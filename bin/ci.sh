@@ -43,6 +43,22 @@ else
   pass "state/events.jsonl has a single writer"
 fi
 
+stage "dag"
+# section 14 of the design and tasks.json are two views of one DAG
+if [ -f design/tasks.json ] && [ -f design/design.md ]; then
+  missing=''
+  for id in $(jq -r '.tasks[].id' design/tasks.json 2>/dev/null); do
+    grep -q "| $id |" design/design.md || missing="$missing $id"
+  done
+  if [ -n "$missing" ]; then
+    flunk "tasks.json has ids the design does not list:$missing"
+  else
+    pass "the design and tasks.json agree"
+  fi
+else
+  skip "no DAG yet"
+fi
+
 stage "bash tests"
 suites=(tests/*.test.sh)
 if [ ${#suites[@]} -eq 0 ]; then
