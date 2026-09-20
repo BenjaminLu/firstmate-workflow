@@ -29,7 +29,7 @@ while [ $# -gt 0 ]; do
 done
 cd "$REPO" || { echo "fm-dispatch: no repo at $REPO" >&2; exit 64; }
 LOG="$REPO/state/events.jsonl"
-emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate "$@" >/dev/null 2>&1 || true; }
+emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate "$@" >/dev/null 2>&1 </dev/null || true; }
 
 # --- the eighth gate: nothing starts before the captain has seen a proposal
 if ! [ -f "$LOG" ] || ! jq -e 'select(.type=="greenlit")' "$LOG" >/dev/null 2>&1; then
@@ -77,7 +77,7 @@ while IFS= read -r id; do
     echo "$id"
   else
     emit --type dispatched --task "$id" --en "dispatched $id" --tw "已派出 $id"
-    "$REPO/bin/fm-worker.sh" --task "$id" --repo "$REPO" >/dev/null 2>&1 &
+    "$REPO/bin/fm-worker.sh" --task "$id" --repo "$REPO" >/dev/null 2>&1 </dev/null &
     echo "$id"
   fi
   slots=$(( slots - 1 )); started_any=1

@@ -44,7 +44,7 @@ $GH pr merge "$PR" --squash --delete-branch >/dev/null 2>&1 || {
 
 FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor captain --type merged --pr "$PR" \
   ${TASK:+--task "$TASK"} --en "merged #$PR from the board" --tw "從看板合併 #$PR" \
-  >/dev/null 2>&1 || true
+  >/dev/null 2>&1 </dev/null || true
 [ -n "$TASK" ] && [ -x "$REPO/bin/fm-cleanup.sh" ] && \
   FM_ROOT="$REPO" FM_GH="$GH" "$REPO/bin/fm-cleanup.sh" --task "$TASK" --repo "$REPO" 2>&1 | sed "s/^/  /"
 echo "fm-merge: merged #$PR"

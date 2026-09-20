@@ -10,8 +10,15 @@ set -uo pipefail
 # Nothing below may read standard input. A dispatched child inherits it, and
 # a child that reads it blocks the whole turn waiting for a human who is not
 # there - the advance loop did exactly this once, and ci.sh has the same
-# line for the same reason. One guarantee, in one place: a per-call redirect
-# as well would make the test for this line pass without it.
+# line for the same reason.
+#
+# It is NOT the only guarantee, and the earlier version of this comment that
+# said so was wrong: `exec` sets fd 0 for the script, and a child dispatched
+# inside a compound command that carries its own redirection - the advance
+# loop's `done <<<"$open_prs"` - is handed the list, not /dev/null. So every
+# dispatch also carries its own `</dev/null`, and bin/ci.sh fails if one
+# does not. Having both means neither is proved by a probe; each is proved
+# by reading the file, which is what the gate does.
 exec < /dev/null
 _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
@@ -34,10 +41,10 @@ say() { printf '  %s\n' "$*"; }
 
 turn() {
   # 1. whatever GitHub knows that the log does not
-  "$B/fm-sync-prs.sh" --repo "$REPO" >/dev/null 2>&1 || true
+  "$B/fm-sync-prs.sh" --repo "$REPO" >/dev/null 2>&1 </dev/null || true
 
   # 2. start what is ready. dispatch refuses on its own if nothing is green-lit
-  started="$("$B/fm-dispatch.sh" --repo "$REPO" 2>/dev/null | grep -E '^T-' || true)"
+  started="$("$B/fm-dispatch.sh" --repo "$REPO" 2>/dev/null </dev/null | grep -E '^T-' || true)"
   [ -z "$started" ] || say "dispatched: $(printf '%s' "$started" | tr '\n' ' ')"
 
   # 3. advance every task that has a pull request open
@@ -53,7 +60,7 @@ turn() {
 
     # the protocol first: from round three it can stop the round outright
     if [ "$round" -ge 3 ]; then
-      "$B/fm-protocol.sh" check --task "$task" --pr "$pr" --round "$round" --repo "$REPO" >/dev/null 2>&1 \
+      "$B/fm-protocol.sh" check --task "$task" --pr "$pr" --round "$round" --repo "$REPO" >/dev/null 2>&1 </dev/null \
         || { say "$task: protocol violation in round $round"; continue; }
     fi
 
@@ -65,14 +72,14 @@ turn() {
       [ -f "state/pending/$id.json" ] && { say "$task: waiting on the captain"; continue; }
       [ -f "state/decisions/$id.json" ] && continue
       "$B/fm-decide.sh" --request "$id" --task "$task" --kind merge --pr "$pr" \
-        --title "$task passed the gates - merge it?" --repo "$REPO" >/dev/null 2>&1
+        --title "$task passed the gates - merge it?" --repo "$REPO" >/dev/null 2>&1 </dev/null
       say "$task: all seven gates green, asking the captain ($id)"
     elif [ "$g" -eq 7 ]; then
       say "$task: gates 1-6 green, sending it to review (round $round)"
       # exit 3 is a round that produced no verdict. Swallowing it would let
       # a crashed engine read as a review that simply did not sign.
       "$B/fm-review.sh" --task "$task" --branch "$branch" --pr "$pr" \
-        --round "$round" --repo "$REPO" >/dev/null 2>&1
+        --round "$round" --repo "$REPO" >/dev/null 2>&1 </dev/null
       case "$?" in
         0) ;;
         2) say "$task: no reviewer engine was available, leaving it for the next turn" ;;

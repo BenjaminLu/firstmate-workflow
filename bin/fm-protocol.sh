@@ -35,7 +35,7 @@ done
   echo "usage: fm-protocol.sh check --task <id> --pr <n> [--round n]" >&2; exit 64; }
 cd "$REPO" || { echo "fm-protocol: no repo at $REPO" >&2; exit 64; }
 
-emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate --task "$TASK" --pr "$PR" "$@" >/dev/null 2>&1 || true; }
+emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate --task "$TASK" --pr "$PR" "$@" >/dev/null 2>&1 </dev/null || true; }
 
 # one comment per line: author, then the body with newlines folded to \r so a
 # multi-line review stays one record

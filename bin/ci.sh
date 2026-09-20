@@ -117,6 +117,42 @@ else
   pass "every script that dispatches closes standard input"
 fi
 
+# `exec < /dev/null` sets fd 0 for the script and nothing more: a child
+# dispatched inside `while ... done <<<"$list"` is handed the list. So every
+# dispatch of one of our own scripts carries its own redirect as well, and
+# that is checkable by reading the file rather than by a probe.
+# joined first: a redirect often sits on the continuation line, and a
+# per-physical-line grep would call that a miss
+undirected=''
+for f in bin/*.sh; do
+  case "$f" in */ci.sh) continue ;; esac
+  hits="$(sed -e :a -e '/\\$/N; s/\\\n//; ta' "$f" \
+    | grep -n '"\$B/\|"\$REPO/bin/fm-' \
+    | grep -v '</dev/null' \
+    | grep -vE 'EMIT=|-x "|-f "|command -v' || true)"
+  [ -z "$hits" ] || undirected="$undirected
+$f: $hits"
+done
+if [ -n "$undirected" ]; then
+  flunk "these dispatch one of our scripts without their own </dev/null:"
+  printf '%s\n' "$undirected"
+else
+  pass "every dispatch carries its own redirect, not only the script's"
+fi
+
+# A file meant to be sourced must NOT carry the redirect: in a sourced file
+# it belongs to the caller for the rest of its life. The exemptions above
+# are names; this asserts the property they stand for.
+wrongly=''
+for f in bin/fm-config.sh bin/fm-guard.sh; do
+  grep -q '^exec < /dev/null' "$f" && wrongly="$wrongly $(basename "$f")"
+done
+if [ -n "$wrongly" ]; then
+  flunk "these are sourced and must not redirect the caller's input:$wrongly"
+else
+  pass "no sourced library takes the caller's standard input"
+fi
+
 # The vendor chain has one implementation. What this catches: a `for v in`
 # over a vendor list, which is the shape the duplicate would take. A second
 # implementation written any other way walks past it; the contract test

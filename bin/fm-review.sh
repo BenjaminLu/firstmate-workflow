@@ -33,7 +33,7 @@ done
   echo "usage: fm-review.sh --task <id> --branch <name> [--pr N] [--round N]" >&2; exit 64; }
 cd "$REPO" || { echo "fm-review: no repo at $REPO" >&2; exit 64; }
 
-emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor reviewer-1 --task "$TASK" "$@" >/dev/null 2>&1 || true; }
+emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor reviewer-1 --task "$TASK" "$@" >/dev/null 2>&1 </dev/null || true; }
 
 spec="$(jq -r --arg t "$TASK" '.tasks[]|select(.id==$t)' design/tasks.json 2>/dev/null)"
 [ -n "$spec" ] || { echo "fm-review: no task $TASK" >&2; exit 65; }

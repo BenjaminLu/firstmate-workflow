@@ -237,13 +237,79 @@ for healthy in "Loaded cached credentials." \
                "Implemented the login flow; credentials are read from the keyring."; do
   assert_eq "0" "$(verdict "$healthy" 0)" "a healthy run that says \"${healthy%% *}...\" is done"
 done
-# and the failures those nouns appear in still read as failures
-for broken in "Error: Authentication required. Please run 'agent login' first" \
-              "Error authenticating: IneligibleTierError" \
-              "Error: quota exceeded for this organisation" \
-              "429 Too Many Requests" \
-              "invalid api key"; do
-  assert_eq "2" "$(verdict "$broken" 0)" "but \"${broken%% *}...\" is an outage"
+# and every alternative in the list is read against a real failure that
+# carries it. The completeness check below fails if one is added without a
+# transcript, because an alternative nobody has seen match is one nobody
+# knows the shape of - which is how `credentials?` got in.
+broken_lines="Error: Authentication required. Please run 'agent login' first
+Error authenticating: IneligibleTierError
+authentication failed for this account
+authentication error: token rejected
+authenticate failed for this key
+you are not authenticated
+Error: 401 Unauthorized
+403 Forbidden
+403 Forbidden: this key may not use that model
+429 Too Many Requests
+status 429 returned by the gateway
+status 401 from the provider
+status 403 from the provider
+Too many requests, slow down
+you are not logged in
+please use gcloud auth login first
+please run claude login first
+login required before running non-interactively
+invalid api key
+missing api key
+missing credentials
+no api key was supplied
+expired api key
+api key not configured for this project
+api key not set in the environment
+api key not found
+api key not valid. Please pass a valid API key.
+invalid credentials
+expired credentials
+credentials could not be read
+Error: quota exceeded for this organisation
+you are out of quota until tomorrow
+quota exhausted for this key
+rate limit exceeded, retry after 30s
+rate-limited by the upstream provider
+rate limited by the upstream provider
+rate limit reached
+network error: could not reach the api
+network error while streaming the response
+network unreachable
+network failure reported by the transport
+fetch failed
+getaddrinfo ENOTFOUND api.example.com
+connect ECONNREFUSED 127.0.0.1:443
+connect ETIMEDOUT 10.0.0.1:443
+getaddrinfo EAI_AGAIN api.example.com"
+while IFS= read -r broken; do
+  [ -n "$broken" ] || continue
+  assert_eq "2" "$(verdict "$broken" 0)" "an outage reading \"$(printf '%.38s' "$broken")...\""
+done <<< "$broken_lines"
+
+# completeness: pull the alternatives out of the library and require each one
+# to be matched by at least one of those transcripts
+sig="$(sed -n "s/^_FM_SIG='\(.*\)'$/\1/p" "$ROOT/bin/adapters/_lib.sh")"
+assert_ne "" "$sig" "the signature list was found"
+unread=''
+saved_ifs="$IFS"; IFS='|'
+for alt in $sig; do
+  printf '%s\n' "$broken_lines" | grep -qiE "$alt" || unread="$unread [$alt]"
+done
+IFS="$saved_ifs"
+assert_eq "" "$unread" "every signature has a transcript that carries it"
+
+# and none of them fires on a healthy one
+for healthy in "Loaded cached credentials." "Authenticated as benjamin. Ready." \
+               "Added rate limiting: the handler now returns 429 with Retry-After." \
+               "Implemented the login flow; credentials are read from the keyring." \
+               "Reviewed the network error handling and the retry budget."; do
+  assert_eq "0" "$(verdict "$healthy" 0)" "and none of them fires on \"$(printf '%.30s' "$healthy")...\""
 done
 assert_eq "1" "$(verdict "" 0)" "exit 0 with nothing said is unfit"
 # the shape a review actually has. The wording test condemns it, and that is

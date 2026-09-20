@@ -134,6 +134,13 @@ assert_eq "reviewer-1" "$(run "$GH" pr view "$pr" --json comments --jq '.comment
 # the reviewer in this fixture signs off
 printf 'reviewer-1\tAPPROVE:T-A\n' >> "$GHSTATE/comments.$pr"
 
+# The fixture's reviewer signs REJECT before it signs APPROVE, and the round
+# counter is what decides whether the next turn runs the round-three
+# protocol instead of asking for a decision. Pin it, or a later edit to the
+# reviewer's output silently changes which branch turn three takes.
+rounds="$(jq -r 'select(.type=="review_opened")|.task' "$r/state/events.jsonl" | wc -l | tr -d ' ')"
+assert_eq "1" "$rounds" "one review round has happened when the approval lands"
+
 # --- turn three: all seven green, so the captain is asked ---------------
 out3="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
 assert_contains "$out3" "asking the captain" "seven green means a decision, not a merge"

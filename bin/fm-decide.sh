@@ -35,7 +35,7 @@ cd "$REPO" || { echo "fm-decide: no repo at $REPO" >&2; exit 64; }
 
 DIR="$REPO/state/decisions"; PEND="$REPO/state/pending"
 mkdir -p "$DIR" "$PEND"
-emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate "$@" >/dev/null 2>&1 || true; }
+emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate "$@" >/dev/null 2>&1 </dev/null || true; }
 
 if [ "$MODE" = request ]; then
   jq -cn --arg id "$ID" --arg task "$TASK" --arg kind "$KIND" --arg title "$TITLE" --arg pr "$PR" \
@@ -51,7 +51,7 @@ fi
 f="$DIR/$ID.json"
 if [ -f "$f" ]; then answer="$f"; else
   if command -v bun >/dev/null 2>&1 && [ -f "$REPO/bin/watch-decisions.ts" ]; then
-    answer="$(bun run "$REPO/bin/watch-decisions.ts" "$DIR" "$ID" "$(( TIMEOUT * 1000 ))" 2>/dev/null)"
+    answer="$(bun run "$REPO/bin/watch-decisions.ts" "$DIR" "$ID" "$(( TIMEOUT * 1000 ))" 2>/dev/null </dev/null)"
   else
     waited=0
     while [ ! -f "$f" ]; do

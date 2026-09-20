@@ -61,7 +61,7 @@ while IFS=$'\t' read -r num state branch title; do
     ${task:+--task "$task"} \
     --en "#${num} ${en}: ${title}" \
     --tw "#${num} ${tw}：${title}" \
-    >/dev/null 2>&1 || continue
+    >/dev/null 2>&1 </dev/null || continue
   echo "$type #$num${task:+ ($task)}"
   new=$(( new + 1 ))
 done <<< "$(jq -r '.[]|[(.number|tostring),.state,.headRefName,.title]|@tsv' <<<"$raw")"

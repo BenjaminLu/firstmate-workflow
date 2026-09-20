@@ -36,7 +36,11 @@
 # credentials." before it does anything, and a `credentials?` alternative
 # turned every successful gemini run into a reported outage. Each one below
 # was read against a successful transcript as well as a failing one.
-_FM_SIG='authenticat(ion|e) (failed|required|error)|error[: ]+authenticat|authenticat[a-z]* (error|failure)|not authenticated|unauthori[sz]ed|401 |403 |not logged in|please (run|use) [^ ]* ?login|login required|(invalid|missing|no|expired) api key|api key not (set|found|configured|valid)|(invalid|missing|expired|no) credentials|credentials (not|are not|could not)|quota (exceeded|exhausted)|out of quota|rate.?limit(ed| exceeded| reached)|too many requests|network (error|unreachable|failure)|fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN'
+# Flat on purpose: one alternative per phrase, no nested groups. The suite
+# splits this on "|" and fails if any alternative has no transcript that
+# carries it, which only works if an alternative is a phrase rather than a
+# little grammar. Each one is a way a CLI reports that it could not run.
+_FM_SIG='authentication failed|authentication required|authentication error|error authenticating|authenticate failed|not authenticated|unauthori[sz]ed|401 unauthorized|403 forbidden|429 too many requests|status 401|status 403|status 429|too many requests,|not logged in|please run [a-z0-9 ._-]{0,30}login|please use [a-z0-9 ._-]{0,30}login|login required|invalid api key|missing api key|no api key|expired api key|api key not set|api key not found|api key not configured|api key not valid|invalid credentials|missing credentials|expired credentials|credentials could not|quota exceeded|quota exhausted|out of quota|rate limit exceeded|rate limit reached|rate-limited|rate limited|network error:|network error while|network unreachable|network failure|fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN'
 
 # fm_adapter_mark <log> -> byte offset to read from after the run
 fm_adapter_mark() { if [ -f "$1" ]; then wc -c < "$1" | tr -d ' '; else echo 0; fi; }

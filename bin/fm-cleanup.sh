@@ -69,6 +69,6 @@ git worktree prune >/dev/null 2>&1
 [ -n "$branch" ] && git branch -D "$branch" >/dev/null 2>&1
 rm -f "$ROOT/$TASK.log"
 FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate --task "$TASK" --type closed \
-  --en "worktree for $TASK removed" --tw "已移除 $TASK 的 worktree" >/dev/null 2>&1 || true
+  --en "worktree for $TASK removed" --tw "已移除 $TASK 的 worktree" >/dev/null 2>&1 </dev/null || true
 echo "fm-cleanup: removed $tgt_real"
 exit 0
