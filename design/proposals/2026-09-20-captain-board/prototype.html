@@ -206,73 +206,85 @@ code,.mono{font-family:var(--mono);font-size:.86em}
   transform:rotateY(90deg) translateZ(calc(var(--w)/2));filter:brightness(.58)}
 .bx>i.tp{width:var(--w);height:var(--d);top:calc(var(--h)/2 - var(--d)/2);
   transform:rotateX(90deg) translateZ(calc(var(--h)/2));filter:brightness(1.34)}
-.fig .sh{left:50%;bottom:-9px;width:66px;height:17px;margin-left:-33px;border-radius:50%;
+.fig .sh{left:50%;bottom:-8px;width:64px;height:16px;margin-left:-32px;border-radius:50%;
   background:radial-gradient(ellipse at 50% 50%,rgba(0,0,0,.62),transparent 72%);transform:translateZ(-16px)}
-.fig .legL{--w:11px;--h:21px;--d:13px;left:27px;bottom:0}
-.fig .legR{--w:11px;--h:21px;--d:13px;left:44px;bottom:0;transform:translateZ(-13px)}
-.fig .torso{--w:33px;--h:36px;--d:23px;left:24px;bottom:19px}
-.fig .head{--w:23px;--h:21px;--d:21px;left:29px;bottom:56px}
-.fig .cap{--w:27px;--h:7px;--d:25px;left:27px;bottom:75px}
-.fig .brim{--w:31px;--h:4px;--d:12px;left:25px;bottom:72px;transform:translateZ(9px)}
-.fig .eye{left:34px;bottom:64px;width:4px;height:4px;border-radius:50%;background:#1b2836;
-  box-shadow:10px 0 0 #1b2836;transform:translateZ(11px)}
-.fig .armL{--w:9px;--h:25px;--d:10px;left:15px;bottom:29px;transform:translateZ(9px) rotate(8deg);transform-origin:50% 3px}
-.fig .armR{--w:9px;--h:25px;--d:10px;left:54px;bottom:29px;transform:translateZ(-10px) rotate(-8deg);transform-origin:50% 3px}
-.fig .tool{left:-5px;bottom:-11px;width:0;height:0}
+/* geometry: everything centred on x=46, stacked bottom-up. no gaps, arms at the body's sides. */
+.fig .shoeL{--w:13px;--h:6px;--d:16px;left:31px;bottom:0}
+.fig .shoeR{--w:13px;--h:6px;--d:16px;left:48px;bottom:0}
+.fig .legL {--w:11px;--h:22px;--d:12px;left:32px;bottom:5px}
+.fig .legR {--w:11px;--h:22px;--d:12px;left:49px;bottom:5px}
+.fig .torso{--w:32px;--h:34px;--d:20px;left:30px;bottom:24px}
+.fig .belt {--w:33px;--h:4px;--d:21px;left:29px;bottom:27px}
+.fig .neck {--w:10px;--h:7px;--d:10px;left:41px;bottom:55px}
+.fig .head {--w:21px;--h:20px;--d:19px;left:36px;bottom:61px}
+.fig .brim {--w:29px;--h:3px;--d:26px;left:32px;bottom:77px}
+.fig .crown{--w:22px;--h:8px;--d:20px;left:35px;bottom:79px}
+.fig .eye{left:41px;bottom:70px;width:3px;height:3.5px;border-radius:1px;background:#1b2836;
+  box-shadow:8px 0 0 #1b2836;transform:translateZ(10px)}
+/* arms hang from the shoulder, flush against the torso, at the body's own depth */
+.fig .armL{--w:8px;--h:23px;--d:11px;left:22px;bottom:31px;transform-origin:50% 2px;transform:rotate(6deg)}
+.fig .armR{--w:8px;--h:23px;--d:11px;left:62px;bottom:31px;transform-origin:50% 2px;transform:rotate(-6deg)}
+.fig .handL,.fig .handR{--w:9px;--h:8px;--d:11px;left:-1px;bottom:-6px}
+.fig .tool{left:-4px;bottom:-9px;width:0;height:0}
 /* role palettes */
-.fig.r-fm{--skin:#f0cfa9;--suit:#2c4d74;--hat:#d9a441}
+.fig{--trouser:#27394a;--shoe:#151f29}
+.fig.r-fm{--skin:#f0cfa9;--suit:#2c4d74;--hat:#d9a441;--trouser:#1f3244}
 .fig.r-w {--skin:#f0cfa9;--suit:#b4672a;--hat:#e8ae3e}
 .fig.r-r {--skin:#f0cfa9;--suit:#6b45a0;--hat:#c07bf0}
-.fig .head,.fig .armL,.fig .armR{--c:var(--skin)}
-.fig .torso,.fig .legL,.fig .legR{--c:var(--suit)}
-.fig .cap,.fig .brim{--c:var(--hat)}
+.fig .head,.fig .neck,.fig .handL,.fig .handR{--c:var(--skin)}
+.fig .torso,.fig .armL,.fig .armR{--c:var(--suit)}
+.fig .legL,.fig .legR{--c:var(--trouser)}
+.fig .shoeL,.fig .shoeR{--c:var(--shoe)}
+.fig .belt{--c:#1a2632}
+.fig .crown,.fig .brim{--c:var(--hat)}
 /* props */
 .prop{left:50%;bottom:6px;margin-left:-23px;width:46px;height:46px;opacity:0;transform:translateZ(22px)}
-.fig.r-fm .prop{opacity:1;border-radius:50%;border:4px solid #a07c36;
+.fig.r-fm .prop{opacity:1;bottom:12px;border-radius:50%;border:4px solid #a07c36;
   box-shadow:inset 0 0 0 3px rgba(9,18,26,.9),0 0 16px rgba(217,164,65,.28)}
 .fig.r-fm .prop::before,.fig.r-fm .prop::after{content:"";position:absolute;left:50%;top:50%;
   width:58px;height:4px;margin:-2px 0 0 -29px;background:#a07c36;border-radius:2px}
 .fig.r-fm .prop::after{transform:rotate(90deg)}
-.fig.r-w  .tool{width:17px;height:11px;border-radius:3px;background:linear-gradient(180deg,#b3c0cd,#5d6b78);
-  box-shadow:0 0 0 2px #26313c,-9px 4px 0 -4px #6b4f2c}
-.fig.r-r  .tool{width:27px;height:8px;border-radius:4px;left:-19px;bottom:1px;
-  background:linear-gradient(90deg,#dbe4ee,#68788a);box-shadow:0 0 0 2px #26313c}
+.fig.r-w  .tool{width:16px;height:10px;border-radius:2px;background:linear-gradient(180deg,#c2cedb,#63717e);
+  box-shadow:0 0 0 2px #26313c;transform:translateZ(6px)}
+.fig.r-w  .tool::after{content:"";position:absolute;left:5px;top:9px;width:5px;height:13px;border-radius:2px;
+  background:#6b4f2c;box-shadow:0 0 0 1px #2a2013}
+.fig.r-r  .tool{width:26px;height:7px;border-radius:4px;left:-17px;bottom:2px;
+  background:linear-gradient(90deg,#e2eaf3,#6d7c8c);box-shadow:0 0 0 2px #26313c;transform:translateZ(6px)}
 /* state-driven motion */
 .m-3d .fig{animation:idlebob 4.4s ease-in-out infinite}
 .m-3d .fig.s-working{animation:idlebob 2.5s ease-in-out infinite}
 .m-3d .fig.s-working .armR{animation:hammer var(--sp,.62s) ease-in-out infinite}
 .m-3d .fig.r-fm .prop{animation:helm 8s linear infinite}
 .m-3d .fig.s-review{animation:scanx 3.6s ease-in-out infinite}
-.fig.s-review .armR{transform:translateZ(-10px) rotate(-108deg)}
+.fig.s-review .armR{transform:rotate(-112deg)}
 .fig.s-gate{filter:saturate(.5) brightness(.86)}
-.fig.s-gate .armR{transform:translateZ(-10px) rotate(16deg)}
-.fig.s-gate .head{bottom:52px}
-.fig.s-gate .cap{bottom:71px} .fig.s-gate .brim{bottom:68px} .fig.s-gate .eye{bottom:60px}
+.fig.s-gate .armR{transform:rotate(13deg)}
+.fig.s-gate .neck{bottom:52px} .fig.s-gate .head{bottom:57px}
+.fig.s-gate .brim{bottom:73px} .fig.s-gate .crown{bottom:75px} .fig.s-gate .eye{bottom:66px}
 .m-3d .fig.s-gate{animation:slump 2.2s ease-in-out infinite}
 .fig.s-queued{filter:grayscale(.75) brightness(.6)}
 .m-3d .fig.s-queued{animation:idlebob 6.5s ease-in-out infinite}
 @keyframes idlebob{0%,100%{transform:rotateX(8deg) rotateY(-26deg) translateY(0)}
                    50%{transform:rotateX(8deg) rotateY(-26deg) translateY(-5px)}}
-@keyframes hammer{0%,100%{transform:translateZ(-10px) rotate(-16deg)}
-                  45%{transform:translateZ(-10px) rotate(-84deg)}}
+@keyframes hammer{0%,100%{transform:rotate(-14deg)}45%{transform:rotate(-86deg)}}
 @keyframes helm{to{transform:translateZ(22px) rotate(360deg)}}
 @keyframes scanx{0%,100%{transform:rotateX(8deg) rotateY(-42deg)}50%{transform:rotateX(8deg) rotateY(-6deg)}}
 @keyframes slump{0%,100%{transform:rotateX(8deg) rotateY(-26deg) translateY(3px)}
                  50%{transform:rotateX(8deg) rotateY(-26deg) translateY(6px)}}
 
 /* ===== level 4: one shared deck, crew interact on it ===== */
-.scene{position:relative;height:218px;margin:13px 18px 0;border:1px solid var(--line);border-radius:13px;
+.scene{position:relative;height:266px;margin:13px 18px 0;border:1px solid var(--line);border-radius:13px;
   overflow:hidden;perspective:900px;perspective-origin:50% 38%;
   background:linear-gradient(180deg,#081a28 0%,#0d3350 48%,#091725 100%)}
 .scene .horizon{position:absolute;left:0;right:0;top:0;height:58px;
   background:linear-gradient(180deg,#0a2033,#12476c);opacity:.85}
-.scene .planks{position:absolute;left:-22%;right:-22%;bottom:0;height:158px;
+.scene .planks{position:absolute;left:-22%;right:-22%;bottom:62px;height:150px;
   background:repeating-linear-gradient(90deg,#223645 0 27px,#1b2b38 27px 54px);
   transform:rotateX(74deg);transform-origin:50% 100%;box-shadow:inset 0 32px 54px rgba(0,0,0,.55)}
-.scene .plat{position:absolute;bottom:54px;left:64%;margin-left:-50px;width:100px;height:13px;border-radius:5px;
+.scene .plat{position:absolute;bottom:116px;left:64%;margin-left:-50px;width:100px;height:13px;border-radius:5px;
   background:linear-gradient(180deg,#31485e,#1a2836);box-shadow:0 5px 14px rgba(0,0,0,.5)}
-.scene .fig{bottom:58px;left:var(--px);transform:rotateX(8deg) rotateY(-26deg) scale(.86)}
-.scene .fig.r-fm{bottom:68px;transform:rotateX(8deg) rotateY(-26deg) scale(.94)}
+.scene .fig{bottom:120px;left:var(--px);transform:rotateX(8deg) rotateY(-26deg) scale(.86)}
+.scene .fig.r-fm{bottom:130px;transform:rotateX(8deg) rotateY(-26deg) scale(.94)}
 .m-4 .scene .fig{animation:idlebob4 4.4s ease-in-out infinite}
 .m-4 .scene .fig.s-working{animation:idlebob4 2.5s ease-in-out infinite}
 .m-4 .scene .fig.s-queued{animation:idlebob4 6.5s ease-in-out infinite}
@@ -284,9 +296,22 @@ code,.mono{font-family:var(--mono);font-size:.86em}
                   50%{transform:rotateX(8deg) rotateY(-26deg) scale(.86) translateY(6px)}}
 @keyframes scan4{0%,100%{transform:rotateX(8deg) rotateY(-44deg) scale(.86)}
                  50%{transform:rotateX(8deg) rotateY(-4deg) scale(.86)}}
-.scene .tag{position:absolute;bottom:9px;left:var(--px);transform:translateX(-50%);
-  font:600 10px var(--mono);color:#7fa8c6;white-space:nowrap;letter-spacing:.04em}
-.scene .tag i{font-style:normal;color:var(--fg3)}
+.scene .tag{position:absolute;bottom:10px;left:var(--px);transform:translateX(-50%);
+  width:15.5%;min-width:104px;max-width:196px;text-align:center;z-index:4}
+.scene .tag .who{display:flex;align-items:center;justify-content:center;gap:6px;
+  font:650 11px var(--mono);color:#cfe0ef;letter-spacing:.03em}
+.scene .tag .job{margin-top:3px;font-size:10.5px;color:#8fb2cc;line-height:1.32;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+  min-height:28px;word-break:break-word;overflow-wrap:anywhere}
+.scene .tag .job b{color:#b9d3e8;font-weight:600;font-family:var(--mono);font-size:10.5px}
+.scene .tag .pb{margin:5px auto 0;width:78%;height:3px;background:rgba(255,255,255,.1);
+  border-radius:2px;overflow:hidden}
+.scene .tag .pb i{display:block;height:100%;background:var(--accent);transition:width .85s linear}
+.scene .tag .pb i.bad{background:var(--bad)}
+.scene .tag .pct{margin-top:3px;font:600 10px var(--mono);color:#6f92ac}
+.scene .tag.st-gate .who{color:var(--bad)}
+.scene .tag.st-queued{opacity:.5}
+.scene .tag.st-review .who{color:#d9b6ff}
 /* things that travel between crew */
 .flyer{position:absolute;bottom:112px;width:22px;height:16px;border-radius:3px;z-index:6;
   display:flex;align-items:center;justify-content:center;font:800 8.5px var(--sans);color:#0b1016;
@@ -546,29 +571,30 @@ const links=d=>'<div class="links">'
     +'<a href="#" onclick="toast(\'github.com/BenjaminLu/firstmate-workflow/pull/'+d.pr+'\');return false">&#9863; '+T('viewPR')+' #'+d.pr+'</a>'
     +'<a href="#" onclick="openLocal(\''+d.design+'\');return false">&#9776; '+T('viewDesign')+'</a></div>';
 /* one CSS-3D crew figure; the s-* / r-* classes are what Playwright asserts against */
+const bx = cls => '<div class="bx '+cls+'"><i class="fr"></i><i class="sd"></i><i class="tp"></i></div>';
+const arm = (a,h,withTool) => '<div class="bx '+a+'"><i class="fr"></i><i class="sd"></i><i class="tp"></i>'
+  + '<div class="bx '+h+'"><i class="fr"></i><i class="sd"></i><i class="tp"></i>'
+  + (withTool?'<span class="tool"></span>':'') + '</div></div>';
 function figureRaw(c){
   const role=c.role==='fm'?'fm':(c.role==='r'?'r':'w');
   const speed=(0.92-Math.min(0.56,c.pct/210)).toFixed(2);
-  const bx=cls=>'<div class="bx '+cls+'"><i class="fr"></i><i class="sd"></i><i class="tp"></i></div>';
   return '<div class="fig r-'+role+' s-'+c.st+'" data-crew="'+c.id
     +'" style="--sp:'+speed+'s;--px:'+(POS[c.id]||'50%')+'">'
-    +'<div class="sh"></div>'+bx('legR')+bx('legL')
-    +'<div class="bx armR"><i class="fr"></i><i class="sd"></i><i class="tp"></i><span class="tool"></span></div>'
-    +bx('torso')+'<div class="bx armL"><i class="fr"></i><i class="sd"></i><i class="tp"></i></div>'
-    +bx('head')+bx('cap')+bx('brim')+'<div class="eye"></div><div class="prop"></div></div>';
+    +'<div class="sh"></div>'+arm('armR','handR',true)
+    +bx('shoeR')+bx('shoeL')+bx('legR')+bx('legL')+bx('torso')+bx('belt')
+    +arm('armL','handL',false)
+    +bx('neck')+bx('head')+'<div class="eye"></div>'+bx('brim')+bx('crown')
+    +'<div class="prop"></div></div>';
 }
 function figure(c){
   const role = c.role==='fm'?'fm':(c.role==='r'?'r':'w');
   const speed = (0.92 - Math.min(0.56, c.pct/210)).toFixed(2); // swings faster as the task nears done
-  const bx = cls => '<div class="bx '+cls+'"><i class="fr"></i><i class="sd"></i><i class="tp"></i></div>';
   return '<div class="stage"><div class="deckline"></div>'
     +'<div class="fig r-'+role+' s-'+c.st+'" data-crew="'+c.id+'" style="--sp:'+speed+'s">'
-    +'<div class="sh"></div>'
-    +bx('legR')+bx('legL')
-    +'<div class="bx armR"><i class="fr"></i><i class="sd"></i><i class="tp"></i><span class="tool"></span></div>'
-    +bx('torso')
-    +'<div class="bx armL"><i class="fr"></i><i class="sd"></i><i class="tp"></i></div>'
-    +bx('head')+bx('cap')+bx('brim')+'<div class="eye"></div>'
+    +'<div class="sh"></div>'+arm('armR','handR',true)
+    +bx('shoeR')+bx('shoeL')+bx('legR')+bx('legL')+bx('torso')+bx('belt')
+    +arm('armL','handL',false)
+    +bx('neck')+bx('head')+'<div class="eye"></div>'+bx('brim')+bx('crown')
     +'<div class="prop"></div>'
     +'</div></div>';
 }
@@ -591,11 +617,19 @@ function fly(from,to,kind){
   }, from===to?600:900);
   setTimeout(()=>f.remove(), 1400);
 }
+function plate(c){
+  const t=c.task?byId(c.task):null;
+  const job = c.id==='firstmate' ? T('coord') : (t ? '<b>'+c.task+'</b> '+L(t.title) : T('idle'));
+  return '<div class="who"><i class="dot '+c.st+'"></i>'+c.id+'</div>'
+    +'<div class="job">'+job+'</div>'
+    +'<div class="pb"><i class="'+(c.st==='gate'?'bad':'')+'" style="width:'+c.pct+'%"></i></div>'
+    +'<div class="pct">'+Math.round(c.pct)+'%</div>';
+}
 function scene(){
   return '<div class="scene"><div class="horizon"></div><div class="planks"></div><div class="plat"></div>'
     + CREW.map(c=>figureRaw(c)).join('')
-    + CREW.map(c=>'<div class="tag" style="--px:'+(POS[c.id]||'50%')+'">'+c.id
-        +(c.task?' <i>'+c.task+'</i>':'')+'</div>').join('')
+    + CREW.map(c=>'<div class="tag st-'+c.st+'" data-tag="'+c.id+'" style="--px:'+(POS[c.id]||'50%')+'">'
+        + plate(c) + '</div>').join('')
     + '</div>';
 }
 function crewline(){
@@ -626,7 +660,7 @@ function shell(){
      +'<div class="flag ship"><div class="hd" id="s-hdg">317&deg;</div><div class="lb">'+T('heading')+'</div></div>'
    +'</div></div>'
 
-   +(variant===4 ? '<div id="scene"></div><div id="crewline"></div>' : '<div class="rail" id="rail"></div>')
+   +(variant===4 ? '<div id="scene"></div>' : '<div class="rail" id="rail"></div>')
 
    +'<div class="deck"><h3>'+T('deck')+'<span class="n" id="d-n">0</span></h3><div id="deck"></div></div>'
    +'<div class="lanes-wrap"><h3>'+T('fleet')+'</h3><div class="lanes" id="lanes"></div></div>'
@@ -655,10 +689,11 @@ function paint(){
       }
       f.style.setProperty('--sp',(0.92-Math.min(0.56,c.pct/210)).toFixed(2)+'s');
     }
-    document.querySelectorAll('.scene .tag').forEach((el,i)=>{
-      const c=CREW[i]; el.innerHTML=c.id+(c.task?' <i>'+c.task+'</i>':'');
-    });
-    const cl=document.getElementById('crewline'); if(cl) cl.innerHTML=crewline();
+    for(const c of CREW){
+      const el=document.querySelector('.scene .tag[data-tag="'+c.id+'"]'); if(!el) continue;
+      el.className='tag st-'+c.st;
+      el.innerHTML=plate(c);
+    }
   }
   const rail=document.getElementById('rail');
   if(rail) rail.innerHTML=CREW.map(c=>{
