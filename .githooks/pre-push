@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Refuse to push anything onto a protected branch, whatever branch we sit on.
+root=$(git rev-parse --show-toplevel)
+: "${FM_PROTECTED:=main master}"
+status=0
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  [ -n "$remote_ref" ] || continue
+  for p in $FM_PROTECTED; do
+    if [ "$remote_ref" = "refs/heads/$p" ]; then
+      printf 'fm-guard: refusing to push directly to %s.\n' "$p" >&2
+      printf '          open a pull request instead.\n' >&2
+      status=1
+    fi
+  done
+done
+exit "$status"
