@@ -184,6 +184,81 @@ code,.mono{font-family:var(--mono);font-size:.86em}
 .toast.on{opacity:1;transform:translateX(-50%) translateY(-6px)}
 @media(max-width:980px){ .lanes{grid-template-columns:repeat(6,190px)} }
 @media(prefers-reduced-motion:reduce){ *,*::before,*::after{animation:none!important;transition:none!important} }
+
+/* ===== 3D crew — box-face geometry, zero dependency ===== */
+.m-3d .rail{grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:11px}
+.m-3d .mem{padding-top:8px}
+.stage{height:132px;position:relative;perspective:560px;perspective-origin:50% 42%;
+  margin:-2px -4px 5px;overflow:hidden;border-radius:9px;
+  background:radial-gradient(120% 80% at 50% 0%,rgba(19,66,102,.6),rgba(8,18,28,0) 70%)}
+.deckline{position:absolute;left:-14%;right:-14%;bottom:12px;height:56px;
+  background:repeating-linear-gradient(90deg,#1d2f3f 0 17px,#17252f 17px 34px);
+  transform:rotateX(76deg);transform-origin:50% 100%;opacity:.9;
+  box-shadow:inset 0 14px 22px rgba(0,0,0,.45)}
+.fig{position:absolute;left:50%;bottom:30px;width:92px;height:100px;margin-left:-46px;
+  transform-style:preserve-3d;transform:rotateX(8deg) rotateY(-26deg)}
+.fig *{position:absolute;transform-style:preserve-3d}
+/* generic box: front + right + top face, shading from geometry */
+.bx{width:var(--w);height:var(--h)}
+.bx>i{display:block;background:var(--c);border-radius:2px}
+.bx>i.fr{width:var(--w);height:var(--h);transform:translateZ(calc(var(--d)/2))}
+.bx>i.sd{width:var(--d);height:var(--h);left:calc(var(--w)/2 - var(--d)/2);
+  transform:rotateY(90deg) translateZ(calc(var(--w)/2));filter:brightness(.58)}
+.bx>i.tp{width:var(--w);height:var(--d);top:calc(var(--h)/2 - var(--d)/2);
+  transform:rotateX(90deg) translateZ(calc(var(--h)/2));filter:brightness(1.34)}
+.fig .sh{left:50%;bottom:-9px;width:66px;height:17px;margin-left:-33px;border-radius:50%;
+  background:radial-gradient(ellipse at 50% 50%,rgba(0,0,0,.62),transparent 72%);transform:translateZ(-16px)}
+.fig .legL{--w:11px;--h:21px;--d:13px;left:27px;bottom:0}
+.fig .legR{--w:11px;--h:21px;--d:13px;left:44px;bottom:0;transform:translateZ(-13px)}
+.fig .torso{--w:33px;--h:36px;--d:23px;left:24px;bottom:19px}
+.fig .head{--w:23px;--h:21px;--d:21px;left:29px;bottom:56px}
+.fig .cap{--w:27px;--h:7px;--d:25px;left:27px;bottom:75px}
+.fig .brim{--w:31px;--h:4px;--d:12px;left:25px;bottom:72px;transform:translateZ(9px)}
+.fig .eye{left:34px;bottom:64px;width:4px;height:4px;border-radius:50%;background:#1b2836;
+  box-shadow:10px 0 0 #1b2836;transform:translateZ(11px)}
+.fig .armL{--w:9px;--h:25px;--d:10px;left:15px;bottom:29px;transform:translateZ(9px) rotate(8deg);transform-origin:50% 3px}
+.fig .armR{--w:9px;--h:25px;--d:10px;left:54px;bottom:29px;transform:translateZ(-10px) rotate(-8deg);transform-origin:50% 3px}
+.fig .tool{left:-5px;bottom:-11px;width:0;height:0}
+/* role palettes */
+.fig.r-fm{--skin:#f0cfa9;--suit:#2c4d74;--hat:#d9a441}
+.fig.r-w {--skin:#f0cfa9;--suit:#b4672a;--hat:#e8ae3e}
+.fig.r-r {--skin:#f0cfa9;--suit:#6b45a0;--hat:#c07bf0}
+.fig .head,.fig .armL,.fig .armR{--c:var(--skin)}
+.fig .torso,.fig .legL,.fig .legR{--c:var(--suit)}
+.fig .cap,.fig .brim{--c:var(--hat)}
+/* props */
+.prop{left:50%;bottom:6px;margin-left:-23px;width:46px;height:46px;opacity:0;transform:translateZ(22px)}
+.fig.r-fm .prop{opacity:1;border-radius:50%;border:4px solid #a07c36;
+  box-shadow:inset 0 0 0 3px rgba(9,18,26,.9),0 0 16px rgba(217,164,65,.28)}
+.fig.r-fm .prop::before,.fig.r-fm .prop::after{content:"";position:absolute;left:50%;top:50%;
+  width:58px;height:4px;margin:-2px 0 0 -29px;background:#a07c36;border-radius:2px}
+.fig.r-fm .prop::after{transform:rotate(90deg)}
+.fig.r-w  .tool{width:17px;height:11px;border-radius:3px;background:linear-gradient(180deg,#b3c0cd,#5d6b78);
+  box-shadow:0 0 0 2px #26313c,-9px 4px 0 -4px #6b4f2c}
+.fig.r-r  .tool{width:27px;height:8px;border-radius:4px;left:-19px;bottom:1px;
+  background:linear-gradient(90deg,#dbe4ee,#68788a);box-shadow:0 0 0 2px #26313c}
+/* state-driven motion */
+.m-3d .fig{animation:idlebob 4.4s ease-in-out infinite}
+.m-3d .fig.s-working{animation:idlebob 2.5s ease-in-out infinite}
+.m-3d .fig.s-working .armR{animation:hammer var(--sp,.62s) ease-in-out infinite}
+.m-3d .fig.r-fm .prop{animation:helm 8s linear infinite}
+.m-3d .fig.s-review{animation:scanx 3.6s ease-in-out infinite}
+.fig.s-review .armR{transform:translateZ(-10px) rotate(-108deg)}
+.fig.s-gate{filter:saturate(.5) brightness(.86)}
+.fig.s-gate .armR{transform:translateZ(-10px) rotate(16deg)}
+.fig.s-gate .head{bottom:52px}
+.fig.s-gate .cap{bottom:71px} .fig.s-gate .brim{bottom:68px} .fig.s-gate .eye{bottom:60px}
+.m-3d .fig.s-gate{animation:slump 2.2s ease-in-out infinite}
+.fig.s-queued{filter:grayscale(.75) brightness(.6)}
+.m-3d .fig.s-queued{animation:idlebob 6.5s ease-in-out infinite}
+@keyframes idlebob{0%,100%{transform:rotateX(8deg) rotateY(-26deg) translateY(0)}
+                   50%{transform:rotateX(8deg) rotateY(-26deg) translateY(-5px)}}
+@keyframes hammer{0%,100%{transform:translateZ(-10px) rotate(-16deg)}
+                  45%{transform:translateZ(-10px) rotate(-84deg)}}
+@keyframes helm{to{transform:translateZ(22px) rotate(360deg)}}
+@keyframes scanx{0%,100%{transform:rotateX(8deg) rotateY(-42deg)}50%{transform:rotateX(8deg) rotateY(-6deg)}}
+@keyframes slump{0%,100%{transform:rotateX(8deg) rotateY(-26deg) translateY(3px)}
+                 50%{transform:rotateX(8deg) rotateY(-26deg) translateY(6px)}}
 </style>
 </head>
 <body class="m-full">
@@ -322,7 +397,7 @@ const TICK_MSG={
 /* ====================== ENGINE (simulated live feed) ====================== */
 const app=document.getElementById('app');
 const params=new URLSearchParams(location.search);
-let variant=params.get('variant')==='2'?2:(params.get('variant')==='1'?1:2);
+let variant=[1,2,3].includes(+params.get('variant'))?+params.get('variant'):3;
 let chosen={}, activeDec='D-007', heading=317, seq=0;
 const evs=[];  // {tm, kind, html}
 const rnd=(a,b)=>a+Math.random()*(b-a);
@@ -416,9 +491,25 @@ const links=d=>'<div class="links">'
     +'<a href="#" onclick="openLocal(\''+d.path+'\');return false">&#8599; '+T('openLocal')+'</a>'
     +'<a href="#" onclick="toast(\'github.com/BenjaminLu/firstmate-workflow/pull/'+d.pr+'\');return false">&#9863; '+T('viewPR')+' #'+d.pr+'</a>'
     +'<a href="#" onclick="openLocal(\''+d.design+'\');return false">&#9776; '+T('viewDesign')+'</a></div>';
+/* one CSS-3D crew figure; the s-* / r-* classes are what Playwright asserts against */
+function figure(c){
+  const role = c.role==='fm'?'fm':(c.role==='r'?'r':'w');
+  const speed = (0.92 - Math.min(0.56, c.pct/210)).toFixed(2); // swings faster as the task nears done
+  const bx = cls => '<div class="bx '+cls+'"><i class="fr"></i><i class="sd"></i><i class="tp"></i></div>';
+  return '<div class="stage"><div class="deckline"></div>'
+    +'<div class="fig r-'+role+' s-'+c.st+'" data-crew="'+c.id+'" style="--sp:'+speed+'s">'
+    +'<div class="sh"></div>'
+    +bx('legR')+bx('legL')
+    +'<div class="bx armR"><i class="fr"></i><i class="sd"></i><i class="tp"></i><span class="tool"></span></div>'
+    +bx('torso')
+    +'<div class="bx armL"><i class="fr"></i><i class="sd"></i><i class="tp"></i></div>'
+    +bx('head')+bx('cap')+bx('brim')+'<div class="eye"></div>'
+    +'<div class="prop"></div>'
+    +'</div></div>';
+}
 function shell(){
   document.documentElement.lang=lang;
-  document.body.className = variant===2?'m-full':'m-steady';
+  document.body.className = variant===1?'m-steady':(variant===2?'m-full':'m-full m-3d');
 
   app.innerHTML =
    '<div class="top"><div class="compass">'+compassSVG()+'</div>'
@@ -457,6 +548,7 @@ function paint(){
     const t=c.task?byId(c.task):null;
     const sub=c.id==='firstmate'?T('coord'):(t?c.task+' · '+L(t.title):T('idle'));
     return '<div class="mem'+(c.task||c.id==='firstmate'?' act':'')+'"><div class="wake"></div>'
+      +(variant===3?figure(c):'')
       +'<div class="hd"><span class="nm"><i class="dot '+c.st+'"></i>'+c.id+'</span>'
       +'<span class="tiny dim num">'+Math.round(c.pct)+'%</span></div>'
       +'<div class="tk">'+sub+'</div>'
@@ -509,16 +601,18 @@ document.getElementById('flowOverlay').onclick=e=>{if(e.target.id==='flowOverlay
 
 /* ====================== SWITCHER (prototype-only) ====================== */
 const MOTION={1:{en:'Steady — live data, calm',tw:'穩舵 —— 會動但克制',cn:'稳舵 —— 会动但克制'},
-              2:{en:'Full sail — waves, wake, sweep',tw:'滿帆 —— 海浪、尾流、雷達',cn:'满帆 —— 海浪、尾流、雷达'}};
-function go(){ variant=variant===1?2:1;
+              2:{en:'Full sail — waves, wake, sweep',tw:'滿帆 —— 海浪、尾流、雷達',cn:'满帆 —— 海浪、尾流、雷达'},
+              3:{en:'Full sail + 3D crew',tw:'滿帆＋3D 船員',cn:'满帆＋3D 船员'}};
+function go(step){ step=step||1; variant=((variant-1+step+3)%3)+1;
   const u=new URL(location); u.searchParams.set('variant',variant); history.replaceState(null,'',u); shell(); }
 function sw(){ document.getElementById('switcher').innerHTML=
-   '<button onclick="go()" aria-label="previous">&#8249;</button>'
+   '<button onclick="go(-1)" aria-label="previous">&#8249;</button>'
   +'<span class="lbl">'+variant+' <em>'+L(MOTION[variant])+'</em></span>'
-  +'<button onclick="go()" aria-label="next">&#8250;</button><span class="tag">PROTOTYPE</span>'; }
+  +'<button onclick="go(1)" aria-label="next">&#8250;</button><span class="tag">PROTOTYPE</span>'; }
 addEventListener('keydown',e=>{
   if(/^(INPUT|TEXTAREA)$/.test(e.target.tagName)||e.target.isContentEditable) return;
-  if(e.key==='ArrowLeft'||e.key==='ArrowRight') go();
+  if(e.key==='ArrowLeft') go(-1);
+  if(e.key==='ArrowRight') go(1);
   if(e.key==='Escape') document.getElementById('flowOverlay').classList.remove('on');
 });
 shell();
