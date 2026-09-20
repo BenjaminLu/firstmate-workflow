@@ -86,11 +86,15 @@ emit --type commit_pushed --en "committed on $branch" --tw "已在 $branch 上 c
 git -C "$tree" push -q -u origin "$branch" 2>/dev/null || {
   echo "fm-worker: could not push $branch" >&2; exit 71; }
 
-pr="$($GH pr create --head "$branch" --base "$BASE" \
+url="$($GH pr create --head "$branch" --base "$BASE" \
       --title "$TASK: $(jq -r .title <<<"$spec")" \
       --body "Dispatched by firstmate for $TASK. Acceptance is in design/tasks.json." \
       2>/dev/null | tail -1)"
-emit --type pr_opened --en "opened $pr" --tw "已開 $pr"
+# the number, not the url: every step after this addresses the pull request by
+# it, and an event without it leaves the gates checking nothing
+num="$(printf '%s' "$url" | sed -n 's|.*/\([0-9][0-9]*\)$|\1|p')"
+[ -n "$num" ] || { echo "fm-worker: could not read a pull request number from '$url'" >&2; exit 72; }
+emit --type pr_opened --pr "$num" --en "opened #$num" --tw "已開 #$num"
 printf '%s\n' "$branch"
 [ "${rc:-1}" = "0" ] || exit 1
 exit 0

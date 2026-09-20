@@ -128,14 +128,16 @@ gate5() {
 }
 
 # ---- 6. the required GitHub check is green -------------------------------
+is_num() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+
 gate6() {
-  [ -n "$PR" ] || return 1
+  is_num "$PR" || return 1
   $GH pr checks "$PR" --required >/dev/null 2>&1
 }
 
 # ---- 7. the reviewer signed, and it was the reviewer ---------------------
 gate7() {
-  [ -n "$PR" ] || return 1
+  is_num "$PR" || return 1
   local body
   body="$($GH pr view "$PR" --json comments --jq \
     '.comments[]|select(.body|test("APPROVE:'"$TASK"'"))|.author.login' 2>/dev/null)"

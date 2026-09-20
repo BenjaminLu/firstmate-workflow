@@ -477,6 +477,36 @@
         "is idempotent: cleaning an already-clean task changes nothing and exits 0",
         "every worktree lives under one root inside the repository, so the system stays self-contained"
       ]
+    },
+    {
+      "id": "T-024",
+      "milestone": "M0",
+      "bootstrap": true,
+      "depends_on": [
+        "T-007",
+        "T-013",
+        "T-015"
+      ],
+      "title": "fm-run.sh: one turn of the whole loop, and an end-to-end proof of it",
+      "scope": [
+        "bin/fm-run.sh",
+        "bin/fm-worker.sh",
+        "bin/fm-gate.sh",
+        "bin/fm-merge.sh",
+        "tests/e2e-loop.test.sh",
+        "tests/gh-stub.sh",
+        "design/tasks.json",
+        "design/design.md"
+      ],
+      "acceptance": [
+        "fm-run.sh once dispatches what is ready and advances every task in flight by one step",
+        "it dispatches nothing before a greenlit event",
+        "all seven gates green asks the captain rather than merging",
+        "nothing merges until a decision file exists",
+        "an end-to-end suite runs dispatch to merged pull request with the mock adapter, a bare remote on disk and a gh stub - no network, no model",
+        "the suite asserts the log records greenlit, dispatched, commit_pushed, pr_opened, review_opened, decision_requested and merged",
+        "the worktree is gone after the merge"
+      ]
     }
   ]
 }
