@@ -69,6 +69,16 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     vendor_says "" 0
     PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
     assert_eq "1" "$?" "$name does not call a silent run a success"
+    # the prompt has to actually reach the CLI. A flag that takes a value,
+    # left dangling by an empty FM_ADAPTER_ARGS, silently swallows it - that
+    # is how the gemini adapter shipped with `-p` and no prompt behind it.
+    printf '#!/usr/bin/env bash\ncat >> "%s/got" 2>/dev/null\nprintf " ARGV:%%s" "$*" >> "%s/got"\nprintf "ran\\n"\nexit 0\n' \
+      "$d" "$d" > "$d/fakebin/$name"
+    chmod +x "$d/fakebin/$name"
+    : > "$d/got"
+    PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+    assert_contains "$(cat "$d/got")" "do the thing" "$name delivers the prompt to its CLI"
+
     vendor_says "wrote the thing" 0
     PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
     assert_eq "0" "$?" "$name still reports success when the CLI does the work"
