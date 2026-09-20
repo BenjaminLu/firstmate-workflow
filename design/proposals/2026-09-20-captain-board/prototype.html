@@ -293,6 +293,13 @@ code,.mono{font-family:var(--mono);font-size:.86em}
   background:linear-gradient(180deg,#31485e,#1a2836);box-shadow:0 5px 14px rgba(0,0,0,.5)}
 .scene .pivot{bottom:120px;left:var(--px);--sc:.86}
 .scene .pivot.p-fm{bottom:130px;--sc:.94}
+.vend{display:inline-flex;align-items:center;gap:6px;font:600 11px var(--mono);color:var(--fg2);
+  border:1px solid var(--line);border-radius:7px;padding:4px 10px;letter-spacing:.02em}
+.vend i{width:6px;height:6px;border-radius:50%;background:var(--fg3)}
+.vend.x{border-color:#4a3a1a;color:#e0b45c} .vend.x i{background:var(--brass)}
+.vend b{font-weight:700;color:var(--brass)}
+.scene .tag .vd{margin-top:2px;font:600 9.5px var(--mono);color:#5d84a3;letter-spacing:.02em}
+.scene .tag .vd.x{color:var(--brass)}
 .scene .hint{position:absolute;top:9px;left:0;right:0;text-align:center;
   font-size:10.5px;color:#5d84a3;letter-spacing:.03em;pointer-events:none;z-index:3}
 .scene .tag{position:absolute;bottom:10px;left:var(--px);transform:translateX(-50%);
@@ -387,6 +394,9 @@ const UI={
  gatesTitle:{en:'fm-gate.sh — deterministic gates. Exit codes decide, not opinions.',
              tw:'fm-gate.sh —— 確定性閘門。exit code 說了算，不是模型印象。',
              cn:'fm-gate.sh —— 确定性闸门。exit code 说了算，不是模型印象。'},
+ engine:{en:'engine',tw:'引擎',cn:'引擎'},
+ crossOn:{en:'cross-vendor review',tw:'跨供應商審核',cn:'跨供应商审核'},
+ crossOff:{en:'same-vendor review',tw:'同供應商審核',cn:'同供应商审核'},
  dragHint:{en:'drag a figure to turn it · drag the deck to turn the whole crew · double-click resets',
           tw:'拖曳人物可旋轉單人 · 拖曳甲板轉全員 · 雙擊復位',
           cn:'拖拽人物可旋转单人 · 拖拽甲板转全员 · 双击复位'},
@@ -416,6 +426,12 @@ const GATES=[
  {en:'GitHub Actions required check is green',tw:'GitHub Actions 必檢項目為綠',cn:'GitHub Actions 必检项为绿'},
  {en:'reviewer posted APPROVE:<task-id>',tw:'reviewer 貼出 APPROVE:<task-id>',cn:'reviewer 贴出 APPROVE:<task-id>'},
 ];
+const CONFIG={vendor:'claude',model:'opus-5',
+  reviewer:{vendor:'cursor-agent',model:'composer'}};   // reviewer override is optional
+const vendorOf = c => (c.role==='r' && CONFIG.reviewer)
+  ? CONFIG.reviewer.vendor+'/'+CONFIG.reviewer.model
+  : CONFIG.vendor+'/'+CONFIG.model;
+const crossVendor = () => !!(CONFIG.reviewer && CONFIG.reviewer.vendor!==CONFIG.vendor);
 const TASKS=[
  {id:'T-001',st:'merged',pct:100,title:{en:'Single writer for the event log (fm-emit.sh)',tw:'事件日誌唯一寫入口 fm-emit.sh',cn:'事件日志唯一写入口 fm-emit.sh'},pr:3,who:'worker-4',round:2,file:'bin/fm-emit.sh'},
  {id:'T-002',st:'review',pct:80,title:{en:'Board SSE server + hot reload',tw:'看板 SSE 伺服器與熱重載',cn:'看板 SSE 服务器与热重载'},pr:7,who:'reviewer-1',round:3,file:'board/server.ts',note:'askCrit'},
@@ -663,7 +679,10 @@ function fly(from,to,kind){
 function plate(c){
   const t=c.task?byId(c.task):null;
   const job = c.id==='firstmate' ? T('coord') : (t ? '<b>'+c.task+'</b> '+L(t.title) : T('idle'));
+  const vd = vendorOf(c);
+  const odd = c.role==='r' && crossVendor();
   return '<div class="who"><i class="dot '+c.st+'"></i>'+c.id+'</div>'
+    +'<div class="vd'+(odd?' x':'')+'">'+vd+'</div>'
     +'<div class="job">'+job+'</div>'
     +'<div class="pb"><i class="'+(c.st==='gate'?'bad':'')+'" style="width:'+c.pct+'%"></i></div>'
     +'<div class="pct">'+Math.round(c.pct)+'%</div>';
@@ -691,6 +710,9 @@ function shell(){
   app.innerHTML =
    '<div class="top"><div class="compass">'+compassSVG()+'</div>'
    +'<div class="brand"><span>'+T('brand')+'<small>'+T('sub')+'</small></span></div><div class="spacer"></div>'
+   +'<span class="vend'+(crossVendor()?' x':'')+'" title="'+T('engine')+'">'
+   +'<i></i>'+CONFIG.vendor+'/'+CONFIG.model
+   +(crossVendor()?' <b>\u21C4 '+CONFIG.reviewer.vendor+'</b>':'')+'</span>'
    +'<span class="clock" id="clock">--:--:--</span>'
    +'<button class="ghost" onclick="openFlow()">&#9783; '+T('flowBtn')+'</button>'
    +'<div class="langs">'+LANGS.map(x=>'<button aria-pressed="'+(x===lang)+'" onclick="setLang(\''+x+'\')">'+LANGNAME[x]+'</button>').join('')+'</div></div>'
