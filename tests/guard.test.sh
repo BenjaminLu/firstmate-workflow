@@ -36,6 +36,12 @@ assert_fail "git -C '$t' push -q origin feature/x:main" "pre-push blocks a push 
 assert_ok   "git -C '$t' push -q origin feature/x:feature/x" "pre-push allows a push onto a branch"
 
 assert_ok "test -x '$ROOT/.githooks/pre-commit' && test -x '$ROOT/.githooks/pre-push'" "hooks are executable"
-assert_ok "'$ROOT/bin/fm-install-hooks.sh' --check" "this checkout has the hooks installed"
+# the installer, not the machine this happens to run on
+fresh="$(mktemp -d)"; git -C "$fresh" init -q -b main
+assert_fail "cd '$fresh' && '$ROOT/bin/fm-install-hooks.sh' --check" "--check fails before the hooks are installed"
+assert_ok   "cd '$fresh' && '$ROOT/bin/fm-install-hooks.sh'"         "the installer runs"
+assert_ok   "cd '$fresh' && '$ROOT/bin/fm-install-hooks.sh' --check" "--check passes once they are"
+assert_eq ".githooks" "$(git -C "$fresh" config --get core.hooksPath)" "it sets core.hooksPath"
+rm -rf "$fresh"
 rm -rf "$t" "$bare"
 finish
