@@ -631,12 +631,18 @@ code,.mono{font-family:var(--mono);font-size:.86em}
                 72%{transform:rotate(-1deg) translateY(-1px)}
                 100%{transform:rotate(0) translateY(0)}}
 .ports{position:absolute;inset:0;pointer-events:none;z-index:3}
-.port{position:absolute;width:21px;height:16px;margin:0 0 -8px -10.5px;border-radius:2px;
-  background:radial-gradient(ellipse at 50% 35%,#0d1119,#04060a 70%);
-  box-shadow:0 0 0 2px var(--brass),0 0 9px rgba(201,151,47,.35),inset 0 3px 5px rgba(0,0,0,.95)}
-.port b{position:absolute;top:5px;width:14px;height:6px;border-radius:3px;
-  background:linear-gradient(90deg,#3d464f,#171d23);box-shadow:0 1px 2px rgba(0,0,0,.8)}
-.port.l b{right:-10px} .port.r b{left:-10px}
+.port{position:absolute;width:29px;height:22px;margin:0 0 -11px -14.5px;border-radius:3px;
+  background:radial-gradient(ellipse at 50% 32%,#10151e,#03050a 72%);
+  box-shadow:0 0 0 2.5px var(--brass),0 0 12px rgba(201,151,47,.4),inset 0 4px 7px rgba(0,0,0,.95)}
+.port b{position:absolute;top:7px;width:19px;height:8px;border-radius:4px;
+  background:linear-gradient(90deg,#454f59,#161c22);box-shadow:0 1px 3px rgba(0,0,0,.85)}
+.port.l b{right:-13px} .port.r b{left:-13px}
+.prow{position:absolute;z-index:3;pointer-events:none;transform:translate(-6%,0)}
+.prow .fighead{display:block;filter:drop-shadow(0 3px 7px rgba(0,0,0,.65))}
+.prow .spar{position:absolute;left:78px;top:20px;width:86px;height:6px;border-radius:3px;
+  background:linear-gradient(90deg,#8a6438,#33230f);transform:rotate(-15deg);transform-origin:0 50%}
+.prow .spar::after{content:"";position:absolute;left:56px;top:-9px;width:5px;height:24px;
+  border-radius:2px;background:#6b4c2c;transform:rotate(15deg)}
 .salvo{position:absolute;inset:0;pointer-events:none;z-index:4}
 .salvo i{position:absolute;width:30px;height:18px;margin:0 0 -9px -15px;border-radius:50%;opacity:0;
   background:radial-gradient(ellipse at 50% 50%,#fffbe8,#f6b447 38%,rgba(246,180,71,0) 72%)}
@@ -1242,6 +1248,21 @@ function shipMarkup(sp,n){
     + '<div class="hub"></div></div>';
   const lx=(50-sp.deckW*deckLens(sp.rows-1).w/2+3).toFixed(1);
   const guns = portList(sp);
+  const prowHTML = function(list){
+    const bow=list[list.length-1];
+    return '<div class="prow" style="left:95%;bottom:'+(bow.H-bow.y+18).toFixed(1)+'px">'
+      + '<svg class="fighead" viewBox="0 0 64 52" width="92" height="74" aria-hidden="true">'
+      +   '<defs><linearGradient id="gild" x1="0" y1="0" x2="0" y2="1">'
+      +     '<stop offset="0" stop-color="#f6dc95"/><stop offset=".48" stop-color="#d9a441"/>'
+      +     '<stop offset="1" stop-color="#7d5718"/></linearGradient></defs>'
+      +   '<path d="M2 41 C16 28 31 21 48 18 C35 28 25 35 17 45 Z" fill="url(#gild)" opacity=".62"/>'
+      +   '<path d="M7 32 C19 20 32 15 46 12 C35 21 27 27 21 36 Z" fill="url(#gild)" opacity=".82"/>'
+      +   '<path d="M29 41 C35 30 44 22 56 18 C59 25 57 32 51 37 C45 42 36 45 29 47 Z" fill="url(#gild)"/>'
+      +   '<circle cx="55" cy="14" r="5.6" fill="url(#gild)"/>'
+      +   '<path d="M47 26 C53 23 59 23 63 25 L62 29 C58 27 53 28 48 30 Z" fill="url(#gild)"/>'
+      +   '<path d="M3 45 C16 41 31 41 45 43 L45 48 C31 45 16 46 4 50 Z" fill="#8a6320"/>'
+      + '</svg><span class="spar"></span></div>';
+  };
   const portHTML = list => list.map(function(pt){
     return '<i class="port '+(pt.dir<0?'l':'r')+'" style="left:'+(pt.x/10).toFixed(2)+'%;'
          + 'bottom:'+(pt.H-pt.y).toFixed(1)+'px"><b></b></i>';
@@ -1256,6 +1277,7 @@ function shipMarkup(sp,n){
     + '<div class="ship"><div class="moon"></div>'
     +   '<div class="hullwrap" style="--deckW:'+sp.deckW+'%;--hullBottom:'+(96-deck0)+'px">'
     +     hullSVG(sp)
+    +     prowHTML(guns)
     +     '<div class="ports">'+portHTML(guns)+'</div>'
     +     '<div class="salvo">'+flashes+'</div></div></div>'
     + m + helm + '<div class="lantern" style="--lx:'+lx+'%;--topR:'+(sp.rows-1)+'"></div>'
