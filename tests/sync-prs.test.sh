@@ -38,7 +38,7 @@ FM_ROOT="$d" FM_GH="$MERGED" "$d/bin/fm-sync-prs.sh" --repo "$d" >/dev/null 2>&1
 assert_eq "$before" "$(wc -l < "$log" | tr -d ' ')" "running it twice writes nothing new"
 
 # the same pull request moving on is a new event, not a duplicate
-NOW="$(rec "$d" then <<'J'
+NOW="$(rec "$d" later <<'J'
 [{"number":9,"state":"MERGED","title":"T-006: the reviewer","headRefName":"t-006-review","mergedAt":"2026-09-20T17:00:00Z"}]
 J
 )"
