@@ -46,6 +46,8 @@ assert_ne "$(jq -r '.gate4' "$tw")" "$cnout" "converting zh-TW actually produces
 # comments included on purpose: the page must carry no Chinese at all, so
 # this one counts rather than filtering - and counting keeps the hygiene lint
 # from reading it as the usual comment-satisfied grep
-cjk="$(grep -c '[一-龥]' "$ROOT/board/public/index.html" || true)"
+# a bracket range over CJK depends on the locale: it passed on macOS and
+# failed on the CI runner. \p{Han} does not.
+cjk="$(perl -CSD -ne 'print if /\p{Han}/' "$ROOT/board/public/index.html" | wc -l | tr -d ' ')"
 assert_eq "0" "$cjk" "the page holds no hardcoded Chinese, comments included"
 finish
