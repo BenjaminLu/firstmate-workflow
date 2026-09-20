@@ -514,6 +514,46 @@
         "the suite asserts the log records greenlit, dispatched, commit_pushed, pr_opened, review_opened, decision_requested and merged",
         "the worktree is gone after the merge"
       ]
+    },
+    {
+      "id": "T-025",
+      "milestone": "M1",
+      "bootstrap": false,
+      "depends_on": [
+        "T-003",
+        "T-006",
+        "T-024"
+      ],
+      "title": "the adapter verdict: a vendor that fails silently is not one that worked",
+      "scope": [
+        "bin/adapters/**",
+        "bin/fm-config.sh",
+        "bin/fm-review.sh",
+        "bin/fm-worker.sh",
+        "bin/fm-run.sh",
+        "bin/fm-emit.sh",
+        "bin/ci.sh",
+        "board/server.ts",
+        "skills/reviewer/SKILL.md",
+        "tests/**",
+        "design/design.md",
+        "design/tasks.json"
+      ],
+      "acceptance": [
+        "an adapter reports unavailable when its CLI prints an outage and exits 0",
+        "a finished run whose own output discusses logins, rate limits or 429 is done, not an outage",
+        "a verdict reads only the bytes its own run added to the shared fallback log",
+        "each adapter is asserted to produce the invocation its CLI documents, not merely to be handed the prompt",
+        "the reviewer falls back through the same chain as the worker, from one implementation",
+        "no vendor runs twice however the fallback list is written",
+        "a review round must carry APPROVE or REJECT; anything else is an engine that failed, exits 3 and emits review_failed",
+        "a failed round keeps the engine's log under state/reviews and says where it is",
+        "fm-run reports a reviewer that was unavailable or produced no verdict instead of swallowing it",
+        "review_failed and worker_crashed read as blocked on the board, in counts as well as lanes",
+        "every stage the board maps is a type fm-emit will write",
+        "no stage of bin/ci.sh reads standard input, and a suite is handed /dev/null",
+        "the hygiene lint is asserted to be linting the suites it was given"
+      ]
     }
   ]
 }
