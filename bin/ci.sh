@@ -100,24 +100,39 @@ else
 fi
 
 stage "bun tests"
-bunspecs=$(find . -name '*.test.ts' -o -name '*.spec.ts' 2>/dev/null | grep -v node_modules | head -1)
-if [ -z "$bunspecs" ]; then
+# tests/e2e belongs to playwright, which owns its own runner; bun picking
+# those files up runs them without a browser and calls the result an error
+bunspecs=()
+while IFS= read -r f; do bunspecs+=("$f"); done < <(
+  find . \( -name '*.test.ts' -o -name '*.spec.ts' \) 2>/dev/null \
+    | grep -v node_modules | grep -v '/tests/e2e/' | sort)
+if [ ${#bunspecs[@]} -eq 0 ]; then
   skip "no bun specs yet"
 elif ! command -v bun >/dev/null 2>&1; then
   skip "bun not installed"
 else
-  if out=$(bun test 2>&1); then pass "bun test"; else flunk "bun test"; printf '%s\n' "$out"; fi
+  if out=$(bun test "${bunspecs[@]}" 2>&1); then
+    pass "bun test (${#bunspecs[@]} files)"
+  else
+    flunk "bun test"; printf '%s\n' "$out"
+  fi
 fi
 
 stage "end-to-end"
-if [ -d tests/e2e ]; then
-  if command -v bunx >/dev/null 2>&1; then
-    if out=$(bunx playwright test 2>&1); then pass "playwright"; else flunk "playwright"; printf '%s\n' "$out"; fi
-  else
-    skip "bunx not installed"
-  fi
-else
+if [ ! -d tests/e2e ]; then
   skip "no e2e suite yet"
+elif ! command -v bunx >/dev/null 2>&1; then
+  skip "bunx not installed"
+elif [ ! -d node_modules/@playwright ]; then
+  # an uninstalled browser is a missing tool, not a red gate: say so loudly
+  # rather than failing a machine that has not run bun install yet
+  skip "playwright not installed (bun install && bunx playwright install chromium)"
+else
+  if out=$(bunx playwright test 2>&1); then
+    pass "playwright: $(printf '%s' "$out" | sed -n 's/.*[^0-9]\([0-9][0-9]*\) passed.*/\1/p' | tail -1) browser tests"
+  else
+    flunk "playwright"; printf '%s\n' "$out"
+  fi
 fi
 
 printf '\n'

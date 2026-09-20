@@ -86,6 +86,9 @@ assert_contains "$outX" "produced no verdict" "a review round with no verdict is
 printf '#!/usr/bin/env bash\nexit 2\n' > "$r/bin/fm-review.sh"; chmod +x "$r/bin/fm-review.sh"
 outY="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
 assert_contains "$outY" "no reviewer engine was available" "and so is a reviewer with no engine"
+printf '#!/usr/bin/env bash\nexit 64\n' > "$r/bin/fm-review.sh"; chmod +x "$r/bin/fm-review.sh"
+outZ="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
+assert_contains "$outZ" "review round failed" "and so is a reviewer that failed some other way"
 cp "$r/review.keep" "$r/bin/fm-review.sh"; chmod +x "$r/bin/fm-review.sh"
 
 # a real review body has newlines, quotes and backslashes in it. The stub

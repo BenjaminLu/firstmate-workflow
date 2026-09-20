@@ -42,12 +42,19 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     FM_MOCK_EXIT=2 PATH="$d/fakebin:$PATH" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
     assert_eq "2" "$?" "mock can report the vendor being unavailable"
     # mock is the default vendor and the engine every e2e runs on, so its
-    # scripted verdicts are a contract too
-    FM_MOCK_EXIT=0 FM_MOCK_BODY="written" PATH="$d/fakebin:$PATH" \
-      "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
-    assert_ok "test -s '$d/log'" "mock never reports done without saying anything"
-    FM_MOCK_EXIT=2 PATH="$d/fakebin:$PATH" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
-    assert_fail "test -f '$d/tree/unwanted.txt'" "an unavailable mock changes nothing in the worktree"
+    # scripted verdicts are a contract too. A fresh log each time, or the
+    # assertion is satisfied by what the previous run wrote.
+    FM_MOCK_EXIT=0 FM_MOCK_BODY="a body only this test would ask for" PATH="$d/fakebin:$PATH" \
+      "$adapter" run "$d/prompt" "$d/tree" "$d/fresh.log" >/dev/null 2>&1
+    assert_ok "test -s '$d/fresh.log'" "mock says what it did in the log it was handed"
+    assert_contains "$(cat "$d/tree/mock.txt")" "only this test would ask for" "and FM_MOCK_BODY is a knob that exists"
+    # an unavailable vendor leaves the worktree exactly as it found it, which
+    # is checked by comparing it rather than by naming a file nothing creates
+    rm -rf "$d/tree"; mkdir -p "$d/tree"; echo keep > "$d/tree/existing"
+    tb="$(find "$d/tree" -type f -exec shasum {} + | shasum)"
+    FM_MOCK_EXIT=2 PATH="$d/fakebin:$PATH" "$adapter" run "$d/prompt" "$d/tree" "$d/u.log" >/dev/null 2>&1
+    assert_eq "$tb" "$(find "$d/tree" -type f -exec shasum {} + | shasum)" \
+      "an unavailable mock leaves the worktree exactly as it found it"
   else
     # a PATH without the vendor CLI - but with a shell, or the script never
     # starts and 127 gets mistaken for a contract failure
@@ -82,20 +89,28 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     # cannot exhibit the gemini bug - real gemini's -p takes the prompt as
     # its value and ignores stdin - so the argv is asserted as well, against
     # the invocation each vendor documents.
-    printf '#!/usr/bin/env bash\ncat >> "%s/got" 2>/dev/null\nprintf " ARGV:%%s" "$*" >> "%s/got"\nprintf "ran\\n"\nexit 0\n' \
+    # stdin and argv are recorded apart, so each adapter can be held to the
+    # half its CLI actually documents
+    printf '#!/usr/bin/env bash\ncat >> "%s/stdin" 2>/dev/null\nprintf "%%s" "$*" >> "%s/argv"\nprintf "ran\\n"\nexit 0\n' \
       "$d" "$d" > "$d/fakebin/$name"
     chmod +x "$d/fakebin/$name"
-    : > "$d/got"
+    : > "$d/stdin"; : > "$d/argv"
     PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
-    assert_contains "$(cat "$d/got")" "do the thing" "$name delivers the prompt to its CLI"
-    argv="$(sed -n 's/.*ARGV://p' "$d/got")"
+    # every one of them hands the prompt over on stdin; that is the whole
+    # reason an adapter may not touch git - the CLI never sees the repository
+    assert_contains "$(cat "$d/stdin")" "do the thing" "$name delivers the prompt on stdin"
+    argv="$(cat "$d/argv")"
     case "$name" in
       # -p here means "print mode", a bare flag: stdin carries the prompt
       claude|cursor-agent) assert_contains " $argv " " -p " "$name asks for print mode" ;;
       # gemini's -p takes the prompt as its VALUE. A bare -p leaves the flag
       # dangling and the prompt is never delivered: "Not enough arguments
       # following: p". Piped stdin is what makes it headless.
-      gemini) assert_fail "printf '%s' ' $argv ' | grep -q ' -p '" "$name passes no dangling -p" ;;
+      # gemini's -p takes the prompt as its VALUE. The documented headless
+      # form is a piped stdin and no -p at all: a bare -p leaves the flag
+      # dangling and the prompt is never delivered.
+      gemini) assert_eq "" "$argv" "$name uses the documented headless form"
+              assert_fail "printf '%s' ' $argv ' | grep -q ' -p '" "$name passes no dangling -p" ;;
       # codex reads stdin only when the last argument is the marker "-"
       codex) assert_eq "-" "${argv##* }" "$name keeps the stdin marker last" ;;
     esac

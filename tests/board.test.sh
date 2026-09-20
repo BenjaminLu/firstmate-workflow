@@ -36,7 +36,13 @@ assert_eq "1" "$(jq -r .counts.inflight <<<"$s")" "the counts follow the log"
 
 # a task whose review never happened, or whose worker died, must not keep
 # reading as work in progress
+# reset between iterations, or the second type is asserted against a stage
+# the first one already set and its absence from the map would go unnoticed
 for pair in review_failed worker_crashed; do
+  FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-A --type dispatched \
+    --en "back to work" --tw "回去做" >/dev/null
+  assert_eq "working" "$(jq -r '.tasks[]|select(.id=="T-A")|.stage' \
+    <<<"$(curl -sf "http://127.0.0.1:$PORT/api/state")")" "T-A is working again before $pair"
   FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-A --type "$pair" \
     --en "stuck" --tw "卡住" >/dev/null
   s2="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
@@ -47,8 +53,7 @@ for pair in review_failed worker_crashed; do
   assert_eq "0" "$(jq -r .counts.inflight <<<"$s2")" "$pair stops counting as in flight"
   assert_eq "1" "$(jq -r .counts.blocked <<<"$s2")" "$pair counts as blocked"
 done
-FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-A --type dispatched \
-  --en "picked up again" --tw "再領一次" >/dev/null
+
 
 page="$(curl -sf "http://127.0.0.1:$PORT/")"
 assert_contains "$page" "Captain" "the page is served"

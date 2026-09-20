@@ -197,8 +197,11 @@ an unavailability signature in the run's own output is a `2` whatever the exit
 code was; exit `0` having said nothing at all is a `1`. Because the fallback
 chain appends to one log, a verdict only reads the bytes its own run added.
 
-`fm_vendor_chain` builds the order and `fm_run_chain` runs it, both in
-`bin/fm-config.sh`, so the worker and the reviewer fall back identically and a
+`fm_vendor_chain <role>` builds the order and `fm_run_chain` runs it, both in
+`bin/fm-config.sh`, so the worker and the reviewer fall back identically. Each
+role may name its own engine — `reviewer:` and `worker:` blocks in
+`config.yaml` — and whichever it names leads a chain that continues through
+`fallback:` with no vendor run twice and a
 reviewer whose engine is down is not simply a reviewer who never ran. A round
 that produced no review exits `3` and emits `review_failed`; it never reaches
 the pull request and never counts toward gate 7.

@@ -72,9 +72,21 @@ cap3="$d/sent3.md"
   bin/fm-review.sh --task T-Z --branch work --round 3 >/dev/null 2>&1 )
 assert_contains "$(cat "$cap3")" "CRITERIA-COMPLETE:T-Z" "round three asks for the closed list"
 
-# an unavailable reviewer vendor is not a rejection
-( cd "$r" && FM_ROOT="$r" FM_GH="$GH" FM_MOCK_EXIT=2 bin/fm-review.sh --task T-Z --branch work >/dev/null 2>&1 )
+# an unavailable reviewer vendor is not a rejection - and the engines' log
+# is exactly what someone needs when nothing would run
+cat > "$r/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'mock: not logged in\n' >> "$4"
+exit 2
+M
+chmod +x "$r/bin/adapters/mock.sh"
+rm -f "$r/state/reviews/T-Z-r7.log"
+outU="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 7 2>&1)"
 assert_eq "2" "$?" "an unavailable vendor exits 2"
+assert_contains "$(cat "$r/state/reviews/T-Z-r7.log" 2>/dev/null)" "not logged in" \
+  "and an outage keeps what the engines said"
+assert_contains "$outU" "state/reviews/T-Z-r7.log" "and says where to read it"
 rm -rf "$d" "$d2"
 # a review that did not happen must not look like one that did
 d="$(fixture)"; r="$d/repo"; GH="$(ghstub "$d")"
@@ -134,7 +146,7 @@ M
 chmod +x "$r/bin/adapters/other.sh"
 out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 2 --pr 9 2>&1)"
 assert_eq "3" "$?" "prose with neither marker is not a review"
-assert_contains "$(cat "$r/state/reviews/T-Z-r2.log" 2>/dev/null)" "" "its log is kept too"
+assert_contains "$out" "state/reviews/T-Z-r2.log" "and round two says where its log is too"
 
 cat > "$r/bin/adapters/other.sh" <<'M'
 #!/usr/bin/env bash

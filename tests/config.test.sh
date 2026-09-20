@@ -66,8 +66,9 @@ fallback:
   - mock
   - codex
 YAML
+# the worker passes a role, so that is the call the test has to make
 ( cd "$d" && . "$ROOT/bin/fm-config.sh"
-  printf '%s' "$(fm_vendor_chain)" ) > "$d/worker.chain"
+  printf '%s' "$(fm_vendor_chain worker)" ) > "$d/worker.chain"
 assert_eq "claude
 codex
 mock" "$(cat "$d/worker.chain")" "the worker leads with its vendor and no vendor runs twice"
@@ -82,6 +83,17 @@ mock" "$(cat "$d/rev.chain")" "the reviewer leads with its own vendor"
 ( cd "$d" && . "$ROOT/bin/fm-config.sh"
   printf '%s' "$(fm_vendor_chain reviewer gemini)" ) > "$d/exp.chain"
 assert_eq "gemini" "$(cat "$d/exp.chain")" "an explicit vendor is the whole chain"
+
+# a worker: block overrides the top level the same way reviewer: does
+printf 'vendor: claude\nworker:\n  vendor: codex\nfallback:\n  - mock\n' > "$d/config.yaml"
+( cd "$d" && . "$ROOT/bin/fm-config.sh"
+  printf '%s' "$(fm_vendor_chain worker)" ) > "$d/w2.chain"
+assert_eq "codex
+mock" "$(cat "$d/w2.chain")" "a worker block names the worker's engine"
+( cd "$d" && . "$ROOT/bin/fm-config.sh"
+  printf '%s' "$(fm_vendor_chain reviewer)" ) > "$d/r2.chain"
+assert_eq "claude
+mock" "$(cat "$d/r2.chain")" "and leaves the reviewer on the top-level one"
 
 # a chain of stub adapters: the first two are unavailable, the third works
 mkdir -p "$d/ad" "$d/tree"; : > "$d/log"; echo p > "$d/prompt"
