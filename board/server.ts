@@ -96,6 +96,19 @@ const server = Bun.serve({
     const url = new URL(req.url);
     if (url.pathname === "/api/state") return json(state());
 
+    // the dictionaries, plus the table that derives zh-CN from zh-TW
+    if (url.pathname === "/api/i18n") {
+      const dir = join(ROOT, "i18n");
+      const read = (f: string) =>
+        existsSync(join(dir, f)) ? JSON.parse(readFileSync(join(dir, f), "utf8")) : {};
+      const table = existsSync(join(dir, "tw2cn.tsv"))
+        ? readFileSync(join(dir, "tw2cn.tsv"), "utf8").split("\n")
+            .filter((l) => l.trim() !== "" && !l.startsWith("#"))
+            .map((l) => l.split("\t")).filter((p) => p.length === 2)
+        : [];
+      return json({ en: read("ui.en.json"), "zh-TW": read("ui.zh-TW.json"), tw2cn: table });
+    }
+
     if (url.pathname === "/events") {
       let stop = () => {};
       const stream = new ReadableStream({

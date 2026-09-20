@@ -30,7 +30,9 @@ for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORT/api/state" >/dev/null 
 s="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
 assert_eq "D-1" "$(jq -r '.pending[0].id' <<<"$s")" "the pending decision reaches the board"
 assert_eq "merge" "$(jq -r '.pending[0].kind' <<<"$s")" "with its kind"
-assert_contains "$(curl -sf "http://127.0.0.1:$PORT/")" "Awaiting your call" "the page has a decision deck"
+# the heading is filled from the dictionary at runtime, so assert on the
+# element the deck renders into rather than on a string that is no longer there
+assert_contains "$(curl -sf "http://127.0.0.1:$PORT/")" 'id="deck"' "the page has a decision deck"
 
 # no -f here: a rejection is a 400 with a body, and -f throws the body away
 post() { curl -s -X POST "http://127.0.0.1:$PORT/decisions" -H 'content-type: application/json' -d "$1"; }
