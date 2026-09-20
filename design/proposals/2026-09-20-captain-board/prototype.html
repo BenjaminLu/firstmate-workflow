@@ -610,6 +610,12 @@ code,.mono{font-family:var(--mono);font-size:.86em}
 .rrow .l2 .act{font-size:10.5px;color:var(--brass);white-space:nowrap;margin-left:auto}
 @media(max-width:700px){ .rrow .l1{grid-template-columns:76px 28px auto 1fr 34px}
   .rrow .rounds,.rrow .pr{display:none} }
+.shipbar .ahoybtn{pointer-events:auto;border:none;border-radius:99px;padding:3px 12px;
+  font:800 10.5px var(--mono);letter-spacing:.12em;color:#2a1c05;
+  background:linear-gradient(180deg,#e6bd63,#b8862c);box-shadow:0 2px 0 #6d4d13}
+.shipbar .ahoybtn:active{transform:translateY(2px);box-shadow:0 0 0 #6d4d13}
+.shipbar .ahoybtn.q{padding:3px 9px;font-size:12px;
+  background:linear-gradient(180deg,#cfd8e2,#8a96a3);box-shadow:0 2px 0 #4a545e}
 .shipbar .toggle{pointer-events:auto;border:1px solid #27455e;border-radius:99px;padding:2px 10px;
   font:600 10.5px var(--mono);color:#9dc0d8;background:rgba(9,20,30,.72)}
 .shipbar .toggle[aria-pressed=true]{background:var(--accent2);border-color:var(--accent2);color:#fff}
@@ -1371,6 +1377,8 @@ function scene(){
     + '<span>'+n+'</span><button onclick="addCrew(1)" aria-label="more">+</button></span>'
     + '<button class="toggle" aria-pressed="'+rosterVisible()+'" onclick="toggleRoster()">'
     +   T('rosterBtn')+'</button>'
+    + '<button class="ahoybtn" onclick="ahoy(\'merged\')" title="broadside">&#9875; AHOY!</button>'
+    + '<button class="ahoybtn q" onclick="ahoy(\'order\')" title="bell">&#9784;</button>'
     + '<span>'+T('dragHint')+'</span></div>'
     + CREW.map(c=>figureRaw(c)).join('')
     + CREW.map(c=>'<div class="tag st-'+c.st+'" data-tag="'+c.id+'" style="--px:'+posOf(c.id)+';--r:'+(c.row||0)+';--plateW:'+(c.plateW||'15%')
