@@ -26,7 +26,12 @@ command -v claude >/dev/null 2>&1 || {
 # FM_ADAPTER_ARGS is deliberately unquoted: it carries whatever extra
 # arguments the operator configured, and they have to split into words.
 off="$(fm_adapter_mark "$log")"
-( cd "$tree" && claude -p ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
+# A worker has to be able to edit files in its own worktree, and nobody is
+# there to answer a prompt. acceptEdits is the least that allows the work:
+# it accepts file edits and still asks about everything else - which the
+# adapter never needs, because the scripts do all the git and gh.
+( cd "$tree" && claude -p --permission-mode acceptEdits ${FM_ADAPTER_ARGS:-} < "$prompt" ) \
+  >> "$log" 2>&1
 rc=$?
 fm_adapter_verdict "$rc" "$log" "$off"
 exit $?
