@@ -138,10 +138,20 @@ grep -Eq '^T-[A-Za-z0-9._-]{1,32}$' <<<"$TASK" || TASKPATH=''
 
 # ------------------------------------------------------------------ helpers
 
+# The escape does not go through ${s//</&lt;}, because that expansion does not
+# mean the same thing in the two bashes this repository runs on. bash 5.2
+# turned patsub_replacement on by default: an unquoted & in the replacement
+# now stands for the text the pattern matched. So that line writes <lt; on
+# the runner's 5.2 and &lt; on the mac's 3.2, and a title of <script> reached
+# the page as <lt;script>gt; - which holds neither &lt;script&gt; nor
+# <script>, so the assertion looking for the escape failed while the one
+# looking for the tag passed, and the pair read as a half-working escape
+# rather than a broken one. There is no spelling that works in both: \& is
+# the escape hatch in 5.2 and two literal characters in 3.2. sed has meant
+# one thing by \& for thirty years, so the substitution happens there.
 esc() {
-  local s="$1"
-  s="${s//&/&amp;}"; s="${s//</&lt;}"; s="${s//>/&gt;}"; s="${s//\"/&quot;}"
-  printf '%s' "$s"
+  printf '%s' "$1" \
+    | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
 }
 
 # The dictionary, read once per language into d_<key>. bash 3.2 ships no

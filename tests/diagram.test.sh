@@ -444,13 +444,30 @@ assert_eq "" "$(find "$nb/board/public/diagrams" -name 'D-051.*' 2>/dev/null)" \
 assert_eq "3" "$(find "$nb/board/public/diagrams" -name 'D-051.*' 2>/dev/null | wc -l | tr -d ' ')" \
   "while a decision still draws all three"
 
-# a captain's title is captain-supplied text, so it reaches the page as text
+# a captain's title is captain-supplied text, so it reaches the page as text.
+#
+# All four characters are asserted, and not only the < that the failure
+# arrived as. The escape was written as ${s//</&lt;}, and bash 5.2 turned
+# patsub_replacement on by default: an unquoted & in the replacement means
+# the text the pattern matched. Under it & -> &amp; still came out right
+# (the match IS an &) while <, > and " all came out as <lt; >gt; "quot;. So
+# a suite that checks one of the four can be green on a machine where three
+# of them are broken - which is what happened: this ran green on bash 3.2
+# and red on the runner, with the one assertion below it reporting ok
+# because <lt;script>gt; contains no script tag either.
 R="$(newroot)"
-decision "$R" D-014 '{"id":"D-014","task":"T-004","kind":"choice","title":"<script>alert(1)</script> & <b>"}'
+decision "$R" D-014 '{"id":"D-014","task":"T-004","kind":"choice","title":"<script>alert(1)</script> & <b> \"q\""}'
 "$DG" --decision D-014 --repo "$R" >/dev/null 2>&1
 d14="$(cat "$R/board/public/diagrams/D-014.en.html" 2>/dev/null)"
 assert_contains "$d14" "&lt;script&gt;" "a title with markup in it is escaped"
+assert_contains "$d14" "&amp;"          "and its ampersand is escaped"
+assert_contains "$d14" "&quot;q&quot;"  "and its quotes are escaped"
 assert_lacks    "$d14" "<script>"       "and no script tag reaches the page"
+# the exact shape the 5.2 expansion produced, pinned so it cannot come back
+# wearing the old assertions' approval
+for wrong in '<lt;' '>gt;' '"quot;'; do
+  assert_lacks "$d14" "$wrong" "and no half-escape [$wrong] is on the page"
+done
 
 # an answered decision is still drawable: the board may show the card while
 # the merge it asked for is running
@@ -573,6 +590,43 @@ kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null || true
 trap - EXIT
 rm -rf "$R"
+
+# ------------------------------------------- the class, not the one instance
+#
+# The escape above was one site. The class is every ${var/pat/rep} in the
+# repository whose replacement carries a literal &, because that character
+# changed meaning between the bash on a mac (3.2, & is an ampersand) and the
+# bash on the runner (5.2, patsub_replacement is on and & is the matched
+# text). Such a line is not portable in either direction - \& is the 5.2
+# escape and two literal characters in 3.2 - so the answer is always to take
+# the substitution somewhere that has one meaning, as esc() now does with
+# sed. A grep, so a new one cannot arrive quietly the way this one did: the
+# only machine that would have caught it is the runner, and it says nothing
+# until the pull request is already open.
+#
+# Comment lines are dropped, or this block would flag the paragraphs that
+# explain it. ${cnout//$a/$b} in tests/i18n.test.sh is not a hit and should
+# not be: an & arriving from an expansion is data, and only a literal & in
+# the source text of the replacement is read as the match.
+patsub="$(grep -HnE '\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?/[/#%]?[^}/]*/[^}]*&' \
+  "$ROOT"/bin/*.sh "$ROOT"/bin/adapters/*.sh "$ROOT"/tests/*.sh 2>/dev/null \
+  | grep -v '^[^:]*:[0-9]*: *#' || true)"
+assert_eq "" "$patsub" \
+  "no pattern substitution puts a literal & in its replacement"
+
+# and the grep is not a grep that cannot find anything: the shape it looks
+# for, handed to it on purpose, has to come back
+probe="$(mktemp -d)"
+# the ampersand is interpolated rather than written out, because a fixture
+# that spells the forbidden shape in full is itself a hit on the grep above
+a='&'
+{ printf 'x="${s//</%slt;}"\n'   "$a"
+  printf '# x="${s//>/%sgt;}"\n' "$a"; } > "$probe/bin.sh"
+hits="$(grep -HnE '\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?/[/#%]?[^}/]*/[^}]*&' \
+  "$probe/bin.sh" | grep -v '^[^:]*:[0-9]*: *#' || true)"
+assert_contains "$hits" '&lt;' "the guard above really does see the shape it forbids"
+assert_lacks    "$hits" '&gt;' "and really does walk past it in a comment"
+rm -rf "$probe"
 
 # ------------------------------------------------- where the suite has to be
 ci="$(cat "$ROOT/bin/ci.sh")"
