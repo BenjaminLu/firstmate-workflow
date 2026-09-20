@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# The whole loop, once, with nothing real behind it: mock adapter, a bare
+# remote on disk, and a gh that remembers. Dispatch to merged pull request.
+set -uo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/lib.sh
+. "$ROOT/tests/lib.sh"
+
+d="$(mktemp -d)"; bare="$d/remote.git"; r="$d/repo"
+git init -q --bare "$bare"
+git init -q -b main "$r"
+cd "$r" || exit 1
+git config user.email a@b.c; git config user.name t
+mkdir -p bin design skills/worker skills/reviewer state src tests
+cp "$ROOT"/bin/fm-*.sh bin/
+cp -r "$ROOT/bin/adapters" bin/
+cp "$ROOT/bin/watch-decisions.ts" bin/ 2>/dev/null || true
+cp "$ROOT/skills/worker/SKILL.md" skills/worker/
+cp "$ROOT/skills/reviewer/SKILL.md" skills/reviewer/
+printf 'vendor: mock\nconcurrency: 2\nfallback:\n  - mock\n' > config.yaml
+printf '#!/usr/bin/env bash\nexit 0\n' > bin/ci.sh; chmod +x bin/ci.sh
+cat > design/tasks.json <<'J'
+{"tasks":[{"id":"T-A","title":"a task the loop can finish","milestone":"M0",
+           "depends_on":[],"scope":["src/**","tests/**"],"acceptance":["it lands"]}]}
+J
+printf '# design\n## 6. gates\nseven\n## 8. board\n' > design/design.md
+echo base > src/thing
+git add -A; git commit -qm base; git remote add origin "$bare"; git push -q -u origin main
+
+export GHSTATE="$d/ghstate"
+GH="$ROOT/tests/gh-stub.sh"
+run() { FM_ROOT="$r" FM_GH="$GH" FM_BASE=main "$@"; }
+
+# the mock writes a real implementation and a test that depends on it, so the
+# fifth gate has something honest to check
+export FM_MOCK_FILE=src/thing FM_MOCK_BODY=implemented
+cat > bin/adapters/mock.sh <<'M'
+#!/usr/bin/env bash
+# One mock, two roles. The prompt says which: fm-review prepends the reviewer
+# skill, fm-worker the worker one.
+[ "$1" = "run" ] || exit 64
+echo "mock ran" >> "$4"
+if grep -q "Find the reason to reject" "$2"; then
+  printf '%s\n' "${FM_VERDICT:-round one: name the helper and cover the empty case}" > "$3/verdict.txt"
+  exit 0
+fi
+printf 'implemented\n' > "$3/src/thing"
+mkdir -p "$3/tests"
+printf '#!/usr/bin/env bash\ngrep -q implemented "$(dirname "$0")/../src/thing"\n' > "$3/tests/a.test.sh"
+chmod +x "$3/tests/a.test.sh"
+exit 0
+M
+chmod +x bin/adapters/mock.sh
+
+# --- nothing starts before the captain has seen it ----------------------
+run bin/fm-run.sh once --repo "$r" >/dev/null 2>&1
+assert_fail "test -s '$GHSTATE/prs'" "no green light, no pull request"
+
+run bin/fm-emit.sh --actor captain --type greenlit --en go --tw 開工 >/dev/null
+
+# --- turn one: dispatch, worktree, commit, push, pull request -----------
+out1="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
+assert_contains "$out1" "dispatched: T-A" "turn one dispatches the ready task"
+for _ in $(seq 1 40); do [ -s "$GHSTATE/prs" ] && break; sleep 0.25; done
+assert_ok "test -s '$GHSTATE/prs'" "a pull request exists"
+pr="$(awk -F'\t' 'NR==1{print $1}' "$GHSTATE/prs")"
+branch="$(awk -F'\t' 'NR==1{print $2}' "$GHSTATE/prs")"
+assert_contains "$branch" "t-a" "on a branch named after the task"
+assert_ok "git --git-dir='$bare' rev-parse --verify '$branch'" "and it was pushed"
+
+# --- turn two: the gates run, gate seven sends it to review -------------
+out2="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
+assert_contains "$out2" "sending it to review" "gates one to six pass and it goes to review"
+assert_ok "test -s '$GHSTATE/comments.$pr'" "the reviewer commented"
+
+# the reviewer in this fixture signs off
+printf 'reviewer-1\tAPPROVE:T-A\n' >> "$GHSTATE/comments.$pr"
+
+# --- turn three: all seven green, so the captain is asked ---------------
+out3="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
+assert_contains "$out3" "asking the captain" "seven green means a decision, not a merge"
+pend="$(ls "$r/state/pending" 2>/dev/null | head -1)"
+assert_ok "[ -n \"$pend\" ]" "a decision is pending on disk"
+id="${pend%.json}"
+
+# nothing merged while the captain has not answered
+assert_eq "OPEN" "$(awk -F'\t' -v n="$pr" '$1==n{print $4}' "$GHSTATE/prs")" \
+  "nothing merges before the captain answers"
+
+# --- the captain answers, and only then does it merge -------------------
+mkdir -p "$r/state/decisions"
+printf '{"id":"%s","task":"T-A","kind":"merge","chosen":"A"}\n' "$id" > "$r/state/decisions/$id.json"
+run bin/fm-merge.sh --pr "$pr" --task T-A --repo "$r" >/dev/null 2>&1
+assert_eq "MERGED" "$(awk -F'\t' -v n="$pr" '$1==n{print $4}' "$GHSTATE/prs")" "the pull request is merged"
+
+types="$(jq -r .type < "$r/state/events.jsonl" | tr '\n' ' ')"
+for want in greenlit dispatched commit_pushed pr_opened review_opened decision_requested merged; do
+  assert_contains "$types" "$want" "the log records $want"
+done
+assert_fail "test -d '$r/state/worktrees/T-A'" "the worktree is cleaned up after the merge"
+
+cd "$ROOT" || exit 1
+rm -rf "$d"
+finish

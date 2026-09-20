@@ -498,6 +498,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-007 | `fm-dispatch.sh`: the DAG, the limit, the green-light gate | T-005, T-006 |
 | T-008 | `fm-decide.sh`: decisions land, firstmate wakes | T-002 |
 | T-023 | `fm-cleanup.sh`: a worker removes its own worktree and nothing else | T-005 |
+| T-024 | `fm-run.sh`: one turn of the whole loop, proved end to end | T-007, T-013, T-015 |
 
 ### M1 — the board
 

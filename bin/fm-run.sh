@@ -35,8 +35,8 @@ turn() {
   [ -z "$started" ] || say "dispatched: $(printf '%s' "$started" | tr '\n' ' ')"
 
   # 3. advance every task that has a pull request open
-  jq -r 'select(.type=="pr_opened")|[.task,(.pr|tostring)]|@tsv' state/events.jsonl 2>/dev/null \
-    | sort -u | while IFS=$'\t' read -r task pr; do
+  open_prs="$(jq -r 'select(.type=="pr_opened")|[.task,(.pr|tostring)]|@tsv' state/events.jsonl 2>/dev/null | sort -u)"
+  while IFS=$'\t' read -r task pr; do
     [ -n "$task" ] && [ -n "$pr" ] || continue
     jq -e --arg t "$task" 'select(.type=="merged" and .task==$t)' state/events.jsonl >/dev/null 2>&1 && continue
 
@@ -47,11 +47,11 @@ turn() {
 
     # the protocol first: from round three it can stop the round outright
     if [ "$round" -ge 3 ]; then
-      "$B/fm-protocol.sh" check --task "$task" --pr "$pr" --round "$round" --repo "$REPO" >/dev/null 2>&1 \
+      "$B/fm-protocol.sh" check --task "$task" --pr "$pr" --round "$round" --repo "$REPO" >/dev/null 2>&1 </dev/null \
         || { say "$task: protocol violation in round $round"; continue; }
     fi
 
-    "$B/fm-gate.sh" --task "$task" --repo "$REPO" --branch "$branch" --pr "$pr" >/dev/null 2>&1
+    "$B/fm-gate.sh" --task "$task" --repo "$REPO" --branch "$branch" --pr "$pr" >/dev/null 2>&1 </dev/null
     g=$?
     if [ "$g" -eq 0 ]; then
       # all seven green: the captain decides, nobody else
@@ -59,15 +59,15 @@ turn() {
       [ -f "state/pending/$id.json" ] && { say "$task: waiting on the captain"; continue; }
       [ -f "state/decisions/$id.json" ] && continue
       "$B/fm-decide.sh" --request "$id" --task "$task" --kind merge --pr "$pr" \
-        --title "$task passed the gates - merge it?" --repo "$REPO" >/dev/null 2>&1
+        --title "$task passed the gates - merge it?" --repo "$REPO" >/dev/null 2>&1 </dev/null
       say "$task: all seven gates green, asking the captain ($id)"
     elif [ "$g" -eq 7 ]; then
       say "$task: gates 1-6 green, sending it to review (round $round)"
-      "$B/fm-review.sh" --task "$task" --branch "$branch" --pr "$pr" --round "$round" --repo "$REPO" >/dev/null 2>&1 || true
+      "$B/fm-review.sh" --task "$task" --branch "$branch" --pr "$pr" --round "$round" --repo "$REPO" >/dev/null 2>&1 </dev/null || true
     else
       say "$task: stopped at gate $g"
     fi
-  done
+  done <<< "$open_prs"
 }
 
 if [ "$MODE" = once ]; then turn; exit 0; fi
