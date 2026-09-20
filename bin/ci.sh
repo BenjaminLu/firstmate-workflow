@@ -69,7 +69,7 @@ if [ -n "$bad" ]; then
   flunk "an assertion greps source without excluding comments"
   printf '%s\n' "$bad"
 else
-  pass "no assertion greps source without excluding comments"
+  pass "no assertion greps source without excluding comments (${#suitefiles[@]} suites)"
 fi
 
 # a fixture that swaps a script out has to put it back, and a hand-rolled
@@ -103,7 +103,11 @@ fi
 stage "stdin"
 dispatchers=''
 for f in bin/*.sh; do
-  case "$f" in */fm-config.sh) continue ;; esac
+  # A file that is meant to be sourced must NOT have the line: `exec` in a
+  # sourced file redirects the caller's own standard input for the rest of
+  # its life, and bin/fm-guard.sh is sourced by .githooks/pre-push, which
+  # receives its ref list on exactly that descriptor.
+  case "$f" in */fm-config.sh|*/fm-guard.sh) continue ;; esac
   grep -qE '\$\(|"\$[A-Z_]*/(bin/)?fm-|fm_run_chain|Bun\.spawn|\$GH ' "$f" || continue
   grep -q '^exec < /dev/null' "$f" || dispatchers="$dispatchers $(basename "$f")"
 done

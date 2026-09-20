@@ -7,11 +7,11 @@
 #   bin/fm-guard.sh branch <dir>      ...in another worktree
 #   . bin/fm-guard.sh                 then call fm_guard_branch yourself
 set -uo pipefail
-# Nothing below may read standard input. A dispatched child inherits it, and
-# a child that reads it blocks the caller waiting for a human who is not
-# there. One guarantee, in one place; bin/ci.sh fails if a script that
-# dispatches is missing it.
-exec < /dev/null
+# No `exec < /dev/null` here, and bin/ci.sh exempts this file by name. The
+# usage above offers this file to be sourced, and a redirect in a sourced
+# file belongs to the caller for the rest of its life - a pre-push hook that
+# sourced it would lose the ref list it is given on standard input. The
+# guarantee belongs on entry points, and this is also a library.
 
 FM_PROTECTED="${FM_PROTECTED:-main master}"
 

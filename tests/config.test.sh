@@ -111,8 +111,13 @@ assert_eq "1 c a b" "$(cat "$d/ran")" "unavailable vendors are skipped, the next
   fm_run_chain "$d/ad" "a b" "$d/prompt" "$d/tree" "$d/log"; printf '%s' "$?" ) > "$d/allout"
 assert_eq "2" "$(cat "$d/allout")" "every vendor unavailable is itself unavailable"
 
+# a head with no adapter is a typo in config.yaml and comes straight back
 ( . "$ROOT/bin/fm-config.sh"
   fm_run_chain "$d/ad" "nosuch c" "$d/prompt" "$d/tree" "$d/log"; printf '%s' "$?" ) > "$d/miss"
-assert_eq "1" "$(cat "$d/miss")" "a vendor with no adapter is passed over"
+assert_eq "65" "$(cat "$d/miss")" "a head with no adapter is a configuration error"
+# a fallback entry with no adapter is just skipped
+( . "$ROOT/bin/fm-config.sh"
+  fm_run_chain "$d/ad" "c nosuch" "$d/prompt" "$d/tree" "$d/log"; printf '%s' "$?" ) > "$d/miss2"
+assert_eq "1" "$(cat "$d/miss2")" "a fallback entry with no adapter is passed over"
 rm -rf "$d"
 finish

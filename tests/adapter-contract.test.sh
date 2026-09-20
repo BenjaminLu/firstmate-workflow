@@ -186,20 +186,64 @@ nothing() { false; }
 fm_run_chain "$e/ad" "one two" "$e/prompt" "$e/out" "$e/log" nothing
 assert_ok "grep -q 'second vendor' '$e/log'" "with nothing to show, the chain moves on"
 
-# a typo at the head of the chain is a configuration error, not an outage
+# A typo at the head of the chain is a configuration error, and it has to be
+# found BEFORE anything runs: the caller's exit 65 would otherwise throw away
+# work a later vendor had already done.
+: > "$e/log"
 fm_run_chain "$e/ad" "nosuchvendor two" "$e/prompt" "$e/out" "$e/log" nothing
-assert_eq "nosuchvendor" "$FM_VENDOR_UNKNOWN" "a head with no adapter is named, not passed over"
+assert_eq "65" "$?" "an unknown head comes straight back as a configuration error"
+assert_eq "nosuchvendor" "$FM_VENDOR_UNKNOWN" "and it is named"
+assert_eq "" "$(cat "$e/log")" "and no vendor was run, even a working fallback"
+
+# a fallback entry with no adapter is a different thing: just skip it
+: > "$e/log"
 fm_run_chain "$e/ad" "two nosuchvendor" "$e/prompt" "$e/out" "$e/log" nothing
 assert_eq "" "$FM_VENDOR_UNKNOWN" "a fallback entry with no adapter is just skipped"
+assert_ok "grep -q 'second vendor' '$e/log'" "and the working head still ran"
+
+# each attempt gets its own output directory when the caller asks, so a
+# vendor that dies half way through cannot sign on the next one's behalf
+: > "$e/log"
+cat > "$e/ad/half.sh" <<'A'
+#!/usr/bin/env bash
+printf 'REJECT:T-Z
+' > "$3/partial.md"
+exit 2
+A
+chmod +x "$e/ad/half.sh"
+saw_marker() { grep -qr 'REJECT:T-Z' "$FM_RUN_OUTDIR" 2>/dev/null; }
+fm_run_chain "$e/ad" "half two" "$e/prompt" "$e/out" "$e/log" saw_marker per-vendor
+assert_eq "half" "$FM_VENDOR_MISREAD" "the vendor that wrote it is the one credited"
+: > "$e/log"; rm -rf "$e/out"; mkdir -p "$e/out"
+cat > "$e/ad/half.sh" <<'A'
+#!/usr/bin/env bash
+printf 'REJECT:T-Z
+' > "$3/partial.md"
+exit 2
+A
+chmod +x "$e/ad/half.sh"
+never() { false; }
+fm_run_chain "$e/ad" "half two" "$e/prompt" "$e/out" "$e/log" never per-vendor
+assert_ok "test -f '$e/out/half/partial.md'" "a dead vendor's bytes stay in its own directory"
+assert_fail "test -f '$e/out/two/partial.md'" "and are not found in the next vendor's"
 rm -rf "$e"
-# The wording test is deliberately generous and is NOT the decision: a task
-# about logins and rate limits says the same words an outage does, and no
-# wording test can tell them apart. So these read as outages here, and the
-# chain's evidence predicate below is what settles them.
-for job in "Added rate limiting: the handler now returns 429 with Retry-After." \
-           "Implemented the login flow; credentials are read from the keyring." \
-           "The authentication middleware rejects an unauthorized token."; do
-  assert_eq "2" "$(verdict "$job" 0)" "the wording test is generous about ${job%% *}"
+# Every alternative in the list has to be shaped like a failure. A bare noun
+# is what a healthy run prints on its way up - gemini says "Loaded cached
+# credentials." before it does anything - and a `credentials?` alternative
+# turned every successful gemini run into a reported outage.
+for healthy in "Loaded cached credentials." \
+               "Authenticated as benjamin. Ready." \
+               "Added rate limiting: the handler now returns 429 with Retry-After." \
+               "Implemented the login flow; credentials are read from the keyring."; do
+  assert_eq "0" "$(verdict "$healthy" 0)" "a healthy run that says \"${healthy%% *}...\" is done"
+done
+# and the failures those nouns appear in still read as failures
+for broken in "Error: Authentication required. Please run 'agent login' first" \
+              "Error authenticating: IneligibleTierError" \
+              "Error: quota exceeded for this organisation" \
+              "429 Too Many Requests" \
+              "invalid api key"; do
+  assert_eq "2" "$(verdict "$broken" 0)" "but \"${broken%% *}...\" is an outage"
 done
 assert_eq "1" "$(verdict "" 0)" "exit 0 with nothing said is unfit"
 # the shape a review actually has. The wording test condemns it, and that is
@@ -207,7 +251,6 @@ assert_eq "1" "$(verdict "" 0)" "exit 0 with nothing said is unfit"
 assert_eq "2" "$(verdict "REJECT:T-025
 1. The rate limit path is unauthorized to retry, and the credentials check
    is never exercised." 0)" "even a real review trips the wording test"
-assert_eq "1" "$(verdict "" 0)" "exit 0 with nothing said is unfit"
 assert_eq "1" "$(verdict "it did not manage it" 1)" "a plain failure stays a plain failure"
 assert_eq "2" "$(verdict "it did not manage it" 69)" "an unavailable exit code still counts"
 

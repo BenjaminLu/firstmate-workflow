@@ -58,11 +58,21 @@ mkdir -p "$work/out"
 # standard output, so a signature matcher calling it an outage would throw
 # away the very thing it was asked for - and the next turn would read the
 # same output and say the same thing, forever.
+# only this attempt's bytes: its own output directory, and the part of the
+# shared log it wrote. A vendor that died half way through must not sign on
+# the next one's behalf.
+# no pipeline here: with `set -o pipefail` a cat that finds nothing makes
+# the whole pipeline fail even when the grep matched, and the predicate then
+# reports "no verdict" for a review that is sitting right there.
 review_is_signed() {
-  grep -qE "(APPROVE|REJECT):$TASK" "$work/out"/* "$work/log" 2>/dev/null
+  local seen
+  seen="$( { cat "$FM_RUN_OUTDIR"/* 2>/dev/null
+             tail -c "+$((FM_RUN_LOG_OFF + 1))" "$work/log" 2>/dev/null; } || true )"
+  case "$seen" in *"APPROVE:$TASK"*|*"REJECT:$TASK"*) return 0 ;; esac
+  return 1
 }
 fm_run_chain "$REPO/bin/adapters" "$(fm_vendor_chain reviewer "$VENDOR")" \
-  "$prompt" "$work/out" "$work/log" review_is_signed; rc=$?
+  "$prompt" "$work/out" "$work/log" review_is_signed per-vendor; rc=$?
 [ -z "$FM_VENDOR_UNKNOWN" ] || {
   echo "fm-review: config.yaml names a vendor with no adapter: $FM_VENDOR_UNKNOWN" >&2
   rm -rf "$work"; exit 65; }
@@ -72,8 +82,9 @@ for v in $FM_VENDOR_SKIPPED; do
   emit --type vendor_unavailable --en "$v unavailable, trying the next" \
        --tw "$v 不可用，換下一家"
 done
-verdict="$(cat "$work/out"/* 2>/dev/null)"
-[ -n "$verdict" ] || verdict="$(cat "$work/log" 2>/dev/null)"
+# the same discipline for the verdict itself: what THIS vendor produced
+verdict="$(cat "${FM_RUN_OUTDIR:-$work/out}"/* 2>/dev/null)"
+[ -n "$verdict" ] || verdict="$(tail -c "+$((${FM_RUN_LOG_OFF:-0} + 1))" "$work/log" 2>/dev/null)"
 
 # An outage is a run that produced nothing. Anything else - an engine that
 # ran and said something unsigned - is a round that failed, and has to be
@@ -94,17 +105,17 @@ fi
 # a real reviewer's verdict IS its stdout.
 signed=0
 case "$verdict" in *"APPROVE:$TASK"*|*"REJECT:$TASK"*) signed=1 ;; esac
-if [ "$rc" != "0" ] || [ -z "$verdict" ] || [ "$signed" = "0" ]; then
-  # the adapter log is the only record of what the engine actually said, and
-  # the failure path is exactly when someone needs to read it. Only the
-  # success path may discard.
-  # keep everything that was said, from wherever it came: the engine's log
+# An exit code does not overrule produced work - not here either. A CLI that
+# prints a complete signed review and then exits non-zero on some teardown
+# has still reviewed it, and throwing that away repeats the round for ever.
+if [ "$signed" = "0" ]; then
+  # Keep everything that was said, from wherever it came - the engine's log
   # and whatever it left in the output directory. The failure path is
-  # exactly when someone needs to read it.
+  # exactly when someone needs to read it; only the success path may discard.
   kept="$REPO/state/reviews/$TASK-r$ROUND.log"
   mkdir -p "$(dirname "$kept")"
-  { cat "$work/log" 2>/dev/null; cat "$work/out"/* 2>/dev/null; } > "$kept"
-  echo "fm-review: ${FM_VENDOR_USED:-the reviewer} produced no review (exit $rc, signed $signed); its log is at $kept" >&2
+  { cat "$work/log" 2>/dev/null; cat "${FM_RUN_OUTDIR:-$work/out}"/* 2>/dev/null; } > "$kept"
+  echo "fm-review: ${FM_VENDOR_USED:-the reviewer} produced no review (exit $rc); its log is at $kept" >&2
   emit --type review_failed --en "review round $ROUND produced nothing" \
        --tw "第 $ROUND 輪審核沒有產出"
   rm -rf "$work"; exit 3

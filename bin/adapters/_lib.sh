@@ -31,7 +31,12 @@
 # The fallback chain appends to one log, so a verdict only ever reads the
 # bytes its own run added.
 
-_FM_SIG='authenticat|unauthor|not logged in|please (run|use) [^ ]* ?login|login required|invalid api key|missing api key|no api key|api key not (set|found|configured)|credentials?|quota|rate limit|network (error|unreachable)|fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN'
+# Every alternative here has to be shaped like a failure. Bare nouns are
+# what a healthy run prints on its way up: gemini says "Loaded cached
+# credentials." before it does anything, and a `credentials?` alternative
+# turned every successful gemini run into a reported outage. Each one below
+# was read against a successful transcript as well as a failing one.
+_FM_SIG='authenticat(ion|e) (failed|required|error)|error[: ]+authenticat|authenticat[a-z]* (error|failure)|not authenticated|unauthori[sz]ed|401 |403 |not logged in|please (run|use) [^ ]* ?login|login required|(invalid|missing|no|expired) api key|api key not (set|found|configured|valid)|(invalid|missing|expired|no) credentials|credentials (not|are not|could not)|quota (exceeded|exhausted)|out of quota|rate.?limit(ed| exceeded| reached)|too many requests|network (error|unreachable|failure)|fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN'
 
 # fm_adapter_mark <log> -> byte offset to read from after the run
 fm_adapter_mark() { if [ -f "$1" ]; then wc -c < "$1" | tr -d ' '; else echo 0; fi; }

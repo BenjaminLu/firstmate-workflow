@@ -58,6 +58,18 @@ assert_contains "$(jq -r .type < "$r2/state/events.jsonl" | tr '\n' ' ')" "vendo
   "it emitted vendor_unavailable"
 assert_eq "" "$(cat "$d2/ghcalls" 2>/dev/null)" "an unavailable vendor opens no pull request"
 
+# a vendor named in config.yaml with no adapter behind it is a typo. It has
+# to be found before anything runs, or a real vendor does the work and the
+# exit 65 throws it away with the worktree.
+d4="$(fixture)"; r4="$d4/repo"; GH4="$(ghstub "$d4")"
+printf 'vendor: nosuchvendor\nfallback:\n  - mock\n' > "$r4/config.yaml"
+out4="$(cd "$r4" && FM_ROOT="$r4" FM_GH="$GH4" bin/fm-worker.sh --task T-Z 2>&1)"
+assert_eq "65" "$?" "a vendor with no adapter is a configuration error, not an outage"
+assert_contains "$out4" "nosuchvendor" "and the worker names it"
+assert_eq "" "$(cat "$d4/ghcalls" 2>/dev/null)" "nothing was pushed"
+assert_fail "test -s '$r4/state/worktrees/T-Z.log'" "and no vendor was run at all"
+rm -rf "$d4"
+
 # an outage is a judgement about text, and a judgement can be wrong. The
 # adapter here reports one having written the work anyway. If the
 # worktree has changes, something did the work and it must not be thrown

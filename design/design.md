@@ -221,9 +221,17 @@ over-eager then costs one more vendor attempt and never the work — and a
 signed review is never thrown away, which would otherwise repeat the same
 round forever with a reassuring message on it.
 
-A vendor named in `config.yaml` with no adapter behind it is a typo, not an
-outage: it exits `65` so a human fixes the configuration, rather than being
-reported as transient on every turn for ever.
+A vendor named at the head of the chain with no adapter behind it is a typo,
+not an outage. It is caught before anything runs and exits `65`, so a human
+fixes the configuration — and so the exit cannot throw away work a fallback
+vendor had already done. A *fallback* entry with no adapter is simply
+skipped.
+
+An exit code never overrules produced work, in the callers any more than in
+the adapters: a signed review is a review whatever the engine exited with,
+and a changed worktree is work. And each attempt reads only its own output —
+its own directory under the chain's, and its own slice of the shared log —
+so a vendor that dies half way through cannot sign on the next one's behalf.
 
 ### 5.4 The pull request protocol
 

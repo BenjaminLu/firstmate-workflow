@@ -64,19 +64,45 @@ fm_vendor_chain() {
 #   the vendor this happened to, so the caller can say so.
 #
 #   The head of the chain having no adapter is a typo in config.yaml, not an
-#   outage: FM_VENDOR_UNKNOWN names it and the caller should exit 65 rather
-#   than report a transient failure forever.
+#   outage: nothing is run at all, FM_VENDOR_UNKNOWN names it and 65 comes
+#   straight back, so the caller's own exit 65 cannot discard work a later
+#   vendor had already done.
+#
+#   <outmode> "per-vendor" gives each attempt its own directory under <tree>
+#   and names it in FM_RUN_OUTDIR; the default shares <tree>, which is what
+#   a worker wants because the worktree IS the artefact. FM_RUN_LOG_OFF is
+#   where this attempt's bytes start in the shared log, so an evidence
+#   predicate can read its own output and no one else's.
 # shellcheck disable=SC2034  # these are read by the callers, not here
 fm_run_chain() {
-  local dir="$1" chain="$2" prompt="$3" tree="$4" log="$5" evidence="${6:-}" v rc=2 first=1
+  local dir="$1" chain="$2" prompt="$3" tree="$4" log="$5" evidence="${6:-}" \
+        outmode="${7:-shared}" v rc=2 head='' out=''
   FM_VENDOR_USED=''; FM_VENDOR_SKIPPED=''; FM_VENDOR_MISREAD=''; FM_VENDOR_UNKNOWN=''
+  # before anything runs. A typo at the head of the chain used to be found
+  # after a real vendor had already worked, and the caller's exit 65 then
+  # threw that work away.
+  # unquoted on purpose: a chain arrives space-separated or newline-separated
+  # and the head is the first word either way
+  # shellcheck disable=SC2086
+  head="$(printf '%s\n' $chain | head -1)"
+  if [ -n "$head" ] && [ ! -x "$dir/$head.sh" ]; then
+    FM_VENDOR_UNKNOWN="$head"; return 65
+  fi
   for v in $chain; do
-    if [ ! -x "$dir/$v.sh" ]; then
-      [ "$first" = 1 ] && FM_VENDOR_UNKNOWN="$v"
-      first=0; continue
+    [ -x "$dir/$v.sh" ] || continue
+    # each vendor reads only what it wrote. The chain shares one log, and a
+    # vendor that dies half way through must not have its bytes read as the
+    # next one's answer - so the caller is told where this attempt's output
+    # begins, and where it went.
+    FM_RUN_LOG_OFF="$(wc -c "$log" 2>/dev/null | awk '{print $1}')"
+    [ -n "$FM_RUN_LOG_OFF" ] || FM_RUN_LOG_OFF=0
+    if [ "$outmode" = "per-vendor" ]; then
+      out="$tree/$v"; mkdir -p "$out"
+    else
+      out="$tree"
     fi
-    first=0
-    "$dir/$v.sh" run "$prompt" "$tree" "$log"; rc=$?
+    FM_RUN_OUTDIR="$out"
+    "$dir/$v.sh" run "$prompt" "$out" "$log"; rc=$?
     if [ "$rc" = 2 ] && [ -n "$evidence" ] && $evidence; then
       FM_VENDOR_USED="$v"; FM_VENDOR_MISREAD="$v"; return 0
     fi

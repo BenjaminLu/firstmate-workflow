@@ -40,7 +40,8 @@ fi
 evt() { jq -r --arg t "$1" 'select(.type==$t)|.task // empty' "$LOG" 2>/dev/null | sort -u; }
 done_tasks="$(evt merged)"
 started="$(evt dispatched)"
-finished="$(printf '%s\n%s\n' "$done_tasks" "$(evt closed)" | sort -u)"
+closed_tasks="$(evt closed)"
+finished="$(printf '%s\n%s\n' "$done_tasks" "$closed_tasks" | sort -u)"
 inflight="$(comm -23 <(printf '%s\n' "$started" | sort -u | sed '/^$/d') \
                      <(printf '%s\n' "$finished" | sort -u | sed '/^$/d') | sed '/^$/d')"
 n_inflight="$(printf '%s\n' "$inflight" | sed '/^$/d' | wc -l | tr -d ' ')"
@@ -54,7 +55,9 @@ is_done()    { printf '%s\n' "$done_tasks" | grep -qx "$1"; }
 is_busy()    { printf '%s\n' "$inflight"   | grep -qx "$1"; }
 # closed is abandoned, not failed: it frees the slot but is never retried on
 # its own. Restarting it is a decision, and decisions belong to the captain.
-is_closed()  { evt closed | grep -qx "$1"; }
+# read once, like the others: a function that re-runs the query inside a
+# pipeline is one pipefail away from answering the wrong question
+is_closed()  { printf '%s\n' "$closed_tasks" | grep -qx "$1"; }
 
 started_any=0
 while IFS= read -r id; do

@@ -560,7 +560,12 @@
         "wording never decides finally: the caller supplies the evidence and work beats a signature",
         "a vendor named in config.yaml with no adapter behind it is a configuration error, not an outage",
         "a fixture that swaps a script out is paired with its restore by the harness, and a hand-rolled one fails the gate",
-        "the gate names every script that dispatches without closing standard input"
+        "the gate names every script that dispatches without closing standard input",
+        "an exit code never overrules produced work, in the adapters or in either caller",
+        "every signature is shaped like a failure and is read against a healthy transcript as well as a failing one",
+        "a configuration error is found before any vendor runs",
+        "each attempt reads only its own output: its own directory and its own slice of the shared log",
+        "a file that is meant to be sourced never carries the standard-input redirect"
       ]
     }
   ]

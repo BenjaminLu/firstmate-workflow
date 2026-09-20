@@ -95,9 +95,18 @@ printf 'import { test, expect } from "bun:test";\ntest("a", () => expect(1).toBe
 printf 'import { test } from "@playwright/test";\ntest("b", async ({ page }) => { await page.goto("about:blank"); });\n' \
   > "$q/tests/e2e/browser.spec.ts"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
-assert_contains "$out" "bun test (1 files)" "the bun stage runs the unit spec and not the browser one"
-assert_contains "$out" "playwright not installed" "and the browser stage says it was skipped"
-assert_fail "printf '%s' \"$out\" | grep -q 'x bun test'" "a browser spec does not turn the bun stage red"
+# the gate supports a machine without these, so the suite has to as well
+if command -v bun >/dev/null 2>&1; then
+  assert_contains "$out" "bun test (1 files)" "the bun stage runs the unit spec and not the browser one"
+  assert_fail "printf '%s' \"$out\" | grep -q 'x bun test'" "a browser spec does not turn the bun stage red"
+else
+  printf '    %s\n' "(bun not installed, the bun stage is unchecked)"
+fi
+if command -v bunx >/dev/null 2>&1; then
+  assert_contains "$out" "playwright not installed" "and the browser stage says it was skipped"
+else
+  assert_contains "$out" "bunx not installed" "and the browser stage says why it was skipped"
+fi
 # bin/*.sh does not recurse, so the adapters went unlinted for as long as
 # they have existed. A fixture with a broken one has to turn the gate red.
 mkdir -p "$q/bin/adapters"
@@ -121,15 +130,30 @@ plant() {   # plant <label> <expected fragment> ; the fixture is built first
 }
 
 # a script that dispatches without closing standard input
+# two, because the criterion says the gate names EVERY offender and a gate
+# that stopped at the first would pass a single-instance plant
 printf '#!/usr/bin/env bash\nset -uo pipefail\nx=$(date)\necho "$x"\n' > "$q/bin/fm-leaky.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\ny=$(date)\necho "$y"\n' > "$q/bin/fm-drippy.sh"
 plant "an unguarded dispatcher turns the stdin stage red" "without closing standard input"
-plant "and the stage names the script" "fm-leaky.sh"
-rm -f "$q/bin/fm-leaky.sh"
+plant "and the stage names the first" "fm-leaky.sh"
+plant "and the stage names the second as well" "fm-drippy.sh"
+rm -f "$q/bin/fm-leaky.sh" "$q/bin/fm-drippy.sh"
 
 # a hand-rolled save-and-restore in a suite
 # assembled, or this suite carries the very string it plants and the lint
 # flags the file that tests it - the same trap as the planted source-grep
 printf '#!/usr/bin/env bash\ncp "$r/bin/x.sh" "$r/x.%s"\n' 'keep"' > "$q/tests/hand-rolled.test.sh"
+# the stage says how many suites it read, which is what makes the
+# empty-list guard provable rather than indistinguishable from reading
+# /dev/null and passing
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+n="$(find "$q/tests" -name '*.test.sh' | wc -l | tr -d ' ')"
+assert_contains "$out" "($n suites)" "the hygiene stage says how many suites it linted"
+bare="$(mktemp -d)"; mkdir -p "$bare/bin"; cp "$q/bin/ci.sh" "$bare/bin/ci.sh"
+assert_contains "$(FM_ROOT="$bare" bash "$bare/bin/ci.sh" 2>&1)" "(0 suites)" \
+  "and says zero rather than passing silently when there are none"
+rm -rf "$bare"
+
 plant "a hand-rolled swap turns the hygiene stage red" "saves a script by hand"
 plant "and the stage names the suite" "hand-rolled.test.sh"
 rm -f "$q/tests/hand-rolled.test.sh"
