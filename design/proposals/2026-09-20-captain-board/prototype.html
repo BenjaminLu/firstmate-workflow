@@ -624,6 +624,13 @@ code,.mono{font-family:var(--mono);font-size:.86em}
                 46%{transform:rotate(1.9deg) translateY(2px)}
                 72%{transform:rotate(-1deg) translateY(-1px)}
                 100%{transform:rotate(0) translateY(0)}}
+.ports{position:absolute;inset:0;pointer-events:none;z-index:3}
+.port{position:absolute;width:21px;height:16px;margin:0 0 -8px -10.5px;border-radius:2px;
+  background:radial-gradient(ellipse at 50% 35%,#0d1119,#04060a 70%);
+  box-shadow:0 0 0 2px var(--brass),0 0 9px rgba(201,151,47,.35),inset 0 3px 5px rgba(0,0,0,.95)}
+.port b{position:absolute;top:5px;width:14px;height:6px;border-radius:3px;
+  background:linear-gradient(90deg,#3d464f,#171d23);box-shadow:0 1px 2px rgba(0,0,0,.8)}
+.port.l b{right:-10px} .port.r b{left:-10px}
 .salvo{position:absolute;inset:0;pointer-events:none;z-index:4}
 .salvo i{position:absolute;width:30px;height:18px;margin:0 0 -9px -15px;border-radius:50%;opacity:0;
   background:radial-gradient(ellipse at 50% 50%,#fffbe8,#f6b447 38%,rgba(246,180,71,0) 72%)}
@@ -1205,7 +1212,8 @@ function shipMarkup(sp,n){
   const deck0=svgH-((sp.rows-1)*ROWSTEP+34);          // px from svg bottom up to deck 0
   let m='';
   for(let i=0;i<sp.masts;i++){
-    const spread = sp.deckW*0.58;                    // stay inside the hull at every size
+    const topW = sp.deckW*(1-0.15*(sp.rows-1));      // masts stand on the TOP deck, which is narrower
+    const spread = topW*0.62;
     const x = sp.masts===1 ? 50 : 50 - spread/2 + spread*i/(sp.masts-1);
     const isMain=i===mainIdx, h=mastH(sp,isMain), w=58+sp.masts*7;
     const band=Math.max(60,h-12-clear);
@@ -1228,6 +1236,10 @@ function shipMarkup(sp,n){
     + '<div class="hub"></div></div>';
   const lx=(50-sp.deckW*deckLens(sp.rows-1).w/2+3).toFixed(1);
   const guns = portList(sp);
+  const portHTML = list => list.map(function(pt){
+    return '<i class="port '+(pt.dir<0?'l':'r')+'" style="left:'+(pt.x/10).toFixed(2)+'%;'
+         + 'bottom:'+(pt.H-pt.y).toFixed(1)+'px"><b></b></i>';
+  }).join('');
   const flashes = guns.map(function(pt,i){
     var d=(i*GUN_DELAY).toFixed(3)+'s';
     var pos='left:'+(pt.x/10).toFixed(2)+'%;bottom:'+(pt.H-pt.y).toFixed(1)+'px;'
@@ -1237,7 +1249,9 @@ function shipMarkup(sp,n){
   return '<div class="vessel">'
     + '<div class="ship"><div class="moon"></div>'
     +   '<div class="hullwrap" style="--deckW:'+sp.deckW+'%;--hullBottom:'+(96-deck0)+'px">'
-    +     hullSVG(sp) + '<div class="salvo">'+flashes+'</div></div></div>'
+    +     hullSVG(sp)
+    +     '<div class="ports">'+portHTML(guns)+'</div>'
+    +     '<div class="salvo">'+flashes+'</div></div></div>'
     + m + helm + '<div class="lantern" style="--lx:'+lx+'%;--topR:'+(sp.rows-1)+'"></div>'
     + '</div><div class="ahoy"></div>';
 }
@@ -1284,9 +1298,7 @@ function hullSVG(sp){
       + '<path d="'+nearLine(d)+'" fill="none" stroke="var(--brass)" stroke-width="2.5" opacity=".9"/>';
   }
   const d0=lens(0), bot=y0+HULLDEPTH;
-  const ports = portList(sp).map(pt =>
-    '<rect class="gunport" x="'+(pt.x-11).toFixed(1)+'" y="'+(pt.y-9).toFixed(1)+'" width="22" height="18" rx="2" '
-    + 'fill="#04050a" stroke="var(--brass)" stroke-width="2" opacity=".85"/>').join('');
+  const ports = '';   // drawn as HTML so the viewBox stretch cannot flatten them
   return '<svg class="hullsvg" viewBox="0 0 '+W+' '+H+'" width="100%" height="'+H+'" '
     + 'preserveAspectRatio="none" aria-hidden="true"><defs>'+clips
     + '<linearGradient id="tarG" x1="0" y1="0" x2="0" y2="1">'
