@@ -44,6 +44,26 @@
       ]
     },
     {
+      "id": "T-019",
+      "milestone": "M0",
+      "bootstrap": true,
+      "depends_on": [
+        "T-002"
+      ],
+      "title": "fm-sync-prs.sh：把 GitHub 的 PR 事件寫回事件日誌",
+      "scope": [
+        "bin/fm-sync-prs.sh",
+        "tests/sync-prs.test.sh"
+      ],
+      "acceptance": [
+        "輪詢 gh 取得 PR 狀態，將 pr_opened / merged / closed 寫回 events.jsonl，一律經 fm-emit.sh",
+        "已寫過的事件不重複寫（以 PR 號與狀態去重），連跑兩次結果相同",
+        "船長在 GitHub 上自行合併時，系統必須自行偵測到並 emit merged，不依賴任何人告知",
+        "無網路或 gh 未登入時以非零退出且不污染日誌",
+        "測試以錄製的 gh 輸出為輸入，不呼叫網路"
+      ]
+    },
+    {
       "id": "T-003",
       "milestone": "M0",
       "bootstrap": true,

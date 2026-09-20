@@ -419,6 +419,7 @@ firstmate 跑完一輪後可以開 `skill-update` task，**但它走一模一樣
 |---|---|---|
 | T-001 | repo 骨架、`ci.sh`、bash 測試框架 | — |
 | T-002 | `fm-emit.sh`：事件唯一寫入口 | T-001 |
+| T-019 | `fm-sync-prs.sh`：把 GitHub 的 PR 事件寫回日誌 | T-002 |
 | T-003 | adapter 契約、`mock.sh`、契約測試 | T-001 |
 | T-004 | `fm-gate.sh`：七道閘 | T-002, T-003 |
 | T-005 | `fm-worker.sh`：worktree → adapter → commit → PR | T-003, T-004 |
