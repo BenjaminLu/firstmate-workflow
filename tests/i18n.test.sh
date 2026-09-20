@@ -17,8 +17,10 @@ assert_fail "jq -r '.[]' '$tw' | grep -q '^$'" "no Chinese value is empty"
 # every key the page asks for has to exist
 missing=''
 # a word boundary, or the t at the end of get(" matches too
-for k in $(grep -oE '[^A-Za-z0-9_]t\("[a-zA-Z0-9]+"\)' "$ROOT/board/public/index.html" \
-           | sed 's/^.*t("//;s/")//' | sort -u); do
+pages="$(find "$ROOT/board/public" -type f \( -name '*.html' -o -name '*.js' \) | sort)"
+assert_ok "test \"$(printf '%s\n' \"$pages\" | wc -l | tr -d ' ')\" -ge 2" "the scan covers every page file"
+for k in $(grep -ohE '[^A-Za-z0-9_][tT]\("[a-zA-Z0-9]+"\)' $pages \
+           | sed 's/^.*("//;s/")//' | sort -u); do
   case "$k" in gate*) continue ;; esac
   jq -e --arg k "$k" 'has($k)' "$en" >/dev/null 2>&1 || missing="$missing $k"
 done
@@ -48,6 +50,6 @@ assert_ne "$(jq -r '.gate4' "$tw")" "$cnout" "converting zh-TW actually produces
 # from reading it as the usual comment-satisfied grep
 # a bracket range over CJK depends on the locale: it passed on macOS and
 # failed on the CI runner. \p{Han} does not.
-cjk="$(perl -CSD -ne 'print if /\p{Han}/' "$ROOT/board/public/index.html" | wc -l | tr -d ' ')"
+cjk="$(perl -CSD -ne 'print if /\p{Han}/' $pages | wc -l | tr -d ' ')"
 assert_eq "0" "$cjk" "the page holds no hardcoded Chinese, comments included"
 finish

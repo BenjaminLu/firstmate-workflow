@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Captain's Board</title>
+<link rel="stylesheet" href="ship.css">
 <style>
 :root{
   --bg:#080f17; --bg2:#0e1720; --bg3:#16212c; --line:#213041;
@@ -83,6 +84,10 @@ section>h2{margin:0 0 10px;font:600 10.5px var(--mono);color:var(--fg3);
   <span class="langs" id="langs"></span>
 </div>
 <div class="counts" id="counts"></div>
+<section style="padding:0 20px">
+   <div class="scene" id="scene"></div>
+  <div class="roster" id="roster"></div>
+</section>
 <section id="deckwrap" style="padding:0 20px" hidden>
   <h2 style="margin:16px 0 10px;font:600 10.5px var(--mono);color:var(--fg3);text-transform:uppercase;letter-spacing:.1em">
     <span id="awaiting"></span> <span id="pcount"></span></h2>
@@ -98,6 +103,7 @@ section>h2{margin:0 0 10px;font:600 10.5px var(--mono);color:var(--fg3);
     <div class="log"><ul id="log"></ul></div>
   </section>
 </main>
+<script src="ship.js"></script>
 <script>
 const LANES = [["queued","laneQueued"],["working","laneWorking"],["gate","laneGate"],
                ["review","laneReview"],["captain","laneCaptain"],["merged","laneMerged"]];
@@ -128,6 +134,7 @@ function chrome() {
       fetch("/api/state").then(x => x.json()).then(render).catch(() => {}); });
 }
 
+let lastMerged = null;
 function render(s) {
   document.getElementById("gl").textContent = s.greenlit ? t("greenlit") : t("notGreenlit");
   document.getElementById("counts").innerHTML = [
@@ -164,6 +171,12 @@ function render(s) {
        </div></div>`;
   }).join("");
   deck.querySelectorAll("button").forEach(b => b.onclick = () => answer(b.dataset.id, b.dataset.c));
+
+  const crew = SHIP.render(document.getElementById("scene"), s, t);
+  SHIP.roster(document.getElementById("roster"), crew, t);
+  // a merge that lands while the board is open is worth a broadside
+  if (lastMerged !== null && s.counts.merged > lastMerged) SHIP.ahoy(document.getElementById("scene"));
+  lastMerged = s.counts.merged;
 
   const log = document.getElementById("log");
   log.innerHTML = s.recent.length ? s.recent.map(e => {
