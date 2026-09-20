@@ -252,10 +252,11 @@ code,.mono{font-family:var(--mono);font-size:.86em}
 /* state-driven motion — these only translate/scale; orientation lives on .pivot */
 .m-3d .fig{animation:bobk 4.4s ease-in-out infinite}
 .m-3d .fig.s-working{animation:bobk 2.5s ease-in-out infinite}
-.m-3d .fig.s-working .armR{animation:hammer var(--sp,.62s) ease-in-out infinite}
 .m-3d .fig.s-review{animation:scank 3.6s ease-in-out infinite}
 .fig.s-review .armR{transform:rotate(-112deg)}
 /* what a crewman is doing depends on which deck they are on */
+/* the action owns the arms; anything without its own swing must say so explicitly */
+.fig .armL,.fig .armR{animation:none}
 .m-3d .fig.a-hammer .armR{animation:hammer var(--sp,.62s) ease-in-out infinite}
 .fig.a-swab .armL{transform:rotate(-34deg)}
 .m-3d .fig.a-swab .armR{animation:swab 1.5s ease-in-out infinite}
@@ -857,9 +858,9 @@ const bx  = cls => '<div class="bx '+cls+'">'+FACES+'</div>';
 const arm = (a,h,withTool) => '<div class="bx '+a+'">'+FACES
   + '<div class="bx '+h+'">'+FACES + (withTool?'<span class="tool"></span>':'') + '</div></div>';
 const DECK_JOBS = {
-  top:  ['lookout','signal','point','write','lean'],   // quarterdeck: watch, signal, direct
-  mid:  ['haul','winch','carry','climb','haul'],       // waist: work the lines and the capstan
-  main: ['hammer','saw','swab','carry','hammer'],      // main deck: build, cut, clean
+  top:  ['lookout','signal','point','write'],          // quarterdeck: watch, signal, direct
+  mid:  ['haul','winch','carry','climb'],              // waist: lines and capstan
+  main: ['hammer','saw','swab','carry'],               // main deck: build, cut, clean
 };
 const IDLE_JOBS = ['lean','swab','climb','carry','write','point','winch'];
 const hashOf = s => { let h=0; for(const ch of s) h=(h*31+ch.charCodeAt(0))|0; return Math.abs(h); };
@@ -926,7 +927,8 @@ const SHIP=[
  {max:5, masts:2, rows:1, deckW:54, name:{en:'Schooner',        tw:'雙桅縱帆船',cn:'双桅纵帆船'}},
  {max:8, masts:3, rows:2, deckW:66, name:{en:'Frigate',         tw:'三桅巡防艦',cn:'三桅巡防舰'}},
  {max:12,masts:4, rows:2, deckW:74, name:{en:'Ship of the line',tw:'四桅戰列艦',cn:'四桅战列舰'}},
- {max:99,masts:5, rows:3, deckW:82, name:{en:'Flagship',        tw:'旗艦',      cn:'旗舰'}},
+ {max:18,masts:5, rows:3, deckW:82, name:{en:'Flagship',        tw:'旗艦',      cn:'旗舰'}},
+ {max:99,masts:6, rows:4, deckW:90, name:{en:"Man-o'-war",      tw:'巨型戰艦',  cn:'巨型战舰'}},
 ];
 const shipOf = n => SHIP.find(s=>n<=s.max);
 let DENS=1, ROWS=1;
@@ -970,7 +972,7 @@ function layout(){
 const posOf = id => { const c=CREW.find(x=>x.id===id); return c? c.px.toFixed(2)+'%' : '50%'; };
 function addCrew(d){
   if(d>0){
-    if(CREW.length>=14) return;
+    if(CREW.length>=24) return;
     const ws=CREW.filter(c=>c.role==='w');
     const id='worker-'+(Math.max(0,...ws.map(w=>+w.id.split('-')[1]))+1);
     CREW.splice(CREW.length-1,0,{id,role:'w',st:'queued',task:null,pct:0});
