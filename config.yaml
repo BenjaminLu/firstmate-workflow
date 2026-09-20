@@ -11,5 +11,6 @@ editor: code            # what /open hands a file to
 
 fallback:               # tried in order when an adapter exits 2 (vendor unavailable)
   - claude
+  - codex
   - cursor-agent
   - gemini

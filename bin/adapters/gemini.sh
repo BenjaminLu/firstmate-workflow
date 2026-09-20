@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # gemini adapter. Hands the prompt to gemini and maps its outcome onto the
 # contract in _contract.md. It must never touch git or gh: the scripts above
-# do all of that, which is what lets a CLI with no git access still be a worker.
+# do all of that, which is what lets a CLI with no repository access still be
+# a worker.
+#
+# The invocation is the non-interactive one on purpose. An adapter that opens
+# a REPL hangs a dispatch until something kills it, and looks like a model
+# thinking rather than a script waiting for a human who is not there.
 set -uo pipefail
 [ "${1-}" = "run" ] || { echo "usage: gemini.sh run <prompt> <worktree> <log>" >&2; exit 64; }
 prompt="${2-}"; tree="${3-}"; log="${4-}"
@@ -12,12 +17,12 @@ command -v gemini >/dev/null 2>&1 || {
   # the log is the only trace a stand-down or a reconcile will have
   echo "gemini: gemini is not installed - vendor unavailable" | tee -a "$log" >&2; exit 2; }
 
-( cd "$tree" && gemini  < "$prompt" ) >> "$log" 2>&1
+( cd "$tree" && gemini -p ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
 rc=$?
 case "$rc" in
   0) exit 0 ;;
-  # authentication, quota and network failures are the vendor being unavailable,
-  # not the model failing at the task
+  # authentication, quota and network failures are the vendor being
+  # unavailable, not the model failing at the task
   2|4|41|69|75) exit 2 ;;
   *) grep -qiE 'not logged in|unauthor|quota|rate limit|network|ENOTFOUND|ECONNREFUSED' "$log" \
        && exit 2 || exit 1 ;;

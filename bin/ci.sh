@@ -77,13 +77,17 @@ suites=(tests/*.test.sh)
 if [ ${#suites[@]} -eq 0 ]; then
   skip "no suites yet"
 else
+  # to a file, never $(...): a suite that starts a server leaves a child
+  # holding the pipe, and command substitution waits for that pipe to close
+  tmp="$(mktemp)"
   for t in "${suites[@]}"; do
-    if out=$(bash "$t" 2>&1); then
+    if bash "$t" > "$tmp" 2>&1; then
       pass "$t"
     else
-      flunk "$t"; printf '%s\n' "$out"
+      flunk "$t"; cat "$tmp"
     fi
   done
+  rm -f "$tmp"
 fi
 
 stage "bun tests"
