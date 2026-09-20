@@ -1,0 +1,21 @@
+name: ci
+# Runs the very same bin/ci.sh the local gate runs. Do not add steps here that
+# are not in that script, or the two will disagree about what green means.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: bin/ci.sh
+        run: bash bin/ci.sh

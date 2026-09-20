@@ -1,0 +1,15 @@
+# firstmate-workflow
+
+vendor: claude          # every role uses this agent unless overridden below
+model:  opus-5
+reviewer:               # optional: a different engine for review buys real
+  vendor: cursor-agent  # adversarial value. delete this block to use one vendor.
+  model:  composer
+
+concurrency: 3          # workers in flight at once
+editor: code            # what /open hands a file to
+
+fallback:               # tried in order when an adapter exits 2 (vendor unavailable)
+  - claude
+  - cursor-agent
+  - gemini
