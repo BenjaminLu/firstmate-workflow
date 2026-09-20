@@ -6,7 +6,7 @@
 // No build step and no framework: the page is a file, the stream is SSE, and
 // the state endpoint is derived from events.jsonl and design/tasks.json so the
 // board has no opinion the log does not already hold.
-import { existsSync, readFileSync, statSync, watch } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const ROOT = resolve(process.env.FM_ROOT ?? ".");
@@ -62,7 +62,17 @@ const state = () => {
     },
     tasks,
     recent: events.slice(-40).reverse(),
+    pending: pending(),
   };
+};
+
+// Decisions the captain has been asked for but has not answered.
+const pending = () => {
+  const dir = join(ROOT, "state/pending");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((f) => f.endsWith(".json")).flatMap((f) => {
+    try { return [JSON.parse(readFileSync(join(dir, f), "utf8"))]; } catch { return []; }
+  });
 };
 
 const json = (body: unknown, status = 200) =>
@@ -106,6 +116,39 @@ const server = Bun.serve({
       return new Response(stream, {
         headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
       });
+    }
+
+    // The captain answers. The board writes the answer down and, for a merge,
+    // calls the one script allowed to merge - it never shells out ad hoc.
+    if (url.pathname === "/decisions" && req.method === "POST") {
+      return req.json().then(async (body: any) => {
+        const id = String(body?.id ?? "");
+        const chosen = String(body?.chosen ?? "");
+        if (!/^D-[0-9]{1,6}$/.test(id)) return json({ error: "bad decision id" }, 400);
+        if (!/^[A-Z]$/.test(chosen)) return json({ error: "bad choice" }, 400);
+
+        const p = pending().find((d: any) => d.id === id);
+        const dir = join(ROOT, "state/decisions");
+        mkdirSync(dir, { recursive: true });
+        const file = join(dir, `${id}.json`);
+        if (existsSync(file)) return json({ ok: true, already: true });
+        writeFileSync(file, JSON.stringify({
+          id, chosen, task: p?.task ?? null, kind: p?.kind ?? "choice",
+          note: typeof body?.note === "string" ? body.note.slice(0, 500) : "",
+          ts: new Date().toISOString(),
+        }) + "\n");
+
+        let merged = null;
+        if (p?.kind === "merge" && chosen === "A" && typeof p.pr === "number") {
+          const r = Bun.spawnSync([join(ROOT, "bin/fm-merge.sh"),
+            "--pr", String(p.pr), ...(p.task ? ["--task", p.task] : []), "--repo", ROOT],
+            { env: { ...process.env, FM_ROOT: ROOT } });
+          merged = { ok: r.exitCode === 0, out: new TextDecoder().decode(r.stdout).trim() };
+        }
+        const pf = join(ROOT, "state/pending", `${id}.json`);
+        if (existsSync(pf)) unlinkSync(pf);
+        return json({ ok: true, merged });
+      }).catch(() => json({ error: "bad request" }, 400));
     }
 
     if (url.pathname === "/" || url.pathname === "") return serveFile("index.html");

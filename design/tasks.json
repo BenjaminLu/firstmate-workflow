@@ -331,14 +331,18 @@
       "title": "the decision API, including merge cards",
       "scope": [
         "board/server.ts",
-        "tests/e2e/decide.spec.ts"
+        "board/public/**",
+        "bin/fm-merge.sh",
+        "tests/decisions.test.sh",
+        "design/tasks.json"
       ],
       "acceptance": [
         "after a POST, state/decisions/<id>.json exists and is valid JSON",
         "e2e: choosing on the board releases fm-decide.sh within one second",
         "posting the same decision twice is idempotent and creates no second file",
         "kind=merge is supported: the card shows the seven gates, the diff stat, the files and the pull request link, answered with merge, send back or hold",
-        "choosing merge runs gh pr merge --squash --delete-branch from the script; a test asserts no path exists for firstmate to merge without the board"
+        "choosing merge runs gh pr merge --squash --delete-branch from the script; a test asserts no path exists for firstmate to merge without the board",
+        "the board never merges directly: it writes the decision and calls bin/fm-merge.sh, which validates the pull request number and its state first"
       ]
     },
     {
