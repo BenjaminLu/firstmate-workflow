@@ -123,7 +123,7 @@ assert_contains "$out" "state/reviews/T-Z-r1.log" "and says where to read it"
 assert_fail "grep -q 'pr comment' '$d/ghcalls'" "nothing was posted to the pull request"
 types="$(jq -r .type "$r/state/events.jsonl")"
 assert_contains "$types" "review_failed" "it emitted review_failed"
-assert_fail "printf '%s' \"$types\" | tail -1 | grep -q approved" "and signed nothing"
+assert_lacks "$(printf '%s\n' "$types" | tail -1)" "approved" "and signed nothing"
 
 # a vendor named in config.yaml with no adapter behind it is a typo, not an
 # outage: reporting it as transient would have fm-run say "leaving it for
@@ -224,7 +224,7 @@ chmod +x "$r/bin/adapters/other.sh"
 out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 3 --pr 9 2>&1)"
 assert_eq "0" "$?" "a signed rejection is a completed round"
 assert_contains "$out" "REJECT:T-Z" "and the rejection is the verdict"
-assert_fail "printf '%s' \"$out\" | grep -q 'the fallback reviewed it'" "and the worker's engine is not used"
+assert_lacks "$out" "the fallback reviewed it" "and the worker's engine is not used"
 
 rm -rf "$d"
 

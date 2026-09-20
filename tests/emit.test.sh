@@ -14,7 +14,7 @@ assert_eq "1" "$(wc -l < "$log" | tr -d ' ')" "one line per event"
 assert_ok "jq -e . '$log' >/dev/null" "the line is valid JSON"
 assert_eq "dispatched" "$(jq -r .type "$log")" "carries the type"
 ts="$(jq -r .ts "$log")"
-assert_ok "printf %s '$ts' | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z$'" "stamps an ISO timestamp"
+assert_matches "$ts" '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z$' "stamps an ISO timestamp"
 
 assert_fail "'$EMIT' --actor firstmate --type teleported --task T-004" "rejects an unknown type"
 assert_eq "1" "$(wc -l < "$log" | tr -d ' ')" "a rejected event is not written"

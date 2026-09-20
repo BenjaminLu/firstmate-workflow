@@ -10,6 +10,16 @@ assert_ne() { _t "$3"; [ "$1" != "$2" ] && ok || bad "expected not [$1]"; }
 assert_ok() { _t "$2"; if eval "$1" >/dev/null 2>&1; then ok; else bad "command failed: $1"; fi; }
 assert_fail() { _t "$2"; if eval "$1" >/dev/null 2>&1; then bad "command unexpectedly passed: $1"; else ok; fi; }
 assert_contains() { _t "$3"; case "$1" in *"$2"*) ok;; *) bad "missing [$2]";; esac; }
+# The counterpart, and the reason it exists: writing this as
+# assert_fail "printf '%s' \"$out\" | grep -q x" interpolates captured output
+# into a string that eval then executes. A gate transcript echoes the source
+# lines it complains about, so a fixture containing $(date) gets RUN by the
+# assertion meant to read it - and whether the result parses varies run to
+# run, which made a real failure report ok about half the time.
+assert_lacks() { _t "$3"; case "$1" in *"$2"*) bad "found [$2]";; *) ok;; esac; }
+# a shape, without handing the string to the shell
+assert_matches() { _t "$3"
+  if printf '%s' "$1" | grep -Eq -- "$2"; then ok; else bad "[$1] does not match /$2/"; fi; }
 # Swapping a script out for a stub is the commonest fixture move and the
 # commonest fixture bug: the restore gets parked at the end of the file,
 # where the next edit duplicates it or loses it. Pair them here instead, and

@@ -72,6 +72,23 @@ else
   pass "no assertion greps source without excluding comments (${#suitefiles[@]} suites)"
 fi
 
+# assert_ok and assert_fail eval their argument, so interpolating captured
+# output into one hands that output to the shell. A gate transcript echoes
+# back the source lines it complains about, so a fixture containing $(date)
+# got RUN by the assertion meant to read it - and when the result failed to
+# parse, assert_fail called that a pass. It reported a real failure as ok
+# about half the time. assert_contains and assert_lacks take data as data.
+evalled=''
+if [ ${#suitefiles[@]} -gt 0 ]; then
+  evalled="$(grep -n "assert_\(ok\|fail\) \"printf" "${suitefiles[@]}" 2>/dev/null || true)"
+fi
+if [ -n "$evalled" ]; then
+  flunk "an assertion evals captured output; use assert_contains or assert_lacks"
+  printf '%s\n' "$evalled"
+else
+  pass "no assertion evals captured output"
+fi
+
 # a fixture that swaps a script out has to put it back, and a hand-rolled
 # save-and-restore is where that goes wrong: the restore ends up parked at
 # the bottom of the file, then duplicated or lost by the next edit.

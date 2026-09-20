@@ -107,7 +107,7 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
       # form is a piped stdin and no -p at all: a bare -p leaves the flag
       # dangling and the prompt is never delivered.
       gemini) assert_eq "" "$argv" "$name uses the documented headless form"
-              assert_fail "printf '%s' ' $argv ' | grep -q ' -p '" "$name passes no dangling -p" ;;
+              assert_lacks " $argv " " -p " "$name passes no dangling -p" ;;
       # codex reads stdin only when the last argument is the marker "-"
       # codex reads a prompt only as `codex exec ... -`: the subcommand, the
       # flag that lets it run outside a repository, and the stdin marker

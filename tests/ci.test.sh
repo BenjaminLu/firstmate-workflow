@@ -98,7 +98,7 @@ out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 # the gate supports a machine without these, so the suite has to as well
 if command -v bun >/dev/null 2>&1; then
   assert_contains "$out" "bun test (1 files)" "the bun stage runs the unit spec and not the browser one"
-  assert_fail "printf '%s' \"$out\" | grep -q 'x bun test'" "a browser spec does not turn the bun stage red"
+  assert_lacks "$out" "x bun test" "a browser spec does not turn the bun stage red"
 else
   printf '    %s\n' "(bun not installed, the bun stage is unchecked)"
 fi
@@ -122,8 +122,7 @@ if command -v shellcheck >/dev/null 2>&1; then
   # and an info-level finding does not: the adapters rely on that
   printf '#!/usr/bin/env bash\nargs=""\necho $args\n' > "$q/bin/adapters/sloppy.sh"
   out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
-  assert_fail "printf '%s' \"$out\" | grep -q 'x shellcheck'" \
-    "an info-level finding does not, which is what the adapters depend on"
+  assert_lacks "$out" "x shellcheck" "an info-level finding does not, which is what the adapters depend on"
 else
   printf '    %s\n' "(shellcheck not installed, adapter lint unchecked)"
 fi
@@ -157,7 +156,7 @@ rm -f "$q/bin/fm-leaky.sh" "$q/bin/fm-drippy.sh"
 # a hand-rolled save-and-restore in a suite
 # assembled, or this suite carries the very string it plants and the lint
 # flags the file that tests it - the same trap as the planted source-grep
-printf '#!/usr/bin/env bash\ncp "$r/bin/x.sh" "$r/x.%s"\n' 'keep"' > "$q/tests/hand-rolled.test.sh"
+printf '#!/usr/bin/env bash\nr=/tmp\ncp "$r/bin/x.sh" "$r/x.%s"\n' 'keep"' > "$q/tests/hand-rolled.test.sh"
 # the stage says how many suites it read, which is what makes the
 # empty-list guard provable rather than indistinguishable from reading
 # /dev/null and passing
@@ -168,6 +167,14 @@ bare="$(mktemp -d)"; mkdir -p "$bare/bin"; cp "$q/bin/ci.sh" "$bare/bin/ci.sh"
 assert_contains "$(FM_ROOT="$bare" bash "$bare/bin/ci.sh" 2>&1)" "(0 suites)" \
   "and says zero rather than passing silently when there are none"
 rm -rf "$bare"
+
+# an assertion that evals captured output
+{ printf '#!/usr/bin/env bash\n'
+  printf 'out=hi\nassert_%s "%s '%%s' \\"$out\\" | grep -q x" "planted"\n' fail printf
+} > "$q/tests/evals.test.sh"
+plant "an assertion that evals captured output turns the hygiene stage red" "evals captured output"
+plant "and the stage names the suite" "evals.test.sh"
+rm -f "$q/tests/evals.test.sh"
 
 plant "a hand-rolled swap turns the hygiene stage red" "saves a script by hand"
 plant "and the stage names the suite" "hand-rolled.test.sh"
@@ -186,13 +193,14 @@ done
 # a library that declares itself sourced must not carry the redirect, and
 # the exemption has to work both ways: the marker exempts it from the
 # dispatch stage AND binds it in the sourced stage
-printf '#!/usr/bin/env bash\n# fm:sourced\nexec < /dev/null\nx=$(date)\n' > "$q/bin/fm-lib.sh"
+printf '#!/usr/bin/env bash\n# fm:sourced\nexec < /dev/null\nx=$(date)\necho "$x"\n' > "$q/bin/fm-lib.sh"
 plant "a sourced library with the redirect turns its stage red" "must not redirect the caller"
 plant "and the stage names it" "fm-lib.sh"
-printf '#!/usr/bin/env bash\n# fm:sourced\nx=$(date)\n' > "$q/bin/fm-lib.sh"
+printf '#!/usr/bin/env bash\n# fm:sourced\nx=$(date)\necho "$x"\n' > "$q/bin/fm-lib.sh"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
-assert_fail "printf '%s' \"$out\" | grep -q 'fm-lib.sh'" \
-  "and without it the dispatch stage leaves the library alone"
+assert_contains "$out" "ci: green" "a declared library with no redirect is simply fine"
+stdin_stage="$(printf '%s\n' "$out" | sed -n '/== stdin/,/== dag/p')"
+assert_lacks "$stdin_stage" "fm-lib.sh" "and the dispatch stage leaves it alone"
 rm -f "$q/bin/fm-lib.sh"
 
 # a second implementation of the vendor chain
