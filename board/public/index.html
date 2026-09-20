@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Captain's Board</title>
+<style>
+:root{
+  --bg:#080f17; --bg2:#0e1720; --bg3:#16212c; --line:#213041;
+  --fg:#e8eff7; --fg2:#93a7bd; --fg3:#5d7188; --brass:#d9a441;
+  --ok:#3ecf8e; --warn:#f2b544; --bad:#f2645a; --wait:#c07bf0; --accent:#4da3ff;
+  --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box} html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font:14px/1.55 var(--sans);padding-bottom:40px}
+.top{display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:1px solid var(--line);
+  background:var(--bg2);position:sticky;top:0;z-index:5}
+.top b{font-weight:650} .top small{display:block;font:400 10.5px var(--mono);color:var(--fg3);
+  letter-spacing:.08em;text-transform:uppercase}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(62,207,142,.15)}
+.dot.off{background:var(--bad);box-shadow:0 0 0 3px rgba(242,100,90,.15)}
+.spacer{flex:1}
+.counts{display:flex;gap:22px;padding:14px 20px;border-bottom:1px solid var(--line)}
+.counts b{display:block;font-size:24px;line-height:1.1;font-variant-numeric:tabular-nums}
+.counts span{font:10.5px var(--mono);color:var(--fg3);text-transform:uppercase;letter-spacing:.09em}
+.counts .w b{color:var(--wait)} .counts .x b{color:var(--bad)}
+main{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:16px;padding:16px 20px}
+@media(max-width:860px){main{grid-template-columns:1fr}}
+section>h2{margin:0 0 10px;font:600 10.5px var(--mono);color:var(--fg3);
+  text-transform:uppercase;letter-spacing:.1em}
+.lanes{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:9px}
+.lane{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:9px;min-height:70px}
+.lane h3{margin:0 0 8px;font:600 10px var(--mono);color:var(--fg3);text-transform:uppercase;
+  letter-spacing:.08em;display:flex;justify-content:space-between}
+.lane h3 i{font-style:normal;background:var(--bg3);border-radius:99px;padding:0 7px;color:var(--fg2)}
+.card{background:var(--bg3);border:1px solid var(--line);border-left:3px solid var(--edge,#26323d);
+  border-radius:8px;padding:8px 9px;margin-bottom:7px}
+.card .id{font:600 10.5px var(--mono);color:var(--fg3)}
+.card .t{font-size:12px;line-height:1.35;margin-top:3px}
+.card .pr{font:600 10px var(--mono);color:var(--accent)}
+.s-working{--edge:#2f5478} .s-review{--edge:#5a3f7d} .s-gate{--edge:#7c322b}
+.s-captain{--edge:#8a6a2f} .s-merged{--edge:#2c5f49} .s-closed{--edge:#3a3a3a}
+.log{background:var(--bg2);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.log ul{margin:0;padding:6px 0;list-style:none;max-height:64vh;overflow:auto}
+.log li{display:grid;grid-template-columns:62px 90px 1fr;gap:10px;padding:5px 13px;font-size:12px;
+  border-bottom:1px solid rgba(33,48,65,.5)}
+.log li:last-child{border-bottom:0}
+.log time{font:11px var(--mono);color:var(--fg3)}
+.log .who{font:600 11px var(--mono);color:var(--fg2);overflow:hidden;text-overflow:ellipsis}
+.log .k-merged{color:var(--ok)} .log .k-gate_failed{color:var(--bad)}
+.log .k-approved{color:var(--ok)} .log .k-decision_requested{color:var(--wait)}
+.log .k-greenlit{color:var(--brass)} .log .k-vendor_unavailable{color:var(--warn)}
+.empty{color:var(--fg3);font-size:12px;padding:10px 13px}
+</style>
+</head>
+<body>
+<div class="top">
+  <span class="dot" id="live"></span>
+  <b>Captain's Board<small id="root">firstmate-workflow</small></b>
+  <span class="spacer"></span>
+  <span id="gl" style="font:600 11px var(--mono);color:var(--brass)"></span>
+</div>
+<div class="counts" id="counts"></div>
+<main>
+  <section>
+    <h2>The fleet</h2>
+    <div class="lanes" id="lanes"></div>
+  </section>
+  <section>
+    <h2>Live log</h2>
+    <div class="log"><ul id="log"></ul></div>
+  </section>
+</main>
+<script>
+const LANES = [["queued","Queued"],["working","Working"],["gate","Gate"],
+               ["review","Review"],["captain","Captain"],["merged","Merged"]];
+const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+function render(s) {
+  document.getElementById("gl").textContent = s.greenlit ? "green-lit" : "not green-lit";
+  document.getElementById("counts").innerHTML = [
+    ["merged", s.counts.merged, ""], ["in flight", s.counts.inflight, ""],
+    ["blocked", s.counts.blocked, "x"], ["queued", s.counts.queued, ""],
+  ].map(([l, n, c]) => `<div class="${c}"><b>${n}</b><span>${l}</span></div>`).join("");
+
+  document.getElementById("lanes").innerHTML = LANES.map(([k, label]) => {
+    const items = s.tasks.filter(t => t.stage === k);
+    return `<div class="lane"><h3>${label}<i>${items.length}</i></h3>` +
+      items.map(t => `<div class="card s-${k}"><span class="id">${esc(t.id)}</span>` +
+        (t.pr ? ` <span class="pr">#${t.pr}</span>` : "") +
+        `<div class="t">${esc(t.title)}</div></div>`).join("") + `</div>`;
+  }).join("");
+
+  const log = document.getElementById("log");
+  log.innerHTML = s.recent.length ? s.recent.map(e => {
+    const t = (e.ts || "").slice(11, 19);
+    const text = (e.summary && (e.summary.en || e.summary["zh-TW"])) || e.type;
+    return `<li><time>${esc(t)}</time><span class="who">${esc(e.actor)}</span>` +
+      `<span class="k-${esc(e.type)}">${esc(text)}</span></li>`;
+  }).join("") : `<li class="empty">nothing in the log yet</li>`;
+}
+
+let es;
+function connect() {
+  es = new EventSource("/events");
+  es.addEventListener("state", e => { document.getElementById("live").classList.remove("off"); render(JSON.parse(e.data)); });
+  es.addEventListener("reload", () => location.reload());
+  es.onerror = () => { document.getElementById("live").classList.add("off"); es.close(); setTimeout(connect, 1500); };
+}
+connect();
+fetch("/api/state").then(r => r.json()).then(render).catch(() => {});
+</script>
+</body>
+</html>
