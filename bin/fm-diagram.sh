@@ -118,6 +118,13 @@ for c in "$ROOT/state/pending/$ID.json" "$ROOT/state/decisions/$ID.json"; do
 done
 [ -n "$FILE" ] || die "no decision $ID under state/pending or state/decisions" 66
 command -v jq >/dev/null 2>&1 || die "jq is required" 69
+# The file is read before it is believed. Every field below is `// ""`, so a
+# file jq cannot parse answers nothing for all of them and the card renders
+# blank, with exit 0 - the same failure as an absent dictionary, which is a
+# broken input wearing a working input's face. A list parses and is still not
+# a decision, so the test is the shape and not merely the syntax.
+jq -e 'type == "object"' "$FILE" >/dev/null 2>&1 \
+  || die "not a readable decision file: $FILE" 66
 
 TASK="$(jq -r '.task // ""' "$FILE")"
 KIND="$(jq -r '.kind // "choice"' "$FILE")"
@@ -329,6 +336,14 @@ BEGIN {
 # half a page already on disk.
 for f in "$I18N/ui.en.json" "$I18N/ui.zh-TW.json" "$I18N/tw2cn.tsv"; do
   [ -f "$f" ] || die "no $f: the three languages cannot be rendered without it" 66
+done
+# and present is not the same as readable. A dictionary jq cannot parse - or
+# one that parses to something that is not an object - hands load_dict no
+# rows at all, so every key renders as itself: the page of raw keys again,
+# this time out of a root where all three files are sitting right there.
+for f in "$I18N/ui.en.json" "$I18N/ui.zh-TW.json"; do
+  jq -e 'type == "object"' "$f" >/dev/null 2>&1 \
+    || die "$f is not a readable dictionary" 66
 done
 
 mkdir -p "$OUT" || die "cannot create $OUT" 73

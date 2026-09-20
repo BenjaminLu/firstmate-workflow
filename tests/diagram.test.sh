@@ -326,6 +326,48 @@ assert_eq "" "$(find "$R/board/public" -name '*.html' 2>/dev/null)" "and nothing
 "$DG" --decision D-404 --repo "$R" >/dev/null 2>&1
 assert_eq "66" "$?" "a decision with no file is a missing input, not a crash"
 
+# --event names a type the captain must rule on, but says nothing about which
+# decision. That is the caller's mistake and it gets a number, not a card with
+# a hole where the id goes.
+"$DG" --event decision_requested --repo "$R" >/dev/null 2>&1
+assert_eq "64" "$?" "--event on a drawn type still needs a decision"
+assert_eq "" "$(find "$R/board/public" -name '*.html' 2>/dev/null)" "and drew nothing without one"
+
+# A decision file that is not JSON. jq answers nothing for every field, so
+# the card used to render with no task, no pull request and the dictionary's
+# placeholder for a title - a blank card delivered with exit 0, which is the
+# same failure as the missing dictionary one section down: an input the
+# script cannot read must not come back looking like one it could.
+for broken in '{"id":"D-061",' '' 'not json at all'; do
+  printf '%s' "$broken" > "$R/state/pending/D-061.json"
+  "$DG" --decision D-061 --repo "$R" >/dev/null 2>&1
+  assert_eq "66" "$?" "a decision file that is not json is a bad input, not a blank card"
+  assert_eq "" "$(find "$R/board/public" -name 'D-061.*' 2>/dev/null)" \
+    "and nothing was rendered from it"
+done
+# valid JSON that is not an object is the same kind of unreadable: .task on a
+# list is an error, and jq -e . alone would have called it good
+printf '%s' '["D-061"]' > "$R/state/pending/D-061.json"
+"$DG" --decision D-061 --repo "$R" >/dev/null 2>&1
+assert_eq "66" "$?" "json that is not an object is refused too"
+# and the guard is not so tight it refuses a real file: the same path renders
+# once the file is an object again
+printf '%s' '{"id":"D-061","task":"T-004","kind":"choice","title":"pick one"}' \
+  > "$R/state/pending/D-061.json"
+"$DG" --decision D-061 --repo "$R" >/dev/null 2>&1
+assert_eq "0" "$?" "while a readable decision file still renders"
+
+# The output directory is the one thing here that is written rather than
+# read, and a tree where it cannot be made says so with the write number
+# rather than three empty redirects and a zero.
+ro="$(newroot)"
+decision "$ro" D-062 '{"id":"D-062","task":"T-004","kind":"merge","title":"merge it"}'
+: > "$ro/board/public/diagrams"   # a file standing where the directory goes
+"$DG" --decision D-062 --repo "$ro" >/dev/null 2>&1
+assert_eq "73" "$?" "an output directory that cannot be made is a write failure, with its own number"
+assert_ok "test -f '$ro/board/public/diagrams'" "and the thing in its way was left alone"
+rm -rf "$ro"
+
 # ------------------------------------------- the inputs it cannot do without
 #
 # A dictionary that is not there used to render every key as itself and exit
@@ -354,6 +396,26 @@ for one in '' tw2cn.tsv ui.en.json ui.zh-TW.json; do
   fi
 done
 rm -rf "$bare"
+
+# A dictionary that is THERE and cannot be read is the same failure wearing a
+# file. jq answers nothing for a file it cannot parse, load_dict reads no
+# rows, and every key on the page renders as itself - the page of raw keys
+# again, out of a root where all three files are present. Both dictionaries,
+# because a check on one of them is a check on neither.
+for which in ui.en.json ui.zh-TW.json; do
+  junk="$(newroot)"
+  printf '%s' '{"laneQueued": ' > "$junk/i18n/$which"
+  decision "$junk" D-043 '{"id":"D-043","task":"T-004","kind":"merge","title":"merge it"}'
+  "$DG" --decision D-043 --repo "$junk" >/dev/null 2>&1
+  assert_eq "66" "$?" "a $which that is not json is a bad input, not a page of raw keys"
+  assert_eq "" "$(find "$junk/board/public" -name '*.html' 2>/dev/null)" \
+    "and nothing half-rendered was left behind"
+  # valid json of the wrong shape reads no rows just as surely
+  printf '%s' '["laneQueued"]' > "$junk/i18n/$which"
+  "$DG" --decision D-043 --repo "$junk" >/dev/null 2>&1
+  assert_eq "66" "$?" "a $which that is json but not an object is refused too"
+  rm -rf "$junk"
+done
 
 # the other half of that contract: a key the dictionary does not answer is
 # not a missing input, it is a visible hole with the key's name on it
