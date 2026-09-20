@@ -364,14 +364,26 @@
       "title": "Playwright e2e and the GitHub Actions workflow",
       "scope": [
         "tests/e2e/**",
+        "tests/ci.test.sh",
         ".github/workflows/**",
-        "bin/ci.sh"
+        "bin/ci.sh",
+        "package.json",
+        "bun.lock",
+        "playwright.config.ts",
+        "board/public/ship.css",
+        "design/tasks.json"
       ],
       "acceptance": [
         "every e2e uses the mock adapter and calls no model",
         "chrome snapshots run in all three languages; interaction flows run in zh-TW only",
         "GitHub Actions runs bin/ci.sh, the same file the local gate runs",
-        "a full CI pass completes in under 60 seconds locally"
+        "a full CI pass completes in under 60 seconds locally",
+        "the gate itself is asserted to run the browser suite, not only CI asserted not to",
+        "every zh-CN assertion pins an expected string, derived the way the board derives it",
+        "a board under test binds a free port rather than a guessed one",
+        "a fixture is removed whether the test passed or not",
+        "the language mechanisms are covered one at a time",
+        "the sixty-second budget is measured, not hoped for"
       ]
     },
     {

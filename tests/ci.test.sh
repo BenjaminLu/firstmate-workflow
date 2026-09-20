@@ -26,6 +26,15 @@ assert_ok "test -x '$ROOT/bin/ci.sh'" "ci.sh is executable"
 gha="$ROOT/.github/workflows/ci.yml"
 assert_ok "test -f '$gha'" "a GitHub Actions workflow exists"
 assert_contains "$(cat "$gha")" "bin/ci.sh" "the workflow calls bin/ci.sh, not a copy of its steps"
+# the browser suite runs in CI too, or the board is only ever checked here.
+# Everything the gate needs must be installed before it runs.
+assert_contains "$(cat "$gha")" "playwright install" "CI installs the browser the gate uses"
+assert_contains "$(cat "$gha")" "bun install" "CI installs the dependencies the gate uses"
+# both halves of "one gate, one file". The negative alone passes on a
+# workflow that never heard of playwright, which is to say on the workflow
+# as it was before this change.
+assert_contains "$(cat "$ROOT/bin/ci.sh")" "playwright test" "the gate runs the browser suite"
+assert_lacks "$(cat "$gha")" "playwright test" "and CI does not run it itself"
 rm -rf "$t"
 # the gate must never read standard input. With nullglob an empty file list
 # turns a grep into one that reads stdin, and a nested run - which is exactly
@@ -126,6 +135,13 @@ if command -v shellcheck >/dev/null 2>&1; then
 else
   printf '    %s\n' "(shellcheck not installed, adapter lint unchecked)"
 fi
+
+# The design's budget is sixty seconds for a full local pass. The gate
+# times itself - measuring it from here would run the gate inside the suite
+# the gate runs - and this asserts it says so and enforces something.
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_matches "$out" 'took [0-9]+s' "the gate reports how long it took"
+assert_contains "$out" "60s locally" "against the budget the design sets"
 
 # --- every lint, planted ------------------------------------------------
 # A lint nobody has ever seen fail is a lint nobody knows works. Each of

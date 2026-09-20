@@ -552,7 +552,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-011 | i18n: dictionaries, `tw2cn.tsv`, the hardcoded-string lint | T-009 |
 | T-012 | `/open` and the read-only diff viewer | T-009 |
 | T-013 | the decision API, including merge cards | T-008, T-009 |
-| T-014 | Playwright e2e and the GitHub Actions workflow | T-010, T-011, T-013 |
+| T-014 | the board in a browser, and the gate that runs it | T-010, T-011, T-013 |
 | T-025 | the adapter verdict: a vendor that fails silently is not one that worked | T-003, T-006, T-024 |
 
 ### M2 — protocol and self-update
