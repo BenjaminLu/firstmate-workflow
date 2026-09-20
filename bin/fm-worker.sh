@@ -122,15 +122,26 @@ emit --type commit_pushed --en "committed on $branch" --tw "已在 $branch 上 c
 git -C "$tree" push -q -u origin "$branch" 2>/dev/null || {
   echo "fm-worker: could not push $branch" >&2; exit 71; }
 
-url="$($GH pr create --head "$branch" --base "$BASE" \
-      --title "$TASK: $(jq -r .title <<<"$spec")" \
-      --body "Dispatched by firstmate for $TASK. Acceptance is in design/tasks.json." \
-      2>/dev/null | tail -1)"
-# the number, not the url: every step after this addresses the pull request by
-# it, and an event without it leaves the gates checking nothing
-num="$(printf '%s' "$url" | sed -n 's|.*/\([0-9][0-9]*\)$|\1|p')"
-[ -n "$num" ] || { echo "fm-worker: could not read a pull request number from '$url'" >&2; exit 72; }
-emit --type pr_opened --pr "$num" --en "opened #$num" --tw "已開 #$num"
+# On a later round the pull request is already open and `pr create` fails,
+# so ask for the branch's pull request first. A worker that could only ever
+# open a new one failed its second round at the last step, with the work
+# pushed and nothing pointing at it.
+num="$($GH pr list --head "$branch" --state open --json number --jq '.[0].number' \
+       2>/dev/null </dev/null | head -1)"
+if [ -z "$num" ] || [ "$num" = "null" ]; then
+  url="$($GH pr create --head "$branch" --base "$BASE" \
+        --title "$TASK: $(jq -r .title <<<"$spec")" \
+        --body "Dispatched by firstmate for $TASK. Acceptance is in design/tasks.json." \
+        2>/dev/null </dev/null | tail -1)"
+  # the number, not the url: every step after this addresses the pull
+  # request by it, and an event without it leaves the gates checking nothing
+  num="$(printf '%s' "$url" | sed -n 's|.*/\([0-9][0-9]*\)$|\1|p')"
+  [ -n "$num" ] || { echo "fm-worker: could not read a pull request number from '$url'" >&2; exit 72; }
+  emit --type pr_opened --pr "$num" --en "opened #$num" --tw "已開 #$num"
+else
+  emit --type commit_pushed --pr "$num" --en "pushed another round to #$num" \
+       --tw "第二輪已推上 #$num"
+fi
 printf '%s\n' "$branch"
 [ "${rc:-1}" = "0" ] || exit 1
 exit 0
