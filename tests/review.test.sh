@@ -10,7 +10,7 @@ fixture() {
   git init -q -b main "$d/repo"; cd "$d/repo" || return 1
   git config user.email a@b.c; git config user.name t
   mkdir -p bin design skills/reviewer src state
-  cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" bin/
+  cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" bin/
   cp -r "$ROOT/bin/adapters" bin/
   cp "$ROOT/skills/reviewer/SKILL.md" skills/reviewer/
   printf 'vendor: mock\n' > config.yaml

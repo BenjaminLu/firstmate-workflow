@@ -6,6 +6,10 @@
 #
 #   fm-review.sh --task T-004 --branch <name> [--repo .] [--pr 9] [--round 1]
 set -uo pipefail
+_fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
+[ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
+# shellcheck source=bin/fm-config.sh
+. "$_fm_lib"
 
 REPO="${FM_ROOT:-$(pwd)}"; TASK=''; BRANCH=''; PR=''; ROUND=1; VENDOR=''
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
@@ -25,8 +29,8 @@ done
 cd "$REPO" || { echo "fm-review: no repo at $REPO" >&2; exit 64; }
 
 emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor reviewer-1 --task "$TASK" "$@" >/dev/null 2>&1 || true; }
-cfg()  { sed -n "s/^$1:[[:space:]]*//p" config.yaml 2>/dev/null | head -1 | tr -d '"'; }
-rcfg() { sed -n '/^reviewer:/,/^[^ ]/p' config.yaml 2>/dev/null | sed -n "s/^[[:space:]]*$1:[[:space:]]*//p" | head -1; }
+cfg()  { fm_cfg "$1"; }
+rcfg() { fm_cfg_in reviewer "$1"; }
 
 spec="$(jq -r --arg t "$TASK" '.tasks[]|select(.id==$t)' design/tasks.json 2>/dev/null)"
 [ -n "$spec" ] || { echo "fm-review: no task $TASK" >&2; exit 65; }

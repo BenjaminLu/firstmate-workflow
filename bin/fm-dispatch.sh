@@ -8,6 +8,10 @@
 #
 #   fm-dispatch.sh [--repo .] [--dry-run] [--limit N]
 set -uo pipefail
+_fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
+[ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
+# shellcheck source=bin/fm-config.sh
+. "$_fm_lib"
 
 REPO="${FM_ROOT:-$(pwd)}"; DRY=0; LIMIT=''
 while [ $# -gt 0 ]; do
@@ -36,7 +40,7 @@ inflight="$(comm -23 <(printf '%s\n' "$started" | sort -u | sed '/^$/d') \
                      <(printf '%s\n' "$finished" | sort -u | sed '/^$/d') | sed '/^$/d')"
 n_inflight="$(printf '%s\n' "$inflight" | sed '/^$/d' | wc -l | tr -d ' ')"
 
-limit="${LIMIT:-$(sed -n 's/^concurrency:[[:space:]]*//p' config.yaml 2>/dev/null | head -1)}"
+limit="${LIMIT:-$(fm_cfg concurrency)}"
 [ -n "$limit" ] || limit=3
 slots=$(( limit - n_inflight ))
 [ "$slots" -gt 0 ] || { echo "fm-dispatch: $n_inflight in flight, limit $limit - nothing to start"; exit 0; }
