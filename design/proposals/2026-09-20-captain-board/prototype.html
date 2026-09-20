@@ -1,10 +1,12 @@
 <!doctype html>
 <!--
   PROTOTYPE - THROWAWAY. Not production code. No tests, no error handling.
-  Question: "What should the captain's board look like?"
-  Three structurally different variants of the captain's board, switchable via
-  ?variant=A|B|C, on a standalone throwaway page (sub-shape B: no existing page).
-  Fake data only. Nothing here is wired to a real backend.
+  Question: "How much motion does the captain's board need to feel like sailing?"
+  Layout is settled: A+C merged (sea header / crew rail / decision deck / stage lanes).
+  Two motion levels, switchable via ?variant=1|2 :
+     1 = Steady  (live data, restrained motion)
+     2 = Full sail (live data + full nautical motion)
+  Fake data, simulated tick. Nothing is wired to a real backend.
 -->
 <html lang="zh-Hant">
 <head>
@@ -13,26 +15,26 @@
 <title>PROTOTYPE - Captain's Board</title>
 <style>
 :root{
-  --bg:#0b1016; --bg2:#111923; --bg3:#18222e; --line:#243141;
-  --fg:#e6edf5; --fg2:#93a4b8; --fg3:#5f7186;
-  --accent:#4da3ff; --accent2:#0d5ba8;
-  --ok:#3ecf8e; --warn:#f2b544; --bad:#f2645a; --idle:#5f7186; --wait:#c07bf0;
+  --bg:#070d14; --bg2:#0e1720; --bg3:#15212d; --line:#213041;
+  --fg:#e8eff7; --fg2:#93a7bd; --fg3:#5d7188;
+  --accent:#4da3ff; --accent2:#0d5ba8; --sea:#0a2a44; --sea2:#0d3b5e;
+  --ok:#3ecf8e; --warn:#f2b544; --bad:#f2645a; --wait:#c07bf0; --brass:#d9a441;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Noto Sans CJK TC",sans-serif;
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
-body{background:var(--bg);color:var(--fg);font:14px/1.55 var(--sans);-webkit-font-smoothing:antialiased;padding-bottom:88px}
+body{background:var(--bg);color:var(--fg);font:14px/1.55 var(--sans);-webkit-font-smoothing:antialiased;padding-bottom:92px;overflow-x:hidden}
 a{color:var(--accent);text-decoration:none}
-a:hover{text-decoration:underline}
 button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 code,.mono{font-family:var(--mono);font-size:.86em}
+.muted{color:var(--fg2)} .tiny{font-size:11.5px} .dim{color:var(--fg3)}
+.num{font-variant-numeric:tabular-nums}
 
-/* ---------- shared chrome (header + lang + flow overlay) ---------- */
-.top{display:flex;align-items:center;gap:16px;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--bg2);position:sticky;top:0;z-index:40}
-.brand{display:flex;align-items:center;gap:10px;font-weight:650;letter-spacing:.2px}
-.brand .dot{width:9px;height:9px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(62,207,142,.15)}
-.brand small{display:block;font-weight:400;color:var(--fg3);font-size:11px;letter-spacing:.06em;text-transform:uppercase}
+/* ===== header ===== */
+.top{display:flex;align-items:center;gap:14px;padding:11px 20px;border-bottom:1px solid var(--line);background:var(--bg2);position:sticky;top:0;z-index:40}
+.brand{display:flex;align-items:center;gap:11px;font-weight:650}
+.brand small{display:block;font-weight:400;color:var(--fg3);font-size:10.5px;letter-spacing:.07em;text-transform:uppercase}
 .top .spacer{flex:1}
 .langs{display:flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
 .langs button{padding:5px 11px;font-size:12px;color:var(--fg2)}
@@ -40,524 +42,487 @@ code,.mono{font-family:var(--mono);font-size:.86em}
 .langs button[aria-pressed=true]{background:var(--accent2);color:#fff}
 .ghost{padding:5px 11px;font-size:12px;color:var(--fg2);border:1px solid var(--line);border-radius:7px}
 .ghost:hover{color:var(--fg);border-color:var(--fg3)}
+.clock{font-family:var(--mono);font-size:12px;color:var(--fg3);letter-spacing:.06em}
 
-.overlay{position:fixed;inset:0;background:rgba(3,7,12,.82);z-index:60;display:none;overflow:auto;padding:40px 20px}
+/* ===== compass (ship's wheel) ===== */
+.compass{width:34px;height:34px;flex:0 0 34px;position:relative}
+.compass svg{display:block}
+.compass .rose{transform-origin:50% 50%}
+.m-full .compass .rose{animation:roll 9s ease-in-out infinite}
+.m-full .compass .sweep{animation:sweep 4s linear infinite;transform-origin:50% 50%}
+.compass .sweep{opacity:0}
+.m-full .compass .sweep{opacity:1}
+@keyframes roll{0%,100%{transform:rotate(-7deg)}50%{transform:rotate(7deg)}}
+@keyframes sweep{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+
+/* ===== sea strip ===== */
+.sea{position:relative;height:104px;overflow:hidden;background:linear-gradient(180deg,#081824 0%,var(--sea) 55%,var(--sea2) 100%);border-bottom:1px solid var(--line)}
+.sea .waves{position:absolute;inset:auto 0 0 0;height:74px}
+.sea .waves svg{position:absolute;bottom:0;left:0;width:220%;height:100%}
+.sea .w1{opacity:.55} .sea .w2{opacity:.35} .sea .w3{opacity:.22}
+.m-full .sea .w1{animation:drift 13s linear infinite}
+.m-full .sea .w2{animation:drift 21s linear infinite reverse}
+.m-full .sea .w3{animation:drift 31s linear infinite}
+@keyframes drift{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+.sea .stats{position:relative;z-index:2;display:flex;gap:26px;align-items:center;height:100%;padding:0 22px}
+.sea .stat b{display:block;font-size:27px;line-height:1;letter-spacing:-.5px}
+.sea .stat span{font-size:10.5px;color:#7fa8c6;text-transform:uppercase;letter-spacing:.09em}
+.sea .stat.hot b{color:var(--wait)}
+.sea .stat.bad b{color:var(--bad)}
+.sea .flag{margin-left:auto;text-align:right}
+.sea .flag .hd{font-family:var(--mono);font-size:21px;color:var(--brass);letter-spacing:1px}
+.sea .flag .lb{font-size:10.5px;color:#7fa8c6;text-transform:uppercase;letter-spacing:.09em}
+.m-full .sea .ship{animation:bob 5.5s ease-in-out infinite}
+@keyframes bob{0%,100%{transform:translateY(0) rotate(-1.2deg)}50%{transform:translateY(-5px) rotate(1.2deg)}}
+.flash{animation:flash .6s ease-out}
+@keyframes flash{0%{color:var(--brass);text-shadow:0 0 14px rgba(217,164,65,.6)}100%{}}
+
+/* ===== crew rail ===== */
+.rail{display:grid;grid-template-columns:repeat(auto-fit,minmax(176px,1fr));gap:9px;padding:14px 18px}
+.mem{background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:11px 12px;position:relative;overflow:hidden}
+.mem.act{border-color:#2c4a66}
+.mem .hd{display:flex;justify-content:space-between;align-items:center;gap:6px}
+.mem .nm{font-family:var(--mono);font-size:12px;font-weight:600;display:flex;align-items:center;gap:7px}
+.dot{width:7px;height:7px;border-radius:50%;flex:0 0 7px;background:var(--fg3)}
+.dot.working{background:var(--accent)} .dot.review{background:var(--accent)}
+.dot.gate{background:var(--bad)} .dot.merged{background:var(--ok)} .dot.queued{background:var(--fg3)}
+.m-full .dot.working,.m-full .dot.review{animation:breathe 1.9s ease-in-out infinite}
+.m-full .dot.gate{animation:breathe 1s ease-in-out infinite}
+@keyframes breathe{0%,100%{box-shadow:0 0 0 0 currentColor;opacity:1}50%{box-shadow:0 0 0 4px rgba(77,163,255,.18);opacity:.75}}
+.mem .tk{font-size:11.5px;color:var(--fg2);margin-top:5px;min-height:17px}
+.mem .bar{height:3px;background:var(--bg3);border-radius:2px;overflow:hidden;margin-top:8px}
+.mem .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width .85s linear}
+.mem .bar i.bad{background:linear-gradient(90deg,#7a2a25,var(--bad))}
+.mem .wake{position:absolute;inset:0;pointer-events:none;opacity:0}
+.m-full .mem.act .wake{opacity:1;background:linear-gradient(90deg,transparent,rgba(77,163,255,.07),transparent);background-size:200% 100%;animation:wake 2.6s linear infinite}
+@keyframes wake{from{background-position:200% 0}to{background-position:-200% 0}}
+
+/* ===== decision deck ===== */
+.deck{padding:6px 18px 0}
+.deck h3,.lanes-wrap h3{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--fg3);margin:10px 0 11px;display:flex;align-items:center;gap:9px}
+.deck h3 .n{background:var(--wait);color:#1a0d28;border-radius:99px;font-size:10px;font-weight:800;padding:1px 7px}
+.card-d{background:var(--bg2);border:1px solid #3a2a52;border-radius:14px;padding:19px 21px;position:relative;overflow:hidden}
+.m-full .card-d::after{content:"";position:absolute;top:0;left:-40%;width:40%;height:2px;background:linear-gradient(90deg,transparent,var(--wait),transparent);animation:scanline 4.5s linear infinite}
+@keyframes scanline{to{left:120%}}
+.card-d .hd{display:flex;gap:12px;align-items:flex-start;margin-bottom:5px}
+.card-d h2{margin:0;font-size:18.5px;line-height:1.35;flex:1}
+.card-d .why{color:var(--fg2);font-size:12.8px;margin:0 0 15px}
+.opts{display:grid;gap:9px;grid-template-columns:repeat(auto-fit,minmax(248px,1fr))}
+.opt{border:1px solid var(--line);border-radius:11px;padding:12px 14px;background:var(--bg3);cursor:pointer;text-align:left;transition:border-color .13s,background .13s,transform .13s}
+.opt:hover{border-color:var(--accent)}
+.m-full .opt:hover{transform:translateY(-2px)}
+.opt[aria-pressed=true]{border-color:var(--accent);background:rgba(77,163,255,.1)}
+.opt .k{display:flex;align-items:center;gap:9px;font-weight:650;font-size:13.5px;margin-bottom:4px}
+.opt .k em{font-style:normal;font-family:var(--mono);font-size:11px;color:#fff;background:var(--accent2);border-radius:5px;padding:1px 6px}
+.opt p{margin:0;font-size:12.3px;color:var(--fg2)}
+.dg{margin-top:14px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--bg3)}
+.dg .cap{display:flex;justify-content:space-between;padding:7px 12px;border-bottom:1px solid var(--line);font-size:11.5px;color:var(--fg3)}
+.dg .canvas{padding:15px}
+.links{display:flex;gap:6px;flex-wrap:wrap;margin-top:11px}
+.links a{font-size:11.5px;padding:3px 9px;border:1px solid var(--line);border-radius:6px;color:var(--fg2)}
+.links a:hover{color:var(--fg);border-color:var(--accent);text-decoration:none}
+.send{margin-top:15px;display:flex;gap:11px;align-items:center;flex-wrap:wrap}
+/* engine-order telegraph button */
+.go{background:linear-gradient(180deg,#e0b055,#b8862c);color:#2a1c05;padding:9px 22px;border-radius:9px;font-weight:750;font-size:13.5px;letter-spacing:.02em;box-shadow:0 2px 0 #6d4d13}
+.go:active{transform:translateY(2px);box-shadow:0 0 0 #6d4d13}
+.go[disabled]{opacity:.35;cursor:not-allowed;box-shadow:none}
+.stack{display:flex;flex-direction:column;gap:8px;margin-top:9px}
+.stack .q{background:var(--bg2);border:1px solid var(--line);border-left:3px solid var(--wait);border-radius:9px;padding:9px 12px;font-size:12.5px;cursor:pointer}
+.stack .q:hover{border-color:var(--accent)}
+
+/* ===== lanes ===== */
+.lanes-wrap{padding:8px 18px 0}
+.lanes{display:grid;grid-template-columns:repeat(6,minmax(172px,1fr));gap:9px;align-items:start;overflow-x:auto;padding-bottom:6px}
+.lane{background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:9px;min-height:118px}
+.lane>h4{margin:0 0 8px;font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--fg3);display:flex;justify-content:space-between}
+.lane>h4 i{font-style:normal;background:var(--bg3);border-radius:99px;padding:0 7px;color:var(--fg2)}
+.lane.hot{border-color:#3a2a52}
+.tcard{background:var(--bg3);border:1px solid var(--line);border-radius:9px;padding:9px 10px;margin-bottom:7px;cursor:pointer;position:relative}
+.tcard:hover{border-color:var(--accent)}
+.tcard.enter{animation:slidein .45s cubic-bezier(.2,.8,.3,1)}
+@keyframes slidein{from{opacity:0;transform:translateX(-14px)}to{opacity:1;transform:none}}
+.tcard .tid{font-family:var(--mono);font-size:10.5px;color:var(--fg3)}
+.tcard .tt{font-size:12.2px;font-weight:600;line-height:1.38;margin:3px 0 6px}
+.tcard .ft{font-size:10.5px;color:var(--fg3);display:flex;justify-content:space-between;gap:6px}
+.tcard .rounds{display:flex;gap:3px;margin-top:6px}
+.tcard .rounds i{width:13px;height:4px;border-radius:2px;background:var(--line)}
+.tcard .rounds i.done{background:var(--bad)} .tcard .rounds i.now{background:var(--warn)}
+.tcard .badge{display:inline-block;margin-top:6px;font-size:10px;font-weight:700;color:#fff;background:#6b3fa0;border-radius:5px;padding:2px 7px}
+
+/* ===== ticker ===== */
+.ticker{margin:14px 18px 0;border:1px solid var(--line);border-radius:10px;background:var(--bg2);overflow:hidden}
+.ticker h4{margin:0;padding:8px 13px;border-bottom:1px solid var(--line);font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--fg3)}
+.ticker ul{margin:0;padding:6px 0;list-style:none;max-height:150px;overflow:auto}
+.ticker li{padding:4px 13px;font-size:12.2px;display:flex;gap:11px}
+.ticker li.new{animation:rowin .5s ease-out}
+@keyframes rowin{from{opacity:0;transform:translateY(-8px);background:rgba(77,163,255,.1)}to{opacity:1;transform:none}}
+.ticker li time{font-family:var(--mono);font-size:11px;color:var(--fg3);flex:0 0 58px}
+.ticker li.ok{color:var(--ok)} .ticker li.bad{color:var(--bad)} .ticker li.cap{color:var(--wait)}
+
+/* ===== overlays / switcher ===== */
+.overlay{position:fixed;inset:0;background:rgba(3,7,12,.85);z-index:60;display:none;overflow:auto;padding:40px 20px}
 .overlay.on{display:block}
 .overlay .sheet{max-width:1000px;margin:0 auto;background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:26px}
-.overlay h2{margin:0 0 18px;font-size:17px}
-
-/* lifecycle diagram */
-.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch}
-.flow .st{flex:1 1 128px;background:var(--bg3);border:1px solid var(--line);border-radius:10px;padding:11px 12px;position:relative}
-.flow .st b{display:block;font-size:12.5px;margin-bottom:3px}
-.flow .st span{font-size:11px;color:var(--fg2);line-height:1.4;display:block}
+.overlay h2{margin:0 0 16px;font-size:17px}
+.flow{display:flex;flex-wrap:wrap;gap:7px}
+.flow .st{flex:1 1 124px;background:var(--bg3);border:1px solid var(--line);border-radius:10px;padding:10px 11px}
+.flow .st b{display:block;font-size:12.3px;margin-bottom:3px}
+.flow .st span{font-size:11px;color:var(--fg2);display:block;line-height:1.4}
 .flow .st.gate{border-color:#4a3a1a;background:#1c1710}
 .flow .st.cap{border-color:#3a2a52;background:#181226}
-.flow .arrow{align-self:center;color:var(--fg3);font-size:16px}
-.gatelist{margin:18px 0 0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px}
-.gatelist li{background:var(--bg3);border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:8px;padding:9px 11px;font-size:12.5px}
+.flow .arrow{align-self:center;color:var(--fg3)}
+.gatelist{margin:16px 0 0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(auto-fill,minmax(248px,1fr));gap:8px}
+.gatelist li{background:var(--bg3);border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:8px;padding:9px 11px;font-size:12.3px}
 .gatelist li b{color:var(--warn);font-family:var(--mono);margin-right:7px}
-
-/* ---------- shared atoms ---------- */
-.pill{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600;letter-spacing:.02em;white-space:nowrap}
-.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
-.s-merged{color:var(--ok);background:rgba(62,207,142,.12)}
-.s-review{color:var(--accent);background:rgba(77,163,255,.12)}
-.s-working{color:var(--accent);background:rgba(77,163,255,.12)}
-.s-gate{color:var(--bad);background:rgba(242,100,90,.12)}
-.s-queued{color:var(--idle);background:rgba(95,113,134,.15)}
-.s-captain{color:var(--wait);background:rgba(192,123,240,.14)}
-.tid{font-family:var(--mono);font-size:11.5px;color:var(--fg3);letter-spacing:.03em}
-.links{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
-.links a,.links button{font-size:11.5px;padding:3px 9px;border:1px solid var(--line);border-radius:6px;color:var(--fg2);display:inline-flex;gap:5px;align-items:center}
-.links a:hover,.links button:hover{color:var(--fg);border-color:var(--accent);text-decoration:none}
-.muted{color:var(--fg2)}
-.tiny{font-size:11.5px}
-
-/* ---------- VARIANT A : bridge, decision-first 3 columns ---------- */
-.v-a{display:grid;grid-template-columns:230px minmax(0,1fr) 300px;gap:0;height:calc(100vh - 53px - 88px);min-height:560px}
-.v-a .col{overflow:auto;padding:16px}
-.v-a .col.mid{background:var(--bg);border-left:1px solid var(--line);border-right:1px solid var(--line)}
-.v-a h3{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--fg3);margin:0 0 11px}
-.v-a .crew{display:flex;flex-direction:column;gap:8px}
-.v-a .crew .m{background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:10px}
-.v-a .crew .m .nm{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;font-weight:600;margin-bottom:4px}
-.v-a .crew .m .bar{height:3px;background:var(--bg3);border-radius:2px;overflow:hidden;margin-top:7px}
-.v-a .crew .m .bar i{display:block;height:100%;background:var(--accent)}
-.v-a .big{background:var(--bg2);border:1px solid #3a2a52;border-radius:14px;padding:20px;margin-bottom:16px}
-.v-a .big .hd{display:flex;align-items:flex-start;gap:12px;margin-bottom:6px}
-.v-a .big h2{margin:0;font-size:19px;line-height:1.35;flex:1}
-.v-a .big .why{color:var(--fg2);font-size:13px;margin:0 0 16px}
-.v-a .opts{display:grid;gap:10px}
-.v-a .opt{border:1px solid var(--line);border-radius:11px;padding:13px 15px;background:var(--bg3);cursor:pointer;transition:border-color .12s,background .12s}
-.v-a .opt:hover{border-color:var(--accent)}
-.v-a .opt[aria-pressed=true]{border-color:var(--accent);background:rgba(77,163,255,.09)}
-.v-a .opt .k{display:flex;align-items:center;gap:9px;font-weight:650;font-size:14px;margin-bottom:4px}
-.v-a .opt .k em{font-style:normal;font-family:var(--mono);font-size:11px;color:#fff;background:var(--accent2);border-radius:5px;padding:1px 6px}
-.v-a .opt p{margin:0;font-size:12.5px;color:var(--fg2)}
-.v-a .send{margin-top:15px;display:flex;gap:10px;align-items:center}
-.v-a .send button.go{background:var(--accent2);color:#fff;padding:9px 20px;border-radius:9px;font-weight:650;font-size:13.5px}
-.v-a .send button.go[disabled]{opacity:.4;cursor:not-allowed}
-.v-a .dg{margin:15px 0 0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--bg3)}
-.v-a .dg .cap{display:flex;justify-content:space-between;align-items:center;padding:7px 12px;border-bottom:1px solid var(--line);font-size:11.5px;color:var(--fg3)}
-.v-a .dg .canvas{padding:16px}
-.v-a .queue{display:flex;flex-direction:column;gap:7px}
-.v-a .queue .q{background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:12.5px}
-.v-a .queue .q.on{border-color:var(--wait)}
-
-/* ---------- VARIANT B : voyage, single timeline stream ---------- */
-.v-b{max-width:860px;margin:0 auto;padding:18px 20px}
-.v-b .strip{display:flex;gap:8px;margin-bottom:22px;flex-wrap:wrap}
-.v-b .strip .c{flex:1 1 118px;background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
-.v-b .strip .c b{display:block;font-size:21px;line-height:1.1;font-variant-numeric:tabular-nums}
-.v-b .strip .c span{font-size:11px;color:var(--fg3);text-transform:uppercase;letter-spacing:.07em}
-.v-b .stream{position:relative;padding-left:26px}
-.v-b .stream::before{content:"";position:absolute;left:7px;top:6px;bottom:6px;width:2px;background:var(--line)}
-.v-b .ev{position:relative;margin-bottom:16px}
-.v-b .ev::before{content:"";position:absolute;left:-23px;top:6px;width:9px;height:9px;border-radius:50%;background:var(--fg3);box-shadow:0 0 0 3px var(--bg)}
-.v-b .ev.ok::before{background:var(--ok)}
-.v-b .ev.bad::before{background:var(--bad)}
-.v-b .ev.cap::before{background:var(--wait)}
-.v-b .ev .when{font-family:var(--mono);font-size:11px;color:var(--fg3)}
-.v-b .ev .line{margin-top:2px;font-size:13.5px}
-.v-b .ev .line b{font-weight:650}
-.v-b .ev .body{margin-top:8px;background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:14px 16px}
-.v-b .ev.cap .body{border-color:#3a2a52}
-.v-b .ev .body h4{margin:0 0 5px;font-size:15px}
-.v-b .ev .body p{margin:0 0 12px;font-size:12.5px;color:var(--fg2)}
-.v-b .inline-opts{display:flex;flex-direction:column;gap:7px}
-.v-b .inline-opts label{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--bg3);cursor:pointer}
-.v-b .inline-opts label:hover{border-color:var(--accent)}
-.v-b .inline-opts input{margin-top:3px;accent-color:var(--accent)}
-.v-b .inline-opts .k{font-weight:650;font-size:13px}
-.v-b .inline-opts p{margin:2px 0 0;font-size:12px}
-.v-b .act{margin-top:12px;display:flex;gap:9px;align-items:center;flex-wrap:wrap}
-.v-b .act .go{background:var(--accent2);color:#fff;padding:7px 17px;border-radius:8px;font-weight:650;font-size:13px}
-
-/* ---------- VARIANT C : fleet, kanban by lifecycle stage ---------- */
-.v-c{padding:16px 18px}
-.v-c .lanes{display:grid;grid-template-columns:repeat(6,minmax(180px,1fr));gap:10px;align-items:start;overflow-x:auto}
-.v-c .lane{background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:10px;min-height:150px}
-.v-c .lane>h3{margin:0 0 9px;font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--fg3);display:flex;justify-content:space-between}
-.v-c .lane>h3 i{font-style:normal;background:var(--bg3);border-radius:99px;padding:0 7px;color:var(--fg2)}
-.v-c .lane.hot{border-color:#3a2a52}
-.v-c .card{background:var(--bg3);border:1px solid var(--line);border-radius:9px;padding:10px;margin-bottom:8px;cursor:pointer}
-.v-c .card:hover{border-color:var(--accent)}
-.v-c .card .tt{font-size:12.5px;font-weight:600;line-height:1.4;margin:4px 0 6px}
-.v-c .card .who{font-size:11px;color:var(--fg3);display:flex;justify-content:space-between;align-items:center}
-.v-c .card .badge{display:inline-block;margin-top:7px;font-size:10.5px;font-weight:700;color:#fff;background:#6b3fa0;border-radius:5px;padding:2px 7px}
-.v-c .card .rounds{display:flex;gap:3px;margin-top:7px}
-.v-c .card .rounds i{width:14px;height:4px;border-radius:2px;background:var(--line)}
-.v-c .card .rounds i.done{background:var(--bad)}
-.v-c .card .rounds i.now{background:var(--warn)}
-.v-c .modal{position:fixed;inset:0;background:rgba(3,7,12,.82);z-index:55;display:none;overflow:auto;padding:40px 20px}
-.v-c .modal.on{display:block}
-.v-c .modal .sheet{max-width:720px;margin:0 auto;background:var(--bg2);border:1px solid #3a2a52;border-radius:14px;padding:24px}
-.v-c .modal h2{margin:0 0 6px;font-size:18px}
-.v-c .modal .opts{display:grid;gap:9px;margin-top:14px}
-.v-c .modal .opt{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--bg3);cursor:pointer}
-.v-c .modal .opt:hover{border-color:var(--accent)}
-.v-c .modal .opt[aria-pressed=true]{border-color:var(--accent);background:rgba(77,163,255,.09)}
-.v-c .modal .go{margin-top:14px;background:var(--accent2);color:#fff;padding:9px 20px;border-radius:9px;font-weight:650}
-
-/* ---------- switcher (prototype-only chrome) ---------- */
-.switcher{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:80;display:flex;align-items:center;gap:2px;background:#f2f5f8;color:#0b1016;border-radius:99px;padding:5px;box-shadow:0 10px 34px rgba(0,0,0,.55),0 0 0 1px rgba(255,255,255,.12)}
+.switcher{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:80;display:flex;align-items:center;gap:2px;background:#f2f5f8;color:#0b1016;border-radius:99px;padding:5px;box-shadow:0 10px 34px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.12)}
 .switcher button{width:34px;height:34px;border-radius:99px;font-size:16px;font-weight:700;color:#4a5866}
 .switcher button:hover{background:#dde4ec}
 .switcher .lbl{padding:0 15px;font-size:12.5px;font-weight:700;white-space:nowrap;font-family:var(--mono)}
 .switcher .lbl em{font-style:normal;font-weight:500;color:#5a6876;font-family:var(--sans)}
 .switcher .tag{background:#0b1016;color:#f2f5f8;font-size:9.5px;font-weight:800;letter-spacing:.1em;padding:4px 9px;border-radius:99px;margin-left:4px}
-.toast{position:fixed;bottom:74px;left:50%;transform:translateX(-50%);z-index:90;background:var(--bg3);border:1px solid var(--accent);border-radius:9px;padding:9px 16px;font-size:12.5px;opacity:0;pointer-events:none;transition:opacity .18s,transform .18s}
+.toast{position:fixed;bottom:76px;left:50%;transform:translateX(-50%);z-index:90;background:var(--bg3);border:1px solid var(--accent);border-radius:9px;padding:9px 16px;font-size:12.5px;opacity:0;pointer-events:none;transition:opacity .18s,transform .18s}
 .toast.on{opacity:1;transform:translateX(-50%) translateY(-6px)}
-@media(max-width:900px){
-  .v-a{grid-template-columns:1fr;height:auto}
-  .v-a .col.mid{border:none;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
-  .v-c .lanes{grid-template-columns:repeat(6,240px)}
-}
+@media(max-width:980px){ .lanes{grid-template-columns:repeat(6,190px)} }
+@media(prefers-reduced-motion:reduce){ *,*::before,*::after{animation:none!important;transition:none!important} }
 </style>
 </head>
-<body>
+<body class="m-full">
 <div id="app"></div>
 <div class="toast" id="toast"></div>
 <div class="overlay" id="flowOverlay"><div class="sheet" id="flowSheet"></div></div>
 <div class="switcher" id="switcher"></div>
 <script>
-/* =========================================================================
-   PROTOTYPE DATA + I18N  (throwaway, in-memory only)
-   ========================================================================= */
-const LANGS = ['en','zh-TW','zh-CN'];
-const LANGNAME = {'en':'EN','zh-TW':'繁','zh-CN':'简'};
+/* ====================== PROTOTYPE DATA + I18N (throwaway) ====================== */
+const LANGS=['en','zh-TW','zh-CN'], LANGNAME={'en':'EN','zh-TW':'繁','zh-CN':'简'};
 let lang = localStorage.getItem('proto.lang') || new URLSearchParams(location.search).get('lang') || 'zh-TW';
-if(!LANGS.includes(lang)) lang = 'zh-TW';
-const K = {'en':'en','zh-TW':'tw','zh-CN':'cn'};
+if(!LANGS.includes(lang)) lang='zh-TW';
+const K={'en':'en','zh-TW':'tw','zh-CN':'cn'};
 const L = o => (o && o[K[lang]]) || '';
+const esc = s => String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
-const UI = {
-  brand:      {en:"Captain's Board",       tw:'船長看板',           cn:'船长看板'},
-  sub:        {en:'firstmate-workflow',    tw:'firstmate-workflow', cn:'firstmate-workflow'},
-  flowBtn:    {en:'Lifecycle',             tw:'流程',               cn:'流程'},
-  crew:       {en:'Crew',                  tw:'船員',               cn:'船员'},
-  decisions:  {en:'Awaiting your call',    tw:'等你拍板',           cn:'等你拍板'},
-  queue:      {en:'Decision queue',        tw:'決策佇列',           cn:'决策队列'},
-  tasks:      {en:'Tasks',                 tw:'任務',               cn:'任务'},
-  options:    {en:'Options',               tw:'選項',               cn:'选项'},
-  diagram:    {en:'Diagram',               tw:'圖解',               cn:'图解'},
-  openLocal:  {en:'Open locally',          tw:'開啟本地檔案',       cn:'打开本地文件'},
-  viewPR:     {en:'View PR',               tw:'前往 PR',            cn:'前往 PR'},
-  viewDesign: {en:'design.md',             tw:'design.md',          cn:'design.md'},
-  submit:     {en:'Submit decision',       tw:'送出決定',           cn:'提交决定'},
-  pickFirst:  {en:'Pick an option first',  tw:'先選一個選項',       cn:'先选一个选项'},
-  sent:       {en:'Decision written to state/decisions/{id}.json — firstmate woke up',
-               tw:'決定已寫入 state/decisions/{id}.json —— firstmate 已喚醒',
-               cn:'决定已写入 state/decisions/{id}.json —— firstmate 已唤醒'},
-  opened:     {en:'Would run: code {p}',   tw:'將執行：code {p}',   cn:'将执行：code {p}'},
-  summary:    {en:'Summary (tri-lingual, emitted by the agent)',
-               tw:'摘要（三語，由 agent 產出）', cn:'摘要（三语，由 agent 产出）'},
-  round:      {en:'Round',                 tw:'輪次',               cn:'轮次'},
-  blockedBy:  {en:'Blocked by',            tw:'卡在',               cn:'卡在'},
-  running:    {en:'running',               tw:'執行中',             cn:'执行中'},
-  idle:       {en:'idle slot',             tw:'空閒名額',           cn:'空闲名额'},
-  gateFail:   {en:'Gate 5 failed',         tw:'第 5 道閘未過',      cn:'第 5 道闸未过'},
-  askCrit:    {en:'ASK-PASS-CRITERIA sent',tw:'已發 ASK-PASS-CRITERIA', cn:'已发 ASK-PASS-CRITERIA'},
-  statMerged: {en:'merged',                tw:'已合併',             cn:'已合并'},
-  statReview: {en:'in review',             tw:'審核中',             cn:'审核中'},
-  statWorking:{en:'working',               tw:'施工中',             cn:'施工中'},
-  statGate:   {en:'gate failed',           tw:'閘門擋下',           cn:'闸门拦下'},
-  statQueued: {en:'queued',                tw:'排隊中',             cn:'排队中'},
-  statCaptain:{en:'awaiting captain',      tw:'等船長',             cn:'等船长'},
-  laneQueued: {en:'Queued',                tw:'排隊',               cn:'排队'},
-  laneWorking:{en:'Working',               tw:'施工',               cn:'施工'},
-  laneGate:   {en:'Gate',                  tw:'閘門',               cn:'闸门'},
-  laneReview: {en:'Review',                tw:'審核',               cn:'审核'},
-  laneCaptain:{en:'Captain',               tw:'船長',               cn:'船长'},
-  laneMerged: {en:'Merged',                tw:'已合併',             cn:'已合并'},
-  nDone:      {en:'merged',                tw:'已合併',             cn:'已合并'},
-  nFlight:    {en:'in flight',             tw:'進行中',             cn:'进行中'},
-  nWait:      {en:'awaiting you',          tw:'等你',               cn:'等你'},
-  nBlocked:   {en:'blocked',               tw:'受阻',               cn:'受阻'},
-  flowTitle:  {en:'Lifecycle — where the captain is in the loop',
-               tw:'生命週期 —— 船長在哪些環節介入', cn:'生命周期 —— 船长在哪些环节介入'},
-  gatesTitle: {en:'fm-gate.sh — deterministic gates. Exit codes decide, not opinions.',
-               tw:'fm-gate.sh —— 確定性閘門。exit code 說了算，不是模型印象。',
-               cn:'fm-gate.sh —— 确定性闸门。exit code 说了算，不是模型印象。'},
-  origin:     {en:'Source text stays zh-TW on GitHub',
-               tw:'GitHub 上的原文維持單語（zh-TW）', cn:'GitHub 上的原文保持单语（zh-TW）'},
+const UI={
+ brand:{en:"Captain's Board",tw:'船長看板',cn:'船长看板'},
+ sub:{en:'firstmate-workflow',tw:'firstmate-workflow',cn:'firstmate-workflow'},
+ flowBtn:{en:'Lifecycle',tw:'流程',cn:'流程'},
+ crew:{en:'Crew',tw:'船員',cn:'船员'},
+ deck:{en:'Awaiting your call',tw:'等你拍板',cn:'等你拍板'},
+ alsoWaiting:{en:'Also waiting',tw:'其他待決',cn:'其他待决'},
+ fleet:{en:'Fleet',tw:'全船進度',cn:'全船进度'},
+ log:{en:'Live log',tw:'即時日誌',cn:'实时日志'},
+ options:{en:'options',tw:'個選項',cn:'个选项'},
+ diagram:{en:'Diagram',tw:'圖解',cn:'图解'},
+ openLocal:{en:'Open locally',tw:'開啟本地檔案',cn:'打开本地文件'},
+ viewPR:{en:'View PR',tw:'前往 PR',cn:'前往 PR'},
+ viewDesign:{en:'design.md',tw:'design.md',cn:'design.md'},
+ submit:{en:'Ring it through',tw:'下令',cn:'下令'},
+ pickFirst:{en:'Pick an option first',tw:'先選一個選項',cn:'先选一个选项'},
+ sent:{en:'Written to state/decisions/{id}.json — firstmate woke up',
+       tw:'已寫入 state/decisions/{id}.json —— firstmate 已喚醒',
+       cn:'已写入 state/decisions/{id}.json —— firstmate 已唤醒'},
+ opened:{en:'Would run: code {p}',tw:'將執行：code {p}',cn:'将执行：code {p}'},
+ heading:{en:'heading',tw:'航向',cn:'航向'},
+ nDone:{en:'merged',tw:'已合併',cn:'已合并'},
+ nFlight:{en:'in flight',tw:'進行中',cn:'进行中'},
+ nWait:{en:'awaiting you',tw:'等你',cn:'等你'},
+ nBlocked:{en:'blocked',tw:'受阻',cn:'受阻'},
+ laneQueued:{en:'Queued',tw:'排隊',cn:'排队'},
+ laneWorking:{en:'Working',tw:'施工',cn:'施工'},
+ laneGate:{en:'Gate',tw:'閘門',cn:'闸门'},
+ laneReview:{en:'Review',tw:'審核',cn:'审核'},
+ laneCaptain:{en:'Captain',tw:'船長',cn:'船长'},
+ laneMerged:{en:'Merged',tw:'已合併',cn:'已合并'},
+ blockedBy:{en:'needs',tw:'卡在',cn:'卡在'},
+ idle:{en:'idle',tw:'空閒',cn:'空闲'},
+ coord:{en:'coordinating',tw:'調度中',cn:'调度中'},
+ askCrit:{en:'ASK-PASS-CRITERIA',tw:'ASK-PASS-CRITERIA',cn:'ASK-PASS-CRITERIA'},
+ gateFail:{en:'gate 5 failed',tw:'第 5 道閘未過',cn:'第 5 道闸未过'},
+ flowTitle:{en:'Lifecycle — where the captain is in the loop',tw:'生命週期 —— 船長在哪些環節介入',cn:'生命周期 —— 船长在哪些环节介入'},
+ gatesTitle:{en:'fm-gate.sh — deterministic gates. Exit codes decide, not opinions.',
+             tw:'fm-gate.sh —— 確定性閘門。exit code 說了算，不是模型印象。',
+             cn:'fm-gate.sh —— 确定性闸门。exit code 说了算，不是模型印象。'},
+ origin:{en:'Source text stays zh-TW on GitHub; the board shows the tri-lingual summary the agent emitted.',
+         tw:'GitHub 上的原文維持單語（zh-TW）；看板顯示的是 agent 送出的三語摘要。',
+         cn:'GitHub 上的原文保持单语（zh-TW）；看板显示的是 agent 送出的三语摘要。'},
 };
 const T = k => L(UI[k]);
 
-const FLOW = [
-  {t:{en:'Grill',tw:'對談盤問',cn:'对谈盘问'},      d:{en:'/grilling until the frontier is empty',tw:'/grilling 直到 frontier 清空',cn:'/grilling 直到 frontier 清空'}},
-  {t:{en:'Prototype',tw:'提案視覺化',cn:'提案可视化'},d:{en:'/prototype — variants the captain can click',tw:'/prototype 產出可點的方案',cn:'/prototype 产出可点的方案'}},
-  {t:{en:'Green-light',tw:'船長成案',cn:'船长立项'}, d:{en:'no dispatch without this event',tw:'沒有這個事件不准派工',cn:'没有这个事件不准派工'},cap:1},
-  {t:{en:'design.md',tw:'design.md',cn:'design.md'}, d:{en:'spec + task DAG, version controlled',tw:'規格 + 任務 DAG，進版控',cn:'规格 + 任务 DAG，进版控'}},
-  {t:{en:'Dispatch',tw:'派工',cn:'派工'},            d:{en:'ready tasks only, max 3 in flight',tw:'只派 ready 的，並行上限 3',cn:'只派 ready 的，并行上限 3'}},
-  {t:{en:'Worker',tw:'工人',cn:'工人'},              d:{en:'own worktree, opens a PR',tw:'自己的 worktree，開 PR',cn:'自己的 worktree，开 PR'}},
-  {t:{en:'7 gates',tw:'七道閘',cn:'七道闸'},          d:{en:'exit codes only, no model opinion',tw:'只看 exit code',cn:'只看 exit code'},gate:1},
-  {t:{en:'Reviewer',tw:'審核者',cn:'审核者'},        d:{en:'sees the diff only — adversarial',tw:'只看 diff，對抗式',cn:'只看 diff，对抗式'}},
-  {t:{en:'Merge',tw:'合併',cn:'合并'},               d:{en:'you press the button',tw:'你按下按鈕',cn:'你按下按钮'},cap:1},
+const FLOW=[
+ {t:{en:'Grill',tw:'對談盤問',cn:'对谈盘问'},d:{en:'/grilling until the frontier is empty',tw:'/grilling 直到 frontier 清空',cn:'/grilling 直到 frontier 清空'}},
+ {t:{en:'Prototype',tw:'提案視覺化',cn:'提案可视化'},d:{en:'/prototype — variants the captain can click',tw:'/prototype 產出可點的方案',cn:'/prototype 产出可点的方案'}},
+ {t:{en:'Green-light',tw:'船長成案',cn:'船长立项'},d:{en:'no dispatch without this event',tw:'沒有這個事件不准派工',cn:'没有这个事件不准派工'},cap:1},
+ {t:{en:'design.md',tw:'design.md',cn:'design.md'},d:{en:'spec + task DAG, version controlled',tw:'規格 + 任務 DAG，進版控',cn:'规格 + 任务 DAG，进版控'}},
+ {t:{en:'Dispatch',tw:'派工',cn:'派工'},d:{en:'ready tasks only, max 3 in flight',tw:'只派 ready 的，並行上限 3',cn:'只派 ready 的，并行上限 3'}},
+ {t:{en:'Worker',tw:'工人',cn:'工人'},d:{en:'own worktree, opens a PR',tw:'自己的 worktree，開 PR',cn:'自己的 worktree，开 PR'}},
+ {t:{en:'7 gates',tw:'七道閘',cn:'七道闸'},d:{en:'exit codes only',tw:'只看 exit code',cn:'只看 exit code'},gate:1},
+ {t:{en:'Reviewer',tw:'審核者',cn:'审核者'},d:{en:'sees the diff only — adversarial',tw:'只看 diff，對抗式',cn:'只看 diff，对抗式'}},
+ {t:{en:'Merge',tw:'合併',cn:'合并'},d:{en:'you press the button',tw:'你按下按鈕',cn:'你按下按钮'},cap:1},
 ];
-const GATES = [
-  {en:'branch exists and has commits',            tw:'分支存在且有 commit',                  cn:'分支存在且有 commit'},
-  {en:'rebase onto main is clean',                tw:'rebase 到 main 乾淨',                  cn:'rebase 到 main 干净'},
-  {en:'ci.sh exits 0 (same script as GHA)',       tw:'ci.sh exit 0（與 GHA 同一支）',        cn:'ci.sh exit 0（与 GHA 同一支）'},
-  {en:'diff stays inside the declared file scope',tw:'diff 不超出宣告的檔案範圍',            cn:'diff 不超出声明的文件范围'},
-  {en:'revert the impl — new tests must go red',  tw:'revert 實作後新測試必須變紅',          cn:'revert 实现后新测试必须变红'},
-  {en:'GitHub Actions required check is green',   tw:'GitHub Actions 必檢項目為綠',          cn:'GitHub Actions 必检项为绿'},
-  {en:'reviewer posted APPROVE:<task-id>',        tw:'reviewer 貼出 APPROVE:<task-id>',      cn:'reviewer 贴出 APPROVE:<task-id>'},
+const GATES=[
+ {en:'branch exists and has commits',tw:'分支存在且有 commit',cn:'分支存在且有 commit'},
+ {en:'rebase onto main is clean',tw:'rebase 到 main 乾淨',cn:'rebase 到 main 干净'},
+ {en:'ci.sh exits 0 (same script as GHA)',tw:'ci.sh exit 0（與 GHA 同一支）',cn:'ci.sh exit 0（与 GHA 同一支）'},
+ {en:'diff stays inside the declared file scope',tw:'diff 不超出宣告的檔案範圍',cn:'diff 不超出声明的文件范围'},
+ {en:'revert the impl — new tests must go red',tw:'revert 實作後新測試必須變紅',cn:'revert 实现后新测试必须变红'},
+ {en:'GitHub Actions required check is green',tw:'GitHub Actions 必檢項目為綠',cn:'GitHub Actions 必检项为绿'},
+ {en:'reviewer posted APPROVE:<task-id>',tw:'reviewer 貼出 APPROVE:<task-id>',cn:'reviewer 贴出 APPROVE:<task-id>'},
 ];
+const TASKS=[
+ {id:'T-001',st:'merged',pct:100,title:{en:'Single writer for the event log (fm-emit.sh)',tw:'事件日誌唯一寫入口 fm-emit.sh',cn:'事件日志唯一写入口 fm-emit.sh'},pr:3,who:'worker-4',round:2,file:'bin/fm-emit.sh'},
+ {id:'T-002',st:'review',pct:80,title:{en:'Board SSE server + hot reload',tw:'看板 SSE 伺服器與熱重載',cn:'看板 SSE 服务器与热重载'},pr:7,who:'reviewer-1',round:3,file:'board/server.ts',note:'askCrit'},
+ {id:'T-003',st:'working',pct:62,title:{en:'Tri-lingual dictionary + TW→CN term conversion',tw:'三語字典與繁簡術語轉換',cn:'三语字典与繁简术语转换'},pr:null,who:'worker-1',round:1,file:'i18n/tw2cn.tsv'},
+ {id:'T-004',st:'gate',pct:28,title:{en:'Decision queue API + fswatch wake-up',tw:'決策佇列 API 與 fswatch 喚醒',cn:'决策队列 API 与 fswatch 唤醒'},pr:9,who:'worker-2',round:2,file:'bin/fm-decide.sh',note:'gateFail'},
+ {id:'T-005',st:'queued',pct:0,title:{en:'/open endpoint + read-only diff viewer',tw:'/open 端點與唯讀 diff 檢視器',cn:'/open 端点与只读 diff 查看器'},pr:null,who:null,round:0,dep:['T-002'],file:'board/server.ts'},
+ {id:'T-006',st:'queued',pct:0,title:{en:'Playwright e2e + GitHub Actions workflow',tw:'Playwright e2e 與 GitHub Actions 工作流',cn:'Playwright e2e 与 GitHub Actions 工作流'},pr:null,who:null,round:0,dep:['T-002','T-004'],file:'tests/e2e/board.spec.ts'},
+ {id:'T-007',st:'queued',pct:0,title:{en:'fm-reconcile.sh — recover state after a crash',tw:'fm-reconcile.sh —— 崩潰後狀態對帳',cn:'fm-reconcile.sh —— 崩溃后状态对账'},pr:null,who:null,round:0,dep:['T-001'],file:'bin/fm-reconcile.sh'},
+];
+const CREW=[
+ {id:'firstmate',role:'fm',st:'working',task:null,pct:100},
+ {id:'worker-1',role:'w',st:'working',task:'T-003',pct:62},
+ {id:'worker-2',role:'w',st:'gate',task:'T-004',pct:28},
+ {id:'worker-3',role:'w',st:'queued',task:null,pct:0},
+ {id:'reviewer-1',role:'r',st:'review',task:'T-002',pct:80},
+];
+const DECISIONS=[
+ {id:'D-007',task:'T-004',pr:9,design:'design/design.md#t-004',path:'bin/fm-decide.sh',
+  title:{en:'Gate 5 caught a vacuous test on T-004 — how do we clear it?',tw:'第 5 道閘抓到 T-004 的空測試 —— 怎麼處理？',cn:'第 5 道闸抓到 T-004 的空测试 —— 怎么处理？'},
+  why:{en:'Reverting fm-decide.sh left the new test green, so it asserts nothing. The worker is on round 2; round 3 triggers the ASK-PASS-CRITERIA protocol.',
+       tw:'revert 掉 fm-decide.sh 之後新測試仍然是綠的，代表它什麼都沒斷言。worker 在第 2 輪，進第 3 輪會觸發 ASK-PASS-CRITERIA 協定。',
+       cn:'revert 掉 fm-decide.sh 之后新测试仍然是绿的，说明它什么都没断言。worker 在第 2 轮，进第 3 轮会触发 ASK-PASS-CRITERIA 协定。'},
+  opts:[
+   {k:'A',t:{en:'Send it back for a real test, stay on round 2',tw:'打回去補真測試，維持第 2 輪',cn:'打回去补真测试，维持第 2 轮'},d:{en:'Cheapest. One more round; protocol unchanged.',tw:'最便宜。多花一輪，協定不變。',cn:'最便宜。多花一轮，协定不变。'}},
+   {k:'B',t:{en:'Escalate to round 3, force the closed checklist',tw:'升到第 3 輪，強制封閉清單',cn:'升到第 3 轮，强制封闭清单'},d:{en:'Reviewer must hand over a numbered, complete list.',tw:'reviewer 必須交出編號完整清單。',cn:'reviewer 必须交出编号完整清单。'}},
+   {k:'C',t:{en:'Downgrade gate 5 to a warning',tw:'把第 5 道閘降為警告',cn:'把第 5 道闸降为警告'},d:{en:'Not recommended — this is the gate that stops vacuous tests.',tw:'不建議 —— 這正是擋空測試的那道閘。',cn:'不建议 —— 这正是挡空测试的那道闸。'}},
+  ]},
+ {id:'D-008',task:'T-002',pr:7,design:'design/design.md#t-002',path:'board/server.ts',
+  title:{en:'Reviewer raised an off-list issue on round 3 — let it through?',tw:'reviewer 在第 3 輪提出清單外問題 —— 放行嗎？',cn:'reviewer 在第 3 轮提出清单外问题 —— 放行吗？'},
+  why:{en:'The closed checklist was declared complete. fm-gate.sh flagged the new comment as a protocol violation.',tw:'封閉清單已宣告完整，fm-gate.sh 把這則新意見判為違反協定。',cn:'封闭清单已声明完整，fm-gate.sh 把这条新意见判为违反协定。'},
+  opts:[
+   {k:'A',t:{en:'Reject it — protocol holds',tw:'駁回 —— 協定照走',cn:'驳回 —— 协定照走'},d:{en:'Reviewer gets a strike; the item becomes a new task.',tw:'reviewer 記一次違規，該項改開新 task。',cn:'reviewer 记一次违规，该项改开新 task。'}},
+   {k:'B',t:{en:'Accept it — it is a real regression',tw:'接受 —— 這是真的 regression',cn:'接受 —— 这是真的 regression'},d:{en:'Regressions are exempt from the closed list.',tw:'regression 本來就是封閉清單的例外。',cn:'regression 本来就是封闭清单的例外。'}},
+  ]},
+];
+const DIAG={
+ 'D-007':{A:{b:{en:'test stays green after revert',tw:'revert 後測試仍是綠的',cn:'revert 后测试仍是绿的'},a:{en:'rewritten test goes red after revert',tw:'改寫後 revert 會變紅',cn:'改写后 revert 会变红'}},
+          B:{b:{en:'complaints arrive one round at a time',tw:'意見一輪擠一點',cn:'意见一轮挤一点'},a:{en:'one numbered closed checklist at round 3',tw:'第 3 輪一份編號封閉清單',cn:'第 3 轮一份编号封闭清单'}},
+          C:{b:{en:'gate 5 blocks the merge',tw:'第 5 道閘擋住合併',cn:'第 5 道闸挡住合并'},a:{en:'warning only — vacuous tests reach main',tw:'只警告 —— 空測試進 main',cn:'只警告 —— 空测试进 main'}}},
+ 'D-008':{A:{b:{en:'off-list item blocks the PR',tw:'清單外項目卡住 PR',cn:'清单外项卡住 PR'},a:{en:'item becomes a new task, PR proceeds',tw:'該項改開新 task，PR 續行',cn:'该项改开新 task，PR 续行'}},
+          B:{b:{en:'regression would ship',tw:'regression 會被放行',cn:'regression 会被放行'},a:{en:'regression fixed inside this PR',tw:'regression 在本 PR 修掉',cn:'regression 在本 PR 修掉'}}},
+};
+const TICK_MSG={
+ commit:{en:'<b>{w}</b> pushed a commit to PR #{pr}',tw:'<b>{w}</b> 推了一個 commit 到 PR #{pr}',cn:'<b>{w}</b> 推了一个 commit 到 PR #{pr}'},
+ gate:{en:'<b>fm-gate.sh</b> {t} passed all 7 gates',tw:'<b>fm-gate.sh</b> {t} 七道閘全過',cn:'<b>fm-gate.sh</b> {t} 七道闸全过'},
+ gatebad:{en:'<b>fm-gate.sh</b> {t} failed gate 5 — revert left the test green',tw:'<b>fm-gate.sh</b> {t} 第 5 道閘未過 —— revert 後測試仍是綠的',cn:'<b>fm-gate.sh</b> {t} 第 5 道闸未过 —— revert 后测试仍是绿的'},
+ review:{en:'<b>reviewer</b> opened round {r} on {t}',tw:'<b>reviewer</b> 對 {t} 開始第 {r} 輪',cn:'<b>reviewer</b> 对 {t} 开始第 {r} 轮'},
+ approve:{en:'<b>reviewer</b> posted APPROVE:{t}',tw:'<b>reviewer</b> 貼出 APPROVE:{t}',cn:'<b>reviewer</b> 贴出 APPROVE:{t}'},
+ merged:{en:'<b>{t}</b> merged into main',tw:'<b>{t}</b> 已合併進 main',cn:'<b>{t}</b> 已合并进 main'},
+ dispatch:{en:'<b>firstmate</b> dispatched {t} to {w}',tw:'<b>firstmate</b> 把 {t} 派給 {w}',cn:'<b>firstmate</b> 把 {t} 派给 {w}'},
+ ask:{en:'<b>{w}</b> sent ASK-PASS-CRITERIA on {t} (round 3)',tw:'<b>{w}</b> 對 {t} 發出 ASK-PASS-CRITERIA（第 3 輪）',cn:'<b>{w}</b> 对 {t} 发出 ASK-PASS-CRITERIA（第 3 轮）'},
+};
 
-const TASKS = [
-  {id:'T-001',st:'merged', title:{en:'Single writer for the event log (fm-emit.sh)',tw:'事件日誌唯一寫入口 fm-emit.sh',cn:'事件日志唯一写入口 fm-emit.sh'},pr:3,who:'worker-4',round:2,file:'bin/fm-emit.sh'},
-  {id:'T-002',st:'review', title:{en:'Board SSE server + hot reload',tw:'看板 SSE 伺服器與熱重載',cn:'看板 SSE 服务器与热重载'},pr:7,who:'reviewer-1',round:3,file:'board/server.ts',note:'askCrit'},
-  {id:'T-003',st:'working',title:{en:'Tri-lingual dictionary + TW→CN term conversion',tw:'三語字典與繁簡術語轉換',cn:'三语字典与繁简术语转换'},pr:null,who:'worker-1',round:1,file:'i18n/tw2cn.tsv'},
-  {id:'T-004',st:'gate',   title:{en:'Decision queue API + fswatch wake-up',tw:'決策佇列 API 與 fswatch 喚醒',cn:'决策队列 API 与 fswatch 唤醒'},pr:9,who:'worker-2',round:2,file:'bin/fm-decide.sh',note:'gateFail'},
-  {id:'T-005',st:'queued', title:{en:'/open endpoint + read-only diff viewer',tw:'/open 端點與唯讀 diff 檢視器',cn:'/open 端点与只读 diff 查看器'},pr:null,who:null,round:0,dep:['T-002'],file:'board/server.ts'},
-  {id:'T-006',st:'queued', title:{en:'Playwright e2e + GitHub Actions workflow',tw:'Playwright e2e 與 GitHub Actions 工作流',cn:'Playwright e2e 与 GitHub Actions 工作流'},pr:null,who:null,round:0,dep:['T-002','T-004'],file:'tests/e2e/board.spec.ts'},
-];
-const CREW = [
-  {id:'firstmate', st:'working', pct:100, task:null,   label:{en:'coordinating',tw:'調度中',cn:'调度中'}},
-  {id:'worker-1',  st:'working', pct:62,  task:'T-003',label:{en:'4m 12s',tw:'4 分 12 秒',cn:'4 分 12 秒'}},
-  {id:'worker-2',  st:'gate',    pct:28,  task:'T-004',label:{en:'reworking',tw:'返工中',cn:'返工中'}},
-  {id:'reviewer-1',st:'review',  pct:80,  task:'T-002',label:{en:'round 3',tw:'第 3 輪',cn:'第 3 轮'}},
-  {id:'slot-3',    st:'queued',  pct:0,   task:null,   label:{en:'idle',tw:'空閒',cn:'空闲'}},
-];
-const DECISIONS = [
-  {
-    id:'D-007', task:'T-004', pr:9, design:'design/design.md#t-004',
-    path:'/Users/benjamin/Desktop/firstmate-workflow/bin/fm-decide.sh',
-    title:{en:'Gate 5 caught a vacuous test on T-004 — how do we clear it?',
-           tw:'第 5 道閘抓到 T-004 的空測試 —— 怎麼處理？',
-           cn:'第 5 道闸抓到 T-004 的空测试 —— 怎么处理？'},
-    why:{en:'Reverting fm-decide.sh left the new test green, so it asserts nothing. The worker is on round 2; round 3 would trigger the ASK-PASS-CRITERIA protocol.',
-         tw:'revert 掉 fm-decide.sh 之後新測試仍然是綠的，代表它什麼都沒斷言。worker 目前在第 2 輪，進第 3 輪就會觸發 ASK-PASS-CRITERIA 協定。',
-         cn:'revert 掉 fm-decide.sh 之后新测试仍然是绿的，说明它什么都没断言。worker 目前在第 2 轮，进第 3 轮就会触发 ASK-PASS-CRITERIA 协定。'},
-    opts:[
-      {k:'A',t:{en:'Send it back for a real test, stay on round 2',tw:'打回去補真測試，維持第 2 輪',cn:'打回去补真测试，维持第 2 轮'},
-           d:{en:'Cheapest. Costs one more round; protocol unchanged.',tw:'最便宜。多花一輪，協定不變。',cn:'最便宜。多花一轮，协定不变。'}},
-      {k:'B',t:{en:'Escalate to round 3 now, force the closed checklist',tw:'直接升到第 3 輪，強制封閉清單',cn:'直接升到第 3 轮，强制封闭清单'},
-           d:{en:'Reviewer must hand over a numbered, complete list — stops the drip-feed of new complaints.',tw:'reviewer 必須交出編號完整清單，終結一次一點的擠牙膏。',cn:'reviewer 必须交出编号完整清单，终结一次一点的挤牙膏。'}},
-      {k:'C',t:{en:'Downgrade gate 5 to a warning',tw:'把第 5 道閘降為警告',cn:'把第 5 道闸降为警告'},
-           d:{en:'Not recommended — this is the gate that stops vacuous tests reaching main.',tw:'不建議 —— 這正是擋空測試進 main 的那道閘。',cn:'不建议 —— 这正是挡空测试进 main 的那道闸。'}},
-    ],
-  },
-  {
-    id:'D-008', task:'T-002', pr:7, design:'design/design.md#t-002',
-    path:'/Users/benjamin/Desktop/firstmate-workflow/board/server.ts',
-    title:{en:'Reviewer raised an off-list issue on round 3 — let it through?',
-           tw:'reviewer 在第 3 輪提出清單外問題 —— 放行嗎？',
-           cn:'reviewer 在第 3 轮提出清单外问题 —— 放行吗？'},
-    why:{en:'The closed checklist was declared complete on round 3. fm-gate.sh flagged the new comment as a protocol violation.',
-         tw:'第 3 輪已宣告封閉清單完整，fm-gate.sh 把這則新意見判為違反協定。',
-         cn:'第 3 轮已声明封闭清单完整，fm-gate.sh 把这条新意见判为违反协定。'},
-    opts:[
-      {k:'A',t:{en:'Reject it — protocol holds',tw:'駁回 —— 協定照走',cn:'驳回 —— 协定照走'},d:{en:'Reviewer gets one strike; the item goes to the backlog as a new task.',tw:'reviewer 記一次違規，該項目改開成新 task。',cn:'reviewer 记一次违规，该项改开成新 task。'}},
-      {k:'B',t:{en:'Accept it — it is a real regression',tw:'接受 —— 這是真的 regression',cn:'接受 —— 这是真的 regression'},d:{en:'Regressions are explicitly exempt from the closed list.',tw:'regression 本來就是封閉清單的例外。',cn:'regression 本来就是封闭清单的例外。'}},
-    ],
-  },
-];
-const EVENTS = [
-  {tm:'14:02:11',kind:'ok',  txt:{en:'<b>T-001</b> merged into main — all 7 gates green',tw:'<b>T-001</b> 已合併進 main —— 七道閘全綠',cn:'<b>T-001</b> 已合并进 main —— 七道闸全绿'}},
-  {tm:'14:06:40',kind:'',    txt:{en:'<b>worker-1</b> picked up T-003 (deps satisfied)',tw:'<b>worker-1</b> 領走 T-003（依賴已滿足）',cn:'<b>worker-1</b> 领走 T-003（依赖已满足）'}},
-  {tm:'14:09:55',kind:'',    txt:{en:'<b>worker-2</b> pushed 3 commits to PR #9',tw:'<b>worker-2</b> 推了 3 個 commit 到 PR #9',cn:'<b>worker-2</b> 推了 3 个 commit 到 PR #9'}},
-  {tm:'14:10:02',kind:'bad', txt:{en:'<b>fm-gate.sh</b> T-004 failed gate 5 — reverting the impl left the new test green',tw:'<b>fm-gate.sh</b> T-004 第 5 道閘未過 —— revert 實作後新測試仍是綠的',cn:'<b>fm-gate.sh</b> T-004 第 5 道闸未过 —— revert 实现后新测试仍是绿的'}},
-  {tm:'14:10:03',kind:'cap', decision:'D-007'},
-  {tm:'14:12:31',kind:'',    txt:{en:'<b>worker-2</b> sent ASK-PASS-CRITERIA on PR #7 (round 3)',tw:'<b>worker-2</b> 在 PR #7 發出 ASK-PASS-CRITERIA（第 3 輪）',cn:'<b>worker-2</b> 在 PR #7 发出 ASK-PASS-CRITERIA（第 3 轮）'}},
-  {tm:'14:13:48',kind:'',    txt:{en:'<b>reviewer-1</b> returned a 6-item closed checklist, declared complete',tw:'<b>reviewer-1</b> 回了 6 項封閉清單並宣告完整',cn:'<b>reviewer-1</b> 回了 6 项封闭清单并声明完整'}},
-  {tm:'14:15:09',kind:'cap', decision:'D-008'},
-];
+/* ====================== ENGINE (simulated live feed) ====================== */
+const app=document.getElementById('app');
+const params=new URLSearchParams(location.search);
+let variant=params.get('variant')==='2'?2:(params.get('variant')==='1'?1:2);
+let chosen={}, activeDec='D-007', heading=317, seq=0;
+const evs=[];  // {tm, kind, html}
+const rnd=(a,b)=>a+Math.random()*(b-a);
+const now=()=>new Date().toTimeString().slice(0,8);
+const fmt=(o,v)=>{let s=L(o);for(const k in v)s=s.split('{'+k+'}').join(v[k]);return s;};
 
-/* =========================================================================
-   HELPERS
-   ========================================================================= */
-const app = document.getElementById('app');
-const params = new URLSearchParams(location.search);
-let variant = (params.get('variant') || 'A').toUpperCase();
-if(!['A','B','C'].includes(variant)) variant = 'A';
-const chosen = {};                 // decisionId -> option key (in memory only)
-const esc = s => String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function emit(kind,key,vars){ evs.unshift({tm:now(),kind,msg:TICK_MSG[key],vars,id:++seq}); if(evs.length>40)evs.pop(); }
+emit('ok','merged',{t:'T-001'});
+emit('cap','ask',{w:'worker-2',t:'T-002'});
 
-function toast(msg){
-  const t = document.getElementById('toast');
-  t.textContent = msg; t.classList.add('on');
-  clearTimeout(toast._h); toast._h = setTimeout(()=>t.classList.remove('on'), 2600);
+const byId=id=>TASKS.find(t=>t.id===id);
+const inFlight=()=>TASKS.filter(t=>['working','gate','review'].includes(t.st)).length;
+const depsOk=t=>!t.dep||t.dep.every(d=>byId(d).st==='merged');
+let lanesDirty=true, deckDirty=true;
+
+function tick(){
+  heading += rnd(-0.55,0.55); if(heading<310)heading=310; if(heading>324)heading=324;
+  for(const c of CREW){
+    if(c.id==='firstmate'){ c.pct=100; continue; }
+    if(!c.task){ c.pct=0; c.st='queued'; continue; }
+    const t=byId(c.task);
+    c.pct=Math.min(100,c.pct+rnd(1.6,5.4)); t.pct=c.pct; c.st=t.st;
+    if(c.pct>=100) advance(t,c);
+  }
+  // dispatch queued work into free worker slots
+  const free=CREW.filter(c=>c.role==='w'&&!c.task);
+  for(const c of free){
+    const t=TASKS.find(x=>x.st==='queued'&&depsOk(x));
+    if(!t||inFlight()>=3) break;
+    t.st='working'; t.who=c.id; t.round=1; t.pct=0; c.task=t.id; c.pct=0; c.st='working';
+    emit('','dispatch',{t:t.id,w:c.id}); lanesDirty=true;
+  }
+  paint();
 }
-const ST = {merged:'statMerged',review:'statReview',working:'statWorking',gate:'statGate',queued:'statQueued',captain:'statCaptain'};
-const pill = st => '<span class="pill s-'+st+'">'+T(ST[st])+'</span>';
-const openLocal = p => toast(T('opened').replace('{p}', p.replace('/Users/benjamin/Desktop/firstmate-workflow/','')));
-function submit(id){
-  if(!chosen[id]) return toast(T('pickFirst'));
-  toast(T('sent').replace('{id}', id));
-}
-function linkRow(d){
-  return '<div class="links">'
-    + '<a href="#" onclick="openLocal(\''+d.path+'\');return false">&#8599; '+T('openLocal')+'</a>'
-    + '<a href="#" onclick="toast(\'https://github.com/BenjaminLu/firstmate-workflow/pull/'+d.pr+'\');return false">&#9863; '+T('viewPR')+' #'+d.pr+'</a>'
-    + '<a href="#" onclick="openLocal(\''+d.design+'\');return false">&#9776; '+T('viewDesign')+'</a>'
-    + '</div>';
+function advance(t,c){
+  c.pct=0; t.pct=0; lanesDirty=true;
+  if(t.st==='working'){
+    if(Math.random()<0.25){ t.st='gate'; t.note='gateFail'; emit('bad','gatebad',{t:t.id}); }
+    else { t.st='review'; t.note=null; t.pr=t.pr||(10+seq%9); emit('ok','gate',{t:t.id});
+           emit('','review',{t:t.id,r:t.round}); c.task=null; c.st='queued';
+           const rv=CREW.find(x=>x.role==='r'); if(!rv.task){rv.task=t.id;rv.pct=0;rv.st='review';} }
+  } else if(t.st==='gate'){
+    t.round++; t.st='working'; t.note=null;
+    if(t.round>=3){ t.note='askCrit'; emit('cap','ask',{w:c.id,t:t.id}); }
+    else emit('','commit',{w:c.id,pr:t.pr||'—'});
+  } else if(t.st==='review'){
+    if(t.round>=3||Math.random()<0.6){ emit('ok','approve',{t:t.id}); t.st='merged'; t.note=null;
+      emit('ok','merged',{t:t.id}); }
+    else { t.round++; t.st='working'; emit('','review',{t:t.id,r:t.round});
+      const w=CREW.find(x=>x.role==='w'&&!x.task); if(w){w.task=t.id;w.pct=0;w.st='working';t.who=w.id;} }
+    if(c.role==='r'){ c.task=null; c.st='queued';
+      const nx=TASKS.find(x=>x.st==='review'); if(nx){c.task=nx.id;c.pct=nx.pct;c.st='review';} }
+  }
 }
 
-/* before / after diagram — one per option, this is what /diagram-design would emit */
-function diagram(dec, k){
-  const copy = {
-    'D-007':{
-      A:{b:{en:'test stays green after revert',tw:'revert 後測試仍是綠的',cn:'revert 后测试仍是绿的'},
-         a:{en:'rewritten test goes red after revert',tw:'改寫後 revert 會變紅',cn:'改写后 revert 会变红'}},
-      B:{b:{en:'complaints arrive one round at a time',tw:'意見一輪擠一點',cn:'意见一轮挤一点'},
-         a:{en:'one numbered closed checklist, round 3',tw:'第 3 輪一份編號封閉清單',cn:'第 3 轮一份编号封闭清单'}},
-      C:{b:{en:'gate 5 blocks the merge',tw:'第 5 道閘擋住合併',cn:'第 5 道闸挡住合并'},
-         a:{en:'gate 5 warns only — vacuous tests reach main',tw:'第 5 道閘只警告 —— 空測試進 main',cn:'第 5 道闸只警告 —— 空测试进 main'}},
-    },
-    'D-008':{
-      A:{b:{en:'off-list item blocks the PR',tw:'清單外項目卡住 PR',cn:'清单外项卡住 PR'},
-         a:{en:'item becomes a new task, PR proceeds',tw:'該項改開新 task，PR 續行',cn:'该项改开新 task，PR 续行'}},
-      B:{b:{en:'regression would ship',tw:'regression 會被放行',cn:'regression 会被放行'},
-         a:{en:'regression fixed in this PR',tw:'regression 在本 PR 修掉',cn:'regression 在本 PR 修掉'}},
-    },
-  };
-  const c = (copy[dec.id]||{})[k];
-  if(!c) return '<div class="tiny muted" style="padding:10px 2px">'+T('pickFirst')+'</div>';
-  const box = (x,y,fill,stroke,label,sub) =>
-    '<rect x="'+x+'" y="'+y+'" width="250" height="74" rx="9" fill="'+fill+'" stroke="'+stroke+'"/>'
-    + '<text x="'+(x+15)+'" y="'+(y+26)+'" fill="#93a4b8" font-size="10.5" font-family="ui-monospace,monospace" letter-spacing="1.2">'+label+'</text>'
-    + '<foreignObject x="'+(x+13)+'" y="'+(y+33)+'" width="224" height="36">'
-    + '<div xmlns="http://www.w3.org/1999/xhtml" style="font:12.5px/1.35 -apple-system,sans-serif;color:#e6edf5">'+esc(sub)+'</div></foreignObject>';
+/* ====================== VIEW ====================== */
+const ST={merged:'merged',review:'review',working:'working',gate:'gate',queued:'queued'};
+const LANES=[['queued','laneQueued'],['working','laneWorking'],['gate','laneGate'],['review','laneReview'],['captain','laneCaptain'],['merged','laneMerged']];
+function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('on');
+  clearTimeout(toast._h);toast._h=setTimeout(()=>t.classList.remove('on'),2600);}
+function openLocal(p){toast(T('opened').replace('{p}',p));}
+function submit(id){ if(!chosen[id]) return toast(T('pickFirst'));
+  toast(T('sent').replace('{id}',id));
+  emit('cap','dispatch',{t:id+' → '+chosen[id],w:'firstmate'}); paint(); }
+function pick(d,k){ chosen[d]=k; deckDirty=true; paint(); }
+function setDec(id){ activeDec=id; deckDirty=true; paint(); }
+function setLang(x){ lang=x; localStorage.setItem('proto.lang',x); shell();
+  if(document.getElementById('flowOverlay').classList.contains('on')) openFlow(); }
+
+function diagram(id,k){
+  const c=(DIAG[id]||{})[k];
+  if(!c) return '<div class="tiny dim" style="padding:8px 2px">'+T('pickFirst')+'</div>';
+  const box=(x,fill,stroke,lab,sub)=>'<rect x="'+x+'" y="7" width="250" height="74" rx="9" fill="'+fill+'" stroke="'+stroke+'"/>'
+   +'<text x="'+(x+15)+'" y="33" fill="#93a4b8" font-size="10.5" font-family="ui-monospace,monospace" letter-spacing="1.2">'+lab+'</text>'
+   +'<foreignObject x="'+(x+13)+'" y="40" width="224" height="36"><div xmlns="http://www.w3.org/1999/xhtml" style="font:12.5px/1.35 -apple-system,sans-serif;color:#e6edf5">'+esc(sub)+'</div></foreignObject>';
   return '<svg viewBox="0 0 580 88" width="100%" height="88" role="img">'
-    + box(0,7,'#1c1310','#5a2a25','BEFORE', L(c.b))
-    + '<path d="M266 44 h34" stroke="#5f7186" stroke-width="1.5"/><path d="M296 39 l8 5 -8 5z" fill="#5f7186"/>'
-    + box(314,7,'#0f1c15','#1f5c3f','AFTER', L(c.a))
-    + '</svg>';
+   +box(0,'#1c1310','#5a2a25','BEFORE',L(c.b))
+   +'<path d="M266 44 h34" stroke="#5f7186" stroke-width="1.5"/><path d="M296 39 l8 5 -8 5z" fill="#5f7186"/>'
+   +box(314,'#0f1c15','#1f5c3f','AFTER',L(c.a))+'</svg>';
 }
+const WAVE='M0,40 C120,10 240,70 360,40 C480,10 600,70 720,40 C840,10 960,70 1080,40 C1200,10 1320,70 1440,40 L1440,80 L0,80 Z';
+function seaSVG(){ return ['w1 #17567f','w2 #1d6b9c','w3 #2a86bd'].map(s=>{const[c,f]=s.split(' ');
+  return '<svg class="'+c+'" viewBox="0 0 1440 80" preserveAspectRatio="none"><path d="'+WAVE+'" fill="'+f+'"/><path d="'+WAVE+'" fill="'+f+'" transform="translate(1440)"/></svg>';}).join(''); }
+function compassSVG(){ return '<svg viewBox="0 0 34 34" width="34" height="34">'
+  +'<circle cx="17" cy="17" r="15.5" fill="#0d1a26" stroke="#2a4257"/>'
+  +'<g class="sweep"><path d="M17 17 L17 2 A15 15 0 0 1 28 7 Z" fill="rgba(77,163,255,.18)"/></g>'
+  +'<g class="rose"><path d="M17 4 L20 17 L17 30 L14 17 Z" fill="#d9a441"/><path d="M4 17 L17 14 L30 17 L17 20 Z" fill="#41607d"/></g>'
+  +'<circle cx="17" cy="17" r="2" fill="#0d1a26" stroke="#d9a441"/></svg>'; }
 
-/* =========================================================================
-   SHARED CHROME
-   ========================================================================= */
-function topBar(){
-  return '<div class="top">'
-    + '<div class="brand"><span class="dot"></span><span>'+T('brand')+'<small>'+T('sub')+'</small></span></div>'
-    + '<div class="spacer"></div>'
-    + '<button class="ghost" onclick="openFlow()">&#9783; '+T('flowBtn')+'</button>'
-    + '<div class="langs">'+LANGS.map(x=>'<button aria-pressed="'+(x===lang)+'" onclick="setLang(\''+x+'\')">'+LANGNAME[x]+'</button>').join('')+'</div>'
-    + '</div>';
+const links=d=>'<div class="links">'
+    +'<a href="#" onclick="openLocal(\''+d.path+'\');return false">&#8599; '+T('openLocal')+'</a>'
+    +'<a href="#" onclick="toast(\'github.com/BenjaminLu/firstmate-workflow/pull/'+d.pr+'\');return false">&#9863; '+T('viewPR')+' #'+d.pr+'</a>'
+    +'<a href="#" onclick="openLocal(\''+d.design+'\');return false">&#9776; '+T('viewDesign')+'</a></div>';
+function shell(){
+  document.documentElement.lang=lang;
+  document.body.className = variant===2?'m-full':'m-steady';
+
+  app.innerHTML =
+   '<div class="top"><div class="compass">'+compassSVG()+'</div>'
+   +'<div class="brand"><span>'+T('brand')+'<small>'+T('sub')+'</small></span></div><div class="spacer"></div>'
+   +'<span class="clock" id="clock">--:--:--</span>'
+   +'<button class="ghost" onclick="openFlow()">&#9783; '+T('flowBtn')+'</button>'
+   +'<div class="langs">'+LANGS.map(x=>'<button aria-pressed="'+(x===lang)+'" onclick="setLang(\''+x+'\')">'+LANGNAME[x]+'</button>').join('')+'</div></div>'
+
+   +'<div class="sea"><div class="waves">'+seaSVG()+'</div><div class="stats">'
+     +'<div class="stat"><b id="s-done">0</b><span>'+T('nDone')+'</span></div>'
+     +'<div class="stat"><b id="s-fly">0</b><span>'+T('nFlight')+'</span></div>'
+     +'<div class="stat hot"><b id="s-wait">0</b><span>'+T('nWait')+'</span></div>'
+     +'<div class="stat bad"><b id="s-blk">0</b><span>'+T('nBlocked')+'</span></div>'
+     +'<div class="flag ship"><div class="hd" id="s-hdg">317&deg;</div><div class="lb">'+T('heading')+'</div></div>'
+   +'</div></div>'
+
+   +'<div class="rail" id="rail"></div>'
+
+   +'<div class="deck"><h3>'+T('deck')+'<span class="n" id="d-n">0</span></h3><div id="deck"></div></div>'
+   +'<div class="lanes-wrap"><h3>'+T('fleet')+'</h3><div class="lanes" id="lanes"></div></div>'
+   +'<div class="ticker"><h4>'+T('log')+'</h4><ul id="log"></ul></div>';
+  lanesDirty=deckDirty=true; paint(); sw();
 }
-function setLang(x){ lang = x; localStorage.setItem('proto.lang', x);
-  document.documentElement.lang = x; render();
-  if(document.getElementById('flowOverlay').classList.contains('on')) openFlow();
+function paint(){
+  const done=TASKS.filter(t=>t.st==='merged').length,
+        fly=TASKS.filter(t=>['working','review'].includes(t.st)).length,
+        blk=TASKS.filter(t=>t.st==='gate').length, wait=DECISIONS.length;
+  const set=(id,v)=>{const e=document.getElementById(id); if(!e)return;
+    if(e.textContent!==String(v)){e.textContent=v;e.classList.remove('flash');void e.offsetWidth;e.classList.add('flash');}};
+  set('s-done',done); set('s-fly',fly); set('s-wait',wait); set('s-blk',blk); set('d-n',wait);
+  const h=document.getElementById('s-hdg'); if(h)h.textContent=heading.toFixed(0)+'°';
+  const ck=document.getElementById('clock'); if(ck)ck.textContent=now();
+
+  const rail=document.getElementById('rail');
+  if(rail) rail.innerHTML=CREW.map(c=>{
+    const t=c.task?byId(c.task):null;
+    const sub=c.id==='firstmate'?T('coord'):(t?c.task+' · '+L(t.title):T('idle'));
+    return '<div class="mem'+(c.task||c.id==='firstmate'?' act':'')+'"><div class="wake"></div>'
+      +'<div class="hd"><span class="nm"><i class="dot '+c.st+'"></i>'+c.id+'</span>'
+      +'<span class="tiny dim num">'+Math.round(c.pct)+'%</span></div>'
+      +'<div class="tk">'+sub+'</div>'
+      +'<div class="bar"><i class="'+(c.st==='gate'?'bad':'')+'" style="width:'+c.pct+'%"></i></div></div>';}).join('');
+
+  if(deckDirty){
+    const d=DECISIONS.find(x=>x.id===activeDec)||DECISIONS[0], sel=chosen[d.id];
+    document.getElementById('deck').innerHTML=
+     '<div class="card-d"><div class="hd"><h2>'+L(d.title)+'</h2><span class="tiny dim mono">'+d.id+' · '+d.task+'</span></div>'
+     +'<p class="why">'+L(d.why)+'</p><div class="opts">'
+     +d.opts.map(o=>'<button class="opt" aria-pressed="'+(sel===o.k)+'" onclick="pick(\''+d.id+'\',\''+o.k+'\')">'
+        +'<span class="k"><em>'+o.k+'</em>'+L(o.t)+'</span><p>'+L(o.d)+'</p></button>').join('')+'</div>'
+     +'<div class="dg"><div class="cap"><span>'+T('diagram')+(sel?' · '+sel:'')+'</span>'
+        +'<span class="mono">diagrams/'+d.id+'.'+lang+'.html</span></div><div class="canvas">'+diagram(d.id,sel)+'</div></div>'
+     +links(d)
+     +'<div class="send"><button class="go" onclick="submit(\''+d.id+'\')">&#9784; '+T('submit')+'</button>'
+     +'<span class="tiny dim">'+(sel?d.id+' → '+sel:T('pickFirst'))+'</span></div></div>'
+     +'<div class="stack">'+DECISIONS.filter(x=>x.id!==d.id).map(x=>'<div class="q" onclick="setDec(\''+x.id+'\')">'
+        +'<span class="tiny dim mono">'+x.id+' · '+x.task+'</span><div>'+L(x.title)+'</div></div>').join('')+'</div>';
+    deckDirty=false;
+  }
+  if(lanesDirty){
+    document.getElementById('lanes').innerHTML=LANES.map(([st,key])=>{
+      const items=st==='captain'?[]:TASKS.filter(t=>t.st===st);
+      const caps=st==='captain'?DECISIONS:[];
+      const body=items.map(t=>'<div class="tcard enter" onclick="toast(\''+t.file+'\')"><span class="tid">'+t.id+'</span>'
+          +'<div class="tt">'+L(t.title)+'</div>'
+          +'<div class="ft"><span>'+(t.who||'—')+'</span><span>'+(t.pr?'#'+t.pr:(t.dep?T('blockedBy')+' '+t.dep.join(','):''))+'</span></div>'
+          +(t.round?'<div class="rounds">'+[1,2,3].map(r=>'<i class="'+(r<t.round?'done':r===t.round?'now':'')+'"></i>').join('')+'</div>':'')
+          +(t.note?'<span class="badge">'+T(t.note)+'</span>':'')+'</div>').join('')
+        +caps.map(x=>'<div class="tcard enter" onclick="setDec(\''+x.id+'\')"><span class="tid">'+x.id+' · '+x.task+'</span>'
+          +'<div class="tt">'+L(x.title)+'</div><span class="badge">'+x.opts.length+' '+T('options')+'</span></div>').join('');
+      return '<div class="lane'+(st==='captain'?' hot':'')+'"><h4>'+T(key)+'<i>'+(items.length+caps.length)+'</i></h4>'+body+'</div>';
+    }).join('');
+    lanesDirty=false;
+  }
+  const lg=document.getElementById('log');
+  if(lg) lg.innerHTML=evs.slice(0,14).map(e=>'<li class="'+e.kind+'"><time>'+e.tm+'</time><span>'+fmt(e.msg,e.vars)+'</span></li>').join('');
 }
 function openFlow(){
-  const s = document.getElementById('flowSheet');
-  s.innerHTML = '<h2>'+T('flowTitle')+'</h2><div class="flow">'
-    + FLOW.map((f,i)=>'<div class="st'+(f.gate?' gate':'')+(f.cap?' cap':'')+'"><b>'+L(f.t)+'</b><span>'+L(f.d)+'</span></div>'
-        + (i<FLOW.length-1?'<div class="arrow">&#8250;</div>':'')).join('')
-    + '</div><h2 style="margin:26px 0 0;font-size:13.5px;color:var(--warn)">'+T('gatesTitle')+'</h2>'
-    + '<ul class="gatelist">'+GATES.map((g,i)=>'<li><b>'+(i+1)+'</b>'+L(g)+'</li>').join('')+'</ul>'
-    + '<p class="tiny muted" style="margin:20px 0 0">'+T('origin')+'</p>';
+  document.getElementById('flowSheet').innerHTML='<h2>'+T('flowTitle')+'</h2><div class="flow">'
+   +FLOW.map((f,i)=>'<div class="st'+(f.gate?' gate':'')+(f.cap?' cap':'')+'"><b>'+L(f.t)+'</b><span>'+L(f.d)+'</span></div>'
+      +(i<FLOW.length-1?'<div class="arrow">&#8250;</div>':'')).join('')
+   +'</div><h2 style="margin:24px 0 0;font-size:13.5px;color:var(--warn)">'+T('gatesTitle')+'</h2>'
+   +'<ul class="gatelist">'+GATES.map((g,i)=>'<li><b>'+(i+1)+'</b>'+L(g)+'</li>').join('')+'</ul>'
+   +'<p class="tiny dim" style="margin:18px 0 0">'+T('origin')+'</p>';
   document.getElementById('flowOverlay').classList.add('on');
 }
-document.getElementById('flowOverlay').onclick = e => {
-  if(e.target.id==='flowOverlay') e.currentTarget.classList.remove('on');
-};
+document.getElementById('flowOverlay').onclick=e=>{if(e.target.id==='flowOverlay')e.currentTarget.classList.remove('on')};
 
-/* =========================================================================
-   VARIANT A — "Bridge": decision-first, three columns
-   ========================================================================= */
-function VariantA(){
-  const d = DECISIONS[0];
-  const sel = chosen[d.id];
-  return topBar() + '<div class="v-a">'
-  + '<div class="col"><h3>'+T('crew')+'</h3><div class="crew">'
-    + CREW.map(c=>'<div class="m"><div class="nm"><span class="mono">'+c.id+'</span>'+pill(c.st)+'</div>'
-        + '<div class="tiny muted">'+(c.task?c.task+' &middot; ':'')+L(c.label)+'</div>'
-        + '<div class="bar"><i style="width:'+c.pct+'%"></i></div></div>').join('')
-    + '</div>'
-    + '<h3 style="margin-top:22px">'+T('tasks')+'</h3>'
-    + TASKS.map(t=>'<div class="tiny" style="margin-bottom:9px"><span class="tid">'+t.id+'</span> '+pill(t.st)
-        + '<div class="muted" style="margin-top:2px">'+L(t.title)+'</div></div>').join('')
-  + '</div>'
-  + '<div class="col mid">'
-    + '<h3>'+T('decisions')+'</h3>'
-    + '<div class="big"><div class="hd"><h2>'+L(d.title)+'</h2><span class="tid">'+d.id+'</span></div>'
-    + '<p class="why">'+L(d.why)+'</p>'
-    + '<div class="opts">'+d.opts.map(o=>'<button class="opt" aria-pressed="'+(sel===o.k)+'" onclick="chosen[\''+d.id+'\']=\''+o.k+'\';render()">'
-        + '<span class="k"><em>'+o.k+'</em>'+L(o.t)+'</span><p>'+L(o.d)+'</p></button>').join('')+'</div>'
-    + '<div class="dg"><div class="cap"><span>'+T('diagram')+(sel?' &middot; '+sel:'')+'</span><span class="mono">diagrams/'+d.id+'.'+lang+'.html</span></div>'
-    + '<div class="canvas">'+diagram(d, sel)+'</div></div>'
-    + linkRow(d)
-    + '<div class="send"><button class="go" onclick="submit(\''+d.id+'\')">'+T('submit')+'</button>'
-    + '<span class="tiny muted">'+ (sel ? d.id+' &rarr; '+sel : T('pickFirst')) +'</span></div>'
-    + '</div>'
-  + '</div>'
-  + '<div class="col"><h3>'+T('queue')+'</h3><div class="queue">'
-    + DECISIONS.map((x,i)=>'<div class="q'+(i===0?' on':'')+'"><span class="tid">'+x.id+'</span> &middot; '+x.task
-        + '<div class="muted tiny" style="margin-top:3px">'+L(x.title)+'</div></div>').join('')
-    + '</div></div>'
-  + '</div>';
-}
-
-/* =========================================================================
-   VARIANT B — "Voyage": one vertical event stream, inline decisions
-   ========================================================================= */
-function VariantB(){
-  const n = {done:TASKS.filter(t=>t.st==='merged').length,
-             fly:TASKS.filter(t=>['working','review'].includes(t.st)).length,
-             wait:DECISIONS.length,
-             blk:TASKS.filter(t=>t.st==='gate').length};
-  const stat = (v,k)=>'<div class="c"><b>'+v+'</b><span>'+T(k)+'</span></div>';
-  return topBar() + '<div class="v-b">'
-  + '<div class="strip">'+stat(n.done,'nDone')+stat(n.fly,'nFlight')+stat(n.wait,'nWait')+stat(n.blk,'nBlocked')+'</div>'
-  + '<div class="stream">'
-  + EVENTS.slice().reverse().map(e=>{
-      if(e.decision){
-        const d = DECISIONS.find(x=>x.id===e.decision), sel = chosen[d.id];
-        return '<div class="ev cap"><div class="when">'+e.tm+'</div>'
-          + '<div class="line"><b>'+d.id+'</b> &middot; '+T('decisions')+'</div>'
-          + '<div class="body"><h4>'+L(d.title)+'</h4><p>'+L(d.why)+'</p>'
-          + '<div class="inline-opts">'+d.opts.map(o=>'<label><input type="radio" name="'+d.id+'" '+(sel===o.k?'checked':'')
-              + ' onchange="chosen[\''+d.id+'\']=\''+o.k+'\';render()"><span><span class="k">'+o.k+' &middot; '+L(o.t)+'</span>'
-              + '<p class="muted">'+L(o.d)+'</p></span></label>').join('')+'</div>'
-          + (sel?'<div style="margin-top:12px">'+diagram(d,sel)+'</div>':'')
-          + linkRow(d)
-          + '<div class="act"><button class="go" onclick="submit(\''+d.id+'\')">'+T('submit')+'</button>'
-          + '<span class="tiny muted">'+(sel?d.id+' &rarr; '+sel:T('pickFirst'))+'</span></div>'
-          + '</div></div>';
-      }
-      return '<div class="ev '+e.kind+'"><div class="when">'+e.tm+'</div><div class="line">'+L(e.txt)+'</div></div>';
-    }).join('')
-  + '</div></div>';
-}
-
-/* =========================================================================
-   VARIANT C — "Fleet": kanban by lifecycle stage, decisions as badges
-   ========================================================================= */
-const LANES = [['queued','laneQueued'],['working','laneWorking'],['gate','laneGate'],['review','laneReview'],['captain','laneCaptain'],['merged','laneMerged']];
-let openCard = null;
-function VariantC(){
-  const decOf = t => DECISIONS.find(d=>d.task===t.id);
-  const lane = (st,key)=>{
-    const items = st==='captain' ? [] : TASKS.filter(t=>t.st===st);
-    const cap = st==='captain' ? DECISIONS : [];
-    const body = items.map(t=>{
-      const d = decOf(t);
-      return '<div class="card" onclick="'+(d?'openCard=\''+d.id+'\';render()':'toast(\''+t.file+'\')')+'">'
-        + '<span class="tid">'+t.id+'</span>'
-        + '<div class="tt">'+L(t.title)+'</div>'
-        + '<div class="who"><span>'+(t.who||'—')+'</span><span>'+(t.pr?'#'+t.pr:(t.dep?T('blockedBy')+' '+t.dep.join(','):''))+'</span></div>'
-        + (t.round? '<div class="rounds">'+[1,2,3].map(r=>'<i class="'+(r<t.round?'done':r===t.round?'now':'')+'"></i>').join('')+'</div>':'')
-        + (t.note? '<span class="badge">'+T(t.note)+'</span>':'')
-        + '</div>';
-    }).join('') + cap.map(d=>'<div class="card" onclick="openCard=\''+d.id+'\';render()">'
-        + '<span class="tid">'+d.id+' &middot; '+d.task+'</span><div class="tt">'+L(d.title)+'</div>'
-        + '<span class="badge">'+d.opts.length+' '+T('options')+'</span></div>').join('');
-    const cnt = items.length + cap.length;
-    return '<div class="lane'+(st==='captain'?' hot':'')+'"><h3>'+T(key)+'<i>'+cnt+'</i></h3>'+body+'</div>';
-  };
-  const d = DECISIONS.find(x=>x.id===openCard);
-  const sel = d && chosen[d.id];
-  const modal = d ? '<div class="modal on" onclick="if(event.target===this){openCard=null;render()}"><div class="sheet">'
-      + '<span class="tid">'+d.id+' &middot; '+d.task+'</span><h2>'+L(d.title)+'</h2>'
-      + '<p class="muted tiny">'+L(d.why)+'</p>'
-      + '<div class="opts">'+d.opts.map(o=>'<button class="opt" aria-pressed="'+(sel===o.k)+'" onclick="chosen[\''+d.id+'\']=\''+o.k+'\';render()">'
-          + '<div style="font-weight:650">'+o.k+' &middot; '+L(o.t)+'</div><p class="muted tiny" style="margin:3px 0 0">'+L(o.d)+'</p></button>').join('')+'</div>'
-      + '<div style="margin-top:14px">'+diagram(d,sel)+'</div>'
-      + linkRow(d)
-      + '<button class="go" onclick="submit(\''+d.id+'\')">'+T('submit')+'</button>'
-      + '</div></div>' : '';
-  return topBar() + '<div class="v-c"><div class="lanes">'+LANES.map(([s,k])=>lane(s,k)).join('')+'</div>'+modal+'</div>';
-}
-
-/* =========================================================================
-   SWITCHER (prototype-only chrome) + render loop
-   ========================================================================= */
-const VARIANTS = {
-  A:{name:{en:'Bridge — decision first',  tw:'艦橋 —— 決策優先', cn:'舰桥 —— 决策优先'}, fn:VariantA},
-  B:{name:{en:'Voyage — one timeline',    tw:'航程 —— 單一時間流', cn:'航程 —— 单一时间流'}, fn:VariantB},
-  C:{name:{en:'Fleet — kanban by stage',  tw:'艦隊 —— 階段看板', cn:'舰队 —— 阶段看板'}, fn:VariantC},
-};
-const ORDER = ['A','B','C'];
-function go(step){
-  const i = (ORDER.indexOf(variant) + step + ORDER.length) % ORDER.length;
-  variant = ORDER[i]; openCard = null;
-  const u = new URL(location); u.searchParams.set('variant', variant);
-  history.replaceState(null,'',u); render();
-}
-function renderSwitcher(){
-  document.getElementById('switcher').innerHTML =
-      '<button onclick="go(-1)" aria-label="previous">&#8249;</button>'
-    + '<span class="lbl">'+variant+' <em>'+L(VARIANTS[variant].name)+'</em></span>'
-    + '<button onclick="go(1)" aria-label="next">&#8250;</button>'
-    + '<span class="tag">PROTOTYPE</span>';
-}
-addEventListener('keydown', e=>{
-  if(/^(INPUT|TEXTAREA)$/.test(e.target.tagName) || e.target.isContentEditable) return;
-  if(e.key==='ArrowLeft') go(-1);
-  if(e.key==='ArrowRight') go(1);
-  if(e.key==='Escape'){ openCard=null; document.getElementById('flowOverlay').classList.remove('on'); render(); }
+/* ====================== SWITCHER (prototype-only) ====================== */
+const MOTION={1:{en:'Steady — live data, calm',tw:'穩舵 —— 會動但克制',cn:'稳舵 —— 会动但克制'},
+              2:{en:'Full sail — waves, wake, sweep',tw:'滿帆 —— 海浪、尾流、雷達',cn:'满帆 —— 海浪、尾流、雷达'}};
+function go(){ variant=variant===1?2:1;
+  const u=new URL(location); u.searchParams.set('variant',variant); history.replaceState(null,'',u); shell(); }
+function sw(){ document.getElementById('switcher').innerHTML=
+   '<button onclick="go()" aria-label="previous">&#8249;</button>'
+  +'<span class="lbl">'+variant+' <em>'+L(MOTION[variant])+'</em></span>'
+  +'<button onclick="go()" aria-label="next">&#8250;</button><span class="tag">PROTOTYPE</span>'; }
+addEventListener('keydown',e=>{
+  if(/^(INPUT|TEXTAREA)$/.test(e.target.tagName)||e.target.isContentEditable) return;
+  if(e.key==='ArrowLeft'||e.key==='ArrowRight') go();
+  if(e.key==='Escape') document.getElementById('flowOverlay').classList.remove('on');
 });
-function render(){
-  document.documentElement.lang = lang;
-  app.innerHTML = VARIANTS[variant].fn();
-  renderSwitcher();
-}
-render();
+shell();
+setInterval(tick,900);
 </script>
 </body>
 </html>
