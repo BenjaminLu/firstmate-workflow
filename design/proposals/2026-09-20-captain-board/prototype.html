@@ -286,13 +286,13 @@ code,.mono{font-family:var(--mono);font-size:.86em}
   background:linear-gradient(180deg,#081a28 0%,#0d3350 48%,#091725 100%)}
 .scene .horizon{position:absolute;left:0;right:0;top:0;height:58px;
   background:linear-gradient(180deg,#0a2033,#12476c);opacity:.85}
-.scene .planks{position:absolute;left:-22%;right:-22%;bottom:62px;height:150px;
+.scene .planks-unused{position:absolute;left:-22%;right:-22%;bottom:62px;height:150px;
   background:repeating-linear-gradient(90deg,#223645 0 27px,#1b2b38 27px 54px);
   transform:rotateX(74deg);transform-origin:50% 100%;box-shadow:inset 0 32px 54px rgba(0,0,0,.55)}
 .scene .plat{position:absolute;bottom:116px;left:64%;margin-left:-50px;width:100px;height:13px;border-radius:5px;
   background:linear-gradient(180deg,#31485e,#1a2836);box-shadow:0 5px 14px rgba(0,0,0,.5)}
-.scene .pivot{bottom:120px;left:var(--px);--sc:.86}
-.scene .pivot.p-fm{bottom:130px;--sc:.94}
+.scene .pivot{bottom:calc(var(--deckY) + 8px);left:var(--px)}
+.scene .pivot.p-fm{bottom:calc(var(--deckY) + 15px)}
 .vend{display:inline-flex;align-items:center;gap:6px;font:600 11px var(--mono);color:var(--fg2);
   border:1px solid var(--line);border-radius:7px;padding:4px 10px;letter-spacing:.02em}
 .vend i{width:6px;height:6px;border-radius:50%;background:var(--fg3)}
@@ -300,10 +300,15 @@ code,.mono{font-family:var(--mono);font-size:.86em}
 .vend b{font-weight:700;color:var(--brass)}
 .scene .tag .vd{margin-top:2px;font:600 9.5px var(--mono);color:#5d84a3;letter-spacing:.02em}
 .scene .tag .vd.x{color:var(--brass)}
+.scene.dens-2 .tag .job,.scene.dens-2 .tag .vd{display:none}
+.scene.dens-2 .tag .who{font-size:10px}
+.scene.dens-3 .tag .job,.scene.dens-3 .tag .vd,.scene.dens-3 .tag .pct{display:none}
+.scene.dens-3 .tag .who{font-size:9.5px;gap:4px}
+.scene.dens-3 .tag .pb{width:92%}
 .scene .hint{position:absolute;top:9px;left:0;right:0;text-align:center;
   font-size:10.5px;color:#5d84a3;letter-spacing:.03em;pointer-events:none;z-index:3}
-.scene .tag{position:absolute;bottom:10px;left:var(--px);transform:translateX(-50%);
-  width:15.5%;min-width:104px;max-width:196px;text-align:center;z-index:4}
+.scene .tag{position:absolute;bottom:7px;left:var(--px);transform:translateX(-50%);
+  width:var(--plateW,15.5%);min-width:0;max-width:196px;text-align:center;z-index:4}
 .scene .tag .who{display:flex;align-items:center;justify-content:center;gap:6px;
   font:650 11px var(--mono);color:#cfe0ef;letter-spacing:.03em}
 .scene .tag .job{margin-top:3px;font-size:10.5px;color:#8fb2cc;line-height:1.32;
@@ -319,7 +324,7 @@ code,.mono{font-family:var(--mono);font-size:.86em}
 .scene .tag.st-queued{opacity:.5}
 .scene .tag.st-review .who{color:#d9b6ff}
 /* things that travel between crew */
-.flyer{position:absolute;bottom:112px;width:22px;height:16px;border-radius:3px;z-index:6;
+.flyer{position:absolute;bottom:calc(var(--deckY) + 62px);width:22px;height:16px;border-radius:3px;z-index:6;
   display:flex;align-items:center;justify-content:center;font:800 8.5px var(--sans);color:#0b1016;
   animation:fly var(--dur,1.15s) cubic-bezier(.3,.02,.4,1) forwards;pointer-events:none}
 .flyer.order  {background:#e8d3a1;box-shadow:0 0 13px rgba(232,211,161,.55)}
@@ -338,6 +343,57 @@ code,.mono{font-family:var(--mono);font-size:.86em}
 .crewline .ch .mb{width:54px;height:3px;background:var(--bg3);border-radius:2px;overflow:hidden}
 .crewline .ch .mb i{display:block;height:100%;background:var(--accent);transition:width .85s linear}
 .crewline .ch .mb i.bad{background:var(--bad)}
+
+/* ===== the ship itself — grows with the crew ===== */
+.scene{height:var(--sceneH,266px)}
+.ship{position:absolute;inset:0;pointer-events:none;z-index:0}
+/* one deck line. hull below it, crew and masts on it, nameplates under it. */
+.scene{--deckY:112px}
+.hull{position:absolute;left:50%;bottom:var(--deckY);transform:translateX(-50%);
+  width:var(--deckW,62%);transform-style:preserve-3d;
+  transition:width .5s cubic-bezier(.3,.8,.3,1)}
+.deckplate{position:absolute;left:0;right:0;bottom:0;height:152px;
+  transform:rotateX(75deg);transform-origin:50% 100%;
+  background:repeating-linear-gradient(90deg,#2a4054 0 26px,#1f3040 26px 52px);
+  clip-path:polygon(9% 0,91% 0,100% 44%,90% 100%,10% 100%,0 44%);
+  box-shadow:inset 0 34px 56px rgba(0,0,0,.55)}
+.gunwale{position:absolute;left:0;right:0;bottom:-15px;height:17px;
+  background:linear-gradient(180deg,#435c74,#1d2b3a);
+  clip-path:polygon(8% 0,92% 0,88% 100%,12% 100%);box-shadow:0 4px 14px rgba(0,0,0,.5)}
+.hullbody{position:absolute;left:0;right:0;bottom:-58px;height:46px;
+  background:linear-gradient(180deg,#26384a,#101b25);
+  clip-path:polygon(12% 0,88% 0,79% 62%,68% 100%,32% 100%,21% 62%);
+  box-shadow:inset 0 -12px 22px rgba(0,0,0,.6)}
+.ports{position:absolute;left:0;right:0;bottom:-26px;height:8px;display:flex;
+  justify-content:center;align-items:center;gap:var(--portGap,20px)}
+.ports i{width:5px;height:5px;border-radius:50%;background:#070e15;box-shadow:0 0 0 1px #4a6178}
+.mast{position:absolute;bottom:18px;width:5px;border-radius:2px;
+  background:linear-gradient(90deg,#9a7743,#4a3721);transform:translateX(-50%);
+  box-shadow:0 0 10px rgba(0,0,0,.45)}
+.mast .yard{position:absolute;left:50%;width:var(--yw,74px);height:4px;border-radius:2px;
+  transform:translateX(-50%);background:linear-gradient(90deg,#4a3721,#9a7743,#4a3721)}
+.mast .sail{position:absolute;left:50%;transform:translateX(-50%);width:var(--sw,66px);
+  background:linear-gradient(180deg,#ece3d4,#b8afa0);opacity:.93;
+  clip-path:polygon(6% 0,94% 0,100% 100%,0 100%);border-radius:2px}
+.m-full .mast .sail{animation:luff 6s ease-in-out infinite;transform-origin:50% 0}
+@keyframes luff{0%,100%{transform:translateX(-50%) skewX(-1.6deg) scaleX(1)}
+                50%{transform:translateX(-50%) skewX(1.6deg) scaleX(.97)}}
+.mast .flag{position:absolute;top:-3px;left:5px;width:22px;height:11px;
+  background:linear-gradient(90deg,var(--brass),#8a6a2f);
+  clip-path:polygon(0 0,100% 0,84% 50%,100% 100%,0 100%)}
+.m-full .mast .flag{animation:flagwave 2.6s ease-in-out infinite;transform-origin:0 50%}
+@keyframes flagwave{0%,100%{transform:skewY(-4deg) scaleX(1)}50%{transform:skewY(5deg) scaleX(.93)}}
+.bowsprit{position:absolute;right:-7%;bottom:34px;width:19%;height:4px;border-radius:2px;
+  background:linear-gradient(90deg,#4a3721,#9a7743);transform:rotate(-13deg);transform-origin:0 50%}
+/* tier badge + crew stepper */
+.shipbar{position:absolute;top:8px;left:0;right:0;z-index:5;display:flex;
+  align-items:center;justify-content:center;gap:14px;font-size:10.5px;color:#7fa8c6}
+.shipbar .tier{font:650 11px var(--mono);color:var(--brass);letter-spacing:.04em}
+.shipbar .step{display:flex;align-items:center;gap:1px;background:rgba(9,20,30,.72);
+  border:1px solid #27455e;border-radius:99px;padding:2px;pointer-events:auto}
+.shipbar .step button{width:21px;height:19px;border-radius:99px;color:#9dc0d8;font-size:12px;line-height:1}
+.shipbar .step button:hover{background:#172c3d;color:#fff}
+.shipbar .step span{padding:0 7px;font:650 11px var(--mono);color:#cfe0ef}
 </style>
 </head>
 <body class="m-full">
@@ -394,6 +450,7 @@ const UI={
  gatesTitle:{en:'fm-gate.sh — deterministic gates. Exit codes decide, not opinions.',
              tw:'fm-gate.sh —— 確定性閘門。exit code 說了算，不是模型印象。',
              cn:'fm-gate.sh —— 确定性闸门。exit code 说了算，不是模型印象。'},
+ crewN:{en:'{n} aboard',tw:'船上 {n} 人',cn:'船上 {n} 人'},
  engine:{en:'engine',tw:'引擎',cn:'引擎'},
  crossOn:{en:'cross-vendor review',tw:'跨供應商審核',cn:'跨供应商审核'},
  crossOff:{en:'same-vendor review',tw:'同供應商審核',cn:'同供应商审核'},
@@ -636,7 +693,7 @@ function figureRaw(c){
   const role=c.role==='fm'?'fm':(c.role==='r'?'r':'w');
   const speed=(0.92-Math.min(0.56,c.pct/210)).toFixed(2);
   return '<div class="pivot'+(role==='fm'?' p-fm':'')+'" data-pivot="'+c.id
-    +'" style="--px:'+(POS[c.id]||'50%')+'">'
+    +'" style="--px:'+posOf(c.id)+';--sc:'+(c.sc||0.86).toFixed(2)+'">'
     +'<div class="fig r-'+role+' s-'+c.st+'" data-crew="'+c.id+'" style="--sp:'+speed+'s">'
     +'<div class="sh"></div>'+arm('armR','handR',true)
     +bx('shoeR')+bx('shoeL')+bx('legR')+bx('legL')+bx('torso')+bx('belt')
@@ -658,12 +715,11 @@ function figure(c){
     +'</div></div></div>';
 }
 /* ---- shared deck: where the crew stand, and what travels between them ---- */
-const POS={'worker-1':'11%','worker-2':'27%','worker-3':'43%','firstmate':'64%','reviewer-1':'85%'};
 const FLYLABEL={order:'ORD',parcel:'PR',reject:'✕',approve:'✓'};
 function fly(from,to,kind){
   if(variant!==4) return;
   const sc=document.querySelector('.scene'); if(!sc) return;
-  const sx=POS[from]||'50%', ex=POS[to]||'50%';
+  const sx=posOf(from), ex=posOf(to);
   const f=document.createElement('div');
   f.className='flyer '+kind;
   f.style.setProperty('--sx',sx); f.style.setProperty('--ex',ex);
@@ -676,23 +732,88 @@ function fly(from,to,kind){
   }, from===to?600:900);
   setTimeout(()=>f.remove(), 1400);
 }
+/* ---- ship scales with the crew ---- */
+const SHIP=[
+ {max:3, masts:1, deckW:46, sceneH:268, name:{en:'Cutter',        tw:'單桅小艇',  cn:'单桅小艇'}},
+ {max:5, masts:2, deckW:62, sceneH:286, name:{en:'Schooner',      tw:'雙桅縱帆船',cn:'双桅纵帆船'}},
+ {max:8, masts:3, deckW:78, sceneH:308, name:{en:'Frigate',       tw:'三桅巡防艦',cn:'三桅巡防舰'}},
+ {max:12,masts:4, deckW:90, sceneH:330, name:{en:'Ship of the line',tw:'四桅戰列艦',cn:'四桅战列舰'}},
+ {max:99,masts:5, deckW:98, sceneH:352, name:{en:'Flagship',      tw:'旗艦',      cn:'旗舰'}},
+];
+const shipOf = n => SHIP.find(s=>n<=s.max);
+let DENS=1, PLATEW='15.5%';
+const deckOrder = () => [...CREW.filter(c=>c.role==='w'),...CREW.filter(c=>c.role==='fm'),
+                         ...CREW.filter(c=>c.role==='r')];
+function layout(){
+  const ord=deckOrder(), n=ord.length, sp=shipOf(n);
+  const lo=50-sp.deckW/2+5, hi=50+sp.deckW/2-9;   // leave the bow clear for the bowsprit
+  ord.forEach((c,i)=>{ c.px = n===1 ? 50 : lo + (hi-lo)*i/(n-1); });
+  // more crew on deck means each one has to be smaller to fit
+  CREW.forEach(c=>{ c.sc = Math.max(0.5, Math.min(0.92, 4.4/n)); });
+  DENS = n<=6 ? 1 : n<=10 ? 2 : 3;
+  PLATEW = n<=1 ? '30%' : (((hi-lo)/(n-1))*0.9).toFixed(2)+'%';   // narrower than the spacing
+  return sp;
+}
+const posOf = id => { const c=CREW.find(x=>x.id===id); return c? c.px.toFixed(2)+'%' : '50%'; };
+function addCrew(d){
+  if(d>0){
+    if(CREW.length>=14) return;
+    const ws=CREW.filter(c=>c.role==='w');
+    const id='worker-'+(Math.max(0,...ws.map(w=>+w.id.split('-')[1]))+1);
+    CREW.splice(CREW.length-1,0,{id,role:'w',st:'queued',task:null,pct:0});
+  } else {
+    const ws=CREW.filter(c=>c.role==='w');
+    if(ws.length<=1) return;
+    const victim=[...ws].reverse().find(w=>!w.task) || ws[ws.length-1];
+    if(victim.task){ const t=byId(victim.task); if(t){t.st='queued';t.who=null;t.pct=0;} lanesDirty=true; }
+    CREW.splice(CREW.indexOf(victim),1);
+  }
+  const sc=document.getElementById('scene'); if(sc) sc.innerHTML=scene();
+  paint();
+}
+function shipMarkup(sp,n){
+  let m='';
+  for(let i=0;i<sp.masts;i++){
+    const x = sp.masts===1 ? 50 : 22 + 56*i/(sp.masts-1);
+    const h = 76 + (i===Math.floor(sp.masts/2) ? 22 : 0) + sp.masts*3;
+    const w = 52 + sp.masts*5;
+    m += '<div class="mast" style="left:'+x+'%;height:'+h+'px;--yw:'+w+'px;--sw:'+(w-10)+'px">'
+       + '<div class="yard" style="top:'+Math.round(h*0.16)+'px"></div>'
+       + '<div class="sail" style="top:'+Math.round(h*0.19)+'px;height:'+Math.round(h*0.46)+'px"></div>'
+       + (i===Math.floor(sp.masts/2)?'<div class="flag"></div>':'') + '</div>';
+  }
+  const ports = Array.from({length:Math.min(14,3+sp.masts*3)},()=>'<i></i>').join('');
+  return '<div class="ship"><div class="hull" style="--deckW:'+sp.deckW+'%">'
+    + '<div class="deckplate"></div><div class="hullbody"></div><div class="gunwale"></div>'
+    + '<div class="ports" style="--portGap:'+(10+sp.masts*3)+'px">'+ports+'</div>'
+    + m + '<div class="bowsprit"></div></div></div>';
+}
 function plate(c){
   const t=c.task?byId(c.task):null;
   const job = c.id==='firstmate' ? T('coord') : (t ? '<b>'+c.task+'</b> '+L(t.title) : T('idle'));
   const vd = vendorOf(c);
   const odd = c.role==='r' && crossVendor();
-  return '<div class="who"><i class="dot '+c.st+'"></i>'+c.id+'</div>'
+  const nm = DENS===3 ? c.id.replace('worker-','w').replace('reviewer-','r').replace('firstmate','fm') : c.id;
+  return '<div class="who"><i class="dot '+c.st+'"></i>'+nm+'</div>'
     +'<div class="vd'+(odd?' x':'')+'">'+vd+'</div>'
     +'<div class="job">'+job+'</div>'
     +'<div class="pb"><i class="'+(c.st==='gate'?'bad':'')+'" style="width:'+c.pct+'%"></i></div>'
     +'<div class="pct">'+Math.round(c.pct)+'%</div>';
 }
 function scene(){
-  return '<div class="scene"><div class="horizon"></div><div class="planks"></div><div class="plat"></div>'
+  const sp=layout(), n=deckOrder().length;
+  return '<div class="scene dens-'+DENS+'" style="--sceneH:'+sp.sceneH+'px;--plateW:'+PLATEW+'">'
+    + '<div class="horizon"></div>'
+    + shipMarkup(sp,n)
+    + '<div class="shipbar"><span class="tier">'+L(sp.name)+'</span>'
+    + '<span>'+T('crewN').replace('{n}',n)+'</span>'
+    + '<span class="step"><button onclick="addCrew(-1)" aria-label="fewer">&minus;</button>'
+    + '<span>'+n+'</span><button onclick="addCrew(1)" aria-label="more">+</button></span>'
+    + '<span>'+T('dragHint')+'</span></div>'
     + CREW.map(c=>figureRaw(c)).join('')
-    + CREW.map(c=>'<div class="tag st-'+c.st+'" data-tag="'+c.id+'" style="--px:'+(POS[c.id]||'50%')+'">'
+    + CREW.map(c=>'<div class="tag st-'+c.st+'" data-tag="'+c.id+'" style="--px:'+posOf(c.id)+'">'
         + plate(c) + '</div>').join('')
-    + '<div class="hint">'+T('dragHint')+'</div></div>';
+    + '</div>';
 }
 function crewline(){
   return '<div class="crewline">'+CREW.map(c=>{
