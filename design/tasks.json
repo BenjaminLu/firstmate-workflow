@@ -138,7 +138,9 @@
       "title": "fm-worker.sh: worktree, adapter, commit, pull request",
       "scope": [
         "bin/fm-worker.sh",
-        "tests/worker.test.sh"
+        "skills/worker/**",
+        "tests/worker.test.sh",
+        "design/tasks.json"
       ],
       "acceptance": [
         "creates a worktree per task from main under state/worktrees/<task>",
