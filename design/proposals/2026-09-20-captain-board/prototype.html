@@ -217,8 +217,8 @@ code,.mono{font-family:var(--mono);font-size:.86em}
 .fig .sh{left:50%;bottom:-8px;width:64px;height:16px;margin-left:-32px;border-radius:50%;
   background:radial-gradient(ellipse at 50% 50%,rgba(0,0,0,.62),transparent 72%);transform:translateZ(-16px)}
 /* geometry: everything centred on x=46, stacked bottom-up. no gaps, arms at the body's sides. */
-.fig .shoeL{--w:13px;--h:6px;--d:16px;left:31px;bottom:0}
-.fig .shoeR{--w:13px;--h:6px;--d:16px;left:48px;bottom:0}
+.fig .shoeL{--w:13px;--h:6px;--d:16px;left:31px;bottom:0;transform-origin:50% -18px}
+.fig .shoeR{--w:13px;--h:6px;--d:16px;left:48px;bottom:0;transform-origin:50% -18px}
 .fig .legL {--w:11px;--h:22px;--d:12px;left:32px;bottom:5px}
 .fig .legR {--w:11px;--h:22px;--d:12px;left:49px;bottom:5px}
 .fig .torso{--w:32px;--h:34px;--d:20px;left:30px;bottom:24px}
@@ -261,14 +261,16 @@ code,.mono{font-family:var(--mono);font-size:.86em}
 /* the action owns the arms; anything without its own swing must say so explicitly */
 .fig .armL,.fig .armR{animation:none}
 /* feet: a weight shift on every working pose, and an occasional hop */
-.m-3d .fig .legL{animation:stepA var(--step,1.25s) ease-in-out infinite}
-.m-3d .fig .legR{animation:stepB var(--step,1.25s) ease-in-out infinite}
-@keyframes stepA{0%,100%{transform:rotate(0deg) translateY(0)}
-                 50%{transform:rotate(-9deg) translateY(-2px)}}
-@keyframes stepB{0%,100%{transform:rotate(-9deg) translateY(-2px)}
-                 50%{transform:rotate(0deg) translateY(0)}}
-.m-3d .fig.s-queued .legL,.m-3d .fig.s-queued .legR{animation-duration:3.4s}
-.m-3d .fig.a-lean .legL,.m-3d .fig.a-lean .legR{animation:none}
+.m-3d .fig .legL,.m-3d .fig .shoeL{animation:stepA var(--step,1.25s) ease-in-out infinite}
+.m-3d .fig .legR,.m-3d .fig .shoeR{animation:stepB var(--step,1.25s) ease-in-out infinite}
+@keyframes stepA{0%,100%{transform:translateY(0) rotate(2deg)}
+                 50%{transform:translateY(-7px) rotate(-16deg)}}
+@keyframes stepB{0%,100%{transform:translateY(-7px) rotate(-16deg)}
+                 50%{transform:translateY(0) rotate(2deg)}}
+.m-3d .fig.s-queued .legL,.m-3d .fig.s-queued .legR,
+.m-3d .fig.s-queued .shoeL,.m-3d .fig.s-queued .shoeR{animation-duration:3.2s}
+.m-3d .fig.a-lean .legL,.m-3d .fig.a-lean .legR,
+.m-3d .fig.a-lean .shoeL,.m-3d .fig.a-lean .shoeR{animation:none}
 .m-3d .fig{translate:0 0;animation-composition:replace}
 .m-3d .fig.can-hop{animation-name:var(--baseAnim,bobk),hopk;
   animation-duration:var(--baseDur,4.4s),var(--hopEvery,9s);
@@ -371,7 +373,7 @@ code,.mono{font-family:var(--mono);font-size:.86em}
 .fig.s-queued{filter:grayscale(.75) brightness(.6)}
 .m-3d .fig.s-queued{--baseAnim:bobk;--baseDur:6.5s}
 .fig.react{animation:joltk .55s ease-out !important}
-@keyframes bobk{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+@keyframes bobk{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
 @keyframes slumpk{0%,100%{transform:translateY(3px)}50%{transform:translateY(6px)}}
 @keyframes scank{0%,100%{transform:rotateY(-17deg)}50%{transform:rotateY(19deg)}}
 @keyframes joltk{0%{transform:translateY(-10px) scale(1.09)}100%{transform:translateY(0) scale(1)}}
