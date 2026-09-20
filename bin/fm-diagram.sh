@@ -23,7 +23,10 @@
 # table row from rewriting markup the day someone adds one that is not CJK.
 #
 # Q8, the first half: an authored drawing in design/diagrams/ wins over the
-# built-in one. Lookup runs decision before task, language before neutral.
+# built-in one. Which drawing is decided once for the whole decision -
+# decision before task - and that choice then has to answer every language or
+# the render is refused. See "the authored drawing tier" below for why the
+# unit is the tier and not the file.
 #
 # Output lands in board/public/diagrams/, which the board already serves as a
 # static file, so nothing has to be added to the server to show one.
@@ -59,6 +62,15 @@ while [ $# -gt 0 ]; do
 done
 [ -d "$ROOT" ] || die "no repo at $ROOT"
 ROOT="$(cd "$ROOT" && pwd)"
+
+# An id that was supplied is checked wherever it was supplied. The shape used
+# to be checked only on the path that draws, so `--event gate_passed
+# --decision D-oo7` exited 0 and said nothing while `--event
+# decision_requested` with the same typo exited 64: the misspelling was
+# invisible for seventeen of the eighteen event types and visible for one.
+# It is the caller's mistake either way, and the routine path is the one
+# where nothing downstream would ever have noticed.
+[ -z "$ID" ] || grep -Eq '^D-[0-9]{1,6}$' <<<"$ID" || die "not a decision id: $ID"
 
 OUT="$ROOT/board/public/diagrams"
 SRC="$ROOT/design/diagrams"
@@ -107,10 +119,9 @@ fi
 
 # ------------------------------------------------------------- the decision
 
-# the id reaches the filesystem, so it is checked against a shape before it
-# is ever joined to a path - the same shape the board's POST handler accepts
+# the id reaches the filesystem, so its shape was checked above, before any
+# mode could act on it - the same shape the board's POST handler accepts
 [ -n "$ID" ] || die "--decision is required"
-grep -Eq '^D-[0-9]{1,6}$' <<<"$ID" || die "not a decision id: $ID"
 
 FILE=''
 for c in "$ROOT/state/pending/$ID.json" "$ROOT/state/decisions/$ID.json"; do
@@ -174,19 +185,79 @@ EOF
 }
 # the key itself when the dictionary has no answer: a diagram with a visible
 # key in it is a bug report, which beats a diagram with a hole in it
-dget() { local n="d_$1"; if [ -n "${!n-}" ]; then printf '%s' "${!n}"; else printf '%s' "$1"; fi; }
+#
+# A key the dictionary answers with the empty string is a key it answered,
+# and it gets the empty string. `-n "${!n-}"` could not tell that from a key
+# the dictionary never mentions, so a value someone deliberately blanked came
+# out wearing the bug report meant for a value nobody wrote. `+x` asks
+# whether the variable is set, which is exactly what load_dict records.
+dget() { local n="d_$1"; if [ -n "${!n+x}" ]; then printf '%s' "${!n}"; else printf '%s' "$1"; fi; }
 dsc()  { esc "$(dget "$1")"; }
 
-# Q8: an authored drawing wins. Decision before task, language before the
-# language-neutral file - a drawing with no words in it serves all three.
+# ------------------------------------------------- the authored drawing tier
+#
+# Q8: an authored drawing wins. WHICH drawing is decided once, for the whole
+# decision, and that choice then has to answer every language.
+#
+# It used to be decided per language, one independent walk down
+# <id>.<lang> -> <id> -> <task>.<lang> -> <task> for each of them. Every rung
+# of that ladder can succeed for one language and fail for another, so a
+# directory holding only D-011.en.html served English a hand drawing and both
+# Chinese readers the built-in frame, with exit 0 and nothing said. The worse
+# shape has no file missing anywhere: D-011.en.html beside T-004.zh-TW.html
+# answers every language, with two different pictures under one decision.
+# Neither is a lookup that failed. Both are lookups that succeeded,
+# differently, which is why checking <id>.en and <id>.zh-TW for each other
+# would have caught one of them and not the other.
+#
+# So the unit is the TIER: every file in design/diagrams/ whose stem is the
+# decision, or failing that every file whose stem is the task. The first tier
+# with anything at all in it is the tier - a half-drawn decision does not
+# quietly become a task drawing - and a tier that cannot answer all of
+# AUTHORED_LANGS is refused with its own number rather than served to
+# whichever languages it happens to cover.
+#
+# zh-CN is not in that list because it is never authored: it is derived from
+# zh-TW. So a hand-written D-011.zh-CN.html answers no language, and a tier
+# holding only that one is a refusal - which is the loud end of the README's
+# "never write a zh-CN file".
+AUTHORED_LANGS="en zh-TW"
+
+tier_files() {   # tier_files <stem> -> the authored files belonging to that stem
+  local stem="$1" f
+  for f in "$SRC/$stem.html" "$SRC/$stem".*.html; do
+    [ -f "$f" ] && printf '%s\n' "${f##*/}"
+  done
+  return 0
+}
+tier_answer() {  # tier_answer <stem> <lang> -> the file that serves that language
+  local stem="$1" lang="$2"
+  [ -f "$SRC/$stem.$lang.html" ] && { printf '%s' "$SRC/$stem.$lang.html"; return 0; }
+  [ -f "$SRC/$stem.html" ]       && { printf '%s' "$SRC/$stem.html";       return 0; }
+  return 1
+}
+# the stem whose drawings this decision uses; empty means the built-in body
+TIER=''
+resolve_tier() {
+  local stem lang unanswered=''
+  for stem in "$ID" ${TASKPATH:+"$TASKPATH"}; do
+    [ -n "$(tier_files "$stem")" ] || continue
+    TIER="$stem"; break
+  done
+  [ -n "$TIER" ] || return 0
+  for lang in $AUTHORED_LANGS; do
+    tier_answer "$TIER" "$lang" >/dev/null || unanswered="$unanswered $lang"
+  done
+  [ -z "$unanswered" ] || die "design/diagrams/$TIER is drawn for some languages and not others:\
+ nothing answers$unanswered (it has: $(tier_files "$TIER" | tr '\n' ' '))\
+ - write $TIER.<lang>.html for each of $AUTHORED_LANGS, or one $TIER.html with no words in it" 65
+}
+
 fragment() {
   local lang="$1" f
-  set -- "$SRC/$ID.$lang.html" "$SRC/$ID.html"
-  [ -n "$TASKPATH" ] && set -- "$@" "$SRC/$TASKPATH.$lang.html" "$SRC/$TASKPATH.html"
-  for f in "$@"; do
-    [ -f "$f" ] && { cat "$f"; return 0; }
-  done
-  return 1
+  [ -n "$TIER" ] || return 1
+  f="$(tier_answer "$TIER" "$lang")" || return 1
+  cat "$f"
 }
 
 # ------------------------------------------------------------------- render
@@ -289,6 +360,15 @@ HTML
 # part that could quietly drift, so tests/diagram.test.sh runs the real cn()
 # lifted out of index.html and this awk over every value in the zh-TW
 # dictionary and fails if they disagree on any of them.
+#
+# One difference that is not a difference: cn() reduces over a whole string
+# and conv() runs on one line's worth of text node at a time. A match can
+# only be lost at a line break if the row's own text spans one, and every row
+# is a single tab-separated line - tests/i18n.test.sh fails the table if any
+# row is not exactly two columns. A replacement cannot introduce a break
+# either, for the same reason. tests/diagram.test.sh pins it with a text node
+# that wraps mid-phrase, since the dictionary corpus is single-line by
+# construction and so could never have shown it.
 TEXTNODES='
 function rep(s, a, b,   out, i) {
   out = ""
@@ -303,7 +383,10 @@ BEGIN {
     i = index(ln, "\t"); if (i == 0) continue
     n++; from[n] = substr(ln, 1, i - 1); to[n] = substr(ln, i + 1)
   }
-  close(TBL); intag = 0; incomment = 0; skip = 0
+  close(TBL); intag = 0; incomment = 0; skip = 0; inq = ""
+  # written as a code point because this program is a single-quoted shell
+  # string and an apostrophe would end it
+  SQ = sprintf("%c", 39)
 }
 {
   line = $0; out = ""
@@ -313,9 +396,22 @@ BEGIN {
       if (p == 0) { out = out line; line = "" }
       else { out = out substr(line, 1, p + 2); line = substr(line, p + 3); incomment = 0 }
     } else if (intag) {
-      p = index(line, ">")
-      if (p == 0) { out = out line; line = "" }
-      else { out = out substr(line, 1, p); line = substr(line, p + 1); intag = 0 }
+      # A tag ends at the first > that is NOT inside an attribute value.
+      # Ending it at the first > full stop is legal in exactly the documents
+      # nobody authors by hand: <text data-note="a > b">, which SVG permits,
+      # handed the tail of its own attribute to the converter as if it were a
+      # text node. Authored fragments are cat-ed in verbatim, so they are the
+      # one input on this path that was never written by this program.
+      q = 1; L = length(line); closed = 0
+      while (q <= L) {
+        ch = substr(line, q, 1)
+        if (inq != "") { if (ch == inq) inq = "" }
+        else if (ch == "\"" || ch == SQ) { inq = ch }
+        else if (ch == ">") { closed = 1; break }
+        q++
+      }
+      if (closed) { out = out substr(line, 1, q); line = substr(line, q + 1); intag = 0 }
+      else { out = out line; line = "" }
     } else {
       p = index(line, "<")
       if (p == 0) { out = out (skip ? line : conv(line)); line = "" }
@@ -355,6 +451,10 @@ for f in "$I18N/ui.en.json" "$I18N/ui.zh-TW.json"; do
   jq -e 'type == "object"' "$f" >/dev/null 2>&1 \
     || die "$f is not a readable dictionary" 66
 done
+# and the drawing this decision will use is chosen here, before the first
+# redirect, because an unevenly authored tier is a refusal and a refusal must
+# not arrive with one language already on disk
+resolve_tier
 
 mkdir -p "$OUT" || die "cannot create $OUT" 73
 

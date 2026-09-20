@@ -422,9 +422,11 @@
       "title": "fm-diagram.sh: decision diagrams and the board embed",
       "scope": [
         "bin/fm-diagram.sh",
+        "bin/fm-decide.sh",
         "design/diagrams/**",
         "board/public/**",
         "tests/diagram.test.sh",
+        "tests/decide.test.sh",
         "tests/i18n.test.sh",
         "design/tasks.json"
       ],
@@ -434,7 +436,9 @@
         "only decisions the captain must rule on produce a diagram; routine events do not",
         "the board embeds them in an iframe and swaps src with the language",
         "the suite that covers it lives where bin/ci.sh runs it",
-        "generated diagrams do not trip the hardcoded-string lint, which scans authored pages"
+        "generated diagrams do not trip the hardcoded-string lint, which scans authored pages",
+        "requesting a decision draws its diagram, so the board never HEADs a file nobody wrote",
+        "a drawing authored for one language and not another is refused rather than served unevenly"
       ]
     },
     {

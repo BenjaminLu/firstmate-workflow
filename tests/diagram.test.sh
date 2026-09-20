@@ -11,8 +11,21 @@ DG="$ROOT/bin/fm-diagram.sh"
 
 # A scratch root, so nothing here writes into the repository the suite runs
 # from and nothing here depends on what happens to be in state/ today.
+#
+# Every one of them is registered as it is made and removed at the end,
+# because they were not: about a dozen were created here and four were
+# rm -rf'd, so most of a suite's worth of trees was left in /tmp on every
+# run. A cleanup written at each use site is a cleanup that is there on the
+# branches somebody remembered.
+#
+# The register is a FILE and not a variable. newroot is always called as
+# `R="$(newroot)"`, which runs it in a subshell, so a variable it appended to
+# would be discarded along with the subshell and the whole thing would read
+# as a cleanup while cleaning nothing up.
+REG="$(mktemp)"
 newroot() {  # newroot -> prints a fresh root with the dictionaries in it
   local d; d="$(mktemp -d)"
+  printf '%s\n' "$d" >> "$REG"
   mkdir -p "$d/bin" "$d/i18n" "$d/state/pending" "$d/state/decisions" \
            "$d/design/diagrams" "$d/board/public"
   # errors are not swallowed here: a fixture that half-builds itself and says
@@ -22,6 +35,17 @@ newroot() {  # newroot -> prints a fresh root with the dictionaries in it
   cp "$ROOT/i18n/ui.en.json" "$ROOT/i18n/ui.zh-TW.json" "$ROOT/i18n/tw2cn.tsv" "$d/i18n/"
   printf '%s' "$d"
 }
+# one exit path, so the server section does not have to take the trap away
+# from the roots and remember to give it back
+SERVER_PID=''
+on_exit() {
+  [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
+  while IFS= read -r r; do [ -z "$r" ] || rm -rf "$r"; done < "$REG"
+  rm -f "$REG"
+  return 0
+}
+trap on_exit EXIT
+
 decision() {  # decision <root> <id> <json>
   printf '%s\n' "$3" > "$1/state/pending/$2.json"
 }
@@ -228,6 +252,24 @@ assert_contains "$(cat "$cn2")" 'class="answers"' "an ASCII table row does not r
 assert_lacks    "$(cat "$cn2")" 'klass'           "nor any other markup"
 assert_contains "$(cat "$cn2")" "代码"            "while the text node it sits next to still converts"
 
+# and the other end of "everything between < and > is markup": a tag ends at
+# the first > that is not inside an attribute value. Ending it at the first >
+# full stop handed the tail of the attribute to the converter as if it were a
+# text node - and an authored fragment is the one input on this path that
+# this program did not write, so a > inside an attribute is exactly where it
+# would arrive from.
+R="$(newroot)"
+printf '%s\n' '<svg><text data-note="a > 程式碼 b">唯讀的檔案</text></svg>' \
+  > "$R/design/diagrams/D-033.zh-TW.html"
+printf '%s\n' '<svg><text data-note="a > b">read only</text></svg>' \
+  > "$R/design/diagrams/D-033.en.html"
+decision "$R" D-033 '{"id":"D-033","task":"T-099","kind":"choice","title":"x"}'
+"$DG" --decision D-033 --repo "$R" >/dev/null 2>&1
+cn33="$(cat "$R/board/public/diagrams/D-033.zh-CN.html" 2>/dev/null)"
+assert_contains "$cn33" 'data-note="a > 程式碼 b"' \
+  "a > inside a quoted attribute does not end the tag, so the rest of it is not converted"
+assert_contains "$cn33" "只读的文件" "while the text node beside it converts as it should"
+
 # ----------------------------------------- one table, two appliers, one rule
 #
 # board/public/index.html already puts zh-TW through this table:
@@ -255,6 +297,9 @@ R="$(newroot)"
 # used: its collation is locale-dependent and laneQueued/log would order one
 # way here and another way in the probe.
 keys="$(jq -r 'keys[]' "$ROOT/i18n/ui.zh-TW.json")"
+# an en file beside it, because a tier authored for one language and not the
+# other is refused now - and the corpus is a zh-TW drawing by nature
+printf '<p>the corpus, in English</p>\n' > "$R/design/diagrams/D-031.en.html"
 : > "$R/design/diagrams/D-031.zh-TW.html"
 for k in $keys; do
   jq -r --arg k "$k" '"<p>" + .[$k] + "</p>"' "$ROOT/i18n/ui.zh-TW.json" \
@@ -270,14 +315,21 @@ assert_eq "$(printf '%s\n' "$keys" | wc -l | tr -d ' ')" \
           "$(printf '%s\n' "$byawk" | wc -l | tr -d ' ')" \
   "every dictionary value reached the generated page as a text node"
 
-probed="$(mktemp -d)"
-{
+# the board's own cn() and its table, lifted rather than retyped. Two callers
+# now, so it is a function: a second copy of the lift is a second thing that
+# could stop being the page's cn() without anyone noticing.
+cn_prelude() {
   printf '%s\n' 'const fs = require("fs");'
   printf '%s\n' 'const rows = fs.readFileSync(process.env.TBL, "utf8").split("\n")'
   printf '%s\n' '  .filter(l => l && l[0] !== "#" && l.includes("\t"))'
   printf '%s\n' '  .map(l => [l.slice(0, l.indexOf("\t")), l.slice(l.indexOf("\t") + 1)]);'
   printf '%s\n' 'const DICT = { tw2cn: rows };'
   grep -h 'const cn = ' "$ROOT/board/public/index.html"
+}
+
+probed="$(mktemp -d)"
+{
+  cn_prelude
   printf '%s\n' 'const d = JSON.parse(fs.readFileSync(process.env.TW, "utf8"));'
   printf '%s\n' 'process.stdout.write(Object.keys(d).sort().map(k => cn(d[k])).join("\n"));'
 } > "$probed/cn.js"
@@ -287,7 +339,37 @@ assert_ok "grep -q 'DICT.tw2cn' '$probed/cn.js'" "the board's own cn() was lifte
 bycn="$(TBL="$ROOT/i18n/tw2cn.tsv" TW="$ROOT/i18n/ui.zh-TW.json" bun run "$probed/cn.js" 2>&1)"
 assert_eq "$bycn" "$byawk" \
   "the board's cn() and the generator's awk agree on every value in the dictionary"
-rm -rf "$probed"
+
+# ...and the one shape that corpus cannot hold. Every node above is one line,
+# because the test wrote it that way; cn() reduces over a whole string and
+# the awk's conv() runs per line, so the unit of work is the only place the
+# two could part company and the fixture excluded it by construction.
+#
+# They do not part company, and the reason is worth pinning rather than
+# arguing: a match can only be lost at a line break if the row's own text
+# spans one, and tests/i18n.test.sh fails the table if any row is not exactly
+# two tab-separated columns. So this asserts the agreement on a node that
+# wraps mid-phrase - 程式碼 split between 程式 and 碼, where the whole-string
+# and per-line readings would differ if anything could make them.
+wrapped="$(mktemp -d)"
+printf '%s' '前面的程式
+碼在後面，還有唯讀的檔案' > "$wrapped/node.txt"
+R="$(newroot)"
+{ printf '<p>'; cat "$wrapped/node.txt"; printf '</p>\n'; } > "$R/design/diagrams/D-032.zh-TW.html"
+printf '<p>a node that wraps</p>\n' > "$R/design/diagrams/D-032.en.html"
+decision "$R" D-032 '{"id":"D-032","task":"T-099","kind":"choice","title":"x"}'
+"$DG" --decision D-032 --repo "$R" >/dev/null 2>&1
+gotwrap="$(perl -0777 -ne 'print $1 if m{<div class="drawn">\s*<p>(.*?)</p>}s' \
+  "$R/board/public/diagrams/D-032.zh-CN.html" 2>/dev/null)"
+{ cn_prelude
+  printf '%s\n' 'process.stdout.write(cn(fs.readFileSync(process.env.NODE, "utf8")));'
+} > "$wrapped/cn2.js"
+wantwrap="$(TBL="$ROOT/i18n/tw2cn.tsv" NODE="$wrapped/node.txt" bun run "$wrapped/cn2.js" 2>&1)"
+assert_eq "2" "$(printf '%s\n' "$gotwrap" | wc -l | tr -d ' ')" \
+  "the wrapped node reached the page still wrapped, which is what makes this a test"
+assert_eq "$wantwrap" "$gotwrap" \
+  "and the two appliers agree on a text node that spans a line break"
+rm -rf "$probed" "$wrapped"
 
 # --------------------------------------------- an authored drawing wins
 R="$(newroot)"
@@ -316,6 +398,81 @@ d13="$(cat "$R/board/public/diagrams/D-013.en.html" 2>/dev/null)"
 assert_contains "$d13" "Choose A" "a choice with no drawing still offers the choice"
 assert_lacks    "$d13" "$(jq -r .gate5 "$ROOT/i18n/ui.en.json")" "and carries no merge checklist"
 
+# ----------------------------------- a drawing authored unevenly is refused
+#
+# The lookup used to run per language: <id>.<lang>, <id>, <task>.<lang>,
+# <task>, resolved independently three times. Every rung of that ladder can
+# succeed for one language and fail for another, and the only signal was the
+# rendered page - three files written, exit 0, nothing said.
+#
+# So the unit is the tier, decided once for the decision, and the fixtures
+# below are the two shapes that distinguish a tier check from a per-language
+# one. The second is the one a pairwise <id>.en/<id>.zh-TW existence check
+# walks straight past, because no file is missing anywhere in it.
+R="$(newroot)"
+decision "$R" D-071 '{"id":"D-071","task":"T-004","kind":"choice","title":"which schema"}'
+printf '<svg class="only-en"></svg>\n' > "$R/design/diagrams/D-071.en.html"
+msg="$("$DG" --decision D-071 --repo "$R" 2>&1)"
+assert_eq "65" "$?" "a decision drawn for en and not zh-TW is refused, with a number of its own"
+assert_contains "$msg" "zh-TW" "and the refusal names the language nothing answers"
+assert_eq "" "$(find "$R/board/public" -name 'D-071.*' 2>/dev/null)" "and nothing at all was written"
+# the same directory one file later: a refusal has to be a refusal of THIS
+# tree, not of the idea of authored drawings
+printf '<svg class="now-tw"></svg>\n' > "$R/design/diagrams/D-071.zh-TW.html"
+"$DG" --decision D-071 --repo "$R" >/dev/null 2>&1
+assert_eq "0" "$?" "and the moment the other language is drawn it renders"
+assert_contains "$(cat "$R/board/public/diagrams/D-071.zh-TW.html")" "now-tw" \
+  "with each language showing its own drawing"
+
+# the shape with no file missing: the decision drawn in English, the task
+# drawn in zh-TW. Every language is answered - by two different pictures.
+R="$(newroot)"
+decision "$R" D-072 '{"id":"D-072","task":"T-004","kind":"choice","title":"which schema"}'
+printf '<svg class="decision-en"></svg>\n' > "$R/design/diagrams/D-072.en.html"
+printf '<svg class="task-tw"></svg>\n'     > "$R/design/diagrams/T-004.zh-TW.html"
+"$DG" --decision D-072 --repo "$R" >/dev/null 2>&1
+assert_eq "65" "$?" "a decision's drawing in one language and the task's in another is refused too"
+assert_eq "" "$(find "$R/board/public" -name 'D-072.*' 2>/dev/null)" "and it too wrote nothing"
+
+# the task's drawings are a tier and are held to the same rule, or half the
+# ladder keeps the old behaviour
+R="$(newroot)"
+decision "$R" D-073 '{"id":"D-073","task":"T-004","kind":"choice","title":"x"}'
+printf '<svg class="task-en"></svg>\n' > "$R/design/diagrams/T-004.en.html"
+"$DG" --decision D-073 --repo "$R" >/dev/null 2>&1
+assert_eq "65" "$?" "an uneven set of the TASK's drawings is refused the same way"
+assert_eq "" "$(find "$R/board/public" -name 'D-073.*' 2>/dev/null)" "and wrote nothing either"
+
+# but the rule is about the tier answering every language, not about there
+# being three files: one wordless drawing answers all of them
+R="$(newroot)"
+decision "$R" D-074 '{"id":"D-074","task":"T-004","kind":"choice","title":"x"}'
+printf '<svg class="wordless"></svg>\n' > "$R/design/diagrams/D-074.html"
+"$DG" --decision D-074 --repo "$R" >/dev/null 2>&1
+assert_eq "0" "$?" "one file with no words in it serves every language"
+for l in en zh-TW zh-CN; do
+  assert_contains "$(cat "$R/board/public/diagrams/D-074.$l.html" 2>/dev/null)" "wordless" \
+    "and the $l page shows it"
+done
+
+# a hand-written zh-CN file answers no language at all - zh-CN is derived,
+# never authored - so a tier holding only one cannot serve anybody. The
+# README's "never write a zh-CN file" gets a number rather than a shrug.
+R="$(newroot)"
+decision "$R" D-075 '{"id":"D-075","task":"T-099","kind":"choice","title":"x"}'
+printf '<svg class="hand-cn"></svg>\n' > "$R/design/diagrams/D-075.zh-CN.html"
+"$DG" --decision D-075 --repo "$R" >/dev/null 2>&1
+assert_eq "65" "$?" "a hand-written zh-CN file is refused rather than quietly ignored"
+
+# and a half-drawn decision does not fall through to the task's drawing: if
+# the decision has any file at all, the decision is the tier
+R="$(newroot)"
+decision "$R" D-076 '{"id":"D-076","task":"T-004","kind":"choice","title":"x"}'
+printf '<svg class="half"></svg>\n'     > "$R/design/diagrams/D-076.en.html"
+printf '<svg class="complete"></svg>\n' > "$R/design/diagrams/T-004.html"
+"$DG" --decision D-076 --repo "$R" >/dev/null 2>&1
+assert_eq "65" "$?" "a half-drawn decision is refused rather than served the task's complete drawing"
+
 # ---------------------------------------------------------------- refusals
 R="$(newroot)"
 for bad in "../../etc/passwd" "D-1234567" "T-004" "D-" "" ; do
@@ -332,6 +489,22 @@ assert_eq "66" "$?" "a decision with no file is a missing input, not a crash"
 "$DG" --event decision_requested --repo "$R" >/dev/null 2>&1
 assert_eq "64" "$?" "--event on a drawn type still needs a decision"
 assert_eq "" "$(find "$R/board/public" -name '*.html' 2>/dev/null)" "and drew nothing without one"
+
+# An id that is supplied is checked wherever it is supplied. The shape used
+# to be checked only on the path that draws, so a misspelled id was a refusal
+# for decision_requested and a silent exit 0 for the other seventeen types -
+# invisible on seventeen of eighteen calls, and seventeen of eighteen is
+# where a typo lives longest, because nothing downstream of a routine event
+# ever looks at the id again.
+decision "$R" D-002 '{"id":"D-002","task":"T-004","kind":"choice","title":"x"}'
+for bad in "D-oo2" "../../etc/passwd" "D-1234567" "T-004"; do
+  "$DG" --event gate_passed --decision "$bad" --repo "$R" >/dev/null 2>&1
+  assert_eq "64" "$?" "[$bad] is refused on a routine event too, not only on the drawn one"
+done
+"$DG" --event gate_passed --decision D-002 --repo "$R" >/dev/null 2>&1
+assert_eq "0" "$?" "while a real id on a routine event is still a clean no-op"
+assert_eq "" "$(find "$R/board/public/diagrams" -name 'D-002.*' 2>/dev/null)" \
+  "which is a no-op because it drew nothing, not because it refused"
 
 # A decision file that is not JSON. jq answers nothing for every field, so
 # the card used to render with no task, no pull request and the dictionary's
@@ -427,6 +600,20 @@ assert_eq "0" "$?" "a dictionary with one key missing still renders"
 assert_contains "$(cat "$holey/board/public/diagrams/D-042.en.html" 2>/dev/null)" "laneQueued" \
   "and the key itself shows through, which is the bug report"
 
+# the other side of that line. A key the dictionary answers with the empty
+# string is a key it answered, and it gets the empty string. The test above
+# is the only one that could have caught the confusion and it cannot: a
+# missing key and a key blanked on purpose both render as the key's name
+# under `-n "${!n-}"`, and only one of them is a bug worth reporting on the
+# page.
+blank="$(newroot)"
+jq '.laneQueued = ""' "$ROOT/i18n/ui.en.json" > "$blank/i18n/ui.en.json"
+decision "$blank" D-044 '{"id":"D-044","task":"T-004","kind":"choice","title":"pick one"}'
+"$DG" --decision D-044 --repo "$blank" >/dev/null 2>&1
+assert_eq "0" "$?" "a dictionary with one value deliberately blank still renders"
+assert_lacks "$(cat "$blank/board/public/diagrams/D-044.en.html" 2>/dev/null)" "laneQueued" \
+  "and an empty value renders empty, not as the name of the key that holds it"
+
 # --repo at a tree with no bin/ in it. The ruling used to be read out of
 # bin/fm-emit.sh, which meant a root without that file fell back to
 # "decision_requested is the only event there is" - so every ROUTINE type
@@ -482,10 +669,18 @@ assert_eq "0" "$?" "a decision that has been answered still renders"
 # The board points an iframe at the file and moves that src when the reader
 # changes language. board/public/diagram.js holds the one function that says
 # where a diagram lives, so the page and the swap cannot disagree.
+# The three assertions below are PRESENCE checks and nothing more: they see a
+# substring in the page's source text. `DIAGRAM.mount` appearing in
+# index.html does not prove it is called with the new language, on the right
+# element, or that its promise is handled - all three would pass on a page
+# that called it with the previous lang. What executes is the probe under
+# them, which runs the module itself; the click handler that calls it has no
+# executing test in this suite. Read these as "the wiring is still spelled
+# here", not as "the wiring works".
 page="$(cat "$ROOT/board/public/index.html")"
-assert_contains "$page" "diagram.js"      "the page loads the embed module"
-assert_contains "$page" "DIAGRAM.embed"   "the decision card carries the iframe"
-assert_contains "$page" "DIAGRAM.mount"   "and the language swap goes through it"
+assert_contains "$page" "diagram.js"      "index.html still names diagram.js (presence)"
+assert_contains "$page" "DIAGRAM.embed"   "and still names DIAGRAM.embed on the card (presence)"
+assert_contains "$page" "DIAGRAM.mount"   "and still names DIAGRAM.mount for the swap (presence)"
 assert_ok "test -f '$ROOT/board/public/diagram.js'" "the module is there"
 
 probe="$(mktemp -d)/embed.js"
@@ -568,10 +763,22 @@ PORT=$(( 14900 + RANDOM % 900 ))
 # holding stdout holds the command substitution open with it
 FM_ROOT="$R" FM_PORT="$PORT" bun run "$R/board/server.ts" > "$R/out" 2>&1 < /dev/null &
 pid=$!
+# recorded before the wait, not after it: the trap that kills this used to be
+# installed after the readiness loop, so a suite interrupted during those ten
+# seconds left bun running on the port it took
+SERVER_PID="$pid"
+# and the loop reports what happened rather than running out. A server that
+# died - a taken port, a bun that will not start - used to leave every
+# assertion below failing on its own terms, reading as a broken diagram
+# rather than as a board that never came up, with $R/out never printed.
+ready=0
 for _ in $(seq 1 40); do
-  curl -sf "http://127.0.0.1:$PORT/api/state" >/dev/null 2>&1 && break; sleep 0.25
+  kill -0 "$pid" 2>/dev/null || break
+  curl -sf "http://127.0.0.1:$PORT/api/state" >/dev/null 2>&1 && { ready=1; break; }
+  sleep 0.25
 done
-trap 'kill "$pid" 2>/dev/null' EXIT
+assert_eq "1" "$ready" "the board server came up, so what follows is about the diagrams"
+[ "$ready" = 1 ] || cat "$R/out"
 
 for l in en zh-TW zh-CN; do
   code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/diagrams/D-021.$l.html")"
@@ -588,8 +795,7 @@ assert_eq "200" "$(curl -s -I -o /dev/null -w '%{http_code}' "http://127.0.0.1:$
 
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null || true
-trap - EXIT
-rm -rf "$R"
+SERVER_PID=''
 
 # ------------------------------------------- the class, not the one instance
 #

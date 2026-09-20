@@ -8,8 +8,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib.sh"
 
 fixture() {
-  local d; d="$(mktemp -d)"; mkdir -p "$d/bin" "$d/state"
-  cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-decide.sh" "$d/bin/"
+  local d; d="$(mktemp -d)"; mkdir -p "$d/bin" "$d/state" "$d/i18n" "$d/board/public"
+  # the generator and the dictionaries it cannot render without: requesting a
+  # decision draws it, so a fixture without them is not a fixture for
+  # --request at all
+  cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-decide.sh" "$ROOT/bin/fm-diagram.sh" "$d/bin/"
+  cp "$ROOT/i18n/ui.en.json" "$ROOT/i18n/ui.zh-TW.json" "$ROOT/i18n/tw2cn.tsv" "$d/i18n/"
   [ -f "$ROOT/bin/watch-decisions.ts" ] && cp "$ROOT/bin/watch-decisions.ts" "$d/bin/"
   printf '%s' "$d"
 }
@@ -21,6 +25,57 @@ assert_ok "test -f '$out'" "a request writes a pending file"
 assert_eq "merge" "$(jq -r .kind "$out")" "it records the kind"
 assert_eq "9" "$(jq -r .pr "$out")" "it records the pull request"
 assert_contains "$(jq -r .type < "$d/state/events.jsonl")" "decision_requested" "it emits decision_requested"
+
+# ------------------------------------------- requesting a decision draws it
+#
+# The board draws nothing. Every decision card mounts an iframe and HEADs
+# board/public/diagrams/D-<n>.<lang>.html before it shows it; if nobody ran
+# the generator, that HEAD is answered 404 and the frame deletes itself -
+# for every reader and every decision, indefinitely, and looking exactly like
+# the case the board is designed for, a decision that legitimately has no
+# drawing. Nothing downstream can tell those apart, which is why the
+# assertion has to be here, at the moment the file is supposed to appear.
+for l in en zh-TW zh-CN; do
+  assert_ok "test -s '$d/board/public/diagrams/D-1.$l.html'" "requesting D-1 drew its $l diagram"
+done
+assert_contains "$(cat "$d/board/public/diagrams/D-1.en.html")" "merge it?" \
+  "and the drawing is of this decision, not a blank frame"
+assert_contains "$(cat "$d/board/public/diagrams/D-1.zh-CN.html")" "闸门" \
+  "with the derived language derived, the same as any other decision"
+
+# --request answers with one thing, the pending file. The generator prints
+# the three paths it wrote; passing its stdout through would put them on the
+# same stream the caller reads that answer from.
+out4="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --request D-4 --task T-1 --title "another" 2>/dev/null)"
+assert_eq "$d/state/pending/D-4.json" "$out4" "the request still prints the pending file and nothing else"
+
+# A drawing that cannot be made must not take the decision with it: the
+# request is what the captain is waiting on. Silently is the other half -
+# a swallowed failure here is a board that is quietly missing a picture and
+# a log that says everything went fine.
+d5="$(fixture)"
+cat > "$d5/bin/fm-diagram.sh" <<'X'
+#!/usr/bin/env bash
+echo "fm-diagram: the table is on fire" >&2
+exit 73
+X
+chmod +x "$d5/bin/fm-diagram.sh"
+err5="$(FM_ROOT="$d5" "$d5/bin/fm-decide.sh" --request D-5 --task T-5 --title "still asked" 2>&1 >/dev/null)"
+rc5=$?
+assert_eq "0" "$rc5" "a generator that fails does not fail the decision request"
+assert_ok "test -f '$d5/state/pending/D-5.json'" "the decision is still pending"
+assert_contains "$(jq -r .type < "$d5/state/events.jsonl" | tr '\n' ' ')" "decision_requested" \
+  "and decision_requested is still emitted"
+assert_contains "$err5" "D-5" "while the drawing that failed is reported rather than swallowed"
+assert_contains "$err5" "73"  "with the number the generator exited with"
+assert_eq "" "$(find "$d5/board/public/diagrams" -name 'D-5.*' 2>/dev/null)" \
+  "and nothing half-drawn was left behind"
+
+# a tree with no generator in it is the same shape: recorded, and said
+d6="$(fixture)"; rm -f "$d6/bin/fm-diagram.sh"
+err6="$(FM_ROOT="$d6" "$d6/bin/fm-decide.sh" --request D-7 --task T-7 --title "no generator here" 2>&1 >/dev/null)"
+assert_ok "test -f '$d6/state/pending/D-7.json'" "a tree with no generator still records the decision"
+assert_contains "$err6" "D-7" "and still says the diagram was not drawn"
 
 # an answer already on disk returns at once, and survives a restart
 mkdir -p "$d/state/decisions"
@@ -57,5 +112,5 @@ assert_fail "FM_ROOT='$d4' '$d4/bin/fm-decide.sh' --await D-9 --timeout 2" "it t
 # the words may appear in a comment explaining the absence; a call may not
 assert_fail "grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-decide.sh' | grep -qE '\\b(fswatch|watchexec|entr)\\b'" \
   "it calls neither fswatch, watchexec nor entr"
-rm -rf "$d" "$d2" "$d3" "$d4" "$stub"
+rm -rf "$d" "$d2" "$d3" "$d4" "$d5" "$d6" "$stub"
 finish

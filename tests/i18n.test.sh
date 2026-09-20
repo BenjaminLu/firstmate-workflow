@@ -84,7 +84,14 @@ mkdir -p "$d/bin" "$d/i18n" "$d/state/pending" "$d/design/diagrams" "$d/board/pu
 # every assertion under it a report about the fixture
 cp "$ROOT/bin/fm-diagram.sh" "$ROOT/bin/fm-emit.sh" "$d/bin/"
 cp "$en" "$tw" "$tbl" "$d/i18n/"
-cp "$ROOT/board/public/index.html" "$ROOT/board/public/ship.js" "$d/board/public/"
+# the directory, not a list of names. A list drifts: it was index.html and
+# ship.js, so diagram.js - added by the same change this block was written
+# for - was never in the tree, and "while still covering the authored pages"
+# passed without covering the new one. Any diagrams already sitting in the
+# developer's own board/public go, because the point below is a tree where
+# THIS run generated the only one.
+cp -R "$ROOT/board/public/." "$d/board/public/"
+rm -rf "$d/board/public/diagrams"
 printf '%s\n' '{"id":"D-001","task":"T-001","kind":"merge","title":"merge it","pr":1}' \
   > "$d/state/pending/D-001.json"
 "$d/bin/fm-diagram.sh" --decision D-001 --repo "$d" >/dev/null 2>&1
@@ -103,7 +110,11 @@ assert_contains "$everything" "diagrams/D-001.zh-TW.html" \
 
 scanned="$(page_files "$d")"
 assert_lacks "$scanned" "diagrams/" "the lint's own scan walks past generated diagrams"
-assert_contains "$scanned" "index.html" "while still covering the authored pages"
+# every page the real scan covers, named by the real scan. "covering the
+# authored pages" asserted against a hand-written list is an assertion about
+# the list.
+assert_eq "$(page_files "$ROOT" | sed "s|^$ROOT/||")" "$(page_files "$d" | sed "s|^$d/||")" \
+  "while still covering every authored page the lint scans in the repository"
 assert_ne "$everything" "$scanned" "so the exclusion is what is keeping it out, not luck"
 scanhan="$(perl -CSD -ne 'print if /\p{Han}/' $scanned 2>/dev/null | wc -l | tr -d ' ')"
 assert_eq "0" "$scanhan" "so a pending decision cannot turn the lint red"
