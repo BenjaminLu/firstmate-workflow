@@ -78,7 +78,9 @@ done
 [ "$rc" = "2" ] && { echo "fm-worker: every vendor was unavailable" >&2; exit 2; }
 
 rm -f "$prompt"
-if [ -z "$(git -C "$tree" status --porcelain)" ]; then
+# the same predicate the chain was given, not a second spelling of it: the
+# two agreed only because the prompt happened to be removed between them
+if ! worker_did_work; then
   echo "fm-worker: the adapter changed nothing" >&2
   emit --type gate_failed --en "the adapter changed nothing" --tw "adapter 沒有改動任何檔案"
   exit 1

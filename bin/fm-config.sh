@@ -64,7 +64,11 @@ fm_vendor_chain() {
 #   Work beats a signature, and the chain stops there. FM_VENDOR_MISREAD names
 #   the vendor this happened to, so the caller can say so.
 #
-#   FM_VENDOR_SPOKE is 1 when some attempt produced output of its own. With
+#   FM_VENDOR_SPOKE is 1 when some attempt produced output of its own -
+#   bytes appended to the log, or, in per-vendor mode only, a file in its
+#   own directory. In shared mode the directory is the caller's artefact and
+#   was not empty to begin with, so it cannot answer the question and is not
+#   consulted. With
 #   the return code it is the whole of what a caller needs: rc 2 with
 #   nothing said is a vendor that was not there; rc 2 with something said is
 #   an engine that ran badly. Neither caller may re-derive this by looking
@@ -76,7 +80,8 @@ fm_vendor_chain() {
 #   vendor had already done.
 #
 #   <outmode> "per-vendor" gives each attempt its own directory under <tree>
-#   and names it in FM_RUN_OUTDIR; the default shares <tree>, which is what
+#   and names it in FM_RUN_OUTDIR (in shared mode that is <tree> itself,
+#   shared by every attempt); the default shares <tree>, which is what
 #   a worker wants because the worktree IS the artefact. FM_RUN_LOG_OFF is
 #   where this attempt's bytes start in the shared log, so an evidence
 #   predicate can read its own output and no one else's.
@@ -120,9 +125,16 @@ fm_run_chain() {
     # engine that ran badly from one that was not there, and this is the
     # only place that can answer it - an adapter's notice about a missing
     # CLI goes to stderr precisely so it does not count here.
+    #
+    # In shared mode the directory IS the artefact and is never empty, so
+    # only the log slice can answer this; the per-vendor directory starts
+    # empty and anything in it was written by this attempt. The meaning is
+    # the same in both modes: bytes this attempt produced.
     after="$(wc -c "$log" 2>/dev/null | awk '{print $1}')"; [ -n "$after" ] || after=0
     [ "$after" != "$FM_RUN_LOG_OFF" ] && FM_VENDOR_SPOKE=1
-    [ -n "$(ls -A "$out" 2>/dev/null)" ] && FM_VENDOR_SPOKE=1
+    if [ "$outmode" = "per-vendor" ] && [ -n "$(ls -A "$out" 2>/dev/null)" ]; then
+      FM_VENDOR_SPOKE=1
+    fi
     if [ "$rc" = 2 ] && [ -n "$evidence" ] && $evidence; then
       FM_VENDOR_USED="$v"; FM_VENDOR_MISREAD="$v"; return 0
     fi

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# fm:lint-source  # this file quotes the shapes it forbids; lints skip it
 # The one gate. Both the local pre-push check and GitHub Actions run this file,
 # so there is no second copy of the steps to drift out of sync.
 #
@@ -62,7 +63,7 @@ stage "test hygiene"
 suitefiles=(tests/*.test.sh)
 bad=''
 if [ ${#suitefiles[@]} -gt 0 ]; then
-  bad=$(grep -nE 'assert_(ok|fail) "grep [^|]*\$(ROOT|[A-Za-z_]*ROOT)[^|]*"' "${suitefiles[@]}" 2>/dev/null \
+  bad=$(grep -HnE 'assert_(ok|fail) "grep [^|]*\$(ROOT|[A-Za-z_]*ROOT)[^|]*"' "${suitefiles[@]}" 2>/dev/null \
         | grep -v 'grep -v' || true)
 fi
 if [ -n "$bad" ]; then
@@ -80,7 +81,8 @@ fi
 # about half the time. assert_contains and assert_lacks take data as data.
 evalled=''
 if [ ${#suitefiles[@]} -gt 0 ]; then
-  evalled="$(grep -n "assert_\(ok\|fail\) \"printf" "${suitefiles[@]}" 2>/dev/null || true)"
+  evalled="$(grep -Hn "assert_\(ok\|fail\) \"printf" "${suitefiles[@]}" 2>/dev/null \
+    | grep -v '^[^:]*:[0-9]*: *#' || true)"
 fi
 if [ -n "$evalled" ]; then
   flunk "an assertion evals captured output; use assert_contains or assert_lacks"
@@ -93,8 +95,15 @@ fi
 # producer takes SIGPIPE, and the pipeline reports failure even though the
 # match happened. `yes MATCH | grep -qi match` returns 141. A here-string
 # has no producer to kill and takes the data as data.
-piped="$(grep -n '| *grep -[qc]' bin/*.sh bin/adapters/*.sh 2>/dev/null \
-  | grep -v '^bin/ci.sh' | grep -v '^[^:]*: *#' || true)"
+# grep -n prints path:line:text, so a comment filter has to skip TWO
+# fields - `^[^:]*: *#` could only ever match the line number, and never
+# did. And ci.sh is skipped the way a sourced library is: by a marker it
+# declares about itself, not by its name.
+piped="$(grep -Hn '| *grep -[qc]' bin/*.sh bin/adapters/*.sh 2>/dev/null \
+  | grep -v '^[^:]*:[0-9]*: *#' \
+  | while IFS=: read -r pf rest; do
+      grep -q '^# fm:lint-source' "$pf" || printf '%s:%s\n' "$pf" "$rest"
+    done || true)"
 if [ -n "$piped" ]; then
   flunk "a pipeline feeds grep -q or -c; use a here-string"
   printf '%s\n' "$piped"
@@ -161,6 +170,7 @@ undirected=''
 for f in bin/*.sh; do
   case "$f" in */ci.sh) continue ;; esac
   hits="$(sed -e :a -e '/\\$/N; s/\\\n//; ta' "$f" \
+    | grep -v '^[[:space:]]*#' \
     | sed -e 's/\[ *-[a-z] *"[^"]*" *\]//g' \
           -e 's/command -v [^ ]*//g' \
           -e 's/[A-Za-z_][A-Za-z_0-9]*="[^"]*bin\/[^"]*"//g' \

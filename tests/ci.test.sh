@@ -187,6 +187,36 @@ plant "a hand-rolled swap turns the hygiene stage red" "saves a script by hand"
 plant "and the stage names the suite" "hand-rolled.test.sh"
 rm -f "$q/tests/hand-rolled.test.sh"
 
+# The negative half of each exclusion. A lint with a plant for the thing it
+# catches and none for the thing it lets through is half a lint: the
+# exclusion is where the false positives live, and one of these was dead
+# code that never matched anything.
+printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n# printf x | grep -q y\necho ok\n' \
+  > "$q/bin/fm-commented.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_contains "$out" "ci: green" "a hazard quoted in a comment is not a hazard"
+rm -f "$q/bin/fm-commented.sh"
+
+printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n# "$REPO/bin/fm-emit.sh" --type x\necho ok\n' \
+  > "$q/bin/fm-commented.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_contains "$out" "ci: green" "a dispatch quoted in a comment is not a dispatch"
+rm -f "$q/bin/fm-commented.sh"
+
+printf '#!/usr/bin/env bash\n# fm:lint-source\nset -uo pipefail\nexec < /dev/null\ns=hi\nprintf "%%s" "$s" | grep -q hi\n' \
+  > "$q/bin/fm-quoter.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_contains "$out" "ci: green" "a file that declares itself a lint source is skipped"
+rm -f "$q/bin/fm-quoter.sh"
+
+{ printf '#!/usr/bin/env bash\n'
+  printf '# assert_%s "%s '%%s' \\"$out\\" | grep -q x" "in a comment"\n' fail printf
+} > "$q/tests/commented.test.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_contains "$out" "ci: green" "an evalling assertion quoted in a comment is not one"
+rm -f "$q/tests/commented.test.sh"
+
+
 # this repository does have sourced libraries, and the marker is how the
 # gate knows: if it were deleted, the stage would report zero and pass
 # counted directly, not by running the gate: this suite IS one of the
@@ -207,6 +237,9 @@ printf '#!/usr/bin/env bash\n# fm:sourced\nx=$(date)\necho "$x"\n' > "$q/bin/fm-
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 assert_contains "$out" "ci: green" "a declared library with no redirect is simply fine"
 stdin_stage="$(printf '%s\n' "$out" | sed -n '/== stdin/,/== dag/p')"
+# an extraction that found nothing makes assert_lacks pass on the empty
+# string, which is green for an assertion that read nothing
+assert_ne "" "$stdin_stage" "the stdin stage was found in the output"
 assert_lacks "$stdin_stage" "fm-lib.sh" "and the dispatch stage leaves it alone"
 rm -f "$q/bin/fm-lib.sh"
 

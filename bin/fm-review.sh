@@ -73,13 +73,22 @@ mkdir -p "$work/out"
 # only this attempt's bytes: its own output directory, and the part of the
 # shared log it wrote. A vendor that died half way through must not sign on
 # the next one's behalf.
-# no pipeline here: with `set -o pipefail` a cat that finds nothing makes
-# the whole pipeline fail even when the grep matched, and the predicate then
-# reports "no verdict" for a review that is sitting right there.
+# ONE definition of what an attempt produced, used by the predicate, by the
+# verdict and by the kept log. There were three: the predicate read the out
+# directory and the log together, the verdict took the out directory if it
+# had anything at all in it, and the log only otherwise. A reviewer whose
+# agent left a scratch file in its working directory therefore had its
+# signed review - printed on stdout, in the log - thrown away for the
+# scratch file, and the round repeated for ever.
+#
+# No pipeline in it either: with `set -o pipefail` a cat that finds nothing
+# fails the whole pipeline even when the grep matched.
+attempt_output() {
+  { cat "${FM_RUN_OUTDIR:-$work/out}"/* 2>/dev/null
+    tail -c "+$((${FM_RUN_LOG_OFF:-0} + 1))" "$work/log" 2>/dev/null; } || true
+}
 review_is_signed() {
-  local seen
-  seen="$( { cat "$FM_RUN_OUTDIR"/* 2>/dev/null
-             tail -c "+$((FM_RUN_LOG_OFF + 1))" "$work/log" 2>/dev/null; } || true )"
+  local seen; seen="$(attempt_output)"
   case "$seen" in *"APPROVE:$TASK"*|*"REJECT:$TASK"*) return 0 ;; esac
   return 1
 }
@@ -94,9 +103,7 @@ for v in $FM_VENDOR_SKIPPED; do
   emit --type vendor_unavailable --en "$v unavailable, trying the next" \
        --tw "$v 不可用，換下一家"
 done
-# the same discipline for the verdict itself: what THIS vendor produced
-verdict="$(cat "${FM_RUN_OUTDIR:-$work/out}"/* 2>/dev/null)"
-[ -n "$verdict" ] || verdict="$(tail -c "+$((${FM_RUN_LOG_OFF:-0} + 1))" "$work/log" 2>/dev/null)"
+verdict="$(attempt_output)"
 
 # The chain says which of the two this was, and both callers read the same
 # answer: rc 2 with nothing said is a vendor that was not there, and only
@@ -125,7 +132,10 @@ if [ "$signed" = "0" ]; then
   # and whatever it left in the output directory. The failure path is
   # exactly when someone needs to read it; only the success path may discard.
   kept="$(keep_log)"
-  { cat "$work/log" 2>/dev/null; cat "${FM_RUN_OUTDIR:-$work/out}"/* 2>/dev/null; } > "$kept"
+  # the whole log here, not just this attempt's slice: on the failure path
+  # every vendor's excuse is worth reading, and the attempt's own output is
+  # already inside it
+  { cat "$work/log" 2>/dev/null; attempt_output; } > "$kept"
   echo "fm-review: ${FM_VENDOR_USED:-the reviewer} produced no review (exit $rc); its log is at $kept" >&2
   emit --type review_failed --en "review round $ROUND produced nothing" \
        --tw "第 $ROUND 輪審核沒有產出"

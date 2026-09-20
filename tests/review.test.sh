@@ -172,6 +172,23 @@ printf 'vendor: mock\nreviewer:\n  vendor: other\nfallback:\n  - mock\n' > "$r/c
 out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
 assert_contains "$out" "reviewed by the other engine" "the reviewer block picks the engine"
 
+# the review is on stdout and the agent left a scratch file in its working
+# directory. Reading the working directory alone would discard the review
+# and repeat the round for ever.
+stub_script "$r/bin/adapters/down.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'a note the agent left behind\n' > "$3/notes.md"
+printf 'Two findings, both the same class.\nREJECT:T-Z\n' >> "$4"
+exit 2
+M
+printf 'vendor: mock\nreviewer:\n  vendor: down\nfallback:\n  - mock\n' > "$r/config.yaml"
+out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 9 --pr 9 2>&1)"
+assert_eq "0" "$?" "a review on stdout is not lost to a scratch file beside it"
+assert_contains "$out" "REJECT:T-Z" "and it is the verdict"
+assert_contains "$out" "a note the agent left behind" "with everything the attempt produced"
+restore_scripts
+
 # an engine misread as unavailable that signed a verdict anyway keeps it:
 # the reviewer's output IS the review, so throwing it away would repeat the
 # same round forever
