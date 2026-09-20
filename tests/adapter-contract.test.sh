@@ -109,7 +109,12 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
       gemini) assert_eq "" "$argv" "$name uses the documented headless form"
               assert_fail "printf '%s' ' $argv ' | grep -q ' -p '" "$name passes no dangling -p" ;;
       # codex reads stdin only when the last argument is the marker "-"
-      codex) assert_eq "-" "${argv##* }" "$name keeps the stdin marker last" ;;
+      # codex reads a prompt only as `codex exec ... -`: the subcommand, the
+      # flag that lets it run outside a repository, and the stdin marker
+      # last. Asserting only the marker let the rest drift.
+      codex) assert_eq "exec" "${argv%% *}" "$name asks for the non-interactive subcommand"
+             assert_contains " $argv " " --skip-git-repo-check " "$name does not require a repository"
+             assert_eq "-" "${argv##* }" "$name keeps the stdin marker last" ;;
     esac
 
     vendor_says "wrote the thing" 0
@@ -225,10 +230,14 @@ assert_eq "2" "$(verdict "$(printf 'padding\n%.0s' $(seq 1 400))
 getaddrinfo ENOTFOUND api.example.com" 1)" \
   "and both signature lists are searched, not just the one a model might write"
 
-# a banner before the failure must not hide it: the window is the opening in
-# bytes, not a fixed number of lines
+# there is no window at all now: a banner of any length cannot bury it, on
+# either exit code. The 2000-byte opening was the last constant fitted to a
+# fixture, and this is what replaces it.
 assert_eq "2" "$(verdict "$(printf 'notice\n%.0s' $(seq 1 30))
 Error: quota exceeded for this organisation" 0)" "a banner does not bury the outage"
+assert_eq "2" "$(verdict "$(printf 'chatter\n%.0s' $(seq 1 600))
+Error: quota exceeded for this organisation" 0)" \
+  "and neither does four kilobytes of it, on exit 0"
 
 # the fallback chain shares one log: a verdict reads only its own bytes
 printf '%s' "Error: Authentication required" > "$v/log"

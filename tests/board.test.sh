@@ -86,8 +86,10 @@ rm -rf "$d"
 # the event types the board maps and the types fm-emit will write are two
 # halves of one list. T-010's rule - shared things have one source - applies
 # to these as much as to the ship's geometry.
+# strip the comments first, the way the sibling assertion above does: a
+# type named only in a comment is not a type the board maps
 mapped="$(sed -n '/^const STAGE/,/^};/p' "$ROOT/board/server.ts" \
-  | grep -oE '[a-z_]+:' | tr -d ':' | sort -u)"
+  | sed 's|//.*||' | grep -oE '[a-z_]+:' | tr -d ':' | sort -u)"
 known="$(sed -n '/^TYPES=/,/"$/p' "$ROOT/bin/fm-emit.sh" | tr ' \\"' '\n\n\n' | grep -E '^[a-z_]+$' | sort -u)"
 unknown=''
 for t in $mapped; do

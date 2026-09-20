@@ -72,21 +72,34 @@ cap3="$d/sent3.md"
   bin/fm-review.sh --task T-Z --branch work --round 3 >/dev/null 2>&1 )
 assert_contains "$(cat "$cap3")" "CRITERIA-COMPLETE:T-Z" "round three asks for the closed list"
 
-# an unavailable reviewer vendor is not a rejection - and the engines' log
-# is exactly what someone needs when nothing would run
-cat > "$r/bin/adapters/mock.sh" <<'M'
+# An outage is a run that produced nothing at all - a CLI that is not there.
+# That is the only thing that earns exit 2, because 2 tells fm-run to try
+# again next turn, and a run that DID produce something will produce the
+# same something next turn, for ever.
+stub_script "$r/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+exit 2
+M
+rm -f "$r/state/reviews/T-Z-r7.log"
+outU="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 7 2>&1)"
+assert_eq "2" "$?" "a reviewer that produced nothing at all is an outage"
+assert_ok "test -f '$r/state/reviews/T-Z-r7.log'" "and the round still leaves a file to read"
+assert_contains "$outU" "state/reviews/T-Z-r7.log" "and says where to read it"
+
+# but a run that said something, however unusable, is a failed round
+stub_script "$r/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
 printf 'mock: not logged in\n' >> "$4"
 exit 2
 M
-chmod +x "$r/bin/adapters/mock.sh"
-rm -f "$r/state/reviews/T-Z-r7.log"
-outU="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 7 2>&1)"
-assert_eq "2" "$?" "an unavailable vendor exits 2"
-assert_contains "$(cat "$r/state/reviews/T-Z-r7.log" 2>/dev/null)" "not logged in" \
-  "and an outage keeps what the engines said"
-assert_contains "$outU" "state/reviews/T-Z-r7.log" "and says where to read it"
+rm -f "$r/state/reviews/T-Z-r8.log"
+( cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 8 >/dev/null 2>&1 )
+assert_eq "3" "$?" "a reviewer that said something unusable is a failed round"
+assert_contains "$(cat "$r/state/reviews/T-Z-r8.log" 2>/dev/null)" "not logged in" \
+  "and what it said is kept"
+restore_scripts
 rm -rf "$d" "$d2"
 # a review that did not happen must not look like one that did
 d="$(fixture)"; r="$d/repo"; GH="$(ghstub "$d")"
@@ -166,6 +179,25 @@ out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch 
 assert_eq "0" "$?" "a signed verdict survives being read as an outage"
 assert_contains "$out" "REJECT:T-Z" "and it is the verdict"
 assert_contains "$out" "was read as unavailable" "and the reviewer says it was misread"
+printf 'vendor: mock\nreviewer:\n  vendor: other\nfallback:\n  - mock\n' > "$r/config.yaml"
+
+# an engine that ran and said something unsigned is a failed round, even
+# when what it said trips the signature list. Reporting that as an outage
+# would have fm-run retry it every turn on the same input, for ever.
+stub_script "$r/bin/adapters/down.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'I could not reach a view on the rate limit changes.\n' > "$3/verdict.txt"
+exit 0
+M
+printf 'vendor: mock\nreviewer:\n  vendor: down\nfallback:\n  - mock\n' > "$r/config.yaml"
+out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 6 --pr 9 2>&1)"
+assert_eq "3" "$?" "unsigned output that trips the signature list is a failed round, not an outage"
+assert_contains "$(cat "$r/state/reviews/T-Z-r6.log" 2>/dev/null)" "rate limit" \
+  "and what it said is kept, from the output directory as well as the log"
+assert_contains "$(jq -r .type < "$r/state/events.jsonl" | tr '\n' ' ')" "review_failed" \
+  "and it emitted review_failed"
+restore_scripts
 printf 'vendor: mock\nreviewer:\n  vendor: other\nfallback:\n  - mock\n' > "$r/config.yaml"
 
 # a round that ends in neither marker is an engine that failed, not a verdict

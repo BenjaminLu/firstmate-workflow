@@ -72,16 +72,20 @@ for v in $FM_VENDOR_SKIPPED; do
   emit --type vendor_unavailable --en "$v unavailable, trying the next" \
        --tw "$v 不可用，換下一家"
 done
-if [ "$rc" = "2" ]; then
+verdict="$(cat "$work/out"/* 2>/dev/null)"
+[ -n "$verdict" ] || verdict="$(cat "$work/log" 2>/dev/null)"
+
+# An outage is a run that produced nothing. Anything else - an engine that
+# ran and said something unsigned - is a round that failed, and has to be
+# reported as one: exit 2 tells fm-run to try again next turn, which on the
+# same input produces the same result for ever. Only silence earns a 2.
+if [ "$rc" = "2" ] && [ -z "$verdict" ]; then
   kept="$REPO/state/reviews/$TASK-r$ROUND.log"
   mkdir -p "$(dirname "$kept")"
-  cp "$work/log" "$kept" 2>/dev/null || true
+  cp "$work/log" "$kept" 2>/dev/null || : > "$kept"
   echo "fm-review: every reviewer vendor was unavailable; their log is at $kept" >&2
   rm -rf "$work"; exit 2
 fi
-
-verdict="$(cat "$work/out"/* 2>/dev/null)"
-[ -n "$verdict" ] || verdict="$(cat "$work/log" 2>/dev/null)"
 # a review that did not happen must never look like one that did. An empty
 # verdict used to reach the pull request as the adapter's own log, and gate 7
 # would then be reading a stack trace for a signature.
@@ -94,9 +98,12 @@ if [ "$rc" != "0" ] || [ -z "$verdict" ] || [ "$signed" = "0" ]; then
   # the adapter log is the only record of what the engine actually said, and
   # the failure path is exactly when someone needs to read it. Only the
   # success path may discard.
+  # keep everything that was said, from wherever it came: the engine's log
+  # and whatever it left in the output directory. The failure path is
+  # exactly when someone needs to read it.
   kept="$REPO/state/reviews/$TASK-r$ROUND.log"
   mkdir -p "$(dirname "$kept")"
-  cp "$work/log" "$kept" 2>/dev/null || true
+  { cat "$work/log" 2>/dev/null; cat "$work/out"/* 2>/dev/null; } > "$kept"
   echo "fm-review: ${FM_VENDOR_USED:-the reviewer} produced no review (exit $rc, signed $signed); its log is at $kept" >&2
   emit --type review_failed --en "review round $ROUND produced nothing" \
        --tw "第 $ROUND 輪審核沒有產出"

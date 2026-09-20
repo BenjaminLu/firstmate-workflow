@@ -108,6 +108,64 @@ if command -v shellcheck >/dev/null 2>&1; then
 else
   printf '    %s\n' "(shellcheck not installed, adapter lint unchecked)"
 fi
+
+# --- every lint, planted ------------------------------------------------
+# A lint nobody has ever seen fail is a lint nobody knows works. Each of
+# these plants exactly what the stage looks for and asserts the gate flunks
+# AND names the offender, because a stage that goes red without saying what
+# it found sends the reader back to the source.
+plant() {   # plant <label> <expected fragment> ; the fixture is built first
+  local label="$1" want="$2" out
+  out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+  assert_contains "$out" "$want" "$label"
+}
+
+# a script that dispatches without closing standard input
+printf '#!/usr/bin/env bash\nset -uo pipefail\nx=$(date)\necho "$x"\n' > "$q/bin/fm-leaky.sh"
+plant "an unguarded dispatcher turns the stdin stage red" "without closing standard input"
+plant "and the stage names the script" "fm-leaky.sh"
+rm -f "$q/bin/fm-leaky.sh"
+
+# a hand-rolled save-and-restore in a suite
+# assembled, or this suite carries the very string it plants and the lint
+# flags the file that tests it - the same trap as the planted source-grep
+printf '#!/usr/bin/env bash\ncp "$r/bin/x.sh" "$r/x.%s"\n' 'keep"' > "$q/tests/hand-rolled.test.sh"
+plant "a hand-rolled swap turns the hygiene stage red" "saves a script by hand"
+plant "and the stage names the suite" "hand-rolled.test.sh"
+rm -f "$q/tests/hand-rolled.test.sh"
+
+# a second implementation of the vendor chain
+printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\nfor v in $chain; do :; done\n' \
+  > "$q/bin/fm-second-chain.sh"
+plant "a second vendor loop turns its stage red" "loops over vendors on its own"
+plant "and the stage names the script" "fm-second-chain.sh"
+rm -f "$q/bin/fm-second-chain.sh"
+
+# a second writer of the event log
+printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\necho x >> state/events.jsonl\n' \
+  > "$q/bin/fm-sneaky.sh"
+plant "a second writer of the event log turns the lint red" "outside fm-emit.sh"
+rm -f "$q/bin/fm-sneaky.sh"
+
+# the design and tasks.json disagreeing
+mkdir -p "$q/design"
+printf '{"tasks":[{"id":"T-999","title":"nowhere in the design"}]}\n' > "$q/design/tasks.json"
+printf '# a design with no task table\n' > "$q/design/design.md"
+plant "an id the design does not list turns the dag stage red" "the design does not list"
+plant "and the stage names the id" "T-999"
+rm -rf "$q/design"
+
+# a suite that fails
+printf '#!/usr/bin/env bash\nexit 1\n' > "$q/tests/doomed.test.sh"
+plant "a failing suite turns the bash stage red" "doomed.test.sh"
+rm -f "$q/tests/doomed.test.sh"
+
+# The two left: the bun and playwright stages report the runner's own
+# output, which their own suites cover, and there is no way to plant a
+# failure in them that is not just a failing spec.
+rm -rf "$q/bin/adapters"   # the broken adapter planted further up
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_contains "$out" "ci: green" "and the fixture is green again once every plant is pulled"
 rm -rf "$q"
 
 finish

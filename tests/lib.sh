@@ -17,15 +17,25 @@ assert_contains() { _t "$3"; case "$1" in *"$2"*) ok;; *) bad "missing [$2]";; e
 _swapped=''
 stub_script() {   # stub_script <path> ; the stub body arrives on stdin
   local p="$1"
-  [ -f "$p.orig" ] || cp "$p" "$p.orig" 2>/dev/null || : > "$p.orig"
+  # only the FIRST swap records the original, so stubbing the same path
+  # twice still restores what was there before the first one
+  if [ ! -e "$p.orig" ] && [ ! -e "$p.absent" ]; then
+    if [ -e "$p" ]; then cp "$p" "$p.orig"; else : > "$p.absent"; fi
+  fi
   cat > "$p"; chmod +x "$p"
   case " $_swapped " in *" $p "*) ;; *) _swapped="$_swapped $p" ;; esac
 }
 restore_scripts() {
   local p
   for p in $_swapped; do
-    [ -s "$p.orig" ] && cp "$p.orig" "$p" && chmod +x "$p"
-    rm -f "$p.orig"
+    if [ -e "$p.absent" ]; then
+      # there was nothing here before: leaving the stub behind would let it
+      # be found by whatever runs next
+      rm -f "$p" "$p.absent"
+    else
+      cp "$p.orig" "$p" 2>/dev/null && chmod +x "$p"
+      rm -f "$p.orig"
+    fi
   done
   _swapped=''
 }

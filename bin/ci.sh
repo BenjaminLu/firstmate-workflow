@@ -52,6 +52,13 @@ stage "test hygiene"
 # an assertion that greps a source file is satisfied by a comment unless it
 # filters them out. This has been written three times now; the machine checks
 # it from here on.
+#
+# What it catches: the `assert_ok "grep ... $ROOT..."` shape, which is how
+# the mistake has always been written here. What it does NOT catch: a source
+# grep built any other way - a variable assigned from sed|grep and then
+# asserted on, for instance. Those are on the author. Widen this when one of
+# them bites, not before, because a lint that flags every grep is a lint
+# people learn to ignore.
 suitefiles=(tests/*.test.sh)
 bad=''
 if [ ${#suitefiles[@]} -gt 0 ]; then
@@ -70,6 +77,11 @@ fi
 # the bottom of the file, then duplicated or lost by the next edit.
 # stub_script pairs them and finish undoes them whether the suite remembered
 # or not.
+#
+# What it catches: a `.keep"` file, which is how that mistake was written
+# here. It is a tripwire on one idiom, not a proof that every swap is
+# paired - a suite that saves to `$d/saved-copy` walks past it. The real
+# guarantee is that stub_script exists and is easier than the alternative.
 if [ ${#suitefiles[@]} -gt 0 ] && grep -ln '\.keep"' "${suitefiles[@]}" >/dev/null 2>&1; then
   flunk "a suite saves a script by hand; use stub_script"
   grep -n '\.keep"' "${suitefiles[@]}"
@@ -77,8 +89,17 @@ else
   pass "every swapped script is paired with its restore"
 fi
 
-# the guarantee that nothing reads standard input has to hold for every
-# script that dispatches a child, not only the ones that were remembered
+# The guarantee that nothing reads standard input, checked against every
+# script that looks like it starts a child. "Looks like" is the honest word:
+# the test is a grep for command substitution, a call to another fm script,
+# the vendor chain, or gh - not a proof that the script dispatches. It errs
+# towards demanding the line, which costs nothing.
+#
+# board/server.ts is out of scope because it is not a shell script and Bun
+# gives a spawned child a closed stdin by default. bin/adapters/*.sh are
+# exempt because each one redirects the prompt into its vendor on the one
+# line that starts a child - that is their whole job, and the contract test
+# asserts the redirect per adapter.
 stage "stdin"
 dispatchers=''
 for f in bin/*.sh; do
@@ -92,8 +113,10 @@ else
   pass "every script that dispatches closes standard input"
 fi
 
-# and the vendor chain has one implementation, so a second loop over
-# vendors cannot appear without this noticing
+# The vendor chain has one implementation. What this catches: a `for v in`
+# over a vendor list, which is the shape the duplicate would take. A second
+# implementation written any other way walks past it; the contract test
+# covering fm_run_chain is what makes that one visible.
 # fm-config.sh holds the one implementation; ci.sh is this lint
 loops="$(grep -ln 'for v in .*vendors\|for v in \$chain' bin/*.sh 2>/dev/null \
   | grep -vE 'fm-config\.sh|ci\.sh' || true)"
