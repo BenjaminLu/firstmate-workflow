@@ -268,6 +268,42 @@ code,.mono{font-family:var(--mono);font-size:.86em}
 .fig.a-lookout .armR{transform:rotate(-106deg)}
 .m-3d .fig.a-lookout{animation:scank 4.2s ease-in-out infinite}
 .fig.a-helm .armL,.fig.a-helm .armR{transform:rotate(-58deg)}
+.fig.a-saw .armL{transform:rotate(-46deg)}
+.m-3d .fig.a-saw .armR{animation:saw .7s ease-in-out infinite}
+@keyframes saw{0%,100%{transform:rotate(-30deg)}50%{transform:rotate(-62deg)}}
+.fig.a-carry .armL,.fig.a-carry .armR{transform:rotate(-78deg)}
+.m-3d .fig.a-carry{animation:trudge 1.6s ease-in-out infinite}
+@keyframes trudge{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+.fig.a-winch .armL{transform:rotate(-52deg)}
+.m-3d .fig.a-winch .armR{animation:crank 1.1s linear infinite}
+@keyframes crank{0%{transform:rotate(-20deg)}25%{transform:rotate(-58deg)}
+                 50%{transform:rotate(-96deg)}75%{transform:rotate(-58deg)}100%{transform:rotate(-20deg)}}
+.m-3d .fig.a-climb .armL{animation:climbL 1.4s ease-in-out infinite}
+.m-3d .fig.a-climb .armR{animation:climbR 1.4s ease-in-out infinite}
+@keyframes climbL{0%,100%{transform:rotate(-124deg)}50%{transform:rotate(-70deg)}}
+@keyframes climbR{0%,100%{transform:rotate(-70deg)}50%{transform:rotate(-124deg)}}
+.fig.a-point .armR{transform:rotate(-92deg)}
+.m-3d .fig.a-point{animation:bobk 3s ease-in-out infinite}
+.fig.a-write .armR{transform:rotate(-70deg)}
+.fig.a-write .armL{transform:rotate(-62deg)}
+.m-3d .fig.a-write .armR{animation:scribble .9s ease-in-out infinite}
+@keyframes scribble{0%,100%{transform:rotate(-70deg)}50%{transform:rotate(-58deg)}}
+.fig.a-lean .armL{transform:rotate(-96deg)} .fig.a-lean .armR{transform:rotate(-96deg)}
+.m-3d .fig.a-lean{animation:bobk 5.5s ease-in-out infinite}
+.m-3d .fig.a-signal .armR{animation:wave .8s ease-in-out infinite}
+@keyframes wave{0%,100%{transform:rotate(-132deg)}50%{transform:rotate(-158deg)}}
+/* tools for the new jobs */
+.fig.a-saw .tool{opacity:1;width:24px;height:6px;border-radius:1px;left:-14px;bottom:-4px;
+  background:linear-gradient(90deg,#dfe7ef,#6f7d8b);transform:translateZ(6px);
+  box-shadow:0 0 0 1px #26313c}
+.fig.a-carry .tool{opacity:1;width:20px;height:16px;border-radius:2px;left:-6px;bottom:-14px;
+  background:linear-gradient(160deg,#7d5630,#3d2718);box-shadow:0 0 0 1px #24160c;transform:translateZ(8px)}
+.fig.a-winch .tool{opacity:1;width:14px;height:4px;border-radius:2px;left:-2px;bottom:-6px;
+  background:#8a6438;transform:translateZ(6px)}
+.fig.a-write .tool{opacity:1;width:14px;height:11px;border-radius:1px;left:-4px;bottom:-8px;
+  background:#e8e2d2;box-shadow:0 0 0 1px #2a2318;transform:translateZ(8px)}
+.fig.a-signal .tool{opacity:1;width:16px;height:11px;left:-2px;bottom:-4px;transform:translateZ(6px);
+  background:#c9972f;clip-path:polygon(0 0,100% 0,78% 50%,100% 100%,0 100%)}
 /* the tool follows the job, not the role */
 .fig .tool{opacity:0}
 .fig.a-hammer .tool{opacity:1;width:16px;height:10px;border-radius:2px;transform:translateZ(6px);
@@ -307,7 +343,7 @@ code,.mono{font-family:var(--mono);font-size:.86em}
   transform:rotateX(74deg);transform-origin:50% 100%;box-shadow:inset 0 32px 54px rgba(0,0,0,.55)}
 .scene .plat{position:absolute;bottom:116px;left:64%;margin-left:-50px;width:100px;height:13px;border-radius:5px;
   background:linear-gradient(180deg,#31485e,#1a2836);box-shadow:0 5px 14px rgba(0,0,0,.5)}
-.scene .pivot{bottom:calc(var(--deckY0) + var(--r,0) * var(--rowStep));left:var(--px)}
+.scene .pivot{bottom:calc(var(--deckY0) + var(--r,0) * var(--rowStep));left:var(--px);z-index:3}
 .vend{display:inline-flex;align-items:center;gap:6px;font:600 11px var(--mono);color:var(--fg2);
   border:1px solid var(--line);border-radius:7px;padding:4px 10px;letter-spacing:.02em}
 .vend i{width:6px;height:6px;border-radius:50%;background:var(--fg3)}
@@ -415,8 +451,9 @@ code,.mono{font-family:var(--mono);font-size:.86em}
 .hullsvg{display:block;overflow:visible;
   filter:drop-shadow(0 14px 26px rgba(0,0,0,.62))}
 /* rig — quiet timber, canvas desaturated, one blood-red course */
-.mast{position:absolute;left:var(--mx);bottom:calc(var(--deckY0) + 4px);width:5px;border-radius:2px;
-  background:linear-gradient(90deg,#6b4c2c,#241708);transform:translateX(-50%);z-index:1}
+.mast{position:absolute;left:var(--mx);width:5px;border-radius:2px;z-index:1;
+  bottom:calc(var(--deckY0) + var(--topR,0) * var(--rowStep));
+  background:linear-gradient(90deg,#6b4c2c,#241708);transform:translateX(-50%)}
 .mast .yard{position:absolute;left:50%;width:var(--yw,74px);height:4px;border-radius:2px;
   transform:translateX(-50%);background:linear-gradient(90deg,#241708,#6b4c2c,#241708)}
 .mast .shroud{position:absolute;bottom:0;width:var(--rw,42px);height:var(--rh,54px);opacity:.34;
@@ -819,13 +856,22 @@ const FACES = '<i class="fr"></i><i class="sd"></i><i class="lf"></i><i class="b
 const bx  = cls => '<div class="bx '+cls+'">'+FACES+'</div>';
 const arm = (a,h,withTool) => '<div class="bx '+a+'">'+FACES
   + '<div class="bx '+h+'">'+FACES + (withTool?'<span class="tool"></span>':'') + '</div></div>';
+const DECK_JOBS = {
+  top:  ['lookout','signal','point','write','lean'],   // quarterdeck: watch, signal, direct
+  mid:  ['haul','winch','carry','climb','haul'],       // waist: work the lines and the capstan
+  main: ['hammer','saw','swab','carry','hammer'],      // main deck: build, cut, clean
+};
+const IDLE_JOBS = ['lean','swab','climb','carry','write','point','winch'];
+const hashOf = s => { let h=0; for(const ch of s) h=(h*31+ch.charCodeAt(0))|0; return Math.abs(h); };
 function actionOf(c,rows){
   if(c.role==='fm') return 'helm';
   if(c.st==='review'||c.role==='r') return 'lookout';
+  // no task assigned still means shipboard work, not five identical idlers
+  if(c.st==='queued') return IDLE_JOBS[hashOf(c.id+'i') % IDLE_JOBS.length];
   const top=(rows||1)-1;
-  if(c.row>=top && top>0) return 'lookout';     // top deck: watch
-  if(c.row===1) return 'haul';                  // mid deck: haul on the lines
-  return (c.id.charCodeAt(c.id.length-1)%2) ? 'hammer' : 'swab';   // main deck: build and swab
+  const lane = (top>0 && c.row>=top) ? 'top' : (c.row===1 ? 'mid' : 'main');
+  const pool = DECK_JOBS[lane];
+  return pool[hashOf(c.id) % pool.length];
 }
 function figureRaw(c){
   const role=c.role==='fm'?'fm':(c.role==='r'?'r':'w');
@@ -887,9 +933,9 @@ let DENS=1, ROWS=1;
 const ROWSTEP=96, HULLDEPTH=124, RIGBASE=104;   // room for a bubble above every head   // deeper hull, taller risers between decks
 // every deck is the same lens curve, scaled; the hull is that lens extruded downward
 const deckLens = r => ({ w: 1 - 0.15*r, y: r*ROWSTEP });
-const headroom = sp => (sp.rows-1)*ROWSTEP + 96;
-const mastH = (sp,isMain) => RIGBASE + headroom(sp) + sp.masts*5 + (isMain?26:0);
-const sceneH = sp => 96 + mastH(sp,true) + 52;
+const headroom = sp => 96;                       // masts start on the top deck, so only clear its crew
+const mastH = (sp,isMain) => RIGBASE + 96 + sp.masts*5 + (isMain?26:0);
+const sceneH = sp => 96 + (sp.rows-1)*ROWSTEP + mastH(sp,true) + 52;
 const deckOrder = () => [...CREW.filter(c=>c.role==='w'),...CREW.filter(c=>c.role==='fm'),
                          ...CREW.filter(c=>c.role==='r')];
 function layout(){
@@ -971,12 +1017,14 @@ function shipMarkup(sp,n){
   const deck0=svgH-((sp.rows-1)*ROWSTEP+34);          // px from svg bottom up to deck 0
   let m='';
   for(let i=0;i<sp.masts;i++){
-    const x = sp.masts===1 ? 50 : 22 + 56*i/(sp.masts-1);
+    const spread = sp.deckW*0.58;                    // stay inside the hull at every size
+    const x = sp.masts===1 ? 50 : 50 - spread/2 + spread*i/(sp.masts-1);
     const isMain=i===mainIdx, h=mastH(sp,isMain), w=58+sp.masts*7;
     const band=Math.max(60,h-12-clear);
     const topH=Math.round(band*0.38), loH=Math.round(band*0.5);
     const topY=12, loY=topY+topH+10;
-    m += '<div class="mast" style="--mx:'+x+'%;height:'+h+'px;--rw:'+Math.round(w*0.44)+'px;'
+    m += '<div class="mast" style="--mx:'+x.toFixed(2)+'%;--topR:'+(sp.rows-1)+';height:'+h+'px;'
+       + '--rw:'+Math.round(w*0.44)+'px;'
        + '--rh:'+Math.round(clear*0.6)+'px">'
        + '<div class="shroud l"></div><div class="shroud r"></div>'
        + '<div class="yard" style="top:'+(topY-3)+'px;--yw:'+Math.round(w*0.72)+'px"></div>'
@@ -1138,7 +1186,7 @@ function paint(){
         f.classList.add(want);
       }
       if(f.dataset.act!==act){
-        f.classList.remove('a-helm','a-lookout','a-haul','a-hammer','a-swab');
+        f.className=f.className.replace(/\ba-[a-z]+/g,'').replace(/\s+/g,' ').trim();
         f.classList.add('a-'+act); f.dataset.act=act;
       }
       f.style.setProperty('--sp',(0.92-Math.min(0.56,c.pct/210)).toFixed(2)+'s');
