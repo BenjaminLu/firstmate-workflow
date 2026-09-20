@@ -624,18 +624,19 @@ code,.mono{font-family:var(--mono);font-size:.86em}
                 46%{transform:rotate(1.9deg) translateY(2px)}
                 72%{transform:rotate(-1deg) translateY(-1px)}
                 100%{transform:rotate(0) translateY(0)}}
-.salvo{position:absolute;left:50%;transform:translateX(-50%);width:var(--deckW,58%);
-  bottom:calc(var(--deckY0) - 34px);height:26px;pointer-events:none;z-index:4}
-.salvo i{position:absolute;bottom:0;width:26px;height:16px;margin-left:-13px;border-radius:50%;opacity:0;
-  background:radial-gradient(ellipse at 30% 50%,#fff7d8,#f0a93a 42%,rgba(240,169,58,0) 72%)}
-.salvo.fire i{animation:flash .5s ease-out}
-@keyframes flash{0%{opacity:0;transform:scale(.3) translateX(0)}
-                 22%{opacity:1;transform:scale(1.25) translateX(-6px)}
-                 100%{opacity:0;transform:scale(1.9) translateX(-22px)}}
-.smoke{position:absolute;bottom:2px;width:30px;height:30px;margin-left:-15px;border-radius:50%;
-  background:radial-gradient(circle,rgba(214,222,230,.55),rgba(214,222,230,0) 68%);opacity:0}
-.salvo.fire .smoke{animation:puff 1.5s ease-out forwards}
-@keyframes puff{0%{opacity:0;transform:scale(.3)}20%{opacity:.85}100%{opacity:0;transform:scale(2.6) translate(-26px,-22px)}}
+.salvo{position:absolute;inset:0;pointer-events:none;z-index:4}
+.salvo i{position:absolute;width:30px;height:18px;margin:0 0 -9px -15px;border-radius:50%;opacity:0;
+  background:radial-gradient(ellipse at 50% 50%,#fffbe8,#f6b447 38%,rgba(246,180,71,0) 72%)}
+.salvo.fire i{animation:flash .34s ease-out}
+@keyframes flash{0%{opacity:0;transform:scale(.25)}
+                 18%{opacity:1;transform:scale(1.35) translateX(calc(var(--dir) * 7px))}
+                 100%{opacity:0;transform:scale(2.1) translateX(calc(var(--dir) * 26px))}}
+.smoke{position:absolute;width:34px;height:34px;margin:0 0 -17px -17px;border-radius:50%;opacity:0;
+  background:radial-gradient(circle,rgba(206,216,226,.6),rgba(206,216,226,0) 66%)}
+.salvo.fire .smoke{animation:puff 1.7s ease-out forwards}
+@keyframes puff{0%{opacity:0;transform:scale(.25)}
+                18%{opacity:.8;transform:scale(1)}
+                100%{opacity:0;transform:scale(2.8) translate(calc(var(--dir) * 30px),-26px)}}
 .ahoy{position:absolute;left:0;right:0;top:9%;text-align:center;z-index:9;pointer-events:none;opacity:0;
   background:none;font:800 clamp(26px,4.4vw,46px)/1 var(--sans);letter-spacing:.14em;color:#ffe6a8;
   text-shadow:0 0 28px rgba(217,164,65,.7),0 5px 0 #6b4410}
@@ -1051,13 +1052,14 @@ function tone(f,dur,type,gain,slideTo){
 function bell(){                                    // ship's bell: two partials, long decay
   tone(784,1.5,'sine',0.16); tone(1174,1.2,'sine',0.07); tone(523,1.8,'sine',0.05);
 }
-function cannon(at){                                // filtered noise burst
+const GUN_DELAY=0.075;
+function cannon(at,gain){      // one crack per gun, on the same clock as that gun's flash
   const a=ac(); if(!a) return;
-  const n=a.sampleRate*0.5, buf=a.createBuffer(1,n,a.sampleRate), d=buf.getChannelData(0);
-  for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/n,2.4);
+  const n=a.sampleRate*0.34, buf=a.createBuffer(1,n,a.sampleRate), d=buf.getChannelData(0);
+  for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/n,3.2);
   const src=a.createBufferSource(); src.buffer=buf;
-  const lp=a.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=420; lp.Q.value=0.8;
-  const g=a.createGain(); g.gain.value=0.5;
+  const lp=a.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=520; lp.Q.value=1.1;
+  const g=a.createGain(); g.gain.value=Math.max(0.16,gain||0.5);
   src.connect(lp).connect(g).connect(a.destination);
   src.start(a.currentTime+(at||0));
 }
@@ -1071,8 +1073,9 @@ function ahoy(kind){
   if(vessel){ vessel.classList.remove('heel'); void vessel.offsetWidth; vessel.classList.add('heel'); }
   if(kind==='merged'){
     if(salvo){ salvo.classList.remove('fire'); void salvo.offsetWidth; salvo.classList.add('fire'); }
-    [0,0.14,0.29].forEach(t=>cannon(t));
-    setTimeout(bell,420);
+    const guns=sc.querySelectorAll('.salvo i').length || 5;
+    for(let i=0;i<guns;i++) cannon(i*GUN_DELAY, 0.6 - i*0.03);
+    setTimeout(bell, (guns*GUN_DELAY + 0.3)*1000);
     if(banner){ banner.innerHTML=T('ahoyMerged')+'<small>'+T('ahoyMergedSub')+'</small>';
       banner.classList.remove('on'); void banner.offsetWidth; banner.classList.add('on'); }
   } else {
@@ -1224,16 +1227,29 @@ function shipMarkup(sp,n){
     + '<div class="wheel"><i></i><i></i><i></i><i></i><div class="ring"></div></div>'
     + '<div class="hub"></div></div>';
   const lx=(50-sp.deckW*deckLens(sp.rows-1).w/2+3).toFixed(1);
-  const flashes = Array.from({length:5},(_,i)=>
-      '<i style="left:'+(16+17*i)+'%;animation-delay:'+(i*0.06).toFixed(2)+'s"></i>'
-    + '<span class="smoke" style="left:'+(16+17*i)+'%;animation-delay:'+(i*0.06).toFixed(2)+'s"></span>').join('');
+  const guns = portList(sp);
+  const flashes = guns.map(function(pt,i){
+    var d=(i*GUN_DELAY).toFixed(3)+'s';
+    var pos='left:'+(pt.x/10).toFixed(2)+'%;bottom:'+(pt.H-pt.y).toFixed(1)+'px;'
+           +'--dir:'+pt.dir+';animation-delay:'+d;
+    return '<i style="'+pos+'"></i><span class="smoke" style="'+pos+'"></span>';
+  }).join('');
   return '<div class="vessel">'
     + '<div class="ship"><div class="moon"></div>'
     +   '<div class="hullwrap" style="--deckW:'+sp.deckW+'%;--hullBottom:'+(96-deck0)+'px">'
-    +     hullSVG(sp) + '</div></div>'
+    +     hullSVG(sp) + '<div class="salvo">'+flashes+'</div></div></div>'
     + m + helm + '<div class="lantern" style="--lx:'+lx+'%;--topR:'+(sp.rows-1)+'"></div>'
-    + '<div class="salvo" style="--deckW:'+sp.deckW+'%">'+flashes+'</div>'
     + '</div><div class="ahoy"></div>';
+}
+// gun ports: one list, used both to draw them and to fire them
+function portList(sp){
+  const top=(sp.rows-1)*ROWSTEP, y0=top+34, H=top+HULLDEPTH+34;
+  const L=40, R=960, n=Math.min(11,3+sp.masts*2), out=[];
+  for(let i=0;i<n;i++){
+    const t=(i+0.5)/n;
+    out.push({x:L+46+(R-L-92)*t, y:y0+52+14*Math.sin(Math.PI*t), H:H, dir:t<0.5?-1:1});
+  }
+  return out;
 }
 function hullSVG(sp){
   const W=1000, top=(sp.rows-1)*ROWSTEP, H=top+HULLDEPTH+34;
@@ -1268,13 +1284,9 @@ function hullSVG(sp){
       + '<path d="'+nearLine(d)+'" fill="none" stroke="var(--brass)" stroke-width="2.5" opacity=".9"/>';
   }
   const d0=lens(0), bot=y0+HULLDEPTH;
-  let ports='';
-  const np=Math.min(11,3+sp.masts*2);
-  for(let i=0;i<np;i++){
-    const t=(i+0.5)/np, x=d0.L+46+(d0.R-d0.L-92)*t, y=y0+52+14*Math.sin(Math.PI*t);
-    ports += '<rect x="'+(x-11).toFixed(1)+'" y="'+(y-9).toFixed(1)+'" width="22" height="18" rx="2" '
-           + 'fill="#04050a" stroke="var(--brass)" stroke-width="2" opacity=".85"/>';
-  }
+  const ports = portList(sp).map(pt =>
+    '<rect class="gunport" x="'+(pt.x-11).toFixed(1)+'" y="'+(pt.y-9).toFixed(1)+'" width="22" height="18" rx="2" '
+    + 'fill="#04050a" stroke="var(--brass)" stroke-width="2" opacity=".85"/>').join('');
   return '<svg class="hullsvg" viewBox="0 0 '+W+' '+H+'" width="100%" height="'+H+'" '
     + 'preserveAspectRatio="none" aria-hidden="true"><defs>'+clips
     + '<linearGradient id="tarG" x1="0" y1="0" x2="0" y2="1">'
