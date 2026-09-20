@@ -259,6 +259,57 @@ code,.mono{font-family:var(--mono);font-size:.86em}
 @keyframes scanx{0%,100%{transform:rotateX(8deg) rotateY(-42deg)}50%{transform:rotateX(8deg) rotateY(-6deg)}}
 @keyframes slump{0%,100%{transform:rotateX(8deg) rotateY(-26deg) translateY(3px)}
                  50%{transform:rotateX(8deg) rotateY(-26deg) translateY(6px)}}
+
+/* ===== level 4: one shared deck, crew interact on it ===== */
+.scene{position:relative;height:218px;margin:13px 18px 0;border:1px solid var(--line);border-radius:13px;
+  overflow:hidden;perspective:900px;perspective-origin:50% 38%;
+  background:linear-gradient(180deg,#081a28 0%,#0d3350 48%,#091725 100%)}
+.scene .horizon{position:absolute;left:0;right:0;top:0;height:58px;
+  background:linear-gradient(180deg,#0a2033,#12476c);opacity:.85}
+.scene .planks{position:absolute;left:-22%;right:-22%;bottom:0;height:158px;
+  background:repeating-linear-gradient(90deg,#223645 0 27px,#1b2b38 27px 54px);
+  transform:rotateX(74deg);transform-origin:50% 100%;box-shadow:inset 0 32px 54px rgba(0,0,0,.55)}
+.scene .plat{position:absolute;bottom:54px;left:64%;margin-left:-50px;width:100px;height:13px;border-radius:5px;
+  background:linear-gradient(180deg,#31485e,#1a2836);box-shadow:0 5px 14px rgba(0,0,0,.5)}
+.scene .fig{bottom:58px;left:var(--px);transform:rotateX(8deg) rotateY(-26deg) scale(.86)}
+.scene .fig.r-fm{bottom:68px;transform:rotateX(8deg) rotateY(-26deg) scale(.94)}
+.m-4 .scene .fig{animation:idlebob4 4.4s ease-in-out infinite}
+.m-4 .scene .fig.s-working{animation:idlebob4 2.5s ease-in-out infinite}
+.m-4 .scene .fig.s-queued{animation:idlebob4 6.5s ease-in-out infinite}
+.m-4 .scene .fig.s-gate{animation:slump4 2.2s ease-in-out infinite}
+.m-4 .scene .fig.s-review{animation:scan4 3.6s ease-in-out infinite}
+@keyframes idlebob4{0%,100%{transform:rotateX(8deg) rotateY(-26deg) scale(.86) translateY(0)}
+                    50%{transform:rotateX(8deg) rotateY(-26deg) scale(.86) translateY(-5px)}}
+@keyframes slump4{0%,100%{transform:rotateX(8deg) rotateY(-26deg) scale(.86) translateY(3px)}
+                  50%{transform:rotateX(8deg) rotateY(-26deg) scale(.86) translateY(6px)}}
+@keyframes scan4{0%,100%{transform:rotateX(8deg) rotateY(-44deg) scale(.86)}
+                 50%{transform:rotateX(8deg) rotateY(-4deg) scale(.86)}}
+.scene .tag{position:absolute;bottom:9px;left:var(--px);transform:translateX(-50%);
+  font:600 10px var(--mono);color:#7fa8c6;white-space:nowrap;letter-spacing:.04em}
+.scene .tag i{font-style:normal;color:var(--fg3)}
+/* things that travel between crew */
+.flyer{position:absolute;bottom:112px;width:22px;height:16px;border-radius:3px;z-index:6;
+  display:flex;align-items:center;justify-content:center;font:800 8.5px var(--sans);color:#0b1016;
+  animation:fly var(--dur,1.15s) cubic-bezier(.3,.02,.4,1) forwards;pointer-events:none}
+.flyer.order  {background:#e8d3a1;box-shadow:0 0 13px rgba(232,211,161,.55)}
+.flyer.parcel {background:#63b3f5;box-shadow:0 0 13px rgba(99,179,245,.55)}
+.flyer.reject {background:#f2645a;color:#fff;box-shadow:0 0 13px rgba(242,100,90,.6)}
+.flyer.approve{background:#3ecf8e;box-shadow:0 0 15px rgba(62,207,142,.65)}
+@keyframes fly{
+  0%  {left:var(--sx);transform:translateY(8px) scale(.55) rotate(-25deg);opacity:0}
+  14% {opacity:1;transform:translateY(0) scale(1) rotate(0)}
+  52% {transform:translateY(-40px) scale(1.08) rotate(175deg)}
+  100%{left:var(--ex);transform:translateY(6px) scale(.55) rotate(350deg);opacity:0}}
+.fig.react{animation:jolt .55s ease-out !important}
+@keyframes jolt{0%{transform:rotateX(8deg) rotateY(-26deg) scale(.99) translateY(-10px)}
+                100%{transform:rotateX(8deg) rotateY(-26deg) scale(.86) translateY(0)}}
+.crewline{display:flex;flex-wrap:wrap;gap:8px;padding:11px 18px 0}
+.crewline .ch{display:flex;align-items:center;gap:9px;background:var(--bg2);border:1px solid var(--line);
+  border-radius:9px;padding:6px 11px;font-size:11.5px}
+.crewline .ch.act{border-color:#2c4a66}
+.crewline .ch .mb{width:54px;height:3px;background:var(--bg3);border-radius:2px;overflow:hidden}
+.crewline .ch .mb i{display:block;height:100%;background:var(--accent);transition:width .85s linear}
+.crewline .ch .mb i.bad{background:var(--bad)}
 </style>
 </head>
 <body class="m-full">
@@ -397,7 +448,7 @@ const TICK_MSG={
 /* ====================== ENGINE (simulated live feed) ====================== */
 const app=document.getElementById('app');
 const params=new URLSearchParams(location.search);
-let variant=[1,2,3].includes(+params.get('variant'))?+params.get('variant'):3;
+let variant=[1,2,3,4].includes(+params.get('variant'))?+params.get('variant'):4;
 let chosen={}, activeDec='D-007', heading=317, seq=0;
 const evs=[];  // {tm, kind, html}
 const rnd=(a,b)=>a+Math.random()*(b-a);
@@ -428,15 +479,15 @@ function tick(){
     const t=TASKS.find(x=>x.st==='queued'&&depsOk(x));
     if(!t||inFlight()>=3) break;
     t.st='working'; t.who=c.id; t.round=1; t.pct=0; c.task=t.id; c.pct=0; c.st='working';
-    emit('','dispatch',{t:t.id,w:c.id}); lanesDirty=true;
+    emit('','dispatch',{t:t.id,w:c.id}); fly('firstmate',c.id,'order'); lanesDirty=true;
   }
   paint();
 }
 function advance(t,c){
   c.pct=0; t.pct=0; lanesDirty=true;
   if(t.st==='working'){
-    if(Math.random()<0.25){ t.st='gate'; t.note='gateFail'; emit('bad','gatebad',{t:t.id}); }
-    else { t.st='review'; t.note=null; t.pr=t.pr||(10+seq%9); emit('ok','gate',{t:t.id});
+    if(Math.random()<0.25){ t.st='gate'; t.note='gateFail'; emit('bad','gatebad',{t:t.id}); fly(c.id,c.id,'reject'); }
+    else { t.st='review'; t.note=null; t.pr=t.pr||(10+seq%9); emit('ok','gate',{t:t.id}); fly(c.id,'reviewer-1','parcel');
            emit('','review',{t:t.id,r:t.round}); c.task=null; c.st='queued';
            const rv=CREW.find(x=>x.role==='r'); if(!rv.task){rv.task=t.id;rv.pct=0;rv.st='review';} }
   } else if(t.st==='gate'){
@@ -444,10 +495,10 @@ function advance(t,c){
     if(t.round>=3){ t.note='askCrit'; emit('cap','ask',{w:c.id,t:t.id}); }
     else emit('','commit',{w:c.id,pr:t.pr||'—'});
   } else if(t.st==='review'){
-    if(t.round>=3||Math.random()<0.6){ emit('ok','approve',{t:t.id}); t.st='merged'; t.note=null;
+    if(t.round>=3||Math.random()<0.6){ emit('ok','approve',{t:t.id}); fly('reviewer-1','firstmate','approve'); t.st='merged'; t.note=null;
       emit('ok','merged',{t:t.id}); }
     else { t.round++; t.st='working'; emit('','review',{t:t.id,r:t.round});
-      const w=CREW.find(x=>x.role==='w'&&!x.task); if(w){w.task=t.id;w.pct=0;w.st='working';t.who=w.id;} }
+      const w=CREW.find(x=>x.role==='w'&&!x.task); if(w){w.task=t.id;w.pct=0;w.st='working';t.who=w.id;fly('reviewer-1',w.id,'reject');} }
     if(c.role==='r'){ c.task=null; c.st='queued';
       const nx=TASKS.find(x=>x.st==='review'); if(nx){c.task=nx.id;c.pct=nx.pct;c.st='review';} }
   }
@@ -461,7 +512,10 @@ function toast(m){const t=document.getElementById('toast');t.textContent=m;t.cla
 function openLocal(p){toast(T('opened').replace('{p}',p));}
 function submit(id){ if(!chosen[id]) return toast(T('pickFirst'));
   toast(T('sent').replace('{id}',id));
-  emit('cap','dispatch',{t:id+' → '+chosen[id],w:'firstmate'}); paint(); }
+  emit('cap','dispatch',{t:id+' \u2192 '+chosen[id],w:'firstmate'});
+  const d=DECISIONS.find(x=>x.id===id), tk=d&&byId(d.task);
+  if(tk&&tk.who) fly('firstmate',tk.who,'order');
+  paint(); }
 function pick(d,k){ chosen[d]=k; deckDirty=true; paint(); }
 function setDec(id){ activeDec=id; deckDirty=true; paint(); }
 function setLang(x){ lang=x; localStorage.setItem('proto.lang',x); shell();
@@ -492,6 +546,17 @@ const links=d=>'<div class="links">'
     +'<a href="#" onclick="toast(\'github.com/BenjaminLu/firstmate-workflow/pull/'+d.pr+'\');return false">&#9863; '+T('viewPR')+' #'+d.pr+'</a>'
     +'<a href="#" onclick="openLocal(\''+d.design+'\');return false">&#9776; '+T('viewDesign')+'</a></div>';
 /* one CSS-3D crew figure; the s-* / r-* classes are what Playwright asserts against */
+function figureRaw(c){
+  const role=c.role==='fm'?'fm':(c.role==='r'?'r':'w');
+  const speed=(0.92-Math.min(0.56,c.pct/210)).toFixed(2);
+  const bx=cls=>'<div class="bx '+cls+'"><i class="fr"></i><i class="sd"></i><i class="tp"></i></div>';
+  return '<div class="fig r-'+role+' s-'+c.st+'" data-crew="'+c.id
+    +'" style="--sp:'+speed+'s;--px:'+(POS[c.id]||'50%')+'">'
+    +'<div class="sh"></div>'+bx('legR')+bx('legL')
+    +'<div class="bx armR"><i class="fr"></i><i class="sd"></i><i class="tp"></i><span class="tool"></span></div>'
+    +bx('torso')+'<div class="bx armL"><i class="fr"></i><i class="sd"></i><i class="tp"></i></div>'
+    +bx('head')+bx('cap')+bx('brim')+'<div class="eye"></div><div class="prop"></div></div>';
+}
 function figure(c){
   const role = c.role==='fm'?'fm':(c.role==='r'?'r':'w');
   const speed = (0.92 - Math.min(0.56, c.pct/210)).toFixed(2); // swings faster as the task nears done
@@ -507,9 +572,44 @@ function figure(c){
     +'<div class="prop"></div>'
     +'</div></div>';
 }
+/* ---- shared deck: where the crew stand, and what travels between them ---- */
+const POS={'worker-1':'11%','worker-2':'27%','worker-3':'43%','firstmate':'64%','reviewer-1':'85%'};
+const FLYLABEL={order:'ORD',parcel:'PR',reject:'✕',approve:'✓'};
+function fly(from,to,kind){
+  if(variant!==4) return;
+  const sc=document.querySelector('.scene'); if(!sc) return;
+  const sx=POS[from]||'50%', ex=POS[to]||'50%';
+  const f=document.createElement('div');
+  f.className='flyer '+kind;
+  f.style.setProperty('--sx',sx); f.style.setProperty('--ex',ex);
+  f.style.setProperty('--dur', from===to ? '.8s' : '1.15s');
+  f.textContent=FLYLABEL[kind]||'';
+  sc.appendChild(f);
+  setTimeout(()=>{
+    const tgt=sc.querySelector('.fig[data-crew="'+to+'"]');
+    if(tgt){ tgt.classList.add('react'); setTimeout(()=>tgt.classList.remove('react'),560); }
+  }, from===to?600:900);
+  setTimeout(()=>f.remove(), 1400);
+}
+function scene(){
+  return '<div class="scene"><div class="horizon"></div><div class="planks"></div><div class="plat"></div>'
+    + CREW.map(c=>figureRaw(c)).join('')
+    + CREW.map(c=>'<div class="tag" style="--px:'+(POS[c.id]||'50%')+'">'+c.id
+        +(c.task?' <i>'+c.task+'</i>':'')+'</div>').join('')
+    + '</div>';
+}
+function crewline(){
+  return '<div class="crewline">'+CREW.map(c=>{
+    const t=c.task?byId(c.task):null;
+    return '<div class="ch'+(c.task||c.id==='firstmate'?' act':'')+'">'
+      +'<i class="dot '+c.st+'"></i><span class="mono">'+c.id+'</span>'
+      +'<span class="dim">'+(c.id==='firstmate'?T('coord'):(t?L(t.title):T('idle')))+'</span>'
+      +'<span class="mb"><i class="'+(c.st==='gate'?'bad':'')+'" style="width:'+c.pct+'%"></i></span>'
+      +'<span class="dim num">'+Math.round(c.pct)+'%</span></div>';}).join('')+'</div>';
+}
 function shell(){
   document.documentElement.lang=lang;
-  document.body.className = variant===1?'m-steady':(variant===2?'m-full':'m-full m-3d');
+  document.body.className = variant===1?'m-steady':variant===2?'m-full':variant===3?'m-full m-3d':'m-full m-3d m-4';
 
   app.innerHTML =
    '<div class="top"><div class="compass">'+compassSVG()+'</div>'
@@ -526,7 +626,7 @@ function shell(){
      +'<div class="flag ship"><div class="hd" id="s-hdg">317&deg;</div><div class="lb">'+T('heading')+'</div></div>'
    +'</div></div>'
 
-   +'<div class="rail" id="rail"></div>'
+   +(variant===4 ? '<div id="scene"></div><div id="crewline"></div>' : '<div class="rail" id="rail"></div>')
 
    +'<div class="deck"><h3>'+T('deck')+'<span class="n" id="d-n">0</span></h3><div id="deck"></div></div>'
    +'<div class="lanes-wrap"><h3>'+T('fleet')+'</h3><div class="lanes" id="lanes"></div></div>'
@@ -543,6 +643,23 @@ function paint(){
   const h=document.getElementById('s-hdg'); if(h)h.textContent=heading.toFixed(0)+'°';
   const ck=document.getElementById('clock'); if(ck)ck.textContent=now();
 
+  if(variant===4){
+    const sc=document.getElementById('scene');
+    if(sc && !sc.firstChild) sc.innerHTML=scene();          // build once: flyers must survive ticks
+    for(const c of CREW){
+      const f=document.querySelector('.fig[data-crew="'+c.id+'"]'); if(!f) continue;
+      const want='s-'+c.st;
+      if(!f.classList.contains(want)){
+        f.classList.remove('s-working','s-gate','s-review','s-queued','s-merged');
+        f.classList.add(want);
+      }
+      f.style.setProperty('--sp',(0.92-Math.min(0.56,c.pct/210)).toFixed(2)+'s');
+    }
+    document.querySelectorAll('.scene .tag').forEach((el,i)=>{
+      const c=CREW[i]; el.innerHTML=c.id+(c.task?' <i>'+c.task+'</i>':'');
+    });
+    const cl=document.getElementById('crewline'); if(cl) cl.innerHTML=crewline();
+  }
   const rail=document.getElementById('rail');
   if(rail) rail.innerHTML=CREW.map(c=>{
     const t=c.task?byId(c.task):null;
@@ -602,8 +719,9 @@ document.getElementById('flowOverlay').onclick=e=>{if(e.target.id==='flowOverlay
 /* ====================== SWITCHER (prototype-only) ====================== */
 const MOTION={1:{en:'Steady — live data, calm',tw:'穩舵 —— 會動但克制',cn:'稳舵 —— 会动但克制'},
               2:{en:'Full sail — waves, wake, sweep',tw:'滿帆 —— 海浪、尾流、雷達',cn:'满帆 —— 海浪、尾流、雷达'},
-              3:{en:'Full sail + 3D crew',tw:'滿帆＋3D 船員',cn:'满帆＋3D 船员'}};
-function go(step){ step=step||1; variant=((variant-1+step+3)%3)+1;
+              3:{en:'Full sail + 3D crew',tw:'滿帆＋3D 船員',cn:'满帆＋3D 船员'},
+              4:{en:'Shared deck — crew interact',tw:'同一甲板 —— 船員互動',cn:'同一甲板 —— 船员互动'}};
+function go(step){ step=step||1; variant=((variant-1+step+4)%4)+1;
   const u=new URL(location); u.searchParams.set('variant',variant); history.replaceState(null,'',u); shell(); }
 function sw(){ document.getElementById('switcher').innerHTML=
    '<button onclick="go(-1)" aria-label="previous">&#8249;</button>'
