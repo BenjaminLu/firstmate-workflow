@@ -5,6 +5,10 @@
 #
 #   fm-worker.sh --task T-004 [--repo .] [--vendor claude] [--name worker-1]
 set -uo pipefail
+_fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
+[ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
+# shellcheck source=bin/fm-config.sh
+. "$_fm_lib"
 
 REPO="${FM_ROOT:-$(pwd)}"; TASK=''; VENDOR=''; NAME=''
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
@@ -23,8 +27,8 @@ NAME="${NAME:-worker-$$}"
 EMIT="$REPO/bin/fm-emit.sh"
 emit() { FM_ROOT="$REPO" "$EMIT" --actor "$NAME" --task "$TASK" "$@" >/dev/null 2>&1 || true; }
 
-cfg() { sed -n "s/^$1:[[:space:]]*//p" config.yaml 2>/dev/null | head -1 | tr -d '"'; }
-fallbacks() { sed -n '/^fallback:/,/^[^ -]/p' config.yaml 2>/dev/null | sed -n 's/^[[:space:]]*-[[:space:]]*//p'; }
+cfg() { fm_cfg "$1"; }
+fallbacks() { fm_cfg_list fallback; }
 
 spec="$(jq -r --arg t "$TASK" '.tasks[]|select(.id==$t)' design/tasks.json 2>/dev/null)"
 [ -n "$spec" ] || { echo "fm-worker: no task $TASK in design/tasks.json" >&2; exit 65; }

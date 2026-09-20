@@ -13,7 +13,7 @@ fixture() {                     # a repo with a remote, a task, and the real scr
   cd "$d/repo" || return 1
   git config user.email a@b.c; git config user.name t
   mkdir -p bin design skills/worker state
-  cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-worker.sh" bin/
+  cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-worker.sh" bin/
   cp -r "$ROOT/bin/adapters" bin/
   cp "$ROOT/skills/worker/SKILL.md" skills/worker/
   printf 'vendor: mock\nfallback:\n  - mock\n' > config.yaml
