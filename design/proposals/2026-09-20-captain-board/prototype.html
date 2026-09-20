@@ -319,7 +319,47 @@ code,.mono{font-family:var(--mono);font-size:.86em}
 .scene.dens-2 .tag .who{font-size:10px}
 .scene.dens-3 .tag .job,.scene.dens-3 .tag .vd,.scene.dens-3 .tag .pct{display:none}
 .scene.dens-3 .tag .who{font-size:9.5px;gap:4px}
-.scene.dens-3 .tag .pb{width:92%}
+.scene.dens-3 .tag .pb{width:94%}
+.scene.dens-3 .tag{padding:4px 6px 5px}
+.scene .hint{position:absolute;top:9px;left:0;right:0;text-align:center;
+  font-size:10.5px;color:#5d84a3;letter-spacing:.03em;pointer-events:none;z-index:3}
+.scene .tag{position:absolute;left:var(--px);transform:translateX(-50%);z-index:5;
+  bottom:calc(var(--deckY0) + var(--r,0) * var(--rowStep) + var(--figH,62px) + 10px);
+  width:var(--plateW,15.5%);min-width:0;max-width:206px;
+  background:rgba(12,19,27,.94);border:1px solid var(--bubEdge,#2c3f52);border-radius:9px;
+  padding:5px 8px 6px;text-align:center;box-shadow:0 6px 18px rgba(0,0,0,.55)}
+.scene .tag::after{content:"";position:absolute;left:50%;bottom:-6px;width:10px;height:10px;
+  margin-left:-5px;transform:rotate(45deg);background:rgba(12,19,27,.94);
+  border-right:1px solid var(--bubEdge,#2c3f52);border-bottom:1px solid var(--bubEdge,#2c3f52)}
+.scene .tag .who{display:flex;align-items:center;justify-content:center;gap:6px;
+  font:650 11px var(--mono);color:#dbe8f4;letter-spacing:.03em}
+.scene .tag .job{margin-top:3px;font-size:10.5px;color:#9dbdd6;line-height:1.3;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+  word-break:break-word;overflow-wrap:anywhere}
+.scene .tag .job b{color:#c8dcec;font-weight:600;font-family:var(--mono);font-size:10px}
+.scene .tag .pb{margin:5px auto 0;width:84%;height:3px;background:rgba(255,255,255,.12);
+  border-radius:2px;overflow:hidden}
+.scene .tag .pb i{display:block;height:100%;background:var(--accent);transition:width .85s linear}
+.scene .tag .pb i.bad{background:var(--bad)}
+.scene .tag .pct{margin-top:3px;font:600 10px var(--mono);color:#7f9db5}
+.scene .tag .vd{margin-top:2px;font:600 9.5px var(--mono);color:#5f819b;letter-spacing:.02em}
+.scene .tag .vd.x{color:var(--brass)}
+.scene .tag.st-working{--bubEdge:#2f5478}
+.scene .tag.st-review {--bubEdge:#5a3f7d}
+.scene .tag.st-gate   {--bubEdge:#7c322b}
+.scene .tag.st-merged {--bubEdge:#2c5f49}
+.scene .tag.st-queued {--bubEdge:#26323d;opacity:.6}
+.scene .tag.st-gate .who{color:#f5a29a}
+.scene .tag.st-review .who{color:#d9b6ff}
+.scene .tag.ping{animation:bubping .8s ease-out}
+@keyframes bubping{0%{box-shadow:0 0 0 0 rgba(217,164,65,.55),0 6px 18px rgba(0,0,0,.55)}
+                   100%{box-shadow:0 0 0 12px rgba(217,164,65,0),0 6px 18px rgba(0,0,0,.55)}}
+.scene.dens-2 .tag .job,.scene.dens-2 .tag .vd{display:none}
+.scene.dens-2 .tag .who{font-size:10px}
+.scene.dens-3 .tag .job,.scene.dens-3 .tag .vd,.scene.dens-3 .tag .pct{display:none}
+.scene.dens-3 .tag .who{font-size:9.5px;gap:4px}
+.scene.dens-3 .tag .pb{width:94%}
+.scene.dens-3 .tag{padding:4px 6px 5px}
 .scene .hint{position:absolute;top:9px;left:0;right:0;text-align:center;
   font-size:10.5px;color:#5d84a3;letter-spacing:.03em;pointer-events:none;z-index:3}
 .scene .tag{position:absolute;bottom:calc(var(--deckY0) + var(--r,0) * var(--rowStep) - 30px);
@@ -339,6 +379,9 @@ code,.mono{font-family:var(--mono);font-size:.86em}
 .scene .tag.st-gate .who{color:var(--bad)}
 .scene .tag.st-queued{opacity:.5}
 .scene .tag.st-review .who{color:#d9b6ff}
+.scene .tag.ping{animation:bubping .8s ease-out}
+@keyframes bubping{0%{box-shadow:0 0 0 0 rgba(217,164,65,.55),0 6px 18px rgba(0,0,0,.55)}
+                   100%{box-shadow:0 0 0 12px rgba(217,164,65,0),0 6px 18px rgba(0,0,0,.55)}}
 /* things that travel between crew */
 .flyer{position:absolute;bottom:calc(var(--deckY0) + 74px);width:22px;height:16px;border-radius:3px;z-index:6;
   display:flex;align-items:center;justify-content:center;font:800 8.5px var(--sans);color:#0b1016;
@@ -826,6 +869,8 @@ function fly(from,to,kind){
   setTimeout(()=>{
     const tgt=sc.querySelector('.fig[data-crew="'+to+'"]');
     if(tgt){ tgt.classList.add('react'); setTimeout(()=>tgt.classList.remove('react'),560); }
+    const bub=sc.querySelector('.tag[data-tag="'+to+'"]');
+    if(bub){ bub.classList.add('ping'); setTimeout(()=>bub.classList.remove('ping'),800); }
   }, from===to?600:900);
   setTimeout(()=>f.remove(), 1400);
 }
@@ -839,7 +884,7 @@ const SHIP=[
 ];
 const shipOf = n => SHIP.find(s=>n<=s.max);
 let DENS=1, ROWS=1;
-const ROWSTEP=74, HULLDEPTH=124, RIGBASE=104;   // deeper hull, taller risers between decks
+const ROWSTEP=96, HULLDEPTH=124, RIGBASE=104;   // room for a bubble above every head   // deeper hull, taller risers between decks
 // every deck is the same lens curve, scaled; the hull is that lens extruded downward
 const deckLens = r => ({ w: 1 - 0.15*r, y: r*ROWSTEP });
 const headroom = sp => (sp.rows-1)*ROWSTEP + 96;
@@ -872,7 +917,7 @@ function layout(){
   });
   const widest=Math.max(...buckets.map(b=>b.length));
   CREW.forEach(c=>{ c.sc = Math.max(0.52, Math.min(0.9, 4.2/Math.max(3,widest))); });
-  DENS = widest<=4 ? 1 : widest<=7 ? 2 : 3;
+  DENS = rows>1 ? (widest<=7 ? 2 : 3) : (widest<=4 ? 1 : widest<=7 ? 2 : 3);
   ROWS = rows;
   return sp;
 }
@@ -1029,7 +1074,8 @@ function scene(){
     + '<span>'+n+'</span><button onclick="addCrew(1)" aria-label="more">+</button></span>'
     + '<span>'+T('dragHint')+'</span></div>'
     + CREW.map(c=>figureRaw(c)).join('')
-    + CREW.map(c=>'<div class="tag st-'+c.st+'" data-tag="'+c.id+'" style="--px:'+posOf(c.id)+';--r:'+(c.row||0)+';--plateW:'+(c.plateW||'15%')+'">'
+    + CREW.map(c=>'<div class="tag st-'+c.st+'" data-tag="'+c.id+'" style="--px:'+posOf(c.id)+';--r:'+(c.row||0)+';--plateW:'+(c.plateW||'15%')
+        +';--figH:'+Math.round(86*(c.sc||0.86))+'px">'
         + plate(c) + '</div>').join('')
     + '</div>';
 }
@@ -1101,6 +1147,7 @@ function paint(){
       const el=document.querySelector('.scene .tag[data-tag="'+c.id+'"]'); if(!el) continue;
       el.className='tag st-'+c.st; el.style.setProperty('--r',c.row||0);
       el.style.setProperty('--plateW',c.plateW||'15%');
+      el.style.setProperty('--figH',Math.round(86*(c.sc||0.86))+'px');
       el.innerHTML=plate(c);
     }
   }
