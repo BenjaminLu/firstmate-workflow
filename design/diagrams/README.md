@@ -65,6 +65,12 @@ holding only one is refused like any other tier that cannot answer `en` and
 
 A drawing with no words in it needs no language suffix and serves all three.
 
+`i18n/tw2cn.tsv` is what makes the derivation a derivation, so the generator
+refuses to run (exit 66) if it finds no usable row in it. An empty or
+truncated table would otherwise make the conversion the identity and ship a
+page of zh-TW words under `lang="zh-CN"` — a broken install that reads as a
+working one.
+
 ## When it is drawn
 
 `bin/fm-decide.sh --request` runs the generator, so the file is on disk

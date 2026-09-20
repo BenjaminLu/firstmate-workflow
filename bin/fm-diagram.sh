@@ -63,6 +63,29 @@ done
 [ -d "$ROOT" ] || die "no repo at $ROOT"
 ROOT="$(cd "$ROOT" && pwd)"
 
+# A whole-STRING check, in the shell, and not `grep -Eq '^...$'`. grep matches
+# a LINE. An id of $'D-007\nanything else' has one line that matches, so it
+# passed a check written as an anchored regex - and what went on to be joined
+# to a path below was both lines. I could not build a traversal out of it,
+# because the newline glues to the leading path component and every use of
+# the id here is a leading component; so this was validation that did not mean
+# what it said rather than a hole. It is fixed in both the places it was
+# written that way and not only in the one that was noticed. A case glob has
+# no notion of a line: it is handed the whole value, and a newline is not in
+# [0-9] nor in [A-Za-z0-9._-].
+is_decision_id() {
+  local rest
+  case "$1" in D-*) rest="${1#D-}" ;; *) return 1 ;; esac
+  case "$rest" in ''|*[!0-9]*) return 1 ;; esac
+  [ "${#rest}" -le 6 ]
+}
+is_task_stem() {
+  local rest
+  case "$1" in T-*) rest="${1#T-}" ;; *) return 1 ;; esac
+  case "$rest" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
+  [ "${#rest}" -le 32 ]
+}
+
 # An id that was supplied is checked wherever it was supplied. The shape used
 # to be checked only on the path that draws, so `--event gate_passed
 # --decision D-oo7` exited 0 and said nothing while `--event
@@ -70,7 +93,7 @@ ROOT="$(cd "$ROOT" && pwd)"
 # invisible for seventeen of the eighteen event types and visible for one.
 # It is the caller's mistake either way, and the routine path is the one
 # where nothing downstream would ever have noticed.
-[ -z "$ID" ] || grep -Eq '^D-[0-9]{1,6}$' <<<"$ID" || die "not a decision id: $ID"
+[ -z "$ID" ] || is_decision_id "$ID" || die "not a decision id: $ID"
 
 OUT="$ROOT/board/public/diagrams"
 SRC="$ROOT/design/diagrams"
@@ -145,7 +168,7 @@ case "$KIND" in merge|choice) ;; *) KIND=choice ;; esac
 # the task id is shown whatever it says, but it is only joined to a path when
 # it looks like one of ours
 TASKPATH="$TASK"
-grep -Eq '^T-[A-Za-z0-9._-]{1,32}$' <<<"$TASK" || TASKPATH=''
+is_task_stem "$TASK" || TASKPATH=''
 
 # ------------------------------------------------------------------ helpers
 
@@ -383,7 +406,14 @@ BEGIN {
     i = index(ln, "\t"); if (i == 0) continue
     n++; from[n] = substr(ln, 1, i - 1); to[n] = substr(ln, i + 1)
   }
-  close(TBL); intag = 0; incomment = 0; skip = 0; inq = ""
+  close(TBL)
+  # The loader answers how many rows it found, and then stops. That is what
+  # lets the pre-flight check below be a question put to THIS program rather
+  # than a second copy of the row rule three lines above - the copy would go
+  # on agreeing with itself for ever, including on the day one of them
+  # changed.
+  if (CHECK != "") { print n; exit }
+  intag = 0; incomment = 0; skip = 0; inq = ""
   # written as a code point because this program is a single-quoted shell
   # string and an apostrophe would end it
   SQ = sprintf("%c", 39)
@@ -451,6 +481,22 @@ for f in "$I18N/ui.en.json" "$I18N/ui.zh-TW.json"; do
   jq -e 'type == "object"' "$f" >/dev/null 2>&1 \
     || die "$f is not a readable dictionary" 66
 done
+# and the table is held to the same line, for the same reason. It used to be
+# checked for existence alone - so a truncated, empty or all-comments
+# tw2cn.tsv left the loader with no rows, made the conversion the identity,
+# and shipped D-$ID.zh-CN.html with lang="zh-CN" over zh-TW words and exit 0.
+# That is the broken input wearing a working input's face again, and it was
+# guarded on the two dictionaries and not on the one file whose entire job is
+# the zh-CN page. tests/i18n.test.sh lints the repository's own copy of the
+# table, which is a different claim: it says this repository's table is good,
+# not that the generator refuses an unusable one wherever it is run.
+#
+# "Readable", for a table, is "the loader finds at least one row in it", so
+# the loader is what is asked. CHECK makes the awk program above print the
+# number of rows it read and stop before the first line of input.
+rows="$(awk -v TBL="$I18N/tw2cn.tsv" -v CHECK=1 "$TEXTNODES" < /dev/null 2>/dev/null)"
+case "${rows:-x}" in ''|*[!0-9]*) rows=0 ;; esac
+[ "$rows" -gt 0 ] || die "no usable rows in $I18N/tw2cn.tsv: zh-CN would be zh-TW under a zh-CN label" 66
 # and the drawing this decision will use is chosen here, before the first
 # redirect, because an unevenly authored tier is a refusal and a refusal must
 # not arrive with one language already on disk

@@ -68,7 +68,22 @@ assert_contains "$(jq -r .type < "$d5/state/events.jsonl" | tr '\n' ' ')" "decis
   "and decision_requested is still emitted"
 assert_contains "$err5" "D-5" "while the drawing that failed is reported rather than swallowed"
 assert_contains "$err5" "73"  "with the number the generator exited with"
-assert_eq "" "$(find "$d5/board/public/diagrams" -name 'D-5.*' 2>/dev/null)" \
+
+# "and nothing half-drawn was left behind" used to be asserted here, against
+# the stub above - a script that echoes and exits, which could not have
+# written a file whatever fm-decide did with it. That assertion was about the
+# fixture. The claim is about the REAL generator refusing a bad input before
+# the first redirect rather than after one of three, so it is asserted where
+# the real generator runs and really does fail: a tree whose zh-TW dictionary
+# is not json. It dies 66, and the number reaching stderr is the generator's
+# own rather than a number the fixture chose.
+d8="$(fixture)"
+printf '%s' '{"laneQueued": ' > "$d8/i18n/ui.zh-TW.json"
+err8="$(FM_ROOT="$d8" "$d8/bin/fm-decide.sh" --request D-8 --task T-8 --title "asked anyway" 2>&1 >/dev/null)"
+assert_ok "test -f '$d8/state/pending/D-8.json'" "a real generator failure still leaves the decision pending"
+assert_contains "$err8" "D-8" "and is reported against the decision it was drawing"
+assert_contains "$err8" "66"  "with the generator's own number"
+assert_eq "" "$(find "$d8/board/public" -name 'D-8.*' 2>/dev/null)" \
   "and nothing half-drawn was left behind"
 
 # a tree with no generator in it is the same shape: recorded, and said
@@ -112,5 +127,5 @@ assert_fail "FM_ROOT='$d4' '$d4/bin/fm-decide.sh' --await D-9 --timeout 2" "it t
 # the words may appear in a comment explaining the absence; a call may not
 assert_fail "grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-decide.sh' | grep -qE '\\b(fswatch|watchexec|entr)\\b'" \
   "it calls neither fswatch, watchexec nor entr"
-rm -rf "$d" "$d2" "$d3" "$d4" "$d5" "$d6" "$stub"
+rm -rf "$d" "$d2" "$d3" "$d4" "$d5" "$d6" "$d8" "$stub"
 finish

@@ -195,6 +195,11 @@ assert_eq "" "$(find "$R/board/public/diagrams" -name 'D-001.*' 2>/dev/null)" \
 "$DG" --event decision_requested --decision D-001 --repo "$R" >/dev/null 2>&1
 assert_eq "3" "$(find "$R/board/public/diagrams" -name 'D-001.*' 2>/dev/null | wc -l | tr -d ' ')" \
   "the decision event drew all three"
+# the loud end reached through --event and not only through --wants. A type
+# nobody has ruled on is a question, and --event is the entry point a caller
+# uses blindly: answering it with a silent 0 is how a type stays undrawn.
+"$DG" --event not_an_event --decision D-001 --repo "$R" >/dev/null 2>&1
+assert_eq "64" "$?" "--event with a type nobody has ruled on is an error there too"
 
 # ------------------------------------------------------ the three languages
 R="$(newroot)"
@@ -473,11 +478,35 @@ printf '<svg class="complete"></svg>\n' > "$R/design/diagrams/T-004.html"
 "$DG" --decision D-076 --repo "$R" >/dev/null 2>&1
 assert_eq "65" "$?" "a half-drawn decision is refused rather than served the task's complete drawing"
 
+# The other half of the same class. The task id is shown whatever it says,
+# but it is only joined to a path when it looks like one of ours - and that
+# check was an anchored grep too, which matches a line. A .task of
+# "T-004\nx" has a line that matches, so the whole two-line value became a
+# stem and was globbed against design/diagrams/. The file below is named
+# exactly that, because a fixture whose stems are all single-line cannot tell
+# the two checks apart: with the grep it is found and drawn, with the case
+# glob the task is not a stem at all and the built-in frame renders.
+R="$(newroot)"
+nl="$(printf 'T-004\nx')"
+printf '<svg class="through-the-newline"></svg>\n' > "$R/design/diagrams/$nl.html"
+assert_ok "test -f '$R/design/diagrams/$nl.html'" "the fixture really wrote a file with a newline in its name"
+decision "$R" D-077 "$(jq -cn --arg t "$nl" '{id:"D-077",task:$t,kind:"choice",title:"x"}')"
+"$DG" --decision D-077 --repo "$R" >/dev/null 2>&1
+assert_eq "0" "$?" "a decision whose task id is not a stem still renders"
+assert_lacks "$(cat "$R/board/public/diagrams/D-077.en.html" 2>/dev/null)" "through-the-newline" \
+  "and a two-line task id is not joined to a path, so no drawing is reached through it"
+
 # ---------------------------------------------------------------- refusals
 R="$(newroot)"
-for bad in "../../etc/passwd" "D-1234567" "T-004" "D-" "" ; do
+# The last two are the reason the check is a case glob and not grep. grep
+# matches a LINE, so an anchored regex said yes to anything with one good
+# line in it, and the value that went on to be joined to a path was the whole
+# of it. A test whose ids are all single-line cannot tell an anchored regex
+# from a whole-string check, which is why every id here was single-line.
+for bad in "../../etc/passwd" "D-1234567" "T-004" "D-" "" \
+           "$(printf 'D-007\n../../etc/passwd')" "$(printf '../../etc/passwd\nD-007')"; do
   "$DG" --decision "$bad" --repo "$R" >/dev/null 2>&1
-  assert_eq "64" "$?" "[$bad] is refused as a decision id"
+  assert_eq "64" "$?" "[$(printf '%s' "$bad" | tr '\n' '|')] is refused as a decision id"
 done
 assert_eq "" "$(find "$R/board/public" -name '*.html' 2>/dev/null)" "and nothing was written on the way"
 "$DG" --decision D-404 --repo "$R" >/dev/null 2>&1
@@ -497,9 +526,10 @@ assert_eq "" "$(find "$R/board/public" -name '*.html' 2>/dev/null)" "and drew no
 # where a typo lives longest, because nothing downstream of a routine event
 # ever looks at the id again.
 decision "$R" D-002 '{"id":"D-002","task":"T-004","kind":"choice","title":"x"}'
-for bad in "D-oo2" "../../etc/passwd" "D-1234567" "T-004"; do
+for bad in "D-oo2" "../../etc/passwd" "D-1234567" "T-004" "$(printf 'D-002\nD-002')"; do
   "$DG" --event gate_passed --decision "$bad" --repo "$R" >/dev/null 2>&1
-  assert_eq "64" "$?" "[$bad] is refused on a routine event too, not only on the drawn one"
+  assert_eq "64" "$?" \
+    "[$(printf '%s' "$bad" | tr '\n' '|')] is refused on a routine event too, not only on the drawn one"
 done
 "$DG" --event gate_passed --decision D-002 --repo "$R" >/dev/null 2>&1
 assert_eq "0" "$?" "while a real id on a routine event is still a clean no-op"
@@ -588,6 +618,33 @@ for which in ui.en.json ui.zh-TW.json; do
   "$DG" --decision D-043 --repo "$junk" >/dev/null 2>&1
   assert_eq "66" "$?" "a $which that is json but not an object is refused too"
   rm -rf "$junk"
+done
+
+# and the third input, which was checked for existence and nothing else. A
+# tw2cn.tsv that is empty, truncated to its comments, or has lost its tabs
+# leaves the loader with no rows: the conversion becomes the identity and
+# D-*.zh-CN.html ships zh-TW words under lang="zh-CN", with exit 0 and three
+# files on disk. That is the same "broken input wearing a working input's
+# face" the two dictionaries above are guarded against, on the one file whose
+# only job is the zh-CN page.
+for empty in '' '# a table with nothing in it but this line
+# and this one' 'no tab on this line at all'; do
+  flat="$(newroot)"
+  printf '%s' "$empty" > "$flat/i18n/tw2cn.tsv"
+  decision "$flat" D-045 '{"id":"D-045","task":"T-004","kind":"merge","title":"合併程式碼"}'
+  "$DG" --decision D-045 --repo "$flat" >/dev/null 2>&1
+  assert_eq "66" "$?" "a tw2cn.tsv the loader finds no rows in is a bad input, not a zh-TW page labelled zh-CN"
+  assert_eq "" "$(find "$flat/board/public" -name 'D-045.*' 2>/dev/null)" \
+    "and nothing was written from it"
+  # the same tree one row later: the refusal is of THIS table, not of tables.
+  # The row is put on a line of its own - appended to a file with no trailing
+  # newline it would glue itself to the last line and stop being the row.
+  { printf '%s' "$empty"; printf '\n%s\t%s\n' "程式碼" "代码"; } > "$flat/i18n/tw2cn.tsv"
+  "$DG" --decision D-045 --repo "$flat" >/dev/null 2>&1
+  assert_eq "0" "$?" "while one usable row is enough to render"
+  assert_contains "$(cat "$flat/board/public/diagrams/D-045.zh-CN.html" 2>/dev/null)" "代码" \
+    "and that row is the one doing the converting"
+  rm -rf "$flat"
 done
 
 # the other half of that contract: a key the dictionary does not answer is
@@ -698,29 +755,72 @@ if (D.src("../../etc/passwd", "en") !== "") fail("a non-decision has no diagram"
 if (!D.embed("D-007").includes('data-decision="D-007"')) fail("embed names its decision");
 if (D.embed("nope") !== "") fail("embed of a non-decision is nothing");
 
-const frame = (id) => {
-const attrs = { "data-decision": id };
-return {
-  dataset: { decision: id }, gone: false,
-  getAttribute: (k) => (k in attrs ? attrs[k] : null),
-  setAttribute: (k, v) => { attrs[k] = v; },
-  removeAttribute: (k) => { delete attrs[k]; },
-  remove() { this.gone = true; },
-  attrs,
+// The element under test is PARSED OUT OF D.embed(id). It used to be typed
+// out beside the module - `const attrs = { "data-decision": id }` - and that
+// hand-built object is what two of the assertions below were really about.
+// `hidden` was never in it, so "a mounted iframe is shown" was true before
+// mount ran and would have stayed true with removeAttribute deleted, while
+// every diagram on the board sat at display:none. The frame is now whatever
+// embed() actually emits, so a missing attribute is a missing attribute.
+const parse = (html) => {
+  const m = /^<([a-z]+)((?:\s+[^\s=>]+(?:="[^"]*")?)*)\s*>/i.exec(html);
+  if (!m) throw new Error("embed() did not return an element: " + html);
+  const attrs = {};
+  const re = /([^\s=]+)(?:="([^"]*)")?/g;
+  let a;
+  while ((a = re.exec(m[2])) !== null) attrs[a[1]] = a[2] === undefined ? "" : a[2];
+  return el(m[1], attrs);
 };
+const el = (tag, attrs) => {
+  const dataset = {};
+  for (const k of Object.keys(attrs)) if (k.startsWith("data-")) dataset[k.slice(5)] = attrs[k];
+  return {
+    tagName: tag.toUpperCase(), dataset, gone: false, attrs,
+    getAttribute: (k) => (k in attrs ? attrs[k] : null),
+    setAttribute: (k, v) => { attrs[k] = v; },
+    removeAttribute: (k) => { delete attrs[k]; },
+    remove() { this.gone = true; },
+  };
 };
-const root = (fs) => ({ querySelectorAll: () => fs });
+// ...and querySelectorAll honours the selector it is handed. Returning every
+// element regardless meant the class embed() writes and the class mount
+// queries for were held together by nobody: rename one and the board mounts
+// zero frames for ever, with this probe still green.
+const matches = (e, sel) => {
+  const parts = sel.split(".");
+  if (parts[0] && e.tagName !== parts[0].toUpperCase()) return false;
+  const have = (e.attrs.class || "").split(/\s+/);
+  return parts.slice(1).every((c) => have.includes(c));
+};
+const root = (els) => ({ querySelectorAll: (sel) => els.filter((e) => matches(e, sel)) });
 
 (async () => {
-const a = frame("D-007"), b = frame("D-008");
+const a = parse(D.embed("D-007")), b = parse(D.embed("D-008"));
+// the state embed() ships the frame in, asserted before anything moves it -
+// or "a mounted iframe is shown" is a claim about a frame that was never
+// hidden
+if (!("hidden" in a.attrs)) fail("embed() ships the frame hidden, so there is something to reveal");
+if (a.getAttribute("src") !== null) fail("embed() ships the frame with no src");
+if (!a.attrs.class) fail("embed() gives the frame a class for mount to find it by");
+
 const seen = [];
 const fetcher = async (u) => { seen.push(u); return { ok: !u.includes("D-008") }; };
 
 let n = await D.mount(root([a, b]), "zh-TW", fetcher);
 if (n !== 1) fail("one of the two mounted, got " + n);
+if (seen.join() !== "diagrams/D-007.zh-TW.html,diagrams/D-008.zh-TW.html")
+  fail("it asked the server about each frame's own file, asked: " + seen.join());
 if (a.attrs.src !== "diagrams/D-007.zh-TW.html") fail("mounted at the zh-TW file");
 if ("hidden" in a.attrs) fail("a mounted iframe is shown");
 if (!b.gone) fail("a decision with no diagram leaves no iframe behind");
+
+// the selector is doing work: neither of these is the module's own markup,
+// and a matcher that waved everything through would mount both
+const decoyTag = el("div", { class: a.attrs.class, "data-decision": "D-010" });
+const decoyClass = el("iframe", { class: "not-a-diagram", "data-decision": "D-010" });
+n = await D.mount(root([decoyTag, decoyClass]), "en", fetcher);
+if (n !== 0 || decoyTag.gone || decoyClass.gone)
+  fail("mount touches its own frames only, moved " + n);
 
 // the swap: same iframe, new language, new src
 n = await D.mount(root([a]), "en", fetcher);
@@ -732,10 +832,16 @@ n = await D.mount(root([a]), "en", fetcher);
 if (n !== 0) fail("re-mounting the same language is a no-op");
 
 // a fetcher that throws must not take the board down with it
-const c = frame("D-009");
+const c = parse(D.embed("D-009"));
 n = await D.mount(root([c]), "en", async () => { throw new Error("offline"); });
 if (n !== 0 || !c.gone) fail("an unreachable probe hides the diagram rather than throwing");
-console.log("embed ok");
+// the class the stylesheet has to know about, reported rather than retyped
+console.log("embed class=" + a.attrs.class);
+// only when nothing failed. It used to be printed unconditionally, so "and
+// said so" reported ok on a run where eight checks above it had failed -
+// a green line in a red block, which is the one place a reader is deciding
+// how much to trust the rest.
+if (!process.exitCode) console.log("embed ok");
 })();
 JS
 MOD="$ROOT/board/public/diagram.js" bun run "$probe" > "$probe.out" 2>&1
@@ -743,6 +849,16 @@ rc=$?
 assert_eq "0" "$rc" "the embed module behaves"
 assert_contains "$(cat "$probe.out" 2>/dev/null)" "embed ok" "and said so"
 [ "$rc" = 0 ] || cat "$probe.out"
+
+# embed() ships the frame hidden and mount reveals it, which only means
+# anything if the page's stylesheet hides it in the meantime. The class comes
+# back from the module rather than being typed in here, so renaming it in
+# diagram.js without renaming it in index.html is what goes red - the two
+# strings are held together by the assertion instead of by memory.
+cls="$(sed -n 's/^embed class=//p' "$probe.out" 2>/dev/null)"
+assert_ok "test -n '$cls'" "the module says which class its frame carries"
+assert_contains "$page" "iframe.${cls}[hidden]" \
+  "and the stylesheet hides that very class until mount takes hidden off"
 rm -rf "$(dirname "$probe")"
 
 # The other end of the same claim: the url the module builds is the url the
