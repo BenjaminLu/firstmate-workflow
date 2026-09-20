@@ -17,6 +17,17 @@ Check, in order:
    you believe would break. If you cannot name one, that is a finding.
 3. Does anything reach outside the declared scope?
 4. What did the diff change that no test covers?
+5. For anything you found: is it one occurrence, or one of a kind? Say which.
+
+## Name the class, not the instance
+
+When you find something, say what **kind** of thing it is, so the worker can
+sweep for it. "Line 44 asserts `core.hooksPath` on the machine running the
+suite" is half a finding; "this suite asserts ambient machine state rather than
+the code — check every assertion in `tests/` for the same" is the whole one.
+
+A worker who fixes only the line you pointed at has done what you asked. If
+that is not what you wanted, it is because you named a line instead of a class.
 
 ## Signing
 

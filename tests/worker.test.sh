@@ -65,6 +65,8 @@ assert_eq "1" "$?" "a failed attempt exits 1"
 assert_contains "$(cat "$d3/ghcalls")" "pr create" "a failed attempt still opens a pull request"
 
 # the adapter never touches the repository
-assert_fail "grep -qE '\\b(git|gh)\\b' '$ROOT/bin/adapters/mock.sh'" "the mock adapter contains no git or gh"
+# a comment may mention git; a call may not
+assert_fail "grep -vE '^[[:space:]]*#' '$ROOT/bin/adapters/mock.sh' | grep -qE '\\b(git|gh)\\b'" \
+  "the mock adapter calls no git and no gh"
 rm -rf "$d" "$d2" "$d3"
 finish

@@ -48,6 +48,11 @@ These bind every actor, including firstmate itself.
 3. **Merging is the captain's**, and it arrives as a decision card on the
    board — never as a sentence in a conversation (section 5.2).
 4. **An agent never runs `git` or `gh`.** The scripts do that (section 5.3).
+5. **A review finding is a class, not an instance.** The worker sweeps the
+   repository for every occurrence of the kind of problem named and fixes them
+   in one round, and reports the search it used and the count it found. Fixing
+   one instance per round is what turns a three-round review into a nine-round
+   one, and it is the single most expensive habit this system can develop.
 
 ---
 
