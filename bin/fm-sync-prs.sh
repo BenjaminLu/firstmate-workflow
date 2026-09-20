@@ -8,6 +8,11 @@
 # Idempotent: an event already in the log for that pull request and state is
 # not written again, so this is safe to run on a timer.
 set -uo pipefail
+# Nothing below may read standard input. A dispatched child inherits it, and
+# a child that reads it blocks the caller waiting for a human who is not
+# there. One guarantee, in one place; bin/ci.sh fails if a script that
+# dispatches is missing it.
+exec < /dev/null
 
 REPO="${FM_ROOT:-$(pwd)}"; LIMIT=50; GH="${FM_GH:-gh}"
 while [ $# -gt 0 ]; do
@@ -56,7 +61,7 @@ while IFS=$'\t' read -r num state branch title; do
     ${task:+--task "$task"} \
     --en "#${num} ${en}: ${title}" \
     --tw "#${num} ${tw}：${title}" \
-    >/dev/null 2>&1 || continue
+    >/dev/null 2>&1 </dev/null || continue
   echo "$type #$num${task:+ ($task)}"
   new=$(( new + 1 ))
 done <<< "$(jq -r '.[]|[(.number|tostring),.state,.headRefName,.title]|@tsv' <<<"$raw")"

@@ -72,8 +72,184 @@ cap3="$d/sent3.md"
   bin/fm-review.sh --task T-Z --branch work --round 3 >/dev/null 2>&1 )
 assert_contains "$(cat "$cap3")" "CRITERIA-COMPLETE:T-Z" "round three asks for the closed list"
 
-# an unavailable reviewer vendor is not a rejection
-( cd "$r" && FM_ROOT="$r" FM_GH="$GH" FM_MOCK_EXIT=2 bin/fm-review.sh --task T-Z --branch work >/dev/null 2>&1 )
-assert_eq "2" "$?" "an unavailable vendor exits 2"
+# An outage is a run that produced nothing at all - a CLI that is not there.
+# That is the only thing that earns exit 2, because 2 tells fm-run to try
+# again next turn, and a run that DID produce something will produce the
+# same something next turn, for ever.
+printf 'vendor: mock\n' > "$r/config.yaml"   # one vendor, and it is not there
+stub_script "$r/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+exit 2
+M
+rm -f "$r/state/reviews/T-Z-r7.log" "$r/state/reviews/T-Z-r7."*.log
+outU="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 7 2>&1)"
+assert_eq "2" "$?" "a reviewer that produced nothing at all is an outage"
+assert_ok "test -f '$r/state/reviews/T-Z-r7.log'" "and the round still leaves a file to read"
+assert_contains "$outU" "state/reviews/T-Z-r7.log" "and says where to read it"
+
+# but a run that said something, however unusable, is a failed round
+stub_script "$r/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'mock: not logged in\n' >> "$4"
+exit 2
+M
+printf 'vendor: mock\n' > "$r/config.yaml"
+rm -f "$r/state/reviews/T-Z-r8.log" "$r/state/reviews/T-Z-r8."*.log
+( cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 8 >/dev/null 2>&1 )
+assert_eq "3" "$?" "a reviewer that said something unusable is a failed round"
+assert_contains "$(cat "$r/state/reviews/T-Z-r8.log" 2>/dev/null)" "not logged in" \
+  "and what it said is kept"
+
+# a failed round does not advance the counter, so the next failure at the
+# same round must not overwrite the last engine's log
+outW="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 8 2>&1)"
+assert_ok "test -f '$r/state/reviews/T-Z-r8.2.log'" "a second failure at the same round lands beside the first"
+assert_contains "$outW" "T-Z-r8.2.log" "and the reviewer says the path it actually wrote"
+restore_scripts
 rm -rf "$d" "$d2"
+# a review that did not happen must not look like one that did
+d="$(fixture)"; r="$d/repo"; GH="$(ghstub "$d")"
+: > "$d/ghcalls"
+cat > "$r/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'TypeError: cannot read properties of undefined\n  at review.js:12\n' >> "$4"
+exit 0
+M
+chmod +x "$r/bin/adapters/mock.sh"
+out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+rc=$?
+assert_eq "3" "$rc" "a silent reviewer is a failed round, not a passed one"
+assert_contains "$out" "produced no review" "it says what went wrong"
+assert_contains "$(cat "$r/state/reviews/T-Z-r1.log" 2>/dev/null)" "TypeError" \
+  "and keeps what the engine actually said instead of deleting it"
+assert_contains "$out" "state/reviews/T-Z-r1.log" "and says where to read it"
+assert_fail "grep -q 'pr comment' '$d/ghcalls'" "nothing was posted to the pull request"
+types="$(jq -r .type "$r/state/events.jsonl")"
+assert_contains "$types" "review_failed" "it emitted review_failed"
+assert_lacks "$(printf '%s\n' "$types" | tail -1)" "approved" "and signed nothing"
+
+# a vendor named in config.yaml with no adapter behind it is a typo, not an
+# outage: reporting it as transient would have fm-run say "leaving it for
+# the next turn" on every turn, forever
+printf 'vendor: mock\nreviewer:\n  vendor: nosuchvendor\nfallback:\n  - mock\n' > "$r/config.yaml"
+out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_eq "65" "$?" "a vendor with no adapter is a configuration error"
+assert_contains "$out" "no adapter" "and says which one"
+
+# the reviewer falls back the same way the worker does
+cat > "$r/bin/adapters/down.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'down: not logged in\n' >> "$4"
+exit 2
+M
+chmod +x "$r/bin/adapters/down.sh"
+printf 'vendor: mock\nreviewer:\n  vendor: down\nfallback:\n  - mock\n' > "$r/config.yaml"
+cat > "$r/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'the fallback reviewed it\nREJECT:T-Z\n' > "$3/verdict.txt"
+exit 0
+M
+chmod +x "$r/bin/adapters/mock.sh"
+out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_eq "0" "$?" "an unavailable reviewer vendor falls through to the next"
+assert_contains "$out" "the fallback reviewed it" "and the fallback's verdict is the verdict"
+
+# and when the reviewer's own vendor is there, it is the one that reviews -
+# a different engine from the worker's is the whole point of the block
+cat > "$r/bin/adapters/other.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'reviewed by the other engine\nREJECT:T-Z\n' > "$3/verdict.txt"
+exit 0
+M
+chmod +x "$r/bin/adapters/other.sh"
+printf 'vendor: mock\nreviewer:\n  vendor: other\nfallback:\n  - mock\n' > "$r/config.yaml"
+out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_contains "$out" "reviewed by the other engine" "the reviewer block picks the engine"
+
+# the review is on stdout and the agent left a scratch file in its working
+# directory. Reading the working directory alone would discard the review
+# and repeat the round for ever.
+stub_script "$r/bin/adapters/down.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'a note the agent left behind\n' > "$3/notes.md"
+printf 'Two findings, both the same class.\nREJECT:T-Z\n' >> "$4"
+exit 2
+M
+printf 'vendor: mock\nreviewer:\n  vendor: down\nfallback:\n  - mock\n' > "$r/config.yaml"
+out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 9 --pr 9 2>&1)"
+assert_eq "0" "$?" "a review on stdout is not lost to a scratch file beside it"
+assert_contains "$out" "REJECT:T-Z" "and it is the verdict"
+assert_contains "$out" "a note the agent left behind" "with everything the attempt produced"
+restore_scripts
+
+# an engine misread as unavailable that signed a verdict anyway keeps it:
+# the reviewer's output IS the review, so throwing it away would repeat the
+# same round forever
+cat > "$r/bin/adapters/down.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'The credentials check is never exercised.\nREJECT:T-Z\n' > "$3/verdict.txt"
+exit 2
+M
+chmod +x "$r/bin/adapters/down.sh"
+printf 'vendor: mock\nreviewer:\n  vendor: down\nfallback:\n  - mock\n' > "$r/config.yaml"
+out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 5 --pr 9 2>&1)"
+assert_eq "0" "$?" "a signed verdict survives being read as an outage"
+assert_contains "$out" "REJECT:T-Z" "and it is the verdict"
+assert_contains "$out" "was read as unavailable" "and the reviewer says it was misread"
+printf 'vendor: mock\nreviewer:\n  vendor: other\nfallback:\n  - mock\n' > "$r/config.yaml"
+
+# an engine that ran and said something unsigned is a failed round, even
+# when what it said trips the signature list. Reporting that as an outage
+# would have fm-run retry it every turn on the same input, for ever.
+stub_script "$r/bin/adapters/down.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'I could not reach a view on the rate limit changes.\n' > "$3/verdict.txt"
+exit 0
+M
+printf 'vendor: mock\nreviewer:\n  vendor: down\nfallback:\n  - mock\n' > "$r/config.yaml"
+out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 6 --pr 9 2>&1)"
+assert_eq "3" "$?" "unsigned output that trips the signature list is a failed round, not an outage"
+assert_contains "$(cat "$r/state/reviews/T-Z-r6.log" 2>/dev/null)" "rate limit" \
+  "and what it said is kept, from the output directory as well as the log"
+assert_contains "$(jq -r .type < "$r/state/events.jsonl" | tr '\n' ' ')" "review_failed" \
+  "and it emitted review_failed"
+restore_scripts
+printf 'vendor: mock\nreviewer:\n  vendor: other\nfallback:\n  - mock\n' > "$r/config.yaml"
+
+# a round that ends in neither marker is an engine that failed, not a verdict
+cat > "$r/bin/adapters/other.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'This looks broadly fine to me, nice work.\n' > "$3/verdict.txt"
+exit 0
+M
+chmod +x "$r/bin/adapters/other.sh"
+out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 2 --pr 9 2>&1)"
+assert_eq "3" "$?" "prose with neither marker is not a review"
+assert_contains "$out" "state/reviews/T-Z-r2.log" "and round two says where its log is too"
+
+cat > "$r/bin/adapters/other.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'Three findings, all one class.\nREJECT:T-Z\n' > "$3/verdict.txt"
+exit 0
+M
+chmod +x "$r/bin/adapters/other.sh"
+out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 3 --pr 9 2>&1)"
+assert_eq "0" "$?" "a signed rejection is a completed round"
+assert_contains "$out" "REJECT:T-Z" "and the rejection is the verdict"
+assert_lacks "$out" "the fallback reviewed it" "and the worker's engine is not used"
+
+rm -rf "$d"
+
+
 finish

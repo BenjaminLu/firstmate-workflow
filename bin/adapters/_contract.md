@@ -17,6 +17,33 @@ exits:    0  done
 Only `2` falls back to the next vendor in `config.yaml`. A `1` is a normal
 failed attempt and goes to the gates and the reviewer like any other.
 
+**The exit code is not the verdict.** `cursor-agent` prints
+`Authentication required` and exits `0`; a vendor that is out of quota or off
+the network can do the same. An adapter that trusted the exit code would
+report done, the gates would run against an untouched worktree, and the
+reviewer would spend a round on nothing. So the verdict is decided by what
+the CLI *said*, in `_lib.sh`, in one place for every adapter:
+
+- the run's own output matches an unavailability signature -> `2`, whatever it exited
+- the exit code is one vendors use for unavailable (`2 4 41 69 75`) -> `2`
+- a non-zero exit -> `1`
+- exit `0` having said nothing at all -> `1`
+- otherwise -> `0`
+
+The fallback chain appends to one log, so a verdict only ever reads the bytes
+its own run added - the previous vendor's auth error must not condemn the
+next one.
+
+`mock.sh` is the exception, deliberately. It has no CLI to read a verdict
+from: its exit code *is* the scenario a test asked for, and putting it on
+`fm_adapter_verdict` would mean a suite could not ask for "exit 0 having
+said nothing" without the library overruling it. It is the only adapter
+whose verdict is an input rather than a judgement, which is why the
+contract test exempts it by name and checks its scripted promises instead.
+
+`fm_vendor_chain` builds the order and `fm_run_chain` runs it, both in
+`bin/fm-config.sh`, so the worker and the reviewer fall back identically.
+
 The separation matters: if a model producing bad work looked the same as an
 outage, an outage would look like the model failing and the crew would burn a
 review round on nothing.

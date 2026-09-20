@@ -7,6 +7,19 @@
 #                                  task in flight by one step
 #   fm-run.sh watch [--every 30]   keep doing that
 set -uo pipefail
+# Nothing below may read standard input. A dispatched child inherits it, and
+# a child that reads it blocks the whole turn waiting for a human who is not
+# there - the advance loop did exactly this once, and ci.sh has the same
+# line for the same reason.
+#
+# It is NOT the only guarantee, and the earlier version of this comment that
+# said so was wrong: `exec` sets fd 0 for the script, and a child dispatched
+# inside a compound command that carries its own redirection - the advance
+# loop's `done <<<"$open_prs"` - is handed the list, not /dev/null. So every
+# dispatch also carries its own `</dev/null`, and bin/ci.sh fails if one
+# does not. Having both means neither is proved by a probe; each is proved
+# by reading the file, which is what the gate does.
+exec < /dev/null
 _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
@@ -28,10 +41,10 @@ say() { printf '  %s\n' "$*"; }
 
 turn() {
   # 1. whatever GitHub knows that the log does not
-  "$B/fm-sync-prs.sh" --repo "$REPO" >/dev/null 2>&1 || true
+  "$B/fm-sync-prs.sh" --repo "$REPO" >/dev/null 2>&1 </dev/null || true
 
   # 2. start what is ready. dispatch refuses on its own if nothing is green-lit
-  started="$("$B/fm-dispatch.sh" --repo "$REPO" 2>/dev/null | grep -E '^T-' || true)"
+  started="$("$B/fm-dispatch.sh" --repo "$REPO" 2>/dev/null </dev/null | grep -E '^T-' || true)"
   [ -z "$started" ] || say "dispatched: $(printf '%s' "$started" | tr '\n' ' ')"
 
   # 3. advance every task that has a pull request open
@@ -63,7 +76,27 @@ turn() {
       say "$task: all seven gates green, asking the captain ($id)"
     elif [ "$g" -eq 7 ]; then
       say "$task: gates 1-6 green, sending it to review (round $round)"
-      "$B/fm-review.sh" --task "$task" --branch "$branch" --pr "$pr" --round "$round" --repo "$REPO" >/dev/null 2>&1 </dev/null || true
+      # exit 3 is a round that produced no verdict. Swallowing it would let
+      # a crashed engine read as a review that simply did not sign.
+      # 65 is a typo in config.yaml, and the one line that says which name
+      # is wrong is on stderr - so it is kept rather than thrown away with
+      # the rest. A configuration error repeats every turn until a human
+      # reads it; a message that suggests nothing is worse than none.
+      rvout="$("$B/fm-review.sh" --task "$task" --branch "$branch" --pr "$pr" \
+        --round "$round" --repo "$REPO" 2>&1 </dev/null)"
+      # the child already said where its log is and which vendor name is
+      # wrong. Every branch here repeats what it said rather than
+      # reconstructing it: a reconstructed path is confidently wrong the
+      # moment a round fails twice, and keep_log numbers the second one.
+      rvrc=$?
+      rvsaid="$(grep -E 'log is at|no adapter' <<< "$rvout" | tail -1)"
+      case "$rvrc" in
+        0) ;;
+        2) say "$task: no reviewer engine was available${rvsaid:+ ($rvsaid)}, leaving it for the next turn" ;;
+        3) say "$task: the reviewer produced no verdict${rvsaid:+ ($rvsaid)}" ;;
+        65) say "$task: ${rvsaid:-config.yaml names a vendor with no adapter}" ;;
+        *) say "$task: the review round failed" ;;
+      esac
     else
       say "$task: stopped at gate $g"
     fi

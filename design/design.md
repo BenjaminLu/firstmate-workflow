@@ -190,6 +190,49 @@ Only `2` triggers the fallback list in `config.yaml`; `1` proceeds to the gates
 and the reviewer like any other attempt. Every adapter passes
 `tests/adapter-contract.test.sh`.
 
+**The exit code is not the verdict.** A vendor can print `Authentication
+required` and exit `0` — `cursor-agent` does. So what the run *said* decides
+first, and one function decides it for every adapter (`bin/adapters/_lib.sh`):
+an unavailability signature in the run's own output is a `2` whatever the exit
+code was; exit `0` having said nothing at all is a `1`. Because the fallback
+chain appends to one log, a verdict only reads the bytes its own run added.
+
+`fm_vendor_chain <role>` builds the order and `fm_run_chain` runs it, both in
+`bin/fm-config.sh`, so the worker and the reviewer fall back identically. Each
+role may name its own engine — `reviewer:` and `worker:` blocks in
+`config.yaml` — and whichever it names leads a chain that continues through
+`fallback:`, with no vendor run twice. A reviewer whose engine is down is
+therefore not a reviewer who never ran.
+
+A round that produced no review exits `3` and emits `review_failed`; it never
+reaches the pull request and never counts toward gate 7. A verdict has to
+carry `APPROVE:<task>` or `REJECT:<task>`, because a real reviewer's verdict
+*is* its standard output and without a marker a crashed engine's stack trace
+looks exactly like a damning review.
+
+The judgement about outages can never be right on wording alone, because
+there is no phrase a model cannot write — this repository contains
+"Authentication required" in two files, so any review of it quotes them. So
+wording does not decide. The adapter is deliberately generous, and the caller
+settles it: `fm_run_chain` takes a predicate answering *did this run produce
+work?*, and work beats a signature. A worker asks whether the worktree
+changed; a reviewer asks whether the output carries a verdict marker. Being
+over-eager then costs one more vendor attempt and never the work — and a
+signed review is never thrown away, which would otherwise repeat the same
+round forever with a reassuring message on it.
+
+A vendor named at the head of the chain with no adapter behind it is a typo,
+not an outage. It is caught before anything runs and exits `65`, so a human
+fixes the configuration — and so the exit cannot throw away work a fallback
+vendor had already done. A *fallback* entry with no adapter is simply
+skipped.
+
+An exit code never overrules produced work, in the callers any more than in
+the adapters: a signed review is a review whatever the engine exited with,
+and a changed worktree is work. And each attempt reads only its own output —
+its own directory under the chain's, and its own slice of the shared log —
+so a vendor that dies half way through cannot sign on the next one's behalf.
+
 ### 5.4 The pull request protocol
 
 Strings on a pull request are input to `bin/fm-gate.sh`. Wrong format means it
@@ -510,6 +553,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-012 | `/open` and the read-only diff viewer | T-009 |
 | T-013 | the decision API, including merge cards | T-008, T-009 |
 | T-014 | Playwright e2e and the GitHub Actions workflow | T-010, T-011, T-013 |
+| T-025 | the adapter verdict: a vendor that fails silently is not one that worked | T-003, T-006, T-024 |
 
 ### M2 — protocol and self-update
 

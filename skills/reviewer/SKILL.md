@@ -29,6 +29,14 @@ the code — check every assertion in `tests/` for the same" is the whole one.
 A worker who fixes only the line you pointed at has done what you asked. If
 that is not what you wanted, it is because you named a line instead of a class.
 
+## The language
+
+Write the review in English. Everything in this repository is — the README,
+the skills, the code, the comments, the pull request bodies and the reviews —
+so that one vocabulary covers the artefact and the argument about it. The
+board is the only thing translated, and it is translated from dictionaries,
+not by writing a second version of anything.
+
 ## Signing
 
 When, and only when, you would defend it:
@@ -39,6 +47,16 @@ APPROVE:<task-id>
 
 Nothing else counts. Praise in prose is not an approval and the gates will not
 read it as one.
+
+When you would not defend it, say so the same way:
+
+```
+REJECT:<task-id>
+```
+
+One of the two ends every round. A round that carries neither is not a review,
+and the scripts treat it as an engine that failed rather than a verdict - the
+only way a crashed reviewer can be told apart from a damning one.
 
 ## From round three
 

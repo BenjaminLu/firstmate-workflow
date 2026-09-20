@@ -8,22 +8,27 @@
 # a REPL hangs a dispatch until something kills it, and looks like a model
 # thinking rather than a script waiting for a human who is not there.
 set -uo pipefail
+_fm_alib="$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
+[ -r "$_fm_alib" ] || { echo "codex: missing $_fm_alib" >&2; exit 70; }
+# shellcheck source=bin/adapters/_lib.sh
+. "$_fm_alib"
 [ "${1-}" = "run" ] || { echo "usage: codex.sh run <prompt> <worktree> <log>" >&2; exit 64; }
 prompt="${2-}"; tree="${3-}"; log="${4-}"
 [ -f "$prompt" ] || { echo "codex: no prompt at $prompt" >&2; exit 64; }
 [ -d "$tree" ]   || { echo "codex: no worktree at $tree" >&2; exit 64; }
 
 command -v codex >/dev/null 2>&1 || {
-  # the log is the only trace a stand-down or a reconcile will have
-  echo "codex: codex is not installed - vendor unavailable" | tee -a "$log" >&2; exit 2; }
+  # stderr, not the log: the log is what the VENDOR said, and a caller that
+  # asks "did anything run?" must not be answered by the adapter's own
+  # notice that nothing could
+  echo "codex: codex is not installed - vendor unavailable" >&2; exit 2; }
 
-( cd "$tree" && codex exec --skip-git-repo-check - ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
+# FM_ADAPTER_ARGS is deliberately unquoted: it carries whatever extra
+# arguments the operator configured, and they have to split into words.
+off="$(fm_adapter_mark "$log")"
+# the trailing "-" is codex's read-the-prompt-from-stdin marker and has to
+# be the last argument, so FM_ADAPTER_ARGS goes before it
+( cd "$tree" && codex exec --skip-git-repo-check ${FM_ADAPTER_ARGS:-} - < "$prompt" ) >> "$log" 2>&1
 rc=$?
-case "$rc" in
-  0) exit 0 ;;
-  # authentication, quota and network failures are the vendor being
-  # unavailable, not the model failing at the task
-  2|4|41|69|75) exit 2 ;;
-  *) grep -qiE 'not logged in|unauthor|quota|rate limit|network|ENOTFOUND|ECONNREFUSED' "$log" \
-       && exit 2 || exit 1 ;;
-esac
+fm_adapter_verdict "$rc" "$log" "$off"
+exit $?

@@ -41,7 +41,7 @@ cat > bin/adapters/mock.sh <<'M'
 [ "$1" = "run" ] || exit 64
 echo "mock ran" >> "$4"
 if grep -q "Find the reason to reject" "$2"; then
-  printf '%s\n' "${FM_VERDICT:-round one: name the helper and cover the empty case}" > "$3/verdict.txt"
+  printf '%s\nREJECT:T-A\n' "${FM_VERDICT:-round one: name the helper and cover the empty case}" > "$3/verdict.txt"
   exit 0
 fi
 printf 'implemented\n' > "$3/src/thing"
@@ -73,8 +73,80 @@ out2="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
 assert_contains "$out2" "sending it to review" "gates one to six pass and it goes to review"
 assert_ok "test -s '$GHSTATE/comments.$pr'" "the reviewer commented"
 
+# fm-run must not swallow a review round that produced no verdict. The
+# reviewer is stubbed rather than crashed for real, so the round counter is
+# untouched and the scenario after this point is the one it was before.
+# the stub says where its log is, the way the real fm-review does, so the
+# turn output can be checked against what the child actually reported
+# rather than against a path fm-run reconstructed
+stub_script "$r/bin/fm-review.sh" <<'S'
+#!/usr/bin/env bash
+echo "fm-review: nothing to show; its log is at state/reviews/T-A-r1.7.log" >&2
+exit 3
+S
+outX="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
+assert_contains "$outX" "produced no verdict" "a review round with no verdict is reported, not counted"
+assert_contains "$outX" "T-A-r1.7.log" "and the path it prints is the one the reviewer wrote"
+stub_script "$r/bin/fm-review.sh" <<'S'
+#!/usr/bin/env bash
+echo "fm-review: every reviewer vendor was unavailable; their log is at state/reviews/T-A-r1.9.log" >&2
+exit 2
+S
+outY="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
+assert_contains "$outY" "no reviewer engine was available" "and so is a reviewer with no engine"
+assert_contains "$outY" "T-A-r1.9.log" "which also carries the log the reviewer kept"
+stub_script "$r/bin/fm-review.sh" <<'S'
+#!/usr/bin/env bash
+exit 64
+S
+outZ="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
+assert_contains "$outZ" "review round failed" "and so is a reviewer that failed some other way"
+
+# a dispatched child inherits fm-run's stdin. If that is the caller's open
+# pipe and the child reads it, the turn never ends - which is how the
+# advance loop once ate its own input. The advance loop happens to be fed
+# by a here-string, so the child that proves this has to be one called
+# outside it: the sync at the top of the turn.
+stub_script "$r/bin/fm-sync-prs.sh" <<'S'
+#!/usr/bin/env bash
+cat > /dev/null
+exit 0
+S
+# a fifo held open read-write never reaches EOF and needs no writer
+# process, so a child that reads it blocks for good and the probe leaves
+# nothing running behind it
+mkfifo "$r/openpipe"
+exec 9<> "$r/openpipe"
+( run bin/fm-run.sh once --repo "$r" >/dev/null 2>&1 <&9; touch "$r/turn-done" ) &
+probe=$!
+deadline=$(( $(date +%s) + 30 ))
+while [ ! -f "$r/turn-done" ] && [ "$(date +%s)" -lt "$deadline" ]; do sleep 0.3; done
+assert_ok "test -f '$r/turn-done'" "a turn finishes even when a child would read standard input"
+kill -9 "$probe" 2>/dev/null; wait "$probe" 2>/dev/null
+pkill -f "$r/bin/fm-sync-prs.sh" 2>/dev/null
+exec 9>&-; rm -f "$r/openpipe"
+restore_scripts
+
+# a real review body has newlines, quotes and backslashes in it. The stub
+# used to interpolate one into JSON by hand, which put a raw control
+# character in the document, and gate 7 then read an approval sitting right
+# there as nothing at all.
+body="$(printf 'Two findings:\n1. the "helper" is unnamed\n2. a path like C:\\tmp is unhandled\nREJECT:T-A')"
+run "$GH" pr comment "$pr" --body "$body" >/dev/null 2>&1
+back="$(run "$GH" pr view "$pr" --json comments --jq '.comments[-1].body')"
+assert_eq "$body" "$back" "a review body with newlines and quotes comes back byte for byte"
+assert_eq "reviewer-1" "$(run "$GH" pr view "$pr" --json comments --jq '.comments[-1].author.login')" \
+  "and the author is not split off by one of its newlines"
+
 # the reviewer in this fixture signs off
 printf 'reviewer-1\tAPPROVE:T-A\n' >> "$GHSTATE/comments.$pr"
+
+# The fixture's reviewer signs REJECT before it signs APPROVE, and the round
+# counter is what decides whether the next turn runs the round-three
+# protocol instead of asking for a decision. Pin it, or a later edit to the
+# reviewer's output silently changes which branch turn three takes.
+rounds="$(jq -r 'select(.type=="review_opened")|.task' "$r/state/events.jsonl" | wc -l | tr -d ' ')"
+assert_eq "1" "$rounds" "one review round has happened when the approval lands"
 
 # --- turn three: all seven green, so the captain is asked ---------------
 out3="$(run bin/fm-run.sh once --repo "$r" 2>&1)"

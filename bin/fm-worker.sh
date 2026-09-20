@@ -5,6 +5,11 @@
 #
 #   fm-worker.sh --task T-004 [--repo .] [--vendor claude] [--name worker-1]
 set -uo pipefail
+# Nothing below may read standard input. A dispatched child inherits it, and
+# a child that reads it blocks the whole turn waiting for a human who is not
+# there - the advance loop did exactly this once, and ci.sh has the same
+# line for the same reason. One guarantee, in one place.
+exec < /dev/null
 _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
@@ -25,10 +30,8 @@ done
 cd "$REPO" || { echo "fm-worker: no repo at $REPO" >&2; exit 64; }
 NAME="${NAME:-worker-$$}"
 EMIT="$REPO/bin/fm-emit.sh"
-emit() { FM_ROOT="$REPO" "$EMIT" --actor "$NAME" --task "$TASK" "$@" >/dev/null 2>&1 || true; }
+emit() { FM_ROOT="$REPO" "$EMIT" --actor "$NAME" --task "$TASK" "$@" >/dev/null 2>&1 </dev/null || true; }
 
-cfg() { fm_cfg "$1"; }
-fallbacks() { fm_cfg_list fallback; }
 
 spec="$(jq -r --arg t "$TASK" '.tasks[]|select(.id==$t)' design/tasks.json 2>/dev/null)"
 [ -n "$spec" ] || { echo "fm-worker: no task $TASK in design/tasks.json" >&2; exit 65; }
@@ -56,23 +59,28 @@ prompt="$tree/.fm-prompt.md"
 } > "$prompt"
 
 # --- the adapter, with fallback only on a vendor being unavailable -------
+# The worker's evidence: files changed in the worktree. The prompt lives
+# there too, so it comes out of the count or every run looks busy.
+worker_did_work() { [ -n "$(git -C "$tree" status --porcelain -- . ":(exclude).fm-prompt.md")" ]; }
 log="$REPO/state/worktrees/$TASK.log"; : > "$log"
-vendors="${VENDOR:-$(cfg vendor)}"
-[ -n "$vendors" ] || vendors=mock
-for v in $vendors $( [ -n "$VENDOR" ] || fallbacks ); do
-  a="$REPO/bin/adapters/$v.sh"
-  [ -x "$a" ] || continue
-  "$a" run "$prompt" "$tree" "$log"; rc=$?
-  case "$rc" in
-    2) emit --type vendor_unavailable --en "$v unavailable, trying the next" \
-            --tw "$v 不可用，換下一家"; continue ;;
-    *) break ;;
-  esac
+fm_run_chain "$REPO/bin/adapters" "$(fm_vendor_chain worker "$VENDOR")" \
+  "$prompt" "$tree" "$log" worker_did_work; rc=$?
+[ -z "$FM_VENDOR_UNKNOWN" ] || {
+  echo "fm-worker: config.yaml names a vendor with no adapter: $FM_VENDOR_UNKNOWN" >&2; exit 65; }
+[ -z "$FM_VENDOR_MISREAD" ] || {
+  echo "fm-worker: $FM_VENDOR_MISREAD was read as unavailable, but it changed files - keeping them" >&2
+  emit --type vendor_unavailable --en "read as unavailable but work was done; keeping it" \
+       --tw "被判成不可用，但確實有改動，保留"; }
+for v in $FM_VENDOR_SKIPPED; do
+  emit --type vendor_unavailable --en "$v unavailable, trying the next" \
+       --tw "$v 不可用，換下一家"
 done
-[ "${rc:-2}" = "2" ] && { echo "fm-worker: every vendor was unavailable" >&2; exit 2; }
+[ "$rc" = "2" ] && { echo "fm-worker: every vendor was unavailable" >&2; exit 2; }
 
 rm -f "$prompt"
-if [ -z "$(git -C "$tree" status --porcelain)" ]; then
+# the same predicate the chain was given, not a second spelling of it: the
+# two agreed only because the prompt happened to be removed between them
+if ! worker_did_work; then
   echo "fm-worker: the adapter changed nothing" >&2
   emit --type gate_failed --en "the adapter changed nothing" --tw "adapter 沒有改動任何檔案"
   exit 1

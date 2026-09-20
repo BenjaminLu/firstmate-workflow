@@ -53,4 +53,71 @@ strays="$(grep -ln "config.yaml" "$ROOT"/bin/*.sh | while read -r s; do
   grep -qE "sed .*config\.yaml|awk .*config\.yaml|grep .*config\.yaml" "$s" && basename "$s"; done)"
 assert_eq "" "$strays" "no script parses config.yaml on its own"
 rm -f "$f"
+
+# --- the vendor chain, which the worker and the reviewer share -----------
+d="$(mktemp -d)"
+cat > "$d/config.yaml" <<'YAML'
+vendor: claude
+reviewer:
+  vendor: cursor-agent
+fallback:
+  - claude
+  - codex
+  - mock
+  - codex
+YAML
+# the worker passes a role, so that is the call the test has to make
+( cd "$d" && . "$ROOT/bin/fm-config.sh"
+  printf '%s' "$(fm_vendor_chain worker)" ) > "$d/worker.chain"
+assert_eq "claude
+codex
+mock" "$(cat "$d/worker.chain")" "the worker leads with its vendor and no vendor runs twice"
+
+( cd "$d" && . "$ROOT/bin/fm-config.sh"
+  printf '%s' "$(fm_vendor_chain reviewer)" ) > "$d/rev.chain"
+assert_eq "cursor-agent
+claude
+codex
+mock" "$(cat "$d/rev.chain")" "the reviewer leads with its own vendor"
+
+( cd "$d" && . "$ROOT/bin/fm-config.sh"
+  printf '%s' "$(fm_vendor_chain reviewer gemini)" ) > "$d/exp.chain"
+assert_eq "gemini" "$(cat "$d/exp.chain")" "an explicit vendor is the whole chain"
+
+# a worker: block overrides the top level the same way reviewer: does
+printf 'vendor: claude\nworker:\n  vendor: codex\nfallback:\n  - mock\n' > "$d/config.yaml"
+( cd "$d" && . "$ROOT/bin/fm-config.sh"
+  printf '%s' "$(fm_vendor_chain worker)" ) > "$d/w2.chain"
+assert_eq "codex
+mock" "$(cat "$d/w2.chain")" "a worker block names the worker's engine"
+( cd "$d" && . "$ROOT/bin/fm-config.sh"
+  printf '%s' "$(fm_vendor_chain reviewer)" ) > "$d/r2.chain"
+assert_eq "claude
+mock" "$(cat "$d/r2.chain")" "and leaves the reviewer on the top-level one"
+
+# a chain of stub adapters: the first two are unavailable, the third works
+mkdir -p "$d/ad" "$d/tree"; : > "$d/log"; echo p > "$d/prompt"
+for v in a b; do
+  printf '#!/usr/bin/env bash\necho "%s down" >> "$4"\nexit 2\n' "$v" > "$d/ad/$v.sh"
+done
+printf '#!/usr/bin/env bash\necho "c ran" >> "$4"\nexit 1\n' > "$d/ad/c.sh"
+chmod +x "$d/ad"/*.sh
+( . "$ROOT/bin/fm-config.sh"
+  fm_run_chain "$d/ad" "a b c" "$d/prompt" "$d/tree" "$d/log"; rc=$?
+  printf '%s %s %s\n' "$rc" "$FM_VENDOR_USED" "$FM_VENDOR_SKIPPED" ) > "$d/ran"
+assert_eq "1 c a b" "$(cat "$d/ran")" "unavailable vendors are skipped, the next verdict stands"
+
+( . "$ROOT/bin/fm-config.sh"
+  fm_run_chain "$d/ad" "a b" "$d/prompt" "$d/tree" "$d/log"; printf '%s' "$?" ) > "$d/allout"
+assert_eq "2" "$(cat "$d/allout")" "every vendor unavailable is itself unavailable"
+
+# a head with no adapter is a typo in config.yaml and comes straight back
+( . "$ROOT/bin/fm-config.sh"
+  fm_run_chain "$d/ad" "nosuch c" "$d/prompt" "$d/tree" "$d/log"; printf '%s' "$?" ) > "$d/miss"
+assert_eq "65" "$(cat "$d/miss")" "a head with no adapter is a configuration error"
+# a fallback entry with no adapter is just skipped
+( . "$ROOT/bin/fm-config.sh"
+  fm_run_chain "$d/ad" "c nosuch" "$d/prompt" "$d/tree" "$d/log"; printf '%s' "$?" ) > "$d/miss2"
+assert_eq "1" "$(cat "$d/miss2")" "a fallback entry with no adapter is passed over"
+rm -rf "$d"
 finish

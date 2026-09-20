@@ -39,13 +39,18 @@ case "${1-}:${2-}" in
     state="$(awk -F'\t' -v n="$n" '$1==n{print $4}' "$S/prs" | tail -1)"
     case " $* " in
       *" comments "*)
+        # jq builds the JSON, because a real review body has newlines and
+        # quotes in it: interpolating one into a string by hand produced a
+        # raw control character, the whole document failed to parse, and
+        # gate 7 read an approval that was sitting right there as nothing
         {
         printf '{"comments":['
         first=1
         while IFS=$'\t' read -r who body; do
           [ -n "$who" ] || continue
           [ "$first" = 1 ] || printf ','; first=0
-          printf '{"author":{"login":"%s"},"body":"%s"}' "$who" "$body"
+          jq -cn --arg who "$who" --arg body "$(printf '%s' "$body" | tr '\r' '\n')" \
+            '{author:{login:$who},body:$body}'
         done < "$S/comments.$n" 2>/dev/null
         printf ']}\n'
         } | emit_json
@@ -56,6 +61,9 @@ case "${1-}:${2-}" in
   pr:checks)  [ -f "$S/red" ] && exit 1; echo "ci pass"; exit 0 ;;
   pr:comment)
     n="$3"; body="$(arg --body "$@")"
+    # one line per comment on disk, so the newlines in a review body are
+    # encoded here and decoded where the JSON is built - the two halves are
+    # the only places that may know about it
     printf '%s\t%s\n' "${GH_AS:-reviewer-1}" "$(printf '%s' "$body" | tr '\n' '\r')" >> "$S/comments.$n"
     ;;
   pr:merge)

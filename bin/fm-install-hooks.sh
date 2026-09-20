@@ -3,6 +3,9 @@
 #   bin/fm-install-hooks.sh          point this worktree at .githooks
 #   bin/fm-install-hooks.sh --check  report whether it is pointed there
 set -euo pipefail
+# Nothing below may read standard input; bin/ci.sh fails if a script that
+# dispatches is missing this.
+exec < /dev/null
 root=$(git rev-parse --show-toplevel)
 if [ "${1-}" = "--check" ]; then
   [ "$(git -C "$root" config --get core.hooksPath || true)" = ".githooks" ]

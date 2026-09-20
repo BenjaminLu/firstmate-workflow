@@ -34,6 +34,27 @@ assert_eq "working" "$(jq -r '.tasks[]|select(.id=="T-A")|.stage' <<<"$s")" "a d
 assert_eq "queued"  "$(jq -r '.tasks[]|select(.id=="T-B")|.stage' <<<"$s")" "an untouched task reads as queued"
 assert_eq "1" "$(jq -r .counts.inflight <<<"$s")" "the counts follow the log"
 
+# a task whose review never happened, or whose worker died, must not keep
+# reading as work in progress
+# reset between iterations, or the second type is asserted against a stage
+# the first one already set and its absence from the map would go unnoticed
+for pair in review_failed worker_crashed; do
+  FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-A --type dispatched \
+    --en "back to work" --tw "回去做" >/dev/null
+  assert_eq "working" "$(jq -r '.tasks[]|select(.id=="T-A")|.stage' \
+    <<<"$(curl -sf "http://127.0.0.1:$PORT/api/state")")" "T-A is working again before $pair"
+  FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-A --type "$pair" \
+    --en "stuck" --tw "卡住" >/dev/null
+  s2="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+  assert_eq "gate" "$(jq -r '.tasks[]|select(.id=="T-A")|.stage' <<<"$s2")" \
+    "$pair leaves the task blocked, not working"
+  # the stage is what the lane shows; inflight is the number a human reads to
+  # decide whether anything is moving, and it is the one that must not lie
+  assert_eq "0" "$(jq -r .counts.inflight <<<"$s2")" "$pair stops counting as in flight"
+  assert_eq "1" "$(jq -r .counts.blocked <<<"$s2")" "$pair counts as blocked"
+done
+
+
 page="$(curl -sf "http://127.0.0.1:$PORT/")"
 assert_contains "$page" "Captain" "the page is served"
 assert_contains "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/../../etc/passwd")" "40" \
@@ -61,4 +82,19 @@ assert_fail "sed 's|//.*||' '$ROOT/board/server.ts' | grep -qF '0.0.0.0'" \
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null || true
 rm -rf "$d"
+
+# the event types the board maps and the types fm-emit will write are two
+# halves of one list. T-010's rule - shared things have one source - applies
+# to these as much as to the ship's geometry.
+# strip the comments first, the way the sibling assertion above does: a
+# type named only in a comment is not a type the board maps
+mapped="$(sed -n '/^const STAGE/,/^};/p' "$ROOT/board/server.ts" \
+  | sed 's|//.*||' | grep -oE '[a-z_]+:' | tr -d ':' | sort -u)"
+known="$(sed -n '/^TYPES=/,/"$/p' "$ROOT/bin/fm-emit.sh" | tr ' \\"' '\n\n\n' | grep -E '^[a-z_]+$' | sort -u)"
+unknown=''
+for t in $mapped; do
+  printf '%s\n' "$known" | grep -qxF "$t" || unknown="$unknown $t"
+done
+assert_eq "" "$unknown" "every stage the board maps is a type fm-emit will write"
+
 finish

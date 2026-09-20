@@ -5,6 +5,11 @@
 #
 #   fm-merge.sh --pr 16 [--task T-009] [--repo .]
 set -uo pipefail
+# Nothing below may read standard input. A dispatched child inherits it, and
+# a child that reads it blocks the caller waiting for a human who is not
+# there. One guarantee, in one place; bin/ci.sh fails if a script that
+# dispatches is missing it.
+exec < /dev/null
 _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
@@ -39,8 +44,9 @@ $GH pr merge "$PR" --squash --delete-branch >/dev/null 2>&1 || {
 
 FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor captain --type merged --pr "$PR" \
   ${TASK:+--task "$TASK"} --en "merged #$PR from the board" --tw "從看板合併 #$PR" \
-  >/dev/null 2>&1 || true
+  >/dev/null 2>&1 </dev/null || true
 [ -n "$TASK" ] && [ -x "$REPO/bin/fm-cleanup.sh" ] && \
-  FM_ROOT="$REPO" FM_GH="$GH" "$REPO/bin/fm-cleanup.sh" --task "$TASK" --repo "$REPO" 2>&1 | sed "s/^/  /"
+  FM_ROOT="$REPO" FM_GH="$GH" "$REPO/bin/fm-cleanup.sh" --task "$TASK" --repo "$REPO" \
+    </dev/null 2>&1 | sed "s/^/  /"
 echo "fm-merge: merged #$PR"
 exit 0

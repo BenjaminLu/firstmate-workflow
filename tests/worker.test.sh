@@ -58,6 +58,39 @@ assert_contains "$(jq -r .type < "$r2/state/events.jsonl" | tr '\n' ' ')" "vendo
   "it emitted vendor_unavailable"
 assert_eq "" "$(cat "$d2/ghcalls" 2>/dev/null)" "an unavailable vendor opens no pull request"
 
+# a vendor named in config.yaml with no adapter behind it is a typo. It has
+# to be found before anything runs, or a real vendor does the work and the
+# exit 65 throws it away with the worktree.
+d4="$(fixture)"; r4="$d4/repo"; GH4="$(ghstub "$d4")"
+printf 'vendor: nosuchvendor\nfallback:\n  - mock\n' > "$r4/config.yaml"
+out4="$(cd "$r4" && FM_ROOT="$r4" FM_GH="$GH4" bin/fm-worker.sh --task T-Z 2>&1)"
+assert_eq "65" "$?" "a vendor with no adapter is a configuration error, not an outage"
+assert_contains "$out4" "nosuchvendor" "and the worker names it"
+assert_eq "" "$(cat "$d4/ghcalls" 2>/dev/null)" "nothing was pushed"
+assert_fail "test -s '$r4/state/worktrees/T-Z.log'" "and no vendor was run at all"
+rm -rf "$d4"
+
+# an outage is a judgement about text, and a judgement can be wrong. The
+# adapter here reports one having written the work anyway. If the
+# worktree has changes, something did the work and it must not be thrown
+# away on the strength of a signature match.
+d3="$(fixture)"; r3="$d3/repo"; GH3="$(ghstub "$d3")"
+cat > "$r3/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+mkdir -p "$3/src"
+printf 'the work was done\n' > "$3/src/thing"
+printf 'Error: rate limit reached\n' >> "$4"
+exit 2
+M
+chmod +x "$r3/bin/adapters/mock.sh"
+out3="$(cd "$r3" && FM_ROOT="$r3" FM_GH="$GH3" bin/fm-worker.sh --task T-Z 2>&1)"
+rc3=$?
+assert_ne "2" "$rc3" "work in the worktree is never discarded as an outage"
+assert_contains "$out3" "keeping them" "and the worker says why it kept it"
+assert_contains "$(cat "$d3/ghcalls" 2>/dev/null)" "pr create" "the work reaches a pull request"
+rm -rf "$d3"
+
 # an adapter that ran and failed still goes to the gates: commit, push, pull request
 d3="$(fixture)"; r3="$d3/repo"; GH3="$(ghstub "$d3")"
 ( cd "$r3" && FM_ROOT="$r3" FM_GH="$GH3" FM_MOCK_EXIT=1 bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )

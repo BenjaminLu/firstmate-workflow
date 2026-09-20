@@ -8,6 +8,11 @@
 # The exit code is the gate number so a caller can tell "the tests are vacuous"
 # from "the reviewer never signed".
 set -uo pipefail
+# Nothing below may read standard input. A dispatched child inherits it, and
+# a child that reads it blocks the caller waiting for a human who is not
+# there. One guarantee, in one place; bin/ci.sh fails if a script that
+# dispatches is missing it.
+exec < /dev/null
 
 REPO=''; TASK=''; BRANCH=''; PR=''; ONLY=''
 BASE="${FM_BASE:-main}"
@@ -143,7 +148,7 @@ gate7() {
     '.comments[]|select(.body|test("APPROVE:'"$TASK"'"))|.author.login' 2>/dev/null)"
   [ -n "$body" ] || return 1
   [ -z "$REVIEWER" ] && return 0
-  printf '%s\n' "$body" | grep -qx "$REVIEWER"
+  grep -qx "$REVIEWER" <<< "$body"
 }
 
 g 1 "branch exists and carries commits"          gate1

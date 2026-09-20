@@ -6,6 +6,11 @@
 #
 #   fm-cleanup.sh --task T-004 [--repo .] [--force]
 set -uo pipefail
+# Nothing below may read standard input. A dispatched child inherits it, and
+# a child that reads it blocks the caller waiting for a human who is not
+# there. One guarantee, in one place; bin/ci.sh fails if a script that
+# dispatches is missing it.
+exec < /dev/null
 
 REPO="${FM_ROOT:-$(pwd)}"; TASK=''; FORCE=0; GH="${FM_GH:-gh}"
 while [ $# -gt 0 ]; do
@@ -47,7 +52,7 @@ while IFS= read -r w; do
   [ -n "$w" ] || continue
   known="$known$(abs "$w" 2>/dev/null)"$'\n'
 done <<< "$(git worktree list --porcelain | sed -n 's/^worktree //p')"
-printf '%s' "$known" | grep -qxF "$tgt_real" || {
+grep -qxF "$tgt_real" <<< "$known" || {
   echo "fm-cleanup: refusing $tgt_real - not a worktree of this repository" >&2; exit 1; }
 
 # --- an open pull request is someone's unfinished work -------------------
@@ -64,6 +69,6 @@ git worktree prune >/dev/null 2>&1
 [ -n "$branch" ] && git branch -D "$branch" >/dev/null 2>&1
 rm -f "$ROOT/$TASK.log"
 FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate --task "$TASK" --type closed \
-  --en "worktree for $TASK removed" --tw "已移除 $TASK 的 worktree" >/dev/null 2>&1 || true
+  --en "worktree for $TASK removed" --tw "已移除 $TASK 的 worktree" >/dev/null 2>&1 </dev/null || true
 echo "fm-cleanup: removed $tgt_real"
 exit 0

@@ -5,6 +5,8 @@ model:  opus-5
 reviewer:               # optional: a different engine for review buys real
   vendor: cursor-agent  # adversarial value. delete this block to use one vendor.
   model:  composer
+# worker:               # the same override exists for the worker; without it
+#   vendor: codex       # the worker uses the top-level vendor above
 
 concurrency: 3          # workers in flight at once
 editor: code            # what /open hands a file to

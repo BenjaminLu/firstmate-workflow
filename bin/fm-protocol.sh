@@ -9,6 +9,11 @@
 # Exit 0 clean, 3 the worker skipped the question, 4 the list was never
 # closed, 5 the reviewer raised something off the closed list.
 set -uo pipefail
+# Nothing below may read standard input. A dispatched child inherits it, and
+# a child that reads it blocks the caller waiting for a human who is not
+# there. One guarantee, in one place; bin/ci.sh fails if a script that
+# dispatches is missing it.
+exec < /dev/null
 _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
@@ -30,7 +35,7 @@ done
   echo "usage: fm-protocol.sh check --task <id> --pr <n> [--round n]" >&2; exit 64; }
 cd "$REPO" || { echo "fm-protocol: no repo at $REPO" >&2; exit 64; }
 
-emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate --task "$TASK" --pr "$PR" "$@" >/dev/null 2>&1 || true; }
+emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate --task "$TASK" --pr "$PR" "$@" >/dev/null 2>&1 </dev/null || true; }
 
 # one comment per line: author, then the body with newlines folded to \r so a
 # multi-line review stays one record
@@ -49,7 +54,7 @@ while IFS=$'\t' read -r who folded; do
     *"CRITERIA-COMPLETE:$TASK"*)
       closed=1
       # the numbered items in the closing comment are the whole of the list
-      list_len="$(printf '%s\n' "$text" | grep -cE '^[[:space:]]*[0-9]+[.)]')"
+      list_len="$(grep -cE '^[[:space:]]*[0-9]+[.)]' <<< "$text")"
       continue ;;
   esac
   [ "$closed" = 1 ] || continue
@@ -58,7 +63,7 @@ while IFS=$'\t' read -r who folded; do
     *"APPROVE:$TASK"*|*"REGRESSION:$TASK"*) continue ;;
   esac
   # after the list closes, a comment has to cite an item on it
-  if ! printf '%s\n' "$text" | grep -qE '(^|[^0-9])[0-9]+[.)]|item[[:space:]]+[0-9]+|#[0-9]+'; then
+  if ! grep -qE '(^|[^0-9])[0-9]+[.)]|item[[:space:]]+[0-9]+|#[0-9]+' <<< "$text"; then
     off="$off$(printf '%s' "$text" | head -c 90)"
     off="$off
 "

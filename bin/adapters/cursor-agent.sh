@@ -8,22 +8,25 @@
 # a REPL hangs a dispatch until something kills it, and looks like a model
 # thinking rather than a script waiting for a human who is not there.
 set -uo pipefail
+_fm_alib="$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
+[ -r "$_fm_alib" ] || { echo "cursor-agent: missing $_fm_alib" >&2; exit 70; }
+# shellcheck source=bin/adapters/_lib.sh
+. "$_fm_alib"
 [ "${1-}" = "run" ] || { echo "usage: cursor-agent.sh run <prompt> <worktree> <log>" >&2; exit 64; }
 prompt="${2-}"; tree="${3-}"; log="${4-}"
 [ -f "$prompt" ] || { echo "cursor-agent: no prompt at $prompt" >&2; exit 64; }
 [ -d "$tree" ]   || { echo "cursor-agent: no worktree at $tree" >&2; exit 64; }
 
 command -v cursor-agent >/dev/null 2>&1 || {
-  # the log is the only trace a stand-down or a reconcile will have
-  echo "cursor-agent: cursor-agent is not installed - vendor unavailable" | tee -a "$log" >&2; exit 2; }
+  # stderr, not the log: the log is what the VENDOR said, and a caller that
+  # asks "did anything run?" must not be answered by the adapter's own
+  # notice that nothing could
+  echo "cursor-agent: cursor-agent is not installed - vendor unavailable" >&2; exit 2; }
 
+# FM_ADAPTER_ARGS is deliberately unquoted: it carries whatever extra
+# arguments the operator configured, and they have to split into words.
+off="$(fm_adapter_mark "$log")"
 ( cd "$tree" && cursor-agent -p ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
 rc=$?
-case "$rc" in
-  0) exit 0 ;;
-  # authentication, quota and network failures are the vendor being
-  # unavailable, not the model failing at the task
-  2|4|41|69|75) exit 2 ;;
-  *) grep -qiE 'not logged in|unauthor|quota|rate limit|network|ENOTFOUND|ECONNREFUSED' "$log" \
-       && exit 2 || exit 1 ;;
-esac
+fm_adapter_verdict "$rc" "$log" "$off"
+exit $?
