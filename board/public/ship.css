@@ -58,7 +58,9 @@
 
 /* crew: box faces, so shading comes from geometry and a pose is a class */
 .pivot{position:absolute;left:var(--px);width:92px;height:100px;margin-left:-46px;z-index:3;
-  pointer-events:auto;  /* .ship turns them off for the hull; the crew are grabbable */
+  pointer-events:auto;  /* .ship turns them off for the hull; the crew are grabbable.
+     Found by the browser suite: without this no crewman could be dragged,
+     which is why one line of the board is inside T-014's scope. */
   bottom:calc(var(--deckY0) + var(--r,0) * var(--rowStep));transform-style:preserve-3d;
   cursor:grab;touch-action:none;transition:transform .16s ease-out;
   transform:rotateX(var(--rx,8deg)) rotateY(var(--ry,-26deg)) scale(var(--sc,.86))}

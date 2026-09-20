@@ -17,6 +17,7 @@ shopt -s nullglob
 exec < /dev/null
 
 fail=0
+started_at="$(date +%s)"
 bold=''; dim=''; red=''; green=''; off=''
 if [ -t 1 ]; then bold=$'\033[1m'; dim=$'\033[2m'; red=$'\033[31m'; green=$'\033[32m'; off=$'\033[0m'; fi
 
@@ -288,6 +289,15 @@ else
   fi
 fi
 
-printf '\n'
+# The design's budget is sixty seconds for a full local pass, and a budget
+# nobody measures is a wish. The hard limit is three times it, because a
+# loaded CI runner is not the machine the budget was written for - but the
+# number is printed either way, so a suite that starts spending it is
+# visible before it breaks anything.
+took=$(( $(date +%s) - started_at ))
+printf '\n%s took %ss (the design asks for 60s locally)%s\n' "$dim" "$took" "$off"
+if [ "$took" -gt 180 ]; then
+  flunk "the gate took ${took}s, more than three times its budget"
+fi
 if [ "$fail" -eq 0 ]; then printf '%sci: green%s\n' "$green" "$off"; else printf '%sci: red%s\n' "$red" "$off"; fi
 exit "$fail"

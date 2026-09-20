@@ -27,8 +27,13 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock', 'bun.lockb') }}
+      # the cache holds the browser binaries; the shared libraries chromium
+      # needs are apt packages on the runner and are not in it. Gating both
+      # on the cache gives a hit with a browser that cannot launch.
+      - name: install the browser's system libraries
+        run: bunx playwright install-deps chromium
       - name: install the browser
         if: steps.browser.outputs.cache-hit != 'true'
-        run: bunx playwright install --with-deps chromium
+        run: bunx playwright install chromium
       - name: bin/ci.sh
         run: bash bin/ci.sh
