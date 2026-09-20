@@ -57,4 +57,30 @@ assert_ne "$(jq -r '.gate4' "$tw")" "$cnout" "converting zh-TW actually produces
 # failed on the CI runner. \p{Han} does not.
 cjk="$(perl -CSD -ne 'print if /\p{Han}/' $pages | wc -l | tr -d ' ')"
 assert_eq "0" "$cjk" "the page holds no hardcoded Chinese, comments included"
+
+# The exclusion above is load-bearing, and an exclusion nobody exercises is a
+# line of prose. So: generate a real diagram, confirm it is full of Chinese -
+# it is produced FROM the dictionaries, so it could not be anything else -
+# and confirm the scan walks past it. Without the -not -path the lint would
+# go red the moment a decision was pending, which is the moment the board is
+# most needed.
+d="$(mktemp -d)"
+mkdir -p "$d/bin" "$d/i18n" "$d/state/pending" "$d/design/diagrams" "$d/board/public"
+cp "$ROOT/bin/fm-diagram.sh" "$ROOT/bin/fm-emit.sh" "$d/bin/" 2>/dev/null
+cp "$en" "$tw" "$tbl" "$d/i18n/"
+cp "$ROOT/board/public/index.html" "$ROOT/board/public/ship.js" "$d/board/public/" 2>/dev/null
+printf '%s\n' '{"id":"D-001","task":"T-001","kind":"merge","title":"merge it","pr":1}' \
+  > "$d/state/pending/D-001.json"
+"$d/bin/fm-diagram.sh" --decision D-001 --repo "$d" >/dev/null 2>&1
+gen="$d/board/public/diagrams/D-001.zh-TW.html"
+assert_ok "test -s '$gen'" "a decision really does generate a diagram under board/public"
+genhan="$(perl -CSD -ne 'print if /\p{Han}/' "$gen" 2>/dev/null | wc -l | tr -d ' ')"
+assert_ne "0" "$genhan" "and that diagram is Chinese, which is the point of it"
+scanned="$(find "$d/board/public" -type f \( -name '*.html' -o -name '*.js' \) \
+  -not -path '*/diagrams/*' | sort)"
+assert_lacks "$scanned" "diagrams/" "the lint's scan walks past generated diagrams"
+assert_contains "$scanned" "index.html" "while still covering the authored pages"
+scanhan="$(perl -CSD -ne 'print if /\p{Han}/' $scanned 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "0" "$scanhan" "so a pending decision cannot turn the lint red"
+rm -rf "$d"
 finish

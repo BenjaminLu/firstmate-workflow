@@ -1,0 +1,5 @@
+# Where bin/fm-diagram.sh writes. Every file here is derived from a decision
+# in state/ and the dictionaries in i18n/, so it is regenerated rather than
+# merged - a committed one is a merge conflict waiting on a file nobody reads.
+# The directory itself is tracked, because the board serves out of it.
+*.html
