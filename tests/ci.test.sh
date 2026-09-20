@@ -110,10 +110,20 @@ fi
 # bin/*.sh does not recurse, so the adapters went unlinted for as long as
 # they have existed. A fixture with a broken one has to turn the gate red.
 mkdir -p "$q/bin/adapters"
-printf '#!/usr/bin/env bash\nif [ -z "$undefined_on_purpose\n' > "$q/bin/adapters/broken.sh"
+# a warning, not a syntax error. A plant that is unparseable proves only
+# that the stage runs; this proves it runs at the severity it claims, which
+# is the question the adapters raised - their deliberate SC2086 is info and
+# must NOT turn the gate red.
+printf '#!/usr/bin/env bash\ncd /tmp\necho done\n' > "$q/bin/adapters/sloppy.sh"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 if command -v shellcheck >/dev/null 2>&1; then
-  assert_contains "$out" "x shellcheck" "a broken adapter turns the shellcheck stage red"
+  assert_contains "$out" "x shellcheck" "a warning in an adapter turns the shellcheck stage red"
+  assert_contains "$out" "SC2164" "and the stage says which warning"
+  # and an info-level finding does not: the adapters rely on that
+  printf '#!/usr/bin/env bash\nargs=""\necho $args\n' > "$q/bin/adapters/sloppy.sh"
+  out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+  assert_fail "printf '%s' \"$out\" | grep -q 'x shellcheck'" \
+    "an info-level finding does not, which is what the adapters depend on"
 else
   printf '    %s\n' "(shellcheck not installed, adapter lint unchecked)"
 fi
@@ -123,6 +133,11 @@ fi
 # these plants exactly what the stage looks for and asserts the gate flunks
 # AND names the offender, because a stage that goes red without saying what
 # it found sends the reader back to the source.
+# Each plant below is the thing its stage exists to find, not something any
+# stage would trip over: a script that dispatches and lacks the redirect, a
+# hand-rolled swap, a second vendor loop, a second writer of the log, an id
+# missing from the design, a suite that returns non-zero. None of them is a
+# syntax error, and none would be caught by a different stage.
 plant() {   # plant <label> <expected fragment> ; the fixture is built first
   local label="$1" want="$2" out
   out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"

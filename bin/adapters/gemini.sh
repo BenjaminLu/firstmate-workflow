@@ -21,6 +21,8 @@ command -v gemini >/dev/null 2>&1 || {
   # the log is the only trace a stand-down or a reconcile will have
   echo "gemini: gemini is not installed - vendor unavailable" | tee -a "$log" >&2; exit 2; }
 
+# FM_ADAPTER_ARGS is deliberately unquoted: it carries whatever extra
+# arguments the operator configured, and they have to split into words.
 off="$(fm_adapter_mark "$log")"
 # no -p here: gemini's -p takes the prompt as its value, so an empty
 # FM_ADAPTER_ARGS left the flag dangling and the prompt was never delivered.

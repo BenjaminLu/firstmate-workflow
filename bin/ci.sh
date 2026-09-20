@@ -122,14 +122,19 @@ fi
 # dispatch of one of our own scripts carries its own redirect as well, and
 # that is checkable by reading the file rather than by a probe.
 # joined first: a redirect often sits on the continuation line, and a
-# per-physical-line grep would call that a miss
+# per-physical-line grep would call that a miss. Then the guards are struck
+# OUT of the line rather than the line being dropped - `[ -x "$REPO/bin/x" ]
+# && "$REPO/bin/x" ...` joins to one record, and excluding the record
+# excluded the dispatch with it.
 undirected=''
 for f in bin/*.sh; do
   case "$f" in */ci.sh) continue ;; esac
   hits="$(sed -e :a -e '/\\$/N; s/\\\n//; ta' "$f" \
-    | grep -n '"\$B/\|"\$REPO/bin/fm-' \
-    | grep -v '</dev/null' \
-    | grep -vE 'EMIT=|-x "|-f "|command -v' || true)"
+    | sed -e 's/\[ *-[a-z] *"[^"]*" *\]//g' \
+          -e 's/command -v [^ ]*//g' \
+          -e 's/[A-Za-z_][A-Za-z_0-9]*="[^"]*bin\/[^"]*"//g' \
+    | grep -n '"\$B/\|"\$REPO/bin/fm-\|"\$EMIT"' \
+    | grep -v '</dev/null' || true)"
   [ -z "$hits" ] || undirected="$undirected
 $f: $hits"
 done

@@ -21,6 +21,8 @@ command -v cursor-agent >/dev/null 2>&1 || {
   # the log is the only trace a stand-down or a reconcile will have
   echo "cursor-agent: cursor-agent is not installed - vendor unavailable" | tee -a "$log" >&2; exit 2; }
 
+# FM_ADAPTER_ARGS is deliberately unquoted: it carries whatever extra
+# arguments the operator configured, and they have to split into words.
 off="$(fm_adapter_mark "$log")"
 ( cd "$tree" && cursor-agent -p ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
 rc=$?

@@ -77,13 +77,19 @@ fm_vendor_chain() {
 fm_run_chain() {
   local dir="$1" chain="$2" prompt="$3" tree="$4" log="$5" evidence="${6:-}" \
         outmode="${7:-shared}" v rc=2 head='' out=''
+  # every output of this function, including the two that say where an
+  # attempt's bytes are: leaving those set means a caller on the
+  # configuration-error path reads the PREVIOUS call's attempt, which is the
+  # exact confusion the offsets exist to prevent
   FM_VENDOR_USED=''; FM_VENDOR_SKIPPED=''; FM_VENDOR_MISREAD=''; FM_VENDOR_UNKNOWN=''
+  FM_RUN_OUTDIR=''; FM_RUN_LOG_OFF=0
   # before anything runs. A typo at the head of the chain used to be found
   # after a real vendor had already worked, and the caller's exit 65 then
   # threw that work away.
   # unquoted on purpose: a chain arrives space-separated or newline-separated
-  # and the head is the first word either way
-  # shellcheck disable=SC2086
+  # and the head is the first word either way. SC2086 is info-level and the
+  # gate runs at warning, so there is no directive here to go stale - the
+  # adapters rely on the same deliberate splitting for FM_ADAPTER_ARGS.
   head="$(printf '%s\n' $chain | head -1)"
   if [ -n "$head" ] && [ ! -x "$dir/$head.sh" ]; then
     FM_VENDOR_UNKNOWN="$head"; return 65

@@ -21,6 +21,8 @@ command -v codex >/dev/null 2>&1 || {
   # the log is the only trace a stand-down or a reconcile will have
   echo "codex: codex is not installed - vendor unavailable" | tee -a "$log" >&2; exit 2; }
 
+# FM_ADAPTER_ARGS is deliberately unquoted: it carries whatever extra
+# arguments the operator configured, and they have to split into words.
 off="$(fm_adapter_mark "$log")"
 # the trailing "-" is codex's read-the-prompt-from-stdin marker and has to
 # be the last argument, so FM_ADAPTER_ARGS goes before it
