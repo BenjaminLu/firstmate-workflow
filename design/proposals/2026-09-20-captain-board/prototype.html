@@ -354,22 +354,14 @@ code,.mono{font-family:var(--mono);font-size:.86em}
   background:repeating-linear-gradient(90deg,#6a4828 0 24px,#583c21 24px 48px);
   clip-path:polygon(9% 0,91% 0,100% 44%,90% 100%,10% 100%,0 44%);
   box-shadow:inset 0 34px 58px rgba(0,0,0,.62)}
-.gunwale{position:absolute;left:0;right:0;bottom:-16px;height:18px;
-  background:linear-gradient(180deg,var(--oakL) 0 26%,var(--trim) 26% 62%,var(--oak) 62% 100%);
-  clip-path:polygon(8% 0,92% 0,88% 100%,12% 100%);
-  box-shadow:0 4px 15px rgba(0,0,0,.6),inset 0 -1px 0 var(--gold)}
-.hullbody{position:absolute;left:0;right:0;bottom:-64px;height:52px;
-  background:linear-gradient(180deg,transparent 0 64%,#070b10 64% 100%),
-    repeating-linear-gradient(180deg,rgba(0,0,0,.2) 0 1px,transparent 1px 9px),
-    linear-gradient(180deg,var(--oakL),var(--oak) 46%,var(--oakD));
-  clip-path:polygon(12% 0,88% 0,79% 60%,68% 100%,32% 100%,21% 60%);
-  box-shadow:inset 0 -14px 26px rgba(0,0,0,.72)}
-.ports{position:absolute;left:0;right:0;bottom:-31px;height:11px;display:flex;
-  justify-content:center;align-items:center;gap:var(--portGap,20px)}
-.ports i{width:9px;height:9px;border-radius:1px;background:#05080c;position:relative;
-  box-shadow:0 0 0 1px var(--gold),inset 0 0 3px #000}
-.ports i::after{content:"";position:absolute;left:2px;top:2.5px;width:11px;height:4px;border-radius:2px;
-  background:linear-gradient(90deg,#39424b,#1a2026);box-shadow:0 1px 2px rgba(0,0,0,.7)}
+.hullsvg{position:absolute;left:-4%;width:108%;bottom:-96px;height:124px;overflow:visible;
+  filter:drop-shadow(0 10px 18px rgba(0,0,0,.6))}
+.bowwave{position:absolute;right:-2%;bottom:-78px;width:24%;height:26px;opacity:.5;
+  background:radial-gradient(ellipse at 20% 50%,rgba(210,238,255,.85),transparent 62%)}
+.wake{position:absolute;left:-20%;bottom:-70px;width:40%;height:22px;opacity:.28;border-radius:50%;
+  background:radial-gradient(ellipse at 80% 50%,rgba(186,222,248,.7),transparent 68%)}
+.m-full .bowwave{animation:swell 4.2s ease-in-out infinite}
+@keyframes swell{0%,100%{opacity:.4;transform:scaleX(1)}50%{opacity:.62;transform:scaleX(1.08)}}
 .lantern{position:absolute;left:1%;bottom:26px;width:9px;height:13px;border-radius:2px 2px 4px 4px;
   background:linear-gradient(180deg,#f0c463,#a4661d)}
 .m-full .lantern{animation:lamp 3.4s ease-in-out infinite}
@@ -400,10 +392,10 @@ code,.mono{font-family:var(--mono);font-size:.86em}
   box-shadow:0 0 12px rgba(0,0,0,.55)}
 .mast .yard{position:absolute;left:50%;width:var(--yw,74px);height:5px;border-radius:2px;
   transform:translateX(-50%);background:linear-gradient(90deg,#33230f,#8a6438,#33230f)}
-.mast .ratline{position:absolute;left:50%;bottom:0;width:var(--rw,46px);height:var(--rh,54px);
-  transform:translateX(-50%);opacity:.5;
-  background:repeating-linear-gradient(180deg,var(--rope) 0 1px,transparent 1px 8px);
-  clip-path:polygon(50% 0,100% 100%,0 100%)}
+.mast .shroud{position:absolute;bottom:0;width:var(--rw,46px);height:var(--rh,54px);opacity:.5;
+  background:repeating-linear-gradient(180deg,var(--rope) 0 1px,transparent 1px 7px)}
+.mast .shroud.l{right:50%;clip-path:polygon(100% 0,100% 100%,0 100%)}
+.mast .shroud.r{left:50%;clip-path:polygon(0 0,100% 100%,0 100%)}
 .mast .sail{position:absolute;left:50%;transform:translateX(-50%);width:var(--sw,66px);
   box-shadow:0 6px 22px rgba(0,0,0,.5);opacity:.96;
   background:repeating-linear-gradient(90deg,rgba(0,0,0,.07) 0 1px,transparent 1px 13px),
@@ -415,6 +407,10 @@ code,.mono{font-family:var(--mono);font-size:.86em}
 .m-full .mast .sail{animation:luff 6s ease-in-out infinite;transform-origin:50% 0}
 @keyframes luff{0%,100%{transform:translateX(-50%) skewX(-2deg) scaleX(1)}
                 50%{transform:translateX(-50%) skewX(2deg) scaleX(.96)}}
+.jib{position:absolute;background:linear-gradient(200deg,var(--canvas),#a89b81);opacity:.94;
+  clip-path:polygon(100% 0,100% 100%,0 100%);box-shadow:0 4px 14px rgba(0,0,0,.4)}
+.m-full .jib{animation:jibluff 7s ease-in-out infinite;transform-origin:100% 0}
+@keyframes jibluff{0%,100%{transform:skewX(0)}50%{transform:skewX(-3deg)}}
 .jolly{position:absolute;top:-5px;left:6px;width:32px;height:18px;background:#0b0b0d;
   border:1px solid #2a2a2e;display:flex;align-items:center;justify-content:center;
   clip-path:polygon(0 0,100% 0,84% 50%,100% 100%,0 100%)}
@@ -938,18 +934,23 @@ function setCapPose(p){
 function shipMarkup(sp,n){
   const SKULL = "<svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M12 2C7 2 4 5.4 4 9.6c0 2.3 1 3.9 2.3 5 .5.4.7.9.7 1.5V18h2v-2h2v2h2v-2h2v2h2v-1.9c0-.6.2-1.1.7-1.5C19 13.5 20 11.9 20 9.6 20 5.4 17 2 12 2z\" fill=\"#e8e4da\"/><circle cx=\"9\" cy=\"10\" r=\"2.2\" fill=\"#0c0c0e\"/><circle cx=\"15\" cy=\"10\" r=\"2.2\" fill=\"#0c0c0e\"/><path d=\"M12 12.4l-1.2 2.4h2.4z\" fill=\"#0c0c0e\"/></svg>";
   const mainIdx = Math.floor(sp.masts/2);
-  const clear = headroom(sp);            // sails must hang entirely above this
+  const clear = headroom(sp);
   let m='';
   for(let i=0;i<sp.masts;i++){
     const x = sp.masts===1 ? 50 : 20 + 60*i/(sp.masts-1);
     const isMain = i===mainIdx;
     const h = mastH(sp,isMain);
     const w = 60 + sp.masts*7;
-    const sailH = Math.max(58, h - 16 - clear);
-    m += '<div class="mast" style="left:'+x+'%;height:'+h+'px;--yw:'+w+'px;--sw:'+(w-8)+'px;'
-       + '--rw:'+Math.round(w*0.6)+'px;--rh:'+Math.round(clear*0.68)+'px">'
-       + '<div class="ratline"></div><div class="yard" style="top:10px"></div>'
-       + '<div class="sail'+(isMain?' main':'')+'" style="top:16px;height:'+sailH+'px">'
+    const band = Math.max(64, h - 14 - clear);      // all canvas lives above the crew
+    const topH = Math.round(band*0.40), loH = Math.round(band*0.52);
+    const topY = 14, loY = topY + topH + 9;
+    m += '<div class="mast" style="left:'+x+'%;height:'+h+'px;--yw:'+w+'px;'
+       + '--rw:'+Math.round(w*0.46)+'px;--rh:'+Math.round(clear*0.66)+'px">'
+       + '<div class="shroud l"></div><div class="shroud r"></div>'
+       + '<div class="yard" style="top:'+(topY-4)+'px;--yw:'+Math.round(w*0.74)+'px"></div>'
+       + '<div class="sail" style="top:'+topY+'px;height:'+topH+'px;--sw:'+Math.round(w*0.68)+'px"></div>'
+       + '<div class="yard" style="top:'+(loY-4)+'px"></div>'
+       + '<div class="sail'+(isMain?' main':'')+'" style="top:'+loY+'px;height:'+loH+'px;--sw:'+(w-8)+'px">'
        +   (isMain&&sp.masts>=3?'<span class="skull">'+SKULL+'</span>':'') + '</div>'
        + (isMain?'<div class="jolly">'+SKULL+'</div>':'') + '</div>';
   }
@@ -959,19 +960,56 @@ function shipMarkup(sp,n){
         + '<div class="plate"></div><div class="skirt"></div><div class="rail"></div></div>';
   }
   const fx = sp.masts===1 ? 50 : 20;
-  const stay = '<div class="stay" style="left:'+fx+'%;bottom:'+(20+mastH(sp,false))
-             + 'px;width:'+(100-fx)+'%;transform:rotate(29deg)"></div>';
+  const foreH = mastH(sp,false);
+  const stay = '<div class="stay" style="left:'+fx+'%;bottom:'+(20+foreH)+'px;'
+             + 'width:'+(104-fx)+'%;transform:rotate(30deg)"></div>';
+  const jibs = '';
   const fm = CREW.find(c=>c.role==='fm');
   const hx = fm ? ((fm.px - (50 - sp.deckW/2)) / sp.deckW * 100).toFixed(2) : '25';
   const helm = '<div class="helm" style="--hx:'+hx+'%;--topR:'+(sp.rows-1)+'">'
     + '<div class="wheel"><i></i><i></i><i></i><i></i><div class="ring"></div></div>'
     + '<div class="hub"></div><div class="binnacle"></div></div>';
-  const ports = Array.from({length:Math.min(13,3+sp.masts*3)},()=>'<i></i>').join('');
   return '<div class="ship"><div class="moon"></div><div class="hull" style="--deckW:'+sp.deckW+'%">'
-    + '<div class="deckplate"></div><div class="hullbody"></div><div class="gunwale"></div>'
-    + '<div class="ports" style="--portGap:'+(9+sp.masts*3)+'px">'+ports+'</div>'
-    + '<div class="lantern"></div><div class="figurehead"></div>'
+    + hullSVG(sp) + '<div class="wake"></div><div class="bowwave"></div>'
+    + '<div class="deckplate"></div>'
+    + '<div class="lantern"></div>'
     + up + helm + m + stay + '<div class="bowsprit"></div></div></div>';
+}
+function hullSVG(sp){
+  const ports = Math.min(11, 3 + sp.masts*2);
+  let gp='';
+  for(let i=0;i<ports;i++){
+    const t=(i+0.5)/ports, x=132+t*740;
+    const y=74 + 20*Math.sin(Math.PI*t) - 16*Math.cos(Math.PI*t);   // ride the sheer, stay above the wale
+    gp += '<rect x="'+(x-14).toFixed(0)+'" y="'+(y-12).toFixed(0)+'" width="28" height="24" rx="3" '
+        + 'fill="#05080c" stroke="#c9972f" stroke-width="3"/>'
+        + '<rect x="'+(x-4).toFixed(0)+'" y="'+(y-4).toFixed(0)+'" width="30" height="9" rx="4" fill="#2b333b"/>';
+  }
+  return '<svg class="hullsvg" viewBox="0 -54 1000 214" preserveAspectRatio="none">'
+   + '<defs>'
+   + '<linearGradient id="oak" x1="0" y1="0" x2="0" y2="1">'
+   +   '<stop offset="0" stop-color="#5e3f24"/><stop offset=".5" stop-color="#33200f"/>'
+   +   '<stop offset="1" stop-color="#120a05"/></linearGradient>'
+   + '<linearGradient id="bul" x1="0" y1="0" x2="0" y2="1">'
+   +   '<stop offset="0" stop-color="#7d5630"/><stop offset=".42" stop-color="#8f2020"/>'
+   +   '<stop offset="1" stop-color="#3d2718"/></linearGradient>'
+   + '</defs>'
+   + '<path d="M18 -6 C 180 -46 330 -8 500 2 C 690 -8 850 -50 986 -24'
+   +        ' C 1002 26 988 72 944 104 C 806 158 300 162 134 118'
+   +        ' C 66 96 20 52 18 -6 Z" fill="url(#oak)"/>'
+   + '<path d="M18 -6 C 180 -46 330 -8 500 2 C 690 -8 850 -50 986 -24'
+   +        ' L 986 24 C 850 -2 690 40 500 50 C 330 40 180 2 18 42 Z" fill="url(#bul)"/>'
+   + '<path d="M18 20 C 180 -20 330 18 500 28 C 690 18 850 -24 986 2" stroke="#c9972f"'
+   +        ' stroke-width="4" fill="none" opacity=".92"/>'
+   + gp
+   + '<path d="M30 104 C 200 74 340 104 500 112 C 690 104 850 62 972 82" stroke="#1b110a"'
+   +        ' stroke-width="8" fill="none" opacity=".85"/>'
+   + '<path d="M18 -6 C 58 -22 94 -14 110 6 L 116 92 C 78 82 34 46 18 -6 Z" fill="#452c16"/>'
+   + '<rect x="40" y="16" width="19" height="22" rx="3" fill="#2a3a48" stroke="#c9972f" stroke-width="3"/>'
+   + '<rect x="69" y="12" width="19" height="24" rx="3" fill="#2a3a48" stroke="#c9972f" stroke-width="3"/>'
+   + '<path d="M134 118 C 300 162 806 158 944 104 L 938 128 C 796 182 300 186 140 138 Z" fill="#05080c"/>'
+   + '<path d="M986 -24 C 1008 -14 1018 4 1014 22 L 990 18 Z" fill="#c9972f" opacity=".85"/>'
+   + '</svg>';
 }
 function plate(c){
   const t=c.task?byId(c.task):null;
