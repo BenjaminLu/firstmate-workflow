@@ -7,7 +7,7 @@
       "milestone": "M0",
       "bootstrap": true,
       "depends_on": [],
-      "title": "repo 骨架、ci.sh、bash 測試框架",
+      "title": "repo skeleton, the one gate, and a bash test harness",
       "scope": [
         "bin/ci.sh",
         "tests/**",
@@ -17,10 +17,10 @@
         "README.md"
       ],
       "acceptance": [
-        "bin/ci.sh 存在且可執行，對空 repo exit 0",
-        "tests/ 下的 *.test.sh 會被 ci.sh 逐一執行，任何一支非零則整體非零",
-        "shellcheck 對 bin/**.sh 無警告",
-        "GHA workflow 呼叫的是同一支 bin/ci.sh，不是複製的步驟"
+        "bin/ci.sh exists, is executable, and exits 0 on a tree with no tests",
+        "every tests/*.test.sh runs; any non-zero makes the whole gate non-zero and the failing suite is named",
+        "shellcheck is clean over bin/**.sh",
+        "the GitHub Actions workflow calls bin/ci.sh rather than restating its steps"
       ]
     },
     {
@@ -30,17 +30,17 @@
       "depends_on": [
         "T-001"
       ],
-      "title": "fm-emit.sh：事件日誌唯一寫入口",
+      "title": "fm-emit.sh, the only writer of the event log",
       "scope": [
         "bin/fm-emit.sh",
         "tests/emit.test.sh",
         "bin/ci.sh"
       ],
       "acceptance": [
-        "以 flock 序列化，20 個並行寫入後 events.jsonl 每行都是合法 JSON 且不缺行",
-        "拒絕未知的 type 值並以非零退出",
-        "帶 summary 的事件必須同時有 en 與 zh-TW，否則拒絕",
-        "ci.sh 新增 lint：bin/ 與 board/ 內出現 >> 直寫 events.jsonl 即失敗"
+        "writes are serialised by a lock; 20 concurrent writers lose no lines and every line parses as JSON",
+        "an unknown type is rejected with a non-zero exit and nothing is written",
+        "an event carrying a summary must have both en and zh-TW, otherwise it is rejected",
+        "ci.sh fails if anything under bin/ or board/ appends to events.jsonl outside fm-emit.sh"
       ]
     },
     {
@@ -50,17 +50,39 @@
       "depends_on": [
         "T-002"
       ],
-      "title": "fm-sync-prs.sh：把 GitHub 的 PR 事件寫回事件日誌",
+      "title": "fm-sync-prs.sh, which notices a merge on its own",
       "scope": [
         "bin/fm-sync-prs.sh",
         "tests/sync-prs.test.sh"
       ],
       "acceptance": [
-        "輪詢 gh 取得 PR 狀態，將 pr_opened / merged / closed 寫回 events.jsonl，一律經 fm-emit.sh",
-        "已寫過的事件不重複寫（以 PR 號與狀態去重），連跑兩次結果相同",
-        "船長在 GitHub 上自行合併時，系統必須自行偵測到並 emit merged，不依賴任何人告知",
-        "無網路或 gh 未登入時以非零退出且不污染日誌",
-        "測試以錄製的 gh 輸出為輸入，不呼叫網路"
+        "polls gh for pull request state and writes pr_opened, merged and closed back through fm-emit.sh",
+        "de-duplicates against the log by pull request number and state; running twice changes nothing",
+        "a merge the captain performs on GitHub is detected by the system itself, not reported to it by a person",
+        "exits non-zero without polluting the log when offline or when gh is not authenticated",
+        "tests drive it from recorded gh output and make no network call"
+      ]
+    },
+    {
+      "id": "T-020",
+      "milestone": "M0",
+      "bootstrap": true,
+      "depends_on": [
+        "T-001"
+      ],
+      "title": "fm-guard.sh and git hooks: nobody writes to main",
+      "scope": [
+        "bin/fm-guard.sh",
+        "bin/fm-install-hooks.sh",
+        ".githooks/**",
+        "tests/guard.test.sh"
+      ],
+      "acceptance": [
+        "fm-guard.sh refuses main, master and a detached HEAD, and honours FM_PROTECTED",
+        "pre-commit blocks a commit on a protected branch and allows one on a feature branch",
+        "pre-push blocks a push whose target ref is a protected branch",
+        "the hooks are self-contained: they must not depend on bin/ existing in the worktree being committed to",
+        "branch protection on GitHub has enforce_admins on, since firstmate runs on the captain's own credentials"
       ]
     },
     {
@@ -70,17 +92,17 @@
       "depends_on": [
         "T-001"
       ],
-      "title": "adapter 契約、mock adapter、契約測試",
+      "title": "the adapter contract, the mock adapter, and the contract test",
       "scope": [
         "bin/adapters/**",
         "tests/adapter-contract.test.sh"
       ],
       "acceptance": [
-        "mock.sh 依腳本產生固定 diff，不呼叫任何網路服務",
-        "契約測試驗證 0/1/2 三種退出碼語意",
-        "契約測試驗證 adapter 未執行任何 git 或 gh 指令",
-        "契約測試驗證 adapter 未寫入 worktree 以外的路徑",
-        "claude.sh / cursor-agent.sh / gemini.sh 三支都通過同一份契約測試"
+        "mock.sh produces a scripted diff and reaches no network",
+        "the contract test pins the meaning of exit codes 0, 1 and 2",
+        "the contract test proves an adapter ran no git and no gh command",
+        "the contract test proves an adapter wrote nothing outside its worktree",
+        "claude.sh, cursor-agent.sh and gemini.sh all pass the same contract test"
       ]
     },
     {
@@ -91,18 +113,18 @@
         "T-002",
         "T-003"
       ],
-      "title": "fm-gate.sh：七道閘",
+      "title": "fm-gate.sh, the seven gates",
       "scope": [
         "bin/fm-gate.sh",
         "tests/gate.test.sh"
       ],
       "acceptance": [
-        "七道閘各有一個會過與一個會擋的測試案例，共十四個",
-        "第 5 道閘：對一個空測試的 PR 必須擋下（revert 實作後測試仍綠）",
-        "第 5 道閘：對一個真測試的 PR 必須放行",
-        "第 4 道閘：diff 超出 tasks.json 的 scope glob 即擋下",
-        "第 7 道閘：APPROVE 字串若非設定的 reviewer 帳號發出則不算數",
-        "任何一道未過時，退出碼標示是第幾道"
+        "each of the seven gates has one passing and one blocking case, fourteen in all",
+        "gate 5 blocks a pull request whose new test stays green after the implementation is reverted",
+        "gate 5 passes a pull request whose new test goes red when the implementation is reverted",
+        "gate 4 blocks a diff that reaches outside the task's scope globs in tasks.json",
+        "gate 7 ignores an APPROVE string that did not come from the configured reviewer account",
+        "the exit code says which gate failed"
       ]
     },
     {
@@ -113,18 +135,18 @@
         "T-003",
         "T-004"
       ],
-      "title": "fm-worker.sh：worktree → adapter → commit → PR",
+      "title": "fm-worker.sh: worktree, adapter, commit, pull request",
       "scope": [
         "bin/fm-worker.sh",
         "tests/worker.test.sh"
       ],
       "acceptance": [
-        "為每個 task 從 main 建立獨立 worktree 於 state/worktrees/<task>",
-        "prompt 只包含 task spec、design.md 相關章節、skills/worker",
-        "commit 與 gh pr create 由本腳本執行，adapter 全程碰不到 git",
-        "adapter 回 2 時依 config.yaml fallback 換下一家並 emit vendor_unavailable",
-        "adapter 回 1 時照常進入閘門，不切 fallback",
-        "以 mock adapter 全程可跑，不需網路"
+        "creates a worktree per task from main under state/worktrees/<task>",
+        "the prompt carries only the task spec, the relevant part of design.md, and skills/worker",
+        "commit and gh pr create are run by this script; the adapter never touches git",
+        "an adapter exiting 2 moves to the next vendor in config.yaml and emits vendor_unavailable",
+        "an adapter exiting 1 proceeds to the gates without falling back",
+        "the whole path runs on the mock adapter with no network"
       ]
     },
     {
@@ -134,17 +156,17 @@
       "depends_on": [
         "T-005"
       ],
-      "title": "fm-review.sh：reviewer 只拿 diff",
+      "title": "fm-review.sh: the reviewer sees only the diff",
       "scope": [
         "bin/fm-review.sh",
         "skills/reviewer/**",
         "tests/review.test.sh"
       ],
       "acceptance": [
-        "傳給 reviewer 的 prompt 只有 diff、task spec、驗收準則",
-        "測試斷言 prompt 內不含 worker 的 log、reasoning 或 worktree 路徑",
-        "reviewer 的輸出以 gh pr comment 貼出，由腳本執行",
-        "只有 APPROVE:<task-id> 字串會被 fm-gate.sh 認可"
+        "the reviewer prompt contains the diff, the task spec and the acceptance criteria and nothing else",
+        "a test asserts the prompt contains no worker log, reasoning or worktree path",
+        "the reviewer's output is posted with gh pr comment by the script",
+        "only APPROVE:<task-id> is recognised by fm-gate.sh"
       ]
     },
     {
@@ -155,16 +177,16 @@
         "T-005",
         "T-006"
       ],
-      "title": "fm-dispatch.sh：DAG、並行上限、成案閘",
+      "title": "fm-dispatch.sh: the DAG, the limit, and the green-light gate",
       "scope": [
         "bin/fm-dispatch.sh",
         "tests/dispatch.test.sh"
       ],
       "acceptance": [
-        "events.jsonl 無對應 greenlit 事件時不派任何工並以非零退出",
-        "只派 depends_on 全部 merged 的 task",
-        "同時進行中的 worker 不超過 config.yaml 的 concurrency",
-        "design.md 第 14 節表格與 tasks.json 不一致時 ci.sh 失敗"
+        "dispatches nothing and exits non-zero when the log holds no matching greenlit event",
+        "dispatches only tasks whose depends_on are all merged",
+        "never exceeds the concurrency in config.yaml",
+        "ci.sh fails when section 14 of design.md and tasks.json disagree"
       ]
     },
     {
@@ -174,17 +196,17 @@
       "depends_on": [
         "T-002"
       ],
-      "title": "fm-decide.sh：決策落檔與阻塞等待",
+      "title": "fm-decide.sh: a decision lands and firstmate wakes",
       "scope": [
         "bin/fm-decide.sh",
         "bin/watch-decisions.ts",
         "tests/decide.test.sh"
       ],
       "acceptance": [
-        "有 bun 時使用 fs.watch，決策檔出現後 200ms 內返回",
-        "無 bun 時退回 1 秒輪詢，行為一致",
-        "不依賴 fswatch、entr 或 watchexec",
-        "決策已落檔的情況下重啟不會漏讀"
+        "with bun present it uses fs.watch and returns within 200ms of the file appearing",
+        "without bun it falls back to a one-second poll with identical behaviour",
+        "it depends on neither fswatch, entr nor watchexec",
+        "a decision already on disk is not missed across a restart"
       ]
     },
     {
@@ -194,17 +216,17 @@
       "depends_on": [
         "T-002"
       ],
-      "title": "board server：SSE、靜態、hot-reload",
+      "title": "board server: SSE, static files, hot reload",
       "scope": [
         "board/server.ts",
         "tests/e2e/server.spec.ts"
       ],
       "acceptance": [
-        "僅綁 127.0.0.1",
-        "tail events.jsonl 並以 SSE 推送新事件",
-        "board/public/** 變動時推 reload 事件",
-        "零 build step，bun run board/server.ts 直接起",
-        "SSE client 斷線後自動重連"
+        "binds 127.0.0.1 only",
+        "tails events.jsonl and pushes new events over SSE",
+        "a change under board/public/** pushes a reload event",
+        "no build step: bun run board/server.ts starts it",
+        "the SSE client reconnects on its own after a drop"
       ]
     },
     {
@@ -214,41 +236,42 @@
       "depends_on": [
         "T-009"
       ],
-      "title": "board UI：船身分級、甲板、船員、決策台、泳道、日誌",
+      "title": "board UI: the ship, the crew, the decision deck, the lanes, the log",
       "scope": [
         "board/public/**"
       ],
       "acceptance": [
-        "從 design/proposals 的 prototype 重寫，不直接複製",
-        "每個船員的姿勢以 .fig.s-<state> class 表達",
-        "狀態文字綁在各自人物下方，任兩塊名牌不重疊",
-        "拖人物轉單人、拖甲板轉全員、雙擊復位",
-        "尊重 prefers-reduced-motion",
-        "名牌依密度降級，3 至 24 人的每個人數都不得出現重疊（e2e 逐一驗證）",
-        "人數變化為可逆：加到上限再減回去，船型與版面回到原狀",
-        "船分六級（1 桅小艇 → 6 桅巨型戰艦），上限 24 人，人多時往上分層（1/2/3 層甲板）而非橫向拉長",
-        "所有元素對齊 --deckY + row × --rowH；整片帆必須在最高層船員頭頂之上（e2e 斷言 sail.bottom <= highestHead.top）",
-        "名牌寬度逐層計算，3 至 24 人的每個人數都不得重疊（e2e 逐一驗證）",
-        "決策區左側繪出船長本人，姿勢隨 idle / ready / order 改變，且可拖曳旋轉",
-        "每層甲板的船員腳底必須落在該層板面內，且各層深度一致（e2e 逐層量測）",
-        "舵輪為最上層甲板的固定物，任何人數下都在頂層（e2e 斷言 helm 落在最高層板面上）",
-        "甲板與船殼由同一條曲線生成到同一張 SVG，與船員同一套投影；不得混用側視圖與透視面",
-        "每層甲板有舷牆立面與 riser 立面牆，層與層之間讀得出高度差",
-        "全畫面只有黃銅一個亮點色，船殼為暖黑剪影，船員必須是畫面最亮的一層",
-        "共 12 種動作按甲板分工，閒置者另有動作池；12 人以上時畫面上同時出現至少 8 種不同動作；工具跟著工作走而非角色走；狀態優先於動作",
-        "每個船員頭上有狀態氣泡（尾巴指向本人），邊框顏色即狀態；層距須大於人高加氣泡高，任何人數下氣泡都不得蓋到上一層船員（e2e 逐一驗證）",
-        "桅杆自最上層甲板起算，桅距依 deckW 比例分佈；任何船型下桅杆都不得超出船體（e2e 逐一驗證）",
-        "每個動作必須自己定義手臂動畫；狀態規則不得漏用動畫到未定義的動作上（e2e 逐一斷言 animationName）",
-        "每個動作都有對應道具（手持或甲板道具），不得有空揮的動作（e2e 逐一斷言道具可見）",
-        "船員有腳步踏步與隨機跳躍，鞋子與腿同動，單一週期內鞋子垂直位移須大於 6px（否則縮放後看不出來），跳躍以 translate 實作以免覆蓋姿勢動畫；同時在場者跳躍時間點不得一致",
-        "船員密到氣泡放棄任務標題時自動展開名冊；名冊需含狀態、甲板、任務編號與標題、檔案範圍、輪次、PR、進度",
-        "共用尺寸常數只能有一個來源：CSS 變數須由 JS 寫入，不得在兩處各寫一份（--rowStep 曾因此漂移，造成上層甲板無人站立）",
-        "PR 合併與船長下令各觸發一組 ahoy 反應（船身搖晃、砲火或鐘聲、全員歡呼、橫幅），音效以 Web Audio 合成不得外掛音檔，須有靜音鈕且吃 prefers-reduced-motion",
-        "慶祝元素不得遮住被慶祝的對象（e2e 斷言橫幅不與船體重疊）",
-        "開砲的火光數、位置與聲音發數必須由同一份砲門座標驅動；e2e 斷言每道火光與其砲門的位移為 0，且發聲數等於砲門數",
-        "砲門在所有船型下的渲染尺寸必須一致（不得因 SVG 非等比縮放而變形）；桅杆須全部落在最上層甲板寬度之內（e2e 逐一驗證）",
-        "船首須有鍍金船首像與船首斜桁，與砲門同樣為固定像素尺寸，不隨船體寬度變形",
-        "船首朝畫面左側（firstmate 那端），艉燈在右；整排砲的砲管、砲門蓋、火光、硝煙方向必須一致且朝向船首（e2e 斷言四者同向）"
+        "rewritten from the prototype in design/proposals, not copied from it",
+        "every crew pose is expressed as a .fig.s-<state> class so e2e asserts classes rather than diffing screenshots",
+        "status text belongs to its own figure and no two nameplates collide",
+        "drag a figure to turn it, drag the deck to turn the crew, double-click resets",
+        "prefers-reduced-motion is honoured",
+        "decks and hull are generated from one curve in one SVG, in the same projection as the crew; no mixing an elevation with perspective decks",
+        "every deck carries a bulwark and a riser wall, so a level reads as a level",
+        "brass is the only accent in the scene and the crew are the brightest layer",
+        "the ship has six rates from a one-mast cutter to a six-mast man-o'-war, up to 24 aboard; a crowd stacks onto more decks rather than stretching the hull",
+        "hull, decks, crew and bubbles all align to --deckY0 + row * --rowStep, and each deck plate is the same height so the crew plant to the same depth on every level",
+        "the whole sail hangs above the tallest crewman's head, asserted as sail.bottom <= highestHead.top",
+        "mast spacing follows the topmost deck's width and no mast sits outside it at any rate",
+        "the helm is a fixture of the topmost deck, placed by construction rather than by where firstmate happens to stand",
+        "the bow faces left, the end firstmate stands on, with the stern lantern to the right",
+        "barrel, port lid, muzzle flash and smoke all point the same way, toward the bow",
+        "gun ports and the figurehead render at fixed pixel sizes and do not deform with beam",
+        "the hull's gun ports, the flash positions and the sound schedule all come from one gun list; each flash sits exactly on its port and the number of reports equals the number of guns",
+        "twelve actions pooled by deck, with a separate pool for idle crew; with twelve or more aboard at least eight distinct actions are on screen at once",
+        "every action holds or stands at a prop; nothing mimes",
+        "each action declares its own arm animation and no state rule leaks one onto an action that did not",
+        "tools follow the job rather than the role, and state wins over action",
+        "crew alternate a weight shift and hop on independent offsets; shoes animate with their leg and the foot travels more than 6px per cycle",
+        "the hop animates translate rather than transform so it composes with the pose animations",
+        "each crewman carries a status bubble above his head with a tail pointing back at him, the border colour carrying state",
+        "deck spacing exceeds body height plus bubble height, so no bubble covers the crew on the deck above, verified from 3 to 24 aboard",
+        "the roster opens automatically once the bubbles drop the task title, and carries state, deck, task id and title, file scope, round, pull request and progress",
+        "the captain is drawn at the left of the decision deck, poses through idle, ready and order, and is draggable",
+        "the deck renders a merge card, the seven-gate checklist standing in for the diagram",
+        "a merge and an order each trigger an ahoy: the ship heels, guns or bell, the crew cheer, a banner. Sound is synthesised through Web Audio with no audio files, there is a mute control, and prefers-reduced-motion is honoured",
+        "nothing in the celebration covers what is being celebrated",
+        "shared numbers have one source: CSS custom properties are written from the JavaScript constants, never declared twice"
       ]
     },
     {
@@ -258,17 +281,17 @@
       "depends_on": [
         "T-009"
       ],
-      "title": "i18n：字典、tw2cn 詞表、硬編碼 lint",
+      "title": "i18n: dictionaries, the tw2cn table, the hardcoded-string lint",
       "scope": [
         "i18n/**",
         "board/public/board.js",
         "tests/i18n.test.sh"
       ],
       "acceptance": [
-        "ui.en.json 與 ui.zh-TW.json 的 key 完全一致，缺一即失敗",
-        "tw2cn.tsv 至少涵蓋 程式/函式/相依/佇列/唯讀 等術語並有測試",
-        "lint：board/public 內出現未進字典的 UI 字串即失敗",
-        "切換語言不觸發任何網路或模型呼叫"
+        "ui.en.json and ui.zh-TW.json hold identical key sets; a missing key fails",
+        "tw2cn.tsv covers at least the terms for program, function, dependency, queue and read-only, with tests",
+        "a lint fails on any UI string in board/public that is not in the dictionary",
+        "switching language makes no network and no model call"
       ]
     },
     {
@@ -278,17 +301,17 @@
       "depends_on": [
         "T-009"
       ],
-      "title": "/open 端點與唯讀 diff 檢視器",
+      "title": "the /open endpoint and the read-only diff viewer",
       "scope": [
         "board/server.ts",
         "board/public/**",
         "tests/e2e/open.spec.ts"
       ],
       "acceptance": [
-        "非 localhost 來源一律 403",
-        "realpath 落在 repo 外一律 403，含 .. 與 symlink 兩種繞法的測試",
-        "編輯器指令取自 config.yaml，預設 code",
-        "唯讀檢視器可在看板內顯示 diff 與 design.md"
+        "any non-localhost origin gets a 403",
+        "a realpath outside the repository gets a 403, with tests for both the .. and the symlink route",
+        "the editor command comes from config.yaml and defaults to code",
+        "the viewer can show a diff and design.md without leaving the board"
       ]
     },
     {
@@ -299,15 +322,17 @@
         "T-008",
         "T-009"
       ],
-      "title": "決策 API：POST /decisions → 落檔",
+      "title": "the decision API, including merge cards",
       "scope": [
         "board/server.ts",
         "tests/e2e/decide.spec.ts"
       ],
       "acceptance": [
-        "POST 後 state/decisions/<id>.json 存在且為合法 JSON",
-        "e2e：在看板點選項並送出後，fm-decide.sh 於 1 秒內解除阻塞",
-        "重複送出同一決策為冪等，不產生第二個檔"
+        "after a POST, state/decisions/<id>.json exists and is valid JSON",
+        "e2e: choosing on the board releases fm-decide.sh within one second",
+        "posting the same decision twice is idempotent and creates no second file",
+        "kind=merge is supported: the card shows the seven gates, the diff stat, the files and the pull request link, answered with merge, send back or hold",
+        "choosing merge runs gh pr merge --squash --delete-branch from the script; a test asserts no path exists for firstmate to merge without the board"
       ]
     },
     {
@@ -319,17 +344,17 @@
         "T-011",
         "T-013"
       ],
-      "title": "Playwright e2e 與 GitHub Actions workflow",
+      "title": "Playwright e2e and the GitHub Actions workflow",
       "scope": [
         "tests/e2e/**",
         ".github/workflows/**",
         "bin/ci.sh"
       ],
       "acceptance": [
-        "所有 e2e 使用 mock adapter，不呼叫任何模型",
-        "chrome 快照三語都跑；互動流程只跑 zh-TW",
-        "GHA 跑的是 bin/ci.sh，與本機同一支",
-        "完整 CI 在本機 60 秒內跑完"
+        "every e2e uses the mock adapter and calls no model",
+        "chrome snapshots run in all three languages; interaction flows run in zh-TW only",
+        "GitHub Actions runs bin/ci.sh, the same file the local gate runs",
+        "a full CI pass completes in under 60 seconds locally"
       ]
     },
     {
@@ -339,7 +364,7 @@
       "depends_on": [
         "T-006"
       ],
-      "title": "fm-protocol.sh：第 3 輪強制與違規偵測",
+      "title": "fm-protocol.sh: round three and its violations",
       "scope": [
         "bin/fm-protocol.sh",
         "skills/worker/**",
@@ -347,10 +372,10 @@
         "tests/protocol.test.sh"
       ],
       "acceptance": [
-        "第 3 輪 worker 未貼 ASK-PASS-CRITERIA 就推 commit 時擋下",
-        "reviewer 未貼 CRITERIA-COMPLETE 時，第 3 輪的意見不計入閘門",
-        "清單外的舊問題觸發 protocol_violation 事件且不計入閘門",
-        "標記 REGRESSION: 的意見即使在清單外也計入"
+        "a round-three commit pushed before ASK-PASS-CRITERIA is blocked",
+        "round-three comments do not count toward the gates until CRITERIA-COMPLETE is posted",
+        "an off-list old complaint raises protocol_violation and does not count",
+        "a comment marked REGRESSION: counts even though it is off-list"
       ]
     },
     {
@@ -360,17 +385,17 @@
       "depends_on": [
         "T-010"
       ],
-      "title": "fm-diagram.sh：決策圖解與看板嵌入",
+      "title": "fm-diagram.sh: decision diagrams and the board embed",
       "scope": [
         "bin/fm-diagram.sh",
         "design/diagrams/**",
         "board/public/**"
       ],
       "acceptance": [
-        "每個決策產出 D-*.en.html 與 D-*.zh-TW.html",
-        "zh-CN 由 tw2cn.tsv 後處理 HTML 文字節點產生",
-        "只有需要船長拍板的決策會產圖，例行事件不產",
-        "看板以 iframe 嵌入，切語言換 src"
+        "each decision produces D-*.en.html and D-*.zh-TW.html",
+        "zh-CN is produced by post-processing the text nodes through tw2cn.tsv",
+        "only decisions the captain must rule on produce a diagram; routine events do not",
+        "the board embeds them in an iframe and swaps src with the language"
       ]
     },
     {
@@ -380,16 +405,16 @@
       "depends_on": [
         "T-007"
       ],
-      "title": "fm-reconcile.sh：崩潰後對帳",
+      "title": "fm-reconcile.sh: reconciling after a crash",
       "scope": [
         "bin/fm-reconcile.sh",
         "tests/reconcile.test.sh"
       ],
       "acceptance": [
-        "replay events.jsonl 即可重建全部狀態，不依賴任何 snapshot",
-        "掃 state/worktrees 與 gh pr list 對帳出孤兒",
-        "pid 已死的 worker 標記 worker_crashed 並重派",
-        "對帳為冪等，連跑兩次結果相同"
+        "replaying events.jsonl rebuilds the whole state with no snapshot",
+        "walks state/worktrees and gh pr list to find orphans",
+        "a worker whose pid is gone is marked worker_crashed and redispatched",
+        "reconciling is idempotent: two runs leave the same state"
       ]
     },
     {
@@ -400,17 +425,17 @@
         "T-007",
         "T-015"
       ],
-      "title": "skills 自更新流程與 sync-skills",
+      "title": "self-update and sync-skills",
       "scope": [
         "bin/fm.sh",
         "skills/**",
         "tests/selfupdate.test.sh"
       ],
       "acceptance": [
-        "skill-update task 走與一般 task 完全相同的 PR 與七道閘",
-        "任何繞過 PR 直接改 skills/ 的路徑都不存在，並有測試斷言",
-        "sync-skills 為單向匯入至 skills/vendor/，不回寫外部目錄",
-        "lint：skills/ 內出現 vendor 專屬語法即失敗"
+        "a skill-update task travels the same pull request and the same seven gates as any other",
+        "no path exists that edits skills/ without a pull request, and a test asserts it",
+        "sync-skills imports into skills/vendor/ one way and never writes back",
+        "a lint fails on vendor-specific syntax inside skills/"
       ]
     }
   ]

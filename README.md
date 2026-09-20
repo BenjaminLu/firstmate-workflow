@@ -1,22 +1,44 @@
 # firstmate-workflow
 
-一個由 firstmate 調度其他 agent 完成軟體工作的工作流。三件事構成它：
+One agent runs the crew. Three things make it up:
 
-- **`skills/`** — 內容。所有角色的行為用純 Markdown 定義。
-- **`bin/fm-*.sh`** — 法律。驗收只看檔案系統與 exit code，不看模型講了什麼。
-- **`board/`** — 船長的唯一操作面。即時狀態、待決事項、拍板送出。
+- **`skills/`** — the content. Every role's behaviour is plain Markdown, so
+  changing a skill changes behaviour without touching code.
+- **`bin/fm-*.sh`** — the law. Acceptance reads the filesystem and exit codes.
+  It never reads what a model claims it did.
+- **`board/`** — the captain's only console. Live state, open decisions, orders.
 
-agent CLI 是可替換的引擎，不是系統本體。
+The agent CLI is a replaceable engine, not the system.
 
-規格看 [`design/design.md`](design/design.md)，任務 DAG 看 [`design/tasks.json`](design/tasks.json)。
+Spec: [`design/design.md`](design/design.md). Task DAG: [`design/tasks.json`](design/tasks.json).
 
-## 狀態
+## Rules that bind everyone
 
-規格已定案，尚未實作。`design/proposals/` 下是船長已核可的看板提案視覺化
-（丟棄式 prototype，不會直接晉升為實作）。
+1. **Nobody writes to `main`.** Not firstmate, not a worker, not a reviewer.
+   Branch, then open a pull request. Enforced by `bin/fm-guard.sh`, by the git
+   hooks in `.githooks/`, and by branch protection on GitHub.
+2. **English in the repository.** README, design docs, skills, code, comments,
+   commit messages, pull request bodies and reviews. The board's three
+   languages are a product feature and are the one exception.
+3. **Merging is the captain's.** It arrives as a decision card on the board,
+   never as a sentence in a conversation.
 
+## Getting set up
+
+```sh
+bin/fm-install-hooks.sh   # git hooks are not cloned; opt in once per checkout
+bin/ci.sh                 # the one gate - CI runs this same file
 ```
+
+## State
+
+Spec is settled and the bootstrap is under way. `design/proposals/` holds the
+board proposal the captain green-lit — a throwaway prototype, not the
+implementation.
+
+```sh
 open design/proposals/2026-09-20-captain-board/prototype.html
 ```
 
-方向鍵切四級呈現，右上角切 EN / 繁 / 简。
+Arrow keys switch the four presentation levels; the top right switches
+EN / 繁 / 简.
