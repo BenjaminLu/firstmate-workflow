@@ -58,6 +58,46 @@ assert_contains "$(jq -r .type < "$r2/state/events.jsonl" | tr '\n' ' ')" "vendo
   "it emitted vendor_unavailable"
 assert_eq "" "$(cat "$d2/ghcalls" 2>/dev/null)" "an unavailable vendor opens no pull request"
 
+# A second round continues the first. Starting over from main would throw
+# away the work the review is about, and the worker would answer a review
+# of something that no longer exists.
+d5="$(fixture)"; r5="$d5/repo"; GH5="$(ghstub "$d5")"
+cat > "$r5/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+mkdir -p "$3/src"
+if [ -f "$3/src/round-one" ]; then
+  printf 'the second round\n' > "$3/src/round-two"
+  grep -q 'REVIEWER SAID' "$2" && printf 'saw the review\n' > "$3/src/saw-review"
+else
+  printf 'the first round\n' > "$3/src/round-one"
+fi
+M
+chmod +x "$r5/bin/adapters/mock.sh"
+( cd "$r5" && FM_ROOT="$r5" FM_GH="$GH5" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+branch="$(cd "$r5" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1)"
+assert_ne "" "$branch" "the first round made a branch"
+assert_ok "cd '$r5' && git cat-file -e '$branch:src/round-one'" "and committed its work"
+
+# the recorder stub answers a comments query for this round, because what
+# the worker is given to answer is the point of the assertion
+cat > "$d5/stub/gh" <<'G'
+#!/usr/bin/env bash
+echo "gh $*" >> "$(dirname "$0")/../calls"
+case " $* " in
+  *" pr view "*" comments "*)
+    jq -cn '{author:{login:"reviewer-1"},body:"REVIEWER SAID: fix the helper"}' \
+      | jq -r '"## " + .author.login + "\n\n" + .body + "\n"' ;;
+esac
+exit 0
+G
+chmod +x "$d5/stub/gh"
+( cd "$r5" && FM_ROOT="$r5" FM_GH="$GH5" bin/fm-worker.sh --task T-Z --pr 9 >/dev/null 2>&1 )
+assert_ok "cd '$r5' && git cat-file -e '$branch:src/round-one'" "the second round keeps the first round's work"
+assert_ok "cd '$r5' && git cat-file -e '$branch:src/round-two'" "and adds its own"
+assert_ok "cd '$r5' && git cat-file -e '$branch:src/saw-review'" "and was given the review to answer"
+rm -rf "$d5"
+
 # a vendor named in config.yaml with no adapter behind it is a typo. It has
 # to be found before anything runs, or a real vendor does the work and the
 # exit 65 throws it away with the worktree.
