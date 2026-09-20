@@ -60,6 +60,8 @@ assert_fail "FM_ROOT='$d3' FM_GH='$JUNK' '$d3/bin/fm-sync-prs.sh' --repo '$d3'" 
 assert_fail "test -s '$d3/state/events.jsonl'" "and writes nothing then either"
 
 # it goes through the one writer like everyone else
-assert_ok "grep -q 'fm-emit.sh' '$ROOT/bin/fm-sync-prs.sh'" "it writes through fm-emit.sh"
+# the header comment names fm-emit.sh too; look at what runs
+assert_ok "grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-sync-prs.sh' | grep -q 'fm-emit.sh'" \
+  "it writes through fm-emit.sh"
 rm -rf "$d" "$d2" "$d3"
 finish

@@ -43,6 +43,19 @@ else
   pass "state/events.jsonl has a single writer"
 fi
 
+stage "test hygiene"
+# an assertion that greps a source file is satisfied by a comment unless it
+# filters them out. This has been written three times now; the machine checks
+# it from here on.
+bad=$(grep -nE 'assert_(ok|fail) "grep [^|]*\$(ROOT|[A-Za-z_]*ROOT)[^|]*"' tests/*.test.sh 2>/dev/null \
+      | grep -v 'grep -v' || true)
+if [ -n "$bad" ]; then
+  flunk "an assertion greps source without excluding comments"
+  printf '%s\n' "$bad"
+else
+  pass "no assertion greps source without excluding comments"
+fi
+
 stage "dag"
 # section 14 of the design and tasks.json are two views of one DAG
 if [ -f design/tasks.json ] && [ -f design/design.md ]; then
@@ -74,14 +87,13 @@ else
 fi
 
 stage "bun tests"
-if [ -f package.json ] || [ -d board ]; then
-  if command -v bun >/dev/null 2>&1; then
-    if out=$(bun test 2>&1); then pass "bun test"; else flunk "bun test"; printf '%s\n' "$out"; fi
-  else
-    skip "bun not installed"
-  fi
+bunspecs=$(find . -name '*.test.ts' -o -name '*.spec.ts' 2>/dev/null | grep -v node_modules | head -1)
+if [ -z "$bunspecs" ]; then
+  skip "no bun specs yet"
+elif ! command -v bun >/dev/null 2>&1; then
+  skip "bun not installed"
 else
-  skip "no board yet"
+  if out=$(bun test 2>&1); then pass "bun test"; else flunk "bun test"; printf '%s\n' "$out"; fi
 fi
 
 stage "end-to-end"
