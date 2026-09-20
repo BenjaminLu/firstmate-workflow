@@ -157,6 +157,24 @@ and may not ask for one in conversation.
 Waiting is `bun run bin/watch-decisions.ts` (`fs.watch`, millisecond wake) when
 bun is present, and a one-second poll otherwise. **No `fswatch` dependency.**
 
+### 5.2a Worktrees, and the one root they live under
+
+Every worktree lives under `state/worktrees/<task-id>` — one root, inside the
+repository, so the whole system is self-contained and nothing it creates ever
+lands in a shared directory somewhere else on the machine.
+
+That root is also what makes cleanup safe to automate. After a task's pull
+request merges, `bin/fm-cleanup.sh` removes that task's worktree and only that
+one. It refuses anything that does not resolve to a **direct child of the root**
+— a path reaching out through `..`, a symlink pointing elsewhere, the
+repository root itself, the main worktree, a worktree belonging to another
+repository. A script that deletes directories has to be boring about which
+ones, and the check is on the resolved path rather than the string it was
+handed.
+
+It also refuses while the pull request is still open. An unmerged branch is
+someone's unfinished work.
+
 ### 5.3 The adapter contract, `bin/adapters/<vendor>.sh`
 
 ```
@@ -479,6 +497,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-006 | `fm-review.sh`: the reviewer sees only the diff | T-005 |
 | T-007 | `fm-dispatch.sh`: the DAG, the limit, the green-light gate | T-005, T-006 |
 | T-008 | `fm-decide.sh`: decisions land, firstmate wakes | T-002 |
+| T-023 | `fm-cleanup.sh`: a worker removes its own worktree and nothing else | T-005 |
 
 ### M1 — the board
 
