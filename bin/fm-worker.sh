@@ -4,6 +4,8 @@
 # them, which is what lets a CLI with no repository access still be a worker.
 #
 #   fm-worker.sh --task T-004 [--repo .] [--vendor claude] [--name worker-1]
+#   fm-worker.sh --task T-004 --pr 27      a later round: continue the branch
+#                                          and read the review already on it
 set -uo pipefail
 # Nothing below may read standard input. A dispatched child inherits it, and
 # a child that reads it blocks the whole turn waiting for a human who is not
@@ -15,7 +17,7 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
 
-REPO="${FM_ROOT:-$(pwd)}"; TASK=''; VENDOR=''; NAME=''
+REPO="${FM_ROOT:-$(pwd)}"; TASK=''; VENDOR=''; NAME=''; PR=''
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -23,6 +25,7 @@ while [ $# -gt 0 ]; do
     --repo) REPO="${2-}"; shift 2 ;;
     --vendor) VENDOR="${2-}"; shift 2 ;;
     --name) NAME="${2-}"; shift 2 ;;
+    --pr)   PR="${2-}"; shift 2 ;;
     *) echo "fm-worker: unknown argument $1" >&2; exit 64 ;;
   esac
 done
@@ -43,8 +46,21 @@ tree="$REPO/state/worktrees/$TASK"
 # --- a worktree of its own -----------------------------------------------
 rm -rf "$tree"; mkdir -p "$REPO/state/worktrees"
 git worktree prune >/dev/null 2>&1
-git branch -D "$branch" >/dev/null 2>&1
-git worktree add -q -b "$branch" "$tree" "$BASE" || { echo "fm-worker: could not create the worktree" >&2; exit 70; }
+# A second round continues the first. Recreating the branch from main would
+# throw away everything the worker did before, which makes a review round
+# pointless and the round-three protocol impossible: the worker would be
+# answering a review of work that no longer exists.
+round_two=0
+if git show-ref --verify --quiet "refs/heads/$branch"; then
+  round_two=1
+  git worktree add -q "$tree" "$branch"
+elif git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+  round_two=1
+  git fetch -q origin "$branch:$branch" 2>/dev/null
+  git worktree add -q "$tree" "$branch"
+else
+  git worktree add -q -b "$branch" "$tree" "$BASE"
+fi || { echo "fm-worker: could not create the worktree" >&2; exit 70; }
 
 # --- the prompt: the task, the design that bears on it, and the skill ----
 prompt="$tree/.fm-prompt.md"
@@ -54,6 +70,18 @@ prompt="$tree/.fm-prompt.md"
   printf '\nYour worktree is the current directory. Your branch is `%s`.\n' "$branch"
   printf 'Stay inside these paths:\n'
   jq -r '.scope[]|"  - " + .' <<<"$spec"
+  # a later round is answering a review, and the review is on the pull
+  # request. Handing over the task alone would have the worker rewrite what
+  # it already wrote instead of fixing what was named.
+  if [ "$round_two" = 1 ]; then
+    printf '\n---\n\n# This is not the first round\n\n'
+    printf 'Your branch already carries your earlier work. Build on it.\n'
+    if [ -n "$PR" ]; then
+      printf '\nWhat review has said so far, oldest first:\n\n'
+      $GH pr view "$PR" --json comments \
+        --jq '.comments[]|"## " + .author.login + "\n\n" + .body + "\n"' 2>/dev/null
+    fi
+  fi
   printf '\n---\n\n# The design\n\n'
   sed -n '/^## 6\./,/^## 8\./p' design/design.md 2>/dev/null
 } > "$prompt"
