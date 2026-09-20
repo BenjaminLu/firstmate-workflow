@@ -76,18 +76,25 @@ assert_ok "test -s '$GHSTATE/comments.$pr'" "the reviewer commented"
 # fm-run must not swallow a review round that produced no verdict. The
 # reviewer is stubbed rather than crashed for real, so the round counter is
 # untouched and the scenario after this point is the one it was before.
+# the stub says where its log is, the way the real fm-review does, so the
+# turn output can be checked against what the child actually reported
+# rather than against a path fm-run reconstructed
 stub_script "$r/bin/fm-review.sh" <<'S'
 #!/usr/bin/env bash
+echo "fm-review: nothing to show; its log is at state/reviews/T-A-r1.7.log" >&2
 exit 3
 S
 outX="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
 assert_contains "$outX" "produced no verdict" "a review round with no verdict is reported, not counted"
+assert_contains "$outX" "T-A-r1.7.log" "and the path it prints is the one the reviewer wrote"
 stub_script "$r/bin/fm-review.sh" <<'S'
 #!/usr/bin/env bash
+echo "fm-review: every reviewer vendor was unavailable; their log is at state/reviews/T-A-r1.9.log" >&2
 exit 2
 S
 outY="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
 assert_contains "$outY" "no reviewer engine was available" "and so is a reviewer with no engine"
+assert_contains "$outY" "T-A-r1.9.log" "which also carries the log the reviewer kept"
 stub_script "$r/bin/fm-review.sh" <<'S'
 #!/usr/bin/env bash
 exit 64

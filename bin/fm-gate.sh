@@ -148,7 +148,7 @@ gate7() {
     '.comments[]|select(.body|test("APPROVE:'"$TASK"'"))|.author.login' 2>/dev/null)"
   [ -n "$body" ] || return 1
   [ -z "$REVIEWER" ] && return 0
-  printf '%s\n' "$body" | grep -qx "$REVIEWER"
+  grep -qx "$REVIEWER" <<< "$body"
 }
 
 g 1 "branch exists and carries commits"          gate1

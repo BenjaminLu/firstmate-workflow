@@ -89,6 +89,19 @@ else
   pass "no assertion evals captured output"
 fi
 
+# `producer | grep -q` under pipefail: grep exits on the first match, the
+# producer takes SIGPIPE, and the pipeline reports failure even though the
+# match happened. `yes MATCH | grep -qi match` returns 141. A here-string
+# has no producer to kill and takes the data as data.
+piped="$(grep -n '| *grep -[qc]' bin/*.sh bin/adapters/*.sh 2>/dev/null \
+  | grep -v '^bin/ci.sh' | grep -v '^[^:]*: *#' || true)"
+if [ -n "$piped" ]; then
+  flunk "a pipeline feeds grep -q or -c; use a here-string"
+  printf '%s\n' "$piped"
+else
+  pass "nothing feeds grep -q through a pipe"
+fi
+
 # a fixture that swaps a script out has to put it back, and a hand-rolled
 # save-and-restore is where that goes wrong: the restore ends up parked at
 # the bottom of the file, then duplicated or lost by the next edit.

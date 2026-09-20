@@ -311,6 +311,19 @@ for healthy in "Loaded cached credentials." "Authenticated as benjamin. Ready." 
                "Reviewed the network error handling and the retry budget."; do
   assert_eq "0" "$(verdict "$healthy" 0)" "and none of them fires on \"$(printf '%.30s' "$healthy")...\""
 done
+# A big transcript with its signature at the front. The hazard this guards
+# is `producer | grep -q`: grep exits on the match, the producer takes
+# SIGPIPE, and under pipefail the pipeline reports failure even though the
+# match happened. Measured here: with bash's builtin printf as the producer
+# it does not reproduce even at 5 MB, but with an external one it does -
+# `yes MATCH | grep -qi match` returns 141 - and fm-review hit it for real
+# with `cat`. So the fix is the shape, not a size, and the shape is
+# asserted by the lint in bin/ci.sh. This is the behavioural regression
+# test that goes with it.
+huge="Error: Authentication required$(printf '%*s' 200000 '' | tr ' ' 'n')"
+assert_eq "2" "$(verdict "$huge" 0)" \
+  "a signature at the front of a very large transcript still counts"
+
 assert_eq "1" "$(verdict "" 0)" "exit 0 with nothing said is unfit"
 # the shape a review actually has. The wording test condemns it, and that is
 # expected now: what rescues it is the caller's evidence, asserted below.

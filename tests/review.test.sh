@@ -101,6 +101,12 @@ rm -f "$r/state/reviews/T-Z-r8.log" "$r/state/reviews/T-Z-r8."*.log
 assert_eq "3" "$?" "a reviewer that said something unusable is a failed round"
 assert_contains "$(cat "$r/state/reviews/T-Z-r8.log" 2>/dev/null)" "not logged in" \
   "and what it said is kept"
+
+# a failed round does not advance the counter, so the next failure at the
+# same round must not overwrite the last engine's log
+outW="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 8 2>&1)"
+assert_ok "test -f '$r/state/reviews/T-Z-r8.2.log'" "a second failure at the same round lands beside the first"
+assert_contains "$outW" "T-Z-r8.2.log" "and the reviewer says the path it actually wrote"
 restore_scripts
 rm -rf "$d" "$d2"
 # a review that did not happen must not look like one that did

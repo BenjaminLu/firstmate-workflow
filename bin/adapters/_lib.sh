@@ -50,7 +50,11 @@ fm_adapter_verdict() {
   local rc="$1" log="$2" off="$3" said=''
   [ -f "$log" ] && said="$(tail -c "+$((off + 1))" "$log" 2>/dev/null)"
 
-  printf '%s' "$said" | grep -qiE "$_FM_SIG" && return 2
+  # a here-string, not a pipeline: under `set -o pipefail` a grep -q that
+  # matches early kills the producer, printf takes SIGPIPE, and the pipeline
+  # reports failure even though the match happened. The verdict would then
+  # fall through to "done" on exactly the transcript it was meant to catch.
+  grep -qiE "$_FM_SIG" <<< "$said" && return 2
   case "$rc" in 2|4|41|69|75) return 2 ;; esac
   [ "$rc" = 0 ] || return 1
   # exit 0 having said nothing at all is not a success either

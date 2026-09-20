@@ -51,13 +51,15 @@ limit="${LIMIT:-$(fm_cfg concurrency)}"
 slots=$(( limit - n_inflight ))
 [ "$slots" -gt 0 ] || { echo "fm-dispatch: $n_inflight in flight, limit $limit - nothing to start"; exit 0; }
 
-is_done()    { printf '%s\n' "$done_tasks" | grep -qx "$1"; }
-is_busy()    { printf '%s\n' "$inflight"   | grep -qx "$1"; }
+# here-strings throughout: a grep -q that matches early kills the producer
+# of a pipeline, and under pipefail that reads as "no match"
+is_done()    { grep -qx "$1" <<< "$done_tasks"; }
+is_busy()    { grep -qx "$1" <<< "$inflight"; }
 # closed is abandoned, not failed: it frees the slot but is never retried on
 # its own. Restarting it is a decision, and decisions belong to the captain.
 # read once, like the others: a function that re-runs the query inside a
 # pipeline is one pipefail away from answering the wrong question
-is_closed()  { printf '%s\n' "$closed_tasks" | grep -qx "$1"; }
+is_closed()  { grep -qx "$1" <<< "$closed_tasks"; }
 
 started_any=0
 while IFS= read -r id; do

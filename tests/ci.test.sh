@@ -176,6 +176,13 @@ plant "an assertion that evals captured output turns the hygiene stage red" "eva
 plant "and the stage names the suite" "evals.test.sh"
 rm -f "$q/tests/evals.test.sh"
 
+# a pipeline feeding grep -q
+printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\ns=hi\nprintf "%%s" "$s" | grep -q hi\n' \
+  > "$q/bin/fm-piped.sh"
+plant "a pipeline into grep -q turns the hygiene stage red" "feeds grep -q or -c"
+plant "and the stage names the script" "fm-piped.sh"
+rm -f "$q/bin/fm-piped.sh"
+
 plant "a hand-rolled swap turns the hygiene stage red" "saves a script by hand"
 plant "and the stage names the suite" "hand-rolled.test.sh"
 rm -f "$q/tests/hand-rolled.test.sh"

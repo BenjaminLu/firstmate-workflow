@@ -84,11 +84,17 @@ turn() {
       # reads it; a message that suggests nothing is worse than none.
       rvout="$("$B/fm-review.sh" --task "$task" --branch "$branch" --pr "$pr" \
         --round "$round" --repo "$REPO" 2>&1 </dev/null)"
-      case "$?" in
+      # the child already said where its log is and which vendor name is
+      # wrong. Every branch here repeats what it said rather than
+      # reconstructing it: a reconstructed path is confidently wrong the
+      # moment a round fails twice, and keep_log numbers the second one.
+      rvrc=$?
+      rvsaid="$(grep -E 'log is at|no adapter' <<< "$rvout" | tail -1)"
+      case "$rvrc" in
         0) ;;
-        2) say "$task: no reviewer engine was available, leaving it for the next turn" ;;
-        3) say "$task: the reviewer produced no verdict (state/reviews/$task-r$round.log)" ;;
-        65) say "$task: $(printf '%s' "$rvout" | grep 'no adapter' | tail -1)" ;;
+        2) say "$task: no reviewer engine was available${rvsaid:+ ($rvsaid)}, leaving it for the next turn" ;;
+        3) say "$task: the reviewer produced no verdict${rvsaid:+ ($rvsaid)}" ;;
+        65) say "$task: ${rvsaid:-config.yaml names a vendor with no adapter}" ;;
         *) say "$task: the review round failed" ;;
       esac
     else

@@ -54,7 +54,7 @@ while IFS=$'\t' read -r who folded; do
     *"CRITERIA-COMPLETE:$TASK"*)
       closed=1
       # the numbered items in the closing comment are the whole of the list
-      list_len="$(printf '%s\n' "$text" | grep -cE '^[[:space:]]*[0-9]+[.)]')"
+      list_len="$(grep -cE '^[[:space:]]*[0-9]+[.)]' <<< "$text")"
       continue ;;
   esac
   [ "$closed" = 1 ] || continue
@@ -63,7 +63,7 @@ while IFS=$'\t' read -r who folded; do
     *"APPROVE:$TASK"*|*"REGRESSION:$TASK"*) continue ;;
   esac
   # after the list closes, a comment has to cite an item on it
-  if ! printf '%s\n' "$text" | grep -qE '(^|[^0-9])[0-9]+[.)]|item[[:space:]]+[0-9]+|#[0-9]+'; then
+  if ! grep -qE '(^|[^0-9])[0-9]+[.)]|item[[:space:]]+[0-9]+|#[0-9]+' <<< "$text"; then
     off="$off$(printf '%s' "$text" | head -c 90)"
     off="$off
 "

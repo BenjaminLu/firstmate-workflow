@@ -52,7 +52,7 @@ while IFS= read -r w; do
   [ -n "$w" ] || continue
   known="$known$(abs "$w" 2>/dev/null)"$'\n'
 done <<< "$(git worktree list --porcelain | sed -n 's/^worktree //p')"
-printf '%s' "$known" | grep -qxF "$tgt_real" || {
+grep -qxF "$tgt_real" <<< "$known" || {
   echo "fm-cleanup: refusing $tgt_real - not a worktree of this repository" >&2; exit 1; }
 
 # --- an open pull request is someone's unfinished work -------------------
