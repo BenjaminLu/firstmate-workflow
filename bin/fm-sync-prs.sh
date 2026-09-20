@@ -8,6 +8,11 @@
 # Idempotent: an event already in the log for that pull request and state is
 # not written again, so this is safe to run on a timer.
 set -uo pipefail
+# Nothing below may read standard input. A dispatched child inherits it, and
+# a child that reads it blocks the caller waiting for a human who is not
+# there. One guarantee, in one place; bin/ci.sh fails if a script that
+# dispatches is missing it.
+exec < /dev/null
 
 REPO="${FM_ROOT:-$(pwd)}"; LIMIT=50; GH="${FM_GH:-gh}"
 while [ $# -gt 0 ]; do

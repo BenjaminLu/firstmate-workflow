@@ -210,10 +210,20 @@ carry `APPROVE:<task>` or `REJECT:<task>`, because a real reviewer's verdict
 *is* its standard output and without a marker a crashed engine's stack trace
 looks exactly like a damning review.
 
-The judgement about outages can still be wrong, so it is not allowed to be
-final: if `fm-worker` is told every vendor was unavailable but the worktree
-has changes in it, something did the work and it is committed and pushed like
-any other attempt. The gates decide from there.
+The judgement about outages can never be right on wording alone, because
+there is no phrase a model cannot write — this repository contains
+"Authentication required" in two files, so any review of it quotes them. So
+wording does not decide. The adapter is deliberately generous, and the caller
+settles it: `fm_run_chain` takes a predicate answering *did this run produce
+work?*, and work beats a signature. A worker asks whether the worktree
+changed; a reviewer asks whether the output carries a verdict marker. Being
+over-eager then costs one more vendor attempt and never the work — and a
+signed review is never thrown away, which would otherwise repeat the same
+round forever with a reassuring message on it.
+
+A vendor named in `config.yaml` with no adapter behind it is a typo, not an
+outage: it exits `65` so a human fixes the configuration, rather than being
+reported as transient on every turn for ever.
 
 ### 5.4 The pull request protocol
 
@@ -524,7 +534,6 @@ gates, and the dispatcher cannot dispatch itself.
 | T-008 | `fm-decide.sh`: decisions land, firstmate wakes | T-002 |
 | T-023 | `fm-cleanup.sh`: a worker removes its own worktree and nothing else | T-005 |
 | T-024 | `fm-run.sh`: one turn of the whole loop, proved end to end | T-007, T-013, T-015 |
-| T-025 | the adapter verdict: a vendor that fails silently is not one that worked | T-003, T-006, T-024 |
 
 ### M1 — the board
 
@@ -536,6 +545,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-012 | `/open` and the read-only diff viewer | T-009 |
 | T-013 | the decision API, including merge cards | T-008, T-009 |
 | T-014 | Playwright e2e and the GitHub Actions workflow | T-010, T-011, T-013 |
+| T-025 | the adapter verdict: a vendor that fails silently is not one that worked | T-003, T-006, T-024 |
 
 ### M2 — protocol and self-update
 

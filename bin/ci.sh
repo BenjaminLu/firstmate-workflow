@@ -65,6 +65,44 @@ else
   pass "no assertion greps source without excluding comments"
 fi
 
+# a fixture that swaps a script out has to put it back, and a hand-rolled
+# save-and-restore is where that goes wrong: the restore ends up parked at
+# the bottom of the file, then duplicated or lost by the next edit.
+# stub_script pairs them and finish undoes them whether the suite remembered
+# or not.
+if [ ${#suitefiles[@]} -gt 0 ] && grep -ln '\.keep"' "${suitefiles[@]}" >/dev/null 2>&1; then
+  flunk "a suite saves a script by hand; use stub_script"
+  grep -n '\.keep"' "${suitefiles[@]}"
+else
+  pass "every swapped script is paired with its restore"
+fi
+
+# the guarantee that nothing reads standard input has to hold for every
+# script that dispatches a child, not only the ones that were remembered
+stage "stdin"
+dispatchers=''
+for f in bin/*.sh; do
+  case "$f" in */fm-config.sh) continue ;; esac
+  grep -qE '\$\(|"\$[A-Z_]*/(bin/)?fm-|fm_run_chain|Bun\.spawn|\$GH ' "$f" || continue
+  grep -q '^exec < /dev/null' "$f" || dispatchers="$dispatchers $(basename "$f")"
+done
+if [ -n "$dispatchers" ]; then
+  flunk "these dispatch a child without closing standard input:$dispatchers"
+else
+  pass "every script that dispatches closes standard input"
+fi
+
+# and the vendor chain has one implementation, so a second loop over
+# vendors cannot appear without this noticing
+# fm-config.sh holds the one implementation; ci.sh is this lint
+loops="$(grep -ln 'for v in .*vendors\|for v in \$chain' bin/*.sh 2>/dev/null \
+  | grep -vE 'fm-config\.sh|ci\.sh' || true)"
+if [ -n "$loops" ]; then
+  flunk "a script loops over vendors on its own: $loops"
+else
+  pass "the vendor chain has one implementation"
+fi
+
 stage "dag"
 # section 14 of the design and tasks.json are two views of one DAG
 if [ -f design/tasks.json ] && [ -f design/design.md ]; then

@@ -34,13 +34,20 @@
 # lists are searched over the whole output - being wrong there costs a
 # fallback, not finished work.
 
-# Said by a CLI and never by a model writing about the task. Anywhere in the
-# opening is enough.
-_FM_ONLY_A_CLI_SAYS='not logged in|please (run|use) [^ ]* ?login|login required|authentication required|invalid api key|missing api key|no api key|api key not (set|found|configured)|ENOTFOUND|ECONNREFUSED|EAI_AGAIN'
-# Said by either. Only counts when the line reports it as an error, because
-# that is the difference between a CLI's excuse and a model's sentence.
-_FM_EITHER_MIGHT_SAY='authenticat|unauthor|credentials?|quota|rate limit|network (error|unreachable)|fetch failed|ETIMEDOUT'
-_FM_REPORTS_AN_ERROR='^[[:space:]]*(error|fatal|fail(ed|ure)?|40[13]|429)\b'
+# There is no phrase a model cannot write: this very repository contains
+# "Authentication required" in two files, so any review of it quotes them.
+# Wording alone can therefore never decide. Three attempts at making it
+# decide - a byte threshold, a five-line window, a "only a CLI says this"
+# list - all failed the same way: they described the outages I happened to
+# have rather than what an outage is.
+#
+# So wording no longer decides anything final. It is deliberately generous
+# here, and the caller settles it: fm_run_chain takes a predicate that
+# answers "did this run produce work?", and work beats any signature. A
+# worker asks whether the worktree changed; a reviewer asks whether the
+# output carries a verdict marker. Being over-eager here now costs at most
+# one more vendor attempt, and never the work.
+_FM_SIG='authenticat|unauthor|not logged in|please (run|use) [^ ]* ?login|login required|invalid api key|missing api key|no api key|api key not (set|found|configured)|credentials?|quota|rate limit|network (error|unreachable)|fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN'
 _FM_OPENING=2000   # bytes of the opening a CLI gets to report an outage in
 
 # fm_adapter_mark <log> -> byte offset to read from after the run
@@ -52,18 +59,13 @@ fm_adapter_verdict() {
   [ -f "$log" ] && said="$(tail -c "+$((off + 1))" "$log" 2>/dev/null)"
   opening="$(printf '%s' "$said" | head -c "$_FM_OPENING")"
 
-  # what only a CLI says, anywhere in the opening
-  printf '%s' "$opening" | grep -qiE "$_FM_ONLY_A_CLI_SAYS" && return 2
-  # what either might say, but only on a line reporting it as an error
-  printf '%s' "$opening" \
-    | grep -iE "$_FM_REPORTS_AN_ERROR" \
-    | grep -qiE "$_FM_EITHER_MIGHT_SAY" && return 2
+  printf '%s' "$opening" | grep -qiE "$_FM_SIG" && return 2
+
 
   case "$rc" in 2|4|41|69|75) return 2 ;; esac
   if [ "$rc" != 0 ]; then
     # it already failed; a signature anywhere now only names the reason
-    printf '%s' "$said" \
-      | grep -qiE "$_FM_ONLY_A_CLI_SAYS|$_FM_EITHER_MIGHT_SAY" && return 2
+    printf '%s' "$said" | grep -qiE "$_FM_SIG" && return 2
     return 1
   fi
   # exit 0 having said nothing at all is not a success either

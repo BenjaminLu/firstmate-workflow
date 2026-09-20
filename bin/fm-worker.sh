@@ -59,27 +59,23 @@ prompt="$tree/.fm-prompt.md"
 } > "$prompt"
 
 # --- the adapter, with fallback only on a vendor being unavailable -------
+# The worker's evidence: files changed in the worktree. The prompt lives
+# there too, so it comes out of the count or every run looks busy.
+worker_did_work() { [ -n "$(git -C "$tree" status --porcelain -- . ":(exclude).fm-prompt.md")" ]; }
 log="$REPO/state/worktrees/$TASK.log"; : > "$log"
 fm_run_chain "$REPO/bin/adapters" "$(fm_vendor_chain worker "$VENDOR")" \
-  "$prompt" "$tree" "$log"; rc=$?
+  "$prompt" "$tree" "$log" worker_did_work; rc=$?
+[ -z "$FM_VENDOR_UNKNOWN" ] || {
+  echo "fm-worker: config.yaml names a vendor with no adapter: $FM_VENDOR_UNKNOWN" >&2; exit 65; }
+[ -z "$FM_VENDOR_MISREAD" ] || {
+  echo "fm-worker: $FM_VENDOR_MISREAD was read as unavailable, but it changed files - keeping them" >&2
+  emit --type vendor_unavailable --en "read as unavailable but work was done; keeping it" \
+       --tw "被判成不可用，但確實有改動，保留"; }
 for v in $FM_VENDOR_SKIPPED; do
   emit --type vendor_unavailable --en "$v unavailable, trying the next" \
        --tw "$v 不可用，換下一家"
 done
-if [ "$rc" = "2" ]; then
-  # the last line of defence against a misread outage. If the worktree has
-  # changes, something did the work, whatever the verdict said - and calling
-  # that an outage would throw it away. The changes are committed and pushed
-  # like any other attempt and the gates decide.
-  rm -f "$prompt"   # it lives in the worktree; leave it and every run looks busy
-  if [ -n "$(git -C "$tree" status --porcelain)" ]; then
-    echo "fm-worker: every vendor reported unavailable, but the worktree has changes - keeping them" >&2
-    emit --type vendor_unavailable --en "read as unavailable but work was done; keeping it" \
-         --tw "被判成不可用，但確實有改動，保留"
-  else
-    echo "fm-worker: every vendor was unavailable" >&2; exit 2
-  fi
-fi
+[ "$rc" = "2" ] && { echo "fm-worker: every vendor was unavailable" >&2; exit 2; }
 
 rm -f "$prompt"
 if [ -z "$(git -C "$tree" status --porcelain)" ]; then

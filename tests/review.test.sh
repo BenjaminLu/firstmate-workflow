@@ -110,8 +110,23 @@ types="$(jq -r .type "$r/state/events.jsonl")"
 assert_contains "$types" "review_failed" "it emitted review_failed"
 assert_fail "printf '%s' \"$types\" | tail -1 | grep -q approved" "and signed nothing"
 
-# the reviewer falls back the same way the worker does
+# a vendor named in config.yaml with no adapter behind it is a typo, not an
+# outage: reporting it as transient would have fm-run say "leaving it for
+# the next turn" on every turn, forever
 printf 'vendor: mock\nreviewer:\n  vendor: nosuchvendor\nfallback:\n  - mock\n' > "$r/config.yaml"
+out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_eq "65" "$?" "a vendor with no adapter is a configuration error"
+assert_contains "$out" "no adapter" "and says which one"
+
+# the reviewer falls back the same way the worker does
+cat > "$r/bin/adapters/down.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'down: not logged in\n' >> "$4"
+exit 2
+M
+chmod +x "$r/bin/adapters/down.sh"
+printf 'vendor: mock\nreviewer:\n  vendor: down\nfallback:\n  - mock\n' > "$r/config.yaml"
 cat > "$r/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
@@ -135,6 +150,23 @@ chmod +x "$r/bin/adapters/other.sh"
 printf 'vendor: mock\nreviewer:\n  vendor: other\nfallback:\n  - mock\n' > "$r/config.yaml"
 out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
 assert_contains "$out" "reviewed by the other engine" "the reviewer block picks the engine"
+
+# an engine misread as unavailable that signed a verdict anyway keeps it:
+# the reviewer's output IS the review, so throwing it away would repeat the
+# same round forever
+cat > "$r/bin/adapters/down.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'The credentials check is never exercised.\nREJECT:T-Z\n' > "$3/verdict.txt"
+exit 2
+M
+chmod +x "$r/bin/adapters/down.sh"
+printf 'vendor: mock\nreviewer:\n  vendor: down\nfallback:\n  - mock\n' > "$r/config.yaml"
+out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 5 --pr 9 2>&1)"
+assert_eq "0" "$?" "a signed verdict survives being read as an outage"
+assert_contains "$out" "REJECT:T-Z" "and it is the verdict"
+assert_contains "$out" "was read as unavailable" "and the reviewer says it was misread"
+printf 'vendor: mock\nreviewer:\n  vendor: other\nfallback:\n  - mock\n' > "$r/config.yaml"
 
 # a round that ends in neither marker is an engine that failed, not a verdict
 cat > "$r/bin/adapters/other.sh" <<'M'

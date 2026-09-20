@@ -72,7 +72,7 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
       chmod +x "$d/fakebin/$name"
     }
     for line in "Error: Authentication required. Please run 'agent login' first" \
-                "You are not logged in." \
+                "Error: you are not logged in" \
                 "Error: quota exceeded for this organisation" \
                 "fetch failed: ENOTFOUND api.example.com" \
                 "Authentication required." \
@@ -152,33 +152,56 @@ Update available: 1.2.3
 $gem"
 assert_eq "2" "$(verdict "$gem" 0)" "a long stack trace is still an outage when the error leads"
 
-# and the one that broke: a real review that talks about authentication
-rev="The verdict: three problems, one of them load-bearing.
+# --- and what actually settles it: the caller's evidence -----------------
+# shellcheck source=bin/fm-config.sh
+. "$ROOT/bin/fm-config.sh"
+e="$(mktemp -d)"; mkdir -p "$e/ad" "$e/out"; echo p > "$e/prompt"
+# an adapter whose CLI wrote a review that quotes the words an outage uses
+cat > "$e/ad/one.sh" <<'A'
+#!/usr/bin/env bash
+printf 'The authentication signature is matched anywhere in the output, so a\nreview discussing authentication reads as an outage.\nREJECT:T-Z\n' >> "$4"
+exit 2   # what the wording test makes of it, which is what is under test
+A
+cat > "$e/ad/two.sh" <<'A'
+#!/usr/bin/env bash
+printf 'the second vendor also ran\n' >> "$4"
+exit 0
+A
+chmod +x "$e/ad"/*.sh
+signed() { grep -q 'REJECT:T-Z' "$e/log" 2>/dev/null; }
+: > "$e/log"
+fm_run_chain "$e/ad" "one two" "$e/prompt" "$e/out" "$e/log" signed
+assert_eq "0" "$?" "work beats a signature: a signed review is not an outage"
+assert_eq "one" "$FM_VENDOR_MISREAD" "and the chain says which vendor was misread"
+assert_fail "grep -q 'second vendor' '$e/log'" "and stops rather than running the next one"
 
-1. The authentication signature in _lib.sh is matched anywhere in the output,
-   so a review discussing authentication is read as an outage. That is not a
-   hypothetical - it is what happened to this review.
-2. fm_vendor_chain dedupes only the head against the fallback list.
-3. The prompt is never delivered when FM_ADAPTER_ARGS is empty."
-rev="$rev$(printf '%*s' 2200 '' | tr ' ' 'y')"
-assert_eq "0" "$(verdict "$rev" 0)" "a long review that discusses authentication is work, not an outage"
-# the task itself can be about logins and rate limits. Completed work must
-# not be thrown away because the model wrote the words down.
+# with no evidence to show, the same output falls through to the next vendor
+: > "$e/log"
+nothing() { false; }
+fm_run_chain "$e/ad" "one two" "$e/prompt" "$e/out" "$e/log" nothing
+assert_ok "grep -q 'second vendor' '$e/log'" "with nothing to show, the chain moves on"
+
+# a typo at the head of the chain is a configuration error, not an outage
+fm_run_chain "$e/ad" "nosuchvendor two" "$e/prompt" "$e/out" "$e/log" nothing
+assert_eq "nosuchvendor" "$FM_VENDOR_UNKNOWN" "a head with no adapter is named, not passed over"
+fm_run_chain "$e/ad" "two nosuchvendor" "$e/prompt" "$e/out" "$e/log" nothing
+assert_eq "" "$FM_VENDOR_UNKNOWN" "a fallback entry with no adapter is just skipped"
+rm -rf "$e"
+# The wording test is deliberately generous and is NOT the decision: a task
+# about logins and rate limits says the same words an outage does, and no
+# wording test can tell them apart. So these read as outages here, and the
+# chain's evidence predicate below is what settles them.
 for job in "Added rate limiting: the handler now returns 429 with Retry-After." \
            "Implemented the login flow; credentials are read from the keyring." \
            "The authentication middleware rejects an unauthorized token."; do
-  assert_eq "0" "$(verdict "$job" 0)" "a finished job that mentions ${job%% *} is done, not an outage"
+  assert_eq "2" "$(verdict "$job" 0)" "the wording test is generous about ${job%% *}"
 done
-assert_eq "2" "$(verdict "Error: rate limit reached, try again later" 0)" \
-  "but the same words led by an error on exit 0 are an outage"
-# the shape a review actually has: a verdict, then numbered findings that
-# mention the very words an outage would. None of it is reported as an error
-# at the start of a line, which is what tells the two apart.
-assert_eq "0" "$(verdict "REJECT:T-025
-1. The gemini adapter failed to deliver the prompt; the CLI returns 401 and
-   the adapter calls it done.
-2. The rate limit path is unauthorized to retry, and the credentials check
-   is never exercised." 0)" "a short review full of those words is still a review"
+assert_eq "1" "$(verdict "" 0)" "exit 0 with nothing said is unfit"
+# the shape a review actually has. The wording test condemns it, and that is
+# expected now: what rescues it is the caller's evidence, asserted below.
+assert_eq "2" "$(verdict "REJECT:T-025
+1. The rate limit path is unauthorized to retry, and the credentials check
+   is never exercised." 0)" "even a real review trips the wording test"
 assert_eq "1" "$(verdict "" 0)" "exit 0 with nothing said is unfit"
 assert_eq "1" "$(verdict "it did not manage it" 1)" "a plain failure stays a plain failure"
 assert_eq "2" "$(verdict "it did not manage it" 69)" "an unavailable exit code still counts"

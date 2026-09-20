@@ -6,6 +6,11 @@
 #
 #   fm-review.sh --task T-004 --branch <name> [--repo .] [--pr 9] [--round 1]
 set -uo pipefail
+# Nothing below may read standard input. A dispatched child inherits it, and
+# a child that reads it blocks the caller waiting for a human who is not
+# there. One guarantee, in one place; bin/ci.sh fails if a script that
+# dispatches is missing it.
+exec < /dev/null
 _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
@@ -49,8 +54,20 @@ prompt="$work/prompt.md"
 # back exactly the way the worker does - one chain, one runner
 emit --type review_opened --en "round $ROUND on $TASK" --tw "$TASK 第 $ROUND 輪審核"
 mkdir -p "$work/out"
+# The reviewer's evidence: a verdict marker. A signed review IS the run's
+# standard output, so a signature matcher calling it an outage would throw
+# away the very thing it was asked for - and the next turn would read the
+# same output and say the same thing, forever.
+review_is_signed() {
+  grep -qE "(APPROVE|REJECT):$TASK" "$work/out"/* "$work/log" 2>/dev/null
+}
 fm_run_chain "$REPO/bin/adapters" "$(fm_vendor_chain reviewer "$VENDOR")" \
-  "$prompt" "$work/out" "$work/log"; rc=$?
+  "$prompt" "$work/out" "$work/log" review_is_signed; rc=$?
+[ -z "$FM_VENDOR_UNKNOWN" ] || {
+  echo "fm-review: config.yaml names a vendor with no adapter: $FM_VENDOR_UNKNOWN" >&2
+  rm -rf "$work"; exit 65; }
+[ -z "$FM_VENDOR_MISREAD" ] || \
+  echo "fm-review: $FM_VENDOR_MISREAD was read as unavailable, but it signed a verdict - keeping it" >&2
 for v in $FM_VENDOR_SKIPPED; do
   emit --type vendor_unavailable --en "$v unavailable, trying the next" \
        --tw "$v 不可用，換下一家"

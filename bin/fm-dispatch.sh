@@ -8,6 +8,11 @@
 #
 #   fm-dispatch.sh [--repo .] [--dry-run] [--limit N]
 set -uo pipefail
+# Nothing below may read standard input. A dispatched child inherits it, and
+# a child that reads it blocks the caller waiting for a human who is not
+# there. One guarantee, in one place; bin/ci.sh fails if a script that
+# dispatches is missing it.
+exec < /dev/null
 _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh

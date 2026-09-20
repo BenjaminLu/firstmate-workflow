@@ -7,6 +7,11 @@
 #   bin/fm-guard.sh branch <dir>      ...in another worktree
 #   . bin/fm-guard.sh                 then call fm_guard_branch yourself
 set -uo pipefail
+# Nothing below may read standard input. A dispatched child inherits it, and
+# a child that reads it blocks the caller waiting for a human who is not
+# there. One guarantee, in one place; bin/ci.sh fails if a script that
+# dispatches is missing it.
+exec < /dev/null
 
 FM_PROTECTED="${FM_PROTECTED:-main master}"
 

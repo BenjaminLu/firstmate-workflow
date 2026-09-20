@@ -52,16 +52,34 @@ fm_vendor_chain() {
   fm_cfg_list fallback | grep -vxF "$head" | awk '!seen[$0]++' || true
 }
 
-# fm_run_chain <adapters-dir> <chain> <prompt> <tree> <log>
+# fm_run_chain <adapters-dir> <chain> <prompt> <tree> <log> [evidence]
 #   Returns the adapter's own exit code, or 2 if every vendor was unavailable.
 #   Sets FM_VENDOR_USED and FM_VENDOR_SKIPPED so the caller can say what it did.
-# shellcheck disable=SC2034  # both are read by the callers, not here
+#
+#   <evidence> is a command that answers "did that run produce work?". An
+#   adapter decides "unavailable" by reading text, and text can lie in both
+#   directions, so the caller gets the last word: a worker asks whether the
+#   worktree changed, a reviewer whether the output carries a verdict marker.
+#   Work beats a signature, and the chain stops there. FM_VENDOR_MISREAD names
+#   the vendor this happened to, so the caller can say so.
+#
+#   The head of the chain having no adapter is a typo in config.yaml, not an
+#   outage: FM_VENDOR_UNKNOWN names it and the caller should exit 65 rather
+#   than report a transient failure forever.
+# shellcheck disable=SC2034  # these are read by the callers, not here
 fm_run_chain() {
-  local dir="$1" chain="$2" prompt="$3" tree="$4" log="$5" v rc=2
-  FM_VENDOR_USED=''; FM_VENDOR_SKIPPED=''
+  local dir="$1" chain="$2" prompt="$3" tree="$4" log="$5" evidence="${6:-}" v rc=2 first=1
+  FM_VENDOR_USED=''; FM_VENDOR_SKIPPED=''; FM_VENDOR_MISREAD=''; FM_VENDOR_UNKNOWN=''
   for v in $chain; do
-    [ -x "$dir/$v.sh" ] || continue
+    if [ ! -x "$dir/$v.sh" ]; then
+      [ "$first" = 1 ] && FM_VENDOR_UNKNOWN="$v"
+      first=0; continue
+    fi
+    first=0
     "$dir/$v.sh" run "$prompt" "$tree" "$log"; rc=$?
+    if [ "$rc" = 2 ] && [ -n "$evidence" ] && $evidence; then
+      FM_VENDOR_USED="$v"; FM_VENDOR_MISREAD="$v"; return 0
+    fi
     if [ "$rc" = 2 ]; then FM_VENDOR_SKIPPED="${FM_VENDOR_SKIPPED:+$FM_VENDOR_SKIPPED }$v"; continue; fi
     FM_VENDOR_USED="$v"; return "$rc"
   done

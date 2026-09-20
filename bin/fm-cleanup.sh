@@ -6,6 +6,11 @@
 #
 #   fm-cleanup.sh --task T-004 [--repo .] [--force]
 set -uo pipefail
+# Nothing below may read standard input. A dispatched child inherits it, and
+# a child that reads it blocks the caller waiting for a human who is not
+# there. One guarantee, in one place; bin/ci.sh fails if a script that
+# dispatches is missing it.
+exec < /dev/null
 
 REPO="${FM_ROOT:-$(pwd)}"; TASK=''; FORCE=0; GH="${FM_GH:-gh}"
 while [ $# -gt 0 ]; do

@@ -556,7 +556,11 @@
         "the hygiene lint is asserted to be linting the suites it was given",
         "no script dispatches a child without closing standard input, proved by a probe that blocks forever if it is open",
         "the gate lints bin/adapters as well as bin, which bin/*.sh does not reach",
-        "work in the worktree is never discarded because the verdict read an outage"
+        "work in the worktree is never discarded because the verdict read an outage",
+        "wording never decides finally: the caller supplies the evidence and work beats a signature",
+        "a vendor named in config.yaml with no adapter behind it is a configuration error, not an outage",
+        "a fixture that swaps a script out is paired with its restore by the harness, and a hand-rolled one fails the gate",
+        "the gate names every script that dispatches without closing standard input"
       ]
     }
   ]

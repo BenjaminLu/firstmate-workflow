@@ -9,6 +9,11 @@
 # A summary is what the board shows. It must carry both languages or nothing:
 # a half-translated event would render blank in one of the three locales.
 set -uo pipefail
+# Nothing below may read standard input. A dispatched child inherits it, and
+# a child that reads it blocks the caller waiting for a human who is not
+# there. One guarantee, in one place; bin/ci.sh fails if a script that
+# dispatches is missing it.
+exec < /dev/null
 
 ROOT="${FM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 LOG="$ROOT/state/events.jsonl"

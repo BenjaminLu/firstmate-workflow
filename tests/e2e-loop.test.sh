@@ -76,14 +76,22 @@ assert_ok "test -s '$GHSTATE/comments.$pr'" "the reviewer commented"
 # fm-run must not swallow a review round that produced no verdict. The
 # reviewer is stubbed rather than crashed for real, so the round counter is
 # untouched and the scenario after this point is the one it was before.
-cp "$r/bin/fm-review.sh" "$r/review.keep"
-printf '#!/usr/bin/env bash\nexit 3\n' > "$r/bin/fm-review.sh"; chmod +x "$r/bin/fm-review.sh"
+stub_script "$r/bin/fm-review.sh" <<'S'
+#!/usr/bin/env bash
+exit 3
+S
 outX="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
 assert_contains "$outX" "produced no verdict" "a review round with no verdict is reported, not counted"
-printf '#!/usr/bin/env bash\nexit 2\n' > "$r/bin/fm-review.sh"; chmod +x "$r/bin/fm-review.sh"
+stub_script "$r/bin/fm-review.sh" <<'S'
+#!/usr/bin/env bash
+exit 2
+S
 outY="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
 assert_contains "$outY" "no reviewer engine was available" "and so is a reviewer with no engine"
-printf '#!/usr/bin/env bash\nexit 64\n' > "$r/bin/fm-review.sh"; chmod +x "$r/bin/fm-review.sh"
+stub_script "$r/bin/fm-review.sh" <<'S'
+#!/usr/bin/env bash
+exit 64
+S
 outZ="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
 assert_contains "$outZ" "review round failed" "and so is a reviewer that failed some other way"
 
@@ -92,9 +100,11 @@ assert_contains "$outZ" "review round failed" "and so is a reviewer that failed 
 # advance loop once ate its own input. The advance loop happens to be fed
 # by a here-string, so the child that proves this has to be one called
 # outside it: the sync at the top of the turn.
-cp "$r/bin/fm-sync-prs.sh" "$r/sync.keep"
-printf '#!/usr/bin/env bash\ncat > /dev/null\nexit 0\n' > "$r/bin/fm-sync-prs.sh"
-chmod +x "$r/bin/fm-sync-prs.sh"
+stub_script "$r/bin/fm-sync-prs.sh" <<'S'
+#!/usr/bin/env bash
+cat > /dev/null
+exit 0
+S
 # a fifo held open read-write never reaches EOF and needs no writer
 # process, so a child that reads it blocks for good and the probe leaves
 # nothing running behind it
@@ -108,8 +118,7 @@ assert_ok "test -f '$r/turn-done'" "a turn finishes even when a child would read
 kill -9 "$probe" 2>/dev/null; wait "$probe" 2>/dev/null
 pkill -f "$r/bin/fm-sync-prs.sh" 2>/dev/null
 exec 9>&-; rm -f "$r/openpipe"
-cp "$r/review.keep" "$r/bin/fm-review.sh"; chmod +x "$r/bin/fm-review.sh"
-cp "$r/review.keep" "$r/bin/fm-review.sh"; chmod +x "$r/bin/fm-review.sh"
+restore_scripts
 
 # a real review body has newlines, quotes and backslashes in it. The stub
 # used to interpolate one into JSON by hand, which put a raw control
