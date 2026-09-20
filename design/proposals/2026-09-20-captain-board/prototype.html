@@ -639,13 +639,11 @@ code,.mono{font-family:var(--mono);font-size:.86em}
   box-shadow:0 2px 4px rgba(0,0,0,.9)}
 .port b::after{content:"";position:absolute;top:-1px;width:6px;height:12px;border-radius:3px;
   background:linear-gradient(180deg,#77828f,#2b333b)}
-.port.l b{right:-24px} .port.l b::after{left:-1px}
-.port.r b{left:-24px}  .port.r b::after{right:-1px}
+.port b{left:-24px} .port b::after{left:-1px}   /* muzzles run out toward the bow, which is to the left */
 .port::after{content:"";position:absolute;top:-11px;left:1px;width:27px;height:10px;border-radius:2px;
   background:linear-gradient(180deg,#6b4a2a,#33210f);box-shadow:0 0 0 1.5px var(--brass);
   transform-origin:50% 100%;transform:rotate(-24deg)}
-.port.r::after{transform:rotate(24deg)}
-.prow{position:absolute;z-index:3;pointer-events:none;transform:translate(-6%,0)}
+.prow{position:absolute;z-index:3;pointer-events:none;transform:translateX(-46%) scaleX(-1)}
 .prow .fighead{display:block;filter:drop-shadow(0 3px 7px rgba(0,0,0,.65))}
 .prow .spar{position:absolute;left:78px;top:20px;width:86px;height:6px;border-radius:3px;
   background:linear-gradient(90deg,#8a6438,#33230f);transform:rotate(-15deg);transform-origin:0 50%}
@@ -1254,11 +1252,12 @@ function shipMarkup(sp,n){
   const helm='<div class="helm" style="--hx:'+(fm?fm.px.toFixed(2):'25')+'%;--topR:'+(sp.rows-1)+'">'
     + '<div class="wheel"><i></i><i></i><i></i><i></i><div class="ring"></div></div>'
     + '<div class="hub"></div></div>';
-  const lx=(50-sp.deckW*deckLens(sp.rows-1).w/2+3).toFixed(1);
+  const lx=(50+sp.deckW*deckLens(sp.rows-1).w/2-3).toFixed(1);   // stern is to starboard of frame now
   const guns = portList(sp);
   const prowHTML = function(list){
     const bow=list[list.length-1];
-    return '<div class="prow" style="left:95%;bottom:'+(bow.H-bow.y+18).toFixed(1)+'px">'
+    const bow2=list[0];
+    return '<div class="prow" style="left:5%;bottom:'+(bow2.H-bow2.y+18).toFixed(1)+'px">'
       + '<svg class="fighead" viewBox="0 0 78 50" width="104" height="67" aria-hidden="true">'
       +   '<defs><linearGradient id="gild" x1="0" y1="0" x2="0" y2="1">'
       +     '<stop offset="0" stop-color="#f8e2a4"/><stop offset=".46" stop-color="#d9a441"/>'
@@ -1306,7 +1305,7 @@ function portList(sp){
   const L=40, R=960, n=Math.min(11,3+sp.masts*2), out=[];
   for(let i=0;i<n;i++){
     const t=(i+0.5)/n;
-    out.push({x:L+46+(R-L-92)*t, y:y0+52+14*Math.sin(Math.PI*t), H:H, dir:t<0.5?-1:1});
+    out.push({x:L+46+(R-L-92)*t, y:y0+52+14*Math.sin(Math.PI*t), H:H, dir:-1});  // broadside fires one way
   }
   return out;
 }
