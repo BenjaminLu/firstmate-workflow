@@ -6,10 +6,13 @@
 // No build step and no framework: the page is a file, the stream is SSE, and
 // the state endpoint is derived from events.jsonl and design/tasks.json so the
 // board has no opinion the log does not already hold.
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-const ROOT = resolve(process.env.FM_ROOT ?? ".");
+// canonical from the start: on macOS /var is a symlink to /private/var, and a
+// path check that compares a resolved path against an unresolved root refuses
+// every legitimate file in the repository
+const ROOT = realpathSync(resolve(process.env.FM_ROOT ?? "."));
 const PORT = Number(process.env.FM_PORT ?? 4173);
 const LOG = join(ROOT, "state/events.jsonl");
 const PUBLIC = join(ROOT, "board/public");
@@ -149,6 +152,52 @@ const server = Bun.serve({
         if (existsSync(pf)) unlinkSync(pf);
         return json({ ok: true, merged });
       }).catch(() => json({ error: "bad request" }, 400));
+    }
+
+    // Hand a file to the editor, or show it. Both refuse anything that does
+    // not resolve inside the repository, and both refuse a caller that is not
+    // on this machine - the board binds loopback, but a browser on it can be
+    // pointed anywhere by a page the captain did not write.
+    const localOnly = (r: Request) => {
+      const h = new URL(r.url).hostname;
+      return h === "127.0.0.1" || h === "localhost" || h === "::1";
+    };
+    // one check for every endpoint that takes a path: resolve it fully, then
+    // insist the real thing sits inside the real root. Three copies of this
+    // is three chances to write it differently.
+    const inside = (p: string) => {
+      if (p === "") return null;
+      const abs = resolve(ROOT, p);
+      if (!existsSync(abs)) return null;
+      const real = realpathSync(abs);
+      return real === ROOT || real.startsWith(ROOT + "/") ? real : null;
+    };
+
+    if (url.pathname === "/open") {
+      if (!localOnly(req)) return json({ error: "localhost only" }, 403);
+      const abs = inside(url.searchParams.get("path") ?? "");
+      if (!abs) return json({ error: "outside the repository" }, 403);
+      const editor = (readFileSync(join(ROOT, "config.yaml"), "utf8")
+        .match(/^editor:\s*([^\s#]+)/m)?.[1] ?? "code");
+      Bun.spawn([editor, abs], { stdout: "ignore", stderr: "ignore" });
+      return json({ ok: true, opened: abs, editor });
+    }
+
+    if (url.pathname === "/file") {
+      if (!localOnly(req)) return json({ error: "localhost only" }, 403);
+      const abs = inside(url.searchParams.get("path") ?? "");
+      if (!abs) return json({ error: "outside the repository" }, 403);
+      if (statSync(abs).size > 512 * 1024) return json({ error: "too large to show" }, 413);
+      return new Response(readFileSync(abs), { headers: { "content-type": "text/plain; charset=utf-8" } });
+    }
+
+    if (url.pathname === "/diff") {
+      if (!localOnly(req)) return json({ error: "localhost only" }, 403);
+      const branch = url.searchParams.get("branch") ?? "";
+      if (!/^[A-Za-z0-9._\/-]{1,120}$/.test(branch)) return json({ error: "bad branch" }, 400);
+      const r = Bun.spawnSync(["git", "-C", ROOT, "diff", `main...${branch}`], {});
+      if (r.exitCode !== 0) return json({ error: "no such branch" }, 404);
+      return new Response(r.stdout, { headers: { "content-type": "text/plain; charset=utf-8" } });
     }
 
     if (url.pathname === "/" || url.pathname === "") return serveFile("index.html");

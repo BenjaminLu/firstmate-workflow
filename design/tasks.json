@@ -311,13 +311,16 @@
       "scope": [
         "board/server.ts",
         "board/public/**",
-        "tests/e2e/open.spec.ts"
+        "tests/open.test.sh",
+        "design/tasks.json"
       ],
       "acceptance": [
         "any non-localhost origin gets a 403",
-        "a realpath outside the repository gets a 403, with tests for both the .. and the symlink route",
+        "a path resolving outside the repository gets a 403, with a test for the .. route and the symlink route",
         "the editor command comes from config.yaml and defaults to code",
-        "the viewer can show a diff and design.md without leaving the board"
+        "a read-only viewer can show a file and a branch diff without leaving the board",
+        "a branch name carrying a shell metacharacter is refused, and an unknown branch is a 404 rather than a 500",
+        "every path-taking endpoint shares one check: resolve fully, then insist the real path sits inside the real root"
       ]
     },
     {
