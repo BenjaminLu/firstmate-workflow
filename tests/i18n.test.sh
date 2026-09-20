@@ -17,7 +17,12 @@ assert_fail "jq -r '.[]' '$tw' | grep -q '^$'" "no Chinese value is empty"
 # every key the page asks for has to exist
 missing=''
 # a word boundary, or the t at the end of get(" matches too
-pages="$(find "$ROOT/board/public" -type f \( -name '*.html' -o -name '*.js' \) | sort)"
+# the authored pages, not everything that ends up under board/public. A
+# generated diagram is Chinese on purpose - it is produced FROM the
+# dictionaries - and scanning it would make the lint red whenever a
+# decision is pending.
+pages="$(find "$ROOT/board/public" -type f \( -name '*.html' -o -name '*.js' \) \
+  -not -path '*/diagrams/*' | sort)"
 assert_ok "test \"$(printf '%s\n' \"$pages\" | wc -l | tr -d ' ')\" -ge 2" "the scan covers every page file"
 for k in $(grep -ohE '[^A-Za-z0-9_][tT]\("[a-zA-Z0-9]+"\)' $pages \
            | sed 's/^.*("//;s/")//' | sort -u); do

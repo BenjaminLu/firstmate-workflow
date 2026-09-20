@@ -101,6 +101,13 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     assert_contains "$(cat "$d/stdin")" "do the thing" "$name delivers the prompt on stdin"
     argv="$(cat "$d/argv")"
     case "$name" in
+      # a worker must be able to edit files in its own worktree and there is
+      # nobody to answer a prompt; a run that cannot write produces nothing
+      # and reads as a model that gave up
+      claude) assert_contains " $argv " " --permission-mode acceptEdits " \
+                "$name may edit files without asking" ;;
+    esac
+    case "$name" in
       # -p here means "print mode", a bare flag: stdin carries the prompt
       claude|cursor-agent) assert_contains " $argv " " -p " "$name asks for print mode" ;;
       # gemini's -p takes the prompt as its VALUE. The documented headless

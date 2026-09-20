@@ -423,13 +423,18 @@
       "scope": [
         "bin/fm-diagram.sh",
         "design/diagrams/**",
-        "board/public/**"
+        "board/public/**",
+        "tests/diagram.test.sh",
+        "tests/i18n.test.sh",
+        "design/tasks.json"
       ],
       "acceptance": [
         "each decision produces D-*.en.html and D-*.zh-TW.html",
         "zh-CN is produced by post-processing the text nodes through tw2cn.tsv",
         "only decisions the captain must rule on produce a diagram; routine events do not",
-        "the board embeds them in an iframe and swaps src with the language"
+        "the board embeds them in an iframe and swaps src with the language",
+        "the suite that covers it lives where bin/ci.sh runs it",
+        "generated diagrams do not trip the hardcoded-string lint, which scans authored pages"
       ]
     },
     {
