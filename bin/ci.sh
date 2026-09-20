@@ -33,6 +33,16 @@ else
   skip "shellcheck not installed"
 fi
 
+stage "lint"
+# the event log has exactly one writer; anything else appending to it is a bug
+strays=$(grep -rnE '>>[[:space:]]*[^|]*events\.jsonl' bin board 2>/dev/null | grep -v 'bin/fm-emit.sh' || true)
+if [ -n "$strays" ]; then
+  flunk "something appends to state/events.jsonl outside fm-emit.sh"
+  printf '%s\n' "$strays"
+else
+  pass "state/events.jsonl has a single writer"
+fi
+
 stage "bash tests"
 suites=(tests/*.test.sh)
 if [ ${#suites[@]} -eq 0 ]; then
