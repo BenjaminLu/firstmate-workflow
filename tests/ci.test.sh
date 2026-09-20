@@ -37,13 +37,19 @@ rm -rf "$t"
 # with a timing margin - not from a number that felt long enough.
 probe_gate() { # <fixture-dir> <label>
   local p="$1" label="$2" pid deadline
-  ( sleep 60 | { FM_ROOT="$p" bash "$p/bin/ci.sh" >/dev/null 2>&1; touch "$p/done"; } ) &
+  # a fifo held open read-write never reaches EOF and needs no writer
+  # process: the probe blocks for good if the gate reads it, and leaves
+  # nothing running behind it
+  rm -f "$p/openpipe"; mkfifo "$p/openpipe"
+  exec 8<> "$p/openpipe"
+  ( FM_ROOT="$p" bash "$p/bin/ci.sh" >/dev/null 2>&1 <&8; touch "$p/done" ) &
   pid=$!
   deadline=$(( $(date +%s) + 90 ))
   while [ ! -f "$p/done" ] && [ "$(date +%s)" -lt "$deadline" ]; do sleep 0.3; done
   assert_ok "test -f '$p/done'" "$label"
   kill -9 "$pid" 2>/dev/null
   wait "$pid" 2>/dev/null
+  exec 8>&-; rm -f "$p/openpipe"
 }
 p="$(mktemp -d)"; mkdir -p "$p/bin"; cp "$ROOT/bin/ci.sh" "$p/bin/ci.sh"
 probe_gate "$p" "the gate finishes on a tree with no tests at all"
@@ -59,11 +65,13 @@ probe_gate "$p" "the gate finishes when a suite reads standard input"
 # input from the one the gate is required to hand over
 printf '#!/usr/bin/env bash\nif [ -p /dev/fd/0 ]; then echo pipe; elif [ -c /dev/fd/0 ]; then echo chardev; else echo other; fi > "%s/sawstdin"\nexit 0\n' \
   "$p" > "$p/tests/reads-stdin.test.sh"
-( sleep 60 | FM_ROOT="$p" bash "$p/bin/ci.sh" >/dev/null 2>&1 ) &
+rm -f "$p/openpipe"; mkfifo "$p/openpipe"
+exec 8<> "$p/openpipe"
+( FM_ROOT="$p" bash "$p/bin/ci.sh" >/dev/null 2>&1 <&8 ) &
 gp=$!
 for _ in $(seq 1 200); do [ -s "$p/sawstdin" ] && break; sleep 0.3; done
 assert_eq "chardev" "$(cat "$p/sawstdin" 2>/dev/null)" "a suite is handed /dev/null, not the caller's pipe"
-kill -9 "$gp" 2>/dev/null; wait "$gp" 2>/dev/null
+kill -9 "$gp" 2>/dev/null; wait "$gp" 2>/dev/null; exec 8>&-; rm -f "$p/openpipe"
 
 # and the hygiene lint must be linting something: with nullglob an empty file
 # list turns its grep into one that reads /dev/null and passes every time
@@ -75,5 +83,31 @@ kill -9 "$gp" 2>/dev/null; wait "$gp" 2>/dev/null
 out="$(FM_ROOT="$p" bash "$p/bin/ci.sh" 2>&1)"
 assert_contains "$out" "greps source without excluding comments" "the hygiene lint reads the suites it is given"
 rm -rf "$p"
+
+# tests/e2e belongs to the browser runner. Bun picking those files up runs
+# them without a browser and calls the result an error, so the bun stage has
+# to leave them alone - and the e2e stage has to say it skipped rather than
+# quietly passing when the browser is not installed.
+q="$(mktemp -d)"; mkdir -p "$q/bin" "$q/tests/e2e"
+cp "$ROOT/bin/ci.sh" "$q/bin/ci.sh"
+printf 'import { test, expect } from "bun:test";\ntest("a", () => expect(1).toBe(1));\n' \
+  > "$q/tests/unit.spec.ts"
+printf 'import { test } from "@playwright/test";\ntest("b", async ({ page }) => { await page.goto("about:blank"); });\n' \
+  > "$q/tests/e2e/browser.spec.ts"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_contains "$out" "bun test (1 files)" "the bun stage runs the unit spec and not the browser one"
+assert_contains "$out" "playwright not installed" "and the browser stage says it was skipped"
+assert_fail "printf '%s' \"$out\" | grep -q 'x bun test'" "a browser spec does not turn the bun stage red"
+# bin/*.sh does not recurse, so the adapters went unlinted for as long as
+# they have existed. A fixture with a broken one has to turn the gate red.
+mkdir -p "$q/bin/adapters"
+printf '#!/usr/bin/env bash\nif [ -z "$undefined_on_purpose\n' > "$q/bin/adapters/broken.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+if command -v shellcheck >/dev/null 2>&1; then
+  assert_contains "$out" "x shellcheck" "a broken adapter turns the shellcheck stage red"
+else
+  printf '    %s\n' "(shellcheck not installed, adapter lint unchecked)"
+fi
+rm -rf "$q"
 
 finish

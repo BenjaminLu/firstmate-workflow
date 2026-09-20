@@ -534,6 +534,7 @@
         "bin/fm-emit.sh",
         "bin/ci.sh",
         "board/server.ts",
+        "config.yaml",
         "skills/reviewer/SKILL.md",
         "tests/**",
         "design/design.md",
@@ -552,7 +553,10 @@
         "review_failed and worker_crashed read as blocked on the board, in counts as well as lanes",
         "every stage the board maps is a type fm-emit will write",
         "no stage of bin/ci.sh reads standard input, and a suite is handed /dev/null",
-        "the hygiene lint is asserted to be linting the suites it was given"
+        "the hygiene lint is asserted to be linting the suites it was given",
+        "no script dispatches a child without closing standard input, proved by a probe that blocks forever if it is open",
+        "the gate lints bin/adapters as well as bin, which bin/*.sh does not reach",
+        "work in the worktree is never discarded because the verdict read an outage"
       ]
     }
   ]

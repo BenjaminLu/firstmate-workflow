@@ -103,9 +103,6 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     case "$name" in
       # -p here means "print mode", a bare flag: stdin carries the prompt
       claude|cursor-agent) assert_contains " $argv " " -p " "$name asks for print mode" ;;
-      # gemini's -p takes the prompt as its VALUE. A bare -p leaves the flag
-      # dangling and the prompt is never delivered: "Not enough arguments
-      # following: p". Piped stdin is what makes it headless.
       # gemini's -p takes the prompt as its VALUE. The documented headless
       # form is a piped stdin and no -p at all: a bare -p leaves the flag
       # dangling and the prompt is never delivered.
@@ -149,7 +146,10 @@ Error authenticating: IneligibleTierError: This client is no longer supported
     at process.processTicksAndRejections (node:internal/process/task_queues:95:5) {
   ineligibleTiers: [ { reasonCode: 'UNSUPPORTED_CLIENT' } ]
 }"
-gem="$gem$(printf '%*s' 2600 '' | tr ' ' 'x')"
+# a real CLI prints a banner first, so the failure is not on line one
+gem="Checking for updates...
+Update available: 1.2.3
+$gem"
 assert_eq "2" "$(verdict "$gem" 0)" "a long stack trace is still an outage when the error leads"
 
 # and the one that broke: a real review that talks about authentication
@@ -171,12 +171,41 @@ for job in "Added rate limiting: the handler now returns 429 with Retry-After." 
 done
 assert_eq "2" "$(verdict "Error: rate limit reached, try again later" 0)" \
   "but the same words led by an error on exit 0 are an outage"
-big="$(printf '%*s' 4600 '' | tr ' ' 'z')"
-assert_eq "0" "$(verdict "Error handling for authentication is wrong.
-$big" 0)" "and a long answer is never an outage, however it opens"
+# the shape a review actually has: a verdict, then numbered findings that
+# mention the very words an outage would. None of it is reported as an error
+# at the start of a line, which is what tells the two apart.
+assert_eq "0" "$(verdict "REJECT:T-025
+1. The gemini adapter failed to deliver the prompt; the CLI returns 401 and
+   the adapter calls it done.
+2. The rate limit path is unauthorized to retry, and the credentials check
+   is never exercised." 0)" "a short review full of those words is still a review"
 assert_eq "1" "$(verdict "" 0)" "exit 0 with nothing said is unfit"
 assert_eq "1" "$(verdict "it did not manage it" 1)" "a plain failure stays a plain failure"
 assert_eq "2" "$(verdict "it did not manage it" 69)" "an unavailable exit code still counts"
+
+# a failed run's signatures only name the reason, so both lists are searched
+# over the whole output. The old code searched one list and called an
+# outage on line eight a model that could not do the job.
+assert_eq "2" "$(verdict "working on it
+line two
+line three
+line four
+line five
+line six
+line seven
+Error: ENOTFOUND api.example.com" 1)" "a failure that names a network outage is an outage"
+assert_eq "2" "$(verdict "$(printf 'padding\n%.0s' $(seq 1 400))
+the request was unauthorized" 1)" "and so is one that names it far past the opening"
+assert_eq "1" "$(verdict "$(printf 'padding\n%.0s' $(seq 1 400))
+I could not work out how to do this" 1)" "a failure with no such reason stays a plain failure"
+assert_eq "2" "$(verdict "$(printf 'padding\n%.0s' $(seq 1 400))
+getaddrinfo ENOTFOUND api.example.com" 1)" \
+  "and both signature lists are searched, not just the one a model might write"
+
+# a banner before the failure must not hide it: the window is the opening in
+# bytes, not a fixed number of lines
+assert_eq "2" "$(verdict "$(printf 'notice\n%.0s' $(seq 1 30))
+Error: quota exceeded for this organisation" 0)" "a banner does not bury the outage"
 
 # the fallback chain shares one log: a verdict reads only its own bytes
 printf '%s' "Error: Authentication required" > "$v/log"

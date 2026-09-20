@@ -41,9 +41,6 @@ cat > bin/adapters/mock.sh <<'M'
 [ "$1" = "run" ] || exit 64
 echo "mock ran" >> "$4"
 if grep -q "Find the reason to reject" "$2"; then
-  if [ -n "${FM_REVIEWER_CRASHES:-}" ]; then
-    printf 'TypeError: undefined is not a function\n' >> "$4"; exit 0
-  fi
   printf '%s\nREJECT:T-A\n' "${FM_VERDICT:-round one: name the helper and cover the empty case}" > "$3/verdict.txt"
   exit 0
 fi
@@ -89,15 +86,41 @@ assert_contains "$outY" "no reviewer engine was available" "and so is a reviewer
 printf '#!/usr/bin/env bash\nexit 64\n' > "$r/bin/fm-review.sh"; chmod +x "$r/bin/fm-review.sh"
 outZ="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
 assert_contains "$outZ" "review round failed" "and so is a reviewer that failed some other way"
+
+# a dispatched child inherits fm-run's stdin. If that is the caller's open
+# pipe and the child reads it, the turn never ends - which is how the
+# advance loop once ate its own input. The advance loop happens to be fed
+# by a here-string, so the child that proves this has to be one called
+# outside it: the sync at the top of the turn.
+cp "$r/bin/fm-sync-prs.sh" "$r/sync.keep"
+printf '#!/usr/bin/env bash\ncat > /dev/null\nexit 0\n' > "$r/bin/fm-sync-prs.sh"
+chmod +x "$r/bin/fm-sync-prs.sh"
+# a fifo held open read-write never reaches EOF and needs no writer
+# process, so a child that reads it blocks for good and the probe leaves
+# nothing running behind it
+mkfifo "$r/openpipe"
+exec 9<> "$r/openpipe"
+( run bin/fm-run.sh once --repo "$r" >/dev/null 2>&1 <&9; touch "$r/turn-done" ) &
+probe=$!
+deadline=$(( $(date +%s) + 30 ))
+while [ ! -f "$r/turn-done" ] && [ "$(date +%s)" -lt "$deadline" ]; do sleep 0.3; done
+assert_ok "test -f '$r/turn-done'" "a turn finishes even when a child would read standard input"
+kill -9 "$probe" 2>/dev/null; wait "$probe" 2>/dev/null
+pkill -f "$r/bin/fm-sync-prs.sh" 2>/dev/null
+exec 9>&-; rm -f "$r/openpipe"
+cp "$r/review.keep" "$r/bin/fm-review.sh"; chmod +x "$r/bin/fm-review.sh"
 cp "$r/review.keep" "$r/bin/fm-review.sh"; chmod +x "$r/bin/fm-review.sh"
 
 # a real review body has newlines, quotes and backslashes in it. The stub
 # used to interpolate one into JSON by hand, which put a raw control
 # character in the document, and gate 7 then read an approval sitting right
 # there as nothing at all.
-run "$GH" pr comment "$pr" --body "$(printf 'Two findings:\n1. the "helper" is unnamed\n2. a path like C:\\tmp is unhandled\nREJECT:T-A\n')" >/dev/null 2>&1
-assert_ok "run '$GH' pr view '$pr' --json comments --jq '.comments[].body' >/dev/null 2>&1" \
-  "a review body with newlines and quotes survives the round trip"
+body="$(printf 'Two findings:\n1. the "helper" is unnamed\n2. a path like C:\\tmp is unhandled\nREJECT:T-A')"
+run "$GH" pr comment "$pr" --body "$body" >/dev/null 2>&1
+back="$(run "$GH" pr view "$pr" --json comments --jq '.comments[-1].body')"
+assert_eq "$body" "$back" "a review body with newlines and quotes comes back byte for byte"
+assert_eq "reviewer-1" "$(run "$GH" pr view "$pr" --json comments --jq '.comments[-1].author.login')" \
+  "and the author is not split off by one of its newlines"
 
 # the reviewer in this fixture signs off
 printf 'reviewer-1\tAPPROVE:T-A\n' >> "$GHSTATE/comments.$pr"

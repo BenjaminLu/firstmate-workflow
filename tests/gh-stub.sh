@@ -61,6 +61,9 @@ case "${1-}:${2-}" in
   pr:checks)  [ -f "$S/red" ] && exit 1; echo "ci pass"; exit 0 ;;
   pr:comment)
     n="$3"; body="$(arg --body "$@")"
+    # one line per comment on disk, so the newlines in a review body are
+    # encoded here and decoded where the JSON is built - the two halves are
+    # the only places that may know about it
     printf '%s\t%s\n' "${GH_AS:-reviewer-1}" "$(printf '%s' "$body" | tr '\n' '\r')" >> "$S/comments.$n"
     ;;
   pr:merge)

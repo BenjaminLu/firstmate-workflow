@@ -5,6 +5,11 @@
 #
 #   fm-worker.sh --task T-004 [--repo .] [--vendor claude] [--name worker-1]
 set -uo pipefail
+# Nothing below may read standard input. A dispatched child inherits it, and
+# a child that reads it blocks the whole turn waiting for a human who is not
+# there - the advance loop did exactly this once, and ci.sh has the same
+# line for the same reason. One guarantee, in one place.
+exec < /dev/null
 _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
@@ -61,7 +66,20 @@ for v in $FM_VENDOR_SKIPPED; do
   emit --type vendor_unavailable --en "$v unavailable, trying the next" \
        --tw "$v 不可用，換下一家"
 done
-[ "$rc" = "2" ] && { echo "fm-worker: every vendor was unavailable" >&2; exit 2; }
+if [ "$rc" = "2" ]; then
+  # the last line of defence against a misread outage. If the worktree has
+  # changes, something did the work, whatever the verdict said - and calling
+  # that an outage would throw it away. The changes are committed and pushed
+  # like any other attempt and the gates decide.
+  rm -f "$prompt"   # it lives in the worktree; leave it and every run looks busy
+  if [ -n "$(git -C "$tree" status --porcelain)" ]; then
+    echo "fm-worker: every vendor reported unavailable, but the worktree has changes - keeping them" >&2
+    emit --type vendor_unavailable --en "read as unavailable but work was done; keeping it" \
+         --tw "被判成不可用，但確實有改動，保留"
+  else
+    echo "fm-worker: every vendor was unavailable" >&2; exit 2
+  fi
+fi
 
 rm -f "$prompt"
 if [ -z "$(git -C "$tree" status --porcelain)" ]; then

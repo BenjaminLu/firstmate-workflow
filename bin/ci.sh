@@ -25,7 +25,7 @@ flunk() { printf '  %sx%s %s\n' "$red" "$off" "$1"; fail=1; }
 skip()  { printf '  %s- %s (skipped)%s\n' "$dim" "$1" "$off"; }
 
 stage "shellcheck"
-scripts=(bin/*.sh tests/*.sh)
+scripts=(bin/*.sh bin/adapters/*.sh tests/*.sh)  # adapters too: bin/*.sh does not recurse
 if [ ${#scripts[@]} -eq 0 ]; then
   skip "no shell scripts"
 elif command -v shellcheck >/dev/null 2>&1; then

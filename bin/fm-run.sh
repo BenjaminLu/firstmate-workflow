@@ -7,6 +7,12 @@
 #                                  task in flight by one step
 #   fm-run.sh watch [--every 30]   keep doing that
 set -uo pipefail
+# Nothing below may read standard input. A dispatched child inherits it, and
+# a child that reads it blocks the whole turn waiting for a human who is not
+# there - the advance loop did exactly this once, and ci.sh has the same
+# line for the same reason. One guarantee, in one place: a per-call redirect
+# as well would make the test for this line pass without it.
+exec < /dev/null
 _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
@@ -47,7 +53,7 @@ turn() {
 
     # the protocol first: from round three it can stop the round outright
     if [ "$round" -ge 3 ]; then
-      "$B/fm-protocol.sh" check --task "$task" --pr "$pr" --round "$round" --repo "$REPO" >/dev/null 2>&1 </dev/null \
+      "$B/fm-protocol.sh" check --task "$task" --pr "$pr" --round "$round" --repo "$REPO" >/dev/null 2>&1 \
         || { say "$task: protocol violation in round $round"; continue; }
     fi
 
@@ -59,14 +65,14 @@ turn() {
       [ -f "state/pending/$id.json" ] && { say "$task: waiting on the captain"; continue; }
       [ -f "state/decisions/$id.json" ] && continue
       "$B/fm-decide.sh" --request "$id" --task "$task" --kind merge --pr "$pr" \
-        --title "$task passed the gates - merge it?" --repo "$REPO" >/dev/null 2>&1 </dev/null
+        --title "$task passed the gates - merge it?" --repo "$REPO" >/dev/null 2>&1
       say "$task: all seven gates green, asking the captain ($id)"
     elif [ "$g" -eq 7 ]; then
       say "$task: gates 1-6 green, sending it to review (round $round)"
       # exit 3 is a round that produced no verdict. Swallowing it would let
       # a crashed engine read as a review that simply did not sign.
       "$B/fm-review.sh" --task "$task" --branch "$branch" --pr "$pr" \
-        --round "$round" --repo "$REPO" >/dev/null 2>&1 </dev/null
+        --round "$round" --repo "$REPO" >/dev/null 2>&1
       case "$?" in
         0) ;;
         2) say "$task: no reviewer engine was available, leaving it for the next turn" ;;

@@ -201,10 +201,19 @@ chain appends to one log, a verdict only reads the bytes its own run added.
 `bin/fm-config.sh`, so the worker and the reviewer fall back identically. Each
 role may name its own engine — `reviewer:` and `worker:` blocks in
 `config.yaml` — and whichever it names leads a chain that continues through
-`fallback:` with no vendor run twice and a
-reviewer whose engine is down is not simply a reviewer who never ran. A round
-that produced no review exits `3` and emits `review_failed`; it never reaches
-the pull request and never counts toward gate 7.
+`fallback:`, with no vendor run twice. A reviewer whose engine is down is
+therefore not a reviewer who never ran.
+
+A round that produced no review exits `3` and emits `review_failed`; it never
+reaches the pull request and never counts toward gate 7. A verdict has to
+carry `APPROVE:<task>` or `REJECT:<task>`, because a real reviewer's verdict
+*is* its standard output and without a marker a crashed engine's stack trace
+looks exactly like a damning review.
+
+The judgement about outages can still be wrong, so it is not allowed to be
+final: if `fm-worker` is told every vendor was unavailable but the worktree
+has changes in it, something did the work and it is committed and pushed like
+any other attempt. The gates decide from there.
 
 ### 5.4 The pull request protocol
 
