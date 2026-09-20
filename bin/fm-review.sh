@@ -38,6 +38,19 @@ emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor reviewer-1 --task "$TASK
 spec="$(jq -r --arg t "$TASK" '.tasks[]|select(.id==$t)' design/tasks.json 2>/dev/null)"
 [ -n "$spec" ] || { echo "fm-review: no task $TASK" >&2; exit 65; }
 
+# A round that produced nothing is not a round, so review_opened is emitted
+# once the chain has actually produced a verdict - otherwise three crashed
+# engines would walk a task into the round-three protocol with no review
+# ever posted. And because a failed round therefore does not advance the
+# counter, its log must not overwrite the last one's.
+keep_log() {
+  local dir="$REPO/state/reviews" n=1 p
+  mkdir -p "$dir"
+  p="$dir/$TASK-r$ROUND.log"
+  while [ -e "$p" ]; do n=$((n + 1)); p="$dir/$TASK-r$ROUND.$n.log"; done
+  printf '%s' "$p"
+}
+
 work="$(mktemp -d)"
 prompt="$work/prompt.md"
 {
@@ -52,7 +65,6 @@ prompt="$work/prompt.md"
 
 # the reviewer runs on its own engine when config.yaml names one, and falls
 # back exactly the way the worker does - one chain, one runner
-emit --type review_opened --en "round $ROUND on $TASK" --tw "$TASK 第 $ROUND 輪審核"
 mkdir -p "$work/out"
 # The reviewer's evidence: a verdict marker. A signed review IS the run's
 # standard output, so a signature matcher calling it an outage would throw
@@ -86,13 +98,13 @@ done
 verdict="$(cat "${FM_RUN_OUTDIR:-$work/out}"/* 2>/dev/null)"
 [ -n "$verdict" ] || verdict="$(tail -c "+$((${FM_RUN_LOG_OFF:-0} + 1))" "$work/log" 2>/dev/null)"
 
-# An outage is a run that produced nothing. Anything else - an engine that
-# ran and said something unsigned - is a round that failed, and has to be
-# reported as one: exit 2 tells fm-run to try again next turn, which on the
-# same input produces the same result for ever. Only silence earns a 2.
-if [ "$rc" = "2" ] && [ -z "$verdict" ]; then
-  kept="$REPO/state/reviews/$TASK-r$ROUND.log"
-  mkdir -p "$(dirname "$kept")"
+# The chain says which of the two this was, and both callers read the same
+# answer: rc 2 with nothing said is a vendor that was not there, and only
+# that earns a 2. An engine that ran and said something unsigned is a
+# failed round - exit 2 there would have fm-run retry the same input every
+# turn, for ever.
+if [ "$rc" = "2" ] && [ "${FM_VENDOR_SPOKE:-0}" = "0" ]; then
+  kept="$(keep_log)"
   cp "$work/log" "$kept" 2>/dev/null || : > "$kept"
   echo "fm-review: every reviewer vendor was unavailable; their log is at $kept" >&2
   rm -rf "$work"; exit 2
@@ -112,14 +124,14 @@ if [ "$signed" = "0" ]; then
   # Keep everything that was said, from wherever it came - the engine's log
   # and whatever it left in the output directory. The failure path is
   # exactly when someone needs to read it; only the success path may discard.
-  kept="$REPO/state/reviews/$TASK-r$ROUND.log"
-  mkdir -p "$(dirname "$kept")"
+  kept="$(keep_log)"
   { cat "$work/log" 2>/dev/null; cat "${FM_RUN_OUTDIR:-$work/out}"/* 2>/dev/null; } > "$kept"
   echo "fm-review: ${FM_VENDOR_USED:-the reviewer} produced no review (exit $rc); its log is at $kept" >&2
   emit --type review_failed --en "review round $ROUND produced nothing" \
        --tw "第 $ROUND 輪審核沒有產出"
   rm -rf "$work"; exit 3
 fi
+emit --type review_opened --en "round $ROUND on $TASK" --tw "$TASK 第 $ROUND 輪審核"
 if [ -n "$PR" ]; then
   $GH pr comment "$PR" --body "$verdict" >/dev/null 2>&1 || true
 fi

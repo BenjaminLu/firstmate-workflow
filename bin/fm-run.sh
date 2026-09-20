@@ -78,12 +78,17 @@ turn() {
       say "$task: gates 1-6 green, sending it to review (round $round)"
       # exit 3 is a round that produced no verdict. Swallowing it would let
       # a crashed engine read as a review that simply did not sign.
-      "$B/fm-review.sh" --task "$task" --branch "$branch" --pr "$pr" \
-        --round "$round" --repo "$REPO" >/dev/null 2>&1 </dev/null
+      # 65 is a typo in config.yaml, and the one line that says which name
+      # is wrong is on stderr - so it is kept rather than thrown away with
+      # the rest. A configuration error repeats every turn until a human
+      # reads it; a message that suggests nothing is worse than none.
+      rvout="$("$B/fm-review.sh" --task "$task" --branch "$branch" --pr "$pr" \
+        --round "$round" --repo "$REPO" 2>&1 </dev/null)"
       case "$?" in
         0) ;;
         2) say "$task: no reviewer engine was available, leaving it for the next turn" ;;
         3) say "$task: the reviewer produced no verdict (state/reviews/$task-r$round.log)" ;;
+        65) say "$task: $(printf '%s' "$rvout" | grep 'no adapter' | tail -1)" ;;
         *) say "$task: the review round failed" ;;
       esac
     else

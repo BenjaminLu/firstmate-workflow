@@ -76,12 +76,13 @@ assert_contains "$(cat "$cap3")" "CRITERIA-COMPLETE:T-Z" "round three asks for t
 # That is the only thing that earns exit 2, because 2 tells fm-run to try
 # again next turn, and a run that DID produce something will produce the
 # same something next turn, for ever.
+printf 'vendor: mock\n' > "$r/config.yaml"   # one vendor, and it is not there
 stub_script "$r/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
 exit 2
 M
-rm -f "$r/state/reviews/T-Z-r7.log"
+rm -f "$r/state/reviews/T-Z-r7.log" "$r/state/reviews/T-Z-r7."*.log
 outU="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 7 2>&1)"
 assert_eq "2" "$?" "a reviewer that produced nothing at all is an outage"
 assert_ok "test -f '$r/state/reviews/T-Z-r7.log'" "and the round still leaves a file to read"
@@ -94,7 +95,8 @@ stub_script "$r/bin/adapters/mock.sh" <<'M'
 printf 'mock: not logged in\n' >> "$4"
 exit 2
 M
-rm -f "$r/state/reviews/T-Z-r8.log"
+printf 'vendor: mock\n' > "$r/config.yaml"
+rm -f "$r/state/reviews/T-Z-r8.log" "$r/state/reviews/T-Z-r8."*.log
 ( cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 8 >/dev/null 2>&1 )
 assert_eq "3" "$?" "a reviewer that said something unusable is a failed round"
 assert_contains "$(cat "$r/state/reviews/T-Z-r8.log" 2>/dev/null)" "not logged in" \

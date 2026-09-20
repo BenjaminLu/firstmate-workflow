@@ -105,9 +105,10 @@ dispatchers=''
 for f in bin/*.sh; do
   # A file that is meant to be sourced must NOT have the line: `exec` in a
   # sourced file redirects the caller's own standard input for the rest of
-  # its life, and bin/fm-guard.sh is sourced by .githooks/pre-push, which
-  # receives its ref list on exactly that descriptor.
-  case "$f" in */fm-config.sh|*/fm-guard.sh) continue ;; esac
+  # its life. Such a file says so about itself with `# fm:sourced`, so a
+  # library added tomorrow is exempt by being what it is rather than by
+  # being on a list someone remembered to extend.
+  grep -q '^# fm:sourced' "$f" && continue
   grep -qE '\$\(|"\$[A-Z_]*/(bin/)?fm-|fm_run_chain|Bun\.spawn|\$GH ' "$f" || continue
   grep -q '^exec < /dev/null' "$f" || dispatchers="$dispatchers $(basename "$f")"
 done
@@ -149,13 +150,19 @@ fi
 # it belongs to the caller for the rest of its life. The exemptions above
 # are names; this asserts the property they stand for.
 wrongly=''
-for f in bin/fm-config.sh bin/fm-guard.sh; do
+sourced=0
+for f in bin/*.sh; do
+  grep -q '^# fm:sourced' "$f" || continue
+  sourced=$((sourced + 1))
   grep -q '^exec < /dev/null' "$f" && wrongly="$wrongly $(basename "$f")"
 done
+# no tripwire for "nobody declared themselves": the gate runs against
+# arbitrary trees, and a tree with no sourced library is a normal tree. The
+# count is reported instead, and this repository's own suite asserts it.
 if [ -n "$wrongly" ]; then
   flunk "these are sourced and must not redirect the caller's input:$wrongly"
 else
-  pass "no sourced library takes the caller's standard input"
+  pass "no sourced library takes the caller's standard input ($sourced declared)"
 fi
 
 # The vendor chain has one implementation. What this catches: a `for v in`

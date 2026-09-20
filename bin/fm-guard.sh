@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# fm:sourced  # this file is sourced; see bin/ci.sh, stdin stage
 # No one on this crew writes to main. Not firstmate, not a worker, not a
 # reviewer, not the captain's own agent. Work happens on a branch and arrives
 # through a pull request, every time.

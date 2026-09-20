@@ -1,3 +1,4 @@
+# fm:sourced  # this file is sourced; see bin/ci.sh, stdin stage
 # shellcheck shell=bash
 # One reader for config.yaml. There were five copies of the same sed
 # expression and every one of them kept the trailing comment, so
@@ -63,6 +64,12 @@ fm_vendor_chain() {
 #   Work beats a signature, and the chain stops there. FM_VENDOR_MISREAD names
 #   the vendor this happened to, so the caller can say so.
 #
+#   FM_VENDOR_SPOKE is 1 when some attempt produced output of its own. With
+#   the return code it is the whole of what a caller needs: rc 2 with
+#   nothing said is a vendor that was not there; rc 2 with something said is
+#   an engine that ran badly. Neither caller may re-derive this by looking
+#   at bytes itself - they disagreed when they did.
+#
 #   The head of the chain having no adapter is a typo in config.yaml, not an
 #   outage: nothing is run at all, FM_VENDOR_UNKNOWN names it and 65 comes
 #   straight back, so the caller's own exit 65 cannot discard work a later
@@ -76,13 +83,13 @@ fm_vendor_chain() {
 # shellcheck disable=SC2034  # these are read by the callers, not here
 fm_run_chain() {
   local dir="$1" chain="$2" prompt="$3" tree="$4" log="$5" evidence="${6:-}" \
-        outmode="${7:-shared}" v rc=2 head='' out=''
+        outmode="${7:-shared}" v rc=2 head='' out='' after=0
   # every output of this function, including the two that say where an
   # attempt's bytes are: leaving those set means a caller on the
   # configuration-error path reads the PREVIOUS call's attempt, which is the
   # exact confusion the offsets exist to prevent
   FM_VENDOR_USED=''; FM_VENDOR_SKIPPED=''; FM_VENDOR_MISREAD=''; FM_VENDOR_UNKNOWN=''
-  FM_RUN_OUTDIR=''; FM_RUN_LOG_OFF=0
+  FM_RUN_OUTDIR=''; FM_RUN_LOG_OFF=0; FM_VENDOR_SPOKE=0
   # before anything runs. A typo at the head of the chain used to be found
   # after a real vendor had already worked, and the caller's exit 65 then
   # threw that work away.
@@ -109,6 +116,13 @@ fm_run_chain() {
     fi
     FM_RUN_OUTDIR="$out"
     "$dir/$v.sh" run "$prompt" "$out" "$log"; rc=$?
+    # did this vendor say anything of its own? The callers need to tell an
+    # engine that ran badly from one that was not there, and this is the
+    # only place that can answer it - an adapter's notice about a missing
+    # CLI goes to stderr precisely so it does not count here.
+    after="$(wc -c "$log" 2>/dev/null | awk '{print $1}')"; [ -n "$after" ] || after=0
+    [ "$after" != "$FM_RUN_LOG_OFF" ] && FM_VENDOR_SPOKE=1
+    [ -n "$(ls -A "$out" 2>/dev/null)" ] && FM_VENDOR_SPOKE=1
     if [ "$rc" = 2 ] && [ -n "$evidence" ] && $evidence; then
       FM_VENDOR_USED="$v"; FM_VENDOR_MISREAD="$v"; return 0
     fi

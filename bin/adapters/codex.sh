@@ -18,8 +18,10 @@ prompt="${2-}"; tree="${3-}"; log="${4-}"
 [ -d "$tree" ]   || { echo "codex: no worktree at $tree" >&2; exit 64; }
 
 command -v codex >/dev/null 2>&1 || {
-  # the log is the only trace a stand-down or a reconcile will have
-  echo "codex: codex is not installed - vendor unavailable" | tee -a "$log" >&2; exit 2; }
+  # stderr, not the log: the log is what the VENDOR said, and a caller that
+  # asks "did anything run?" must not be answered by the adapter's own
+  # notice that nothing could
+  echo "codex: codex is not installed - vendor unavailable" >&2; exit 2; }
 
 # FM_ADAPTER_ARGS is deliberately unquoted: it carries whatever extra
 # arguments the operator configured, and they have to split into words.

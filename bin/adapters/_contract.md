@@ -34,6 +34,13 @@ The fallback chain appends to one log, so a verdict only ever reads the bytes
 its own run added - the previous vendor's auth error must not condemn the
 next one.
 
+`mock.sh` is the exception, deliberately. It has no CLI to read a verdict
+from: its exit code *is* the scenario a test asked for, and putting it on
+`fm_adapter_verdict` would mean a suite could not ask for "exit 0 having
+said nothing" without the library overruling it. It is the only adapter
+whose verdict is an input rather than a judgement, which is why the
+contract test exempts it by name and checks its scripted promises instead.
+
 `fm_vendor_chain` builds the order and `fm_run_chain` runs it, both in
 `bin/fm-config.sh`, so the worker and the reviewer fall back identically.
 

@@ -173,6 +173,28 @@ plant "a hand-rolled swap turns the hygiene stage red" "saves a script by hand"
 plant "and the stage names the suite" "hand-rolled.test.sh"
 rm -f "$q/tests/hand-rolled.test.sh"
 
+# this repository does have sourced libraries, and the marker is how the
+# gate knows: if it were deleted, the stage would report zero and pass
+# counted directly, not by running the gate: this suite IS one of the
+# suites the gate runs, and calling it from here recurses
+own="$(grep -l '^# fm:sourced' "$ROOT"/bin/*.sh 2>/dev/null | wc -l | tr -d ' ')"
+assert_ne "0" "$own" "the repository's own sourced libraries are declared"
+for f in "$ROOT"/bin/fm-config.sh "$ROOT"/bin/fm-guard.sh; do
+  assert_ok "grep -q '^# fm:sourced' '$f'" "$(basename "$f") declares itself sourced"
+done
+
+# a library that declares itself sourced must not carry the redirect, and
+# the exemption has to work both ways: the marker exempts it from the
+# dispatch stage AND binds it in the sourced stage
+printf '#!/usr/bin/env bash\n# fm:sourced\nexec < /dev/null\nx=$(date)\n' > "$q/bin/fm-lib.sh"
+plant "a sourced library with the redirect turns its stage red" "must not redirect the caller"
+plant "and the stage names it" "fm-lib.sh"
+printf '#!/usr/bin/env bash\n# fm:sourced\nx=$(date)\n' > "$q/bin/fm-lib.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_fail "printf '%s' \"$out\" | grep -q 'fm-lib.sh'" \
+  "and without it the dispatch stage leaves the library alone"
+rm -f "$q/bin/fm-lib.sh"
+
 # a second implementation of the vendor chain
 printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\nfor v in $chain; do :; done\n' \
   > "$q/bin/fm-second-chain.sh"
