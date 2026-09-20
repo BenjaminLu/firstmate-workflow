@@ -26,6 +26,12 @@ assert_ok "test -x '$ROOT/bin/ci.sh'" "ci.sh is executable"
 gha="$ROOT/.github/workflows/ci.yml"
 assert_ok "test -f '$gha'" "a GitHub Actions workflow exists"
 assert_contains "$(cat "$gha")" "bin/ci.sh" "the workflow calls bin/ci.sh, not a copy of its steps"
+# the browser suite runs in CI too, or the board is only ever checked here.
+# Everything the gate needs must be installed before it runs.
+assert_contains "$(cat "$gha")" "playwright install" "CI installs the browser the gate uses"
+assert_contains "$(cat "$gha")" "bun install" "CI installs the dependencies the gate uses"
+# and CI must not run the browser suite itself: one gate, one file
+assert_lacks "$(cat "$gha")" "playwright test" "CI does not run playwright itself, bin/ci.sh does"
 rm -rf "$t"
 # the gate must never read standard input. With nullglob an empty file list
 # turns a grep into one that reads stdin, and a nested run - which is exactly

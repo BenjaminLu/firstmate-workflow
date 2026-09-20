@@ -1,6 +1,8 @@
 name: ci
 # Runs the very same bin/ci.sh the local gate runs. Do not add steps here that
 # are not in that script, or the two will disagree about what green means.
+# Everything above the run step is installing what the script needs; the
+# browser is cached because downloading it is most of the wall clock.
 on:
   push:
     branches: [main]
@@ -17,5 +19,16 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - name: install dependencies
+        run: bun install --frozen-lockfile
+      - name: cache the browser
+        id: browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock', 'bun.lockb') }}
+      - name: install the browser
+        if: steps.browser.outputs.cache-hit != 'true'
+        run: bunx playwright install --with-deps chromium
       - name: bin/ci.sh
         run: bash bin/ci.sh
