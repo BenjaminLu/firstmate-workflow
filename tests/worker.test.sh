@@ -121,6 +121,28 @@ assert_contains "$(jq -r '.type + " " + (.pr|tostring)' < "$r5/state/events.json
   "and its event points at that number"
 rm -rf "$d5"
 
+# The worker cannot run gh, so the only way its question reaches the
+# reviewer is this file. Without it the round-three protocol cannot happen:
+# ASK-PASS-CRITERIA sits in a log nobody reads while fm-protocol reports a
+# violation every turn, which looks exactly like a worker that stopped.
+d6="$(fixture)"; r6="$d6/repo"; GH6="$(ghstub "$d6")"
+cat > "$r6/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md"
+M
+chmod +x "$r6/bin/adapters/mock.sh"
+out6="$(cd "$r6" && FM_ROOT="$r6" FM_GH="$GH6" bin/fm-worker.sh --task T-Z --pr 9 2>&1)"
+assert_eq "0" "$?" "a round in which the worker only asks is a complete round"
+assert_contains "$out6" "asked rather than changed" "and says so rather than looking idle"
+assert_contains "$(cat "$d6/ghcalls")" "pr comment" "the question is posted to the pull request"
+assert_contains "$(jq -r .type < "$r6/state/events.jsonl" | tr '\n' ' ')" "ask_pass_criteria" \
+  "and the log records that the worker spoke"
+assert_lacks "$(cat "$d6/ghcalls")" "push" "asking pushes nothing"
+b6="$(cd "$r6" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1)"
+assert_fail "cd '$r6' && git cat-file -e '$b6:.fm-say.md'" "and the file never reaches the diff"
+rm -rf "$d6"
+
 # a vendor named in config.yaml with no adapter behind it is a typo. It has
 # to be found before anything runs, or a real vendor does the work and the
 # exit 65 throws it away with the worktree.
