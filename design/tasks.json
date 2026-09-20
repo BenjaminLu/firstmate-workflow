@@ -379,13 +379,18 @@
         "bin/fm-protocol.sh",
         "skills/worker/**",
         "skills/reviewer/**",
-        "tests/protocol.test.sh"
+        "tests/protocol.test.sh",
+        "design/tasks.json"
       ],
       "acceptance": [
-        "a round-three commit pushed before ASK-PASS-CRITERIA is blocked",
-        "round-three comments do not count toward the gates until CRITERIA-COMPLETE is posted",
-        "an off-list old complaint raises protocol_violation and does not count",
-        "a comment marked REGRESSION: counts even though it is off-list"
+        "rounds one and two are not policed",
+        "round three with no ASK-PASS-CRITERIA from the worker is a violation, exit 3",
+        "a reviewer who never posts CRITERIA-COMPLETE leaves the list open, exit 4",
+        "after the list closes, a comment must cite an item on it, carry REGRESSION:, or be the APPROVE; anything else is a violation, exit 5",
+        "a comment from anyone but the configured reviewer does not trip it",
+        "it counts and reports how many items the closed list held",
+        "every violation is emitted so the captain sees the reviewer drip-feeding",
+        "the suite runs from recorded comment payloads and makes no network call"
       ]
     },
     {
