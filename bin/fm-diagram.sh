@@ -9,10 +9,11 @@
 #
 # Q8, the second half: a drawing is made for a decision the captain must rule
 # on and for nothing else. A routine event - a dispatch, a push, a passing
-# gate - gets none, so --event is the entry point a caller can use blindly:
-# it consults the same ruling --wants reports and writes nothing for the rest.
-# The list of what an event can be is read out of bin/fm-emit.sh rather than
-# copied here, so a type added there is a type this script must rule on.
+# gate - gets none, so --event is the entry point a caller can use blindly
+# for any type bin/fm-emit.sh will accept: it consults the same ruling
+# --wants reports and writes nothing for the rest. A type fm-emit would
+# itself refuse, or one nobody here has ruled on, is an error and not a quiet
+# no - see RULED and ROUTINE below for why that is the loud end.
 #
 # I4: each decision produces D-*.en.html and D-*.zh-TW.html out of the two
 # dictionaries, and D-*.zh-CN.html out of the zh-TW page by putting its TEXT
@@ -37,14 +38,22 @@ ROOT="${FM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 die()   { printf 'fm-diagram: %s\n' "$1" >&2; exit "${2:-64}"; }
 
+# `shift 2` with one argument left does not shift: it returns 1 and leaves
+# $@ alone, so `while [ $# -gt 0 ]` spins on the same flag for ever. A
+# trailing --decision was an unkillable busy loop, which is the failure this
+# file's own header spends five lines forbidding. So no branch shifts a count
+# it has not checked: need() is handed what is left of the command line and
+# refuses before the shift rather than after it.
+need() { [ "$#" -ge 2 ] || die "$1 needs a value"; }
+
 MODE=''; ID=''; EVENT=''
 while [ $# -gt 0 ]; do
   case "$1" in
-    --decision) ID="${2-}";    shift 2 ;;
-    --event)    MODE=event; EVENT="${2-}"; shift 2 ;;
-    --wants)    MODE=wants; EVENT="${2-}"; shift 2 ;;
-    --repo)     ROOT="${2-}";  shift 2 ;;
-    -h|--help)  sed -n '2,10p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    --decision) need "$@"; ID="$2";                shift 2 ;;
+    --event)    need "$@"; MODE=event; EVENT="$2"; shift 2 ;;
+    --wants)    need "$@"; MODE=wants; EVENT="$2"; shift 2 ;;
+    --repo)     need "$@"; ROOT="$2";              shift 2 ;;
+    -h|--help)  sed -n '4,8p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -57,33 +66,33 @@ I18N="$ROOT/i18n"
 
 # ---------------------------------------------------------------- the ruling
 
-# The one event that puts something in front of the captain. Everything else
-# fm-emit can write is routine and gets no drawing.
+# The ruling, written out. Every type bin/fm-emit.sh can write appears in
+# exactly one of these two lines: RULED puts something in front of the
+# captain and gets a drawing, ROUTINE is everything else and gets none.
+#
+# This used to be derived by parsing fm-emit.sh's TYPES line, which read like
+# the careful thing to do and was the opposite: a type added there became a
+# type known here on the same commit, silently classified as routine and
+# silently undrawn - and the suite, which parsed fm-emit the same way,
+# compared that list against itself and could not go red for any input.
+# A copied list that a test compares against the original is drift a machine
+# can see. A derived list is drift a machine cannot see.
 RULED="decision_requested"
+ROUTINE="greenlit dispatched commit_pushed pr_opened gate_passed gate_failed \
+review_opened review_failed ask_pass_criteria criteria_returned \
+protocol_violation approved merged closed decision_made worker_crashed \
+vendor_unavailable"
 
-known_types() {
-  local f="$ROOT/bin/fm-emit.sh"
-  if [ -f "$f" ]; then
-    # the same list fm-emit validates against, read from the one place it
-    # lives rather than copied into a second one that drifts
-    sed -n '/^TYPES=/,/"$/p' "$f" | tr ' \\"' '\n\n\n' | grep -E '^[a-z_]+$'
-  else
-    printf '%s\n' "$RULED"
-  fi
-}
-
-# 0 the captain must rule on it, 1 routine, 64 not an event at all
+# 0 the captain must rule on it, 1 routine, 64 no ruling for it here
 wants() {
-  local type="$1" t seen=0
+  local type="$1"
   [ -n "$type" ] || die "--wants needs an event type"
-  while IFS= read -r t; do
-    [ "$t" = "$type" ] && seen=1
-  done <<EOF
-$(known_types)
-EOF
-  [ "$seen" = 1 ] || die "unknown event type: $type"
   case " $RULED " in *" $type "*) return 0 ;; esac
-  return 1
+  case " $ROUTINE " in *" $type "*) return 1 ;; esac
+  # Not silence, and not a default. A type fm-emit can write and this file
+  # has not ruled on is a question nobody has answered yet, and tests/
+  # diagram.test.sh walks fm-emit's list to find it the moment it appears.
+  die "no ruling for event type: $type"
 }
 
 if [ "$MODE" = wants ]; then
@@ -133,7 +142,12 @@ esc() {
 # back to the shell the way eval would.
 load_dict() {
   local f="$1" k v
-  [ -f "$f" ] || return 0
+  # An absent dictionary and an absent key are different failures. A key the
+  # dictionary does not answer renders as the key, which is a bug report on
+  # the page. A dictionary file that is not there at all renders EVERY key
+  # that way, and a whole page of `laneQueued` shipped with exit 0 is a
+  # broken install that reads as a working one.
+  [ -f "$f" ] || die "no dictionary at $f" 66
   while IFS=$'\t' read -r k v; do
     case "$k" in ''|*[!A-Za-z0-9_]*) continue ;; esac
     printf -v "d_$k" '%s' "$v"
@@ -238,6 +252,26 @@ HTML
 # zh-CN is the zh-TW page with its text nodes converted. Everything between
 # < and > is markup and is copied through untouched, as is anything inside a
 # comment, a script or a style block.
+#
+# The board already applies this table, in board/public/index.html:
+#
+#   const cn = (x) => DICT.tw2cn.reduce((acc, p) => acc.split(p[0]).join(p[1]), x)
+#
+# and the honest question is why that is not simply called here. It converts
+# a dictionary VALUE, one string at a time, before that string has met any
+# markup; there is nothing in it that could tell a word from a tag, because
+# nothing it is ever handed contains one. What this file has at the point of
+# conversion is a finished document - and it has to be, because an authored
+# drawing out of design/diagrams/ carries zh-TW that was never a dictionary
+# value and so was never converted on the way in.
+#
+# So: same table, same substitution rule - row by row in file order, every
+# occurrence of each, and no rescanning of what a row just wrote, which is
+# what keeps a row whose output contains its input from looping - and a
+# different unit of work. The rule is the
+# part that could quietly drift, so tests/diagram.test.sh runs the real cn()
+# lifted out of index.html and this awk over every value in the zh-TW
+# dictionary and fails if they disagree on any of them.
 TEXTNODES='
 function rep(s, a, b,   out, i) {
   out = ""
@@ -288,18 +322,23 @@ BEGIN {
 }
 '
 
+# Everything the render needs is checked before anything is written. render
+# runs inside a subshell feeding a redirect, so a die in there would have
+# created the file first and then been reported as the redirect's own 73 -
+# the missing input would reach the caller wearing the wrong number and with
+# half a page already on disk.
+for f in "$I18N/ui.en.json" "$I18N/ui.zh-TW.json" "$I18N/tw2cn.tsv"; do
+  [ -f "$f" ] || die "no $f: the three languages cannot be rendered without it" 66
+done
+
 mkdir -p "$OUT" || die "cannot create $OUT" 73
 
 # a subshell per language: the dictionary is read into d_* names, and a key
 # missing from one file must not be answered by the other file's value
 ( render en    "$I18N/ui.en.json"    en    ) > "$OUT/$ID.en.html"    || die "could not write $ID.en.html" 73
 ( render zh-TW "$I18N/ui.zh-TW.json" zh-TW ) > "$OUT/$ID.zh-TW.html" || die "could not write $ID.zh-TW.html" 73
-if [ -f "$I18N/tw2cn.tsv" ]; then
-  ( render zh-CN "$I18N/ui.zh-TW.json" zh-TW ) \
-    | awk -v TBL="$I18N/tw2cn.tsv" "$TEXTNODES" > "$OUT/$ID.zh-CN.html" \
-    || die "could not write $ID.zh-CN.html" 73
-else
-  die "no i18n/tw2cn.tsv: zh-CN cannot be derived" 66
-fi
+( render zh-CN "$I18N/ui.zh-TW.json" zh-TW ) \
+  | awk -v TBL="$I18N/tw2cn.tsv" "$TEXTNODES" > "$OUT/$ID.zh-CN.html" \
+  || die "could not write $ID.zh-CN.html" 73
 
 printf '%s\n' "$OUT/$ID.en.html" "$OUT/$ID.zh-TW.html" "$OUT/$ID.zh-CN.html"

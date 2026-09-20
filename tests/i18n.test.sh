@@ -21,8 +21,17 @@ missing=''
 # generated diagram is Chinese on purpose - it is produced FROM the
 # dictionaries - and scanning it would make the lint red whenever a
 # decision is pending.
-pages="$(find "$ROOT/board/public" -type f \( -name '*.html' -o -name '*.js' \) \
-  -not -path '*/diagrams/*' | sort)"
+#
+# A function, and not an expression written out at each use, because the
+# exclusion is the whole of acceptance criterion six and the exercise at the
+# bottom of this file has to be able to run THIS scan rather than a copy of
+# it. A copy would still say "the scan walks past diagrams/" on the day
+# someone deleted the -not -path from the line the lint actually uses.
+page_files() {  # page_files <root> -> the files the hardcoded-string lint scans
+  find "$1/board/public" -type f \( -name '*.html' -o -name '*.js' \) \
+    -not -path '*/diagrams/*' | sort
+}
+pages="$(page_files "$ROOT")"
 assert_ok "test \"$(printf '%s\n' \"$pages\" | wc -l | tr -d ' ')\" -ge 2" "the scan covers every page file"
 for k in $(grep -ohE '[^A-Za-z0-9_][tT]\("[a-zA-Z0-9]+"\)' $pages \
            | sed 's/^.*("//;s/")//' | sort -u); do
@@ -64,22 +73,38 @@ assert_eq "0" "$cjk" "the page holds no hardcoded Chinese, comments included"
 # and confirm the scan walks past it. Without the -not -path the lint would
 # go red the moment a decision was pending, which is the moment the board is
 # most needed.
+#
+# Everything below runs page_files, the function the lint itself runs, over a
+# tree that has a generated diagram in it. Nothing here writes a find of its
+# own: an assertion about a find the test wrote is an assertion about the
+# test.
 d="$(mktemp -d)"
 mkdir -p "$d/bin" "$d/i18n" "$d/state/pending" "$d/design/diagrams" "$d/board/public"
-cp "$ROOT/bin/fm-diagram.sh" "$ROOT/bin/fm-emit.sh" "$d/bin/" 2>/dev/null
+# no 2>/dev/null on the fixtures: a copy that silently did not happen makes
+# every assertion under it a report about the fixture
+cp "$ROOT/bin/fm-diagram.sh" "$ROOT/bin/fm-emit.sh" "$d/bin/"
 cp "$en" "$tw" "$tbl" "$d/i18n/"
-cp "$ROOT/board/public/index.html" "$ROOT/board/public/ship.js" "$d/board/public/" 2>/dev/null
+cp "$ROOT/board/public/index.html" "$ROOT/board/public/ship.js" "$d/board/public/"
 printf '%s\n' '{"id":"D-001","task":"T-001","kind":"merge","title":"merge it","pr":1}' \
   > "$d/state/pending/D-001.json"
 "$d/bin/fm-diagram.sh" --decision D-001 --repo "$d" >/dev/null 2>&1
+assert_eq "0" "$?" "the generator ran in the scratch tree"
 gen="$d/board/public/diagrams/D-001.zh-TW.html"
 assert_ok "test -s '$gen'" "a decision really does generate a diagram under board/public"
 genhan="$(perl -CSD -ne 'print if /\p{Han}/' "$gen" 2>/dev/null | wc -l | tr -d ' ')"
 assert_ne "0" "$genhan" "and that diagram is Chinese, which is the point of it"
-scanned="$(find "$d/board/public" -type f \( -name '*.html' -o -name '*.js' \) \
-  -not -path '*/diagrams/*' | sort)"
-assert_lacks "$scanned" "diagrams/" "the lint's scan walks past generated diagrams"
+
+# the diagram is inside the tree the lint walks - that is what makes the
+# exclusion do any work at all, and without this line the assertions below
+# would also pass on a tree where no diagram was ever written
+everything="$(find "$d/board/public" -type f \( -name '*.html' -o -name '*.js' \) | sort)"
+assert_contains "$everything" "diagrams/D-001.zh-TW.html" \
+  "the generated diagram is under the directory the lint walks"
+
+scanned="$(page_files "$d")"
+assert_lacks "$scanned" "diagrams/" "the lint's own scan walks past generated diagrams"
 assert_contains "$scanned" "index.html" "while still covering the authored pages"
+assert_ne "$everything" "$scanned" "so the exclusion is what is keeping it out, not luck"
 scanhan="$(perl -CSD -ne 'print if /\p{Han}/' $scanned 2>/dev/null | wc -l | tr -d ' ')"
 assert_eq "0" "$scanhan" "so a pending decision cannot turn the lint red"
 rm -rf "$d"
