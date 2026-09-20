@@ -437,6 +437,53 @@
         "sync-skills imports into skills/vendor/ one way and never writes back",
         "a lint fails on vendor-specific syntax inside skills/"
       ]
+    },
+    {
+      "id": "T-021",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-005",
+        "T-007"
+      ],
+      "title": "fm-standdown.sh: halt the crew and collect verified handoffs",
+      "scope": [
+        "bin/fm-standdown.sh",
+        "skills/worker/**",
+        "skills/reviewer/**",
+        "tests/standdown.test.sh"
+      ],
+      "acceptance": [
+        "gives every running agent the four-step order verbatim as it appears in design.md",
+        "a worker commits and pushes only its own branch: a test asserts no pull request was opened, no merge and no rebase happened during the stand-down",
+        "a tree that cannot be committed cleanly is reported in uncommittable rather than forced; an empty uncommittable with a dirty tree fails verification",
+        "each handoff is verified against the repository - head matches git rev-parse, a pushed claim matches the remote ref, tree matches git status",
+        "the handoff must state what was decided and never written down; absent or empty fails, and none must be said explicitly",
+        "pause_until must parse and be in the future",
+        "every handoff verified emits stood_down; anything unverified emits standdown_incomplete naming who and why and leaves the stand-down open",
+        "fm-dispatch.sh dispatches nothing while state/standdown.json exists"
+      ]
+    },
+    {
+      "id": "T-022",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-021",
+        "T-017"
+      ],
+      "title": "fm-resume.sh: pick up exactly where the stand-down stopped",
+      "scope": [
+        "bin/fm-resume.sh",
+        "tests/resume.test.sh"
+      ],
+      "acceptance": [
+        "replays the event log, reads every handoff, reattaches the worktrees and restores each task to the state it was in",
+        "refuses to start while any handoff fails verification, naming the handoff",
+        "an end-to-end test stands the crew down mid-task, resumes, and the task completes without repeating work already pushed",
+        "resuming is idempotent: running it twice leaves the same state",
+        "emits resumed and clears state/standdown.json only after every worktree is reattached"
+      ]
     }
   ]
 }

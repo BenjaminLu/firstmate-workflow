@@ -439,7 +439,81 @@ global skills.
 
 ---
 
-## 13. Security
+## 13. Standing down
+
+`bin/fm-standdown.sh "<reason>" --until <when>` halts the whole crew without
+losing anything. It is the command for "stop, we are picking this up later",
+and the whole point is that the next start resumes exactly where this one
+stopped.
+
+**A stand-down is not a discard.** Nothing is thrown away and nothing is
+forced.
+
+### The order, given verbatim to every agent still running
+
+> This is a stand-down, not a discard. Nothing gets thrown away and nothing is
+> forced. Do these four things:
+>
+> 1. Commit what you have and push it to your own branch. No pull request, no
+>    merge, no rebase, nothing extra while you are at it.
+> 2. If something will not commit cleanly, say so. Do not force it.
+> 3. Write the handoff: your head, the state of the tree, what you pushed, and
+>    what the next person needs that is not in the branch or the pull request —
+>    above all **the decisions you have made and not written down**. That is the
+>    part that dies with the session.
+> 4. Declare a bounded pause, then stop.
+
+### The handoff, `state/handoffs/<task>.md`
+
+```markdown
+---
+task: T-004
+branch: t-004-decide
+head: 9f2c1ab
+pushed: true
+tree: clean
+uncommittable: []
+pause_until: 2026-09-21T09:00Z
+---
+## On the branch
+## Not on the branch, and the next person needs it
+## Decided but never written down
+## Where I would pick it up
+```
+
+`uncommittable` is where step 2 lands: each entry a path and the reason. An
+empty list and a dirty tree contradict each other and fail verification.
+
+### Verified, not believed
+
+A handoff is a model writing about its own work, so `fm-standdown.sh` checks it
+against the repository before accepting it — the same rule as everywhere else
+in this system:
+
+| Claim | How it is checked |
+|---|---|
+| `head` | matches `git rev-parse` in that worktree |
+| `pushed: true` | the remote ref exists at that sha |
+| `tree` | matches `git status --porcelain` |
+| `uncommittable` | non-empty if and only if the tree is dirty |
+| `pause_until` | parses, and is in the future |
+| "Decided but never written down" | present, and not empty — `none` must be said out loud |
+| no extra work | no pull request opened, no merge, no rebase since the order |
+
+Accepted handoffs produce `stood_down`. Anything unverified produces
+`standdown_incomplete` naming who and why, and the stand-down stays open.
+`fm-dispatch.sh` refuses to dispatch while `state/standdown.json` exists.
+
+### Resuming
+
+`bin/fm-resume.sh` replays the log, reads every handoff, reattaches the
+worktrees and puts each task back where it was. It refuses to start while any
+handoff fails verification: a bad handoff is discovered now, not three tasks
+into the next session.
+
+---
+
+## 14. Security
 
 - `/open` accepts localhost only, and the resolved path must sit inside the
   repository.
@@ -451,7 +525,7 @@ global skills.
 
 ---
 
-## 14. The task DAG
+## 15. The task DAG
 
 `design/tasks.json` is the machine-readable form, with `id`, `title`,
 `milestone`, `depends_on`, `scope`, `bootstrap` and `acceptance`. `scope` is
@@ -494,3 +568,5 @@ gates, and the dispatcher cannot dispatch itself.
 | T-016 | `fm-diagram.sh`: decision diagrams, and the board embed | T-010 |
 | T-017 | `fm-reconcile.sh`: reconciling after a crash | T-007 |
 | T-018 | self-update and `sync-skills` | T-007, T-015 |
+| T-021 | `fm-standdown.sh`: halt the crew, collect verified handoffs | T-005, T-007 |
+| T-022 | `fm-resume.sh`: pick up exactly where the stand-down stopped | T-021, T-017 |
