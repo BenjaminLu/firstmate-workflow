@@ -615,6 +615,45 @@ code,.mono{font-family:var(--mono);font-size:.86em}
 .shipbar .toggle[aria-pressed=true]{background:var(--accent2);border-color:var(--accent2);color:#fff}
 @media(max-width:700px){ .rrow{grid-template-columns:70px 26px minmax(0,1fr) 34px}
   .rrow .act,.rrow .bar{display:none} }
+
+/* ===== ahoy: the ship answers ===== */
+.vessel{position:absolute;inset:0;transform-origin:50% 88%}
+.vessel.heel{animation:heel 1.8s cubic-bezier(.3,.7,.3,1)}
+@keyframes heel{0%{transform:rotate(0) translateY(0)}
+                18%{transform:rotate(-2.4deg) translateY(-5px)}
+                46%{transform:rotate(1.9deg) translateY(2px)}
+                72%{transform:rotate(-1deg) translateY(-1px)}
+                100%{transform:rotate(0) translateY(0)}}
+.salvo{position:absolute;left:50%;transform:translateX(-50%);width:var(--deckW,58%);
+  bottom:calc(var(--deckY0) - 34px);height:26px;pointer-events:none;z-index:4}
+.salvo i{position:absolute;bottom:0;width:26px;height:16px;margin-left:-13px;border-radius:50%;opacity:0;
+  background:radial-gradient(ellipse at 30% 50%,#fff7d8,#f0a93a 42%,rgba(240,169,58,0) 72%)}
+.salvo.fire i{animation:flash .5s ease-out}
+@keyframes flash{0%{opacity:0;transform:scale(.3) translateX(0)}
+                 22%{opacity:1;transform:scale(1.25) translateX(-6px)}
+                 100%{opacity:0;transform:scale(1.9) translateX(-22px)}}
+.smoke{position:absolute;bottom:2px;width:30px;height:30px;margin-left:-15px;border-radius:50%;
+  background:radial-gradient(circle,rgba(214,222,230,.55),rgba(214,222,230,0) 68%);opacity:0}
+.salvo.fire .smoke{animation:puff 1.5s ease-out forwards}
+@keyframes puff{0%{opacity:0;transform:scale(.3)}20%{opacity:.85}100%{opacity:0;transform:scale(2.6) translate(-26px,-22px)}}
+.ahoy{position:absolute;left:0;right:0;top:9%;text-align:center;z-index:9;pointer-events:none;opacity:0;
+  background:none;font:800 clamp(26px,4.4vw,46px)/1 var(--sans);letter-spacing:.14em;color:#ffe6a8;
+  text-shadow:0 0 28px rgba(217,164,65,.7),0 5px 0 #6b4410}
+.ahoy.on{animation:ahoyIn 1.7s cubic-bezier(.2,1.5,.3,1)}
+@keyframes ahoyIn{0%{opacity:0;transform:scale(.55) rotate(-5deg)}
+                  16%{opacity:1;transform:scale(1.1) rotate(2deg)}
+                  30%{transform:scale(1) rotate(0)}
+                  74%{opacity:1}100%{opacity:0;transform:scale(1.08) translateY(-18px)}}
+.ahoy small{display:block;margin-top:7px;font:600 13px var(--mono);letter-spacing:.24em;color:#c9972f;
+  text-shadow:none}
+.fig.cheer .armL{transform:rotate(-150deg)!important}
+.fig.cheer .armR{transform:rotate(-150deg)!important}
+.m-3d .fig.cheer{animation:cheerhop .8s ease-out 2}
+@keyframes cheerhop{0%{translate:0 0}30%{translate:0 -14px}55%{translate:0 0}72%{translate:0 -6px}100%{translate:0 0}}
+.helm.spin .wheel{animation:helmspin 1.1s linear 2!important}
+.mute{padding:5px 9px;font-size:12px;color:var(--fg2);border:1px solid var(--line);border-radius:7px}
+.mute[aria-pressed=true]{color:var(--fg3);opacity:.6}
+@media(prefers-reduced-motion:reduce){ .vessel.heel,.ahoy.on,.salvo.fire i,.salvo.fire .smoke{animation:none} }
 </style>
 </head>
 <body class="m-full">
@@ -671,6 +710,10 @@ const UI={
  gatesTitle:{en:'fm-gate.sh — deterministic gates. Exit codes decide, not opinions.',
              tw:'fm-gate.sh —— 確定性閘門。exit code 說了算，不是模型印象。',
              cn:'fm-gate.sh —— 确定性闸门。exit code 说了算，不是模型印象。'},
+ ahoyMerged:{en:'AHOY!',tw:'AHOY!',cn:'AHOY!'},
+ ahoyMergedSub:{en:'MERGED INTO MAIN',tw:'已合併進 MAIN',cn:'已合并进 MAIN'},
+ ahoyOrder:{en:'AYE, CAPTAIN!',tw:'遵命，船長！',cn:'遵命，船长！'},
+ ahoyOrderSub:{en:'ORDERS AWAY',tw:'令已下達',cn:'令已下达'},
  statWorking:{en:'working',tw:'施工',cn:'施工'},
  statReview:{en:'review',tw:'審核',cn:'审核'},
  statGate:{en:'gate',tw:'閘門',cn:'闸门'},
@@ -840,7 +883,7 @@ function advance(t,c){
     else emit('','commit',{w:c.id,pr:t.pr||'—'});
   } else if(t.st==='review'){
     if(t.round>=3||Math.random()<0.6){ emit('ok','approve',{t:t.id}); fly('reviewer-1','firstmate','approve'); t.st='merged'; t.note=null;
-      emit('ok','merged',{t:t.id}); }
+      emit('ok','merged',{t:t.id}); ahoy('merged'); }
     else { t.round++; t.st='working'; emit('','review',{t:t.id,r:t.round});
       const w=CREW.find(x=>x.role==='w'&&!x.task); if(w){w.task=t.id;w.pct=0;w.st='working';t.who=w.id;fly('reviewer-1',w.id,'reject');} }
     if(c.role==='r'){ c.task=null; c.st='queued';
@@ -856,7 +899,7 @@ function toast(m){const t=document.getElementById('toast');t.textContent=m;t.cla
   clearTimeout(toast._h);toast._h=setTimeout(()=>t.classList.remove('on'),2600);}
 function openLocal(p){toast(T('opened').replace('{p}',p));}
 function submit(id){ if(!chosen[id]) return toast(T('pickFirst'));
-  setCapPose('order'); setTimeout(()=>setCapPose(chosen[id]?'ready':'idle'),1800);
+  setCapPose('order'); setTimeout(()=>setCapPose(chosen[id]?'ready':'idle'),1800); ahoy('order');
   toast(T('sent').replace('{id}',id));
   emit('cap','dispatch',{t:id+' \u2192 '+chosen[id],w:'firstmate'});
   const d=DECISIONS.find(x=>x.id===id), tk=d&&byId(d.task);
@@ -985,6 +1028,60 @@ function figure(c){
     +bx('neck')+bx('head')+'<div class="eye"></div>'+bx('brim')+bx('crown')
     +'<div class="prop"></div>'
     +'</div></div></div>';
+}
+/* ---- ahoy: synthesised on the fly, no audio files, muted until the captain clicks ---- */
+let AC=null, muted=(localStorage.getItem('proto.mute')==='1');
+function ac(){ if(muted) return null;
+  if(!AC){ const C=window.AudioContext||window.webkitAudioContext; if(!C) return null; AC=new C(); }
+  if(AC.state==='suspended') AC.resume();
+  return AC; }
+function toggleMute(){ muted=!muted; localStorage.setItem('proto.mute',muted?'1':'0');
+  const b=document.querySelector('.mute'); if(b){b.setAttribute('aria-pressed',muted); b.textContent=muted?'\u{1F507}':'\u{1F50A}';} }
+function tone(f,dur,type,gain,slideTo){
+  const a=ac(); if(!a) return;
+  const o=a.createOscillator(), g=a.createGain();
+  o.type=type||'sine'; o.frequency.setValueAtTime(f,a.currentTime);
+  if(slideTo) o.frequency.exponentialRampToValueAtTime(slideTo,a.currentTime+dur);
+  g.gain.setValueAtTime(0.0001,a.currentTime);
+  g.gain.exponentialRampToValueAtTime(gain||0.18,a.currentTime+0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001,a.currentTime+dur);
+  o.connect(g).connect(a.destination); o.start(); o.stop(a.currentTime+dur+0.05);
+}
+function bell(){                                    // ship's bell: two partials, long decay
+  tone(784,1.5,'sine',0.16); tone(1174,1.2,'sine',0.07); tone(523,1.8,'sine',0.05);
+}
+function cannon(at){                                // filtered noise burst
+  const a=ac(); if(!a) return;
+  const n=a.sampleRate*0.5, buf=a.createBuffer(1,n,a.sampleRate), d=buf.getChannelData(0);
+  for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/n,2.4);
+  const src=a.createBufferSource(); src.buffer=buf;
+  const lp=a.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=420; lp.Q.value=0.8;
+  const g=a.createGain(); g.gain.value=0.5;
+  src.connect(lp).connect(g).connect(a.destination);
+  src.start(a.currentTime+(at||0));
+}
+function whistle(){ tone(880,0.28,'sine',0.1,1660); setTimeout(()=>tone(1660,0.34,'sine',0.09,990),260); }
+
+/* ---- ahoy: the whole ship reacts ---- */
+function ahoy(kind){
+  const sc=document.querySelector('.scene'); if(!sc) return;
+  const vessel=sc.querySelector('.vessel'), salvo=sc.querySelector('.salvo');
+  const banner=sc.querySelector('.ahoy');
+  if(vessel){ vessel.classList.remove('heel'); void vessel.offsetWidth; vessel.classList.add('heel'); }
+  if(kind==='merged'){
+    if(salvo){ salvo.classList.remove('fire'); void salvo.offsetWidth; salvo.classList.add('fire'); }
+    [0,0.14,0.29].forEach(t=>cannon(t));
+    setTimeout(bell,420);
+    if(banner){ banner.innerHTML=T('ahoyMerged')+'<small>'+T('ahoyMergedSub')+'</small>';
+      banner.classList.remove('on'); void banner.offsetWidth; banner.classList.add('on'); }
+  } else {
+    bell(); setTimeout(whistle,180);
+    const h=sc.querySelector('.helm'); if(h){ h.classList.remove('spin'); void h.offsetWidth; h.classList.add('spin'); }
+    if(banner){ banner.innerHTML=T('ahoyOrder')+'<small>'+T('ahoyOrderSub')+'</small>';
+      banner.classList.remove('on'); void banner.offsetWidth; banner.classList.add('on'); }
+  }
+  sc.querySelectorAll('.fig').forEach((f,i)=>setTimeout(()=>{
+    f.classList.add('cheer'); setTimeout(()=>f.classList.remove('cheer'),1700); }, i*45));
 }
 /* ---- shared deck: where the crew stand, and what travels between them ---- */
 const FLYLABEL={order:'ORD',parcel:'PR',reject:'✕',approve:'✓'};
@@ -1126,10 +1223,16 @@ function shipMarkup(sp,n){
     + '<div class="wheel"><i></i><i></i><i></i><i></i><div class="ring"></div></div>'
     + '<div class="hub"></div></div>';
   const lx=(50-sp.deckW*deckLens(sp.rows-1).w/2+3).toFixed(1);
-  return '<div class="ship"><div class="moon"></div>'
-    + '<div class="hullwrap" style="--deckW:'+sp.deckW+'%;--hullBottom:'+(96-deck0)+'px">'
-    +   hullSVG(sp) + '</div></div>'
-    + m + helm + '<div class="lantern" style="--lx:'+lx+'%;--topR:'+(sp.rows-1)+'"></div>';
+  const flashes = Array.from({length:5},(_,i)=>
+      '<i style="left:'+(16+17*i)+'%;animation-delay:'+(i*0.06).toFixed(2)+'s"></i>'
+    + '<span class="smoke" style="left:'+(16+17*i)+'%;animation-delay:'+(i*0.06).toFixed(2)+'s"></span>').join('');
+  return '<div class="vessel">'
+    + '<div class="ship"><div class="moon"></div>'
+    +   '<div class="hullwrap" style="--deckW:'+sp.deckW+'%;--hullBottom:'+(96-deck0)+'px">'
+    +     hullSVG(sp) + '</div></div>'
+    + m + helm + '<div class="lantern" style="--lx:'+lx+'%;--topR:'+(sp.rows-1)+'"></div>'
+    + '<div class="salvo" style="--deckW:'+sp.deckW+'%">'+flashes+'</div>'
+    + '</div><div class="ahoy"></div>';
 }
 function hullSVG(sp){
   const W=1000, top=(sp.rows-1)*ROWSTEP, H=top+HULLDEPTH+34;
@@ -1270,6 +1373,8 @@ function shell(){
    +'<i></i>'+CONFIG.vendor+'/'+CONFIG.model
    +(crossVendor()?' <b>\u21C4 '+CONFIG.reviewer.vendor+'</b>':'')+'</span>'
    +'<span class="clock" id="clock">--:--:--</span>'
+   +'<button class="mute" aria-pressed="'+muted+'" onclick="toggleMute()" title="ahoy">'
+   +   (muted?'\u{1F507}':'\u{1F50A}')+'</button>'
    +'<button class="ghost" onclick="openFlow()">&#9783; '+T('flowBtn')+'</button>'
    +'<div class="langs">'+LANGS.map(x=>'<button aria-pressed="'+(x===lang)+'" onclick="setLang(\''+x+'\')">'+LANGNAME[x]+'</button>').join('')+'</div></div>'
 
