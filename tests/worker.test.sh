@@ -79,6 +79,7 @@ mkdir -p "$3/src"
 if [ -f "$3/src/round-one" ]; then
   printf 'the second round\n' > "$3/src/round-two"
   grep -q 'REVIEWER SAID' "$2" && printf 'saw the review\n' > "$3/src/saw-review"
+  grep -q 'THE RUNNER SAID' "$2" && printf 'saw the failure\n' > "$3/src/saw-ci"
 else
   printf 'the first round\n' > "$3/src/round-one"
 fi
@@ -96,6 +97,8 @@ cat > "$d5/stub/gh" <<'G'
 echo "gh $*" >> "$(dirname "$0")/../ghcalls"
 case " $* " in
   *" pr list "*) echo 9; exit 0 ;;
+  *" pr checks "*) echo "https://example.invalid/actions/runs/777/job/1"; exit 0 ;;
+  *" run view "*) printf 'ci\tbin/ci.sh\tTHE RUNNER SAID: a title with markup is not escaped\n'; exit 0 ;;
   *" pr view "*" comments "*)
     jq -cn '{author:{login:"reviewer-1"},body:"REVIEWER SAID: fix the helper"}' \
       | jq -r '"## " + .author.login + "\n\n" + .body + "\n"' ;;
@@ -108,6 +111,7 @@ chmod +x "$d5/stub/gh"
 assert_ok "cd '$r5' && git cat-file -e '$branch:src/round-one'" "the second round keeps the first round's work"
 assert_ok "cd '$r5' && git cat-file -e '$branch:src/round-two'" "and adds its own"
 assert_ok "cd '$r5' && git cat-file -e '$branch:src/saw-review'" "and was given the review to answer"
+assert_ok "cd '$r5' && git cat-file -e '$branch:src/saw-ci'" "and why the required check is red"
 # and it does not try to open a second pull request for the same branch:
 # on a later round `pr create` fails, and a worker that could only ever
 # open a new one fails at the last step with its work already pushed

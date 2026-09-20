@@ -79,7 +79,19 @@ prompt="$tree/.fm-prompt.md"
     if [ -n "$PR" ]; then
       printf '\nWhat review has said so far, oldest first:\n\n'
       $GH pr view "$PR" --json comments \
-        --jq '.comments[]|"## " + .author.login + "\n\n" + .body + "\n"' 2>/dev/null
+        --jq '.comments[]|"## " + .author.login + "\n\n" + .body + "\n"' 2>/dev/null </dev/null
+      # and why the gate is red, if it is. A worker answering a failing
+      # check without being shown the failure is guessing - and gate 6 does
+      # not open until that check is green, so it is the whole of the round.
+      failing="$($GH pr checks "$PR" --json state,link \
+        --jq '.[]|select(.state!="SUCCESS" and .state!="PENDING")|.link' 2>/dev/null </dev/null | head -1)"
+      if [ -n "$failing" ]; then
+        printf '\n---\n\n# The required check is red\n\n'
+        printf 'It fails on the runner and may well pass on your machine.\n\n```\n'
+        $GH run view "${failing##*/runs/}" --log-failed 2>/dev/null </dev/null \
+          | tail -120 | sed 's/^[^\t]*\t[^\t]*\t//'
+        printf '```\n'
+      fi
     fi
   fi
   printf '\n---\n\n# The design\n\n'
