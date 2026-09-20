@@ -47,8 +47,11 @@ assert_contains "$sent" "T-Z" "the prompt carries the task"
 assert_contains "$sent" "it exists" "the prompt carries the acceptance criteria"
 assert_contains "$sent" "SECRET_WORKER_REASONING" "the prompt carries the diff"
 assert_contains "$sent" "Find the reason to reject" "the prompt carries the reviewer skill"
+# the skill legitimately uses the word "reasoning", so assert on concrete
+# leak markers - a path, a log file, the worker script - not on vocabulary
 assert_fail "grep -q 'state/worktrees' '$cap'" "the prompt names no worktree path"
-assert_fail "grep -qi 'worker log\\|reasoning:\\|fm-worker' '$cap'" "the prompt carries no worker log or reasoning"
+assert_fail "grep -qE 'fm-worker\\.sh|\\.fm-prompt|worktrees/[A-Z]' '$cap'" \
+  "the prompt carries nothing that identifies the worker's run"
 
 assert_contains "$(cat "$d/ghcalls")" "pr comment" "the verdict is posted by the script"
 assert_contains "$out" "APPROVE:T-Z" "the verdict comes back"
