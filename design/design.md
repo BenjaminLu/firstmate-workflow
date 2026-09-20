@@ -1,448 +1,496 @@
-# firstmate-workflow — 設計文件
+# firstmate-workflow — design
 
-> 本文是全系統唯一規格來源。`bin/fm-dispatch.sh` 從 `design/tasks.json` 讀任務 DAG，
-> 本文的第 14 節與該檔一一對應；兩者不一致時 CI 會紅。
+> This is the single source of truth. `bin/fm-dispatch.sh` reads the task DAG
+> from `design/tasks.json`; section 14 mirrors that file and CI fails if the two
+> disagree.
 >
-> 語言：本文與所有 PR 討論固定 zh-TW 單語。只有船長看板三語（見第 9 節）。
+> **Language:** everything in this repository is written in English — this
+> document, the skills, the code and its comments, commit messages, pull
+> request bodies and reviews. The board's three locales are the one exception,
+> and they are a product feature (section 9).
 
 ---
 
-## 1. 這是什麼
+## 1. What this is
 
-一個由單一 agent（firstmate）調度其他 agent 完成軟體工作的工作流。三件事構成它：
+One agent, firstmate, runs a crew of other agents through software work. Three
+things make it up:
 
-1. **`skills/`** —— 內容。所有角色的行為用純 Markdown 定義，改 skill 就改行為。
-2. **`bin/fm-*.sh`** —— 法律。驗收一律看檔案系統與 exit code，不看模型講了什麼。
-3. **`board/`** —— 船長的唯一操作面。即時狀態、待決事項、拍板送出。
+1. **`skills/`** — the content. Every role's behaviour is plain Markdown.
+   Changing a skill changes behaviour without touching code.
+2. **`bin/fm-*.sh`** — the law. Acceptance reads the filesystem and exit codes.
+   It never reads what a model claims about its own work.
+3. **`board/`** — the captain's only console. Live state, open decisions,
+   orders.
 
-agent CLI 是**可替換的引擎**，不是系統本體。
+The agent CLI is a **replaceable engine**, not the system.
 
-### 不是什麼
+### What it is not
 
-- 不是自動合併機器人。合併永遠由人按下。
-- 不是 agent 自主改進系統。skills 的變更走跟一般程式碼一模一樣的 PR 與七道閘。
-- 不做 snapshot 式狀態。事件日誌就是真相（第 5.1 節）。
+- Not an auto-merge bot. A human always presses merge.
+- Not an agent that improves itself in place. Changes to `skills/` travel the
+  same pull request and the same seven gates as any other code.
+- Not snapshot-based. The event log is the truth (section 5.1).
 
 ---
 
-## 2. 已定案決策
+## 2. Standing rules
 
-| 編號 | 決策 | 結果 |
+These bind every actor, including firstmate itself.
+
+1. **Nobody writes to `main` or `master`.** Work happens on a branch and
+   arrives through a pull request. Enforced in three layers: `bin/fm-guard.sh`
+   for the scripts, the hooks in `.githooks/` for anything driving git
+   directly, and branch protection on GitHub with `enforce_admins` on — because
+   firstmate runs on the captain's own credentials, an admin exemption would be
+   an exemption for firstmate too.
+2. **English in the repository**, as stated above.
+3. **Merging is the captain's**, and it arrives as a decision card on the
+   board — never as a sentence in a conversation (section 5.2).
+4. **An agent never runs `git` or `gh`.** The scripts do that (section 5.3).
+
+---
+
+## 3. Settled decisions
+
+| # | Decision | Outcome |
 |---|---|---|
-| Q0 | 落點 | 全新 repo，不重用任何既有專案 |
-| Q1 | 執行基座 | shell 起獨立 agent 程序，一 task 一 git worktree |
-| Q2 | firstmate 形態 | 長駐 session ＋ 看板為第二輸入通道 |
-| Q3 | 真相來源 | 本地 append-only `state/events.jsonl`；GitHub 為外顯 |
-| Q4 | 看板→firstmate | 決策落檔 + 阻塞等待（bun `fs.watch`，退回輪詢） |
-| Q5 | 看板技術棧 | Bun + SSE + vanilla HTML，零 build step |
-| Q6 | 確定性邊界 | script 管「跑過了嗎」，模型只管「做對了嗎」 |
-| Q7 | 第三輪協定 | `ASK-PASS-CRITERIA` + 編號封閉清單 |
-| Q8 | 圖解範圍 | 只有要船長拍板的方案畫圖，優先重用既有圖 |
-| Q9 | PR 落點 | private `BenjaminLu/firstmate-workflow` |
-| R1 | 自更新 | skills 定義行為；寫回走完整 PR；外部 skills 單向唯讀匯入 |
-| R2 | reviewer 視野 | 只有 diff + task spec + 驗收準則，看不到 worker reasoning |
-| R3 | 粒度 | 一 task = 一 PR = 一 worktree；DAG `depends_on`；並行上限 3 |
-| R4 | 分支 | 每 task 從 `main` 開、打回 `main`；衝突由 worker 自行 rebase |
-| R5 | 日誌寫入 | 只能經 `bin/fm-emit.sh`（`flock` 序列化） |
-| R6 | 開本地檔 | `/open` 呼叫編輯器（localhost only、路徑須在 repo 內）＋唯讀檢視器 |
-| R7 | CI | 本機與 GHA 跑同一支 `bin/ci.sh` |
-| R8 | 復原 | event log replay ＋ 啟動時對帳 |
-| R9 | hot-reload | 前端 SSE 推 `reload`；後端 `bun --watch` |
-| I1 | 看板動態內容 | agent 產出時就寫入三語 payload |
-| I2 | 三語來源 | agent 產 en + zh-TW；zh-CN 由詞表機械轉換 |
-| I3 | 語言偏好 | `localStorage` ＋ `?lang=` 覆寫，預設 `zh-TW` |
-| I4 | 圖解語言 | 產 `.en.html` 與 `.zh-TW.html`；zh-CN 後處理 |
-| I5 | e2e 語言 | chrome 快照三語；互動流程只跑 zh-TW |
-| I6 | 工作語言 | PR / design.md / skills 固定 zh-TW 單語 |
-| I7 | 原文呈現 | 看板只顯示三語結構化摘要 ＋ PR 連結 |
-| V1 | vendor 抽象 | shell adapter 契約 |
-| V2 | 角色 vendor | 全體同一家；reviewer 可選擇性覆寫 |
-| V3 | 能力差異 | adapter 只產生檔案變更，git/gh 全由腳本做 |
-| V4 | prompt 可攜 | skills 純 Markdown，adapter 負責翻譯；lint 擋 vendor 專屬語法 |
-| V5 | 可攜性保證 | `mock` adapter 跑全部 e2e ＋ adapter 契約測試 |
-| V6 | 失敗語意 | exit 0 完成 / 1 沒過 / 2 供應商不可用（只有 2 切 fallback） |
-| V7 | 看板顯示 | 標頭顯示引擎，reviewer 覆寫時標示 |
-| V8 | 對抗性 | 資訊不對稱 ＋ 對立 skill ＋ 可選跨 vendor |
+| Q0 | Where it lives | A new repository; nothing reused from earlier projects |
+| Q1 | Execution substrate | Shell starts an independent agent process, one git worktree per task |
+| Q2 | Shape of firstmate | A long-running session, with the board as a second input channel |
+| Q3 | Source of truth | Local append-only `state/events.jsonl`; GitHub is the outward face |
+| Q4 | Board to firstmate | Decision lands as a file; firstmate blocks on it (bun `fs.watch`, polling fallback) |
+| Q5 | Board stack | Bun + SSE + vanilla HTML, no build step |
+| Q6 | Where determinism ends | Scripts decide whether it ran; models only judge whether it is right |
+| Q7 | Round three | `ASK-PASS-CRITERIA` plus a numbered, closed checklist |
+| Q8 | Diagram scope | Only decisions the captain must rule on; reuse existing diagrams first |
+| Q9 | Where pull requests live | `BenjaminLu/firstmate-workflow`, public so branch protection is available |
+| R1 | Self-update | Skills define behaviour; writing them back travels a full pull request; external skills import read-only |
+| R2 | What the reviewer sees | The diff, the task spec and the acceptance criteria — never the worker's reasoning |
+| R3 | Granularity | One task, one pull request, one worktree; `depends_on` forms a DAG; three in flight |
+| R4 | Branching | Every task branches from `main` and targets `main`; the worker rebases its own conflicts |
+| R5 | Writing the log | Only through `bin/fm-emit.sh` |
+| R6 | Opening a file | `/open` hands it to the editor — localhost only, path must resolve inside the repo — plus a read-only viewer |
+| R7 | CI | The local gate and GitHub Actions run the same `bin/ci.sh` |
+| R8 | Recovery | Replay the event log, then reconcile on start |
+| R9 | Hot reload | SSE pushes `reload` to the front end; `bun --watch` restarts the server |
+| I1 | Dynamic board content | Agents write the tri-lingual payload at emit time |
+| I2 | Where the three come from | Agents produce `en` and `zh-TW`; `zh-CN` is a table conversion |
+| I3 | Language preference | `localStorage`, overridable with `?lang=`, default `zh-TW` |
+| I4 | Diagram languages | `.en.html` and `.zh-TW.html`; `zh-CN` post-processed |
+| I5 | e2e languages | Chrome snapshots in all three; interaction flows in `zh-TW` only |
+| I6 | Working language | **Superseded.** Everything in the repository is English; only the board is tri-lingual |
+| I7 | Source text on the board | The board shows the agent's tri-lingual summary plus a link to the pull request |
+| V1 | Vendor abstraction | A shell adapter contract |
+| V2 | Vendor per role | One vendor for the crew, with an optional reviewer override |
+| V3 | Capability gaps | Adapters only produce file changes; the scripts do all git and gh |
+| V4 | Prompt portability | Skills are plain Markdown; adapters translate; a lint blocks vendor-specific syntax |
+| V5 | Proving portability | A `mock` adapter runs every e2e, plus one shared adapter contract test |
+| V6 | Failure semantics | Exit 0 done, 1 attempted and failed, 2 vendor unavailable — only 2 falls back |
+| V7 | What the board shows | The engine in the header, marked when the reviewer differs |
+| V8 | Adversarial review | Information asymmetry, an opposed skill, and optionally a different vendor |
 
 ---
 
-## 3. 角色與程序
+## 4. Roles
 
-| 角色 | 形態 | 生命週期 | 能碰 git 嗎 |
+| Role | Shape | Lifetime | Touches git? |
 |---|---|---|---|
-| **captain**（你） | 人 | — | 只按合併 |
-| **firstmate** | 長駐互動 session | 一直在 | 不 |
-| **worker** | `bin/adapters/<vendor>.sh` 起的獨立程序 | 一 task 一條命 | **不** |
-| **reviewer** | 同上，獨立程序 | 一輪審核一條命 | **不** |
-| **board** | `bun --watch board/server.ts` | 一直在 | 不 |
+| **captain** (you) | human | — | presses merge only |
+| **firstmate** | long-running interactive session | always on | no |
+| **worker** | independent process from `bin/adapters/<vendor>.sh` | one task, then gone | **no** |
+| **reviewer** | same, independent process | one round, then gone | **no** |
+| **board** | `bun --watch board/server.ts` | always on | no |
 
-worker 與 reviewer 都是無狀態的一次性程序：讀 prompt、在自己的 worktree 裡改檔案、退出。
-git / commit / push / `gh pr create` / 貼 comment **全部由 `bin/fm-*.sh` 執行**。
+Workers and reviewers are stateless one-shot processes: read a prompt, change
+files inside their own worktree, exit. Everything else — commit, push,
+`gh pr create`, posting comments — is done by `bin/fm-*.sh`.
 
-firstmate 自己不寫程式碼，只做四件事：派工、整理、把待決事項送上看板、等你拍板。
-
----
-
-## 4. Repo 佈局
-
-```
-bin/
-  fm.sh                 唯一入口，分派子命令
-  fm-emit.sh            事件唯一寫入口（flock 序列化、schema 驗證）
-  fm-dispatch.sh        讀 DAG，派 ready 的 task；無「成案」事件不動作
-  fm-worker.sh          建 worktree → 跑 adapter → commit → 開 PR
-  fm-gate.sh            七道閘，exit code 說了算
-  fm-review.sh          起 reviewer（只餵 diff）→ 貼 PR comment
-  fm-protocol.sh        第 3 輪 ASK-PASS-CRITERIA 強制與違規偵測
-  fm-decide.sh          阻塞等待船長決策
-  fm-reconcile.sh       崩潰後對帳
-  fm-diagram.sh         為決策產生 en / zh-TW 圖解
-  ci.sh                 本機與 GHA 跑的同一支
-  adapters/
-    _contract.md        adapter 契約
-    mock.sh             CI 用，純 shell，產生固定 diff
-    claude.sh  cursor-agent.sh  gemini.sh
-skills/
-  firstmate/SKILL.md    調度、整理、何時上呈船長
-  worker/SKILL.md       如何做事、如何在第 3 輪反問
-  reviewer/SKILL.md     如何找出拒絕的理由
-  vendor/               從外部 skills 單向唯讀匯入，不回寫
-board/
-  server.ts             SSE + /open + 唯讀檢視器 + 決策 API
-  public/index.html     vanilla，零 build
-  public/board.css  public/board.js
-i18n/
-  ui.en.json  ui.zh-TW.json
-  tw2cn.tsv             繁簡＋陸台術語對照
-state/                  .gitignore，執行期產物
-  events.jsonl          append-only，唯一真相
-  decisions/D-*.json    船長的回覆落地處
-  workers/T-*.pid
-  worktrees/T-*/
-design/
-  design.md             本文
-  tasks.json            機器可讀的任務 DAG
-  diagrams/D-*.{en,zh-TW}.html
-  proposals/            每次盤問後的提案視覺化，丟棄式，保留供回溯
-tests/
-  *.test.sh             閘門與腳本自己的測試
-  adapter-contract.test.sh
-  e2e/*.spec.ts         Playwright，看板
-config.yaml             vendor / model / 並行上限 / 編輯器
-```
+firstmate writes no code. It dispatches, it summarises, it puts decisions on
+the board, and it waits for the captain.
 
 ---
 
-## 5. 契約
+## 5. Contracts
 
-### 5.1 事件日誌 `state/events.jsonl`
+### 5.1 The event log, `state/events.jsonl`
 
-append-only。**任何程序只能透過 `bin/fm-emit.sh` 寫入**，該腳本用 `flock` 序列化並做單行原子 append。
-CI 以 `grep -rn '>>.*events\.jsonl' bin/ board/` 擋掉繞道寫入。
+Append-only. **Only `bin/fm-emit.sh` writes to it**, serialising with a `mkdir`
+lock — `flock(1)` does not ship on macOS. `bin/ci.sh` fails if anything under
+`bin/` or `board/` appends to the log directly.
 
 ```jsonc
 {"ts":"2026-09-20T14:10:02Z","actor":"worker-2","task":"T-004","type":"gate_failed",
  "pr":9,"data":{"gate":5},
- "summary":{"en":"...","zh-TW":"..."}}      // 要上看板的事件才需要 summary
+ "summary":{"en":"...","zh-TW":"..."}}
 ```
 
-`type` 列舉：`greenlit` `dispatched` `commit_pushed` `pr_opened` `gate_passed` `gate_failed`
-`review_opened` `ask_pass_criteria` `criteria_returned` `protocol_violation` `approved`
-`merged` `decision_requested` `decision_made` `worker_crashed` `vendor_unavailable`
+Types: `greenlit` `dispatched` `commit_pushed` `pr_opened` `gate_passed`
+`gate_failed` `review_opened` `ask_pass_criteria` `criteria_returned`
+`protocol_violation` `approved` `merged` `closed` `decision_requested`
+`decision_made` `worker_crashed` `vendor_unavailable`.
 
-`summary` 只帶 en 與 zh-TW；zh-CN 由看板用 `i18n/tw2cn.tsv` 即時轉換（純查表，無模型呼叫）。
+A `summary` carries `en` and `zh-TW` or it is rejected: half a translation
+renders blank in one of the board's locales, which is worse than none.
+`zh-CN` is derived at display time from `i18n/tw2cn.tsv` — a table lookup, no
+model call.
 
-### 5.2 船長決策 `state/decisions/D-*.json`
+### 5.2 Captain decisions, `state/decisions/D-*.json`
 
-看板 `POST /decisions` 落檔；`bin/fm-decide.sh` 阻塞等待該目錄出現新檔。
+The board POSTs one; `bin/fm-decide.sh` blocks until it appears.
 
 ```jsonc
-{"id":"D-007","task":"T-004","chosen":"B","note":"先不要動 schema","ts":"..."}
+{"id":"D-007","task":"T-004","kind":"choice","chosen":"B","note":"leave the schema alone","ts":"..."}
 ```
 
-等待實作：有 `bun` 時用 `bun run bin/watch-decisions.ts`（`fs.watch`，毫秒級）；
-沒有時退回 `while :; do ...; sleep 1; done`。**不引入 `fswatch` 依賴。**
+Two kinds. `choice` is an option card carrying a before/after diagram. **`merge`
+is a request to merge**, carrying the seven-gate checklist, the diff stat, the
+files touched and the pull request link, answered with merge, send back, or
+hold. **Every merge goes through a card.** firstmate may not merge on its own
+and may not ask for one in conversation.
 
-### 5.3 Adapter 契約 `bin/adapters/<vendor>.sh`
+Waiting is `bun run bin/watch-decisions.ts` (`fs.watch`, millisecond wake) when
+bun is present, and a one-second poll otherwise. **No `fswatch` dependency.**
+
+### 5.3 The adapter contract, `bin/adapters/<vendor>.sh`
 
 ```
-用法：  <vendor>.sh run <prompt-file> <worktree-dir> <log-file>
-職責：  把 prompt 交給該供應商的 CLI，讓它在 <worktree-dir> 內修改檔案。
-禁止：  執行任何 git / gh 指令；寫入 <worktree-dir> 以外的路徑。
-退出：  0 = 完成
-        1 = 執行了但沒達成（模型放棄、產出不合格）
-        2 = 供應商層級不可用（未登入、額度耗盡、網路失敗）
+usage:   <vendor>.sh run <prompt-file> <worktree-dir> <log-file>
+does:    hands the prompt to that vendor's CLI and lets it edit files in <worktree-dir>
+must not: run git or gh; write anywhere outside <worktree-dir>
+exits:   0  done
+         1  ran, but did not achieve it (the model gave up, the output is unfit)
+         2  vendor unavailable (not logged in, out of quota, network down)
 ```
 
-只有 `2` 會觸發 `config.yaml` 的 fallback 清單；`1` 照常進七道閘與 reviewer。
-每個 adapter 都必須通過 `tests/adapter-contract.test.sh`。
+Only `2` triggers the fallback list in `config.yaml`; `1` proceeds to the gates
+and the reviewer like any other attempt. Every adapter passes
+`tests/adapter-contract.test.sh`.
 
-### 5.4 PR 協定
+### 5.4 The pull request protocol
 
-PR 上的字串是 `fm-gate.sh` 的輸入，格式錯誤等於沒發生：
+Strings on a pull request are input to `bin/fm-gate.sh`. Wrong format means it
+did not happen.
 
-| 字串 | 由誰貼 | 意義 |
+| String | Posted by | Meaning |
 |---|---|---|
-| `APPROVE:<task-id>` | reviewer | 唯一有效的通過信號 |
-| `ASK-PASS-CRITERIA:<task-id>` | worker | 第 3 輪起的反問 |
-| `CRITERIA-COMPLETE:<task-id>` | reviewer | 宣告後續編號清單即為完整集合 |
-| `REGRESSION:<task-id>` | reviewer | 清單外但屬新引入的退步，允許 |
+| `APPROVE:<task-id>` | reviewer | the only valid pass signal |
+| `ASK-PASS-CRITERIA:<task-id>` | worker | the round-three question |
+| `CRITERIA-COMPLETE:<task-id>` | reviewer | the numbered list that follows is the complete set |
+| `REGRESSION:<task-id>` | reviewer | off-list but newly introduced, so admissible |
 
 ---
 
-## 6. 生命週期與七道閘
+## 6. Lifecycle and the seven gates
 
 ```
-盤問 /grilling  →  提案視覺化 /prototype  →  【船長成案】  →  design.md + tasks.json
-                                                  ↓
-                                   fm-dispatch.sh（只派 ready 的，上限 3）
-                                                  ↓
-                     fm-worker.sh：worktree → adapter → commit → 開 PR
-                                                  ↓
-                                   ★ fm-gate.sh 七道閘 ★
-                                                  ↓
-                     fm-review.sh：reviewer 只拿 diff + spec + 驗收準則
-                                                  ↓
-                 未過 → worker 復活修（第 3 輪起先發 ASK-PASS-CRITERIA）→ 回閘門
-                                                  ↓
-                 APPROVE → firstmate 整理狀況 → 【船長在看板按合併】
+grilling  ->  /prototype  ->  [captain green-lights]  ->  design.md + tasks.json
+                                       |
+                        fm-dispatch.sh (ready tasks only, three at a time)
+                                       |
+              fm-worker.sh: worktree -> adapter -> commit -> pull request
+                                       |
+                          *  fm-gate.sh, the seven gates  *
+                                       |
+            fm-review.sh: reviewer sees the diff, the spec, the criteria
+                                       |
+     not passed -> worker revives and fixes (round 3+ asks first) -> back to the gates
+                                       |
+              APPROVE -> firstmate summarises -> [captain merges on the board]
 ```
 
-**`fm-dispatch.sh` 在 `events.jsonl` 出現對應的 `greenlit` 事件之前，一律不派工。**
-這是第八道閘，擋的是「沒給船長看過就開工」。
+**`fm-dispatch.sh` dispatches nothing until a `greenlit` event exists** for the
+work. That is the eighth gate, and it stops work starting before the captain
+has seen a proposal.
 
-### fm-gate.sh 七道閘
-
-| # | 檢查 | 怎麼驗 |
+| # | Gate | How it is checked |
 |---|---|---|
-| 1 | 分支存在且有 commit | `git rev-list --count main..<branch>` > 0 |
-| 2 | rebase 到 main 乾淨 | 在暫存 worktree 試 rebase，非零即失敗 |
-| 3 | `bin/ci.sh` exit 0 | 與 GHA 同一支腳本 |
-| 4 | diff 未超出宣告範圍 | `git diff --name-only` ⊆ tasks.json 的 `scope` glob |
-| 5 | **新測試不是空的** | revert 實作 hunk → 新測試必須變紅；仍綠即失敗 |
-| 6 | GHA 必檢項目為綠 | `gh pr checks <pr> --required` |
-| 7 | reviewer 已貼 `APPROVE:<task-id>` | 且發文者必須是設定的 reviewer 帳號 |
+| 1 | branch exists and has commits | `git rev-list --count main..<branch>` > 0 |
+| 2 | rebase onto main is clean | attempt it in a scratch worktree; non-zero fails |
+| 3 | `bin/ci.sh` exits 0 | the same script GitHub Actions runs |
+| 4 | the diff stays in scope | `git diff --name-only` within the task's `scope` globs |
+| 5 | **the new tests are not vacuous** | revert the implementation hunks; the new tests must go red |
+| 6 | the required GitHub check is green | `gh pr checks <pr> --required` |
+| 7 | the reviewer posted `APPROVE:<task-id>` | and from the configured reviewer account |
 
-七道全綠才會 emit `approved` 並進入「請船長合併」清單。
-任何一道紅，reviewer 在 PR 上的任何讚美都不算數。
-
----
-
-## 7. 第三輪反問協定
-
-第 1、2 輪：reviewer 正常挑毛病。
-
-**第 3 輪起**：
-
-1. worker 必須先貼 `ASK-PASS-CRITERIA:<task-id>`，再動任何一行程式碼。
-2. reviewer 必須回一份**編號清單**並貼 `CRITERIA-COMPLETE:<task-id>`。
-3. 此後 reviewer 只能針對：清單內編號項目、或標記 `REGRESSION:` 的新引入退步。
-4. 出現清單外的舊問題 → `fm-protocol.sh` emit `protocol_violation`，該意見不計入閘門，
-   並把事件推上看板讓船長知道 reviewer 在擠牙膏。
-
-目的：終結「改一輪、冒一個新問題」的無限迴圈。
+All seven green before an `approved` event and a merge card. Any one red and
+nothing the reviewer said in praise counts.
 
 ---
 
-## 8. 船長看板
+## 7. The round-three protocol
 
-Bun + 原生 SSE + vanilla HTML，**零 build step**。
+Rounds one and two: the reviewer picks holes as usual.
 
-| 區塊 | 內容 |
+**From round three:**
+
+1. Before touching a line, the worker posts `ASK-PASS-CRITERIA:<task-id>`.
+2. The reviewer answers with a **numbered list** and posts
+   `CRITERIA-COMPLETE:<task-id>`.
+3. After that the reviewer may raise only numbered items from that list, or a
+   newly introduced regression marked `REGRESSION:`.
+4. An old off-list complaint makes `bin/fm-protocol.sh` emit
+   `protocol_violation`. It does not count toward the gates, and it goes on the
+   board so the captain can see the reviewer drip-feeding.
+
+The point is to end the loop where each round fixes one thing and surfaces
+another.
+
+---
+
+## 8. The captain's board
+
+Bun, native SSE, vanilla HTML, **no build step**.
+
+| Region | What it holds |
 |---|---|
-| 海面標頭 | 已合併 / 進行中 / 等你 / 受阻 計數、引擎 chip（reviewer 覆寫時標示） |
-| 船身 | **海盜船，單一量體**：每層甲板與船殼由同一條透鏡曲線生成到同一張 SVG —— 甲板是前縮平面，船殼是它往下擠出的量體，與方塊船員同一套投影。每層有舷牆立面與黃銅壓條，層與層之間有立面牆（riser），這是「一層」讀得出來的關鍵。船殼為暖黑剪影（`--tar`），**黃銅是全畫面唯一亮點**，船員因此成為最亮的一層。大小隨在編船員數變化，1 桅小艇 → 5 桅旗艦 |
-| 甲板 | 所有船員站同一塊甲板；姿勢由狀態驅動；交接物在人之間飛行 |
-| 決策台 | 左側是**船長本人**（紅袍金綬帶、三角帽、彎刀），姿勢隨決策狀態改變；右側大決策卡：選項、before/after 圖解、PR 連結、design.md 連結、下令按鈕 |
-| 泳道 | 排隊 / 施工 / 閘門 / 審核 / 船長 / 已合併 |
-| 即時日誌 | `events.jsonl` 的三語摘要 |
+| Sea header | merged / in flight / awaiting you / blocked, and the engine chip — marked when the reviewer runs a different vendor |
+| The ship | a pirate vessel whose size tracks the crew, one mast to six |
+| Deck | crew stand on the ship, poses driven by state, handoffs fly between them |
+| Decision deck | the captain drawn at the left; the card to the right — options, before/after diagram, or the seven-gate checklist for a merge |
+| Crew roster | opens when the deck is too crowded for the bubbles to carry the work |
+| Lanes | queued / working / gate / review / captain / merged |
+| Live log | tri-lingual summaries from `events.jsonl` |
 
-**船的分級**（依甲板上總人數，含 firstmate 與 reviewer）：
+### The ship
 
-| 人數 | 船型 | 桅 | 甲板層 | 甲板寬 |
+Decks and hull come out of **one lens curve in one SVG** — the deck is the
+foreshortened plan, the hull is that same curve extruded down — in the same
+projection as the voxel crew. Mixing an elevation with perspective decks was
+what made earlier versions read as a drawing of a ship next to some slabs.
+
+The hull is a warm-black silhouette and **brass is the only accent in the whole
+scene**, so the crew are the brightest layer. That is the hierarchy the board
+wants.
+
+| Crew | Rate | Masts | Decks | Beam |
 |---|---|---|---|---|
-| ≤3 | 單桅小艇 | 1 | 1 | 42% |
-| 4–5 | 雙桅縱帆船 | 2 | 1 | 54% |
-| 6–8 | 三桅巡防艦 | 3 | 2 | 66% |
-| 9–12 | 四桅戰列艦 | 4 | 2 | 74% |
-| 13–18 | 旗艦 | 5 | 3 | 82% |
-| 19–24 | 巨型戰艦 | 6 | 4 | 90% |
+| ≤3 | cutter | 1 | 1 | 42% |
+| 4–5 | schooner | 2 | 1 | 54% |
+| 6–8 | frigate | 3 | 2 | 66% |
+| 9–12 | ship of the line | 4 | 2 | 74% |
+| 13–18 | flagship | 5 | 3 | 82% |
+| 19–24 | man-o'-war | 6 | 4 | 90% |
 
-**上限 24 人**（含 firstmate 與 reviewer）。實測 24 人時人物縮放觸及 0.52 下限、
-氣泡間距剩 10px，再往上只是越來越小。真正的瓶頸不是船而是 `concurrency`（預設 3）。
+**A crowd goes up, not lengthwise.** Upper decks are shorter; firstmate always
+holds the topmost deck and the reviewer the one below. Hull, decks, crew and
+bubbles all align to `--deckY0 + row * --rowStep`, and every deck plate is the
+same height or the crew plant to different depths on each level. Each deck
+carries a bulwark and a riser wall down to the deck below, which is what makes
+a level read as a level.
 
-**人多時往上分層，不往橫向拉長。** 上層甲板較短，firstmate 永遠在最高層掌舵，
-reviewer 在次高層。船體、各層甲板、船員、名牌全部對齊 `--deckY + row × --rowH`；
-各層甲板板面高度必須一致，否則各層船員「踩進甲板」的深度會不同。
+Mast height and scene height derive from `headroom()` so the **whole sail hangs
+above the tallest crewman's head** — otherwise the crew stand inside the
+canvas. Mast spacing is a fraction of the **topmost** deck's width, since that
+is what they are stepped on; using the hull's widest point puts the outer masts
+off the edge.
 
-**舵輪是最上層甲板的固定物**，不是掛在 firstmate 身上的道具 —— 由結構保證它永遠在頂層艉側，
-而不是靠「剛好 firstmate 站在那裡」。firstmate 雙手前伸扶舵。
+**The bow faces left**, the end firstmate stands on. That is a narrative choice,
+not a nautical one — the helm belongs aft on a real ship — but the person
+leading should be at the head of it. Gilded figurehead and bowsprit to port,
+stern lantern to starboard. **The whole broadside points one way**, toward the
+bow: barrel, port lid, muzzle flash and smoke all agree.
 
-桅高與場景高度由 `headroom()` 推導，保證**整片帆都在最高層船員的頭頂之上** —— 否則人會站在帆布裡。
-名牌寬度逐層計算（各層甲板寬度不同），依密度降級（≤4 全欄位 / 5–7 去掉任務標題 / ≥8 只留短代號與進度條），
-3 至 14 人的每個人數都不得重疊。
+Gun ports and the figurehead are drawn in **HTML at fixed pixel sizes, not
+SVG** — the hull's viewBox stretches horizontally with beam and not vertically,
+which flattened a cutter's ports into slots.
 
-**船員太密時自動展開船員名冊**（氣泡一旦放棄任務標題就展開，也能手動切換）。
-名冊帶的是**真正的工作內容**：狀態、所在甲板、任務編號與標題、檔案範圍、輪次、PR、進度 ——
-海盜動作只是旁邊一行淡字。
+### The crew
 
-**每個船員頭上有一個氣泡**承載他的狀態（代號、任務、進度條、百分比），氣泡尾巴指向本人。
-邊框顏色即狀態（施工藍／審核紫／閘門紅／已合併綠／排隊灰）。交接物落地時對應氣泡會擴散一圈。
-層距必須大於「人高 + 氣泡高」，否則氣泡會蓋到上一層的船員。
+Twelve actions, pooled by deck and chosen by a hash of the crew id so they stay
+put: helm, lookout, signal, point and log on the quarterdeck; haul, capstan,
+carry and climb amidships; hammer, saw, swab and carry on the main deck. **Idle
+crew get their own pool** — with a concurrency of three, most of a large crew
+has no task, and one shared idle pose turns them into a row of broken statues.
 
-**各層船員做各層的事**，共 12 種動作，用 id 雜湊挑選以保持穩定：
+**Every action holds or stands at something**; nobody mimes. Tools follow the
+job, not the role. State still wins over action: a worker stopped at the gate
+slumps, a reviewer raises a spyglass.
 
-| 甲板 | 工作 |
+Legs alternate a weight shift at a per-crewman cadence, and each hops every
+7–15 seconds on its own offset. The hop animates the `translate` property
+rather than `transform`, so it composes with the pose animations instead of
+replacing them. **Shoes animate with their leg** — otherwise the leg turns
+while the shoe stays nailed to the deck and all you see is a bobbing body.
+
+**Each crewman carries a bubble above his head**: id, task, progress, percent,
+with the border colour carrying state. A landing handoff pulses the recipient's
+bubble. Deck spacing must exceed body height plus bubble height or a bubble
+covers the crew on the deck above.
+
+### The captain
+
+Drawn at the left of the decision deck on a lit stage — red coat, gold sash,
+tricorn and plume, eye patch, cutlass. Three poses: sheathed while nothing is
+chosen, half drawn once an option is picked, raised when the order goes out.
+Draggable like the rest of the crew.
+
+### Ahoy
+
+| Trigger | Response |
 |---|---|
-| 頂層 | 掌舵、瞭望、打旗號、指揮、記航海日誌 |
-| 中層 | 拉纜、絞盤、搬運、爬索具 |
-| 主甲板 | 打鐵、鋸木、刷洗、搬運 |
+| A merge | the broadside fires gun by gun, the ship heels, every crewman's arms go up, the bell rings, `AHOY! / MERGED INTO MAIN` |
+| An order | bell and bosun's whistle, the helm spins twice, `AYE, CAPTAIN! / ORDERS AWAY` |
 
-**閒置的人也要有自己的動作池**（刷甲板、爬索具、搬貨、記帳、絞盤）—— 並行上限只有 3，
-大船上多數人沒有任務，全部給同一個閒置姿勢會變成一排壞掉的雕像。
-**每個動作都必須有對應道具**，不能空揮 —— 手持道具（鎚、鋸、拖把、木箱、望遠鏡、旗、帳簿、鵝毛筆、海圖、纜繩）
-或甲板道具（絞盤、酒桶、繩梯）。工具跟著**工作**走不是跟著角色走。
-狀態仍然優先：閘門擋下就駝背、審核中就舉望遠鏡。
+Sound is synthesised at runtime through Web Audio — the bell two partials on a
+long decay, the cannon a lowpassed noise burst, the whistle a swept sine — so
+there are no audio files and no network. Mute lives in the header and persists;
+browsers require a gesture before the first sound. Honours
+`prefers-reduced-motion`.
 
-**Ahoy 時刻**：兩個事件會讓整艘船有反應 ——
+**One gun list** (`portList()`) drives the ports, the flash positions and the
+sound schedule: one gun, one flash, one report, the same `GUN_DELAY` apart. The
+bell waits until the last gun has spoken. **The shout stays in English in every
+locale** — it is a cry, not a label.
 
-| 觸發 | 反應 |
-|---|---|
-| PR 合併 | 全舷側砲依序開火（火光＋硝煙向外噴）、船身左右搖晃、全員舉手歡呼、鳴鐘、`AHOY! / MERGED INTO MAIN` 橫幅 |
-| 船長下令 | 鳴鐘＋水手長哨音、舵輪急轉兩圈、全員歡呼、`AYE, CAPTAIN! / ORDERS AWAY` 橫幅 |
+Celebration must not hide what is being celebrated: the banner sits clear of
+the ship.
 
-音效以 Web Audio **即時合成**（鐘是雙泛音長衰減、砲是低通濾過的雜訊爆發、哨音是正弦掃頻），
-不外掛音檔、不打網路。
-**砲門座標只有一份**（`portList()`）—— 砲門、火光定位、砲聲排程全部吃它，
-一門砲一發聲一道光、同一個 `GUN_DELAY` 間隔，光和聲不會對不上。鐘在最後一發之後才敲。
-**船首朝畫面左側**，也就是 firstmate 站的那一端 —— 這是刻意的敘事選擇（領頭的人在船頭），
-不是航海慣例（真船的舵在艉）。鍍金船首像與船首斜桁在左，艉燈在右。
-**整個舷側砲朝同一方向**（朝船首），砲管、砲門蓋、火光、硝煙四者方向必須一致。
-船首像與砲門同樣以 HTML 固定尺寸繪製。
-**砲門以 HTML 繪製而非 SVG** —— SVG 用 `preserveAspectRatio="none"`，橫向隨船寬伸縮而縱向不變，
-小船會把砲門壓成細縫。HTML 固定 21×16px，任何船型都一樣清楚。
-**桅距依最上層甲板寬度計算**，不是依船體最寬處 —— 桅杆從頂層甲板長出，用船體寬會站到甲板外。標頭有靜音鈕，偏好存 `localStorage`；瀏覽器要求先有使用者手勢才會出聲。
-整組吃 `prefers-reduced-motion`。
-**橫幅字樣三語都維持英文** —— 那是一聲喊，不是介面標籤，不進 i18n 字典的翻譯範圍。
+### Interaction
 
-**腳步與跳躍**：雙腿交替踏步，**鞋子必須與腿同動**（否則腿轉了鞋還釘在甲板上，只看得到身體在浮），每人步頻不同；另外每 7–15 秒隨機跳一下，
-跳躍走 `translate` 屬性而非 `transform`，才能和姿勢動畫疊加而不是互相覆蓋。
+Drag a figure to turn it, drag the deck to turn the whole crew, double-click to
+reset. Every pose is a `.fig.s-<state>` class, so **e2e asserts classes rather
+than diffing screenshots**.
 
-**桅杆從最上層甲板長出，桅距依 `deckW` 按比例分佈** —— 用固定百分比的話，小船時桅杆會插在船殼外面。
+**Hot reload:** a change under `board/public/**` pushes `reload` over SSE; a
+change to `board/server.ts` restarts under `bun --watch` and the client
+reconnects. Decisions are already on disk, so a restart loses none.
 
-**船長本人**站在決策台左側的聚光台上，可拖曳旋轉，三種姿勢：
-未選 `c-idle` 手按刀柄 → 選了選項 `c-ready` 刀半出鞘 → 按下令 `c-order` 舉刀。
+**`/open`:** `GET /open?path=` hands the file to the editor. Localhost only,
+and `realpath` must resolve inside the repository or it is a 403. A read-only
+diff viewer covers the case where you would rather not leave the board.
 
-**互動**：拖人物轉單人、拖甲板轉全員、雙擊復位。狀態文字綁在各自人物腳下。
-所有姿勢以 `.fig.s-<state>` class 表達，**e2e 直接斷言 class，不比對截圖**。
+**One source for shared numbers.** CSS custom properties are written from the
+JavaScript constants. `--rowStep` once drifted from `ROWSTEP` and the decks were
+drawn on one grid while the crew stood on another — by the fourth level they
+were 102px below their own deck.
 
-**hot-reload**：`board/public/**` 變動 → SSE 推 `reload`；`board/server.ts` 變動 → `bun --watch` 重啟，
-SSE client 自動重連。決策已落檔，重啟不掉。
-
-**`/open`**：`GET /open?path=` → `code <path>`。僅接受 localhost 來源，且 `realpath` 必須在 repo 內，
-否則 403。另備唯讀 diff 檢視器作為不切窗的替代。
-
-3D 船員的正式實作從 `design/proposals/` 的 prototype **重寫**，不直接晉升
-（prototype 在無測試、無錯誤處理的前提下寫成）。
+The production board is **rewritten** from the prototype in
+`design/proposals/`, not promoted from it: that prototype was written with no
+tests and no error handling.
 
 ---
 
-## 9. 三語
+## 9. Three languages
 
-只有看板三語。PR、design.md、skills、事件原文一律 zh-TW 單語。
+Only the board is tri-lingual. The repository is English (section 1).
 
-- agent 在 `fm-emit.sh` 的 `summary` 欄位寫入 **en + zh-TW** 兩份。
-- zh-CN 由 `i18n/tw2cn.tsv` 機械轉換（繁簡＋陸台術語：`程式`→`程序`、`函式`→`函数`、`相依`→`依赖`）。
-  詞表進版控、有測試。反向不做（`程序` 在 zh-CN 同時是 program 與 procedure，轉不回去）。
-- UI chrome 走 `i18n/ui.*.json`。CI lint：UI 出現未進字典的硬編碼字串即紅。
-- 圖解產 `.en.html` 與 `.zh-TW.html` 兩版，zh-CN 後處理 HTML 文字節點。
-- 語言偏好存 `localStorage`，`?lang=` 可覆寫，預設 `zh-TW`。
+- Agents write `en` and `zh-TW` into the `summary` field through
+  `bin/fm-emit.sh`.
+- `zh-CN` is produced by table conversion through `i18n/tw2cn.tsv`, covering
+  script and vocabulary both. The reverse is not attempted: 程序 is both
+  *program* and *procedure* in `zh-CN` and cannot be mapped back.
+- UI chrome comes from `i18n/ui.*.json`. A lint fails the build on any UI
+  string that is not in the dictionary.
+- Diagrams render `.en.html` and `.zh-TW.html`; `zh-CN` post-processes the text
+  nodes.
+- The preference lives in `localStorage`, `?lang=` overrides it, default
+  `zh-TW`.
 
 ---
 
 ## 10. CI
 
-本機與 GitHub Actions 跑**同一支** `bin/ci.sh`：
+The local gate and GitHub Actions run **the same** `bin/ci.sh`:
 
 ```
-shellcheck bin/**.sh          →  bash tests/*.test.sh
-→  bun test                   →  playwright（chrome 快照三語；互動流程只跑 zh-TW）
-→  lint：硬編碼 UI 字串 / 繞道寫 events.jsonl / skills 內的 vendor 專屬語法
+shellcheck        ->  single-writer lint  ->  bash suites
+                  ->  bun test            ->  playwright
 ```
 
-**所有 e2e 使用 `mock` adapter** —— 不呼叫任何模型，因此快、免費、確定性。
-真 vendor 只在 nightly smoke job 跑。
+Each stage skips cleanly when its subject does not exist, so the gate is green
+from an empty tree onward. **Every e2e uses the `mock` adapter** — no model
+call, so it is fast, free and deterministic. Real vendors run in a nightly
+smoke job.
+
+`ci` is a required status check on `main`, and a branch must be up to date
+before it can merge.
 
 ---
 
-## 11. 自更新
+## 11. Self-update
 
-`skills/` 是行為定義，改 skill 即改行為，不必改程式碼。
+`skills/` defines behaviour; changing a skill changes behaviour without
+touching code.
 
-firstmate 跑完一輪後可以開 `skill-update` task，**但它走一模一樣的 PR + reviewer + 七道閘**。
-系統不能偷改自己。
+After a round, firstmate may open a `skill-update` task — **but it travels the
+same pull request, reviewer and seven gates as anything else.** The system
+cannot quietly edit itself.
 
-`fm.sh sync-skills` 從外部 skills 目錄單向匯入到 `skills/vendor/`，唯讀，不回寫，
-不污染使用者的全域 skills。
-
----
-
-## 12. 失效與復原
-
-- 真相是 `events.jsonl`，啟動時 replay 重建狀態。不做 snapshot。
-- `fm-reconcile.sh`：掃 `state/worktrees/` ＋ `gh pr list` 對帳；
-  worker 以 pid file 判活，已死的標 `worker_crashed` 並重派。
-- adapter 回 `2` → 依 `config.yaml` 的 fallback 清單換下一家，emit `vendor_unavailable`。
-- 日誌成長到影響 replay 速度再談壓縮，現在不做。
+`fm.sh sync-skills` imports from an external skills directory into
+`skills/vendor/`, read-only, never writing back, never polluting the user's
+global skills.
 
 ---
 
-## 13. 安全
+## 12. Failure and recovery
 
-- `/open` 僅接受 localhost，`realpath` 須落在 repo 內，否則 403。
-- adapter 禁止執行 git / gh；worker 拿不到 GitHub token。
-- repo 為 private：內含本機路徑、agent prompt 與決策紀錄。
-- 看板不對外開埠，僅綁 `127.0.0.1`。
+- The truth is `state/events.jsonl`; state is rebuilt by replaying it on start.
+  No snapshots.
+- `fm-reconcile.sh` walks `state/worktrees/` and `gh pr list` looking for
+  orphans, tests worker liveness by pid file, and marks the dead
+  `worker_crashed` for redispatch.
+- `bin/fm-sync-prs.sh` polls GitHub and writes pull request events back into
+  the same log. **A merge the captain performs on GitHub must be noticed by the
+  system itself**, not reported to it by a person.
+- An adapter exiting `2` moves to the next vendor in `config.yaml` and emits
+  `vendor_unavailable`.
+- Compaction waits until the log is large enough to slow a replay.
 
 ---
 
-## 14. 任務 DAG
+## 13. Security
 
-機器可讀版本在 `design/tasks.json`，欄位：`id` `title` `milestone` `depends_on` `scope`
-`bootstrap` `acceptance`。`scope` 是第 4 道閘的 glob 白名單。
+- `/open` accepts localhost only, and the resolved path must sit inside the
+  repository.
+- Adapters may not run git or gh; a worker never holds a GitHub token.
+- The board binds `127.0.0.1` and opens no external port.
+- The repository is public so that branch protection is available, which means
+  nothing secret may enter it — no local paths, no credentials, no customer
+  content.
 
-`bootstrap: true` 的任務由人手工建立 —— 派工器本身還不存在，無法自己派自己。
+---
 
-### M0 — 骨架（bootstrap）
+## 14. The task DAG
 
-| id | 標題 | 依賴 |
+`design/tasks.json` is the machine-readable form, with `id`, `title`,
+`milestone`, `depends_on`, `scope`, `bootstrap` and `acceptance`. `scope` is
+the glob allowlist gate 4 enforces.
+
+Tasks marked `bootstrap` are built by hand: they are the dispatcher and its
+gates, and the dispatcher cannot dispatch itself.
+
+### M0 — the frame (bootstrap)
+
+| id | title | depends on |
 |---|---|---|
-| T-001 | repo 骨架、`ci.sh`、bash 測試框架 | — |
-| T-002 | `fm-emit.sh`：事件唯一寫入口 | T-001 |
-| T-019 | `fm-sync-prs.sh`：把 GitHub 的 PR 事件寫回日誌 | T-002 |
-| T-003 | adapter 契約、`mock.sh`、契約測試 | T-001 |
-| T-004 | `fm-gate.sh`：七道閘 | T-002, T-003 |
-| T-005 | `fm-worker.sh`：worktree → adapter → commit → PR | T-003, T-004 |
-| T-006 | `fm-review.sh`：reviewer 只餵 diff | T-005 |
-| T-007 | `fm-dispatch.sh`：DAG、上限 3、成案閘 | T-005, T-006 |
-| T-008 | `fm-decide.sh`：決策落檔 + 阻塞等待 | T-002 |
+| T-001 | repo skeleton, the one gate, a bash test harness | — |
+| T-002 | `fm-emit.sh`, the only writer of the event log | T-001 |
+| T-019 | `fm-sync-prs.sh`, noticing a merge on its own | T-002 |
+| T-020 | `fm-guard.sh` and hooks: nobody writes to main | T-001 |
+| T-003 | the adapter contract, `mock.sh`, the contract test | T-001 |
+| T-004 | `fm-gate.sh`, the seven gates | T-002, T-003 |
+| T-005 | `fm-worker.sh`: worktree, adapter, commit, pull request | T-003, T-004 |
+| T-006 | `fm-review.sh`: the reviewer sees only the diff | T-005 |
+| T-007 | `fm-dispatch.sh`: the DAG, the limit, the green-light gate | T-005, T-006 |
+| T-008 | `fm-decide.sh`: decisions land, firstmate wakes | T-002 |
 
-### M1 — 看板
+### M1 — the board
 
-| id | 標題 | 依賴 |
+| id | title | depends on |
 |---|---|---|
-| T-009 | board server：SSE、靜態、hot-reload | T-002 |
-| T-010 | board UI：甲板、船員、決策台、泳道、日誌 | T-009 |
-| T-011 | i18n：字典、`tw2cn.tsv`、硬編碼 lint | T-009 |
-| T-012 | `/open` 端點與唯讀 diff 檢視器 | T-009 |
-| T-013 | 決策 API：`POST /decisions` → 落檔 | T-008, T-009 |
-| T-014 | Playwright e2e ＋ GHA workflow | T-010, T-011, T-013 |
+| T-009 | board server: SSE, static, hot reload | T-002 |
+| T-010 | board UI: the ship, the crew, the deck, the lanes, the log | T-009 |
+| T-011 | i18n: dictionaries, `tw2cn.tsv`, the hardcoded-string lint | T-009 |
+| T-012 | `/open` and the read-only diff viewer | T-009 |
+| T-013 | the decision API, including merge cards | T-008, T-009 |
+| T-014 | Playwright e2e and the GitHub Actions workflow | T-010, T-011, T-013 |
 
-### M2 — 協定與自更新
+### M2 — protocol and self-update
 
-| id | 標題 | 依賴 |
+| id | title | depends on |
 |---|---|---|
-| T-015 | `fm-protocol.sh`：第 3 輪強制與違規偵測 | T-006 |
-| T-016 | `fm-diagram.sh`：決策圖解 en / zh-TW ＋ 看板嵌入 | T-010 |
-| T-017 | `fm-reconcile.sh`：崩潰對帳 | T-007 |
-| T-018 | `skills/` 自更新流程與 `sync-skills` | T-007, T-015 |
+| T-015 | `fm-protocol.sh`: round three and its violations | T-006 |
+| T-016 | `fm-diagram.sh`: decision diagrams, and the board embed | T-010 |
+| T-017 | `fm-reconcile.sh`: reconciling after a crash | T-007 |
+| T-018 | self-update and `sync-skills` | T-007, T-015 |
