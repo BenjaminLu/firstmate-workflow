@@ -76,4 +76,52 @@ assert_contains "$(cat "$cap3")" "CRITERIA-COMPLETE:T-Z" "round three asks for t
 ( cd "$r" && FM_ROOT="$r" FM_GH="$GH" FM_MOCK_EXIT=2 bin/fm-review.sh --task T-Z --branch work >/dev/null 2>&1 )
 assert_eq "2" "$?" "an unavailable vendor exits 2"
 rm -rf "$d" "$d2"
+# a review that did not happen must not look like one that did
+d="$(fixture)"; r="$d/repo"; GH="$(ghstub "$d")"
+: > "$d/ghcalls"
+cat > "$r/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+exit 0
+M
+chmod +x "$r/bin/adapters/mock.sh"
+out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+rc=$?
+assert_eq "3" "$rc" "a silent reviewer is a failed round, not a passed one"
+assert_contains "$out" "produced no review" "it says what went wrong"
+assert_fail "grep -q 'pr comment' '$d/ghcalls'" "nothing was posted to the pull request"
+types="$(jq -r .type "$r/state/events.jsonl")"
+assert_contains "$types" "review_failed" "it emitted review_failed"
+assert_fail "printf '%s' \"$types\" | tail -1 | grep -q approved" "and signed nothing"
+
+# the reviewer falls back the same way the worker does
+printf 'vendor: mock\nreviewer:\n  vendor: nosuchvendor\nfallback:\n  - mock\n' > "$r/config.yaml"
+cat > "$r/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'the fallback reviewed it\n' > "$3/verdict.txt"
+exit 0
+M
+chmod +x "$r/bin/adapters/mock.sh"
+out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_eq "0" "$?" "an unavailable reviewer vendor falls through to the next"
+assert_contains "$out" "the fallback reviewed it" "and the fallback's verdict is the verdict"
+
+# and when the reviewer's own vendor is there, it is the one that reviews -
+# a different engine from the worker's is the whole point of the block
+cat > "$r/bin/adapters/other.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'reviewed by the other engine\n' > "$3/verdict.txt"
+exit 0
+M
+chmod +x "$r/bin/adapters/other.sh"
+printf 'vendor: mock\nreviewer:\n  vendor: other\nfallback:\n  - mock\n' > "$r/config.yaml"
+out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_contains "$out" "reviewed by the other engine" "the reviewer block picks the engine"
+assert_fail "printf '%s' \"$out\" | grep -q 'the fallback reviewed it'" "and the worker's engine is not used"
+
+rm -rf "$d"
+
+
 finish

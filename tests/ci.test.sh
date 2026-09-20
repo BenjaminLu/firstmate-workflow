@@ -27,4 +27,15 @@ gha="$ROOT/.github/workflows/ci.yml"
 assert_ok "test -f '$gha'" "a GitHub Actions workflow exists"
 assert_contains "$(cat "$gha")" "bin/ci.sh" "the workflow calls bin/ci.sh, not a copy of its steps"
 rm -rf "$t"
+# the gate must never read standard input. With nullglob an empty file list
+# turns a grep into one that reads stdin, and a nested run - which is exactly
+# what this suite does - then waits for a human who is not there. The probe
+# gives it a pipe that stays open, the way a real caller does.
+p="$(mktemp -d)"; mkdir -p "$p/bin"; cp "$ROOT/bin/ci.sh" "$p/bin/ci.sh"
+( sleep 20 | { FM_ROOT="$p" bash "$p/bin/ci.sh" >/dev/null 2>&1; touch "$p/done"; } ) &
+for _ in $(seq 1 30); do [ -f "$p/done" ] && break; sleep 0.2; done
+assert_ok "test -f '$p/done'" "the gate finishes with an open pipe on its input"
+pkill -f "$p/bin/ci.sh" 2>/dev/null
+rm -rf "$p"
+
 finish

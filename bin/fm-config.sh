@@ -33,3 +33,36 @@ fm_cfg_list() { # fm_cfg_list <section> [file]
   sed -n "/^$1:/,/^[^[:space:]#-]/p" "$f" \
     | sed -n 's/^[[:space:]]*-[[:space:]]*//p' | _fm_clean
 }
+
+# The order vendors are tried in, and the running of that order. Both the
+# worker and the reviewer need it and they must behave identically, so it
+# lives here once rather than as a loop in each.
+#
+# fm_vendor_chain [role] [explicit]
+#   An explicit --vendor is the whole chain: the caller asked for that engine,
+#   not for whatever the config would fall back to.
+fm_vendor_chain() {
+  local role="${1:-}" explicit="${2:-}" head=''
+  if [ -n "$explicit" ]; then printf '%s\n' "$explicit"; return 0; fi
+  [ -n "$role" ] && head="$(fm_cfg_in "$role" vendor)"
+  [ -n "$head" ] || head="$(fm_cfg vendor)"
+  [ -n "$head" ] || head=mock
+  printf '%s\n' "$head"
+  fm_cfg_list fallback | grep -vxF "$head" || true
+}
+
+# fm_run_chain <adapters-dir> <chain> <prompt> <tree> <log>
+#   Returns the adapter's own exit code, or 2 if every vendor was unavailable.
+#   Sets FM_VENDOR_USED and FM_VENDOR_SKIPPED so the caller can say what it did.
+# shellcheck disable=SC2034  # both are read by the callers, not here
+fm_run_chain() {
+  local dir="$1" chain="$2" prompt="$3" tree="$4" log="$5" v rc=2
+  FM_VENDOR_USED=''; FM_VENDOR_SKIPPED=''
+  for v in $chain; do
+    [ -x "$dir/$v.sh" ] || continue
+    "$dir/$v.sh" run "$prompt" "$tree" "$log"; rc=$?
+    if [ "$rc" = 2 ]; then FM_VENDOR_SKIPPED="${FM_VENDOR_SKIPPED:+$FM_VENDOR_SKIPPED }$v"; continue; fi
+    FM_VENDOR_USED="$v"; return "$rc"
+  done
+  return "$rc"
+}

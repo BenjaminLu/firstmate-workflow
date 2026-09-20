@@ -9,6 +9,11 @@ set -uo pipefail
 ROOT="${FM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT" || exit 2
 shopt -s nullglob
+# nothing here may read stdin. With nullglob an empty file list turns a grep
+# into one that reads standard input, and the whole gate stops dead waiting
+# for a human who is not there - the same way fm-run's advance loop once ate
+# its own input.
+exec < /dev/null
 
 fail=0
 bold=''; dim=''; red=''; green=''; off=''
@@ -47,8 +52,12 @@ stage "test hygiene"
 # an assertion that greps a source file is satisfied by a comment unless it
 # filters them out. This has been written three times now; the machine checks
 # it from here on.
-bad=$(grep -nE 'assert_(ok|fail) "grep [^|]*\$(ROOT|[A-Za-z_]*ROOT)[^|]*"' tests/*.test.sh 2>/dev/null \
-      | grep -v 'grep -v' || true)
+suitefiles=(tests/*.test.sh)
+bad=''
+if [ ${#suitefiles[@]} -gt 0 ]; then
+  bad=$(grep -nE 'assert_(ok|fail) "grep [^|]*\$(ROOT|[A-Za-z_]*ROOT)[^|]*"' "${suitefiles[@]}" 2>/dev/null \
+        | grep -v 'grep -v' || true)
+fi
 if [ -n "$bad" ]; then
   flunk "an assertion greps source without excluding comments"
   printf '%s\n' "$bad"

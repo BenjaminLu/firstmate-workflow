@@ -33,6 +33,9 @@ const STAGE: Record<string, string> = {
   dispatched: "working", commit_pushed: "working", pr_opened: "review",
   gate_failed: "gate", gate_passed: "review", review_opened: "review",
   approved: "captain", merged: "merged", closed: "closed",
+  // a task whose review never happened, or whose worker died, is blocked -
+  // it must not sit in a lane that says work is under way
+  review_failed: "gate", worker_crashed: "gate",
 };
 
 const state = () => {

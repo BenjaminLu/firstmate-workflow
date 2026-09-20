@@ -29,8 +29,6 @@ done
 cd "$REPO" || { echo "fm-review: no repo at $REPO" >&2; exit 64; }
 
 emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor reviewer-1 --task "$TASK" "$@" >/dev/null 2>&1 || true; }
-cfg()  { fm_cfg "$1"; }
-rcfg() { fm_cfg_in reviewer "$1"; }
 
 spec="$(jq -r --arg t "$TASK" '.tasks[]|select(.id==$t)' design/tasks.json 2>/dev/null)"
 [ -n "$spec" ] || { echo "fm-review: no task $TASK" >&2; exit 65; }
@@ -47,19 +45,32 @@ prompt="$work/prompt.md"
   printf '```\n'
 } > "$prompt"
 
-# the reviewer runs on its own engine when config.yaml names one
-v="${VENDOR:-$(rcfg vendor)}"; [ -n "$v" ] || v="$(cfg vendor)"; [ -n "$v" ] || v=mock
-a="$REPO/bin/adapters/$v.sh"
-[ -x "$a" ] || { echo "fm-review: no adapter $v" >&2; rm -rf "$work"; exit 65; }
-
+# the reviewer runs on its own engine when config.yaml names one, and falls
+# back exactly the way the worker does - one chain, one runner
 emit --type review_opened --en "round $ROUND on $TASK" --tw "$TASK 第 $ROUND 輪審核"
 mkdir -p "$work/out"
-"$a" run "$prompt" "$work/out" "$work/log"; rc=$?
-[ "$rc" = "2" ] && { echo "fm-review: $v unavailable" >&2; rm -rf "$work"; exit 2; }
+fm_run_chain "$REPO/bin/adapters" "$(fm_vendor_chain reviewer "$VENDOR")" \
+  "$prompt" "$work/out" "$work/log"; rc=$?
+for v in $FM_VENDOR_SKIPPED; do
+  emit --type vendor_unavailable --en "$v unavailable, trying the next" \
+       --tw "$v 不可用，換下一家"
+done
+if [ "$rc" = "2" ]; then
+  echo "fm-review: every reviewer vendor was unavailable" >&2; rm -rf "$work"; exit 2
+fi
 
 verdict="$(cat "$work/out"/* 2>/dev/null)"
 [ -n "$verdict" ] || verdict="$(cat "$work/log" 2>/dev/null)"
-if [ -n "$PR" ] && [ -n "$verdict" ]; then
+# a review that did not happen must never look like one that did. An empty
+# verdict used to reach the pull request as the adapter's own log, and gate 7
+# would then be reading a stack trace for a signature.
+if [ "$rc" != "0" ] || [ -z "$verdict" ]; then
+  echo "fm-review: ${FM_VENDOR_USED:-the reviewer} produced no review (exit $rc)" >&2
+  emit --type review_failed --en "review round $ROUND produced nothing" \
+       --tw "第 $ROUND 輪審核沒有產出"
+  rm -rf "$work"; exit 3
+fi
+if [ -n "$PR" ]; then
   $GH pr comment "$PR" --body "$verdict" >/dev/null 2>&1 || true
 fi
 case "$verdict" in

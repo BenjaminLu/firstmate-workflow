@@ -19,6 +19,7 @@ make_sandbox() {
 
 for adapter in "$ROOT"/bin/adapters/*.sh; do
   name="$(basename "$adapter" .sh)"
+  case "$name" in _*) continue ;; esac   # shared library, not an adapter
   printf '  %s\n' "$name"
 
   assert_ok "test -x '$adapter'" "$name is executable"
@@ -45,6 +46,33 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     # starts and 127 gets mistaken for a contract failure
     PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
     assert_eq "2" "$?" "$name exits 2 when its CLI is missing"
+  fi
+
+  # a vendor that prints an auth error and exits 0 is unavailable, not done.
+  # Every vendor can do this, so every adapter is asked.
+  if [ "$name" != "mock" ]; then
+    vendor_says() {  # <stdout> <exit code>
+      printf '#!/usr/bin/env bash\nprintf "%%s\\n" %s\nexit %s\n' "$(printf '%q' "$1")" "$2" \
+        > "$d/fakebin/$name"
+      chmod +x "$d/fakebin/$name"
+    }
+    for line in "Error: Authentication required. Please run 'agent login' first" \
+                "You are not logged in." \
+                "Error: quota exceeded for this organisation" \
+                "fetch failed: ENOTFOUND api.example.com" \
+                "Authentication required." \
+                "401 Unauthorized"; do
+      vendor_says "$line" 0
+      PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+      assert_eq "2" "$?" "$name reports unavailable when the CLI says: ${line%% *}..."
+    done
+    vendor_says "" 0
+    PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+    assert_eq "1" "$?" "$name does not call a silent run a success"
+    vendor_says "wrote the thing" 0
+    PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+    assert_eq "0" "$?" "$name still reports success when the CLI does the work"
+    rm -f "$d/fakebin/$name"
   fi
 
   assert_eq "" "$(cat "$d/calls")" "$name ran no git and no gh"

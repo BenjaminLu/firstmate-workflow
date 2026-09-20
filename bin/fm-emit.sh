@@ -15,7 +15,7 @@ LOG="$ROOT/state/events.jsonl"
 LOCK="$ROOT/state/.events.lock"
 
 TYPES="greenlit dispatched commit_pushed pr_opened gate_passed gate_failed \
-review_opened ask_pass_criteria criteria_returned protocol_violation approved \
+review_opened review_failed ask_pass_criteria criteria_returned protocol_violation approved \
 merged closed decision_requested decision_made worker_crashed vendor_unavailable"
 
 die() { printf 'fm-emit: %s\n' "$1" >&2; exit 1; }

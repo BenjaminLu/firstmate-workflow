@@ -34,6 +34,18 @@ assert_eq "working" "$(jq -r '.tasks[]|select(.id=="T-A")|.stage' <<<"$s")" "a d
 assert_eq "queued"  "$(jq -r '.tasks[]|select(.id=="T-B")|.stage' <<<"$s")" "an untouched task reads as queued"
 assert_eq "1" "$(jq -r .counts.inflight <<<"$s")" "the counts follow the log"
 
+# a task whose review never happened, or whose worker died, must not keep
+# reading as work in progress
+for pair in review_failed worker_crashed; do
+  FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-A --type "$pair" \
+    --en "stuck" --tw "卡住" >/dev/null
+  s2="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+  assert_eq "gate" "$(jq -r '.tasks[]|select(.id=="T-A")|.stage' <<<"$s2")" \
+    "$pair leaves the task blocked, not working"
+done
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-A --type dispatched \
+  --en "picked up again" --tw "再領一次" >/dev/null
+
 page="$(curl -sf "http://127.0.0.1:$PORT/")"
 assert_contains "$page" "Captain" "the page is served"
 assert_contains "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/../../etc/passwd")" "40" \

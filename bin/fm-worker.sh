@@ -27,8 +27,6 @@ NAME="${NAME:-worker-$$}"
 EMIT="$REPO/bin/fm-emit.sh"
 emit() { FM_ROOT="$REPO" "$EMIT" --actor "$NAME" --task "$TASK" "$@" >/dev/null 2>&1 || true; }
 
-cfg() { fm_cfg "$1"; }
-fallbacks() { fm_cfg_list fallback; }
 
 spec="$(jq -r --arg t "$TASK" '.tasks[]|select(.id==$t)' design/tasks.json 2>/dev/null)"
 [ -n "$spec" ] || { echo "fm-worker: no task $TASK in design/tasks.json" >&2; exit 65; }
@@ -57,19 +55,13 @@ prompt="$tree/.fm-prompt.md"
 
 # --- the adapter, with fallback only on a vendor being unavailable -------
 log="$REPO/state/worktrees/$TASK.log"; : > "$log"
-vendors="${VENDOR:-$(cfg vendor)}"
-[ -n "$vendors" ] || vendors=mock
-for v in $vendors $( [ -n "$VENDOR" ] || fallbacks ); do
-  a="$REPO/bin/adapters/$v.sh"
-  [ -x "$a" ] || continue
-  "$a" run "$prompt" "$tree" "$log"; rc=$?
-  case "$rc" in
-    2) emit --type vendor_unavailable --en "$v unavailable, trying the next" \
-            --tw "$v 不可用，換下一家"; continue ;;
-    *) break ;;
-  esac
+fm_run_chain "$REPO/bin/adapters" "$(fm_vendor_chain worker "$VENDOR")" \
+  "$prompt" "$tree" "$log"; rc=$?
+for v in $FM_VENDOR_SKIPPED; do
+  emit --type vendor_unavailable --en "$v unavailable, trying the next" \
+       --tw "$v 不可用，換下一家"
 done
-[ "${rc:-2}" = "2" ] && { echo "fm-worker: every vendor was unavailable" >&2; exit 2; }
+[ "$rc" = "2" ] && { echo "fm-worker: every vendor was unavailable" >&2; exit 2; }
 
 rm -f "$prompt"
 if [ -z "$(git -C "$tree" status --porcelain)" ]; then

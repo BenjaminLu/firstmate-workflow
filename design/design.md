@@ -190,6 +190,19 @@ Only `2` triggers the fallback list in `config.yaml`; `1` proceeds to the gates
 and the reviewer like any other attempt. Every adapter passes
 `tests/adapter-contract.test.sh`.
 
+**The exit code is not the verdict.** A vendor can print `Authentication
+required` and exit `0` — `cursor-agent` does. So what the run *said* decides
+first, and one function decides it for every adapter (`bin/adapters/_lib.sh`):
+an unavailability signature in the run's own output is a `2` whatever the exit
+code was; exit `0` having said nothing at all is a `1`. Because the fallback
+chain appends to one log, a verdict only reads the bytes its own run added.
+
+`fm_vendor_chain` builds the order and `fm_run_chain` runs it, both in
+`bin/fm-config.sh`, so the worker and the reviewer fall back identically and a
+reviewer whose engine is down is not simply a reviewer who never ran. A round
+that produced no review exits `3` and emits `review_failed`; it never reaches
+the pull request and never counts toward gate 7.
+
 ### 5.4 The pull request protocol
 
 Strings on a pull request are input to `bin/fm-gate.sh`. Wrong format means it
