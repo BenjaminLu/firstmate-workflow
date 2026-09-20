@@ -47,8 +47,9 @@ fm_vendor_chain() {
   [ -n "$role" ] && head="$(fm_cfg_in "$role" vendor)"
   [ -n "$head" ] || head="$(fm_cfg vendor)"
   [ -n "$head" ] || head=mock
+  # one run per vendor: a fallback list may name the head, or itself twice
   printf '%s\n' "$head"
-  fm_cfg_list fallback | grep -vxF "$head" || true
+  fm_cfg_list fallback | grep -vxF "$head" | awk '!seen[$0]++' || true
 }
 
 # fm_run_chain <adapters-dir> <chain> <prompt> <tree> <log>

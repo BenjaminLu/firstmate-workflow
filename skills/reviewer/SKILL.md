@@ -40,6 +40,16 @@ APPROVE:<task-id>
 Nothing else counts. Praise in prose is not an approval and the gates will not
 read it as one.
 
+When you would not defend it, say so the same way:
+
+```
+REJECT:<task-id>
+```
+
+One of the two ends every round. A round that carries neither is not a review,
+and the scripts treat it as an engine that failed rather than a verdict - the
+only way a crashed reviewer can be told apart from a damning one.
+
 ## From round three
 
 The worker will post `ASK-PASS-CRITERIA:<task-id>`. Answer with a **numbered

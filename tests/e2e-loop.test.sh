@@ -41,7 +41,10 @@ cat > bin/adapters/mock.sh <<'M'
 [ "$1" = "run" ] || exit 64
 echo "mock ran" >> "$4"
 if grep -q "Find the reason to reject" "$2"; then
-  printf '%s\n' "${FM_VERDICT:-round one: name the helper and cover the empty case}" > "$3/verdict.txt"
+  if [ -n "${FM_REVIEWER_CRASHES:-}" ]; then
+    printf 'TypeError: undefined is not a function\n' >> "$4"; exit 0
+  fi
+  printf '%s\nREJECT:T-A\n' "${FM_VERDICT:-round one: name the helper and cover the empty case}" > "$3/verdict.txt"
   exit 0
 fi
 printf 'implemented\n' > "$3/src/thing"
@@ -72,6 +75,26 @@ assert_ok "git --git-dir='$bare' rev-parse --verify '$branch'" "and it was pushe
 out2="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
 assert_contains "$out2" "sending it to review" "gates one to six pass and it goes to review"
 assert_ok "test -s '$GHSTATE/comments.$pr'" "the reviewer commented"
+
+# fm-run must not swallow a review round that produced no verdict. The
+# reviewer is stubbed rather than crashed for real, so the round counter is
+# untouched and the scenario after this point is the one it was before.
+cp "$r/bin/fm-review.sh" "$r/review.keep"
+printf '#!/usr/bin/env bash\nexit 3\n' > "$r/bin/fm-review.sh"; chmod +x "$r/bin/fm-review.sh"
+outX="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
+assert_contains "$outX" "produced no verdict" "a review round with no verdict is reported, not counted"
+printf '#!/usr/bin/env bash\nexit 2\n' > "$r/bin/fm-review.sh"; chmod +x "$r/bin/fm-review.sh"
+outY="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
+assert_contains "$outY" "no reviewer engine was available" "and so is a reviewer with no engine"
+cp "$r/review.keep" "$r/bin/fm-review.sh"; chmod +x "$r/bin/fm-review.sh"
+
+# a real review body has newlines, quotes and backslashes in it. The stub
+# used to interpolate one into JSON by hand, which put a raw control
+# character in the document, and gate 7 then read an approval sitting right
+# there as nothing at all.
+run "$GH" pr comment "$pr" --body "$(printf 'Two findings:\n1. the "helper" is unnamed\n2. a path like C:\\tmp is unhandled\nREJECT:T-A\n')" >/dev/null 2>&1
+assert_ok "run '$GH' pr view '$pr' --json comments --jq '.comments[].body' >/dev/null 2>&1" \
+  "a review body with newlines and quotes survives the round trip"
 
 # the reviewer in this fixture signs off
 printf 'reviewer-1\tAPPROVE:T-A\n' >> "$GHSTATE/comments.$pr"

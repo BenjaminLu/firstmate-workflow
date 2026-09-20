@@ -9,7 +9,7 @@
 # thinking rather than a script waiting for a human who is not there.
 set -uo pipefail
 _fm_alib="$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
-[ -f "$_fm_alib" ] || { echo "claude: missing $_fm_alib" >&2; exit 70; }
+[ -r "$_fm_alib" ] || { echo "claude: missing $_fm_alib" >&2; exit 70; }
 # shellcheck source=bin/adapters/_lib.sh
 . "$_fm_alib"
 [ "${1-}" = "run" ] || { echo "usage: claude.sh run <prompt> <worktree> <log>" >&2; exit 64; }

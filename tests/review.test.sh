@@ -82,6 +82,7 @@ d="$(fixture)"; r="$d/repo"; GH="$(ghstub "$d")"
 cat > "$r/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
+printf 'TypeError: cannot read properties of undefined\n  at review.js:12\n' >> "$4"
 exit 0
 M
 chmod +x "$r/bin/adapters/mock.sh"
@@ -89,6 +90,9 @@ out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch 
 rc=$?
 assert_eq "3" "$rc" "a silent reviewer is a failed round, not a passed one"
 assert_contains "$out" "produced no review" "it says what went wrong"
+assert_contains "$(cat "$r/state/reviews/T-Z-r1.log" 2>/dev/null)" "TypeError" \
+  "and keeps what the engine actually said instead of deleting it"
+assert_contains "$out" "state/reviews/T-Z-r1.log" "and says where to read it"
 assert_fail "grep -q 'pr comment' '$d/ghcalls'" "nothing was posted to the pull request"
 types="$(jq -r .type "$r/state/events.jsonl")"
 assert_contains "$types" "review_failed" "it emitted review_failed"
@@ -99,7 +103,7 @@ printf 'vendor: mock\nreviewer:\n  vendor: nosuchvendor\nfallback:\n  - mock\n' 
 cat > "$r/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
-printf 'the fallback reviewed it\n' > "$3/verdict.txt"
+printf 'the fallback reviewed it\nREJECT:T-Z\n' > "$3/verdict.txt"
 exit 0
 M
 chmod +x "$r/bin/adapters/mock.sh"
@@ -112,13 +116,36 @@ assert_contains "$out" "the fallback reviewed it" "and the fallback's verdict is
 cat > "$r/bin/adapters/other.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
-printf 'reviewed by the other engine\n' > "$3/verdict.txt"
+printf 'reviewed by the other engine\nREJECT:T-Z\n' > "$3/verdict.txt"
 exit 0
 M
 chmod +x "$r/bin/adapters/other.sh"
 printf 'vendor: mock\nreviewer:\n  vendor: other\nfallback:\n  - mock\n' > "$r/config.yaml"
 out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
 assert_contains "$out" "reviewed by the other engine" "the reviewer block picks the engine"
+
+# a round that ends in neither marker is an engine that failed, not a verdict
+cat > "$r/bin/adapters/other.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'This looks broadly fine to me, nice work.\n' > "$3/verdict.txt"
+exit 0
+M
+chmod +x "$r/bin/adapters/other.sh"
+out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 2 --pr 9 2>&1)"
+assert_eq "3" "$?" "prose with neither marker is not a review"
+assert_contains "$(cat "$r/state/reviews/T-Z-r2.log" 2>/dev/null)" "" "its log is kept too"
+
+cat > "$r/bin/adapters/other.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'Three findings, all one class.\nREJECT:T-Z\n' > "$3/verdict.txt"
+exit 0
+M
+chmod +x "$r/bin/adapters/other.sh"
+out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --round 3 --pr 9 2>&1)"
+assert_eq "0" "$?" "a signed rejection is a completed round"
+assert_contains "$out" "REJECT:T-Z" "and the rejection is the verdict"
 assert_fail "printf '%s' \"$out\" | grep -q 'the fallback reviewed it'" "and the worker's engine is not used"
 
 rm -rf "$d"

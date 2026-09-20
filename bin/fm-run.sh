@@ -63,7 +63,16 @@ turn() {
       say "$task: all seven gates green, asking the captain ($id)"
     elif [ "$g" -eq 7 ]; then
       say "$task: gates 1-6 green, sending it to review (round $round)"
-      "$B/fm-review.sh" --task "$task" --branch "$branch" --pr "$pr" --round "$round" --repo "$REPO" >/dev/null 2>&1 </dev/null || true
+      # exit 3 is a round that produced no verdict. Swallowing it would let
+      # a crashed engine read as a review that simply did not sign.
+      "$B/fm-review.sh" --task "$task" --branch "$branch" --pr "$pr" \
+        --round "$round" --repo "$REPO" >/dev/null 2>&1 </dev/null
+      case "$?" in
+        0) ;;
+        2) say "$task: no reviewer engine was available, leaving it for the next turn" ;;
+        3) say "$task: the reviewer produced no verdict (state/reviews/$task-r$round.log)" ;;
+        *) say "$task: the review round failed" ;;
+      esac
     else
       say "$task: stopped at gate $g"
     fi

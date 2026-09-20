@@ -31,11 +31,49 @@ rm -rf "$t"
 # turns a grep into one that reads stdin, and a nested run - which is exactly
 # what this suite does - then waits for a human who is not there. The probe
 # gives it a pipe that stays open, the way a real caller does.
+# Two ways in, so neither fix ships untested: a tree with no tests at all
+# (nullglob leaves the lint's grep with no file list) and a tree whose suite
+# reads stdin itself. The budget is derived from the work - a full gate run
+# with a timing margin - not from a number that felt long enough.
+probe_gate() { # <fixture-dir> <label>
+  local p="$1" label="$2" pid deadline
+  ( sleep 60 | { FM_ROOT="$p" bash "$p/bin/ci.sh" >/dev/null 2>&1; touch "$p/done"; } ) &
+  pid=$!
+  deadline=$(( $(date +%s) + 90 ))
+  while [ ! -f "$p/done" ] && [ "$(date +%s)" -lt "$deadline" ]; do sleep 0.3; done
+  assert_ok "test -f '$p/done'" "$label"
+  kill -9 "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+}
 p="$(mktemp -d)"; mkdir -p "$p/bin"; cp "$ROOT/bin/ci.sh" "$p/bin/ci.sh"
-( sleep 20 | { FM_ROOT="$p" bash "$p/bin/ci.sh" >/dev/null 2>&1; touch "$p/done"; } ) &
-for _ in $(seq 1 30); do [ -f "$p/done" ] && break; sleep 0.2; done
-assert_ok "test -f '$p/done'" "the gate finishes with an open pipe on its input"
-pkill -f "$p/bin/ci.sh" 2>/dev/null
+probe_gate "$p" "the gate finishes on a tree with no tests at all"
+mkdir -p "$p/tests"
+printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n' > "$p/tests/reads-stdin.test.sh"
+rm -f "$p/done"
+probe_gate "$p" "the gate finishes when a suite reads standard input"
+
+# The two fixes are each sufficient to survive those probes, so neither is
+# proved by them. This asserts the invariant itself: whatever the gate is
+# started with, what reaches a suite is /dev/null.
+# a pipe answers -p, /dev/null answers -c: enough to tell the caller's
+# input from the one the gate is required to hand over
+printf '#!/usr/bin/env bash\nif [ -p /dev/fd/0 ]; then echo pipe; elif [ -c /dev/fd/0 ]; then echo chardev; else echo other; fi > "%s/sawstdin"\nexit 0\n' \
+  "$p" > "$p/tests/reads-stdin.test.sh"
+( sleep 60 | FM_ROOT="$p" bash "$p/bin/ci.sh" >/dev/null 2>&1 ) &
+gp=$!
+for _ in $(seq 1 200); do [ -s "$p/sawstdin" ] && break; sleep 0.3; done
+assert_eq "chardev" "$(cat "$p/sawstdin" 2>/dev/null)" "a suite is handed /dev/null, not the caller's pipe"
+kill -9 "$gp" 2>/dev/null; wait "$gp" 2>/dev/null
+
+# and the hygiene lint must be linting something: with nullglob an empty file
+# list turns its grep into one that reads /dev/null and passes every time
+# assembled at run time: written out whole, this line is itself the
+# violation, and the lint would flag this suite for carrying its own fixture
+{ printf '#!/usr/bin/env bash\n'
+  printf 'assert_%s "%s -q x $%s/bin/ci.sh" "planted"\n' ok grep ROOT
+} > "$p/tests/planted.test.sh"
+out="$(FM_ROOT="$p" bash "$p/bin/ci.sh" 2>&1)"
+assert_contains "$out" "greps source without excluding comments" "the hygiene lint reads the suites it is given"
 rm -rf "$p"
 
 finish

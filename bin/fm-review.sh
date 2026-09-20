@@ -56,7 +56,11 @@ for v in $FM_VENDOR_SKIPPED; do
        --tw "$v 不可用，換下一家"
 done
 if [ "$rc" = "2" ]; then
-  echo "fm-review: every reviewer vendor was unavailable" >&2; rm -rf "$work"; exit 2
+  kept="$REPO/state/reviews/$TASK-r$ROUND.log"
+  mkdir -p "$(dirname "$kept")"
+  cp "$work/log" "$kept" 2>/dev/null || true
+  echo "fm-review: every reviewer vendor was unavailable; their log is at $kept" >&2
+  rm -rf "$work"; exit 2
 fi
 
 verdict="$(cat "$work/out"/* 2>/dev/null)"
@@ -64,8 +68,19 @@ verdict="$(cat "$work/out"/* 2>/dev/null)"
 # a review that did not happen must never look like one that did. An empty
 # verdict used to reach the pull request as the adapter's own log, and gate 7
 # would then be reading a stack trace for a signature.
-if [ "$rc" != "0" ] || [ -z "$verdict" ]; then
-  echo "fm-review: ${FM_VENDOR_USED:-the reviewer} produced no review (exit $rc)" >&2
+# A verdict has to be one of the two markers. Without that rule a crashed
+# engine's stack trace on stdout is indistinguishable from a review, because
+# a real reviewer's verdict IS its stdout.
+signed=0
+case "$verdict" in *"APPROVE:$TASK"*|*"REJECT:$TASK"*) signed=1 ;; esac
+if [ "$rc" != "0" ] || [ -z "$verdict" ] || [ "$signed" = "0" ]; then
+  # the adapter log is the only record of what the engine actually said, and
+  # the failure path is exactly when someone needs to read it. Only the
+  # success path may discard.
+  kept="$REPO/state/reviews/$TASK-r$ROUND.log"
+  mkdir -p "$(dirname "$kept")"
+  cp "$work/log" "$kept" 2>/dev/null || true
+  echo "fm-review: ${FM_VENDOR_USED:-the reviewer} produced no review (exit $rc, signed $signed); its log is at $kept" >&2
   emit --type review_failed --en "review round $ROUND produced nothing" \
        --tw "第 $ROUND 輪審核沒有產出"
   rm -rf "$work"; exit 3

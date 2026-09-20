@@ -9,7 +9,7 @@
 # thinking rather than a script waiting for a human who is not there.
 set -uo pipefail
 _fm_alib="$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
-[ -f "$_fm_alib" ] || { echo "codex: missing $_fm_alib" >&2; exit 70; }
+[ -r "$_fm_alib" ] || { echo "codex: missing $_fm_alib" >&2; exit 70; }
 # shellcheck source=bin/adapters/_lib.sh
 . "$_fm_alib"
 [ "${1-}" = "run" ] || { echo "usage: codex.sh run <prompt> <worktree> <log>" >&2; exit 64; }
@@ -22,6 +22,8 @@ command -v codex >/dev/null 2>&1 || {
   echo "codex: codex is not installed - vendor unavailable" | tee -a "$log" >&2; exit 2; }
 
 off="$(fm_adapter_mark "$log")"
+# the trailing "-" is codex's read-the-prompt-from-stdin marker and has to
+# be the last argument, so FM_ADAPTER_ARGS goes before it
 ( cd "$tree" && codex exec --skip-git-repo-check ${FM_ADAPTER_ARGS:-} - < "$prompt" ) >> "$log" 2>&1
 rc=$?
 fm_adapter_verdict "$rc" "$log" "$off"

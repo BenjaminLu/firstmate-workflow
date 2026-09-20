@@ -42,6 +42,10 @@ for pair in review_failed worker_crashed; do
   s2="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
   assert_eq "gate" "$(jq -r '.tasks[]|select(.id=="T-A")|.stage' <<<"$s2")" \
     "$pair leaves the task blocked, not working"
+  # the stage is what the lane shows; inflight is the number a human reads to
+  # decide whether anything is moving, and it is the one that must not lie
+  assert_eq "0" "$(jq -r .counts.inflight <<<"$s2")" "$pair stops counting as in flight"
+  assert_eq "1" "$(jq -r .counts.blocked <<<"$s2")" "$pair counts as blocked"
 done
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-A --type dispatched \
   --en "picked up again" --tw "再領一次" >/dev/null
@@ -73,4 +77,17 @@ assert_fail "sed 's|//.*||' '$ROOT/board/server.ts' | grep -qF '0.0.0.0'" \
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null || true
 rm -rf "$d"
+
+# the event types the board maps and the types fm-emit will write are two
+# halves of one list. T-010's rule - shared things have one source - applies
+# to these as much as to the ship's geometry.
+mapped="$(sed -n '/^const STAGE/,/^};/p' "$ROOT/board/server.ts" \
+  | grep -oE '[a-z_]+:' | tr -d ':' | sort -u)"
+known="$(sed -n '/^TYPES=/,/"$/p' "$ROOT/bin/fm-emit.sh" | tr ' \\"' '\n\n\n' | grep -E '^[a-z_]+$' | sort -u)"
+unknown=''
+for t in $mapped; do
+  printf '%s\n' "$known" | grep -qxF "$t" || unknown="$unknown $t"
+done
+assert_eq "" "$unknown" "every stage the board maps is a type fm-emit will write"
+
 finish

@@ -64,12 +64,13 @@ fallback:
   - claude
   - codex
   - mock
+  - codex
 YAML
 ( cd "$d" && . "$ROOT/bin/fm-config.sh"
   printf '%s' "$(fm_vendor_chain)" ) > "$d/worker.chain"
 assert_eq "claude
 codex
-mock" "$(cat "$d/worker.chain")" "the worker leads with its vendor and never repeats it"
+mock" "$(cat "$d/worker.chain")" "the worker leads with its vendor and no vendor runs twice"
 
 ( cd "$d" && . "$ROOT/bin/fm-config.sh"
   printf '%s' "$(fm_vendor_chain reviewer)" ) > "$d/rev.chain"
