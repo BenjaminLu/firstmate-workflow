@@ -1,0 +1,50 @@
+# zh-TW to zh-CN. Script first, then the terms that differ between the two
+# technical vocabularies. The reverse is deliberately absent: 程序 is both
+# "program" and "procedure" in zh-CN and cannot be mapped back.
+# Longest match wins, so multi-character terms come before single characters.
+程式碼	代码
+程式	程序
+函式	函数
+相依	依赖
+佇列	队列
+唯讀	只读
+檔案	文件
+資料夾	文件夹
+伺服器	服务器
+執行緒	线程
+記憶體	内存
+快取	缓存
+介面	接口
+物件	对象
+陣列	数组
+迴圈	循环
+變數	变量
+編譯	编译
+除錯	调试
+部署	部署
+測試	测试
+分支	分支
+合併	合并
+衝突	冲突
+提交	提交
+版本	版本
+閘門	闸门
+審核	审核
+船長	船长
+船員	船员
+拍板	拍板
+成案	立项
+已合併	已合并
+進行中	进行中
+受阻	受阻
+排隊	排队
+施工	施工
+日誌	日志
+待決	待决
+擱著	搁着
+退回	退回
+乾淨	干净
+範圍	范围
+簽	签
+開啟	打开
+看板	看板

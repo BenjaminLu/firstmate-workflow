@@ -52,6 +52,10 @@ section>h2{margin:0 0 10px;font:600 10.5px var(--mono);color:var(--fg3);
 .log .k-approved{color:var(--ok)} .log .k-decision_requested{color:var(--wait)}
 .log .k-greenlit{color:var(--brass)} .log .k-vendor_unavailable{color:var(--warn)}
 .empty{color:var(--fg3);font-size:12px;padding:10px 13px}
+.langs{display:flex;border:1px solid var(--line);border-radius:7px;overflow:hidden;margin-left:12px}
+.langs button{padding:4px 11px;font:12px var(--sans);color:var(--fg2);background:none;border:none;cursor:pointer}
+.langs button+button{border-left:1px solid var(--line)}
+.langs button[aria-pressed=true]{background:#1d4b7a;color:#fff}
 #pcount{background:var(--wait);color:#1a0d28;border-radius:99px;font:800 10px var(--mono);padding:1px 7px}
 .dcard{background:var(--bg2);border:1px solid #3a2a52;border-radius:12px;padding:16px 18px;margin-bottom:10px}
 .dcard h3{margin:0 0 4px;font-size:17px;line-height:1.35}
@@ -73,43 +77,67 @@ section>h2{margin:0 0 10px;font:600 10.5px var(--mono);color:var(--fg3);
 <body>
 <div class="top">
   <span class="dot" id="live"></span>
-  <b>Captain's Board<small id="root">firstmate-workflow</small></b>
+  <b id="h-brand"></b>
   <span class="spacer"></span>
   <span id="gl" style="font:600 11px var(--mono);color:var(--brass)"></span>
+  <span class="langs" id="langs"></span>
 </div>
 <div class="counts" id="counts"></div>
 <section id="deckwrap" style="padding:0 20px" hidden>
   <h2 style="margin:16px 0 10px;font:600 10.5px var(--mono);color:var(--fg3);text-transform:uppercase;letter-spacing:.1em">
-    Awaiting your call <span id="pcount"></span></h2>
+    <span id="awaiting"></span> <span id="pcount"></span></h2>
   <div id="deck"></div>
 </section>
 <main>
   <section>
-    <h2>The fleet</h2>
+    <h2 id="h-fleet"></h2>
     <div class="lanes" id="lanes"></div>
   </section>
   <section>
-    <h2>Live log</h2>
+    <h2 id="h-log"></h2>
     <div class="log"><ul id="log"></ul></div>
   </section>
 </main>
 <script>
-const LANES = [["queued","Queued"],["working","Working"],["gate","Gate"],
-               ["review","Review"],["captain","Captain"],["merged","Merged"]];
-const GATES = ["branch has commits","rebases onto main","ci.sh exits 0",
-  "diff inside scope","reverting turns tests red","required check green","reviewer signed"];
+const LANES = [["queued","laneQueued"],["working","laneWorking"],["gate","laneGate"],
+               ["review","laneReview"],["captain","laneCaptain"],["merged","laneMerged"]];
+// every string the reader sees comes from the dictionary; zh-CN is derived
+// from zh-TW by the table, so there is no third file to keep in step
+const LANGS = ["en", "zh-TW", "zh-CN"], LANGNAME = { "en": "EN", "zh-TW": "\u7e41", "zh-CN": "\u7b80" };
+let lang = localStorage.getItem("board.lang") ||
+  new URLSearchParams(location.search).get("lang") || "zh-TW";
+if (!LANGS.includes(lang)) lang = "zh-TW";
+let DICT = { en: {}, "zh-TW": {}, tw2cn: [] };
+const cn = (x) => DICT.tw2cn.reduce((acc, pair) => acc.split(pair[0]).join(pair[1]), x);
+const t = (k) => lang === "zh-CN" ? cn(DICT["zh-TW"][k] ?? DICT.en[k] ?? k)
+                                  : (DICT[lang] && DICT[lang][k]) || DICT.en[k] || k;
+const GATES = () => [1,2,3,4,5,6,7].map(n => t("gate" + n));
 const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 
+function chrome() {
+  document.getElementById("h-brand").innerHTML =
+    esc(t("brand")) + "<small>" + esc(t("sub")) + "</small>";
+  document.getElementById("awaiting").textContent = t("awaiting");
+  document.getElementById("h-fleet").textContent = t("fleet");
+  document.getElementById("h-log").textContent = t("log");
+  document.getElementById("langs").innerHTML = LANGS.map(l =>
+    `<button aria-pressed="${l === lang}" data-l="${l}">${LANGNAME[l]}</button>`).join("");
+  document.getElementById("langs").querySelectorAll("button").forEach(b =>
+    b.onclick = () => { lang = b.dataset.l; localStorage.setItem("board.lang", lang);
+      document.documentElement.lang = lang; chrome();
+      fetch("/api/state").then(x => x.json()).then(render).catch(() => {}); });
+}
+
 function render(s) {
-  document.getElementById("gl").textContent = s.greenlit ? "green-lit" : "not green-lit";
+  document.getElementById("gl").textContent = s.greenlit ? t("greenlit") : t("notGreenlit");
   document.getElementById("counts").innerHTML = [
-    ["merged", s.counts.merged, ""], ["in flight", s.counts.inflight, ""],
-    ["blocked", s.counts.blocked, "x"], ["queued", s.counts.queued, ""],
+    [t("merged"), s.counts.merged, ""], [t("inflight"), s.counts.inflight, ""],
+    [t("blocked"), s.counts.blocked, "x"], [t("queued"), s.counts.queued, ""],
   ].map(([l, n, c]) => `<div class="${c}"><b>${n}</b><span>${l}</span></div>`).join("");
 
   document.getElementById("lanes").innerHTML = LANES.map(([k, label]) => {
     const items = s.tasks.filter(t => t.stage === k);
-    return `<div class="lane"><h3>${label}<i>${items.length}</i></h3>` +
+    return `<div class="lane"><h3>${t(label)}<i>${items.length}</i></h3>` +
       items.map(t => `<div class="card s-${k}"><span class="id">${esc(t.id)}</span>` +
         (t.pr ? ` <span class="pr">#${t.pr}</span>` : "") +
         `<div class="t">${esc(t.title)}</div></div>`).join("") + `</div>`;
@@ -124,14 +152,14 @@ function render(s) {
     const gates = (d.gates || []).length ? d.gates : [1,1,1,1,1,1,0];
     return `<div class="dcard"><div class="meta">${esc(d.id)} · ${esc(d.task || "")}` +
       (d.pr ? ` · <a href="https://github.com/BenjaminLu/firstmate-workflow/pull/${d.pr}" target="_blank" rel="noreferrer">#${d.pr}</a>` : "") +
-      `</div><h3>${esc(d.title || "a decision is waiting")}</h3>` +
+      `</div><h3>${esc(d.title || t("waiting"))}</h3>` +
       (d.kind === "merge"
-        ? `<ul class="gates">${GATES.map((g,i)=>`<li class="${gates[i]?"y":"n"}"><i>${gates[i]?"&#10003;":"&#8211;"}</i>${i+1}. ${g}</li>`).join("")}</ul>`
+        ? `<ul class="gates">${GATES().map((g,i)=>`<li class="${gates[i]?"y":"n"}"><i>${gates[i]?"&#10003;":"&#8211;"}</i>${i+1}. ${g}</li>`).join("")}</ul>`
         : "") +
       `<div class="acts">
-         <button class="go"  data-id="${esc(d.id)}" data-c="A">${d.kind==="merge"?"Merge into main":"Choose A"}</button>
-         <button class="alt" data-id="${esc(d.id)}" data-c="B">Send it back</button>
-         <button class="alt" data-id="${esc(d.id)}" data-c="C">Hold</button>
+         <button class="go"  data-id="${esc(d.id)}" data-c="A">${d.kind==="merge"?esc(t("mergeInto")):esc(t("chooseA"))}</button>
+         <button class="alt" data-id="${esc(d.id)}" data-c="B">${esc(t("sendBack"))}</button>
+         <button class="alt" data-id="${esc(d.id)}" data-c="C">${esc(t("hold"))}</button>
          <span class="said" id="said-${esc(d.id)}"></span>
        </div></div>`;
   }).join("");
@@ -143,18 +171,18 @@ function render(s) {
     const text = (e.summary && (e.summary.en || e.summary["zh-TW"])) || e.type;
     return `<li><time>${esc(t)}</time><span class="who">${esc(e.actor)}</span>` +
       `<span class="k-${esc(e.type)}">${esc(text)}</span></li>`;
-  }).join("") : `<li class="empty">nothing in the log yet</li>`;
+  }).join("") : `<li class="empty">${esc(t("nothingYet"))}</li>`;
 }
 
 async function answer(id, chosen) {
   const said = document.getElementById("said-" + id);
-  if (said) said.textContent = "sending...";
+  if (said) said.textContent = t("sending");
   const r = await fetch("/decisions", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ id, chosen }),
-  }).then(x => x.json()).catch(() => ({ error: "unreachable" }));
+  }).then(x => x.json()).catch(() => ({ error: t("unreachable") }));
   if (said) said.textContent = r.error ? r.error
-    : r.merged ? (r.merged.ok ? r.merged.out : "merge refused") : "recorded";
+    : r.merged ? (r.merged.ok ? r.merged.out : t("mergeRefused")) : t("recorded");
   fetch("/api/state").then(x => x.json()).then(render).catch(() => {});
 }
 
@@ -165,8 +193,14 @@ function connect() {
   es.addEventListener("reload", () => location.reload());
   es.onerror = () => { document.getElementById("live").classList.add("off"); es.close(); setTimeout(connect, 1500); };
 }
-connect();
-fetch("/api/state").then(r => r.json()).then(render).catch(() => {});
+fetch("/api/i18n").then(r => r.json()).then(dd => { DICT = dd; })
+  .catch(() => {})
+  .finally(() => {
+    document.documentElement.lang = lang;
+    chrome();
+    connect();
+    fetch("/api/state").then(r => r.json()).then(render).catch(() => {});
+  });
 </script>
 </body>
 </html>
