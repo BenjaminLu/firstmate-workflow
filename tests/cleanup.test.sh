@@ -24,8 +24,11 @@ d="$(fixture)"; r="$d/repo"
 MERGED="$(ghstub "$d" MERGED)"
 
 # --- it refuses everything that is not its own worktree ------------------
-assert_ok "FM_GH='$MERGED' '$r/bin/fm-cleanup.sh' --task ../../.. --repo '$r' 2>&1 | grep -q 'no worktree'" \
-  "a path of dots resolves to nothing and is a no-op, not a delete"
+# assert the outcome, not the wording: a dotted path may not exist at all or
+# may resolve to a real directory outside the root, and both must end the same
+FM_GH="$MERGED" "$r/bin/fm-cleanup.sh" --task ../../.. --repo "$r" >/dev/null 2>&1 || true
+assert_ok "test -d '$r' && test -d '$r/state/worktrees'" "a path of dots deletes nothing"
+assert_ok "test -d '$d'" "and nothing above the repository either"
 
 mkdir -p "$d/elsewhere/precious"; echo keep > "$d/elsewhere/precious/file"
 ln -s "$d/elsewhere/precious" "$r/state/worktrees/T-LINK"
