@@ -101,7 +101,10 @@ prompt="$tree/.fm-prompt.md"
 # --- the adapter, with fallback only on a vendor being unavailable -------
 # The worker's evidence: files changed in the worktree. The prompt lives
 # there too, so it comes out of the count or every run looks busy.
-worker_did_work() { [ -n "$(git -C "$tree" status --porcelain -- . ":(exclude).fm-prompt.md")" ]; }
+worker_did_work() {
+  [ -n "$(git -C "$tree" status --porcelain -- . \
+      ":(exclude).fm-prompt.md" ":(exclude).fm-say.md")" ] || [ -s "$tree/.fm-say.md" ]
+}
 log="$REPO/state/worktrees/$TASK.log"; : > "$log"
 fm_run_chain "$REPO/bin/adapters" "$(fm_vendor_chain worker "$VENDOR")" \
   "$prompt" "$tree" "$log" worker_did_work; rc=$?
@@ -118,6 +121,33 @@ done
 [ "$rc" = "2" ] && { echo "fm-worker: every vendor was unavailable" >&2; exit 2; }
 
 rm -f "$prompt"
+
+# The worker's one way to speak on the pull request. It may not touch gh -
+# that is the adapter contract and the reason a CLI with no repository
+# access can be a worker - so it writes .fm-say.md and this script posts
+# it. Without this the round-three protocol cannot happen at all:
+# ASK-PASS-CRITERIA would sit in a log nobody reads while fm-protocol
+# reported a violation every turn, which looks exactly like a worker that
+# stopped working.
+say="$tree/.fm-say.md"
+if [ -s "$say" ] && [ -n "$PR" ]; then
+  $GH pr comment "$PR" --body-file "$say" >/dev/null 2>&1 </dev/null \
+    && emit --type ask_pass_criteria --pr "$PR" --en "the worker spoke on #$PR" \
+            --tw "工人在 #$PR 上發言" \
+    || echo "fm-worker: could not post the worker's message to #$PR" >&2
+fi
+asked=0
+[ -s "$say" ] && asked=1
+rm -f "$say"
+
+# asking IS the work in a round that begins with a question, and the round
+# after it is the one that changes files
+if [ "$asked" = 1 ] && [ -z "$(git -C "$tree" status --porcelain)" ]; then
+  echo "fm-worker: the worker asked rather than changed anything; its question is on #$PR" >&2
+  printf '%s\n' "$branch"
+  exit 0
+fi
+
 # the same predicate the chain was given, not a second spelling of it: the
 # two agreed only because the prompt happened to be removed between them
 if ! worker_did_work; then

@@ -60,3 +60,19 @@ asking is to find out the whole price before paying any of it.
 
 If the reviewer then raises something that was not on the list and is not a
 regression you just introduced, say so plainly and carry on with the list.
+
+## Saying something on the pull request
+
+You may not run `git` or `gh`. That is what lets a CLI with no repository
+access be a worker at all, and the scripts around you do every one of those
+operations themselves.
+
+When you need to say something where the reviewer will see it — and from
+round three that is the whole of your turn, because you ask before you
+change anything — write it to **`.fm-say.md`** in your worktree. The script
+posts that file as a comment on the pull request and removes it before
+anything is committed, so it never reaches the diff.
+
+A round in which you only ask is a complete round. Do not change files as
+well as asking: the point of asking is that you do not yet know what would
+pass.
