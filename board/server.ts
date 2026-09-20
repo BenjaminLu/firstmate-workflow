@@ -73,11 +73,24 @@ const state = () => {
 };
 
 // Decisions the captain has been asked for but has not answered.
+// A card for a pull request that is already merged is the board lying. It
+// happens whenever a merge goes through some other way - a decision file
+// outlives the thing it was asking about - and the captain is then offered
+// a choice that cannot be made.
 const pending = () => {
   const dir = join(ROOT, "state/pending");
   if (!existsSync(dir)) return [];
+  const settled = new Set(
+    readEvents()
+      .filter((e) => e.type === "merged" || e.type === "closed")
+      .map((e) => String((e as Record<string, unknown>).pr ?? "")),
+  );
   return readdirSync(dir).filter((f) => f.endsWith(".json")).flatMap((f) => {
-    try { return [JSON.parse(readFileSync(join(dir, f), "utf8"))]; } catch { return []; }
+    try {
+      const d = JSON.parse(readFileSync(join(dir, f), "utf8"));
+      if (d.pr != null && settled.has(String(d.pr))) return [];
+      return [d];
+    } catch { return []; }
   });
 };
 

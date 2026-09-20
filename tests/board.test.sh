@@ -34,6 +34,20 @@ assert_eq "working" "$(jq -r '.tasks[]|select(.id=="T-A")|.stage' <<<"$s")" "a d
 assert_eq "queued"  "$(jq -r '.tasks[]|select(.id=="T-B")|.stage' <<<"$s")" "an untouched task reads as queued"
 assert_eq "1" "$(jq -r .counts.inflight <<<"$s")" "the counts follow the log"
 
+# a card for a pull request that has already been merged is the board
+# lying: the captain is offered a choice that cannot be made
+mkdir -p "$d/state/pending"
+printf '{"id":"D-77","task":"T-A","kind":"merge","pr":77,"title":"stale"}\n' > "$d/state/pending/D-77.json"
+s3="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_ne "" "$s3" "the board is still answering at this point"
+assert_contains "$(jq -r '.pending[].id' <<<"$s3" | tr '\n' ' ')" "D-77" "an open decision is on the board"
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --task T-A --type merged --pr 77 \
+  --en "merged" --tw "已合併" >/dev/null
+s4="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_lacks "$(jq -r '.pending[].id' <<<"$s4" | tr '\n' ' ')" "D-77" \
+  "and it is gone once the pull request is merged"
+rm -f "$d/state/pending/D-77.json"
+
 # a task whose review never happened, or whose worker died, must not keep
 # reading as work in progress
 # reset between iterations, or the second type is asserted against a stage
@@ -81,6 +95,7 @@ assert_fail "sed 's|//.*||' '$ROOT/board/server.ts' | grep -qF '0.0.0.0'" \
 
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null || true
+
 rm -rf "$d"
 
 # the event types the board maps and the types fm-emit will write are two
@@ -96,5 +111,6 @@ for t in $mapped; do
   printf '%s\n' "$known" | grep -qxF "$t" || unknown="$unknown $t"
 done
 assert_eq "" "$unknown" "every stage the board maps is a type fm-emit will write"
+
 
 finish
