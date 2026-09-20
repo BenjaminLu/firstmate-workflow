@@ -46,8 +46,14 @@ const state = () => {
     : [];
   const stage = new Map<string, string>();
   const pr = new Map<string, number>();
+  // merged and closed are where a task stops. Anything said about it
+  // afterwards - a review round run against the branch, a late sync - is
+  // about work that is already in, and letting it move the task back reads
+  // as work in progress that nobody is doing.
+  const FINAL = new Set(["merged", "closed"]);
   for (const e of events) {
     if (!e.task) continue;
+    if (FINAL.has(stage.get(e.task) ?? "")) continue;
     const s = STAGE[e.type ?? ""];
     if (s) stage.set(e.task, s);
     if (typeof e.pr === "number") pr.set(e.task, e.pr);
