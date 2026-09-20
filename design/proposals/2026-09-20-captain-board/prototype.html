@@ -634,9 +634,17 @@ code,.mono{font-family:var(--mono);font-size:.86em}
 .port{position:absolute;width:29px;height:22px;margin:0 0 -11px -14.5px;border-radius:3px;
   background:radial-gradient(ellipse at 50% 32%,#10151e,#03050a 72%);
   box-shadow:0 0 0 2.5px var(--brass),0 0 12px rgba(201,151,47,.4),inset 0 4px 7px rgba(0,0,0,.95)}
-.port b{position:absolute;top:7px;width:19px;height:8px;border-radius:4px;
-  background:linear-gradient(90deg,#454f59,#161c22);box-shadow:0 1px 3px rgba(0,0,0,.85)}
-.port.l b{right:-13px} .port.r b{left:-13px}
+.port b{position:absolute;top:6px;width:30px;height:10px;border-radius:5px;
+  background:linear-gradient(180deg,#5b6672,#20272e 60%,#0d1116);
+  box-shadow:0 2px 4px rgba(0,0,0,.9)}
+.port b::after{content:"";position:absolute;top:-1px;width:6px;height:12px;border-radius:3px;
+  background:linear-gradient(180deg,#77828f,#2b333b)}
+.port.l b{right:-24px} .port.l b::after{left:-1px}
+.port.r b{left:-24px}  .port.r b::after{right:-1px}
+.port::after{content:"";position:absolute;top:-11px;left:1px;width:27px;height:10px;border-radius:2px;
+  background:linear-gradient(180deg,#6b4a2a,#33210f);box-shadow:0 0 0 1.5px var(--brass);
+  transform-origin:50% 100%;transform:rotate(-24deg)}
+.port.r::after{transform:rotate(24deg)}
 .prow{position:absolute;z-index:3;pointer-events:none;transform:translate(-6%,0)}
 .prow .fighead{display:block;filter:drop-shadow(0 3px 7px rgba(0,0,0,.65))}
 .prow .spar{position:absolute;left:78px;top:20px;width:86px;height:6px;border-radius:3px;
@@ -1251,16 +1259,25 @@ function shipMarkup(sp,n){
   const prowHTML = function(list){
     const bow=list[list.length-1];
     return '<div class="prow" style="left:95%;bottom:'+(bow.H-bow.y+18).toFixed(1)+'px">'
-      + '<svg class="fighead" viewBox="0 0 64 52" width="92" height="74" aria-hidden="true">'
+      + '<svg class="fighead" viewBox="0 0 78 50" width="104" height="67" aria-hidden="true">'
       +   '<defs><linearGradient id="gild" x1="0" y1="0" x2="0" y2="1">'
-      +     '<stop offset="0" stop-color="#f6dc95"/><stop offset=".48" stop-color="#d9a441"/>'
-      +     '<stop offset="1" stop-color="#7d5718"/></linearGradient></defs>'
-      +   '<path d="M2 41 C16 28 31 21 48 18 C35 28 25 35 17 45 Z" fill="url(#gild)" opacity=".62"/>'
-      +   '<path d="M7 32 C19 20 32 15 46 12 C35 21 27 27 21 36 Z" fill="url(#gild)" opacity=".82"/>'
-      +   '<path d="M29 41 C35 30 44 22 56 18 C59 25 57 32 51 37 C45 42 36 45 29 47 Z" fill="url(#gild)"/>'
-      +   '<circle cx="55" cy="14" r="5.6" fill="url(#gild)"/>'
-      +   '<path d="M47 26 C53 23 59 23 63 25 L62 29 C58 27 53 28 48 30 Z" fill="url(#gild)"/>'
-      +   '<path d="M3 45 C16 41 31 41 45 43 L45 48 C31 45 16 46 4 50 Z" fill="#8a6320"/>'
+      +     '<stop offset="0" stop-color="#f8e2a4"/><stop offset=".46" stop-color="#d9a441"/>'
+      +     '<stop offset="1" stop-color="#785214"/></linearGradient>'
+      +   '<linearGradient id="gild2" x1="0" y1="0" x2="1" y2="0">'
+      +     '<stop offset="0" stop-color="#8a6320"/><stop offset="1" stop-color="#e9c473"/>'
+      +   '</linearGradient></defs>'
+      // drapery streaming aft, up and to the left
+      +   '<path d="M6 8 C22 10 38 16 52 24 C36 22 20 24 6 30 Z" fill="url(#gild2)" opacity=".55"/>'
+      +   '<path d="M2 20 C20 20 38 24 54 31 C36 31 18 35 4 42 Z" fill="url(#gild2)" opacity=".75"/>'
+      // torso leaning out over the water, shoulders aft and head forward
+      +   '<path d="M18 16 C32 18 46 22 58 28 C56 34 50 38 42 38 C32 38 24 30 18 24 Z" fill="url(#gild)"/>'
+      // arms thrust forward past the stem
+      +   '<path d="M52 24 C60 21 69 20 76 22 L75 27 C68 26 60 28 54 30 Z" fill="url(#gild)"/>'
+      // head: the leading point of the whole ship
+      +   '<circle cx="66" cy="17" r="6.4" fill="url(#gild)"/>'
+      +   '<path d="M60 14 C63 9 70 8 73 11 C69 12 65 14 62 17 Z" fill="#f3d488"/>'
+      // scrolled trailboard under it
+      +   '<path d="M2 40 C18 36 34 36 50 39 L49 45 C34 41 18 42 3 47 Z" fill="#8a6320"/>'
       + '</svg><span class="spar"></span></div>';
   };
   const portHTML = list => list.map(function(pt){
