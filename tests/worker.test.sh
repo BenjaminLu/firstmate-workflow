@@ -26,8 +26,18 @@ JSON
 }
 
 ghstub() {                      # records what it was asked, invents a pull request url
+  # `pr list` has to answer emptily: the worker asks it first, and a stub
+  # that answers every question with a url tells the worker a pull request
+  # already exists and it never opens one
   mkdir -p "$1/stub"
-  printf '#!/usr/bin/env bash\necho "gh $*" >> "%s/ghcalls"\necho "https://example.invalid/pull/42"\n' "$1" > "$1/stub/gh"
+  cat > "$1/stub/gh" <<G
+#!/usr/bin/env bash
+echo "gh \$*" >> "$1/ghcalls"
+case " \$* " in
+  *" pr list "*) exit 0 ;;
+esac
+echo "https://example.invalid/pull/42"
+G
   chmod +x "$1/stub/gh"; printf '%s' "$1/stub/gh"
 }
 
@@ -83,8 +93,9 @@ assert_ok "cd '$r5' && git cat-file -e '$branch:src/round-one'" "and committed i
 # the worker is given to answer is the point of the assertion
 cat > "$d5/stub/gh" <<'G'
 #!/usr/bin/env bash
-echo "gh $*" >> "$(dirname "$0")/../calls"
+echo "gh $*" >> "$(dirname "$0")/../ghcalls"
 case " $* " in
+  *" pr list "*) echo 9; exit 0 ;;
   *" pr view "*" comments "*)
     jq -cn '{author:{login:"reviewer-1"},body:"REVIEWER SAID: fix the helper"}' \
       | jq -r '"## " + .author.login + "\n\n" + .body + "\n"' ;;
@@ -92,10 +103,18 @@ esac
 exit 0
 G
 chmod +x "$d5/stub/gh"
+: > "$d5/ghcalls"      # so "did it create one?" is about THIS round
 ( cd "$r5" && FM_ROOT="$r5" FM_GH="$GH5" bin/fm-worker.sh --task T-Z --pr 9 >/dev/null 2>&1 )
 assert_ok "cd '$r5' && git cat-file -e '$branch:src/round-one'" "the second round keeps the first round's work"
 assert_ok "cd '$r5' && git cat-file -e '$branch:src/round-two'" "and adds its own"
 assert_ok "cd '$r5' && git cat-file -e '$branch:src/saw-review'" "and was given the review to answer"
+# and it does not try to open a second pull request for the same branch:
+# on a later round `pr create` fails, and a worker that could only ever
+# open a new one fails at the last step with its work already pushed
+assert_lacks "$(cat "$d5/ghcalls" 2>/dev/null)" "pr create" \
+  "the second round reuses the pull request it already opened"
+assert_contains "$(jq -r '.type + " " + (.pr|tostring)' < "$r5/state/events.jsonl" | tail -1)" "9" \
+  "and its event points at that number"
 rm -rf "$d5"
 
 # a vendor named in config.yaml with no adapter behind it is a typo. It has
