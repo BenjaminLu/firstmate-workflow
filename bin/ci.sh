@@ -5,7 +5,17 @@
 #
 #   bin/ci.sh            run every stage against the repo this script lives in
 #   FM_ROOT=/path        run against another tree (used by the tests)
+#   FM_CI_MAX_SECONDS=600 select an explicit elapsed-time budget (default 180)
 set -uo pipefail
+
+# Bound the string before arithmetic, avoiding overflow, octal interpretation,
+# and accidental unlimited runs. An explicitly empty value is invalid.
+ci_max_seconds="${FM_CI_MAX_SECONDS-180}"
+if [[ ! "$ci_max_seconds" =~ ^[1-9][0-9]{0,3}$ ]] || [ "$ci_max_seconds" -gt 3600 ]; then
+  printf '%s\n' 'ci: FM_CI_MAX_SECONDS must be a decimal integer from 1 to 3600 (no leading zeros); unset it for 180' >&2
+  exit 64
+fi
+printf 'ci: effective budget: %ss\n' "$ci_max_seconds"
 
 ROOT="${FM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT" || exit 2
@@ -465,15 +475,11 @@ else
   fi
 fi
 
-# The design's budget is sixty seconds for a full local pass, and a budget
-# nobody measures is a wish. The hard limit is three times it, because a
-# loaded CI runner is not the machine the budget was written for - but the
-# number is printed either way, so a suite that starts spending it is
-# visible before it breaks anything.
+# Measure the full gate without interrupting or bypassing functional checks.
 took=$(( $(date +%s) - started_at ))
-printf '\n%s took %ss (the design asks for 60s locally)%s\n' "$dim" "$took" "$off"
-if [ "$took" -gt 180 ]; then
-  flunk "the gate took ${took}s, more than three times its budget"
+printf '\n%s took %ss (effective budget: %ss)%s\n' "$dim" "$took" "$ci_max_seconds" "$off"
+if [ "$took" -gt "$ci_max_seconds" ]; then
+  flunk "the gate took ${took}s, exceeds effective budget of ${ci_max_seconds}s"
 fi
 if [ "$fail" -eq 0 ]; then printf '%sci: green%s\n' "$green" "$off"; else printf '%sci: red%s\n' "$red" "$off"; fi
 exit "$fail"

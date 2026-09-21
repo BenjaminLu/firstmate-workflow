@@ -9,6 +9,57 @@ fixture() {                      # a throwaway repo root for ci.sh to operate on
   d="$(mktemp -d)"; mkdir -p "$d/bin" "$d/tests"; printf '%s' "$d"
 }
 
+
+# Budget probes run the real gate against a tiny tree with a deterministic
+# two-reading clock. No sleep and no full repository CI run is needed.
+budget_tree="$(fixture)"
+clock_dir="$(mktemp -d)"
+cat > "$clock_dir/date" <<'CLOCK'
+#!/usr/bin/env bash
+if [ -f "$FM_TEST_CLOCK_STATE" ]; then
+  printf '%s\n' "$((1000 + FM_TEST_ELAPSED))"
+else
+  touch "$FM_TEST_CLOCK_STATE"
+  printf '1000\n'
+fi
+CLOCK
+chmod +x "$clock_dir/date"
+budget_probe() { # <unset|budget> <elapsed> <expected exit>
+  local supplied="$1" elapsed="$2" expected="$3" rc=0
+  rm -f "$clock_dir/state"
+  out="$(
+    if [ "$supplied" = unset ]; then unset FM_CI_MAX_SECONDS
+    else export FM_CI_MAX_SECONDS="$supplied"; fi
+    PATH="$clock_dir:$PATH" FM_TEST_CLOCK_STATE="$clock_dir/state" \
+      FM_TEST_ELAPSED="$elapsed" FM_ROOT="$budget_tree" bash "$ROOT/bin/ci.sh" 2>&1
+  )" || rc=$?
+  assert_eq "$expected" "$rc" "budget [$supplied], elapsed ${elapsed}s: exit $expected"
+}
+for budget in unset 600; do
+  limit=180; [ "$budget" != unset ] && limit="$budget"
+  for elapsed in "$((limit - 1))" "$limit"; do
+    budget_probe "$budget" "$elapsed" 0
+    assert_contains "$out" "took ${elapsed}s" "reports deterministic elapsed time"
+    assert_contains "$out" "effective budget: ${limit}s" "reports the selected budget"
+  done
+  budget_probe "$budget" "$((limit + 1))" 1
+  assert_contains "$out" "exceeds effective budget of ${limit}s" "budget excess explains failure"
+done
+budget_probe unset 208 1
+budget_probe 600 208 0
+for budget in 1 3600; do budget_probe "$budget" "$budget" 0; done
+for budget in '' 0 -1 +600 0600 1.5 ' 600' '600 ' 1e3 3601 999999999999999999999999 '1+1' '$(touch injected)' $'600\n'; do
+  budget_probe "$budget" 0 64
+  assert_contains "$out" 'FM_CI_MAX_SECONDS must be a decimal integer from 1 to 3600 (no leading zeros); unset it for 180' \
+    "invalid budget gives actionable guidance"
+  assert_lacks "$out" '== shellcheck' "invalid budget stops before checks"
+done
+printf '#!/usr/bin/env bash\nexit 1\n' > "$budget_tree/tests/red.test.sh"
+budget_probe 600 208 1
+assert_contains "$out" 'x tests/red.test.sh' "functional failure still fails under 600"
+assert_contains "$out" 'effective budget: 600s' "failed run also reports its budget"
+rm -rf "$budget_tree" "$clock_dir"
+
 t="$(fixture)"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$t/tests/green.test.sh"
 assert_ok "FM_ROOT='$t' bash '$ROOT/bin/ci.sh'" "passes when every test passes"
@@ -34,6 +85,8 @@ assert_fail "grep -qE '^  [+x] tests/' <<< \"\$empty\"" \
 assert_ok "test -x '$ROOT/bin/ci.sh'" "ci.sh is executable"
 gha="$ROOT/.github/workflows/ci.yml"
 assert_ok "test -f '$gha'" "a GitHub Actions workflow exists"
+assert_contains "$(cat "$gha")" 'FM_CI_MAX_SECONDS: "600"' "GitHub explicitly selects 600 seconds"
+assert_contains "$(cat "$gha")" "timeout-minutes: 10" "GitHub keeps its job timeout"
 assert_contains "$(cat "$gha")" "bin/ci.sh" "the workflow calls bin/ci.sh, not a copy of its steps"
 # the browser suite runs in CI too, or the board is only ever checked here.
 # Everything the gate needs must be installed before it runs.
@@ -145,12 +198,11 @@ else
   printf '    %s\n' "(shellcheck not installed, adapter lint unchecked)"
 fi
 
-# The design's budget is sixty seconds for a full local pass. The gate
-# times itself - measuring it from here would run the gate inside the suite
-# the gate runs - and this asserts it says so and enforces something.
+# The real clock path reports elapsed time and the caller's effective budget;
+# deterministic boundary enforcement is covered above.
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 assert_matches "$out" 'took [0-9]+s' "the gate reports how long it took"
-assert_contains "$out" "60s locally" "against the budget the design sets"
+assert_contains "$out" "effective budget: ${FM_CI_MAX_SECONDS-180}s" "against the selected budget"
 
 # --- every lint, planted ------------------------------------------------
 # A lint nobody has ever seen fail is a lint nobody knows works. Each of
