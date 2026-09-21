@@ -126,10 +126,6 @@
 .fig.s-review{--baseAnim:scank;--baseDur:3.6s}
 .fig.s-captain{--baseAnim:bobk;--baseDur:3.1s}
 .fig.s-queued{--baseAnim:bobk;--baseDur:6.5s;filter:grayscale(.75) brightness(.6)}
-/* blocked reads as stopped, not as slow work: it is the one state a
-   reader most needs told truthfully, and painting it as progress made
-   the deck disagree with the card beside it */
-.fig.s-blocked{--baseAnim:slumpk;--baseDur:5.5s;filter:grayscale(.6) brightness(.72)}
 .fig.a-hammer .armR{animation:hammer var(--sp,.62s) ease-in-out infinite}
 .fig.a-hammer .tool{opacity:1;width:16px;height:10px;border-radius:2px;transform:translateZ(6px);
   background:linear-gradient(180deg,#c2cedb,#63717e);box-shadow:0 0 0 2px #26313c}
@@ -162,7 +158,7 @@
 .bub .pb{margin:5px auto 0;width:84%;height:3px;background:rgba(255,255,255,.12);border-radius:2px;overflow:hidden}
 .bub .pb i{display:block;height:100%;background:var(--accent)}
 .bub.st-working{--bubEdge:#2f5478} .bub.st-review{--bubEdge:#5a3f7d}
-.bub.st-gate,.bub.st-blocked{--bubEdge:#7c322b}
+.bub.st-gate{--bubEdge:#7c322b}
 .bub.st-merged,.bub.st-captain{--bubEdge:#2c5f49}
 .bub.st-queued{--bubEdge:#26323d;opacity:.6}
 
@@ -228,7 +224,7 @@
 .roster .st{font-size:10.5px;padding:1px 7px;border-radius:99px;border:1px solid var(--bubEdge,#2c3f52);color:#9dbdd6;justify-self:start}
 .roster .jb{color:#8fa9bd;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .roster li.st-working{--av:#2f5478} .roster li.st-review{--av:#5a3f7d}
-.roster li.st-gate,.roster li.st-blocked{--av:#7c322b}
+.roster li.st-gate{--av:#7c322b}
 .roster li.st-merged,.roster li.st-captain{--av:#2c5f49}
 .roster li.st-queued{--av:#26323d;opacity:.62}
 .shipbar button{pointer-events:auto;font:650 10.5px var(--mono);color:#0f1621;cursor:pointer;

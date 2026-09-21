@@ -33,7 +33,6 @@ const SHIP = (() => {
     gate:    ["swab", "lean", "lantern"],
     review:  ["lookout", "chart", "lantern"],
     queued:  ["lean", "coil"],
-    blocked: ["lean", "lantern"],
     captain: ["helm", "chart"],
   };
   const hash = (s) => { let h = 7; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h; };
@@ -104,8 +103,12 @@ const SHIP = (() => {
 
   function bubble(c, T, topRow) {
     if (c.row !== topRow) {
+      // the chip carries the TASK. The criterion has no crowding
+      // qualifier, and a chip with only the agent's name meant no bubble
+      // anywhere on a crowded ship said what anyone was working on. The
+      // agent's own name is in the roster beside it.
       return `<div class="bub mini st-${c.state}" style="--px:${c.x}%;--r:${c.row}">` +
-        `<div class="who">${esc(c.name)}</div></div>`;
+        `<div class="who">${esc(c.task || c.name)}</div></div>`;
     }
     return `<div class="bub st-${c.state}" style="--px:${c.x}%;--r:${c.row}">` +
       `<div class="who">${esc(c.name)}</div>` +
@@ -139,6 +142,7 @@ const SHIP = (() => {
       job: a.task
         ? `${a.task}${a.title ? " \u00b7 " + a.title : ""}`
         : T(s.greenlit ? "fmDispatching" : "fmWaiting"),
+      task: a.task || null,
       pct: a.task ? ({ working: 45, gate: 70, review: 85, captain: 95 }[a.state] ?? null) : null,
     }));
   }

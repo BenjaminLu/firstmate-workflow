@@ -40,9 +40,11 @@ NAME="${NAME:-reviewer-$$}"
 emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --data '{"role":"reviewer"}' --actor "$NAME" --task "$TASK" "$@" >/dev/null 2>&1 </dev/null || true; }
 # Armed where emit() first works, not forty lines further down: every
 # exit between the two boards an actor that never leaves. On every exit
-# path, including the ones that give up.
+# path, including the ones that give up - and a bare EXIT trap is not
+# every path: an untrapped TERM or INT kills bash without running it,
+# and those are exactly the ones that give up.
 finished() { emit --type agent_finished --en "run finished" --tw "這次執行結束"; }
-trap finished EXIT
+trap finished EXIT INT TERM HUP
 
 # The task spec comes from the branch under review, not from whatever is
 # checked out. A task defined on its own branch - which is how a new one

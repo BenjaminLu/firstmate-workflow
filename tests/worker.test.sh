@@ -187,6 +187,40 @@ M
   rm -rf "$da"
 done
 
+# A killed run is exactly "one that gives up", and the server's backstop
+# does not save it - the task is still open, so the dead agent would sit
+# aboard for ever and inflate the rate.
+#
+# Measured, so the claim is not bigger than the evidence: this assertion
+# holds with `trap ... EXIT` alone, because bash defers a TERM that
+# arrives while it is waiting for a child and then runs the EXIT trap.
+# INT/TERM/HUP are listed anyway, for the paths and the shells where
+# that is not true; what this test proves is the behaviour the criterion
+# names, not the flag list.
+dk="$(fixture)"; rk="$dk/repo"; GHk="$(ghstub "$dk")"
+cat > "$rk/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+sleep 5
+M
+chmod +x "$rk/bin/adapters/mock.sh"
+( cd "$rk" && FM_ROOT="$rk" FM_GH="$GHk" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 ) &
+killme=$!
+for _ in $(seq 1 60); do
+  [ -s "$rk/state/events.jsonl" ] && break
+  sleep 0.2
+done
+pkill -TERM -f "fm-worker.sh --task T-Z" 2>/dev/null
+wait "$killme" 2>/dev/null
+for _ in $(seq 1 40); do
+  [ "$(jq -r .type < "$rk/state/events.jsonl" 2>/dev/null | tail -1)" = "agent_finished" ] && break
+  sleep 0.2
+done
+assert_eq "agent_finished" "$(jq -r .type < "$rk/state/events.jsonl" | tail -1)" \
+  "a run killed mid-flight still says it ended"
+pkill -f "sleep 5" 2>/dev/null
+rm -rf "$dk"
+
 # a vendor named in config.yaml with no adapter behind it is a typo. It has
 # to be found before anything runs, or a real vendor does the work and the
 # exit 65 throws it away with the worktree.

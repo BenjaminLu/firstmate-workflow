@@ -80,6 +80,13 @@ assert_eq "captain" "$(jq -r '.tasks[]|select(.id=="T-C")|.stage' <<<"$sc2")" \
   "and stays there while the card is up, whatever is said after"
 rm -f "$d/state/pending/D-12.json"
 
+# firstmate's own state, which nothing read: on a green-lit board with
+# nothing assigned it is the most visible crewman, and an earlier version
+# drew it slumped and grey while its bubble said "dispatching"
+sq="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "working" "$(jq -r '.crew[]|select(.id=="firstmate")|.state' <<<"$sq")" \
+  "green-lit and nothing assigned is working, not stopped"
+
 # firstmate is an agent too, and it does work of its own. Reporting it as
 # "dispatching" whatever it was actually doing was the board saying what
 # the role is for rather than what the agent is on - and firstmate is the
@@ -160,6 +167,12 @@ assert_ne "" "$declared" "the crew states are declared in one place"
 for st in $declared; do
   assert_contains "$css_rules" ".fig.s-$st" "the page can draw state $st"
 done
+# and the animation each of them names actually exists: a --baseAnim
+# pointing at a keyframe nobody defined resolves to nothing, silently,
+# and a check that greps only for the selector cannot tell
+for anim in $(printf '%s' "$css_rules" | grep -oE '\-\-baseAnim:[a-zA-Z0-9_-]+' | cut -d: -f2 | sort -u); do
+  assert_contains "$css_rules" "@keyframes $anim" "the keyframe $anim is defined"
+done
 # and what the fixture produced is inside that set
 for st in $(jq -r '.crew[].state' <<<"$sv" | sort -u); do
   assert_contains "$declared" "$st" "state $st is one the server declares"
@@ -169,6 +182,23 @@ done
 # page draws him from the same pending deck the cards come from
 assert_lacks "$(jq -r '.crew[].role' <<<"$sr2" | tr '\n' ' ')" "captain" \
   "the server does not put the captain in the crew"
+
+# a log written before the role was stated: the fallback that reads the
+# actor's name is what every existing log looks like
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor reviewer-old --task T-A --type review_opened \
+  --en "an old event with no role" --tw "沒有 role 的舊事件" >/dev/null
+so="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "reviewer" "$(jq -r '.crew[]|select(.id=="reviewer-old")|.role' <<<"$so")" \
+  "an event with no stated role falls back to the actor's name"
+
+# a task that was closed rather than merged also sends its agent home
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-closed --task T-C --type dispatched \
+  --en "on T-C" --tw "在做 T-C" >/dev/null
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --task T-C --type closed \
+  --en "abandoned" --tw "放棄" >/dev/null
+sc2="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_lacks "$(jq -r '.crew[].id' <<<"$sc2" | tr '\n' ' ')" "worker-closed" \
+  "a closed task sends its agent home too, not only a merged one"
 
 # 24 is one number, and the page is told what it was
 assert_eq "24" "$(jq -r '.deckLimit' <<<"$sv")" "the server says what the deck holds"

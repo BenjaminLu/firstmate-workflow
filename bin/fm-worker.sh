@@ -66,7 +66,7 @@ tree="$REPO/state/worktrees/$TASK"
 # ever run, and the ship's rate follows the history instead of what is
 # happening now. On every exit path, including the ones that give up.
 finished() { emit --type agent_finished --en "run finished" --tw "這次執行結束"; }
-trap finished EXIT
+trap finished EXIT INT TERM HUP
 
 emit --type dispatched --en "picked up $TASK" --tw "接下 $TASK"
 

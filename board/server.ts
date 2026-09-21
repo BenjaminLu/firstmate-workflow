@@ -36,7 +36,7 @@ const readEvents = (): Event[] => {
 // an actor on a blocked task reached the page as `st-blocked`, which no
 // stylesheet rule and no dictionary key covers.
 const DECK_LIMIT = 24;   // what the ship holds; the page reads it back
-type CrewState = "queued" | "working" | "gate" | "review" | "captain" | "blocked";
+type CrewState = "queued" | "working" | "gate" | "review" | "captain";
 type Crew = {
   id: string;
   role: "firstmate" | "worker" | "reviewer";
@@ -56,12 +56,18 @@ const roleOf = (actor: string, e: Event): "worker" | "reviewer" => {
   return actor.startsWith("reviewer") ? "reviewer" : "worker";   // older logs
 };
 
-// An unrecognised stage is not "working": painting blocked work as
-// progress is the one thing a reader most needs told truthfully, and the
-// deck would then disagree with the card beside it.
+// A crewman's state is a statement about the AGENT, not a verdict on the
+// task, and an agent that is aboard is by definition running. So an
+// unknown stage - firstmate between dispatches, or a task defined on a
+// branch this checkout has never seen, which fm-worker says is normal -
+// is "working". The previous version guessed "blocked", which drew the
+// most visible crewman slumped and grey while its own bubble said
+// "dispatching". STAGE cannot produce "blocked" at all: it maps to
+// working, gate, review, captain, merged and closed, and the last two
+// are already filtered out above.
 const CREW_STATE = (s: string | undefined): CrewState =>
-  s === "queued" || s === "working" || s === "gate" || s === "review" ||
-  s === "captain" || s === "blocked" ? s : "blocked";
+  s === "queued" || s === "working" || s === "gate" || s === "review" || s === "captain"
+    ? s : "working";
 
 const STAGE: Record<string, string> = {
   dispatched: "working", commit_pushed: "working", pr_opened: "review",

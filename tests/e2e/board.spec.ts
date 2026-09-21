@@ -59,21 +59,16 @@ for (const lang of ["en", "zh-TW", "zh-CN"]) {
     const cards = await page.locator(".dcard").count();
     await expect(page.locator("#captain .capsays i")).toHaveText(String(cards));
     expect(cards).toBeGreaterThan(0);
-    // and he goes when the last card does: the old unit test covered his
-    // appearing and nothing covered his leaving
-    // SHIP is a top-level const in a classic script: a global binding,
-    // not a property of window, so it is reached by name
-    await page.evaluate(`SHIP.captain(document.getElementById("captain"), 0, (k) => k)`);
-    await expect(page.locator("#captain .fig.r-cap")).toHaveCount(0);
-    await expect(page.locator("#captain")).toBeHidden();
     // every crewman says who he is and what he is on, over his own head
     await expect(page.locator(".scene .bub")).toHaveCount(CREW.length + 1);
     await expect(page.locator(".scene .bub:not(.mini) .job").first()).not.toBeEmpty();
-    const named = await page.locator(".scene .bub .who").allInnerTexts();
+    // the full bubbles name the agent; the chips below them name the
+    // task, because a chip with only a name says nothing about the work
+    const named = await page.locator(".scene .bub:not(.mini) .who").allInnerTexts();
     const listed = await page.locator(".roster .nm").allInnerTexts();
-    expect(named.sort()).toEqual(listed.sort());
-    // and they are named after the agent, not after the task it is on
-    const agents = named.filter((n) => /^(worker|reviewer)-\d+$/.test(n));
+    for (const n of named) expect(listed).toContain(n);
+    // and the roster is named after the agents, not after the tasks
+    const agents = listed.filter((n) => /^(worker|reviewer)-\d+$/.test(n));
     expect(agents.length).toBe(CREW.length);
     const jobs = await page.locator(".roster .jb").allInnerTexts();
     expect(jobs.some((j) => /^T-\d+/.test(j))).toBe(true);
@@ -183,6 +178,21 @@ test("nothing here can reach a model", async () => {
   expect(readdirSync(join(board.root, "bin"))).toEqual(["fm-merge.sh"]);
 });
 
+test("no cards, no captain", async ({ page }) => {
+  test.setTimeout(60_000);
+  // Driven by the state the page reads, not by calling into the page:
+  // render() runs again on the board's own refresh and would put him
+  // straight back, so a hand call passes or flakes depending on the tick.
+  const quiet = await startBoard(makeRoot(["working"], false));
+  try {
+    await page.goto(`${quiet.url}/?lang=en`);
+    await expect(page.locator(".scene .pivot").first()).toBeVisible();
+    await expect(page.locator(".dcard")).toHaveCount(0);
+    await expect(page.locator("#captain .fig.r-cap")).toHaveCount(0);
+    await expect(page.locator("#captain")).toBeHidden();
+  } finally { stopBoard(quiet); }
+});
+
 test("a crewman below the top deck still names the task he is on", async ({ page }) => {
   test.setTimeout(60_000);
   // Criterion 3 has no viewport qualifier, and a crowded ship is where
@@ -195,8 +205,11 @@ test("a crewman below the top deck still names the task he is on", async ({ page
     await expect(page.locator(".scene .pivot").first()).toBeVisible();
     const minis = page.locator(".scene .bub.mini");
     expect(await minis.count()).toBeGreaterThan(0);
+    // the task, not merely non-empty: a chip holding the agent's name is
+    // also non-empty, which is what it held before and why "not blank"
+    // was an assertion that passed on the old code
     for (const text of await minis.locator(".who").allInnerTexts()) {
-      expect(text.trim()).not.toBe("");
+      expect(text.trim()).toMatch(/^T-\d+$/);
     }
     // and the roster still carries what each of them is on
     const jobs = await page.locator(".roster .jb").allInnerTexts();
