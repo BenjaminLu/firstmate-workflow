@@ -300,7 +300,9 @@ is never allowed to be empty. A check's link is
 `…/actions/runs/<run>/job/<job>`, and the run is the part before the
 job: reading the whole tail of it asked `gh run view` for something it
 refuses, its complaint went to `/dev/null`, and the worker was handed a
-blank block. A blank block reads as a green run, so the round was spent
+blank block. The shape is checked rather than assumed — a required
+check need not be an Actions run at all, and one that is not says so
+rather than asking for a run called `https:`. A blank block reads as a green run, so the round was spent
 asking why the check was red. When the log cannot be fetched the block
 says so, names the run, and passes on what `gh` said.
 

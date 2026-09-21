@@ -144,6 +144,7 @@ d9="$(fixture)"; r9="$d9/repo"
 cat > "$r9/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
+cp "$2" "${FM_CAPTURE:-/dev/null}" 2>/dev/null
 if [ -f "$3/src/round-one" ]; then
   # BOTH halves of the criterion, one condition each: the question is
   # only written if the prompt carried the review AND the failing check
@@ -178,19 +179,25 @@ exit 0
 G
 chmod +x "$d9/stub/gh"
 : > "$d9/ghcalls"
-out9="$(cd "$r9" && FM_ROOT="$r9" FM_GH="$GH9" bin/fm-worker.sh --task T-Z 2>&1)"; rc9=$?
+cap9="$d9/sent.md"
+out9="$(cd "$r9" && FM_ROOT="$r9" FM_GH="$GH9" FM_CAPTURE="$cap9" \
+        bin/fm-worker.sh --task T-Z 2>&1)"; rc9=$?
+sent9="$(cat "$cap9" 2>/dev/null)"
 assert_eq "0" "$rc9" "a later round dispatched from a task id alone is a complete round"
 assert_contains "$out9" "already has #31" "the worker found the pull request itself"
 assert_contains "$out9" "its question is on #31" "and says which one it spoke on, with a number after the hash"
-# the question exists only if BOTH halves reached the prompt: the
-# adapter exits 1 without either, so this assertion is the conjunction
-# the CONTENT, not that gh was called: `gh run view` being in the calls
-# is true of a run id read out of the link wrongly, which is how the
-# worker came to be handed an empty block and spend a round asking
-# about it. The adapter exits 1 unless it sees THE RUNNER SAID, so the
-# question existing is the assertion.
+# The CONTENT of the block, read off the prompt the worker was handed -
+# not gh having been called, and not an adapter's exit code standing in
+# for it. That block is the worker's only view of the runner and it
+# arrived empty for real; a proxy cannot tell empty from full.
+assert_contains "$sent9" "The required check is red" "the prompt carries the red-check section"
+assert_contains "$sent9" "THE RUNNER SAID: the gate is red" "with the runner's own log in it"
+assert_contains "$sent9" "REVIEWER SAID: answer this" "and what review said, in the same prompt"
+assert_lacks "$sent9" "could not be fetched" "and it did not have to say it failed to fetch it"
+# and separately, the run id itself: the link carries a job path after
+# the run, and reading the whole tail of it is what emptied the block
 assert_contains "$(cat "$d9/ghcalls")" "run view 9 " \
-  "and asked for the RUN, not the run plus the job path out of the link"
+  "having asked for the RUN, not the run plus the job path out of the link"
 # "there is no second lookup" - once per run, not once per site: the
 # post-push branch reuses what this found, and two answers to one
 # question can disagree when a pull request is opened while the engine
@@ -392,7 +399,9 @@ cat > "$d16/stub/gh" <<'G'
 #!/usr/bin/env bash
 case " $* " in
   *" pr list "*) echo 21; exit 0 ;;
-  *" pr checks "*) echo "https://example.invalid/actions/runs/404/job/1"; exit 0 ;;
+  # the run id is NOT in gh's message: `404` in both would make
+  # "names the run" pass off the echoed gh line alone
+  *" pr checks "*) echo "https://example.invalid/actions/runs/51/job/1"; exit 0 ;;
   *" run view "*) echo "HTTP 404: Not Found" >&2; exit 1 ;;
   *" pr view "*" comments "*) printf '## reviewer-1
 
@@ -406,10 +415,50 @@ cap16="$d16/sent.md"
 ( cd "$r16" && FM_ROOT="$r16" FM_GH="$GH16" FM_CAPTURE="$cap16"     bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
 sent16="$(cat "$cap16" 2>/dev/null)"
 assert_contains "$sent16" "The required check is red" "the prompt still says the check is red"
-assert_contains "$sent16" "could not be fetched" "and says the log could not be fetched"
-assert_contains "$sent16" "404" "naming the run it asked for"
+# the whole phrase, so a mis-parsed run id fails it: `run 51/job/1`
+# would satisfy a bare "51" and so would gh's own message
+assert_contains "$sent16" "The log for run 51 could not be fetched" \
+  "and says the log could not be fetched, naming the run it asked for"
 assert_contains "$sent16" "gh: HTTP 404" "and passing on what gh said about it"
 rm -rf "$d16"
+
+# and a required check that is not an Actions run at all - Buildkite,
+# CircleCI - whose link has no /actions/runs/ in it. Reading the tail
+# of that leaves the whole URL, which the run-id trim reduces to
+# `https:`, and the worker is told "the log for run https: could not be
+# fetched".
+d17="$(fixture)"; r17="$d17/repo"; GH17="$(ghstub "$d17")"
+cat > "$r17/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+cp "$2" "${FM_CAPTURE:-/dev/null}" 2>/dev/null
+mkdir -p "$3/src"
+if [ -f "$3/src/round-one" ]; then printf 'two\n' > "$3/src/round-two"
+else printf 'one\n' > "$3/src/round-one"; fi
+M
+chmod +x "$r17/bin/adapters/mock.sh"
+( cd "$r17" && FM_ROOT="$r17" FM_GH="$GH17" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+cat > "$d17/stub/gh" <<'G'
+#!/usr/bin/env bash
+echo "gh $*" >> "$(dirname "$0")/../ghcalls"
+case " $* " in
+  *" pr list "*) echo 22; exit 0 ;;
+  *" pr checks "*) echo "https://buildkite.com/acme/pipeline/builds/1234"; exit 0 ;;
+  *" pr view "*" comments "*) printf '## reviewer-1\n\nsomething\n' ;;
+esac
+exit 0
+G
+chmod +x "$d17/stub/gh"; : > "$d17/ghcalls"
+cap17="$d17/sent.md"
+( cd "$r17" && FM_ROOT="$r17" FM_GH="$GH17" FM_CAPTURE="$cap17" \
+    bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+sent17="$(cat "$cap17" 2>/dev/null)"
+assert_contains "$sent17" "The required check is red" "the prompt still says the check is red"
+assert_contains "$sent17" "not a GitHub Actions run" "and says why it cannot fetch the log"
+assert_contains "$sent17" "buildkite.com/acme/pipeline/builds/1234" "naming the check it means"
+assert_lacks "$sent17" "run https:" "rather than asking for a run called https:"
+assert_lacks "$(cat "$d17/ghcalls")" "run view" "and it does not ask gh for a run that is not one"
+rm -rf "$d17"
 
 # and if it cannot be kept either, the run says so rather than pointing
 # at a path inside the worktree as though it were safe - which is what
