@@ -49,6 +49,19 @@ tree="$REPO/state/worktrees/$TASK"
 emit --type dispatched --en "picked up $TASK" --tw "接下 $TASK"
 
 # --- a worktree of its own -----------------------------------------------
+# Never delete work. A run that was interrupted - the machine slept, the
+# session ended, someone pressed ctrl-c - leaves its files here
+# uncommitted, and this used to remove them before the next round could
+# see them. Tonight that nearly cost two finished tasks.
+if [ -d "$tree" ] && [ -n "$(git -C "$tree" status --porcelain 2>/dev/null \
+     -- . ":(exclude).fm-prompt.md" ":(exclude).fm-say.md")" ]; then
+  rescue="$REPO/state/rescued/$TASK-$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$(dirname "$rescue")"
+  cp -R "$tree" "$rescue"
+  echo "fm-worker: $tree had uncommitted work; a copy is at $rescue" >&2
+  emit --type worker_crashed --en "rescued uncommitted work to ${rescue#"$REPO"/}" \
+       --tw "把未提交的工作救到 ${rescue#"$REPO"/}"
+fi
 rm -rf "$tree"; mkdir -p "$REPO/state/worktrees"
 git worktree prune >/dev/null 2>&1
 # A second round continues the first. Recreating the branch from main would
