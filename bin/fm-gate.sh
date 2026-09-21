@@ -80,7 +80,12 @@ is_test()  { case "$1" in tests/*|*.test.*|*.spec.*) return 0 ;; *) return 1 ;; 
 # ---- 4. the diff stays inside the task's declared scope ------------------
 gate4() {
   local scopes f ok
-  scopes="$(jq -r --arg t "$TASK" '.tasks[]|select(.id==$t)|.scope[]' design/tasks.json 2>/dev/null)"
+  # from the branch: a task that defines itself in its own diff is
+  # otherwise unscoped, and gate 4 would pass anything
+  scopes="$(git show "$BRANCH:design/tasks.json" 2>/dev/null | \
+            jq -r --arg t "$TASK" '.tasks[]|select(.id==$t)|.scope[]' 2>/dev/null)"
+  [ -n "$scopes" ] || scopes="$(jq -r --arg t "$TASK" '.tasks[]|select(.id==$t)|.scope[]' \
+            design/tasks.json 2>/dev/null)"
   [ -n "$scopes" ] || return 1          # a task with no declared scope cannot be gated
   while IFS= read -r f; do
     [ -n "$f" ] || continue
