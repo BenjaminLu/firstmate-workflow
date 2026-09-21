@@ -653,6 +653,26 @@
         "no script names a signal alongside EXIT in one trap: the handler runs and execution continues, and kill stops working",
         "a suite that prints command-not-found cannot report green: the gate reads what the run said"
       ]
+    },
+    {
+      "id": "T-029",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-026"
+      ],
+      "title": "one exit code for a usage error, in every script",
+      "scope": [
+        "bin/**",
+        "tests/**",
+        "design/design.md",
+        "design/tasks.json"
+      ],
+      "acceptance": [
+        "every usage error in every script exits 64, and every refusal to write exits 1",
+        "the gate enforces it rather than the design merely stating it",
+        "each converted path has an assertion that fails if it goes back"
+      ]
     }
   ]
 }

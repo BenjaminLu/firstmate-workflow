@@ -49,4 +49,27 @@ cd "$ROOT" || exit 1
 strays=$(grep -rnE '>>[[:space:]]*.*events\.jsonl' bin board 2>/dev/null | grep -v 'fm-emit.sh' | wc -l | tr -d ' ')
 assert_eq "0" "$strays" "nothing appends to the log except fm-emit.sh"
 rm -rf "$t"
+
+# Two kinds of failure, two codes: 64 is "you called it wrong" and 1 is
+# "it could not write". A caller that cannot tell them apart cannot react
+# to either - one is fixed by a human, the other by trying again. No suite
+# pinned these before, so the conversion could have gone either way
+# unnoticed; `grep -n 'assert_eq \"1\"' tests/emit.test.sh` before this
+# change returned only line-count and pr-number assertions.
+u="$(mktemp -d)"; mkdir -p "$u/state"
+code() { FM_ROOT="$u" bash "$ROOT/bin/fm-emit.sh" "$@" >/dev/null 2>&1; printf '%s' "$?"; }
+assert_eq "64" "$(code --type greenlit --en a --tw b)" "no --actor is a usage error"
+assert_eq "64" "$(code --actor x --en a --tw b)" "no --type is one too"
+assert_eq "64" "$(code --actor x --type nosuchtype --en a --tw b)" "an unknown type is one"
+assert_eq "64" "$(code --actor x --type greenlit --data 'not json' --en a --tw b)" \
+  "so is --data that is not JSON"
+assert_eq "64" "$(code --actor x --type greenlit --tw b)" "so is a summary with only zh-TW"
+assert_eq "64" "$(code --actor x --type greenlit --en a)" "and one with only English"
+assert_eq "64" "$(code --actor x --type greenlit --en a --tw b --nope 1)" "and an unknown flag"
+# and a refusal to write is still 1, or the two codes would say one thing
+assert_eq "1" "$(FM_ROOT=/dev/null/nowhere bash "$ROOT/bin/fm-emit.sh" --actor x \
+  --type greenlit --en a --tw b >/dev/null 2>&1; printf '%s' "$?")" \
+  "but a log it cannot write is not a usage error"
+rm -rf "$u"
+
 finish

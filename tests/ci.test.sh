@@ -318,12 +318,32 @@ plant "a pipeline into grep -q turns the hygiene stage red" "feeds grep -q or -c
 plant "and the stage names the script" "fm-piped.sh"
 rm -f "$q/bin/fm-piped.sh"
 
-# a shift 2 that has not checked it has two
-printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\nwhile [ $# -gt 0 ]; do\n  case "$1" in\n    --x) v="${2-}"; shift 2 ;;\n    *) exit 64 ;;\n  esac\ndone\necho "${v:-}"\n' \
+# Two scripts, and one of them with two offending lines: a stage that
+# stopped at the first hit passes a single-instance plant, which this
+# file's own comment says twenty lines up.
+printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\nwhile [ $# -gt 0 ]; do\n  case "$1" in\n    --x) v="${2-}"; shift 2 ;;\n    --y) w="${2-}"; shift 2 ;;\n    *) exit 64 ;;\n  esac\ndone\necho "${v:-}${w:-}"\n' \
   > "$q/bin/fm-spinner.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\nwhile [ $# -gt 0 ]; do\n  case "$1" in\n    --z) u="${2-}"; shift 2 ;;\n    *) exit 64 ;;\n  esac\ndone\necho "${u:-}"\n' \
+  > "$q/bin/fm-twirler.sh"
 plant "an unguarded shift 2 turns the hygiene stage red" "has not checked it has two"
-plant "and the stage names the script" "fm-spinner.sh"
-rm -f "$q/bin/fm-spinner.sh"
+plant "and the stage names the first script" "fm-spinner.sh"
+plant "and the second as well" "fm-twirler.sh"
+plant "and both lines of the one with two" "--y"
+rm -f "$q/bin/fm-spinner.sh" "$q/bin/fm-twirler.sh"
+
+# a comment must not talk the stage out of firing: the guard is judged by
+# what the code does, not by the word appearing on the line
+printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\nwhile [ $# -gt 0 ]; do\n  case "$1" in\n    --x) v="${2-}"; shift 2 ;;   # need to check this\n    *) exit 64 ;;\n  esac\ndone\necho "${v:-}"\n' \
+  > "$q/bin/fm-sneak.sh"
+plant "a comment mentioning the guard does not count as one" "has not checked it has two"
+rm -f "$q/bin/fm-sneak.sh"
+
+# and it descends: bin/*.sh missed anything in a subdirectory
+mkdir -p "$q/bin/inner"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\nwhile [ $# -gt 0 ]; do\n  case "$1" in\n    --x) v="${2-}"; shift 2 ;;\n    *) exit 64 ;;\n  esac\ndone\necho "${v:-}"\n' \
+  > "$q/bin/inner/fm-buried.sh"
+plant "a script in a subdirectory of bin is linted too" "fm-buried.sh"
+rm -rf "$q/bin/inner"
 # and the stage says how many scripts it read, so linting nothing does not
 # look like linting a clean repository
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"

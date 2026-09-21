@@ -101,20 +101,32 @@ fi
 # ci.sh quotes the shape it forbids, so it declares itself a lint source
 # the way a sourced library declares itself sourced - by a marker rather
 # than by being on a list.
-# a `shift 2` that is code rather than prose: this file and fm-config.sh
-# both explain the hazard in comments, and a corpus that counted those
-# would lint its own documentation
+# ONE definition of the corpus, used by the gate and by
+# tests/option-loop.test.sh, and it descends: bin/*.sh missed anything in
+# a subdirectory. A file declares itself a lint source when it quotes the
+# shapes it forbids - this file does, on line 2.
+#
+# Comments come off the line BEFORE it is judged, both for finding the
+# corpus and for finding the guard. `--x) v="${2-}"; shift 2 ;; # need` was
+# a `shift 2` that spins for ever and satisfied a grep for the word
+# `need`: the lint was recognising the fix by its name rather than by its
+# presence in the code.
+strip_comments() { sed -e 's/[[:space:]]*#.*$//' "$1"; }
 loopfiles=()
-for f in bin/*.sh; do
+while IFS= read -r f; do
   grep -q '^# fm:lint-source' "$f" && continue
-  grep -v '^[[:space:]]*#' "$f" | grep -q 'shift 2' || continue
+  strip_comments "$f" | grep -q 'shift 2' || continue
   loopfiles+=("$f")
-done
+done < <(find bin -type f -name '*.sh' | sort)
 unguarded=''
-if [ ${#loopfiles[@]} -gt 0 ]; then
-  unguarded="$(grep -Hn 'shift 2' "${loopfiles[@]}" 2>/dev/null \
-    | grep -v 'need ' | grep -v '^[^:]*:[0-9]*: *#' || true)"
-fi
+# bash 3.2 treats "${arr[@]}" on an empty array as unbound under set -u,
+# so the count is checked before the array is touched, the way the
+# earlier stage does it
+[ ${#loopfiles[@]} -eq 0 ] || for f in "${loopfiles[@]}"; do
+  hits="$(strip_comments "$f" | grep -n 'shift 2' | grep -vE '\bneed |fm_need ' || true)"
+  [ -z "$hits" ] || unguarded="$unguarded$(printf '%s\n' "$hits" | sed "s|^|$f:|")
+"
+done
 if [ -n "$unguarded" ]; then
   flunk "a shift 2 that has not checked it has two:"
   printf '%s\n' "$unguarded"
@@ -259,7 +271,11 @@ fi
 stage "assertions"
 if [ -d tests ] && [ -f tests/lib.sh ]; then
   defined="$(grep -ohE '^assert_[a-z_]+' tests/lib.sh 2>/dev/null | sort -u)"
-  called="$(grep -ohE 'assert_[a-z_]+' tests/*.sh 2>/dev/null | sort -u)"
+  # comments off first: a suite that NAMES a helper in prose - "this file
+  # leans on assert_ne" - is not calling it, and counting the mention
+  # turns the gate red for a sentence
+  called="$(sed -e 's/[[:space:]]*#.*$//' tests/*.sh 2>/dev/null \
+            | grep -ohE 'assert_[a-z_]+' | sort -u)"
   missing=''
   for a in $called; do
     printf '%s\n' "$defined" | grep -qx "$a" || missing="$missing $a"

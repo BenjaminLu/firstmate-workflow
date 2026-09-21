@@ -96,26 +96,53 @@ assert_eq "46" "$total" "every pinned flag was exercised"
 # than prose, in a file that has not declared itself a lint source - read
 # by marker rather than by filename, or the two definitions drift the
 # moment a second file carries it.
+# the same rule bin/ci.sh uses, and it descends: bin/*.sh missed anything
+# in a subdirectory, and the two definitions would drift the moment one
+# of them was widened
 loops=''
-for p in "$ROOT"/bin/*.sh; do
+while IFS= read -r p; do
   grep -q '^# fm:lint-source' "$p" && continue
-  grep -v '^[[:space:]]*#' "$p" | grep -q 'shift 2' || continue
+  sed -e 's/[[:space:]]*#.*$//' "$p" | grep -q 'shift 2' || continue
   loops="$loops$(basename "$p" .sh)
 "
-done
+done < <(find "$ROOT/bin" -type f -name '*.sh' | sort)
 assert_eq "$(printf '%s\n' "$PINNED" | awk '{print $1}' | sort)" "$(printf '%s' "$loops" | sort)" \
   "the pinned list is every script that consumes a value with shift 2, and no more"
 
 # and nothing consumes a value any other way, which is the blind spot the
 # lint and this check would otherwise share. Bare flags shift once; a
 # `shift $n` or a getopts loop would be invisible to both.
-assert_eq "" "$(grep -n 'shift' "$ROOT"/bin/fm-*.sh | grep -vE 'shift 2|shift ;;|shift$|shift 1|: *#' || true)" \
+# one corpus for these too, and every script under bin, not only fm-*
+allsh="$(find "$ROOT/bin" -type f -name '*.sh' | sort)"
+assert_ne "" "$allsh" "there are scripts to sweep"
+assert_eq "" "$(printf '%s\n' "$allsh" | xargs grep -n 'shift' \
+  | grep -vE 'shift 2|shift ;;|shift$|shift 1|: *#' || true)" \
   "no script consumes a value with a shift this check cannot see"
-assert_eq "" "$(grep -l 'getopts\|OPTARG' "$ROOT"/bin/*.sh || true)" \
+assert_eq "" "$(printf '%s\n' "$allsh" | xargs grep -l 'getopts\|OPTARG' || true)" \
   "and none of them uses getopts, which would be invisible too"
 
 # an unknown flag is refused the same way rather than looping
 run_capped 6 bash "$ROOT/bin/fm-emit.sh" --no-such-flag
 assert_eq "64" "$code" "an unknown flag is refused too"
 assert_contains "$said" "unknown argument" "and says so"
+# Six scripts get their guard from a sourced function, and a
+# command-not-found under `set -uo pipefail` carries on - the exact hazard
+# the assertions stage exists to catch. So the load has to be hard: if the
+# library will not load, the script must not reach its option loop.
+sourced=0
+for f in "$ROOT"/bin/fm-*.sh; do
+  # comments off: the five that keep a local copy mention fm_need in a
+  # comment pointing at the library, and a grep for the name picks them up
+  sed -e 's/[[:space:]]*#.*$//' "$f" | grep -q 'fm_need ' || continue
+  sourced=$((sourced + 1))
+  name="$(basename "$f")"
+  tmp="$(mktemp -d)"; mkdir -p "$tmp/bin"
+  cp "$f" "$tmp/bin/"                       # and NOT fm-config.sh
+  run_capped 6 bash "$tmp/bin/$name" --task
+  assert_eq "70" "$code" "$name refuses to start without the library it needs"
+  assert_contains "$said" "fm-config.sh" "and says which library"
+  rm -rf "$tmp"
+done
+assert_eq "6" "$sourced" "six scripts take their guard from the library"
+
 finish

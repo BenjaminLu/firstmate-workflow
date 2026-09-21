@@ -247,9 +247,10 @@ so a vendor that dies half way through cannot sign on the next one's behalf.
 `shift 2` with one argument left does not shift. It returns 1 and leaves
 `$@` alone, so `while [ $# -gt 0 ]` spins on the same flag for ever —
 `bin/fm-emit.sh --type` was a busy loop rather than an error, in eleven
-scripts at once. Every flag that takes a value checks first, and every
-script exits `64` for a usage error, so a caller can tell one from a refused
-write. `bin/ci.sh` fails on a `shift 2` that has not checked, and
+scripts at once. Every flag that takes a value checks first and exits `64`,
+which is what a caller reads as "you called it wrong". (Whether every OTHER
+usage error in every script does the same is T-029; today `fm-emit` does and
+the rest have not been looked at.) `bin/ci.sh` fails on a `shift 2` that has not checked, and
 `tests/option-loop.test.sh` runs every flag of every script with nothing
 after it — under an alarm, because a test for a hang that simply calls the
 script hangs the gate instead of failing it.
@@ -586,3 +587,4 @@ gates, and the dispatcher cannot dispatch itself.
 | T-016 | `fm-diagram.sh`: decision diagrams, and the board embed | T-010 |
 | T-017 | `fm-reconcile.sh`: reconciling after a crash | T-007 |
 | T-018 | self-update and `sync-skills` | T-007, T-015 |
+| T-029 | one exit code for a usage error, in every script | T-026 |
