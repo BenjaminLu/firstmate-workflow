@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# fm:skills-writer  # the one script allowed to write under skills/, and only
-#                   # ever under skills/vendor/. `fm.sh lint` enforces both
-#                   # halves of that sentence against every program this
-#                   # repository ships, and fails if a second script ever
-#                   # declares the same marker.
+# fm:skills-writer
+# The bounded syntactic lint permits this writer only under skills/vendor/.
+# It is a review aid, not an enforcement boundary for arbitrary programs.
 #
 # Self-update, and the import of somebody else's skills.
 #
@@ -42,6 +40,23 @@ REPO="${FM_ROOT:-$(cd "$HERE/.." && pwd)}"
 
 TAB="$(printf '\t')"
 die() { printf 'fm: %s\n' "$1" >&2; exit "${2:-64}"; }
+# All value-taking options reject missing/option-shaped values before shift.
+need_value() {
+  [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 requires a value"
+  case "$2" in -*) die "$1 requires a value, got $2" ;; esac
+}
+
+# Reject links before touching a cache. This includes dangling links and
+# linked metadata or old staging paths. No linked content is supported.
+no_links() {
+  local links
+  [ ! -L "$1" ] || die "sync-skills: symlink is not allowed: $1"
+  [ -e "$1" ] || return 0
+  links="$(find "$1" -type l -print 2>/dev/null)" \
+    || die "sync-skills: cannot inspect $1" 70
+  [ -z "$links" ] || die "sync-skills: symlink is not allowed: $links"
+}
+
 abs() { ( cd "$1" 2>/dev/null && pwd -P ) || return 1; }
 # an imported tree is read-only on purpose, so removing one needs the bit back
 rmtree() { [ -e "$1" ] || return 0; chmod -R u+w "$1" 2>/dev/null; rm -rf "$1"; }
@@ -68,7 +83,7 @@ usage: fm.sh <command> [options]
         copy is discarded by the next import.
 
   lint [--repo DIR]
-        Two checks. No program in the repository writes a skill, and
+        Two checks. Detect supported literal skill writes in programs, and
         nothing under skills/ is written in one vendor's syntax.
 EOF
 }
@@ -116,10 +131,9 @@ lint_markdown() {
 # -------------------------------------------------------------------------
 # the writer lint
 #
-# The corpus is every program the repository ships. Not a list of directories
-# and not a list of suffixes: both of those were holes, and a rogue in
-# scripts/, at the repository root, in .github/workflows/, or simply named
-# rogue.py walked straight past a lint that read bin/*.sh and board/*.ts.
+# Walk the repository without a directory allowlist, then select executables,
+# shebang files and recognised program names below. Unrecognised languages,
+# prose, and dynamically evaluated source remain outside this bounded lint.
 #
 # Pruned, with a reason each: .git and node_modules are not ours,
 # skills/vendor is imported and read-only by construction, state/ is runtime
@@ -166,17 +180,12 @@ is_program() {
 # skills/worker, and comparing strings instead of paths is what let the last
 # round's declared writer climb out of skills/vendor.
 #
-# What it still cannot see: a destination assembled entirely out of
-# variables, with no literal skills/ anywhere on the line. That limit is the
-# same one bin/ci.sh's single-writer lint has, and the same answer holds -
-# one script declares itself the writer and the count of declarations is
-# checked.
-#
-# mode=tests changes the question. A suite never writes this checkout: it
-# builds a tree in a temporary directory and writes that. So under tests/ the
-# only forbidden destination is one rooted at the checkout the suite is
-# running from, and the names for that are read out of the file itself -
-# whatever it assigns from BASH_SOURCE or FM_ROOT - rather than guessed.
+# Limits: this does not evaluate variables, aliases, computed paths, language
+# syntax, heredoc execution, or general working-directory changes. Counting
+# declarations does not close those gaps or prove arbitrary programs cannot write skills. Review and the
+# PR gates remain required. Unknown variable roots in tests are treated as
+# fixture paths; that convention is not a proof of temporary provenance.
+# Tests are checked for literal relative paths and known checkout roots.
 write_targets() {
   awk -v mode="$2" '
   function endtok(s) {
@@ -207,7 +216,8 @@ write_targets() {
   }
   function rooted(raw,   s, v) {
     s = raw; gsub(QUOTES, "", s)
-    if (substr(s, 1, 1) != "$") return 0
+    sub(/^[ \t]+/, "", s)
+    if (substr(s, 1, 1) != "$") return (substr(s, 1, 1) != "/" && !fixture_cwd)
     v = substr(s, 2); sub("^\\{", "", v); sub("[/}].*$", "", v)
     return (v in roots)
   }
@@ -222,6 +232,25 @@ write_targets() {
   }
   function scan(ln, line,   s, m, pre, t, n, j, k, cmd, last, inplace, sub_, a) {
     if (line ~ /^[ \t]*#/) return
+    # Recognise the narrow fixture idiom: mktemp assignment, derived path,
+    # then cd to that variable. Reset at function boundaries. This is not
+    # general shell dataflow or working-directory analysis.
+    if (mode == "tests") {
+      if (line ~ /^[ \t]*}/ || line ~ /^[A-Za-z_][A-Za-z_0-9]*\(\)/) fixture_cwd = 0
+      s = line
+      while (match(s, /[A-Za-z_][A-Za-z_0-9]*=[^;]+/)) {
+        a = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
+        cmd = a; sub(/=.*/, "", cmd)
+        sub(/^[^=]*=/, "", a); gsub(QUOTES, "", a)
+        if (a ~ /^\$\(mktemp -d\)/) temps[cmd] = 1
+        else { sub(/^\$/, "", a); sub(/[\/ \t].*/, "", a); if (a in temps) temps[cmd] = 1 }
+      }
+      if (match(line, /(^|[; \t])cd[ \t]+[^; \t]+/)) {
+        a = substr(line, RSTART, RLENGTH); sub(/^.*cd[ \t]+/, "", a)
+        gsub(QUOTES, "", a); sub(/^\$/, "", a); sub(/\{/, "", a); sub(/[\/}].*/, "", a)
+        fixture_cwd = (a in temps)
+      }
+    }
     s = line
     while (match(s, />>?[ \t]*[^ \t;|&()<>]+/)) {
       m = substr(s, RSTART, RLENGTH)
@@ -265,9 +294,15 @@ write_targets() {
       }
     }
     s = line
-    while (match(s, /(writeFileSync|writeFile|appendFileSync|appendFile|outputFile|createWriteStream|copyFileSync|renameSync|mkdirSync|rmSync|unlinkSync|Bun\.write)[ \t]*\(/)) {
+    while (match(s, /(writeFileSync|writeFile|appendFileSync|appendFile|outputFile|createWriteStream|copyFileSync|copyFile|renameSync|rename|mkdirSync|rmSync|unlinkSync|Bun\.write)[ \t]*\(/)) {
+      cmd = substr(s, RSTART, RLENGTH)
       s = substr(s, RSTART + RLENGTH)
-      a = s; sub(/[,)].*$/, "", a); record(ln, a)
+      a = s; sub(/[,)].*$/, "", a)
+      if (cmd !~ /^copyFile/) record(ln, a)
+      if (cmd ~ /^(copyFile|rename)/) {
+        a = s; sub(/^[^,]*,[ \t]*/, "", a)
+        sub(/[,)].*$/, "", a); record(ln, a)
+      }
     }
     if (line ~ /open[ \t]*\(/ && line ~ ("[\"" Q "][wax]")) {
       a = line; sub(/^.*open[ \t]*\(/, "", a); sub(/[,)].*$/, "", a); record(ln, a)
@@ -278,12 +313,19 @@ write_targets() {
     # python one-liner inside a shell string reaches the file as
     # open(\"skills/...\") and the backslash is what hid it last time
     Q = sprintf("%c", 39); QUOTES = "[\"" Q "\\\\]"
-    split("cp mv install ln rsync", x, " ");                for (i in x) lastarg[x[i]] = 1
-    split("rm rmdir mkdir touch tee truncate patch sponge unlink shred dd", x, " ")
+    split("cp install ln rsync", x, " ");                for (i in x) lastarg[x[i]] = 1
+    split("mv rm rmdir mkdir touch tee truncate patch sponge unlink shred dd", x, " ")
     for (i in x) allargs[x[i]] = 1
     nl = 0
   }
-  { nl++; L[nl] = $0 }
+  {
+    if (heredoc != "") { if ($0 == heredoc) heredoc = ""; next }
+    nl++; L[nl] = $0; lineno[nl] = NR
+    if (match($0, /<<[ \t]*[\042\047]?[A-Za-z_][A-Za-z_0-9]*[\042\047]?/)) {
+      heredoc = substr($0, RSTART, RLENGTH)
+      sub(/^<<[ \t]*/, "", heredoc); gsub(QUOTES, "", heredoc)
+    }
+  }
   END {
     if (mode == "tests") {
       roots["FM_ROOT"] = 1
@@ -293,7 +335,7 @@ write_targets() {
           v = substr(L[i], RSTART, RLENGTH - 1); sub(/^[ \t]*/, "", v); roots[v] = 1
         }
     }
-    for (i = 1; i <= nl; i++) scan(i, L[i])
+    for (i = 1; i <= nl; i++) scan(lineno[i], L[i])
   }' "$1"
 }
 
@@ -322,7 +364,7 @@ lint_writers() {
     grep -q '^# fm:skills-writer' "$f" 2>/dev/null && declares=1
     mode=all
     case "$rel" in tests/*|*/tests/*) mode=tests ;; esac
-    out="$(write_targets "$f" "$mode")"
+    out="$(write_targets "$f" "$mode")" || { printf "%s: writer analysis failed\n" "$rel"; continue; }
     [ -n "$out" ] || continue
     while IFS="$TAB" read -r ln p raw; do
       [ -n "$ln" ] || continue
@@ -344,7 +386,7 @@ cmd_lint() {
   local repo="$REPO" bad w v n writers nwriters
   while [ $# -gt 0 ]; do
     case "$1" in
-      --repo) repo="${2-}"; shift 2 ;;
+      --repo) need_value "$@"; repo="${2-}"; shift 2 ;;
       *) die "lint: unknown argument $1" ;;
     esac
   done
@@ -356,7 +398,7 @@ cmd_lint() {
   nwriters=0
   [ -z "$writers" ] || nwriters="$(printf '%s\n' "$writers" | wc -l | tr -d ' ')"
   if [ -n "$w" ]; then
-    printf 'fm lint: something other than a pull request can edit a skill:\n'
+    printf 'fm lint: detected a prohibited literal skill write:\n'
     printf '%s\n' "$w" | sed 's/^/  x /'
     bad=1
   elif [ "$nwriters" -gt 1 ]; then
@@ -364,7 +406,7 @@ cmd_lint() {
     printf '%s\n' "$writers" | sed 's/^/  x /'
     bad=1
   else
-    printf '  + nothing writes a skill outside skills/vendor/ (%s declared writer)\n' "$nwriters"
+    printf '  + no prohibited literal skill writes detected (%s declared writer)\n' "$nwriters"
   fi
 
   v="$(lint_markdown "$repo/skills" "skills/")"
@@ -386,8 +428,8 @@ cmd_sync() {
   local repo="$REPO" src='' name='' vendor vreal dest stage n s imported=0 nskipped=0 skipped=''
   while [ $# -gt 0 ]; do
     case "$1" in
-      --repo) repo="${2-}"; shift 2 ;;
-      --name) name="${2-}"; shift 2 ;;
+      --repo) need_value "$@"; repo="${2-}"; shift 2 ;;
+      --name) need_value "$@"; name="${2-}"; shift 2 ;;
       -*) die "sync-skills: unknown argument $1" ;;
       *) [ -z "$src" ] || die "sync-skills: one source directory at a time"; src="$1"; shift ;;
     esac
@@ -399,7 +441,12 @@ cmd_sync() {
   # be copied over an imported one and back again
   case "$src" in "$repo"|"$repo"/*) die "sync-skills: $src is inside this repository" ;; esac
 
+  # Check source and destination ancestors before the first write. Reject all
+  # imported links rather than retain references into the external source.
+  no_links "$src"
+  [ ! -L "$repo/skills" ] || die "sync-skills: skills is a symlink"
   vendor="$repo/skills/vendor"
+  no_links "$vendor"
   mkdir -p "$vendor" || die "sync-skills: cannot create $vendor" 70
   vreal="$(abs "$vendor")" || die "sync-skills: cannot resolve $vendor" 70
   # imports are not this repository's code. They are read-only copies of
@@ -436,13 +483,14 @@ cmd_sync() {
     # what it deletes: the check is on the resolved parent, not the string
     [ "$(abs "$(dirname "$dest")")" = "$vreal" ] || die "sync-skills: $dest is not inside $vreal"
 
-    stage="$vendor/.staging.$$"
-    rmtree "$stage"; mkdir -p "$stage/$n" || die "sync-skills: cannot stage $n" 70
+    stage="$(mktemp -d "$vendor/.staging.XXXXXXXX")" || die "sync-skills: cannot allocate staging" 70
+    mkdir -p "$stage/$n" || die "sync-skills: cannot stage $n" 70
     cp -R "$s/." "$stage/$n/" 2>/dev/null || { rmtree "$stage"; die "sync-skills: cannot read $s" 1; }
 
     # lint before it lands, never after: an import that fails the lint would
     # leave skills/ red with a file nobody here may edit. Half a skill is
     # worse than none, so an offending file skips the whole skill.
+    no_links "$stage/$n"
     local bad; bad="$(lint_markdown "$stage/$n" "$n/")"
     if [ -n "$bad" ]; then
       printf 'fm sync-skills: skipping %s, it is written for one vendor:\n' "$n"
@@ -452,7 +500,7 @@ cmd_sync() {
       continue
     fi
 
-    rmtree "$dest"
+    rmtree "$dest" || { rmtree "$stage"; die "sync-skills: cannot remove $n" 70; }
     mv "$stage/$n" "$dest" || { rmtree "$stage"; die "sync-skills: cannot place $n" 70; }
     rmtree "$stage"
     # read-only, because the copy is not ours to edit: an edit here is lost
@@ -460,8 +508,8 @@ cmd_sync() {
     # The directories too, not only the files: a tree whose files are locked
     # and whose directories are not is a tree you can still add a file to,
     # and that file sits there until the next import quietly deletes it.
-    chmod -R a-w "$dest" 2>/dev/null
-    manifest_put "$vendor" "$n" "$s" "$dest"
+    chmod -R a-w "$dest" 2>/dev/null || die "sync-skills: cannot lock $n" 70
+    manifest_put "$vendor" "$n" "$s" "$dest" || die "sync-skills: cannot persist manifest" 70
     imported=$((imported + 1))
     printf 'fm sync-skills: imported %s\n' "$n"
   done
@@ -494,10 +542,10 @@ cmd_selfupdate() {
   local repo="$REPO" skill='' why='' adopt='' dir id spec
   while [ $# -gt 0 ]; do
     case "$1" in
-      --skill) skill="${2-}"; shift 2 ;;
-      --why)   why="${2-}";   shift 2 ;;
-      --adopt) adopt="${2-}"; shift 2 ;;
-      --repo)  repo="${2-}";  shift 2 ;;
+      --skill) need_value "$@"; skill="${2-}"; shift 2 ;;
+      --why)   need_value "$@"; why="${2-}";   shift 2 ;;
+      --adopt) need_value "$@"; adopt="${2-}"; shift 2 ;;
+      --repo)  need_value "$@"; repo="${2-}";  shift 2 ;;
       *) die "self-update: unknown argument $1" ;;
     esac
   done
@@ -566,10 +614,7 @@ cmd_selfupdate() {
 # worker, through the pull request the adopted task produces.
 adopt_proposal() {
   local repo="$1" id="$2" spec answer chosen tasks design row tmp
-  case "$id" in
-    SK-[0-9][0-9][0-9]) ;;
-    *) die "self-update: $id is not a proposal id (SK-001)" ;;
-  esac
+  [[ "$id" =~ ^SK-[0-9]{3,}$ ]] || die "self-update: $id is not a proposal id (SK-001)"
   spec="$repo/state/skill-updates/$id.json"
   [ -f "$spec" ] || die "self-update: no proposal at state/skill-updates/$id.json"
 
@@ -581,6 +626,8 @@ adopt_proposal() {
   tasks="$repo/design/tasks.json"
   design="$repo/design/design.md"
   [ -f "$tasks" ] || die "self-update: no design/tasks.json to adopt into"
+  [ -f "$design" ] || die "self-update: no design/design.md to adopt into"
+  [ -x "$repo/bin/fm-emit.sh" ] || die "self-update: bin/fm-emit.sh is missing" 70
 
   if jq -e --arg id "$id" '[.tasks[]?.id] | index($id)' "$tasks" >/dev/null 2>&1; then
     printf 'fm self-update: %s is already in design/tasks.json\n' "$id"
@@ -588,7 +635,7 @@ adopt_proposal() {
     tmp="$tasks.new"
     jq --slurpfile s "$spec" '.tasks += $s' "$tasks" > "$tmp" \
       || { rm -f "$tmp"; die "self-update: could not add $id to design/tasks.json" 70; }
-    mv "$tmp" "$tasks"
+    mv "$tmp" "$tasks" || { rm -f "$tmp"; die "self-update: could not replace tasks.json" 70; }
     printf 'fm self-update: %s added to design/tasks.json\n' "$id"
   fi
 
@@ -606,14 +653,15 @@ adopt_proposal() {
           for (i = 1; i <= NR; i++) { print L[i]; if (i == last) print row }
           if (last == 0) print row
         }' "$design" > "$tmp" || { rm -f "$tmp"; die "self-update: could not write design.md" 70; }
-      mv "$tmp" "$design"
+      mv "$tmp" "$design" || { rm -f "$tmp"; die "self-update: could not replace design.md" 70; }
       printf 'fm self-update: %s listed in design/design.md\n' "$id"
     fi
   fi
 
   [ -x "$repo/bin/fm-emit.sh" ] && FM_ROOT="$repo" "$repo/bin/fm-emit.sh" \
     --actor firstmate --type greenlit --task "$id" \
-    --en "${id} adopted into the plan" --tw "${id} 已納入計畫" >/dev/null </dev/null
+    --en "${id} adopted into the plan" --tw "${id} 已納入計畫" >/dev/null </dev/null \
+    || die "self-update: could not emit greenlit for $id; retry adoption" 70
   printf 'fm self-update: %s is now an ordinary task. Nothing under skills/ has changed.\n' "$id"
 }
 

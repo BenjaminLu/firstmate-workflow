@@ -44,6 +44,157 @@ types() { jq -r .type < "$1/state/events.jsonl" 2>/dev/null | tr '\n' ' '; }
 # plant <path> <body> ; an executable script with one interesting line in it
 plant() { mkdir -p "$(dirname "$1")"; printf '#!/usr/bin/env bash\n%s\n' "$2" > "$1"; chmod +x "$1"; }
 
+# Review regressions run independently of the git-backed gate fixtures below.
+# FM_SELFUPDATE_FOCUSED=1 skips only the git/gh-backed fixtures below.
+review_regressions() {
+  local d src outside snap before cmd flag tail rc out pid timer m op sample target failbin realmv
+  d="$(fixture)"; src="$(mktemp -d)"; outside="$(mktemp -d)"
+  printf 'plain\n' > "$src/SKILL.md"
+  printf 'untouched\n' > "$outside/keep"
+  snap="$(treesum "$d")"
+  while read -r cmd flag; do
+    for tail in '' --unknown; do
+      out="$outside/output"
+      FM_ROOT="$d" "$FM" "$cmd" "$flag" ${tail:+"$tail"} > "$out" 2>&1 & pid=$!
+      ( sleep 1; kill "$pid" 2>/dev/null ) & timer=$!
+      wait "$pid"; rc=$?
+      kill "$timer" 2>/dev/null; wait "$timer" 2>/dev/null
+      assert_eq 64 "$rc" "$cmd $flag $tail terminates with usage failure"
+      assert_contains "$(cat "$out")" "$flag" "missing value names its option"
+      assert_eq "$snap" "$(treesum "$d")" "invalid options have no side effects"
+    done
+  done <<'OPTIONS'
+lint --repo
+sync-skills --repo
+sync-skills --name
+self-update --skill
+self-update --why
+self-update --adopt
+self-update --repo
+OPTIONS
+  rm -f "$outside/output"
+  # Every pre-existing destination is checked before any mutation. Record
+  # mode bits as well as contents: chmod through a link is also a write.
+  for target in skills skills/vendor skills/vendor/imported skills/vendor/.gitignore skills/vendor/MANIFEST.tsv skills/vendor/MANIFEST.tsv.new skills/vendor/.staging.hostile; do
+    m="$(mktemp -d)"
+    mkdir -p "$(dirname "$m/$target")"
+    ln -s "$outside" "$m/$target"
+    before="$(ls -ld "$outside" "$outside/keep"; treesum "$outside"; treesum "$m")"
+    assert_fail "'$FM' sync-skills '$src' --name imported --repo '$m'" "reject destination link $target"
+    assert_eq "$before" "$(ls -ld "$outside" "$outside/keep"; treesum "$outside"; treesum "$m")" "rejection preserves contents and permissions"
+    assert_eq "$outside" "$(readlink "$m/$target")" "rejection preserves destination link itself"
+    rm "$m/$target"; scrub "$m"
+  done
+  m="$(fixture)"
+  ln -s "$m/skills/worker" "$m/skills/vendor"
+  before="$(ls -ld "$m/skills/worker" "$m/skills/worker/SKILL.md"; treesum "$m")"
+  assert_fail "'$FM' sync-skills '$src' --name imported --repo '$m'" "vendor cannot redirect into authored skills"
+  assert_eq "$before" "$(ls -ld "$m/skills/worker" "$m/skills/worker/SKILL.md"; treesum "$m")" "authored contents and permissions are preserved"
+  rm "$m/skills/vendor"; scrub "$m"
+  for target in SKILL.md reference.md linked-dir; do
+    m="$(mktemp -d)"; mkdir -p "$m/input" "$m/repo"
+    printf 'plain\n' > "$m/input/SKILL.md"
+    rm -f "$m/input/$target"
+    case "$target" in
+      linked-dir) ln -s "$outside" "$m/input/$target" ;;
+      *) ln -s "$outside/keep" "$m/input/$target" ;;
+    esac
+    before="$(ls -ld "$outside" "$outside/keep"; treesum "$outside")"
+    assert_fail "'$FM' sync-skills '$m/input' --name imported --repo '$m/repo'" "reject imported link $target"
+    assert_eq "$before" "$(ls -ld "$outside" "$outside/keep"; treesum "$outside")" "imported link target remains unchanged"
+    assert_fail "test -e '$m/repo/skills'" "link rejection happens before destination creation"
+    rm "$m/input/$target"; scrub "$m"
+  done
+  # Linked Markdown is refused even when it hides vendor-specific syntax.
+  printf 'Read CLAUDE.md\n' > "$outside/vendor.md"
+  ln -s "$outside/vendor.md" "$src/reference.md"
+  assert_fail "'$FM' sync-skills '$src' --repo '$d'" "linked vendor syntax cannot enter cache"
+  rm "$src/reference.md"
+  before="$(ls -ld "$src" "$src/SKILL.md"; treesum "$src")"
+  assert_ok "'$FM' sync-skills '$src' --name imported --repo '$d'" "ordinary import still succeeds"
+  assert_eq "$before" "$(ls -ld "$src" "$src/SKILL.md"; treesum "$src")" "ordinary import leaves source contents and permissions unchanged"
+  assert_eq "$(cat "$src/SKILL.md")" "$(cat "$d/skills/vendor/imported/SKILL.md")" "import contains source bytes"
+  assert_fail "test -w '$d/skills/vendor/imported/SKILL.md'" "imported file is read-only"
+  assert_fail "touch '$d/skills/vendor/imported/extra'" "imported directory is read-only"
+  assert_ok "'$FM' sync-skills '$src' --name imported --repo '$d'" "read-only import can be refreshed"
+  m="$(mktemp -d)"; mkdir -p "$m/tests" "$m/bin"
+  for op in copyFileSync renameSync copyFile rename; do
+    plant "$m/bin/rogue.js" "$op(\"input\", \"skills/worker/SKILL.md\")"
+    assert_fail "'$FM' lint --repo '$m'" "$op checks destination argument"
+    plant "$m/bin/rogue.js" "$op(\"skills/worker/SKILL.md\", \"backup\")"
+    # Rename mutates the source as well; copying only reads it.
+    case "$op" in
+      rename*) assert_fail "'$FM' lint --repo '$m'" "$op also removes its source" ;;
+      *) assert_ok "'$FM' lint --repo '$m'" "$op permits reading skills" ;;
+    esac
+  done
+  for op in writeFileSync writeFile appendFileSync appendFile outputFile createWriteStream mkdirSync rmSync unlinkSync Bun.write; do
+    plant "$m/bin/rogue.js" "$op(\"skills/worker/SKILL.md\", body)"
+    assert_fail "'$FM' lint --repo '$m'" "$op checks first argument"
+    plant "$m/bin/rogue.js" "$op(\"backup\", \"skills/worker/SKILL.md\")"
+    assert_ok "'$FM' lint --repo '$m'" "$op does not mistake data for destination"
+  done
+  rm "$m/bin/rogue.js"
+  sample='mv "skills/worker/SKILL.md" backup'
+  plant "$m/bin/rogue.sh" "$sample"
+  assert_fail "'$FM' lint --repo '$m'" "shell move also mutates its source"
+  rm "$m/bin/rogue.sh"
+  for target in skills/worker/SKILL.md ./skills/worker/SKILL.md; do
+    plant "$m/tests/rogue.sh" "printf x > $target"
+    assert_fail "'$FM' lint --repo '$m'" "tests cannot write relative checkout path $target"
+  done
+  plant "$m/tests/rogue.sh" 't="$(mktemp -d)"
+cd "$t" || exit 1
+printf x > skills/worker/SKILL.md'
+  assert_ok "'$FM' lint --repo '$m'" "relative writes after explicit mktemp cd are fixture writes"
+  plant "$m/tests/rogue.sh" 't="$(mktemp -d)"
+cd "$t" || exit 1
+cd "$FM_ROOT" || exit 1
+printf x > skills/worker/SKILL.md'
+  assert_fail "'$FM' lint --repo '$m'" "returning to checkout restores relative write detection"
+  scrub "$m"
+  # Inject operation failures, not platform-dependent directory permissions.
+  realmv="$(command -v mv)"; failbin="$(mktemp -d)"
+  cat > "$failbin/mv" <<'MV'
+#!/usr/bin/env bash
+case "$*" in *"$FAIL_REPLACE"*) exit 1 ;; esac
+exec "$REAL_MV" "$@"
+MV
+  chmod +x "$failbin/mv"
+  printf '# Design\n\n| id | title | depends |\n' > "$d/design/design.md"
+  "$FM" self-update --skill worker --why regression --repo "$d" >/dev/null
+  printf '{"chosen":"A"}\n' > "$d/state/decisions/D-SK-001.json"
+  for target in tasks.json design.md; do
+    out="$(PATH="$failbin:$PATH" REAL_MV="$realmv" FAIL_REPLACE="$target" "$FM" self-update --adopt SK-001 --repo "$d" 2>&1)"; rc=$?
+    assert_ne 0 "$rc" "failed $target replacement fails adoption"
+    assert_lacks "$out" 'is now an ordinary task' "no false adoption success"
+    assert_lacks "$(types "$d")" greenlit "no greenlight before both files persist"
+    if [ "$target" = tasks.json ]; then
+      assert_lacks "$(cat "$d/design/tasks.json")" SK-001 "failed replacement leaves task absent"
+    fi
+  done
+  cp "$d/bin/fm-emit.sh" "$failbin/emitter"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$d/bin/fm-emit.sh"
+  out="$("$FM" self-update --adopt SK-001 --repo "$d" 2>&1)"; rc=$?
+  assert_ne 0 "$rc" "event failure fails adoption"
+  assert_lacks "$out" 'is now an ordinary task' "event failure cannot report success"
+  assert_lacks "$(types "$d")" greenlit "failed emitter has not greenlit the task"
+  rm "$d/bin/fm-emit.sh"
+  assert_fail "'$FM' self-update --adopt SK-001 --repo '$d'" "missing emitter fails adoption"
+  cp "$failbin/emitter" "$d/bin/fm-emit.sh"; chmod +x "$d/bin/fm-emit.sh"
+  assert_ok "'$FM' self-update --adopt SK-001 --repo '$d'" "retry completes partially persisted adoption"
+  assert_eq 1 "$(jq '[.tasks[]|select(.id=="SK-001")]|length' "$d/design/tasks.json")" "retry does not duplicate task"
+  assert_contains "$(types "$d")" greenlit "successful retry greenlights persisted task"
+  printf '{}\n' > "$d/state/skill-updates/SK-999.json"
+  assert_ok "'$FM' self-update --skill worker --why boundary --repo '$d'" "proposal after SK-999 succeeds"
+  assert_ok "test -f '$d/state/skill-updates/SK-1000.json'" "ID grows beyond three digits"
+  printf '{"chosen":"A"}\n' > "$d/state/decisions/D-SK-1000.json"
+  assert_ok "'$FM' self-update --adopt SK-1000 --repo '$d'" "generated four-digit ID can be adopted"
+  scrub "$d" "$src" "$outside" "$failbin"
+}
+review_regressions
+g=''; gi=''; GHSTATE=''
+
 # =========================================================================
 # 1. self-update proposes; it never edits
 # =========================================================================
@@ -139,6 +290,7 @@ assert_fail "FM_ROOT='$d2' '$d2/bin/fm-dispatch.sh' --repo '$d2' --dry-run" \
 # that tends to fall through a gate written with code in mind. So the whole
 # set runs against one, and each gate is shown blocking as well as passing.
 # =========================================================================
+if [ "${FM_SELFUPDATE_FOCUSED:-0}" != 1 ]; then
 g="$(mktemp -d)"
 GHSTATE="$(mktemp -d)"; export GHSTATE
 GH="$ROOT/tests/gh-stub.sh"
@@ -219,14 +371,15 @@ assert_fail "$gate --branch sk-001-skill --pr $pr2 --only 7" "7 blocks a pull re
 GH_AS=someone-else "$GH" pr comment "$pr2" --body "APPROVE:SK-001"
 assert_fail "$gate --branch sk-001-skill --pr $pr2 --only 7" "7 blocks an approval from the wrong account"
 
+fi
+
 # =========================================================================
-# 5. no path edits skills/ without a pull request
+# 5. bounded syntactic checks for writes outside the import cache
 #
-# The corpus is every program in the repository, which is the whole of the
-# fix: the last round read bin/*.sh and board/*.ts, so a rogue in scripts/,
+# The corpus selects executable files and recognised program names: the last round read bin/*.sh and board/*.ts, so a rogue in scripts/,
 # at the root, in .github/workflows/ or simply named rogue.py was invisible.
 # =========================================================================
-assert_ok "'$FM' lint --repo '$ROOT'" "this repository has no path that writes a skill"
+assert_ok "'$FM' lint --repo '$ROOT'" "this repository passes the bounded writer lint"
 assert_contains "$("$FM" lint --repo "$ROOT" 2>&1)" "1 declared writer" \
   "and exactly one script in it declares itself the writer"
 
@@ -262,16 +415,17 @@ assert_ok "'$FM' lint --repo '$m'" "the fixture is clean again"
 # a file with no suffix and no executable bit is still a program if it says
 # so on its first line - which is how a git hook and a python script that is
 # run as `python3 thing` both get read
-printf '#!/usr/bin/env python3\nopen("skills/worker/SKILL.md", "w").write(x)\n' > "$m/hook-no-suffix"
+printf '#!/usr/bin/env python3\nopen("%s", "w").write(x)\n' "skills/worker/SKILL.md" > "$m/hook-no-suffix"
 assert_fail "'$FM' lint --repo '$m'" "a shebang alone puts a file in the corpus"
 rm -f "$m/hook-no-suffix"
 
 # html is read when something in it runs and not when it is prose. The board
 # is an html file with a script tag in it, which is why the suffix is in the
 # corpus at all; a document that quotes a shell line is not.
-printf '<html><script>\nawait Bun.write("skills/worker/SKILL.md", body)\n</script></html>\n' > "$m/board/page.html"
+printf '<html><script>\nawait Bun.write("%s", body)\n</script></html>\n' "skills/worker/SKILL.md" > "$m/board/page.html"
 assert_fail "'$FM' lint --repo '$m'" "html that runs something is read"
-printf '<html><p>then run: cp new.md skills/worker/SKILL.md</p></html>\n' > "$m/board/page.html"
+sample='cp new.md skills/worker/SKILL.md'
+printf '<html><p>then run: %s</p></html>\n' "$sample" > "$m/board/page.html"
 assert_ok "'$FM' lint --repo '$m'" "html that only describes one is prose"
 rm -f "$m/board/page.html"
 
@@ -417,6 +571,7 @@ assert_contains "$(cat "$d/skills/vendor/MANIFEST.tsv")" "plain-skill" "naming t
 # git ignoring skills/vendor is a thing git does, not a character in a file:
 # the old assertion read '^\*$' out of .gitignore and would have passed on a
 # .gitignore that ignored nothing
+if [ "${FM_SELFUPDATE_FOCUSED:-0}" != 1 ]; then
 gi="$(mktemp -d)"
 git -C "$gi" init -q -b main
 git -C "$gi" config user.email a@b.c; git -C "$gi" config user.name t
@@ -427,6 +582,8 @@ assert_ok "git -C '$gi' check-ignore -q skills/vendor/MANIFEST.tsv" \
   "including the manifest, which records a local path"
 assert_fail "git -C '$gi' check-ignore -q skills/vendor/.gitignore" \
   "and the .gitignore that says so is itself tracked"
+
+fi
 
 # one way: a local edit is not a change to the source, it is a change to be lost
 chmod -R u+w "$d/skills/vendor/plain-skill"
