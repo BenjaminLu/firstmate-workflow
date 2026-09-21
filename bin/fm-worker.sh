@@ -191,7 +191,7 @@ if [ "$round_two" = 1 ] && [ -z "$PR" ]; then
   # a mktemp that failed would leave this empty, `2>""` would fail the
   # redirection, gh would never run, and the round would exit 74
   # saying GitHub could not answer - when GitHub was never asked
-  lookup_err="$(scratch_new)" || lookup_err=''
+  lookup_err="$(scratch_new)"
   [ -n "$lookup_err" ] || { echo "fm-worker: could not make a scratch file" >&2; exit 70; }
   scratch_add "$lookup_err"
   PR="$($GH pr list --head "$branch" --state open --json number --jq '.[0].number' \
@@ -278,19 +278,38 @@ say="$tree/.fm-say.md"
           # fetched once: two calls can disagree, and the second would be
           # the one the worker is shown while the first decided whether to
           # show anything
-          log_err="$(scratch_new)" || log_err=''
+          # scratch_new mints, scratch_add registers - the pair is one
+          # register, not two, and a mint that failed leaves the empty
+          # string that the `:-/dev/null` below is for
+          log_err="$(scratch_new)"
           [ -z "$log_err" ] || scratch_add "$log_err"
-          failed_log="$($GH run view "$run_id" --log-failed 2>"${log_err:-/dev/null}" </dev/null \
-                       | tail -120 | sed 's/^[^\t]*\t[^\t]*\t//')"
-          if [ -n "$failed_log" ]; then
-            printf '%s\n' "$failed_log"
-          else
+          raw_log="$($GH run view "$run_id" --log-failed 2>"${log_err:-/dev/null}" </dev/null)"
+          gh_rc=$?
+          # Emptiness is decided on what REACHES THE FENCE, not on the
+          # capture: a log of blank lines, or one every line of which the
+          # column trim reduces to nothing, is non-empty here and prints
+          # an empty block - which is the failure this whole section is
+          # about, arriving through the branch that fixes it.
+          rendered=''
+          [ -z "$raw_log" ] || rendered="$(printf '%s\n' "$raw_log" \
+            | tail -120 | sed 's/^[^\t]*\t[^\t]*\t//' | grep -v '^[[:space:]]*$' || true)"
+          if [ -n "$rendered" ]; then
+            printf '%s\n' "$rendered"
+          elif [ "$gh_rc" != 0 ]; then
             # said, not left blank: the worker cannot run gh, so this block
             # is its only view of the runner, and silence reads as "nothing
             # was wrong" rather than "I could not fetch it"
             printf 'The log for run %s could not be fetched.\n' "$run_id"
             [ -z "$log_err" ] || sed 's/^/gh: /' "$log_err"
             printf 'Ask for it on the pull request rather than guessing.\n'
+          else
+            # gh answered, and had nothing: a cancelled run, or a job that
+            # died before any step logged. Saying "could not be fetched"
+            # here would be a false statement about gh in the one block
+            # the worker has no way to check.
+            printf 'Run %s reported no failing step log.\n' "$run_id"
+            printf 'It may have been cancelled, or failed before any step ran.\n'
+            printf 'Ask on the pull request rather than guessing.\n'
           fi
         fi
         printf '```\n'
@@ -342,7 +361,7 @@ spoke=0
 # number. The run said where the text is and not what went wrong.
 say_err=''
 if [ "$asked" = 1 ] && [ -n "$PR" ]; then
-  say_err="$(scratch_new)" || say_err=''
+  say_err="$(scratch_new)"
   [ -z "$say_err" ] || scratch_add "$say_err"
   if $GH pr comment "$PR" --body-file "$say" >/dev/null 2>"${say_err:-/dev/null}" </dev/null; then
     spoke=1

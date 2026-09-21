@@ -387,13 +387,12 @@ cat > "$r16/bin/adapters/mock.sh" <<'M'
 [ "$1" = "run" ] || exit 64
 cp "$2" "${FM_CAPTURE:?}" 2>/dev/null
 mkdir -p "$3/src"
-if [ -f "$3/src/round-one" ]; then printf 'two
-' > "$3/src/round-two"
-else printf 'one
-' > "$3/src/round-one"; fi
+if [ -f "$3/src/round-one" ]; then printf 'two\n' > "$3/src/round-two"
+else printf 'one\n' > "$3/src/round-one"; fi
 M
 chmod +x "$r16/bin/adapters/mock.sh"
-( cd "$r16" && FM_ROOT="$r16" FM_GH="$GH16" FM_CAPTURE=/dev/null     bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+( cd "$r16" && FM_ROOT="$r16" FM_GH="$GH16" FM_CAPTURE=/dev/null \
+    bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
 # a red check whose log gh will not hand over
 cat > "$d16/stub/gh" <<'G'
 #!/usr/bin/env bash
@@ -412,7 +411,8 @@ exit 0
 G
 chmod +x "$d16/stub/gh"
 cap16="$d16/sent.md"
-( cd "$r16" && FM_ROOT="$r16" FM_GH="$GH16" FM_CAPTURE="$cap16"     bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+( cd "$r16" && FM_ROOT="$r16" FM_GH="$GH16" FM_CAPTURE="$cap16" \
+    bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
 sent16="$(cat "$cap16" 2>/dev/null)"
 assert_contains "$sent16" "The required check is red" "the prompt still says the check is red"
 # the whole phrase, so a mis-parsed run id fails it: `run 51/job/1`
@@ -459,6 +459,56 @@ assert_contains "$sent17" "buildkite.com/acme/pipeline/builds/1234" "naming the 
 assert_lacks "$sent17" "run https:" "rather than asking for a run called https:"
 assert_lacks "$(cat "$d17/ghcalls")" "run view" "and it does not ask gh for a run that is not one"
 rm -rf "$d17"
+
+# The three ways the block can come out empty, each said differently,
+# because to the worker they mean different things. A run id that is
+# not a number; a fetch that failed; and a fetch that SUCCEEDED and
+# had nothing, which "could not be fetched" would misreport as gh's
+# fault in the one block the worker cannot check.
+redcheck() {   # redcheck <label> <check link> <run view body> <want>
+  local d r g cap sent
+  d="$(fixture)"; r="$d/repo"; g="$(ghstub "$d")"
+  cat > "$r/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+cp "$2" "${FM_CAPTURE:-/dev/null}" 2>/dev/null
+mkdir -p "$3/src"
+if [ -f "$3/src/round-one" ]; then printf 'two\n' > "$3/src/round-two"
+else printf 'one\n' > "$3/src/round-one"; fi
+M
+  chmod +x "$r/bin/adapters/mock.sh"
+  ( cd "$r" && FM_ROOT="$r" FM_GH="$g" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+  { printf '#!/usr/bin/env bash\n'
+    printf 'echo "gh $*" >> "$(dirname "$0")/../ghcalls"\n'
+    printf 'case " $* " in\n'
+    printf '  *" pr list "*) echo 23; exit 0 ;;\n'
+    printf '  *" pr checks "*) echo "%s"; exit 0 ;;\n' "$2"
+    printf '  *" run view "*) %s ;;\n' "$3"
+    printf '  *" pr view "*" comments "*) printf %s ;;\n' "'## r\n\nsomething\n'"
+    printf 'esac\nexit 0\n'
+  } > "$d/stub/gh"
+  chmod +x "$d/stub/gh"
+  cap="$d/sent.md"
+  ( cd "$r" && FM_ROOT="$r" FM_GH="$g" FM_CAPTURE="$cap" \
+      bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+  sent="$(cat "$cap" 2>/dev/null)"
+  assert_contains "$sent" "The required check is red" "$1: the section is there"
+  assert_contains "$sent" "$4" "$1"
+  rm -rf "$d"
+}
+redcheck "a run id that is not a number is not asked for" \
+  "https://github.com/o/r/actions/runs/latest/job/1" "exit 0" \
+  "not a GitHub Actions run"
+redcheck "a fetch that failed says so" \
+  "https://github.com/o/r/actions/runs/61/job/1" "exit 1" \
+  "The log for run 61 could not be fetched"
+redcheck "a fetch that succeeded with nothing says THAT, not that gh failed" \
+  "https://github.com/o/r/actions/runs/62/job/1" "exit 0" \
+  "Run 62 reported no failing step log"
+redcheck "and a log the column trim empties is the same case" \
+  "https://github.com/o/r/actions/runs/63/job/1" \
+  "printf 'ci\tbin/ci.sh\t\nci\tbin/ci.sh\t   \n'; exit 0" \
+  "Run 63 reported no failing step log"
 
 # and if it cannot be kept either, the run says so rather than pointing
 # at a path inside the worktree as though it were safe - which is what

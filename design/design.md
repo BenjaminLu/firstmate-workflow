@@ -302,9 +302,18 @@ job: reading the whole tail of it asked `gh run view` for something it
 refuses, its complaint went to `/dev/null`, and the worker was handed a
 blank block. The shape is checked rather than assumed — a required
 check need not be an Actions run at all, and one that is not says so
-rather than asking for a run called `https:`. A blank block reads as a green run, so the round was spent
-asking why the check was red. When the log cannot be fetched the block
-says so, names the run, and passes on what `gh` said.
+rather than asking for a run called `https:`. A blank block reads as a
+green run, so the round was spent asking why the check was red.
+
+The block is never blank, and it says which of three things happened,
+because to the worker they mean different things: the check is not an
+Actions run and its log is not ours to fetch; the fetch failed, and
+here is what `gh` said; or the fetch succeeded and the run had no
+failing step log at all — a cancelled run, or a job that died before
+anything logged — which "could not be fetched" would misreport as
+GitHub's fault. Emptiness is decided on what reaches the fence rather
+than on what `gh` returned: a log whose every line the column trim
+reduces to nothing is not an empty capture, and it is an empty block.
 
 The lookup keeps GitHub's exit status, because *no open pull request*
 and *`gh` did not answer* are the same empty string and opposite
