@@ -336,8 +336,9 @@ event the round writes is the one the worker writes — there is no
 second `worker_crashed` from a caller noticing the code. The codes a
 worker can exit with are `1` a failed attempt, `2` no vendor was
 available, `64` it was called wrong, `65` no such task in
-`design/tasks.json`, `70` no worktree or no library, `71` the push
-failed, `72` no pull request number came back, `73` the worker had
+`design/tasks.json`, `70` something the run needs before it starts and
+cannot have — no library, no worktree, nowhere to put a scratch file —
+`71` the push failed, `72` no pull request number came back, `73` the worker had
 something to say and there was nowhere to put it, `74` GitHub could not
 say which pull request the branch has, and `129`, `130`, `143` — a
 signal, 128 plus its number, from the traps that make a killed run stop
@@ -345,7 +346,11 @@ rather than carry on.
 
 `tests/worker.test.sh` compares that list against every `exit` in the
 script, by identity: a code added correctly is not a failure and a code
-that moves without the sentence moving is.
+that moves without the sentence moving is. That check compares numbers,
+not meanings — a new failure reusing an existing code passes it in
+silence, which is how `70` acquired a third meaning its sentence did
+not mention. A code is a bucket, and widening the bucket is an edit to
+this paragraph.
 
 ### 5.4 The pull request protocol
 
