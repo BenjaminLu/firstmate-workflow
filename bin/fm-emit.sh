@@ -24,10 +24,13 @@ review_opened review_failed ask_pass_criteria criteria_returned protocol_violati
 merged closed decision_requested decision_made worker_crashed vendor_unavailable \
 agent_finished"
 
-# Two kinds of failure, two codes, and every path goes through here so
-# they cannot drift: 64 is "you called it wrong", 1 is "it could not
-# write". A caller that cannot tell them apart cannot react to either -
-# one is fixed by a human, the other by trying again.
+# 64 is what the OPTION LOOP exits, and only the option loop: a flag with
+# no value after it, and a flag this script does not know. Everything
+# else below still exits 1, as it always has. Converting the rest -
+# `--actor is required`, a type that is not in the list, `--data` that is
+# not JSON - is T-029, which sweeps the convention across every script
+# instead of leaving one script half converted and a rule in the design
+# that only one file obeys.
 die()   { printf 'fm-emit: %s\n' "$1" >&2; exit 1; }
 usage() { printf 'fm-emit: %s\n' "$1" >&2; exit 64; }
 
@@ -49,16 +52,16 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-[ -n "$actor" ] || usage "--actor is required"
-[ -n "$type" ]  || usage "--type is required"
-case " $TYPES " in *" $type "*) ;; *) usage "unknown type: $type" ;; esac
+[ -n "$actor" ] || die "--actor is required"
+[ -n "$type" ]  || die "--type is required"
+case " $TYPES " in *" $type "*) ;; *) die "unknown type: $type" ;; esac
 command -v jq >/dev/null 2>&1 || die "jq is required"
-jq -e . >/dev/null 2>&1 <<<"$data" || usage "--data is not valid JSON"
+jq -e . >/dev/null 2>&1 <<<"$data" || die "--data is not valid JSON"
 
 # half a summary is worse than none: it renders blank in one locale
 if [ -n "$en" ] || [ -n "$tw" ]; then
-  [ -n "$en" ] || usage "--tw given without --en (a summary needs both languages)"
-  [ -n "$tw" ] || usage "--en given without --tw (a summary needs both languages)"
+  [ -n "$en" ] || die "--tw given without --en (a summary needs both languages)"
+  [ -n "$tw" ] || die "--en given without --tw (a summary needs both languages)"
 fi
 
 line=$(jq -cn \

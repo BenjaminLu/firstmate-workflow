@@ -171,7 +171,7 @@ assert_contains "$out" "60s locally" "against the budget the design sets"
 # `replant` call after every write, one was missed, and the assertion read
 # the previous run - green for an assertion that tested nothing, which is
 # the class this suite exists to catch.
-planted=''; planted_sig=''
+planted=''; planted_sig=''; planted_runs=0
 # The content, not the metadata. `ls -ld` prints the mtime to the minute
 # on the BSD tools this runs on, so rewriting a file with different
 # content of the same size seconds later produced an identical signature -
@@ -185,9 +185,28 @@ plant() {   # plant <label> <expected fragment>
   if [ "$sig" != "$planted_sig" ]; then
     planted="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
     planted_sig="$sig"
+    planted_runs=$((planted_runs + 1))
   fi
   assert_contains "$planted" "$want" "$label"
 }
+
+# The cache has to HIT, or it is a claim rather than a saving: if
+# bin/ci.sh writes anything under FM_ROOT the signature changes every
+# time, every plant re-runs the whole gate, and the suite is green
+# either way. Two plants against a fixture nothing has touched, and the
+# gate must have run once.
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
+  printf '    --x) v="${2-}"; shift 2 ;;\n    *) exit 64 ;;\n  esac\ndone\necho "${v:-}"\n'
+} > "$q/bin/fm-cachecheck.sh"
+before_runs="$planted_runs"
+plant "the cache warms on the first plant" "has not checked it has two"
+assert_eq "$((before_runs + 1))" "$planted_runs" "the first plant ran the gate"
+plant "and a second plant against the same fixture" "fm-cachecheck.sh"
+assert_eq "$((before_runs + 1))" "$planted_runs" "and the second one did not run it again"
+rm -f "$q/bin/fm-cachecheck.sh"
+plant "and a plant after a change runs it again" "no option loop can spin"
+assert_eq "$((before_runs + 2))" "$planted_runs" "a changed fixture is not served from the cache"
 
 # The plant cache has to notice an in-place edit, not only a file
 # appearing or disappearing. The version keyed on `ls -ld` did not: its
@@ -339,6 +358,32 @@ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\nwhile [ $# -gt 
 plant "a comment mentioning the guard does not count as one" "has not checked it has two"
 rm -f "$q/bin/fm-sneak.sh"
 
+# nor must a check written AFTER the shift, which is not a check: by then
+# the argument it was supposed to find is gone. Nor `echo "need a value"`,
+# which mentions the word and does nothing.
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'need() { [ "$#" -ge 2 ] || exit 64; }\n'
+  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
+  printf '    --x) v="${2-}"; shift 2; need "$@" ;;\n'
+  printf '    --y) w="${2-}"; shift 2; echo "need a value" ;;\n'
+  printf '    *) exit 64 ;;\n  esac\ndone\necho "${v:-}${w:-}"\n'
+} > "$q/bin/fm-afterwards.sh"
+plant "a guard written after the shift does not count as one" "has not checked it has two"
+plant "and the stage names that line" "--x"
+plant "and the one that only says the word" "--y"
+rm -f "$q/bin/fm-afterwards.sh"
+
+# and the corpus has to SEE a script whose option loop shares a line with
+# a `#` that is not a comment. `sed 's/#.*$//'` cuts `${1#--}` in half,
+# the `shift 2` disappears with it, and the script is excused entirely.
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
+  printf '    --*) n="${1#--}"; v="${2-}"; shift 2 ;;\n'
+  printf '    *) exit 64 ;;\n  esac\ndone\necho "${n:-}${v:-}"\n'
+} > "$q/bin/fm-hashed.sh"
+plant "a hash inside a parameter expansion does not hide an option loop" "fm-hashed.sh"
+rm -f "$q/bin/fm-hashed.sh"
+
 # and it descends: bin/*.sh missed anything in a subdirectory
 mkdir -p "$q/bin/inner"
 printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\nwhile [ $# -gt 0 ]; do\n  case "$1" in\n    --x) v="${2-}"; shift 2 ;;\n    *) exit 64 ;;\n  esac\ndone\necho "${v:-}"\n' \
@@ -422,6 +467,38 @@ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\nfor v in $chain
 plant "a second vendor loop turns its stage red" "loops over vendors on its own"
 plant "and the stage names the script" "fm-second-chain.sh"
 rm -f "$q/bin/fm-second-chain.sh"
+
+# The assertions stage, from both sides. It landed with no fixture, which
+# is the one rule this file is for: a lint nobody has ever seen fail is a
+# lint nobody knows works.
+# the stage needs a harness to compare against, and this fixture has
+# none until now - without lib.sh it skips, and a plant against a stage
+# that skipped is the assertion that cannot fail all over again
+cp "$ROOT/tests/lib.sh" "$q/tests/lib.sh"
+{ printf '#!/usr/bin/env bash\n'
+  printf '. "$(dirname "$0")/lib.sh"\n'
+  printf 'assert_%s "x" "x" "planted"\n' nosuchthing
+  printf 'finish\n'
+} > "$q/tests/undefined.test.sh"
+plant "a suite calling an assertion lib.sh does not define turns the stage red" \
+  "does not define"
+# assembled, or this suite carries the name of a helper that does not
+# exist and the assertions stage - which cannot tell a call from a
+# mention - turns the gate red on the file that tests it
+miss="nosuchthing"
+plant "and the stage names it" "assert_${miss}"
+rm -f "$q/tests/undefined.test.sh"
+# and the negative half, which is the reason the stage strips comments:
+# a suite that NAMES a helper in prose is not calling it
+{ printf '#!/usr/bin/env bash\n'
+  printf '. "$(dirname "$0")/lib.sh"\n'
+  printf '# this file used to lean on assert_%s, which no longer exists\n' nosuchthing
+  printf 'assert_eq "x" "x" "planted"\n'
+  printf 'finish\n'
+} > "$q/tests/mentions.test.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_contains "$out" "ci: green" "a helper named only in a comment does not turn it red"
+rm -f "$q/tests/mentions.test.sh" "$q/tests/lib.sh"
 
 # a second writer of the event log
 printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\necho x >> state/events.jsonl\n' \

@@ -120,7 +120,14 @@ fi
 # below this one exists to forbid, in the file that forbids it: the
 # marker exempts the whole file, so the gate is the one script the gate
 # cannot lint. It cost two scripts on the runner and neither locally.
-strip_comments() { sed -e 's/[[:space:]]*#.*$//' "$1"; }
+#
+# The stripper cuts at a `#` that STARTS A WORD, not at the first `#` on
+# the line. `sed 's/#.*$//'` also cuts `${1#--}` and `"#"`, so a `shift
+# 2` sharing a line with either dropped out of the lint AND out of the
+# sweep in tests/option-loop.test.sh that is supposed to catch the lint
+# missing something - both blind the same way, which is the shape of a
+# check that cannot notice its own blind spot.
+strip_comments() { sed -e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]]#.*$//' "$1"; }
 loopfiles=()
 while IFS= read -r f; do
   grep -q '^# fm:lint-source' "$f" && continue
@@ -131,8 +138,20 @@ unguarded=''
 # bash 3.2 treats "${arr[@]}" on an empty array as unbound under set -u,
 # so the count is checked before the array is touched, the way the
 # earlier stage does it
+#
+# The guard has to come BEFORE the shift, and the grep did not care
+# where it was: `--x) v="${2-}"; shift 2; need "$@" ;;` checks after the
+# argument is gone and still passed, and so did `shift 2; echo "need a
+# value"`, which is not a check at all. So the line is cut at the shift
+# and only the part in front of it is searched, for a CALL - the word
+# followed by an argument - rather than for the word.
 [ ${#loopfiles[@]} -eq 0 ] || for f in "${loopfiles[@]}"; do
-  hits="$(strip_comments "$f" | grep -n 'shift 2' | grep -vE '\bneed |fm_need ' || true)"
+  hits="$(strip_comments "$f" | grep -n 'shift 2' | awk '
+            { head = $0
+              sub(/^[0-9]+:/, "", head)      # grep -n prefix, not code
+              sub(/shift 2.*$/, "", head)    # only what comes BEFORE the shift
+              if (head !~ /(^|[^[:alnum:]_])(fm_)?need[ \t]+[^;[:space:]]/) print }
+          ' || true)"
   [ -z "$hits" ] || unguarded="$unguarded$(printf '%s\n' "$hits" | sed "s|^|$f:|")
 "
 done

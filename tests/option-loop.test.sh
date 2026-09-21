@@ -65,7 +65,10 @@ run_capped 5 bash -c 'exit 0'
 assert_eq "0" "$code" "and lets something that returns through"
 run_capped 5 bash -c 'echo boom >&2'
 assert_contains "$said" "boom" "and what the command said is captured, not swallowed"
-assert_eq "" "$(printf '%s' "$said" | tr -d 'boom\n')" "and nothing else is"
+# `tr -d 'boom\n'` is a character SET, so "mob", "oo" and "" all satisfy
+# it - an assertion that cannot fail, in the file whose thesis is that
+# an assertion that cannot fail is the bug. What it meant to say:
+assert_eq "boom" "$(printf '%s' "$said")" "and nothing else is"
 
 # --- every flag of every pinned script ----------------------------------
 total=0
