@@ -26,15 +26,18 @@ JSON
 }
 
 ghstub() {                      # records what it was asked, invents a pull request url
-  # `pr list` has to answer emptily: the worker asks it first, and a stub
-  # that answers every question with a url tells the worker a pull request
-  # already exists and it never opens one
+  # `pr list` has to answer the way gh does: through `--jq
+  # '.[0].number'` a branch with no open pull request is the literal
+  # `null`, not silence, and the worker normalises it. A stub that
+  # answers with nothing leaves that normalisation untested - and a
+  # stub that answers every question with a url tells the worker a
+  # pull request already exists and it never opens one.
   mkdir -p "$1/stub"
   cat > "$1/stub/gh" <<G
 #!/usr/bin/env bash
 echo "gh \$*" >> "$1/ghcalls"
 case " \$* " in
-  *" pr list "*) exit 0 ;;
+  *" pr list "*) echo null; exit 0 ;;
 esac
 echo "https://example.invalid/pull/42"
 G
@@ -120,7 +123,74 @@ assert_lacks "$(cat "$d5/ghcalls" 2>/dev/null)" "pr create" \
 # the last event is now agent_finished, so look for the push itself
 assert_contains "$(jq -r 'select(.type=="commit_pushed")|.pr|tostring' < "$r5/state/events.jsonl" | tail -1)" "9" \
   "and its event points at that number"
+
 rm -rf "$d5"
+
+# The round this task exists for, and the join the two halves above do
+# not make: dispatched from a task id ALONE, on a branch that already
+# has a pull request, the worker asks - and the question has to land on
+# the number it found for itself. That is the path that broke, and what
+# it printed was `its question is on #`, with nothing after the hash.
+#
+# A fresh fixture, not surgery on the one above: the previous version
+# rewound a branch with five silenced git commands and then asserted on
+# files the old commit already carried, so it could not tell a round
+# that produced them from one that did nothing.
+d9="$(fixture)"; r9="$d9/repo"
+cat > "$r9/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+if [ -f "$3/src/round-one" ]; then
+  # BOTH halves of the criterion, one condition each: the question is
+  # only written if the prompt carried the review AND the failing check
+  grep -q 'REVIEWER SAID' "$2" || exit 1
+  grep -q 'THE RUNNER SAID' "$2" || exit 1
+  printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md"
+else
+  mkdir -p "$3/src"; printf 'the first round\n' > "$3/src/round-one"
+fi
+M
+chmod +x "$r9/bin/adapters/mock.sh"
+GH9="$(ghstub "$d9")"
+( cd "$r9" && FM_ROOT="$r9" FM_GH="$GH9" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+b9="$(cd "$r9" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1)"
+# what the first round DID, not that a branch exists: `git worktree add
+# -b` makes the branch before the engine runs, so a branch is also what
+# a round that died on its first line leaves
+assert_ok "cd '$r9' && git cat-file -e '$b9:src/round-one'" \
+  "the first round committed work for the second to answer for"
+# a stub that knows the branch has #31, and records what it is asked
+cat > "$d9/stub/gh" <<'G'
+#!/usr/bin/env bash
+echo "gh $*" >> "$(dirname "$0")/../ghcalls"
+case " $* " in
+  *" pr list "*) echo 31; exit 0 ;;
+  *" pr checks "*) echo "https://example.invalid/actions/runs/9/job/1"; exit 0 ;;
+  *" run view "*) printf 'ci\tbin/ci.sh\tTHE RUNNER SAID: the gate is red\n'; exit 0 ;;
+  *" pr view "*" comments "*) printf '## reviewer-1\n\nREVIEWER SAID: answer this\n' ;;
+esac
+exit 0
+G
+chmod +x "$d9/stub/gh"
+: > "$d9/ghcalls"
+out9="$(cd "$r9" && FM_ROOT="$r9" FM_GH="$GH9" bin/fm-worker.sh --task T-Z 2>&1)"; rc9=$?
+assert_eq "0" "$rc9" "a later round dispatched from a task id alone is a complete round"
+assert_contains "$out9" "already has #31" "the worker found the pull request itself"
+assert_contains "$out9" "its question is on #31" "and says which one it spoke on, with a number after the hash"
+# the question exists only if BOTH halves reached the prompt: the
+# adapter exits 1 without either, so this assertion is the conjunction
+assert_contains "$(cat "$d9/ghcalls")" "run view" "and the prompt carried the failing check as well as the review"
+# "there is no second lookup" - once per run, not once per site: the
+# post-push branch reuses what this found, and two answers to one
+# question can disagree when a pull request is opened while the engine
+# is running
+assert_eq "1" "$(grep -c 'pr list' "$d9/ghcalls" || true)" "and it asked which pull request exactly once"
+assert_contains "$(cat "$d9/ghcalls")" "pr comment 31" "the question reached that pull request"
+assert_eq "31" "$(jq -r 'select(.type=="ask_pass_criteria")|.pr' < "$r9/state/events.jsonl" | tail -1)" \
+  "and the log records the number it spoke on"
+assert_contains "$out9" "asked rather than changed" \
+  "an asking round says so - which is the string the stale-signal test below asserts the ABSENCE of"
+rm -rf "$d9"
 
 # The worker cannot run gh, so the only way its question reaches the
 # reviewer is this file. Without it the round-three protocol cannot happen:
@@ -143,6 +213,308 @@ assert_lacks "$(cat "$d6/ghcalls")" "push" "asking pushes nothing"
 b6="$(cd "$r6" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1)"
 assert_fail "cd '$r6' && git cat-file -e '$b6:.fm-say.md'" "and the file never reaches the diff"
 rm -rf "$d6"
+
+# A question that went nowhere leaves the task deadlocked: the reviewer
+# waits for a question it will never see and the next round asks it
+# again. That used to be a line on standard error and an exit 0 - the
+# run reported a complete round and the log said nothing at all. It is
+# the run's outcome now.
+d7="$(fixture)"; r7="$d7/repo"; GH7="$(ghstub "$d7")"
+cat > "$r7/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md"
+M
+chmod +x "$r7/bin/adapters/mock.sh"
+# a gh that refuses the comment and nothing else
+cat > "$d7/stub/gh" <<'G'
+#!/usr/bin/env bash
+echo "gh $*" >> "$(dirname "$0")/../ghcalls"
+case " $* " in *" pr comment "*) echo "could not post" >&2; exit 1 ;; esac
+echo "https://example.invalid/pull/42"
+G
+chmod +x "$d7/stub/gh"
+out7="$(cd "$r7" && FM_ROOT="$r7" FM_GH="$GH7" bin/fm-worker.sh --task T-Z --pr 9 2>&1)"; rc7=$?
+assert_eq "73" "$rc7" "a question that could not be posted fails the run"
+assert_contains "$out7" "nowhere to put it" "and says what happened"
+assert_contains "$out7" "#9" "naming the pull request that would not take it"
+# and WHY, which is the only thing that tells the person picking this
+# up by hand whether to retry, ask for access, or fix the number
+assert_contains "$out7" "could not post" "and passing on what gh said about it"
+assert_eq "9" "$(jq -r 'select(.type=="worker_crashed")|.pr' < "$r7/state/events.jsonl" | tail -1)" \
+  "and the event carries it, so the board can link the failed round to the pull request"
+# the FILE, not the length: with nullglob off bash leaves an unmatched
+# pattern in place, so the array has one element either way
+unsent7=("$r7"/state/unsent/T-Z-*.md)
+assert_ok "test -s '${unsent7[0]}'" "and the question itself is kept, outside the worktree"
+assert_contains "$(jq -r .type < "$r7/state/events.jsonl" | tr '\n' ' ')" "worker_crashed" \
+  "and the log carries it, so the board is not showing a round that went fine"
+# d9 above emits ask_pass_criteria on a round where the post succeeded,
+# so this absence is about the post failing and not about a type the
+# log never carries
+assert_lacks "$(jq -r .type < "$r7/state/events.jsonl" | tr '\n' ' ')" "ask_pass_criteria" \
+  "and does not claim the worker spoke"
+rm -rf "$d7"
+
+# and the same with no pull request at all to say it on
+d8="$(fixture)"; r8="$d8/repo"; GH8="$(ghstub "$d8")"
+# written out, not copied from $r7: that fixture was removed four lines
+# up, so the cp failed every run and the `||` fallback was the whole
+# implementation wearing a conditional
+cat > "$r8/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md"
+M
+chmod +x "$r8/bin/adapters/mock.sh"
+out8="$(cd "$r8" && FM_ROOT="$r8" FM_GH="$GH8" bin/fm-worker.sh --task T-Z 2>&1)"; rc8=$?
+assert_eq "73" "$rc8" "so does a question with no pull request to put it on"
+assert_contains "$out8" "no pull request to say it on - asking is premature" \
+  "and it says what was actually checked - there is no pull request"
+# the payload survives, or the only copy of the question is gone and
+# nobody can post it by hand either
+# OUT of the worktree: the next round removes and recreates that, so
+# the file where it was written is gone as soon as anything runs again
+# - and the design says the text survives for a human to post
+unsent8=("$r8"/state/unsent/T-Z-*.md)
+assert_ok "test -s '${unsent8[0]}'" \
+  "what the worker wrote is kept where the next round will not delete it"
+assert_contains "$out8" "state/unsent/T-Z" "and the run says where"
+assert_contains "$(jq -r 'select(.type=="worker_crashed")|.summary.en // .en' \
+  < "$r8/state/events.jsonl" | tail -1)" "before there was a pull request" \
+  "and the log says which of the two it was"
+rm -rf "$d8"
+
+# A later round whose lookup could not answer. "No pull request" and
+# "gh did not answer" used to be the same empty string, and they are
+# opposite instructions: the first means open one, the second means the
+# prompt would carry no review and the push would collide with a pull
+# request nobody looked for. So the run stops BEFORE the engine - which
+# is what this asserts, rather than that it printed a warning.
+d10="$(fixture)"; r10="$d10/repo"; GH10="$(ghstub "$d10")"
+# the counter is OUTSIDE the worktree, because the worktree is recreated
+# from the branch each round - a file the first round committed is back
+# on disk before the second one starts, so it cannot say whether the
+# engine ran
+runs="$d10/engine-runs"
+cat > "$r10/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+echo ran >> "${FM_RUNS:?}"
+mkdir -p "$3/src"
+printf '%s\n' "$RANDOM$$" > "$3/src/work"
+M
+chmod +x "$r10/bin/adapters/mock.sh"
+( cd "$r10" && FM_ROOT="$r10" FM_GH="$GH10" FM_RUNS="$runs" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+assert_eq "1" "$(grep -c . "$runs" 2>/dev/null || true)" "the first round ran the engine once"
+# a gh that cannot answer, which is what a rate limit or an outage is
+printf '#!/usr/bin/env bash\necho "HTTP 503" >&2\nexit 1\n' > "$d10/stub/gh"
+chmod +x "$d10/stub/gh"
+out10="$(cd "$r10" && FM_ROOT="$r10" FM_GH="$GH10" FM_RUNS="$runs" bin/fm-worker.sh --task T-Z 2>&1)"; rc10=$?
+assert_eq "74" "$rc10" "a later round whose lookup cannot answer stops"
+# what it DID, not what it said
+assert_eq "1" "$(grep -c . "$runs" 2>/dev/null || true)" \
+  "and stops before the engine, rather than running blind"
+assert_contains "$out10" "could not ask which pull request" "it says what it could not do"
+assert_contains "$out10" "HTTP 503" "and passes on what gh said, instead of swallowing it"
+rm -rf "$d10"
+
+# and the other half of the same status, which must NOT stop: a lookup
+# that succeeded and said there is none. A round that pushed and then
+# died before opening a pull request leaves exactly that, and the right
+# thing is to carry on and open one.
+d13="$(fixture)"; r13="$d13/repo"; GH13="$(ghstub "$d13")"
+cat > "$r13/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+mkdir -p "$3/src"
+printf '%s\n' "$RANDOM$$" > "$3/src/work"
+M
+chmod +x "$r13/bin/adapters/mock.sh"
+( cd "$r13" && FM_ROOT="$r13" FM_GH="$GH13" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+# a gh that answers, and answers "none"
+cat > "$d13/stub/gh" <<'G'
+#!/usr/bin/env bash
+echo "gh $*" >> "$(dirname "$0")/../ghcalls"
+case " $* " in
+  # what gh really prints for a branch with no open pull request,
+  # through `--jq '.[0].number'`: the literal four characters, not
+  # silence. A stub that answers with nothing tests the code's
+  # expectation rather than the vendor.
+  *" pr list "*) echo null; exit 0 ;;
+  *" pr view "*|*" pr checks "*) exit 0 ;;
+esac
+echo "https://example.invalid/pull/61"
+G
+chmod +x "$d13/stub/gh"; : > "$d13/ghcalls"
+out14="$(cd "$r13" && FM_ROOT="$r13" FM_GH="$GH13" bin/fm-worker.sh --task T-Z 2>&1)"; rc14=$?
+assert_eq "0" "$rc14" "a lookup that answers \"none\" is not a failure"
+assert_contains "$out14" "will open one" "and the run says it is opening one"
+# d9 counts this on an asking round, which never reaches the post-push
+# site at all. This one does - it goes all the way to `pr create` - so
+# it is the fixture that can see a second lookup if one comes back
+assert_eq "1" "$(grep -c 'pr list' "$d13/ghcalls" || true)" \
+  "and asked which pull request exactly once, on a round that runs to the end"
+assert_lacks "$out14" "#null" "and never carries gh's four characters through as a number"
+assert_contains "$(cat "$d13/ghcalls")" "pr create" "and it does open one"
+rm -rf "$d13"
+
+# and if it cannot be kept either, the run says so rather than pointing
+# at a path inside the worktree as though it were safe - which is what
+# the fallback this replaces did
+d11="$(fixture)"; r11="$d11/repo"; GH11="$(ghstub "$d11")"
+cat > "$r11/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md"
+M
+chmod +x "$r11/bin/adapters/mock.sh"
+cat > "$d11/stub/gh" <<'G'
+#!/usr/bin/env bash
+case " $* " in *" pr comment "*) exit 1 ;; esac
+exit 0
+G
+chmod +x "$d11/stub/gh"
+# a directory mode is advisory for root, so the test would silently
+# invert under a root runner: it makes the destination a FILE instead,
+# which no uid can cp into as if it were a directory
+mkdir -p "$r11/state"; : > "$r11/state/unsent"
+out12="$(cd "$r11" && FM_ROOT="$r11" FM_GH="$GH11" bin/fm-worker.sh --task T-Z --pr 9 2>&1)"; rc12=$?
+rm -f "$r11/state/unsent"
+assert_eq "73" "$rc12" "a question that can be neither posted nor kept still fails the run"
+assert_contains "$out12" "could not be kept either" "and says the keeping failed too"
+assert_lacks "$out12" "it is at state/unsent" "rather than naming a file it did not write"
+# Every path that makes a scratch file, in a TMPDIR the test owns.
+# Counting what is in the machine's $TMPDIR before and after scored
+# every other process against the worker - and would have passed on a
+# leak if anything else removed a file in the same window.
+# By NAME. An owned TMPDIR settles whose machine, not whose file: git,
+# the stub and the adapter all run under it too, and any of them would
+# fail this as a worker leak. `scratch_new`'s template exists so a file
+# left behind says who left it - so the check reads the name.
+leak_check() {   # leak_check <label> <tmpdir> ; the run has already happened
+  local left; left="$(find "$2" -name 'fm-worker-*' -type f 2>/dev/null | wc -l | tr -d ' ')"
+  assert_eq "0" "$left" "$1"
+}
+
+# the exit-73 route, which makes say_err
+d14="$(fixture)"; r14="$d14/repo"; GH14="$(ghstub "$d14")"
+cat > "$r14/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md"
+M
+chmod +x "$r14/bin/adapters/mock.sh"
+cat > "$d14/stub/gh" <<'G'
+#!/usr/bin/env bash
+case " $* " in *" pr comment "*) echo "refused" >&2; exit 1 ;; esac
+exit 0
+G
+chmod +x "$d14/stub/gh"
+mkdir -p "$d14/tmp"
+out16="$(cd "$r14" && TMPDIR="$d14/tmp" FM_ROOT="$r14" FM_GH="$GH14" \
+    bin/fm-worker.sh --task T-Z --pr 9 2>&1)"; rc16=$?
+# The control. "No file left" is also what a run that never made one
+# looks like, and say_err has a path where it is not made at all -
+# `scratch_new` failing leaves it empty and the run carries on. The
+# replayed `gh:` line is printed only from a non-empty $say_err, so it
+# is proof the file existed to be cleaned up.
+assert_eq "73" "$rc16" "the run took the path that makes say_err"
+assert_contains "$out16" "fm-worker: gh: refused" \
+  "and it captured what gh said, which it can only do into a file it made"
+leak_check "a run that exits 73 leaves no scratch file behind" "$d14/tmp"
+rm -rf "$d14"
+
+# the exit-74 route, which makes lookup_err - a different file on a
+# different path, and the comment says every one of them
+d15="$(fixture)"; r15="$d15/repo"; GH15="$(ghstub "$d15")"
+cat > "$r15/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+mkdir -p "$3/src"; printf '%s\n' "$RANDOM$$" > "$3/src/work"
+M
+chmod +x "$r15/bin/adapters/mock.sh"
+( cd "$r15" && FM_ROOT="$r15" FM_GH="$GH15" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+printf '#!/usr/bin/env bash\nexit 1\n' > "$d15/stub/gh"; chmod +x "$d15/stub/gh"
+mkdir -p "$d15/tmp"
+( cd "$r15" && TMPDIR="$d15/tmp" FM_ROOT="$r15" FM_GH="$GH15" \
+    bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+assert_eq "74" "$?" "the lookup failed, as this fixture intends"
+leak_check "and a run that exits 74 leaves none either" "$d15/tmp"
+
+# and the half the comment names by name: a signal. The scratch file is
+# made at the lookup and is still there while the engine runs, so a run
+# killed mid-engine is the case where "removed at the end" and "removed
+# on the way out" differ.
+cat > "$r15/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+: > "${FM_STARTED:?}"
+sleep 5
+M
+chmod +x "$r15/bin/adapters/mock.sh"
+cat > "$d15/stub/gh" <<'G'
+#!/usr/bin/env bash
+case " $* " in *" pr list "*) echo 9; exit 0 ;; esac
+exit 0
+G
+chmod +x "$d15/stub/gh"
+rm -rf "$d15/tmp"; mkdir -p "$d15/tmp"
+started15="$d15/started"
+( cd "$r15" && TMPDIR="$d15/tmp" FM_ROOT="$r15" FM_GH="$GH15" FM_STARTED="$started15" \
+    exec bin/fm-worker.sh --task T-Z >/dev/null 2>&1 ) &
+kp15=$!
+for _ in $(seq 1 60); do [ -e "$started15" ] && break; sleep 0.2; done
+assert_ok "test -e '$started15'" "the engine was running, so the scratch file is open"
+kill -TERM "$kp15" 2>/dev/null
+wait "$kp15" 2>/dev/null
+leak_check "and a run cut short by a signal leaves none" "$d15/tmp"
+rm -rf "$d15"
+
+rm -rf "$d11"
+
+# round_two is decided from the local branch OR origin's, so a wiped
+# state/ or a second machine is still a later round - which is what
+# gates the lookup, and therefore whether a branch that already has a
+# pull request reaches `pr create`. The comment the old post-push
+# lookup carried said that was the failure it existed to prevent, so
+# the replacement has to be shown to cover it.
+d12="$(fixture)"; r12="$d12/repo"; GH12="$(ghstub "$d12")"
+cat > "$r12/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+mkdir -p "$3/src"
+if [ -f "$3/src/round-one" ]; then printf 'two\n' > "$3/src/round-two"
+else printf 'one\n' > "$3/src/round-one"; fi
+M
+chmod +x "$r12/bin/adapters/mock.sh"
+( cd "$r12" && FM_ROOT="$r12" FM_GH="$GH12" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+b12="$(cd "$r12" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1)"
+assert_ok "cd '$r12' && git cat-file -e '$b12:src/round-one'" "the first round pushed a branch"
+# the local trace is gone: the worktree, the branch, the whole of state/
+( cd "$r12" && git worktree remove --force "state/worktrees/T-Z" >/dev/null 2>&1; true )
+( cd "$r12" && git branch -D "$b12" >/dev/null 2>&1 )
+assert_fail "cd '$r12' && git show-ref --verify --quiet 'refs/heads/$b12'" \
+  "and nothing local remembers it"
+assert_ok "cd '$r12' && git ls-remote --exit-code --heads origin '$b12'" "but origin does"
+cat > "$d12/stub/gh" <<'G'
+#!/usr/bin/env bash
+echo "gh $*" >> "$(dirname "$0")/../ghcalls"
+case " $* " in
+  *" pr list "*) echo 55; exit 0 ;;
+  *" pr checks "*) exit 0 ;;
+  *" pr view "*" comments "*) printf '## reviewer-1\n\nnothing to add\n' ;;
+esac
+exit 0
+G
+chmod +x "$d12/stub/gh"; : > "$d12/ghcalls"
+out13="$(cd "$r12" && FM_ROOT="$r12" FM_GH="$GH12" bin/fm-worker.sh --task T-Z 2>&1)"
+assert_contains "$out13" "already has #55" "a branch only origin remembers is still a later round"
+assert_contains "$(jq -r 'select(.type=="commit_pushed")|.pr|tostring' \
+  < "$r12/state/events.jsonl" | tail -1)" "55" "and its push points at the one that is there"
+assert_eq "1" "$(grep -c 'pr list' "$d12/ghcalls" || true)" \
+  "having asked once, not once at each site that wants the number"
+rm -rf "$d12"
 
 # A run that was interrupted leaves its files uncommitted in the worktree,
 # and the next dispatch used to delete them before anything could see
@@ -336,6 +708,33 @@ assert_contains "$out4" "worker-mute" "and names the crewman left on the deck"
 assert_ok "git -C '$r4' rev-parse --verify t-z-a-mock-task" \
   "a log it cannot write to does not stop the run"
 rm -rf "$d4"
+
+# §5.3.2 lists the codes a worker can exit with, and a list in prose
+# rots the first time one moves. Every `exit N` in the script has to be
+# named there, and every code named there has to be in the script -
+# identity, not a count, so adding one correctly is not a failure and
+# losing one is.
+# Strings first, THEN the comment. `^[^#]*exit N` means "no # anywhere
+# to the left", and every message in this script names a pull request
+# with one - so `{ echo "fm-worker: #$PR refused" >&2; exit 75; }`, the
+# most idiomatic line in the file, would never enter the list and the
+# identity would pass without 75 being documented anywhere.
+# and the signal traps separately, because their code IS inside the
+# quotes the first pass removes - `trap 'exit 143' TERM` is as much an
+# exit code as any other, and the first version of this check found it
+# only by accident of where the quotes fell
+codes="$( { sed -e "s/'[^']*'//g" -e 's/"[^"]*"//g' -e 's/#.*$//' "$ROOT/bin/fm-worker.sh" \
+              | grep -oE '\bexit [0-9]+'
+            grep -oE "^[[:space:]]*trap[[:space:]]+'exit [0-9]+'" "$ROOT/bin/fm-worker.sh" \
+              | grep -oE 'exit [0-9]+'
+          } | awk '{print $2}' | sort -un | grep -v '^0$' || true)"
+assert_ne "" "$codes" "the worker has exit codes to check"
+# the section and NOT the heading that ends it: sed's range includes
+# its terminating line, so `### 5.4 ...` was inside the text being
+# scanned for a number in backticks
+listed="$(awk '/^### 5\.3\.2/ {inside=1; next} /^#{1,6} / {inside=0} inside' \
+          "$ROOT/design/design.md" | grep -oE '`[0-9]+`' | tr -d '`' | sort -un)"
+assert_eq "$codes" "$listed" "design.md §5.3.2 names exactly the codes fm-worker exits with"
 
 # the adapter never touches the repository
 # a comment may mention git; a call may not

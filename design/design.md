@@ -274,6 +274,84 @@ and the same idea of what a comment is, out of `bin/fm-config.sh`: the
 suite exists to catch the gate missing a script, and a suite carrying
 its own copy of the rule is a check that agrees with itself.
 
+### 5.3.2 A later round has to know it is one
+
+A worker asks GitHub for its branch's pull request before it builds the
+prompt, not after the engine has run. The number is what makes a later
+round a later round: the prompt carries what review has said and why the
+required check is red, and `.fm-say.md` — the worker's one way to speak,
+since it may not touch `gh` — has somewhere to go. Looked up afterwards,
+a round dispatched from a task id alone was a first round wearing its
+clothes. It rewrote what it had already written, and the question it
+asked was dropped in silence; the run said `its question is on #`, with
+nothing after the hash.
+
+`fm-dispatch` cannot help: a task whose pull request is open counts as
+in flight and is never restarted, and once it is settled it is merged or
+closed and is not restarted either. There is no path through the
+dispatcher that starts a task with a number to hand it, so the worker
+finding its own is the only path there can be, and
+`tests/dispatch.test.sh` asserts that rather than the design asserting
+it.
+
+The lookup keeps GitHub's exit status, because *no open pull request*
+and *`gh` did not answer* are the same empty string and opposite
+instructions. Answered-and-none is an ordinary state — a round that
+pushed and then died before opening one leaves exactly that — and the
+round carries on and opens it. Could-not-answer stops the run at `74`,
+before the engine: the prompt would carry no review, and the push would
+collide with a pull request nobody looked for. Both halves are in
+`tests/worker.test.sh`, one asserting that the engine did not run and
+one that it did.
+
+Asking is the whole of a round that begins with a question, so a
+question that could not be posted is a failed run — exit `73`, a
+`worker_crashed` carrying the pull request number, and the text copied
+to `state/unsent/`. Not left in the worktree: the next round removes
+and recreates that from the branch, so a file kept where it was written
+is gone as soon as anything runs again. `state/unsent/` sits beside
+`state/rescued/`, which is where an interrupted run's files go — same
+idea, different thing saved: one is work, the other is a message.
+Nothing reaps either. They are under `state/`, which is not in the
+repository, and a directory of questions nobody could post is a thing
+to read rather than a thing to garbage-collect; the names carry the
+task, a UTC stamp and the pid, so two failures in the same second do
+not overwrite each other. (That recreation is also what
+makes `.fm-say.md` a signal from the current round and not a stale one
+from an earlier failure.) It used to be a line on standard error and an
+exit 0: the reviewer waited for a question it would never see, the next
+round asked it again, and the board showed a round that went fine.
+
+This does not unstick the task, and the design should not claim it
+does. Nothing reads `worker_crashed` and acts on it, and a task whose
+pull request is open is not one the dispatcher restarts, so the round
+still ends with a reviewer waiting. What changes is that the run no
+longer says it went well: the failure is on the board, under the pull
+request it happened on, with the text kept where the next round will
+not delete it. Something that picks it up is its own task.
+
+Nothing reads the worker's exit status either. `fm-dispatch` starts it
+with `&` and never waits, so `73` is read by a person, and the one
+event the round writes is the one the worker writes — there is no
+second `worker_crashed` from a caller noticing the code. The codes a
+worker can exit with are `1` a failed attempt, `2` no vendor was
+available, `64` it was called wrong, `65` no such task in
+`design/tasks.json`, `70` something the run needs before it starts and
+cannot have — no library, no worktree, nowhere to put a scratch file —
+`71` the push failed, `72` no pull request number came back, `73` the worker had
+something to say and there was nowhere to put it, `74` GitHub could not
+say which pull request the branch has, and `129`, `130`, `143` — a
+signal, 128 plus its number, from the traps that make a killed run stop
+rather than carry on.
+
+`tests/worker.test.sh` compares that list against every `exit` in the
+script, by identity: a code added correctly is not a failure and a code
+that moves without the sentence moving is. That check compares numbers,
+not meanings — a new failure reusing an existing code passes it in
+silence, which is how `70` acquired a third meaning its sentence did
+not mention. A code is a bucket, and widening the bucket is an edit to
+this paragraph.
+
 ### 5.4 The pull request protocol
 
 Strings on a pull request are input to `bin/fm-gate.sh`. Wrong format means it
@@ -608,3 +686,4 @@ gates, and the dispatcher cannot dispatch itself.
 | T-018 | self-update and `sync-skills` | T-007, T-015 |
 | T-029 | one exit code for a usage error, in every script | T-026 |
 | T-030 | the lints are blind to the files that carry them | T-026 |
+| T-031 | a second round the worker cannot see, and a question nobody hears | T-007 |

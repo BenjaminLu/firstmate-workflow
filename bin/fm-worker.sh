@@ -64,7 +64,32 @@ emit() { emit_once "$@" || true; }
 # run says so rather than passing in silence. Both go through one
 # definition of the command: two spellings of the same emit is how the
 # ending and the progress lines drift apart.
+# Every scratch file this script makes, removed on the way out -
+# including on the paths a signal or an early exit cuts short, which
+# this script has traps for. They were `mktemp`d and removed on the
+# happy path only, and one of them was made on every round whether or
+# not it was needed. tests/worker.test.sh walks three ways out in a
+# TMPDIR it owns: 73 with say_err open, 74 with lookup_err open, and a
+# TERM mid-engine, which is the case where "removed at the end" and
+# "removed on the way out" differ. A signal arriving while the comment
+# is being posted is the one combination no fixture holds still long
+# enough to catch.
+# An explicit template, for two reasons: BSD mktemp ignores $TMPDIR
+# without one - so a caller that wants these somewhere it owns, which
+# is how the leak is tested, cannot have them - and a file called
+# tmp.XXXX says nothing about who left it if one ever does.
+scratch_new() { mktemp "${TMPDIR:-/tmp}/fm-worker-XXXXXX"; }
+# An ARRAY. A space-delimited string is word-split and glob-expanded by
+# `rm -f`, so one space in $TMPDIR and the removal silently removes
+# nothing - `-f` says so by saying nothing - and every leak test still
+# passes, because a test builds its own path and never puts a space in
+# it.
+scratch=()
+scratch_add() { scratch+=("$1"); }
+clean_scratch() { [ ${#scratch[@]} -eq 0 ] || rm -f "${scratch[@]}"; }
+
 finished() {
+  clean_scratch
   local try=3
   while [ "$try" -gt 0 ]; do
     try=$(( try - 1 ))
@@ -136,8 +161,74 @@ else
   git worktree add -q -b "$branch" "$tree" "$BASE"
 fi || { echo "fm-worker: could not create the worktree" >&2; exit 70; }
 
+# The pull request the branch already has, if the caller did not say.
+# This used to be looked up two hundred lines below, AFTER the engine had
+# run - so a second round dispatched without --pr was a first round
+# wearing its clothes: the prompt carried no review and no failing check,
+# the worker rewrote what it had already written, and the question it
+# wrote into .fm-say.md was dropped because $PR was still empty when the
+# time came to post it. The run then said "its question is on #", with
+# nothing after the hash, which is what finding this looked like.
+# Only on a later round: a branch that does not exist yet cannot have a
+# pull request, and a first round that called `gh` at all would break the
+# guarantee that an unavailable vendor touches nothing.
+#
+# The exit status is kept, and this is the whole point of the block.
+# `2>/dev/null` and an empty answer make "there is no pull request" and
+# "gh did not answer" the same string - and they are opposite
+# instructions. Empty-and-succeeded is a real state: a previous round
+# that pushed and then died at `pr create` leaves exactly that, and the
+# right thing is to carry on and open one. Empty-and-failed means the
+# prompt would be blind and the push would collide with a pull request
+# that is already there, so the run stops before it spends an engine
+# round finding that out.
+if [ "$round_two" = 1 ] && [ -z "$PR" ]; then
+  # no pipe: `$?` after one is the LAST element's, and `head` on empty
+  # input exits 0 - so a `head -1` here would turn could-not-answer into
+  # answered-none the moment pipefail was not in force, which is the one
+  # thing this block exists to prevent. `--jq '.[0].number'` yields a
+  # single line anyway, so the pipe bought nothing.
+  # a mktemp that failed would leave this empty, `2>""` would fail the
+  # redirection, gh would never run, and the round would exit 74
+  # saying GitHub could not answer - when GitHub was never asked
+  lookup_err="$(scratch_new)" || lookup_err=''
+  [ -n "$lookup_err" ] || { echo "fm-worker: could not make a scratch file" >&2; exit 70; }
+  scratch_add "$lookup_err"
+  PR="$($GH pr list --head "$branch" --state open --json number --jq '.[0].number' \
+        2>"$lookup_err" </dev/null)"; lookup_rc=$?
+  # what gh actually prints for a branch with no open pull request is
+  # the literal `null`, not silence - leak it through and the round
+  # says `already has #null` and then posts to `gh pr comment null`
+  PR="$(printf '%s' "$PR" | tr -d '[:space:]')"
+  case "$PR" in null) PR='' ;; esac
+  if [ "$lookup_rc" != 0 ]; then
+    echo "fm-worker: could not ask which pull request $branch has" >&2
+    sed 's/^/fm-worker: gh: /' "$lookup_err" >&2
+    echo "fm-worker: a later round cannot run without it - the prompt would carry no review" >&2
+    echo "fm-worker: and the push would collide with a pull request nobody looked for" >&2
+    emit --type worker_crashed --en "could not ask which pull request $branch has" \
+         --tw "問不到 ${branch} 的 PR"
+    exit 74
+  fi
+  if [ -n "$PR" ]; then
+    echo "fm-worker: $branch already has #$PR; this round answers it" >&2
+  else
+    # succeeded and said none: the branch was pushed by a round that did
+    # not get as far as opening one, and this round opens it
+    echo "fm-worker: $branch has no open pull request; this round will open one" >&2
+  fi
+fi
+
 # --- the prompt: the task, the design that bears on it, and the skill ----
 prompt="$tree/.fm-prompt.md"
+# This is the worker's one way to speak, and it is read back with
+# `[ -s ... ]`, so it has to be a signal from THIS round. What makes
+# that true is above: the worktree is removed and recreated from the
+# branch before the engine runs, and .fm-say.md is never committed, so
+# a question left by an earlier round cannot be here. The rescue that
+# runs first excludes it by name for the same reason - a leftover
+# question is not uncommitted work worth saving.
+say="$tree/.fm-say.md"
 {
   cat skills/worker/SKILL.md
   printf '\n---\n\n# Your task\n\n```json\n%s\n```\n' "$spec"
@@ -203,15 +294,77 @@ rm -f "$prompt"
 # ASK-PASS-CRITERIA would sit in a log nobody reads while fm-protocol
 # reported a violation every turn, which looks exactly like a worker that
 # stopped working.
-say="$tree/.fm-say.md"
-if [ -s "$say" ] && [ -n "$PR" ]; then
-  $GH pr comment "$PR" --body-file "$say" >/dev/null 2>&1 </dev/null \
-    && emit --type ask_pass_criteria --pr "$PR" --en "the worker spoke on #$PR" \
-            --tw "工人在 #$PR 上發言" \
-    || echo "fm-worker: could not post the worker's message to #$PR" >&2
-fi
 asked=0
 [ -s "$say" ] && asked=1
+spoke=0
+# gh's own words are kept, the way the lookup above keeps them: this is
+# the one path where a person is expected to pick the failure up by
+# hand, and "it was refused" without "why" sends them to the pull
+# request to find out - no permission, rate limited, locked, wrong
+# number. The run said where the text is and not what went wrong.
+say_err=''
+if [ "$asked" = 1 ] && [ -n "$PR" ]; then
+  say_err="$(scratch_new)" || say_err=''
+  [ -z "$say_err" ] || scratch_add "$say_err"
+  if $GH pr comment "$PR" --body-file "$say" >/dev/null 2>"${say_err:-/dev/null}" </dev/null; then
+    spoke=1
+    emit --type ask_pass_criteria --pr "$PR" --en "the worker spoke on #$PR" \
+         --tw "工人在 #$PR 上發言"
+  fi
+fi
+# A question that went nowhere used to be a line on standard error and
+# an exit 0: the run reported a complete round, the log said nothing,
+# and the next round asked the same question again. This does not
+# UNSTICK the task - nothing reads worker_crashed and acts on it, and a
+# task with an open pull request is not one the dispatcher restarts -
+# but it stops the run lying about what happened, and it keeps what the
+# worker wrote so a human can post it.
+#
+# So the file is kept, not removed, and the event carries the number:
+# a failed round that cannot be linked to the pull request it failed on
+# is a card the captain cannot act on.
+if [ "$asked" = 1 ] && [ "$spoke" = 0 ]; then
+  # Out of the worktree, which is removed and recreated on the next
+  # round: keeping the file where it was written is not keeping it, and
+  # the design says the text survives so a human can post it. Beside
+  # state/rescued/, where an interrupted run's files go, and under a
+  # name of its own because this is a message rather than work.
+  #
+  # No fallback to $say if the copy fails. The old one put the path
+  # back inside the worktree and printed it as though it were safe,
+  # which is the exact thing the sentence above says does not survive -
+  # a fallback that quietly undoes the fix it is a fallback for.
+  # the pid too: two failures in the same second would otherwise
+  # overwrite each other, and the earlier question is the one this
+  # path exists to keep
+  kept="$REPO/state/unsent/$TASK-$(date -u +%Y%m%dT%H%M%SZ)-$$.md"
+  # its own stderr prefixed like everything else here: an unprefixed
+  # `mkdir: File exists` lands ahead of the lines that explain what
+  # happened, in a run whose whole point is reporting in its own voice
+  mkdir -p "$(dirname "$kept")" 2>&1 | sed 's/^/fm-worker: /' >&2
+  echo "fm-worker: the worker had something to say and there was nowhere to put it" >&2
+  if cp "$say" "$kept" 2>/dev/null; then
+    echo "fm-worker: it is at ${kept#"$REPO"/}" >&2
+  else
+    echo "fm-worker: and it could not be kept either - ${kept#"$REPO"/} is not writable" >&2
+    echo "fm-worker: the text is in $say until the next round recreates that worktree" >&2
+  fi
+  # Two causes, because there are two. The middle one - "or a gh that
+  # did not answer" - is gone: the lookup keeps its exit status now and
+  # stops the run before this point, so an empty $PR here means the
+  # question was asked and the answer was none.
+  if [ -n "$PR" ]; then
+    echo "fm-worker: #$PR would not take the comment" >&2
+    [ -z "$say_err" ] || sed 's/^/fm-worker: gh: /' "$say_err" >&2
+    emit --type worker_crashed --pr "$PR" --en "the worker's question could not be posted to #$PR" \
+         --tw "工人的提問貼不上 #$PR"
+  else
+    echo "fm-worker: $branch has no pull request to say it on - asking is premature" >&2
+    emit --type worker_crashed --en "the worker asked before there was a pull request" \
+         --tw "工人在還沒有 PR 的時候提問"
+  fi
+  exit 73
+fi
 rm -f "$say"
 
 # asking IS the work in a round that begins with a question, and the round
@@ -238,12 +391,23 @@ emit --type commit_pushed --en "committed on $branch" --tw "已在 $branch 上 c
 git -C "$tree" push -q -u origin "$branch" 2>/dev/null || {
   echo "fm-worker: could not push $branch" >&2; exit 71; }
 
-# On a later round the pull request is already open and `pr create` fails,
-# so ask for the branch's pull request first. A worker that could only ever
-# open a new one failed its second round at the last step, with the work
-# pushed and nothing pointing at it.
-num="$($GH pr list --head "$branch" --state open --json number --jq '.[0].number' \
-       2>/dev/null </dev/null | head -1)"
+# On a later round the pull request is already open and `pr create` fails.
+# A worker that could only ever open a new one failed its second round at
+# the last step, with the work pushed and nothing pointing at it.
+#
+# $PR is what the lookup above the prompt found, or what the caller
+# passed; asking again here would be a second answer to one question,
+# and the two could disagree - a pull request opened while the engine
+# was running would be posted to by one half of this script and not the
+# other. There is no second lookup - asserted, not asserted about:
+# tests/worker.test.sh counts `pr list` at one per run. An
+# empty $PR here means either a first round, or a later round whose
+# lookup succeeded and said there is none - a branch pushed by a round
+# that died before it opened one. Both want a pull request created
+# below. The third case, a lookup that could not answer, does not reach
+# here: it exits 74 above rather than pushing at a pull request nobody
+# looked for.
+num="$PR"
 if [ -z "$num" ] || [ "$num" = "null" ]; then
   url="$($GH pr create --head "$branch" --base "$BASE" \
         --title "$TASK: $(jq -r .title <<<"$spec")" \
