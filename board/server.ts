@@ -36,7 +36,7 @@ const readEvents = (): Event[] => {
 // an actor on a blocked task reached the page as `st-blocked`, which no
 // stylesheet rule and no dictionary key covers.
 const DECK_LIMIT = 24;   // what the ship holds; the page reads it back
-type CrewState = "queued" | "working" | "gate" | "review" | "captain";
+type CrewState = "queued" | "working" | "gate" | "review" | "captain" | "blocked";
 type Crew = {
   id: string;
   role: "firstmate" | "worker" | "reviewer";
@@ -44,9 +44,24 @@ type Crew = {
   task: string | null;
   title: string | null;
 };
+// What an agent says it is. fm-review emits role "reviewer", fm-worker
+// "worker"; a run that says nothing is a worker, which is what a
+// dispatch is. The old version read the actor's NAME, so `rev-$$` or
+// `secondmate` boarded as a worker and only a regex in one browser test
+// would have noticed.
+const roleOf = (actor: string, e: Event): "worker" | "reviewer" => {
+  const d = (e as { data?: { role?: unknown } }).data;
+  if (d && d.role === "reviewer") return "reviewer";
+  if (d && d.role === "worker") return "worker";
+  return actor.startsWith("reviewer") ? "reviewer" : "worker";   // older logs
+};
+
+// An unrecognised stage is not "working": painting blocked work as
+// progress is the one thing a reader most needs told truthfully, and the
+// deck would then disagree with the card beside it.
 const CREW_STATE = (s: string | undefined): CrewState =>
-  s === "queued" || s === "working" || s === "gate" || s === "review" || s === "captain"
-    ? s : "working";
+  s === "queued" || s === "working" || s === "gate" || s === "review" ||
+  s === "captain" || s === "blocked" ? s : "blocked";
 
 const STAGE: Record<string, string> = {
   dispatched: "working", commit_pushed: "working", pr_opened: "review",
@@ -138,11 +153,18 @@ const state = () => {
   for (const [actor, e] of lastByActor) {
     if (actor === "firstmate") continue;   // already aboard, above
     const task = e.task ?? null;
-    if (!task || done.has(task)) continue;
+    if (!task) continue;
+    // agent_finished is the answer; this is the backstop for a run that
+    // never got to say it - killed, or a machine that slept. When they
+    // disagree, agent_finished wins: it is checked above and has already
+    // removed the actor. This only catches a run that vanished.
+    if (done.has(task)) continue;
     const t = tasks.find((x) => x.id === task);
     crew.push({
       id: actor,
-      role: actor.startsWith("reviewer") ? "reviewer" : "worker",
+      // stated, not guessed: the emitter writes what it is, so renaming
+      // an actor cannot silently turn every reviewer into a worker
+      role: roleOf(actor, e),
       state: CREW_STATE(t?.stage),
       task, title: t?.title ?? null,
     });

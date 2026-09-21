@@ -31,6 +31,10 @@ function host() {
 // moved through three tasks is one crewman.
 const state = (n: number, stage = "working") => ({
   greenlit: true, counts: { merged: 0, inflight: n, blocked: 0, queued: 0 }, pending: [],
+  // the server sends the limit with the list; the page holds no copy of
+  // the number, so a fixture that omitted it made this test pass through
+  // a client-side fallback that no longer exists
+  deckLimit: 24,
   tasks: Array.from({ length: n }, (_, i) => ({ id: `T-${i}`, title: `task ${i}`, stage })),
   crew: [
     { id: "firstmate", role: "firstmate", state: "working", task: null },
@@ -72,6 +76,8 @@ test("the crew are the agents the server named, and 24 is the deck limit", () =>
   // and each one says the task it is on, not its own name twice
   expect(c[1].job).toBe("T-0 \u00b7 task 0");
   expect(SHIP.crewOf(state(40), T).length).toBe(24);
+  // and it is the server's number that decides, not one kept here
+  expect(SHIP.crewOf({ ...state(40), deckLimit: 6 }, T).length).toBe(6);
   // the captain is not in this list at all: he is the person they are
   // waiting on, drawn beside the cards from the pending deck, and the
   // server does not put him here either - one source, not two

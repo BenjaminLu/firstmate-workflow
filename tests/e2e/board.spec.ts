@@ -54,7 +54,11 @@ for (const lang of ["en", "zh-TW", "zh-CN"]) {
     // he is the person they are waiting on
     await expect(page.locator(".scene .fig.r-cap")).toHaveCount(0);
     await expect(page.locator("#captain .fig.r-cap")).toHaveCount(1);
-    await expect(page.locator("#captain .capsays i")).toHaveText("1");
+    // the badge counts the cards, rather than being pinned to the one
+    // this fixture happens to have
+    const cards = await page.locator(".dcard").count();
+    await expect(page.locator("#captain .capsays i")).toHaveText(String(cards));
+    expect(cards).toBeGreaterThan(0);
     // and he goes when the last card does: the old unit test covered his
     // appearing and nothing covered his leaving
     // SHIP is a top-level const in a classic script: a global binding,
@@ -177,6 +181,27 @@ test("nothing here can reach a model", async () => {
   const { readdirSync } = await import("node:fs");
   expect(existsSync(join(board.root, "bin/adapters"))).toBe(false);
   expect(readdirSync(join(board.root, "bin"))).toEqual(["fm-merge.sh"]);
+});
+
+test("a crewman below the top deck still names the task he is on", async ({ page }) => {
+  test.setTimeout(60_000);
+  // Criterion 3 has no viewport qualifier, and a crowded ship is where
+  // the name chips appear - the full bubble would blindfold the crew
+  // standing over it, so the chip has to carry the name and the roster
+  // the job. Nothing covered the chip.
+  const many = await startBoard(makeRoot(Array(9).fill("working"), false));
+  try {
+    await page.goto(`${many.url}/?lang=en`);
+    await expect(page.locator(".scene .pivot").first()).toBeVisible();
+    const minis = page.locator(".scene .bub.mini");
+    expect(await minis.count()).toBeGreaterThan(0);
+    for (const text of await minis.locator(".who").allInnerTexts()) {
+      expect(text.trim()).not.toBe("");
+    }
+    // and the roster still carries what each of them is on
+    const jobs = await page.locator(".roster .jb").allInnerTexts();
+    expect(jobs.filter((j) => /^T-\d+/.test(j)).length).toBe(9);
+  } finally { stopBoard(many); }
 });
 
 test("the ship follows the crew, not the backlog", async ({ page }) => {

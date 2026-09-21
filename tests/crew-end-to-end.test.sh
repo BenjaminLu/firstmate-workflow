@@ -50,18 +50,31 @@ assert_eq "2" "$(printf '%s\n' "$actors" | sed '/^$/d' | wc -l | tr -d ' ')" \
   "two real runs emit two distinct actor names"
 assert_matches "$actors" '^worker-' "and they are workers by name"
 
-# strip the agent_finished the runs emitted, so both read as still running
-grep -v '"agent_finished"' "$r/state/events.jsonl" > "$r/state/e2" && mv "$r/state/e2" "$r/state/events.jsonl"
-
 PORT=$(( 15000 + RANDOM % 900 ))
 FM_ROOT="$r" FM_PORT="$PORT" bun run "$r/board/server.ts" > "$d/out" 2>&1 < /dev/null &
 pid=$!
 trap 'kill "$pid" 2>/dev/null' EXIT
 for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORT/api/state" >/dev/null 2>&1 && break; sleep 0.25; done
+# First with the log exactly as the two real runs left it. Both said
+# agent_finished, so both have gone home and only firstmate is aboard -
+# which is criteria 8 and 9 joined end to end, by the producer and the
+# server rather than by hand. The first version of this test deleted
+# those events before asking, which removed the join it exists to make.
+s0="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_ne "" "$s0" "the board answers"
+assert_eq "1" "$(jq -r '.crew|length' <<<"$s0")" \
+  "two runs that finished leave only firstmate aboard"
+assert_eq "firstmate" "$(jq -r '.crew[0].id' <<<"$s0")" "and that one is firstmate"
+
+# now as if both were still running: the same log without the endings
+grep -v '"agent_finished"' "$r/state/events.jsonl" > "$r/state/e2" && mv "$r/state/e2" "$r/state/events.jsonl"
 s="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
-assert_ne "" "$s" "the board answers"
+assert_ne "" "$s" "the board still answers"
 assert_eq "3" "$(jq -r '.crew|length' <<<"$s")" "firstmate and both real workers are aboard"
 tasks="$(jq -r '.crew[]|select(.role=="worker")|.task' <<<"$s" | sort | tr '\n' ' ')"
 assert_eq "T-1 T-2 " "$tasks" "each real worker carries its own task"
+# and the role came off the event rather than off the name
+assert_eq "worker worker " "$(jq -r '.crew[]|select(.id|startswith("worker-"))|.role' <<<"$s" | sort | tr '\n' ' ')" \
+  "and says it is a worker because the run said so"
 rm -rf "$d"
 finish

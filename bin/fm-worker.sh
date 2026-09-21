@@ -33,7 +33,7 @@ done
 cd "$REPO" || { echo "fm-worker: no repo at $REPO" >&2; exit 64; }
 NAME="${NAME:-worker-$$}"
 EMIT="$REPO/bin/fm-emit.sh"
-emit() { FM_ROOT="$REPO" "$EMIT" --actor "$NAME" --task "$TASK" "$@" >/dev/null 2>&1 </dev/null || true; }
+emit() { FM_ROOT="$REPO" "$EMIT" --data '{"role":"worker"}' --actor "$NAME" --task "$TASK" "$@" >/dev/null 2>&1 </dev/null || true; }
 
 
 # The task spec comes from the branch under review, not from whatever is
@@ -68,7 +68,7 @@ tree="$REPO/state/worktrees/$TASK"
 finished() { emit --type agent_finished --en "run finished" --tw "這次執行結束"; }
 trap finished EXIT
 
-emit --type dispatched --en "picked up $TASK" --tw "接下 ${TASK}"
+emit --type dispatched --en "picked up $TASK" --tw "接下 $TASK"
 
 # --- a worktree of its own -----------------------------------------------
 # Never delete work. A run that was interrupted - the machine slept, the

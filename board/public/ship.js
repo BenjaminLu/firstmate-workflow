@@ -33,6 +33,7 @@ const SHIP = (() => {
     gate:    ["swab", "lean", "lantern"],
     review:  ["lookout", "chart", "lantern"],
     queued:  ["lean", "coil"],
+    blocked: ["lean", "lantern"],
     captain: ["helm", "chart"],
   };
   const hash = (s) => { let h = 7; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h; };
@@ -118,25 +119,26 @@ const SHIP = (() => {
   // waiting for someone. Drawing one per in-flight task put pull requests
   // on the deck: three tasks handled by one worker looked like three of
   // the crew, and the ship grew with the backlog instead of the crew.
+  // the server sends one of these three; an unknown one is a mismatch
+  // between the two halves and should be visible, not painted as a worker
   const ROLE = { firstmate: "fm", worker: "w", reviewer: "r" };   // no captain: see captain()
   function crewOf(s, T) {
     const label = { firstmate: T("roleFirstmate"), worker: T("roleWorker"),
                     reviewer: T("roleReviewer"), captain: T("roleCaptain") };
-    // the limit comes from the server with the list: knowing 24 here as
-    // well would be the same number in two languages
-    return (s.crew || []).slice(0, s.deckLimit || 24).map((a) => ({
+    // the limit comes from the server with the list. No fallback: a
+    // number here as well is the same number in two languages, and the
+    // test for it would pass through the copy.
+    return (s.crew || []).slice(0, s.deckLimit).map((a) => ({
       id: a.id,
-      role: ROLE[a.role] || "w",
+      role: ROLE[a.role] || "unknown",
       state: a.state || "working",
       // the agent's own name, and what it is on underneath
       name: a.role === "firstmate" ? label.firstmate : a.id,
-      // a taskless agent is idle, whichever one it is: the old fallback
-      // said "dispatching" for anybody without a task, which is only
-      // true of firstmate
+      // only firstmate can be aboard without a task: the server skips a
+      // taskless worker or reviewer, so there is no third case to write
       job: a.task
         ? `${a.task}${a.title ? " \u00b7 " + a.title : ""}`
-        : a.role === "firstmate" ? T(s.greenlit ? "fmDispatching" : "fmWaiting")
-        : T("idle"),
+        : T(s.greenlit ? "fmDispatching" : "fmWaiting"),
       pct: a.task ? ({ working: 45, gate: 70, review: 85, captain: 95 }[a.state] ?? null) : null,
     }));
   }
@@ -239,11 +241,16 @@ const SHIP = (() => {
     // here, because the geometry has one source and it is this file
     host.style.setProperty("--deckY0", "0px");
     host.style.setProperty("--rowStep", "0px");
+    // every number the captain's block uses, from the deck's constants
     host.style.setProperty("--figH", Math.round(FIG_H * CAPTAIN_SCALE) + "px");
-    host.style.setProperty("--sc", String(CAPTAIN_SCALE));
+    host.style.setProperty("--capStand", Math.round(FIG_H * CAPTAIN_SCALE * 1.5) + "px");
+    host.style.setProperty("--capBox", Math.round(FIG_H * CAPTAIN_SCALE * 2.05) + "px");
+    host.style.setProperty("--capFoot", Math.round(FIG_H * CAPTAIN_SCALE * 1.04) + "px");
     const c = { id: "captain", role: "cap", state: "captain", action: "helm", x: 50, row: 0 };
+    // the scale is an argument, not also a custom property: figure() puts
+    // it on the pivot, which is the only place it is read
     host.innerHTML =
-      `<div class="capstand">${figure(c, 1)}</div>` +
+      `<div class="capstand">${figure(c, CAPTAIN_SCALE)}</div>` +
       `<div class="capsays"><b>${esc(T("roleCaptain"))}</b>` +
       `<span>${esc(T("capDeciding"))}</span>` +
       `<i>${n}</i></div>`;

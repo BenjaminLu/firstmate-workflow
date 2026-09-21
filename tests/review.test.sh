@@ -277,4 +277,34 @@ assert_lacks "$out9" "no task T-NEW" "and not reported as missing"
 assert_eq "65" "$?" "a task that exists nowhere is still refused"
 rm -rf "$d9"
 
+
+# Criterion 9 says every exit path, including the ones that give up -
+# and the reviewer's give-up path is `rm -rf "$work"; exit 3`. The worker
+# got this loop; the reviewer got nothing.
+for scenario in signed unsigned outage; do
+  dr="$(fixture)"; rr="$dr/repo"; GHr="$(ghstub "$dr")"
+  case "$scenario" in
+    signed)   body='printf "looks fine\nAPPROVE:T-Z\n" > "$3/v.txt"'; rc=0 ;;
+    unsigned) body='printf "no verdict at all\n" > "$3/v.txt"';        rc=0 ;;
+    outage)   body=':';                                                 rc=2 ;;
+  esac
+  { printf '#!/usr/bin/env bash\n[ "$1" = "run" ] || exit 64\n%s\nexit %s\n' "$body" "$rc"
+  } > "$rr/bin/adapters/mock.sh"
+  chmod +x "$rr/bin/adapters/mock.sh"
+  ( cd "$rr" && FM_ROOT="$rr" FM_GH="$GHr" bin/fm-review.sh --task T-Z --branch work >/dev/null 2>&1 )
+  assert_eq "agent_finished" "$(jq -r .type < "$rr/state/events.jsonl" | tail -1)" \
+    "a $scenario round says when it ended, last"
+  assert_matches "$(jq -r 'select(.type=="agent_finished")|.actor' < "$rr/state/events.jsonl")" \
+    '^reviewer-[0-9]+$' "and under its own per-run name"
+  rm -rf "$dr"
+done
+
+# the role is stated rather than read off the name, so renaming an actor
+# cannot turn every reviewer into a worker on the deck
+dz="$(fixture)"; rz="$dz/repo"; GHz="$(ghstub "$dz")"
+( cd "$rz" && FM_ROOT="$rz" FM_GH="$GHz" bin/fm-review.sh --name rev-7 --task T-Z --branch work >/dev/null 2>&1 )
+assert_eq "reviewer" "$(jq -r 'select(.actor=="rev-7")|.data.role' < "$rz/state/events.jsonl" | head -1)" \
+  "a reviewer says it is a reviewer, whatever it is called"
+rm -rf "$dz"
+
 finish

@@ -126,6 +126,10 @@
 .fig.s-review{--baseAnim:scank;--baseDur:3.6s}
 .fig.s-captain{--baseAnim:bobk;--baseDur:3.1s}
 .fig.s-queued{--baseAnim:bobk;--baseDur:6.5s;filter:grayscale(.75) brightness(.6)}
+/* blocked reads as stopped, not as slow work: it is the one state a
+   reader most needs told truthfully, and painting it as progress made
+   the deck disagree with the card beside it */
+.fig.s-blocked{--baseAnim:slumpk;--baseDur:5.5s;filter:grayscale(.6) brightness(.72)}
 .fig.a-hammer .armR{animation:hammer var(--sp,.62s) ease-in-out infinite}
 .fig.a-hammer .tool{opacity:1;width:16px;height:10px;border-radius:2px;transform:translateZ(6px);
   background:linear-gradient(180deg,#c2cedb,#63717e);box-shadow:0 0 0 2px #26313c}
@@ -158,7 +162,8 @@
 .bub .pb{margin:5px auto 0;width:84%;height:3px;background:rgba(255,255,255,.12);border-radius:2px;overflow:hidden}
 .bub .pb i{display:block;height:100%;background:var(--accent)}
 .bub.st-working{--bubEdge:#2f5478} .bub.st-review{--bubEdge:#5a3f7d}
-.bub.st-gate{--bubEdge:#7c322b} .bub.st-merged,.bub.st-captain{--bubEdge:#2c5f49}
+.bub.st-gate,.bub.st-blocked{--bubEdge:#7c322b}
+.bub.st-merged,.bub.st-captain{--bubEdge:#2c5f49}
 .bub.st-queued{--bubEdge:#26323d;opacity:.6}
 
 /* ahoy */
@@ -223,7 +228,7 @@
 .roster .st{font-size:10.5px;padding:1px 7px;border-radius:99px;border:1px solid var(--bubEdge,#2c3f52);color:#9dbdd6;justify-self:start}
 .roster .jb{color:#8fa9bd;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .roster li.st-working{--av:#2f5478} .roster li.st-review{--av:#5a3f7d}
-.roster li.st-gate{--av:#7c322b}
+.roster li.st-gate,.roster li.st-blocked{--av:#7c322b}
 .roster li.st-merged,.roster li.st-captain{--av:#2c5f49}
 .roster li.st-queued{--av:#26323d;opacity:.62}
 .shipbar button{pointer-events:auto;font:650 10.5px var(--mono);color:#0f1621;cursor:pointer;
@@ -252,17 +257,20 @@
    agents doing work, he is the person they are waiting on - so he stands
    where the waiting is rather than on a deck. */
 .capwrap{display:grid;grid-template-columns:132px 1fr;gap:16px;align-items:start}
-/* no geometry declared here: the figure's offsets come from the same
-   JavaScript constants the deck uses, written on by SHIP.captain. This
-   block had --deckY0 and --rowStep of its own, which is exactly the two
-   sources the ship exists not to have. */
-.captain{position:relative;min-height:190px;padding-top:12px;
+/* Every number here comes from SHIP.captain, which computes them from the
+   same constants the deck uses - --capBox, --capStand, --capFoot. The
+   first version declared --deckY0 and --rowStep of its own and then a
+   height, a min-height and a shadow width besides, under a comment
+   claiming it declared no geometry. */
+.captain{position:relative;min-height:var(--capBox);padding-top:12px;
   border:1px solid var(--line);border-radius:13px;overflow:hidden;
   background:linear-gradient(180deg,#0a1a26,#060f17)}
-.captain .capstand{position:relative;height:132px;perspective:800px;perspective-origin:50% 40%}
-.captain .pivot{bottom:6px}   /* --sc comes from SHIP.captain: one source */
-.captain .capstand::after{content:"";position:absolute;left:50%;bottom:0;width:96px;height:10px;
-  margin-left:-48px;border-radius:50%;background:radial-gradient(ellipse,rgba(0,0,0,.6),transparent 70%)}
+.captain .capstand{position:relative;height:var(--capStand);
+  perspective:800px;perspective-origin:50% 40%}
+.captain .pivot{bottom:6px}
+.captain .capstand::after{content:"";position:absolute;left:50%;bottom:0;
+  width:var(--capFoot);height:10px;margin-left:calc(var(--capFoot) / -2);
+  border-radius:50%;background:radial-gradient(ellipse,rgba(0,0,0,.6),transparent 70%)}
 .captain .capsays{padding:6px 10px 12px;text-align:center}
 .captain .capsays b{display:block;font:650 11px var(--mono);color:var(--brass);letter-spacing:.05em}
 .captain .capsays span{display:block;margin-top:3px;font-size:10.5px;color:#9dbdd6;line-height:1.35}
@@ -270,6 +278,11 @@
   border-radius:99px;font:650 11px var(--mono);font-style:normal;
   background:linear-gradient(180deg,#f0c46a,#c9972f);color:#0f1621}
 @media (max-width:760px){.capwrap{grid-template-columns:1fr}
+  /* an author display beats the user agent's [hidden] rule, so every
+     rule that sets display has to re-assert it or the JS that hides this
+     element stops working at this width - index.html already carries the
+     same guard for the diagram iframe */
+  .captain[hidden]{display:none}
   .captain{min-height:0;display:flex;align-items:center;gap:10px;padding:10px}
   .captain .capstand{width:110px;height:110px;flex:0 0 110px}
   .captain .capsays{text-align:left;padding:0}}

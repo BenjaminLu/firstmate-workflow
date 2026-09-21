@@ -144,15 +144,25 @@ assert_eq "working" "$(jq -r '.tasks[]|select(.id=="T-A")|.stage' <<<"$sr2")" \
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-7 --task T-B --type dispatched \
   --en "on a queued task" --tw "在排隊的任務上" >/dev/null
 sv="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
-# comments stripped: a state named only in a comment is not one the page
-# can draw, and the hygiene lint is right to insist
-css_rules="$(sed 's|/\*.*\*/||g; s|^[[:space:]]*/\*.*||' "$ROOT/board/public/ship.css")"
+# Comments stripped across the whole file, not line by line: CSS block
+# comments span lines, and a line-oriented sed leaves lines 2..n of every
+# block behind. A rule named on the second line of a comment would have
+# satisfied this check with nothing in the sheet - which is exactly what
+# the check exists to prevent.
+css_rules="$(perl -0777 -pe 's{/\*.*?\*/}{}gs' "$ROOT/board/public/ship.css")"
 # a loop over server-derived data is green when the data is empty, which
 # is green for a check that read nothing
-states="$(jq -r '.crew[].state' <<<"$sv" | sort -u)"
-assert_ne "" "$states" "there are crew states to check"
-for st in $states; do
+# every state the server's own closed set can produce, not the ones this
+# fixture happened to produce: a sixth added without a rule has to fail
+declared="$(sed -n 's/^type CrewState = //p' "$ROOT/board/server.ts" \
+  | tr -d ';"' | tr '|' '\n' | tr -d ' ' | sed '/^$/d')"
+assert_ne "" "$declared" "the crew states are declared in one place"
+for st in $declared; do
   assert_contains "$css_rules" ".fig.s-$st" "the page can draw state $st"
+done
+# and what the fixture produced is inside that set
+for st in $(jq -r '.crew[].state' <<<"$sv" | sort -u); do
+  assert_contains "$declared" "$st" "state $st is one the server declares"
 done
 
 # the captain is not crew: nothing in the server's list is him, and the

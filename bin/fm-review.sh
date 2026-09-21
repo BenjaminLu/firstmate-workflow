@@ -26,6 +26,7 @@ while [ $# -gt 0 ]; do
     --pr) PR="${2-}"; shift 2 ;;
     --round) ROUND="${2-}"; shift 2 ;;
     --vendor) VENDOR="${2-}"; shift 2 ;;
+    --name)   NAME="${2-}"; shift 2 ;;
     *) echo "fm-review: unknown argument $1" >&2; exit 64 ;;
   esac
 done
@@ -36,7 +37,12 @@ cd "$REPO" || { echo "fm-review: no repo at $REPO" >&2; exit 64; }
 # per run, like the worker's: a constant actor collapses two concurrent
 # rounds into one crewman carrying whichever task the second one touched
 NAME="${NAME:-reviewer-$$}"
-emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor "$NAME" --task "$TASK" "$@" >/dev/null 2>&1 </dev/null || true; }
+emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --data '{"role":"reviewer"}' --actor "$NAME" --task "$TASK" "$@" >/dev/null 2>&1 </dev/null || true; }
+# Armed where emit() first works, not forty lines further down: every
+# exit between the two boards an actor that never leaves. On every exit
+# path, including the ones that give up.
+finished() { emit --type agent_finished --en "run finished" --tw "這次執行結束"; }
+trap finished EXIT
 
 # The task spec comes from the branch under review, not from whatever is
 # checked out. A task defined on its own branch - which is how a new one
@@ -78,13 +84,6 @@ prompt="$work/prompt.md"
 
 # the reviewer runs on its own engine when config.yaml names one, and falls
 # back exactly the way the worker does - one chain, one runner
-
-# A run that ends has to say so. Without it "aboard" means "ever touched
-# a task that is not finished yet", the board draws every actor that has
-# ever run, and the ship's rate follows the history instead of what is
-# happening now. On every exit path, including the ones that give up.
-finished() { emit --type agent_finished --en "run finished" --tw "這次執行結束"; }
-trap finished EXIT
 
 mkdir -p "$work/out"
 # The reviewer's evidence: a verdict marker. A signed review IS the run's
@@ -162,7 +161,7 @@ if [ "$signed" = "0" ]; then
        --tw "第 $ROUND 輪審核沒有產出"
   rm -rf "$work"; exit 3
 fi
-emit --type review_opened --en "round $ROUND on $TASK" --tw "${TASK} 第 ${ROUND} 輪審核"
+emit --type review_opened --en "round $ROUND on $TASK" --tw "$TASK 第 $ROUND 輪審核"
 if [ -n "$PR" ]; then
   $GH pr comment "$PR" --body "$verdict" >/dev/null 2>&1 || true
 fi
