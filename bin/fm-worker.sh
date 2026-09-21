@@ -137,13 +137,22 @@ tree="$REPO/state/worktrees/$TASK"
 # touching the worktree. The PID is published atomically while holding it.
 pidfile="$REPO/state/worktrees/$TASK.pid"
 mkdir -p "$REPO/state/worktrees" || exit 70
+dispatch_data='{"role":"worker"}'
 if [ "${FM_WORKER_LOCK_PID:-}" != "$$" ]; then
   exec 9>>"$pidfile.lock" || exit 70
   perl -MFcntl=:flock -e '
     open(my $lock, "+<&=9") or die "worker lock: $!";
     flock($lock, LOCK_EX | LOCK_NB) or exit 1;
   ' || { echo "fm-worker: cannot lock $TASK; another worker may be running" >&2; exit 70; }
+else
+  # Reconcile execs this PID with its locked fd 9. Both producers describe
+  # the same attempt: the worker must not introduce a fresh boundary after
+  # the launcher's recovery event, even when neither knows the PR yet.
+  dispatch_data='{"role":"worker","recovery":true}'
 fi
+# Consume the PID-bound handoff; a child/wrapper must not reuse it as a
+# generic recovery flag. Keep fd 9 open for this worker's entire lifetime.
+unset FM_WORKER_LOCK_PID
 printf '%s\n' "$$" > "$pidfile.next" && mv -f "$pidfile.next" "$pidfile" || {
   echo "fm-worker: cannot publish liveness for $TASK" >&2; exit 70;
 }
@@ -152,7 +161,7 @@ pid_owned=1
 # The worker records that it started, not the dispatcher. A task started
 # by hand was otherwise never in flight as far as the log was concerned,
 # and the dispatcher would start a second one on top of it.
-emit --type dispatched ${PR:+--pr "$PR"} --en "picked up $TASK" --tw "接下 $TASK"
+emit --type dispatched ${PR:+--pr "$PR"} --data "$dispatch_data" --en "picked up $TASK" --tw "接下 $TASK"
 
 # --- a worktree of its own -----------------------------------------------
 # Never delete work. A run that was interrupted - the machine slept, the

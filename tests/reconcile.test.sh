@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Reconciling after a crash. Every fixture is a temp directory with a log, a
-# recorded `gh pr list` and some files on disk - no network, no real worker,
+# recorded `gh pr list` and some files on disk - no network,
 # and no assumption about the machine the suite runs on.
 #
 # Several fixtures below exist to make ONE section's repair the input to the
@@ -572,6 +572,85 @@ for terminal in CLOSED MERGED; do
     assert_fail "test -f '$d/state/worktrees/T-011.pid'" "current terminal removes stale PID ($terminal/$association)"
     assert_fail "appears '$d/worker-args'" "current terminal starts no replacement ($terminal/$association)"
     kill_pidfile "$d/state/worktrees/T-011.pid"; rm -rf "$d"
+  done
+done
+
+echo "  real worker preserves no-PR boundaries across repeated offline recovery"
+# Exercise the production worker/emitter/launcher together. Only repository
+# operations are simulated: stop worktree creation before PR discovery, without
+# inventing the worker's dispatched event or passing --pr to it.
+for terminal in CLOSED MERGED; do
+  for timing in historical current new-attempt; do
+    d="$(fixture)"; cleanup_stub "$d"
+    cp "$ROOT/bin/fm-worker.sh" "$ROOT/bin/fm-config.sh" "$d/bin/"
+    mkdir -p "$d/design" "$d/stub" "$d/state/worktrees/T-011"
+    echo '{"tasks":[{"id":"T-011","title":"test","scope":[]}]}' > "$d/design/tasks.json"
+    cat > "$d/stub/git" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  'worktree add '*)
+    # Do not let this controlled subprocess retain the worker's lock.
+    exec 9>&-
+    touch "$FM_ROOT/ready"
+    while [ ! -f "$FM_ROOT/release" ]; do sleep 0.05; done
+    exit 1;;
+  'show-ref '*|'ls-remote '*) exit 1;;
+esac
+SH
+    chmod +x "$d/stub/git"
+    type="$(tr '[:upper:]' '[:lower:]' <<< "$terminal")"
+    : > "$d/state/events.jsonl"
+    [ "$timing" = historical ] || echo '{"type":"dispatched","task":"T-011"}' >> "$d/state/events.jsonl"
+    jq -cn --arg type "$type" '{type:$type,pr:10}' >> "$d/state/events.jsonl"
+    [ "$timing" != historical ] || echo '{"type":"dispatched","task":"T-011"}' >> "$d/state/events.jsonl"
+    for round in 1 2; do
+      dead_pid > "$d/state/worktrees/T-011.pid"
+      rm -f "$d/ready" "$d/release"
+      out="$(PATH="$d/stub:$PATH" FM_ROOT="$d" FM_GH="$(rec "$d" offline <<< offline)" "$d/bin/fm-reconcile.sh" 2>&1)"
+      assert_eq 0 "$?" "real offline launch succeeds ($terminal/$timing/$round)"
+      for _ in $(seq 1 100); do [ -f "$d/ready" ] && break; sleep 0.05; done
+      assert_ok "test -f '$d/ready'" "real worker reaches pre-association crash point"
+      assert_ok "jq -se 'last(.[]|select(.type==\"dispatched\"))|.data.recovery==true and .pr==null and .data.role==\"worker\"' '$d/state/events.jsonl'" "real no-PR dispatch is recovery"
+      PATH="$d/stub:$PATH" FM_ROOT="$d" "$d/bin/fm-worker.sh" --task T-011 > "$d/duplicate" 2>&1
+      assert_eq 70 "$?" "inherited lock rejects ordinary overlapping worker"
+      PATH="$d/stub:$PATH" FM_ROOT="$d" FM_GH="$(none "$d")" "$d/bin/fm-reconcile.sh" > "$d/live" 2>&1
+      assert_lacks "$(cat "$d/live")" 'redispatch T-011' "live real replacement is not duplicated"
+      touch "$d/release"
+      for _ in $(seq 1 100); do
+        count="$(jq -s '[.[]|select(.type=="agent_finished" and .actor!="reconcile")]|length' "$d/state/events.jsonl")"
+        [ "$count" -ge "$((round * 2))" ] && break
+        sleep 0.05
+      done
+      assert_eq "$((round * 2))" "$count" "real failed worker records its ending"
+    done
+    if [ "$timing" = new-attempt ]; then
+      # A genuinely new ordinary run must still move the boundary. A stale
+      # ancestor environment is not the same-PID recovery handoff.
+      FM_WORKER_LOCK_PID="$$" PATH="$d/stub:$PATH" FM_ROOT="$d" "$d/bin/fm-worker.sh" --task T-011 > "$d/ordinary" 2>&1
+      assert_eq 70 "$?" "ordinary new attempt reaches controlled worktree failure"
+      assert_ok "jq -se 'last(.[]|select(.type==\"dispatched\"))|(.data.recovery // false)==false and .pr==null' '$d/state/events.jsonl'" "ordinary no-PR run establishes a new boundary"
+    fi
+    dead_pid > "$d/state/worktrees/T-011.pid"
+    mkdir -p "$d/state/worktrees/T-011"
+    G="$(rec "$d" online <<< "$(jq -cn --arg state "$terminal" '[{number:10,state:$state,title:"terminal",headRefName:"t-011-test"}]')")"
+    cp "$d/state/events.jsonl" "$d/before"
+    out="$(FM_ROOT="$d" FM_GH="$G" "$d/bin/fm-reconcile.sh" --dry-run 2>&1)"
+    assert_ok "cmp -s '$d/before' '$d/state/events.jsonl'" "real recovery dry run preserves log"
+    # Prevent any later work while observing the online terminal decision.
+    worker_stub "$d"
+    out="$(FM_ROOT="$d" FM_GH="$G" "$d/bin/fm-reconcile.sh" 2>&1)"
+    assert_eq 0 "$?" "online terminal decision succeeds"
+    if [ "$timing" = current ]; then
+      assert_fail "test -d '$d/state/worktrees/T-011'" "current taskless terminal still cleans after real recoveries"
+      assert_fail "test -e '$d/state/worktrees/T-011.pid'" "current terminal retires PID"
+      assert_fail "appears '$d/worker-args'" "completed work is never rerun"
+    else
+      assert_ok "wait_for '$d/worker-args'" "historical terminal permits recovery"
+      assert_ok "test -d '$d/state/worktrees/T-011'" "historical terminal protects worktree"
+      assert_ok "jq -se 'any(.[]; .pr==10 and .data.historical==true)' '$d/state/events.jsonl'" "old terminal remains historical"
+    fi
+    kill_pidfile "$d/state/worktrees/T-011.pid"
+    rm -rf "$d"
   done
 done
 

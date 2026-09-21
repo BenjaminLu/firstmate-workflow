@@ -1152,10 +1152,11 @@ mkdir -p "$3/src"
 printf 'completed\n' > "$3/src/recovered"
 SH
 chmod +x "$ri/bin/adapters/mock.sh"
-FM_ROOT="$ri" FM_GH="$di/stub/gh" "$ri/bin/fm-worker.sh" --task T-999 --pr 42 >"$di/worker.out" 2>&1 &
+FM_WORKER_LOCK_PID="$$" FM_ROOT="$ri" FM_GH="$di/stub/gh" "$ri/bin/fm-worker.sh" --task T-999 --pr 42 >"$di/worker.out" 2>&1 &
 ordinary=$!
 for _ in $(seq 1 100); do [ -s "$ri/starts" ] && break; sleep 0.1; done
 assert_ok "test -s '$ri/starts'" "ordinary worker reached its adapter"
+assert_ok "jq -se 'any(.[]; .type==\"dispatched\" and (.data.recovery // false)==false)' '$ri/state/events.jsonl'" "ancestor lock environment does not turn an ordinary attempt into recovery"
 assert_eq "$ordinary" "$(cat "$ri/state/worktrees/T-999.pid" 2>/dev/null)" "ordinary worker publishes its actual PID"
 FM_ROOT="$ri" FM_GH="$di/stub/gh" "$ri/bin/fm-worker.sh" --task T-999 --pr 42 >"$di/duplicate.out" 2>&1
 assert_eq 70 "$?" "an overlapping ordinary launch refuses the held lock"
@@ -1174,6 +1175,7 @@ for _ in $(seq 1 100); do [ "$(wc -l < "$ri/starts" | tr -d ' ')" = 2 ] && break
 assert_eq 2 "$(wc -l < "$ri/starts" | tr -d ' ')" "the real replacement reaches its adapter"
 assert_ok "jq -se 'any(.[]; .type==\"worker_crashed\" and .pr==42)' '$ri/state/events.jsonl'" "ordinary crash retains its PR association"
 assert_eq 42 "$(jq -r 'select(.type=="dispatched")|.pr' "$ri/state/events.jsonl" | tail -1)" "replacement dispatch retains the retry PR"
+assert_ok "jq -se 'last(.[]|select(.type==\"dispatched\"))|.data.recovery==true and .data.role==\"worker\"' '$ri/state/events.jsonl'" "real associated replacement preserves recovery semantics"
 FM_ROOT="$ri" FM_GH="$di/stub/gh" "$ri/bin/fm-reconcile.sh" >"$di/repeat.out" 2>&1
 assert_lacks "$(cat "$di/repeat.out")" "redispatch T-999" "replacement evidence prevents another recovery"
 : > "$ri/release"

@@ -322,6 +322,10 @@ while IFS= read -r t; do
   # before the worker can run. Even if reconcile dies between spawn and PID
   # publication, a second launcher cannot start a second worker. Perl flock
   # uses the kernel API on macOS too; it does not require flock(1).
+  # FM_WORKER_LOCK_PID is a same-PID exec handoff, not ambient recovery
+  # context: fm-worker uses it both to retain fd 9 and to mark its own
+  # dispatch as recovery. Wrappers must preserve PID and fd across exec;
+  # a forked worker needs a new ownership handoff, not this parent's PID.
   FM_ROOT="$REPO" perl -MFcntl=:flock,F_SETFD -MPOSIX=dup2 -e '
     my ($path, @command) = @ARGV;
     open(my $lock, ">>", "$path.lock") or die "launch lock: $!";
