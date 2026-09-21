@@ -243,6 +243,18 @@ and a changed worktree is work. And each attempt reads only its own output —
 its own directory under the chain's, and its own slice of the shared log —
 so a vendor that dies half way through cannot sign on the next one's behalf.
 
+### 5.3.1 Every script refuses the same way
+
+`shift 2` with one argument left does not shift. It returns 1 and leaves
+`$@` alone, so `while [ $# -gt 0 ]` spins on the same flag for ever —
+`bin/fm-emit.sh --type` was a busy loop rather than an error, in eleven
+scripts at once. Every flag that takes a value checks first, and every
+script exits `64` for a usage error, so a caller can tell one from a refused
+write. `bin/ci.sh` fails on a `shift 2` that has not checked, and
+`tests/option-loop.test.sh` runs every flag of every script with nothing
+after it — under an alarm, because a test for a hang that simply calls the
+script hangs the gate instead of failing it.
+
 ### 5.4 The pull request protocol
 
 Strings on a pull request are input to `bin/fm-gate.sh`. Wrong format means it

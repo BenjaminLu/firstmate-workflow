@@ -92,6 +92,24 @@ else
   pass "no assertion evals captured output"
 fi
 
+# `shift 2` with one argument left does not shift - it returns 1 and leaves
+# $@ alone, so the option loop spins on the same flag for ever. Every
+# value-taking flag has to check first. What this catches: a `shift 2`
+# branch with no `need` in front of it. What it does not: a loop that
+# checks some other way, which is why the check is named rather than
+# inferred.
+# ci.sh quotes the shape it forbids, and says so about itself the way a
+# sourced library does
+unguarded="$(grep -Hn 'shift 2' bin/*.sh 2>/dev/null \
+  | grep -v '^bin/ci\.sh:' | grep -v 'need ' \
+  | grep -v '^[^:]*:[0-9]*: *#' || true)"
+if [ -n "$unguarded" ]; then
+  flunk "a shift 2 that has not checked it has two:"
+  printf '%s\n' "$unguarded"
+else
+  pass "no option loop can spin on a flag with no value"
+fi
+
 # `producer | grep -q` under pipefail: grep exits on the first match, the
 # producer takes SIGPIPE, and the pipeline reports failure even though the
 # match happened. `yes MATCH | grep -qi match` returns 141. A here-string

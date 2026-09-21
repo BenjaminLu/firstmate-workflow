@@ -27,16 +27,26 @@ agent_finished"
 die() { printf 'fm-emit: %s\n' "$1" >&2; exit 1; }
 
 actor=''; type=''; task=''; pr=''; data='{}'; en=''; tw=''
+# `shift 2` with one argument left does not shift: it returns 1 and leaves
+# $@ alone, so `while [ $# -gt 0 ]` spins on the same flag for ever. Every
+# flag that takes a value goes through this, which refuses instead. A test
+# for it has to run under an alarm, or it hangs the gate rather than
+# failing it - tests/option-loop.test.sh does.
+need() {   # need <flag>: there has to be a value after it
+  [ "$#" -ge 2 ] || { echo "fm-emit: $1 needs a value" >&2; exit 64; }
+}
 while [ $# -gt 0 ]; do
   case "$1" in
-    --actor) actor="${2-}"; shift 2 ;;
-    --type)  type="${2-}";  shift 2 ;;
-    --task)  task="${2-}";  shift 2 ;;
-    --pr)    pr="${2-}";    shift 2 ;;
-    --data)  data="${2-}";  shift 2 ;;
-    --en)    en="${2-}";    shift 2 ;;
-    --tw)    tw="${2-}";    shift 2 ;;
-    *) die "unknown argument: $1" ;;
+    --actor) need "$@"; actor="${2-}"; shift 2 ;;
+    --type)  need "$@"; type="${2-}";  shift 2 ;;
+    --task)  need "$@"; task="${2-}";  shift 2 ;;
+    --pr)    need "$@"; pr="${2-}";    shift 2 ;;
+    --data)  need "$@"; data="${2-}";  shift 2 ;;
+    --en)    need "$@"; en="${2-}";    shift 2 ;;
+    --tw)    need "$@"; tw="${2-}";    shift 2 ;;
+    # 64 like every other script here: a caller that cannot tell a usage
+    # error from a refused write cannot react to either
+    *) echo "fm-emit: unknown argument: $1" >&2; exit 64 ;;
   esac
 done
 

@@ -19,13 +19,21 @@ BASE="${FM_BASE:-main}"
 GH="${FM_GH:-gh}"
 REVIEWER="${FM_REVIEWER_LOGIN:-}"
 
+# `shift 2` with one argument left does not shift: it returns 1 and leaves
+# $@ alone, so `while [ $# -gt 0 ]` spins on the same flag for ever. Every
+# flag that takes a value goes through this, which refuses instead. A test
+# for it has to run under an alarm, or it hangs the gate rather than
+# failing it - tests/option-loop.test.sh does.
+need() {   # need <flag>: there has to be a value after it
+  [ "$#" -ge 2 ] || { echo "fm-gate: $1 needs a value" >&2; exit 64; }
+}
 while [ $# -gt 0 ]; do
   case "$1" in
-    --task) TASK="${2-}"; shift 2 ;;
-    --repo) REPO="${2-}"; shift 2 ;;
-    --branch) BRANCH="${2-}"; shift 2 ;;
-    --pr) PR="${2-}"; shift 2 ;;
-    --only) ONLY="${2-}"; shift 2 ;;
+    --task) need "$@"; TASK="${2-}"; shift 2 ;;
+    --repo) need "$@"; REPO="${2-}"; shift 2 ;;
+    --branch) need "$@"; BRANCH="${2-}"; shift 2 ;;
+    --pr) need "$@"; PR="${2-}"; shift 2 ;;
+    --only) need "$@"; ONLY="${2-}"; shift 2 ;;
     *) echo "fm-gate: unknown argument $1" >&2; exit 64 ;;
   esac
 done

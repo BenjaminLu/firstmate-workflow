@@ -18,15 +18,23 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 
 REPO="${FM_ROOT:-$(pwd)}"; TASK=''; BRANCH=''; PR=''; ROUND=1; VENDOR=''; NAME=''
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
+# `shift 2` with one argument left does not shift: it returns 1 and leaves
+# $@ alone, so `while [ $# -gt 0 ]` spins on the same flag for ever. Every
+# flag that takes a value goes through this, which refuses instead. A test
+# for it has to run under an alarm, or it hangs the gate rather than
+# failing it - tests/option-loop.test.sh does.
+need() {   # need <flag>: there has to be a value after it
+  [ "$#" -ge 2 ] || { echo "fm-review: $1 needs a value" >&2; exit 64; }
+}
 while [ $# -gt 0 ]; do
   case "$1" in
-    --task) TASK="${2-}"; shift 2 ;;
-    --branch) BRANCH="${2-}"; shift 2 ;;
-    --repo) REPO="${2-}"; shift 2 ;;
-    --pr) PR="${2-}"; shift 2 ;;
-    --round) ROUND="${2-}"; shift 2 ;;
-    --vendor) VENDOR="${2-}"; shift 2 ;;
-    --name)   NAME="${2-}"; shift 2 ;;
+    --task) need "$@"; TASK="${2-}"; shift 2 ;;
+    --branch) need "$@"; BRANCH="${2-}"; shift 2 ;;
+    --repo) need "$@"; REPO="${2-}"; shift 2 ;;
+    --pr) need "$@"; PR="${2-}"; shift 2 ;;
+    --round) need "$@"; ROUND="${2-}"; shift 2 ;;
+    --vendor) need "$@"; VENDOR="${2-}"; shift 2 ;;
+    --name) need "$@"; NAME="${2-}"; shift 2 ;;
     *) echo "fm-review: unknown argument $1" >&2; exit 64 ;;
   esac
 done

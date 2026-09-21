@@ -284,6 +284,13 @@ plant "a pipeline into grep -q turns the hygiene stage red" "feeds grep -q or -c
 plant "and the stage names the script" "fm-piped.sh"
 rm -f "$q/bin/fm-piped.sh"
 
+# a shift 2 that has not checked it has two
+printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\nwhile [ $# -gt 0 ]; do\n  case "$1" in\n    --x) v="${2-}"; shift 2 ;;\n    *) exit 64 ;;\n  esac\ndone\necho "${v:-}"\n' \
+  > "$q/bin/fm-spinner.sh"
+plant "an unguarded shift 2 turns the hygiene stage red" "has not checked it has two"
+plant "and the stage names the script" "fm-spinner.sh"
+rm -f "$q/bin/fm-spinner.sh"
+
 plant "a hand-rolled swap turns the hygiene stage red" "saves a script by hand"
 plant "and the stage names the suite" "hand-rolled.test.sh"
 rm -f "$q/tests/hand-rolled.test.sh"
