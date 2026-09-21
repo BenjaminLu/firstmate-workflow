@@ -690,7 +690,7 @@
       ],
       "acceptance": [
         "the pipe-into-grep lint reads tests/ as well as bin/, which is where most of the pipelines are",
-        "a file is no longer exempted whole by # fm:lint-source: a LINE says it quotes a shape rather than runs it, and every other line in that file is judged - by the pipe-into-grep stage and by the shift-2 stage alike, which today both excuse bin/ci.sh and tests/option-loop.test.sh entirely",
+        "a file is no longer exempted whole by # fm:lint-source: a LINE says it quotes a shape rather than runs it, and every other line in that file is judged - today the marker takes bin/ci.sh and bin/fm-config.sh out of the shift-2 stage and the pipe-into-grep stage entirely, and those are the two files that hold both rules",
         "every site the widened lints report is converted or marked, and the count is pinned so a new one cannot arrive unnoticed",
         "the marker is tested from both sides: a marked line does not fire the stage and an unmarked one does"
       ]

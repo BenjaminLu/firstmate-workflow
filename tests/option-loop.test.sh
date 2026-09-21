@@ -25,6 +25,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # against what lib.sh defines instead.
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# The corpus and the comment stripper come from the same file bin/ci.sh
+# reads them from. This suite exists to catch the gate missing a script,
+# so a second copy of the rule here is a check that agrees with itself.
+# shellcheck source=bin/fm-config.sh
+. "$ROOT/bin/fm-config.sh" || { echo "option-loop: no bin/fm-config.sh" >&2; exit 70; }
 
 # the scripts with an option loop, and how many value-taking flags each has
 PINNED="fm-cleanup 2
@@ -95,34 +100,30 @@ while read -r name want; do
 done <<< "$PINNED"
 assert_eq "51" "$total" "every pinned flag was exercised"
 
-# A script that grows an option loop has to be pinned here too. The
-# corpus is the same one bin/ci.sh uses - a `shift 2` that is code rather
-# than prose, in a file that has not declared itself a lint source - read
-# by marker rather than by filename, or the two definitions drift the
-# moment a second file carries it.
-# the same rule bin/ci.sh uses, and it descends: bin/*.sh missed anything
-# in a subdirectory, and the two definitions would drift the moment one
-# of them was widened
+# A script that grows an option loop has to be pinned here too, and the
+# corpus is the one bin/ci.sh judges - literally, out of
+# bin/fm-config.sh, not a copy of the rule written out again here. The
+# copy had drifted twice: it kept the comment stripper that cuts
+# `${1#--}` in half after the gate's was fixed, so a script the gate
+# demanded a guard from could vanish from the sweep that exists to catch
+# the gate missing one, and the pinned list would agree with a sweep
+# that had not looked.
 loops=''
 while IFS= read -r p; do
-  grep -q '^# fm:lint-source' "$p" && continue
-  # here-string, not a pipe: grep -q exits on the match, sed takes
-  # SIGPIPE, and pipefail turns that into "no match". On the runner it
-  # dropped fm-diagram and fm-worker - the two longest scripts, where
-  # sed is still writing when grep leaves - out of the corpus, and the
-  # pinned list then disagreed with a sweep that had not looked.
-  grep -q 'shift 2' <<< "$(sed -e 's/[[:space:]]*#.*$//' "$p")" || continue
   loops="$loops$(basename "$p" .sh)
 "
-done < <(find "$ROOT/bin" -type f -name '*.sh' | sort)
+done < <(fm_loop_corpus "$ROOT/bin")
 assert_eq "$(printf '%s\n' "$PINNED" | awk '{print $1}' | sort)" "$(printf '%s' "$loops" | sort)" \
   "the pinned list is every script that consumes a value with shift 2, and no more"
+# and the corpus is not the empty set dressed up as agreement
+assert_ne "" "$loops" "the corpus found scripts to compare against"
 
 # and nothing consumes a value any other way, which is the blind spot the
 # lint and this check would otherwise share. Bare flags shift once; a
 # `shift $n` or a getopts loop would be invisible to both.
-# one corpus for these too, and every script under bin, not only fm-*
-allsh="$(find "$ROOT/bin" -type f -name '*.sh' | sort)"
+# the same corpus function, so this cannot be looking at a different set
+# of files from the check above it
+allsh="$(fm_shell_corpus "$ROOT/bin")"
 assert_ne "" "$allsh" "there are scripts to sweep"
 assert_eq "" "$(printf '%s\n' "$allsh" | xargs grep -n 'shift' \
   | grep -vE 'shift 2|shift ;;|shift$|shift 1|: *#' || true)" \
@@ -139,10 +140,15 @@ assert_contains "$said" "unknown argument" "and says so"
 # the assertions stage exists to catch. So the load has to be hard: if the
 # library will not load, the script must not reach its option loop.
 sourced=0
-for f in "$ROOT"/bin/fm-*.sh; do
+# the corpus function, not `bin/fm-*.sh`: that glob does not descend,
+# which is the very reason the other sweeps use find - a script under
+# bin/inner/ taking its guard from the library was never checked, and
+# the count would not have noticed, because a file that drops out of the
+# sweep drops out of the count with it
+while IFS= read -r f; do
   # comments off: the five that keep a local copy mention fm_need in a
   # comment pointing at the library, and a grep for the name picks them up
-  grep -q 'fm_need ' <<< "$(sed -e 's/[[:space:]]*#.*$//' "$f")" || continue
+  grep -q 'fm_need ' <<< "$(fm_strip_comments "$f")" || continue
   sourced=$((sourced + 1))
   name="$(basename "$f")"
   tmp="$(mktemp -d)"; mkdir -p "$tmp/bin"
@@ -151,7 +157,7 @@ for f in "$ROOT"/bin/fm-*.sh; do
   assert_eq "70" "$code" "$name refuses to start without the library it needs"
   assert_contains "$said" "fm-config.sh" "and says which library"
   rm -rf "$tmp"
-done
+done < <(fm_shell_corpus "$ROOT/bin")
 assert_eq "6" "$sourced" "six scripts take their guard from the library"
 
 finish

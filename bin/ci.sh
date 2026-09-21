@@ -16,6 +16,17 @@ shopt -s nullglob
 # its own input.
 exec < /dev/null
 
+# The corpus and the comment stripper come from the library, so the gate
+# and tests/option-loop.test.sh judge the same files by the same rule.
+# They were written out at each call site - four times, and three of them
+# were a version of the stripper that cuts `${1#--}` in half.
+# beside the SCRIPT, not under FM_ROOT: the gate is run against other
+# trees and the library is part of the gate, not of the tree it judges
+_fm_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-config.sh"
+[ -r "$_fm_lib" ] || { echo "ci: missing $_fm_lib" >&2; exit 70; }
+# shellcheck source=bin/fm-config.sh
+. "$_fm_lib"
+
 fail=0
 started_at="$(date +%s)"
 bold=''; dim=''; red=''; green=''; off=''
@@ -101,39 +112,18 @@ fi
 # ci.sh quotes the shape it forbids, so it declares itself a lint source
 # the way a sourced library declares itself sourced - by a marker rather
 # than by being on a list.
-# ONE definition of the corpus, used by the gate and by
-# tests/option-loop.test.sh, and it descends: bin/*.sh missed anything in
-# a subdirectory. A file declares itself a lint source when it quotes the
-# shapes it forbids - this file does, on line 2.
-#
 # Comments come off the line BEFORE it is judged, both for finding the
 # corpus and for finding the guard. `--x) v="${2-}"; shift 2 ;; # need` was
 # a `shift 2` that spins for ever and satisfied a grep for the word
 # `need`: the lint was recognising the fix by its name rather than by its
 # presence in the code.
 #
-# And the corpus is built with a HERE-STRING, not `strip_comments | grep
-# -q`. grep exits on the first match, sed takes SIGPIPE, and under
-# pipefail the pipeline reports failure - so on a file long enough that
-# sed is still writing, a script WITH an option loop was read as one
-# without and dropped out of the corpus. It is the hazard the stage
-# below this one exists to forbid, in the file that forbids it: the
-# marker exempts the whole file, so the gate is the one script the gate
-# cannot lint. It cost two scripts on the runner and neither locally.
-#
-# The stripper cuts at a `#` that STARTS A WORD, not at the first `#` on
-# the line. `sed 's/#.*$//'` also cuts `${1#--}` and `"#"`, so a `shift
-# 2` sharing a line with either dropped out of the lint AND out of the
-# sweep in tests/option-loop.test.sh that is supposed to catch the lint
-# missing something - both blind the same way, which is the shape of a
-# check that cannot notice its own blind spot.
-strip_comments() { sed -e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]]#.*$//' "$1"; }
+# Both of these - which files, and what a comment is - come from
+# bin/fm-config.sh, because tests/option-loop.test.sh has to sweep for a
+# script this stage should have linted and did not, and a sweep written
+# out by hand at each call site drifts from the thing it is checking.
 loopfiles=()
-while IFS= read -r f; do
-  grep -q '^# fm:lint-source' "$f" && continue
-  grep -q 'shift 2' <<< "$(strip_comments "$f")" || continue
-  loopfiles+=("$f")
-done < <(find bin -type f -name '*.sh' | sort)
+while IFS= read -r f; do loopfiles+=("$f"); done < <(fm_loop_corpus bin)
 unguarded=''
 # bash 3.2 treats "${arr[@]}" on an empty array as unbound under set -u,
 # so the count is checked before the array is touched, the way the
@@ -146,11 +136,31 @@ unguarded=''
 # and only the part in front of it is searched, for a CALL - the word
 # followed by an argument - rather than for the word.
 [ ${#loopfiles[@]} -eq 0 ] || for f in "${loopfiles[@]}"; do
-  hits="$(strip_comments "$f" | grep -n 'shift 2' | awk '
-            { head = $0
-              sub(/^[0-9]+:/, "", head)      # grep -n prefix, not code
-              sub(/shift 2.*$/, "", head)    # only what comes BEFORE the shift
-              if (head !~ /(^|[^[:alnum:]_])(fm_)?need[ \t]+[^;[:space:]]/) print }
+  hits="$(fm_strip_comments "$f" | awk '
+            # The unit is the case BRANCH, not the line. A guard has to
+            # come before the shift, and a branch is what `;;` ends - so
+            # the ordinary
+            #     --repo)
+            #       fm_need "fm-x" "$@"
+            #       REPO="$2"; shift 2 ;;
+            # is guarded, and reading one physical line called it naked.
+            # Going the other way, a guard in the PREVIOUS branch must
+            # not cover this one, which is what `;;` resets.
+            function guard(t) { return t ~ /(^|[^[:alnum:]_])(fm_)?need[ \t]+[^;[:space:]]/ }
+            { rest = $0
+              while (1) {
+                p = index(rest, ";;")
+                seg = p ? substr(rest, 1, p - 1) : rest
+                sp = index(seg, "shift 2")
+                gp = 0
+                if (match(seg, /(^|[^[:alnum:]_])(fm_)?need[ \t]+[^;[:space:]]/)) gp = RSTART
+                if (sp && !seen && !(gp && gp < sp)) print FNR ":" $0
+                if (gp && (!sp || gp < sp)) seen = 1
+                if (!p) break
+                seen = 0                     # the branch ended here
+                rest = substr(rest, p + 2)
+              }
+            }
           ' || true)"
   [ -z "$hits" ] || unguarded="$unguarded$(printf '%s\n' "$hits" | sed "s|^|$f:|")
 "
@@ -302,8 +312,12 @@ if [ -d tests ] && [ -f tests/lib.sh ]; then
   # comments off first: a suite that NAMES a helper in prose - "this file
   # leans on assert_ne" - is not calling it, and counting the mention
   # turns the gate red for a sentence
-  called="$(sed -e 's/[[:space:]]*#.*$//' tests/*.sh 2>/dev/null \
-            | grep -ohE 'assert_[a-z_]+' | sort -u)"
+  called=''
+  for _t in tests/*.sh; do
+    called="$called$(fm_strip_comments "$_t" | grep -ohE 'assert_[a-z_]+' || true)
+"
+  done
+  called="$(printf '%s' "$called" | sed '/^$/d' | sort -u)"
   missing=''
   for a in $called; do
     printf '%s\n' "$defined" | grep -qx "$a" || missing="$missing $a"

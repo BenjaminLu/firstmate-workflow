@@ -69,7 +69,7 @@ probe_gate() { # <fixture-dir> <label>
   wait "$pid" 2>/dev/null
   exec 8>&-; rm -f "$p/openpipe"
 }
-p="$(mktemp -d)"; mkdir -p "$p/bin"; cp "$ROOT/bin/ci.sh" "$p/bin/ci.sh"
+p="$(mktemp -d)"; mkdir -p "$p/bin"; cp "$ROOT/bin/ci.sh" "$ROOT/bin/fm-config.sh" "$p/bin/"
 probe_gate "$p" "the gate finishes on a tree with no tests at all"
 mkdir -p "$p/tests"
 printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n' > "$p/tests/reads-stdin.test.sh"
@@ -107,7 +107,7 @@ rm -rf "$p"
 # to leave them alone - and the e2e stage has to say it skipped rather than
 # quietly passing when the browser is not installed.
 q="$(mktemp -d)"; mkdir -p "$q/bin" "$q/tests/e2e"
-cp "$ROOT/bin/ci.sh" "$q/bin/ci.sh"
+cp "$ROOT/bin/ci.sh" "$ROOT/bin/fm-config.sh" "$q/bin/"
 printf 'import { test, expect } from "bun:test";\ntest("a", () => expect(1).toBe(1));\n' \
   > "$q/tests/unit.spec.ts"
 printf 'import { test } from "@playwright/test";\ntest("b", async ({ page }) => { await page.goto("about:blank"); });\n' \
@@ -317,7 +317,7 @@ printf '#!/usr/bin/env bash\nr=/tmp\ncp "$r/bin/x.sh" "$r/x.%s"\n' 'keep"' > "$q
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 n="$(find "$q/tests" -name '*.test.sh' | wc -l | tr -d ' ')"
 assert_contains "$out" "($n suites)" "the hygiene stage says how many suites it linted"
-bare="$(mktemp -d)"; mkdir -p "$bare/bin"; cp "$q/bin/ci.sh" "$bare/bin/ci.sh"
+bare="$(mktemp -d)"; mkdir -p "$bare/bin"; cp "$q/bin/ci.sh" "$q/bin/fm-config.sh" "$bare/bin/"
 assert_contains "$(FM_ROOT="$bare" bash "$bare/bin/ci.sh" 2>&1)" "(0 suites)" \
   "and says zero rather than passing silently when there are none"
 rm -rf "$bare"
@@ -373,6 +373,36 @@ plant "and the stage names that line" "--x"
 plant "and the one that only says the word" "--y"
 rm -f "$q/bin/fm-afterwards.sh"
 
+# And the ordinary multi-line branch, which IS guarded: the check reads
+# the case branch, not the physical line, so a guard on a line of its
+# own counts. Reading one line called this naked and would have made the
+# gate refuse the commonest way of writing it - the rule §5.3.1 states
+# is "checks first", not "checks first, on the same line".
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'need() { [ "$#" -ge 2 ] || exit 64; }\n'
+  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
+  printf '    --x)\n      need "$@"\n      v="${2-}"; shift 2 ;;\n'
+  printf '    *) exit 64 ;;\n  esac\ndone\necho "${v:-}"\n'
+} > "$q/bin/fm-spread.sh"
+plant "a guard on its own line, above the shift, is a guard" "no option loop can spin"
+rm -f "$q/bin/fm-spread.sh"
+
+# and the guard does not leak past the end of its branch: one branch
+# checks, the next does not, and the next one is an offender
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'need() { [ "$#" -ge 2 ] || exit 64; }\n'
+  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
+  printf '    --x)\n      need "$@"\n      v="${2-}"; shift 2 ;;\n'
+  printf '    --y)\n      w="${2-}"; shift 2 ;;\n'
+  printf '    *) exit 64 ;;\n  esac\ndone\necho "${v:-}${w:-}"\n'
+} > "$q/bin/fm-leaky2.sh"
+plant "a guard in the branch above does not cover the one below it" "has not checked it has two"
+# the line it prints is the one with the shift on it, and it is the
+# line the reader has to open: the branch head is two lines up and the
+# line number is in the output
+plant "and the stage names the line" "w=\"\${2-}\"; shift 2"
+rm -f "$q/bin/fm-leaky2.sh"
+
 # and the corpus has to SEE a script whose option loop shares a line with
 # a `#` that is not a comment. `sed 's/#.*$//'` cuts `${1#--}` in half,
 # the `shift 2` disappears with it, and the script is excused entirely.
@@ -395,7 +425,7 @@ rm -rf "$q/bin/inner"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 assert_matches "$out" 'spin on a flag with no value \([0-9]+ scripts\)' \
   "the option-loop stage says how many scripts it read"
-bare2="$(mktemp -d)"; mkdir -p "$bare2/bin"; cp "$q/bin/ci.sh" "$bare2/bin/ci.sh"
+bare2="$(mktemp -d)"; mkdir -p "$bare2/bin"; cp "$q/bin/ci.sh" "$q/bin/fm-config.sh" "$bare2/bin/"
 assert_contains "$(FM_ROOT="$bare2" bash "$bare2/bin/ci.sh" 2>&1)" "value (0 scripts)" \
   "and says zero on a tree with none"
 rm -rf "$bare2"
