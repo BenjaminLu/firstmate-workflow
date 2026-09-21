@@ -25,9 +25,21 @@ function host() {
     querySelector: () => stub(), querySelectorAll: () => [] as unknown[],
   };
 }
+// The crew are AGENTS now: the server derives who is running from the
+// actors in the log and the page draws that list. A fixture that wants
+// five crewmen needs five agents, not five tasks - one worker that has
+// moved through three tasks is one crewman.
 const state = (n: number, stage = "working") => ({
   greenlit: true, counts: { merged: 0, inflight: n, blocked: 0, queued: 0 }, pending: [],
   tasks: Array.from({ length: n }, (_, i) => ({ id: `T-${i}`, title: `task ${i}`, stage })),
+  crew: [
+    { id: "firstmate", role: "firstmate", state: "working", task: null },
+    ...Array.from({ length: n }, (_, i) => ({
+      id: stage === "review" ? `reviewer-${i}` : `worker-${i}`,
+      role: stage === "review" ? "reviewer" : "worker",
+      state: stage, task: `T-${i}`, title: `task ${i}`,
+    })),
+  ],
 });
 
 test("a crowd stacks onto more decks, it does not stretch the hull", () => {
@@ -54,14 +66,20 @@ test("every deck carries crew, including the topmost", () => {
   }
 });
 
-test("the crew comes out of the state, and 24 is the deck limit", () => {
+test("the crew are the agents the server named, and 24 is the deck limit", () => {
   const c = SHIP.crewOf(state(3), T);
-  expect(c.map((x: any) => x.id)).toEqual(["firstmate", "T-0", "T-1", "T-2"]);
+  expect(c.map((x: any) => x.id)).toEqual(["firstmate", "worker-0", "worker-1", "worker-2"]);
+  // and each one says the task it is on, not its own name twice
+  expect(c[1].job).toBe("T-0 \u00b7 task 0");
   expect(SHIP.crewOf(state(40), T).length).toBe(24);
-  // queued and merged tasks are ashore, not aboard
-  expect(SHIP.crewOf(state(5, "merged"), T).length).toBe(1);
-  const withDecision = SHIP.crewOf({ ...state(1), pending: [{ id: "d1" }] }, T);
-  expect(withDecision.some((x: any) => x.role === "cap")).toBe(true);
+  // the captain is not crew: he is the person they are waiting on, and he
+  // stands beside the cards rather than on a deck
+  const withDecision = SHIP.crewOf({
+    ...state(1),
+    crew: [...state(1).crew, { id: "captain", role: "captain", state: "captain", task: null }],
+  }, T);
+  expect(withDecision.some((x: any) => x.role === "cap")).toBe(false);
+  expect(withDecision.length).toBe(2);
 });
 
 test("a pose is a class, and every action holds a prop", () => {

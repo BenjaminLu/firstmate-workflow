@@ -44,19 +44,28 @@ for (const lang of ["en", "zh-TW", "zh-CN"]) {
   test(`the board reads in ${lang}`, async ({ page }) => {
     await open(page, lang);
 
-    // the crew is the state, not a decoration: firstmate, five tasks, captain
-    await expect(page.locator(".scene .pivot")).toHaveCount(CREW.length + 2);
-    await expect(page.locator(".roster li")).toHaveCount(CREW.length + 2);
+    // the crew are agents: firstmate, one per working agent, the captain
+    await expect(page.locator(".scene .pivot")).toHaveCount(CREW.length + 1);
+    await expect(page.locator(".roster li")).toHaveCount(CREW.length + 1);
     for (const s of new Set(CREW)) {
       await expect(page.locator(`.scene .fig.s-${s}`).first()).toBeVisible();
     }
-    await expect(page.locator(".scene .fig.r-cap")).toHaveCount(1);
+    // the captain is NOT on the deck: the crew are agents doing work and
+    // he is the person they are waiting on
+    await expect(page.locator(".scene .fig.r-cap")).toHaveCount(0);
+    await expect(page.locator("#captain .fig.r-cap")).toHaveCount(1);
+    await expect(page.locator("#captain .capsays i")).toHaveText("1");
     // every crewman says who he is and what he is on, over his own head
-    await expect(page.locator(".scene .bub")).toHaveCount(CREW.length + 2);
+    await expect(page.locator(".scene .bub")).toHaveCount(CREW.length + 1);
     await expect(page.locator(".scene .bub:not(.mini) .job").first()).not.toBeEmpty();
     const named = await page.locator(".scene .bub .who").allInnerTexts();
     const listed = await page.locator(".roster .nm").allInnerTexts();
     expect(named.sort()).toEqual(listed.sort());
+    // and they are named after the agent, not after the task it is on
+    const agents = named.filter((n) => /^(worker|reviewer)-\d+$/.test(n));
+    expect(agents.length).toBe(CREW.length);
+    const jobs = await page.locator(".roster .jb").allInnerTexts();
+    expect(jobs.some((j) => /^T-\d+/.test(j))).toBe(true);
     await expect(page.locator(".scene .port").first()).toBeVisible();
     await expect(page.locator(".scene .mast .sail").first()).toBeVisible();
 
@@ -72,7 +81,7 @@ for (const lang of ["en", "zh-TW", "zh-CN"]) {
     }
     const aboard = await page.locator(".shipbar span").nth(1).innerText();
     expect(aboard).toContain(want("aboard"));
-    expect(aboard).toContain(`${CREW.length + 2}/24`);
+    expect(aboard).toContain(`${CREW.length + 1}/24`);
 
     // and the language is the one that was asked for
     expect(await page.locator(".roster h3 span").first().innerText()).toBe(want("roster"));
@@ -170,7 +179,7 @@ test("the ship grows with the crew", async ({ page }) => {
   await open(page, "zh-TW");
   const small = await page.locator(".scene").getAttribute("data-rate");
   const crewNow = Number(await page.locator(".scene").getAttribute("data-crew"));
-  expect(crewNow).toBe(CREW.length + 2);
+  expect(crewNow).toBe(CREW.length + 1);
   const big = await startBoard(makeRoot(Array(20).fill("working"), false));
   try {
     await page.goto(`${big.url}/?lang=en`);

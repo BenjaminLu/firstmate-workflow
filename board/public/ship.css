@@ -222,6 +222,10 @@
 .roster .nm{font:650 11px var(--mono);color:#dbe8f4}
 .roster .st{font-size:10.5px;padding:1px 7px;border-radius:99px;border:1px solid var(--bubEdge,#2c3f52);color:#9dbdd6;justify-self:start}
 .roster .jb{color:#8fa9bd;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* the session the agent is running under: enough of it to copy, and the
+   whole of it in the title, so a crewman on the board can be opened */
+.roster .sid{font:600 10px var(--mono);color:var(--brass);opacity:.8;
+  background:rgba(217,164,65,.1);border-radius:4px;padding:1px 5px;margin-left:6px}
 .roster li.st-working{--av:#2f5478} .roster li.st-review{--av:#5a3f7d}
 .roster li.st-gate{--av:#7c322b}
 .roster li.st-merged,.roster li.st-captain{--av:#2c5f49}
@@ -247,3 +251,29 @@
 .bub.mini{padding:2px 7px 3px;max-width:112px;background:rgba(9,15,22,.9)}
 .bub.mini .who{font-size:10px}
 .bub.mini::after{display:none}
+
+/* The captain's own place, beside the cards. He is not crew - the crew are
+   agents doing work, he is the person they are waiting on - so he stands
+   where the waiting is rather than on a deck. */
+.capwrap{display:grid;grid-template-columns:132px 1fr;gap:16px;align-items:start}
+/* no geometry declared here: the figure's offsets come from the same
+   JavaScript constants the deck uses, written on by SHIP.captain. This
+   block had --deckY0 and --rowStep of its own, which is exactly the two
+   sources the ship exists not to have. */
+.captain{position:relative;min-height:190px;padding-top:12px;
+  border:1px solid var(--line);border-radius:13px;overflow:hidden;
+  background:linear-gradient(180deg,#0a1a26,#060f17)}
+.captain .capstand{position:relative;height:132px;perspective:800px;perspective-origin:50% 40%}
+.captain .pivot{--sc:1.05;bottom:6px}
+.captain .capstand::after{content:"";position:absolute;left:50%;bottom:0;width:96px;height:10px;
+  margin-left:-48px;border-radius:50%;background:radial-gradient(ellipse,rgba(0,0,0,.6),transparent 70%)}
+.captain .capsays{padding:6px 10px 12px;text-align:center}
+.captain .capsays b{display:block;font:650 11px var(--mono);color:var(--brass);letter-spacing:.05em}
+.captain .capsays span{display:block;margin-top:3px;font-size:10.5px;color:#9dbdd6;line-height:1.35}
+.captain .capsays i{display:inline-block;margin-top:7px;min-width:20px;padding:1px 7px;
+  border-radius:99px;font:650 11px var(--mono);font-style:normal;
+  background:linear-gradient(180deg,#f0c46a,#c9972f);color:#0f1621}
+@media (max-width:760px){.capwrap{grid-template-columns:1fr}
+  .captain{min-height:0;display:flex;align-items:center;gap:10px;padding:10px}
+  .captain .capstand{width:110px;height:110px;flex:0 0 110px}
+  .captain .capsays{text-align:left;padding:0}}

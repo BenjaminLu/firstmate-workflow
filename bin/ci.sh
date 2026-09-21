@@ -219,6 +219,24 @@ else
   pass "the vendor chain has one implementation"
 fi
 
+# bash 3.2 reads the bytes of a full-width character as part of a variable
+# name: `"$TASK（session）"` is an unbound variable called `TASK（`, and the
+# script aborts under `set -u`. The runner has 5.2 and does not care, so a
+# line like that is green there and dead here. Brace the variable.
+stage "portability"
+# perl, not grep: a bracket range over high bytes is not portable, and the
+# first version of this flagged a tab. A tab ends a name cleanly; only a
+# character bash cannot tell from a name character is swallowed.
+bare="$(find bin tests skills -type f \( -name '*.sh' -o -name '*.md' \) \
+  -exec perl -CSD -ne 'print "$ARGV:$.: $_" if /\$[A-Za-z_]\w*[^\x00-\x7f]/' {} + 2>/dev/null \
+  | grep -v '^[^:]*:[0-9]*: *#' || true)"
+if [ -n "$bare" ]; then
+  flunk "an unbraced variable runs into a non-ASCII character:"
+  printf '%s\n' "$bare"
+else
+  pass "every variable next to a non-ASCII character is braced"
+fi
+
 stage "dag"
 # section 14 of the design and tasks.json are two views of one DAG
 if [ -f design/tasks.json ] && [ -f design/design.md ]; then

@@ -70,7 +70,64 @@ const state = () => {
     stage: awaiting.has(d.id as string) ? "captain" : (stage.get(d.id as string) ?? "queued"),
     pr: pr.get(d.id as string) ?? null,
   }));
+  // The crew are AGENTS, not tasks. A crewman on the deck is something
+  // that is running: firstmate, each worker or reviewer currently engaged,
+  // and the captain while a decision is waiting. Drawing one figure per
+  // in-flight task put pull requests on the deck instead - three tasks
+  // handled by one worker looked like three of the crew, and the ship's
+  // rate followed the backlog rather than the concurrency.
+  //
+  // An agent is engaged when the last thing it did concerns a task that is
+  // not finished. github is the sync, not an agent, and is never aboard.
+  // the session each agent is running under, so a crewman on the board can
+  // be opened and read rather than only watched
+  const sessionOf = new Map<string, string>();
+  for (const e of events) {
+    const sid = (e as Record<string, unknown>).data as Record<string, unknown> | undefined;
+    if (e.actor && sid && typeof sid.session === "string") sessionOf.set(e.actor, sid.session);
+  }
+  // firstmate included: it is an agent like the others and it does work
+  // of its own. Pinning it to "dispatching" was the board saying what the
+  // role is for rather than what the agent is doing, and it is the one
+  // crewman a reader most wants to be told the truth about.
+  const lastByActor = new Map<string, Event>();
+  for (const e of events) {
+    if (!e.actor || e.actor === "github" || e.actor === "captain") continue;
+    lastByActor.set(e.actor, e);
+  }
+  const done = new Set(tasks.filter((t) => ["merged", "closed"].includes(t.stage))
+                            .map((t) => t.id as string));
+  // firstmate carries its task like anyone else. Pinning it to
+  // "dispatching" was the board saying what the role is FOR rather than
+  // what the agent is DOING - and firstmate is the crewman a reader most
+  // wants the truth about, because it is the one that works off the board.
+  const fm = lastByActor.get("firstmate");
+  const fmTask = fm?.task && !done.has(fm.task) ? fm.task : null;
+  const fmT = fmTask ? tasks.find((x) => x.id === fmTask) : undefined;
+  const crew: Array<Record<string, unknown>> = [{
+    id: "firstmate", role: "firstmate",
+    state: !events.some((e) => e.type === "greenlit") ? "queued"
+         : (fmT?.stage ?? "working"),
+    task: fmTask, title: fmT?.title ?? null,
+    session: sessionOf.get("firstmate") ?? null,
+  }];
+  for (const [actor, e] of lastByActor) {
+    if (actor === "firstmate") continue;   // already aboard, above
+    const task = e.task ?? null;
+    if (!task || done.has(task)) continue;
+    const t = tasks.find((x) => x.id === task);
+    crew.push({
+      id: actor,
+      role: actor.startsWith("reviewer") ? "reviewer" : "worker",
+      state: t?.stage ?? "working",
+      task, title: t?.title ?? null,
+      session: sessionOf.get(actor) ?? null,
+    });
+  }
+  if (pending().length) crew.push({ id: "captain", role: "captain", state: "captain", task: null });
+
   return {
+    crew,
     greenlit: events.some((e) => e.type === "greenlit"),
     counts: {
       merged: tasks.filter((t) => t.stage === "merged").length,

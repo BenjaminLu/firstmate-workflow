@@ -80,6 +80,69 @@ assert_eq "captain" "$(jq -r '.tasks[]|select(.id=="T-C")|.stage' <<<"$sc2")" \
   "and stays there while the card is up, whatever is said after"
 rm -f "$d/state/pending/D-12.json"
 
+# firstmate is an agent too, and it does work of its own. Reporting it as
+# "dispatching" whatever it was actually doing was the board saying what
+# the role is for rather than what the agent is on - and firstmate is the
+# crewman a reader most needs the truth about, because it is the one that
+# works outside the board.
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor firstmate --task T-A --type dispatched \
+  --data '{"session":"018J92FGGa4fgjEfnCPP62bf"}' \
+  --en "firstmate took it itself" --tw "大副自己做" >/dev/null
+sf="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_ne "" "$sf" "the board is answering"
+assert_eq "T-A" "$(jq -r '.crew[]|select(.id=="firstmate")|.task' <<<"$sf")" \
+  "firstmate carries the task it is on"
+assert_eq "018J92FGGa4fgjEfnCPP62bf" \
+  "$(jq -r '.crew[]|select(.id=="firstmate")|.session' <<<"$sf")" \
+  "and the session it is running under"
+assert_eq "1" "$(jq -r '[.crew[]|select(.id=="firstmate")]|length' <<<"$sf")" \
+  "and appears once, not twice"
+
+# The crew are AGENTS, not tasks. One worker that has moved between three
+# tasks is one crewman, and github - which is the sync, not an agent - is
+# never aboard. Drawing one figure per in-flight task put pull requests on
+# the deck and made the ship grow with the backlog.
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-2 --task T-A --type dispatched \
+  --en "on T-A" --tw "在做 T-A" >/dev/null
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-2 --task T-B --type dispatched \
+  --en "on T-B now" --tw "改做 T-B" >/dev/null
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor github --task T-A --type pr_opened --pr 3 \
+  --en "sync" --tw "同步" >/dev/null
+sk="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_ne "" "$sk" "the board is answering"
+ids="$(jq -r '.crew[].id' <<<"$sk" | sort | tr '\n' ' ')"
+assert_contains "$ids" "firstmate" "firstmate is always aboard"
+assert_contains "$ids" "worker-2" "an agent that is working is aboard"
+assert_lacks "$ids" "github" "the sync is not an agent and is never aboard"
+assert_eq "1" "$(jq -r '[.crew[]|select(.id=="worker-2")]|length' <<<"$sk")" \
+  "one agent on three tasks is one crewman, not three"
+assert_eq "T-B" "$(jq -r '.crew[]|select(.id=="worker-2")|.task' <<<"$sk")" \
+  "and it is on the task it moved to"
+assert_ne "" "$(jq -r '.crew[]|select(.id=="worker-2")|.title' <<<"$sk")" \
+  "with the task's title beside it"
+assert_eq "worker" "$(jq -r '.crew[]|select(.id=="worker-2")|.role' <<<"$sk")" \
+  "a worker is a worker"
+
+# and the session it is running under, so a crewman can be opened and read
+# rather than only watched: a headless run is not a named session, and a
+# dispatched agent was invisible to anything that lists them
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-3 --task T-A --type dispatched \
+  --data '{"session":"669cb22e-b169-47e6-abf4-fdef47460310"}' \
+  --en "picked up" --tw "接下" >/dev/null
+sks="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "669cb22e-b169-47e6-abf4-fdef47460310" \
+  "$(jq -r '.crew[]|select(.id=="worker-3")|.session' <<<"$sks")" \
+  "an agent carries the session it is running under"
+assert_eq "null" "$(jq -r '.crew[]|select(.id=="worker-2")|.session' <<<"$sks")" \
+  "and one that never reported a session simply has none"
+
+# an agent whose task is finished has gone home
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --task T-B --type merged --pr 3 \
+  --en "merged" --tw "已合併" >/dev/null
+sk2="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_lacks "$(jq -r '.crew[].id' <<<"$sk2" | tr '\n' ' ')" "worker-2" \
+  "an agent whose task is finished is not aboard"
+
 # merged is where a task stops. A review round run against the branch
 # afterwards would otherwise move it back to "in review", which reads as
 # work in progress that nobody is doing.

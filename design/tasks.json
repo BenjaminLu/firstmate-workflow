@@ -611,6 +611,33 @@
         "the gate refuses a shift 2 that has not checked it has two",
         "the probe runs under an alarm, because a test for a hang would hang the gate rather than fail it"
       ]
+    },
+    {
+      "id": "T-027",
+      "milestone": "M1",
+      "bootstrap": false,
+      "depends_on": [
+        "T-010"
+      ],
+      "title": "the crew are agents, not pull requests",
+      "scope": [
+        "board/server.ts",
+        "board/public/**",
+        "tests/board.test.sh",
+        "tests/e2e/**",
+        "i18n/**",
+        "design/tasks.json",
+        "design/design.md"
+      ],
+      "acceptance": [
+        "a crewman is an agent that is working, not a task and not a pull request",
+        "the crew comes from the actors in the event log, derived by the server",
+        "firstmate is always aboard; the captain is aboard while a decision is pending",
+        "an agent's bubble says which task it is on, and the roster says the same",
+        "two agents on two tasks are two crewmen; one agent that has moved between tasks is one",
+        "github is not an agent and is never aboard",
+        "the ship's rate follows the number of agents, which is the concurrency, not the backlog"
+      ]
     }
   ]
 }

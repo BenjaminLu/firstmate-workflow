@@ -111,23 +111,30 @@ const SHIP = (() => {
       (c.pct == null ? "" : `<div class="pb"><i style="width:${c.pct}%"></i></div>`) + `</div>`;
   }
 
-  // the crew comes out of the state, never out of a fixture
+  // The crew are AGENTS. The server derives them from the actors in the
+  // event log - who is running, and what each one is on - because a
+  // crewman standing on the deck is something doing work, not a task
+  // waiting for someone. Drawing one per in-flight task put pull requests
+  // on the deck: three tasks handled by one worker looked like three of
+  // the crew, and the ship grew with the backlog instead of the crew.
+  const ROLE = { firstmate: "fm", worker: "w", reviewer: "r" };
   function crewOf(s, T) {
     const label = { firstmate: T("roleFirstmate"), worker: T("roleWorker"),
                     reviewer: T("roleReviewer"), captain: T("roleCaptain") };
-    const crew = [{ id: "firstmate", role: "fm", state: s.greenlit ? "working" : "queued",
-                    name: label.firstmate, job: T(s.greenlit ? "fmDispatching" : "fmWaiting"), pct: null }];
-    for (const t of s.tasks || []) {
-      if (t.stage === "queued" || t.stage === "merged") continue;
-      crew.push({ id: t.id, role: t.stage === "review" ? "r" : "w", state: t.stage,
-                  name: t.id, job: t.title || "",
-                  pct: { working: 45, gate: 70, review: 85, captain: 95 }[t.stage] ?? null });
-    }
-    if ((s.pending || []).length) {
-      crew.push({ id: "captain", role: "cap", state: "captain", name: label.captain,
-                  job: T("capDeciding"), pct: null });
-    }
-    return crew.slice(0, 24);
+    return (s.crew || []).filter((a) => a.role !== "captain").slice(0, 24).map((a) => ({
+      id: a.id,
+      role: ROLE[a.role] || "w",
+      state: a.state || "working",
+      // the agent's own name, and what it is on underneath
+      name: a.role === "firstmate" ? label.firstmate
+          : a.role === "captain" ? label.captain : a.id,
+      job: a.task
+        ? `${a.task}${a.title ? " \u00b7 " + a.title : ""}`
+        : a.role === "captain" ? T("capDeciding")
+        : T(s.greenlit ? "fmDispatching" : "fmWaiting"),
+      pct: a.task ? ({ working: 45, gate: 70, review: 85, captain: 95 }[a.state] ?? null) : null,
+      session: a.session || null,
+    }));
   }
 
   function render(host, s, T) {
@@ -217,12 +224,35 @@ const SHIP = (() => {
     return crew;
   }
 
+  // The captain's own figure, beside the cards rather than on the deck.
+  // He is not crew: the crew are agents doing work and he is the person
+  // they are waiting on, so he stands in the place where the waiting is.
+  function captain(host, n, T) {
+    if (!host) return;
+    if (!n) { host.innerHTML = ""; host.hidden = true; return; }
+    host.hidden = false;
+    // he stands on no deck, so the deck offsets are zero - written from
+    // here, because the geometry has one source and it is this file
+    host.style.setProperty("--deckY0", "0px");
+    host.style.setProperty("--rowStep", "0px");
+    host.style.setProperty("--figH", Math.round(FIG_H * 1.05) + "px");
+    const c = { id: "captain", role: "cap", state: "captain", action: "helm", x: 50, row: 0 };
+    host.innerHTML =
+      `<div class="capstand">${figure(c, 1)}</div>` +
+      `<div class="capsays"><b>${esc(T("roleCaptain"))}</b>` +
+      `<span>${esc(T("capDeciding"))}</span>` +
+      `<i>${n}</i></div>`;
+    drag(host);
+  }
+
   function roster(host, crew, T) {
     host.innerHTML = `<h3><span>${esc(T("roster"))}</span><span>${crew.length}</span></h3><ul>` +
       crew.map((c) => `<li class="st-${c.state}"><span class="av"></span>` +
         `<span class="nm">${esc(c.name)}</span>` +
         `<span class="st">${esc(T("lane" + c.state[0].toUpperCase() + c.state.slice(1)))}</span>` +
-        `<span class="jb" title="${esc(c.job)}">${esc(c.job)}</span></li>`).join("") + `</ul>`;
+        `<span class="jb" title="${esc(c.job)}">${esc(c.job)}` +
+        (c.session ? ` <code class="sid" title="claude --resume ${esc(c.session)}">${esc(c.session.slice(0, 8))}</code>` : "") +
+        `</span></li>`).join("") + `</ul>`;
   }
 
   // drag to turn a crewman; the pointer owns him until it lets go
@@ -284,7 +314,7 @@ const SHIP = (() => {
     return guns.length;
   }
 
-  return { render, roster, ahoy, rateFor, actionFor, crewOf, layout, RATES, ACTIONS,
+  return { render, roster, captain, ahoy, rateFor, actionFor, crewOf, layout, RATES, ACTIONS,
            muted: (() => { try { return !!localStorage.getItem("board.muted"); } catch (_) { return false; } })() };
 })();
 if (typeof module !== "undefined") module.exports = SHIP;
