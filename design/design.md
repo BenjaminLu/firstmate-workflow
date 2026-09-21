@@ -780,3 +780,4 @@ gates, and the dispatcher cannot dispatch itself.
 | T-031 | a second round the worker cannot see, and a question nobody hears | T-007 |
 | T-032 | the red check reaches the worker as an empty block | T-031 |
 | T-033 | firstmate startup contract | T-007, T-006, T-013 |
+| T-034 | clear localized captain decisions and reliable outcome effects | T-010, T-013, T-014 |

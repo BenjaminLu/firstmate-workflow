@@ -771,6 +771,58 @@
         "There is no required reliance on lavish or no-mistakes in startup or role workflows. Verification uses the repository checks and actual GitHub CI evidence, with captain decisions retaining their established board workflow.",
         "Changes remain documentation/instructions and narrowly useful skill metadata or link-structure validation. Do not add arbitrary prose-grep assertions or model/API-dependent CI. Update README and design references so future Claude and Codex sessions discover the same role contract without conversational history."
       ]
+    },
+    {
+      "id": "T-034",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-010",
+        "T-013",
+        "T-014"
+      ],
+      "title": "clear localized captain decisions and reliable outcome effects",
+      "scope": [
+        "bin/fm-decide.sh",
+        "bin/fm-diagram.sh",
+        "board/public/diagram.js",
+        "board/server.ts",
+        "board/public/index.html",
+        "board/public/ship.js",
+        "board/public/ship.css",
+        "i18n/ui.en.json",
+        "i18n/ui.zh-TW.json",
+        "i18n/tw2cn.tsv",
+        "tests/decisions.test.sh",
+        "tests/decide.test.sh",
+        "tests/diagram.test.sh",
+        "tests/i18n.test.sh",
+        "tests/board.test.sh",
+        "tests/ship.spec.ts",
+        "tests/e2e/board.spec.ts",
+        "tests/e2e/fixture.ts",
+        "design/design.md",
+        "design/tasks.json",
+        "design/diagrams/README.md",
+        "design/diagrams/T-034.en.html",
+        "design/diagrams/T-034.zh-TW.html"
+      ],
+      "acceptance": [
+        "Every new decision has one concise task-specific explanation, a bespoke before/after change diagram and concrete advantages and costs for its A/B/C options. Remove repeated nested card framing, titles, lane strips, buttons and checklists from embedded diagrams. A generic workflow diagram is not a substitute for the actual proposed change.",
+        "Add validated structured localized decision input to fm-decide and document its shared server/diagram/frontend contract. Author dynamic titles, explanations, before/after labels, option descriptions, advantages/costs and outcome feedback in en and zh-TW. Derive zh-CN through the existing conversion semantics, extending its table where necessary for complete actual displayed content. Locale changes update entire content, not only controls; event summaries retain en and zh-TW.",
+        "Reject malformed new localized payloads before partial writes or replacing existing decisions. Keep legacy title-only records readable with explicit missing-detail feedback; never fabricate translations, task-specific diagrams or tradeoffs from missing author input. Firstmate supplies missing content before presenting a new decision as complete.",
+        "Use lightweight repository-native HTML/inline SVG and the existing authored-fragment mechanism where useful; no image generation, Figma, lavish or external model/rendering dependency. Escape untrusted dynamic text and validate data boundaries; distinguish trusted authored fragments from data, and verify markup-like text cannot inject scripts or controls.",
+        "Add behavioral coverage for two materially different decisions with distinct before/after diagrams and option tradeoffs, no nested duplicate content, complete en/zh-TW/zh-CN locale switching, malformed/missing localization, legacy records, safe text rendering, authored-fragment selection and derived zh-CN, as well as all effect scenarios below.",
+        "Clicking an existing decision option visibly transitions the captain from idle through submitting to the actual recorded outcome. Preserve existing A/B/C meanings and immediate one-click submission; do not add a second confirmation action or change authorization, merge policy, or retry semantics without a separate captain decision. Keep feedback visible long enough to observe when the last pending card disappears.",
+        "A successfully recorded order produces the documented captain/order response: raised-order pose, helm response and AYE, CAPTAIN! acknowledgement, with synthesized bell/whistle where browser audio permissions and mute allow. An acknowledged hold or send-back must not claim a successful merge. A pending or failed request has distinct truthful feedback.",
+        "Confirmed merge effects follow newly observed merge-event identity, not changes in the task-derived merged count. A merge for a task absent from the currently loaded design/tasks.json still produces one celebration. Duplicate SSE snapshots, explicit refreshes, repeated delivery and reconnects do not replay an already handled event; initial historical state does not replay old celebrations. Multiple newly observed outcomes are not silently collapsed into a single count delta.",
+        "The decision path provides an observable stable identity and outcome for recorded decisions without depending on a separate fm-decide --await process. Preserve bin/fm-emit.sh as the only append path for events and avoid duplicate semantic events if an existing waiter also observes the response. If satisfying this requires changing scripts outside this scope, stop for a scope decision rather than editing them.",
+        "Routine state refreshes do not replace or reset active captain/ship effect state before its visible completion. Crew and task data can continue updating during the effect. Do not invent agents, task progress, successful merges or lifecycle events for visual feedback.",
+        "A merge helper failure or request/network error shows persistent accessible failure feedback and no successful-merge broadside/banner. An HTTP response that records a decision while reporting merge failure is not treated as merge success. Duplicate recorded requests do not invent a new successful outcome.",
+        "Respect prefers-reduced-motion with a readable static outcome acknowledgement instead of suppressing all feedback. Audio mute persists, audio is optional, and browser autoplay refusal never prevents the decision or its visible feedback. Localize new interface text through English and zh-TW dictionaries and the existing zh-CN derivation; event summaries retain both en and zh-TW.",
+        "Add fail-first behavioral browser coverage for actual decision submission and resulting captain/order effects, a real merge event for a task absent from task definitions, duplicate/reconnected state delivery, state refresh during an effect, failed merge, and reduced-motion feedback. Assertions must observe outcomes and effect lifetime, not merely grep source or click the manual Ahoy demonstration button. Test fixtures use isolated local state and stub merge execution, never real captain decisions or model/network APIs.",
+        "Run the repository CI and relevant browser tests, record actual observed results and limitations, and establish that new regressions fail with the implementation removed. Update the relevant design contract and task metadata to describe the shipped behavior without claiming that instruction prose or a manually triggered effect proves the complete decision path."
+      ]
     }
   ]
 }
