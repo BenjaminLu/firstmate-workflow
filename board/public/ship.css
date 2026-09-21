@@ -99,6 +99,12 @@
 .fig.r-fm{--suit:#2c4d74;--hat:#d9a441;--trouser:#1f3244}
 .fig.r-w {--suit:#b4672a;--hat:#e8ae3e}
 .fig.r-r {--suit:#6b45a0;--hat:#c07bf0}
+/* A role the page has no name for is a mismatch between the server's
+   vocabulary and this sheet's, and the page said it should be visible
+   rather than painted as a worker. Without a rule it inherited .fig and
+   looked like a crewman in the default suit, which is the quiet failure
+   the comment claimed not to have. Magenta is used by nothing else. */
+.fig.r-unknown{--suit:#ff00a8;--hat:#ff00a8;--trouser:#ff00a8;outline:2px dashed #ff00a8}
 .fig .head,.fig .neck,.fig .handL,.fig .handR{--c:var(--skin)}
 .fig .torso,.fig .armL,.fig .armR{--c:var(--suit)}
 .fig .legL,.fig .legR{--c:var(--trouser)}

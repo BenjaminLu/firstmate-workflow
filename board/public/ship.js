@@ -116,15 +116,17 @@ const SHIP = (() => {
       (c.pct == null ? "" : `<div class="pb"><i style="width:${c.pct}%"></i></div>`) + `</div>`;
   }
 
+  // the server sends one of these three; an unknown one is a mismatch
+  // between the two halves, and .fig.r-unknown draws it as one. Exported
+  // because the sheet has to carry a rule for every value in here and
+  // nothing can check that against a constant it cannot see.
+  const ROLE = { firstmate: "fm", worker: "w", reviewer: "r" };   // no captain: see captain()
   // The crew are AGENTS. The server derives them from the actors in the
   // event log - who is running, and what each one is on - because a
   // crewman standing on the deck is something doing work, not a task
   // waiting for someone. Drawing one per in-flight task put pull requests
   // on the deck: three tasks handled by one worker looked like three of
   // the crew, and the ship grew with the backlog instead of the crew.
-  // the server sends one of these three; an unknown one is a mismatch
-  // between the two halves and should be visible, not painted as a worker
-  const ROLE = { firstmate: "fm", worker: "w", reviewer: "r" };   // no captain: see captain()
   function crewOf(s, T) {
     // only firstmate is named by its role; a worker or a reviewer is
     // named by its own id, and the captain is not in this list at all
@@ -338,7 +340,7 @@ const SHIP = (() => {
     return guns.length;
   }
 
-  return { render, roster, captain, ahoy, rateFor, actionFor, crewOf, layout, RATES, ACTIONS,
+  return { render, roster, captain, ahoy, rateFor, actionFor, crewOf, layout, RATES, ACTIONS, ROLE,
            muted: (() => { try { return !!localStorage.getItem("board.muted"); } catch (_) { return false; } })() };
 })();
 if (typeof module !== "undefined") module.exports = SHIP;

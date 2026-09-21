@@ -149,8 +149,6 @@ assert_contains "$out" "60s locally" "against the budget the design sets"
 # AND names the offender, because a stage that goes red without saying what
 # it found sends the reader back to the source.
 # Each plant below is the thing its stage exists to find, not something any
-
-
 # stage would trip over: a script that dispatches and lacks the redirect, a
 # hand-rolled swap, a second vendor loop, a second writer of the log, an id
 # missing from the design, a suite that returns non-zero. None of them is a
@@ -185,6 +183,44 @@ rm -f "$q/tests/silent.test.sh"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 assert_contains "$out" "ci: green" "a suite that prints those words as data still passes"
 rm -f "$q/tests/talks.test.sh"
+
+# the rest of the same family: bash says all of these the same way and
+# carries on afterwards. A file that will not exec, and a syntax error
+# in something sourced - which leaves the suite running with half its
+# functions undefined and exiting 0, which is exactly what two spliced
+# lines in a test file did.
+cat > "$q/brokenlib.sh" <<'L'
+f() {
+L
+{ printf '#!/usr/bin/env bash\n'
+  printf '. "%s/brokenlib.sh"\n' "$q"
+  printf 'exit 0\n'
+} > "$q/tests/broken.test.sh"
+plant "a suite that goes on after a syntax error in a sourced file is a failure" "did not run"
+plant "and the stage prints that line too" "syntax error"
+{ printf '#!/usr/bin/env bash\n'
+  printf '/nonexistent/not-a-program\n'
+  printf 'exit 0\n'
+} > "$q/tests/broken.test.sh"
+plant "a suite that goes on after a command it could not exec is a failure" "did not run"
+rm -f "$q/tests/broken.test.sh" "$q/brokenlib.sh"
+
+# The locale the gate runs a suite under is production, and nothing here
+# would break if the line were deleted: the diagnostics it reads are
+# English on an English machine either way. So the suite asserts the
+# environment itself. LC_MESSAGES pinned to C, and LC_ALL emptied rather
+# than set to C - LC_ALL=C pins collation and ctype for every suite as
+# well, running their sort, grep and tr over UTF-8 in a locale no
+# developer uses.
+cat > "$q/tests/locale.test.sh" <<L
+#!/usr/bin/env bash
+printf 'LC_ALL=[%s] LC_MESSAGES=[%s]\\n' "\${LC_ALL-unset}" "\${LC_MESSAGES-unset}" > "$q/locale"
+exit 0
+L
+LC_ALL=zh_TW.UTF-8 LC_MESSAGES=zh_TW.UTF-8 FM_ROOT="$q" bash "$q/bin/ci.sh" >/dev/null 2>&1
+assert_eq "LC_ALL=[] LC_MESSAGES=[C]" "$(cat "$q/locale")" \
+  "the gate pins the shell's messages to C and leaves the rest of the locale alone"
+rm -f "$q/tests/locale.test.sh" "$q/locale"
 
 # a script that dispatches without closing standard input
 # two, because the criterion says the gate names EVERY offender and a gate

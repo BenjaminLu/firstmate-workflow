@@ -244,11 +244,17 @@ else
   # holding the pipe, and command substitution waits for that pipe to close
   tmp="$(mktemp)"
   for t in "${suites[@]}"; do
-    # LC_ALL=C because the check below reads the shell's own messages,
-    # and bash localises them: on a zh-TW shell it says 命令未找到 and an
-    # English grep matches nothing, which is green for a suite that
-    # never ran half its lines
-    if LC_ALL=C bash "$t" > "$tmp" 2>&1; then
+    # The check below reads the shell's OWN messages, and bash localises
+    # them: on a zh-TW shell it says 命令未找到 and an English grep
+    # matches nothing, which is green for a suite that never ran half
+    # its lines. So the messages are pinned - and only the messages.
+    # LC_ALL=C pins collation and ctype too, which would run every
+    # suite's sort, grep and tr over UTF-8 in a locale no developer
+    # uses; and LC_ALL has to be cleared as well, because it outranks
+    # LC_MESSAGES wherever the caller has it set. Empty, not unset: an
+    # empty LC_ALL is the POSIX way to say "do not override", and
+    # unsetting it in a child needs a subshell.
+    if LC_ALL='' LC_MESSAGES=C bash "$t" > "$tmp" 2>&1; then
       # A suite that calls something that does not exist prints to
       # stderr, carries on, and reaches finish green - which is how a
       # test file with two spliced lines reported the same as one
@@ -256,8 +262,18 @@ else
       # tell us, so the gate reads what the run said.
       # the shell's OWN diagnostic, which carries "<file>: line N:" - a
       # suite that legitimately prints one of these phrases as data, or
-      # asserts a script's error text, is not a suite that broke
-      noise="$(grep -nE '^[^:]+: line [0-9]+: .*(command not found|unbound variable)' "$tmp" || true)"
+      # asserts a script's error text, is not a suite that broke.
+      #
+      # The set is chosen, not collected: these are bash's diagnostics
+      # for "this line did not run and I am carrying on anyway", which
+      # is the whole hazard under `set -uo pipefail` with no -e. A
+      # missing command, an unset variable, a file that will not exec,
+      # and a syntax error in something sourced - which leaves the suite
+      # running with half its functions undefined and exiting 0, the way
+      # two spliced lines in a test file did. Diagnostics that stop the
+      # shell do not belong here: the suite's exit status already
+      # catches those, on the other arm.
+      noise="$(grep -nE '^[^:]+: line [0-9]+: .*(command not found|unbound variable|No such file or directory|syntax error)' "$tmp" || true)"
       if [ -n "$noise" ]; then
         flunk "$t said it passed, but something in it did not run:"
         printf '%s\n' "$noise"

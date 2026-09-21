@@ -189,7 +189,45 @@ test("no cards, no captain", async ({ page }) => {
     await expect(page.locator(".scene .pivot").first()).toBeVisible();
     await expect(page.locator(".dcard")).toHaveCount(0);
     await expect(page.locator("#captain .fig.r-cap")).toHaveCount(0);
-    await expect(page.locator("#captain")).toBeHidden();
+    // his OWN decision, not his ancestor's: #captain sits inside
+    // #deckwrap, which the page hides whenever there are no cards, so
+    // toBeHidden() here is true whatever SHIP.captain did with him.
+    await expect(page.locator("#captain")).toHaveAttribute("hidden", "");
+  } finally { stopBoard(quiet); }
+});
+
+test("the captain keeps his own block on a phone", async ({ page }) => {
+  test.setTimeout(60_000);
+  // At 760px and under the block becomes its own column, and an author
+  // `display` at that width beats the user agent's [hidden] rule - so
+  // the width that rearranges him is also the width where hiding him
+  // can quietly stop working. Both halves, at the width itself.
+  await page.setViewportSize({ width: 375, height: 800 });
+  const waiting = await startBoard(makeRoot(["working"], true));
+  try {
+    await page.goto(`${waiting.url}/?lang=en`);
+    await expect(page.locator(".dcard").first()).toBeVisible();
+    await expect(page.locator("#captain .fig.r-cap")).toHaveCount(1);
+    await expect(page.locator("#captain")).toBeVisible();
+    // beside the cards, not on the deck, at this width as at any other
+    await expect(page.locator(".scene .fig.r-cap")).toHaveCount(0);
+    const box = await page.locator("#captain").boundingBox();
+    expect(box!.width).toBeGreaterThan(0);
+    expect(box!.height).toBeGreaterThan(0);
+    // and the guard that keeps `hidden` working at this width. It has
+    // to be provoked from here: the page only ever hides him when there
+    // are no cards, and then #deckwrap is hidden too and hides him
+    // whatever this rule says - which is why removing the rule broke
+    // nothing until this line existed. The rule is the contract for
+    // `.captain[hidden]`, so the attribute is what sets it.
+    await page.evaluate(() => { document.getElementById("captain")!.hidden = true; });
+    await expect(page.locator("#captain")).toBeHidden({ timeout: 2000 });
+  } finally { stopBoard(waiting); }
+  const quiet = await startBoard(makeRoot(["working"], false));
+  try {
+    await page.goto(`${quiet.url}/?lang=en`);
+    await expect(page.locator(".scene .pivot").first()).toBeVisible();
+    await expect(page.locator("#captain")).toHaveAttribute("hidden", "");
   } finally { stopBoard(quiet); }
 });
 

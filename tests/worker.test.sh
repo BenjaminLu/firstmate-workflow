@@ -273,6 +273,23 @@ d3="$(fixture)"; r3="$d3/repo"; GH3="$(ghstub "$d3")"
 assert_eq "1" "$?" "a failed attempt exits 1"
 assert_contains "$(cat "$d3/ghcalls")" "pr create" "a failed attempt still opens a pull request"
 
+# The ending is the one emit that is not best-effort. Every other line
+# the worker writes to the log is decoration the board can miss; this
+# one is what takes the crewman off the deck, and a lost one leaves the
+# agent standing there until the task merges - which is the failure the
+# `agent_finished` pair exists to remove. So when it cannot be written
+# the run says so on stderr instead of ending quietly.
+d4="$(fixture)"; r4="$d4/repo"; GH4="$(ghstub "$d4")"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$r4/bin/fm-emit.sh"; chmod +x "$r4/bin/fm-emit.sh"
+out4="$(cd "$r4" && FM_ROOT="$r4" FM_GH="$GH4" bin/fm-worker.sh --task T-Z --name worker-mute 2>&1)"
+assert_contains "$out4" "could not record the end of this run" \
+  "a run whose ending cannot be written says so rather than ending in silence"
+assert_contains "$out4" "worker-mute" "and names the crewman left on the deck"
+# and the ordinary lines stay best-effort: the run still did its work
+assert_ok "git -C '$r4' rev-parse --verify t-z-a-mock-task" \
+  "a log it cannot write to does not stop the run"
+rm -rf "$d4"
+
 # the adapter never touches the repository
 # a comment may mention git; a call may not
 assert_fail "grep -vE '^[[:space:]]*#' '$ROOT/bin/adapters/mock.sh' | grep -qE '\\b(git|gh)\\b'" \

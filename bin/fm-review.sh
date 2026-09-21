@@ -37,7 +37,8 @@ cd "$REPO" || { echo "fm-review: no repo at $REPO" >&2; exit 64; }
 # per run, like the worker's: a constant actor collapses two concurrent
 # rounds into one crewman carrying whichever task the second one touched
 NAME="${NAME:-reviewer-$$}"
-emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --data '{"role":"reviewer"}' --actor "$NAME" --task "$TASK" "$@" >/dev/null 2>&1 </dev/null || true; }
+emit_once() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --data '{"role":"reviewer"}' --actor "$NAME" --task "$TASK" "$@" >/dev/null 2>&1 </dev/null; }
+emit() { emit_once "$@" || true; }
 # Armed where emit() first works: every exit between the two would board
 # an actor that never leaves. Above it is only the argument parsing,
 # which exits 64 before emit() exists.
@@ -47,7 +48,22 @@ emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --data '{"role":"reviewer"}' --a
 # run announces it has finished and carries on working - and `kill`
 # stops working on it, because a trapped TERM that does not exit leaves
 # only SIGKILL. The codes are the conventional 128+signal.
-finished() { emit --type agent_finished --en "run finished" --tw "這次執行結束"; }
+# The ordinary emit is best-effort - a progress line the board misses
+# costs an update - but the ending is not. `agent_finished` is what
+# takes the crewman off the deck; lose it and the agent stands there
+# until its task merges, which is the failure this pair exists to
+# remove. So it is tried again, and if it still cannot be written the
+# run says so rather than passing in silence. Both go through one
+# definition of the command: two spellings of the same emit is how the
+# ending and the progress lines drift apart.
+finished() {
+  local try=3
+  while [ "$try" -gt 0 ]; do
+    try=$(( try - 1 ))
+    emit_once --type agent_finished --en "run finished" --tw "這次執行結束" && return 0
+  done
+  echo "${0##*/}: could not record the end of this run; ${NAME} stays on the deck until ${TASK} is finished" >&2
+}
 trap finished EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM

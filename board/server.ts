@@ -128,9 +128,19 @@ const state = () => {
   // "ever touched a task that is not finished yet", a worker that died at
   // a gate was drawn working for ever, and the rate followed the history
   // rather than what is happening now.
+  //
+  // Insertion order here is the order of each actor's LAST event, oldest
+  // first, because the loop deletes before it sets. That matters at the
+  // one place the list is cut: `Map.set` on a key that already exists
+  // keeps the original position, so without the delete the map was
+  // ordered by each actor's FIRST event and a full deck showed the
+  // stalest crew while the agents that had just started fell off the
+  // end. Reversed below, the deck holds the ones that spoke most
+  // recently, which is what a reader watching a busy ship is looking at.
   const lastByActor = new Map<string, Event>();
   for (const e of events) {
     if (!e.actor || e.actor === "github" || e.actor === "captain") continue;
+    lastByActor.delete(e.actor);
     lastByActor.set(e.actor, e);
   }
   for (const [actor, e] of [...lastByActor]) {
@@ -147,16 +157,22 @@ const state = () => {
   // way as any other agent: its task if it has one, nothing if its run
   // ended. Two comments used to argue it was "an agent like the others"
   // while the code exempted it; this is the exemption, named and narrow.
+  // one derivation, read twice: firstmate's state and the payload's own
+  // flag were each computing this, and the page reads the flag while it
+  // is handed the state - two answers to one question, in one response
+  const greenlit = events.some((e) => e.type === "greenlit");
   const fm = lastByActor.get("firstmate");
   const fmTask = fm?.task && !done.has(fm.task) ? fm.task : null;
   const fmT = fmTask ? tasks.find((x) => x.id === fmTask) : undefined;
   const crew: Crew[] = [{
     id: "firstmate", role: "firstmate",
-    state: !events.some((e) => e.type === "greenlit") ? "queued"
-         : CREW_STATE(fmT?.stage),
+    state: greenlit ? CREW_STATE(fmT?.stage) : "queued",
     task: fmTask, title: fmT?.title ?? null,
   }];
-  for (const [actor, e] of lastByActor) {
+  // newest first, and firstmate is already pinned at the head: when the
+  // deck overflows it is the oldest crewman that is dropped, never the
+  // one that just boarded
+  for (const [actor, e] of [...lastByActor].reverse()) {
     if (actor === "firstmate") continue;   // already aboard, above
     const task = e.task ?? null;
     if (!task) continue;
@@ -188,7 +204,7 @@ const state = () => {
     // building an unbounded array into every payload.
     deckLimit: DECK_LIMIT,
     crew: crew.slice(0, DECK_LIMIT),
-    greenlit: events.some((e) => e.type === "greenlit"),
+    greenlit,
     counts: {
       merged: tasks.filter((t) => t.stage === "merged").length,
       inflight: tasks.filter((t) => ["working", "review"].includes(t.stage)).length,

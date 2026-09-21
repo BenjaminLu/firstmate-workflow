@@ -15,7 +15,8 @@ cp "$ROOT/board/public/index.html" "$d/board/public/"
 cat > "$d/design/tasks.json" <<'J'
 {"tasks":[{"id":"T-A","title":"first","milestone":"M0","depends_on":[]},
           {"id":"T-B","title":"second","milestone":"M0","depends_on":["T-A"]},
-          {"id":"T-C","title":"third","milestone":"M0","depends_on":[]}]}
+          {"id":"T-C","title":"third","milestone":"M0","depends_on":[]},
+          {"id":"T-D","title":"fourth","milestone":"M0","depends_on":[]}]}
 J
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --type greenlit --en "go" --tw "開工" >/dev/null
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-A --type dispatched --en "picked up T-A" --tw "領走 T-A" >/dev/null
@@ -275,6 +276,35 @@ wait "$writer" 2>/dev/null || true
 stream="$(cat "$d/stream")"
 assert_contains "$stream" "event: state" "the stream opens with the state"
 assert_contains "$stream" "merged" "an event written while the stream is open reaches it"
+
+# The deck holds a fixed number, and when more agents are aboard than it
+# holds the server has to decide which ones are shown. It keeps the ones
+# that spoke most recently. The first version kept the oldest without
+# meaning to: `Map.set` on a key that is already present keeps its
+# original position, so the map was ordered by each actor's FIRST event
+# and a full deck showed the stalest crew while agents that had just
+# boarded fell off the end. Last in this fixture, because it fills the
+# deck and every assertion above reads the crew. On T-D, which exists in
+# this fixture for exactly this and is the only task nothing above has
+# merged or closed - an agent on a finished task is not aboard at all,
+# so a crowd on T-A would have left the deck empty and every assertion
+# here green for the wrong reason.
+limit="$(jq -r '.deckLimit' <<<"$(curl -sf "http://127.0.0.1:$PORT/api/state")")"
+assert_matches "$limit" '^[0-9]+$' "the server states the deck limit"
+n=$(( limit + 6 ))
+i=0
+while [ "$i" -lt "$n" ]; do
+  FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor "crowd-$i" --task T-D --type dispatched \
+    --en "aboard" --tw "上船" >/dev/null
+  i=$(( i + 1 ))
+done
+sd="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "$limit" "$(jq -r '.crew|length' <<<"$sd")" "the deck holds its limit and no more"
+crowd="$(jq -r '.crew[].id' <<<"$sd" | tr '\n' ' ')"
+assert_contains "$crowd" "firstmate " "firstmate keeps its place at the head"
+assert_eq "firstmate" "$(jq -r '.crew[0].id' <<<"$sd")" "and it is the head"
+assert_contains "$crowd" "crowd-$(( n - 1 )) " "the agent that boarded last is on the deck"
+assert_lacks "$crowd" "crowd-0 " "and the one that has been aboard longest is the one dropped"
 
 # loopback only - on the option that binds, not on the file's prose
 assert_ok "sed 's|//.*||' '$ROOT/board/server.ts' | grep -qE 'hostname:[[:space:]]*\"127\\.0\\.0\\.1\"'" \

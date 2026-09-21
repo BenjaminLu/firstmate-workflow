@@ -43,8 +43,34 @@ assert_lacks "$split" "CARRIED-ON" "a signal trap that exits stops the script"
 assert_contains "$split" "END" "and the EXIT trap still runs"
 
 # --- and the shape, across every script ----------------------------------
-scripts="$(find "$ROOT/bin" "$ROOT/tests" -type f -name '*.sh' | sort)"
+# The criterion says "no script", so the sweep is the repository and not
+# the two directories the scripts happen to live in today: every file
+# with a .sh suffix wherever it sits, every file bash is told to execute
+# by its shebang whatever it is called, and the workflow files, whose
+# `run:` blocks are shell the runner executes. Excluded, deliberately:
+# .git, node_modules and state/, which are not ours; and shell quoted
+# inside markdown - skills/**/SKILL.md carries commands for an agent to
+# run, not a script with exit paths of its own, and a trap written there
+# traps nothing.
+shellish() {
+  find "$ROOT" -type d \( -name .git -o -name node_modules -o -name state \) -prune \
+       -o -type f -print | while IFS= read -r f; do
+    case "$f" in
+      *.sh) printf '%s\n' "$f"; continue ;;
+      "$ROOT"/.github/workflows/*) printf '%s\n' "$f"; continue ;;
+      *.md|*.json|*.css|*.html|*.tsv|*.png|*.svg) continue ;;
+    esac
+    # a here-string, not a pipe: the gate refuses a pipeline into grep -q
+    grep -qE '^#!.*[ /](ba)?sh([ ]|$)' <<< "$(head -1 "$f" 2>/dev/null)" \
+      && printf '%s\n' "$f"
+  done | sort
+}
+scripts="$(shellish)"
 assert_ne "" "$scripts" "there were scripts to check"
+# the sweep reaches past bin/ and tests/, or it is the old one with a
+# longer name: these two are the files outside them that it must see
+assert_contains "$scripts" "/.github/workflows/" "the sweep reaches the workflow files"
+assert_ok "grep -qv '/bin/\|/tests/' <<< \"$scripts\"" "and something outside bin/ and tests/"
 
 # both orders: `trap f EXIT INT` and `trap f INT TERM EXIT`, which is the
 # commoner idiom and the same bug

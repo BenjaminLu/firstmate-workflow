@@ -33,7 +33,8 @@ done
 cd "$REPO" || { echo "fm-worker: no repo at $REPO" >&2; exit 64; }
 NAME="${NAME:-worker-$$}"
 EMIT="$REPO/bin/fm-emit.sh"
-emit() { FM_ROOT="$REPO" "$EMIT" --data '{"role":"worker"}' --actor "$NAME" --task "$TASK" "$@" >/dev/null 2>&1 </dev/null || true; }
+emit_once() { FM_ROOT="$REPO" "$EMIT" --data '{"role":"worker"}' --actor "$NAME" --task "$TASK" "$@" >/dev/null 2>&1 </dev/null; }
+emit() { emit_once "$@" || true; }
 
 # A run that ends has to say so, or "aboard" means "ever touched a task
 # that is not finished yet", the board draws every actor that has ever
@@ -54,7 +55,22 @@ emit() { FM_ROOT="$REPO" "$EMIT" --data '{"role":"worker"}' --actor "$NAME" --ta
 # worktree creation (70), the adapter chain - and every one of those
 # exits happens after the run has said it started, so every one of them
 # needs the ending.
-finished() { emit --type agent_finished --en "run finished" --tw "這次執行結束"; }
+# The ordinary emit is best-effort - a progress line the board misses
+# costs an update - but the ending is not. `agent_finished` is what
+# takes the crewman off the deck; lose it and the agent stands there
+# until its task merges, which is the failure this pair exists to
+# remove. So it is tried again, and if it still cannot be written the
+# run says so rather than passing in silence. Both go through one
+# definition of the command: two spellings of the same emit is how the
+# ending and the progress lines drift apart.
+finished() {
+  local try=3
+  while [ "$try" -gt 0 ]; do
+    try=$(( try - 1 ))
+    emit_once --type agent_finished --en "run finished" --tw "這次執行結束" && return 0
+  done
+  echo "${0##*/}: could not record the end of this run; ${NAME} stays on the deck until ${TASK} is finished" >&2
+}
 trap finished EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM

@@ -113,6 +113,34 @@ test("every state a crewman can be in is styled and named", () => {
   }
 });
 
+// The page maps the server's three role names onto short class
+// suffixes and falls back to "unknown" for anything else. The comment
+// beside that line says a mismatch "should be visible, not painted as a
+// worker" - which was reasoning, not code: r-unknown had no rule, so it
+// inherited .fig and looked like an ordinary crewman.
+test("a role the page does not know is drawn as a mismatch, not as a worker", () => {
+  // every suffix the map can produce has a rule of its own, and the
+  // server's own role union is what decides the set - a fourth role
+  // added there without one here has to fail
+  const roles = readFileSync(join(ROOT, "board/server.ts"), "utf8")
+    .match(/role:\s*("(?:firstmate|worker|reviewer)"(?:\s*\|\s*"\w+")*)/)?.[1]
+    ?.split("|").map((x) => x.trim().replace(/"/g, "")) ?? [];
+  expect(roles.length).toBeGreaterThan(2);
+  for (const r of roles) expect(SHIP.ROLE[r]).toBeTruthy();
+  for (const k of [...Object.values(SHIP.ROLE) as string[], "unknown"]) {
+    expect(CSS).toContain(`.fig.r-${k}`);
+  }
+  // and it reaches the page loudly: a crewman the server sent with a
+  // role this page has never heard of
+  const s = state(1);
+  (s.crew[1] as { role: string }).role = "quartermaster";
+  expect(SHIP.crewOf(s, T)[1].role).toBe("unknown");
+  const h = host();
+  SHIP.render(h as never, s, T);
+  expect(h.innerHTML).toContain("r-unknown");
+  expect(h.innerHTML).not.toContain("r-w ");
+});
+
 test("state and role reach the page as classes", () => {
   const h = host();
   const crew = SHIP.render(h as any, state(4, "review"), T);
