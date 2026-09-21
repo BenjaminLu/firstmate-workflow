@@ -306,13 +306,22 @@ uses count — `/actions/runs/<id>/job/<id>` and the older check-run
 `/runs/<id>`. A blank block reads as a green run, so the round was
 spent asking why the check was red.
 
-The block is never blank, and it says which of three things happened,
+The run id is the leading run of digits after `/runs/`, and what
+follows it has to be a delimiter — the legacy url is served with a
+query on that segment, and trimming at the next slash turned
+`6789123?check_suite_focus=true` into something the digit check then
+rejected.
+
+The block is never blank, and it says which of four things happened,
 because to the worker they mean different things: no run id could be
 read out of the link, so the log is not something this script can
 fetch; the fetch failed, and here is what `gh` said; or the fetch
 succeeded and the run had no failing step log at all — a cancelled
 run, or a job that died before anything logged — which "could not be
-fetched" would misreport as GitHub's fault. The first of those says
+fetched" would misreport as GitHub's fault; or some of it came back
+and `gh` failed anyway, a multi-job run with one job's log gone, where
+the partial log is shown AND said to be partial. A partial log alone
+reads as the whole of the failure. The first of those says
 what the SCRIPT could not do rather than what the check is: it knows
 it found no run id, and it does not know which CI produced the link.
 

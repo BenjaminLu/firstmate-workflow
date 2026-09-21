@@ -467,7 +467,11 @@ rm -rf "$d17"
 # not a number; a fetch that failed; and a fetch that SUCCEEDED and
 # had nothing, which "could not be fetched" would misreport as gh's
 # fault in the one block the worker cannot check.
-redcheck() {   # redcheck <label> <check link> <run view body> <want>
+# <run> is the id the code under test has to compute out of <link>:
+# the stub answers that and refuses anything else, so a mis-parse is a
+# failure here rather than a pass. A stub that answers `run view` for
+# any argument cannot see the bug this task exists for.
+redcheck() {   # redcheck <label> <check link> <run> <run view body> <want>
   local d r g cap sent
   d="$(fixture)"; r="$d/repo"; g="$(ghstub "$d")"
   cat > "$r/bin/adapters/mock.sh" <<'M'
@@ -485,7 +489,8 @@ M
     printf 'case " $* " in\n'
     printf '  *" pr list "*) echo 23; exit 0 ;;\n'
     printf '  *" pr checks "*) echo "%s"; exit 0 ;;\n' "$2"
-    printf '  *" run view "*) %s ;;\n' "$3"
+    printf '  *" run view %s "*) %s ;;\n' "$3" "$4"
+    printf '  *" run view "*) echo "could not find any workflow run" >&2; exit 1 ;;\n'
     printf '  *" pr view "*" comments "*) printf %s ;;\n' "'## r\n\nsomething\n'"
     printf 'esac\nexit 0\n'
   } > "$d/stub/gh"
@@ -495,28 +500,54 @@ M
       bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
   sent="$(cat "$cap" 2>/dev/null)"
   assert_contains "$sent" "The required check is red" "$1: the section is there"
-  assert_contains "$sent" "$4" "$1"
+  assert_contains "$sent" "$5" "$1"
   rm -rf "$d"
 }
 redcheck "a run id that is not a number says what the SCRIPT could not do" \
-  "https://github.com/o/r/actions/runs/latest/job/1" "exit 0" \
+  "https://github.com/o/r/actions/runs/latest/job/1" "NONE" "exit 0" \
   "No run id could be read out of"
 # the older check-run details_url, which IS an Actions run and has no
 # /actions/ in it: narrowing the match to /actions/runs/ sent these
 # down the cannot-read path, which is a worse answer than the noise it
 # replaced
 redcheck "an old-style /runs/<id> link is an Actions run" \
-  "https://github.com/o/r/runs/6789123" \
+  "https://github.com/o/r/runs/6789123" "6789123" \
   "printf 'ci\tbin/ci.sh\tOLD STYLE LOG\n'; exit 0" \
   "OLD STYLE LOG"
+# and that link is served with a query on the run segment in the wild
+redcheck "even with a query string after the id" \
+  "https://github.com/o/r/runs/6789124?check_suite_focus=true" "6789124" \
+  "printf 'ci\tbin/ci.sh\tQUERY STRING LOG\n'; exit 0" \
+  "QUERY STRING LOG"
+# but digits followed by more id are not an id
+redcheck "while digits with letters after them fail closed" \
+  "https://github.com/o/r/runs/12ab" "12ab" \
+  "printf 'ci\tbin/ci.sh\tSHOULD NOT APPEAR\n'; exit 0" \
+  "No run id could be read out of"
+# Some of it came back and gh still failed - a multi-job run with one
+# job's log gone. A partial log printed alone reads as the whole of
+# the failure, which is the same lie as a blank block wearing a green
+# run's face.
+redcheck "a partial log says it is partial" \
+  "https://github.com/o/r/actions/runs/64/job/1" "64" \
+  "printf 'ci\tx\tHALF THE LOG\n'; echo 'one job log is gone' >&2; exit 1" \
+  "this log is incomplete"
+redcheck "and still shows what did come back" \
+  "https://github.com/o/r/actions/runs/64/job/1" "64" \
+  "printf 'ci\tx\tHALF THE LOG\n'; echo 'one job log is gone' >&2; exit 1" \
+  "HALF THE LOG"
+redcheck "and passes on why the rest did not" \
+  "https://github.com/o/r/actions/runs/64/job/1" "64" \
+  "printf 'ci\tx\tHALF THE LOG\n'; echo 'one job log is gone' >&2; exit 1" \
+  "gh: one job log is gone"
 redcheck "a fetch that failed says so" \
-  "https://github.com/o/r/actions/runs/61/job/1" "exit 1" \
+  "https://github.com/o/r/actions/runs/61/job/1" "61" "exit 1" \
   "The log for run 61 could not be fetched"
 redcheck "a fetch that succeeded with nothing says THAT, not that gh failed" \
-  "https://github.com/o/r/actions/runs/62/job/1" "exit 0" \
+  "https://github.com/o/r/actions/runs/62/job/1" "62" "exit 0" \
   "Run 62 reported no failing step log"
 redcheck "and a log the column trim empties is the same case" \
-  "https://github.com/o/r/actions/runs/63/job/1" \
+  "https://github.com/o/r/actions/runs/63/job/1" "63" \
   "printf 'ci\tbin/ci.sh\t\nci\tbin/ci.sh\t   \n'; exit 0" \
   "Run 63 reported no failing step log"
 
@@ -539,7 +570,8 @@ cat > "$d18/stub/gh" <<'G'
 case " $* " in
   *" pr list "*) echo 24; exit 0 ;;
   *" pr checks "*) echo "https://github.com/o/r/actions/runs/71/job/1"; exit 0 ;;
-  *" run view "*) printf 'ci\tx\tTraceback ABOVE\nci\tx\t\nci\tx\tAssertionError BELOW\n'; exit 0 ;;
+  *" run view 71 "*) printf 'ci\tx\tTraceback ABOVE\nci\tx\t\nci\tx\tAssertionError BELOW\n'; exit 0 ;;
+  *" run view "*) echo "could not find any workflow run" >&2; exit 1 ;;
   *" pr view "*" comments "*) printf '## r\n\nsomething\n' ;;
 esac
 exit 0
@@ -576,7 +608,8 @@ cat > "$d19/stub/gh" <<'G'
 case " $* " in
   *" pr list "*) echo 25; exit 0 ;;
   *" pr checks "*) echo "https://github.com/o/r/actions/runs/81/job/1"; exit 0 ;;
-  *" run view "*) echo "boom" >&2; exit 1 ;;
+  *" run view 81 "*) echo "boom" >&2; exit 1 ;;
+  *" run view "*) echo "could not find any workflow run" >&2; exit 1 ;;
   *" pr view "*" comments "*) printf '## r\n\nsomething\n' ;;
 esac
 exit 0
@@ -618,7 +651,8 @@ cat > "$d20/stub/gh" <<'G'
 case " $* " in
   *" pr list "*) echo 26; exit 0 ;;
   *" pr checks "*) echo "https://github.com/o/r/actions/runs/91/job/1"; exit 0 ;;
-  *" run view "*) i=0; while [ "$i" -lt 200 ]; do echo "noise $i" >&2; i=$((i+1)); done; exit 1 ;;
+  *" run view 91 "*) i=0; while [ "$i" -lt 200 ]; do echo "noise $i" >&2; i=$((i+1)); done; exit 1 ;;
+  *" run view "*) echo "could not find any workflow run" >&2; exit 1 ;;
   *" pr view "*" comments "*) printf '## r\n\nsomething\n' ;;
 esac
 exit 0

@@ -264,8 +264,20 @@ say="$tree/.fm-say.md"
         run_id=''
         case "$failing" in
           */runs/*)
-            run_id="${failing##*/runs/}"; run_id="${run_id%%/*}"
-            case "$run_id" in *[!0-9]*|'') run_id='' ;; esac ;;
+            # The id is delimited by NOT-A-DIGIT, not by a slash.
+            # `%%/*` assumed a slash or end of string, and the legacy
+            # details_url is served with a query on that segment -
+            # `/runs/6789123?check_suite_focus=true` - which trimmed to
+            # the whole thing, failed the digit guard, and told the
+            # worker no run id could be read out of an Actions run.
+            _rt="${failing##*/runs/}"
+            _rd="${_rt%%[!0-9]*}"          # the leading run of digits
+            _rr="${_rt#"$_rd"}"            # and whatever follows it
+            # empty digits is no id at all; `12ab` has to fail closed,
+            # so what follows has to be a delimiter rather than more id
+            case "$_rd" in '') ;; *)
+              case "$_rr" in ''|/*|'?'*|'#'*) run_id="$_rd" ;; esac ;;
+            esac ;;
         esac
         printf '\n---\n\n# The required check is red\n\n'
         printf 'It fails on the runner and may well pass on your machine.\n\n```\n'
@@ -300,7 +312,16 @@ say="$tree/.fm-say.md"
             trimmed="$(printf '%s\n' "$raw_log" | tail -120 | sed 's/^[^\t]*\t[^\t]*\t//')"
             rendered="$(printf '%s\n' "$trimmed" | grep -v '^[[:space:]]*$' || true)"
           fi
-          if [ -n "$rendered" ]; then
+          if [ -n "$rendered" ] && [ "$gh_rc" != 0 ]; then
+            # Some of it came back and gh still failed - a multi-job run
+            # where one job's log is gone. Printing the partial log
+            # alone presents it as the whole of the failure, which is
+            # the same lie as an empty block wearing a green run's face.
+            printf '%s\n' "$trimmed"
+            printf '\n-- this log is incomplete: gh exited %s while fetching run %s\n' \
+              "$gh_rc" "$run_id"
+            [ -z "$log_err" ] || sed 's/^/gh: /' "$log_err" | head -20
+          elif [ -n "$rendered" ]; then
             printf '%s\n' "$trimmed"
           elif [ "$gh_rc" != 0 ]; then
             # said, not left blank: the worker cannot run gh, so this block
