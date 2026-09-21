@@ -65,10 +65,18 @@ emit() { emit_once "$@" || true; }
 # definition of the command: two spellings of the same emit is how the
 # ending and the progress lines drift apart.
 # Every scratch file this script makes, removed on the way out -
-# including the ones a signal cuts short, which this script has traps
-# for. They were `mktemp`d and removed on the happy path only, and one
-# of them was made on every round whether or not it was needed.
+# including on the paths a signal or an early exit cuts short, which
+# this script has traps for. They were `mktemp`d and removed on the
+# happy path only, and one of them was made on every round whether or
+# not it was needed. tests/worker.test.sh walks all three ways out -
+# 73, 74 and a TERM mid-engine - in a TMPDIR it owns, so "every" is
+# the assertion and not the adjective.
 scratch=''
+# An explicit template, for two reasons: BSD mktemp ignores $TMPDIR
+# without one - so a caller that wants these somewhere it owns, which
+# is how the leak is tested, cannot have them - and a file called
+# tmp.XXXX says nothing about who left it if one ever does.
+scratch_new() { mktemp "${TMPDIR:-/tmp}/fm-worker-XXXXXX"; }
 scratch_add() { scratch="$scratch $1"; }
 clean_scratch() { [ -z "$scratch" ] || rm -f $scratch; }
 
@@ -172,7 +180,7 @@ if [ "$round_two" = 1 ] && [ -z "$PR" ]; then
   # answered-none the moment pipefail was not in force, which is the one
   # thing this block exists to prevent. `--jq '.[0].number'` yields a
   # single line anyway, so the pipe bought nothing.
-  lookup_err="$(mktemp)"; scratch_add "$lookup_err"
+  lookup_err="$(scratch_new)"; scratch_add "$lookup_err"
   PR="$($GH pr list --head "$branch" --state open --json number --jq '.[0].number' \
         2>"$lookup_err" </dev/null)"; lookup_rc=$?
   # what gh actually prints for a branch with no open pull request is
@@ -283,7 +291,7 @@ spoke=0
 # number. The run said where the text is and not what went wrong.
 say_err=''
 if [ "$asked" = 1 ] && [ -n "$PR" ]; then
-  say_err="$(mktemp)"; scratch_add "$say_err"
+  say_err="$(scratch_new)"; scratch_add "$say_err"
   if $GH pr comment "$PR" --body-file "$say" >/dev/null 2>"$say_err" </dev/null; then
     spoke=1
     emit --type ask_pass_criteria --pr "$PR" --en "the worker spoke on #$PR" \
@@ -374,7 +382,8 @@ git -C "$tree" push -q -u origin "$branch" 2>/dev/null || {
 # passed; asking again here would be a second answer to one question,
 # and the two could disagree - a pull request opened while the engine
 # was running would be posted to by one half of this script and not the
-# other. There is no second lookup, and there does not need to be: an
+# other. There is no second lookup - asserted, not asserted about:
+# tests/worker.test.sh counts `pr list` at one per run. An
 # empty $PR here means either a first round, or a later round whose
 # lookup succeeded and said there is none - a branch pushed by a round
 # that died before it opened one. Both want a pull request created

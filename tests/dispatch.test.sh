@@ -136,6 +136,24 @@ t1=$(date +%s)
 assert_ok "[ $(( t1 - t0 )) -lt 3 ]" "the dispatcher returns without waiting for the worker"
 assert_fail "test -e '$b/worker-finished'" "and the worker it started is still running"
 
+# and the conclusion criterion 6 rests on, rather than the premise: no
+# worker is started with a --pr at all. The two states enumerated above
+# are why, but the stub can simply record its argv and say so for every
+# path through this script, including ones nobody enumerated.
+a="$(pr_tree)"
+cat > "$a/bin/fm-worker.sh" <<W
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$a/argv"
+W
+chmod +x "$a/bin/fm-worker.sh"
+FM_ROOT="$a" "$a/bin/fm-emit.sh" --actor firstmate --type pr_opened --task T-001 --pr 5 \
+  --en "opened #5" --tw "已開 #5" >/dev/null
+FM_ROOT="$a" "$a/bin/fm-dispatch.sh" --repo "$a" >/dev/null 2>&1
+for _ in $(seq 1 30); do [ -s "$a/argv" ] && break; sleep 0.1; done
+assert_ne "" "$(cat "$a/argv" 2>/dev/null)" "a worker was started, so there is an argv to read"
+assert_lacks "$(cat "$a/argv")" "--pr" "and no worker is ever started with a pull request number"
+rm -rf "$a"
+
 # and it does not read what the worker exits with: a worker that fails
 # immediately leaves the dispatcher's own status untouched, so a failed
 # round writes the one event the worker wrote and no second one

@@ -180,6 +180,11 @@ assert_contains "$out9" "its question is on #31" "and says which one it spoke on
 # the question exists only if BOTH halves reached the prompt: the
 # adapter exits 1 without either, so this assertion is the conjunction
 assert_contains "$(cat "$d9/ghcalls")" "run view" "and the prompt carried the failing check as well as the review"
+# "there is no second lookup" - once per run, not once per site: the
+# post-push branch reuses what this found, and two answers to one
+# question can disagree when a pull request is opened while the engine
+# is running
+assert_eq "1" "$(grep -c 'pr list' "$d9/ghcalls" || true)" "and it asked which pull request exactly once"
 assert_contains "$(cat "$d9/ghcalls")" "pr comment 31" "the question reached that pull request"
 assert_eq "31" "$(jq -r 'select(.type=="ask_pass_criteria")|.pr' < "$r9/state/events.jsonl" | tail -1)" \
   "and the log records the number it spoke on"
@@ -374,10 +379,16 @@ rm -f "$r11/state/unsent"
 assert_eq "73" "$rc12" "a question that can be neither posted nor kept still fails the run"
 assert_contains "$out12" "could not be kept either" "and says the keeping failed too"
 assert_lacks "$out12" "it is at state/unsent" "rather than naming a file it did not write"
-# and the scratch files those two paths make are gone: they were
-# mktemp'd and removed on the happy path only, so a run that took a
-# signal - which this script has traps for - left them in $TMPDIR
-before_tmp="$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'tmp.*' -type f 2>/dev/null | wc -l | tr -d ' ')"
+# Every path that makes a scratch file, in a TMPDIR the test owns.
+# Counting what is in the machine's $TMPDIR before and after scored
+# every other process against the worker - and would have passed on a
+# leak if anything else removed a file in the same window.
+leak_check() {   # leak_check <label> <tmpdir> ; the run has already happened
+  local left; left="$(find "$2" -type f 2>/dev/null | wc -l | tr -d ' ')"
+  assert_eq "0" "$left" "$1"
+}
+
+# the exit-73 route, which makes say_err
 d14="$(fixture)"; r14="$d14/repo"; GH14="$(ghstub "$d14")"
 cat > "$r14/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
@@ -391,10 +402,57 @@ case " $* " in *" pr comment "*) echo "refused" >&2; exit 1 ;; esac
 exit 0
 G
 chmod +x "$d14/stub/gh"
-( cd "$r14" && FM_ROOT="$r14" FM_GH="$GH14" bin/fm-worker.sh --task T-Z --pr 9 >/dev/null 2>&1 )
-after_tmp="$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'tmp.*' -type f 2>/dev/null | wc -l | tr -d ' ')"
-assert_eq "$before_tmp" "$after_tmp" "a run that exits 73 leaves no scratch file behind"
+mkdir -p "$d14/tmp"
+( cd "$r14" && TMPDIR="$d14/tmp" FM_ROOT="$r14" FM_GH="$GH14" \
+    bin/fm-worker.sh --task T-Z --pr 9 >/dev/null 2>&1 )
+leak_check "a run that exits 73 leaves no scratch file behind" "$d14/tmp"
 rm -rf "$d14"
+
+# the exit-74 route, which makes lookup_err - a different file on a
+# different path, and the comment says every one of them
+d15="$(fixture)"; r15="$d15/repo"; GH15="$(ghstub "$d15")"
+cat > "$r15/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+mkdir -p "$3/src"; printf '%s\n' "$RANDOM$$" > "$3/src/work"
+M
+chmod +x "$r15/bin/adapters/mock.sh"
+( cd "$r15" && FM_ROOT="$r15" FM_GH="$GH15" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+printf '#!/usr/bin/env bash\nexit 1\n' > "$d15/stub/gh"; chmod +x "$d15/stub/gh"
+mkdir -p "$d15/tmp"
+( cd "$r15" && TMPDIR="$d15/tmp" FM_ROOT="$r15" FM_GH="$GH15" \
+    bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+assert_eq "74" "$?" "the lookup failed, as this fixture intends"
+leak_check "and a run that exits 74 leaves none either" "$d15/tmp"
+
+# and the half the comment names by name: a signal. The scratch file is
+# made at the lookup and is still there while the engine runs, so a run
+# killed mid-engine is the case where "removed at the end" and "removed
+# on the way out" differ.
+cat > "$r15/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+: > "${FM_STARTED:?}"
+sleep 5
+M
+chmod +x "$r15/bin/adapters/mock.sh"
+cat > "$d15/stub/gh" <<'G'
+#!/usr/bin/env bash
+case " $* " in *" pr list "*) echo 9; exit 0 ;; esac
+exit 0
+G
+chmod +x "$d15/stub/gh"
+rm -rf "$d15/tmp"; mkdir -p "$d15/tmp"
+started15="$d15/started"
+( cd "$r15" && TMPDIR="$d15/tmp" FM_ROOT="$r15" FM_GH="$GH15" FM_STARTED="$started15" \
+    exec bin/fm-worker.sh --task T-Z >/dev/null 2>&1 ) &
+kp15=$!
+for _ in $(seq 1 60); do [ -e "$started15" ] && break; sleep 0.2; done
+assert_ok "test -e '$started15'" "the engine was running, so the scratch file is open"
+kill -TERM "$kp15" 2>/dev/null
+wait "$kp15" 2>/dev/null
+leak_check "and a run cut short by a signal leaves none" "$d15/tmp"
+rm -rf "$d15"
 
 rm -rf "$d11"
 
