@@ -21,21 +21,34 @@ LOCK="$ROOT/state/.events.lock"
 
 TYPES="greenlit dispatched commit_pushed pr_opened gate_passed gate_failed \
 review_opened review_failed ask_pass_criteria criteria_returned protocol_violation approved \
-merged closed decision_requested decision_made worker_crashed vendor_unavailable"
+merged closed decision_requested decision_made worker_crashed vendor_unavailable \
+agent_finished"
 
-die() { printf 'fm-emit: %s\n' "$1" >&2; exit 1; }
+# 64 is what the OPTION LOOP exits, and only the option loop: a flag with
+# no value after it, and a flag this script does not know. Everything
+# else below still exits 1, as it always has. Converting the rest -
+# `--actor is required`, a type that is not in the list, `--data` that is
+# not JSON - is T-029, which sweeps the convention across every script
+# instead of leaving one script half converted and a rule in the design
+# that only one file obeys.
+die()   { printf 'fm-emit: %s\n' "$1" >&2; exit 1; }
+usage() { printf 'fm-emit: %s\n' "$1" >&2; exit 64; }
 
 actor=''; type=''; task=''; pr=''; data='{}'; en=''; tw=''
+# see fm_need in bin/fm-config.sh for why: `shift 2` with one argument
+# left does not shift, and the loop spins. This file deliberately depends
+# on nothing, so it carries the two lines rather than the explanation.
+need() { [ "$#" -ge 2 ] || { echo "fm-emit: $1 needs a value" >&2; exit 64; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
-    --actor) actor="${2-}"; shift 2 ;;
-    --type)  type="${2-}";  shift 2 ;;
-    --task)  task="${2-}";  shift 2 ;;
-    --pr)    pr="${2-}";    shift 2 ;;
-    --data)  data="${2-}";  shift 2 ;;
-    --en)    en="${2-}";    shift 2 ;;
-    --tw)    tw="${2-}";    shift 2 ;;
-    *) die "unknown argument: $1" ;;
+    --actor) need "$@"; actor="${2-}"; shift 2 ;;
+    --type)  need "$@"; type="${2-}";  shift 2 ;;
+    --task)  need "$@"; task="${2-}";  shift 2 ;;
+    --pr)    need "$@"; pr="${2-}";    shift 2 ;;
+    --data)  need "$@"; data="${2-}";  shift 2 ;;
+    --en)    need "$@"; en="${2-}";    shift 2 ;;
+    --tw)    need "$@"; tw="${2-}";    shift 2 ;;
+    *) usage "unknown argument: $1" ;;
   esac
 done
 
@@ -68,7 +81,13 @@ mkdir -p "$ROOT/state" || die "cannot create $ROOT/state"
 for _ in $(seq 1 600); do
   if mkdir "$LOCK" 2>/dev/null; then
     # shellcheck disable=SC2064
-    trap "rmdir '$LOCK' 2>/dev/null" EXIT INT TERM
+    # the signal traps only exit; the EXIT trap releases. Naming a
+    # signal alongside EXIT released the lock and then CARRIED ON
+    # writing, with the lock already gone - and kill stopped working
+    trap "rmdir '$LOCK' 2>/dev/null" EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
     printf '%s\n' "$line" >> "$LOG"
     exit 0
   fi

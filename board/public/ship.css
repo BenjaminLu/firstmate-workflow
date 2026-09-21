@@ -99,6 +99,12 @@
 .fig.r-fm{--suit:#2c4d74;--hat:#d9a441;--trouser:#1f3244}
 .fig.r-w {--suit:#b4672a;--hat:#e8ae3e}
 .fig.r-r {--suit:#6b45a0;--hat:#c07bf0}
+/* A role the page has no name for is a mismatch between the server's
+   vocabulary and this sheet's, and the page said it should be visible
+   rather than painted as a worker. Without a rule it inherited .fig and
+   looked like a crewman in the default suit, which is the quiet failure
+   the comment claimed not to have. Magenta is used by nothing else. */
+.fig.r-unknown{--suit:#ff00a8;--hat:#ff00a8;--trouser:#ff00a8;outline:2px dashed #ff00a8}
 .fig .head,.fig .neck,.fig .handL,.fig .handR{--c:var(--skin)}
 .fig .torso,.fig .armL,.fig .armR{--c:var(--suit)}
 .fig .legL,.fig .legR{--c:var(--trouser)}
@@ -158,7 +164,8 @@
 .bub .pb{margin:5px auto 0;width:84%;height:3px;background:rgba(255,255,255,.12);border-radius:2px;overflow:hidden}
 .bub .pb i{display:block;height:100%;background:var(--accent)}
 .bub.st-working{--bubEdge:#2f5478} .bub.st-review{--bubEdge:#5a3f7d}
-.bub.st-gate{--bubEdge:#7c322b} .bub.st-merged,.bub.st-captain{--bubEdge:#2c5f49}
+.bub.st-gate{--bubEdge:#7c322b}
+.bub.st-captain{--bubEdge:#2c5f49}
 .bub.st-queued{--bubEdge:#26323d;opacity:.6}
 
 /* ahoy */
@@ -224,7 +231,7 @@
 .roster .jb{color:#8fa9bd;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .roster li.st-working{--av:#2f5478} .roster li.st-review{--av:#5a3f7d}
 .roster li.st-gate{--av:#7c322b}
-.roster li.st-merged,.roster li.st-captain{--av:#2c5f49}
+.roster li.st-captain{--av:#2c5f49}
 .roster li.st-queued{--av:#26323d;opacity:.62}
 .shipbar button{pointer-events:auto;font:650 10.5px var(--mono);color:#0f1621;cursor:pointer;
   background:linear-gradient(180deg,#f0c46a,#c9972f);border:0;border-radius:99px;padding:3px 11px}
@@ -247,3 +254,53 @@
 .bub.mini{padding:2px 7px 3px;max-width:112px;background:rgba(9,15,22,.9)}
 .bub.mini .who{font-size:10px}
 .bub.mini::after{display:none}
+
+/* The captain's own place, beside the cards. He is not crew - the crew are
+   agents doing work, he is the person they are waiting on - so he stands
+   where the waiting is rather than on a deck. */
+/* `auto`, not a width: the track is on this element and --capStand is on
+   its child, and a custom property does not travel upwards - so the
+   column takes its size from what stands in it. It was 132px, close
+   enough to the derived 139 to look right and wrong the moment
+   CAPTAIN_SCALE moved, with `overflow:hidden` below to clip him. */
+.capwrap{display:grid;grid-template-columns:auto 1fr;gap:16px;align-items:start}
+/* The three that scale with the captain come from SHIP.captain, which
+   computes them from the same constants the deck uses: --capStand is his
+   height and his width, --capBox the box's, --capFoot the shadow's. The
+   rest of this block is trim - padding, a radius, a border, the shadow's
+   thickness - and does not follow him; the claim used to be "every
+   number here", which was not true of the column above it, and it is the
+   coupling numbers that have to be derived, not the cosmetic ones. */
+.captain{position:relative;width:var(--capStand);min-height:var(--capBox);padding-top:12px;
+  border:1px solid var(--line);border-radius:13px;overflow:hidden;
+  background:linear-gradient(180deg,#0a1a26,#060f17)}
+.captain .capstand{position:relative;height:var(--capStand);
+  perspective:800px;perspective-origin:50% 40%}
+/* he stands on no deck, so this is the whole of his vertical placement.
+   SHIP.captain used to write --deckY0 and --rowStep as zeroes for the
+   .pivot rule to add up - but this rule is more specific and overrode
+   the sum, so both were dead. They are gone from the JavaScript. */
+.captain .pivot{bottom:6px}
+.captain .capstand::after{content:"";position:absolute;left:50%;bottom:0;
+  width:var(--capFoot);height:10px;margin-left:calc(var(--capFoot) / -2);
+  border-radius:50%;background:radial-gradient(ellipse,rgba(0,0,0,.6),transparent 70%)}
+.captain .capsays{padding:6px 10px 12px;text-align:center}
+.captain .capsays b{display:block;font:650 11px var(--mono);color:var(--brass);letter-spacing:.05em}
+.captain .capsays span{display:block;margin-top:3px;font-size:10.5px;color:#9dbdd6;line-height:1.35}
+.captain .capsays i{display:inline-block;margin-top:7px;min-width:20px;padding:1px 7px;
+  border-radius:99px;font:650 11px var(--mono);font-style:normal;
+  background:linear-gradient(180deg,#f0c46a,#c9972f);color:#0f1621}
+@media (max-width:760px){.capwrap{grid-template-columns:1fr}
+  /* an author display beats the user agent's [hidden] rule, so every
+     rule that sets display has to re-assert it or the JS that hides this
+     element stops working at this width - index.html already carries the
+     same guard for the diagram iframe */
+  .captain[hidden]{display:none}
+  /* still no numbers: the stand keeps the height SHIP.captain derived
+     and simply becomes its own column. The first version wrote 110px
+     here, fourteen lines under a comment saying every number came from
+     the JavaScript. */
+  .captain{width:auto;min-height:0;display:flex;align-items:center;gap:10px;padding:10px}
+  .captain .capstand{width:var(--capStand);height:var(--capStand);
+    flex:0 0 var(--capStand)}
+  .captain .capsays{text-align:left;padding:0}}

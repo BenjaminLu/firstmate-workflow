@@ -16,6 +16,17 @@ shopt -s nullglob
 # its own input.
 exec < /dev/null
 
+# The corpus and the comment stripper come from the library, so the gate
+# and tests/option-loop.test.sh judge the same files by the same rule.
+# They were written out at each call site - four times, and three of them
+# were a version of the stripper that cuts `${1#--}` in half.
+# beside the SCRIPT, not under FM_ROOT: the gate is run against other
+# trees and the library is part of the gate, not of the tree it judges
+_fm_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-config.sh"
+[ -r "$_fm_lib" ] || { echo "ci: missing $_fm_lib" >&2; exit 70; }
+# shellcheck source=bin/fm-config.sh
+. "$_fm_lib"
+
 fail=0
 started_at="$(date +%s)"
 bold=''; dim=''; red=''; green=''; off=''
@@ -90,6 +101,102 @@ if [ -n "$evalled" ]; then
   printf '%s\n' "$evalled"
 else
   pass "no assertion evals captured output"
+fi
+
+# `shift 2` with one argument left does not shift - it returns 1 and leaves
+# $@ alone, so the option loop spins on the same flag for ever. Every
+# value-taking flag has to check first. What this catches: a `shift 2`
+# branch with no `need` in front of it. What it does not: a loop that
+# checks some other way, which is why the check is named rather than
+# inferred.
+# ci.sh quotes the shape it forbids, so it declares itself a lint source
+# the way a sourced library declares itself sourced - by a marker rather
+# than by being on a list.
+# Comments come off the line BEFORE it is judged, both for finding the
+# corpus and for finding the guard. `--x) v="${2-}"; shift 2 ;; # need` was
+# a `shift 2` that spins for ever and satisfied a grep for the word
+# `need`: the lint was recognising the fix by its name rather than by its
+# presence in the code.
+#
+# Both of these - which files, and what a comment is - come from
+# bin/fm-config.sh, because tests/option-loop.test.sh has to sweep for a
+# script this stage should have linted and did not, and a sweep written
+# out by hand at each call site drifts from the thing it is checking.
+loopfiles=()
+while IFS= read -r f; do loopfiles+=("$f"); done < <(fm_loop_corpus bin)
+unguarded=''
+# bash 3.2 treats "${arr[@]}" on an empty array as unbound under set -u,
+# so the count is checked before the array is touched, the way the
+# earlier stage does it
+#
+# The guard has to come BEFORE the shift, and the grep did not care
+# where it was: `--x) v="${2-}"; shift 2; need "$@" ;;` checks after the
+# argument is gone and still passed, and so did `shift 2; echo "need a
+# value"`, which is not a check at all. So the line is cut at the shift
+# and only the part in front of it is searched, for a CALL - the word
+# followed by an argument - rather than for the word.
+[ ${#loopfiles[@]} -eq 0 ] || for f in "${loopfiles[@]}"; do
+  hits="$(fm_strip_comments "$f" | awk '
+            # The unit is the case BRANCH, not the line. A guard has to
+            # come before the shift, and a branch is what `;;` ends - so
+            # the ordinary
+            #     --repo)
+            #       fm_need "fm-x" "$@"
+            #       REPO="$2"; shift 2 ;;
+            # is guarded, and reading one physical line called it naked.
+            # Going the other way, a guard in the PREVIOUS branch must
+            # not cover this one, which is what `;;` resets.
+            #
+            # And the guard has to be a COMMAND, not the four letters
+            # somewhere to the left. `echo "you need a value"; v="$2";
+            # shift 2` passed a column comparison, and so did `die "need
+            # a value"` and a `usage()` helper defined above the loop
+            # whose message happens to say the word. So every candidate
+            # is checked for what precedes it: a command starts a
+            # segment, or follows ; ( ) { } & | then do else.
+            function guardcol(seg,   s, off, pre, c) {
+              off = 0; s = seg
+              while (match(s, /(fm_)?need[ \t]+[^;[:space:]]/)) {
+                pre = substr(s, 1, RSTART - 1)
+                sub(/[ \t]+$/, "", pre)
+                c = (pre == "") ? "" : substr(pre, length(pre), 1)
+                if (pre == "" || c == ";" || c == "(" || c == ")" || c == "{" \
+                    || c == "}" || c == "&" || c == "|" \
+                    || pre ~ /(^|[ \t])(then|do|else)$/)
+                  return off + RSTART
+                off += RSTART + RLENGTH - 1
+                s = substr(s, RSTART + RLENGTH)
+              }
+              return 0
+            }
+            # a new case pattern also ends the previous branch: a branch
+            # written without `;;` before the next one - or a guard that
+            # lives in a function above the loop - must not carry over
+            /^[[:space:]]*[^[:space:]()]+\)([[:space:]]|$)/ { seen = 0 }
+            { rest = $0
+              while (1) {
+                p = index(rest, ";;")
+                seg = p ? substr(rest, 1, p - 1) : rest
+                sp = index(seg, "shift 2")
+                gp = guardcol(seg)
+                if (sp && !seen && !(gp && gp < sp)) print FNR ":" $0
+                if (gp && (!sp || gp < sp)) seen = 1
+                if (!p) break
+                seen = 0                     # the branch ended here
+                rest = substr(rest, p + 2)
+              }
+            }
+          ' || true)"
+  [ -z "$hits" ] || unguarded="$unguarded$(printf '%s\n' "$hits" | sed "s|^|$f:|")
+"
+done
+if [ -n "$unguarded" ]; then
+  flunk "a shift 2 that has not checked it has two:"
+  printf '%s\n' "$unguarded"
+else
+  # the count, so an empty corpus is visible rather than looking like a
+  # clean one - the stage passed identically when it linted nothing
+  pass "no option loop can spin on a flag with no value (${#loopfiles[@]} scripts)"
 fi
 
 # `producer | grep -q` under pipefail: grep exits on the first match, the
@@ -219,6 +326,36 @@ else
   pass "the vendor chain has one implementation"
 fi
 
+# An assertion helper that does not exist is a command-not-found: under
+# `set -uo pipefail` it prints to stderr, the suite carries on, and the
+# file exits 0. A whole suite goes green for free - in the files whose job
+# is to stop exactly that. So every assert_* a suite calls has to be one
+# tests/lib.sh defines.
+stage "assertions"
+if [ -d tests ] && [ -f tests/lib.sh ]; then
+  defined="$(grep -ohE '^assert_[a-z_]+' tests/lib.sh 2>/dev/null | sort -u)"
+  # comments off first: a suite that NAMES a helper in prose - "this file
+  # leans on assert_ne" - is not calling it, and counting the mention
+  # turns the gate red for a sentence
+  called=''
+  for _t in tests/*.sh; do
+    called="$called$(fm_strip_comments "$_t" | grep -ohE 'assert_[a-z_]+' || true)
+"
+  done
+  called="$(printf '%s' "$called" | sed '/^$/d' | sort -u)"
+  missing=''
+  for a in $called; do
+    printf '%s\n' "$defined" | grep -qx "$a" || missing="$missing $a"
+  done
+  if [ -n "$missing" ]; then
+    flunk "a suite calls an assertion tests/lib.sh does not define:$missing"
+  else
+    pass "every assertion a suite calls is defined ($(printf '%s\n' "$called" | sed '/^$/d' | wc -l | tr -d ' ') names)"
+  fi
+else
+  skip "no test harness"
+fi
+
 stage "dag"
 # section 14 of the design and tasks.json are two views of one DAG
 if [ -f design/tasks.json ] && [ -f design/design.md ]; then
@@ -244,8 +381,47 @@ else
   # holding the pipe, and command substitution waits for that pipe to close
   tmp="$(mktemp)"
   for t in "${suites[@]}"; do
-    if bash "$t" > "$tmp" 2>&1; then
-      pass "$t"
+    # The check below reads the shell's OWN messages, and bash localises
+    # them: on a zh-TW shell it says 命令未找到 and an English grep
+    # matches nothing, which is green for a suite that never ran half
+    # its lines. So the messages are pinned - and only the messages.
+    # LC_ALL=C pins collation and ctype too, which would run every
+    # suite's sort, grep and tr over UTF-8 in a locale no developer
+    # uses; and LC_ALL has to be cleared as well, because it outranks
+    # LC_MESSAGES wherever the caller has it set. Empty, not unset: an
+    # empty LC_ALL is the POSIX way to say "do not override", and
+    # unsetting it in a child needs a subshell.
+    if LC_ALL='' LC_MESSAGES=C bash "$t" > "$tmp" 2>&1; then
+      # A suite that calls something that does not exist prints to
+      # stderr, carries on, and reaches finish green - which is how a
+      # test file with two spliced lines reported the same as one
+      # without. Under `set -uo pipefail` with no -e, the shell will not
+      # tell us, so the gate reads what the run said.
+      #
+      # What it looks for is the shell's OWN diagnostic, which carries
+      # the "<file>: line N:" prefix. A suite that prints one of these
+      # phrases as data, or asserts a script's error text, is not a
+      # suite that broke, and the prefix is what tells them apart.
+      #
+      # The set is chosen, not collected: these are bash's diagnostics
+      # for "this line did not run and I am carrying on anyway", which
+      # is the whole hazard under `set -uo pipefail` with no -e. A
+      # missing command, an unset variable in a subshell - where `set -u`
+      # kills the subshell and leaves the parent running, which is the
+      # only shape of it that reaches here, since in the main shell bash
+      # exits and the other arm catches it - a file that will not exec,
+      # and a syntax error in something sourced - which leaves the suite
+      # running with half its functions undefined and exiting 0, the way
+      # two spliced lines in a test file did. Diagnostics that stop the
+      # shell do not belong here: the suite's exit status already
+      # catches those, on the other arm.
+      noise="$(grep -nE '^[^:]+: line [0-9]+: .*(command not found|unbound variable|No such file or directory|syntax error)' "$tmp" || true)"
+      if [ -n "$noise" ]; then
+        flunk "$t said it passed, but something in it did not run:"
+        printf '%s\n' "$noise"
+      else
+        pass "$t"
+      fi
     else
       flunk "$t"; cat "$tmp"
     fi

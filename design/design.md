@@ -107,6 +107,22 @@ These bind every actor, including firstmate itself.
 | **reviewer** | same, independent process | one round, then gone | **no** |
 | **board** | `bun --watch board/server.ts` | always on | no |
 
+The portable [root router](../AGENTS.md) selects the canonical
+[firstmate startup contract](../skills/firstmate/SKILL.md) immediately for
+interactive sessions and preserves explicitly dispatched roles. The thin
+[Claude entrypoint](../CLAUDE.md) imports the same router; Codex loads it directly.
+[Worker](../skills/worker/SKILL.md) and [reviewer](../skills/reviewer/SKILL.md)
+skills remain the dispatched role sources. Supply isolated reviewers with their
+role and authoritative relevant design context in the prompt.
+
+The startup contract specifies state inspection, board opening, visible managed
+panes, retained authorization and explicit remediation coordination. It documents
+current script gaps rather than promising unmerged reconciliation or runtime
+transport. `fm-run.sh` reports failed gates; firstmate must coordinate subsequent
+worker attempts. Static instruction validation does not prove agent behavior.
+Neither lavish nor no-mistakes is a prerequisite; do not add their startup or
+verification hooks. Use repository checks and actual GitHub CI evidence.
+
 Workers and reviewers are stateless one-shot processes: read a prompt, change
 files inside their own worktree, exit. Everything else — commit, push,
 `gh pr create`, posting comments — is done by `bin/fm-*.sh`.
@@ -131,9 +147,19 @@ lock — `flock(1)` does not ship on macOS. `bin/ci.sh` fails if anything under
 ```
 
 Types: `greenlit` `dispatched` `commit_pushed` `pr_opened` `gate_passed`
-`gate_failed` `review_opened` `ask_pass_criteria` `criteria_returned`
-`protocol_violation` `approved` `merged` `closed` `decision_requested`
-`decision_made` `worker_crashed` `vendor_unavailable`.
+`gate_failed` `review_opened` `review_failed` `ask_pass_criteria`
+`criteria_returned` `protocol_violation` `approved` `merged` `closed`
+`decision_requested` `decision_made` `worker_crashed` `vendor_unavailable`
+`agent_finished`.
+
+`dispatched` and `agent_finished` bracket one run of one agent, and they
+are what the board reads to decide who is aboard. An agent is running from
+the first to the second; a run that ends any other way — killed, hung up —
+still emits the second, from a trap. Without the closing one, "aboard"
+degenerates into "ever touched a task that is not finished yet", and the
+ship's crew becomes a record of everything that ever ran rather than of
+what is running. Every script that emits under an actor of its own must
+emit it; `tests/traps.test.sh` fails if one does not.
 
 A `summary` carries `en` and `zh-TW` or it is rejected: half a translation
 renders blank in one of the board's locales, which is worse than none.
@@ -142,7 +168,10 @@ model call.
 
 ### 5.2 Captain decisions, `state/decisions/D-*.json`
 
-The board POSTs one; `bin/fm-decide.sh` blocks until it appears.
+`bin/fm-decide.sh --request <id>` writes a pending card, attempts its diagram
+and returns without waiting. The board POST writes the response file;
+`bin/fm-decide.sh --await <id>` waits for that file and returns its contents.
+Receiving a response is not itself approval; inspect the chosen option and context.
 
 ```jsonc
 {"id":"D-007","task":"T-004","kind":"choice","chosen":"B","note":"leave the schema alone","ts":"..."}
@@ -154,8 +183,18 @@ files touched and the pull request link, answered with merge, send back, or
 hold. **Every merge goes through a card.** firstmate may not merge on its own
 and may not ask for one in conversation.
 
-Waiting is `bun run bin/watch-decisions.ts` (`fs.watch`, millisecond wake) when
-bun is present, and a one-second poll otherwise. **No `fswatch` dependency.**
+Await mode uses `bun run bin/watch-decisions.ts` (`fs.watch`) when bun and the
+watcher script are present, and a one-second poll otherwise. Wake latency must
+be measured, not inferred from the watcher mechanism. **No `fswatch` dependency.**
+
+These are orchestration requirements, not enforcement inside `fm-merge.sh`.
+The board calls that helper for choice A on a pending merge card. The helper
+checks PR state and invokes GitHub merge, then attempts event emission and
+cleanup; it does not read approval decisions or run the seven gates. The board
+route does not rerun gates either. Firstmate must verify current-head gates, CI,
+reviewer provenance and board approval, and coordinate fresh verification when
+the head changes so a stale card is not treated as ready. `fm-run.sh` requests
+cards after gate success; it neither awaits decisions nor performs merges.
 
 ### 5.2a Worktrees, and the one root they live under
 
@@ -206,9 +245,12 @@ therefore not a reviewer who never ran.
 
 A round that produced no review exits `3` and emits `review_failed`; it never
 reaches the pull request and never counts toward gate 7. A verdict has to
-carry `APPROVE:<task>` or `REJECT:<task>`, because a real reviewer's verdict
-*is* its standard output and without a marker a crashed engine's stack trace
-looks exactly like a damning review.
+carry exactly one unquoted `APPROVE:<task>` or `REJECT:<task>` in the final
+assistant answer. Only that answer is the verdict; prompt echoes, intermediate
+text, quoted examples and full CLI transcripts are not authoritative. Retain
+reviewer identity and the reviewed head with the evidence. The current review
+launcher scans combined output and does not establish this provenance; firstmate
+must identify and coordinate that gap rather than accept a marker as proof.
 
 The judgement about outages can never be right on wording alone, because
 there is no phrase a model cannot write — this repository contains
@@ -216,9 +258,10 @@ there is no phrase a model cannot write — this repository contains
 wording does not decide. The adapter is deliberately generous, and the caller
 settles it: `fm_run_chain` takes a predicate answering *did this run produce
 work?*, and work beats a signature. A worker asks whether the worktree
-changed; a reviewer asks whether the output carries a verdict marker. Being
+changed; the current reviewer predicate asks whether combined output carries a
+verdict marker, a known gap from the final-answer contract above. Being
 over-eager then costs one more vendor attempt and never the work — and a
-signed review is never thrown away, which would otherwise repeat the same
+proven final signed review is never thrown away, which would otherwise repeat the same
 round forever with a reassuring message on it.
 
 A vendor named at the head of the chain with no adapter behind it is a typo,
@@ -228,10 +271,119 @@ vendor had already done. A *fallback* entry with no adapter is simply
 skipped.
 
 An exit code never overrules produced work, in the callers any more than in
-the adapters: a signed review is a review whatever the engine exited with,
+the adapters: a proven final signed review remains a review even on teardown failure,
 and a changed worktree is work. And each attempt reads only its own output —
 its own directory under the chain's, and its own slice of the shared log —
 so a vendor that dies half way through cannot sign on the next one's behalf.
+
+### 5.3.1 Every script refuses the same way
+
+`shift 2` with one argument left does not shift. It returns 1 and leaves
+`$@` alone, so `while [ $# -gt 0 ]` spins on the same flag for ever —
+`bin/fm-emit.sh --type` was a busy loop rather than an error, in eleven
+scripts at once. (T-016 had already found it in `fm-diagram`, one script
+at a time, before it was known to be in all of them.) Every flag that
+takes a value checks before it shifts, and exits `64`, which is what a
+caller reads as "you called it wrong". Precisely: the check comes before
+the `shift 2` **in the same `case` branch** — on a line of its own is
+fine, in the branch above is not, and after the shift is not a check at
+all, because by then the argument it was looking for is gone. That is
+the whole of the rule here: whether every OTHER kind of usage error
+exits `64` too is T-029, and nothing in this section says it does.
+
+No count belongs in this paragraph. How many scripts have an option
+loop, how many carry a local copy of the guard, how many take it from
+`bin/fm-config.sh`, and which files are exempt from the rule because
+they hold it, are all pinned in `tests/option-loop.test.sh`, where a
+number that stops being true turns the gate red; a number written here
+would only ever be true on the day it was typed. The two halves have to
+add up to the corpus, so a script cannot quietly leave one set without
+joining the other.
+`bin/ci.sh` fails on a `shift 2` that has not checked, and
+`tests/option-loop.test.sh` runs every flag of every script with nothing
+after it — under an alarm, because a test for a hang that simply calls the
+script hangs the gate instead of failing it. Both read the same corpus
+and the same idea of what a comment is, out of `bin/fm-config.sh`: the
+suite exists to catch the gate missing a script, and a suite carrying
+its own copy of the rule is a check that agrees with itself.
+
+### 5.3.2 A later round has to know it is one
+
+A worker asks GitHub for its branch's pull request before it builds the
+prompt, not after the engine has run. The number is what makes a later
+round a later round: the prompt carries what review has said and why the
+required check is red, and `.fm-say.md` — the worker's one way to speak,
+since it may not touch `gh` — has somewhere to go. Looked up afterwards,
+a round dispatched from a task id alone was a first round wearing its
+clothes. It rewrote what it had already written, and the question it
+asked was dropped in silence; the run said `its question is on #`, with
+nothing after the hash.
+
+`fm-dispatch` cannot help: a task whose pull request is open counts as
+in flight and is never restarted, and once it is settled it is merged or
+closed and is not restarted either. There is no path through the
+dispatcher that starts a task with a number to hand it, so the worker
+finding its own is the only path there can be, and
+`tests/dispatch.test.sh` asserts that rather than the design asserting
+it.
+
+The lookup keeps GitHub's exit status, because *no open pull request*
+and *`gh` did not answer* are the same empty string and opposite
+instructions. Answered-and-none is an ordinary state — a round that
+pushed and then died before opening one leaves exactly that — and the
+round carries on and opens it. Could-not-answer stops the run at `74`,
+before the engine: the prompt would carry no review, and the push would
+collide with a pull request nobody looked for. Both halves are in
+`tests/worker.test.sh`, one asserting that the engine did not run and
+one that it did.
+
+Asking is the whole of a round that begins with a question, so a
+question that could not be posted is a failed run — exit `73`, a
+`worker_crashed` carrying the pull request number, and the text copied
+to `state/unsent/`. Not left in the worktree: the next round removes
+and recreates that from the branch, so a file kept where it was written
+is gone as soon as anything runs again. `state/unsent/` sits beside
+`state/rescued/`, which is where an interrupted run's files go — same
+idea, different thing saved: one is work, the other is a message.
+Nothing reaps either. They are under `state/`, which is not in the
+repository, and a directory of questions nobody could post is a thing
+to read rather than a thing to garbage-collect; the names carry the
+task, a UTC stamp and the pid, so two failures in the same second do
+not overwrite each other. (That recreation is also what
+makes `.fm-say.md` a signal from the current round and not a stale one
+from an earlier failure.) It used to be a line on standard error and an
+exit 0: the reviewer waited for a question it would never see, the next
+round asked it again, and the board showed a round that went fine.
+
+This does not unstick the task, and the design should not claim it
+does. Nothing reads `worker_crashed` and acts on it, and a task whose
+pull request is open is not one the dispatcher restarts, so the round
+still ends with a reviewer waiting. What changes is that the run no
+longer says it went well: the failure is on the board, under the pull
+request it happened on, with the text kept where the next round will
+not delete it. Something that picks it up is its own task.
+
+Nothing reads the worker's exit status either. `fm-dispatch` starts it
+with `&` and never waits, so `73` is read by a person, and the one
+event the round writes is the one the worker writes — there is no
+second `worker_crashed` from a caller noticing the code. The codes a
+worker can exit with are `1` a failed attempt, `2` no vendor was
+available, `64` it was called wrong, `65` no such task in
+`design/tasks.json`, `70` something the run needs before it starts and
+cannot have — no library, no worktree, nowhere to put a scratch file —
+`71` the push failed, `72` no pull request number came back, `73` the worker had
+something to say and there was nowhere to put it, `74` GitHub could not
+say which pull request the branch has, and `129`, `130`, `143` — a
+signal, 128 plus its number, from the traps that make a killed run stop
+rather than carry on.
+
+`tests/worker.test.sh` compares that list against every `exit` in the
+script, by identity: a code added correctly is not a failure and a code
+that moves without the sentence moving is. That check compares numbers,
+not meanings — a new failure reusing an existing code passes it in
+silence, which is how `70` acquired a third meaning its sentence did
+not mention. A code is a bucket, and widening the bucket is an edit to
+this paragraph.
 
 ### 5.4 The pull request protocol
 
@@ -265,9 +417,10 @@ grilling  ->  /prototype  ->  [captain green-lights]  ->  design.md + tasks.json
               APPROVE -> firstmate summarises -> [captain merges on the board]
 ```
 
-**`fm-dispatch.sh` dispatches nothing until a `greenlit` event exists** for the
-work. That is the eighth gate, and it stops work starting before the captain
-has seen a proposal.
+**`fm-dispatch.sh` dispatches nothing until a `greenlit` event exists.**
+It checks for any such event, not a match to the proposed work. Firstmate must
+verify that authorization covers the work. Dependencies and capacity are read
+from events, so reconcile these with current PRs and live processes before launch.
 
 | # | Gate | How it is checked |
 |---|---|---|
@@ -277,10 +430,15 @@ has seen a proposal.
 | 4 | the diff stays in scope | `git diff --name-only` within the task's `scope` globs |
 | 5 | **the new tests are not vacuous** | revert the implementation hunks; the new tests must go red |
 | 6 | the required GitHub check is green | `gh pr checks <pr> --required` |
-| 7 | the reviewer posted `APPROVE:<task-id>` | and from the configured reviewer account |
+| 7 | a PR comment contains `APPROVE:<task-id>` | author filtered only if `FM_REVIEWER_LOGIN` is set |
 
-All seven green before an `approved` event and a merge card. Any one red and
-nothing the reviewer said in praise counts.
+Require all seven gates and current-head review evidence before treating a merge
+card as ready. `fm-run.sh` requests a card after gate success, but `fm-review.sh`
+can emit `approved` on an approval substring before that subsequent gate run.
+Gate 7 neither binds approval to a head nor distinguishes final, quoted or stale
+markers; a later rejection does not invalidate an earlier matching comment.
+Firstmate must verify provenance and current readiness explicitly. Any red gate
+requires remediation regardless of praise or an `approved` event.
 
 ---
 
@@ -290,14 +448,23 @@ Rounds one and two: the reviewer picks holes as usual.
 
 **From round three:**
 
-1. Before touching a line, the worker posts `ASK-PASS-CRITERIA:<task-id>`.
+1. Before touching a line, if no original closed list exists, the worker posts
+   `ASK-PASS-CRITERIA:<task-id>` in `.fm-say.md` for script publication and waits.
+   That asking round changes no implementation files.
 2. The reviewer answers with a **numbered list** and posts
    `CRITERIA-COMPLETE:<task-id>`.
-3. After that the reviewer may raise only numbered items from that list, or a
+3. Preserve that original list across subsequent rounds; do not ask again or
+   replace it. Fix the whole list in one pass. After that the reviewer may raise
+   only numbered items from that list, or a
    newly introduced regression marked `REGRESSION:`.
-4. An old off-list complaint makes `bin/fm-protocol.sh` emit
-   `protocol_violation`. It does not count toward the gates, and it goes on the
-   board so the captain can see the reviewer drip-feeding.
+4. Report old off-list complaints to firstmate for board coordination.
+   `bin/fm-protocol.sh` attempts a `protocol_violation` event for the violations
+   its marker checks detect; it cannot determine every semantic violation.
+   It accepts numeric-reference shapes without checking original item membership,
+   does not authenticate ask/completion markers, can replace its list count on a
+   later completion marker, and does not prove a marked regression is new.
+   Firstmate must preserve and verify the original list; a passing protocol
+   check does not establish compliance with this role contract.
 
 The point is to end the loop where each round fixes one thing and surfaces
 another.
@@ -554,6 +721,8 @@ gates, and the dispatcher cannot dispatch itself.
 | T-013 | the decision API, including merge cards | T-008, T-009 |
 | T-014 | the board in a browser, and the gate that runs it | T-010, T-011, T-013 |
 | T-025 | the adapter verdict: a vendor that fails silently is not one that worked | T-003, T-006, T-024 |
+| T-026 | the option loop: a flag with no value must not spin for ever | T-017 |
+| T-027 | the crew are agents, not pull requests | T-010 |
 
 ### M2 — protocol and self-update
 
@@ -563,3 +732,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-016 | `fm-diagram.sh`: decision diagrams, and the board embed | T-010 |
 | T-017 | `fm-reconcile.sh`: reconciling after a crash | T-007 |
 | T-018 | self-update and `sync-skills` | T-007, T-015 |
+| T-029 | one exit code for a usage error, in every script | T-026 |
+| T-030 | the lints are blind to the files that carry them | T-026 |
+| T-031 | a second round the worker cannot see, and a question nobody hears | T-007 |
+| T-033 | firstmate startup contract | T-007, T-006, T-013 |

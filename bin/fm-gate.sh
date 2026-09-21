@@ -19,13 +19,17 @@ BASE="${FM_BASE:-main}"
 GH="${FM_GH:-gh}"
 REVIEWER="${FM_REVIEWER_LOGIN:-}"
 
+# see fm_need in bin/fm-config.sh for why: `shift 2` with one argument
+# left does not shift, and the loop spins. This file deliberately depends
+# on nothing, so it carries the two lines rather than the explanation.
+need() { [ "$#" -ge 2 ] || { echo "fm-gate: $1 needs a value" >&2; exit 64; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
-    --task) TASK="${2-}"; shift 2 ;;
-    --repo) REPO="${2-}"; shift 2 ;;
-    --branch) BRANCH="${2-}"; shift 2 ;;
-    --pr) PR="${2-}"; shift 2 ;;
-    --only) ONLY="${2-}"; shift 2 ;;
+    --task) need "$@"; TASK="${2-}"; shift 2 ;;
+    --repo) need "$@"; REPO="${2-}"; shift 2 ;;
+    --branch) need "$@"; BRANCH="${2-}"; shift 2 ;;
+    --pr) need "$@"; PR="${2-}"; shift 2 ;;
+    --only) need "$@"; ONLY="${2-}"; shift 2 ;;
     *) echo "fm-gate: unknown argument $1" >&2; exit 64 ;;
   esac
 done
@@ -80,7 +84,12 @@ is_test()  { case "$1" in tests/*|*.test.*|*.spec.*) return 0 ;; *) return 1 ;; 
 # ---- 4. the diff stays inside the task's declared scope ------------------
 gate4() {
   local scopes f ok
-  scopes="$(jq -r --arg t "$TASK" '.tasks[]|select(.id==$t)|.scope[]' design/tasks.json 2>/dev/null)"
+  # from the branch: a task that defines itself in its own diff is
+  # otherwise unscoped, and gate 4 would pass anything
+  scopes="$(git show "$BRANCH:design/tasks.json" 2>/dev/null | \
+            jq -r --arg t "$TASK" '.tasks[]|select(.id==$t)|.scope[]' 2>/dev/null)"
+  [ -n "$scopes" ] || scopes="$(jq -r --arg t "$TASK" '.tasks[]|select(.id==$t)|.scope[]' \
+            design/tasks.json 2>/dev/null)"
   [ -n "$scopes" ] || return 1          # a task with no declared scope cannot be gated
   while IFS= read -r f; do
     [ -n "$f" ] || continue

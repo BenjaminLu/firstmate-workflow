@@ -1,4 +1,6 @@
 # fm:sourced  # this file is sourced; see bin/ci.sh, stdin stage
+# fm:lint-source  # and it now HOLDS the option-loop corpus rule, so it
+# quotes `shift 2` without having one; T-030 makes this marker per-line
 # shellcheck shell=bash
 # One reader for config.yaml. There were five copies of the same sed
 # expression and every one of them kept the trailing comment, so
@@ -142,4 +144,75 @@ fm_run_chain() {
     FM_VENDOR_USED="$v"; return "$rc"
   done
   return "$rc"
+}
+
+# `shift 2` with one argument left does not shift: it returns 1 and leaves
+# $@ alone, so `while [ $# -gt 0 ]` spins on the same flag for ever -
+# `bin/fm-emit.sh --type` was a busy loop rather than an error. Every
+# flag that takes a value checks before it shifts, in the same case
+# branch, and exits 64. bin/ci.sh fails on a `shift 2` that has not
+# checked, and tests/option-loop.test.sh runs every flag of every script
+# with nothing after it - under an alarm, because a test for a hang that
+# simply calls the script hangs the gate instead of failing it.
+#
+# The scripts that deliberately depend on nothing carry a two-line copy
+# that points back here. How many there are is pinned in
+# tests/option-loop.test.sh - by an assertion that greps for the local
+# definition, which is new: the sentence claiming it was pinned was
+# there a round before the assertion was. A count in a comment is only
+# true on the day it is typed, and a claim that a count is checked
+# somewhere else is worth no more than the check.
+fm_need() { [ "$#" -ge 3 ] || { echo "$1: $2 needs a value" >&2; exit 64; }; }
+
+# --- what counts as a script, and what counts as a comment ---------------
+#
+# One definition, because there were four and three of them were the
+# broken one. The gate lints an option loop; tests/option-loop.test.sh
+# sweeps for a script the gate should have linted and did not. Two
+# processes, so they cannot share a variable - but they can share these,
+# and a sweep written out by hand at the call site is a sweep that drifts
+# from the one it is supposed to be checking.
+#
+# The stripper cuts at a `#` that STARTS A WORD. `sed 's/#.*$//'` also
+# cuts `${1#--}` and `"#"`, and a `shift 2` sharing a line with either
+# then disappears - out of the lint, and out of the sweep that exists to
+# notice the lint missing something, both blind the same way.
+fm_strip_comments() { sed -e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]]#.*$//' "$1"; }
+
+# It descends: `bin/*.sh` misses a subdirectory, and bin/adapters has
+# been there all along.
+fm_shell_corpus() { find "${1:-bin}" -type f -name '*.sh' | sort; }
+
+# A file declares itself a lint source when it quotes the shapes it
+# forbids, rather than being on a list somewhere else.
+fm_is_lint_source() { grep -q '^# fm:lint-source' "$1"; }
+
+# Every script with an option loop, which is the corpus both the gate and
+# the suite judge.
+fm_loop_corpus() {   # fm_loop_corpus [dir]
+  local f
+  while IFS= read -r f; do
+    fm_is_lint_source "$f" && continue
+    # a here-string, not a pipe: grep -q leaves on the match, the
+    # producer takes SIGPIPE, and under pipefail that reads as "no
+    # match" - it dropped the two longest scripts on the runner
+    grep -q 'shift 2' <<< "$(fm_strip_comments "$f")" || continue
+    printf '%s\n' "$f"
+  done < <(fm_shell_corpus "${1:-bin}")
+}
+
+# Which flags an option loop consumes a value for. This lived in
+# tests/option-loop.test.sh, hand-rolled, which made it a THIRD idea of
+# what a line of an option loop is in the file whose argument is that
+# there must be one - and it was the idea the pinned counts are derived
+# from. It reads comments off first (a flag named in a comment inside
+# the loop used to invent one) and takes the whole case pattern rather
+# than one flag from it, so `--x|--y)` is two.
+fm_loop_flags() {   # fm_loop_flags <file>
+  fm_strip_comments "$1" \
+    | sed -n '/while .*$# -gt 0/,/^done/p' \
+    | grep 'shift 2' \
+    | sed 's/).*$//' \
+    | grep -oE '\-\-[A-Za-z][A-Za-z0-9-]*' \
+    | sort -u
 }

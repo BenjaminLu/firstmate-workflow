@@ -13,10 +13,14 @@ set -uo pipefail
 exec < /dev/null
 
 REPO="${FM_ROOT:-$(pwd)}"; TASK=''; FORCE=0; GH="${FM_GH:-gh}"
+# see fm_need in bin/fm-config.sh for why: `shift 2` with one argument
+# left does not shift, and the loop spins. This file deliberately depends
+# on nothing, so it carries the two lines rather than the explanation.
+need() { [ "$#" -ge 2 ] || { echo "fm-cleanup: $1 needs a value" >&2; exit 64; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
-    --task) TASK="${2-}"; shift 2 ;;
-    --repo) REPO="${2-}"; shift 2 ;;
+    --task) need "$@"; TASK="${2-}"; shift 2 ;;
+    --repo) need "$@"; REPO="${2-}"; shift 2 ;;
     --force) FORCE=1; shift ;;
     *) echo "fm-cleanup: unknown argument $1" >&2; exit 64 ;;
   esac

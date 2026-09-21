@@ -29,10 +29,51 @@ const readEvents = (): Event[] => {
 
 // A task's state is whatever the log last said about it. The board never
 // decides; it reports.
+// What a crewman is, declared: every field on every entry, so a missing
+// one is a type error rather than an `undefined` the client happens to
+// tolerate. The state is a closed set because the client turns it into a
+// class name, a dictionary key and a progress number - an open one meant
+// an actor on a blocked task reached the page as `st-blocked`, which no
+// stylesheet rule and no dictionary key covers.
+const DECK_LIMIT = 24;   // what the ship holds; the page reads it back
+type CrewState = "queued" | "working" | "gate" | "review" | "captain";
+type Crew = {
+  id: string;
+  role: "firstmate" | "worker" | "reviewer";
+  state: CrewState;
+  task: string | null;
+  title: string | null;
+};
+// What an agent says it is. fm-review emits role "reviewer", fm-worker
+// "worker"; a run that says nothing is a worker, which is what a
+// dispatch is. The old version read the actor's NAME, so `rev-$$` or
+// `secondmate` boarded as a worker and only a regex in one browser test
+// would have noticed.
+const roleOf = (actor: string, e: Event): "worker" | "reviewer" => {
+  const d = (e as { data?: { role?: unknown } }).data;
+  if (d && d.role === "reviewer") return "reviewer";
+  if (d && d.role === "worker") return "worker";
+  return actor.startsWith("reviewer") ? "reviewer" : "worker";   // older logs
+};
+
+// A crewman's state is a statement about the AGENT, not a verdict on the
+// task, and an agent that is aboard is by definition running. So an
+// unknown stage - firstmate between dispatches, or a task defined on a
+// branch this checkout has never seen, which fm-worker says is normal -
+// is "working". The previous version guessed "blocked", which drew the
+// most visible crewman slumped and grey while its own bubble said
+// "dispatching". STAGE cannot produce "blocked" at all: it maps to
+// working, gate, review, captain, merged and closed, and the last two
+// are already filtered out above.
+const CREW_STATE = (s: string | undefined): CrewState =>
+  s === "queued" || s === "working" || s === "gate" || s === "review" || s === "captain"
+    ? s : "working";
+
 const STAGE: Record<string, string> = {
   dispatched: "working", commit_pushed: "working", pr_opened: "review",
   gate_failed: "gate", gate_passed: "review", review_opened: "review",
-  approved: "captain", merged: "merged", closed: "closed",
+  approved: "captain", decision_requested: "captain",
+  merged: "merged", closed: "closed",
   // a task whose review never happened, or whose worker died, is blocked -
   // it must not sit in a lane that says work is under way
   review_failed: "gate", worker_crashed: "gate",
@@ -58,14 +99,112 @@ const state = () => {
     if (s) stage.set(e.task, s);
     if (typeof e.pr === "number") pr.set(e.task, e.pr);
   }
+  // A pending decision is a fact on disk, not a point in a history: while
+  // the card is up, the task is the captain's whatever else has been said
+  // since. T-016 read as "working" because a dispatch that should never
+  // have happened landed after the card went up.
+  const awaiting = new Set(pending().map((p: Record<string, unknown>) => String(p.task ?? "")));
   const tasks = defs.map((d) => ({
     id: d.id, title: d.title, milestone: d.milestone,
     depends_on: d.depends_on ?? [],
-    stage: stage.get(d.id as string) ?? "queued",
+    stage: awaiting.has(d.id as string) ? "captain" : (stage.get(d.id as string) ?? "queued"),
     pr: pr.get(d.id as string) ?? null,
   }));
+  // The crew are AGENTS, not tasks. A crewman on the deck is something
+  // that is running: firstmate, each worker or reviewer currently engaged,
+  // and the captain while a decision is waiting. Drawing one figure per
+  // in-flight task put pull requests on the deck instead - three tasks
+  // handled by one worker looked like three of the crew, and the ship's
+  // rate followed the backlog rather than the concurrency.
+  //
+  // An agent is engaged when the last thing it did concerns a task that is
+  // not finished. github is the sync, not an agent, and is never aboard.
+  // firstmate included: it is an agent like the others and it does work
+  // of its own. Pinning it to "dispatching" was the board saying what the
+  // role is for rather than what the agent is doing, and it is the one
+  // crewman a reader most wants to be told the truth about.
+  // Aboard means RUNNING. An actor whose last word was agent_finished has
+  // gone home, whatever became of the task: without that, "aboard" meant
+  // "ever touched a task that is not finished yet", a worker that died at
+  // a gate was drawn working for ever, and the rate followed the history
+  // rather than what is happening now.
+  //
+  // Insertion order here is the order of each actor's LAST event, oldest
+  // first, because the loop deletes before it sets. That matters at the
+  // one place the list is cut: `Map.set` on a key that already exists
+  // keeps the original position, so without the delete the map was
+  // ordered by each actor's FIRST event and a full deck showed the
+  // stalest crew while the agents that had just started fell off the
+  // end. Reversed below, the deck holds the ones that spoke most
+  // recently, which is what a reader watching a busy ship is looking at.
+  const lastByActor = new Map<string, Event>();
+  for (const e of events) {
+    if (!e.actor || e.actor === "github" || e.actor === "captain") continue;
+    lastByActor.delete(e.actor);
+    lastByActor.set(e.actor, e);
+  }
+  for (const [actor, e] of [...lastByActor]) {
+    if (e.type === "agent_finished") lastByActor.delete(actor);
+  }
+  const done = new Set(tasks.filter((t) => ["merged", "closed"].includes(t.stage))
+                            .map((t) => t.id as string));
+  // firstmate carries its task like anyone else. Pinning it to
+  // "dispatching" was the board saying what the role is FOR rather than
+  // what the agent is DOING - and firstmate is the crewman a reader most
+  // wants the truth about, because it is the one that works off the board.
+  // firstmate is always ABOARD - it is the one that dispatches, so the
+  // ship is never empty - but everything else about it is read the same
+  // way as any other agent: its task if it has one, nothing if its run
+  // ended. Two comments used to argue it was "an agent like the others"
+  // while the code exempted it; this is the exemption, named and narrow.
+  // one derivation, read twice: firstmate's state and the payload's own
+  // flag were each computing this, and the page reads the flag while it
+  // is handed the state - two answers to one question, in one response
+  const greenlit = events.some((e) => e.type === "greenlit");
+  const fm = lastByActor.get("firstmate");
+  const fmTask = fm?.task && !done.has(fm.task) ? fm.task : null;
+  const fmT = fmTask ? tasks.find((x) => x.id === fmTask) : undefined;
+  const crew: Crew[] = [{
+    id: "firstmate", role: "firstmate",
+    state: greenlit ? CREW_STATE(fmT?.stage) : "queued",
+    task: fmTask, title: fmT?.title ?? null,
+  }];
+  // newest first, and firstmate is already pinned at the head: when the
+  // deck overflows it is the oldest crewman that is dropped, never the
+  // one that just boarded
+  for (const [actor, e] of [...lastByActor].reverse()) {
+    if (actor === "firstmate") continue;   // already aboard, above
+    const task = e.task ?? null;
+    if (!task) continue;
+    // agent_finished is the answer; this is the backstop for a run that
+    // never got to say it - killed, or a machine that slept. When they
+    // disagree, agent_finished wins: it is checked above and has already
+    // removed the actor. This only catches a run that vanished.
+    if (done.has(task)) continue;
+    const t = tasks.find((x) => x.id === task);
+    crew.push({
+      id: actor,
+      // stated, not guessed: the emitter writes what it is, so renaming
+      // an actor cannot silently turn every reviewer into a worker
+      role: roleOf(actor, e),
+      state: CREW_STATE(t?.stage),
+      task, title: t?.title ?? null,
+    });
+  }
+  // no captain here on purpose. He is not crew - the crew are agents
+  // doing work and he is the person they are waiting on - and he is drawn
+  // beside the cards from the same pending deck the cards come from. The
+  // first version emitted him here AND re-derived him on the page, which
+  // is the two sources this file argues against three comments above.
+
   return {
-    greenlit: events.some((e) => e.type === "greenlit"),
+    // The deck holds this many. One number: the server truncates and
+    // tells the page what the limit was, rather than both of them
+    // knowing 24 - truncating only on the client also left the server
+    // building an unbounded array into every payload.
+    deckLimit: DECK_LIMIT,
+    crew: crew.slice(0, DECK_LIMIT),
+    greenlit,
     counts: {
       merged: tasks.filter((t) => t.stage === "merged").length,
       inflight: tasks.filter((t) => ["working", "review"].includes(t.stage)).length,

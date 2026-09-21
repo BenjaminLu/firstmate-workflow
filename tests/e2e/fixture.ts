@@ -12,12 +12,14 @@ import { spawn, type ChildProcess } from "node:child_process";
 // against the config file, not cwd, so that is not what makes this true.
 export const ROOT = resolve(process.cwd());
 export type Stage = "working" | "gate" | "review";
+// an agent per entry: the board's crew are agents, so a fixture that wants
+// five crewmen needs five actors, not five tasks
 
 const EVENT_FOR: Record<Stage, string> = {
   working: "dispatched", gate: "gate_failed", review: "review_opened",
 };
 
-export function makeRoot(stages: Stage[], withDecision = true) {
+export function makeRoot(stages: Stage[], withDecision = true, actors: "per-task" | "one-worker" = "per-task") {
   const d = mkdtempSync(join(tmpdir(), "fm-e2e-"));
   mkdirSync(join(d, "state/pending"), { recursive: true });
   mkdirSync(join(d, "design"), { recursive: true });
@@ -38,7 +40,11 @@ export function makeRoot(stages: Stage[], withDecision = true) {
     const t = tasks[i];
     ev.push(JSON.stringify({
       ts: `2026-09-21T09:${String(i + 1).padStart(2, "0")}:00Z`,
-      actor: "worker", task: t.id, type: EVENT_FOR[s],
+      // "one-worker" is what a real log looks like when one agent works
+      // through a queue: the crew are agents, so that is ONE crewman
+      actor: actors === "one-worker" ? "worker-1"
+           : s === "review" ? `reviewer-${i + 1}` : `worker-${i + 1}`,
+      task: t.id, type: EVENT_FOR[s],
       summary: { en: t.title, "zh-TW": t.title },
     }));
   });

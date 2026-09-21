@@ -24,10 +24,10 @@ REVIEWER="${FM_REVIEWER_LOGIN:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
     check) MODE=check; shift ;;
-    --task) TASK="${2-}"; shift 2 ;;
-    --pr) PR="${2-}"; shift 2 ;;
-    --round) ROUND="${2-}"; shift 2 ;;
-    --repo) REPO="${2-}"; shift 2 ;;
+    --task) fm_need "fm-protocol" "$@"; TASK="${2-}"; shift 2 ;;
+    --pr) fm_need "fm-protocol" "$@"; PR="${2-}"; shift 2 ;;
+    --round) fm_need "fm-protocol" "$@"; ROUND="${2-}"; shift 2 ;;
+    --repo) fm_need "fm-protocol" "$@"; REPO="${2-}"; shift 2 ;;
     *) echo "fm-protocol: unknown argument $1" >&2; exit 64 ;;
   esac
 done

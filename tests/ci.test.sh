@@ -21,6 +21,15 @@ assert_contains "$out" "red.test.sh" "names the failing test"
 
 rm -f "$t/tests/red.test.sh" "$t/tests/green.test.sh"
 assert_ok "FM_ROOT='$t' bash '$ROOT/bin/ci.sh'" "passes on a repo with no tests yet"
+# The bash stage has two arms and only one of them reads what a suite
+# said, which reads like a rule enforced in one place out of two. It is
+# not: the other arm runs no suite. Asserted, so the shape cannot change
+# quietly - on a tree with no suites the stage skips and reports on
+# nothing, so there is no second path a suite's verdict can come down.
+empty="$(FM_ROOT="$t" bash "$ROOT/bin/ci.sh" 2>&1)"
+assert_contains "$empty" "no suites yet" "with no suites the bash stage skips"
+assert_fail "grep -qE '^  [+x] tests/' <<< \"\$empty\"" \
+  "and reports on no suite at all, so nothing decides green on the other arm"
 
 assert_ok "test -x '$ROOT/bin/ci.sh'" "ci.sh is executable"
 gha="$ROOT/.github/workflows/ci.yml"
@@ -60,7 +69,7 @@ probe_gate() { # <fixture-dir> <label>
   wait "$pid" 2>/dev/null
   exec 8>&-; rm -f "$p/openpipe"
 }
-p="$(mktemp -d)"; mkdir -p "$p/bin"; cp "$ROOT/bin/ci.sh" "$p/bin/ci.sh"
+p="$(mktemp -d)"; mkdir -p "$p/bin"; cp "$ROOT/bin/ci.sh" "$ROOT/bin/fm-config.sh" "$p/bin/"
 probe_gate "$p" "the gate finishes on a tree with no tests at all"
 mkdir -p "$p/tests"
 printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n' > "$p/tests/reads-stdin.test.sh"
@@ -98,7 +107,7 @@ rm -rf "$p"
 # to leave them alone - and the e2e stage has to say it skipped rather than
 # quietly passing when the browser is not installed.
 q="$(mktemp -d)"; mkdir -p "$q/bin" "$q/tests/e2e"
-cp "$ROOT/bin/ci.sh" "$q/bin/ci.sh"
+cp "$ROOT/bin/ci.sh" "$ROOT/bin/fm-config.sh" "$q/bin/"
 printf 'import { test, expect } from "bun:test";\ntest("a", () => expect(1).toBe(1));\n' \
   > "$q/tests/unit.spec.ts"
 printf 'import { test } from "@playwright/test";\ntest("b", async ({ page }) => { await page.goto("about:blank"); });\n' \
@@ -153,11 +162,140 @@ assert_contains "$out" "60s locally" "against the budget the design sets"
 # hand-rolled swap, a second vendor loop, a second writer of the log, an id
 # missing from the design, a suite that returns non-zero. None of them is a
 # syntax error, and none would be caught by a different stage.
-plant() {   # plant <label> <expected fragment> ; the fixture is built first
-  local label="$1" want="$2" out
-  out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
-  assert_contains "$out" "$want" "$label"
+# One gate run per fixture STATE, not one per assertion: every plant used
+# to run a full nested gate, and the stage that measures the gate's own
+# budget was mostly measuring that.
+#
+# The cache invalidates itself off a signature of the fixture rather than
+# off the author remembering to clear it. The first version needed a
+# `replant` call after every write, one was missed, and the assertion read
+# the previous run - green for an assertion that tested nothing, which is
+# the class this suite exists to catch.
+planted=''; planted_sig=''; planted_runs=0
+# The content, not the metadata. `ls -ld` prints the mtime to the minute
+# on the BSD tools this runs on, so rewriting a file with different
+# content of the same size seconds later produced an identical signature -
+# and the assertion then read the PREVIOUS fixture's gate run and passed.
+# A plant that creates or deletes a file was safe; one that edits in place
+# was not, and those are the ones this suite added.
+fixture_sig() { find "$q" -type f -exec shasum {} + 2>/dev/null | sort | shasum | cut -c1-40; }
+plant() {   # plant <label> <expected fragment>
+  local label="$1" want="$2" sig
+  sig="$(fixture_sig)"
+  if [ "$sig" != "$planted_sig" ]; then
+    planted="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+    planted_sig="$sig"
+    planted_runs=$((planted_runs + 1))
+  fi
+  assert_contains "$planted" "$want" "$label"
 }
+
+# The cache has to HIT, or it is a claim rather than a saving: if
+# bin/ci.sh writes anything under FM_ROOT the signature changes every
+# time, every plant re-runs the whole gate, and the suite is green
+# either way. Two plants against a fixture nothing has touched, and the
+# gate must have run once.
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
+  printf '    --x) v="${2-}"; shift 2 ;;\n    *) exit 64 ;;\n  esac\ndone\necho "${v:-}"\n'
+} > "$q/bin/fm-cachecheck.sh"
+before_runs="$planted_runs"
+plant "the cache warms on the first plant" "has not checked it has two"
+assert_eq "$((before_runs + 1))" "$planted_runs" "the first plant ran the gate"
+plant "and a second plant against the same fixture" "fm-cachecheck.sh"
+assert_eq "$((before_runs + 1))" "$planted_runs" "and the second one did not run it again"
+rm -f "$q/bin/fm-cachecheck.sh"
+plant "and a plant after a change runs it again" "no option loop can spin"
+assert_eq "$((before_runs + 2))" "$planted_runs" "a changed fixture is not served from the cache"
+
+# The plant cache has to notice an in-place edit, not only a file
+# appearing or disappearing. The version keyed on `ls -ld` did not: its
+# mtime is minute-granular here, so a rewrite of the same size seconds
+# later was invisible and the next assertion read the previous run.
+sigdir="$(mktemp -d)"; q_save="$q"; q="$sigdir"
+printf 'AAAA' > "$q/f"; sig_a="$(fixture_sig)"
+sleep 1
+printf 'BBBB' > "$q/f"; sig_b="$(fixture_sig)"
+assert_ne "$sig_a" "$sig_b" "the plant cache notices a same-size edit a second later"
+printf 'AAAA' > "$q/f"
+assert_eq "$sig_a" "$(fixture_sig)" "and is the same signature for the same content"
+q="$q_save"; rm -rf "$sigdir"
+
+# The gate decides green by reading what a suite said, because a suite
+# that calls something which does not exist prints to stderr, carries
+# on, and reaches finish green. That decision is the one production
+# change with no test, so here it is.
+{ printf '#!/usr/bin/env bash\n'
+  printf 'nosuch%s "x"\n' helper
+  printf 'exit 0\n'
+} > "$q/tests/silent.test.sh"
+plant "a suite that passes while something in it did not run is a failure" "did not run"
+plant "and the stage prints the line" "nosuchhelper"
+rm -f "$q/tests/silent.test.sh"
+
+# and the negative half: a suite that prints one of those phrases as
+# DATA - asserting a script's own error text, say - is not a suite that
+# broke, so the rule matches the shell's diagnostic prefix and not the
+# words on their own
+{ printf '#!/usr/bin/env bash\n'
+  printf 'echo "the script said: command not found, which is what we assert"\n'
+  printf 'echo "and also: unbound variable"\n'
+  printf 'exit 0\n'
+} > "$q/tests/talks.test.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_contains "$out" "ci: green" "a suite that prints those words as data still passes"
+rm -f "$q/tests/talks.test.sh"
+
+# the rest of the same family: bash says all of these the same way and
+# carries on afterwards. A file that will not exec, and a syntax error
+# in something sourced - which leaves the suite running with half its
+# functions undefined and exiting 0, which is exactly what two spliced
+# lines in a test file did.
+cat > "$q/brokenlib.sh" <<'L'
+f() {
+L
+{ printf '#!/usr/bin/env bash\n'
+  printf '. "%s/brokenlib.sh"\n' "$q"
+  printf 'exit 0\n'
+} > "$q/tests/broken.test.sh"
+plant "a suite that goes on after a syntax error in a sourced file is a failure" "did not run"
+plant "and the stage prints that line too" "syntax error"
+{ printf '#!/usr/bin/env bash\n'
+  printf '/nonexistent/not-a-program\n'
+  printf 'exit 0\n'
+} > "$q/tests/broken.test.sh"
+plant "a suite that goes on after a command it could not exec is a failure" "did not run"
+# `unbound variable` was in the rule with no plant, and it is the one
+# phrase whose place in the set is arguable: under `set -u` a
+# non-interactive bash EXITS, which is the other arm's job. In a
+# SUBSHELL it does not - the subshell dies, the parent carries on, and
+# the suite reaches its end green with a line that never ran. That is
+# what earns it a place here.
+{ printf '#!/usr/bin/env bash\n'
+  printf 'set -u\n'
+  printf '( echo "$NO_SUCH_VARIABLE" )\n'
+  printf 'exit 0\n'
+} > "$q/tests/broken.test.sh"
+plant "a suite that goes on after an unbound variable in a subshell is a failure" "did not run"
+plant "and the stage prints that line as well" "NO_SUCH_VARIABLE"
+rm -f "$q/tests/broken.test.sh" "$q/brokenlib.sh"
+
+# The locale the gate runs a suite under is production, and nothing here
+# would break if the line were deleted: the diagnostics it reads are
+# English on an English machine either way. So the suite asserts the
+# environment itself. LC_MESSAGES pinned to C, and LC_ALL emptied rather
+# than set to C - LC_ALL=C pins collation and ctype for every suite as
+# well, running their sort, grep and tr over UTF-8 in a locale no
+# developer uses.
+cat > "$q/tests/locale.test.sh" <<L
+#!/usr/bin/env bash
+printf 'LC_ALL=[%s] LC_MESSAGES=[%s]\\n' "\${LC_ALL-unset}" "\${LC_MESSAGES-unset}" > "$q/locale"
+exit 0
+L
+LC_ALL=zh_TW.UTF-8 LC_MESSAGES=zh_TW.UTF-8 FM_ROOT="$q" bash "$q/bin/ci.sh" >/dev/null 2>&1
+assert_eq "LC_ALL=[] LC_MESSAGES=[C]" "$(cat "$q/locale")" \
+  "the gate pins the shell's messages to C and leaves the rest of the locale alone"
+rm -f "$q/tests/locale.test.sh" "$q/locale"
 
 # a script that dispatches without closing standard input
 # two, because the criterion says the gate names EVERY offender and a gate
@@ -179,7 +317,7 @@ printf '#!/usr/bin/env bash\nr=/tmp\ncp "$r/bin/x.sh" "$r/x.%s"\n' 'keep"' > "$q
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 n="$(find "$q/tests" -name '*.test.sh' | wc -l | tr -d ' ')"
 assert_contains "$out" "($n suites)" "the hygiene stage says how many suites it linted"
-bare="$(mktemp -d)"; mkdir -p "$bare/bin"; cp "$q/bin/ci.sh" "$bare/bin/ci.sh"
+bare="$(mktemp -d)"; mkdir -p "$bare/bin"; cp "$q/bin/ci.sh" "$q/bin/fm-config.sh" "$bare/bin/"
 assert_contains "$(FM_ROOT="$bare" bash "$bare/bin/ci.sh" 2>&1)" "(0 suites)" \
   "and says zero rather than passing silently when there are none"
 rm -rf "$bare"
@@ -198,6 +336,149 @@ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\ns=hi\nprintf "%
 plant "a pipeline into grep -q turns the hygiene stage red" "feeds grep -q or -c"
 plant "and the stage names the script" "fm-piped.sh"
 rm -f "$q/bin/fm-piped.sh"
+
+# Two scripts, and one of them with two offending lines: a stage that
+# stopped at the first hit passes a single-instance plant, which this
+# file's own comment says twenty lines up.
+printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\nwhile [ $# -gt 0 ]; do\n  case "$1" in\n    --x) v="${2-}"; shift 2 ;;\n    --y) w="${2-}"; shift 2 ;;\n    *) exit 64 ;;\n  esac\ndone\necho "${v:-}${w:-}"\n' \
+  > "$q/bin/fm-spinner.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\nwhile [ $# -gt 0 ]; do\n  case "$1" in\n    --z) u="${2-}"; shift 2 ;;\n    *) exit 64 ;;\n  esac\ndone\necho "${u:-}"\n' \
+  > "$q/bin/fm-twirler.sh"
+plant "an unguarded shift 2 turns the hygiene stage red" "has not checked it has two"
+plant "and the stage names the first script" "fm-spinner.sh"
+plant "and the second as well" "fm-twirler.sh"
+plant "and both lines of the one with two" "--y"
+rm -f "$q/bin/fm-spinner.sh" "$q/bin/fm-twirler.sh"
+
+# a comment must not talk the stage out of firing: the guard is judged by
+# what the code does, not by the word appearing on the line
+# On a line of its own inside the branch, and shaped like a command,
+# because only the STRIPPING can then be what catches it: a trailing
+# `;; # need to check this` is refused by the command-position rule
+# instead - `#` is not something a command can follow - and the plant
+# would be coasting on a mechanism it does not name.
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
+  printf '    --x)\n      # ; need "$@" would go here\n'
+  printf '      v="${2-}"; shift 2 ;;\n'
+  printf '    *) exit 64 ;;\n  esac\ndone\necho "${v:-}"\n'
+} > "$q/bin/fm-sneak.sh"
+plant "a comment mentioning the guard does not count as one" "has not checked it has two"
+rm -f "$q/bin/fm-sneak.sh"
+
+# nor must a check written AFTER the shift, which is not a check: by then
+# the argument it was supposed to find is gone.
+#
+# One script per shape from here on. Two plants in one file and the
+# coarse "turns it red" assertion is carried by whichever of them fires,
+# so the other one tests nothing of its own.
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'need() { [ "$#" -ge 2 ] || exit 64; }\n'
+  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
+  printf '    --x) v="${2-}"; shift 2; need "$@" ;;\n'
+  printf '    *) exit 64 ;;\n  esac\ndone\necho "${v:-}"\n'
+} > "$q/bin/fm-afterwards.sh"
+plant "a guard written after the shift does not count as one" "has not checked it has two"
+plant "and the stage names that line" "--x"
+rm -f "$q/bin/fm-afterwards.sh"
+
+# The word in a string, IN FRONT of the shift, so the ordering rule
+# cannot be what catches it. A column comparison called this guarded;
+# the guard has to be a command.
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
+  printf '    --y) echo "you need a value"; w="${2-}"; shift 2 ;;\n'
+  printf '    *) exit 64 ;;\n  esac\ndone\necho "${w:-}"\n'
+} > "$q/bin/fm-saysit.sh"
+plant "the word in a string in front of the shift is not a guard" "has not checked it has two"
+plant "and the stage names that one" "--y"
+rm -f "$q/bin/fm-saysit.sh"
+
+# and a helper defined ABOVE the loop whose message says the word - not
+# exotic, fm-emit grows a usage() in this very diff - with a loop that
+# is not a case statement at all
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'usage() { echo "you need a value" >&2; exit 64; }\n'
+  printf 'while [ $# -gt 0 ]; do\n'
+  printf '  if [ "$1" = --x ]; then v="${2-}"; shift 2; fi\n'
+  printf 'done\necho "${v:-}"\n'
+} > "$q/bin/fm-helper.sh"
+plant "a helper above the loop whose message says the word is not a guard" \
+  "has not checked it has two"
+plant "and the stage names it" "fm-helper.sh"
+rm -f "$q/bin/fm-helper.sh"
+
+# a REAL guard, in command position, in a function above the loop: it
+# guards something, but not this branch. A case pattern ends the
+# previous branch as surely as `;;` does.
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'need() { [ "$#" -ge 2 ] || exit 64; }\n'
+  printf 'check() { need "$@"; }\n'
+  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
+  printf '    --x) v="${2-}"; shift 2 ;;\n'
+  printf '    *) exit 64 ;;\n  esac\ndone\necho "${v:-}"\n'
+} > "$q/bin/fm-elsewhere.sh"
+plant "a guard called somewhere else does not cover a branch that has none" \
+  "has not checked it has two"
+plant "and the stage names that one too" "fm-elsewhere.sh"
+rm -f "$q/bin/fm-elsewhere.sh"
+
+# And the ordinary multi-line branch, which IS guarded: the check reads
+# the case branch, not the physical line, so a guard on a line of its
+# own counts. Reading one line called this naked and would have made the
+# gate refuse the commonest way of writing it - the rule §5.3.1 states
+# is "checks first", not "checks first, on the same line".
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'need() { [ "$#" -ge 2 ] || exit 64; }\n'
+  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
+  printf '    --x)\n      need "$@"\n      v="${2-}"; shift 2 ;;\n'
+  printf '    *) exit 64 ;;\n  esac\ndone\necho "${v:-}"\n'
+} > "$q/bin/fm-spread.sh"
+plant "a guard on its own line, above the shift, is a guard" "no option loop can spin"
+rm -f "$q/bin/fm-spread.sh"
+
+# and the guard does not leak past the end of its branch: one branch
+# checks, the next does not, and the next one is an offender
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'need() { [ "$#" -ge 2 ] || exit 64; }\n'
+  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
+  printf '    --x)\n      need "$@"\n      v="${2-}"; shift 2 ;;\n'
+  printf '    --y)\n      w="${2-}"; shift 2 ;;\n'
+  printf '    *) exit 64 ;;\n  esac\ndone\necho "${v:-}${w:-}"\n'
+} > "$q/bin/fm-leaky2.sh"
+plant "a guard in the branch above does not cover the one below it" "has not checked it has two"
+# the line it prints is the one with the shift on it, and it is the
+# line the reader has to open: the branch head is two lines up and the
+# line number is in the output
+plant "and the stage names the line" "w=\"\${2-}\"; shift 2"
+rm -f "$q/bin/fm-leaky2.sh"
+
+# and the corpus has to SEE a script whose option loop shares a line with
+# a `#` that is not a comment. `sed 's/#.*$//'` cuts `${1#--}` in half,
+# the `shift 2` disappears with it, and the script is excused entirely.
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
+  printf '    --*) n="${1#--}"; v="${2-}"; shift 2 ;;\n'
+  printf '    *) exit 64 ;;\n  esac\ndone\necho "${n:-}${v:-}"\n'
+} > "$q/bin/fm-hashed.sh"
+plant "a hash inside a parameter expansion does not hide an option loop" "fm-hashed.sh"
+rm -f "$q/bin/fm-hashed.sh"
+
+# and it descends: bin/*.sh missed anything in a subdirectory
+mkdir -p "$q/bin/inner"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\nwhile [ $# -gt 0 ]; do\n  case "$1" in\n    --x) v="${2-}"; shift 2 ;;\n    *) exit 64 ;;\n  esac\ndone\necho "${v:-}"\n' \
+  > "$q/bin/inner/fm-buried.sh"
+plant "a script in a subdirectory of bin is linted too" "fm-buried.sh"
+rm -rf "$q/bin/inner"
+# and the stage says how many scripts it read, so linting nothing does not
+# look like linting a clean repository
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_matches "$out" 'spin on a flag with no value \([0-9]+ scripts\)' \
+  "the option-loop stage says how many scripts it read"
+bare2="$(mktemp -d)"; mkdir -p "$bare2/bin"; cp "$q/bin/ci.sh" "$q/bin/fm-config.sh" "$bare2/bin/"
+assert_contains "$(FM_ROOT="$bare2" bash "$bare2/bin/ci.sh" 2>&1)" "value (0 scripts)" \
+  "and says zero on a tree with none"
+rm -rf "$bare2"
 
 plant "a hand-rolled swap turns the hygiene stage red" "saves a script by hand"
 plant "and the stage names the suite" "hand-rolled.test.sh"
@@ -265,6 +546,38 @@ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\nfor v in $chain
 plant "a second vendor loop turns its stage red" "loops over vendors on its own"
 plant "and the stage names the script" "fm-second-chain.sh"
 rm -f "$q/bin/fm-second-chain.sh"
+
+# The assertions stage, from both sides. It landed with no fixture, which
+# is the one rule this file is for: a lint nobody has ever seen fail is a
+# lint nobody knows works.
+# the stage needs a harness to compare against, and this fixture has
+# none until now - without lib.sh it skips, and a plant against a stage
+# that skipped is the assertion that cannot fail all over again
+cp "$ROOT/tests/lib.sh" "$q/tests/lib.sh"
+{ printf '#!/usr/bin/env bash\n'
+  printf '. "$(dirname "$0")/lib.sh"\n'
+  printf 'assert_%s "x" "x" "planted"\n' nosuchthing
+  printf 'finish\n'
+} > "$q/tests/undefined.test.sh"
+plant "a suite calling an assertion lib.sh does not define turns the stage red" \
+  "does not define"
+# assembled, or this suite carries the name of a helper that does not
+# exist and the assertions stage - which cannot tell a call from a
+# mention - turns the gate red on the file that tests it
+miss="nosuchthing"
+plant "and the stage names it" "assert_${miss}"
+rm -f "$q/tests/undefined.test.sh"
+# and the negative half, which is the reason the stage strips comments:
+# a suite that NAMES a helper in prose is not calling it
+{ printf '#!/usr/bin/env bash\n'
+  printf '. "$(dirname "$0")/lib.sh"\n'
+  printf '# this file used to lean on assert_%s, which no longer exists\n' nosuchthing
+  printf 'assert_eq "x" "x" "planted"\n'
+  printf 'finish\n'
+} > "$q/tests/mentions.test.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_contains "$out" "ci: green" "a helper named only in a comment does not turn it red"
+rm -f "$q/tests/mentions.test.sh" "$q/tests/lib.sh"
 
 # a second writer of the event log
 printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\necho x >> state/events.jsonl\n' \

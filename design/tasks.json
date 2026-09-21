@@ -590,6 +590,166 @@
         "each attempt reads only its own output: its own directory and its own slice of the shared log",
         "a file that is meant to be sourced never carries the standard-input redirect"
       ]
+    },
+    {
+      "id": "T-026",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-017"
+      ],
+      "title": "the option loop: eleven scripts spin for ever on a flag with no value",
+      "scope": [
+        "bin/**",
+        "tests/**",
+        "design/tasks.json",
+        "design/design.md"
+      ],
+      "acceptance": [
+        "no script loops for ever when a flag arrives with nothing after it",
+        "every one of them exits 64 and says which flag",
+        "the gate refuses a shift 2 that has not checked it has two",
+        "the probe runs under an alarm, because a test for a hang would hang the gate rather than fail it"
+      ]
+    },
+    {
+      "id": "T-027",
+      "milestone": "M1",
+      "bootstrap": false,
+      "depends_on": [
+        "T-010"
+      ],
+      "title": "the crew are agents, not pull requests",
+      "scope": [
+        "bin/ci.sh",
+        "bin/fm-diagram.sh",
+        "bin/fm-emit.sh",
+        "bin/fm-review.sh",
+        "bin/fm-worker.sh",
+        "board/public/**",
+        "board/server.ts",
+        "design/design.md",
+        "design/tasks.json",
+        "i18n/**",
+        "tests/board.test.sh",
+        "tests/ci.test.sh",
+        "tests/crew-end-to-end.test.sh",
+        "tests/e2e/**",
+        "tests/review.test.sh",
+        "tests/ship.spec.ts",
+        "tests/traps.test.sh",
+        "tests/worker.test.sh"
+      ],
+      "acceptance": [
+        "a crewman is an agent that is working, not a task and not a pull request",
+        "the crew comes from the actors in the event log, derived by the server",
+        "an agent's bubble says which task it is on, and the roster says the same",
+        "two agents on two tasks are two crewmen; one agent that has moved between tasks is one",
+        "github is not an agent and is never aboard",
+        "the ship's rate follows the number of agents, which is the concurrency, not the backlog",
+        "the captain is not crew: he is drawn beside the cards, from the same pending deck the cards come from, and nothing else derives him",
+        "an agent that has finished its run is not aboard, whatever became of the task",
+        "a run says when it ends, on every exit path including the ones that give up",
+        "no script names a signal alongside EXIT in one trap: the handler runs and execution continues, and kill stops working",
+        "a suite that prints command-not-found cannot report green: the gate reads what the run said"
+      ]
+    },
+    {
+      "id": "T-029",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-026"
+      ],
+      "title": "one exit code for a usage error, in every script",
+      "scope": [
+        "bin/**",
+        "tests/**",
+        "design/design.md",
+        "design/tasks.json"
+      ],
+      "acceptance": [
+        "every usage error in every script exits 64, and every refusal to write exits 1",
+        "the gate enforces it rather than the design merely stating it",
+        "each converted path has an assertion that fails if it goes back"
+      ]
+    },
+    {
+      "id": "T-030",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-026"
+      ],
+      "title": "the lints are blind to the files that carry them",
+      "scope": [
+        "bin/**",
+        "tests/**",
+        "design/design.md",
+        "design/tasks.json"
+      ],
+      "acceptance": [
+        "the pipe-into-grep lint reads tests/ as well as bin/, which is where most of the pipelines are",
+        "a file is no longer exempted whole by # fm:lint-source: a LINE says it quotes a shape rather than runs it, and every other line in that file is judged - today the marker takes bin/ci.sh and bin/fm-config.sh out of the shift-2 stage and the pipe-into-grep stage entirely, and those are the two files that hold both rules",
+        "every site the widened lints report is converted or marked, and the count is pinned so a new one cannot arrive unnoticed",
+        "the marker is tested from both sides: a marked line does not fire the stage and an unmarked one does"
+      ]
+    },
+    {
+      "id": "T-031",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-007"
+      ],
+      "title": "a second round the worker cannot see, and a question nobody hears",
+      "scope": [
+        "bin/fm-worker.sh",
+        "tests/worker.test.sh",
+        "tests/dispatch.test.sh",
+        "design/design.md",
+        "design/tasks.json"
+      ],
+      "acceptance": [
+        "a worker dispatched on a task whose branch already has an open pull request finds that pull request itself, without being told the number",
+        "on a later round the prompt carries what review has said and the failing check, whether or not --pr was passed",
+        "the lookup keeps GitHub's exit status: answered-and-none carries on and opens a pull request, could-not-answer stops the run before the engine rather than building a blind prompt and pushing at a pull request nobody looked for",
+        "the worker's .fm-say.md reaches the pull request on any round where one exists, and the run says which pull request it went to",
+        "a message that could not be posted is an error the run reports, not a line on standard error nobody reads: asking is the whole of that round and a question that went nowhere leaves the task deadlocked",
+        "the worker's own lookup is the only path there can be: fm-dispatch never restarts a task whose pull request is open, so it has no number to pass, and the suite says so rather than the design claiming it"
+      ]
+    },
+    {
+      "id": "T-033",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-007",
+        "T-006",
+        "T-013"
+      ],
+      "title": "firstmate startup contract",
+      "scope": [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "README.md",
+        "skills/**",
+        "design/design.md",
+        "design/tasks.json",
+        "tests/skills.test.sh"
+      ],
+      "acceptance": [
+        "A concise canonical startup contract and thin Claude/Codex entrypoints route a top-level interactive session to firstmate immediately, while an explicitly dispatched worker or reviewer retains its assigned role; entrypoints link to the canonical contract rather than duplicating instructions.",
+        "The default firstmate plans, dispatches, monitors, coordinates remediation and submits decisions through the repository scripts; it does not implement production code or run git/gh mutations itself. Document the actual scripts and their limitations, including gate failures that require explicit remediation coordination.",
+        "Existing user authorization persists across turns and routine authorized work proceeds without repeated confirmation. Scope decisions and captain merge approval still go through the board, and firstmate does not infer captain merge approval from a request to finish all PRs.",
+        "Startup inspects resumable task state, open PRs, worktrees and live herdr panes before launching work; it resumes existing agents instead of duplicating them, checks herdr availability within the managed session, and launches actual future worker/reviewer processes in visible panes. A conversation subagent alone is not evidence that a herdr worker exists.",
+        "Startup starts or reuses the captain board and opens it using the available browser mechanism, verifies observable results, and never claims a board, worker, test, hook removal, commit or PR action succeeded without evidence.",
+        "All relevant role skills are English portable Markdown with provider-independent valid metadata. No vendor-specific syntax occurs inside skills/. Claude/Codex-specific loading conventions may appear only in their thin root entrypoints. Resolve existing role skills and links coherently rather than creating competing startup sources.",
+        "Firstmate, worker and reviewer instructions coherently capture the round-three closed-list review protocol, subsequent original-list/regression-only enforcement, and final-only reviewer verdict provenance; intermediate text or quoted APPROVE/REJECT cannot be treated as the final review decision.",
+        "Role instructions distinguish tests actually executed and their observable results from unverified claims, require honest limitations, and distinguish static English instruction prose from dynamic user-facing summaries that require both en and zh-TW.",
+        "There is no required reliance on lavish or no-mistakes in startup or role workflows. Verification uses the repository checks and actual GitHub CI evidence, with captain decisions retaining their established board workflow.",
+        "Changes remain documentation/instructions and narrowly useful skill metadata or link-structure validation. Do not add arbitrary prose-grep assertions or model/API-dependent CI. Update README and design references so future Claude and Codex sessions discover the same role contract without conversational history."
+      ]
     }
   ]
 }

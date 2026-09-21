@@ -49,4 +49,32 @@ cd "$ROOT" || exit 1
 strays=$(grep -rnE '>>[[:space:]]*.*events\.jsonl' bin board 2>/dev/null | grep -v 'fm-emit.sh' | wc -l | tr -d ' ')
 assert_eq "0" "$strays" "nothing appends to the log except fm-emit.sh"
 rm -rf "$t"
+
+# 64 is what the OPTION LOOP exits, and nothing else in this script does
+# - not yet. A flag with no value after it, and a flag fm-emit does not
+# know: those are what this task owns, and pinning them is what stops
+# the guard being removed later. Everything below the loop still exits 1
+# and is pinned at 1 here, so the half-converted state is a fact the
+# suite states rather than a thing nobody looked at; T-029 is where the
+# rest moves, and this block is what will turn red when it does.
+u="$(mktemp -d)"; mkdir -p "$u/state"
+code() { FM_ROOT="$u" bash "$ROOT/bin/fm-emit.sh" "$@" >/dev/null 2>&1; printf '%s' "$?"; }
+assert_eq "64" "$(code --actor x --type greenlit --en a --tw b --nope 1)" \
+  "a flag fm-emit does not know is a usage error"
+assert_eq "64" "$(code --actor x --type greenlit --en a --tw)" \
+  "and so is a flag with nothing after it"
+for bad in "--type greenlit --en a --tw b" "--actor x --en a --tw b" \
+           "--actor x --type nosuchtype --en a --tw b" \
+           "--actor x --type greenlit --data notjson --en a --tw b" \
+           "--actor x --type greenlit --tw b" "--actor x --type greenlit --en a"; do
+  # shellcheck disable=SC2086   # a command line, deliberately split
+  assert_eq "1" "$(code $bad)" "everything below the loop still exits 1: $bad"
+done
+# and a refusal to write is 1 as well, which is the code the line above
+# it shares - telling those two apart is exactly what T-029 is for
+assert_eq "1" "$(FM_ROOT=/dev/null/nowhere bash "$ROOT/bin/fm-emit.sh" --actor x \
+  --type greenlit --en a --tw b >/dev/null 2>&1; printf '%s' "$?")" \
+  "a log it cannot write is 1 too"
+rm -rf "$u"
+
 finish

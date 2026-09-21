@@ -73,6 +73,11 @@ section>h2{margin:0 0 10px;font:600 10.5px var(--mono);color:var(--fg3);
 .acts .alt{background:var(--bg3);color:var(--fg2);border:1px solid var(--line)}
 .acts .said{font:11px var(--mono);color:var(--brass)}
 .dcard a{color:var(--accent);font:11px var(--mono)}
+/* the diagram is a page of its own, so it comes in as a page: the board's
+   styles cannot leak into it and its styles cannot leak back out */
+iframe.dg{display:block;width:100%;height:240px;margin:12px 0 0;border:1px solid var(--line);
+  border-radius:10px;background:var(--bg3)}
+iframe.dg[hidden]{display:none}
 </style>
 </head>
 <body>
@@ -91,7 +96,8 @@ section>h2{margin:0 0 10px;font:600 10.5px var(--mono);color:var(--fg3);
 <section id="deckwrap" style="padding:0 20px" hidden>
   <h2 style="margin:16px 0 10px;font:600 10.5px var(--mono);color:var(--fg3);text-transform:uppercase;letter-spacing:.1em">
     <span id="awaiting"></span> <span id="pcount"></span></h2>
-  <div id="deck"></div>
+  <div class="capwrap"><div class="captain" id="captain"></div>
+  <div id="deck"></div></div>
 </section>
 <main>
   <section>
@@ -104,6 +110,7 @@ section>h2{margin:0 0 10px;font:600 10.5px var(--mono);color:var(--fg3);
   </section>
 </main>
 <script src="ship.js"></script>
+<script src="diagram.js"></script>
 <script>
 const LANES = [["queued","laneQueued"],["working","laneWorking"],["gate","laneGate"],
                ["review","laneReview"],["captain","laneCaptain"],["merged","laneMerged"]];
@@ -131,6 +138,9 @@ function chrome() {
   document.getElementById("langs").querySelectorAll("button").forEach(b =>
     b.onclick = () => { lang = b.dataset.l; localStorage.setItem("board.lang", lang);
       document.documentElement.lang = lang; chrome();
+      // straight away, so the drawing changes language with the chrome
+      // rather than after the state comes back
+      DIAGRAM.mount(document.getElementById("deck"), lang).catch(() => {});
       fetch("/api/state").then(x => x.json()).then(render).catch(() => {}); });
 }
 
@@ -160,6 +170,7 @@ function render(s) {
     return `<div class="dcard"><div class="meta">${esc(d.id)} · ${esc(d.task || "")}` +
       (d.pr ? ` · <a href="https://github.com/BenjaminLu/firstmate-workflow/pull/${d.pr}" target="_blank" rel="noreferrer">#${d.pr}</a>` : "") +
       `</div><h3>${esc(d.title || t("waiting"))}</h3>` +
+      DIAGRAM.embed(d.id) +
       (d.kind === "merge"
         ? `<ul class="gates">${GATES().map((g,i)=>`<li class="${gates[i]?"y":"n"}"><i>${gates[i]?"&#10003;":"&#8211;"}</i>${i+1}. ${g}</li>`).join("")}</ul>`
         : "") +
@@ -171,9 +182,13 @@ function render(s) {
        </div></div>`;
   }).join("");
   deck.querySelectorAll("button").forEach(b => b.onclick = () => answer(b.dataset.id, b.dataset.c));
+  // the diagrams arrive after the card: mount checks each one is there
+  // before it is shown, so a decision without one leaves no empty frame
+  DIAGRAM.mount(deck, lang).catch(() => {});
 
   const crew = SHIP.render(document.getElementById("scene"), s, t);
   SHIP.roster(document.getElementById("roster"), crew, t);
+  SHIP.captain(document.getElementById("captain"), pend.length, t);
   // a merge that lands while the board is open is worth a broadside
   if (lastMerged !== null && s.counts.merged > lastMerged) SHIP.ahoy(document.getElementById("scene"));
   lastMerged = s.counts.merged;

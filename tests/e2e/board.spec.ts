@@ -3,7 +3,7 @@
 // moves would fail on the animation and pass on the wrong crew.
 import { test, expect, type Page } from "@playwright/test";
 import { makeRoot, startBoard, stopBoard, ROOT } from "./fixture";
-import { readFileSync, existsSync } from "node:fs";
+import { appendFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 const EN = JSON.parse(readFileSync(join(ROOT, "i18n/ui.en.json"), "utf8"));
@@ -44,19 +44,34 @@ for (const lang of ["en", "zh-TW", "zh-CN"]) {
   test(`the board reads in ${lang}`, async ({ page }) => {
     await open(page, lang);
 
-    // the crew is the state, not a decoration: firstmate, five tasks, captain
-    await expect(page.locator(".scene .pivot")).toHaveCount(CREW.length + 2);
-    await expect(page.locator(".roster li")).toHaveCount(CREW.length + 2);
+    // the crew are agents: firstmate, one per working agent, the captain
+    await expect(page.locator(".scene .pivot")).toHaveCount(CREW.length + 1);
+    await expect(page.locator(".roster li")).toHaveCount(CREW.length + 1);
     for (const s of new Set(CREW)) {
       await expect(page.locator(`.scene .fig.s-${s}`).first()).toBeVisible();
     }
-    await expect(page.locator(".scene .fig.r-cap")).toHaveCount(1);
+    // the captain is NOT on the deck: the crew are agents doing work and
+    // he is the person they are waiting on
+    await expect(page.locator(".scene .fig.r-cap")).toHaveCount(0);
+    await expect(page.locator("#captain .fig.r-cap")).toHaveCount(1);
+    // the badge counts the cards, rather than being pinned to the one
+    // this fixture happens to have
+    const cards = await page.locator(".dcard").count();
+    await expect(page.locator("#captain .capsays i")).toHaveText(String(cards));
+    expect(cards).toBeGreaterThan(0);
     // every crewman says who he is and what he is on, over his own head
-    await expect(page.locator(".scene .bub")).toHaveCount(CREW.length + 2);
+    await expect(page.locator(".scene .bub")).toHaveCount(CREW.length + 1);
     await expect(page.locator(".scene .bub:not(.mini) .job").first()).not.toBeEmpty();
-    const named = await page.locator(".scene .bub .who").allInnerTexts();
+    // the full bubbles name the agent; the chips below them name the
+    // task, because a chip with only a name says nothing about the work
+    const named = await page.locator(".scene .bub:not(.mini) .who").allInnerTexts();
     const listed = await page.locator(".roster .nm").allInnerTexts();
-    expect(named.sort()).toEqual(listed.sort());
+    for (const n of named) expect(listed).toContain(n);
+    // and the roster is named after the agents, not after the tasks
+    const agents = listed.filter((n) => /^(worker|reviewer)-\d+$/.test(n));
+    expect(agents.length).toBe(CREW.length);
+    const jobs = await page.locator(".roster .jb").allInnerTexts();
+    expect(jobs.some((j) => /^T-\d+/.test(j))).toBe(true);
     await expect(page.locator(".scene .port").first()).toBeVisible();
     await expect(page.locator(".scene .mast .sail").first()).toBeVisible();
 
@@ -72,7 +87,7 @@ for (const lang of ["en", "zh-TW", "zh-CN"]) {
     }
     const aboard = await page.locator(".shipbar span").nth(1).innerText();
     expect(aboard).toContain(want("aboard"));
-    expect(aboard).toContain(`${CREW.length + 2}/24`);
+    expect(aboard).toContain(`${CREW.length + 1}/24`);
 
     // and the language is the one that was asked for
     expect(await page.locator(".roster h3 span").first().innerText()).toBe(want("roster"));
@@ -163,6 +178,112 @@ test("nothing here can reach a model", async () => {
   expect(readdirSync(join(board.root, "bin"))).toEqual(["fm-merge.sh"]);
 });
 
+test("no cards, no captain", async ({ page }) => {
+  test.setTimeout(60_000);
+  // Driven by the state the page reads, not by calling into the page:
+  // render() runs again on the board's own refresh and would put him
+  // straight back, so a hand call passes or flakes depending on the tick.
+  const quiet = await startBoard(makeRoot(["working"], false));
+  try {
+    await page.goto(`${quiet.url}/?lang=en`);
+    await expect(page.locator(".scene .pivot").first()).toBeVisible();
+    await expect(page.locator(".dcard")).toHaveCount(0);
+    await expect(page.locator("#captain .fig.r-cap")).toHaveCount(0);
+    // his OWN decision, not his ancestor's: #captain sits inside
+    // #deckwrap, which the page hides whenever there are no cards, so
+    // toBeHidden() here is true whatever SHIP.captain did with him.
+    await expect(page.locator("#captain")).toHaveAttribute("hidden", "");
+  } finally { stopBoard(quiet); }
+});
+
+test("the captain keeps his own block on a phone", async ({ page }) => {
+  test.setTimeout(60_000);
+  // At 760px and under the block becomes its own column, and an author
+  // `display` at that width beats the user agent's [hidden] rule - so
+  // the width that rearranges him is also the width where hiding him
+  // can quietly stop working. Both halves, at the width itself.
+  await page.setViewportSize({ width: 375, height: 800 });
+  const waiting = await startBoard(makeRoot(["working"], true));
+  try {
+    await page.goto(`${waiting.url}/?lang=en`);
+    await expect(page.locator(".dcard").first()).toBeVisible();
+    await expect(page.locator("#captain .fig.r-cap")).toHaveCount(1);
+    await expect(page.locator("#captain")).toBeVisible();
+    // beside the cards, not on the deck, at this width as at any other
+    await expect(page.locator(".scene .fig.r-cap")).toHaveCount(0);
+    const box = await page.locator("#captain").boundingBox();
+    expect(box!.width).toBeGreaterThan(0);
+    expect(box!.height).toBeGreaterThan(0);
+    // and the guard that keeps `hidden` working at this width. It has to
+    // be provoked from here: the page only ever hides him when there are
+    // no cards, and then #deckwrap is hidden too and hides him whatever
+    // this rule says - which is why removing the rule broke nothing
+    // until this line existed. The rule is the contract for
+    // `.captain[hidden]`, so the attribute is what sets it.
+    //
+    // Not a race with the board's own clock, and asserted rather than
+    // argued: the page renders when the event log changes and at no
+    // other time, so nothing is going to undo this on a tick. The proof
+    // is the second half - a real event goes into the log, the render
+    // it triggers puts him back, and the page is shown to be the owner
+    // of the attribute this half just borrowed.
+    await page.evaluate(() => { document.getElementById("captain")!.hidden = true; });
+    await expect(page.locator("#captain")).toBeHidden();
+    appendFileSync(join(waiting.root, "state/events.jsonl"),
+      JSON.stringify({ ts: "2026-09-21T10:00:00Z", actor: "worker-9", task: "T-001",
+                       type: "dispatched", summary: { en: "late", "zh-TW": "late" } }) + "\n");
+    await expect(page.locator("#captain")).toBeVisible({ timeout: 10_000 });
+  } finally { stopBoard(waiting); }
+  const quiet = await startBoard(makeRoot(["working"], false));
+  try {
+    await page.goto(`${quiet.url}/?lang=en`);
+    await expect(page.locator(".scene .pivot").first()).toBeVisible();
+    await expect(page.locator("#captain")).toHaveAttribute("hidden", "");
+  } finally { stopBoard(quiet); }
+});
+
+test("a crewman below the top deck still names the task he is on", async ({ page }) => {
+  test.setTimeout(60_000);
+  // Criterion 3 has no viewport qualifier, and a crowded ship is where
+  // the name chips appear - the full bubble would blindfold the crew
+  // standing over it, so the chip has to carry the name and the roster
+  // the job. Nothing covered the chip.
+  const many = await startBoard(makeRoot(Array(9).fill("working"), false));
+  try {
+    await page.goto(`${many.url}/?lang=en`);
+    await expect(page.locator(".scene .pivot").first()).toBeVisible();
+    const minis = page.locator(".scene .bub.mini");
+    expect(await minis.count()).toBeGreaterThan(0);
+    // the task, not merely non-empty: a chip holding the agent's name is
+    // also non-empty, which is what it held before and why "not blank"
+    // was an assertion that passed on the old code
+    for (const text of await minis.locator(".who").allInnerTexts()) {
+      expect(text.trim()).toMatch(/^T-\d+$/);
+    }
+    // and the roster still carries what each of them is on
+    const jobs = await page.locator(".roster .jb").allInnerTexts();
+    expect(jobs.filter((j) => /^T-\d+/.test(j)).length).toBe(9);
+  } finally { stopBoard(many); }
+});
+
+test("the ship follows the crew, not the backlog", async ({ page }) => {
+  test.setTimeout(60_000);
+  // The bug this task replaces: one figure per in-flight task. A fixture
+  // with one agent per task cannot tell the two apart, which is why the
+  // old one looked fine - so this is twelve tasks in flight and one agent
+  // on them, and it has to be a small ship with one crewman aboard
+  // besides firstmate.
+  const many = await startBoard(makeRoot(Array(12).fill("working"), false, "one-worker"));
+  try {
+    await page.goto(`${many.url}/?lang=en`);
+    await expect(page.locator(".scene .pivot").first()).toBeVisible();
+    expect(Number(await page.locator(".scene").getAttribute("data-crew"))).toBe(2);
+    await expect(page.locator(".roster li")).toHaveCount(2);
+    const small = await page.locator(".scene").getAttribute("data-rate");
+    expect(small).toBe("rate1");        // two aboard is the smallest ship
+  } finally { stopBoard(many); }
+});
+
 test("the ship grows with the crew", async ({ page }) => {
   test.setTimeout(60_000);   // starts a second board in its body
   // zh-TW like every other interaction: the criterion puts the three
@@ -170,7 +291,7 @@ test("the ship grows with the crew", async ({ page }) => {
   await open(page, "zh-TW");
   const small = await page.locator(".scene").getAttribute("data-rate");
   const crewNow = Number(await page.locator(".scene").getAttribute("data-crew"));
-  expect(crewNow).toBe(CREW.length + 2);
+  expect(crewNow).toBe(CREW.length + 1);
   const big = await startBoard(makeRoot(Array(20).fill("working"), false));
   try {
     await page.goto(`${big.url}/?lang=en`);
