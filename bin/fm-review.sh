@@ -16,7 +16,7 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
 
-REPO="${FM_ROOT:-$(pwd)}"; TASK=''; BRANCH=''; PR=''; ROUND=1; VENDOR=''
+REPO="${FM_ROOT:-$(pwd)}"; TASK=''; BRANCH=''; PR=''; ROUND=1; VENDOR=''; NAME=''
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -33,7 +33,10 @@ done
   echo "usage: fm-review.sh --task <id> --branch <name> [--pr N] [--round N]" >&2; exit 64; }
 cd "$REPO" || { echo "fm-review: no repo at $REPO" >&2; exit 64; }
 
-emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor reviewer-1 --task "$TASK" "$@" >/dev/null 2>&1 </dev/null || true; }
+# per run, like the worker's: a constant actor collapses two concurrent
+# rounds into one crewman carrying whichever task the second one touched
+NAME="${NAME:-reviewer-$$}"
+emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor "$NAME" --task "$TASK" "$@" >/dev/null 2>&1 </dev/null || true; }
 
 # The task spec comes from the branch under review, not from whatever is
 # checked out. A task defined on its own branch - which is how a new one
@@ -82,6 +85,13 @@ FM_SESSION_ID="$(printf '%s-%s-4%s-a%s-%s' \
   "$(rand_hex 4)" "$(rand_hex 2)" "$(rand_hex 2 | cut -c2-4)" \
   "$(rand_hex 2 | cut -c2-4)" "$(rand_hex 6)")"
 export FM_SESSION_ID
+
+# A run that ends has to say so. Without it "aboard" means "ever touched
+# a task that is not finished yet", the board draws every actor that has
+# ever run, and the ship's rate follows the history instead of what is
+# happening now. On every exit path, including the ones that give up.
+finished() { emit --type agent_finished --en "run finished" --tw "這次執行結束"; }
+trap finished EXIT
 
 mkdir -p "$work/out"
 # The reviewer's evidence: a verdict marker. A signed review IS the run's

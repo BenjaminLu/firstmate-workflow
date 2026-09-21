@@ -258,17 +258,34 @@ suites=(tests/*.test.sh)
 if [ ${#suites[@]} -eq 0 ]; then
   skip "no suites yet"
 else
-  # to a file, never $(...): a suite that starts a server leaves a child
-  # holding the pipe, and command substitution waits for that pipe to close
-  tmp="$(mktemp)"
+  # In parallel, because they are independent - every one builds its own
+  # temporary root and the ones that listen pick their own port - and the
+  # gate is measured in wall clock against a budget the design sets. Run
+  # one after another they took 74s; the work did not change.
+  #
+  # To a file, never $(...): a suite that starts a server leaves a child
+  # holding the pipe, and command substitution waits for that pipe to
+  # close. The files are also what keeps the output in a fixed order
+  # rather than interleaved.
+  outdir="$(mktemp -d)"
+  jobs_max="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
+  [ "$jobs_max" -ge 2 ] || jobs_max=2
+  running=0
   for t in "${suites[@]}"; do
-    if bash "$t" > "$tmp" 2>&1; then
+    ( bash "$t" > "$outdir/$(basename "$t").out" 2>&1; echo $? > "$outdir/$(basename "$t").rc" ) &
+    running=$((running + 1))
+    if [ "$running" -ge "$jobs_max" ]; then wait -n 2>/dev/null || wait; running=$((running - 1)); fi
+  done
+  wait
+  for t in "${suites[@]}"; do
+    b="$(basename "$t")"
+    if [ "$(cat "$outdir/$b.rc" 2>/dev/null)" = "0" ]; then
       pass "$t"
     else
-      flunk "$t"; cat "$tmp"
+      flunk "$t"; cat "$outdir/$b.out" 2>/dev/null
     fi
   done
-  rm -f "$tmp"
+  rm -rf "$outdir"
 fi
 
 stage "bun tests"

@@ -121,7 +121,7 @@ const SHIP = (() => {
   function crewOf(s, T) {
     const label = { firstmate: T("roleFirstmate"), worker: T("roleWorker"),
                     reviewer: T("roleReviewer"), captain: T("roleCaptain") };
-    return (s.crew || []).filter((a) => a.role !== "captain").slice(0, 24).map((a) => ({
+    return (s.crew || []).slice(0, 24).map((a) => ({
       id: a.id,
       role: ROLE[a.role] || "w",
       state: a.state || "working",
@@ -251,7 +251,10 @@ const SHIP = (() => {
         `<span class="nm">${esc(c.name)}</span>` +
         `<span class="st">${esc(T("lane" + c.state[0].toUpperCase() + c.state.slice(1)))}</span>` +
         `<span class="jb" title="${esc(c.job)}">${esc(c.job)}` +
-        (c.session ? ` <code class="sid" title="claude --resume ${esc(c.session)}">${esc(c.session.slice(0, 8))}</code>` : "") +
+        (c.session
+          ? ` <code class="sid" title="${esc(T("openAgent"))}: claude --resume ${esc(c.session)}">` +
+            `${esc(c.session.slice(0, 8))}</code>`
+          : "") +
         `</span></li>`).join("") + `</ul>`;
   }
 

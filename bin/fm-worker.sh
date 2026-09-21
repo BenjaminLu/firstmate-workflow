@@ -70,6 +70,13 @@ FM_SESSION_ID="$(printf '%s-%s-4%s-a%s-%s' \
   "$(rand_hex 4)" "$(rand_hex 2)" "$(rand_hex 2 | cut -c2-4)" \
   "$(rand_hex 2 | cut -c2-4)" "$(rand_hex 6)")"
 export FM_SESSION_ID
+# A run that ends has to say so. Without it "aboard" means "ever touched
+# a task that is not finished yet", the board draws every actor that has
+# ever run, and the ship's rate follows the history instead of what is
+# happening now. On every exit path, including the ones that give up.
+finished() { emit --type agent_finished --en "run finished" --tw "這次執行結束"; }
+trap finished EXIT
+
 emit --type dispatched --data "$(jq -cn --arg s "$FM_SESSION_ID" '{session:$s}')" \
      --en "picked up $TASK (session $FM_SESSION_ID)" \
      --tw "接下 ${TASK}（session ${FM_SESSION_ID}）"

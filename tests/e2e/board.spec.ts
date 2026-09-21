@@ -88,6 +88,13 @@ for (const lang of ["en", "zh-TW", "zh-CN"]) {
     // and the conversion actually changed something, or "derived" would be
     // satisfied by a table that does nothing
     if (lang === "zh-CN") expect(CN.roster).not.toBe(TW.roster);
+    // the session badge: eight characters to read, the whole id and a
+    // translated instruction in the title, so a crewman can be opened
+    const sid = page.locator(".roster .sid").first();
+    await expect(sid).toHaveText(/^[0-9a-f]{8}$/);
+    const tip = await sid.getAttribute("title");
+    expect(tip).toContain("claude --resume");
+    expect(tip).toContain(want("openAgent"));
     expect(await page.evaluate(() => document.documentElement.lang)).toBe(lang);
   });
 }
@@ -170,6 +177,24 @@ test("nothing here can reach a model", async () => {
   const { readdirSync } = await import("node:fs");
   expect(existsSync(join(board.root, "bin/adapters"))).toBe(false);
   expect(readdirSync(join(board.root, "bin"))).toEqual(["fm-merge.sh"]);
+});
+
+test("the ship follows the crew, not the backlog", async ({ page }) => {
+  test.setTimeout(60_000);
+  // The bug this task replaces: one figure per in-flight task. A fixture
+  // with one agent per task cannot tell the two apart, which is why the
+  // old one looked fine - so this is twelve tasks in flight and one agent
+  // on them, and it has to be a small ship with one crewman aboard
+  // besides firstmate.
+  const many = await startBoard(makeRoot(Array(12).fill("working"), false, "one-worker"));
+  try {
+    await page.goto(`${many.url}/?lang=en`);
+    await expect(page.locator(".scene .pivot").first()).toBeVisible();
+    expect(Number(await page.locator(".scene").getAttribute("data-crew"))).toBe(2);
+    await expect(page.locator(".roster li")).toHaveCount(2);
+    const small = await page.locator(".scene").getAttribute("data-rate");
+    expect(small).toBe("rate1");        // two aboard is the smallest ship
+  } finally { stopBoard(many); }
 });
 
 test("the ship grows with the crew", async ({ page }) => {

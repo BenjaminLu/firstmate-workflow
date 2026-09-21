@@ -72,14 +72,10 @@ test("the crew are the agents the server named, and 24 is the deck limit", () =>
   // and each one says the task it is on, not its own name twice
   expect(c[1].job).toBe("T-0 \u00b7 task 0");
   expect(SHIP.crewOf(state(40), T).length).toBe(24);
-  // the captain is not crew: he is the person they are waiting on, and he
-  // stands beside the cards rather than on a deck
-  const withDecision = SHIP.crewOf({
-    ...state(1),
-    crew: [...state(1).crew, { id: "captain", role: "captain", state: "captain", task: null }],
-  }, T);
-  expect(withDecision.some((x: any) => x.role === "cap")).toBe(false);
-  expect(withDecision.length).toBe(2);
+  // the captain is not in this list at all: he is the person they are
+  // waiting on, drawn beside the cards from the pending deck, and the
+  // server does not put him here either - one source, not two
+  expect(SHIP.crewOf(state(1), T).some((x: any) => x.role === "cap")).toBe(false);
 });
 
 test("a pose is a class, and every action holds a prop", () => {

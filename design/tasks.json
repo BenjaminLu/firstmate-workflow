@@ -632,11 +632,13 @@
       "acceptance": [
         "a crewman is an agent that is working, not a task and not a pull request",
         "the crew comes from the actors in the event log, derived by the server",
-        "firstmate is always aboard; the captain is aboard while a decision is pending",
         "an agent's bubble says which task it is on, and the roster says the same",
         "two agents on two tasks are two crewmen; one agent that has moved between tasks is one",
         "github is not an agent and is never aboard",
-        "the ship's rate follows the number of agents, which is the concurrency, not the backlog"
+        "the ship's rate follows the number of agents, which is the concurrency, not the backlog",
+        "the captain is not crew: he is drawn beside the cards, from the same pending deck the cards come from, and nothing else derives him",
+        "an agent that has finished its run is not aboard, whatever became of the task",
+        "a run says when it ends, on every exit path including the ones that give up"
       ]
     }
   ]

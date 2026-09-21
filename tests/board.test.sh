@@ -136,6 +136,55 @@ assert_eq "669cb22e-b169-47e6-abf4-fdef47460310" \
 assert_eq "null" "$(jq -r '.crew[]|select(.id=="worker-2")|.session' <<<"$sks")" \
   "and one that never reported a session simply has none"
 
+# An agent that has finished its run has gone home, whatever became of
+# the task. Without this "aboard" meant "ever touched a task that is not
+# finished yet": a worker that died at a gate was drawn working for ever,
+# and the rate followed the history rather than what is happening now.
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-9 --task T-A --type dispatched \
+  --en "started" --tw "開工" >/dev/null
+sr="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_contains "$(jq -r '.crew[].id' <<<"$sr" | tr '\n' ' ')" "worker-9" \
+  "an agent that started is aboard"
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-9 --task T-A --type agent_finished \
+  --en "run finished" --tw "執行結束" >/dev/null
+sr2="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_lacks "$(jq -r '.crew[].id' <<<"$sr2" | tr '\n' ' ')" "worker-9" \
+  "and is not aboard once its run has ended, though T-A is still open"
+assert_eq "working" "$(jq -r '.tasks[]|select(.id=="T-A")|.stage' <<<"$sr2")" \
+  "which did not change the task"
+
+# the session belongs to the run, not to the actor for ever: a crewman
+# showing an id from a previous run invites the captain to resume a
+# session that is not the one in front of them
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-8 --task T-A --type dispatched \
+  --data '{"session":"aaaaaaaa-0000-4000-a000-000000000001"}' \
+  --en "run one" --tw "第一次" >/dev/null
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-8 --task T-A --type agent_finished \
+  --en "done" --tw "結束" >/dev/null
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-8 --task T-A --type dispatched \
+  --en "run two, no session reported" --tw "第二次，沒回報 session" >/dev/null
+ss="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "null" "$(jq -r '.crew[]|select(.id=="worker-8")|.session' <<<"$ss")" \
+  "a run that reported no session shows none, not the last run's"
+
+# every state the server sends is one the page can draw: it becomes a
+# class name, a dictionary key and a progress number, so an open set means
+# a crewman with no style and no label
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-7 --task T-B --type dispatched \
+  --en "on a queued task" --tw "在排隊的任務上" >/dev/null
+sv="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+# comments stripped: a state named only in a comment is not one the page
+# can draw, and the hygiene lint is right to insist
+css_rules="$(sed 's|/\*.*\*/||g; s|^[[:space:]]*/\*.*||' "$ROOT/board/public/ship.css")"
+for st in $(jq -r '.crew[].state' <<<"$sv" | sort -u); do
+  assert_contains "$css_rules" ".fig.s-$st" "the page can draw state $st"
+done
+
+# the captain is not crew: nothing in the server's list is him, and the
+# page draws him from the same pending deck the cards come from
+assert_lacks "$(jq -r '.crew[].role' <<<"$sr2" | tr '\n' ' ')" "captain" \
+  "the server does not put the captain in the crew"
+
 # an agent whose task is finished has gone home
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --task T-B --type merged --pr 3 \
   --en "merged" --tw "已合併" >/dev/null

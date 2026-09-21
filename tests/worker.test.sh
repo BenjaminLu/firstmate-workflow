@@ -117,7 +117,8 @@ assert_ok "cd '$r5' && git cat-file -e '$branch:src/saw-ci'" "and why the requir
 # open a new one fails at the last step with its work already pushed
 assert_lacks "$(cat "$d5/ghcalls" 2>/dev/null)" "pr create" \
   "the second round reuses the pull request it already opened"
-assert_contains "$(jq -r '.type + " " + (.pr|tostring)' < "$r5/state/events.jsonl" | tail -1)" "9" \
+# the last event is now agent_finished, so look for the push itself
+assert_contains "$(jq -r 'select(.type=="commit_pushed")|.pr|tostring' < "$r5/state/events.jsonl" | tail -1)" "9" \
   "and its event points at that number"
 rm -rf "$d5"
 
@@ -164,6 +165,27 @@ assert_contains "$(cat "$rescued" 2>/dev/null)" "half finished" "with what was i
 assert_contains "$(jq -r .type < "$r7/state/events.jsonl" | tr '\n' ' ')" "worker_crashed" \
   "and the log says it happened"
 rm -rf "$d7"
+
+# A run says when it ends, on every exit path - including the ones that
+# give up. Without it the board cannot tell a worker that is running from
+# one that died at a gate, and draws both.
+for scenario in clean failed; do
+  da="$(fixture)"; ra="$da/repo"; GHa="$(ghstub "$da")"
+  if [ "$scenario" = failed ]; then
+    cat > "$ra/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+exit 1
+M
+    chmod +x "$ra/bin/adapters/mock.sh"
+  fi
+  ( cd "$ra" && FM_ROOT="$ra" FM_GH="$GHa" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+  assert_contains "$(jq -r .type < "$ra/state/events.jsonl" | tr '\n' ' ')" "agent_finished" \
+    "a $scenario run says when it ended"
+  assert_eq "agent_finished" "$(jq -r .type < "$ra/state/events.jsonl" | tail -1)" \
+    "and it is the last thing it says"
+  rm -rf "$da"
+done
 
 # a vendor named in config.yaml with no adapter behind it is a typo. It has
 # to be found before anything runs, or a real vendor does the work and the

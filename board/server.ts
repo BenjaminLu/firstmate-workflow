@@ -29,6 +29,25 @@ const readEvents = (): Event[] => {
 
 // A task's state is whatever the log last said about it. The board never
 // decides; it reports.
+// What a crewman is, declared: every field on every entry, so a missing
+// one is a type error rather than an `undefined` the client happens to
+// tolerate. The state is a closed set because the client turns it into a
+// class name, a dictionary key and a progress number - an open one meant
+// an actor on a blocked task reached the page as `st-blocked`, which no
+// stylesheet rule and no dictionary key covers.
+type CrewState = "queued" | "working" | "gate" | "review" | "captain";
+type Crew = {
+  id: string;
+  role: "firstmate" | "worker" | "reviewer";
+  state: CrewState;
+  task: string | null;
+  title: string | null;
+  session: string | null;
+};
+const CREW_STATE = (s: string | undefined): CrewState =>
+  s === "queued" || s === "working" || s === "gate" || s === "review" || s === "captain"
+    ? s : "working";
+
 const STAGE: Record<string, string> = {
   dispatched: "working", commit_pushed: "working", pr_opened: "review",
   gate_failed: "gate", gate_passed: "review", review_opened: "review",
@@ -79,21 +98,38 @@ const state = () => {
   //
   // An agent is engaged when the last thing it did concerns a task that is
   // not finished. github is the sync, not an agent, and is never aboard.
-  // the session each agent is running under, so a crewman on the board can
-  // be opened and read rather than only watched
-  const sessionOf = new Map<string, string>();
+  // The session an agent is running under, so a crewman on the board can
+  // be opened and read rather than only watched. Scoped to the run: the
+  // first version kept the last session seen for an actor anywhere in the
+  // log, so a crewman could show an id from a previous run and invite the
+  // captain to resume a session that is not the one in front of them.
+  const sessionIn = (e: Event | undefined): string | null => {
+    const d = (e as Record<string, unknown> | undefined)?.data as Record<string, unknown> | undefined;
+    return d && typeof d.session === "string" && d.session ? d.session : null;
+  };
+  const sessionOfRun = new Map<string, string>();   // actor -> this run's id
   for (const e of events) {
-    const sid = (e as Record<string, unknown>).data as Record<string, unknown> | undefined;
-    if (e.actor && sid && typeof sid.session === "string") sessionOf.set(e.actor, sid.session);
+    if (!e.actor) continue;
+    if (e.type === "agent_finished") { sessionOfRun.delete(e.actor); continue; }
+    const s = sessionIn(e);
+    if (s) sessionOfRun.set(e.actor, s);
   }
   // firstmate included: it is an agent like the others and it does work
   // of its own. Pinning it to "dispatching" was the board saying what the
   // role is for rather than what the agent is doing, and it is the one
   // crewman a reader most wants to be told the truth about.
+  // Aboard means RUNNING. An actor whose last word was agent_finished has
+  // gone home, whatever became of the task: without that, "aboard" meant
+  // "ever touched a task that is not finished yet", a worker that died at
+  // a gate was drawn working for ever, and the rate followed the history
+  // rather than what is happening now.
   const lastByActor = new Map<string, Event>();
   for (const e of events) {
     if (!e.actor || e.actor === "github" || e.actor === "captain") continue;
     lastByActor.set(e.actor, e);
+  }
+  for (const [actor, e] of [...lastByActor]) {
+    if (e.type === "agent_finished") lastByActor.delete(actor);
   }
   const done = new Set(tasks.filter((t) => ["merged", "closed"].includes(t.stage))
                             .map((t) => t.id as string));
@@ -104,12 +140,12 @@ const state = () => {
   const fm = lastByActor.get("firstmate");
   const fmTask = fm?.task && !done.has(fm.task) ? fm.task : null;
   const fmT = fmTask ? tasks.find((x) => x.id === fmTask) : undefined;
-  const crew: Array<Record<string, unknown>> = [{
+  const crew: Crew[] = [{
     id: "firstmate", role: "firstmate",
     state: !events.some((e) => e.type === "greenlit") ? "queued"
-         : (fmT?.stage ?? "working"),
-    task: fmTask, title: fmT?.title ?? null,
-    session: sessionOf.get("firstmate") ?? null,
+         : CREW_STATE(fmT?.stage as string | undefined),
+    task: fmTask, title: (fmT?.title as string) ?? null,
+    session: sessionOfRun.get("firstmate") ?? null,
   }];
   for (const [actor, e] of lastByActor) {
     if (actor === "firstmate") continue;   // already aboard, above
@@ -119,15 +155,22 @@ const state = () => {
     crew.push({
       id: actor,
       role: actor.startsWith("reviewer") ? "reviewer" : "worker",
-      state: t?.stage ?? "working",
-      task, title: t?.title ?? null,
-      session: sessionOf.get(actor) ?? null,
+      state: CREW_STATE(t?.stage as string | undefined),
+      task, title: (t?.title as string) ?? null,
+      session: sessionOfRun.get(actor) ?? null,
     });
   }
-  if (pending().length) crew.push({ id: "captain", role: "captain", state: "captain", task: null });
+  // no captain here on purpose. He is not crew - the crew are agents
+  // doing work and he is the person they are waiting on - and he is drawn
+  // beside the cards from the same pending deck the cards come from. The
+  // first version emitted him here AND re-derived him on the page, which
+  // is the two sources this file argues against three comments above.
 
   return {
-    crew,
+    // the deck holds 24. Truncating only on the client left the server
+    // building an unbounded array into every payload and the page
+    // silently dropping the tail.
+    crew: crew.slice(0, 24),
     greenlit: events.some((e) => e.type === "greenlit"),
     counts: {
       merged: tasks.filter((t) => t.stage === "merged").length,
