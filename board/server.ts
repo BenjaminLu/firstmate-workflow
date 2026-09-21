@@ -59,10 +59,15 @@ const state = () => {
     if (s) stage.set(e.task, s);
     if (typeof e.pr === "number") pr.set(e.task, e.pr);
   }
+  // A pending decision is a fact on disk, not a point in a history: while
+  // the card is up, the task is the captain's whatever else has been said
+  // since. T-016 read as "working" because a dispatch that should never
+  // have happened landed after the card went up.
+  const awaiting = new Set(pending().map((p: Record<string, unknown>) => String(p.task ?? "")));
   const tasks = defs.map((d) => ({
     id: d.id, title: d.title, milestone: d.milestone,
     depends_on: d.depends_on ?? [],
-    stage: stage.get(d.id as string) ?? "queued",
+    stage: awaiting.has(d.id as string) ? "captain" : (stage.get(d.id as string) ?? "queued"),
     pr: pr.get(d.id as string) ?? null,
   }));
   return {
