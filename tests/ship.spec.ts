@@ -25,9 +25,25 @@ function host() {
     querySelector: () => stub(), querySelectorAll: () => [] as unknown[],
   };
 }
+// The crew are AGENTS now: the server derives who is running from the
+// actors in the log and the page draws that list. A fixture that wants
+// five crewmen needs five agents, not five tasks - one worker that has
+// moved through three tasks is one crewman.
 const state = (n: number, stage = "working") => ({
   greenlit: true, counts: { merged: 0, inflight: n, blocked: 0, queued: 0 }, pending: [],
+  // the server sends the limit with the list; the page holds no copy of
+  // the number, so a fixture that omitted it made this test pass through
+  // a client-side fallback that no longer exists
+  deckLimit: 24,
   tasks: Array.from({ length: n }, (_, i) => ({ id: `T-${i}`, title: `task ${i}`, stage })),
+  crew: [
+    { id: "firstmate", role: "firstmate", state: "working", task: null },
+    ...Array.from({ length: n }, (_, i) => ({
+      id: stage === "review" ? `reviewer-${i}` : `worker-${i}`,
+      role: stage === "review" ? "reviewer" : "worker",
+      state: stage, task: `T-${i}`, title: `task ${i}`,
+    })),
+  ],
 });
 
 test("a crowd stacks onto more decks, it does not stretch the hull", () => {
@@ -54,14 +70,18 @@ test("every deck carries crew, including the topmost", () => {
   }
 });
 
-test("the crew comes out of the state, and 24 is the deck limit", () => {
+test("the crew are the agents the server named, and 24 is the deck limit", () => {
   const c = SHIP.crewOf(state(3), T);
-  expect(c.map((x: any) => x.id)).toEqual(["firstmate", "T-0", "T-1", "T-2"]);
+  expect(c.map((x: any) => x.id)).toEqual(["firstmate", "worker-0", "worker-1", "worker-2"]);
+  // and each one says the task it is on, not its own name twice
+  expect(c[1].job).toBe("T-0 \u00b7 task 0");
   expect(SHIP.crewOf(state(40), T).length).toBe(24);
-  // queued and merged tasks are ashore, not aboard
-  expect(SHIP.crewOf(state(5, "merged"), T).length).toBe(1);
-  const withDecision = SHIP.crewOf({ ...state(1), pending: [{ id: "d1" }] }, T);
-  expect(withDecision.some((x: any) => x.role === "cap")).toBe(true);
+  // and it is the server's number that decides, not one kept here
+  expect(SHIP.crewOf({ ...state(40), deckLimit: 6 }, T).length).toBe(6);
+  // the captain is not in this list at all: he is the person they are
+  // waiting on, drawn beside the cards from the pending deck, and the
+  // server does not put him here either - one source, not two
+  expect(SHIP.crewOf(state(1), T).some((x: any) => x.role === "cap")).toBe(false);
 });
 
 test("a pose is a class, and every action holds a prop", () => {
@@ -91,6 +111,75 @@ test("every state a crewman can be in is styled and named", () => {
     // the roster names it from the dictionary, so it is switchable
     expect(en["lane" + s[0].toUpperCase() + s.slice(1)]).toBeTruthy();
   }
+});
+
+// The page maps the server's three role names onto short class
+// suffixes and falls back to "unknown" for anything else. The comment
+// beside that line says a mismatch "should be visible, not painted as a
+// worker" - which was reasoning, not code: r-unknown had no rule, so it
+// inherited .fig and looked like an ordinary crewman.
+// The captain's geometry has one source, and the test for that is not a
+// comment saying so. It wrote three properties nothing in his block read
+// - two of them for a sum that a more specific rule overrode - which is
+// the same defect as a literal, pointed the other way.
+// The chip below the top deck carries the task, and falls back to the
+// agent's name when there is none. The fallback is the page's contract
+// with a crew list, not with today's server: firstmate is crew[0] and
+// crew[0] is always on the top row, so nothing the server sends reaches
+// it - and an empty chip is a crewman the board cannot name at all.
+test("a crewman below the top deck with no task is still named on his chip", () => {
+  const s = state(7);
+  const nameless = s.crew[4] as { task?: string | null; title?: string | null; id: string };
+  nameless.task = null; nameless.title = null;
+  const h = host();
+  SHIP.render(h as never, s, T);
+  const minis = [...h.innerHTML.matchAll(/class="bub mini [^"]*"[^>]*><div class="who">([^<]*)</g)]
+    .map((m) => m[1]);
+  expect(minis.length).toBeGreaterThan(0);
+  // no chip is blank, and the taskless one carries the agent's own id
+  for (const m of minis) expect(m.trim()).not.toBe("");
+  expect(minis).toContain(nameless.id);
+});
+
+test("every custom property the captain writes is one his own block reads", () => {
+  const js = readFileSync(join(ROOT, "board/public/ship.js"), "utf8");
+  const body = js.slice(js.indexOf("function captain("), js.indexOf("function roster("));
+  const props = [...body.matchAll(/setProperty\("(--[\w-]+)"/g)].map((m) => m[1]);
+  expect(props.length).toBeGreaterThan(1);
+  // his rules only: a property read somewhere else on the page is not
+  // read HERE, which is the whole of the claim
+  const his = CSS.replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("}")
+    .filter((chunk) => /(^|[\s{,])\.(captain|capwrap|capstand|capsays)\b/.test(chunk.split("{")[0] ?? ""))
+    .join("}");
+  expect(his).toContain(".captain");
+  for (const p of props) expect(his).toContain(`var(${p})`);
+  // and the other way: the column the captain stands in takes its size
+  // from him, rather than a literal that has to be kept in step
+  expect(CSS).toMatch(/\.capwrap\{[^}]*grid-template-columns:auto 1fr/);
+});
+
+test("a role the page does not know is drawn as a mismatch, not as a worker", () => {
+  // every suffix the map can produce has a rule of its own, and the
+  // server's own role union is what decides the set - a fourth role
+  // added there without one here has to fail
+  const roles = readFileSync(join(ROOT, "board/server.ts"), "utf8")
+    .match(/role:\s*("(?:firstmate|worker|reviewer)"(?:\s*\|\s*"\w+")*)/)?.[1]
+    ?.split("|").map((x) => x.trim().replace(/"/g, "")) ?? [];
+  expect(roles.length).toBeGreaterThan(2);
+  for (const r of roles) expect(SHIP.ROLE[r]).toBeTruthy();
+  for (const k of [...Object.values(SHIP.ROLE) as string[], "unknown"]) {
+    expect(CSS).toContain(`.fig.r-${k}`);
+  }
+  // and it reaches the page loudly: a crewman the server sent with a
+  // role this page has never heard of
+  const s = state(1);
+  (s.crew[1] as { role: string }).role = "quartermaster";
+  expect(SHIP.crewOf(s, T)[1].role).toBe("unknown");
+  const h = host();
+  SHIP.render(h as never, s, T);
+  expect(h.innerHTML).toContain("r-unknown");
+  expect(h.innerHTML).not.toContain("r-w ");
 });
 
 test("state and role reach the page as classes", () => {

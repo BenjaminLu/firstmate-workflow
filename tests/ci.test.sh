@@ -21,6 +21,15 @@ assert_contains "$out" "red.test.sh" "names the failing test"
 
 rm -f "$t/tests/red.test.sh" "$t/tests/green.test.sh"
 assert_ok "FM_ROOT='$t' bash '$ROOT/bin/ci.sh'" "passes on a repo with no tests yet"
+# The bash stage has two arms and only one of them reads what a suite
+# said, which reads like a rule enforced in one place out of two. It is
+# not: the other arm runs no suite. Asserted, so the shape cannot change
+# quietly - on a tree with no suites the stage skips and reports on
+# nothing, so there is no second path a suite's verdict can come down.
+empty="$(FM_ROOT="$t" bash "$ROOT/bin/ci.sh" 2>&1)"
+assert_contains "$empty" "no suites yet" "with no suites the bash stage skips"
+assert_fail "grep -qE '^  [+x] tests/' <<< \"\$empty\"" \
+  "and reports on no suite at all, so nothing decides green on the other arm"
 
 assert_ok "test -x '$ROOT/bin/ci.sh'" "ci.sh is executable"
 gha="$ROOT/.github/workflows/ci.yml"
@@ -158,6 +167,82 @@ plant() {   # plant <label> <expected fragment> ; the fixture is built first
   out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
   assert_contains "$out" "$want" "$label"
 }
+
+# The gate decides green by reading what a suite said, because a suite
+# that calls something which does not exist prints to stderr, carries
+# on, and reaches finish green. That decision is the one production
+# change with no test, so here it is.
+{ printf '#!/usr/bin/env bash\n'
+  printf 'nosuch%s "x"\n' helper
+  printf 'exit 0\n'
+} > "$q/tests/silent.test.sh"
+plant "a suite that passes while something in it did not run is a failure" "did not run"
+plant "and the stage prints the line" "nosuchhelper"
+rm -f "$q/tests/silent.test.sh"
+
+# and the negative half: a suite that prints one of those phrases as
+# DATA - asserting a script's own error text, say - is not a suite that
+# broke, so the rule matches the shell's diagnostic prefix and not the
+# words on their own
+{ printf '#!/usr/bin/env bash\n'
+  printf 'echo "the script said: command not found, which is what we assert"\n'
+  printf 'echo "and also: unbound variable"\n'
+  printf 'exit 0\n'
+} > "$q/tests/talks.test.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_contains "$out" "ci: green" "a suite that prints those words as data still passes"
+rm -f "$q/tests/talks.test.sh"
+
+# the rest of the same family: bash says all of these the same way and
+# carries on afterwards. A file that will not exec, and a syntax error
+# in something sourced - which leaves the suite running with half its
+# functions undefined and exiting 0, which is exactly what two spliced
+# lines in a test file did.
+cat > "$q/brokenlib.sh" <<'L'
+f() {
+L
+{ printf '#!/usr/bin/env bash\n'
+  printf '. "%s/brokenlib.sh"\n' "$q"
+  printf 'exit 0\n'
+} > "$q/tests/broken.test.sh"
+plant "a suite that goes on after a syntax error in a sourced file is a failure" "did not run"
+plant "and the stage prints that line too" "syntax error"
+{ printf '#!/usr/bin/env bash\n'
+  printf '/nonexistent/not-a-program\n'
+  printf 'exit 0\n'
+} > "$q/tests/broken.test.sh"
+plant "a suite that goes on after a command it could not exec is a failure" "did not run"
+# `unbound variable` was in the rule with no plant, and it is the one
+# phrase whose place in the set is arguable: under `set -u` a
+# non-interactive bash EXITS, which is the other arm's job. In a
+# SUBSHELL it does not - the subshell dies, the parent carries on, and
+# the suite reaches its end green with a line that never ran. That is
+# what earns it a place here.
+{ printf '#!/usr/bin/env bash\n'
+  printf 'set -u\n'
+  printf '( echo "$NO_SUCH_VARIABLE" )\n'
+  printf 'exit 0\n'
+} > "$q/tests/broken.test.sh"
+plant "a suite that goes on after an unbound variable in a subshell is a failure" "did not run"
+plant "and the stage prints that line as well" "NO_SUCH_VARIABLE"
+rm -f "$q/tests/broken.test.sh" "$q/brokenlib.sh"
+
+# The locale the gate runs a suite under is production, and nothing here
+# would break if the line were deleted: the diagnostics it reads are
+# English on an English machine either way. So the suite asserts the
+# environment itself. LC_MESSAGES pinned to C, and LC_ALL emptied rather
+# than set to C - LC_ALL=C pins collation and ctype for every suite as
+# well, running their sort, grep and tr over UTF-8 in a locale no
+# developer uses.
+cat > "$q/tests/locale.test.sh" <<L
+#!/usr/bin/env bash
+printf 'LC_ALL=[%s] LC_MESSAGES=[%s]\\n' "\${LC_ALL-unset}" "\${LC_MESSAGES-unset}" > "$q/locale"
+exit 0
+L
+LC_ALL=zh_TW.UTF-8 LC_MESSAGES=zh_TW.UTF-8 FM_ROOT="$q" bash "$q/bin/ci.sh" >/dev/null 2>&1
+assert_eq "LC_ALL=[] LC_MESSAGES=[C]" "$(cat "$q/locale")" \
+  "the gate pins the shell's messages to C and leaves the rest of the locale alone"
+rm -f "$q/tests/locale.test.sh" "$q/locale"
 
 # a script that dispatches without closing standard input
 # two, because the criterion says the gate names EVERY offender and a gate

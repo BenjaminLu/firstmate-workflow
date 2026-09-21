@@ -15,7 +15,8 @@ cp "$ROOT/board/public/index.html" "$d/board/public/"
 cat > "$d/design/tasks.json" <<'J'
 {"tasks":[{"id":"T-A","title":"first","milestone":"M0","depends_on":[]},
           {"id":"T-B","title":"second","milestone":"M0","depends_on":["T-A"]},
-          {"id":"T-C","title":"third","milestone":"M0","depends_on":[]}]}
+          {"id":"T-C","title":"third","milestone":"M0","depends_on":[]},
+          {"id":"T-D","title":"fourth","milestone":"M0","depends_on":[]}]}
 J
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --type greenlit --en "go" --tw "開工" >/dev/null
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-A --type dispatched --en "picked up T-A" --tw "領走 T-A" >/dev/null
@@ -80,6 +81,171 @@ assert_eq "captain" "$(jq -r '.tasks[]|select(.id=="T-C")|.stage' <<<"$sc2")" \
   "and stays there while the card is up, whatever is said after"
 rm -f "$d/state/pending/D-12.json"
 
+# firstmate's own state, which nothing read: on a green-lit board with
+# nothing assigned it is the most visible crewman, and an earlier version
+# drew it slumped and grey while its bubble said "dispatching"
+sq="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "working" "$(jq -r '.crew[]|select(.id=="firstmate")|.state' <<<"$sq")" \
+  "green-lit and nothing assigned is working, not stopped"
+
+# firstmate is an agent too, and it does work of its own. Reporting it as
+# "dispatching" whatever it was actually doing was the board saying what
+# the role is for rather than what the agent is on - and firstmate is the
+# crewman a reader most needs the truth about, because it is the one that
+# works outside the board.
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor firstmate --task T-A --type dispatched \
+  --en "firstmate took it itself" --tw "大副自己做" >/dev/null
+sf="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_ne "" "$sf" "the board is answering"
+assert_eq "T-A" "$(jq -r '.crew[]|select(.id=="firstmate")|.task' <<<"$sf")" \
+  "firstmate carries the task it is on"
+assert_eq "1" "$(jq -r '[.crew[]|select(.id=="firstmate")]|length' <<<"$sf")" \
+  "and appears once, not twice"
+
+# The crew are AGENTS, not tasks. One worker that has moved between three
+# tasks is one crewman, and github - which is the sync, not an agent - is
+# never aboard. Drawing one figure per in-flight task put pull requests on
+# the deck and made the ship grow with the backlog.
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-2 --task T-A --type dispatched \
+  --en "on T-A" --tw "在做 T-A" >/dev/null
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-2 --task T-B --type dispatched \
+  --en "on T-B now" --tw "改做 T-B" >/dev/null
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor github --task T-A --type pr_opened --pr 3 \
+  --en "sync" --tw "同步" >/dev/null
+sk="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_ne "" "$sk" "the board is answering"
+ids="$(jq -r '.crew[].id' <<<"$sk" | sort | tr '\n' ' ')"
+assert_contains "$ids" "firstmate" "firstmate is always aboard"
+assert_contains "$ids" "worker-2" "an agent that is working is aboard"
+assert_lacks "$ids" "github" "the sync is not an agent and is never aboard"
+assert_eq "1" "$(jq -r '[.crew[]|select(.id=="worker-2")]|length' <<<"$sk")" \
+  "one agent on three tasks is one crewman, not three"
+assert_eq "T-B" "$(jq -r '.crew[]|select(.id=="worker-2")|.task' <<<"$sk")" \
+  "and it is on the task it moved to"
+# jq -r renders null as the four characters "null", so `assert_ne ""`
+# over jq output is green for a field that is not there at all
+assert_eq "second" "$(jq -r '.crew[]|select(.id=="worker-2")|.title' <<<"$sk")" \
+  "with the task's own title beside it"
+assert_eq "worker" "$(jq -r '.crew[]|select(.id=="worker-2")|.role' <<<"$sk")" \
+  "a worker is a worker"
+
+
+# An agent that has finished its run has gone home, whatever became of
+# the task. Without this "aboard" meant "ever touched a task that is not
+# finished yet": a worker that died at a gate was drawn working for ever,
+# and the rate followed the history rather than what is happening now.
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-9 --task T-A --type dispatched \
+  --en "started" --tw "開工" >/dev/null
+sr="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_contains "$(jq -r '.crew[].id' <<<"$sr" | tr '\n' ' ')" "worker-9" \
+  "an agent that started is aboard"
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-9 --task T-A --type agent_finished \
+  --en "run finished" --tw "執行結束" >/dev/null
+sr2="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_lacks "$(jq -r '.crew[].id' <<<"$sr2" | tr '\n' ' ')" "worker-9" \
+  "and is not aboard once its run has ended, though T-A is still open"
+assert_eq "working" "$(jq -r '.tasks[]|select(.id=="T-A")|.stage' <<<"$sr2")" \
+  "which did not change the task"
+
+
+# every state the server sends is one the page can draw: it becomes a
+# class name, a dictionary key and a progress number, so an open set means
+# a crewman with no style and no label
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-7 --task T-B --type dispatched \
+  --en "on a queued task" --tw "在排隊的任務上" >/dev/null
+sv="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+# Comments stripped across the whole file, not line by line: CSS block
+# comments span lines, and a line-oriented sed leaves lines 2..n of every
+# block behind. A rule named on the second line of a comment would have
+# satisfied this check with nothing in the sheet - which is exactly what
+# the check exists to prevent.
+css_rules="$(perl -0777 -pe 's{/\*.*?\*/}{}gs' "$ROOT/board/public/ship.css")"
+# a loop over server-derived data is green when the data is empty, which
+# is green for a check that read nothing
+# every state the server's own closed set can produce, not the ones this
+# fixture happened to produce: a sixth added without a rule has to fail
+declared="$(sed -n 's/^type CrewState = //p' "$ROOT/board/server.ts" \
+  | tr -d ';"' | tr '|' '\n' | tr -d ' ' | sed '/^$/d')"
+assert_ne "" "$declared" "the crew states are declared in one place"
+for st in $declared; do
+  assert_contains "$css_rules" ".fig.s-$st" "the page can draw state $st"
+done
+# and the animation each of them names actually exists: a --baseAnim
+# pointing at a keyframe nobody defined resolves to nothing, silently,
+# and a check that greps only for the selector cannot tell
+for anim in $(printf '%s' "$css_rules" | grep -oE '\-\-baseAnim:[a-zA-Z0-9_-]+' | cut -d: -f2 | sort -u); do
+  assert_contains "$css_rules" "@keyframes $anim" "the keyframe $anim is defined"
+done
+# and what the fixture produced is inside that set
+for st in $(jq -r '.crew[].state' <<<"$sv" | sort -u); do
+  assert_contains "$declared" "$st" "state $st is one the server declares"
+done
+
+# the captain is not crew: nothing in the server's list is him, and the
+# page draws him from the same pending deck the cards come from
+assert_lacks "$(jq -r '.crew[].role' <<<"$sr2" | tr '\n' ' ')" "captain" \
+  "the server does not put the captain in the crew"
+
+# The role is STATED, and the test has to be able to tell that from the
+# name fallback - so the actor is called something the fallback would get
+# wrong. Deleting the two data.role lines turns this red; before, every
+# fixture used a name the fallback happened to read correctly.
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor rev-9 --task T-A --type review_opened \
+  --data '{"role":"reviewer"}' --en "a reviewer by another name" --tw "換個名字的檢查官" >/dev/null
+sn="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "reviewer" "$(jq -r '.crew[]|select(.id=="rev-9")|.role' <<<"$sn")" \
+  "an actor named rev-9 is a reviewer because the run said so"
+
+# a log written before the role was stated: the fallback that reads the
+# actor's name is what every existing log looks like
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor reviewer-old --task T-A --type review_opened \
+  --en "an old event with no role" --tw "沒有 role 的舊事件" >/dev/null
+so="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "reviewer" "$(jq -r '.crew[]|select(.id=="reviewer-old")|.role' <<<"$so")" \
+  "an event with no stated role falls back to the actor's name"
+
+# a task that was closed rather than merged also sends its agent home
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-closed --task T-C --type dispatched \
+  --en "on T-C" --tw "在做 T-C" >/dev/null
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --task T-C --type closed \
+  --en "abandoned" --tw "放棄" >/dev/null
+sclosed="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_lacks "$(jq -r '.crew[].id' <<<"$sclosed" | tr '\n' ' ')" "worker-closed" \
+  "a closed task sends its agent home too, not only a merged one"
+
+# A new event type has readers beyond this one. fm-dispatch keys on
+# dispatched minus merged-or-closed, fm-run on pr_opened and merged,
+# fm-sync-prs on type and pr - none of them has a default branch that
+# does anything with an unknown type, and this asserts that rather than
+# asserting it in prose: the same log, before and after an
+# agent_finished, has to give the dispatcher the same answer.
+before="$(cd "$d" && FM_ROOT="$d" "$ROOT/bin/fm-dispatch.sh" --dry-run --repo "$d" 2>&1 | sort)"
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-2 --task T-A --type agent_finished \
+  --en "ended" --tw "結束" >/dev/null
+after="$(cd "$d" && FM_ROOT="$d" "$ROOT/bin/fm-dispatch.sh" --dry-run --repo "$d" 2>&1 | sort)"
+assert_eq "$before" "$after" "an ending does not change what the dispatcher would start"
+
+# 24 is one number, and the page is told what it was
+assert_eq "24" "$(jq -r '.deckLimit' <<<"$sv")" "the server says what the deck holds"
+
+# An agent whose task is finished has gone home. The backstop for a run
+# that never got to say it ended, and the merged half of it: the closed
+# half is covered above by worker-closed.
+#
+# On worker-7, and not on worker-2, which is what this asserted before:
+# worker-2 said agent_finished ten lines up, the ending is checked first
+# and had already taken it off the deck, so the assertion was green with
+# `merged` deleted from the server's FINAL set. worker-7 was dispatched
+# on T-B and has never said anything since.
+sbefore="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_contains "$(jq -r '.crew[].id' <<<"$sbefore" | tr '\n' ' ')" "worker-7" \
+  "an agent on an open task, which has not said it ended, is aboard"
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --task T-B --type merged --pr 3 \
+  --en "merged" --tw "已合併" >/dev/null
+sk2="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_lacks "$(jq -r '.crew[].id' <<<"$sk2" | tr '\n' ' ')" "worker-7" \
+  "and is not aboard once that task is merged"
+
 # merged is where a task stops. A review round run against the branch
 # afterwards would otherwise move it back to "in review", which reads as
 # work in progress that nobody is doing.
@@ -121,6 +287,68 @@ wait "$writer" 2>/dev/null || true
 stream="$(cat "$d/stream")"
 assert_contains "$stream" "event: state" "the stream opens with the state"
 assert_contains "$stream" "merged" "an event written while the stream is open reaches it"
+
+# The captain is not an agent and is never aboard. Not covered by the
+# assertion above it, which reads roles rather than ids, nor by anything
+# else here: every captain event in this fixture until now has been on a
+# task that is merged or closed, so `done.has(task)` would have dropped
+# him anyway and deleting the clause changed nothing.
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --task T-D --type dispatched \
+  --en "the captain says something about an open task" --tw "船長對未完成的任務說話" >/dev/null
+scap="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_lacks "$(jq -r '.crew[].id' <<<"$scap" | tr '\n' ' ')" "captain" \
+  "the captain is not crew even when he speaks about an open task"
+
+# The role is what the run SAID, and the fallback that reads the name is
+# only for logs written before it said anything. An actor named like a
+# reviewer that states worker is the only case the stated-role branch
+# decides on its own - rev-9 covers the mirror of it.
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor reviewer-really-a-worker --task T-D \
+  --data '{"role":"worker"}' --type dispatched \
+  --en "named like a reviewer, says it is a worker" --tw "名字像 reviewer，說自己是 worker" >/dev/null
+srw="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "worker" "$(jq -r '.crew[]|select(.id=="reviewer-really-a-worker")|.role' <<<"$srw")" \
+  "an actor named like a reviewer that states worker is a worker"
+
+# The deck holds a fixed number, and when more agents are aboard than it
+# holds the server has to decide which ones are shown. It keeps the ones
+# that spoke most recently. The first version kept the oldest without
+# meaning to: `Map.set` on a key that is already present keeps its
+# original position, so the map was ordered by each actor's FIRST event
+# and a full deck showed the stalest crew while agents that had just
+# boarded fell off the end. Last in this fixture, because it fills the
+# deck and every assertion above reads the crew. On T-D, which exists in
+# this fixture for exactly this and is the only task nothing above has
+# merged or closed - an agent on a finished task is not aboard at all,
+# so a crowd on T-A would have left the deck empty and every assertion
+# here green for the wrong reason.
+limit="$(jq -r '.deckLimit' <<<"$(curl -sf "http://127.0.0.1:$PORT/api/state")")"
+assert_matches "$limit" '^[0-9]+$' "the server states the deck limit"
+n=$(( limit + 6 ))
+i=0
+while [ "$i" -lt "$n" ]; do
+  FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor "crowd-$i" --task T-D --type dispatched \
+    --en "aboard" --tw "上船" >/dev/null
+  i=$(( i + 1 ))
+done
+sd="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "$limit" "$(jq -r '.crew|length' <<<"$sd")" "the deck holds its limit and no more"
+# Ordered by each actor's LAST event, which is the whole of the fix and
+# is invisible in a crowd where everyone spoke once: with one event each,
+# first and last are the same event and the order is the same with the
+# `delete` and without it. So the oldest crewman aboard speaks again, and
+# has to come back to the head.
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor crowd-0 --task T-D --type gate_failed \
+  --en "still here" --tw "還在" >/dev/null
+sd2="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+crowd2="$(jq -r '.crew[].id' <<<"$sd2" | tr '\n' ' ')"
+assert_contains "$crowd2" "crowd-0 " "the agent that has been aboard longest, having just spoken, is on the deck"
+assert_lacks "$crowd2" "crowd-1 " "and the one that has now been quiet longest is the one dropped"
+crowd="$(jq -r '.crew[].id' <<<"$sd" | tr '\n' ' ')"
+assert_contains "$crowd" "firstmate " "firstmate keeps its place at the head"
+assert_eq "firstmate" "$(jq -r '.crew[0].id' <<<"$sd")" "and it is the head"
+assert_contains "$crowd" "crowd-$(( n - 1 )) " "the agent that boarded last is on the deck"
+assert_lacks "$crowd" "crowd-0 " "and the one that has been aboard longest is the one dropped"
 
 # loopback only - on the option that binds, not on the file's prose
 assert_ok "sed 's|//.*||' '$ROOT/board/server.ts' | grep -qE 'hostname:[[:space:]]*\"127\\.0\\.0\\.1\"'" \

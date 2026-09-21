@@ -16,7 +16,7 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
 
-REPO="${FM_ROOT:-$(pwd)}"; TASK=''; BRANCH=''; PR=''; ROUND=1; VENDOR=''
+REPO="${FM_ROOT:-$(pwd)}"; TASK=''; BRANCH=''; PR=''; ROUND=1; VENDOR=''; NAME=''
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -26,6 +26,7 @@ while [ $# -gt 0 ]; do
     --pr) PR="${2-}"; shift 2 ;;
     --round) ROUND="${2-}"; shift 2 ;;
     --vendor) VENDOR="${2-}"; shift 2 ;;
+    --name)   NAME="${2-}"; shift 2 ;;
     *) echo "fm-review: unknown argument $1" >&2; exit 64 ;;
   esac
 done
@@ -33,7 +34,49 @@ done
   echo "usage: fm-review.sh --task <id> --branch <name> [--pr N] [--round N]" >&2; exit 64; }
 cd "$REPO" || { echo "fm-review: no repo at $REPO" >&2; exit 64; }
 
-emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor reviewer-1 --task "$TASK" "$@" >/dev/null 2>&1 </dev/null || true; }
+# per run, like the worker's: a constant actor collapses two concurrent
+# rounds into one crewman carrying whichever task the second one touched
+NAME="${NAME:-reviewer-$$}"
+emit_once() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --data '{"role":"reviewer"}' --actor "$NAME" --task "$TASK" "$@" >/dev/null 2>&1 </dev/null; }
+emit() { emit_once "$@" || true; }
+# Armed where emit() first works: every exit between the two would board
+# an actor that never leaves. Above it is only the argument parsing,
+# which exits 64 before emit() exists.
+#
+# One EXIT trap does the emitting; the signal traps only exit. Naming a
+# signal alongside EXIT runs the handler and then CONTINUES, so a killed
+# run announces it has finished and carries on working - and `kill`
+# stops working on it, because a trapped TERM that does not exit leaves
+# only SIGKILL. The codes are the conventional 128+signal.
+#
+# The ordinary emit is best-effort - a progress line the board misses
+# costs an update - but the ending is not. `agent_finished` is what
+# takes the crewman off the deck; lose it and the agent stands there
+# until its task merges, which is the failure this pair exists to
+# remove. So it is tried again, and if it still cannot be written the
+# run says so rather than passing in silence. Both go through one
+# definition of the command: two spellings of the same emit is how the
+# ending and the progress lines drift apart.
+finished() {
+  local try=3
+  while [ "$try" -gt 0 ]; do
+    try=$(( try - 1 ))
+    emit_once --type agent_finished --en "run finished" --tw "這次執行結束" && return 0
+  done
+  echo "${0##*/}: could not record the end of this run; ${NAME} stays on the deck until ${TASK} is finished" >&2
+}
+trap finished EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
+# Said at the START of the round, not at the end of it. A reviewer's
+# whole run is one call to an engine, and this was emitted after that
+# call returned - so the only two events a round ever wrote, this and
+# the ending, landed a moment apart and the board never had a reviewer
+# on the deck at all. An agent is aboard while it is working, which for
+# a reviewer is the part that takes the minutes.
+emit --type review_opened --en "round $ROUND on $TASK" --tw "$TASK 第 $ROUND 輪審核"
 
 # The task spec comes from the branch under review, not from whatever is
 # checked out. A task defined on its own branch - which is how a new one
@@ -151,7 +194,6 @@ if [ "$signed" = "0" ]; then
        --tw "第 $ROUND 輪審核沒有產出"
   rm -rf "$work"; exit 3
 fi
-emit --type review_opened --en "round $ROUND on $TASK" --tw "$TASK 第 $ROUND 輪審核"
 if [ -n "$PR" ]; then
   $GH pr comment "$PR" --body "$verdict" >/dev/null 2>&1 || true
 fi

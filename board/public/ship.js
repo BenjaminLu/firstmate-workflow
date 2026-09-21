@@ -11,6 +11,7 @@ const SHIP = (() => {
   const FIG_H = 88;        // a crewman's head clears this much of his deck
   const BUBBLE_CLEAR = 74; // his bubble sits above that
   const SAIL_H = 98, MAST_TOP = 26, HULL_BOTTOM = 12, BULWARK = 26, GUN_DROP = 20, FLAG_H = 18;
+  const CAPTAIN_SCALE = 1.05;   // he stands nearer than the crew; one source
 
   // six rates. More crew means more decks and a broader hull, never a longer
   // one: a crowd stacks upward.
@@ -102,8 +103,12 @@ const SHIP = (() => {
 
   function bubble(c, T, topRow) {
     if (c.row !== topRow) {
+      // the chip carries the TASK. The criterion has no crowding
+      // qualifier, and a chip with only the agent's name meant no bubble
+      // anywhere on a crowded ship said what anyone was working on. The
+      // agent's own name is in the roster beside it.
       return `<div class="bub mini st-${c.state}" style="--px:${c.x}%;--r:${c.row}">` +
-        `<div class="who">${esc(c.name)}</div></div>`;
+        `<div class="who">${esc(c.task || c.name)}</div></div>`;
     }
     return `<div class="bub st-${c.state}" style="--px:${c.x}%;--r:${c.row}">` +
       `<div class="who">${esc(c.name)}</div>` +
@@ -111,27 +116,45 @@ const SHIP = (() => {
       (c.pct == null ? "" : `<div class="pb"><i style="width:${c.pct}%"></i></div>`) + `</div>`;
   }
 
-  // the crew comes out of the state, never out of a fixture
+  // the server sends one of these three; an unknown one is a mismatch
+  // between the two halves, and .fig.r-unknown draws it as one. Exported
+  // because the sheet has to carry a rule for every value in here and
+  // nothing can check that against a constant it cannot see.
+  const ROLE = { firstmate: "fm", worker: "w", reviewer: "r" };   // no captain: see captain()
+  // The crew are AGENTS. The server derives them from the actors in the
+  // event log - who is running, and what each one is on - because a
+  // crewman standing on the deck is something doing work, not a task
+  // waiting for someone. Drawing one per in-flight task put pull requests
+  // on the deck: three tasks handled by one worker looked like three of
+  // the crew, and the ship grew with the backlog instead of the crew.
   function crewOf(s, T) {
-    const label = { firstmate: T("roleFirstmate"), worker: T("roleWorker"),
-                    reviewer: T("roleReviewer"), captain: T("roleCaptain") };
-    const crew = [{ id: "firstmate", role: "fm", state: s.greenlit ? "working" : "queued",
-                    name: label.firstmate, job: T(s.greenlit ? "fmDispatching" : "fmWaiting"), pct: null }];
-    for (const t of s.tasks || []) {
-      if (t.stage === "queued" || t.stage === "merged") continue;
-      crew.push({ id: t.id, role: t.stage === "review" ? "r" : "w", state: t.stage,
-                  name: t.id, job: t.title || "",
-                  pct: { working: 45, gate: 70, review: 85, captain: 95 }[t.stage] ?? null });
-    }
-    if ((s.pending || []).length) {
-      crew.push({ id: "captain", role: "cap", state: "captain", name: label.captain,
-                  job: T("capDeciding"), pct: null });
-    }
-    return crew.slice(0, 24);
+    // only firstmate is named by its role; a worker or a reviewer is
+    // named by its own id, and the captain is not in this list at all
+    const label = { firstmate: T("roleFirstmate") };
+    // the limit comes from the server with the list. No fallback: a
+    // number here as well is the same number in two languages, and the
+    // test for it would pass through the copy.
+    return (s.crew || []).slice(0, s.deckLimit).map((a) => ({
+      id: a.id,
+      role: ROLE[a.role] || "unknown",
+      state: a.state || "working",
+      // the agent's own name, and what it is on underneath
+      name: a.role === "firstmate" ? label.firstmate : a.id,
+      // only firstmate can be aboard without a task: the server skips a
+      // taskless worker or reviewer, so there is no third case to write
+      job: a.task
+        ? `${a.task}${a.title ? " \u00b7 " + a.title : ""}`
+        : T(s.greenlit ? "fmDispatching" : "fmWaiting"),
+      task: a.task || null,
+      pct: a.task ? ({ working: 45, gate: 70, review: 85, captain: 95 }[a.state] ?? null) : null,
+    }));
   }
 
   function render(host, s, T) {
     const crew = crewOf(s, T);
+    // from the server with the list: the shipbar used to print a
+    // hardcoded 24 under a comment claiming the number had one source
+    const limit = s.deckLimit;
     const rate = rateFor(crew.length);
     const rows = rate.rows, step = rate.step;
     const topDeck = DECK_Y0 + (rows - 1) * step;
@@ -174,7 +197,7 @@ const SHIP = (() => {
     host.innerHTML =
       `<div class="horizon"></div><div class="sea" style="height:${HULL_BOTTOM + 14}px"></div>` +
       `<div class="shipbar"><span class="tier">${esc(T(rate.key))}</span>` +
-      `<span>${esc(T("aboard"))} ${crew.length}/24</span>` +
+      `<span>${esc(T("aboard"))} ${crew.length}/${limit}</span>` +
       `<button id="ahoyBtn">${esc(T("ahoyBtn"))}</button>` +
       `<button class="mute" id="muteBtn" aria-pressed="${SHIP.muted}">${esc(T(SHIP.muted ? "unmute" : "mute"))}</button></div>` +
       `<div class="vessel" id="vessel">` +
@@ -217,6 +240,33 @@ const SHIP = (() => {
     return crew;
   }
 
+  // The captain's own figure, beside the cards rather than on the deck.
+  // He is not crew: the crew are agents doing work and he is the person
+  // they are waiting on, so he stands in the place where the waiting is.
+  function captain(host, n, T) {
+    if (!host) return;
+    if (!n) { host.innerHTML = ""; host.hidden = true; return; }
+    host.hidden = false;
+    // The three the captain's block actually reads, from the deck's own
+    // constants. It used to write --deckY0, --rowStep and --figH as
+    // well: nothing reads them here - `.captain .pivot` sets `bottom`
+    // outright and overrides the sum they were for, and --figH is read
+    // only by `.bub`, which the captain does not have - so they were
+    // three numbers kept in step with nothing.
+    host.style.setProperty("--capStand", Math.round(FIG_H * CAPTAIN_SCALE * 1.5) + "px");
+    host.style.setProperty("--capBox", Math.round(FIG_H * CAPTAIN_SCALE * 2.05) + "px");
+    host.style.setProperty("--capFoot", Math.round(FIG_H * CAPTAIN_SCALE * 1.04) + "px");
+    const c = { id: "captain", role: "cap", state: "captain", action: "helm", x: 50, row: 0 };
+    // the scale is an argument, not also a custom property: figure() puts
+    // it on the pivot, which is the only place it is read
+    host.innerHTML =
+      `<div class="capstand">${figure(c, CAPTAIN_SCALE)}</div>` +
+      `<div class="capsays"><b>${esc(T("roleCaptain"))}</b>` +
+      `<span>${esc(T("capDeciding"))}</span>` +
+      `<i>${n}</i></div>`;
+    drag(host);
+  }
+
   function roster(host, crew, T) {
     host.innerHTML = `<h3><span>${esc(T("roster"))}</span><span>${crew.length}</span></h3><ul>` +
       crew.map((c) => `<li class="st-${c.state}"><span class="av"></span>` +
@@ -225,7 +275,13 @@ const SHIP = (() => {
         `<span class="jb" title="${esc(c.job)}">${esc(c.job)}</span></li>`).join("") + `</ul>`;
   }
 
-  // drag to turn a crewman; the pointer owns him until it lets go
+  // Drag to turn a crewman; the pointer owns him until it lets go.
+  //
+  // The listeners go on the .pivot elements, never on the host, and every
+  // caller has just replaced host.innerHTML - so the elements these are
+  // attached to are new and the previous ones were discarded with their
+  // listeners. Nothing accumulates across renders. Put one on `host` and
+  // that stops being true.
   function drag(host) {
     host.querySelectorAll(".pivot").forEach((p) => {
       let x0 = 0, y0 = 0, ry = -26, rx = 8, on = false;
@@ -284,7 +340,7 @@ const SHIP = (() => {
     return guns.length;
   }
 
-  return { render, roster, ahoy, rateFor, actionFor, crewOf, layout, RATES, ACTIONS,
+  return { render, roster, captain, ahoy, rateFor, actionFor, crewOf, layout, RATES, ACTIONS, ROLE,
            muted: (() => { try { return !!localStorage.getItem("board.muted"); } catch (_) { return false; } })() };
 })();
 if (typeof module !== "undefined") module.exports = SHIP;

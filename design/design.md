@@ -131,9 +131,19 @@ lock — `flock(1)` does not ship on macOS. `bin/ci.sh` fails if anything under
 ```
 
 Types: `greenlit` `dispatched` `commit_pushed` `pr_opened` `gate_passed`
-`gate_failed` `review_opened` `ask_pass_criteria` `criteria_returned`
-`protocol_violation` `approved` `merged` `closed` `decision_requested`
-`decision_made` `worker_crashed` `vendor_unavailable`.
+`gate_failed` `review_opened` `review_failed` `ask_pass_criteria`
+`criteria_returned` `protocol_violation` `approved` `merged` `closed`
+`decision_requested` `decision_made` `worker_crashed` `vendor_unavailable`
+`agent_finished`.
+
+`dispatched` and `agent_finished` bracket one run of one agent, and they
+are what the board reads to decide who is aboard. An agent is running from
+the first to the second; a run that ends any other way — killed, hung up —
+still emits the second, from a trap. Without the closing one, "aboard"
+degenerates into "ever touched a task that is not finished yet", and the
+ship's crew becomes a record of everything that ever ran rather than of
+what is running. Every script that emits under an actor of its own must
+emit it; `tests/traps.test.sh` fails if one does not.
 
 A `summary` carries `en` and `zh-TW` or it is rejected: half a translation
 renders blank in one of the board's locales, which is worse than none.
@@ -555,6 +565,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-014 | the board in a browser, and the gate that runs it | T-010, T-011, T-013 |
 | T-025 | the adapter verdict: a vendor that fails silently is not one that worked | T-003, T-006, T-024 |
 | T-026 | the option loop: a flag with no value must not spin for ever | T-017 |
+| T-027 | the crew are agents, not pull requests | T-010 |
 
 ### M2 — protocol and self-update
 

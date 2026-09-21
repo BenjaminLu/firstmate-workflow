@@ -21,7 +21,8 @@ LOCK="$ROOT/state/.events.lock"
 
 TYPES="greenlit dispatched commit_pushed pr_opened gate_passed gate_failed \
 review_opened review_failed ask_pass_criteria criteria_returned protocol_violation approved \
-merged closed decision_requested decision_made worker_crashed vendor_unavailable"
+merged closed decision_requested decision_made worker_crashed vendor_unavailable \
+agent_finished"
 
 die() { printf 'fm-emit: %s\n' "$1" >&2; exit 1; }
 
@@ -68,7 +69,13 @@ mkdir -p "$ROOT/state" || die "cannot create $ROOT/state"
 for _ in $(seq 1 600); do
   if mkdir "$LOCK" 2>/dev/null; then
     # shellcheck disable=SC2064
-    trap "rmdir '$LOCK' 2>/dev/null" EXIT INT TERM
+    # the signal traps only exit; the EXIT trap releases. Naming a
+    # signal alongside EXIT released the lock and then CARRIED ON
+    # writing, with the lock already gone - and kill stopped working
+    trap "rmdir '$LOCK' 2>/dev/null" EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
     printf '%s\n' "$line" >> "$LOG"
     exit 0
   fi

@@ -117,7 +117,8 @@ assert_ok "cd '$r5' && git cat-file -e '$branch:src/saw-ci'" "and why the requir
 # open a new one fails at the last step with its work already pushed
 assert_lacks "$(cat "$d5/ghcalls" 2>/dev/null)" "pr create" \
   "the second round reuses the pull request it already opened"
-assert_contains "$(jq -r '.type + " " + (.pr|tostring)' < "$r5/state/events.jsonl" | tail -1)" "9" \
+# the last event is now agent_finished, so look for the push itself
+assert_contains "$(jq -r 'select(.type=="commit_pushed")|.pr|tostring' < "$r5/state/events.jsonl" | tail -1)" "9" \
   "and its event points at that number"
 rm -rf "$d5"
 
@@ -165,6 +166,121 @@ assert_contains "$(jq -r .type < "$r7/state/events.jsonl" | tr '\n' ' ')" "worke
   "and the log says it happened"
 rm -rf "$d7"
 
+# A run says when it ends, on every exit path - including the ones that
+# give up. Without it the board cannot tell a worker that is running from
+# one that died at a gate, and draws both.
+for scenario in clean failed; do
+  da="$(fixture)"; ra="$da/repo"; GHa="$(ghstub "$da")"
+  if [ "$scenario" = failed ]; then
+    cat > "$ra/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+exit 1
+M
+    chmod +x "$ra/bin/adapters/mock.sh"
+  fi
+  ( cd "$ra" && FM_ROOT="$ra" FM_GH="$GHa" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+  assert_contains "$(jq -r .type < "$ra/state/events.jsonl" | tr '\n' ' ')" "agent_finished" \
+    "a $scenario run says when it ended"
+  assert_eq "agent_finished" "$(jq -r .type < "$ra/state/events.jsonl" | tail -1)" \
+    "and it is the last thing it says"
+  assert_eq "1" "$(jq -r 'select(.type=="agent_finished")|.type' "$ra/state/events.jsonl" | grep -c . || true)" \
+    "exactly once, not once per exit path"
+  rm -rf "$da"
+done
+
+# A killed run is exactly "one that gives up", and the server's backstop
+# does not save it - the task is still open, so the dead agent would sit
+# aboard for ever and inflate the rate.
+#
+# Measured, so the claim is not bigger than the evidence: this assertion
+# holds with `trap ... EXIT` alone, because bash defers a TERM that
+# arrives while it is waiting for a child and then runs the EXIT trap.
+# INT/TERM/HUP are listed anyway, for the paths and the shells where
+# that is not true; what this test proves is the behaviour the criterion
+# names, not the flag list.
+# The adapter sleeps and THEN does the work, so the two runs differ. A
+# stub that only sleeps writes nothing into the worktree, an untouched
+# run therefore produces no diff and never reaches `pr create` either -
+# and every assertion below would have held with the kill deleted. The
+# control run at the end is what makes the killed one mean something.
+killable_adapter() {   # killable_adapter <repo>
+  cat > "$1/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+# says it has STARTED, so the killer waits for the engine to be running
+# rather than for the script's first event - which is a different moment
+# and, on a fast machine, can be after the run is already over
+: > "${FM_STARTED:?}"
+sleep 2
+mkdir -p "$3/src"
+printf 'the work was done\n' > "$3/src/thing"
+M
+  chmod +x "$1/bin/adapters/mock.sh"
+}
+
+dk="$(fixture)"; rk="$dk/repo"; GHk="$(ghstub "$dk")"
+killable_adapter "$rk"
+# `exec`, so the pid is the SCRIPT and not the subshell around it.
+# Without it `$!` is the wrapper, and whether the signal ever reaches
+# fm-worker.sh depends on whether this bash elides the last fork - which
+# bash 5 does and the 3.2 on this platform does not. On the shell that
+# does not, the wrapper dies, the worker is orphaned, runs to its
+# natural end, and `kill -0 "$killme"` is false anyway because the
+# wrapper was reaped: green, on a run nothing interrupted.
+started="$dk/started"
+( cd "$rk" && FM_ROOT="$rk" FM_GH="$GHk" FM_STARTED="$started" \
+    exec bin/fm-worker.sh --task T-Z >/dev/null 2>&1 ) &
+killme=$!
+for _ in $(seq 1 60); do
+  [ -e "$started" ] && break
+  sleep 0.2
+done
+assert_ok "test -e '$started'" "the engine was running when the signal was sent"
+# by pid, not by pattern: pkill -f matches every process on the machine,
+# so two suites running at once reap each other's stubs and each sees an
+# ending its assertions attribute to the trap
+kill -TERM "$killme" 2>/dev/null
+wait "$killme" 2>/dev/null; krc=$?
+for _ in $(seq 1 40); do
+  [ "$(jq -r .type < "$rk/state/events.jsonl" 2>/dev/null | tail -1)" = "agent_finished" ] && break
+  sleep 0.2
+done
+# The position of a line in a log is not the behaviour. What matters is
+# that the run STOPPED - exactly one ending, and nothing after it - and
+# the first version of this asserted `tail -1` alone, which held whether
+# the run stopped or carried on to open a pull request.
+ends="$(jq -r 'select(.type=="agent_finished")|.type' "$rk/state/events.jsonl" | grep -c . || true)"
+assert_eq "1" "$ends" "a run killed mid-flight ends exactly once"
+after="$(jq -r .type "$rk/state/events.jsonl" | sed -n '/agent_finished/,$p' | tail -n +2)"
+assert_eq "" "$after" "and says nothing after it"
+assert_lacks "$(cat "$dk/ghcalls" 2>/dev/null)" "pr create" \
+  "a killed run does not go on to open a pull request"
+assert_eq "143" "$krc" "and it exits on the signal - 128+TERM, from the signal trap"
+assert_fail "kill -0 '$killme' 2>/dev/null" "and the process is gone"
+# and the discrimination, stated: the adapter DID write its file - bash
+# defers a TERM that arrives while it is waiting for a child, so the
+# sleep finishes and the work lands - and the run still never reached
+# `pr create`. Work present, pull request absent, is something only an
+# interrupted run produces.
+assert_ok "test -f '$rk/state/worktrees/T-Z/src/thing'" \
+  "the adapter had finished its work, so a run left alone would have gone on"
+rm -rf "$dk"
+
+# the same fixture, left alone: this is what the four assertions above
+# are the absence of, and without it they are satisfied by a run that
+# was never interrupted
+dl="$(fixture)"; rl="$dl/repo"; GHl="$(ghstub "$dl")"
+killable_adapter "$rl"
+( cd "$rl" && FM_ROOT="$rl" FM_GH="$GHl" FM_STARTED="$dl/started" \
+    bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+assert_eq "0" "$?" "the same run, not killed, exits 0"
+assert_contains "$(cat "$dl/ghcalls" 2>/dev/null)" "pr create" \
+  "the same run, not killed, does reach a pull request"
+assert_eq "1" "$(jq -r 'select(.type=="agent_finished")|.type' "$rl/state/events.jsonl" | grep -c . || true)" \
+  "and ends exactly once as well"
+rm -rf "$dl"
+
 # a vendor named in config.yaml with no adapter behind it is a typo. It has
 # to be found before anything runs, or a real vendor does the work and the
 # exit 65 throws it away with the worktree.
@@ -203,6 +319,23 @@ d3="$(fixture)"; r3="$d3/repo"; GH3="$(ghstub "$d3")"
 ( cd "$r3" && FM_ROOT="$r3" FM_GH="$GH3" FM_MOCK_EXIT=1 bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
 assert_eq "1" "$?" "a failed attempt exits 1"
 assert_contains "$(cat "$d3/ghcalls")" "pr create" "a failed attempt still opens a pull request"
+
+# The ending is the one emit that is not best-effort. Every other line
+# the worker writes to the log is decoration the board can miss; this
+# one is what takes the crewman off the deck, and a lost one leaves the
+# agent standing there until the task merges - which is the failure the
+# `agent_finished` pair exists to remove. So when it cannot be written
+# the run says so on stderr instead of ending quietly.
+d4="$(fixture)"; r4="$d4/repo"; GH4="$(ghstub "$d4")"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$r4/bin/fm-emit.sh"; chmod +x "$r4/bin/fm-emit.sh"
+out4="$(cd "$r4" && FM_ROOT="$r4" FM_GH="$GH4" bin/fm-worker.sh --task T-Z --name worker-mute 2>&1)"
+assert_contains "$out4" "could not record the end of this run" \
+  "a run whose ending cannot be written says so rather than ending in silence"
+assert_contains "$out4" "worker-mute" "and names the crewman left on the deck"
+# and the ordinary lines stay best-effort: the run still did its work
+assert_ok "git -C '$r4' rev-parse --verify t-z-a-mock-task" \
+  "a log it cannot write to does not stop the run"
+rm -rf "$d4"
 
 # the adapter never touches the repository
 # a comment may mention git; a call may not
