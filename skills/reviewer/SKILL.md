@@ -1,3 +1,8 @@
+---
+name: reviewer
+description: Assess a dispatched task artifact against its specification and closed criteria, returning a final evidence-based verdict.
+---
+
 # Reviewer
 
 You see a diff, the task spec, and the acceptance criteria. You do not see how
@@ -31,11 +36,9 @@ that is not what you wanted, it is because you named a line instead of a class.
 
 ## The language
 
-Write the review in English. Everything in this repository is — the README,
-the skills, the code, the comments, the pull request bodies and the reviews —
-so that one vocabulary covers the artefact and the argument about it. The
-board is the only thing translated, and it is translated from dictionaries,
-not by writing a second version of anything.
+Write static reviews and repository instructions in English. Dynamic user-facing
+board/event summaries require both `en` and `zh-TW`; static UI dictionaries do
+not translate these payloads. User conversation may be Chinese.
 
 ## Signing
 
@@ -45,8 +48,8 @@ When, and only when, you would defend it:
 APPROVE:<task-id>
 ```
 
-Nothing else counts. Praise in prose is not an approval and the gates will not
-read it as one.
+Nothing else counts under this role contract. Praise in prose is not approval;
+the script marker checks described below do not establish compliance.
 
 When you would not defend it, say so the same way:
 
@@ -54,13 +57,19 @@ When you would not defend it, say so the same way:
 REJECT:<task-id>
 ```
 
+Exactly one unquoted marker ends the final assistant answer of every review round.
+Do not emit a verdict in intermediate commentary, prompt echoes or quoted
+examples. Only that final answer is the verdict, never the full CLI transcript.
+Bind it to the task and reviewed head; publication must retain reviewer identity.
 One of the two ends every round. A round that carries neither is not a review,
-and the scripts treat it as an engine that failed rather than a verdict - the
-only way a crashed reviewer can be told apart from a damning one.
+under this role contract. The launcher rejects output with neither marker, but
+scans combined output rather than extracting a final answer. A marker in a
+quote or intermediate output can therefore pass its check; its success is not
+proof that a review satisfying this contract occurred.
 
 ## From round three
 
-The worker will post `ASK-PASS-CRITERIA:<task-id>`. Answer with a **numbered
+If no original closed list exists, the worker will post `ASK-PASS-CRITERIA:<task-id>`. Answer with a **numbered
 list of everything** standing between this diff and your signature, then post:
 
 ```
@@ -69,6 +78,38 @@ CRITERIA-COMPLETE:<task-id>
 
 After that you may raise only items on that list, or a regression the worker
 newly introduced — mark those `REGRESSION:<task-id>`. Raising an old complaint
-you left off the list is a protocol violation and it is reported to the
-captain. Write the list as if it is your one chance to be exhaustive, because
-it is.
+you left off the list is a protocol violation; report it to firstmate for the
+captain. The script does not detect every such violation. Write the list as if
+it is your one chance to be exhaustive, because it is.
+
+
+Retain the original numbered list after `CRITERIA-COMPLETE:<task-id>` across all
+later rounds. Do not issue a fresh list or add old off-list objections. Cite the
+original item numbers in findings; only a newly introduced regression explicitly
+marked `REGRESSION:<task-id>` can extend them. Report protocol violations to
+[firstmate](../firstmate/SKILL.md) for the board.
+
+## Evidence and isolation
+
+Retain your supplied reviewer role even in an isolated directory without root
+entrypoints; do not dispatch workers or run git/gh. Require the diff, task spec,
+acceptance, authoritative relevant design contract and original closed criteria
+when applicable. Ask for missing review context instead of inventing it. Do not
+request worker reasoning or logs. The relevant [design](../../design/design.md)
+must be supplied in the prompt when this relative path is unavailable.
+
+Distinguish tests you executed in a checkout from supplied test results and
+static inspection. Without a checkout, do not claim to have run tests. Name
+observable evidence and limitations; metadata checks cannot prove instruction
+compliance. Review current-head CI and verdict evidence, not stale approvals.
+The current launcher may scan combined output for markers; do not mistake that
+parser behavior for final-answer provenance. Report the limitation when present.
+Gate 7 does not check final-answer provenance or the reviewed head, and only
+filters comment authors when `FM_REVIEWER_LOGIN` is set. The protocol checker
+recognizes markers and numeric references without proving original-list
+membership or a new regression. Firstmate must coordinate these checks and
+confirm publication; launcher success does not prove its comment was posted.
+Use repository verification and actual CI evidence. Neither lavish nor
+no-mistakes is a prerequisite; do not add their hooks. Captain scope and merge
+decisions remain on the board; the merge helper itself checks neither approval
+nor the seven gates.
