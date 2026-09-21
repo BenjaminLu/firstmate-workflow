@@ -385,7 +385,7 @@ d16="$(fixture)"; r16="$d16/repo"; GH16="$(ghstub "$d16")"
 cat > "$r16/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
-cp "$2" "${FM_CAPTURE:?}" 2>/dev/null
+cp "$2" "${FM_CAPTURE:-/dev/null}" 2>/dev/null
 mkdir -p "$3/src"
 if [ -f "$3/src/round-one" ]; then printf 'two\n' > "$3/src/round-two"
 else printf 'one\n' > "$3/src/round-one"; fi
@@ -454,9 +454,11 @@ cap17="$d17/sent.md"
     bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
 sent17="$(cat "$cap17" 2>/dev/null)"
 assert_contains "$sent17" "The required check is red" "the prompt still says the check is red"
-assert_contains "$sent17" "not a GitHub Actions run" "and says why it cannot fetch the log"
+assert_contains "$sent17" "No run id could be read out of" "and says what it could not do"
 assert_contains "$sent17" "buildkite.com/acme/pipeline/builds/1234" "naming the check it means"
 assert_lacks "$sent17" "run https:" "rather than asking for a run called https:"
+assert_lacks "$sent17" "is not a GitHub Actions run" \
+  "and does not claim to know which CI produced the link, which it cannot"
 assert_lacks "$(cat "$d17/ghcalls")" "run view" "and it does not ask gh for a run that is not one"
 rm -rf "$d17"
 
@@ -496,9 +498,17 @@ M
   assert_contains "$sent" "$4" "$1"
   rm -rf "$d"
 }
-redcheck "a run id that is not a number is not asked for" \
+redcheck "a run id that is not a number says what the SCRIPT could not do" \
   "https://github.com/o/r/actions/runs/latest/job/1" "exit 0" \
-  "not a GitHub Actions run"
+  "No run id could be read out of"
+# the older check-run details_url, which IS an Actions run and has no
+# /actions/ in it: narrowing the match to /actions/runs/ sent these
+# down the cannot-read path, which is a worse answer than the noise it
+# replaced
+redcheck "an old-style /runs/<id> link is an Actions run" \
+  "https://github.com/o/r/runs/6789123" \
+  "printf 'ci\tbin/ci.sh\tOLD STYLE LOG\n'; exit 0" \
+  "OLD STYLE LOG"
 redcheck "a fetch that failed says so" \
   "https://github.com/o/r/actions/runs/61/job/1" "exit 1" \
   "The log for run 61 could not be fetched"
@@ -509,6 +519,118 @@ redcheck "and a log the column trim empties is the same case" \
   "https://github.com/o/r/actions/runs/63/job/1" \
   "printf 'ci\tbin/ci.sh\t\nci\tbin/ci.sh\t   \n'; exit 0" \
   "Run 63 reported no failing step log"
+
+# A blank line inside a real log is part of the log. The emptiness
+# filter is for DECIDING; printing it deleted every separator in a
+# traceback, and spent the 120-line budget on lines it then dropped.
+d18="$(fixture)"; r18="$d18/repo"; GH18="$(ghstub "$d18")"
+cat > "$r18/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+cp "$2" "${FM_CAPTURE:-/dev/null}" 2>/dev/null
+mkdir -p "$3/src"
+if [ -f "$3/src/round-one" ]; then printf 'two\n' > "$3/src/round-two"
+else printf 'one\n' > "$3/src/round-one"; fi
+M
+chmod +x "$r18/bin/adapters/mock.sh"
+( cd "$r18" && FM_ROOT="$r18" FM_GH="$GH18" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+cat > "$d18/stub/gh" <<'G'
+#!/usr/bin/env bash
+case " $* " in
+  *" pr list "*) echo 24; exit 0 ;;
+  *" pr checks "*) echo "https://github.com/o/r/actions/runs/71/job/1"; exit 0 ;;
+  *" run view "*) printf 'ci\tx\tTraceback ABOVE\nci\tx\t\nci\tx\tAssertionError BELOW\n'; exit 0 ;;
+  *" pr view "*" comments "*) printf '## r\n\nsomething\n' ;;
+esac
+exit 0
+G
+chmod +x "$d18/stub/gh"
+cap18="$d18/sent.md"
+( cd "$r18" && FM_ROOT="$r18" FM_GH="$GH18" FM_CAPTURE="$cap18" \
+    bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+sent18="$(cat "$cap18" 2>/dev/null)"
+assert_contains "$sent18" "Traceback ABOVE" "the line above a blank one reaches the prompt"
+assert_contains "$sent18" "AssertionError BELOW" "and the line below it"
+assert_contains "$sent18" "Traceback ABOVE
+
+AssertionError BELOW" "with the blank line still between them"
+rm -rf "$d18"
+
+# The failed-fetch branch with no scratch file to capture gh into: the
+# `:-/dev/null` fallback has to hold, the run still has to be told the
+# log could not be fetched, and there must be no `gh:` lines claiming
+# to quote something nothing captured.
+d19="$(fixture)"; r19="$d19/repo"; GH19="$(ghstub "$d19")"
+cat > "$r19/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+cp "$2" "${FM_CAPTURE:-/dev/null}" 2>/dev/null
+mkdir -p "$3/src"
+if [ -f "$3/src/round-one" ]; then printf 'two\n' > "$3/src/round-two"
+else printf 'one\n' > "$3/src/round-one"; fi
+M
+chmod +x "$r19/bin/adapters/mock.sh"
+( cd "$r19" && FM_ROOT="$r19" FM_GH="$GH19" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+cat > "$d19/stub/gh" <<'G'
+#!/usr/bin/env bash
+case " $* " in
+  *" pr list "*) echo 25; exit 0 ;;
+  *" pr checks "*) echo "https://github.com/o/r/actions/runs/81/job/1"; exit 0 ;;
+  *" run view "*) echo "boom" >&2; exit 1 ;;
+  *" pr view "*" comments "*) printf '## r\n\nsomething\n' ;;
+esac
+exit 0
+G
+chmod +x "$d19/stub/gh"
+# A TMPDIR that is a file: mktemp cannot mint into it, whatever the
+# uid. `--pr 25` so the LOOKUP's scratch file is never wanted - that
+# one is a hard refusal by design (exit 70, T-031), and the run would
+# stop before it ever reached the block under test.
+: > "$d19/nodir"
+cap19="$d19/sent.md"
+( cd "$r19" && TMPDIR="$d19/nodir" FM_ROOT="$r19" FM_GH="$GH19" FM_CAPTURE="$cap19" \
+    bin/fm-worker.sh --task T-Z --pr 25 >/dev/null 2>&1 )
+sent19="$(cat "$cap19" 2>/dev/null)"
+assert_contains "$sent19" "The log for run 81 could not be fetched" \
+  "with no scratch file, the failed fetch is still reported"
+assert_lacks "$sent19" "gh: " "and nothing is quoted that nothing captured"
+assert_lacks "$sent19" "No such file or directory" \
+  "and the redirection did not fall over on an empty path"
+rm -rf "$d19"
+
+# gh's stderr is bounded like the log above it: everything that reaches
+# that fence has to be, and a runner that dies noisily can say a great
+# deal on stderr
+d20="$(fixture)"; r20="$d20/repo"; GH20="$(ghstub "$d20")"
+cp "$r19/bin/adapters/mock.sh" "$r20/bin/adapters/mock.sh" 2>/dev/null || true
+cat > "$r20/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+cp "$2" "${FM_CAPTURE:-/dev/null}" 2>/dev/null
+mkdir -p "$3/src"
+if [ -f "$3/src/round-one" ]; then printf 'two\n' > "$3/src/round-two"
+else printf 'one\n' > "$3/src/round-one"; fi
+M
+chmod +x "$r20/bin/adapters/mock.sh"
+( cd "$r20" && FM_ROOT="$r20" FM_GH="$GH20" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+cat > "$d20/stub/gh" <<'G'
+#!/usr/bin/env bash
+case " $* " in
+  *" pr list "*) echo 26; exit 0 ;;
+  *" pr checks "*) echo "https://github.com/o/r/actions/runs/91/job/1"; exit 0 ;;
+  *" run view "*) i=0; while [ "$i" -lt 200 ]; do echo "noise $i" >&2; i=$((i+1)); done; exit 1 ;;
+  *" pr view "*" comments "*) printf '## r\n\nsomething\n' ;;
+esac
+exit 0
+G
+chmod +x "$d20/stub/gh"
+cap20="$d20/sent.md"
+( cd "$r20" && FM_ROOT="$r20" FM_GH="$GH20" FM_CAPTURE="$cap20" \
+    bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+lines20="$(grep -c '^gh: noise' "$cap20" 2>/dev/null || true)"
+assert_contains "$(cat "$cap20")" "gh: noise 0" "gh's first words reach the prompt"
+assert_ok "[ '$lines20' -le 20 ]" "and 200 lines of them do not: the splice is bounded"
+rm -rf "$d20"
 
 # and if it cannot be kept either, the run says so rather than pointing
 # at a path inside the worktree as though it were safe - which is what

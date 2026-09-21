@@ -191,7 +191,7 @@ if [ "$round_two" = 1 ] && [ -z "$PR" ]; then
   # a mktemp that failed would leave this empty, `2>""` would fail the
   # redirection, gh would never run, and the round would exit 74
   # saying GitHub could not answer - when GitHub was never asked
-  lookup_err="$(scratch_new)"
+  lookup_err="$(scratch_new)" || lookup_err=''
   [ -n "$lookup_err" ] || { echo "fm-worker: could not make a scratch file" >&2; exit 70; }
   scratch_add "$lookup_err"
   PR="$($GH pr list --head "$branch" --state open --json number --jq '.[0].number' \
@@ -256,28 +256,32 @@ say="$tree/.fm-say.md"
         # refused it, its stderr went to /dev/null, and the worker was handed
         # an empty block. An empty block is indistinguishable from a green
         # run, so the round was spent asking why the check was red.
-        # The shape is CHECKED, not assumed. A required check need not be
-        # an Actions run - Buildkite and CircleCI links have no `/runs/`
-        # at all - and `${x##*/runs/}` on one of those leaves the whole
-        # URL, which `%%/*` then reduces to `https:`. The worker would be
-        # told "the log for run https: could not be fetched", which is
-        # worse than saying it is a check this cannot read.
+        # The shape is CHECKED, not assumed, and BOTH shapes GitHub
+        # uses count: `/actions/runs/<id>/job/<id>` and the older
+        # check-run details_url `/runs/<id>`. Narrowing to the first
+        # would send the second down the "cannot read it" path, which
+        # is a worse answer than the one it replaced.
         run_id=''
         case "$failing" in
-          *"/actions/runs/"*)
-            run_id="${failing##*/actions/runs/}"; run_id="${run_id%%/*}"
+          */runs/*)
+            run_id="${failing##*/runs/}"; run_id="${run_id%%/*}"
             case "$run_id" in *[!0-9]*|'') run_id='' ;; esac ;;
         esac
         printf '\n---\n\n# The required check is red\n\n'
         printf 'It fails on the runner and may well pass on your machine.\n\n```\n'
         if [ -z "$run_id" ]; then
-          printf 'The check is at %s, which is not a GitHub Actions run,\n' "$failing"
-          printf 'so its log is not something this script can fetch.\n'
+          # what the SCRIPT could not do, not what the check is. It knows
+          # it found no run id in the link; it does not know which CI
+          # produced the link, and saying "this is not an Actions run"
+          # about an old-style /runs/<id> url was simply false.
+          printf 'No run id could be read out of %s,\n' "$failing"
+          printf 'so this script could not fetch its log.\n'
           printf 'Ask for it on the pull request rather than guessing.\n'
         else
           # fetched once: two calls can disagree, and the second would be
           # the one the worker is shown while the first decided whether to
-          # show anything
+          # show anything.
+          #
           # scratch_new mints, scratch_add registers - the pair is one
           # register, not two, and a mint that failed leaves the empty
           # string that the `:-/dev/null` below is for
@@ -285,22 +289,27 @@ say="$tree/.fm-say.md"
           [ -z "$log_err" ] || scratch_add "$log_err"
           raw_log="$($GH run view "$run_id" --log-failed 2>"${log_err:-/dev/null}" </dev/null)"
           gh_rc=$?
-          # Emptiness is decided on what REACHES THE FENCE, not on the
-          # capture: a log of blank lines, or one every line of which the
-          # column trim reduces to nothing, is non-empty here and prints
-          # an empty block - which is the failure this whole section is
-          # about, arriving through the branch that fixes it.
-          rendered=''
-          [ -z "$raw_log" ] || rendered="$(printf '%s\n' "$raw_log" \
-            | tail -120 | sed 's/^[^\t]*\t[^\t]*\t//' | grep -v '^[[:space:]]*$' || true)"
+          # Two values, on purpose. `trimmed` is what the worker is shown;
+          # `rendered` is the same thing with blank lines dropped, and is
+          # only ever used to DECIDE whether there is anything to show.
+          # Printing the filtered one deleted every blank line inside a
+          # real traceback - a filter that decides something must not also
+          # be the thing printed.
+          trimmed=''; rendered=''
+          if [ -n "$raw_log" ]; then
+            trimmed="$(printf '%s\n' "$raw_log" | tail -120 | sed 's/^[^\t]*\t[^\t]*\t//')"
+            rendered="$(printf '%s\n' "$trimmed" | grep -v '^[[:space:]]*$' || true)"
+          fi
           if [ -n "$rendered" ]; then
-            printf '%s\n' "$rendered"
+            printf '%s\n' "$trimmed"
           elif [ "$gh_rc" != 0 ]; then
             # said, not left blank: the worker cannot run gh, so this block
             # is its only view of the runner, and silence reads as "nothing
             # was wrong" rather than "I could not fetch it"
             printf 'The log for run %s could not be fetched.\n' "$run_id"
-            [ -z "$log_err" ] || sed 's/^/gh: /' "$log_err"
+            # bounded, like the log above it: gh's stderr is not, and
+            # everything that reaches this fence has to be
+            [ -z "$log_err" ] || sed 's/^/gh: /' "$log_err" | head -20
             printf 'Ask for it on the pull request rather than guessing.\n'
           else
             # gh answered, and had nothing: a cancelled run, or a job that
@@ -361,7 +370,7 @@ spoke=0
 # number. The run said where the text is and not what went wrong.
 say_err=''
 if [ "$asked" = 1 ] && [ -n "$PR" ]; then
-  say_err="$(scratch_new)"
+  say_err="$(scratch_new)" || say_err=''
   [ -z "$say_err" ] || scratch_add "$say_err"
   if $GH pr comment "$PR" --body-file "$say" >/dev/null 2>"${say_err:-/dev/null}" </dev/null; then
     spoke=1

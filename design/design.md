@@ -301,19 +301,27 @@ is never allowed to be empty. A check's link is
 job: reading the whole tail of it asked `gh run view` for something it
 refuses, its complaint went to `/dev/null`, and the worker was handed a
 blank block. The shape is checked rather than assumed — a required
-check need not be an Actions run at all, and one that is not says so
-rather than asking for a run called `https:`. A blank block reads as a
-green run, so the round was spent asking why the check was red.
+check need not be an Actions run at all, and both shapes GitHub itself
+uses count — `/actions/runs/<id>/job/<id>` and the older check-run
+`/runs/<id>`. A blank block reads as a green run, so the round was
+spent asking why the check was red.
 
 The block is never blank, and it says which of three things happened,
-because to the worker they mean different things: the check is not an
-Actions run and its log is not ours to fetch; the fetch failed, and
-here is what `gh` said; or the fetch succeeded and the run had no
-failing step log at all — a cancelled run, or a job that died before
-anything logged — which "could not be fetched" would misreport as
-GitHub's fault. Emptiness is decided on what reaches the fence rather
-than on what `gh` returned: a log whose every line the column trim
-reduces to nothing is not an empty capture, and it is an empty block.
+because to the worker they mean different things: no run id could be
+read out of the link, so the log is not something this script can
+fetch; the fetch failed, and here is what `gh` said; or the fetch
+succeeded and the run had no failing step log at all — a cancelled
+run, or a job that died before anything logged — which "could not be
+fetched" would misreport as GitHub's fault. The first of those says
+what the SCRIPT could not do rather than what the check is: it knows
+it found no run id, and it does not know which CI produced the link.
+
+Emptiness is decided on what reaches the fence rather than on what
+`gh` returned — a log whose every line the column trim reduces to
+nothing is not an empty capture, and it is an empty block — but the
+filter that decides is not the thing printed, or every blank line
+inside a traceback would be deleted on the way. Everything spliced
+into that fence is bounded, `gh`'s complaints included.
 
 The lookup keeps GitHub's exit status, because *no open pull request*
 and *`gh` did not answer* are the same empty string and opposite
