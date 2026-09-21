@@ -228,12 +228,23 @@ assert_eq "$before" "$after" "an ending does not change what the dispatcher woul
 # 24 is one number, and the page is told what it was
 assert_eq "24" "$(jq -r '.deckLimit' <<<"$sv")" "the server says what the deck holds"
 
-# an agent whose task is finished has gone home
+# An agent whose task is finished has gone home. The backstop for a run
+# that never got to say it ended, and the merged half of it: the closed
+# half is covered above by worker-closed.
+#
+# On worker-7, and not on worker-2, which is what this asserted before:
+# worker-2 said agent_finished ten lines up, the ending is checked first
+# and had already taken it off the deck, so the assertion was green with
+# `merged` deleted from the server's FINAL set. worker-7 was dispatched
+# on T-B and has never said anything since.
+sbefore="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_contains "$(jq -r '.crew[].id' <<<"$sbefore" | tr '\n' ' ')" "worker-7" \
+  "an agent on an open task, which has not said it ended, is aboard"
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --task T-B --type merged --pr 3 \
   --en "merged" --tw "已合併" >/dev/null
 sk2="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
-assert_lacks "$(jq -r '.crew[].id' <<<"$sk2" | tr '\n' ' ')" "worker-2" \
-  "an agent whose task is finished is not aboard"
+assert_lacks "$(jq -r '.crew[].id' <<<"$sk2" | tr '\n' ' ')" "worker-7" \
+  "and is not aboard once that task is merged"
 
 # merged is where a task stops. A review round run against the branch
 # afterwards would otherwise move it back to "in review", which reads as

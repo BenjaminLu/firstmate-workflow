@@ -21,6 +21,15 @@ assert_contains "$out" "red.test.sh" "names the failing test"
 
 rm -f "$t/tests/red.test.sh" "$t/tests/green.test.sh"
 assert_ok "FM_ROOT='$t' bash '$ROOT/bin/ci.sh'" "passes on a repo with no tests yet"
+# The bash stage has two arms and only one of them reads what a suite
+# said, which reads like a rule enforced in one place out of two. It is
+# not: the other arm runs no suite. Asserted, so the shape cannot change
+# quietly - on a tree with no suites the stage skips and reports on
+# nothing, so there is no second path a suite's verdict can come down.
+empty="$(FM_ROOT="$t" bash "$ROOT/bin/ci.sh" 2>&1)"
+assert_contains "$empty" "no suites yet" "with no suites the bash stage skips"
+assert_fail "grep -qE '^  [+x] tests/' <<< \"\$empty\"" \
+  "and reports on no suite at all, so nothing decides green on the other arm"
 
 assert_ok "test -x '$ROOT/bin/ci.sh'" "ci.sh is executable"
 gha="$ROOT/.github/workflows/ci.yml"

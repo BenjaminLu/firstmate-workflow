@@ -3,7 +3,7 @@
 // moves would fail on the animation and pass on the wrong crew.
 import { test, expect, type Page } from "@playwright/test";
 import { makeRoot, startBoard, stopBoard, ROOT } from "./fixture";
-import { readFileSync, existsSync } from "node:fs";
+import { appendFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 const EN = JSON.parse(readFileSync(join(ROOT, "i18n/ui.en.json"), "utf8"));
@@ -214,14 +214,25 @@ test("the captain keeps his own block on a phone", async ({ page }) => {
     const box = await page.locator("#captain").boundingBox();
     expect(box!.width).toBeGreaterThan(0);
     expect(box!.height).toBeGreaterThan(0);
-    // and the guard that keeps `hidden` working at this width. It has
-    // to be provoked from here: the page only ever hides him when there
-    // are no cards, and then #deckwrap is hidden too and hides him
-    // whatever this rule says - which is why removing the rule broke
-    // nothing until this line existed. The rule is the contract for
+    // and the guard that keeps `hidden` working at this width. It has to
+    // be provoked from here: the page only ever hides him when there are
+    // no cards, and then #deckwrap is hidden too and hides him whatever
+    // this rule says - which is why removing the rule broke nothing
+    // until this line existed. The rule is the contract for
     // `.captain[hidden]`, so the attribute is what sets it.
+    //
+    // Not a race with the board's own clock, and asserted rather than
+    // argued: the page renders when the event log changes and at no
+    // other time, so nothing is going to undo this on a tick. The proof
+    // is the second half - a real event goes into the log, the render
+    // it triggers puts him back, and the page is shown to be the owner
+    // of the attribute this half just borrowed.
     await page.evaluate(() => { document.getElementById("captain")!.hidden = true; });
-    await expect(page.locator("#captain")).toBeHidden({ timeout: 2000 });
+    await expect(page.locator("#captain")).toBeHidden();
+    appendFileSync(join(waiting.root, "state/events.jsonl"),
+      JSON.stringify({ ts: "2026-09-21T10:00:00Z", actor: "worker-9", task: "T-001",
+                       type: "dispatched", summary: { en: "late", "zh-TW": "late" } }) + "\n");
+    await expect(page.locator("#captain")).toBeVisible({ timeout: 10_000 });
   } finally { stopBoard(waiting); }
   const quiet = await startBoard(makeRoot(["working"], false));
   try {
