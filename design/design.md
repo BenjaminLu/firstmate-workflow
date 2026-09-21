@@ -183,6 +183,16 @@ files touched and the pull request link, answered with merge, send back, or
 hold. **Every merge goes through a card.** firstmate may not merge on its own
 and may not ask for one in conversation.
 
+T-034 planned interaction restores selecting an option locally, then explicitly
+confirming it. A fourth custom choice carries the captain's own bounded text,
+stored as data under a distinct `chosen` value such as `custom`, not a note on
+option A. Nothing is selected initially; selecting or typing performs no write.
+Confirmation validates nonempty text and limits before storing the decision.
+Custom text is escaped for display, preserved through the watch/storage path,
+and never evaluated as shell input or treated as merge approval. The interface
+localizes its labels and validation, not the captain's authored words. This is
+T-034's planned contract; current production support is not implied.
+
 Await mode uses `bun run bin/watch-decisions.ts` (`fs.watch`) when bun and the
 watcher script are present, and a one-second poll otherwise. Wake latency must
 be measured, not inferred from the watcher mechanism. **No `fswatch` dependency.**
