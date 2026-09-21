@@ -40,10 +40,16 @@ fi
 evt() { jq -r --arg t "$1" 'select(.type==$t)|.task // empty' "$LOG" 2>/dev/null | sort -u; }
 done_tasks="$(evt merged)"
 started="$(evt dispatched)"
+# a task whose pull request is open is being worked on, whoever started it.
+# Without this a task waiting for the captain is dispatched again and a
+# second worker pushes onto a branch a reviewer has already signed.
+open_prs="$(jq -r 'select(.type=="pr_opened")|.task // empty' "$LOG" 2>/dev/null | sort -u)"
+settled_prs="$(jq -r 'select(.type=="merged" or .type=="closed")|.task // empty' "$LOG" 2>/dev/null | sort -u)"
 closed_tasks="$(evt closed)"
 finished="$(printf '%s\n%s\n' "$done_tasks" "$closed_tasks" | sort -u)"
-inflight="$(comm -23 <(printf '%s\n' "$started" | sort -u | sed '/^$/d') \
-                     <(printf '%s\n' "$finished" | sort -u | sed '/^$/d') | sed '/^$/d')"
+inflight="$(comm -23 <(printf '%s\n%s\n' "$started" "$open_prs" | sort -u | sed '/^$/d') \
+                     <(printf '%s\n%s\n' "$finished" "$settled_prs" | sort -u | sed '/^$/d') \
+             | sed '/^$/d')"
 n_inflight="$(printf '%s\n' "$inflight" | sed '/^$/d' | wc -l | tr -d ' ')"
 
 limit="${LIMIT:-$(fm_cfg concurrency)}"
@@ -78,7 +84,8 @@ while IFS= read -r id; do
   if [ "$DRY" -eq 1 ]; then
     echo "$id"
   else
-    emit --type dispatched --task "$id" --en "dispatched $id" --tw "已派出 $id"
+    # the worker emits dispatched itself; two writers of one fact is how
+    # the log ends up disagreeing with itself
     "$REPO/bin/fm-worker.sh" --task "$id" --repo "$REPO" >/dev/null 2>&1 </dev/null &
     echo "$id"
   fi

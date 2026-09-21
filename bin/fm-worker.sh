@@ -43,6 +43,11 @@ slug="$(printf '%s' "$TASK" | tr 'A-Z' 'a-z')"
 branch="$slug-$(jq -r '.title' <<<"$spec" | tr 'A-Z' 'a-z' | tr -cs 'a-z0-9' '-' | cut -c1-28 | sed 's/-*$//')"
 tree="$REPO/state/worktrees/$TASK"
 
+# The worker records that it started, not the dispatcher. A task started
+# by hand was otherwise never in flight as far as the log was concerned,
+# and the dispatcher would start a second one on top of it.
+emit --type dispatched --en "picked up $TASK" --tw "接下 $TASK"
+
 # --- a worktree of its own -----------------------------------------------
 rm -rf "$tree"; mkdir -p "$REPO/state/worktrees"
 git worktree prune >/dev/null 2>&1
