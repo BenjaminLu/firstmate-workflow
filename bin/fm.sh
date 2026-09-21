@@ -437,9 +437,13 @@ cmd_sync() {
   [ -n "$src" ] || { usage >&2; die "sync-skills: a source directory is required"; }
   repo="$(abs "$repo")" || die "no repo at $repo"
   src="$(abs "$src")" || die "sync-skills: no directory at $src"
-  # importing from yourself is not an import, and it would let a role skill
-  # be copied over an imported one and back again
+  # Neither tree may contain the other. A source containing the repository
+  # would be mutated by staging and could recursively copy its own output.
+  # Both paths are physical absolute paths; slash boundaries allow siblings
+  # with a shared name prefix. Handle the filesystem root explicitly.
   case "$src" in "$repo"|"$repo"/*) die "sync-skills: $src is inside this repository" ;; esac
+  case "$repo" in "$src"/*) die "sync-skills: $src contains this repository" ;; esac
+  [ "$src" != / ] && [ "$repo" != / ] || die "sync-skills: source and repository overlap"
 
   # Check source and destination ancestors before the first write. Reject all
   # imported links rather than retain references into the external source.

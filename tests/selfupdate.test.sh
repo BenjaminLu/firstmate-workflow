@@ -73,6 +73,40 @@ self-update --adopt
 self-update --repo
 OPTIONS
   rm -f "$outside/output"
+  scrub "$d" "$src"
+  # Overlap must be rejected in both directions, before even creating the
+  # cache. Stub copying to keep a broken ancestor check from recursively
+  # copying its own staging directory; a usage error must precede the stub.
+  failbin="$(mktemp -d)"
+  printf '#!/usr/bin/env bash\nexit 99\n' > "$failbin/cp"
+  chmod +x "$failbin/cp"
+  for target in ancestor descendant same sibling; do
+    m="$(mktemp -d)"
+    mkdir -p "$m/input/repo" "$m/input-other"
+    printf 'plain\n' > "$m/input/SKILL.md"
+    printf 'authored\n' > "$m/input/repo/keep"
+    chmod 640 "$m/input/SKILL.md" "$m/input/repo/keep"
+    case "$target" in
+      ancestor) src="$m/input"; d="$m/input/repo" ;;
+      descendant) src="$m/input/repo"; d="$m/input" ;;
+      same) src="$m/input"; d="$m/input" ;;
+      sibling) src="$m/input"; d="$m/input-other" ;;
+    esac
+    before="$(find "$m" -exec ls -ld {} \; | LC_ALL=C sort; treesum "$m")"
+    if [ "$target" = sibling ]; then
+      assert_ok "'$FM' sync-skills '$src' --name imported --repo '$d'" "shared path prefix alone is not overlap"
+    else
+      PATH="$failbin:$PATH" "$FM" sync-skills "$src" --name imported --repo "$d" > "$outside/output" 2>&1
+      rc=$?
+      assert_eq 64 "$rc" "$target overlap is refused before copying"
+      assert_eq "$before" "$(find "$m" -exec ls -ld {} \; | LC_ALL=C sort; treesum "$m")" "$target rejection preserves all paths, bytes and permissions"
+    fi
+    scrub "$m"
+  done
+  scrub "$failbin"
+  rm -f "$outside/output"
+  d="$(fixture)"; src="$(mktemp -d)"
+  printf 'plain\n' > "$src/SKILL.md"
   # Every pre-existing destination is checked before any mutation. Record
   # mode bits as well as contents: chmod through a link is also a write.
   for target in skills skills/vendor skills/vendor/imported skills/vendor/.gitignore skills/vendor/MANIFEST.tsv skills/vendor/MANIFEST.tsv.new skills/vendor/.staging.hostile; do
