@@ -69,7 +69,12 @@ mkdir -p "$ROOT/state" || die "cannot create $ROOT/state"
 for _ in $(seq 1 600); do
   if mkdir "$LOCK" 2>/dev/null; then
     # shellcheck disable=SC2064
-    trap "rmdir '$LOCK' 2>/dev/null" EXIT INT TERM
+    # the signal traps only exit; the EXIT trap releases. Naming a
+    # signal alongside EXIT released the lock and then CARRIED ON
+    # writing, with the lock already gone - and kill stopped working
+    trap "rmdir '$LOCK' 2>/dev/null" EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     printf '%s\n' "$line" >> "$LOG"
     exit 0
   fi

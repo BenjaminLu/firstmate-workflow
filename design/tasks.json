@@ -621,21 +621,22 @@
       ],
       "title": "the crew are agents, not pull requests",
       "scope": [
-        "board/server.ts",
+        "bin/fm-diagram.sh",
+        "bin/fm-emit.sh",
+        "bin/fm-review.sh",
+        "bin/fm-worker.sh",
         "board/public/**",
+        "board/server.ts",
+        "design/design.md",
+        "design/tasks.json",
+        "i18n/**",
         "tests/board.test.sh",
         "tests/crew-end-to-end.test.sh",
         "tests/e2e/**",
-        "tests/ship.spec.ts",
-        "tests/worker.test.sh",
         "tests/review.test.sh",
-        "bin/fm-emit.sh",
-        "bin/fm-worker.sh",
-        "bin/fm-review.sh",
-        "bin/fm-diagram.sh",
-        "i18n/**",
-        "design/tasks.json",
-        "design/design.md"
+        "tests/ship.spec.ts",
+        "tests/traps.test.sh",
+        "tests/worker.test.sh"
       ],
       "acceptance": [
         "a crewman is an agent that is working, not a task and not a pull request",
@@ -646,7 +647,8 @@
         "the ship's rate follows the number of agents, which is the concurrency, not the backlog",
         "the captain is not crew: he is drawn beside the cards, from the same pending deck the cards come from, and nothing else derives him",
         "an agent that has finished its run is not aboard, whatever became of the task",
-        "a run says when it ends, on every exit path including the ones that give up"
+        "a run says when it ends, on every exit path including the ones that give up",
+        "no script names a signal alongside EXIT in one trap: the handler runs and execution continues, and kill stops working"
       ]
     }
   ]

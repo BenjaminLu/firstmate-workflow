@@ -38,13 +38,20 @@ cd "$REPO" || { echo "fm-review: no repo at $REPO" >&2; exit 64; }
 # rounds into one crewman carrying whichever task the second one touched
 NAME="${NAME:-reviewer-$$}"
 emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --data '{"role":"reviewer"}' --actor "$NAME" --task "$TASK" "$@" >/dev/null 2>&1 </dev/null || true; }
-# Armed where emit() first works, not forty lines further down: every
-# exit between the two boards an actor that never leaves. On every exit
-# path, including the ones that give up - and a bare EXIT trap is not
-# every path: an untrapped TERM or INT kills bash without running it,
-# and those are exactly the ones that give up.
+# Armed where emit() first works: every exit between the two would board
+# an actor that never leaves. Above it is only the argument parsing,
+# which exits 64 before emit() exists.
+#
+# One EXIT trap does the emitting; the signal traps only exit. Naming a
+# signal alongside EXIT runs the handler and then CONTINUES, so a killed
+# run announces it has finished and carries on working - and `kill`
+# stops working on it, because a trapped TERM that does not exit leaves
+# only SIGKILL. The codes are the conventional 128+signal.
 finished() { emit --type agent_finished --en "run finished" --tw "這次執行結束"; }
-trap finished EXIT INT TERM HUP
+trap finished EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 # The task spec comes from the branch under review, not from whatever is
 # checked out. A task defined on its own branch - which is how a new one
