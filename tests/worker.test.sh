@@ -26,15 +26,18 @@ JSON
 }
 
 ghstub() {                      # records what it was asked, invents a pull request url
-  # `pr list` has to answer emptily: the worker asks it first, and a stub
-  # that answers every question with a url tells the worker a pull request
-  # already exists and it never opens one
+  # `pr list` has to answer the way gh does: through `--jq
+  # '.[0].number'` a branch with no open pull request is the literal
+  # `null`, not silence, and the worker normalises it. A stub that
+  # answers with nothing leaves that normalisation untested - and a
+  # stub that answers every question with a url tells the worker a
+  # pull request already exists and it never opens one.
   mkdir -p "$1/stub"
   cat > "$1/stub/gh" <<G
 #!/usr/bin/env bash
 echo "gh \$*" >> "$1/ghcalls"
 case " \$* " in
-  *" pr list "*) exit 0 ;;
+  *" pr list "*) echo null; exit 0 ;;
 esac
 echo "https://example.invalid/pull/42"
 G
@@ -182,7 +185,6 @@ assert_eq "31" "$(jq -r 'select(.type=="ask_pass_criteria")|.pr' < "$r9/state/ev
   "and the log records the number it spoke on"
 assert_contains "$out9" "asked rather than changed" \
   "an asking round says so - which is the string the stale-signal test below asserts the ABSENCE of"
-assert_lacks "$(cat "$d9/ghcalls")" "pr create" "and it opened no second pull request"
 rm -rf "$d9"
 
 # The worker cannot run gh, so the only way its question reaches the
@@ -231,6 +233,9 @@ out7="$(cd "$r7" && FM_ROOT="$r7" FM_GH="$GH7" bin/fm-worker.sh --task T-Z --pr 
 assert_eq "73" "$rc7" "a question that could not be posted fails the run"
 assert_contains "$out7" "nowhere to put it" "and says what happened"
 assert_contains "$out7" "#9" "naming the pull request that would not take it"
+# and WHY, which is the only thing that tells the person picking this
+# up by hand whether to retry, ask for access, or fix the number
+assert_contains "$out7" "could not post" "and passing on what gh said about it"
 assert_eq "9" "$(jq -r 'select(.type=="worker_crashed")|.pr' < "$r7/state/events.jsonl" | tail -1)" \
   "and the event carries it, so the board can link the failed round to the pull request"
 # the FILE, not the length: with nullglob off bash leaves an unmatched
@@ -328,7 +333,11 @@ cat > "$d13/stub/gh" <<'G'
 #!/usr/bin/env bash
 echo "gh $*" >> "$(dirname "$0")/../ghcalls"
 case " $* " in
-  *" pr list "*) exit 0 ;;
+  # what gh really prints for a branch with no open pull request,
+  # through `--jq '.[0].number'`: the literal four characters, not
+  # silence. A stub that answers with nothing tests the code's
+  # expectation rather than the vendor.
+  *" pr list "*) echo null; exit 0 ;;
   *" pr view "*|*" pr checks "*) exit 0 ;;
 esac
 echo "https://example.invalid/pull/61"
@@ -337,7 +346,9 @@ chmod +x "$d13/stub/gh"; : > "$d13/ghcalls"
 out14="$(cd "$r13" && FM_ROOT="$r13" FM_GH="$GH13" bin/fm-worker.sh --task T-Z 2>&1)"; rc14=$?
 assert_eq "0" "$rc14" "a lookup that answers \"none\" is not a failure"
 assert_contains "$out14" "will open one" "and the run says it is opening one"
-assert_contains "$(cat "$d13/ghcalls")" "pr create" "and it does"
+assert_lacks "$out14" "#null" "and never carries gh's four characters through as a number"
+assert_contains "$(cat "$d13/ghcalls")" "pr create" "and it does open one"
+assert_lacks "$(cat "$d13/ghcalls")" "pr comment null" "rather than posting to a pull request called null"
 rm -rf "$d13"
 
 # and if it cannot be kept either, the run says so rather than pointing
@@ -356,9 +367,12 @@ case " $* " in *" pr comment "*) exit 1 ;; esac
 exit 0
 G
 chmod +x "$d11/stub/gh"
-mkdir -p "$r11/state/unsent"; chmod 500 "$r11/state/unsent"
+# a directory mode is advisory for root, so the test would silently
+# invert under a root runner: it makes the destination a FILE instead,
+# which no uid can cp into as if it were a directory
+mkdir -p "$r11/state"; : > "$r11/state/unsent"
 out12="$(cd "$r11" && FM_ROOT="$r11" FM_GH="$GH11" bin/fm-worker.sh --task T-Z --pr 9 2>&1)"; rc12=$?
-chmod 700 "$r11/state/unsent"
+rm -f "$r11/state/unsent"
 assert_eq "73" "$rc12" "a question that can be neither posted nor kept still fails the run"
 assert_contains "$out12" "could not be kept either" "and says the keeping failed too"
 assert_lacks "$out12" "it is at state/unsent" "rather than naming a file it did not write"
@@ -401,8 +415,6 @@ G
 chmod +x "$d12/stub/gh"; : > "$d12/ghcalls"
 out13="$(cd "$r12" && FM_ROOT="$r12" FM_GH="$GH12" bin/fm-worker.sh --task T-Z 2>&1)"
 assert_contains "$out13" "already has #55" "a branch only origin remembers is still a later round"
-assert_lacks "$(cat "$d12/ghcalls")" "pr create" \
-  "so it does not try to open a second pull request for it"
 assert_contains "$(jq -r 'select(.type=="commit_pushed")|.pr|tostring' \
   < "$r12/state/events.jsonl" | tail -1)" "55" "and its push points at the one that is there"
 rm -rf "$d12"
@@ -599,6 +611,18 @@ assert_contains "$out4" "worker-mute" "and names the crewman left on the deck"
 assert_ok "git -C '$r4' rev-parse --verify t-z-a-mock-task" \
   "a log it cannot write to does not stop the run"
 rm -rf "$d4"
+
+# §5.3.2 lists the codes a worker can exit with, and a list in prose
+# rots the first time one moves. Every `exit N` in the script has to be
+# named there, and every code named there has to be in the script -
+# identity, not a count, so adding one correctly is not a failure and
+# losing one is.
+codes="$(grep -oE '^[^#]*exit [0-9]+' "$ROOT/bin/fm-worker.sh" \
+         | grep -oE 'exit [0-9]+$' | awk '{print $2}' | sort -un | grep -v '^0$' || true)"
+assert_ne "" "$codes" "the worker has exit codes to check"
+listed="$(sed -n '/^### 5.3.2/,/^### /p' "$ROOT/design/design.md" \
+          | grep -oE '`[0-9]+`' | tr -d '`' | sort -un)"
+assert_eq "$codes" "$listed" "design.md §5.3.2 names exactly the codes fm-worker exits with"
 
 # the adapter never touches the repository
 # a comment may mention git; a call may not

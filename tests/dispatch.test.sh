@@ -69,13 +69,21 @@ rm -rf "$d" "$d2" "$d3"
 # it. Without this the dispatcher starts a second worker on a branch a
 # reviewer has already signed - which is what happened the first time the
 # dispatcher ran after a task had been started by hand.
-p="$(mktemp -d)"; mkdir -p "$p/bin" "$p/design" "$p/state"
-cp "$ROOT/bin/fm-dispatch.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$p/bin/"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$p/bin/fm-worker.sh"; chmod +x "$p/bin/fm-worker.sh"
-printf 'vendor: mock\nconcurrency: 3\n' > "$p/config.yaml"
-printf '{"tasks":[{"id":"T-001","title":"a","depends_on":[]},{"id":"T-002","title":"b","depends_on":[]}]}\n' \
-  > "$p/design/tasks.json"
-FM_ROOT="$p" "$p/bin/fm-emit.sh" --actor captain --type greenlit --en go --tw 開工 >/dev/null
+# ONE builder for both trees. The control below has to be the same
+# tree as the negative or the comparison is between two different
+# things, and two copies of a setup written out by hand agree only
+# until one of them is edited.
+pr_tree() {                     # pr_tree -> a greenlit repo with T-001 and T-002
+  local d; d="$(mktemp -d)"; mkdir -p "$d/bin" "$d/design" "$d/state"
+  cp "$ROOT/bin/fm-dispatch.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$d/bin/"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$d/bin/fm-worker.sh"; chmod +x "$d/bin/fm-worker.sh"
+  printf 'vendor: mock\nconcurrency: 3\n' > "$d/config.yaml"
+  printf '{"tasks":[{"id":"T-001","title":"a","depends_on":[]},{"id":"T-002","title":"b","depends_on":[]}]}\n' \
+    > "$d/design/tasks.json"
+  FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --type greenlit --en go --tw 開工 >/dev/null
+  printf '%s' "$d"
+}
+p="$(pr_tree)"
 # the positive control first, or "it did not appear" is evidence about a
 # string rather than about a filter: before anything is said about it,
 # T-001 is a task this dispatcher would start
@@ -85,12 +93,7 @@ FM_ROOT="$p" "$p/bin/fm-emit.sh" --actor captain --type greenlit --en go --tw �
 # tell "not restarted because its pull request is open" from "not
 # restarted because it is already started". Same invocation, same
 # output surface, no shared state.
-c="$(mktemp -d)"; mkdir -p "$c/bin" "$c/design" "$c/state"
-cp "$ROOT/bin/fm-dispatch.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$c/bin/"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$c/bin/fm-worker.sh"; chmod +x "$c/bin/fm-worker.sh"
-printf 'vendor: mock\nconcurrency: 3\n' > "$c/config.yaml"
-cp "$p/design/tasks.json" "$c/design/tasks.json"
-FM_ROOT="$c" "$c/bin/fm-emit.sh" --actor captain --type greenlit --en go --tw 開工 >/dev/null
+c="$(pr_tree)"
 assert_contains "$(cd "$c" && FM_ROOT="$c" bin/fm-dispatch.sh --repo "$c" 2>&1)" "T-001" \
   "the same tree without the pull request event does dispatch T-001"
 rm -rf "$c"
@@ -112,5 +115,15 @@ assert_lacks "$out" "T-001" "and a merged task is not dispatched either"
 # A later round started by hand therefore arrives with nothing, and
 # bin/fm-worker.sh looks the number up before it builds the prompt.
 rm -rf "$p"
+
+# §5.3.2 says nothing reads the worker's exit status, which is why one
+# failed round is one card on the board and not two. That is a claim
+# about this file, so this file carries it: the worker is started in
+# the background and never waited for.
+started_line="$(grep -n 'bin/fm-worker.sh' "$ROOT/bin/fm-dispatch.sh" | grep -v '^[0-9]*: *#')"
+assert_ne "" "$started_line" "the dispatcher starts the worker"
+assert_contains "$started_line" "&" "in the background"
+assert_eq "" "$(grep -vE '^[[:space:]]*#' "$ROOT/bin/fm-dispatch.sh" | grep -E '\bwait\b' || true)" \
+  "and never waits for it, so nothing here reads its exit status"
 
 finish

@@ -158,9 +158,18 @@ fi || { echo "fm-worker: could not create the worktree" >&2; exit 70; }
 # that is already there, so the run stops before it spends an engine
 # round finding that out.
 if [ "$round_two" = 1 ] && [ -z "$PR" ]; then
+  # no pipe: `$?` after one is the LAST element's, and `head` on empty
+  # input exits 0 - so a `head -1` here would turn could-not-answer into
+  # answered-none the moment pipefail was not in force, which is the one
+  # thing this block exists to prevent. `--jq '.[0].number'` yields a
+  # single line anyway, so the pipe bought nothing.
   lookup_err="$(mktemp)"
   PR="$($GH pr list --head "$branch" --state open --json number --jq '.[0].number' \
-        2>"$lookup_err" </dev/null | head -1)"; lookup_rc=$?
+        2>"$lookup_err" </dev/null)"; lookup_rc=$?
+  # what gh actually prints for a branch with no open pull request is
+  # the literal `null`, not silence - leak it through and the round
+  # says `already has #null` and then posts to `gh pr comment null`
+  PR="$(printf '%s' "$PR" | tr -d '[:space:]')"
   case "$PR" in null) PR='' ;; esac
   if [ "$lookup_rc" != 0 ]; then
     echo "fm-worker: could not ask which pull request $branch has" >&2
@@ -260,8 +269,14 @@ rm -f "$prompt"
 asked=0
 [ -s "$say" ] && asked=1
 spoke=0
+# gh's own words are kept, the way the lookup above keeps them: this is
+# the one path where a person is expected to pick the failure up by
+# hand, and "it was refused" without "why" sends them to the pull
+# request to find out - no permission, rate limited, locked, wrong
+# number. The run said where the text is and not what went wrong.
+say_err="$(mktemp)"
 if [ "$asked" = 1 ] && [ -n "$PR" ]; then
-  if $GH pr comment "$PR" --body-file "$say" >/dev/null 2>&1 </dev/null; then
+  if $GH pr comment "$PR" --body-file "$say" >/dev/null 2>"$say_err" </dev/null; then
     spoke=1
     emit --type ask_pass_criteria --pr "$PR" --en "the worker spoke on #$PR" \
          --tw "工人在 #$PR 上發言"
@@ -289,7 +304,10 @@ if [ "$asked" = 1 ] && [ "$spoke" = 0 ]; then
   # back inside the worktree and printed it as though it were safe,
   # which is the exact thing the sentence above says does not survive -
   # a fallback that quietly undoes the fix it is a fallback for.
-  kept="$REPO/state/unsent/$TASK-$(date -u +%Y%m%dT%H%M%SZ).md"
+  # the pid too: two failures in the same second would otherwise
+  # overwrite each other, and the earlier question is the one this
+  # path exists to keep
+  kept="$REPO/state/unsent/$TASK-$(date -u +%Y%m%dT%H%M%SZ)-$$.md"
   mkdir -p "$(dirname "$kept")"
   echo "fm-worker: the worker had something to say and there was nowhere to put it" >&2
   if cp "$say" "$kept" 2>/dev/null; then
@@ -304,6 +322,7 @@ if [ "$asked" = 1 ] && [ "$spoke" = 0 ]; then
   # question was asked and the answer was none.
   if [ -n "$PR" ]; then
     echo "fm-worker: #$PR would not take the comment" >&2
+    sed 's/^/fm-worker: gh: /' "$say_err" >&2
     emit --type worker_crashed --pr "$PR" --en "the worker's question could not be posted to #$PR" \
          --tw "工人的提問貼不上 #$PR"
   else
@@ -311,9 +330,10 @@ if [ "$asked" = 1 ] && [ "$spoke" = 0 ]; then
     emit --type worker_crashed --en "the worker asked before there was a pull request" \
          --tw "工人在還沒有 PR 的時候提問"
   fi
+  rm -f "$say_err"
   exit 73
 fi
-rm -f "$say"
+rm -f "$say" "$say_err"
 
 # asking IS the work in a round that begins with a question, and the round
 # after it is the one that changes files

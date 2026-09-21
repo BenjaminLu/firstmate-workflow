@@ -309,7 +309,14 @@ question that could not be posted is a failed run — exit `73`, a
 `worker_crashed` carrying the pull request number, and the text copied
 to `state/unsent/`. Not left in the worktree: the next round removes
 and recreates that from the branch, so a file kept where it was written
-is gone as soon as anything runs again. (That recreation is also what
+is gone as soon as anything runs again. `state/unsent/` sits beside
+`state/rescued/`, which is where an interrupted run's files go — same
+idea, different thing saved: one is work, the other is a message.
+Nothing reaps either. They are under `state/`, which is not in the
+repository, and a directory of questions nobody could post is a thing
+to read rather than a thing to garbage-collect; the names carry the
+task, a UTC stamp and the pid, so two failures in the same second do
+not overwrite each other. (That recreation is also what
 makes `.fm-say.md` a signal from the current round and not a stale one
 from an earlier failure.) It used to be a line on standard error and an
 exit 0: the reviewer waited for a question it would never see, the next
@@ -328,10 +335,17 @@ with `&` and never waits, so `73` is read by a person, and the one
 event the round writes is the one the worker writes — there is no
 second `worker_crashed` from a caller noticing the code. The codes a
 worker can exit with are `1` a failed attempt, `2` no vendor was
-available, `64` it was called wrong, `70` no worktree or no library,
-`71` the push failed, `72` no pull request number came back, `73` the
-worker had something to say and there was nowhere to put it, and `74`
-GitHub could not say which pull request the branch has.
+available, `64` it was called wrong, `65` no such task in
+`design/tasks.json`, `70` no worktree or no library, `71` the push
+failed, `72` no pull request number came back, `73` the worker had
+something to say and there was nowhere to put it, `74` GitHub could not
+say which pull request the branch has, and `129`, `130`, `143` — a
+signal, 128 plus its number, from the traps that make a killed run stop
+rather than carry on.
+
+`tests/worker.test.sh` compares that list against every `exit` in the
+script, by identity: a code added correctly is not a failure and a code
+that moves without the sentence moving is.
 
 ### 5.4 The pull request protocol
 
