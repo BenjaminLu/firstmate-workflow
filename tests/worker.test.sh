@@ -143,6 +143,28 @@ b6="$(cd "$r6" && git for-each-ref --format='%(refname:short)' refs/heads | grep
 assert_fail "cd '$r6' && git cat-file -e '$b6:.fm-say.md'" "and the file never reaches the diff"
 rm -rf "$d6"
 
+# A run that was interrupted leaves its files uncommitted in the worktree,
+# and the next dispatch used to delete them before anything could see
+# them. Tonight that nearly cost two finished tasks.
+d7="$(fixture)"; r7="$d7/repo"; GH7="$(ghstub "$d7")"
+cat > "$r7/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+mkdir -p "$3/src"; printf 'work\n' > "$3/src/thing"
+M
+chmod +x "$r7/bin/adapters/mock.sh"
+( cd "$r7" && FM_ROOT="$r7" FM_GH="$GH7" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+# leave something uncommitted behind, the way an interrupted run does
+printf 'half finished\n' > "$r7/state/worktrees/T-Z/src/unsaved"
+out7="$(cd "$r7" && FM_ROOT="$r7" FM_GH="$GH7" bin/fm-worker.sh --task T-Z 2>&1)"
+assert_contains "$out7" "uncommitted work" "an interrupted run's files are noticed"
+rescued="$(find "$r7/state/rescued" -name unsaved 2>/dev/null | head -1)"
+assert_ne "" "$rescued" "and copied somewhere before the worktree is remade"
+assert_contains "$(cat "$rescued" 2>/dev/null)" "half finished" "with what was in them"
+assert_contains "$(jq -r .type < "$r7/state/events.jsonl" | tr '\n' ' ')" "worker_crashed" \
+  "and the log says it happened"
+rm -rf "$d7"
+
 # a vendor named in config.yaml with no adapter behind it is a typo. It has
 # to be found before anything runs, or a real vendor does the work and the
 # exit 65 throws it away with the worktree.
