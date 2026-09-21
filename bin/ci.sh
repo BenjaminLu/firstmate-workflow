@@ -98,16 +98,27 @@ fi
 # branch with no `need` in front of it. What it does not: a loop that
 # checks some other way, which is why the check is named rather than
 # inferred.
-# ci.sh quotes the shape it forbids, and says so about itself the way a
-# sourced library does
-unguarded="$(grep -Hn 'shift 2' bin/*.sh 2>/dev/null \
-  | grep -v '^bin/ci\.sh:' | grep -v 'need ' \
-  | grep -v '^[^:]*:[0-9]*: *#' || true)"
+# ci.sh quotes the shape it forbids, so it declares itself a lint source
+# the way a sourced library declares itself sourced - by a marker rather
+# than by being on a list.
+loopfiles=()
+for f in bin/*.sh; do
+  grep -q '^# fm:lint-source' "$f" && continue
+  grep -q 'shift 2' "$f" || continue
+  loopfiles+=("$f")
+done
+unguarded=''
+if [ ${#loopfiles[@]} -gt 0 ]; then
+  unguarded="$(grep -Hn 'shift 2' "${loopfiles[@]}" 2>/dev/null \
+    | grep -v 'need ' | grep -v '^[^:]*:[0-9]*: *#' || true)"
+fi
 if [ -n "$unguarded" ]; then
   flunk "a shift 2 that has not checked it has two:"
   printf '%s\n' "$unguarded"
 else
-  pass "no option loop can spin on a flag with no value"
+  # the count, so an empty corpus is visible rather than looking like a
+  # clean one - the stage passed identically when it linted nothing
+  pass "no option loop can spin on a flag with no value (${#loopfiles[@]} scripts)"
 fi
 
 # `producer | grep -q` under pipefail: grep exits on the first match, the
@@ -235,6 +246,28 @@ if [ -n "$loops" ]; then
   flunk "a script loops over vendors on its own: $loops"
 else
   pass "the vendor chain has one implementation"
+fi
+
+# AGENTS.md is the short form of design.md's standing rules, and it is the
+# file an agent actually reads. Two copies of one list is how a rule ends
+# up true in one place and not the other.
+stage "rules"
+# only where there are rules to carry: the gate runs against fixtures too,
+# and a tree with no design document is not a tree missing AGENTS.md
+design_n=0
+[ -f design/design.md ] && design_n="$(sed -n '/^## 2\. Standing rules/,/^---/p' design/design.md \
+  | grep -cE '^[0-9]+\. \*\*')"
+if [ "$design_n" -eq 0 ]; then
+  skip "no standing rules to carry"
+elif [ ! -f AGENTS.md ]; then
+  flunk "design.md has $design_n standing rules and there is no AGENTS.md to carry them"
+else
+  agents_n="$(grep -cE '^[0-9]+\. \*\*' AGENTS.md)"
+  if [ "$agents_n" -lt "$design_n" ]; then
+    flunk "design.md has $design_n standing rules and AGENTS.md carries $agents_n"
+  else
+    pass "AGENTS.md carries every standing rule ($agents_n)"
+  fi
 fi
 
 stage "dag"

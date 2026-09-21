@@ -162,10 +162,27 @@ assert_contains "$out" "60s locally" "against the budget the design sets"
 # hand-rolled swap, a second vendor loop, a second writer of the log, an id
 # missing from the design, a suite that returns non-zero. None of them is a
 # syntax error, and none would be caught by a different stage.
-plant() {   # plant <label> <expected fragment> ; the fixture is built first
-  local label="$1" want="$2" out
-  out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
-  assert_contains "$out" "$want" "$label"
+# One gate run per fixture STATE, not one per assertion: every plant used
+# to run a full nested gate, and the stage that measures the gate's own
+# budget was mostly measuring that.
+#
+# The cache invalidates itself off a signature of the fixture rather than
+# off the author remembering to clear it. The first version needed a
+# `replant` call after every write, one was missed, and the assertion read
+# the previous run - green for an assertion that tested nothing, which is
+# the class this suite exists to catch.
+planted=''; planted_sig=''
+# every file, its size and its mtime: enough to notice a plant going in or
+# coming out, and portable to the BSD tools this runs on
+fixture_sig() { find "$q" -type f -exec ls -ld {} + 2>/dev/null | sort | shasum | cut -c1-40; }
+plant() {   # plant <label> <expected fragment>
+  local label="$1" want="$2" sig
+  sig="$(fixture_sig)"
+  if [ "$sig" != "$planted_sig" ]; then
+    planted="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+    planted_sig="$sig"
+  fi
+  assert_contains "$planted" "$want" "$label"
 }
 
 # The gate decides green by reading what a suite said, because a suite
@@ -290,6 +307,30 @@ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\nwhile [ $# -gt 
 plant "an unguarded shift 2 turns the hygiene stage red" "has not checked it has two"
 plant "and the stage names the script" "fm-spinner.sh"
 rm -f "$q/bin/fm-spinner.sh"
+# and the stage says how many scripts it read, so linting nothing does not
+# look like linting a clean repository
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_matches "$out" 'spin on a flag with no value \([0-9]+ scripts\)' \
+  "the option-loop stage says how many scripts it read"
+bare2="$(mktemp -d)"; mkdir -p "$bare2/bin"; cp "$q/bin/ci.sh" "$bare2/bin/ci.sh"
+assert_contains "$(FM_ROOT="$bare2" bash "$bare2/bin/ci.sh" 2>&1)" "value (0 scripts)" \
+  "and says zero on a tree with none"
+rm -rf "$bare2"
+
+# AGENTS.md is the short form of the standing rules and the file an agent
+# reads first. Two copies of one list is how a rule ends up true in one
+# place and not the other.
+mkdir -p "$q/design"
+printf '## 2. Standing rules\n\n1. **one**\n2. **two**\n3. **three**\n\n---\n' \
+  > "$q/design/design.md"
+printf '{"tasks":[]}\n' > "$q/design/tasks.json"
+plant "standing rules with no AGENTS.md turn the gate red" "no AGENTS.md to carry them"
+printf '# AGENTS.md\n\n1. **one**\n2. **two**\n' > "$q/AGENTS.md"
+plant "and so does an AGENTS.md that carries fewer" "AGENTS.md carries 2"
+printf '# AGENTS.md\n\n1. **one**\n2. **two**\n3. **three**\n' > "$q/AGENTS.md"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_contains "$out" "carries every standing rule (3)" "and green once it carries them all"
+rm -rf "$q/AGENTS.md" "$q/design"
 
 plant "a hand-rolled swap turns the hygiene stage red" "saves a script by hand"
 plant "and the stage names the suite" "hand-rolled.test.sh"

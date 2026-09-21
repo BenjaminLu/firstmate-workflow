@@ -24,7 +24,12 @@ review_opened review_failed ask_pass_criteria criteria_returned protocol_violati
 merged closed decision_requested decision_made worker_crashed vendor_unavailable \
 agent_finished"
 
-die() { printf 'fm-emit: %s\n' "$1" >&2; exit 1; }
+# Two kinds of failure, two codes, and every path goes through here so
+# they cannot drift: 64 is "you called it wrong", 1 is "it could not
+# write". A caller that cannot tell them apart cannot react to either -
+# one is fixed by a human, the other by trying again.
+die()   { printf 'fm-emit: %s\n' "$1" >&2; exit 1; }
+usage() { printf 'fm-emit: %s\n' "$1" >&2; exit 64; }
 
 actor=''; type=''; task=''; pr=''; data='{}'; en=''; tw=''
 # `shift 2` with one argument left does not shift: it returns 1 and leaves
@@ -44,22 +49,20 @@ while [ $# -gt 0 ]; do
     --data)  need "$@"; data="${2-}";  shift 2 ;;
     --en)    need "$@"; en="${2-}";    shift 2 ;;
     --tw)    need "$@"; tw="${2-}";    shift 2 ;;
-    # 64 like every other script here: a caller that cannot tell a usage
-    # error from a refused write cannot react to either
-    *) echo "fm-emit: unknown argument: $1" >&2; exit 64 ;;
+    *) usage "unknown argument: $1" ;;
   esac
 done
 
-[ -n "$actor" ] || die "--actor is required"
-[ -n "$type" ]  || die "--type is required"
-case " $TYPES " in *" $type "*) ;; *) die "unknown type: $type" ;; esac
+[ -n "$actor" ] || usage "--actor is required"
+[ -n "$type" ]  || usage "--type is required"
+case " $TYPES " in *" $type "*) ;; *) usage "unknown type: $type" ;; esac
 command -v jq >/dev/null 2>&1 || die "jq is required"
-jq -e . >/dev/null 2>&1 <<<"$data" || die "--data is not valid JSON"
+jq -e . >/dev/null 2>&1 <<<"$data" || usage "--data is not valid JSON"
 
 # half a summary is worse than none: it renders blank in one locale
 if [ -n "$en" ] || [ -n "$tw" ]; then
-  [ -n "$en" ] || die "--tw given without --en (a summary needs both languages)"
-  [ -n "$tw" ] || die "--en given without --tw (a summary needs both languages)"
+  [ -n "$en" ] || usage "--tw given without --en (a summary needs both languages)"
+  [ -n "$tw" ] || usage "--en given without --tw (a summary needs both languages)"
 fi
 
 line=$(jq -cn \
