@@ -32,7 +32,8 @@ const readEvents = (): Event[] => {
 const STAGE: Record<string, string> = {
   dispatched: "working", commit_pushed: "working", pr_opened: "review",
   gate_failed: "gate", gate_passed: "review", review_opened: "review",
-  approved: "captain", merged: "merged", closed: "closed",
+  approved: "captain", decision_requested: "captain",
+  merged: "merged", closed: "closed",
   // a task whose review never happened, or whose worker died, is blocked -
   // it must not sit in a lane that says work is under way
   review_failed: "gate", worker_crashed: "gate",
@@ -46,16 +47,27 @@ const state = () => {
     : [];
   const stage = new Map<string, string>();
   const pr = new Map<string, number>();
+  // merged and closed are where a task stops. Anything said about it
+  // afterwards - a review round run against the branch, a late sync - is
+  // about work that is already in, and letting it move the task back reads
+  // as work in progress that nobody is doing.
+  const FINAL = new Set(["merged", "closed"]);
   for (const e of events) {
     if (!e.task) continue;
+    if (FINAL.has(stage.get(e.task) ?? "")) continue;
     const s = STAGE[e.type ?? ""];
     if (s) stage.set(e.task, s);
     if (typeof e.pr === "number") pr.set(e.task, e.pr);
   }
+  // A pending decision is a fact on disk, not a point in a history: while
+  // the card is up, the task is the captain's whatever else has been said
+  // since. T-016 read as "working" because a dispatch that should never
+  // have happened landed after the card went up.
+  const awaiting = new Set(pending().map((p: Record<string, unknown>) => String(p.task ?? "")));
   const tasks = defs.map((d) => ({
     id: d.id, title: d.title, milestone: d.milestone,
     depends_on: d.depends_on ?? [],
-    stage: stage.get(d.id as string) ?? "queued",
+    stage: awaiting.has(d.id as string) ? "captain" : (stage.get(d.id as string) ?? "queued"),
     pr: pr.get(d.id as string) ?? null,
   }));
   return {
@@ -73,11 +85,24 @@ const state = () => {
 };
 
 // Decisions the captain has been asked for but has not answered.
+// A card for a pull request that is already merged is the board lying. It
+// happens whenever a merge goes through some other way - a decision file
+// outlives the thing it was asking about - and the captain is then offered
+// a choice that cannot be made.
 const pending = () => {
   const dir = join(ROOT, "state/pending");
   if (!existsSync(dir)) return [];
+  const settled = new Set(
+    readEvents()
+      .filter((e) => e.type === "merged" || e.type === "closed")
+      .map((e) => String((e as Record<string, unknown>).pr ?? "")),
+  );
   return readdirSync(dir).filter((f) => f.endsWith(".json")).flatMap((f) => {
-    try { return [JSON.parse(readFileSync(join(dir, f), "utf8"))]; } catch { return []; }
+    try {
+      const d = JSON.parse(readFileSync(join(dir, f), "utf8"));
+      if (d.pr != null && settled.has(String(d.pr))) return [];
+      return [d];
+    } catch { return []; }
   });
 };
 

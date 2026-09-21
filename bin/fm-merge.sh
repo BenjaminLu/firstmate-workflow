@@ -31,7 +31,19 @@ case "$PR" in
   ''|*[!0-9]*) echo "fm-merge: --pr must be a number, got '$PR'" >&2; exit 64 ;;
 esac
 
-state="$($GH pr view "$PR" --json state --jq .state 2>/dev/null || true)"
+state="$($GH pr view "$PR" --json state --jq .state 2>/dev/null </dev/null || true)"
+
+# A merged event with no task is an event the board cannot use: the reducer
+# keys on the task, so the task sits in whatever lane it was in and the
+# board shows finished work as work in progress. A branch is named after
+# its task, the same way fm-sync-prs reads it, so ask rather than require
+# the caller to remember.
+if [ -z "$TASK" ]; then
+  headref="$($GH pr view "$PR" --json headRefName --jq .headRefName 2>/dev/null </dev/null || true)"
+  TASK="$(printf '%s' "$headref" | sed -n 's/^\([tT]-\{0,1\}[0-9]\{3\}\).*/\1/p' \
+          | tr 'a-z' 'A-Z' | sed 's/^T\([0-9]\)/T-\1/')"
+  [ -z "$TASK" ] || echo "fm-merge: #$PR is $TASK, by its branch name"
+fi
 case "$state" in
   OPEN) ;;
   MERGED) echo "fm-merge: #$PR is already merged"; exit 0 ;;

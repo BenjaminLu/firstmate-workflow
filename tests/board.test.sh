@@ -14,7 +14,8 @@ cp "$ROOT/board/server.ts" "$d/board/"
 cp "$ROOT/board/public/index.html" "$d/board/public/"
 cat > "$d/design/tasks.json" <<'J'
 {"tasks":[{"id":"T-A","title":"first","milestone":"M0","depends_on":[]},
-          {"id":"T-B","title":"second","milestone":"M0","depends_on":["T-A"]}]}
+          {"id":"T-B","title":"second","milestone":"M0","depends_on":["T-A"]},
+          {"id":"T-C","title":"third","milestone":"M0","depends_on":[]}]}
 J
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --type greenlit --en "go" --tw "開工" >/dev/null
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-A --type dispatched --en "picked up T-A" --tw "領走 T-A" >/dev/null
@@ -33,6 +34,7 @@ assert_eq "true" "$(jq -r .greenlit <<<"$s")" "it reports the green light"
 assert_eq "working" "$(jq -r '.tasks[]|select(.id=="T-A")|.stage' <<<"$s")" "a dispatched task reads as working"
 assert_eq "queued"  "$(jq -r '.tasks[]|select(.id=="T-B")|.stage' <<<"$s")" "an untouched task reads as queued"
 assert_eq "1" "$(jq -r .counts.inflight <<<"$s")" "the counts follow the log"
+
 
 # a task whose review never happened, or whose worker died, must not keep
 # reading as work in progress
@@ -56,6 +58,54 @@ done
 
 
 page="$(curl -sf "http://127.0.0.1:$PORT/")"
+# a task the captain has been asked about is the captain's, whatever was
+# said about it before. It was reading as "working" because a dispatch
+# that should never have happened was the last thing in the log.
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-C --type dispatched \
+  --en "picked up" --tw "接下" >/dev/null
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor firstmate --task T-C --type decision_requested \
+  --pr 12 --en "asked the captain" --tw "請示船長" >/dev/null
+sc="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_ne "" "$sc" "the board is answering"
+assert_eq "captain" "$(jq -r '.tasks[]|select(.id=="T-C")|.stage' <<<"$sc")" \
+  "a task the captain has been asked about waits on the captain"
+# and it keeps waiting: while the card is up, nothing said afterwards
+# moves the task out of the captain's lane
+mkdir -p "$d/state/pending"
+printf '{"id":"D-12","task":"T-C","kind":"merge","pr":12,"title":"ready"}\n' > "$d/state/pending/D-12.json"
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-C --type dispatched \
+  --en "a stray dispatch" --tw "多餘的派工" >/dev/null
+sc2="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "captain" "$(jq -r '.tasks[]|select(.id=="T-C")|.stage' <<<"$sc2")" \
+  "and stays there while the card is up, whatever is said after"
+rm -f "$d/state/pending/D-12.json"
+
+# merged is where a task stops. A review round run against the branch
+# afterwards would otherwise move it back to "in review", which reads as
+# work in progress that nobody is doing.
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --task T-B --type merged \
+  --en "merged" --tw "已合併" >/dev/null
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor reviewer-1 --task T-B --type review_opened \
+  --en "a late round" --tw "遲到的一輪" >/dev/null
+sm="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_ne "" "$sm" "the board is answering"
+assert_eq "merged" "$(jq -r '.tasks[]|select(.id=="T-B")|.stage' <<<"$sm")" \
+  "a merged task stays merged whatever is said about it afterwards"
+
+# a card for a pull request that has already been merged is the board
+# lying: the captain is offered a choice that cannot be made
+mkdir -p "$d/state/pending"
+printf '{"id":"D-77","task":"T-A","kind":"merge","pr":77,"title":"stale"}\n' > "$d/state/pending/D-77.json"
+s3="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_ne "" "$s3" "the board is still answering at this point"
+assert_contains "$(jq -r '.pending[].id' <<<"$s3" | tr '\n' ' ')" "D-77" "an open decision is on the board"
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --task T-A --type merged --pr 77 \
+  --en "merged" --tw "已合併" >/dev/null
+s4="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_lacks "$(jq -r '.pending[].id' <<<"$s4" | tr '\n' ' ')" "D-77" \
+  "and it is gone once the pull request is merged"
+rm -f "$d/state/pending/D-77.json"
+
 assert_contains "$page" "Captain" "the page is served"
 assert_contains "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/../../etc/passwd")" "40" \
   "it will not serve a path climbing out of board/public"
@@ -81,6 +131,7 @@ assert_fail "sed 's|//.*||' '$ROOT/board/server.ts' | grep -qF '0.0.0.0'" \
 
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null || true
+
 rm -rf "$d"
 
 # the event types the board maps and the types fm-emit will write are two
@@ -96,5 +147,6 @@ for t in $mapped; do
   printf '%s\n' "$known" | grep -qxF "$t" || unknown="$unknown $t"
 done
 assert_eq "" "$unknown" "every stage the board maps is a type fm-emit will write"
+
 
 finish

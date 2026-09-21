@@ -26,8 +26,18 @@ JSON
 }
 
 ghstub() {                      # records what it was asked, invents a pull request url
+  # `pr list` has to answer emptily: the worker asks it first, and a stub
+  # that answers every question with a url tells the worker a pull request
+  # already exists and it never opens one
   mkdir -p "$1/stub"
-  printf '#!/usr/bin/env bash\necho "gh $*" >> "%s/ghcalls"\necho "https://example.invalid/pull/42"\n' "$1" > "$1/stub/gh"
+  cat > "$1/stub/gh" <<G
+#!/usr/bin/env bash
+echo "gh \$*" >> "$1/ghcalls"
+case " \$* " in
+  *" pr list "*) exit 0 ;;
+esac
+echo "https://example.invalid/pull/42"
+G
   chmod +x "$1/stub/gh"; printf '%s' "$1/stub/gh"
 }
 
@@ -57,6 +67,103 @@ assert_eq "2" "$?" "every vendor unavailable exits 2"
 assert_contains "$(jq -r .type < "$r2/state/events.jsonl" | tr '\n' ' ')" "vendor_unavailable" \
   "it emitted vendor_unavailable"
 assert_eq "" "$(cat "$d2/ghcalls" 2>/dev/null)" "an unavailable vendor opens no pull request"
+
+# A second round continues the first. Starting over from main would throw
+# away the work the review is about, and the worker would answer a review
+# of something that no longer exists.
+d5="$(fixture)"; r5="$d5/repo"; GH5="$(ghstub "$d5")"
+cat > "$r5/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+mkdir -p "$3/src"
+if [ -f "$3/src/round-one" ]; then
+  printf 'the second round\n' > "$3/src/round-two"
+  grep -q 'REVIEWER SAID' "$2" && printf 'saw the review\n' > "$3/src/saw-review"
+  grep -q 'THE RUNNER SAID' "$2" && printf 'saw the failure\n' > "$3/src/saw-ci"
+else
+  printf 'the first round\n' > "$3/src/round-one"
+fi
+M
+chmod +x "$r5/bin/adapters/mock.sh"
+( cd "$r5" && FM_ROOT="$r5" FM_GH="$GH5" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+branch="$(cd "$r5" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1)"
+assert_ne "" "$branch" "the first round made a branch"
+assert_ok "cd '$r5' && git cat-file -e '$branch:src/round-one'" "and committed its work"
+
+# the recorder stub answers a comments query for this round, because what
+# the worker is given to answer is the point of the assertion
+cat > "$d5/stub/gh" <<'G'
+#!/usr/bin/env bash
+echo "gh $*" >> "$(dirname "$0")/../ghcalls"
+case " $* " in
+  *" pr list "*) echo 9; exit 0 ;;
+  *" pr checks "*) echo "https://example.invalid/actions/runs/777/job/1"; exit 0 ;;
+  *" run view "*) printf 'ci\tbin/ci.sh\tTHE RUNNER SAID: a title with markup is not escaped\n'; exit 0 ;;
+  *" pr view "*" comments "*)
+    jq -cn '{author:{login:"reviewer-1"},body:"REVIEWER SAID: fix the helper"}' \
+      | jq -r '"## " + .author.login + "\n\n" + .body + "\n"' ;;
+esac
+exit 0
+G
+chmod +x "$d5/stub/gh"
+: > "$d5/ghcalls"      # so "did it create one?" is about THIS round
+( cd "$r5" && FM_ROOT="$r5" FM_GH="$GH5" bin/fm-worker.sh --task T-Z --pr 9 >/dev/null 2>&1 )
+assert_ok "cd '$r5' && git cat-file -e '$branch:src/round-one'" "the second round keeps the first round's work"
+assert_ok "cd '$r5' && git cat-file -e '$branch:src/round-two'" "and adds its own"
+assert_ok "cd '$r5' && git cat-file -e '$branch:src/saw-review'" "and was given the review to answer"
+assert_ok "cd '$r5' && git cat-file -e '$branch:src/saw-ci'" "and why the required check is red"
+# and it does not try to open a second pull request for the same branch:
+# on a later round `pr create` fails, and a worker that could only ever
+# open a new one fails at the last step with its work already pushed
+assert_lacks "$(cat "$d5/ghcalls" 2>/dev/null)" "pr create" \
+  "the second round reuses the pull request it already opened"
+assert_contains "$(jq -r '.type + " " + (.pr|tostring)' < "$r5/state/events.jsonl" | tail -1)" "9" \
+  "and its event points at that number"
+rm -rf "$d5"
+
+# The worker cannot run gh, so the only way its question reaches the
+# reviewer is this file. Without it the round-three protocol cannot happen:
+# ASK-PASS-CRITERIA sits in a log nobody reads while fm-protocol reports a
+# violation every turn, which looks exactly like a worker that stopped.
+d6="$(fixture)"; r6="$d6/repo"; GH6="$(ghstub "$d6")"
+cat > "$r6/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md"
+M
+chmod +x "$r6/bin/adapters/mock.sh"
+out6="$(cd "$r6" && FM_ROOT="$r6" FM_GH="$GH6" bin/fm-worker.sh --task T-Z --pr 9 2>&1)"
+assert_eq "0" "$?" "a round in which the worker only asks is a complete round"
+assert_contains "$out6" "asked rather than changed" "and says so rather than looking idle"
+assert_contains "$(cat "$d6/ghcalls")" "pr comment" "the question is posted to the pull request"
+assert_contains "$(jq -r .type < "$r6/state/events.jsonl" | tr '\n' ' ')" "ask_pass_criteria" \
+  "and the log records that the worker spoke"
+assert_lacks "$(cat "$d6/ghcalls")" "push" "asking pushes nothing"
+b6="$(cd "$r6" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1)"
+assert_fail "cd '$r6' && git cat-file -e '$b6:.fm-say.md'" "and the file never reaches the diff"
+rm -rf "$d6"
+
+# A run that was interrupted leaves its files uncommitted in the worktree,
+# and the next dispatch used to delete them before anything could see
+# them. Tonight that nearly cost two finished tasks.
+d7="$(fixture)"; r7="$d7/repo"; GH7="$(ghstub "$d7")"
+cat > "$r7/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+mkdir -p "$3/src"; printf 'work\n' > "$3/src/thing"
+M
+chmod +x "$r7/bin/adapters/mock.sh"
+( cd "$r7" && FM_ROOT="$r7" FM_GH="$GH7" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+# leave something uncommitted behind, the way an interrupted run does
+printf 'half finished\n' > "$r7/state/worktrees/T-Z/src/unsaved"
+out7="$(cd "$r7" && FM_ROOT="$r7" FM_GH="$GH7" bin/fm-worker.sh --task T-Z 2>&1)"
+assert_contains "$out7" "uncommitted work" "an interrupted run's files are noticed"
+rescued="$(find "$r7/state/rescued" -name unsaved 2>/dev/null | head -1)"
+assert_ne "" "$rescued" "and copied somewhere before the worktree is remade"
+assert_contains "$(cat "$rescued" 2>/dev/null)" "half finished" "with what was in them"
+assert_contains "$(jq -r .type < "$r7/state/events.jsonl" | tr '\n' ' ')" "worker_crashed" \
+  "and the log says it happened"
+rm -rf "$d7"
 
 # a vendor named in config.yaml with no adapter behind it is a typo. It has
 # to be found before anything runs, or a real vendor does the work and the

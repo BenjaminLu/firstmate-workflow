@@ -457,7 +457,9 @@
         "replaying events.jsonl rebuilds the whole state with no snapshot",
         "walks state/worktrees and gh pr list to find orphans",
         "a worker whose pid is gone is marked worker_crashed and redispatched",
-        "reconciling is idempotent: two runs leave the same state"
+        "reconciling is idempotent: two runs leave the same state",
+        "a merged pull request whose event carried no task is repaired from the branch name",
+        "it prints what it would change and changes nothing with --dry-run"
       ]
     },
     {
@@ -587,6 +589,27 @@
         "a configuration error is found before any vendor runs",
         "each attempt reads only its own output: its own directory and its own slice of the shared log",
         "a file that is meant to be sourced never carries the standard-input redirect"
+      ]
+    },
+    {
+      "id": "T-026",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-017"
+      ],
+      "title": "the option loop: eleven scripts spin for ever on a flag with no value",
+      "scope": [
+        "bin/**",
+        "tests/**",
+        "design/tasks.json",
+        "design/design.md"
+      ],
+      "acceptance": [
+        "no script loops for ever when a flag arrives with nothing after it",
+        "every one of them exits 64 and says which flag",
+        "the gate refuses a shift 2 that has not checked it has two",
+        "the probe runs under an alarm, because a test for a hang would hang the gate rather than fail it"
       ]
     }
   ]
