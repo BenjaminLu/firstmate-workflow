@@ -149,6 +149,9 @@ const SHIP = (() => {
 
   function render(host, s, T) {
     const crew = crewOf(s, T);
+    // from the server with the list: the shipbar used to print a
+    // hardcoded 24 under a comment claiming the number had one source
+    const limit = s.deckLimit;
     const rate = rateFor(crew.length);
     const rows = rate.rows, step = rate.step;
     const topDeck = DECK_Y0 + (rows - 1) * step;
@@ -191,7 +194,7 @@ const SHIP = (() => {
     host.innerHTML =
       `<div class="horizon"></div><div class="sea" style="height:${HULL_BOTTOM + 14}px"></div>` +
       `<div class="shipbar"><span class="tier">${esc(T(rate.key))}</span>` +
-      `<span>${esc(T("aboard"))} ${crew.length}/24</span>` +
+      `<span>${esc(T("aboard"))} ${crew.length}/${limit}</span>` +
       `<button id="ahoyBtn">${esc(T("ahoyBtn"))}</button>` +
       `<button class="mute" id="muteBtn" aria-pressed="${SHIP.muted}">${esc(T(SHIP.muted ? "unmute" : "mute"))}</button></div>` +
       `<div class="vessel" id="vessel">` +

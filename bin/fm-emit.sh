@@ -75,6 +75,7 @@ for _ in $(seq 1 600); do
     trap "rmdir '$LOCK' 2>/dev/null" EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
+    trap 'exit 129' HUP
     printf '%s\n' "$line" >> "$LOG"
     exit 0
   fi

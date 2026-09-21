@@ -210,6 +210,18 @@ sc2="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
 assert_lacks "$(jq -r '.crew[].id' <<<"$sc2" | tr '\n' ' ')" "worker-closed" \
   "a closed task sends its agent home too, not only a merged one"
 
+# A new event type has readers beyond this one. fm-dispatch keys on
+# dispatched minus merged-or-closed, fm-run on pr_opened and merged,
+# fm-sync-prs on type and pr - none of them has a default branch that
+# does anything with an unknown type, and this asserts that rather than
+# asserting it in prose: the same log, before and after an
+# agent_finished, has to give the dispatcher the same answer.
+before="$(cd "$d" && FM_ROOT="$d" "$ROOT/bin/fm-dispatch.sh" --dry-run --repo "$d" 2>&1 | sort)"
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-2 --task T-A --type agent_finished \
+  --en "ended" --tw "結束" >/dev/null
+after="$(cd "$d" && FM_ROOT="$d" "$ROOT/bin/fm-dispatch.sh" --dry-run --repo "$d" 2>&1 | sort)"
+assert_eq "$before" "$after" "an ending does not change what the dispatcher would start"
+
 # 24 is one number, and the page is told what it was
 assert_eq "24" "$(jq -r '.deckLimit' <<<"$sv")" "the server says what the deck holds"
 

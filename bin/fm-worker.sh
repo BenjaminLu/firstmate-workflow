@@ -49,11 +49,11 @@ emit() { FM_ROOT="$REPO" "$EMIT" --data '{"role":"worker"}' --actor "$NAME" --ta
 # 128+signal, so a caller can still tell what happened.
 #
 # Armed here, the first point emit() works, and the same in fm-review.
-# What sits above it in each: the argument parsing, and in this script
-# the task-spec lookup (exit 65) and the worktree creation (exit 70).
-# None of those has emitted anything, so nothing has boarded and there
-# is nothing to send home - the trap would emit an agent_finished for a
-# run the board never saw start.
+# Above it is only the argument parsing, which exits 64 before emit()
+# exists. Everything else is below - the task-spec lookup (65), the
+# worktree creation (70), the adapter chain - and every one of those
+# exits happens after the run has said it started, so every one of them
+# needs the ending.
 finished() { emit --type agent_finished --en "run finished" --tw "這次執行結束"; }
 trap finished EXIT
 trap 'exit 130' INT

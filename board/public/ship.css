@@ -279,6 +279,11 @@
      element stops working at this width - index.html already carries the
      same guard for the diagram iframe */
   .captain[hidden]{display:none}
+  /* still no numbers: the stand keeps the height SHIP.captain derived
+     and simply becomes its own column. The first version wrote 110px
+     here, fourteen lines under a comment saying every number came from
+     the JavaScript. */
   .captain{min-height:0;display:flex;align-items:center;gap:10px;padding:10px}
-  .captain .capstand{width:110px;height:110px;flex:0 0 110px}
+  .captain .capstand{width:var(--capStand);height:var(--capStand);
+    flex:0 0 var(--capStand)}
   .captain .capsays{text-align:left;padding:0}}
