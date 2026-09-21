@@ -70,6 +70,14 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
+# Said at the START of the round, not at the end of it. A reviewer's
+# whole run is one call to an engine, and this was emitted after that
+# call returned - so the only two events a round ever wrote, this and
+# the ending, landed a moment apart and the board never had a reviewer
+# on the deck at all. An agent is aboard while it is working, which for
+# a reviewer is the part that takes the minutes.
+emit --type review_opened --en "round $ROUND on $TASK" --tw "$TASK 第 $ROUND 輪審核"
+
 # The task spec comes from the branch under review, not from whatever is
 # checked out. A task defined on its own branch - which is how a new one
 # arrives - was invisible to the reviewer and to the gate: `no task
@@ -186,7 +194,6 @@ if [ "$signed" = "0" ]; then
        --tw "第 $ROUND 輪審核沒有產出"
   rm -rf "$work"; exit 3
 fi
-emit --type review_opened --en "round $ROUND on $TASK" --tw "$TASK 第 $ROUND 輪審核"
 if [ -n "$PR" ]; then
   $GH pr comment "$PR" --body "$verdict" >/dev/null 2>&1 || true
 fi

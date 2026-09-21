@@ -208,6 +208,10 @@ killable_adapter() {   # killable_adapter <repo>
   cat > "$1/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
+# says it has STARTED, so the killer waits for the engine to be running
+# rather than for the script's first event - which is a different moment
+# and, on a fast machine, can be after the run is already over
+: > "${FM_STARTED:?}"
 sleep 2
 mkdir -p "$3/src"
 printf 'the work was done\n' > "$3/src/thing"
@@ -224,12 +228,15 @@ killable_adapter "$rk"
 # does not, the wrapper dies, the worker is orphaned, runs to its
 # natural end, and `kill -0 "$killme"` is false anyway because the
 # wrapper was reaped: green, on a run nothing interrupted.
-( cd "$rk" && FM_ROOT="$rk" FM_GH="$GHk" exec bin/fm-worker.sh --task T-Z >/dev/null 2>&1 ) &
+started="$dk/started"
+( cd "$rk" && FM_ROOT="$rk" FM_GH="$GHk" FM_STARTED="$started" \
+    exec bin/fm-worker.sh --task T-Z >/dev/null 2>&1 ) &
 killme=$!
 for _ in $(seq 1 60); do
-  [ -s "$rk/state/events.jsonl" ] && break
+  [ -e "$started" ] && break
   sleep 0.2
 done
+assert_ok "test -e '$started'" "the engine was running when the signal was sent"
 # by pid, not by pattern: pkill -f matches every process on the machine,
 # so two suites running at once reap each other's stubs and each sees an
 # ending its assertions attribute to the trap
@@ -265,7 +272,8 @@ rm -rf "$dk"
 # was never interrupted
 dl="$(fixture)"; rl="$dl/repo"; GHl="$(ghstub "$dl")"
 killable_adapter "$rl"
-( cd "$rl" && FM_ROOT="$rl" FM_GH="$GHl" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+( cd "$rl" && FM_ROOT="$rl" FM_GH="$GHl" FM_STARTED="$dl/started" \
+    bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
 assert_eq "0" "$?" "the same run, not killed, exits 0"
 assert_contains "$(cat "$dl/ghcalls" 2>/dev/null)" "pr create" \
   "the same run, not killed, does reach a pull request"

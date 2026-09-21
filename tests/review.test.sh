@@ -311,6 +311,12 @@ killable_reviewer() {   # killable_reviewer <repo>
   cat > "$1/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
+# says it has STARTED, so the killer waits for the engine to be running
+# rather than for the script's first event: fm-review's first event used
+# to come after the whole round, so the wait outlasted the run and the
+# kill landed on a process that had already exited - green on a fast
+# machine, and nothing to do with traps
+: > "${FM_STARTED:?}"
 sleep 2
 printf 'APPROVE:T-Z\n' > "$3/v.txt"
 M
@@ -323,9 +329,12 @@ killable_reviewer "$rkr"
 # it the signal may only reach the wrapper, the review is orphaned and
 # runs to its natural end, and `kill -0` is false because the wrapper
 # was reaped - green on a round nothing interrupted.
-( cd "$rkr" && FM_ROOT="$rkr" FM_GH="$GHkr" exec bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 ) &
+started="$dkr/started"
+( cd "$rkr" && FM_ROOT="$rkr" FM_GH="$GHkr" FM_STARTED="$started" \
+    exec bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 ) &
 kp=$!
-for _ in $(seq 1 60); do [ -s "$rkr/state/events.jsonl" ] && break; sleep 0.2; done
+for _ in $(seq 1 60); do [ -e "$started" ] && break; sleep 0.2; done
+assert_ok "test -e '$started'" "the engine was running when the signal was sent"
 kill -TERM "$kp" 2>/dev/null
 wait "$kp" 2>/dev/null; krc=$?
 for _ in $(seq 1 40); do
@@ -351,7 +360,8 @@ rm -rf "$dkr"
 # the same round, left alone: the absence above means nothing without it
 dlr="$(fixture)"; rlr="$dlr/repo"; GHlr="$(ghstub "$dlr")"
 killable_reviewer "$rlr"
-( cd "$rlr" && FM_ROOT="$rlr" FM_GH="$GHlr" bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
+( cd "$rlr" && FM_ROOT="$rlr" FM_GH="$GHlr" FM_STARTED="$dlr/started" \
+    bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
 assert_eq "0" "$?" "the same round, not killed, exits 0"
 assert_contains "$(cat "$dlr/ghcalls" 2>/dev/null)" "pr comment" \
   "and posts its verdict"
