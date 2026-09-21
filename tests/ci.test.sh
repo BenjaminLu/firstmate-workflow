@@ -173,6 +173,19 @@ plant "a suite that passes while something in it did not run is a failure" "did 
 plant "and the stage prints the line" "nosuchhelper"
 rm -f "$q/tests/silent.test.sh"
 
+# and the negative half: a suite that prints one of those phrases as
+# DATA - asserting a script's own error text, say - is not a suite that
+# broke, so the rule matches the shell's diagnostic prefix and not the
+# words on their own
+{ printf '#!/usr/bin/env bash\n'
+  printf 'echo "the script said: command not found, which is what we assert"\n'
+  printf 'echo "and also: unbound variable"\n'
+  printf 'exit 0\n'
+} > "$q/tests/talks.test.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_contains "$out" "ci: green" "a suite that prints those words as data still passes"
+rm -f "$q/tests/talks.test.sh"
+
 # a script that dispatches without closing standard input
 # two, because the criterion says the gate names EVERY offender and a gate
 # that stopped at the first would pass a single-instance plant

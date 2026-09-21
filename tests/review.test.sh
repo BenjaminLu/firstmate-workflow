@@ -312,7 +312,7 @@ M
 ( cd "$rkr" && FM_ROOT="$rkr" FM_GH="$GHkr" bin/fm-review.sh --task T-Z --branch work >/dev/null 2>&1 ) &
 kp=$!
 for _ in $(seq 1 60); do [ -s "$rkr/state/events.jsonl" ] && break; sleep 0.2; done
-pkill -TERM -f "fm-review.sh --task T-Z" 2>/dev/null
+kill -TERM "$kp" 2>/dev/null
 wait "$kp" 2>/dev/null
 for _ in $(seq 1 40); do
   [ "$(jq -r .type < "$rkr/state/events.jsonl" 2>/dev/null | tail -1)" = "agent_finished" ] && break
@@ -322,8 +322,7 @@ assert_eq "1" "$(jq -r 'select(.type=="agent_finished")|.type' "$rkr/state/event
   "a review killed mid-round ends exactly once"
 assert_eq "" "$(jq -r .type "$rkr/state/events.jsonl" | sed -n '/agent_finished/,$p' | tail -n +2)" \
   "and says nothing after it"
-assert_fail "pgrep -f 'fm-review.sh --task T-Z' >/dev/null" "and the process is gone"
-pkill -f "sleep 5" 2>/dev/null
+assert_fail "kill -0 '$kp' 2>/dev/null" "and the process is gone"
 restore_scripts
 rm -rf "$dkr"
 

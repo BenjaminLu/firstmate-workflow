@@ -131,9 +131,19 @@ lock — `flock(1)` does not ship on macOS. `bin/ci.sh` fails if anything under
 ```
 
 Types: `greenlit` `dispatched` `commit_pushed` `pr_opened` `gate_passed`
-`gate_failed` `review_opened` `ask_pass_criteria` `criteria_returned`
-`protocol_violation` `approved` `merged` `closed` `decision_requested`
-`decision_made` `worker_crashed` `vendor_unavailable`.
+`gate_failed` `review_opened` `review_failed` `ask_pass_criteria`
+`criteria_returned` `protocol_violation` `approved` `merged` `closed`
+`decision_requested` `decision_made` `worker_crashed` `vendor_unavailable`
+`agent_finished`.
+
+`dispatched` and `agent_finished` bracket one run of one agent, and they
+are what the board reads to decide who is aboard. An agent is running from
+the first to the second; a run that ends any other way — killed, hung up —
+still emits the second, from a trap. Without the closing one, "aboard"
+degenerates into "ever touched a task that is not finished yet", and the
+ship's crew becomes a record of everything that ever ran rather than of
+what is running. Every script that emits under an actor of its own must
+emit it; `tests/traps.test.sh` fails if one does not.
 
 A `summary` carries `en` and `zh-TW` or it is rejected: half a translation
 renders blank in one of the board's locales, which is worse than none.

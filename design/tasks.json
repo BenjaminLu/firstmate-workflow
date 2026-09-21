@@ -632,6 +632,7 @@
         "design/tasks.json",
         "i18n/**",
         "tests/board.test.sh",
+        "tests/ci.test.sh",
         "tests/crew-end-to-end.test.sh",
         "tests/e2e/**",
         "tests/review.test.sh",

@@ -212,7 +212,10 @@ for _ in $(seq 1 60); do
   [ -s "$rk/state/events.jsonl" ] && break
   sleep 0.2
 done
-pkill -TERM -f "fm-worker.sh --task T-Z" 2>/dev/null
+# by pid, not by pattern: pkill -f matches every process on the machine,
+# so two suites running at once reap each other's stubs and each sees an
+# ending its assertions attribute to the trap
+kill -TERM "$killme" 2>/dev/null
 wait "$killme" 2>/dev/null
 for _ in $(seq 1 40); do
   [ "$(jq -r .type < "$rk/state/events.jsonl" 2>/dev/null | tail -1)" = "agent_finished" ] && break
@@ -228,8 +231,7 @@ after="$(jq -r .type "$rk/state/events.jsonl" | sed -n '/agent_finished/,$p' | t
 assert_eq "" "$after" "and says nothing after it"
 assert_lacks "$(cat "$dk/ghcalls" 2>/dev/null)" "pr create" \
   "a killed run does not go on to open a pull request"
-assert_fail "pgrep -f 'fm-worker.sh --task T-Z' >/dev/null" "and the process is gone"
-pkill -f "sleep 5" 2>/dev/null
+assert_fail "kill -0 '$killme' 2>/dev/null" "and the process is gone"
 rm -rf "$dk"
 
 # a vendor named in config.yaml with no adapter behind it is a typo. It has

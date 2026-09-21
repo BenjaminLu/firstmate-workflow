@@ -121,8 +121,10 @@ assert_eq "1" "$(jq -r '[.crew[]|select(.id=="worker-2")]|length' <<<"$sk")" \
   "one agent on three tasks is one crewman, not three"
 assert_eq "T-B" "$(jq -r '.crew[]|select(.id=="worker-2")|.task' <<<"$sk")" \
   "and it is on the task it moved to"
-assert_ne "" "$(jq -r '.crew[]|select(.id=="worker-2")|.title' <<<"$sk")" \
-  "with the task's title beside it"
+# jq -r renders null as the four characters "null", so `assert_ne ""`
+# over jq output is green for a field that is not there at all
+assert_eq "second" "$(jq -r '.crew[]|select(.id=="worker-2")|.title' <<<"$sk")" \
+  "with the task's own title beside it"
 assert_eq "worker" "$(jq -r '.crew[]|select(.id=="worker-2")|.role' <<<"$sk")" \
   "a worker is a worker"
 

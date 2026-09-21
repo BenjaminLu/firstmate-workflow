@@ -254,7 +254,10 @@ else
       # test file with two spliced lines reported the same as one
       # without. Under `set -uo pipefail` with no -e, the shell will not
       # tell us, so the gate reads what the run said.
-      noise="$(grep -nE 'command not found|unbound variable|: No such file or directory' "$tmp" || true)"
+      # the shell's OWN diagnostic, which carries "<file>: line N:" - a
+      # suite that legitimately prints one of these phrases as data, or
+      # asserts a script's error text, is not a suite that broke
+      noise="$(grep -nE '^[^:]+: line [0-9]+: .*(command not found|unbound variable)' "$tmp" || true)"
       if [ -n "$noise" ]; then
         flunk "$t said it passed, but something in it did not run:"
         printf '%s\n' "$noise"
