@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # fm:skills-writer  # the one script allowed to write under skills/, and only
 #                   # ever under skills/vendor/. `fm.sh lint` enforces both
-#                   # halves of that sentence against bin/ and board/.
+#                   # halves of that sentence against bin/, board/ and
+#                   # .githooks/ - everything here that runs without a review.
 #
 # Self-update, and the import of somebody else's skills.
 #
@@ -50,8 +51,8 @@ usage: fm.sh <command> [options]
         copy is discarded by the next import.
 
   lint [--repo DIR]
-        Two checks. Nothing under bin/ or board/ writes a skill, and
-        nothing under skills/ is written in one vendor's syntax.
+        Two checks. Nothing under bin/, board/ or .githooks/ writes a
+        skill, and nothing under skills/ is written in one vendor's syntax.
 EOF
 }
 
@@ -131,9 +132,12 @@ lint_writers() {
         esac
       fi
     done <<< "$hits"
-  done <<< "$(find "$repo/bin" "$repo/board" -type f \
-      \( -name '*.sh' -o -name '*.ts' -o -name '*.js' -o -name '*.mjs' -o -name '*.html' \) \
-      2>/dev/null | grep -v node_modules | LC_ALL=C sort)"
+  done <<< "$( { find "$repo/bin" "$repo/board" -type f \
+        \( -name '*.sh' -o -name '*.ts' -o -name '*.js' -o -name '*.mjs' -o -name '*.html' \) 2>/dev/null
+      # a git hook runs on every commit with no pull request anywhere near it,
+      # and by convention it carries no suffix - so every file, not a filter
+      find "$repo/.githooks" -type f 2>/dev/null
+    } | grep -v node_modules | LC_ALL=C sort)"
 }
 
 cmd_lint() {

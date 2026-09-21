@@ -110,6 +110,21 @@ printf 'y\n' > "$g/bin/thing.sh"; git -C "$g" commit -qam code; git -C "$g" chec
 assert_fail "'$ROOT/bin/fm-gate.sh' --task SK-001 --repo '$g' --branch sk-001-code --only 4" \
   "gate 4 blocks one that reaches into bin/"
 
+# Gate 5 is the other one a skill-update could have slipped past. A skill
+# changes no code, only markdown, and a gate that read "markdown is not
+# implementation" would wave every skill-update through untested. The
+# proposal's own acceptance list says reverting the SKILL.md turns the
+# assertion red, so the gate has to agree.
+assert_ok "'$ROOT/bin/fm-gate.sh' --task SK-001 --repo '$g' --branch sk-001-skill --only 5" \
+  "gate 5 passes a skill-update whose test reads the new sentence"
+
+git -C "$g" checkout -q -b sk-001-vacuous main
+printf '# Worker\n\nthe new rule.\n' > "$g/skills/worker/SKILL.md"
+printf '#!/usr/bin/env bash\ntest -f "${FM_ROOT:-.}/skills/worker/SKILL.md"\n' > "$g/tests/skills.test.sh"
+git -C "$g" add -A; git -C "$g" commit -qm vacuous; git -C "$g" checkout -q main
+assert_fail "'$ROOT/bin/fm-gate.sh' --task SK-001 --repo '$g' --branch sk-001-vacuous --only 5" \
+  "gate 5 blocks one whose test passes without the change"
+
 # =========================================================================
 # 4. no path edits skills/ without a pull request
 # =========================================================================
@@ -137,6 +152,16 @@ printf 'await Bun.write("skills/worker/SKILL.md", body)\n' > "$d/board/server.ts
 assert_fail "'$FM' lint --repo '$d'" "the board cannot write a skill either"
 rm -f "$d/board/server.ts"
 assert_ok "'$FM' lint --repo '$d'" "the fixture is clean again"
+
+# and .githooks/, which is the third thing that runs here - a hook fires on
+# every commit, with no pull request anywhere near it. Hooks carry no .sh
+# suffix, so a scan that filtered by extension would have missed the lot.
+mkdir -p "$d/.githooks"
+rogue "$d/.githooks/pre-commit" 'cp staged.md "$REPO/skills/worker/SKILL.md"'
+assert_fail "'$FM' lint --repo '$d'" "a git hook that writes a skill fails the lint"
+assert_contains "$("$FM" lint --repo "$d" 2>&1)" "pre-commit" "and the lint names it"
+rm -f "$d/.githooks/pre-commit"
+assert_ok "'$FM' lint --repo '$d'" "the fixture is clean once the hook is gone"
 
 # =========================================================================
 # 5. sync-skills imports one way
