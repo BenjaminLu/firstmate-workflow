@@ -16,16 +16,20 @@ set -uo pipefail
 exec < /dev/null
 
 REPO="${FM_ROOT:-$(pwd)}"; MODE=''; ID=''; TASK=''; KIND='choice'; TITLE=''; PR=''; TIMEOUT=0
+# see fm_need in bin/fm-config.sh for why: `shift 2` with one argument
+# left does not shift, and the loop spins. This file deliberately depends
+# on nothing, so it carries the two lines rather than the explanation.
+need() { [ "$#" -ge 2 ] || { echo "fm-decide: $1 needs a value" >&2; exit 64; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
-    --request) MODE=request; ID="${2-}"; shift 2 ;;
-    --await)   MODE=await;   ID="${2-}"; shift 2 ;;
-    --task)  TASK="${2-}";  shift 2 ;;
-    --kind)  KIND="${2-}";  shift 2 ;;
-    --title) TITLE="${2-}"; shift 2 ;;
-    --pr)    PR="${2-}";    shift 2 ;;
-    --repo)  REPO="${2-}";  shift 2 ;;
-    --timeout) TIMEOUT="${2-}"; shift 2 ;;
+    --request) need "$@"; MODE=request; ID="${2-}"; shift 2 ;;
+    --await)   need "$@"; MODE=await;   ID="${2-}"; shift 2 ;;
+    --task)  need "$@"; TASK="${2-}";  shift 2 ;;
+    --kind)  need "$@"; KIND="${2-}";  shift 2 ;;
+    --title) need "$@"; TITLE="${2-}"; shift 2 ;;
+    --pr)    need "$@"; PR="${2-}";    shift 2 ;;
+    --repo)  need "$@"; REPO="${2-}";  shift 2 ;;
+    --timeout) need "$@"; TIMEOUT="${2-}"; shift 2 ;;
     *) echo "fm-decide: unknown argument $1" >&2; exit 64 ;;
   esac
 done

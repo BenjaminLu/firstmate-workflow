@@ -20,13 +20,13 @@ REPO="${FM_ROOT:-$(pwd)}"; TASK=''; BRANCH=''; PR=''; ROUND=1; VENDOR=''; NAME='
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
 while [ $# -gt 0 ]; do
   case "$1" in
-    --task) TASK="${2-}"; shift 2 ;;
-    --branch) BRANCH="${2-}"; shift 2 ;;
-    --repo) REPO="${2-}"; shift 2 ;;
-    --pr) PR="${2-}"; shift 2 ;;
-    --round) ROUND="${2-}"; shift 2 ;;
-    --vendor) VENDOR="${2-}"; shift 2 ;;
-    --name)   NAME="${2-}"; shift 2 ;;
+    --task) fm_need "fm-review" "$@"; TASK="${2-}"; shift 2 ;;
+    --branch) fm_need "fm-review" "$@"; BRANCH="${2-}"; shift 2 ;;
+    --repo) fm_need "fm-review" "$@"; REPO="${2-}"; shift 2 ;;
+    --pr) fm_need "fm-review" "$@"; PR="${2-}"; shift 2 ;;
+    --round) fm_need "fm-review" "$@"; ROUND="${2-}"; shift 2 ;;
+    --vendor) fm_need "fm-review" "$@"; VENDOR="${2-}"; shift 2 ;;
+    --name) fm_need "fm-review" "$@"; NAME="${2-}"; shift 2 ;;
     *) echo "fm-review: unknown argument $1" >&2; exit 64 ;;
   esac
 done

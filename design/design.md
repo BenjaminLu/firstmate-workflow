@@ -243,6 +243,37 @@ and a changed worktree is work. And each attempt reads only its own output —
 its own directory under the chain's, and its own slice of the shared log —
 so a vendor that dies half way through cannot sign on the next one's behalf.
 
+### 5.3.1 Every script refuses the same way
+
+`shift 2` with one argument left does not shift. It returns 1 and leaves
+`$@` alone, so `while [ $# -gt 0 ]` spins on the same flag for ever —
+`bin/fm-emit.sh --type` was a busy loop rather than an error, in eleven
+scripts at once. (T-016 had already found it in `fm-diagram`, one script
+at a time, before it was known to be in all of them.) Every flag that
+takes a value checks before it shifts, and exits `64`, which is what a
+caller reads as "you called it wrong". Precisely: the check comes before
+the `shift 2` **in the same `case` branch** — on a line of its own is
+fine, in the branch above is not, and after the shift is not a check at
+all, because by then the argument it was looking for is gone. That is
+the whole of the rule here: whether every OTHER kind of usage error
+exits `64` too is T-029, and nothing in this section says it does.
+
+No count belongs in this paragraph. How many scripts have an option
+loop, how many carry a local copy of the guard, how many take it from
+`bin/fm-config.sh`, and which files are exempt from the rule because
+they hold it, are all pinned in `tests/option-loop.test.sh`, where a
+number that stops being true turns the gate red; a number written here
+would only ever be true on the day it was typed. The two halves have to
+add up to the corpus, so a script cannot quietly leave one set without
+joining the other.
+`bin/ci.sh` fails on a `shift 2` that has not checked, and
+`tests/option-loop.test.sh` runs every flag of every script with nothing
+after it — under an alarm, because a test for a hang that simply calls the
+script hangs the gate instead of failing it. Both read the same corpus
+and the same idea of what a comment is, out of `bin/fm-config.sh`: the
+suite exists to catch the gate missing a script, and a suite carrying
+its own copy of the rule is a check that agrees with itself.
+
 ### 5.4 The pull request protocol
 
 Strings on a pull request are input to `bin/fm-gate.sh`. Wrong format means it
@@ -575,3 +606,5 @@ gates, and the dispatcher cannot dispatch itself.
 | T-016 | `fm-diagram.sh`: decision diagrams, and the board embed | T-010 |
 | T-017 | `fm-reconcile.sh`: reconciling after a crash | T-007 |
 | T-018 | self-update and `sync-skills` | T-007, T-015 |
+| T-029 | one exit code for a usage error, in every script | T-026 |
+| T-030 | the lints are blind to the files that carry them | T-026 |

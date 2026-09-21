@@ -21,9 +21,9 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 REPO="${FM_ROOT:-$(pwd)}"; DRY=0; LIMIT=''
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repo) REPO="${2-}"; shift 2 ;;
+    --repo) fm_need "fm-dispatch" "$@"; REPO="${2-}"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
-    --limit) LIMIT="${2-}"; shift 2 ;;
+    --limit) fm_need "fm-dispatch" "$@"; LIMIT="${2-}"; shift 2 ;;
     *) echo "fm-dispatch: unknown argument $1" >&2; exit 64 ;;
   esac
 done

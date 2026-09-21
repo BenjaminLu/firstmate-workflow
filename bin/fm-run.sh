@@ -29,8 +29,8 @@ REPO="${FM_ROOT:-$(pwd)}"; MODE=''; EVERY=30
 while [ $# -gt 0 ]; do
   case "$1" in
     once|watch) MODE="$1"; shift ;;
-    --repo) REPO="${2-}"; shift 2 ;;
-    --every) EVERY="${2-}"; shift 2 ;;
+    --repo) fm_need "fm-run" "$@"; REPO="${2-}"; shift 2 ;;
+    --every) fm_need "fm-run" "$@"; EVERY="${2-}"; shift 2 ;;
     *) echo "fm-run: unknown argument $1" >&2; exit 64 ;;
   esac
 done

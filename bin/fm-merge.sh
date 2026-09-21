@@ -18,9 +18,9 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 REPO="${FM_ROOT:-$(pwd)}"; PR=''; TASK=''; GH="${FM_GH:-gh}"
 while [ $# -gt 0 ]; do
   case "$1" in
-    --pr) PR="${2-}"; shift 2 ;;
-    --task) TASK="${2-}"; shift 2 ;;
-    --repo) REPO="${2-}"; shift 2 ;;
+    --pr) fm_need "fm-merge" "$@"; PR="${2-}"; shift 2 ;;
+    --task) fm_need "fm-merge" "$@"; TASK="${2-}"; shift 2 ;;
+    --repo) fm_need "fm-merge" "$@"; REPO="${2-}"; shift 2 ;;
     *) echo "fm-merge: unknown argument $1" >&2; exit 64 ;;
   esac
 done
