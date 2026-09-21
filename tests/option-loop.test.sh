@@ -84,8 +84,7 @@ while read -r name want; do
   assert_ok "test -f '$f'" "$name.sh is still there"
   # discovered from the file, then checked against the pinned count, so a
   # loop written differently tomorrow fails loudly instead of quietly
-  flags="$(sed -n '/while .*\$# -gt 0/,/^done/p' "$f" \
-           | grep 'shift 2' | grep -oE '\-\-[a-z-]+\)' | tr -d ')' | sort -u)"
+  flags="$(fm_loop_flags "$f")"
   got="$(printf '%s\n' "$flags" | sed '/^$/d' | wc -l | tr -d ' ')"
   assert_eq "$want" "$got" "$name has its $want value-taking flags"
   while IFS= read -r flag; do
@@ -118,6 +117,21 @@ assert_eq "$(printf '%s\n' "$PINNED" | awk '{print $1}' | sort)" "$(printf '%s' 
   "the pinned list is every script that consumes a value with shift 2, and no more"
 # and the corpus is not the empty set dressed up as agreement
 assert_ne "" "$loops" "the corpus found scripts to compare against"
+
+# The marker is a one-line switch that takes a script out of the gate
+# AND out of the list this suite checks the gate against, in one edit,
+# with nothing going red - the same shape as the non-descending glob
+# above, where a file that drops out of the sweep drops out of the
+# count with it. So the exempt set is pinned by name. Adding the marker
+# to a real script is then a change to this line, which a reader sees.
+exempt=''
+while IFS= read -r f; do
+  fm_is_lint_source "$f" && exempt="$exempt${f#"$ROOT"/}
+"
+done < <(fm_shell_corpus "$ROOT/bin")
+assert_eq "bin/ci.sh
+bin/fm-config.sh" "$(printf '%s' "$exempt" | sed '/^$/d' | sort)" \
+  "only the two files that HOLD these rules are exempt from them"
 
 # and nothing consumes a value any other way, which is the blind spot the
 # lint and this check would otherwise share. Bare flags shift once; a
@@ -160,5 +174,20 @@ while IFS= read -r f; do
   rm -rf "$tmp"
 done < <(fm_shell_corpus "$ROOT/bin")
 assert_eq "6" "$sourced" "six scripts take their guard from the library"
+
+# And the other half of the same number, because two comments say it is
+# pinned here and until now it was not: the scripts that deliberately
+# depend on nothing and carry a two-line copy of the guard instead. The
+# pair has to add up to the corpus, or one of the three numbers is
+# describing a set nothing looked at.
+local_copies=0
+while IFS= read -r f; do
+  grep -qE '^need\(\) \{' <<< "$(fm_strip_comments "$f")" || continue
+  local_copies=$((local_copies + 1))
+done < <(fm_shell_corpus "$ROOT/bin")
+assert_eq "6" "$local_copies" "six scripts carry a local copy of the guard"
+assert_eq "$(printf '%s\n' "$PINNED" | awk 'NF {n++} END {print n+0}')" \
+  "$((sourced + local_copies))" \
+  "and every script with an option loop does one or the other, and not both"
 
 finish

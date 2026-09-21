@@ -157,9 +157,11 @@ fm_run_chain() {
 #
 # The scripts that deliberately depend on nothing carry a two-line copy
 # that points back here. How many there are is pinned in
-# tests/option-loop.test.sh, not written down anywhere as prose:
-# design.md §5.3.1 argues that a count in a comment is only true on the
-# day it is typed, and this file was carrying two of them.
+# tests/option-loop.test.sh - by an assertion that greps for the local
+# definition, which is new: the sentence claiming it was pinned was
+# there a round before the assertion was. A count in a comment is only
+# true on the day it is typed, and a claim that a count is checked
+# somewhere else is worth no more than the check.
 fm_need() { [ "$#" -ge 3 ] || { echo "$1: $2 needs a value" >&2; exit 64; }; }
 
 # --- what counts as a script, and what counts as a comment ---------------
@@ -197,4 +199,20 @@ fm_loop_corpus() {   # fm_loop_corpus [dir]
     grep -q 'shift 2' <<< "$(fm_strip_comments "$f")" || continue
     printf '%s\n' "$f"
   done < <(fm_shell_corpus "${1:-bin}")
+}
+
+# Which flags an option loop consumes a value for. This lived in
+# tests/option-loop.test.sh, hand-rolled, which made it a THIRD idea of
+# what a line of an option loop is in the file whose argument is that
+# there must be one - and it was the idea the pinned counts are derived
+# from. It reads comments off first (a flag named in a comment inside
+# the loop used to invent one) and takes the whole case pattern rather
+# than one flag from it, so `--x|--y)` is two.
+fm_loop_flags() {   # fm_loop_flags <file>
+  fm_strip_comments "$1" \
+    | sed -n '/while .*$# -gt 0/,/^done/p' \
+    | grep 'shift 2' \
+    | sed 's/).*$//' \
+    | grep -oE '\-\-[A-Za-z][A-Za-z0-9-]*' \
+    | sort -u
 }

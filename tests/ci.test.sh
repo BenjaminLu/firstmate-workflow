@@ -350,7 +350,6 @@ plant "and the second as well" "fm-twirler.sh"
 plant "and both lines of the one with two" "--y"
 rm -f "$q/bin/fm-spinner.sh" "$q/bin/fm-twirler.sh"
 
-
 # a comment must not talk the stage out of firing: the guard is judged by
 # what the code does, not by the word appearing on the line
 # On a line of its own inside the branch, and shaped like a command,
@@ -426,43 +425,6 @@ rm -f "$q/bin/fm-elsewhere.sh"
 
 # And the ordinary multi-line branch, which IS guarded: the check reads
 # the case branch, not the physical line, so a guard on a line of its
-# own counts. Reading one line called this naked and the gate would
-# have refused the commonest way of writing it - the rule in §5.3.1 is
-# "checks first", not "checks first, on the same line".
-{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
-  printf 'need() { [ "$#" -ge 2 ] || exit 64; }\n'
-  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
-  printf '    --x)\n      need "$@"\n      v="${2-}"; shift 2 ;;\n'
-  printf '    *) exit 64 ;;\n  esac\ndone\necho "${v:-}"\n'
-} > "$q/bin/fm-spread.sh"
-plant "a guard on its own line, above the shift, is a guard" "no option loop can spin"
-rm -f "$q/bin/fm-spread.sh"
-
-# and a guard does not leak past the end of its branch
-{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
-  printf 'need() { [ "$#" -ge 2 ] || exit 64; }\n'
-  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
-  printf '    --x)\n      need "$@"\n      v="${2-}"; shift 2 ;;\n'
-  printf '    --y)\n      w="${2-}"; shift 2 ;;\n'
-  printf '    *) exit 64 ;;\n  esac\ndone\necho "${v:-}${w:-}"\n'
-} > "$q/bin/fm-leaky2.sh"
-plant "a guard in the branch above does not cover the one below it" "has not checked it has two"
-plant "and the stage names the line" "w=\"\${2-}\"; shift 2"
-rm -f "$q/bin/fm-leaky2.sh"
-
-# and the corpus has to SEE a script whose option loop shares a line
-# with a `#` that is not a comment: `sed 's/#.*$//'` cuts `${1#--}` in
-# half, the `shift 2` goes with it, and the script is excused entirely
-{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
-  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
-  printf '    --*) n="${1#--}"; v="${2-}"; shift 2 ;;\n'
-  printf '    *) exit 64 ;;\n  esac\ndone\necho "${n:-}${v:-}"\n'
-} > "$q/bin/fm-hashed.sh"
-plant "a hash inside a parameter expansion does not hide an option loop" "fm-hashed.sh"
-rm -f "$q/bin/fm-hashed.sh"
-
-# And the ordinary multi-line branch, which IS guarded: the check reads
-# the case branch, not the physical line, so a guard on a line of its
 # own counts. Reading one line called this naked and would have made the
 # gate refuse the commonest way of writing it - the rule §5.3.1 states
 # is "checks first", not "checks first, on the same line".
@@ -517,7 +479,6 @@ bare2="$(mktemp -d)"; mkdir -p "$bare2/bin"; cp "$q/bin/ci.sh" "$q/bin/fm-config
 assert_contains "$(FM_ROOT="$bare2" bash "$bare2/bin/ci.sh" 2>&1)" "value (0 scripts)" \
   "and says zero on a tree with none"
 rm -rf "$bare2"
-
 
 plant "a hand-rolled swap turns the hygiene stage red" "saves a script by hand"
 plant "and the stage names the suite" "hand-rolled.test.sh"

@@ -259,10 +259,13 @@ the whole of the rule here: whether every OTHER kind of usage error
 exits `64` too is T-029, and nothing in this section says it does.
 
 No count belongs in this paragraph. How many scripts have an option
-loop, how many carry a local copy of the guard and how many take it
-from `bin/fm-config.sh` are all pinned in `tests/option-loop.test.sh`,
-where a number that stops being true turns the gate red; a number
-written here would only ever be true on the day it was typed.
+loop, how many carry a local copy of the guard, how many take it from
+`bin/fm-config.sh`, and which files are exempt from the rule because
+they hold it, are all pinned in `tests/option-loop.test.sh`, where a
+number that stops being true turns the gate red; a number written here
+would only ever be true on the day it was typed. The two halves have to
+add up to the corpus, so a script cannot quietly leave one set without
+joining the other.
 `bin/ci.sh` fails on a `shift 2` that has not checked, and
 `tests/option-loop.test.sh` runs every flag of every script with nothing
 after it — under an alarm, because a test for a hang that simply calls the
