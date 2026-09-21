@@ -805,7 +805,10 @@
         "design/tasks.json",
         "design/diagrams/README.md",
         "design/diagrams/T-034.en.html",
-        "design/diagrams/T-034.zh-TW.html"
+        "design/diagrams/T-034.zh-TW.html",
+        "bin/fm-run.sh",
+        "tests/e2e-loop.test.sh",
+        "tests/option-loop.test.sh"
       ],
       "acceptance": [
         "Every new decision has one concise task-specific explanation, a bespoke before/after change diagram and concrete advantages and costs for its A/B/C options. Remove repeated nested card framing, titles, lane strips, buttons and checklists from embedded diagrams. A generic workflow diagram is not a substitute for the actual proposed change.",
