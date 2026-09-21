@@ -69,6 +69,16 @@ sc="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
 assert_ne "" "$sc" "the board is answering"
 assert_eq "captain" "$(jq -r '.tasks[]|select(.id=="T-C")|.stage' <<<"$sc")" \
   "a task the captain has been asked about waits on the captain"
+# and it keeps waiting: while the card is up, nothing said afterwards
+# moves the task out of the captain's lane
+mkdir -p "$d/state/pending"
+printf '{"id":"D-12","task":"T-C","kind":"merge","pr":12,"title":"ready"}\n' > "$d/state/pending/D-12.json"
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-C --type dispatched \
+  --en "a stray dispatch" --tw "多餘的派工" >/dev/null
+sc2="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "captain" "$(jq -r '.tasks[]|select(.id=="T-C")|.stage' <<<"$sc2")" \
+  "and stays there while the card is up, whatever is said after"
+rm -f "$d/state/pending/D-12.json"
 
 # merged is where a task stops. A review round run against the branch
 # afterwards would otherwise move it back to "in review", which reads as
