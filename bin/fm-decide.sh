@@ -37,10 +37,38 @@ DIR="$REPO/state/decisions"; PEND="$REPO/state/pending"
 mkdir -p "$DIR" "$PEND"
 emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate "$@" >/dev/null 2>&1 </dev/null || true; }
 
+# The board draws no diagrams. It mounts an iframe for every decision card
+# and HEADs the file first, so a decision whose diagram nobody generated is
+# answered 404 and the frame removes itself - every reader, every decision,
+# for as long as nothing calls the generator. Requesting the decision is the
+# moment the file has to exist, because it is the moment the card appears.
+#
+# The drawing is decoration on the request; the request is what the captain
+# is waiting for. So a generator that fails does not take the decision with
+# it. It does not vanish either: the reason goes to standard error, where the
+# caller's own log keeps it. Its stdout is not passed through - --request
+# prints one thing, the pending file, and three diagram paths arriving on the
+# same stream would be read as that answer.
+draw() {
+  local out rc
+  [ -x "$REPO/bin/fm-diagram.sh" ] || {
+    printf 'fm-decide: no bin/fm-diagram.sh under %s: %s will have no diagram\n' "$REPO" "$ID" >&2
+    return 0
+  }
+  out="$(FM_ROOT="$REPO" "$REPO/bin/fm-diagram.sh" --event decision_requested \
+         --decision "$ID" --repo "$REPO" 2>&1 </dev/null)"; rc=$?
+  [ "$rc" -eq 0 ] || printf 'fm-decide: could not draw %s (fm-diagram.sh exited %s): %s\n' \
+    "$ID" "$rc" "$out" >&2
+  return 0
+}
+
 if [ "$MODE" = request ]; then
   jq -cn --arg id "$ID" --arg task "$TASK" --arg kind "$KIND" --arg title "$TITLE" --arg pr "$PR" \
     '{id:$id,task:$task,kind:$kind,title:$title}
      + (if $pr=="" then {} else {pr:($pr|tonumber)} end)' > "$PEND/$ID.json"
+  # after the pending file and before the event: the generator reads the file
+  # it is drawing, and the event is what wakes anything watching
+  draw
   emit --type decision_requested --task "$TASK" ${PR:+--pr "$PR"} \
        --en "${TITLE:-a decision is waiting}" --tw "${TITLE:-有待決事項}"
   printf '%s\n' "$PEND/$ID.json"
