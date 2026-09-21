@@ -199,14 +199,32 @@ done
 # INT/TERM/HUP are listed anyway, for the paths and the shells where
 # that is not true; what this test proves is the behaviour the criterion
 # names, not the flag list.
-dk="$(fixture)"; rk="$dk/repo"; GHk="$(ghstub "$dk")"
-cat > "$rk/bin/adapters/mock.sh" <<'M'
+# The adapter sleeps and THEN does the work, so the two runs differ. A
+# stub that only sleeps writes nothing into the worktree, an untouched
+# run therefore produces no diff and never reaches `pr create` either -
+# and every assertion below would have held with the kill deleted. The
+# control run at the end is what makes the killed one mean something.
+killable_adapter() {   # killable_adapter <repo>
+  cat > "$1/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
-sleep 5
+sleep 2
+mkdir -p "$3/src"
+printf 'the work was done\n' > "$3/src/thing"
 M
-chmod +x "$rk/bin/adapters/mock.sh"
-( cd "$rk" && FM_ROOT="$rk" FM_GH="$GHk" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 ) &
+  chmod +x "$1/bin/adapters/mock.sh"
+}
+
+dk="$(fixture)"; rk="$dk/repo"; GHk="$(ghstub "$dk")"
+killable_adapter "$rk"
+# `exec`, so the pid is the SCRIPT and not the subshell around it.
+# Without it `$!` is the wrapper, and whether the signal ever reaches
+# fm-worker.sh depends on whether this bash elides the last fork - which
+# bash 5 does and the 3.2 on this platform does not. On the shell that
+# does not, the wrapper dies, the worker is orphaned, runs to its
+# natural end, and `kill -0 "$killme"` is false anyway because the
+# wrapper was reaped: green, on a run nothing interrupted.
+( cd "$rk" && FM_ROOT="$rk" FM_GH="$GHk" exec bin/fm-worker.sh --task T-Z >/dev/null 2>&1 ) &
 killme=$!
 for _ in $(seq 1 60); do
   [ -s "$rk/state/events.jsonl" ] && break
@@ -216,7 +234,7 @@ done
 # so two suites running at once reap each other's stubs and each sees an
 # ending its assertions attribute to the trap
 kill -TERM "$killme" 2>/dev/null
-wait "$killme" 2>/dev/null
+wait "$killme" 2>/dev/null; krc=$?
 for _ in $(seq 1 40); do
   [ "$(jq -r .type < "$rk/state/events.jsonl" 2>/dev/null | tail -1)" = "agent_finished" ] && break
   sleep 0.2
@@ -231,8 +249,29 @@ after="$(jq -r .type "$rk/state/events.jsonl" | sed -n '/agent_finished/,$p' | t
 assert_eq "" "$after" "and says nothing after it"
 assert_lacks "$(cat "$dk/ghcalls" 2>/dev/null)" "pr create" \
   "a killed run does not go on to open a pull request"
+assert_eq "143" "$krc" "and it exits on the signal - 128+TERM, from the signal trap"
 assert_fail "kill -0 '$killme' 2>/dev/null" "and the process is gone"
+# and the discrimination, stated: the adapter DID write its file - bash
+# defers a TERM that arrives while it is waiting for a child, so the
+# sleep finishes and the work lands - and the run still never reached
+# `pr create`. Work present, pull request absent, is something only an
+# interrupted run produces.
+assert_ok "test -f '$rk/state/worktrees/T-Z/src/thing'" \
+  "the adapter had finished its work, so a run left alone would have gone on"
 rm -rf "$dk"
+
+# the same fixture, left alone: this is what the four assertions above
+# are the absence of, and without it they are satisfied by a run that
+# was never interrupted
+dl="$(fixture)"; rl="$dl/repo"; GHl="$(ghstub "$dl")"
+killable_adapter "$rl"
+( cd "$rl" && FM_ROOT="$rl" FM_GH="$GHl" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+assert_eq "0" "$?" "the same run, not killed, exits 0"
+assert_contains "$(cat "$dl/ghcalls" 2>/dev/null)" "pr create" \
+  "the same run, not killed, does reach a pull request"
+assert_eq "1" "$(jq -r 'select(.type=="agent_finished")|.type' "$rl/state/events.jsonl" | grep -c . || true)" \
+  "and ends exactly once as well"
+rm -rf "$dl"
 
 # a vendor named in config.yaml with no adapter behind it is a typo. It has
 # to be found before anything runs, or a real vendor does the work and the

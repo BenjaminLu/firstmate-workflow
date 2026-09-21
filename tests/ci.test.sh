@@ -212,6 +212,19 @@ plant "and the stage prints that line too" "syntax error"
   printf 'exit 0\n'
 } > "$q/tests/broken.test.sh"
 plant "a suite that goes on after a command it could not exec is a failure" "did not run"
+# `unbound variable` was in the rule with no plant, and it is the one
+# phrase whose place in the set is arguable: under `set -u` a
+# non-interactive bash EXITS, which is the other arm's job. In a
+# SUBSHELL it does not - the subshell dies, the parent carries on, and
+# the suite reaches its end green with a line that never ran. That is
+# what earns it a place here.
+{ printf '#!/usr/bin/env bash\n'
+  printf 'set -u\n'
+  printf '( echo "$NO_SUCH_VARIABLE" )\n'
+  printf 'exit 0\n'
+} > "$q/tests/broken.test.sh"
+plant "a suite that goes on after an unbound variable in a subshell is a failure" "did not run"
+plant "and the stage prints that line as well" "NO_SUCH_VARIABLE"
 rm -f "$q/tests/broken.test.sh" "$q/brokenlib.sh"
 
 # The locale the gate runs a suite under is production, and nothing here

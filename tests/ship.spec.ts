@@ -122,6 +122,25 @@ test("every state a crewman can be in is styled and named", () => {
 // comment saying so. It wrote three properties nothing in his block read
 // - two of them for a sum that a more specific rule overrode - which is
 // the same defect as a literal, pointed the other way.
+// The chip below the top deck carries the task, and falls back to the
+// agent's name when there is none. The fallback is the page's contract
+// with a crew list, not with today's server: firstmate is crew[0] and
+// crew[0] is always on the top row, so nothing the server sends reaches
+// it - and an empty chip is a crewman the board cannot name at all.
+test("a crewman below the top deck with no task is still named on his chip", () => {
+  const s = state(7);
+  const nameless = s.crew[4] as { task?: string | null; title?: string | null; id: string };
+  nameless.task = null; nameless.title = null;
+  const h = host();
+  SHIP.render(h as never, s, T);
+  const minis = [...h.innerHTML.matchAll(/class="bub mini [^"]*"[^>]*><div class="who">([^<]*)</g)]
+    .map((m) => m[1]);
+  expect(minis.length).toBeGreaterThan(0);
+  // no chip is blank, and the taskless one carries the agent's own id
+  for (const m of minis) expect(m.trim()).not.toBe("");
+  expect(minis).toContain(nameless.id);
+});
+
 test("every custom property the captain writes is one his own block reads", () => {
   const js = readFileSync(join(ROOT, "board/public/ship.js"), "utf8");
   const body = js.slice(js.indexOf("function captain("), js.indexOf("function roster("));

@@ -288,6 +288,28 @@ stream="$(cat "$d/stream")"
 assert_contains "$stream" "event: state" "the stream opens with the state"
 assert_contains "$stream" "merged" "an event written while the stream is open reaches it"
 
+# The captain is not an agent and is never aboard. Not covered by the
+# assertion above it, which reads roles rather than ids, nor by anything
+# else here: every captain event in this fixture until now has been on a
+# task that is merged or closed, so `done.has(task)` would have dropped
+# him anyway and deleting the clause changed nothing.
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --task T-D --type dispatched \
+  --en "the captain says something about an open task" --tw "船長對未完成的任務說話" >/dev/null
+scap="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_lacks "$(jq -r '.crew[].id' <<<"$scap" | tr '\n' ' ')" "captain" \
+  "the captain is not crew even when he speaks about an open task"
+
+# The role is what the run SAID, and the fallback that reads the name is
+# only for logs written before it said anything. An actor named like a
+# reviewer that states worker is the only case the stated-role branch
+# decides on its own - rev-9 covers the mirror of it.
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor reviewer-really-a-worker --task T-D \
+  --data '{"role":"worker"}' --type dispatched \
+  --en "named like a reviewer, says it is a worker" --tw "名字像 reviewer，說自己是 worker" >/dev/null
+srw="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "worker" "$(jq -r '.crew[]|select(.id=="reviewer-really-a-worker")|.role' <<<"$srw")" \
+  "an actor named like a reviewer that states worker is a worker"
+
 # The deck holds a fixed number, and when more agents are aboard than it
 # holds the server has to decide which ones are shown. It keeps the ones
 # that spoke most recently. The first version kept the oldest without
@@ -311,6 +333,17 @@ while [ "$i" -lt "$n" ]; do
 done
 sd="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
 assert_eq "$limit" "$(jq -r '.crew|length' <<<"$sd")" "the deck holds its limit and no more"
+# Ordered by each actor's LAST event, which is the whole of the fix and
+# is invisible in a crowd where everyone spoke once: with one event each,
+# first and last are the same event and the order is the same with the
+# `delete` and without it. So the oldest crewman aboard speaks again, and
+# has to come back to the head.
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor crowd-0 --task T-D --type gate_failed \
+  --en "still here" --tw "還在" >/dev/null
+sd2="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+crowd2="$(jq -r '.crew[].id' <<<"$sd2" | tr '\n' ' ')"
+assert_contains "$crowd2" "crowd-0 " "the agent that has been aboard longest, having just spoken, is on the deck"
+assert_lacks "$crowd2" "crowd-1 " "and the one that has now been quiet longest is the one dropped"
 crowd="$(jq -r '.crew[].id' <<<"$sd" | tr '\n' ' ')"
 assert_contains "$crowd" "firstmate " "firstmate keeps its place at the head"
 assert_eq "firstmate" "$(jq -r '.crew[0].id' <<<"$sd")" "and it is the head"

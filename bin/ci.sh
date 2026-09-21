@@ -269,7 +269,10 @@ else
       # The set is chosen, not collected: these are bash's diagnostics
       # for "this line did not run and I am carrying on anyway", which
       # is the whole hazard under `set -uo pipefail` with no -e. A
-      # missing command, an unset variable, a file that will not exec,
+      # missing command, an unset variable in a subshell - where `set -u`
+      # kills the subshell and leaves the parent running, which is the
+      # only shape of it that reaches here, since in the main shell bash
+      # exits and the other arm catches it - a file that will not exec,
       # and a syntax error in something sourced - which leaves the suite
       # running with half its functions undefined and exiting 0, the way
       # two spliced lines in a test file did. Diagnostics that stop the
