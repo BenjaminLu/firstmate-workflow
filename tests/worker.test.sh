@@ -138,8 +138,11 @@ cat > "$r9/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
 if [ -f "$3/src/round-one" ]; then
-  # only on the round that was given the review to answer
-  grep -q 'REVIEWER SAID' "$2" && printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md"
+  # BOTH halves of the criterion, one condition each: the question is
+  # only written if the prompt carried the review AND the failing check
+  grep -q 'REVIEWER SAID' "$2" || exit 1
+  grep -q 'THE RUNNER SAID' "$2" || exit 1
+  printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md"
 else
   mkdir -p "$3/src"; printf 'the first round\n' > "$3/src/round-one"
 fi
@@ -148,14 +151,19 @@ chmod +x "$r9/bin/adapters/mock.sh"
 GH9="$(ghstub "$d9")"
 ( cd "$r9" && FM_ROOT="$r9" FM_GH="$GH9" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
 b9="$(cd "$r9" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1)"
-assert_ne "" "$b9" "the first round left a branch to answer on"
+# what the first round DID, not that a branch exists: `git worktree add
+# -b` makes the branch before the engine runs, so a branch is also what
+# a round that died on its first line leaves
+assert_ok "cd '$r9' && git cat-file -e '$b9:src/round-one'" \
+  "the first round committed work for the second to answer for"
 # a stub that knows the branch has #31, and records what it is asked
 cat > "$d9/stub/gh" <<'G'
 #!/usr/bin/env bash
 echo "gh $*" >> "$(dirname "$0")/../ghcalls"
 case " $* " in
   *" pr list "*) echo 31; exit 0 ;;
-  *" pr checks "*) exit 0 ;;
+  *" pr checks "*) echo "https://example.invalid/actions/runs/9/job/1"; exit 0 ;;
+  *" run view "*) printf 'ci\tbin/ci.sh\tTHE RUNNER SAID: the gate is red\n'; exit 0 ;;
   *" pr view "*" comments "*) printf '## reviewer-1\n\nREVIEWER SAID: answer this\n' ;;
 esac
 exit 0
@@ -166,6 +174,9 @@ out9="$(cd "$r9" && FM_ROOT="$r9" FM_GH="$GH9" bin/fm-worker.sh --task T-Z 2>&1)
 assert_eq "0" "$rc9" "a later round dispatched from a task id alone is a complete round"
 assert_contains "$out9" "already has #31" "the worker found the pull request itself"
 assert_contains "$out9" "its question is on #31" "and says which one it spoke on, with a number after the hash"
+# the question exists only if BOTH halves reached the prompt: the
+# adapter exits 1 without either, so this assertion is the conjunction
+assert_contains "$(cat "$d9/ghcalls")" "run view" "and the prompt carried the failing check as well as the review"
 assert_contains "$(cat "$d9/ghcalls")" "pr comment 31" "the question reached that pull request"
 assert_eq "31" "$(jq -r 'select(.type=="ask_pass_criteria")|.pr' < "$r9/state/events.jsonl" | tail -1)" \
   "and the log records the number it spoke on"
@@ -220,7 +231,9 @@ assert_contains "$out7" "nowhere to put it" "and says what happened"
 assert_contains "$out7" "#9" "naming the pull request that would not take it"
 assert_eq "9" "$(jq -r 'select(.type=="worker_crashed")|.pr' < "$r7/state/events.jsonl" | tail -1)" \
   "and the event carries it, so the board can link the failed round to the pull request"
-assert_ok "test -s '$r7/state/worktrees/T-Z/.fm-say.md'" "and the question itself is kept"
+unsent7=("$r7"/state/unsent/T-Z-*.md)
+assert_eq "1" "${#unsent7[@]}" "and the question itself is kept, outside the worktree"
+assert_ok "test -s '${unsent7[0]}'" "with the text in it"
 assert_contains "$(jq -r .type < "$r7/state/events.jsonl" | tr '\n' ' ')" "worker_crashed" \
   "and the log carries it, so the board is not showing a round that went fine"
 assert_lacks "$(jq -r .type < "$r7/state/events.jsonl" | tr '\n' ' ')" "ask_pass_criteria" \
@@ -240,14 +253,75 @@ M
 chmod +x "$r8/bin/adapters/mock.sh"
 out8="$(cd "$r8" && FM_ROOT="$r8" FM_GH="$GH8" bin/fm-worker.sh --task T-Z 2>&1)"; rc8=$?
 assert_eq "73" "$rc8" "so does a question with no pull request to put it on"
-assert_contains "$out8" "is new, so there is no pull request" \
-  "and it says what was actually checked - that the branch is new"
+assert_contains "$out8" "is new - this is a first round" \
+  "and it says what was actually checked - that there is no branch yet"
 # the payload survives, or the only copy of the question is gone and
 # nobody can post it by hand either
-assert_ok "test -s '$r8/state/worktrees/T-Z/.fm-say.md'" "what the worker wrote is still there"
-assert_contains "$out8" ".fm-say.md" "and the run says where"
-assert_contains "$(jq -r 'select(.type=="worker_crashed")|.en // .summary.en' \
-  < "$r8/state/events.jsonl" | tail -1)" "no pull request" "and the log says which failure it was"
+# OUT of the worktree: the next round removes and recreates that, so
+# the file where it was written is gone as soon as anything runs again
+# - and the design says the text survives for a human to post
+unsent8=("$r8"/state/unsent/T-Z-*.md)
+assert_eq "1" "${#unsent8[@]}" \
+  "what the worker wrote is kept where the next round will not delete it"
+assert_contains "$out8" "state/unsent/T-Z" "and the run says where"
+assert_contains "$(jq -r 'select(.type=="worker_crashed")|.summary.en // .en' \
+  < "$r8/state/events.jsonl" | tail -1)" "first round" "and the log says which of the three it was"
+
+# the third cause, which the two branches above could not tell apart: a
+# LATER round whose lookup came back empty. `gh` swallowed its errors,
+# so an unreachable one looked exactly like a new branch - and the run
+# said "this branch is new" about a branch with commits on it.
+d10="$(fixture)"; r10="$d10/repo"; GH10="$(ghstub "$d10")"
+cat > "$r10/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+if [ -f "$3/src/round-one" ]; then
+  printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md"
+else
+  mkdir -p "$3/src"; printf 'the first round\n' > "$3/src/round-one"
+fi
+M
+chmod +x "$r10/bin/adapters/mock.sh"
+( cd "$r10" && FM_ROOT="$r10" FM_GH="$GH10" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+b10="$(cd "$r10" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1)"
+assert_ok "cd '$r10' && git cat-file -e '$b10:src/round-one'" "the first round committed something"
+# a gh that cannot answer, which is what a rate limit or an outage is
+printf '#!/usr/bin/env bash\nexit 1\n' > "$d10/stub/gh"; chmod +x "$d10/stub/gh"
+out10="$(cd "$r10" && FM_ROOT="$r10" FM_GH="$GH10" bin/fm-worker.sh --task T-Z 2>&1)"; rc10=$?
+assert_eq "73" "$rc10" "a later round that cannot find its pull request fails too"
+assert_contains "$out10" "exists but no open pull request was found" \
+  "and does not call a branch with commits on it new"
+assert_contains "$out10" "gh that did not answer" "naming the cause it could not rule out"
+
+# And that keeping it does not leave a stale signal behind: the
+# worktree is removed and recreated from the branch on every round, so
+# `[ -s .fm-say.md ]` can only ever be this round's question. If it
+# were not - if the file were kept where it was written - the next
+# round would read it, report itself an asking round whatever the
+# engine did, and never commit the work.
+cat > "$r10/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+mkdir -p "$3/src"; printf 'the round after the failure\n' > "$3/src/round-three"
+M
+chmod +x "$r10/bin/adapters/mock.sh"
+assert_ok "test -s '$r10/state/worktrees/T-Z/.fm-say.md'" \
+  "the failed round's question is still in the worktree it was written in"
+cat > "$d10/stub/gh" <<'G'
+#!/usr/bin/env bash
+echo "gh $*" >> "$(dirname "$0")/../ghcalls"
+case " $* " in *" pr list "*) echo 31; exit 0 ;; esac
+exit 0
+G
+chmod +x "$d10/stub/gh"; : > "$d10/ghcalls"
+out11="$(cd "$r10" && FM_ROOT="$r10" FM_GH="$GH10" bin/fm-worker.sh --task T-Z 2>&1)"
+assert_lacks "$out11" "asked rather than changed" \
+  "a question left by an earlier round is not this round's question"
+assert_ok "cd '$r10' && git cat-file -e '$b10:src/round-three'" \
+  "and the work this round did is committed, not thrown away"
+assert_fail "test -e '$r10/state/worktrees/T-Z/.fm-say.md'" \
+  "the recreated worktree does not carry it"
+rm -rf "$d10"
 rm -rf "$d8"
 
 # A run that was interrupted leaves its files uncommitted in the worktree,

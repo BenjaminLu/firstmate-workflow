@@ -152,10 +152,19 @@ if [ "$round_two" = 1 ] && [ -z "$PR" ]; then
         2>/dev/null </dev/null | head -1)"
   case "$PR" in null) PR='' ;; esac
   [ -z "$PR" ] || echo "fm-worker: $branch already has #$PR; this round answers it" >&2
+  [ -n "$PR" ] || echo "fm-worker: no open pull request found for $branch" >&2
 fi
 
 # --- the prompt: the task, the design that bears on it, and the skill ----
 prompt="$tree/.fm-prompt.md"
+# This is the worker's one way to speak, and it is read back with
+# `[ -s ... ]`, so it has to be a signal from THIS round. What makes
+# that true is above: the worktree is removed and recreated from the
+# branch before the engine runs, and .fm-say.md is never committed, so
+# a question left by an earlier round cannot be here. The rescue that
+# runs first excludes it by name for the same reason - a leftover
+# question is not uncommitted work worth saving.
+say="$tree/.fm-say.md"
 {
   cat skills/worker/SKILL.md
   printf '\n---\n\n# Your task\n\n```json\n%s\n```\n' "$spec"
@@ -221,7 +230,6 @@ rm -f "$prompt"
 # ASK-PASS-CRITERIA would sit in a log nobody reads while fm-protocol
 # reported a violation every turn, which looks exactly like a worker that
 # stopped working.
-say="$tree/.fm-say.md"
 asked=0
 [ -s "$say" ] && asked=1
 spoke=0
@@ -244,19 +252,32 @@ fi
 # a failed round that cannot be linked to the pull request it failed on
 # is a card the captain cannot act on.
 if [ "$asked" = 1 ] && [ "$spoke" = 0 ]; then
+  # Out of the worktree, which is removed and recreated on the next
+  # round: keeping the file where it was written is not keeping it, and
+  # the design said the text survives so a human can post it. This is
+  # the same place an interrupted run's work goes.
+  kept="$REPO/state/unsent/$TASK-$(date -u +%Y%m%dT%H%M%SZ).md"
+  mkdir -p "$(dirname "$kept")"
+  cp "$say" "$kept" 2>/dev/null || kept="$say"
   echo "fm-worker: the worker had something to say and there was nowhere to put it" >&2
-  echo "fm-worker: it is at $say" >&2
+  echo "fm-worker: it is at ${kept#"$REPO"/}" >&2
+  # Three causes, and each message names the one that was checked. The
+  # first version had two branches and the second one said "the branch
+  # is new" on the strength of `[ -z "$PR" ]` - which is also what an
+  # unreachable gh looks like, since the lookup swallows its errors.
   if [ -n "$PR" ]; then
     echo "fm-worker: #$PR would not take the comment" >&2
     emit --type worker_crashed --pr "$PR" --en "the worker's question could not be posted to #$PR" \
          --tw "工人的提問貼不上 #$PR"
+  elif [ "$round_two" = 1 ]; then
+    echo "fm-worker: $branch exists but no open pull request was found for it" >&2
+    echo "fm-worker: that is either a branch with no pull request, or a gh that did not answer" >&2
+    emit --type worker_crashed --en "no pull request was found for $branch" \
+         --tw "找不到 ${branch} 的 PR"
   else
-    # what was actually checked: round_two is 0, which means neither the
-    # local branch nor origin has one - so there is no pull request
-    # because there is no branch, and this is a first round
-    echo "fm-worker: $branch is new, so there is no pull request to say it on" >&2
-    emit --type worker_crashed --en "the worker asked on a round with no pull request" \
-         --tw "工人在還沒有 PR 的一輪提問"
+    echo "fm-worker: $branch is new - this is a first round, and there is nothing to say it on yet" >&2
+    emit --type worker_crashed --en "the worker asked on a first round" \
+         --tw "工人在第一輪就提問"
   fi
   exit 73
 fi

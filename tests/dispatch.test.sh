@@ -79,7 +79,10 @@ FM_ROOT="$p" "$p/bin/fm-emit.sh" --actor captain --type greenlit --en go --tw é–
 # the positive control first, or "it did not appear" is evidence about a
 # string rather than about a filter: before anything is said about it,
 # T-001 is a task this dispatcher would start
-out="$(cd "$p" && FM_ROOT="$p" bin/fm-dispatch.sh --dry-run --repo "$p" 2>&1)"
+# the same invocation the two assertions below use, not --dry-run: a
+# control read off a different output surface proves nothing about the
+# surface being searched
+out="$(cd "$p" && FM_ROOT="$p" bin/fm-dispatch.sh --repo "$p" 2>&1)"
 assert_contains "$out" "T-001" "a task with nothing said about it is dispatchable"
 # T-001 has a pull request open and no dispatched event: started by hand
 FM_ROOT="$p" "$p/bin/fm-emit.sh" --actor worker-1 --task T-001 --type pr_opened --pr 5 \

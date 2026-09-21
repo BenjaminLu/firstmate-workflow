@@ -296,11 +296,14 @@ it.
 
 Asking is the whole of a round that begins with a question, so a
 question that could not be posted is a failed run — exit `73`, a
-`worker_crashed` carrying the pull request number, and `.fm-say.md`
-left on disk so the text is not lost. It used to be a line on standard
-error and an exit 0: the reviewer waited for a question it would never
-see, the next round asked it again, and the board showed a round that
-went fine.
+`worker_crashed` carrying the pull request number, and the text copied
+to `state/unsent/`. Not left in the worktree: the next round removes
+and recreates that from the branch, so a file kept where it was written
+is gone as soon as anything runs again. (That recreation is also what
+makes `.fm-say.md` a signal from the current round and not a stale one
+from an earlier failure.) It used to be a line on standard error and an
+exit 0: the reviewer waited for a question it would never see, the next
+round asked it again, and the board showed a round that went fine.
 
 This does not unstick the task, and the design should not claim it
 does. Nothing reads `worker_crashed` and acts on it, and a task whose
