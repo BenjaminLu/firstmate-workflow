@@ -55,6 +55,13 @@ for (const lang of ["en", "zh-TW", "zh-CN"]) {
     await expect(page.locator(".scene .fig.r-cap")).toHaveCount(0);
     await expect(page.locator("#captain .fig.r-cap")).toHaveCount(1);
     await expect(page.locator("#captain .capsays i")).toHaveText("1");
+    // and he goes when the last card does: the old unit test covered his
+    // appearing and nothing covered his leaving
+    // SHIP is a top-level const in a classic script: a global binding,
+    // not a property of window, so it is reached by name
+    await page.evaluate(`SHIP.captain(document.getElementById("captain"), 0, (k) => k)`);
+    await expect(page.locator("#captain .fig.r-cap")).toHaveCount(0);
+    await expect(page.locator("#captain")).toBeHidden();
     // every crewman says who he is and what he is on, over his own head
     await expect(page.locator(".scene .bub")).toHaveCount(CREW.length + 1);
     await expect(page.locator(".scene .bub:not(.mini) .job").first()).not.toBeEmpty();
@@ -88,13 +95,6 @@ for (const lang of ["en", "zh-TW", "zh-CN"]) {
     // and the conversion actually changed something, or "derived" would be
     // satisfied by a table that does nothing
     if (lang === "zh-CN") expect(CN.roster).not.toBe(TW.roster);
-    // the session badge: eight characters to read, the whole id and a
-    // translated instruction in the title, so a crewman can be opened
-    const sid = page.locator(".roster .sid").first();
-    await expect(sid).toHaveText(/^[0-9a-f]{8}$/);
-    const tip = await sid.getAttribute("title");
-    expect(tip).toContain("claude --resume");
-    expect(tip).toContain(want("openAgent"));
     expect(await page.evaluate(() => document.documentElement.lang)).toBe(lang);
   });
 }

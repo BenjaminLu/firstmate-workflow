@@ -78,13 +78,6 @@ prompt="$work/prompt.md"
 
 # the reviewer runs on its own engine when config.yaml names one, and falls
 # back exactly the way the worker does - one chain, one runner
-# the reviewer is an agent too, and the captain has to be able to open it
-# and read what it actually did - not only see that a round happened
-rand_hex() { LC_ALL=C hexdump -n "$1" -v -e '/1 "%02x"' /dev/urandom; }
-FM_SESSION_ID="$(printf '%s-%s-4%s-a%s-%s' \
-  "$(rand_hex 4)" "$(rand_hex 2)" "$(rand_hex 2 | cut -c2-4)" \
-  "$(rand_hex 2 | cut -c2-4)" "$(rand_hex 6)")"
-export FM_SESSION_ID
 
 # A run that ends has to say so. Without it "aboard" means "ever touched
 # a task that is not finished yet", the board draws every actor that has
@@ -169,9 +162,7 @@ if [ "$signed" = "0" ]; then
        --tw "第 $ROUND 輪審核沒有產出"
   rm -rf "$work"; exit 3
 fi
-emit --type review_opened --data "$(jq -cn --arg s "${FM_SESSION_ID:-}" '{session:$s}')" \
-     --en "round $ROUND on $TASK (session ${FM_SESSION_ID:-none})" \
-     --tw "${TASK} 第 ${ROUND} 輪審核（session ${FM_SESSION_ID:-none}）"
+emit --type review_opened --en "round $ROUND on $TASK" --tw "${TASK} 第 ${ROUND} 輪審核"
 if [ -n "$PR" ]; then
   $GH pr comment "$PR" --body "$verdict" >/dev/null 2>&1 || true
 fi

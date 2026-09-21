@@ -86,15 +86,11 @@ rm -f "$d/state/pending/D-12.json"
 # crewman a reader most needs the truth about, because it is the one that
 # works outside the board.
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor firstmate --task T-A --type dispatched \
-  --data '{"session":"018J92FGGa4fgjEfnCPP62bf"}' \
   --en "firstmate took it itself" --tw "大副自己做" >/dev/null
 sf="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
 assert_ne "" "$sf" "the board is answering"
 assert_eq "T-A" "$(jq -r '.crew[]|select(.id=="firstmate")|.task' <<<"$sf")" \
   "firstmate carries the task it is on"
-assert_eq "018J92FGGa4fgjEfnCPP62bf" \
-  "$(jq -r '.crew[]|select(.id=="firstmate")|.session' <<<"$sf")" \
-  "and the session it is running under"
 assert_eq "1" "$(jq -r '[.crew[]|select(.id=="firstmate")]|length' <<<"$sf")" \
   "and appears once, not twice"
 
@@ -123,18 +119,6 @@ assert_ne "" "$(jq -r '.crew[]|select(.id=="worker-2")|.title' <<<"$sk")" \
 assert_eq "worker" "$(jq -r '.crew[]|select(.id=="worker-2")|.role' <<<"$sk")" \
   "a worker is a worker"
 
-# and the session it is running under, so a crewman can be opened and read
-# rather than only watched: a headless run is not a named session, and a
-# dispatched agent was invisible to anything that lists them
-FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-3 --task T-A --type dispatched \
-  --data '{"session":"669cb22e-b169-47e6-abf4-fdef47460310"}' \
-  --en "picked up" --tw "接下" >/dev/null
-sks="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
-assert_eq "669cb22e-b169-47e6-abf4-fdef47460310" \
-  "$(jq -r '.crew[]|select(.id=="worker-3")|.session' <<<"$sks")" \
-  "an agent carries the session it is running under"
-assert_eq "null" "$(jq -r '.crew[]|select(.id=="worker-2")|.session' <<<"$sks")" \
-  "and one that never reported a session simply has none"
 
 # An agent that has finished its run has gone home, whatever became of
 # the task. Without this "aboard" meant "ever touched a task that is not
@@ -153,19 +137,6 @@ assert_lacks "$(jq -r '.crew[].id' <<<"$sr2" | tr '\n' ' ')" "worker-9" \
 assert_eq "working" "$(jq -r '.tasks[]|select(.id=="T-A")|.stage' <<<"$sr2")" \
   "which did not change the task"
 
-# the session belongs to the run, not to the actor for ever: a crewman
-# showing an id from a previous run invites the captain to resume a
-# session that is not the one in front of them
-FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-8 --task T-A --type dispatched \
-  --data '{"session":"aaaaaaaa-0000-4000-a000-000000000001"}' \
-  --en "run one" --tw "第一次" >/dev/null
-FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-8 --task T-A --type agent_finished \
-  --en "done" --tw "結束" >/dev/null
-FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-8 --task T-A --type dispatched \
-  --en "run two, no session reported" --tw "第二次，沒回報 session" >/dev/null
-ss="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
-assert_eq "null" "$(jq -r '.crew[]|select(.id=="worker-8")|.session' <<<"$ss")" \
-  "a run that reported no session shows none, not the last run's"
 
 # every state the server sends is one the page can draw: it becomes a
 # class name, a dictionary key and a progress number, so an open set means
@@ -176,7 +147,11 @@ sv="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
 # comments stripped: a state named only in a comment is not one the page
 # can draw, and the hygiene lint is right to insist
 css_rules="$(sed 's|/\*.*\*/||g; s|^[[:space:]]*/\*.*||' "$ROOT/board/public/ship.css")"
-for st in $(jq -r '.crew[].state' <<<"$sv" | sort -u); do
+# a loop over server-derived data is green when the data is empty, which
+# is green for a check that read nothing
+states="$(jq -r '.crew[].state' <<<"$sv" | sort -u)"
+assert_ne "" "$states" "there are crew states to check"
+for st in $states; do
   assert_contains "$css_rules" ".fig.s-$st" "the page can draw state $st"
 done
 
@@ -184,6 +159,9 @@ done
 # page draws him from the same pending deck the cards come from
 assert_lacks "$(jq -r '.crew[].role' <<<"$sr2" | tr '\n' ' ')" "captain" \
   "the server does not put the captain in the crew"
+
+# 24 is one number, and the page is told what it was
+assert_eq "24" "$(jq -r '.deckLimit' <<<"$sv")" "the server says what the deck holds"
 
 # an agent whose task is finished has gone home
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --task T-B --type merged --pr 3 \

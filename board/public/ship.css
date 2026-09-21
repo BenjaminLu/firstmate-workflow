@@ -222,10 +222,6 @@
 .roster .nm{font:650 11px var(--mono);color:#dbe8f4}
 .roster .st{font-size:10.5px;padding:1px 7px;border-radius:99px;border:1px solid var(--bubEdge,#2c3f52);color:#9dbdd6;justify-self:start}
 .roster .jb{color:#8fa9bd;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* the session the agent is running under: enough of it to copy, and the
-   whole of it in the title, so a crewman on the board can be opened */
-.roster .sid{font:600 10px var(--mono);color:var(--brass);opacity:.8;
-  background:rgba(217,164,65,.1);border-radius:4px;padding:1px 5px;margin-left:6px}
 .roster li.st-working{--av:#2f5478} .roster li.st-review{--av:#5a3f7d}
 .roster li.st-gate{--av:#7c322b}
 .roster li.st-merged,.roster li.st-captain{--av:#2c5f49}
@@ -264,7 +260,7 @@
   border:1px solid var(--line);border-radius:13px;overflow:hidden;
   background:linear-gradient(180deg,#0a1a26,#060f17)}
 .captain .capstand{position:relative;height:132px;perspective:800px;perspective-origin:50% 40%}
-.captain .pivot{--sc:1.05;bottom:6px}
+.captain .pivot{bottom:6px}   /* --sc comes from SHIP.captain: one source */
 .captain .capstand::after{content:"";position:absolute;left:50%;bottom:0;width:96px;height:10px;
   margin-left:-48px;border-radius:50%;background:radial-gradient(ellipse,rgba(0,0,0,.6),transparent 70%)}
 .captain .capsays{padding:6px 10px 12px;text-align:center}

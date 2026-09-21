@@ -11,6 +11,7 @@ const SHIP = (() => {
   const FIG_H = 88;        // a crewman's head clears this much of his deck
   const BUBBLE_CLEAR = 74; // his bubble sits above that
   const SAIL_H = 98, MAST_TOP = 26, HULL_BOTTOM = 12, BULWARK = 26, GUN_DROP = 20, FLAG_H = 18;
+  const CAPTAIN_SCALE = 1.05;   // he stands nearer than the crew; one source
 
   // six rates. More crew means more decks and a broader hull, never a longer
   // one: a crowd stacks upward.
@@ -117,23 +118,26 @@ const SHIP = (() => {
   // waiting for someone. Drawing one per in-flight task put pull requests
   // on the deck: three tasks handled by one worker looked like three of
   // the crew, and the ship grew with the backlog instead of the crew.
-  const ROLE = { firstmate: "fm", worker: "w", reviewer: "r" };
+  const ROLE = { firstmate: "fm", worker: "w", reviewer: "r" };   // no captain: see captain()
   function crewOf(s, T) {
     const label = { firstmate: T("roleFirstmate"), worker: T("roleWorker"),
                     reviewer: T("roleReviewer"), captain: T("roleCaptain") };
-    return (s.crew || []).slice(0, 24).map((a) => ({
+    // the limit comes from the server with the list: knowing 24 here as
+    // well would be the same number in two languages
+    return (s.crew || []).slice(0, s.deckLimit || 24).map((a) => ({
       id: a.id,
       role: ROLE[a.role] || "w",
       state: a.state || "working",
       // the agent's own name, and what it is on underneath
-      name: a.role === "firstmate" ? label.firstmate
-          : a.role === "captain" ? label.captain : a.id,
+      name: a.role === "firstmate" ? label.firstmate : a.id,
+      // a taskless agent is idle, whichever one it is: the old fallback
+      // said "dispatching" for anybody without a task, which is only
+      // true of firstmate
       job: a.task
         ? `${a.task}${a.title ? " \u00b7 " + a.title : ""}`
-        : a.role === "captain" ? T("capDeciding")
-        : T(s.greenlit ? "fmDispatching" : "fmWaiting"),
+        : a.role === "firstmate" ? T(s.greenlit ? "fmDispatching" : "fmWaiting")
+        : T("idle"),
       pct: a.task ? ({ working: 45, gate: 70, review: 85, captain: 95 }[a.state] ?? null) : null,
-      session: a.session || null,
     }));
   }
 
@@ -235,7 +239,8 @@ const SHIP = (() => {
     // here, because the geometry has one source and it is this file
     host.style.setProperty("--deckY0", "0px");
     host.style.setProperty("--rowStep", "0px");
-    host.style.setProperty("--figH", Math.round(FIG_H * 1.05) + "px");
+    host.style.setProperty("--figH", Math.round(FIG_H * CAPTAIN_SCALE) + "px");
+    host.style.setProperty("--sc", String(CAPTAIN_SCALE));
     const c = { id: "captain", role: "cap", state: "captain", action: "helm", x: 50, row: 0 };
     host.innerHTML =
       `<div class="capstand">${figure(c, 1)}</div>` +
@@ -250,15 +255,16 @@ const SHIP = (() => {
       crew.map((c) => `<li class="st-${c.state}"><span class="av"></span>` +
         `<span class="nm">${esc(c.name)}</span>` +
         `<span class="st">${esc(T("lane" + c.state[0].toUpperCase() + c.state.slice(1)))}</span>` +
-        `<span class="jb" title="${esc(c.job)}">${esc(c.job)}` +
-        (c.session
-          ? ` <code class="sid" title="${esc(T("openAgent"))}: claude --resume ${esc(c.session)}">` +
-            `${esc(c.session.slice(0, 8))}</code>`
-          : "") +
-        `</span></li>`).join("") + `</ul>`;
+        `<span class="jb" title="${esc(c.job)}">${esc(c.job)}</span></li>`).join("") + `</ul>`;
   }
 
-  // drag to turn a crewman; the pointer owns him until it lets go
+  // Drag to turn a crewman; the pointer owns him until it lets go.
+  //
+  // The listeners go on the .pivot elements, never on the host, and every
+  // caller has just replaced host.innerHTML - so the elements these are
+  // attached to are new and the previous ones were discarded with their
+  // listeners. Nothing accumulates across renders. Put one on `host` and
+  // that stops being true.
   function drag(host) {
     host.querySelectorAll(".pivot").forEach((p) => {
       let x0 = 0, y0 = 0, ry = -26, rx = 8, on = false;

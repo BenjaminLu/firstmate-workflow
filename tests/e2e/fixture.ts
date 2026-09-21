@@ -44,7 +44,6 @@ export function makeRoot(stages: Stage[], withDecision = true, actors: "per-task
       // through a queue: the crew are agents, so that is ONE crewman
       actor: actors === "one-worker" ? "worker-1"
            : s === "review" ? `reviewer-${i + 1}` : `worker-${i + 1}`,
-      data: { session: `0000000${i}-0000-4000-a000-00000000000${i}` },
       task: t.id, type: EVENT_FOR[s],
       summary: { en: t.title, "zh-TW": t.title },
     }));

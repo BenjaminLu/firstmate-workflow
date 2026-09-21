@@ -30,13 +30,8 @@ off="$(fm_adapter_mark "$log")"
 # there to answer a prompt. acceptEdits is the least that allows the work:
 # it accepts file edits and still asks about everything else - which the
 # adapter never needs, because the scripts do all the git and gh.
-# FM_SESSION_ID makes the run findable afterwards. A headless `claude -p`
-# is not a named session, so a dispatched worker was invisible to anything
-# that lists sessions - the captain could see the crew on the board and
-# had no way to open one and read what it actually did.
-( cd "$tree" && claude -p --permission-mode acceptEdits \
-    ${FM_SESSION_ID:+--session-id "$FM_SESSION_ID"} \
-    ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
+( cd "$tree" && claude -p --permission-mode acceptEdits ${FM_ADAPTER_ARGS:-} < "$prompt" ) \
+  >> "$log" 2>&1
 rc=$?
 fm_adapter_verdict "$rc" "$log" "$off"
 exit $?

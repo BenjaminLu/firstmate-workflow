@@ -61,15 +61,6 @@ tree="$REPO/state/worktrees/$TASK"
 # by hand was otherwise never in flight as far as the log was concerned,
 # and the dispatcher would start a second one on top of it.
 #
-# And it records WHICH session, because a headless run is not a named one:
-# without this the captain can see a crewman on the board and has no way
-# to open it and read what the agent actually did. The id is a v4 UUID
-# because that is what the vendor CLIs take.
-rand_hex() { LC_ALL=C hexdump -n "$1" -v -e '/1 "%02x"' /dev/urandom; }
-FM_SESSION_ID="$(printf '%s-%s-4%s-a%s-%s' \
-  "$(rand_hex 4)" "$(rand_hex 2)" "$(rand_hex 2 | cut -c2-4)" \
-  "$(rand_hex 2 | cut -c2-4)" "$(rand_hex 6)")"
-export FM_SESSION_ID
 # A run that ends has to say so. Without it "aboard" means "ever touched
 # a task that is not finished yet", the board draws every actor that has
 # ever run, and the ship's rate follows the history instead of what is
@@ -77,9 +68,7 @@ export FM_SESSION_ID
 finished() { emit --type agent_finished --en "run finished" --tw "這次執行結束"; }
 trap finished EXIT
 
-emit --type dispatched --data "$(jq -cn --arg s "$FM_SESSION_ID" '{session:$s}')" \
-     --en "picked up $TASK (session $FM_SESSION_ID)" \
-     --tw "接下 ${TASK}（session ${FM_SESSION_ID}）"
+emit --type dispatched --en "picked up $TASK" --tw "接下 ${TASK}"
 
 # --- a worktree of its own -----------------------------------------------
 # Never delete work. A run that was interrupted - the machine slept, the

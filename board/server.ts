@@ -35,6 +35,7 @@ const readEvents = (): Event[] => {
 // class name, a dictionary key and a progress number - an open one meant
 // an actor on a blocked task reached the page as `st-blocked`, which no
 // stylesheet rule and no dictionary key covers.
+const DECK_LIMIT = 24;   // what the ship holds; the page reads it back
 type CrewState = "queued" | "working" | "gate" | "review" | "captain";
 type Crew = {
   id: string;
@@ -42,7 +43,6 @@ type Crew = {
   state: CrewState;
   task: string | null;
   title: string | null;
-  session: string | null;
 };
 const CREW_STATE = (s: string | undefined): CrewState =>
   s === "queued" || s === "working" || s === "gate" || s === "review" || s === "captain"
@@ -98,22 +98,6 @@ const state = () => {
   //
   // An agent is engaged when the last thing it did concerns a task that is
   // not finished. github is the sync, not an agent, and is never aboard.
-  // The session an agent is running under, so a crewman on the board can
-  // be opened and read rather than only watched. Scoped to the run: the
-  // first version kept the last session seen for an actor anywhere in the
-  // log, so a crewman could show an id from a previous run and invite the
-  // captain to resume a session that is not the one in front of them.
-  const sessionIn = (e: Event | undefined): string | null => {
-    const d = (e as Record<string, unknown> | undefined)?.data as Record<string, unknown> | undefined;
-    return d && typeof d.session === "string" && d.session ? d.session : null;
-  };
-  const sessionOfRun = new Map<string, string>();   // actor -> this run's id
-  for (const e of events) {
-    if (!e.actor) continue;
-    if (e.type === "agent_finished") { sessionOfRun.delete(e.actor); continue; }
-    const s = sessionIn(e);
-    if (s) sessionOfRun.set(e.actor, s);
-  }
   // firstmate included: it is an agent like the others and it does work
   // of its own. Pinning it to "dispatching" was the board saying what the
   // role is for rather than what the agent is doing, and it is the one
@@ -137,15 +121,19 @@ const state = () => {
   // "dispatching" was the board saying what the role is FOR rather than
   // what the agent is DOING - and firstmate is the crewman a reader most
   // wants the truth about, because it is the one that works off the board.
+  // firstmate is always ABOARD - it is the one that dispatches, so the
+  // ship is never empty - but everything else about it is read the same
+  // way as any other agent: its task if it has one, nothing if its run
+  // ended. Two comments used to argue it was "an agent like the others"
+  // while the code exempted it; this is the exemption, named and narrow.
   const fm = lastByActor.get("firstmate");
   const fmTask = fm?.task && !done.has(fm.task) ? fm.task : null;
   const fmT = fmTask ? tasks.find((x) => x.id === fmTask) : undefined;
   const crew: Crew[] = [{
     id: "firstmate", role: "firstmate",
     state: !events.some((e) => e.type === "greenlit") ? "queued"
-         : CREW_STATE(fmT?.stage as string | undefined),
-    task: fmTask, title: (fmT?.title as string) ?? null,
-    session: sessionOfRun.get("firstmate") ?? null,
+         : CREW_STATE(fmT?.stage),
+    task: fmTask, title: fmT?.title ?? null,
   }];
   for (const [actor, e] of lastByActor) {
     if (actor === "firstmate") continue;   // already aboard, above
@@ -155,9 +143,8 @@ const state = () => {
     crew.push({
       id: actor,
       role: actor.startsWith("reviewer") ? "reviewer" : "worker",
-      state: CREW_STATE(t?.stage as string | undefined),
-      task, title: (t?.title as string) ?? null,
-      session: sessionOfRun.get(actor) ?? null,
+      state: CREW_STATE(t?.stage),
+      task, title: t?.title ?? null,
     });
   }
   // no captain here on purpose. He is not crew - the crew are agents
@@ -167,10 +154,12 @@ const state = () => {
   // is the two sources this file argues against three comments above.
 
   return {
-    // the deck holds 24. Truncating only on the client left the server
-    // building an unbounded array into every payload and the page
-    // silently dropping the tail.
-    crew: crew.slice(0, 24),
+    // The deck holds this many. One number: the server truncates and
+    // tells the page what the limit was, rather than both of them
+    // knowing 24 - truncating only on the client also left the server
+    // building an unbounded array into every payload.
+    deckLimit: DECK_LIMIT,
+    crew: crew.slice(0, DECK_LIMIT),
     greenlit: events.some((e) => e.type === "greenlit"),
     counts: {
       merged: tasks.filter((t) => t.stage === "merged").length,
