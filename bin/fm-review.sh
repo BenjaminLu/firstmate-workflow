@@ -48,6 +48,7 @@ emit() { emit_once "$@" || true; }
 # run announces it has finished and carries on working - and `kill`
 # stops working on it, because a trapped TERM that does not exit leaves
 # only SIGKILL. The codes are the conventional 128+signal.
+#
 # The ordinary emit is best-effort - a progress line the board misses
 # costs an update - but the ending is not. `agent_finished` is what
 # takes the crewman off the deck; lose it and the agent stands there

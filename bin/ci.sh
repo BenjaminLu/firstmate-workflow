@@ -260,9 +260,11 @@ else
       # test file with two spliced lines reported the same as one
       # without. Under `set -uo pipefail` with no -e, the shell will not
       # tell us, so the gate reads what the run said.
-      # the shell's OWN diagnostic, which carries "<file>: line N:" - a
-      # suite that legitimately prints one of these phrases as data, or
-      # asserts a script's error text, is not a suite that broke.
+      #
+      # What it looks for is the shell's OWN diagnostic, which carries
+      # the "<file>: line N:" prefix. A suite that prints one of these
+      # phrases as data, or asserts a script's error text, is not a
+      # suite that broke, and the prefix is what tells them apart.
       #
       # The set is chosen, not collected: these are bash's diagnostics
       # for "this line did not run and I am carrying on anyway", which

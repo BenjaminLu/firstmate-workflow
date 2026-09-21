@@ -93,7 +93,8 @@ SIGNALS='EXIT|ERR|DEBUG|RETURN|HUP|INT|QUIT|ILL|TRAP|ABRT|BUS|FPE|KILL|USR1|SEGV
 # `trap 'rm -f "$tmp"; rmdir "$d"' EXIT INT` walked straight past, and a
 # cleanup handler that does two things is the normal idiom.
 sweep_combined() {   # files -> those naming a signal alongside EXIT
-  awk -v sigs="^($SIGNALS)\$" '
+  local out
+  out="$(awk -v sigs="^($SIGNALS)\$" '
     { line = $0; sub(/[[:space:]]*#.*$/, "", line); sub(/[[:space:]]+$/, "", line) }
     line ~ /^[[:space:]]*trap[[:space:]]/ {
       n = split(line, w, /[[:space:]]+/)
@@ -105,7 +106,12 @@ sweep_combined() {   # files -> those naming a signal alongside EXIT
       }
       if (seen_exit && count > 1 && !(FILENAME in done)) { done[FILENAME] = 1; print FILENAME }
     }
-  ' "$@" | sort -u
+  ' "$@")" || return 1
+  # awk's status, not sort's: `awk ... | sort -u` reports on the sort, and
+  # a path awk could not open is a complaint on stderr, a skipped file and
+  # an empty answer - which reads exactly like "nothing found"
+  [ -n "$out" ] || return 0
+  sort -u <<< "$out"
 }
 
 # Every script whose EXIT trap has to run - whether it ends a run or
@@ -116,6 +122,8 @@ sweep_combined() {   # files -> those naming a signal alongside EXIT
 sweep_unguarded() {   # files -> "<file>:<signal>" for each one missing
   local f sig code
   for f in "$@"; do
+    # a file it cannot read is not a file with nothing wrong in it
+    [ -r "$f" ] || return 1
     code="$(sed -e 's/[[:space:]]*#.*$//' "$f")"
     grep -qE '^[[:space:]]*trap[[:space:]].*[[:space:]]EXIT$' <<< "$code" || continue
     for sig in INT TERM HUP; do
@@ -123,6 +131,7 @@ sweep_unguarded() {   # files -> "<file>:<signal>" for each one missing
         || printf '%s:%s\n' "$(basename "$f")" "$sig"
     done
   done
+  return 0
 }
 
 # An actor boards when its last event carries an unfinished task, so a
@@ -133,6 +142,7 @@ sweep_unguarded() {   # files -> "<file>:<signal>" for each one missing
 sweep_unarmed() {   # files -> "<file>:<actor>" for each one that cannot say it ended
   local f code actor
   for f in "$@"; do
+    [ -r "$f" ] || return 1
     case "$(basename "$f")" in fm-emit.sh) continue ;; esac   # the emitter itself
     code="$(sed -e 's/[[:space:]]*#.*$//' "$f")"
     grep -q -- '--task' <<< "$code" || continue
@@ -143,6 +153,7 @@ sweep_unarmed() {   # files -> "<file>:<actor>" for each one that cannot say it 
         || printf '%s:%s\n' "$(basename "$f")" "$actor"
     done
   done
+  return 0
 }
 
 # --- each sweep, against something it has to catch -----------------------
@@ -185,28 +196,65 @@ plant_script speaks.sh 'finished() { fm-emit.sh --actor "worker-1" --task T-1 --
 silent="$(sweep_unarmed "$p/quiet.sh" "$p/speaks.sh")"
 assert_contains "$silent" 'quiet.sh:"worker-1"' "an actor of its own with no ending is found"
 assert_lacks "$silent" "speaks.sh" "and one that arms an ending is not"
+# and the third failure a sweep can have, which no assertion above can
+# see: it could not read what it was given. Every one has to say so,
+# because an empty answer is what "nothing is wrong" looks like.
+sweep_combined  "$p/no-such-file.sh" >/dev/null 2>&1
+assert_eq "1" "$?" "a sweep that cannot read its input fails rather than answering nothing"
+sweep_unguarded "$p/no-such-file.sh" >/dev/null 2>&1
+assert_eq "1" "$?" "and so does the one for unguarded EXIT traps"
+sweep_unarmed   "$p/no-such-file.sh" >/dev/null 2>&1
+assert_eq "1" "$?" "and the one for a run that cannot say it ended"
+# a path with a space in it is one file, not two: the repository pass
+# hands these over as an array for exactly this reason
+mkdir -p "$p/a dir"
+plant_script "a dir/spaced.sh" 'trap cleanup EXIT INT'
+spaced="$(sweep_combined "$p/a dir/spaced.sh")"; rc=$?
+assert_eq "0" "$rc" "a path with a space in it is read"
+assert_contains "$spaced" "spaced.sh" "and swept"
 rm -rf "$p"
 
 # --- and now the repository ----------------------------------------------
-bad="$(sweep_combined $scripts)"
+# One paragraph of this file is about a sweep that finds nothing reading
+# the same as a sweep that cannot look, and the plants above guard the
+# matcher while `assert_ne "" "$scripts"` guards the input list. This is
+# the third way it can happen and the run that matters: the arguments are
+# an ARRAY, not a word-split string - one space in a path under $ROOT and
+# awk is handed filenames that do not exist, complains on stderr, skips
+# them and answers nothing - and the status of each sweep is asserted, so
+# a sweep that died is not read as a repository with nothing wrong in it.
+files=()
+while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done <<< "$scripts"
+assert_ne "0" "${#files[@]}" "the sweep has files to read"
+unreadable=''
+for f in "${files[@]}"; do [ -r "$f" ] || unreadable="$unreadable $f"; done
+assert_eq "" "$unreadable" "and can read every one of them"
+
+bad="$(sweep_combined "${files[@]}")"; rc=$?
+assert_eq "0" "$rc" "the sweep for a signal alongside EXIT ran to the end"
 assert_eq "" "$bad" "no script names a signal alongside EXIT in one trap"
 
-binscripts="$(find "$ROOT/bin" -type f -name '*.sh' | sort)"
-# shellcheck disable=SC2086   # a list of paths, deliberately split
-assert_eq "" "$(sweep_unguarded $binscripts)" \
-  "every EXIT trap that has to run is guarded on INT, TERM and HUP"
+binfiles=()
+while IFS= read -r f; do [ -n "$f" ] && binfiles+=("$f"); done \
+  < <(find "$ROOT/bin" -type f -name '*.sh' | sort)
+assert_ne "0" "${#binfiles[@]}" "there are scripts under bin/ to check"
+
+missing="$(sweep_unguarded "${binfiles[@]}")"; rc=$?
+assert_eq "0" "$rc" "the sweep for unguarded EXIT traps ran to the end"
+assert_eq "" "$missing" "every EXIT trap that has to run is guarded on INT, TERM and HUP"
+
 # the names, not the count: a fourth script that correctly acquires one
 # should not turn this red, but losing one of these should
 armed=''
-while IFS= read -r f; do
-  sed -e 's/[[:space:]]*#.*$//' "$f" | grep -qE '^[[:space:]]*trap[[:space:]].*[[:space:]]EXIT$' \
-    && armed="$armed $(basename "$f")"
-done <<< "$binscripts"
+for f in "${binfiles[@]}"; do
+  grep -qE '^[[:space:]]*trap[[:space:]].*[[:space:]]EXIT$' \
+    <<< "$(sed -e 's/[[:space:]]*#.*$//' "$f")" && armed="$armed $(basename "$f")"
+done
 for want in fm-emit.sh fm-review.sh fm-worker.sh; do
   assert_contains "$armed" "$want" "$want still has an EXIT trap to protect"
 done
 
-# shellcheck disable=SC2086
-unarmed="$(sweep_unarmed $binscripts)"
+unarmed="$(sweep_unarmed "${binfiles[@]}")"; rc=$?
+assert_eq "0" "$rc" "the sweep for a run that cannot say it ended ran to the end"
 assert_eq "" "$unarmed" "every script that emits under an actor of its own says when it ends"
 finish

@@ -247,12 +247,12 @@ const SHIP = (() => {
     if (!host) return;
     if (!n) { host.innerHTML = ""; host.hidden = true; return; }
     host.hidden = false;
-    // he stands on no deck, so the deck offsets are zero - written from
-    // here, because the geometry has one source and it is this file
-    host.style.setProperty("--deckY0", "0px");
-    host.style.setProperty("--rowStep", "0px");
-    // every number the captain's block uses, from the deck's constants
-    host.style.setProperty("--figH", Math.round(FIG_H * CAPTAIN_SCALE) + "px");
+    // The three the captain's block actually reads, from the deck's own
+    // constants. It used to write --deckY0, --rowStep and --figH as
+    // well: nothing reads them here - `.captain .pivot` sets `bottom`
+    // outright and overrides the sum they were for, and --figH is read
+    // only by `.bub`, which the captain does not have - so they were
+    // three numbers kept in step with nothing.
     host.style.setProperty("--capStand", Math.round(FIG_H * CAPTAIN_SCALE * 1.5) + "px");
     host.style.setProperty("--capBox", Math.round(FIG_H * CAPTAIN_SCALE * 2.05) + "px");
     host.style.setProperty("--capFoot", Math.round(FIG_H * CAPTAIN_SCALE * 1.04) + "px");

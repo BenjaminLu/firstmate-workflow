@@ -118,6 +118,28 @@ test("every state a crewman can be in is styled and named", () => {
 // beside that line says a mismatch "should be visible, not painted as a
 // worker" - which was reasoning, not code: r-unknown had no rule, so it
 // inherited .fig and looked like an ordinary crewman.
+// The captain's geometry has one source, and the test for that is not a
+// comment saying so. It wrote three properties nothing in his block read
+// - two of them for a sum that a more specific rule overrode - which is
+// the same defect as a literal, pointed the other way.
+test("every custom property the captain writes is one his own block reads", () => {
+  const js = readFileSync(join(ROOT, "board/public/ship.js"), "utf8");
+  const body = js.slice(js.indexOf("function captain("), js.indexOf("function roster("));
+  const props = [...body.matchAll(/setProperty\("(--[\w-]+)"/g)].map((m) => m[1]);
+  expect(props.length).toBeGreaterThan(1);
+  // his rules only: a property read somewhere else on the page is not
+  // read HERE, which is the whole of the claim
+  const his = CSS.replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("}")
+    .filter((chunk) => /(^|[\s{,])\.(captain|capwrap|capstand|capsays)\b/.test(chunk.split("{")[0] ?? ""))
+    .join("}");
+  expect(his).toContain(".captain");
+  for (const p of props) expect(his).toContain(`var(${p})`);
+  // and the other way: the column the captain stands in takes its size
+  // from him, rather than a literal that has to be kept in step
+  expect(CSS).toMatch(/\.capwrap\{[^}]*grid-template-columns:auto 1fr/);
+});
+
 test("a role the page does not know is drawn as a mismatch, not as a worker", () => {
   // every suffix the map can produce has a rule of its own, and the
   // server's own role union is what decides the set - a fourth role

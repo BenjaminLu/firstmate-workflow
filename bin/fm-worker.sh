@@ -55,6 +55,7 @@ emit() { emit_once "$@" || true; }
 # worktree creation (70), the adapter chain - and every one of those
 # exits happens after the run has said it started, so every one of them
 # needs the ending.
+#
 # The ordinary emit is best-effort - a progress line the board misses
 # costs an update - but the ending is not. `agent_finished` is what
 # takes the crewman off the deck; lose it and the agent stands there
