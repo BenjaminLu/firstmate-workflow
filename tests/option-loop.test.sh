@@ -13,16 +13,17 @@
 #   - The corpus is pinned, not scraped. Discovering the scripts and their
 #     flags by grepping the files under test means a script that stops
 #     matching the grep contributes nothing and the suite stays green -
-#     ten of eleven could drop out silently. The names and counts are
+#     all but one of them could drop out silently. The names and counts are
 #     written down here, and the discovery is checked against them.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# The helpers this file leans on are defined in tests/lib.sh. The first
-# version of this comment listed them with line numbers and listed the
-# wrong ones - it named assert_ne, which this file never calls, and not
-# assert_ok, which it does. An inventory written by hand is an inventory
-# nobody checked, so bin/ci.sh checks every assert_* call in tests/
-# against what lib.sh defines instead.
+# The helpers this file leans on are defined in tests/lib.sh. An earlier
+# version of this comment inventoried them by hand, with line numbers,
+# and got the list wrong - and then the sentence saying so went stale
+# too, because the file grew a call to the very helper it claimed never
+# to use. So there is no inventory here at all: bin/ci.sh checks every
+# assert_* call in tests/ against what lib.sh defines, which is a list
+# that cannot go out of date because nobody maintains it.
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 # The corpus and the comment stripper come from the same file bin/ci.sh

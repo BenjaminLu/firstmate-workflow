@@ -146,14 +146,39 @@ unguarded=''
             # is guarded, and reading one physical line called it naked.
             # Going the other way, a guard in the PREVIOUS branch must
             # not cover this one, which is what `;;` resets.
-            function guard(t) { return t ~ /(^|[^[:alnum:]_])(fm_)?need[ \t]+[^;[:space:]]/ }
+            #
+            # And the guard has to be a COMMAND, not the four letters
+            # somewhere to the left. `echo "you need a value"; v="$2";
+            # shift 2` passed a column comparison, and so did `die "need
+            # a value"` and a `usage()` helper defined above the loop
+            # whose message happens to say the word. So every candidate
+            # is checked for what precedes it: a command starts a
+            # segment, or follows ; ( ) { } & | then do else.
+            function guardcol(seg,   s, off, pre, c) {
+              off = 0; s = seg
+              while (match(s, /(fm_)?need[ \t]+[^;[:space:]]/)) {
+                pre = substr(s, 1, RSTART - 1)
+                sub(/[ \t]+$/, "", pre)
+                c = (pre == "") ? "" : substr(pre, length(pre), 1)
+                if (pre == "" || c == ";" || c == "(" || c == ")" || c == "{" \
+                    || c == "}" || c == "&" || c == "|" \
+                    || pre ~ /(^|[ \t])(then|do|else)$/)
+                  return off + RSTART
+                off += RSTART + RLENGTH - 1
+                s = substr(s, RSTART + RLENGTH)
+              }
+              return 0
+            }
+            # a new case pattern also ends the previous branch: a branch
+            # written without `;;` before the next one - or a guard that
+            # lives in a function above the loop - must not carry over
+            /^[[:space:]]*[^[:space:]()]+\)([[:space:]]|$)/ { seen = 0 }
             { rest = $0
               while (1) {
                 p = index(rest, ";;")
                 seg = p ? substr(rest, 1, p - 1) : rest
                 sp = index(seg, "shift 2")
-                gp = 0
-                if (match(seg, /(^|[^[:alnum:]_])(fm_)?need[ \t]+[^;[:space:]]/)) gp = RSTART
+                gp = guardcol(seg)
                 if (sp && !seen && !(gp && gp < sp)) print FNR ":" $0
                 if (gp && (!sp || gp < sp)) seen = 1
                 if (!p) break

@@ -353,25 +353,113 @@ rm -f "$q/bin/fm-spinner.sh" "$q/bin/fm-twirler.sh"
 
 # a comment must not talk the stage out of firing: the guard is judged by
 # what the code does, not by the word appearing on the line
-printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\nwhile [ $# -gt 0 ]; do\n  case "$1" in\n    --x) v="${2-}"; shift 2 ;;   # need to check this\n    *) exit 64 ;;\n  esac\ndone\necho "${v:-}"\n' \
-  > "$q/bin/fm-sneak.sh"
+# On a line of its own inside the branch, and shaped like a command,
+# because only the STRIPPING can then be what catches it: a trailing
+# `;; # need to check this` is refused by the command-position rule
+# instead - `#` is not something a command can follow - and the plant
+# would be coasting on a mechanism it does not name.
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
+  printf '    --x)\n      # ; need "$@" would go here\n'
+  printf '      v="${2-}"; shift 2 ;;\n'
+  printf '    *) exit 64 ;;\n  esac\ndone\necho "${v:-}"\n'
+} > "$q/bin/fm-sneak.sh"
 plant "a comment mentioning the guard does not count as one" "has not checked it has two"
 rm -f "$q/bin/fm-sneak.sh"
 
 # nor must a check written AFTER the shift, which is not a check: by then
-# the argument it was supposed to find is gone. Nor `echo "need a value"`,
-# which mentions the word and does nothing.
+# the argument it was supposed to find is gone.
+#
+# One script per shape from here on. Two plants in one file and the
+# coarse "turns it red" assertion is carried by whichever of them fires,
+# so the other one tests nothing of its own.
 { printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
   printf 'need() { [ "$#" -ge 2 ] || exit 64; }\n'
   printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
   printf '    --x) v="${2-}"; shift 2; need "$@" ;;\n'
-  printf '    --y) w="${2-}"; shift 2; echo "need a value" ;;\n'
-  printf '    *) exit 64 ;;\n  esac\ndone\necho "${v:-}${w:-}"\n'
+  printf '    *) exit 64 ;;\n  esac\ndone\necho "${v:-}"\n'
 } > "$q/bin/fm-afterwards.sh"
 plant "a guard written after the shift does not count as one" "has not checked it has two"
 plant "and the stage names that line" "--x"
-plant "and the one that only says the word" "--y"
 rm -f "$q/bin/fm-afterwards.sh"
+
+# The word in a string, IN FRONT of the shift, so the ordering rule
+# cannot be what catches it. A column comparison called this guarded;
+# the guard has to be a command.
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
+  printf '    --y) echo "you need a value"; w="${2-}"; shift 2 ;;\n'
+  printf '    *) exit 64 ;;\n  esac\ndone\necho "${w:-}"\n'
+} > "$q/bin/fm-saysit.sh"
+plant "the word in a string in front of the shift is not a guard" "has not checked it has two"
+plant "and the stage names that one" "--y"
+rm -f "$q/bin/fm-saysit.sh"
+
+# and a helper defined ABOVE the loop whose message says the word - not
+# exotic, fm-emit grows a usage() in this very diff - with a loop that
+# is not a case statement at all
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'usage() { echo "you need a value" >&2; exit 64; }\n'
+  printf 'while [ $# -gt 0 ]; do\n'
+  printf '  if [ "$1" = --x ]; then v="${2-}"; shift 2; fi\n'
+  printf 'done\necho "${v:-}"\n'
+} > "$q/bin/fm-helper.sh"
+plant "a helper above the loop whose message says the word is not a guard" \
+  "has not checked it has two"
+plant "and the stage names it" "fm-helper.sh"
+rm -f "$q/bin/fm-helper.sh"
+
+# a REAL guard, in command position, in a function above the loop: it
+# guards something, but not this branch. A case pattern ends the
+# previous branch as surely as `;;` does.
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'need() { [ "$#" -ge 2 ] || exit 64; }\n'
+  printf 'check() { need "$@"; }\n'
+  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
+  printf '    --x) v="${2-}"; shift 2 ;;\n'
+  printf '    *) exit 64 ;;\n  esac\ndone\necho "${v:-}"\n'
+} > "$q/bin/fm-elsewhere.sh"
+plant "a guard called somewhere else does not cover a branch that has none" \
+  "has not checked it has two"
+plant "and the stage names that one too" "fm-elsewhere.sh"
+rm -f "$q/bin/fm-elsewhere.sh"
+
+# And the ordinary multi-line branch, which IS guarded: the check reads
+# the case branch, not the physical line, so a guard on a line of its
+# own counts. Reading one line called this naked and the gate would
+# have refused the commonest way of writing it - the rule in §5.3.1 is
+# "checks first", not "checks first, on the same line".
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'need() { [ "$#" -ge 2 ] || exit 64; }\n'
+  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
+  printf '    --x)\n      need "$@"\n      v="${2-}"; shift 2 ;;\n'
+  printf '    *) exit 64 ;;\n  esac\ndone\necho "${v:-}"\n'
+} > "$q/bin/fm-spread.sh"
+plant "a guard on its own line, above the shift, is a guard" "no option loop can spin"
+rm -f "$q/bin/fm-spread.sh"
+
+# and a guard does not leak past the end of its branch
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'need() { [ "$#" -ge 2 ] || exit 64; }\n'
+  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
+  printf '    --x)\n      need "$@"\n      v="${2-}"; shift 2 ;;\n'
+  printf '    --y)\n      w="${2-}"; shift 2 ;;\n'
+  printf '    *) exit 64 ;;\n  esac\ndone\necho "${v:-}${w:-}"\n'
+} > "$q/bin/fm-leaky2.sh"
+plant "a guard in the branch above does not cover the one below it" "has not checked it has two"
+plant "and the stage names the line" "w=\"\${2-}\"; shift 2"
+rm -f "$q/bin/fm-leaky2.sh"
+
+# and the corpus has to SEE a script whose option loop shares a line
+# with a `#` that is not a comment: `sed 's/#.*$//'` cuts `${1#--}` in
+# half, the `shift 2` goes with it, and the script is excused entirely
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n'
+  printf 'while [ $# -gt 0 ]; do\n  case "$1" in\n'
+  printf '    --*) n="${1#--}"; v="${2-}"; shift 2 ;;\n'
+  printf '    *) exit 64 ;;\n  esac\ndone\necho "${n:-}${v:-}"\n'
+} > "$q/bin/fm-hashed.sh"
+plant "a hash inside a parameter expansion does not hide an option loop" "fm-hashed.sh"
+rm -f "$q/bin/fm-hashed.sh"
 
 # And the ordinary multi-line branch, which IS guarded: the check reads
 # the case branch, not the physical line, so a guard on a line of its
