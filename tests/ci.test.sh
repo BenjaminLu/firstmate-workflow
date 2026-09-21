@@ -331,6 +331,7 @@ plant "and the second as well" "fm-twirler.sh"
 plant "and both lines of the one with two" "--y"
 rm -f "$q/bin/fm-spinner.sh" "$q/bin/fm-twirler.sh"
 
+
 # a comment must not talk the stage out of firing: the guard is judged by
 # what the code does, not by the word appearing on the line
 printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\nwhile [ $# -gt 0 ]; do\n  case "$1" in\n    --x) v="${2-}"; shift 2 ;;   # need to check this\n    *) exit 64 ;;\n  esac\ndone\necho "${v:-}"\n' \

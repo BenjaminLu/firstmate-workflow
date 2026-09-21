@@ -111,11 +111,20 @@ fi
 # a `shift 2` that spins for ever and satisfied a grep for the word
 # `need`: the lint was recognising the fix by its name rather than by its
 # presence in the code.
+#
+# And the corpus is built with a HERE-STRING, not `strip_comments | grep
+# -q`. grep exits on the first match, sed takes SIGPIPE, and under
+# pipefail the pipeline reports failure - so on a file long enough that
+# sed is still writing, a script WITH an option loop was read as one
+# without and dropped out of the corpus. It is the hazard the stage
+# below this one exists to forbid, in the file that forbids it: the
+# marker exempts the whole file, so the gate is the one script the gate
+# cannot lint. It cost two scripts on the runner and neither locally.
 strip_comments() { sed -e 's/[[:space:]]*#.*$//' "$1"; }
 loopfiles=()
 while IFS= read -r f; do
   grep -q '^# fm:lint-source' "$f" && continue
-  strip_comments "$f" | grep -q 'shift 2' || continue
+  grep -q 'shift 2' <<< "$(strip_comments "$f")" || continue
   loopfiles+=("$f")
 done < <(find bin -type f -name '*.sh' | sort)
 unguarded=''

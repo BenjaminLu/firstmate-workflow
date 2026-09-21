@@ -588,3 +588,4 @@ gates, and the dispatcher cannot dispatch itself.
 | T-017 | `fm-reconcile.sh`: reconciling after a crash | T-007 |
 | T-018 | self-update and `sync-skills` | T-007, T-015 |
 | T-029 | one exit code for a usage error, in every script | T-026 |
+| T-030 | the pipe-into-grep lint is blind to the files that carry the lint | T-026 |

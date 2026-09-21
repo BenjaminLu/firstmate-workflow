@@ -103,7 +103,12 @@ assert_eq "51" "$total" "every pinned flag was exercised"
 loops=''
 while IFS= read -r p; do
   grep -q '^# fm:lint-source' "$p" && continue
-  sed -e 's/[[:space:]]*#.*$//' "$p" | grep -q 'shift 2' || continue
+  # here-string, not a pipe: grep -q exits on the match, sed takes
+  # SIGPIPE, and pipefail turns that into "no match". On the runner it
+  # dropped fm-diagram and fm-worker - the two longest scripts, where
+  # sed is still writing when grep leaves - out of the corpus, and the
+  # pinned list then disagreed with a sweep that had not looked.
+  grep -q 'shift 2' <<< "$(sed -e 's/[[:space:]]*#.*$//' "$p")" || continue
   loops="$loops$(basename "$p" .sh)
 "
 done < <(find "$ROOT/bin" -type f -name '*.sh' | sort)
@@ -134,7 +139,7 @@ sourced=0
 for f in "$ROOT"/bin/fm-*.sh; do
   # comments off: the five that keep a local copy mention fm_need in a
   # comment pointing at the library, and a grep for the name picks them up
-  sed -e 's/[[:space:]]*#.*$//' "$f" | grep -q 'fm_need ' || continue
+  grep -q 'fm_need ' <<< "$(sed -e 's/[[:space:]]*#.*$//' "$f")" || continue
   sourced=$((sourced + 1))
   name="$(basename "$f")"
   tmp="$(mktemp -d)"; mkdir -p "$tmp/bin"
