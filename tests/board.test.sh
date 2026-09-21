@@ -14,7 +14,8 @@ cp "$ROOT/board/server.ts" "$d/board/"
 cp "$ROOT/board/public/index.html" "$d/board/public/"
 cat > "$d/design/tasks.json" <<'J'
 {"tasks":[{"id":"T-A","title":"first","milestone":"M0","depends_on":[]},
-          {"id":"T-B","title":"second","milestone":"M0","depends_on":["T-A"]}]}
+          {"id":"T-B","title":"second","milestone":"M0","depends_on":["T-A"]},
+          {"id":"T-C","title":"third","milestone":"M0","depends_on":[]}]}
 J
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --type greenlit --en "go" --tw "開工" >/dev/null
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-A --type dispatched --en "picked up T-A" --tw "領走 T-A" >/dev/null
@@ -57,6 +58,18 @@ done
 
 
 page="$(curl -sf "http://127.0.0.1:$PORT/")"
+# a task the captain has been asked about is the captain's, whatever was
+# said about it before. It was reading as "working" because a dispatch
+# that should never have happened was the last thing in the log.
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-C --type dispatched \
+  --en "picked up" --tw "接下" >/dev/null
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor firstmate --task T-C --type decision_requested \
+  --pr 12 --en "asked the captain" --tw "請示船長" >/dev/null
+sc="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_ne "" "$sc" "the board is answering"
+assert_eq "captain" "$(jq -r '.tasks[]|select(.id=="T-C")|.stage' <<<"$sc")" \
+  "a task the captain has been asked about waits on the captain"
+
 # merged is where a task stops. A review round run against the branch
 # afterwards would otherwise move it back to "in review", which reads as
 # work in progress that nobody is doing.
