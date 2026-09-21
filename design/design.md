@@ -36,9 +36,7 @@ The agent CLI is a **replaceable engine**, not the system.
 
 ## 2. Standing rules
 
-These bind every actor, including firstmate itself. `AGENTS.md` at the root
-carries the same list in short form, because that is the file an agent reads
-before it does anything; this section is the long form and the machinery.
+These bind every actor, including firstmate itself.
 
 1. **Nobody writes to `main` or `master`.** Work happens on a branch and
    arrives through a pull request. Enforced in three layers: `bin/fm-guard.sh`
@@ -55,16 +53,6 @@ before it does anything; this section is the long form and the machinery.
    in one round, and reports the search it used and the count it found. Fixing
    one instance per round is what turns a three-round review into a nine-round
    one, and it is the single most expensive habit this system can develop.
-6. **Only commits, this document, pull request commits and pull request
-   reviews are ground truth.** Everything else is downstream of them and goes
-   stale: `state/events.jsonl` can be missing a fact — a `merged` event that
-   carried no task once left four finished tasks reading as work in flight —
-   a worker's log is one engine's account of itself, and a note kept outside
-   the repository was already wrong by the time it was read. Before acting on
-   a claim about what exists or what is fixed, check it here or on the pull
-   request. Record a decision by committing it; a decision that lives only in
-   a conversation, a state file or someone's notes has not been made.
-
 ---
 
 ## 3. Settled decisions

@@ -143,3 +143,17 @@ fm_run_chain() {
   done
   return "$rc"
 }
+
+# `shift 2` with one argument left does not shift: it returns 1 and leaves
+# $@ alone, so `while [ $# -gt 0 ]` spins on the same flag for ever -
+# `bin/fm-emit.sh --type` was a busy loop rather than an error, in eleven
+# scripts at once. Every flag that takes a value checks first, and every
+# script exits 64 for a usage error so a caller can tell one from a
+# refused write. bin/ci.sh fails on a `shift 2` that has not checked, and
+# tests/option-loop.test.sh runs every flag of every script with nothing
+# after it - under an alarm, because a test for a hang that simply calls
+# the script hangs the gate instead of failing it.
+#
+# The five scripts that deliberately depend on nothing carry a two-line
+# copy that points back here.
+fm_need() { [ "$#" -ge 3 ] || { echo "$1: $2 needs a value" >&2; exit 64; }; }

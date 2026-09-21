@@ -16,14 +16,10 @@ set -uo pipefail
 exec < /dev/null
 
 REPO="${FM_ROOT:-$(pwd)}"; MODE=''; ID=''; TASK=''; KIND='choice'; TITLE=''; PR=''; TIMEOUT=0
-# `shift 2` with one argument left does not shift: it returns 1 and leaves
-# $@ alone, so `while [ $# -gt 0 ]` spins on the same flag for ever. Every
-# flag that takes a value goes through this, which refuses instead. A test
-# for it has to run under an alarm, or it hangs the gate rather than
-# failing it - tests/option-loop.test.sh does.
-need() {   # need <flag>: there has to be a value after it
-  [ "$#" -ge 2 ] || { echo "fm-decide: $1 needs a value" >&2; exit 64; }
-}
+# see fm_need in bin/fm-config.sh for why: `shift 2` with one argument
+# left does not shift, and the loop spins. This file deliberately depends
+# on nothing, so it carries the two lines rather than the explanation.
+need() { [ "$#" -ge 2 ] || { echo "fm-decide: $1 needs a value" >&2; exit 64; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --request) need "$@"; MODE=request; ID="${2-}"; shift 2 ;;

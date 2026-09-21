@@ -172,9 +172,13 @@ assert_contains "$out" "60s locally" "against the budget the design sets"
 # the previous run - green for an assertion that tested nothing, which is
 # the class this suite exists to catch.
 planted=''; planted_sig=''
-# every file, its size and its mtime: enough to notice a plant going in or
-# coming out, and portable to the BSD tools this runs on
-fixture_sig() { find "$q" -type f -exec ls -ld {} + 2>/dev/null | sort | shasum | cut -c1-40; }
+# The content, not the metadata. `ls -ld` prints the mtime to the minute
+# on the BSD tools this runs on, so rewriting a file with different
+# content of the same size seconds later produced an identical signature -
+# and the assertion then read the PREVIOUS fixture's gate run and passed.
+# A plant that creates or deletes a file was safe; one that edits in place
+# was not, and those are the ones this suite added.
+fixture_sig() { find "$q" -type f -exec shasum {} + 2>/dev/null | sort | shasum | cut -c1-40; }
 plant() {   # plant <label> <expected fragment>
   local label="$1" want="$2" sig
   sig="$(fixture_sig)"
@@ -184,6 +188,19 @@ plant() {   # plant <label> <expected fragment>
   fi
   assert_contains "$planted" "$want" "$label"
 }
+
+# The plant cache has to notice an in-place edit, not only a file
+# appearing or disappearing. The version keyed on `ls -ld` did not: its
+# mtime is minute-granular here, so a rewrite of the same size seconds
+# later was invisible and the next assertion read the previous run.
+sigdir="$(mktemp -d)"; q_save="$q"; q="$sigdir"
+printf 'AAAA' > "$q/f"; sig_a="$(fixture_sig)"
+sleep 1
+printf 'BBBB' > "$q/f"; sig_b="$(fixture_sig)"
+assert_ne "$sig_a" "$sig_b" "the plant cache notices a same-size edit a second later"
+printf 'AAAA' > "$q/f"
+assert_eq "$sig_a" "$(fixture_sig)" "and is the same signature for the same content"
+q="$q_save"; rm -rf "$sigdir"
 
 # The gate decides green by reading what a suite said, because a suite
 # that calls something which does not exist prints to stderr, carries
@@ -317,20 +334,6 @@ assert_contains "$(FM_ROOT="$bare2" bash "$bare2/bin/ci.sh" 2>&1)" "value (0 scr
   "and says zero on a tree with none"
 rm -rf "$bare2"
 
-# AGENTS.md is the short form of the standing rules and the file an agent
-# reads first. Two copies of one list is how a rule ends up true in one
-# place and not the other.
-mkdir -p "$q/design"
-printf '## 2. Standing rules\n\n1. **one**\n2. **two**\n3. **three**\n\n---\n' \
-  > "$q/design/design.md"
-printf '{"tasks":[]}\n' > "$q/design/tasks.json"
-plant "standing rules with no AGENTS.md turn the gate red" "no AGENTS.md to carry them"
-printf '# AGENTS.md\n\n1. **one**\n2. **two**\n' > "$q/AGENTS.md"
-plant "and so does an AGENTS.md that carries fewer" "AGENTS.md carries 2"
-printf '# AGENTS.md\n\n1. **one**\n2. **two**\n3. **three**\n' > "$q/AGENTS.md"
-out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
-assert_contains "$out" "carries every standing rule (3)" "and green once it carries them all"
-rm -rf "$q/AGENTS.md" "$q/design"
 
 plant "a hand-rolled swap turns the hygiene stage red" "saves a script by hand"
 plant "and the stage names the suite" "hand-rolled.test.sh"

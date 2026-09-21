@@ -17,9 +17,12 @@
 #     written down here, and the discovery is checked against them.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# The helpers this file leans on are tests/lib.sh's assert_eq (line 8),
-# assert_ne (9), assert_contains (12) and finish (37). tests/lib.test.sh
-# covers the harness itself.
+# The helpers this file leans on are defined in tests/lib.sh. The first
+# version of this comment listed them with line numbers and listed the
+# wrong ones - it named assert_ne, which this file never calls, and not
+# assert_ok, which it does. An inventory written by hand is an inventory
+# nobody checked, so bin/ci.sh checks every assert_* call in tests/
+# against what lib.sh defines instead.
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 
@@ -88,11 +91,28 @@ while read -r name want; do
 done <<< "$PINNED"
 assert_eq "46" "$total" "every pinned flag was exercised"
 
-# a script that grows an option loop has to be pinned here too
-loops="$(grep -l 'shift 2' "$ROOT"/bin/*.sh | grep -v '/ci\.sh$' \
-         | while read -r p; do basename "$p" .sh; done | sort)"
-assert_eq "$(printf '%s\n' "$PINNED" | awk '{print $1}' | sort)" "$loops" \
-  "the pinned list is every script with an option loop, and no more"
+# A script that grows an option loop has to be pinned here too. The
+# corpus is the same one bin/ci.sh uses - a `shift 2` that is code rather
+# than prose, in a file that has not declared itself a lint source - read
+# by marker rather than by filename, or the two definitions drift the
+# moment a second file carries it.
+loops=''
+for p in "$ROOT"/bin/*.sh; do
+  grep -q '^# fm:lint-source' "$p" && continue
+  grep -v '^[[:space:]]*#' "$p" | grep -q 'shift 2' || continue
+  loops="$loops$(basename "$p" .sh)
+"
+done
+assert_eq "$(printf '%s\n' "$PINNED" | awk '{print $1}' | sort)" "$(printf '%s' "$loops" | sort)" \
+  "the pinned list is every script that consumes a value with shift 2, and no more"
+
+# and nothing consumes a value any other way, which is the blind spot the
+# lint and this check would otherwise share. Bare flags shift once; a
+# `shift $n` or a getopts loop would be invisible to both.
+assert_eq "" "$(grep -n 'shift' "$ROOT"/bin/fm-*.sh | grep -vE 'shift 2|shift ;;|shift$|shift 1|: *#' || true)" \
+  "no script consumes a value with a shift this check cannot see"
+assert_eq "" "$(grep -l 'getopts\|OPTARG' "$ROOT"/bin/*.sh || true)" \
+  "and none of them uses getopts, which would be invisible too"
 
 # an unknown flag is refused the same way rather than looping
 run_capped 6 bash "$ROOT/bin/fm-emit.sh" --no-such-flag

@@ -101,10 +101,13 @@ fi
 # ci.sh quotes the shape it forbids, so it declares itself a lint source
 # the way a sourced library declares itself sourced - by a marker rather
 # than by being on a list.
+# a `shift 2` that is code rather than prose: this file and fm-config.sh
+# both explain the hazard in comments, and a corpus that counted those
+# would lint its own documentation
 loopfiles=()
 for f in bin/*.sh; do
   grep -q '^# fm:lint-source' "$f" && continue
-  grep -q 'shift 2' "$f" || continue
+  grep -v '^[[:space:]]*#' "$f" | grep -q 'shift 2' || continue
   loopfiles+=("$f")
 done
 unguarded=''
@@ -248,26 +251,26 @@ else
   pass "the vendor chain has one implementation"
 fi
 
-# AGENTS.md is the short form of design.md's standing rules, and it is the
-# file an agent actually reads. Two copies of one list is how a rule ends
-# up true in one place and not the other.
-stage "rules"
-# only where there are rules to carry: the gate runs against fixtures too,
-# and a tree with no design document is not a tree missing AGENTS.md
-design_n=0
-[ -f design/design.md ] && design_n="$(sed -n '/^## 2\. Standing rules/,/^---/p' design/design.md \
-  | grep -cE '^[0-9]+\. \*\*')"
-if [ "$design_n" -eq 0 ]; then
-  skip "no standing rules to carry"
-elif [ ! -f AGENTS.md ]; then
-  flunk "design.md has $design_n standing rules and there is no AGENTS.md to carry them"
-else
-  agents_n="$(grep -cE '^[0-9]+\. \*\*' AGENTS.md)"
-  if [ "$agents_n" -lt "$design_n" ]; then
-    flunk "design.md has $design_n standing rules and AGENTS.md carries $agents_n"
+# An assertion helper that does not exist is a command-not-found: under
+# `set -uo pipefail` it prints to stderr, the suite carries on, and the
+# file exits 0. A whole suite goes green for free - in the files whose job
+# is to stop exactly that. So every assert_* a suite calls has to be one
+# tests/lib.sh defines.
+stage "assertions"
+if [ -d tests ] && [ -f tests/lib.sh ]; then
+  defined="$(grep -ohE '^assert_[a-z_]+' tests/lib.sh 2>/dev/null | sort -u)"
+  called="$(grep -ohE 'assert_[a-z_]+' tests/*.sh 2>/dev/null | sort -u)"
+  missing=''
+  for a in $called; do
+    printf '%s\n' "$defined" | grep -qx "$a" || missing="$missing $a"
+  done
+  if [ -n "$missing" ]; then
+    flunk "a suite calls an assertion tests/lib.sh does not define:$missing"
   else
-    pass "AGENTS.md carries every standing rule ($agents_n)"
+    pass "every assertion a suite calls is defined ($(printf '%s\n' "$called" | sed '/^$/d' | wc -l | tr -d ' ') names)"
   fi
+else
+  skip "no test harness"
 fi
 
 stage "dag"

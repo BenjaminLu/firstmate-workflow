@@ -21,21 +21,13 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 
 REPO="${FM_ROOT:-$(pwd)}"; TASK=''; PR=''; ROUND=1; GH="${FM_GH:-gh}"; MODE=''
 REVIEWER="${FM_REVIEWER_LOGIN:-}"
-# `shift 2` with one argument left does not shift: it returns 1 and leaves
-# $@ alone, so `while [ $# -gt 0 ]` spins on the same flag for ever. Every
-# flag that takes a value goes through this, which refuses instead. A test
-# for it has to run under an alarm, or it hangs the gate rather than
-# failing it - tests/option-loop.test.sh does.
-need() {   # need <flag>: there has to be a value after it
-  [ "$#" -ge 2 ] || { echo "fm-protocol: $1 needs a value" >&2; exit 64; }
-}
 while [ $# -gt 0 ]; do
   case "$1" in
     check) MODE=check; shift ;;
-    --task) need "$@"; TASK="${2-}"; shift 2 ;;
-    --pr) need "$@"; PR="${2-}"; shift 2 ;;
-    --round) need "$@"; ROUND="${2-}"; shift 2 ;;
-    --repo) need "$@"; REPO="${2-}"; shift 2 ;;
+    --task) fm_need "fm-protocol" "$@"; TASK="${2-}"; shift 2 ;;
+    --pr) fm_need "fm-protocol" "$@"; PR="${2-}"; shift 2 ;;
+    --round) fm_need "fm-protocol" "$@"; ROUND="${2-}"; shift 2 ;;
+    --repo) fm_need "fm-protocol" "$@"; REPO="${2-}"; shift 2 ;;
     *) echo "fm-protocol: unknown argument $1" >&2; exit 64 ;;
   esac
 done

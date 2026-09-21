@@ -19,21 +19,13 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 
 REPO="${FM_ROOT:-$(pwd)}"; TASK=''; VENDOR=''; NAME=''; PR=''
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
-# `shift 2` with one argument left does not shift: it returns 1 and leaves
-# $@ alone, so `while [ $# -gt 0 ]` spins on the same flag for ever. Every
-# flag that takes a value goes through this, which refuses instead. A test
-# for it has to run under an alarm, or it hangs the gate rather than
-# failing it - tests/option-loop.test.sh does.
-need() {   # need <flag>: there has to be a value after it
-  [ "$#" -ge 2 ] || { echo "fm-worker: $1 needs a value" >&2; exit 64; }
-}
 while [ $# -gt 0 ]; do
   case "$1" in
-    --task) need "$@"; TASK="${2-}"; shift 2 ;;
-    --repo) need "$@"; REPO="${2-}"; shift 2 ;;
-    --vendor) need "$@"; VENDOR="${2-}"; shift 2 ;;
-    --name) need "$@"; NAME="${2-}"; shift 2 ;;
-    --pr)   need "$@"; PR="${2-}"; shift 2 ;;
+    --task) fm_need "fm-worker" "$@"; TASK="${2-}"; shift 2 ;;
+    --repo) fm_need "fm-worker" "$@"; REPO="${2-}"; shift 2 ;;
+    --vendor) fm_need "fm-worker" "$@"; VENDOR="${2-}"; shift 2 ;;
+    --name) fm_need "fm-worker" "$@"; NAME="${2-}"; shift 2 ;;
+    --pr)   fm_need "fm-worker" "$@"; PR="${2-}"; shift 2 ;;
     *) echo "fm-worker: unknown argument $1" >&2; exit 64 ;;
   esac
 done
