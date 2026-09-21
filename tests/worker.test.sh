@@ -388,8 +388,12 @@ assert_lacks "$out12" "it is at state/unsent" "rather than naming a file it did 
 # Counting what is in the machine's $TMPDIR before and after scored
 # every other process against the worker - and would have passed on a
 # leak if anything else removed a file in the same window.
+# By NAME. An owned TMPDIR settles whose machine, not whose file: git,
+# the stub and the adapter all run under it too, and any of them would
+# fail this as a worker leak. `scratch_new`'s template exists so a file
+# left behind says who left it - so the check reads the name.
 leak_check() {   # leak_check <label> <tmpdir> ; the run has already happened
-  local left; left="$(find "$2" -type f 2>/dev/null | wc -l | tr -d ' ')"
+  local left; left="$(find "$2" -name 'fm-worker-*' -type f 2>/dev/null | wc -l | tr -d ' ')"
   assert_eq "0" "$left" "$1"
 }
 
@@ -408,8 +412,16 @@ exit 0
 G
 chmod +x "$d14/stub/gh"
 mkdir -p "$d14/tmp"
-( cd "$r14" && TMPDIR="$d14/tmp" FM_ROOT="$r14" FM_GH="$GH14" \
-    bin/fm-worker.sh --task T-Z --pr 9 >/dev/null 2>&1 )
+out16="$(cd "$r14" && TMPDIR="$d14/tmp" FM_ROOT="$r14" FM_GH="$GH14" \
+    bin/fm-worker.sh --task T-Z --pr 9 2>&1)"; rc16=$?
+# The control. "No file left" is also what a run that never made one
+# looks like, and say_err has a path where it is not made at all -
+# `scratch_new` failing leaves it empty and the run carries on. The
+# replayed `gh:` line is printed only from a non-empty $say_err, so it
+# is proof the file existed to be cleaned up.
+assert_eq "73" "$rc16" "the run took the path that makes say_err"
+assert_contains "$out16" "fm-worker: gh: refused" \
+  "and it captured what gh said, which it can only do into a file it made"
 leak_check "a run that exits 73 leaves no scratch file behind" "$d14/tmp"
 rm -rf "$d14"
 

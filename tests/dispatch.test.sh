@@ -131,16 +131,20 @@ sleep 5
 echo done >> "$b/worker-finished"
 W
 chmod +x "$b/bin/fm-worker.sh"
-t0=$(date +%s)
 FM_ROOT="$b" "$b/bin/fm-dispatch.sh" --repo "$b" >/dev/null 2>&1
-t1=$(date +%s)
-assert_ok "[ $(( t1 - t0 )) -lt 3 ]" "the dispatcher returns without waiting for the worker"
-assert_fail "test -e '$b/worker-finished'" "and the worker it started is still running"
-# and it is put down rather than left writing into a tree the suite is
-# about to delete
-for _ in $(seq 1 30); do [ -s "$b/worker-pid" ] && break; sleep 0.1; done
+# The control first: a dispatcher that started NOTHING also returns at
+# once and also leaves no worker-finished, so the absence below means
+# nothing without proof that a worker is there to be waited for.
+for _ in $(seq 1 60); do [ -s "$b/worker-pid" ] && break; sleep 0.1; done
 wpid="$(cat "$b/worker-pid" 2>/dev/null)"
-[ -z "$wpid" ] || kill -TERM "$wpid" 2>/dev/null
+assert_ne "" "$wpid" "a worker was started, and said which process it is"
+# and it is STILL running, which is the property - the dispatcher
+# returned while its child was in the middle of a five-second sleep.
+# No clock: "is it still alive" is the same question without a
+# threshold to tune against whatever the runner is doing.
+assert_ok "kill -0 '$wpid' 2>/dev/null" "and the dispatcher returned while it was still running"
+assert_fail "test -e '$b/worker-finished'" "so the worker had not finished when the dispatcher did"
+kill -TERM "$wpid" 2>/dev/null
 
 # and the conclusion criterion 6 rests on, rather than the premise: the
 # worker the dispatcher starts is not handed a number. The two states
