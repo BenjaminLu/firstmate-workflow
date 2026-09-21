@@ -93,7 +93,6 @@ prompt="$work/prompt.md"
 
 # the reviewer runs on its own engine when config.yaml names one, and falls
 # back exactly the way the worker does - one chain, one runner
-
 mkdir -p "$work/out"
 # The reviewer's evidence: a verdict marker. A signed review IS the run's
 # standard output, so a signature matcher calling it an outage would throw

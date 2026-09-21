@@ -245,7 +245,18 @@ else
   tmp="$(mktemp)"
   for t in "${suites[@]}"; do
     if bash "$t" > "$tmp" 2>&1; then
-      pass "$t"
+      # A suite that calls something that does not exist prints to
+      # stderr, carries on, and reaches finish green - which is how a
+      # test file with two spliced lines reported the same as one
+      # without. Under `set -uo pipefail` with no -e, the shell will not
+      # tell us, so the gate reads what the run said.
+      noise="$(grep -nE 'command not found|unbound variable|: No such file or directory' "$tmp" || true)"
+      if [ -n "$noise" ]; then
+        flunk "$t said it passed, but something in it did not run:"
+        printf '%s\n' "$noise"
+      else
+        pass "$t"
+      fi
     else
       flunk "$t"; cat "$tmp"
     fi

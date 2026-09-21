@@ -621,6 +621,7 @@
       ],
       "title": "the crew are agents, not pull requests",
       "scope": [
+        "bin/ci.sh",
         "bin/fm-diagram.sh",
         "bin/fm-emit.sh",
         "bin/fm-review.sh",
@@ -648,7 +649,8 @@
         "the captain is not crew: he is drawn beside the cards, from the same pending deck the cards come from, and nothing else derives him",
         "an agent that has finished its run is not aboard, whatever became of the task",
         "a run says when it ends, on every exit path including the ones that give up",
-        "no script names a signal alongside EXIT in one trap: the handler runs and execution continues, and kill stops working"
+        "no script names a signal alongside EXIT in one trap: the handler runs and execution continues, and kill stops working",
+        "a suite that prints command-not-found cannot report green: the gate reads what the run said"
       ]
     }
   ]
