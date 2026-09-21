@@ -68,17 +68,25 @@ emit() { emit_once "$@" || true; }
 # including on the paths a signal or an early exit cuts short, which
 # this script has traps for. They were `mktemp`d and removed on the
 # happy path only, and one of them was made on every round whether or
-# not it was needed. tests/worker.test.sh walks all three ways out -
-# 73, 74 and a TERM mid-engine - in a TMPDIR it owns, so "every" is
-# the assertion and not the adjective.
-scratch=''
+# not it was needed. tests/worker.test.sh walks three ways out in a
+# TMPDIR it owns: 73 with say_err open, 74 with lookup_err open, and a
+# TERM mid-engine, which is the case where "removed at the end" and
+# "removed on the way out" differ. A signal arriving while the comment
+# is being posted is the one combination no fixture holds still long
+# enough to catch.
 # An explicit template, for two reasons: BSD mktemp ignores $TMPDIR
 # without one - so a caller that wants these somewhere it owns, which
 # is how the leak is tested, cannot have them - and a file called
 # tmp.XXXX says nothing about who left it if one ever does.
 scratch_new() { mktemp "${TMPDIR:-/tmp}/fm-worker-XXXXXX"; }
-scratch_add() { scratch="$scratch $1"; }
-clean_scratch() { [ -z "$scratch" ] || rm -f $scratch; }
+# An ARRAY. A space-delimited string is word-split and glob-expanded by
+# `rm -f`, so one space in $TMPDIR and the removal silently removes
+# nothing - `-f` says so by saying nothing - and every leak test still
+# passes, because a test builds its own path and never puts a space in
+# it.
+scratch=()
+scratch_add() { scratch+=("$1"); }
+clean_scratch() { [ ${#scratch[@]} -eq 0 ] || rm -f "${scratch[@]}"; }
 
 finished() {
   clean_scratch
@@ -180,7 +188,12 @@ if [ "$round_two" = 1 ] && [ -z "$PR" ]; then
   # answered-none the moment pipefail was not in force, which is the one
   # thing this block exists to prevent. `--jq '.[0].number'` yields a
   # single line anyway, so the pipe bought nothing.
-  lookup_err="$(scratch_new)"; scratch_add "$lookup_err"
+  # a mktemp that failed would leave this empty, `2>""` would fail the
+  # redirection, gh would never run, and the round would exit 74
+  # saying GitHub could not answer - when GitHub was never asked
+  lookup_err="$(scratch_new)" || lookup_err=''
+  [ -n "$lookup_err" ] || { echo "fm-worker: could not make a scratch file" >&2; exit 70; }
+  scratch_add "$lookup_err"
   PR="$($GH pr list --head "$branch" --state open --json number --jq '.[0].number' \
         2>"$lookup_err" </dev/null)"; lookup_rc=$?
   # what gh actually prints for a branch with no open pull request is
@@ -291,8 +304,9 @@ spoke=0
 # number. The run said where the text is and not what went wrong.
 say_err=''
 if [ "$asked" = 1 ] && [ -n "$PR" ]; then
-  say_err="$(scratch_new)"; scratch_add "$say_err"
-  if $GH pr comment "$PR" --body-file "$say" >/dev/null 2>"$say_err" </dev/null; then
+  say_err="$(scratch_new)" || say_err=''
+  [ -z "$say_err" ] || scratch_add "$say_err"
+  if $GH pr comment "$PR" --body-file "$say" >/dev/null 2>"${say_err:-/dev/null}" </dev/null; then
     spoke=1
     emit --type ask_pass_criteria --pr "$PR" --en "the worker spoke on #$PR" \
          --tw "工人在 #$PR 上發言"
@@ -324,7 +338,10 @@ if [ "$asked" = 1 ] && [ "$spoke" = 0 ]; then
   # overwrite each other, and the earlier question is the one this
   # path exists to keep
   kept="$REPO/state/unsent/$TASK-$(date -u +%Y%m%dT%H%M%SZ)-$$.md"
-  mkdir -p "$(dirname "$kept")"
+  # its own stderr prefixed like everything else here: an unprefixed
+  # `mkdir: File exists` lands ahead of the lines that explain what
+  # happened, in a run whose whole point is reporting in its own voice
+  mkdir -p "$(dirname "$kept")" 2>&1 | sed 's/^/fm-worker: /' >&2
   echo "fm-worker: the worker had something to say and there was nowhere to put it" >&2
   if cp "$say" "$kept" 2>/dev/null; then
     echo "fm-worker: it is at ${kept#"$REPO"/}" >&2

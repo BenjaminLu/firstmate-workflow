@@ -350,6 +350,11 @@ chmod +x "$d13/stub/gh"; : > "$d13/ghcalls"
 out14="$(cd "$r13" && FM_ROOT="$r13" FM_GH="$GH13" bin/fm-worker.sh --task T-Z 2>&1)"; rc14=$?
 assert_eq "0" "$rc14" "a lookup that answers \"none\" is not a failure"
 assert_contains "$out14" "will open one" "and the run says it is opening one"
+# d9 counts this on an asking round, which never reaches the post-push
+# site at all. This one does - it goes all the way to `pr create` - so
+# it is the fixture that can see a second lookup if one comes back
+assert_eq "1" "$(grep -c 'pr list' "$d13/ghcalls" || true)" \
+  "and asked which pull request exactly once, on a round that runs to the end"
 assert_lacks "$out14" "#null" "and never carries gh's four characters through as a number"
 assert_contains "$(cat "$d13/ghcalls")" "pr create" "and it does open one"
 rm -rf "$d13"
@@ -495,6 +500,8 @@ out13="$(cd "$r12" && FM_ROOT="$r12" FM_GH="$GH12" bin/fm-worker.sh --task T-Z 2
 assert_contains "$out13" "already has #55" "a branch only origin remembers is still a later round"
 assert_contains "$(jq -r 'select(.type=="commit_pushed")|.pr|tostring' \
   < "$r12/state/events.jsonl" | tail -1)" "55" "and its push points at the one that is there"
+assert_eq "1" "$(grep -c 'pr list' "$d12/ghcalls" || true)" \
+  "having asked once, not once at each site that wants the number"
 rm -rf "$d12"
 
 # A run that was interrupted leaves its files uncommitted in the worktree,
@@ -695,13 +702,25 @@ rm -rf "$d4"
 # named there, and every code named there has to be in the script -
 # identity, not a count, so adding one correctly is not a failure and
 # losing one is.
-codes="$(grep -oE '^[^#]*exit [0-9]+' "$ROOT/bin/fm-worker.sh" \
-         | grep -oE 'exit [0-9]+$' | awk '{print $2}' | sort -un | grep -v '^0$' || true)"
+# Strings first, THEN the comment. `^[^#]*exit N` means "no # anywhere
+# to the left", and every message in this script names a pull request
+# with one - so `{ echo "fm-worker: #$PR refused" >&2; exit 75; }`, the
+# most idiomatic line in the file, would never enter the list and the
+# identity would pass without 75 being documented anywhere.
+# and the signal traps separately, because their code IS inside the
+# quotes the first pass removes - `trap 'exit 143' TERM` is as much an
+# exit code as any other, and the first version of this check found it
+# only by accident of where the quotes fell
+codes="$( { sed -e "s/'[^']*'//g" -e 's/"[^"]*"//g' -e 's/#.*$//' "$ROOT/bin/fm-worker.sh" \
+              | grep -oE '\bexit [0-9]+'
+            grep -oE "^[[:space:]]*trap[[:space:]]+'exit [0-9]+'" "$ROOT/bin/fm-worker.sh" \
+              | grep -oE 'exit [0-9]+'
+          } | awk '{print $2}' | sort -un | grep -v '^0$' || true)"
 assert_ne "" "$codes" "the worker has exit codes to check"
 # the section and NOT the heading that ends it: sed's range includes
 # its terminating line, so `### 5.4 ...` was inside the text being
 # scanned for a number in backticks
-listed="$(awk '/^### 5\.3\.2/ {inside=1; next} /^### / {inside=0} inside' \
+listed="$(awk '/^### 5\.3\.2/ {inside=1; next} /^#{1,6} / {inside=0} inside' \
           "$ROOT/design/design.md" | grep -oE '`[0-9]+`' | tr -d '`' | sort -un)"
 assert_eq "$codes" "$listed" "design.md §5.3.2 names exactly the codes fm-worker exits with"
 

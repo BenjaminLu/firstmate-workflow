@@ -126,6 +126,7 @@ rm -rf "$p"
 b="$(pr_tree)"
 cat > "$b/bin/fm-worker.sh" <<W
 #!/usr/bin/env bash
+echo \$\$ > "$b/worker-pid"
 sleep 5
 echo done >> "$b/worker-finished"
 W
@@ -135,11 +136,18 @@ FM_ROOT="$b" "$b/bin/fm-dispatch.sh" --repo "$b" >/dev/null 2>&1
 t1=$(date +%s)
 assert_ok "[ $(( t1 - t0 )) -lt 3 ]" "the dispatcher returns without waiting for the worker"
 assert_fail "test -e '$b/worker-finished'" "and the worker it started is still running"
+# and it is put down rather than left writing into a tree the suite is
+# about to delete
+for _ in $(seq 1 30); do [ -s "$b/worker-pid" ] && break; sleep 0.1; done
+wpid="$(cat "$b/worker-pid" 2>/dev/null)"
+[ -z "$wpid" ] || kill -TERM "$wpid" 2>/dev/null
 
-# and the conclusion criterion 6 rests on, rather than the premise: no
-# worker is started with a --pr at all. The two states enumerated above
-# are why, but the stub can simply record its argv and say so for every
-# path through this script, including ones nobody enumerated.
+# and the conclusion criterion 6 rests on, rather than the premise: the
+# worker the dispatcher starts is not handed a number. The two states
+# above are WHY there is never one to hand; this reads the argv of the
+# worker that actually ran, on a tree where the other task does have a
+# pull request - so it is the conclusion observed once, not proved for
+# every path.
 a="$(pr_tree)"
 cat > "$a/bin/fm-worker.sh" <<W
 #!/usr/bin/env bash
@@ -158,10 +166,14 @@ rm -rf "$a"
 # immediately leaves the dispatcher's own status untouched, so a failed
 # round writes the one event the worker wrote and no second one
 e="$(pr_tree)"
-printf '#!/usr/bin/env bash\nexit 9\n' > "$e/bin/fm-worker.sh"; chmod +x "$e/bin/fm-worker.sh"
+# a worker that records that it HAS exited, so the absence below is
+# read after the thing that could have caused it, not after a sleep
+printf '#!/usr/bin/env bash\necho x > "%s/worker-done"\nexit 9\n' "$e" > "$e/bin/fm-worker.sh"
+chmod +x "$e/bin/fm-worker.sh"
 FM_ROOT="$e" "$e/bin/fm-dispatch.sh" --repo "$e" >/dev/null 2>&1
 assert_eq "0" "$?" "a worker that fails does not fail the dispatcher"
-for _ in $(seq 1 20); do sleep 0.1; done
+for _ in $(seq 1 60); do [ -e "$e/worker-done" ] && break; sleep 0.1; done
+assert_ok "test -e '$e/worker-done'" "the failing worker has run and exited"
 assert_eq "0" "$(jq -r 'select(.type=="worker_crashed")|.type' "$e/state/events.jsonl" \
   | grep -c . || true)" "and the dispatcher writes no event about it"
 rm -rf "$b" "$e"
