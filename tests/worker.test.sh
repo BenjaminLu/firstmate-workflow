@@ -6,6 +6,23 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 
+# A simulated fetch failure must reject malformed arguments too: its normal
+# nonzero status alone cannot distinguish the fixture response from rejection.
+check_strict_run_stub() (
+  local stub="$1" id="$2" response rc
+  # Earlier fixture assertions may leave the caller in a removed worktree.
+  cd "$ROOT" || return 1
+  response="$("$stub" run view "$id" --log-failed --job 999 2>&1)"; rc=$?
+  assert_eq "1" "$rc" "run $id stub rejects extra job selector"
+  assert_eq "could not find any workflow run" "$response" "run $id extra selector cannot return fixture output"
+  response="$("$stub" run view --job "$id" --log-failed 2>&1)"; rc=$?
+  assert_eq "1" "$rc" "run $id stub rejects job namespace"
+  assert_eq "could not find any workflow run" "$response" "run $id job namespace cannot return fixture output"
+  response="$("$stub" run view "$id" 2>&1)"; rc=$?
+  assert_eq "1" "$rc" "run $id stub requires log-failed flag"
+  assert_eq "could not find any workflow run" "$response" "run $id missing flag cannot return fixture output"
+)
+
 fixture() {                     # a repo with a remote, a task, and the real scripts
   local d; d="$(mktemp -d)"; local bare="$d/remote.git"
   git init -q --bare "$bare"
@@ -104,7 +121,7 @@ case " $* " in
   # gh refuses an id it does not recognise, and the link carries a job
   # path after the run - so a stub that answers any argument is a stub
   # that cannot see a run id read out of the link wrongly
-  *" run view 777 "*) printf 'ci\tbin/ci.sh\tTHE RUNNER SAID: a title with markup is not escaped\n'; exit 0 ;;
+  " run view 777 --log-failed ") printf 'ci\tbin/ci.sh\tTHE RUNNER SAID: a title with markup is not escaped\n'; exit 0 ;;
   *" run view "*) echo "could not find any workflow run" >&2; exit 1 ;;
   *" pr view "*" comments "*)
     jq -cn '{author:{login:"reviewer-1"},body:"REVIEWER SAID: fix the helper"}' \
@@ -113,6 +130,7 @@ esac
 exit 0
 G
 chmod +x "$d5/stub/gh"
+check_strict_run_stub "$d5/stub/gh" 777
 : > "$d5/ghcalls"      # so "did it create one?" is about THIS round
 ( cd "$r5" && FM_ROOT="$r5" FM_GH="$GH5" bin/fm-worker.sh --task T-Z --pr 9 >/dev/null 2>&1 )
 assert_ok "cd '$r5' && git cat-file -e '$branch:src/round-one'" "the second round keeps the first round's work"
@@ -171,13 +189,14 @@ echo "gh $*" >> "$(dirname "$0")/../ghcalls"
 case " $* " in
   *" pr list "*) echo 31; exit 0 ;;
   *" pr checks "*) echo "https://example.invalid/actions/runs/9/job/1"; exit 0 ;;
-  *" run view 9 "*) printf 'ci\tbin/ci.sh\tTHE RUNNER SAID: the gate is red\n'; exit 0 ;;
+  " run view 9 --log-failed ") printf 'ci\tbin/ci.sh\tTHE RUNNER SAID: the gate is red\n'; exit 0 ;;
   *" run view "*) echo "could not find any workflow run" >&2; exit 1 ;;
   *" pr view "*" comments "*) printf '## reviewer-1\n\nREVIEWER SAID: answer this\n' ;;
 esac
 exit 0
 G
 chmod +x "$d9/stub/gh"
+check_strict_run_stub "$d9/stub/gh" 9
 : > "$d9/ghcalls"
 cap9="$d9/sent.md"
 out9="$(cd "$r9" && FM_ROOT="$r9" FM_GH="$GH9" FM_CAPTURE="$cap9" \
@@ -401,7 +420,8 @@ case " $* " in
   # the run id is NOT in gh's message: `404` in both would make
   # "names the run" pass off the echoed gh line alone
   *" pr checks "*) echo "https://example.invalid/actions/runs/51/job/1"; exit 0 ;;
-  *" run view "*) echo "HTTP 404: Not Found" >&2; exit 1 ;;
+  " run view 51 --log-failed ") echo "HTTP 404: Not Found" >&2; exit 1 ;;
+  *" run view "*) echo "could not find any workflow run" >&2; exit 1 ;;
   *" pr view "*" comments "*) printf '## reviewer-1
 
 something
@@ -410,6 +430,7 @@ esac
 exit 0
 G
 chmod +x "$d16/stub/gh"
+check_strict_run_stub "$d16/stub/gh" 51
 cap16="$d16/sent.md"
 ( cd "$r16" && FM_ROOT="$r16" FM_GH="$GH16" FM_CAPTURE="$cap16" \
     bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
@@ -591,13 +612,14 @@ cat > "$d18/stub/gh" <<'G'
 case " $* " in
   *" pr list "*) echo 24; exit 0 ;;
   *" pr checks "*) echo "https://github.com/o/r/actions/runs/71/job/1"; exit 0 ;;
-  *" run view 71 "*) printf 'ci\tx\tTraceback ABOVE\nci\tx\t\nci\tx\tAssertionError BELOW\n'; exit 0 ;;
+  " run view 71 --log-failed ") printf 'ci\tx\tTraceback ABOVE\nci\tx\t\nci\tx\tAssertionError BELOW\n'; exit 0 ;;
   *" run view "*) echo "could not find any workflow run" >&2; exit 1 ;;
   *" pr view "*" comments "*) printf '## r\n\nsomething\n' ;;
 esac
 exit 0
 G
 chmod +x "$d18/stub/gh"
+check_strict_run_stub "$d18/stub/gh" 71
 cap18="$d18/sent.md"
 ( cd "$r18" && FM_ROOT="$r18" FM_GH="$GH18" FM_CAPTURE="$cap18" \
     bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
@@ -629,13 +651,14 @@ cat > "$d19/stub/gh" <<'G'
 case " $* " in
   *" pr list "*) echo 25; exit 0 ;;
   *" pr checks "*) echo "https://github.com/o/r/actions/runs/81/job/1"; exit 0 ;;
-  *" run view 81 "*) echo "boom" >&2; exit 1 ;;
+  " run view 81 --log-failed ") echo "boom" >&2; exit 1 ;;
   *" run view "*) echo "could not find any workflow run" >&2; exit 1 ;;
   *" pr view "*" comments "*) printf '## r\n\nsomething\n' ;;
 esac
 exit 0
 G
 chmod +x "$d19/stub/gh"
+check_strict_run_stub "$d19/stub/gh" 81
 # A TMPDIR that is a file: mktemp cannot mint into it, whatever the
 # uid. `--pr 25` so the LOOKUP's scratch file is never wanted - that
 # one is a hard refusal by design (exit 70, T-031), and the run would
@@ -672,13 +695,14 @@ cat > "$d20/stub/gh" <<'G'
 case " $* " in
   *" pr list "*) echo 26; exit 0 ;;
   *" pr checks "*) echo "https://github.com/o/r/actions/runs/91/job/1"; exit 0 ;;
-  *" run view 91 "*) i=0; while [ "$i" -lt 200 ]; do echo "noise $i" >&2; i=$((i+1)); done; exit 1 ;;
+  " run view 91 --log-failed ") i=0; while [ "$i" -lt 200 ]; do echo "noise $i" >&2; i=$((i+1)); done; exit 1 ;;
   *" run view "*) echo "could not find any workflow run" >&2; exit 1 ;;
   *" pr view "*" comments "*) printf '## r\n\nsomething\n' ;;
 esac
 exit 0
 G
 chmod +x "$d20/stub/gh"
+check_strict_run_stub "$d20/stub/gh" 91
 cap20="$d20/sent.md"
 ( cd "$r20" && FM_ROOT="$r20" FM_GH="$GH20" FM_CAPTURE="$cap20" \
     bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
