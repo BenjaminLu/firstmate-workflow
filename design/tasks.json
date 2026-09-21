@@ -474,7 +474,9 @@
       "scope": [
         "bin/fm.sh",
         "skills/**",
-        "tests/selfupdate.test.sh"
+        "tests/selfupdate.test.sh",
+        "tests/option-loop.test.sh",
+        "design/tasks.json"
       ],
       "acceptance": [
         "a skill-update task travels the same pull request and the same seven gates as any other",

@@ -1,0 +1,5 @@
+# Imported by `bin/fm.sh sync-skills`. Read-only copies of external
+# skills: they are not part of this repository and never travel a
+# pull request. Delete the directory and import again.
+*
+!.gitignore
