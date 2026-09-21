@@ -274,6 +274,32 @@ and the same idea of what a comment is, out of `bin/fm-config.sh`: the
 suite exists to catch the gate missing a script, and a suite carrying
 its own copy of the rule is a check that agrees with itself.
 
+### 5.3.2 A later round has to know it is one
+
+A worker asks GitHub for its branch's pull request before it builds the
+prompt, not after the engine has run. The number is what makes a later
+round a later round: the prompt carries what review has said and why the
+required check is red, and `.fm-say.md` — the worker's one way to speak,
+since it may not touch `gh` — has somewhere to go. Looked up afterwards,
+a round dispatched from a task id alone was a first round wearing its
+clothes. It rewrote what it had already written, and the question it
+asked was dropped in silence; the run said `its question is on #`, with
+nothing after the hash.
+
+`fm-dispatch` cannot help: a task whose pull request is open counts as
+in flight and is never restarted, and once it is settled it is merged or
+closed and is not restarted either. There is no path through the
+dispatcher that starts a task with a number to hand it, so the worker
+finding its own is the only path there can be, and
+`tests/dispatch.test.sh` asserts that rather than the design asserting
+it.
+
+Asking is the whole of a round that begins with a question, so a
+question that could not be posted is a failed run — exit `73`, and a
+`worker_crashed` in the log. It used to be a line on standard error and
+an exit 0: the reviewer waited for a question it would never see, the
+next round asked it again, and the board showed a round that went fine.
+
 ### 5.4 The pull request protocol
 
 Strings on a pull request are input to `bin/fm-gate.sh`. Wrong format means it
@@ -606,5 +632,6 @@ gates, and the dispatcher cannot dispatch itself.
 | T-016 | `fm-diagram.sh`: decision diagrams, and the board embed | T-010 |
 | T-017 | `fm-reconcile.sh`: reconciling after a crash | T-007 |
 | T-018 | self-update and `sync-skills` | T-007, T-015 |
+| T-031 | a second round the worker cannot see, and a question nobody hears | T-007 |
 | T-029 | one exit code for a usage error, in every script | T-026 |
 | T-030 | the lints are blind to the files that carry them | T-026 |

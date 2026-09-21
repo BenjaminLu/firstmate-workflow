@@ -89,4 +89,24 @@ out="$(cd "$p" && FM_ROOT="$p" bin/fm-dispatch.sh --repo "$p" 2>&1)"
 assert_lacks "$out" "T-001" "and a merged task is not dispatched either"
 rm -rf "$p"
 
+# Why the worker has to find its own pull request: the dispatcher never
+# has one to hand it. A task with a pr_opened and nothing settling it
+# counts as in flight and is not restarted; once it IS settled it is
+# done or closed and is not restarted either. So there is no path
+# through this script that starts a task whose pull request is open -
+# which is the whole reason a later round dispatched by hand arrived
+# with no number, no review in its prompt, and nowhere to put its
+# question.
+w="$(fixture)"
+say "$w" greenlit
+FM_ROOT="$w" "$w/bin/fm-emit.sh" --actor firstmate --type dispatched --task A \
+  --en "started" --tw "開工" >/dev/null
+FM_ROOT="$w" "$w/bin/fm-emit.sh" --actor firstmate --type pr_opened --task A --pr 7 \
+  --en "opened" --tw "已開" >/dev/null
+assert_lacks "$(ready "$w")" "A" "a task with an open pull request is never restarted"
+FM_ROOT="$w" "$w/bin/fm-emit.sh" --actor firstmate --type merged --task A \
+  --en "merged" --tw "已合併" >/dev/null
+assert_lacks "$(ready "$w")" "A" "and once it is merged it is not restarted either"
+rm -rf "$w"
+
 finish

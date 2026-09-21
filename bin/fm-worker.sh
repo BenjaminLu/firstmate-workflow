@@ -136,6 +136,24 @@ else
   git worktree add -q -b "$branch" "$tree" "$BASE"
 fi || { echo "fm-worker: could not create the worktree" >&2; exit 70; }
 
+# The pull request the branch already has, if the caller did not say.
+# This used to be looked up two hundred lines below, AFTER the engine had
+# run - so a second round dispatched without --pr was a first round
+# wearing its clothes: the prompt carried no review and no failing check,
+# the worker rewrote what it had already written, and the question it
+# wrote into .fm-say.md was dropped because $PR was still empty when the
+# time came to post it. The run then said "its question is on #", with
+# nothing after the hash, which is what finding this looked like.
+# Only on a later round: a branch that does not exist yet cannot have a
+# pull request, and a first round that called `gh` at all would break the
+# guarantee that an unavailable vendor touches nothing.
+if [ "$round_two" = 1 ] && [ -z "$PR" ]; then
+  PR="$($GH pr list --head "$branch" --state open --json number --jq '.[0].number' \
+        2>/dev/null </dev/null | head -1)"
+  case "$PR" in null) PR='' ;; esac
+  [ -z "$PR" ] || echo "fm-worker: $branch already has #$PR; this round answers it" >&2
+fi
+
 # --- the prompt: the task, the design that bears on it, and the skill ----
 prompt="$tree/.fm-prompt.md"
 {
@@ -204,15 +222,28 @@ rm -f "$prompt"
 # reported a violation every turn, which looks exactly like a worker that
 # stopped working.
 say="$tree/.fm-say.md"
-if [ -s "$say" ] && [ -n "$PR" ]; then
-  $GH pr comment "$PR" --body-file "$say" >/dev/null 2>&1 </dev/null \
-    && emit --type ask_pass_criteria --pr "$PR" --en "the worker spoke on #$PR" \
-            --tw "工人在 #$PR 上發言" \
-    || echo "fm-worker: could not post the worker's message to #$PR" >&2
-fi
 asked=0
 [ -s "$say" ] && asked=1
+spoke=0
+if [ "$asked" = 1 ] && [ -n "$PR" ]; then
+  if $GH pr comment "$PR" --body-file "$say" >/dev/null 2>&1 </dev/null; then
+    spoke=1
+    emit --type ask_pass_criteria --pr "$PR" --en "the worker spoke on #$PR" \
+         --tw "工人在 #$PR 上發言"
+  fi
+fi
 rm -f "$say"
+# A question that went nowhere leaves the task deadlocked: the reviewer
+# is waiting for a question it will never see, and the next round asks
+# it again. So this is the run's outcome, not a line on standard error.
+if [ "$asked" = 1 ] && [ "$spoke" = 0 ]; then
+  echo "fm-worker: the worker had something to say and there was nowhere to put it" >&2
+  [ -n "$PR" ] && echo "fm-worker: #$PR would not take the comment" >&2
+  [ -n "$PR" ] || echo "fm-worker: $branch has no open pull request to say it on" >&2
+  emit --type worker_crashed --en "the worker's question could not be posted" \
+       --tw "工人的提問貼不上去"
+  exit 73
+fi
 
 # asking IS the work in a round that begins with a question, and the round
 # after it is the one that changes files
@@ -238,12 +269,16 @@ emit --type commit_pushed --en "committed on $branch" --tw "已在 $branch 上 c
 git -C "$tree" push -q -u origin "$branch" 2>/dev/null || {
   echo "fm-worker: could not push $branch" >&2; exit 71; }
 
-# On a later round the pull request is already open and `pr create` fails,
-# so ask for the branch's pull request first. A worker that could only ever
-# open a new one failed its second round at the last step, with the work
-# pushed and nothing pointing at it.
-num="$($GH pr list --head "$branch" --state open --json number --jq '.[0].number' \
-       2>/dev/null </dev/null | head -1)"
+# On a later round the pull request is already open and `pr create` fails.
+# A worker that could only ever open a new one failed its second round at
+# the last step, with the work pushed and nothing pointing at it.
+#
+# $PR is what the lookup above the prompt found, or what the caller
+# passed; asking again here would be a second answer to one question,
+# and the two could disagree - a pull request opened while the engine
+# was running would be posted to by one half of this script and not the
+# other. The branch is still re-read when there is nothing to reuse.
+num="$PR"
 if [ -z "$num" ] || [ "$num" = "null" ]; then
   url="$($GH pr create --head "$branch" --base "$BASE" \
         --title "$TASK: $(jq -r .title <<<"$spec")" \
@@ -254,6 +289,7 @@ if [ -z "$num" ] || [ "$num" = "null" ]; then
   num="$(printf '%s' "$url" | sed -n 's|.*/\([0-9][0-9]*\)$|\1|p')"
   [ -n "$num" ] || { echo "fm-worker: could not read a pull request number from '$url'" >&2; exit 72; }
   emit --type pr_opened --pr "$num" --en "opened #$num" --tw "已開 #$num"
+  PR="$num"
 else
   emit --type commit_pushed --pr "$num" --en "pushed another round to #$num" \
        --tw "第二輪已推上 #$num"

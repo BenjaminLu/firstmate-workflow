@@ -120,6 +120,24 @@ assert_lacks "$(cat "$d5/ghcalls" 2>/dev/null)" "pr create" \
 # the last event is now agent_finished, so look for the push itself
 assert_contains "$(jq -r 'select(.type=="commit_pushed")|.pr|tostring' < "$r5/state/events.jsonl" | tail -1)" "9" \
   "and its event points at that number"
+
+# And the same round WITHOUT --pr, which is how the dispatcher starts one
+# from a task id alone. The lookup used to sit below the engine, so a
+# round with no number was a first round wearing its clothes: no review
+# in the prompt, no failing check, and the worker rewriting what it had
+# already written. Same fixture, same stub, nothing passed.
+( cd "$r5" && git update-ref -d "refs/heads/nothing" 2>/dev/null; true )
+( cd "$r5" && git -C "state/worktrees/T-Z" rm -q --cached -r . >/dev/null 2>&1; true )
+rm -f "$r5/state/worktrees/T-Z/src/saw-review" "$r5/state/worktrees/T-Z/src/saw-ci"
+( cd "$r5" && git worktree remove --force state/worktrees/T-Z >/dev/null 2>&1; true )
+( cd "$r5" && git update-ref "refs/heads/$branch" "$branch~1" 2>/dev/null; true )
+: > "$d5/ghcalls"
+out5="$(cd "$r5" && FM_ROOT="$r5" FM_GH="$GH5" bin/fm-worker.sh --task T-Z 2>&1)"
+assert_contains "$out5" "already has #9" "a later round finds the pull request itself"
+assert_ok "cd '$r5' && git cat-file -e '$branch:src/saw-review'" \
+  "and is given the review to answer without being told the number"
+assert_ok "cd '$r5' && git cat-file -e '$branch:src/saw-ci'" "and why the check is red"
+assert_lacks "$(cat "$d5/ghcalls" 2>/dev/null)" "pr create" "and opens no second pull request"
 rm -rf "$d5"
 
 # The worker cannot run gh, so the only way its question reaches the
@@ -143,6 +161,47 @@ assert_lacks "$(cat "$d6/ghcalls")" "push" "asking pushes nothing"
 b6="$(cd "$r6" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1)"
 assert_fail "cd '$r6' && git cat-file -e '$b6:.fm-say.md'" "and the file never reaches the diff"
 rm -rf "$d6"
+
+# A question that went nowhere leaves the task deadlocked: the reviewer
+# waits for a question it will never see and the next round asks it
+# again. That used to be a line on standard error and an exit 0 - the
+# run reported a complete round and the log said nothing at all. It is
+# the run's outcome now.
+d7="$(fixture)"; r7="$d7/repo"; GH7="$(ghstub "$d7")"
+cat > "$r7/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md"
+M
+chmod +x "$r7/bin/adapters/mock.sh"
+# a gh that refuses the comment and nothing else
+cat > "$d7/stub/gh" <<'G'
+#!/usr/bin/env bash
+echo "gh $*" >> "$(dirname "$0")/../ghcalls"
+case " $* " in *" pr comment "*) echo "could not post" >&2; exit 1 ;; esac
+echo "https://example.invalid/pull/42"
+G
+chmod +x "$d7/stub/gh"
+out7="$(cd "$r7" && FM_ROOT="$r7" FM_GH="$GH7" bin/fm-worker.sh --task T-Z --pr 9 2>&1)"; rc7=$?
+assert_eq "73" "$rc7" "a question that could not be posted fails the run"
+assert_contains "$out7" "nowhere to put it" "and says what happened"
+assert_contains "$out7" "#9" "naming the pull request that would not take it"
+assert_contains "$(jq -r .type < "$r7/state/events.jsonl" | tr '\n' ' ')" "worker_crashed" \
+  "and the log carries it, so the board is not showing a round that went fine"
+assert_lacks "$(jq -r .type < "$r7/state/events.jsonl" | tr '\n' ' ')" "ask_pass_criteria" \
+  "and does not claim the worker spoke"
+rm -rf "$d7"
+
+# and the same with no pull request at all to say it on
+d8="$(fixture)"; r8="$d8/repo"; GH8="$(ghstub "$d8")"
+cp "$r7/bin/adapters/mock.sh" "$r8/bin/adapters/mock.sh" 2>/dev/null || {
+  printf '#!/usr/bin/env bash\n[ "$1" = "run" ] || exit 64\nprintf "ASK-PASS-CRITERIA:T-Z\\n" > "$3/.fm-say.md"\n' \
+    > "$r8/bin/adapters/mock.sh"; }
+chmod +x "$r8/bin/adapters/mock.sh"
+out8="$(cd "$r8" && FM_ROOT="$r8" FM_GH="$GH8" bin/fm-worker.sh --task T-Z 2>&1)"; rc8=$?
+assert_eq "73" "$rc8" "so does a question with no pull request to put it on"
+assert_contains "$out8" "no open pull request" "and it says that is why"
+rm -rf "$d8"
 
 # A run that was interrupted leaves its files uncommitted in the worktree,
 # and the next dispatch used to delete them before anything could see
