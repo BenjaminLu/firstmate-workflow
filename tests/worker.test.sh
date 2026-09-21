@@ -259,8 +259,8 @@ M
 chmod +x "$r8/bin/adapters/mock.sh"
 out8="$(cd "$r8" && FM_ROOT="$r8" FM_GH="$GH8" bin/fm-worker.sh --task T-Z 2>&1)"; rc8=$?
 assert_eq "73" "$rc8" "so does a question with no pull request to put it on"
-assert_contains "$out8" "is new - this is a first round" \
-  "and it says what was actually checked - that there is no branch yet"
+assert_contains "$out8" "no pull request to say it on - asking is premature" \
+  "and it says what was actually checked - there is no pull request"
 # the payload survives, or the only copy of the question is gone and
 # nobody can post it by hand either
 # OUT of the worktree: the next round removes and recreates that, so
@@ -271,66 +271,74 @@ assert_ok "test -s '${unsent8[0]}'" \
   "what the worker wrote is kept where the next round will not delete it"
 assert_contains "$out8" "state/unsent/T-Z" "and the run says where"
 assert_contains "$(jq -r 'select(.type=="worker_crashed")|.summary.en // .en' \
-  < "$r8/state/events.jsonl" | tail -1)" "first round" "and the log says which of the three it was"
+  < "$r8/state/events.jsonl" | tail -1)" "before there was a pull request" \
+  "and the log says which of the two it was"
 rm -rf "$d8"
 
-# the third cause, which the two branches above could not tell apart: a
-# LATER round whose lookup came back empty. `gh` swallowed its errors,
-# so an unreachable one looked exactly like a new branch - and the run
-# said "this branch is new" about a branch with commits on it.
+# A later round whose lookup could not answer. "No pull request" and
+# "gh did not answer" used to be the same empty string, and they are
+# opposite instructions: the first means open one, the second means the
+# prompt would carry no review and the push would collide with a pull
+# request nobody looked for. So the run stops BEFORE the engine - which
+# is what this asserts, rather than that it printed a warning.
 d10="$(fixture)"; r10="$d10/repo"; GH10="$(ghstub "$d10")"
+# the counter is OUTSIDE the worktree, because the worktree is recreated
+# from the branch each round - a file the first round committed is back
+# on disk before the second one starts, so it cannot say whether the
+# engine ran
+runs="$d10/engine-runs"
 cat > "$r10/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
-if [ -f "$3/src/round-one" ]; then
-  printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md"
-else
-  mkdir -p "$3/src"; printf 'the first round\n' > "$3/src/round-one"
-fi
+echo ran >> "${FM_RUNS:?}"
+mkdir -p "$3/src"
+printf '%s\n' "$RANDOM$$" > "$3/src/work"
 M
 chmod +x "$r10/bin/adapters/mock.sh"
-( cd "$r10" && FM_ROOT="$r10" FM_GH="$GH10" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
-b10="$(cd "$r10" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1)"
-assert_ok "cd '$r10' && git cat-file -e '$b10:src/round-one'" "the first round committed something"
+( cd "$r10" && FM_ROOT="$r10" FM_GH="$GH10" FM_RUNS="$runs" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+assert_eq "1" "$(grep -c . "$runs" 2>/dev/null || true)" "the first round ran the engine once"
 # a gh that cannot answer, which is what a rate limit or an outage is
-printf '#!/usr/bin/env bash\nexit 1\n' > "$d10/stub/gh"; chmod +x "$d10/stub/gh"
-out10="$(cd "$r10" && FM_ROOT="$r10" FM_GH="$GH10" bin/fm-worker.sh --task T-Z 2>&1)"; rc10=$?
-assert_eq "73" "$rc10" "a later round that cannot find its pull request fails too"
-assert_contains "$out10" "exists but no open pull request was found" \
-  "and does not call a branch with commits on it new"
-assert_contains "$out10" "gh that did not answer" "naming the cause it could not rule out"
+printf '#!/usr/bin/env bash\necho "HTTP 503" >&2\nexit 1\n' > "$d10/stub/gh"
+chmod +x "$d10/stub/gh"
+out10="$(cd "$r10" && FM_ROOT="$r10" FM_GH="$GH10" FM_RUNS="$runs" bin/fm-worker.sh --task T-Z 2>&1)"; rc10=$?
+assert_eq "74" "$rc10" "a later round whose lookup cannot answer stops"
+# what it DID, not what it said
+assert_eq "1" "$(grep -c . "$runs" 2>/dev/null || true)" \
+  "and stops before the engine, rather than running blind"
+assert_fail "test -e '$r10/state/worktrees/T-Z/.fm-prompt.md'" "the prompt was never built"
+assert_contains "$out10" "could not ask which pull request" "it says what it could not do"
+assert_contains "$out10" "HTTP 503" "and passes on what gh said, instead of swallowing it"
+rm -rf "$d10"
 
-# And that keeping it does not leave a stale signal behind: the
-# worktree is removed and recreated from the branch on every round, so
-# `[ -s .fm-say.md ]` can only ever be this round's question. If it
-# were not - if the file were kept where it was written - the next
-# round would read it, report itself an asking round whatever the
-# engine did, and never commit the work.
-cat > "$r10/bin/adapters/mock.sh" <<'M'
+# and the other half of the same status, which must NOT stop: a lookup
+# that succeeded and said there is none. A round that pushed and then
+# died before opening a pull request leaves exactly that, and the right
+# thing is to carry on and open one.
+d13="$(fixture)"; r13="$d13/repo"; GH13="$(ghstub "$d13")"
+cat > "$r13/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
-mkdir -p "$3/src"; printf 'the round after the failure\n' > "$3/src/round-three"
+mkdir -p "$3/src"
+printf '%s\n' "$RANDOM$$" > "$3/src/work"
 M
-chmod +x "$r10/bin/adapters/mock.sh"
-assert_ok "test -s '$r10/state/worktrees/T-Z/.fm-say.md'" \
-  "the failed round's question is still in the worktree it was written in"
-cat > "$d10/stub/gh" <<'G'
+chmod +x "$r13/bin/adapters/mock.sh"
+( cd "$r13" && FM_ROOT="$r13" FM_GH="$GH13" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+# a gh that answers, and answers "none"
+cat > "$d13/stub/gh" <<'G'
 #!/usr/bin/env bash
 echo "gh $*" >> "$(dirname "$0")/../ghcalls"
-case " $* " in *" pr list "*) echo 31; exit 0 ;; esac
-exit 0
+case " $* " in
+  *" pr list "*) exit 0 ;;
+  *" pr view "*|*" pr checks "*) exit 0 ;;
+esac
+echo "https://example.invalid/pull/61"
 G
-chmod +x "$d10/stub/gh"; : > "$d10/ghcalls"
-out11="$(cd "$r10" && FM_ROOT="$r10" FM_GH="$GH10" bin/fm-worker.sh --task T-Z 2>&1)"
-# the phrase is one the script does emit - asserted on out9 above, on a
-# round that really did ask - so its absence here is evidence
-assert_lacks "$out11" "asked rather than changed" \
-  "a question left by an earlier round is not this round's question"
-assert_ok "cd '$r10' && git cat-file -e '$b10:src/round-three'" \
-  "and the work this round did is committed, not thrown away"
-assert_fail "test -e '$r10/state/worktrees/T-Z/.fm-say.md'" \
-  "the recreated worktree does not carry it"
-rm -rf "$d10"
+chmod +x "$d13/stub/gh"; : > "$d13/ghcalls"
+out14="$(cd "$r13" && FM_ROOT="$r13" FM_GH="$GH13" bin/fm-worker.sh --task T-Z 2>&1)"; rc14=$?
+assert_eq "0" "$rc14" "a lookup that answers \"none\" is not a failure"
+assert_contains "$out14" "will open one" "and the run says it is opening one"
+assert_contains "$(cat "$d13/ghcalls")" "pr create" "and it does"
+rm -rf "$d13"
 
 # and if it cannot be kept either, the run says so rather than pointing
 # at a path inside the worktree as though it were safe - which is what

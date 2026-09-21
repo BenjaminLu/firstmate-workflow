@@ -147,12 +147,39 @@ fi || { echo "fm-worker: could not create the worktree" >&2; exit 70; }
 # Only on a later round: a branch that does not exist yet cannot have a
 # pull request, and a first round that called `gh` at all would break the
 # guarantee that an unavailable vendor touches nothing.
+#
+# The exit status is kept, and this is the whole point of the block.
+# `2>/dev/null` and an empty answer make "there is no pull request" and
+# "gh did not answer" the same string - and they are opposite
+# instructions. Empty-and-succeeded is a real state: a previous round
+# that pushed and then died at `pr create` leaves exactly that, and the
+# right thing is to carry on and open one. Empty-and-failed means the
+# prompt would be blind and the push would collide with a pull request
+# that is already there, so the run stops before it spends an engine
+# round finding that out.
 if [ "$round_two" = 1 ] && [ -z "$PR" ]; then
+  lookup_err="$(mktemp)"
   PR="$($GH pr list --head "$branch" --state open --json number --jq '.[0].number' \
-        2>/dev/null </dev/null | head -1)"
+        2>"$lookup_err" </dev/null | head -1)"; lookup_rc=$?
   case "$PR" in null) PR='' ;; esac
-  [ -z "$PR" ] || echo "fm-worker: $branch already has #$PR; this round answers it" >&2
-  [ -n "$PR" ] || echo "fm-worker: no open pull request found for $branch" >&2
+  if [ "$lookup_rc" != 0 ]; then
+    echo "fm-worker: could not ask which pull request $branch has" >&2
+    sed 's/^/fm-worker: gh: /' "$lookup_err" >&2
+    echo "fm-worker: a later round cannot run without it - the prompt would carry no review" >&2
+    echo "fm-worker: and the push would collide with a pull request nobody looked for" >&2
+    rm -f "$lookup_err"
+    emit --type worker_crashed --en "could not ask which pull request $branch has" \
+         --tw "問不到 ${branch} 的 PR"
+    exit 74
+  fi
+  rm -f "$lookup_err"
+  if [ -n "$PR" ]; then
+    echo "fm-worker: $branch already has #$PR; this round answers it" >&2
+  else
+    # succeeded and said none: the branch was pushed by a round that did
+    # not get as far as opening one, and this round opens it
+    echo "fm-worker: $branch has no open pull request; this round will open one" >&2
+  fi
 fi
 
 # --- the prompt: the task, the design that bears on it, and the skill ----
@@ -271,23 +298,18 @@ if [ "$asked" = 1 ] && [ "$spoke" = 0 ]; then
     echo "fm-worker: and it could not be kept either - ${kept#"$REPO"/} is not writable" >&2
     echo "fm-worker: the text is in $say until the next round recreates that worktree" >&2
   fi
-  # Three causes, and each message names the one that was checked. The
-  # first version had two branches and the second one said "the branch
-  # is new" on the strength of `[ -z "$PR" ]` - which is also what an
-  # unreachable gh looks like, since the lookup swallows its errors.
+  # Two causes, because there are two. The middle one - "or a gh that
+  # did not answer" - is gone: the lookup keeps its exit status now and
+  # stops the run before this point, so an empty $PR here means the
+  # question was asked and the answer was none.
   if [ -n "$PR" ]; then
     echo "fm-worker: #$PR would not take the comment" >&2
     emit --type worker_crashed --pr "$PR" --en "the worker's question could not be posted to #$PR" \
          --tw "工人的提問貼不上 #$PR"
-  elif [ "$round_two" = 1 ]; then
-    echo "fm-worker: $branch exists but no open pull request was found for it" >&2
-    echo "fm-worker: that is either a branch with no pull request, or a gh that did not answer" >&2
-    emit --type worker_crashed --en "no pull request was found for $branch" \
-         --tw "找不到 ${branch} 的 PR"
   else
-    echo "fm-worker: $branch is new - this is a first round, and there is nothing to say it on yet" >&2
-    emit --type worker_crashed --en "the worker asked on a first round" \
-         --tw "工人在第一輪就提問"
+    echo "fm-worker: $branch has no pull request to say it on - asking is premature" >&2
+    emit --type worker_crashed --en "the worker asked before there was a pull request" \
+         --tw "工人在還沒有 PR 的時候提問"
   fi
   exit 73
 fi
@@ -325,8 +347,13 @@ git -C "$tree" push -q -u origin "$branch" 2>/dev/null || {
 # passed; asking again here would be a second answer to one question,
 # and the two could disagree - a pull request opened while the engine
 # was running would be posted to by one half of this script and not the
-# other. There is no second lookup: if $PR is empty, this is a first
-# round, the branch is new, and a pull request is created below.
+# other. There is no second lookup, and there does not need to be: an
+# empty $PR here means either a first round, or a later round whose
+# lookup succeeded and said there is none - a branch pushed by a round
+# that died before it opened one. Both want a pull request created
+# below. The third case, a lookup that could not answer, does not reach
+# here: it exits 74 above rather than pushing at a pull request nobody
+# looked for.
 num="$PR"
 if [ -z "$num" ] || [ "$num" = "null" ]; then
   url="$($GH pr create --head "$branch" --base "$BASE" \

@@ -294,6 +294,16 @@ finding its own is the only path there can be, and
 `tests/dispatch.test.sh` asserts that rather than the design asserting
 it.
 
+The lookup keeps GitHub's exit status, because *no open pull request*
+and *`gh` did not answer* are the same empty string and opposite
+instructions. Answered-and-none is an ordinary state — a round that
+pushed and then died before opening one leaves exactly that — and the
+round carries on and opens it. Could-not-answer stops the run at `74`,
+before the engine: the prompt would carry no review, and the push would
+collide with a pull request nobody looked for. Both halves are in
+`tests/worker.test.sh`, one asserting that the engine did not run and
+one that it did.
+
 Asking is the whole of a round that begins with a question, so a
 question that could not be posted is a failed run — exit `73`, a
 `worker_crashed` carrying the pull request number, and the text copied
@@ -319,8 +329,9 @@ event the round writes is the one the worker writes — there is no
 second `worker_crashed` from a caller noticing the code. The codes a
 worker can exit with are `1` a failed attempt, `2` no vendor was
 available, `64` it was called wrong, `70` no worktree or no library,
-`71` the push failed, `72` no pull request number came back, and `73`
-the worker had something to say and there was nowhere to put it.
+`71` the push failed, `72` no pull request number came back, `73` the
+worker had something to say and there was nowhere to put it, and `74`
+GitHub could not say which pull request the branch has.
 
 ### 5.4 The pull request protocol
 
