@@ -63,4 +63,29 @@ printf '| T-404 | a task |\n' >> "$lintdir/design/design.md"
 assert_ok "FM_ROOT='$lintdir' bash '$lintdir/bin/ci.sh'" "and passes once the design lists it"
 rm -rf "$lintdir"
 rm -rf "$d" "$d2" "$d3"
+
+# A task whose pull request is open is being worked on, whoever started
+# it. Without this the dispatcher starts a second worker on a branch a
+# reviewer has already signed - which is what happened the first time the
+# dispatcher ran after a task had been started by hand.
+p="$(mktemp -d)"; mkdir -p "$p/bin" "$p/design" "$p/state"
+cp "$ROOT/bin/fm-dispatch.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$p/bin/"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$p/bin/fm-worker.sh"; chmod +x "$p/bin/fm-worker.sh"
+printf 'vendor: mock\nconcurrency: 3\n' > "$p/config.yaml"
+printf '{"tasks":[{"id":"T-001","title":"a","depends_on":[]},{"id":"T-002","title":"b","depends_on":[]}]}\n' \
+  > "$p/design/tasks.json"
+FM_ROOT="$p" "$p/bin/fm-emit.sh" --actor captain --type greenlit --en go --tw 開工 >/dev/null
+# T-001 has a pull request open and no dispatched event: started by hand
+FM_ROOT="$p" "$p/bin/fm-emit.sh" --actor worker-1 --task T-001 --type pr_opened --pr 5 \
+  --en "opened #5" --tw "已開 #5" >/dev/null
+out="$(cd "$p" && FM_ROOT="$p" bin/fm-dispatch.sh --repo "$p" 2>&1)"
+assert_lacks "$out" "T-001" "a task with an open pull request is not dispatched again"
+assert_contains "$out" "T-002" "and the one that is free still starts"
+# once it is merged it is done, not free
+FM_ROOT="$p" "$p/bin/fm-emit.sh" --actor captain --task T-001 --type merged --pr 5 \
+  --en "merged" --tw "已合併" >/dev/null
+out="$(cd "$p" && FM_ROOT="$p" bin/fm-dispatch.sh --repo "$p" 2>&1)"
+assert_lacks "$out" "T-001" "and a merged task is not dispatched either"
+rm -rf "$p"
+
 finish
