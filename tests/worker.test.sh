@@ -101,7 +101,11 @@ echo "gh $*" >> "$(dirname "$0")/../ghcalls"
 case " $* " in
   *" pr list "*) echo 9; exit 0 ;;
   *" pr checks "*) echo "https://example.invalid/actions/runs/777/job/1"; exit 0 ;;
-  *" run view "*) printf 'ci\tbin/ci.sh\tTHE RUNNER SAID: a title with markup is not escaped\n'; exit 0 ;;
+  # gh refuses an id it does not recognise, and the link carries a job
+  # path after the run - so a stub that answers any argument is a stub
+  # that cannot see a run id read out of the link wrongly
+  *" run view 777 "*) printf 'ci\tbin/ci.sh\tTHE RUNNER SAID: a title with markup is not escaped\n'; exit 0 ;;
+  *" run view "*) echo "could not find any workflow run" >&2; exit 1 ;;
   *" pr view "*" comments "*)
     jq -cn '{author:{login:"reviewer-1"},body:"REVIEWER SAID: fix the helper"}' \
       | jq -r '"## " + .author.login + "\n\n" + .body + "\n"' ;;
@@ -166,7 +170,8 @@ echo "gh $*" >> "$(dirname "$0")/../ghcalls"
 case " $* " in
   *" pr list "*) echo 31; exit 0 ;;
   *" pr checks "*) echo "https://example.invalid/actions/runs/9/job/1"; exit 0 ;;
-  *" run view "*) printf 'ci\tbin/ci.sh\tTHE RUNNER SAID: the gate is red\n'; exit 0 ;;
+  *" run view 9 "*) printf 'ci\tbin/ci.sh\tTHE RUNNER SAID: the gate is red\n'; exit 0 ;;
+  *" run view "*) echo "could not find any workflow run" >&2; exit 1 ;;
   *" pr view "*" comments "*) printf '## reviewer-1\n\nREVIEWER SAID: answer this\n' ;;
 esac
 exit 0
@@ -179,7 +184,13 @@ assert_contains "$out9" "already has #31" "the worker found the pull request its
 assert_contains "$out9" "its question is on #31" "and says which one it spoke on, with a number after the hash"
 # the question exists only if BOTH halves reached the prompt: the
 # adapter exits 1 without either, so this assertion is the conjunction
-assert_contains "$(cat "$d9/ghcalls")" "run view" "and the prompt carried the failing check as well as the review"
+# the CONTENT, not that gh was called: `gh run view` being in the calls
+# is true of a run id read out of the link wrongly, which is how the
+# worker came to be handed an empty block and spend a round asking
+# about it. The adapter exits 1 unless it sees THE RUNNER SAID, so the
+# question existing is the assertion.
+assert_contains "$(cat "$d9/ghcalls")" "run view 9 " \
+  "and asked for the RUN, not the run plus the job path out of the link"
 # "there is no second lookup" - once per run, not once per site: the
 # post-push branch reuses what this found, and two answers to one
 # question can disagree when a pull request is opened while the engine
@@ -358,6 +369,47 @@ assert_eq "1" "$(grep -c 'pr list' "$d13/ghcalls" || true)" \
 assert_lacks "$out14" "#null" "and never carries gh's four characters through as a number"
 assert_contains "$(cat "$d13/ghcalls")" "pr create" "and it does open one"
 rm -rf "$d13"
+
+# A log that cannot be fetched must SAY so. An empty block reads to the
+# worker exactly like a green run - it cannot run gh, so that block is
+# its only view of the runner - and a round was spent asking why the
+# check was red when the block was simply blank.
+d16="$(fixture)"; r16="$d16/repo"; GH16="$(ghstub "$d16")"
+cat > "$r16/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+cp "$2" "${FM_CAPTURE:?}" 2>/dev/null
+mkdir -p "$3/src"
+if [ -f "$3/src/round-one" ]; then printf 'two
+' > "$3/src/round-two"
+else printf 'one
+' > "$3/src/round-one"; fi
+M
+chmod +x "$r16/bin/adapters/mock.sh"
+( cd "$r16" && FM_ROOT="$r16" FM_GH="$GH16" FM_CAPTURE=/dev/null     bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+# a red check whose log gh will not hand over
+cat > "$d16/stub/gh" <<'G'
+#!/usr/bin/env bash
+case " $* " in
+  *" pr list "*) echo 21; exit 0 ;;
+  *" pr checks "*) echo "https://example.invalid/actions/runs/404/job/1"; exit 0 ;;
+  *" run view "*) echo "HTTP 404: Not Found" >&2; exit 1 ;;
+  *" pr view "*" comments "*) printf '## reviewer-1
+
+something
+' ;;
+esac
+exit 0
+G
+chmod +x "$d16/stub/gh"
+cap16="$d16/sent.md"
+( cd "$r16" && FM_ROOT="$r16" FM_GH="$GH16" FM_CAPTURE="$cap16"     bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+sent16="$(cat "$cap16" 2>/dev/null)"
+assert_contains "$sent16" "The required check is red" "the prompt still says the check is red"
+assert_contains "$sent16" "could not be fetched" "and says the log could not be fetched"
+assert_contains "$sent16" "404" "naming the run it asked for"
+assert_contains "$sent16" "gh: HTTP 404" "and passing on what gh said about it"
+rm -rf "$d16"
 
 # and if it cannot be kept either, the run says so rather than pointing
 # at a path inside the worktree as though it were safe - which is what

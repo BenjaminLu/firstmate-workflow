@@ -294,6 +294,16 @@ finding its own is the only path there can be, and
 `tests/dispatch.test.sh` asserts that rather than the design asserting
 it.
 
+What the worker is shown of a red check is the whole of its view of the
+runner — it does not run `gh`, by the adapter contract — so that block
+is never allowed to be empty. A check's link is
+`…/actions/runs/<run>/job/<job>`, and the run is the part before the
+job: reading the whole tail of it asked `gh run view` for something it
+refuses, its complaint went to `/dev/null`, and the worker was handed a
+blank block. A blank block reads as a green run, so the round was spent
+asking why the check was red. When the log cannot be fetched the block
+says so, names the run, and passes on what `gh` said.
+
 The lookup keeps GitHub's exit status, because *no open pull request*
 and *`gh` did not answer* are the same empty string and opposite
 instructions. Answered-and-none is an ordinary state — a round that
@@ -687,3 +697,4 @@ gates, and the dispatcher cannot dispatch itself.
 | T-029 | one exit code for a usage error, in every script | T-026 |
 | T-030 | the lints are blind to the files that carry them | T-026 |
 | T-031 | a second round the worker cannot see, and a question nobody hears | T-007 |
+| T-032 | the red check reaches the worker as an empty block | T-031 |

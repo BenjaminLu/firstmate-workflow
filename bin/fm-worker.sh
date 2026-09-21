@@ -251,10 +251,31 @@ say="$tree/.fm-say.md"
       failing="$($GH pr checks "$PR" --json state,link \
         --jq '.[]|select(.state!="SUCCESS" and .state!="PENDING")|.link' 2>/dev/null </dev/null | head -1)"
       if [ -n "$failing" ]; then
+        # A check's link is .../actions/runs/<run>/job/<job>. `${x##*/runs/}`
+        # leaves `<run>/job/<job>`, which is not a run id - `gh run view`
+        # refused it, its stderr went to /dev/null, and the worker was handed
+        # an empty block. An empty block is indistinguishable from a green
+        # run, so the round was spent asking why the check was red.
+        run_id="${failing##*/runs/}"; run_id="${run_id%%/*}"
         printf '\n---\n\n# The required check is red\n\n'
         printf 'It fails on the runner and may well pass on your machine.\n\n```\n'
-        $GH run view "${failing##*/runs/}" --log-failed 2>/dev/null </dev/null \
-          | tail -120 | sed 's/^[^\t]*\t[^\t]*\t//'
+        # fetched once: two calls can disagree, and the second would be
+        # the one the worker is shown while the first decided whether to
+        # show anything
+        log_err="$(scratch_new)" || log_err=''
+        [ -z "$log_err" ] || scratch_add "$log_err"
+        failed_log="$($GH run view "$run_id" --log-failed 2>"${log_err:-/dev/null}" </dev/null \
+                     | tail -120 | sed 's/^[^\t]*\t[^\t]*\t//')"
+        if [ -n "$failed_log" ]; then
+          printf '%s\n' "$failed_log"
+        else
+          # said, not left blank: the worker cannot run gh, so this block
+          # is its only view of the runner, and silence reads as "nothing
+          # was wrong" rather than "I could not fetch it"
+          printf 'The log for run %s could not be fetched.\n' "$run_id"
+          [ -z "$log_err" ] || sed 's/^/gh: /' "$log_err"
+          printf 'Ask for it on the pull request rather than guessing.\n'
+        fi
         printf '```\n'
       fi
     fi
