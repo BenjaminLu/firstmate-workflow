@@ -554,6 +554,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-013 | the decision API, including merge cards | T-008, T-009 |
 | T-014 | the board in a browser, and the gate that runs it | T-010, T-011, T-013 |
 | T-025 | the adapter verdict: a vendor that fails silently is not one that worked | T-003, T-006, T-024 |
+| T-026 | the option loop: a flag with no value must not spin for ever | T-017 |
 
 ### M2 — protocol and self-update
 
