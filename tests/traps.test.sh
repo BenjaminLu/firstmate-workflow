@@ -17,17 +17,20 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib.sh"
 
 # --- the pattern, behaviourally ------------------------------------------
+# The script signals ITSELF, so there is no race to lose: the first
+# version killed it after sleeping 0.2s and assumed a busy loop was
+# still running, which on a fast machine it is not - a non-deterministic
+# test of a perfectly deterministic language behaviour.
 probe() {   # probe <trap lines> -> what the script managed to write
   local traps="$1" d out
   d="$(mktemp -d)"; out="$d/log"
   { printf '#!/usr/bin/env bash\n'
     printf 'f() { echo END >> "%s"; }\n' "$out"
     printf '%s\n' "$traps"
-    printf 'for i in $(seq 1 400000); do :; done\n'     # busy, not in a child
+    printf 'kill -TERM $$\n'
     printf 'echo CARRIED-ON >> "%s"\n' "$out"
   } > "$d/s.sh"
-  bash "$d/s.sh" & local p=$!
-  sleep 0.2; kill -TERM "$p" 2>/dev/null; wait "$p" 2>/dev/null
+  bash "$d/s.sh" >/dev/null 2>&1
   tr '\n' ' ' < "$out"; rm -rf "$d"
 }
 

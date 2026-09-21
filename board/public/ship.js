@@ -126,8 +126,9 @@ const SHIP = (() => {
   // between the two halves and should be visible, not painted as a worker
   const ROLE = { firstmate: "fm", worker: "w", reviewer: "r" };   // no captain: see captain()
   function crewOf(s, T) {
-    const label = { firstmate: T("roleFirstmate"), worker: T("roleWorker"),
-                    reviewer: T("roleReviewer"), captain: T("roleCaptain") };
+    // only firstmate is named by its role; a worker or a reviewer is
+    // named by its own id, and the captain is not in this list at all
+    const label = { firstmate: T("roleFirstmate") };
     // the limit comes from the server with the list. No fallback: a
     // number here as well is the same number in two languages, and the
     // test for it would pass through the copy.

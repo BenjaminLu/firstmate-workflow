@@ -244,7 +244,11 @@ else
   # holding the pipe, and command substitution waits for that pipe to close
   tmp="$(mktemp)"
   for t in "${suites[@]}"; do
-    if bash "$t" > "$tmp" 2>&1; then
+    # LC_ALL=C because the check below reads the shell's own messages,
+    # and bash localises them: on a zh-TW shell it says 命令未找到 and an
+    # English grep matches nothing, which is green for a suite that
+    # never ran half its lines
+    if LC_ALL=C bash "$t" > "$tmp" 2>&1; then
       # A suite that calls something that does not exist prints to
       # stderr, carries on, and reaches finish green - which is how a
       # test file with two spliced lines reported the same as one

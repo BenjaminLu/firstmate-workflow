@@ -159,7 +159,7 @@
 .bub .pb i{display:block;height:100%;background:var(--accent)}
 .bub.st-working{--bubEdge:#2f5478} .bub.st-review{--bubEdge:#5a3f7d}
 .bub.st-gate{--bubEdge:#7c322b}
-.bub.st-merged,.bub.st-captain{--bubEdge:#2c5f49}
+.bub.st-captain{--bubEdge:#2c5f49}
 .bub.st-queued{--bubEdge:#26323d;opacity:.6}
 
 /* ahoy */
@@ -225,7 +225,7 @@
 .roster .jb{color:#8fa9bd;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .roster li.st-working{--av:#2f5478} .roster li.st-review{--av:#5a3f7d}
 .roster li.st-gate{--av:#7c322b}
-.roster li.st-merged,.roster li.st-captain{--av:#2c5f49}
+.roster li.st-captain{--av:#2c5f49}
 .roster li.st-queued{--av:#26323d;opacity:.62}
 .shipbar button{pointer-events:auto;font:650 10.5px var(--mono);color:#0f1621;cursor:pointer;
   background:linear-gradient(180deg,#f0c46a,#c9972f);border:0;border-radius:99px;padding:3px 11px}

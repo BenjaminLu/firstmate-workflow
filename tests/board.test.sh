@@ -206,8 +206,8 @@ FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-closed --task T-C --type dispatc
   --en "on T-C" --tw "在做 T-C" >/dev/null
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --task T-C --type closed \
   --en "abandoned" --tw "放棄" >/dev/null
-sc2="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
-assert_lacks "$(jq -r '.crew[].id' <<<"$sc2" | tr '\n' ' ')" "worker-closed" \
+sclosed="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_lacks "$(jq -r '.crew[].id' <<<"$sclosed" | tr '\n' ' ')" "worker-closed" \
   "a closed task sends its agent home too, not only a merged one"
 
 # A new event type has readers beyond this one. fm-dispatch keys on

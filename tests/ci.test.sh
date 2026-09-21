@@ -149,6 +149,8 @@ assert_contains "$out" "60s locally" "against the budget the design sets"
 # AND names the offender, because a stage that goes red without saying what
 # it found sends the reader back to the source.
 # Each plant below is the thing its stage exists to find, not something any
+
+
 # stage would trip over: a script that dispatches and lacks the redirect, a
 # hand-rolled swap, a second vendor loop, a second writer of the log, an id
 # missing from the design, a suite that returns non-zero. None of them is a
@@ -158,6 +160,18 @@ plant() {   # plant <label> <expected fragment> ; the fixture is built first
   out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
   assert_contains "$out" "$want" "$label"
 }
+
+# The gate decides green by reading what a suite said, because a suite
+# that calls something which does not exist prints to stderr, carries
+# on, and reaches finish green. That decision is the one production
+# change with no test, so here it is.
+{ printf '#!/usr/bin/env bash\n'
+  printf 'nosuch%s "x"\n' helper
+  printf 'exit 0\n'
+} > "$q/tests/silent.test.sh"
+plant "a suite that passes while something in it did not run is a failure" "did not run"
+plant "and the stage prints the line" "nosuchhelper"
+rm -f "$q/tests/silent.test.sh"
 
 # a script that dispatches without closing standard input
 # two, because the criterion says the gate names EVERY offender and a gate
