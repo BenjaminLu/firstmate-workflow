@@ -254,13 +254,23 @@ fi
 if [ "$asked" = 1 ] && [ "$spoke" = 0 ]; then
   # Out of the worktree, which is removed and recreated on the next
   # round: keeping the file where it was written is not keeping it, and
-  # the design said the text survives so a human can post it. This is
-  # the same place an interrupted run's work goes.
+  # the design says the text survives so a human can post it. Beside
+  # state/rescued/, where an interrupted run's files go, and under a
+  # name of its own because this is a message rather than work.
+  #
+  # No fallback to $say if the copy fails. The old one put the path
+  # back inside the worktree and printed it as though it were safe,
+  # which is the exact thing the sentence above says does not survive -
+  # a fallback that quietly undoes the fix it is a fallback for.
   kept="$REPO/state/unsent/$TASK-$(date -u +%Y%m%dT%H%M%SZ).md"
   mkdir -p "$(dirname "$kept")"
-  cp "$say" "$kept" 2>/dev/null || kept="$say"
   echo "fm-worker: the worker had something to say and there was nowhere to put it" >&2
-  echo "fm-worker: it is at ${kept#"$REPO"/}" >&2
+  if cp "$say" "$kept" 2>/dev/null; then
+    echo "fm-worker: it is at ${kept#"$REPO"/}" >&2
+  else
+    echo "fm-worker: and it could not be kept either - ${kept#"$REPO"/} is not writable" >&2
+    echo "fm-worker: the text is in $say until the next round recreates that worktree" >&2
+  fi
   # Three causes, and each message names the one that was checked. The
   # first version had two branches and the second one said "the branch
   # is new" on the strength of `[ -z "$PR" ]` - which is also what an

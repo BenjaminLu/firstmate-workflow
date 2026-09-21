@@ -79,11 +79,21 @@ FM_ROOT="$p" "$p/bin/fm-emit.sh" --actor captain --type greenlit --en go --tw �
 # the positive control first, or "it did not appear" is evidence about a
 # string rather than about a filter: before anything is said about it,
 # T-001 is a task this dispatcher would start
-# the same invocation the two assertions below use, not --dry-run: a
-# control read off a different output surface proves nothing about the
-# surface being searched
-out="$(cd "$p" && FM_ROOT="$p" bin/fm-dispatch.sh --repo "$p" 2>&1)"
-assert_contains "$out" "T-001" "a task with nothing said about it is dispatchable"
+# The control is a SEPARATE tree, because running the dispatcher for
+# real emits `dispatched` - so a control run against this fixture would
+# leave T-001 in flight and the two assertions below could no longer
+# tell "not restarted because its pull request is open" from "not
+# restarted because it is already started". Same invocation, same
+# output surface, no shared state.
+c="$(mktemp -d)"; mkdir -p "$c/bin" "$c/design" "$c/state"
+cp "$ROOT/bin/fm-dispatch.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$c/bin/"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$c/bin/fm-worker.sh"; chmod +x "$c/bin/fm-worker.sh"
+printf 'vendor: mock\nconcurrency: 3\n' > "$c/config.yaml"
+cp "$p/design/tasks.json" "$c/design/tasks.json"
+FM_ROOT="$c" "$c/bin/fm-emit.sh" --actor captain --type greenlit --en go --tw 開工 >/dev/null
+assert_contains "$(cd "$c" && FM_ROOT="$c" bin/fm-dispatch.sh --repo "$c" 2>&1)" "T-001" \
+  "the same tree without the pull request event does dispatch T-001"
+rm -rf "$c"
 # T-001 has a pull request open and no dispatched event: started by hand
 FM_ROOT="$p" "$p/bin/fm-emit.sh" --actor worker-1 --task T-001 --type pr_opened --pr 5 \
   --en "opened #5" --tw "已開 #5" >/dev/null

@@ -310,8 +310,17 @@ does. Nothing reads `worker_crashed` and acts on it, and a task whose
 pull request is open is not one the dispatcher restarts, so the round
 still ends with a reviewer waiting. What changes is that the run no
 longer says it went well: the failure is on the board, under the pull
-request it happened on, with the text still there to post by hand.
-Something that picks it up is its own task.
+request it happened on, with the text kept where the next round will
+not delete it. Something that picks it up is its own task.
+
+Nothing reads the worker's exit status either. `fm-dispatch` starts it
+with `&` and never waits, so `73` is read by a person, and the one
+event the round writes is the one the worker writes — there is no
+second `worker_crashed` from a caller noticing the code. The codes a
+worker can exit with are `1` a failed attempt, `2` no vendor was
+available, `64` it was called wrong, `70` no worktree or no library,
+`71` the push failed, `72` no pull request number came back, and `73`
+the worker had something to say and there was nowhere to put it.
 
 ### 5.4 The pull request protocol
 

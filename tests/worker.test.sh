@@ -180,6 +180,8 @@ assert_contains "$(cat "$d9/ghcalls")" "run view" "and the prompt carried the fa
 assert_contains "$(cat "$d9/ghcalls")" "pr comment 31" "the question reached that pull request"
 assert_eq "31" "$(jq -r 'select(.type=="ask_pass_criteria")|.pr' < "$r9/state/events.jsonl" | tail -1)" \
   "and the log records the number it spoke on"
+assert_contains "$out9" "asked rather than changed" \
+  "an asking round says so - which is the string the stale-signal test below asserts the ABSENCE of"
 assert_lacks "$(cat "$d9/ghcalls")" "pr create" "and it opened no second pull request"
 rm -rf "$d9"
 
@@ -231,11 +233,15 @@ assert_contains "$out7" "nowhere to put it" "and says what happened"
 assert_contains "$out7" "#9" "naming the pull request that would not take it"
 assert_eq "9" "$(jq -r 'select(.type=="worker_crashed")|.pr' < "$r7/state/events.jsonl" | tail -1)" \
   "and the event carries it, so the board can link the failed round to the pull request"
+# the FILE, not the length: with nullglob off bash leaves an unmatched
+# pattern in place, so the array has one element either way
 unsent7=("$r7"/state/unsent/T-Z-*.md)
-assert_eq "1" "${#unsent7[@]}" "and the question itself is kept, outside the worktree"
-assert_ok "test -s '${unsent7[0]}'" "with the text in it"
+assert_ok "test -s '${unsent7[0]}'" "and the question itself is kept, outside the worktree"
 assert_contains "$(jq -r .type < "$r7/state/events.jsonl" | tr '\n' ' ')" "worker_crashed" \
   "and the log carries it, so the board is not showing a round that went fine"
+# d9 above emits ask_pass_criteria on a round where the post succeeded,
+# so this absence is about the post failing and not about a type the
+# log never carries
 assert_lacks "$(jq -r .type < "$r7/state/events.jsonl" | tr '\n' ' ')" "ask_pass_criteria" \
   "and does not claim the worker spoke"
 rm -rf "$d7"
@@ -261,11 +267,12 @@ assert_contains "$out8" "is new - this is a first round" \
 # the file where it was written is gone as soon as anything runs again
 # - and the design says the text survives for a human to post
 unsent8=("$r8"/state/unsent/T-Z-*.md)
-assert_eq "1" "${#unsent8[@]}" \
+assert_ok "test -s '${unsent8[0]}'" \
   "what the worker wrote is kept where the next round will not delete it"
 assert_contains "$out8" "state/unsent/T-Z" "and the run says where"
 assert_contains "$(jq -r 'select(.type=="worker_crashed")|.summary.en // .en' \
   < "$r8/state/events.jsonl" | tail -1)" "first round" "and the log says which of the three it was"
+rm -rf "$d8"
 
 # the third cause, which the two branches above could not tell apart: a
 # LATER round whose lookup came back empty. `gh` swallowed its errors,
@@ -315,6 +322,8 @@ exit 0
 G
 chmod +x "$d10/stub/gh"; : > "$d10/ghcalls"
 out11="$(cd "$r10" && FM_ROOT="$r10" FM_GH="$GH10" bin/fm-worker.sh --task T-Z 2>&1)"
+# the phrase is one the script does emit - asserted on out9 above, on a
+# round that really did ask - so its absence here is evidence
 assert_lacks "$out11" "asked rather than changed" \
   "a question left by an earlier round is not this round's question"
 assert_ok "cd '$r10' && git cat-file -e '$b10:src/round-three'" \
@@ -322,7 +331,73 @@ assert_ok "cd '$r10' && git cat-file -e '$b10:src/round-three'" \
 assert_fail "test -e '$r10/state/worktrees/T-Z/.fm-say.md'" \
   "the recreated worktree does not carry it"
 rm -rf "$d10"
-rm -rf "$d8"
+
+# and if it cannot be kept either, the run says so rather than pointing
+# at a path inside the worktree as though it were safe - which is what
+# the fallback this replaces did
+d11="$(fixture)"; r11="$d11/repo"; GH11="$(ghstub "$d11")"
+cat > "$r11/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md"
+M
+chmod +x "$r11/bin/adapters/mock.sh"
+cat > "$d11/stub/gh" <<'G'
+#!/usr/bin/env bash
+case " $* " in *" pr comment "*) exit 1 ;; esac
+exit 0
+G
+chmod +x "$d11/stub/gh"
+mkdir -p "$r11/state/unsent"; chmod 500 "$r11/state/unsent"
+out12="$(cd "$r11" && FM_ROOT="$r11" FM_GH="$GH11" bin/fm-worker.sh --task T-Z --pr 9 2>&1)"; rc12=$?
+chmod 700 "$r11/state/unsent"
+assert_eq "73" "$rc12" "a question that can be neither posted nor kept still fails the run"
+assert_contains "$out12" "could not be kept either" "and says the keeping failed too"
+assert_lacks "$out12" "it is at state/unsent" "rather than naming a file it did not write"
+rm -rf "$d11"
+
+# round_two is decided from the local branch OR origin's, so a wiped
+# state/ or a second machine is still a later round - which is what
+# gates the lookup, and therefore whether a branch that already has a
+# pull request reaches `pr create`. The comment the old post-push
+# lookup carried said that was the failure it existed to prevent, so
+# the replacement has to be shown to cover it.
+d12="$(fixture)"; r12="$d12/repo"; GH12="$(ghstub "$d12")"
+cat > "$r12/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+mkdir -p "$3/src"
+if [ -f "$3/src/round-one" ]; then printf 'two\n' > "$3/src/round-two"
+else printf 'one\n' > "$3/src/round-one"; fi
+M
+chmod +x "$r12/bin/adapters/mock.sh"
+( cd "$r12" && FM_ROOT="$r12" FM_GH="$GH12" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+b12="$(cd "$r12" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1)"
+assert_ok "cd '$r12' && git cat-file -e '$b12:src/round-one'" "the first round pushed a branch"
+# the local trace is gone: the worktree, the branch, the whole of state/
+( cd "$r12" && git worktree remove --force "state/worktrees/T-Z" >/dev/null 2>&1; true )
+( cd "$r12" && git branch -D "$b12" >/dev/null 2>&1 )
+assert_fail "cd '$r12' && git show-ref --verify --quiet 'refs/heads/$b12'" \
+  "and nothing local remembers it"
+assert_ok "cd '$r12' && git ls-remote --exit-code --heads origin '$b12'" "but origin does"
+cat > "$d12/stub/gh" <<'G'
+#!/usr/bin/env bash
+echo "gh $*" >> "$(dirname "$0")/../ghcalls"
+case " $* " in
+  *" pr list "*) echo 55; exit 0 ;;
+  *" pr checks "*) exit 0 ;;
+  *" pr view "*" comments "*) printf '## reviewer-1\n\nnothing to add\n' ;;
+esac
+exit 0
+G
+chmod +x "$d12/stub/gh"; : > "$d12/ghcalls"
+out13="$(cd "$r12" && FM_ROOT="$r12" FM_GH="$GH12" bin/fm-worker.sh --task T-Z 2>&1)"
+assert_contains "$out13" "already has #55" "a branch only origin remembers is still a later round"
+assert_lacks "$(cat "$d12/ghcalls")" "pr create" \
+  "so it does not try to open a second pull request for it"
+assert_contains "$(jq -r 'select(.type=="commit_pushed")|.pr|tostring' \
+  < "$r12/state/events.jsonl" | tail -1)" "55" "and its push points at the one that is there"
+rm -rf "$d12"
 
 # A run that was interrupted leaves its files uncommitted in the worktree,
 # and the next dispatch used to delete them before anything could see
