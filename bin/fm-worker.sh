@@ -64,7 +64,16 @@ emit() { emit_once "$@" || true; }
 # run says so rather than passing in silence. Both go through one
 # definition of the command: two spellings of the same emit is how the
 # ending and the progress lines drift apart.
+# Every scratch file this script makes, removed on the way out -
+# including the ones a signal cuts short, which this script has traps
+# for. They were `mktemp`d and removed on the happy path only, and one
+# of them was made on every round whether or not it was needed.
+scratch=''
+scratch_add() { scratch="$scratch $1"; }
+clean_scratch() { [ -z "$scratch" ] || rm -f $scratch; }
+
 finished() {
+  clean_scratch
   local try=3
   while [ "$try" -gt 0 ]; do
     try=$(( try - 1 ))
@@ -163,7 +172,7 @@ if [ "$round_two" = 1 ] && [ -z "$PR" ]; then
   # answered-none the moment pipefail was not in force, which is the one
   # thing this block exists to prevent. `--jq '.[0].number'` yields a
   # single line anyway, so the pipe bought nothing.
-  lookup_err="$(mktemp)"
+  lookup_err="$(mktemp)"; scratch_add "$lookup_err"
   PR="$($GH pr list --head "$branch" --state open --json number --jq '.[0].number' \
         2>"$lookup_err" </dev/null)"; lookup_rc=$?
   # what gh actually prints for a branch with no open pull request is
@@ -176,12 +185,10 @@ if [ "$round_two" = 1 ] && [ -z "$PR" ]; then
     sed 's/^/fm-worker: gh: /' "$lookup_err" >&2
     echo "fm-worker: a later round cannot run without it - the prompt would carry no review" >&2
     echo "fm-worker: and the push would collide with a pull request nobody looked for" >&2
-    rm -f "$lookup_err"
     emit --type worker_crashed --en "could not ask which pull request $branch has" \
          --tw "問不到 ${branch} 的 PR"
     exit 74
   fi
-  rm -f "$lookup_err"
   if [ -n "$PR" ]; then
     echo "fm-worker: $branch already has #$PR; this round answers it" >&2
   else
@@ -274,8 +281,9 @@ spoke=0
 # hand, and "it was refused" without "why" sends them to the pull
 # request to find out - no permission, rate limited, locked, wrong
 # number. The run said where the text is and not what went wrong.
-say_err="$(mktemp)"
+say_err=''
 if [ "$asked" = 1 ] && [ -n "$PR" ]; then
+  say_err="$(mktemp)"; scratch_add "$say_err"
   if $GH pr comment "$PR" --body-file "$say" >/dev/null 2>"$say_err" </dev/null; then
     spoke=1
     emit --type ask_pass_criteria --pr "$PR" --en "the worker spoke on #$PR" \
@@ -322,7 +330,7 @@ if [ "$asked" = 1 ] && [ "$spoke" = 0 ]; then
   # question was asked and the answer was none.
   if [ -n "$PR" ]; then
     echo "fm-worker: #$PR would not take the comment" >&2
-    sed 's/^/fm-worker: gh: /' "$say_err" >&2
+    [ -z "$say_err" ] || sed 's/^/fm-worker: gh: /' "$say_err" >&2
     emit --type worker_crashed --pr "$PR" --en "the worker's question could not be posted to #$PR" \
          --tw "工人的提問貼不上 #$PR"
   else
@@ -330,10 +338,9 @@ if [ "$asked" = 1 ] && [ "$spoke" = 0 ]; then
     emit --type worker_crashed --en "the worker asked before there was a pull request" \
          --tw "工人在還沒有 PR 的時候提問"
   fi
-  rm -f "$say_err"
   exit 73
 fi
-rm -f "$say" "$say_err"
+rm -f "$say"
 
 # asking IS the work in a round that begins with a question, and the round
 # after it is the one that changes files

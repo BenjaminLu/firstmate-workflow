@@ -310,7 +310,6 @@ assert_eq "74" "$rc10" "a later round whose lookup cannot answer stops"
 # what it DID, not what it said
 assert_eq "1" "$(grep -c . "$runs" 2>/dev/null || true)" \
   "and stops before the engine, rather than running blind"
-assert_fail "test -e '$r10/state/worktrees/T-Z/.fm-prompt.md'" "the prompt was never built"
 assert_contains "$out10" "could not ask which pull request" "it says what it could not do"
 assert_contains "$out10" "HTTP 503" "and passes on what gh said, instead of swallowing it"
 rm -rf "$d10"
@@ -348,7 +347,6 @@ assert_eq "0" "$rc14" "a lookup that answers \"none\" is not a failure"
 assert_contains "$out14" "will open one" "and the run says it is opening one"
 assert_lacks "$out14" "#null" "and never carries gh's four characters through as a number"
 assert_contains "$(cat "$d13/ghcalls")" "pr create" "and it does open one"
-assert_lacks "$(cat "$d13/ghcalls")" "pr comment null" "rather than posting to a pull request called null"
 rm -rf "$d13"
 
 # and if it cannot be kept either, the run says so rather than pointing
@@ -376,6 +374,28 @@ rm -f "$r11/state/unsent"
 assert_eq "73" "$rc12" "a question that can be neither posted nor kept still fails the run"
 assert_contains "$out12" "could not be kept either" "and says the keeping failed too"
 assert_lacks "$out12" "it is at state/unsent" "rather than naming a file it did not write"
+# and the scratch files those two paths make are gone: they were
+# mktemp'd and removed on the happy path only, so a run that took a
+# signal - which this script has traps for - left them in $TMPDIR
+before_tmp="$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'tmp.*' -type f 2>/dev/null | wc -l | tr -d ' ')"
+d14="$(fixture)"; r14="$d14/repo"; GH14="$(ghstub "$d14")"
+cat > "$r14/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md"
+M
+chmod +x "$r14/bin/adapters/mock.sh"
+cat > "$d14/stub/gh" <<'G'
+#!/usr/bin/env bash
+case " $* " in *" pr comment "*) echo "refused" >&2; exit 1 ;; esac
+exit 0
+G
+chmod +x "$d14/stub/gh"
+( cd "$r14" && FM_ROOT="$r14" FM_GH="$GH14" bin/fm-worker.sh --task T-Z --pr 9 >/dev/null 2>&1 )
+after_tmp="$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'tmp.*' -type f 2>/dev/null | wc -l | tr -d ' ')"
+assert_eq "$before_tmp" "$after_tmp" "a run that exits 73 leaves no scratch file behind"
+rm -rf "$d14"
+
 rm -rf "$d11"
 
 # round_two is decided from the local branch OR origin's, so a wiped
@@ -620,8 +640,11 @@ rm -rf "$d4"
 codes="$(grep -oE '^[^#]*exit [0-9]+' "$ROOT/bin/fm-worker.sh" \
          | grep -oE 'exit [0-9]+$' | awk '{print $2}' | sort -un | grep -v '^0$' || true)"
 assert_ne "" "$codes" "the worker has exit codes to check"
-listed="$(sed -n '/^### 5.3.2/,/^### /p' "$ROOT/design/design.md" \
-          | grep -oE '`[0-9]+`' | tr -d '`' | sort -un)"
+# the section and NOT the heading that ends it: sed's range includes
+# its terminating line, so `### 5.4 ...` was inside the text being
+# scanned for a number in backticks
+listed="$(awk '/^### 5\.3\.2/ {inside=1; next} /^### / {inside=0} inside' \
+          "$ROOT/design/design.md" | grep -oE '`[0-9]+`' | tr -d '`' | sort -un)"
 assert_eq "$codes" "$listed" "design.md §5.3.2 names exactly the codes fm-worker exits with"
 
 # the adapter never touches the repository

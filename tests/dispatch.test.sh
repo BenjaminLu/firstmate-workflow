@@ -117,13 +117,35 @@ assert_lacks "$out" "T-001" "and a merged task is not dispatched either"
 rm -rf "$p"
 
 # §5.3.2 says nothing reads the worker's exit status, which is why one
-# failed round is one card on the board and not two. That is a claim
-# about this file, so this file carries it: the worker is started in
-# the background and never waited for.
-started_line="$(grep -n 'bin/fm-worker.sh' "$ROOT/bin/fm-dispatch.sh" | grep -v '^[0-9]*: *#')"
-assert_ne "" "$started_line" "the dispatcher starts the worker"
-assert_contains "$started_line" "&" "in the background"
-assert_eq "" "$(grep -vE '^[[:space:]]*#' "$ROOT/bin/fm-dispatch.sh" | grep -E '\bwait\b' || true)" \
-  "and never waits for it, so nothing here reads its exit status"
+# failed round is one card on the board and not two. Behaviour, not a
+# grep for `&` - which is also `2>&1` and `&&`, and would have been
+# satisfied by a line with the background operator deleted.
+#
+# A worker that takes its time: if the dispatcher waited, this would
+# take as long as the worker does.
+b="$(pr_tree)"
+cat > "$b/bin/fm-worker.sh" <<W
+#!/usr/bin/env bash
+sleep 5
+echo done >> "$b/worker-finished"
+W
+chmod +x "$b/bin/fm-worker.sh"
+t0=$(date +%s)
+FM_ROOT="$b" "$b/bin/fm-dispatch.sh" --repo "$b" >/dev/null 2>&1
+t1=$(date +%s)
+assert_ok "[ $(( t1 - t0 )) -lt 3 ]" "the dispatcher returns without waiting for the worker"
+assert_fail "test -e '$b/worker-finished'" "and the worker it started is still running"
+
+# and it does not read what the worker exits with: a worker that fails
+# immediately leaves the dispatcher's own status untouched, so a failed
+# round writes the one event the worker wrote and no second one
+e="$(pr_tree)"
+printf '#!/usr/bin/env bash\nexit 9\n' > "$e/bin/fm-worker.sh"; chmod +x "$e/bin/fm-worker.sh"
+FM_ROOT="$e" "$e/bin/fm-dispatch.sh" --repo "$e" >/dev/null 2>&1
+assert_eq "0" "$?" "a worker that fails does not fail the dispatcher"
+for _ in $(seq 1 20); do sleep 0.1; done
+assert_eq "0" "$(jq -r 'select(.type=="worker_crashed")|.type' "$e/state/events.jsonl" \
+  | grep -c . || true)" "and the dispatcher writes no event about it"
+rm -rf "$b" "$e"
 
 finish
