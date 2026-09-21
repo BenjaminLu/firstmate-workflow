@@ -294,6 +294,8 @@ for scenario in signed unsigned outage; do
   ( cd "$rr" && FM_ROOT="$rr" FM_GH="$GHr" bin/fm-review.sh --task T-Z --branch work >/dev/null 2>&1 )
   assert_eq "agent_finished" "$(jq -r .type < "$rr/state/events.jsonl" | tail -1)" \
     "a $scenario round says when it ended, last"
+  assert_eq "1" "$(jq -r 'select(.type=="agent_finished")|.type' "$rr/state/events.jsonl" | grep -c . || true)" \
+    "and exactly once"
   assert_matches "$(jq -r 'select(.type=="agent_finished")|.actor' < "$rr/state/events.jsonl")" \
     '^reviewer-[0-9]+$' "and under its own per-run name"
   rm -rf "$dr"

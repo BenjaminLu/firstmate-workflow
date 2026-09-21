@@ -35,6 +35,31 @@ NAME="${NAME:-worker-$$}"
 EMIT="$REPO/bin/fm-emit.sh"
 emit() { FM_ROOT="$REPO" "$EMIT" --data '{"role":"worker"}' --actor "$NAME" --task "$TASK" "$@" >/dev/null 2>&1 </dev/null || true; }
 
+# A run that ends has to say so, or "aboard" means "ever touched a task
+# that is not finished yet", the board draws every actor that has ever
+# run, and the ship's rate follows the history instead of what is
+# happening now.
+#
+# One EXIT trap does the emitting; the signal traps only exit. Naming a
+# signal alongside EXIT was worse than the bug it fixed: the handler ran
+# and then execution CONTINUED, so a killed run announced it had
+# finished and went on to commit, push and open a pull request - and
+# `kill` no longer worked on it, because a trapped TERM that does not
+# exit leaves only SIGKILL. The exit codes are the conventional
+# 128+signal, so a caller can still tell what happened.
+#
+# Armed here, the first point emit() works, and the same in fm-review.
+# What sits above it in each: the argument parsing, and in this script
+# the task-spec lookup (exit 65) and the worktree creation (exit 70).
+# None of those has emitted anything, so nothing has boarded and there
+# is nothing to send home - the trap would emit an agent_finished for a
+# run the board never saw start.
+finished() { emit --type agent_finished --en "run finished" --tw "這次執行結束"; }
+trap finished EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
 
 # The task spec comes from the branch under review, not from whatever is
 # checked out. A task defined on its own branch - which is how a new one
@@ -61,12 +86,6 @@ tree="$REPO/state/worktrees/$TASK"
 # by hand was otherwise never in flight as far as the log was concerned,
 # and the dispatcher would start a second one on top of it.
 #
-# A run that ends has to say so. Without it "aboard" means "ever touched
-# a task that is not finished yet", the board draws every actor that has
-# ever run, and the ship's rate follows the history instead of what is
-# happening now. On every exit path, including the ones that give up.
-finished() { emit --type agent_finished --en "run finished" --tw "這次執行結束"; }
-trap finished EXIT INT TERM HUP
 
 emit --type dispatched --en "picked up $TASK" --tw "接下 $TASK"
 

@@ -183,6 +183,16 @@ done
 assert_lacks "$(jq -r '.crew[].role' <<<"$sr2" | tr '\n' ' ')" "captain" \
   "the server does not put the captain in the crew"
 
+# The role is STATED, and the test has to be able to tell that from the
+# name fallback - so the actor is called something the fallback would get
+# wrong. Deleting the two data.role lines turns this red; before, every
+# fixture used a name the fallback happened to read correctly.
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor rev-9 --task T-A --type review_opened \
+  --data '{"role":"reviewer"}' --en "a reviewer by another name" --tw "換個名字的檢查官" >/dev/null
+sn="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "reviewer" "$(jq -r '.crew[]|select(.id=="rev-9")|.role' <<<"$sn")" \
+  "an actor named rev-9 is a reviewer because the run said so"
+
 # a log written before the role was stated: the fallback that reads the
 # actor's name is what every existing log looks like
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor reviewer-old --task T-A --type review_opened \

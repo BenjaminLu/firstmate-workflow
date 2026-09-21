@@ -73,8 +73,14 @@ assert_ne "" "$s" "the board still answers"
 assert_eq "3" "$(jq -r '.crew|length' <<<"$s")" "firstmate and both real workers are aboard"
 tasks="$(jq -r '.crew[]|select(.role=="worker")|.task' <<<"$s" | sort | tr '\n' ' ')"
 assert_eq "T-1 T-2 " "$tasks" "each real worker carries its own task"
-# and the role came off the event rather than off the name
+# "because the run said so" has to be distinguishable from "because the
+# name starts with worker-", and with a name like worker-1234 it is not.
+# So the claim is split: this is what the real worker WRITES, and
+# board.test.sh's rev-9 case is what the server does with a name the
+# fallback would read wrongly.
+assert_eq "worker" "$(jq -r 'select(.type=="dispatched")|.data.role' "$r/state/events.jsonl" | head -1)" \
+  "the real worker states its role in the event"
 assert_eq "worker worker " "$(jq -r '.crew[]|select(.id|startswith("worker-"))|.role' <<<"$s" | sort | tr '\n' ' ')" \
-  "and says it is a worker because the run said so"
+  "and both of them are workers on the board"
 rm -rf "$d"
 finish

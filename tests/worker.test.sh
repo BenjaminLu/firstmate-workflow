@@ -184,6 +184,8 @@ M
     "a $scenario run says when it ended"
   assert_eq "agent_finished" "$(jq -r .type < "$ra/state/events.jsonl" | tail -1)" \
     "and it is the last thing it says"
+  assert_eq "1" "$(jq -r 'select(.type=="agent_finished")|.type' "$ra/state/events.jsonl" | grep -c . || true)" \
+    "exactly once, not once per exit path"
   rm -rf "$da"
 done
 
@@ -216,8 +218,17 @@ for _ in $(seq 1 40); do
   [ "$(jq -r .type < "$rk/state/events.jsonl" 2>/dev/null | tail -1)" = "agent_finished" ] && break
   sleep 0.2
 done
-assert_eq "agent_finished" "$(jq -r .type < "$rk/state/events.jsonl" | tail -1)" \
-  "a run killed mid-flight still says it ended"
+# The position of a line in a log is not the behaviour. What matters is
+# that the run STOPPED - exactly one ending, and nothing after it - and
+# the first version of this asserted `tail -1` alone, which held whether
+# the run stopped or carried on to open a pull request.
+ends="$(jq -r 'select(.type=="agent_finished")|.type' "$rk/state/events.jsonl" | grep -c . || true)"
+assert_eq "1" "$ends" "a run killed mid-flight ends exactly once"
+after="$(jq -r .type "$rk/state/events.jsonl" | sed -n '/agent_finished/,$p' | tail -n +2)"
+assert_eq "" "$after" "and says nothing after it"
+assert_lacks "$(cat "$dk/ghcalls" 2>/dev/null)" "pr create" \
+  "a killed run does not go on to open a pull request"
+assert_fail "pgrep -f 'fm-worker.sh --task T-Z' >/dev/null" "and the process is gone"
 pkill -f "sleep 5" 2>/dev/null
 rm -rf "$dk"
 
