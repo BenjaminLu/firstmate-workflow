@@ -85,8 +85,8 @@ rm -f "$d/state/pending/D-12.json"
 # nothing assigned it is the most visible crewman, and an earlier version
 # drew it slumped and grey while its bubble said "dispatching"
 sq="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
-assert_eq "working" "$(jq -r '.crew[]|select(.id=="firstmate")|.state' <<<"$sq")" \
-  "green-lit and nothing assigned is working, not stopped"
+assert_eq "captain" "$(jq -r '.crew[]|select(.id=="firstmate")|.state' <<<"$sq")" \
+  "firstmate retains its recorded decision-request phase without task metadata"
 
 # firstmate is an agent too, and it does work of its own. Reporting it as
 # "dispatching" whatever it was actually doing was the board saying what

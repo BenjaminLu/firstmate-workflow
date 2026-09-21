@@ -47,7 +47,8 @@ on_exit() {
 trap on_exit EXIT
 
 decision() {  # decision <root> <id> <json>
-  printf '%s\n' "$3" > "$1/state/pending/$2.json"
+  # Explicit diagram-only fixture data; request validation is covered separately.
+  jq '. + {details:{en:{before:.title,after:"One read"},"zh-TW":{before:.title,after:"已合併閘門程式碼"}}}' <<<"$3" > "$1/state/pending/$2.json"
 }
 # the tag stream of a page: everything between < and >, with the document's
 # language normalised away. Two pages with the same tag stream differ only in
@@ -216,20 +217,20 @@ for f in "$en" "$tw" "$cnf"; do
 done
 
 enb="$(cat "$en")"; twb="$(cat "$tw")"; cnb="$(cat "$cnf")"
-assert_contains "$enb" "branch has commits"  "the English page takes its words from ui.en.json"
-assert_contains "$twb" "分支有 commit"        "the zh-TW page takes its words from ui.zh-TW.json"
-assert_lacks    "$enb" "分支有 commit"        "and neither page carries the other's"
+assert_contains "$enb" "Before"  "the English diagram labels come from ui.en.json"
+assert_contains "$twb" "變更前" "the zh-TW diagram labels come from ui.zh-TW.json"
+assert_lacks "$enb" "變更前" "labels follow the selected language"
 assert_contains "$enb" 'lang="en"'            "the English page says so"
 assert_contains "$twb" 'lang="zh-TW"'         "the zh-TW page says so"
 assert_contains "$cnb" 'lang="zh-CN"'         "the zh-CN page says so"
-assert_contains "$enb" "#9"                   "the pull request is on the card"
-assert_contains "$enb" "T-004"                "so is the task"
+assert_lacks "$enb" '<h1>' 'diagram has no duplicate card title'
+assert_lacks "$enb" '<ol class="lanes">' 'diagram has no duplicate lane strip'
 
 # the seven gates, because this one is a merge
 for n in 1 2 3 4 5 6 7; do
-  assert_contains "$enb" "$(jq -r ".gate$n" "$ROOT/i18n/ui.en.json")" "gate $n is on the merge card"
+  assert_lacks "$enb" "$(jq -r ".gate$n" "$ROOT/i18n/ui.en.json")" "gate $n is not duplicated in the diagram"
 done
-assert_contains "$enb" "Merge into main" "a merge card offers the merge"
+assert_lacks "$enb" "Merge into main" "diagram does not duplicate action controls"
 
 # ------------------------------------------- zh-CN is the table, not a model
 assert_contains "$cnb" "闸门"   "zh-CN converts the vocabulary (閘門)"
@@ -253,7 +254,7 @@ printf 'class\tklass\n%s\t%s\n' "程式碼" "代码" > "$R2/i18n/tw2cn.tsv"
 decision "$R2" D-007 '{"id":"D-007","task":"T-004","kind":"merge","title":"合併 T-004 的程式碼","pr":9}'
 "$DG" --decision D-007 --repo "$R2" >/dev/null 2>&1
 cn2="$R2/board/public/diagrams/D-007.zh-CN.html"
-assert_contains "$(cat "$cn2")" 'class="answers"' "an ASCII table row does not rewrite an attribute"
+assert_contains "$(cat "$cn2")" 'class="change"' "an ASCII table row does not rewrite an attribute"
 assert_lacks    "$(cat "$cn2")" 'klass'           "nor any other markup"
 assert_contains "$(cat "$cn2")" "代码"            "while the text node it sits next to still converts"
 
@@ -400,7 +401,7 @@ assert_contains "$(cat "$R/board/public/diagrams/D-012.en.html")" "by-task" \
 decision "$R" D-013 '{"id":"D-013","task":"T-099","kind":"choice","title":"pick one"}'
 "$DG" --decision D-013 --repo "$R" >/dev/null 2>&1
 d13="$(cat "$R/board/public/diagrams/D-013.en.html" 2>/dev/null)"
-assert_contains "$d13" "Choose A" "a choice with no drawing still offers the choice"
+assert_contains "$d13" "before-after" "a choice without authored fragment uses its bespoke data"
 assert_lacks    "$d13" "$(jq -r .gate5 "$ROOT/i18n/ui.en.json")" "and carries no merge checklist"
 
 # ----------------------------------- a drawing authored unevenly is refused
@@ -650,11 +651,11 @@ done
 # the other half of that contract: a key the dictionary does not answer is
 # not a missing input, it is a visible hole with the key's name on it
 holey="$(newroot)"
-jq 'del(.laneQueued)' "$ROOT/i18n/ui.en.json" > "$holey/i18n/ui.en.json"
+jq 'del(.before)' "$ROOT/i18n/ui.en.json" > "$holey/i18n/ui.en.json"
 decision "$holey" D-042 '{"id":"D-042","task":"T-004","kind":"choice","title":"pick one"}'
 "$DG" --decision D-042 --repo "$holey" >/dev/null 2>&1
 assert_eq "0" "$?" "a dictionary with one key missing still renders"
-assert_contains "$(cat "$holey/board/public/diagrams/D-042.en.html" 2>/dev/null)" "laneQueued" \
+assert_contains "$(cat "$holey/board/public/diagrams/D-042.en.html" 2>/dev/null)" "<b>before</b>" \
   "and the key itself shows through, which is the bug report"
 
 # the other side of that line. A key the dictionary answers with the empty
@@ -664,11 +665,11 @@ assert_contains "$(cat "$holey/board/public/diagrams/D-042.en.html" 2>/dev/null)
 # under `-n "${!n-}"`, and only one of them is a bug worth reporting on the
 # page.
 blank="$(newroot)"
-jq '.laneQueued = ""' "$ROOT/i18n/ui.en.json" > "$blank/i18n/ui.en.json"
+jq '.before = ""' "$ROOT/i18n/ui.en.json" > "$blank/i18n/ui.en.json"
 decision "$blank" D-044 '{"id":"D-044","task":"T-004","kind":"choice","title":"pick one"}'
 "$DG" --decision D-044 --repo "$blank" >/dev/null 2>&1
 assert_eq "0" "$?" "a dictionary with one value deliberately blank still renders"
-assert_lacks "$(cat "$blank/board/public/diagrams/D-044.en.html" 2>/dev/null)" "laneQueued" \
+assert_lacks "$(cat "$blank/board/public/diagrams/D-044.en.html" 2>/dev/null)" "<b>before</b>" \
   "and an empty value renders empty, not as the name of the key that holds it"
 
 # --repo at a tree with no bin/ in it. The ruling used to be read out of

@@ -15,15 +15,26 @@ fixture() {
   cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-decide.sh" "$ROOT/bin/fm-diagram.sh" "$d/bin/"
   cp "$ROOT/i18n/ui.en.json" "$ROOT/i18n/ui.zh-TW.json" "$ROOT/i18n/tw2cn.tsv" "$d/i18n/"
   [ -f "$ROOT/bin/watch-decisions.ts" ] && cp "$ROOT/bin/watch-decisions.ts" "$d/bin/"
+  jq -n '{en:{title:"Cache index",explanation:"Read once",before:"Repeated reads",after:"One read",outcome:"Choice recorded",options:{A:{description:"Cache",pros:"Fast",cons:"Memory"},B:{description:"Read",pros:"Simple",cons:"Slow"},C:{description:"Wait",pros:"Measure",cons:"Delay"}}},"zh-TW":{title:"快取索引",explanation:"讀取一次",before:"重複讀取",after:"讀取一次",outcome:"已記錄選擇",options:{A:{description:"快取",pros:"快速",cons:"記憶體"},B:{description:"讀取",pros:"簡單",cons:"較慢"},C:{description:"等待",pros:"測量",cons:"延後"}}}}' > "$d/details.json"
   printf '%s' "$d"
 }
 elapsed() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo $(( e - s )); }
 
 d="$(fixture)"
-out="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --request D-1 --task T-1 --kind merge --title "merge it?" --pr 9)"
+bad="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --request D-99 --task T-1 --title 'missing' 2>&1)"
+assert_eq "64" "$?" "title-only new requests fail"
+assert_contains "$bad" '--details requires complete authored' 'missing details have actionable feedback'
+assert_fail "test -f '$d/state/pending/D-99.json'" "missing authored input creates no card"
+jq 'del(."zh-TW".options.B.cons)' "$d/details.json" > "$d/invalid.json"
+assert_fail "FM_ROOT='$d' '$d/bin/fm-decide.sh' --request D-98 --task T-1 --details '$d/invalid.json'" "incomplete localized tradeoffs fail"
+assert_fail "test -f '$d/state/pending/D-98.json'" "invalid payload creates no partial card"
+out="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --request D-1 --task T-1 --kind merge --details "$d/details.json" --pr 9)"
 assert_ok "test -f '$out'" "a request writes a pending file"
 assert_eq "merge" "$(jq -r .kind "$out")" "it records the kind"
 assert_eq "9" "$(jq -r .pr "$out")" "it records the pull request"
+original="$(cat "$out")"
+assert_fail "FM_ROOT='$d' '$d/bin/fm-decide.sh' --request D-1 --task T-1 --details '$d/invalid.json'" "invalid replacement is rejected"
+assert_eq "$original" "$(cat "$out")" "rejection preserves the existing decision"
 assert_contains "$(jq -r .type < "$d/state/events.jsonl")" "decision_requested" "it emits decision_requested"
 
 # ------------------------------------------- requesting a decision draws it
@@ -38,15 +49,15 @@ assert_contains "$(jq -r .type < "$d/state/events.jsonl")" "decision_requested" 
 for l in en zh-TW zh-CN; do
   assert_ok "test -s '$d/board/public/diagrams/D-1.$l.html'" "requesting D-1 drew its $l diagram"
 done
-assert_contains "$(cat "$d/board/public/diagrams/D-1.en.html")" "merge it?" \
+assert_contains "$(cat "$d/board/public/diagrams/D-1.en.html")" "Repeated reads" \
   "and the drawing is of this decision, not a blank frame"
-assert_contains "$(cat "$d/board/public/diagrams/D-1.zh-CN.html")" "闸门" \
+assert_contains "$(cat "$d/board/public/diagrams/D-1.zh-CN.html")" "读取" \
   "with the derived language derived, the same as any other decision"
 
 # --request answers with one thing, the pending file. The generator prints
 # the three paths it wrote; passing its stdout through would put them on the
 # same stream the caller reads that answer from.
-out4="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --request D-4 --task T-1 --title "another" 2>/dev/null)"
+out4="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --request D-4 --task T-1 --details "$d/details.json" 2>/dev/null)"
 assert_eq "$d/state/pending/D-4.json" "$out4" "the request still prints the pending file and nothing else"
 
 # A drawing that cannot be made must not take the decision with it: the
@@ -60,7 +71,7 @@ echo "fm-diagram: the table is on fire" >&2
 exit 73
 X
 chmod +x "$d5/bin/fm-diagram.sh"
-err5="$(FM_ROOT="$d5" "$d5/bin/fm-decide.sh" --request D-5 --task T-5 --title "still asked" 2>&1 >/dev/null)"
+err5="$(FM_ROOT="$d5" "$d5/bin/fm-decide.sh" --request D-5 --task T-5 --details "$d/details.json" 2>&1 >/dev/null)"
 rc5=$?
 assert_eq "0" "$rc5" "a generator that fails does not fail the decision request"
 assert_ok "test -f '$d5/state/pending/D-5.json'" "the decision is still pending"
@@ -79,7 +90,7 @@ assert_contains "$err5" "73"  "with the number the generator exited with"
 # own rather than a number the fixture chose.
 d8="$(fixture)"
 printf '%s' '{"laneQueued": ' > "$d8/i18n/ui.zh-TW.json"
-err8="$(FM_ROOT="$d8" "$d8/bin/fm-decide.sh" --request D-8 --task T-8 --title "asked anyway" 2>&1 >/dev/null)"
+err8="$(FM_ROOT="$d8" "$d8/bin/fm-decide.sh" --request D-8 --task T-8 --details "$d/details.json" 2>&1 >/dev/null)"
 assert_ok "test -f '$d8/state/pending/D-8.json'" "a real generator failure still leaves the decision pending"
 assert_contains "$err8" "D-8" "and is reported against the decision it was drawing"
 assert_contains "$err8" "66"  "with the generator's own number"
@@ -88,7 +99,7 @@ assert_eq "" "$(find "$d8/board/public" -name 'D-8.*' 2>/dev/null)" \
 
 # a tree with no generator in it is the same shape: recorded, and said
 d6="$(fixture)"; rm -f "$d6/bin/fm-diagram.sh"
-err6="$(FM_ROOT="$d6" "$d6/bin/fm-decide.sh" --request D-7 --task T-7 --title "no generator here" 2>&1 >/dev/null)"
+err6="$(FM_ROOT="$d6" "$d6/bin/fm-decide.sh" --request D-7 --task T-7 --details "$d/details.json" 2>&1 >/dev/null)"
 assert_ok "test -f '$d6/state/pending/D-7.json'" "a tree with no generator still records the decision"
 assert_contains "$err6" "D-7" "and still says the diagram was not drawn"
 
@@ -97,7 +108,7 @@ mkdir -p "$d/state/decisions"
 printf '{"id":"D-1","task":"T-1","chosen":"A"}\n' > "$d/state/decisions/D-1.json"
 got="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --await D-1)"
 assert_eq "A" "$(jq -r .chosen <<<"$got")" "an answer already on disk is not missed"
-assert_contains "$(jq -r .type < "$d/state/events.jsonl" | tr '\n' ' ')" "decision_made" "it emits decision_made"
+assert_eq "0" "$(jq -s 'map(select(.type=="decision_made"))|length' "$d/state/events.jsonl")" "await never emits duplicate semantic events"
 assert_fail "test -f '$d/state/pending/D-1.json'" "answering clears the pending file"
 
 # the interesting case: blocked, then answered from outside

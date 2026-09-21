@@ -183,15 +183,39 @@ files touched and the pull request link, answered with merge, send back, or
 hold. **Every merge goes through a card.** firstmate may not merge on its own
 and may not ask for one in conversation.
 
-T-034 planned interaction restores selecting an option locally, then explicitly
-confirming it. A fourth custom choice carries the captain's own bounded text,
-stored as data under a distinct `chosen` value such as `custom`, not a note on
+Selecting an option is local; a separate CONFIRM submits it. A fourth custom
+choice carries the captain's own bounded text,
+stored as data under the distinct `chosen` value `custom`, not a note on
 option A. Nothing is selected initially; selecting or typing performs no write.
 Confirmation validates nonempty text and limits before storing the decision.
 Custom text is escaped for display, preserved through the watch/storage path,
 and never evaluated as shell input or treated as merge approval. The interface
-localizes its labels and validation, not the captain's authored words. This is
-T-034's planned contract; current production support is not implied.
+localizes its labels and validation, not the captain's authored words. The
+`text` field preserves literal whitespace, markup and Unicode, with a maximum
+of 1000 Unicode code points; empty/whitespace-only input, control characters
+other than tabs/newlines, and lone surrogates are rejected. Custom never calls
+the merge helper. A/B/C keep their existing meanings.
+
+New requests require `--details <file>` with this shared data contract:
+`{en: Locale, "zh-TW": Locale}`, where each Locale contains nonempty strings
+`title`, `explanation`, `before`, `after`, `outcome`, and `options.A/B/C`, each
+with `description`, `pros`, `cons`. Each string is bounded to 2000 code points.
+Firstmate authors both locales; the scripts do not infer them from task titles.
+The board escapes data as text, diagrams use the authored before/after labels,
+and zh-CN applies the same ordered TW-to-CN table as the UI. Invalid requests
+fail before a pending record is written; existing IDs cannot be replaced.
+Legacy scalar records remain readable with an explicit missing-details notice.
+Trusted repository diagram fragments are assets, never fields in this input.
+
+`fm-run.sh` consumes `state/decision-details/D-<task-number>.json` after gates
+pass. Missing or invalid authored input is reported as no card created. Only
+a successful request is announced as asking the captain.
+
+The board atomically publishes a response, invokes `fm-emit.sh` once with
+`decision_made` and `data.decision`, then handles any authorized A merge.
+Awaiters only observe the record; they do not emit a second event. Repeating
+the same response returns the stored outcome, while a conflicting response
+is rejected. Failed merges are recorded and never automatically retried.
 
 Await mode uses `bun run bin/watch-decisions.ts` (`fs.watch`) when bun and the
 watcher script are present, and a one-second poll otherwise. Wake latency must
@@ -533,9 +557,9 @@ Bun, native SSE, vanilla HTML, **no build step**.
 | Sea header | merged / in flight / awaiting you / blocked, and the engine chip — marked when the reviewer runs a different vendor |
 | The ship | a pirate vessel whose size tracks the crew, one mast to six |
 | Deck | crew stand on the ship, poses driven by state, handoffs fly between them |
-| Decision deck | the captain drawn at the left; the card to the right — options, before/after diagram, or the seven-gate checklist for a merge |
+| Decision deck | pending records first, with full localized options, diagrams and explicit confirmation |
 | Crew roster | opens when the deck is too crowded for the bubbles to carry the work |
-| Lanes | queued / working / gate / review / captain / merged |
+| Lanes | captain / gate / review / working / queued; merged and closed tasks in a separate initially collapsed history |
 | Live log | tri-lingual summaries from `events.jsonl` |
 
 ### The ship
@@ -599,17 +623,41 @@ rather than `transform`, so it composes with the pose animations instead of
 replacing them. **Shoes animate with their leg** — otherwise the leg turns
 while the shoe stays nailed to the deck and all you see is a bobbing body.
 
-**Each crewman carries a bubble above his head**: id, task, progress, percent,
+**Each crewman carries a bubble above his head**: identity and task, with full
+localized work and lifecycle phase in the accessible figure label and readable
+roster. Percentages are displayed only for explicit bounded progress data,
 with the border colour carrying state. A landing handoff pulses the recipient's
 bubble. Deck spacing must exceed body height plus bubble height or a bubble
 covers the crew on the deck above.
 
 ### The captain
 
-Drawn at the left of the decision deck on a lit stage — red coat, gold sash,
-tricorn and plume, eye patch, cutlass. Three poses: sheathed while nothing is
-chosen, half drawn once an option is picked, raised when the order goes out.
-Draggable like the rest of the crew.
+The human captain is always visible on the ship's top deck, including startup
+with zero pending decisions and after the final acknowledgement. There is one
+captain and no separate decision-side stage. He is excluded from agent counts.
+The shared deck coordinate system anchors his feet; firstmate and the helm
+remain at the original left/bow anchor, with the stern on the right. Three
+poses remain: sheathed without a choice, half drawn on local selection, raised
+on explicit confirmation and through recorded acknowledgement, then idle.
+He is draggable like the crew; orientation does not replace sword poses.
+
+Primary task, decision, tradeoff and event text is at least 16 CSS pixels;
+secondary labels are at least 13 pixels and decision titles at least 20 pixels.
+Choice and confirmation targets are at least 44 pixels high. Wrapped content
+and flexible columns support 320-pixel screens and enlarged text. Completed
+history uses a native keyboard-operable disclosure, with distinct merged and
+closed counts. Its open state survives refresh and locale changes; new merges
+do not open it. Pending decisions come from pending records, not task stages.
+
+Crew payloads add `activity: {en, "zh-TW"}`, `crew_name` and optional bounded
+`progress` without changing canonical actor IDs or roles. Replay retains each
+actor's dispatch/activity description and last applicable lifecycle phase
+across technical events, independently of the 40-event recent list. Localized
+task activity takes precedence when available; scalar titles are not guessed
+translations. Missing descriptions and unknown phases are explicitly labeled.
+Finished actors cannot reappear through late technical events; a new dispatch
+starts fresh activity. Producers lacking authored summaries need firstmate
+coordination with the owning task, not fabricated board descriptions.
 
 ### Ahoy
 
@@ -624,6 +672,26 @@ there are no audio files and no network. Mute lives in the header and persists;
 browsers require a gesture before the first sound. Honours
 `prefers-reduced-motion`.
 
+Order audio follows recorded acknowledgement, never selection or pending
+network traffic. It uses bell partials and a swept bosun whistle; merge audio
+uses a broadside followed by a bell. Optional browser speech uses only voices
+explicitly marked `localService=true`, preferring English and speaking the
+invariant cries. No remote voice, audio download or paid TTS is used. If local
+speech is unavailable, the board says so and retains cues and English text.
+One persisted mute stops Web Audio and clears the board's voice queue. An
+active owned utterance is cancelled only when no other utterance is queued;
+otherwise it is paused until unmute, because browsers lack per-utterance
+cancellation. The board never cancels an unrelated speech queue.
+
+The full outcome stream supplies stable decision IDs and merge identities
+(PR, or task/event fallback). Initial history is silent, new outcomes queue,
+and refreshes/reconnects cannot replay handled identities. The 3.2-second
+effect deadline survives ordinary state rendering; animation delays use elapsed
+time, crew data continues updating, and the captain persists with feedback
+after the last card disappears. Reduced motion keeps static acknowledgement
+and independently honors audio preference. Only confirmed `merged` events
+fire the merge salute; recording an order or a failed helper cannot do so.
+
 **One gun list** (`portList()`) drives the ports, the flash positions and the
 sound schedule: one gun, one flash, one report, the same `GUN_DELAY` apart. The
 bell waits until the last gun has spoken. **The shout stays in English in every
@@ -637,6 +705,18 @@ the ship.
 Drag a figure to turn it, drag the deck to turn the whole crew, double-click to
 reset. Every pose is a `.fig.s-<state>` class, so **e2e asserts classes rather
 than diffing screenshots**.
+
+The renderer patches existing figures, preserving pointer capture and rotation.
+Full event replay supplies directed `handoffs` with event identities: dispatch
+or recorded order from firstmate to a worker, PR/review handoff to a reviewer,
+approval to firstmate and rejection to the worker. Peer resolution requires
+one known active participant on the same task; ambiguous or missing recipients
+produce static unavailable feedback. Initial history is silent and duplicate
+snapshots do not replay cues. Travel uses current rendered anchors for 1.4
+seconds, then a receiving reaction and bubble pulse, with cleanup at 2.3 seconds.
+Reduced motion retains localized directed text. Handoffs emit no events, POSTs
+or success audio. Browser checks measure travel, endpoints and drag ownership,
+in addition to pose classes; source text alone does not establish behavior.
 
 **Hot reload:** a change under `board/public/**` pushes `reload` over SSE; a
 change to `board/server.ts` restarts under `bun --watch` and the client

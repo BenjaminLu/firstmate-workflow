@@ -34,7 +34,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # the scripts with an option loop, and how many value-taking flags each has
 PINNED="fm-cleanup 2
-fm-decide 8
+fm-decide 9
 fm-diagram 4
 fm-dispatch 2
 fm-emit 7
@@ -98,7 +98,7 @@ while read -r name want; do
     assert_contains "$said" "$name" "and so is the script"
   done <<< "$flags"
 done <<< "$PINNED"
-assert_eq "51" "$total" "every pinned flag was exercised"
+assert_eq "52" "$total" "every pinned flag was exercised"
 
 # A script that grows an option loop has to be pinned here too, and the
 # corpus is the one bin/ci.sh judges - literally, out of

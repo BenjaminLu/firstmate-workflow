@@ -146,7 +146,8 @@
 .fig.a-helm .armL,.fig.a-helm .armR{transform:rotate(-58deg)}
 .fig.a-lean .armL,.fig.a-lean .armR{transform:rotate(-96deg)}
 .fig.a-lean .legL,.fig.a-lean .legR,.fig.a-lean .shoeL,.fig.a-lean .shoeR{animation:none}
-.fig.cheer .armL,.fig.cheer .armR{transform:rotate(-150deg)!important}
+.scene .fig.cheer .armL,.scene .fig.cheer .armR{animation:crewArms 2.8s both;animation-delay:inherit}
+@keyframes crewArms{0%,100%{transform:rotate(0)}15%,65%{transform:rotate(-150deg)}}
 
 /* a bubble over every head, clear of the deck above */
 .bub{position:absolute;left:var(--px);transform:translateX(-50%);z-index:5;
@@ -183,6 +184,27 @@
   font:800 clamp(26px,4.4vw,46px)/1 var(--sans);letter-spacing:.14em;color:#ffe6a8;
   text-shadow:0 0 28px rgba(217,164,65,.7),0 5px 0 #6b4410}
 .ahoy.on{animation:ahoyIn 1.7s cubic-bezier(.2,1.5,.3,1)}
+.ahoy.active{opacity:1;top:40px;font-size:clamp(14px,2vw,22px);line-height:1.2;background:var(--bg)}
+.helm.orders{animation:orders 2s ease-in-out both}
+@keyframes orders{from{transform:translateX(-50%) rotate(0)}to{transform:translateX(-50%) rotate(720deg)}}
+.fig.cheer{animation:crewOrder 2.8s both}
+@keyframes crewOrder{0%{translate:0 0}15%,65%{translate:0 -8px}100%{translate:0 0}}
+.captain .fig.r-cap .tool{opacity:1;width:5px;height:25px;background:#e8eff7;border-bottom:5px solid var(--brass);transform:rotate(20deg)}
+.captain[data-pose="idle"] .armR{transform:rotate(10deg)}
+.captain[data-pose="idle"] .tool{background:#3b2617}
+.captain[data-pose="ready"] .armR{transform:rotate(-65deg)}
+.captain[data-pose="ready"] .tool{height:38px}
+.captain[data-pose="order"] .armR{transform:rotate(-155deg)!important}
+.captain[data-pose="order"] .tool{height:52px}
+.acts{flex-wrap:wrap}.acts .tradeoffs,.acts label{width:100%}
+.acts textarea{display:block;width:100%;min-height:80px}
+.acts [aria-pressed="true"]{outline:2px solid var(--brass)}
+.acts [hidden]{display:none}
+#orderFeedback{white-space:pre-wrap;overflow-wrap:anywhere}
+.change-fallback{display:flex;align-items:center;gap:16px}
+.change-fallback section{flex:1}
+.change-fallback[hidden]{display:none}
+@media(prefers-reduced-motion:reduce){.helm.orders,.fig.cheer{animation:none}.ahoy.active{opacity:1}}
 @keyframes ahoyIn{0%{opacity:0;transform:scale(.55)}16%{opacity:1;transform:scale(1.1)}
                   30%{transform:scale(1)}74%{opacity:1}100%{opacity:0;transform:translateY(-18px)}}
 .ahoy small{display:block;margin-top:7px;font:600 13px var(--mono);letter-spacing:.24em;
@@ -255,52 +277,21 @@
 .bub.mini .who{font-size:10px}
 .bub.mini::after{display:none}
 
-/* The captain's own place, beside the cards. He is not crew - the crew are
-   agents doing work, he is the person they are waiting on - so he stands
-   where the waiting is rather than on a deck. */
-/* `auto`, not a width: the track is on this element and --capStand is on
-   its child, and a custom property does not travel upwards - so the
-   column takes its size from what stands in it. It was 132px, close
-   enough to the derived 139 to look right and wrong the moment
-   CAPTAIN_SCALE moved, with `overflow:hidden` below to clip him. */
-.capwrap{display:grid;grid-template-columns:auto 1fr;gap:16px;align-items:start}
-/* The three that scale with the captain come from SHIP.captain, which
-   computes them from the same constants the deck uses: --capStand is his
-   height and his width, --capBox the box's, --capFoot the shadow's. The
-   rest of this block is trim - padding, a radius, a border, the shadow's
-   thickness - and does not follow him; the claim used to be "every
-   number here", which was not true of the column above it, and it is the
-   coupling numbers that have to be derived, not the cosmetic ones. */
-.captain{position:relative;width:var(--capStand);min-height:var(--capBox);padding-top:12px;
-  border:1px solid var(--line);border-radius:13px;overflow:hidden;
-  background:linear-gradient(180deg,#0a1a26,#060f17)}
-.captain .capstand{position:relative;height:var(--capStand);
-  perspective:800px;perspective-origin:50% 40%}
-/* he stands on no deck, so this is the whole of his vertical placement.
-   SHIP.captain used to write --deckY0 and --rowStep as zeroes for the
-   .pivot rule to add up - but this rule is more specific and overrode
-   the sum, so both were dead. They are gone from the JavaScript. */
-.captain .pivot{bottom:6px}
-.captain .capstand::after{content:"";position:absolute;left:50%;bottom:0;
-  width:var(--capFoot);height:10px;margin-left:calc(var(--capFoot) / -2);
-  border-radius:50%;background:radial-gradient(ellipse,rgba(0,0,0,.6),transparent 70%)}
-.captain .capsays{padding:6px 10px 12px;text-align:center}
-.captain .capsays b{display:block;font:650 11px var(--mono);color:var(--brass);letter-spacing:.05em}
-.captain .capsays span{display:block;margin-top:3px;font-size:10.5px;color:#9dbdd6;line-height:1.35}
-.captain .capsays i{display:inline-block;margin-top:7px;min-width:20px;padding:1px 7px;
-  border-radius:99px;font:650 11px var(--mono);font-style:normal;
-  background:linear-gradient(180deg,#f0c46a,#c9972f);color:#0f1621}
-@media (max-width:760px){.capwrap{grid-template-columns:1fr}
-  /* an author display beats the user agent's [hidden] rule, so every
-     rule that sets display has to re-assert it or the JS that hides this
-     element stops working at this width - index.html already carries the
-     same guard for the diagram iframe */
-  .captain[hidden]{display:none}
-  /* still no numbers: the stand keeps the height SHIP.captain derived
-     and simply becomes its own column. The first version wrote 110px
-     here, fourteen lines under a comment saying every number came from
-     the JavaScript. */
-  .captain{width:auto;min-height:0;display:flex;align-items:center;gap:10px;padding:10px}
-  .captain .capstand{width:var(--capStand);height:var(--capStand);
-    flex:0 0 var(--capStand)}
-  .captain .capsays{text-align:left;padding:0}}
+/* The captain shares the actual ship coordinate system and deck surface. */
+.scene .captain{position:absolute;inset:0;width:auto;min-height:0;padding:0;display:block;background:none;border:0;box-shadow:none;pointer-events:none}
+.scene .captain .pivot{bottom:calc(var(--deckY0) + var(--capRow) * var(--rowStep));pointer-events:auto}
+.scene .pivot{transform-origin:50% 100%}
+.scene{touch-action:none}
+.roster .jb{white-space:normal;overflow:visible;text-overflow:clip;font-size:16px;overflow-wrap:anywhere}
+.roster .nm,.roster .st,.roster h3,.shipbar,.shipbar .tier{font-size:13px}
+.roster li{grid-template-columns:16px minmax(0,1fr) minmax(0,1fr);font-size:16px}
+.roster .jb{grid-column:2/-1}.roster .nm{overflow-wrap:anywhere}
+.roster ul{max-height:280px}.bub.mini .who{white-space:normal;overflow-wrap:anywhere}
+.fig.s-unknown{--baseAnim:bobk}.st-unknown{--bubEdge:#566777}
+.handoffs{position:absolute;inset:0;pointer-events:none;z-index:8}
+.stern{position:absolute;right:0;top:0;width:10px;height:18px;border:2px solid var(--brass);background:#806431;border-radius:3px}
+.handoff{position:absolute;transform:translate(-50%,-50%);padding:4px 8px;background:var(--brass);color:#171210;border-radius:5px;font-size:16px}
+.handoff.static{position:relative;transform:none;left:auto;top:auto;margin:50px 12px 0;overflow-wrap:anywhere}
+.pivot.react .fig{animation:receive .7s ease-out}.bub.ping{outline:3px solid var(--brass)}
+@keyframes receive{50%{translate:0 -9px}}
+@media(prefers-reduced-motion:reduce){.pivot.react .fig{animation:none}}

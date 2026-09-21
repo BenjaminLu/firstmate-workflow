@@ -1,9 +1,8 @@
 # Authored drawings
 
-`bin/fm-diagram.sh` renders a card for every decision the captain must rule
-on: the id, the task, the pull request, where the task sits in the lanes, and
-the answers on offer. That frame it can always build from the decision file
-and `i18n/`.
+`bin/fm-diagram.sh` renders only the change diagram for each decision. The
+board owns the card title, explanation, options and tradeoffs; the embedded
+document must not duplicate card framing, lane strips, buttons or checklists.
 
 What it cannot invent is the picture in the middle — the before and after of
 a schema change, the two shapes a module could take. Q8 says **reuse existing
@@ -24,8 +23,9 @@ next. The first tier with anything at all in it is the tier that is used:
 
 Within the tier, `<stem>.<lang>.html` serves that language and `<stem>.html`
 serves any language it does not. A tier with nothing in it at all means the
-built-in body: the seven gates for a `merge`, and for a `choice` the frame
-alone.
+built-in body: the decision's localized `details.en` / `details.zh-TW`
+`before` and `after` text in two connected panels. Missing legacy details
+produce an explicit notice, never a fabricated task-specific diagram.
 
 ## A tier answers every language, or it is refused
 
@@ -53,6 +53,13 @@ either. If `D-007` has any file at all, `D-007` is the tier.
 A fragment, not a document — no `<html>`, no `<body>`. Inline SVG is the
 usual thing. It is pasted into the card as it stands, so it carries its own
 sizing.
+
+Primary diagram text must be at least 16 CSS pixels and wrap on narrow
+screens. The built-in before/after panels stack on phones. The board measures
+the same-origin document after loading and observes its size, so an enlarged
+or wrapped diagram is not trapped in a fixed-height viewport. Frames keep
+their identity through ordinary refreshes; only a locale change changes their
+source. Authored fragments remain trusted markup; decision data remains text.
 
 ## Languages
 

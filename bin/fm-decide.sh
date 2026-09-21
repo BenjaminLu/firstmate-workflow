@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Puts a decision in front of the captain and blocks until it comes back.
 #
-#   fm-decide.sh --request D-007 --task T-004 --kind merge --title "..." [--pr 9]
+#   fm-decide.sh --request D-007 --task T-004 --kind merge --details details.json --pr 9
 #   fm-decide.sh --await   D-007 [--timeout 3600]
 #
 # Waiting uses bun's fs.watch when bun is there and a one-second poll when it
@@ -15,7 +15,7 @@ set -uo pipefail
 # dispatches is missing it.
 exec < /dev/null
 
-REPO="${FM_ROOT:-$(pwd)}"; MODE=''; ID=''; TASK=''; KIND='choice'; TITLE=''; PR=''; TIMEOUT=0
+REPO="${FM_ROOT:-$(pwd)}"; MODE=''; ID=''; TASK=''; KIND='choice'; PR=''; TIMEOUT=0; DETAILS=''
 # see fm_need in bin/fm-config.sh for why: `shift 2` with one argument
 # left does not shift, and the loop spins. This file deliberately depends
 # on nothing, so it carries the two lines rather than the explanation.
@@ -26,7 +26,8 @@ while [ $# -gt 0 ]; do
     --await)   need "$@"; MODE=await;   ID="${2-}"; shift 2 ;;
     --task)  need "$@"; TASK="${2-}";  shift 2 ;;
     --kind)  need "$@"; KIND="${2-}";  shift 2 ;;
-    --title) need "$@"; TITLE="${2-}"; shift 2 ;;
+    --title) need "$@"; shift 2 ;; # accepted for old callers; never supplies authored details
+    --details) need "$@"; DETAILS="${2-}"; shift 2 ;;
     --pr)    need "$@"; PR="${2-}";    shift 2 ;;
     --repo)  need "$@"; REPO="${2-}";  shift 2 ;;
     --timeout) need "$@"; TIMEOUT="${2-}"; shift 2 ;;
@@ -36,6 +37,7 @@ done
 [ -n "$MODE" ] && [ -n "$ID" ] || {
   echo "usage: fm-decide.sh --request <id> --task <id> [--kind merge] | --await <id>" >&2; exit 64; }
 cd "$REPO" || { echo "fm-decide: no repo at $REPO" >&2; exit 64; }
+[[ "$ID" =~ ^D-[0-9]{1,6}$ ]] || { echo 'fm-decide: bad decision id' >&2; exit 64; }
 
 DIR="$REPO/state/decisions"; PEND="$REPO/state/pending"
 mkdir -p "$DIR" "$PEND"
@@ -67,14 +69,36 @@ draw() {
 }
 
 if [ "$MODE" = request ]; then
-  jq -cn --arg id "$ID" --arg task "$TASK" --arg kind "$KIND" --arg title "$TITLE" --arg pr "$PR" \
-    '{id:$id,task:$task,kind:$kind,title:$title}
-     + (if $pr=="" then {} else {pr:($pr|tonumber)} end)' > "$PEND/$ID.json"
+  # Authored data only. Never generate tradeoffs or translations from a title.
+  [ -f "$DETAILS" ] && jq -e '
+    def words: type == "string" and length <= 2000 and test("\\S");
+    def locale: type == "object" and (.title|words) and (.explanation|words)
+      and (.before|words) and (.after|words)
+      and (.outcome|words)
+      and (.options|type == "object")
+      and all(.options.A,.options.B,.options.C;
+        type == "object" and (.description|words) and (.pros|words) and (.cons|words));
+    type == "object" and (.en|locale) and (."zh-TW"|locale)
+  ' "$DETAILS" >/dev/null 2>&1 || {
+    echo 'fm-decide: --details requires complete authored en and zh-TW title, explanation, before, after, outcome and A/B/C description/pros/cons' >&2; exit 64;
+  }
+  case "$KIND" in choice|merge) ;; *) echo 'fm-decide: bad kind' >&2; exit 64 ;; esac
+  [[ "$TASK" =~ ^T-[A-Za-z0-9._-]{1,32}$ ]] || { echo 'fm-decide: bad task' >&2; exit 64; }
+  if [ "$KIND" = merge ]; then
+    [[ "$PR" =~ ^[1-9][0-9]*$ ]] || { echo 'fm-decide: merge requires a positive PR' >&2; exit 64; }
+  fi
+  [ ! -e "$PEND/$ID.json" ] && [ ! -e "$DIR/$ID.json" ] || {
+    echo "fm-decide: $ID already exists; refusing replacement" >&2; exit 65;
+  }
+  payload="$(jq -cn --arg id "$ID" --arg task "$TASK" --arg kind "$KIND" --arg pr "$PR" --slurpfile details "$DETAILS" \
+    '{id:$id,task:$task,kind:$kind,details:$details[0],title:$details[0].en.title}
+     + (if $pr=="" then {} else {pr:($pr|tonumber)} end)')" || exit 64
+  (set -o noclobber; printf '%s\n' "$payload" > "$PEND/$ID.json") || exit 65
   # after the pending file and before the event: the generator reads the file
   # it is drawing, and the event is what wakes anything watching
   draw
   emit --type decision_requested --task "$TASK" ${PR:+--pr "$PR"} \
-       --en "${TITLE:-a decision is waiting}" --tw "${TITLE:-有待決事項}"
+       --en "$(jq -r '.en.title' "$DETAILS")" --tw "$(jq -r '."zh-TW".title' "$DETAILS")"
   printf '%s\n' "$PEND/$ID.json"
   exit 0
 fi
@@ -95,10 +119,7 @@ if [ -f "$f" ]; then answer="$f"; else
 fi
 [ -n "$answer" ] && [ -f "$answer" ] || { echo "fm-decide: timed out waiting for $ID" >&2; exit 1; }
 
-chosen="$(jq -r '.chosen // empty' "$answer")"
-task="$(jq -r '.task // empty' "$answer")"
-emit --type decision_made ${task:+--task "$task"} \
-     --en "$ID answered $chosen" --tw "$ID 已決定 $chosen"
+# Recording belongs to the board; observing a response never emits it again.
 rm -f "$PEND/$ID.json"
 cat "$answer"
 exit 0

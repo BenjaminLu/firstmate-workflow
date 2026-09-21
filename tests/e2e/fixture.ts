@@ -4,7 +4,7 @@
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, cpSync, rmSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 
 // No import.meta here: it is ESM-only and the runner transpiles to
 // CommonJS. cwd is the repository root because bin/ci.sh is the only thing
@@ -12,6 +12,12 @@ import { spawn, type ChildProcess } from "node:child_process";
 // against the config file, not cwd, so that is not what makes this true.
 export const ROOT = resolve(process.cwd());
 export type Stage = "working" | "gate" | "review";
+export const details = {
+  en: { title:'Cache the task index', explanation:'Read the index once per refresh.', before:'Each card rereads the task file', after:'One shared index per refresh', outcome:'Index choice recorded',
+    options:{A:{description:'Cache per refresh',pros:'Fewer reads',cons:'Uses memory'},B:{description:'Keep individual reads',pros:'No cache',cons:'Repeated IO'},C:{description:'Measure first',pros:'Evidence before change',cons:'Delays improvement'}}},
+  'zh-TW':{title:'快取任務索引',explanation:'每次重新整理只讀取一次索引。',before:'每張卡片重讀任務檔案',after:'每次重新整理共用一份索引',outcome:'已記錄索引選擇',
+    options:{A:{description:'每次重新整理建立快取',pros:'減少讀取',cons:'佔用記憶體'},B:{description:'保留各自讀取',pros:'無需快取',cons:'重複讀取'},C:{description:'先測量',pros:'取得證據再變更',cons:'延後改善'}}}
+};
 // an agent per entry: the board's crew are agents, so a fixture that wants
 // five crewmen needs five actors, not five tasks
 
@@ -26,6 +32,8 @@ export function makeRoot(stages: Stage[], withDecision = true, actors: "per-task
   cpSync(join(ROOT, "board"), join(d, "board"), { recursive: true });
   cpSync(join(ROOT, "i18n"), join(d, "i18n"), { recursive: true });
   cpSync(join(ROOT, "design/tasks.json"), join(d, "design/tasks.json"));
+  mkdirSync(join(d, 'bin'));
+  for (const f of ['fm-emit.sh','fm-diagram.sh','fm-decide.sh','watch-decisions.ts']) cpSync(join(ROOT,'bin',f), join(d,'bin',f));
 
   const tasks = JSON.parse(readFileSync(join(ROOT, "design/tasks.json"), "utf8")).tasks;
   if (tasks.length < stages.length) {
@@ -53,8 +61,10 @@ export function makeRoot(stages: Stage[], withDecision = true, actors: "per-task
   if (withDecision) {
     writeFileSync(join(d, "state/pending/D-1.json"), JSON.stringify({
       id: "D-1", kind: "merge", task: tasks[0].id, pr: 99,
-      title: "Merge it into main", gates: [1, 1, 1, 1, 1, 1, 0],
+      title: "Merge it into main", details, gates: [1, 1, 1, 1, 1, 1, 0],
     }));
+    const result = spawnSync('bash', [join(d,'bin/fm-diagram.sh'),'--decision','D-1','--repo',d]);
+    if (result.status !== 0) throw new Error(result.stderr.toString());
   }
   return d;
 }
