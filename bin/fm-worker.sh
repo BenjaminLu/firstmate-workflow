@@ -258,10 +258,10 @@ say="$tree/.fm-say.md"
         # run, so the round was spent asking why the check was red.
         # The shape is CHECKED, not assumed, and BOTH shapes GitHub
         # uses count: `/actions/runs/<id>/job/<id>` and the older
-        # check-run details_url `/runs/<id>`. Narrowing to the first
+        # check-run details_url `/runs/<job>`. Narrowing to the first
         # would send the second down the "cannot read it" path, which
         # is a worse answer than the one it replaced.
-        run_id=''
+        run_id=''; log_kind=run; log_title=Run
         case "$failing" in
           */runs/*)
             # The id is delimited by NOT-A-DIGIT, not by a slash.
@@ -278,6 +278,12 @@ say="$tree/.fm-say.md"
             case "$_rd" in '') ;; *)
               case "$_rr" in ''|/*|'?'*|'#'*) run_id="$_rd" ;; esac ;;
             esac ;;
+        esac
+        # Legacy IDs identify jobs, not workflow runs. Let gh resolve the
+        # owning run with --job; modern links already supply the run ID.
+        case "$failing" in
+          */actions/runs/*) ;;
+          */runs/*) log_kind=job; log_title=Job ;;
         esac
         printf '\n---\n\n# The required check is red\n\n'
         printf 'It fails on the runner and may well pass on your machine.\n\n```\n'
@@ -299,7 +305,9 @@ say="$tree/.fm-say.md"
           # string that the `:-/dev/null` below is for
           log_err="$(scratch_new)"
           [ -z "$log_err" ] || scratch_add "$log_err"
-          raw_log="$($GH run view "$run_id" --log-failed 2>"${log_err:-/dev/null}" </dev/null)"
+          log_args=("$run_id")
+          [ "$log_kind" != job ] || log_args=(--job "$run_id")
+          raw_log="$($GH run view "${log_args[@]}" --log-failed 2>"${log_err:-/dev/null}" </dev/null)"
           gh_rc=$?
           # Two values, on purpose. `trimmed` is what the worker is shown;
           # `rendered` is the same thing with blank lines dropped, and is
@@ -318,8 +326,8 @@ say="$tree/.fm-say.md"
             # alone presents it as the whole of the failure, which is
             # the same lie as an empty block wearing a green run's face.
             printf '%s\n' "$trimmed"
-            printf '\n-- this log is incomplete: gh exited %s while fetching run %s\n' \
-              "$gh_rc" "$run_id"
+            printf '\n-- this log is incomplete: gh exited %s while fetching %s %s\n' \
+              "$gh_rc" "$log_kind" "$run_id"
             [ -z "$log_err" ] || sed 's/^/gh: /' "$log_err" | head -20
           elif [ -n "$rendered" ]; then
             printf '%s\n' "$trimmed"
@@ -327,7 +335,7 @@ say="$tree/.fm-say.md"
             # said, not left blank: the worker cannot run gh, so this block
             # is its only view of the runner, and silence reads as "nothing
             # was wrong" rather than "I could not fetch it"
-            printf 'The log for run %s could not be fetched.\n' "$run_id"
+            printf 'The log for %s %s could not be fetched.\n' "$log_kind" "$run_id"
             # bounded, like the log above it: gh's stderr is not, and
             # everything that reaches this fence has to be
             [ -z "$log_err" ] || sed 's/^/gh: /' "$log_err" | head -20
@@ -337,7 +345,7 @@ say="$tree/.fm-say.md"
             # died before any step logged. Saying "could not be fetched"
             # here would be a false statement about gh in the one block
             # the worker has no way to check.
-            printf 'Run %s reported no failing step log.\n' "$run_id"
+            printf '%s %s reported no failing step log.\n' "$log_title" "$run_id"
             printf 'It may have been cancelled, or failed before any step ran.\n'
             printf 'Ask on the pull request rather than guessing.\n'
           fi

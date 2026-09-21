@@ -734,8 +734,8 @@
         "design/tasks.json"
       ],
       "acceptance": [
-        "the run id is read out of the check's link correctly: a link ending in /runs/<id>/job/<id> yields the run, not the run plus the job path",
-        "the stub answers the way gh answers - a real link shape and a run view that refuses an id it does not recognise - so a malformed id fails the test instead of passing it",
+        "modern /actions/runs/<run>/job/<job> links fetch the workflow run; legacy /runs/<job> links fetch via gh run view --job, including query strings and fragments, without confusing job IDs with workflow run IDs",
+        "the stub answers the way gh answers - real link shapes and strict run view arguments that distinguish job IDs from workflow run IDs and refuse an id or namespace it does not recognise - so malformed selections fail the prompt-content tests",
         "the block the worker is handed is asserted by its CONTENT reaching the prompt, not by gh having been called",
         "a check whose log cannot be fetched says so in the prompt rather than leaving an empty block, because an empty block is indistinguishable from a green run and the worker spends its round asking about it"
       ]

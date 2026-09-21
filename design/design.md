@@ -302,15 +302,20 @@ job: reading the whole tail of it asked `gh run view` for something it
 refuses, its complaint went to `/dev/null`, and the worker was handed a
 blank block. The shape is checked rather than assumed — a required
 check need not be an Actions run at all, and both shapes GitHub itself
-uses count — `/actions/runs/<id>/job/<id>` and the older check-run
-`/runs/<id>`. A blank block reads as a green run, so the round was
+uses count — `/actions/runs/<run>/job/<job>` and the older check-run
+`/runs/<job>`. The legacy ID identifies a job, so it is passed to
+`gh run view --job <job> --log-failed`; a modern link uses
+`gh run view <run> --log-failed`. These IDs are different namespaces.
+A blank block reads as a green run, so the round was
 spent asking why the check was red.
 
-The run id is the leading run of digits after `/runs/`, and what
+The run or job id is the leading run of digits after `/runs/`, and what
 follows it has to be a delimiter — the legacy url is served with a
 query on that segment, and trimming at the next slash turned
 `6789123?check_suite_focus=true` into something the digit check then
-rejected.
+rejected. Query strings and fragments are stripped in either shape;
+letters immediately after the digits are rejected. Fetch failures,
+empty logs, and partial logs name the run or job actually requested.
 
 The block is never blank, and it says which of four things happened,
 because to the worker they mean different things: no run id could be

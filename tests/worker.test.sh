@@ -467,11 +467,12 @@ rm -rf "$d17"
 # not a number; a fetch that failed; and a fetch that SUCCEEDED and
 # had nothing, which "could not be fetched" would misreport as gh's
 # fault in the one block the worker cannot check.
-# <run> is the id the code under test has to compute out of <link>:
+# <id> is the run or job ID the code must compute out of <link>:
 # the stub answers that and refuses anything else, so a mis-parse is a
 # failure here rather than a pass. A stub that answers `run view` for
 # any argument cannot see the bug this task exists for.
-redcheck() {   # redcheck <label> <check link> <run> <run view body> <want>
+redcheck() {   # redcheck <label> <check link> <id> <run view body> <want> [job]
+  # Optional seventh/eighth arguments assert retained log and stderr content.
   local d r g cap sent
   d="$(fixture)"; r="$d/repo"; g="$(ghstub "$d")"
   cat > "$r/bin/adapters/mock.sh" <<'M'
@@ -489,7 +490,8 @@ M
     printf 'case " $* " in\n'
     printf '  *" pr list "*) echo 23; exit 0 ;;\n'
     printf '  *" pr checks "*) echo "%s"; exit 0 ;;\n' "$2"
-    printf '  *" run view %s "*) %s ;;\n' "$3" "$4"
+    # Exact arguments keep job IDs and workflow run IDs in separate namespaces.
+    printf '  " run view %s%s --log-failed ") %s ;;\n' "${6:+--job }" "$3" "$4"
     printf '  *" run view "*) echo "could not find any workflow run" >&2; exit 1 ;;\n'
     printf '  *" pr view "*" comments "*) printf %s ;;\n' "'## r\n\nsomething\n'"
     printf 'esac\nexit 0\n'
@@ -501,24 +503,43 @@ M
   sent="$(cat "$cap" 2>/dev/null)"
   assert_contains "$sent" "The required check is red" "$1: the section is there"
   assert_contains "$sent" "$5" "$1"
+  [ -z "${7:-}" ] || assert_contains "$sent" "$7" "$1: log content survives"
+  [ -z "${8:-}" ] || assert_contains "$sent" "$8" "$1: fetch diagnostic survives"
   rm -rf "$d"
 }
 redcheck "a run id that is not a number says what the SCRIPT could not do" \
   "https://github.com/o/r/actions/runs/latest/job/1" "NONE" "exit 0" \
   "No run id could be read out of"
-# the older check-run details_url, which IS an Actions run and has no
-# /actions/ in it: narrowing the match to /actions/runs/ sent these
-# down the cannot-read path, which is a worse answer than the noise it
-# replaced
-redcheck "an old-style /runs/<id> link is an Actions run" \
+# Legacy details URLs identify jobs, not workflow runs. The stub refuses
+# the same numeric ID when passed as a positional workflow run ID.
+redcheck "an old-style /runs/<id> link selects a job" \
   "https://github.com/o/r/runs/6789123" "6789123" \
   "printf 'ci\tbin/ci.sh\tOLD STYLE LOG\n'; exit 0" \
-  "OLD STYLE LOG"
-# and that link is served with a query on the run segment in the wild
+  "OLD STYLE LOG" job
+# and that link is served with a query on the job segment in the wild
 redcheck "even with a query string after the id" \
   "https://github.com/o/r/runs/6789124?check_suite_focus=true" "6789124" \
   "printf 'ci\tbin/ci.sh\tQUERY STRING LOG\n'; exit 0" \
-  "QUERY STRING LOG"
+  "QUERY STRING LOG" job
+redcheck "a legacy fragment also selects the job" \
+  "https://github.com/o/r/runs/6789125#step:2:1" "6789125" \
+  "printf 'ci\tx\tFRAGMENT LOG\n'; exit 0" \
+  "FRAGMENT LOG" job
+redcheck "modern links keep the workflow run namespace" \
+  "https://github.com/o/r/actions/runs/72/job/6789125?check_suite_focus=true#step:2:1" "72" \
+  "printf 'ci\tx\tWORKFLOW RUN LOG\n'; exit 0" \
+  "WORKFLOW RUN LOG"
+redcheck "a legacy job fetch failure names the job" \
+  "https://github.com/o/r/runs/6789126" "6789126" "exit 1" \
+  "The log for job 6789126 could not be fetched" job
+redcheck "an empty legacy job log names the job" \
+  "https://github.com/o/r/runs/6789127" "6789127" "exit 0" \
+  "Job 6789127 reported no failing step log" job
+redcheck "a partial legacy job log retains the failure context" \
+  "https://github.com/o/r/runs/6789128" "6789128" \
+  "printf 'ci\tx\tLEGACY PARTIAL LOG\nci\tx\t\nci\tx\tAFTER BLANK\n'; echo 'job log unavailable' >&2; exit 1" \
+  "this log is incomplete: gh exited 1 while fetching job 6789128" job \
+  $'LEGACY PARTIAL LOG\n\nAFTER BLANK' "gh: job log unavailable"
 # but digits followed by more id are not an id
 redcheck "while digits with letters after them fail closed" \
   "https://github.com/o/r/runs/12ab" "12ab" \
