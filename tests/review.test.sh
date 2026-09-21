@@ -252,4 +252,29 @@ assert_lacks "$out" "the fallback reviewed it" "and the worker's engine is not u
 rm -rf "$d"
 
 
+
+# A task that defines itself on its own branch - which is how every new
+# task arrives - was invisible: fm-review read design/tasks.json from
+# whatever was checked out and said "no task T-027" for a task sitting in
+# the diff it was handed.
+d9="$(fixture)"; r9="$d9/repo"; GH9="$(ghstub "$d9")"
+( cd "$r9" && git checkout -q -b newtask main \
+  && python3 - <<'P'
+import json
+d=json.load(open("design/tasks.json"))
+d["tasks"].append({"id":"T-NEW","title":"defined on its own branch",
+                   "scope":["src/**"],"acceptance":["it exists"]})
+json.dump(d, open("design/tasks.json","w"))
+P
+  git add -A && git -c user.email=a@b.c -c user.name=t commit -qm "add T-NEW"
+  git checkout -q main )
+out9="$(cd "$r9" && FM_ROOT="$r9" FM_GH="$GH9" bin/fm-review.sh --task T-NEW --branch newtask 2>&1)"
+rc9=$?
+assert_ne "65" "$rc9" "a task defined on the branch under review is found"
+assert_lacks "$out9" "no task T-NEW" "and not reported as missing"
+# and one that exists nowhere is still refused
+( cd "$r9" && FM_ROOT="$r9" FM_GH="$GH9" bin/fm-review.sh --task T-NOPE --branch newtask >/dev/null 2>&1 )
+assert_eq "65" "$?" "a task that exists nowhere is still refused"
+rm -rf "$d9"
+
 finish

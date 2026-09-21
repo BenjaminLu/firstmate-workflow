@@ -35,7 +35,17 @@ cd "$REPO" || { echo "fm-review: no repo at $REPO" >&2; exit 64; }
 
 emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor reviewer-1 --task "$TASK" "$@" >/dev/null 2>&1 </dev/null || true; }
 
-spec="$(jq -r --arg t "$TASK" '.tasks[]|select(.id==$t)' design/tasks.json 2>/dev/null)"
+# The task spec comes from the branch under review, not from whatever is
+# checked out. A task defined on its own branch - which is how a new one
+# arrives - was invisible to the reviewer and to the gate: `no task
+# T-027`, for a task sitting in the diff they were handed.
+task_spec() {   # task_spec <task> [branch]
+  local t="$1" b="${2:-}" j=''
+  [ -n "$b" ] && j="$(git show "$b:design/tasks.json" 2>/dev/null)"
+  [ -n "$j" ] || j="$(cat design/tasks.json 2>/dev/null)"
+  printf '%s' "$j" | jq -r --arg t "$t" '.tasks[]|select(.id==$t)' 2>/dev/null
+}
+spec="$(task_spec "$TASK" "$BRANCH")"
 [ -n "$spec" ] || { echo "fm-review: no task $TASK" >&2; exit 65; }
 
 # A round that produced nothing is not a round, so review_opened is emitted

@@ -36,7 +36,21 @@ EMIT="$REPO/bin/fm-emit.sh"
 emit() { FM_ROOT="$REPO" "$EMIT" --actor "$NAME" --task "$TASK" "$@" >/dev/null 2>&1 </dev/null || true; }
 
 
-spec="$(jq -r --arg t "$TASK" '.tasks[]|select(.id==$t)' design/tasks.json 2>/dev/null)"
+# The task spec comes from the branch under review, not from whatever is
+# checked out. A task defined on its own branch - which is how a new one
+# arrives - was invisible to the reviewer and to the gate: `no task
+# T-027`, for a task sitting in the diff they were handed.
+task_spec() {   # task_spec <task> [branch]
+  local t="$1" b="${2:-}" j=''
+  [ -n "$b" ] && j="$(git show "$b:design/tasks.json" 2>/dev/null)"
+  [ -n "$j" ] || j="$(cat design/tasks.json 2>/dev/null)"
+  printf '%s' "$j" | jq -r --arg t "$t" '.tasks[]|select(.id==$t)' 2>/dev/null
+}
+# the worker has no branch name yet - it is derived from the title - so
+# it looks for one already carrying this task
+branch_guess="$(git for-each-ref --format='%(refname:short)' refs/heads \
+  | grep -i "^$(printf '%s' "$TASK" | tr 'A-Z' 'a-z')-" | head -1)"
+spec="$(task_spec "$TASK" "$branch_guess")"
 [ -n "$spec" ] || { echo "fm-worker: no task $TASK in design/tasks.json" >&2; exit 65; }
 
 slug="$(printf '%s' "$TASK" | tr 'A-Z' 'a-z')"
