@@ -232,18 +232,35 @@ if [ "$asked" = 1 ] && [ -n "$PR" ]; then
          --tw "工人在 #$PR 上發言"
   fi
 fi
-rm -f "$say"
-# A question that went nowhere leaves the task deadlocked: the reviewer
-# is waiting for a question it will never see, and the next round asks
-# it again. So this is the run's outcome, not a line on standard error.
+# A question that went nowhere used to be a line on standard error and
+# an exit 0: the run reported a complete round, the log said nothing,
+# and the next round asked the same question again. This does not
+# UNSTICK the task - nothing reads worker_crashed and acts on it, and a
+# task with an open pull request is not one the dispatcher restarts -
+# but it stops the run lying about what happened, and it keeps what the
+# worker wrote so a human can post it.
+#
+# So the file is kept, not removed, and the event carries the number:
+# a failed round that cannot be linked to the pull request it failed on
+# is a card the captain cannot act on.
 if [ "$asked" = 1 ] && [ "$spoke" = 0 ]; then
   echo "fm-worker: the worker had something to say and there was nowhere to put it" >&2
-  [ -n "$PR" ] && echo "fm-worker: #$PR would not take the comment" >&2
-  [ -n "$PR" ] || echo "fm-worker: $branch has no open pull request to say it on" >&2
-  emit --type worker_crashed --en "the worker's question could not be posted" \
-       --tw "工人的提問貼不上去"
+  echo "fm-worker: it is at $say" >&2
+  if [ -n "$PR" ]; then
+    echo "fm-worker: #$PR would not take the comment" >&2
+    emit --type worker_crashed --pr "$PR" --en "the worker's question could not be posted to #$PR" \
+         --tw "工人的提問貼不上 #$PR"
+  else
+    # what was actually checked: round_two is 0, which means neither the
+    # local branch nor origin has one - so there is no pull request
+    # because there is no branch, and this is a first round
+    echo "fm-worker: $branch is new, so there is no pull request to say it on" >&2
+    emit --type worker_crashed --en "the worker asked on a round with no pull request" \
+         --tw "工人在還沒有 PR 的一輪提問"
+  fi
   exit 73
 fi
+rm -f "$say"
 
 # asking IS the work in a round that begins with a question, and the round
 # after it is the one that changes files
@@ -277,7 +294,8 @@ git -C "$tree" push -q -u origin "$branch" 2>/dev/null || {
 # passed; asking again here would be a second answer to one question,
 # and the two could disagree - a pull request opened while the engine
 # was running would be posted to by one half of this script and not the
-# other. The branch is still re-read when there is nothing to reuse.
+# other. There is no second lookup: if $PR is empty, this is a first
+# round, the branch is new, and a pull request is created below.
 num="$PR"
 if [ -z "$num" ] || [ "$num" = "null" ]; then
   url="$($GH pr create --head "$branch" --base "$BASE" \
@@ -289,7 +307,6 @@ if [ -z "$num" ] || [ "$num" = "null" ]; then
   num="$(printf '%s' "$url" | sed -n 's|.*/\([0-9][0-9]*\)$|\1|p')"
   [ -n "$num" ] || { echo "fm-worker: could not read a pull request number from '$url'" >&2; exit 72; }
   emit --type pr_opened --pr "$num" --en "opened #$num" --tw "已開 #$num"
-  PR="$num"
 else
   emit --type commit_pushed --pr "$num" --en "pushed another round to #$num" \
        --tw "第二輪已推上 #$num"

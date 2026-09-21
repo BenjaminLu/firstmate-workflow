@@ -76,6 +76,11 @@ printf 'vendor: mock\nconcurrency: 3\n' > "$p/config.yaml"
 printf '{"tasks":[{"id":"T-001","title":"a","depends_on":[]},{"id":"T-002","title":"b","depends_on":[]}]}\n' \
   > "$p/design/tasks.json"
 FM_ROOT="$p" "$p/bin/fm-emit.sh" --actor captain --type greenlit --en go --tw 開工 >/dev/null
+# the positive control first, or "it did not appear" is evidence about a
+# string rather than about a filter: before anything is said about it,
+# T-001 is a task this dispatcher would start
+out="$(cd "$p" && FM_ROOT="$p" bin/fm-dispatch.sh --dry-run --repo "$p" 2>&1)"
+assert_contains "$out" "T-001" "a task with nothing said about it is dispatchable"
 # T-001 has a pull request open and no dispatched event: started by hand
 FM_ROOT="$p" "$p/bin/fm-emit.sh" --actor worker-1 --task T-001 --type pr_opened --pr 5 \
   --en "opened #5" --tw "已開 #5" >/dev/null
@@ -87,26 +92,12 @@ FM_ROOT="$p" "$p/bin/fm-emit.sh" --actor captain --task T-001 --type merged --pr
   --en "merged" --tw "已合併" >/dev/null
 out="$(cd "$p" && FM_ROOT="$p" bin/fm-dispatch.sh --repo "$p" 2>&1)"
 assert_lacks "$out" "T-001" "and a merged task is not dispatched either"
+# Which is why a worker has to find its own pull request: there is no
+# state in which this script starts a task that has one. It is in flight
+# while the pull request is open and done once it is settled, so the
+# number it reads off the log is never a number it can hand to a worker.
+# A later round started by hand therefore arrives with nothing, and
+# bin/fm-worker.sh looks the number up before it builds the prompt.
 rm -rf "$p"
-
-# Why the worker has to find its own pull request: the dispatcher never
-# has one to hand it. A task with a pr_opened and nothing settling it
-# counts as in flight and is not restarted; once it IS settled it is
-# done or closed and is not restarted either. So there is no path
-# through this script that starts a task whose pull request is open -
-# which is the whole reason a later round dispatched by hand arrived
-# with no number, no review in its prompt, and nowhere to put its
-# question.
-w="$(fixture)"
-say "$w" greenlit
-FM_ROOT="$w" "$w/bin/fm-emit.sh" --actor firstmate --type dispatched --task A \
-  --en "started" --tw "開工" >/dev/null
-FM_ROOT="$w" "$w/bin/fm-emit.sh" --actor firstmate --type pr_opened --task A --pr 7 \
-  --en "opened" --tw "已開" >/dev/null
-assert_lacks "$(ready "$w")" "A" "a task with an open pull request is never restarted"
-FM_ROOT="$w" "$w/bin/fm-emit.sh" --actor firstmate --type merged --task A \
-  --en "merged" --tw "已合併" >/dev/null
-assert_lacks "$(ready "$w")" "A" "and once it is merged it is not restarted either"
-rm -rf "$w"
 
 finish

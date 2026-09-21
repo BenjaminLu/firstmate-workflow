@@ -295,10 +295,20 @@ finding its own is the only path there can be, and
 it.
 
 Asking is the whole of a round that begins with a question, so a
-question that could not be posted is a failed run — exit `73`, and a
-`worker_crashed` in the log. It used to be a line on standard error and
-an exit 0: the reviewer waited for a question it would never see, the
-next round asked it again, and the board showed a round that went fine.
+question that could not be posted is a failed run — exit `73`, a
+`worker_crashed` carrying the pull request number, and `.fm-say.md`
+left on disk so the text is not lost. It used to be a line on standard
+error and an exit 0: the reviewer waited for a question it would never
+see, the next round asked it again, and the board showed a round that
+went fine.
+
+This does not unstick the task, and the design should not claim it
+does. Nothing reads `worker_crashed` and acts on it, and a task whose
+pull request is open is not one the dispatcher restarts, so the round
+still ends with a reviewer waiting. What changes is that the run no
+longer says it went well: the failure is on the board, under the pull
+request it happened on, with the text still there to post by hand.
+Something that picks it up is its own task.
 
 ### 5.4 The pull request protocol
 
@@ -632,6 +642,6 @@ gates, and the dispatcher cannot dispatch itself.
 | T-016 | `fm-diagram.sh`: decision diagrams, and the board embed | T-010 |
 | T-017 | `fm-reconcile.sh`: reconciling after a crash | T-007 |
 | T-018 | self-update and `sync-skills` | T-007, T-015 |
-| T-031 | a second round the worker cannot see, and a question nobody hears | T-007 |
 | T-029 | one exit code for a usage error, in every script | T-026 |
 | T-030 | the lints are blind to the files that carry them | T-026 |
+| T-031 | a second round the worker cannot see, and a question nobody hears | T-007 |

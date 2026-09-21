@@ -121,24 +121,56 @@ assert_lacks "$(cat "$d5/ghcalls" 2>/dev/null)" "pr create" \
 assert_contains "$(jq -r 'select(.type=="commit_pushed")|.pr|tostring' < "$r5/state/events.jsonl" | tail -1)" "9" \
   "and its event points at that number"
 
-# And the same round WITHOUT --pr, which is how the dispatcher starts one
-# from a task id alone. The lookup used to sit below the engine, so a
-# round with no number was a first round wearing its clothes: no review
-# in the prompt, no failing check, and the worker rewriting what it had
-# already written. Same fixture, same stub, nothing passed.
-( cd "$r5" && git update-ref -d "refs/heads/nothing" 2>/dev/null; true )
-( cd "$r5" && git -C "state/worktrees/T-Z" rm -q --cached -r . >/dev/null 2>&1; true )
-rm -f "$r5/state/worktrees/T-Z/src/saw-review" "$r5/state/worktrees/T-Z/src/saw-ci"
-( cd "$r5" && git worktree remove --force state/worktrees/T-Z >/dev/null 2>&1; true )
-( cd "$r5" && git update-ref "refs/heads/$branch" "$branch~1" 2>/dev/null; true )
-: > "$d5/ghcalls"
-out5="$(cd "$r5" && FM_ROOT="$r5" FM_GH="$GH5" bin/fm-worker.sh --task T-Z 2>&1)"
-assert_contains "$out5" "already has #9" "a later round finds the pull request itself"
-assert_ok "cd '$r5' && git cat-file -e '$branch:src/saw-review'" \
-  "and is given the review to answer without being told the number"
-assert_ok "cd '$r5' && git cat-file -e '$branch:src/saw-ci'" "and why the check is red"
-assert_lacks "$(cat "$d5/ghcalls" 2>/dev/null)" "pr create" "and opens no second pull request"
 rm -rf "$d5"
+
+# The round this task exists for, and the join the two halves above do
+# not make: dispatched from a task id ALONE, on a branch that already
+# has a pull request, the worker asks - and the question has to land on
+# the number it found for itself. That is the path that broke, and what
+# it printed was `its question is on #`, with nothing after the hash.
+#
+# A fresh fixture, not surgery on the one above: the previous version
+# rewound a branch with five silenced git commands and then asserted on
+# files the old commit already carried, so it could not tell a round
+# that produced them from one that did nothing.
+d9="$(fixture)"; r9="$d9/repo"
+cat > "$r9/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+if [ -f "$3/src/round-one" ]; then
+  # only on the round that was given the review to answer
+  grep -q 'REVIEWER SAID' "$2" && printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md"
+else
+  mkdir -p "$3/src"; printf 'the first round\n' > "$3/src/round-one"
+fi
+M
+chmod +x "$r9/bin/adapters/mock.sh"
+GH9="$(ghstub "$d9")"
+( cd "$r9" && FM_ROOT="$r9" FM_GH="$GH9" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
+b9="$(cd "$r9" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1)"
+assert_ne "" "$b9" "the first round left a branch to answer on"
+# a stub that knows the branch has #31, and records what it is asked
+cat > "$d9/stub/gh" <<'G'
+#!/usr/bin/env bash
+echo "gh $*" >> "$(dirname "$0")/../ghcalls"
+case " $* " in
+  *" pr list "*) echo 31; exit 0 ;;
+  *" pr checks "*) exit 0 ;;
+  *" pr view "*" comments "*) printf '## reviewer-1\n\nREVIEWER SAID: answer this\n' ;;
+esac
+exit 0
+G
+chmod +x "$d9/stub/gh"
+: > "$d9/ghcalls"
+out9="$(cd "$r9" && FM_ROOT="$r9" FM_GH="$GH9" bin/fm-worker.sh --task T-Z 2>&1)"; rc9=$?
+assert_eq "0" "$rc9" "a later round dispatched from a task id alone is a complete round"
+assert_contains "$out9" "already has #31" "the worker found the pull request itself"
+assert_contains "$out9" "its question is on #31" "and says which one it spoke on, with a number after the hash"
+assert_contains "$(cat "$d9/ghcalls")" "pr comment 31" "the question reached that pull request"
+assert_eq "31" "$(jq -r 'select(.type=="ask_pass_criteria")|.pr' < "$r9/state/events.jsonl" | tail -1)" \
+  "and the log records the number it spoke on"
+assert_lacks "$(cat "$d9/ghcalls")" "pr create" "and it opened no second pull request"
+rm -rf "$d9"
 
 # The worker cannot run gh, so the only way its question reaches the
 # reviewer is this file. Without it the round-three protocol cannot happen:
@@ -186,6 +218,9 @@ out7="$(cd "$r7" && FM_ROOT="$r7" FM_GH="$GH7" bin/fm-worker.sh --task T-Z --pr 
 assert_eq "73" "$rc7" "a question that could not be posted fails the run"
 assert_contains "$out7" "nowhere to put it" "and says what happened"
 assert_contains "$out7" "#9" "naming the pull request that would not take it"
+assert_eq "9" "$(jq -r 'select(.type=="worker_crashed")|.pr' < "$r7/state/events.jsonl" | tail -1)" \
+  "and the event carries it, so the board can link the failed round to the pull request"
+assert_ok "test -s '$r7/state/worktrees/T-Z/.fm-say.md'" "and the question itself is kept"
 assert_contains "$(jq -r .type < "$r7/state/events.jsonl" | tr '\n' ' ')" "worker_crashed" \
   "and the log carries it, so the board is not showing a round that went fine"
 assert_lacks "$(jq -r .type < "$r7/state/events.jsonl" | tr '\n' ' ')" "ask_pass_criteria" \
@@ -194,13 +229,25 @@ rm -rf "$d7"
 
 # and the same with no pull request at all to say it on
 d8="$(fixture)"; r8="$d8/repo"; GH8="$(ghstub "$d8")"
-cp "$r7/bin/adapters/mock.sh" "$r8/bin/adapters/mock.sh" 2>/dev/null || {
-  printf '#!/usr/bin/env bash\n[ "$1" = "run" ] || exit 64\nprintf "ASK-PASS-CRITERIA:T-Z\\n" > "$3/.fm-say.md"\n' \
-    > "$r8/bin/adapters/mock.sh"; }
+# written out, not copied from $r7: that fixture was removed four lines
+# up, so the cp failed every run and the `||` fallback was the whole
+# implementation wearing a conditional
+cat > "$r8/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md"
+M
 chmod +x "$r8/bin/adapters/mock.sh"
 out8="$(cd "$r8" && FM_ROOT="$r8" FM_GH="$GH8" bin/fm-worker.sh --task T-Z 2>&1)"; rc8=$?
 assert_eq "73" "$rc8" "so does a question with no pull request to put it on"
-assert_contains "$out8" "no open pull request" "and it says that is why"
+assert_contains "$out8" "is new, so there is no pull request" \
+  "and it says what was actually checked - that the branch is new"
+# the payload survives, or the only copy of the question is gone and
+# nobody can post it by hand either
+assert_ok "test -s '$r8/state/worktrees/T-Z/.fm-say.md'" "what the worker wrote is still there"
+assert_contains "$out8" ".fm-say.md" "and the run says where"
+assert_contains "$(jq -r 'select(.type=="worker_crashed")|.en // .summary.en' \
+  < "$r8/state/events.jsonl" | tail -1)" "no pull request" "and the log says which failure it was"
 rm -rf "$d8"
 
 # A run that was interrupted leaves its files uncommitted in the worktree,
