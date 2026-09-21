@@ -718,6 +718,38 @@
         "a message that could not be posted is an error the run reports, not a line on standard error nobody reads: asking is the whole of that round and a question that went nowhere leaves the task deadlocked",
         "the worker's own lookup is the only path there can be: fm-dispatch never restarts a task whose pull request is open, so it has no number to pass, and the suite says so rather than the design claiming it"
       ]
+    },
+    {
+      "id": "T-033",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-007",
+        "T-006",
+        "T-013"
+      ],
+      "title": "firstmate startup contract",
+      "scope": [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "README.md",
+        "skills/**",
+        "design/design.md",
+        "design/tasks.json",
+        "tests/skills.test.sh"
+      ],
+      "acceptance": [
+        "A concise canonical startup contract and thin Claude/Codex entrypoints route a top-level interactive session to firstmate immediately, while an explicitly dispatched worker or reviewer retains its assigned role; entrypoints link to the canonical contract rather than duplicating instructions.",
+        "The default firstmate plans, dispatches, monitors, coordinates remediation and submits decisions through the repository scripts; it does not implement production code or run git/gh mutations itself. Document the actual scripts and their limitations, including gate failures that require explicit remediation coordination.",
+        "Existing user authorization persists across turns and routine authorized work proceeds without repeated confirmation. Scope decisions and captain merge approval still go through the board, and firstmate does not infer captain merge approval from a request to finish all PRs.",
+        "Startup inspects resumable task state, open PRs, worktrees and live herdr panes before launching work; it resumes existing agents instead of duplicating them, checks herdr availability within the managed session, and launches actual future worker/reviewer processes in visible panes. A conversation subagent alone is not evidence that a herdr worker exists.",
+        "Startup starts or reuses the captain board and opens it using the available browser mechanism, verifies observable results, and never claims a board, worker, test, hook removal, commit or PR action succeeded without evidence.",
+        "All relevant role skills are English portable Markdown with provider-independent valid metadata. No vendor-specific syntax occurs inside skills/. Claude/Codex-specific loading conventions may appear only in their thin root entrypoints. Resolve existing role skills and links coherently rather than creating competing startup sources.",
+        "Firstmate, worker and reviewer instructions coherently capture the round-three closed-list review protocol, subsequent original-list/regression-only enforcement, and final-only reviewer verdict provenance; intermediate text or quoted APPROVE/REJECT cannot be treated as the final review decision.",
+        "Role instructions distinguish tests actually executed and their observable results from unverified claims, require honest limitations, and distinguish static English instruction prose from dynamic user-facing summaries that require both en and zh-TW.",
+        "There is no required reliance on lavish or no-mistakes in startup or role workflows. Verification uses the repository checks and actual GitHub CI evidence, with captain decisions retaining their established board workflow.",
+        "Changes remain documentation/instructions and narrowly useful skill metadata or link-structure validation. Do not add arbitrary prose-grep assertions or model/API-dependent CI. Update README and design references so future Claude and Codex sessions discover the same role contract without conversational history."
+      ]
     }
   ]
 }

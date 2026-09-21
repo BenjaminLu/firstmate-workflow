@@ -687,3 +687,4 @@ gates, and the dispatcher cannot dispatch itself.
 | T-029 | one exit code for a usage error, in every script | T-026 |
 | T-030 | the lints are blind to the files that carry them | T-026 |
 | T-031 | a second round the worker cannot see, and a question nobody hears | T-007 |
+| T-033 | firstmate startup contract | T-007, T-006, T-013 |
