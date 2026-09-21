@@ -60,7 +60,10 @@ review_regressions() {
       wait "$pid"; rc=$?
       kill "$timer" 2>/dev/null; wait "$timer" 2>/dev/null
       assert_eq 64 "$rc" "$cmd $flag $tail terminates with usage failure"
-      assert_contains "$(cat "$out")" "$flag" "missing value names its option"
+      assert_contains "$(cat "$out")" "fm: $flag requires a value" "the option's value guard refuses the input"
+      if [ -n "$tail" ]; then
+        assert_contains "$(cat "$out")" "got $tail" "the guard rejects the option-shaped value before consuming it"
+      fi
       assert_eq "$snap" "$(treesum "$d")" "invalid options have no side effects"
     done
   done <<'OPTIONS'

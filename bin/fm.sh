@@ -41,7 +41,7 @@ REPO="${FM_ROOT:-$(cd "$HERE/.." && pwd)}"
 TAB="$(printf '\t')"
 die() { printf 'fm: %s\n' "$1" >&2; exit "${2:-64}"; }
 # All value-taking options reject missing/option-shaped values before shift.
-need_value() {
+need() {
   [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 requires a value"
   case "$2" in -*) die "$1 requires a value, got $2" ;; esac
 }
@@ -386,7 +386,7 @@ cmd_lint() {
   local repo="$REPO" bad w v n writers nwriters
   while [ $# -gt 0 ]; do
     case "$1" in
-      --repo) need_value "$@"; repo="${2-}"; shift 2 ;;
+      --repo) need "$@"; repo="${2-}"; shift 2 ;;
       *) die "lint: unknown argument $1" ;;
     esac
   done
@@ -428,8 +428,8 @@ cmd_sync() {
   local repo="$REPO" src='' name='' vendor vreal dest stage n s imported=0 nskipped=0 skipped=''
   while [ $# -gt 0 ]; do
     case "$1" in
-      --repo) need_value "$@"; repo="${2-}"; shift 2 ;;
-      --name) need_value "$@"; name="${2-}"; shift 2 ;;
+      --repo) need "$@"; repo="${2-}"; shift 2 ;;
+      --name) need "$@"; name="${2-}"; shift 2 ;;
       -*) die "sync-skills: unknown argument $1" ;;
       *) [ -z "$src" ] || die "sync-skills: one source directory at a time"; src="$1"; shift ;;
     esac
@@ -546,10 +546,10 @@ cmd_selfupdate() {
   local repo="$REPO" skill='' why='' adopt='' dir id spec
   while [ $# -gt 0 ]; do
     case "$1" in
-      --skill) need_value "$@"; skill="${2-}"; shift 2 ;;
-      --why)   need_value "$@"; why="${2-}";   shift 2 ;;
-      --adopt) need_value "$@"; adopt="${2-}"; shift 2 ;;
-      --repo)  need_value "$@"; repo="${2-}";  shift 2 ;;
+      --skill) need "$@"; skill="${2-}"; shift 2 ;;
+      --why)   need "$@"; why="${2-}";   shift 2 ;;
+      --adopt) need "$@"; adopt="${2-}"; shift 2 ;;
+      --repo)  need "$@"; repo="${2-}";  shift 2 ;;
       *) die "self-update: unknown argument $1" ;;
     esac
   done
