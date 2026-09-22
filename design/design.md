@@ -665,6 +665,30 @@ Finished actors cannot reappear through late technical events; a new dispatch
 starts fresh activity. Producers lacking authored summaries need firstmate
 coordination with the owning task, not fabricated board descriptions.
 
+#### Mid-run progress (truthful; T-036)
+
+Captains need more than “wait for the final result,” but the board must not
+invent motion. The throwaway prototype under
+`design/proposals/2026-09-20-captain-board/prototype.html` randomly ticks
+`pct` for demo only; that behaviour is not product truth and must not be
+ported into production percentages.
+
+Three layers, coarsest first:
+
+1. **Phase** — mechanical lifecycle labels emitted only from script-known
+   nodes (adapter started, tests running, commit pushed, review opened,
+   verdict signed, and similar). Vendors share the same producers.
+2. **Activity** — authored `data.activity` `{en, "zh-TW"}` describing what is
+   observably underway. Prefer script and artifact evidence over model prose.
+3. **Bounded progress** — optional `{done, total, …}` (or equivalent) only
+   when a real denominator exists (closed-list items, gates). No denominator
+   means no progress bar and no percentage.
+
+Pane heartbeats and vendor JSON buffers are not board state until a producer
+writes through `bin/fm-emit.sh`. High-frequency updates are throttled. The UI
+hides progress chrome when bounded progress is absent; mapping coarse stage
+names to fixed percentages is forbidden.
+
 ### Ahoy
 
 | Trigger | Response |
