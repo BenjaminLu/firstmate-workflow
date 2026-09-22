@@ -863,6 +863,7 @@
         "bin/fm-review.sh",
         "bin/fm-herdr.py",
         "bin/fm-checkpoint.sh",
+        "bin/fm-guard.sh",
         "bin/fm-config.sh",
         "board/server.ts",
         "board/public/**",
@@ -872,6 +873,8 @@
         "tests/review.test.sh",
         "tests/session.test.sh",
         "tests/herdr.test.sh",
+        "tests/crew-end-to-end.test.sh",
+        "tests/reconcile.test.sh",
         "skills/firstmate/**",
         "skills/worker/SKILL.md",
         "skills/reviewer/SKILL.md"

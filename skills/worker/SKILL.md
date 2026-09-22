@@ -34,14 +34,20 @@ You never merge, never write to `main`/`master`, never open or edit a pull
 request, and never rebase onto protected branches. Raw `git` / `gh` for those
 operations stays forbidden.
 
-**Mid-run checkpoint (required):** after each logical commit, run
-`bin/fm-checkpoint.sh` (commit if dirty, then immediate `git push` of the
-feature branch). Do not wait until `WORKER_COMPLETE` for the only push.
-`fm-worker.sh` may still do a final sweep through the same helper for leftovers.
-Checkpoint is branch save-only.
+**Mid-run checkpoint (required):** after each logical unit of work — and
+before any `ASK-PASS-CRITERIA` if you also changed files — run the stock
+helper so the PR is never a black box waiting for the final script commit:
 
-When the harness owns git for you, edit files and stop; otherwise checkpoint
-as you go so the remote always holds mid-run work.
+```bash
+bin/fm-checkpoint.sh --task <TASK> --message "<short why>" --repo <root>
+# or, from inside the worktree:
+bin/fm-checkpoint.sh --dir . --task <TASK> --message "<short why>"
+```
+
+That commits and immediately pushes the feature branch only. Do not wait
+until `WORKER_COMPLETE` for the only push. `fm-worker.sh` still does a
+final sweep through the same helper and will also publish a dirty
+worktree on EXIT (TERM/INT), but mid-run saves are your job.
 
 ## Every finding is a class
 

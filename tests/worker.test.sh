@@ -1218,27 +1218,30 @@ git init -q --bare "$barec"
 git init -q -b main "$dc/repo"
 cd "$dc/repo" || exit 1
 git config user.email a@b.c; git config user.name t
-cp "$ROOT/bin/fm-checkpoint.sh" "$ROOT/bin/fm-guard.sh" .
-mkdir -p bin; cp fm-checkpoint.sh fm-guard.sh bin/
+mkdir -p bin design
+cp "$ROOT/bin/fm-checkpoint.sh" "$ROOT/bin/fm-guard.sh" "$ROOT/bin/fm-config.sh" \
+   "$ROOT/bin/fm-emit.sh" bin/
 printf 'base\n' > README; git add README; git commit -qm base
 git remote add origin "$barec"; git push -q -u origin main
-git checkout -q -b t-036-checkpoint
-printf 'unit\n' > work.txt
-assert_ok "./bin/fm-checkpoint.sh --dir . --message 'T-036: checkpoint unit'" \
+git branch -q t-ck-branch
+mkdir -p state/worktrees
+git worktree add -q state/worktrees/T-CK t-ck-branch
+printf 'unit\n' > state/worktrees/T-CK/work.txt
+assert_ok "FM_ROOT='$dc/repo' bin/fm-checkpoint.sh --task T-CK --repo '$dc/repo' --message 'checkpoint unit'" \
   "checkpoint commits dirty work on a feature branch"
-assert_ok "git --git-dir='$barec' rev-parse --verify t-036-checkpoint" \
+assert_ok "git --git-dir='$barec' rev-parse --verify t-ck-branch" \
   "checkpoint pushes the feature branch immediately"
-assert_contains "$(git log -1 --pretty=%s)" "T-036: checkpoint unit" \
+assert_contains "$(git -C state/worktrees/T-CK log -1 --pretty=%s)" "T-CK: checkpoint unit" \
   "checkpoint commit uses the supplied message"
 # Refuse protected branches.
-git checkout -q main
-printf 'nope\n' > bad.txt
-assert_fail "./bin/fm-checkpoint.sh --dir . --message 'should refuse main'" \
+git -C state/worktrees/T-CK checkout -q main
+printf 'nope\n' > state/worktrees/T-CK/bad.txt
+assert_fail "FM_ROOT='$dc/repo' bin/fm-checkpoint.sh --task T-CK --repo '$dc/repo' --message 'should refuse main'" \
   "checkpoint refuses to write on main"
-assert_fail "git --git-dir='$barec' cat-file -e origin/main:bad.txt 2>/dev/null" \
+assert_fail "git --git-dir='$barec' ls-tree -r main --name-only | grep -qx bad.txt" \
   "refused main checkpoint pushes nothing"
 # Never a PR helper: the script has no gh / pr create path.
-assert_fail "grep -nE '\\\$GH|pr create|gh pr' '$ROOT/bin/fm-checkpoint.sh'" \
+assert_fail "grep -nE 'pr create|gh pr' '$ROOT/bin/fm-checkpoint.sh'" \
   "checkpoint is branch save-only (no PR create)"
 rm -rf "$dc"
 

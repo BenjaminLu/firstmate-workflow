@@ -606,8 +606,8 @@ fi
 # Final sweep for leftovers uses the same stock checkpoint helper the
 # worker skill requires after each logical commit: commit then push the
 # feature branch. Never wait until WORKER_COMPLETE for the only push.
-if ! "$REPO/bin/fm-checkpoint.sh" --dir "$tree" \
-     --message "$TASK: $(jq -r .title <<<"$spec")" </dev/null; then
+if ! "$REPO/bin/fm-checkpoint.sh" --task "$TASK" --repo "$REPO" \
+     --message "$(jq -r .title <<<"$spec")" </dev/null; then
   echo "fm-worker: could not checkpoint $branch" >&2; exit 71
 fi
 emit --type commit_pushed --en "committed on $branch" --tw "已在 $branch 上 commit"

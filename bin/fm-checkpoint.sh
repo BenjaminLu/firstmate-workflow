@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # Mid-run save for a live worker worktree: commit then push the feature branch.
 # Workers call this after each logical unit so the PR is never a black box.
-# Does not open/merge PRs, touch main/master, or run gh beyond optional emit.
+# Does not open/merge PRs, touch main/master, or create pull requests.
 #
-#   fm-checkpoint.sh --task T-035 --message "SIGHUP ignore in transport" [--repo .]
+#   fm-checkpoint.sh --task T-036 --message "why" [--repo ROOT]
+#   fm-checkpoint.sh --dir WORKTREE --message "why"
+#
+# --repo is the session/repo root (owns state/worktrees/). --dir is the
+# worktree itself. Pass one or the other, not both.
 set -euo pipefail
 exec < /dev/null
 _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
@@ -11,23 +15,40 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
 
-REPO="${FM_ROOT:-$(pwd)}"; TASK=''; MSG=''
+REPO="${FM_ROOT:-$(pwd)}"; TASK=''; MSG=''; DIR=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --task) fm_need "fm-checkpoint" "$@"; TASK="${2-}"; shift 2 ;;
     --repo) fm_need "fm-checkpoint" "$@"; REPO="${2-}"; shift 2 ;;
+    --dir)  fm_need "fm-checkpoint" "$@"; DIR="${2-}"; shift 2 ;;
     --message|--msg) fm_need "fm-checkpoint" "$@"; MSG="${2-}"; shift 2 ;;
     *) echo "fm-checkpoint: unknown argument $1" >&2; exit 64 ;;
   esac
 done
-[ -n "$TASK" ] && [ -n "$MSG" ] || {
-  echo "usage: fm-checkpoint.sh --task <id> --message <text> [--repo dir]" >&2
+[ -n "$MSG" ] || {
+  echo "usage: fm-checkpoint.sh (--task <id> [--repo dir] | --dir <path>) --message <text>" >&2
   exit 64
 }
-cd "$REPO" || { echo "fm-checkpoint: no repo at $REPO" >&2; exit 64; }
-REPO="$(pwd -P)"
-tree="$REPO/state/worktrees/$TASK"
-[ -d "$tree" ] || { echo "fm-checkpoint: no worktree at $tree" >&2; exit 70; }
+if [ -n "$DIR" ] && [ -n "$TASK" ]; then
+  echo "fm-checkpoint: pass --task or --dir, not both" >&2
+  exit 64
+fi
+if [ -z "$DIR" ] && [ -z "$TASK" ]; then
+  echo "usage: fm-checkpoint.sh (--task <id> [--repo dir] | --dir <path>) --message <text>" >&2
+  exit 64
+fi
+
+if [ -n "$DIR" ]; then
+  tree="$(cd "$DIR" && pwd -P)" || { echo "fm-checkpoint: no directory at $DIR" >&2; exit 70; }
+  REPO="$(git -C "$tree" rev-parse --show-toplevel 2>/dev/null)" || {
+    echo "fm-checkpoint: $DIR is not a git worktree" >&2; exit 70; }
+  TASK="$(basename "$tree")"
+else
+  cd "$REPO" || { echo "fm-checkpoint: no repo at $REPO" >&2; exit 64; }
+  REPO="$(pwd -P)"
+  tree="$REPO/state/worktrees/$TASK"
+  [ -d "$tree" ] || { echo "fm-checkpoint: no worktree at $tree" >&2; exit 70; }
+fi
 
 branch="$(git -C "$tree" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 case "$branch" in
@@ -37,22 +58,36 @@ case "$branch" in
     ;;
 esac
 
+# Prefer fm-guard when present (same protected-branch policy as the crew).
+if [ -f "$(dirname "${BASH_SOURCE[0]}")/fm-guard.sh" ]; then
+  # shellcheck source=bin/fm-guard.sh
+  . "$(dirname "${BASH_SOURCE[0]}")/fm-guard.sh"
+  fm_guard_branch "$tree" || exit 71
+fi
+
 dirty="$(git -C "$tree" status --porcelain -- . \
   ":(exclude).fm-prompt.md" ":(exclude).fm-say.md" || true)"
-[ -n "$dirty" ] || {
-  echo "fm-checkpoint: nothing to commit on $branch" >&2
-  exit 0
-}
 
-git -C "$tree" add -A
-git -C "$tree" -c user.name=firstmate -c user.email=firstmate@local \
-  commit -q -m "$TASK: $MSG"
+if [ -n "$dirty" ]; then
+  git -C "$tree" add -A -- . \
+    ':(exclude).fm-prompt.md' ':(exclude).fm-say.md' 2>/dev/null \
+    || git -C "$tree" add -A
+  case "$MSG" in
+    "$TASK:"*|"$TASK "*) commit_msg="$MSG" ;;
+    *) commit_msg="$TASK: $MSG" ;;
+  esac
+  git -C "$tree" -c user.name=firstmate -c user.email=firstmate@local \
+    commit -q -m "$commit_msg"
+fi
+
+# Always push: a clean tree may still hold unpushed commits. Exiting before
+# push is the end-of-run-only black box this helper exists to end.
 if [ -x "$REPO/bin/fm-emit.sh" ] || [ -x "${FM_CODE_ROOT:-}/bin/fm-emit.sh" ]; then
   EMIT="${FM_CODE_ROOT:-$REPO}/bin/fm-emit.sh"
   FM_ROOT="$REPO" "$EMIT" --actor "${FM_ACTOR:-worker}" --task "$TASK" --type commit_pushed \
-    --en "checkpoint: $MSG" --tw "checkpoint：$MSG" >/dev/null 2>&1 || true
+    --en "checkpoint: $MSG" --tw "checkpoint：$MSG" >/dev/null 2>&1 </dev/null || true
 fi
-git -C "$tree" push -q -u origin "$branch" || {
+git -C "$tree" push -q -u origin "$branch" </dev/null || {
   echo "fm-checkpoint: push failed for $branch" >&2
   exit 71
 }
