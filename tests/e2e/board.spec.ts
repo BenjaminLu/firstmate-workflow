@@ -196,8 +196,8 @@ test('continuation history, readable mobile content and persistent controls', as
     await page.evaluate("fetch('/api/state').then(r=>r.json()).then(render)");
     await expect(page.locator('#history summary')).toContainText('31');
     let posts=0;page.on('request',r=>{if(r.method()==='POST')posts++;});
-    await page.locator('[data-c="custom"]').first().click();
-    await page.locator('textarea').first().fill('Literal 船長');
+    await page.locator('#card-D-1 [data-c="custom"]').click();
+    await page.locator('#card-D-1 textarea').fill('Literal 船長');
     await page.locator('#history summary').focus(); await page.keyboard.press('Enter');
     await expect(page.locator('#history .card')).toHaveCount(31);
     for(let i=0;i<30;i++)await expect(page.locator('#history .card').nth(i)).toContainText(`H-${i}`);
@@ -207,14 +207,14 @@ test('continuation history, readable mobile content and persistent controls', as
     await page.evaluate("fetch('/api/state').then(r => r.json()).then(render)");
     await expect(page.locator('#history')).toHaveJSProperty('open',true);
     await expect(page.locator('#history summary')).toBeFocused();
-    await expect(page.locator('textarea').first()).toHaveValue('Literal 船長');
+    await expect(page.locator('#card-D-1 textarea')).toHaveValue('Literal 船長');
     await page.locator('#history summary').click();
-    await page.locator('textarea').first().focus();
+    await page.locator('#card-D-1 textarea').focus();
     emitFixture(root,'github','T-005','merged','Completed task','任務已完成');
     await page.evaluate("fetch('/api/state').then(r=>r.json()).then(render)");
     await expect(page.locator('#history summary')).toContainText('32');
     await expect(page.locator('#history')).toHaveJSProperty('open',false);
-    await expect(page.locator('textarea').first()).toBeFocused();
+    await expect(page.locator('#card-D-1 textarea')).toBeFocused();
     const effect=await page.locator('.scene').getAttribute('data-effect');expect(effect).toBeTruthy();
     await page.evaluate("fetch('/api/state').then(r=>r.json()).then(render)");
     expect(await page.locator('.scene').getAttribute('data-effect')).toBe(effect);
@@ -245,7 +245,7 @@ test('continuation history, readable mobile content and persistent controls', as
     await page.locator('.scene').screenshot({path:testInfo.outputPath('mobile-ship.png')});
     await page.addStyleTag({content:'body{font-size:32px} .dcard h3{font-size:44px} .explanation,.tradeoffs,.acts button,.acts label,.acts textarea{font-size:32px}'});
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=320)).toBe(true);
-    await expect(page.locator('textarea').first()).toHaveValue('Literal 船長');
+    await expect(page.locator('#card-D-1 textarea')).toHaveValue('Literal 船長');
     expect(posts).toBe(0);
   } finally {stopBoard(b);}
 });
@@ -440,9 +440,9 @@ test('all authored fields switch locale, diagrams differ and input stays text', 
     await page.goto(`${b.url}/?lang=en`);
     for (const lang of ['en','zh-TW','zh-CN']) {
       await page.locator(`[data-l="${lang}"]`).click();
-      for (const [i,d] of [details,second].entries()) {
-        const want = lang === 'en' ? d.en : lang === 'zh-TW' ? d['zh-TW'] : CN_DETAILS[i];
-        const card = page.locator('.dcard').nth(i);
+      for (const [id, d, cn] of [['D-1', details, CN_DETAILS[0]], ['D-2', second, CN_DETAILS[1]]] as const) {
+        const want = lang === 'en' ? d.en : lang === 'zh-TW' ? d['zh-TW'] : cn;
+        const card = page.locator(`#card-${id}`);
         for (const field of ['title','explanation'] as const) await expect(card).toContainText(want[field]);
         for (const opt of Object.values(want.options)) for (const value of Object.values(opt)) await expect(card).toContainText(value);
         const frame = card.frameLocator('iframe');
@@ -450,12 +450,12 @@ test('all authored fields switch locale, diagrams differ and input stays text', 
         await expect(frame.locator('body')).toContainText(want.after);
         await expect(frame.locator('h1,button,.gates,.lanes')).toHaveCount(0);
       }
-      if (lang === 'zh-CN') await expect(page.locator('.dcard').nth(1).locator('h3')).toHaveText('限制审查重试');
-      await expect(page.locator('.dcard').first().locator('iframe:visible, .change-fallback:visible')).toHaveCount(1);
+      if (lang === 'zh-CN') await expect(page.locator('#card-D-2 h3')).toHaveText('限制审查重试');
+      await expect(page.locator('#card-D-1').locator('iframe:visible, .change-fallback:visible')).toHaveCount(1);
     }
     await expect(page.locator('.dcard img,.dcard script')).toHaveCount(0);
-    await page.locator('.dcard').nth(1).locator('[data-c="B"]').click();
-    await page.locator('.dcard').nth(1).locator('.confirm').click();
+    await page.locator('#card-D-2 [data-c="B"]').click();
+    await page.locator('#card-D-2 .confirm').click();
     await expect(page.locator('#orderFeedback')).toContainText(CN_DETAILS[1].outcome);
     await page.locator('[data-l="en"]').click();
     await expect(page.locator('#orderFeedback')).toContainText(second.en.outcome);
@@ -531,18 +531,18 @@ test('external outcomes override stale success and clear only their settled draf
   writeFileSync(join(b.root,'bin/fm-merge.sh'),'#!/usr/bin/env bash\necho refused\nexit 1\n');
   try {
     await page.goto(`${b.url}/?lang=en`);
-    const cards=page.locator('.dcard');
-    await cards.nth(0).locator('[data-c="B"]').click();
-    await cards.nth(2).locator('[data-c="custom"]').click();
-    await cards.nth(2).locator('textarea').fill('keep this unrelated draft');
-    await cards.nth(1).locator('[data-c="B"]').click();await cards.nth(1).locator('.confirm').click();
+    await page.locator('#card-D-1 [data-c="B"]').click();
+    await page.locator('#card-D-3 [data-c="custom"]').click();
+    await page.locator('#card-D-3 textarea').fill('keep this unrelated draft');
+    await page.locator('#card-D-2 [data-c="B"]').click();
+    await page.locator('#card-D-2 .confirm').click();
     await expect(page.locator('#orderFeedback')).toContainText(EN.recorded);
     const external=await page.request.post(`${b.url}/decisions`,{data:{id:'D-1',chosen:'A'}});
     expect(external.ok()).toBe(true);
     await expect(page.locator('#orderFeedback')).toContainText(EN.mergeRefused);
     await expect(page.locator('#orderFeedback')).not.toContainText(EN.recorded);
     await expect(page.locator('.dcard')).toHaveCount(1);
-    await expect(page.locator('.dcard textarea')).toHaveValue('keep this unrelated draft');
+    await expect(page.locator('#card-D-3 textarea')).toHaveValue('keep this unrelated draft');
     await expect(page.locator('#captain')).toHaveAttribute('data-pose','ready',{timeout:7000});
     await page.request.post(`${b.url}/decisions`,{data:{id:'D-3',chosen:'custom',text:'keep this unrelated draft'}});
     await expect(page.locator('.dcard')).toHaveCount(0);

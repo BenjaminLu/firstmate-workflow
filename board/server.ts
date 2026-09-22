@@ -283,6 +283,8 @@ const pending = () => {
       .map((e) => String((e as Record<string, unknown>).pr ?? "")),
   );
   const settledTasks = new Set(terminal.map(e => String(e.task ?? '')).filter(Boolean));
+  // readdirSync order is filesystem-dependent (macOS vs Linux CI). Sort by
+  // decision id so the deck and multi-card tests stay stable everywhere.
   return readdirSync(dir).filter((f) => f.endsWith(".json")).flatMap((f) => {
     try {
       const d = JSON.parse(readFileSync(join(dir, f), "utf8"));
@@ -290,7 +292,7 @@ const pending = () => {
       if (d.task != null && settledTasks.has(String(d.task))) return [];
       return [d];
     } catch { return []; }
-  });
+  }).sort((a, b) => String(a.id ?? "").localeCompare(String(b.id ?? ""), "en", { numeric: true }));
 };
 
 const json = (body: unknown, status = 200) =>

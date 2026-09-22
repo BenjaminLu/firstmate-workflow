@@ -274,6 +274,18 @@ assert_eq "999" "$(jq -r '.tasks[]|select(.id=="T-999")|.pr' <<<"$sterm")" \
   "and keeps the event PR on that completed identity"
 rm -f "$d/state/pending/D-88.json"
 
+# Pending list order must not follow readdirSync: write higher ids first so a
+# filesystem that returns creation/lexicographic order still yields numeric id
+# order. T-A is still open here (T-B merged, T-C closed); settled tasks filter.
+mkdir -p "$d/state/pending"
+printf '{"id":"D-100","task":"T-A","kind":"choice","title":"hundred"}\n' > "$d/state/pending/D-100.json"
+printf '{"id":"D-20","task":"T-A","kind":"choice","title":"twenty"}\n' > "$d/state/pending/D-20.json"
+printf '{"id":"D-3","task":"T-A","kind":"choice","title":"three"}\n' > "$d/state/pending/D-3.json"
+sord="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "D-3 D-20 D-100" "$(jq -r '[.pending[].id]|join(" ")' <<<"$sord")" \
+  "pending cards are ordered by decision id, not filesystem readdir order"
+rm -f "$d/state/pending/D-100.json" "$d/state/pending/D-20.json" "$d/state/pending/D-3.json"
+
 # review_failed without review_outcome is missing-review/error, never a
 # directed rejection. The additive datum makes a substantive reject handoff.
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-real --task T-D --type dispatched \

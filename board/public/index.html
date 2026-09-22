@@ -229,7 +229,8 @@ function render(s) {
 
   const deck = document.getElementById("deck");
   const wrap = document.getElementById("deckwrap");
-  const pend = s.pending || [];
+  const pend = [...(s.pending || [])].sort((a, b) =>
+    String(a.id || "").localeCompare(String(b.id || ""), "en", { numeric: true }));
   const pendingIds = new Set(pend.map(d => d.id));
   for (const id of [...picks.keys()]) if (!pendingIds.has(id)) picks.delete(id);
   for (const id of [...drafts.keys()]) if (!pendingIds.has(id)) drafts.delete(id);
