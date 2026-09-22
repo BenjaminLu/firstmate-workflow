@@ -71,13 +71,13 @@ emit() { emit_once "$@" || true; }
 # Phase / activity refresh without inventing percent. Optional done/total when
 # a true denominator exists. Shared path for every vendor.
 emit_status() {
-  local en="$1" tw="$2" done="${3-}" total="${4-}" data
+  local en="$1" tw="$2" done_n="${3-}" total_n="${4-}" data
   data="$(jq -cn --argjson base "$CREW_DATA" --arg en "$en" --arg tw "$tw" \
-    --arg done "$done" --arg total "$total" '
+    --arg done_n "$done_n" --arg total_n "$total_n" '
     $base * {activity:{en:$en,"zh-TW":$tw}}
-    + (if ($done|test("^[0-9]+$")) and ($total|test("^[1-9][0-9]*$"))
-         and (($done|tonumber) <= ($total|tonumber))
-       then {progress:{done:($done|tonumber),total:($total|tonumber)}}
+    + (if ($done_n|test("^[0-9]+$")) and ($total_n|test("^[1-9][0-9]*$"))
+         and (($done_n|tonumber) <= ($total_n|tonumber))
+       then {progress:{done:($done_n|tonumber),total:($total_n|tonumber)}}
        else {} end)
   ')"
   emit_once --type crew_status --data "$data" --en "$en" --tw "$tw" || true
@@ -144,19 +144,17 @@ publish_wip_if_dirty() {
   dirty="$(git -C "$tree" status --porcelain -- . \
     ":(exclude).fm-prompt.md" ":(exclude).fm-say.md" 2>/dev/null || true)"
   [ -n "$dirty" ] || return 0
-  _fm_wip_done=1
   echo "fm-worker: publishing dirty worktree ($reason)" >&2
-  git -C "$tree" add -A || return 1
-  git -C "$tree" -c user.name=firstmate -c user.email=firstmate@local \
-    diff --cached --quiet 2>/dev/null && return 0
-  git -C "$tree" -c user.name=firstmate -c user.email=firstmate@local \
-    commit -q -m "$TASK: checkpoint ($reason)" || return 1
+  # Same stock helper as mid-run checkpoints: commit then push. Emit stays
+  # here so the board sees the real actor, not a phantom default.
+  if ! "$REPO/bin/fm-checkpoint.sh" --task "$TASK" --repo "$REPO" \
+       --message "checkpoint ($reason)" </dev/null; then
+    echo "fm-worker: checkpoint push failed for $branch ($reason)" >&2
+    return 1
+  fi
+  _fm_wip_done=1
   emit --type commit_pushed ${PR:+--pr "$PR"} \
     --en "checkpoint on $branch ($reason)" --tw "已 checkpoint $branch ($reason)"
-  git -C "$tree" push -q -u origin "$branch" 2>/dev/null || {
-    echo "fm-worker: checkpoint push failed for $branch" >&2
-    return 1
-  }
   return 0
 }
 

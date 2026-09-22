@@ -67,13 +67,13 @@ emit_once() {
 }
 emit() { emit_once "$@" || true; }
 emit_status() {
-  local en="$1" tw="$2" done="${3-}" total="${4-}" data
+  local en="$1" tw="$2" done_n="${3-}" total_n="${4-}" data
   data="$(jq -cn --argjson base "$CREW_DATA" --arg en "$en" --arg tw "$tw" \
-    --arg done "$done" --arg total "$total" '
+    --arg done_n "$done_n" --arg total_n "$total_n" '
     $base * {activity:{en:$en,"zh-TW":$tw}}
-    + (if ($done|test("^[0-9]+$")) and ($total|test("^[1-9][0-9]*$"))
-         and (($done|tonumber) <= ($total|tonumber))
-       then {progress:{done:($done|tonumber),total:($total|tonumber)}}
+    + (if ($done_n|test("^[0-9]+$")) and ($total_n|test("^[1-9][0-9]*$"))
+         and (($done_n|tonumber) <= ($total_n|tonumber))
+       then {progress:{done:($done_n|tonumber),total:($total_n|tonumber)}}
        else {} end)
   ')"
   emit_once --type crew_status --data "$data" --en "$en" --tw "$tw" || true
