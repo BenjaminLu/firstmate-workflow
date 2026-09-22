@@ -451,7 +451,15 @@
       "title": "fm-reconcile.sh: reconciling after a crash",
       "scope": [
         "bin/fm-reconcile.sh",
-        "tests/reconcile.test.sh"
+        "tests/reconcile.test.sh",
+        "tests/option-loop.test.sh",
+        "design/tasks.json",
+        "bin/fm-worker.sh",
+        "tests/worker.test.sh",
+        "bin/ci.sh",
+        "tests/ci.test.sh",
+        ".github/workflows/ci.yml",
+        "design/design.md"
       ],
       "acceptance": [
         "replaying events.jsonl rebuilds the whole state with no snapshot",
@@ -474,7 +482,9 @@
       "scope": [
         "bin/fm.sh",
         "skills/**",
-        "tests/selfupdate.test.sh"
+        "tests/selfupdate.test.sh",
+        "tests/option-loop.test.sh",
+        "design/tasks.json"
       ],
       "acceptance": [
         "a skill-update task travels the same pull request and the same seven gates as any other",

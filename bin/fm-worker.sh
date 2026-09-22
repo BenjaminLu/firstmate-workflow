@@ -89,11 +89,19 @@ scratch_add() { scratch+=("$1"); }
 clean_scratch() { [ ${#scratch[@]} -eq 0 ] || rm -f "${scratch[@]}"; }
 
 finished() {
+  local rc=$?
   clean_scratch
   local try=3
   while [ "$try" -gt 0 ]; do
     try=$(( try - 1 ))
-    emit_once --type agent_finished --en "run finished" --tw "這次執行結束" && return 0
+    if emit_once --type agent_finished --en "run finished" --tw "這次執行結束"; then
+      # Failed or interrupted attempts retain evidence for reconcile. Only
+      # this owner can retire a successfully completed run's PID record.
+      if [ "$rc" -eq 0 ] && [ "${pid_owned:-0}" = 1 ]; then
+        rm -f "$pidfile" || { echo "fm-worker: cannot retire $pidfile" >&2; exit 70; }
+      fi
+      return 0
+    fi
   done
   echo "${0##*/}: could not record the end of this run; ${NAME} stays on the deck until ${TASK} is finished" >&2
 }
@@ -124,10 +132,36 @@ slug="$(printf '%s' "$TASK" | tr 'A-Z' 'a-z')"
 branch="$slug-$(jq -r '.title' <<<"$spec" | tr 'A-Z' 'a-z' | tr -cs 'a-z0-9' '-' | cut -c1-28 | sed 's/-*$//')"
 tree="$REPO/state/worktrees/$TASK"
 
+# Ordinary dispatch and recovery share one kernel lock. Recovery passes the
+# locked descriptor as fd 9 across exec; ordinary workers acquire it before
+# touching the worktree. The PID is published atomically while holding it.
+pidfile="$REPO/state/worktrees/$TASK.pid"
+mkdir -p "$REPO/state/worktrees" || exit 70
+dispatch_data='{"role":"worker"}'
+if [ "${FM_WORKER_LOCK_PID:-}" != "$$" ]; then
+  exec 9>>"$pidfile.lock" || exit 70
+  perl -MFcntl=:flock -e '
+    open(my $lock, "+<&=9") or die "worker lock: $!";
+    flock($lock, LOCK_EX | LOCK_NB) or exit 1;
+  ' || { echo "fm-worker: cannot lock $TASK; another worker may be running" >&2; exit 70; }
+else
+  # Reconcile execs this PID with its locked fd 9. Both producers describe
+  # the same attempt: the worker must not introduce a fresh boundary after
+  # the launcher's recovery event, even when neither knows the PR yet.
+  dispatch_data='{"role":"worker","recovery":true}'
+fi
+# Consume the PID-bound handoff; a child/wrapper must not reuse it as a
+# generic recovery flag. Keep fd 9 open for this worker's entire lifetime.
+unset FM_WORKER_LOCK_PID
+printf '%s\n' "$$" > "$pidfile.next" && mv -f "$pidfile.next" "$pidfile" || {
+  echo "fm-worker: cannot publish liveness for $TASK" >&2; exit 70;
+}
+pid_owned=1
+
 # The worker records that it started, not the dispatcher. A task started
 # by hand was otherwise never in flight as far as the log was concerned,
 # and the dispatcher would start a second one on top of it.
-emit --type dispatched --en "picked up $TASK" --tw "接下 $TASK"
+emit --type dispatched ${PR:+--pr "$PR"} --data "$dispatch_data" --en "picked up $TASK" --tw "接下 $TASK"
 
 # --- a worktree of its own -----------------------------------------------
 # Never delete work. A run that was interrupted - the machine slept, the
@@ -366,8 +400,22 @@ worker_did_work() {
       ":(exclude).fm-prompt.md" ":(exclude).fm-say.md")" ] || [ -s "$tree/.fm-say.md" ]
 }
 log="$REPO/state/worktrees/$TASK.log"; : > "$log"
-fm_run_chain "$REPO/bin/adapters" "$(fm_vendor_chain worker "$VENDOR")" \
-  "$prompt" "$tree" "$log" worker_did_work; rc=$?
+# A function redirection saves fd 9 on another descriptor, which an adapter
+# can inherit. Close it permanently in a subshell instead, so a surviving
+# adapter cannot hold the dead worker's recovery lock. Return only the chain's
+# outputs, using bash's quoted declarations rather than parsing adapter text.
+chain_result="$(scratch_new)" || exit 70
+scratch_add "$chain_result"
+(
+  exec 9>&-
+  fm_run_chain "$REPO/bin/adapters" "$(fm_vendor_chain worker "$VENDOR")" \
+    "$prompt" "$tree" "$log" worker_did_work
+  chain_rc=$?
+  declare -p FM_VENDOR_USED FM_VENDOR_SKIPPED FM_VENDOR_MISREAD FM_VENDOR_UNKNOWN > "$chain_result"
+  exit "$chain_rc"
+); rc=$?
+# shellcheck disable=SC1090
+. "$chain_result"
 [ -z "$FM_VENDOR_UNKNOWN" ] || {
   echo "fm-worker: config.yaml names a vendor with no adapter: $FM_VENDOR_UNKNOWN" >&2; exit 65; }
 [ -z "$FM_VENDOR_MISREAD" ] || {

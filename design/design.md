@@ -754,7 +754,19 @@ Only the board is tri-lingual. The repository is English (section 1).
 
 ## 10. CI
 
-The local gate and GitHub Actions run **the same** `bin/ci.sh`:
+The local gate and GitHub Actions run **the same** `bin/ci.sh`.
+
+The elapsed-time limit defaults to 180 seconds. Set `FM_CI_MAX_SECONDS` to a
+plain decimal integer from 1 to 3600, without leading zeros, to select an
+explicit budget; invalid or empty values exit 64 with guidance. The gate
+reports the effective budget and elapsed time, and exceeding the budget
+still fails after all functional checks. This is an elapsed-time check, not
+a process timeout; selecting a larger budget does not waive functional failures.
+GitHub sets `FM_CI_MAX_SECONDS=600`; its separate `timeout-minutes: 10` covers
+the entire job, including setup, so the script may have less than 600 seconds
+before GitHub cancels it. For T-017, Firstmate runs the same full local gate
+with `FM_CI_MAX_SECONDS=600 bash bin/ci.sh` before publication. A functional
+pass at 208 seconds is within that authorized budget, but exceeds the default.
 
 ```
 shellcheck        ->  single-writer lint  ->  bash suites
