@@ -854,7 +854,7 @@
         "T-002",
         "T-010"
       ],
-      "title": "truthful crew progress on the captain board",
+      "title": "truthful crew progress",
       "scope": [
         "design/design.md",
         "design/tasks.json",
