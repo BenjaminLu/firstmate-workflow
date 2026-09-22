@@ -177,6 +177,22 @@ fm_run_chain() {
 # somewhere else is worth no more than the check.
 fm_need() { [ "$#" -ge 3 ] || { echo "$1: $2 needs a value" >&2; exit 64; }; }
 
+# Commits that land on GitHub must use the operator's configured identity
+# (user.name / user.email), not a synthetic firstmate@local that GitHub
+# cannot link to an account. Override with FM_GIT_NAME / FM_GIT_EMAIL when
+# a bot identity is intentional.
+fm_git_name()  { printf '%s' "${FM_GIT_NAME:-$(git config user.name 2>/dev/null || true)}"; }
+fm_git_email() { printf '%s' "${FM_GIT_EMAIL:-$(git config user.email 2>/dev/null || true)}"; }
+fm_git_commit() {  # fm_git_commit <worktree> <message>
+  local dir="$1" msg="$2" n e
+  n="$(fm_git_name)"; e="$(fm_git_email)"
+  if [ -z "$n" ] || [ -z "$e" ]; then
+    echo "fm: set git user.name and user.email (or FM_GIT_NAME / FM_GIT_EMAIL) before committing" >&2
+    return 70
+  fi
+  git -C "$dir" -c user.name="$n" -c user.email="$e" commit -q -m "$msg"
+}
+
 # --- what counts as a script, and what counts as a comment ---------------
 #
 # One definition, because there were four and three of them were the

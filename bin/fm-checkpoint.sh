@@ -98,8 +98,7 @@ if [ -n "$dirty" ]; then
       "$TASK:"*|"$TASK "*) commit_msg="$MSG" ;;
       *) commit_msg="$TASK: $MSG" ;;
     esac
-    git -C "$tree" -c user.name=firstmate -c user.email=firstmate@local \
-      commit -q -m "$commit_msg"
+    fm_git_commit "$tree" "$commit_msg"
   fi
 fi
 
