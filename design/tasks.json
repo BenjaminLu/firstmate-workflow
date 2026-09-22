@@ -854,7 +854,7 @@
         "T-002",
         "T-010"
       ],
-      "title": "truthful mid-run crew activity and bounded progress on the captain board",
+      "title": "truthful crew progress on the captain board",
       "scope": [
         "design/design.md",
         "design/tasks.json",
@@ -877,7 +877,7 @@
       ],
       "acceptance": [
         "Document in design.md a mid-run reporting contract with three layers: (1) mechanical lifecycle phases emitted only from script-known nodes, (2) authored data.activity {en, zh-TW} that never invents task-specific progress from scalar titles, (3) optional bounded progress only when a true denominator exists (for example done/total). State explicitly that the 2026-09-20 captain-board prototype's random pct tick is demo-only and must not be promoted as product truth.",
-        "Remove or disable any client-side invention of percentages from coarse lifecycle state (including the working/gate/review/captain → fixed pct map). Bubbles and roster show a progress bar only when the crew payload carries explicitly bounded progress; otherwise no bar and no fake percent.",
+        "Remove or disable any client-side invention of percentages from coarse lifecycle state (including the working/gate/review/captain \u2192 fixed pct map). Bubbles and roster show a progress bar only when the crew payload carries explicitly bounded progress; otherwise no bar and no fake percent.",
         "Board /api/state (or equivalent) crew payloads expose authored activity, optional bounded progress, crew_name and a truthful phase derived from event replay per T-034 rules: retain activity beyond the recent-event window, label missing activity explicitly, and never fabricate mid-run copy for visuals.",
         "Producers: fm-worker.sh, fm-review.sh and managed herdr transport emit phase/activity (and bounded progress when applicable) through fm-emit.sh at script-known nodes such as adapter started, tests running, commit pushed, review opened, verdict signed. Cursor/Claude/Codex/Gemini share the same path; do not add vendor-only progress invention. Heartbeat-only pane text is not board state until emitted.",
         "Throttle or coalesce high-frequency updates so the event log stays usable; a still-running heartbeat may refresh activity on an interval without claiming percent complete.",
