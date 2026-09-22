@@ -27,7 +27,11 @@ fixture() {                     # a repo with a remote, a task, and the real scr
   local d; d="$(mktemp -d)"; local bare="$d/remote.git" task="${1:-T-Z}"
   git init -q --bare "$bare"
   git init -q -b main "$d/repo"
-  cd "$d/repo" || return 1
+  # Never leave the suite cwd inside a disposable fixture: later asserts use
+  # `git --git-dir=...` and fail with "Unable to read current working directory"
+  # once the fixture is rm -rf'd.
+  (
+  cd "$d/repo" || exit 1
   git config user.email a@b.c; git config user.name t
   mkdir -p bin design skills/worker state
   cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-worker.sh" \
@@ -42,6 +46,7 @@ JSON
   mv design/tasks.next design/tasks.json
   printf '# design\n## 6. gates\nseven of them\n## 8. board\n' > design/design.md
   git add -A; git commit -qm base; git remote add origin "$bare"; git push -q -u origin main
+  ) || return 1
   printf '%s' "$d"
 }
 
@@ -74,7 +79,7 @@ assert_ok "test -d '$r/state/worktrees/T-Z'" "it made a worktree of its own"
 assert_ok "git -C '$r' rev-parse --verify '$branch'" "the branch exists"
 assert_eq "1" "$(git -C "$r" rev-list --count "main..$branch")" "exactly one commit"
 assert_ok "git -C '$r/state/worktrees/T-Z' show --stat HEAD | grep -q mock.txt" "the adapter's file is in it"
-assert_ok "git --git-dir='$d/remote.git' rev-parse --verify '$branch'" "it pushed to the remote"
+assert_ok "cd '$ROOT' && git --git-dir='$d/remote.git' rev-parse --verify '$branch'" "it pushed to the remote"
 assert_contains "$(cat "$d/ghcalls")" "pr create" "it opened a pull request"
 
 log="$r/state/events.jsonl"
@@ -123,7 +128,7 @@ chmod +x "$r5/bin/adapters/mock.sh"
 ( cd "$r5" && FM_ROOT="$r5" FM_GH="$GH5" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
 branch="$(cd "$r5" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1)"
 assert_ne "" "$branch" "the first round made a branch"
-assert_ok "cd '$r5' && git cat-file -e '$branch:src/round-one'" "and committed its work"
+assert_ok "git -C '$r5' cat-file -e '$branch:src/round-one'" "and committed its work"
 
 # the recorder stub answers a comments query for this round, because what
 # the worker is given to answer is the point of the assertion
@@ -148,10 +153,10 @@ chmod +x "$d5/stub/gh"
 check_strict_run_stub "$d5/stub/gh" 777
 : > "$d5/ghcalls"      # so "did it create one?" is about THIS round
 ( cd "$r5" && FM_ROOT="$r5" FM_GH="$GH5" bin/fm-worker.sh --task T-Z --pr 9 >/dev/null 2>&1 )
-assert_ok "cd '$r5' && git cat-file -e '$branch:src/round-one'" "the second round keeps the first round's work"
-assert_ok "cd '$r5' && git cat-file -e '$branch:src/round-two'" "and adds its own"
-assert_ok "cd '$r5' && git cat-file -e '$branch:src/saw-review'" "and was given the review to answer"
-assert_ok "cd '$r5' && git cat-file -e '$branch:src/saw-ci'" "and why the required check is red"
+assert_ok "git -C '$r5' cat-file -e '$branch:src/round-one'" "the second round keeps the first round's work"
+assert_ok "git -C '$r5' cat-file -e '$branch:src/round-two'" "and adds its own"
+assert_ok "git -C '$r5' cat-file -e '$branch:src/saw-review'" "and was given the review to answer"
+assert_ok "git -C '$r5' cat-file -e '$branch:src/saw-ci'" "and why the required check is red"
 # and it does not try to open a second pull request for the same branch:
 # on a later round `pr create` fails, and a worker that could only ever
 # open a new one fails at the last step with its work already pushed
@@ -195,7 +200,7 @@ b9="$(cd "$r9" && git for-each-ref --format='%(refname:short)' refs/heads | grep
 # what the first round DID, not that a branch exists: `git worktree add
 # -b` makes the branch before the engine runs, so a branch is also what
 # a round that died on its first line leaves
-assert_ok "cd '$r9' && git cat-file -e '$b9:src/round-one'" \
+assert_ok "git -C '$r9' cat-file -e '$b9:src/round-one'" \
   "the first round committed work for the second to answer for"
 # a stub that knows the branch has #31, and records what it is asked
 cat > "$d9/stub/gh" <<'G'
@@ -263,7 +268,7 @@ assert_contains "$(jq -r .type < "$r6/state/events.jsonl" | tr '\n' ' ')" "ask_p
   "and the log records that the worker spoke"
 assert_lacks "$(cat "$d6/ghcalls")" "push" "asking pushes nothing"
 b6="$(cd "$r6" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1)"
-assert_fail "cd '$r6' && git cat-file -e '$b6:.fm-say.md'" "and the file never reaches the diff"
+assert_fail "git -C '$r6' cat-file -e '$b6:.fm-say.md'" "and the file never reaches the diff"
 rm -rf "$d6"
 
 # A question that went nowhere leaves the task deadlocked: the reviewer
@@ -881,13 +886,13 @@ M
 chmod +x "$r12/bin/adapters/mock.sh"
 ( cd "$r12" && FM_ROOT="$r12" FM_GH="$GH12" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
 b12="$(cd "$r12" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1)"
-assert_ok "cd '$r12' && git cat-file -e '$b12:src/round-one'" "the first round pushed a branch"
+assert_ok "git -C '$r12' cat-file -e '$b12:src/round-one'" "the first round pushed a branch"
 # the local trace is gone: the worktree, the branch, the whole of state/
 ( cd "$r12" && git worktree remove --force "state/worktrees/T-Z" >/dev/null 2>&1; true )
 ( cd "$r12" && git branch -D "$b12" >/dev/null 2>&1 )
-assert_fail "cd '$r12' && git show-ref --verify --quiet 'refs/heads/$b12'" \
+assert_fail "git -C '$r12' show-ref --verify --quiet 'refs/heads/$b12'" \
   "and nothing local remembers it"
-assert_ok "cd '$r12' && git ls-remote --exit-code --heads origin '$b12'" "but origin does"
+assert_ok "git -C '$r12' ls-remote --exit-code --heads origin '$b12'" "but origin does"
 cat > "$d12/stub/gh" <<'G'
 #!/usr/bin/env bash
 echo "gh $*" >> "$(dirname "$0")/../ghcalls"
@@ -1037,8 +1042,13 @@ assert_ok "test -f '$rk/state/worktrees/T-Z/src/thing'" \
 # used to leave the PR empty even though the worktree had real changes.
 branchk="$(cd "$rk" && git for-each-ref --format='%(refname:short)' refs/heads | grep '^t-z-' | head -1)"
 assert_ne "" "$branchk" "interrupted run still created its feature branch"
-assert_ok "git --git-dir='$dk/remote.git' cat-file -e '$branchk:src/thing'" \
+assert_ok "git -C '$rk/state/worktrees/T-Z' cat-file -e HEAD:src/thing" \
+  "EXIT committed dirty work into the feature branch HEAD"
+assert_eq "$(git -C "$rk/state/worktrees/T-Z" rev-parse HEAD)" \
+  "$(git -C "$rk/state/worktrees/T-Z" rev-parse "origin/$branchk")" \
   "EXIT publishes dirty worktree when the happy-path commit never runs"
+assert_ok "git -C '$rk/state/worktrees/T-Z' cat-file -e origin/$branchk:src/thing" \
+  "origin tip after EXIT contains the adapter's file"
 assert_contains "$(jq -r .type < "$rk/state/events.jsonl" | tr '\n' ' ')" "commit_pushed" \
   "EXIT checkpoint emits commit_pushed"
 rm -rf "$dk"
@@ -1214,57 +1224,61 @@ rm -rf "$df"
 
 # --- T-036: mid-run checkpoint (commit then push; never main / never PR) ---
 assert_ok "test -x '$ROOT/bin/fm-checkpoint.sh'" "fm-checkpoint.sh is the stock mid-run save helper"
-assert_ok "grep -q 'fm-checkpoint.sh' '$ROOT/bin/fm-worker.sh'" \
+worker_code="$(sed 's/#.*//' "$ROOT/bin/fm-worker.sh")"
+skill_code="$(sed 's/#.*//' "$ROOT/skills/worker/SKILL.md")"
+assert_contains "$worker_code" "fm-checkpoint.sh" \
   "fm-worker final sweep goes through fm-checkpoint.sh"
-assert_ok "grep -q 'fm-checkpoint.sh' '$ROOT/skills/worker/SKILL.md'" \
+assert_contains "$skill_code" "fm-checkpoint.sh" \
   "worker skill requires checkpoint after each logical commit"
-assert_ok "grep -qE 'WORKER_COMPLETE|only push' '$ROOT/skills/worker/SKILL.md'" \
+assert_contains "$skill_code" "WORKER_COMPLETE" \
   "skill forbids waiting until WORKER_COMPLETE for the only push"
 
-dc="$(mktemp -d)"; barec="$dc/remote.git"
+dc="$(mktemp -d)"; barec="$dc/remote.git"; rc="$dc/repo"
+cd "$ROOT" || exit 1
 git init -q --bare "$barec"
-git init -q -b main "$dc/repo"
-cd "$dc/repo" || exit 1
-git config user.email a@b.c; git config user.name t
-mkdir -p bin design
+git init -q -b main "$rc"
+git -C "$rc" config user.email a@b.c; git -C "$rc" config user.name t
+mkdir -p "$rc/bin" "$rc/design" "$rc/state/worktrees"
 cp "$ROOT/bin/fm-checkpoint.sh" "$ROOT/bin/fm-guard.sh" "$ROOT/bin/fm-config.sh" \
-   "$ROOT/bin/fm-emit.sh" bin/
-printf 'base\n' > README; git add README; git commit -qm base
-git remote add origin "$barec"; git push -q -u origin main
-git branch -q t-ck-branch
-mkdir -p state/worktrees
-git worktree add -q state/worktrees/T-CK t-ck-branch
-printf 'unit\n' > state/worktrees/T-CK/work.txt
-assert_ok "FM_ROOT='$dc/repo' bin/fm-checkpoint.sh --task T-CK --repo '$dc/repo' --message 'checkpoint unit'" \
+   "$ROOT/bin/fm-emit.sh" "$rc/bin/"
+printf 'base\n' > "$rc/README"; git -C "$rc" add README; git -C "$rc" commit -qm base
+git -C "$rc" remote add origin "$barec"; git -C "$rc" push -q -u origin main
+git -C "$rc" branch -q t-ck-branch
+git -C "$rc" worktree add -q "$rc/state/worktrees/T-CK" t-ck-branch
+printf 'unit\n' > "$rc/state/worktrees/T-CK/work.txt"
+assert_ok "FM_ROOT='$rc' '$rc/bin/fm-checkpoint.sh' --task T-CK --repo '$rc' --message 'checkpoint unit'" \
   "checkpoint commits dirty work on a feature branch"
-assert_ok "git --git-dir='$barec' rev-parse --verify t-ck-branch" \
+assert_ok "cd '$ROOT' && git --git-dir='$barec' rev-parse --verify t-ck-branch" \
   "checkpoint pushes the feature branch immediately"
-assert_contains "$(git -C state/worktrees/T-CK log -1 --pretty=%s)" "T-CK: checkpoint unit" \
+assert_contains "$(git -C "$rc/state/worktrees/T-CK" log -1 --pretty=%s)" "T-CK: checkpoint unit" \
   "checkpoint commit uses the supplied message"
 # --repo may be the worktree itself (not the session root).
-printf 'via-repo\n' > state/worktrees/T-CK/via.txt
-assert_ok "FM_ROOT='$dc/repo' bin/fm-checkpoint.sh --task T-CK --repo '$dc/repo/state/worktrees/T-CK' --message 'via worktree as repo'" \
+printf 'via-repo\n' > "$rc/state/worktrees/T-CK/via.txt"
+assert_ok "FM_ROOT='$rc' '$rc/bin/fm-checkpoint.sh' --task T-CK --repo '$rc/state/worktrees/T-CK' --message 'via worktree as repo'" \
   "checkpoint accepts the worktree path as --repo"
-assert_ok "git --git-dir='$barec' cat-file -e t-ck-branch:via.txt" \
+assert_ok "cd '$ROOT' && git --git-dir='$barec' cat-file -e t-ck-branch:via.txt" \
   "worktree-as-repo checkpoint pushed the file"
 # --dir form (cwd-agnostic).
-printf 'via-dir\n' > state/worktrees/T-CK/via-dir.txt
-assert_ok "bin/fm-checkpoint.sh --dir '$dc/repo/state/worktrees/T-CK' --message 'via --dir'" \
+printf 'via-dir\n' > "$rc/state/worktrees/T-CK/via-dir.txt"
+assert_ok "'$rc/bin/fm-checkpoint.sh' --dir '$rc/state/worktrees/T-CK' --message 'via --dir'" \
   "checkpoint --dir commits and pushes"
-assert_ok "git --git-dir='$barec' cat-file -e t-ck-branch:via-dir.txt" \
+assert_ok "cd '$ROOT' && git --git-dir='$barec' cat-file -e t-ck-branch:via-dir.txt" \
   "--dir checkpoint reached the remote"
 # Refuse protected / non-feature tips. main is already the primary checkout,
 # so attach a detached worktree at main's tip (refuses as HEAD).
-git worktree remove -f state/worktrees/T-CK
-git worktree add -q --detach state/worktrees/T-CK main
-printf 'nope\n' > state/worktrees/T-CK/bad.txt
-assert_fail "FM_ROOT='$dc/repo' bin/fm-checkpoint.sh --task T-CK --repo '$dc/repo' --message 'should refuse main'" \
+git -C "$rc" worktree remove -f "$rc/state/worktrees/T-CK"
+git -C "$rc" worktree add -q --detach "$rc/state/worktrees/T-CK" main
+printf 'nope\n' > "$rc/state/worktrees/T-CK/bad.txt"
+assert_fail "FM_ROOT='$rc' '$rc/bin/fm-checkpoint.sh' --task T-CK --repo '$rc' --message 'should refuse main'" \
   "checkpoint refuses to write on main"
-assert_fail "git --git-dir='$barec' ls-tree -r main --name-only | grep -qx bad.txt" \
+assert_fail "cd '$ROOT' && git --git-dir='$barec' ls-tree -r main --name-only | grep -qx bad.txt" \
   "refused main checkpoint pushes nothing"
 # Never a PR helper: the script has no gh / pr create path.
-assert_fail "grep -nE 'pr create|gh pr' '$ROOT/bin/fm-checkpoint.sh'" \
-  "checkpoint is branch save-only (no PR create)"
+# Strip comments before grepping source (ci hygiene: assert_* "grep $ROOT..."
+# is satisfied by a comment unless comments are excluded first).
+ckpt_code="$(sed 's/#.*//' "$ROOT/bin/fm-checkpoint.sh")"
+assert_lacks "$ckpt_code" "pr create" "checkpoint is branch save-only (no PR create)"
+assert_lacks "$ckpt_code" "gh pr" "checkpoint is branch save-only (no gh pr helper)"
 rm -rf "$dc"
 
 finish

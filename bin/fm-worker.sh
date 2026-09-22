@@ -17,7 +17,7 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
 
-REPO="${FM_ROOT:-$(pwd)}"; TASK=''; VENDOR=''; NAME=''; PR=''
+REPO="$(fm_default_repo)"; TASK=''; VENDOR=''; NAME=''; PR=''
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -55,9 +55,13 @@ set_crew_activity() {
 # payload so extras cannot wipe crew_name or activity.
 emit_once() {
   local data="$CREW_DATA" args=()
+  # Local need(): return (do not exit) so a bad call cannot kill the run.
+  # Name must be need/fm_need — bin/ci.sh only accepts those as shift-2 guards.
+  need() { [ "$#" -ge 3 ] || { echo "emit_once: $2 needs a value" >&2; return 1; }; }
   while [ $# -gt 0 ]; do
     case "$1" in
       --data)
+        need "emit_once" "$@" || return 1
         data="$(jq -c --argjson extra "${2-}" '. * $extra' <<<"$data")" || return 1
         shift 2
         ;;
@@ -147,9 +151,24 @@ publish_wip_if_dirty() {
   echo "fm-worker: publishing dirty worktree ($reason)" >&2
   # Same stock helper as mid-run checkpoints: commit then push. Emit stays
   # here so the board sees the real actor, not a phantom default.
-  if ! "$REPO/bin/fm-checkpoint.sh" --task "$TASK" --repo "$REPO" \
+  if ! "$REPO/bin/fm-checkpoint.sh" --dir "$tree" \
        --message "checkpoint ($reason)" </dev/null; then
     echo "fm-worker: checkpoint push failed for $branch ($reason)" >&2
+    return 1
+  fi
+  # Prove the save landed: still-dirty after checkpoint means the helper
+  # pushed an old tip while leaving work behind.
+  still="$(git -C "$tree" status --porcelain -- . \
+    ":(exclude).fm-prompt.md" ":(exclude).fm-say.md" 2>/dev/null || true)"
+  if [ -n "$still" ]; then
+    echo "fm-worker: checkpoint left dirty paths: $still" >&2
+    return 1
+  fi
+  # Remote tip must match the worktree tip before claiming commit_pushed.
+  local_tip="$(git -C "$tree" rev-parse HEAD 2>/dev/null || true)"
+  remote_tip="$(git -C "$tree" ls-remote --heads origin "refs/heads/$branch" 2>/dev/null | awk '{print $1}')"
+  if [ -z "$local_tip" ] || [ -z "$remote_tip" ] || [ "$local_tip" != "$remote_tip" ]; then
+    echo "fm-worker: checkpoint remote tip mismatch for $branch ($reason) local=$local_tip remote=$remote_tip" >&2
     return 1
   fi
   _fm_wip_done=1

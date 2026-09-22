@@ -7,7 +7,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 fixture() {
   local d; d="$(mktemp -d)"
-  git init -q -b main "$d/repo"; cd "$d/repo" || return 1
+  # Keep the suite cwd out of the disposable fixture (same class as
+  # tests/worker.test.sh): git --git-dir fails once getcwd cannot run.
+  (
+  git init -q -b main "$d/repo"; cd "$d/repo" || exit 1
   git config user.email a@b.c; git config user.name t
   mkdir -p bin design skills/reviewer src state
   cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" bin/
@@ -19,6 +22,7 @@ fixture() {
   git checkout -q -b work
   echo "SECRET_WORKER_REASONING" > src/a
   git commit -qam work; git checkout -q main
+  ) || return 1
   printf '%s' "$d"
 }
 ghstub() { mkdir -p "$1/stub"

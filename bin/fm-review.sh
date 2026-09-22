@@ -16,7 +16,7 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
 
-REPO="${FM_ROOT:-$(pwd)}"; TASK=''; BRANCH=''; PR=''; ROUND=1; VENDOR=''; NAME=''
+REPO="$(fm_default_repo)"; TASK=''; BRANCH=''; PR=''; ROUND=1; VENDOR=''; NAME=''
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -53,9 +53,13 @@ set_crew_activity() {
 }
 emit_once() {
   local data="$CREW_DATA" args=()
+  # Local need(): return (do not exit) so a bad call cannot kill the run.
+  # Name must be need/fm_need — bin/ci.sh only accepts those as shift-2 guards.
+  need() { [ "$#" -ge 3 ] || { echo "emit_once: $2 needs a value" >&2; return 1; }; }
   while [ $# -gt 0 ]; do
     case "$1" in
       --data)
+        need "emit_once" "$@" || return 1
         data="$(jq -c --argjson extra "${2-}" '. * $extra' <<<"$data")" || return 1
         shift 2
         ;;

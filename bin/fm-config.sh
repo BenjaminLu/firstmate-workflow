@@ -17,6 +17,19 @@ _fm_clean() {   # strip an inline comment, surrounding quotes, and stray space
       -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
 }
 
+# Session root for scripts that accept FM_ROOT / --repo. A deleted inherited
+# cwd (suite eval'd `cd` then `rm -rf`) makes bare `$(pwd)` fail under `set -e`
+# before absolute --dir/--repo flags can recover.
+fm_default_repo() {
+  if [ -n "${FM_ROOT:-}" ]; then
+    printf '%s\n' "$FM_ROOT"
+  elif _fm_pwd="$(pwd -P 2>/dev/null)"; then
+    printf '%s\n' "$_fm_pwd"
+  else
+    printf '\n'
+  fi
+}
+
 fm_cfg() {      # fm_cfg <key> [file]
   local f="${2:-config.yaml}"
   [ -f "$f" ] || return 1

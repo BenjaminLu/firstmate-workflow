@@ -15,7 +15,7 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
 
-REPO="${FM_ROOT:-$(pwd)}"; TASK=''; MSG=''; DIR=''
+REPO="$(fm_default_repo)"; TASK=''; MSG=''; DIR=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --task) fm_need "fm-checkpoint" "$@"; TASK="${2-}"; shift 2 ;;
@@ -89,15 +89,18 @@ dirty="$(git -C "$tree" status --porcelain -- . \
   ":(exclude).fm-prompt.md" ":(exclude).fm-say.md" || true)"
 
 if [ -n "$dirty" ]; then
-  git -C "$tree" add -A -- . \
-    ':(exclude).fm-prompt.md' ':(exclude).fm-say.md' 2>/dev/null \
-    || git -C "$tree" add -A
-  case "$MSG" in
-    "$TASK:"*|"$TASK "*) commit_msg="$MSG" ;;
-    *) commit_msg="$TASK: $MSG" ;;
-  esac
-  git -C "$tree" -c user.name=firstmate -c user.email=firstmate@local \
-    commit -q -m "$commit_msg"
+  # Stage everything then drop ephemeral harness files. Pathspec excludes
+  # on `git add -A -- .` are inconsistent across git versions in worktrees.
+  git -C "$tree" add -A
+  git -C "$tree" reset -q -- .fm-prompt.md .fm-say.md 2>/dev/null || true
+  if ! git -C "$tree" diff --cached --quiet 2>/dev/null; then
+    case "$MSG" in
+      "$TASK:"*|"$TASK "*) commit_msg="$MSG" ;;
+      *) commit_msg="$TASK: $MSG" ;;
+    esac
+    git -C "$tree" -c user.name=firstmate -c user.email=firstmate@local \
+      commit -q -m "$commit_msg"
+  fi
 fi
 
 # Always push: a clean tree may still hold unpushed commits. Exiting before

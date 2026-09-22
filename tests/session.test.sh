@@ -7,14 +7,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib.sh"
 
 # Keep this suite focused on the contract boundary; full session lifecycle
-# lives with managed Herdr transport tests.
+# lives with managed Herdr transport tests. Strip comments before grepping
+# source so a mention in a comment cannot satisfy the assert.
+herdr_code="$(sed 's/#.*//' "$ROOT/bin/fm-herdr.py")"
 assert_ok "test -f '$ROOT/bin/fm-herdr.py'" "managed transport entrypoint is present"
-assert_ok "grep -q 'crew_status' '$ROOT/bin/fm-herdr.py'" \
+assert_contains "$herdr_code" "crew_status" \
   "herdr mid-run status uses crew_status, not vendor-only invention"
-assert_ok "grep -q 'fm-emit.sh' '$ROOT/bin/fm-herdr.py'" \
+assert_contains "$herdr_code" "fm-emit.sh" \
   "herdr board updates go through fm-emit.sh"
-hits="$(grep -nE 'progress[[:space:]]*=[[:space:]]*[0-9]+|pct[[:space:]]*=[[:space:]]*[0-9]+' \
-  "$ROOT/bin/fm-herdr.py" | grep -v '^[[:space:]]*#' || true)"
+hits="$(printf '%s\n' "$herdr_code" | grep -nE 'progress[[:space:]]*=[[:space:]]*[0-9]+|pct[[:space:]]*=[[:space:]]*[0-9]+' || true)"
 assert_eq "" "$hits" "herdr does not invent a fixed percentage"
 
 finish
