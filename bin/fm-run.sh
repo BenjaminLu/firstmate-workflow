@@ -71,9 +71,13 @@ turn() {
       id="D-$(printf '%s' "$task" | tr -dc '0-9')"
       [ -f "state/pending/$id.json" ] && { say "$task: waiting on the captain"; continue; }
       [ -f "state/decisions/$id.json" ] && continue
-      "$B/fm-decide.sh" --request "$id" --task "$task" --kind merge --pr "$pr" \
-        --title "$task passed the gates - merge it?" --repo "$REPO" >/dev/null 2>&1 </dev/null
-      say "$task: all seven gates green, asking the captain ($id)"
+      details="$REPO/state/decision-details/$id.json"
+      if request_out="$("$B/fm-decide.sh" --request "$id" --task "$task" --kind merge --pr "$pr" \
+        --details "$details" --repo "$REPO" 2>&1 </dev/null)"; then
+        say "$task: all seven gates green, asking the captain ($id)"
+      else
+        say "$task: no captain card created; firstmate must supply valid authored details at $details ($request_out)"
+      fi
     elif [ "$g" -eq 7 ]; then
       say "$task: gates 1-6 green, sending it to review (round $round)"
       # exit 3 is a round that produced no verdict. Swallowing it would let

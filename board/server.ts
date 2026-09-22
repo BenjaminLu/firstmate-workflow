@@ -6,7 +6,7 @@
 // No build step and no framework: the page is a file, the stream is SSE, and
 // the state endpoint is derived from events.jsonl and design/tasks.json so the
 // board has no opinion the log does not already hold.
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 // canonical from the start: on macOS /var is a symlink to /private/var, and a
@@ -36,13 +36,16 @@ const readEvents = (): Event[] => {
 // an actor on a blocked task reached the page as `st-blocked`, which no
 // stylesheet rule and no dictionary key covers.
 const DECK_LIMIT = 24;   // what the ship holds; the page reads it back
-type CrewState = "queued" | "working" | "gate" | "review" | "captain";
+type CrewState = "queued" | "working" | "gate" | "review" | "captain" | "unknown";
 type Crew = {
   id: string;
   role: "firstmate" | "worker" | "reviewer";
   state: CrewState;
   task: string | null;
   title: string | null;
+  activity?: Record<string, string> | null;
+  crew_name?: string;
+  progress?: number;
 };
 // What an agent says it is. fm-review emits role "reviewer", fm-worker
 // "worker"; a run that says nothing is a worker, which is what a
@@ -56,18 +59,10 @@ const roleOf = (actor: string, e: Event): "worker" | "reviewer" => {
   return actor.startsWith("reviewer") ? "reviewer" : "worker";   // older logs
 };
 
-// A crewman's state is a statement about the AGENT, not a verdict on the
-// task, and an agent that is aboard is by definition running. So an
-// unknown stage - firstmate between dispatches, or a task defined on a
-// branch this checkout has never seen, which fm-worker says is normal -
-// is "working". The previous version guessed "blocked", which drew the
-// most visible crewman slumped and grey while its own bubble said
-// "dispatching". STAGE cannot produce "blocked" at all: it maps to
-// working, gate, review, captain, merged and closed, and the last two
-// are already filtered out above.
+// Missing lifecycle evidence is unknown, never inferred from task metadata.
 const CREW_STATE = (s: string | undefined): CrewState =>
   s === "queued" || s === "working" || s === "gate" || s === "review" || s === "captain"
-    ? s : "working";
+    ? s : "unknown";
 
 const STAGE: Record<string, string> = {
   dispatched: "working", commit_pushed: "working", pr_opened: "review",
@@ -81,10 +76,15 @@ const STAGE: Record<string, string> = {
 
 const state = () => {
   const events = readEvents();
+  const responseDir = join(ROOT, 'state/decisions');
+  const responses = existsSync(responseDir) ? readdirSync(responseDir).filter(f => /^D-[0-9]{1,6}\.json$/.test(f)).flatMap(f => {
+    try { return [JSON.parse(readFileSync(join(responseDir, f), 'utf8'))]; } catch { return []; }
+  }) : [];
   const tasksFile = join(ROOT, "design/tasks.json");
   const defs = existsSync(tasksFile)
     ? (JSON.parse(readFileSync(tasksFile, "utf8")).tasks as Array<Record<string, unknown>>)
     : [];
+  const definitions = new Map(defs.map(d => [String(d.id), d]));
   const stage = new Map<string, string>();
   const pr = new Map<string, number>();
   // merged and closed are where a task stops. Anything said about it
@@ -94,22 +94,27 @@ const state = () => {
   const FINAL = new Set(["merged", "closed"]);
   for (const e of events) {
     if (!e.task) continue;
+    if (typeof e.pr === "number") pr.set(e.task, e.pr);
     if (FINAL.has(stage.get(e.task) ?? "")) continue;
     const s = STAGE[e.type ?? ""];
     if (s) stage.set(e.task, s);
-    if (typeof e.pr === "number") pr.set(e.task, e.pr);
   }
   // A pending decision is a fact on disk, not a point in a history: while
   // the card is up, the task is the captain's whatever else has been said
   // since. T-016 read as "working" because a dispatch that should never
   // have happened landed after the card went up.
   const awaiting = new Set(pending().map((p: Record<string, unknown>) => String(p.task ?? "")));
-  const tasks = defs.map((d) => ({
-    id: d.id, title: d.title, milestone: d.milestone,
+  const taskIds = [...definitions.keys()];
+  for (const e of events) if (e.task && !definitions.has(e.task) && !taskIds.includes(e.task)) taskIds.push(e.task);
+  const tasks = taskIds.map((id) => {
+    const d = definitions.get(id) || {};
+    const terminal = FINAL.has(stage.get(id) ?? "");
+    return ({
+    id, title: typeof d.title === 'string' ? d.title : null, milestone: d.milestone ?? null,
     depends_on: d.depends_on ?? [],
-    stage: awaiting.has(d.id as string) ? "captain" : (stage.get(d.id as string) ?? "queued"),
-    pr: pr.get(d.id as string) ?? null,
-  }));
+    stage: !terminal && awaiting.has(id) ? "captain" : (stage.get(id) ?? "queued"),
+    pr: pr.get(id) ?? null,
+  }); });
   // The crew are AGENTS, not tasks. A crewman on the deck is something
   // that is running: firstmate, each worker or reviewer currently engaged,
   // and the captain while a decision is waiting. Drawing one figure per
@@ -138,16 +143,55 @@ const state = () => {
   // end. Reversed below, the deck holds the ones that spoke most
   // recently, which is what a reader watching a busy ship is looking at.
   const lastByActor = new Map<string, Event>();
-  for (const e of events) {
+  const authored = (v: any): Record<string,string> | null => v && typeof v.en === 'string' && typeof v['zh-TW'] === 'string' && v.en.trim() && v['zh-TW'].trim() ? {en:v.en,'zh-TW':v['zh-TW']} : null;
+  const activity = new Map<string, Record<string,string>>();
+  const phases = new Map<string, CrewState>();
+  const names = new Map<string,string>();
+  const progress = new Map<string,number>();
+  const roles = new Map<string,'worker'|'reviewer'>();
+  const finished = new Set<string>();
+  const handoffs: Array<Record<string,unknown>> = [];
+  for (const [index, e] of events.entries()) {
+    const actor = String(e.actor || '');
+    const data = (e.data || {}) as Record<string, any>;
+    const previous = lastByActor.get(actor);
+    if (e.type === 'dispatched') finished.delete(actor);
+    else if (finished.has(actor)) continue;
+    if (e.type === 'agent_finished') finished.add(actor);
+    if (e.type === 'dispatched' || (e.task && previous?.task !== e.task)) {
+      activity.delete(actor); phases.delete(actor);
+      progress.delete(actor);
+      if (e.type === 'dispatched') names.delete(actor);
+    }
+    if (typeof data.crew_name === 'string') names.set(actor, data.crew_name);
+    if (typeof data.progress === 'number' && Number.isFinite(data.progress) && data.progress >= 0 && data.progress <= 100) progress.set(actor,data.progress);
+    if (e.type === 'dispatched' || data.role) roles.set(actor, roleOf(actor,e));
+    const description = authored(data.activity) || (e.type === 'dispatched' || e.type === 'review_opened' ? authored(e.summary) : null);
+    if (description) activity.set(actor,description);
+    if (STAGE[e.type || '']) phases.set(actor,e.type === 'dispatched'
+      ? (roleOf(actor,e) === 'reviewer' ? 'review' : 'working')
+      : CREW_STATE(STAGE[e.type || '']));
+    const peer = (role: string) => {
+      const candidates = [...lastByActor].filter(([id,event]) => id !== actor && id !== 'firstmate' && event.task === e.task && event.type !== 'agent_finished' && !finished.has(id) && (roles.get(id) || roleOf(id,event)) === role);
+      // Several runs on one task are ambiguous; never pick an arbitrary actor.
+      return candidates.length === 1 ? candidates[0][0] : undefined;
+    };
+    let kind = '', from: string | undefined, to: string | undefined;
+    if (e.type === 'dispatched' && actor !== 'firstmate' && roleOf(actor,e) === 'worker') {kind='order';from='firstmate';to=actor;}
+    if (e.type === 'pr_opened') {kind='work';from=actor;to=peer('reviewer');}
+    if (e.type === 'review_opened') {kind='work';from=peer('worker');to=actor;}
+    if (e.type === 'approved') {kind='approve';from=actor;to='firstmate';}
+    if (e.type === 'review_failed' && data.review_outcome === 'rejected') {kind='reject';from=actor;to=peer('worker');}
+    if (e.type === 'decision_made') {kind='order';from='firstmate';to=peer('worker');}
+    if (kind) handoffs.push({identity:`handoff:${index}:${JSON.stringify(e)}`,kind,from:from || null,to:to || null,task:e.task || null});
     if (!e.actor || e.actor === "github" || e.actor === "captain") continue;
     lastByActor.delete(e.actor);
-    lastByActor.set(e.actor, e);
+    lastByActor.set(e.actor, {...e,task:e.task || previous?.task});
   }
   for (const [actor, e] of [...lastByActor]) {
     if (e.type === "agent_finished") lastByActor.delete(actor);
   }
-  const done = new Set(tasks.filter((t) => ["merged", "closed"].includes(t.stage))
-                            .map((t) => t.id as string));
+  const done = new Set([...stage].filter(([,value]) => FINAL.has(value)).map(([id]) => id));
   // firstmate carries its task like anyone else. Pinning it to
   // "dispatching" was the board saying what the role is FOR rather than
   // what the agent is DOING - and firstmate is the crewman a reader most
@@ -166,8 +210,9 @@ const state = () => {
   const fmT = fmTask ? tasks.find((x) => x.id === fmTask) : undefined;
   const crew: Crew[] = [{
     id: "firstmate", role: "firstmate",
-    state: greenlit ? CREW_STATE(fmT?.stage) : "queued",
+    state: greenlit ? (fm ? phases.get('firstmate') || 'unknown' : 'unknown') : "queued",
     task: fmTask, title: fmT?.title ?? null,
+    activity: fm ? activity.get('firstmate') || null : null,
   }];
   // newest first, and firstmate is already pinned at the head: when the
   // deck overflows it is the oldest crewman that is dropped, never the
@@ -186,16 +231,15 @@ const state = () => {
       id: actor,
       // stated, not guessed: the emitter writes what it is, so renaming
       // an actor cannot silently turn every reviewer into a worker
-      role: roleOf(actor, e),
-      state: CREW_STATE(t?.stage),
+      role: roles.get(actor) || roleOf(actor, e),
+      state: phases.get(actor) || 'unknown',
       task, title: t?.title ?? null,
+      crew_name: names.get(actor),
+      progress: progress.get(actor),
+      activity: authored(defs.find(d=>d.id===task)?.activity) || authored(t?.title) || activity.get(actor) || null,
     });
   }
-  // no captain here on purpose. He is not crew - the crew are agents
-  // doing work and he is the person they are waiting on - and he is drawn
-  // beside the cards from the same pending deck the cards come from. The
-  // first version emitted him here AND re-derived him on the page, which
-  // is the two sources this file argues against three comments above.
+  // The permanently aboard human captain is rendered separately from agents.
 
   return {
     // The deck holds this many. One number: the server truncates and
@@ -212,6 +256,13 @@ const state = () => {
       queued: tasks.filter((t) => t.stage === "queued").length,
     },
     tasks,
+    // Full outcome stream: a busy refresh must not lose events outside recent.
+    responses,
+    handoffs,
+    outcomes: [...events.filter(e => e.type === "merged" || e.type === "decision_made")
+      .map(e => ({ ...e, identity: e.type === "decision_made"
+        ? `decision:${(e.data as any)?.decision ?? JSON.stringify(e)}` : `merge:${e.pr ?? e.task ?? JSON.stringify(e)}` })),
+      ...responses.filter(d => d.identity).map(d => ({type:'decision_made',identity:d.identity,data:{decision:d.id,chosen:d.chosen}}))],
     recent: events.slice(-40).reverse(),
     pending: pending(),
   };
@@ -225,18 +276,23 @@ const state = () => {
 const pending = () => {
   const dir = join(ROOT, "state/pending");
   if (!existsSync(dir)) return [];
+  const terminal = readEvents().filter((e) => e.type === "merged" || e.type === "closed");
   const settled = new Set(
-    readEvents()
+    terminal
       .filter((e) => e.type === "merged" || e.type === "closed")
       .map((e) => String((e as Record<string, unknown>).pr ?? "")),
   );
+  const settledTasks = new Set(terminal.map(e => String(e.task ?? '')).filter(Boolean));
+  // readdirSync order is filesystem-dependent (macOS vs Linux CI). Sort by
+  // decision id so the deck and multi-card tests stay stable everywhere.
   return readdirSync(dir).filter((f) => f.endsWith(".json")).flatMap((f) => {
     try {
       const d = JSON.parse(readFileSync(join(dir, f), "utf8"));
       if (d.pr != null && settled.has(String(d.pr))) return [];
+      if (d.task != null && settledTasks.has(String(d.task))) return [];
       return [d];
     } catch { return []; }
-  });
+  }).sort((a, b) => String(a.id ?? "").localeCompare(String(b.id ?? ""), "en", { numeric: true }));
 };
 
 const json = (body: unknown, status = 200) =>
@@ -300,31 +356,65 @@ const server = Bun.serve({
     if (url.pathname === "/decisions" && req.method === "POST") {
       return req.json().then(async (body: any) => {
         const id = String(body?.id ?? "");
-        const chosen = String(body?.chosen ?? "");
+        const chosen = typeof body?.chosen === "string" ? body.chosen : "";
         if (!/^D-[0-9]{1,6}$/.test(id)) return json({ error: "bad decision id" }, 400);
-        if (!/^[A-Z]$/.test(chosen)) return json({ error: "bad choice" }, 400);
+        if (!["A", "B", "C", "custom"].includes(chosen)) return json({ error: "bad choice" }, 400);
+        // Count Unicode code points, preserving the literal text including spaces.
+        const text = body?.text;
+        if (chosen === "custom" && (typeof text !== "string" || !text.trim()
+          || [...text].length > 1000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\ud800-\udfff]/u.test(text))) {
+          return json({ error: "invalid custom text", code: "customInvalid" }, 400);
+        }
 
         const p = pending().find((d: any) => d.id === id);
         const dir = join(ROOT, "state/decisions");
         mkdirSync(dir, { recursive: true });
         const file = join(dir, `${id}.json`);
-        if (existsSync(file)) return json({ ok: true, already: true });
-        writeFileSync(file, JSON.stringify({
+        if (existsSync(file)) {
+          const decision = JSON.parse(readFileSync(file, "utf8"));
+          if (decision.chosen !== chosen || (chosen === "custom" && decision.text !== text))
+            return json({ error: "decision already recorded differently" }, 409);
+          return json({ ok: true, already: true, decision, merged: decision.merged ?? null });
+        }
+        if (!p) return json({ error: "no pending decision" }, 404);
+        const decision = {
           id, chosen, task: p?.task ?? null, kind: p?.kind ?? "choice",
+          ...(chosen === "custom" ? { text } : {}),
           note: typeof body?.note === "string" ? body.note.slice(0, 500) : "",
           ts: new Date().toISOString(),
-        }) + "\n");
+          identity: `decision:${id}`, merged: (p.kind === 'merge' && chosen === 'A'
+            ? {ok:false,out:'Merge outcome not confirmed'} : null) as null | { ok: boolean; out: string },
+        };
+        // Exclusive creation makes repeated requests unable to rerun a merge.
+        const temporary = join(dir, `.${id}.${crypto.randomUUID()}.tmp`);
+        writeFileSync(temporary, JSON.stringify(decision) + "\n", { flag: "wx" });
+        try { linkSync(temporary, file); } finally { unlinkSync(temporary); }
+        let eventRecorded = false;
+        try {
+          const emitted = Bun.spawnSync([join(ROOT, "bin/fm-emit.sh"),
+          "--actor", "captain", "--type", "decision_made",
+          ...(p.task ? ["--task", p.task] : []),
+          "--data", JSON.stringify({ decision: id, chosen, outcome: "recorded" }),
+          "--en", `${id} recorded ${chosen}`, "--tw", `${id} 已記錄 ${chosen}`],
+          { env: { ...process.env, FM_ROOT: ROOT } });
+          eventRecorded = emitted.exitCode === 0;
+        } catch { /* the durable decision still exists; report the event failure */ }
 
         let merged = null;
         if (p?.kind === "merge" && chosen === "A" && typeof p.pr === "number") {
+          try {
           const r = Bun.spawnSync([join(ROOT, "bin/fm-merge.sh"),
             "--pr", String(p.pr), ...(p.task ? ["--task", p.task] : []), "--repo", ROOT],
             { env: { ...process.env, FM_ROOT: ROOT } });
           merged = { ok: r.exitCode === 0, out: new TextDecoder().decode(r.stdout).trim() };
+          } catch { merged = {ok:false,out:'Merge helper unavailable'}; }
         }
+        decision.merged = merged;
+        writeFileSync(temporary, JSON.stringify(decision) + "\n", { flag: "wx" });
+        renameSync(temporary, file);
         const pf = join(ROOT, "state/pending", `${id}.json`);
         if (existsSync(pf)) unlinkSync(pf);
-        return json({ ok: true, merged });
+        return json({ ok: true, decision, merged, eventRecorded });
       }).catch(() => json({ error: "bad request" }, 400));
     }
 

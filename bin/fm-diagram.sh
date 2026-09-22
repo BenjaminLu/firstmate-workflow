@@ -161,10 +161,6 @@ jq -e 'type == "object"' "$FILE" >/dev/null 2>&1 \
   || die "not a readable decision file: $FILE" 66
 
 TASK="$(jq -r '.task // ""' "$FILE")"
-KIND="$(jq -r '.kind // "choice"' "$FILE")"
-TITLE="$(jq -r '.title // ""' "$FILE")"
-PR="$(jq -r 'if (.pr|type) == "number" then (.pr|tostring) else "" end' "$FILE")"
-case "$KIND" in merge|choice) ;; *) KIND=choice ;; esac
 # the task id is shown whatever it says, but it is only joined to a path when
 # it looks like one of ours
 TASKPATH="$TASK"
@@ -287,9 +283,7 @@ fragment() {
 
 render() {  # render <html-lang> <dictionary> <fragment-language>
   load_dict "$2"
-  local title frag=''
-  title="$(esc "$TITLE")"
-  [ -n "$title" ] || title="$(dsc waiting)"
+  local frag=''
   frag="$(fragment "$3")" || frag=''
 
   cat <<HTML
@@ -305,7 +299,9 @@ render() {  # render <html-lang> <dictionary> <fragment-language>
   --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 *{box-sizing:border-box}html,body{margin:0}
-body{background:var(--bg);color:var(--fg);font:13px/1.5 var(--sans);padding:14px}
+body{background:var(--bg);color:var(--fg);font:16px/1.5 var(--sans);padding:14px;overflow-wrap:anywhere}
+.before-after section{min-width:0}
+@media(max-width:420px){.before-after{flex-direction:column;align-items:stretch!important}}
 .meta{margin:0;font:11px var(--mono);color:var(--fg3);letter-spacing:.04em}
 .meta b{color:var(--brass);font-weight:700}
 h1{margin:4px 0 12px;font-size:16px;line-height:1.35;font-weight:650}
@@ -327,36 +323,18 @@ h1{margin:4px 0 12px;font-size:16px;line-height:1.35;font-weight:650}
 </style>
 </head>
 <body>
-<main class="card k-$KIND" id="$ID">
-<p class="meta"><b>$(esc "$ID")</b>$([ -n "$TASK" ] && printf ' &middot; %s' "$(esc "$TASK")")$([ -n "$PR" ] && printf ' &middot; #%s' "$(esc "$PR")")</p>
-<h1>$title</h1>
-<ol class="lanes">
-<li>$(dsc laneQueued)</li>
-<li>$(dsc laneWorking)</li>
-<li>$(dsc laneGate)</li>
-<li>$(dsc laneReview)</li>
-<li class="here">$(dsc laneCaptain)</li>
-<li>$(dsc laneMerged)</li>
-</ol>
+<main class="change" id="$ID">
 HTML
 
   if [ -n "$frag" ]; then
     printf '<div class="drawn">\n%s\n</div>\n' "$frag"
-  elif [ "$KIND" = merge ]; then
-    printf '<ul class="gates">\n'
-    for n in 1 2 3 4 5 6 7; do
-      printf '<li><i>%s</i>%s</li>\n' "$n" "$(dsc "gate$n")"
-    done
-    printf '</ul>\n'
-  fi
-
-  printf '<ul class="answers">\n'
-  if [ "$KIND" = merge ]; then
-    printf '<li class="go">%s</li>\n' "$(dsc mergeInto)"
+  elif jq -e --arg lang "$3" '.details[$lang].before and .details[$lang].after' "$FILE" >/dev/null; then
+    printf '<div class="before-after" style="display:flex;gap:16px;align-items:center"><section style="flex:1"><b>%s</b><p>%s</p></section><span aria-hidden="true">→</span><section style="flex:1"><b>%s</b><p>%s</p></section></div>\n' \
+      "$(dsc before)" "$(esc "$(jq -r --arg lang "$3" '.details[$lang].before' "$FILE")")" \
+      "$(dsc after)" "$(esc "$(jq -r --arg lang "$3" '.details[$lang].after' "$FILE")")"
   else
-    printf '<li class="go">%s</li>\n' "$(dsc chooseA)"
+    printf '<p>%s</p>\n' "$(dsc missingDetails)"
   fi
-  printf '<li>%s</li>\n<li>%s</li>\n</ul>\n' "$(dsc sendBack)" "$(dsc hold)"
   printf '</main>\n</body>\n</html>\n'
 }
 

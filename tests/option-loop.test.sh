@@ -36,7 +36,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # subcommands; its seven parser branches are exercised separately below.
 PINNED="fm 5
 fm-cleanup 2
-fm-decide 8
+fm-decide 9
 fm-diagram 4
 fm-dispatch 2
 fm-emit 7
@@ -126,7 +126,7 @@ while read -r name want; do
     fi
   done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "60" "$total" "every pinned flag and all seven fm option branches were exercised"
+assert_eq "61" "$total" "every pinned flag and all seven fm option branches were exercised"
 
 # A script that grows an option loop has to be pinned here too, and the
 # corpus is the one bin/ci.sh judges - literally, out of

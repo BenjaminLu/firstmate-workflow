@@ -58,6 +58,18 @@ while IFS=$'\t' read -r a b; do
 done < "$tbl"
 assert_ne "$(jq -r '.gate4' "$tw")" "$cnout" "converting zh-TW actually produces zh-CN"
 
+# Authored oracle, deliberately independent of the table under test. This
+# catches both overlap order (船員 before 船員名冊) and displayed characters
+# that a self-derived expectation silently preserves.
+displayed='船員名冊 · 讀取變數 · 每張任務卡片 · 任務檔案'
+displayed_cn="$displayed"
+while IFS=$'\t' read -r a b; do
+  case "$a" in '#'*|'') continue ;; esac
+  displayed_cn="${displayed_cn//$a/$b}"
+done < "$tbl"
+assert_eq '船员名册 · 读取变量 · 每张任务卡片 · 任务文件' "$displayed_cn" \
+  "displayed CN vocabulary matches an independently authored oracle"
+
 # the page carries no Chinese of its own: it all comes from the dictionary
 # comments included on purpose: the page must carry no Chinese at all, so
 # this one counts rather than filtering - and counting keeps the hygiene lint

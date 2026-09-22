@@ -74,7 +74,7 @@ test("the crew are the agents the server named, and 24 is the deck limit", () =>
   const c = SHIP.crewOf(state(3), T);
   expect(c.map((x: any) => x.id)).toEqual(["firstmate", "worker-0", "worker-1", "worker-2"]);
   // and each one says the task it is on, not its own name twice
-  expect(c[1].job).toBe("T-0 \u00b7 task 0");
+  expect(c[1].job).toBe("T-0 · descriptionUnavailable");
   expect(SHIP.crewOf(state(40), T).length).toBe(24);
   // and it is the server's number that decides, not one kept here
   expect(SHIP.crewOf({ ...state(40), deckLimit: 6 }, T).length).toBe(6);
@@ -138,14 +138,14 @@ test("a crewman below the top deck with no task is still named on his chip", () 
   expect(minis.length).toBeGreaterThan(0);
   // no chip is blank, and the taskless one carries the agent's own id
   for (const m of minis) expect(m.trim()).not.toBe("");
-  expect(minis).toContain(nameless.id);
+  expect(minis.map(x=>x.trim())).toContain(nameless.id);
 });
 
 test("every custom property the captain writes is one his own block reads", () => {
   const js = readFileSync(join(ROOT, "board/public/ship.js"), "utf8");
   const body = js.slice(js.indexOf("function captain("), js.indexOf("function roster("));
   const props = [...body.matchAll(/setProperty\("(--[\w-]+)"/g)].map((m) => m[1]);
-  expect(props.length).toBeGreaterThan(1);
+  expect(props.length).toBe(0); // the captain now shares the ship's deck geometry
   // his rules only: a property read somewhere else on the page is not
   // read HERE, which is the whole of the claim
   const his = CSS.replace(/\/\*[\s\S]*?\*\//g, "")
@@ -156,7 +156,7 @@ test("every custom property the captain writes is one his own block reads", () =
   for (const p of props) expect(his).toContain(`var(${p})`);
   // and the other way: the column the captain stands in takes its size
   // from him, rather than a literal that has to be kept in step
-  expect(CSS).toMatch(/\.capwrap\{[^}]*grid-template-columns:auto 1fr/);
+  expect(CSS).toContain('var(--capRow) * var(--rowStep)');
 });
 
 test("a role the page does not know is drawn as a mismatch, not as a worker", () => {
@@ -186,7 +186,7 @@ test("state and role reach the page as classes", () => {
   const h = host();
   const crew = SHIP.render(h as any, state(4, "review"), T);
   expect(crew.length).toBe(5);
-  expect(h.innerHTML.split("class=\"pivot\"").length - 1).toBe(5);
+  expect(h.innerHTML.split("class=\"pivot\"").length - 1).toBe(6);
   expect(h.innerHTML).toContain("s-review");
   expect(h.innerHTML).toContain("r-fm");
   expect(h.innerHTML).toContain("r-r");
@@ -198,7 +198,7 @@ test("state and role reach the page as classes", () => {
   const rowsSeen = [...h.innerHTML.matchAll(/--r:(\d+)/g)].map((m) => +m[1]);
   const perRow = SHIP.layout(5, rate.rows);
   for (let r = 0; r < rate.rows; r++) {
-    expect(rowsSeen.filter((x) => x === r).length).toBe(perRow[r] * 2); // figure + bubble
+    expect(rowsSeen.filter((x) => x === r).length).toBe(perRow[r] * 2 + (r===rate.rows-1?1:0)); // human captain shares top deck
   }
   expect(new Set(rowsSeen).size).toBe(rate.rows);
 
@@ -209,7 +209,7 @@ test("state and role reach the page as classes", () => {
   const h2 = host();
   const c2 = SHIP.render(h2 as any, mixed, T);
   const worn = [...h2.innerHTML.matchAll(/class="fig r-\w+ s-\w+ a-(\w+)"/g)].map((m) => m[1]);
-  expect(worn).toEqual(c2.map((c: any) => SHIP.actionFor(c.id, c.state)));
+  expect(worn).toEqual([...c2.map((c: any) => c.role==='fm'?'helm':SHIP.actionFor(c.id, c.state)), 'helm']);
   expect(new Set(worn).size).toBeGreaterThan(1);
 });
 

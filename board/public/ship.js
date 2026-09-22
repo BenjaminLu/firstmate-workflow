@@ -107,10 +107,10 @@ const SHIP = (() => {
       // qualifier, and a chip with only the agent's name meant no bubble
       // anywhere on a crowded ship said what anyone was working on. The
       // agent's own name is in the roster beside it.
-      return `<div class="bub mini st-${c.state}" style="--px:${c.x}%;--r:${c.row}">` +
-        `<div class="who">${esc(c.task || c.name)}</div></div>`;
+      return `<div class="bub mini st-${c.state}" data-bubble="${esc(c.id)}" style="--px:${c.x}%;--r:${c.row}">` +
+        `<div class="who">${esc(c.name)} ${esc(c.task || '')}</div></div>`;
     }
-    return `<div class="bub st-${c.state}" style="--px:${c.x}%;--r:${c.row}">` +
+    return `<div class="bub st-${c.state}" data-bubble="${esc(c.id)}" style="--px:${c.x}%;--r:${c.row}">` +
       `<div class="who">${esc(c.name)}</div>` +
       `<div class="job">${esc(c.job)}</div>` +
       (c.pct == null ? "" : `<div class="pb"><i style="width:${c.pct}%"></i></div>`) + `</div>`;
@@ -127,7 +127,7 @@ const SHIP = (() => {
   // waiting for someone. Drawing one per in-flight task put pull requests
   // on the deck: three tasks handled by one worker looked like three of
   // the crew, and the ship grew with the backlog instead of the crew.
-  function crewOf(s, T) {
+  function crewOf(s, T, L = value => value?.en || '') {
     // only firstmate is named by its role; a worker or a reviewer is
     // named by its own id, and the captain is not in this list at all
     const label = { firstmate: T("roleFirstmate") };
@@ -137,28 +137,61 @@ const SHIP = (() => {
     return (s.crew || []).slice(0, s.deckLimit).map((a) => ({
       id: a.id,
       role: ROLE[a.role] || "unknown",
-      state: a.state || "working",
+      state: a.state || "unknown",
       // the agent's own name, and what it is on underneath
-      name: a.role === "firstmate" ? label.firstmate : a.id,
+      name: a.role === "firstmate" ? label.firstmate : a.crew_name || a.id,
       // only firstmate can be aboard without a task: the server skips a
       // taskless worker or reviewer, so there is no third case to write
       job: a.task
-        ? `${a.task}${a.title ? " \u00b7 " + a.title : ""}`
-        : T(s.greenlit ? "fmDispatching" : "fmWaiting"),
+        ? `${a.task} · ${L(a.activity) || T('descriptionUnavailable')}`
+        : L(a.activity) || T(s.greenlit ? "descriptionUnavailable" : "fmWaiting"),
       task: a.task || null,
-      pct: a.task ? ({ working: 45, gate: 70, review: 85, captain: 95 }[a.state] ?? null) : null,
+      pct: Number.isFinite(a.progress) && a.progress >= 0 && a.progress <= 100 ? a.progress : null,
     }));
   }
 
-  function render(host, s, T) {
-    const crew = crewOf(s, T);
+  // Patch matching nodes in place: a captured pointer, rotation and running
+  // effect belong to the same figure across state and language updates.
+  function patch(parent, markup) {
+    if (!parent.ownerDocument) { parent.innerHTML = markup; return; }
+    const template = document.createElement('template'); template.innerHTML = markup;
+    const key = el => el.nodeType === 1 ? el.id || el.dataset.crew || el.dataset.bubble || '' : '';
+    function sync(dst, src) {
+      const old = [...dst.childNodes];
+      const retained = new Set();
+      [...src.childNodes].forEach((fresh,index) => {
+        let node = key(fresh) ? old.find(el=>key(el)===key(fresh)) : old[index];
+        if (!node || node.nodeName !== fresh.nodeName || (key(node) && key(node)!==key(fresh))) node = fresh.cloneNode(true);
+        else if (node.nodeType === 3) node.textContent = fresh.textContent;
+        else {
+          const rotation = ['--rx','--ry'].map(p=>node.style.getPropertyValue(p));
+          const transient = ['dragging','cheer','react','ping','heel','orders','fire','active'].filter(c=>node.classList.contains(c));
+          const effectDelay = transient.length ? node.style.animationDelay : '';
+          for (const a of [...node.attributes]) if (!fresh.hasAttribute(a.name) && !(node.tagName==='IFRAME' && ['src','style'].includes(a.name))) node.removeAttribute(a.name);
+          for (const a of fresh.attributes) if (node.getAttribute(a.name)!==a.value && !(node.tagName==='IFRAME' && a.name==='hidden' && node.hasAttribute('src'))) node.setAttribute(a.name,a.value);
+          rotation.forEach((v,i)=>{if(v)node.style.setProperty(['--rx','--ry'][i],v);});
+          transient.forEach(c=>node.classList.add(c));
+          if(effectDelay)node.style.animationDelay=effectDelay;
+          sync(node,fresh);
+        }
+        if(dst.childNodes[index]!==node)dst.insertBefore(node,dst.childNodes[index] || null);
+        retained.add(node);
+      });
+      old.filter(el=>!retained.has(el)).forEach(el=>el.remove());
+    }
+    sync(parent,template.content);
+  }
+
+  function render(host, s, T, L) {
+    const crew = crewOf(s, T, L);
     // from the server with the list: the shipbar used to print a
     // hardcoded 24 under a comment claiming the number had one source
     const limit = s.deckLimit;
     const rate = rateFor(crew.length);
     const rows = rate.rows, step = rate.step;
     const topDeck = DECK_Y0 + (rows - 1) * step;
-    const sceneH = Math.round(topDeck + FIG_H + BUBBLE_CLEAR + SAIL_H + MAST_TOP + FLAG_H);
+    // Reserve a band above the rigging for outcome feedback and audio controls.
+    const sceneH = Math.round(topDeck + FIG_H + BUBBLE_CLEAR + SAIL_H + MAST_TOP + FLAG_H + 80);
     const hullH = Math.round(topDeck + BULWARK - HULL_BOTTOM);
     const hullW = 1000;
 
@@ -168,10 +201,12 @@ const SHIP = (() => {
       const n = per[r], span = rate.w * taper(r, rows) * 0.9;
       for (let i = 0; i < n; i++, k++) {
         crew[k].row = r;
-        crew[k].x = +(50 - span / 2 + (span * (i + 0.5)) / n).toFixed(2);
-        crew[k].action = actionFor(crew[k].id, crew[k].state);
+        crew[k].x = +(50 - span / 2 + (span * (i + 0.5)) / (n + (r === rows-1 ? 1 : 0))).toFixed(2);
+        crew[k].action = crew[k].role === 'fm' ? 'helm' : actionFor(crew[k].id, crew[k].state);
       }
     }
+    const firstmate = crew.find(c=>c.role==='fm');
+    if (firstmate) firstmate.x = 50 - rate.w * .3;
 
     // one gun list: ports, flashes and the count of shots all read it
     const guns = [];
@@ -194,11 +229,12 @@ const SHIP = (() => {
     host.dataset.rate = rate.key;
     host.dataset.crew = String(crew.length);
 
-    host.innerHTML =
+    const captainX = 50 + rate.w * .29;
+    const helmX = crew.find(c=>c.role==='fm')?.x ?? 50 - rate.w * .3;
+    const markup =
       `<div class="horizon"></div><div class="sea" style="height:${HULL_BOTTOM + 14}px"></div>` +
       `<div class="shipbar"><span class="tier">${esc(T(rate.key))}</span>` +
       `<span>${esc(T("aboard"))} ${crew.length}/${limit}</span>` +
-      `<button id="ahoyBtn">${esc(T("ahoyBtn"))}</button>` +
       `<button class="mute" id="muteBtn" aria-pressed="${SHIP.muted}">${esc(T(SHIP.muted ? "unmute" : "mute"))}</button></div>` +
       `<div class="vessel" id="vessel">` +
         `<div class="ship">` +
@@ -215,78 +251,68 @@ const SHIP = (() => {
                   `<circle cx="9.5" cy="8.5" r="1.8" fill="#0b0b0d"/><circle cx="14.5" cy="8.5" r="1.8" fill="#0b0b0d"/></svg></div>`
                 : "") + `</div>`;
           }).join("") +
-          `<div class="hullwrap">${hullSVG(hullW, hullH, rows, step)}${prow(hullH)}` +
+          `<div class="hullwrap">${hullSVG(hullW, hullH, rows, step)}${prow(hullH)}<i class="stern" aria-hidden="true"></i>` +
             `<div class="ports">` + guns.map((g) =>
               `<div class="port" style="left:${g.x}%;bottom:${g.y - HULL_BOTTOM}px"><b></b></div>`).join("") +
             `</div><div class="salvo" id="salvo">` + guns.map((g) =>
               `<i style="left:${g.x}%;bottom:${g.y - HULL_BOTTOM}px"></i>`).join("") + `</div>` +
           `</div>` +
-          `<div class="helm" style="--hx:${50 + rate.w / 2 - 4}%;--topR:${rows - 1}">` +
+          `<div class="helm" style="--hx:${helmX}%;--topR:${rows - 1}">` +
             `<div class="ring"></div><i></i><i></i><i></i><i></i></div>` +
           crew.map((c) => figure(c, rate.sc)).join("") +
+          `<div id="captain" class="captain" style="--capX:${captainX}%;--capRow:${rows-1}">${figure({id:'captain',role:'cap',state:'captain',action:'helm',x:captainX,row:rows-1},Math.min(rate.sc,CAPTAIN_SCALE))}</div>` +
         `</div>` +
       `</div>` +
       crew.map((c) => bubble(c, T, rows - 1)).join("") +
-      `<div class="ahoy" id="ahoy">AHOY!<small>${esc(T("ahoySub"))}</small></div>`;
+      `<div class="ahoy" id="ahoy" role="status"></div>`;
+    const layer = host.querySelector('.handoffs');
+    if (layer?.remove) layer.remove();
+    patch(host, markup);
+    if (layer?.remove) host.append(layer);
+    for (const c of crew) {
+      const p = [...host.querySelectorAll('[data-crew]')].find(el=>el.dataset.crew===c.id);
+      if (p) { p.setAttribute('aria-label',`${c.name} · ${c.job} · ${T('lane'+c.state[0].toUpperCase()+c.state.slice(1))}`); p.tabIndex=0; }
+    }
 
-    host.querySelector("#ahoyBtn").onclick = () => SHIP.ahoy(host);
     host.querySelector("#muteBtn").onclick = (e) => {
       SHIP.muted = !SHIP.muted;
+      if (SHIP.muted) silence(); else unlock();
       try { localStorage.setItem("board.muted", SHIP.muted ? "1" : ""); } catch (_) {}
       e.target.textContent = T(SHIP.muted ? "unmute" : "mute");
       e.target.setAttribute("aria-pressed", String(SHIP.muted));
     };
     drag(host);
+    applyEffect(host);
+    if (host.ownerDocument) handoffs(host,s.handoffs || [],T,crew);
     return crew;
   }
 
-  // The captain's own figure, beside the cards rather than on the deck.
-  // He is not crew: the crew are agents doing work and he is the person
-  // they are waiting on, so he stands in the place where the waiting is.
+  // Human captain is permanently part of ship geometry, never agent counts.
   function captain(host, n, T) {
     if (!host) return;
-    if (!n) { host.innerHTML = ""; host.hidden = true; return; }
     host.hidden = false;
-    // The three the captain's block actually reads, from the deck's own
-    // constants. It used to write --deckY0, --rowStep and --figH as
-    // well: nothing reads them here - `.captain .pivot` sets `bottom`
-    // outright and overrides the sum they were for, and --figH is read
-    // only by `.bub`, which the captain does not have - so they were
-    // three numbers kept in step with nothing.
-    host.style.setProperty("--capStand", Math.round(FIG_H * CAPTAIN_SCALE * 1.5) + "px");
-    host.style.setProperty("--capBox", Math.round(FIG_H * CAPTAIN_SCALE * 2.05) + "px");
-    host.style.setProperty("--capFoot", Math.round(FIG_H * CAPTAIN_SCALE * 1.04) + "px");
-    const c = { id: "captain", role: "cap", state: "captain", action: "helm", x: 50, row: 0 };
-    // the scale is an argument, not also a custom property: figure() puts
-    // it on the pivot, which is the only place it is read
-    host.innerHTML =
-      `<div class="capstand">${figure(c, CAPTAIN_SCALE)}</div>` +
-      `<div class="capsays"><b>${esc(T("roleCaptain"))}</b>` +
-      `<span>${esc(T("capDeciding"))}</span>` +
-      `<i>${n}</i></div>`;
-    drag(host);
+    host.setAttribute('aria-label', T('roleCaptain'));
   }
 
   function roster(host, crew, T) {
-    host.innerHTML = `<h3><span>${esc(T("roster"))}</span><span>${crew.length}</span></h3><ul>` +
+    patch(host, `<h3><span>${esc(T("roster"))}</span><span>${crew.length}</span></h3><ul>` +
       crew.map((c) => `<li class="st-${c.state}"><span class="av"></span>` +
         `<span class="nm">${esc(c.name)}</span>` +
         `<span class="st">${esc(T("lane" + c.state[0].toUpperCase() + c.state.slice(1)))}</span>` +
-        `<span class="jb" title="${esc(c.job)}">${esc(c.job)}</span></li>`).join("") + `</ul>`;
+        `<span class="jb">${esc(c.job)}</span></li>`).join("") + `</ul>`);
   }
 
   // Drag to turn a crewman; the pointer owns him until it lets go.
   //
-  // The listeners go on the .pivot elements, never on the host, and every
-  // caller has just replaced host.innerHTML - so the elements these are
-  // attached to are new and the previous ones were discarded with their
-  // listeners. Nothing accumulates across renders. Put one on `host` and
-  // that stops being true.
+  // Bind once to preserved figures; the scene owns only background drags.
   function drag(host) {
+    if (!host.ownerDocument) return;
     host.querySelectorAll(".pivot").forEach((p) => {
+      if (p._dragBound) return;
+      p._dragBound = true;
       let x0 = 0, y0 = 0, ry = -26, rx = 8, on = false;
       p.addEventListener("pointerdown", (e) => {
-        on = true; x0 = e.clientX; y0 = e.clientY;
+        e.stopPropagation(); on = true; x0 = e.clientX; y0 = e.clientY;
         ry = parseFloat(p.style.getPropertyValue("--ry")) || -26;
         rx = parseFloat(p.style.getPropertyValue("--rx")) || 8;
         p.classList.add("dragging"); p.setPointerCapture(e.pointerId); e.preventDefault();
@@ -299,16 +325,91 @@ const SHIP = (() => {
       const up = () => { on = false; p.classList.remove("dragging"); };
       p.addEventListener("pointerup", up);
       p.addEventListener("pointercancel", up);
+      p.addEventListener('dblclick',e=>{e.stopPropagation();p.style.removeProperty('--rx');p.style.removeProperty('--ry');});
     });
+    if (host._deckDrag) return;
+    host._deckDrag = true;
+    let start = null;
+    host.addEventListener('pointerdown', e=>{
+      if (e.target.closest('button,a,.pivot')) return;
+      start = {x:e.clientX,y:e.clientY,crew:[...host.querySelectorAll('.pivot')].map(p=>[p,parseFloat(p.style.getPropertyValue('--ry')) || -26,parseFloat(p.style.getPropertyValue('--rx')) || 8])};
+      host.setPointerCapture(e.pointerId);e.preventDefault();
+    });
+    host.addEventListener('pointermove',e=>{if(start)for(const [p,y,x] of start.crew){p.style.setProperty('--ry',y+(e.clientX-start.x)*.6+'deg');p.style.setProperty('--rx',Math.max(-32,Math.min(42,x-(e.clientY-start.y)*.4))+'deg');}});
+    for(const event of ['pointerup','pointercancel'])host.addEventListener(event,()=>{start=null;});
+    host.addEventListener('dblclick',e=>{if(e.target.closest('button,a'))return;host.querySelectorAll('.pivot').forEach(p=>{p.style.removeProperty('--rx');p.style.removeProperty('--ry');});});
+  }
+
+  const handoffSeen = new Set();
+  let handoffStarted = false;
+  function handoffs(host, events, T, crew) {
+    let layer = host.querySelector('.handoffs');
+    if (!layer) {layer=document.createElement('div');layer.className='handoffs';host.append(layer);}
+    host._handoffT = T;
+    const person = id => crew.find(c=>c.id===id)?.name || id || T('handoffUnavailable');
+    for(const e of events) {
+      if(handoffSeen.has(e.identity))continue;
+      handoffSeen.add(e.identity);
+      if(!handoffStarted)continue;
+      const cue=document.createElement('div');cue.className='handoff';cue.dataset.identity=e.identity;cue.dataset.from=e.from || '';cue.dataset.to=e.to || '';cue.dataset.kind=e.kind;
+      cue.setAttribute('role','status');layer.append(cue);
+      const start=performance.now(), duration=1400;
+      const find=id=>[...host.querySelectorAll('.pivot')].find(p=>p.dataset.crew===id);
+      let arrived=false;
+      function frame(now) {
+        const from=find(e.from), to=find(e.to), elapsed=now-start;
+        const label=host._handoffT('handoff'+e.kind[0].toUpperCase()+e.kind.slice(1));
+        cue.setAttribute('aria-label',`${label}: ${person(e.from)} → ${person(e.to)} · ${e.task || ''}`);
+        if(!from || !to || matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          cue.style.removeProperty('left');cue.style.removeProperty('top');
+          cue.classList.add('static');cue.textContent=cue.getAttribute('aria-label')+(!from||!to?' · '+host._handoffT('handoffUnavailable'):'');
+        } else {
+          cue.textContent={order:'ORD',work:'PR',reject:'✕',approve:'✓'}[e.kind];
+          const a=from.getBoundingClientRect(),b=to.getBoundingClientRect(),h=host.getBoundingClientRect(),p=Math.min(1,elapsed/duration);
+          cue.style.left=(a.x+a.width/2+(b.x+b.width/2-a.x-a.width/2)*p-h.x)+'px';
+          cue.style.top=(a.y+a.height/2+(b.y+b.height/2-a.y-a.height/2)*p-h.y)+'px';
+          if(p===1&&!arrived){arrived=true;to.classList.add('react');const bubble=[...host.querySelectorAll('[data-bubble]')].find(b=>b.dataset.bubble===e.to);bubble?.classList.add('ping');setTimeout(()=>{to.classList.remove('react');bubble?.classList.remove('ping');},700);}
+        }
+        if(elapsed<2300)requestAnimationFrame(frame);else cue.remove();
+      }
+      requestAnimationFrame(frame);
+    }
+    handoffStarted=true;
   }
 
   // synthesised, so the board carries no audio files
-  let ac = null;
-  function boom(at, gain) {
+  let ac = null, master = null;
+  const sources = new Set();
+  let unlocked = false, current = null;
+  const effects = [], handled = new Set();
+  function unlock() {
+    unlocked = true;
     if (SHIP.muted) return;
     try {
       ac = ac || new (window.AudioContext || window.webkitAudioContext)();
-      if (ac.state === "suspended") ac.resume();
+      master = master || ac.createGain(); master.connect(ac.destination);
+      master.gain.setValueAtTime(1, ac.currentTime);
+      if (ac.state === 'suspended') Promise.resolve(ac.resume()).catch(() => {});
+    } catch (_) {}
+  }
+  function silence() {
+    effects.forEach(effect => { effect.audio = false; });
+    try { master?.gain.setValueAtTime(0, ac.currentTime); } catch (_) {}
+    for (const source of sources) { try { source.stop(); } catch (_) {} }
+    sources.clear();
+  }
+  function sound(kind, host) {
+    if (kind !== 'merge' || SHIP.muted || !unlocked) return;
+    try {
+      unlock();
+      (host._guns || []).forEach((_, i) => boom(i * .07, .34));
+    } catch (_) { /* optional audio never changes a recorded decision */ }
+  }
+  function boom(at, gain) {
+    if (SHIP.muted || !ac || !master) return;
+    try {
+      ac = ac || new (window.AudioContext || window.webkitAudioContext)();
+      if (ac.state === "suspended") Promise.resolve(ac.resume()).catch(() => {});
     } catch (_) { return; }
     const t0 = ac.currentTime + at, len = 0.5;
     const buf = ac.createBuffer(1, Math.floor(ac.sampleRate * len), ac.sampleRate);
@@ -318,29 +419,58 @@ const SHIP = (() => {
     const lp = ac.createBiquadFilter(); lp.type = "lowpass";
     lp.frequency.setValueAtTime(900, t0); lp.frequency.exponentialRampToValueAtTime(110, t0 + len);
     const g = ac.createGain(); g.gain.setValueAtTime(gain, t0); g.gain.exponentialRampToValueAtTime(0.001, t0 + len);
-    src.connect(lp).connect(g).connect(ac.destination); src.start(t0); src.stop(t0 + len);
+    src.connect(lp).connect(g).connect(master); sources.add(src); src.onended = () => sources.delete(src);
+    src.start(t0); src.stop(t0 + len);
   }
 
-  function ahoy(host) {
-    const vessel = host.querySelector("#vessel"), salvo = host.querySelector("#salvo"),
-          banner = host.querySelector("#ahoy");
-    if (!vessel) return;
-    vessel.classList.remove("heel"); void vessel.offsetWidth; vessel.classList.add("heel");
-    banner.classList.remove("on"); void banner.offsetWidth; banner.classList.add("on");
-    host.querySelectorAll(".fig").forEach((f, i) =>
-      setTimeout(() => { f.classList.add("cheer"); setTimeout(() => f.classList.remove("cheer"), 1400); }, i * 55));
-    // the flash and the report are the same event: one gun, one sound, same delay
-    const guns = host._guns || [];
-    salvo.classList.remove("fire"); void salvo.offsetWidth;
-    salvo.querySelectorAll("i").forEach((el, i) => {
-      el.style.animationDelay = (i * 0.07).toFixed(2) + "s";
-      boom(i * 0.07, i === 0 ? 0.5 : 0.34);
+  function applyEffect(host) {
+    if (!current) return;
+    const elapsed = (Date.now() - current.start) / 1000;
+    const banner = host.querySelector('#ahoy');
+    banner.textContent = current.kind === 'order' ? 'AYE, CAPTAIN! / ORDERS AWAY' : 'AHOY! / MERGED INTO MAIN';
+    banner.classList.add('active');
+    host.dataset.effect = current.id;
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduced) return;
+    host.querySelectorAll('.fig').forEach((f, i) => {
+      if (!f.classList.contains('cheer')) {
+        f.classList.add('cheer'); f.style.animationDelay = `${i * .055 - elapsed}s`;
+      }
     });
-    salvo.classList.add("fire");
-    return guns.length;
+    const target = host.querySelector(current.kind === 'order' ? '.helm' : '#vessel');
+    const targetClass = current.kind === 'order' ? 'orders' : 'heel';
+    if (!target.classList.contains(targetClass)) {
+      target.classList.add(targetClass); target.style.animationDelay = `${-elapsed}s`;
+    }
+    if (current.kind === 'merge') {
+      const salvo = host.querySelector('#salvo');
+      if (!salvo.classList.contains('fire')) {
+        salvo.classList.add('fire');
+        salvo.querySelectorAll('i').forEach((el, i) => { el.style.animationDelay = `${i * .07 - elapsed}s`; });
+      }
+    }
+  }
+  function nextEffect(host) {
+    if (current || !effects.length) return;
+    current = {...effects.shift(), start:Date.now()};
+    applyEffect(host); if (current.audio) sound(current.kind, host);
+    document.dispatchEvent(new Event('ship-effect'));
+    setTimeout(() => {
+      current = null;
+      host.querySelectorAll('.cheer,.heel,.orders,.fire,.active').forEach(el => {
+        el.classList.remove('cheer','heel','orders','fire','active'); el.style.animationDelay = '';
+      });
+      delete host.dataset.effect;
+      document.dispatchEvent(new Event('ship-effect')); nextEffect(host);
+    }, 3200);
+  }
+  function enqueue(host, kind, id) {
+    if (handled.has(id)) return;
+    handled.add(id); effects.push({kind,id,audio:!SHIP.muted && unlocked}); nextEffect(host);
   }
 
-  return { render, roster, captain, ahoy, rateFor, actionFor, crewOf, layout, RATES, ACTIONS, ROLE,
+  return { render, roster, captain, patch, enqueue, unlock, active:() => current,
+           rateFor, actionFor, crewOf, layout, RATES, ACTIONS, ROLE,
            muted: (() => { try { return !!localStorage.getItem("board.muted"); } catch (_) { return false; } })() };
 })();
 if (typeof module !== "undefined") module.exports = SHIP;

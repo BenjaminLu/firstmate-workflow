@@ -21,7 +21,9 @@ echo "fm-merge: merged"
 M
 chmod +x "$d/bin/fm-merge.sh"
 
-FM_ROOT="$d" "$d/bin/fm-decide.sh" --request D-1 --task T-A --kind merge --title "merge it?" --pr 16 >/dev/null
+# Explicit legacy fixture: the route must keep old pending records readable.
+mkdir -p "$d/state/pending"
+printf '%s\n' '{"id":"D-1","task":"T-A","kind":"merge","title":"merge it?","pr":16}' > "$d/state/pending/D-1.json"
 PORT=$(( 15000 + RANDOM % 900 ))
 FM_ROOT="$d" FM_PORT="$PORT" bun run "$d/board/server.ts" >"$d/out" 2>&1 </dev/null &
 pid=$!; trap 'kill "$pid" 2>/dev/null' EXIT
@@ -38,6 +40,7 @@ assert_contains "$(curl -sf "http://127.0.0.1:$PORT/")" 'id="deck"' "the page ha
 post() { curl -s -X POST "http://127.0.0.1:$PORT/decisions" -H 'content-type: application/json' -d "$1"; }
 assert_contains "$(post '{"id":"nope","chosen":"A"}')" "bad decision id" "it rejects an id that is not a decision id"
 assert_contains "$(post '{"id":"D-1","chosen":"rm -rf /"}')" "bad choice" "it rejects a choice that is not a letter"
+assert_contains "$(post '{"id":"D-1","chosen":["A"]}')" "bad choice" "it never coerces an array into merge authorization"
 assert_fail "test -f '$d/state/merge-calls'" "neither attempt reached the merge script"
 
 r="$(post '{"id":"D-1","chosen":"A"}')"
@@ -59,9 +62,46 @@ post '{"id":"D-1","chosen":"A"}' >/dev/null
 assert_eq "$before" "$(wc -l < "$d/state/merge-calls" | tr -d ' ')" "answering again is idempotent"
 
 # a non-merge answer never touches the merge script
-FM_ROOT="$d" "$d/bin/fm-decide.sh" --request D-2 --task T-A --kind merge --title "again?" --pr 17 >/dev/null
+printf '%s\n' '{"id":"D-2","task":"T-A","kind":"merge","title":"again?","pr":17}' > "$d/state/pending/D-2.json"
 post '{"id":"D-2","chosen":"B"}' >/dev/null
 assert_fail "grep -q 'pr 17' '$d/state/merge-calls'" "sending it back does not merge"
+
+printf '%s\n' '{"id":"D-3","task":"T-A","kind":"merge","pr":18}' > "$d/state/pending/D-3.json"
+for value in '""' '"   "' 'null' '123'; do
+  payload="$(jq -cn --argjson text "$value" '{id:"D-3",chosen:"custom",text:$text}')"
+  response="$(post "$payload")"
+  assert_contains "$response" 'invalid custom text' 'empty and non-string custom responses fail'
+done
+large="$(jq -cn '{id:"D-3",chosen:"custom",text:("🚢" * 1001)}')"
+assert_contains "$(post "$large")" 'invalid custom text' 'Unicode code point limit enforced'
+for pair in '127 007F' '133 0085' '159 009F'; do
+  set -- $pair
+  payload="$(jq -cn --argjson cp "$1" '{id:"D-3",chosen:"custom",text:("captain" + ([$cp]|implode) + "order")}')"
+  assert_contains "$(post "$payload")" 'invalid custom text' "Unicode control U+$2 is rejected"
+done
+assert_fail "test -f '$d/state/decisions/D-3.json'" 'invalid custom responses leave no record'
+literal='  船長 🚢 <script>oops()</script> $(touch forbidden)  '
+r="$(post "$(jq -cn --arg text "$literal" '{id:"D-3",chosen:"custom",text:$text}')")"
+assert_eq 'true' "$(jq -r .ok <<<"$r")" 'literal custom response accepted'
+got="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --await D-3 --timeout 5)"
+assert_eq 'custom' "$(jq -r .chosen <<<"$got")" 'watch returns distinct custom semantics'
+assert_eq "$literal" "$(jq -r .text <<<"$got")" 'watch preserves literal response'
+state_text="$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r '.responses[]|select(.id=="D-3")|.text')"
+assert_eq "$literal" "$state_text" 'state roundtrip preserves literal response'
+assert_fail "grep -q 'pr 18' '$d/state/merge-calls'" 'custom never authorizes merge'
+assert_eq '3' "$(jq -s 'map(select(.type=="decision_made"))|length' "$d/state/events.jsonl")" 'one event per decision, none from await or duplicate'
+assert_contains "$(post '{"id":"D-3","chosen":"A"}')" 'already recorded differently' 'conflicting repeat is truthful'
+assert_contains "$(post '{"id":"D-404","chosen":"A"}')" 'no pending decision' 'unknown decision cannot be invented'
+
+printf '%s\n' '{"id":"D-4","task":"T-A","kind":"choice"}' > "$d/state/pending/D-4.json"
+assert_eq 'true' "$(post "$(jq -cn '{id:"D-4",chosen:"custom",text:("🚢" * 1000)}')" | jq -r .ok)" '1000 Unicode code points accepted'
+
+printf '%s\n' '{"id":"D-5","task":"T-A","kind":"choice"}' > "$d/state/pending/D-5.json"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$d/bin/fm-emit.sh"
+r="$(post '{"id":"D-5","chosen":"C"}')"
+assert_eq 'true' "$(jq -r .ok <<<"$r")" 'event failure cannot hide a recorded decision'
+assert_eq 'false' "$(jq -r .eventRecorded <<<"$r")" 'event failure is disclosed'
+assert_eq 'decision:D-5' "$(jq -r .decision.identity <<<"$r")" 'recording has an observable stable identity without an awaiter'
 
 kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null || true
 rm -rf "$d"

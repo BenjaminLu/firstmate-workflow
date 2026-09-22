@@ -22,7 +22,7 @@ const DIAGRAM = (() => {
 
   // hidden and without a src: mount decides whether it is shown at all
   const embed = (id) => isDecision(id)
-    ? `<iframe class="dg" data-decision="${id}" title="${id}" loading="lazy" hidden></iframe>`
+    ? `<iframe class="dg" data-decision="${id}" title="${id}" hidden></iframe>`
     : "";
 
   const decisionOf = (el) =>
@@ -36,13 +36,35 @@ const DIAGRAM = (() => {
     const frames = root ? Array.from(root.querySelectorAll("iframe.dg")) : [];
     let moved = 0;
     for (const el of frames) {
+      if (el.addEventListener && !el._resizeBound) {
+        el._resizeBound = true;
+        el.addEventListener('load', () => {
+          try {
+            const body = el.contentDocument.body;
+            const resize = () => { el.style.height = Math.ceil(body.getBoundingClientRect().height + 4) + 'px'; };
+            el._observer?.disconnect();
+            el._observer = new ResizeObserver(resize); el._observer.observe(body); resize();
+          } catch (_) { /* trusted authored documents are same origin */ }
+        });
+      }
       const want = src(decisionOf(el), lang);
-      if (!want || el.getAttribute("src") === want) continue;
+      el._wanted = want;
+      const fallback = el.nextElementSibling?.classList.contains('change-fallback') ? el.nextElementSibling : null;
+      if (!want) { if (fallback) fallback.hidden = false; continue; }
+      if (el.getAttribute("src") === want) {
+        el.removeAttribute("hidden");
+        if (fallback) fallback.hidden = true;
+        continue;
+      }
       let there = false;
       try { there = !!get && (await get(want, { method: "HEAD" })).ok; } catch (_) { there = false; }
-      if (!there) { el.remove(); continue; }
+      if (el._wanted !== want) continue;
+      if (!there) { if (fallback) fallback.hidden = false; el.remove(); continue; }
       el.setAttribute("src", want);
       el.removeAttribute("hidden");
+      // Complete authored data remains usable when generation is unavailable.
+      // A served authored fragment replaces that inline before/after fallback.
+      if (fallback) fallback.hidden = true;
       moved++;
     }
     return moved;

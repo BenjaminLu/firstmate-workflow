@@ -17,18 +17,18 @@
 body{background:var(--bg);color:var(--fg);font:14px/1.55 var(--sans);padding-bottom:40px}
 .top{display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:1px solid var(--line);
   background:var(--bg2);position:sticky;top:0;z-index:5}
-.top b{font-weight:650} .top small{display:block;font:400 10.5px var(--mono);color:var(--fg3);
+.top b{font-weight:650} .top small{display:block;font:400 13px var(--mono);color:var(--fg3);
   letter-spacing:.08em;text-transform:uppercase}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(62,207,142,.15)}
 .dot.off{background:var(--bad);box-shadow:0 0 0 3px rgba(242,100,90,.15)}
 .spacer{flex:1}
 .counts{display:flex;gap:22px;padding:14px 20px;border-bottom:1px solid var(--line)}
 .counts b{display:block;font-size:24px;line-height:1.1;font-variant-numeric:tabular-nums}
-.counts span{font:10.5px var(--mono);color:var(--fg3);text-transform:uppercase;letter-spacing:.09em}
+.counts span{font:13px var(--mono);color:var(--fg3);text-transform:uppercase;letter-spacing:.09em}
 .counts .w b{color:var(--wait)} .counts .x b{color:var(--bad)}
 main{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:16px;padding:16px 20px}
 @media(max-width:860px){main{grid-template-columns:1fr}}
-section>h2{margin:0 0 10px;font:600 10.5px var(--mono);color:var(--fg3);
+section>h2{margin:0 0 10px;font:600 13px var(--mono);color:var(--fg3);
   text-transform:uppercase;letter-spacing:.1em}
 .lanes{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:9px}
 .lane{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:9px;min-height:70px}
@@ -78,6 +78,24 @@ section>h2{margin:0 0 10px;font:600 10.5px var(--mono);color:var(--fg3);
 iframe.dg{display:block;width:100%;height:240px;margin:12px 0 0;border:1px solid var(--line);
   border-radius:10px;background:var(--bg3)}
 iframe.dg[hidden]{display:none}
+body{font-size:16px}
+.top{flex-wrap:wrap;position:relative;gap:8px}
+.top>*{min-width:0}.langs{margin-left:0;flex-shrink:0}
+.langs button,.acts .said{font-size:13px}#gl{font-size:13px!important}
+.top small,.counts span,section>h2,.lane h3,.card .id,.card .pr,.dcard .meta,.dcard a,.log time,.log .who,#pcount{font-size:13px}
+#deckwrap>h2{font-size:13px!important}
+.counts{flex-wrap:wrap;gap:16px}.counts>div{min-width:0}
+.lanes{align-items:start;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))}
+.lane,.card,section,main,.dcard,.acts>*{min-width:0;overflow-wrap:anywhere}
+.card .t,.log li,.explanation,.tradeoffs,.gates li,.empty,.acts button,.acts label,.acts textarea{font-size:16px}
+.dcard h3{font-size:22px}.acts button,.langs button{min-height:44px;white-space:normal;max-width:100%}
+.acts textarea{font:inherit}.gates{grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr))}
+.log li{grid-template-columns:minmax(0,62px) minmax(0,90px) minmax(0,1fr)}
+.log .who{overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
+#history{margin-top:16px}#history summary{cursor:pointer;min-height:44px;padding:10px;background:var(--bg2);font-size:16px}
+.history-cards{padding-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:9px}
+@media(max-width:420px){.top,.counts,main{padding-left:12px;padding-right:12px}.log li{grid-template-columns:1fr 2fr}.log li>span:last-child{grid-column:1/-1}}
+.top small,.counts span,section>h2,#deckwrap>h2,#gl{font-size:13px!important}
 </style>
 </head>
 <body>
@@ -85,24 +103,24 @@ iframe.dg[hidden]{display:none}
   <span class="dot" id="live"></span>
   <b id="h-brand"></b>
   <span class="spacer"></span>
-  <span id="gl" style="font:600 11px var(--mono);color:var(--brass)"></span>
+  <span id="gl" style="font:600 13px var(--mono);color:var(--brass)"></span>
   <span class="langs" id="langs"></span>
 </div>
 <div class="counts" id="counts"></div>
-<section style="padding:0 20px">
+<section id="shipregion" style="padding:0 20px">
    <div class="scene" id="scene"></div>
   <div class="roster" id="roster"></div>
 </section>
 <section id="deckwrap" style="padding:0 20px" hidden>
-  <h2 style="margin:16px 0 10px;font:600 10.5px var(--mono);color:var(--fg3);text-transform:uppercase;letter-spacing:.1em">
+  <h2 style="margin:16px 0 10px;font:600 13px var(--mono);color:var(--fg3);text-transform:uppercase;letter-spacing:.1em">
     <span id="awaiting"></span> <span id="pcount"></span></h2>
-  <div class="capwrap"><div class="captain" id="captain"></div>
-  <div id="deck"></div></div>
+  <div id="deck"></div>
 </section>
 <main>
   <section>
     <h2 id="h-fleet"></h2>
     <div class="lanes" id="lanes"></div>
+    <details id="history"><summary></summary><div class="history-cards"></div></details>
   </section>
   <section>
     <h2 id="h-log"></h2>
@@ -112,20 +130,53 @@ iframe.dg[hidden]{display:none}
 <script src="ship.js"></script>
 <script src="diagram.js"></script>
 <script>
-const LANES = [["queued","laneQueued"],["working","laneWorking"],["gate","laneGate"],
-               ["review","laneReview"],["captain","laneCaptain"],["merged","laneMerged"]];
+const LANES = [["captain","laneCaptain"],["gate","laneGate"],["review","laneReview"],
+               ["working","laneWorking"],["queued","laneQueued"]];
+// Decisions lead the page; the vessel and readable crew remain directly below.
+document.getElementById('shipregion').before(document.getElementById('deckwrap'));
 // every string the reader sees comes from the dictionary; zh-CN is derived
 // from zh-TW by the table, so there is no third file to keep in step
 const LANGS = ["en", "zh-TW", "zh-CN"], LANGNAME = { "en": "EN", "zh-TW": "\u7e41", "zh-CN": "\u7b80" };
-let lang = localStorage.getItem("board.lang") ||
-  new URLSearchParams(location.search).get("lang") || "zh-TW";
+let lang = new URLSearchParams(location.search).get("lang") ||
+  localStorage.getItem("board.lang") || "zh-TW";
 if (!LANGS.includes(lang)) lang = "zh-TW";
 let DICT = { en: {}, "zh-TW": {}, tw2cn: [] };
 const cn = (x) => DICT.tw2cn.reduce((acc, pair) => acc.split(pair[0]).join(pair[1]), x);
 const t = (k) => lang === "zh-CN" ? cn(DICT["zh-TW"][k] ?? DICT.en[k] ?? k)
                                   : (DICT[lang] && DICT[lang][k]) || DICT.en[k] || k;
 const GATES = () => [1,2,3,4,5,6,7].map(n => t("gate" + n));
-const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':'&quot;',"'":'&#39;'}[c]));
+const localized = d => d?.details?.[lang === 'en' ? 'en' : 'zh-TW'];
+const words = s => lang === 'zh-CN' ? cn(String(s ?? '')) : String(s ?? '');
+const picks = new Map(), drafts = new Map(), sent = new Set();
+let latest, feedback = null, initialized = false;
+const seen = new Set();
+function feedbackText() {
+  const el = document.getElementById('orderFeedback');
+  if (!el) return;
+  el.textContent = feedback ? [feedback.cry || '', t(feedback.key),
+    words(localized(feedback.decision)?.outcome || ''), feedback.literal || '', feedback.eventFailed ? t('eventFailed') : '']
+    .filter(Boolean).join(' · ') : '';
+}
+function pose() {
+  const cap = document.getElementById('captain');
+  cap.dataset.pose = sent.size || SHIP.active()?.kind === 'order' ? 'order'
+    : picks.size ? 'ready' : 'idle';
+  const figure = cap.querySelector('.fig');
+  if (figure) { figure.classList.remove('c-idle','c-ready','c-order'); figure.classList.add('c-' + cap.dataset.pose); }
+  const label = cap.querySelector('.capsays span');
+  if (label) label.textContent = t(cap.dataset.pose === 'ready' ? 'capReady' : cap.dataset.pose === 'order' ? 'capOrder' : 'capDeciding');
+}
+function observe(outcomes) {
+  for (const e of outcomes || []) {
+    if (seen.has(e.identity)) continue;
+    seen.add(e.identity);
+    if (!initialized) continue;
+    const kind = e.type === 'merged' ? 'merge' : 'order';
+    SHIP.enqueue(document.getElementById('scene'), kind, e.identity);
+  }
+  initialized = true;
+}
 
 function chrome() {
   document.getElementById("h-brand").innerHTML =
@@ -133,8 +184,8 @@ function chrome() {
   document.getElementById("awaiting").textContent = t("awaiting");
   document.getElementById("h-fleet").textContent = t("fleet");
   document.getElementById("h-log").textContent = t("log");
-  document.getElementById("langs").innerHTML = LANGS.map(l =>
-    `<button aria-pressed="${l === lang}" data-l="${l}">${LANGNAME[l]}</button>`).join("");
+  SHIP.patch(document.getElementById("langs"), LANGS.map(l =>
+    `<button aria-pressed="${l === lang}" data-l="${l}">${LANGNAME[l]}</button>`).join(""));
   document.getElementById("langs").querySelectorAll("button").forEach(b =>
     b.onclick = () => { lang = b.dataset.l; localStorage.setItem("board.lang", lang);
       document.documentElement.lang = lang; chrome();
@@ -144,75 +195,140 @@ function chrome() {
       fetch("/api/state").then(x => x.json()).then(render).catch(() => {}); });
 }
 
-let lastMerged = null;
 function render(s) {
+  const focus = document.activeElement;
+  const focusKey = focus?.dataset?.id;
+  const focusChoice = focus?.dataset?.c;
+  const selection = focus?.tagName === 'TEXTAREA' ? [focus.selectionStart, focus.selectionEnd] : null;
+  latest = s;
+  const failures = (s.responses || []).filter(d => d.merged?.ok === false)
+    .sort((a,b) => String(a.ts || '').localeCompare(String(b.ts || '')));
+  const failed = failures[failures.length - 1];
+  if (failed && (feedback?.decisionId !== failed.id || feedback.key !== 'mergeRefused'))
+    feedback = {key:'mergeRefused',decisionId:failed.id};
   document.getElementById("gl").textContent = s.greenlit ? t("greenlit") : t("notGreenlit");
   document.getElementById("counts").innerHTML = [
     [t("merged"), s.counts.merged, ""], [t("inflight"), s.counts.inflight, ""],
     [t("blocked"), s.counts.blocked, "x"], [t("queued"), s.counts.queued, ""],
   ].map(([l, n, c]) => `<div class="${c}"><b>${n}</b><span>${l}</span></div>`).join("");
 
-  document.getElementById("lanes").innerHTML = LANES.map(([k, label]) => {
-    const items = s.tasks.filter(t => t.stage === k);
+  SHIP.patch(document.getElementById("lanes"), LANES.map(([k, label]) => {
+    const items = s.tasks.filter(task => task.stage === k);
     return `<div class="lane"><h3>${t(label)}<i>${items.length}</i></h3>` +
-      items.map(t => `<div class="card s-${k}"><span class="id">${esc(t.id)}</span>` +
-        (t.pr ? ` <span class="pr">#${t.pr}</span>` : "") +
-        `<div class="t">${esc(t.title)}</div></div>`).join("") + `</div>`;
-  }).join("");
+      items.map(task => `<div class="card s-${k}"><span class="id">${esc(task.id)}</span>` +
+        (task.pr ? ` <span class="pr">#${task.pr}</span>` : "") +
+        `<div class="t">${esc(task.title || t('descriptionUnavailable'))}</div></div>`).join("") + `</div>`;
+  }).join(""));
+
+  const completed = s.tasks.filter(item => ['merged','closed'].includes(item.stage));
+  const history = document.getElementById('history');
+  history.querySelector('summary').textContent = `${t('history')} · ${t('laneMerged')} ${completed.filter(x=>x.stage==='merged').length} · ${t('laneClosed')} ${completed.filter(x=>x.stage==='closed').length}`;
+  SHIP.patch(history.querySelector('.history-cards'), completed.map(item =>
+    `<div class="card s-${item.stage}"><span class="id">${esc(item.id)}</span> <span>${esc(t(item.stage==='merged'?'laneMerged':'laneClosed'))}</span>` +
+    (item.pr ? ` <span class="pr">#${esc(item.pr)}</span>` : '') + `<div class="t">${esc(item.title || t('descriptionUnavailable'))}</div></div>`).join(''));
 
   const deck = document.getElementById("deck");
   const wrap = document.getElementById("deckwrap");
-  const pend = s.pending || [];
-  wrap.hidden = pend.length === 0;
+  const pend = [...(s.pending || [])].sort((a, b) =>
+    String(a.id || "").localeCompare(String(b.id || ""), "en", { numeric: true }));
+  const pendingIds = new Set(pend.map(d => d.id));
+  for (const id of [...picks.keys()]) if (!pendingIds.has(id)) picks.delete(id);
+  for (const id of [...drafts.keys()]) if (!pendingIds.has(id)) drafts.delete(id);
+  for (const id of [...sent]) if (!pendingIds.has(id)) sent.delete(id);
+  wrap.hidden = pend.length === 0 && !feedback && !SHIP.active();
+  if (!document.getElementById('orderFeedback')) {
+    const status = document.createElement('p'); status.id = 'orderFeedback';
+    status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+    wrap.append(status);
+  }
   document.getElementById("pcount").textContent = pend.length || "";
-  deck.innerHTML = pend.map(d => {
-    const gates = (d.gates || []).length ? d.gates : [1,1,1,1,1,1,0];
-    return `<div class="dcard"><div class="meta">${esc(d.id)} · ${esc(d.task || "")}` +
+  SHIP.patch(deck, pend.map(d => {
+    const gates = d.gates || [], content = localized(d), pick = picks.get(d.id);
+    const options = ['A','B','C'].map(k => {
+      const o = content?.options?.[k];
+      return `<button class="opt" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" ${sent.has(d.id)?'disabled':''}>${k} · ${esc(o ? words(o.description) : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'))}</button>` +
+        (o ? `<p class="tradeoffs"><b>${esc(t('pros'))}</b> ${esc(words(o.pros))}<br><b>${esc(t('cons'))}</b> ${esc(words(o.cons))}</p>` : '');
+    }).join('');
+    return `<div class="dcard" id="card-${esc(d.id)}"><div class="meta">${esc(d.id)} · ${esc(d.task || "")}` +
       (d.pr ? ` · <a href="https://github.com/BenjaminLu/firstmate-workflow/pull/${d.pr}" target="_blank" rel="noreferrer">#${d.pr}</a>` : "") +
-      `</div><h3>${esc(d.title || t("waiting"))}</h3>` +
-      DIAGRAM.embed(d.id) +
-      (d.kind === "merge"
+      `</div><h3>${esc(content ? words(content.title) : d.title || t("waiting"))}</h3>` +
+      `<p class="explanation">${esc(content ? words(content.explanation) : t('missingDetails'))}</p>` +
+      DIAGRAM.embed(d.id) + (content ? `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${esc(words(content.before))}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${esc(words(content.after))}</p></section></div>` : '') +
+      (d.kind === "merge" && gates.length
         ? `<ul class="gates">${GATES().map((g,i)=>`<li class="${gates[i]?"y":"n"}"><i>${gates[i]?"&#10003;":"&#8211;"}</i>${i+1}. ${g}</li>`).join("")}</ul>`
         : "") +
-      `<div class="acts">
-         <button class="go"  data-id="${esc(d.id)}" data-c="A">${d.kind==="merge"?esc(t("mergeInto")):esc(t("chooseA"))}</button>
-         <button class="alt" data-id="${esc(d.id)}" data-c="B">${esc(t("sendBack"))}</button>
-         <button class="alt" data-id="${esc(d.id)}" data-c="C">${esc(t("hold"))}</button>
-         <span class="said" id="said-${esc(d.id)}"></span>
+      `<div class="acts">${options}
+         <button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${sent.has(d.id)?'disabled':''}>${esc(t('customChoice'))}</button>
+         <label ${pick === 'custom'?'':'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${sent.has(d.id)?'disabled':''}>${esc(drafts.get(d.id) || '')}</textarea></label>
+         <span class="validation" id="validation-${esc(d.id)}"></span>
+         <button class="go confirm" data-id="${esc(d.id)}" disabled>${esc(t('confirmOrder'))}</button>
        </div></div>`;
-  }).join("");
-  deck.querySelectorAll("button").forEach(b => b.onclick = () => answer(b.dataset.id, b.dataset.c));
+  }).join(""));
+  deck.querySelectorAll('[data-c]').forEach(b => b.onclick = () => {
+    picks.set(b.dataset.id, b.dataset.c); render(latest);
+  });
+  deck.querySelectorAll('textarea').forEach(el => el.oninput = () => {
+    drafts.set(el.dataset.id, el.value); validate(el.dataset.id);
+  });
+  deck.querySelectorAll('.confirm').forEach(b => { b.onclick = () => answer(b.dataset.id); validate(b.dataset.id); });
   // the diagrams arrive after the card: mount checks each one is there
   // before it is shown, so a decision without one leaves no empty frame
   DIAGRAM.mount(deck, lang).catch(() => {});
 
-  const crew = SHIP.render(document.getElementById("scene"), s, t);
+  const crew = SHIP.render(document.getElementById("scene"), s, t, value => words(value?.[lang === 'en' ? 'en' : 'zh-TW'] || ''));
   SHIP.roster(document.getElementById("roster"), crew, t);
-  SHIP.captain(document.getElementById("captain"), pend.length, t);
-  // a merge that lands while the board is open is worth a broadside
-  if (lastMerged !== null && s.counts.merged > lastMerged) SHIP.ahoy(document.getElementById("scene"));
-  lastMerged = s.counts.merged;
+  observe(s.outcomes);
+  SHIP.captain(document.getElementById("captain"), pend.length || (feedback || SHIP.active() ? 1 : 0), t);
+  pose(); feedbackText();
+  if (focusKey) {
+    const replacement = [...deck.querySelectorAll('[data-id]')].find(el => el.dataset.id === focusKey && el.tagName === focus.tagName && (focusChoice ? el.dataset.c === focusChoice : !el.dataset.c));
+    replacement?.focus({preventScroll:true});
+    if (replacement && selection) replacement.setSelectionRange(...selection);
+  }
 
   const log = document.getElementById("log");
   log.innerHTML = s.recent.length ? s.recent.map(e => {
     const t = (e.ts || "").slice(11, 19);
-    const text = (e.summary && (e.summary.en || e.summary["zh-TW"])) || e.type;
+    const text = words(e.summary?.[lang === 'en' ? 'en' : 'zh-TW'] || e.summary?.en || e.type);
     return `<li><time>${esc(t)}</time><span class="who">${esc(e.actor)}</span>` +
       `<span class="k-${esc(e.type)}">${esc(text)}</span></li>`;
   }).join("") : `<li class="empty">${esc(t("nothingYet"))}</li>`;
 }
 
-async function answer(id, chosen) {
-  const said = document.getElementById("said-" + id);
-  if (said) said.textContent = t("sending");
+function validate(id) {
+  const chosen = picks.get(id), text = drafts.get(id) || '';
+  const valid = chosen && (chosen !== 'custom' || (text.trim() && [...text].length <= 1000
+    && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\ud800-\udfff]/u.test(text)));
+  const button = document.querySelector(`.confirm[data-id="${id}"]`);
+  if (button) button.disabled = !valid || sent.has(id);
+  const label = document.getElementById('validation-' + id);
+  if (label) label.textContent = chosen === 'custom' && !valid ? t('customInvalid') : '';
+  return valid;
+}
+async function answer(id) {
+  if (sent.has(id) || !validate(id)) return;
+  const chosen = picks.get(id), text = drafts.get(id), decision = latest.pending.find(d => d.id === id);
+  sent.add(id); SHIP.unlock(); feedback = {key:'sending'}; render(latest);
   const r = await fetch("/decisions", {
     method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id, chosen }),
+    body: JSON.stringify({ id, chosen, ...(chosen === 'custom' ? {text} : {}) }),
   }).then(x => x.json()).catch(() => ({ error: t("unreachable") }));
-  if (said) said.textContent = r.error ? r.error
-    : r.merged ? (r.merged.ok ? r.merged.out : t("mergeRefused")) : t("recorded");
+  sent.delete(id);
+  if (r.error) feedback = {key:r.code || 'orderFailed'};
+  else {
+    picks.delete(id); drafts.delete(id);
+    feedback = {key:r.merged && !r.merged.ok ? 'mergeRefused' : chosen === 'custom' ? 'customRecorded' : 'recorded', decisionId:id,
+      cry:'AYE, CAPTAIN! / ORDERS AWAY', decision, literal:chosen === 'custom' ? text : '', eventFailed:r.eventRecorded === false};
+    const identity = r.decision?.identity || `decision:${id}`;
+    if (!r.already && !seen.has(identity)) {
+      seen.add(identity); SHIP.enqueue(document.getElementById('scene'), 'order', identity);
+    }
+  }
+  render(latest);
   fetch("/api/state").then(x => x.json()).then(render).catch(() => {});
 }
+document.addEventListener('ship-effect', () => { pose(); feedbackText(); });
+document.addEventListener('pointerdown', () => SHIP.unlock());
 
 let es;
 function connect() {
