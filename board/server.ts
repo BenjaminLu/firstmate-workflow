@@ -84,6 +84,7 @@ const state = () => {
   const defs = existsSync(tasksFile)
     ? (JSON.parse(readFileSync(tasksFile, "utf8")).tasks as Array<Record<string, unknown>>)
     : [];
+  const definitions = new Map(defs.map(d => [String(d.id), d]));
   const stage = new Map<string, string>();
   const pr = new Map<string, number>();
   // merged and closed are where a task stops. Anything said about it
@@ -93,22 +94,27 @@ const state = () => {
   const FINAL = new Set(["merged", "closed"]);
   for (const e of events) {
     if (!e.task) continue;
+    if (typeof e.pr === "number") pr.set(e.task, e.pr);
     if (FINAL.has(stage.get(e.task) ?? "")) continue;
     const s = STAGE[e.type ?? ""];
     if (s) stage.set(e.task, s);
-    if (typeof e.pr === "number") pr.set(e.task, e.pr);
   }
   // A pending decision is a fact on disk, not a point in a history: while
   // the card is up, the task is the captain's whatever else has been said
   // since. T-016 read as "working" because a dispatch that should never
   // have happened landed after the card went up.
   const awaiting = new Set(pending().map((p: Record<string, unknown>) => String(p.task ?? "")));
-  const tasks = defs.map((d) => ({
-    id: d.id, title: d.title, milestone: d.milestone,
+  const taskIds = [...definitions.keys()];
+  for (const e of events) if (e.task && !definitions.has(e.task) && !taskIds.includes(e.task)) taskIds.push(e.task);
+  const tasks = taskIds.map((id) => {
+    const d = definitions.get(id) || {};
+    const terminal = FINAL.has(stage.get(id) ?? "");
+    return ({
+    id, title: typeof d.title === 'string' ? d.title : null, milestone: d.milestone ?? null,
     depends_on: d.depends_on ?? [],
-    stage: awaiting.has(d.id as string) ? "captain" : (stage.get(d.id as string) ?? "queued"),
-    pr: pr.get(d.id as string) ?? null,
-  }));
+    stage: !terminal && awaiting.has(id) ? "captain" : (stage.get(id) ?? "queued"),
+    pr: pr.get(id) ?? null,
+  }); });
   // The crew are AGENTS, not tasks. A crewman on the deck is something
   // that is running: firstmate, each worker or reviewer currently engaged,
   // and the captain while a decision is waiting. Drawing one figure per
@@ -160,9 +166,11 @@ const state = () => {
     if (typeof data.crew_name === 'string') names.set(actor, data.crew_name);
     if (typeof data.progress === 'number' && Number.isFinite(data.progress) && data.progress >= 0 && data.progress <= 100) progress.set(actor,data.progress);
     if (e.type === 'dispatched' || data.role) roles.set(actor, roleOf(actor,e));
-    const description = authored(data.activity) || (e.type === 'dispatched' ? authored(e.summary) : null);
+    const description = authored(data.activity) || (e.type === 'dispatched' || e.type === 'review_opened' ? authored(e.summary) : null);
     if (description) activity.set(actor,description);
-    if (STAGE[e.type || '']) phases.set(actor,CREW_STATE(STAGE[e.type || '']));
+    if (STAGE[e.type || '']) phases.set(actor,e.type === 'dispatched'
+      ? (roleOf(actor,e) === 'reviewer' ? 'review' : 'working')
+      : CREW_STATE(STAGE[e.type || '']));
     const peer = (role: string) => {
       const candidates = [...lastByActor].filter(([id,event]) => id !== actor && id !== 'firstmate' && event.task === e.task && event.type !== 'agent_finished' && !finished.has(id) && (roles.get(id) || roleOf(id,event)) === role);
       // Several runs on one task are ambiguous; never pick an arbitrary actor.
@@ -173,7 +181,7 @@ const state = () => {
     if (e.type === 'pr_opened') {kind='work';from=actor;to=peer('reviewer');}
     if (e.type === 'review_opened') {kind='work';from=peer('worker');to=actor;}
     if (e.type === 'approved') {kind='approve';from=actor;to='firstmate';}
-    if (e.type === 'review_failed') {kind='reject';from=actor;to=peer('worker');}
+    if (e.type === 'review_failed' && data.review_outcome === 'rejected') {kind='reject';from=actor;to=peer('worker');}
     if (e.type === 'decision_made') {kind='order';from='firstmate';to=peer('worker');}
     if (kind) handoffs.push({identity:`handoff:${index}:${JSON.stringify(e)}`,kind,from:from || null,to:to || null,task:e.task || null});
     if (!e.actor || e.actor === "github" || e.actor === "captain") continue;
@@ -183,8 +191,7 @@ const state = () => {
   for (const [actor, e] of [...lastByActor]) {
     if (e.type === "agent_finished") lastByActor.delete(actor);
   }
-  const done = new Set(tasks.filter((t) => ["merged", "closed"].includes(t.stage))
-                            .map((t) => t.id as string));
+  const done = new Set([...stage].filter(([,value]) => FINAL.has(value)).map(([id]) => id));
   // firstmate carries its task like anyone else. Pinning it to
   // "dispatching" was the board saying what the role is FOR rather than
   // what the agent is DOING - and firstmate is the crewman a reader most
@@ -269,15 +276,18 @@ const state = () => {
 const pending = () => {
   const dir = join(ROOT, "state/pending");
   if (!existsSync(dir)) return [];
+  const terminal = readEvents().filter((e) => e.type === "merged" || e.type === "closed");
   const settled = new Set(
-    readEvents()
+    terminal
       .filter((e) => e.type === "merged" || e.type === "closed")
       .map((e) => String((e as Record<string, unknown>).pr ?? "")),
   );
+  const settledTasks = new Set(terminal.map(e => String(e.task ?? '')).filter(Boolean));
   return readdirSync(dir).filter((f) => f.endsWith(".json")).flatMap((f) => {
     try {
       const d = JSON.parse(readFileSync(join(dir, f), "utf8"));
       if (d.pr != null && settled.has(String(d.pr))) return [];
+      if (d.task != null && settledTasks.has(String(d.task))) return [];
       return [d];
     } catch { return []; }
   });
@@ -350,7 +360,7 @@ const server = Bun.serve({
         // Count Unicode code points, preserving the literal text including spaces.
         const text = body?.text;
         if (chosen === "custom" && (typeof text !== "string" || !text.trim()
-          || [...text].length > 1000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\ud800-\udfff]/u.test(text))) {
+          || [...text].length > 1000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\ud800-\udfff]/u.test(text))) {
           return json({ error: "invalid custom text", code: "customInvalid" }, 400);
         }
 

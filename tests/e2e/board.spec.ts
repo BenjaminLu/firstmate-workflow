@@ -9,15 +9,24 @@ import { join } from "node:path";
 
 const EN = JSON.parse(readFileSync(join(ROOT, "i18n/ui.en.json"), "utf8"));
 const TW = JSON.parse(readFileSync(join(ROOT, "i18n/ui.zh-TW.json"), "utf8"));
-// zh-CN is derived, so the expectation is derived too - the same table the
-// board applies, applied here. Asserting only "not the traditional one"
-// passes for a converter that emits anything at all.
-const TABLE = readFileSync(join(ROOT, "i18n/tw2cn.tsv"), "utf8")
-  .split("\n").filter((l) => l && !l.startsWith("#"))
-  .map((l) => l.split("\t")) as [string, string][];
-const cn = (x: string) => TABLE.reduce((a, [tw, zh]) => a.split(tw).join(zh), x);
-const CN: Record<string, string> = Object.fromEntries(
-  Object.entries(TW).map(([k, v]) => [k, cn(v as string)]));
+// Independently authored oracles: using the production conversion table here
+// made an incorrect or incomplete table prove itself correct.
+const CN = {merged:'已合并',inflight:'进行中',blocked:'受阻',queued:'排队',aboard:'在船上',
+  roster:'船员名册',descriptionUnavailable:'尚无工作说明'};
+const CN_ACTIVITY = {
+  build:'Rowan 实作船长决策', test:'Rowan 测试决策', literal:'验证船长原文命令',
+  bea:'Bea 审查船长决策',
+};
+const CN_DETAILS = [
+  {title:'缓存任务索引',explanation:'每次重新整理只读取一次索引。',before:'每张卡片重读任务文件',after:'每次重新整理共用一份索引',outcome:'已记录索引选择',options:{
+    A:{description:'每次重新整理建立缓存',pros:'减少读取',cons:'占用内存'},
+    B:{description:'保留各自读取',pros:'无需缓存',cons:'重复读取'},
+    C:{description:'先测量',pros:'取得证据再变更',cons:'延后改善'}}},
+  {title:'限制审查重试',explanation:'三次后停止',before:'无限重试',after:'最多三次',outcome:'已记录重试策略',options:{
+    A:{description:'限制重试',pros:'可预测代价',cons:'需要手动恢复'},
+    B:{description:'保留各自读取',pros:'无需缓存',cons:'重复读取'},
+    C:{description:'先测量',pros:'取得证据再变更',cons:'延后改善'}}},
+];
 const CREW = ["working", "gate", "review", "working", "gate"] as const;
 
 function emitFixture(root:string, actor:string, task:string, type:string, en='', tw='', data={}) {
@@ -35,6 +44,7 @@ test('retained actor activity is localized, run-specific and never guessed from 
   emitFixture(root,'worker-mira','T-035','dispatched','Mira implements safe startup','Mira 實作安全啟動',{crew_name:'Mira',role:'worker'});
   emitFixture(root,'firstmate','T-034','dispatched','Coordinate the decision work','協調決策工作');
   emitFixture(root,'reviewer-sam','T-034','dispatched','Sam reviews decisions','Sam 審查決策',{role:'reviewer',crew_name:'Sam'});
+  emitFixture(root,'reviewer-bea','T-036','review_opened','Bea reviews captain decisions','Bea 審查船長決策',{role:'reviewer',crew_name:'Bea'});
   emitFixture(root,'worker-gap','T-001','dispatched');
   emitFixture(root,'worker-unknown','T-035','criteria_returned');
   emitFixture(root,'worker-rowan','T-034','gate_failed');
@@ -45,12 +55,14 @@ test('retained actor activity is localized, run-specific and never guessed from 
     const state=await (await fetch(b.url+'/api/state')).json();
     expect(state.recent).toHaveLength(40);
     expect(state.crew.find((c:any)=>c.id==='worker-rowan')).toMatchObject({state:'gate',crew_name:'Rowan',activity:{en:'Rowan builds captain decisions'}});
+    expect(state.crew.find((c:any)=>c.id==='reviewer-sam').state).toBe('review');
+    expect(state.crew.find((c:any)=>c.id==='reviewer-bea')).toMatchObject({state:'review',activity:{en:'Bea reviews captain decisions'}});
     expect(state.crew.find((c:any)=>c.id==='worker-unknown').state).toBe('unknown');
     expect(state.crew.find((c:any)=>c.id==='firstmate').activity.en).toBe('Coordinate the decision work');
     await page.goto(b.url+'/?lang=en');
     for(const locale of ['en','zh-TW','zh-CN']) {
       await page.locator(`[data-l="${locale}"]`).click();
-      const text=locale==='en'?'Rowan builds captain decisions':locale==='zh-TW'?'Rowan 實作船長決策':cn('Rowan 實作船長決策');
+      const text=locale==='en'?'Rowan builds captain decisions':locale==='zh-TW'?'Rowan 實作船長決策':CN_ACTIVITY.build;
       await expect(page.locator('.roster')).toContainText(text);
       await expect(page.locator('[data-crew="worker-rowan"]')).toHaveAttribute('aria-label',new RegExp(text));
       await expect(page.locator('.roster')).toContainText(locale==='en'?EN.descriptionUnavailable:locale==='zh-TW'?TW.descriptionUnavailable:CN.descriptionUnavailable);
@@ -60,11 +72,11 @@ test('retained actor activity is localized, run-specific and never guessed from 
     emitFixture(root,'worker-rowan','T-034','commit_pushed');
     await expect(page.locator('[data-crew="worker-rowan"]')).toHaveCount(0);
     emitFixture(root,'worker-rowan-new','T-034','dispatched','Rowan tests decisions','Rowan 測試決策',{crew_name:'Rowan',role:'worker'});
-    await expect(page.locator('[data-crew="worker-rowan-new"]')).toHaveAttribute('aria-label',new RegExp(cn('Rowan 測試決策')));
+    await expect(page.locator('[data-crew="worker-rowan-new"]')).toHaveAttribute('aria-label',new RegExp(CN_ACTIVITY.test));
     spec.tasks.push({id:'T-034',title:'Scalar title is not a translation',activity:{en:'Verify literal captain orders','zh-TW':'驗證船長原文命令'},depends_on:[]});
     writeFileSync(file,JSON.stringify(spec));
     emitFixture(root,'worker-rowan-new','T-034','criteria_returned');
-    await expect(page.locator('[data-crew="worker-rowan-new"]')).toHaveAttribute('aria-label',new RegExp(cn('驗證船長原文命令')));
+    await expect(page.locator('[data-crew="worker-rowan-new"]')).toHaveAttribute('aria-label',new RegExp(CN_ACTIVITY.literal));
     await expect(page.locator('[data-crew="worker-rowan-new"] .fig')).toHaveClass(/s-working/);
     await expect(page.locator('[data-crew="worker-rowan"]')).toHaveCount(0);
     await expect(page.locator('.roster .nm').filter({hasText:/^Rowan$/})).toHaveCount(1);
@@ -101,7 +113,12 @@ test('real directed handoffs travel, react once and retain pointer ownership thr
     expect(Math.abs(end!.x+end!.width/2-receiver!.x-receiver!.width/2)).toBeLessThan(4);
     await page.clock.runFor(1000);await expect(cue).toHaveCount(0);
     await page.evaluate("fetch('/api/state').then(r=>r.json()).then(render)");await page.clock.runFor(50);await expect(cue).toHaveCount(0);
-    emitFixture(root,'reviewer-real','T-034','review_failed','Revise decisions','修改決策');
+    emitFixture(root,'reviewer-real','T-034','review_failed','No review produced','未產生審查');
+    expect((await (await fetch(b.url+'/api/state')).json()).handoffs.filter((h:any)=>h.kind==='reject')).toHaveLength(0);
+    await page.evaluate("fetch('/api/state').then(r=>r.json()).then(render)");await page.clock.runFor(32);
+    await expect(page.locator('.handoff[data-kind="reject"]')).toHaveCount(0);
+    emitFixture(root,'reviewer-real','T-034','review_failed','Changes requested','要求修改',{review_outcome:'rejected'});
+    expect((await (await fetch(b.url+'/api/state')).json()).handoffs.filter((h:any)=>h.kind==='reject')).toHaveLength(1);
     await page.evaluate("fetch('/api/state').then(r=>r.json()).then(render)");await page.clock.runFor(32);
     await expect(page.locator('.handoff[data-kind="reject"]')).toHaveAttribute('data-to','worker-real');
     const worker=page.locator('[data-crew="worker-real"]'), reviewer=page.locator('[data-crew="reviewer-real"]');
@@ -128,7 +145,7 @@ test('real directed handoffs travel, react once and retain pointer ownership thr
     await expect(page.locator('.pivot.react')).toHaveCount(0);
     await page.clock.runFor(2400);
     emitFixture(root,'worker-real','T-034','agent_finished');
-    emitFixture(root,'reviewer-real','T-034','review_failed','Revise again','再次修改');
+    emitFixture(root,'reviewer-real','T-034','review_failed','Reject again','再次拒絕',{review_outcome:'rejected'});
     await page.evaluate("fetch('/api/state').then(r=>r.json()).then(render)");await page.clock.runFor(32);
     await expect(page.locator('.handoff.static')).toContainText(TW.handoffUnavailable);
     await expect(page.locator('[data-crew="worker-real"]')).toHaveCount(0);
@@ -156,13 +173,20 @@ test('continuation history, readable mobile content and persistent controls', as
     spec.tasks.push({id:`H-${i}`,title:'Completed '+i,depends_on:[]});
     appendFileSync(join(root,'state/events.jsonl'), JSON.stringify({actor:'github',task:`H-${i}`,type:'merged',pr:100+i})+'\n');
   }
+  appendFileSync(join(root,'state/events.jsonl'), JSON.stringify({actor:'worker-ghost',task:'T-999',type:'dispatched',summary:{en:'Unknown task work','zh-TW':'未知任務工作'},data:{role:'worker'}})+'\n');
+  appendFileSync(join(root,'state/events.jsonl'), JSON.stringify({actor:'github',task:'T-999',type:'merged',pr:999})+'\n');
+  writeFileSync(join(root,'state/pending/D-999.json'),JSON.stringify({id:'D-999',task:'T-999',kind:'choice',details}));
   writeFileSync(file,JSON.stringify(spec));
   const b = await startBoard(root);
   try {
     await page.setViewportSize({width:390,height:844});
     await page.goto(b.url+'/?lang=en');
     await expect(page.locator('#history')).toHaveJSProperty('open',false);
-    await expect(page.locator('#history summary')).toContainText('30');
+    await expect(page.locator('#history summary')).toContainText('31');
+    await expect(page.locator('[data-crew="worker-ghost"]')).toHaveCount(0);
+    await expect(page.locator('#card-D-999')).toHaveCount(0);
+    for(const selector of ['.bub .who','.bub .job','.shipbar button','.roster .nm','.roster .st'])
+      expect(await page.locator(selector).first().evaluate(el=>parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(13);
     await expect(page.locator('#history .card').first()).not.toBeVisible();
     expect((await page.locator('.dcard').first().boundingBox())!.y).toBeLessThan(844);
     const activeHeight=(await page.locator('#lanes').boundingBox())!.height;
@@ -170,14 +194,16 @@ test('continuation history, readable mobile content and persistent controls', as
     await expect(page.locator('#history summary')).toContainText('1');
     expect((await page.locator('#lanes').boundingBox())!.height).toBe(activeHeight);
     await page.evaluate("fetch('/api/state').then(r=>r.json()).then(render)");
-    await expect(page.locator('#history summary')).toContainText('30');
+    await expect(page.locator('#history summary')).toContainText('31');
     let posts=0;page.on('request',r=>{if(r.method()==='POST')posts++;});
     await page.locator('[data-c="custom"]').first().click();
     await page.locator('textarea').first().fill('Literal 船長');
     await page.locator('#history summary').focus(); await page.keyboard.press('Enter');
-    await expect(page.locator('#history .card')).toHaveCount(30);
+    await expect(page.locator('#history .card')).toHaveCount(31);
     for(let i=0;i<30;i++)await expect(page.locator('#history .card').nth(i)).toContainText(`H-${i}`);
-    await expect(page.locator('#history .card').last()).toContainText('#129');
+    await expect(page.locator('#history .card').nth(29)).toContainText('#129');
+    await expect(page.locator('#history .card').last()).toContainText('T-999');
+    await expect(page.locator('#history .card').last()).toContainText('#999');
     await page.evaluate("fetch('/api/state').then(r => r.json()).then(render)");
     await expect(page.locator('#history')).toHaveJSProperty('open',true);
     await expect(page.locator('#history summary')).toBeFocused();
@@ -186,7 +212,7 @@ test('continuation history, readable mobile content and persistent controls', as
     await page.locator('textarea').first().focus();
     emitFixture(root,'github','T-005','merged','Completed task','任務已完成');
     await page.evaluate("fetch('/api/state').then(r=>r.json()).then(render)");
-    await expect(page.locator('#history summary')).toContainText('31');
+    await expect(page.locator('#history summary')).toContainText('32');
     await expect(page.locator('#history')).toHaveJSProperty('open',false);
     await expect(page.locator('textarea').first()).toBeFocused();
     const effect=await page.locator('.scene').getAttribute('data-effect');expect(effect).toBeTruthy();
@@ -363,7 +389,10 @@ test("custom selection is local, literal and never merges", async ({ page }) => 
     page.on('request', r => { if (r.method() === 'POST') posts++; });
     await page.goto(`${b.url}/?lang=en`);
     const card = page.locator('.dcard');
+    expect(await page.locator('#captain .tool').evaluate(el=>({height:getComputedStyle(el).height,background:getComputedStyle(el).backgroundColor,opacity:getComputedStyle(el).opacity})))
+      .toEqual({height:'10px',background:'rgb(59, 38, 23)',opacity:'0.45'});
     await card.locator('[data-c="custom"]').click();
+    expect(await page.locator('#captain .tool').evaluate(el=>getComputedStyle(el).height)).toBe('38px');
     await expect(card.locator('.confirm')).toBeDisabled();
     await card.locator('textarea').fill('🚢'.repeat(1001));
     await expect(card.locator('.confirm')).toBeDisabled();
@@ -375,6 +404,8 @@ test("custom selection is local, literal and never merges", async ({ page }) => 
     await expect(page.locator('#orderFeedback')).toContainText('AYE, CAPTAIN!');
     await expect(page.locator('#captain')).toBeVisible();
     await expect(page.locator('#captain')).toHaveAttribute('data-pose', 'order');
+    expect(await page.locator('#captain .tool').evaluate(el=>({height:getComputedStyle(el).height,background:getComputedStyle(el).backgroundColor,opacity:getComputedStyle(el).opacity})))
+      .toEqual({height:'52px',background:'rgb(232, 239, 247)',opacity:'1'});
     const stored = JSON.parse(readFileSync(join(b.root, 'state/decisions/D-1.json'), 'utf8'));
     expect(stored.chosen).toBe('custom');
     expect(stored.text).toBe(literal);
@@ -410,22 +441,22 @@ test('all authored fields switch locale, diagrams differ and input stays text', 
     for (const lang of ['en','zh-TW','zh-CN']) {
       await page.locator(`[data-l="${lang}"]`).click();
       for (const [i,d] of [details,second].entries()) {
-        const want = lang === 'en' ? d.en : d['zh-TW'];
-        const convert = (s:string) => lang === 'zh-CN' ? cn(s) : s;
+        const want = lang === 'en' ? d.en : lang === 'zh-TW' ? d['zh-TW'] : CN_DETAILS[i];
         const card = page.locator('.dcard').nth(i);
-        for (const field of ['title','explanation'] as const) await expect(card).toContainText(convert(want[field]));
-        for (const opt of Object.values(want.options)) for (const value of Object.values(opt)) await expect(card).toContainText(convert(value));
+        for (const field of ['title','explanation'] as const) await expect(card).toContainText(want[field]);
+        for (const opt of Object.values(want.options)) for (const value of Object.values(opt)) await expect(card).toContainText(value);
         const frame = card.frameLocator('iframe');
-        await expect(frame.locator('body')).toContainText(convert(want.before));
-        await expect(frame.locator('body')).toContainText(convert(want.after));
+        await expect(frame.locator('body')).toContainText(want.before);
+        await expect(frame.locator('body')).toContainText(want.after);
         await expect(frame.locator('h1,button,.gates,.lanes')).toHaveCount(0);
       }
       if (lang === 'zh-CN') await expect(page.locator('.dcard').nth(1).locator('h3')).toHaveText('限制审查重试');
+      await expect(page.locator('.dcard').first().locator('iframe:visible, .change-fallback:visible')).toHaveCount(1);
     }
     await expect(page.locator('.dcard img,.dcard script')).toHaveCount(0);
     await page.locator('.dcard').nth(1).locator('[data-c="B"]').click();
     await page.locator('.dcard').nth(1).locator('.confirm').click();
-    await expect(page.locator('#orderFeedback')).toContainText(cn(second['zh-TW'].outcome));
+    await expect(page.locator('#orderFeedback')).toContainText(CN_DETAILS[1].outcome);
     await page.locator('[data-l="en"]').click();
     await expect(page.locator('#orderFeedback')).toContainText(second.en.outcome);
     await expect(page.locator('#orderFeedback')).toContainText('AYE, CAPTAIN!');
@@ -447,10 +478,20 @@ test('merge identities queue absent tasks, survive refresh and never replay hist
     emit(root,'merged',881); emit(root,'merged',882);
     await expect(page.locator('.scene')).toHaveAttribute('data-effect','merge:881');
     await expect(page.locator('#salvo')).toHaveClass(/fire/);
-    await page.waitForTimeout(1100);
+    await page.waitForTimeout(700);
+    const beforeRefresh = await page.locator('#vessel').evaluate(el => {
+      const a=el.getAnimations()[0];
+      return Number(a?.effect?.getComputedTiming().progress);
+    });
     await page.evaluate(async () => (window as any).render(await (await fetch('/api/state')).json()));
     await expect(page.locator('.scene')).toHaveAttribute('data-effect','merge:881');
-    expect(await page.locator('#vessel').evaluate(el=>parseFloat(el.style.animationDelay))).toBeLessThan(-1);
+    const afterRefresh = await page.locator('#vessel').evaluate(el => {
+      const a=el.getAnimations()[0];
+      return Number(a?.effect?.getComputedTiming().progress);
+    });
+    expect(afterRefresh-beforeRefresh).toBeGreaterThanOrEqual(0);
+    expect(afterRefresh-beforeRefresh).toBeLessThan(.15);
+    expect(await page.locator('#vessel').evaluate(el=>(el as HTMLElement).style.animationDelay)).toBe('0s');
     emit(root,'merged',881);
     await expect(page.locator('.scene')).toHaveAttribute('data-effect','merge:882', {timeout:4000});
     await expect(page.locator('.scene')).not.toHaveAttribute('data-effect', /.+/, {timeout:4000});
@@ -482,18 +523,48 @@ test('failed merge persists failure without salute or automatic retry', async ({
   } finally {stopBoard(b);}
 });
 
+test('external outcomes override stale success and clear only their settled draft', async ({page}) => {
+  const root=makeRoot(['working']);
+  writeFileSync(join(root,'state/pending/D-2.json'),JSON.stringify({id:'D-2',task:'T-002',kind:'choice',details}));
+  writeFileSync(join(root,'state/pending/D-3.json'),JSON.stringify({id:'D-3',task:'T-003',kind:'choice',details}));
+  const b=await startBoard(root);
+  writeFileSync(join(b.root,'bin/fm-merge.sh'),'#!/usr/bin/env bash\necho refused\nexit 1\n');
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    const cards=page.locator('.dcard');
+    await cards.nth(0).locator('[data-c="B"]').click();
+    await cards.nth(2).locator('[data-c="custom"]').click();
+    await cards.nth(2).locator('textarea').fill('keep this unrelated draft');
+    await cards.nth(1).locator('[data-c="B"]').click();await cards.nth(1).locator('.confirm').click();
+    await expect(page.locator('#orderFeedback')).toContainText(EN.recorded);
+    const external=await page.request.post(`${b.url}/decisions`,{data:{id:'D-1',chosen:'A'}});
+    expect(external.ok()).toBe(true);
+    await expect(page.locator('#orderFeedback')).toContainText(EN.mergeRefused);
+    await expect(page.locator('#orderFeedback')).not.toContainText(EN.recorded);
+    await expect(page.locator('.dcard')).toHaveCount(1);
+    await expect(page.locator('.dcard textarea')).toHaveValue('keep this unrelated draft');
+    await expect(page.locator('#captain')).toHaveAttribute('data-pose','ready',{timeout:7000});
+    await page.request.post(`${b.url}/decisions`,{data:{id:'D-3',chosen:'custom',text:'keep this unrelated draft'}});
+    await expect(page.locator('.dcard')).toHaveCount(0);
+    await expect(page.locator('#captain')).toHaveAttribute('data-pose','idle',{timeout:7000});
+  } finally {stopBoard(b);}
+});
+
 test('network refusal keeps selection and accessible failure; reduced motion still acknowledges', async ({page}) => {
   const b = await startBoard(makeRoot(['working']));
   try {
     await page.emulateMedia({reducedMotion:'reduce'});
     await page.goto(`${b.url}/?lang=zh-TW`);
     await page.route('**/decisions',route => route.abort());
-    await page.locator('[data-c="C"]').click(); await page.locator('.confirm').click();
+    await page.locator('[data-c="C"]').click();
+    expect(await page.locator('#captain .tool').evaluate(el=>getComputedStyle(el).height)).toBe('38px');
+    await page.locator('.confirm').click();
     await expect(page.locator('#orderFeedback')).toContainText(TW.orderFailed);
     await expect(page.locator('.scene .fig.cheer')).toHaveCount(0);
     expect(existsSync(join(b.root,'state/decisions/D-1.json'))).toBe(false);
     await page.unroute('**/decisions'); await page.locator('.confirm').click();
     await expect(page.locator('#orderFeedback')).toContainText('AYE, CAPTAIN!');
+    expect(await page.locator('#captain .tool').evaluate(el=>getComputedStyle(el).height)).toBe('52px');
     await expect(page.locator('#ahoy')).toBeVisible();
     await expect(page.locator('.scene .fig.cheer')).toHaveCount(0);
   } finally {stopBoard(b);}
@@ -525,7 +596,7 @@ async function fakeAudio(page:Page, local = true, refused = false) {
     w.finishVoice = () => {synth.speaking=false;w.utterance?.onend?.();};
   }, {local,refused});
 }
-test('order bell and whistle, local voice, merge broadside, dedupe and mute', async ({page}) => {
+test('Ahoy speech cues stay off while merge cannon, dedupe and mute remain', async ({page}) => {
   test.setTimeout(30_000);
   await fakeAudio(page);
   const b = await startBoard(makeRoot(['working']));
@@ -537,31 +608,28 @@ test('order bell and whistle, local voice, merge broadside, dedupe and mute', as
     expect(await page.evaluate(()=>(window as any).sounds.tones)).toEqual([]);
     expect(await page.evaluate(()=>(window as any).sounds.spoken)).toEqual([]);
     await page.locator('.confirm').click();
-    await expect.poll(()=>page.evaluate(()=>(window as any).sounds.spoken)).toEqual([{text:'Aye, Captain!',local:true}]);
     const sound = await page.evaluate(()=>(window as any).sounds);
-    expect(sound.tones).toEqual([880,1320,1500,2300]); expect(sound.booms).toBe(0);
+    expect(sound.tones).toEqual([]);expect(sound.spoken).toEqual([]);expect(sound.booms).toBe(0);
     emit(b.root,'merged',885);
     await expect(page.locator('.scene')).toHaveAttribute('data-effect','merge:885',{timeout:5000});
     expect((await page.evaluate(()=>(window as any).sounds)).booms).toBeGreaterThan(0);
-    expect((await page.evaluate(()=>(window as any).sounds)).spoken).toHaveLength(1);
-    await page.evaluate(()=>(window as any).finishVoice());
-    await expect.poll(()=>page.evaluate(()=>(window as any).sounds.spoken.length)).toBe(2);
-    expect((await page.evaluate(()=>(window as any).sounds)).spoken[1]).toEqual({text:'Ahoy!',local:true});
+    expect((await page.evaluate(()=>(window as any).sounds)).tones).toEqual([]);
+    expect((await page.evaluate(()=>(window as any).sounds)).spoken).toEqual([]);
     const before = await page.evaluate(()=>(window as any).sounds.booms);
     emit(b.root,'merged',885);
     await page.locator('#muteBtn').click();
     expect(await page.evaluate(()=>localStorage.getItem('board.muted'))).toBe('1');
-    expect((await page.evaluate(()=>(window as any).sounds)).cancel).toBe(1);
+    expect((await page.evaluate(()=>(window as any).sounds)).cancel).toBe(0);
     emit(b.root,'merged',886);
     await expect(page.locator('.scene')).toHaveAttribute('data-effect','merge:886',{timeout:5000});
     expect((await page.evaluate(()=>(window as any).sounds)).booms).toBe(before);
-    expect((await page.evaluate(()=>(window as any).sounds)).spoken).toHaveLength(2);
+    expect((await page.evaluate(()=>(window as any).sounds)).spoken).toEqual([]);
     expect(external).toEqual([]);
     await page.reload(); await expect(page.locator('#muteBtn')).toHaveAttribute('aria-pressed','true');
   } finally {stopBoard(b);}
 });
 
-test('remote-only voice and autoplay refusal preserve truthful visible acknowledgement', async ({page}) => {
+test('audio unavailability never adds fallback noise or hides visible acknowledgement', async ({page}) => {
   await fakeAudio(page,false,true);
   const b = await startBoard(makeRoot(['working']));
   try {
@@ -569,13 +637,13 @@ test('remote-only voice and autoplay refusal preserve truthful visible acknowled
     await page.goto(`${b.url}/?lang=en`);
     await page.locator('[data-c="C"]').click(); await page.locator('.confirm').click();
     await expect(page.locator('#orderFeedback')).toContainText('AYE, CAPTAIN!');
-    await expect(page.locator('#orderFeedback')).toContainText(EN.voiceFallback);
+    await expect(page.locator('#orderFeedback')).not.toContainText('Local speech unavailable');
     expect((await page.evaluate(()=>(window as any).sounds)).spoken).toEqual([]);
-    expect((await page.evaluate(()=>(window as any).sounds)).tones).toEqual([880,1320,1500,2300]);
+    expect((await page.evaluate(()=>(window as any).sounds)).tones).toEqual([]);
   } finally {stopBoard(b);}
 });
 
-test('speech waits for unrelated audio and mute preserves an unrelated queue', async ({page}) => {
+test('Ahoy override never touches an unrelated browser speech queue', async ({page}) => {
   await fakeAudio(page);
   const b = await startBoard(makeRoot(['working']));
   try {
@@ -584,13 +652,10 @@ test('speech waits for unrelated audio and mute preserves an unrelated queue', a
     await page.locator('[data-c="C"]').click(); await page.locator('.confirm').click();
     await expect(page.locator('#orderFeedback')).toContainText('AYE, CAPTAIN!');
     expect((await page.evaluate(()=>(window as any).sounds)).spoken).toEqual([]);
-    await page.evaluate(()=>{(window.speechSynthesis as any).speaking=false;});
-    await expect.poll(()=>page.evaluate(()=>(window as any).sounds.spoken.length)).toBe(1);
     await page.evaluate(()=>{(window.speechSynthesis as any).pending=true;});
     await page.locator('#muteBtn').click();
     const sounds = await page.evaluate(()=>(window as any).sounds);
-    expect(sounds.cancel).toBe(0); expect(sounds.pause).toBe(1);
-    expect(sounds.stopped).toBeGreaterThan(0);
+    expect(sounds.spoken).toEqual([]);expect(sounds.cancel).toBe(0);expect(sounds.pause).toBe(0);
   } finally {stopBoard(b);}
 });
 

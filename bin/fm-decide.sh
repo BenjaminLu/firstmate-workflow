@@ -70,15 +70,21 @@ draw() {
 
 if [ "$MODE" = request ]; then
   # Authored data only. Never generate tradeoffs or translations from a title.
-  [ -f "$DETAILS" ] && jq -e '
-    def words: type == "string" and length <= 2000 and test("\\S");
+  # Exactly one details object. Reject the same prohibited control set the
+  # board uses for custom text (C0 except tab/LF/CR, DEL, C1, lone surrogates)
+  # before any pending write, so U+007F never reaches persistence.
+  [ -f "$DETAILS" ] && jq -e -s '
+    def bad: (. < 32 and . != 9 and . != 10 and . != 13)
+      or (. >= 127 and . <= 159) or (. >= 55296 and . <= 57343);
+    def words: type == "string" and length <= 2000 and test("\\S")
+      and (any(explode[]; bad) | not);
     def locale: type == "object" and (.title|words) and (.explanation|words)
       and (.before|words) and (.after|words)
       and (.outcome|words)
       and (.options|type == "object")
       and all(.options.A,.options.B,.options.C;
         type == "object" and (.description|words) and (.pros|words) and (.cons|words));
-    type == "object" and (.en|locale) and (."zh-TW"|locale)
+    length == 1 and (.[0] | type == "object" and (.en|locale) and (."zh-TW"|locale))
   ' "$DETAILS" >/dev/null 2>&1 || {
     echo 'fm-decide: --details requires complete authored en and zh-TW title, explanation, before, after, outcome and A/B/C description/pros/cons' >&2; exit 64;
   }

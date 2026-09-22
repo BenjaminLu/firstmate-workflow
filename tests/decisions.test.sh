@@ -74,6 +74,11 @@ for value in '""' '"   "' 'null' '123'; do
 done
 large="$(jq -cn '{id:"D-3",chosen:"custom",text:("🚢" * 1001)}')"
 assert_contains "$(post "$large")" 'invalid custom text' 'Unicode code point limit enforced'
+for pair in '127 007F' '133 0085' '159 009F'; do
+  set -- $pair
+  payload="$(jq -cn --argjson cp "$1" '{id:"D-3",chosen:"custom",text:("captain" + ([$cp]|implode) + "order")}')"
+  assert_contains "$(post "$payload")" 'invalid custom text' "Unicode control U+$2 is rejected"
+done
 assert_fail "test -f '$d/state/decisions/D-3.json'" 'invalid custom responses leave no record'
 literal='  船長 🚢 <script>oops()</script> $(touch forbidden)  '
 r="$(post "$(jq -cn --arg text "$literal" '{id:"D-3",chosen:"custom",text:$text}')")"

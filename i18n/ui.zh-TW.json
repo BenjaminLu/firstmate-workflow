@@ -73,7 +73,6 @@
   "confirmOrder": "確認送出",
   "customRecorded": "已記錄自訂回覆，交由大副解讀。",
   "orderFailed": "未收到指令確認。重試前請檢查連線與決策狀態。",
-  "voiceFallback": "本機語音無法使用；保留航海音效與文字。",
   "eventFailed": "決策已儲存，但無法寫入事件記錄。",
   "capReady": "刀已半出鞘 — 請確認選擇",
   "capOrder": "指令已送出"

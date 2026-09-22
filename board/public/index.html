@@ -17,18 +17,18 @@
 body{background:var(--bg);color:var(--fg);font:14px/1.55 var(--sans);padding-bottom:40px}
 .top{display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:1px solid var(--line);
   background:var(--bg2);position:sticky;top:0;z-index:5}
-.top b{font-weight:650} .top small{display:block;font:400 10.5px var(--mono);color:var(--fg3);
+.top b{font-weight:650} .top small{display:block;font:400 13px var(--mono);color:var(--fg3);
   letter-spacing:.08em;text-transform:uppercase}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(62,207,142,.15)}
 .dot.off{background:var(--bad);box-shadow:0 0 0 3px rgba(242,100,90,.15)}
 .spacer{flex:1}
 .counts{display:flex;gap:22px;padding:14px 20px;border-bottom:1px solid var(--line)}
 .counts b{display:block;font-size:24px;line-height:1.1;font-variant-numeric:tabular-nums}
-.counts span{font:10.5px var(--mono);color:var(--fg3);text-transform:uppercase;letter-spacing:.09em}
+.counts span{font:13px var(--mono);color:var(--fg3);text-transform:uppercase;letter-spacing:.09em}
 .counts .w b{color:var(--wait)} .counts .x b{color:var(--bad)}
 main{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:16px;padding:16px 20px}
 @media(max-width:860px){main{grid-template-columns:1fr}}
-section>h2{margin:0 0 10px;font:600 10.5px var(--mono);color:var(--fg3);
+section>h2{margin:0 0 10px;font:600 13px var(--mono);color:var(--fg3);
   text-transform:uppercase;letter-spacing:.1em}
 .lanes{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:9px}
 .lane{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:9px;min-height:70px}
@@ -95,6 +95,7 @@ body{font-size:16px}
 #history{margin-top:16px}#history summary{cursor:pointer;min-height:44px;padding:10px;background:var(--bg2);font-size:16px}
 .history-cards{padding-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:9px}
 @media(max-width:420px){.top,.counts,main{padding-left:12px;padding-right:12px}.log li{grid-template-columns:1fr 2fr}.log li>span:last-child{grid-column:1/-1}}
+.top small,.counts span,section>h2,#deckwrap>h2,#gl{font-size:13px!important}
 </style>
 </head>
 <body>
@@ -102,7 +103,7 @@ body{font-size:16px}
   <span class="dot" id="live"></span>
   <b id="h-brand"></b>
   <span class="spacer"></span>
-  <span id="gl" style="font:600 11px var(--mono);color:var(--brass)"></span>
+  <span id="gl" style="font:600 13px var(--mono);color:var(--brass)"></span>
   <span class="langs" id="langs"></span>
 </div>
 <div class="counts" id="counts"></div>
@@ -111,7 +112,7 @@ body{font-size:16px}
   <div class="roster" id="roster"></div>
 </section>
 <section id="deckwrap" style="padding:0 20px" hidden>
-  <h2 style="margin:16px 0 10px;font:600 10.5px var(--mono);color:var(--fg3);text-transform:uppercase;letter-spacing:.1em">
+  <h2 style="margin:16px 0 10px;font:600 13px var(--mono);color:var(--fg3);text-transform:uppercase;letter-spacing:.1em">
     <span id="awaiting"></span> <span id="pcount"></span></h2>
   <div id="deck"></div>
 </section>
@@ -154,8 +155,8 @@ function feedbackText() {
   const el = document.getElementById('orderFeedback');
   if (!el) return;
   el.textContent = feedback ? [feedback.cry || '', t(feedback.key),
-    words(localized(feedback.decision)?.outcome || ''), feedback.literal || '', feedback.eventFailed ? t('eventFailed') : '',
-    SHIP.voiceFallback ? t('voiceFallback') : ''].filter(Boolean).join(' · ') : '';
+    words(localized(feedback.decision)?.outcome || ''), feedback.literal || '', feedback.eventFailed ? t('eventFailed') : '']
+    .filter(Boolean).join(' · ') : '';
 }
 function pose() {
   const cap = document.getElementById('captain');
@@ -200,7 +201,11 @@ function render(s) {
   const focusChoice = focus?.dataset?.c;
   const selection = focus?.tagName === 'TEXTAREA' ? [focus.selectionStart, focus.selectionEnd] : null;
   latest = s;
-  if (!feedback && (s.responses || []).some(d => d.merged?.ok === false)) feedback = {key:'mergeRefused'};
+  const failures = (s.responses || []).filter(d => d.merged?.ok === false)
+    .sort((a,b) => String(a.ts || '').localeCompare(String(b.ts || '')));
+  const failed = failures[failures.length - 1];
+  if (failed && (feedback?.decisionId !== failed.id || feedback.key !== 'mergeRefused'))
+    feedback = {key:'mergeRefused',decisionId:failed.id};
   document.getElementById("gl").textContent = s.greenlit ? t("greenlit") : t("notGreenlit");
   document.getElementById("counts").innerHTML = [
     [t("merged"), s.counts.merged, ""], [t("inflight"), s.counts.inflight, ""],
@@ -208,11 +213,11 @@ function render(s) {
   ].map(([l, n, c]) => `<div class="${c}"><b>${n}</b><span>${l}</span></div>`).join("");
 
   SHIP.patch(document.getElementById("lanes"), LANES.map(([k, label]) => {
-    const items = s.tasks.filter(t => t.stage === k);
+    const items = s.tasks.filter(task => task.stage === k);
     return `<div class="lane"><h3>${t(label)}<i>${items.length}</i></h3>` +
-      items.map(t => `<div class="card s-${k}"><span class="id">${esc(t.id)}</span>` +
-        (t.pr ? ` <span class="pr">#${t.pr}</span>` : "") +
-        `<div class="t">${esc(t.title)}</div></div>`).join("") + `</div>`;
+      items.map(task => `<div class="card s-${k}"><span class="id">${esc(task.id)}</span>` +
+        (task.pr ? ` <span class="pr">#${task.pr}</span>` : "") +
+        `<div class="t">${esc(task.title || t('descriptionUnavailable'))}</div></div>`).join("") + `</div>`;
   }).join(""));
 
   const completed = s.tasks.filter(item => ['merged','closed'].includes(item.stage));
@@ -220,11 +225,15 @@ function render(s) {
   history.querySelector('summary').textContent = `${t('history')} · ${t('laneMerged')} ${completed.filter(x=>x.stage==='merged').length} · ${t('laneClosed')} ${completed.filter(x=>x.stage==='closed').length}`;
   SHIP.patch(history.querySelector('.history-cards'), completed.map(item =>
     `<div class="card s-${item.stage}"><span class="id">${esc(item.id)}</span> <span>${esc(t(item.stage==='merged'?'laneMerged':'laneClosed'))}</span>` +
-    (item.pr ? ` <span class="pr">#${esc(item.pr)}</span>` : '') + `<div class="t">${esc(item.title)}</div></div>`).join(''));
+    (item.pr ? ` <span class="pr">#${esc(item.pr)}</span>` : '') + `<div class="t">${esc(item.title || t('descriptionUnavailable'))}</div></div>`).join(''));
 
   const deck = document.getElementById("deck");
   const wrap = document.getElementById("deckwrap");
   const pend = s.pending || [];
+  const pendingIds = new Set(pend.map(d => d.id));
+  for (const id of [...picks.keys()]) if (!pendingIds.has(id)) picks.delete(id);
+  for (const id of [...drafts.keys()]) if (!pendingIds.has(id)) drafts.delete(id);
+  for (const id of [...sent]) if (!pendingIds.has(id)) sent.delete(id);
   wrap.hidden = pend.length === 0 && !feedback && !SHIP.active();
   if (!document.getElementById('orderFeedback')) {
     const status = document.createElement('p'); status.id = 'orderFeedback';
@@ -287,7 +296,8 @@ function render(s) {
 
 function validate(id) {
   const chosen = picks.get(id), text = drafts.get(id) || '';
-  const valid = chosen && (chosen !== 'custom' || (text.trim() && [...text].length <= 1000));
+  const valid = chosen && (chosen !== 'custom' || (text.trim() && [...text].length <= 1000
+    && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\ud800-\udfff]/u.test(text)));
   const button = document.querySelector(`.confirm[data-id="${id}"]`);
   if (button) button.disabled = !valid || sent.has(id);
   const label = document.getElementById('validation-' + id);
@@ -306,7 +316,7 @@ async function answer(id) {
   if (r.error) feedback = {key:r.code || 'orderFailed'};
   else {
     picks.delete(id); drafts.delete(id);
-    feedback = {key:r.merged && !r.merged.ok ? 'mergeRefused' : chosen === 'custom' ? 'customRecorded' : 'recorded',
+    feedback = {key:r.merged && !r.merged.ok ? 'mergeRefused' : chosen === 'custom' ? 'customRecorded' : 'recorded', decisionId:id,
       cry:'AYE, CAPTAIN! / ORDERS AWAY', decision, literal:chosen === 'custom' ? text : '', eventFailed:r.eventRecorded === false};
     const identity = r.decision?.identity || `decision:${id}`;
     if (!r.already && !seen.has(identity)) {

@@ -49,16 +49,22 @@ const DIAGRAM = (() => {
       }
       const want = src(decisionOf(el), lang);
       el._wanted = want;
-      if (!want || el.getAttribute("src") === want) continue;
+      const fallback = el.nextElementSibling?.classList.contains('change-fallback') ? el.nextElementSibling : null;
+      if (!want) { if (fallback) fallback.hidden = false; continue; }
+      if (el.getAttribute("src") === want) {
+        el.removeAttribute("hidden");
+        if (fallback) fallback.hidden = true;
+        continue;
+      }
       let there = false;
       try { there = !!get && (await get(want, { method: "HEAD" })).ok; } catch (_) { there = false; }
       if (el._wanted !== want) continue;
-      if (!there) { el.remove(); continue; }
+      if (!there) { if (fallback) fallback.hidden = false; el.remove(); continue; }
       el.setAttribute("src", want);
       el.removeAttribute("hidden");
       // Complete authored data remains usable when generation is unavailable.
       // A served authored fragment replaces that inline before/after fallback.
-      if (el.nextElementSibling?.classList.contains('change-fallback')) el.nextElementSibling.hidden = true;
+      if (fallback) fallback.hidden = true;
       moved++;
     }
     return moved;

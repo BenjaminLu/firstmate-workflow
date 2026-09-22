@@ -257,6 +257,41 @@ sm="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
 assert_ne "" "$sm" "the board is answering"
 assert_eq "merged" "$(jq -r '.tasks[]|select(.id=="T-B")|.stage' <<<"$sm")" \
   "a merged task stays merged whatever is said about it afterwards"
+# Pending must not override a terminal stage, and history identity comes from
+# events even when the task is absent from current definitions.
+mkdir -p "$d/state/pending"
+printf '{"id":"D-88","task":"T-B","kind":"choice","title":"late card"}\n' > "$d/state/pending/D-88.json"
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor github --task T-999 --type merged --pr 999 \
+  --en "external merge" --tw "外部合併" >/dev/null
+sterm="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "merged" "$(jq -r '.tasks[]|select(.id=="T-B")|.stage' <<<"$sterm")" \
+  "a pending card cannot move a merged task back to captain"
+assert_lacks "$(jq -r '.pending[].id' <<<"$sterm" | tr '\n' ' ')" "D-88" \
+  "pending for a terminal task is not offered"
+assert_eq "merged" "$(jq -r '.tasks[]|select(.id=="T-999")|.stage' <<<"$sterm")" \
+  "completed identity from events reaches state without a current definition"
+assert_eq "999" "$(jq -r '.tasks[]|select(.id=="T-999")|.pr' <<<"$sterm")" \
+  "and keeps the event PR on that completed identity"
+rm -f "$d/state/pending/D-88.json"
+
+# review_failed without review_outcome is missing-review/error, never a
+# directed rejection. The additive datum makes a substantive reject handoff.
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-real --task T-D --type dispatched \
+  --data '{"role":"worker"}' --en "Build" --tw "實作" >/dev/null
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor reviewer-real --task T-D --type dispatched \
+  --data '{"role":"reviewer"}' --en "Review" --tw "審查" >/dev/null
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor reviewer-real --task T-D --type review_failed \
+  --en "No review produced" --tw "未產生審查" >/dev/null
+sno="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "0" "$(jq -r '[.handoffs[]|select(.kind=="reject")]|length' <<<"$sno")" \
+  "legacy review_failed is not a substantive rejection handoff"
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor reviewer-real --task T-D --type review_failed \
+  --data '{"review_outcome":"rejected"}' --en "Changes requested" --tw "要求修改" >/dev/null
+syes="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "1" "$(jq -r '[.handoffs[]|select(.kind=="reject")]|length' <<<"$syes")" \
+  "review_outcome rejected yields one directed rejection"
+assert_eq "worker-real" "$(jq -r '.handoffs[]|select(.kind=="reject")|.to' <<<"$syes")" \
+  "and targets the real worker on the same task"
 
 # a card for a pull request that has already been merged is the board
 # lying: the captain is offered a choice that cannot be made

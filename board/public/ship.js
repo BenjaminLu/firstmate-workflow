@@ -165,11 +165,13 @@ const SHIP = (() => {
         else if (node.nodeType === 3) node.textContent = fresh.textContent;
         else {
           const rotation = ['--rx','--ry'].map(p=>node.style.getPropertyValue(p));
-          const transient = ['dragging','cheer','react','ping'].filter(c=>node.classList.contains(c));
+          const transient = ['dragging','cheer','react','ping','heel','orders','fire','active'].filter(c=>node.classList.contains(c));
+          const effectDelay = transient.length ? node.style.animationDelay : '';
           for (const a of [...node.attributes]) if (!fresh.hasAttribute(a.name) && !(node.tagName==='IFRAME' && ['src','style'].includes(a.name))) node.removeAttribute(a.name);
           for (const a of fresh.attributes) if (node.getAttribute(a.name)!==a.value && !(node.tagName==='IFRAME' && a.name==='hidden' && node.hasAttribute('src'))) node.setAttribute(a.name,a.value);
           rotation.forEach((v,i)=>{if(v)node.style.setProperty(['--rx','--ry'][i],v);});
           transient.forEach(c=>node.classList.add(c));
+          if(effectDelay)node.style.animationDelay=effectDelay;
           sync(node,fresh);
         }
         if(dst.childNodes[index]!==node)dst.insertBefore(node,dst.childNodes[index] || null);
@@ -376,14 +378,13 @@ const SHIP = (() => {
   }
 
   // synthesised, so the board carries no audio files
-  let ac = null, master = null, voiceActive = null;
-  const voices = [], sources = new Set();
+  let ac = null, master = null;
+  const sources = new Set();
   let unlocked = false, current = null;
   const effects = [], handled = new Set();
   function unlock() {
     unlocked = true;
     if (SHIP.muted) return;
-    if (voiceActive) { try { window.speechSynthesis.resume(); } catch (_) {} }
     try {
       ac = ac || new (window.AudioContext || window.webkitAudioContext)();
       master = master || ac.createGain(); master.connect(ac.destination);
@@ -392,62 +393,17 @@ const SHIP = (() => {
     } catch (_) {}
   }
   function silence() {
-    voices.length = 0;
     effects.forEach(effect => { effect.audio = false; });
     try { master?.gain.setValueAtTime(0, ac.currentTime); } catch (_) {}
     for (const source of sources) { try { source.stop(); } catch (_) {} }
     sources.clear();
-    // Cancel only our active utterance when no other utterance is pending.
-    // The browser has no per-utterance cancellation; if another caller queued
-    // speech, pause our active response instead of deleting their queue.
-    if (voiceActive) {
-      try {
-        if (!window.speechSynthesis.pending) { window.speechSynthesis.cancel(); voiceActive = null; }
-        else window.speechSynthesis.pause();
-      } catch (_) {}
-    }
   }
-  function speakNext() {
-    if (SHIP.muted || voiceActive || !voices.length) return;
-    const synth = window.speechSynthesis;
-    if (synth?.speaking || synth?.pending) { setTimeout(speakNext, 200); return; }
-    const text = voices.shift();
-    try {
-      const local = (synth?.getVoices() || []).filter(v => v.localService === true);
-      const voice = local.find(v => /^en\b/i.test(v.lang)) || local[0];
-      SHIP.voiceFallback = !voice;
-      document.dispatchEvent(new Event('ship-effect'));
-      if (!voice) return;
-      const u = new SpeechSynthesisUtterance(text); u.voice = voice; u.lang = 'en-US';
-      voiceActive = u;
-      u.onend = () => { voiceActive = null; speakNext(); };
-      u.onerror = () => { voiceActive = null; SHIP.voiceFallback = true;
-        document.dispatchEvent(new Event('ship-effect')); speakNext(); };
-      synth.speak(u);
-    } catch (_) { voiceActive = null; SHIP.voiceFallback = true; document.dispatchEvent(new Event('ship-effect')); }
-  }
-  function tone(at, frequency, end, length, gain) {
-    if (SHIP.muted || !ac || !master) return;
-    const o = ac.createOscillator(), g = ac.createGain(), start = ac.currentTime + at;
-    o.frequency.setValueAtTime(frequency, start);
-    o.frequency.exponentialRampToValueAtTime(end, start + length);
-    g.gain.setValueAtTime(gain, start); g.gain.exponentialRampToValueAtTime(.001, start + length);
-    o.connect(g).connect(master); sources.add(o); o.onended = () => sources.delete(o);
-    o.start(start); o.stop(start + length);
-  }
-  function bell(at) { tone(at, 880, 880, 1.2, .18); tone(at, 1320, 1320, .9, .09); }
   function sound(kind, host) {
-    if (SHIP.muted || !unlocked) return;
+    if (kind !== 'merge' || SHIP.muted || !unlocked) return;
     try {
       unlock();
-      if (kind === 'order') {
-        bell(0); tone(.2, 1500, 2300, .55, .12); tone(.85, 2300, 1600, .4, .1);
-      } else {
-        (host._guns || []).forEach((_, i) => boom(i * .07, .34));
-        bell((host._guns || []).length * .07 + .1);
-      }
+      (host._guns || []).forEach((_, i) => boom(i * .07, .34));
     } catch (_) { /* optional audio never changes a recorded decision */ }
-    voices.push(kind === 'order' ? 'Aye, Captain!' : 'Ahoy!'); speakNext();
   }
   function boom(at, gain) {
     if (SHIP.muted || !ac || !master) return;
@@ -477,14 +433,21 @@ const SHIP = (() => {
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (reduced) return;
     host.querySelectorAll('.fig').forEach((f, i) => {
-      f.classList.add('cheer'); f.style.animationDelay = `${i * .055 - elapsed}s`;
+      if (!f.classList.contains('cheer')) {
+        f.classList.add('cheer'); f.style.animationDelay = `${i * .055 - elapsed}s`;
+      }
     });
     const target = host.querySelector(current.kind === 'order' ? '.helm' : '#vessel');
-    target.classList.add(current.kind === 'order' ? 'orders' : 'heel');
-    target.style.animationDelay = `${-elapsed}s`;
+    const targetClass = current.kind === 'order' ? 'orders' : 'heel';
+    if (!target.classList.contains(targetClass)) {
+      target.classList.add(targetClass); target.style.animationDelay = `${-elapsed}s`;
+    }
     if (current.kind === 'merge') {
-      const salvo = host.querySelector('#salvo'); salvo.classList.add('fire');
-      salvo.querySelectorAll('i').forEach((el, i) => { el.style.animationDelay = `${i * .07 - elapsed}s`; });
+      const salvo = host.querySelector('#salvo');
+      if (!salvo.classList.contains('fire')) {
+        salvo.classList.add('fire');
+        salvo.querySelectorAll('i').forEach((el, i) => { el.style.animationDelay = `${i * .07 - elapsed}s`; });
+      }
     }
   }
   function nextEffect(host) {
@@ -506,7 +469,7 @@ const SHIP = (() => {
     handled.add(id); effects.push({kind,id,audio:!SHIP.muted && unlocked}); nextEffect(host);
   }
 
-  return { render, roster, captain, patch, enqueue, unlock, active:() => current, voiceFallback:false,
+  return { render, roster, captain, patch, enqueue, unlock, active:() => current,
            rateFor, actionFor, crewOf, layout, RATES, ACTIONS, ROLE,
            muted: (() => { try { return !!localStorage.getItem("board.muted"); } catch (_) { return false; } })() };
 })();

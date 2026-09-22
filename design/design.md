@@ -285,6 +285,12 @@ text, quoted examples and full CLI transcripts are not authoritative. Retain
 reviewer identity and the reviewed head with the evidence. The current review
 launcher scans combined output and does not establish this provenance; firstmate
 must identify and coordinate that gap rather than accept a marker as proof.
+The board therefore treats a legacy `review_failed` as missing-review/error,
+not rejection. A directed rejection exists only when the event also carries
+the additive `data.review_outcome: "rejected"` contract. T-035 owns emitting
+that datum after it has authoritative final-answer evidence; old logs remain
+truthful without it. Crew phase follows each actor's dispatched role, so a
+reviewer is reviewing even while a worker on the same task has another phase.
 
 The judgement about outages can never be right on wording alone, because
 there is no phrase a model cannot write — this repository contains
@@ -663,38 +669,29 @@ coordination with the owning task, not fabricated board descriptions.
 
 | Trigger | Response |
 |---|---|
-| A merge | the broadside fires gun by gun, the ship heels, every crewman's arms go up, the bell rings, `AHOY! / MERGED INTO MAIN` |
-| An order | bell and bosun's whistle, the helm spins twice, `AYE, CAPTAIN! / ORDERS AWAY` |
+| A merge | the broadside fires gun by gun with cannon reports, the ship heels, every crewman's arms go up, `AHOY! / MERGED INTO MAIN` |
+| An order | the helm spins twice and the visible crew acknowledges, `AYE, CAPTAIN! / ORDERS AWAY` |
 
-Sound is synthesised at runtime through Web Audio — the bell two partials on a
-long decay, the cannon a lowpassed noise burst, the whistle a swept sine — so
-there are no audio files and no network. Mute lives in the header and persists;
-browsers require a gesture before the first sound. Honours
-`prefers-reduced-motion`.
-
-Order audio follows recorded acknowledgement, never selection or pending
-network traffic. It uses bell partials and a swept bosun whistle; merge audio
-uses a broadside followed by a bell. Optional browser speech uses only voices
-explicitly marked `localService=true`, preferring English and speaking the
-invariant cries. No remote voice, audio download or paid TTS is used. If local
-speech is unavailable, the board says so and retains cues and English text.
-One persisted mute stops Web Audio and clears the board's voice queue. An
-active owned utterance is cancelled only when no other utterance is queued;
-otherwise it is paused until unmute, because browsers lack per-utterance
-cancellation. The board never cancels an unrelated speech queue.
+The later captain override disables Ahoy-related speech, bell and whistle
+audio. No substitute cue or global mute implements that choice. Confirmed
+merges retain their synthesised lowpassed-noise cannon reports; there are no
+audio files or network requests. Persistent mute silences those reports,
+browsers may require a gesture, initial history is silent and event identities
+deduplicate playback. The board never touches the browser speech queue.
 
 The full outcome stream supplies stable decision IDs and merge identities
 (PR, or task/event fallback). Initial history is silent, new outcomes queue,
 and refreshes/reconnects cannot replay handled identities. The 3.2-second
-effect deadline survives ordinary state rendering; animation delays use elapsed
-time, crew data continues updating, and the captain persists with feedback
+effect deadline survives ordinary state rendering; retained animations keep
+their running timeline while elapsed offsets apply only to newly mounted effect
+nodes. Crew data continues updating, and the captain persists with feedback
 after the last card disappears. Reduced motion keeps static acknowledgement
 and independently honors audio preference. Only confirmed `merged` events
 fire the merge salute; recording an order or a failed helper cannot do so.
 
 **One gun list** (`portList()`) drives the ports, the flash positions and the
-sound schedule: one gun, one flash, one report, the same `GUN_DELAY` apart. The
-bell waits until the last gun has spoken. **The shout stays in English in every
+sound schedule: one gun, one flash, one report, the same `GUN_DELAY` apart.
+**The shout stays in English in every
 locale** — it is a cry, not a label.
 
 Celebration must not hide what is being celebrated: the banner sits clear of

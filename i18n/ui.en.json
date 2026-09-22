@@ -73,7 +73,6 @@
   "confirmOrder": "CONFIRM",
   "customRecorded": "Custom response recorded for firstmate to interpret.",
   "orderFailed": "Order not acknowledged. Check the connection and decision state before retrying.",
-  "voiceFallback": "Local speech unavailable; nautical cues and text remain.",
   "eventFailed": "Decision saved, but its event could not be logged.",
   "capReady": "Cutlass half drawn — confirm your choice",
   "capOrder": "Orders away"

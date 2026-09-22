@@ -28,6 +28,21 @@ assert_fail "test -f '$d/state/pending/D-99.json'" "missing authored input creat
 jq 'del(."zh-TW".options.B.cons)' "$d/details.json" > "$d/invalid.json"
 assert_fail "FM_ROOT='$d' '$d/bin/fm-decide.sh' --request D-98 --task T-1 --details '$d/invalid.json'" "incomplete localized tradeoffs fail"
 assert_fail "test -f '$d/state/pending/D-98.json'" "invalid payload creates no partial card"
+dstream="$(fixture)"
+{ printf '%s\n' '{}'; cat "$d/details.json"; } > "$dstream/stream.json"
+assert_fail "FM_ROOT='$dstream' '$dstream/bin/fm-decide.sh' --request D-97 --task T-1 --details '$dstream/stream.json'" \
+  "details require exactly one JSON document"
+assert_fail "test -f '$dstream/state/pending/D-97.json'" "a JSON stream leaves no partial card"
+# Full prohibited control set, including U+007F, before any pending write.
+dctrl="$(fixture)"
+for pair in '0 0000' '8 0008' '11 000B' '12 000C' '14 000E' '31 001F' '127 007F' '133 0085' '159 009F'; do
+  set -- $pair
+  jq --argjson cp "$1" '(.en.title) |= ("Cache" + ([$cp]|implode) + "index")' \
+    "$dctrl/details.json" > "$dctrl/ctrl.json"
+  assert_fail "FM_ROOT='$dctrl' '$dctrl/bin/fm-decide.sh' --request D-9$1 --task T-1 --details '$dctrl/ctrl.json'" \
+    "details reject Unicode control U+$2 before persistence"
+  assert_fail "test -f '$dctrl/state/pending/D-9$1.json'" "control U+$2 leaves no pending card"
+done
 out="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --request D-1 --task T-1 --kind merge --details "$d/details.json" --pr 9)"
 assert_ok "test -f '$out'" "a request writes a pending file"
 assert_eq "merge" "$(jq -r .kind "$out")" "it records the kind"
@@ -138,5 +153,5 @@ assert_fail "FM_ROOT='$d4' '$d4/bin/fm-decide.sh' --await D-9 --timeout 2" "it t
 # the words may appear in a comment explaining the absence; a call may not
 assert_fail "grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-decide.sh' | grep -qE '\\b(fswatch|watchexec|entr)\\b'" \
   "it calls neither fswatch, watchexec nor entr"
-rm -rf "$d" "$d2" "$d3" "$d4" "$d5" "$d6" "$d8" "$stub"
+rm -rf "$d" "$d2" "$d3" "$d4" "$d5" "$d6" "$d8" "$dstream" "$dctrl" "$stub"
 finish

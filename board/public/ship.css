@@ -13,7 +13,7 @@
 .scene .horizon{position:absolute;left:0;right:0;top:0;height:62px;
   background:linear-gradient(180deg,#07121d,#123047);opacity:.75}
 .shipbar{position:absolute;top:9px;left:13px;z-index:6;display:flex;gap:11px;
-  align-items:center;font-size:10.5px;color:#7fa8c6;pointer-events:none}
+  align-items:center;font-size:13px;color:#7fa8c6;pointer-events:none}
 .shipbar .tier{font:650 11px var(--mono);color:var(--brass);letter-spacing:.04em}
 
 .ship{position:absolute;inset:0;pointer-events:none;z-index:0}
@@ -159,8 +159,8 @@
   transform:rotate(45deg);background:rgba(12,19,27,.94);
   border-right:1px solid var(--bubEdge,#2c3f52);border-bottom:1px solid var(--bubEdge,#2c3f52)}
 .bub .who{display:flex;align-items:center;justify-content:center;gap:6px;
-  font:650 11px var(--mono);color:#dbe8f4}
-.bub .job{margin-top:3px;font-size:10.5px;color:#9dbdd6;line-height:1.3;overflow:hidden;
+  font:650 13px var(--mono);color:#dbe8f4}
+.bub .job{margin-top:3px;font-size:13px;color:#9dbdd6;line-height:1.3;overflow:hidden;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
 .bub .pb{margin:5px auto 0;width:84%;height:3px;background:rgba(255,255,255,.12);border-radius:2px;overflow:hidden}
 .bub .pb i{display:block;height:100%;background:var(--accent)}
@@ -191,11 +191,11 @@
 @keyframes crewOrder{0%{translate:0 0}15%,65%{translate:0 -8px}100%{translate:0 0}}
 .captain .fig.r-cap .tool{opacity:1;width:5px;height:25px;background:#e8eff7;border-bottom:5px solid var(--brass);transform:rotate(20deg)}
 .captain[data-pose="idle"] .armR{transform:rotate(10deg)}
-.captain[data-pose="idle"] .tool{background:#3b2617}
+.captain[data-pose="idle"] .fig.r-cap .tool{height:10px;opacity:.45;background:#3b2617;border-bottom:0}
 .captain[data-pose="ready"] .armR{transform:rotate(-65deg)}
-.captain[data-pose="ready"] .tool{height:38px}
+.captain[data-pose="ready"] .fig.r-cap .tool{height:38px;opacity:1;background:#e8eff7;border-bottom:5px solid var(--brass)}
 .captain[data-pose="order"] .armR{transform:rotate(-155deg)!important}
-.captain[data-pose="order"] .tool{height:52px}
+.captain[data-pose="order"] .fig.r-cap .tool{height:52px;opacity:1;background:#e8eff7;border-bottom:5px solid var(--brass)}
 .acts{flex-wrap:wrap}.acts .tradeoffs,.acts label{width:100%}
 .acts textarea{display:block;width:100%;min-height:80px}
 .acts [aria-pressed="true"]{outline:2px solid var(--brass)}
@@ -245,17 +245,17 @@
   display:flex;justify-content:space-between}
 .roster ul{list-style:none;margin:0;padding:0;max-height:196px;overflow:auto}
 .roster li{display:grid;grid-template-columns:22px 92px 84px 1fr;gap:10px;align-items:center;
-  padding:6px 12px;border-bottom:1px solid rgba(255,255,255,.045);font-size:11.5px}
+  padding:6px 12px;border-bottom:1px solid rgba(255,255,255,.045);font-size:13px}
 .roster li:last-child{border-bottom:0}
 .roster .av{width:16px;height:16px;border-radius:4px;background:var(--av,#33506f)}
-.roster .nm{font:650 11px var(--mono);color:#dbe8f4}
-.roster .st{font-size:10.5px;padding:1px 7px;border-radius:99px;border:1px solid var(--bubEdge,#2c3f52);color:#9dbdd6;justify-self:start}
+.roster .nm{font:650 13px var(--mono);color:#dbe8f4}
+.roster .st{font-size:13px;padding:1px 7px;border-radius:99px;border:1px solid var(--bubEdge,#2c3f52);color:#9dbdd6;justify-self:start}
 .roster .jb{color:#8fa9bd;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .roster li.st-working{--av:#2f5478} .roster li.st-review{--av:#5a3f7d}
 .roster li.st-gate{--av:#7c322b}
 .roster li.st-captain{--av:#2c5f49}
 .roster li.st-queued{--av:#26323d;opacity:.62}
-.shipbar button{pointer-events:auto;font:650 10.5px var(--mono);color:#0f1621;cursor:pointer;
+.shipbar button{pointer-events:auto;font:650 13px var(--mono);color:#0f1621;cursor:pointer;
   background:linear-gradient(180deg,#f0c46a,#c9972f);border:0;border-radius:99px;padding:3px 11px}
 .shipbar button.mute{background:transparent;color:#7fa8c6;border:1px solid var(--line)}
 /* three poses were still empty-handed. Every one of the twelve holds
@@ -274,7 +274,7 @@
 /* a name chip for the decks that have a deck above them: the bubble would
    blindfold the crew standing over it, and the roster carries the job text */
 .bub.mini{padding:2px 7px 3px;max-width:112px;background:rgba(9,15,22,.9)}
-.bub.mini .who{font-size:10px}
+.bub.mini .who{font-size:13px}
 .bub.mini::after{display:none}
 
 /* The captain shares the actual ship coordinate system and deck surface. */
@@ -283,7 +283,7 @@
 .scene .pivot{transform-origin:50% 100%}
 .scene{touch-action:none}
 .roster .jb{white-space:normal;overflow:visible;text-overflow:clip;font-size:16px;overflow-wrap:anywhere}
-.roster .nm,.roster .st,.roster h3,.shipbar,.shipbar .tier{font-size:13px}
+.roster .nm,.roster .st,.roster h3,.shipbar,.shipbar .tier,.shipbar button,.bub .who,.bub .job,.bub.mini .who{font-size:13px}
 .roster li{grid-template-columns:16px minmax(0,1fr) minmax(0,1fr);font-size:16px}
 .roster .jb{grid-column:2/-1}.roster .nm{overflow-wrap:anywhere}
 .roster ul{max-height:280px}.bub.mini .who{white-space:normal;overflow-wrap:anywhere}
