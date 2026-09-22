@@ -37,6 +37,49 @@ fm_cfg_list() { # fm_cfg_list <section> [file]
     | sed -n 's/^[[:space:]]*-[[:space:]]*//p' | _fm_clean
 }
 
+_fm_code_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+
+# Freeze before doing work. A nested entrypoint uses the parent's frozen code,
+# while a newly invoked session takes a new snapshot. Explicit roles win.
+fm_freeze() {
+  local script="$1"
+  if [ "${FM_ENTRY_PID:-}" != "$$" ] || [ "${FM_ENTRY_SCRIPT:-}" != "${script##*/}" ]; then
+    exec python3 "$_fm_code_dir/fm-herdr.py" launch "$_fm_code_dir/${script##*/}" "${@:2}"
+  fi
+}
+
+fm_identity() {
+  local role="$1" task="$2" alias="$3"
+  # Recursion guards belong to one adapter invocation, never a new role run.
+  unset FM_CONTEXT_READY FM_ATTEMPT_DIR FM_FINAL_PATH FM_CLI_EXIT FM_CHAIN_ATTEMPT
+  FM_RUN_DIR="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" allocate "$REPO" "$role" "$task" "$alias")" || return 70
+  NAME="${FM_RUN_DIR##*/}"
+  export FM_RUN_DIR FM_ROLE="$role" FM_TASK="$task" FM_ACTOR="$NAME" FM_ROOT="$REPO"
+  printf '%s: canonical actor %s (requested alias: %s)\n' "$role" "$NAME" "${alias:-automatic}" >&2
+  python3 - "$FM_RUN_DIR" "$$" "${FM_CODE_ROOT:-$REPO}" <<'PY'
+import json, pathlib, sys
+run, pid, code = sys.argv[1:]
+p = pathlib.Path(run)
+identity = json.loads((p / 'identity.json').read_text())
+(p / 'process.json').write_text(json.dumps(dict(identity, pid=int(pid), token=code, snapshot=code)))
+PY
+}
+
+fm_record_end() {
+  python3 - "$FM_RUN_DIR" "$1" "${FM_CODE_ROOT:-$REPO}" "${FM_CHAIN_ATTEMPT:-}" "${FM_VENDOR_USED:-}" <<'PY'
+import importlib.util, json, pathlib, sys
+spec = importlib.util.spec_from_file_location('managed', pathlib.Path(sys.argv[3]) / 'bin/fm-herdr.py')
+module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+run = pathlib.Path(sys.argv[1])
+identity = json.loads((run / 'identity.json').read_text())
+last = run / 'last-result.json'
+result = json.loads(last.read_text()) if last.exists() else {}
+if not sys.argv[4] or result.get('chain_attempt') != sys.argv[4]:
+    result = dict(status='unknown', chain_attempt=sys.argv[4], vendor=sys.argv[5])
+module.save(run / 'orchestration-result.json', dict(identity, process_exit=int(sys.argv[2]), adapter_result=result))
+PY
+}
+
 # The order vendors are tried in, and the running of that order. Both the
 # worker and the reviewer need it and they must behave identically, so it
 # lives here once rather than as a loop in each.
@@ -97,6 +140,7 @@ fm_run_chain() {
   # exact confusion the offsets exist to prevent
   FM_VENDOR_USED=''; FM_VENDOR_SKIPPED=''; FM_VENDOR_MISREAD=''; FM_VENDOR_UNKNOWN=''
   FM_RUN_OUTDIR=''; FM_RUN_LOG_OFF=0; FM_VENDOR_SPOKE=0
+  export FM_CHAIN_ATTEMPT=''
   # before anything runs. A typo at the head of the chain used to be found
   # after a real vendor had already worked, and the caller's exit 65 then
   # threw that work away.
@@ -122,6 +166,10 @@ fm_run_chain() {
       out="$tree"
     fi
     FM_RUN_OUTDIR="$out"
+    # Bind every receipt reader to this invocation, including custom fallbacks
+    # that never create managed receipts. Keep previous receipts as evidence.
+    FM_CHAIN_ATTEMPT="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')" || return 70
+    export FM_CHAIN_ATTEMPT
     "$dir/$v.sh" run "$prompt" "$out" "$log"; rc=$?
     # did this vendor say anything of its own? The callers need to tell an
     # engine that ran badly from one that was not there, and this is the

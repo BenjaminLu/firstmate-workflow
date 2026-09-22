@@ -2,6 +2,9 @@
 # One contract, every adapter. This is what keeps the system from quietly
 # growing a dependency on whichever vendor happened to be configured.
 set -uo pipefail
+# The legacy contract exercises direct CLIs; managed tests supply fake Herdr.
+export HERDR_ENV=0 FM_TRANSPORT=direct
+unset FM_RUN_DIR FM_ROLE FM_TASK FM_ACTOR FM_CODE_ROOT FM_CONTEXT_READY FM_ATTEMPT_DIR FM_FINAL_PATH FM_CLI_EXIT
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"

@@ -24,6 +24,7 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
+fm_args=("$@")
 
 REPO="${FM_ROOT:-$(pwd)}"; MODE=''; EVERY=30
 while [ $# -gt 0 ]; do
@@ -36,7 +37,9 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$MODE" ] || { echo "usage: fm-run.sh once|watch [--repo dir] [--every n]" >&2; exit 64; }
 cd "$REPO" || { echo "fm-run: no repo at $REPO" >&2; exit 64; }
-B="$REPO/bin"
+REPO="$(pwd -P)"
+fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
+B="${FM_CODE_ROOT:-$REPO}/bin"
 say() { printf '  %s\n' "$*"; }
 
 turn() {
@@ -71,9 +74,27 @@ turn() {
       id="D-$(printf '%s' "$task" | tr -dc '0-9')"
       [ -f "state/pending/$id.json" ] && { say "$task: waiting on the captain"; continue; }
       [ -f "state/decisions/$id.json" ] && continue
-      "$B/fm-decide.sh" --request "$id" --task "$task" --kind merge --pr "$pr" \
-        --title "$task passed the gates - merge it?" --repo "$REPO" >/dev/null 2>&1 </dev/null
-      say "$task: all seven gates green, asking the captain ($id)"
+      # T-034 authored --details is preferred when this checkout's decide
+      # understands it. Until that lands, keep the title-only path so the
+      # shipped loop still creates a card. Firstmate skills document the
+      # details contract; this branch is the explicit integration dependency.
+      details="$REPO/state/decision-details/$id.json"
+      request_out=''
+      if grep -q -- '--details)' "$B/fm-decide.sh" 2>/dev/null; then
+        if request_out="$("$B/fm-decide.sh" --request "$id" --task "$task" --kind merge --pr "$pr" \
+          --details "$details" --repo "$REPO" 2>&1 </dev/null)"; then
+          say "$task: all seven gates green, asking the captain ($id)"
+        else
+          say "$task: no captain card created; firstmate must supply valid authored details at $details ($request_out)"
+        fi
+      else
+        if request_out="$("$B/fm-decide.sh" --request "$id" --task "$task" --kind merge --pr "$pr" \
+          --title "$task passed the gates - merge it?" --repo "$REPO" 2>&1 </dev/null)"; then
+          say "$task: all seven gates green, asking the captain ($id)"
+        else
+          say "$task: no captain card created ($request_out)"
+        fi
+      fi
     elif [ "$g" -eq 7 ]; then
       say "$task: gates 1-6 green, sending it to review (round $round)"
       # exit 3 is a round that produced no verdict. Swallowing it would let

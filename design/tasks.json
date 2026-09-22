@@ -451,7 +451,15 @@
       "title": "fm-reconcile.sh: reconciling after a crash",
       "scope": [
         "bin/fm-reconcile.sh",
-        "tests/reconcile.test.sh"
+        "tests/reconcile.test.sh",
+        "tests/option-loop.test.sh",
+        "design/tasks.json",
+        "bin/fm-worker.sh",
+        "tests/worker.test.sh",
+        "bin/ci.sh",
+        "tests/ci.test.sh",
+        ".github/workflows/ci.yml",
+        "design/design.md"
       ],
       "acceptance": [
         "replaying events.jsonl rebuilds the whole state with no snapshot",
@@ -474,7 +482,9 @@
       "scope": [
         "bin/fm.sh",
         "skills/**",
-        "tests/selfupdate.test.sh"
+        "tests/selfupdate.test.sh",
+        "tests/option-loop.test.sh",
+        "design/tasks.json"
       ],
       "acceptance": [
         "a skill-update task travels the same pull request and the same seven gates as any other",
@@ -717,6 +727,185 @@
         "the worker's .fm-say.md reaches the pull request on any round where one exists, and the run says which pull request it went to",
         "a message that could not be posted is an error the run reports, not a line on standard error nobody reads: asking is the whole of that round and a question that went nowhere leaves the task deadlocked",
         "the worker's own lookup is the only path there can be: fm-dispatch never restarts a task whose pull request is open, so it has no number to pass, and the suite says so rather than the design claiming it"
+      ]
+    },
+    {
+      "id": "T-032",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-031"
+      ],
+      "title": "the red check reaches the worker as an empty block",
+      "scope": [
+        "bin/fm-worker.sh",
+        "tests/worker.test.sh",
+        "design/design.md",
+        "design/tasks.json"
+      ],
+      "acceptance": [
+        "modern /actions/runs/<run>/job/<job> links fetch the workflow run; legacy /runs/<job> links fetch via gh run view --job, including query strings and fragments, without confusing job IDs with workflow run IDs",
+        "the stub answers the way gh answers - real link shapes and strict run view arguments that distinguish job IDs from workflow run IDs and refuse an id or namespace it does not recognise - so malformed selections fail the prompt-content tests",
+        "the block the worker is handed is asserted by its CONTENT reaching the prompt, not by gh having been called",
+        "a check whose log cannot be fetched says so in the prompt rather than leaving an empty block, because an empty block is indistinguishable from a green run and the worker spends its round asking about it"
+      ]
+    },
+    {
+      "id": "T-033",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-007",
+        "T-006",
+        "T-013"
+      ],
+      "title": "firstmate startup contract",
+      "scope": [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "README.md",
+        "skills/**",
+        "design/design.md",
+        "design/tasks.json",
+        "tests/skills.test.sh"
+      ],
+      "acceptance": [
+        "A concise canonical startup contract and thin Claude/Codex entrypoints route a top-level interactive session to firstmate immediately, while an explicitly dispatched worker or reviewer retains its assigned role; entrypoints link to the canonical contract rather than duplicating instructions.",
+        "The default firstmate plans, dispatches, monitors, coordinates remediation and submits decisions through the repository scripts; it does not implement production code or run git/gh mutations itself. Document the actual scripts and their limitations, including gate failures that require explicit remediation coordination.",
+        "Existing user authorization persists across turns and routine authorized work proceeds without repeated confirmation. Scope decisions and captain merge approval still go through the board, and firstmate does not infer captain merge approval from a request to finish all PRs.",
+        "Startup inspects resumable task state, open PRs, worktrees and live herdr panes before launching work; it resumes existing agents instead of duplicating them, checks herdr availability within the managed session, and launches actual future worker/reviewer processes in visible panes. A conversation subagent alone is not evidence that a herdr worker exists.",
+        "Startup starts or reuses the captain board and opens it using the available browser mechanism, verifies observable results, and never claims a board, worker, test, hook removal, commit or PR action succeeded without evidence.",
+        "All relevant role skills are English portable Markdown with provider-independent valid metadata. No vendor-specific syntax occurs inside skills/. Claude/Codex-specific loading conventions may appear only in their thin root entrypoints. Resolve existing role skills and links coherently rather than creating competing startup sources.",
+        "Firstmate, worker and reviewer instructions coherently capture the round-three closed-list review protocol, subsequent original-list/regression-only enforcement, and final-only reviewer verdict provenance; intermediate text or quoted APPROVE/REJECT cannot be treated as the final review decision.",
+        "Role instructions distinguish tests actually executed and their observable results from unverified claims, require honest limitations, and distinguish static English instruction prose from dynamic user-facing summaries that require both en and zh-TW.",
+        "There is no required reliance on lavish or no-mistakes in startup or role workflows. Verification uses the repository checks and actual GitHub CI evidence, with captain decisions retaining their established board workflow.",
+        "Changes remain documentation/instructions and narrowly useful skill metadata or link-structure validation. Do not add arbitrary prose-grep assertions or model/API-dependent CI. Update README and design references so future Claude and Codex sessions discover the same role contract without conversational history."
+      ]
+    },
+    {
+      "id": "T-034",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-010",
+        "T-013",
+        "T-014"
+      ],
+      "title": "localized two-stage captain decisions, literal custom orders and confirmed outcome effects",
+      "scope": [
+        "bin/fm-decide.sh",
+        "bin/fm-diagram.sh",
+        "board/public/diagram.js",
+        "board/server.ts",
+        "board/public/index.html",
+        "board/public/ship.js",
+        "board/public/ship.css",
+        "i18n/ui.en.json",
+        "i18n/ui.zh-TW.json",
+        "i18n/tw2cn.tsv",
+        "tests/decisions.test.sh",
+        "tests/decide.test.sh",
+        "tests/diagram.test.sh",
+        "tests/i18n.test.sh",
+        "tests/board.test.sh",
+        "tests/ship.spec.ts",
+        "tests/e2e/board.spec.ts",
+        "tests/e2e/fixture.ts",
+        "design/design.md",
+        "design/tasks.json",
+        "design/diagrams/README.md",
+        "design/diagrams/T-034.en.html",
+        "design/diagrams/T-034.zh-TW.html",
+        "bin/fm-run.sh",
+        "tests/e2e-loop.test.sh",
+        "tests/option-loop.test.sh"
+      ],
+      "acceptance": [
+        "Every new decision has one concise task-specific explanation, a bespoke before/after change diagram and concrete advantages and costs for its A/B/C options. Remove repeated nested card framing, titles, lane strips, buttons and checklists from embedded diagrams. A generic workflow diagram is not a substitute for the actual proposed change.",
+        "Add validated structured localized decision input to fm-decide and document its shared server/diagram/frontend contract. Author dynamic titles, explanations, before/after labels, option descriptions, advantages/costs and outcome feedback in en and zh-TW. Derive zh-CN through the existing conversion semantics, extending its table where necessary for complete actual displayed content. Locale changes update entire content, not only controls; event summaries retain en and zh-TW.",
+        "Reject malformed new localized payloads before partial writes or replacing existing decisions. Keep legacy title-only records readable with explicit missing-detail feedback; never fabricate translations, task-specific diagrams or tradeoffs from missing author input. Firstmate supplies missing content before presenting a new decision as complete.",
+        "Use lightweight repository-native HTML/inline SVG and the existing authored-fragment mechanism where useful; no image generation, Figma, lavish or external model/rendering dependency. Escape untrusted dynamic text and validate data boundaries; distinguish trusted authored fragments from data, and verify markup-like text cannot inject scripts or controls.",
+        "Add behavioral coverage for two materially different decisions with distinct before/after diagrams and option tradeoffs, no nested duplicate content, complete en/zh-TW/zh-CN locale switching, malformed/missing localization, legacy records, safe text rendering, authored-fragment selection and derived zh-CN, as well as all effect scenarios below.",
+        "Restore the original two-stage decision interaction demonstrated by design/proposals/2026-09-20-captain-board/prototype.html (pick handler near line 928 and separate submit control near line 1519) and design/design.md Captain/Ahoy sections. Selecting A/B/C updates only local selection and the captain's half-drawn sword pose: no decision file, POST or other network mutation. A distinct explicit confirmation submits the selected option and raises the sword; no selection means confirmation is unavailable. Preserve A/B/C meanings, merge authorization and truthful request outcome handling. Keep the captain visible until the final acknowledgement/effect completes even when its last card disappears.",
+        "On explicit confirmation, show the order being sent; on successful recorded acknowledgement, animate the whole visible crew in staggered response with the captain's raised sword, two helm spins, and AYE, CAPTAIN! / ORDERS AWAY. The later audio override keeps order speech, bell and whistle off. English cries remain invariant across locales; surrounding interface content localizes. Honor persistent mute and reduced-motion with accessible static acknowledgement. A pending/failed request has distinct truthful feedback, and a recorded order is never presented as a successful merge: merge broadside/banner and cannon require actual confirmed merge success.",
+        "Confirmed merge effects follow newly observed merge-event identity, not changes in the task-derived merged count. A merge for a task absent from the currently loaded design/tasks.json still produces one celebration. Duplicate SSE snapshots, explicit refreshes, repeated delivery and reconnects do not replay an already handled event; initial historical state does not replay old celebrations. Multiple newly observed outcomes are not silently collapsed into a single count delta.",
+        "The decision path provides an observable stable identity and outcome for recorded decisions without depending on a separate fm-decide --await process. Preserve bin/fm-emit.sh as the only append path for events and avoid duplicate semantic events if an existing waiter also observes the response. If satisfying this requires changing scripts outside this scope, stop for a scope decision rather than editing them.",
+        "Routine state refreshes do not replace or reset active captain/ship effect state before its visible completion. Crew and task data can continue updating during the effect. Do not invent agents, task progress, successful merges or lifecycle events for visual feedback.",
+        "A merge helper failure or request/network error shows persistent accessible failure feedback and no successful-merge broadside/banner. An HTTP response that records a decision while reporting merge failure is not treated as merge success. Duplicate recorded requests do not invent a new successful outcome.",
+        "Respect prefers-reduced-motion with a readable static outcome acknowledgement instead of suppressing all feedback. Audio mute persists, audio is optional, and browser autoplay refusal never prevents the decision or its visible feedback. Localize new interface text through English and zh-TW dictionaries and the existing zh-CN derivation; event summaries retain both en and zh-TW.",
+        "Add fail-first behavioral browser coverage for actual decision submission and resulting captain/order effects, a real merge event for a task absent from task definitions, duplicate/reconnected state delivery, state refresh during an effect, failed merge, and reduced-motion feedback. Assertions must observe outcomes and effect lifetime, not merely grep source or click the manual Ahoy demonstration button. Test fixtures use isolated local state and stub merge execution, never real captain decisions or model/network APIs. Also assert selection alone performs no POST/file write, explicit confirmation submits the selected option exactly once, captain sword poses follow selection/send/outcome, captain persists after the final card disappears, the whole crew acknowledges in staggered order, and cries remain English across locales.",
+        "Run the repository CI and relevant browser tests, record actual observed results and limitations, and establish that new regressions fail with the implementation removed. Update the relevant design contract and task metadata to describe the shipped behavior without claiming that instruction prose or a manually triggered effect proves the complete decision path.",
+        "Add a genuine fourth custom/free-text captain choice, distinct from predefined A/B/C and distinct from a note attached to A. Selecting it and typing remain local with no mutation until explicit confirmation; initially no option is selected and no action is sent. Persist a stable distinct chosen value such as custom plus its authored text as bounded validated data, never shell evaluation or implicit merge approval. Reject empty/whitespace-only or over-limit custom input before persistence; escape markup and preserve its exact valid text through server storage, state/watch roundtrip and firstmate consumption. Localize choice label, hint, validation and outcome feedback in all supported locales; do not translate or reinterpret the captain's authored text. A custom order always remains a captain decision for interpretation, never an automatic arbitrary command or a merge-equivalent A. Browser and server tests cover selection/confirmation, Unicode, escaping, limits, stored roundtrip and proof that custom text cannot trigger merge.",
+        "Apply the later captain audio override: disable Ahoy-related speech, bell and whistle cues without substitute sounds or global mute. Preserve visible order/merge effects and invariant English cries. An actually confirmed merge retains synthesized cannon reports; persistent mute silences them, initial history stays silent, and stable event identities prevent replay across duplicate SSE snapshots, refresh and reconnect. Selection, orders, rejected submissions and unconfirmed/failed merges produce no audio. Browser autoplay refusal never breaks decisions, reduced motion remains independent, no external audio requests occur, and the board never touches an unrelated browser speech queue. Tests use fake Web Audio/speech APIs to prove cannon eligibility, unwanted-cue absence, mute and deduplication.",
+        "Pending decisions precede the ship and active work; captain, gate, review, working and queued lanes exclude completed tasks. A native initially collapsed history preserves every merged/closed identity and PR, truthful separate counts and session disclosure state through refresh and locale changes.",
+        "Use at least 16px primary and 13px secondary text, 20px decision titles and 44px choice/confirm targets. Three locales reflow at 320/390/768/1280 widths and 200 percent text without page overflow or clipping decision meaning.",
+        "The helm follows the original left firstmate/deck anchor; bow remains left and stern right. Exactly one human captain remains on the real ship deck through zero pending cards, selection, confirmation, acknowledgement, errors, refresh and reduced motion, without changing agent concurrency.",
+        "Replay full event history for stable actor identity, authored en/zh-TW activity and truthful phase. Derive CN, retain dispatch descriptions through technical events, avoid cross-run contamination and scalar-title translation guesses, label missing descriptions and unknown phases, and display only explicitly bounded progress.",
+        "Directed order/work/approve/reject handoffs resolve real participants from task and lifecycle events, retain stable event identities and visible travel/reaction across refresh/locale/resize, and never replay initial or duplicate history. Missing or ambiguous participants produce honest localized static feedback. Restore individual/deck drag, pointer cancellation and double-click reset without interfering with captain controls.",
+        "Focused isolated browser checks cover history geometry and persistence, all locales and widths, always-aboard deck bounds and left helm at ship-size boundaries, retained activity beyond 40 events, directed travel endpoints and pointer capture, reduced motion and the original real decision/custom/outcome/audio cases. Firstmate coordinates full CI and publication."
+      ]
+    },
+    {
+      "id": "T-035",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-033",
+        "T-003",
+        "T-008",
+        "T-009"
+      ],
+      "title": "managed firstmate session defaults",
+      "scope": [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "README.md",
+        "skills/**",
+        "config.yaml",
+        "bin/fm-config.sh",
+        "bin/fm-session.sh",
+        "bin/fm-herdr.py",
+        "bin/adapters/**",
+        "tests/session.test.sh",
+        "tests/herdr.test.sh",
+        "tests/adapter-contract.test.sh",
+        "tests/config.test.sh",
+        "tests/option-loop.test.sh",
+        "tests/skills.test.sh",
+        "design/design.md",
+        "design/tasks.json",
+        "bin/fm-worker.sh",
+        "bin/fm-review.sh",
+        "bin/fm-dispatch.sh",
+        "bin/fm-run.sh",
+        "tests/worker.test.sh",
+        "tests/review.test.sh",
+        "tests/dispatch.test.sh",
+        "tests/e2e-loop.test.sh",
+        "tests/crew-end-to-end.test.sh"
+      ],
+      "acceptance": [
+        "Ship a documented session bootstrap with vendor-neutral role context injection for the declared supported adapters. Native Claude/Codex root entrypoints remain thin routes to the shared contract. Top-level sessions default immediately to firstmate; explicitly dispatched workers/reviewers retain their roles and never launch a crew. Do not claim arbitrary engines automatically load AGENTS.md, or claim unsupported engines are ready.",
+        "Managed Herdr transport is shipped in the repository and enabled by default when HERDR_ENV=1. Detect and use the supported installed Herdr interface truthfully; launch real worker/reviewer processes in visible panes named by task and role through the normal adapter path. A clean clone needs no ignored runtime transport wrappers or global startup hooks. Missing/unsupported Herdr transport is surfaced clearly and never reported as successful visible dispatch.",
+        "Every dispatched worker and reviewer receives a distinct human-readable crew name, such as worker-mira-t035-r2 or reviewer-noah-t018-r8, with role/task/run identity and a collision suffix when needed. These are machine crew labels, not claims of actual human accounts. Keep the canonical name within Herdr's 32-character limit and supported syntax, retaining role prefixes for existing consumers unless explicit role fields are verified throughout. Use the identical canonical name in process invocation/context, Herdr pane/sidebar identity, board event actor, logs and final result metadata. Names remain stable during a run; different active workers/reviewers never share a name, and retries receive a distinct run identity. Reject or disambiguate colliding requested aliases without hiding the mapping. Do not inconsistently rename already-live actors; apply new naming coherently to new runs and document the examples in role skills.",
+        "Propagate canonical identity through the actual shipped fm-run, fm-dispatch, fm-worker, fm-review and adapter entrypoints. Default managed execution and ownership-safe lifecycle must work when those real entrypoints are invoked, not only through an unused standalone helper. Explicitly document whether vendor fallback retains the logical run actor or creates an attempt identity; preserve one unambiguous canonical mapping across panes, events and artifacts.",
+        "The completed/agent_finished event retires exactly the canonical actor for that run and cannot remove a concurrent worker or reviewer. Test concurrent same-task runs, worker-versus-reviewer runs, retries, requested-name collisions, naming-limit normalization, vendor fallback and exact actor removal through the real orchestration entrypoints with isolated mocks.",
+        "Pane lifecycle ownership is explicit and verifiable. Before attempting automatic close, durably persist final result, logs, process exit status and a structured final completion status (or equivalent explicit final-answer-only task-status contract). Process exit zero alone does not establish completed work: blocked, failed, incomplete, missing or ambiguous status retains the pane and artifacts. Immediately before closing, verify the exact recorded owned pane/run/task/terminal/shell identity and observed shell-only terminal state; never attempt to close an observed caller, unowned, reused, mismatched or busy pane. Refuse and retain on uncertainty. Use the installed Herdr CLI's available checks; do not require an unsupported atomic conditional-close API or upstream Herdr implementation. Document the unavoidable check-to-close race with an unrelated external client honestly instead of promising mathematical atomicity. Concurrent runs retain distinct ownership/artifacts; default close applies only to positively verified completed owned runs.",
+        "Outside managed Herdr, retain normal supported adapter execution and vendor fallback. Availability reflects real executable/transport checks and actual results; do not turn a transport failure, empty response or partial output into fabricated success. Existing adapter result/verdict provenance and failure behavior remain compatible.",
+        "Session bootstrap inspects actual live tasks/processes/panes and existing state before launch, resumes supported existing work without duplicate workers, and starts or reuses only the correct-root captain board after observable server checks. Open the board through an available supported mechanism and report opener/page-verification limitations honestly. Honor configured concurrency and preserve interrupted work.",
+        "Expose an actual cancellable decision-watch process using the existing repository watcher path. Its live/stopped/failed status and identity must be observable, with durable observed decision results. Reuse an existing matching watch rather than duplicating it. Do not claim that a background process wakes a completed conversational agent turn or that no live process is continuously monitoring.",
+        "Session defaults are enabled without requiring per-task transport toggles or opt-in prompts. Provide a documented explicit user opt-out for managed transport, successful-owned-pane auto-close and decision watching where applicable. Preserve prior user authorization for routine work; scope/product choices and merge approval still go through the captain board. User authorization of this self-update is not a fabricated board choice or merge approval.",
+        "Use stable per-run execution artifacts so edits to live source scripts or wrappers cannot shift a running shell's execution or duplicate adapter work. Snapshot the supported execution path as needed and retain enough run identity/evidence to distinguish source changes from the code actually executed. Do not edit or replace artifacts that an active run is reading.",
+        "Update shared role skills with the actual shipped startup/lifecycle behavior and durable session lessons: honest evidence, actual tests versus claims, final-only current-head reviewer provenance, original closed-list protocol, continued authorization and resumable state. Include firstmate's requirement for bespoke decision change diagrams, option tradeoffs and authored en/zh-TW dynamic content with derived zh-CN, while explicitly distinguishing requirements from board implementation still pending under T-034.",
+        "No dependency on lavish, no-mistakes, global hooks, environment-specific ignored scripts or undeclared external tooling is introduced. Keep skills portable English Markdown with valid provider-neutral metadata; use root entrypoints or the launcher for vendor-specific loading. Document exact support and failure boundaries, including effects/locale fixes not yet shipped.",
+        "Add meaningful fail-first clean-clone/mock tests for role injection, default managed and non-managed paths, ownership-safe pane close, caller/reused/busy protection, result persistence before close, transport/output failure, concurrent identities, explicit opt-out, board reuse, live cancellable watch and per-run source stability. CI uses no real model API, real user panes, external accounts or actual captain decisions. Run repository CI and relevant tests and report observed results and remaining limitations.",
+        "Implementation remains inside this exact scope. If watcher implementation, board production files or additional exact files must change, identify the required files and reason to firstmate before implementation; do not silently broaden scope or claim guarantees that the shipped entrypoints cannot enforce.",
+        "Treat a platform limitation as a bounded limitation: implement all independently satisfiable accepted criteria and report remaining evidence/gaps precisely. An unavailable atomic conditional-close operation is not a prerequisite to the authorized checked-close policy. Tests must distinguish rc=0 plus blocked/failed/incomplete final status from completed status and retain the former, while proving observed caller/reused/busy/mismatched identities are never targeted for close using mocks, not real user panes.",
+        "In a managed Herdr session, every newly dispatched worker and reviewer owns a dedicated new tab with one owned root pane; never split the captain's tab or another user's view. Create the tab with the supported --no-focus option, retain caller tab/pane identity, and verify the caller's focus remains unchanged. Use the same unique human-readable role/task/run canonical crew label for the tab, its agent pane/sidebar, board actor, process context and run artifacts, within Herdr naming limits. Review and retry/continuation launches follow this default too; explicit resumed live runs retain their verified identity without duplicate agents.",
+        "Record ownership of the created tab and its single root pane together with the existing run/task/terminal/shell identities. Completion auto-close remains guarded: first persist a positively completed task status and final artifacts, then immediately verify unchanged ownership, exact identities, shell-only terminal state and that the tab still contains only that owned pane. Retain the tab/pane on uncertainty, failure, blocked/incomplete result, reuse, a user-added pane, shared-tab membership or observed busy state. Never close the caller, an unowned tab, or a shared tab, and never use unconditional whole-tab close.",
+        "Closing a positively verified owned pane may cause its unchanged single-pane tab to disappear under Herdr's normal behavior; this is not authority to close arbitrary tabs. Document the available CLI's check-to-close race honestly. Tests use fake Herdr interfaces to assert default tab creation with --no-focus, one root pane per worker/reviewer, caller focus preservation, exact crew identity mapping and refusal after tab membership or ownership changes. Do not exercise closure on real user panes in CI.",
+        "The isolated crew-end-to-end fixture copies the shipped fm-herdr.py dependency and exercises real worker-to-board identity and exact completion removal without outer-checkout helpers. D-335 authorizes this additional fixture path.",
+        "Before updating firstmate decision instructions, inspect the final T-034 fm-decide.sh and fm-run.sh version identified by firstmate and its acceptance/tests read-only. Replace title-only examples with its actual --details authored en/zh-TW contract, exact validation and refusal handling; preserve user-authored custom choices and dynamic locale requirements. Clearly mark the integration dependency until that version lands."
       ]
     }
   ]

@@ -32,7 +32,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=bin/fm-config.sh
 . "$ROOT/bin/fm-config.sh" || { echo "option-loop: no bin/fm-config.sh" >&2; exit 70; }
 
-# the scripts with an option loop, and how many value-taking flags each has
+# Scripts and distinct value-taking flag names. fm repeats --repo in three
+# subcommands; its seven parser branches are exercised separately below.
+# fm.sh / fm-reconcile.sh are not in this checkout's T-035 scope; pin only
+# scripts that exist here. fm-decide stays at eight flags until T-034's
+# --details lands in-tree.
 PINNED="fm-cleanup 2
 fm-decide 8
 fm-diagram 4
@@ -43,6 +47,7 @@ fm-merge 3
 fm-protocol 4
 fm-review 7
 fm-run 2
+fm-session 2
 fm-sync-prs 2
 fm-worker 5"
 
@@ -87,18 +92,43 @@ while read -r name want; do
   flags="$(fm_loop_flags "$f")"
   got="$(printf '%s\n' "$flags" | sed '/^$/d' | wc -l | tr -d ' ')"
   assert_eq "$want" "$got" "$name has its $want value-taking flags"
-  while IFS= read -r flag; do
+  if [ "$name" = fm ]; then
+    cases='--repo lint
+--repo sync-skills
+--name sync-skills
+--skill self-update
+--why self-update
+--adopt self-update
+--repo self-update'
+    assert_eq "$flags" "$(printf '%s\n' "$cases" | awk '{print $1}' | sort -u)" \
+      "fm subcommand probes cover every discovered flag"
+  else
+    cases="$flags"
+  fi
+  while read -r flag subcommand; do
     [ -n "$flag" ] || continue
     total=$((total + 1))
-    run_capped 6 bash "$f" "$flag"
-    assert_eq "64" "$code" "$name $flag with no value is refused"
+    args=()
+    [ -z "$subcommand" ] || args+=("$subcommand")
+    args+=("$flag")
+    run_capped 6 bash "$f" "${args[@]}"
+    assert_eq "64" "$code" "$name $subcommand $flag with no value is refused"
     # and says which one: a message that lost $1, or the script's name, or
     # went to stdout, would pass a status-only assertion
     assert_contains "$said" "$flag" "$name $flag is named in the refusal"
     assert_contains "$said" "$name" "and so is the script"
-  done <<< "$flags"
+    if [ "$name" = fm ]; then
+      # A generic usage error can come from a later check or unknown-command
+      # fallback. Require this option's guard to be what actually refused it.
+      assert_contains "$said" "$flag requires a value" "$subcommand $flag reaches its value guard"
+      run_capped 6 bash "$f" "${args[@]}" --unknown
+      assert_eq "64" "$code" "$subcommand $flag rejects an option-shaped value"
+      assert_contains "$said" "fm: $flag requires a value, got --unknown" \
+        "$subcommand $flag refuses before consuming the next option"
+    fi
+  done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "51" "$total" "every pinned flag was exercised"
+assert_eq "53" "$total" "every pinned flag was exercised"
 
 # A script that grows an option loop has to be pinned here too, and the
 # corpus is the one bin/ci.sh judges - literally, out of
@@ -150,7 +180,7 @@ assert_eq "" "$(printf '%s\n' "$allsh" | xargs grep -l 'getopts\|OPTARG' || true
 run_capped 6 bash "$ROOT/bin/fm-emit.sh" --no-such-flag
 assert_eq "64" "$code" "an unknown flag is refused too"
 assert_contains "$said" "unknown argument" "and says so"
-# Six scripts get their guard from a sourced function, and a
+# Seven scripts get their guard from a sourced function, and a
 # command-not-found under `set -uo pipefail` carries on - the exact hazard
 # the assertions stage exists to catch. So the load has to be hard: if the
 # library will not load, the script must not reach its option loop.
@@ -161,7 +191,7 @@ sourced=0
 # the count would not have noticed, because a file that drops out of the
 # sweep drops out of the count with it
 while IFS= read -r f; do
-  # comments off: the five that keep a local copy mention fm_need in a
+  # comments off: scripts that keep a local copy mention fm_need in a
   # comment pointing at the library, and a grep for the name picks them up
   grep -q 'fm_need ' <<< "$(fm_strip_comments "$f")" || continue
   sourced=$((sourced + 1))
@@ -173,7 +203,7 @@ while IFS= read -r f; do
   assert_contains "$said" "fm-config.sh" "and says which library"
   rm -rf "$tmp"
 done < <(fm_shell_corpus "$ROOT/bin")
-assert_eq "6" "$sourced" "six scripts take their guard from the library"
+assert_eq "7" "$sourced" "seven scripts take their guard from the library"
 
 # And the other half of the same number, because two comments say it is
 # pinned here and until now it was not: the scripts that deliberately

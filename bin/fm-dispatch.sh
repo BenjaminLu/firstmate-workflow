@@ -17,6 +17,7 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
+fm_args=("$@")
 
 REPO="${FM_ROOT:-$(pwd)}"; DRY=0; LIMIT=''
 while [ $# -gt 0 ]; do
@@ -28,6 +29,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 cd "$REPO" || { echo "fm-dispatch: no repo at $REPO" >&2; exit 64; }
+REPO="$(pwd -P)"
+fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
 LOG="$REPO/state/events.jsonl"
 emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate "$@" >/dev/null 2>&1 </dev/null || true; }
 
@@ -86,7 +89,8 @@ while IFS= read -r id; do
   else
     # the worker emits dispatched itself; two writers of one fact is how
     # the log ends up disagreeing with itself
-    "$REPO/bin/fm-worker.sh" --task "$id" --repo "$REPO" >/dev/null 2>&1 </dev/null &
+    mkdir -p "$REPO/state/dispatch"
+    "${FM_CODE_ROOT:-$REPO}/bin/fm-worker.sh" --task "$id" --repo "$REPO" >>"$REPO/state/dispatch/$id.log" 2>&1 </dev/null &
     echo "$id"
   fi
   slots=$(( slots - 1 )); started_any=1

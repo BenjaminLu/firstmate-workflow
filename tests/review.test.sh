@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # What the reviewer is shown is the whole point of this script.
 set -uo pipefail
+export HERDR_ENV=0 FM_TRANSPORT=direct
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
@@ -11,10 +12,11 @@ fixture() {
   git config user.email a@b.c; git config user.name t
   mkdir -p bin design skills/reviewer src state
   cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" bin/
+  cp "$ROOT/bin/fm-herdr.py" bin/
   cp -r "$ROOT/bin/adapters" bin/
   cp "$ROOT/skills/reviewer/SKILL.md" skills/reviewer/
   printf 'vendor: mock\n' > config.yaml
-  printf '{"tasks":[{"id":"T-Z","title":"a task","scope":["src/**"],"acceptance":["it exists"]}]}\n' > design/tasks.json
+  printf '{"tasks":[{"id":"T-Z","title":"a task","activity":{"en":"Review the authored task","zh-TW":"審查已撰寫的任務"},"scope":["src/**"],"acceptance":["it exists"]}]}\n' > design/tasks.json
   echo base > src/a; git add -A; git commit -qm base
   git checkout -q -b work
   echo "SECRET_WORKER_REASONING" > src/a
@@ -58,6 +60,19 @@ assert_contains "$out" "APPROVE:T-Z" "the verdict comes back"
 types="$(jq -r .type < "$r/state/events.jsonl" | tr '\n' ' ')"
 assert_contains "$types" "review_opened" "it emitted review_opened"
 assert_contains "$types" "approved" "an APPROVE emits approved"
+review_actor="$(jq -r 'select(.type=="review_opened")|.actor' "$r/state/events.jsonl")"
+assert_eq "$review_actor" \
+  "$(jq -r 'select(.type=="review_opened")|.data.crew_name' "$r/state/events.jsonl")" \
+  "the reviewer publishes its exact canonical actor as crew_name"
+assert_eq "reviewer" \
+  "$(jq -r 'select(.type=="review_opened")|.data.role' "$r/state/events.jsonl")" \
+  "the reviewer publishes its explicit role"
+assert_eq "Review the authored task" \
+  "$(jq -r 'select(.type=="review_opened")|.data.activity.en' "$r/state/events.jsonl")" \
+  "the reviewer publishes the authored English work brief"
+assert_eq "審查已撰寫的任務" \
+  "$(jq -r 'select(.type=="review_opened")|.data.activity["zh-TW"]' "$r/state/events.jsonl")" \
+  "the reviewer publishes the authored zh-TW work brief"
 
 # praise is not an approval
 d2="$(fixture)"; r2="$d2/repo"; GH2="$(ghstub "$d2")"
@@ -87,6 +102,9 @@ outU="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch
 assert_eq "2" "$?" "a reviewer that produced nothing at all is an outage"
 assert_ok "test -f '$r/state/reviews/T-Z-r7.log'" "and the round still leaves a file to read"
 assert_contains "$outU" "state/reviews/T-Z-r7.log" "and says where to read it"
+assert_eq "infrastructure_error" \
+  "$(jq -r 'select(.type=="review_failed")|.data.review_outcome' "$r/state/events.jsonl" | tail -1)" \
+  "and records an unavailable vendor as infrastructure, not rejection"
 
 # but a run that said something, however unusable, is a failed round
 stub_script "$r/bin/adapters/mock.sh" <<'M'
@@ -101,6 +119,9 @@ rm -f "$r/state/reviews/T-Z-r8.log" "$r/state/reviews/T-Z-r8."*.log
 assert_eq "3" "$?" "a reviewer that said something unusable is a failed round"
 assert_contains "$(cat "$r/state/reviews/T-Z-r8.log" 2>/dev/null)" "not logged in" \
   "and what it said is kept"
+assert_eq "infrastructure_error" \
+  "$(jq -r 'select(.type=="review_failed")|.data.review_outcome' "$r/state/events.jsonl" | tail -1)" \
+  "and records a nonzero failed attempt as infrastructure"
 
 # a failed round does not advance the counter, so the next failure at the
 # same round must not overwrite the last engine's log
@@ -130,6 +151,9 @@ assert_fail "grep -q 'pr comment' '$d/ghcalls'" "nothing was posted to the pull 
 types="$(jq -r .type "$r/state/events.jsonl")"
 assert_contains "$types" "review_failed" "it emitted review_failed"
 assert_lacks "$(printf '%s\n' "$types" | tail -1)" "approved" "and signed nothing"
+assert_eq "missing_review" \
+  "$(jq -r 'select(.type=="review_failed")|.data.review_outcome' "$r/state/events.jsonl" | tail -1)" \
+  "and does not turn an unsigned zero-exit result into rejection"
 
 # a vendor named in config.yaml with no adapter behind it is a typo, not an
 # outage: reporting it as transient would have fm-run say "leaving it for
@@ -138,6 +162,9 @@ printf 'vendor: mock\nreviewer:\n  vendor: nosuchvendor\nfallback:\n  - mock\n' 
 out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
 assert_eq "65" "$?" "a vendor with no adapter is a configuration error"
 assert_contains "$out" "no adapter" "and says which one"
+assert_eq "infrastructure_error" \
+  "$(jq -r 'select(.type=="review_failed")|.data.review_outcome' "$r/state/events.jsonl" | tail -1)" \
+  "and records the configuration error as infrastructure, not rejection"
 
 # the reviewer falls back the same way the worker does
 cat > "$r/bin/adapters/down.sh" <<'M'
@@ -222,6 +249,9 @@ assert_contains "$(cat "$r/state/reviews/T-Z-r6.log" 2>/dev/null)" "rate limit" 
   "and what it said is kept, from the output directory as well as the log"
 assert_contains "$(jq -r .type < "$r/state/events.jsonl" | tr '\n' ' ')" "review_failed" \
   "and it emitted review_failed"
+assert_eq "missing_review" \
+  "$(jq -r 'select(.type=="review_failed")|.data.review_outcome' "$r/state/events.jsonl" | tail -1)" \
+  "and a zero-exit unsigned attempt is missing_review, never rejected"
 restore_scripts
 printf 'vendor: mock\nreviewer:\n  vendor: other\nfallback:\n  - mock\n' > "$r/config.yaml"
 
@@ -248,6 +278,19 @@ out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch 
 assert_eq "0" "$?" "a signed rejection is a completed round"
 assert_contains "$out" "REJECT:T-Z" "and the rejection is the verdict"
 assert_lacks "$out" "the fallback reviewed it" "and the worker's engine is not used"
+assert_eq "rejected" \
+  "$(jq -r 'select(.type=="review_failed")|.data.review_outcome' "$r/state/events.jsonl" | tail -1)" \
+  "and only the signed rejection records an authoritative reject outcome"
+assert_eq "reviewer" \
+  "$(jq -r 'select(.type=="review_failed")|.data.role' "$r/state/events.jsonl" | tail -1)" \
+  "the rejection remains explicitly authored by a reviewer"
+reject_actor="$(jq -r 'select(.type=="review_failed")|.actor' "$r/state/events.jsonl" | tail -1)"
+assert_eq "$reject_actor" \
+  "$(jq -r 'select(.type=="review_failed")|.data.crew_name' "$r/state/events.jsonl" | tail -1)" \
+  "the rejection publishes its exact canonical actor as crew_name"
+assert_eq "Review the authored task|審查已撰寫的任務" \
+  "$(jq -r 'select(.type=="review_failed")|[.data.activity.en,.data.activity["zh-TW"]]|join("|")' "$r/state/events.jsonl" | tail -1)" \
+  "the rejection preserves the authored bilingual activity"
 
 rm -rf "$d"
 
@@ -272,6 +315,9 @@ out9="$(cd "$r9" && FM_ROOT="$r9" FM_GH="$GH9" bin/fm-review.sh --task T-NEW --b
 rc9=$?
 assert_ne "65" "$rc9" "a task defined on the branch under review is found"
 assert_lacks "$out9" "no task T-NEW" "and not reported as missing"
+assert_eq "Work description unavailable|尚無工作說明" \
+  "$(jq -r 'select(.type=="review_opened" and .task=="T-NEW")|[.data.activity.en,.data.activity["zh-TW"]]|join("|")' "$r9/state/events.jsonl")" \
+  "a reviewer labels missing authored activity honestly"
 # and one that exists nowhere is still refused
 ( cd "$r9" && FM_ROOT="$r9" FM_GH="$GH9" bin/fm-review.sh --task T-NOPE --branch newtask >/dev/null 2>&1 )
 assert_eq "65" "$?" "a task that exists nowhere is still refused"
@@ -297,7 +343,7 @@ for scenario in signed unsigned outage; do
   assert_eq "1" "$(jq -r 'select(.type=="agent_finished")|.type' "$rr/state/events.jsonl" | grep -c . || true)" \
     "and exactly once"
   assert_matches "$(jq -r 'select(.type=="agent_finished")|.actor' < "$rr/state/events.jsonl")" \
-    '^reviewer-[0-9]+$' "and under its own per-run name"
+    '^reviewer-noah-tz-r[0-9]+$' "and under its own per-run name"
   rm -rf "$dr"
 done
 
@@ -371,8 +417,12 @@ rm -rf "$dlr"
 # cannot turn every reviewer into a worker on the deck
 dz="$(fixture)"; rz="$dz/repo"; GHz="$(ghstub "$dz")"
 ( cd "$rz" && FM_ROOT="$rz" FM_GH="$GHz" bin/fm-review.sh --name rev-7 --task T-Z --branch work >/dev/null 2>&1 )
-assert_eq "reviewer" "$(jq -r 'select(.actor=="rev-7")|.data.role' < "$rz/state/events.jsonl" | head -1)" \
-  "a reviewer says it is a reviewer, whatever it is called"
+canonical="$(jq -r 'select(.type=="review_opened")|.actor' "$rz/state/events.jsonl")"
+assert_matches "$canonical" '^reviewer-rev-7-tz-r[0-9]+$' "requested alias maps to a canonical reviewer identity"
+assert_eq "reviewer" "$(jq -r --arg actor "$canonical" 'select(.actor==$actor)|.data.role' "$rz/state/events.jsonl" | sort -u)" \
+  "a reviewer states its role on every event under the allocated actor"
+assert_eq "$canonical" "$(jq -r 'select(.type=="agent_finished")|.actor' "$rz/state/events.jsonl")" \
+  "completion retires exactly that canonical reviewer"
 rm -rf "$dz"
 
 finish

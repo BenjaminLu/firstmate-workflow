@@ -16,6 +16,7 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
+fm_args=("$@")
 
 REPO="${FM_ROOT:-$(pwd)}"; TASK=''; VENDOR=''; NAME=''; PR=''
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
@@ -31,9 +32,40 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$TASK" ] || { echo "usage: fm-worker.sh --task <id> [--repo dir]" >&2; exit 64; }
 cd "$REPO" || { echo "fm-worker: no repo at $REPO" >&2; exit 64; }
-NAME="${NAME:-worker-$$}"
-EMIT="$REPO/bin/fm-emit.sh"
-emit_once() { FM_ROOT="$REPO" "$EMIT" --data '{"role":"worker"}' --actor "$NAME" --task "$TASK" "$@" >/dev/null 2>&1 </dev/null; }
+REPO="$(pwd -P)"
+fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
+fm_identity worker "$TASK" "$NAME" || exit 70
+EMIT="${FM_CODE_ROOT:-$REPO}/bin/fm-emit.sh"
+CREW_DATA="$(jq -cn --arg role worker --arg name "$NAME" \
+  --arg en 'Work description unavailable' --arg tw '尚無工作說明' \
+  '{role:$role,crew_name:$name,activity:{en:$en,"zh-TW":$tw}}')"
+set_crew_activity() {
+  local authored
+  authored="$(jq -c '
+    .activity
+    | select(type == "object"
+        and (.en | type == "string" and test("\\S"))
+        and (."zh-TW" | type == "string" and test("\\S")))
+    | {en:.en,"zh-TW":."zh-TW"}
+  ' <<<"$1" 2>/dev/null)"
+  [ -z "$authored" ] || CREW_DATA="$(jq -c --argjson activity "$authored" '.activity=$activity' <<<"$CREW_DATA")"
+}
+# fm-emit keeps the last --data only. Merge any call-site --data into the
+# crew payload so role/recovery extras cannot wipe crew_name or activity.
+emit_once() {
+  local data="$CREW_DATA" args=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --data)
+        data="$(jq -c --argjson extra "${2-}" '. * $extra' <<<"$data")" || return 1
+        shift 2
+        ;;
+      *) args+=("$1"); shift ;;
+    esac
+  done
+  FM_ROOT="$REPO" "$EMIT" --data "$data" --actor "$NAME" --task "$TASK" \
+    ${args[@]+"${args[@]}"} >/dev/null 2>&1 </dev/null
+}
 emit() { emit_once "$@" || true; }
 
 # A run that ends has to say so, or "aboard" means "ever touched a task
@@ -89,11 +121,20 @@ scratch_add() { scratch+=("$1"); }
 clean_scratch() { [ ${#scratch[@]} -eq 0 ] || rm -f "${scratch[@]}"; }
 
 finished() {
+  local rc=$?
+  fm_record_end "$rc"
   clean_scratch
   local try=3
   while [ "$try" -gt 0 ]; do
     try=$(( try - 1 ))
-    emit_once --type agent_finished --en "run finished" --tw "這次執行結束" && return 0
+    if emit_once --type agent_finished --en "run finished" --tw "這次執行結束"; then
+      # Failed or interrupted attempts retain evidence for reconcile. Only
+      # this owner can retire a successfully completed run's PID record.
+      if [ "$rc" -eq 0 ] && [ "${pid_owned:-0}" = 1 ]; then
+        rm -f "$pidfile" || { echo "fm-worker: cannot retire $pidfile" >&2; exit 70; }
+      fi
+      return 0
+    fi
   done
   echo "${0##*/}: could not record the end of this run; ${NAME} stays on the deck until ${TASK} is finished" >&2
 }
@@ -119,15 +160,42 @@ branch_guess="$(git for-each-ref --format='%(refname:short)' refs/heads \
   | grep -i "^$(printf '%s' "$TASK" | tr 'A-Z' 'a-z')-" | head -1)"
 spec="$(task_spec "$TASK" "$branch_guess")"
 [ -n "$spec" ] || { echo "fm-worker: no task $TASK in design/tasks.json" >&2; exit 65; }
+set_crew_activity "$spec"
 
 slug="$(printf '%s' "$TASK" | tr 'A-Z' 'a-z')"
 branch="$slug-$(jq -r '.title' <<<"$spec" | tr 'A-Z' 'a-z' | tr -cs 'a-z0-9' '-' | cut -c1-28 | sed 's/-*$//')"
 tree="$REPO/state/worktrees/$TASK"
 
+# Ordinary dispatch and recovery share one kernel lock. Recovery passes the
+# locked descriptor as fd 9 across exec; ordinary workers acquire it before
+# touching the worktree. The PID is published atomically while holding it.
+pidfile="$REPO/state/worktrees/$TASK.pid"
+mkdir -p "$REPO/state/worktrees" || exit 70
+dispatch_data='{"role":"worker"}'
+if [ "${FM_WORKER_LOCK_PID:-}" != "$$" ]; then
+  exec 9>>"$pidfile.lock" || exit 70
+  perl -MFcntl=:flock -e '
+    open(my $lock, "+<&=9") or die "worker lock: $!";
+    flock($lock, LOCK_EX | LOCK_NB) or exit 1;
+  ' || { echo "fm-worker: cannot lock $TASK; another worker may be running" >&2; exit 70; }
+else
+  # Reconcile execs this PID with its locked fd 9. Both producers describe
+  # the same attempt: the worker must not introduce a fresh boundary after
+  # the launcher's recovery event, even when neither knows the PR yet.
+  dispatch_data='{"role":"worker","recovery":true}'
+fi
+# Consume the PID-bound handoff; a child/wrapper must not reuse it as a
+# generic recovery flag. Keep fd 9 open for this worker's entire lifetime.
+unset FM_WORKER_LOCK_PID
+printf '%s\n' "$$" > "$pidfile.next" && mv -f "$pidfile.next" "$pidfile" || {
+  echo "fm-worker: cannot publish liveness for $TASK" >&2; exit 70;
+}
+pid_owned=1
+
 # The worker records that it started, not the dispatcher. A task started
 # by hand was otherwise never in flight as far as the log was concerned,
 # and the dispatcher would start a second one on top of it.
-emit --type dispatched --en "picked up $TASK" --tw "接下 $TASK"
+emit --type dispatched ${PR:+--pr "$PR"} --data "$dispatch_data" --en "picked up $TASK" --tw "接下 $TASK"
 
 # --- a worktree of its own -----------------------------------------------
 # Never delete work. A run that was interrupted - the machine slept, the
@@ -230,7 +298,7 @@ prompt="$tree/.fm-prompt.md"
 # question is not uncommitted work worth saving.
 say="$tree/.fm-say.md"
 {
-  cat skills/worker/SKILL.md
+  cat "${FM_CODE_ROOT:-$REPO}/skills/worker/SKILL.md"
   printf '\n---\n\n# Your task\n\n```json\n%s\n```\n' "$spec"
   printf '\nYour worktree is the current directory. Your branch is `%s`.\n' "$branch"
   printf 'Stay inside these paths:\n'
@@ -251,10 +319,105 @@ say="$tree/.fm-say.md"
       failing="$($GH pr checks "$PR" --json state,link \
         --jq '.[]|select(.state!="SUCCESS" and .state!="PENDING")|.link' 2>/dev/null </dev/null | head -1)"
       if [ -n "$failing" ]; then
+        # A check's link is .../actions/runs/<run>/job/<job>. `${x##*/runs/}`
+        # leaves `<run>/job/<job>`, which is not a run id - `gh run view`
+        # refused it, its stderr went to /dev/null, and the worker was handed
+        # an empty block. An empty block is indistinguishable from a green
+        # run, so the round was spent asking why the check was red.
+        # The shape is CHECKED, not assumed, and BOTH shapes GitHub
+        # uses count: `/actions/runs/<id>/job/<id>` and the older
+        # check-run details_url `/runs/<job>`. Narrowing to the first
+        # would send the second down the "cannot read it" path, which
+        # is a worse answer than the one it replaced.
+        run_id=''; log_kind=run; log_title=Run
+        case "$failing" in
+          */runs/*)
+            # The id is delimited by NOT-A-DIGIT, not by a slash.
+            # `%%/*` assumed a slash or end of string, and the legacy
+            # details_url is served with a query on that segment -
+            # `/runs/6789123?check_suite_focus=true` - which trimmed to
+            # the whole thing, failed the digit guard, and told the
+            # worker no run id could be read out of an Actions run.
+            _rt="${failing##*/runs/}"
+            _rd="${_rt%%[!0-9]*}"          # the leading run of digits
+            _rr="${_rt#"$_rd"}"            # and whatever follows it
+            # empty digits is no id at all; `12ab` has to fail closed,
+            # so what follows has to be a delimiter rather than more id
+            case "$_rd" in '') ;; *)
+              case "$_rr" in ''|/*|'?'*|'#'*) run_id="$_rd" ;; esac ;;
+            esac ;;
+        esac
+        # Legacy IDs identify jobs, not workflow runs. Let gh resolve the
+        # owning run with --job; modern links already supply the run ID.
+        case "$failing" in
+          */actions/runs/*) ;;
+          */runs/*) log_kind=job; log_title=Job ;;
+        esac
         printf '\n---\n\n# The required check is red\n\n'
         printf 'It fails on the runner and may well pass on your machine.\n\n```\n'
-        $GH run view "${failing##*/runs/}" --log-failed 2>/dev/null </dev/null \
-          | tail -120 | sed 's/^[^\t]*\t[^\t]*\t//'
+        if [ -z "$run_id" ]; then
+          # what the SCRIPT could not do, not what the check is. It knows
+          # it found no run id in the link; it does not know which CI
+          # produced the link, and saying "this is not an Actions run"
+          # about an old-style /runs/<id> url was simply false.
+          printf 'No run id could be read out of %s,\n' "$failing"
+          printf 'so this script could not fetch its log.\n'
+          printf 'Ask for it on the pull request rather than guessing.\n'
+        else
+          # fetched once: two calls can disagree, and the second would be
+          # the one the worker is shown while the first decided whether to
+          # show anything.
+          #
+          # scratch_new mints, scratch_add registers - the pair is one
+          # register, not two, and a mint that failed leaves the empty
+          # string that the `:-/dev/null` below is for
+          log_err="$(scratch_new)"
+          [ -z "$log_err" ] || scratch_add "$log_err"
+          log_args=("$run_id")
+          [ "$log_kind" != job ] || log_args=(--job "$run_id")
+          raw_log="$($GH run view "${log_args[@]}" --log-failed 2>"${log_err:-/dev/null}" </dev/null)"
+          gh_rc=$?
+          # Two values, on purpose. `trimmed` is what the worker is shown;
+          # `rendered` is the same thing with blank lines dropped, and is
+          # only ever used to DECIDE whether there is anything to show.
+          # Printing the filtered one deleted every blank line inside a
+          # real traceback - a filter that decides something must not also
+          # be the thing printed.
+          trimmed=''; rendered=''
+          if [ -n "$raw_log" ]; then
+            trimmed="$(printf '%s\n' "$raw_log" | tail -120 | sed 's/^[^\t]*\t[^\t]*\t//')"
+            rendered="$(printf '%s\n' "$trimmed" | grep -v '^[[:space:]]*$' || true)"
+          fi
+          if [ -n "$rendered" ] && [ "$gh_rc" != 0 ]; then
+            # Some of it came back and gh still failed - a multi-job run
+            # where one job's log is gone. Printing the partial log
+            # alone presents it as the whole of the failure, which is
+            # the same lie as an empty block wearing a green run's face.
+            printf '%s\n' "$trimmed"
+            printf '\n-- this log is incomplete: gh exited %s while fetching %s %s\n' \
+              "$gh_rc" "$log_kind" "$run_id"
+            [ -z "$log_err" ] || sed 's/^/gh: /' "$log_err" | head -20
+          elif [ -n "$rendered" ]; then
+            printf '%s\n' "$trimmed"
+          elif [ "$gh_rc" != 0 ]; then
+            # said, not left blank: the worker cannot run gh, so this block
+            # is its only view of the runner, and silence reads as "nothing
+            # was wrong" rather than "I could not fetch it"
+            printf 'The log for %s %s could not be fetched.\n' "$log_kind" "$run_id"
+            # bounded, like the log above it: gh's stderr is not, and
+            # everything that reaches this fence has to be
+            [ -z "$log_err" ] || sed 's/^/gh: /' "$log_err" | head -20
+            printf 'Ask for it on the pull request rather than guessing.\n'
+          else
+            # gh answered, and had nothing: a cancelled run, or a job that
+            # died before any step logged. Saying "could not be fetched"
+            # here would be a false statement about gh in the one block
+            # the worker has no way to check.
+            printf '%s %s reported no failing step log.\n' "$log_title" "$run_id"
+            printf 'It may have been cancelled, or failed before any step ran.\n'
+            printf 'Ask on the pull request rather than guessing.\n'
+          fi
+        fi
         printf '```\n'
       fi
     fi
@@ -270,11 +433,31 @@ worker_did_work() {
   [ -n "$(git -C "$tree" status --porcelain -- . \
       ":(exclude).fm-prompt.md" ":(exclude).fm-say.md")" ] || [ -s "$tree/.fm-say.md" ]
 }
-log="$REPO/state/worktrees/$TASK.log"; : > "$log"
-fm_run_chain "$REPO/bin/adapters" "$(fm_vendor_chain worker "$VENDOR")" \
-  "$prompt" "$tree" "$log" worker_did_work; rc=$?
+log="$FM_RUN_DIR/worker.log"; : > "$log"
+# Close fd 9 and the launch-time task lock in a subshell so adapters cannot
+# hold either. The parent keeps its copies for exclusion; if the published
+# PID is SIGKILL'd, a surviving adapter must not keep the task lock or
+# recovery relaunch blocks on "already has a live worker".
+# Managed-session runs keep evidence under FM_RUN_DIR and resolve adapters
+# through FM_CODE_ROOT when a frozen snapshot is active.
+chain_result="$(scratch_new)" || exit 70
+scratch_add "$chain_result"
+(
+  exec 9>&-
+  if [[ "${FM_WORKER_TASK_LOCK_FD:-}" =~ ^[0-9]+$ ]]; then
+    eval "exec ${FM_WORKER_TASK_LOCK_FD}>&-"
+  fi
+  fm_run_chain "${FM_CODE_ROOT:-$REPO}/bin/adapters" "$(fm_vendor_chain worker "$VENDOR")" \
+    "$prompt" "$tree" "$log" worker_did_work
+  chain_rc=$?
+  declare -p FM_VENDOR_USED FM_VENDOR_SKIPPED FM_VENDOR_MISREAD FM_VENDOR_UNKNOWN > "$chain_result"
+  exit "$chain_rc"
+); rc=$?
+# shellcheck disable=SC1090
+. "$chain_result"
 [ -z "$FM_VENDOR_UNKNOWN" ] || {
   echo "fm-worker: config.yaml names a vendor with no adapter: $FM_VENDOR_UNKNOWN" >&2; exit 65; }
+[ "$rc" -lt 64 ] || { echo "fm-worker: adapter transport/configuration failed; artifacts at $FM_RUN_DIR" >&2; exit 70; }
 [ -z "$FM_VENDOR_MISREAD" ] || {
   echo "fm-worker: $FM_VENDOR_MISREAD was read as unavailable, but it changed files - keeping them" >&2
   emit --type vendor_unavailable --en "read as unavailable but work was done; keeping it" \

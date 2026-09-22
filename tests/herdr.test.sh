@@ -1,0 +1,554 @@
+#!/usr/bin/env bash
+# No real Herdr control or model calls: lifecycle observations are isolated.
+set -euo pipefail
+exec < /dev/null
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+python3 - "$ROOT" <<'PY'
+import concurrent.futures
+import importlib.util
+import json
+import os
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+import sys
+import shutil
+import subprocess
+import signal
+import time
+
+sys.dont_write_bytecode = True  # Import production code without dirtying the checkout.
+root = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location('managed', root / 'bin/fm-herdr.py')
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+
+class Lifecycle(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.run = m.allocate(self.root, 'worker', 'T-035', '')
+        self.owner = dict(owned=True, actor=self.run.name, task='T-035',
+                          run=str(self.run), pane_id='owned', caller='caller',
+                          terminal_id='terminal', shell_pid=91, tab_id='tab-owned',
+                          caller_tab='tab-caller', workspace_id='workspace')
+        m.save(self.run / 'owner.json', self.owner)
+        self.pane = dict(pane_id='owned', terminal_id='terminal',
+                         label=self.run.name, agent_status='idle', tab_id='tab-owned', workspace_id='workspace',
+                         tokens=dict(fm_actor=self.run.name, fm_task='T-035', fm_run=str(self.run)))
+        self.proc = dict(pane_id='owned', shell_pid=91, foreground_processes=[dict(pid=91)])
+        self.tab = dict(tab_id='tab-owned', workspace_id='workspace', label=self.run.name, pane_count=1)
+        self.layout = dict(tab_id='tab-owned', workspace_id='workspace', panes=[dict(pane_id='owned')], splits=[])
+        self.calls = []
+        (self.run / 'final.txt').write_text('Evidence.\nWORKER_COMPLETE:T-035\n')
+        (self.run / 'cli.log').write_text('transcript')
+        m.save(self.run / 'result.json', dict(actor=self.run.name, task='T-035', exit_code=0, status='completed'))
+    def control(self, *args):
+        self.calls.append(args)
+        if args == ('api', 'snapshot'): return dict(snapshot=dict(tabs=[self.tab], panes=[self.pane], layouts=[self.layout]))
+        if args[:2] == ('pane', 'get'): return dict(pane=self.pane)
+        if args[:2] == ('pane', 'process-info'): return dict(process_info=self.proc)
+        if args[:2] == ('pane', 'close'):
+            self.assertTrue((self.run / 'result.json').is_file())
+            self.assertTrue((self.run / 'final.txt').is_file())
+            self.assertTrue((self.run / 'cli.log').is_file())
+            return {}
+        raise AssertionError(args)
+    def close(self):
+        return m.close_owned(self.run, self.owner, self.control)
+    def test_completed_closes_only_owned_after_evidence(self):
+        self.assertEqual('closed', self.close())
+        self.assertEqual(('pane', 'close', 'owned'), self.calls[-1])
+    def test_uncertain_observations_never_target_close(self):
+        variants = [('pane', 'terminal_id', 'reused'), ('pane', 'pane_id', 'caller'),
+                    ('pane', 'agent_status', 'blocked'), ('pane', 'label', 'other'),
+                    ('pane', 'tab_id', 'tab-caller'), ('tab', 'pane_count', 2),
+                    ('tab', 'label', 'reused'), ('tab', 'workspace_id', 'elsewhere'),
+                    ('layout', 'panes', [dict(pane_id='owned'), dict(pane_id='user')]),
+                    ('layout', 'splits', [dict(id='split')]),
+                    ('proc', 'shell_pid', 92), ('proc', 'foreground_processes', []),
+                    ('proc', 'foreground_processes', [dict(pid=99)])]
+        for obj, key, value in variants:
+            with self.subTest(obj=obj, key=key):
+                target = getattr(self, obj); old = target.get(key); target[key] = value
+                self.calls.clear(); self.assertNotEqual('closed', self.close())
+                self.assertFalse(any(c[:2] == ('pane', 'close') for c in self.calls))
+                target[key] = old
+        for key in ['fm_task', 'fm_run', 'fm_actor']:
+            old = self.pane['tokens'][key]; self.pane['tokens'][key] = 'other'
+            self.assertNotEqual('closed', self.close()); self.pane['tokens'][key] = old
+    def test_rc_zero_is_not_completion(self):
+        for status in ['blocked', 'failed', 'incomplete', 'unknown', '']:
+            m.save(self.run / 'result.json', dict(actor=self.run.name, task='T-035', exit_code=0, status=status))
+            self.assertNotEqual('closed', self.close())
+        self.assertEqual('unknown', m.completion('worker', 'T-035', 'quoted WORKER_COMPLETE:T-035'))
+        self.assertEqual('blocked', m.completion('worker', 'T-035', 'WORKER_BLOCKED:T-035'))
+        self.assertEqual('unknown', m.completion('worker', 'T-035', 'WORKER_BLOCKED:T-035\nWORKER_COMPLETE:T-035'))
+        self.assertEqual('completed', m.completion('reviewer', 'T-035', 'REJECT:T-035\nREVIEWER_COMPLETE:T-035'))
+    def test_changed_owner_and_caller_retained(self):
+        m.save(self.run / 'owner.json', {**self.owner, 'task':'other'})
+        self.assertNotEqual('closed', self.close())
+        self.owner['caller'] = 'owned'; m.save(self.run / 'owner.json', self.owner)
+        self.assertNotEqual('closed', self.close())
+        self.owner['caller'] = 'caller'; self.owner['owned'] = False
+        m.save(self.run / 'owner.json', self.owner)
+        self.assertNotEqual('closed', self.close())
+    def test_missing_evidence_retained(self):
+        (self.run / 'final.txt').unlink()
+        self.assertNotEqual('closed', self.close())
+    def test_identity_concurrency_retry_alias_and_limits(self):
+        def new(i): return m.allocate(self.root, 'worker' if i % 2 else 'reviewer', 'T-035', 'Mira ' * 30)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            runs = list(pool.map(new, range(24)))
+        self.assertEqual(24, len({p.name for p in runs}))
+        for p in runs:
+            self.assertRegex(p.name, r'^(worker|reviewer)-[a-z0-9-]+-t035-r[0-9]+$')
+            self.assertLessEqual(len(p.name), 32)
+            self.assertEqual(p.name, json.loads((p / 'identity.json').read_text())['actor'])
+    def test_snapshot_survives_source_change(self):
+        (self.root / 'bin').mkdir(); (self.root / 'skills').mkdir()
+        src = self.root / 'bin/example.sh'; src.write_text('original')
+        snap = m.snapshot(self.root)
+        src.write_text('changed')
+        self.assertEqual('original', (snap / 'bin/example.sh').read_text())
+        self.assertIn('bin/example.sh', json.loads((snap / 'manifest.json').read_text()))
+
+class Entrypoints(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.repo = Path(self.tmp.name)
+        shutil.copytree(root / 'bin', self.repo / 'bin')
+        shutil.copytree(root / 'skills', self.repo / 'skills')
+        (self.repo / 'design').mkdir()
+        (self.repo / 'design/tasks.json').write_text(json.dumps({'tasks':[dict(id='T-035',title='test',scope=['src/**'],depends_on=[],acceptance=['works'])]}))
+        (self.repo / 'design/design.md').write_text('## 6. Gates\nEvidence\n## 8. Board\n')
+        (self.repo / 'config.yaml').write_text('vendor: codex\nconcurrency: 2\n')
+        self.fake = self.repo / 'fakebin'; self.fake.mkdir()
+        self.env = {k:v for k,v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
+        self.env.update(PATH=str(self.fake)+os.pathsep+os.environ['PATH'], HERDR_ENV='1', HERDR_PANE_ID='caller',
+                        FM_ROOT=str(self.repo), FM_TEST_ROOT=str(self.repo), FM_HERDR_TIMEOUT='5')
+        self.executable('herdr', r'''
+import json, os, pathlib, subprocess, sys, uuid
+r=pathlib.Path(os.environ['FM_TEST_ROOT']); a=sys.argv[1:]
+with (r/'controls').open('a') as f: f.write(json.dumps(a)+'\n')
+def save(p,v):
+ t=p.with_suffix('.tmp'); t.write_text(json.dumps(v)); t.replace(p)
+def pane(p):
+ if p=='caller': return dict(pane_id=p, terminal_id='caller-terminal',tab_id='caller-tab',workspace_id='workspace')
+ return json.loads((r/p).read_text())
+result={}
+if a[:2]==['tab','create']:
+ assert '--no-focus' in a and '--focus' not in a
+ assert a[a.index('--workspace')+1]=='workspace'
+ p='pane-'+uuid.uuid4().hex
+ t='tab-'+uuid.uuid4().hex
+ v=dict(pane_id=p,terminal_id=p+'-terminal',tab_id=t,workspace_id='workspace',label='',tokens={},agent_status='idle')
+ tab=dict(tab_id=t,workspace_id='workspace',label=a[a.index('--label')+1],pane_count=1)
+ save(r/p,v); save(r/t,tab); result={'root_pane':v,'tab':tab}
+ if os.environ.get('FM_TEST_FOCUS')=='changed': (r/'focus-changed').touch()
+elif a==['api','snapshot']:
+ panes=[pane(p.name) for p in r.glob('pane-*')]
+ tabs=[json.loads(p.read_text()) for p in r.glob('tab-*')]
+ layouts=[dict(tab_id=t['tab_id'],workspace_id='workspace',panes=[dict(pane_id=p['pane_id']) for p in panes if p['tab_id']==t['tab_id']],splits=[]) for t in tabs]
+ focus='other' if (r/'focus-changed').exists() else 'caller'
+ result={'snapshot':dict(panes=panes,tabs=tabs,layouts=layouts,focused_pane_id=focus,focused_tab_id='caller-tab',focused_workspace_id='workspace')}
+ if (r/'malformed').exists(): result['snapshot']['layouts']=None
+elif a[:2]==['pane','get']: result={'pane':pane(a[2])}
+elif a[:2]==['pane','list']: result={'panes':[]}
+elif a[:2]==['pane','process-info']:
+ shell=42
+ if os.environ.get('FM_TEST_CHANGE')=='late-shell' and list(pathlib.Path(os.environ['FM_RUN_DIR']).glob('codex-*')):
+  count=r/('count-'+a[3]); n=int(count.read_text())+1 if count.exists() else 1; count.write_text(str(n))
+  if n>=2: shell=43
+ result={'process_info':dict(pane_id=a[3],shell_pid=shell,foreground_processes=[dict(pid=99 if pane(a[3]).get('busy') else shell)])}
+elif a[:2]==['pane','rename']:
+ v=pane(a[2]); v['label']=a[3]; save(r/a[2],v)
+elif a[:2]==['pane','report-metadata']:
+ v=pane(a[2]); v['tokens']={a[i+1].split('=',1)[0]:a[i+1].split('=',1)[1] for i in range(len(a)-1) if a[i]=='--token'}; save(r/a[2],v)
+elif a[:2]==['pane','report-agent']:
+ v=pane(a[2]); v['agent_status']=a[a.index('--state')+1]; save(r/a[2],v)
+elif a[:2]==['agent','rename']:
+ assert a[3]==pane(a[2])['label']
+elif a[:2]==['pane','run']:
+ assert a[2]!='caller'
+ if os.environ.get('FM_TEST_ASYNC')=='1':
+  import shlex
+  child=subprocess.Popen(shlex.split(a[3]),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
+  (r/'mock-runner.pid').write_text(str(child.pid))
+ else:
+  subprocess.run(a[3],shell=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=False)
+ v=pane(a[2]); change=os.environ.get('FM_TEST_CHANGE')
+ if change=='moved': v['tab_id']='caller-tab'
+ if change=='reused': v['terminal_id']='new-terminal'
+ if change=='identity': v['tokens']['fm_actor']='other'
+ if change=='busy': v['busy']=True
+ if change=='unknown': v['tab_id']=None
+ if change=='malformed': (r/'malformed').touch()
+ if change=='shared':
+  tab=json.loads((r/v['tab_id']).read_text()); tab['pane_count']=2; save(r/v['tab_id'],tab)
+ if change=='added':
+  save(r/('pane-user-'+a[2]),dict(pane_id='user',tab_id=v['tab_id'],workspace_id='workspace'))
+ save(r/a[2],v)
+elif a[:2]==['pane','close']:
+ v=pane(a[2]); run=pathlib.Path(v['tokens']['fm_run'])
+ assert json.loads((run/'result.json').read_text())['status']=='completed'
+ assert (run/'final.txt').stat().st_size and (run/'cli.log').stat().st_size
+ (r/'closed').write_text(a[2])
+else: raise SystemExit('unsupported fake Herdr command '+str(a))
+print(json.dumps({'result':result}))
+''')
+        self.executable('codex', r'''
+import os,pathlib,sys,time
+r=pathlib.Path(os.environ['FM_TEST_ROOT']); prompt=sys.stdin.read()
+actor=os.environ['FM_ACTOR']; role=os.environ['FM_ROLE']; task=os.environ['FM_TASK']
+(r/(actor+'.prompt')).write_text(prompt)
+assert actor in prompt and ('explicitly dispatched '+role) in prompt
+if os.environ.get('FM_TEST_ASYNC')=='1':
+ pathlib.Path('surviving-work').write_text(actor)
+ pathlib.Path('.fm-say.md').write_text('retained evidence')
+ (r/'model.pid').write_text(str(os.getpid()))
+ while not (r/'release-model').exists(): time.sleep(.02)
+time.sleep(float(os.environ.get('FM_TEST_DELAY','0')))
+marker=role.upper()+'_'+os.environ.get('FM_TEST_STATUS','COMPLETE')+':'+task
+verdict=os.environ.get('FM_TEST_VERDICT','APPROVE')
+final=(verdict+':'+task+'\n' if role=='reviewer' else 'Implemented\n')+marker+'\n'
+if os.environ.get('FM_TEST_EMPTY')!='1':
+ pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(final)
+ print(final)
+if role=='worker': pathlib.Path('work.txt').write_text('done')
+raise SystemExit(int(os.environ.get('FM_TEST_EXIT','0')))
+''')
+        self.executable('git', r'''
+import json,os,pathlib,sys
+r=pathlib.Path(os.environ['FM_TEST_ROOT']); a=sys.argv[1:]
+if a[0]=='show': print((r/'design/tasks.json').read_text())
+elif a[0] in ('show-ref','ls-remote'): sys.exit(1)
+elif a[:2]==['worktree','add']:
+ pathlib.Path(a[-2]).mkdir(parents=True,exist_ok=True)
+elif 'status' in a:
+ p=pathlib.Path(a[a.index('-C')+1]); print('?? work.txt' if (p/'work.txt').exists() else '')
+elif a[0]=='diff': print('diff --git a/test b/test\n+change')
+elif a[0]=='branch': print('t-035-test')
+''')
+        self.executable('gh', "import sys\nprint('https://example.invalid/pull/35' if 'create' in sys.argv else '[]')\n")
+    def executable(self, name, content):
+        p=self.fake/name; p.write_text('#!'+sys.executable+'\n'+content); p.chmod(0o755)
+    def invoke(self, script, args=(), **env):
+        return subprocess.run(['bash',str(self.repo/'bin'/script),*args,'--repo',str(self.repo)],
+                              env=dict(self.env,**env),capture_output=True,text=True,timeout=20)
+    def results(self): return list((self.repo/'state/runs').glob('*/last-result.json'))
+    def wait_for(self, predicate):
+        for _ in range(250):
+            value=predicate()
+            if value: return value
+            time.sleep(.02)
+        self.fail('asynchronous process did not reach expected state')
+    def no_live_runs(self):
+        # In-process inspection must never inherit a developer's real Herdr.
+        with patch.dict(os.environ, {'FM_TRANSPORT':'direct'}):
+            return not any(r['live'] for r in m.inspect(self.repo)['runs'])
+    def test_retained_worker_survives_timeout_interrupt_and_launcher_death(self):
+        for ending in ('timeout', 'term', 'kill', 'runner-kill', 'direct-runner-kill'):
+            with self.subTest(ending=ending):
+                for name in ('release-model','model.pid','mock-runner.pid'):
+                    (self.repo/name).unlink(missing_ok=True)
+                env=dict(self.env,FM_TEST_ASYNC='1',FM_HERDR_TIMEOUT='.3' if ending=='timeout' else '30')
+                if ending=='direct-runner-kill': env['FM_TRANSPORT']='direct'
+                with tempfile.TemporaryFile(mode='w+') as output:
+                    launcher=subprocess.Popen(['bash',str(self.repo/'bin/fm-worker.sh'),'--task','T-035'],
+                        env=env,stdout=output,stderr=output,start_new_session=True)
+                    runner=None; model=None
+                    try:
+                        self.wait_for(lambda:(self.repo/'model.pid').exists())
+                        model=int((self.repo/'model.pid').read_text())
+                        tree=self.repo/'state/worktrees/T-035'
+                        actor=(tree/'surviving-work').read_text()
+                        execution=next((self.repo/'state/runs'/actor).glob('*/execution.json'))
+                        runner=json.loads(execution.read_text())['runner_pid']
+                        if ending=='direct-runner-kill':
+                            os.kill(launcher.pid,signal.SIGKILL)
+                        elif ending!='timeout':
+                            os.killpg(launcher.pid,signal.SIGTERM if ending=='term' else signal.SIGKILL)
+                        launcher.wait(timeout=10)
+                        if ending in ('runner-kill','direct-runner-kill'): os.kill(runner,signal.SIGKILL)
+                        status=self.invoke('fm-session.sh',['status'])
+                        self.assertEqual(0,status.returncode,status.stderr)
+                        run=next(r for r in json.loads(status.stdout)['runs'] if r['actor']==actor)
+                        self.assertTrue(run['live'],run)
+                        retry=self.invoke('fm-worker.sh',['--task','T-035'])
+                        self.assertEqual(70,retry.returncode,retry.stderr)
+                        self.assertEqual(actor,(tree/'surviving-work').read_text())
+                        self.assertEqual('retained evidence',(tree/'.fm-say.md').read_text())
+                    finally:
+                        (self.repo/'release-model').touch()
+                        if launcher.poll() is None:
+                            os.killpg(launcher.pid,signal.SIGKILL); launcher.wait(timeout=5)
+                        if model:
+                            self.wait_for(lambda:not m.process_matches(dict(pid=model,token=str(self.fake/'codex'))))
+                        if runner:
+                            self.wait_for(lambda:not m.process_matches(dict(pid=runner,token=str(self.repo/'state/snapshots'))))
+                            # A killed runner can leave the adapter alive; wait for its
+                            # inherited lifetime lock to drain before the next retry.
+                            self.wait_for(self.no_live_runs)
+                    retry=self.invoke('fm-worker.sh',['--task','T-035'])
+                    self.assertEqual(0,retry.returncode,retry.stderr)
+                    self.assertNotEqual(actor,json.loads(max(self.results(),key=lambda p:p.stat().st_mtime_ns).read_text())['actor'])
+    def test_relative_paths_through_all_frozen_entrypoints(self):
+        subprocess.run([str(self.repo/'bin/fm-emit.sh'),'--actor','captain','--type','greenlit'],
+                       env=self.env,check=True,capture_output=True)
+        entries=[('fm-session.sh',['status']),('fm-worker.sh',['--task','T-035']),
+                 ('fm-review.sh',['--task','T-035','--branch','work']),
+                 ('fm-dispatch.sh',['--dry-run']),('fm-run.sh',['once'])]
+        (self.repo/'bin/fm-gate.sh').write_text('#!/usr/bin/env bash\nexit 1\n')
+        for script,args in entries:
+            for source in ('repo-argument','environment','relative-script-argument','relative-script-environment'):
+                with self.subTest(script=script,source=source):
+                    env=dict(self.env,FM_TRANSPORT='direct',FM_ROOT=self.repo.name)
+                    entry=self.repo/'bin'/script
+                    if source.startswith('relative-script'): entry=entry.relative_to(self.repo.parent)
+                    argv=['bash',str(entry),*args]
+                    if source.endswith('argument'): argv+=['--repo',self.repo.name]
+                    result=subprocess.run(argv,cwd=self.repo.parent,env=env,capture_output=True,text=True,timeout=20)
+                    self.assertEqual(0,result.returncode,result.stderr)
+                    self.assertNotIn('No such file or directory',result.stderr)
+                    self.assertFalse((self.repo/self.repo.name).exists())
+    def test_builtin_failure_then_custom_fallback_uses_current_output_and_receipt(self):
+        self.executable('claude', "print('Authentication required.')\nraise SystemExit(2)\n")
+        custom=self.repo/'bin/adapters/custom.sh'
+        custom.write_text('#!/usr/bin/env bash\nprintf "REJECT:T-035 current custom verdict\\n" >> "$4"\n')
+        custom.chmod(0o755)
+        for vendor in ('custom','mock'):
+            for transport in ('direct','herdr'):
+                with self.subTest(vendor=vendor,transport=transport):
+                    (self.repo/'config.yaml').write_text('vendor: claude\nfallback:\n  - '+vendor+'\n')
+                    answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],
+                                       FM_TRANSPORT=transport,FM_MOCK_BODY='REJECT:T-035 current mock verdict')
+                    self.assertEqual(0,answer.returncode,answer.stderr)
+                    self.assertIn('REJECT:T-035 current '+vendor+' verdict',answer.stdout)
+                    path=max((self.repo/'state/runs').glob('*/orchestration-result.json'),key=lambda p:p.stat().st_mtime_ns)
+                    receipt=json.loads(path.read_text())
+                    self.assertEqual(vendor,receipt['adapter_result']['vendor'])
+                    self.assertEqual('unknown',receipt['adapter_result']['status'])
+                    self.assertNotIn('attempt',receipt['adapter_result'])
+                    old=json.loads((path.parent/'last-result.json').read_text())
+                    self.assertNotEqual(old['chain_attempt'],receipt['adapter_result']['chain_attempt'])
+    def test_pending_launch_cannot_recreate_tree_or_claim_termination(self):
+        run=m.allocate(self.repo,'worker','T-035','pending')
+        attempt=run/'pending-attempt'; attempt.mkdir()
+        m.reserve_execution(attempt)
+        tree=self.repo/'state/worktrees/T-035'; tree.mkdir(parents=True)
+        (tree/'sentinel').write_text('preserved')
+        retry=self.invoke('fm-worker.sh',['--task','T-035'])
+        self.assertEqual(70,retry.returncode,retry.stderr)
+        self.assertEqual('preserved',(tree/'sentinel').read_text())
+        status=self.invoke('fm-session.sh',['status'])
+        record=next(r for r in json.loads(status.stdout)['runs'] if r['actor']==run.name)
+        self.assertTrue(record['uncertain'])
+        self.assertFalse(record['live'])
+    def test_legacy_unfinished_attempt_is_uncertain_and_excluded(self):
+        run=m.allocate(self.repo,'worker','T-035','legacy')
+        attempt=run/'old-attempt'; attempt.mkdir()
+        m.save(attempt/'invocation.json',dict(role='worker',task='T-035'))
+        retry=self.invoke('fm-worker.sh',['--task','T-035'])
+        self.assertEqual(70,retry.returncode,retry.stderr)
+        status=self.invoke('fm-session.sh',['status'])
+        record=next(r for r in json.loads(status.stdout)['runs'] if r['actor']==run.name)
+        self.assertTrue(record['uncertain'])
+        self.assertFalse(record['live'])
+    def test_duplicate_task_options_lock_the_effective_task(self):
+        run=m.allocate(self.repo,'worker','T-035','pending')
+        attempt=run/'pending-attempt'; attempt.mkdir(); m.reserve_execution(attempt)
+        reply=self.invoke('fm-worker.sh',['--task','T-unused','--task','T-035'])
+        self.assertEqual(70,reply.returncode,reply.stderr)
+        self.assertIn('already has a live worker',reply.stderr)
+    def test_real_reviewer_entrypoint_identity_and_final_provenance(self):
+        answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work','--name','Noah'],
+                           FM_TEST_VERDICT='REJECT')
+        self.assertEqual(0,answer.returncode,answer.stderr)
+        result=json.loads(self.results()[0].read_text()); actor=result['actor']
+        self.assertRegex(actor,r'^reviewer-noah-t035-r[0-9]+$')
+        events=[json.loads(s) for s in (self.repo/'state/events.jsonl').read_text().splitlines()]
+        self.assertEqual({actor},{e['actor'] for e in events})
+        self.assertEqual(1,len([e for e in events if e['type']=='agent_finished']))
+        rejected=[e for e in events if e['type']=='review_failed']
+        self.assertEqual(1,len(rejected))
+        self.assertEqual('rejected',rejected[0]['data']['review_outcome'])
+        self.assertEqual('reviewer',rejected[0]['data']['role'])
+        self.assertEqual(actor,rejected[0]['data']['crew_name'])
+        self.assertEqual({'en':'Work description unavailable','zh-TW':'尚無工作說明'},
+                         rejected[0]['data']['activity'])
+        self.assertIn(actor,(self.repo/(actor+'.prompt')).read_text())
+        calls=[json.loads(s) for s in (self.repo/'controls').read_text().splitlines()]
+        self.assertIn(actor,next(c for c in calls if c[:2]==['agent','rename']))
+        self.assertTrue((self.repo/'closed').exists())
+    def test_dedicated_tab_mapping_and_focus_for_each_role(self):
+        for role in ('worker','review'):
+            args=['--task','T-035'] + (['--branch','work'] if role=='review' else [])
+            answer=self.invoke('fm-'+role+'.sh',args)
+            self.assertEqual(0,answer.returncode,answer.stderr)
+        calls=[json.loads(s) for s in (self.repo/'controls').read_text().splitlines()]
+        creates=[c for c in calls if c[:2]==['tab','create']]
+        self.assertEqual(2,len(creates))
+        self.assertFalse(any(c[:2] in (['pane','split'],['tab','close'],['tab','focus'],['pane','focus']) for c in calls))
+        for path in self.results():
+            result=json.loads(path.read_text()); attempt=Path(result['attempt'])
+            owner=json.loads((attempt/'owner.json').read_text())
+            tab=json.loads((self.repo/owner['tab_id']).read_text())
+            pane=json.loads((self.repo/owner['pane_id']).read_text())
+            self.assertEqual(result['actor'],tab['label'])
+            self.assertEqual(owner['tab_id'],pane['tab_id'])
+            self.assertEqual(result['actor'],pane['label'])
+            environment=json.loads((attempt/'environment.json').read_text())
+            self.assertEqual(owner['pane_id'],environment['HERDR_PANE_ID'])
+            self.assertEqual(owner['tab_id'],environment['HERDR_TAB_ID'])
+            self.assertEqual(result['actor'],environment['FM_ACTOR'])
+            self.assertEqual('caller-tab',owner['caller_tab'])
+            self.assertEqual('caller',owner['focus_before']['focused_pane_id'])
+            self.assertEqual(owner['focus_before'],owner['focus_after'])
+            self.assertEqual(1,tab['pane_count'])
+            create=next(c for c in creates if result['actor'] in c)
+            self.assertIn('--no-focus',create)
+    def test_changed_focus_refuses_launch(self):
+        answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],FM_TEST_FOCUS='changed')
+        self.assertNotEqual(0,answer.returncode)
+        calls=[json.loads(s) for s in (self.repo/'controls').read_text().splitlines()]
+        self.assertFalse(any(c[:2] in (['pane','run'],['pane','close'],['tab','close']) for c in calls))
+    def test_changed_resources_retained_through_real_entrypoint(self):
+        for change in ('added','moved','shared','reused','busy','identity','unknown','malformed'):
+            with self.subTest(change=change):
+                answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],FM_TEST_CHANGE=change)
+                self.assertEqual(0,answer.returncode,answer.stderr)
+                self.assertFalse((self.repo/'closed').exists())
+                result=json.loads(self.results()[-1].read_text())
+                self.assertEqual('completed',result['status'])
+        calls=[json.loads(s) for s in (self.repo/'controls').read_text().splitlines()]
+        self.assertFalse(any(c[:2] in (['pane','close'],['tab','close']) for c in calls))
+    def test_real_worker_and_default_nonmanaged_optout(self):
+        for extra in ({'HERDR_ENV':'0'}, {'FM_TRANSPORT':'direct'}):
+            answer=self.invoke('fm-worker.sh',['--task','T-035'],**extra)
+            self.assertEqual(0,answer.returncode,answer.stderr)
+        self.assertFalse((self.repo/'controls').exists())
+        self.assertEqual(2,len(self.results()))
+        self.assertEqual(2,len({json.loads(p.read_text())['actor'] for p in self.results()}))
+    def test_blocked_empty_failed_and_autoclose_optout(self):
+        for extra in ({'FM_TEST_STATUS':'BLOCKED'}, {'FM_TEST_STATUS':'INCOMPLETE'},
+                      {'FM_TEST_EMPTY':'1'}, {'FM_TEST_EXIT':'1'}, {'FM_AUTOCLOSE':'0'}):
+            answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],**extra)
+            self.assertFalse((self.repo/'closed').exists(),answer.stderr)
+    def test_concurrent_same_task_reviewers_and_worker_retire_exact_actor(self):
+        def launch(role):
+            args=['--task','T-035','--name','same']
+            if role=='review': args += ['--branch','work']
+            return self.invoke('fm-'+role+'.sh',args,FM_TEST_DELAY='.2')
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+            answers=list(pool.map(launch,['review','review','worker']))
+        for answer in answers: self.assertEqual(0,answer.returncode,answer.stderr)
+        events=[json.loads(s) for s in (self.repo/'state/events.jsonl').read_text().splitlines()]
+        started={e['actor'] for e in events if e['type'] in ('dispatched','review_opened')}
+        ended=[e['actor'] for e in events if e['type']=='agent_finished']
+        self.assertEqual(3,len(started)); self.assertEqual(started,set(ended)); self.assertEqual(3,len(ended))
+    def test_transport_failure_stops_worker_before_success(self):
+        self.executable('herdr','raise SystemExit(7)')
+        answer=self.invoke('fm-worker.sh',['--task','T-035'])
+        self.assertEqual(70,answer.returncode,answer.stderr)
+        self.assertNotIn('pr_opened',(self.repo/'state/events.jsonl').read_text())
+    def test_new_role_resets_inherited_adapter_guard(self):
+        answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],
+                           FM_CONTEXT_READY='1',FM_ATTEMPT_DIR='/unused-parent',FM_FINAL_PATH='/unused-parent/final')
+        self.assertEqual(0,answer.returncode,answer.stderr)
+        self.assertTrue((self.repo/'controls').exists())
+        self.assertEqual(1,len(self.results()))
+    def test_unknown_adapter_remains_configuration_error(self):
+        answer=self.invoke('fm-worker.sh',['--task','T-035','--vendor','unknown'])
+        self.assertEqual(65,answer.returncode,answer.stderr)
+        self.assertFalse((self.repo/'controls').exists())
+    def test_fallback_keeps_one_actor_and_owned_pane(self):
+        self.executable('claude', "print('Authentication required.')\nraise SystemExit(2)\n")
+        (self.repo/'config.yaml').write_text('vendor: claude\nfallback:\n  - codex\n')
+        answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'])
+        self.assertEqual(0,answer.returncode,answer.stderr)
+        calls=[json.loads(s) for s in (self.repo/'controls').read_text().splitlines()]
+        self.assertEqual(1,len([c for c in calls if c[:2]==['tab','create']]))
+        names={c[3] for c in calls if c[:2]==['agent','rename']}
+        self.assertEqual(1,len(names))
+        result=json.loads(self.results()[0].read_text())
+        self.assertEqual(names,{result['actor']})
+        self.assertEqual(2,len(list(self.results()[0].parent.glob('*/result.json'))))
+    def test_fallback_refuses_changed_owned_resources(self):
+        self.executable('claude', "print('Authentication required.')\nraise SystemExit(2)\n")
+        (self.repo/'config.yaml').write_text('vendor: claude\nfallback:\n  - codex\n')
+        for change in ('added','moved','shared','reused','busy','identity','unknown','late-shell'):
+            with self.subTest(change=change):
+                answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],FM_TEST_CHANGE=change)
+                self.assertNotEqual(0,answer.returncode,answer.stderr)
+        calls=[json.loads(s) for s in (self.repo/'controls').read_text().splitlines()]
+        self.assertEqual(8,len([c for c in calls if c[:2]==['tab','create']]))
+        self.assertEqual(8,len([c for c in calls if c[:2]==['pane','run']]))
+        self.assertFalse(list(self.repo.glob('reviewer-*.prompt')), 'fallback model must not start')
+        self.assertFalse(any(c[:2] in (['pane','close'],['tab','close']) for c in calls))
+    def test_all_supported_cli_formats_inject_roles_and_keep_final(self):
+        for vendor in ('claude','cursor-agent','gemini'):
+            self.executable(vendor, r'''
+import json,os,sys
+prompt=sys.stdin.read(); assert os.environ['FM_ACTOR'] in prompt
+assert 'explicitly dispatched reviewer' in prompt
+assert '--output-format' in sys.argv and 'json' in sys.argv
+final='REJECT:T-035\nREVIEWER_COMPLETE:T-035'
+print(json.dumps({'type':'result','result':final,'response':final}))
+''')
+            answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work','--vendor',vendor])
+            self.assertEqual(0,answer.returncode,answer.stderr)
+            self.assertIn('REJECT:T-035',answer.stdout)
+        self.assertEqual(3,len(self.results()))
+        self.assertEqual({'completed'},{json.loads(p.read_text())['status'] for p in self.results()})
+    def test_real_dispatch_and_run_paths_use_managed_adapters(self):
+        # Production dispatch launches the production worker; only git/gh/model
+        # boundaries are fake. No captain decision or external account is used.
+        subprocess.run([str(self.repo/'bin/fm-emit.sh'),'--actor','captain','--type','greenlit'],
+                       env=self.env,check=True,capture_output=True)
+        answer=self.invoke('fm-dispatch.sh')
+        self.assertEqual(0,answer.returncode,answer.stderr)
+        import time
+        for _ in range(120):
+            paths=list((self.repo/'state/runs').glob('*/orchestration-result.json'))
+            if paths: break
+            time.sleep(.05)
+        self.assertTrue(paths)
+        self.assertEqual(0,json.loads(paths[0].read_text())['process_exit'])
+        # Gate 7 requests a reviewer; gate execution itself is outside this test.
+        (self.repo/'bin/fm-gate.sh').write_text('#!/usr/bin/env bash\nexit 7\n')
+        answer=self.invoke('fm-run.sh',['once'])
+        self.assertEqual(0,answer.returncode,answer.stderr)
+        self.assertEqual({'worker','reviewer'},{json.loads(p.read_text())['role'] for p in self.results()})
+    def test_running_adapter_uses_snapshot_after_source_edit(self):
+        self.executable('codex',r'''
+import os,pathlib,sys
+r=pathlib.Path(os.environ['FM_TEST_ROOT'])
+(r/'bin/adapters/codex.sh').write_text('#!/usr/bin/env bash\nexit 99\n')
+pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text('APPROVE:T-035\nREVIEWER_COMPLETE:T-035')
+print('One invocation completed')
+''')
+        answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'])
+        self.assertEqual(0,answer.returncode,answer.stderr)
+        self.assertEqual(1,len(self.results()))
+        record=json.loads(next((self.repo/'state/runs').glob('*/process.json')).read_text())
+        self.assertNotEqual((self.repo/'bin/adapters/codex.sh').read_text(),
+                            (Path(record['snapshot'])/'bin/adapters/codex.sh').read_text())
+    def test_second_worker_cannot_recreate_live_task_tree(self):
+        import time
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            first=pool.submit(self.invoke,'fm-worker.sh',['--task','T-035'],FM_TEST_DELAY='1')
+            for _ in range(100):
+                if list(self.repo.glob('worker-*.prompt')): break
+                time.sleep(.02)
+            self.assertTrue(list(self.repo.glob('worker-*.prompt')))
+            second=self.invoke('fm-worker.sh',['--task','T-035'])
+            self.assertEqual(70,second.returncode,second.stderr)
+            self.assertIn('already has a live worker',second.stderr)
+            self.assertEqual(0,first.result().returncode)
+        self.assertEqual(1,len(self.results()))
+
+unittest.main(argv=['herdr', *os.environ.get('FM_TEST_CASES','').split()], verbosity=2)
+PY

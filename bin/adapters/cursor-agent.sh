@@ -16,6 +16,7 @@ _fm_alib="$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 prompt="${2-}"; tree="${3-}"; log="${4-}"
 [ -f "$prompt" ] || { echo "cursor-agent: no prompt at $prompt" >&2; exit 64; }
 [ -d "$tree" ]   || { echo "cursor-agent: no worktree at $tree" >&2; exit 64; }
+fm_adapter_context "$0"
 
 command -v cursor-agent >/dev/null 2>&1 || {
   # stderr, not the log: the log is what the VENDOR said, and a caller that
@@ -26,7 +27,12 @@ command -v cursor-agent >/dev/null 2>&1 || {
 # FM_ADAPTER_ARGS is deliberately unquoted: it carries whatever extra
 # arguments the operator configured, and they have to split into words.
 off="$(fm_adapter_mark "$log")"
-( cd "$tree" && cursor-agent -p ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
+if [ -n "${FM_ATTEMPT_DIR:-}" ]; then
+  ( cd "$tree" && cursor-agent -p --output-format json ${FM_ADAPTER_ARGS:-} < "$prompt" ) 2>&1 | tee -a "$log"
+  fm_adapter_pipeline_status "${PIPESTATUS[@]}"
+else
+  ( cd "$tree" && cursor-agent -p ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
+fi
 rc=$?
 fm_adapter_verdict "$rc" "$log" "$off"
 exit $?

@@ -107,6 +107,22 @@ These bind every actor, including firstmate itself.
 | **reviewer** | same, independent process | one round, then gone | **no** |
 | **board** | `bun --watch board/server.ts` | always on | no |
 
+The portable [root router](../AGENTS.md) selects the canonical
+[firstmate startup contract](../skills/firstmate/SKILL.md) immediately for
+interactive sessions and preserves explicitly dispatched roles. The thin
+[Claude entrypoint](../CLAUDE.md) imports the same router; Codex loads it directly.
+[Worker](../skills/worker/SKILL.md) and [reviewer](../skills/reviewer/SKILL.md)
+skills remain the dispatched role sources. Supply isolated reviewers with their
+role and authoritative relevant design context in the prompt.
+
+The startup contract specifies state inspection, board opening, visible managed
+panes, retained authorization and explicit remediation coordination. It documents
+current script gaps rather than promising unmerged reconciliation or runtime
+transport. `fm-run.sh` reports failed gates; firstmate must coordinate subsequent
+worker attempts. Static instruction validation does not prove agent behavior.
+Neither lavish nor no-mistakes is a prerequisite; do not add their startup or
+verification hooks. Use repository checks and actual GitHub CI evidence.
+
 Workers and reviewers are stateless one-shot processes: read a prompt, change
 files inside their own worktree, exit. Everything else — commit, push,
 `gh pr create`, posting comments — is done by `bin/fm-*.sh`.
@@ -150,9 +166,30 @@ renders blank in one of the board's locales, which is worse than none.
 `zh-CN` is derived at display time from `i18n/tw2cn.tsv` — a table lookup, no
 model call.
 
+Worker and reviewer lifecycle events retain the exact canonical run identity in
+`actor` and state their role, the same canonical value as `data.crew_name`, and
+an authored `data.activity` object with nonblank `en` and `zh-TW`. A task's valid
+authored activity is preserved verbatim. A task without it receives the explicit
+generic unavailable description; producers do not translate a scalar title or
+invent task-specific progress. The board derives `zh-CN` through its existing
+table semantics.
+
+`review_failed` distinguishes a review verdict from a failed review attempt.
+Only a completed signed rejection carries
+`data.review_outcome: "rejected"`; that exact value is the authoritative reject
+handoff. Missing or unsigned output uses `missing_review` when truthful, and
+vendor/configuration/execution failure uses `infrastructure_error`. Consumers
+must never treat an absent, legacy, or different value (including a generic
+`data.outcome`) as a substantive rejection. Final-answer provenance remains the
+adapter contract: built-in adapters retain extracted final output, while custom
+adapters retain their documented combined-output limitation.
+
 ### 5.2 Captain decisions, `state/decisions/D-*.json`
 
-The board POSTs one; `bin/fm-decide.sh` blocks until it appears.
+`bin/fm-decide.sh --request <id>` writes a pending card, attempts its diagram
+and returns without waiting. The board POST writes the response file;
+`bin/fm-decide.sh --await <id>` waits for that file and returns its contents.
+Receiving a response is not itself approval; inspect the chosen option and context.
 
 ```jsonc
 {"id":"D-007","task":"T-004","kind":"choice","chosen":"B","note":"leave the schema alone","ts":"..."}
@@ -164,8 +201,52 @@ files touched and the pull request link, answered with merge, send back, or
 hold. **Every merge goes through a card.** firstmate may not merge on its own
 and may not ask for one in conversation.
 
-Waiting is `bun run bin/watch-decisions.ts` (`fs.watch`, millisecond wake) when
-bun is present, and a one-second poll otherwise. **No `fswatch` dependency.**
+Selecting an option is local; a separate CONFIRM submits it. A fourth custom
+choice carries the captain's own bounded text,
+stored as data under the distinct `chosen` value `custom`, not a note on
+option A. Nothing is selected initially; selecting or typing performs no write.
+Confirmation validates nonempty text and limits before storing the decision.
+Custom text is escaped for display, preserved through the watch/storage path,
+and never evaluated as shell input or treated as merge approval. The interface
+localizes its labels and validation, not the captain's authored words. The
+`text` field preserves literal whitespace, markup and Unicode, with a maximum
+of 1000 Unicode code points; empty/whitespace-only input, control characters
+other than tabs/newlines, and lone surrogates are rejected. Custom never calls
+the merge helper. A/B/C keep their existing meanings.
+
+New requests require `--details <file>` with this shared data contract:
+`{en: Locale, "zh-TW": Locale}`, where each Locale contains nonempty strings
+`title`, `explanation`, `before`, `after`, `outcome`, and `options.A/B/C`, each
+with `description`, `pros`, `cons`. Each string is bounded to 2000 code points.
+Firstmate authors both locales; the scripts do not infer them from task titles.
+The board escapes data as text, diagrams use the authored before/after labels,
+and zh-CN applies the same ordered TW-to-CN table as the UI. Invalid requests
+fail before a pending record is written; existing IDs cannot be replaced.
+Legacy scalar records remain readable with an explicit missing-details notice.
+Trusted repository diagram fragments are assets, never fields in this input.
+
+`fm-run.sh` consumes `state/decision-details/D-<task-number>.json` after gates
+pass. Missing or invalid authored input is reported as no card created. Only
+a successful request is announced as asking the captain.
+
+The board atomically publishes a response, invokes `fm-emit.sh` once with
+`decision_made` and `data.decision`, then handles any authorized A merge.
+Awaiters only observe the record; they do not emit a second event. Repeating
+the same response returns the stored outcome, while a conflicting response
+is rejected. Failed merges are recorded and never automatically retried.
+
+Await mode uses `bun run bin/watch-decisions.ts` (`fs.watch`) when bun and the
+watcher script are present, and a one-second poll otherwise. Wake latency must
+be measured, not inferred from the watcher mechanism. **No `fswatch` dependency.**
+
+These are orchestration requirements, not enforcement inside `fm-merge.sh`.
+The board calls that helper for choice A on a pending merge card. The helper
+checks PR state and invokes GitHub merge, then attempts event emission and
+cleanup; it does not read approval decisions or run the seven gates. The board
+route does not rerun gates either. Firstmate must verify current-head gates, CI,
+reviewer provenance and board approval, and coordinate fresh verification when
+the head changes so a stale card is not treated as ready. `fm-run.sh` requests
+cards after gate success; it neither awaits decisions nor performs merges.
 
 ### 5.2a Worktrees, and the one root they live under
 
@@ -214,11 +295,25 @@ role may name its own engine — `reviewer:` and `worker:` blocks in
 `fallback:`, with no vendor run twice. A reviewer whose engine is down is
 therefore not a reviewer who never ran.
 
-A round that produced no review exits `3` and emits `review_failed`; it never
-reaches the pull request and never counts toward gate 7. A verdict has to
-carry `APPROVE:<task>` or `REJECT:<task>`, because a real reviewer's verdict
-*is* its standard output and without a marker a crashed engine's stack trace
-looks exactly like a damning review.
+A round that produced no review exits `3` and emits `review_failed` with
+`data.review_outcome` set to `missing_review` when an attempt completed without
+a signed verdict, or `infrastructure_error` for vendor/configuration/execution
+failure; it never reaches the pull request and never counts toward gate 7. A
+verdict has to
+carry exactly one unquoted `APPROVE:<task>` or `REJECT:<task>` in the final
+assistant answer. Only that answer is the verdict; prompt echoes, intermediate
+text, quoted examples and full CLI transcripts are not authoritative. Retain
+reviewer identity and the reviewed head with the evidence. Built-in managed
+adapters extract and retain the final answer. Custom adapters and the current
+review launcher still scan combined output and do not establish final-answer
+provenance; firstmate must identify and coordinate that gap rather than accept
+a marker as proof.
+The board therefore treats a legacy `review_failed` as missing-review/error,
+not rejection. A directed rejection exists only when the event also carries
+the additive `data.review_outcome: "rejected"` contract. T-035 owns emitting
+that datum after it has authoritative final-answer evidence; old logs remain
+truthful without it. Crew phase follows each actor's dispatched role, so a
+reviewer is reviewing even while a worker on the same task has another phase.
 
 The judgement about outages can never be right on wording alone, because
 there is no phrase a model cannot write — this repository contains
@@ -226,9 +321,10 @@ there is no phrase a model cannot write — this repository contains
 wording does not decide. The adapter is deliberately generous, and the caller
 settles it: `fm_run_chain` takes a predicate answering *did this run produce
 work?*, and work beats a signature. A worker asks whether the worktree
-changed; a reviewer asks whether the output carries a verdict marker. Being
+changed; the current reviewer predicate asks whether combined output carries a
+verdict marker, a known gap from the final-answer contract above. Being
 over-eager then costs one more vendor attempt and never the work — and a
-signed review is never thrown away, which would otherwise repeat the same
+proven final signed review is never thrown away, which would otherwise repeat the same
 round forever with a reassuring message on it.
 
 A vendor named at the head of the chain with no adapter behind it is a typo,
@@ -238,7 +334,7 @@ vendor had already done. A *fallback* entry with no adapter is simply
 skipped.
 
 An exit code never overrules produced work, in the callers any more than in
-the adapters: a signed review is a review whatever the engine exited with,
+the adapters: a proven final signed review remains a review even on teardown failure,
 and a changed worktree is work. And each attempt reads only its own output —
 its own directory under the chain's, and its own slice of the shared log —
 so a vendor that dies half way through cannot sign on the next one's behalf.
@@ -294,6 +390,49 @@ finding its own is the only path there can be, and
 `tests/dispatch.test.sh` asserts that rather than the design asserting
 it.
 
+What the worker is shown of a red check is the whole of its view of the
+runner — it does not run `gh`, by the adapter contract — so that block
+is never allowed to be empty. A check's link is
+`…/actions/runs/<run>/job/<job>`, and the run is the part before the
+job: reading the whole tail of it asked `gh run view` for something it
+refuses, its complaint went to `/dev/null`, and the worker was handed a
+blank block. The shape is checked rather than assumed — a required
+check need not be an Actions run at all, and both shapes GitHub itself
+uses count — `/actions/runs/<run>/job/<job>` and the older check-run
+`/runs/<job>`. The legacy ID identifies a job, so it is passed to
+`gh run view --job <job> --log-failed`; a modern link uses
+`gh run view <run> --log-failed`. These IDs are different namespaces.
+A blank block reads as a green run, so the round was
+spent asking why the check was red.
+
+The run or job id is the leading run of digits after `/runs/`, and what
+follows it has to be a delimiter — the legacy url is served with a
+query on that segment, and trimming at the next slash turned
+`6789123?check_suite_focus=true` into something the digit check then
+rejected. Query strings and fragments are stripped in either shape;
+letters immediately after the digits are rejected. Fetch failures,
+empty logs, and partial logs name the run or job actually requested.
+
+The block is never blank, and it says which of four things happened,
+because to the worker they mean different things: no run id could be
+read out of the link, so the log is not something this script can
+fetch; the fetch failed, and here is what `gh` said; or the fetch
+succeeded and the run had no failing step log at all — a cancelled
+run, or a job that died before anything logged — which "could not be
+fetched" would misreport as GitHub's fault; or some of it came back
+and `gh` failed anyway, a multi-job run with one job's log gone, where
+the partial log is shown AND said to be partial. A partial log alone
+reads as the whole of the failure. The first of those says
+what the SCRIPT could not do rather than what the check is: it knows
+it found no run id, and it does not know which CI produced the link.
+
+Emptiness is decided on what reaches the fence rather than on what
+`gh` returned — a log whose every line the column trim reduces to
+nothing is not an empty capture, and it is an empty block — but the
+filter that decides is not the thing printed, or every blank line
+inside a traceback would be deleted on the way. Everything spliced
+into that fence is bounded, `gh`'s complaints included.
+
 The lookup keeps GitHub's exit status, because *no open pull request*
 and *`gh` did not answer* are the same empty string and opposite
 instructions. Answered-and-none is an ordinary state — a round that
@@ -336,8 +475,9 @@ event the round writes is the one the worker writes — there is no
 second `worker_crashed` from a caller noticing the code. The codes a
 worker can exit with are `1` a failed attempt, `2` no vendor was
 available, `64` it was called wrong, `65` no such task in
-`design/tasks.json`, `70` something the run needs before it starts and
-cannot have — no library, no worktree, nowhere to put a scratch file —
+`design/tasks.json` or an unknown configured adapter, `70` something the run
+needs and cannot have — no library, no worktree, nowhere to put a scratch file,
+identity/snapshot failure, a live task lock, or failed managed transport —
 `71` the push failed, `72` no pull request number came back, `73` the worker had
 something to say and there was nowhere to put it, `74` GitHub could not
 say which pull request the branch has, and `129`, `130`, `143` — a
@@ -384,9 +524,10 @@ grilling  ->  /prototype  ->  [captain green-lights]  ->  design.md + tasks.json
               APPROVE -> firstmate summarises -> [captain merges on the board]
 ```
 
-**`fm-dispatch.sh` dispatches nothing until a `greenlit` event exists** for the
-work. That is the eighth gate, and it stops work starting before the captain
-has seen a proposal.
+**`fm-dispatch.sh` dispatches nothing until a `greenlit` event exists.**
+It checks for any such event, not a match to the proposed work. Firstmate must
+verify that authorization covers the work. Dependencies and capacity are read
+from events, so reconcile these with current PRs and live processes before launch.
 
 | # | Gate | How it is checked |
 |---|---|---|
@@ -396,10 +537,15 @@ has seen a proposal.
 | 4 | the diff stays in scope | `git diff --name-only` within the task's `scope` globs |
 | 5 | **the new tests are not vacuous** | revert the implementation hunks; the new tests must go red |
 | 6 | the required GitHub check is green | `gh pr checks <pr> --required` |
-| 7 | the reviewer posted `APPROVE:<task-id>` | and from the configured reviewer account |
+| 7 | a PR comment contains `APPROVE:<task-id>` | author filtered only if `FM_REVIEWER_LOGIN` is set |
 
-All seven green before an `approved` event and a merge card. Any one red and
-nothing the reviewer said in praise counts.
+Require all seven gates and current-head review evidence before treating a merge
+card as ready. `fm-run.sh` requests a card after gate success, but `fm-review.sh`
+can emit `approved` on an approval substring before that subsequent gate run.
+Gate 7 neither binds approval to a head nor distinguishes final, quoted or stale
+markers; a later rejection does not invalidate an earlier matching comment.
+Firstmate must verify provenance and current readiness explicitly. Any red gate
+requires remediation regardless of praise or an `approved` event.
 
 ---
 
@@ -409,14 +555,23 @@ Rounds one and two: the reviewer picks holes as usual.
 
 **From round three:**
 
-1. Before touching a line, the worker posts `ASK-PASS-CRITERIA:<task-id>`.
+1. Before touching a line, if no original closed list exists, the worker posts
+   `ASK-PASS-CRITERIA:<task-id>` in `.fm-say.md` for script publication and waits.
+   That asking round changes no implementation files.
 2. The reviewer answers with a **numbered list** and posts
    `CRITERIA-COMPLETE:<task-id>`.
-3. After that the reviewer may raise only numbered items from that list, or a
+3. Preserve that original list across subsequent rounds; do not ask again or
+   replace it. Fix the whole list in one pass. After that the reviewer may raise
+   only numbered items from that list, or a
    newly introduced regression marked `REGRESSION:`.
-4. An old off-list complaint makes `bin/fm-protocol.sh` emit
-   `protocol_violation`. It does not count toward the gates, and it goes on the
-   board so the captain can see the reviewer drip-feeding.
+4. Report old off-list complaints to firstmate for board coordination.
+   `bin/fm-protocol.sh` attempts a `protocol_violation` event for the violations
+   its marker checks detect; it cannot determine every semantic violation.
+   It accepts numeric-reference shapes without checking original item membership,
+   does not authenticate ask/completion markers, can replace its list count on a
+   later completion marker, and does not prove a marked regression is new.
+   Firstmate must preserve and verify the original list; a passing protocol
+   check does not establish compliance with this role contract.
 
 The point is to end the loop where each round fixes one thing and surfaces
 another.
@@ -432,9 +587,9 @@ Bun, native SSE, vanilla HTML, **no build step**.
 | Sea header | merged / in flight / awaiting you / blocked, and the engine chip — marked when the reviewer runs a different vendor |
 | The ship | a pirate vessel whose size tracks the crew, one mast to six |
 | Deck | crew stand on the ship, poses driven by state, handoffs fly between them |
-| Decision deck | the captain drawn at the left; the card to the right — options, before/after diagram, or the seven-gate checklist for a merge |
+| Decision deck | pending records first, with full localized options, diagrams and explicit confirmation |
 | Crew roster | opens when the deck is too crowded for the bubbles to carry the work |
-| Lanes | queued / working / gate / review / captain / merged |
+| Lanes | captain / gate / review / working / queued; merged and closed tasks in a separate initially collapsed history |
 | Live log | tri-lingual summaries from `events.jsonl` |
 
 ### The ship
@@ -498,34 +653,69 @@ rather than `transform`, so it composes with the pose animations instead of
 replacing them. **Shoes animate with their leg** — otherwise the leg turns
 while the shoe stays nailed to the deck and all you see is a bobbing body.
 
-**Each crewman carries a bubble above his head**: id, task, progress, percent,
+**Each crewman carries a bubble above his head**: identity and task, with full
+localized work and lifecycle phase in the accessible figure label and readable
+roster. Percentages are displayed only for explicit bounded progress data,
 with the border colour carrying state. A landing handoff pulses the recipient's
 bubble. Deck spacing must exceed body height plus bubble height or a bubble
 covers the crew on the deck above.
 
 ### The captain
 
-Drawn at the left of the decision deck on a lit stage — red coat, gold sash,
-tricorn and plume, eye patch, cutlass. Three poses: sheathed while nothing is
-chosen, half drawn once an option is picked, raised when the order goes out.
-Draggable like the rest of the crew.
+The human captain is always visible on the ship's top deck, including startup
+with zero pending decisions and after the final acknowledgement. There is one
+captain and no separate decision-side stage. He is excluded from agent counts.
+The shared deck coordinate system anchors his feet; firstmate and the helm
+remain at the original left/bow anchor, with the stern on the right. Three
+poses remain: sheathed without a choice, half drawn on local selection, raised
+on explicit confirmation and through recorded acknowledgement, then idle.
+He is draggable like the crew; orientation does not replace sword poses.
+
+Primary task, decision, tradeoff and event text is at least 16 CSS pixels;
+secondary labels are at least 13 pixels and decision titles at least 20 pixels.
+Choice and confirmation targets are at least 44 pixels high. Wrapped content
+and flexible columns support 320-pixel screens and enlarged text. Completed
+history uses a native keyboard-operable disclosure, with distinct merged and
+closed counts. Its open state survives refresh and locale changes; new merges
+do not open it. Pending decisions come from pending records, not task stages.
+
+Crew payloads add `activity: {en, "zh-TW"}`, `crew_name` and optional bounded
+`progress` without changing canonical actor IDs or roles. Replay retains each
+actor's dispatch/activity description and last applicable lifecycle phase
+across technical events, independently of the 40-event recent list. Localized
+task activity takes precedence when available; scalar titles are not guessed
+translations. Missing descriptions and unknown phases are explicitly labeled.
+Finished actors cannot reappear through late technical events; a new dispatch
+starts fresh activity. Producers lacking authored summaries need firstmate
+coordination with the owning task, not fabricated board descriptions.
 
 ### Ahoy
 
 | Trigger | Response |
 |---|---|
-| A merge | the broadside fires gun by gun, the ship heels, every crewman's arms go up, the bell rings, `AHOY! / MERGED INTO MAIN` |
-| An order | bell and bosun's whistle, the helm spins twice, `AYE, CAPTAIN! / ORDERS AWAY` |
+| A merge | the broadside fires gun by gun with cannon reports, the ship heels, every crewman's arms go up, `AHOY! / MERGED INTO MAIN` |
+| An order | the helm spins twice and the visible crew acknowledges, `AYE, CAPTAIN! / ORDERS AWAY` |
 
-Sound is synthesised at runtime through Web Audio — the bell two partials on a
-long decay, the cannon a lowpassed noise burst, the whistle a swept sine — so
-there are no audio files and no network. Mute lives in the header and persists;
-browsers require a gesture before the first sound. Honours
-`prefers-reduced-motion`.
+The later captain override disables Ahoy-related speech, bell and whistle
+audio. No substitute cue or global mute implements that choice. Confirmed
+merges retain their synthesised lowpassed-noise cannon reports; there are no
+audio files or network requests. Persistent mute silences those reports,
+browsers may require a gesture, initial history is silent and event identities
+deduplicate playback. The board never touches the browser speech queue.
+
+The full outcome stream supplies stable decision IDs and merge identities
+(PR, or task/event fallback). Initial history is silent, new outcomes queue,
+and refreshes/reconnects cannot replay handled identities. The 3.2-second
+effect deadline survives ordinary state rendering; retained animations keep
+their running timeline while elapsed offsets apply only to newly mounted effect
+nodes. Crew data continues updating, and the captain persists with feedback
+after the last card disappears. Reduced motion keeps static acknowledgement
+and independently honors audio preference. Only confirmed `merged` events
+fire the merge salute; recording an order or a failed helper cannot do so.
 
 **One gun list** (`portList()`) drives the ports, the flash positions and the
-sound schedule: one gun, one flash, one report, the same `GUN_DELAY` apart. The
-bell waits until the last gun has spoken. **The shout stays in English in every
+sound schedule: one gun, one flash, one report, the same `GUN_DELAY` apart.
+**The shout stays in English in every
 locale** — it is a cry, not a label.
 
 Celebration must not hide what is being celebrated: the banner sits clear of
@@ -536,6 +726,18 @@ the ship.
 Drag a figure to turn it, drag the deck to turn the whole crew, double-click to
 reset. Every pose is a `.fig.s-<state>` class, so **e2e asserts classes rather
 than diffing screenshots**.
+
+The renderer patches existing figures, preserving pointer capture and rotation.
+Full event replay supplies directed `handoffs` with event identities: dispatch
+or recorded order from firstmate to a worker, PR/review handoff to a reviewer,
+approval to firstmate and rejection to the worker. Peer resolution requires
+one known active participant on the same task; ambiguous or missing recipients
+produce static unavailable feedback. Initial history is silent and duplicate
+snapshots do not replay cues. Travel uses current rendered anchors for 1.4
+seconds, then a receiving reaction and bubble pulse, with cleanup at 2.3 seconds.
+Reduced motion retains localized directed text. Handoffs emit no events, POSTs
+or success audio. Browser checks measure travel, endpoints and drag ownership,
+in addition to pose classes; source text alone does not establish behavior.
 
 **Hot reload:** a change under `board/public/**` pushes `reload` over SSE; a
 change to `board/server.ts` restarts under `bun --watch` and the client
@@ -576,7 +778,19 @@ Only the board is tri-lingual. The repository is English (section 1).
 
 ## 10. CI
 
-The local gate and GitHub Actions run **the same** `bin/ci.sh`:
+The local gate and GitHub Actions run **the same** `bin/ci.sh`.
+
+The elapsed-time limit defaults to 180 seconds. Set `FM_CI_MAX_SECONDS` to a
+plain decimal integer from 1 to 3600, without leading zeros, to select an
+explicit budget; invalid or empty values exit 64 with guidance. The gate
+reports the effective budget and elapsed time, and exceeding the budget
+still fails after all functional checks. This is an elapsed-time check, not
+a process timeout; selecting a larger budget does not waive functional failures.
+GitHub sets `FM_CI_MAX_SECONDS=600`; its separate `timeout-minutes: 10` covers
+the entire job, including setup, so the script may have less than 600 seconds
+before GitHub cancels it. For T-017, Firstmate runs the same full local gate
+with `FM_CI_MAX_SECONDS=600 bash bin/ci.sh` before publication. A functional
+pass at 208 seconds is within that authorized budget, but exceeds the default.
 
 ```
 shellcheck        ->  single-writer lint  ->  bash suites
@@ -594,6 +808,151 @@ before it can merge.
 ---
 
 ## 11. Self-update
+
+### Managed session defaults
+
+`bin/fm-session.sh start --repo <root>` is the portable service bootstrap.
+It reports actual recorded process liveness, worktrees, pending decisions and
+(inside `HERDR_ENV=1`) observed Herdr panes. It starts or reuses the correct-root
+board and a cancellable decision watch. It does not dispatch work or invent a
+captain choice. Firstmate reconciles legacy/unrecorded processes and existing
+authorization before dispatch; stopped work is preserved for explicit resumption.
+`status` reads the live process receipts and durable watch results. `watch` and
+`stop`, optionally with `--decision D-id`, manage the watcher independently.
+
+Board reuse is verified with a fresh random file under the requested root and
+the board's existing `/file?path=<relative-path>` endpoint. An HTTP response on
+the configured port is insufficient; a different or unverifiable root is refused.
+The bootstrap verifies HTTP page retrieval and reports whether `open` or
+`xdg-open` was invoked. It cannot verify browser navigation. Bun is required for
+the board. The watch uses the existing `fm-decide.sh` path (Bun fs.watch where
+available, its shell polling fallback otherwise), has a real PID and process
+identity, and preserves observed decision JSON. Its continuous mode scans pending
+IDs between bounded waits; it is not a sub-200ms guarantee across multiple IDs.
+It never wakes a completed API conversation. Firstmate keeps pending authorized
+work actively monitored or explicitly hands it off before ending the turn.
+
+The normal `fm-run`, `fm-dispatch`, `fm-worker` and `fm-review` entrypoints freeze
+`bin/` and `skills/` into a private per-launch snapshot with a hash manifest before
+doing work. Nested launches use that same frozen execution path. New sessions
+take a new snapshot; source changes cannot replace scripts a running shell is
+reading. Do not alter retained snapshots. Runtime events, current task specs and
+worktrees remain in the requested repository. All five frozen entrypoints resolve
+relative `--repo`/`FM_ROOT` once in the caller's directory and replay the canonical
+root. Relative script paths retain their original code directory across that change.
+A worker holds an advisory task lock through orchestration. Each supported adapter
+execution also reserves its attempt before launch and holds a separate lifetime lock
+in the pane runner, adapter and inherited CLI descendants. Retry checks these
+reservations under task exclusion before touching the worktree. Timeout, interrupted
+transport or launcher death cannot release the surviving execution's exclusion.
+Session status distinguishes orchestration liveness, actual execution liveness and
+uncertain pending launches, retaining canonical actor and actual adapter PID evidence.
+A pending launch without proof it started, or an unfinished legacy attempt lacking
+lifetime metadata, blocks recreation until its termination is established; it is not
+reported as a verified live PID. These observations describe this implementation;
+T-017 PID/flock reconciliation integration requires separate validation.
+Concurrent reviewers and worker/reviewer runs have distinct artifacts and actors.
+
+Every new worker/reviewer obtains one canonical human-readable machine label,
+such as `worker-mira-t035-r2` or `reviewer-noah-t018-r8`. Labels retain role prefixes,
+fit Herdr's 32-character syntax and include task/run identity. A locked repository
+counter disambiguates concurrent runs, retries and repeated requested aliases;
+normalization and the requested alias are recorded in `identity.json` and printed
+at launch. Extremely long task labels retain a digest and the full original task
+in metadata. The exact canonical actor appears in invocation context, Herdr tab,
+pane and agent names, board events, log paths and result receipts. Existing live actors
+are not renamed. A foreign Herdr name collision is a reported transport failure,
+not a silently different sidebar identity.
+
+In `HERDR_ENV=1`, Codex, Claude, Cursor Agent and Gemini adapters use shipped
+`bin/fm-herdr.py` to execute the real CLI in a dedicated new tab containing one
+owned root pane. `herdr tab create --workspace <caller-workspace> --cwd <tree>
+--label <canonical-actor> --no-focus` uses the installed supported interface;
+creation IDs come from `result.tab` and `result.root_pane`. Never split the caller's
+view. Record caller tab/pane and observed UI focus before and after creation;
+changed or unknown focus refuses launch without taking focus back from the user.
+The process receives its owned tab/pane/workspace context, not the caller's IDs.
+It uses installed Herdr pane/agent commands, not an ignored wrapper or a tail-only
+pane. A known caller pane is required. Missing or unsupported transport fails
+clearly; it never silently falls back to invisible execution. `FM_TRANSPORT=direct`
+explicitly opts out; outside Herdr direct adapter execution remains the default.
+The scripted mock adapter remains a non-model test adapter. Dependencies are
+Python 3.9+ (standard library), existing shell/jq tools and the chosen vendor CLI;
+Herdr and Bun are needed only for their respective features. No model/network
+API is required by the managed test suites. The isolated crew-end-to-end fixture
+must copy the actual shipped `fm-herdr.py` dependency alongside worker/config/emit
+and adapters, use default snapshot/identity startup without outer-checkout helpers,
+and retain the real worker-to-board identity and exact actor-removal assertions.
+D-335 approves that fixture path only; repository/account boundaries may be mocked.
+
+All four supported model adapters receive the explicit role skill and canonical
+identity through their actual launcher prompt, regardless of native instruction
+loading. Claude/Codex native root files remain thin routes; an explicitly
+dispatched role always wins. This does not claim other engines automatically load
+AGENTS.md. Codex final output comes from `--output-last-message`; Claude/Cursor
+use a complete JSON result object, and Gemini a complete JSON response object.
+Malformed, partial or mixed result output remains inspectable and cannot establish
+final-answer provenance. Existing CLI availability and fallback verdict rules
+remain in the shared adapter library. Raw CLI exit and adapter verdict exit are
+retained separately. Custom/test adapters retain their existing contract; the
+launcher cannot infer final provenance from arbitrary custom transcripts.
+
+Vendor fallback retains one logical actor and one owned tab/root pane. Before reusing it,
+the launcher rechecks the previous attempt's task/run/terminal/shell identity and
+shell-only state, the previous durable ownership receipt and unchanged tab
+membership. A tab must still have exactly its owned pane, the canonical label,
+workspace identity and no splits. Caller tabs, added panes, moved/reused/shared
+resources and unknown topology refuse reuse. Attempts have separate immutable prompts, invocation metadata,
+private environment, CLI log, final answer and result JSON under
+`state/runs/<actor>/`. A blocked or unavailable attempt is kept there even if a
+later vendor completes. Any ownership uncertainty stops reuse. Worker and reviewer
+`agent_finished` events retire exactly their run actor; neither event means the
+task was accepted. Orchestration exit receipts also remain under the actor. Each chain invocation has
+an attempt token; both reviewer output selection and orchestration recording accept
+managed receipts only with that current token. A custom/mock fallback reads its own
+output files/log slice and records unknown final provenance, preserving the previous
+built-in receipt as evidence without adopting its status.
+
+Automatic close defaults on only for a positively completed owned run. The
+final assistant answer must end with exactly one standalone
+`WORKER_COMPLETE:<task>` or `REVIEWER_COMPLETE:<task>` status marker. Blocked,
+failed, incomplete, missing and ambiguous statuses retain the pane even at exit
+zero. A completed review may reject the PR. Result JSON, final text, logs and exit
+evidence are persisted before close. Immediately before the close command, the
+launcher rechecks its ownership record, caller exclusion, canonical label,
+run/task tokens, terminal ID, shell PID and nonempty shell-only foreground state.
+It also verifies the created tab identity and unchanged single-owned-pane layout
+through the installed snapshot API. Ownership records bind tab/workspace and
+caller tab/pane IDs to run/task/actor/terminal/shell identities. No whole-tab close
+is authorized: a positively verified owned pane may close and its single-pane
+tab may disappear as Herdr's normal consequence. Shared or moved resources stay.
+Changed, busy, unowned, caller or uncertain panes are never intentionally targeted.
+Herdr does not expose atomic compare-and-close: an unrelated external client can
+change the pane between observation and close. This is an observed checked-close
+policy, not an atomicity or race-free guarantee. `FM_AUTOCLOSE=0` retains all panes.
+`FM_HERDR_TIMEOUT` (seconds, default 21600) bounds waiting; a timeout preserves the
+process and evidence for inspection, never kills an uncertain pane.
+
+`FM_WATCH=0` opts out of automatic watch startup; stop an already-running watch
+explicitly. Watch identity and results live under `state/session/`; a stopped
+watch can be restarted, and continuous observation receipts survive restarts.
+No global hooks, lavish or no-mistakes installation is needed. Existing user
+authorization persists, while scope/product choices and merge approval remain
+captain board decisions. The self-update request is not a fabricated board choice.
+
+Decision content should include bespoke before/after diagrams, concrete option
+tradeoffs and authored English/Traditional Chinese summaries with derived
+Simplified Chinese. The current generic generator does not establish that content
+quality. Board diagrams, locale and effects changes are separately T-034 and are
+not shipped by this task. Firstmate's decision instructions must integrate the
+final T-034 `fm-decide.sh`/`fm-run.sh` contract after firstmate identifies that
+version: authored `--details`, exact field types/bounds, honest refusal handling,
+custom captain choices and full dynamic locale content. A title-only request is
+not an acceptable substitute for that integration; source verification remains
+a dependency until the final T-034 version is supplied.
+Current-head gate/reviewer verification and original
+closed-list protocol remain firstmate/reviewer responsibilities; a successful
+process or status marker is never PR acceptance.
 
 `skills/` defines behaviour; changing a skill changes behaviour without
 touching code.
@@ -687,3 +1046,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-029 | one exit code for a usage error, in every script | T-026 |
 | T-030 | the lints are blind to the files that carry them | T-026 |
 | T-031 | a second round the worker cannot see, and a question nobody hears | T-007 |
+| T-032 | the red check reaches the worker as an empty block | T-031 |
+| T-033 | firstmate startup contract | T-007, T-006, T-013 |
+| T-034 | clear localized captain decisions and reliable outcome effects | T-010, T-013, T-014 |
+| T-035 | managed firstmate session defaults | T-033, T-003, T-008, T-009 |
