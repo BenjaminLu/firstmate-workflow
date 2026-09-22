@@ -24,7 +24,7 @@ check_strict_run_stub() (
 )
 
 fixture() {                     # a repo with a remote, a task, and the real scripts
-  local d; d="$(mktemp -d)"; local bare="$d/remote.git"
+  local d; d="$(mktemp -d)"; local bare="$d/remote.git" task="${1:-T-Z}"
   git init -q --bare "$bare"
   git init -q -b main "$d/repo"
   cd "$d/repo" || return 1
@@ -37,6 +37,8 @@ fixture() {                     # a repo with a remote, a task, and the real scr
   cat > design/tasks.json <<'JSON'
 {"tasks":[{"id":"T-Z","title":"a mock task","scope":["src/**"],"acceptance":["it exists"]}]}
 JSON
+  jq --arg task "$task" '.tasks[0].id=$task' design/tasks.json > design/tasks.next
+  mv design/tasks.next design/tasks.json
   printf '# design\n## 6. gates\nseven of them\n## 8. board\n' > design/design.md
   git add -A; git commit -qm base; git remote add origin "$bare"; git push -q -u origin main
   printf '%s' "$d"
@@ -61,6 +63,7 @@ G
   chmod +x "$1/stub/gh"; printf '%s' "$1/stub/gh"
 }
 
+if [ "${FM_WORKER_LIVENESS_ONLY:-0}" != 1 ]; then
 d="$(fixture)"; r="$d/repo"; GH="$(ghstub "$d")"
 out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-worker.sh --task T-Z --name worker-1 2>&1)"; rc=$?
 assert_eq "0" "$rc" "a clean run exits 0"
@@ -659,14 +662,32 @@ exit 0
 G
 chmod +x "$d19/stub/gh"
 check_strict_run_stub "$d19/stub/gh" 81
-# A TMPDIR that is a file: mktemp cannot mint into it, whatever the
-# uid. `--pr 25` so the LOOKUP's scratch file is never wanted - that
-# one is a hard refusal by design (exit 70, T-031), and the run would
-# stop before it ever reached the block under test.
-: > "$d19/nodir"
+# Fail only the optional log capture. `--pr 25` skips lookup_err, so
+# the first worker allocation is log_err; chain_result must still succeed
+# before the adapter can capture the prompt. Keep state outside the shim's
+# process because scratch_new runs in command substitutions.
+mkdir -p "$d19/tmp"
+real_mktemp19="$(command -v mktemp)"
+cat > "$d19/stub/mktemp" <<'M'
+#!/usr/bin/env bash
+if [ "$#" -eq 1 ] && [ "$1" = "$TMPDIR/fm-worker-XXXXXX" ]; then
+  if [ ! -e "$FM_MKTEMP_FAILED" ]; then
+    : > "$FM_MKTEMP_FAILED"
+    exit 1
+  fi
+fi
+exec "$FM_REAL_MKTEMP" "$@"
+M
+chmod +x "$d19/stub/mktemp"
 cap19="$d19/sent.md"
-( cd "$r19" && TMPDIR="$d19/nodir" FM_ROOT="$r19" FM_GH="$GH19" FM_CAPTURE="$cap19" \
+( cd "$r19" && PATH="$d19/stub:$PATH" TMPDIR="$d19/tmp" \
+    FM_REAL_MKTEMP="$real_mktemp19" FM_MKTEMP_FAILED="$d19/mktemp-failed" \
+    FM_ROOT="$r19" FM_GH="$GH19" FM_CAPTURE="$cap19" \
     bin/fm-worker.sh --task T-Z --pr 25 >/dev/null 2>&1 )
+rc19=$?
+assert_eq "0" "$rc19" "optional log allocation failure still completes the worker run"
+assert_ok "test -f '$d19/mktemp-failed'" "the optional log allocation failure was exercised"
+assert_ok "test -s '$cap19'" "the adapter ran and captured the prompt after allocation failure"
 sent19="$(cat "$cap19" 2>/dev/null)"
 assert_contains "$sent19" "The log for run 81 could not be fetched" \
   "with no scratch file, the failed fetch is still reported"
@@ -802,7 +823,8 @@ cat > "$r15/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
 : > "${FM_STARTED:?}"
-sleep 5
+exec 8<> "${FM_RELEASE:?}"
+read -r -t 12 -u 8 || exit 124
 M
 chmod +x "$r15/bin/adapters/mock.sh"
 cat > "$d15/stub/gh" <<'G'
@@ -813,13 +835,18 @@ G
 chmod +x "$d15/stub/gh"
 rm -rf "$d15/tmp"; mkdir -p "$d15/tmp"
 started15="$d15/started"
-( cd "$r15" && TMPDIR="$d15/tmp" FM_ROOT="$r15" FM_GH="$GH15" FM_STARTED="$started15" \
+mkfifo "$d15/release"
+exec 8<> "$d15/release"
+( cd "$r15" && TMPDIR="$d15/tmp" FM_ROOT="$r15" FM_GH="$GH15" FM_STARTED="$started15" FM_RELEASE="$d15/release" \
     exec bin/fm-worker.sh --task T-Z >/dev/null 2>&1 ) &
 kp15=$!
 for _ in $(seq 1 60); do [ -e "$started15" ] && break; sleep 0.2; done
 assert_ok "test -e '$started15'" "the engine was running, so the scratch file is open"
 kill -TERM "$kp15" 2>/dev/null
+printf "release\n" >&8
 wait "$kp15" 2>/dev/null
+assert_eq 143 "$?" "scratch cleanup run exits on TERM after adapter release"
+exec 8>&-
 leak_check "and a run cut short by a signal leaves none" "$d15/tmp"
 rm -rf "$d15"
 
@@ -923,7 +950,7 @@ done
 # INT/TERM/HUP are listed anyway, for the paths and the shells where
 # that is not true; what this test proves is the behaviour the criterion
 # names, not the flag list.
-# The adapter sleeps and THEN does the work, so the two runs differ. A
+# The adapter waits for release and THEN does the work, so the two runs differ. A
 # stub that only sleeps writes nothing into the worktree, an untouched
 # run therefore produces no diff and never reaches `pr create` either -
 # and every assertion below would have held with the kill deleted. The
@@ -936,7 +963,8 @@ killable_adapter() {   # killable_adapter <repo>
 # rather than for the script's first event - which is a different moment
 # and, on a fast machine, can be after the run is already over
 : > "${FM_STARTED:?}"
-sleep 2
+exec 8<> "${FM_RELEASE:?}"
+read -r -t 12 -u 8 || exit 124
 mkdir -p "$3/src"
 printf 'the work was done\n' > "$3/src/thing"
 M
@@ -953,7 +981,11 @@ killable_adapter "$rk"
 # natural end, and `kill -0 "$killme"` is false anyway because the
 # wrapper was reaped: green, on a run nothing interrupted.
 started="$dk/started"
-( cd "$rk" && FM_ROOT="$rk" FM_GH="$GHk" FM_STARTED="$started" \
+# Keep both FIFO ends open: a failed readiness check cannot hang the writer.
+# The adapter has a 12-second safety deadline, not a fixed work duration.
+mkfifo "$dk/release"
+exec 8<> "$dk/release"
+( cd "$rk" && FM_ROOT="$rk" FM_GH="$GHk" FM_STARTED="$started" FM_RELEASE="$dk/release" \
     exec bin/fm-worker.sh --task T-Z >/dev/null 2>&1 ) &
 killme=$!
 for _ in $(seq 1 60); do
@@ -965,11 +997,11 @@ assert_ok "test -e '$started'" "the engine was running when the signal was sent"
 # so two suites running at once reap each other's stubs and each sees an
 # ending its assertions attribute to the trap
 kill -TERM "$killme" 2>/dev/null
+printf "release\n" >&8
 wait "$killme" 2>/dev/null; krc=$?
-for _ in $(seq 1 40); do
-  [ "$(jq -r .type < "$rk/state/events.jsonl" 2>/dev/null | tail -1)" = "agent_finished" ] && break
-  sleep 0.2
-done
+exec 8>&-
+# wait reaps the actual worker after its synchronous EXIT emitter finishes;
+# no event poll is needed after this exit barrier.
 # The position of a line in a log is not the behaviour. What matters is
 # that the run STOPPED - exactly one ending, and nothing after it - and
 # the first version of this asserted `tail -1` alone, which held whether
@@ -984,7 +1016,7 @@ assert_eq "143" "$krc" "and it exits on the signal - 128+TERM, from the signal t
 assert_fail "kill -0 '$killme' 2>/dev/null" "and the process is gone"
 # and the discrimination, stated: the adapter DID write its file - bash
 # defers a TERM that arrives while it is waiting for a child, so the
-# sleep finishes and the work lands - and the run still never reached
+# release arrives and the work lands - and the run still never reached
 # `pr create`. Work present, pull request absent, is something only an
 # interrupted run produces.
 assert_ok "test -f '$rk/state/worktrees/T-Z/src/thing'" \
@@ -996,9 +1028,13 @@ rm -rf "$dk"
 # was never interrupted
 dl="$(fixture)"; rl="$dl/repo"; GHl="$(ghstub "$dl")"
 killable_adapter "$rl"
-( cd "$rl" && FM_ROOT="$rl" FM_GH="$GHl" FM_STARTED="$dl/started" \
+mkfifo "$dl/release"
+exec 8<> "$dl/release"
+printf "release\n" >&8
+( cd "$rl" && FM_ROOT="$rl" FM_GH="$GHl" FM_STARTED="$dl/started" FM_RELEASE="$dl/release" \
     bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
 assert_eq "0" "$?" "the same run, not killed, exits 0"
+exec 8>&-
 assert_contains "$(cat "$dl/ghcalls" 2>/dev/null)" "pr create" \
   "the same run, not killed, does reach a pull request"
 assert_eq "1" "$(jq -r 'select(.type=="agent_finished")|.type' "$rl/state/events.jsonl" | grep -c . || true)" \
@@ -1093,4 +1129,66 @@ assert_eq "$codes" "$listed" "design.md §5.3.2 names exactly the codes fm-worke
 assert_fail "grep -vE '^[[:space:]]*#' '$ROOT/bin/adapters/mock.sh' | grep -qE '\\b(git|gh)\\b'" \
   "the mock adapter calls no git and no gh"
 rm -rf "$d" "$d2" "$d3"
+fi
+
+# Real ordinary-worker evidence must be consumable by recovery. No emitter
+# protocol is invented here; only GitHub and the adapter are controlled.
+di="$(fixture T-999)"; ri="$di/repo"
+cp "$ROOT/bin/fm-reconcile.sh" "$ri/bin/"
+mkdir -p "$di/stub"
+cat > "$di/stub/gh" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *" --json number,state,title,headRefName "*) echo '[]';;
+  *" pr list "*) echo 42;;
+esac
+SH
+chmod +x "$di/stub/gh"
+cat > "$ri/bin/adapters/mock.sh" <<'SH'
+#!/usr/bin/env bash
+echo started >> "$FM_ROOT/starts"
+while [ ! -e "$FM_ROOT/release" ]; do sleep 0.1; done
+mkdir -p "$3/src"
+printf 'completed\n' > "$3/src/recovered"
+SH
+chmod +x "$ri/bin/adapters/mock.sh"
+FM_WORKER_LOCK_PID="$$" FM_ROOT="$ri" FM_GH="$di/stub/gh" "$ri/bin/fm-worker.sh" --task T-999 --pr 42 >"$di/worker.out" 2>&1 &
+ordinary=$!
+for _ in $(seq 1 100); do [ -s "$ri/starts" ] && break; sleep 0.1; done
+assert_ok "test -s '$ri/starts'" "ordinary worker reached its adapter"
+assert_ok "jq -se 'any(.[]; .type==\"dispatched\" and (.data.recovery // false)==false)' '$ri/state/events.jsonl'" "ancestor lock environment does not turn an ordinary attempt into recovery"
+assert_eq "$ordinary" "$(cat "$ri/state/worktrees/T-999.pid" 2>/dev/null)" "ordinary worker publishes its actual PID"
+FM_ROOT="$ri" FM_GH="$di/stub/gh" "$ri/bin/fm-worker.sh" --task T-999 --pr 42 >"$di/duplicate.out" 2>&1
+assert_eq 70 "$?" "an overlapping ordinary launch refuses the held lock"
+assert_eq "$ordinary" "$(cat "$ri/state/worktrees/T-999.pid" 2>/dev/null)" "a refused duplicate preserves the owner's PID"
+FM_ROOT="$ri" FM_GH="$di/stub/gh" "$ri/bin/fm-reconcile.sh" >"$di/live.out" 2>&1
+assert_eq 0 "$?" "reconcile accepts live ordinary-worker evidence"
+assert_lacks "$(cat "$di/live.out")" "redispatch T-999" "live ordinary worker is not duplicated"
+kill -KILL "$ordinary" 2>/dev/null
+wait "$ordinary" 2>/dev/null
+FM_ROOT="$ri" FM_GH="$di/stub/gh" "$ri/bin/fm-reconcile.sh" >"$di/dead.out" 2>&1
+recovery_rc=$?
+assert_eq 0 "$recovery_rc" "reconcile revives a killed ordinary worker"
+[ "$recovery_rc" = 0 ] || cat "$di/dead.out"
+assert_contains "$(cat "$di/dead.out")" "redispatch T-999 on #42" "recovery passes the actual retry PR"
+for _ in $(seq 1 100); do [ "$(wc -l < "$ri/starts" | tr -d ' ')" = 2 ] && break; sleep 0.1; done
+assert_eq 2 "$(wc -l < "$ri/starts" | tr -d ' ')" "the real replacement reaches its adapter"
+assert_ok "jq -se 'any(.[]; .type==\"worker_crashed\" and .pr==42)' '$ri/state/events.jsonl'" "ordinary crash retains its PR association"
+assert_eq 42 "$(jq -r 'select(.type=="dispatched")|.pr' "$ri/state/events.jsonl" | tail -1)" "replacement dispatch retains the retry PR"
+assert_ok "jq -se 'last(.[]|select(.type==\"dispatched\"))|.data.recovery==true and .data.role==\"worker\"' '$ri/state/events.jsonl'" "real associated replacement preserves recovery semantics"
+FM_ROOT="$ri" FM_GH="$di/stub/gh" "$ri/bin/fm-reconcile.sh" >"$di/repeat.out" 2>&1
+assert_lacks "$(cat "$di/repeat.out")" "redispatch T-999" "replacement evidence prevents another recovery"
+: > "$ri/release"
+for _ in $(seq 1 100); do [ ! -e "$ri/state/worktrees/T-999.pid" ] && break; sleep 0.1; done
+assert_fail "test -e '$ri/state/worktrees/T-999.pid'" "a completed ordinary run removes its liveness claim"
+assert_ok "jq -se 'any(.[]; .type==\"agent_finished\" and .actor!=\"reconcile\")' '$ri/state/events.jsonl'" "the real emitter records worker endings"
+rm -rf "$di"
+
+df="$(fixture T-998)"; rf="$df/repo"
+mkdir -p "$rf/state/worktrees/T-998.pid.next"
+FM_ROOT="$rf" "$rf/bin/fm-worker.sh" --task T-998 >"$df/out" 2>&1
+assert_eq 70 "$?" "ordinary PID publication failure refuses to run"
+assert_fail "test -d '$rf/state/worktrees/T-998'" "publication failure precedes worktree mutation"
+assert_fail "test -e '$rf/state/worktrees/T-998.pid'" "failed publication leaves no false PID claim"
+rm -rf "$df"
 finish

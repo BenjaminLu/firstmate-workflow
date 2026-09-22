@@ -43,6 +43,7 @@ fm-emit 7
 fm-gate 5
 fm-merge 3
 fm-protocol 4
+fm-reconcile 2
 fm-review 7
 fm-run 2
 fm-sync-prs 2
@@ -125,7 +126,7 @@ while read -r name want; do
     fi
   done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "58" "$total" "every pinned flag and all seven fm option branches were exercised"
+assert_eq "60" "$total" "every pinned flag and all seven fm option branches were exercised"
 
 # A script that grows an option loop has to be pinned here too, and the
 # corpus is the one bin/ci.sh judges - literally, out of
@@ -188,7 +189,7 @@ sourced=0
 # the count would not have noticed, because a file that drops out of the
 # sweep drops out of the count with it
 while IFS= read -r f; do
-  # comments off: the five that keep a local copy mention fm_need in a
+  # comments off: scripts that keep a local copy mention fm_need in a
   # comment pointing at the library, and a grep for the name picks them up
   grep -q 'fm_need ' <<< "$(fm_strip_comments "$f")" || continue
   sourced=$((sourced + 1))
@@ -212,7 +213,7 @@ while IFS= read -r f; do
   grep -qE '^need\(\) \{' <<< "$(fm_strip_comments "$f")" || continue
   local_copies=$((local_copies + 1))
 done < <(fm_shell_corpus "$ROOT/bin")
-assert_eq "7" "$local_copies" "seven scripts carry a local copy of the guard"
+assert_eq "8" "$local_copies" "eight scripts carry a local copy of the guard"
 assert_eq "$(printf '%s\n' "$PINNED" | awk 'NF {n++} END {print n+0}')" \
   "$((sourced + local_copies))" \
   "and every script with an option loop does one or the other, and not both"
