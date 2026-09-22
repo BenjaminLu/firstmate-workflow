@@ -610,6 +610,7 @@ if ! "$REPO/bin/fm-checkpoint.sh" --task "$TASK" --repo "$REPO" \
      --message "$(jq -r .title <<<"$spec")" </dev/null; then
   echo "fm-worker: could not checkpoint $branch" >&2; exit 71
 fi
+_fm_wip_done=1
 emit --type commit_pushed --en "committed on $branch" --tw "已在 $branch 上 commit"
 emit_status "Commit pushed on $branch" "已在 $branch 上推送 commit"
 

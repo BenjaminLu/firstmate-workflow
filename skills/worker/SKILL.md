@@ -41,7 +41,7 @@ helper so the PR is never a black box waiting for the final script commit:
 ```bash
 bin/fm-checkpoint.sh --task <TASK> --message "<short why>" --repo <root>
 # or, from inside the worktree:
-bin/fm-checkpoint.sh --dir . --task <TASK> --message "<short why>"
+bin/fm-checkpoint.sh --dir . --message "<short why>"
 ```
 
 That commits and immediately pushes the feature branch only. Do not wait

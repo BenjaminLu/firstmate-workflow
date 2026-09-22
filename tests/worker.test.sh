@@ -1033,6 +1033,14 @@ assert_fail "kill -0 '$killme' 2>/dev/null" "and the process is gone"
 # interrupted run produces.
 assert_ok "test -f '$rk/state/worktrees/T-Z/src/thing'" \
   "the adapter had finished its work, so a run left alone would have gone on"
+# EXIT must publish that dirty work: finishing without a happy-path commit
+# used to leave the PR empty even though the worktree had real changes.
+branchk="$(cd "$rk" && git for-each-ref --format='%(refname:short)' refs/heads | grep '^t-z-' | head -1)"
+assert_ne "" "$branchk" "interrupted run still created its feature branch"
+assert_ok "git --git-dir='$dk/remote.git' cat-file -e '$branchk:src/thing'" \
+  "EXIT publishes dirty worktree when the happy-path commit never runs"
+assert_contains "$(jq -r .type < "$rk/state/events.jsonl" | tr '\n' ' ')" "commit_pushed" \
+  "EXIT checkpoint emits commit_pushed"
 rm -rf "$dk"
 
 # the same fixture, left alone: this is what the four assertions above
@@ -1233,8 +1241,22 @@ assert_ok "git --git-dir='$barec' rev-parse --verify t-ck-branch" \
   "checkpoint pushes the feature branch immediately"
 assert_contains "$(git -C state/worktrees/T-CK log -1 --pretty=%s)" "T-CK: checkpoint unit" \
   "checkpoint commit uses the supplied message"
-# Refuse protected branches.
-git -C state/worktrees/T-CK checkout -q main
+# --repo may be the worktree itself (not the session root).
+printf 'via-repo\n' > state/worktrees/T-CK/via.txt
+assert_ok "FM_ROOT='$dc/repo' bin/fm-checkpoint.sh --task T-CK --repo '$dc/repo/state/worktrees/T-CK' --message 'via worktree as repo'" \
+  "checkpoint accepts the worktree path as --repo"
+assert_ok "git --git-dir='$barec' cat-file -e t-ck-branch:via.txt" \
+  "worktree-as-repo checkpoint pushed the file"
+# --dir form (cwd-agnostic).
+printf 'via-dir\n' > state/worktrees/T-CK/via-dir.txt
+assert_ok "bin/fm-checkpoint.sh --dir '$dc/repo/state/worktrees/T-CK' --message 'via --dir'" \
+  "checkpoint --dir commits and pushes"
+assert_ok "git --git-dir='$barec' cat-file -e t-ck-branch:via-dir.txt" \
+  "--dir checkpoint reached the remote"
+# Refuse protected / non-feature tips. main is already the primary checkout,
+# so attach a detached worktree at main's tip (refuses as HEAD).
+git worktree remove -f state/worktrees/T-CK
+git worktree add -q --detach state/worktrees/T-CK main
 printf 'nope\n' > state/worktrees/T-CK/bad.txt
 assert_fail "FM_ROOT='$dc/repo' bin/fm-checkpoint.sh --task T-CK --repo '$dc/repo' --message 'should refuse main'" \
   "checkpoint refuses to write on main"

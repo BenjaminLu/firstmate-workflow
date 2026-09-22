@@ -40,14 +40,34 @@ fi
 
 if [ -n "$DIR" ]; then
   tree="$(cd "$DIR" && pwd -P)" || { echo "fm-checkpoint: no directory at $DIR" >&2; exit 70; }
-  REPO="$(git -C "$tree" rev-parse --show-toplevel 2>/dev/null)" || {
+  git -C "$tree" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
     echo "fm-checkpoint: $DIR is not a git worktree" >&2; exit 70; }
   TASK="$(basename "$tree")"
+  # Session root is usually two levels up from state/worktrees/<TASK>.
+  case "$tree" in
+    */state/worktrees/*)
+      REPO="$(cd "$tree/../.." && pwd -P)" || REPO="$tree"
+      ;;
+    *)
+      REPO="$tree"
+      ;;
+  esac
 else
   cd "$REPO" || { echo "fm-checkpoint: no repo at $REPO" >&2; exit 64; }
   REPO="$(pwd -P)"
-  tree="$REPO/state/worktrees/$TASK"
-  [ -d "$tree" ] || { echo "fm-checkpoint: no worktree at $tree" >&2; exit 70; }
+  if [ -d "$REPO/state/worktrees/$TASK" ]; then
+    tree="$REPO/state/worktrees/$TASK"
+  elif case "$REPO" in */state/worktrees/"$TASK") true ;; *) false ;; esac; then
+    tree="$REPO"
+    REPO="$(cd "$tree/../.." && pwd -P)" || REPO="$tree"
+  elif git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+       && [ ! -d "$REPO/state/worktrees" ]; then
+    # Caller passed the worktree as --repo (common when cwd is the worktree).
+    tree="$REPO"
+  else
+    echo "fm-checkpoint: no worktree at $REPO/state/worktrees/$TASK" >&2
+    exit 70
+  fi
 fi
 
 branch="$(git -C "$tree" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
@@ -81,12 +101,9 @@ if [ -n "$dirty" ]; then
 fi
 
 # Always push: a clean tree may still hold unpushed commits. Exiting before
-# push is the end-of-run-only black box this helper exists to end.
-if [ -x "$REPO/bin/fm-emit.sh" ] || [ -x "${FM_CODE_ROOT:-}/bin/fm-emit.sh" ]; then
-  EMIT="${FM_CODE_ROOT:-$REPO}/bin/fm-emit.sh"
-  FM_ROOT="$REPO" "$EMIT" --actor "${FM_ACTOR:-worker}" --task "$TASK" --type commit_pushed \
-    --en "checkpoint: $MSG" --tw "checkpoint：$MSG" >/dev/null 2>&1 </dev/null || true
-fi
+# push is the end-of-run-only black box this helper exists to end. Lifecycle
+# events stay with the producer (fm-worker / fm-review); checkpoint never
+# invents an actor on the board.
 git -C "$tree" push -q -u origin "$branch" </dev/null || {
   echo "fm-checkpoint: push failed for $branch" >&2
   exit 71
