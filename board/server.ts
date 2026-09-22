@@ -45,7 +45,8 @@ type Crew = {
   title: string | null;
   activity?: Record<string, string> | null;
   crew_name?: string;
-  progress?: number;
+  // Bounded only: done/total with a real denominator. Never a bare percent.
+  progress?: { done: number; total: number } | null;
 };
 // What an agent says it is. fm-review emits role "reviewer", fm-worker
 // "worker"; a run that says nothing is a worker, which is what a
@@ -147,10 +148,22 @@ const state = () => {
   const activity = new Map<string, Record<string,string>>();
   const phases = new Map<string, CrewState>();
   const names = new Map<string,string>();
-  const progress = new Map<string,number>();
+  const progress = new Map<string, { done: number; total: number }>();
   const roles = new Map<string,'worker'|'reviewer'>();
   const finished = new Set<string>();
   const handoffs: Array<Record<string,unknown>> = [];
+  // Only an object with a true denominator is progress. Bare numbers, stage
+  // maps and missing fields stay null — never a fake percent on the payload.
+  const bounded = (v: unknown): { done: number; total: number } | null => {
+    if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+    const o = v as { done?: unknown; total?: unknown };
+    const done = typeof o.done === "number" ? o.done : Number.NaN;
+    const total = typeof o.total === "number" ? o.total : Number.NaN;
+    if (!Number.isFinite(done) || !Number.isFinite(total) || total <= 0 || done < 0 || done > total) {
+      return null;
+    }
+    return { done, total };
+  };
   for (const [index, e] of events.entries()) {
     const actor = String(e.actor || '');
     const data = (e.data || {}) as Record<string, any>;
@@ -164,10 +177,16 @@ const state = () => {
       if (e.type === 'dispatched') names.delete(actor);
     }
     if (typeof data.crew_name === 'string') names.set(actor, data.crew_name);
-    if (typeof data.progress === 'number' && Number.isFinite(data.progress) && data.progress >= 0 && data.progress <= 100) progress.set(actor,data.progress);
+    const nextProgress = bounded(data.progress);
+    if (nextProgress) progress.set(actor, nextProgress);
     if (e.type === 'dispatched' || data.role) roles.set(actor, roleOf(actor,e));
-    const description = authored(data.activity) || (e.type === 'dispatched' || e.type === 'review_opened' ? authored(e.summary) : null);
+    // Mid-run authored data.activity wins over a static tasks.json activity
+    // and over a bilingual summary used only as a dispatch/review opener.
+    // Scalar titles are never treated as activity.
+    const description = authored(data.activity)
+      || (e.type === 'dispatched' || e.type === 'review_opened' ? authored(e.summary) : null);
     if (description) activity.set(actor,description);
+    // crew_status refreshes activity/progress only; it must not invent a phase.
     if (STAGE[e.type || '']) phases.set(actor,e.type === 'dispatched'
       ? (roleOf(actor,e) === 'reviewer' ? 'review' : 'working')
       : CREW_STATE(STAGE[e.type || '']));
@@ -212,7 +231,15 @@ const state = () => {
     id: "firstmate", role: "firstmate",
     state: greenlit ? (fm ? phases.get('firstmate') || 'unknown' : 'unknown') : "queued",
     task: fmTask, title: fmT?.title ?? null,
-    activity: fm ? activity.get('firstmate') || null : null,
+    activity: fm
+      ? (activity.get("firstmate")
+        || (fmTask
+          ? authored((defs.find((d) => d.id === fmTask) as { activity?: unknown } | undefined)?.activity)
+          : null)
+        || null)
+      : null,
+    progress: fm ? (progress.get("firstmate") ?? null) : null,
+    crew_name: fm ? names.get("firstmate") : undefined,
   }];
   // newest first, and firstmate is already pinned at the head: when the
   // deck overflows it is the oldest crewman that is dropped, never the
@@ -235,8 +262,11 @@ const state = () => {
       state: phases.get(actor) || 'unknown',
       task, title: t?.title ?? null,
       crew_name: names.get(actor),
-      progress: progress.get(actor),
-      activity: authored(defs.find(d=>d.id===task)?.activity) || authored(t?.title) || activity.get(actor) || null,
+      progress: progress.get(actor) ?? null,
+      // Event/mid-run activity first; static task.activity next; never title.
+      activity: activity.get(actor)
+        || authored((defs.find((d) => d.id === task) as { activity?: unknown } | undefined)?.activity)
+        || null,
     });
   }
   // The permanently aboard human captain is rendered separately from agents.

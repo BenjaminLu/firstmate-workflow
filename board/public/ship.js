@@ -146,7 +146,16 @@ const SHIP = (() => {
         ? `${a.task} · ${L(a.activity) || T('descriptionUnavailable')}`
         : L(a.activity) || T(s.greenlit ? "descriptionUnavailable" : "fmWaiting"),
       task: a.task || null,
-      pct: Number.isFinite(a.progress) && a.progress >= 0 && a.progress <= 100 ? a.progress : null,
+      // Only explicit bounded progress ({done,total}) becomes a bar. Coarse
+      // lifecycle state never invents a percentage.
+      pct: (() => {
+        const p = a.progress;
+        if (!p || typeof p !== "object") return null;
+        const done = Number(p.done), total = Number(p.total);
+        if (!Number.isFinite(done) || !Number.isFinite(total) || total <= 0) return null;
+        if (done < 0 || done > total) return null;
+        return Math.round((100 * done) / total);
+      })(),
     }));
   }
 
@@ -299,7 +308,9 @@ const SHIP = (() => {
       crew.map((c) => `<li class="st-${c.state}"><span class="av"></span>` +
         `<span class="nm">${esc(c.name)}</span>` +
         `<span class="st">${esc(T("lane" + c.state[0].toUpperCase() + c.state.slice(1)))}</span>` +
-        `<span class="jb">${esc(c.job)}</span></li>`).join("") + `</ul>`);
+        `<span class="jb">${esc(c.job)}` +
+        (c.pct == null ? "" : `<span class="pb" title="${c.pct}%"><i style="width:${c.pct}%"></i></span>`) +
+        `</span></li>`).join("") + `</ul>`);
   }
 
   // Drag to turn a crewman; the pointer owns him until it lets go.

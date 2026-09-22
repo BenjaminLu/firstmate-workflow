@@ -123,6 +123,18 @@ conversation may be Chinese. Dynamic user-facing board/event summaries require
 both `en` and `zh-TW`; static UI dictionaries do not translate those summaries.
 Only `bin/fm-emit.sh` appends events.
 
+### Mid-run crew progress (T-036)
+
+Producers (`fm-worker.sh`, `fm-review.sh`, managed herdr transport) emit
+lifecycle phases and authored `data.activity` `{en, zh-TW}` through
+`fm-emit.sh` at script-known nodes. Optional bounded `data.progress`
+`{done, total}` only when a true denominator exists. Do not invent
+task-specific progress from scalar titles, and do not treat pane heartbeat
+text as board state until it is emitted. Identical `crew_status` heartbeats
+are coalesced; a refresh may update activity without claiming percent
+complete. The 2026-09-20 captain-board prototype's random pct tick is
+demo-only.
+
 Do not edit a shell script or runtime wrapper while a live process executes it.
 Where code may change, use immutable per-run snapshots through the supported
 execution path. After suspected offset shifts or duplicate adapter execution,

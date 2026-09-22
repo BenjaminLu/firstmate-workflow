@@ -77,4 +77,24 @@ assert_eq "1" "$(FM_ROOT=/dev/null/nowhere bash "$ROOT/bin/fm-emit.sh" --actor x
   "a log it cannot write is 1 too"
 rm -rf "$u"
 
+# --- T-036: crew_status throttle coalesces identical heartbeats only -------
+c="$(mktemp -d)"; mkdir -p "$c/state"
+code_c() { FM_ROOT="$c" FM_CREW_STATUS_SECS=60 bash "$ROOT/bin/fm-emit.sh" "$@" >/dev/null 2>&1; printf '%s' "$?"; }
+assert_eq "0" "$(code_c --actor w1 --task T-1 --type crew_status \
+  --data '{"activity":{"en":"still running","zh-TW":"仍在跑"}}' \
+  --en "heartbeat" --tw "心跳")" "crew_status writes the first heartbeat"
+assert_eq "1" "$(wc -l < "$c/state/events.jsonl" | tr -d ' ')" "one crew_status line so far"
+assert_eq "0" "$(code_c --actor w1 --task T-1 --type crew_status \
+  --data '{"activity":{"en":"still running","zh-TW":"仍在跑"}}' \
+  --en "heartbeat" --tw "心跳")" "an identical heartbeat inside the window is a quiet success"
+assert_eq "1" "$(wc -l < "$c/state/events.jsonl" | tr -d ' ')" "identical heartbeats do not flood the log"
+assert_eq "0" "$(code_c --actor w1 --task T-1 --type crew_status \
+  --data '{"activity":{"en":"still running","zh-TW":"仍在跑"},"progress":{"done":2,"total":7}}' \
+  --en "gates 2/7" --tw "關卡 2/7")" "a changed progress payload always writes"
+assert_eq "2" "$(wc -l < "$c/state/events.jsonl" | tr -d ' ')" "bounded progress is not dropped by the throttle"
+assert_eq "0" "$(code_c --actor w1 --task T-1 --type crew_status \
+  --data '{"progress":67}' --en "fake" --tw "假")" "a bare percent payload is still accepted as an event"
+assert_eq "3" "$(wc -l < "$c/state/events.jsonl" | tr -d ' ')" "refused bare percent is a distinct payload, so it writes"
+rm -rf "$c"
+
 finish

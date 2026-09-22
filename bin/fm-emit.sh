@@ -22,7 +22,7 @@ LOCK="$ROOT/state/.events.lock"
 TYPES="greenlit dispatched commit_pushed pr_opened gate_passed gate_failed \
 review_opened review_failed ask_pass_criteria criteria_returned protocol_violation approved \
 merged closed decision_requested decision_made worker_crashed vendor_unavailable \
-agent_finished"
+agent_finished crew_status"
 
 # 64 is what the OPTION LOOP exits, and only the option loop: a flag with
 # no value after it, and a flag this script does not know. Everything
@@ -77,6 +77,32 @@ line=$(jq -cn \
 
 mkdir -p "$ROOT/state" || die "cannot create $ROOT/state"
 
+# High-frequency mid-run refreshes must not flood the log. crew_status is
+# coalesced per actor when the payload fingerprint is unchanged inside the
+# throttle window (FM_CREW_STATUS_SECS, default 10; 0 disables). A changed
+# activity or bounded progress always writes.
+crew_fp=''; stamp=''; now=''
+if [ "$type" = crew_status ]; then
+  secs="${FM_CREW_STATUS_SECS:-10}"
+  case "$secs" in
+    ''|*[!0-9]*) secs=10 ;;
+  esac
+  stamp_dir="$ROOT/state/.crew-status-throttle"
+  mkdir -p "$stamp_dir" || die "cannot create $stamp_dir"
+  safe="$(printf '%s' "$actor" | tr -c 'A-Za-z0-9._-' '_')"
+  stamp="$stamp_dir/$safe"
+  now="$(date -u +%s)"
+  crew_fp="$(printf '%s' "$line" | jq -cr '{data:(.data//{}),summary:(.summary//{})}' 2>/dev/null || printf '%s' "$line")"
+  if [ "$secs" -gt 0 ] && [ -f "$stamp" ]; then
+    prev_ts="$(awk -F'\t' 'NR==1{print $1}' "$stamp" 2>/dev/null || printf 0)"
+    prev_fp="$(awk -F'\t' 'NR==1{print $2}' "$stamp" 2>/dev/null || printf '')"
+    case "$prev_ts" in ''|*[!0-9]*) prev_ts=0 ;; esac
+    if [ "$crew_fp" = "$prev_fp" ] && [ $(( now - prev_ts )) -lt "$secs" ]; then
+      exit 0
+    fi
+  fi
+fi
+
 # mkdir is the portable atomic lock; macOS ships no flock(1)
 for _ in $(seq 1 600); do
   if mkdir "$LOCK" 2>/dev/null; then
@@ -89,6 +115,9 @@ for _ in $(seq 1 600); do
     trap 'exit 143' TERM
     trap 'exit 129' HUP
     printf '%s\n' "$line" >> "$LOG"
+    if [ "$type" = crew_status ] && [ -n "$stamp" ]; then
+      printf '%s\t%s\n' "${now:-$(date -u +%s)}" "$crew_fp" > "$stamp"
+    fi
     exit 0
   fi
   perl -e 'select(undef,undef,undef,0.01)' 2>/dev/null || sleep 0.05

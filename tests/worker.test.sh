@@ -30,7 +30,8 @@ fixture() {                     # a repo with a remote, a task, and the real scr
   cd "$d/repo" || return 1
   git config user.email a@b.c; git config user.name t
   mkdir -p bin design skills/worker state
-  cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-worker.sh" bin/
+  cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-worker.sh" \
+     "$ROOT/bin/fm-checkpoint.sh" "$ROOT/bin/fm-guard.sh" bin/
   cp -r "$ROOT/bin/adapters" bin/
   cp "$ROOT/skills/worker/SKILL.md" skills/worker/
   printf 'vendor: mock\nfallback:\n  - mock\n' > config.yaml
@@ -79,6 +80,17 @@ assert_contains "$(cat "$d/ghcalls")" "pr create" "it opened a pull request"
 log="$r/state/events.jsonl"
 assert_contains "$(jq -r .type < "$log" | tr '\n' ' ')" "commit_pushed" "it emitted commit_pushed"
 assert_contains "$(jq -r .type < "$log" | tr '\n' ' ')" "pr_opened" "it emitted pr_opened"
+assert_eq "$(jq -r 'select(.type=="dispatched")|.actor' "$log")" \
+  "$(jq -r 'select(.type=="dispatched")|.data.crew_name' "$log")" \
+  "the worker publishes its exact canonical actor as crew_name"
+assert_ne "null" "$(jq -r 'select(.type=="dispatched")|.data.activity.en' "$log")" \
+  "the worker emits authored activity.en (never invents from a missing field as null-only)"
+assert_ne "null" "$(jq -r 'select(.type=="dispatched")|.data.activity["zh-TW"]' "$log")" \
+  "the worker emits authored activity.zh-TW"
+assert_contains "$(jq -r .type < "$log" | tr '\n' ' ')" "crew_status" \
+  "the worker emits mid-run crew_status at a script-known node"
+assert_eq "0" "$(jq -c 'select(.type=="crew_status" and (.data.progress!=null))' "$log" | wc -l | tr -d ' ')" \
+  "ordinary mid-run status does not invent a percentage without a denominator"
 
 # the prompt carries the task and the skill, and is not left lying around
 assert_fail "test -f '$r/state/worktrees/T-Z/.fm-prompt.md'" "the prompt is cleaned up"
@@ -1191,4 +1203,43 @@ assert_eq 70 "$?" "ordinary PID publication failure refuses to run"
 assert_fail "test -d '$rf/state/worktrees/T-998'" "publication failure precedes worktree mutation"
 assert_fail "test -e '$rf/state/worktrees/T-998.pid'" "failed publication leaves no false PID claim"
 rm -rf "$df"
+
+# --- T-036: mid-run checkpoint (commit then push; never main / never PR) ---
+assert_ok "test -x '$ROOT/bin/fm-checkpoint.sh'" "fm-checkpoint.sh is the stock mid-run save helper"
+assert_ok "grep -q 'fm-checkpoint.sh' '$ROOT/bin/fm-worker.sh'" \
+  "fm-worker final sweep goes through fm-checkpoint.sh"
+assert_ok "grep -q 'fm-checkpoint.sh' '$ROOT/skills/worker/SKILL.md'" \
+  "worker skill requires checkpoint after each logical commit"
+assert_ok "grep -qE 'WORKER_COMPLETE|only push' '$ROOT/skills/worker/SKILL.md'" \
+  "skill forbids waiting until WORKER_COMPLETE for the only push"
+
+dc="$(mktemp -d)"; barec="$dc/remote.git"
+git init -q --bare "$barec"
+git init -q -b main "$dc/repo"
+cd "$dc/repo" || exit 1
+git config user.email a@b.c; git config user.name t
+cp "$ROOT/bin/fm-checkpoint.sh" "$ROOT/bin/fm-guard.sh" .
+mkdir -p bin; cp fm-checkpoint.sh fm-guard.sh bin/
+printf 'base\n' > README; git add README; git commit -qm base
+git remote add origin "$barec"; git push -q -u origin main
+git checkout -q -b t-036-checkpoint
+printf 'unit\n' > work.txt
+assert_ok "./bin/fm-checkpoint.sh --dir . --message 'T-036: checkpoint unit'" \
+  "checkpoint commits dirty work on a feature branch"
+assert_ok "git --git-dir='$barec' rev-parse --verify t-036-checkpoint" \
+  "checkpoint pushes the feature branch immediately"
+assert_contains "$(git log -1 --pretty=%s)" "T-036: checkpoint unit" \
+  "checkpoint commit uses the supplied message"
+# Refuse protected branches.
+git checkout -q main
+printf 'nope\n' > bad.txt
+assert_fail "./bin/fm-checkpoint.sh --dir . --message 'should refuse main'" \
+  "checkpoint refuses to write on main"
+assert_fail "git --git-dir='$barec' cat-file -e origin/main:bad.txt 2>/dev/null" \
+  "refused main checkpoint pushes nothing"
+# Never a PR helper: the script has no gh / pr create path.
+assert_fail "grep -nE '\\\$GH|pr create|gh pr' '$ROOT/bin/fm-checkpoint.sh'" \
+  "checkpoint is branch save-only (no PR create)"
+rm -rf "$dc"
+
 finish

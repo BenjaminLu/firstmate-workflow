@@ -37,8 +37,47 @@ cd "$REPO" || { echo "fm-review: no repo at $REPO" >&2; exit 64; }
 # per run, like the worker's: a constant actor collapses two concurrent
 # rounds into one crewman carrying whichever task the second one touched
 NAME="${NAME:-reviewer-$$}"
-emit_once() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --data '{"role":"reviewer"}' --actor "$NAME" --task "$TASK" "$@" >/dev/null 2>&1 </dev/null; }
+CREW_DATA="$(jq -cn --arg role reviewer --arg name "$NAME" \
+  --arg en 'Work description unavailable' --arg tw '尚無工作說明' \
+  '{role:$role,crew_name:$name,activity:{en:$en,"zh-TW":$tw}}')"
+set_crew_activity() {
+  local authored
+  authored="$(jq -c '
+    .activity
+    | select(type == "object"
+        and (.en | type == "string" and test("\\S"))
+        and (."zh-TW" | type == "string" and test("\\S")))
+    | {en:.en,"zh-TW":."zh-TW"}
+  ' <<<"$1" 2>/dev/null)"
+  [ -z "$authored" ] || CREW_DATA="$(jq -c --argjson activity "$authored" '.activity=$activity' <<<"$CREW_DATA")"
+}
+emit_once() {
+  local data="$CREW_DATA" args=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --data)
+        data="$(jq -c --argjson extra "${2-}" '. * $extra' <<<"$data")" || return 1
+        shift 2
+        ;;
+      *) args+=("$1"); shift ;;
+    esac
+  done
+  FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --data "$data" --actor "$NAME" --task "$TASK" \
+    ${args[@]+"${args[@]}"} >/dev/null 2>&1 </dev/null
+}
 emit() { emit_once "$@" || true; }
+emit_status() {
+  local en="$1" tw="$2" done="${3-}" total="${4-}" data
+  data="$(jq -cn --argjson base "$CREW_DATA" --arg en "$en" --arg tw "$tw" \
+    --arg done "$done" --arg total "$total" '
+    $base * {activity:{en:$en,"zh-TW":$tw}}
+    + (if ($done|test("^[0-9]+$")) and ($total|test("^[1-9][0-9]*$"))
+         and (($done|tonumber) <= ($total|tonumber))
+       then {progress:{done:($done|tonumber),total:($total|tonumber)}}
+       else {} end)
+  ')"
+  emit_once --type crew_status --data "$data" --en "$en" --tw "$tw" || true
+}
 # Armed where emit() first works: every exit between the two would board
 # an actor that never leaves. Above it is only the argument parsing,
 # which exits 64 before emit() exists.
@@ -70,14 +109,6 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
-# Said at the START of the round, not at the end of it. A reviewer's
-# whole run is one call to an engine, and this was emitted after that
-# call returned - so the only two events a round ever wrote, this and
-# the ending, landed a moment apart and the board never had a reviewer
-# on the deck at all. An agent is aboard while it is working, which for
-# a reviewer is the part that takes the minutes.
-emit --type review_opened --en "round $ROUND on $TASK" --tw "$TASK 第 $ROUND 輪審核"
-
 # The task spec comes from the branch under review, not from whatever is
 # checked out. A task defined on its own branch - which is how a new one
 # arrives - was invisible to the reviewer and to the gate: `no task
@@ -90,6 +121,17 @@ task_spec() {   # task_spec <task> [branch]
 }
 spec="$(task_spec "$TASK" "$BRANCH")"
 [ -n "$spec" ] || { echo "fm-review: no task $TASK" >&2; exit 65; }
+# Activity comes from the task spec when authored; never from the title.
+set_crew_activity "$spec"
+
+# Said at the START of the round, not at the end of it. A reviewer's
+# whole run is one call to an engine, and this was emitted after that
+# call returned - so the only two events a round ever wrote, this and
+# the ending, landed a moment apart and the board never had a reviewer
+# on the deck at all. An agent is aboard while it is working, which for
+# a reviewer is the part that takes the minutes.
+emit --type review_opened --en "round $ROUND on $TASK" --tw "$TASK 第 $ROUND 輪審核"
+emit_status "Review adapter starting on $TASK" "開始審核 $TASK"
 
 # A round that produced nothing is not a round, so review_opened is emitted
 # once the chain has actually produced a verdict - otherwise three crashed
@@ -198,7 +240,13 @@ if [ -n "$PR" ]; then
   $GH pr comment "$PR" --body "$verdict" >/dev/null 2>&1 || true
 fi
 case "$verdict" in
-  *"APPROVE:$TASK"*) emit --type approved --en "reviewer signed $TASK" --tw "reviewer 已簽 $TASK" ;;
+  *"APPROVE:$TASK"*)
+    emit --type approved --en "reviewer signed $TASK" --tw "reviewer 已簽 $TASK"
+    emit_status "Verdict signed: APPROVE:$TASK" "已簽署裁決：APPROVE:$TASK"
+    ;;
+  *"REJECT:$TASK"*)
+    emit_status "Verdict signed: REJECT:$TASK" "已簽署裁決：REJECT:$TASK"
+    ;;
 esac
 printf '%s\n' "$verdict"
 rm -rf "$work"
