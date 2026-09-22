@@ -22,12 +22,33 @@ elapsed() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo 
 
 d="$(fixture)"
 bad="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --request D-99 --task T-1 --title 'missing' 2>&1)"
-assert_eq "64" "$?" "title-only new requests fail"
+assert_eq "64" "$?" "numeric title-only new requests fail"
 assert_contains "$bad" '--details requires complete authored' 'missing details have actionable feedback'
 assert_fail "test -f '$d/state/pending/D-99.json'" "missing authored input creates no card"
 jq 'del(."zh-TW".options.B.cons)' "$d/details.json" > "$d/invalid.json"
 assert_fail "FM_ROOT='$d' '$d/bin/fm-decide.sh' --request D-98 --task T-1 --details '$d/invalid.json'" "incomplete localized tradeoffs fail"
 assert_fail "test -f '$d/state/pending/D-98.json'" "invalid payload creates no partial card"
+
+# Legacy skill-update path: D-SK-* + matching SK-* + --title, no invented details.
+dleg="$(fixture)"
+leg_title='skill-update: worker - say the round-three rule once (A adopt it, B leave it)'
+leg="$(FM_ROOT="$dleg" "$dleg/bin/fm-decide.sh" --request D-SK-001 --task SK-001 --kind choice --title "$leg_title")"
+assert_ok "test -f '$leg'" "legacy skill-update request writes a pending file"
+assert_eq "$leg_title" "$(jq -r .title "$leg")" "legacy request persists the given --title"
+assert_eq "SK-001" "$(jq -r .task "$leg")" "legacy request records the matching skill task"
+assert_eq "null" "$(jq -r .details "$leg")" "legacy request invents no details object"
+assert_eq "choice" "$(jq -r .kind "$leg")" "legacy request records kind"
+assert_contains "$(jq -r .type < "$dleg/state/events.jsonl")" "decision_requested" \
+  "legacy request still emits decision_requested"
+assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --request D-SK-001 --task SK-001 --title 'again'" \
+  "legacy replacement is refused"
+assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --request D-SK-002 --task SK-999 --title 'mismatch'" \
+  "legacy rejects a task that does not match D-SK id"
+assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --request D-SK-002 --task SK-002" \
+  "legacy without --title fails"
+assert_fail "test -f '$dleg/state/pending/D-SK-002.json'" "legacy without title creates no card"
+assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --request D-SK-002 --task SK-002 --details '$d/details.json'" \
+  "skill-update ids cannot take the strict --details path"
 dstream="$(fixture)"
 { printf '%s\n' '{}'; cat "$d/details.json"; } > "$dstream/stream.json"
 assert_fail "FM_ROOT='$dstream' '$dstream/bin/fm-decide.sh' --request D-97 --task T-1 --details '$dstream/stream.json'" \
@@ -153,5 +174,5 @@ assert_fail "FM_ROOT='$d4' '$d4/bin/fm-decide.sh' --await D-9 --timeout 2" "it t
 # the words may appear in a comment explaining the absence; a call may not
 assert_fail "grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-decide.sh' | grep -qE '\\b(fswatch|watchexec|entr)\\b'" \
   "it calls neither fswatch, watchexec nor entr"
-rm -rf "$d" "$d2" "$d3" "$d4" "$d5" "$d6" "$d8" "$dstream" "$dctrl" "$stub"
+rm -rf "$d" "$d2" "$d3" "$d4" "$d5" "$d6" "$d8" "$dstream" "$dctrl" "$dleg" "$stub"
 finish
