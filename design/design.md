@@ -150,7 +150,12 @@ Types: `greenlit` `dispatched` `commit_pushed` `pr_opened` `gate_passed`
 `gate_failed` `review_opened` `review_failed` `ask_pass_criteria`
 `criteria_returned` `protocol_violation` `approved` `merged` `closed`
 `decision_requested` `decision_made` `worker_crashed` `vendor_unavailable`
-`agent_finished`.
+`agent_finished` `crew_status`.
+
+`crew_status` is the mid-run refresh (T-036): authored `data.activity` and
+optional bounded `data.progress: {done, total}` without changing lifecycle
+phase. Identical payloads are coalesced per actor so heartbeats cannot flood
+the log.
 
 `dispatched` and `agent_finished` bracket one run of one agent, and they
 are what the board reads to decide who is aboard. An agent is running from
@@ -658,12 +663,49 @@ do not open it. Pending decisions come from pending records, not task stages.
 Crew payloads add `activity: {en, "zh-TW"}`, `crew_name` and optional bounded
 `progress` without changing canonical actor IDs or roles. Replay retains each
 actor's dispatch/activity description and last applicable lifecycle phase
-across technical events, independently of the 40-event recent list. Localized
-task activity takes precedence when available; scalar titles are not guessed
-translations. Missing descriptions and unknown phases are explicitly labeled.
+across technical events, independently of the 40-event recent list. Replayed
+event activity (`crew_status`, dispatch summaries, and similar) takes precedence
+over static `tasks.json` `activity`; static copy is a fallback when nothing has
+been emitted yet. Scalar titles are not guessed translations. Missing
+descriptions and unknown phases are explicitly labeled.
 Finished actors cannot reappear through late technical events; a new dispatch
 starts fresh activity. Producers lacking authored summaries need firstmate
 coordination with the owning task, not fabricated board descriptions.
+
+#### Mid-run progress (truthful; T-036)
+
+Captains need more than “wait for the final result,” but the board must not
+invent motion. The throwaway prototype under
+`design/proposals/2026-09-20-captain-board/prototype.html` randomly ticks
+`pct` for demo only; that behaviour is not product truth and must not be
+ported into production percentages.
+
+Three layers, coarsest first:
+
+1. **Phase** — mechanical lifecycle labels emitted only from script-known
+   nodes (adapter started, tests running, commit pushed, review opened,
+   verdict signed, and similar). Vendors share the same producers.
+2. **Activity** — authored `data.activity` `{en, "zh-TW"}` describing what is
+   observably underway. Prefer script and artifact evidence over model prose.
+3. **Bounded progress** — optional `{done, total}` on the event and crew
+   payload only when a real denominator exists (closed-list items, gates). The
+   board never accepts a bare percentage. No denominator means no progress bar
+   and no percentage.
+
+Pane heartbeats and vendor JSON buffers are not board state until a producer
+writes through `bin/fm-emit.sh`. High-frequency `crew_status` updates are
+coalesced per actor: identical activity/progress payloads inside the throttle
+window are dropped; within a window only `FM_CREW_STATUS_BURST` distinct payloads
+may write so varying heartbeat text cannot flood the log; a changed bounded
+progress always writes. The
+UI hides progress chrome when bounded progress is absent; mapping coarse stage
+names to fixed percentages is forbidden.
+
+Mid-run branch saves use `bin/fm-checkpoint.sh`: after each logical commit the
+worker commits (if dirty) and immediately pushes the feature branch. Waiting
+until `WORKER_COMPLETE` for the only push is forbidden. Checkpoint never
+merges, never writes `main`/`master`, and never opens a pull request;
+`fm-worker.sh` may still run a final sweep through the same helper.
 
 ### Ahoy
 
@@ -880,3 +922,4 @@ gates, and the dispatcher cannot dispatch itself.
 | T-032 | the red check reaches the worker as an empty block | T-031 |
 | T-033 | firstmate startup contract | T-007, T-006, T-013 |
 | T-034 | clear localized captain decisions and reliable outcome effects | T-010, T-013, T-014 |
+| T-036 | truthful crew progress | T-034, T-002, T-010 |

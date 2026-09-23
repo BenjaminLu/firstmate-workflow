@@ -23,11 +23,31 @@ Implement the task so that all seven gates pass. Read them in
   green light wired to nothing. Write the test first, watch it fail, then make
   it pass.
 
+Board mid-run status (phase / authored `data.activity` / optional bounded
+`{done,total}` progress) is emitted by the worker script through `fm-emit.sh`
+at script-known nodes. Do not invent percentages from lifecycle labels or
+scalar titles; heartbeat pane text is not board state until emitted.
+
 ## What you never do
 
-You never run `git` or `gh`. Not commit, not push, not open a pull request,
-not merge, not rebase. The scripts do all of that. Edit files in your worktree
-and stop.
+You never merge, never write to `main`/`master`, never open or edit a pull
+request, and never rebase onto protected branches. Raw `git` / `gh` for those
+operations stays forbidden.
+
+**Mid-run checkpoint (required):** after each logical unit of work — and
+before any `ASK-PASS-CRITERIA` if you also changed files — run the stock
+helper so the PR is never a black box waiting for the final script commit:
+
+```bash
+bin/fm-checkpoint.sh --task <TASK> --message "<short why>" --repo <root>
+# or, from inside the worktree:
+bin/fm-checkpoint.sh --dir . --message "<short why>"
+```
+
+That commits and immediately pushes the feature branch only. Do not wait
+until `WORKER_COMPLETE` for the only push. `fm-worker.sh` still does a
+final sweep through the same helper and will also publish a dirty
+worktree on EXIT (TERM/INT), but mid-run saves are your job.
 
 ## Every finding is a class
 
@@ -70,17 +90,16 @@ regression you just introduced, say so plainly and carry on with the list.
 
 ## Saying something on the pull request
 
-You may not run `git` or `gh`. That is what lets a CLI with no repository
-access be a worker at all, and the scripts around you do every one of those
-operations themselves.
+You may not open, merge, or rewrite pull requests with raw `git` / `gh`. Branch
+saves go through `bin/fm-checkpoint.sh`.
 
-When you need to say something where the reviewer will see it — and when requesting the initial
-closed list that is the whole of your turn, because you ask before you
-change anything — write it to **`.fm-say.md`** in your worktree. The worker script
-attempts publication when a PR is available and removes the file before its
-commit step. Inspect its reported publication result; writing the file alone
-does not establish that the reviewer received it. Preserve any reported recovery
-copy on failure.
+When you need to say something where the reviewer will see it — and when
+requesting the initial closed list that is the whole of your turn, because you
+ask before you change anything — write it to **`.fm-say.md`** in your worktree.
+The worker script attempts publication when a PR is available and removes the
+file before its commit step. Inspect its reported publication result; writing
+the file alone does not establish that the reviewer received it. Preserve any
+reported recovery copy on failure.
 
 A round in which you only ask is a complete round. Do not change files as
 well as asking: the point of asking is that you do not yet know what would
@@ -115,5 +134,7 @@ no-mistakes is a prerequisite; do not add their hooks.
 
 Keep repository prose and `.fm-say.md` in English. Dynamic user-facing board/event
 summaries require both `en` and `zh-TW`; static UI dictionaries do not supply them.
+Do not invent mid-run board progress: scripts emit phase and authored activity
+through `fm-emit.sh`; bounded `{done,total}` only when a real denominator exists.
 Do not edit scripts or runtime wrappers executing in a live process. Coordinate
 immutable run snapshots if needed and revalidate interrupted or duplicated runs.

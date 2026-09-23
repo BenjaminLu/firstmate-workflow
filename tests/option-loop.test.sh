@@ -35,6 +35,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Scripts and distinct value-taking flag names. fm repeats --repo in three
 # subcommands; its seven parser branches are exercised separately below.
 PINNED="fm 5
+fm-checkpoint 5
 fm-cleanup 2
 fm-decide 9
 fm-diagram 4
@@ -126,7 +127,7 @@ while read -r name want; do
     fi
   done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "61" "$total" "every pinned flag and all seven fm option branches were exercised"
+assert_eq "66" "$total" "every pinned flag and all seven fm option branches were exercised"
 
 # A script that grows an option loop has to be pinned here too, and the
 # corpus is the one bin/ci.sh judges - literally, out of
@@ -201,7 +202,7 @@ while IFS= read -r f; do
   assert_contains "$said" "fm-config.sh" "and says which library"
   rm -rf "$tmp"
 done < <(fm_shell_corpus "$ROOT/bin")
-assert_eq "6" "$sourced" "six scripts take their guard from the library"
+assert_eq "7" "$sourced" "seven scripts take their guard from the library"
 
 # And the other half of the same number, because two comments say it is
 # pinned here and until now it was not: the scripts that deliberately

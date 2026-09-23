@@ -24,6 +24,9 @@ Check, in order:
 4. What did the diff change that no test covers?
 5. For anything you found: is it one occurrence, or one of a kind? Say which.
 
+For mid-run board progress (T-036): reject invented percentages, stage→pct
+maps, missing `en`/`zh-TW` activity, or progress without a true denominator.
+
 ## Name the class, not the instance
 
 When you find something, say what **kind** of thing it is, so the worker can
@@ -112,4 +115,5 @@ confirm publication; launcher success does not prove its comment was posted.
 Use repository verification and actual CI evidence. Neither lavish nor
 no-mistakes is a prerequisite; do not add their hooks. Captain scope and merge
 decisions remain on the board; the merge helper itself checks neither approval
-nor the seven gates.
+nor the seven gates. Mid-run board progress is script-emitted only: do not invent
+percentages from coarse lifecycle state in review prose or fixtures.

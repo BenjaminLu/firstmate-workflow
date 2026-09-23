@@ -250,7 +250,10 @@
 .roster .av{width:16px;height:16px;border-radius:4px;background:var(--av,#33506f)}
 .roster .nm{font:650 13px var(--mono);color:#dbe8f4}
 .roster .st{font-size:13px;padding:1px 7px;border-radius:99px;border:1px solid var(--bubEdge,#2c3f52);color:#9dbdd6;justify-self:start}
-.roster .jb{color:#8fa9bd;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.roster .jb{color:#8fa9bd;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.roster .jb .pb{display:inline-block;vertical-align:middle;margin-left:8px;width:48px;height:3px;
+  background:rgba(255,255,255,.12);border-radius:2px;overflow:hidden}
+.roster .jb .pb i{display:block;height:100%;background:var(--accent)}
 .roster li.st-working{--av:#2f5478} .roster li.st-review{--av:#5a3f7d}
 .roster li.st-gate{--av:#7c322b}
 .roster li.st-captain{--av:#2c5f49}

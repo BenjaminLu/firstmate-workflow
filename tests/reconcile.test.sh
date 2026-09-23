@@ -582,7 +582,8 @@ echo "  real worker preserves no-PR boundaries across repeated offline recovery"
 for terminal in CLOSED MERGED; do
   for timing in historical current new-attempt; do
     d="$(fixture)"; cleanup_stub "$d"
-    cp "$ROOT/bin/fm-worker.sh" "$ROOT/bin/fm-config.sh" "$d/bin/"
+    cp "$ROOT/bin/fm-worker.sh" "$ROOT/bin/fm-config.sh" \
+      "$ROOT/bin/fm-checkpoint.sh" "$ROOT/bin/fm-guard.sh" "$d/bin/"
     mkdir -p "$d/design" "$d/stub" "$d/state/worktrees/T-011"
     echo '{"tasks":[{"id":"T-011","title":"test","scope":[]}]}' > "$d/design/tasks.json"
     cat > "$d/stub/git" <<'SH'

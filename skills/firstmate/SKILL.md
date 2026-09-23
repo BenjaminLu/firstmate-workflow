@@ -32,7 +32,10 @@ Continue independent authorized tasks while a decision waits.
    concurrency by config and account for existing work before dispatch.
 3. In a user-managed Herdr session (`HERDR_ENV=1`), check `herdr` availability
    there, read installed `herdr --skill` and help, and inspect the caller pane and
-   live panes. Launch future worker/reviewer processes through the normal script
+   live panes. Refresh mid-run board activity from pane evidence with
+   `python3 bin/fm-herdr.py emit-status` (same `crew_status` path as
+   `fm-worker.sh` / `fm-review.sh`; pane text is not board state until emitted).
+   Launch future worker/reviewer processes through the normal script
    and adapter path in explicit visible panes, preserve caller focus, and record
    actual pane, task, role and session identities. Reuse existing agents. An
    internal conversation subagent, a background CLI or a tail-only log pane is
@@ -122,6 +125,18 @@ without evidence. Static repository instructions and reviews are English; user
 conversation may be Chinese. Dynamic user-facing board/event summaries require
 both `en` and `zh-TW`; static UI dictionaries do not translate those summaries.
 Only `bin/fm-emit.sh` appends events.
+
+### Mid-run crew progress (T-036)
+
+Producers (`fm-worker.sh`, `fm-review.sh`, managed herdr transport) emit
+lifecycle phases and authored `data.activity` `{en, zh-TW}` through
+`fm-emit.sh` at script-known nodes. Optional bounded `data.progress`
+`{done, total}` only when a true denominator exists. Do not invent
+task-specific progress from scalar titles, and do not treat pane heartbeat
+text as board state until it is emitted. Identical `crew_status` heartbeats
+are coalesced; a refresh may update activity without claiming percent
+complete. The 2026-09-20 captain-board prototype's random pct tick is
+demo-only.
 
 Do not edit a shell script or runtime wrapper while a live process executes it.
 Where code may change, use immutable per-run snapshots through the supported

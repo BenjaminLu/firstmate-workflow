@@ -4,3 +4,5 @@ state/
 test-results/
 playwright-report/
 state/rescued/
+.fm-prompt.md
+.fm-say.md

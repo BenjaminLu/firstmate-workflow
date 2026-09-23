@@ -18,7 +18,8 @@ d="$(mktemp -d)"; r="$d/repo"
 git init -q -b main "$r"
 ( cd "$r" && git config user.email a@b.c && git config user.name t )
 mkdir -p "$r/bin" "$r/design" "$r/state" "$r/skills/worker" "$r/board"
-cp "$ROOT/bin/fm-worker.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$r/bin/"
+cp "$ROOT/bin/fm-worker.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" \
+  "$ROOT/bin/fm-checkpoint.sh" "$ROOT/bin/fm-guard.sh" "$r/bin/"
 cp -r "$ROOT/bin/adapters" "$r/bin/"
 cp "$ROOT/board/server.ts" "$r/board/"
 cp "$ROOT/skills/worker/SKILL.md" "$r/skills/worker/"
@@ -26,6 +27,9 @@ printf 'vendor: mock\n' > "$r/config.yaml"
 printf '{"tasks":[{"id":"T-1","title":"first","scope":["src/**"],"acceptance":["x"]},\n' > "$r/design/tasks.json"
 printf '          {"id":"T-2","title":"second","scope":["src/**"],"acceptance":["x"]}]}\n' >> "$r/design/tasks.json"
 ( cd "$r" && echo base > f && git add -A && git commit -qm base )
+# Push target for fm-checkpoint.sh (worker final sweep).
+git init -q --bare "$d/remote.git"
+( cd "$r" && git remote add origin "$d/remote.git" && git push -q -u origin main )
 
 mkdir -p "$d/stub"
 cat > "$d/stub/gh" <<G

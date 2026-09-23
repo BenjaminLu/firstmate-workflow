@@ -17,6 +17,19 @@ _fm_clean() {   # strip an inline comment, surrounding quotes, and stray space
       -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
 }
 
+# Session root for scripts that accept FM_ROOT / --repo. A deleted inherited
+# cwd (suite eval'd `cd` then `rm -rf`) makes bare `$(pwd)` fail under `set -e`
+# before absolute --dir/--repo flags can recover.
+fm_default_repo() {
+  if [ -n "${FM_ROOT:-}" ]; then
+    printf '%s\n' "$FM_ROOT"
+  elif _fm_pwd="$(pwd -P 2>/dev/null)"; then
+    printf '%s\n' "$_fm_pwd"
+  else
+    printf '\n'
+  fi
+}
+
 fm_cfg() {      # fm_cfg <key> [file]
   local f="${2:-config.yaml}"
   [ -f "$f" ] || return 1
@@ -163,6 +176,47 @@ fm_run_chain() {
 # true on the day it is typed, and a claim that a count is checked
 # somewhere else is worth no more than the check.
 fm_need() { [ "$#" -ge 3 ] || { echo "$1: $2 needs a value" >&2; exit 64; }; }
+
+# Commits that land on GitHub must use the operator's configured identity
+# (user.name / user.email), not a synthetic firstmate@local that GitHub
+# cannot link to an account. Override with FM_GIT_NAME / FM_GIT_EMAIL when
+# a bot identity is intentional.
+#
+# The lookup asks the worktree being committed to, not the caller's cwd:
+# fm-checkpoint --dir never cd's into the repo, so a cwd lookup saw only
+# whatever identity happened to be ambient - the operator's own config at
+# a terminal, and nothing at all on a CI runner, where a repo that does
+# configure an identity locally was refused a commit anyway.
+fm_git_name()  { printf '%s' "${FM_GIT_NAME:-$(git -C "${1:-.}" config user.name 2>/dev/null || true)}"; }
+fm_git_email() { printf '%s' "${FM_GIT_EMAIL:-$(git -C "${1:-.}" config user.email 2>/dev/null || true)}"; }
+fm_git_commit() {  # fm_git_commit <worktree> <message>
+  local dir="$1" msg="$2" n e
+  n="$(fm_git_name "$dir")"; e="$(fm_git_email "$dir")"
+  if [ -z "$n" ] || [ -z "$e" ]; then
+    echo "fm: set git user.name and user.email (or FM_GIT_NAME / FM_GIT_EMAIL) before committing" >&2
+    return 70
+  fi
+  git -C "$dir" -c user.name="$n" -c user.email="$e" commit -q -m "$msg"
+}
+
+# Managed Herdr sessions refresh mid-run activity through the same crew_status
+# path as fm-worker.sh / fm-review.sh (T-036).
+# Equals-form long opts on purpose: traps.sweep_unarmed matches `--actor VALUE`
+# (space form) on lifecycle scripts. This is a library helper, not an emitter
+# that boards a crewman, so space-form would false-positive the unarmed sweep.
+fm_herdr_emit_status() {  # fm_herdr_emit_status <root> <actor> <task> <en> <tw> [role [done total]]
+  local root="$1" actor="$2" task="$3" en="$4" tw="$5" role="${6:-worker}"
+  local done_n="${7-}" total_n="${8-}" py="${root}/bin/fm-herdr.py"
+  command -v python3 >/dev/null 2>&1 || return 2
+  [ -f "$py" ] || return 2
+  if [ -n "$done_n" ] && [ -n "$total_n" ]; then
+    python3 "$py" emit-status --root="$root" --actor="$actor" --task="$task" \
+      --role="$role" --en="$en" --tw="$tw" --done="$done_n" --total="$total_n"
+  else
+    python3 "$py" emit-status --root="$root" --actor="$actor" --task="$task" \
+      --role="$role" --en="$en" --tw="$tw"
+  fi
+}
 
 # --- what counts as a script, and what counts as a comment ---------------
 #

@@ -7,7 +7,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 fixture() {
   local d; d="$(mktemp -d)"
-  git init -q -b main "$d/repo"; cd "$d/repo" || return 1
+  # Keep the suite cwd out of the disposable fixture (same class as
+  # tests/worker.test.sh): git --git-dir fails once getcwd cannot run.
+  (
+  git init -q -b main "$d/repo"; cd "$d/repo" || exit 1
   git config user.email a@b.c; git config user.name t
   mkdir -p bin design skills/reviewer src state
   cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" bin/
@@ -19,6 +22,7 @@ fixture() {
   git checkout -q -b work
   echo "SECRET_WORKER_REASONING" > src/a
   git commit -qam work; git checkout -q main
+  ) || return 1
   printf '%s' "$d"
 }
 ghstub() { mkdir -p "$1/stub"
@@ -58,6 +62,14 @@ assert_contains "$out" "APPROVE:T-Z" "the verdict comes back"
 types="$(jq -r .type < "$r/state/events.jsonl" | tr '\n' ' ')"
 assert_contains "$types" "review_opened" "it emitted review_opened"
 assert_contains "$types" "approved" "an APPROVE emits approved"
+assert_contains "$types" "crew_status" "the reviewer emits mid-run crew_status"
+assert_eq "$(jq -r 'select(.type=="review_opened")|.actor' "$r/state/events.jsonl")" \
+  "$(jq -r 'select(.type=="review_opened")|.data.crew_name' "$r/state/events.jsonl")" \
+  "the reviewer publishes its exact canonical actor as crew_name"
+assert_ne "null" "$(jq -r 'select(.type=="review_opened")|.data.activity.en' "$r/state/events.jsonl")" \
+  "the reviewer emits activity.en on review_opened"
+assert_ne "null" "$(jq -r 'select(.type=="review_opened")|.data.activity["zh-TW"]' "$r/state/events.jsonl")" \
+  "the reviewer emits activity.zh-TW on review_opened"
 
 # praise is not an approval
 d2="$(fixture)"; r2="$d2/repo"; GH2="$(ghstub "$d2")"
