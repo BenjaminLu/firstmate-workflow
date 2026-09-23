@@ -69,7 +69,8 @@ These bind every actor, including firstmate itself.
 | Q6 | Where determinism ends | Scripts decide whether it ran; models only judge whether it is right |
 | Q7 | Round three | `ASK-PASS-CRITERIA` plus a numbered, closed checklist |
 | Q8 | Diagram scope | Only decisions the captain must rule on; reuse existing diagrams first |
-| Q9 | Where pull requests live | `BenjaminLu/firstmate-workflow`, public so branch protection is available |
+| Q9 | Where pull requests live | `BenjaminLu/firstmate-workflow`, public so branch protection is available; under Q10 a task's pull request lives on its project's repository |
+| Q10 | Which repositories firstmate drives | D-049, option B: one external installation — this repository holds the engine, every project's design and task list, and all runtime state, and drives registered target repositories that carry none of it (section 15) |
 | R1 | Self-update | Skills define behaviour; writing them back travels a full pull request; external skills import read-only |
 | R2 | What the reviewer sees | The diff, the task spec and the acceptance criteria — never the worker's reasoning |
 | R3 | Granularity | One task, one pull request, one worktree; `depends_on` forms a DAG; three in flight |
@@ -1101,7 +1102,8 @@ global skills.
 - The board binds `127.0.0.1` and opens no external port.
 - The repository is public so that branch protection is available, which means
   nothing secret may enter it — no local paths, no credentials, no customer
-  content.
+  content. That includes the design and task list of every registered project;
+  section 15.8 names the captain decision private projects are waiting on.
 
 ---
 
@@ -1168,3 +1170,299 @@ gates, and the dispatcher cannot dispatch itself.
 | T-044 | a completed run's pane actually closes | T-035 |
 | T-040 | captain's board layout parity with the 2026-09-20 prototype | T-034, T-036 |
 | T-043 | the project declares its setup and checks; the gates stop hard-coding this repo's toolchain | T-041, T-039 |
+
+### M3 — driving other repositories
+
+| id | title | depends on |
+|---|---|---|
+| T-045 | design: firstmate drives other repositories from one external installation | T-043 |
+| T-046 | the project registry and the two roots | T-043, T-045 |
+| T-047 | the project on events, decisions and pull request sync | T-046 |
+| T-048 | `fm-project.sh`: managed clones, target verification and the guard | T-046 |
+| T-049 | spec pins: gate 4 reads a pinned scope, not the branch | T-047, T-048 |
+| T-050 | project-aware gates 1–3 and 5–7 | T-049 |
+| T-051 | the worker and the reviewer in a target checkout | T-049 |
+| T-052 | role prompts carry the project's design from the engine side | T-051 |
+| T-053 | dispatch, run and session across projects | T-050, T-051 |
+| T-054 | the board shows which project | T-047 |
+| T-055 | the first external project, proved end to end | T-052, T-053, T-054 |
+
+---
+
+## 15. Driving other repositories (the external model)
+
+Captain decision D-049 chose option B: **one external installation.** This
+repository holds the engine (`bin/`, `skills/`, `board/`), the design and task
+list of every project, and all runtime state under `state/`. It drives target
+repositories, which receive only the branches and pull requests of their own
+tasks and carry nothing of firstmate's.
+
+This section is the plan; the M3 tasks in section 14 implement it. Until each
+one merges, sections 5 to 12 describe the running system. Every M3 task keeps
+self-hosting working on its own: this repository is registered as a project,
+it is the default, and a script called without `--project` behaves exactly as
+it does today.
+
+### 15.1 Two roots, and how a script learns which is which
+
+There are three trees, of which two are roots:
+
+| Tree | What it is | How a script finds it |
+|---|---|---|
+| code tree | the frozen snapshot of `bin/` and `skills/` a launch runs from (section 11) | `FM_CODE_ROOT`, unchanged |
+| **engine root** | this repository's checkout: `config.yaml`, every project's design and task list, `state/` | `--repo` / `FM_ROOT`, unchanged in meaning |
+| **project root** | the git repository a task's diff lands in | only from the registry, via `--project` / `FM_PROJECT` |
+
+`--repo` and `FM_ROOT` keep meaning *where the configuration, the task lists
+and the state are*. Every caller, fixture and hook that passes them today is
+already passing the engine root, so none of them changes meaning.
+
+The project is always named, never inferred. One library function in
+`bin/fm-config.sh` resolves it: `--project <name>` wins, then `FM_PROJECT`,
+then `default_project` from `config.yaml`. No script reads the project from the
+current directory, a git remote or the worktree it happens to be in — a run
+must not change project because a shell was somewhere else. A name the registry
+does not hold exits `65`, like an unknown task. Scripts export `FM_PROJECT` and
+the resolved `FM_PROJECT_ROOT` to their children so nested launches cannot
+disagree; adapters still receive only their worktree.
+
+A project's root is either the engine root itself (`repo: .`, which is how
+this repository hosts itself) or an **engine-managed clone** at
+`state/projects/<name>/repo`, cloned from the project's GitHub repository.
+Managed clones, rather than a path to the captain's own checkout, because:
+
+- the engine repository is public (section 13), so no local absolute path may
+  be committed into its registry;
+- the captain's own checkout of a target is never touched — no worktree
+  metadata, hooks or branches appear in it;
+- firstmate owns the clone's fetch and prune life cycle, as it owns
+  `state/worktrees/` today.
+
+### 15.2 The registry
+
+`config.yaml` gains `default_project` and a `projects:` map:
+
+```yaml
+default_project: firstmate-workflow
+projects:
+  firstmate-workflow:                     # this repository, hosting itself
+    repo: .
+    github: BenjaminLu/firstmate-workflow
+    base: main
+    required_check: ci
+    design: design/design.md
+    tasks: design/tasks.json
+    # setup / check / check_env / tests / test: the contract T-043 introduces,
+    # with the values that reproduce today's gates 3 and 5
+  example-app:                            # an external target
+    github: example-org/example-app
+    base: main
+    required_check: check
+    # design and tasks default to projects/example-app/design.md and .../tasks.json
+    # setup / check / check_env / tests / test as T-043 defines them
+```
+
+| Field | Meaning | Rule |
+|---|---|---|
+| name (the key) | the project's identity everywhere: events, decisions, pins, paths | `[a-z0-9-]`, at most 24 characters |
+| `repo` | `.` for the engine itself; absent means the managed clone | any other value is refused (exit `65`) — a committed local path would publish one |
+| `github` | `owner/repo` pull requests are opened on | required |
+| `base` | the branch tasks branch from and target | required; gates 1, 2 and the guard use it instead of a literal `main` |
+| `required_check` | the status check name branch protection requires | required; gate 6 and target verification read it |
+| `design`, `tasks` | paths **relative to the engine root** | default `projects/<name>/design.md` and `projects/<name>/tasks.json` |
+| `setup`, `check`, `check_env`, `tests`, `test` | T-043's per-project build and test contract | T-043's merged text defines their semantics; this section only moves them under a project |
+
+Until the self entry carries T-043's fields, the top-level values T-043 adds
+remain the default project's values, so no intermediate state breaks the gate.
+`bin/ci.sh`'s agreement check between a design's task table and its task list
+runs once for every registered `(design, tasks)` pair.
+
+### 15.3 Where each project's things live
+
+| What | Self project | Any other project |
+|---|---|---|
+| design | `design/design.md` | `projects/<name>/design.md` (engine root, committed) |
+| task list | `design/tasks.json` | `projects/<name>/tasks.json` (engine root, committed) |
+| checkout | the engine root | `state/projects/<name>/repo` |
+| worktrees | `state/worktrees/<task>` | `state/projects/<name>/worktrees/<task>` |
+| spec pins | `state/pins/<name>/<task>/` | `state/pins/<name>/<task>/` |
+| events | `state/events.jsonl` | the same log, carrying `project` |
+| decisions | `state/decisions/D-*.json` | the same directory, carrying `project` |
+| runs, reviews, unsent, rescued | `state/runs/<actor>/` and siblings | the same, with `project` in `identity.json` |
+
+The self project keeps its current paths so no merged test, cleanup rule or
+recovery path moves. Each worktree root keeps section 5.2a's rule — cleanup
+removes only a direct child of **that project's** root.
+
+Task ids are unique within a project, not across projects: the key is
+`(project, task)`. One event log, not one per project, because it keeps one
+writer lock, one replay and one board; a per-project log would multiply every
+recovery path in section 12.
+
+### 15.4 How the log, the board and decisions name the project
+
+- **Events** gain a top-level `project` field, written by `fm-emit.sh
+  --project` and validated against the registry (unknown exits `65`). An event
+  without it belongs to the default project, so every line already in the log
+  stays valid. Every event about a non-default project carries it. `pr` stays
+  a number; `(project, pr)` is the key.
+- **Decisions** carry `project` in the request and the response. Ids stay
+  global `D-<n>`. `fm-run.sh`'s derivation of `D-<task-number>` stays for the
+  default project only; for any other project it allocates the next free
+  number under a lock, because two projects can both have a `T-004`. Merge
+  cards name the project and link the pull request on the project's GitHub
+  repository.
+- **`fm-sync-prs.sh`** polls every registered project's repository and writes
+  what it finds with that project.
+- **The board** shows a project chip on lane cards, crew bubbles and decision
+  cards, and filters with `?project=`; without it, it shows all projects. Chip
+  labels come from the UI dictionaries; a project's name is data and is not
+  translated. Dynamic summaries still carry `en` and `zh-TW`.
+- **Crew identity** is unchanged: the locked run counter already makes labels
+  unique across projects. `identity.json` records the project.
+
+### 15.5 Gate 4 under the external model
+
+Today gate 4 reads the task's scope from `design/tasks.json` **on the task's
+own branch**, falling back to the working copy. Under option B a target's
+branch has no task list, and the engine's working copy can change during a
+run. Both sources go.
+
+1. **Source.** The scope comes from the project's task list in the engine
+   repository, at a **pinned engine commit** — never from the target branch and
+   never from the engine's working copy.
+2. **Pinning.** On a task's first round `fm-worker.sh` writes
+   `state/pins/<project>/<task>/1.json` holding the project, task, engine
+   commit, task-list path, the spec verbatim, its SHA-256, the design path and
+   the target base commit, and emits `spec_pinned`. The engine commit is the
+   engine's `main` head, which must contain the task. The self project has
+   one exception, because that is how a self-hosted task arrives today, this
+   one included: a task not yet on `main` is pinned from its own branch's
+   commit if the entry is there, and otherwise from the engine's working copy
+   with `engine_commit: null`. Such a task must commit that same entry on its
+   own branch, which self-hosted acceptance already requires.
+3. **Reading.** Every later round, gate run and review reads the highest
+   numbered pin. With an engine commit, it re-derives the spec from
+   `git show <commit>:<tasks path>`; a hash mismatch fails the gate, so an
+   edited pin file is caught. Without one, the branch's own entry must match
+   the pin's hash. Later commits to the engine's `main` do not reach a pinned
+   run. Pin files are append-only and never rewritten.
+4. **Changing scope.** The worker still says so and stops. Firstmate raises a
+   `choice` card. If the captain authorizes it, the new spec is committed to
+   the engine repository through an ordinary engine pull request, merged on a
+   merge card. Then `fm-project.sh repin --task <t> --decision D-<n>` writes
+   the next pin citing both. It refuses unless the decision record is a
+   `decision_made` for that project and task with the authorizing option, and
+   the new commit is on the engine's `main` with a spec that differs. It emits
+   `spec_repinned`. The decision records who authorized the change; the commit
+   records what was authorized.
+5. **Failing.** Gate 4 fails with no pin, with a mismatched pin, with a changed
+   file outside the pinned scope, and — for a self-hosted task — when the
+   branch's own task-list entry differs from its pin. The last one is new: a
+   self-hosted pull request can no longer widen its scope by editing its own
+   entry. In a target it also fails on any firstmate artifact (15.6),
+   whatever the scope says.
+6. **What the reviewer and the gates see.** `fm-review.sh` builds its prompt
+   from the pinned spec and the project's design at the pin's commit (15.7).
+   The pull request body on the target carries the task id, title, acceptance,
+   scope and `spec pin: <project>/<task>#<n> <sha256 prefix>`, so a person on
+   the target sees what the reviewer saw. Gate 7 keeps its marker and reads
+   the target pull request's comments.
+
+`spec_pinned` and `spec_repinned` join the event types in section 5.1.
+
+### 15.6 Git and GitHub for a target
+
+Pull requests open on the project's `github` repository against its `base`,
+from the managed clone, with `gh … --repo <owner/repo>`. Merge, sync and
+cleanup name the same repository.
+
+**What a target needs**, checked by `fm-project.sh verify <name>` before any
+dispatch to it; a failure refuses dispatch with exit `70` and names the item:
+
+- `base` protected, `enforce_admins` on, the branch required to be up to date,
+  and `required_check` a required status check;
+- a workflow on the target that runs the declared `check` under the
+  `required_check` name. It arrives through the target's own review — added by
+  its owner, or by a firstmate task whose pinned scope names it — never as a
+  side effect of other work;
+- the fm-guard hooks active in the managed clone: `core.hooksPath` in the
+  clone's local git config points at the engine's `.githooks/`, and the guard
+  protects `main`, `master` and the project's `base`. The hooks are never
+  copied into the target's tree;
+- the captain's credentials able to push branches and open pull requests.
+
+**What firstmate never writes into a target:**
+
+- a commit to `base` or any protected branch, or a force-push to anything but
+  the task's own branch;
+- any of its own artifacts: designs, task lists, pins, state, events,
+  decisions, skills, `config.yaml`, prompts, logs, `.fm-say.md`,
+  `.fm-prompt.md`. The clone's `.git/info/exclude` keeps `.fm-*` local, and
+  gate 4 fails on any `.fm-*` path;
+- repository settings, branch protection, secrets, labels, webhooks, releases
+  or tags;
+- committed git configuration or hooks, or changes to the target's own
+  `AGENTS.md`, `CLAUDE.md` or CI workflows, unless the pinned scope names them;
+- anything outside the pinned scope.
+
+The self project follows the same rules, except that its design and task list
+legitimately live in its own tree.
+
+### 15.7 Roles when the checkout is not this repository
+
+Routing does not depend on the checkout. Section 11 already delivers the role
+skill and canonical identity through each adapter's launcher prompt, so a
+target without firstmate's `AGENTS.md` routes the same. A target's own
+`AGENTS.md` or `CLAUDE.md` are that project's coding instructions; the
+explicitly dispatched role still wins, as it does here.
+
+The prompt carries from the engine side what the checkout cannot:
+
+- the role skill and the pinned spec, as today;
+- the project's design context: the design file at the pin's commit, bounded
+  in size, with any truncation stated in the prompt rather than silent;
+- the project's gate facts: `base`, the `check` it will be judged by, the
+  test contract gate 5 applies;
+- the absolute path of the checkpoint helper in the frozen code tree, because
+  a target has no `bin/fm-checkpoint.sh`.
+
+The worker and reviewer skills stop pointing at repository-relative files
+(`design/design.md`, `design/tasks.json`, `bin/fm-checkpoint.sh`) and refer to
+"the design, scope and checkpoint command in your prompt". The self project
+gets the same prompt shape. The reviewer still sees the diff, the spec and the
+design — never the worker's reasoning (R2). Firstmate itself always runs in
+the engine root and names the project on every script it calls.
+
+### 15.8 Open captain decision: private projects
+
+Section 13 keeps the engine public so branch protection is available, and
+D-049 puts every project's design and task list in the engine. A private
+target's design would therefore be published. This design does not guess:
+until the captain decides, **only projects whose GitHub repository is public
+may be registered**, and `fm-project.sh verify` refuses a private one.
+
+The card to raise when a private project is wanted:
+
+- **A** — the engine stays public; a private project's design and task list
+  live in a separate private repository that the registry names;
+- **B** — the engine repository becomes private, which needs a plan that
+  offers branch protection on private repositories;
+- **C** — public targets only, as settled here.
+
+### 15.9 Order of work
+
+The M3 tasks in section 14 carry the exact scopes and acceptance. The order
+follows one rule: each merges on its own, and after each one this repository,
+as its own default project, still drives itself with no change to any caller.
+
+1. T-046 the registry and root resolution — nothing reads them yet.
+2. T-047 `project` on events and decisions — absent means default.
+3. T-048 `fm-project.sh` clone, verify and guard — nothing dispatches yet.
+4. T-049 pins and the new gate 4 — the self project is pinned too.
+5. T-050 the other gates read the project — the self values are today's.
+6. T-051 the worker and the reviewer in a target checkout.
+7. T-052 prompts carry the engine-side design.
+8. T-053 dispatch, run and session across projects.
+9. T-054 the board shows which project.
+10. T-055 a fixture target driven end to end, and the README for registering one.

@@ -147,6 +147,10 @@ Spec is settled and the bootstrap is under way. `design/proposals/` holds the
 board proposal the captain green-lit — a throwaway prototype, not the
 implementation.
 
+Driving other repositories from this one installation is designed in section
+15 of the design and not yet built: until the M3 tasks land, firstmate drives
+only this repository.
+
 ```sh
 open design/proposals/2026-09-20-captain-board/prototype.html
 ```
