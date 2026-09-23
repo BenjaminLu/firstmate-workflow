@@ -1113,3 +1113,4 @@ gates, and the dispatcher cannot dispatch itself.
 | T-039 | fm-gate.sh's gate 3 must run the full local gate at the budget design.md already authorizes | — |
 | T-041 | firstmate never loses a captain order it did not act on | T-035 |
 | T-042 | a worker that changed files still opens its PR when it also leaves a note | T-005, T-031 |
+| T-044 | a completed run's pane actually closes | T-035 |

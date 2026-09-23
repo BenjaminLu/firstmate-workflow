@@ -181,10 +181,13 @@ def close_owned(run, owner, control):
                 or owner.get('task') != result.get('task')): return 'retained: not owned'
         status = control('pane', 'get', pane)['pane']
         tokens = status.get('tokens', {})
+        # agent_status is not consulted: real Herdr keeps reporting 'working'
+        # after the agent exits and the pane is back at an idle prompt, so it
+        # retained every completed run. Idleness is shell_only() below.
         if (status.get('pane_id') != pane or status.get('terminal_id') != owner['terminal_id']
                 or status.get('tab_id') != owner['tab_id']
                 or status.get('workspace_id') != owner['workspace_id']
-                or status.get('label') != owner['actor'] or status.get('agent_status') not in ('idle', 'done')
+                or status.get('label') != owner['actor']
                 or tokens.get('fm_actor') != owner['actor'] or tokens.get('fm_task') != owner['task']
                 or tokens.get('fm_run') != (owner.get('run_token') or Path(owner['run']).name)):
             return 'retained: pane identity or state changed'
