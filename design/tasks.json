@@ -1025,6 +1025,30 @@
         "Fail-first tests in tests/session.test.sh: an observed-but-unacknowledged decision appears in status; after ack it no longer appears; ack is idempotent and refuses an unknown id; status never removes or rewrites decision, pending or observation files. tests/skills.test.sh keeps passing with the updated skill. Run bin/ci.sh and report observed results.",
         "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
       ]
+    },
+    {
+      "id": "T-042",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-005",
+        "T-031"
+      ],
+      "title": "a worker that changed files still opens its PR when it also leaves a note",
+      "scope": [
+        "bin/fm-worker.sh",
+        "tests/worker.test.sh",
+        "skills/worker/**",
+        "design/design.md",
+        "design/tasks.json"
+      ],
+      "acceptance": [
+        "Incident (2026-09-23, T-041 round 1): the claude adapter runs with --permission-mode acceptEdits, so the worker edited every file but could not execute tests. It wrote a completion note in .fm-say.md saying so. fm-worker.sh (the asked/spoke block near 'asking is premature') treats any .fm-say.md as a question, so on a first round with no PR it keeps the note in state/unsent/ and exits 73. It opens no PR, even though the worktree had real changes. This task's own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+        "When a round changed files in the worktree and also left a .fm-say.md, fm-worker.sh commits and pushes as usual, opens the pull request if none exists, then posts the note as a PR comment. Only a round that left a note and changed nothing, on a branch with no PR, keeps the existing 'asking is premature' behaviour (note kept under state/unsent/, worker_crashed event, non-zero exit). .fm-say.md is still never committed.",
+        "skills/worker/SKILL.md: a worker whose adapter cannot execute commands does not stop or ask because it cannot run tests. It finishes the work, says in its note which checks it could not run, and ends with WORKER_COMPLETE:<task>. Verification is the gates' job and the pull request's required GitHub check. Keep the existing closed-list and ASK-PASS-CRITERIA rules unchanged.",
+        "Fail-first tests in tests/worker.test.sh with the mock adapter and the existing gh stub: a round-one adapter that changes a file and writes .fm-say.md ends with an opened PR and the note posted as a comment; a round-one adapter that only writes .fm-say.md still opens no PR and keeps the note under state/unsent/. Evidence is the pull request's required GitHub check and the seven gates; this task does not require the worker to execute tests itself.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
     }
   ]
 }

@@ -582,14 +582,32 @@ spoke=0
 # request to find out - no permission, rate limited, locked, wrong
 # number. The run said where the text is and not what went wrong.
 say_err=''
-if [ "$asked" = 1 ] && [ -n "$PR" ]; then
+post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
   say_err="$(scratch_new)" || say_err=''
   [ -z "$say_err" ] || scratch_add "$say_err"
-  if $GH pr comment "$PR" --body-file "$say" >/dev/null 2>"${say_err:-/dev/null}" </dev/null; then
+  if $GH pr comment "$2" --body-file "$1" >/dev/null 2>"${say_err:-/dev/null}" </dev/null; then
     spoke=1
-    emit --type ask_pass_criteria --pr "$PR" --en "the worker spoke on #$PR" \
-         --tw "工人在 #$PR 上發言"
+    emit --type ask_pass_criteria --pr "$2" --en "the worker spoke on #$2" \
+         --tw "工人在 #$2 上發言"
   fi
+}
+# A note is not only a question. An adapter that may edit but not execute
+# finishes the work and says which checks it could not run, and on a
+# first round that note used to be read as a question asked before there
+# was a pull request: kept, exit 73, and the work in the worktree never
+# reached one. A note beside real changes waits for the pull request this
+# round is about to open. It is set aside OUT of the worktree first, so
+# the commit below cannot take it even from a branch that tracks it.
+held=''
+if [ "$asked" = 1 ] && [ -z "$PR" ] && [ -n "$(git -C "$tree" status --porcelain -- . \
+     ":(exclude).fm-prompt.md" ":(exclude).fm-say.md")" ]; then
+  held="$(scratch_new)" || held=''
+  [ -n "$held" ] || { echo "fm-worker: could not make a scratch file" >&2; exit 70; }
+  scratch_add "$held"
+  cp "$say" "$held" || { echo "fm-worker: could not set the worker's note aside" >&2; exit 70; }
+fi
+if [ "$asked" = 1 ] && [ -n "$PR" ]; then
+  post_note "$say" "$PR"
 fi
 # A question that went nowhere used to be a line on standard error and
 # an exit 0: the run reported a complete round, the log said nothing,
@@ -602,7 +620,7 @@ fi
 # So the file is kept, not removed, and the event carries the number:
 # a failed round that cannot be linked to the pull request it failed on
 # is a card the captain cannot act on.
-if [ "$asked" = 1 ] && [ "$spoke" = 0 ]; then
+keep_unsent() {   # keep_unsent <file>; reads $PR, never returns
   # Out of the worktree, which is removed and recreated on the next
   # round: keeping the file where it was written is not keeping it, and
   # the design says the text survives so a human can post it. Beside
@@ -622,11 +640,18 @@ if [ "$asked" = 1 ] && [ "$spoke" = 0 ]; then
   # happened, in a run whose whole point is reporting in its own voice
   mkdir -p "$(dirname "$kept")" 2>&1 | sed 's/^/fm-worker: /' >&2
   echo "fm-worker: the worker had something to say and there was nowhere to put it" >&2
-  if cp "$say" "$kept" 2>/dev/null; then
+  if cp "$1" "$kept" 2>/dev/null; then
     echo "fm-worker: it is at ${kept#"$REPO"/}" >&2
   else
     echo "fm-worker: and it could not be kept either - ${kept#"$REPO"/} is not writable" >&2
-    echo "fm-worker: the text is in $say until the next round recreates that worktree" >&2
+    if [ "$1" = "$say" ]; then
+      echo "fm-worker: the text is in $say until the next round recreates that worktree" >&2
+    else
+      # a scratch copy is removed on exit, so print it rather than
+      # naming a file that will not be there to read
+      echo "fm-worker: the text was:" >&2
+      sed 's/^/fm-worker: | /' "$1" >&2
+    fi
   fi
   # Two causes, because there are two. The middle one - "or a gh that
   # did not answer" - is gone: the lookup keeps its exit status now and
@@ -643,6 +668,11 @@ if [ "$asked" = 1 ] && [ "$spoke" = 0 ]; then
          --tw "工人在還沒有 PR 的時候提問"
   fi
   exit 73
+}
+# held means the note waits for the pull request opened below, which is
+# the only case where no pull request yet is not the end of the round
+if [ "$asked" = 1 ] && [ "$spoke" = 0 ] && [ -z "$held" ]; then
+  keep_unsent "$say"
 fi
 rm -f "$say"
 
@@ -703,6 +733,14 @@ else
   emit_status "Pushed another round to #$num" "已推第二輪到 #$num"
   emit --type commit_pushed --pr "$num" --en "pushed another round to #$num" \
        --tw "第二輪已推上 #$num"
+fi
+# the note that waited for a pull request has one now. Refused, it is
+# kept and the run fails the way a refused note on an existing pull
+# request does - the work and the pull request stand either way.
+if [ -n "$held" ]; then
+  PR="$num"
+  post_note "$held" "$num"
+  [ "$spoke" = 1 ] || keep_unsent "$held"
 fi
 printf '%s\n' "$branch"
 [ "${rc:-1}" = "0" ] || exit 1

@@ -97,13 +97,25 @@ When you need to say something where the reviewer will see it — and when
 requesting the initial closed list that is the whole of your turn, because you
 ask before you change anything — write it to **`.fm-say.md`** in your worktree.
 The worker script attempts publication when a PR is available and removes the
-file before its commit step. Inspect its reported publication result; writing
-the file alone does not establish that the reviewer received it. Preserve any
-reported recovery copy on failure.
+file before its commit step. On a round that changed files and has no PR yet,
+it commits, pushes and opens the PR first, then posts the note there. A note
+with no changed files and no PR is a premature question: it is kept under
+`state/unsent/` and the round fails. Inspect its reported publication result;
+writing the file alone does not establish that the reviewer received it.
+Preserve any reported recovery copy on failure.
 
 A round in which you only ask is a complete round. Do not change files as
 well as asking: the point of asking is that you do not yet know what would
 pass.
+
+## When you cannot run commands
+
+Some adapters let you edit files but not execute anything. That is not a
+reason to stop or to ask. Finish the work, write in `.fm-say.md` which checks
+you could not run, and end with `WORKER_COMPLETE:<task>`. Verification is the
+job of the seven gates and the pull request's required GitHub check. Do not
+claim a test passed that you did not run; gate 5 still applies to the tests
+you write.
 
 ## Evidence and role boundary
 
