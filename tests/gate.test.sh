@@ -21,7 +21,15 @@ JSON
   git -C "$d" add -A; git -C "$d" commit -qm base
   printf '%s' "$d"
 }
-gate() { "$GATE" --task T-X --repo "$1" --branch "$2" --only "$3" "${@:4}" >/dev/null 2>&1; }
+# Hermetic against the caller's own environment: this suite runs as one of
+# bin/ci.sh's own tests/*.test.sh, and firstmate's documented way to run the
+# full local gate is FM_CI_MAX_SECONDS=600 bash bin/ci.sh (design.md section
+# 10) - the very value gate3() itself now sets. Left to inherit, an ambient
+# FM_CI_MAX_SECONDS would leak into gate3's subshell regardless of whether
+# gate3's own code sets it, so the "slow" case below would pass even under
+# gate3's old, unfixed bare-default behavior. env -u makes every case here
+# test what gate3 itself does, not what surrounds it.
+gate() { env -u FM_CI_MAX_SECONDS "$GATE" --task T-X --repo "$1" --branch "$2" --only "$3" "${@:4}" >/dev/null 2>&1; }
 
 # --- gate 1 --------------------------------------------------------------
 d="$(fixture)"
