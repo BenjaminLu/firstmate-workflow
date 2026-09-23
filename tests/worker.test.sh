@@ -347,7 +347,149 @@ assert_contains "$out8" "state/unsent/T-Z" "and the run says where"
 assert_contains "$(jq -r 'select(.type=="worker_crashed")|.summary.en // .en' \
   < "$r8/state/events.jsonl" | tail -1)" "before there was a pull request" \
   "and the log says which of the two it was"
+assert_lacks "$(cat "$d8/ghcalls" 2>/dev/null)" "pr create" \
+  "a note with no work behind it opens no pull request"
 rm -rf "$d8"
+
+# A note is not only a question. An adapter that may edit but not execute
+# (claude under acceptEdits) finishes the work and says which checks it
+# could not run - and on a first round the old block read that note as a
+# premature question, kept it in state/unsent/, exited 73 and opened no
+# pull request for work that was sitting in the worktree. Work plus a
+# note is a round that pushes, opens its pull request, and then speaks.
+d8w="$(fixture)"; r8w="$d8w/repo"; GH8w="$(ghstub "$d8w")"
+cat > "$r8w/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+mkdir -p "$3/src"; printf 'the work\n' > "$3/src/done.txt"
+printf 'COULD NOT RUN: tests/worker.test.sh\n' > "$3/.fm-say.md"
+M
+chmod +x "$r8w/bin/adapters/mock.sh"
+# the stub records the body it was handed, so the assertion is about
+# what the reviewer reads and not only that a comment was attempted
+cat > "$d8w/stub/gh" <<G
+#!/usr/bin/env bash
+echo "gh \$*" >> "$d8w/ghcalls"
+case " \$* " in
+  *" pr list "*) echo null; exit 0 ;;
+  *" pr comment "*)
+    while [ \$# -gt 0 ]; do
+      [ "\$1" = --body-file ] && cat "\$2" >> "$d8w/commented"; shift
+    done
+    exit 0 ;;
+esac
+echo "https://example.invalid/pull/42"
+G
+chmod +x "$d8w/stub/gh"
+out8w="$(cd "$r8w" && FM_ROOT="$r8w" FM_GH="$GH8w" bin/fm-worker.sh --task T-Z 2>&1)"; rc8w=$?
+assert_eq "0" "$rc8w" "a first round that changed files and left a note is a complete round"
+assert_contains "$(cat "$d8w/ghcalls" 2>/dev/null)" "pr create" "it opens the pull request"
+calls8w="$(cat "$d8w/ghcalls" 2>/dev/null)"
+assert_contains "$calls8w" "pr comment 42" "and the note goes to the pull request it just opened"
+# order, not presence: a comment attempted before the pull request exists
+# has nowhere to land
+assert_eq "pr create" "$(grep -o 'pr create\|pr comment' "$d8w/ghcalls" 2>/dev/null | head -1)" \
+  "the pull request is opened before the note is posted"
+assert_eq "COULD NOT RUN: tests/worker.test.sh" "$(cat "$d8w/commented" 2>/dev/null)" \
+  "with the worker's own words as the comment body"
+b8w="$(cd "$r8w" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1)"
+assert_ok "cd '$ROOT' && git --git-dir='$d8w/remote.git' cat-file -e '$b8w:src/done.txt'" \
+  "the work was committed and pushed"
+assert_fail "cd '$ROOT' && git --git-dir='$d8w/remote.git' cat-file -e '$b8w:.fm-say.md'" \
+  "and the note never reaches the diff"
+assert_lacks "$out8w" "asking is premature" "a note beside real work is not a premature question"
+assert_fail "ls '$r8w'/state/unsent/T-Z-*.md" "nothing is left unsent"
+types8w="$(jq -r .type < "$r8w/state/events.jsonl" | tr '\n' ' ')"
+assert_contains "$types8w" "pr_opened" "the log records the pull request"
+assert_lacks "$types8w" "worker_crashed" "and no crash"
+assert_eq "42" "$(jq -r 'select(.type=="ask_pass_criteria")|.pr' < "$r8w/state/events.jsonl" | tail -1)" \
+  "and that the worker spoke on it"
+rm -rf "$d8w"
+
+# The same round when the new pull request will not take the comment: the
+# work is already pushed and the pull request open, so those stand - but
+# the note is kept where a human can post it and the run says so, exactly
+# as a refused comment on an existing pull request does.
+d8x="$(fixture)"; r8x="$d8x/repo"
+cat > "$r8x/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+mkdir -p "$3/src"; printf 'the work\n' > "$3/src/done.txt"
+printf 'COULD NOT RUN: anything\n' > "$3/.fm-say.md"
+M
+chmod +x "$r8x/bin/adapters/mock.sh"
+mkdir -p "$d8x/stub"
+cat > "$d8x/stub/gh" <<G
+#!/usr/bin/env bash
+echo "gh \$*" >> "$d8x/ghcalls"
+case " \$* " in
+  *" pr list "*) echo null; exit 0 ;;
+  *" pr comment "*) echo "refused by the stub" >&2; exit 1 ;;
+esac
+echo "https://example.invalid/pull/42"
+G
+chmod +x "$d8x/stub/gh"
+out8x="$(cd "$r8x" && FM_ROOT="$r8x" FM_GH="$d8x/stub/gh" bin/fm-worker.sh --task T-Z 2>&1)"; rc8x=$?
+assert_eq "73" "$rc8x" "a note the new pull request refused still fails the run"
+assert_contains "$(cat "$d8x/ghcalls" 2>/dev/null)" "pr create" "after the pull request was opened"
+assert_contains "$out8x" "#42 would not take the comment" "naming the pull request that refused it"
+assert_contains "$out8x" "refused by the stub" "and passing on what gh said"
+unsent8x=("$r8x"/state/unsent/T-Z-*.md)
+assert_eq "COULD NOT RUN: anything" "$(cat "${unsent8x[0]}" 2>/dev/null)" \
+  "and the note is kept outside the worktree"
+assert_eq "42" "$(jq -r 'select(.type=="worker_crashed")|.pr' < "$r8x/state/events.jsonl" | tail -1)" \
+  "the crash event carries the number"
+rm -rf "$d8x"
+
+# Every other way out between setting the note aside and posting it. The
+# note left the worktree before the commit, so the scratch copy is the
+# only one; a push the remote refuses (71), a url with no number in it
+# (72) or a TERM while the pull request is being opened (143) used to
+# remove that copy with the rest of the scratch files. Each keeps it
+# under state/unsent/ and says so, and each keeps its own exit status.
+held_note_case() {   # held_note_case <label> <want-rc> <gh-create-body> [pre-receive]
+  local d r out rc
+  d="$(fixture)"; r="$d/repo"
+  cat > "$r/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+mkdir -p "$3/src"; printf 'the work\n' > "$3/src/done.txt"
+printf 'COULD NOT RUN: anything\n' > "$3/.fm-say.md"
+M
+  chmod +x "$r/bin/adapters/mock.sh"
+  mkdir -p "$d/stub"
+  cat > "$d/stub/gh" <<G
+#!/usr/bin/env bash
+echo "gh \$*" >> "$d/ghcalls"
+case " \$* " in
+  *" pr list "*) echo null; exit 0 ;;
+  *" pr create "*) $3 ;;
+esac
+exit 0
+G
+  chmod +x "$d/stub/gh"
+  if [ -n "${4:-}" ]; then
+    printf '#!/bin/sh\necho "%s" >&2\nexit 1\n' "$4" > "$d/remote.git/hooks/pre-receive"
+    chmod +x "$d/remote.git/hooks/pre-receive"
+  fi
+  out="$(cd "$r" && FM_ROOT="$r" FM_GH="$d/stub/gh" bin/fm-worker.sh --task T-Z 2>&1)"; rc=$?
+  assert_eq "$2" "$rc" "$1: the run keeps its own exit status"
+  local kept=("$r"/state/unsent/T-Z-*.md)
+  assert_eq "COULD NOT RUN: anything" "$(cat "${kept[0]}" 2>/dev/null)" \
+    "$1: the note that never reached a pull request is kept outside the worktree"
+  assert_contains "$out" "state/unsent/T-Z" "$1: and the run says where"
+  assert_lacks "$(cat "$d/ghcalls" 2>/dev/null)" "pr comment" "$1: no comment was attempted"
+  assert_contains "$(jq -r 'select(.type=="worker_crashed")|.summary.en // .en' \
+    < "$r/state/events.jsonl" | tail -1)" "note" "$1: and the log records the note was not posted"
+  rm -rf "$d"
+}
+held_note_case "push refused" 71 'echo https://example.invalid/pull/42' "refused by the remote"
+held_note_case "no pull request number" 72 'echo "something went wrong"'
+# the stub TERMs the worker while it waits on `pr create`; bash runs the
+# trap when the command substitution returns. Single-quoted: the stub
+# reads the pid file through the FM_ROOT the worker handed down
+held_note_case "TERM while opening the pull request" 143 \
+  'kill -TERM "$(cat "$FM_ROOT/state/worktrees/T-Z.pid")"; echo https://example.invalid/pull/42'
 
 # A later round whose lookup could not answer. "No pull request" and
 # "gh did not answer" used to be the same empty string, and they are

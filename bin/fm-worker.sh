@@ -191,6 +191,8 @@ finished() {
   # reach here via `exit`; SIGKILL cannot. Mid-run saves use fm-checkpoint.sh.
   publish_wip_if_dirty "exit-$rc" || true
   fm_record_end "$rc"
+  # before clean_scratch, which would remove the only copy of it
+  [ -z "${held:-}" ] || [ "${held_settled:-0}" = 1 ] || lost_held "$rc"
   clean_scratch
   local try=3
   while [ "$try" -gt 0 ]; do
@@ -582,15 +584,15 @@ spoke=0
 # request to find out - no permission, rate limited, locked, wrong
 # number. The run said where the text is and not what went wrong.
 say_err=''
-if [ "$asked" = 1 ] && [ -n "$PR" ]; then
+post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
   say_err="$(scratch_new)" || say_err=''
   [ -z "$say_err" ] || scratch_add "$say_err"
-  if $GH pr comment "$PR" --body-file "$say" >/dev/null 2>"${say_err:-/dev/null}" </dev/null; then
+  if $GH pr comment "$2" --body-file "$1" >/dev/null 2>"${say_err:-/dev/null}" </dev/null; then
     spoke=1
-    emit --type ask_pass_criteria --pr "$PR" --en "the worker spoke on #$PR" \
-         --tw "工人在 #$PR 上發言"
+    emit --type ask_pass_criteria --pr "$2" --en "the worker spoke on #$2" \
+         --tw "工人在 #$2 上發言"
   fi
-fi
+}
 # A question that went nowhere used to be a line on standard error and
 # an exit 0: the run reported a complete round, the log said nothing,
 # and the next round asked the same question again. This does not
@@ -602,7 +604,7 @@ fi
 # So the file is kept, not removed, and the event carries the number:
 # a failed round that cannot be linked to the pull request it failed on
 # is a card the captain cannot act on.
-if [ "$asked" = 1 ] && [ "$spoke" = 0 ]; then
+save_unsent() {   # save_unsent <file>; copies it under state/unsent/ and says where
   # Out of the worktree, which is removed and recreated on the next
   # round: keeping the file where it was written is not keeping it, and
   # the design says the text survives so a human can post it. Beside
@@ -622,12 +624,25 @@ if [ "$asked" = 1 ] && [ "$spoke" = 0 ]; then
   # happened, in a run whose whole point is reporting in its own voice
   mkdir -p "$(dirname "$kept")" 2>&1 | sed 's/^/fm-worker: /' >&2
   echo "fm-worker: the worker had something to say and there was nowhere to put it" >&2
-  if cp "$say" "$kept" 2>/dev/null; then
+  if cp "$1" "$kept" 2>/dev/null; then
     echo "fm-worker: it is at ${kept#"$REPO"/}" >&2
   else
     echo "fm-worker: and it could not be kept either - ${kept#"$REPO"/} is not writable" >&2
-    echo "fm-worker: the text is in $say until the next round recreates that worktree" >&2
+    if [ "$1" = "$say" ]; then
+      echo "fm-worker: the text is in $say until the next round recreates that worktree" >&2
+    else
+      # a scratch copy is removed on exit, so print it rather than
+      # naming a file that will not be there to read
+      echo "fm-worker: the text was:" >&2
+      sed 's/^/fm-worker: | /' "$1" >&2
+    fi
   fi
+}
+keep_unsent() {   # keep_unsent <file>; reads $PR, never returns
+  # the held note included: this is its keeping, and the EXIT trap
+  # must not keep it a second time
+  held_settled=1
+  save_unsent "$1"
   # Two causes, because there are two. The middle one - "or a gh that
   # did not answer" - is gone: the lookup keeps its exit status now and
   # stops the run before this point, so an empty $PR here means the
@@ -643,6 +658,45 @@ if [ "$asked" = 1 ] && [ "$spoke" = 0 ]; then
          --tw "工人在還沒有 PR 的時候提問"
   fi
   exit 73
+}
+# A note is not only a question. An adapter that may edit but not execute
+# finishes the work and says which checks it could not run, and on a
+# first round that note used to be read as a question asked before there
+# was a pull request: kept, exit 73, and the work in the worktree never
+# reached one. A note beside real changes waits for the pull request this
+# round is about to open. It is set aside OUT of the worktree first, so
+# the commit below cannot take it even from a branch that tracks it.
+#
+# From here the scratch copy is the only one, so every way out before it
+# is posted - a refused push (71), a url with no number (72), a signal -
+# goes through the EXIT trap, which keeps it with lost_held. It used to
+# go with the rest of the scratch files. held is set only once the copy
+# is whole, so a failed cp leaves the original in the worktree instead.
+held=''
+held_settled=0
+lost_held() {   # lost_held <rc>; from the EXIT trap, so it returns
+  held_settled=1
+  echo "fm-worker: the run ended (exit $1) before the worker's note reached a pull request" >&2
+  save_unsent "$held"
+  emit --type worker_crashed ${PR:+--pr "$PR"} \
+       --en "the worker's note was not posted: the run ended (exit $1) before it reached a pull request" \
+       --tw "工人的留言沒有貼出：執行在送到 PR 之前就結束了（exit ${1}）"
+}
+if [ "$asked" = 1 ] && [ -z "$PR" ] && [ -n "$(git -C "$tree" status --porcelain -- . \
+     ":(exclude).fm-prompt.md" ":(exclude).fm-say.md")" ]; then
+  _held="$(scratch_new)" || _held=''
+  [ -n "$_held" ] || { echo "fm-worker: could not make a scratch file" >&2; exit 70; }
+  scratch_add "$_held"
+  cp "$say" "$_held" || { echo "fm-worker: could not set the worker's note aside" >&2; exit 70; }
+  held="$_held"
+fi
+if [ "$asked" = 1 ] && [ -n "$PR" ]; then
+  post_note "$say" "$PR"
+fi
+# held means the note waits for the pull request opened below, which is
+# the only case where no pull request yet is not the end of the round
+if [ "$asked" = 1 ] && [ "$spoke" = 0 ] && [ -z "$held" ]; then
+  keep_unsent "$say"
 fi
 rm -f "$say"
 
@@ -703,6 +757,15 @@ else
   emit_status "Pushed another round to #$num" "已推第二輪到 #$num"
   emit --type commit_pushed --pr "$num" --en "pushed another round to #$num" \
        --tw "第二輪已推上 #$num"
+fi
+# the note that waited for a pull request has one now. Refused, it is
+# kept and the run fails the way a refused note on an existing pull
+# request does - the work and the pull request stand either way.
+if [ -n "$held" ]; then
+  PR="$num"
+  post_note "$held" "$num"
+  [ "$spoke" = 1 ] && held_settled=1
+  [ "$spoke" = 1 ] || keep_unsent "$held"
 fi
 printf '%s\n' "$branch"
 [ "${rc:-1}" = "0" ] || exit 1
