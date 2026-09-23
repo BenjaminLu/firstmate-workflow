@@ -84,6 +84,7 @@ exactly that.
 | `check_env` | no | map of environment variables set for `check` and `test` |
 | `tests` | no | list of globs saying which changed files are tests; defaults to `tests/**`, `*.test.*`, `*.spec.*` |
 | `test` | no | command template that runs one test file; `{file}` becomes the shell-quoted path |
+| `docs` | no | list of globs for changes that need no test of their own; undeclared exempts nothing |
 
 Values are opaque shell command strings, run with `bash -c` from the checkout
 root. They are read, never evaluated, so quotes, `&&` and `{file}` arrive as
@@ -95,7 +96,8 @@ block is an error, not an empty declaration.
   missing `check` or a failing `setup` fails the gate and says so.
 - **Gate 5** classifies the diff with `tests`, reverts the implementation, runs
   `setup`, then runs each changed test through `test` — or the whole `check`
-  when there is no `test` — and requires red.
+  when there is no `test` — and requires red. A diff whose every non-test
+  path matches `docs` needs no new test; any other path still does.
 - **`fm-session.sh start`** runs `setup` once in the repository checkout and
   reports a `project` block: the declared keys, setup's exit status and a short
   error. A failed setup is reported as not ready; startup carries on.
@@ -136,7 +138,8 @@ project:
 This repository declares its own: `setup` installs Bun dependencies and the
 Playwright browser (without them a fresh worktree's `bin/ci.sh` skips its
 end-to-end stage), `check` is `bin/ci.sh` with `FM_CI_MAX_SECONDS=600`, and
-`test` runs a changed `*.test.sh` with bash.
+`test` runs a changed `*.test.sh` with bash. Its `docs` are `design/**` and
+`README.md`; skills are behaviour, so they are not docs.
 
 ## State
 

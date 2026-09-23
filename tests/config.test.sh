@@ -95,6 +95,14 @@ tests
 test' "$(fm_project keys "$p/config.yaml")" "keys names what is declared"
 assert_eq "3" "$(fm_cfg concurrency "$p/config.yaml")" "the block does not swallow what follows"
 
+printf 'project:\n  check: make\n  docs:\n    - "docs/**"\n    - README.md   # the front page\n' > "$p/config.yaml"
+assert_eq 'docs/**
+README.md' "$(fm_project docs "$p/config.yaml")" "docs is a list of globs, comments stripped"
+assert_eq 'check
+docs' "$(fm_project keys "$p/config.yaml")" "and keys names it"
+printf 'project:\n  check: make\n  docs: README.md\n' > "$p/config.yaml"
+assert_fail "fm_project docs '$p/config.yaml'" "a docs scalar is refused: it must be a list"
+
 printf 'vendor: claude\n' > "$p/config.yaml"
 assert_eq "" "$(fm_project check "$p/config.yaml")" "an undeclared check reads empty"
 assert_eq "" "$(fm_project keys "$p/config.yaml")" "and nothing is declared"

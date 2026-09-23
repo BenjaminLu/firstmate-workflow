@@ -60,20 +60,22 @@ cd "$REPO" || { echo "fm-gate: no repo at $REPO" >&2; exit 64; }
 # Which toolchain a project uses is its own business. config.yaml's project:
 # block declares how to prepare a fresh checkout (setup), what green means
 # (check, with check_env), which files are tests (tests) and how to run one
-# (test). Gates 3 and 5 run what is declared and name nothing else.
+# (test), and which changes need no test (docs). Gates 3 and 5 run what is
+# declared and name nothing else.
 #
 # The declaration read is the branch's own: it is what the branch will be
 # checked with everywhere else, and gate 4 decides whether a branch may
 # change config.yaml at all.
-P_SETUP=''; P_CHECK=''; P_TEST=''; P_TESTS=''; P_ENV=()
+P_SETUP=''; P_CHECK=''; P_TEST=''; P_TESTS=''; P_DOCS=''; P_ENV=()
 load_project() {  # load_project <config.yaml of the branch>
   local cfg="$1" kv
-  P_SETUP=''; P_CHECK=''; P_TEST=''; P_TESTS=''; P_ENV=()
+  P_SETUP=''; P_CHECK=''; P_TEST=''; P_TESTS=''; P_DOCS=''; P_ENV=()
   [ -s "$cfg" ] || return 0
   P_SETUP="$(fm_project setup "$cfg")" || return 1
   P_CHECK="$(fm_project check "$cfg")" || return 1
   P_TEST="$(fm_project test "$cfg")" || return 1
   P_TESTS="$(fm_project tests "$cfg")" || return 1
+  P_DOCS="$(fm_project docs "$cfg")" || return 1
   while IFS= read -r -d '' kv; do P_ENV+=("$kv"); done < <(fm_project check_env "$cfg")
 }
 branch_config() {  # branch_config <file> ; the branch's config.yaml, or empty
@@ -140,22 +142,29 @@ gate3() {
 }
 
 changed() { git diff --name-only "$BASE...$BRANCH"; }
-# The declared tests globs when there are any, these when there are none. A
-# leading **/ also matches at the top level, as it does everywhere else.
-is_test() {
+# matches <path> <globs, one per line>. A leading **/ also matches at the top
+# level, as it does everywhere else.
+matches() {
   local g
-  if [ -z "$P_TESTS" ]; then
-    case "$1" in tests/*|*.test.*|*.spec.*) return 0 ;; *) return 1 ;; esac
-  fi
   while IFS= read -r g; do
     [ -n "$g" ] || continue
     # shellcheck disable=SC2254
     case "$1" in $g) return 0 ;; esac
     # shellcheck disable=SC2254
     case "$g" in '**/'*) case "$1" in ${g#\*\*/}) return 0 ;; esac ;; esac
-  done <<< "$P_TESTS"
+  done <<< "$2"
   return 1
 }
+# The declared tests globs when there are any, these when there are none.
+is_test() {
+  if [ -z "$P_TESTS" ]; then
+    case "$1" in tests/*|*.test.*|*.spec.*) return 0 ;; *) return 1 ;; esac
+  fi
+  matches "$1" "$P_TESTS"
+}
+# Only what the project declares as docs. Nothing is docs by default: a path
+# no one declared is behaviour until someone says otherwise.
+is_doc() { [ -n "$P_DOCS" ] && matches "$1" "$P_DOCS"; }
 # fill <template> <file> ; every {file} becomes the shell-quoted path. No
 # ${var//x/y}: with bash 5.2's patsub_replacement an & in the path would
 # come back as the match.
@@ -200,19 +209,23 @@ gate4() {
 # is implementation like any other file and goes back to the base below.
 # Setup runs on the reverted tree, since that is the tree the tests run in.
 # Each changed test runs through the declared `test` template; without one,
-# the whole check runs once and must go red.
+# the whole check runs once and must go red. Paths matching the declared
+# `docs` globs need no test of their own, but are reverted with the rest.
 gate5() {
-  local w impl tests f rc log cfg
-  impl=''; tests=''
+  local w impl code tests f rc log cfg
+  impl=''; code=''; tests=''
   cfg="$(mktemp)"; branch_config "$cfg"
   load_project "$cfg" || { rm -f "$cfg"; return 1; }
   rm -f "$cfg"
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    if is_test "$f"; then tests="$tests$f"$'\n'; else impl="$impl$f"$'\n'; fi
+    if is_test "$f"; then tests="$tests$f"$'\n'; continue; fi
+    impl="$impl$f"$'\n'
+    is_doc "$f" || code="$code$f"$'\n'
   done <<< "$(changed)"
-  # nothing executable changed - a docs or design task has nothing to make red
-  [ -n "$(printf '%s' "$impl" | tr -d '[:space:]')" ] || return 0
+  # every non-test path is one the project declared as docs: nothing that
+  # behaves changed, so there is nothing to make red. Anything else needs a test.
+  [ -n "$(printf '%s' "$code" | tr -d '[:space:]')" ] || return 0
   [ -n "$(printf '%s' "$tests" | tr -d '[:space:]')" ] || {
     echo "      the diff changes implementation but adds no test" >&2; return 1; }
   [ -n "$P_TEST" ] || [ -n "$P_CHECK" ] || { no_check; return 1; }

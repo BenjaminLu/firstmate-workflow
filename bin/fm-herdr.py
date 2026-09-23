@@ -985,7 +985,7 @@ def emit_status(root, actor, task, en, tw, role='worker', crew_name=None,
 # prepare a checkout and what green means. Values are opaque shell command
 # strings: read and returned exactly, never evaluated here. Nothing in bin/
 # may know which toolchain a project uses; it only runs what is declared.
-PROJECT_KEYS = ('setup', 'check', 'check_env', 'tests', 'test')
+PROJECT_KEYS = ('setup', 'check', 'check_env', 'tests', 'test', 'docs')
 
 
 def _project_scalar(text, where):
@@ -1052,7 +1052,7 @@ def project_contract(config):
                 if children: raise ValueError(where + ' must be a one-line command')
                 continue
             contract[key] = _project_scalar(value, where)
-        elif key == 'tests':
+        elif key in ('tests', 'docs'):
             if value and not value.startswith('#'): raise ValueError(where + ' must be a list of globs')
             items = []
             for child in children:
@@ -1106,8 +1106,8 @@ def project_field(config, field):
     if field == 'keys':
         for key in PROJECT_KEYS:
             if key in contract: print(key)
-    elif field == 'tests':
-        for glob in contract.get('tests', []): print(glob)
+    elif field in ('tests', 'docs'):
+        for glob in contract.get(field, []): print(glob)
     elif field == 'check_env':
         for name, value in contract.get('check_env', {}).items():
             sys.stdout.write(name + '=' + value + '\0')

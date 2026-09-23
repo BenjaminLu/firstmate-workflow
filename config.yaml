@@ -29,3 +29,6 @@ project:                # how this repository is prepared and checked; see READM
     - "*.test.*"
     - "*.spec.*"
   test: case {file} in *.test.sh) bash {file} ;; esac
+  docs:                 # changes that need no test; skills are behaviour
+    - design/**
+    - README.md

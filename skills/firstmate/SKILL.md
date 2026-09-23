@@ -40,7 +40,7 @@ idempotent, deletes no observation, decision file or event, and is refused for
 an id with no observation. Acknowledging is bookkeeping, not approval.
 
 The project contract is `config.yaml`'s `project:` block: `setup`, `check`,
-`check_env`, `tests` and `test` (see the README). `start` runs the declared
+`check_env`, `tests`, `test` and `docs` (see the README). `start` runs the declared
 `setup` once in the checkout and reports a `project` block with the declared
 keys, setup's exit status and error, and `ready`; `status` reports the same
 declaration without running anything. Report the contract at startup, including

@@ -551,8 +551,10 @@ requires remediation regardless of praise or an `approved` event.
 
 Gates 3 and 5 name no toolchain. The target repository declares its own in
 `config.yaml`'s `project:` block (`setup`, `check`, `check_env`, `tests`,
-`test`; see the README), and the gates run exactly that, read from the branch
-under test; gate 4 decides whether a branch may change `config.yaml` at all.
+`test`, `docs`; see the README), and the gates run exactly that, read from the
+branch under test; gate 4 decides whether a branch may change `config.yaml` at
+all. Gate 5 asks for no new test only when every changed non-test path matches
+the declared `docs` globs; with none declared, nothing is exempt.
 An undeclared `check` or a failed `setup` fails the gate by name; a stage the
 check skipped is not a stage that passed. `bin/fm-session.sh start` runs
 `setup` once in the checkout and reports the contract; `status` only reports it.

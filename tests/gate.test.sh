@@ -177,6 +177,33 @@ git -C "$py" commit -qam badsetup; git -C "$py" checkout -q main
 assert_fail "gate '$py' badsetup 5" "5 blocks when setup fails, however red the tests would be"
 assert_contains "$(said "$py" badsetup 5)" "setup failed (exit 9)" "and names the failure"
 
+# docs: the project declares which paths need no test of their own. Only
+# those: undeclared exempts nothing, and code beside docs still needs a test.
+doc="$(fixture)"
+printf '# thing\n' > "$doc/README.md"; mkdir -p "$doc/design"; printf 'v1\n' > "$doc/design/design.md"
+printf '{"tasks":[{"id":"T-X","scope":["src/**","tests/**","design/**","README.md","config.yaml"]}]}\n' \
+  > "$doc/design/tasks.json"
+# declared on main, so the branch under test changes nothing but prose
+printf 'project:\n  check: bin/suite\n  docs:\n    - design/**\n    - README.md\n' > "$doc/config.yaml"
+git -C "$doc" add -A; git -C "$doc" commit -qm docs-base
+git -C "$doc" checkout -q -b docs-only main
+printf 'v2\n' > "$doc/design/design.md"; printf '# thing, better\n' > "$doc/README.md"
+git -C "$doc" commit -qam prose; git -C "$doc" checkout -q main
+assert_ok "gate '$doc' docs-only 5" "5 needs no test when every changed path is declared docs"
+
+git -C "$doc" checkout -q -b docs-and-code main
+printf 'v3\n' > "$doc/design/design.md"; echo more >> "$doc/src/thing.sh"
+git -C "$doc" commit -qam mixed; git -C "$doc" checkout -q main
+assert_fail "gate '$doc' docs-and-code 5" "5 still blocks code beside docs that ships no test"
+assert_contains "$(said "$doc" docs-and-code 5)" "adds no test" "and says why"
+
+undoc="$(fixture)"
+mkdir -p "$undoc/design"; printf 'v1\n' > "$undoc/design/design.md"
+git -C "$undoc" add -A; git -C "$undoc" commit -qm base-design
+git -C "$undoc" checkout -q -b prose main
+printf 'v2\n' > "$undoc/design/design.md"; git -C "$undoc" commit -qam prose; git -C "$undoc" checkout -q main
+assert_fail "gate '$undoc' prose 5" "5 exempts nothing when no docs are declared"
+
 # --- gates 6 and 7: gh is injectable so the suite makes no network call ---
 stub() {  # stub <dir> <checks-exit> <approver-login>
   mkdir -p "$1/stub"

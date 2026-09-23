@@ -53,7 +53,7 @@ _fm_code_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # project fills in so that nothing here has to know its toolchain.
 #
 #   fm_project setup|check|test [file]  -> the command, exactly as declared
-#   fm_project tests [file]             -> one glob per line
+#   fm_project tests|docs [file]        -> one glob per line
 #   fm_project check_env [file]         -> NAME=value, each ending in NUL
 #   fm_project keys [file]              -> the declared keys, one per line
 #
