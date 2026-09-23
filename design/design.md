@@ -1283,7 +1283,7 @@ be one the captain has already merged. This replaces T-043's rule that the
 contract is read from the branch under test. T-043's gate-4 rule survives in
 its narrower form: a branch may change `config.yaml` only if its pinned scope
 names it, and such a change never alters its own gates; it applies to tasks
-pinned after it merges.
+pinned after T-049 merges.
 
 **One source of truth during the transition.** The contract is written in
 exactly one place at every commit. Until T-050, that is T-043's top-level
@@ -1293,7 +1293,12 @@ T-043's behaviour. T-049's pins record that resolved contract. T-050 moves the
 block, unchanged, to `projects.firstmate-workflow.project` and deletes the
 top-level one in the same commit, and switches gates 3 and 5 to the pin. A
 `config.yaml` holding both the top-level block and the self entry's is refused
-(exit `65`), so the two can never disagree.
+(exit `65`), so the two can never disagree. Re-deriving a pinned contract
+(15.5 step 3) reads the block wherever the recorded commit's `config.yaml`
+holds it: the top-level `project:` block if that commit has one, otherwise
+the project's registry entry. A pin recorded before T-050 therefore still
+verifies after T-050 merges, with no repin, and a task in flight across that
+merge keeps the contract it was pinned with.
 
 `bin/ci.sh`'s agreement check between a design's task table and its task list
 runs once for every registered `(design, tasks)` pair.
@@ -1373,7 +1378,7 @@ run. Both sources go.
    together passes the gates, and the captain reading that entry in the pull
    request's diff is the remaining check. The contract is
    re-derived and hash-checked the same way from its own commit, which always
-   exists. Later commits to the engine's `main` do not reach a pinned
+   exists, reading the block from wherever that commit holds it (15.2). Later commits to the engine's `main` do not reach a pinned
    run. Pin files are append-only and never rewritten.
 4. **Changing scope.** The worker still says so and stops. Firstmate raises a
    `choice` card. If the captain authorizes it, the new spec is committed to
