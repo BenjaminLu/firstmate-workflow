@@ -16,6 +16,7 @@ _fm_alib="$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 prompt="${2-}"; tree="${3-}"; log="${4-}"
 [ -f "$prompt" ] || { echo "codex: no prompt at $prompt" >&2; exit 64; }
 [ -d "$tree" ]   || { echo "codex: no worktree at $tree" >&2; exit 64; }
+fm_adapter_context "$0"
 
 command -v codex >/dev/null 2>&1 || {
   # stderr, not the log: the log is what the VENDOR said, and a caller that
@@ -28,7 +29,14 @@ command -v codex >/dev/null 2>&1 || {
 off="$(fm_adapter_mark "$log")"
 # the trailing "-" is codex's read-the-prompt-from-stdin marker and has to
 # be the last argument, so FM_ADAPTER_ARGS goes before it
-( cd "$tree" && codex exec --skip-git-repo-check ${FM_ADAPTER_ARGS:-} - < "$prompt" ) >> "$log" 2>&1
+final_args=()
+[ -z "${FM_FINAL_PATH:-}" ] || final_args=(--output-last-message "$FM_FINAL_PATH")
+if [ -n "${FM_ATTEMPT_DIR:-}" ]; then
+  ( cd "$tree" && codex exec --skip-git-repo-check ${final_args[@]+"${final_args[@]}"} ${FM_ADAPTER_ARGS:-} - < "$prompt" ) 2>&1 | tee -a "$log"
+  fm_adapter_pipeline_status "${PIPESTATUS[@]}"
+else
+  ( cd "$tree" && codex exec --skip-git-repo-check ${final_args[@]+"${final_args[@]}"} ${FM_ADAPTER_ARGS:-} - < "$prompt" ) >> "$log" 2>&1
+fi
 rc=$?
 fm_adapter_verdict "$rc" "$log" "$off"
 exit $?

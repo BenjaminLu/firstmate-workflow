@@ -150,12 +150,7 @@ Types: `greenlit` `dispatched` `commit_pushed` `pr_opened` `gate_passed`
 `gate_failed` `review_opened` `review_failed` `ask_pass_criteria`
 `criteria_returned` `protocol_violation` `approved` `merged` `closed`
 `decision_requested` `decision_made` `worker_crashed` `vendor_unavailable`
-`agent_finished` `crew_status`.
-
-`crew_status` is the mid-run refresh (T-036): authored `data.activity` and
-optional bounded `data.progress: {done, total}` without changing lifecycle
-phase. Identical payloads are coalesced per actor so heartbeats cannot flood
-the log.
+`agent_finished`.
 
 `dispatched` and `agent_finished` bracket one run of one agent, and they
 are what the board reads to decide who is aboard. An agent is running from
@@ -170,6 +165,24 @@ A `summary` carries `en` and `zh-TW` or it is rejected: half a translation
 renders blank in one of the board's locales, which is worse than none.
 `zh-CN` is derived at display time from `i18n/tw2cn.tsv` — a table lookup, no
 model call.
+
+Worker and reviewer lifecycle events retain the exact canonical run identity in
+`actor` and state their role, the same canonical value as `data.crew_name`, and
+an authored `data.activity` object with nonblank `en` and `zh-TW`. A task's valid
+authored activity is preserved verbatim. A task without it receives the explicit
+generic unavailable description; producers do not translate a scalar title or
+invent task-specific progress. The board derives `zh-CN` through its existing
+table semantics.
+
+`review_failed` distinguishes a review verdict from a failed review attempt.
+Only a completed signed rejection carries
+`data.review_outcome: "rejected"`; that exact value is the authoritative reject
+handoff. Missing or unsigned output uses `missing_review` when truthful, and
+vendor/configuration/execution failure uses `infrastructure_error`. Consumers
+must never treat an absent, legacy, or different value (including a generic
+`data.outcome`) as a substantive rejection. Final-answer provenance remains the
+adapter contract: built-in adapters retain extracted final output, while custom
+adapters retain their documented combined-output limitation.
 
 ### 5.2 Captain decisions, `state/decisions/D-*.json`
 
@@ -282,14 +295,19 @@ role may name its own engine — `reviewer:` and `worker:` blocks in
 `fallback:`, with no vendor run twice. A reviewer whose engine is down is
 therefore not a reviewer who never ran.
 
-A round that produced no review exits `3` and emits `review_failed`; it never
-reaches the pull request and never counts toward gate 7. A verdict has to
+A round that produced no review exits `3` and emits `review_failed` with
+`data.review_outcome` set to `missing_review` when an attempt completed without
+a signed verdict, or `infrastructure_error` for vendor/configuration/execution
+failure; it never reaches the pull request and never counts toward gate 7. A
+verdict has to
 carry exactly one unquoted `APPROVE:<task>` or `REJECT:<task>` in the final
 assistant answer. Only that answer is the verdict; prompt echoes, intermediate
 text, quoted examples and full CLI transcripts are not authoritative. Retain
-reviewer identity and the reviewed head with the evidence. The current review
-launcher scans combined output and does not establish this provenance; firstmate
-must identify and coordinate that gap rather than accept a marker as proof.
+reviewer identity and the reviewed head with the evidence. Built-in managed
+adapters extract and retain the final answer. Custom adapters and the current
+review launcher still scan combined output and do not establish final-answer
+provenance; firstmate must identify and coordinate that gap rather than accept
+a marker as proof.
 The board therefore treats a legacy `review_failed` as missing-review/error,
 not rejection. A directed rejection exists only when the event also carries
 the additive `data.review_outcome: "rejected"` contract. T-035 owns emitting
@@ -457,13 +475,16 @@ event the round writes is the one the worker writes — there is no
 second `worker_crashed` from a caller noticing the code. The codes a
 worker can exit with are `1` a failed attempt, `2` no vendor was
 available, `64` it was called wrong, `65` no such task in
-`design/tasks.json`, `70` something the run needs before it starts and
-cannot have — no library, no worktree, nowhere to put a scratch file —
+`design/tasks.json` or an unknown configured adapter, `70` something the run
+needs and cannot have — no library, no worktree, nowhere to put a scratch file,
+identity/snapshot failure, a live task lock, or failed managed transport —
 `71` the push failed, `72` no pull request number came back, `73` the worker had
 something to say and there was nowhere to put it, `74` GitHub could not
-say which pull request the branch has, and `129`, `130`, `143` — a
-signal, 128 plus its number, from the traps that make a killed run stop
-rather than carry on.
+say which pull request the branch has, and `130`, `143` — a signal, 128
+plus its number, from the INT/TERM traps that make a killed run stop
+rather than carry on. `SIGHUP` is ignored (same as `fm-config.sh`) so a
+managed transport wait and PR publish survive a launching agent shell
+exiting; hangup is not an exit path.
 
 `tests/worker.test.sh` compares that list against every `exit` in the
 script, by identity: a code added correctly is not a failure and a code
@@ -663,49 +684,12 @@ do not open it. Pending decisions come from pending records, not task stages.
 Crew payloads add `activity: {en, "zh-TW"}`, `crew_name` and optional bounded
 `progress` without changing canonical actor IDs or roles. Replay retains each
 actor's dispatch/activity description and last applicable lifecycle phase
-across technical events, independently of the 40-event recent list. Replayed
-event activity (`crew_status`, dispatch summaries, and similar) takes precedence
-over static `tasks.json` `activity`; static copy is a fallback when nothing has
-been emitted yet. Scalar titles are not guessed translations. Missing
-descriptions and unknown phases are explicitly labeled.
+across technical events, independently of the 40-event recent list. Localized
+task activity takes precedence when available; scalar titles are not guessed
+translations. Missing descriptions and unknown phases are explicitly labeled.
 Finished actors cannot reappear through late technical events; a new dispatch
 starts fresh activity. Producers lacking authored summaries need firstmate
 coordination with the owning task, not fabricated board descriptions.
-
-#### Mid-run progress (truthful; T-036)
-
-Captains need more than “wait for the final result,” but the board must not
-invent motion. The throwaway prototype under
-`design/proposals/2026-09-20-captain-board/prototype.html` randomly ticks
-`pct` for demo only; that behaviour is not product truth and must not be
-ported into production percentages.
-
-Three layers, coarsest first:
-
-1. **Phase** — mechanical lifecycle labels emitted only from script-known
-   nodes (adapter started, tests running, commit pushed, review opened,
-   verdict signed, and similar). Vendors share the same producers.
-2. **Activity** — authored `data.activity` `{en, "zh-TW"}` describing what is
-   observably underway. Prefer script and artifact evidence over model prose.
-3. **Bounded progress** — optional `{done, total}` on the event and crew
-   payload only when a real denominator exists (closed-list items, gates). The
-   board never accepts a bare percentage. No denominator means no progress bar
-   and no percentage.
-
-Pane heartbeats and vendor JSON buffers are not board state until a producer
-writes through `bin/fm-emit.sh`. High-frequency `crew_status` updates are
-coalesced per actor: identical activity/progress payloads inside the throttle
-window are dropped; within a window only `FM_CREW_STATUS_BURST` distinct payloads
-may write so varying heartbeat text cannot flood the log; a changed bounded
-progress always writes. The
-UI hides progress chrome when bounded progress is absent; mapping coarse stage
-names to fixed percentages is forbidden.
-
-Mid-run branch saves use `bin/fm-checkpoint.sh`: after each logical commit the
-worker commits (if dirty) and immediately pushes the feature branch. Waiting
-until `WORKER_COMPLETE` for the only push is forbidden. Checkpoint never
-merges, never writes `main`/`master`, and never opens a pull request;
-`fm-worker.sh` may still run a final sweep through the same helper.
 
 ### Ahoy
 
@@ -827,6 +811,207 @@ before it can merge.
 
 ## 11. Self-update
 
+#### Mid-run progress (truthful; T-036)
+
+Captains need more than “wait for the final result,” but the board must not
+invent motion. The throwaway prototype under
+`design/proposals/2026-09-20-captain-board/prototype.html` randomly ticks
+`pct` for demo only; that behaviour is not product truth and must not be
+ported into production percentages.
+
+Three layers, coarsest first:
+
+1. **Phase** — mechanical lifecycle labels emitted only from script-known
+   nodes (adapter started, tests running, commit pushed, review opened,
+   verdict signed, and similar). Vendors share the same producers.
+2. **Activity** — authored `data.activity` `{en, "zh-TW"}` describing what is
+   observably underway. Prefer script and artifact evidence over model prose.
+3. **Bounded progress** — optional `{done, total}` on the event and crew
+   payload only when a real denominator exists (closed-list items, gates). The
+   board never accepts a bare percentage. No denominator means no progress bar
+   and no percentage.
+
+Pane heartbeats and vendor JSON buffers are not board state until a producer
+writes through `bin/fm-emit.sh`. High-frequency `crew_status` updates are
+coalesced per actor: identical activity/progress payloads inside the throttle
+window are dropped; within a window only `FM_CREW_STATUS_BURST` distinct payloads
+may write so varying heartbeat text cannot flood the log; a changed bounded
+progress always writes. The
+UI hides progress chrome when bounded progress is absent; mapping coarse stage
+names to fixed percentages is forbidden.
+
+Mid-run branch saves use `bin/fm-checkpoint.sh`: after each logical commit the
+worker commits (if dirty) and immediately pushes the feature branch. Waiting
+until `WORKER_COMPLETE` for the only push is forbidden. Checkpoint never
+merges, never writes `main`/`master`, and never opens a pull request;
+`fm-worker.sh` may still run a final sweep through the same helper.
+
+### Managed session defaults
+
+`bin/fm-session.sh start --repo <root>` is the portable service bootstrap.
+It reports actual recorded process liveness, worktrees, pending decisions and
+(inside `HERDR_ENV=1`) observed Herdr panes. It starts or reuses the correct-root
+board and a cancellable decision watch. It does not dispatch work or invent a
+captain choice. Firstmate reconciles legacy/unrecorded processes and existing
+authorization before dispatch; stopped work is preserved for explicit resumption.
+Before the board is shown, and again on `status`, session bootstrap runs deck
+reconcile: for each non-`firstmate` actor whose last event is not
+`agent_finished`, it corroborates that actor against `state/runs/<actor>/`
+process receipts (not task-level pidfiles). Actors with no live process receive
+`agent_finished` under that exact actor with `data.status: process_gone`, so the
+event-sourced crew list matches process reality. Task-level reconcile alone
+cannot clear these ghosts. `status` and `start` report the reconcile result as
+`deck_reconcile`. `status` reads the live process receipts and durable watch
+results. `watch` and `stop`, optionally with `--decision D-id`, manage the
+watcher independently.
+
+Board reuse is verified with a fresh random file under the requested root and
+the board's existing `/file?path=<relative-path>` endpoint. An HTTP response on
+the configured port is insufficient; a different or unverifiable root is refused.
+The bootstrap verifies HTTP page retrieval and reports whether `open` or
+`xdg-open` was invoked. It cannot verify browser navigation. Bun is required for
+the board. The watch polls `state/decisions/*.json` directly into durable
+observation receipts; it does not invoke `fm-decide.sh --await`, so it neither
+rejects non-numeric ids nor rewrites `events.jsonl`. It has a real PID and
+process identity. Its continuous mode scans pending IDs between bounded waits;
+it is not a sub-200ms guarantee across multiple IDs. It never wakes a completed
+API conversation. Firstmate keeps pending authorized work actively monitored or
+explicitly hands it off before ending the turn.
+
+The normal `fm-run`, `fm-dispatch`, `fm-worker` and `fm-review` entrypoints freeze
+`bin/` and `skills/` from the entrypoint's own code tree into a private per-launch
+snapshot with a hash manifest before doing work. Invoking a checkout script against
+a sparse `--repo` fixture snapshots the checkout, not the fixture. Nested launches
+use that same frozen execution path. New sessions take a new snapshot; source changes
+cannot replace scripts a running shell is reading. Do not alter retained snapshots.
+Runtime events, current task specs and worktrees remain in the requested repository.
+All five frozen entrypoints resolve relative `--repo`/`FM_ROOT` once in the caller's
+directory and replay the canonical root. Relative script paths retain their original
+code directory across that change.
+A worker holds an advisory task lock through orchestration. Each supported adapter
+execution also reserves its attempt before launch and holds a separate lifetime lock
+in the pane runner, adapter and inherited CLI descendants. Retry checks these
+reservations under task exclusion before touching the worktree. Timeout, interrupted
+transport or launcher death cannot release the surviving execution's exclusion.
+Session status distinguishes orchestration liveness, actual execution liveness and
+uncertain pending launches, retaining canonical actor and actual adapter PID evidence.
+A pending launch without proof it started, or an unfinished legacy attempt lacking
+lifetime metadata, blocks recreation until its termination is established; it is not
+reported as a verified live PID. These observations describe this implementation;
+T-017 PID/flock reconciliation integration requires separate validation.
+Concurrent reviewers and worker/reviewer runs have distinct artifacts and actors.
+
+Every new worker/reviewer obtains one canonical human-readable machine label,
+such as `worker-mira-t035-r2` or `reviewer-noah-t018-r8`. Labels retain role prefixes,
+fit Herdr's 32-character syntax and include task/run identity. A locked repository
+counter disambiguates concurrent runs, retries and repeated requested aliases;
+normalization and the requested alias are recorded in `identity.json` and printed
+at launch. Extremely long task labels retain a digest and the full original task
+in metadata. The exact canonical actor appears in invocation context, Herdr tab,
+pane and agent names, board events, log paths and result receipts. Existing live actors
+are not renamed. A foreign Herdr name collision is a reported transport failure,
+not a silently different sidebar identity.
+
+In `HERDR_ENV=1`, Codex, Claude, Cursor Agent and Gemini adapters use shipped
+`bin/fm-herdr.py` to execute the real CLI in a dedicated new tab containing one
+owned root pane. `herdr tab create --workspace <caller-workspace> --cwd <tree>
+--label <canonical-actor> --no-focus` uses the installed supported interface;
+creation IDs come from `result.tab` and `result.root_pane`. Never split the caller's
+view. Record caller tab/pane and observed UI focus before and after creation;
+changed or unknown focus refuses launch without taking focus back from the user.
+The process receives its owned tab/pane/workspace context, not the caller's IDs.
+It uses installed Herdr pane/agent commands, not an ignored wrapper or a tail-only
+pane. A known caller pane is required. Missing or unsupported transport fails
+clearly; it never silently falls back to invisible execution. Inside
+`HERDR_ENV=1`, `FM_TRANSPORT=direct` is refused (exit 70) unless
+`FM_ALLOW_DIRECT=1` for isolated tests — live Claude, Codex and Cursor sessions
+must not set it. Outside Herdr, in-process adapter execution remains the default.
+Firstmate *stock launch* is only `bin/fm-worker.sh` / `bin/fm-review.sh`; session
+wrappers and hand-started vendor CLIs are protocol violations.
+Adapters still tee vendor transcripts into `cli.log` while leaving stdout on the
+owned pane. Vendors that buffer until completion (for example cursor-agent `-p`
+JSON) do not stream progress; `pane-child` therefore prints a start line, periodic
+`[fm] … still running` heartbeats (interval `FM_HEARTBEAT_SECS`, default 15, `0`
+disables), and a finish line so a captain watching the Herdr tab can see liveness
+without opening log files.
+The scripted mock adapter remains a non-model test adapter. Dependencies are
+Python 3.9+ (standard library), existing shell/jq tools and the chosen vendor CLI;
+Herdr and Bun are needed only for their respective features. No model/network
+API is required by the managed test suites. The isolated crew-end-to-end fixture
+must copy the actual shipped `fm-herdr.py` dependency alongside worker/config/emit
+and adapters, use default snapshot/identity startup without outer-checkout helpers,
+and retain the real worker-to-board identity and exact actor-removal assertions.
+D-335 approves that fixture path only; repository/account boundaries may be mocked.
+
+All four supported model adapters receive the explicit role skill and canonical
+identity through their actual launcher prompt, regardless of native instruction
+loading. Claude/Codex native root files remain thin routes; an explicitly
+dispatched role always wins. This does not claim other engines automatically load
+AGENTS.md. Codex final output comes from `--output-last-message`; Claude/Cursor
+use a complete JSON result object, and Gemini a complete JSON response object.
+Malformed, partial or mixed result output remains inspectable and cannot establish
+final-answer provenance. Existing CLI availability and fallback verdict rules
+remain in the shared adapter library. Raw CLI exit and adapter verdict exit are
+retained separately. Custom/test adapters retain their existing contract; the
+launcher cannot infer final provenance from arbitrary custom transcripts.
+
+Vendor fallback retains one logical actor and one owned tab/root pane. Before reusing it,
+the launcher rechecks the previous attempt's task/run/terminal/shell identity and
+shell-only state, the previous durable ownership receipt and unchanged tab
+membership. A tab must still have exactly its owned pane, the canonical label,
+workspace identity and no splits. Caller tabs, added panes, moved/reused/shared
+resources and unknown topology refuse reuse. Attempts have separate immutable prompts, invocation metadata,
+private environment, CLI log, final answer and result JSON under
+`state/runs/<actor>/`. A blocked or unavailable attempt is kept there even if a
+later vendor completes. Any ownership uncertainty stops reuse. Worker and reviewer
+`agent_finished` events retire exactly their run actor; neither event means the
+task was accepted. Orchestration exit receipts also remain under the actor. Each chain invocation has
+an attempt token; both reviewer output selection and orchestration recording accept
+managed receipts only with that current token. A custom/mock fallback reads its own
+output files/log slice and records unknown final provenance, preserving the previous
+built-in receipt as evidence without adopting its status.
+
+Automatic close defaults on only for a positively completed owned run. The
+final assistant answer must end with exactly one standalone
+`WORKER_COMPLETE:<task>` or `REVIEWER_COMPLETE:<task>` status marker. Blocked,
+failed, incomplete, missing and ambiguous statuses retain the pane even at exit
+zero. A completed review may reject the PR. Result JSON, final text, logs and exit
+evidence are persisted before close. Immediately before the close command, the
+launcher rechecks its ownership record, caller exclusion, canonical label,
+run/task tokens, terminal ID, shell PID and nonempty shell-only foreground state.
+It also verifies the created tab identity and unchanged single-owned-pane layout
+through the installed snapshot API. Ownership records bind tab/workspace and
+caller tab/pane IDs to run/task/actor/terminal/shell identities. No whole-tab close
+is authorized: a positively verified owned pane may close and its single-pane
+tab may disappear as Herdr's normal consequence. Shared or moved resources stay.
+Changed, busy, unowned, caller or uncertain panes are never intentionally targeted.
+Herdr does not expose atomic compare-and-close: an unrelated external client can
+change the pane between observation and close. This is an observed checked-close
+policy, not an atomicity or race-free guarantee. `FM_AUTOCLOSE=0` retains all panes.
+`FM_HERDR_TIMEOUT` (seconds, default 21600) bounds waiting; a timeout preserves the
+process and evidence for inspection, never kills an uncertain pane.
+
+`FM_WATCH=0` opts out of automatic watch startup; stop an already-running watch
+explicitly. Watch identity and results live under `state/session/`; a stopped
+watch can be restarted, and continuous observation receipts survive restarts.
+No global hooks, lavish or no-mistakes installation is needed. Existing user
+authorization persists, while scope/product choices and merge approval remain
+captain board decisions. The self-update request is not a fabricated board choice.
+
+Decision content should include bespoke before/after diagrams, concrete option
+tradeoffs and authored English/Traditional Chinese summaries with derived
+Simplified Chinese. The current generic generator does not establish that content
+quality. Board diagrams, locale and effects changes are separately T-034 and are
+not shipped by this task. Firstmate's decision instructions must integrate the
+final T-034 `fm-decide.sh`/`fm-run.sh` contract after firstmate identifies that
+version: authored `--details`, exact field types/bounds, honest refusal handling,
+custom captain choices and full dynamic locale content. A title-only request is
+not an acceptable substitute for that integration; source verification remains
+a dependency until the final T-034 version is supplied.
+Current-head gate/reviewer verification and original
+closed-list protocol remain firstmate/reviewer responsibilities; a successful
+process or status marker is never PR acceptance.
+
 `skills/` defines behaviour; changing a skill changes behaviour without
 touching code.
 
@@ -922,6 +1107,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-032 | the red check reaches the worker as an empty block | T-031 |
 | T-033 | firstmate startup contract | T-007, T-006, T-013 |
 | T-034 | clear localized captain decisions and reliable outcome effects | T-010, T-013, T-014 |
+| T-035 | managed firstmate session defaults | T-033, T-003, T-008, T-009 |
 | T-036 | truthful crew progress | T-034, T-002, T-010 |
 | T-037 | fm-worker.sh must reuse an existing task branch, not re-derive its name | (none) |
 | T-039 | fm-gate.sh's gate 3 must run the full local gate at the budget design.md already authorizes | — |

@@ -15,6 +15,7 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
+fm_args=("$@")
 
 REPO="$(fm_default_repo)"; TASK=''; BRANCH=''; PR=''; ROUND=1; VENDOR=''; NAME=''
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
@@ -33,10 +34,13 @@ done
 [ -n "$TASK" ] && [ -n "$BRANCH" ] || {
   echo "usage: fm-review.sh --task <id> --branch <name> [--pr N] [--round N]" >&2; exit 64; }
 cd "$REPO" || { echo "fm-review: no repo at $REPO" >&2; exit 64; }
+REPO="$(pwd -P)"
+fm_refuse_herdr_bypass fm-review || exit $?
 
 # per run, like the worker's: a constant actor collapses two concurrent
 # rounds into one crewman carrying whichever task the second one touched
-NAME="${NAME:-reviewer-$$}"
+fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
+fm_identity reviewer "$TASK" "$NAME" || exit 70
 CREW_DATA="$(jq -cn --arg role reviewer --arg name "$NAME" \
   --arg en 'Work description unavailable' --arg tw '尚無工作說明' \
   '{role:$role,crew_name:$name,activity:{en:$en,"zh-TW":$tw}}')"
@@ -51,27 +55,37 @@ set_crew_activity() {
   ' <<<"$1" 2>/dev/null)"
   [ -z "$authored" ] || CREW_DATA="$(jq -c --argjson activity "$authored" '.activity=$activity' <<<"$CREW_DATA")"
 }
+# fm-emit keeps the last --data only. Merge review_outcome and any call-site
+# --data into the crew payload so extras cannot wipe crew_name or activity.
 emit_once() {
   local data="$CREW_DATA" args=()
-  # Local need(): return (do not exit) so a bad call cannot kill the run.
-  # Name must be need/fm_need — bin/ci.sh only accepts those as shift-2 guards.
-  need() { [ "$#" -ge 3 ] || { echo "emit_once: $2 needs a value" >&2; return 1; }; }
   while [ $# -gt 0 ]; do
     case "$1" in
+      --review-outcome)
+        fm_need "fm-review" "$@"
+        data="$(jq -c --arg outcome "${2-}" '.review_outcome=$outcome' <<<"$data")" || return 1
+        shift 2
+        ;;
       --data)
-        need "emit_once" "$@" || return 1
+        fm_need "fm-review" "$@"
         data="$(jq -c --argjson extra "${2-}" '. * $extra' <<<"$data")" || return 1
         shift 2
         ;;
       *) args+=("$1"); shift ;;
     esac
   done
-  FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --data "$data" --actor "$NAME" --task "$TASK" \
+  FM_ROOT="$REPO" "${FM_CODE_ROOT:-$REPO}/bin/fm-emit.sh" --data "$data" --actor "$NAME" --task "$TASK" \
     ${args[@]+"${args[@]}"} >/dev/null 2>&1 </dev/null
 }
 emit() { emit_once "$@" || true; }
+
+# Mid-run activity refresh (T-036); never invents percent from lifecycle labels.
 emit_status() {
   local en="$1" tw="$2" done_n="${3-}" total_n="${4-}" data
+  if [ "${HERDR_ENV:-}" = 1 ]; then
+    fm_herdr_emit_status "$REPO" "$NAME" "$TASK" "$en" "$tw" reviewer "$done_n" "$total_n" \
+      >/dev/null 2>&1 && return 0
+  fi
   data="$(jq -cn --argjson base "$CREW_DATA" --arg en "$en" --arg tw "$tw" \
     --arg done_n "$done_n" --arg total_n "$total_n" '
     $base * {activity:{en:$en,"zh-TW":$tw}}
@@ -82,6 +96,7 @@ emit_status() {
   ')"
   emit_once --type crew_status --data "$data" --en "$en" --tw "$tw" || true
 }
+
 # Armed where emit() first works: every exit between the two would board
 # an actor that never leaves. Above it is only the argument parsing,
 # which exits 64 before emit() exists.
@@ -101,6 +116,7 @@ emit_status() {
 # definition of the command: two spellings of the same emit is how the
 # ending and the progress lines drift apart.
 finished() {
+  fm_record_end "$?"
   local try=3
   while [ "$try" -gt 0 ]; do
     try=$(( try - 1 ))
@@ -111,7 +127,9 @@ finished() {
 trap finished EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-trap 'exit 129' HUP
+# Keep SIGHUP ignored (fm-config). Exiting on hangup orphans managed
+# transport wait / durable last-result recovery / PR publish.
+trap '' HUP
 
 # The task spec comes from the branch under review, not from whatever is
 # checked out. A task defined on its own branch - which is how a new one
@@ -125,15 +143,12 @@ task_spec() {   # task_spec <task> [branch]
 }
 spec="$(task_spec "$TASK" "$BRANCH")"
 [ -n "$spec" ] || { echo "fm-review: no task $TASK" >&2; exit 65; }
-# Activity comes from the task spec when authored; never from the title.
 set_crew_activity "$spec"
 
-# Said at the START of the round, not at the end of it. A reviewer's
-# whole run is one call to an engine, and this was emitted after that
-# call returned - so the only two events a round ever wrote, this and
-# the ending, landed a moment apart and the board never had a reviewer
-# on the deck at all. An agent is aboard while it is working, which for
-# a reviewer is the part that takes the minutes.
+# Said at the START of the actual review, not after the engine returns. The
+# small spec lookup above supplies the authored brief and refuses a nonexistent
+# task; the minutes-long engine invocation remains entirely bracketed by this
+# event and agent_finished.
 emit --type review_opened --en "round $ROUND on $TASK" --tw "$TASK 第 $ROUND 輪審核"
 emit_status "Review adapter starting on $TASK" "開始審核 $TASK"
 
@@ -150,10 +165,11 @@ keep_log() {
   printf '%s' "$p"
 }
 
-work="$(mktemp -d)"
+work="$FM_RUN_DIR/review"
+mkdir -p "$work"
 prompt="$work/prompt.md"
 {
-  cat skills/reviewer/SKILL.md
+  cat "${FM_CODE_ROOT:-$REPO}/skills/reviewer/SKILL.md"
   printf '\n---\n\n# The task\n\n```json\n%s\n```\n' "$spec"
   printf '\n# Round %s\n' "$ROUND"
   [ "$ROUND" -ge 3 ] && printf '\nThis is round three or later. If the worker has posted ASK-PASS-CRITERIA, answer with the complete numbered list and then post CRITERIA-COMPLETE:%s.\n' "$TASK"
@@ -183,6 +199,13 @@ mkdir -p "$work/out"
 # No pipeline in it either: with `set -o pipefail` a cat that finds nothing
 # fails the whole pipeline even when the grep matched.
 attempt_output() {
+  if [ -n "${FM_CHAIN_ATTEMPT:-}" ] && [ -f "$FM_RUN_DIR/last-result.json" ] &&
+     jq -e --arg attempt "$FM_CHAIN_ATTEMPT" '.chain_attempt == $attempt' "$FM_RUN_DIR/last-result.json" >/dev/null; then
+    local final
+    final="$(jq -r '.attempt' "$FM_RUN_DIR/last-result.json")/final.txt"
+    [ ! -f "$final" ] || cat "$final"
+    return 0
+  fi
   { cat "${FM_RUN_OUTDIR:-$work/out}"/* 2>/dev/null
     tail -c "+$((${FM_RUN_LOG_OFF:-0} + 1))" "$work/log" 2>/dev/null; } || true
 }
@@ -191,10 +214,12 @@ review_is_signed() {
   case "$seen" in *"APPROVE:$TASK"*|*"REJECT:$TASK"*) return 0 ;; esac
   return 1
 }
-fm_run_chain "$REPO/bin/adapters" "$(fm_vendor_chain reviewer "$VENDOR")" \
+fm_run_chain "${FM_CODE_ROOT:-$REPO}/bin/adapters" "$(fm_vendor_chain reviewer "$VENDOR")" \
   "$prompt" "$work/out" "$work/log" review_is_signed per-vendor; rc=$?
 [ -z "$FM_VENDOR_UNKNOWN" ] || {
   echo "fm-review: config.yaml names a vendor with no adapter: $FM_VENDOR_UNKNOWN" >&2
+  emit --review-outcome infrastructure_error --type review_failed \
+       --en "review round $ROUND could not start" --tw "第 $ROUND 輪審核無法開始"
   rm -rf "$work"; exit 65; }
 [ -z "$FM_VENDOR_MISREAD" ] || \
   echo "fm-review: $FM_VENDOR_MISREAD was read as unavailable, but it signed a verdict - keeping it" >&2
@@ -213,6 +238,9 @@ if [ "$rc" = "2" ] && [ "${FM_VENDOR_SPOKE:-0}" = "0" ]; then
   kept="$(keep_log)"
   cp "$work/log" "$kept" 2>/dev/null || : > "$kept"
   echo "fm-review: every reviewer vendor was unavailable; their log is at $kept" >&2
+  emit --review-outcome infrastructure_error --type review_failed \
+       --en "review round $ROUND could not reach a reviewer" \
+       --tw "第 $ROUND 輪審核無法連線至 reviewer"
   rm -rf "$work"; exit 2
 fi
 # a review that did not happen must never look like one that did. An empty
@@ -223,6 +251,23 @@ fi
 # a real reviewer's verdict IS its stdout.
 signed=0
 case "$verdict" in *"APPROVE:$TASK"*|*"REJECT:$TASK"*) signed=1 ;; esac
+# When the managed transport waiter dies mid-chain, pane-child may still have
+# published last-result/final.txt. Recover that durable verdict rather than
+# claiming "no signed review".
+if [ "$signed" = "0" ] && [ -n "${FM_RUN_DIR:-}" ] && [ -f "$FM_RUN_DIR/last-result.json" ]; then
+  recovered_final="$(jq -r '.attempt // empty' "$FM_RUN_DIR/last-result.json" 2>/dev/null)/final.txt"
+  [ -f "$recovered_final" ] || recovered_final="$FM_RUN_DIR/final.txt"
+  if [ -f "$recovered_final" ]; then
+    recovered="$(cat "$recovered_final" 2>/dev/null || true)"
+    case "$recovered" in
+      *"APPROVE:$TASK"*|*"REJECT:$TASK"*)
+        verdict="$recovered"
+        signed=1
+        echo "fm-review: recovered signed verdict from durable last-result" >&2
+        ;;
+    esac
+  fi
+fi
 # An exit code does not overrule produced work - not here either. A CLI that
 # prints a complete signed review and then exits non-zero on some teardown
 # has still reviewed it, and throwing that away repeats the round for ever.
@@ -236,8 +281,10 @@ if [ "$signed" = "0" ]; then
   # already inside it
   { cat "$work/log" 2>/dev/null; attempt_output; } > "$kept"
   echo "fm-review: ${FM_VENDOR_USED:-the reviewer} produced no review (exit $rc); its log is at $kept" >&2
-  emit --type review_failed --en "review round $ROUND produced nothing" \
-       --tw "第 $ROUND 輪審核沒有產出"
+  if [ "$rc" = 0 ]; then outcome=missing_review; else outcome=infrastructure_error; fi
+  emit --review-outcome "$outcome" --type review_failed \
+       --en "review round $ROUND produced no signed review" \
+       --tw "第 $ROUND 輪審核沒有已簽署的結果"
   rm -rf "$work"; exit 3
 fi
 if [ -n "$PR" ]; then
@@ -249,6 +296,8 @@ case "$verdict" in
     emit_status "Verdict signed: APPROVE:$TASK" "已簽署裁決：APPROVE:$TASK"
     ;;
   *"REJECT:$TASK"*)
+    emit --review-outcome rejected --type review_failed \
+         --en "reviewer rejected $TASK" --tw "reviewer 拒絕 $TASK"
     emit_status "Verdict signed: REJECT:$TASK" "已簽署裁決：REJECT:$TASK"
     ;;
 esac

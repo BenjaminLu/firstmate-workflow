@@ -50,3 +50,18 @@ review round on nothing.
 
 Every adapter passes `tests/adapter-contract.test.sh`. Add a vendor by adding a
 file here and a line to `config.yaml`; nothing else in the system changes.
+
+The four shipped model adapters also participate in the
+[managed session contract](../../design/design.md#managed-session-defaults).
+With a dispatched run identity, their launcher owns private per-attempt artifacts
+under `state/runs/<actor>` in addition to the adapter's worktree/log outputs.
+In Herdr this launcher creates a dedicated tab with `--no-focus` and runs the same
+adapter CLI in its single owned root pane, using one canonical actor for tab, pane,
+sidebar, process and durable artifacts. It verifies caller focus and tab membership;
+added/shared/moved/reused or uncertain resources are retained. Checked completion
+closes only the verified pane, never a whole tab unconditionally. Direct mode still injects the portable role context and retains final/exit evidence.
+Codex final output and complete vendor JSON results establish final-answer
+provenance; arbitrary custom adapters and the scripted mock do not inherit that
+guarantee. Transport/configuration failures return 70 and are not vendor outages
+or successful work. Successful CLI/adapter exit is distinct from explicit task
+completion, a reviewer verdict, gates and captain acceptance.

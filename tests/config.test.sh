@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # One reader, because five copies of the same sed were wrong in the same way.
 set -uo pipefail
+# A live managed worker exports FM_RUN_DIR / FM_ENTRY_* / FM_WORKER_TASK_LOCK_FD
+# and Herdr pane ids into this shell. Suites must not inherit them or freeze,
+# identity, locks and pushes bind to the outer run instead of the fixture.
+for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
+  unset "$_fm_k" || true
+done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"

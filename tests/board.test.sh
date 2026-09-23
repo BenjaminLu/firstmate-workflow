@@ -2,6 +2,12 @@
 # The board's contract is HTTP, so the suite speaks HTTP. No browser download
 # in CI: a headless Chromium is a minute of install to assert what curl can.
 set -uo pipefail
+# A live managed worker exports FM_RUN_DIR / FM_ENTRY_* / FM_WORKER_TASK_LOCK_FD
+# and Herdr pane ids into this shell. Suites must not inherit them or freeze,
+# identity, locks and pushes bind to the outer run instead of the fixture.
+for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
+  unset "$_fm_k" || true
+done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
@@ -398,10 +404,12 @@ assert_contains "$crowd" "crowd-$(( n - 1 )) " "the agent that boarded last is o
 assert_lacks "$crowd" "crowd-0 " "and the one that has been aboard longest is the one dropped"
 
 # loopback only - on the option that binds, not on the file's prose
-assert_ok "sed 's|//.*||' '$ROOT/board/server.ts' | grep -qE 'hostname:[[:space:]]*\"127\\.0\\.0\\.1\"'" \
+# Do not pipe grep -q under pipefail: early close makes sed SIGPIPE and flakes red.
+_bind_src="$(sed 's|//.*||' "$ROOT/board/server.ts")"
+assert_matches "$_bind_src" 'hostname:[[:space:]]*"127\.0\.0\.1"' \
   "the bind option is 127.0.0.1"
 # strip from // onward: a trailing comment is still a comment
-assert_fail "sed 's|//.*||' '$ROOT/board/server.ts' | grep -qF '0.0.0.0'" \
+assert_lacks "$_bind_src" '0.0.0.0' \
   "no code binds 0.0.0.0"
 
 kill "$pid" 2>/dev/null

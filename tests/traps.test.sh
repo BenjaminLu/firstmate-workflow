@@ -127,8 +127,16 @@ sweep_unguarded() {   # files -> "<file>:<signal>" for each one missing
     code="$(sed -e 's/[[:space:]]*#.*$//' "$f")"
     grep -qE '^[[:space:]]*trap[[:space:]].*[[:space:]]EXIT$' <<< "$code" || continue
     for sig in INT TERM HUP; do
-      grep -qE "^[[:space:]]*trap[[:space:]]+'exit [0-9]+'[[:space:]]+$sig\$" <<< "$code" \
-        || printf '%s:%s\n' "$(basename "$f")" "$sig"
+      # exit-N is the usual guard: the signal becomes an EXIT path.
+      grep -qE "^[[:space:]]*trap[[:space:]]+'exit [0-9]+'[[:space:]]+$sig\$" <<< "$code" && continue
+      # Ignoring HUP is also a deliberate guard for managed Herdr: a
+      # launching agent shell's hangup must not kill the wait / publish.
+      # INT/TERM still exit so the EXIT trap runs on those paths.
+      if [ "$sig" = HUP ] \
+         && grep -qE "^[[:space:]]*trap[[:space:]]+(['\"]['\"]|'')[[:space:]]+HUP\$" <<< "$code"; then
+        continue
+      fi
+      printf '%s:%s\n' "$(basename "$f")" "$sig"
     done
   done
   return 0
@@ -183,11 +191,14 @@ assert_lacks "$caught" "clean.sh" "a correctly split one is left alone"
 assert_lacks "$caught" "shouty.sh" "and a handler that merely says the words is not one"
 
 plant_script exposed.sh 'trap cleanup EXIT'
-missing="$(sweep_unguarded "$p/exposed.sh" "$p/clean.sh")"
+plant_script ignorehup.sh 'trap finished EXIT' "trap 'exit 130' INT" \
+                       "trap 'exit 143' TERM" "trap '' HUP"
+missing="$(sweep_unguarded "$p/exposed.sh" "$p/clean.sh" "$p/ignorehup.sh")"
 for sig in INT TERM HUP; do
   assert_contains "$missing" "exposed.sh:$sig" "an EXIT trap with no $sig guard is found"
 done
 assert_lacks "$missing" "clean.sh" "and one with all three is not"
+assert_lacks "$missing" "ignorehup.sh" "ignoring HUP counts as a HUP guard"
 
 plant_script quiet.sh  'fm-emit.sh --actor "worker-1" --task T-1 --type dispatched'
 plant_script speaks.sh 'finished() { fm-emit.sh --actor "worker-1" --task T-1 --type agent_finished; }' \

@@ -42,12 +42,37 @@
 # little grammar. Each one is a way a CLI reports that it could not run.
 _FM_SIG='authentication failed|authentication required|authentication error|error authenticating|authenticate failed|not authenticated|unauthori[sz]ed|401 unauthorized|403 forbidden|429 too many requests|status 401|status 403|status 429|too many requests,|not logged in|please run [a-z0-9 ._-]{0,30}login|please use [a-z0-9 ._-]{0,30}login|login required|invalid api key|missing api key|no api key|expired api key|api key not set|api key not found|api key not configured|api key not valid|invalid credentials|missing credentials|expired credentials|credentials could not|quota exceeded|quota exhausted|out of quota|rate limit exceeded|rate limit reached|rate-limited|rate limited|network error:|network error while|network unreachable|network failure|fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN'
 
+# Called after argument validation and before touching a model. The Python
+# runner invokes this same adapter inside a real pane with context-ready=1.
+fm_adapter_context() {
+  local adapter="$1" code
+  unset FM_CLI_EXIT
+  code="$(cd "$(dirname "$adapter")/../.." && pwd)"
+  if [ "${HERDR_ENV:-}" = 1 ] && [ "${FM_TRANSPORT:-herdr}" = direct ] && [ "${FM_ALLOW_DIRECT:-}" != 1 ]; then
+    echo "${adapter##*/}: FM_TRANSPORT=direct is refused when HERDR_ENV=1; use stock managed Herdr via fm-worker/fm-review" >&2
+    exit 70
+  fi
+  if [ "${FM_CONTEXT_READY:-}" != 1 ] && { [ -n "${FM_RUN_DIR:-}" ] || { [ "${HERDR_ENV:-}" = 1 ] && [ "${FM_TRANSPORT:-herdr}" != direct ]; }; }; then
+    # shellcheck disable=SC2154  # validated positional arguments in each adapter
+    exec python3 "$code/bin/fm-herdr.py" transport "$adapter" "$prompt" "$tree" "$log"
+  fi
+}
+
+# Keep the CLI's exit separately from a failed transcript writer. Either failure
+# fails the adapter, but only the first pipeline member is the model process.
+fm_adapter_pipeline_status() {
+  FM_CLI_EXIT="$1"
+  [ "$2" = 0 ] || return 1
+  return "$1"
+}
+
 # fm_adapter_mark <log> -> byte offset to read from after the run
 fm_adapter_mark() { if [ -f "$1" ]; then wc -c < "$1" | tr -d ' '; else echo 0; fi; }
 
 # fm_adapter_verdict <rc> <log> <offset> -> 0 done / 1 unfit / 2 unavailable
 fm_adapter_verdict() {
   local rc="$1" log="$2" off="$3" said=''
+  [ -z "${FM_ATTEMPT_DIR:-}" ] || printf '%s\n' "${FM_CLI_EXIT:-$rc}" > "$FM_ATTEMPT_DIR/cli-exit-code"
   [ -f "$log" ] && said="$(tail -c "+$((off + 1))" "$log" 2>/dev/null)"
 
   # a here-string, not a pipeline: under `set -o pipefail` a grep -q that

@@ -117,3 +117,13 @@ no-mistakes is a prerequisite; do not add their hooks. Captain scope and merge
 decisions remain on the board; the merge helper itself checks neither approval
 nor the seven gates. Mid-run board progress is script-emitted only: do not invent
 percentages from coarse lifecycle state in review prose or fixtures.
+
+Managed launches create a dedicated tab with one owned root pane and the same
+canonical actor as the tab, pane and sidebar label. Creation uses `--no-focus`,
+records the caller tab/pane and verifies unchanged UI focus. Never split or reuse
+the captain's view. Before fallback reuse or completion close, verify the recorded
+tab still contains only its owned pane, with unchanged task/run/actor, terminal
+and shell identities and shell-only state. Added panes, moved/shared/reused tabs,
+unknown observations and incomplete results retain resources. Close only the
+verified pane; its single-pane tab may disappear as a consequence, never through
+unconditional whole-tab deletion. Preserve explicit transport/auto-close opt-outs.

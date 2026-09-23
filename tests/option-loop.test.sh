@@ -16,6 +16,12 @@
 #     all but one of them could drop out silently. The names and counts are
 #     written down here, and the discovery is checked against them.
 set -uo pipefail
+# A live managed worker exports FM_RUN_DIR / FM_ENTRY_* / FM_WORKER_TASK_LOCK_FD
+# and Herdr pane ids into this shell. Suites must not inherit them or freeze,
+# identity, locks and pushes bind to the outer run instead of the fixture.
+for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
+  unset "$_fm_k" || true
+done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # The helpers this file leans on are defined in tests/lib.sh. An earlier
 # version of this comment inventoried them by hand, with line numbers,
@@ -47,6 +53,7 @@ fm-protocol 4
 fm-reconcile 2
 fm-review 7
 fm-run 2
+fm-session 2
 fm-sync-prs 2
 fm-worker 5"
 
@@ -127,7 +134,7 @@ while read -r name want; do
     fi
   done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "66" "$total" "every pinned flag and all seven fm option branches were exercised"
+assert_eq "68" "$total" "every pinned flag and all seven fm option branches were exercised"
 
 # A script that grows an option loop has to be pinned here too, and the
 # corpus is the one bin/ci.sh judges - literally, out of
@@ -179,7 +186,7 @@ assert_eq "" "$(printf '%s\n' "$allsh" | xargs grep -l 'getopts\|OPTARG' || true
 run_capped 6 bash "$ROOT/bin/fm-emit.sh" --no-such-flag
 assert_eq "64" "$code" "an unknown flag is refused too"
 assert_contains "$said" "unknown argument" "and says so"
-# Six scripts get their guard from a sourced function, and a
+# Seven scripts get their guard from a sourced function, and a
 # command-not-found under `set -uo pipefail` carries on - the exact hazard
 # the assertions stage exists to catch. So the load has to be hard: if the
 # library will not load, the script must not reach its option loop.
@@ -202,7 +209,7 @@ while IFS= read -r f; do
   assert_contains "$said" "fm-config.sh" "and says which library"
   rm -rf "$tmp"
 done < <(fm_shell_corpus "$ROOT/bin")
-assert_eq "7" "$sourced" "seven scripts take their guard from the library"
+assert_eq "8" "$sourced" "eight scripts take their guard from the library"
 
 # And the other half of the same number, because two comments say it is
 # pinned here and until now it was not: the scripts that deliberately

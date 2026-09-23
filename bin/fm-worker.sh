@@ -16,6 +16,7 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
+fm_args=("$@")
 
 REPO="$(fm_default_repo)"; TASK=''; VENDOR=''; NAME=''; PR=''
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
@@ -31,12 +32,11 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$TASK" ] || { echo "usage: fm-worker.sh --task <id> [--repo dir]" >&2; exit 64; }
 cd "$REPO" || { echo "fm-worker: no repo at $REPO" >&2; exit 64; }
-NAME="${NAME:-worker-$$}"
-EMIT="$REPO/bin/fm-emit.sh"
-# Mid-run reporting (T-036): every emit carries role, canonical crew_name and
-# authored activity. Prefer task.activity from the spec; never invent copy from
-# the scalar title. Bounded progress is attached only at nodes with a real
-# denominator (see emit_progress / crew_status).
+REPO="$(pwd -P)"
+fm_refuse_herdr_bypass fm-worker || exit $?
+fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
+fm_identity worker "$TASK" "$NAME" || exit 70
+EMIT="${FM_CODE_ROOT:-$REPO}/bin/fm-emit.sh"
 CREW_DATA="$(jq -cn --arg role worker --arg name "$NAME" \
   --arg en 'Work description unavailable' --arg tw '尚無工作說明' \
   '{role:$role,crew_name:$name,activity:{en:$en,"zh-TW":$tw}}')"
@@ -51,17 +51,14 @@ set_crew_activity() {
   ' <<<"$1" 2>/dev/null)"
   [ -z "$authored" ] || CREW_DATA="$(jq -c --argjson activity "$authored" '.activity=$activity' <<<"$CREW_DATA")"
 }
-# fm-emit keeps the last --data only. Merge call-site --data into the crew
-# payload so extras cannot wipe crew_name or activity.
+# fm-emit keeps the last --data only. Merge any call-site --data into the
+# crew payload so role/recovery extras cannot wipe crew_name or activity.
 emit_once() {
   local data="$CREW_DATA" args=()
-  # Local need(): return (do not exit) so a bad call cannot kill the run.
-  # Name must be need/fm_need — bin/ci.sh only accepts those as shift-2 guards.
-  need() { [ "$#" -ge 3 ] || { echo "emit_once: $2 needs a value" >&2; return 1; }; }
   while [ $# -gt 0 ]; do
     case "$1" in
       --data)
-        need "emit_once" "$@" || return 1
+        fm_need "fm-worker" "$@"
         data="$(jq -c --argjson extra "${2-}" '. * $extra' <<<"$data")" || return 1
         shift 2
         ;;
@@ -72,8 +69,9 @@ emit_once() {
     ${args[@]+"${args[@]}"} >/dev/null 2>&1 </dev/null
 }
 emit() { emit_once "$@" || true; }
+
 # Phase / activity refresh without inventing percent. Optional done/total when
-# a true denominator exists. Shared path for every vendor.
+# a true denominator exists. Shared path for every vendor (T-036).
 emit_status() {
   local en="$1" tw="$2" done_n="${3-}" total_n="${4-}" data
   if [ "${HERDR_ENV:-}" = 1 ]; then
@@ -90,6 +88,7 @@ emit_status() {
   ')"
   emit_once --type crew_status --data "$data" --en "$en" --tw "$tw" || true
 }
+
 
 # A run that ends has to say so, or "aboard" means "ever touched a task
 # that is not finished yet", the board draws every actor that has ever
@@ -143,6 +142,10 @@ scratch=()
 scratch_add() { scratch+=("$1"); }
 clean_scratch() { [ ${#scratch[@]} -eq 0 ] || rm -f "${scratch[@]}"; }
 
+# Dirty worktrees used to vanish when the adapter/transport never returned
+# to the happy-path commit (SIGHUP, kill, blocked ask-only after edits, or
+# EXIT before the final git block). Publish once on the way out so a PR
+# always sees a remote checkpoint when the worktree had real changes.
 _fm_wip_done=0
 publish_wip_if_dirty() {
   local reason="${1:-exit}" dirty
@@ -153,9 +156,11 @@ publish_wip_if_dirty() {
     ":(exclude).fm-prompt.md" ":(exclude).fm-say.md" 2>/dev/null || true)"
   [ -n "$dirty" ] || return 0
   echo "fm-worker: publishing dirty worktree ($reason)" >&2
-  # Same stock helper as mid-run checkpoints: commit then push. Emit stays
-  # here so the board sees the real actor, not a phantom default.
-  if ! "$REPO/bin/fm-checkpoint.sh" --dir "$tree" \
+  # Same stock helper as mid-run checkpoints: commit then push. Prefer the
+  # frozen snapshot helper when present so live source edits cannot shift us.
+  _ckpt="${FM_CODE_ROOT:-$REPO}/bin/fm-checkpoint.sh"
+  [ -x "$_ckpt" ] || _ckpt="$REPO/bin/fm-checkpoint.sh"
+  if ! "$_ckpt" --dir "$tree" \
        --message "checkpoint ($reason)" </dev/null; then
     echo "fm-worker: checkpoint push failed for $branch ($reason)" >&2
     return 1
@@ -168,7 +173,6 @@ publish_wip_if_dirty() {
     echo "fm-worker: checkpoint left dirty paths: $still" >&2
     return 1
   fi
-  # Remote tip must match the worktree tip before claiming commit_pushed.
   local_tip="$(git -C "$tree" rev-parse HEAD 2>/dev/null || true)"
   remote_tip="$(git -C "$tree" ls-remote --heads origin "refs/heads/$branch" 2>/dev/null | awk '{print $1}')"
   if [ -z "$local_tip" ] || [ -z "$remote_tip" ] || [ "$local_tip" != "$remote_tip" ]; then
@@ -183,7 +187,10 @@ publish_wip_if_dirty() {
 
 finished() {
   local rc=$?
+  # Before retiring the actor: save any unpushed worktree edits. SIGTERM/INT
+  # reach here via `exit`; SIGKILL cannot. Mid-run saves use fm-checkpoint.sh.
   publish_wip_if_dirty "exit-$rc" || true
+  fm_record_end "$rc"
   clean_scratch
   local try=3
   while [ "$try" -gt 0 ]; do
@@ -202,7 +209,9 @@ finished() {
 trap finished EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-trap 'exit 129' HUP
+# Keep SIGHUP ignored (fm-config). Exiting on hangup orphans the managed
+# transport wait and PR publish when a launching agent shell ends.
+trap '' HUP
 
 
 # The task spec comes from the branch under review, not from whatever is
@@ -218,7 +227,7 @@ task_spec() {   # task_spec <task> [branch]
 # the worker has no branch name yet - it is derived from the title - so
 # it looks for one already carrying this task. Local first, then origin:
 # a worktree can be swept between rounds and leave nothing local behind,
-# and a branch only origin remembers is still a branch to continue.
+# and a branch only origin remembers is still a branch to continue (T-037).
 slug="$(printf '%s' "$TASK" | tr 'A-Z' 'a-z')"
 branch_guess="$(git for-each-ref --format='%(refname:short)' refs/heads \
   | grep -i "^$slug-" | head -1)"
@@ -226,10 +235,6 @@ if [ -z "$branch_guess" ]; then
   remote_guess="$(git ls-remote --heads origin 2>/dev/null \
     | sed -n 's#.*[[:space:]]refs/heads/##p' \
     | grep -i "^$slug-" | head -1)"
-  # fetched into a same-named local branch right away, so every use of
-  # branch_guess below - task_spec's `git show`, and the worktree this
-  # becomes - sees one ref, not "local has it"/"origin has it" as two
-  # different questions answered two different ways
   if [ -n "$remote_guess" ] && git fetch -q origin "$remote_guess:$remote_guess" 2>/dev/null; then
     branch_guess="$remote_guess"
   fi
@@ -239,11 +244,15 @@ spec="$(task_spec "$TASK" "$branch_guess")"
 set_crew_activity "$spec"
 
 # A task's title is mutable; its branch name, once created, is not re-derived
-# from it. branch_guess found an existing ref for this task - reuse it as-is.
-# Recomputing a slug from the CURRENT title here would silently mismatch an
-# existing branch (a title edited after the branch was made, or a branch
-# named before this script cut slugs to 28 characters) and fall through
-# below to creating a second branch from base, stranding the first one's work.
+# from it (T-037). Prefer an explicit --pr headRefName when valid (T-035).
+if [ -n "$PR" ]; then
+  pr_branch="$($GH pr view "$PR" --json headRefName --jq '.headRefName' 2>/dev/null || true)"
+  case "$pr_branch" in
+    ''|null) ;;
+    *[!A-Za-z0-9._/-]*|/*|*/) ;;
+    *) branch_guess="$pr_branch" ;;
+  esac
+fi
 if [ -n "$branch_guess" ]; then
   branch="$branch_guess"
 else
@@ -256,7 +265,7 @@ tree="$REPO/state/worktrees/$TASK"
 # touching the worktree. The PID is published atomically while holding it.
 pidfile="$REPO/state/worktrees/$TASK.pid"
 mkdir -p "$REPO/state/worktrees" || exit 70
-dispatch_extra='{}'
+dispatch_data='{"role":"worker"}'
 if [ "${FM_WORKER_LOCK_PID:-}" != "$$" ]; then
   exec 9>>"$pidfile.lock" || exit 70
   perl -MFcntl=:flock -e '
@@ -267,7 +276,7 @@ else
   # Reconcile execs this PID with its locked fd 9. Both producers describe
   # the same attempt: the worker must not introduce a fresh boundary after
   # the launcher's recovery event, even when neither knows the PR yet.
-  dispatch_extra='{"recovery":true}'
+  dispatch_data='{"role":"worker","recovery":true}'
 fi
 # Consume the PID-bound handoff; a child/wrapper must not reuse it as a
 # generic recovery flag. Keep fd 9 open for this worker's entire lifetime.
@@ -280,7 +289,7 @@ pid_owned=1
 # The worker records that it started, not the dispatcher. A task started
 # by hand was otherwise never in flight as far as the log was concerned,
 # and the dispatcher would start a second one on top of it.
-emit --type dispatched ${PR:+--pr "$PR"} --data "$dispatch_extra" --en "picked up $TASK" --tw "接下 $TASK"
+emit --type dispatched ${PR:+--pr "$PR"} --data "$dispatch_data" --en "picked up $TASK" --tw "接下 $TASK"
 emit_status "Adapter starting on $TASK" "開始在 $TASK 上跑 adapter"
 
 # --- a worktree of its own -----------------------------------------------
@@ -384,7 +393,7 @@ prompt="$tree/.fm-prompt.md"
 # question is not uncommitted work worth saving.
 say="$tree/.fm-say.md"
 {
-  cat skills/worker/SKILL.md
+  cat "${FM_CODE_ROOT:-$REPO}/skills/worker/SKILL.md"
   printf '\n---\n\n# Your task\n\n```json\n%s\n```\n' "$spec"
   printf '\nYour worktree is the current directory. Your branch is `%s`.\n' "$branch"
   printf 'Stay inside these paths:\n'
@@ -519,30 +528,32 @@ worker_did_work() {
   [ -n "$(git -C "$tree" status --porcelain -- . \
       ":(exclude).fm-prompt.md" ":(exclude).fm-say.md")" ] || [ -s "$tree/.fm-say.md" ]
 }
-log="$REPO/state/worktrees/$TASK.log"; : > "$log"
-# A function redirection saves fd 9 on another descriptor, which an adapter
-# can inherit. Close it permanently in a subshell instead, so a surviving
-# adapter cannot hold the dead worker's recovery lock. Return only the chain's
-# outputs, using bash's quoted declarations rather than parsing adapter text.
+log="$FM_RUN_DIR/worker.log"; : > "$log"
+# Close fd 9 and the launch-time task lock in a subshell so adapters cannot
+# hold either. The parent keeps its copies for exclusion; if the published
+# PID is SIGKILL'd, a surviving adapter must not keep the task lock or
+# recovery relaunch blocks on "already has a live worker".
+# Managed-session runs keep evidence under FM_RUN_DIR and resolve adapters
+# through FM_CODE_ROOT when a frozen snapshot is active.
 chain_result="$(scratch_new)" || exit 70
 scratch_add "$chain_result"
 emit_status "Adapter running on $TASK" "adapter 正在執行 $TASK"
 (
   exec 9>&-
-  fm_run_chain "$REPO/bin/adapters" "$(fm_vendor_chain worker "$VENDOR")" \
+  if [[ "${FM_WORKER_TASK_LOCK_FD:-}" =~ ^[0-9]+$ ]]; then
+    eval "exec ${FM_WORKER_TASK_LOCK_FD}>&-"
+  fi
+  fm_run_chain "${FM_CODE_ROOT:-$REPO}/bin/adapters" "$(fm_vendor_chain worker "$VENDOR")" \
     "$prompt" "$tree" "$log" worker_did_work
   chain_rc=$?
   declare -p FM_VENDOR_USED FM_VENDOR_SKIPPED FM_VENDOR_MISREAD FM_VENDOR_UNKNOWN > "$chain_result"
   exit "$chain_rc"
 ); rc=$?
-if [ -s "$chain_result" ]; then
-  # shellcheck disable=SC1090
-  . "$chain_result"
-else
-  FM_VENDOR_USED=''; FM_VENDOR_SKIPPED=''; FM_VENDOR_MISREAD=''; FM_VENDOR_UNKNOWN=''
-fi
+# shellcheck disable=SC1090
+. "$chain_result"
 [ -z "$FM_VENDOR_UNKNOWN" ] || {
   echo "fm-worker: config.yaml names a vendor with no adapter: $FM_VENDOR_UNKNOWN" >&2; exit 65; }
+[ "$rc" -lt 64 ] || { echo "fm-worker: adapter transport/configuration failed; artifacts at $FM_RUN_DIR" >&2; exit 70; }
 [ -z "$FM_VENDOR_MISREAD" ] || {
   echo "fm-worker: $FM_VENDOR_MISREAD was read as unavailable, but it changed files - keeping them" >&2
   emit --type vendor_unavailable --en "read as unavailable but work was done; keeping it" \
@@ -652,16 +663,13 @@ if ! worker_did_work; then
 fi
 
 # --- from here on it is the script's job, never the adapter's ------------
-# Final sweep for leftovers uses the same stock checkpoint helper the
-# worker skill requires after each logical commit: commit then push the
-# feature branch. Never wait until WORKER_COMPLETE for the only push.
-if ! "$REPO/bin/fm-checkpoint.sh" --task "$TASK" --repo "$REPO" \
-     --message "$(jq -r .title <<<"$spec")" </dev/null; then
-  echo "fm-worker: could not checkpoint $branch" >&2; exit 71
-fi
+git -C "$tree" add -A
+fm_git_commit "$tree" "$TASK: $(jq -r .title <<<"$spec")"
 _fm_wip_done=1
-emit --type commit_pushed --en "committed on $branch" --tw "已在 $branch 上 commit"
 emit_status "Commit pushed on $branch" "已在 $branch 上推送 commit"
+emit --type commit_pushed --en "committed on $branch" --tw "已在 $branch 上 commit"
+git -C "$tree" push -q -u origin "$branch" 2>/dev/null || {
+  echo "fm-worker: could not push $branch" >&2; exit 71; }
 
 # On a later round the pull request is already open and `pr create` fails.
 # A worker that could only ever open a new one failed its second round at
@@ -689,12 +697,12 @@ if [ -z "$num" ] || [ "$num" = "null" ]; then
   # request by it, and an event without it leaves the gates checking nothing
   num="$(printf '%s' "$url" | sed -n 's|.*/\([0-9][0-9]*\)$|\1|p')"
   [ -n "$num" ] || { echo "fm-worker: could not read a pull request number from '$url'" >&2; exit 72; }
-  emit --type pr_opened --pr "$num" --en "opened #$num" --tw "已開 #$num"
   emit_status "Pull request #$num opened" "已開 PR #$num"
+  emit --type pr_opened --pr "$num" --en "opened #$num" --tw "已開 #$num"
 else
+  emit_status "Pushed another round to #$num" "已推第二輪到 #$num"
   emit --type commit_pushed --pr "$num" --en "pushed another round to #$num" \
        --tw "第二輪已推上 #$num"
-  emit_status "Pushed another round to #$num" "已推第二輪到 #$num"
 fi
 printf '%s\n' "$branch"
 [ "${rc:-1}" = "0" ] || exit 1
