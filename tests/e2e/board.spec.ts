@@ -12,7 +12,11 @@ const TW = JSON.parse(readFileSync(join(ROOT, "i18n/ui.zh-TW.json"), "utf8"));
 // Independently authored oracles: using the production conversion table here
 // made an incorrect or incomplete table prove itself correct.
 const CN = {merged:'已合并',inflight:'进行中',blocked:'受阻',queued:'排队',aboard:'在船上',
-  roster:'船员名册',descriptionUnavailable:'尚无工作说明'};
+  roster:'船员名册',descriptionUnavailable:'尚无工作说明',waitingOnYou:'等你拍板',
+  titleMissing:'design/tasks.json 未列出标题',blockedOn:'卡在',gateFailedN:'第 {n} 道闸未过',
+  optionsN:'{n} 个选项',rosterBtn:'名册',crossVendor:'跨供应商审核',mergedMore:'另 {n} 个在已完成历史中',
+  dragHint:'拖曳人物可旋转单人 · 拖曳甲板转全员 · 双击复位',ahoyDemo:'试放礼炮（不写入事件）',
+  orderDemo:'试演下令回应（不写入事件）',alsoWaiting:'其他待决（点开就地展开）'};
 const CN_ACTIVITY = {
   build:'Rowan 实作船长决策', test:'Rowan 测试决策', literal:'验证船长原文命令',
   bea:'Bea 审查船长决策',
@@ -191,10 +195,17 @@ test('continuation history, readable mobile content and persistent controls', as
       expect(await page.locator(selector).first().evaluate(el=>parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(13);
     await expect(page.locator('#history .card').first()).not.toBeVisible();
     expect((await page.locator('.dcard').first().boundingBox())!.y).toBeLessThan(844);
-    const activeHeight=(await page.locator('#lanes').boundingBox())!.height;
+    // merged is a lane now, but a short one: the latest few, newest first,
+    // and a pointer at the history for the rest
+    const mergedLane=page.locator('[data-lane="merged"]');
+    await expect(mergedLane.locator('h3 i')).toHaveText('31');
+    await expect(mergedLane.locator('.card')).toHaveCount(5);
+    await expect(mergedLane.locator('.card').first()).toContainText('T-999');
+    await expect(mergedLane.locator('.more')).toHaveText(EN.mergedMore.replace('{n}','26'));
     await page.evaluate(async()=>{const s=await(await fetch('/api/state')).json();s.tasks=s.tasks.filter((t:any)=>t.stage!=='merged'||t.id==='H-0');(window as any).render(s);});
     await expect(page.locator('#history summary')).toContainText('1');
-    expect((await page.locator('#lanes').boundingBox())!.height).toBe(activeHeight);
+    await expect(mergedLane.locator('.card')).toHaveCount(1);
+    await expect(mergedLane.locator('.more')).toHaveCount(0);
     await page.evaluate("fetch('/api/state').then(r=>r.json()).then(render)");
     await expect(page.locator('#history summary')).toContainText('31');
     let posts=0;page.on('request',r=>{if(r.method()==='POST')posts++;});
@@ -313,7 +324,7 @@ for (const lang of ["en", "zh-TW", "zh-CN"]) {
     // substring scan would not do: "log" is inside plenty of honest text.
     const want = (k: string) => (lang === "en" ? EN : lang === "zh-TW" ? TW : CN)[k];
     const labels = await page.locator(".counts span").allInnerTexts();
-    for (const [i, k] of ["merged", "inflight", "blocked", "queued"].entries()) {
+    for (const [i, k] of ["merged", "inflight", "waitingOnYou", "blocked", "queued"].entries()) {
       const w = want(k);
       // the stylesheet upper-cases these, so compare the words not the case
       expect(labels[i].toLowerCase()).toBe(w.toLowerCase());
@@ -440,8 +451,14 @@ test('all authored fields switch locale, diagrams differ and input stays text', 
   const b = await startBoard(root);
   try {
     await page.goto(`${b.url}/?lang=en`);
+    // the second decision is a strip until it is opened in place, and it
+    // stays open through a language switch
+    await expect(page.locator('#strip-D-2')).toHaveJSProperty('open', false);
+    await page.locator('#strip-D-2 > summary').click();
+    await expect(page.locator('#strip-D-2')).toHaveJSProperty('open', true);
     for (const lang of ['en','zh-TW','zh-CN']) {
       await page.locator(`[data-l="${lang}"]`).click();
+      await expect(page.locator('#strip-D-2')).toHaveJSProperty('open', true);
       for (const [id, d, cn] of [['D-1', details, CN_DETAILS[0]], ['D-2', second, CN_DETAILS[1]]] as const) {
         const want = lang === 'en' ? d.en : lang === 'zh-TW' ? d['zh-TW'] : cn;
         const card = page.locator(`#card-${id}`);
@@ -525,6 +542,147 @@ test('failed merge persists failure without salute or automatic retry', async ({
   } finally {stopBoard(b);}
 });
 
+test('a refused merge names its decision and task, and clears once that task merges', async ({page}) => {
+  test.setTimeout(30_000);
+  const b = await startBoard(makeRoot(['working']));
+  writeFileSync(join(b.root,'bin/fm-merge.sh'),'#!/usr/bin/env bash\necho refused\nexit 1\n');
+  const {task} = JSON.parse(readFileSync(join(b.root,'state/pending/D-1.json'),'utf8'));
+  const feedback = page.locator('#orderFeedback');
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    await page.locator('[data-c="A"]').click();
+    await page.locator('.confirm').click();
+    await expect(feedback).toContainText(EN.mergeRefused);
+    await expect(feedback).toContainText('D-1');
+    await expect(feedback).toContainText(task);
+    // a merge of some other task is not this one
+    emitFixture(b.root,'github','T-OTHER','merged','Other merged','其他已合併');
+    await page.evaluate(async () => (window as any).render(await (await fetch('/api/state')).json()));
+    await expect(feedback).toContainText(EN.mergeRefused);
+    // the same task merged afterwards, some other way: the refusal is old news
+    const r = spawnSync('bash',[join(b.root,'bin/fm-emit.sh'),'--actor','github','--type','merged','--task',task,'--pr','99',
+      '--en','merged by hand','--tw','手動合併'],{env:{...process.env,FM_ROOT:b.root}});
+    expect(r.status).toBe(0);
+    await expect(feedback).not.toContainText(EN.mergeRefused, {timeout:5000});
+    // and a reload does not bring it back
+    await page.reload();
+    await expect(page.locator('.scene .pivot').first()).toBeVisible();
+    await expect(page.locator('#orderFeedback')).not.toContainText(EN.mergeRefused);
+    await expect(page.locator('#deckwrap')).toBeHidden();
+  } finally {stopBoard(b);}
+});
+
+test('the prototype layout: engine badge, six lanes, portrait and strips, roster rows and demonstrations', async ({page}) => {
+  test.setTimeout(90_000);
+  const root = makeRoot(['working','gate','review']);
+  // names nothing could have hard-coded
+  writeFileSync(join(root,'config.yaml'),'vendor: vendor-alpha  # top\nreviewer:\n  vendor: vendor-beta\n');
+  const file = join(root,'design/tasks.json'), spec = JSON.parse(readFileSync(file,'utf8'));
+  const first = spec.tasks[0].id;
+  spec.tasks.push({id:'T-QUEUE',title:'Queued behind unmerged work',depends_on:[first]});
+  writeFileSync(file, JSON.stringify(spec));
+  emitFixture(root,'worker-absent','T-ABSENT','dispatched','Work on an unlisted task','處理未列出的任務',{role:'worker'});
+  emitFixture(root,'worker-2',spec.tasks[1].id,'gate_failed','Gate five failed','第五道閘未過',{gate:5});
+  emitFixture(root,'worker-1',first,'crew_status','Counting gates','計算閘門',{role:'worker',progress:{done:2,total:5}});
+  writeFileSync(join(root,'state/pending/D-2.json'),JSON.stringify({id:'D-2',kind:'choice',task:spec.tasks[2].id,details}));
+  const b = await startBoard(root);
+  let posts = 0; page.on('request', r => { if (r.method() === 'POST') posts++; });
+  try {
+    await page.setViewportSize({width:1280,height:900});
+    await page.goto(`${b.url}/?lang=en`);
+    await expect(page.locator('.scene .pivot').first()).toBeVisible();
+
+    // V7: the engine from config.yaml, marked when review runs elsewhere
+    await expect(page.locator('#engine')).toHaveText('vendor-alpha ⇄ vendor-beta');
+    await expect(page.locator('#engine')).toHaveClass(/\bx\b/);
+    writeFileSync(join(root,'config.yaml'),'vendor: vendor-alpha\nreviewer:\n  vendor: vendor-alpha\n');
+    await page.evaluate(async () => (window as any).render(await (await fetch('/api/state')).json()));
+    await expect(page.locator('#engine')).toHaveText('vendor-alpha');
+    await expect(page.locator('#engine')).not.toHaveClass(/\bx\b/);
+
+    // waiting on you counts the decisions, beside the other four
+    await expect(page.locator('[data-count="waiting"] b')).toHaveText('2');
+    expect(await page.locator('.counts [data-count]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.count)))
+      .toEqual(['merged','inflight','waiting','blocked','queued']);
+
+    // six lanes in one row, left to right in lifecycle order
+    const lanes = page.locator('#lanes .lane');
+    expect(await lanes.evaluateAll(els => els.map(e => (e as HTMLElement).dataset.lane)))
+      .toEqual(['queued','working','gate','review','captain','merged']);
+    const boxes = await lanes.evaluateAll(els => els.map(e => e.getBoundingClientRect()).map(r => ({x:r.x,y:r.y})));
+    for (let i = 1; i < boxes.length; i++) {
+      expect(boxes[i].x).toBeGreaterThan(boxes[i-1].x);
+      expect(Math.abs(boxes[i].y - boxes[0].y)).toBeLessThan(2);
+    }
+    // cards say what the log says, and nothing it does not
+    const queued = page.locator('[data-task="T-QUEUE"]');
+    await expect(queued).toContainText(`${EN.blockedOn} ${first}`);
+    await expect(page.locator('[data-lane="queued"] [data-task="T-QUEUE"]')).toHaveCount(1);
+    await expect(page.locator('[data-task="T-ABSENT"] .t')).toHaveText(EN.titleMissing);
+    await expect(page.locator('[data-task="T-ABSENT"]')).toContainText('worker-absent');
+    await expect(page.locator(`[data-task="${spec.tasks[1].id}"] .badge`)).toHaveText(EN.gateFailedN.replace('{n}','5'));
+    await expect(page.locator(`[data-lane="captain"] [data-task="${first}"] .badge`)).toContainText('D-1');
+    await expect(page.locator(`[data-lane="captain"] [data-task="${spec.tasks[2].id}"] .badge`))
+      .toHaveText(`D-2 · ${EN.optionsN.replace('{n}','3')}`);
+
+    // the portrait sits beside the first full card; the next is a strip that
+    // opens in place and keeps the two-stage confirmation
+    const portrait = (await page.locator('#capstage').boundingBox())!, card = (await page.locator('#card-D-1').boundingBox())!;
+    expect(portrait.x + portrait.width).toBeLessThanOrEqual(card.x);
+    await expect(page.locator('#capstage .lbl')).toContainText(EN.roleCaptain);
+    await expect(page.locator('.scene .fig.r-cap')).toHaveCount(1);
+    await expect(page.locator('#strip-D-2')).toHaveJSProperty('open', false);
+    await expect(page.locator('#card-D-2 .confirm')).toBeHidden();
+    await page.locator('#strip-D-2 > summary').click();
+    await expect(page.locator('#card-D-2 .confirm')).toBeVisible();
+    await expect(page.locator('#card-D-2 .confirm')).toBeDisabled();
+    await page.locator('#card-D-2 [data-c="B"]').click();
+    await expect(page.locator('#card-D-2 .confirm')).toBeEnabled();
+    await expect(page.locator('#strip-D-2')).toHaveJSProperty('open', true);
+    await expect(page.locator('#card-D-1 .links')).toContainText(`${EN.viewPr} #99`);
+
+    // roster rows; a bar only for the one with bounded progress, never a %
+    await expect(page.locator('.roster li.rrow')).toHaveCount(4 + 1);
+    await expect(page.locator('.roster .pb')).toHaveCount(1);
+    await expect(page.locator('.roster [data-roster="worker-1"] .pb')).toHaveAttribute('aria-valuemax','5');
+    await expect(page.locator('.scene .bub .pb')).toHaveCount(0);
+    expect(await page.locator('#shipregion').innerText()).not.toMatch(/\d+\s*%/);
+    await page.locator('#rosterBtn').click();
+    await expect(page.locator('#roster')).toBeHidden();
+    await expect(page.locator('#rosterBtn')).toHaveAttribute('aria-pressed','false');
+    await page.locator('#rosterBtn').click();
+    await expect(page.locator('#roster')).toBeVisible();
+
+    // the demonstration plays locally and records nothing
+    await page.locator('#ahoyDemo').click();
+    await expect(page.locator('.scene')).toHaveAttribute('data-effect', /^demo:merge:/);
+    await expect(page.locator('#salvo')).toHaveClass(/fire/);
+    expect(posts).toBe(0);
+
+    // the live log is the full-width panel at the bottom
+    const log = (await page.locator('.logwrap').boundingBox())!, lanesBox = (await page.locator('#lanes').boundingBox())!;
+    expect(log.y).toBeGreaterThan(lanesBox.y + lanesBox.height);
+    expect(log.width).toBeGreaterThan(1200);
+
+    // every width, every locale, and doubled text: nothing overflows the page
+    await page.addStyleTag({content:'body{font-size:32px} .card .t,.roster .jb,.log li,.dcard h3,.explanation,.tradeoffs,.acts button,.dstrip>summary{font-size:32px}'});
+    for (const locale of ['en','zh-TW','zh-CN']) {
+      await page.locator(`[data-l="${locale}"]`).click();
+      const want = locale === 'en' ? EN : locale === 'zh-TW' ? TW : CN;
+      await expect(page.locator('[data-count="waiting"] span')).toHaveText(want.waitingOnYou);
+      await expect(page.locator('[data-task="T-ABSENT"] .t')).toHaveText(want.titleMissing);
+      await expect(queued).toContainText(want.blockedOn);
+      await expect(page.locator('#rosterBtn')).toHaveText(want.rosterBtn);
+      for (const width of [320,390,768,1280]) {
+        await page.setViewportSize({width,height:844});
+        expect(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth+1)).toBe(true);
+      }
+      await page.setViewportSize({width:1280,height:900});
+    }
+    expect(posts).toBe(0);
+  } finally {stopBoard(b);}
+});
+
 test('external outcomes override stale success and clear only their settled draft', async ({page}) => {
   const root=makeRoot(['working']);
   writeFileSync(join(root,'state/pending/D-2.json'),JSON.stringify({id:'D-2',task:'T-002',kind:'choice',details}));
@@ -534,6 +692,8 @@ test('external outcomes override stale success and clear only their settled draf
   try {
     await page.goto(`${b.url}/?lang=en`);
     await page.locator('#card-D-1 [data-c="B"]').click();
+    await page.locator('#strip-D-2 > summary').click();
+    await page.locator('#strip-D-3 > summary').click();
     await page.locator('#card-D-3 [data-c="custom"]').click();
     await page.locator('#card-D-3 textarea').fill('keep this unrelated draft');
     await page.locator('#card-D-2 [data-c="B"]').click();

@@ -588,8 +588,8 @@ const crew = SHIP.crewOf({ deckLimit: 24, greenlit: true, crew: [
     activity: { en: "a", "zh-TW": "b" }, progress: { done: 1, total: 2 } },
 ]}, T, L);
 SHIP.roster(host, crew, T);
-const working = host.innerHTML.match(/<li class="st-working">[\s\S]*?<\/li>/);
-const gate = host.innerHTML.match(/<li class="st-gate">[\s\S]*?<\/li>/);
+const working = host.innerHTML.match(/<li class="rrow st-working"[\s\S]*?<\/li>/);
+const gate = host.innerHTML.match(/<li class="rrow st-gate"[\s\S]*?<\/li>/);
 if (!working || !gate) { console.log("FAIL roster missing li"); process.exit(1); }
 if (/class="pb"/.test(working[0]) || !/class="pb"/.test(gate[0])) {
   console.log("FAIL roster"); process.exit(1);
@@ -601,5 +601,141 @@ assert_eq "ok" "$roster" "roster shows a progress bar only with bounded progress
 kill "$pidp" 2>/dev/null
 wait "$pidp" 2>/dev/null || true
 rm -rf "$p"
+
+# --- T-040: layout parity data ---------------------------------------------
+# Its own fixture again: the engine badge reads config.yaml, which the other
+# two fixtures do not have, and the merge refusal needs a helper that says no.
+e="$(mktemp -d)"; mkdir -p "$e/bin" "$e/state/pending" "$e/design" "$e/board/public"
+cp "$ROOT/bin/fm-emit.sh" "$e/bin/"
+cp "$ROOT/board/server.ts" "$e/board/"
+cp "$ROOT/board/public/index.html" "$e/board/public/"
+printf '#!/usr/bin/env bash\necho refused\nexit 1\n' > "$e/bin/fm-merge.sh"
+chmod +x "$e/bin/fm-merge.sh"
+# names nobody would hard-code, so a badge that did cannot pass
+cat > "$e/config.yaml" <<'Y'
+vendor: vendor-alpha      # the top-level engine
+model:  m1
+reviewer:                 # a different engine for review
+  vendor: vendor-beta     # not the same one
+  model:  m2
+# worker:
+#   vendor: vendor-gamma
+concurrency: 3
+Y
+cat > "$e/design/tasks.json" <<'J'
+{"tasks":[{"id":"T-E1","title":"first","milestone":"M2","depends_on":[]},
+          {"id":"T-E2","title":"second","milestone":"M2","depends_on":["T-E1"]},
+          {"id":"T-E3","title":"third","milestone":"M2","depends_on":["T-E9"]},
+          {"id":"T-E4","title":"fourth","milestone":"M2","depends_on":[]},
+          {"id":"T-E5","title":"fifth","milestone":"M2","depends_on":[]}]}
+J
+FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor captain --type greenlit --en "go" --tw "開工" >/dev/null
+PORTE=$(( 16000 + RANDOM % 900 ))
+FM_ROOT="$e" FM_PORT="$PORTE" bun run "$e/board/server.ts" > "$e/out" 2>&1 < /dev/null &
+pide=$!
+for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORTE/api/state" >/dev/null 2>&1 && break; sleep 0.25; done
+st() { curl -sf "http://127.0.0.1:$PORTE/api/state"; }
+
+# V7: the engine as config.yaml says it, marked when the reviewer differs
+se="$(st)"
+assert_eq "vendor-alpha" "$(jq -r '.engine.vendor' <<<"$se")" "the badge names the top-level vendor from config.yaml"
+assert_eq "vendor-beta" "$(jq -r '.engine.reviewer' <<<"$se")" "and the reviewer's vendor"
+assert_eq "true" "$(jq -r '.engine.cross' <<<"$se")" "marked as cross-vendor when they differ"
+# read at request time: an edit shows on the next request, no restart
+cat > "$e/config.yaml" <<'Y'
+vendor: vendor-delta
+reviewer:
+  vendor: vendor-delta
+Y
+se2="$(st)"
+assert_eq "vendor-delta" "$(jq -r '.engine.vendor' <<<"$se2")" "config.yaml is read per request, not at start"
+assert_eq "false" "$(jq -r '.engine.cross' <<<"$se2")" "a reviewer on the same vendor is not marked"
+printf 'vendor: vendor-delta\n' > "$e/config.yaml"
+se3="$(st)"
+assert_eq "null" "$(jq -r '.engine.reviewer' <<<"$se3")" "no reviewer block, no reviewer vendor"
+assert_eq "false" "$(jq -r '.engine.cross' <<<"$se3")" "and nothing is marked"
+
+# six lanes, left to right, in lifecycle order; closed is not a lane
+assert_eq "queued working gate review captain merged" "$(jq -r '.lanes|join(" ")' <<<"$se")" \
+  "the lanes are queued, work, gate, review, captain, merged in that order"
+
+# a queued task names the dependencies that have not merged, and only those
+assert_eq "T-E1" "$(jq -r '.tasks[]|select(.id=="T-E2")|.blocked_on|join(",")' <<<"$se")" \
+  "a queued task is blocked on its unmerged dependency"
+assert_eq "T-E9" "$(jq -r '.tasks[]|select(.id=="T-E3")|.blocked_on|join(",")' <<<"$se")" \
+  "a dependency the log has never heard of is not merged either"
+assert_eq "" "$(jq -r '.tasks[]|select(.id=="T-E4")|.blocked_on|join(",")' <<<"$se")" \
+  "a task with no dependencies is blocked on nothing"
+FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor github --task T-E1 --type merged --pr 41 \
+  --en "merged" --tw "已合併" >/dev/null
+sm1="$(st)"
+assert_eq "" "$(jq -r '.tasks[]|select(.id=="T-E2")|.blocked_on|join(",")' <<<"$sm1")" \
+  "and is unblocked once that dependency merges"
+assert_eq "merged" "$(jq -r '.tasks[]|select(.id=="T-E1")|.stage' <<<"$sm1")" "merged is a stage the merged lane shows"
+
+# card badges come from events: the failing gate when the event names it,
+# an open ASK-PASS-CRITERIA, and nothing invented otherwise
+FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor worker-e --task T-E4 --type dispatched \
+  --data '{"role":"worker","crew_name":"Wren"}' --en "on it" --tw "接下" >/dev/null
+sb0="$(st)"
+assert_eq "Wren" "$(jq -r '.tasks[]|select(.id=="T-E4")|.crew|join(",")' <<<"$sb0")" \
+  "a card names the crew aboard on it"
+assert_eq "0" "$(jq -r '.tasks[]|select(.id=="T-E4")|.badges|length' <<<"$sb0")" \
+  "a task at work with nothing to report carries no badge"
+FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor worker-e --task T-E4 --type gate_failed \
+  --data '{"gate":5}' --en "gate 5" --tw "第 5 道" >/dev/null
+FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor worker-e --task T-E4 --type ask_pass_criteria \
+  --en "asked" --tw "已詢問" >/dev/null
+sb1="$(st)"
+assert_eq "5" "$(jq -r '.tasks[]|select(.id=="T-E4")|.badges[]|select(.kind=="gate")|.gate' <<<"$sb1")" \
+  "the failing gate's number comes from the event"
+assert_eq "1" "$(jq -r '[.tasks[]|select(.id=="T-E4")|.badges[]|select(.kind=="ask")]|length' <<<"$sb1")" \
+  "an open ASK-PASS-CRITERIA is a badge"
+FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor worker-e --task T-E4 --type criteria_returned \
+  --en "listed" --tw "已列出" >/dev/null
+FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor worker-e --task T-E4 --type gate_failed \
+  --en "no number" --tw "沒有編號" >/dev/null
+sb2="$(st)"
+assert_eq "0" "$(jq -r '[.tasks[]|select(.id=="T-E4")|.badges[]|select(.kind=="ask")]|length' <<<"$sb2")" \
+  "and it is gone once the criteria are returned"
+assert_eq "null" "$(jq -r '.tasks[]|select(.id=="T-E4")|.badges[]|select(.kind=="gate")|.gate' <<<"$sb2")" \
+  "a failure that names no gate gets no invented number"
+
+# waiting on you is the number of pending decisions, whatever their stage
+assert_eq "0" "$(jq -r '.counts.waiting' <<<"$sb2")" "nothing pending, nobody waiting on the captain"
+printf '{"id":"D-401","task":"T-E5","kind":"merge","pr":45,"title":"merge it","details":{"en":{"options":{"A":{},"B":{},"C":{}}}}}\n' \
+  > "$e/state/pending/D-401.json"
+printf '{"id":"D-402","task":"T-E4","kind":"choice","title":"which"}\n' > "$e/state/pending/D-402.json"
+sw="$(st)"
+assert_eq "2" "$(jq -r '.counts.waiting' <<<"$sw")" "waiting on you counts each pending decision"
+assert_eq "3" "$(jq -r '.tasks[]|select(.id=="T-E5")|.badges[]|select(.kind=="decision")|.options' <<<"$sw")" \
+  "a pending decision's badge carries the options it actually offers"
+assert_eq "null" "$(jq -r '.tasks[]|select(.id=="T-E4")|.badges[]|select(.kind=="decision")|.options' <<<"$sw")" \
+  "and a record that lists none gets no invented count"
+rm -f "$e/state/pending/D-402.json"
+
+# a refused merge is flagged as overtaken once that task is merged afterwards
+curl -sf -X POST -H 'content-type: application/json' -d '{"id":"D-401","chosen":"A"}' \
+  "http://127.0.0.1:$PORTE/decisions" > "$e/post" || true
+assert_eq "false" "$(jq -r '.merged.ok' "$e/post")" "the helper refused the merge"
+sr1="$(st)"
+assert_eq "false" "$(jq -r '.responses[]|select(.id=="D-401")|.superseded' <<<"$sr1")" \
+  "a refusal with nothing merged since is still news"
+assert_eq "45" "$(jq -r '.responses[]|select(.id=="D-401")|.pr' <<<"$sr1")" \
+  "the decision record keeps the pull request it was about"
+assert_eq "0" "$(jq -r '.counts.waiting' <<<"$sr1")" "an answered decision no longer waits"
+# a merge of some other task does not overtake it
+FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor github --task T-E2 --type merged --pr 42 \
+  --en "merged" --tw "已合併" >/dev/null
+assert_eq "false" "$(jq -r '.responses[]|select(.id=="D-401")|.superseded' <<<"$(st)")" \
+  "a merge of another task does not clear the refusal"
+FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor github --task T-E5 --type merged --pr 45 \
+  --en "merged by hand" --tw "手動合併" >/dev/null
+assert_eq "true" "$(jq -r '.responses[]|select(.id=="D-401")|.superseded' <<<"$(st)")" \
+  "a later merge of the same task clears the refusal"
+
+kill "$pide" 2>/dev/null
+wait "$pide" 2>/dev/null || true
+rm -rf "$e"
 
 finish

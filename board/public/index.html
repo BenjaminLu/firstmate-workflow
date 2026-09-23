@@ -26,11 +26,49 @@ body{background:var(--bg);color:var(--fg);font:14px/1.55 var(--sans);padding-bot
 .counts b{display:block;font-size:24px;line-height:1.1;font-variant-numeric:tabular-nums}
 .counts span{font:13px var(--mono);color:var(--fg3);text-transform:uppercase;letter-spacing:.09em}
 .counts .w b{color:var(--wait)} .counts .x b{color:var(--bad)}
-main{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:16px;padding:16px 20px}
-@media(max-width:860px){main{grid-template-columns:1fr}}
+.lanes-wrap,.logwrap{padding:16px 20px 0}
 section>h2{margin:0 0 10px;font:600 13px var(--mono);color:var(--fg3);
   text-transform:uppercase;letter-spacing:.1em}
-.lanes{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:9px}
+/* six lanes left to right in lifecycle order; narrower screens wrap them in
+   the same reading order rather than scrolling the page sideways */
+.lanes{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:9px;align-items:start}
+@media(max-width:1100px){.lanes{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:620px){.lanes{grid-template-columns:minmax(0,1fr)}}
+.lane.l-captain{border-color:#3a2a52}
+.card .hd{display:flex;justify-content:space-between;gap:6px}
+.card .t.missing{color:var(--fg3);font-style:italic}
+.card .crew,.card .dep{font:13px var(--mono);color:var(--fg2);margin-top:4px}
+.card .dep{color:var(--warn)}
+.card .badge{display:inline-block;margin:6px 6px 0 0;font:700 13px var(--mono);color:#fff;
+  background:#6b3fa0;border-radius:5px;padding:2px 7px}
+.card .badge.b-gate{background:#7c322b}
+.lane .more{margin:4px 0 0;font-size:13px;color:var(--fg3)}
+/* the engine the crew run on, from config.yaml */
+.vend{display:inline-flex;align-items:center;gap:6px;font:600 13px var(--mono);color:var(--fg2);
+  border:1px solid var(--line);border-radius:7px;padding:4px 10px;flex-shrink:1;flex-wrap:wrap;overflow-wrap:anywhere}
+.vend[hidden]{display:none}
+.vend i{width:6px;height:6px;border-radius:50%;background:var(--fg3)}
+.vend.x{border-color:#4a3a1a;color:#e0b45c} .vend.x i{background:var(--brass)}
+.vend b{font-weight:700;color:var(--brass)}
+/* the sea strip under the header, as the prototype has it */
+.counts{background:linear-gradient(180deg,#081824 0%,#0a2a44 55%,#0d3b5e 100%)}
+.counts span{color:#7fa8c6}
+/* the captain's portrait beside the first card; the rest are strips */
+.deckrow{display:flex;gap:18px;align-items:flex-start}
+#deck{flex:1;min-width:0}
+@media(max-width:820px){.deckrow{flex-direction:column;align-items:stretch}}
+#deck .also{margin:12px 0 8px;font:600 13px var(--mono);color:var(--fg3);text-transform:uppercase;letter-spacing:.09em}
+.dstrip{background:var(--bg2);border:1px solid var(--line);border-left:3px solid var(--wait);
+  border-radius:9px;margin-bottom:8px;min-width:0}
+.dstrip>summary{cursor:pointer;min-height:44px;padding:10px 12px;font-size:16px;overflow-wrap:anywhere}
+.dstrip>summary .meta{font:13px var(--mono);color:var(--fg3)}
+.dstrip>summary .picked{font:700 13px var(--mono);font-style:normal;color:var(--brass)}
+.dstrip[open]>summary{border-bottom:1px solid var(--line)}
+.dstrip>.dcard{margin:0;border:0}
+.links{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.links a{font-size:13px;padding:3px 9px;border:1px solid var(--line);border-radius:6px;color:var(--fg2);text-decoration:none}
+.links a:hover{color:var(--fg);border-color:var(--accent)}
+.log ul{max-height:260px}
 .lane{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:9px;min-height:70px}
 .lane h3{margin:0 0 8px;font:600 10px var(--mono);color:var(--fg3);text-transform:uppercase;
   letter-spacing:.08em;display:flex;justify-content:space-between}
@@ -85,8 +123,7 @@ body{font-size:16px}
 .top small,.counts span,section>h2,.lane h3,.card .id,.card .pr,.dcard .meta,.dcard a,.log time,.log .who,#pcount{font-size:13px}
 #deckwrap>h2{font-size:13px!important}
 .counts{flex-wrap:wrap;gap:16px}.counts>div{min-width:0}
-.lanes{align-items:start;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))}
-.lane,.card,section,main,.dcard,.acts>*{min-width:0;overflow-wrap:anywhere}
+.lane,.card,section,.dcard,.acts>*{min-width:0;overflow-wrap:anywhere}
 .card .t,.log li,.explanation,.tradeoffs,.gates li,.empty,.acts button,.acts label,.acts textarea{font-size:16px}
 .dcard h3{font-size:22px}.acts button,.langs button{min-height:44px;white-space:normal;max-width:100%}
 .acts textarea{font:inherit}.gates{grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr))}
@@ -94,7 +131,7 @@ body{font-size:16px}
 .log .who{overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 #history{margin-top:16px}#history summary{cursor:pointer;min-height:44px;padding:10px;background:var(--bg2);font-size:16px}
 .history-cards{padding-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:9px}
-@media(max-width:420px){.top,.counts,main{padding-left:12px;padding-right:12px}.log li{grid-template-columns:1fr 2fr}.log li>span:last-child{grid-column:1/-1}}
+@media(max-width:420px){.top,.counts,.lanes-wrap,.logwrap{padding-left:12px;padding-right:12px}.log li{grid-template-columns:1fr 2fr}.log li>span:last-child{grid-column:1/-1}}
 .top small,.counts span,section>h2,#deckwrap>h2,#gl{font-size:13px!important}
 </style>
 </head>
@@ -103,37 +140,37 @@ body{font-size:16px}
   <span class="dot" id="live"></span>
   <b id="h-brand"></b>
   <span class="spacer"></span>
+  <span class="vend" id="engine" hidden></span>
   <span id="gl" style="font:600 13px var(--mono);color:var(--brass)"></span>
   <span class="langs" id="langs"></span>
 </div>
 <div class="counts" id="counts"></div>
-<section id="shipregion" style="padding:0 20px">
-   <div class="scene" id="scene"></div>
-  <div class="roster" id="roster"></div>
-</section>
+<!-- Decisions lead the page; the vessel and readable crew remain directly below. -->
 <section id="deckwrap" style="padding:0 20px" hidden>
   <h2 style="margin:16px 0 10px;font:600 13px var(--mono);color:var(--fg3);text-transform:uppercase;letter-spacing:.1em">
     <span id="awaiting"></span> <span id="pcount"></span></h2>
-  <div id="deck"></div>
+  <div class="deckrow"><div class="capstage" id="capstage" hidden></div><div id="deck"></div></div>
 </section>
-<main>
-  <section>
-    <h2 id="h-fleet"></h2>
-    <div class="lanes" id="lanes"></div>
-    <details id="history"><summary></summary><div class="history-cards"></div></details>
-  </section>
-  <section>
-    <h2 id="h-log"></h2>
-    <div class="log"><ul id="log"></ul></div>
-  </section>
-</main>
+<section id="shipregion" style="padding:0 20px">
+  <div class="scene" id="scene"></div>
+  <div class="roster" id="roster"></div>
+</section>
+<section class="lanes-wrap">
+  <h2 id="h-fleet"></h2>
+  <div class="lanes" id="lanes"></div>
+  <details id="history"><summary></summary><div class="history-cards"></div></details>
+</section>
+<section class="logwrap">
+  <h2 id="h-log"></h2>
+  <div class="log"><ul id="log"></ul></div>
+</section>
 <script src="ship.js"></script>
 <script src="diagram.js"></script>
 <script>
-const LANES = [["captain","laneCaptain"],["gate","laneGate"],["review","laneReview"],
-               ["working","laneWorking"],["queued","laneQueued"]];
-// Decisions lead the page; the vessel and readable crew remain directly below.
-document.getElementById('shipregion').before(document.getElementById('deckwrap'));
+// the lanes come from the server, in lifecycle order; this is only how many
+// merged cards the merged lane shows before pointing at the history
+const MERGED_SHOWN = 5;
+const laneKey = k => "lane" + k[0].toUpperCase() + k.slice(1);
 // every string the reader sees comes from the dictionary; zh-CN is derived
 // from zh-TW by the table, so there is no third file to keep in step
 const LANGS = ["en", "zh-TW", "zh-CN"], LANGNAME = { "en": "EN", "zh-TW": "\u7e41", "zh-CN": "\u7b80" };
@@ -149,12 +186,17 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 const localized = d => d?.details?.[lang === 'en' ? 'en' : 'zh-TW'];
 const words = s => lang === 'zh-CN' ? cn(String(s ?? '')) : String(s ?? '');
 const picks = new Map(), drafts = new Map(), sent = new Set();
+// strips the captain has opened in place; the first card is always open
+const expanded = new Set();
 let latest, feedback = null, initialized = false;
 const seen = new Set();
 function feedbackText() {
   const el = document.getElementById('orderFeedback');
   if (!el) return;
-  el.textContent = feedback ? [feedback.cry || '', t(feedback.key),
+  // a refused merge names what was refused, so it cannot be read as news
+  // about some other card
+  const which = feedback?.key === 'mergeRefused' ? [feedback.decisionId, feedback.task].filter(Boolean).join(' · ') : '';
+  el.textContent = feedback ? [feedback.cry || '', t(feedback.key), which,
     words(localized(feedback.decision)?.outcome || ''), feedback.literal || '', feedback.eventFailed ? t('eventFailed') : '']
     .filter(Boolean).join(' · ') : '';
 }
@@ -162,9 +204,13 @@ function pose() {
   const cap = document.getElementById('captain');
   cap.dataset.pose = sent.size || SHIP.active()?.kind === 'order' ? 'order'
     : picks.size ? 'ready' : 'idle';
-  const figure = cap.querySelector('.fig');
-  if (figure) { figure.classList.remove('c-idle','c-ready','c-order'); figure.classList.add('c-' + cap.dataset.pose); }
-  const label = cap.querySelector('.capsays span');
+  // the portrait is the same captain, so it wears the same pose
+  const stage = document.getElementById('capstage');
+  stage.dataset.pose = cap.dataset.pose;
+  for (const figure of [cap.querySelector('.fig'), stage.querySelector('.fig')]) {
+    if (figure) { figure.classList.remove('c-idle','c-ready','c-order'); figure.classList.add('c-' + cap.dataset.pose); }
+  }
+  const label = stage.querySelector('.lbl span');
   if (label) label.textContent = t(cap.dataset.pose === 'ready' ? 'capReady' : cap.dataset.pose === 'order' ? 'capOrder' : 'capDeciding');
 }
 function observe(outcomes) {
@@ -201,23 +247,53 @@ function render(s) {
   const focusChoice = focus?.dataset?.c;
   const selection = focus?.tagName === 'TEXTAREA' ? [focus.selectionStart, focus.selectionEnd] : null;
   latest = s;
-  const failures = (s.responses || []).filter(d => d.merged?.ok === false)
+  // A refused merge stays up until the same task or pull request is merged
+  // afterwards; the server says which refusals have been overtaken.
+  const failures = (s.responses || []).filter(d => d.merged?.ok === false && !d.superseded)
     .sort((a,b) => String(a.ts || '').localeCompare(String(b.ts || '')));
   const failed = failures[failures.length - 1];
   if (failed && (feedback?.decisionId !== failed.id || feedback.key !== 'mergeRefused'))
-    feedback = {key:'mergeRefused',decisionId:failed.id};
+    feedback = {key:'mergeRefused',decisionId:failed.id,task:failed.task};
+  if (feedback?.key === 'mergeRefused'
+      && (s.responses || []).some(d => d.id === feedback.decisionId && d.superseded)) feedback = null;
   document.getElementById("gl").textContent = s.greenlit ? t("greenlit") : t("notGreenlit");
+  // the engine as config.yaml has it, marked when review runs elsewhere
+  const engine = document.getElementById("engine"), eng = s.engine;
+  engine.hidden = !eng;
+  engine.className = "vend" + (eng?.cross ? " x" : "");
+  engine.innerHTML = eng ? `<i aria-hidden="true"></i>${esc(eng.vendor)}` +
+    (eng.cross ? ` <b>⇄ ${esc(eng.reviewer)}</b>` : "") : "";
+  engine.title = eng ? `${t("engine")}${eng.cross ? " · " + t("crossVendor") : ""}` : "";
   document.getElementById("counts").innerHTML = [
-    [t("merged"), s.counts.merged, ""], [t("inflight"), s.counts.inflight, ""],
-    [t("blocked"), s.counts.blocked, "x"], [t("queued"), s.counts.queued, ""],
-  ].map(([l, n, c]) => `<div class="${c}"><b>${n}</b><span>${l}</span></div>`).join("");
+    ["merged", t("merged"), s.counts.merged, ""], ["inflight", t("inflight"), s.counts.inflight, ""],
+    ["waiting", t("waitingOnYou"), s.counts.waiting ?? 0, "w"],
+    ["blocked", t("blocked"), s.counts.blocked, "x"], ["queued", t("queued"), s.counts.queued, ""],
+  ].map(([k, l, n, c]) => `<div class="${c}" data-count="${k}"><b>${esc(n)}</b><span>${esc(l)}</span></div>`).join("");
 
-  SHIP.patch(document.getElementById("lanes"), LANES.map(([k, label]) => {
-    const items = s.tasks.filter(task => task.stage === k);
-    return `<div class="lane"><h3>${t(label)}<i>${items.length}</i></h3>` +
-      items.map(task => `<div class="card s-${k}"><span class="id">${esc(task.id)}</span>` +
-        (task.pr ? ` <span class="pr">#${task.pr}</span>` : "") +
-        `<div class="t">${esc(task.title || t('descriptionUnavailable'))}</div></div>`).join("") + `</div>`;
+  const badge = b => b.kind === 'gate' ? (b.gate ? t("gateFailedN").replace('{n}', b.gate) : t("gateFailed"))
+    : b.kind === 'ask' ? 'ASK-PASS-CRITERIA'
+    : b.kind === 'decision' ? (b.options ? `${b.id} · ${t("optionsN").replace('{n}', b.options)}` : b.id) : '';
+  // a task the definitions do not list keeps its id and says the title is
+  // missing; it never borrows one
+  const title = task => `<div class="t${task.title ? '' : ' missing'}">${esc(task.title || t("titleMissing"))}</div>`;
+  const card = (task, k) => `<div class="card s-${k}" data-task="${esc(task.id)}">` +
+    `<div class="hd"><span class="id">${esc(task.id)}</span>${task.pr ? `<span class="pr">#${esc(task.pr)}</span>` : ''}</div>` +
+    title(task) +
+    ((task.crew || []).length ? `<div class="crew">${esc(task.crew.join(', '))}</div>` : '') +
+    ((task.blocked_on || []).length ? `<div class="dep">${esc(t("blockedOn"))} ${esc(task.blocked_on.join(', '))}</div>` : '') +
+    (task.badges || []).map(b => `<span class="badge b-${esc(b.kind)}">${esc(badge(b))}</span>`).join('') + `</div>`;
+  SHIP.patch(document.getElementById("lanes"), (s.lanes || []).map(k => {
+    let items = s.tasks.filter(task => task.stage === k), more = '';
+    if (k === 'merged') {
+      // newest first; the rest are one click away in the history
+      items = [...items].sort((a, b) => (b.merged_seq ?? -1) - (a.merged_seq ?? -1));
+      if (items.length > MERGED_SHOWN)
+        more = `<p class="more">${esc(t("mergedMore").replace('{n}', items.length - MERGED_SHOWN))}</p>`;
+    }
+    const total = items.length;
+    if (k === 'merged') items = items.slice(0, MERGED_SHOWN);
+    return `<div class="lane l-${k}" data-lane="${k}"><h3>${esc(t(laneKey(k)))}<i>${total}</i></h3>` +
+      items.map(task => card(task, k)).join("") + more + `</div>`;
   }).join(""));
 
   const completed = s.tasks.filter(item => ['merged','closed'].includes(item.stage));
@@ -225,7 +301,7 @@ function render(s) {
   history.querySelector('summary').textContent = `${t('history')} · ${t('laneMerged')} ${completed.filter(x=>x.stage==='merged').length} · ${t('laneClosed')} ${completed.filter(x=>x.stage==='closed').length}`;
   SHIP.patch(history.querySelector('.history-cards'), completed.map(item =>
     `<div class="card s-${item.stage}"><span class="id">${esc(item.id)}</span> <span>${esc(t(item.stage==='merged'?'laneMerged':'laneClosed'))}</span>` +
-    (item.pr ? ` <span class="pr">#${esc(item.pr)}</span>` : '') + `<div class="t">${esc(item.title || t('descriptionUnavailable'))}</div></div>`).join(''));
+    (item.pr ? ` <span class="pr">#${esc(item.pr)}</span>` : '') + title(item) + `</div>`).join(''));
 
   const deck = document.getElementById("deck");
   const wrap = document.getElementById("deckwrap");
@@ -235,6 +311,7 @@ function render(s) {
   for (const id of [...picks.keys()]) if (!pendingIds.has(id)) picks.delete(id);
   for (const id of [...drafts.keys()]) if (!pendingIds.has(id)) drafts.delete(id);
   for (const id of [...sent]) if (!pendingIds.has(id)) sent.delete(id);
+  for (const id of [...expanded]) if (!pendingIds.has(id)) expanded.delete(id);
   wrap.hidden = pend.length === 0 && !feedback && !SHIP.active();
   if (!document.getElementById('orderFeedback')) {
     const status = document.createElement('p'); status.id = 'orderFeedback';
@@ -242,7 +319,18 @@ function render(s) {
     wrap.append(status);
   }
   document.getElementById("pcount").textContent = pend.length || "";
-  SHIP.patch(deck, pend.map(d => {
+  // Links go only where the data is: a local file the record names, the pull
+  // request it names, and design.md when the repository has one.
+  const links = d => {
+    const out = [];
+    if (typeof d.path === 'string' && d.path)
+      out.push(`<a href="/file?path=${encodeURIComponent(d.path)}" data-open="${esc(d.path)}" target="_blank" rel="noreferrer">&#8599; ${esc(t("openLocal"))}</a>`);
+    if (d.pr) out.push(`<a href="https://github.com/BenjaminLu/firstmate-workflow/pull/${esc(d.pr)}" target="_blank" rel="noreferrer">${esc(t("viewPr"))} #${esc(d.pr)}</a>`);
+    if (s.designDoc)
+      out.push(`<a href="/file?path=design%2Fdesign.md" data-open="design/design.md" target="_blank" rel="noreferrer">&#9776; ${esc(t("viewDesign"))}</a>`);
+    return out.length ? `<div class="links">${out.join('')}</div>` : '';
+  };
+  const full = d => {
     const gates = d.gates || [], content = localized(d), pick = picks.get(d.id);
     const options = ['A','B','C'].map(k => {
       const o = content?.options?.[k];
@@ -250,8 +338,7 @@ function render(s) {
         (o ? `<p class="tradeoffs"><b>${esc(t('pros'))}</b> ${esc(words(o.pros))}<br><b>${esc(t('cons'))}</b> ${esc(words(o.cons))}</p>` : '');
     }).join('');
     return `<div class="dcard" id="card-${esc(d.id)}"><div class="meta">${esc(d.id)} · ${esc(d.task || "")}` +
-      (d.pr ? ` · <a href="https://github.com/BenjaminLu/firstmate-workflow/pull/${d.pr}" target="_blank" rel="noreferrer">#${d.pr}</a>` : "") +
-      `</div><h3>${esc(content ? words(content.title) : d.title || t("waiting"))}</h3>` +
+      `</div><h3>${esc(content ? words(content.title) : d.title || t("waiting"))}</h3>` + links(d) +
       `<p class="explanation">${esc(content ? words(content.explanation) : t('missingDetails'))}</p>` +
       DIAGRAM.embed(d.id) + (content ? `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${esc(words(content.before))}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${esc(words(content.after))}</p></section></div>` : '') +
       (d.kind === "merge" && gates.length
@@ -263,7 +350,31 @@ function render(s) {
          <span class="validation" id="validation-${esc(d.id)}"></span>
          <button class="go confirm" data-id="${esc(d.id)}" disabled>${esc(t('confirmOrder'))}</button>
        </div></div>`;
+  };
+  // The first pending decision is open in full beside the captain's portrait;
+  // every other one is a one-line strip that opens in place, with the same
+  // select-then-confirm card inside it.
+  SHIP.patch(deck, pend.map((d, i) => {
+    if (i === 0) return full(d) +
+      (pend.length > 1 ? `<p class="also" id="alsoWaiting">${esc(t("alsoWaiting"))}</p>` : '');
+    const content = localized(d), pick = picks.get(d.id);
+    return `<details class="dstrip" id="strip-${esc(d.id)}" data-id="${esc(d.id)}"${expanded.has(d.id) ? ' open' : ''}>` +
+      `<summary><span class="meta">${esc(d.id)} · ${esc(d.task || '')}</span> ` +
+      `<span class="st">${esc(content ? words(content.title) : d.title || t("waiting"))}</span>` +
+      (pick ? ` <i class="picked">${esc(pick === 'custom' ? t("customChoice") : pick)}</i>` : '') +
+      `</summary>${full(d)}</details>`;
   }).join(""));
+  deck.querySelectorAll('details.dstrip').forEach(el => el.ontoggle = () => {
+    if (el.open) expanded.add(el.dataset.id); else expanded.delete(el.dataset.id);
+    if (el.open) DIAGRAM.mount(el, lang).catch(() => {});
+  });
+  deck.querySelectorAll('[data-open]').forEach(a => a.onclick = e => {
+    // hand it to the editor; the read-only view stays the fallback
+    e.preventDefault();
+    fetch('/open?path=' + encodeURIComponent(a.dataset.open)).then(r => { if (!r.ok) open(a.href, '_blank'); })
+      .catch(() => open(a.href, '_blank'));
+  });
+  SHIP.portrait(document.getElementById('capstage'), pend.length > 0, t);
   deck.querySelectorAll('[data-c]').forEach(b => b.onclick = () => {
     picks.set(b.dataset.id, b.dataset.c); render(latest);
   });
@@ -318,6 +429,7 @@ async function answer(id) {
   else {
     picks.delete(id); drafts.delete(id);
     feedback = {key:r.merged && !r.merged.ok ? 'mergeRefused' : chosen === 'custom' ? 'customRecorded' : 'recorded', decisionId:id,
+      task:decision?.task || r.decision?.task || null,
       cry:'AYE, CAPTAIN! / ORDERS AWAY', decision, literal:chosen === 'custom' ? text : '', eventFailed:r.eventRecorded === false};
     const identity = r.decision?.identity || `decision:${id}`;
     if (!r.already && !seen.has(identity)) {

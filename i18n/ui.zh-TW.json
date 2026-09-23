@@ -75,5 +75,20 @@
   "orderFailed": "未收到指令確認。重試前請檢查連線與決策狀態。",
   "eventFailed": "決策已儲存，但無法寫入事件記錄。",
   "capReady": "刀已半出鞘 — 請確認選擇",
-  "capOrder": "指令已送出"
+  "capOrder": "指令已送出",
+  "engine": "引擎",
+  "crossVendor": "跨供應商審核",
+  "waitingOnYou": "等你拍板",
+  "blockedOn": "卡在",
+  "titleMissing": "design/tasks.json 未列出標題",
+  "mergedMore": "另 {n} 個在已完成歷史中",
+  "gateFailed": "閘門未過",
+  "gateFailedN": "第 {n} 道閘未過",
+  "optionsN": "{n} 個選項",
+  "rosterBtn": "名冊",
+  "ahoyDemo": "試放禮砲（不寫入事件）",
+  "orderDemo": "試演下令回應（不寫入事件）",
+  "dragHint": "拖曳人物可旋轉單人 · 拖曳甲板轉全員 · 雙擊復位",
+  "alsoWaiting": "其他待決（點開就地展開）",
+  "viewDesign": "design.md"
 }

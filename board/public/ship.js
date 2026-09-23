@@ -86,7 +86,8 @@ const SHIP = (() => {
       `<circle cx="62" cy="42" r="7" fill="#d9a441"/></svg><i class="spar"></i></div>`;
   }
 
-  function figure(c, scale) {
+  // the body alone, so the ship and the captain's portrait draw one figure
+  function body(c) {
     const parts = ["shoeL", "shoeR", "legL", "legR", "torso",
                    c.role === "cap" ? "coat" : "", "neck", "head", "brim", "crown"]
       .filter(Boolean)
@@ -95,12 +96,17 @@ const SHIP = (() => {
     const arm = (s) => `<div class="bx arm${s}"><i class="bk"></i><i class="lf"></i><i class="sd"></i>` +
       `<i class="tp"></i><i class="fr"></i><div class="bx hand${s}"><i class="bk"></i><i class="lf"></i>` +
       `<i class="sd"></i><i class="tp"></i><i class="fr"></i></div>${s === "R" ? '<i class="tool"></i>' : ""}</div>`;
-    return `<div class="pivot" data-crew="${esc(c.id)}" style="--px:${c.x}%;--r:${c.row};--sc:${scale}">` +
-      `<div class="fig r-${c.role} s-${c.state} a-${c.action}" ` +
+    return `<div class="fig r-${c.role} s-${c.state} a-${c.action}" ` +
       `style="--step:${(1.05 + (hash(c.id) % 7) / 10).toFixed(2)}s;--hopDelay:${hash(c.id) % 9}s">` +
-      `<div class="sh"></div>${parts}${arm("L")}${arm("R")}<i class="eye"></i></div></div>`;
+      `<div class="sh"></div>${parts}${arm("L")}${arm("R")}<i class="eye"></i></div>`;
+  }
+  function figure(c, scale) {
+    return `<div class="pivot" data-crew="${esc(c.id)}" style="--px:${c.x}%;--r:${c.row};--sc:${scale}">` +
+      body(c) + `</div>`;
   }
 
+  // A name tag over each head: who, and what they are on. No progress and no
+  // percentage here - the roster carries a bar, and only for bounded progress.
   function bubble(c, T, topRow) {
     if (c.row !== topRow) {
       // the chip carries the TASK. The criterion has no crowding
@@ -112,8 +118,7 @@ const SHIP = (() => {
     }
     return `<div class="bub st-${c.state}" data-bubble="${esc(c.id)}" style="--px:${c.x}%;--r:${c.row}">` +
       `<div class="who">${esc(c.name)}</div>` +
-      `<div class="job">${esc(c.job)}</div>` +
-      (c.pct == null ? "" : `<div class="pb"><i style="width:${c.pct}%"></i></div>`) + `</div>`;
+      `<div class="job">${esc(c.job)}</div></div>`;
   }
 
   // the server sends one of these three; an unknown one is a mismatch
@@ -134,29 +139,32 @@ const SHIP = (() => {
     // the limit comes from the server with the list. No fallback: a
     // number here as well is the same number in two languages, and the
     // test for it would pass through the copy.
-    return (s.crew || []).slice(0, s.deckLimit).map((a) => ({
-      id: a.id,
-      role: ROLE[a.role] || "unknown",
-      state: a.state || "unknown",
-      // the agent's own name, and what it is on underneath
-      name: a.role === "firstmate" ? label.firstmate : a.crew_name || a.id,
-      // only firstmate can be aboard without a task: the server skips a
-      // taskless worker or reviewer, so there is no third case to write
-      job: a.task
-        ? `${a.task} · ${L(a.activity) || T('descriptionUnavailable')}`
-        : L(a.activity) || T(s.greenlit ? "descriptionUnavailable" : "fmWaiting"),
-      task: a.task || null,
+    return (s.crew || []).slice(0, s.deckLimit).map((a) => {
+      const activity = a.task
+        ? L(a.activity) || T("descriptionUnavailable")
+        : L(a.activity) || T(s.greenlit ? "descriptionUnavailable" : "fmWaiting");
       // Only explicit bounded progress ({done,total}) becomes a bar. Coarse
       // lifecycle state never invents a percentage.
-      pct: (() => {
-        const p = a.progress;
-        if (!p || typeof p !== "object") return null;
-        const done = Number(p.done), total = Number(p.total);
-        if (!Number.isFinite(done) || !Number.isFinite(total) || total <= 0) return null;
-        if (done < 0 || done > total) return null;
-        return Math.round((100 * done) / total);
-      })(),
-    }));
+      const p = a.progress && typeof a.progress === "object" ? a.progress : null;
+      const done = p ? Number(p.done) : NaN, total = p ? Number(p.total) : NaN;
+      const bounded = Number.isFinite(done) && Number.isFinite(total) && total > 0 && done >= 0 && done <= total;
+      return {
+        id: a.id,
+        role: ROLE[a.role] || "unknown",
+        state: a.state || "unknown",
+        // the agent's own name, and what it is on underneath
+        name: a.role === "firstmate" ? label.firstmate : a.crew_name || a.id,
+        // only firstmate can be aboard without a task: the server skips a
+        // taskless worker or reviewer, so there is no third case to write
+        job: a.task ? `${a.task} · ${activity}` : activity,
+        activity,
+        task: a.task || null,
+        title: a.title || null,
+        pr: ((s.tasks || []).find((t) => t.id === a.task) || {}).pr ?? null,
+        progress: bounded ? { done, total } : null,
+        pct: bounded ? Math.round((100 * done) / total) : null,
+      };
+    });
   }
 
   // Patch matching nodes in place: a captured pointer, rotation and running
@@ -225,8 +233,12 @@ const SHIP = (() => {
     }
     host._guns = guns;
 
-    const masts = rows <= 1 ? [50] : rows === 2 ? [34, 62] : [26, 50, 76];
+    // two masts, as the prototype draws them; a tall ship adds a third. Each
+    // carries a topsail over a course, and the two share SAIL_H between them
+    // so the whole rig still hangs above the tallest head.
+    const masts = rows <= 2 ? [30, 64] : [24, 50, 76];
     const mastH = FIG_H + BUBBLE_CLEAR + SAIL_H + MAST_TOP;
+    const TOPSAIL = Math.round(SAIL_H * 0.38), REEF = 8, COURSE = SAIL_H - TOPSAIL - REEF;
 
     host.style.setProperty("--sceneH", sceneH + "px");
     host.style.setProperty("--deckY0", DECK_Y0 + "px");
@@ -244,16 +256,27 @@ const SHIP = (() => {
       `<div class="horizon"></div><div class="sea" style="height:${HULL_BOTTOM + 14}px"></div>` +
       `<div class="shipbar"><span class="tier">${esc(T(rate.key))}</span>` +
       `<span>${esc(T("aboard"))} ${crew.length}/${limit}</span>` +
-      `<button class="mute" id="muteBtn" aria-pressed="${SHIP.muted}">${esc(T(SHIP.muted ? "unmute" : "mute"))}</button></div>` +
+      `<button class="toggle" id="rosterBtn" aria-controls="roster" aria-pressed="${SHIP.rosterOn}">${esc(T("rosterBtn"))}</button>` +
+      // a demonstration, and says so: it plays the salute locally and
+      // records nothing - no event, no request, no decision
+      `<button class="ahoybtn" id="ahoyDemo" title="${esc(T("ahoyDemo"))}" aria-label="${esc(T("ahoyDemo"))}">&#9875; AHOY!</button>` +
+      `<button class="ahoybtn q" id="orderDemo" title="${esc(T("orderDemo"))}" aria-label="${esc(T("orderDemo"))}">&#9784;</button>` +
+      `<button class="mute" id="muteBtn" aria-pressed="${SHIP.muted}">${esc(T(SHIP.muted ? "unmute" : "mute"))}</button>` +
+      `<span class="hint">${esc(T("dragHint"))}</span></div>` +
       `<div class="vessel" id="vessel">` +
         `<div class="ship">` +
           masts.map((mx, i) => {
-            const h = Math.round(mastH * (i === 1 || masts.length === 1 ? 1 : 0.86));
-            const yw = i === 1 || masts.length === 1 ? 118 : 92;
+            const main = i === masts.length - 1 || (masts.length === 3 && i === 1);
+            const h = Math.round(mastH * (main ? 1 : 0.86));
+            const yw = main ? 118 : 92;
+            const top = Math.round(h * 0.1);
             return `<div class="mast" style="--mx:${mx}%;--topR:${rows - 1};height:${h}px">` +
-              `<i class="yard" style="top:${Math.round(h * 0.1)}px;--yw:${yw}px"></i>` +
-              `<i class="sail${i === 1 || masts.length === 1 ? " main" : ""}" ` +
-              `style="top:${Math.round(h * 0.1) + 5}px;height:${SAIL_H}px;--sw:${yw - 12}px"></i>` +
+              `<i class="shroud l"></i><i class="shroud r"></i>` +
+              `<i class="yard" style="top:${top}px;--yw:${Math.round(yw * 0.72)}px"></i>` +
+              `<i class="sail top" style="top:${top + 5}px;height:${TOPSAIL}px;--sw:${Math.round((yw - 12) * 0.72)}px"></i>` +
+              `<i class="yard" style="top:${top + 5 + TOPSAIL + REEF - 3}px;--yw:${yw}px"></i>` +
+              `<i class="sail${main ? " main" : ""}" ` +
+              `style="top:${top + 5 + TOPSAIL + REEF}px;height:${COURSE}px;--sw:${yw - 12}px"></i>` +
               (i === masts.length - 1
                 ? `<div class="jolly"><svg viewBox="0 0 24 24" fill="#e8e8ee" aria-hidden="true">` +
                   `<circle cx="12" cy="9" r="6"/><rect x="7" y="16" width="10" height="3" rx="1.5"/>` +
@@ -290,6 +313,17 @@ const SHIP = (() => {
       e.target.textContent = T(SHIP.muted ? "unmute" : "mute");
       e.target.setAttribute("aria-pressed", String(SHIP.muted));
     };
+    host.querySelector("#rosterBtn").onclick = (e) => {
+      SHIP.rosterOn = !SHIP.rosterOn;
+      try { localStorage.setItem("board.roster", SHIP.rosterOn ? "" : "hidden"); } catch (_) {}
+      e.target.setAttribute("aria-pressed", String(SHIP.rosterOn));
+      const list = host.ownerDocument && host.ownerDocument.getElementById("roster");
+      if (list) list.hidden = !SHIP.rosterOn;
+    };
+    // demonstration identities never collide with a real outcome's and are
+    // never sent anywhere; the queue plays them like any other effect
+    host.querySelector("#ahoyDemo").onclick = () => enqueue(host, "merge", `demo:merge:${++demos}`);
+    host.querySelector("#orderDemo").onclick = () => enqueue(host, "order", `demo:order:${++demos}`);
     drag(host);
     applyEffect(host);
     if (host.ownerDocument) handoffs(host,s.handoffs || [],T,crew);
@@ -303,14 +337,41 @@ const SHIP = (() => {
     host.setAttribute('aria-label', T('roleCaptain'));
   }
 
+  // Portrait of the one captain, beside the first decision card. It is a
+  // picture of the captain on the ship, not a second one aboard: no pivot, no
+  // crew id, hidden from assistive technology, and gone when nothing waits.
+  function portrait(host, show, T) {
+    if (!host) return;
+    host.hidden = !show;
+    if (!show) { if (host.firstChild) host.innerHTML = ""; return; }
+    if (!host.querySelector(".fig")) {
+      host.innerHTML = `<div class="floor"></div><div class="glow"></div>` +
+        `<div class="capfig" aria-hidden="true">${body({ id: "portrait", role: "cap", state: "captain", action: "helm" })}</div>` +
+        `<div class="lbl"><b></b><span></span></div>`;
+    }
+    host.querySelector(".lbl b").textContent = T("roleCaptain");
+  }
+
+  // Two-column rows, as the prototype lays them out: status dot, name, stage
+  // pill and pull request over the task and the authored activity. A bar only
+  // for bounded progress, and never a percentage.
   function roster(host, crew, T) {
-    patch(host, `<h3><span>${esc(T("roster"))}</span><span>${crew.length}</span></h3><ul>` +
-      crew.map((c) => `<li class="st-${c.state}"><span class="av"></span>` +
+    if (host.ownerDocument) host.hidden = !SHIP.rosterOn;
+    patch(host, `<h3><span>${esc(T("roster"))}</span><span>${crew.length}</span></h3><ul class="rows">` +
+      crew.map((c) => `<li class="rrow st-${c.state}" data-roster="${esc(c.id)}">` +
+        `<div class="l1"><span class="av" aria-hidden="true"></span>` +
         `<span class="nm">${esc(c.name)}</span>` +
         `<span class="st">${esc(T("lane" + c.state[0].toUpperCase() + c.state.slice(1)))}</span>` +
-        `<span class="jb">${esc(c.job)}` +
-        (c.pct == null ? "" : `<span class="pb" title="${c.pct}%"><i style="width:${c.pct}%"></i></span>`) +
-        `</span></li>`).join("") + `</ul>`);
+        `<span class="rpr">${c.pr ? "#" + esc(c.pr) : ""}</span></div>` +
+        `<div class="jb">` +
+        (c.task ? `<b class="tk">${esc(c.task)}</b> <span class="tt">${esc(c.title || T("titleMissing"))}</span> ` : "") +
+        `<span class="act">${esc(c.activity)}</span>` +
+        (c.progress
+          ? `<span class="pb" role="progressbar" aria-valuemin="0" aria-valuenow="${c.progress.done}" ` +
+            `aria-valuemax="${c.progress.total}" title="${c.progress.done}/${c.progress.total}">` +
+            `<i style="width:${c.pct}%"></i></span>`
+          : "") +
+        `</div></li>`).join("") + `</ul>`);
   }
 
   // Drag to turn a crewman; the pointer owns him until it lets go.
@@ -475,13 +536,16 @@ const SHIP = (() => {
       document.dispatchEvent(new Event('ship-effect')); nextEffect(host);
     }, 3200);
   }
+  let demos = 0;
   function enqueue(host, kind, id) {
     if (handled.has(id)) return;
     handled.add(id); effects.push({kind,id,audio:!SHIP.muted && unlocked}); nextEffect(host);
   }
 
-  return { render, roster, captain, patch, enqueue, unlock, active:() => current,
+  return { render, roster, captain, portrait, patch, enqueue, unlock, active:() => current,
            rateFor, actionFor, crewOf, layout, RATES, ACTIONS, ROLE,
-           muted: (() => { try { return !!localStorage.getItem("board.muted"); } catch (_) { return false; } })() };
+           muted: (() => { try { return !!localStorage.getItem("board.muted"); } catch (_) { return false; } })(),
+           // shown unless the captain hid it; the choice survives a reload
+           rosterOn: (() => { try { return localStorage.getItem("board.roster") !== "hidden"; } catch (_) { return true; } })() };
 })();
 if (typeof module !== "undefined") module.exports = SHIP;
