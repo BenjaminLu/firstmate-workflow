@@ -875,6 +875,7 @@
         "tests/herdr.test.sh",
         "tests/crew-end-to-end.test.sh",
         "tests/reconcile.test.sh",
+        "tests/e2e/board.spec.ts",
         "skills/firstmate/**",
         "skills/worker/SKILL.md",
         "skills/reviewer/SKILL.md"

@@ -76,7 +76,9 @@ test('retained actor activity is localized, run-specific and never guessed from 
     spec.tasks.push({id:'T-034',title:'Scalar title is not a translation',activity:{en:'Verify literal captain orders','zh-TW':'驗證船長原文命令'},depends_on:[]});
     writeFileSync(file,JSON.stringify(spec));
     emitFixture(root,'worker-rowan-new','T-034','criteria_returned');
-    await expect(page.locator('[data-crew="worker-rowan-new"]')).toHaveAttribute('aria-label',new RegExp(CN_ACTIVITY.literal));
+    // T-036: replayed event activity beats static task.activity; criteria_returned
+    // does not replace the dispatch summary already on the actor.
+    await expect(page.locator('[data-crew="worker-rowan-new"]')).toHaveAttribute('aria-label',new RegExp(CN_ACTIVITY.test));
     await expect(page.locator('[data-crew="worker-rowan-new"] .fig')).toHaveClass(/s-working/);
     await expect(page.locator('[data-crew="worker-rowan"]')).toHaveCount(0);
     await expect(page.locator('.roster .nm').filter({hasText:/^Rowan$/})).toHaveCount(1);

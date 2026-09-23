@@ -1270,12 +1270,17 @@ assert_fail "FM_ROOT='$rc' '$rc/bin/fm-checkpoint.sh' --task T-CK --repo '$rc' -
   "checkpoint refuses to write on main"
 assert_fail "cd '$ROOT' && git --git-dir='$barec' ls-tree -r main --name-only | grep -qx bad.txt" \
   "refused main checkpoint pushes nothing"
+# Unset clears the shared repo local config (worktrees share it). On a CI
+# runner with no global fallback that poisons every later commit in this
+# fixture unless restored immediately after the negative case.
 git -C "$rc/state/worktrees/T-CK" config --unset user.name 2>/dev/null || true
 git -C "$rc/state/worktrees/T-CK" config --unset user.email 2>/dev/null || true
 unset FM_GIT_NAME FM_GIT_EMAIL
 printf 'orphan\n' > "$rc/state/worktrees/T-CK/orphan.txt"
 assert_fail "FM_ROOT='$rc' FM_GIT_NAME= FM_GIT_EMAIL= '$rc/bin/fm-checkpoint.sh' --dir '$rc/state/worktrees/T-CK' --message 'no identity'" \
   "checkpoint refuses commit when git identity is missing"
+git -C "$rc" config user.email a@b.c
+git -C "$rc" config user.name t
 # Re-attach a feature worktree: the prior block left T-CK detached on main.
 git -C "$rc" worktree remove -f "$rc/state/worktrees/T-CK" 2>/dev/null || true
 git -C "$rc" worktree add -q "$rc/state/worktrees/T-CK" t-ck-branch
