@@ -1264,6 +1264,11 @@ assert_ok "'$rc/bin/fm-checkpoint.sh' --dir '$rc/state/worktrees/T-CK' --message
   "checkpoint --dir commits and pushes"
 assert_ok "cd '$ROOT' && git --git-dir='$barec' cat-file -e t-ck-branch:via-dir.txt" \
   "--dir checkpoint reached the remote"
+# The identity comes from the repo being committed to, not from the caller's
+# cwd: this fixture's a@b.c is local to $rc, so a cwd lookup would sign with
+# whatever the caller has (the operator's own address, or nothing on CI).
+assert_eq "a@b.c" "$(git -C "$rc/state/worktrees/T-CK" log -1 --pretty=%ae)" \
+  "--dir checkpoint signs with the repo's own identity"
 # Refuse protected / non-feature tips. main is already the primary checkout,
 # so attach a detached worktree at main's tip (refuses as HEAD).
 git -C "$rc" worktree remove -f "$rc/state/worktrees/T-CK"

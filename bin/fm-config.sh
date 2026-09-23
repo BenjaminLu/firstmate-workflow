@@ -181,11 +181,17 @@ fm_need() { [ "$#" -ge 3 ] || { echo "$1: $2 needs a value" >&2; exit 64; }; }
 # (user.name / user.email), not a synthetic firstmate@local that GitHub
 # cannot link to an account. Override with FM_GIT_NAME / FM_GIT_EMAIL when
 # a bot identity is intentional.
-fm_git_name()  { printf '%s' "${FM_GIT_NAME:-$(git config user.name 2>/dev/null || true)}"; }
-fm_git_email() { printf '%s' "${FM_GIT_EMAIL:-$(git config user.email 2>/dev/null || true)}"; }
+#
+# The lookup asks the worktree being committed to, not the caller's cwd:
+# fm-checkpoint --dir never cd's into the repo, so a cwd lookup saw only
+# whatever identity happened to be ambient - the operator's own config at
+# a terminal, and nothing at all on a CI runner, where a repo that does
+# configure an identity locally was refused a commit anyway.
+fm_git_name()  { printf '%s' "${FM_GIT_NAME:-$(git -C "${1:-.}" config user.name 2>/dev/null || true)}"; }
+fm_git_email() { printf '%s' "${FM_GIT_EMAIL:-$(git -C "${1:-.}" config user.email 2>/dev/null || true)}"; }
 fm_git_commit() {  # fm_git_commit <worktree> <message>
   local dir="$1" msg="$2" n e
-  n="$(fm_git_name)"; e="$(fm_git_email)"
+  n="$(fm_git_name "$dir")"; e="$(fm_git_email "$dir")"
   if [ -z "$n" ] || [ -z "$e" ]; then
     echo "fm: set git user.name and user.email (or FM_GIT_NAME / FM_GIT_EMAIL) before committing" >&2
     return 70
