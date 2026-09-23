@@ -663,9 +663,11 @@ do not open it. Pending decisions come from pending records, not task stages.
 Crew payloads add `activity: {en, "zh-TW"}`, `crew_name` and optional bounded
 `progress` without changing canonical actor IDs or roles. Replay retains each
 actor's dispatch/activity description and last applicable lifecycle phase
-across technical events, independently of the 40-event recent list. Localized
-task activity takes precedence when available; scalar titles are not guessed
-translations. Missing descriptions and unknown phases are explicitly labeled.
+across technical events, independently of the 40-event recent list. Replayed
+event activity (`crew_status`, dispatch summaries, and similar) takes precedence
+over static `tasks.json` `activity`; static copy is a fallback when nothing has
+been emitted yet. Scalar titles are not guessed translations. Missing
+descriptions and unknown phases are explicitly labeled.
 Finished actors cannot reappear through late technical events; a new dispatch
 starts fresh activity. Producers lacking authored summaries need firstmate
 coordination with the owning task, not fabricated board descriptions.
@@ -693,7 +695,9 @@ Three layers, coarsest first:
 Pane heartbeats and vendor JSON buffers are not board state until a producer
 writes through `bin/fm-emit.sh`. High-frequency `crew_status` updates are
 coalesced per actor: identical activity/progress payloads inside the throttle
-window are dropped; a changed activity or bounded progress always writes. The
+window are dropped; within a window only `FM_CREW_STATUS_BURST` distinct payloads
+may write so varying heartbeat text cannot flood the log; a changed bounded
+progress always writes. The
 UI hides progress chrome when bounded progress is absent; mapping coarse stage
 names to fixed percentages is forbidden.
 

@@ -76,6 +76,10 @@ emit() { emit_once "$@" || true; }
 # a true denominator exists. Shared path for every vendor.
 emit_status() {
   local en="$1" tw="$2" done_n="${3-}" total_n="${4-}" data
+  if [ "${HERDR_ENV:-}" = 1 ]; then
+    fm_herdr_emit_status "$REPO" "$NAME" "$TASK" "$en" "$tw" worker "$done_n" "$total_n" \
+      >/dev/null 2>&1 && return 0
+  fi
   data="$(jq -cn --argjson base "$CREW_DATA" --arg en "$en" --arg tw "$tw" \
     --arg done_n "$done_n" --arg total_n "$total_n" '
     $base * {activity:{en:$en,"zh-TW":$tw}}
@@ -507,8 +511,12 @@ emit_status "Adapter running on $TASK" "adapter 正在執行 $TASK"
   declare -p FM_VENDOR_USED FM_VENDOR_SKIPPED FM_VENDOR_MISREAD FM_VENDOR_UNKNOWN > "$chain_result"
   exit "$chain_rc"
 ); rc=$?
-# shellcheck disable=SC1090
-. "$chain_result"
+if [ -s "$chain_result" ]; then
+  # shellcheck disable=SC1090
+  . "$chain_result"
+else
+  FM_VENDOR_USED=''; FM_VENDOR_SKIPPED=''; FM_VENDOR_MISREAD=''; FM_VENDOR_UNKNOWN=''
+fi
 [ -z "$FM_VENDOR_UNKNOWN" ] || {
   echo "fm-worker: config.yaml names a vendor with no adapter: $FM_VENDOR_UNKNOWN" >&2; exit 65; }
 [ -z "$FM_VENDOR_MISREAD" ] || {

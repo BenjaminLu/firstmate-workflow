@@ -97,4 +97,30 @@ assert_eq "0" "$(code_c --actor w1 --task T-1 --type crew_status \
 assert_eq "3" "$(wc -l < "$c/state/events.jsonl" | tr -d ' ')" "refused bare percent is a distinct payload, so it writes"
 rm -rf "$c"
 
+assert_eq "64" "$(FM_ROOT="$(mktemp -d)" FM_CREW_STATUS_SECS=abc bash "$ROOT/bin/fm-emit.sh" \
+  --actor w1 --task T-1 --type crew_status --en x --tw y >/dev/null 2>&1; printf '%s' "$?")" \
+  "invalid FM_CREW_STATUS_SECS is refused with exit 64"
+
+# Varying heartbeat text cannot exceed the per-window burst ceiling.
+b="$(mktemp -d)"; mkdir -p "$b/state"
+code_b() { FM_ROOT="$b" FM_CREW_STATUS_SECS=60 FM_CREW_STATUS_BURST=3 \
+  bash "$ROOT/bin/fm-emit.sh" "$@" >/dev/null 2>&1; printf '%s' "$?"; }
+i=1
+while [ "$i" -le 8 ]; do
+  data="$(printf '{"activity":{"en":"tick %s","zh-TW":"tick %s"}}' "$i" "$i")"
+  en="$(printf 'heartbeat %s' "$i")"
+  tw="$(printf 'heartbeat %s' "$i")"
+  rc="$(code_b --actor burst-w --task T-1 --type crew_status --data "$data" --en "$en" --tw "$tw")"
+  assert_eq "0" "$rc" "burst heartbeats return success even when coalesced"
+  i=$(( i + 1 ))
+done
+assert_eq "3" "$(jq -r 'select(.type=="crew_status") | .actor' "$b/state/events.jsonl" | wc -l | tr -d ' ')" \
+  "varying heartbeats are capped at FM_CREW_STATUS_BURST per window"
+assert_eq "0" "$(code_b --actor burst-w --task T-1 --type crew_status \
+  --data '{"activity":{"en":"gates","zh-TW":"關卡"},"progress":{"done":1,"total":4}}' \
+  --en "1/4" --tw "1/4")" "bounded progress still writes after the burst ceiling"
+assert_eq "4" "$(jq -r 'select(.type=="crew_status") | .actor' "$b/state/events.jsonl" | wc -l | tr -d ' ')" \
+  "progress change is not dropped by the burst cap"
+rm -rf "$b"
+
 finish

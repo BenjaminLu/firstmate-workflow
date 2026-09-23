@@ -180,8 +180,7 @@ const state = () => {
     const nextProgress = bounded(data.progress);
     if (nextProgress) progress.set(actor, nextProgress);
     if (e.type === 'dispatched' || data.role) roles.set(actor, roleOf(actor,e));
-    // Mid-run authored data.activity describes the run; when the task
-    // itself ships localized activity, that takes precedence (design §5).
+    // Mid-run authored data.activity from events describes the run.
     // Scalar titles are never treated as activity.
     const description = authored(data.activity)
       || (e.type === 'dispatched' || e.type === 'review_opened' ? authored(e.summary) : null);
@@ -232,10 +231,10 @@ const state = () => {
     state: greenlit ? (fm ? phases.get('firstmate') || 'unknown' : 'unknown') : "queued",
     task: fmTask, title: fmT?.title ?? null,
     activity: fm
-      ? ((fmTask
+      ? (activity.get("firstmate")
+        || (fmTask
           ? authored((defs.find((d) => d.id === fmTask) as { activity?: unknown } | undefined)?.activity)
           : null)
-        || activity.get("firstmate")
         || null)
       : null,
     progress: fm ? (progress.get("firstmate") ?? null) : null,
@@ -263,10 +262,9 @@ const state = () => {
       task, title: t?.title ?? null,
       crew_name: names.get(actor),
       progress: progress.get(actor) ?? null,
-      // Localized task.activity takes precedence when available; then
-      // mid-run/event activity; never scalar title.
-      activity: authored((defs.find((d) => d.id === task) as { activity?: unknown } | undefined)?.activity)
-        || activity.get(actor)
+      // Replay/event activity wins over static task.activity; never scalar title.
+      activity: activity.get(actor)
+        || authored((defs.find((d) => d.id === task) as { activity?: unknown } | undefined)?.activity)
         || null,
     });
   }

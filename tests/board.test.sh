@@ -443,21 +443,36 @@ FM_ROOT="$p" FM_PORT="$PORTP" FM_CREW_STATUS_SECS=0 bun run "$p/board/server.ts"
 pidp=$!
 for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORTP/api/state" >/dev/null 2>&1 && break; sleep 0.25; done
 
-# Activity: localized task.activity takes precedence when available; else
-# event-authored activity; titles are never invented as translations.
+# Activity: emitted/event activity wins over static task.activity; titles are
+# never invented as translations.
 FM_ROOT="$p" FM_CREW_STATUS_SECS=0 "$p/bin/fm-emit.sh" --actor worker-act --task T-P --type dispatched \
   --data '{"role":"worker","crew_name":"worker-act","activity":{"en":"Running the adapter","zh-TW":"正在跑 adapter"}}' \
   --en "picked up" --tw "接下" >/dev/null
 sp="$(curl -sf "http://127.0.0.1:$PORTP/api/state")"
-assert_eq "Authored task activity" \
+assert_eq "Running the adapter" \
   "$(jq -r '.crew[]|select(.id=="worker-act")|.activity.en' <<<"$sp")" \
-  "crew activity en prefers localized task.activity when available"
-assert_eq "已撰寫的任務活動" \
+  "crew activity en prefers emitted activity over static task.activity"
+assert_eq "正在跑 adapter" \
   "$(jq -r '.crew[]|select(.id=="worker-act")|.activity["zh-TW"]' <<<"$sp")" \
-  "crew activity zh-TW prefers localized task.activity when available"
+  "crew activity zh-TW prefers emitted activity over static task.activity"
+FM_ROOT="$p" FM_CREW_STATUS_SECS=0 "$p/bin/fm-emit.sh" --actor worker-act --task T-P --type crew_status \
+  --data '{"role":"worker","activity":{"en":"Running focused checks","zh-TW":"正在跑聚焦檢查"}}' \
+  --en "heartbeat" --tw "心跳" >/dev/null
+sp="$(curl -sf "http://127.0.0.1:$PORTP/api/state")"
+assert_eq "Running focused checks" \
+  "$(jq -r '.crew[]|select(.id=="worker-act")|.activity.en' <<<"$sp")" \
+  "crew_status refreshes activity when the task also has static task.activity"
 assert_eq "worker-act" \
   "$(jq -r '.crew[]|select(.id=="worker-act")|.crew_name' <<<"$sp")" \
   "crew_name is carried on the crew payload"
+
+# Static task.activity is the fallback when the event carries no activity.
+FM_ROOT="$p" FM_CREW_STATUS_SECS=0 "$p/bin/fm-emit.sh" --actor worker-fallback --task T-P --type dispatched \
+  --data '{"role":"worker","crew_name":"worker-fallback"}' >/dev/null
+ss="$(curl -sf "http://127.0.0.1:$PORTP/api/state")"
+assert_eq "Authored task activity" \
+  "$(jq -r '.crew[]|select(.id=="worker-fallback")|.activity.en' <<<"$ss")" \
+  "static task.activity fills in when the event carries no activity"
 
 # When the task has no authored activity, event/mid-run activity still shows.
 FM_ROOT="$p" FM_CREW_STATUS_SECS=0 "$p/bin/fm-emit.sh" --actor worker-q --task T-Q --type dispatched \

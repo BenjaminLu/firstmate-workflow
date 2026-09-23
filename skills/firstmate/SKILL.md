@@ -32,7 +32,10 @@ Continue independent authorized tasks while a decision waits.
    concurrency by config and account for existing work before dispatch.
 3. In a user-managed Herdr session (`HERDR_ENV=1`), check `herdr` availability
    there, read installed `herdr --skill` and help, and inspect the caller pane and
-   live panes. Launch future worker/reviewer processes through the normal script
+   live panes. Refresh mid-run board activity from pane evidence with
+   `python3 bin/fm-herdr.py emit-status` (same `crew_status` path as
+   `fm-worker.sh` / `fm-review.sh`; pane text is not board state until emitted).
+   Launch future worker/reviewer processes through the normal script
    and adapter path in explicit visible panes, preserve caller focus, and record
    actual pane, task, role and session identities. Reuse existing agents. An
    internal conversation subagent, a background CLI or a tail-only log pane is

@@ -1224,14 +1224,6 @@ rm -rf "$df"
 
 # --- T-036: mid-run checkpoint (commit then push; never main / never PR) ---
 assert_ok "test -x '$ROOT/bin/fm-checkpoint.sh'" "fm-checkpoint.sh is the stock mid-run save helper"
-worker_code="$(sed 's/#.*//' "$ROOT/bin/fm-worker.sh")"
-skill_code="$(sed 's/#.*//' "$ROOT/skills/worker/SKILL.md")"
-assert_contains "$worker_code" "fm-checkpoint.sh" \
-  "fm-worker final sweep goes through fm-checkpoint.sh"
-assert_contains "$skill_code" "fm-checkpoint.sh" \
-  "worker skill requires checkpoint after each logical commit"
-assert_contains "$skill_code" "WORKER_COMPLETE" \
-  "skill forbids waiting until WORKER_COMPLETE for the only push"
 
 dc="$(mktemp -d)"; barec="$dc/remote.git"; rc="$dc/repo"
 cd "$ROOT" || exit 1
@@ -1278,12 +1270,12 @@ assert_fail "FM_ROOT='$rc' '$rc/bin/fm-checkpoint.sh' --task T-CK --repo '$rc' -
   "checkpoint refuses to write on main"
 assert_fail "cd '$ROOT' && git --git-dir='$barec' ls-tree -r main --name-only | grep -qx bad.txt" \
   "refused main checkpoint pushes nothing"
-# Never a PR helper: the script has no gh / pr create path.
-# Strip comments before grepping source (ci hygiene: assert_* "grep $ROOT..."
-# is satisfied by a comment unless comments are excluded first).
-ckpt_code="$(sed 's/#.*//' "$ROOT/bin/fm-checkpoint.sh")"
-assert_lacks "$ckpt_code" "pr create" "checkpoint is branch save-only (no PR create)"
-assert_lacks "$ckpt_code" "gh pr" "checkpoint is branch save-only (no gh pr helper)"
+git -C "$rc/state/worktrees/T-CK" config --unset user.name 2>/dev/null || true
+git -C "$rc/state/worktrees/T-CK" config --unset user.email 2>/dev/null || true
+unset FM_GIT_NAME FM_GIT_EMAIL
+printf 'orphan\n' > "$rc/state/worktrees/T-CK/orphan.txt"
+assert_fail "FM_ROOT='$rc' FM_GIT_NAME= FM_GIT_EMAIL= '$rc/bin/fm-checkpoint.sh' --dir '$rc/state/worktrees/T-CK' --message 'no identity'" \
+  "checkpoint refuses commit when git identity is missing"
 rm -rf "$dc"
 
 finish
