@@ -85,14 +85,29 @@ if [ -f "$(dirname "${BASH_SOURCE[0]}")/fm-guard.sh" ]; then
   fm_guard_branch "$tree" || exit 71
 fi
 
+# Ephemeral harness notes must never land as content. A deletion of a
+# previously mistaken tip copy is the one exception that must still commit,
+# otherwise a REJECT for a tracked .fm-say.md can never clear via checkpoint.
 dirty="$(git -C "$tree" status --porcelain -- . \
   ":(exclude).fm-prompt.md" ":(exclude).fm-say.md" || true)"
+for _ephemeral in .fm-prompt.md .fm-say.md; do
+  if git -C "$tree" ls-files --error-unmatch "$_ephemeral" >/dev/null 2>&1 \
+     && [ ! -e "$tree/$_ephemeral" ]; then
+    dirty="${dirty}"$'\n'"D  ${_ephemeral}"
+  fi
+done
 
 if [ -n "$dirty" ]; then
-  # Stage everything then drop ephemeral harness files. Pathspec excludes
+  # Stage everything then drop ephemeral harness *contents*. Pathspec excludes
   # on `git add -A -- .` are inconsistent across git versions in worktrees.
   git -C "$tree" add -A
-  git -C "$tree" reset -q -- .fm-prompt.md .fm-say.md 2>/dev/null || true
+  for _ephemeral in .fm-prompt.md .fm-say.md; do
+    if [ -e "$tree/$_ephemeral" ] || [ -L "$tree/$_ephemeral" ]; then
+      # Still on disk: never stage new or modified note contents.
+      git -C "$tree" reset -q -- "$_ephemeral" 2>/dev/null || true
+    fi
+    # Absent from disk: keep a staged deletion so a wrongly tracked tip is purged.
+  done
   if ! git -C "$tree" diff --cached --quiet 2>/dev/null; then
     case "$MSG" in
       "$TASK:"*|"$TASK "*) commit_msg="$MSG" ;;

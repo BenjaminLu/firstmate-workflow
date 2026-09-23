@@ -1276,6 +1276,32 @@ unset FM_GIT_NAME FM_GIT_EMAIL
 printf 'orphan\n' > "$rc/state/worktrees/T-CK/orphan.txt"
 assert_fail "FM_ROOT='$rc' FM_GIT_NAME= FM_GIT_EMAIL= '$rc/bin/fm-checkpoint.sh' --dir '$rc/state/worktrees/T-CK' --message 'no identity'" \
   "checkpoint refuses commit when git identity is missing"
+# Re-attach a feature worktree: the prior block left T-CK detached on main.
+git -C "$rc" worktree remove -f "$rc/state/worktrees/T-CK" 2>/dev/null || true
+git -C "$rc" worktree add -q "$rc/state/worktrees/T-CK" t-ck-branch
+# A tip that already tracks .fm-say.md must be purgeable: reset must not
+# resurrect the file when the working tree deleted it.
+printf 'round notes\n' > "$rc/state/worktrees/T-CK/.fm-say.md"
+git -C "$rc/state/worktrees/T-CK" add -f .fm-say.md
+git -C "$rc/state/worktrees/T-CK" commit -qm 'fixture: tracked say'
+git -C "$rc/state/worktrees/T-CK" push -q origin t-ck-branch
+rm -f "$rc/state/worktrees/T-CK/.fm-say.md"
+printf 'after-purge\n' > "$rc/state/worktrees/T-CK/after.txt"
+assert_ok "'$rc/bin/fm-checkpoint.sh' --dir '$rc/state/worktrees/T-CK' --message 'drop tracked say'" \
+  "checkpoint commits when a tracked .fm-say.md was deleted"
+assert_fail "cd '$ROOT' && git --git-dir='$barec' cat-file -e t-ck-branch:.fm-say.md" \
+  "checkpoint removes a mistakenly tracked .fm-say.md from the tip"
+assert_ok "cd '$ROOT' && git --git-dir='$barec' cat-file -e t-ck-branch:after.txt" \
+  "purge commit still pushes the accompanying work"
+# Present on-disk notes still never reach the tip.
+printf 'live notes\n' > "$rc/state/worktrees/T-CK/.fm-say.md"
+printf 'keep\n' > "$rc/state/worktrees/T-CK/keep.txt"
+assert_ok "'$rc/bin/fm-checkpoint.sh' --dir '$rc/state/worktrees/T-CK' --message 'keep notes local'" \
+  "checkpoint with a live .fm-say.md still saves other work"
+assert_fail "cd '$ROOT' && git --git-dir='$barec' cat-file -e t-ck-branch:.fm-say.md" \
+  "live .fm-say.md contents are never re-committed"
+assert_ok "cd '$ROOT' && git --git-dir='$barec' cat-file -e t-ck-branch:keep.txt" \
+  "non-ephemeral files still checkpoint beside a live .fm-say.md"
 rm -rf "$dc"
 
 finish
