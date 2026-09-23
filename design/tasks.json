@@ -1000,6 +1000,31 @@
         "Add a fail-first regression test in tests/gate.test.sh: a fixture whose full suite takes longer than 180 seconds but less than 600 (a controllable/fake duration, not a real sleep long enough to be flaky) must pass gate3 under the fixed code and must fail it under the old bare-default behavior. Do not depend on real wall-clock timing beyond what is needed to distinguish the two budgets deterministically.",
         "Run bin/ci.sh and report the observed exit status/duration for this branch."
       ]
+    },
+    {
+      "id": "T-041",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-035"
+      ],
+      "title": "firstmate never loses a captain order it did not act on",
+      "scope": [
+        "skills/firstmate/**",
+        "bin/fm-session.sh",
+        "bin/fm-herdr.py",
+        "tests/session.test.sh",
+        "tests/skills.test.sh",
+        "design/design.md",
+        "design/tasks.json"
+      ],
+      "acceptance": [
+        "Incident this task answers (2026-09-23): the captain answered D-047 on the board. The session watcher started by fm-session.sh recorded it within a second in state/session/observed/D-047.json, but nothing woke the conversational firstmate: its turn had ended and a watcher only writes to disk. Firstmate did not act until the captain asked. This task's own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+        "Managed flow: `bin/fm-session.sh status` reports every observed decision that firstmate has not yet acknowledged (id, task, kind, chosen, custom text, decision timestamp), in the machine-readable output and as a short human summary. Add an explicit acknowledgement, for example `bin/fm-session.sh ack --decision D-nnn`, which records a durable acknowledgement under state/session/ without deleting the observation, the decision file or any event. Acknowledgement is idempotent; acknowledging an id with no observation is refused with a clear message. `status` and `start` stay read-only toward decisions; they never consume, merge or answer one.",
+        "Skill (skills/firstmate/SKILL.md, portable English, no vendor-specific syntax): state the rule that a session watcher or an observation file never wakes a conversational agent. After every decision request, firstmate starts a notifying wait whose completion reaches the conversation (`bin/fm-decide.sh --await <id> --repo <root>` run as a background task the host reports on when it finishes). Firstmate does not end a turn while any card is pending without such a live wait. At the start of every turn and before ending one, firstmate runs `bin/fm-session.sh status`, acts on every unacknowledged observed decision, then acknowledges it. Keep the existing statements that exit zero is observation, not approval.",
+        "Fail-first tests in tests/session.test.sh: an observed-but-unacknowledged decision appears in status; after ack it no longer appears; ack is idempotent and refuses an unknown id; status never removes or rewrites decision, pending or observation files. tests/skills.test.sh keeps passing with the updated skill. Run bin/ci.sh and report observed results.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
     }
   ]
 }

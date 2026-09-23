@@ -212,6 +212,63 @@ class Session(unittest.TestCase):
         self.assertIn('still running', text)
         self.assertRegex(text, r'finished exit=0 after \d+s')
 
+    def session_cli(self, *args):
+        env = {k: v for k, v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
+        return subprocess.run(['bash', str(self.repo / 'bin/fm-session.sh'), *args, '--repo', str(self.repo)],
+                              cwd=self.repo, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    def decision_files(self):
+        state = self.repo / 'state'
+        return {str(p.relative_to(state)): p.read_bytes()
+                for folder in ('pending', 'decisions', 'session/observed')
+                for p in sorted((state / folder).glob('*.json'))} | {'events.jsonl': (state / 'events.jsonl').read_bytes()}
+    def test_unacknowledged_observed_decision_is_reported_until_ack(self):
+        """T-041: a watcher only writes to disk; status must surface what firstmate has not acted on."""
+        state = self.repo / 'state'
+        for folder in ('pending', 'decisions', 'session/observed'): (state / folder).mkdir(parents=True, exist_ok=True)
+        (state / 'events.jsonl').write_text('{"type":"decision_made","data":{"decision":"D-047"}}\n')
+        (state / 'pending/D-047.json').write_text('{"id":"D-047","task":"T-041","kind":"choice"}')
+        answer = dict(id='D-047', chosen='custom', text='hold until Friday', task='T-041', kind='choice',
+                      ts='2026-09-23T08:00:00.000Z', identity='decision:D-047')
+        (state / 'decisions/D-047.json').write_text(json.dumps(answer))
+        m.save(state / 'session/observed/D-047.json',
+               dict(status='observed', decision=answer, id='D-047', observed=1790000000.0))
+        # Answered but never observed: not firstmate's acknowledgement backlog.
+        (state / 'decisions/D-048.json').write_text('{"id":"D-048","chosen":"A","task":"T-040","kind":"merge"}')
+        before = self.decision_files()
+
+        status = self.session_cli('status')
+        self.assertEqual(0, status.returncode, status.stderr)
+        report = json.loads(status.stdout)
+        self.assertEqual([dict(id='D-047', task='T-041', kind='choice', chosen='custom',
+                               text='hold until Friday', ts='2026-09-23T08:00:00.000Z',
+                               observed=1790000000.0)], report['unacknowledged'])
+        self.assertRegex(status.stderr, r'(?s)1 captain decision.*D-047.*T-041.*custom.*hold until Friday')
+        self.assertEqual(before, self.decision_files(), 'status must not consume or rewrite decisions')
+
+        refused = self.session_cli('ack', '--decision', 'D-999')
+        self.assertNotEqual(0, refused.returncode)
+        self.assertIn('no observation for D-999', refused.stderr)
+        self.assertFalse((state / 'session/acknowledged/D-999.json').exists())
+        self.assertNotEqual(0, self.session_cli('ack').returncode, 'ack requires an explicit decision id')
+        unobserved = self.session_cli('ack', '--decision', 'D-048')
+        self.assertNotEqual(0, unobserved.returncode)
+        self.assertIn('no observation for D-048', unobserved.stderr)
+
+        acked = self.session_cli('ack', '--decision', 'D-047')
+        self.assertEqual(0, acked.returncode, acked.stderr)
+        receipt = state / 'session/acknowledged/D-047.json'
+        self.assertEqual('D-047', json.loads(receipt.read_text())['id'])
+        saved = receipt.read_bytes()
+        self.assertEqual(before, self.decision_files(), 'ack must not delete observation, decision or event')
+        again = self.session_cli('ack', '--decision', 'D-047')
+        self.assertEqual(0, again.returncode, again.stderr)
+        self.assertEqual(saved, receipt.read_bytes(), 'ack is idempotent')
+
+        after = self.session_cli('status')
+        self.assertEqual(0, after.returncode, after.stderr)
+        self.assertEqual([], json.loads(after.stdout)['unacknowledged'])
+        self.assertIn('no unacknowledged captain decisions', after.stderr)
+        self.assertEqual(before, self.decision_files())
     def test_emit_status_is_board_path_not_pane_heartbeat(self):
         """T-036: pane text is board activity only after emit-status."""
         d = Path(tempfile.mkdtemp()); self.addCleanup(lambda: shutil.rmtree(d, ignore_errors=True))
