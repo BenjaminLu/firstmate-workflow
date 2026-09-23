@@ -441,6 +441,56 @@ assert_eq "42" "$(jq -r 'select(.type=="worker_crashed")|.pr' < "$r8x/state/even
   "the crash event carries the number"
 rm -rf "$d8x"
 
+# Every other way out between setting the note aside and posting it. The
+# note left the worktree before the commit, so the scratch copy is the
+# only one; a push the remote refuses (71), a url with no number in it
+# (72) or a TERM while the pull request is being opened (143) used to
+# remove that copy with the rest of the scratch files. Each keeps it
+# under state/unsent/ and says so, and each keeps its own exit status.
+held_note_case() {   # held_note_case <label> <want-rc> <gh-create-body> [pre-receive]
+  local d r out rc
+  d="$(fixture)"; r="$d/repo"
+  cat > "$r/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+mkdir -p "$3/src"; printf 'the work\n' > "$3/src/done.txt"
+printf 'COULD NOT RUN: anything\n' > "$3/.fm-say.md"
+M
+  chmod +x "$r/bin/adapters/mock.sh"
+  mkdir -p "$d/stub"
+  cat > "$d/stub/gh" <<G
+#!/usr/bin/env bash
+echo "gh \$*" >> "$d/ghcalls"
+case " \$* " in
+  *" pr list "*) echo null; exit 0 ;;
+  *" pr create "*) $3 ;;
+esac
+exit 0
+G
+  chmod +x "$d/stub/gh"
+  if [ -n "${4:-}" ]; then
+    printf '#!/bin/sh\necho "%s" >&2\nexit 1\n' "$4" > "$d/remote.git/hooks/pre-receive"
+    chmod +x "$d/remote.git/hooks/pre-receive"
+  fi
+  out="$(cd "$r" && FM_ROOT="$r" FM_GH="$d/stub/gh" bin/fm-worker.sh --task T-Z 2>&1)"; rc=$?
+  assert_eq "$2" "$rc" "$1: the run keeps its own exit status"
+  local kept=("$r"/state/unsent/T-Z-*.md)
+  assert_eq "COULD NOT RUN: anything" "$(cat "${kept[0]}" 2>/dev/null)" \
+    "$1: the note that never reached a pull request is kept outside the worktree"
+  assert_contains "$out" "state/unsent/T-Z" "$1: and the run says where"
+  assert_lacks "$(cat "$d/ghcalls" 2>/dev/null)" "pr comment" "$1: no comment was attempted"
+  assert_contains "$(jq -r 'select(.type=="worker_crashed")|.summary.en // .en' \
+    < "$r/state/events.jsonl" | tail -1)" "note" "$1: and the log records the note was not posted"
+  rm -rf "$d"
+}
+held_note_case "push refused" 71 'echo https://example.invalid/pull/42' "refused by the remote"
+held_note_case "no pull request number" 72 'echo "something went wrong"'
+# the stub TERMs the worker while it waits on `pr create`; bash runs the
+# trap when the command substitution returns. Single-quoted: the stub
+# reads the pid file through the FM_ROOT the worker handed down
+held_note_case "TERM while opening the pull request" 143 \
+  'kill -TERM "$(cat "$FM_ROOT/state/worktrees/T-Z.pid")"; echo https://example.invalid/pull/42'
+
 # A later round whose lookup could not answer. "No pull request" and
 # "gh did not answer" used to be the same empty string, and they are
 # opposite instructions: the first means open one, the second means the
