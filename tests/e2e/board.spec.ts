@@ -16,7 +16,13 @@ const CN = {merged:'已合并',inflight:'进行中',blocked:'受阻',queued:'排
   titleMissing:'design/tasks.json 未列出标题',blockedOn:'卡在',gateFailedN:'第 {n} 道闸未过',
   optionsN:'{n} 个选项',rosterBtn:'名册',crossVendor:'跨供应商审核',mergedMore:'另 {n} 个在已完成历史中',
   dragHint:'拖曳人物可旋转单人 · 拖曳甲板转全员 · 双击复位',ahoyDemo:'试放礼炮（不写入事件）',
-  orderDemo:'试演下令回应（不写入事件）',alsoWaiting:'其他待决（点开就地展开）'};
+  orderDemo:'试演下令回应（不写入事件）',alsoWaiting:'其他待决（点开就地展开）',
+  engine:'引擎',gateFailed:'闸门未过',viewDesign:'design.md'};
+// Every key T-040 added. Each must have an oracle above, and the board's own
+// conversion must reproduce it: an oracle only some keys are checked against
+// let 閘門未過 ship half-converted.
+const T040_KEYS = ['engine','crossVendor','waitingOnYou','blockedOn','titleMissing','mergedMore',
+  'gateFailed','gateFailedN','optionsN','rosterBtn','ahoyDemo','orderDemo','dragHint','alsoWaiting','viewDesign'];
 const CN_ACTIVITY = {
   build:'Rowan 实作船长决策', test:'Rowan 测试决策', literal:'验证船长原文命令',
   bea:'Bea 审查船长决策',
@@ -673,6 +679,18 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
       await expect(page.locator('[data-task="T-ABSENT"] .t')).toHaveText(want.titleMissing);
       await expect(queued).toContainText(want.blockedOn);
       await expect(page.locator('#rosterBtn')).toHaveText(want.rosterBtn);
+      if (locale === 'zh-CN') {
+        // the page's own conversion, against the oracle, for every new key
+        for (const k of T040_KEYS) {
+          expect(CN, `no zh-CN oracle for ${k}`).toHaveProperty(k);
+          expect(await page.evaluate((s) => (window as any).eval('cn')(s), TW[k]), k).toBe((CN as any)[k]);
+        }
+        // 閘門 survives only as a pair row; 門 on its own must convert too
+        expect(await page.evaluate(() => (window as any).eval('cn')('門'))).toBe('门');
+        await expect(page.locator(`[data-task="${spec.tasks[1].id}"] .badge`)).toHaveText(CN.gateFailedN.replace('{n}','5'));
+        await expect(page.locator(`[data-lane="captain"] [data-task="${spec.tasks[2].id}"] .badge`))
+          .toHaveText(`D-2 · ${CN.optionsN.replace('{n}','3')}`);
+      }
       for (const width of [320,390,768,1280]) {
         await page.setViewportSize({width,height:844});
         expect(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth+1)).toBe(true);

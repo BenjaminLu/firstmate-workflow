@@ -734,6 +734,18 @@ FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor github --task T-E5 --type merged --pr 4
 assert_eq "true" "$(jq -r '.responses[]|select(.id=="D-401")|.superseded' <<<"$(st)")" \
   "a later merge of the same task clears the refusal"
 
+# a later successful merge *response* overtakes a refusal on its own, with no
+# merged event in the log; an earlier success does not
+jq '.id="D-403"|.task="T-E6"|.pr=46|.ts="2026-01-01T00:00:10Z"' "$e/state/decisions/D-401.json" \
+  > "$e/state/decisions/D-403.json"
+jq '.id="D-404"|.task="T-E6"|.pr=46|.ts="2026-01-01T00:00:00Z"|.merged={ok:true}' "$e/state/decisions/D-401.json" \
+  > "$e/state/decisions/D-404.json"
+assert_eq "false" "$(jq -r '.responses[]|select(.id=="D-403")|.superseded' <<<"$(st)")" \
+  "a success recorded before the refusal does not clear it"
+jq '.ts="2026-01-01T00:01:00Z"' "$e/state/decisions/D-404.json" > "$e/d404" && mv "$e/d404" "$e/state/decisions/D-404.json"
+assert_eq "true" "$(jq -r '.responses[]|select(.id=="D-403")|.superseded' <<<"$(st)")" \
+  "a later successful merge response for the same task clears the refusal"
+
 kill "$pide" 2>/dev/null
 wait "$pide" 2>/dev/null || true
 rm -rf "$e"

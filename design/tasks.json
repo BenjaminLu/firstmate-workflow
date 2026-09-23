@@ -1105,7 +1105,7 @@
         "The live log moves to a full-width panel at the bottom as in the prototype.",
         "The prototype's crew percentages (100% / 91% / 73%) and its random pct tick are demo-only and must not ship anywhere (T-036). Dynamic summaries stay en plus zh-TW with zh-CN derived through i18n/tw2cn.tsv; extend that table for any new interface text so zh-CN renders fully simplified.",
         "Layout holds at 320, 390, 768 and 1280 px widths and 200 percent text in all three locales without page overflow, per T-034.",
-        "Add fail-first tests: tests/board.test.sh for the API (engine badge data from config.yaml, waiting-on-you count, merge-refused clearing after a later merged event, lane order and dependency blocking), and browser tests for the six-lane order, header badge, banner clearing, and no progress bar without bounded progress. Run bin/ci.sh and report observed results.",
+        "Add fail-first tests: tests/board.test.sh for the API (engine badge data from config.yaml, waiting-on-you count, merge-refused clearing after a later merged event, lane order and dependency blocking), and browser tests for the six-lane order, header badge, banner clearing, and no progress bar without bounded progress. Evidence is the pull request's required GitHub check and the seven gates.",
         "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason instead of editing it."
       ]
     }
