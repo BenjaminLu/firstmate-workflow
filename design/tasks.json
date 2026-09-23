@@ -885,7 +885,7 @@
       ],
       "acceptance": [
         "Document in design.md a mid-run reporting contract with three layers: (1) mechanical lifecycle phases emitted only from script-known nodes, (2) authored data.activity {en, zh-TW} that never invents task-specific progress from scalar titles, (3) optional bounded progress only when a true denominator exists (for example done/total). State explicitly that the 2026-09-20 captain-board prototype's random pct tick is demo-only and must not be promoted as product truth.",
-        "Remove or disable any client-side invention of percentages from coarse lifecycle state (including the working/gate/review/captain \u2192 fixed pct map). Bubbles and roster show a progress bar only when the crew payload carries explicitly bounded progress; otherwise no bar and no fake percent.",
+        "Remove or disable any client-side invention of percentages from coarse lifecycle state (including the working/gate/review/captain → fixed pct map). Bubbles and roster show a progress bar only when the crew payload carries explicitly bounded progress; otherwise no bar and no fake percent.",
         "Board /api/state (or equivalent) crew payloads expose authored activity, optional bounded progress, crew_name and a truthful phase derived from event replay per T-034 rules: retain activity beyond the recent-event window, label missing activity explicitly, and never fabricate mid-run copy for visuals.",
         "Producers: fm-worker.sh, fm-review.sh and managed herdr transport emit phase/activity (and bounded progress when applicable) through fm-emit.sh at script-known nodes such as adapter started, tests running, commit pushed, review opened, verdict signed. Cursor/Claude/Codex/Gemini share the same path; do not add vendor-only progress invention. Heartbeat-only pane text is not board state until emitted.",
         "Throttle or coalesce high-frequency updates so the event log stays usable; a still-running heartbeat may refresh activity on an interval without claiming percent complete.",
@@ -910,6 +910,26 @@
         "fm-worker.sh already computes branch_guess from existing refs/heads before deriving a fresh branch name from the task's current title. When branch_guess is non-empty, the worker must use it as the branch to continue, never independently recompute a name from the (mutable) title and fall through to creating a new branch from base when that recomputed name happens not to match any existing local or remote ref. Recomputing a slug from title is reserved for the case where branch_guess is genuinely empty (no existing ref for this task).",
         "Add a fail-first regression test: given an existing local (or remote-only) branch for a task whose current title would slug/truncate to a different name (reproducing the observed case where an untruncated historical branch name no longer matches the current cut -c1-28 slug), running fm-worker.sh --task <id> must reuse that existing branch and worktree, and must never create a second branch from base for a task that already has one. Assert this without exercising a live captain decision, model or network API.",
         "Do not change the branch-continuity behavior for a task that genuinely has no existing branch (branch_guess empty): it must still create a fresh branch from base exactly as today.",
+        "Run bin/ci.sh and report the observed exit status/duration for this branch."
+      ]
+    },
+    {
+      "id": "T-039",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [],
+      "title": "fm-gate.sh's gate 3 must run the full local gate at the budget design.md already authorizes",
+      "scope": [
+        "bin/fm-gate.sh",
+        "tests/gate.test.sh",
+        "design/tasks.json",
+        "design/design.md"
+      ],
+      "acceptance": [
+        "This task's own entry, exactly as given here, must be committed into design/tasks.json and this row added to design/design.md's task table on this task's branch, matching the convention other self-registering tasks use.",
+        "design/design.md section 10 already documents that bin/ci.sh defaults to a 180-second budget, that GitHub sets FM_CI_MAX_SECONDS=600, and that 'Firstmate runs the same full local gate with FM_CI_MAX_SECONDS=600 bash bin/ci.sh before publication.' Do not redesign this; gate3() in bin/fm-gate.sh currently invokes the detached worktree's bin/ci.sh with no FM_CI_MAX_SECONDS set at all, so it silently runs at the bare 180-second default instead of the 600-second budget the design already authorizes for this exact use. Fix gate3() to invoke bin/ci.sh with FM_CI_MAX_SECONDS=600 in its environment, matching GitHub's own budget and design.md's stated firstmate practice.",
+        "This changes only the elapsed-time budget gate3 runs under; it must not change or weaken any functional check inside bin/ci.sh, and a genuinely failing suite (shellcheck, a red bash/bun/playwright test, the dag check, etc.) must still fail gate3 exactly as before, regardless of budget.",
+        "Add a fail-first regression test in tests/gate.test.sh: a fixture whose full suite takes longer than 180 seconds but less than 600 (a controllable/fake duration, not a real sleep long enough to be flaky) must pass gate3 under the fixed code and must fail it under the old bare-default behavior. Do not depend on real wall-clock timing beyond what is needed to distinguish the two budgets deterministically.",
         "Run bin/ci.sh and report the observed exit status/duration for this branch."
       ]
     }

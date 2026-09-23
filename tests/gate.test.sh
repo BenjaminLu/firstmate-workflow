@@ -21,7 +21,15 @@ JSON
   git -C "$d" add -A; git -C "$d" commit -qm base
   printf '%s' "$d"
 }
-gate() { "$GATE" --task T-X --repo "$1" --branch "$2" --only "$3" "${@:4}" >/dev/null 2>&1; }
+# Hermetic against the caller's own environment: this suite runs as one of
+# bin/ci.sh's own tests/*.test.sh, and firstmate's documented way to run the
+# full local gate is FM_CI_MAX_SECONDS=600 bash bin/ci.sh (design.md section
+# 10) - the very value gate3() itself now sets. Left to inherit, an ambient
+# FM_CI_MAX_SECONDS would leak into gate3's subshell regardless of whether
+# gate3's own code sets it, so the "slow" case below would pass even under
+# gate3's old, unfixed bare-default behavior. env -u makes every case here
+# test what gate3 itself does, not what surrounds it.
+gate() { env -u FM_CI_MAX_SECONDS "$GATE" --task T-X --repo "$1" --branch "$2" --only "$3" "${@:4}" >/dev/null 2>&1; }
 
 # --- gate 1 --------------------------------------------------------------
 d="$(fixture)"
@@ -43,6 +51,20 @@ assert_ok "gate '$d' green 3" "3 passes when ci.sh exits 0"
 git -C "$d" checkout -q -b red green
 printf '#!/usr/bin/env bash\nexit 1\n' > "$d/tests/a.test.sh"; git -C "$d" commit -qam red; git -C "$d" checkout -q main
 assert_fail "gate '$d' red 3" "3 blocks when ci.sh exits non-zero"
+
+# design.md section 10: GitHub sets FM_CI_MAX_SECONDS=600 and firstmate runs
+# the same full local gate at that budget before publication. A suite whose
+# real work fits in 600s but not the bare 180s default must pass gate3 only
+# because gate3 sets that budget itself - not because it took 180s or less.
+# The fixture fakes its own duration so this is deterministic, not a flaky
+# real sleep. Branches off the same green fixture gate 4 below still needs,
+# rather than calling fixture() again and shadowing $d out from under it.
+git -C "$d" checkout -q -b slow green
+printf '#!/usr/bin/env bash\nbudget="${FM_CI_MAX_SECONDS-180}"\ntook=300\n[ "$took" -le "$budget" ]\n' \
+  > "$d/bin/ci.sh"
+git -C "$d" commit -qam slow; git -C "$d" checkout -q main
+assert_ok "gate '$d' slow 3" \
+  "3 passes a 300s suite because gate3 itself sets the 600s budget design.md authorizes"
 
 # --- gate 4 --------------------------------------------------------------
 assert_ok "gate '$d' green 4" "4 passes a diff inside the declared scope"
