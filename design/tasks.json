@@ -1188,9 +1188,9 @@
         "design/design.md"
       ],
       "acceptance": [
-        "Implements design.md sections 15.1 and 15.2. config.yaml gains `default_project: firstmate-workflow` and a `projects:` map; firstmate-workflow is registered with repo `.`, github BenjaminLu/firstmate-workflow, base main, required_check ci, design design/design.md, tasks design/tasks.json, and the T-043 setup/check/check_env/tests/test values that reproduce today's gates 3 and 5.",
+        "Implements design.md sections 15.1 and 15.2. config.yaml gains `default_project: firstmate-workflow` and a `projects:` map; firstmate-workflow is registered with repo `.`, github BenjaminLu/firstmate-workflow, base main, required_check ci, design design/design.md, tasks design/tasks.json. The self entry holds no copy of T-043's `project:` block; that block stays top-level until T-050 (section 15.2).",
         "bin/fm-config.sh gains one resolver used by every later task: the project is `--project`, else FM_PROJECT, else default_project; a field lookup returns a project's value with the section 15.2 defaults for design and tasks; the project root is the engine root for repo `.` and state/projects/<name>/repo otherwise. The project is never inferred from the current directory, a git remote or a worktree.",
-        "Validation, each refused with exit 65 and a message naming the project and field: an unregistered name; a name outside [a-z0-9-] or longer than 24 characters; a repo value other than `.` or absent; a github value not shaped owner/repo; a missing base or required_check. While the self entry lacks a T-043 field, the top-level T-043 value is used for the default project.",
+        "Validation, each refused with exit 65 and a message naming the project and field: an unregistered name; a name outside [a-z0-9-] or longer than 24 characters; a repo value other than `.` or absent; a github value not shaped owner/repo; a missing base or required_check. The default project's contract resolves to T-043's top-level `project:` block, whole — every field it has, `docs` included, never a re-listed subset; a config.yaml holding both that block and a self entry `project:` is refused with exit 65.",
         "bin/ci.sh runs its design/task-list agreement check once for every registered (design, tasks) pair and names the project on failure. No other script reads the registry yet.",
         "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
         "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
@@ -1281,8 +1281,8 @@
         "design/design.md"
       ],
       "acceptance": [
-        "Implements design.md section 15.5 exactly. On a task's first round fm-worker.sh writes state/pins/<project>/<task>/1.json (project, task, engine commit, task-list path, verbatim spec, its SHA-256, design path, target base commit) and emits spec_pinned. The engine commit is the engine main head containing the task; for the self project a task not on main is pinned from its own branch's commit, else from the engine working copy with engine_commit null.",
-        "fm-worker.sh, fm-review.sh and fm-gate.sh read the task spec from the highest-numbered pin through one library function in bin/fm-config.sh, never from the target branch or the engine working copy. With an engine commit the spec is re-derived and its hash compared; without one the branch's own entry must match the pin's hash.",
+        "Implements design.md section 15.5 exactly. On a task's first round fm-worker.sh writes state/pins/<project>/<task>/1.json (project, task, engine commit, task-list path, verbatim spec, its SHA-256, design path, target base commit, and T-043's contract for the project verbatim — the whole block, `docs` included — with the engine main commit it was read from and its SHA-256) and emits spec_pinned. The contract always comes from the engine main head at pin time, including for a self-hosted task whose spec is pinned from its own branch. The engine commit is the engine main head containing the task; for the self project a task not on main is pinned from its own branch's commit, else from the engine working copy with engine_commit null.",
+        "fm-worker.sh, fm-review.sh and fm-gate.sh read the task spec from the highest-numbered pin through one library function in bin/fm-config.sh, never from the target branch or the engine working copy. With an engine commit the spec is re-derived and its hash compared; without one the branch's own entry must match the pin's hash. The contract is re-derived from its recorded commit and hash-checked in both cases; repin reads spec and contract afresh from the new commit.",
         "Gate 4 fails with no pin, a hash mismatch, a changed file outside the pinned scope, a self-hosted branch whose own task entry differs from its pin, and any `.fm-*` path. Each failure names its reason.",
         "`fm-project.sh repin --task <t> --decision D-<n>` writes the next pin and emits spec_repinned only when the decision is a decision_made for that project and task with its authorizing option and the new engine commit is on main with a differing spec; otherwise it refuses with a message and writes nothing. Pin files are append-only.",
         "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
@@ -1299,12 +1299,17 @@
       ],
       "title": "project-aware gates 1–3 and 5–7",
       "scope": [
+        "config.yaml",
+        "bin/fm-config.sh",
         "bin/fm-gate.sh",
+        "tests/config.test.sh",
         "tests/gate.test.sh",
+        "README.md",
         "design/design.md"
       ],
       "acceptance": [
-        "Implements the gate half of design.md sections 15.2 and 15.6. fm-gate.sh takes --project. Gates 1 and 2 use the project's base, not a literal main. Gate 3 runs the project's setup and then its check with check_env, in a scratch worktree of the project's checkout, as T-043 defines them. Gate 5 reverts implementation hunks and applies the project's tests/test contract. Gates 6 and 7 query the project's github repository with gh --repo, and gate 6 requires the registry's required_check.",
+        "Implements the gate half of design.md sections 15.2 and 15.6. fm-gate.sh takes --project. Gates 1 and 2 use the project's base, not a literal main. Gates 3 and 5 read T-043's contract from the task's pin (section 15.2), never from the branch under test or the engine working copy, and apply every field of it exactly as T-043 defines them — including the `docs` exemption, so a design- or README-only self-hosted task still passes gate 5; a missing pin or a contract hash mismatch fails the gate by name. Gate 3 runs in a scratch worktree of the project's checkout. Gates 6 and 7 query the project's github repository with gh --repo, and gate 6 requires the registry's required_check.",
+        "In this same commit T-043's top-level `project:` block moves unchanged to projects.firstmate-workflow.project and the top-level block is deleted; bin/fm-config.sh resolves every project's contract from its registry entry, and README.md's description of the block names its new place. The contract exists in exactly one place before and after this commit.",
         "For the self project the gates run the same commands with the same budget as today (section 10; FM_CI_MAX_SECONDS=600 for gate 3). The section 6 gate table states the per-project form.",
         "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
         "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
@@ -1360,7 +1365,7 @@
         "design/design.md"
       ],
       "acceptance": [
-        "Implements design.md section 15.7. Worker and reviewer prompts carry, from the engine side: the role skill, the pinned spec, the project's design file at the pin's commit bounded in size with any truncation stated in the prompt, the project's base, check and test contract, and the absolute path of the checkpoint helper in the frozen code tree.",
+        "Implements design.md section 15.7. Worker and reviewer prompts carry, from the engine side: the role skill, the pinned spec, the project's design file at the pin's commit bounded in size with any truncation stated in the prompt, the project's base and its pinned T-043 contract (every field), and the absolute path of the checkpoint helper in the frozen code tree.",
         "The worker and reviewer skills stop pointing at repository-relative files (design/design.md, design/tasks.json, bin/fm-checkpoint.sh) and refer to the design, scope and checkpoint command in the prompt; they stay portable English with no vendor-specific syntax. The firstmate skill says firstmate runs in the engine root and names --project on every script it calls.",
         "The self project's prompt has the same shape; the reviewer still receives the diff, the spec and the design and never the worker's reasoning (R2).",
         "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",

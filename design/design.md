@@ -1178,7 +1178,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-045 | design: firstmate drives other repositories from one external installation | T-043 |
 | T-046 | the project registry and the two roots | T-043, T-045 |
 | T-047 | the project on events, decisions and pull request sync | T-046 |
-| T-048 | `fm-project.sh`: managed clones, target verification and the guard | T-046 |
+| T-048 | fm-project.sh: managed clones, target verification and the guard | T-046 |
 | T-049 | spec pins: gate 4 reads a pinned scope, not the branch | T-047, T-048 |
 | T-050 | project-aware gates 1–3 and 5–7 | T-049 |
 | T-051 | the worker and the reviewer in a target checkout | T-049 |
@@ -1252,14 +1252,15 @@ projects:
     required_check: ci
     design: design/design.md
     tasks: design/tasks.json
-    # setup / check / check_env / tests / test: the contract T-043 introduces,
-    # with the values that reproduce today's gates 3 and 5
+    project:                              # T-043's contract, whole, from T-050 on
+      ...
   example-app:                            # an external target
     github: example-org/example-app
     base: main
     required_check: check
     # design and tasks default to projects/example-app/design.md and .../tasks.json
-    # setup / check / check_env / tests / test as T-043 defines them
+    project:                              # T-043's contract, whole
+      ...
 ```
 
 | Field | Meaning | Rule |
@@ -1270,10 +1271,30 @@ projects:
 | `base` | the branch tasks branch from and target | required; gates 1, 2 and the guard use it instead of a literal `main` |
 | `required_check` | the status check name branch protection requires | required; gate 6 and target verification read it |
 | `design`, `tasks` | paths **relative to the engine root** | default `projects/<name>/design.md` and `projects/<name>/tasks.json` |
-| `setup`, `check`, `check_env`, `tests`, `test` | T-043's per-project build and test contract | T-043's merged text defines their semantics; this section only moves them under a project |
+| `project` | T-043's `project:` block, every field of it | T-043's merged text and the README define the fields and their meaning; this section only moves the block under a project and never re-lists it, so a field T-043 has or later gains — `docs` included — moves with it |
 
-Until the self entry carries T-043's fields, the top-level values T-043 adds
-remain the default project's values, so no intermediate state breaks the gate.
+**Where gates 3 and 5 read the contract.** From the task's spec pin (15.5),
+which records the contract verbatim next to the spec. Nothing else: not the
+branch under test, which in a target has no `config.yaml`, and not the engine's
+working copy, which can change during a run. The pin takes the contract from
+the engine's `main` head at pin time — also for a self-hosted task whose spec
+is pinned from its own branch — because the contract a task is judged by must
+be one the captain has already merged. This replaces T-043's rule that the
+contract is read from the branch under test. T-043's gate-4 rule survives in
+its narrower form: a branch may change `config.yaml` only if its pinned scope
+names it, and such a change never alters its own gates; it applies to tasks
+pinned after it merges.
+
+**One source of truth during the transition.** The contract is written in
+exactly one place at every commit. Until T-050, that is T-043's top-level
+`project:` block: the self entry carries no copy, `bin/fm-config.sh` resolves
+the default project's contract to the top-level block, and gates 3 and 5 keep
+T-043's behaviour. T-049's pins record that resolved contract. T-050 moves the
+block, unchanged, to `projects.firstmate-workflow.project` and deletes the
+top-level one in the same commit, and switches gates 3 and 5 to the pin. A
+`config.yaml` holding both the top-level block and the self entry's is refused
+(exit `65`), so the two can never disagree.
+
 `bin/ci.sh`'s agreement check between a design's task table and its task list
 runs once for every registered `(design, tasks)` pair.
 
@@ -1333,8 +1354,10 @@ run. Both sources go.
    never from the engine's working copy.
 2. **Pinning.** On a task's first round `fm-worker.sh` writes
    `state/pins/<project>/<task>/1.json` holding the project, task, engine
-   commit, task-list path, the spec verbatim, its SHA-256, the design path and
-   the target base commit, and emits `spec_pinned`. The engine commit is the
+   commit, task-list path, the spec verbatim, its SHA-256, the design path, the
+   target base commit, and the project's T-043 contract verbatim with the
+   engine `main` commit it was read from and its SHA-256 (15.2), and emits
+   `spec_pinned`. The engine commit is the
    engine's `main` head, which must contain the task. The self project has
    one exception, because that is how a self-hosted task arrives today, this
    one included: a task not yet on `main` is pinned from its own branch's
@@ -1345,13 +1368,19 @@ run. Both sources go.
    numbered pin. With an engine commit, it re-derives the spec from
    `git show <commit>:<tasks path>`; a hash mismatch fails the gate, so an
    edited pin file is caught. Without one, the branch's own entry must match
-   the pin's hash. Later commits to the engine's `main` do not reach a pinned
+   the pin's hash; that is the only tamper check such a pin has — nothing ties
+   it to a commit, so an edit made to the pin file and the branch entry
+   together passes the gates, and the captain reading that entry in the pull
+   request's diff is the remaining check. The contract is
+   re-derived and hash-checked the same way from its own commit, which always
+   exists. Later commits to the engine's `main` do not reach a pinned
    run. Pin files are append-only and never rewritten.
 4. **Changing scope.** The worker still says so and stops. Firstmate raises a
    `choice` card. If the captain authorizes it, the new spec is committed to
    the engine repository through an ordinary engine pull request, merged on a
    merge card. Then `fm-project.sh repin --task <t> --decision D-<n>` writes
-   the next pin citing both. It refuses unless the decision record is a
+   the next pin citing both, with spec and contract read afresh from that
+   commit. It refuses unless the decision record is a
    `decision_made` for that project and task with the authorizing option, and
    the new commit is on the engine's `main` with a spec that differs. It emits
    `spec_repinned`. The decision records who authorized the change; the commit
@@ -1422,8 +1451,8 @@ The prompt carries from the engine side what the checkout cannot:
 - the role skill and the pinned spec, as today;
 - the project's design context: the design file at the pin's commit, bounded
   in size, with any truncation stated in the prompt rather than silent;
-- the project's gate facts: `base`, the `check` it will be judged by, the
-  test contract gate 5 applies;
+- the project's gate facts: `base` and the pinned T-043 contract that gates 3
+  and 5 will apply;
 - the absolute path of the checkpoint helper in the frozen code tree, because
   a target has no `bin/fm-checkpoint.sh`.
 
@@ -1448,7 +1477,7 @@ The card to raise when a private project is wanted:
   live in a separate private repository that the registry names;
 - **B** — the engine repository becomes private, which needs a plan that
   offers branch protection on private repositories;
-- **C** — public targets only, as settled here.
+- **C** — keep today's interim: public targets only.
 
 ### 15.9 Order of work
 
@@ -1460,7 +1489,8 @@ as its own default project, still drives itself with no change to any caller.
 2. T-047 `project` on events and decisions — absent means default.
 3. T-048 `fm-project.sh` clone, verify and guard — nothing dispatches yet.
 4. T-049 pins and the new gate 4 — the self project is pinned too.
-5. T-050 the other gates read the project — the self values are today's.
+5. T-050 the other gates read the project and the pinned contract; the
+   contract block moves under the self entry — its values are today's.
 6. T-051 the worker and the reviewer in a target checkout.
 7. T-052 prompts carry the engine-side design.
 8. T-053 dispatch, run and session across projects.
