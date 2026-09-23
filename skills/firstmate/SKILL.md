@@ -28,6 +28,17 @@ starts or reuses a real decision watcher. It does not authorize or dispatch work
 cancels the owned watch (`--decision <id>` targets a specific watch). A browser
 opener returning zero does not establish that the user saw the page.
 
+A session watcher or an observation file never wakes a conversational agent: it
+only writes to disk. `start` and `status` list every observed decision firstmate
+has not acknowledged (`unacknowledged` in the JSON, plus a short summary on
+standard error) and stay read-only toward decisions; they never consume, merge
+or answer one. At the start of every turn and again before ending one, run
+`bin/fm-session.sh status --repo <root>`, act on every unacknowledged observed
+decision, then record that with
+`bin/fm-session.sh ack --decision <id> --repo <root>`. Acknowledgement is
+idempotent, deletes no observation, decision file or event, and is refused for
+an id with no observation. Acknowledging is bookkeeping, not approval.
+
 1. Inspect config, task dependencies, events, pending decisions, saved reviews,
    open PR evidence, worktrees and actual live processes before launching work.
    Use `bin/fm-sync-prs.sh --repo <root>` and read-only filesystem inspection;
@@ -91,6 +102,10 @@ opener returning zero does not establish that the user saw the page.
   removes the pending file and emits no duplicate decision event. Exit zero is
   observation, not approval. Inspect chosen response and task/PR context; keep
   independent work moving while waiting.
+- After every decision request, start a notifying wait whose completion reaches
+  the conversation: run `bin/fm-decide.sh --await <id> --repo <root>` as a
+  background task that the host reports on when it finishes. Do not end a turn
+  while any card is pending without such a live wait for it.
 - Firstmate must establish current-head gates, CI and reviewer provenance before
   presenting a merge card, and coordinate renewed verification if the head changes.
   The board calls `bin/fm-merge.sh` directly for choice A on a pending merge card;
@@ -192,7 +207,8 @@ last check and close. Never describe that policy as atomic or race-free.
 watch startup; explicitly stop a previously running watch when opting out.
 The watcher is a cancellable operating-system process with durable decision
 observations under `state/session/`, not a mechanism that wakes a completed API
-conversation. Continuous mode scans pending IDs between bounded waits; it does
+conversation; only a notifying `--await` wait or the next turn's `status` check
+brings an observed decision back to firstmate. Continuous mode scans pending IDs between bounded waits; it does
 not guarantee sub-200ms observation across multiple decisions. While
 authorized work or decisions remain pending, keep the active turn monitoring
 observable progress or explicitly hand off with run/watch identities and the

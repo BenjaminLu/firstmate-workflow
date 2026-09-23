@@ -1111,3 +1111,4 @@ gates, and the dispatcher cannot dispatch itself.
 | T-036 | truthful crew progress | T-034, T-002, T-010 |
 | T-037 | fm-worker.sh must reuse an existing task branch, not re-derive its name | (none) |
 | T-039 | fm-gate.sh's gate 3 must run the full local gate at the budget design.md already authorizes | — |
+| T-041 | firstmate never loses a captain order it did not act on | T-035 |

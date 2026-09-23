@@ -10,7 +10,7 @@ fm_args=("$@")
 REPO="${FM_ROOT:-$(pwd)}"; MODE=start; DECISION=all
 while [ $# -gt 0 ]; do
   case "$1" in
-    start|status|watch|stop) MODE="$1"; shift ;;
+    start|status|watch|stop|ack) MODE="$1"; shift ;;
     --repo) fm_need "fm-session" "$@"; REPO="$2"; shift 2 ;;
     --decision) fm_need "fm-session" "$@"; DECISION="$2"; shift 2 ;;
     *) echo "fm-session: unknown argument $1" >&2; exit 64 ;;

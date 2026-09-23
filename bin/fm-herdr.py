@@ -773,6 +773,46 @@ def watch_child(root, decision, directory):
         save(result, dict(status='failed', error=str(error))); return 1
 
 
+def unacknowledged(root):
+    """Observed captain decisions firstmate has not acknowledged; reads, never consumes."""
+    base = Path(root) / 'state/session'
+    found = []
+    for path in sorted((base / 'observed').glob('*.json')):
+        if (base / 'acknowledged' / path.name).exists(): continue
+        receipt = read(path); answer = receipt.get('decision') or {}
+        found.append(dict(id=receipt.get('id', path.stem), task=answer.get('task'), kind=answer.get('kind'),
+                          chosen=answer.get('chosen'), text=answer.get('text'), ts=answer.get('ts'),
+                          observed=receipt.get('observed')))
+    return found
+
+
+def pending_summary(items):
+    if not items: return 'fm-session: no unacknowledged captain decisions'
+    lines = [f'fm-session: {len(items)} captain decision{"" if len(items) == 1 else "s"} '
+             'observed but not acknowledged; act on each, then run fm-session.sh ack --decision <id>']
+    for item in items:
+        chosen = item['chosen'] if item['text'] is None else f'{item["chosen"]} "{item["text"]}"'
+        lines.append(f'  {item["id"]} {item["task"]} {item["kind"]} chose {chosen} at {item["ts"]}')
+    return '\n'.join(lines)
+
+
+def acknowledge(root, decision):
+    """Durably record that firstmate acted on an observation; idempotent, deletes nothing."""
+    if decision == 'all' or not re.fullmatch(r'[A-Za-z0-9_-]+', decision):
+        raise ValueError('ack requires --decision <id>')
+    base = Path(root) / 'state/session'
+    observation = base / 'observed' / (decision + '.json')
+    if not observation.exists():
+        raise LookupError(f'no observation for {decision}; nothing to acknowledge')
+    receipt = base / 'acknowledged' / (decision + '.json')
+    with locked(base / '.ack.lock'):
+        if receipt.exists(): return read(receipt)
+        record = dict(id=decision, acknowledged=time.time(),
+                      observation=hashlib.sha256(observation.read_bytes()).hexdigest())
+        save(receipt, record)
+        return record
+
+
 def http_get(url):
     try:
         with urllib.request.urlopen(url, timeout=2) as response: return response.read()
@@ -841,6 +881,7 @@ def inspect(root):
         watches.append(dict(record, live=process_matches(record), result=read(result) if result.exists() else None))
     report = dict(root=str(root), runs=runs, watches=watches,
                   pending=[p.name for p in (root / 'state/pending').glob('*.json')],
+                  unacknowledged=unacknowledged(root),
                   worktrees=[p.name for p in (root / 'state/worktrees').glob('*') if p.is_dir()])
     events = root / 'state/events.jsonl'
     report['events'] = [json.loads(line) for line in events.read_text().splitlines() if line.strip()] if events.exists() else []
@@ -952,6 +993,11 @@ def main(args):
             reconcile = retire_dead_crew(root)
             report = inspect(root); report['deck_reconcile'] = reconcile
             print(json.dumps(report, indent=2))
+            print(pending_summary(report['unacknowledged']), file=sys.stderr)
+        elif action == 'ack':
+            try: print(json.dumps(acknowledge(root, decision)))
+            except LookupError as error:
+                print('fm-session: ' + str(error.args[0]), file=sys.stderr); return 1
         elif action == 'watch': print(json.dumps(watch_start(root, decision)))
         elif action == 'stop': watch_stop(root, decision)
         elif action == 'start':
@@ -961,6 +1007,7 @@ def main(args):
             report['board'] = board_start(root)
             if os.environ.get('FM_WATCH', '1') != '0': report['watch'] = watch_start(root)
             print(json.dumps(report, indent=2))
+            print(pending_summary(report['unacknowledged']), file=sys.stderr)
         else: raise ValueError('unknown session action')
         return 0
     if mode == 'emit-status':
