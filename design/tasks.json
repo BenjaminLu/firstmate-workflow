@@ -1049,6 +1049,27 @@
         "Fail-first tests in tests/worker.test.sh with the mock adapter and the existing gh stub: a round-one adapter that changes a file and writes .fm-say.md ends with an opened PR and the note posted as a comment; a round-one adapter that only writes .fm-say.md still opens no PR and keeps the note under state/unsent/. Evidence is the pull request's required GitHub check and the seven gates; this task does not require the worker to execute tests itself.",
         "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
       ]
+    },
+    {
+      "id": "T-044",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-035"
+      ],
+      "title": "a completed run's pane actually closes",
+      "scope": [
+        "bin/fm-herdr.py",
+        "tests/herdr.test.sh",
+        "design/design.md",
+        "design/tasks.json"
+      ],
+      "acceptance": [
+        "Incident (2026-09-23/24): every run that finished with status completed was retained with 'retained: pane identity or state changed'. That covered four of four today: reviewer-noah-t040-r58, reviewer-noah-t041-r56, reviewer-noah-t042-r57 and worker-mira-t042-r55. Firstmate closed each pane by hand after checking. Observed on real Herdr: after the adapter exits and the pane is back at an idle shell prompt, with the recorded shell_pid alive and no children, `herdr pane list` still reports agent_status 'working'. Pane id, terminal id, tab, workspace, label and the fm_actor/fm_task/fm_run tokens all still matched the ownership record. close_owned() in bin/fm-herdr.py refuses unless agent_status is 'idle' or 'done', so on real Herdr it can never close. This task's own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+        "close_owned() stops gating on agent_status. Idleness is decided by the existing process-info shell_only check. Every other retain condition stays exactly as it is: incomplete or blocked result, missing evidence, ownership change, pane/terminal/tab/workspace/label/token mismatch, busy or changed shell, and tab membership or layout change.",
+        "tests/herdr.test.sh: the fake Herdr must report agent_status the way real Herdr does, keeping 'working' after the agent process has exited. Name that observed behaviour in the fixture, not a value chosen to make the code pass. Fail-first cases: a completed run whose pane is an idle shell with agent_status still 'working' is closed; the same run with a busy shell is retained; a blocked result is retained; an identity mismatch is retained. Evidence is the pull request's required GitHub check and the seven gates; this task does not require the worker to execute tests itself.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
     }
   ]
 }

@@ -35,8 +35,11 @@ class Lifecycle(unittest.TestCase):
                           terminal_id='terminal', shell_pid=91, tab_id='tab-owned',
                           caller_tab='tab-caller', workspace_id='workspace')
         m.save(self.run / 'owner.json', self.owner)
+        # Observed on real Herdr (2026-09-23/24): after the adapter exits and the
+        # pane is back at an idle shell prompt, `pane list` still reports
+        # agent_status 'working'. The fixture reports what Herdr reports.
         self.pane = dict(pane_id='owned', terminal_id='terminal',
-                         label=self.run.name, agent_status='idle', tab_id='tab-owned', workspace_id='workspace',
+                         label=self.run.name, agent_status='working', tab_id='tab-owned', workspace_id='workspace',
                          tokens=dict(fm_actor=self.run.name, fm_task='T-035', fm_run=self.run.name))
         self.proc = dict(pane_id='owned', shell_pid=91, foreground_processes=[dict(pid=91)])
         self.tab = dict(tab_id='tab-owned', workspace_id='workspace', label=self.run.name, pane_count=1)
@@ -61,9 +64,29 @@ class Lifecycle(unittest.TestCase):
     def test_completed_closes_only_owned_after_evidence(self):
         self.assertEqual('closed', self.close())
         self.assertEqual(('pane', 'close', 'owned'), self.calls[-1])
+    def test_herdr_still_reporting_working_decides_nothing(self):
+        # T-044: a stale 'working' neither closes nor retains; the shell and
+        # the result do. Each retain case keeps agent_status 'working' too.
+        self.assertEqual('working', self.pane['agent_status'])
+        self.assertEqual('closed', self.close())
+        self.assertIn(('pane', 'close', 'owned'), self.calls)
+        def retained(expected):
+            self.calls.clear(); self.assertEqual(expected, self.close())
+            self.assertFalse(any(c[:2] == ('pane', 'close') for c in self.calls))
+        self.proc['foreground_processes'] = [dict(pid=91), dict(pid=4242)]
+        retained('retained: busy or shell changed')
+        self.proc['foreground_processes'] = [dict(pid=91)]
+        m.save(self.run / 'result.json', dict(actor=self.run.name, task='T-035', exit_code=0, status='blocked'))
+        retained('retained: incomplete result')
+        m.save(self.run / 'result.json', dict(actor=self.run.name, task='T-035', exit_code=0, status='completed'))
+        self.pane['tokens']['fm_actor'] = 'other'
+        retained('retained: pane identity or state changed')
+        self.pane['tokens']['fm_actor'] = self.run.name
+        self.pane['terminal_id'] = 'reused'
+        retained('retained: pane identity or state changed')
     def test_uncertain_observations_never_target_close(self):
         variants = [('pane', 'terminal_id', 'reused'), ('pane', 'pane_id', 'caller'),
-                    ('pane', 'agent_status', 'blocked'), ('pane', 'label', 'other'),
+                    ('pane', 'label', 'other'),
                     ('pane', 'tab_id', 'tab-caller'), ('tab', 'pane_count', 2),
                     ('tab', 'label', 'reused'), ('tab', 'workspace_id', 'elsewhere'),
                     ('layout', 'panes', [dict(pane_id='owned'), dict(pane_id='user')]),
@@ -241,7 +264,12 @@ elif a[:2]==['pane','rename']:
 elif a[:2]==['pane','report-metadata']:
  v=pane(a[2]); v['tokens']={a[i+1].split('=',1)[0]:a[i+1].split('=',1)[1] for i in range(len(a)-1) if a[i]=='--token'}; save(r/a[2],v)
 elif a[:2]==['pane','report-agent']:
- v=pane(a[2]); v['agent_status']=a[a.index('--state')+1]; save(r/a[2],v)
+ # Observed on real Herdr (2026-09-23/24): once a pane has been 'working',
+ # `pane list` keeps saying 'working' after the agent exits and the shell is
+ # idle again, whatever state is reported afterwards.
+ v=pane(a[2]); state=a[a.index('--state')+1]
+ if v.get('agent_status')!='working': v['agent_status']=state
+ save(r/a[2],v)
 elif a[:2]==['agent','rename']:
  assert a[3]==pane(a[2])['label']
 elif a[:2]==['pane','run']:
