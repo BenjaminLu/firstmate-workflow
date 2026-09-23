@@ -73,7 +73,10 @@ gate3() {
   w="$(mktemp -d)"
   git worktree add -q --detach "$w" "$BRANCH" >/dev/null 2>&1 || { rm -rf "$w"; return 1; }
   [ -x "$w/bin/ci.sh" ] || { git worktree remove --force "$w" >/dev/null 2>&1; rm -rf "$w"; return 1; }
-  ( cd "$w" && FM_ROOT="$w" ./bin/ci.sh >/dev/null 2>&1 ); rc=$?
+  # design.md section 10: GitHub sets FM_CI_MAX_SECONDS=600 and firstmate
+  # runs the same full local gate at that budget before publication. Left
+  # unset here, ci.sh's own bare default of 180 applies instead.
+  ( cd "$w" && FM_ROOT="$w" FM_CI_MAX_SECONDS=600 ./bin/ci.sh >/dev/null 2>&1 ); rc=$?
   git worktree remove --force "$w" >/dev/null 2>&1; rm -rf "$w"
   return "$rc"
 }

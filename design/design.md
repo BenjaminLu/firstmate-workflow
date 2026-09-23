@@ -924,3 +924,4 @@ gates, and the dispatcher cannot dispatch itself.
 | T-034 | clear localized captain decisions and reliable outcome effects | T-010, T-013, T-014 |
 | T-036 | truthful crew progress | T-034, T-002, T-010 |
 | T-037 | fm-worker.sh must reuse an existing task branch, not re-derive its name | (none) |
+| T-039 | fm-gate.sh's gate 3 must run the full local gate at the budget design.md already authorizes | — |
