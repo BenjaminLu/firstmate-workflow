@@ -287,7 +287,8 @@ test("the roster is two-line rows and a bar only for bounded progress", () => {
     expect(r).toContain('class="nm"');
     expect(r).toContain('class="st"');
     expect(r).toContain('class="jb"');
-    expect(r).not.toMatch(/\d+%</);
+    // the text a reader sees; the bounded bar's fill width is a percentage too
+    expect(r.replace(/<[^>]*>/g, "")).not.toMatch(/\d+\s*%/);
   }
   expect(rows[1]).toContain("#12");
   expect(rows[1]).toContain("T-0");
