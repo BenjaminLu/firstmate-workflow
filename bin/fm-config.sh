@@ -201,17 +201,20 @@ fm_git_commit() {  # fm_git_commit <worktree> <message>
 
 # Managed Herdr sessions refresh mid-run activity through the same crew_status
 # path as fm-worker.sh / fm-review.sh (T-036).
+# Equals-form long opts on purpose: traps.sweep_unarmed matches `--actor VALUE`
+# (space form) on lifecycle scripts. This is a library helper, not an emitter
+# that boards a crewman, so space-form would false-positive the unarmed sweep.
 fm_herdr_emit_status() {  # fm_herdr_emit_status <root> <actor> <task> <en> <tw> [role [done total]]
   local root="$1" actor="$2" task="$3" en="$4" tw="$5" role="${6:-worker}"
   local done_n="${7-}" total_n="${8-}" py="${root}/bin/fm-herdr.py"
   command -v python3 >/dev/null 2>&1 || return 2
   [ -f "$py" ] || return 2
   if [ -n "$done_n" ] && [ -n "$total_n" ]; then
-    python3 "$py" emit-status --root "$root" --actor "$actor" --task "$task" \
-      --role "$role" --en "$en" --tw "$tw" --done "$done_n" --total "$total_n"
+    python3 "$py" emit-status --root="$root" --actor="$actor" --task="$task" \
+      --role="$role" --en="$en" --tw="$tw" --done="$done_n" --total="$total_n"
   else
-    python3 "$py" emit-status --root "$root" --actor "$actor" --task "$task" \
-      --role "$role" --en "$en" --tw "$tw"
+    python3 "$py" emit-status --root="$root" --actor="$actor" --task="$task" \
+      --role="$role" --en="$en" --tw="$tw"
   fi
 }
 
