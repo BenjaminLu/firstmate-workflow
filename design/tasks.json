@@ -902,7 +902,8 @@
       "scope": [
         "bin/fm-worker.sh",
         "tests/worker.test.sh",
-        "design/tasks.json"
+        "design/tasks.json",
+        "design/design.md"
       ],
       "acceptance": [
         "This task's own entry, exactly as given here, must be committed into design/tasks.json on this task's branch (matching the existing convention used by other tasks that define themselves within their own diff), so the reviewer and fm-gate.sh can find it.",
