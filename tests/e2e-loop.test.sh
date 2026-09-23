@@ -2,6 +2,13 @@
 # The whole loop, once, with nothing real behind it: mock adapter, a bare
 # remote on disk, and a gh that remembers. Dispatch to merged pull request.
 set -uo pipefail
+# A live managed worker exports FM_RUN_DIR / FM_ENTRY_* / FM_WORKER_TASK_LOCK_FD
+# and Herdr pane ids into this shell. Suites must not inherit them or freeze,
+# identity, locks and pushes bind to the outer run instead of the fixture.
+for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
+  unset "$_fm_k" || true
+done
+export HERDR_ENV=0 FM_TRANSPORT=direct
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
@@ -10,7 +17,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # focused path never invokes git, gh, engines or a live board.
 caller="$(mktemp -d)"
 mkdir -p "$caller/bin" "$caller/state/decision-details"
-cp "$ROOT/bin/fm-run.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-decide.sh" "$ROOT/bin/fm-emit.sh" "$caller/bin/"
+cp "$ROOT/bin/fm-run.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-decide.sh" \
+   "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-herdr.py" "$caller/bin/"
 for script in fm-sync-prs fm-dispatch fm-gate; do
   printf '#!/usr/bin/env bash\nexit 0\n' > "$caller/bin/$script.sh"
   chmod +x "$caller/bin/$script.sh"
@@ -38,6 +46,7 @@ cd "$r" || exit 1
 git config user.email a@b.c; git config user.name t
 mkdir -p bin design skills/worker skills/reviewer state src tests
 cp "$ROOT"/bin/fm-*.sh bin/
+cp "$ROOT/bin/fm-herdr.py" bin/
 cp -r "$ROOT/bin/adapters" bin/
 cp "$ROOT/bin/watch-decisions.ts" bin/ 2>/dev/null || true
 cp "$ROOT/skills/worker/SKILL.md" skills/worker/

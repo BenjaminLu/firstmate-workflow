@@ -14,6 +14,12 @@
 #     than discovering that the two samples in the suite happened to be the
 #     two shapes the code already handled.
 set -uo pipefail
+# A live managed worker exports FM_RUN_DIR / FM_ENTRY_* / FM_WORKER_TASK_LOCK_FD
+# and Herdr pane ids into this shell. Suites must not inherit them or freeze,
+# identity, locks and pushes bind to the outer run instead of the fixture.
+for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
+  unset "$_fm_k" || true
+done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
@@ -25,7 +31,7 @@ fixture() {
   local d; d="$(mktemp -d)"
   mkdir -p "$d/bin" "$d/board" "$d/design" "$d/state" "$d/skills/worker" "$d/skills/reviewer"
   cp "$ROOT/bin/fm.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-decide.sh" \
-     "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-dispatch.sh" "$d/bin/"
+     "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-dispatch.sh" "$ROOT/bin/fm-herdr.py" "$d/bin/"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$d/bin/fm-worker.sh"; chmod +x "$d/bin/fm-worker.sh"
   printf 'concurrency: 3\n' > "$d/config.yaml"
   printf '# Worker\n\nYou are one crew member on one task.\n' > "$d/skills/worker/SKILL.md"

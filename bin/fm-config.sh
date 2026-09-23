@@ -17,9 +17,6 @@ _fm_clean() {   # strip an inline comment, surrounding quotes, and stray space
       -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/"
 }
 
-# Session root for scripts that accept FM_ROOT / --repo. A deleted inherited
-# cwd (suite eval'd `cd` then `rm -rf`) makes bare `$(pwd)` fail under `set -e`
-# before absolute --dir/--repo flags can recover.
 fm_default_repo() {
   if [ -n "${FM_ROOT:-}" ]; then
     printf '%s\n' "$FM_ROOT"
@@ -48,6 +45,53 @@ fm_cfg_list() { # fm_cfg_list <section> [file]
   [ -f "$f" ] || return 1
   sed -n "/^$1:/,/^[^[:space:]#-]/p" "$f" \
     | sed -n 's/^[[:space:]]*-[[:space:]]*//p' | _fm_clean
+}
+
+_fm_code_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+
+# Freeze before doing work. A nested entrypoint uses the parent's frozen code,
+# while a newly invoked session takes a new snapshot. Explicit roles win.
+# Ignore SIGHUP so a background launch from an agent shell that exits does not
+# orphan the caller-side wait for result.json / PR publish. Pane-child also
+# ignores hangup and publishes last-result / close itself.
+trap '' HUP
+fm_freeze() {
+  local script="$1"
+  if [ "${FM_ENTRY_PID:-}" != "$$" ] || [ "${FM_ENTRY_SCRIPT:-}" != "${script##*/}" ]; then
+    exec python3 "$_fm_code_dir/fm-herdr.py" launch "$_fm_code_dir/${script##*/}" "${@:2}"
+  fi
+}
+
+fm_identity() {
+  local role="$1" task="$2" alias="$3"
+  # Recursion guards belong to one adapter invocation, never a new role run.
+  unset FM_CONTEXT_READY FM_ATTEMPT_DIR FM_FINAL_PATH FM_CLI_EXIT FM_CHAIN_ATTEMPT
+  FM_RUN_DIR="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" allocate "$REPO" "$role" "$task" "$alias")" || return 70
+  NAME="${FM_RUN_DIR##*/}"
+  export FM_RUN_DIR FM_ROLE="$role" FM_TASK="$task" FM_ACTOR="$NAME" FM_ROOT="$REPO"
+  printf '%s: canonical actor %s (requested alias: %s)\n' "$role" "$NAME" "${alias:-automatic}" >&2
+  python3 - "$FM_RUN_DIR" "$$" "${FM_CODE_ROOT:-$REPO}" <<'PY'
+import json, pathlib, sys
+run, pid, code = sys.argv[1:]
+p = pathlib.Path(run)
+identity = json.loads((p / 'identity.json').read_text())
+(p / 'process.json').write_text(json.dumps(dict(identity, pid=int(pid), token=code, snapshot=code)))
+PY
+}
+
+fm_record_end() {
+  python3 - "$FM_RUN_DIR" "$1" "${FM_CODE_ROOT:-$REPO}" "${FM_CHAIN_ATTEMPT:-}" "${FM_VENDOR_USED:-}" <<'PY'
+import importlib.util, json, pathlib, sys
+spec = importlib.util.spec_from_file_location('managed', pathlib.Path(sys.argv[3]) / 'bin/fm-herdr.py')
+module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+run = pathlib.Path(sys.argv[1])
+identity = json.loads((run / 'identity.json').read_text())
+last = run / 'last-result.json'
+result = json.loads(last.read_text()) if last.exists() else {}
+if not sys.argv[4] or result.get('chain_attempt') != sys.argv[4]:
+    result = dict(status='unknown', chain_attempt=sys.argv[4], vendor=sys.argv[5])
+module.save(run / 'orchestration-result.json', dict(identity, process_exit=int(sys.argv[2]), adapter_result=result))
+PY
 }
 
 # The order vendors are tried in, and the running of that order. Both the
@@ -110,6 +154,7 @@ fm_run_chain() {
   # exact confusion the offsets exist to prevent
   FM_VENDOR_USED=''; FM_VENDOR_SKIPPED=''; FM_VENDOR_MISREAD=''; FM_VENDOR_UNKNOWN=''
   FM_RUN_OUTDIR=''; FM_RUN_LOG_OFF=0; FM_VENDOR_SPOKE=0
+  export FM_CHAIN_ATTEMPT=''
   # before anything runs. A typo at the head of the chain used to be found
   # after a real vendor had already worked, and the caller's exit 65 then
   # threw that work away.
@@ -135,6 +180,10 @@ fm_run_chain() {
       out="$tree"
     fi
     FM_RUN_OUTDIR="$out"
+    # Bind every receipt reader to this invocation, including custom fallbacks
+    # that never create managed receipts. Keep previous receipts as evidence.
+    FM_CHAIN_ATTEMPT="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')" || return 70
+    export FM_CHAIN_ATTEMPT
     "$dir/$v.sh" run "$prompt" "$out" "$log"; rc=$?
     # did this vendor say anything of its own? The callers need to tell an
     # engine that ran badly from one that was not there, and this is the
@@ -199,6 +248,32 @@ fm_git_commit() {  # fm_git_commit <worktree> <message>
   git -C "$dir" -c user.name="$n" -c user.email="$e" commit -q -m "$msg"
 }
 
+# Inside a user Herdr session, direct transport is a protocol violation —
+# firstmate must use stock managed panes, not invent FM_TRANSPORT=direct
+# or session wrappers. Tests that intentionally exercise in-process
+# adapters under a fake HERDR_ENV set FM_ALLOW_DIRECT=1.
+fm_refuse_herdr_bypass() {
+  local who="${1:-fm}"
+  if [ "${HERDR_ENV:-}" = 1 ] && [ "${FM_TRANSPORT:-herdr}" = direct ] && [ "${FM_ALLOW_DIRECT:-}" != 1 ]; then
+    echo "$who: FM_TRANSPORT=direct is refused when HERDR_ENV=1; use stock managed Herdr (unset FM_TRANSPORT)" >&2
+    return 70
+  fi
+  return 0
+}
+
+# --- what counts as a script, and what counts as a comment ---------------
+#
+# One definition, because there were four and three of them were the
+# broken one. The gate lints an option loop; tests/option-loop.test.sh
+# sweeps for a script the gate should have linted and did not. Two
+# processes, so they cannot share a variable - but they can share these,
+# and a sweep written out by hand at the call site is a sweep that drifts
+# from the one it is supposed to be checking.
+#
+# The stripper cuts at a `#` that STARTS A WORD. `sed 's/#.*$//'` also
+# cuts `${1#--}` and `"#"`, and a `shift 2` sharing a line with either
+# then disappears - out of the lint, and out of the sweep that exists to
+# notice the lint missing something, both blind the same way.
 # Managed Herdr sessions refresh mid-run activity through the same crew_status
 # path as fm-worker.sh / fm-review.sh (T-036).
 # Equals-form long opts on purpose: traps.sweep_unarmed matches `--actor VALUE`
@@ -218,19 +293,6 @@ fm_herdr_emit_status() {  # fm_herdr_emit_status <root> <actor> <task> <en> <tw>
   fi
 }
 
-# --- what counts as a script, and what counts as a comment ---------------
-#
-# One definition, because there were four and three of them were the
-# broken one. The gate lints an option loop; tests/option-loop.test.sh
-# sweeps for a script the gate should have linted and did not. Two
-# processes, so they cannot share a variable - but they can share these,
-# and a sweep written out by hand at the call site is a sweep that drifts
-# from the one it is supposed to be checking.
-#
-# The stripper cuts at a `#` that STARTS A WORD. `sed 's/#.*$//'` also
-# cuts `${1#--}` and `"#"`, and a `shift 2` sharing a line with either
-# then disappears - out of the lint, and out of the sweep that exists to
-# notice the lint missing something, both blind the same way.
 fm_strip_comments() { sed -e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]]#.*$//' "$1"; }
 
 # It descends: `bin/*.sh` misses a subdirectory, and bin/adapters has

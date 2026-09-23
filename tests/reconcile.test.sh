@@ -8,6 +8,12 @@
 # repair is green and blind: it cannot see a run that repairs a merge and then
 # redispatches the task it just declared merged.
 set -uo pipefail
+# A live managed worker exports FM_RUN_DIR / FM_ENTRY_* / FM_WORKER_TASK_LOCK_FD
+# and Herdr pane ids into this shell. Suites must not inherit them or freeze,
+# identity, locks and pushes bind to the outer run instead of the fixture.
+for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
+  unset "$_fm_k" || true
+done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
@@ -582,8 +588,10 @@ echo "  real worker preserves no-PR boundaries across repeated offline recovery"
 for terminal in CLOSED MERGED; do
   for timing in historical current new-attempt; do
     d="$(fixture)"; cleanup_stub "$d"
-    cp "$ROOT/bin/fm-worker.sh" "$ROOT/bin/fm-config.sh" \
-      "$ROOT/bin/fm-checkpoint.sh" "$ROOT/bin/fm-guard.sh" "$d/bin/"
+    cp "$ROOT/bin/fm-worker.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$d/bin/"
+    # T-036 checkpoint + guard are launch-adjacent deps when present on the tip.
+    [ -f "$ROOT/bin/fm-checkpoint.sh" ] && cp "$ROOT/bin/fm-checkpoint.sh" "$d/bin/"
+    [ -f "$ROOT/bin/fm-guard.sh" ] && cp "$ROOT/bin/fm-guard.sh" "$d/bin/"
     mkdir -p "$d/design" "$d/stub" "$d/state/worktrees/T-011"
     echo '{"tasks":[{"id":"T-011","title":"test","scope":[]}]}' > "$d/design/tasks.json"
     cat > "$d/stub/git" <<'SH'
@@ -617,12 +625,15 @@ SH
       PATH="$d/stub:$PATH" FM_ROOT="$d" FM_GH="$(none "$d")" "$d/bin/fm-reconcile.sh" > "$d/live" 2>&1
       assert_lacks "$(cat "$d/live")" 'redispatch T-011' "live real replacement is not duplicated"
       touch "$d/release"
+      # One EXIT trap → one agent_finished per failed real worker. Reconcile's
+      # own ending uses actor=reconcile and is excluded. Do not expect a
+      # double-count from a second process that freeze/exec no longer leaves.
       for _ in $(seq 1 100); do
         count="$(jq -s '[.[]|select(.type=="agent_finished" and .actor!="reconcile")]|length' "$d/state/events.jsonl")"
-        [ "$count" -ge "$((round * 2))" ] && break
+        [ "$count" -ge "$round" ] && break
         sleep 0.05
       done
-      assert_eq "$((round * 2))" "$count" "real failed worker records its ending"
+      assert_eq "$round" "$count" "real failed worker records its ending"
     done
     if [ "$timing" = new-attempt ]; then
       # A genuinely new ordinary run must still move the boundary. A stale

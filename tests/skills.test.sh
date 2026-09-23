@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Validate discoverable role metadata and local Markdown link structure.
 set -euo pipefail
+for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
+  unset "$_fm_k" || true
+done
 ROOT="${FM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 python3 - "$ROOT" <<'PY'
 import pathlib

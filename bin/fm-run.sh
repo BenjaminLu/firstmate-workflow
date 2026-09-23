@@ -24,6 +24,7 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
+fm_args=("$@")
 
 REPO="${FM_ROOT:-$(pwd)}"; MODE=''; EVERY=30
 while [ $# -gt 0 ]; do
@@ -36,7 +37,9 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$MODE" ] || { echo "usage: fm-run.sh once|watch [--repo dir] [--every n]" >&2; exit 64; }
 cd "$REPO" || { echo "fm-run: no repo at $REPO" >&2; exit 64; }
-B="$REPO/bin"
+REPO="$(pwd -P)"
+fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
+B="${FM_CODE_ROOT:-$REPO}/bin"
 say() { printf '  %s\n' "$*"; }
 
 turn() {
