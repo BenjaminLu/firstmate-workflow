@@ -51,7 +51,7 @@ cp -r "$ROOT/bin/adapters" bin/
 cp "$ROOT/bin/watch-decisions.ts" bin/ 2>/dev/null || true
 cp "$ROOT/skills/worker/SKILL.md" skills/worker/
 cp "$ROOT/skills/reviewer/SKILL.md" skills/reviewer/
-printf 'vendor: mock\nconcurrency: 2\nfallback:\n  - mock\n' > config.yaml
+printf 'vendor: mock\nconcurrency: 2\nfallback:\n  - mock\nproject:\n  check: bin/ci.sh\n' > config.yaml
 printf '#!/usr/bin/env bash\nexit 0\n' > bin/ci.sh; chmod +x bin/ci.sh
 cat > design/tasks.json <<'J'
 {"tasks":[{"id":"T-1","title":"a task the loop can finish","milestone":"M0",

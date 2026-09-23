@@ -1127,6 +1127,8 @@
         "tests/config.test.sh",
         "tests/session.test.sh",
         "tests/gate.test.sh",
+        "tests/e2e-loop.test.sh",
+        "tests/selfupdate.test.sh",
         "skills/firstmate/**",
         "README.md",
         "design/design.md",
