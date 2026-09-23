@@ -75,8 +75,39 @@ const STAGE: Record<string, string> = {
   review_failed: "gate", worker_crashed: "gate",
 };
 
+// The lanes, left to right, in lifecycle order. The page reads this list
+// rather than keeping its own, so the order has one source. Closed tasks are
+// not a lane: they stay in the collapsed history with the merged ones.
+const LANES = ["queued", "working", "gate", "review", "captain", "merged"] as const;
+
+// The header's engine badge (V7). Read at request time, so an edit to
+// config.yaml shows on the next refresh, and never hard-coded: the names are
+// whatever the file says. Only the two keys the badge needs are read - the
+// top-level vendor and the reviewer block's vendor - and a comment is never
+// a value. No file, or no top-level vendor, is no badge rather than a guess.
+const engine = (): { vendor: string; reviewer: string | null; cross: boolean } | null => {
+  const file = join(ROOT, "config.yaml");
+  if (!existsSync(file)) return null;
+  let vendor: string | null = null, reviewer: string | null = null, block = "";
+  const value = (v: string) => v.trim().replace(/^(["'])(.*)\1$/, "$2") || null;
+  for (const raw of readFileSync(file, "utf8").split("\n")) {
+    const line = raw.replace(/(^|\s)#.*$/, "");
+    const top = /^([A-Za-z_][\w-]*):(.*)$/.exec(line);
+    if (top) {
+      block = top[1];
+      if (block === "vendor") vendor = value(top[2]);
+      continue;
+    }
+    const nested = /^\s+vendor:(.*)$/.exec(line);
+    if (nested && block === "reviewer") reviewer = value(nested[1]);
+  }
+  if (!vendor) return null;
+  return { vendor, reviewer, cross: reviewer !== null && reviewer !== vendor };
+};
+
 const state = () => {
   const events = readEvents();
+  const pend = pending();
   const responseDir = join(ROOT, 'state/decisions');
   const responses = existsSync(responseDir) ? readdirSync(responseDir).filter(f => /^D-[0-9]{1,6}\.json$/.test(f)).flatMap(f => {
     try { return [JSON.parse(readFileSync(join(responseDir, f), 'utf8'))]; } catch { return []; }
@@ -93,28 +124,70 @@ const state = () => {
   // about work that is already in, and letting it move the task back reads
   // as work in progress that nobody is doing.
   const FINAL = new Set(["merged", "closed"]);
-  for (const e of events) {
+  // What a card's badges are read from: the event that last moved the task,
+  // whether a round-three question is still open, and where in the log the
+  // task was merged. Each is a fact the log holds, never a guess.
+  const moved = new Map<string, Event>();
+  const asking = new Set<string>();
+  const settledAt = new Map<string, number>();
+  for (const [index, e] of events.entries()) {
     if (!e.task) continue;
     if (typeof e.pr === "number") pr.set(e.task, e.pr);
     if (FINAL.has(stage.get(e.task) ?? "")) continue;
+    if (e.type === "ask_pass_criteria") asking.add(e.task);
+    if (e.type === "criteria_returned") asking.delete(e.task);
     const s = STAGE[e.type ?? ""];
-    if (s) stage.set(e.task, s);
+    if (s) { stage.set(e.task, s); moved.set(e.task, e); }
+    if (s === "merged") settledAt.set(e.task, index);
   }
   // A pending decision is a fact on disk, not a point in a history: while
   // the card is up, the task is the captain's whatever else has been said
   // since. T-016 read as "working" because a dispatch that should never
   // have happened landed after the card went up.
-  const awaiting = new Set(pending().map((p: Record<string, unknown>) => String(p.task ?? "")));
+  const awaiting = new Set(pend.map((p: Record<string, unknown>) => String(p.task ?? "")));
   const taskIds = [...definitions.keys()];
   for (const e of events) if (e.task && !definitions.has(e.task) && !taskIds.includes(e.task)) taskIds.push(e.task);
+  const stageOf = (id: string) => {
+    const terminal = FINAL.has(stage.get(id) ?? "");
+    return !terminal && awaiting.has(id) ? "captain" : (stage.get(id) ?? "queued");
+  };
+  // The badges a card carries. Only what an event or a pending record says:
+  // the gate that failed when the failure named it, an open ASK-PASS-CRITERIA,
+  // and a waiting decision with the number of options it actually offers.
+  type Badge = { kind: "gate"; gate: number | null } | { kind: "ask" }
+    | { kind: "decision"; id: string; options: number | null };
+  const badgesOf = (id: string, at: string): Badge[] => {
+    const out: Badge[] = [];
+    const last = moved.get(id);
+    if (at === "gate" && last?.type === "gate_failed") {
+      const n = (last.data as { gate?: unknown } | undefined)?.gate;
+      out.push({ kind: "gate", gate: Number.isInteger(n) && (n as number) >= 1 && (n as number) <= 7 ? n as number : null });
+    }
+    if (!FINAL.has(at) && asking.has(id)) out.push({ kind: "ask" });
+    for (const p of pend.filter((x: Record<string, unknown>) => String(x.task ?? "") === id)) {
+      const options = (p as { details?: { en?: { options?: unknown } } }).details?.en?.options;
+      out.push({ kind: "decision", id: String(p.id ?? ""),
+        options: options && typeof options === "object" ? Object.keys(options).length : null });
+    }
+    return out;
+  };
   const tasks = taskIds.map((id) => {
     const d = definitions.get(id) || {};
-    const terminal = FINAL.has(stage.get(id) ?? "");
+    const at = stageOf(id);
+    const depends: string[] = Array.isArray(d.depends_on) ? (d.depends_on as unknown[]).map(String) : [];
     return ({
     id, title: typeof d.title === 'string' ? d.title : null, milestone: d.milestone ?? null,
-    depends_on: d.depends_on ?? [],
-    stage: !terminal && awaiting.has(id) ? "captain" : (stage.get(id) ?? "queued"),
+    depends_on: depends,
+    stage: at,
     pr: pr.get(id) ?? null,
+    // queued behind work that is not in yet: a dependency counts as done only
+    // once it has merged, and one the log has never heard of is not done
+    blocked_on: at === "queued" ? depends.filter((dep) => stageOf(dep) !== "merged") : [],
+    badges: badgesOf(id, at),
+    // the aboard crew's names, filled in once the crew is known below
+    crew: [] as string[],
+    // where the merge sits in the log, so the lane can show the latest first
+    merged_seq: settledAt.get(id) ?? null,
   }); });
   // The crew are AGENTS, not tasks. A crewman on the deck is something
   // that is running: firstmate, each worker or reviewer currently engaged,
@@ -270,7 +343,36 @@ const state = () => {
   }
   // The permanently aboard human captain is rendered separately from agents.
 
+  // A card names who is aboard on it: the agents on the deck, not whoever
+  // once touched the task. firstmate is the coordinator, not the crew on it.
+  const aboard = crew.slice(0, DECK_LIMIT);
+  for (const t of tasks) {
+    t.crew = aboard.filter((c) => c.role !== "firstmate" && c.task === t.id).map((c) => c.crew_name || c.id);
+  }
+
+  // A refused merge stops being news once the same task or pull request is
+  // merged afterwards - by a later answer on the board or any other way. The
+  // record keeps what happened; the flag says it has been overtaken.
+  const later = (a: unknown, b: unknown) => {
+    const x = Date.parse(String(a ?? "")), y = Date.parse(String(b ?? ""));
+    // event stamps are whole seconds: one in the same second is not earlier
+    return !Number.isFinite(x) || !Number.isFinite(y) || x + 1000 > y;
+  };
+  const mergedEvents = events.filter((e) => e.type === "merged");
+  const reviewed = responses.map((d: Record<string, any>) => {
+    if (d?.merged?.ok !== false) return d;
+    const sameWork = (task: unknown, number: unknown) =>
+      (d.task != null && task != null && String(task) === String(d.task))
+      || (d.pr != null && number != null && String(number) === String(d.pr));
+    const superseded = mergedEvents.some((e) => sameWork(e.task, e.pr) && later(e.ts, d.ts))
+      || responses.some((o: Record<string, any>) => o !== d && o?.merged?.ok === true
+        && sameWork(o.task, o.pr) && later(o.ts, d.ts));
+    return { ...d, superseded };
+  });
+
   return {
+    engine: engine(),
+    lanes: LANES,
     // The deck holds this many. One number: the server truncates and
     // tells the page what the limit was, rather than both of them
     // knowing 24 - truncating only on the client also left the server
@@ -283,17 +385,21 @@ const state = () => {
       inflight: tasks.filter((t) => ["working", "review"].includes(t.stage)).length,
       blocked: tasks.filter((t) => t.stage === "gate").length,
       queued: tasks.filter((t) => t.stage === "queued").length,
+      // one per decision on the deck: the captain is what these wait on
+      waiting: pend.length,
     },
     tasks,
+    // design.md is linked from a card only when there is one to open
+    designDoc: existsSync(join(ROOT, "design/design.md")),
     // Full outcome stream: a busy refresh must not lose events outside recent.
-    responses,
+    responses: reviewed,
     handoffs,
     outcomes: [...events.filter(e => e.type === "merged" || e.type === "decision_made")
       .map(e => ({ ...e, identity: e.type === "decision_made"
         ? `decision:${(e.data as any)?.decision ?? JSON.stringify(e)}` : `merge:${e.pr ?? e.task ?? JSON.stringify(e)}` })),
       ...responses.filter(d => d.identity).map(d => ({type:'decision_made',identity:d.identity,data:{decision:d.id,chosen:d.chosen}}))],
     recent: events.slice(-40).reverse(),
-    pending: pending(),
+    pending: pend,
   };
 };
 
@@ -407,7 +513,7 @@ const server = Bun.serve({
         }
         if (!p) return json({ error: "no pending decision" }, 404);
         const decision = {
-          id, chosen, task: p?.task ?? null, kind: p?.kind ?? "choice",
+          id, chosen, task: p?.task ?? null, pr: typeof p?.pr === "number" ? p.pr : null, kind: p?.kind ?? "choice",
           ...(chosen === "custom" ? { text } : {}),
           note: typeof body?.note === "string" ? body.note.slice(0, 500) : "",
           ts: new Date().toISOString(),

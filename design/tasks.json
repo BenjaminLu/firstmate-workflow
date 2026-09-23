@@ -1070,6 +1070,44 @@
         "tests/herdr.test.sh: the fake Herdr must report agent_status the way real Herdr does, keeping 'working' after the agent process has exited. Name that observed behaviour in the fixture, not a value chosen to make the code pass. Fail-first cases: a completed run whose pane is an idle shell with agent_status still 'working' is closed; the same run with a busy shell is retained; a blocked result is retained; an identity mismatch is retained. Evidence is the pull request's required GitHub check and the seven gates; this task does not require the worker to execute tests itself.",
         "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
       ]
+    },
+    {
+      "id": "T-040",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-034",
+        "T-036"
+      ],
+      "title": "captain's board layout parity with the 2026-09-20 prototype",
+      "scope": [
+        "board/server.ts",
+        "board/public/**",
+        "i18n/ui.en.json",
+        "i18n/ui.zh-TW.json",
+        "i18n/tw2cn.tsv",
+        "tests/board.test.sh",
+        "tests/ship.spec.ts",
+        "tests/e2e/board.spec.ts",
+        "tests/e2e/fixture.ts",
+        "design/design.md",
+        "design/tasks.json"
+      ],
+      "acceptance": [
+        "Captain decision D-047 chose option B: full layout parity with design/proposals/2026-09-20-captain-board/prototype.html, without invented percentages. This task's own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+        "Header engine badge per settled decision V7: show the top-level vendor from config.yaml and, when config.yaml's reviewer vendor differs, mark it (for example 'claude ⇄ cursor-agent'). Read config.yaml at request time; never hard-code vendor names.",
+        "Counts add a 'waiting on you' figure equal to the number of pending decisions, beside merged, in flight, blocked and queued.",
+        "Progress lanes render as six columns left to right in lifecycle order: queued, work, gate, review, captain, merged. Merged is a lane; closed tasks stay in the collapsed history T-034 established. Cards show task id and title, the aboard crew name when one is assigned, the PR number, 'blocked on T-xxx' for queued tasks with unmerged dependencies, and badges derived only from real events (for example the failing gate number, ASK-PASS-CRITERIA, or a pending decision's option count). A task absent from design/tasks.json shows its id with an explicit missing-title label, never an invented title.",
+        "The merge-refused feedback (board/public/index.html render(): latest response with merged.ok === false) must clear once that decision's task or PR later records a merged event, and while shown it must name the decision id and task. A failed merge that was superseded by a successful merge of the same task must never keep displaying.",
+        "Crew roster uses the prototype's two-column rows: status dot, crew name, stage pill, PR number, task id and title, and authored activity. A progress bar appears only when the crew payload carries bounded {done,total} progress (T-036). No percentage is shown otherwise.",
+        "Decision area follows the prototype: a captain portrait panel beside the first full pending decision card; further pending decisions collapse to one-line strips that expand in place. Preserve T-034's two-stage select-then-confirm, the custom response, the authored diagram embed, and links to the local file, PR and design.md where the data exists.",
+        "Ship and deck follow the prototype: a two-mast ship, crew name tags above heads (no percentages), a roster toggle and the AHOY demonstration, and drag/rotate/double-click-reset deck interaction. Keep T-034's invariants: exactly one captain always aboard, the helm at the left firstmate anchor, bow left and stern right, reduced-motion and mute behaviour.",
+        "The live log moves to a full-width panel at the bottom as in the prototype.",
+        "The prototype's crew percentages (100% / 91% / 73%) and its random pct tick are demo-only and must not ship anywhere (T-036). Dynamic summaries stay en plus zh-TW with zh-CN derived through i18n/tw2cn.tsv; extend that table for any new interface text so zh-CN renders fully simplified.",
+        "Layout holds at 320, 390, 768 and 1280 px widths and 200 percent text in all three locales without page overflow, per T-034.",
+        "Add fail-first tests: tests/board.test.sh for the API (engine badge data from config.yaml, waiting-on-you count, merge-refused clearing after a later merged event, lane order and dependency blocking), and browser tests for the six-lane order, header badge, banner clearing, and no progress bar without bounded progress. Evidence is the pull request's required GitHub check and the seven gates.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason instead of editing it."
+      ]
     }
   ]
 }

@@ -75,5 +75,20 @@
   "orderFailed": "Order not acknowledged. Check the connection and decision state before retrying.",
   "eventFailed": "Decision saved, but its event could not be logged.",
   "capReady": "Cutlass half drawn — confirm your choice",
-  "capOrder": "Orders away"
+  "capOrder": "Orders away",
+  "engine": "engine",
+  "crossVendor": "cross-vendor review",
+  "waitingOnYou": "waiting on you",
+  "blockedOn": "blocked on",
+  "titleMissing": "Title missing from design/tasks.json",
+  "mergedMore": "{n} more in completed history",
+  "gateFailed": "gate failed",
+  "gateFailedN": "gate {n} failed",
+  "optionsN": "{n} options",
+  "rosterBtn": "Roster",
+  "ahoyDemo": "Demonstrate the salute (no event is recorded)",
+  "orderDemo": "Demonstrate an order acknowledgement (no event is recorded)",
+  "dragHint": "drag a figure to turn it · drag the deck to turn the whole crew · double-click resets",
+  "alsoWaiting": "Also waiting (expand in place)",
+  "viewDesign": "design.md"
 }

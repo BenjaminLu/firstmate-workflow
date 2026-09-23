@@ -584,15 +584,50 @@ another.
 
 Bun, native SSE, vanilla HTML, **no build step**.
 
+Captain decision D-047 (T-040) chose full layout parity with
+`design/proposals/2026-09-20-captain-board/prototype.html`, without invented
+percentages. The regions below are that layout.
+
 | Region | What it holds |
 |---|---|
-| Sea header | merged / in flight / awaiting you / blocked, and the engine chip — marked when the reviewer runs a different vendor |
-| The ship | a pirate vessel whose size tracks the crew, one mast to six |
-| Deck | crew stand on the ship, poses driven by state, handoffs fly between them |
-| Decision deck | pending records first, with full localized options, diagrams and explicit confirmation |
-| Crew roster | opens when the deck is too crowded for the bubbles to carry the work |
-| Lanes | captain / gate / review / working / queued; merged and closed tasks in a separate initially collapsed history |
-| Live log | tri-lingual summaries from `events.jsonl` |
+| Header | brand, the engine badge, green-light state and the language switch |
+| Sea header | merged / in flight / waiting on you / blocked / queued; waiting on you is the number of pending decisions |
+| Decision deck | pending records first: the captain's portrait beside the first full card, further decisions as one-line strips that expand in place |
+| The ship | a two-mast pirate vessel (three on the tallest rates) whose beam and decks track the crew |
+| Deck | crew stand on the ship with name tags over their heads, poses driven by state, handoffs fly between them |
+| Crew roster | two-column rows, shown by default and toggled from the ship's bar |
+| Lanes | six columns left to right: queued, work, gate, review, captain, merged; closed tasks, and every merged task, in the separate initially collapsed history |
+| Live log | a full-width panel at the bottom; tri-lingual summaries from `events.jsonl` |
+
+**Engine badge (V7).** The server reads `config.yaml` on every state request —
+the top-level `vendor`, and `reviewer.vendor` when that block exists — and the
+header shows the top-level vendor, marked `vendor ⇄ reviewer-vendor` when they
+differ. Names are never hard-coded; no file or no top-level vendor is no badge.
+
+**Lanes and cards.** The lane order is sent by the server (`lanes`) so the page
+keeps no second copy. A card shows the task id and title, the aboard crew's
+names, the pull request, `blocked on T-xxx` for a queued task whose
+dependencies have not merged, and badges read only from events and pending
+records: the failed gate's number when the `gate_failed` event carries
+`data.gate`, an `ask_pass_criteria` not yet answered by `criteria_returned`,
+and a pending decision with the number of options it actually lists. A task
+absent from `design/tasks.json` shows its id and an explicit missing-title
+label. The merged lane shows the latest few merges, newest first, and counts
+the rest into the history.
+
+**Refused merges.** The feedback for a refused merge names the decision and
+the task. The server flags a refusal as `superseded` once a `merged` event for
+the same task or pull request — or a later successful merge response — is
+recorded afterwards, and the page stops showing it; a reload cannot bring it
+back.
+
+**Roster and tags.** Roster rows carry a status dot, the crew name, a stage
+pill and the pull request, over the task id and title and the authored
+activity. A bar appears only for bounded `{done,total}` progress; no
+percentage is shown anywhere. The prototype's crew percentages and its random
+progress tick were demonstration only and do not ship. The ship's bar carries
+the roster toggle and the AHOY and order demonstrations, which play the
+effect locally and record nothing.
 
 ### The ship
 
@@ -657,8 +692,9 @@ while the shoe stays nailed to the deck and all you see is a bobbing body.
 
 **Each crewman carries a bubble above his head**: identity and task, with full
 localized work and lifecycle phase in the accessible figure label and readable
-roster. Percentages are displayed only for explicit bounded progress data,
-with the border colour carrying state. A landing handoff pulses the recipient's
+roster. The tag carries no progress and no percentage; the roster draws a
+bar only for explicit bounded progress data, with the border colour carrying
+state. A landing handoff pulses the recipient's
 bubble. Deck spacing must exceed body height plus bubble height or a bubble
 covers the crew on the deck above.
 
@@ -666,7 +702,10 @@ covers the crew on the deck above.
 
 The human captain is always visible on the ship's top deck, including startup
 with zero pending decisions and after the final acknowledgement. There is one
-captain and no separate decision-side stage. He is excluded from agent counts.
+captain aboard. While a decision is pending, the decision deck also shows his
+portrait beside the first card (D-047); it is a picture of the same captain in
+the same pose, not a second figure aboard, and it disappears with the last
+card. He is excluded from agent counts.
 The shared deck coordinate system anchors his feet; firstmate and the helm
 remain at the original left/bow anchor, with the stern on the right. Three
 poses remain: sheathed without a choice, half drawn on local selection, raised
@@ -1114,3 +1153,4 @@ gates, and the dispatcher cannot dispatch itself.
 | T-041 | firstmate never loses a captain order it did not act on | T-035 |
 | T-042 | a worker that changed files still opens its PR when it also leaves a note | T-005, T-031 |
 | T-044 | a completed run's pane actually closes | T-035 |
+| T-040 | captain's board layout parity with the 2026-09-20 prototype | T-034, T-036 |

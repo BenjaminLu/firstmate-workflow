@@ -230,11 +230,71 @@ test("the whole sail clears the tallest crewman's head", () => {
     const px = (k: string) => parseFloat(h.props[k]);
     const rate = SHIP.rateFor(SHIP.crewOf(state(n), T).length);
     const topDeck = px("--deckY0") + (rate.rows - 1) * px("--rowStep");
-    const sail = /class="sail[^"]*" style="top:(\d+)px;height:(\d+)px/.exec(h.innerHTML)!;
-    const mastH = parseInt(/class="mast"[^>]*height:(\d+)px/.exec(h.innerHTML)![1], 10);
-    const sailBottom = topDeck + mastH - (parseInt(sail[1], 10) + parseInt(sail[2], 10));
-    expect(sailBottom).toBeGreaterThan(topDeck + px("--figH"));
+    // every sail on every mast: a topsail clearing the heads says nothing
+    // about the course hung below it
+    const masts = [...h.innerHTML.matchAll(/<div class="mast"[^>]*height:(\d+)px">([\s\S]*?)<\/div>/g)];
+    expect(masts.length).toBeGreaterThanOrEqual(2);
+    for (const [, height, rig] of masts) {
+      const sails = [...rig.matchAll(/class="sail[^"]*" style="top:(\d+)px;height:(\d+)px/g)];
+      expect(sails.length).toBe(2);
+      for (const s of sails) {
+        const sailBottom = topDeck + parseInt(height, 10) - (parseInt(s[1], 10) + parseInt(s[2], 10));
+        expect(sailBottom).toBeGreaterThan(topDeck + px("--figH"));
+      }
+    }
   }
+});
+
+test("a two-mast ship, name tags without percentages, and demonstrations that record nothing", () => {
+  const h = host();
+  const s = state(3);
+  (s.crew[1] as any).progress = { done: 3, total: 7 };
+  SHIP.render(h as any, s, T);
+  expect(h.innerHTML.split('class="mast"').length - 1).toBe(2);
+  // the smallest ship is a two-master too, not a single stick
+  const small = host();
+  SHIP.render(small as any, state(1), T);
+  expect(small.innerHTML.split('class="mast"').length - 1).toBe(2);
+  // the tag over a head carries no bar and no number, bounded or not
+  const tags = [...h.innerHTML.matchAll(/<div class="bub[^"]*"[\s\S]*?<\/div><\/div>/g)].map((m) => m[0]);
+  expect(tags.length).toBeGreaterThan(0);
+  for (const tag of tags) {
+    expect(tag).not.toContain('class="pb"');
+    // the text a reader sees; the position style is a percentage too
+    expect(tag.replace(/<[^>]*>/g, "")).not.toMatch(/\d+\s*%/);
+  }
+  // the roster toggle and both demonstrations are on the ship's bar
+  for (const id of ["rosterBtn", "ahoyDemo", "orderDemo", "muteBtn"]) expect(h.innerHTML).toContain(`id="${id}"`);
+  // and the demonstrations go through the effect queue, not the network
+  const src = readFileSync(join(ROOT, "board/public/ship.js"), "utf8");
+  const demo = src.slice(src.indexOf('querySelector("#ahoyDemo")'), src.indexOf('querySelector("#orderDemo")') + 120);
+  expect(demo).toContain("enqueue(");
+  expect(demo).not.toMatch(/fetch\(|XMLHttpRequest|sendBeacon/);
+});
+
+test("the roster is two-line rows and a bar only for bounded progress", () => {
+  const s = state(2);
+  (s.crew[1] as any).progress = { done: 1, total: 4 };
+  (s.crew[2] as any).progress = 67;   // a bare number is not progress
+  s.tasks[0] = { ...s.tasks[0], pr: 12 } as any;
+  const crew = SHIP.crewOf(s, T);
+  const h = { innerHTML: "", ownerDocument: null } as any;
+  SHIP.roster(h, crew, T);
+  const rows = [...h.innerHTML.matchAll(/<li class="rrow [^"]*"[\s\S]*?<\/li>/g)].map((m) => m[0]);
+  expect(rows.length).toBe(3);
+  for (const r of rows) {
+    expect(r).toContain('class="l1"');
+    expect(r).toContain('class="nm"');
+    expect(r).toContain('class="st"');
+    expect(r).toContain('class="jb"');
+    // the text a reader sees; the bounded bar's fill width is a percentage too
+    expect(r.replace(/<[^>]*>/g, "")).not.toMatch(/\d+\s*%/);
+  }
+  expect(rows[1]).toContain("#12");
+  expect(rows[1]).toContain("T-0");
+  expect(rows[1]).toContain('class="pb"');
+  expect(rows[1]).toContain('aria-valuemax="4"');
+  expect(rows[2]).not.toContain('class="pb"');
 });
 
 test("one gun list drives the ports, the flashes and the broadside", () => {
