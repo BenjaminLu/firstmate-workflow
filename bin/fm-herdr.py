@@ -980,8 +980,149 @@ def emit_status(root, actor, task, en, tw, role='worker', crew_name=None,
     return 0
 
 
+# --- the project contract --------------------------------------------------
+# config.yaml's `project:` block is how a target project tells firstmate how to
+# prepare a checkout and what green means. Values are opaque shell command
+# strings: read and returned exactly, never evaluated here. Nothing in bin/
+# may know which toolchain a project uses; it only runs what is declared.
+PROJECT_KEYS = ('setup', 'check', 'check_env', 'tests', 'test')
+
+
+def _project_scalar(text, where):
+    """One YAML scalar: plain, "double" or 'single' quoted. Returns the value."""
+    text = text.strip()
+    if text[:1] in ('|', '>'):
+        raise ValueError(where + ': block scalars are not supported; write the command on one line')
+    if text[:1] == '"':
+        out, i = [], 1
+        while i < len(text):
+            if text[i] == '\\' and i + 1 < len(text):
+                out.append({'n': '\n', 't': '\t'}.get(text[i + 1], text[i + 1])); i += 2; continue
+            if text[i] == '"': break
+            out.append(text[i]); i += 1
+        else: raise ValueError(where + ': unterminated double quote')
+        rest = text[i + 1:].strip()
+    elif text[:1] == "'":
+        out, i = [], 1
+        while i < len(text):
+            if text[i] == "'":
+                if text[i + 1:i + 2] == "'": out.append("'"); i += 2; continue
+                break
+            out.append(text[i]); i += 1
+        else: raise ValueError(where + ': unterminated single quote')
+        rest = text[i + 1:].strip()
+    else:
+        # a plain scalar ends at a comment, which YAML starts with " #"
+        found = re.search(r'\s#', text)
+        return (text[:found.start()] if found else text).rstrip()
+    if rest and not rest.startswith('#'):
+        raise ValueError(where + ': unexpected text after the closing quote: ' + rest)
+    return ''.join(out)
+
+
+def project_contract(config):
+    """The declared project block as {key: value}; absent keys are absent."""
+    path = Path(config)
+    if not path.is_file(): return {}
+    block, inside = [], False
+    for raw in path.read_text().splitlines():
+        if not inside:
+            inside = bool(re.match(r'project:\s*(#.*)?$', raw))
+            continue
+        if not raw.strip() or raw.lstrip().startswith('#'): continue
+        if not raw[:1].isspace(): break
+        block.append(raw.expandtabs(8))
+    indent = lambda line: len(line) - len(line.lstrip(' '))
+    contract, i = {}, 0
+    while i < len(block):
+        line = block[i]; level = indent(line)
+        found = re.match(r'\s*([A-Za-z_][A-Za-z0-9_]*):(?:\s+(.*))?$', line)
+        if not found: raise ValueError('config.yaml project: cannot read line: ' + line.strip())
+        key, value = found.group(1), (found.group(2) or '').strip()
+        if key not in PROJECT_KEYS:
+            raise ValueError('config.yaml project: unknown key ' + key + ' (known: ' + ', '.join(PROJECT_KEYS) + ')')
+        children = []
+        i += 1
+        # YAML lets a list sit at its key's own indent
+        while i < len(block) and (indent(block[i]) > level or block[i].lstrip().startswith('- ')):
+            children.append(block[i]); i += 1
+        where = 'config.yaml project.' + key
+        if key in ('setup', 'check', 'test'):
+            if children or not value or value.startswith('#'):
+                if children: raise ValueError(where + ' must be a one-line command')
+                continue
+            contract[key] = _project_scalar(value, where)
+        elif key == 'tests':
+            if value and not value.startswith('#'): raise ValueError(where + ' must be a list of globs')
+            items = []
+            for child in children:
+                item = re.match(r'\s*-\s+(.*)$', child)
+                if not item: raise ValueError(where + ' must be a list of globs')
+                items.append(_project_scalar(item.group(1), where))
+            if items: contract[key] = items
+        else:
+            if value and not value.startswith('#'): raise ValueError(where + ' must be a map of variables')
+            env = {}
+            for child in children:
+                item = re.match(r'\s*([A-Za-z_][A-Za-z0-9_]*):(?:\s+(.*))?$', child)
+                if not item: raise ValueError(where + ' must map variable names to values: ' + child.strip())
+                env[item.group(1)] = _project_scalar(item.group(2) or '', where + '.' + item.group(1))
+            if env: contract[key] = env
+    for key in ('setup', 'check', 'test'):
+        if contract.get(key) == '': del contract[key]
+    if 'test' in contract and '{file}' not in contract['test']:
+        raise ValueError('config.yaml project.test must contain {file}')
+    return contract
+
+
+def project_report(root, run_setup=False):
+    """What start and status say about the project. Only start runs setup."""
+    root = Path(root).resolve()
+    report = dict(declared=[], setup=None, ready=False)
+    try: contract = project_contract(root / 'config.yaml')
+    except ValueError as error:
+        report['error'] = str(error); return report
+    report['declared'] = [key for key in PROJECT_KEYS if key in contract]
+    if run_setup and 'setup' in contract:
+        base = root / 'state/session'; base.mkdir(parents=True, exist_ok=True)
+        log = base / 'project-setup.log'
+        with log.open('w') as out:
+            code = subprocess.call(['bash', '-c', contract['setup']], cwd=root,
+                                   stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
+        report['setup'] = dict(exit=code, log=str(log))
+        if code != 0:
+            tail = [line for line in log.read_text(errors='replace').splitlines() if line.strip()][-3:]
+            report['setup']['error'] = ('setup failed (exit %d)' % code
+                                        + (': ' + ' | '.join(tail) if tail else ''))[:300]
+    if 'check' not in contract:
+        report['error'] = 'config.yaml declares no project.check'
+    report['ready'] = 'check' in contract and (report['setup'] is None or report['setup']['exit'] == 0)
+    return report
+
+
+def project_field(config, field):
+    """Print one declared value for bin/fm-config.sh, exactly as declared."""
+    contract = project_contract(config)
+    if field == 'keys':
+        for key in PROJECT_KEYS:
+            if key in contract: print(key)
+    elif field == 'tests':
+        for glob in contract.get('tests', []): print(glob)
+    elif field == 'check_env':
+        for name, value in contract.get('check_env', {}).items():
+            sys.stdout.write(name + '=' + value + '\0')
+    elif field in ('setup', 'check', 'test'):
+        if field in contract: print(contract[field])
+    else: raise ValueError('unknown project field ' + field)
+    return 0
+
+
 def main(args):
     mode, *args = args
+    if mode == 'project':
+        try: return project_field(*args)
+        except ValueError as error:
+            print('fm-config: ' + str(error), file=sys.stderr); return 65
     if mode == 'allocate': print(allocate(Path(args[0]), *args[1:])); return 0
     if mode == 'launch': launch(args[0], args[1], args[2:])
     if mode == 'transport': return transport(*args)
@@ -995,6 +1136,7 @@ def main(args):
         if action == 'status':
             reconcile = retire_dead_crew(root)
             report = inspect(root); report['deck_reconcile'] = reconcile
+            report['project'] = project_report(root)
             print(json.dumps(report, indent=2))
             print(pending_summary(report['unacknowledged']), file=sys.stderr)
         elif action == 'ack':
@@ -1007,6 +1149,9 @@ def main(args):
             # Close ghost actors before the board is shown or work is planned.
             reconcile = retire_dead_crew(root)
             report = inspect(root); report['deck_reconcile'] = reconcile
+            # Before the board: a fresh checkout is prepared once, as the
+            # project declares. A failure is reported, never fatal.
+            report['project'] = project_report(root, run_setup=True)
             report['board'] = board_start(root)
             if os.environ.get('FM_WATCH', '1') != '0': report['watch'] = watch_start(root)
             print(json.dumps(report, indent=2))

@@ -1108,6 +1108,40 @@
         "Add fail-first tests: tests/board.test.sh for the API (engine badge data from config.yaml, waiting-on-you count, merge-refused clearing after a later merged event, lane order and dependency blocking), and browser tests for the six-lane order, header badge, banner clearing, and no progress bar without bounded progress. Evidence is the pull request's required GitHub check and the seven gates.",
         "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason instead of editing it."
       ]
+    },
+    {
+      "id": "T-043",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-041",
+        "T-039"
+      ],
+      "title": "the project declares its setup and checks; the gates stop hard-coding this repo's toolchain",
+      "scope": [
+        "config.yaml",
+        "bin/fm-config.sh",
+        "bin/fm-session.sh",
+        "bin/fm-herdr.py",
+        "bin/fm-gate.sh",
+        "tests/config.test.sh",
+        "tests/session.test.sh",
+        "tests/gate.test.sh",
+        "skills/firstmate/**",
+        "README.md",
+        "design/design.md",
+        "design/tasks.json"
+      ],
+      "acceptance": [
+        "firstmate-workflow is meant to orchestrate work on other repositories too, so nothing in bin/ may assume this repository's own toolchain. Today fm-gate.sh gate 3 requires ./bin/ci.sh and passes FM_CI_MAX_SECONDS, which only this repo's ci.sh understands. Gate 5 classifies tests by fixed globs and runs only *.test.sh with bash. And every fresh worktree lacks this repo's gitignored node_modules, so its ci.sh silently skips e2e. The captain chose to make everything project-specific declared rather than coded. This task's own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+        "config.yaml gains a `project:` block that the target project fills in: `setup` (optional shell command preparing a fresh checkout, e.g. installing dependencies); `check` (required shell command whose exit status means green); `check_env` (optional map of environment variables for `check`); `tests` (optional list of globs classifying test files); `test` (optional command template containing `{file}` that runs one test file). bin/fm-config.sh exposes these values without evaluating them at read time. Values are opaque shell command strings; nothing in bin/ names bun, playwright, chromium, ci.sh or FM_CI_MAX_SECONDS.",
+        "fm-gate.sh: gate 3 runs `setup` (when declared) and then `check` with `check_env` in its detached worktree. If `check` is undeclared, gate 3 fails with a message saying config.yaml declares no project.check. If `setup` fails, gate 3 fails and names the failure; it never passes with a stage silently skipped because setup did not run. Gate 5 classifies test files using `tests` (defaulting to the current globs only when undeclared) and runs `setup` first. With the implementation reverted, it runs each changed test through `test` when declared, otherwise the whole `check`, and requires red.",
+        "`bin/fm-session.sh start` runs `setup` once for the repository checkout when declared and reports a `project` block in its JSON: which keys are declared, and the setup's observed exit status and a short error when it fails. A failed setup is reported as not ready and never aborts the rest of startup. `status` reports the declared contract read-only and never runs setup. With no setup declared, nothing is run.",
+        "This repository declares its own values in config.yaml: setup `bun install --frozen-lockfile && bunx playwright install chromium`, check `bin/ci.sh`, check_env FM_CI_MAX_SECONDS=600, and its current test globs and runner. Its local gate 3 therefore actually runs the end-to-end stage. README.md documents the `project:` block with at least two non-JavaScript examples (for instance a Go and a Python project) and a project with no setup.",
+        "skills/firstmate/SKILL.md: startup reports the project contract, and any fresh verification worktree runs the declared `setup` before `check`. A check whose output says a stage was skipped is not evidence that the stage passed.",
+        "Fail-first tests with no network, using fixture repos with their own config.yaml: gate 3 runs the declared check and setup (and fails loudly on setup failure or missing check); gate 5 honours `tests` globs and the `test` template on a fixture that is not a bash project; session start runs setup once and reports a failure without aborting; status never runs setup; config parsing keeps quotes, `&&` and `{file}` intact. Evidence is the pull request's required GitHub check and the seven gates; this task does not require the worker to execute tests itself.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
     }
   ]
 }

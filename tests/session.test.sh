@@ -269,6 +269,57 @@ class Session(unittest.TestCase):
         self.assertEqual([], json.loads(after.stdout)['unacknowledged'])
         self.assertIn('no unacknowledged captain decisions', after.stderr)
         self.assertEqual(before, self.decision_files())
+    def start_with(self, config):
+        """T-043: session start against a fixture that declares its own project contract."""
+        import io, contextlib
+        (self.repo / 'config.yaml').write_text(config)
+        out = io.StringIO()
+        with patch.object(m, 'board_start', return_value=dict(stub=True)) as board, \
+             patch.dict(os.environ, {'FM_WATCH': '0'}), \
+             contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            rc = m.main(['session', 'start', str(self.repo)])
+        return rc, json.loads(out.getvalue()), board
+    def test_start_runs_declared_setup_once_and_reports_it(self):
+        rc, report, board = self.start_with(
+            'vendor: mock\nproject:\n  setup: echo ran >> setup-count && echo "it\'s done"\n  check: make test\n')
+        self.assertEqual(0, rc)
+        self.assertEqual('ran\n', (self.repo / 'setup-count').read_text(), 'setup runs exactly once, in the checkout')
+        project = report['project']
+        self.assertEqual(['setup', 'check'], project['declared'])
+        self.assertEqual(0, project['setup']['exit'])
+        self.assertTrue(project['ready'])
+        self.assertTrue(board.called)
+    def test_failed_setup_is_not_ready_and_never_aborts_startup(self):
+        rc, report, board = self.start_with(
+            'project:\n  setup: echo "lockfile is out of date" >&2; exit 4\n  check: make test\n')
+        self.assertEqual(0, rc, 'a failed setup is reported, not fatal')
+        self.assertTrue(board.called, 'the rest of startup still runs')
+        self.assertEqual(dict(stub=True), report['board'])
+        project = report['project']
+        self.assertEqual(4, project['setup']['exit'])
+        self.assertIn('lockfile is out of date', project['setup']['error'])
+        self.assertFalse(project['ready'])
+    def test_start_without_setup_runs_nothing(self):
+        rc, report, _ = self.start_with('project:\n  check: make test\n')
+        self.assertEqual(0, rc)
+        self.assertEqual(['check'], report['project']['declared'])
+        self.assertIsNone(report['project']['setup'])
+        self.assertTrue(report['project']['ready'])
+        self.assertFalse((self.repo / 'state/session/project-setup.log').exists())
+    def test_start_without_check_is_not_ready(self):
+        rc, report, _ = self.start_with('vendor: mock\n')
+        self.assertEqual(0, rc)
+        self.assertEqual([], report['project']['declared'])
+        self.assertFalse(report['project']['ready'])
+        self.assertIn('declares no project.check', report['project']['error'])
+    def test_status_reports_contract_and_never_runs_setup(self):
+        (self.repo / 'config.yaml').write_text('project:\n  setup: touch setup-ran\n  check: make test\n  tests:\n    - "*_test.go"\n')
+        status = self.session_cli('status')
+        self.assertEqual(0, status.returncode, status.stderr)
+        project = json.loads(status.stdout)['project']
+        self.assertEqual(['setup', 'check', 'tests'], project['declared'])
+        self.assertIsNone(project['setup'], 'status reports; it does not run')
+        self.assertFalse((self.repo / 'setup-ran').exists(), 'status never runs setup')
     def test_emit_status_is_board_path_not_pane_heartbeat(self):
         """T-036: pane text is board activity only after emit-status."""
         d = Path(tempfile.mkdtemp()); self.addCleanup(lambda: shutil.rmtree(d, ignore_errors=True))

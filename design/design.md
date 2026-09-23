@@ -535,9 +535,9 @@ from events, so reconcile these with current PRs and live processes before launc
 |---|---|---|
 | 1 | branch exists and has commits | `git rev-list --count main..<branch>` > 0 |
 | 2 | rebase onto main is clean | attempt it in a scratch worktree; non-zero fails |
-| 3 | `bin/ci.sh` exits 0 | the same script GitHub Actions runs |
+| 3 | the declared `project.check` exits 0 | `config.yaml`'s `setup`, then `check` with `check_env`, in a fresh worktree |
 | 4 | the diff stays in scope | `git diff --name-only` within the task's `scope` globs |
-| 5 | **the new tests are not vacuous** | revert the implementation hunks; the new tests must go red |
+| 5 | **the new tests are not vacuous** | classify by `project.tests`, revert the implementation, run `setup`, then each test through `project.test` (else `check`); it must go red |
 | 6 | the required GitHub check is green | `gh pr checks <pr> --required` |
 | 7 | a PR comment contains `APPROVE:<task-id>` | author filtered only if `FM_REVIEWER_LOGIN` is set |
 
@@ -548,6 +548,14 @@ Gate 7 neither binds approval to a head nor distinguishes final, quoted or stale
 markers; a later rejection does not invalidate an earlier matching comment.
 Firstmate must verify provenance and current readiness explicitly. Any red gate
 requires remediation regardless of praise or an `approved` event.
+
+Gates 3 and 5 name no toolchain. The target repository declares its own in
+`config.yaml`'s `project:` block (`setup`, `check`, `check_env`, `tests`,
+`test`; see the README), and the gates run exactly that, read from the branch
+under test; gate 4 decides whether a branch may change `config.yaml` at all.
+An undeclared `check` or a failed `setup` fails the gate by name; a stage the
+check skipped is not a stage that passed. `bin/fm-session.sh start` runs
+`setup` once in the checkout and reports the contract; `status` only reports it.
 
 ---
 
@@ -830,7 +838,10 @@ a process timeout; selecting a larger budget does not waive functional failures.
 GitHub sets `FM_CI_MAX_SECONDS=600`; its separate `timeout-minutes: 10` covers
 the entire job, including setup, so the script may have less than 600 seconds
 before GitHub cancels it. For T-017, Firstmate runs the same full local gate
-with `FM_CI_MAX_SECONDS=600 bash bin/ci.sh` before publication. A functional
+with `FM_CI_MAX_SECONDS=600 bash bin/ci.sh` before publication. Since T-043
+that budget is this repository's declared `project.check_env`, and gate 3 runs
+the declared `setup` first, so a fresh worktree has the dependencies and
+browser the end-to-end stage needs instead of skipping it. A functional
 pass at 208 seconds is within that authorized budget, but exceeds the default.
 
 ```
@@ -1154,3 +1165,4 @@ gates, and the dispatcher cannot dispatch itself.
 | T-042 | a worker that changed files still opens its PR when it also leaves a note | T-005, T-031 |
 | T-044 | a completed run's pane actually closes | T-035 |
 | T-040 | captain's board layout parity with the 2026-09-20 prototype | T-034, T-036 |
+| T-043 | the project declares its setup and checks; the gates stop hard-coding this repo's toolchain | T-041, T-039 |

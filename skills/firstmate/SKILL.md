@@ -39,6 +39,17 @@ decision, then record that with
 idempotent, deletes no observation, decision file or event, and is refused for
 an id with no observation. Acknowledging is bookkeeping, not approval.
 
+The project contract is `config.yaml`'s `project:` block: `setup`, `check`,
+`check_env`, `tests` and `test` (see the README). `start` runs the declared
+`setup` once in the checkout and reports a `project` block with the declared
+keys, setup's exit status and error, and `ready`; `status` reports the same
+declaration without running anything. Report the contract at startup, including
+a missing `check` or a failed setup, which is not ready rather than a reason to
+stop startup. Any fresh verification worktree — gate 3, gate 5, or any check
+you coordinate outside the gates — runs the declared `setup` before `check`. A
+check whose output says a stage was skipped is not evidence that the stage
+passed: a skipped stage is an unverified stage, whatever the exit status.
+
 1. Inspect config, task dependencies, events, pending decisions, saved reviews,
    open PR evidence, worktrees and actual live processes before launching work.
    Use `bin/fm-sync-prs.sh --repo <root>` and read-only filesystem inspection;
@@ -88,7 +99,9 @@ an id with no observation. Acknowledging is bookkeeping, not approval.
   `watch` repeats it. It reports failed gates but does not restart failed workers.
   Explicitly coordinate remediation with the assigned worker, inspect its final
   results, then rerun the relevant checks. Avoid competing loop owners.
-- `bin/fm-gate.sh` checks seven gates; `bin/ci.sh` is the shared local/CI check.
+- `bin/fm-gate.sh` checks seven gates; gate 3 runs the project's declared
+  `setup` and `check`, which for this repository is `bin/ci.sh`, the shared
+  local/CI check.
   `bin/fm-review.sh` runs review; `bin/fm-protocol.sh` checks the closed-list
   protocol. Read their current usage before invocation. Supply the reviewer with
   diff, spec, acceptance, authoritative relevant design and any original closed
