@@ -216,15 +216,39 @@ task_spec() {   # task_spec <task> [branch]
   printf '%s' "$j" | jq -r --arg t "$t" '.tasks[]|select(.id==$t)' 2>/dev/null
 }
 # the worker has no branch name yet - it is derived from the title - so
-# it looks for one already carrying this task
+# it looks for one already carrying this task. Local first, then origin:
+# a worktree can be swept between rounds and leave nothing local behind,
+# and a branch only origin remembers is still a branch to continue.
+slug="$(printf '%s' "$TASK" | tr 'A-Z' 'a-z')"
 branch_guess="$(git for-each-ref --format='%(refname:short)' refs/heads \
-  | grep -i "^$(printf '%s' "$TASK" | tr 'A-Z' 'a-z')-" | head -1)"
+  | grep -i "^$slug-" | head -1)"
+if [ -z "$branch_guess" ]; then
+  remote_guess="$(git ls-remote --heads origin 2>/dev/null \
+    | sed -n 's#.*[[:space:]]refs/heads/##p' \
+    | grep -i "^$slug-" | head -1)"
+  # fetched into a same-named local branch right away, so every use of
+  # branch_guess below - task_spec's `git show`, and the worktree this
+  # becomes - sees one ref, not "local has it"/"origin has it" as two
+  # different questions answered two different ways
+  if [ -n "$remote_guess" ] && git fetch -q origin "$remote_guess:$remote_guess" 2>/dev/null; then
+    branch_guess="$remote_guess"
+  fi
+fi
 spec="$(task_spec "$TASK" "$branch_guess")"
 [ -n "$spec" ] || { echo "fm-worker: no task $TASK in design/tasks.json" >&2; exit 65; }
 set_crew_activity "$spec"
 
-slug="$(printf '%s' "$TASK" | tr 'A-Z' 'a-z')"
-branch="$slug-$(jq -r '.title' <<<"$spec" | tr 'A-Z' 'a-z' | tr -cs 'a-z0-9' '-' | cut -c1-28 | sed 's/-*$//')"
+# A task's title is mutable; its branch name, once created, is not re-derived
+# from it. branch_guess found an existing ref for this task - reuse it as-is.
+# Recomputing a slug from the CURRENT title here would silently mismatch an
+# existing branch (a title edited after the branch was made, or a branch
+# named before this script cut slugs to 28 characters) and fall through
+# below to creating a second branch from base, stranding the first one's work.
+if [ -n "$branch_guess" ]; then
+  branch="$branch_guess"
+else
+  branch="$slug-$(jq -r '.title' <<<"$spec" | tr 'A-Z' 'a-z' | tr -cs 'a-z0-9' '-' | cut -c1-28 | sed 's/-*$//')"
+fi
 tree="$REPO/state/worktrees/$TASK"
 
 # Ordinary dispatch and recovery share one kernel lock. Recovery passes the
