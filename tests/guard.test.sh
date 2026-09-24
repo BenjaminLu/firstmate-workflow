@@ -92,9 +92,16 @@ assert_fail "FM_PROTECTED='feature/x' '$G' branch '$t'" "and cannot unprotect th
 echo t2 > "$t/f"
 assert_fail "git -C '$t' commit -qam trunk-after" "pre-commit blocks a commit on the project's base"
 assert_contains "$(git -C "$t" commit -qam trunk-after 2>&1)" "refusing to commit on trunk" "and names it"
-git -C "$t" checkout -q -f feature/x
-assert_fail "git -C '$t' push -q origin feature/x:trunk" "pre-push blocks a push onto the project's base"
-assert_contains "$(git -C "$t" push -q origin feature/x:trunk 2>&1)" "refusing to push directly to trunk" "and names it"
+# The pushed branch is ahead of the remote's trunk: git rejects a push that
+# is not a fast-forward before it runs pre-push, and that refusal would pass
+# here without the hook.
+git -C "$t" checkout -q -f -b ahead trunk
+echo t3 > "$t/f"
+assert_ok   "git -C '$t' commit -qam ahead" "a branch ahead of the project's base is committed on"
+assert_fail "git -C '$t' push -q origin ahead:trunk" "pre-push blocks a push onto the project's base"
+assert_contains "$(git -C "$t" push -q origin ahead:trunk 2>&1)" "refusing to push directly to trunk" "and names it"
+assert_eq "$(git -C "$t" rev-parse trunk)" "$(git -C "$bare" rev-parse trunk)" "and the remote's base did not move"
+git -C "$t" checkout -q feature/x
 assert_fail "git -C '$t' push -q origin feature/x:main" "and still onto main"
 assert_ok   "git -C '$t' push -q origin feature/x:feature/y" "and still allows a push onto a branch"
 # a worktree of the clone shares its config, so a task worktree is guarded too
