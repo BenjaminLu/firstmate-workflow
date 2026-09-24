@@ -1199,11 +1199,18 @@ test("a crewman turns under the pointer, and the ahoy fires", async ({ page }) =
 test("nothing here can reach a model", async () => {
   // structural, not a promise: the fixture root has no adapters in it, so
   // there is nothing for the board to shell out to even if it tried. The
-  // only script it may spawn is the merge recorder, and that is the whole
-  // contents of its bin/.
-  const { readdirSync } = await import("node:fs");
+  // only scripts it may spawn are the merge recorder and the registry
+  // reader, and they are the whole contents of its bin/.
+  //
+  // fm-config.sh and the fm-herdr.py it imports (T-069) are there so the
+  // board can read the project registry's `github`. The only path from them
+  // to a model is fm_run_chain, which runs bin/adapters - absent above - and
+  // the board calls nothing from fm-config.sh but the two registry readers.
+  const { readdirSync, readFileSync } = await import("node:fs");
   expect(existsSync(join(board.root, "bin/adapters"))).toBe(false);
-  expect(readdirSync(join(board.root, "bin")).sort()).toEqual(["fm-decide.sh", "fm-diagram.sh", "fm-emit.sh", "fm-merge.sh", "watch-decisions.ts"]);
+  expect(readdirSync(join(board.root, "bin")).sort()).toEqual(["fm-config.sh", "fm-decide.sh", "fm-diagram.sh", "fm-emit.sh", "fm-herdr.py", "fm-merge.sh", "watch-decisions.ts"]);
+  const called = new Set(readFileSync(join(board.root, "board/server.ts"), "utf8").match(/\bfm_[a-z_]+/g) ?? []);
+  expect([...called].sort()).toEqual(["fm_project_get", "fm_project_resolve"]);
 });
 
 test("no cards retains one idle captain aboard", async ({ page }) => {
