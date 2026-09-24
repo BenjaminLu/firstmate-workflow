@@ -1619,15 +1619,17 @@ spaces that cannot meet, and moves every record already in the wrong space:
 - **an existing file is not proof of ownership.** A record owns a derived id
   only when its `kind` is `merge` and its `task` and `project` (absent means
   the default project) are the ones the id derives from. `fm-run.sh` applies
-  that test to both `state/pending/<id>.json` and `state/decisions/<id>.json`
-  before it says a card is waiting or already answered.
+  that test to `state/pending/<id>.json`, `state/decisions/<id>.json` and
+  `state/runtime/archived-pending/<id>.json` before it says a card is
+  waiting or already answered, or raises one.
 - **a record in the wrong space is moved out of it, once, with everything
   keyed by its id.** Every record at or below `D-999` that does not own its
   id is renumbered into the allocated space: `fm-decide.sh --renumber <id>`
   takes the next free number from `D-1000` under the decision-id lock and
   moves every store keyed by a decision id, not only the record. The list of
-  stores comes from the search below, not from memory, and names eight:
-  `state/pending/<id>.json`, `state/decisions/<id>.json`,
+  stores comes from the search below, not from memory, and names nine:
+  `state/pending/<id>.json`, `state/decisions/<id>.json`, the archived cards
+  `state/runtime/archived-pending/<id>.json`,
   `state/decision-details/<id>.json`, the rendered pages
   `board/public/diagrams/<id>.*`, the authored drawings
   `design/diagrams/<id>.*`, and the watcher's three,
@@ -1654,9 +1656,13 @@ spaces that cannot meet, and moves every record already in the wrong space:
   every id in the table above. Left behind, they would make the owning
   task's answer under its derived id — the captain's merge answer on T-056's
   own `D-056` card — never observed, so it never wakes firstmate. So
-  `--renumber` carries both to the new id, rewriting the receipt's `id` and
-  recomputing the acknowledgement's `observation` hash over the rewritten
-  receipt; an observation not yet acknowledged stays unacknowledged under the
+  `--renumber` carries both to the new id. It rewrites the observation
+  receipt's `id`; it rewrites the acknowledgement record's own `id` field as
+  well as recomputing its `observation` hash over the rewritten receipt, and
+  it writes the acknowledgement under `state/session/.ack.lock`, the lock
+  `fm-session.sh ack` takes, so an `ack` running at the same moment neither
+  writes a receipt for the old id after the move nor reads a half-written
+  one. An observation not yet acknowledged stays unacknowledged under the
   new id. It copies them first, then renames the record, then deletes the old
   receipts, so a continuous watch polling in between sees an observation for
   whichever name the record has and never observes T-043's old answer a
@@ -1695,15 +1701,28 @@ spaces that cannot meet, and moves every record already in the wrong space:
   | `board/server.ts` | `state/pending/<id>.json`, `state/decisions/<id>.json` and its `.tmp`, `identity` `decision:<id>`, `decision_made` events by `data.decision` |
   | `board/public/index.html` | `seen` set and the order animation, keyed by `identity` |
   | `skills/firstmate/SKILL.md` | the same stores named for firstmate: `design/diagrams/<decision>.*`, `board/public/diagrams/`, `state/decision-details/<decision-id>.json`, `fm-session.sh ack --decision <id>` |
+  | `skills/firstmate/clear-zombie-workers/SKILL.md` | `state/runtime/archived-pending/<id>.json`: step 6 moves a stale pending card there by hand, under its own name (found by the second search, not the first) |
   | `tests/` | fixtures of those same stores (`decide`, `decisions`, `diagram`, `board`, `session`, `selfupdate`, `i18n`, `e2e-loop`, `e2e/board.spec.ts`, `e2e/fixture.ts`); none names another |
   | `tests/dispatch.test.sh`, `skills/worker/SKILL.md` | the word "observed" in prose; not a store |
 
-  Every other runtime path the second search lists is keyed by a task, a
-  run, a review, a pull request or nothing (`state/worktrees/`, `state/runs/`,
-  `state/reviews/`, `state/unsent/`, `state/rescued/`, `state/snapshots/`,
-  `state/runtime/`, `state/events.jsonl`); `state/merge-calls` is a test
-  stub's log. A store added later that is keyed by a decision id joins
-  `--renumber`'s list in the same pull request that adds it.
+  The other runtime paths the second search listed on 2026-09-24, each read
+  where it is written, and what keys them: by task, `state/worktrees/<task>`
+  and its `.pid`, `state/dispatch/<task>.log` (`fm-dispatch.sh`),
+  `state/rescued/<task>-<stamp>` (`fm-worker.sh`, clear-zombie-workers) and
+  `state/unsent/<task>-…`; by run actor, `state/runs/<actor>/`,
+  `state/runtime/archived-runs/`, `state/runtime/run-*.sh` and
+  `state/runtime/*.pid` (dispatch-crew and clear-zombie-workers skills) and
+  `state/.crew-status-throttle/<actor>` (`fm-emit.sh`); by task and round,
+  `state/reviews/<task>-r<n>.log`; by a fresh temporary name,
+  `state/snapshots/code-*` (`fm-herdr.py` `snapshot`); by nothing, the
+  single files `state/events.jsonl`, `state/.events.lock`,
+  `state/session/board.log` and `state/session/project-setup.log`; and by
+  `SK-<n>`, `state/skill-updates/`. `state/merge-calls` and `state/e2` exist
+  only in tests (a stub's log and a temporary copy of the event log). That
+  is every path the search printed; nothing under `state/runtime/` other
+  than the four named was read, because the code names no other. A store
+  added later that is keyed by a decision id joins `--renumber`'s list in
+  the same pull request that adds it.
   The record's `id` becomes
   the new id and its stored `identity` becomes `decision:<new>`. The map
   entry `{old, new, task, ts}` is appended to
@@ -1723,7 +1742,19 @@ spaces that cannot meet, and moves every record already in the wrong space:
   record that has a response. A foreign record still pending is left where
   it is, because an `--await` on its id would never wake; `fm-run.sh` names
   it and raises nothing until the captain answers it, and then moves it on
-  its next turn. After the move the derived id is free and the owning task's
+  its next turn. An archived card is the one exception: firstmate moves a
+  pending card to `state/runtime/archived-pending/` only for a long-finished
+  task, after clearing its processes (clear-zombie-workers step 6), so
+  nothing awaits its id and no answer will ever come. A foreign archived
+  card at a derived id is therefore renumbered without a response — moved to
+  `state/runtime/archived-pending/<new>.json` with its `id` and `identity`
+  rewritten and its details and drawings moved with it — rather than left to
+  share the id with the owning task's new pending card. Left in place it
+  would escape the "named and left in place" rule, because it is not under
+  `state/pending/`, and `fm-run.sh` would raise the owning card under an id
+  that still names another task's card on disk. An archived card that owns
+  its id is the task's own stale merge card; it is left where it is and
+  does not block a new card for that task. After the move the derived id is free and the owning task's
   card is raised there, so the task gets its card rather than a report.
 - **who moves them, before and after T-047.** Once T-047 lands, `fm-run.sh`
   does it: finding an answered foreign record at its derived id, it calls
@@ -1731,11 +1762,13 @@ spaces that cannot meet, and moves every record already in the wrong space:
   turn. Before T-047 lands, nothing in `bin/` knows to, and T-046, T-047 and
   T-056 need cards before then — T-056's own id, `D-056`, is held by T-043's
   record. So firstmate renumbers by hand now, before the next merge card is
-  due: every answered record in the table above, by the same steps — every
-  store listed above, the untracked authored drawings in `design/diagrams/`
-  and the watcher's `state/session/observed/` and `acknowledged/` receipts
-  included, in the same copy, rename, delete order, with no live watch on the
-  id — and into the same map, taking numbers from `D-1000` up. `--renumber` then finds
+  due: every answered record in the table above and every foreign card under
+  `state/runtime/archived-pending/` at or below `D-999`, by the same steps —
+  every store listed above, the untracked authored drawings in
+  `design/diagrams/` and the watcher's `state/session/observed/` and
+  `acknowledged/` receipts included (the acknowledgement's `id` and hash
+  rewritten under `.ack.lock`), in the same copy, rename, delete order, with
+  no live watch on the id — and into the same map, taking numbers from `D-1000` up. `--renumber` then finds
   those done and stops at the map, so doing it by hand first costs nothing
   later. Until T-047 lands, firstmate also checks each task's derived id by
   the ownership test before it tells the captain a card is waiting.
@@ -1841,7 +1874,7 @@ Who proves what:
 
 | Task | Its part of this section |
 |---|---|
-| T-047 | the decision ids of point 1: merge cards derived per `(project, task)`, other cards allocated from `D-1000` under the lock, the ownership test in `fm-run.sh`, and `fm-decide.sh --renumber` moving an answered foreign record and every store keyed by its id, authored drawings and the watcher's receipts included, refusing while a watch on the id is live, so the owning task gets its own card and its answer wakes firstmate |
+| T-047 | the decision ids of point 1: merge cards derived per `(project, task)`, other cards allocated from `D-1000` under the lock, the ownership test in `fm-run.sh`, and `fm-decide.sh --renumber` moving an answered or archived foreign record and every store keyed by its id, authored drawings and the watcher's receipts included, refusing while a watch on the id is live, so the owning task gets its own card and its answer wakes firstmate |
 | T-052 | point 2's caller: the firstmate skill dispatches with no `--project`, and names `--project` for dispatch only when the captain asks for one project; hand-raised cards take ids from `D-1000` up |
 | T-053 | points 1–3 in the scripts: the global count by `(project, task)`, the slot lock taken after verify, fair fill as the no-flag path, and the merge turn in `fm-run.sh` freed only when `base` has settled |
 | T-054 | points 3 and 4 on the board: 5.2's background merge and recorded outcome, recovery of a `running` record whose helper died, the same-project refusal before publishing, the widened decision-id pattern and the renumbering map, and several projects' live work and cards at once |
