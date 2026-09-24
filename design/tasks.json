@@ -1709,6 +1709,40 @@
         "Evidence is this pull request's required GitHub check and the seven gates; the worker does not run the suite itself.",
         "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
       ]
+    },
+    {
+      "id": "T-067",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-065"
+      ],
+      "title": "fm-worker.sh brings a task branch up to date with its base, and the worker resolves the conflicts",
+      "scope": [
+        "bin/fm-worker.sh",
+        "skills/worker/SKILL.md",
+        "skills/firstmate/SKILL.md",
+        "skills/firstmate/dispatch-crew/SKILL.md",
+        "tests/worker.test.sh",
+        "tests/herdr.test.sh",
+        "tests/reconcile.test.sh",
+        "tests/e2e-loop.test.sh",
+        "tests/crew-end-to-end.test.sh",
+        "tests/option-loop.test.sh",
+        "tests/traps.test.sh",
+        "tests/gh-stub.sh",
+        "design/design.md",
+        "design/tasks.json"
+      ],
+      "acceptance": [
+        "Firstmate must not run git, and the worker's adapter cannot run commands. So when main moves under an open task branch and the branch conflicts, nothing in the system can bring it up to date. On 2026-09-24 firstmate had been rebasing branches by hand, against its skill. T-059 (#67) is blocked by real code conflicts with T-058 in bin/fm-dispatch.sh, board/server.ts and tests/dispatch.test.sh. The captain chose to make fm-worker.sh own this (option A). Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+        "On every round that continues an existing branch (with --pr, or a reused task branch), fm-worker.sh fetches the base and checks whether the branch still applies cleanly to it. If it does, nothing changes. If it does not, fm-worker.sh rebuilds the branch as one commit on the current base: it takes the branch's own change (merge-base..branch) and applies it three-way onto base. Files that apply cleanly are staged. Conflicting files are left with standard conflict markers, and the round's prompt tells the worker exactly which files conflict and that it must resolve them, keeping both main's change and the task's intent. Gate 2 is unchanged: a single commit on the current base rebases cleanly by construction.",
+        "After the adapter returns, fm-worker.sh refuses to commit while any conflict marker remains in a tracked file, and says which files. A task branch it rebuilt is pushed with --force-with-lease against the head it fetched, so a concurrent push is never overwritten. The PR is updated in place and the previous head is recorded in the round's result for the reviewer.",
+        "The task's own design/tasks.json entry and its design/design.md table row survive a rebuild exactly. Where both sides only appended task-table rows, the union is taken without involving the worker. Any other design.md conflict goes to the worker like a code conflict, and a whole side is never taken.",
+        "skills/worker/SKILL.md tells the worker how to resolve handed-over conflicts: keep both sides, and never drop main's change. skills/firstmate/SKILL.md and dispatch-crew say that a conflicting branch is sent back through fm-worker.sh --pr rather than rebased by firstmate.",
+        "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first in tests/worker.test.sh, against a real git fixture with a bare remote: a branch that still applies is left untouched; a moved base with a clean apply produces one commit on the new base; a conflicting file is handed to the adapter with markers and listed in the prompt; a marker left behind refuses the commit; force-with-lease refuses when the remote head moved; the task entry and table row survive. The worker does not run the suite itself.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
     }
   ]
 }

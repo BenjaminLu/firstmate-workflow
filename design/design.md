@@ -534,10 +534,17 @@ worker can exit with are `1` a failed attempt, `2` no vendor was
 available, `64` it was called wrong, `65` no such task in
 `design/tasks.json` or an unknown configured adapter, `70` something the run
 needs and cannot have — no library, no worktree, nowhere to put a scratch file,
-identity/snapshot failure, a live task lock, or failed managed transport —
-`71` the push failed, `72` no pull request number came back, `73` the worker had
+identity/snapshot failure, a live task lock, failed managed transport, a
+round's commit that failed (nothing is pushed or reported after it), or a
+rebuild on the base that could not be made —
+`71` the push failed — a rebuilt branch's lease refused included — `72` no
+pull request number came back, `73` the worker had
 something to say and there was nowhere to put it, `74` GitHub could not
-say which pull request the branch has, and `130`, `143` — a signal, 128
+say which pull request the branch has, `75` a rebuilt round was refused
+before its commit — a conflict marker left, a conflict with no markers left
+exactly as the merge left it, a HEAD no longer on the rebuild base, or the
+task's own entry or table row not as the previous head had it — and nothing
+was published, and `130`, `143` — a signal, 128
 plus its number, from the INT/TERM traps that make a killed run stop
 rather than carry on. `SIGHUP` is ignored (same as `fm-config.sh`) so a
 managed transport wait and PR publish survive a launching agent shell
@@ -550,6 +557,93 @@ not meanings — a new failure reusing an existing code passes it in
 silence, which is how `70` acquired a third meaning its sentence did
 not mention. A code is a bucket, and widening the bucket is an edit to
 this paragraph.
+
+### 5.3.3 A later round starts from the current base
+
+Firstmate may not run git, and a worker's adapter may not be able to run
+anything, so when the base moves under an open task branch and the two
+conflict, nothing else in the system can bring the branch up to date.
+Firstmate was rebasing branches by hand, against its own skill, and
+T-059 sat blocked on real code conflicts with T-058. `fm-worker.sh` owns
+it (T-067).
+
+Every round that continues a branch — `--pr`, or a task branch found and
+reused — first fast-forwards the local branch to `origin`'s when it can
+(never a rewind, never over a divergence), then fetches the base from
+`origin` (the local base ref is never trusted or moved) and asks gate 2's
+question the way gate 2 asks it: does the branch `git rebase` onto the base,
+commit by commit, in a scratch worktree? A squashed patch can apply where
+that replay does not, and a branch this step left alone while gate 2 stayed
+red could never be fixed by anything. If it rebases, nothing changes: the
+round builds on the branch as it is. If it does not, the branch is rebuilt.
+The worktree is detached at the fetched base and the branch's own change,
+`merge-base..branch`, is squash-merged onto it, three-way: clean files are
+staged, conflicting files keep standard conflict markers, and the prompt
+lists them by name with the rule for resolving them — keep the base's
+change and the task's intent, never a whole side. A conflict git cannot
+put markers into — a binary file, or one side deleted what the other
+changed — is listed apart, with which side the merge left in the worktree,
+because that side looks resolved and is not.
+
+The rebuild is not attempted, and the round goes on with the branch as it
+is, when the worktree is not clean (the rebuild's failure path is a hard
+reset), the base cannot be fetched, the replay failed without stopping on
+a conflict (that answers nothing about gate 2), the branch shares no
+history with it, `origin` cannot say where the branch is, or `origin`'s
+branch has commits
+the local one lacks — the head the push would lease on must be inside
+what is rebuilt, or the rebuild would overwrite it. Each says so. A
+squash-merge that fails without leaving a conflict stops the round with
+`70`, the worktree back on the branch, before any worker is started.
+
+The branch ref does not move until origin has taken the rebuilt commit,
+so a run that dies half way leaves the branch where it was, and `fm-checkpoint.sh` refuses
+the detached worktree. A round that only asks, or is refused before its
+commit, publishes nothing. The next round finds the worktree dirty, copies
+it to `state/rescued/` as it does any interrupted run, recreates the
+worktree from the unmoved branch and rebuilds again.
+
+Two design files are the task's own business. Its `design/tasks.json`
+entry comes through exactly: when that file conflicts, it is merged by
+task id — the task's entry from the branch, entries only one side
+touched from that side — and written back in `jq`'s layout, which is
+only attempted when the base's copy already is in it; where both sides
+changed the same other entry, the file goes to the worker. When it
+merged cleanly but the task's entry changed, only that entry is put
+back. In `design/design.md`, hunk by hunk: where both sides only
+appended task-table rows at the same place, the union is taken — the
+base's rows, then the task's — without the worker; every other hunk goes
+to the worker like code, as a standard conflict, so one prose conflict
+does not hand back the rows as well. The task's own table row is put back
+exactly wherever the merge changed it. Each of these repairs is best
+effort; what holds the round is the check below.
+
+After the adapter returns, a rebuilt round is not committed while HEAD is
+anything but the rebuild base, detached — a commit made on it mid-round
+would sit under the round, outside every check — nor while any file it
+carries, read against that base, has a line starting `<<<<<<<` or
+`>>>>>>>`, nor while a conflict with no markers is byte for byte what the
+merge left, nor while the task's `tasks.json` entry or table row differs
+from the previous head's — however it got that way, including a worker
+that rewrote it while resolving. In a rebuilt round the task's own entry
+and row are therefore frozen: a change to either waits for a round that
+is not a rebuild. The run names the files, publishes nothing and exits
+`75`. Otherwise the rebuild and the round's work are one commit on the
+base, so gate 2 holds by construction. The commit is pushed from the
+detached HEAD with `--force-with-lease` against the branch head read
+before the rebuild: anything pushed to the branch since is refused, never
+overwritten. The local branch moves onto the commit only after origin has
+taken it, so a refused push leaves it on its previous head; the next round
+fast-forwards to what was pushed and rebuilds from there. While the push
+is unconfirmed, `refs/fm-rebuilt/<branch>` names the commit. A run cut
+short in that window — by a signal, from the EXIT trap, or by SIGKILL, at
+the start of the next round — asks origin and settles on its answer: the
+local branch moves onto the rebuilt commit if origin has it, and stays
+where it was if not. `commit_pushed` is written only once a
+push has landed, on every round. The pull request is updated in place; the previous head
+goes into the round's `commit_pushed` (or `pr_opened`) event as
+`data.rebuilt.previous_head`, and onto the pull request as a comment for
+the reviewer, whose last reading of the branch no longer exists on it.
 
 ### 5.4 The pull request protocol
 
@@ -1343,6 +1437,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-057 | the board separates ready work from backlog | T-040 |
 | T-065 | the local gate runs its suites in parallel, with every threshold intact | T-046 |
 | T-058 | the captain parks or drops a task from the board | T-057 |
+| T-067 | fm-worker.sh brings a task branch up to date with its base, and the worker resolves the conflicts | T-065 |
 | T-071 | two assertions that only hold on an idle machine hold under the parallel gate | T-065 |
 | T-070 | design: prototype v2 of the living ship, at a designer's standard | T-058 |
 | T-069 | every pull request number on the board links to that project's pull request | T-046, T-058 |

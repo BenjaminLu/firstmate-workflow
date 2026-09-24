@@ -217,8 +217,11 @@ class Entrypoints(unittest.TestCase):
         (self.repo / 'config.yaml').write_text('vendor: codex\nconcurrency: 2\n')
         self.fake = self.repo / 'fakebin'; self.fake.mkdir()
         self.env = {k:v for k,v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
+        # The fake git below answers `config` with nothing, so the identity a
+        # commit needs is the fixture's own: a worker whose commit fails stops.
         self.env.update(PATH=str(self.fake)+os.pathsep+os.environ['PATH'], HERDR_ENV='1', HERDR_PANE_ID='caller',
-                        FM_ROOT=str(self.repo), FM_TEST_ROOT=str(self.repo), FM_HERDR_TIMEOUT=str(WAIT))
+                        FM_ROOT=str(self.repo), FM_TEST_ROOT=str(self.repo), FM_HERDR_TIMEOUT=str(WAIT),
+                        FM_GIT_NAME='t', FM_GIT_EMAIL='a@b.c')
         self.executable('herdr', r'''
 import json, os, pathlib, subprocess, sys, uuid
 r=pathlib.Path(os.environ['FM_TEST_ROOT']); a=sys.argv[1:]

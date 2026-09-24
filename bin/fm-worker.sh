@@ -155,6 +155,14 @@ publish_wip_if_dirty() {
   dirty="$(git -C "$tree" status --porcelain -- . \
     ":(exclude).fm-prompt.md" ":(exclude).fm-say.md" 2>/dev/null || true)"
   [ -n "$dirty" ] || return 0
+  # An uncommitted rebuild is not a checkpoint: it sits detached on the
+  # base, possibly with markers, and pushing it would replace the branch.
+  # The branch ref was never moved, the next round rescues this worktree
+  # to state/rescued/ and rebuilds from the branch again.
+  if [ "${rebuilt:-0}" = 1 ]; then
+    echo "fm-worker: the rebuild of $branch was not committed ($reason); nothing is published" >&2
+    return 0
+  fi
   echo "fm-worker: publishing dirty worktree ($reason)" >&2
   # Same stock helper as mid-run checkpoints: commit then push. Prefer the
   # frozen snapshot helper when present so live source edits cannot shift us.
@@ -185,11 +193,48 @@ publish_wip_if_dirty() {
   return 0
 }
 
+# A rebuilt commit is pushed before the local branch moves onto it, and
+# refs/fm-rebuilt/<branch> names it while that push is unconfirmed. A run
+# cut short in between - a signal here, SIGKILL for the next round - lands
+# on whichever head origin actually has: the rebuilt commit if the push
+# reached it, the previous head (never moved) if not. Moving the local ref
+# first and restoring it only on a failed return left a run killed during
+# the push with a local branch origin never had, and every later round
+# refused at the plain push (71) with nothing allowed to repair it.
+rebuild_settle() {
+  local pending ls lsrc origin_head
+  [ -n "${branch:-}" ] && [ -n "${REPO:-}" ] || return 0
+  pending="$(git -C "$REPO" rev-parse -q --verify "refs/fm-rebuilt/$branch^{commit}" 2>/dev/null)" || return 0
+  ls="$(git -C "$REPO" ls-remote --exit-code --heads origin "refs/heads/$branch" 2>/dev/null)"; lsrc=$?
+  if [ "$lsrc" != 0 ] && [ "$lsrc" != 2 ]; then
+    echo "fm-worker: could not ask origin whether the rebuilt $branch (${pending}) reached it; the next round asks again" >&2
+    return 1
+  fi
+  origin_head="$(printf '%s\n' "$ls" | awk 'NR == 1 { print $1 }')"
+  if [ -n "$origin_head" ] && { [ "$origin_head" = "$pending" ] \
+       || git -C "$REPO" merge-base --is-ancestor "$pending" "$origin_head" 2>/dev/null; }; then
+    if ! git -C "$REPO" branch -f "$branch" "$pending" >/dev/null 2>&1; then
+      echo "fm-worker: the rebuilt $branch (${pending}) is on origin, but $branch could not be moved onto it; the next round tries again" >&2
+      return 1
+    fi
+    echo "fm-worker: the rebuilt $branch (${pending}) reached origin; $branch now points at it" >&2
+  else
+    echo "fm-worker: the rebuilt $branch (${pending}) never reached origin; $branch stays where it was" >&2
+  fi
+  git -C "$REPO" update-ref -d "refs/fm-rebuilt/$branch" 2>/dev/null || {
+    echo "fm-worker: could not clear refs/fm-rebuilt/$branch; the next round settles it again" >&2; return 1; }
+}
+
 finished() {
   local rc=$?
   # Before retiring the actor: save any unpushed worktree edits. SIGTERM/INT
   # reach here via `exit`; SIGKILL cannot. Mid-run saves use fm-checkpoint.sh.
   publish_wip_if_dirty "exit-$rc" || true
+  rebuild_settle || true
+  # the scratch worktree the rebuild check replays in, if a signal cut it short
+  if [ -n "${rebuild_probe:-}" ]; then
+    git -C "$REPO" worktree remove --force "$rebuild_probe" >/dev/null 2>&1; rm -rf "$rebuild_probe"
+  fi
   fm_record_end "$rc"
   # before clean_scratch, which would remove the only copy of it
   [ -z "${held:-}" ] || [ "${held_settled:-0}" = 1 ] || lost_held "$rc"
@@ -310,6 +355,8 @@ if [ -d "$tree" ] && [ -n "$(git -C "$tree" status --porcelain 2>/dev/null \
 fi
 rm -rf "$tree"; mkdir -p "$REPO/state/worktrees"
 git worktree prune >/dev/null 2>&1
+# a rebuilt push the last run could not confirm - it was killed during it
+rebuild_settle || true
 # A second round continues the first. Recreating the branch from main would
 # throw away everything the worker did before, which makes a review round
 # pointless and the round-three protocol impossible: the worker would be
@@ -317,6 +364,11 @@ git worktree prune >/dev/null 2>&1
 round_two=0
 if git show-ref --verify --quiet "refs/heads/$branch"; then
   round_two=1
+  # Origin's head may be ahead of the local branch: a round whose rebuild
+  # the lease refused, or a save from elsewhere. Fast-forward only - no `+`,
+  # so a local branch that has diverged or is ahead is never rewound - and
+  # a failure here leaves the local branch as it was.
+  git fetch -q origin "refs/heads/$branch:refs/heads/$branch" >/dev/null 2>&1 || true
   git worktree add -q "$tree" "$branch"
 elif git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
   round_two=1
@@ -383,6 +435,333 @@ if [ "$round_two" = 1 ] && [ -z "$PR" ]; then
     echo "fm-worker: $branch has no open pull request; this round will open one" >&2
   fi
 fi
+
+# --- a later round starts from the current base (T-067) -------------------
+# Firstmate may not run git and the adapter cannot, so when the base moves
+# under an open task branch and the two conflict, this is the only place
+# that can bring the branch up to date. The base is FETCHED, not read from
+# the local ref: nothing here updates the local main, so it is as stale as
+# the last time someone pulled.
+#
+# A branch that still rebases onto the fetched base - gate 2's question,
+# asked gate 2's way - is left exactly as it is. One that does not is
+# rebuilt: the worktree is detached at the base and the branch's own change
+# (merge-base..branch) is squash-merged onto it, three-way. Clean files are
+# staged; conflicting files keep standard markers and are handed to the
+# worker by name. The worktree stays DETACHED until the commit below, so
+# the branch ref never points at a half-rebuilt tree: a run that dies here
+# leaves the branch as it was, and fm-checkpoint.sh refuses a detached
+# HEAD. A commit made on it anyway is refused before the round's own.
+rebuilt=0; rebuild_prev=''; rebuild_lease=''; rebuild_base=''; rebuild_mark=''
+rebuild_entry=''; rebuild_rows=''; rebuild_probe=''
+rebuild_conflicts=(); rebuild_restore=()
+# Conflicts git could not write markers into - a binary file, or one side
+# deleted what the other changed - and what the merge left in their place:
+# the blob in the worktree, or `absent`. The worker is told which side that
+# is, and the round is refused while the file is still exactly that.
+rebuild_bare=(); rebuild_bare_left=(); rebuild_bare_side=()
+rebuild_state_of() {   # rebuild_state_of <path>; the worktree's blob, or absent
+  if [ -f "$tree/$1" ] || [ -L "$tree/$1" ]; then
+    git -C "$tree" hash-object --no-filters -- "$1" 2>/dev/null || echo unreadable
+  else
+    echo absent
+  fi
+}
+rebuild_side_left() {   # rebuild_side_left <path>; which side the merge left, in words
+  local ours='' theirs='' now sha stage
+  while IFS=$' \t' read -r _ sha stage _; do
+    case "$stage" in 2) ours="$sha" ;; 3) theirs="$sha" ;; esac
+  done < <(git -C "$tree" ls-files -u -- "$1" 2>/dev/null)
+  now="$(rebuild_state_of "$1")"
+  if [ "$now" = absent ] && [ -z "$ours" ]; then echo "deleted, as $BASE has it; your task changed it"
+  elif [ "$now" = absent ] && [ -z "$theirs" ]; then echo "deleted, as your task has it; $BASE changed it"
+  elif [ "$now" = absent ]; then echo "deleted; neither side deleted it"
+  elif [ "$now" = "$ours" ] && [ -z "$theirs" ]; then echo "$BASE's version; your task deleted it"
+  elif [ "$now" = "$ours" ]; then echo "$BASE's version; your task's change is not in it"
+  elif [ "$now" = "$theirs" ] && [ -z "$ours" ]; then echo "your task's version; $BASE deleted it"
+  elif [ "$now" = "$theirs" ]; then echo "your task's version; $BASE's change is not in it"
+  else echo "neither side exactly as it was"
+  fi
+}
+rebuild_fingerprint() {
+  # The tree the worktree holds, so a rebuilt round can tell the worker's
+  # changes from the ones the rebuild itself made. Written through an index
+  # of its own: the real one has unmerged entries, and `git status` says
+  # `UU` for a conflicted file before and after the worker resolves it.
+  # Read over the base the rebuild sits on, never HEAD: something that
+  # commits on the detached HEAD mid-round must not move what it is read
+  # against.
+  local idx
+  idx="$(scratch_new)" || return 0
+  scratch_add "$idx"; rm -f "$idx"
+  GIT_INDEX_FILE="$idx" git -C "$tree" read-tree "${rebuild_base:-HEAD}" 2>/dev/null \
+    && GIT_INDEX_FILE="$idx" git -C "$tree" add -A 2>/dev/null \
+    && GIT_INDEX_FILE="$idx" git -C "$tree" rm -q --cached --ignore-unmatch \
+         -- .fm-prompt.md .fm-say.md >/dev/null 2>&1 \
+    && GIT_INDEX_FILE="$idx" git -C "$tree" write-tree 2>/dev/null
+  rm -f "$idx"
+}
+# The task's own tasks.json entry survives exactly, and entries the two
+# sides added or changed independently are merged by id. Written back in
+# jq's own layout, which is only safe when the base side already is in it.
+# Fails (and leaves the file alone) when both sides changed one entry that
+# is not the task's, or changed anything outside .tasks differently.
+rebuild_tasks_json() {   # rebuild_tasks_json <merge-base> <old head>
+  local f="design/tasks.json" b o t merged
+  t="$(git show "$2:$f" 2>/dev/null)" || return 0
+  jq -e --arg id "$TASK" '.tasks[]|select(.id==$id)' <<<"$t" >/dev/null 2>&1 || return 0
+  b="$(git show "$1:$f" 2>/dev/null || printf '{}')"
+  o="$(git show "$rebuild_base:$f" 2>/dev/null)" || return 1
+  [ "$(jq . <<<"$o" 2>/dev/null)" = "$o" ] || return 1
+  # files, not --argjson: the whole task list does not belong on argv
+  merged="$(jq -n --arg id "$TASK" --slurpfile b <(printf '%s' "$b") \
+      --slurpfile o <(printf '%s' "$o") --slurpfile t <(printf '%s' "$t") '
+    def byid: map({key:.id, value:.}) | from_entries;
+    $b[0] as $b | $o[0] as $o | $t[0] as $t
+    | ($b.tasks // [] | byid) as $B | ($o.tasks // [] | byid) as $O | ($t.tasks | byid) as $T
+    | ($b|del(.tasks)) as $bt | ($o|del(.tasks)) as $ot | ($t|del(.tasks)) as $tt
+    | if $tt != $bt and $ot != $bt and $tt != $ot then error("both changed the top level") else . end
+    | [ $T | keys[] | select($B[.] != $T[.]) ] as $changed
+    | [ $B | keys[] | select($T[.] == null) ] as $removed
+    | ($changed + $removed | map(select(. != $id and $O[.] != $B[.] and $O[.] != $T[.])))
+      as $both
+    | if ($both | length) > 0 then error("both changed " + ($both | join(", "))) else . end
+    | (if $tt != $bt then $t else $o end)
+    | .tasks = ([ $o.tasks[] | .id as $k
+                  | if ($removed | any(. == $k)) then empty
+                    elif ($changed | any(. == $k)) or $k == $id then $T[$k]
+                    else . end ]
+                + [ $t.tasks[] | .id as $k
+                    | select($O[$k] == null and (($changed | any(. == $k)) or $k == $id)) ])
+  ' 2>/dev/null)" || return 1
+  printf '%s\n' "$merged" > "$tree/$f" && git -C "$tree" add -- "$f"
+}
+# A file the merge left unmerged. Read into a string, not piped into
+# grep -q: under pipefail an early grep exit is a failed pipeline.
+rebuild_unmerged() { [ -n "$(git -C "$tree" ls-files -u -- "$1" 2>/dev/null)" ]; }
+# What the previous head had for the task: its tasks.json entry (sorted
+# keys, one line) and its design.md table row. Both are what a rebuilt
+# round must still carry exactly.
+rebuild_entry_of() {   # rebuild_entry_of <tasks.json text>
+  jq -cS --arg id "$TASK" '.tasks[]|select(.id==$id)' <<<"$1" 2>/dev/null
+}
+rebuild_rows_of() {   # rebuild_rows_of <design.md text>
+  grep -E "^\| $TASK \|" <<<"$1" 2>/dev/null
+}
+# Which of the two files no longer carries what the previous head had for
+# the task, read from the worktree or from the index (what a commit would
+# take). One line per file; nothing when both survive.
+rebuild_lost() {   # rebuild_lost worktree|index
+  local tj dm
+  if [ "$1" = index ]; then
+    tj="$(git -C "$tree" show :design/tasks.json 2>/dev/null)"
+    dm="$(git -C "$tree" show :design/design.md 2>/dev/null)"
+  else
+    tj="$(cat "$tree/design/tasks.json" 2>/dev/null)"
+    dm="$(cat "$tree/design/design.md" 2>/dev/null)"
+  fi
+  [ -z "$rebuild_entry" ] || [ "$rebuild_entry" = "$(rebuild_entry_of "$tj")" ] || echo design/tasks.json
+  [ -z "$rebuild_rows" ] || [ "$rebuild_rows" = "$(rebuild_rows_of "$dm")" ] || echo design/design.md
+}
+# A tasks.json that merged cleanly can still carry main's edit of the
+# task's own entry. Only that entry is put back, as the branch had it, and
+# only in a file already in jq's layout; anything else is left for the
+# worker, and the check before the commit holds the round until it is.
+rebuild_task_entry_restore() {   # <old head>
+  local f="design/tasks.json" mine cur next
+  mine="$(git show "$1:$f" 2>/dev/null | jq -c --arg id "$TASK" '.tasks[]|select(.id==$id)' 2>/dev/null)"
+  [ -n "$mine" ] || return 0
+  cur="$(cat "$tree/$f" 2>/dev/null)" || return 1
+  [ "$(jq . <<<"$cur" 2>/dev/null)" = "$cur" ] || return 1
+  next="$(jq --arg id "$TASK" --argjson mine "$mine" '
+    if any(.tasks[]; .id == $id) then .tasks |= map(if .id == $id then $mine else . end)
+    else .tasks += [$mine] end' <<<"$cur" 2>/dev/null)" || return 1
+  [ -n "$next" ] || return 1
+  printf '%s\n' "$next" > "$tree/$f" && git -C "$tree" add -- "$f"
+}
+# Where both sides only appended task-table rows at the same place, the
+# union is taken - main's rows, then the task's - and the worker never
+# sees it. Hunk by hunk: every other hunk is written back as a standard
+# conflict (no diff3 base section) for the worker, so one prose conflict
+# does not hand the row union back as well. The file is staged only when
+# nothing is left; otherwise it stays unmerged, and so on the list.
+rebuild_design_rows() {
+  local f="design/design.md" out rc
+  git -C "$tree" checkout -q --conflict=diff3 -- "$f" 2>/dev/null || return 1
+  out="$(awk '
+    function row(s) { return s ~ /^\| T-[A-Za-z0-9]+ \|/ }
+    function flush(   i, j, dup, ok) {
+      ok = (nb == 0 && no > 0 && nt > 0)
+      for (i = 1; i <= no && ok; i++) if (!row(o[i])) ok = 0
+      for (i = 1; i <= nt && ok; i++) if (!row(t[i])) ok = 0
+      if (!ok) {
+        unresolved++
+        print opener; for (i = 1; i <= no; i++) print o[i]
+        print "======="; for (j = 1; j <= nt; j++) print t[j]
+        print closer
+        return
+      }
+      for (i = 1; i <= no; i++) print o[i]
+      for (j = 1; j <= nt; j++) {
+        dup = 0; for (i = 1; i <= no; i++) if (o[i] == t[j]) dup = 1
+        if (!dup) print t[j]
+      }
+    }
+    state == 0 && /^<<<<<<<( |$)/ { state = 1; no = nb = nt = 0; opener = $0; next }
+    state == 0 { print; next }
+    state == 1 && /^\|\|\|\|\|\|\|( |$)/ { state = 2; next }
+    (state == 1 || state == 2) && /^=======$/ { state = 3; next }
+    state == 3 && /^>>>>>>>( |$)/ { closer = $0; state = 0; flush(); next }
+    state == 1 { o[++no] = $0; next }
+    state == 2 { nb++; next }
+    state == 3 { t[++nt] = $0; next }
+    END { if (state != 0) exit 2; exit (unresolved > 0) }
+  ' "$tree/$f")"; rc=$?
+  case "$rc" in
+    0) printf '%s\n' "$out" > "$tree/$f" && git -C "$tree" add -- "$f" ;;
+    1) printf '%s\n' "$out" > "$tree/$f"; return 1 ;;
+    *) git -C "$tree" checkout -q --conflict=merge -- "$f" 2>/dev/null; return 1 ;;
+  esac
+}
+# The task's table row, exactly as the branch had it. A merge can still
+# carry main's edit of it, cleanly or inside a hunk the worker is handed;
+# the task's is put back either way. Staged only when the file has no
+# conflict left, or `add` would mark the markers resolved.
+rebuild_design_row_survives() {   # <old head>
+  local f="design/design.md" mine
+  mine="$(rebuild_rows_of "$(git show "$1:$f" 2>/dev/null)" | head -1)"
+  [ -n "$mine" ] || return 0
+  grep -qE "^\| $TASK \|" "$tree/$f" 2>/dev/null || return 1
+  MINE="$mine" awk -v id="| $TASK |" 'index($0, id) == 1 { print ENVIRON["MINE"]; next } { print }' \
+    "$tree/$f" > "$tree/$f.fm-next" || { rm -f "$tree/$f.fm-next"; return 1; }
+  mv "$tree/$f.fm-next" "$tree/$f" || return 1
+  rebuild_unmerged "$f" || git -C "$tree" add -- "$f"
+}
+# Whether the branch still rebases onto the base: gate 2's own question,
+# asked the way gate 2 asks it - `git rebase`, commit by commit, in a
+# scratch worktree - not a second spelling of it. A squashed patch can
+# apply where the replay does not (a later commit that undid an earlier
+# one main also touched), and then gate 2 stays red on a branch this
+# script would leave alone forever. The replay's commits are thrown away,
+# so they are made under any identity, with no hook of the repository's
+# run.
+rebuild_rebases() {   # rebuild_rebases <head> <base ref>; 0 clean, 1 not, 2 unknown
+  local rc n e
+  n="$(fm_git_name "$tree")"; e="$(fm_git_email "$tree")"
+  rebuild_probe="$(mktemp -d "${TMPDIR:-/tmp}/fm-worker-probe-XXXXXX")" || return 2
+  git -c core.hooksPath=/dev/null worktree add -q --detach "$rebuild_probe" "$1" >/dev/null 2>&1 || {
+    rm -rf "$rebuild_probe"; rebuild_probe=''; return 2; }
+  git -C "$rebuild_probe" -c core.hooksPath=/dev/null -c rerere.enabled=false \
+    -c user.name="${n:-fm-worker}" -c user.email="${e:-fm-worker@localhost}" \
+    rebase "$2" >/dev/null 2>&1; rc=$?
+  # A replay that stopped on a conflict leaves unmerged paths. One that
+  # failed any other way - a signing key, a hook, a lock - answered nothing
+  # about gate 2, and a rebuild on it would force-push a branch that may
+  # well rebase.
+  [ "$rc" = 0 ] || [ -n "$(git -C "$rebuild_probe" ls-files -u 2>/dev/null)" ] || rc=2
+  git -C "$rebuild_probe" rebase --abort >/dev/null 2>&1
+  rebuild_probe_drop
+  case "$rc" in 0) return 0 ;; 2) return 2 ;; *) return 1 ;; esac
+}
+rebuild_probe_drop() {
+  [ -n "${rebuild_probe:-}" ] || return 0
+  git worktree remove --force "$rebuild_probe" >/dev/null 2>&1; rm -rf "$rebuild_probe"
+  git worktree prune >/dev/null 2>&1; rebuild_probe=''
+}
+bring_up_to_date() {
+  local base_ref="refs/remotes/origin/$BASE" head mb ls rc f side
+  # The worktree was just made from the branch, so it is clean. Were it
+  # not, the rebuild's own failure path (reset --hard) would destroy what
+  # is in it, so a dirty tree is never rebuilt.
+  if [ -n "$(git -C "$tree" status --porcelain 2>/dev/null)" ]; then
+    echo "fm-worker: $tree is not clean; $branch is not rebuilt this round" >&2
+    return 0
+  fi
+  git fetch -q origin "+refs/heads/$BASE:$base_ref" 2>/dev/null || {
+    echo "fm-worker: could not fetch $BASE; $branch is not checked against it this round" >&2
+    return 0; }
+  head="$(git -C "$tree" rev-parse HEAD)" || return 0
+  mb="$(git merge-base "$base_ref" "$head" 2>/dev/null)" || {
+    echo "fm-worker: $branch shares no history with $BASE; not rebuilding it" >&2; return 0; }
+  # already on the base: there is nothing to replay
+  [ "$mb" != "$(git rev-parse "$base_ref")" ] || return 0
+  rebuild_rebases "$head" "$base_ref"; rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    1) ;;
+    *) echo "fm-worker: could not check whether $branch rebases onto $BASE; not rebuilding it" >&2
+       return 0 ;;
+  esac
+  # the head the push will lease against: the remote's, as it is now. A
+  # remote head this branch does not contain is work the rebuild would
+  # overwrite, and nothing here has seen it.
+  ls="$(git ls-remote --exit-code --heads origin "refs/heads/$branch" 2>/dev/null)"; rc=$?
+  case "$rc" in
+    0) rebuild_lease="$(printf '%s\n' "$ls" | awk 'NR == 1 { print $1 }')" ;;
+    2) rebuild_lease='' ;;
+    *) echo "fm-worker: could not read origin's $branch; not rebuilding it" >&2; return 0 ;;
+  esac
+  if [ -n "$rebuild_lease" ] && ! git merge-base --is-ancestor "$rebuild_lease" "$head" 2>/dev/null; then
+    echo "fm-worker: origin's $branch has commits this worktree lacks; not rebuilding it" >&2
+    return 0
+  fi
+  rebuild_prev="$head"; rebuild_base="$(git rev-parse "$base_ref")"
+  # Up before the worktree leaves the branch, not after the merge: a signal
+  # in between must find it set, so the exit path publishes nothing from a
+  # detached, half-merged tree.
+  rebuilt=1
+  git -C "$tree" checkout -q --detach "$rebuild_base" || {
+    echo "fm-worker: could not detach $tree at $BASE" >&2; exit 70; }
+  git -C "$tree" -c merge.conflictStyle=merge -c rerere.enabled=false \
+    merge -q --squash "$head" >/dev/null 2>&1; rc=$?
+  # a merge that failed without leaving a conflict did not merge at all,
+  # and the worker must not be handed the bare base as though it were
+  # its branch
+  if [ "$rc" != 0 ] && [ -z "$(git -C "$tree" diff --name-only -z --diff-filter=U)" ]; then
+    echo "fm-worker: could not rebuild $branch on $BASE" >&2
+    git -C "$tree" reset -q --hard 2>/dev/null
+    git -C "$tree" checkout -q "$branch" 2>/dev/null
+    exit 70
+  fi
+  rebuild_entry="$(rebuild_entry_of "$(git show "$head:design/tasks.json" 2>/dev/null)")"
+  rebuild_rows="$(rebuild_rows_of "$(git show "$head:design/design.md" 2>/dev/null)")"
+  # Each repair below is best-effort, and says nothing when it cannot:
+  # the check before the commit is what holds the round, on every path,
+  # whether the repair failed or the worker undid it.
+  if rebuild_unmerged design/tasks.json; then
+    rebuild_tasks_json "$mb" "$head" || true
+  elif [ "$rebuild_entry" != "$(rebuild_entry_of "$(cat "$tree/design/tasks.json" 2>/dev/null)")" ]; then
+    rebuild_task_entry_restore "$head" || true
+  fi
+  if rebuild_unmerged design/design.md; then
+    rebuild_design_rows || true
+  fi
+  rebuild_design_row_survives "$head" || true
+  # NUL-separated: without -z, git quotes a name outside ASCII
+  # ("\346\226\207.txt"), and that string names no file in the worktree
+  while IFS= read -r -d '' f; do
+    [ -n "$f" ] && rebuild_conflicts+=("$f")
+  done < <(git -C "$tree" diff --name-only -z --diff-filter=U)
+  # A conflict with no marker in it - binary, or deleted on one side - has
+  # one side sitting in the worktree looking resolved. `add -A` would
+  # commit that side whole, so each is described as what it is and held
+  # until the worker changes it.
+  for f in ${rebuild_conflicts[@]+"${rebuild_conflicts[@]}"}; do
+    [ -f "$tree/$f" ] && grep -qIE '^(<<<<<<<|>>>>>>>)( |$)' "$tree/$f" 2>/dev/null && continue
+    side="$(rebuild_side_left "$f")"
+    rebuild_bare+=("$f"); rebuild_bare_left+=("$(rebuild_state_of "$f")"); rebuild_bare_side+=("$side")
+  done
+  # a file that merged but still lost the task's entry or row goes to the
+  # worker too, by name; a conflicted one is already on the list above
+  while IFS= read -r f; do
+    [ -n "$f" ] && ! rebuild_unmerged "$f" && rebuild_restore+=("$f")
+  done < <(rebuild_lost worktree)
+  rebuild_mark="$(rebuild_fingerprint)"
+  echo "fm-worker: $branch no longer rebases onto $BASE; rebuilt on ${rebuild_base:0:12} from ${rebuild_prev:0:12}" \
+       "(${#rebuild_conflicts[@]} conflicting)" >&2
+  emit_status "Rebuilt $branch on $BASE" "已把 $branch 重建在 $BASE 上"
+}
+if [ "$round_two" = 1 ]; then bring_up_to_date; fi
 
 # --- the prompt: the task, the design that bears on it, and the skill ----
 prompt="$tree/.fm-prompt.md"
@@ -519,6 +898,52 @@ say="$tree/.fm-say.md"
       fi
     fi
   fi
+  if [ "$rebuilt" = 1 ]; then
+    printf '\n---\n\n# Your branch was rebuilt on the current %s\n\n' "$BASE"
+    printf '%s moved under this branch and the branch no longer rebased onto it,\n' "$BASE"
+    printf 'so fm-worker.sh rebuilt it: your change so far (previous head %s)\n' "$rebuild_prev"
+    printf 'was applied three-way onto %s at %s. It is staged, not committed;\n' "$BASE" "$rebuild_base"
+    printf 'fm-worker.sh commits it with this round as one commit on %s.\n' "$BASE"
+    if [ "${#rebuild_conflicts[@]}" -gt 0 ]; then
+      marked_list=()
+      for f in "${rebuild_conflicts[@]}"; do
+        bare=0
+        for g in ${rebuild_bare[@]+"${rebuild_bare[@]}"}; do [ "$g" != "$f" ] || bare=1; done
+        [ "$bare" = 1 ] || marked_list+=("$f")
+      done
+      if [ "${#marked_list[@]}" -gt 0 ]; then
+        printf '\nThese files conflict and carry standard conflict markers:\n\n'
+        printf -- '- `%s`\n' "${marked_list[@]}"
+      fi
+      if [ "${#rebuild_bare[@]}" -gt 0 ]; then
+        printf '\nThese files conflict but git could not write markers into them (a\n'
+        printf 'binary file, or one side deleted what the other changed). One side\n'
+        printf 'is sitting in the worktree and looks resolved; it is not:\n\n'
+        for i in "${!rebuild_bare[@]}"; do
+          printf -- '- `%s`: the worktree holds %s\n' "${rebuild_bare[$i]}" "${rebuild_bare_side[$i]}"
+        done
+        printf '\nDecide what each should be with both changes in mind. A round that\n'
+        printf 'leaves one exactly as the merge left it is refused.\n'
+      fi
+      printf '\nResolve every one before anything else. Keep BOTH sides: %s'"'"'s change\n' "$BASE"
+      printf 'and your task'"'"'s intent. Never take a whole side, and never drop %s'"'"'s change.\n' "$BASE"
+      printf 'A conflict marker left in any file this commit carries refuses the commit.\n'
+    else
+      printf '\nEvery file applied cleanly; there is nothing to resolve.\n'
+    fi
+    if [ "${#rebuild_restore[@]}" -gt 0 ]; then
+      printf '\nThe rebuild could not keep your task'"'"'s own entry or table row in:\n\n'
+      printf -- '- `%s`\n' "${rebuild_restore[@]}"
+      printf '\nPut it back exactly as it is at %s, keeping %s'"'"'s other changes.\n' "$rebuild_prev" "$BASE"
+    fi
+    printf '\nYour task'"'"'s design/tasks.json entry and design/design.md table row must\n'
+    printf 'come through exactly as they are at %s; a rebuilt round that changes\n' "$rebuild_prev"
+    printf 'either is refused, like one that leaves a conflict marker.\n'
+    printf '\nThe worktree is detached until fm-worker.sh commits, so fm-checkpoint.sh\n'
+    printf 'refuses this round. That is expected: fm-worker.sh pushes the rebuild.\n'
+    printf 'Do not commit in it yourself: a round whose HEAD is no longer %s is\n' "$rebuild_base"
+    printf 'refused too.\n'
+  fi
   printf '\n---\n\n# The design\n\n'
   sed -n '/^## 6\./,/^## 8\./p' design/design.md 2>/dev/null
 } > "$prompt"
@@ -526,9 +951,19 @@ say="$tree/.fm-say.md"
 # --- the adapter, with fallback only on a vendor being unavailable -------
 # The worker's evidence: files changed in the worktree. The prompt lives
 # there too, so it comes out of the count or every run looks busy.
-worker_did_work() {
+# A rebuilt worktree is dirty before the engine starts, so there it is the
+# difference from what the rebuild left that counts - or every vendor would
+# look busy, and an unavailable one would be read as having done work.
+worker_changed_files() {
+  if [ "$rebuilt" = 1 ]; then
+    [ "$(rebuild_fingerprint)" != "$rebuild_mark" ]
+    return
+  fi
   [ -n "$(git -C "$tree" status --porcelain -- . \
-      ":(exclude).fm-prompt.md" ":(exclude).fm-say.md")" ] || [ -s "$tree/.fm-say.md" ]
+      ":(exclude).fm-prompt.md" ":(exclude).fm-say.md")" ]
+}
+worker_did_work() {
+  worker_changed_files || [ -s "$tree/.fm-say.md" ]
 }
 log="$FM_RUN_DIR/worker.log"; : > "$log"
 # Close fd 9 and the launch-time task lock in a subshell so adapters cannot
@@ -682,8 +1117,7 @@ lost_held() {   # lost_held <rc>; from the EXIT trap, so it returns
        --en "the worker's note was not posted: the run ended (exit $1) before it reached a pull request" \
        --tw "工人的留言沒有貼出：執行在送到 PR 之前就結束了（exit ${1}）"
 }
-if [ "$asked" = 1 ] && [ -z "$PR" ] && [ -n "$(git -C "$tree" status --porcelain -- . \
-     ":(exclude).fm-prompt.md" ":(exclude).fm-say.md")" ]; then
+if [ "$asked" = 1 ] && [ -z "$PR" ] && worker_changed_files; then
   _held="$(scratch_new)" || _held=''
   [ -n "$_held" ] || { echo "fm-worker: could not make a scratch file" >&2; exit 70; }
   scratch_add "$_held"
@@ -701,29 +1135,147 @@ fi
 rm -f "$say"
 
 # asking IS the work in a round that begins with a question, and the round
-# after it is the one that changes files
-if [ "$asked" = 1 ] && [ -z "$(git -C "$tree" status --porcelain)" ]; then
+# after it is the one that changes files. A rebuild this round made is not
+# a change the worker made: an asking round publishes nothing, and the next
+# round rebuilds again from the branch as it stands.
+if [ "$asked" = 1 ] && ! worker_changed_files; then
   echo "fm-worker: the worker asked rather than changed anything; its question is on #$PR" >&2
   printf '%s\n' "$branch"
   exit 0
 fi
 
 # the same predicate the chain was given, not a second spelling of it: the
-# two agreed only because the prompt happened to be removed between them
-if ! worker_did_work; then
+# two agreed only because the prompt happened to be removed between them.
+# A rebuild is work in its own right: a branch brought up to date with
+# nothing else to add is still committed and pushed.
+if [ "$rebuilt" = 0 ] && ! worker_did_work; then
   echo "fm-worker: the adapter changed nothing" >&2
   emit --type gate_failed --en "the adapter changed nothing" --tw "adapter 沒有改動任何檔案"
   exit 1
 fi
 
 # --- from here on it is the script's job, never the adapter's ------------
-git -C "$tree" add -A
-fm_git_commit "$tree" "$TASK: $(jq -r .title <<<"$spec")"
+# Every step from here to the push is checked where it stands. This script
+# does not run under `set -e`, so a git command that fails and is not
+# tested is simply stepped over - and the run goes on to report a commit
+# it never made.
+rebuild_refuse() {   # rebuild_refuse <what, en> <what, zh-TW>
+  echo "fm-worker: $1" >&2
+  echo "fm-worker: nothing is committed or pushed; the branch stays at ${rebuild_prev}" >&2
+  echo "fm-worker: the worktree is left at $tree; the next round rescues it and rebuilds from the branch" >&2
+  emit --type gate_failed ${PR:+--pr "$PR"} --en "$1; not committed" --tw "${2}，沒有 commit"
+  exit 75
+}
+# Everything below reads the rebuild against the base it was made on, and
+# the commit below lands on HEAD. The two are one only while HEAD is still
+# that base, detached: a commit made on it mid-round - a worker's own, or
+# any save - would sit under the round, outside every check here, and go
+# out with it.
+if [ "$rebuilt" = 1 ]; then
+  now_head="$(git -C "$tree" rev-parse -q --verify HEAD 2>/dev/null)"
+  if [ "$now_head" != "$rebuild_base" ] || git -C "$tree" symbolic-ref -q HEAD >/dev/null 2>&1; then
+    rebuild_refuse "HEAD moved off the rebuild base ${rebuild_base} during the round (now ${now_head:-unreadable}$(git -C "$tree" symbolic-ref -q --short HEAD 2>/dev/null | sed 's/^/ on /'))" \
+      "這輪中途 HEAD 離開了重建的基底 ${rebuild_base}"
+  fi
+fi
+git -C "$tree" add -A || { echo "fm-worker: could not stage the round on $branch" >&2; exit 70; }
+# A rebuilt round is committed only once every handed-over conflict is
+# resolved. Every file this commit carries is read - on a rebuild that is
+# the task's whole change - not just the ones listed, because a marker the
+# worker copied elsewhere is as broken as one it left in place. From the
+# index, since that is what would be committed.
+if [ "$rebuilt" = 1 ]; then
+  carried=(); marked=()
+  while IFS= read -r -d '' f; do carried+=("$f"); done \
+    < <(git -C "$tree" diff --cached --name-only -z --diff-filter=d "$rebuild_base")
+  if [ ${#carried[@]} -gt 0 ]; then
+    # exit 1 is "no marker anywhere"; anything above it is a grep that did
+    # not read the files, and that is not the same answer
+    # names NUL-separated, as above, so the refusal names the real file;
+    # turned back into lines here, since a substitution drops NULs
+    found="$(git -C "$tree" --literal-pathspecs grep --cached -l -z -E '^(<<<<<<<|>>>>>>>)( |$)' \
+               -- "${carried[@]}" 2>/dev/null | tr '\0' '\n'; exit "${PIPESTATUS[0]}")"; grc=$?
+    [ "$grc" -le 1 ] || { echo "fm-worker: could not read the rebuilt $branch for conflict markers" >&2; exit 70; }
+    while IFS= read -r f; do
+      [ -n "$f" ] && marked+=("$f")
+    done <<<"$found"
+  fi
+  if [ ${#marked[@]} -gt 0 ]; then
+    listed="$(printf '%s, ' "${marked[@]}")"; listed="${listed%, }"
+    rebuild_refuse "conflict markers remain in: ${listed}" "衝突標記還留在 ${listed}"
+  fi
+  # a conflict with no markers, still exactly the side the merge left
+  untouched=()
+  for i in ${rebuild_bare[@]+"${!rebuild_bare[@]}"}; do
+    [ "$(rebuild_state_of "${rebuild_bare[$i]}")" != "${rebuild_bare_left[$i]}" ] \
+      || untouched+=("${rebuild_bare[$i]}")
+  done
+  if [ ${#untouched[@]} -gt 0 ]; then
+    listed="$(printf '%s, ' "${untouched[@]}")"; listed="${listed%, }"
+    rebuild_refuse "conflicts with no markers are still as the merge left them: ${listed}" \
+      "沒有衝突標記的衝突還是合併留下的樣子：${listed}"
+  fi
+  # the task's own entry and row, exactly as the previous head had them,
+  # whatever repaired or resolved them on the way here
+  lost=()
+  while IFS= read -r f; do [ -n "$f" ] && lost+=("$f"); done < <(rebuild_lost index)
+  if [ ${#lost[@]} -gt 0 ]; then
+    listed="$(printf '%s, ' "${lost[@]}")"; listed="${listed%, }"
+    rebuild_refuse "the task's own entry or table row is not as ${rebuild_prev} had it in: ${listed}" \
+      "任務自己的條目或表格列跟 ${rebuild_prev} 不一樣：${listed}"
+  fi
+fi
+if ! fm_git_commit "$tree" "$TASK: $(jq -r .title <<<"$spec")"; then
+  # Stop here, rebuilt or not. A plain round would otherwise push a branch
+  # without this round's work and say it had committed; a rebuilt one
+  # would move the branch onto the bare base below.
+  echo "fm-worker: could not commit on $branch; nothing is pushed" >&2
+  emit --type gate_failed ${PR:+--pr "$PR"} --en "could not commit on $branch" --tw "無法在 $branch 上 commit"
+  exit 70
+fi
 _fm_wip_done=1
+if [ "$rebuilt" = 1 ]; then
+  rebuilt_head="$(git -C "$tree" rev-parse HEAD)"
+  # Pushed from the detached HEAD first; the local branch moves only once
+  # origin has taken it. Until then refs/fm-rebuilt/ names the commit, so a
+  # run cut short in between settles on origin's answer (rebuild_settle).
+  git -C "$REPO" update-ref "refs/fm-rebuilt/$branch" "$rebuilt_head" || {
+    echo "fm-worker: could not record the rebuilt commit ${rebuilt_head}; nothing is pushed" >&2; exit 70; }
+  # Leased on the head fetched before the rebuild, never a bare --force:
+  # anything pushed to the branch since is refused rather than overwritten.
+  # An empty lease means the branch must still not exist on origin.
+  if ! git -C "$tree" push -q --force-with-lease="refs/heads/$branch:$rebuild_lease" \
+       origin "HEAD:refs/heads/$branch" 2>/dev/null; then
+    # refused: the local branch never moved; the rebuilt commit stays
+    # reachable by the id printed here
+    rebuild_settle || true
+    echo "fm-worker: could not push the rebuilt $branch: origin no longer has ${rebuild_lease:-no such branch}, or refused" >&2
+    echo "fm-worker: the rebuilt commit is ${rebuilt_head}; $branch is back at $(git -C "$REPO" rev-parse -q --verify "refs/heads/$branch")" >&2
+    exit 71
+  fi
+  # origin has it: only now the local branch
+  git -C "$tree" checkout -q -B "$branch" || {
+    echo "fm-worker: the rebuilt $branch (${rebuilt_head}) is on origin, but $branch could not be moved onto it; the next round does" >&2
+    exit 70; }
+  git -C "$tree" branch -q -u "origin/$branch" >/dev/null 2>&1 || true
+  git -C "$REPO" update-ref -d "refs/fm-rebuilt/$branch" 2>/dev/null \
+    || echo "fm-worker: could not clear refs/fm-rebuilt/$branch; the next round settles it" >&2
+  echo "fm-worker: $branch rebuilt on $BASE; the previous head was ${rebuild_prev}" >&2
+else
+  git -C "$tree" push -q -u origin "$branch" 2>/dev/null || {
+    echo "fm-worker: could not push $branch" >&2; exit 71; }
+fi
+# Only now: a push that was refused - a lease above, or a plain one - left
+# a commit that is not on origin, and the log must not say it was pushed.
 emit_status "Commit pushed on $branch" "已在 $branch 上推送 commit"
 emit --type commit_pushed --en "committed on $branch" --tw "已在 $branch 上 commit"
-git -C "$tree" push -q -u origin "$branch" 2>/dev/null || {
-  echo "fm-worker: could not push $branch" >&2; exit 71; }
+rebuild_args=()
+if [ "$rebuilt" = 1 ]; then
+  rebuild_args=(--data "$(jq -cn --arg prev "$rebuild_prev" --arg base "$BASE" \
+    --arg base_head "$rebuild_base" --arg head "$(git -C "$tree" rev-parse HEAD)" \
+    '{rebuilt:{previous_head:$prev,base:$base,base_head:$base_head,head:$head,
+      conflicts:$ARGS.positional}}' --args ${rebuild_conflicts[@]+"${rebuild_conflicts[@]}"})")
+fi
 
 # On a later round the pull request is already open and `pr create` fails.
 # A worker that could only ever open a new one failed its second round at
@@ -752,11 +1304,29 @@ if [ -z "$num" ] || [ "$num" = "null" ]; then
   num="$(printf '%s' "$url" | sed -n 's|.*/\([0-9][0-9]*\)$|\1|p')"
   [ -n "$num" ] || { echo "fm-worker: could not read a pull request number from '$url'" >&2; exit 72; }
   emit_status "Pull request #$num opened" "已開 PR #$num"
-  emit --type pr_opened --pr "$num" --en "opened #$num" --tw "已開 #$num"
+  emit --type pr_opened --pr "$num" ${rebuild_args[@]+"${rebuild_args[@]}"} \
+       --en "opened #$num" --tw "已開 #$num"
 else
   emit_status "Pushed another round to #$num" "已推第二輪到 #$num"
-  emit --type commit_pushed --pr "$num" --en "pushed another round to #$num" \
-       --tw "第二輪已推上 #$num"
+  emit --type commit_pushed --pr "$num" ${rebuild_args[@]+"${rebuild_args[@]}"} \
+       --en "pushed another round to #$num" --tw "第二輪已推上 #$num"
+fi
+# The reviewer reads the pull request, and after a rebuild the diff it saw
+# last is gone from the branch. The previous head is what it compares
+# against, so it goes on the pull request as well as into the event.
+if [ "$rebuilt" = 1 ]; then
+  if [ "${#rebuild_conflicts[@]}" -gt 0 ]; then
+    handed="$(printf '`%s`, ' "${rebuild_conflicts[@]}")"; handed="${handed%, }"
+  else
+    handed='none'
+  fi
+  if ! $GH pr comment "$num" --body "$(printf '%s\n' \
+       "fm-worker.sh rebuilt \`$branch\` as one commit on \`$BASE\` at \`$rebuild_base\`: it no longer rebased onto it cleanly." \
+       "" "Previous head: \`$rebuild_prev\`" "New head: \`$(git -C "$tree" rev-parse HEAD)\`" \
+       "Conflicts handed to the worker: $handed")" \
+       >/dev/null 2>&1 </dev/null; then
+    echo "fm-worker: could not note the rebuild on #$num; the previous head was ${rebuild_prev}" >&2
+  fi
 fi
 # the note that waited for a pull request has one now. Refused, it is
 # kept and the run fails the way a refused note on an existing pull

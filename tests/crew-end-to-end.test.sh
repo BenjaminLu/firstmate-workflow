@@ -17,6 +17,9 @@ done
 # Keep fixture startup isolated even when this suite is launched by a managed worker.
 unset FM_CODE_ROOT FM_ENTRY_PID FM_ENTRY_SCRIPT FM_RUN_DIR FM_CONTEXT_READY FM_ATTEMPT_DIR FM_FINAL_PATH FM_CLI_EXIT
 export HERDR_ENV=0 FM_TRANSPORT=direct
+# The mock git below answers `config` with nothing, so the identity a commit
+# needs is the fixture's own: a worker whose commit fails stops.
+export FM_GIT_NAME=t FM_GIT_EMAIL=a@b.c
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
