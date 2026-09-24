@@ -1767,6 +1767,31 @@
         "Evidence is this pull request's required GitHub check and the seven gates. Tests written to fail first, in fixtures that install the real hooks with bin/fm-install-hooks.sh: a rebuild of a branch that no longer rebases publishes one commit on the new base and moves the local branch; a rebuild with a leftover marker publishes nothing; a commit on main is still refused by the hook; a commit on a detached HEAD is now allowed by the hook. Each of these fails on today's code. The worker does not run the suite itself.",
         "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
       ]
+    },
+    {
+      "id": "T-089",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-065"
+      ],
+      "title": "every crew member has a name of their own, drawn from one fleet roster",
+      "scope": [
+        "bin/fm-herdr.py",
+        "config.yaml",
+        "tests/herdr.test.sh",
+        "tests/worker.test.sh",
+        "tests/review.test.sh",
+        "design/design.md",
+        "design/tasks.json"
+      ],
+      "acceptance": [
+        "bin/fm-herdr.py allocate() names every worker 'mira' and every reviewer 'noah' when no alias is given, so concurrent runs share a display name. The captain noticed this on 2026-09-24, and T-086's service records and ranks need one person per name. Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+        "A fleet roster (a list of short given names, overridable in config.yaml, and shared by workers and reviewers so no name is used for both roles) replaces the fixed stems. allocate() gives a run the name of a crew member who is not live in any other run: live means an unfinished run under state/runs, decided under the existing identity lock. A task keeps the same crew member across its rounds while that member is free. When every name is live, allocation says so and names the one it reuses with a numeric suffix, never silently.",
+        "The actor keeps its current shape, <role>-<name>-<task>-r<n>, so every consumer of actor names is unchanged. An explicit alias still wins, but it is refused when that name is live.",
+        "Evidence is this pull request's required GitHub check and the seven gates. Tests written to fail first: two concurrent workers get different names; a worker and a reviewer live at once never share a name; a task's second round gets its first round's name when that name is free; the exhausted roster is reported; and a live alias is refused. The worker does not run the suite itself.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
     }
   ]
 }

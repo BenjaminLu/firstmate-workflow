@@ -386,7 +386,7 @@ for scenario in signed unsigned outage; do
   assert_eq "1" "$(jq -r 'select(.type=="agent_finished")|.type' "$rr/state/events.jsonl" | grep -c . || true)" \
     "and exactly once"
   assert_matches "$(jq -r 'select(.type=="agent_finished")|.actor' < "$rr/state/events.jsonl")" \
-    '^reviewer-noah-tz-r[0-9]+$' "and under its own per-run name"
+    '^reviewer-[a-z]+[0-9]*-tz-r[0-9]+$' "and under its own per-run name"
   rm -rf "$dr"
 done
 
