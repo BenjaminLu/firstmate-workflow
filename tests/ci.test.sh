@@ -645,6 +645,34 @@ plant "an id the design does not list turns the dag stage red" "the design does 
 plant "and the stage names the id" "T-999"
 rm -rf "$q/design"
 
+# with a registry, the check runs once per registered (design, tasks) pair
+# and names the project that disagrees. The library's parser lives beside it.
+cp "$ROOT/bin/fm-herdr.py" "$q/bin/"
+mkdir -p "$q/design" "$q/projects/other-app"
+printf '{"tasks":[{"id":"T-001"}]}\n' > "$q/design/tasks.json"
+printf '| T-001 | the engine task |\n' > "$q/design/design.md"
+printf '{"tasks":[{"id":"T-777"}]}\n' > "$q/projects/other-app/tasks.json"
+printf '# a target design with no task table\n' > "$q/projects/other-app/design.md"
+{ printf 'default_project: self-host\nprojects:\n'
+  printf '  self-host:\n    repo: .\n    github: o/engine\n    base: main\n    required_check: ci\n'
+  printf '    design: design/design.md\n    tasks: design/tasks.json\n'
+  printf '  other-app:\n    github: o/other-app\n    base: main\n    required_check: check\n'
+} > "$q/config.yaml"
+plant "a registered project's disagreement turns the dag stage red" "the design does not list"
+plant "and the stage names that project" "project other-app (projects/other-app/design.md, projects/other-app/tasks.json)"
+plant "and its id" "T-777"
+plant "the self pair is checked in the same run" \
+  "project self-host (design/design.md, design/tasks.json): the design and tasks.json agree"
+printf '| T-777 | the target task |\n' > "$q/projects/other-app/design.md"
+plant "every pair agreeing is green per project" \
+  "project other-app (projects/other-app/design.md, projects/other-app/tasks.json): the design and tasks.json agree"
+rm -rf "$q/projects"
+plant "a registered pair that does not exist is red, not skipped" \
+  "project other-app: projects/other-app/design.md or projects/other-app/tasks.json does not exist"
+printf '  broken-app:\n    github: not-a-repo\n    base: main\n    required_check: ci\n' >> "$q/config.yaml"
+plant "a broken registry turns the stage red" "the project registry: fm-config: project broken-app: github"
+rm -rf "$q/design" "$q/config.yaml" "$q/bin/fm-herdr.py"
+
 # a suite that fails
 printf '#!/usr/bin/env bash\nexit 1\n' > "$q/tests/doomed.test.sh"
 plant "a failing suite turns the bash stage red" "doomed.test.sh"

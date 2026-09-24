@@ -116,6 +116,169 @@ printf 'project:\n  check: "make test\n' > "$p/config.yaml"
 assert_fail "fm_project check '$p/config.yaml'" "an unterminated quote is refused"
 rm -rf "$p"
 
+# --- the project registry and the two roots (design 15.1, 15.2) ----------
+# A refusal is asserted by its exit code, never by assert_fail: a resolver
+# that does not exist fails too, and would pass every one of these.
+r="$(mktemp -d)"
+engine="$(cd "$r" && pwd -P)"
+rc_of() { "$@" > "$r/out" 2> "$r/err"; printf '%s' "$?"; }
+registry() {   # registry <example-app entry lines> ; the self entry is fixed
+  { printf 'vendor: claude\ndefault_project: self-host   # the engine\n'
+    printf 'projects:               # every repository\n'
+    printf '  self-host:            # this one\n    repo: .\n'
+    printf '    github: owner-a/engine\n    base: main\n    required_check: ci\n'
+    printf '    design: design/design.md\n    tasks: design/tasks.json\n'
+    printf '  example-app:\n%s\n' "$1"
+    printf 'project:\n  setup: make deps && echo "$(not evaluated)"\n  check: make check\n'
+    printf '  check_env:\n    BUDGET: "600"\n  tests:\n    - tests/**\n'
+    printf '  test: bash {file}\n  docs:\n    - docs/**\n    - README.md\n'
+    printf 'concurrency: 3\n'
+  } > "$r/config.yaml"
+}
+app='    github: example-org/example-app
+    base: trunk
+    required_check: check
+    project:
+      check: npm test
+      docs:
+        - "*.md"'
+registry "$app"
+c="$r/config.yaml"
+
+assert_eq "self-host
+example-app" "$(fm_projects "$c")" "the registry lists every project, in order"
+assert_eq "self-host" "$(fm_project_resolve '' "$c")" "no --project and no FM_PROJECT: default_project"
+assert_eq "example-app" "$(FM_PROJECT=example-app fm_project_resolve '' "$c")" "FM_PROJECT beats the default"
+assert_eq "self-host" "$(FM_PROJECT=example-app fm_project_resolve self-host "$c")" "--project beats FM_PROJECT"
+
+# never inferred: a shell standing inside another project's managed clone,
+# whose remote is that project's repository, still resolves the default
+clone="$r/state/projects/example-app/repo"
+mkdir -p "$clone"
+git -C "$clone" init -q && git -C "$clone" remote add origin https://github.com/example-org/example-app.git
+assert_eq "self-host" "$(cd "$clone" && fm_project_resolve '' "$c")" \
+  "the current directory, its remote and its worktree choose nothing"
+
+assert_eq "design/design.md" "$(fm_project_get self-host design "$c")" "a declared design path is read"
+assert_eq "design/tasks.json" "$(fm_project_get self-host tasks "$c")" "a declared task list is read"
+assert_eq "projects/example-app/design.md" "$(fm_project_get example-app design "$c")" "design defaults under projects/<name>"
+assert_eq "projects/example-app/tasks.json" "$(fm_project_get example-app tasks "$c")" "and so does the task list"
+assert_eq "example-org/example-app" "$(fm_project_get example-app github "$c")" "github is read"
+assert_eq "trunk" "$(fm_project_get example-app base "$c")" "base is read"
+assert_eq "check" "$(fm_project_get example-app required_check "$c")" "required_check is read"
+assert_eq "." "$(fm_project_get self-host repo "$c")" "repo is read"
+assert_eq "$engine" "$(fm_project_get self-host root "$c")" "repo . has the engine root as its project root"
+assert_eq "$engine/state/projects/example-app/repo" "$(fm_project_get example-app root "$c")" \
+  "any other project's root is its managed clone"
+assert_eq "example-app|$engine/state/projects/example-app/repo" \
+  "$( fm_project_use example-app "$c" && bash -c 'printf "%s|%s" "$FM_PROJECT" "$FM_PROJECT_ROOT"' )" \
+  "fm_project_use exports the name and the root to children"
+
+# the self entry's contract is T-043's top-level block, whole
+for k in keys setup check test tests docs; do
+  assert_eq "$(fm_project "$k" "$c")" "$(fm_project_contract self-host "$k" "$c")" \
+    "the self contract's $k is the top-level block's"
+done
+assert_eq "$(fm_project check_env "$c" | tr '\0' '|')" \
+  "$(fm_project_contract self-host check_env "$c" | tr '\0' '|')" "and so is its check_env"
+assert_eq 'make deps && echo "$(not evaluated)"' "$(fm_project_contract self-host setup "$c")" \
+  "a contract value comes back exactly as declared"
+assert_eq "check
+docs" "$(fm_project_contract example-app keys "$c")" "another project's contract is its own block"
+assert_eq "npm test" "$(fm_project_contract example-app check "$c")" "and reads through the same parser"
+assert_eq "*.md" "$(fm_project_contract example-app docs "$c")" "docs included"
+
+# every refusal is 65 and names the project and the field
+refused() {   # refused <label> <project> <field> <command...>
+  local label="$1" name="$2" field="$3"; shift 3
+  assert_eq "65" "$(rc_of "$@")" "$label: exit 65"
+  assert_contains "$(cat "$r/err")" "project $name" "$label: names the project"
+  assert_contains "$(cat "$r/err")" "$field" "$label: names the field"
+}
+refused "an unregistered --project" nosuch name fm_project_resolve nosuch "$c"
+refused "an unregistered FM_PROJECT" ghost name env FM_PROJECT=ghost bash -c \
+  '. "$1/bin/fm-config.sh"; fm_project_resolve "" "$2"' _ "$ROOT" "$c"
+refused "a field lookup on an unregistered name" nosuch name fm_project_get nosuch base "$c"
+refused "a name outside [a-z0-9-]" Bad_Name name fm_project_resolve Bad_Name "$c"
+refused "a name longer than 24 characters" abcdefghijklmnopqrstuvwxy name \
+  fm_project_resolve abcdefghijklmnopqrstuvwxy "$c"
+assert_eq "self-host" "$(FM_PROJECT='' fm_project_resolve '' "$c")" "an empty FM_PROJECT is no project"
+
+registry "$app"; printf '  Upper_Case:\n    github: a/b\n    base: main\n    required_check: ci\n' > "$r/extra"
+sed '/^project:/,$d' "$c" > "$r/head"; sed -n '/^project:/,$p' "$c" > "$r/tail"
+cat "$r/head" "$r/extra" "$r/tail" > "$c"
+refused "a registered name outside [a-z0-9-]" Upper_Case name fm_projects "$c"
+registry "$app"; printf '  a-name-of-twenty-five-chr:\n    github: a/b\n    base: main\n    required_check: ci\n' > "$r/extra"
+cat "$r/head" "$r/extra" "$r/tail" > "$c"
+refused "a registered name longer than 24" a-name-of-twenty-five-chr name fm_projects "$c"
+
+for bad in /Users/someone/example-app ../example-app example-app '~/src/app' '""'; do
+  registry "    repo: $bad
+    github: example-org/example-app
+    base: main
+    required_check: check"
+  refused "repo $bad" example-app repo fm_project_get example-app root "$c"
+done
+registry "    repo: .
+    github: example-org/example-app
+    base: main
+    required_check: check"
+refused "a second project claiming the engine" example-app repo fm_projects "$c"
+
+for bad in example-app example-org/ /example-app example-org/example-app/extra 'example org/app' ''; do
+  registry "    github: $bad
+    base: main
+    required_check: check"
+  refused "github [$bad]" example-app github fm_project_get example-app base "$c"
+done
+registry "    base: main
+    required_check: check"
+refused "a missing github" example-app github fm_project_get example-app base "$c"
+registry "    github: example-org/example-app
+    required_check: check"
+refused "a missing base" example-app base fm_project_get example-app github "$c"
+registry "    github: example-org/example-app
+    base: main"
+refused "a missing required_check" example-app required_check fm_project_get example-app github "$c"
+# the whole registry is validated, not only the entry asked about
+refused "a broken entry refuses every lookup" example-app required_check \
+  fm_project_resolve self-host "$c"
+
+# one source of truth: a self entry holding its own contract beside the
+# top-level block is refused, so the two can never disagree
+registry "$app"
+while IFS= read -r line; do
+  printf '%s\n' "$line"
+  if [ "$line" = "    tasks: design/tasks.json" ]; then printf '    project:\n      check: make other\n'; fi
+done < "$c" > "$r/both"; mv "$r/both" "$c"
+assert_contains "$(cat "$c")" "      check: make other" "(the fixture now holds both blocks)"
+refused "the top-level block and a self entry project:" self-host project fm_project_contract self-host check "$c"
+refused "and it refuses any lookup, not only the contract" self-host project fm_project_resolve '' "$c"
+
+# no default and nothing named
+printf 'projects:\n  only-one:\n    github: a/b\n    base: main\n    required_check: ci\n' > "$c"
+assert_eq "65" "$(rc_of fm_project_resolve '' "$c")" "nothing named and no default_project exits 65"
+assert_eq "only-one" "$(fm_project_resolve only-one "$c")" "while a named project still resolves"
+rm -rf "$r"
+
+# --- self-hosting: this repository's own registry ------------------------
+own="$ROOT/config.yaml"
+assert_eq "firstmate-workflow" "$(fm_project_resolve '' "$own")" "this repository is the default project"
+assert_eq "firstmate-workflow" "$(fm_project_resolve firstmate-workflow "$own")" "and resolves when named"
+assert_eq ".|BenjaminLu/firstmate-workflow|main|ci|design/design.md|design/tasks.json" \
+  "$(for k in repo github base required_check design tasks; do printf '%s|' "$(fm_project_get firstmate-workflow "$k" "$own")"; done | sed 's/|$//')" \
+  "it is registered with its repo, github, base, check, design and tasks"
+assert_eq "$(cd "$ROOT" && pwd -P)" "$(fm_project_get firstmate-workflow root "$own")" \
+  "its project root is the engine root"
+assert_contains "$(fm_project_contract firstmate-workflow keys "$own")" "docs" \
+  "its contract is T-043's block, docs included"
+for k in keys setup check test tests docs; do
+  assert_eq "$(fm_project "$k" "$own")" "$(fm_project_contract firstmate-workflow "$k" "$own")" \
+    "its contract's $k is the top-level block's"
+done
+assert_eq "bin/ci.sh" "$(fm_project check "$own")" "the top-level block still reads as before"
+assert_eq "3" "$(fm_cfg concurrency "$own")" "and the registry swallows nothing after it"
+
 # --- the vendor chain, which the worker and the reviewer share -----------
 d="$(mktemp -d)"
 cat > "$d/config.yaml" <<'YAML'

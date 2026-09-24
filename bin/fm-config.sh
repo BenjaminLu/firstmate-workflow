@@ -67,6 +67,203 @@ fm_project() {  # fm_project <field> [file]
   python3 "$_fm_code_dir/fm-herdr.py" project "${2:-config.yaml}" "$1"
 }
 
+# The project registry (design section 15): config.yaml's `default_project`
+# and `projects:` map. The directory holding config.yaml is the engine root.
+#
+#   fm_projects [file]                     -> registered names, one per line
+#   fm_project_resolve [explicit] [file]   -> the project this run is for
+#   fm_project_get <name> <field> [file]   -> repo github base required_check
+#                                             design tasks, or root
+#   fm_project_contract <name> <field> [file] -> as fm_project, for a project
+#   fm_project_use [explicit] [file]       -> exports FM_PROJECT, FM_PROJECT_ROOT
+#
+# The project is named, never inferred: an explicit `--project` value wins,
+# then FM_PROJECT, then default_project. Nothing here looks at the current
+# directory, a git remote or a worktree - a run must not change project
+# because a shell was somewhere else. `root` is the engine root for `repo: .`
+# and state/projects/<name>/repo otherwise.
+#
+# Every lookup validates the whole registry first and exits 65 naming the
+# project and the field: an unregistered or malformed name, a `repo` other
+# than `.`, a `github` not shaped owner/repo, a missing base or
+# required_check. A config.yaml with no `projects:` map registers nothing.
+#
+# The contract has one source during the transition to T-050: the self entry
+# (`repo: .`) resolves to T-043's top-level `project:` block, whole, read by
+# the same parser fm_project uses. A self entry carrying its own `project:`
+# as well as the top-level block is refused, so the two cannot disagree.
+fm_projects()         { _fm_registry "${1:-config.yaml}" names; }
+fm_project_resolve()  { _fm_registry "${2:-config.yaml}" resolve "${1:-}"; }
+fm_project_get()      { _fm_registry "${3:-config.yaml}" field "$1" "$2"; }
+fm_project_contract() { _fm_registry "${3:-config.yaml}" contract "$1" "$2"; }
+fm_project_use() {
+  local name root
+  name="$(fm_project_resolve "${1:-}" "${2:-config.yaml}")" || return
+  root="$(fm_project_get "$name" root "${2:-config.yaml}")" || return
+  FM_PROJECT="$name"; FM_PROJECT_ROOT="$root"
+  export FM_PROJECT FM_PROJECT_ROOT
+}
+
+_fm_registry() {  # _fm_registry <file> <mode> [args...]
+  python3 - "$_fm_code_dir/fm-herdr.py" "$@" <<'PY'
+import importlib.util, os, re, sys, tempfile
+from pathlib import Path
+
+herdr_path, config, mode, *args = sys.argv[1:]
+if Path(config).is_file():   # the one scalar and contract parser, fm_project's
+    spec = importlib.util.spec_from_file_location('fm_herdr', herdr_path)
+    herdr = importlib.util.module_from_spec(spec); spec.loader.exec_module(herdr)
+FIELDS = ('repo', 'github', 'base', 'required_check', 'design', 'tasks', 'project')
+NAME = re.compile(r'[a-z0-9-]{1,24}$')
+GITHUB = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+$')
+
+
+class Refused(Exception):
+    pass
+
+
+def refuse(name, field, why):
+    raise Refused('project %s: %s %s' % (name, field, why))
+
+
+def indent(line):
+    return len(line) - len(line.lstrip(' '))
+
+
+def top_block(lines, key):
+    """The lines under a column-0 `key:`; None when the key is absent."""
+    block, inside, found = [], False, None
+    for raw in lines:
+        if not inside:
+            if re.match(re.escape(key) + r':\s*(#.*)?$', raw):
+                inside, found = True, block
+            continue
+        if not raw.strip() or raw.lstrip().startswith('#'): continue
+        if not raw[:1].isspace(): break
+        block.append(raw.expandtabs(8))
+    return found
+
+
+def load(path):
+    path = Path(path)
+    if not path.is_file(): return None, {}, False
+    lines = path.read_text().splitlines()
+    default = None
+    for raw in lines:
+        found = re.match(r'default_project:(?:\s+(.*))?$', raw)
+        if found:
+            default = herdr._project_scalar(found.group(1) or '', 'config.yaml default_project')
+            break
+    block = top_block(lines, 'projects') or []
+    projects, order, i = {}, [], 0
+    level = indent(block[0]) if block else 0
+    while i < len(block):
+        line = block[i]
+        found = re.match(r'\s*([^\s:#][^:]*):\s*(#.*)?$', line)
+        if indent(line) != level or not found:
+            raise Refused('projects: cannot read line: ' + line.strip())
+        name = found.group(1).strip()
+        if not NAME.match(name):
+            refuse(name, 'name', 'must be [a-z0-9-], at most 24 characters')
+        if name in projects: refuse(name, 'name', 'is registered twice')
+        entry, i = {}, i + 1
+        children = []
+        while i < len(block) and indent(block[i]) > level:
+            children.append(block[i]); i += 1
+        j = 0
+        while j < len(children):
+            line = children[j]; own = indent(line)
+            found = re.match(r'\s*([A-Za-z_][A-Za-z0-9_]*):(?:\s+(.*))?$', line)
+            if not found: refuse(name, 'entry', 'cannot read line: ' + line.strip())
+            key, value = found.group(1), (found.group(2) or '').strip()
+            if key not in FIELDS: refuse(name, key, 'is not a registry field (known: ' + ', '.join(FIELDS) + ')')
+            if key in entry: refuse(name, key, 'is given twice')
+            nested = []
+            j += 1
+            while j < len(children) and indent(children[j]) > own:
+                nested.append(children[j]); j += 1
+            if key == 'project':
+                if value and not value.startswith('#'): refuse(name, key, 'must be a block, as in T-043')
+                entry[key] = nested
+            else:
+                if nested: refuse(name, key, 'must be a one-line value')
+                entry[key] = herdr._project_scalar(value, 'config.yaml projects.%s.%s' % (name, key))
+        projects[name] = entry; order.append(name)
+    has_top = top_block(lines, 'project') is not None
+    for name in order:
+        entry = projects[name]
+        if 'repo' in entry and entry['repo'] != '.':
+            refuse(name, 'repo', "must be . or absent (a committed local path would publish it), not '%s'" % entry['repo'])
+        if not GITHUB.match(entry.get('github', '')) or entry['github'].split('/')[1] in ('.', '..'):
+            refuse(name, 'github', "must be shaped owner/repo, not '%s'" % entry.get('github', ''))
+        for key in ('base', 'required_check'):
+            if not entry.get(key): refuse(name, key, 'is required')
+        for key in ('design', 'tasks'):
+            value = entry.get(key)
+            if value is None: continue
+            if not value or value.startswith('/') or '..' in Path(value).parts:
+                refuse(name, key, "must be a path relative to the engine root, not '%s'" % value)
+        if has_top and entry.get('repo') == '.' and 'project' in entry:
+            refuse(name, 'project', 'is also declared by the top-level project: block; '
+                   'until T-050 the contract lives only there')
+    selves = [name for name in order if projects[name].get('repo') == '.']
+    if len(selves) > 1:
+        refuse(selves[1], 'repo', 'is . for %s as well; only one project is the engine itself' % selves[0])
+    return default, projects, has_top
+
+
+def registered(projects, name):
+    if not NAME.match(name): refuse(name, 'name', 'must be [a-z0-9-], at most 24 characters')
+    if name not in projects:
+        refuse(name, 'name', 'is not registered in config.yaml (registered: %s)'
+               % (', '.join(projects) or 'none'))
+    return projects[name]
+
+
+def field(projects, name, key, config):
+    entry = registered(projects, name)
+    engine = Path(config).resolve().parent
+    if key == 'root':
+        return str(engine if entry.get('repo') == '.' else engine / 'state/projects' / name / 'repo')
+    if key in ('design', 'tasks'):
+        return entry.get(key) or 'projects/%s/%s' % (name, 'design.md' if key == 'design' else 'tasks.json')
+    if key in ('repo', 'github', 'base', 'required_check'):
+        return entry.get(key, '')
+    refuse(name, key, 'is not a registry field')
+
+
+try:
+    default, projects, has_top = load(config)
+    if mode == 'names':
+        for name in projects: print(name)
+    elif mode == 'resolve':
+        explicit = args[0] if args else ''
+        name = explicit or os.environ.get('FM_PROJECT', '') or default or ''
+        if not name:
+            raise Refused('no project named: pass --project, set FM_PROJECT or declare default_project')
+        registered(projects, name); print(name)
+    elif mode == 'field':
+        print(field(projects, args[0], args[1], config))
+    elif mode == 'contract':
+        name, key = args
+        entry = registered(projects, name)
+        with tempfile.NamedTemporaryFile('w', suffix='.yaml') as block:
+            block.write('project:\n' + ''.join(line + '\n' for line in entry.get('project', [])))
+            block.flush()
+            source = config if entry.get('repo') == '.' and has_top else block.name
+            try: rc = herdr.project_field(source, key)
+            except ValueError as error:
+                refuse(name, 'project', str(error).replace('config.yaml ', ''))
+        sys.exit(rc)
+    else:
+        raise Refused('unknown registry mode ' + mode)
+except Refused as error:
+    print('fm-config: ' + str(error), file=sys.stderr); sys.exit(65)
+except ValueError as error:
+    print('fm-config: ' + str(error), file=sys.stderr); sys.exit(65)
+PY
+}
+
 # Freeze before doing work. A nested entrypoint uses the parent's frozen code,
 # while a newly invoked session takes a new snapshot. Explicit roles win.
 # Ignore SIGHUP so a background launch from an agent shell that exits does not

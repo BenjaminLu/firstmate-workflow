@@ -1348,7 +1348,29 @@ verifies after T-050 merges, with no repin, and a task in flight across that
 merge keeps the contract it was pinned with.
 
 `bin/ci.sh`'s agreement check between a design's task table and its task list
-runs once for every registered `(design, tasks)` pair.
+runs once for every registered `(design, tasks)` pair and names the project on
+failure; a registered pair whose files do not exist is red, not skipped. A tree
+with no `projects:` map (the test fixtures) keeps the one
+`design/design.md`/`design/tasks.json` pair it always had.
+
+**The interface (T-046).** `bin/fm-config.sh` holds the resolver every later
+task calls; each function takes the engine's `config.yaml` as its last,
+optional argument, and the directory holding it is the engine root:
+
+| Function | Answers |
+|---|---|
+| `fm_project_resolve [explicit]` | the project: `explicit` (a script's `--project`), else `FM_PROJECT`, else `default_project` |
+| `fm_project_get <name> <field>` | `repo`, `github`, `base`, `required_check`, `design`, `tasks` (with the defaults above), or `root` |
+| `fm_project_contract <name> <field>` | the fields `fm_project` answers, for that project; the self entry reads the top-level block |
+| `fm_project_use [explicit]` | resolves and exports `FM_PROJECT` and `FM_PROJECT_ROOT` |
+| `fm_projects` | every registered name, in file order |
+
+Every call validates the whole registry first, so one malformed entry refuses
+every lookup (exit `65`, naming the project and field) rather than only the
+lookups that touch it. Besides the rules in the table, it refuses an unknown
+field in an entry, a name registered twice, a second entry with `repo: .`, and
+a `design` or `tasks` path that is absolute or climbs out with `..` — the same
+reasoning as `repo`: nothing outside the engine root may be named.
 
 ### 15.3 Where each project's things live
 

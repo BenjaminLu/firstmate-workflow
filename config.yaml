@@ -17,6 +17,17 @@ fallback:               # tried in order when an adapter exits 2 (vendor unavail
   - cursor-agent
   - gemini
 
+default_project: firstmate-workflow   # the project a script without --project runs for
+projects:               # every repository firstmate drives; design section 15.2
+  firstmate-workflow:   # this repository, hosting itself
+    repo: .
+    github: BenjaminLu/firstmate-workflow
+    base: main
+    required_check: ci
+    design: design/design.md
+    tasks: design/tasks.json
+    # its contract is the top-level project: block below until T-050 moves it
+
 project:                # how this repository is prepared and checked; see README
   # a fresh worktree has no node_modules and no browser, and without them the
   # check skips its end-to-end stage rather than failing
