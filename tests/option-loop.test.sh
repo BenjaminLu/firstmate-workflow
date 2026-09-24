@@ -49,6 +49,7 @@ fm-dispatch 2
 fm-emit 8
 fm-gate 5
 fm-merge 4
+fm-project 1
 fm-protocol 4
 fm-reconcile 2
 fm-review 7
@@ -134,7 +135,7 @@ while read -r name want; do
     fi
   done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "71" "$total" "every pinned flag and all seven fm option branches were exercised"
+assert_eq "72" "$total" "every pinned flag and all seven fm option branches were exercised"
 
 # A script that grows an option loop has to be pinned here too, and the
 # corpus is the one bin/ci.sh judges - literally, out of
@@ -209,7 +210,7 @@ while IFS= read -r f; do
   assert_contains "$said" "fm-config.sh" "and says which library"
   rm -rf "$tmp"
 done < <(fm_shell_corpus "$ROOT/bin")
-assert_eq "8" "$sourced" "eight scripts take their guard from the library"
+assert_eq "9" "$sourced" "nine scripts take their guard from the library"
 
 # And the other half of the same number, because two comments say it is
 # pinned here and until now it was not: the scripts that deliberately

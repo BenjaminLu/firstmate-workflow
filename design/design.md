@@ -1797,6 +1797,26 @@ dispatch to it; a failure refuses dispatch with exit `70` and names the item:
   copied into the target's tree;
 - the captain's credentials able to push branches and open pull requests.
 
+`fm-project.sh sync <name>` makes the clone that way (T-048): it clones
+`<owner>/<repo>` from `FM_GITHUB_URL` (GitHub unless a fixture stands in),
+or fetches and prunes the clone already there; sets `core.hooksPath` to the
+engine root's `.githooks/` and `firstmate.base` to the project's `base` in
+the clone's local config; and adds `.fm-*` to its `.git/info/exclude`. It
+runs git only in a directory that is its own repository, reached without a
+symlink, under `state/projects/<name>/`, whose `origin` is the project's
+repository; anything else is refused with exit `70`. The guard and both
+hooks read `firstmate.base` and protect it on top of `FM_PROTECTED`
+(`main master`), so a checkout without the key — the self project's among
+them — keeps exactly that set, and a task worktree of the clone shares it.
+`verify` checks the protection, public-only (15.8) and guard items above,
+through `gh api` for the base's protection and the repository. It also
+checks the clone's `origin`, since a guarded clone of another repository
+guards nothing of the target's, and takes the hooks directory from git
+itself, which expands `~` and reads a relative path from the clone. It
+names every missing one before it exits `70`. The workflow and the
+credentials are not machine-checked yet. For the self project both
+subcommands are no-ops that succeed.
+
 **What firstmate never writes into a target:**
 
 - a commit to `base` or any protected branch, or a force-push to anything but
