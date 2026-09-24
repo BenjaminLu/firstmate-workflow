@@ -246,6 +246,12 @@ git -C "$clone" config firstmate.base main
 assert_eq "70" "$(run verify example-app --repo "$eng")" "a guard protecting some other base refuses"
 assert_contains "$(cat "$t/err")" "firstmate.base" "and names the guard's base"
 git -C "$clone" config firstmate.base trunk
+# hooked and guarded, but a clone of some other repository guards nothing of the target's
+git -C "$clone" remote set-url origin "$remotes/example-org/not-this.git"
+assert_eq "70" "$(run verify example-app --repo "$eng")" "a clone of some other repository refuses"
+assert_contains "$(cat "$t/err")" "origin" "and names the origin"
+git -C "$clone" remote set-url origin "$bare"
+assert_eq "0" "$(run verify example-app --repo "$eng")" "and the right origin verifies again"
 
 # everything wrong at once: every item named, not just the first
 protection false false lint

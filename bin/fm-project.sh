@@ -14,8 +14,8 @@
 #
 # verify exits 70, naming every missing item, unless the base is protected
 # with enforce_admins on, up to date required and required_check a required
-# status check; the repository is public (15.8); and the clone's hooks and
-# guard are the engine's. For the self project (`repo: .`) both are no-ops
+# status check; the repository is public (15.8); and the clone's origin is
+# the project's repository and its hooks and guard are the engine's. For the self project (`repo: .`) both are no-ops
 # that succeed.
 #
 # FM_GITHUB_URL is where `owner/repo` is cloned from: https://github.com
@@ -145,7 +145,10 @@ verify_target() {
   if ! place_ok 2>/dev/null || ! is_clone; then
     miss "no managed clone at state/projects/$NAME/repo; run fm-project.sh sync $NAME"
   else
-    local hp gb
+    local hp gb og
+    og="$(git -C "$clone" remote get-url origin 2>/dev/null || true)"
+    [ "$og" = "$origin" ] \
+      || miss "the clone's origin is '${og}', not $origin"
     hp="$(git -C "$clone" config --local --get core.hooksPath 2>/dev/null || true)"
     [ -n "$hp" ] && [ "$(resolved "$hp")" = "$(resolved "$hooks")" ] \
       || miss "the clone's core.hooksPath is '${hp}', not the engine's $hooks"

@@ -1777,7 +1777,9 @@ hooks read `firstmate.base` and protect it on top of `FM_PROTECTED`
 (`main master`), so a checkout without the key — the self project's among
 them — keeps exactly that set, and a task worktree of the clone shares it.
 `verify` checks the protection, public-only (15.8) and guard items above,
-through `gh api` for the base's protection and the repository, and names
+through `gh api` for the base's protection and the repository, and the
+clone's `origin`, since a guarded clone of another repository guards
+nothing of the target's; it names
 every missing one before it exits `70`. The workflow and the credentials
 are not machine-checked yet. For the self project both subcommands are
 no-ops that succeed.
