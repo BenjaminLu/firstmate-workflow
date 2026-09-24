@@ -1568,15 +1568,16 @@
         "board/public/ship.js",
         "board/public/ship.css",
         "bin/fm-dispatch.sh",
-        "bin/fm-emit.sh",
         "i18n/ui.en.json",
         "i18n/ui.zh-TW.json",
         "i18n/tw2cn.tsv",
         "tests/board.test.sh",
         "tests/dispatch.test.sh",
-        "tests/emit.test.sh",
         "tests/e2e/board.spec.ts",
         "tests/e2e/fixture.ts",
+        "bin/fm-emit.sh",
+        "tests/emit.test.sh",
+        "bin/fm-diagram.sh",
         "design/design.md",
         "design/tasks.json"
       ],
@@ -1587,6 +1588,8 @@
         "fm-dispatch.sh never starts a parked task and starts it again only after an 'unparked'. A task that depends on a parked or dropped task shows that as its blocker on its backlog card.",
         "Park, unpark and drop are refused (409, nothing emitted) for a task that is in flight or later, and the card for such a task offers neither action.",
         "Labels come from the UI dictionaries (en park/unpark/drop/parked; zh-TW 擱置/恢復/不做/已擱置); zh-CN derives through tw2cn.tsv. design.md's board and dispatch sections describe the two actions and the new events.",
+        "Captain decision D-1002 = A added bin/fm-emit.sh and tests/emit.test.sh to this scope: fm-emit.sh's TYPES gains 'parked' and 'unparked', and tests/emit.test.sh asserts each new type is accepted, next to the other types.",
+        "Captain decision D-1006 = A added bin/fm-diagram.sh to this scope: 'parked' and 'unparked' join its ROUTINE list, so tests/diagram.test.sh's check that every fm-emit type has a ruling stays green. Neither event gets a drawing.",
         "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first: board.test.sh (each action emits the right event; refused for in-flight), dispatch.test.sh (parked is skipped, unparked is dispatchable again, dropped never is), and the e2e board spec (drag and click each move a card to parked and back, and drop after confirming). The worker does not run the suite itself.",
         "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
       ]
