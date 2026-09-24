@@ -27,11 +27,25 @@ J
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --type greenlit --en "go" --tw "開工" >/dev/null
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-A --type dispatched --en "picked up T-A" --tw "領走 T-A" >/dev/null
 
-PORT=$(( 14000 + RANDOM % 900 ))
+# The kernel picks the port and the server says which one it got. A RANDOM
+# range overlapped the other suites' ranges, and with the gate running suites
+# side by side a readiness loop could be answered by somebody else's board.
+board_port() {   # board_port <log> <pid>: the port the server printed; 1 if it died first
+  local log="$1" pid="$2" end=$(( $(date +%s) + 60 )) port
+  while [ "$(date +%s)" -le "$end" ]; do
+    port="$(sed -n 's|^board on http://127\.0\.0\.1:\([0-9][0-9]*\).*|\1|p' "$log" 2>/dev/null | head -1)"
+    [ -n "$port" ] && { printf '%s' "$port"; return 0; }
+    kill -0 "$pid" 2>/dev/null || return 1
+    sleep 0.05
+  done
+  return 1
+}
+
 # detach every descriptor: ci.sh runs suites inside $(...), and a child that
 # keeps stdout open holds the command substitution open with it
-FM_ROOT="$d" FM_PORT="$PORT" bun run "$d/board/server.ts" > "$d/out" 2>&1 < /dev/null &
+FM_ROOT="$d" FM_PORT=0 bun run "$d/board/server.ts" > "$d/out" 2>&1 < /dev/null &
 pid=$!
+PORT="$(board_port "$d/out" "$pid")"
 for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORT/api/state" >/dev/null 2>&1 && break; sleep 0.25; done
 trap 'kill "$pid" 2>/dev/null' EXIT
 
@@ -448,10 +462,10 @@ cat > "$p/design/tasks.json" <<'J'
 ]}
 J
 FM_ROOT="$p" "$p/bin/fm-emit.sh" --actor captain --type greenlit --en "go" --tw "開工" >/dev/null
-PORTP=$(( 15000 + RANDOM % 900 ))
 # Disable coalesce so successive crew_status fixtures are not dropped.
-FM_ROOT="$p" FM_PORT="$PORTP" FM_CREW_STATUS_SECS=0 bun run "$p/board/server.ts" > "$p/out" 2>&1 < /dev/null &
+FM_ROOT="$p" FM_PORT=0 FM_CREW_STATUS_SECS=0 bun run "$p/board/server.ts" > "$p/out" 2>&1 < /dev/null &
 pidp=$!
+PORTP="$(board_port "$p/out" "$pidp")"
 for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORTP/api/state" >/dev/null 2>&1 && break; sleep 0.25; done
 
 # Activity: emitted/event activity wins over static task.activity; titles are
@@ -634,9 +648,9 @@ cat > "$e/design/tasks.json" <<'J'
           {"id":"T-E6","title":"sixth","milestone":"M2","depends_on":["T-E1","T-E5"]}]}
 J
 FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor captain --type greenlit --en "go" --tw "開工" >/dev/null
-PORTE=$(( 16000 + RANDOM % 900 ))
-FM_ROOT="$e" FM_PORT="$PORTE" bun run "$e/board/server.ts" > "$e/out" 2>&1 < /dev/null &
+FM_ROOT="$e" FM_PORT=0 bun run "$e/board/server.ts" > "$e/out" 2>&1 < /dev/null &
 pide=$!
+PORTE="$(board_port "$e/out" "$pide")"
 for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORTE/api/state" >/dev/null 2>&1 && break; sleep 0.25; done
 st() { curl -sf "http://127.0.0.1:$PORTE/api/state"; }
 

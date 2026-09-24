@@ -32,6 +32,15 @@ JSON
 }
 say() { FM_ROOT="$1" "$1/bin/fm-emit.sh" --actor firstmate --type "$2" ${3:+--task "$3"} >/dev/null; }
 ready() { FM_ROOT="$1" "$1/bin/fm-dispatch.sh" --repo "$1" --dry-run 2>/dev/null | sed '/^fm-dispatch/d'; }
+# A detached worker's file appears a moment after the dispatcher returns. The
+# wait is for that file, against a deadline wide enough for a loaded machine:
+# a count of short sleeps ran out under the gate's parallel pool. It returns
+# the moment the file is there, so the width costs nothing on a quiet one.
+WAIT_SECS=60
+eventually() {   # eventually <command...>: 0 once the command is, 1 at the deadline
+  local end=$(( $(date +%s) + WAIT_SECS ))
+  until "$@"; do [ "$(date +%s)" -le "$end" ] || return 1; sleep 0.05; done
+}
 
 d="$(fixture)"
 assert_fail "FM_ROOT='$d' '$d/bin/fm-dispatch.sh' --repo '$d' --dry-run" \
@@ -144,7 +153,7 @@ FM_ROOT="$b" "$b/bin/fm-dispatch.sh" --repo "$b" >/dev/null 2>&1
 # The control first: a dispatcher that started NOTHING also returns at
 # once and also leaves no worker-finished, so the absence below means
 # nothing without proof that a worker is there to be waited for.
-for _ in $(seq 1 60); do [ -s "$b/worker-pid" ] && break; sleep 0.1; done
+eventually test -s "$b/worker-pid"
 wpid="$(cat "$b/worker-pid" 2>/dev/null)"
 assert_ne "" "$wpid" "a worker was started, and said which process it is"
 # and it is STILL running, which is the property - the dispatcher
@@ -170,7 +179,7 @@ chmod +x "$a/bin/fm-worker.sh"
 FM_ROOT="$a" "$a/bin/fm-emit.sh" --actor firstmate --type pr_opened --task T-001 --pr 5 \
   --en "opened #5" --tw "已開 #5" >/dev/null
 FM_ROOT="$a" "$a/bin/fm-dispatch.sh" --repo "$a" >/dev/null 2>&1
-for _ in $(seq 1 30); do [ -s "$a/argv" ] && break; sleep 0.1; done
+eventually test -s "$a/argv"
 assert_ne "" "$(cat "$a/argv" 2>/dev/null)" "a worker was started, so there is an argv to read"
 assert_lacks "$(cat "$a/argv")" "--pr" "and no worker is ever started with a pull request number"
 rm -rf "$a"
@@ -185,7 +194,7 @@ printf '#!/usr/bin/env bash\necho x > "%s/worker-done"\nexit 9\n' "$e" > "$e/bin
 chmod +x "$e/bin/fm-worker.sh"
 FM_ROOT="$e" "$e/bin/fm-dispatch.sh" --repo "$e" >/dev/null 2>&1
 assert_eq "0" "$?" "a worker that fails does not fail the dispatcher"
-for _ in $(seq 1 60); do [ -e "$e/worker-done" ] && break; sleep 0.1; done
+eventually test -e "$e/worker-done"
 assert_ok "test -e '$e/worker-done'" "the failing worker has run and exited"
 assert_eq "0" "$(jq -r 'select(.type=="worker_crashed")|.type' "$e/state/events.jsonl" \
   | grep -c . || true)" "and the dispatcher writes no event about it"

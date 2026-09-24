@@ -897,6 +897,41 @@ shellcheck        ->  single-writer lint  ->  bash suites
                   ->  bun test            ->  playwright
 ```
 
+That is the order the stages are **reported** in, not the order they run in
+(T-065). The bash suites run through a bounded pool: the job count is the
+online CPU count capped at 6, printed as `ci: bash suites: N at a time`, and
+`FM_CI_JOBS` (a decimal integer from 1 to 99; anything else exits 64)
+overrides it. `FM_CI_JOBS=1` is the one-at-a-time run in glob order. With
+more than one job the slowest suites start first — herdr, reconcile and
+worker by name, the rest by size. Each suite keeps `LC_ALL=''
+LC_MESSAGES=C` and `</dev/null`, and writes to its own log in a `mktemp`
+directory outside `FM_ROOT`; nothing the gate writes lands in the tree it
+judges. When every suite has finished, the results print in glob order with
+the same pass, flunk and noise-check lines as before. The shellcheck and
+end-to-end stages run beside the pool and print in their usual places; the
+pool polls rather than using `wait -n`, which bash 3.2 lacks. Playwright
+runs `fullyParallel` with no retries, so no browser test may change state
+another one reads: a test that writes to its board starts its own. Its
+config asks for 4 workers; beside the pool, `ci.sh` gives it half the online
+CPUs instead (at least 1, at most 4), printed as `ci: end-to-end: N workers`,
+because four browsers beside four suites on a 4-vCPU runner starved the
+browsers. Every background job and the gate itself trap INT, TERM and HUP,
+so an interrupted gate takes its suites, browsers and logs with it.
+
+Running in parallel changes no threshold: the budget, every stage, every
+suite, every assertion and the per-suite noise check are what they were.
+What it does demand of the suites is that none of them leans on the machine
+being idle. A suite that starts a board takes its port from the kernel
+(`FM_PORT=0`, then the port from the `board on http://127.0.0.1:PORT` line
+the server prints), because the old `RANDOM` ranges overlapped and a
+readiness loop could reach another suite's server. A positive wait is for
+its real condition against a deadline wide enough for a loaded machine, and
+returns the moment the condition holds; that includes the browser tests'
+expect and test timeouts, and an animation a test steps through runs on a
+paused clock rather than on real time. A negative window ("nothing was
+started within N seconds") is wall clock, never a count of sleeps, and may
+only grow: reconcile's is 5 seconds.
+
 Each stage skips cleanly when its subject does not exist, so the gate is green
 from an empty tree onward. **Every e2e uses the `mock` adapter** — no model
 call, so it is fast, free and deterministic. Real vendors run in a nightly
@@ -1216,6 +1251,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-040 | captain's board layout parity with the 2026-09-20 prototype | T-034, T-036 |
 | T-043 | the project declares its setup and checks; the gates stop hard-coding this repo's toolchain | T-041, T-039 |
 | T-057 | the board separates ready work from backlog | T-040 |
+| T-065 | the local gate runs its suites in parallel, with every threshold intact | T-046 |
 
 ### M3 — driving other repositories
 

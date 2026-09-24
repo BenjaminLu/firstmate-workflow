@@ -24,6 +24,20 @@ spec = importlib.util.spec_from_file_location('managed', root / 'bin/fm-herdr.py
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 
+# A positive wait is for its real condition, against a deadline wide enough
+# for a loaded machine. Counts of short sleeps - two seconds for the first
+# worker's prompt, five for a run to settle - ran out under the gate's
+# parallel pool while the process they waited on was still on its way. The
+# loop returns the moment the condition holds, so the width costs nothing on
+# a quiet machine. Negative windows (nothing happens within N) are not this.
+WAIT = 120
+def eventually(predicate, seconds=WAIT):
+    end = time.monotonic() + seconds
+    while True:
+        value = predicate()
+        if value or time.monotonic() > end: return value
+        time.sleep(.02)
+
 class Lifecycle(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -204,7 +218,7 @@ class Entrypoints(unittest.TestCase):
         self.fake = self.repo / 'fakebin'; self.fake.mkdir()
         self.env = {k:v for k,v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
         self.env.update(PATH=str(self.fake)+os.pathsep+os.environ['PATH'], HERDR_ENV='1', HERDR_PANE_ID='caller',
-                        FM_ROOT=str(self.repo), FM_TEST_ROOT=str(self.repo), FM_HERDR_TIMEOUT='5')
+                        FM_ROOT=str(self.repo), FM_TEST_ROOT=str(self.repo), FM_HERDR_TIMEOUT=str(WAIT))
         self.executable('herdr', r'''
 import json, os, pathlib, subprocess, sys, uuid
 r=pathlib.Path(os.environ['FM_TEST_ROOT']); a=sys.argv[1:]
@@ -317,6 +331,10 @@ if os.environ.get('FM_TEST_ASYNC')=='1':
  pathlib.Path('.fm-say.md').write_text('retained evidence')
  (r/'model.pid').write_text(str(os.getpid()))
  while not (r/'release-model').exists(): time.sleep(.02)
+# held until the test says so, rather than for a number of seconds a loaded
+# machine can spend before the test has looked
+if os.environ.get('FM_TEST_HOLD'):
+ while not (r/os.environ['FM_TEST_HOLD']).exists(): time.sleep(.02)
 time.sleep(float(os.environ.get('FM_TEST_DELAY','0')))
 marker=role.upper()+'_'+os.environ.get('FM_TEST_STATUS','COMPLETE')+':'+task
 verdict=os.environ.get('FM_TEST_VERDICT','APPROVE')
@@ -344,13 +362,11 @@ elif a[0]=='branch': print('t-035-test')
         p=self.fake/name; p.write_text('#!'+sys.executable+'\n'+content); p.chmod(0o755)
     def invoke(self, script, args=(), **env):
         return subprocess.run(['bash',str(self.repo/'bin'/script),*args,'--repo',str(self.repo)],
-                              env=dict(self.env,**env),capture_output=True,text=True,timeout=20)
+                              env=dict(self.env,**env),capture_output=True,text=True,timeout=WAIT)
     def results(self): return list((self.repo/'state/runs').glob('*/last-result.json'))
     def wait_for(self, predicate):
-        for _ in range(250):
-            value=predicate()
-            if value: return value
-            time.sleep(.02)
+        value=eventually(predicate)
+        if value: return value
         self.fail('asynchronous process did not reach expected state')
     def no_live_runs(self):
         # In-process inspection must never inherit a developer's real Herdr.
@@ -361,7 +377,7 @@ elif a[0]=='branch': print('t-035-test')
             with self.subTest(ending=ending):
                 for name in ('release-model','model.pid','mock-runner.pid'):
                     (self.repo/name).unlink(missing_ok=True)
-                env=dict(self.env,FM_TEST_ASYNC='1',FM_HERDR_TIMEOUT='.3' if ending=='timeout' else '30')
+                env=dict(self.env,FM_TEST_ASYNC='1',FM_HERDR_TIMEOUT='.3' if ending=='timeout' else str(WAIT))
                 if ending=='direct-runner-kill':
                     env['FM_TRANSPORT']='direct'
                     env['FM_ALLOW_DIRECT']='1'
@@ -380,7 +396,7 @@ elif a[0]=='branch': print('t-035-test')
                             os.kill(launcher.pid,signal.SIGKILL)
                         elif ending!='timeout':
                             os.killpg(launcher.pid,signal.SIGTERM if ending=='term' else signal.SIGKILL)
-                        launcher.wait(timeout=10)
+                        launcher.wait(timeout=WAIT)
                         if ending in ('runner-kill','direct-runner-kill'): os.kill(runner,signal.SIGKILL)
                         status=self.invoke('fm-session.sh',['status'])
                         self.assertEqual(0,status.returncode,status.stderr)
@@ -419,7 +435,7 @@ elif a[0]=='branch': print('t-035-test')
                     if source.startswith('relative-script'): entry=entry.relative_to(self.repo.parent)
                     argv=['bash',str(entry),*args]
                     if source.endswith('argument'): argv+=['--repo',self.repo.name]
-                    result=subprocess.run(argv,cwd=self.repo.parent,env=env,capture_output=True,text=True,timeout=20)
+                    result=subprocess.run(argv,cwd=self.repo.parent,env=env,capture_output=True,text=True,timeout=WAIT)
                     self.assertEqual(0,result.returncode,result.stderr)
                     self.assertNotIn('No such file or directory',result.stderr)
                     self.assertFalse((self.repo/self.repo.name).exists())
@@ -647,11 +663,7 @@ print(json.dumps({'type':'result','result':final,'response':final}))
                        env=self.env,check=True,capture_output=True)
         answer=self.invoke('fm-dispatch.sh')
         self.assertEqual(0,answer.returncode,answer.stderr)
-        import time
-        for _ in range(120):
-            paths=list((self.repo/'state/runs').glob('*/orchestration-result.json'))
-            if paths: break
-            time.sleep(.05)
+        paths=eventually(lambda:list((self.repo/'state/runs').glob('*/orchestration-result.json')))
         self.assertTrue(paths)
         self.assertEqual(0,json.loads(paths[0].read_text())['process_exit'])
         # Gate 7 requests a reviewer; gate execution itself is outside this test.
@@ -674,14 +686,17 @@ print('One invocation completed')
         self.assertNotEqual((self.repo/'bin/adapters/codex.sh').read_text(),
                             (Path(record['snapshot'])/'bin/adapters/codex.sh').read_text())
     def test_second_worker_cannot_recreate_live_task_tree(self):
-        import time
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            first=pool.submit(self.invoke,'fm-worker.sh',['--task','T-035'],FM_TEST_DELAY='1')
-            for _ in range(100):
-                if list(self.repo.glob('worker-*.prompt')): break
-                time.sleep(.02)
-            self.assertTrue(list(self.repo.glob('worker-*.prompt')))
-            second=self.invoke('fm-worker.sh',['--task','T-035'])
+            # the first worker's model is held until the second has been
+            # refused, so "still live" is a fact of the fixture and not a
+            # one-second head start the second run has to win
+            first=pool.submit(self.invoke,'fm-worker.sh',['--task','T-035'],FM_TEST_HOLD='release-first')
+            try:
+                eventually(lambda:list(self.repo.glob('worker-*.prompt')))
+                self.assertTrue(list(self.repo.glob('worker-*.prompt')))
+                second=self.invoke('fm-worker.sh',['--task','T-035'])
+            finally:
+                (self.repo/'release-first').touch()
             self.assertEqual(70,second.returncode,second.stderr)
             self.assertIn('already has a live worker',second.stderr)
             self.assertEqual(0,first.result().returncode)
@@ -689,7 +704,7 @@ print('One invocation completed')
     def test_managed_handoff_survives_transport_sighup(self):
         for name in ('release-model','model.pid','mock-runner.pid','closed'):
             (self.repo/name).unlink(missing_ok=True)
-        env=dict(self.env,FM_TEST_ASYNC='1',FM_HERDR_TIMEOUT='30',FM_TEST_DELAY='0')
+        env=dict(self.env,FM_TEST_ASYNC='1',FM_HERDR_TIMEOUT=str(WAIT),FM_TEST_DELAY='0')
         with tempfile.TemporaryFile(mode='w+') as output:
             launcher=subprocess.Popen(['bash',str(self.repo/'bin/fm-worker.sh'),'--task','T-035'],
                 env=env,stdout=output,stderr=output,start_new_session=True)
@@ -712,7 +727,7 @@ print('One invocation completed')
                 time.sleep(.3)
                 self.assertIsNone(launcher.poll(),'managed wait must ignore SIGHUP')
                 (self.repo/'release-model').touch()
-                rc=launcher.wait(timeout=20)
+                rc=launcher.wait(timeout=WAIT)
                 # 73 is fm-worker's "had something to say, no PR" after the async
                 # fixture writes .fm-say.md; handoff still completed.
                 self.assertNotEqual(129,rc,'must not die from SIGHUP')
@@ -731,7 +746,7 @@ print('One invocation completed')
         """Transport waiter death must not orphan last-result / owned close."""
         for name in ('release-model','model.pid','mock-runner.pid','closed'):
             (self.repo/name).unlink(missing_ok=True)
-        env=dict(self.env,FM_TEST_ASYNC='1',FM_HERDR_TIMEOUT='30',FM_TEST_DELAY='0')
+        env=dict(self.env,FM_TEST_ASYNC='1',FM_HERDR_TIMEOUT=str(WAIT),FM_TEST_DELAY='0')
         with tempfile.TemporaryFile(mode='w+') as output:
             launcher=subprocess.Popen(['bash',str(self.repo/'bin/fm-worker.sh'),'--task','T-035'],
                 env=env,stdout=output,stderr=output,start_new_session=True)
@@ -753,11 +768,11 @@ print('One invocation completed')
                 for pid in transports:
                     try: os.kill(pid,signal.SIGKILL)
                     except ProcessLookupError: pass
+                def gone(pid):
+                    try: os.kill(pid,0); return False
+                    except ProcessLookupError: return True
                 for pid in transports:
-                    for _ in range(50):
-                        try: os.kill(pid,0); time.sleep(.02)
-                        except ProcessLookupError: break
-                    else:
+                    if not eventually(lambda:gone(pid)):
                         self.fail(f'transport {pid} survived SIGKILL')
                 (self.repo/'release-model').touch()
                 # Pane-child continues after the waiter dies; close may lag publish.
