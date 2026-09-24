@@ -11,18 +11,21 @@ const EN = JSON.parse(readFileSync(join(ROOT, "i18n/ui.en.json"), "utf8"));
 const TW = JSON.parse(readFileSync(join(ROOT, "i18n/ui.zh-TW.json"), "utf8"));
 // Independently authored oracles: using the production conversion table here
 // made an incorrect or incomplete table prove itself correct.
-const CN = {merged:'已合并',inflight:'进行中',blocked:'受阻',queued:'排队',aboard:'在船上',
+const CN = {merged:'已合并',inflight:'进行中',blocked:'受阻',aboard:'在船上',
   roster:'船员名册',descriptionUnavailable:'尚无工作说明',waitingOnYou:'等你拍板',
   titleMissing:'design/tasks.json 未列出标题',blockedOn:'卡在',gateFailedN:'第 {n} 道闸未过',
   optionsN:'{n} 个选项',rosterBtn:'名册',crossVendor:'跨供应商审核',mergedMore:'另 {n} 个在已完成历史中',
   dragHint:'拖曳人物可旋转单人 · 拖曳甲板转全员 · 双击复位',ahoyDemo:'试放礼炮（不写入事件）',
   orderDemo:'试演下令回应（不写入事件）',alsoWaiting:'其他待决（点开就地展开）',
-  engine:'引擎',gateFailed:'闸门未过',viewDesign:'design.md'};
+  engine:'引擎',gateFailed:'闸门未过',viewDesign:'design.md',
+  ready:'就绪',backlog:'待办',laneReady:'就绪',laneBacklog:'待办'};
 // Every key T-040 added. Each must have an oracle above, and the board's own
 // conversion must reproduce it: an oracle only some keys are checked against
 // let 閘門未過 ship half-converted.
 const T040_KEYS = ['engine','crossVendor','waitingOnYou','blockedOn','titleMissing','mergedMore',
   'gateFailed','gateFailedN','optionsN','rosterBtn','ahoyDemo','orderDemo','dragHint','alsoWaiting','viewDesign'];
+// and every key T-057 added, held to the same rule
+const T057_KEYS = ['ready','backlog','laneReady','laneBacklog'];
 const CN_ACTIVITY = {
   build:'Rowan 实作船长决策', test:'Rowan 测试决策', literal:'验证船长原文命令',
   bea:'Bea 审查船长决策',
@@ -330,7 +333,7 @@ for (const lang of ["en", "zh-TW", "zh-CN"]) {
     // substring scan would not do: "log" is inside plenty of honest text.
     const want = (k: string) => (lang === "en" ? EN : lang === "zh-TW" ? TW : CN)[k];
     const labels = await page.locator(".counts span").allInnerTexts();
-    for (const [i, k] of ["merged", "inflight", "waitingOnYou", "blocked", "queued"].entries()) {
+    for (const [i, k] of ["merged", "inflight", "waitingOnYou", "blocked", "ready", "backlog"].entries()) {
       const w = want(k);
       // the stylesheet upper-cases these, so compare the words not the case
       expect(labels[i].toLowerCase()).toBe(w.toLowerCase());
@@ -586,6 +589,7 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
   const file = join(root,'design/tasks.json'), spec = JSON.parse(readFileSync(file,'utf8'));
   const first = spec.tasks[0].id;
   spec.tasks.push({id:'T-QUEUE',title:'Queued behind unmerged work',depends_on:[first]});
+  spec.tasks.push({id:'T-READY',title:'Nothing to wait on',depends_on:[]});
   writeFileSync(file, JSON.stringify(spec));
   emitFixture(root,'worker-absent','T-ABSENT','dispatched','Work on an unlisted task','處理未列出的任務',{role:'worker'});
   emitFixture(root,'worker-2',spec.tasks[1].id,'gate_failed','Gate five failed','第五道閘未過',{gate:5});
@@ -609,12 +613,25 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
     // waiting on you counts the decisions, beside the other four
     await expect(page.locator('[data-count="waiting"] b')).toHaveText('2');
     expect(await page.locator('.counts [data-count]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.count)))
-      .toEqual(['merged','inflight','waiting','blocked','queued']);
+      .toEqual(['merged','inflight','waiting','blocked','ready','backlog']);
 
-    // six lanes in one row, left to right in lifecycle order
+    // seven lanes in one row, left to right in lifecycle order
     const lanes = page.locator('#lanes .lane');
     expect(await lanes.evaluateAll(els => els.map(e => (e as HTMLElement).dataset.lane)))
-      .toEqual(['queued','working','gate','review','captain','merged']);
+      .toEqual(['backlog','ready','working','gate','review','captain','merged']);
+    // ready and backlog each render with their own count, and the header
+    // count is the lane's count: one derivation, shown twice
+    for (const k of ['ready','backlog']) {
+      const n = await page.locator(`[data-lane="${k}"] .card`).count();
+      expect(n, `${k} lane has cards`).toBeGreaterThan(0);
+      await expect(page.locator(`[data-lane="${k}"] h3 i`)).toHaveText(String(n));
+      await expect(page.locator(`[data-count="${k}"] b`)).toHaveText(String(n));
+      await expect(page.locator(`[data-lane="${k}"] h3`)).toContainText(EN[k === 'ready' ? 'laneReady' : 'laneBacklog']);
+      await expect(page.locator(`[data-count="${k}"] span`)).toHaveText(EN[k]);
+    }
+    // a ready card could start now and shows no blocker
+    await expect(page.locator('[data-lane="ready"] [data-task="T-READY"]')).toHaveCount(1);
+    await expect(page.locator('[data-task="T-READY"] .dep')).toHaveCount(0);
     const boxes = await lanes.evaluateAll(els => els.map(e => e.getBoundingClientRect()).map(r => ({x:r.x,y:r.y})));
     for (let i = 1; i < boxes.length; i++) {
       expect(boxes[i].x).toBeGreaterThan(boxes[i-1].x);
@@ -623,7 +640,7 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
     // cards say what the log says, and nothing it does not
     const queued = page.locator('[data-task="T-QUEUE"]');
     await expect(queued).toContainText(`${EN.blockedOn} ${first}`);
-    await expect(page.locator('[data-lane="queued"] [data-task="T-QUEUE"]')).toHaveCount(1);
+    await expect(page.locator('[data-lane="backlog"] [data-task="T-QUEUE"]')).toHaveCount(1);
     await expect(page.locator('[data-task="T-ABSENT"] .t')).toHaveText(EN.titleMissing);
     await expect(page.locator('[data-task="T-ABSENT"]')).toContainText('worker-absent');
     await expect(page.locator(`[data-task="${spec.tasks[1].id}"] .badge`)).toHaveText(EN.gateFailedN.replace('{n}','5'));
@@ -679,9 +696,13 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
       await expect(page.locator('[data-task="T-ABSENT"] .t')).toHaveText(want.titleMissing);
       await expect(queued).toContainText(want.blockedOn);
       await expect(page.locator('#rosterBtn')).toHaveText(want.rosterBtn);
+      await expect(page.locator('[data-count="ready"] span')).toHaveText(want.ready);
+      await expect(page.locator('[data-count="backlog"] span')).toHaveText(want.backlog);
+      await expect(page.locator('[data-lane="ready"] h3')).toContainText(want.laneReady);
+      await expect(page.locator('[data-lane="backlog"] h3')).toContainText(want.laneBacklog);
       if (locale === 'zh-CN') {
         // the page's own conversion, against the oracle, for every new key
-        for (const k of T040_KEYS) {
+        for (const k of [...T040_KEYS, ...T057_KEYS]) {
           expect(CN, `no zh-CN oracle for ${k}`).toHaveProperty(k);
           expect(await page.evaluate((s) => (window as any).eval('cn')(s), TW[k]), k).toBe((CN as any)[k]);
         }
@@ -698,6 +719,15 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
       await page.setViewportSize({width:1280,height:900});
     }
     expect(posts).toBe(0);
+
+    // its dependency merging moves the backlog card to ready over the live
+    // stream: no reload, no render called by hand
+    emitFixture(root,'github',first,'merged','Merged','已合併');
+    await expect(page.locator('[data-lane="ready"] [data-task="T-QUEUE"]')).toHaveCount(1, {timeout:5000});
+    await expect(page.locator('[data-lane="backlog"] [data-task="T-QUEUE"]')).toHaveCount(0);
+    await expect(page.locator('[data-task="T-QUEUE"] .dep')).toHaveCount(0);
+    const readyNow = await page.locator('[data-lane="ready"] .card').count();
+    await expect(page.locator('[data-count="ready"] b')).toHaveText(String(readyNow));
   } finally {stopBoard(b);}
 });
 

@@ -39,7 +39,10 @@ s="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
 assert_ok "[ -n '$s' ]" "the state endpoint answers"
 assert_eq "true" "$(jq -r .greenlit <<<"$s")" "it reports the green light"
 assert_eq "working" "$(jq -r '.tasks[]|select(.id=="T-A")|.stage' <<<"$s")" "a dispatched task reads as working"
-assert_eq "queued"  "$(jq -r '.tasks[]|select(.id=="T-B")|.stage' <<<"$s")" "an untouched task reads as queued"
+# an untouched task is ready once every dependency has merged and backlog
+# while any has not; T-B waits on T-A, which is only being worked on
+assert_eq "backlog" "$(jq -r '.tasks[]|select(.id=="T-B")|.stage' <<<"$s")" "an untouched task waiting on unmerged work reads as backlog"
+assert_eq "ready"   "$(jq -r '.tasks[]|select(.id=="T-C")|.stage' <<<"$s")" "an untouched task with nothing to wait on reads as ready"
 assert_eq "1" "$(jq -r .counts.inflight <<<"$s")" "the counts follow the log"
 
 
@@ -627,7 +630,8 @@ cat > "$e/design/tasks.json" <<'J'
           {"id":"T-E2","title":"second","milestone":"M2","depends_on":["T-E1"]},
           {"id":"T-E3","title":"third","milestone":"M2","depends_on":["T-E9"]},
           {"id":"T-E4","title":"fourth","milestone":"M2","depends_on":[]},
-          {"id":"T-E5","title":"fifth","milestone":"M2","depends_on":[]}]}
+          {"id":"T-E5","title":"fifth","milestone":"M2","depends_on":[]},
+          {"id":"T-E6","title":"sixth","milestone":"M2","depends_on":["T-E1","T-E5"]}]}
 J
 FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor captain --type greenlit --en "go" --tw "開工" >/dev/null
 PORTE=$(( 16000 + RANDOM % 900 ))
@@ -655,13 +659,25 @@ se3="$(st)"
 assert_eq "null" "$(jq -r '.engine.reviewer' <<<"$se3")" "no reviewer block, no reviewer vendor"
 assert_eq "false" "$(jq -r '.engine.cross' <<<"$se3")" "and nothing is marked"
 
-# six lanes, left to right, in lifecycle order; closed is not a lane
-assert_eq "queued working gate review captain merged" "$(jq -r '.lanes|join(" ")' <<<"$se")" \
-  "the lanes are queued, work, gate, review, captain, merged in that order"
+# seven lanes, left to right, in lifecycle order; closed is not a lane
+assert_eq "backlog ready working gate review captain merged" "$(jq -r '.lanes|join(" ")' <<<"$se")" \
+  "the lanes are backlog, ready, work, gate, review, captain, merged in that order"
+assert_eq "null" "$(jq -r '.counts.queued' <<<"$se")" "there is no single queued count any more"
 
-# a queued task names the dependencies that have not merged, and only those
+# ready: every dependency has merged, so the task could be dispatched now;
+# backlog: at least one has not. The replay that fills blocked_on decides it.
+assert_eq "backlog" "$(jq -r '.tasks[]|select(.id=="T-E2")|.stage' <<<"$se")" \
+  "a task with an unmerged dependency is backlog"
+assert_eq "backlog" "$(jq -r '.tasks[]|select(.id=="T-E3")|.stage' <<<"$se")" \
+  "a task whose dependency the log has never heard of is backlog"
+assert_eq "ready" "$(jq -r '.tasks[]|select(.id=="T-E1")|.stage' <<<"$se")" \
+  "a task with no dependencies is ready"
+assert_eq "3 ready, 3 backlog" "$(jq -r '"\(.counts.ready) ready, \(.counts.backlog) backlog"' <<<"$se")" \
+  "the header counts ready and backlog separately"
+
+# a backlog task names the dependencies that have not merged, and only those
 assert_eq "T-E1" "$(jq -r '.tasks[]|select(.id=="T-E2")|.blocked_on|join(",")' <<<"$se")" \
-  "a queued task is blocked on its unmerged dependency"
+  "a backlog task is blocked on its unmerged dependency"
 assert_eq "T-E9" "$(jq -r '.tasks[]|select(.id=="T-E3")|.blocked_on|join(",")' <<<"$se")" \
   "a dependency the log has never heard of is not merged either"
 assert_eq "" "$(jq -r '.tasks[]|select(.id=="T-E4")|.blocked_on|join(",")' <<<"$se")" \
@@ -671,6 +687,12 @@ FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor github --task T-E1 --type merged --pr 4
 sm1="$(st)"
 assert_eq "" "$(jq -r '.tasks[]|select(.id=="T-E2")|.blocked_on|join(",")' <<<"$sm1")" \
   "and is unblocked once that dependency merges"
+assert_eq "ready" "$(jq -r '.tasks[]|select(.id=="T-E2")|.stage' <<<"$sm1")" \
+  "its last dependency merging moves the card from backlog to ready"
+assert_eq "3 ready, 2 backlog" "$(jq -r '"\(.counts.ready) ready, \(.counts.backlog) backlog"' <<<"$sm1")" \
+  "and the counts follow it"
+assert_eq "backlog T-E5" "$(jq -r '.tasks[]|select(.id=="T-E6")|"\(.stage) \(.blocked_on|join(","))"' <<<"$sm1")" \
+  "one of two dependencies merging leaves the card in backlog, waiting on the other"
 assert_eq "merged" "$(jq -r '.tasks[]|select(.id=="T-E1")|.stage' <<<"$sm1")" "merged is a stage the merged lane shows"
 
 # card badges come from events: the failing gate when the event names it,
@@ -733,6 +755,8 @@ FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor github --task T-E5 --type merged --pr 4
   --en "merged by hand" --tw "手動合併" >/dev/null
 assert_eq "true" "$(jq -r '.responses[]|select(.id=="D-401")|.superseded' <<<"$(st)")" \
   "a later merge of the same task clears the refusal"
+assert_eq "ready " "$(jq -r '.tasks[]|select(.id=="T-E6")|"\(.stage) \(.blocked_on|join(","))"' <<<"$(st)")" \
+  "its last dependency merging moves the two-dependency card to ready, blocked on nothing"
 
 # a later successful merge *response* overtakes a refusal on its own, with no
 # merged event in the log; an earlier success does not

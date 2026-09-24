@@ -29,10 +29,12 @@
   "greenlit": "green-lit",
   "hold": "Hold",
   "inflight": "in flight",
+  "laneBacklog": "Backlog",
   "laneCaptain": "Captain",
   "laneGate": "Gate",
   "laneMerged": "Merged",
   "laneQueued": "Queued",
+  "laneReady": "Ready",
   "laneReview": "Review",
   "laneWorking": "Working",
   "log": "Live log",
@@ -43,7 +45,6 @@
   "notGreenlit": "not green-lit",
   "nothingYet": "nothing in the log yet",
   "openLocal": "Open locally",
-  "queued": "queued",
   "rate1": "SLOOP",
   "rate2": "BRIG",
   "rate3": "FRIGATE",
@@ -90,5 +91,7 @@
   "orderDemo": "Demonstrate an order acknowledgement (no event is recorded)",
   "dragHint": "drag a figure to turn it · drag the deck to turn the whole crew · double-click resets",
   "alsoWaiting": "Also waiting (expand in place)",
-  "viewDesign": "design.md"
+  "viewDesign": "design.md",
+  "ready": "ready",
+  "backlog": "backlog"
 }

@@ -31,7 +31,7 @@ section>h2{margin:0 0 10px;font:600 13px var(--mono);color:var(--fg3);
   text-transform:uppercase;letter-spacing:.1em}
 /* six lanes left to right in lifecycle order; narrower screens wrap them in
    the same reading order rather than scrolling the page sideways */
-.lanes{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:9px;align-items:start}
+.lanes{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:9px;align-items:start}
 @media(max-width:1100px){.lanes{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:620px){.lanes{grid-template-columns:minmax(0,1fr)}}
 .lane.l-captain{border-color:#3a2a52}
@@ -267,7 +267,8 @@ function render(s) {
   document.getElementById("counts").innerHTML = [
     ["merged", t("merged"), s.counts.merged, ""], ["inflight", t("inflight"), s.counts.inflight, ""],
     ["waiting", t("waitingOnYou"), s.counts.waiting ?? 0, "w"],
-    ["blocked", t("blocked"), s.counts.blocked, "x"], ["queued", t("queued"), s.counts.queued, ""],
+    ["blocked", t("blocked"), s.counts.blocked, "x"],
+    ["ready", t("ready"), s.counts.ready, ""], ["backlog", t("backlog"), s.counts.backlog, ""],
   ].map(([k, l, n, c]) => `<div class="${c}" data-count="${k}"><b>${esc(n)}</b><span>${esc(l)}</span></div>`).join("");
 
   const badge = b => b.kind === 'gate' ? (b.gate ? t("gateFailedN").replace('{n}', b.gate) : t("gateFailed"))

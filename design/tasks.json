@@ -1482,6 +1482,37 @@
         "Evidence for this task is the pull request's required GitHub check (which includes the design/tasks.json–design.md agreement check) and the seven gates; the worker does not run tests itself.",
         "Stay inside this scope; this task edits no code."
       ]
+    },
+    {
+      "id": "T-057",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-040"
+      ],
+      "title": "the board separates ready work from backlog",
+      "scope": [
+        "board/server.ts",
+        "board/public/index.html",
+        "board/public/ship.css",
+        "i18n/ui.en.json",
+        "i18n/ui.zh-TW.json",
+        "i18n/tw2cn.tsv",
+        "tests/board.test.sh",
+        "tests/e2e/board.spec.ts",
+        "tests/e2e/fixture.ts",
+        "design/design.md",
+        "design/tasks.json"
+      ],
+      "acceptance": [
+        "The captain asked for the queued lane to stop mixing two kinds of card. Today every task in design/tasks.json that is not merged, closed or in flight lands in one 'queued' lane, whether it can start now or is still waiting on another task. Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+        "Split that lane into two, in lifecycle order before 'working': 'ready' — every depends_on is merged, so the task could be dispatched now — and 'backlog' — at least one depends_on is not merged yet. A backlog card keeps showing what it waits on (today's blocked_on line). A ready card shows no blocker. The split is computed by board/server.ts from the same replay that computes blocked_on; nothing else decides it.",
+        "The header counts show ready and backlog separately in place of the single queued count. Lane titles and count labels come from the UI dictionaries: en 'ready' / 'backlog', zh-TW '就緒' / '待辦'. The zh-CN view derives from tw2cn.tsv as for every other key, and any new character needed is added there.",
+        "A card moves from backlog to ready on its own when its last dependency merges, with no reload, the same way every other lane change arrives over SSE.",
+        "Update design.md's board section where it lists the lanes, so the documented lanes match what ships.",
+        "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first: in tests/board.test.sh (a task with all deps merged is 'ready', one with an unmerged dep is 'backlog', a dependency merging moves the card) and in the e2e board spec (both lanes render with their counts). The worker does not run the suite itself.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
     }
   ]
 }
