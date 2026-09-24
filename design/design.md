@@ -646,9 +646,11 @@ comment whose numbered list is followed by `CRITERIA-COMPLETE:<task-id>`. A
 marker counts only as a line of its own and a comment that asks is never a
 list, so a worker's numbered change log that mentions a marker in passing is
 not taken for the closed list. Each quote is fenced with a per-run nonce, so a
-comment cannot close its own quote. It then says which case holds: a list (it is the closed list; findings cite its
-items or are marked `REGRESSION:`), only an ask (answer with the complete list),
-neither, or comments `gh` could not read, in which case the round still runs.
+comment cannot close its own quote, and printed straight from `jq`, so its
+trailing newlines survive. It then says which case holds: a list (it is the
+closed list; findings cite its items or are marked `REGRESSION:`), only an ask
+(answer with the complete list), neither, or comments `gh` could not read, in
+which case the round still runs.
 No other comment enters the prompt, so the worker's reasoning stays out.
 Rounds one and two, and any round without `--pr`, get the prompt unchanged.
 

@@ -58,7 +58,10 @@ case "${1-}:${2-}" in
         while IFS=$'\t' read -r who body; do
           [ -n "$who" ] || continue
           [ "$first" = 1 ] || printf ','; first=0; i=$(( i + 1 ))
-          jq -cn --arg who "$who" --arg body "$(printf '%s' "$body" | tr '\r' '\n')" \
+          # the trailing x keeps a body's trailing newlines, which $(...)
+          # would strip: gh returns them, and a caller must see them too
+          body="$(printf '%s' "$body" | tr '\r' '\n'; printf x)"; body="${body%x}"
+          jq -cn --arg who "$who" --arg body "$body" \
             --argjson i "$i" --arg n "$n" '{
               id: ("IC_kwDOstub" + ($i|tostring)),
               author: {login: $who},
@@ -81,7 +84,7 @@ case "${1-}:${2-}" in
     ;;
   pr:checks)  [ -f "$S/red" ] && exit 1; echo "ci pass"; exit 0 ;;
   pr:comment)
-    n="$3"; body="$(arg --body "$@")"
+    n="$3"; body="$(arg --body "$@"; printf x)"; body="${body%x}"
     # one line per comment on disk, so the newlines in a review body are
     # encoded here and decoded where the JSON is built - the two halves are
     # the only places that may know about it

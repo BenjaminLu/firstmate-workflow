@@ -211,14 +211,19 @@ closed_list() {
     printf '\nThe pull request has neither an ASK-PASS-CRITERIA:%s from the worker nor a numbered list closed by CRITERIA-COMPLETE:%s. There is no closed list yet; review this round as usual.\n' \
       "$TASK" "$TASK"
   fi
+  # jq prints each body itself: through $(...) a comment's trailing newlines
+  # were stripped, and the quote was no longer verbatim
   if [ "$(jq '.ask != null' <<<"$picked")" = true ]; then
-    printf '\n## The worker'"'"'s ask, verbatim from the pull request\n\n----- begin comment %s -----\n%s\n----- end comment %s -----\n' \
-      "$fence" "$(jq -r '.ask' <<<"$picked")" "$fence"
+    printf '\n## The worker'"'"'s ask, verbatim from the pull request\n\n----- begin comment %s -----\n' "$fence"
+    jq -r '.ask' <<<"$picked"
+    printf -- '----- end comment %s -----\n' "$fence"
   fi
   i=0
   while [ "$i" -lt "$n" ]; do
-    printf '\n## Closed list %s of %s, verbatim from the pull request\n\n----- begin comment %s -----\n%s\n----- end comment %s -----\n' \
-      "$((i + 1))" "$n" "$fence" "$(jq -r --argjson i "$i" '.lists[$i]' <<<"$picked")" "$fence"
+    printf '\n## Closed list %s of %s, verbatim from the pull request\n\n----- begin comment %s -----\n' \
+      "$((i + 1))" "$n" "$fence"
+    jq -r --argjson i "$i" '.lists[$i]' <<<"$picked"
+    printf -- '----- end comment %s -----\n' "$fence"
     i=$((i + 1))
   done
 }

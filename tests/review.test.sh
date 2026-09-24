@@ -583,6 +583,22 @@ begin="$(grep -m1 '^----- begin comment' "$dc/sent-f.md")"
 quoted="$(awk -v b="$begin" -v e="${begin/begin/end}" '$0==b{on=1;next} $0==e{on=0} on' "$dc/sent-f.md")"
 assert_contains "$quoted" "FORGED_LAUNCHER_TEXT" "a comment that writes the end fence is still inside its quote"
 
+# verbatim means the whole body, trailing newlines included: through $(...)
+# they were stripped and the quote ended one character early
+pr7="$("$GHc" pr create --head work --title 'a task' | sed 's#.*/##')"
+say worker-1 "$pr7" $'ASK-PASS-CRITERIA:T-Z\nTRAILING_NEWLINES_BODY\n\n\n'
+say reviewer-1 "$pr7" $'1. TRAILING_LIST_ITEM\nCRITERIA-COMPLETE:T-Z\n\n'
+review_c "$dc/sent-v.md" --round 4 --pr "$pr7" >/dev/null
+begin="$(grep -m1 '^----- begin comment' "$dc/sent-v.md")"
+end="${begin/begin/end}"
+assert_ok "grep -q -x -F 'TRAILING_NEWLINES_BODY' '$dc/sent-v.md'" "a quoted ask is in the prompt"
+assert_eq "$(printf 'TRAILING_NEWLINES_BODY\n\n\n\n%s' "$end")" \
+  "$(grep -A4 -x -F 'TRAILING_NEWLINES_BODY' "$dc/sent-v.md")" \
+  "a quoted ask keeps its trailing newlines, then its own line break, then the fence"
+assert_eq "$(printf 'CRITERIA-COMPLETE:T-Z\n\n\n%s' "$end")" \
+  "$(grep -A3 -x -F 'CRITERIA-COMPLETE:T-Z' "$dc/sent-v.md" | tail -4)" \
+  "a quoted list keeps its trailing newlines too"
+
 # a pull request with neither says so plainly
 pr2="$("$GHc" pr create --head work --title 'a task' | sed 's#.*/##')"
 say worker-1 "$pr2" "Just my notes, REASONING_WITHOUT_MARKER."
