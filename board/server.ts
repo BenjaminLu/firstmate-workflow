@@ -130,25 +130,29 @@ const engine = (): { vendor: string; reviewer: string | null; cross: boolean } |
 // is no repository - the page then shows plain text, never a guessed link.
 // Read at request time like the engine badge; the answer is kept only while
 // config.yaml is unchanged, so an edit shows on the next refresh.
-let registryRead: { stamp: string; github: string | null } | null = null;
-const github = (): string | null => {
+let registryRead: { stamp: string; github: string | null; name: string | null } | null = null;
+const registry = (): { github: string | null; name: string | null } => {
   const file = join(ROOT, "config.yaml"), lib = join(ROOT, "bin/fm-config.sh");
-  if (!existsSync(file) || !existsSync(lib)) return null;
+  if (!existsSync(file) || !existsSync(lib)) return { github: null, name: null };
   const st = statSync(file);
   const stamp = `${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
-  if (registryRead?.stamp === stamp) return registryRead.github;
+  if (registryRead?.stamp === stamp) return registryRead;
   const { FM_PROJECT: _, ...env } = process.env;
-  let found: string | null = null;
+  let found: string | null = null, name: string | null = null;
   try {
     const r = Bun.spawnSync(["bash", "-c",
-      '. "$1" && name="$(fm_project_resolve "" "$2")" && fm_project_get "$name" github "$2"',
+      '. "$1" && name="$(fm_project_resolve "" "$2")" && printf "%s\\n" "$name" && fm_project_get "$name" github "$2"',
       "fm-board", lib, file], { env, cwd: ROOT });
-    const out = r.exitCode === 0 ? new TextDecoder().decode(r.stdout).trim() : "";
+    const [n = "", out = ""] = r.exitCode === 0 ? new TextDecoder().decode(r.stdout).trim().split("\n") : [];
     found = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(out) ? out : null;
-  } catch { found = null; }
-  registryRead = { stamp, github: found };
-  return found;
+    name = /^[a-z0-9-]{1,24}$/.test(n) ? n : null;
+  } catch { found = null; name = null; }
+  registryRead = { stamp, github: found, name };
+  return registryRead;
 };
+const github = (): string | null => registry().github;
+// the project an event or card naming none belongs to (design section 15.4)
+const defaultProject = (): string => registry().name ?? "";
 // The one reading of a pull request number, for every place the board takes
 // one: a positive integer, or the same digits as a string. The page never
 // judges a number itself; it links what this lets through and nothing else.
@@ -538,19 +542,23 @@ const pending = () => {
   const dir = join(ROOT, "state/pending");
   if (!existsSync(dir)) return [];
   const terminal = readEvents().filter((e) => e.type === "merged" || e.type === "closed");
+  // (project, pr) and (project, task) are the keys: another project's merged
+  // #7 does not settle this project's card for #7. Naming none is the default's.
+  const def = defaultProject();
+  const within = (p: unknown, k: unknown) => `${typeof p === "string" && p ? p : def}\u0000${String(k ?? "")}`;
   const settled = new Set(
     terminal
       .filter((e) => e.type === "merged" || e.type === "closed")
-      .map((e) => String((e as Record<string, unknown>).pr ?? "")),
+      .map((e) => within((e as Record<string, unknown>).project, (e as Record<string, unknown>).pr)),
   );
-  const settledTasks = new Set(terminal.map(e => String(e.task ?? '')).filter(Boolean));
+  const settledTasks = new Set(terminal.filter(e => e.task).map(e => within((e as Record<string, unknown>).project, e.task)));
   // readdirSync order is filesystem-dependent (macOS vs Linux CI). Sort by
   // decision id so the deck and multi-card tests stay stable everywhere.
   return readdirSync(dir).filter((f) => f.endsWith(".json")).flatMap((f) => {
     try {
       const d = JSON.parse(readFileSync(join(dir, f), "utf8"));
-      if (d.pr != null && settled.has(String(d.pr))) return [];
-      if (d.task != null && settledTasks.has(String(d.task))) return [];
+      if (d.pr != null && settled.has(within(d.project, d.pr))) return [];
+      if (d.task != null && settledTasks.has(within(d.project, d.task))) return [];
       return [{ ...d, owner: ownerOf(d.id) }];
     } catch { return []; }
   }).sort((a, b) => String(a.id ?? "").localeCompare(String(b.id ?? ""), "en", { numeric: true }));
@@ -638,8 +646,11 @@ const server = Bun.serve({
           return json({ ok: true, already: true, decision, merged: decision.merged ?? null });
         }
         if (!p) return json({ error: "no pending decision" }, 404);
-        // the card's project: what the request recorded, else what its id names
-        const project = typeof p.project === "string" && p.project ? p.project : ownerOf(id)?.project ?? null;
+        // the card's project is what its request recorded. A card recording
+        // none is the default project's - a tree with no registry names its
+        // ids by the self project but has no registry to merge by name on -
+        // so the id's owner is never passed on as a --project
+        const project = typeof p.project === "string" && p.project ? p.project : null;
         const onProject = project ? ["--project", project] : [];
         const decision = {
           id, chosen, task: p?.task ?? null, pr: typeof p?.pr === "number" ? p.pr : null, kind: p?.kind ?? "choice",

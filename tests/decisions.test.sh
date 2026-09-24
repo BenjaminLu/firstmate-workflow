@@ -146,6 +146,31 @@ assert_eq "$nid" "$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r --arg i 
   "the answered new-form card is read back among the responses"
 assert_lacks "$(grep -F -- '--pr 16' "$d/state/merge-calls")" "--project" \
   "an old card with no project merges with no --project, as before"
+# a tree with no registry names its cards by the self project but records no
+# project on them; the id's owner is not a registry name there, so a merge
+# answer passes none, exactly as an old card does
+sid=D-firstmate-workflow-T005-1
+printf '{"id":"%s","task":"T-005","kind":"merge","title":"merge self","pr":17}\n' "$sid" \
+  > "$d/state/pending/$sid.json"
+assert_eq "true" "$(post "{\"id\":\"$sid\",\"chosen\":\"A\"}" | jq -r .ok)" "a new-form card with no project is answered"
+assert_contains "$(tail -1 "$d/state/merge-calls")" "--pr 17" "and its merge is called"
+assert_lacks "$(tail -1 "$d/state/merge-calls")" "--project" \
+  "with no --project read out of its id"
+# A card is settled by its own project's merge only. example-app merging its
+# #21 for its T-021 leaves the engine's card for #21 up; the engine's own
+# merge, written with no project and so the default's, takes it down.
+kid=D-firstmate-workflow-T021-1
+printf '{"id":"%s","task":"T-021","project":"firstmate-workflow","kind":"merge","title":"merge 21","pr":21}\n' "$kid" \
+  > "$d/state/pending/$kid.json"
+FM_ROOT="$d" bash "$d/bin/fm-emit.sh" --actor github --type merged --task T-021 --pr 21 --project example-app \
+  --en "#21 merged" --tw "#21 已合併" >/dev/null 2>&1
+assert_eq "$kid" "$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r --arg i "$kid" '.pending[]|select(.id==$i)|.id')" \
+  "another project's merge of the same number and task does not settle the card"
+FM_ROOT="$d" bash "$d/bin/fm-emit.sh" --actor github --type merged --task T-021 --pr 21 \
+  --en "#21 merged" --tw "#21 已合併" >/dev/null 2>&1
+assert_eq "" "$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r --arg i "$kid" '.pending[]|select(.id==$i)|.id')" \
+  "its own project's merge does"
+rm -f "$d/state/pending/$kid.json"
 for badid in D-Bad_Name-T047-1 D-firstmate-workflow-1 D-firstmate-workflow-T047-0 'D-../x-T047-1' 'D-a/b-T047-1'; do
   assert_contains "$(post "$(jq -cn --arg i "$badid" '{id:$i,chosen:"A"}')")" "bad decision id" \
     "the route refuses a malformed id: $badid"

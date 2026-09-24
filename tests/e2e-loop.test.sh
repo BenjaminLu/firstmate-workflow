@@ -23,18 +23,19 @@ projects:
     base: main
     required_check: ci
 '
-caller_fixture() {   # caller_fixture <task branch> <event line> -> a fixture root
+caller_fixture() {   # caller_fixture <task branch> <event lines> [registry] -> a fixture root
   local c; c="$(mktemp -d)"
   mkdir -p "$c/bin" "$c/state/decision-details"
   cp "$ROOT/bin/fm-run.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-decide.sh" \
      "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-herdr.py" "$c/bin/"
+  # each stub notes that it ran, so a test can say what a turn touched
   for script in fm-sync-prs fm-dispatch fm-gate; do
-    printf '#!/usr/bin/env bash\nexit 0\n' > "$c/bin/$script.sh"
+    printf '#!/usr/bin/env bash\necho "%s $*" >> "%s/calls"\nexit 0\n' "$script" "$c" > "$c/bin/$script.sh"
     chmod +x "$c/bin/$script.sh"
   done
   printf '#!/usr/bin/env bash\nprintf "%s\\n"\n' "$1" > "$c/bin/git"
   chmod +x "$c/bin/git"
-  printf '%s' "$REGISTRY" > "$c/config.yaml"
+  printf '%s' "${3-$REGISTRY}" > "$c/config.yaml"
   printf '%s\n' "$2" > "$c/state/events.jsonl"
   printf '%s' "$c"
 }
@@ -62,6 +63,73 @@ waiting="$(PATH="$caller/bin:$PATH" bash "$caller/bin/fm-run.sh" once --repo "$c
 assert_contains "$waiting" 'waiting on the captain' 'a pending card for the task is found under its new id'
 assert_eq '1' "$(find "$caller/state/pending" -name '*.json' | wc -l | tr -d ' ')" 'and no second card is raised'
 DETAILS="$caller/state/decision-details/$card.json"
+
+# The caller fixture exactly as it was before projects existed: no
+# config.yaml at all. It still raises its merge card - under an id owned by
+# the self project, never D-991 - and records no project on it.
+bare="$(caller_fixture t-991-fixture '{"type":"pr_opened","task":"T-991","pr":991}' '')"
+rm -f "$bare/config.yaml"
+cp "$DETAILS" "$bare/state/decision-details/$card.json"
+obare="$(PATH="$bare/bin:$PATH" bash "$bare/bin/fm-run.sh" once --repo "$bare" 2>&1)"
+assert_contains "$obare" "asking the captain ($card)" 'a tree with no registry still raises its merge card'
+assert_eq "false" "$(jq -c 'has("project")' "$bare/state/pending/$card.json")" \
+  'and records no project on it, having no registry to name one from'
+assert_fail "test -e '$bare/state/pending/D-991.json'" 'and derives no D-<task digits> id there either'
+rm -rf "$bare"
+
+# The log is shared by every project, and a pull request number is only a key
+# together with its project. Another project's #7 for its own T-004 is not
+# this run's to gate, to card or to merge.
+REGISTRY2="${REGISTRY}  example-app:
+    github: example-org/example-app
+    base: main
+    required_check: check
+"
+other="$(caller_fixture t-004-engine '{"type":"pr_opened","task":"T-004","pr":7,"project":"example-app"}' "$REGISTRY2")"
+oother="$(PATH="$other/bin:$PATH" bash "$other/bin/fm-run.sh" once --repo "$other" 2>&1)"
+assert_lacks "$(cat "$other/calls" 2>/dev/null)" "fm-gate" "another project's pull request is not gated by this run"
+assert_lacks "$oother" "T-004" "nor mentioned"
+assert_fail "test -d '$other/state/decision-ids/firstmate-workflow/T004'" "and no card id is allocated for it"
+rm -rf "$other"
+# the engine's own #7 (no project: the default's) is still advanced when the
+# other project's #7 for a task of the same name has merged
+both="$(caller_fixture t-004-engine "$(printf '%s\n%s' \
+  '{"type":"pr_opened","task":"T-004","pr":7}' \
+  '{"type":"merged","task":"T-004","pr":7,"project":"example-app"}')" "$REGISTRY2")"
+cp "$DETAILS" "$both/state/decision-details/D-firstmate-workflow-T004-1.json"
+oboth="$(PATH="$both/bin:$PATH" bash "$both/bin/fm-run.sh" once --repo "$both" 2>&1)"
+assert_contains "$(cat "$both/calls")" "fm-gate --task T-004" "the engine's own #7 is still gated"
+assert_contains "$oboth" "asking the captain (D-firstmate-workflow-T004-1)" \
+  "and carded, another project's merge notwithstanding"
+assert_eq "7 firstmate-workflow" \
+  "$(jq -r '"\(.pr) \(.project)"' "$both/state/pending/D-firstmate-workflow-T004-1.json")" \
+  "the card is the engine's #7"
+rm -rf "$both"
+# a run for the other project advances that project's #7 and not the engine's
+app="$(caller_fixture t-004-app "$(printf '%s\n%s' \
+  '{"type":"pr_opened","task":"T-004","pr":7}' \
+  '{"type":"pr_opened","task":"T-004","pr":8,"project":"example-app"}')" "$REGISTRY2")"
+cp "$DETAILS" "$app/state/decision-details/D-example-app-T004-1.json"
+oapp="$(FM_PROJECT=example-app PATH="$app/bin:$PATH" bash "$app/bin/fm-run.sh" once --repo "$app" 2>&1)"
+assert_contains "$oapp" "asking the captain (D-example-app-T004-1)" "a run for example-app cards its own pull request"
+assert_eq "8 example-app" "$(jq -r '"\(.pr) \(.project)"' "$app/state/pending/D-example-app-T004-1.json")" \
+  "with that project's pull request number"
+assert_lacks "$(cat "$app/calls")" "--pr 7" "and never gates the engine's #7"
+rm -rf "$app"
+
+# An id reserved for the task's merge card and never published is reused by
+# the next turn, the lowest first; a choice id reserved for the same task is
+# not a merge card and is left alone. No fresh id is taken.
+res="$(caller_fixture t-992-fixture '{"type":"pr_opened","task":"T-992","pr":992}')"
+for k in choice merge merge; do
+  PATH="$res/bin:$PATH" bash "$res/bin/fm-decide.sh" --allocate --task T-992 --kind "$k" --repo "$res" >/dev/null 2>&1
+done
+ores="$(PATH="$res/bin:$PATH" bash "$res/bin/fm-run.sh" once --repo "$res" 2>&1)"
+assert_contains "$ores" "state/decision-details/D-firstmate-workflow-T992-2.json" \
+  "the lowest reserved merge id is the one the turn asks details for"
+assert_eq "1 2 3" "$(find "$res/state/decision-ids/firstmate-workflow/T992" -name '*.json' -exec basename {} .json \; | sort -n | tr '\n' ' ' | sed 's/ $//')" \
+  "and no fresh id is allocated"
+rm -rf "$res"
 
 # T-043's hand-raised record sits at D-056, the id T-056's merge card used to
 # be derived as. It is not T-056's and new ids never look at it: T-056 gets
@@ -101,7 +169,9 @@ cp -r "$ROOT/bin/adapters" bin/
 cp "$ROOT/bin/watch-decisions.ts" bin/ 2>/dev/null || true
 cp "$ROOT/skills/worker/SKILL.md" skills/worker/
 cp "$ROOT/skills/reviewer/SKILL.md" skills/reviewer/
-printf 'vendor: mock\nconcurrency: 2\nfallback:\n  - mock\nproject:\n  check: bin/ci.sh\n  test: bash {file}\n%s' "$REGISTRY" > config.yaml
+# exactly the config.yaml this loop had before projects existed: no registry.
+# The whole loop still runs to a merged pull request in such a tree.
+printf 'vendor: mock\nconcurrency: 2\nfallback:\n  - mock\nproject:\n  check: bin/ci.sh\n  test: bash {file}\n' > config.yaml
 printf '#!/usr/bin/env bash\nexit 0\n' > bin/ci.sh; chmod +x bin/ci.sh
 cat > design/tasks.json <<'J'
 {"tasks":[{"id":"T-1","title":"a task the loop can finish","milestone":"M0",
@@ -237,7 +307,8 @@ assert_eq "1" "$rounds" "one review round has happened when the approval lands"
 # details and any drawing are written under the id the card will carry
 mkdir -p "$r/state/decision-details"
 card1="$(run bin/fm-decide.sh --allocate --task T-1 --kind merge --repo "$r" 2>/dev/null)"
-assert_eq "D-firstmate-workflow-T1-1" "$card1" "firstmate allocates the merge card's id"
+assert_eq "D-firstmate-workflow-T1-1" "$card1" \
+  "firstmate allocates the merge card's id; a tree with no registry is the self project"
 cp "$DETAILS" "$r/state/decision-details/$card1.json"
 rm -rf "$caller"
 out3="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
@@ -245,6 +316,9 @@ assert_contains "$out3" "asking the captain" "seven green means a decision, not 
 pend="$(ls "$r/state/pending" 2>/dev/null | head -1)"
 assert_ok "[ -n \"$pend\" ]" "a decision is pending on disk"
 id="${pend%.json}"
+assert_eq "$card1" "$id" "the pending card is the one allocated"
+assert_eq "false" "$(jq -c 'has("project")' "$r/state/pending/$pend")" \
+  "and, with no registry to validate one against, it records no project"
 
 # nothing merged while the captain has not answered
 assert_eq "OPEN" "$(awk -F'\t' -v n="$pr" '$1==n{print $4}' "$GHSTATE/prs")" \

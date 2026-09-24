@@ -1535,13 +1535,21 @@ recovery path in section 12.
   (`state/pending/`, `state/decisions/`, `state/decision-details/`,
   `board/public/diagrams/`, `design/diagrams/`, the watcher's receipts)
   accepts both forms. Merge cards name the project and link the pull request
-  on the project's GitHub repository.
+  on the project's GitHub repository. A tree with no `projects:` map (every
+  tree before the registry, and the test fixtures) is the engine hosting
+  itself. Its ids are owned by `firstmate-workflow`. Its cards and their
+  events record no project, because there is no registry to validate one
+  against, and naming any other project there exits `65`. The board passes a
+  card's recorded project to `fm-merge.sh`, never the owner read from its id.
 - **`fm-sync-prs.sh`** polls every registered project's repository
   (`gh --repo`) and writes what it finds with that project; one project it
   cannot read does not stop the others. **`fm-merge.sh --project`** merges on
   that project's repository and writes its `merged` event with the project.
   `(project, pr)` is the key: a pull request number in one project never
-  matches another project's event.
+  matches another project's event. `fm-run.sh` resolves its project once and
+  advances only that project's `pr_opened` and `merged` events. An event with
+  no project counts as the default project's. So another project's #7 is never
+  gated, carded or merged as this project's #7.
 - **The board** shows a project chip on lane cards, crew bubbles and decision
   cards, and filters with `?project=`; without it, it shows all projects. Chip
   labels come from the UI dictionaries; a project's name is data and is not

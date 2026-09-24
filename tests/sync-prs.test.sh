@@ -103,6 +103,7 @@ printf '%s\n' '{"ts":"2026-09-20T00:00:00Z","actor":"github","type":"pr_opened",
   > "$d4/state/events.jsonl"
 out4="$(FM_ROOT="$d4" FM_GH="$d4/ghp/gh" "$d4/bin/fm-sync-prs.sh" --repo "$d4" 2>&1)"
 assert_eq "0" "$?" "a sync across two projects exits 0"
+assert_contains "$out4" "merged #7 (T-004) in example-app" "and says which project each new event is in"
 calls="$(cat "$d4/ghcalls")"
 assert_contains "$calls" "--repo owner/engine" "it polls the default project's repository by name"
 assert_contains "$calls" "--repo example-org/example-app" "and the other project's"
@@ -130,6 +131,23 @@ FM_ROOT="$d4" FM_GH="$d4/ghp/gh" "$d4/bin/fm-sync-prs.sh" --repo "$d4" >/dev/nul
 assert_ne "0" "$?" "a project that cannot be read makes the sync exit non-zero"
 assert_eq "example-app" "$(jq -r 'select(.pr==8)|.project' "$log4")" "but the other project is still synced"
 rm -rf "$d4"
+
+# A tree whose config.yaml has no `projects:` map - every fixture written
+# before projects existed - still needs nothing beside the script: not the
+# registry library, which the old fixture never copied. It polls the
+# checkout's own repository and writes no project, as before.
+d5="$(fixture)"
+printf 'vendor: mock\nconcurrency: 2\n' > "$d5/config.yaml"
+OLD5="$(rec "$d5" old <<'J'
+[{"number":3,"state":"OPEN","title":"T-003: old","headRefName":"t-003-old","mergedAt":null}]
+J
+)"
+out5="$(FM_ROOT="$d5" FM_GH="$OLD5" "$d5/bin/fm-sync-prs.sh" --repo "$d5" 2>&1)"
+assert_eq "0" "$?" "a config.yaml with no projects: map syncs with only the two scripts it always had"
+assert_contains "$out5" "pr_opened #3" "and writes what it found"
+assert_eq "false" "$(jq -c 'select(.pr==3)|has("project")' "$d5/state/events.jsonl")" \
+  "with no project, as before"
+rm -rf "$d5"
 
 # it goes through the one writer like everyone else
 # the header comment names fm-emit.sh too; look at what runs

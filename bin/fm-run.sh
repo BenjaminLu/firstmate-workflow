@@ -42,6 +42,31 @@ fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
 B="${FM_CODE_ROOT:-$REPO}/bin"
 say() { printf '  %s\n' "$*"; }
 
+# Which project this run is for, resolved once (design section 15.4). The log
+# is shared: fm-sync-prs.sh writes every registered project's pull requests
+# into it, and a pull request number is only a key together with its
+# project. So a turn advances only the events of its own project - an event
+# with no project is the default project's - and names its cards by it.
+#   RUN_PROJECT  the resolved registry name; empty in a tree registering none
+#   DEFAULT      the project an event with no `project` belongs to
+#   OWNER        the project a card's id names. A tree with no `projects:`
+#                map is the engine hosting itself, and fm-decide.sh names
+#                its cards by the self project, as here
+RUN_PROJECT=''; DEFAULT=''; OWNER=''; RUN_ERR=''
+if ! registered="$(fm_projects "$REPO/config.yaml" 2>&1)"; then
+  RUN_ERR="$registered"
+elif [ -z "$registered" ]; then
+  OWNER="${FM_PROJECT:-firstmate-workflow}"
+  [ "$OWNER" = firstmate-workflow ] || { RUN_ERR="config.yaml registers no project $OWNER"; OWNER=''; }
+elif RUN_PROJECT="$(fm_project_resolve '' "$REPO/config.yaml" 2>&1)"; then
+  OWNER="$RUN_PROJECT"
+  DEFAULT="$(FM_PROJECT='' fm_project_resolve '' "$REPO/config.yaml" 2>/dev/null)" || DEFAULT=''
+else
+  RUN_ERR="$RUN_PROJECT"; RUN_PROJECT=''
+fi
+# the events of this run's project, and only those
+OURS='((.project // $def) == $proj)'
+
 # The merge card of one task, under an id that names its owner (design
 # section 15.4): D-<project>-<task>-<n>, allocated by fm-decide.sh. Never
 # derived from the task's digits - that space was shared with hand-raised
@@ -50,9 +75,9 @@ say() { printf '  %s\n' "$*"; }
 # D-<digits> record, whoever it belongs to, is never read, moved or replaced.
 # The project is the one this run resolves (FM_PROJECT, else the default).
 merge_card() {  # merge_card <task> <pr>
-  local task="$1" pr="$2" project key f id='' details request_out n best=''
-  if ! project="$(fm_project_resolve '' "$REPO/config.yaml" 2>&1)"; then
-    say "$task: no captain card created; no project to name it by ($project)"; return
+  local task="$1" pr="$2" project="$OWNER" key f id='' details request_out n best=''
+  if [ -z "$project" ]; then
+    say "$task: no captain card created; no project to name it by ($RUN_ERR)"; return
   fi
   key="T${task#T-}"
   # a card already up, or already answered, is this task's merge card
@@ -99,10 +124,13 @@ turn() {
   [ -z "$started" ] || say "dispatched: $(printf '%s' "$started" | tr '\n' ' ')"
 
   # 3. advance every task that has a pull request open
-  open_prs="$(jq -r 'select(.type=="pr_opened")|[.task,(.pr|tostring)]|@tsv' state/events.jsonl 2>/dev/null | sort -u)"
+  #    of this run's project: another project's #7 is not this project's #7
+  open_prs="$(jq -r --arg proj "$RUN_PROJECT" --arg def "$DEFAULT" \
+    "select(.type==\"pr_opened\" and $OURS)|[.task,(.pr|tostring)]|@tsv" state/events.jsonl 2>/dev/null | sort -u)"
   while IFS=$'\t' read -r task pr; do
     [ -n "$task" ] && [ -n "$pr" ] || continue
-    jq -e --arg t "$task" 'select(.type=="merged" and .task==$t)' state/events.jsonl >/dev/null 2>&1 && continue
+    jq -e --arg t "$task" --arg proj "$RUN_PROJECT" --arg def "$DEFAULT" \
+      "select(.type==\"merged\" and .task==\$t and $OURS)" state/events.jsonl >/dev/null 2>&1 && continue
 
     branch="$(git branch --list "$(printf '%s' "$task" | tr 'A-Z' 'a-z')-*" --format='%(refname:short)' | head -1)"
     [ -n "$branch" ] || continue

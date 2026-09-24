@@ -267,7 +267,39 @@ before_sum="$(cksum < "$o/state/decisions/D-056.json")"
 assert_eq "D-firstmate-workflow-T056-1" "$(alloc --task T-056)" \
   "with T-043's old D-056 on disk, T-056's first card is its own id"
 assert_eq "$before_sum" "$(cksum < "$o/state/decisions/D-056.json")" "and D-056 is left exactly as it was"
+# A lock left by a process killed outright (KILL: no trap runs) blocks that
+# task's allocations. They time out rather than hang, name the lock and say
+# what to do; nothing clears it on a guess. Other tasks are not blocked.
+mkdir -p "$o/state/decision-ids/firstmate-workflow/T070.lock"
+lk="$(FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --allocate --task T-070 2>&1)"
+assert_eq "1" "$?" "an allocation behind a stale lock times out"
+assert_contains "$lk" "decision-ids/firstmate-workflow/T070.lock" "naming the lock"
+assert_contains "$lk" "remove it (rmdir) and allocate again" "and saying what a human does about it"
+assert_fail "test -e '$o/state/decision-ids/firstmate-workflow/T070/1.json'" "and reserving nothing"
+assert_eq "D-firstmate-workflow-T071-1" "$(alloc --task T-071)" "another task's allocation is not blocked by it"
+rmdir "$o/state/decision-ids/firstmate-workflow/T070.lock"
+assert_eq "D-firstmate-workflow-T070-1" "$(alloc --task T-070)" "once it is removed, the task allocates again"
 rm -rf "$o"
+
+# A tree with no `projects:` map - every fixture before projects existed - is
+# the engine hosting itself: its ids are the self project's, and nothing
+# records a project, because there is no registry to validate one against.
+u="$(fixture)"; cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$u/bin/"
+printf 'vendor: mock\n' > "$u/config.yaml"
+uid="$(FM_ROOT="$u" bash "$u/bin/fm-decide.sh" --allocate --task T-047 --kind merge 2>/dev/null)"
+assert_eq "D-firstmate-workflow-T047-1" "$uid" "an unregistered tree allocates under the self project"
+assert_eq "D-firstmate-workflow-T047-2" \
+  "$(FM_ROOT="$u" bash "$u/bin/fm-decide.sh" --allocate --task T-047 --project firstmate-workflow 2>/dev/null)" \
+  "naming the self project there is the same"
+FM_ROOT="$u" bash "$u/bin/fm-decide.sh" --allocate --task T-047 --project example-app >/dev/null 2>&1
+assert_eq "65" "$?" "naming any other project there is refused"
+upend="$(FM_ROOT="$u" bash "$u/bin/fm-decide.sh" --request "$uid" --task T-047 --kind merge --pr 3 \
+  --details "$d/details.json" 2>/dev/null)"
+assert_eq "$u/state/pending/$uid.json" "$upend" "and the id is requested there"
+assert_eq "false" "$(jq -c 'has("project")' "$upend")" "with no project on the card"
+assert_eq "false" "$(jq -c 'select(.type=="decision_requested")|has("project")' "$u/state/events.jsonl")" \
+  "and its decision_requested event is written, with no project"
+rm -rf "$u"
 
 # no dependency on a watcher that has to be installed
 # the words may appear in a comment explaining the absence; a call may not

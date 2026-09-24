@@ -100,6 +100,23 @@ assert_eq "0" "$?" "the default project named explicitly merges"
 assert_contains "$(grep 'pr merge' "$d/ghcalls")" "--repo owner/engine" "on the engine's own repository"
 rm -rf "$d"
 
+# Cleanup knows only the engine's own worktree root: another project's T-004
+# is not cleaned up here, or state/worktrees/T-004 - the engine's own T-004 -
+# would go with it. The self project's merge still cleans up.
+cleanup_stub() { printf '#!/usr/bin/env bash\necho "$*" >> "%s/cleanup-calls"\n' "$1" > "$1/bin/fm-cleanup.sh"
+  chmod +x "$1/bin/fm-cleanup.sh"; }
+d="$(fixture OPEN t-004-app)"; registry "$d"; cleanup_stub "$d"
+out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --project example-app 2>&1)"
+assert_eq "0" "$?" "another project's merge with a cleanup script present still merges"
+assert_fail "test -e '$d/cleanup-calls'" "and does not run the engine's cleanup for it"
+assert_contains "$out" "T-004's worktree in example-app is not cleaned up here" "and says so"
+rm -rf "$d"
+d="$(fixture OPEN t-009-board)"; registry "$d"; cleanup_stub "$d"
+out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --project firstmate-workflow 2>&1)"
+assert_contains "$(cat "$d/cleanup-calls" 2>/dev/null)" "--task T-009" "the self project's merge cleans up its task"
+assert_lacks "$out" "not cleaned up here" "without saying otherwise"
+rm -rf "$d"
+
 d="$(fixture OPEN t-009-board)"; registry "$d"
 FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --project nosuch-app >/dev/null 2>&1
 assert_eq "65" "$?" "a project the registry does not hold exits 65"

@@ -37,9 +37,10 @@ cd "$REPO" || { echo "fm-sync-prs: no repo at $REPO" >&2; exit 64; }
 LOG="$REPO/state/events.jsonl"; mkdir -p "$REPO/state"
 
 # The registry, when there is one. The library is needed only to read it, so
-# a tree without a config.yaml still depends on nothing.
+# a tree whose config.yaml has no `projects:` map - or no config.yaml at all -
+# still depends on nothing, as it did before projects existed.
 projects=''; default=''
-if [ -f "$REPO/config.yaml" ]; then
+if [ -f "$REPO/config.yaml" ] && grep -q '^projects:' "$REPO/config.yaml"; then
   [ -r "$HERE/fm-config.sh" ] || { echo "fm-sync-prs: reading the registry needs $HERE/fm-config.sh" >&2; exit 70; }
   # shellcheck source=bin/fm-config.sh
   . "$HERE/fm-config.sh"

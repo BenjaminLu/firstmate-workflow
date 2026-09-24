@@ -290,8 +290,13 @@ task's own lock, reserves it and prints it; `--request` refuses an owned id
 that was not allocated (65), or whose task or project is not the card's (64).
 Allocate first, so the details and any authored drawing are written under the
 id the card will carry. Old ids (`D-<digits>`, `D-SK-<n>`) stay readable and
-are never renamed. Tasks written into an id match `^T-[A-Za-z0-9]{1,32}$`;
-the numeric `^D-[0-9]{1,6}$` request path remains only for old callers. Kind is
+are never renamed. Tasks written into an id match `^T-[A-Za-z0-9]{1,32}$`.
+Every new card you raise, merge or hand-raised, must take the owned form
+from `--allocate`. The script still accepts `--request D-<digits>` so that old
+callers and existing fixtures keep working. That is the only reason, and the
+code does not stop you misusing it, so the rule is yours to keep. In a tree
+with no `projects:` map, ids are owned by `firstmate-workflow` and the card
+records no project. Kind is
 `choice` or `merge`, and a merge requires `--pr` matching `^[1-9][0-9]*$`.
 
 Before a real request:

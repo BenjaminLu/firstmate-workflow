@@ -77,11 +77,27 @@ task_key() {    # task_key <task> -> T047 for T-047; 64 for a task no id can hol
   [[ "$1" =~ $TASK_ID ]] || { echo "fm-decide: bad task '$1' (a decision id holds T-<letters and digits>)" >&2; exit 64; }
   printf 'T%s' "${BASH_REMATCH[1]}"
 }
+# A tree that registers no project (no `projects:` map: every tree before the
+# registry, and the test fixtures) is the engine hosting itself. Its ids are
+# owned by the self project's name, and nothing records a project, because
+# there is no registry to validate one against - the same tree's events carry
+# none either. Naming any other project there is refused.
+SELF_PROJECT=firstmate-workflow
+RECORD=''            # the project written on the card and its event
 resolve_project() {  # PROJECT <- the registry name: --project, FM_PROJECT, default_project
+  local names
   [ -r "$HERE/fm-config.sh" ] || { echo "fm-decide: a project id needs $HERE/fm-config.sh" >&2; exit 70; }
   # shellcheck source=bin/fm-config.sh
   . "$HERE/fm-config.sh"
+  names="$(fm_projects "$REPO/config.yaml")" || exit 65
+  if [ -z "$names" ]; then
+    PROJECT="${PROJECT:-${FM_PROJECT:-$SELF_PROJECT}}"
+    [ "$PROJECT" = "$SELF_PROJECT" ] || {
+      echo "fm-decide: no project $PROJECT: config.yaml registers none" >&2; exit 65; }
+    return 0
+  fi
   PROJECT="$(fm_project_resolve "$PROJECT" "$REPO/config.yaml")" || exit 65
+  RECORD="$PROJECT"
 }
 
 # Await accepts every id shape there is: numeric, skill-update and owned.
@@ -113,7 +129,11 @@ if [ "$MODE" = allocate ]; then
     if mkdir "$lock" 2>/dev/null; then got=1; break; fi
     perl -e 'select(undef,undef,undef,0.01)' 2>/dev/null || sleep 0.05
   done
-  [ -n "$got" ] || { echo "fm-decide: timed out waiting for the decision-id lock $lock" >&2; exit 1; }
+  # a lock outlives only a process killed by a signal no trap sees (KILL);
+  # nothing clears it on a guess, so the message says what a human does
+  [ -n "$got" ] || {
+    echo "fm-decide: timed out waiting for the decision-id lock $lock; if no fm-decide.sh is allocating for $TASK, remove it (rmdir) and allocate again" >&2
+    exit 1; }
   # the path is fixed now, not when the trap fires
   # shellcheck disable=SC2064
   trap "rmdir '$lock' 2>/dev/null" EXIT
@@ -209,7 +229,7 @@ if [ "$MODE" = request ]; then
       echo 'fm-decide: --details requires complete authored en and zh-TW title, explanation, before, after, outcome and A/B/C description/pros/cons' >&2; exit 64;
     }
     payload="$(jq -cn --arg id "$ID" --arg task "$TASK" --arg kind "$KIND" --arg pr "$PR" \
-      --arg project "$PROJECT" --slurpfile details "$DETAILS" \
+      --arg project "$RECORD" --slurpfile details "$DETAILS" \
       '{id:$id,task:$task,kind:$kind,details:$details[0],title:$details[0].en.title}
        + (if $project=="" then {} else {project:$project} end)
        + (if $pr=="" then {} else {pr:($pr|tonumber)} end)')" || exit 64
@@ -217,7 +237,7 @@ if [ "$MODE" = request ]; then
     # after the pending file and before the event: the generator reads the file
     # it is drawing, and the event is what wakes anything watching
     draw
-    emit --type decision_requested --task "$TASK" ${PR:+--pr "$PR"} ${PROJECT:+--project "$PROJECT"} \
+    emit --type decision_requested --task "$TASK" ${PR:+--pr "$PR"} ${RECORD:+--project "$RECORD"} \
          --en "$(jq -r '.en.title' "$DETAILS")" --tw "$(jq -r '."zh-TW".title' "$DETAILS")"
     printf '%s\n' "$PEND/$ID.json"
     exit 0
