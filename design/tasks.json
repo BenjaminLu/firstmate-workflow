@@ -1743,6 +1743,30 @@
         "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first in tests/worker.test.sh, against a real git fixture with a bare remote: a branch that still applies is left untouched; a moved base with a clean apply produces one commit on the new base; a conflicting file is handed to the adapter with markers and listed in the prompt; a marker left behind refuses the commit; force-with-lease refuses when the remote head moved; the task entry and table row survive. The worker does not run the suite itself.",
         "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
       ]
+    },
+    {
+      "id": "T-093",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-067"
+      ],
+      "title": "a rebuilt branch commits under the real hooks, and the hooks keep only the main-branch rules",
+      "scope": [
+        "bin/fm-worker.sh",
+        ".githooks/pre-commit",
+        "tests/worker.test.sh",
+        "tests/guard.test.sh",
+        "design/design.md",
+        "design/tasks.json"
+      ],
+      "acceptance": [
+        "T-067 shipped a rebuild that never works on a real checkout. fm-worker.sh rebuilds a branch on a detached HEAD, and the repository's own pre-commit hook (fm-guard) refuses every commit on a detached HEAD. On 2026-09-24 the first three real rebuilds (T-059, T-048, T-089) all ended with 'fm-guard: detached HEAD - refusing to commit' and nothing published. The tests passed only because their fixtures install no hooks. Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+        "fm-worker.sh makes the rebuilt commit with git commit-tree from the staged tree, parented on the fetched base, after its own marker and unresolved-conflict checks. It pushes that commit with --force-with-lease against the head it fetched, and moves the local branch only after the push lands. No hook is bypassed on a protected branch, because the commit is never made on main or master.",
+        ".githooks/pre-commit keeps only the rule that no commit is made on a protected branch (main, master). The detached-HEAD refusal is removed: server-side branch protection (pull request required, ci required, strict, no force pushes, admins included) is the authority, and the local hook is an early warning. The pre-push hook is unchanged.",
+        "Evidence is this pull request's required GitHub check and the seven gates. Tests written to fail first, in fixtures that install the real hooks with bin/fm-install-hooks.sh: a rebuild of a branch that no longer rebases publishes one commit on the new base and moves the local branch; a rebuild with a leftover marker publishes nothing; a commit on main is still refused by the hook; a commit on a detached HEAD is now allowed by the hook. Each of these fails on today's code. The worker does not run the suite itself.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
     }
   ]
 }

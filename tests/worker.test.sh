@@ -1582,7 +1582,14 @@ rb_fixture() {   # rb_fixture [two-tasks]; prints the fixture dir with round one
     printf '%s\n' '# design' '## 6. gates' 'seven of them' '' \
       '| id | title | depends on |' '|---|---|---|' '| T-1 | one | — |' '' \
       'the table ends here' 'prose the two sides may both edit' '## 8. board' > design/design.md
+    # RB_HOOKS=1: the repository's own hooks, in the tree and installed the
+    # way a real checkout installs them - relative, so every worktree runs
+    # the copy it has checked out
+    if [ "${RB_HOOKS:-0}" = 1 ]; then
+      cp -R "$ROOT/.githooks" .githooks; cp "$ROOT/bin/fm-install-hooks.sh" bin/
+    fi
     git add -A; git commit -qm 'app and task table'; git push -q origin main
+    [ "${RB_HOOKS:-0}" != 1 ] || bin/fm-install-hooks.sh >/dev/null
   ) || return 1
   # the step a round runs is a file the test writes, so each case can say
   # what its worker does without a second copy of the adapter
@@ -1846,18 +1853,18 @@ assert_contains "$rb_out" "could not commit" "and says so"
 assert_eq "$oldG" "$(rb_head "$dG" "$bG")" "nothing is pushed"
 assert_eq "$pushedG" "$(rb_pushed "$dG")" "and no commit is reported"
 assert_lacks "$(cat "$dG/ghcalls")" "pr comment" "nor is the pull request told of one"
+# A rebuilt round's commit is made with commit-tree, which runs no hook
+# (T-093), so here the failure is commit-tree's own.
 dG2="$(rb_fixture)"; bG2="$(rb_branch "$dG2")"
 rb_replay_conflict "$dG2"; oldG2="$(rb_head "$dG2" "$bG2")"; mainG2="$(rb_head "$dG2" main)"
-rb_refusing_hook "$dG2"
-rb_round_two "$dG2" "$rb_add"
+PATH="$(rb_gitwrap "$dG2"):$PATH" FM_T_GIT_FAIL=" commit-tree " rb_round_two "$dG2" "$rb_add"
 rb_rebuilt "$dG2" "G2"
 assert_eq "70" "$rb_rc" "a rebuilt round whose commit fails stops"
 assert_contains "$rb_out" "could not commit" "at the commit"
 assert_eq "$oldG2" "$(rb_head "$dG2" "$bG2")" "and pushes nothing"
 assert_eq "$oldG2" "$(git -C "$dG2/repo" rev-parse "$bG2")" "and the local branch is not moved onto the base"
-# G2, next round, with the hook gone: the staged rebuild the failed commit
-# left is rescued, and the branch is rebuilt again and committed once.
-git -C "$dG2/repo" config --unset core.hooksPath
+# G2, next round, with commit-tree working: the staged rebuild the failed
+# commit left is rescued, and the branch is rebuilt again and committed once.
 rb_round_two "$dG2" "$rb_add"
 assert_eq "0" "$rb_rc" "the round after a failed rebuilt commit completes"
 rb_rebuilt "$dG2" "G2, next round"
@@ -2251,8 +2258,57 @@ assert_eq "0" "$rb_rc" "T, next round: completes"
 rb_rebuilt "$dT" "T, next round"
 assert_eq "$mainT" "$(rb_head "$dT" "$bT^")" "T, next round: one commit on the base"
 
+# U: rebuilds in a repository running its real hooks, installed by
+# bin/fm-install-hooks.sh (T-093). Every fixture above installs none, and
+# that is how a rebuild the repository's own pre-commit refused on every
+# real checkout - it is made on a detached HEAD - passed here.
+dU1="$(RB_HOOKS=1 rb_fixture)"; bU1="$(rb_branch "$dU1")"
+assert_ne "" "$bU1" "U1: round one pushed a branch under the real hooks"
+assert_eq ".githooks" "$(git -C "$dU1/repo" config --get core.hooksPath)" "U1: the fixture installs the real hooks"
+assert_fail "git -C '$dU1/repo' -c user.email=a@b.c -c user.name=t commit -q --allow-empty -m onmain" \
+  "U1: and they are live: a commit on main is refused"
+rb_replay_conflict "$dU1"; oldU1="$(rb_head "$dU1" "$bU1")"; mainU1="$(rb_head "$dU1" main)"
+rb_round_two "$dU1" "$rb_add"
+rb_rebuilt "$dU1" "U1"
+assert_eq "0" "$rb_rc" "U1: a rebuild under the real hooks completes"
+assert_lacks "$rb_out" "detached HEAD" "U1: and no hook refused it"
+assert_eq "$mainU1" "$(rb_head "$dU1" "$bU1^")" "U1: one commit on the new base"
+assert_eq "1" "$(git --git-dir="$dU1/remote.git" rev-list --count "main..$bU1")" "U1: exactly one"
+assert_ok "git --git-dir='$dU1/remote.git' cat-file -e '$bU1:src/round-two'" "U1: carrying this round's work"
+assert_eq "$(rb_head "$dU1" "$bU1")" "$(git -C "$dU1/repo" rev-parse "$bU1")" "U1: the local branch moved onto what was pushed"
+assert_eq "refs/heads/$bU1" "$(git -C "$dU1/repo/state/worktrees/T-Z" symbolic-ref -q HEAD)" \
+  "U1: and the worktree is back on the branch"
+assert_eq "$oldU1" "$(jq -r 'select(.type=="commit_pushed" and .data.rebuilt!=null)|.data.rebuilt.previous_head' \
+  "$dU1/repo/state/events.jsonl" | tail -1)" "U1: the previous head is recorded"
+# U2: a marker left behind publishes nothing under the real hooks either;
+# the round that resolves it publishes one commit on the base
+dU2="$(RB_HOOKS=1 rb_fixture)"; bU2="$(rb_branch "$dU2")"; oldU2="$(rb_head "$dU2" "$bU2")"
+rb_conflicting_main "$dU2"; mainU2="$(rb_head "$dU2" main)"
+pushedU2="$(rb_pushed "$dU2")"
+rb_round_two "$dU2" "$rb_add"
+rb_rebuilt "$dU2" "U2"
+assert_eq "75" "$rb_rc" "U2: a marker left behind refuses the round"
+assert_contains "$rb_out" "conflict markers remain in: src/app.txt" "U2: and names the file"
+assert_eq "$oldU2" "$(rb_head "$dU2" "$bU2")" "U2: nothing is pushed"
+assert_eq "$oldU2" "$(git -C "$dU2/repo" rev-parse "$bU2")" "U2: the local branch is not moved"
+assert_eq "$pushedU2" "$(rb_pushed "$dU2")" "U2: and no commit is reported"
+cat > "$dU2/resolve.sh" <<'S'
+{ printf 'line %s\n' 1 2 3 4; printf 'line 5 by main and the task\n'; printf 'line %s\n' 6 7 8 9 10; } > src/app.txt
+awk '/^<<<<<<< / { skip = 1; print "prose as main and the task say"; next }
+     /^>>>>>>> / { skip = 0; next } !skip' design/design.md > design/d.next
+mv design/d.next design/design.md
+S
+rb_round_two "$dU2" "$dU2/resolve.sh"
+rb_rebuilt "$dU2" "U2, next round"
+assert_eq "0" "$rb_rc" "U2, next round: the resolved rebuild completes under the real hooks"
+assert_eq "$mainU2" "$(rb_head "$dU2" "$bU2^")" "U2, next round: one commit on the base"
+assert_eq "1" "$(git --git-dir="$dU2/remote.git" rev-list --count "main..$bU2")" "U2, next round: exactly one"
+assert_contains "$(git --git-dir="$dU2/remote.git" show "$bU2:src/app.txt")" "line 5 by main and the task" \
+  "U2, next round: carrying the resolution"
+assert_eq "$(rb_head "$dU2" "$bU2")" "$(git -C "$dU2/repo" rev-parse "$bU2")" "U2, next round: the local branch moved onto it"
+
 rm -rf "$dA" "$dA2" "$dB" "$dC" "$dD" "$dE" "$dF" "$dG" "$dG2" "$dH" "$dI" "$dJ" "$dK" "$dK2" "$dL" \
   "$dM" "$dN" "$dP1" "$dP2" "$dP3" "$dP4" "$dP5" "$dP6" "$dP7" "$dQ1" "$dQ2" "$dQ3" "$dQ4" \
-  "$dR1" "$dR2" "$dS" "$dT" "$rb_add" "$rb_more"
+  "$dR1" "$dR2" "$dS" "$dT" "$dU1" "$dU2" "$rb_add" "$rb_more"
 
 finish

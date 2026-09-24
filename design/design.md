@@ -43,7 +43,9 @@ These bind every actor, including firstmate itself.
    for the scripts, the hooks in `.githooks/` for anything driving git
    directly, and branch protection on GitHub with `enforce_admins` on — because
    firstmate runs on the captain's own credentials, an admin exemption would be
-   an exemption for firstmate too.
+   an exemption for firstmate too. Branch protection is the authority; the
+   hooks are an early warning and refuse only a commit or push on a protected
+   branch — not a detached HEAD, where `fm-worker.sh` rebuilds (T-093).
 2. **English in the repository**, as stated above.
 3. **Merging is the captain's**, and it arrives as a decision card on the
    board — never as a sentence in a conversation (section 5.2).
@@ -629,9 +631,14 @@ that rewrote it while resolving. In a rebuilt round the task's own entry
 and row are therefore frozen: a change to either waits for a round that
 is not a rebuild. The run names the files, publishes nothing and exits
 `75`. Otherwise the rebuild and the round's work are one commit on the
-base, so gate 2 holds by construction. The commit is pushed from the
-detached HEAD with `--force-with-lease` against the branch head read
-before the rebuild: anything pushed to the branch since is refused, never
+base, so gate 2 holds by construction. The commit is made with `git
+commit-tree` from the staged tree, parented on the fetched base — never
+`git commit` on the detached HEAD, which the repository's own pre-commit
+hook used to refuse, and did, on every real rebuild (T-093). It runs no
+hook and steps around none on a protected branch: until the push lands
+it is on no branch at all, and then only on the task's. It is pushed by
+its id with `--force-with-lease` against the branch head read before the
+rebuild: anything pushed to the branch since is refused, never
 overwritten. The local branch moves onto the commit only after origin has
 taken it, so a refused push leaves it on its previous head; the next round
 fast-forwards to what was pushed and rebuilds from there. While the push
@@ -1442,6 +1449,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-070 | design: prototype v2 of the living ship, at a designer's standard | T-058 |
 | T-069 | every pull request number on the board links to that project's pull request | T-046, T-058 |
 | T-073 | the reviewer sees the worker's ask and the closed list | T-065 |
+| T-093 | a rebuilt branch commits under the real hooks, and the hooks keep only the main-branch rules | T-067 |
 
 ### M3 — driving other repositories
 
