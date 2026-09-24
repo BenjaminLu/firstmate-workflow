@@ -673,15 +673,17 @@
       ],
       "title": "one exit code for a usage error, in every script",
       "scope": [
-        "bin/**",
-        "tests/**",
+        "bin/fm-guard.sh",
+        "tests/guard.test.sh",
         "design/design.md",
         "design/tasks.json"
       ],
       "acceptance": [
-        "every usage error in every script exits 64, and every refusal to write exits 1",
-        "the gate enforces it rather than the design merely stating it",
-        "each converted path has an assertion that fails if it goes back"
+        "Rescoped by the captain on 2026-09-24 after firstmate re-checked it against main: every script's usage error already exits 64 except one. bin/fm-guard.sh line 40 prints its usage and exits 2. This task makes that path exit 64 like every other script. The earlier 'the gate enforces it' item is dropped: the remaining gap is one line, and a lint for it is not worth its weight today. This entry's rescoped text is committed on this task's branch.",
+        "tests/guard.test.sh gains an assertion, written to fail first, that an unknown fm-guard.sh subcommand exits 64 and prints its usage on standard error.",
+        "design.md's sentence that notes T-029 (the one that says exit 64 for usage errors 'is T-029') is updated to state that it now holds for every script.",
+        "Evidence is this pull request's required GitHub check and the seven gates; the worker does not run the suite itself.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
       ]
     },
     {

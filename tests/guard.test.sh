@@ -21,6 +21,11 @@ assert_fail "'$G' branch '$t'" "refuses a detached HEAD"
 git -C "$t" checkout -q feature/x
 assert_fail "FM_PROTECTED='feature/x' '$G' branch '$t'" "honours FM_PROTECTED"
 
+# a usage error exits 64, like every other script, and says so on stderr
+uerr="$("$G" nonsense 2>&1 >/dev/null)"; urc=$?
+assert_eq "64" "$urc" "an unknown subcommand exits 64"
+assert_contains "$uerr" "usage: fm-guard.sh" "and prints its usage on stderr"
+
 # the hooks are the half that catches a human, or an agent using git directly
 git -C "$t" config core.hooksPath "$ROOT/.githooks"
 git -C "$t" checkout -q main
