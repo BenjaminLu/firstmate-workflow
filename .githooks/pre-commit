@@ -6,8 +6,10 @@
 # and it names only the protected branches. A detached HEAD is not one:
 # fm-worker.sh rebuilds a branch there (T-093).
 : "${FM_PROTECTED:=main master}"
+# a target's managed clone names its project's base (bin/fm-project.sh sync)
+base=$(git config --local --get firstmate.base 2>/dev/null || true)
 b=$(git branch --show-current 2>/dev/null)
-for p in $FM_PROTECTED; do
+for p in $FM_PROTECTED $base; do
   if [ "$b" = "$p" ]; then
     echo "fm-guard: refusing to commit on $b." >&2
     echo '          branch first, then open a pull request.' >&2
