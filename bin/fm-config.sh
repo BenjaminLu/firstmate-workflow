@@ -110,12 +110,15 @@ import importlib.util, os, re, sys, tempfile
 from pathlib import Path
 
 herdr_path, config, mode, *args = sys.argv[1:]
-if not Path(herdr_path).is_file():
-    print('fm-config: cannot read the registry: no fm-herdr.py beside fm-config.sh (%s)' % herdr_path,
-          file=sys.stderr); sys.exit(65)
-# the one scalar and contract parser, fm_project's
-spec = importlib.util.spec_from_file_location('fm_herdr', herdr_path)
-herdr = importlib.util.module_from_spec(spec); spec.loader.exec_module(herdr)
+# the one scalar and contract parser, fm_project's; needed only when there is a
+# config to parse, so a tree with no config.yaml registers nothing without it
+herdr = None
+if Path(config).is_file():
+    if not Path(herdr_path).is_file():
+        print('fm-config: cannot read the registry: no fm-herdr.py beside fm-config.sh (%s)' % herdr_path,
+              file=sys.stderr); sys.exit(65)
+    spec = importlib.util.spec_from_file_location('fm_herdr', herdr_path)
+    herdr = importlib.util.module_from_spec(spec); spec.loader.exec_module(herdr)
 FIELDS = ('repo', 'github', 'base', 'required_check', 'design', 'tasks', 'project')
 NAME = re.compile(r'[a-z0-9-]{1,24}$')
 GITHUB = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+$')

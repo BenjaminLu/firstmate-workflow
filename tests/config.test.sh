@@ -276,6 +276,12 @@ assert_eq "65" "$(rc_of bash -c '. "$1/lone/bin/fm-config.sh"; fm_project_resolv
   "no fm-herdr.py beside fm-config.sh: exit 65"
 assert_contains "$(cat "$r/err")" "fm-herdr.py" "and the message names the missing parser"
 assert_lacks "$(cat "$r/err")" "Traceback" "not a Python traceback"
+# ...but with no config.yaml there is nothing to parse, so no parser is needed
+assert_eq "0" "$(rc_of bash -c '. "$1/lone/bin/fm-config.sh"; fm_projects "$1/absent.yaml"' _ "$r")" \
+  "no config and no fm-herdr.py: the registry is empty, exit 0"
+assert_eq "" "$(cat "$r/err")" "and nothing is said about the parser"
+assert_eq "65" "$(rc_of bash -c '. "$1/lone/bin/fm-config.sh"; fm_project_resolve x "$1/absent.yaml"' _ "$r")" \
+  "while resolving a name against it is still refused with 65"
 rm -rf "$r"
 
 # --- self-hosting: this repository's own registry ------------------------
