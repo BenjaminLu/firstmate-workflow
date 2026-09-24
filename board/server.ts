@@ -4,7 +4,7 @@
 //   FM_PORT=4173 FM_ROOT=.             the log it tails is the one the crew writes
 //
 // No build step and no framework: the page is a file, the stream is SSE, and
-// the state endpoint is derived from events.jsonl and design/tasks.json so the
+// the state endpoint is derived from events.jsonl and design/tasks/ so the
 // board has no opinion the log does not already hold.
 import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -154,6 +154,36 @@ const registry = (): { github: string | null; name: string | null } => {
   return registryRead;
 };
 const github = (): string | null => registry().github;
+
+// The task list (T-090): one file per task under design/tasks, read through
+// bin/fm-config.sh's fm_tasks - the one reader every script uses - so the
+// board and the dispatcher cannot disagree about what a task is. Read at
+// request time; the answer is kept only while no task file has changed.
+// No directory, no library or a file that does not parse is no task list,
+// never half of one.
+let tasksRead: { stamp: string; defs: Array<Record<string, unknown>> } | null = null;
+const taskDefs = (): Array<Record<string, unknown>> => {
+  const dir = join(ROOT, "design/tasks"), lib = join(ROOT, "bin/fm-config.sh");
+  if (!existsSync(dir) || !existsSync(lib)) return [];
+  let stamp = "";
+  try {
+    const d = statSync(dir);
+    stamp = `${d.ino}:${d.mtimeMs}|` + readdirSync(dir).filter(f => f.endsWith(".json")).sort().map(f => {
+      const st = statSync(join(dir, f));
+      return `${f}:${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
+    }).join("|");
+  } catch { return []; }
+  if (tasksRead?.stamp === stamp) return tasksRead.defs;
+  let defs: Array<Record<string, unknown>> = [];
+  try {
+    const r = Bun.spawnSync(["bash", "-c", '. "$1" && fm_tasks design/tasks', "fm-board", lib], { cwd: ROOT });
+    if (r.exitCode === 0) {
+      defs = new TextDecoder().decode(r.stdout).split("\n").filter(Boolean).map(line => JSON.parse(line));
+    }
+  } catch { defs = []; }
+  tasksRead = { stamp, defs };
+  return defs;
+};
 // the project an event or card naming none belongs to (design section 15.4)
 const defaultProject = (): string => registry().name ?? "";
 // The one reading of a pull request number, for every place the board takes
@@ -208,10 +238,7 @@ const state = () => {
   const responses = existsSync(responseDir) ? readdirSync(responseDir).filter(f => f.endsWith('.json') && isDecisionId(f.slice(0, -5))).flatMap(f => {
     try { return [JSON.parse(readFileSync(join(responseDir, f), 'utf8'))]; } catch { return []; }
   }) : [];
-  const tasksFile = join(ROOT, "design/tasks.json");
-  const defs = existsSync(tasksFile)
-    ? (JSON.parse(readFileSync(tasksFile, "utf8")).tasks as Array<Record<string, unknown>>)
-    : [];
+  const defs = taskDefs();
   const definitions = new Map(defs.map(d => [String(d.id), d]));
   const stage = new Map<string, string>();
   const pr = new Map<string, number>();
@@ -699,7 +726,7 @@ const server = Bun.serve({
 
     // The captain parks, unparks or drops a task (T-058). Written as a captain
     // event through fm-emit.sh like every other board write; the plan in
-    // design/tasks.json is never touched. The check and the write run with
+    // design/tasks/ is never touched. The check and the write run with
     // nothing in between - spawnSync holds the only thread - so two clicks
     // cannot both pass the check. Declared JSON only: a cross-site form can
     // post text/plain without asking first, but not application/json.

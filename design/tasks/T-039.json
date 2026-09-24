@@ -1,0 +1,20 @@
+{
+  "id": "T-039",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "fm-gate.sh's gate 3 must run the full local gate at the budget design.md already authorizes",
+  "scope": [
+    "bin/fm-gate.sh",
+    "tests/gate.test.sh",
+    "design/tasks.json",
+    "design/design.md"
+  ],
+  "acceptance": [
+    "This task's own entry, exactly as given here, must be committed into design/tasks.json and this row added to design/design.md's task table on this task's branch, matching the convention other self-registering tasks use.",
+    "design/design.md section 10 already documents that bin/ci.sh defaults to a 180-second budget, that GitHub sets FM_CI_MAX_SECONDS=600, and that 'Firstmate runs the same full local gate with FM_CI_MAX_SECONDS=600 bash bin/ci.sh before publication.' Do not redesign this; gate3() in bin/fm-gate.sh currently invokes the detached worktree's bin/ci.sh with no FM_CI_MAX_SECONDS set at all, so it silently runs at the bare 180-second default instead of the 600-second budget the design already authorizes for this exact use. Fix gate3() to invoke bin/ci.sh with FM_CI_MAX_SECONDS=600 in its environment, matching GitHub's own budget and design.md's stated firstmate practice.",
+    "This changes only the elapsed-time budget gate3 runs under; it must not change or weaken any functional check inside bin/ci.sh, and a genuinely failing suite (shellcheck, a red bash/bun/playwright test, the dag check, etc.) must still fail gate3 exactly as before, regardless of budget.",
+    "Add a fail-first regression test in tests/gate.test.sh: a fixture whose full suite takes longer than 180 seconds but less than 600 (a controllable/fake duration, not a real sleep long enough to be flaky) must pass gate3 under the fixed code and must fail it under the old bare-default behavior. Do not depend on real wall-clock timing beyond what is needed to distinguish the two budgets deterministically.",
+    "Run bin/ci.sh and report the observed exit status/duration for this branch."
+  ]
+}

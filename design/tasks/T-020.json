@@ -1,0 +1,22 @@
+{
+  "id": "T-020",
+  "milestone": "M0",
+  "bootstrap": true,
+  "depends_on": [
+    "T-001"
+  ],
+  "title": "fm-guard.sh and git hooks: nobody writes to main",
+  "scope": [
+    "bin/fm-guard.sh",
+    "bin/fm-install-hooks.sh",
+    ".githooks/**",
+    "tests/guard.test.sh"
+  ],
+  "acceptance": [
+    "fm-guard.sh refuses main, master and a detached HEAD, and honours FM_PROTECTED",
+    "pre-commit blocks a commit on a protected branch and allows one on a feature branch",
+    "pre-push blocks a push whose target ref is a protected branch",
+    "the hooks are self-contained: they must not depend on bin/ existing in the worktree being committed to",
+    "branch protection on GitHub has enforce_admins on, since firstmate runs on the captain's own credentials"
+  ]
+}

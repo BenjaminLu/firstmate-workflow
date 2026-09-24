@@ -1,0 +1,26 @@
+{
+  "id": "T-055",
+  "milestone": "M3",
+  "bootstrap": false,
+  "depends_on": [
+    "T-052",
+    "T-053",
+    "T-054",
+    "T-056"
+  ],
+  "title": "the first external project, proved end to end",
+  "scope": [
+    "tests/external-project.test.sh",
+    "README.md",
+    "design/design.md"
+  ],
+  "acceptance": [
+    "A fixture drives a second registered project end to end with the mock adapter and the gh stub: a local bare repository stands in for the target, sync and verify pass against stubbed GitHub answers in the shapes GitHub returns, one task is pinned, worked, gated, reviewed and carded, and the target's tree afterwards contains only the task's scoped files and none of firstmate's artifacts.",
+    "The same fixture runs one task of the self project in the same log and proves the two are kept apart on events, decisions and pins.",
+    "Proves design.md section 15.10 end to end: the self project's task is dispatched and still live, not merged, when the external project's task is dispatched, and both are in flight together within the one global limit; the external task is pinned, worked, gated, reviewed and carded while the self task is live; both projects' merge cards are pending at the same time; answering the external card leaves the self card pending, and nothing project-scoped (pins, worktrees, checkout, guard, decisions) of one project is read or written by the other's run.",
+    "README.md explains registering a project: the registry entry, what the target needs (section 15.6), and that private projects wait for the section 15.8 decision. Section 15's status line says the external model is implemented.",
+    "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
+    "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+  ]
+}

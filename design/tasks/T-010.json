@@ -1,0 +1,45 @@
+{
+  "id": "T-010",
+  "milestone": "M1",
+  "bootstrap": false,
+  "depends_on": [
+    "T-009"
+  ],
+  "title": "board UI: the ship, the crew, the decision deck, the lanes, the log",
+  "scope": [
+    "board/public/**"
+  ],
+  "acceptance": [
+    "rewritten from the prototype in design/proposals, not copied from it",
+    "every crew pose is expressed as a .fig.s-<state> class so e2e asserts classes rather than diffing screenshots",
+    "status text belongs to its own figure and no two nameplates collide",
+    "drag a figure to turn it, drag the deck to turn the crew, double-click resets",
+    "prefers-reduced-motion is honoured",
+    "decks and hull are generated from one curve in one SVG, in the same projection as the crew; no mixing an elevation with perspective decks",
+    "every deck carries a bulwark and a riser wall, so a level reads as a level",
+    "brass is the only accent in the scene and the crew are the brightest layer",
+    "the ship has six rates from a one-mast cutter to a six-mast man-o'-war, up to 24 aboard; a crowd stacks onto more decks rather than stretching the hull",
+    "hull, decks, crew and bubbles all align to --deckY0 + row * --rowStep, and each deck plate is the same height so the crew plant to the same depth on every level",
+    "the whole sail hangs above the tallest crewman's head, asserted as sail.bottom <= highestHead.top",
+    "mast spacing follows the topmost deck's width and no mast sits outside it at any rate",
+    "the helm is a fixture of the topmost deck, placed by construction rather than by where firstmate happens to stand",
+    "the bow faces left, the end firstmate stands on, with the stern lantern to the right",
+    "barrel, port lid, muzzle flash and smoke all point the same way, toward the bow",
+    "gun ports and the figurehead render at fixed pixel sizes and do not deform with beam",
+    "the hull's gun ports, the flash positions and the sound schedule all come from one gun list; each flash sits exactly on its port and the number of reports equals the number of guns",
+    "twelve actions pooled by deck, with a separate pool for idle crew; with twelve or more aboard at least eight distinct actions are on screen at once",
+    "every action holds or stands at a prop; nothing mimes",
+    "each action declares its own arm animation and no state rule leaks one onto an action that did not",
+    "tools follow the job rather than the role, and state wins over action",
+    "crew alternate a weight shift and hop on independent offsets; shoes animate with their leg and the foot travels more than 6px per cycle",
+    "the hop animates translate rather than transform so it composes with the pose animations",
+    "each crewman carries a status bubble above his head with a tail pointing back at him, the border colour carrying state",
+    "deck spacing exceeds body height plus bubble height, so no bubble covers the crew on the deck above, verified from 3 to 24 aboard",
+    "the roster opens automatically once the bubbles drop the task title, and carries state, deck, task id and title, file scope, round, pull request and progress",
+    "the captain is drawn at the left of the decision deck, poses through idle, ready and order, and is draggable",
+    "the deck renders a merge card, the seven-gate checklist standing in for the diagram",
+    "a merge and an order each trigger an ahoy: the ship heels, guns or bell, the crew cheer, a banner. Sound is synthesised through Web Audio with no audio files, there is a mute control, and prefers-reduced-motion is honoured",
+    "nothing in the celebration covers what is being celebrated",
+    "shared numbers have one source: CSS custom properties are written from the JavaScript constants, never declared twice"
+  ]
+}

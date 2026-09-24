@@ -1,0 +1,20 @@
+{
+  "id": "T-019",
+  "milestone": "M0",
+  "bootstrap": true,
+  "depends_on": [
+    "T-002"
+  ],
+  "title": "fm-sync-prs.sh, which notices a merge on its own",
+  "scope": [
+    "bin/fm-sync-prs.sh",
+    "tests/sync-prs.test.sh"
+  ],
+  "acceptance": [
+    "polls gh for pull request state and writes pr_opened, merged and closed back through fm-emit.sh",
+    "de-duplicates against the log by pull request number and state; running twice changes nothing",
+    "a merge the captain performs on GitHub is detected by the system itself, not reported to it by a person",
+    "exits non-zero without polluting the log when offline or when gh is not authenticated",
+    "tests drive it from recorded gh output and make no network call"
+  ]
+}

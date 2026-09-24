@@ -25,7 +25,8 @@ projects:
 Y
 cp "$ROOT/bin/watch-decisions.ts" "$d/bin/" 2>/dev/null || true
 cp "$ROOT/board/server.ts" "$d/board/"; cp "$ROOT/board/public/index.html" "$d/board/public/"
-printf '{"tasks":[{"id":"T-A","title":"first","milestone":"M0","depends_on":[]}]}\n' > "$d/design/tasks.json"
+mkdir -p "$d/design/tasks"
+printf '{"id":"T-A","title":"first","milestone":"M0","depends_on":[]}\n' > "$d/design/tasks/T-A.json"
 
 # fm-merge is the only thing allowed to merge, so the test records that it ran
 cat > "$d/bin/fm-merge.sh" <<'M'

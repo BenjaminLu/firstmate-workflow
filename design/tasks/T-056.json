@@ -1,0 +1,21 @@
+{
+  "id": "T-056",
+  "milestone": "M3",
+  "bootstrap": false,
+  "depends_on": [
+    "T-045"
+  ],
+  "title": "design: the board dispatches to several projects at the same time",
+  "scope": [
+    "design/design.md",
+    "design/tasks.json"
+  ],
+  "acceptance": [
+    "The captain asked that the external model explicitly guarantee firstmate can run work in several projects at the same time from one board. Section 15 and T-053/T-054/T-055 imply it (one global concurrency limit, per-project greenlit, project chips) but never state it as a requirement or prove it. This task is design only and changes no code. Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+    "Add to section 15 a subsection on concurrency across projects that settles, with reasons: (1) runs in different projects are live at the same time up to the one global limit, and nothing project-scoped (pins, worktrees, clones, panes, the guard, decisions) is shared or locked across projects; (2) whether the global limit needs a per-project share so one project cannot starve another, and the default; (3) merge cards: two projects' merge cards may be open at once because they target different repositories, while within one project merges stay one at a time because each rebases the next; (4) how the captain sees and answers several projects' cards together on the board.",
+    "Amend the acceptance of T-053 (concurrent dispatch across two projects, including a test with two registered projects live at once), T-054 (the board shows several projects' live work and decision cards at the same time, with a test), and T-055 (the end-to-end proof runs a task in the external project while a self-hosted task is live) so each states its part of that subsection. Keep each task's existing scope unless a file is truly needed; if one is, add it and say why in the design.",
+    "If the design cannot be settled without a captain decision (for example per-project fairness), say which decision in the design and stop there rather than guessing.",
+    "Evidence for this task is the pull request's required GitHub check (which includes the design/tasks.json–design.md agreement check) and the seven gates; the worker does not run tests itself.",
+    "Stay inside this scope; this task edits no code."
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "id": "T-003",
+  "milestone": "M0",
+  "bootstrap": true,
+  "depends_on": [
+    "T-001"
+  ],
+  "title": "the adapter contract, the mock adapter, and the contract test",
+  "scope": [
+    "bin/adapters/**",
+    "tests/adapter-contract.test.sh"
+  ],
+  "acceptance": [
+    "mock.sh produces a scripted diff and reaches no network",
+    "the contract test pins the meaning of exit codes 0, 1 and 2",
+    "the contract test proves an adapter ran no git and no gh command",
+    "the contract test proves an adapter wrote nothing outside its worktree",
+    "claude.sh, cursor-agent.sh and gemini.sh all pass the same contract test"
+  ]
+}

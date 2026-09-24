@@ -11,14 +11,18 @@ done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=bin/fm-config.sh
+. "$ROOT/bin/fm-config.sh"   # fm_tasks_write: a fixture's tasks, one file each
 
 command -v bun >/dev/null 2>&1 || { echo "    bun not installed - board suite skipped"; exit 0; }
 
+# the board reads design/tasks/ through bin/fm-config.sh (T-090), so every
+# fixture carries the library
 d="$(mktemp -d)"; mkdir -p "$d/bin" "$d/state" "$d/design" "$d/board/public"
-cp "$ROOT/bin/fm-emit.sh" "$d/bin/"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$d/bin/"
 cp "$ROOT/board/server.ts" "$d/board/"
 cp "$ROOT/board/public/index.html" "$d/board/public/"
-cat > "$d/design/tasks.json" <<'J'
+fm_tasks_write /dev/stdin "$d/design/tasks" <<'J'
 {"tasks":[{"id":"T-A","title":"first","milestone":"M0","depends_on":[]},
           {"id":"T-B","title":"second","milestone":"M0","depends_on":["T-A"]},
           {"id":"T-C","title":"third","milestone":"M0","depends_on":[]},
@@ -481,10 +485,10 @@ assert_eq "" "$unknown" "every stage the board maps is a type fm-emit will write
 # --- T-036: truthful mid-run crew progress ---------------------------------
 # Separate fixture: the crowd above floods the deck and would drown these.
 p="$(mktemp -d)"; mkdir -p "$p/bin" "$p/state" "$p/design" "$p/board/public"
-cp "$ROOT/bin/fm-emit.sh" "$p/bin/"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$p/bin/"
 cp "$ROOT/board/server.ts" "$p/board/"
 cp "$ROOT/board/public/index.html" "$p/board/public/"
-cat > "$p/design/tasks.json" <<'J'
+fm_tasks_write /dev/stdin "$p/design/tasks" <<'J'
 {"tasks":[
   {"id":"T-P","title":"Scalar English title is not activity","milestone":"M0","depends_on":[],
    "activity":{"en":"Authored task activity","zh-TW":"已撰寫的任務活動"}},
@@ -653,7 +657,7 @@ rm -rf "$p"
 # Its own fixture again: the engine badge reads config.yaml, which the other
 # two fixtures do not have, and the merge refusal needs a helper that says no.
 e="$(mktemp -d)"; mkdir -p "$e/bin" "$e/state/pending" "$e/design" "$e/board/public"
-cp "$ROOT/bin/fm-emit.sh" "$e/bin/"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$e/bin/"
 cp "$ROOT/board/server.ts" "$e/board/"
 cp "$ROOT/board/public/index.html" "$e/board/public/"
 printf '#!/usr/bin/env bash\necho refused\nexit 1\n' > "$e/bin/fm-merge.sh"
@@ -669,7 +673,7 @@ reviewer:                 # a different engine for review
 #   vendor: vendor-gamma
 concurrency: 3
 Y
-cat > "$e/design/tasks.json" <<'J'
+fm_tasks_write /dev/stdin "$e/design/tasks" <<'J'
 {"tasks":[{"id":"T-E1","title":"first","milestone":"M2","depends_on":[]},
           {"id":"T-E2","title":"second","milestone":"M2","depends_on":["T-E1"]},
           {"id":"T-E3","title":"third","milestone":"M2","depends_on":["T-E9"]},
@@ -822,10 +826,10 @@ rm -rf "$e"
 # Its own fixture: every action here writes to the log, and the counts below
 # are lines in that log, so nothing else may be writing to it.
 f="$(mktemp -d)"; mkdir -p "$f/bin" "$f/state" "$f/design" "$f/board/public"
-cp "$ROOT/bin/fm-emit.sh" "$f/bin/"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$f/bin/"
 cp "$ROOT/board/server.ts" "$f/board/"
 cp "$ROOT/board/public/index.html" "$f/board/public/"
-cat > "$f/design/tasks.json" <<'J'
+fm_tasks_write /dev/stdin "$f/design/tasks" <<'J'
 {"tasks":[{"id":"T-P1","title":"ready one","milestone":"M2","depends_on":[]},
           {"id":"T-P2","title":"waits on P1","milestone":"M2","depends_on":["T-P1"]},
           {"id":"T-P3","title":"at work","milestone":"M2","depends_on":[]},
@@ -836,7 +840,8 @@ J
 FM_ROOT="$f" "$f/bin/fm-emit.sh" --actor captain --type greenlit --en "go" --tw "開工" >/dev/null
 FM_ROOT="$f" "$f/bin/fm-emit.sh" --actor worker-p --task T-P3 --type dispatched --en "on it" --tw "接下" >/dev/null
 FM_ROOT="$f" "$f/bin/fm-emit.sh" --actor github --task T-P6 --type merged --pr 60 --en "merged" --tw "已合併" >/dev/null
-plan_before="$(cksum < "$f/design/tasks.json")"
+plan() { ( cd "$f/design/tasks" && ls -A && cat -- *.json ) | cksum; }
+plan_before="$(plan)"
 FM_ROOT="$f" FM_PORT=0 bun run "$f/board/server.ts" > "$f/out" 2>&1 < /dev/null &
 pidf=$!
 PORTF="$(board_port "$f/out" "$pidf")"
@@ -938,7 +943,7 @@ assert_eq "415" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-ty
 assert_eq "$n5" "$(lines)" "and none of them writes anything"
 
 # the board never edits the plan
-assert_eq "$plan_before" "$(cksum < "$f/design/tasks.json")" "design/tasks.json is untouched"
+assert_eq "$plan_before" "$(plan)" "design/tasks/ is untouched"
 
 kill "$pidf" 2>/dev/null
 wait "$pidf" 2>/dev/null || true
@@ -953,7 +958,7 @@ g="$(mktemp -d)"; mkdir -p "$g/bin" "$g/state/pending" "$g/state/decisions" "$g/
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$g/bin/"
 cp "$ROOT/board/server.ts" "$g/board/"
 cp "$ROOT/board/public/index.html" "$g/board/public/"
-cat > "$g/design/tasks.json" <<'J'
+fm_tasks_write /dev/stdin "$g/design/tasks" <<'J'
 {"tasks":[{"id":"T-G1","title":"in review","milestone":"M2","depends_on":[]},
           {"id":"T-G2","title":"merged","milestone":"M2","depends_on":[]},
           {"id":"T-G3","title":"no pull request","milestone":"M2","depends_on":[]},

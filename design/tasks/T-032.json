@@ -1,0 +1,21 @@
+{
+  "id": "T-032",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-031"
+  ],
+  "title": "the red check reaches the worker as an empty block",
+  "scope": [
+    "bin/fm-worker.sh",
+    "tests/worker.test.sh",
+    "design/design.md",
+    "design/tasks.json"
+  ],
+  "acceptance": [
+    "modern /actions/runs/<run>/job/<job> links fetch the workflow run; legacy /runs/<job> links fetch via gh run view --job, including query strings and fragments, without confusing job IDs with workflow run IDs",
+    "the stub answers the way gh answers - real link shapes and strict run view arguments that distinguish job IDs from workflow run IDs and refuse an id or namespace it does not recognise - so malformed selections fail the prompt-content tests",
+    "the block the worker is handed is asserted by its CONTENT reaching the prompt, not by gh having been called",
+    "a check whose log cannot be fetched says so in the prompt rather than leaving an empty block, because an empty block is indistinguishable from a green run and the worker spends its round asking about it"
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "id": "T-071",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-065"
+  ],
+  "title": "two assertions that only hold on an idle machine hold under the parallel gate",
+  "scope": [
+    "tests/ci.test.sh",
+    "tests/reconcile.test.sh",
+    "design/design.md",
+    "design/tasks.json"
+  ],
+  "acceptance": [
+    "Since T-065 runs suites in parallel, two assertions have failed on GitHub for reasons unrelated to the change under test. tests/ci.test.sh 'with two at a time, z-quick finished before a-waits' (PR #69's first run) depends on relative timing. tests/reconcile.test.sh 'it writes through fm-emit.sh' uses `grep -vE … | grep -q` under pipefail: grep -q exits at the first match, the writer gets SIGPIPE, and the pipeline fails (PR #71). Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+    "The ordering assertion keeps its meaning (the pool really runs two suites at once and reports in glob order) but no longer depends on one suite finishing before another in wall-clock time. Use an explicit handshake between the two fixture suites (one waits for a file the other writes) so the overlap is proven by construction, with a deadline wide enough for a loaded runner.",
+    "The reconcile assertion keeps its meaning (fm-reconcile.sh calls fm-emit.sh outside comments) without a pipe into grep -q: use a here-string or a single grep, the form bin/ci.sh's own lint asks for. Sweep tests/ for every other `| grep -q` or `| grep -c` fed by a producer that can outlive the match, and fix those in the two in-scope files.",
+    "No assertion is removed or weakened; each changed assertion still fails against a mutant that breaks what it checks (write the mutant check into the suite or state it in the PR).",
+    "Evidence is this pull request's required GitHub check and the seven gates; the worker does not run the suite itself.",
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+  ]
+}

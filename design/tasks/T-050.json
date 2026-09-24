@@ -1,0 +1,27 @@
+{
+  "id": "T-050",
+  "milestone": "M3",
+  "bootstrap": false,
+  "depends_on": [
+    "T-049"
+  ],
+  "title": "project-aware gates 1–3 and 5–7",
+  "scope": [
+    "config.yaml",
+    "bin/fm-config.sh",
+    "bin/fm-gate.sh",
+    "tests/config.test.sh",
+    "tests/gate.test.sh",
+    "README.md",
+    "design/design.md"
+  ],
+  "acceptance": [
+    "Implements the gate half of design.md sections 15.2 and 15.6. fm-gate.sh takes --project. Gates 1 and 2 use the project's base, not a literal main. Gates 3 and 5 read T-043's contract from the task's pin (section 15.2), never from the branch under test or the engine working copy, and apply every field of it exactly as T-043 defines them — including the `docs` exemption, so a design- or README-only self-hosted task still passes gate 5; a missing pin or a contract hash mismatch fails the gate by name. Gate 3 runs in a scratch worktree of the project's checkout. Gates 6 and 7 query the project's github repository with gh --repo, and gate 6 requires the registry's required_check.",
+    "In this same commit T-043's top-level `project:` block moves unchanged to projects.firstmate-workflow.project and the top-level block is deleted; bin/fm-config.sh resolves every project's contract from its registry entry, and README.md's description of the block names its new place. The contract exists in exactly one place before and after this commit. Re-deriving a pinned contract reads the block wherever the pin's recorded commit holds it (top-level `project:` if that commit has one, else the registry entry), so a pin recorded before this task still verifies after this task merges, without a repin.",
+    "This task rewrites T-043's section 6 paragraph that says the contract is read from the branch under test and that gate 4 decides whether a branch may change `config.yaml` at all, so that it states section 15.2's rule instead: gates 3 and 5 read the contract from the task's pin, and a branch may change `config.yaml` only when its pinned scope names it, without that change affecting its own gates.",
+    "For the self project the gates run the same commands with the same budget as today (section 10; FM_CI_MAX_SECONDS=600 for gate 3). The section 6 gate table states the per-project form.",
+    "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
+    "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+  ]
+}

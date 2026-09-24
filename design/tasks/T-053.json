@@ -1,0 +1,29 @@
+{
+  "id": "T-053",
+  "milestone": "M3",
+  "bootstrap": false,
+  "depends_on": [
+    "T-050",
+    "T-051",
+    "T-056"
+  ],
+  "title": "dispatch, run and session across projects",
+  "scope": [
+    "bin/fm-dispatch.sh",
+    "bin/fm-run.sh",
+    "bin/fm-session.sh",
+    "tests/dispatch.test.sh",
+    "tests/session.test.sh",
+    "tests/e2e-loop.test.sh",
+    "design/design.md"
+  ],
+  "acceptance": [
+    "fm-dispatch.sh and fm-run.sh take --project, read that project's task list from the registry, resolve depends_on within the project and pass --project to every script they call. The concurrency limit stays one global number across all projects. Dispatch to a non-default project runs fm-project.sh verify first and dispatches nothing on its refusal.",
+    "The greenlit check matches the project: a greenlit event for one project authorizes nothing in another. fm-session.sh status reports live work grouped by project.",
+    "Implements the script half of design.md section 15.10 (points 1-3). Live runs are counted by (project, task) across every project against the one global limit, under a dispatch slot lock held only while fm-dispatch.sh recounts live runs, takes free slots and emits dispatched, so two dispatches started at once never exceed the limit; fm-project.sh verify, the task lists and the greenlit check run before the lock is taken. fm-dispatch.sh with no --project fills free slots across every registered project one at a time, each to the project with a ready, greenlit, verified task and the fewest live runs, ties to the name that sorts first, and with only the default project registered behaves exactly as today; --project dispatches only that project within the same limit and lock. fm-run.sh notes the project's base commit before gating and, under a per-project lock, requests a merge card only when that project's merge turn is free and base is still that commit; the turn is freed by a send back or hold, and for a merge only once the decision record's merge outcome is merged or failed, never on the answer alone. Otherwise it requests none and says whether the card waits for a pending or running merge or for a regate on the new base; a merge card or merge in one project never holds back another project's.",
+    "Tests with two registered projects live at the same time, written to fail first: runs in both projects are in flight together up to the limit and a shared task id in both is counted twice, not once; two concurrent dispatch calls never exceed the limit; dispatch with no --project splits free slots fairly and hands a freed slot to the project with fewer live runs; with a merge card pending in one project, fm-run.sh requests a merge card in the other project but not a second one in the first; with a merge answered but its outcome not yet recorded, fm-run.sh still requests no second card in that project, and once base has moved it requests none for a branch gated against the old base.",
+    "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
+    "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+  ]
+}

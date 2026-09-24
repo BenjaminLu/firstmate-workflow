@@ -11,7 +11,8 @@ One agent runs the crew. Three things make it up:
 
 The agent CLI is a replaceable engine, not the system.
 
-Spec: [`design/design.md`](design/design.md). Task DAG: [`design/tasks.json`](design/tasks.json).
+Spec: [`design/design.md`](design/design.md). Task DAG: [`design/tasks/`](design/tasks/),
+one file per task; `bin/fm.sh tasks` prints it as a table.
 
 ## Starting a session
 

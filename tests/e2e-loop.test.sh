@@ -173,9 +173,10 @@ cp "$ROOT/skills/reviewer/SKILL.md" skills/reviewer/
 # The whole loop still runs to a merged pull request in such a tree.
 printf 'vendor: mock\nconcurrency: 2\nfallback:\n  - mock\nproject:\n  check: bin/ci.sh\n  test: bash {file}\n' > config.yaml
 printf '#!/usr/bin/env bash\nexit 0\n' > bin/ci.sh; chmod +x bin/ci.sh
-cat > design/tasks.json <<'J'
-{"tasks":[{"id":"T-1","title":"a task the loop can finish","milestone":"M0",
-           "depends_on":[],"scope":["src/**","tests/**"],"acceptance":["it lands"]}]}
+mkdir -p design/tasks
+cat > design/tasks/T-1.json <<'J'
+{"id":"T-1","title":"a task the loop can finish","milestone":"M0",
+ "depends_on":[],"scope":["src/**","tests/**"],"acceptance":["it lands"]}
 J
 printf '# design\n## 6. gates\nseven\n## 8. board\n' > design/design.md
 echo base > src/thing

@@ -1,0 +1,51 @@
+{
+  "id": "T-090",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-065"
+  ],
+  "title": "one file per task, and no hand-kept copy of the task list",
+  "scope": [
+    "design/tasks.json",
+    "design/tasks/**",
+    "design/design.md",
+    "README.md",
+    "bin/ci.sh",
+    "bin/fm-config.sh",
+    "bin/fm-dispatch.sh",
+    "bin/fm-gate.sh",
+    "bin/fm-review.sh",
+    "bin/fm-worker.sh",
+    "bin/fm.sh",
+    "board/server.ts",
+    "skills/firstmate/SKILL.md",
+    "skills/worker/SKILL.md",
+    "tests/board.test.sh",
+    "tests/ci.test.sh",
+    "tests/config.test.sh",
+    "tests/crew-end-to-end.test.sh",
+    "tests/decisions.test.sh",
+    "tests/diagram.test.sh",
+    "tests/dispatch.test.sh",
+    "tests/e2e-loop.test.sh",
+    "tests/e2e/board.spec.ts",
+    "tests/e2e/fixture.ts",
+    "tests/gate.test.sh",
+    "tests/herdr.test.sh",
+    "tests/open.test.sh",
+    "tests/reconcile.test.sh",
+    "tests/review.test.sh",
+    "tests/selfupdate.test.sh",
+    "tests/worker.test.sh"
+  ],
+  "acceptance": [
+    "Every pull request conflicts with every other one because each edits the same two shared regions: the tail of design/tasks.json's single task array, and the task table in design/design.md, which is a hand-kept copy of it. With main requiring up-to-date branches, each merge turns every open pull request into a conflict. On 2026-09-24 this forced repeated hand resolution and force pushes, and once silently dropped a design section. The captain approved the first-principles fix: parallel work must never write the same text. Its own spec is design/tasks/T-090.json, added in this pull request.",
+    "design/tasks.json is replaced by design/tasks/<id>.json, one file per task, holding exactly today's entry for that task (same keys, same values). Adding a task adds a file; revising a task edits only its file. The migration is mechanical and lossless: a test checks that the concatenation of the new files, ordered as today, equals the old array.",
+    "The task table in design/design.md is removed and replaced by a sentence pointing to design/tasks/ and to a command that prints the table on demand (bin/fm.sh tasks, grouped by milestone, with id, title and dependencies). Nothing generated is committed, so nothing can conflict. bin/ci.sh's agreement check becomes: every task file parses, its id matches its file name, its dependencies exist and there are no cycles.",
+    "Every reader switches to the directory through one shared helper in bin/fm-config.sh (list tasks, get one task), and board/server.ts reads it the same way. Gate 4 reads the task's scope from design/tasks/<id>.json on the branch under test, keeping today's rule, now from the task's own file. The readers found by a search on 2026-09-24 are all in this task's scope; search again, and stop and name any reader outside the scope.",
+    "Pull requests already open when this lands carry edits to design/tasks.json. The design.md paragraph that replaces the table says how such a branch is brought over: its own entry moves to its own file. This task's own branch is the first to do it.",
+    "Evidence is this pull request's required GitHub check and the seven gates. Tests written to fail first: the lossless migration; the id and file-name agreement; a missing dependency and a cycle turn ci red; two branches that each add a task merge with no conflict (a real git fixture); gate 4 reads scope from the task's own file; bin/fm.sh tasks prints the table. The worker does not run the suite itself.",
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+  ]
+}
