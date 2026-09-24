@@ -1242,6 +1242,32 @@ pane and agent names, board events, log paths and result receipts. Existing live
 are not renamed. A foreign Herdr name collision is a reported transport failure,
 not a silently different sidebar identity.
 
+The name in the label is a crew member from one fleet roster (T-089), shared by
+workers and reviewers: `DEFAULT_ROSTER` in `bin/fm-herdr.py`, or config.yaml's
+`roster:` list of short given names. Under the identity lock a run takes a name
+no live run holds. A run is live while it is unfinished — it has no
+`orchestration-result.json` — unless it is proven over: its `process.json`
+launcher no longer matches and every attempt it recorded has terminated. A run
+with neither record is starting, not over: `fm_identity` writes `process.json`
+immediately after allocation and `transport()` writes its attempt, so no clock
+decides it. Reserved, unstarted and legacy attempts count as live, as they do
+for recreation. `identity.json` records the crew member whole as `name`, and the
+actor carries exactly that name; runs from before T-089 have none, so their name
+is read from the actor. Every comparison — live, previous round, other role,
+reuse — is on the whole name. A task's worker and reviewer are never the same
+crew member: a name either role of the task has used is not offered to the
+other. A task keeps its previous round's name while that name is free;
+otherwise it takes the first free name. When no name is left for the run the
+allocator reuses one as `<name><n>`, records `reused` in `identity.json`, and
+says why: `every roster name is live (N); reusing <name> as <name><n>` when all
+are live, or `no roster name is free for this task (L of N live, <names> held
+by its other role); reusing …` when the only free names are the other role's. An explicit alias wins but is refused, exit 70
+with one line, while that name is live or is the task's other role's. A name is
+never cut: one that does not fit the room the final `-<task>-r<n>` suffix
+leaves, measured again on each retry, is refused, so the actor stays within 32
+characters and no label can stand for two crew members. An empty `roster:` is
+refused like any other invalid roster, not replaced by the default.
+
 In `HERDR_ENV=1`, Codex, Claude, Cursor Agent and Gemini adapters use shipped
 `bin/fm-herdr.py` to execute the real CLI in a dedicated new tab containing one
 owned root pane. `herdr tab create --workspace <caller-workspace> --cwd <tree>
@@ -1456,6 +1482,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-069 | every pull request number on the board links to that project's pull request | T-046, T-058 |
 | T-073 | the reviewer sees the worker's ask and the closed list | T-065 |
 | T-093 | a rebuilt branch commits under the real hooks, and the hooks keep only the main-branch rules | T-067 |
+| T-089 | every crew member has a name of their own, drawn from one fleet roster | T-065 |
 
 ### M3 — driving other repositories
 
