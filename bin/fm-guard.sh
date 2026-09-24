@@ -37,6 +37,6 @@ fm_guard_branch() {
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   case "${1-}" in
     branch) fm_guard_branch "${2:-.}" ;;
-    *) printf 'usage: fm-guard.sh branch [dir]\n' >&2; exit 2 ;;
+    *) printf 'usage: fm-guard.sh branch [dir]\n' >&2; exit 64 ;;
   esac
 fi

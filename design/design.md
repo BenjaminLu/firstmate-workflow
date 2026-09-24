@@ -391,8 +391,9 @@ caller reads as "you called it wrong". Precisely: the check comes before
 the `shift 2` **in the same `case` branch** — on a line of its own is
 fine, in the branch above is not, and after the shift is not a check at
 all, because by then the argument it was looking for is gone. That is
-the whole of the rule here: whether every OTHER kind of usage error
-exits `64` too is T-029, and nothing in this section says it does.
+the whole of the rule here. Every OTHER kind of usage error exits `64`
+too, in every script: T-029 converted the last one, `bin/fm-guard.sh`'s
+unknown subcommand, which exited `2`.
 
 No count belongs in this paragraph. How many scripts have an option
 loop, how many carry a local copy of the guard, how many take it from
