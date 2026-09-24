@@ -807,10 +807,16 @@ FM_ROOT="$f" "$f/bin/fm-emit.sh" --actor captain --type greenlit --en "go" --tw 
 FM_ROOT="$f" "$f/bin/fm-emit.sh" --actor worker-p --task T-P3 --type dispatched --en "on it" --tw "接下" >/dev/null
 FM_ROOT="$f" "$f/bin/fm-emit.sh" --actor github --task T-P6 --type merged --pr 60 --en "merged" --tw "已合併" >/dev/null
 plan_before="$(cksum < "$f/design/tasks.json")"
-PORTF=$(( 17000 + RANDOM % 900 ))
-FM_ROOT="$f" FM_PORT="$PORTF" bun run "$f/board/server.ts" > "$f/out" 2>&1 < /dev/null &
+FM_ROOT="$f" FM_PORT=0 bun run "$f/board/server.ts" > "$f/out" 2>&1 < /dev/null &
 pidf=$!
-for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORTF/api/state" >/dev/null 2>&1 && break; sleep 0.25; done
+PORTF="$(board_port "$f/out" "$pidf")"
+# wait for the state it serves, not for a count of sleeps: the gate's pool
+# can stretch a start well past ten seconds
+endf=$(( $(date +%s) + 60 ))
+until curl -sf "http://127.0.0.1:$PORTF/api/state" >/dev/null 2>&1; do
+  [ "$(date +%s)" -le "$endf" ] && kill -0 "$pidf" 2>/dev/null || break
+  sleep 0.05
+done
 sf() { curl -sf "http://127.0.0.1:$PORTF/api/state"; }
 lines() { wc -l < "$f/state/events.jsonl" | tr -d ' '; }
 # act TASK ACTION -> the HTTP status; the body lands in $f/resp
