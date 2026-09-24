@@ -1252,6 +1252,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-043 | the project declares its setup and checks; the gates stop hard-coding this repo's toolchain | T-041, T-039 |
 | T-057 | the board separates ready work from backlog | T-040 |
 | T-065 | the local gate runs its suites in parallel, with every threshold intact | T-046 |
+| T-058 | the captain parks or drops a task from the board | T-057 |
 
 ### M3 — driving other repositories
 

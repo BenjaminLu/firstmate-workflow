@@ -1553,6 +1553,41 @@
         "Evidence is this pull request's required GitHub check and the seven gates. The worker does not run the suite itself.",
         "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
       ]
+    },
+    {
+      "id": "T-058",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-057"
+      ],
+      "title": "the captain parks or drops a task from the board",
+      "scope": [
+        "board/server.ts",
+        "board/public/index.html",
+        "board/public/ship.js",
+        "board/public/ship.css",
+        "bin/fm-dispatch.sh",
+        "i18n/ui.en.json",
+        "i18n/ui.zh-TW.json",
+        "i18n/tw2cn.tsv",
+        "tests/board.test.sh",
+        "tests/dispatch.test.sh",
+        "tests/e2e/board.spec.ts",
+        "tests/e2e/fixture.ts",
+        "design/design.md",
+        "design/tasks.json"
+      ],
+      "acceptance": [
+        "The captain asked to be able to take a task they do not want run off the ready and backlog lanes directly on the board, by dragging it or by clicking. Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+        "Two actions, on any ready or backlog card, reachable both by drag and drop and by a click menu on the card (the click path is also the keyboard path): (1) park — reversible: the card moves to a collapsed 'parked' group below the lanes and can be unparked the same two ways, returning to ready or backlog as its dependencies say; (2) drop — the task will not be done: the board asks for one confirming step built into the page (no browser dialog), then the task leaves the lanes.",
+        "Both actions are captain events written through bin/fm-emit.sh with actor captain, like every other board write: park and unpark emit 'parked' and 'unparked'; drop emits the existing 'closed' event that fm-dispatch.sh already honours. The board never edits design/tasks.json. A drop does not delete the task from the plan; removing it from tasks.json, if the captain wants that, is an ordinary pull request firstmate raises afterwards.",
+        "fm-dispatch.sh never starts a parked task and starts it again only after an 'unparked'. A task that depends on a parked or dropped task shows that as its blocker on its backlog card.",
+        "Park, unpark and drop are refused (409, nothing emitted) for a task that is in flight or later, and the card for such a task offers neither action.",
+        "Labels come from the UI dictionaries (en park/unpark/drop/parked; zh-TW 擱置/恢復/不做/已擱置); zh-CN derives through tw2cn.tsv. design.md's board and dispatch sections describe the two actions and the new events.",
+        "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first: board.test.sh (each action emits the right event; refused for in-flight), dispatch.test.sh (parked is skipped, unparked is dispatchable again, dropped never is), and the e2e board spec (drag and click each move a card to parked and back, and drop after confirming). The worker does not run the suite itself.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
     }
   ]
 }
