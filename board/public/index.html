@@ -151,6 +151,10 @@ body{font-size:16px}
 #dropConfirm{margin-top:12px;padding:12px 14px;background:var(--bg2);border:1px solid #7c322b;border-radius:10px}
 #dropConfirm[hidden]{display:none}#dropConfirm p{margin:0;font-size:16px}
 #taskFeedback{margin:8px 0 0;color:var(--warn);font-size:14px}#taskFeedback:empty{display:none}
+/* T-069: a pull request number is a link to it and keeps the look it had */
+a.pr{text-decoration:none}.log a.pr{color:inherit}
+a.pr:hover,a.pr:focus-visible{text-decoration:underline}
+a.pr:focus-visible,.dcard a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
 @media(max-width:420px){.top,.counts,.lanes-wrap,.logwrap{padding-left:12px;padding-right:12px}.log li{grid-template-columns:1fr 2fr}.log li>span:last-child{grid-column:1/-1}}
 .top small,.counts span,section>h2,#deckwrap>h2,#gl{font-size:13px!important}
 </style>
@@ -211,6 +215,16 @@ const t = (k) => lang === "zh-CN" ? cn(DICT["zh-TW"][k] ?? DICT.en[k] ?? k)
                                   : (DICT[lang] && DICT[lang][k]) || DICT.en[k] || k;
 const GATES = () => [1,2,3,4,5,6,7].map(n => t("gate" + n));
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':'&quot;',"'":'&#39;'}[c]));
+// T-069: a pull request number links to that pull request, at the URL the
+// server derived from the project registry. Without one it is the same text,
+// unlinked: the page never builds a repository URL of its own.
+const prRef = (n, url, cls = 'pr', label = `#${esc(n)}`) =>
+  typeof url === 'string' && url.startsWith('https://github.com/')
+    ? `<a class="${cls}" href="${esc(url)}" target="_blank" rel="noreferrer" draggable="false" data-pr="${esc(n)}">${label}</a>`
+    : `<span class="${cls}">${label}</span>`;
+// a log line's own pull request number, where its summary names it
+const prsIn = (text, e) => !e.pr_url || !Number.isInteger(e.pr) ? esc(text)
+  : esc(text).replace(new RegExp(`(^|[^\\w&])#${e.pr}(?!\\d)`, 'g'), (m, lead) => lead + prRef(e.pr, e.pr_url));
 const localized = d => d?.details?.[lang === 'en' ? 'en' : 'zh-TW'];
 const words = s => lang === 'zh-CN' ? cn(String(s ?? '')) : String(s ?? '');
 const picks = new Map(), drafts = new Map(), sent = new Set();
@@ -324,7 +338,7 @@ function render(s) {
         `<button role="menuitem" data-act="${esc(a)}" data-for="${esc(task.id)}">${esc(t(a))}</button>`).join('') + `</div>` : '');
   };
   const card = (task, k) => `<div class="card s-${k}" data-task="${esc(task.id)}"${(task.actions || []).length ? ' draggable="true"' : ''}>` +
-    `<div class="hd"><span class="id">${esc(task.id)}</span>${task.pr ? `<span class="pr">#${esc(task.pr)}</span>` : ''}${menu(task)}</div>` +
+    `<div class="hd"><span class="id">${esc(task.id)}</span>${task.pr ? prRef(task.pr, task.pr_url) : ''}${menu(task)}</div>` +
     title(task) +
     ((task.crew || []).length ? `<div class="crew">${esc(task.crew.join(', '))}</div>` : '') +
     ((task.blocked_on || []).length ? `<div class="dep">${esc(t("blockedOn"))} ${esc((task.blocked_by || task.blocked_on.map(id => ({id}))).map(blocker).join(', '))}</div>` : '') +
@@ -369,7 +383,7 @@ function render(s) {
   history.querySelector('summary').textContent = `${t('history')} · ${t('laneMerged')} ${completed.filter(x=>x.stage==='merged').length} · ${t('laneClosed')} ${completed.filter(x=>x.stage==='closed').length}`;
   SHIP.patch(history.querySelector('.history-cards'), completed.map(item =>
     `<div class="card s-${item.stage}"><span class="id">${esc(item.id)}</span> <span>${esc(t(item.stage==='merged'?'laneMerged':'laneClosed'))}</span>` +
-    (item.pr ? ` <span class="pr">#${esc(item.pr)}</span>` : '') + title(item) + `</div>`).join(''));
+    (item.pr ? ` ${prRef(item.pr, item.pr_url)}` : '') + title(item) + `</div>`).join(''));
 
   const deck = document.getElementById("deck");
   const wrap = document.getElementById("deckwrap");
@@ -393,7 +407,7 @@ function render(s) {
     const out = [];
     if (typeof d.path === 'string' && d.path)
       out.push(`<a href="/file?path=${encodeURIComponent(d.path)}" data-open="${esc(d.path)}" target="_blank" rel="noreferrer">&#8599; ${esc(t("openLocal"))}</a>`);
-    if (d.pr) out.push(`<a href="https://github.com/BenjaminLu/firstmate-workflow/pull/${esc(d.pr)}" target="_blank" rel="noreferrer">${esc(t("viewPr"))} #${esc(d.pr)}</a>`);
+    if (d.pr) out.push(prRef(d.pr, d.pr_url, 'prlink', `${esc(t("viewPr"))} #${esc(d.pr)}`));
     if (s.designDoc)
       out.push(`<a href="/file?path=design%2Fdesign.md" data-open="design/design.md" target="_blank" rel="noreferrer">&#9776; ${esc(t("viewDesign"))}</a>`);
     return out.length ? `<div class="links">${out.join('')}</div>` : '';
@@ -470,7 +484,7 @@ function render(s) {
     const t = (e.ts || "").slice(11, 19);
     const text = words(e.summary?.[lang === 'en' ? 'en' : 'zh-TW'] || e.summary?.en || e.type);
     return `<li><time>${esc(t)}</time><span class="who">${esc(e.actor)}</span>` +
-      `<span class="k-${esc(e.type)}">${esc(text)}</span></li>`;
+      `<span class="k-${esc(e.type)}">${prsIn(text, e)}</span></li>`;
   }).join("") : `<li class="empty">${esc(t("nothingYet"))}</li>`;
 }
 
@@ -548,7 +562,12 @@ board.addEventListener('keydown', e => {
   menuOpen = null; confirming = null; render(latest);
   document.querySelector(`[data-menu="${CSS.escape(id)}"]`)?.focus();
 });
+// T-069: a press that starts on a pull request number is a click on its
+// link, never the start of dragging the card it sits on
+let pressedOn = null;
+board.addEventListener('pointerdown', e => { pressedOn = e.target; }, true);
 board.addEventListener('dragstart', e => {
+  if (pressedOn?.closest?.('a[data-pr]')) { e.preventDefault(); return; }
   const cardEl = e.target.closest?.('.card[draggable="true"]');
   if (!cardEl) return;
   dragging = cardEl.dataset.task;

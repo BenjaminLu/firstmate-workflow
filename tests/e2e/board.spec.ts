@@ -2,7 +2,7 @@
 // dictionary values, never as screenshots: a snapshot test of a ship that
 // moves would fail on the animation and pass on the wrong crew.
 import { test, expect, type Page } from "@playwright/test";
-import { makeRoot, startBoard, stopBoard, ROOT, details } from "./fixture";
+import { makeRoot, startBoard, stopBoard, writeRegistry, ROOT, details } from "./fixture";
 import { appendFileSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -872,6 +872,122 @@ test('the captain parks, unparks and drops a card by menu and by drag, and confi
     // no browser dialog at any point, and the board never edits the plan
     expect(dialogs).toEqual([]);
     expect(readFileSync(file,'utf8')).toBe(plan);
+  } finally {stopBoard(b);}
+});
+
+// T-069: every #n the board shows links to that pull request on the
+// repository the project registry names, and a press on one is a click on a
+// link - never the start of a drag, never the card's menu
+test('every pull request number links to its pull request on the registered repository', async ({page}) => {
+  test.setTimeout(90_000);
+  const root = makeRoot([], false);
+  const REPO = 'example-org/linked-app';
+  const pull = (n:number) => `https://github.com/${REPO}/pull/${n}`;
+  writeRegistry(root, REPO);
+  writeFileSync(join(root,'design/tasks.json'), JSON.stringify({tasks:[
+    {id:'T-A',title:'Not started, with a pull request opened by hand',depends_on:[]},
+    {id:'T-W',title:'Waiting on the captain',depends_on:[]},
+    {id:'T-M',title:'Merged',depends_on:[]},
+  ]}));
+  emitFixture(root,'worker-w','T-W','dispatched','On it','接下',{role:'worker',crew_name:'Wren'});
+  const log = (e:object) => appendFileSync(join(root,'state/events.jsonl'),
+    JSON.stringify({ts:'2026-09-21T10:00:00Z',...e}) + '\n');
+  // a number the log holds for a task nobody has started: its card is ready,
+  // so it is draggable and has a menu
+  log({actor:'github',task:'T-A',type:'pr_seen',pr:7,summary:{en:'found #7','zh-TW':'找到 #7'}});
+  log({actor:'worker-w',task:'T-W',type:'pr_opened',pr:8,summary:{en:'opened #8 for T-W','zh-TW':'為 T-W 開了 #8'}});
+  log({actor:'github',task:'T-M',type:'merged',pr:9,summary:{en:'merged #9','zh-TW':'已合併 #9'}});
+  writeFileSync(join(root,'state/pending/D-8.json'), JSON.stringify({
+    id:'D-8', kind:'merge', task:'T-W', pr:8, title:'Merge it', details, gates:[1,1,1,1,1,1,0]}));
+  const events = () => readFileSync(join(root,'state/events.jsonl'),'utf8').trim().split('\n');
+  // nothing leaves the machine: the opened tab gets a local page
+  await page.context().route('https://github.com/**', r => r.fulfill({status:200, contentType:'text/html', body:'<title>pull</title>'}));
+  const b = await startBoard(root);
+  const isLink = async (l: ReturnType<Page['locator']>, n:number) => {
+    await expect(l).toHaveCount(1);
+    await expect(l).toHaveAttribute('href', pull(n));
+    await expect(l).toHaveAttribute('target', '_blank');
+    await expect(l).toHaveAttribute('rel', /(^|\s)noreferrer(\s|$)/);
+    await expect(l).toContainText(`#${n}`);
+  };
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    const card = (k:string, id:string) => page.locator(`[data-lane="${k}"] [data-task="${id}"]`);
+    await expect(card('ready','T-A')).toHaveCount(1);
+    // the top right of each lane card
+    await isLink(card('ready','T-A').locator('.hd a'), 7);
+    await isLink(card('captain','T-W').locator('.hd a'), 8);
+    await isLink(card('merged','T-M').locator('.hd a'), 9);
+    // the history rows, the decision card, the roster and the log
+    await isLink(page.locator('#history .history-cards a'), 9);
+    await isLink(page.locator('#card-D-8 .links a[data-pr]'), 8);
+    await expect(page.locator('#card-D-8 .links a[data-pr]')).toContainText(`${EN.viewPr} #8`);
+    await isLink(page.locator('#roster [data-roster="worker-w"] .rpr a'), 8);
+    await isLink(page.locator('#log a', {hasText:'#7'}), 7);
+    await isLink(page.locator('#log a', {hasText:'#8'}), 8);
+    await isLink(page.locator('#log a', {hasText:'#9'}), 9);
+    // and no #n anywhere on the page is left as bare text or points elsewhere
+    const stray = await page.evaluate(() => {
+      const out: string[] = [];
+      const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+        const parent = n.parentElement;
+        if (!parent || parent.closest('script,style')) continue;
+        for (const m of (n.textContent || '').matchAll(/#(\d+)/g)) {
+          const a = parent.closest('a');
+          if (!a || a.getAttribute('href') !== `https://github.com/example-org/linked-app/pull/${m[1]}`)
+            out.push(`${m[0]} in ${parent.outerHTML.slice(0, 120)}`);
+        }
+      }
+      return out;
+    });
+    expect(stray).toEqual([]);
+
+    // reachable by keyboard
+    const seven = card('ready','T-A').locator('.hd a');
+    await seven.focus();
+    await expect(seven).toBeFocused();
+    // a click opens the pull request in a new tab, and nothing else happens
+    const [tab] = await Promise.all([page.waitForEvent('popup'), seven.click()]);
+    await tab.waitForLoadState();
+    expect(tab.url()).toBe(pull(7));
+    await tab.close();
+    await expect(card('ready','T-A').locator('.cacts')).toHaveCount(0);
+    await expect(page.locator('[data-menu="T-A"]')).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.locator('.lanes-wrap')).not.toHaveClass(/dragging/);
+    // a press that starts on the number and moves away does not drag the card
+    const before = events().length;
+    await seven.dragTo(page.locator('#dropzone'));
+    await expect(page.locator('#dropConfirm')).toBeHidden();
+    await seven.dragTo(page.locator('#parked > summary'));
+    await expect(card('ready','T-A')).toHaveCount(1);
+    await expect(page.locator('#parked [data-task="T-A"]')).toHaveCount(0);
+    expect(events().length).toBe(before);
+    // the card itself still drags: the number is excluded, not the card
+    await card('ready','T-A').locator('.t').dragTo(page.locator('#dropzone'));
+    await expect(page.locator('#dropConfirm')).toContainText(EN.dropConfirm.replace('{id}','T-A'));
+    await page.locator('[data-cancel-drop="T-A"]').click();
+    expect(events().length).toBe(before);
+  } finally {stopBoard(b);}
+});
+
+test('without a github entry a pull request number is plain text, never a guessed link', async ({page}) => {
+  test.setTimeout(60_000);
+  const root = makeRoot([], false);
+  writeFileSync(join(root,'design/tasks.json'), JSON.stringify({tasks:[{id:'T-W',title:'Waiting',depends_on:[]}]}));
+  emitFixture(root,'worker-w','T-W','dispatched','On it','接下',{role:'worker'});
+  appendFileSync(join(root,'state/events.jsonl'), JSON.stringify({ts:'2026-09-21T10:00:00Z',actor:'worker-w',
+    task:'T-W',type:'pr_opened',pr:8,summary:{en:'opened #8','zh-TW':'開了 #8'}}) + '\n');
+  writeFileSync(join(root,'state/pending/D-8.json'), JSON.stringify({
+    id:'D-8', kind:'merge', task:'T-W', pr:8, title:'Merge it', details, gates:[1,1,1,1,1,1,0]}));
+  const b = await startBoard(root);
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    await expect(page.locator('[data-task="T-W"] .hd')).toContainText('#8');
+    await expect(page.locator('#card-D-8 .links')).toContainText(`${EN.viewPr} #8`);
+    await expect(page.locator('#log')).toContainText('opened #8');
+    await expect(page.locator('a[data-pr]')).toHaveCount(0);
+    await expect(page.locator('a[href*="/pull/"]')).toHaveCount(0);
   } finally {stopBoard(b);}
 });
 

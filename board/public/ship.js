@@ -51,6 +51,11 @@ const SHIP = (() => {
 
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  // a pull request number is a link to it, at the URL the server derived
+  // from the project registry (T-069); without one it stays plain text
+  const prRef = (n, url) => typeof url === "string" && url.startsWith("https://github.com/")
+    ? `<a href="${esc(url)}" target="_blank" rel="noreferrer" draggable="false" data-pr="${esc(n)}">#${esc(n)}</a>`
+    : "#" + esc(n);
 
   // one lens curve. The decks are that same curve clipped, so the planks the
   // crew stand on and the hull they stand in share a projection.
@@ -161,6 +166,8 @@ const SHIP = (() => {
         task: a.task || null,
         title: a.title || null,
         pr: ((s.tasks || []).find((t) => t.id === a.task) || {}).pr ?? null,
+        // the URL the server put beside the task's number (T-069), or none
+        pr_url: ((s.tasks || []).find((t) => t.id === a.task) || {}).pr_url ?? null,
         progress: bounded ? { done, total } : null,
         pct: bounded ? Math.round((100 * done) / total) : null,
       };
@@ -362,7 +369,7 @@ const SHIP = (() => {
         `<div class="l1"><span class="av" aria-hidden="true"></span>` +
         `<span class="nm">${esc(c.name)}</span>` +
         `<span class="st">${esc(T("lane" + c.state[0].toUpperCase() + c.state.slice(1)))}</span>` +
-        `<span class="rpr">${c.pr ? "#" + esc(c.pr) : ""}</span></div>` +
+        `<span class="rpr">${c.pr ? prRef(c.pr, c.pr_url) : ""}</span></div>` +
         `<div class="jb">` +
         (c.task ? `<b class="tk">${esc(c.task)}</b> <span class="tt">${esc(c.title || T("titleMissing"))}</span> ` : "") +
         `<span class="act">${esc(c.activity)}</span>` +

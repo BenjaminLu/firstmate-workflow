@@ -297,6 +297,26 @@ test("the roster is two-line rows and a bar only for bounded progress", () => {
   expect(rows[2]).not.toContain('class="pb"');
 });
 
+// T-069: the roster's #n links to the URL the server put beside the task's
+// number, and to nothing the page made up when there is none
+test("a roster row's pull request number links to the server's URL, or stays text", () => {
+  const s = state(2);
+  const url = "https://github.com/example-org/roster-app/pull/12";
+  s.tasks[0] = { ...s.tasks[0], pr: 12, pr_url: url } as any;
+  s.tasks[1] = { ...s.tasks[1], pr: 13, pr_url: null } as any;
+  const crew = SHIP.crewOf(s, T);
+  const h = { innerHTML: "", ownerDocument: null } as any;
+  SHIP.roster(h, crew, T);
+  const rows = [...h.innerHTML.matchAll(/<li class="rrow [^"]*"[\s\S]*?<\/li>/g)].map((m) => m[0]);
+  const link = /<a [^>]*>#12<\/a>/.exec(rows[1])?.[0] ?? "";
+  expect(link).toContain(`href="${url}"`);
+  expect(link).toContain('target="_blank"');
+  expect(link).toContain('rel="noreferrer"');
+  expect(rows[2]).toContain("#13");
+  expect(rows[2]).not.toContain("<a ");
+  expect(rows[2]).not.toContain("github.com");
+});
+
 test("one gun list drives the ports, the flashes and the broadside", () => {
   const h = host();
   SHIP.render(h as any, state(20), T);

@@ -711,6 +711,22 @@ card whose dependency is parked or dropped says so beside the blocker's id
 Labels are the dictionaries' `park` / `unpark` / `drop` / `parked`
 (擱置 / 恢復 / 不做 / 已擱置); zh-CN derives through `tw2cn.tsv`.
 
+**Pull request links (T-069).** Every `#n` the board shows — the top right of
+a lane card, a history row, the decision card's link, a roster row and a log
+line whose summary names the event's own `pr` — links to that pull request, in
+a new tab with `rel=noreferrer`. The server derives the URL from the project
+registry (section 15.2): the project's `github` (`owner/repo`), read through
+`bin/fm-config.sh`'s `fm_project_resolve` and `fm_project_get`, and sends it
+as `pr_url` next to every `pr` it returns (tasks, decisions and their
+responses, outcomes and the log). Until T-054 gives events a project, that is
+the default project; the server does not pass `FM_PROJECT` on, so the shell
+that started it cannot change it. It reads the registry again whenever
+`config.yaml` changes. No registry, no `github`, or a registry
+`fm-config.sh` refuses is no URL, and the page shows the number as plain text,
+never a guessed link; no owner or repository name is a literal under `board/`.
+A press that starts on a card's `#n` is a click on the link: it never starts
+the card's drag or opens its menu.
+
 **Refused merges.** The feedback for a refused merge names the decision and
 the task. The server flags a refusal as `superseded` once a `merged` event for
 the same task or pull request — or a later successful merge response — is
@@ -1293,6 +1309,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-057 | the board separates ready work from backlog | T-040 |
 | T-065 | the local gate runs its suites in parallel, with every threshold intact | T-046 |
 | T-058 | the captain parks or drops a task from the board | T-057 |
+| T-069 | every pull request number on the board links to that project's pull request | T-046, T-058 |
 
 ### M3 — driving other repositories
 
