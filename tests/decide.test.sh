@@ -641,29 +641,41 @@ done
 raisers="$(git -C "$ROOT" ls-files -- . ':!tests/' ':!design/' ':!*.md' ':!bin/fm-decide.sh' \
   | while read -r f; do [ -f "$ROOT/$f" ] && both "$f" && printf '%s ' "$f"; done)"
 assert_eq "bin/fm-run.sh bin/fm.sh " "$raisers" "fm-run.sh and fm.sh are the only files that raise a card"
-via="$(git -C "$ROOT" grep -lE "$names" -- . ':!tests/' ':!design/' ':!*.md' \
+# A line that is one quoted message and nothing else only prints the name: it
+# tells a reader what to run (fm-config.sh's "bin/fm.sh tasks split"), it
+# does not run it. Any other non-comment line naming them counts as a call.
+said='^[[:space:]]*(echo|printf)[[:space:]]+"[^"]*"[[:space:]]*(>&2)?[[:space:]]*$'
+runs() { code "$1" | grep -E -- "$names" | grep -vE -- "$said" | grep . >/dev/null; }
+assert_fail "grep -qE -- '$said' <<<'bin/fm.sh tasks split x'" "a bare call is still a call"
+assert_ok "grep -qE -- '$said' <<<'    echo \"bring it over: bin/fm.sh tasks split \$id\" >&2'" \
+  "a printed message is not a call"
+named="$(git -C "$ROOT" grep -lE "$names" -- . ':!tests/' ':!design/' ':!*.md' \
   ':!bin/fm-run.sh' ':!bin/fm.sh' ':!bin/fm-decide.sh' \
   | while read -r f; do has "$f" "$names" && printf '%s ' "$f"; done)"
-assert_eq "" "$via" "nothing else in the repository calls them outside a comment"
+assert_contains " $named" " bin/fm-config.sh " "the sweep sees fm-config.sh name fm.sh in its messages"
+via="$(for f in $named; do runs "$f" && printf '%s ' "$f"; done)"
+assert_eq "" "$via" "nothing else in the repository calls them outside a comment or a message"
 direct="$(for f in $suites; do [ -f "$ROOT/$f" ] && both "$f" && printf '%s ' "$f"; done)"
 assert_eq "tests/decide.test.sh " "$direct" "no suite but decide.test.sh names fm-decide with --request"
 reach="$(for f in $suites; do
   [ "$f" != tests/decide.test.sh ] && [ -f "$ROOT/$f" ] && has "$f" "$names" && printf '%s\n' "$f"; done)"
 assert_contains " $(printf '%s ' $reach)" " tests/e2e-loop.test.sh " "the sweep finds a suite that runs fm-run.sh"
 assert_contains " $(printf '%s ' $reach)" " tests/selfupdate.test.sh " "and one that runs fm.sh self-update"
+# Each suite that reaches one is held to a guard it carries, whatever its
+# name: the shared loop that unsets every HERDR_* (and FM_*) before anything
+# runs, HERDR_ENV=0 exported, or its own herdr first on PATH.
 for f in $reach; do
   src="$(code "$f")"
-  case "$f" in
-    tests/e2e-loop.test.sh)
-      grep -qE '^export HERDR_ENV=0' <<<"$src"; ok=$?; how="exports HERDR_ENV=0" ;;
-    tests/selfupdate.test.sh|tests/option-loop.test.sh)
-      grep -qF 'HERDR_[^=]*)=' <<<"$src"; ok=$?; how="unsets every HERDR_* before it runs anything" ;;
-    tests/herdr.test.sh)
-      grep -qE "executable\\('herdr'" <<<"$src" && grep -qF 'PATH=str(self.fake)' <<<"$src"
-      ok=$?; how="puts its own herdr first on PATH" ;;
-    *)
-      ok=1; how="runs a script that raises a card, with no guard against an inherited HERDR_ENV" ;;
-  esac
+  # shellcheck disable=SC2016
+  if grep -qF 'HERDR_[^=]*)=' <<<"$src" && grep -qF 'unset "$_fm_k"' <<<"$src"; then
+    ok=0; how="unsets every HERDR_* before it runs anything"
+  elif grep -qE '^export HERDR_ENV=0' <<<"$src"; then
+    ok=0; how="exports HERDR_ENV=0"
+  elif grep -qE "executable\\('herdr'" <<<"$src" && grep -qF 'PATH=str(self.fake)' <<<"$src"; then
+    ok=0; how="puts its own herdr first on PATH"
+  else
+    ok=1; how="runs a script that raises a card, with no guard against an inherited HERDR_ENV"
+  fi
   assert_eq "0" "$ok" "$f $how"
 done
 rm -rf "$o" "$n" "$na" "$nb" "$na".* "$nb".* "$hstub"
