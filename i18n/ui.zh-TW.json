@@ -29,10 +29,12 @@
   "greenlit": "已成案",
   "hold": "先擱著",
   "inflight": "進行中",
+  "laneBacklog": "待辦",
   "laneCaptain": "船長",
   "laneGate": "閘門",
   "laneMerged": "已合併",
   "laneQueued": "排隊",
+  "laneReady": "就緒",
   "laneReview": "審核",
   "laneWorking": "施工",
   "log": "即時日誌",
@@ -43,7 +45,6 @@
   "notGreenlit": "尚未成案",
   "nothingYet": "日誌還是空的",
   "openLocal": "開啟本地檔案",
-  "queued": "排隊",
   "rate1": "單桅帆船",
   "rate2": "雙桅帆船",
   "rate3": "巡防艦",
@@ -90,5 +91,7 @@
   "orderDemo": "試演下令回應（不寫入事件）",
   "dragHint": "拖曳人物可旋轉單人 · 拖曳甲板轉全員 · 雙擊復位",
   "alsoWaiting": "其他待決（點開就地展開）",
-  "viewDesign": "design.md"
+  "viewDesign": "design.md",
+  "ready": "就緒",
+  "backlog": "待辦"
 }

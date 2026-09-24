@@ -641,12 +641,12 @@ percentages. The regions below are that layout.
 | Region | What it holds |
 |---|---|
 | Header | brand, the engine badge, green-light state and the language switch |
-| Sea header | merged / in flight / waiting on you / blocked / queued; waiting on you is the number of pending decisions |
+| Sea header | merged / in flight / waiting on you / blocked / ready / backlog; waiting on you is the number of pending decisions |
 | Decision deck | pending records first: the captain's portrait beside the first full card, further decisions as one-line strips that expand in place |
 | The ship | a two-mast pirate vessel (three on the tallest rates) whose beam and decks track the crew |
 | Deck | crew stand on the ship with name tags over their heads, poses driven by state, handoffs fly between them |
 | Crew roster | two-column rows, shown by default and toggled from the ship's bar |
-| Lanes | six columns left to right: queued, work, gate, review, captain, merged; closed tasks, and every merged task, in the separate initially collapsed history |
+| Lanes | seven columns left to right: backlog, ready, work, gate, review, captain, merged; closed tasks, and every merged task, in the separate initially collapsed history |
 | Live log | a full-width panel at the bottom; tri-lingual summaries from `events.jsonl` |
 
 **Engine badge (V7).** The server reads `config.yaml` on every state request —
@@ -655,8 +655,13 @@ header shows the top-level vendor, marked `vendor ⇄ reviewer-vendor` when they
 differ. Names are never hard-coded; no file or no top-level vendor is no badge.
 
 **Lanes and cards.** The lane order is sent by the server (`lanes`) so the page
-keeps no second copy. A card shows the task id and title, the aboard crew's
-names, the pull request, `blocked on T-xxx` for a queued task whose
+keeps no second copy. A task no event has moved yet is `ready` when every
+`depends_on` has merged, so it could be dispatched now, and `backlog` while
+any has not; a dependency the log has never heard of is not merged. The server
+decides this from the same replay that fills `blocked_on`, and counts the two
+separately, so a card moves from backlog to ready over the live stream the
+moment its last dependency merges. A card shows the task id and title, the aboard crew's
+names, the pull request, `blocked on T-xxx` for a backlog task whose
 dependencies have not merged, and badges read only from events and pending
 records: the failed gate's number when the `gate_failed` event carries
 `data.gate`, an `ask_pass_criteria` not yet answered by `criteria_returned`,
@@ -1209,6 +1214,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-044 | a completed run's pane actually closes | T-035 |
 | T-040 | captain's board layout parity with the 2026-09-20 prototype | T-034, T-036 |
 | T-043 | the project declares its setup and checks; the gates stop hard-coding this repo's toolchain | T-041, T-039 |
+| T-057 | the board separates ready work from backlog | T-040 |
 
 ### M3 — driving other repositories
 

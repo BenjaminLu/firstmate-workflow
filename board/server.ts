@@ -78,7 +78,9 @@ const STAGE: Record<string, string> = {
 // The lanes, left to right, in lifecycle order. The page reads this list
 // rather than keeping its own, so the order has one source. Closed tasks are
 // not a lane: they stay in the collapsed history with the merged ones.
-const LANES = ["queued", "working", "gate", "review", "captain", "merged"] as const;
+// Backlog and ready are both untouched work, split by whether it could be
+// dispatched now: backlog still waits on a dependency, ready waits on nobody.
+const LANES = ["backlog", "ready", "working", "gate", "review", "captain", "merged"] as const;
 
 // The header's engine badge (V7). Read at request time, so an edit to
 // config.yaml shows on the next refresh, and never hard-coded: the names are
@@ -147,9 +149,11 @@ const state = () => {
   const awaiting = new Set(pend.map((p: Record<string, unknown>) => String(p.task ?? "")));
   const taskIds = [...definitions.keys()];
   for (const e of events) if (e.task && !definitions.has(e.task) && !taskIds.includes(e.task)) taskIds.push(e.task);
+  // Where the log puts a task. Untouched is not yet a lane: which of backlog
+  // or ready it is depends on its dependencies, decided below from this.
   const stageOf = (id: string) => {
     const terminal = FINAL.has(stage.get(id) ?? "");
-    return !terminal && awaiting.has(id) ? "captain" : (stage.get(id) ?? "queued");
+    return !terminal && awaiting.has(id) ? "captain" : (stage.get(id) ?? "untouched");
   };
   // The badges a card carries. Only what an event or a pending record says:
   // the gate that failed when the failure named it, an open ASK-PASS-CRITERIA,
@@ -173,16 +177,20 @@ const state = () => {
   };
   const tasks = taskIds.map((id) => {
     const d = definitions.get(id) || {};
-    const at = stageOf(id);
     const depends: string[] = Array.isArray(d.depends_on) ? (d.depends_on as unknown[]).map(String) : [];
+    // untouched work waiting on work that is not in yet: a dependency counts
+    // as done only once it has merged, and one the log has never heard of is
+    // not done. The same list decides the lane, so a card in backlog always
+    // names what it waits on and a card in ready never does.
+    const untouched = stageOf(id) === "untouched";
+    const blockedOn = untouched ? depends.filter((dep) => stageOf(dep) !== "merged") : [];
+    const at = untouched ? (blockedOn.length ? "backlog" : "ready") : stageOf(id);
     return ({
     id, title: typeof d.title === 'string' ? d.title : null, milestone: d.milestone ?? null,
     depends_on: depends,
     stage: at,
     pr: pr.get(id) ?? null,
-    // queued behind work that is not in yet: a dependency counts as done only
-    // once it has merged, and one the log has never heard of is not done
-    blocked_on: at === "queued" ? depends.filter((dep) => stageOf(dep) !== "merged") : [],
+    blocked_on: blockedOn,
     badges: badgesOf(id, at),
     // the aboard crew's names, filled in once the crew is known below
     crew: [] as string[],
@@ -384,7 +392,8 @@ const state = () => {
       merged: tasks.filter((t) => t.stage === "merged").length,
       inflight: tasks.filter((t) => ["working", "review"].includes(t.stage)).length,
       blocked: tasks.filter((t) => t.stage === "gate").length,
-      queued: tasks.filter((t) => t.stage === "queued").length,
+      ready: tasks.filter((t) => t.stage === "ready").length,
+      backlog: tasks.filter((t) => t.stage === "backlog").length,
       // one per decision on the deck: the captain is what these wait on
       waiting: pend.length,
     },
