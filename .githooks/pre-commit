@@ -2,11 +2,11 @@
 # Local half of the no-writes-to-main rule. Self-contained on purpose: a fresh
 # worktree may not have bin/ yet, and a hook that errors for the wrong reason
 # is worse than no hook - it passes for the wrong reason too.
+# Server-side branch protection is the authority; this is an early warning,
+# and it names only the protected branches. A detached HEAD is not one:
+# fm-worker.sh rebuilds a branch there (T-093).
 : "${FM_PROTECTED:=main master}"
 b=$(git branch --show-current 2>/dev/null)
-if [ -z "$b" ]; then
-  echo 'fm-guard: detached HEAD - refusing to commit' >&2; exit 1
-fi
 for p in $FM_PROTECTED; do
   if [ "$b" = "$p" ]; then
     echo "fm-guard: refusing to commit on $b." >&2

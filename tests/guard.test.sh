@@ -26,14 +26,39 @@ uerr="$("$G" nonsense 2>&1 >/dev/null)"; urc=$?
 assert_eq "64" "$urc" "an unknown subcommand exits 64"
 assert_contains "$uerr" "usage: fm-guard.sh" "and prints its usage on stderr"
 
-# the hooks are the half that catches a human, or an agent using git directly
-git -C "$t" config core.hooksPath "$ROOT/.githooks"
-git -C "$t" checkout -q main
+# the hooks are the half that catches a human, or an agent using git directly.
+# Installed the way a checkout installs them: in the tree, and pointed at by
+# bin/fm-install-hooks.sh, relative - not by an absolute path into this repo.
+# Each switch below is asserted: a refusal passes on the wrong branch too,
+# and an allowance passes where no hook is checked out.
+assert_ok "git -C '$t' checkout -q main" "the fixture switches to main"
+assert_eq "main" "$(git -C "$t" branch --show-current)" "and is on main"
+cp -R "$ROOT/.githooks" "$t/.githooks"
+assert_ok "git -C '$t' add -A && git -C '$t' commit -qm hooks" "the fixture commits the real hooks, before they are installed"
+assert_ok "cd '$t' && '$ROOT/bin/fm-install-hooks.sh' >/dev/null" "the fixture installs the real hooks"
 echo y > "$t/f"
 assert_fail "git -C '$t' commit -qam onmain" "pre-commit blocks a commit on main"
-git -C "$t" checkout -q feature/x
+assert_ok "git -C '$t' checkout -q -f master && git -C '$t' merge -q --ff-only main" "the fixture switches to master, with the hooks"
+assert_eq "master" "$(git -C "$t" branch --show-current)" "and is on master"
+echo y > "$t/f"
+assert_fail "git -C '$t' commit -qam onmaster" "pre-commit blocks a commit on master"
+assert_ok "git -C '$t' checkout -q -f feature/x && git -C '$t' merge -q --ff-only main" "the fixture switches to feature/x, with the hooks"
+assert_eq "feature/x" "$(git -C "$t" branch --show-current)" "and is on feature/x"
+assert_ok "test -x '$t/.githooks/pre-commit'" "where the hook is checked out"
 echo z > "$t/f"
 assert_ok "git -C '$t' commit -qam onbranch" "pre-commit allows a commit on a branch"
+# Server-side branch protection is the authority; the hook is an early
+# warning for main and master only. A detached HEAD is where fm-worker.sh
+# rebuilds a branch, and refusing it there refused every rebuild (T-093).
+assert_ok "git -C '$t' checkout -q --detach" "the fixture detaches HEAD"
+assert_eq "" "$(git -C "$t" branch --show-current)" "and is on no branch"
+assert_fail "git -C '$t' symbolic-ref -q HEAD" "HEAD names no branch"
+assert_ok "test -x '$t/.githooks/pre-commit'" "and the hook is still checked out"
+echo d > "$t/f"
+dout="$(git -C "$t" commit -qam ondetached 2>&1)"; drc=$?
+assert_eq "0" "$drc" "pre-commit allows a commit on a detached HEAD"
+assert_lacks "$dout" "fm-guard" "and says nothing about it"
+assert_ok "git -C '$t' checkout -q feature/x" "the fixture goes back to feature/x"
 
 bare="$(mktemp -d)"; git init -q --bare "$bare"
 git -C "$t" remote add origin "$bare"

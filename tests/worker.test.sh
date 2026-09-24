@@ -1582,7 +1582,14 @@ rb_fixture() {   # rb_fixture [two-tasks]; prints the fixture dir with round one
     printf '%s\n' '# design' '## 6. gates' 'seven of them' '' \
       '| id | title | depends on |' '|---|---|---|' '| T-1 | one | — |' '' \
       'the table ends here' 'prose the two sides may both edit' '## 8. board' > design/design.md
+    # RB_HOOKS=1: the repository's own hooks, in the tree and installed the
+    # way a real checkout installs them - relative, so every worktree runs
+    # the copy it has checked out
+    if [ "${RB_HOOKS:-0}" = 1 ]; then
+      cp -R "$ROOT/.githooks" .githooks; cp "$ROOT/bin/fm-install-hooks.sh" bin/
+    fi
     git add -A; git commit -qm 'app and task table'; git push -q origin main
+    [ "${RB_HOOKS:-0}" != 1 ] || bin/fm-install-hooks.sh >/dev/null
   ) || return 1
   # the step a round runs is a file the test writes, so each case can say
   # what its worker does without a second copy of the adapter
@@ -1790,10 +1797,23 @@ assert_ne "" "$rebuiltE" "and the run names the rebuilt commit"
 assert_fail "git --git-dir='$dE/remote.git' cat-file -e '$rebuiltE^{commit}'" "which never reached origin"
 assert_eq "$oldE" "$(git -C "$dE/repo" rev-parse "$bE")" "the local branch is back on its previous head"
 assert_eq "$pushedE" "$(rb_pushed "$dE")" "and no commit_pushed says otherwise"
+# The commit is made with commit-tree, which moves nothing (T-093): the
+# worktree must still be left detached on it and clean, as a commit leaves
+# it, or the next round takes the refused rebuild for crashed work.
+assert_eq "$rebuiltE" "$(git -C "$dE/repo/state/worktrees/T-Z" rev-parse -q --verify HEAD)" \
+  "the refused round leaves the worktree on the rebuilt commit"
+# tracked, staged and unmerged changes only: which scratch files a round
+# leaves untracked is not what this is about
+assert_eq "" "$(git -C "$dE/repo/state/worktrees/T-Z" status --porcelain --untracked-files=no)" \
+  "with nothing uncommitted"
+assert_ok "git -C '$dE/repo/state/worktrees/T-Z' diff --cached --quiet HEAD" "and nothing staged"
 # E, next round: the local branch fast-forwards to what the racer pushed,
 # and the rebuild is made again from there and leased on the racer's head.
 rb_round_two "$dE" "$rb_add"
 assert_eq "0" "$rb_rc" "the round after a refused lease completes"
+assert_lacks "$rb_out" "had uncommitted work" "without rescuing the refused rebuild as crashed work"
+assert_eq "0" "$(jq -r 'select(.type=="worker_crashed")|.type' "$dE/repo/state/events.jsonl" | wc -l | tr -d ' ')" \
+  "and no worker_crashed is recorded"
 rb_rebuilt "$dE" "E, next round"
 assert_eq "$mainE" "$(rb_head "$dE" "$bE^")" "as one commit on the base"
 assert_eq "1" "$(git --git-dir="$dE/remote.git" rev-list --count "main..$bE")" "exactly one"
@@ -1846,18 +1866,19 @@ assert_contains "$rb_out" "could not commit" "and says so"
 assert_eq "$oldG" "$(rb_head "$dG" "$bG")" "nothing is pushed"
 assert_eq "$pushedG" "$(rb_pushed "$dG")" "and no commit is reported"
 assert_lacks "$(cat "$dG/ghcalls")" "pr comment" "nor is the pull request told of one"
+# A rebuilt round's commit is made with commit-tree, which runs no hook
+# (T-093), so here the failure is commit-tree's own.
 dG2="$(rb_fixture)"; bG2="$(rb_branch "$dG2")"
 rb_replay_conflict "$dG2"; oldG2="$(rb_head "$dG2" "$bG2")"; mainG2="$(rb_head "$dG2" main)"
-rb_refusing_hook "$dG2"
-rb_round_two "$dG2" "$rb_add"
+PATH="$(rb_gitwrap "$dG2"):$PATH" FM_T_GIT_FAIL=" commit-tree " rb_round_two "$dG2" "$rb_add"
 rb_rebuilt "$dG2" "G2"
 assert_eq "70" "$rb_rc" "a rebuilt round whose commit fails stops"
 assert_contains "$rb_out" "could not commit" "at the commit"
+assert_matches "$rb_out" "fm-test: refused git .* commit-tree " "G2: the failure injected is commit-tree's"
 assert_eq "$oldG2" "$(rb_head "$dG2" "$bG2")" "and pushes nothing"
 assert_eq "$oldG2" "$(git -C "$dG2/repo" rev-parse "$bG2")" "and the local branch is not moved onto the base"
-# G2, next round, with the hook gone: the staged rebuild the failed commit
-# left is rescued, and the branch is rebuilt again and committed once.
-git -C "$dG2/repo" config --unset core.hooksPath
+# G2, next round, with commit-tree working: the staged rebuild the failed
+# commit left is rescued, and the branch is rebuilt again and committed once.
 rb_round_two "$dG2" "$rb_add"
 assert_eq "0" "$rb_rc" "the round after a failed rebuilt commit completes"
 rb_rebuilt "$dG2" "G2, next round"
@@ -1866,6 +1887,54 @@ assert_eq "$mainG2" "$(rb_head "$dG2" "$bG2^")" "as one commit on the base"
 assert_eq "1" "$(git --git-dir="$dG2/remote.git" rev-list --count "main..$bG2")" "exactly one"
 assert_eq "$oldG2" "$(jq -r 'select(.type=="commit_pushed" and .data.rebuilt!=null)|.data.rebuilt.previous_head' \
   "$dG2/repo/state/events.jsonl" | tail -1)" "rebuilt from the branch the failed round left alone"
+# G3: commit-tree carries fm_git_commit's identity rule - user.name and
+# user.email from git's config, or FM_GIT_NAME / FM_GIT_EMAIL - not git's
+# own: with neither, a rebuilt round refuses before it commits, as a plain
+# round does. Git itself still has an identity, from GIT_AUTHOR_* and
+# GIT_COMMITTER_*: the rebuild's merge needs one where the host name gives
+# none (a CI runner), and without the rule commit-tree would take it and
+# commit. The fixture's identity is local, so it is removed here; the
+# caller's global config is kept, less any identity in it.
+dG3="$(rb_fixture)"; bG3="$(rb_branch "$dG3")"
+rb_replay_conflict "$dG3"; oldG3="$(rb_head "$dG3" "$bG3")"; pushedG3="$(rb_pushed "$dG3")"
+git -C "$dG3/repo" config --unset user.name; git -C "$dG3/repo" config --unset user.email
+g3cfg="$dG3/global.gitconfig"; : > "$g3cfg"
+for g3f in "$HOME/.gitconfig" "${XDG_CONFIG_HOME:-$HOME/.config}/git/config"; do
+  [ ! -f "$g3f" ] || cat "$g3f" >> "$g3cfg"
+done
+git config --file "$g3cfg" --unset-all user.name; git config --file "$g3cfg" --unset-all user.email
+assert_eq "" "$(GIT_CONFIG_GLOBAL="$g3cfg" git -C "$dG3/repo" config user.name)" "G3: git's config holds no user.name"
+assert_eq "" "$(GIT_CONFIG_GLOBAL="$g3cfg" git -C "$dG3/repo" config user.email)" "G3: nor any user.email"
+GIT_CONFIG_GLOBAL="$g3cfg" FM_GIT_NAME='' FM_GIT_EMAIL='' \
+  GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=a@b.c GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=a@b.c \
+  rb_round_two "$dG3" "$rb_add"
+rb_rebuilt "$dG3" "G3"
+assert_eq "70" "$rb_rc" "a rebuilt round with no git identity stops"
+assert_contains "$rb_out" "set git user.name and user.email" "and names what is missing"
+assert_eq "$oldG3" "$(rb_head "$dG3" "$bG3")" "and pushes nothing"
+assert_eq "$pushedG3" "$(rb_pushed "$dG3")" "and no commit is reported"
+# G4: a repository that signs its commits gets a signed rebuilt commit, as
+# `git commit` would have made it; commit-tree ignores commit.gpgSign. The
+# signer is a stand-in that answers the way gpg does, so no key is needed.
+dG4="$(rb_fixture)"; bG4="$(rb_branch "$dG4")"
+rb_replay_conflict "$dG4"; mainG4="$(rb_head "$dG4" main)"
+cat > "$dG4/fake-gpg" <<'P'
+#!/usr/bin/env bash
+cat > /dev/null
+printf '\n[GNUPG:] SIG_CREATED D 1 8 00 0 FAKE\n' >&2
+printf '%s\n' '-----BEGIN PGP SIGNATURE-----' '' 'ZmFrZQ==' '-----END PGP SIGNATURE-----'
+P
+chmod +x "$dG4/fake-gpg"
+git -C "$dG4/repo" config commit.gpgSign true
+git -C "$dG4/repo" config gpg.program "$dG4/fake-gpg"
+git -C "$dG4/repo" config user.signingKey FAKE
+assert_eq "true" "$(git -C "$dG4/repo/state/worktrees/T-Z" config --bool commit.gpgSign)" "G4: the fixture signs its commits"
+rb_round_two "$dG4" "$rb_add"
+rb_rebuilt "$dG4" "G4"
+assert_eq "0" "$rb_rc" "G4: a rebuild in a repository that signs completes"
+assert_eq "$mainG4" "$(rb_head "$dG4" "$bG4^")" "G4: as one commit on the base"
+assert_contains "$(git --git-dir="$dG4/remote.git" cat-file commit "$bG4")" "gpgsig -----BEGIN PGP SIGNATURE-----" \
+  "G4: signed, as git commit would have signed it"
 
 # H: design.md has a row-append conflict AND a prose conflict. The rows
 # are unioned hunk by hunk; only the prose reaches the worker, as a
@@ -2251,8 +2320,67 @@ assert_eq "0" "$rb_rc" "T, next round: completes"
 rb_rebuilt "$dT" "T, next round"
 assert_eq "$mainT" "$(rb_head "$dT" "$bT^")" "T, next round: one commit on the base"
 
-rm -rf "$dA" "$dA2" "$dB" "$dC" "$dD" "$dE" "$dF" "$dG" "$dG2" "$dH" "$dI" "$dJ" "$dK" "$dK2" "$dL" \
+# U: rebuilds in a repository running its real hooks, installed by
+# bin/fm-install-hooks.sh (T-093). Every fixture above installs none, and
+# that is how a rebuild the repository's own pre-commit refused on every
+# real checkout - it is made on a detached HEAD - passed here.
+dU1="$(RB_HOOKS=1 rb_fixture)"; bU1="$(rb_branch "$dU1")"
+assert_ne "" "$bU1" "U1: round one pushed a branch under the real hooks"
+assert_eq ".githooks" "$(git -C "$dU1/repo" config --get core.hooksPath)" "U1: the fixture installs the real hooks"
+assert_fail "git -C '$dU1/repo' -c user.email=a@b.c -c user.name=t commit -q --allow-empty -m onmain" \
+  "U1: and they are live: a commit on main is refused"
+rb_replay_conflict "$dU1"; oldU1="$(rb_head "$dU1" "$bU1")"; mainU1="$(rb_head "$dU1" main)"
+rb_round_two "$dU1" "$rb_add"
+rb_rebuilt "$dU1" "U1"
+assert_eq "0" "$rb_rc" "U1: a rebuild under the real hooks completes"
+assert_lacks "$rb_out" "detached HEAD" "U1: and no hook refused it"
+assert_eq "$mainU1" "$(rb_head "$dU1" "$bU1^")" "U1: one commit on the new base"
+assert_eq "1" "$(git --git-dir="$dU1/remote.git" rev-list --count "main..$bU1")" "U1: exactly one"
+assert_ok "git --git-dir='$dU1/remote.git' cat-file -e '$bU1:src/round-two'" "U1: carrying this round's work"
+# made as fm_git_commit makes a plain round's commit: the fixture's own
+# identity as author and committer, and the task's title
+assert_eq "t <a@b.c> t <a@b.c>" "$(git --git-dir="$dU1/remote.git" log -1 --format='%an <%ae> %cn <%ce>' "$bU1")" \
+  "U1: under the repository's identity, as author and committer"
+assert_eq "T-Z: a mock task" "$(git --git-dir="$dU1/remote.git" log -1 --format=%B "$bU1")" \
+  "U1: with the message a plain round's commit has"
+assert_eq "$(rb_head "$dU1" "$bU1")" "$(git -C "$dU1/repo" rev-parse "$bU1")" "U1: the local branch moved onto what was pushed"
+assert_eq "refs/heads/$bU1" "$(git -C "$dU1/repo/state/worktrees/T-Z" symbolic-ref -q HEAD)" \
+  "U1: and the worktree is back on the branch"
+assert_eq "$oldU1" "$(jq -r 'select(.type=="commit_pushed" and .data.rebuilt!=null)|.data.rebuilt.previous_head' \
+  "$dU1/repo/state/events.jsonl" | tail -1)" "U1: the previous head is recorded"
+# U2: a marker left behind publishes nothing under the real hooks either;
+# the round that resolves it publishes one commit on the base
+dU2="$(RB_HOOKS=1 rb_fixture)"; bU2="$(rb_branch "$dU2")"; oldU2="$(rb_head "$dU2" "$bU2")"
+assert_eq ".githooks" "$(git -C "$dU2/repo" config --get core.hooksPath)" "U2: the fixture installs the real hooks"
+assert_fail "git -C '$dU2/repo' -c user.email=a@b.c -c user.name=t commit -q --allow-empty -m onmain" \
+  "U2: and they are live: a commit on main is refused"
+rb_conflicting_main "$dU2"; mainU2="$(rb_head "$dU2" main)"
+pushedU2="$(rb_pushed "$dU2")"
+rb_round_two "$dU2" "$rb_add"
+rb_rebuilt "$dU2" "U2"
+assert_eq "75" "$rb_rc" "U2: a marker left behind refuses the round"
+# both conflicts are left, and git lists them in path order
+assert_contains "$rb_out" "conflict markers remain in: design/design.md, src/app.txt" "U2: and names the files"
+assert_eq "$oldU2" "$(rb_head "$dU2" "$bU2")" "U2: nothing is pushed"
+assert_eq "$oldU2" "$(git -C "$dU2/repo" rev-parse "$bU2")" "U2: the local branch is not moved"
+assert_eq "$pushedU2" "$(rb_pushed "$dU2")" "U2: and no commit is reported"
+cat > "$dU2/resolve.sh" <<'S'
+{ printf 'line %s\n' 1 2 3 4; printf 'line 5 by main and the task\n'; printf 'line %s\n' 6 7 8 9 10; } > src/app.txt
+awk '/^<<<<<<< / { skip = 1; print "prose as main and the task say"; next }
+     /^>>>>>>> / { skip = 0; next } !skip' design/design.md > design/d.next
+mv design/d.next design/design.md
+S
+rb_round_two "$dU2" "$dU2/resolve.sh"
+rb_rebuilt "$dU2" "U2, next round"
+assert_eq "0" "$rb_rc" "U2, next round: the resolved rebuild completes under the real hooks"
+assert_eq "$mainU2" "$(rb_head "$dU2" "$bU2^")" "U2, next round: one commit on the base"
+assert_eq "1" "$(git --git-dir="$dU2/remote.git" rev-list --count "main..$bU2")" "U2, next round: exactly one"
+assert_contains "$(git --git-dir="$dU2/remote.git" show "$bU2:src/app.txt")" "line 5 by main and the task" \
+  "U2, next round: carrying the resolution"
+assert_eq "$(rb_head "$dU2" "$bU2")" "$(git -C "$dU2/repo" rev-parse "$bU2")" "U2, next round: the local branch moved onto it"
+
+rm -rf "$dA" "$dA2" "$dB" "$dC" "$dD" "$dE" "$dF" "$dG" "$dG2" "$dG3" "$dG4" "$dH" "$dI" "$dJ" "$dK" "$dK2" "$dL" \
   "$dM" "$dN" "$dP1" "$dP2" "$dP3" "$dP4" "$dP5" "$dP6" "$dP7" "$dQ1" "$dQ2" "$dQ3" "$dQ4" \
-  "$dR1" "$dR2" "$dS" "$dT" "$rb_add" "$rb_more"
+  "$dR1" "$dR2" "$dS" "$dT" "$dU1" "$dU2" "$rb_add" "$rb_more"
 
 finish
