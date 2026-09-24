@@ -640,9 +640,10 @@ Rounds one and two: the reviewer picks holes as usual.
 
 The reviewer cannot see the pull request, so the launcher carries the protocol
 across (T-073). From round three, given `--pr`, `fm-review.sh` reads the pull
-request's comments with `gh` and quotes into the prompt, verbatim and in the
-order posted, the latest comment holding `ASK-PASS-CRITERIA:<task-id>` and every
-comment whose numbered list is followed by `CRITERIA-COMPLETE:<task-id>`. A
+request's comments with `gh` and quotes into the prompt, verbatim, first the
+latest comment holding `ASK-PASS-CRITERIA:<task-id>`, then every comment whose
+numbered list is followed by `CRITERIA-COMPLETE:<task-id>`, in the order
+posted, whether before or after the ask. A
 marker counts only as a line of its own and a comment that asks is never a
 list, so a worker's numbered change log that mentions a marker in passing is
 not taken for the closed list. Each quote is fenced with a per-run nonce, so a

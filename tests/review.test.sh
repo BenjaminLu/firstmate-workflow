@@ -475,7 +475,7 @@ assert_eq "$canonical" "$(jq -r 'select(.type=="agent_finished")|.actor' "$rz/st
 rm -rf "$dz"
 
 # From round three the reviewer is shown what was said about the closed list
-# on the pull request - the worker's ask and every earlier list - and nothing
+# on the pull request - the worker's latest ask, then every list - and nothing
 # else from it. Without that it reviewed every round from scratch and the
 # list it had closed never bound anything. The comments come from the
 # remembering stub, which answers in gh's own JSON shape.
@@ -534,8 +534,8 @@ assert_lacks "$sent" "OLDER_ASK_BODY" "only the latest ask is shown"
 assert_lacks "$sent" "ANOTHER_TASKS_ASK" "an ask for another task is not this task's ask"
 assert_lacks "$sent" "REASONING_WITHOUT_MARKER" "a comment with worker reasoning but no marker is not included"
 
-# the reviewer closes the list; a passing mention of the marker with no list
-# is not a list; a second list after it is shown too, in the order posted
+# the reviewer closes the list; the marker mentioned inside a sentence is not
+# a list; a second list after it is shown too, in the order posted
 say reviewer-1 "$pr" "$(printf 'Two items.\n\n1. Name the helper FIRST_LIST_ITEM.\n2. Cover the empty case.\n\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z')"
 say worker-1 "$pr" "$(printf 'I think CRITERIA-COMPLETE:T-Z was premature, NO_LIST_HERE.')"
 say reviewer-1 "$pr" "$(printf '1. SECOND_LIST_ITEM\nCRITERIA-COMPLETE:T-Z')"
@@ -545,7 +545,7 @@ assert_contains "$sent" "1. Name the helper FIRST_LIST_ITEM." "a round-four prom
 assert_contains "$sent" "is the closed list" "and says it is the closed list"
 assert_contains "$sent" "REGRESSION:T-Z" "and that anything else must be marked a regression"
 assert_contains "$sent" "LATEST_ASK_BODY" "and still carries the ask"
-assert_lacks "$sent" "NO_LIST_HERE" "a marker with no numbered list before it is not a list"
+assert_lacks "$sent" "NO_LIST_HERE" "a marker inside a sentence is not a list"
 assert_lacks "$sent" "REASONING_WITHOUT_MARKER" "and the reasoning stays out"
 first="$(grep -n FIRST_LIST_ITEM "$dc/sent-r4.md" | head -1 | cut -d: -f1)"
 second="$(grep -n SECOND_LIST_ITEM "$dc/sent-r4.md" | head -1 | cut -d: -f1)"
@@ -574,6 +574,23 @@ assert_lacks "$sent" "WORKER_STATUS_ITEM" "an earlier worker comment with number
 assert_contains "$sent" "## Closed list 1 of 1" "so the reviewer's list is the only one, and the original"
 assert_contains "$sent" "REVIEWER_LIST_ITEM" "and it is quoted"
 assert_lacks "$sent" "The worker's ask, verbatim" "a list that mentions ASK-PASS-CRITERIA in prose is not the worker's ask"
+
+# a list is numbered lines followed by the marker: the marker on its own line
+# closes nothing without a numbered line before it, whether there is none at
+# all or they only come after it. Each fixture passes the own-line filter, so
+# only the numbered-list check can keep it out
+pr8="$("$GHc" pr create --head work --title 'a task' | sed 's#.*/##')"
+say reviewer-1 "$pr8" "$(printf 'Looks fine, NO_NUMBERED_LINE_BODY.\nCRITERIA-COMPLETE:T-Z')"
+review_c "$dc/sent-nn.md" --round 4 --pr "$pr8" >/dev/null
+sent="$(cat "$dc/sent-nn.md")"
+assert_lacks "$sent" "NO_NUMBERED_LINE_BODY" "a standalone marker with no numbered line is not a list"
+assert_lacks "$sent" "## Closed list" "and nothing is quoted as one"
+pr9="$("$GHc" pr create --head work --title 'a task' | sed 's#.*/##')"
+say reviewer-1 "$pr9" "$(printf 'CRITERIA-COMPLETE:T-Z\n1. AFTER_MARKER_ITEM')"
+review_c "$dc/sent-am.md" --round 4 --pr "$pr9" >/dev/null
+sent="$(cat "$dc/sent-am.md")"
+assert_lacks "$sent" "AFTER_MARKER_ITEM" "numbered lines only after a standalone marker are not a list"
+assert_lacks "$sent" "## Closed list" "and nothing is quoted as one"
 
 # a quote cannot be closed from inside the comment it quotes
 pr6="$("$GHc" pr create --head work --title 'a task' | sed 's#.*/##')"

@@ -167,11 +167,12 @@ keep_log() {
 }
 
 # From round three the reviewer is shown what was said about the closed list
-# on the pull request: the latest ASK-PASS-CRITERIA from the worker and every
-# comment holding a numbered list closed by CRITERIA-COMPLETE, verbatim and in
-# the order posted. Without it every round was reviewed from scratch and a
-# list the reviewer had closed bound nothing. Only those comments cross over;
-# the rest of the pull request is the worker's reasoning and stays out.
+# on the pull request, verbatim: first the latest ASK-PASS-CRITERIA from the
+# worker, then every comment holding a numbered list closed by
+# CRITERIA-COMPLETE, in the order posted. Without it every round was reviewed
+# from scratch and a list the reviewer had closed bound nothing. Only those
+# comments cross over; the rest of the pull request is the worker's reasoning
+# and stays out.
 #
 # A marker counts only as a line of its own. Matched anywhere, a worker's
 # "1. fixed X ... please post CRITERIA-COMPLETE:T-1" became the closed list
