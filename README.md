@@ -153,3 +153,7 @@ open design/proposals/2026-09-20-captain-board/prototype.html
 
 Arrow keys switch the four presentation levels; the top right switches
 EN / 繁 / 简.
+
+Driving other repositories from this one installation is designed in section
+15 of the design and not yet built: until the M3 tasks land, firstmate drives
+only this repository.

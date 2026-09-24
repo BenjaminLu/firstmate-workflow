@@ -1145,6 +1145,311 @@
         "Captain decision D-051 = A: the project contract gains `docs`, an optional list of globs. Gate 5 needs no new test when every changed non-test path matches `docs`; any other non-test path still needs one; when `docs` is undeclared nothing is exempt. This repository declares `design/**` and `README.md`; skills are behaviour and are not docs. Fail-first tests: a docs-only diff passes gate 5, docs plus code without a test fails, and undeclared `docs` exempts nothing.",
         "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
       ]
+    },
+    {
+      "id": "T-045",
+      "milestone": "M3",
+      "bootstrap": false,
+      "depends_on": [
+        "T-043"
+      ],
+      "title": "design: firstmate drives other repositories from one external installation",
+      "scope": [
+        "design/design.md",
+        "design/tasks.json",
+        "README.md"
+      ],
+      "acceptance": [
+        "Captain decision D-049 chose option B, external: one firstmate repository holds the engine, every project's task lists and design, and all runtime state, and drives target repositories that stay untouched. This task is the design only. It changes no code and writes the plan that implementation tasks will follow. Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+        "Add a design.md section for the external model that settles, with reasons: (1) the two roots — the engine root (this repository) and each project's repository — and how every script learns which is which; (2) a `projects:` registry in config.yaml (name, repository location, base branch, GitHub owner/repo, and the per-project setup/check/check_env/tests/test contract T-043 introduces), with firstmate-workflow itself registered as a project so self-hosting keeps working; (3) where each project's design, tasks, worktrees, runtime state and events live; (4) how the event log, board and decisions identify the project.",
+        "Redesign the gate 4 rule explicitly. Today scope is read from design/tasks.json on the task's own branch, but under B the task list no longer travels in the target PR. Define where a run's scope comes from, how it is pinned so it cannot change mid-run, and how a scope change is authorized (captain decision plus a commit to this repository). Also define how the reviewer and gates see the task spec without it being in the target diff.",
+        "Cover git and GitHub for targets: PRs opened on the target's GitHub repository, what the target needs (branch protection, required check running the declared `check`, the fm-guard hooks), and what firstmate must never write into a target repository.",
+        "Cover roles: worker and reviewer prompts receive the project's design context from the engine side; skills and AGENTS.md routing still work when the checkout being edited is not this repository.",
+        "Break the implementation into ordered tasks and add them to design/tasks.json and the design.md table: each with a title, depends_on, an exact scope file list and acceptance. Every one of them must be independently mergeable, and self-hosting (this repository as its own registered project) must keep working after each one. Evidence for those tasks is their PR's required GitHub check and the seven gates; do not ask workers to run tests themselves.",
+        "Evidence for this task is the pull request's required GitHub check (which includes the design/tasks.json–design.md agreement check) and the seven gates.",
+        "Stay inside this scope; this task edits no code. If the design cannot be settled without a captain decision, say which decision in the design and stop there rather than guessing."
+      ]
+    },
+    {
+      "id": "T-046",
+      "milestone": "M3",
+      "bootstrap": false,
+      "depends_on": [
+        "T-043",
+        "T-045"
+      ],
+      "title": "the project registry and the two roots",
+      "scope": [
+        "config.yaml",
+        "bin/fm-config.sh",
+        "bin/ci.sh",
+        "tests/config.test.sh",
+        "tests/ci.test.sh",
+        "design/design.md"
+      ],
+      "acceptance": [
+        "Implements design.md sections 15.1 and 15.2. config.yaml gains `default_project: firstmate-workflow` and a `projects:` map; firstmate-workflow is registered with repo `.`, github BenjaminLu/firstmate-workflow, base main, required_check ci, design design/design.md, tasks design/tasks.json. The self entry holds no copy of T-043's `project:` block; that block stays top-level until T-050 (section 15.2).",
+        "bin/fm-config.sh gains one resolver used by every later task: the project is `--project`, else FM_PROJECT, else default_project; a field lookup returns a project's value with the section 15.2 defaults for design and tasks; the project root is the engine root for repo `.` and state/projects/<name>/repo otherwise. The project is never inferred from the current directory, a git remote or a worktree.",
+        "Validation, each refused with exit 65 and a message naming the project and field: an unregistered name; a name outside [a-z0-9-] or longer than 24 characters; a repo value other than `.` or absent; a github value not shaped owner/repo; a missing base or required_check. The default project's contract resolves to T-043's top-level `project:` block, whole — every field it has, `docs` included, never a re-listed subset; a config.yaml holding both that block and a self entry `project:` is refused with exit 65.",
+        "bin/ci.sh runs its design/task-list agreement check once for every registered (design, tasks) pair and names the project on failure. No other script reads the registry yet.",
+        "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
+        "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
+    },
+    {
+      "id": "T-047",
+      "milestone": "M3",
+      "bootstrap": false,
+      "depends_on": [
+        "T-046"
+      ],
+      "title": "the project on events, decisions and pull request sync",
+      "scope": [
+        "bin/fm-emit.sh",
+        "bin/fm-decide.sh",
+        "bin/fm-run.sh",
+        "bin/fm-sync-prs.sh",
+        "bin/fm-merge.sh",
+        "tests/emit.test.sh",
+        "tests/decide.test.sh",
+        "tests/decisions.test.sh",
+        "tests/sync-prs.test.sh",
+        "tests/merge.test.sh",
+        "tests/e2e-loop.test.sh",
+        "design/design.md"
+      ],
+      "acceptance": [
+        "Implements design.md section 15.4 for the log and decisions. fm-emit.sh accepts --project, validates it against the registry (exit 65 when unknown) and writes a top-level `project` field; an event without it belongs to the default project, and existing log lines stay valid. The new event types spec_pinned and spec_repinned are accepted and listed in section 5.1.",
+        "fm-decide.sh records `project` in the request and the stored response. fm-run.sh keeps D-<task-number> for the default project and, for any other project, allocates the next free numeric decision id under a lock; two projects with the same task id never share a decision file.",
+        "fm-sync-prs.sh polls every registered project's github repository (gh --repo) and emits with that project; fm-merge.sh takes --project and merges on that project's repository. (project, pr) is the key: a pull request number in one project never matches an event of another.",
+        "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
+        "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
+    },
+    {
+      "id": "T-048",
+      "milestone": "M3",
+      "bootstrap": false,
+      "depends_on": [
+        "T-046"
+      ],
+      "title": "fm-project.sh: managed clones, target verification and the guard",
+      "scope": [
+        "bin/fm-project.sh",
+        "bin/fm-guard.sh",
+        ".githooks/pre-commit",
+        ".githooks/pre-push",
+        "tests/project.test.sh",
+        "tests/guard.test.sh",
+        "tests/option-loop.test.sh",
+        "tests/traps.test.sh",
+        "tests/gh-stub.sh",
+        "design/design.md"
+      ],
+      "acceptance": [
+        "Implements design.md sections 15.1 (managed clone) and 15.6 (what a target needs). New bin/fm-project.sh with `sync <name>` and `verify <name>`, following section 5.3.1's option rules. For the self project both are no-ops that succeed.",
+        "sync clones the project's github repository into state/projects/<name>/repo, or fetches and prunes an existing clone; sets core.hooksPath in the clone's local git config to the engine's .githooks/; adds `.fm-*` to the clone's .git/info/exclude. It writes nothing into the target's tree and never touches any checkout outside state/projects/.",
+        "verify refuses with exit 70, naming each missing item, unless: base is protected with enforce_admins on, up to date required and required_check a required status check; the repository is public (section 15.8 — private projects wait for a captain decision); the clone's hooks path is the engine's .githooks/. The gh stub answers these API calls in the shapes GitHub returns.",
+        "fm-guard.sh and the hooks protect main, master and the project's base; the self project's protected set is unchanged.",
+        "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
+        "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
+    },
+    {
+      "id": "T-049",
+      "milestone": "M3",
+      "bootstrap": false,
+      "depends_on": [
+        "T-047",
+        "T-048"
+      ],
+      "title": "spec pins: gate 4 reads a pinned scope, not the branch",
+      "scope": [
+        "bin/fm-config.sh",
+        "bin/fm-project.sh",
+        "bin/fm-worker.sh",
+        "bin/fm-review.sh",
+        "bin/fm-gate.sh",
+        "tests/gate.test.sh",
+        "tests/worker.test.sh",
+        "tests/review.test.sh",
+        "tests/project.test.sh",
+        "tests/option-loop.test.sh",
+        "design/design.md"
+      ],
+      "acceptance": [
+        "Implements design.md section 15.5 exactly. On a task's first round fm-worker.sh writes state/pins/<project>/<task>/1.json (project, task, engine commit, task-list path, verbatim spec, its SHA-256, design path, target base commit, and T-043's contract for the project verbatim — the whole block, `docs` included — with the engine main commit it was read from and its SHA-256) and emits spec_pinned. The contract always comes from the engine main head at pin time, including for a self-hosted task whose spec is pinned from its own branch. The engine commit is the engine main head containing the task; for the self project a task not on main is pinned from its own branch's commit, else from the engine working copy with engine_commit null.",
+        "fm-worker.sh, fm-review.sh and fm-gate.sh read the task spec from the highest-numbered pin through one library function in bin/fm-config.sh, never from the target branch or the engine working copy. With an engine commit the spec is re-derived and its hash compared; without one the branch's own entry must match the pin's hash. The contract is re-derived from its recorded commit and hash-checked in both cases; repin reads spec and contract afresh from the new commit.",
+        "Gate 4 fails with no pin, a hash mismatch, a changed file outside the pinned scope, a self-hosted branch whose own task entry differs from its pin, and any `.fm-*` path. Each failure names its reason.",
+        "`fm-project.sh repin --task <t> --decision D-<n>` writes the next pin and emits spec_repinned only when the decision is a decision_made for that project and task with its authorizing option and the new engine commit is on main with a differing spec; otherwise it refuses with a message and writes nothing. Pin files are append-only.",
+        "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
+        "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
+    },
+    {
+      "id": "T-050",
+      "milestone": "M3",
+      "bootstrap": false,
+      "depends_on": [
+        "T-049"
+      ],
+      "title": "project-aware gates 1–3 and 5–7",
+      "scope": [
+        "config.yaml",
+        "bin/fm-config.sh",
+        "bin/fm-gate.sh",
+        "tests/config.test.sh",
+        "tests/gate.test.sh",
+        "README.md",
+        "design/design.md"
+      ],
+      "acceptance": [
+        "Implements the gate half of design.md sections 15.2 and 15.6. fm-gate.sh takes --project. Gates 1 and 2 use the project's base, not a literal main. Gates 3 and 5 read T-043's contract from the task's pin (section 15.2), never from the branch under test or the engine working copy, and apply every field of it exactly as T-043 defines them — including the `docs` exemption, so a design- or README-only self-hosted task still passes gate 5; a missing pin or a contract hash mismatch fails the gate by name. Gate 3 runs in a scratch worktree of the project's checkout. Gates 6 and 7 query the project's github repository with gh --repo, and gate 6 requires the registry's required_check.",
+        "In this same commit T-043's top-level `project:` block moves unchanged to projects.firstmate-workflow.project and the top-level block is deleted; bin/fm-config.sh resolves every project's contract from its registry entry, and README.md's description of the block names its new place. The contract exists in exactly one place before and after this commit. Re-deriving a pinned contract reads the block wherever the pin's recorded commit holds it (top-level `project:` if that commit has one, else the registry entry), so a pin recorded before this task still verifies after this task merges, without a repin.",
+        "This task rewrites T-043's section 6 paragraph that says the contract is read from the branch under test and that gate 4 decides whether a branch may change `config.yaml` at all, so that it states section 15.2's rule instead: gates 3 and 5 read the contract from the task's pin, and a branch may change `config.yaml` only when its pinned scope names it, without that change affecting its own gates.",
+        "For the self project the gates run the same commands with the same budget as today (section 10; FM_CI_MAX_SECONDS=600 for gate 3). The section 6 gate table states the per-project form.",
+        "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
+        "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
+    },
+    {
+      "id": "T-051",
+      "milestone": "M3",
+      "bootstrap": false,
+      "depends_on": [
+        "T-049"
+      ],
+      "title": "the worker and the reviewer in a target checkout",
+      "scope": [
+        "bin/fm-worker.sh",
+        "bin/fm-review.sh",
+        "bin/fm-checkpoint.sh",
+        "bin/fm-cleanup.sh",
+        "bin/fm-reconcile.sh",
+        "tests/worker.test.sh",
+        "tests/review.test.sh",
+        "tests/cleanup.test.sh",
+        "tests/reconcile.test.sh",
+        "design/design.md"
+      ],
+      "acceptance": [
+        "Implements design.md sections 15.3 and 15.6 for runs. For a non-default project fm-worker.sh runs fm-project.sh sync and verify first and stops on their refusal; creates the worktree at state/projects/<name>/worktrees/<task> from the managed clone at the project's base; pushes the task branch to the project's github repository; opens and looks up the pull request with gh --repo against base. The pull request body carries task id, title, acceptance, scope and the `spec pin: <project>/<task>#<n> <sha256 prefix>` line.",
+        "fm-review.sh, fm-checkpoint.sh, fm-cleanup.sh and fm-reconcile.sh take --project and act only in that project's clone, worktree root and repository. fm-cleanup.sh refuses anything that is not a direct child of that project's worktree root (section 5.2a).",
+        "Nothing in section 15.6's never-write list reaches the target: .fm-prompt.md and .fm-say.md are excluded locally and never committed, and no push goes to base. Any new worker exit code is added to section 5.3.2's list.",
+        "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
+        "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
+    },
+    {
+      "id": "T-052",
+      "milestone": "M3",
+      "bootstrap": false,
+      "depends_on": [
+        "T-051"
+      ],
+      "title": "role prompts carry the project's design from the engine side",
+      "scope": [
+        "skills/worker/SKILL.md",
+        "skills/reviewer/SKILL.md",
+        "skills/firstmate/SKILL.md",
+        "bin/fm-worker.sh",
+        "bin/fm-review.sh",
+        "tests/worker.test.sh",
+        "tests/review.test.sh",
+        "tests/skills.test.sh",
+        "design/design.md"
+      ],
+      "acceptance": [
+        "Implements design.md section 15.7. Worker and reviewer prompts carry, from the engine side: the role skill, the pinned spec, the project's design file at the pin's commit bounded in size with any truncation stated in the prompt, the project's base and its pinned T-043 contract (every field), and the absolute path of the checkpoint helper in the frozen code tree.",
+        "The worker and reviewer skills stop pointing at repository-relative files (design/design.md, design/tasks.json, bin/fm-checkpoint.sh) and refer to the design, scope and checkpoint command in the prompt; they stay portable English with no vendor-specific syntax. The firstmate skill says firstmate runs in the engine root and names --project on every script it calls.",
+        "The self project's prompt has the same shape; the reviewer still receives the diff, the spec and the design and never the worker's reasoning (R2).",
+        "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
+        "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
+    },
+    {
+      "id": "T-053",
+      "milestone": "M3",
+      "bootstrap": false,
+      "depends_on": [
+        "T-050",
+        "T-051"
+      ],
+      "title": "dispatch, run and session across projects",
+      "scope": [
+        "bin/fm-dispatch.sh",
+        "bin/fm-run.sh",
+        "bin/fm-session.sh",
+        "tests/dispatch.test.sh",
+        "tests/session.test.sh",
+        "tests/e2e-loop.test.sh",
+        "design/design.md"
+      ],
+      "acceptance": [
+        "fm-dispatch.sh and fm-run.sh take --project, read that project's task list from the registry, resolve depends_on within the project and pass --project to every script they call. The concurrency limit stays one global number across all projects. Dispatch to a non-default project runs fm-project.sh verify first and dispatches nothing on its refusal.",
+        "The greenlit check matches the project: a greenlit event for one project authorizes nothing in another. fm-session.sh status reports live work grouped by project.",
+        "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
+        "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
+    },
+    {
+      "id": "T-054",
+      "milestone": "M3",
+      "bootstrap": false,
+      "depends_on": [
+        "T-047"
+      ],
+      "title": "the board shows which project",
+      "scope": [
+        "board/server.ts",
+        "board/public/index.html",
+        "board/public/ship.js",
+        "board/public/ship.css",
+        "i18n/ui.en.json",
+        "i18n/ui.zh-TW.json",
+        "tests/board.test.sh",
+        "tests/e2e/board.spec.ts",
+        "tests/e2e/fixture.ts"
+      ],
+      "acceptance": [
+        "Implements the board half of design.md section 15.4. Replay keys tasks, pull requests and decisions by (project, id), so two projects with the same task id never merge into one lane card. Lane cards, crew bubbles and decision cards show a project chip; ?project= filters and its absence shows every project. Merge cards link the pull request on that project's repository.",
+        "Chip labels come from the UI dictionaries; a project name is data and is not translated. With only the default project in the log the board renders as it does today.",
+        "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
+        "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
+    },
+    {
+      "id": "T-055",
+      "milestone": "M3",
+      "bootstrap": false,
+      "depends_on": [
+        "T-052",
+        "T-053",
+        "T-054"
+      ],
+      "title": "the first external project, proved end to end",
+      "scope": [
+        "tests/external-project.test.sh",
+        "README.md",
+        "design/design.md"
+      ],
+      "acceptance": [
+        "A fixture drives a second registered project end to end with the mock adapter and the gh stub: a local bare repository stands in for the target, sync and verify pass against stubbed GitHub answers in the shapes GitHub returns, one task is pinned, worked, gated, reviewed and carded, and the target's tree afterwards contains only the task's scoped files and none of firstmate's artifacts.",
+        "The same fixture runs one task of the self project in the same log and proves the two are kept apart on events, decisions and pins.",
+        "README.md explains registering a project: the registry entry, what the target needs (section 15.6), and that private projects wait for the section 15.8 decision. Section 15's status line says the external model is implemented.",
+        "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
+        "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
     }
   ]
 }
