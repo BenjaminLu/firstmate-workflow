@@ -474,4 +474,99 @@ assert_eq "$canonical" "$(jq -r 'select(.type=="agent_finished")|.actor' "$rz/st
   "completion retires exactly that canonical reviewer"
 rm -rf "$dz"
 
+# From round three the reviewer is shown what was said about the closed list
+# on the pull request - the worker's ask and every earlier list - and nothing
+# else from it. Without that it reviewed every round from scratch and the
+# list it had closed never bound anything. The comments come from the
+# remembering stub, which answers in gh's own JSON shape.
+dc="$(fixture)"; rc="$dc/repo"
+export GHSTATE="$dc/ghstate"
+GHc="$ROOT/tests/gh-stub.sh"
+cat > "$rc/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+cp "$2" "${FM_CAPTURE:-/dev/null}" 2>/dev/null
+printf '%s\n' "${FM_VERDICT:-no verdict}" > "$3/verdict.txt"
+exit 0
+M
+chmod +x "$rc/bin/adapters/mock.sh"
+say() { GH_AS="$1" "$GHc" pr comment "$2" --body "$3"; }
+review_c() {   # review_c <capture> <args...>
+  local cap="$1"; shift
+  ( cd "$rc" && FM_ROOT="$rc" FM_GH="$GHc" FM_CAPTURE="$cap" FM_VERDICT="REJECT:T-Z" \
+      bin/fm-review.sh --task T-Z --branch work "$@" 2>&1 )
+}
+# the prompt exactly as the script built it before it read any comments
+today() {      # today <round>
+  cat "$rc/skills/reviewer/SKILL.md"
+  printf '\n---\n\n# The task\n\n```json\n%s\n```\n' \
+    "$(jq -r '.tasks[]|select(.id=="T-Z")' "$rc/design/tasks.json")"
+  printf '\n# Round %s\n' "$1"
+  [ "$1" -ge 3 ] && printf '\nThis is round three or later. If the worker has posted ASK-PASS-CRITERIA, answer with the complete numbered list and then post CRITERIA-COMPLETE:%s.\n' T-Z
+  printf '\n---\n\n# The diff under review\n\n```diff\n'
+  git -C "$rc" diff main...work
+  printf '```\n'
+}
+pr="$("$GHc" pr create --head work --title 'a task' | sed 's#.*/##')"
+say worker-1 "$pr" "My reasoning: the flake came from REASONING_WITHOUT_MARKER, so I rewrote it."
+say worker-1 "$pr" "$(printf 'An earlier ask.\nASK-PASS-CRITERIA:T-Z\nOLDER_ASK_BODY')"
+say worker-1 "$pr" "$(printf 'ASK-PASS-CRITERIA:T-ZZ\nANOTHER_TASKS_ASK')"
+ask="$(printf 'Round three: before touching a line.\n\nASK-PASS-CRITERIA:T-Z\n\nLATEST_ASK_BODY with `code` and "quotes"')"
+say worker-1 "$pr" "$ask"
+
+# rounds one and two, with or without --pr, and round three without it, are
+# the prompt they always were - an ask sitting on the pull request included
+for args in "--round 1" "--round 2" "--round 1 --pr $pr" "--round 2 --pr $pr" "--round 3"; do
+  n="$(printf '%s' "$args" | cut -d' ' -f2)"
+  # shellcheck disable=SC2086
+  review_c "$dc/sent-id.md" $args >/dev/null
+  today "$n" > "$dc/today.md"
+  assert_ok "cmp -s '$dc/today.md' '$dc/sent-id.md'" "a prompt for $args is byte-identical to today's"
+done
+
+review_c "$dc/sent-r3.md" --round 3 --pr "$pr" >/dev/null
+assert_eq "0" "$?" "a round-three review with an ask runs"
+sent="$(cat "$dc/sent-r3.md")"
+assert_contains "$sent" "$ask" "a round-three prompt carries the worker's ask verbatim"
+assert_contains "$sent" "answer with the complete numbered list" "and tells the reviewer to answer it with the list"
+assert_contains "$sent" "CRITERIA-COMPLETE:T-Z" "and to close it with CRITERIA-COMPLETE"
+assert_lacks "$sent" "OLDER_ASK_BODY" "only the latest ask is shown"
+assert_lacks "$sent" "ANOTHER_TASKS_ASK" "an ask for another task is not this task's ask"
+assert_lacks "$sent" "REASONING_WITHOUT_MARKER" "a comment with worker reasoning but no marker is not included"
+
+# the reviewer closes the list; a passing mention of the marker with no list
+# is not a list; a second list after it is shown too, in the order posted
+say reviewer-1 "$pr" "$(printf 'Two items.\n\n1. Name the helper FIRST_LIST_ITEM.\n2. Cover the empty case.\n\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z')"
+say worker-1 "$pr" "$(printf 'I think CRITERIA-COMPLETE:T-Z was premature, NO_LIST_HERE.')"
+say reviewer-1 "$pr" "$(printf '1. SECOND_LIST_ITEM\nCRITERIA-COMPLETE:T-Z')"
+review_c "$dc/sent-r4.md" --round 4 --pr "$pr" >/dev/null
+sent="$(cat "$dc/sent-r4.md")"
+assert_contains "$sent" "1. Name the helper FIRST_LIST_ITEM." "a round-four prompt carries the earlier list"
+assert_contains "$sent" "is the closed list" "and says it is the closed list"
+assert_contains "$sent" "REGRESSION:T-Z" "and that anything else must be marked a regression"
+assert_contains "$sent" "LATEST_ASK_BODY" "and still carries the ask"
+assert_lacks "$sent" "NO_LIST_HERE" "a marker with no numbered list before it is not a list"
+assert_lacks "$sent" "REASONING_WITHOUT_MARKER" "and the reasoning stays out"
+first="$(grep -n FIRST_LIST_ITEM "$dc/sent-r4.md" | head -1 | cut -d: -f1)"
+second="$(grep -n SECOND_LIST_ITEM "$dc/sent-r4.md" | head -1 | cut -d: -f1)"
+assert_ok "[ '${first:-0}' -gt 0 ] && [ '${second:-0}' -gt '${first:-0}' ]" "every list is shown, in the order posted"
+
+# a pull request with neither says so plainly
+pr2="$("$GHc" pr create --head work --title 'a task' | sed 's#.*/##')"
+say worker-1 "$pr2" "Just my notes, REASONING_WITHOUT_MARKER."
+review_c "$dc/sent-none.md" --round 3 --pr "$pr2" >/dev/null
+sent="$(cat "$dc/sent-none.md")"
+assert_contains "$sent" "has neither an ASK-PASS-CRITERIA:T-Z" "a pull request with neither says so"
+assert_lacks "$sent" "REASONING_WITHOUT_MARKER" "and carries none of its comments"
+
+# gh that cannot answer is stated, and the round still runs
+: > "$GHSTATE/down"
+outd="$(review_c "$dc/sent-down.md" --round 3 --pr "$pr")"
+assert_eq "0" "$?" "a round whose comments could not be read still runs"
+assert_contains "$(cat "$dc/sent-down.md")" "could not be read" "and its prompt says the context could not be read"
+assert_contains "$outd" "REJECT:T-Z" "and the verdict still comes back"
+rm -f "$GHSTATE/down"
+unset GHSTATE
+rm -rf "$dc"
+
 finish

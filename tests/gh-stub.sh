@@ -12,6 +12,12 @@ arg() { local want="$1"; shift; while [ $# -gt 0 ]; do [ "$1" = "$want" ] && { p
 # see raw JSON and mistake "non-empty" for "matched"
 JQ="$(arg --jq "$@")"
 emit_json() { if [ -n "$JQ" ]; then jq -r "$JQ"; else cat; fi; }
+# $S/down makes every call fail the way gh does when GitHub cannot be reached:
+# a message on stderr, nothing on stdout, exit 1
+if [ -f "$S/down" ]; then
+  echo 'error connecting to api.github.com' >&2
+  exit 1
+fi
 
 case "${1-}:${2-}" in
   pr:create)
@@ -42,15 +48,30 @@ case "${1-}:${2-}" in
         # jq builds the JSON, because a real review body has newlines and
         # quotes in it: interpolating one into a string by hand produced a
         # raw control character, the whole document failed to parse, and
-        # gate 7 read an approval that was sitting right there as nothing
+        # gate 7 read an approval that was sitting right there as nothing.
+        # Each comment carries every field `gh pr view --json comments`
+        # returns, oldest first as gh lists them, so a caller that picks
+        # fields or relies on the order is tested against what gh sends.
         {
         printf '{"comments":['
-        first=1
+        first=1; i=0
         while IFS=$'\t' read -r who body; do
           [ -n "$who" ] || continue
-          [ "$first" = 1 ] || printf ','; first=0
+          [ "$first" = 1 ] || printf ','; first=0; i=$(( i + 1 ))
           jq -cn --arg who "$who" --arg body "$(printf '%s' "$body" | tr '\r' '\n')" \
-            '{author:{login:$who},body:$body}'
+            --argjson i "$i" --arg n "$n" '{
+              id: ("IC_kwDOstub" + ($i|tostring)),
+              author: {login: $who},
+              authorAssociation: "OWNER",
+              body: $body,
+              createdAt: ("2026-01-01T00:" + (if $i < 10 then "0" else "" end) + ($i|tostring) + ":00Z"),
+              includesCreatedEdit: false,
+              isMinimized: false,
+              minimizedReason: "",
+              reactionGroups: [],
+              url: ("https://github.com/o/r/pull/" + $n + "#issuecomment-" + ($i|tostring)),
+              viewerDidAuthor: false
+            }'
         done < "$S/comments.$n" 2>/dev/null
         printf ']}\n'
         } | emit_json

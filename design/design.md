@@ -638,6 +638,17 @@ Rounds one and two: the reviewer picks holes as usual.
    Firstmate must preserve and verify the original list; a passing protocol
    check does not establish compliance with this role contract.
 
+The reviewer cannot see the pull request, so the launcher carries the protocol
+across (T-073). From round three, given `--pr`, `fm-review.sh` reads the pull
+request's comments with `gh` and quotes into the prompt, verbatim and in the
+order posted, the latest comment holding `ASK-PASS-CRITERIA:<task-id>` and every
+comment whose numbered list is followed by `CRITERIA-COMPLETE:<task-id>`. It
+then says which case holds: a list (it is the closed list; findings cite its
+items or are marked `REGRESSION:`), only an ask (answer with the complete list),
+neither, or comments `gh` could not read, in which case the round still runs.
+No other comment enters the prompt, so the worker's reasoning stays out.
+Rounds one and two, and any round without `--pr`, get the prompt unchanged.
+
 The point is to end the loop where each round fixes one thing and surfaces
 another.
 
@@ -1316,6 +1327,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-065 | the local gate runs its suites in parallel, with every threshold intact | T-046 |
 | T-058 | the captain parks or drops a task from the board | T-057 |
 | T-069 | every pull request number on the board links to that project's pull request | T-046, T-058 |
+| T-073 | the reviewer sees the worker's ask and the closed list | T-065 |
 
 ### M3 — driving other repositories
 

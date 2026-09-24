@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs one review round. The reviewer is given the diff, the task spec and the
-# acceptance criteria - and nothing else. Not the worker's log, not its
-# reasoning, not even the path it worked in. Reasoning is persuasive; the
+# acceptance criteria - and, from round three, the round-three protocol's own
+# comments from the pull request - and nothing else. Not the worker's log, not
+# its reasoning, not even the path it worked in. Reasoning is persuasive; the
 # artefact is what is under review.
 #
 #   fm-review.sh --task T-004 --branch <name> [--repo .] [--pr 9] [--round 1]
@@ -165,6 +166,53 @@ keep_log() {
   printf '%s' "$p"
 }
 
+# From round three the reviewer is shown what was said about the closed list
+# on the pull request: the latest ASK-PASS-CRITERIA from the worker and every
+# comment holding a numbered list closed by CRITERIA-COMPLETE, verbatim and in
+# the order posted. Without it every round was reviewed from scratch and a
+# list the reviewer had closed bound nothing. Only those comments cross over;
+# the rest of the pull request is the worker's reasoning and stays out.
+closed_list() {
+  local json picked
+  if ! json="$($GH pr view "$PR" --json comments 2>/dev/null)" ||
+     ! picked="$(jq -c --arg t "$TASK" '
+       ($t | gsub("(?<c>[.*+?^$(){}|\\[\\]\\\\/])"; "\\\(.c)")) as $e
+       | "ASK-PASS-CRITERIA:\($e)(?![A-Za-z0-9_-])" as $ask
+       | "CRITERIA-COMPLETE:\($e)(?![A-Za-z0-9_-])" as $done
+       | [.comments[] | .body | strings] as $b
+       | { ask: ([$b[] | select(test($ask))] | last),
+           lists: [$b[] | . as $x
+                    | ([match($done; "g").offset] | last) as $at
+                    | select($at != null and ($x[0:$at] | test("(^|\\n)[ \\t]*[0-9]+[.)][ \\t]"))) ] }
+     ' <<<"$json" 2>/dev/null)" || [ -z "$picked" ]; then
+    printf '\nThe pull request'"'"'s comments could not be read, so whether the worker has asked with ASK-PASS-CRITERIA:%s or a closed list with CRITERIA-COMPLETE:%s already exists is unknown. Review this round as usual; if your findings close a list, number them and post CRITERIA-COMPLETE:%s.\n' \
+      "$TASK" "$TASK" "$TASK"
+    return 0
+  fi
+  local n i
+  n="$(jq '.lists | length' <<<"$picked")"
+  if [ "$n" -gt 0 ]; then
+    printf '\nThe numbered list below, posted with CRITERIA-COMPLETE:%s, is the closed list for this task. If more than one appears, the first is the original. Every finding this round must cite a numbered item from it, or be a regression this round newly introduced, marked REGRESSION:%s. Raise nothing else.\n' \
+      "$TASK" "$TASK"
+  elif [ "$(jq '.ask != null' <<<"$picked")" = true ]; then
+    printf '\nThe worker has asked for the pass criteria with ASK-PASS-CRITERIA:%s, quoted below. There is no closed list yet: answer with the complete numbered list of everything that must change for this task to pass, and then post CRITERIA-COMPLETE:%s.\n' \
+      "$TASK" "$TASK"
+  else
+    printf '\nThe pull request has neither an ASK-PASS-CRITERIA:%s from the worker nor a numbered list closed by CRITERIA-COMPLETE:%s. There is no closed list yet; review this round as usual.\n' \
+      "$TASK" "$TASK"
+  fi
+  if [ "$(jq '.ask != null' <<<"$picked")" = true ]; then
+    printf '\n## The worker'"'"'s ask, verbatim from the pull request\n\n----- begin comment -----\n%s\n----- end comment -----\n' \
+      "$(jq -r '.ask' <<<"$picked")"
+  fi
+  i=0
+  while [ "$i" -lt "$n" ]; do
+    printf '\n## Closed list %s of %s, verbatim from the pull request\n\n----- begin comment -----\n%s\n----- end comment -----\n' \
+      "$((i + 1))" "$n" "$(jq -r --argjson i "$i" '.lists[$i]' <<<"$picked")"
+    i=$((i + 1))
+  done
+}
+
 work="$FM_RUN_DIR/review"
 mkdir -p "$work"
 prompt="$work/prompt.md"
@@ -172,7 +220,12 @@ prompt="$work/prompt.md"
   cat "${FM_CODE_ROOT:-$REPO}/skills/reviewer/SKILL.md"
   printf '\n---\n\n# The task\n\n```json\n%s\n```\n' "$spec"
   printf '\n# Round %s\n' "$ROUND"
-  [ "$ROUND" -ge 3 ] && printf '\nThis is round three or later. If the worker has posted ASK-PASS-CRITERIA, answer with the complete numbered list and then post CRITERIA-COMPLETE:%s.\n' "$TASK"
+  if [ "$ROUND" -ge 3 ] && [ -n "$PR" ]; then
+    printf '\n# The closed list\n'
+    closed_list
+  elif [ "$ROUND" -ge 3 ]; then
+    printf '\nThis is round three or later. If the worker has posted ASK-PASS-CRITERIA, answer with the complete numbered list and then post CRITERIA-COMPLETE:%s.\n' "$TASK"
+  fi
   printf '\n---\n\n# The diff under review\n\n```diff\n'
   git diff "$BASE...$BRANCH"
   printf '```\n'

@@ -92,6 +92,15 @@ original item numbers in findings; only a newly introduced regression explicitly
 marked `REGRESSION:<task-id>` can extend them. Report protocol violations to
 [firstmate](../firstmate/SKILL.md) for the board.
 
+Where to find them: from round three, when the launcher knows the pull request,
+your prompt has a **The closed list** section after the round number and before
+the diff. It quotes, verbatim and in the order posted, the worker's latest
+`ASK-PASS-CRITERIA:<task-id>` and every earlier comment whose numbered list ends
+in `CRITERIA-COMPLETE:<task-id>`; when several lists appear, the first is the
+original. Its opening line says which case you are in: a list that binds this
+round, an ask to answer, neither, or comments the launcher failed to read.
+Nothing else from the pull request is quoted there.
+
 ## Evidence and isolation
 
 Retain your supplied reviewer role even in an isolated directory without root
