@@ -1625,12 +1625,18 @@ spaces that cannot meet, and moves every record already in the wrong space:
   keyed by its id.** Every record at or below `D-999` that does not own its
   id is renumbered into the allocated space: `fm-decide.sh --renumber <id>`
   takes the next free number from `D-1000` under the decision-id lock and
-  moves every store keyed by a decision id, not only the record. Those are,
-  found by searching `bin/` and `board/` for paths built from a decision id:
+  moves every store keyed by a decision id, not only the record. The list of
+  stores comes from the search below, not from memory, and names eight:
   `state/pending/<id>.json`, `state/decisions/<id>.json`,
   `state/decision-details/<id>.json`, the rendered pages
-  `board/public/diagrams/<id>.*`, and the authored drawings
-  `design/diagrams/<id>.*`. The last one matters most. `bin/fm-diagram.sh`
+  `board/public/diagrams/<id>.*`, the authored drawings
+  `design/diagrams/<id>.*`, and the watcher's three,
+  `state/session/observed/<id>.json`, `state/session/acknowledged/<id>.json`
+  and `state/session/watch-<id>.json` (with the watch directory it points at,
+  whose `observed/<id>.json` and `result.json` name the id). Two identities
+  are keyed by it as well: the record's stored `identity`, `decision:<id>`,
+  and the `data.decision` of events in the log. The authored drawings and the
+  watcher's stores are the two that hurt when missed. `bin/fm-diagram.sh`
   serves an authored drawing whose stem is the decision before one whose stem
   is the task, so a drawing left at the old stem would be shown on the owning
   task's new card. On 2026-09-24 `design/diagrams/` held authored `D-047`,
@@ -1640,8 +1646,65 @@ spaces that cannot meet, and moves every record already in the wrong space:
   renamed by the script, because renaming a tracked file in the engine
   checkout is a change to `base` outside a pull request: `--renumber` stops
   before moving anything, names the file, and the rename lands through a
-  pull request, after which `--renumber` completes. `state/skill-updates/`
-  is keyed by `SK-<n>` and is never renumbered. The record's `id` becomes
+  pull request, after which `--renumber` completes.
+  The watcher (`bin/fm-herdr.py`, behind `fm-session.sh`) skips for ever an
+  id that already has `state/session/observed/<id>.json`, and lists as
+  unacknowledged every observation without a matching
+  `state/session/acknowledged/<id>.json`. The local checkout holds both for
+  every id in the table above. Left behind, they would make the owning
+  task's answer under its derived id — the captain's merge answer on T-056's
+  own `D-056` card — never observed, so it never wakes firstmate. So
+  `--renumber` carries both to the new id, rewriting the receipt's `id` and
+  recomputing the acknowledgement's `observation` hash over the rewritten
+  receipt; an observation not yet acknowledged stays unacknowledged under the
+  new id. It copies them first, then renames the record, then deletes the old
+  receipts, so a continuous watch polling in between sees an observation for
+  whichever name the record has and never observes T-043's old answer a
+  second time. A `state/session/watch-<id>.json` whose process is still live
+  (the same `process_matches` test the watcher uses) is waiting on that id:
+  `--renumber` refuses, names the watch, and moves nothing until it is
+  stopped. A dead one is renamed to `watch-<new>.json` with its `decision`
+  and its directory's receipts rewritten, so `fm-session.sh status` does not
+  report T-043's answer as a watch on `D-056`.
+  Not stores and not moved: `state/skill-updates/` is keyed by `SK-<n>`,
+  outside the renumbered range; the board's `.<id>.<uuid>.tmp` in
+  `state/decisions/` exists only for the length of one write, which is
+  renamed onto the record; the browser's `seen` set is in memory and keys
+  by identity, covered below.
+
+  The search, so a reader can re-run it from the repository root:
+
+  ```
+  grep -rnE 'state/(pending|decisions|decision-details|session)|(public|design)/diagrams|watch-|observed|acknowledged|decision:' bin board skills tests
+  grep -rhoE '(state|board/public|design)/[A-Za-z0-9_./-]*' bin board skills tests | sort | uniq -c
+  ```
+
+  The first finds every place that builds a path or identity from a
+  decision id. The second lists every runtime path the code names at all, so
+  a store under an unexpected directory would show up; each was read to see
+  what keys it. On 2026-09-24 the hits were:
+
+  | Where | What is keyed by the decision id |
+  |---|---|
+  | `bin/fm-decide.sh` | `state/pending/<id>.json` written, `state/decisions/<id>.json` awaited |
+  | `bin/watch-decisions.ts` | `state/decisions/<id>.json` awaited (not a hit itself: `fm-decide.sh` hands it the directory and the id) |
+  | `bin/fm-run.sh` | `state/pending/`, `state/decisions/`, `state/decision-details/<id>.json` |
+  | `bin/fm-diagram.sh` | reads `state/pending/` or `state/decisions/<id>.json`; authored `design/diagrams/<id>.*` beats the task stem; writes `board/public/diagrams/<id>.*` |
+  | `bin/fm-herdr.py` | `state/session/observed/<id>.json` (`watch_child`), `state/session/acknowledged/<id>.json` (`acknowledge`, `unacknowledged`), `state/session/watch-<id>.json` and its directory (`watch_start`, `watch_stop`, `status`) |
+  | `bin/fm.sh` | `state/decisions/D-SK-<n>.json` for self-update, outside the renumbered range |
+  | `board/server.ts` | `state/pending/<id>.json`, `state/decisions/<id>.json` and its `.tmp`, `identity` `decision:<id>`, `decision_made` events by `data.decision` |
+  | `board/public/index.html` | `seen` set and the order animation, keyed by `identity` |
+  | `skills/firstmate/SKILL.md` | the same stores named for firstmate: `design/diagrams/<decision>.*`, `board/public/diagrams/`, `state/decision-details/<decision-id>.json`, `fm-session.sh ack --decision <id>` |
+  | `tests/` | fixtures of those same stores (`decide`, `decisions`, `diagram`, `board`, `session`, `selfupdate`, `i18n`, `e2e-loop`, `e2e/board.spec.ts`, `e2e/fixture.ts`); none names another |
+  | `tests/dispatch.test.sh`, `skills/worker/SKILL.md` | the word "observed" in prose; not a store |
+
+  Every other runtime path the second search lists is keyed by a task, a
+  run, a review, a pull request or nothing (`state/worktrees/`, `state/runs/`,
+  `state/reviews/`, `state/unsent/`, `state/rescued/`, `state/snapshots/`,
+  `state/runtime/`, `state/events.jsonl`); `state/merge-calls` is a test
+  stub's log. A store added later that is keyed by a decision id joins
+  `--renumber`'s list in the same pull request that adds it.
+  The record's `id` becomes
   the new id and its stored `identity` becomes `decision:<new>`. The map
   entry `{old, new, task, ts}` is appended to
   `state/decision-renumbered.json` before any file moves, so an interrupted
@@ -1654,7 +1717,9 @@ spaces that cannot meet, and moves every record already in the wrong space:
   `D-056` gets an identity of its own. Until T-054 lands the board keys
   outcomes by the raw id, so the two answers share `decision:D-056` and the
   board's `seen` set swallows the second one's animation; no card, answer or
-  merge is affected, only that animation. Renumbering moves only a
+  merge is affected, only that animation. The watcher is not part of this
+  gap: its receipts moved with the record, so the second answer is observed
+  under `D-056` and listed as unacknowledged. Renumbering moves only a
   record that has a response. A foreign record still pending is left where
   it is, because an `--await` on its id would never wake; `fm-run.sh` names
   it and raises nothing until the captain answers it, and then moves it on
@@ -1668,7 +1733,9 @@ spaces that cannot meet, and moves every record already in the wrong space:
   record. So firstmate renumbers by hand now, before the next merge card is
   due: every answered record in the table above, by the same steps — every
   store listed above, the untracked authored drawings in `design/diagrams/`
-  included — and into the same map, taking numbers from `D-1000` up. `--renumber` then finds
+  and the watcher's `state/session/observed/` and `acknowledged/` receipts
+  included, in the same copy, rename, delete order, with no live watch on the
+  id — and into the same map, taking numbers from `D-1000` up. `--renumber` then finds
   those done and stops at the map, so doing it by hand first costs nothing
   later. Until T-047 lands, firstmate also checks each task's derived id by
   the ownership test before it tells the captain a card is waiting.
@@ -1774,7 +1841,7 @@ Who proves what:
 
 | Task | Its part of this section |
 |---|---|
-| T-047 | the decision ids of point 1: merge cards derived per `(project, task)`, other cards allocated from `D-1000` under the lock, the ownership test in `fm-run.sh`, and `fm-decide.sh --renumber` moving an answered foreign record and every store keyed by its id, authored drawings included, so the owning task gets its own card |
+| T-047 | the decision ids of point 1: merge cards derived per `(project, task)`, other cards allocated from `D-1000` under the lock, the ownership test in `fm-run.sh`, and `fm-decide.sh --renumber` moving an answered foreign record and every store keyed by its id, authored drawings and the watcher's receipts included, refusing while a watch on the id is live, so the owning task gets its own card and its answer wakes firstmate |
 | T-052 | point 2's caller: the firstmate skill dispatches with no `--project`, and names `--project` for dispatch only when the captain asks for one project; hand-raised cards take ids from `D-1000` up |
 | T-053 | points 1–3 in the scripts: the global count by `(project, task)`, the slot lock taken after verify, fair fill as the no-flag path, and the merge turn in `fm-run.sh` freed only when `base` has settled |
 | T-054 | points 3 and 4 on the board: 5.2's background merge and recorded outcome, recovery of a `running` record whose helper died, the same-project refusal before publishing, the widened decision-id pattern and the renumbering map, and several projects' live work and cards at once |
