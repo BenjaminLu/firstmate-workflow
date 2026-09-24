@@ -44,8 +44,9 @@ These bind every actor, including firstmate itself.
    directly, and branch protection on GitHub with `enforce_admins` on — because
    firstmate runs on the captain's own credentials, an admin exemption would be
    an exemption for firstmate too. Branch protection is the authority; the
-   hooks are an early warning and refuse only a commit or push on a protected
-   branch — not a detached HEAD, where `fm-worker.sh` rebuilds (T-093).
+   hooks are an early warning: they refuse only a commit made on a protected
+   branch and a push to one — not a commit on a detached HEAD, where
+   `fm-worker.sh` rebuilds (T-093).
 2. **English in the repository**, as stated above.
 3. **Merging is the captain's**, and it arrives as a decision card on the
    board — never as a sentence in a conversation (section 5.2).
@@ -632,7 +633,9 @@ and row are therefore frozen: a change to either waits for a round that
 is not a rebuild. The run names the files, publishes nothing and exits
 `75`. Otherwise the rebuild and the round's work are one commit on the
 base, so gate 2 holds by construction. The commit is made with `git
-commit-tree` from the staged tree, parented on the fetched base — never
+commit-tree` from the staged tree, parented on the fetched base, under
+the identity a plain round's commit takes and signed when
+`commit.gpgSign` says so, as `git commit` would sign it — never
 `git commit` on the detached HEAD, which the repository's own pre-commit
 hook used to refuse, and did, on every real rebuild (T-093). It runs no
 hook and steps around none on a protected branch: until the push lands

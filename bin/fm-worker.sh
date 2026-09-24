@@ -1241,14 +1241,21 @@ fi
 commit_msg="$TASK: $(jq -r .title <<<"$spec")"
 rebuilt_head=''; commit_ok=0
 if [ "$rebuilt" = 1 ]; then
-  # the identity rule is fm_git_commit's (bin/fm-config.sh), applied here
-  # to commit-tree
+  # fm_git_commit (bin/fm-config.sh) is the identity rule, a refusal and
+  # `commit -q -m`; this is the same rule and refusal, applied to
+  # commit-tree. What commit does beyond that and commit-tree does not is
+  # run the hooks - the point here - and clean up the message, which is
+  # one line. commit also signs when commit.gpgSign says to; commit-tree,
+  # being plumbing, ignores that setting, so it is read here and passed
+  # on as -S.
   rb_name="$(fm_git_name "$tree")"; rb_email="$(fm_git_email "$tree")"
+  rb_sign=''
+  [ "$(git -C "$tree" config --bool commit.gpgSign 2>/dev/null)" != true ] || rb_sign=-S
   if [ -z "$rb_name" ] || [ -z "$rb_email" ]; then
     echo "fm: set git user.name and user.email (or FM_GIT_NAME / FM_GIT_EMAIL) before committing" >&2
   elif rebuilt_tree="$(git -C "$tree" write-tree)" && [ -n "$rebuilt_tree" ]; then
     rebuilt_head="$(git -C "$tree" -c user.name="$rb_name" -c user.email="$rb_email" \
-      commit-tree "$rebuilt_tree" -p "$rebuild_base" -m "$commit_msg" </dev/null)" || rebuilt_head=''
+      commit-tree ${rb_sign:+"$rb_sign"} "$rebuilt_tree" -p "$rebuild_base" -m "$commit_msg" </dev/null)" || rebuilt_head=''
     if [ -n "$rebuilt_head" ] && git -C "$tree" update-ref --no-deref -m "fm-worker: rebuilt $branch" \
          HEAD "$rebuilt_head" "$rebuild_base"; then
       commit_ok=1
