@@ -1343,6 +1343,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-057 | the board separates ready work from backlog | T-040 |
 | T-065 | the local gate runs its suites in parallel, with every threshold intact | T-046 |
 | T-058 | the captain parks or drops a task from the board | T-057 |
+| T-071 | two assertions that only hold on an idle machine hold under the parallel gate | T-065 |
 | T-070 | design: prototype v2 of the living ship, at a designer's standard | T-058 |
 | T-069 | every pull request number on the board links to that project's pull request | T-046, T-058 |
 | T-073 | the reviewer sees the worker's ask and the closed list | T-065 |

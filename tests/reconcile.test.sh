@@ -459,10 +459,45 @@ assert_contains "$(sed -n 2p "$d/gh-args")" "--limit 50" "and there is a default
 rm -rf "$d"
 
 # it goes through the one writer like everyone else; the header comment names
-# fm-emit.sh too, so look at what runs
-assert_ok "grep -vE '^[[:space:]]*#' '$RC' | grep -q 'fm-emit.sh'" "it writes through fm-emit.sh"
-assert_fail "grep -vE '^[[:space:]]*#' '$RC' | grep -qE '>>.*events\\.jsonl'" \
-  "and never appends to the log itself"
+# fm-emit.sh too, so look at what runs. The code is read once and searched
+# through a here-string: `producer | grep -q` under pipefail fails when grep
+# exits on the match and the producer takes SIGPIPE, which turns the first
+# check red on a match and the second green on one.
+code_of() { grep -vE '^[[:space:]]*#' "$1" || true; }
+writes_through_emit() { grep -q 'fm-emit.sh' <<<"$(code_of "$1")"; }
+appends_to_log() { grep -qE '>>.*events\.jsonl' <<<"$(code_of "$1")"; }
+assert_ok "writes_through_emit '$RC'" "it writes through fm-emit.sh"
+assert_fail "appends_to_log '$RC'" "and never appends to the log itself"
+# the mutants: fm-emit.sh named only in comments, and a direct append
+m="$(mktemp -d)"
+printf '#!/usr/bin/env bash\n# fm-emit.sh\necho x >> "$FM_ROOT/state/log"\n' > "$m/rc"
+assert_fail "writes_through_emit '$m/rc'" "fm-emit.sh named only in a comment is not a write through it (mutant)"
+printf '#!/usr/bin/env bash\nfm-emit.sh x\necho x >> "$FM_ROOT/state/events.jsonl"\n' > "$m/rc"
+assert_ok "appends_to_log '$m/rc'" "a direct append to the log is caught (mutant)"
+rm -rf "$m"
+
+# The sweep, kept: no pipeline in this suite or ci.test.sh feeds grep -q or
+# -c. Comments are skipped, and so are printf lines that plant a script for
+# ci.sh's own lint to catch - those quote the shape on purpose.
+piped_greps() {
+  local hits
+  hits="$(grep -HnE '\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*[qc]' "$@" || true)"
+  grep -vE "^[^:]*:[0-9]+:[[:space:]]*(#|printf '.*\\\\n')" <<<"$hits" || true
+}
+assert_eq "" "$(piped_greps "$ROOT/tests/reconcile.test.sh" "$ROOT/tests/ci.test.sh")" \
+  "no pipeline in reconcile.test.sh or ci.test.sh feeds grep -q or -c"
+m="$(mktemp -d)"
+p='|'   # built, so these lines do not trip the sweep above
+cat > "$m/t.sh" <<SH
+# x $p grep -q y
+printf '#!/usr/bin/env bash\\nx $p grep -q y\\n' > f
+x $p grep -qE y
+x ${p}grep -c y
+SH
+assert_eq "$m/t.sh:3:x $p grep -qE y
+$m/t.sh:4:x ${p}grep -c y" "$(piped_greps "$m/t.sh")" \
+  "the sweep flags a live pipe into grep -q or -c and skips comments and planted fixtures (mutant)"
+rm -rf "$m"
 
 # Regression fixtures for the complete round-three criteria.
 echo "  corrupt replay cannot authorize mutations"

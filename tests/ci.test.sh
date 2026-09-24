@@ -172,22 +172,42 @@ rm -rf "$t"
 # first: a-waits holds until z-quick's marker is there. Each suite writes
 # its name into a finish log as it ends, so the finish order is read, not
 # inferred, and the report's order is checked against it separately.
-# There is no clock in the rendezvous: a-waits gives up only so that a gate
-# running them one at a time does not hang, and it exits 0 either way, so
-# the order check never depends on whether the two ran together.
-t="$(fixture)"
-cat > "$t/tests/a-waits.test.sh" <<S
+# The order is a handshake, not a race: z-quick logs its name BEFORE it
+# drops the marker, and a-waits logs only after it has seen the marker, so
+# once the two overlap at all "z-quick" is first in the log by
+# construction, however loaded the machine is. The deadline is not part of
+# the order; it only keeps a gate that runs them one at a time from
+# hanging, and a-waits says it gave up, so that case can never read as the
+# expected log. The control below runs exactly that case.
+pool_suites() { # <fixture-dir> <seconds a-waits waits for z-quick>
+  cat > "$1/tests/a-waits.test.sh" <<S
 #!/usr/bin/env bash
-end=\$(( \$(date +%s) + 30 ))
+end=\$(( \$(date +%s) + $2 ))
 until [ -e "$pool_marks/z-done" ]; do
-  [ "\$(date +%s)" -le "\$end" ] || break
+  if [ "\$(date +%s)" -gt "\$end" ]; then
+    echo "a-waits gave up" >> "$pool_marks/finished"
+    exit 0
+  fi
   sleep 0.05
 done
 echo a-waits >> "$pool_marks/finished"
 exit 0
 S
-printf '#!/usr/bin/env bash\ntouch "%s/z-done"\necho z-quick >> "%s/finished"\nexit 0\n' \
-  "$pool_marks" "$pool_marks" > "$t/tests/z-quick.test.sh"
+  printf '#!/usr/bin/env bash\necho z-quick >> "%s/finished"\ntouch "%s/z-done"\nexit 0\n' \
+    "$pool_marks" "$pool_marks" > "$1/tests/z-quick.test.sh"
+}
+# the control: one at a time, a-waits runs alone and cannot see a marker
+# z-quick has not written yet, so the order assertion below has to fail here
+t="$(fixture)"; pool_suites "$t" 1
+rm -f "$pool_marks/finished" "$pool_marks/z-done"
+FM_CI_JOBS=1 FM_ROOT="$t" bash "$ROOT/bin/ci.sh" >/dev/null 2>&1
+assert_eq "a-waits gave up
+z-quick" "$(cat "$pool_marks/finished" 2>/dev/null)" \
+  "one at a time, a-waits gives up before z-quick runs (the control)"
+rm -rf "$t"; rm -f "$pool_marks/finished" "$pool_marks/z-done"
+# 180 seconds is a deadline for a runner starved of CPU, not a timing: on
+# any machine z-quick starts as soon as the pool has a second slot
+t="$(fixture)"; pool_suites "$t" 180
 before="$(find "$t" -print | sort; find "$t" -type f -exec shasum {} + | sort)"
 # The listing above sees what is left; the stamp sees what happened. A path
 # created, rewritten or removed under FM_ROOT during the run changes its own
