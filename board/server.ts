@@ -149,10 +149,35 @@ const github = (): string | null => {
   registryRead = { stamp, github: found };
   return found;
 };
+// The one reading of a pull request number, for every place the board takes
+// one: a positive integer, or the same digits as a string. The page never
+// judges a number itself; it links what this lets through and nothing else.
+const PR_DIGITS = "[1-9][0-9]{0,8}";
+const prNumber = (n: unknown): number | null => {
+  const v = typeof n === "string" && new RegExp(`^${PR_DIGITS}$`).test(n) ? Number(n) : n;
+  return Number.isSafeInteger(v) && (v as number) > 0 ? v as number : null;
+};
 // the pull request's page, or null when there is no number or no repository
-const pullUrl = (repo: string | null, n: unknown): string | null =>
-  repo && (Number.isInteger(n) ? (n as number) > 0 : typeof n === "string" && /^[1-9][0-9]*$/.test(n))
-    ? `https://github.com/${repo}/pull/${n}` : null;
+const pullUrl = (repo: string | null, n: unknown): string | null => {
+  const k = prNumber(n);
+  return repo && k ? `https://github.com/${repo}/pull/${k}` : null;
+};
+// Every #n written anywhere in what /api/state returns - a log summary, a
+// title, a decision's text, a crewman's activity - with its URL. The page
+// links a #n in text through this map only. The page's pattern is the same
+// one, with the same lead: no word character before the '#'.
+const mentioned = (repo: string | null, value: unknown): Record<string, string> => {
+  const out: Record<string, string> = {};
+  if (!repo) return out;
+  const find = new RegExp(`(?<!\\w)#(${PR_DIGITS})(?![0-9])`, "g");
+  const walk = (v: unknown): void => {
+    if (typeof v === "string") { for (const m of v.matchAll(find)) out[m[1]] = pullUrl(repo, m[1])!; }
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") Object.values(v).forEach(walk);
+  };
+  walk(value);
+  return out;
+};
 
 const state = () => {
   const events = readEvents();
@@ -189,7 +214,8 @@ const state = () => {
   const parked = new Set<string>();
   for (const [index, e] of events.entries()) {
     if (!e.task) continue;
-    if (typeof e.pr === "number") pr.set(e.task, e.pr);
+    const n = prNumber(e.pr);
+    if (n) pr.set(e.task, n);
     if (FINAL.has(stage.get(e.task) ?? "")) continue;
     if (e.type === "parked") parked.add(e.task);
     if (e.type === "unparked") parked.delete(e.task);
@@ -456,7 +482,7 @@ const state = () => {
     return { ...d, superseded };
   });
 
-  return {
+  const out = {
     engine: engine(),
     lanes: LANES,
     // The deck holds this many. One number: the server truncates and
@@ -489,6 +515,7 @@ const state = () => {
     recent: events.slice(-40).reverse().map(linked),
     pending: pend.map(linked),
   };
+  return { ...out, pr_urls: mentioned(repo, out) };
 };
 
 // Decisions the captain has been asked for but has not answered.

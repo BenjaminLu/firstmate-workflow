@@ -152,9 +152,9 @@ body{font-size:16px}
 #dropConfirm[hidden]{display:none}#dropConfirm p{margin:0;font-size:16px}
 #taskFeedback{margin:8px 0 0;color:var(--warn);font-size:14px}#taskFeedback:empty{display:none}
 /* T-069: a pull request number is a link to it and keeps the look it had */
-a.pr{text-decoration:none}.log a.pr{color:inherit}
-a.pr:hover,a.pr:focus-visible{text-decoration:underline}
-a.pr:focus-visible,.dcard a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+a[data-pr]{text-decoration:none}a[data-pr]:not(.pr):not(.prlink){color:inherit;font:inherit}
+a[data-pr]:not(.prlink):hover,a[data-pr]:not(.prlink):focus-visible{text-decoration:underline}
+a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
 @media(max-width:420px){.top,.counts,.lanes-wrap,.logwrap{padding-left:12px;padding-right:12px}.log li{grid-template-columns:1fr 2fr}.log li>span:last-child{grid-column:1/-1}}
 .top small,.counts span,section>h2,#deckwrap>h2,#gl{font-size:13px!important}
 </style>
@@ -217,14 +217,13 @@ const GATES = () => [1,2,3,4,5,6,7].map(n => t("gate" + n));
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':'&quot;',"'":'&#39;'}[c]));
 // T-069: a pull request number links to that pull request, at the URL the
 // server derived from the project registry. Without one it is the same text,
-// unlinked: the page never builds a repository URL of its own.
-const prRef = (n, url, cls = 'pr', label = `#${esc(n)}`) =>
-  typeof url === 'string' && url.startsWith('https://github.com/')
-    ? `<a class="${cls}" href="${esc(url)}" target="_blank" rel="noreferrer" draggable="false" data-pr="${esc(n)}">${label}</a>`
-    : `<span class="${cls}">${label}</span>`;
-// a log line's own pull request number, where its summary names it
-const prsIn = (text, e) => !e.pr_url || !Number.isInteger(e.pr) ? esc(text)
-  : esc(text).replace(new RegExp(`(^|[^\\w&])#${e.pr}(?!\\d)`, 'g'), (m, lead) => lead + prRef(e.pr, e.pr_url));
+// unlinked: the page never builds a repository URL of its own. One prRef and
+// one linkPrs, the ship's, so the page and the roster cannot disagree.
+const prRef = (n, url, cls = 'pr', label = `#${esc(n)}`) => SHIP.prRef(n, url, cls, label);
+// the server's pr_urls for this render: every #n anywhere in /api/state
+let prUrls = null;
+// text someone wrote, escaped, with every #n in it linked
+const said = s => SHIP.linkPrs(esc(s), prUrls);
 const localized = d => d?.details?.[lang === 'en' ? 'en' : 'zh-TW'];
 const words = s => lang === 'zh-CN' ? cn(String(s ?? '')) : String(s ?? '');
 const picks = new Map(), drafts = new Map(), sent = new Set();
@@ -241,9 +240,9 @@ function feedbackText() {
   // a refused merge names what was refused, so it cannot be read as news
   // about some other card
   const which = feedback?.key === 'mergeRefused' ? [feedback.decisionId, feedback.task].filter(Boolean).join(' · ') : '';
-  el.textContent = feedback ? [feedback.cry || '', t(feedback.key), which,
+  el.innerHTML = feedback ? [feedback.cry || '', t(feedback.key), which,
     words(localized(feedback.decision)?.outcome || ''), feedback.literal || '', feedback.eventFailed ? t('eventFailed') : '']
-    .filter(Boolean).join(' · ') : '';
+    .filter(Boolean).map(said).join(' · ') : '';
 }
 function pose() {
   const cap = document.getElementById('captain');
@@ -292,6 +291,7 @@ function render(s) {
   const focusChoice = focus?.dataset?.c;
   const selection = focus?.tagName === 'TEXTAREA' ? [focus.selectionStart, focus.selectionEnd] : null;
   latest = s;
+  prUrls = s.pr_urls || null;
   // A refused merge stays up until the same task or pull request is merged
   // afterwards; the server says which refusals have been overtaken.
   const failures = (s.responses || []).filter(d => d.merged?.ok === false && !d.superseded)
@@ -321,7 +321,7 @@ function render(s) {
     : b.kind === 'decision' ? (b.options ? `${b.id} · ${t("optionsN").replace('{n}', b.options)}` : b.id) : '';
   // a task the definitions do not list keeps its id and says the title is
   // missing; it never borrows one
-  const title = task => `<div class="t${task.title ? '' : ' missing'}">${esc(task.title || t("titleMissing"))}</div>`;
+  const title = task => `<div class="t${task.title ? '' : ' missing'}">${said(task.title || t("titleMissing"))}</div>`;
   // a blocker the captain parked or dropped will not arrive by itself, so
   // the card says which it is
   const blocker = b => b.stage === 'parked' ? `${b.id} (${t('parked')})`
@@ -417,12 +417,12 @@ function render(s) {
     const options = ['A','B','C'].map(k => {
       const o = content?.options?.[k];
       return `<button class="opt" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" ${sent.has(d.id)?'disabled':''}>${k} · ${esc(o ? words(o.description) : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'))}</button>` +
-        (o ? `<p class="tradeoffs"><b>${esc(t('pros'))}</b> ${esc(words(o.pros))}<br><b>${esc(t('cons'))}</b> ${esc(words(o.cons))}</p>` : '');
+        (o ? `<p class="tradeoffs"><b>${esc(t('pros'))}</b> ${said(words(o.pros))}<br><b>${esc(t('cons'))}</b> ${said(words(o.cons))}</p>` : '');
     }).join('');
     return `<div class="dcard" id="card-${esc(d.id)}"><div class="meta">${esc(d.id)} · ${esc(d.task || "")}` +
-      `</div><h3>${esc(content ? words(content.title) : d.title || t("waiting"))}</h3>` + links(d) +
-      `<p class="explanation">${esc(content ? words(content.explanation) : t('missingDetails'))}</p>` +
-      DIAGRAM.embed(d.id) + (content ? `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${esc(words(content.before))}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${esc(words(content.after))}</p></section></div>` : '') +
+      `</div><h3>${said(content ? words(content.title) : d.title || t("waiting"))}</h3>` + links(d) +
+      `<p class="explanation">${said(content ? words(content.explanation) : t('missingDetails'))}</p>` +
+      DIAGRAM.embed(d.id) + (content ? `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before))}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after))}</p></section></div>` : '') +
       (d.kind === "merge" && gates.length
         ? `<ul class="gates">${GATES().map((g,i)=>`<li class="${gates[i]?"y":"n"}"><i>${gates[i]?"&#10003;":"&#8211;"}</i>${i+1}. ${g}</li>`).join("")}</ul>`
         : "") +
@@ -442,7 +442,7 @@ function render(s) {
     const content = localized(d), pick = picks.get(d.id);
     return `<details class="dstrip" id="strip-${esc(d.id)}" data-id="${esc(d.id)}"${expanded.has(d.id) ? ' open' : ''}>` +
       `<summary><span class="meta">${esc(d.id)} · ${esc(d.task || '')}</span> ` +
-      `<span class="st">${esc(content ? words(content.title) : d.title || t("waiting"))}</span>` +
+      `<span class="st">${said(content ? words(content.title) : d.title || t("waiting"))}</span>` +
       (pick ? ` <i class="picked">${esc(pick === 'custom' ? t("customChoice") : pick)}</i>` : '') +
       `</summary>${full(d)}</details>`;
   }).join(""));
@@ -484,7 +484,7 @@ function render(s) {
     const t = (e.ts || "").slice(11, 19);
     const text = words(e.summary?.[lang === 'en' ? 'en' : 'zh-TW'] || e.summary?.en || e.type);
     return `<li><time>${esc(t)}</time><span class="who">${esc(e.actor)}</span>` +
-      `<span class="k-${esc(e.type)}">${prsIn(text, e)}</span></li>`;
+      `<span class="k-${esc(e.type)}">${said(text)}</span></li>`;
   }).join("") : `<li class="empty">${esc(t("nothingYet"))}</li>`;
 }
 

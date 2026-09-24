@@ -712,13 +712,19 @@ Labels are the dictionaries' `park` / `unpark` / `drop` / `parked`
 (擱置 / 恢復 / 不做 / 已擱置); zh-CN derives through `tw2cn.tsv`.
 
 **Pull request links (T-069).** Every `#n` the board shows — the top right of
-a lane card, a history row, the decision card's link, a roster row and a log
-line whose summary names the event's own `pr` — links to that pull request, in
-a new tab with `rel=noreferrer`. The server derives the URL from the project
-registry (section 15.2): the project's `github` (`owner/repo`), read through
-`bin/fm-config.sh`'s `fm_project_resolve` and `fm_project_get`, and sends it
-as `pr_url` next to every `pr` it returns (tasks, decisions and their
-responses, outcomes and the log). Until T-054 gives events a project, that is
+a lane card, a history row, the decision card's link, a roster row, and any
+`#n` written in text: a log line, a task title, a decision's text, a
+crewman's activity, the order feedback — links to that pull request, in a new
+tab with `rel=noreferrer`. The one exception is a decision's option label,
+which is a button and cannot hold a link. The server derives the URL from the
+project registry (section 15.2): the project's `github` (`owner/repo`), read
+through `bin/fm-config.sh`'s `fm_project_resolve` and `fm_project_get`. It
+sends it as `pr_url` next to every `pr` it returns (tasks, decisions and
+their responses, outcomes and the log), and as `pr_urls`, a map from every
+`#n` written anywhere in `/api/state` to its URL. A pull request number has
+one reading, the server's: a positive integer or the same digits as a
+string. The page links a number only where the server gave it a URL, and
+never judges one itself. Until T-054 gives events a project, that is
 the default project; the server does not pass `FM_PROJECT` on, so the shell
 that started it cannot change it. It reads the registry again whenever
 `config.yaml` changes. No registry, no `github`, or a registry
