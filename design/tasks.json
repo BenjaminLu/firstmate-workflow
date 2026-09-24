@@ -1202,7 +1202,8 @@
       "milestone": "M3",
       "bootstrap": false,
       "depends_on": [
-        "T-046"
+        "T-046",
+        "T-056"
       ],
       "title": "the project on events, decisions and pull request sync",
       "scope": [
@@ -1221,7 +1222,8 @@
       ],
       "acceptance": [
         "Implements design.md section 15.4 for the log and decisions. fm-emit.sh accepts --project, validates it against the registry (exit 65 when unknown) and writes a top-level `project` field; an event without it belongs to the default project, and existing log lines stay valid. The new event types spec_pinned and spec_repinned are accepted and listed in section 5.1.",
-        "fm-decide.sh records `project` in the request and the stored response. fm-run.sh keeps D-<task-number> for the default project and, for any other project, allocates the next free numeric decision id under a lock; two projects with the same task id never share a decision file.",
+        "fm-decide.sh records `project` in the request and the stored response. Implements the decision ids of design.md sections 15.4 and 15.10 point 1: a merge card's id is derived from (project, task) with no lock, D-<task-number> for the default project as today and D-<project>-<task-number> for any other, so two projects with the same task id never share a decision file; every other card's id is allocated by fm-decide.sh under the decision-id lock from D-1000 up, so it can never equal a derived id; fm-decide.sh accepts both shapes and still rejects anything else. A record owns a derived id only when its kind is merge and its task and project (absent means default) are the ones the id derives from; fm-run.sh applies that test to state/pending/<id>.json, state/decisions/<id>.json and state/runtime/archived-pending/<id>.json before it says a card is waiting or answered or raises one, instead of skipping in silence. fm-decide.sh --renumber <id> moves an answered record, or an archived card under state/runtime/archived-pending/ (which nothing awaits), at or below D-999 that does not own its id to the next free id from D-1000 under the decision-id lock together with every store keyed by that decision id (design.md section 15.10): state/pending/<id>.json, state/decisions/<id>.json, state/runtime/archived-pending/<id>.json (an archived card stays archived under the new id), state/decision-details/<id>.json, the rendered pages board/public/diagrams/<id>.*, the authored drawings design/diagrams/<id>.*, and the watcher's state/session/observed/<id>.json, state/session/acknowledged/<id>.json and state/session/watch-<id>.json with its watch directory's receipts — the list design.md section 15.10 derives from a stated search, which the pull request re-runs and quotes. It moves an untracked authored drawing and, for a tracked one, stops before anything moves and names the file, since that rename lands through a pull request. It carries the observed and acknowledged receipts to the new id, rewriting the observation receipt's id and the acknowledgement record's own id field and recomputing the acknowledgement's observation hash, writing the acknowledgement under state/session/.ack.lock as fm-session.sh ack does, in the order copy receipts, rename the record, delete the old receipts, so a continuous watch never observes the old answer a second time; it refuses and names the watch while state/session/watch-<id>.json belongs to a live process, and renames a dead one with its decision and receipts rewritten. It rewrites the record's id and its identity to decision:<new>, and appends {old, new, task, ts} to state/decision-renumbered.json before any file moves, so an interrupted run is finished under the same new id; a second run on the same id changes nothing. When fm-run.sh finds an answered foreign record at its derived id it renumbers it and requests its own card there in the same turn; a foreign record still pending is named and left in place, and no card is raised until it is answered.",
+        "Tests written to fail first: the same task id in two projects yields two distinct merge-card ids and files; an allocated id is at least D-1000 and never equals a derived one; with an answered hand-made record for another task (as D-056 for T-043) under a task's derived id, fm-run.sh moves it to D-1000 or above with its details, records the move in state/decision-renumbered.json and raises the task's own merge card under the derived id; a second fm-run.sh turn moves nothing and raises no second card; a pending foreign record under a derived id is named, not moved, and no card is raised; a foreign record under state/pending/ is not reported as the task waiting on the captain; a record already renumbered by hand is left alone; with an untracked authored drawing design/diagrams/D-<n>.en.html and .zh-TW.html belonging to the foreign record, after the move those files sit under the new id and fm-diagram.sh rendering the owning task's card under D-<n> no longer serves the old record's drawing; a tracked authored drawing under the old id stops the move with the file named and nothing moved; a renumber interrupted after its map entry is finished by the next run under the same new id; with observed and acknowledged receipts for the foreign record under the old id, after the move they sit under the new id (still acknowledged), a new answer written under the old id is observed by fm-session.sh's watcher and listed by fm-session.sh status as unacknowledged, and the old answer is not observed a second time; with a live watch-<old>.json, --renumber refuses, names the watch and moves nothing; after the move the acknowledgement record under the new id has id equal to the new id; with an unanswered foreign card under state/runtime/archived-pending/ at a task's derived id, fm-run.sh moves it to state/runtime/archived-pending/<new>.json with its id and identity rewritten, records the move in the map and raises the task's own merge card under the derived id, while an archived card that owns its id is left in place and does not block the task's new card.",
         "fm-sync-prs.sh polls every registered project's github repository (gh --repo) and emits with that project; fm-merge.sh takes --project and merges on that project's repository. (project, pr) is the key: a pull request number in one project never matches an event of another.",
         "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
         "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
@@ -1351,7 +1353,8 @@
       "milestone": "M3",
       "bootstrap": false,
       "depends_on": [
-        "T-051"
+        "T-051",
+        "T-056"
       ],
       "title": "role prompts carry the project's design from the engine side",
       "scope": [
@@ -1367,7 +1370,7 @@
       ],
       "acceptance": [
         "Implements design.md section 15.7. Worker and reviewer prompts carry, from the engine side: the role skill, the pinned spec, the project's design file at the pin's commit bounded in size with any truncation stated in the prompt, the project's base and its pinned T-043 contract (every field), and the absolute path of the checkpoint helper in the frozen code tree.",
-        "The worker and reviewer skills stop pointing at repository-relative files (design/design.md, design/tasks.json, bin/fm-checkpoint.sh) and refer to the design, scope and checkpoint command in the prompt; they stay portable English with no vendor-specific syntax. The firstmate skill says firstmate runs in the engine root and names --project on every script it calls.",
+        "The worker and reviewer skills stop pointing at repository-relative files (design/design.md, design/tasks.json, bin/fm-checkpoint.sh) and refer to the design, scope and checkpoint command in the prompt; they stay portable English with no vendor-specific syntax. The firstmate skill says firstmate runs in the engine root and names --project on every script it calls, with one exception from design.md section 15.10 point 2: its routine dispatch step, after a green light and whenever a run ends, calls fm-dispatch.sh with no --project so free slots are filled fairly across every registered project, and it names --project for dispatch only when the captain asks for one project's work. The firstmate skill also says every card firstmate raises by hand takes an id allocated from D-1000 up (design.md section 15.10 point 1), never one at or below D-999, which belongs to a merge card.",
         "The self project's prompt has the same shape; the reviewer still receives the diff, the spec and the design and never the worker's reasoning (R2).",
         "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
         "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
@@ -1380,7 +1383,8 @@
       "bootstrap": false,
       "depends_on": [
         "T-050",
-        "T-051"
+        "T-051",
+        "T-056"
       ],
       "title": "dispatch, run and session across projects",
       "scope": [
@@ -1395,6 +1399,8 @@
       "acceptance": [
         "fm-dispatch.sh and fm-run.sh take --project, read that project's task list from the registry, resolve depends_on within the project and pass --project to every script they call. The concurrency limit stays one global number across all projects. Dispatch to a non-default project runs fm-project.sh verify first and dispatches nothing on its refusal.",
         "The greenlit check matches the project: a greenlit event for one project authorizes nothing in another. fm-session.sh status reports live work grouped by project.",
+        "Implements the script half of design.md section 15.10 (points 1-3). Live runs are counted by (project, task) across every project against the one global limit, under a dispatch slot lock held only while fm-dispatch.sh recounts live runs, takes free slots and emits dispatched, so two dispatches started at once never exceed the limit; fm-project.sh verify, the task lists and the greenlit check run before the lock is taken. fm-dispatch.sh with no --project fills free slots across every registered project one at a time, each to the project with a ready, greenlit, verified task and the fewest live runs, ties to the name that sorts first, and with only the default project registered behaves exactly as today; --project dispatches only that project within the same limit and lock. fm-run.sh notes the project's base commit before gating and, under a per-project lock, requests a merge card only when that project's merge turn is free and base is still that commit; the turn is freed by a send back or hold, and for a merge only once the decision record's merge outcome is merged or failed, never on the answer alone. Otherwise it requests none and says whether the card waits for a pending or running merge or for a regate on the new base; a merge card or merge in one project never holds back another project's.",
+        "Tests with two registered projects live at the same time, written to fail first: runs in both projects are in flight together up to the limit and a shared task id in both is counted twice, not once; two concurrent dispatch calls never exceed the limit; dispatch with no --project splits free slots fairly and hands a freed slot to the project with fewer live runs; with a merge card pending in one project, fm-run.sh requests a merge card in the other project but not a second one in the first; with a merge answered but its outcome not yet recorded, fm-run.sh still requests no second card in that project, and once base has moved it requests none for a branch gated against the old base.",
         "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
         "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
         "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
@@ -1405,7 +1411,8 @@
       "milestone": "M3",
       "bootstrap": false,
       "depends_on": [
-        "T-047"
+        "T-047",
+        "T-056"
       ],
       "title": "the board shows which project",
       "scope": [
@@ -1422,6 +1429,8 @@
       "acceptance": [
         "Implements the board half of design.md section 15.4. Replay keys tasks, pull requests and decisions by (project, id), so two projects with the same task id never merge into one lane card. Lane cards, crew bubbles and decision cards show a project chip; ?project= filters and its absence shows every project. Merge cards link the pull request on that project's repository.",
         "Chip labels come from the UI dictionaries; a project name is data and is not translated. With only the default project in the log the board renders as it does today.",
+        "Implements the board half of design.md section 15.10 (points 3 and 4). Without ?project= the board shows live work and decision cards of several projects at the same time; the deck lists every pending card of every project in one list, oldest request first, and its pending count covers all projects or only the filtered one. Answering one card never changes, removes or reorders another project's pending card. The merge route follows design.md section 5.2's outcome contract: it passes the card's --project to fm-merge.sh, publishes the response with merge running, runs the helper in the background without blocking the server, answers at once, and rewrites the stored record's merge to merged or failed (with the reason) when the helper exits; a failed merge is never retried. A second merge in the same project while one runs is refused with 409 before anything is published or emitted, leaving that card pending; another project's merge runs alongside it. The board accepts both decision-id shapes of section 15.4 (D-<n> and D-<project>-<n>) wherever it reads or answers a decision, and resolves an event naming a renumbered decision id through state/decision-renumbered.json, including the outcome identity: a decision_made event from before the move is keyed decision:<new>, so the owning task's later answer under the old id gets an identity of its own and is not swallowed as already seen. A record left saying merge running is recovered by the board, the only writer of merge, as design.md section 5.2 says: the merge marker records the decision id and the helper's pid and start time; on start and on every poll the board leaves the record running while that helper is alive, and otherwise reads the outcome from a merged event for the card's (project, pr) after the response, then from GitHub's pull request state (MERGED makes it merged; OPEN or CLOSED makes it failed, never retried); if GitHub cannot be read the record stays running, the card says the outcome is unknown and the project's turn stays held.",
+        "Tests with two registered projects live at the same time, written to fail first: both projects' lane cards, crew bubbles and pending decision cards (including one merge card each) render together with their chips; answering one project's card leaves the other's pending and in place; while one project's merge helper is still running, the board still serves, that card's record says merge running, and the other project's merge completes; a second merge in the first project is refused with no response file and no decision_made event; the record says merged or failed once the helper exits; a D-<project>-<n> card is listed and answerable; with a renumbering map entry D-<n> -> D-<m>, an old decision_made event for D-<n> and a new answer under D-<n> produce two distinct outcome identities. Recovery tests, also written to fail first, with a gh stub that answers in gh's real JSON shape: a record saying merge running whose helper pid is dead becomes merged after a board restart when the log has the merged event, merged when only GitHub says MERGED, failed when GitHub says OPEN, and stays running and marked unknown when gh fails; a record whose helper is alive is left running; each resolved record frees its project so a next merge there is no longer refused.",
         "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
         "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
         "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
@@ -1434,7 +1443,8 @@
       "depends_on": [
         "T-052",
         "T-053",
-        "T-054"
+        "T-054",
+        "T-056"
       ],
       "title": "the first external project, proved end to end",
       "scope": [
@@ -1445,10 +1455,32 @@
       "acceptance": [
         "A fixture drives a second registered project end to end with the mock adapter and the gh stub: a local bare repository stands in for the target, sync and verify pass against stubbed GitHub answers in the shapes GitHub returns, one task is pinned, worked, gated, reviewed and carded, and the target's tree afterwards contains only the task's scoped files and none of firstmate's artifacts.",
         "The same fixture runs one task of the self project in the same log and proves the two are kept apart on events, decisions and pins.",
+        "Proves design.md section 15.10 end to end: the self project's task is dispatched and still live, not merged, when the external project's task is dispatched, and both are in flight together within the one global limit; the external task is pinned, worked, gated, reviewed and carded while the self task is live; both projects' merge cards are pending at the same time; answering the external card leaves the self card pending, and nothing project-scoped (pins, worktrees, checkout, guard, decisions) of one project is read or written by the other's run.",
         "README.md explains registering a project: the registry entry, what the target needs (section 15.6), and that private projects wait for the section 15.8 decision. Section 15's status line says the external model is implemented.",
         "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
         "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
         "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
+    },
+    {
+      "id": "T-056",
+      "milestone": "M3",
+      "bootstrap": false,
+      "depends_on": [
+        "T-045"
+      ],
+      "title": "design: the board dispatches to several projects at the same time",
+      "scope": [
+        "design/design.md",
+        "design/tasks.json"
+      ],
+      "acceptance": [
+        "The captain asked that the external model explicitly guarantee firstmate can run work in several projects at the same time from one board. Section 15 and T-053/T-054/T-055 imply it (one global concurrency limit, per-project greenlit, project chips) but never state it as a requirement or prove it. This task is design only and changes no code. Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+        "Add to section 15 a subsection on concurrency across projects that settles, with reasons: (1) runs in different projects are live at the same time up to the one global limit, and nothing project-scoped (pins, worktrees, clones, panes, the guard, decisions) is shared or locked across projects; (2) whether the global limit needs a per-project share so one project cannot starve another, and the default; (3) merge cards: two projects' merge cards may be open at once because they target different repositories, while within one project merges stay one at a time because each rebases the next; (4) how the captain sees and answers several projects' cards together on the board.",
+        "Amend the acceptance of T-053 (concurrent dispatch across two projects, including a test with two registered projects live at once), T-054 (the board shows several projects' live work and decision cards at the same time, with a test), and T-055 (the end-to-end proof runs a task in the external project while a self-hosted task is live) so each states its part of that subsection. Keep each task's existing scope unless a file is truly needed; if one is, add it and say why in the design.",
+        "If the design cannot be settled without a captain decision (for example per-project fairness), say which decision in the design and stop there rather than guessing.",
+        "Evidence for this task is the pull request's required GitHub check (which includes the design/tasks.json–design.md agreement check) and the seven gates; the worker does not run tests itself.",
+        "Stay inside this scope; this task edits no code."
       ]
     }
   ]

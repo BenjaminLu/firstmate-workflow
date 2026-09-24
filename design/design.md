@@ -236,6 +236,45 @@ Awaiters only observe the record; they do not emit a second event. Repeating
 the same response returns the stored outcome, while a conflicting response
 is rejected. Failed merges are recorded and never automatically retried.
 
+**The merge runs after the response, not inside it** (section 15.10 point 3;
+the board implements it in T-054). For choice A on a merge card the board
+first checks the card's project: if a merge in that project is already
+running it refuses with `409`, publishes nothing and leaves the card pending.
+Otherwise it publishes the response with `merge: "running"`, emits
+`decision_made`, starts `fm-merge.sh --project` in the background under the
+project's merge marker, and answers the POST at once. When the helper exits,
+the board rewrites the stored record's `merge` to `"merged"` or to
+`"failed"` with the helper's reason, and removes the marker; `fm-merge.sh`
+still emits `merged` itself. The outcome is recorded in the decision record,
+not in the POST's response; a failed merge is recorded and never retried,
+exactly as before. Repeating the same response returns the stored record with
+whatever `merge` it holds by then.
+
+**A `running` merge whose outcome was never written is recovered by the
+board.** The board is the only writer of `merge`, so it is the one that
+repairs it; `fm-reconcile.sh` does not touch decision records. The helper is
+started detached, and the project's merge marker records the decision id,
+the helper's pid and its start time. On start, and again on every poll while
+any record says `running`, the board reads each such record's marker:
+
+- if that pid is alive and is still the helper it started (same start time),
+  the merge is still going: the board leaves the record `running` and waits
+  for that pid to exit, then reads the outcome as below;
+- otherwise the helper is gone without a word, and the outcome is read, never
+  guessed: a `merged` event in the log for the card's `(project, pr)` after
+  the response makes it `merged`; failing that, `gh pr view --repo <the
+  project's github> <pr> --json state` saying `MERGED` makes it `merged`
+  (and `fm-reconcile.sh` repairs the missing event from GitHub, as it already
+  does); `OPEN` or `CLOSED` makes it `failed` with the reason "the merge
+  helper stopped before recording an outcome", never retried;
+- if GitHub cannot be read, the record stays `running` and the board shows
+  the card as "merge outcome unknown" by name; the project's turn stays held,
+  because freeing it on a guess could card a branch against a `base` that has
+  already moved. The next poll tries again.
+
+A board that is down starts no merges, so a turn held while it is down holds
+back nothing that could have run.
+
 Await mode uses `bun run bin/watch-decisions.ts` (`fs.watch`) when bun and the
 watcher script are present, and a one-second poll otherwise. Wake latency must
 be measured, not inferred from the watcher mechanism. **No `fswatch` dependency.**
@@ -1177,15 +1216,16 @@ gates, and the dispatcher cannot dispatch itself.
 |---|---|---|
 | T-045 | design: firstmate drives other repositories from one external installation | T-043 |
 | T-046 | the project registry and the two roots | T-043, T-045 |
-| T-047 | the project on events, decisions and pull request sync | T-046 |
+| T-047 | the project on events, decisions and pull request sync | T-046, T-056 |
 | T-048 | fm-project.sh: managed clones, target verification and the guard | T-046 |
 | T-049 | spec pins: gate 4 reads a pinned scope, not the branch | T-047, T-048 |
 | T-050 | project-aware gates 1–3 and 5–7 | T-049 |
 | T-051 | the worker and the reviewer in a target checkout | T-049 |
-| T-052 | role prompts carry the project's design from the engine side | T-051 |
-| T-053 | dispatch, run and session across projects | T-050, T-051 |
-| T-054 | the board shows which project | T-047 |
-| T-055 | the first external project, proved end to end | T-052, T-053, T-054 |
+| T-052 | role prompts carry the project's design from the engine side | T-051, T-056 |
+| T-053 | dispatch, run and session across projects | T-050, T-051, T-056 |
+| T-054 | the board shows which project | T-047, T-056 |
+| T-055 | the first external project, proved end to end | T-052, T-053, T-054, T-056 |
+| T-056 | design: the board dispatches to several projects at the same time | T-045 |
 
 ---
 
@@ -1333,11 +1373,16 @@ recovery path in section 12.
   stays valid. Every event about a non-default project carries it. `pr` stays
   a number; `(project, pr)` is the key.
 - **Decisions** carry `project` in the request and the response. Ids stay
-  global `D-<n>`. `fm-run.sh`'s derivation of `D-<task-number>` stays for the
-  default project only; for any other project it allocates the next free
-  number under a lock, because two projects can both have a `T-004`. Merge
-  cards name the project and link the pull request on the project's GitHub
-  repository.
+  global, and there are exactly two ways to make one, which never meet
+  (section 15.10's decisions row gives the reasons). A merge card's id is
+  derived from `(project, task)` with no lock: `D-<task-number>` for the
+  default project, as today, and `D-<project>-<task-number>` for any other,
+  because two projects can both have a `T-004`. Every other card's id is
+  allocated by `fm-decide.sh` under the decision-id lock, from `D-1000` up.
+  Records below `D-1000` that do not own their id are renumbered into that
+  space once, with everything keyed by the id and a recorded map (15.10).
+  Merge cards name the project and link the pull request on the project's
+  GitHub repository.
 - **`fm-sync-prs.sh`** polls every registered project's repository and writes
   what it finds with that project.
 - **The board** shows a project chip on lane cards, crew bubbles and decision
@@ -1501,3 +1546,344 @@ as its own default project, still drives itself with no change to any caller.
 8. T-053 dispatch, run and session across projects.
 9. T-054 the board shows which project.
 10. T-055 a fixture target driven end to end, and the README for registering one.
+
+T-047, T-052, T-053, T-054 and T-055 each carry their part of section 15.10
+in their acceptance and depend on T-056, which wrote that section and changed
+no code.
+
+### 15.10 Several projects at the same time
+
+The captain runs work in several projects at once from one board. This is a
+requirement, not a consequence of the rest of section 15, and T-053, T-054 and
+T-055 each prove their part of it with a test that has two registered projects
+live at the same time.
+
+**1. Runs in different projects are live together, up to the one global
+limit.** `config.yaml`'s `concurrency` stays one number for the whole
+installation, counted over every project: a run in `example-app` and a run in
+`firstmate-workflow` each take one slot of the same limit. Nothing
+project-scoped is shared or locked across projects:
+
+| Thing | Scoped to | Why it cannot collide |
+|---|---|---|
+| spec pins | `state/pins/<project>/<task>/` | the path carries the project |
+| worktrees | each project's own worktree root (15.3) | cleanup removes only a direct child of that project's root |
+| checkout | the engine root, or `state/projects/<name>/repo` | one clone per project; its fetch and prune never touch another |
+| guard | `core.hooksPath` in each checkout's local config, protecting that project's `base` | a hook runs in the repository it guards and nowhere else |
+| panes and runs | one tab and one owned pane per run actor (section 11) | the locked run counter makes actors unique across projects |
+| decisions | one card per request, carrying `project` | merge-card ids derive from `(project, task)`; every other id is allocated from `D-1000` up (below) |
+| merges | the project's own `github` repository | see point 3 |
+
+The decisions row was checked against both allocators, because today they
+share one space and do collide. `fm-run.sh` derives `D-<task digits>` with no
+lock, and cards firstmate raised by hand took numbers from the same `D-<n>`
+range. On 2026-09-24 `state/decisions/` (runtime, not in git) held these
+records under ids they do not own by the ownership rule below — each is a
+choice card, or a card raised for a task other than the one its id derives
+from:
+
+| Id | Raised for | Id | Raised for |
+|---|---|---|---|
+| D-034, D-035 | not a merge card for T-034, T-035 | D-048 | T-041 |
+| D-038 | T-017 | D-049 | T-045 |
+| D-039 | T-018 | D-050, D-051 | T-043 |
+| D-040, D-041 | T-034 | D-052 | T-042 |
+| D-042 | T-036 | D-053, D-054 | T-044 |
+| D-043 | T-037 | D-055 | T-040 |
+| D-045 | T-039 | D-056 | T-043 |
+| D-046 | T-035 | D-057 | T-045 |
+| D-047 | T-040 | D-334, D-335, D-338 | T-034, T-035, T-017 (choice cards) |
+
+So every task from T-046 to T-057 — T-046, T-047 and T-056 among them — has
+its merge-card id taken, and T-334, T-335 and T-338 would have theirs taken
+too. D-034 and D-035 hold T-034's and T-035's own ids without being their
+merge cards; they fail the ownership test like the rest and are moved with
+them. Today `fm-run.sh` finds the file, takes it for its
+own card and silently raises none (`bin/fm-run.sh`, the `[ -f
+state/decisions/$id.json ] && continue` line). This table is a snapshot, not
+the rule: the remedy below reads ownership from each file, so a record added
+later is caught the same way. The fix keeps one scheme per kind, puts them in
+spaces that cannot meet, and moves every record already in the wrong space:
+
+- **merge cards are derived, never allocated.** `(project, task)` is unique,
+  so the id needs no lock: `D-<task digits>` for the default project (today's
+  id, so self-hosting and `state/decision-details/<id>.json` are unchanged)
+  and `D-<project>-<task digits>` for any other. A project name is
+  `[a-z0-9-]` (15.2) and task digits never contain `-`, so the id splits at
+  its last `-` into one project and one task; it cannot equal a default id,
+  which has a single `-`, or a `D-SK-<n>` skill card, whose `SK` is upper case.
+- **every other card is allocated, never derived.** `fm-decide.sh` takes the
+  next free number under the decision-id lock, starting at `D-1000`. Task ids
+  are `T-` and three digits, so a derived default id is at most `D-999` and
+  allocation can never reach one.
+- **an existing file is not proof of ownership.** A record owns a derived id
+  only when its `kind` is `merge` and its `task` and `project` (absent means
+  the default project) are the ones the id derives from. `fm-run.sh` applies
+  that test to `state/pending/<id>.json`, `state/decisions/<id>.json` and
+  `state/runtime/archived-pending/<id>.json` before it says a card is
+  waiting or already answered, or raises one.
+- **a record in the wrong space is moved out of it, once, with everything
+  keyed by its id.** Every record at or below `D-999` that does not own its
+  id is renumbered into the allocated space: `fm-decide.sh --renumber <id>`
+  takes the next free number from `D-1000` under the decision-id lock and
+  moves every store keyed by a decision id, not only the record. The list of
+  stores comes from the search below, not from memory, and names nine:
+  `state/pending/<id>.json`, `state/decisions/<id>.json`, the archived cards
+  `state/runtime/archived-pending/<id>.json`,
+  `state/decision-details/<id>.json`, the rendered pages
+  `board/public/diagrams/<id>.*`, the authored drawings
+  `design/diagrams/<id>.*`, and the watcher's three,
+  `state/session/observed/<id>.json`, `state/session/acknowledged/<id>.json`
+  and `state/session/watch-<id>.json` (with the watch directory it points at,
+  whose `observed/<id>.json` and `result.json` name the id). Two identities
+  are keyed by it as well: the record's stored `identity`, `decision:<id>`,
+  and the `data.decision` of events in the log. The authored drawings and the
+  watcher's stores are the two that hurt when missed. `bin/fm-diagram.sh`
+  serves an authored drawing whose stem is the decision before one whose stem
+  is the task, so a drawing left at the old stem would be shown on the owning
+  task's new card. On 2026-09-24 `design/diagrams/` held authored `D-047`,
+  `D-049`, `D-050` and `D-051` (the choice drawings for T-040, T-045 and
+  T-043), all untracked; left there, T-047's merge card would show T-040's
+  board layout. An untracked authored drawing is moved. A tracked one is not
+  renamed by the script, because renaming a tracked file in the engine
+  checkout is a change to `base` outside a pull request: `--renumber` stops
+  before moving anything, names the file, and the rename lands through a
+  pull request, after which `--renumber` completes.
+  The watcher (`bin/fm-herdr.py`, behind `fm-session.sh`) skips for ever an
+  id that already has `state/session/observed/<id>.json`, and lists as
+  unacknowledged every observation without a matching
+  `state/session/acknowledged/<id>.json`. The local checkout holds both for
+  every id in the table above. Left behind, they would make the owning
+  task's answer under its derived id — the captain's merge answer on T-056's
+  own `D-056` card — never observed, so it never wakes firstmate. So
+  `--renumber` carries both to the new id. It rewrites the observation
+  receipt's `id`; it rewrites the acknowledgement record's own `id` field as
+  well as recomputing its `observation` hash over the rewritten receipt, and
+  it writes the acknowledgement under `state/session/.ack.lock`, the lock
+  `fm-session.sh ack` takes, so an `ack` running at the same moment neither
+  writes a receipt for the old id after the move nor reads a half-written
+  one. An observation not yet acknowledged stays unacknowledged under the
+  new id. It copies them first, then renames the record, then deletes the old
+  receipts, so a continuous watch polling in between sees an observation for
+  whichever name the record has and never observes T-043's old answer a
+  second time. A `state/session/watch-<id>.json` whose process is still live
+  (the same `process_matches` test the watcher uses) is waiting on that id:
+  `--renumber` refuses, names the watch, and moves nothing until it is
+  stopped. A dead one is renamed to `watch-<new>.json` with its `decision`
+  and its directory's receipts rewritten, so `fm-session.sh status` does not
+  report T-043's answer as a watch on `D-056`.
+  Not stores and not moved: `state/skill-updates/` is keyed by `SK-<n>`,
+  outside the renumbered range; the board's `.<id>.<uuid>.tmp` in
+  `state/decisions/` exists only for the length of one write, which is
+  renamed onto the record; the browser's `seen` set is in memory and keys
+  by identity, covered below.
+
+  The search, so a reader can re-run it from the repository root:
+
+  ```
+  grep -rnE 'state/(pending|decisions|decision-details|session)|(public|design)/diagrams|watch-|observed|acknowledged|decision:' bin board skills tests
+  grep -rhoE '(state|board/public|design)/[A-Za-z0-9_./-]*' bin board skills tests | sort | uniq -c
+  ```
+
+  The first finds every place that builds a path or identity from a
+  decision id. The second lists every runtime path the code names at all, so
+  a store under an unexpected directory would show up; each was read to see
+  what keys it. On 2026-09-24 the hits were:
+
+  | Where | What is keyed by the decision id |
+  |---|---|
+  | `bin/fm-decide.sh` | `state/pending/<id>.json` written, `state/decisions/<id>.json` awaited |
+  | `bin/watch-decisions.ts` | `state/decisions/<id>.json` awaited (not a hit itself: `fm-decide.sh` hands it the directory and the id) |
+  | `bin/fm-run.sh` | `state/pending/`, `state/decisions/`, `state/decision-details/<id>.json` |
+  | `bin/fm-diagram.sh` | reads `state/pending/` or `state/decisions/<id>.json`; authored `design/diagrams/<id>.*` beats the task stem; writes `board/public/diagrams/<id>.*` |
+  | `bin/fm-herdr.py` | `state/session/observed/<id>.json` (`watch_child`), `state/session/acknowledged/<id>.json` (`acknowledge`, `unacknowledged`), `state/session/watch-<id>.json` and its directory (`watch_start`, `watch_stop`, `status`) |
+  | `bin/fm.sh` | `state/decisions/D-SK-<n>.json` for self-update, outside the renumbered range |
+  | `board/server.ts` | `state/pending/<id>.json`, `state/decisions/<id>.json` and its `.tmp`, `identity` `decision:<id>`, `decision_made` events by `data.decision` |
+  | `board/public/index.html` | `seen` set and the order animation, keyed by `identity` |
+  | `skills/firstmate/SKILL.md` | the same stores named for firstmate: `design/diagrams/<decision>.*`, `board/public/diagrams/`, `state/decision-details/<decision-id>.json`, `fm-session.sh ack --decision <id>` |
+  | `skills/firstmate/clear-zombie-workers/SKILL.md` | `state/runtime/archived-pending/<id>.json`: step 6 moves a stale pending card there by hand, under its own name (found by the second search, not the first) |
+  | `tests/` | fixtures of those same stores (`decide`, `decisions`, `diagram`, `board`, `session`, `selfupdate`, `i18n`, `e2e-loop`, `e2e/board.spec.ts`, `e2e/fixture.ts`); none names another |
+  | `tests/dispatch.test.sh`, `skills/worker/SKILL.md` | the word "observed" in prose; not a store |
+
+  The other runtime paths the second search listed on 2026-09-24, each read
+  where it is written, and what keys them: by task, `state/worktrees/<task>`
+  and its `.pid`, `state/dispatch/<task>.log` (`fm-dispatch.sh`),
+  `state/rescued/<task>-<stamp>` (`fm-worker.sh`, clear-zombie-workers) and
+  `state/unsent/<task>-…`; by run actor, `state/runs/<actor>/`,
+  `state/runtime/archived-runs/`, `state/runtime/run-*.sh` and
+  `state/runtime/*.pid` (dispatch-crew and clear-zombie-workers skills) and
+  `state/.crew-status-throttle/<actor>` (`fm-emit.sh`); by task and round,
+  `state/reviews/<task>-r<n>.log`; by a fresh temporary name,
+  `state/snapshots/code-*` (`fm-herdr.py` `snapshot`); by nothing, the
+  single files `state/events.jsonl`, `state/.events.lock`,
+  `state/session/board.log` and `state/session/project-setup.log`; and by
+  `SK-<n>`, `state/skill-updates/`. `state/merge-calls` and `state/e2` exist
+  only in tests (a stub's log and a temporary copy of the event log). That
+  is every path the search printed; nothing under `state/runtime/` other
+  than the four named was read, because the code names no other. A store
+  added later that is keyed by a decision id joins `--renumber`'s list in
+  the same pull request that adds it.
+  The record's `id` becomes
+  the new id and its stored `identity` becomes `decision:<new>`. The map
+  entry `{old, new, task, ts}` is appended to
+  `state/decision-renumbered.json` before any file moves, so an interrupted
+  renumber is finished by the next run under the same new id, never repeated
+  under a second one. The event log is append-only and keeps the old id; a
+  reader that pairs an event with a record resolves the old id through that
+  map. That includes the board's outcome identity: an old `decision_made`
+  event for `D-056` is T-043's answer, and the board (T-054) keys it as
+  `decision:<new>` through the map, so the owning task's later answer under
+  `D-056` gets an identity of its own. Until T-054 lands the board keys
+  outcomes by the raw id, so the two answers share `decision:D-056` and the
+  board's `seen` set swallows the second one's animation; no card, answer or
+  merge is affected, only that animation. The watcher is not part of this
+  gap: its receipts moved with the record, so the second answer is observed
+  under `D-056` and listed as unacknowledged. Renumbering moves only a
+  record that has a response. A foreign record still pending is left where
+  it is, because an `--await` on its id would never wake; `fm-run.sh` names
+  it and raises nothing until the captain answers it, and then moves it on
+  its next turn. An archived card is the one exception: firstmate moves a
+  pending card to `state/runtime/archived-pending/` only for a long-finished
+  task, after clearing its processes (clear-zombie-workers step 6), so
+  nothing awaits its id and no answer will ever come. A foreign archived
+  card at a derived id is therefore renumbered without a response — moved to
+  `state/runtime/archived-pending/<new>.json` with its `id` and `identity`
+  rewritten and its details and drawings moved with it — rather than left to
+  share the id with the owning task's new pending card. Left in place it
+  would escape the "named and left in place" rule, because it is not under
+  `state/pending/`, and `fm-run.sh` would raise the owning card under an id
+  that still names another task's card on disk. An archived card that owns
+  its id is the task's own stale merge card; it is left where it is and
+  does not block a new card for that task. After the move the derived id is free and the owning task's
+  card is raised there, so the task gets its card rather than a report.
+- **who moves them, before and after T-047.** Once T-047 lands, `fm-run.sh`
+  does it: finding an answered foreign record at its derived id, it calls
+  `fm-decide.sh --renumber` for that id and requests its own card in the same
+  turn. Before T-047 lands, nothing in `bin/` knows to, and T-046, T-047 and
+  T-056 need cards before then — T-056's own id, `D-056`, is held by T-043's
+  record. So firstmate renumbers by hand now, before the next merge card is
+  due: every answered record in the table above and every foreign card under
+  `state/runtime/archived-pending/` at or below `D-999`, by the same steps —
+  every store listed above, the untracked authored drawings in
+  `design/diagrams/` and the watcher's `state/session/observed/` and
+  `acknowledged/` receipts included (the acknowledgement's `id` and hash
+  rewritten under `.ack.lock`), in the same copy, rename, delete order, with
+  no live watch on the id — and into the same map, taking numbers from `D-1000` up. `--renumber` then finds
+  those done and stops at the map, so doing it by hand first costs nothing
+  later. Until T-047 lands, firstmate also checks each task's derived id by
+  the ownership test before it tells the captain a card is waiting.
+- **hand-raised cards use the allocated space from now on.** Until T-047's
+  allocator exists firstmate picks the next unused number from `D-1000` up
+  itself; `fm-decide.sh` already accepts that shape. After T-047 it lets
+  `fm-decide.sh` allocate. It never raises a card by hand at or below
+  `D-999` again (T-052 puts this in the firstmate skill).
+
+Four things are deliberately global, and each is a short critical section,
+not a lock held for the length of a run: the event log's writer lock
+(`fm-emit.sh`), the run-counter lock that numbers run actors (section 11), the
+decision-id lock that allocates the next non-merge card (above), and a
+**dispatch slot lock** that `fm-dispatch.sh` holds only while it counts live
+runs and emits `dispatched`. The slot lock is new. Without it two dispatches
+started at once — one per project, which is now the ordinary case — can each
+count the same free slot and together exceed the limit. Everything slow
+happens before it is taken: `fm-project.sh verify` (a GitHub call), reading
+each project's task list and the `greenlit` check pick the candidates first,
+and under the lock `fm-dispatch.sh` only recounts live runs, takes the free
+slots and emits. Live runs are counted by `(project, task)`, not by task id,
+because two projects can both have a `T-004` live.
+
+**2. The limit has no per-project share; free slots are filled fairly.** A
+reserved share would idle slots: with the default limit of three and two
+projects, any split leaves a slot empty whenever one project has no ready
+work, and a share per project has to be re-cut every time a project is
+registered. Fair filling gives the same protection against starvation without
+idling anything.
+
+Fair fill is the normal path, not an option someone has to remember.
+`fm-dispatch.sh` with no `--project` dispatches across every registered
+project and fills free slots one at a time: each slot goes to the registered
+project, among those with a ready task whose `greenlit` matches it and whose
+`fm-project.sh verify` passes, that has the fewest live runs; a tie goes to
+the project whose name sorts first. With only the default project registered
+that is exactly today's dispatch, so no existing caller changes. The caller is
+firstmate, at every dispatch step of its loop — after a green light and
+whenever a run ends — and the firstmate skill says to dispatch with no
+`--project` (T-052). `--project <name>` dispatches only that project, within
+the same global limit and under the same slot lock; it is a deliberate
+override that bypasses fair fill, so firstmate uses it only when the captain
+asks for one project's work, never as its routine dispatch.
+
+So one project can hold every slot only while no other project has ready
+work, and it loses the next freed slot as soon as another does. There is no
+preemption: a live run is never stopped to make room. Starvation is therefore
+bounded by run length, not removed — a project whose task becomes ready while
+every slot is busy waits until the first live run anywhere ends, and then
+takes that slot, because it has fewer live runs than the project holding them.
+The default is therefore **no share, fair fill**. A per-project cap or a
+reserved share is a captain decision only if the captain later asks for one
+(for example to keep a slot free for one project); this design does not need
+it and does not add the knob.
+
+**3. Merge cards: parallel across projects, one at a time within one.** Two
+projects' merge cards may be pending at once: they target different
+repositories, a merge in one changes nothing another's branch is based on, and
+neither needs the other rebased. Within one project merges stay one at a time,
+because `base` is required to be up to date (15.6): each merge moves `base`,
+so every other open pull request in that project must be rebased onto it and
+gated again at its new head before it can be carded (section 6). A card raised
+before that would be stale the moment the first one merges. The rule:
+
+- **at most one merge in flight per project.** A project's merge turn is
+  taken when its merge card is requested and freed only when `base` has
+  settled: by a send back or a hold, which merge nothing, or, for a merge,
+  only once the stored record says `merge: "merged"` or `"failed"` (5.2). It
+  is not freed when the captain answers merge, because `base` moves when the
+  merge completes, not when it is chosen, and a branch gated in between would
+  be gated against the old `base`. A merge whose helper died before writing
+  its outcome does not hold the turn for ever: the board reads the real
+  outcome on start and on every poll (5.2) and only then frees it.
+- **`fm-run.sh` cards only against a settled `base`.** It notes the project's
+  `base` commit before it runs the gates. After they pass it takes a lock
+  under `state/` named for the project and requests a merge card only if the
+  project's turn is free and `base` is still the commit it gated against.
+  Otherwise it requests none, says whether the card waits for the project's
+  pending or running merge or for a regate on the new `base`, and leaves the
+  branch to be rebased and gated again on a later turn.
+- **the board never serializes one project's merge behind another's.** The
+  merge route follows 5.2's outcome contract: it runs `fm-merge.sh` with the
+  card's `--project` in the background, answers at once, and records the
+  outcome in the decision record. A second merge in the same project while one
+  is running is refused before anything is published, so that card stays
+  pending and nothing is emitted; the one-card rule means this only guards
+  against a stray or hand-raised card. A merge in another project runs
+  alongside it. Today's synchronous `Bun.spawnSync` call blocks the whole
+  board while one merge runs, which is exactly the cross-project coupling this
+  section rules out.
+
+**4. The captain sees and answers several projects' cards together.** Without
+`?project=` the board shows every project (15.4): lane cards, crew bubbles and
+decision cards of all projects on one page, each with its project chip. The
+deck holds every pending card of every project in one list, oldest request
+first, so a card never hides behind another project's; the pending count counts
+all projects, or only the filtered one under `?project=`. Each card is answered
+on its own — ids are global, so answering needs no project — and answering one
+never changes, reloads away or reorders another project's pending card. There
+is no bulk answer: every merge still goes through its own card (5.2).
+
+Who proves what:
+
+| Task | Its part of this section |
+|---|---|
+| T-047 | the decision ids of point 1: merge cards derived per `(project, task)`, other cards allocated from `D-1000` under the lock, the ownership test in `fm-run.sh`, and `fm-decide.sh --renumber` moving an answered or archived foreign record and every store keyed by its id, authored drawings and the watcher's receipts included, refusing while a watch on the id is live, so the owning task gets its own card and its answer wakes firstmate |
+| T-052 | point 2's caller: the firstmate skill dispatches with no `--project`, and names `--project` for dispatch only when the captain asks for one project; hand-raised cards take ids from `D-1000` up |
+| T-053 | points 1–3 in the scripts: the global count by `(project, task)`, the slot lock taken after verify, fair fill as the no-flag path, and the merge turn in `fm-run.sh` freed only when `base` has settled |
+| T-054 | points 3 and 4 on the board: 5.2's background merge and recorded outcome, recovery of a `running` record whose helper died, the same-project refusal before publishing, the widened decision-id pattern and the renumbering map, and several projects' live work and cards at once |
+| T-055 | the whole section end to end: the external project's task runs while a self-hosted task is live, and both merge cards are pending together |
+
+Each of these depends on T-056, so none is pinned on its acceptance from
+before this section. No task needs a file outside its existing scope for this:
+the slot lock, the merge-turn lock, the merge marker and the renumbering map
+live under `state/`, rendered pages under `board/public/diagrams/`, all
+runtime output, not scoped files. The authored drawings `--renumber` moves
+are untracked files; a tracked one is renamed through a pull request, never
+by the script, so T-047 needs no `design/diagrams/` scope.
