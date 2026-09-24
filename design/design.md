@@ -1379,8 +1379,8 @@ recovery path in section 12.
   default project, as today, and `D-<project>-<task-number>` for any other,
   because two projects can both have a `T-004`. Every other card's id is
   allocated by `fm-decide.sh` under the decision-id lock, from `D-1000` up.
-  Records raised by hand below `D-1000` that hold another task's merge-card
-  id are renumbered into that space once, with a recorded map (15.10).
+  Records below `D-1000` that do not own their id are renumbered into that
+  space once, with everything keyed by the id and a recorded map (15.10).
   Merge cards name the project and link the pull request on the project's
   GitHub repository.
 - **`fm-sync-prs.sh`** polls every registered project's repository and writes
@@ -1578,10 +1578,13 @@ The decisions row was checked against both allocators, because today they
 share one space and do collide. `fm-run.sh` derives `D-<task digits>` with no
 lock, and cards firstmate raised by hand took numbers from the same `D-<n>`
 range. On 2026-09-24 `state/decisions/` (runtime, not in git) held these
-records under ids that belong to another task's merge card:
+records under ids they do not own by the ownership rule below — each is a
+choice card, or a card raised for a task other than the one its id derives
+from:
 
 | Id | Raised for | Id | Raised for |
 |---|---|---|---|
+| D-034, D-035 | not a merge card for T-034, T-035 | D-048 | T-041 |
 | D-038 | T-017 | D-049 | T-045 |
 | D-039 | T-018 | D-050, D-051 | T-043 |
 | D-040, D-041 | T-034 | D-052 | T-042 |
@@ -1589,11 +1592,13 @@ records under ids that belong to another task's merge card:
 | D-043 | T-037 | D-055 | T-040 |
 | D-045 | T-039 | D-056 | T-043 |
 | D-046 | T-035 | D-057 | T-045 |
-| D-047 | T-040 | D-334, D-335, D-338 | no task of that number |
-| D-048 | T-041 | | |
+| D-047 | T-040 | D-334, D-335, D-338 | T-034, T-035, T-017 (choice cards) |
 
 So every task from T-046 to T-057 — T-046, T-047 and T-056 among them — has
-its merge-card id taken. Today `fm-run.sh` finds the file, takes it for its
+its merge-card id taken, and T-334, T-335 and T-338 would have theirs taken
+too. D-034 and D-035 hold T-034's and T-035's own ids without being their
+merge cards; they fail the ownership test like the rest and are moved with
+them. Today `fm-run.sh` finds the file, takes it for its
 own card and silently raises none (`bin/fm-run.sh`, the `[ -f
 state/decisions/$id.json ] && continue` line). This table is a snapshot, not
 the rule: the remedy below reads ownership from each file, so a record added
@@ -1616,15 +1621,40 @@ spaces that cannot meet, and moves every record already in the wrong space:
   the default project) are the ones the id derives from. `fm-run.sh` applies
   that test to both `state/pending/<id>.json` and `state/decisions/<id>.json`
   before it says a card is waiting or already answered.
-- **a record in the wrong space is moved out of it, once.** Every record at
-  or below `D-999` that does not own its id is renumbered into the allocated
-  space: `fm-decide.sh --renumber <id>` takes the next free number from
-  `D-1000` under the decision-id lock, moves the record's pending request,
-  response, `state/decision-details/<id>.json` and diagrams under
-  `board/public/diagrams/` to the new id, rewrites the `id` field, and appends
-  `{old, new, task, ts}` to `state/decision-renumbered.json`. The event log is
-  append-only and keeps the old id; a reader that pairs an event with a
-  record resolves the old id through that map. Renumbering moves only a
+- **a record in the wrong space is moved out of it, once, with everything
+  keyed by its id.** Every record at or below `D-999` that does not own its
+  id is renumbered into the allocated space: `fm-decide.sh --renumber <id>`
+  takes the next free number from `D-1000` under the decision-id lock and
+  moves every store keyed by a decision id, not only the record. Those are,
+  found by searching `bin/` and `board/` for paths built from a decision id:
+  `state/pending/<id>.json`, `state/decisions/<id>.json`,
+  `state/decision-details/<id>.json`, the rendered pages
+  `board/public/diagrams/<id>.*`, and the authored drawings
+  `design/diagrams/<id>.*`. The last one matters most. `bin/fm-diagram.sh`
+  serves an authored drawing whose stem is the decision before one whose stem
+  is the task, so a drawing left at the old stem would be shown on the owning
+  task's new card. On 2026-09-24 `design/diagrams/` held authored `D-047`,
+  `D-049`, `D-050` and `D-051` (the choice drawings for T-040, T-045 and
+  T-043), all untracked; left there, T-047's merge card would show T-040's
+  board layout. An untracked authored drawing is moved. A tracked one is not
+  renamed by the script, because renaming a tracked file in the engine
+  checkout is a change to `base` outside a pull request: `--renumber` stops
+  before moving anything, names the file, and the rename lands through a
+  pull request, after which `--renumber` completes. `state/skill-updates/`
+  is keyed by `SK-<n>` and is never renumbered. The record's `id` becomes
+  the new id and its stored `identity` becomes `decision:<new>`. The map
+  entry `{old, new, task, ts}` is appended to
+  `state/decision-renumbered.json` before any file moves, so an interrupted
+  renumber is finished by the next run under the same new id, never repeated
+  under a second one. The event log is append-only and keeps the old id; a
+  reader that pairs an event with a record resolves the old id through that
+  map. That includes the board's outcome identity: an old `decision_made`
+  event for `D-056` is T-043's answer, and the board (T-054) keys it as
+  `decision:<new>` through the map, so the owning task's later answer under
+  `D-056` gets an identity of its own. Until T-054 lands the board keys
+  outcomes by the raw id, so the two answers share `decision:D-056` and the
+  board's `seen` set swallows the second one's animation; no card, answer or
+  merge is affected, only that animation. Renumbering moves only a
   record that has a response. A foreign record still pending is left where
   it is, because an `--await` on its id would never wake; `fm-run.sh` names
   it and raises nothing until the captain answers it, and then moves it on
@@ -1636,8 +1666,9 @@ spaces that cannot meet, and moves every record already in the wrong space:
   turn. Before T-047 lands, nothing in `bin/` knows to, and T-046, T-047 and
   T-056 need cards before then — T-056's own id, `D-056`, is held by T-043's
   record. So firstmate renumbers by hand now, before the next merge card is
-  due: every answered record in the table above, by the same steps and into
-  the same map, taking numbers from `D-1000` up. `--renumber` then finds
+  due: every answered record in the table above, by the same steps — every
+  store listed above, the untracked authored drawings in `design/diagrams/`
+  included — and into the same map, taking numbers from `D-1000` up. `--renumber` then finds
   those done and stops at the map, so doing it by hand first costs nothing
   later. Until T-047 lands, firstmate also checks each task's derived id by
   the ownership test before it tells the captain a card is waiting.
@@ -1743,7 +1774,7 @@ Who proves what:
 
 | Task | Its part of this section |
 |---|---|
-| T-047 | the decision ids of point 1: merge cards derived per `(project, task)`, other cards allocated from `D-1000` under the lock, the ownership test in `fm-run.sh`, and `fm-decide.sh --renumber` moving an answered foreign record so the owning task gets its card |
+| T-047 | the decision ids of point 1: merge cards derived per `(project, task)`, other cards allocated from `D-1000` under the lock, the ownership test in `fm-run.sh`, and `fm-decide.sh --renumber` moving an answered foreign record and every store keyed by its id, authored drawings included, so the owning task gets its own card |
 | T-052 | point 2's caller: the firstmate skill dispatches with no `--project`, and names `--project` for dispatch only when the captain asks for one project; hand-raised cards take ids from `D-1000` up |
 | T-053 | points 1–3 in the scripts: the global count by `(project, task)`, the slot lock taken after verify, fair fill as the no-flag path, and the merge turn in `fm-run.sh` freed only when `base` has settled |
 | T-054 | points 3 and 4 on the board: 5.2's background merge and recorded outcome, recovery of a `running` record whose helper died, the same-project refusal before publishing, the widened decision-id pattern and the renumbering map, and several projects' live work and cards at once |
@@ -1752,5 +1783,7 @@ Who proves what:
 Each of these depends on T-056, so none is pinned on its acceptance from
 before this section. No task needs a file outside its existing scope for this:
 the slot lock, the merge-turn lock, the merge marker and the renumbering map
-live under `state/`, and moved diagrams under `board/public/diagrams/`, all
-runtime output, not scoped files.
+live under `state/`, rendered pages under `board/public/diagrams/`, all
+runtime output, not scoped files. The authored drawings `--renumber` moves
+are untracked files; a tracked one is renamed through a pull request, never
+by the script, so T-047 needs no `design/diagrams/` scope.
