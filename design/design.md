@@ -636,7 +636,10 @@ commit-tree` from the staged tree, parented on the fetched base — never
 `git commit` on the detached HEAD, which the repository's own pre-commit
 hook used to refuse, and did, on every real rebuild (T-093). It runs no
 hook and steps around none on a protected branch: until the push lands
-it is on no branch at all, and then only on the task's. It is pushed by
+it is on no branch at all, and then only on the task's. HEAD is then
+moved onto it, detached, as a commit would leave it, so a round that stops
+before the branch moves leaves a clean worktree, not a staged rebuild the
+next round would rescue as crashed work. It is pushed by
 its id with `--force-with-lease` against the branch head read before the
 rebuild: anything pushed to the branch since is refused, never
 overwritten. The local branch moves onto the commit only after origin has

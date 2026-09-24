@@ -1231,21 +1231,33 @@ fi
 # HEAD, and so every real rebuild (T-093). No hook is stepped around on a
 # protected branch - this commit is on no branch at all until the push
 # below lands, and then only on the task's.
+#
+# Once made, HEAD is moved onto it, detached, as `git commit` would have
+# left it: the index and worktree already hold its tree, so the worktree
+# is clean. Every exit between here and the branch move - a refused lease,
+# a failed record - relies on that. Left on the base with the rebuild
+# staged, the next round would take a pushed or refused commit for an
+# uncommitted round and rescue it as crashed work.
 commit_msg="$TASK: $(jq -r .title <<<"$spec")"
-rebuilt_head=''
+rebuilt_head=''; commit_ok=0
 if [ "$rebuilt" = 1 ]; then
+  # the identity rule is fm_git_commit's (bin/fm-config.sh), applied here
+  # to commit-tree
   rb_name="$(fm_git_name "$tree")"; rb_email="$(fm_git_email "$tree")"
   if [ -z "$rb_name" ] || [ -z "$rb_email" ]; then
     echo "fm: set git user.name and user.email (or FM_GIT_NAME / FM_GIT_EMAIL) before committing" >&2
   elif rebuilt_tree="$(git -C "$tree" write-tree)" && [ -n "$rebuilt_tree" ]; then
     rebuilt_head="$(git -C "$tree" -c user.name="$rb_name" -c user.email="$rb_email" \
       commit-tree "$rebuilt_tree" -p "$rebuild_base" -m "$commit_msg" </dev/null)" || rebuilt_head=''
+    if [ -n "$rebuilt_head" ] && git -C "$tree" update-ref --no-deref -m "fm-worker: rebuilt $branch" \
+         HEAD "$rebuilt_head" "$rebuild_base"; then
+      commit_ok=1
+    fi
   fi
-  [ -n "$rebuilt_head" ]
-else
-  fm_git_commit "$tree" "$commit_msg"
+elif fm_git_commit "$tree" "$commit_msg"; then
+  commit_ok=1
 fi
-if [ "$?" != 0 ]; then
+if [ "$commit_ok" != 1 ]; then
   # Stop here, rebuilt or not. A plain round would otherwise push a branch
   # without this round's work and say it had committed; a rebuilt one
   # would move the branch onto the bare base below.
@@ -1272,8 +1284,8 @@ if [ "$rebuilt" = 1 ]; then
     echo "fm-worker: the rebuilt commit is ${rebuilt_head}; $branch is back at $(git -C "$REPO" rev-parse -q --verify "refs/heads/$branch")" >&2
     exit 71
   fi
-  # origin has it: only now the local branch. The index and worktree are
-  # already its tree, so this moves the branch and attaches HEAD to it.
+  # origin has it: only now the local branch. HEAD, the index and the
+  # worktree are already on it, so this moves the branch and attaches HEAD.
   git -C "$tree" checkout -q -B "$branch" "$rebuilt_head" || {
     echo "fm-worker: the rebuilt $branch (${rebuilt_head}) is on origin, but $branch could not be moved onto it; the next round does" >&2
     exit 70; }

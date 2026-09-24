@@ -1797,10 +1797,20 @@ assert_ne "" "$rebuiltE" "and the run names the rebuilt commit"
 assert_fail "git --git-dir='$dE/remote.git' cat-file -e '$rebuiltE^{commit}'" "which never reached origin"
 assert_eq "$oldE" "$(git -C "$dE/repo" rev-parse "$bE")" "the local branch is back on its previous head"
 assert_eq "$pushedE" "$(rb_pushed "$dE")" "and no commit_pushed says otherwise"
+# The commit is made with commit-tree, which moves nothing (T-093): the
+# worktree must still be left detached on it and clean, as a commit leaves
+# it, or the next round takes the refused rebuild for crashed work.
+assert_eq "$rebuiltE" "$(git -C "$dE/repo/state/worktrees/T-Z" rev-parse -q --verify HEAD)" \
+  "the refused round leaves the worktree on the rebuilt commit"
+assert_eq "" "$(git -C "$dE/repo/state/worktrees/T-Z" status --porcelain -- . ':(exclude).fm-prompt.md' ':(exclude).fm-say.md')" \
+  "with nothing uncommitted"
 # E, next round: the local branch fast-forwards to what the racer pushed,
 # and the rebuild is made again from there and leased on the racer's head.
 rb_round_two "$dE" "$rb_add"
 assert_eq "0" "$rb_rc" "the round after a refused lease completes"
+assert_lacks "$rb_out" "had uncommitted work" "without rescuing the refused rebuild as crashed work"
+assert_eq "0" "$(jq -r 'select(.type=="worker_crashed")|.type' "$dE/repo/state/events.jsonl" | wc -l | tr -d ' ')" \
+  "and no worker_crashed is recorded"
 rb_rebuilt "$dE" "E, next round"
 assert_eq "$mainE" "$(rb_head "$dE" "$bE^")" "as one commit on the base"
 assert_eq "1" "$(git --git-dir="$dE/remote.git" rev-list --count "main..$bE")" "exactly one"
@@ -1873,6 +1883,19 @@ assert_eq "$mainG2" "$(rb_head "$dG2" "$bG2^")" "as one commit on the base"
 assert_eq "1" "$(git --git-dir="$dG2/remote.git" rev-list --count "main..$bG2")" "exactly one"
 assert_eq "$oldG2" "$(jq -r 'select(.type=="commit_pushed" and .data.rebuilt!=null)|.data.rebuilt.previous_head' \
   "$dG2/repo/state/events.jsonl" | tail -1)" "rebuilt from the branch the failed round left alone"
+# G3: commit-tree carries fm_git_commit's identity rule, not git's own
+# guess: with no identity anywhere, a rebuilt round refuses before it
+# commits, as a plain round does. The fixture's identity is local, so it is
+# removed here; the global and system files are kept out of the round.
+dG3="$(rb_fixture)"; bG3="$(rb_branch "$dG3")"
+rb_replay_conflict "$dG3"; oldG3="$(rb_head "$dG3" "$bG3")"; pushedG3="$(rb_pushed "$dG3")"
+git -C "$dG3/repo" config --unset user.name; git -C "$dG3/repo" config --unset user.email
+GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 FM_GIT_NAME='' FM_GIT_EMAIL='' rb_round_two "$dG3" "$rb_add"
+rb_rebuilt "$dG3" "G3"
+assert_eq "70" "$rb_rc" "a rebuilt round with no git identity stops"
+assert_contains "$rb_out" "set git user.name and user.email" "and names what is missing"
+assert_eq "$oldG3" "$(rb_head "$dG3" "$bG3")" "and pushes nothing"
+assert_eq "$pushedG3" "$(rb_pushed "$dG3")" "and no commit is reported"
 
 # H: design.md has a row-append conflict AND a prose conflict. The rows
 # are unioned hunk by hunk; only the prose reaches the worker, as a
@@ -2288,7 +2311,8 @@ pushedU2="$(rb_pushed "$dU2")"
 rb_round_two "$dU2" "$rb_add"
 rb_rebuilt "$dU2" "U2"
 assert_eq "75" "$rb_rc" "U2: a marker left behind refuses the round"
-assert_contains "$rb_out" "conflict markers remain in: src/app.txt" "U2: and names the file"
+# both conflicts are left, and git lists them in path order
+assert_contains "$rb_out" "conflict markers remain in: design/design.md, src/app.txt" "U2: and names the files"
 assert_eq "$oldU2" "$(rb_head "$dU2" "$bU2")" "U2: nothing is pushed"
 assert_eq "$oldU2" "$(git -C "$dU2/repo" rev-parse "$bU2")" "U2: the local branch is not moved"
 assert_eq "$pushedU2" "$(rb_pushed "$dU2")" "U2: and no commit is reported"
@@ -2307,7 +2331,7 @@ assert_contains "$(git --git-dir="$dU2/remote.git" show "$bU2:src/app.txt")" "li
   "U2, next round: carrying the resolution"
 assert_eq "$(rb_head "$dU2" "$bU2")" "$(git -C "$dU2/repo" rev-parse "$bU2")" "U2, next round: the local branch moved onto it"
 
-rm -rf "$dA" "$dA2" "$dB" "$dC" "$dD" "$dE" "$dF" "$dG" "$dG2" "$dH" "$dI" "$dJ" "$dK" "$dK2" "$dL" \
+rm -rf "$dA" "$dA2" "$dB" "$dC" "$dD" "$dE" "$dF" "$dG" "$dG2" "$dG3" "$dH" "$dI" "$dJ" "$dK" "$dK2" "$dL" \
   "$dM" "$dN" "$dP1" "$dP2" "$dP3" "$dP4" "$dP5" "$dP6" "$dP7" "$dQ1" "$dQ2" "$dQ3" "$dQ4" \
   "$dR1" "$dR2" "$dS" "$dT" "$dU1" "$dU2" "$rb_add" "$rb_more"
 
