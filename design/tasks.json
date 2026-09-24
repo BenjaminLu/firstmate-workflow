@@ -1214,13 +1214,24 @@
         "bin/fm-run.sh",
         "bin/fm-sync-prs.sh",
         "bin/fm-merge.sh",
+        "bin/fm-diagram.sh",
+        "board/server.ts",
+        "board/public/diagram.js",
+        "board/public/index.html",
+        "skills/firstmate/SKILL.md",
         "tests/emit.test.sh",
         "tests/decide.test.sh",
         "tests/decisions.test.sh",
         "tests/sync-prs.test.sh",
         "tests/merge.test.sh",
+        "tests/diagram.test.sh",
+        "tests/board.test.sh",
+        "tests/session.test.sh",
         "tests/e2e-loop.test.sh",
-        "design/design.md"
+        "tests/e2e/board.spec.ts",
+        "tests/option-loop.test.sh",
+        "design/design.md",
+        "design/tasks.json"
       ],
       "acceptance": [
         "Implements design.md section 15.4 for the log and decisions. fm-emit.sh accepts --project, validates it against the registry (exit 65 when unknown) and writes a top-level `project` field; an event without it belongs to the default project, and existing log lines stay valid. The new event types spec_pinned and spec_repinned are accepted and listed in section 5.1.",
@@ -1228,6 +1239,7 @@
         "Tests written to fail first: the same task id in two projects yields two distinct ids; two cards for one task get n=1 and n=2; two tasks never share an id; with the old hand-raised record D-056 (for T-043) present, a new merge card for T-056 is raised as D-firstmate-workflow-T056-1 and nothing old is read, moved or overwritten; every parser listed above accepts both forms and rejects malformed ones (bad project name, missing task, n of 0, path characters); the board lists, answers and renders diagrams for a new-form card, in board.test.sh and the e2e spec.",
         "fm-sync-prs.sh polls every registered project's github repository (gh --repo) and emits with that project; fm-merge.sh takes --project and merges on that project's repository. (project, pr) is the key: a pull request number in one project never matches an event of another.",
         "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
+        "Captain decision D-1023 = A: tests/option-loop.test.sh joins this scope only to update three pinned counts of value-taking flags: fm-decide 9 to 10, fm-emit 7 to 8 and fm-merge 3 to 4, one each for --project.",
         "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
         "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
       ]

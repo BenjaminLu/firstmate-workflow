@@ -117,7 +117,9 @@ if [ "$MODE" = allocate ]; then
   # the path is fixed now, not when the trap fires
   # shellcheck disable=SC2064
   trap "rmdir '$lock' 2>/dev/null" EXIT
-  trap 'exit 130' INT; trap 'exit 143' TERM
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
   max=0
   for f in "$own"/*.json "$PEND/D-$PROJECT-$key-"*.json "$DIR/D-$PROJECT-$key-"*.json \
            "$REPO/state/runtime/archived-pending/D-$PROJECT-$key-"*.json; do
