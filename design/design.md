@@ -642,8 +642,11 @@ The reviewer cannot see the pull request, so the launcher carries the protocol
 across (T-073). From round three, given `--pr`, `fm-review.sh` reads the pull
 request's comments with `gh` and quotes into the prompt, verbatim and in the
 order posted, the latest comment holding `ASK-PASS-CRITERIA:<task-id>` and every
-comment whose numbered list is followed by `CRITERIA-COMPLETE:<task-id>`. It
-then says which case holds: a list (it is the closed list; findings cite its
+comment whose numbered list is followed by `CRITERIA-COMPLETE:<task-id>`. A
+marker counts only as a line of its own and a comment that asks is never a
+list, so a worker's numbered change log that mentions a marker in passing is
+not taken for the closed list. Each quote is fenced with a per-run nonce, so a
+comment cannot close its own quote. It then says which case holds: a list (it is the closed list; findings cite its
 items or are marked `REGRESSION:`), only an ask (answer with the complete list),
 neither, or comments `gh` could not read, in which case the round still runs.
 No other comment enters the prompt, so the worker's reasoning stays out.

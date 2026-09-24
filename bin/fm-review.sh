@@ -172,16 +172,25 @@ keep_log() {
 # the order posted. Without it every round was reviewed from scratch and a
 # list the reviewer had closed bound nothing. Only those comments cross over;
 # the rest of the pull request is the worker's reasoning and stays out.
+#
+# A marker counts only as a line of its own. Matched anywhere, a worker's
+# "1. fixed X ... please post CRITERIA-COMPLETE:T-1" became the closed list
+# and bound the reviewer to the worker's own change log. For the same reason
+# a comment that asks is never a list.
+#
+# Each quote is fenced with a nonce minted for this run: a fixed fence can be
+# closed from inside the comment, and whatever follows it would read as the
+# launcher's own words.
 closed_list() {
-  local json picked
+  local json picked fence
   if ! json="$($GH pr view "$PR" --json comments 2>/dev/null)" ||
      ! picked="$(jq -c --arg t "$TASK" '
        ($t | gsub("(?<c>[.*+?^$(){}|\\[\\]\\\\/])"; "\\\(.c)")) as $e
-       | "ASK-PASS-CRITERIA:\($e)(?![A-Za-z0-9_-])" as $ask
-       | "CRITERIA-COMPLETE:\($e)(?![A-Za-z0-9_-])" as $done
+       | "(^|\\n)[ \\t]*ASK-PASS-CRITERIA:\($e)[ \\t\\r]*(\\n|$)" as $ask
+       | "(^|\\n)[ \\t]*CRITERIA-COMPLETE:\($e)[ \\t\\r]*(\\n|$)" as $done
        | [.comments[] | .body | strings] as $b
        | { ask: ([$b[] | select(test($ask))] | last),
-           lists: [$b[] | . as $x
+           lists: [$b[] | select(test($ask) | not) | . as $x
                     | ([match($done; "g").offset] | last) as $at
                     | select($at != null and ($x[0:$at] | test("(^|\\n)[ \\t]*[0-9]+[.)][ \\t]"))) ] }
      ' <<<"$json" 2>/dev/null)" || [ -z "$picked" ]; then
@@ -190,6 +199,7 @@ closed_list() {
     return 0
   fi
   local n i
+  fence="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
   n="$(jq '.lists | length' <<<"$picked")"
   if [ "$n" -gt 0 ]; then
     printf '\nThe numbered list below, posted with CRITERIA-COMPLETE:%s, is the closed list for this task. If more than one appears, the first is the original. Every finding this round must cite a numbered item from it, or be a regression this round newly introduced, marked REGRESSION:%s. Raise nothing else.\n' \
@@ -202,13 +212,13 @@ closed_list() {
       "$TASK" "$TASK"
   fi
   if [ "$(jq '.ask != null' <<<"$picked")" = true ]; then
-    printf '\n## The worker'"'"'s ask, verbatim from the pull request\n\n----- begin comment -----\n%s\n----- end comment -----\n' \
-      "$(jq -r '.ask' <<<"$picked")"
+    printf '\n## The worker'"'"'s ask, verbatim from the pull request\n\n----- begin comment %s -----\n%s\n----- end comment %s -----\n' \
+      "$fence" "$(jq -r '.ask' <<<"$picked")" "$fence"
   fi
   i=0
   while [ "$i" -lt "$n" ]; do
-    printf '\n## Closed list %s of %s, verbatim from the pull request\n\n----- begin comment -----\n%s\n----- end comment -----\n' \
-      "$((i + 1))" "$n" "$(jq -r --argjson i "$i" '.lists[$i]' <<<"$picked")"
+    printf '\n## Closed list %s of %s, verbatim from the pull request\n\n----- begin comment %s -----\n%s\n----- end comment %s -----\n' \
+      "$((i + 1))" "$n" "$fence" "$(jq -r --argjson i "$i" '.lists[$i]' <<<"$picked")" "$fence"
     i=$((i + 1))
   done
 }
