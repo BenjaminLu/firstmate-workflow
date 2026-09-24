@@ -10,8 +10,8 @@
 set -uo pipefail
 # Nothing below may read standard input. A dispatched child inherits it, and
 # a child that reads it blocks the caller waiting for a human who is not
-# there. One guarantee, in one place; bin/ci.sh fails if a script that
-# dispatches is missing it.
+# there. One guarantee, in one place; the repository's own lint fails if a
+# script that dispatches is missing it.
 exec < /dev/null
 
 REPO=''; TASK=''; BRANCH=''; PR=''; ONLY=''
@@ -20,8 +20,9 @@ GH="${FM_GH:-gh}"
 REVIEWER="${FM_REVIEWER_LOGIN:-}"
 
 # see fm_need in bin/fm-config.sh for why: `shift 2` with one argument
-# left does not shift, and the loop spins. This file deliberately depends
-# on nothing, so it carries the two lines rather than the explanation.
+# left does not shift, and the loop spins. The arguments are read before
+# anything is sourced, so this file carries the two lines rather than the
+# explanation.
 need() { [ "$#" -ge 2 ] || { echo "fm-gate: $1 needs a value" >&2; exit 64; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -48,7 +49,56 @@ g() {   # g <n> <description> ; body reads stdin-free, returns 0/1
   say 'x' "$n" "$desc"; exit "$n"
 }
 
+_fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
+[ -f "$_fm_lib" ] || { echo "fm-gate: missing $_fm_lib" >&2; exit 70; }
+# shellcheck source=bin/fm-config.sh
+. "$_fm_lib"
+
 cd "$REPO" || { echo "fm-gate: no repo at $REPO" >&2; exit 64; }
+
+# ---- the project contract ------------------------------------------------
+# Which toolchain a project uses is its own business. config.yaml's project:
+# block declares how to prepare a fresh checkout (setup), what green means
+# (check, with check_env), which files are tests (tests) and how to run one
+# (test), and which changes need no test (docs). Gates 3 and 5 run what is
+# declared and name nothing else.
+#
+# The declaration read is the branch's own: it is what the branch will be
+# checked with everywhere else, and gate 4 decides whether a branch may
+# change config.yaml at all.
+P_SETUP=''; P_CHECK=''; P_TEST=''; P_TESTS=''; P_DOCS=''; P_ENV=()
+load_project() {  # load_project <config.yaml of the branch>
+  local cfg="$1" kv
+  P_SETUP=''; P_CHECK=''; P_TEST=''; P_TESTS=''; P_DOCS=''; P_ENV=()
+  [ -s "$cfg" ] || return 0
+  P_SETUP="$(fm_project setup "$cfg")" || return 1
+  P_CHECK="$(fm_project check "$cfg")" || return 1
+  P_TEST="$(fm_project test "$cfg")" || return 1
+  P_TESTS="$(fm_project tests "$cfg")" || return 1
+  P_DOCS="$(fm_project docs "$cfg")" || return 1
+  while IFS= read -r -d '' kv; do P_ENV+=("$kv"); done < <(fm_project check_env "$cfg")
+}
+branch_config() {  # branch_config <file> ; the branch's config.yaml, or empty
+  git show "$BRANCH:config.yaml" > "$1" 2>/dev/null || : > "$1"
+}
+
+# run_in <dir> <log> <with-check-env 0|1> <command>
+#   FM_ROOT points at <dir>: one inherited from the caller would aim the
+#   command at some other tree. check_env goes on top for check and tests.
+run_in() {
+  local dir="$1" log="$2" cmd="$4"
+  if [ "$3" = 1 ]; then
+    ( cd "$dir" && env FM_ROOT="$dir" ${P_ENV[@]+"${P_ENV[@]}"} bash -c "$cmd" ) > "$log" 2>&1
+  else
+    ( cd "$dir" && env FM_ROOT="$dir" bash -c "$cmd" ) > "$log" 2>&1
+  fi
+}
+failed() {  # failed <stage> <exit> <command> <log> ; says which, and what it said
+  echo "      $1 failed (exit $2): $3" >&2
+  tail -n 20 "$4" | sed 's/^/        /' >&2
+}
+no_check() { echo "      config.yaml declares no project.check, so nothing says what green means" >&2; }
+drop() { git worktree remove --force "$1" >/dev/null 2>&1; rm -rf "$1"; }
 
 # ---- 1. the branch exists and carries work -------------------------------
 gate1() {
@@ -67,22 +117,65 @@ gate2() {
   return "$rc"
 }
 
-# ---- 3. the one gate exits 0 ---------------------------------------------
+# ---- 3. the declared check exits 0 ---------------------------------------
+# In a fresh detached worktree, which has nothing a checkout does not carry:
+# setup first when one is declared, then the check. A setup that fails is a
+# red gate that says so - never a check that goes green with a stage skipped
+# because what it needed was never installed.
 gate3() {
-  local w rc
-  w="$(mktemp -d)"
-  git worktree add -q --detach "$w" "$BRANCH" >/dev/null 2>&1 || { rm -rf "$w"; return 1; }
-  [ -x "$w/bin/ci.sh" ] || { git worktree remove --force "$w" >/dev/null 2>&1; rm -rf "$w"; return 1; }
-  # design.md section 10: GitHub sets FM_CI_MAX_SECONDS=600 and firstmate
-  # runs the same full local gate at that budget before publication. Left
-  # unset here, ci.sh's own bare default of 180 applies instead.
-  ( cd "$w" && FM_ROOT="$w" FM_CI_MAX_SECONDS=600 ./bin/ci.sh >/dev/null 2>&1 ); rc=$?
-  git worktree remove --force "$w" >/dev/null 2>&1; rm -rf "$w"
-  return "$rc"
+  local w log cfg rc=0
+  w="$(mktemp -d)"; log="$(mktemp)"; cfg="$(mktemp)"
+  branch_config "$cfg"
+  if ! load_project "$cfg"; then rc=1
+  elif [ -z "$P_CHECK" ]; then no_check; rc=1
+  elif ! git worktree add -q --detach "$w" "$BRANCH" >/dev/null 2>&1; then rc=1
+  else
+    if [ -n "$P_SETUP" ]; then
+      run_in "$w" "$log" 0 "$P_SETUP" || { rc=$?; failed setup "$rc" "$P_SETUP" "$log"; }
+    fi
+    if [ "$rc" -eq 0 ]; then
+      run_in "$w" "$log" 1 "$P_CHECK" || { rc=$?; failed check "$rc" "$P_CHECK" "$log"; }
+    fi
+  fi
+  drop "$w"; rm -f "$log" "$cfg"
+  [ "$rc" -eq 0 ]
 }
 
 changed() { git diff --name-only "$BASE...$BRANCH"; }
-is_test()  { case "$1" in tests/*|*.test.*|*.spec.*) return 0 ;; *) return 1 ;; esac; }
+# matches <path> <globs, one per line>. A leading **/ also matches at the top
+# level, as it does everywhere else.
+matches() {
+  local g
+  while IFS= read -r g; do
+    [ -n "$g" ] || continue
+    # shellcheck disable=SC2254
+    case "$1" in $g) return 0 ;; esac
+    # shellcheck disable=SC2254
+    case "$g" in '**/'*) case "$1" in ${g#\*\*/}) return 0 ;; esac ;; esac
+  done <<< "$2"
+  return 1
+}
+# The declared tests globs when there are any, these when there are none.
+is_test() {
+  if [ -z "$P_TESTS" ]; then
+    case "$1" in tests/*|*.test.*|*.spec.*) return 0 ;; *) return 1 ;; esac
+  fi
+  matches "$1" "$P_TESTS"
+}
+# Only what the project declares as docs. Nothing is docs by default: a path
+# no one declared is behaviour until someone says otherwise.
+is_doc() { [ -n "$P_DOCS" ] && matches "$1" "$P_DOCS"; }
+# fill <template> <file> ; every {file} becomes the shell-quoted path. No
+# ${var//x/y}: with bash 5.2's patsub_replacement an & in the path would
+# come back as the match.
+fill() {
+  local rest="$1" q out=''
+  q="$(printf '%q' "$2")"
+  while [[ "$rest" == *'{file}'* ]]; do
+    out="$out${rest%%\{file\}*}$q"; rest="${rest#*\{file\}}"
+  done
+  printf '%s' "$out$rest"
+}
 
 # ---- 4. the diff stays inside the task's declared scope ------------------
 gate4() {
@@ -111,35 +204,57 @@ gate4() {
 # ---- 5. the new tests are not vacuous ------------------------------------
 # Revert the implementation to the base and the new tests must go red. A test
 # that still passes without the code it is meant to cover is testing nothing.
+#
+# The branch's declaration is read before anything is reverted: config.yaml
+# is implementation like any other file and goes back to the base below.
+# Setup runs on the reverted tree, since that is the tree the tests run in.
+# Each changed test runs through the declared `test` template; without one,
+# the whole check runs once and must go red. Paths matching the declared
+# `docs` globs need no test of their own, but are reverted with the rest.
 gate5() {
-  local w impl tests f rc
-  impl=''; tests=''
+  local w impl code tests f rc log cfg
+  impl=''; code=''; tests=''
+  cfg="$(mktemp)"; branch_config "$cfg"
+  load_project "$cfg" || { rm -f "$cfg"; return 1; }
+  rm -f "$cfg"
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    if is_test "$f"; then tests="$tests$f"$'\n'; else impl="$impl$f"$'\n'; fi
+    if is_test "$f"; then tests="$tests$f"$'\n'; continue; fi
+    impl="$impl$f"$'\n'
+    is_doc "$f" || code="$code$f"$'\n'
   done <<< "$(changed)"
-  # nothing executable changed - a docs or design task has nothing to make red
-  [ -n "$(printf '%s' "$impl" | tr -d '[:space:]')" ] || return 0
+  # every non-test path is one the project declared as docs: nothing that
+  # behaves changed, so there is nothing to make red. Anything else needs a test.
+  [ -n "$(printf '%s' "$code" | tr -d '[:space:]')" ] || return 0
   [ -n "$(printf '%s' "$tests" | tr -d '[:space:]')" ] || {
     echo "      the diff changes implementation but adds no test" >&2; return 1; }
+  [ -n "$P_TEST" ] || [ -n "$P_CHECK" ] || { no_check; return 1; }
 
-  w="$(mktemp -d)"
-  git worktree add -q --detach "$w" "$BRANCH" >/dev/null 2>&1 || { rm -rf "$w"; return 1; }
+  w="$(mktemp -d)"; log="$(mktemp)"
+  git worktree add -q --detach "$w" "$BRANCH" >/dev/null 2>&1 || { rm -rf "$w" "$log"; return 1; }
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     ( cd "$w" && git checkout "$BASE" -- "$f" >/dev/null 2>&1 || rm -f "$f" )
   done <<< "$impl"
 
-  rc=1                                   # assume vacuous until one test goes red
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    [ -f "$w/$f" ] || continue
-    case "$f" in
-      *.test.sh) ( cd "$w" && FM_ROOT="$w" bash "$f" >/dev/null 2>&1 ) || { rc=0; break ;} ;;
-    esac
-  done <<< "$tests"
+  rc=0
+  [ -z "$P_SETUP" ] || run_in "$w" "$log" 0 "$P_SETUP" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    failed setup "$rc" "$P_SETUP" "$log"; drop "$w"; rm -f "$log"; return 1
+  fi
 
-  git worktree remove --force "$w" >/dev/null 2>&1; rm -rf "$w"
+  rc=1                                   # assume vacuous until one test goes red
+  if [ -n "$P_TEST" ]; then
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      [ -f "$w/$f" ] || continue
+      run_in "$w" "$log" 1 "$(fill "$P_TEST" "$f")" || { rc=0; break; }
+    done <<< "$tests"
+  else
+    run_in "$w" "$log" 1 "$P_CHECK" || rc=0
+  fi
+
+  drop "$w"; rm -f "$log"
   [ "$rc" -eq 0 ] || echo "      the new tests still pass with the implementation reverted" >&2
   return "$rc"
 }
@@ -165,7 +280,7 @@ gate7() {
 
 g 1 "branch exists and carries commits"          gate1
 g 2 "rebases onto $BASE cleanly"                 gate2
-g 3 "bin/ci.sh exits 0"                          gate3
+g 3 "the declared project.check exits 0"         gate3
 g 4 "diff stays inside the declared scope"       gate4
 g 5 "reverting the implementation turns tests red" gate5
 g 6 "the required GitHub check is green"         gate6

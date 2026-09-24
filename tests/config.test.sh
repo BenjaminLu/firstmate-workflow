@@ -60,6 +60,62 @@ strays="$(grep -ln "config.yaml" "$ROOT"/bin/*.sh | while read -r s; do
 assert_eq "" "$strays" "no script parses config.yaml on its own"
 rm -f "$f"
 
+# --- the project contract: opaque command strings, never evaluated ------
+p="$(mktemp -d)"
+cat > "$p/config.yaml" <<'Y'
+vendor: claude
+project:                        # what the target project declares
+  setup: pip install -r "requirements dev.txt" && touch "$(echo evaluated)"
+  check: 'go vet ./... && go test -run ''TestA|TestB'' ./...'  # quoted whole
+  check_env:
+    GOFLAGS: -mod=mod
+    BUDGET: "600"               # a quoted value with a comment
+    SPACED: "a # not a comment"
+  tests:
+    - "**/*_test.go"
+    - tests/**                  # the second glob
+  test: python3 -m pytest -q {file} && echo "done: {file}"
+concurrency: 3
+Y
+assert_eq 'pip install -r "requirements dev.txt" && touch "$(echo evaluated)"' \
+  "$(fm_project setup "$p/config.yaml")" "setup keeps its quotes and && intact"
+assert_fail "test -e '$p/evaluated'" "and reading it evaluated nothing"
+assert_eq "go vet ./... && go test -run 'TestA|TestB' ./..." \
+  "$(fm_project check "$p/config.yaml")" "a single-quoted check unquotes once, '' becomes '"
+assert_eq 'python3 -m pytest -q {file} && echo "done: {file}"' \
+  "$(fm_project test "$p/config.yaml")" "the test template keeps {file} and its quotes"
+assert_eq '**/*_test.go
+tests/**' "$(fm_project tests "$p/config.yaml")" "tests is a list of globs, comments stripped"
+assert_eq 'GOFLAGS=-mod=mod|BUDGET=600|SPACED=a # not a comment|' \
+  "$(fm_project check_env "$p/config.yaml" | tr '\0' '|')" "check_env is NUL-separated KEY=VALUE"
+assert_eq 'setup
+check
+check_env
+tests
+test' "$(fm_project keys "$p/config.yaml")" "keys names what is declared"
+assert_eq "3" "$(fm_cfg concurrency "$p/config.yaml")" "the block does not swallow what follows"
+
+printf 'project:\n  check: make\n  docs:\n    - "docs/**"\n    - README.md   # the front page\n' > "$p/config.yaml"
+assert_eq 'docs/**
+README.md' "$(fm_project docs "$p/config.yaml")" "docs is a list of globs, comments stripped"
+assert_eq 'check
+docs' "$(fm_project keys "$p/config.yaml")" "and keys names it"
+printf 'project:\n  check: make\n  docs: README.md\n' > "$p/config.yaml"
+assert_fail "fm_project docs '$p/config.yaml'" "a docs scalar is refused: it must be a list"
+
+printf 'vendor: claude\n' > "$p/config.yaml"
+assert_eq "" "$(fm_project check "$p/config.yaml")" "an undeclared check reads empty"
+assert_eq "" "$(fm_project keys "$p/config.yaml")" "and nothing is declared"
+assert_ok "fm_project setup '$p/config.yaml'" "absence is not an error"
+
+printf 'project:\n  chek: make test\n' > "$p/config.yaml"
+assert_fail "fm_project check '$p/config.yaml'" "a misspelt key is refused, not ignored"
+printf 'project:\n  check: make\n  test: pytest -q\n' > "$p/config.yaml"
+assert_fail "fm_project test '$p/config.yaml'" "a test template without {file} is refused"
+printf 'project:\n  check: "make test\n' > "$p/config.yaml"
+assert_fail "fm_project check '$p/config.yaml'" "an unterminated quote is refused"
+rm -rf "$p"
+
 # --- the vendor chain, which the worker and the reviewer share -----------
 d="$(mktemp -d)"
 cat > "$d/config.yaml" <<'YAML'

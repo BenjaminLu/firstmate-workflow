@@ -70,6 +70,77 @@ bin/fm-install-hooks.sh   # git hooks are not cloned; opt in once per checkout
 bin/ci.sh                 # the one gate - CI runs this same file
 ```
 
+## Declaring a project
+
+Firstmate can run a crew on any repository. It knows nothing about that
+repository's toolchain; the repository says what it needs in the `project:`
+block of its `config.yaml`, and the gates and `bin/fm-session.sh start` run
+exactly that.
+
+| key | required | meaning |
+|---|---|---|
+| `setup` | no | shell command that prepares a fresh checkout, such as installing dependencies |
+| `check` | yes | shell command whose exit status means green |
+| `check_env` | no | map of environment variables set for `check` and `test` |
+| `tests` | no | list of globs saying which changed files are tests; defaults to `tests/**`, `*.test.*`, `*.spec.*` |
+| `test` | no | command template that runs one test file; `{file}` becomes the shell-quoted path |
+| `docs` | no | list of globs for changes that need no test of their own; undeclared exempts nothing |
+
+Values are opaque shell command strings, run with `bash -c` from the checkout
+root. They are read, never evaluated, so quotes, `&&` and `{file}` arrive as
+written; quote a value in YAML only if it contains ` #` or starts with a YAML
+indicator such as `*`. An unknown key, a `test` without `{file}` or a malformed
+block is an error, not an empty declaration.
+
+- **Gate 3** runs `setup` and then `check` in a fresh detached worktree. A
+  missing `check` or a failing `setup` fails the gate and says so.
+- **Gate 5** classifies the diff with `tests`, reverts the implementation, runs
+  `setup`, then runs each changed test through `test` — or the whole `check`
+  when there is no `test` — and requires red. A diff whose every non-test
+  path matches `docs` needs no new test; any other path still does.
+- **`fm-session.sh start`** runs `setup` once in the repository checkout and
+  reports a `project` block: the declared keys, setup's exit status and a short
+  error. A failed setup is reported as not ready; startup carries on.
+  `status` reports the same declaration and never runs `setup`.
+
+A Go project:
+
+```yaml
+project:
+  setup: go mod download
+  check: go vet ./... && go test ./...
+  tests:
+    - "**/*_test.go"
+  test: go test ./$(dirname {file})
+```
+
+A Python project:
+
+```yaml
+project:
+  setup: python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+  check: .venv/bin/python -m pytest -q
+  check_env:
+    PYTHONDONTWRITEBYTECODE: 1
+  tests:
+    - "tests/**"
+    - "**/test_*.py"
+  test: .venv/bin/python -m pytest -q {file}
+```
+
+A project with nothing to install:
+
+```yaml
+project:
+  check: make check
+```
+
+This repository declares its own: `setup` installs Bun dependencies and the
+Playwright browser (without them a fresh worktree's `bin/ci.sh` skips its
+end-to-end stage), `check` is `bin/ci.sh` with `FM_CI_MAX_SECONDS=600`, and
+`test` runs a changed `*.test.sh` with bash. Its `docs` are `design/**` and
+`README.md`; skills are behaviour, so they are not docs.
+
 ## State
 
 Spec is settled and the bootstrap is under way. `design/proposals/` holds the

@@ -1,4 +1,4 @@
-# fm:sourced  # this file is sourced; see bin/ci.sh, stdin stage
+# fm:sourced  # this file is sourced; see the repository lint's stdin stage
 # fm:lint-source  # and it now HOLDS the option-loop corpus rule, so it
 # quotes `shift 2` without having one; T-030 makes this marker per-line
 # shellcheck shell=bash
@@ -48,6 +48,24 @@ fm_cfg_list() { # fm_cfg_list <section> [file]
 }
 
 _fm_code_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+
+# The project contract: config.yaml's `project:` block, which the target
+# project fills in so that nothing here has to know its toolchain.
+#
+#   fm_project setup|check|test [file]  -> the command, exactly as declared
+#   fm_project tests|docs [file]        -> one glob per line
+#   fm_project check_env [file]         -> NAME=value, each ending in NUL
+#   fm_project keys [file]              -> the declared keys, one per line
+#
+# Values are opaque shell command strings. They are printed, never evaluated:
+# quotes, `&&`, `$(...)` and `{file}` come back as written. An absent key
+# prints nothing and succeeds; a malformed block, an unknown key or a `test`
+# without `{file}` exits 65, because a typo that silently read as "nothing
+# declared" would skip a stage and still look green. The parser is the one
+# `fm-session.sh start` uses, so the two cannot disagree about the block.
+fm_project() {  # fm_project <field> [file]
+  python3 "$_fm_code_dir/fm-herdr.py" project "${2:-config.yaml}" "$1"
+}
 
 # Freeze before doing work. A nested entrypoint uses the parent's frozen code,
 # while a newly invoked session takes a new snapshot. Explicit roles win.
@@ -212,7 +230,7 @@ fm_run_chain() {
 # $@ alone, so `while [ $# -gt 0 ]` spins on the same flag for ever -
 # `bin/fm-emit.sh --type` was a busy loop rather than an error. Every
 # flag that takes a value checks before it shifts, in the same case
-# branch, and exits 64. bin/ci.sh fails on a `shift 2` that has not
+# branch, and exits 64. The repository lint fails on a `shift 2` that has not
 # checked, and tests/option-loop.test.sh runs every flag of every script
 # with nothing after it - under an alarm, because a test for a hang that
 # simply calls the script hangs the gate instead of failing it.

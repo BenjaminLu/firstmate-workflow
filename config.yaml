@@ -16,3 +16,19 @@ fallback:               # tried in order when an adapter exits 2 (vendor unavail
   - codex
   - cursor-agent
   - gemini
+
+project:                # how this repository is prepared and checked; see README
+  # a fresh worktree has no node_modules and no browser, and without them the
+  # check skips its end-to-end stage rather than failing
+  setup: bun install --frozen-lockfile && bunx playwright install chromium
+  check: bin/ci.sh
+  check_env:
+    FM_CI_MAX_SECONDS: 600   # GitHub's budget; the bare default is 180
+  tests:
+    - tests/**
+    - "*.test.*"
+    - "*.spec.*"
+  test: case {file} in *.test.sh) bash {file} ;; esac
+  docs:                 # changes that need no test; skills are behaviour
+    - design/**
+    - README.md

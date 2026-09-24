@@ -347,6 +347,8 @@ printf 'x\n' > "$g/bin/thing.sh"
 # real one: a gate that cannot run is not a gate a skill-update passed
 printf '#!/usr/bin/env bash\nset -uo pipefail\nR="${FM_ROOT:-.}"\nrc=0\nfor t in "$R"/tests/*.test.sh; do\n  [ -f "$t" ] || continue\n  FM_ROOT="$R" bash "$t" || rc=1\ndone\nexit "$rc"\n' > "$g/bin/ci.sh"
 chmod +x "$g/bin/ci.sh"
+# and gate 3 runs only what the project declares, so it declares that
+printf 'project:\n  check: bin/ci.sh\n' > "$g/config.yaml"
 git -C "$g" add -A; git -C "$g" commit -qm base
 
 git -C "$g" checkout -q -b sk-001-skill
