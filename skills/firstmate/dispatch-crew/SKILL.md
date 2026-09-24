@@ -63,6 +63,8 @@ in-process. That is the non-Herdr default, not an invented bypass.
 | `herdr is unavailable` | Report and stop; do not invent a launcher |
 | `already has a live worker` / uncertain launch | Follow [clear-zombie-workers](../clear-zombie-workers/SKILL.md); resume the live actor if real |
 | Adapter/vendor failure from stock script | Use configured fallback via the same stock script; do not open a manual agent pane |
+| Task branch conflicts with its base (gate 2 red, base moved) | Relaunch the worker recipe above with `--pr <N>`; the script rebuilds the branch on the base and hands the conflicts to the worker. Never rebase, merge or push the branch by hand |
+| Worker exits `75` after a rebuild | The rebuilt round was refused before its commit (the run names why) and nothing was pushed; relaunch with `--pr <N>` (the next round copies the worktree to `state/rescued/` and rebuilds from the branch) |
 
 ## Do
 

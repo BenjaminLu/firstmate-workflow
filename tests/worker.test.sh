@@ -1559,4 +1559,700 @@ assert_ok "cd '$ROOT' && git --git-dir='$barec' cat-file -e t-ck-branch:keep.txt
   "non-ephemeral files still checkpoint beside a live .fm-say.md"
 rm -rf "$dc"
 
+# --- a later round brings its branch up to date with the base (T-067) ----
+# Firstmate may not run git and the adapter cannot, so when main moves
+# under an open task branch and the two conflict, fm-worker.sh is the only
+# thing that can bring the branch up to date. Every case below is a real
+# repository with a bare remote: round one runs, main moves in a separate
+# clone - so the worker has to FETCH the base, its own local main is stale -
+# and round two continues the pull request.
+rb_fixture() {   # rb_fixture [two-tasks]; prints the fixture dir with round one done
+  local d r
+  d="$(fixture)" || return 1; r="$d/repo"
+  (
+    cd "$r" || exit 1
+    mkdir -p src
+    printf 'line %s\n' 1 2 3 4 5 6 7 8 9 10 > src/app.txt
+    # a second entry both sides can change, still on one line as fixture() has it
+    [ "${1:-}" != two-tasks ] || printf '%s\n' \
+      '{"tasks":[{"id":"T-Z","title":"a mock task","scope":["src/**"],"acceptance":["it exists"]},{"id":"T-1","title":"one","scope":[],"acceptance":[]}]}' \
+      > design/tasks.json
+    # a line with words in it between the table and the prose: git joins
+    # two conflicts separated only by a blank line into one hunk
+    printf '%s\n' '# design' '## 6. gates' 'seven of them' '' \
+      '| id | title | depends on |' '|---|---|---|' '| T-1 | one | — |' '' \
+      'the table ends here' 'prose the two sides may both edit' '## 8. board' > design/design.md
+    git add -A; git commit -qm 'app and task table'; git push -q origin main
+  ) || return 1
+  # the step a round runs is a file the test writes, so each case can say
+  # what its worker does without a second copy of the adapter
+  cat > "$r/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+[ -z "${FM_CAPTURE:-}" ] || cp "$2" "$FM_CAPTURE"
+cd "$3" || exit 1
+# shellcheck disable=SC1090
+. "$FM_T_STEP"
+M
+  chmod +x "$r/bin/adapters/mock.sh"
+  # round one: the task changes line 5, edits the prose, adds its own
+  # table row and gives its own tasks.json entry a dependency
+  cat > "$d/round-one.sh" <<'S'
+sed 's/^line 5$/line 5 by the task/' src/app.txt > src/app.next && mv src/app.next src/app.txt
+awk '{ if ($0 == "prose the two sides may both edit") print "prose as the task says"; else print }
+     /^\| T-1 \|/ { print "| T-Z | a mock task | T-1 |" }' design/design.md > design/d.next
+mv design/d.next design/design.md
+jq '.tasks[0].depends_on=["T-1"]' design/tasks.json > design/t.next && mv design/t.next design/tasks.json
+S
+  ghstub "$d" >/dev/null
+  ( cd "$r" && FM_ROOT="$r" FM_GH="$d/stub/gh" FM_T_STEP="$d/round-one.sh" \
+      bin/fm-worker.sh --task T-Z >/dev/null 2>&1 ) || return 1
+  printf '%s' "$d"
+}
+rb_branch() { git --git-dir="$1/remote.git" for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1; }
+rb_head() { git --git-dir="$1/remote.git" rev-parse "$2" 2>/dev/null; }
+rb_move_main() {   # rb_move_main <dir> <script run in a fresh clone of main>
+  rm -rf "$1/other"
+  git clone -q -b main "$1/remote.git" "$1/other" || return 1
+  # shellcheck disable=SC1090
+  ( cd "$1/other" && git config user.email a@b.c && git config user.name t \
+      && . "$2" && git add -A && git commit -qm 'main moved' && git push -q origin main )
+}
+rb_round_two() {   # rb_round_two <dir> <step> [pr, '' for none]; sets rb_out and rb_rc
+  local pr="${3-42}"
+  # a prompt left from an earlier round would answer for this one
+  : > "$1/ghcalls"; rm -f "$1/prompt.md"
+  rb_out="$(cd "$1/repo" && FM_ROOT="$1/repo" FM_GH="$1/stub/gh" FM_T_STEP="$2" \
+    FM_T_DIR="$1" FM_T_BRANCH="$(rb_branch "$1")" FM_CAPTURE="$1/prompt.md" \
+    bin/fm-worker.sh --task T-Z ${pr:+--pr "$pr"} 2>&1)"; rb_rc=$?
+}
+printf 'printf "two\\n" > src/round-two\n' > "${TMPDIR:-/tmp}/fm-rb-add-$$.sh"
+rb_add="${TMPDIR:-/tmp}/fm-rb-add-$$.sh"
+# What each case sets up has to have happened, or its other assertions
+# pass on code that never rebuilds anything: a refused push, an untouched
+# branch and a 71 all look the same with or without a rebuild in front.
+rb_rebuilt() {   # rb_rebuilt <dir> <case>: this round rebuilt the branch
+  assert_contains "$(cat "$1/prompt.md" 2>/dev/null)" "Your branch was rebuilt" "$2: the worker was told of a rebuild"
+  assert_contains "$rb_out" "no longer rebases onto main; rebuilt on" "$2: and the run rebuilt the branch"
+}
+rb_not_rebuilt() {   # rb_not_rebuilt <dir> <case>: this round left the branch as it was
+  assert_lacks "$(cat "$1/prompt.md" 2>/dev/null)" "Your branch was rebuilt" "$2: the worker is not told of a rebuild"
+  assert_lacks "$rb_out" "rebuilt on" "$2: and the run rebuilt nothing"
+}
+rb_pushed() { jq -r 'select(.type=="commit_pushed")|.type' "$1/repo/state/events.jsonl" | wc -l | tr -d ' '; }
+rb_commit() { git -c user.email=a@b.c -c user.name=t commit -q "$@"; }
+# The branch no longer rebases onto main commit by commit, yet its change as
+# a whole merges cleanly: two later commits touched line 10 and put it back,
+# and main changed line 10. Gate 2 replays commits, so gate 2 is red here -
+# while the squashed patch (line 5, three lines of context) still applies.
+rb_replay_conflict() {   # rb_replay_conflict <dir>
+  ( cd "$1/repo/state/worktrees/T-Z" \
+      && sed 's/^line 10$/line 10 for a while/' src/app.txt > n && mv n src/app.txt && rb_commit -am 'touch line 10' \
+      && sed 's/^line 10 for a while$/line 10/' src/app.txt > n && mv n src/app.txt && rb_commit -am 'put line 10 back' \
+      && git push -q origin HEAD ) || return 1
+  printf '%s\n' "sed 's/^line 10\$/line 10 by main/' src/app.txt > n && mv n src/app.txt" > "$1/main.sh"
+  rb_move_main "$1" "$1/main.sh"
+}
+# Fails one git command the worker runs, by the words it is run with, and
+# passes every other one through to the real git.
+rb_git_real="$(command -v git)"
+rb_gitwrap() {   # rb_gitwrap <dir>; prints a PATH entry
+  mkdir -p "$1/gitwrap"
+  cat > "$1/gitwrap/git" <<W
+#!/usr/bin/env bash
+if [ -n "\${FM_T_GIT_FAIL:-}" ]; then
+  case " \$* " in *"\$FM_T_GIT_FAIL"*) echo "fm-test: refused git \$*" >&2; exit 128 ;; esac
+fi
+# the run dies during one git command - its leased push unless told which -
+# after that command ran, or before
+if [ -n "\${FM_T_GIT_KILL:-}" ]; then
+  case " \$* " in *"\${FM_T_GIT_KILL_ON:- --force-with-lease=}"*)
+    [ "\${FM_T_GIT_LAND:-}" != 1 ] || "$rb_git_real" "\$@"
+    kill -"\$FM_T_GIT_KILL" "\$PPID"; exit 128 ;;
+  esac
+fi
+exec "$rb_git_real" "\$@"
+W
+  chmod +x "$1/gitwrap/git"; printf '%s' "$1/gitwrap"
+}
+
+# A: main moved somewhere the task never touched. The branch still applies,
+# so it is left exactly as it was: the round adds a commit on top of it.
+dA="$(rb_fixture)"; bA="$(rb_branch "$dA")"; oldA="$(rb_head "$dA" "$bA")"
+assert_ne "" "$oldA" "round one pushed a branch to continue"
+printf 'printf "x\\n" > unrelated.txt\n' > "$dA/main.sh"
+rb_move_main "$dA" "$dA/main.sh"
+rb_round_two "$dA" "$rb_add"
+assert_eq "0" "$rb_rc" "a branch that still applies: the round completes"
+rb_not_rebuilt "$dA" "A"
+assert_eq "$oldA" "$(rb_head "$dA" "$bA^")" "a branch that still applies is left untouched"
+
+# A2: main changed a line next to the task's. The squashed patch no longer
+# applies (its context moved), but the branch still REBASES - which is what
+# gate 2 asks - so it is left exactly as it is, the same as gate 2 leaves it.
+dA2="$(rb_fixture)"; bA2="$(rb_branch "$dA2")"; oldA2="$(rb_head "$dA2" "$bA2")"
+printf '%s\n' "sed 's/^line 3\$/line 3 by main/' src/app.txt > n && mv n src/app.txt" > "$dA2/main.sh"
+rb_move_main "$dA2" "$dA2/main.sh"
+rb_round_two "$dA2" "$rb_add"
+assert_eq "0" "$rb_rc" "a branch that still rebases: the round completes"
+rb_not_rebuilt "$dA2" "A2"
+assert_eq "$oldA2" "$(rb_head "$dA2" "$bA2^")" "a branch that still rebases is left untouched"
+
+# B: the branch no longer rebases onto main commit by commit - gate 2 is
+# red - but its change as a whole merges cleanly three-way: one commit on
+# the new base, carrying both changes, and nothing for the worker.
+dB="$(rb_fixture)"; bB="$(rb_branch "$dB")"
+rb_replay_conflict "$dB"; oldB="$(rb_head "$dB" "$bB")"
+mainB="$(rb_head "$dB" main)"
+rb_round_two "$dB" "$rb_add"
+assert_eq "0" "$rb_rc" "a moved base with a clean apply: the round completes"
+rb_rebuilt "$dB" "B"
+assert_eq "$mainB" "$(rb_head "$dB" "$bB^")" "a clean rebuild sits on the NEW base"
+assert_eq "1" "$(git --git-dir="$dB/remote.git" rev-list --count "main..$bB")" \
+  "as exactly one commit"
+appB="$(git --git-dir="$dB/remote.git" show "$bB:src/app.txt")"
+assert_contains "$appB" "line 10 by main" "the rebuilt branch keeps main's change"
+assert_contains "$appB" "line 5 by the task" "and the task's"
+assert_ok "git --git-dir='$dB/remote.git' cat-file -e '$bB:src/round-two'" "and this round's work"
+assert_lacks "$(cat "$dB/prompt.md")" "These files conflict" "and the worker is told nothing conflicts"
+assert_eq "$oldB" "$(jq -r 'select(.type=="commit_pushed" and .data.rebuilt!=null)|.data.rebuilt.previous_head' \
+  "$dB/repo/state/events.jsonl" | tail -1)" "the round's result records the previous head"
+assert_contains "$(cat "$dB/ghcalls")" "pr comment 42" "the pull request is told, in place"
+assert_contains "$(cat "$dB/ghcalls")" "$oldB" "with the previous head for the reviewer"
+assert_lacks "$(cat "$dB/ghcalls")" "pr create" "and no second pull request is opened"
+
+# C: main and the task changed the same line, and the same prose. Both
+# files reach the worker with markers, listed by name in the prompt, and
+# what the worker writes is what is pushed.
+rb_conflicting_main() {
+  printf '%s\n' "sed 's/^line 5\$/line 5 by main/' src/app.txt > n && mv n src/app.txt" \
+    "sed 's/^prose the two sides may both edit\$/prose as main says/' design/design.md > n && mv n design/design.md" \
+    > "$1/main.sh"
+  rb_move_main "$1" "$1/main.sh"
+}
+dC="$(rb_fixture)"; bC="$(rb_branch "$dC")"
+rb_conflicting_main "$dC"; mainC="$(rb_head "$dC" main)"
+cat > "$dC/resolve.sh" <<'S'
+grep -q '^<<<<<<< ' src/app.txt && : > src/saw-markers
+{ printf 'line %s\n' 1 2 3 4; printf 'line 5 by main and the task\n'; printf 'line %s\n' 6 7 8 9 10; } > src/app.txt
+awk '/^<<<<<<< / { skip = 1; print "prose as main and the task say"; next }
+     /^>>>>>>> / { skip = 0; next } !skip' design/design.md > design/d.next
+mv design/d.next design/design.md
+S
+rb_round_two "$dC" "$dC/resolve.sh"
+rb_rebuilt "$dC" "C"
+pC="$(cat "$dC/prompt.md")"
+assert_contains "$pC" "These files conflict" "a conflicting rebuild tells the worker"
+assert_contains "$pC" '- `src/app.txt`' "and names the conflicting code file"
+assert_contains "$pC" '- `design/design.md`' "and a design.md conflict that is not table rows"
+assert_ok "git --git-dir='$dC/remote.git' cat-file -e '$bC:src/saw-markers'" \
+  "the conflicting file reached the adapter with standard markers"
+assert_eq "0" "$rb_rc" "a resolved conflict: the round completes"
+assert_eq "$mainC" "$(rb_head "$dC" "$bC^")" "the resolved branch is one commit on the new base"
+assert_contains "$(git --git-dir="$dC/remote.git" show "$bC:src/app.txt")" "line 5 by main and the task" \
+  "carrying the worker's resolution"
+assert_contains "$(git --git-dir="$dC/remote.git" show "$bC:design/design.md")" "prose as main and the task say" \
+  "in design.md too - no whole side was taken for it"
+
+# D: the worker leaves a marker behind. Nothing is committed and nothing
+# is pushed, and the run says which file.
+dD="$(rb_fixture)"; bD="$(rb_branch "$dD")"; oldD="$(rb_head "$dD" "$bD")"
+rb_conflicting_main "$dD"
+rb_round_two "$dD" "$rb_add"
+rb_rebuilt "$dD" "D"
+assert_eq "75" "$rb_rc" "a conflict marker left behind refuses the commit"
+assert_contains "$rb_out" "conflict marker" "and says why"
+assert_contains "$rb_out" "src/app.txt" "and which file"
+assert_eq "$oldD" "$(rb_head "$dD" "$bD")" "the remote branch is not touched"
+assert_eq "$oldD" "$(git -C "$dD/repo" rev-parse "$bD")" "nor is the local branch"
+
+# E: someone else pushed to the branch while the round ran. The rebuilt
+# branch is pushed with a lease on the head it fetched, so the push is
+# refused rather than overwriting what arrived.
+dE="$(rb_fixture)"; bE="$(rb_branch "$dE")"
+rb_replay_conflict "$dE"; oldE="$(rb_head "$dE" "$bE")"; mainE="$(rb_head "$dE" main)"
+cat > "$dE/race.sh" <<'S'
+printf 'two\n' > src/round-two
+git clone -q -b "$FM_T_BRANCH" "$FM_T_DIR/remote.git" "$FM_T_DIR/racer" \
+  && git -C "$FM_T_DIR/racer" -c user.email=a@b.c -c user.name=t commit -q --allow-empty -m race \
+  && git -C "$FM_T_DIR/racer" push -q origin HEAD
+S
+pushedE="$(rb_pushed "$dE")"
+rb_round_two "$dE" "$dE/race.sh"
+rb_rebuilt "$dE" "E"
+raceE="$(git -C "$dE/racer" rev-parse HEAD 2>/dev/null)"
+assert_ne "$oldE" "$raceE" "the racer pushed a new head"
+assert_eq "71" "$rb_rc" "force-with-lease refuses when the remote head moved"
+assert_eq "$raceE" "$(rb_head "$dE" "$bE")" "and the concurrent push is not overwritten"
+assert_contains "$rb_out" "could not push the rebuilt $bE" "the refusal is the rebuild's lease"
+rebuiltE="$(sed -n 's/^fm-worker: the rebuilt commit is \([0-9a-f]*\);.*/\1/p' <<<"$rb_out")"
+assert_ne "" "$rebuiltE" "and the run names the rebuilt commit"
+assert_fail "git --git-dir='$dE/remote.git' cat-file -e '$rebuiltE^{commit}'" "which never reached origin"
+assert_eq "$oldE" "$(git -C "$dE/repo" rev-parse "$bE")" "the local branch is back on its previous head"
+assert_eq "$pushedE" "$(rb_pushed "$dE")" "and no commit_pushed says otherwise"
+# E, next round: the local branch fast-forwards to what the racer pushed,
+# and the rebuild is made again from there and leased on the racer's head.
+rb_round_two "$dE" "$rb_add"
+assert_eq "0" "$rb_rc" "the round after a refused lease completes"
+rb_rebuilt "$dE" "E, next round"
+assert_eq "$mainE" "$(rb_head "$dE" "$bE^")" "as one commit on the base"
+assert_eq "1" "$(git --git-dir="$dE/remote.git" rev-list --count "main..$bE")" "exactly one"
+assert_eq "$raceE" "$(jq -r 'select(.type=="commit_pushed" and .data.rebuilt!=null)|.data.rebuilt.previous_head' \
+  "$dE/repo/state/events.jsonl" | tail -1)" "rebuilt from the racer's head, not over it"
+
+# F: both sides appended to the task table and to tasks.json. The rows are
+# unioned without the worker, and the task's own entry and row come through
+# exactly. A rebuild the worker adds nothing to is still pushed.
+dF="$(rb_fixture)"; bF="$(rb_branch "$dF")"; oldF="$(rb_head "$dF" "$bF")"
+cat > "$dF/main.sh" <<'S'
+jq '.tasks += [{id:"T-W",title:"main work",scope:[],acceptance:[]}]' design/tasks.json > n && mv n design/tasks.json
+awk '{ print } /^\| T-1 \|/ { print "| T-W | main work | — |" }' design/design.md > n && mv n design/design.md
+S
+rb_move_main "$dF" "$dF/main.sh"
+mainF="$(rb_head "$dF" main)"
+printf ':\n' > "$dF/nothing.sh"
+rb_round_two "$dF" "$dF/nothing.sh"
+assert_eq "0" "$rb_rc" "appended rows on both sides: the round completes"
+rb_rebuilt "$dF" "F"
+assert_eq "$mainF" "$(rb_head "$dF" "$bF^")" "on the new base"
+pF="$(cat "$dF/prompt.md")"
+assert_lacks "$pF" '- `design/design.md`' "the table-row union is not handed to the worker"
+assert_lacks "$pF" '- `design/tasks.json`' "nor are the appended task entries"
+dmF="$(git --git-dir="$dF/remote.git" show "$bF:design/design.md")"
+assert_contains "$dmF" "| T-Z | a mock task | T-1 |" "the task's table row survives exactly"
+assert_contains "$dmF" "| T-W | main work | — |" "and main's row is kept beside it"
+assert_lacks "$dmF" "=======" "with no marker left in design.md"
+assert_eq "$(git --git-dir="$dF/remote.git" show "$oldF:design/tasks.json" | jq -cS '.tasks[]|select(.id=="T-Z")')" \
+  "$(git --git-dir="$dF/remote.git" show "$bF:design/tasks.json" | jq -cS '.tasks[]|select(.id=="T-Z")')" \
+  "the task's tasks.json entry survives exactly"
+assert_eq "T-W" "$(git --git-dir="$dF/remote.git" show "$bF:design/tasks.json" | jq -r '.tasks[]|select(.id=="T-W")|.id')" \
+  "and main's new entry is kept"
+
+# G: a commit that fails stops the round, rebuilt or not. The script does
+# not run under set -e, so an unchecked commit was stepped over and the
+# round pushed and reported work it never committed. A pre-commit hook
+# that refuses is the failure: the fixture's own config, nothing ambient.
+rb_refusing_hook() {
+  mkdir -p "$1/hooks"; printf '#!/bin/sh\nexit 1\n' > "$1/hooks/pre-commit"; chmod +x "$1/hooks/pre-commit"
+  git -C "$1/repo" config core.hooksPath "$1/hooks"
+}
+dG="$(rb_fixture)"; bG="$(rb_branch "$dG")"; oldG="$(rb_head "$dG" "$bG")"
+rb_refusing_hook "$dG"
+pushedG="$(rb_pushed "$dG")"
+rb_round_two "$dG" "$rb_add"
+rb_not_rebuilt "$dG" "G"
+assert_eq "70" "$rb_rc" "a plain round whose commit fails stops"
+assert_contains "$rb_out" "could not commit" "and says so"
+assert_eq "$oldG" "$(rb_head "$dG" "$bG")" "nothing is pushed"
+assert_eq "$pushedG" "$(rb_pushed "$dG")" "and no commit is reported"
+assert_lacks "$(cat "$dG/ghcalls")" "pr comment" "nor is the pull request told of one"
+dG2="$(rb_fixture)"; bG2="$(rb_branch "$dG2")"
+rb_replay_conflict "$dG2"; oldG2="$(rb_head "$dG2" "$bG2")"; mainG2="$(rb_head "$dG2" main)"
+rb_refusing_hook "$dG2"
+rb_round_two "$dG2" "$rb_add"
+rb_rebuilt "$dG2" "G2"
+assert_eq "70" "$rb_rc" "a rebuilt round whose commit fails stops"
+assert_contains "$rb_out" "could not commit" "at the commit"
+assert_eq "$oldG2" "$(rb_head "$dG2" "$bG2")" "and pushes nothing"
+assert_eq "$oldG2" "$(git -C "$dG2/repo" rev-parse "$bG2")" "and the local branch is not moved onto the base"
+# G2, next round, with the hook gone: the staged rebuild the failed commit
+# left is rescued, and the branch is rebuilt again and committed once.
+git -C "$dG2/repo" config --unset core.hooksPath
+rb_round_two "$dG2" "$rb_add"
+assert_eq "0" "$rb_rc" "the round after a failed rebuilt commit completes"
+rb_rebuilt "$dG2" "G2, next round"
+assert_ne "" "$(ls "$dG2/repo/state/rescued" 2>/dev/null)" "after keeping what the failed round left"
+assert_eq "$mainG2" "$(rb_head "$dG2" "$bG2^")" "as one commit on the base"
+assert_eq "1" "$(git --git-dir="$dG2/remote.git" rev-list --count "main..$bG2")" "exactly one"
+assert_eq "$oldG2" "$(jq -r 'select(.type=="commit_pushed" and .data.rebuilt!=null)|.data.rebuilt.previous_head' \
+  "$dG2/repo/state/events.jsonl" | tail -1)" "rebuilt from the branch the failed round left alone"
+
+# H: design.md has a row-append conflict AND a prose conflict. The rows
+# are unioned hunk by hunk; only the prose reaches the worker, as a
+# standard conflict with no diff3 base section.
+dH="$(rb_fixture)"; bH="$(rb_branch "$dH")"
+cat > "$dH/main.sh" <<'S'
+awk '{ if ($0 == "prose the two sides may both edit") print "prose as main says"; else print }
+     /^\| T-1 \|/ { print "| T-W | main work | — |" }' design/design.md > n && mv n design/design.md
+S
+rb_move_main "$dH" "$dH/main.sh"; mainH="$(rb_head "$dH" main)"
+cat > "$dH/resolve.sh" <<'S'
+[ "$(grep -c '^<<<<<<< ' design/design.md)" = 1 ] && : > src/one-hunk
+grep '^|||||||' design/design.md > /dev/null && : > src/saw-diff3
+awk '/^<<<<<<< / { skip = 1; print "prose as main and the task say"; next }
+     /^>>>>>>> / { skip = 0; next } !skip' design/design.md > design/d.next
+mv design/d.next design/design.md
+S
+rb_round_two "$dH" "$dH/resolve.sh"
+rb_rebuilt "$dH" "H"
+assert_eq "0" "$rb_rc" "rows and prose both conflicting: the round completes"
+assert_contains "$(cat "$dH/prompt.md")" '- `design/design.md`' "the prose goes to the worker"
+assert_ok "git --git-dir='$dH/remote.git' cat-file -e '$bH:src/one-hunk'" \
+  "as the only hunk left: the row union was not handed back with it"
+assert_fail "git --git-dir='$dH/remote.git' cat-file -e '$bH:src/saw-diff3'" \
+  "and as a standard conflict, with no diff3 base section"
+assert_eq "$mainH" "$(rb_head "$dH" "$bH^")" "one commit on the new base"
+dmH="$(git --git-dir="$dH/remote.git" show "$bH:design/design.md")"
+assert_contains "$dmH" "| T-W | main work | — |" "main's row is kept"
+assert_contains "$dmH" "| T-Z | a mock task | T-1 |" "and the task's"
+assert_contains "$dmH" "prose as main and the task say" "and the worker's resolution"
+
+# I: the task's entry and row are checked before the commit, on every
+# path. A worker that rewrites its own row while resolving is refused.
+dI="$(rb_fixture)"; bI="$(rb_branch "$dI")"; oldI="$(rb_head "$dI" "$bI")"
+rb_conflicting_main "$dI"
+cat > "$dI/resolve.sh" <<'S'
+{ printf 'line %s\n' 1 2 3 4; printf 'line 5 by main and the task\n'; printf 'line %s\n' 6 7 8 9 10; } > src/app.txt
+awk '/^<<<<<<< / { skip = 1; print "prose as main and the task say"; next }
+     /^>>>>>>> / { skip = 0; next } !skip' design/design.md \
+  | sed 's/^| T-Z | a mock task |/| T-Z | renamed by the worker |/' > design/d.next
+mv design/d.next design/design.md
+S
+rb_round_two "$dI" "$dI/resolve.sh"
+rb_rebuilt "$dI" "I"
+assert_eq "75" "$rb_rc" "a rebuilt round that changes the task's own row is refused"
+assert_contains "$rb_out" "table row is not as $oldI had it in: design/design.md" "and names the file"
+assert_eq "$oldI" "$(rb_head "$dI" "$bI")" "and pushes nothing"
+
+# J: main edited the task's own tasks.json entry, and the file merged
+# cleanly. The branch's entry is put back, and main's other change stays.
+# Main's edits alone still rebase, so the branch is first made one that
+# fails gate 2's replay; otherwise nothing is rebuilt and nothing restored.
+dJ="$(rb_fixture)"; bJ="$(rb_branch "$dJ")"
+rb_replay_conflict "$dJ"; oldJ="$(rb_head "$dJ" "$bJ")"
+cat > "$dJ/main.sh" <<'S'
+sed 's/^line 3$/line 3 by main/' src/app.txt > n && mv n src/app.txt
+jq '{version: 2} + (.tasks[0].title = "retitled on main")' design/tasks.json > n && mv n design/tasks.json
+S
+rb_move_main "$dJ" "$dJ/main.sh"; mainJ="$(rb_head "$dJ" main)"
+rb_round_two "$dJ" "$rb_add"
+rb_rebuilt "$dJ" "J"
+assert_eq "0" "$rb_rc" "main edited the task's entry: the round completes"
+assert_eq "$mainJ" "$(rb_head "$dJ" "$bJ^")" "on the new base"
+tjJ="$(git --git-dir="$dJ/remote.git" show "$bJ:design/tasks.json")"
+assert_eq "$(git --git-dir="$dJ/remote.git" show "$oldJ:design/tasks.json" | jq -cS '.tasks[]|select(.id=="T-Z")')" \
+  "$(jq -cS '.tasks[]|select(.id=="T-Z")' <<<"$tjJ")" "the task's entry comes through as the branch had it"
+assert_eq "2" "$(jq -r .version <<<"$tjJ")" "and main's other change to the file is kept"
+
+# K: the round after one that did not commit its rebuild - a marker left
+# (75), or a round that only asked - rescues the worktree, rebuilds from
+# the branch, and commits once on the base with that round's resolution.
+dK="$(rb_fixture)"; bK="$(rb_branch "$dK")"; oldK="$(rb_head "$dK" "$bK")"
+rb_conflicting_main "$dK"; mainK="$(rb_head "$dK" main)"
+rb_round_two "$dK" "$rb_add"
+rb_rebuilt "$dK" "K"
+assert_eq "75" "$rb_rc" "round two leaves a marker"
+cp "$dC/resolve.sh" "$dK/resolve.sh" 2>/dev/null || true
+rb_round_two "$dK" "$dK/resolve.sh"
+rb_rebuilt "$dK" "K, next round"
+assert_eq "0" "$rb_rc" "the next round completes"
+assert_ne "" "$(ls "$dK/repo/state/rescued" 2>/dev/null)" "and kept the refused round's worktree first"
+assert_eq "$mainK" "$(rb_head "$dK" "$bK^")" "one commit on the base"
+assert_eq "1" "$(git --git-dir="$dK/remote.git" rev-list --count "main..$bK")" "exactly one"
+assert_contains "$(git --git-dir="$dK/remote.git" show "$bK:src/app.txt")" "line 5 by main and the task" \
+  "with this round's resolution in it"
+assert_lacks "$(git --git-dir="$dK/remote.git" show "$bK:src/app.txt")" "<<<<<<<" "and no marker"
+assert_ne "$oldK" "$(git -C "$dK/repo" rev-parse "$bK")" "the local branch is the rebuilt one"
+dK2="$(rb_fixture)"; bK2="$(rb_branch "$dK2")"; oldK2="$(rb_head "$dK2" "$bK2")"
+rb_conflicting_main "$dK2"; mainK2="$(rb_head "$dK2" main)"
+printf 'printf "ASK-PASS-CRITERIA:T-Z\\n" > .fm-say.md\n' > "$dK2/ask.sh"
+rb_round_two "$dK2" "$dK2/ask.sh"
+rb_rebuilt "$dK2" "K2"
+assert_eq "0" "$rb_rc" "a rebuilt round that only asks completes"
+assert_eq "$oldK2" "$(rb_head "$dK2" "$bK2")" "and publishes nothing"
+cp "$dC/resolve.sh" "$dK2/resolve.sh" 2>/dev/null || true
+rb_round_two "$dK2" "$dK2/resolve.sh"
+rb_rebuilt "$dK2" "K2, next round"
+assert_eq "0" "$rb_rc" "the round after the question completes"
+assert_eq "$mainK2" "$(rb_head "$dK2" "$bK2^")" "as one commit on the base"
+assert_contains "$(git --git-dir="$dK2/remote.git" show "$bK2:src/app.txt")" "line 5 by main and the task" \
+  "carrying the resolution"
+
+# L: a reused branch with no --pr is continued the same way. The lookup
+# finds no pull request, the rebuild is pushed, and the one it opens
+# records the previous head.
+dL="$(rb_fixture)"; bL="$(rb_branch "$dL")"
+rb_replay_conflict "$dL"; oldL="$(rb_head "$dL" "$bL")"; mainL="$(rb_head "$dL" main)"
+rb_round_two "$dL" "$rb_add" ''
+rb_rebuilt "$dL" "L"
+assert_eq "0" "$rb_rc" "a reused branch without --pr: the round completes"
+assert_eq "$mainL" "$(rb_head "$dL" "$bL^")" "rebuilt on the new base"
+assert_contains "$(cat "$dL/ghcalls")" "pr create" "the pull request is opened"
+assert_eq "$oldL" "$(jq -r 'select(.type=="pr_opened" and .data.rebuilt!=null)|.data.rebuilt.previous_head' \
+  "$dL/repo/state/events.jsonl" | tail -1)" "and the event that opens it records the previous head"
+
+# M: something commits on the detached HEAD mid-round - a checkpoint, or
+# the worker's own commit with the markers still in it - and then the
+# worker adds more. The checks read the rebuild against its base, so the
+# round is refused and nothing with a marker in it is published.
+dM="$(rb_fixture)"; bM="$(rb_branch "$dM")"; oldM="$(rb_head "$dM" "$bM")"
+rb_conflicting_main "$dM"
+cat > "$dM/commit.sh" <<'S'
+"$FM_T_DIR/repo/bin/fm-checkpoint.sh" --dir . --message 'mid-round save' >/dev/null 2>&1
+echo "$?" > "$FM_T_DIR/checkpoint-rc"
+git add -A && git -c user.email=a@b.c -c user.name=t commit -qm 'mid-round, markers and all'
+printf 'two\n' > src/round-two
+S
+rb_round_two "$dM" "$dM/commit.sh"
+rb_rebuilt "$dM" "M"
+assert_ne "0" "$(cat "$dM/checkpoint-rc" 2>/dev/null)" "a checkpoint on the detached rebuild is refused"
+assert_eq "75" "$rb_rc" "a commit made on the rebuild mid-round refuses the round"
+assert_contains "$rb_out" "HEAD moved off the rebuild base" "and says why"
+assert_eq "$oldM" "$(rb_head "$dM" "$bM")" "nothing is pushed"
+assert_eq "$oldM" "$(git -C "$dM/repo" rev-parse "$bM")" "and the local branch is not moved"
+
+# N: a conflict git cannot write markers into. Main deleted the file the
+# task changed, so the task's version sits in the worktree looking done.
+# It is described as what it is, and a round that leaves it exactly as the
+# merge left it is refused; one that decides is committed.
+dN="$(rb_fixture)"; bN="$(rb_branch "$dN")"; oldN="$(rb_head "$dN" "$bN")"
+printf 'rm src/app.txt\n' > "$dN/main.sh"
+rb_move_main "$dN" "$dN/main.sh"; mainN="$(rb_head "$dN" main)"
+rb_round_two "$dN" "$rb_add"
+rb_rebuilt "$dN" "N"
+pN="$(cat "$dN/prompt.md")"
+assert_contains "$pN" "git could not write markers into them" "a conflict with no markers is described as one"
+assert_contains "$pN" "- \`src/app.txt\`: the worktree holds your task's version; main deleted it" \
+  "with the side the merge left in the worktree"
+# the worker skill in the same prompt says "carry standard conflict
+# markers" too; only the list's own heading is the run's claim
+assert_lacks "$pN" "These files conflict and carry standard conflict markers" "and is not called a file with markers"
+assert_eq "75" "$rb_rc" "left as the merge left it, the round is refused"
+assert_contains "$rb_out" "conflicts with no markers are still as the merge left them: src/app.txt" "and names it"
+assert_eq "$oldN" "$(rb_head "$dN" "$bN")" "nothing is pushed"
+printf '%s\n' 'rm -f src/app.txt' "printf 'line 5 by the task\\n' > src/line-5.txt" > "$dN/decide.sh"
+rb_round_two "$dN" "$dN/decide.sh"
+rb_rebuilt "$dN" "N, next round"
+assert_eq "0" "$rb_rc" "a round that decides is committed"
+assert_eq "$mainN" "$(rb_head "$dN" "$bN^")" "as one commit on the base"
+assert_fail "git --git-dir='$dN/remote.git' cat-file -e '$bN:src/app.txt'" "with main's deletion kept"
+assert_ok "git --git-dir='$dN/remote.git' cat-file -e '$bN:src/line-5.txt'" "and the task's intent"
+
+# P: each place bring_up_to_date declines to rebuild says so, and leaves
+# the branch as it is. Every one is set up where a rebuild would otherwise
+# happen, so a guard that is deleted shows.
+# P1: origin's branch has a commit the local one lacks, and the local one a
+# commit origin lacks: the lease head is not in what would be rebuilt, so
+# a rebuild would overwrite it. Not rebuilt; the plain push is refused.
+dP1="$(rb_fixture)"; bP1="$(rb_branch "$dP1")"
+rb_replay_conflict "$dP1"
+( cd "$dP1/repo/state/worktrees/T-Z" && printf 'local\n' > src/local.txt && git add src/local.txt \
+    && rb_commit -m 'not pushed' )
+git clone -q -b "$bP1" "$dP1/remote.git" "$dP1/racer" \
+  && ( cd "$dP1/racer" && rb_commit --allow-empty -m 'pushed from elsewhere' && git push -q origin HEAD )
+raceP1="$(git -C "$dP1/racer" rev-parse HEAD)"
+rb_round_two "$dP1" "$rb_add"
+rb_not_rebuilt "$dP1" "P1"
+assert_contains "$rb_out" "origin's $bP1 has commits this worktree lacks" "origin ahead: says why it is not rebuilt"
+assert_eq "71" "$rb_rc" "and the plain push is refused"
+assert_eq "$raceP1" "$(rb_head "$dP1" "$bP1")" "the commit only origin had is not overwritten"
+# P2: the base cannot be fetched.
+dP2="$(rb_fixture)"; bP2="$(rb_branch "$dP2")"
+rb_replay_conflict "$dP2"; oldP2="$(rb_head "$dP2" "$bP2")"
+PATH="$(rb_gitwrap "$dP2"):$PATH" FM_T_GIT_FAIL="fetch -q origin +refs/heads/main:" rb_round_two "$dP2" "$rb_add"
+rb_not_rebuilt "$dP2" "P2"
+assert_contains "$rb_out" "could not fetch main; $bP2 is not checked against it" "an unfetchable base: says so"
+assert_eq "0" "$rb_rc" "and the round goes on without it"
+assert_eq "$oldP2" "$(rb_head "$dP2" "$bP2^")" "on the branch as it was"
+# P3: origin cannot say where the branch is, so there is no head to lease on.
+dP3="$(rb_fixture)"; bP3="$(rb_branch "$dP3")"
+rb_replay_conflict "$dP3"; oldP3="$(rb_head "$dP3" "$bP3")"
+PATH="$(rb_gitwrap "$dP3"):$PATH" FM_T_GIT_FAIL="ls-remote --exit-code --heads origin refs/heads/" \
+  rb_round_two "$dP3" "$rb_add"
+rb_not_rebuilt "$dP3" "P3"
+assert_contains "$rb_out" "could not read origin's $bP3; not rebuilding it" "an unreadable remote head: says so"
+assert_eq "0" "$rb_rc" "and the round goes on without a rebuild"
+assert_eq "$oldP3" "$(rb_head "$dP3" "$bP3^")" "on the branch as it was"
+# P4: main was replaced by a history the branch shares nothing with.
+dP4="$(rb_fixture)"; bP4="$(rb_branch "$dP4")"; oldP4="$(rb_head "$dP4" "$bP4")"
+rm -rf "$dP4/other"; git clone -q -b main "$dP4/remote.git" "$dP4/other"
+( cd "$dP4/other" && git checkout -q --orphan fresh && git rm -rqf . && printf 'x\n' > x \
+    && git add x && rb_commit -m 'unrelated' && git push -q -f origin fresh:main )
+rb_round_two "$dP4" "$rb_add"
+rb_not_rebuilt "$dP4" "P4"
+assert_contains "$rb_out" "$bP4 shares no history with main" "no merge base: says so"
+assert_eq "0" "$rb_rc" "and the round goes on without a rebuild"
+assert_eq "$oldP4" "$(rb_head "$dP4" "$bP4^")" "on the branch as it was"
+# P5: the three-way merge fails without leaving a conflict. The worker is
+# never handed the bare base as though it were its branch.
+dP5="$(rb_fixture)"; bP5="$(rb_branch "$dP5")"
+rb_replay_conflict "$dP5"; oldP5="$(rb_head "$dP5" "$bP5")"
+PATH="$(rb_gitwrap "$dP5"):$PATH" FM_T_GIT_FAIL="merge -q --squash" rb_round_two "$dP5" "$rb_add"
+assert_eq "70" "$rb_rc" "a merge that fails with no conflict stops the round"
+assert_contains "$rb_out" "could not rebuild $bP5 on main" "and says so"
+assert_eq "" "$(cat "$dP5/prompt.md" 2>/dev/null)" "before any worker is started"
+assert_eq "$oldP5" "$(rb_head "$dP5" "$bP5")" "nothing is pushed"
+assert_eq "refs/heads/$bP5" "$(git -C "$dP5/repo/state/worktrees/T-Z" symbolic-ref -q HEAD)" \
+  "and the worktree is back on the branch"
+assert_eq "$oldP5" "$(git -C "$dP5/repo/state/worktrees/T-Z" rev-parse HEAD)" "at its head"
+# P6: the fresh worktree is not clean - here a post-checkout hook of the
+# repository's own wrote into it - so the rebuild, whose failure path is a
+# hard reset, is not attempted.
+dP6="$(rb_fixture)"; bP6="$(rb_branch "$dP6")"
+rb_replay_conflict "$dP6"; oldP6="$(rb_head "$dP6" "$bP6")"
+mkdir -p "$dP6/hooks"; printf '#!/bin/sh\nprintf "stray\\n" > stray.txt\n' > "$dP6/hooks/post-checkout"
+chmod +x "$dP6/hooks/post-checkout"; git -C "$dP6/repo" config core.hooksPath "$dP6/hooks"
+rb_round_two "$dP6" "$rb_add"
+rb_not_rebuilt "$dP6" "P6"
+assert_contains "$rb_out" "is not clean; $bP6 is not rebuilt this round" "a dirty worktree: says so"
+assert_eq "0" "$rb_rc" "and the round goes on without a rebuild"
+assert_eq "$oldP6" "$(rb_head "$dP6" "$bP6^")" "on the branch as it was"
+# P7: both sides changed the same entry in tasks.json, and it is not the
+# task's. Merging by id cannot choose, so the file goes to the worker with
+# its markers rather than one side's entry being taken.
+dP7="$(rb_fixture two-tasks)"; bP7="$(rb_branch "$dP7")"
+( cd "$dP7/repo/state/worktrees/T-Z" \
+    && jq '(.tasks[]|select(.id=="T-1")|.title)="one, as the task says"' design/tasks.json > n \
+    && mv n design/tasks.json && rb_commit -am 'the task retitles T-1' && git push -q origin HEAD )
+oldP7="$(rb_head "$dP7" "$bP7")"
+printf '%s\n' "jq '(.tasks[]|select(.id==\"T-1\")|.title)=\"one, as main says\"' design/tasks.json > n && mv n design/tasks.json" \
+  > "$dP7/main.sh"
+rb_move_main "$dP7" "$dP7/main.sh"
+printf '%s\n' 'grep -q "^<<<<<<< " design/tasks.json && : > "$FM_T_DIR/saw-tasks-markers"' > "$dP7/look.sh"
+rb_round_two "$dP7" "$dP7/look.sh"
+rb_rebuilt "$dP7" "P7"
+assert_contains "$(cat "$dP7/prompt.md")" '- `design/tasks.json`' "an entry both sides changed goes to the worker"
+assert_ok "test -f '$dP7/saw-tasks-markers'" "with its markers"
+assert_eq "75" "$rb_rc" "and a round that leaves them is refused"
+assert_eq "$oldP7" "$(rb_head "$dP7" "$bP7")" "nothing is pushed"
+
+# Q: the run dies during the rebuilt push. The local branch must end on
+# whatever origin has, or every later round is refused at the plain push
+# (71) with nothing in the system allowed to repair it. TERM goes through
+# the EXIT trap; KILL leaves it to the next round. Each dies once with the
+# push not landed and once with it landed, and the next round is run.
+rb_dies_pushing() {   # rb_dies_pushing <dir> <signal> <landed 0|1>
+  PATH="$(rb_gitwrap "$1"):$PATH" FM_T_GIT_KILL="$2" FM_T_GIT_LAND="$3" rb_round_two "$1" "$rb_add"
+}
+rb_pending() { git -C "$1/repo" rev-parse -q --verify "refs/fm-rebuilt/$2" 2>/dev/null; }
+# a round after a landed rebuild needs work of its own to commit
+rb_more="${TMPDIR:-/tmp}/fm-rb-more-$$.sh"; printf 'printf "three\\n" > src/round-three\n' > "$rb_more"
+# Q1: TERM before origin took it. The branch never moved, and stays.
+dQ1="$(rb_fixture)"; bQ1="$(rb_branch "$dQ1")"
+rb_replay_conflict "$dQ1"; oldQ1="$(rb_head "$dQ1" "$bQ1")"; mainQ1="$(rb_head "$dQ1" main)"
+rb_dies_pushing "$dQ1" TERM 0
+rb_rebuilt "$dQ1" "Q1"
+assert_eq "143" "$rb_rc" "Q1: a run terminated during its rebuilt push stops"
+assert_eq "$oldQ1" "$(rb_head "$dQ1" "$bQ1")" "Q1: origin never took the rebuild"
+assert_eq "$oldQ1" "$(git -C "$dQ1/repo" rev-parse "$bQ1")" "Q1: so the local branch stays on the previous head"
+assert_contains "$rb_out" "never reached origin; $bQ1 stays where it was" "Q1: the exit settles it and says so"
+assert_eq "" "$(rb_pending "$dQ1" "$bQ1")" "Q1: and nothing is left pending"
+rb_round_two "$dQ1" "$rb_add"
+assert_eq "0" "$rb_rc" "Q1, next round: completes rather than being refused"
+rb_rebuilt "$dQ1" "Q1, next round"
+assert_eq "$mainQ1" "$(rb_head "$dQ1" "$bQ1^")" "Q1, next round: one commit on the base"
+assert_eq "1" "$(git --git-dir="$dQ1/remote.git" rev-list --count "main..$bQ1")" "Q1, next round: exactly one"
+# Q2: TERM after origin took it. The branch follows origin.
+dQ2="$(rb_fixture)"; bQ2="$(rb_branch "$dQ2")"
+rb_replay_conflict "$dQ2"; mainQ2="$(rb_head "$dQ2" main)"
+rb_dies_pushing "$dQ2" TERM 1
+rb_rebuilt "$dQ2" "Q2"
+assert_eq "143" "$rb_rc" "Q2: a run terminated as its rebuilt push lands stops"
+newQ2="$(rb_head "$dQ2" "$bQ2")"
+assert_eq "$mainQ2" "$(rb_head "$dQ2" "$bQ2^")" "Q2: origin took the rebuild"
+assert_eq "$newQ2" "$(git -C "$dQ2/repo" rev-parse "$bQ2")" "Q2: so the local branch moves onto it"
+assert_contains "$rb_out" "reached origin; $bQ2 now points at it" "Q2: the exit settles it and says so"
+assert_eq "" "$(rb_pending "$dQ2" "$bQ2")" "Q2: and nothing is left pending"
+rb_round_two "$dQ2" "$rb_more"
+assert_eq "0" "$rb_rc" "Q2, next round: completes"
+rb_not_rebuilt "$dQ2" "Q2, next round"
+assert_eq "$newQ2" "$(rb_head "$dQ2" "$bQ2^")" "Q2, next round: continues the rebuilt commit"
+# Q3: KILL before origin took it. No trap runs; the next round asks origin.
+dQ3="$(rb_fixture)"; bQ3="$(rb_branch "$dQ3")"
+rb_replay_conflict "$dQ3"; oldQ3="$(rb_head "$dQ3" "$bQ3")"; mainQ3="$(rb_head "$dQ3" main)"
+rb_dies_pushing "$dQ3" KILL 0
+rb_rebuilt "$dQ3" "Q3"
+assert_eq "137" "$rb_rc" "Q3: a run killed during its rebuilt push stops"
+assert_eq "$oldQ3" "$(rb_head "$dQ3" "$bQ3")" "Q3: origin never took the rebuild"
+assert_eq "$oldQ3" "$(git -C "$dQ3/repo" rev-parse "$bQ3")" "Q3: and the local branch never moved"
+assert_ne "" "$(rb_pending "$dQ3" "$bQ3")" "Q3: the unconfirmed push is left pending"
+rb_round_two "$dQ3" "$rb_add"
+assert_eq "0" "$rb_rc" "Q3, next round: completes rather than being refused"
+assert_contains "$rb_out" "never reached origin; $bQ3 stays where it was" "Q3, next round: settles it first"
+assert_eq "" "$(rb_pending "$dQ3" "$bQ3")" "Q3, next round: and clears it"
+rb_rebuilt "$dQ3" "Q3, next round"
+assert_eq "$mainQ3" "$(rb_head "$dQ3" "$bQ3^")" "Q3, next round: one commit on the base"
+# Q4: KILL after origin took it, before the local branch moved onto it.
+dQ4="$(rb_fixture)"; bQ4="$(rb_branch "$dQ4")"
+rb_replay_conflict "$dQ4"; oldQ4="$(rb_head "$dQ4" "$bQ4")"; mainQ4="$(rb_head "$dQ4" main)"
+rb_dies_pushing "$dQ4" KILL 1
+rb_rebuilt "$dQ4" "Q4"
+assert_eq "137" "$rb_rc" "Q4: a run killed as its rebuilt push lands stops"
+newQ4="$(rb_head "$dQ4" "$bQ4")"
+assert_eq "$mainQ4" "$(rb_head "$dQ4" "$bQ4^")" "Q4: origin took the rebuild"
+assert_eq "$oldQ4" "$(git -C "$dQ4/repo" rev-parse "$bQ4")" "Q4: the local branch had not moved yet"
+rb_round_two "$dQ4" "$rb_more"
+assert_eq "0" "$rb_rc" "Q4, next round: completes rather than being refused"
+assert_contains "$rb_out" "reached origin; $bQ4 now points at it" "Q4, next round: follows origin first"
+rb_not_rebuilt "$dQ4" "Q4, next round"
+assert_eq "$newQ4" "$(rb_head "$dQ4" "$bQ4^")" "Q4, next round: continues the rebuilt commit"
+
+# R: a conflict in a file whose name is not ASCII. git's plain path output
+# quotes such a name ("src/\346\226\207..."), and that string names no file:
+# read as one, the conflict looks deleted, sits under "no markers", and the
+# round is refused on every rebuild with nothing allowed to repair it.
+# core.quotePath is set to git's default here, not read from this machine.
+rb_ascii_conflict() {   # rb_ascii_conflict <dir>: both sides add src/文件.txt
+  git -C "$1/repo" config core.quotePath true
+  ( cd "$1/repo/state/worktrees/T-Z" && printf 'the task\n' > 'src/文件.txt' && git add -A \
+      && rb_commit -m 'the task adds a file' && git push -q origin HEAD ) || return 1
+  printf '%s\n' "printf 'main\\n' > 'src/文件.txt'" > "$1/main.sh"
+  rb_move_main "$1" "$1/main.sh"
+}
+# R1: the worker resolves it; one commit on the base, carrying the resolution.
+dR1="$(rb_fixture)"; bR1="$(rb_branch "$dR1")"
+rb_ascii_conflict "$dR1"; mainR1="$(rb_head "$dR1" main)"
+printf '%s\n' "grep -q '^<<<<<<< ' 'src/文件.txt' && : > \"\$FM_T_DIR/saw-markers\"" \
+  "printf 'main and the task\\n' > 'src/文件.txt'" > "$dR1/resolve.sh"
+rb_round_two "$dR1" "$dR1/resolve.sh"
+rb_rebuilt "$dR1" "R1"
+pR1="$(cat "$dR1/prompt.md")"
+assert_contains "$pR1" '- `src/文件.txt`' "R1: a non-ASCII conflict is listed by its real name"
+assert_lacks "$pR1" '\346' "R1: never by git's quoted spelling"
+assert_lacks "$pR1" "git could not write markers" "R1: and not as a conflict with no markers"
+assert_ok "test -f '$dR1/saw-markers'" "R1: it reached the worker with its markers"
+assert_eq "0" "$rb_rc" "R1: once resolved, the round completes"
+assert_eq "$mainR1" "$(rb_head "$dR1" "$bR1^")" "R1: as one commit on the base"
+assert_eq "main and the task" "$(git --git-dir="$dR1/remote.git" show "$bR1:src/文件.txt")" \
+  "R1: carrying the worker's resolution"
+# R2: a marker left in it is refused, and the refusal names the real file.
+dR2="$(rb_fixture)"; bR2="$(rb_branch "$dR2")"
+rb_ascii_conflict "$dR2"; oldR2="$(rb_head "$dR2" "$bR2")"
+rb_round_two "$dR2" "$rb_add"
+rb_rebuilt "$dR2" "R2"
+assert_eq "75" "$rb_rc" "R2: a marker left in a non-ASCII file refuses the commit"
+assert_contains "$rb_out" "conflict markers remain in: src/文件.txt" "R2: naming the file as it is"
+assert_eq "$oldR2" "$(rb_head "$dR2" "$bR2")" "R2: nothing is pushed"
+
+# S: the rebase probe fails for a reason that is not a conflict. That says
+# nothing about gate 2, so the branch is not rebuilt (and force-pushed) on it.
+dS="$(rb_fixture)"; bS="$(rb_branch "$dS")"
+rb_replay_conflict "$dS"; oldS="$(rb_head "$dS" "$bS")"
+PATH="$(rb_gitwrap "$dS"):$PATH" FM_T_GIT_FAIL="rebase refs/remotes/origin/main" rb_round_two "$dS" "$rb_add"
+rb_not_rebuilt "$dS" "S"
+assert_contains "$rb_out" "could not check whether $bS rebases onto main; not rebuilding it" \
+  "S: a probe that failed without a conflict: says so"
+assert_eq "0" "$rb_rc" "S: and the round goes on without a rebuild"
+assert_eq "$oldS" "$(rb_head "$dS" "$bS^")" "S: on the branch as it was"
+
+# T: TERM right after the squash merge, before the rest of the rebuild. The
+# worktree is detached and dirty with the half-made rebuild; the exit must
+# know it is one and publish nothing, and the next round rebuilds it.
+dT="$(rb_fixture)"; bT="$(rb_branch "$dT")"
+rb_replay_conflict "$dT"; oldT="$(rb_head "$dT" "$bT")"; mainT="$(rb_head "$dT" main)"
+PATH="$(rb_gitwrap "$dT"):$PATH" FM_T_GIT_KILL=TERM FM_T_GIT_KILL_ON=" merge -q --squash " FM_T_GIT_LAND=1 \
+  rb_round_two "$dT" "$rb_add"
+assert_eq "143" "$rb_rc" "T: a run terminated mid-rebuild stops"
+assert_contains "$rb_out" "the rebuild of $bT was not committed" "T: the exit knows it holds a rebuild"
+assert_lacks "$rb_out" "publishing dirty worktree" "T: and publishes nothing from it"
+assert_eq "$oldT" "$(rb_head "$dT" "$bT")" "T: origin is untouched"
+rb_round_two "$dT" "$rb_add"
+assert_eq "0" "$rb_rc" "T, next round: completes"
+rb_rebuilt "$dT" "T, next round"
+assert_eq "$mainT" "$(rb_head "$dT" "$bT^")" "T, next round: one commit on the base"
+
+rm -rf "$dA" "$dA2" "$dB" "$dC" "$dD" "$dE" "$dF" "$dG" "$dG2" "$dH" "$dI" "$dJ" "$dK" "$dK2" "$dL" \
+  "$dM" "$dN" "$dP1" "$dP2" "$dP3" "$dP4" "$dP5" "$dP6" "$dP7" "$dQ1" "$dQ2" "$dQ3" "$dQ4" \
+  "$dR1" "$dR2" "$dS" "$dT" "$rb_add" "$rb_more"
+
 finish

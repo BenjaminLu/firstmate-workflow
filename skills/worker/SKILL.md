@@ -49,6 +49,36 @@ until `WORKER_COMPLETE` for the only push. `fm-worker.sh` still does a
 final sweep through the same helper and will also publish a dirty
 worktree on EXIT (TERM/INT), but mid-run saves are your job.
 
+## When the base moved under your branch
+
+On a later round `fm-worker.sh` may rebuild your branch as one change on the
+current base before you start, and the prompt then says so and lists every
+file it could not merge. Those files carry standard conflict markers
+(`<<<<<<<`, `=======`, `>>>>>>>`). Resolve every listed file before any other
+work:
+
+- Keep both sides. The base's side is someone else's merged work; your side
+  is your task's intent. Write the result that does what both meant.
+- Never drop the base's change, and never take a whole side of a file.
+- Remove every marker. A marker left in any file the commit carries refuses
+  the commit, and nothing from the round is published.
+- Some conflicts have no markers: a binary file, or a file one side deleted
+  and the other changed. The prompt lists them apart and says which side is
+  in the worktree. That side only looks resolved. Decide what the file should
+  be; a round that leaves one exactly as the merge left it is refused.
+
+The rebuild leaves the worktree detached until the script commits, so
+`fm-checkpoint.sh` refuses that round; `fm-worker.sh` pushes it. Do not
+commit in it yourself: a round whose HEAD moved off the rebuild base is
+refused.
+
+In a rebuilt round your own `design/tasks.json` entry and task-table row are
+frozen. The script carries them through exactly as your previous head had
+them; do not rewrite them while resolving. A rebuilt round that changes
+either is refused like one that leaves a marker. If the review asks you to
+change them, say so in `.fm-say.md` and change them in the next round that
+is not a rebuild.
+
 ## Every finding is a class
 
 **A review finding names an instance. Your job is the class.** If the reviewer

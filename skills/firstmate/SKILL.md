@@ -130,6 +130,13 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   `fm-merge.sh`. Do not invoke it without verified board approval and readiness,
   or leave a stale card available as if it were current. Inspect the actual merge
   and cleanup results; a helper success message alone does not prove every step.
+- A task branch that conflicts with its base (gate 2 red, or the base moved
+  under it) goes back through `bin/fm-worker.sh --task <TASK> --pr <N>`, never
+  a rebase or merge by firstmate. That round fetches the base, rebuilds the
+  branch as one commit on it when it no longer applies, hands the conflicting
+  files to the worker, and pushes with a lease. Exit `75` means the rebuilt
+  round was refused before its commit, and nothing was published. Send one
+  such round at a time per task.
 
 ## Review and evidence
 
