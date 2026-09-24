@@ -157,6 +157,17 @@ const prNumber = (n: unknown): number | null => {
   const v = typeof n === "string" && new RegExp(`^${PR_DIGITS}$`).test(n) ? Number(n) : n;
   return Number.isSafeInteger(v) && (v as number) > 0 ? v as number : null;
 };
+// A decision id (design section 15.4): the old D-<digits>, or one that names
+// its owner, D-<project>-<task>-<n> - a registry name, the task id without its
+// hyphen, and n from 1. The board lists and answers both; an owned id's
+// project and task are read out of the id itself, never guessed.
+const OLD_DECISION = /^D-[0-9]{1,6}$/;
+const OWNED_DECISION = /^D-([a-z0-9-]{1,24})-(T[A-Za-z0-9]{1,32})-([1-9][0-9]{0,5})$/;
+const isDecisionId = (id: string) => OLD_DECISION.test(id) || OWNED_DECISION.test(id);
+const ownerOf = (id: unknown): { project: string; task: string; n: number } | null => {
+  const m = OWNED_DECISION.exec(String(id ?? ""));
+  return m ? { project: m[1], task: `T-${m[2].slice(1)}`, n: Number(m[3]) } : null;
+};
 // the pull request's page, or null when there is no number or no repository
 const pullUrl = (repo: string | null, n: unknown): string | null => {
   const k = prNumber(n);
@@ -187,7 +198,7 @@ const state = () => {
     o && typeof o === "object" && o.pr != null ? { ...o, pr_url: pullUrl(repo, o.pr) } : o;
   const pend = pending();
   const responseDir = join(ROOT, 'state/decisions');
-  const responses = existsSync(responseDir) ? readdirSync(responseDir).filter(f => /^D-[0-9]{1,6}\.json$/.test(f)).flatMap(f => {
+  const responses = existsSync(responseDir) ? readdirSync(responseDir).filter(f => f.endsWith('.json') && isDecisionId(f.slice(0, -5))).flatMap(f => {
     try { return [JSON.parse(readFileSync(join(responseDir, f), 'utf8'))]; } catch { return []; }
   }) : [];
   const tasksFile = join(ROOT, "design/tasks.json");
@@ -540,7 +551,7 @@ const pending = () => {
       const d = JSON.parse(readFileSync(join(dir, f), "utf8"));
       if (d.pr != null && settled.has(String(d.pr))) return [];
       if (d.task != null && settledTasks.has(String(d.task))) return [];
-      return [d];
+      return [{ ...d, owner: ownerOf(d.id) }];
     } catch { return []; }
   }).sort((a, b) => String(a.id ?? "").localeCompare(String(b.id ?? ""), "en", { numeric: true }));
 };
@@ -607,7 +618,7 @@ const server = Bun.serve({
       return req.json().then(async (body: any) => {
         const id = String(body?.id ?? "");
         const chosen = typeof body?.chosen === "string" ? body.chosen : "";
-        if (!/^D-[0-9]{1,6}$/.test(id)) return json({ error: "bad decision id" }, 400);
+        if (!isDecisionId(id)) return json({ error: "bad decision id" }, 400);
         if (!["A", "B", "C", "custom"].includes(chosen)) return json({ error: "bad choice" }, 400);
         // Count Unicode code points, preserving the literal text including spaces.
         const text = body?.text;
@@ -627,8 +638,12 @@ const server = Bun.serve({
           return json({ ok: true, already: true, decision, merged: decision.merged ?? null });
         }
         if (!p) return json({ error: "no pending decision" }, 404);
+        // the card's project: what the request recorded, else what its id names
+        const project = typeof p.project === "string" && p.project ? p.project : ownerOf(id)?.project ?? null;
+        const onProject = project ? ["--project", project] : [];
         const decision = {
           id, chosen, task: p?.task ?? null, pr: typeof p?.pr === "number" ? p.pr : null, kind: p?.kind ?? "choice",
+          ...(project ? { project } : {}),
           ...(chosen === "custom" ? { text } : {}),
           note: typeof body?.note === "string" ? body.note.slice(0, 500) : "",
           ts: new Date().toISOString(),
@@ -643,7 +658,7 @@ const server = Bun.serve({
         try {
           const emitted = Bun.spawnSync([join(ROOT, "bin/fm-emit.sh"),
           "--actor", "captain", "--type", "decision_made",
-          ...(p.task ? ["--task", p.task] : []),
+          ...(p.task ? ["--task", p.task] : []), ...onProject,
           "--data", JSON.stringify({ decision: id, chosen, outcome: "recorded" }),
           "--en", `${id} recorded ${chosen}`, "--tw", `${id} 已記錄 ${chosen}`],
           { env: { ...process.env, FM_ROOT: ROOT } });
@@ -654,7 +669,7 @@ const server = Bun.serve({
         if (p?.kind === "merge" && chosen === "A" && typeof p.pr === "number") {
           try {
           const r = Bun.spawnSync([join(ROOT, "bin/fm-merge.sh"),
-            "--pr", String(p.pr), ...(p.task ? ["--task", p.task] : []), "--repo", ROOT],
+            "--pr", String(p.pr), ...(p.task ? ["--task", p.task] : []), ...onProject, "--repo", ROOT],
             { env: { ...process.env, FM_ROOT: ROOT } });
           merged = { ok: r.exitCode === 0, out: new TextDecoder().decode(r.stdout).trim() };
           } catch { merged = {ok:false,out:'Merge helper unavailable'}; }

@@ -495,6 +495,30 @@ test('all authored fields switch locale, diagrams differ and input stays text', 
   } finally {stopBoard(b);}
 });
 
+// T-047: a card whose id names its owner is listed, drawn and answered, and
+// the card says which project and task the id belongs to
+test('a card whose id names its project and task renders, draws and is answered', async ({page}) => {
+  const root = makeRoot(['working'], false);
+  const id = 'D-example-app-T004-1';
+  writeFileSync(join(root,`state/pending/${id}.json`), JSON.stringify({id,task:'T-004',project:'example-app',kind:'choice',details}));
+  expect(spawnSync('bash',[join(root,'bin/fm-diagram.sh'),'--decision',id,'--repo',root]).status).toBe(0);
+  const b = await startBoard(root);
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    const card = page.locator(`#card-${id}`);
+    await expect(card).toContainText(details.en.title);
+    await expect(card.locator('.meta')).toContainText(id);
+    await expect(card.locator('.meta .project')).toHaveText('example-app');
+    await expect(card.locator('.meta')).toContainText('T-004');
+    const frame = card.frameLocator('iframe');
+    await expect(frame.locator('body')).toContainText(details.en.before);
+    await card.locator('[data-c="B"]').click();
+    await card.locator('.confirm').click();
+    await expect.poll(() => existsSync(join(root,`state/decisions/${id}.json`))).toBe(true);
+    expect(JSON.parse(readFileSync(join(root,`state/decisions/${id}.json`),'utf8')).chosen).toBe('B');
+  } finally {stopBoard(b);}
+});
+
 const emit = (root:string, type:string, pr:number) => {
   const r = spawnSync('bash',[join(root,'bin/fm-emit.sh'),'--actor','github','--type',type,'--task',`T-${pr}`,'--pr',String(pr),'--en','fixture outcome','--tw','測試結果'], {env:{...process.env,FM_ROOT:root}});
   expect(r.status).toBe(0);

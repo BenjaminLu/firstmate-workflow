@@ -15,28 +15,78 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # The production caller in a fixture with all orchestration stubbed. This
 # focused path never invokes git, gh, engines or a live board.
-caller="$(mktemp -d)"
-mkdir -p "$caller/bin" "$caller/state/decision-details"
-cp "$ROOT/bin/fm-run.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-decide.sh" \
-   "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-herdr.py" "$caller/bin/"
-for script in fm-sync-prs fm-dispatch fm-gate; do
-  printf '#!/usr/bin/env bash\nexit 0\n' > "$caller/bin/$script.sh"
-  chmod +x "$caller/bin/$script.sh"
-done
-printf '#!/usr/bin/env bash\nprintf "t-991-fixture\\n"\n' > "$caller/bin/git"
-chmod +x "$caller/bin/git"
-printf '%s\n' '{"type":"pr_opened","task":"T-991","pr":991}' > "$caller/state/events.jsonl"
+REGISTRY='default_project: firstmate-workflow
+projects:
+  firstmate-workflow:
+    repo: .
+    github: owner/engine
+    base: main
+    required_check: ci
+'
+caller_fixture() {   # caller_fixture <task branch> <event line> -> a fixture root
+  local c; c="$(mktemp -d)"
+  mkdir -p "$c/bin" "$c/state/decision-details"
+  cp "$ROOT/bin/fm-run.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-decide.sh" \
+     "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-herdr.py" "$c/bin/"
+  for script in fm-sync-prs fm-dispatch fm-gate; do
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$c/bin/$script.sh"
+    chmod +x "$c/bin/$script.sh"
+  done
+  printf '#!/usr/bin/env bash\nprintf "%s\\n"\n' "$1" > "$c/bin/git"
+  chmod +x "$c/bin/git"
+  printf '%s' "$REGISTRY" > "$c/config.yaml"
+  printf '%s\n' "$2" > "$c/state/events.jsonl"
+  printf '%s' "$c"
+}
+caller="$(caller_fixture t-991-fixture '{"type":"pr_opened","task":"T-991","pr":991}')"
+# T-047: the card's id is allocated by fm-decide.sh and names its owner. It
+# is never derived from the task's digits again.
+card=D-firstmate-workflow-T991-1
 missing="$(PATH="$caller/bin:$PATH" bash "$caller/bin/fm-run.sh" once --repo "$caller" 2>&1)"
 assert_contains "$missing" 'no captain card created' 'missing authored details reported truthfully'
-assert_fail "test -f '$caller/state/pending/D-991.json'" 'missing input never produces a card'
-printf '{}\n' > "$caller/state/decision-details/D-991.json"
+assert_contains "$missing" "state/decision-details/$card.json" 'and it names the path for the id it allocated'
+assert_fail "test -f '$caller/state/pending/$card.json'" 'missing input never produces a card'
+assert_fail "test -e '$caller/state/pending/D-991.json' || test -e '$caller/state/decisions/D-991.json'" \
+  'and no D-<task digits> id is derived'
+printf '{}\n' > "$caller/state/decision-details/$card.json"
 invalid="$(PATH="$caller/bin:$PATH" bash "$caller/bin/fm-run.sh" once --repo "$caller" 2>&1)"
 assert_contains "$invalid" 'no captain card created' 'invalid authored details reported truthfully'
-assert_fail "test -f '$caller/state/pending/D-991.json'" 'invalid input never produces a card'
-jq -n '{en:{title:"Merge fixture cache",explanation:"Cache file reads",before:"Repeated reads",after:"One read",outcome:"Cache decision recorded",options:{A:{description:"Merge cache",pros:"Less IO",cons:"More memory"},B:{description:"Revise cache",pros:"Improve design",cons:"Delay"},C:{description:"Hold cache",pros:"Measure",cons:"No improvement"}}},"zh-TW":{title:"合併快取",explanation:"快取檔案讀取",before:"重複讀取",after:"讀取一次",outcome:"已記錄快取決策",options:{A:{description:"合併快取",pros:"減少讀取",cons:"增加記憶體"},B:{description:"修訂快取",pros:"改善設計",cons:"延後"},C:{description:"保留快取",pros:"測量",cons:"尚未改善"}}}}' > "$caller/state/decision-details/D-991.json"
+assert_contains "$invalid" "$card" 'a later turn keeps the id it allocated rather than taking another'
+assert_fail "test -f '$caller/state/pending/$card.json'" 'invalid input never produces a card'
+jq -n '{en:{title:"Merge fixture cache",explanation:"Cache file reads",before:"Repeated reads",after:"One read",outcome:"Cache decision recorded",options:{A:{description:"Merge cache",pros:"Less IO",cons:"More memory"},B:{description:"Revise cache",pros:"Improve design",cons:"Delay"},C:{description:"Hold cache",pros:"Measure",cons:"No improvement"}}},"zh-TW":{title:"合併快取",explanation:"快取檔案讀取",before:"重複讀取",after:"讀取一次",outcome:"已記錄快取決策",options:{A:{description:"合併快取",pros:"減少讀取",cons:"增加記憶體"},B:{description:"修訂快取",pros:"改善設計",cons:"延後"},C:{description:"保留快取",pros:"測量",cons:"尚未改善"}}}}' > "$caller/state/decision-details/$card.json"
 valid="$(PATH="$caller/bin:$PATH" bash "$caller/bin/fm-run.sh" once --repo "$caller" 2>&1)"
-assert_contains "$valid" 'asking the captain (D-991)' 'valid authored details create an announced card'
-assert_eq '合併快取' "$(jq -r '.details."zh-TW".title' "$caller/state/pending/D-991.json")" 'caller preserves authored translation'
+assert_contains "$valid" "asking the captain ($card)" 'valid authored details create an announced card'
+assert_eq '合併快取' "$(jq -r '.details."zh-TW".title' "$caller/state/pending/$card.json")" 'caller preserves authored translation'
+assert_eq 'firstmate-workflow' "$(jq -r .project "$caller/state/pending/$card.json")" 'the card names its project'
+waiting="$(PATH="$caller/bin:$PATH" bash "$caller/bin/fm-run.sh" once --repo "$caller" 2>&1)"
+assert_contains "$waiting" 'waiting on the captain' 'a pending card for the task is found under its new id'
+assert_eq '1' "$(find "$caller/state/pending" -name '*.json' | wc -l | tr -d ' ')" 'and no second card is raised'
+DETAILS="$caller/state/decision-details/$card.json"
+
+# T-043's hand-raised record sits at D-056, the id T-056's merge card used to
+# be derived as. It is not T-056's and new ids never look at it: T-056 gets
+# its own card, and the old record is not read, moved or overwritten.
+old='{"id":"D-056","task":"T-043","kind":"choice","chosen":"A","ts":"2026-09-01T00:00:00Z"}'
+own="$(caller_fixture t-056-own '{"type":"pr_opened","task":"T-056","pr":56}')"
+mkdir -p "$own/state/decisions" "$own/state/pending"
+printf '%s\n' "$old" > "$own/state/decisions/D-056.json"
+printf '%s\n' "$old" > "$own/state/pending/D-056.json"
+cp "$DETAILS" "$own/state/decision-details/D-056.json"
+keyed() { cksum "$own/state/decisions/D-056.json" "$own/state/pending/D-056.json" \
+  "$own/state/decision-details/D-056.json"; }
+before56="$(keyed)"
+out56="$(PATH="$own/bin:$PATH" bash "$own/bin/fm-run.sh" once --repo "$own" 2>&1)"
+assert_contains "$out56" 'D-firstmate-workflow-T056-1' 'T-056 is allocated its own id beside the old D-056'
+assert_lacks "$out56" 'waiting on the captain' 'the old pending D-056 is not read as T-056 waiting'
+cp "$DETAILS" "$own/state/decision-details/D-firstmate-workflow-T056-1.json"
+out56="$(PATH="$own/bin:$PATH" bash "$own/bin/fm-run.sh" once --repo "$own" 2>&1)"
+assert_contains "$out56" 'asking the captain (D-firstmate-workflow-T056-1)' 'and its merge card is raised there'
+assert_eq 'T-056' "$(jq -r .task "$own/state/pending/D-firstmate-workflow-T056-1.json")" 'for T-056'
+assert_eq "$before56" "$(keyed)" 'and D-056 and everything keyed by it are exactly as they were'
+assert_eq 'D-056.json D-firstmate-workflow-T056-1.json' \
+  "$(find "$own/state/pending" -name '*.json' -exec basename {} \; | sort | tr '\n' ' ' | sed 's/ $//')" \
+  'with nothing moved in or out of the pending cards'
+rm -rf "$own"
 if [ "${FM_CALLER_ONLY:-0}" = 1 ]; then rm -rf "$caller"; finish; exit $?; fi
 
 d="$(mktemp -d)"; bare="$d/remote.git"; r="$d/repo"
@@ -51,7 +101,7 @@ cp -r "$ROOT/bin/adapters" bin/
 cp "$ROOT/bin/watch-decisions.ts" bin/ 2>/dev/null || true
 cp "$ROOT/skills/worker/SKILL.md" skills/worker/
 cp "$ROOT/skills/reviewer/SKILL.md" skills/reviewer/
-printf 'vendor: mock\nconcurrency: 2\nfallback:\n  - mock\nproject:\n  check: bin/ci.sh\n  test: bash {file}\n' > config.yaml
+printf 'vendor: mock\nconcurrency: 2\nfallback:\n  - mock\nproject:\n  check: bin/ci.sh\n  test: bash {file}\n%s' "$REGISTRY" > config.yaml
 printf '#!/usr/bin/env bash\nexit 0\n' > bin/ci.sh; chmod +x bin/ci.sh
 cat > design/tasks.json <<'J'
 {"tasks":[{"id":"T-1","title":"a task the loop can finish","milestone":"M0",
@@ -183,8 +233,12 @@ rounds="$(jq -r 'select(.type=="review_opened")|.task' "$r/state/events.jsonl" |
 assert_eq "1" "$rounds" "one review round has happened when the approval lands"
 
 # --- turn three: all seven green, so the captain is asked ---------------
+# firstmate allocates the card's id before it authors the details, so the
+# details and any drawing are written under the id the card will carry
 mkdir -p "$r/state/decision-details"
-cp "$caller/state/decision-details/D-991.json" "$r/state/decision-details/D-1.json"
+card1="$(run bin/fm-decide.sh --allocate --task T-1 --kind merge --repo "$r" 2>/dev/null)"
+assert_eq "D-firstmate-workflow-T1-1" "$card1" "firstmate allocates the merge card's id"
+cp "$DETAILS" "$r/state/decision-details/$card1.json"
 rm -rf "$caller"
 out3="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
 assert_contains "$out3" "asking the captain" "seven green means a decision, not a merge"

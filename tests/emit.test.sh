@@ -49,8 +49,59 @@ for kind in parked unparked; do
     "writes the $kind event with its type"
 done
 
+# T-047: pins are events too, and join the list in design section 5.1
+for kind in spec_pinned spec_repinned; do
+  assert_ok "'$EMIT' --actor firstmate --type $kind --task T-S" "accepts a $kind event"
+  assert_eq "$kind" "$(jq -r "select(.task==\"T-S\" and .type==\"$kind\") | .type" "$log")" \
+    "writes the $kind event with its type"
+done
+
 assert_fail "'$EMIT' --type dispatched --task T-1" "requires an actor"
 assert_fail "'$EMIT' --actor x" "requires a type"
+
+# --- T-047: the project an event is about -------------------------------
+# An event without --project belongs to the default project and carries no
+# field, so every line already in the log keeps meaning what it meant. A
+# named project is checked against the registry in the engine root's
+# config.yaml and written as a top-level field; a name the registry does not
+# hold exits 65 and writes nothing.
+p="$(mktemp -d)"; mkdir -p "$p/bin" "$p/state"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$p/bin/"
+cat > "$p/config.yaml" <<'Y'
+default_project: firstmate-workflow
+projects:
+  firstmate-workflow:
+    repo: .
+    github: owner/engine
+    base: main
+    required_check: ci
+  example-app:
+    github: example-org/example-app
+    base: main
+    required_check: check
+Y
+plog="$p/state/events.jsonl"
+pemit() { FM_ROOT="$p" bash "$p/bin/fm-emit.sh" "$@" >/dev/null 2>&1; printf '%s' "$?"; }
+assert_eq "0" "$(pemit --actor github --type pr_opened --task T-004 --pr 3 --project example-app)" \
+  "an event names a registered project"
+assert_eq "example-app" "$(jq -r 'select(.pr==3)|.project' "$plog")" \
+  "and the project is a top-level field of the line"
+assert_eq "0" "$(pemit --actor github --type pr_opened --task T-004 --pr 4 --project firstmate-workflow)" \
+  "the default project can be named explicitly"
+assert_eq "firstmate-workflow" "$(jq -r 'select(.pr==4)|.project' "$plog")" "and is written when named"
+assert_eq "0" "$(pemit --actor github --type pr_opened --task T-004 --pr 5)" "an event with no project still writes"
+assert_eq "false" "$(jq -c 'select(.pr==5)|has("project")' "$plog")" \
+  "and carries no project field: it belongs to the default project"
+before="$(wc -l < "$plog" | tr -d ' ')"
+assert_eq "65" "$(pemit --actor github --type pr_opened --task T-004 --pr 6 --project nosuch-app)" \
+  "a project the registry does not hold exits 65"
+assert_eq "65" "$(pemit --actor github --type pr_opened --task T-004 --pr 6 --project 'Bad/Name')" \
+  "and so does a name that cannot be a project"
+assert_eq "$before" "$(wc -l < "$plog" | tr -d ' ')" "and neither writes a line"
+# a line written before this task, with no project, is still a valid line
+printf '%s\n' '{"ts":"2026-09-20T00:00:00Z","actor":"github","type":"merged","task":"T-001","pr":1}' >> "$plog"
+assert_ok "jq -e . '$plog' >/dev/null" "an old line without a project stays valid beside new ones"
+rm -rf "$p"
 
 # nobody may write around it
 cd "$ROOT" || exit 1

@@ -170,6 +170,105 @@ assert_ok "[ '$t3' -le 5 ]" "the poll path wakes within seconds too (${t3}s)"
 d4="$(fixture)"
 assert_fail "FM_ROOT='$d4' '$d4/bin/fm-decide.sh' --await D-9 --timeout 2" "it times out rather than hanging forever"
 
+# ------------------------------------ T-047: every new id names its owner
+#
+# D-<project>-<task>-<n>. The project is the registry name the run resolved
+# (--project, then FM_PROJECT, then default_project); the task is its id
+# without the hyphen; n counts within that project's task only and is
+# allocated here, under that task's own lock. Nothing global is counted.
+owned() {   # a fixture with a registry of two projects
+  local o; o="$(fixture)"
+  cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$o/bin/"
+  cat > "$o/config.yaml" <<'Y'
+default_project: firstmate-workflow
+projects:
+  firstmate-workflow:
+    repo: .
+    github: owner/engine
+    base: main
+    required_check: ci
+  example-app:
+    github: example-org/example-app
+    base: main
+    required_check: check
+Y
+  printf '%s' "$o"
+}
+alloc() { FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --allocate "$@" 2>/dev/null; }
+o="$(owned)"
+assert_eq "D-firstmate-workflow-T047-1" "$(alloc --task T-047)" \
+  "a first card for a task of the default project is n=1"
+assert_eq "D-firstmate-workflow-T047-2" "$(alloc --task T-047)" "and a second card for that task is n=2"
+assert_eq "D-example-app-T047-1" "$(alloc --task T-047 --project example-app)" \
+  "the same task id in another project is a distinct id, counted from 1"
+assert_eq "D-example-app-T047-2" "$(FM_PROJECT=example-app alloc --task T-047)" \
+  "FM_PROJECT names the project when no flag does"
+assert_eq "D-firstmate-workflow-T047-3" "$(alloc --task T-047 --project firstmate-workflow)" \
+  "naming the default project explicitly counts in the same place as naming none"
+assert_eq "D-firstmate-workflow-T048-1" "$(alloc --task T-048)" "two tasks never share an id"
+FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --allocate --task T-047 --project nosuch-app >/dev/null 2>&1
+assert_eq "65" "$?" "a project the registry does not hold exits 65"
+for t in T-4.7 X-047 T- 'T-0/1'; do
+  FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --allocate --task "$t" >/dev/null 2>&1
+  assert_eq "64" "$?" "a task that cannot be written into an id is refused: $t"
+done
+# a record already on disk is never handed out again, whoever wrote it
+mkdir -p "$o/state/decisions"
+printf '{"id":"D-example-app-T050-4","task":"T-050","kind":"choice","chosen":"A"}\n' \
+  > "$o/state/decisions/D-example-app-T050-4.json"
+assert_eq "D-example-app-T050-5" "$(alloc --task T-050 --project example-app)" \
+  "the next free n is past every record that task already has"
+# the lock is the task's own: ten allocations at once get ten ids
+for i in $(seq 1 10); do
+  ( alloc --task T-060 > "$o/par.$i" ) &
+done
+wait
+assert_eq "10" "$(cat "$o"/par.* | sort -u | grep -c '^D-firstmate-workflow-T060-')" \
+  "ten concurrent allocations for one task get ten distinct ids"
+assert_eq "D-firstmate-workflow-T060-10" "$(cat "$o"/par.* | sort -t- -k5 -n | tail -1)" \
+  "numbered 1 to 10 with none skipped"
+
+# requesting an allocated id publishes it with its project
+id="$(alloc --task T-047 --project example-app)"
+out="$(FM_ROOT="$o" "$o/bin/fm-decide.sh" --request "$id" --task T-047 --project example-app \
+  --kind merge --pr 12 --details "$d/details.json" 2>/dev/null)"
+assert_eq "$o/state/pending/$id.json" "$out" "an allocated id is requested like any other"
+assert_eq "example-app" "$(jq -r .project "$out")" "and the card records its project"
+assert_eq "example-app" "$(jq -r 'select(.type=="decision_requested")|.project' "$o/state/events.jsonl" | tail -1)" \
+  "and so does its decision_requested event"
+assert_ok "test -s '$o/board/public/diagrams/$id.en.html'" "and its diagram is drawn under the new id"
+FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request D-example-app-T047-9 --task T-047 --project example-app \
+  --details "$d/details.json" >/dev/null 2>&1
+assert_eq "65" "$?" "an id nobody allocated is refused"
+assert_fail "test -f '$o/state/pending/D-example-app-T047-9.json'" "and publishes nothing"
+id2="$(alloc --task T-047)"
+FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$id2" --task T-048 --details "$d/details.json" >/dev/null 2>&1
+assert_eq "64" "$?" "an id whose task is not the card's task is refused"
+FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$id2" --task T-047 --project example-app \
+  --details "$d/details.json" >/dev/null 2>&1
+assert_eq "64" "$?" "an id whose project is not the card's project is refused"
+assert_fail "test -f '$o/state/pending/$id2.json'" "and neither publishes anything"
+
+# await reads both forms and refuses anything else before touching a path
+printf '{"id":"%s","task":"T-047","chosen":"B"}\n' "$id" > "$o/state/decisions/$id.json"
+assert_eq "B" "$(FM_ROOT="$o" "$o/bin/fm-decide.sh" --await "$id" --timeout 2 | jq -r .chosen)" \
+  "await returns a new-form answer"
+printf '{"id":"D-056","task":"T-043","chosen":"A"}\n' > "$o/state/decisions/D-056.json"
+assert_eq "A" "$(FM_ROOT="$o" "$o/bin/fm-decide.sh" --await D-056 --timeout 2 | jq -r .chosen)" \
+  "and still returns an old numeric one"
+for badid in D-Bad_Name-T047-1 D-abcdefghijklmnopqrstuvwxy-T047-1 D-firstmate-workflow-1 \
+  D-firstmate-workflow-T047-0 D-firstmate-workflow-T047-01 D-firstmate-workflow-T047 \
+  'D-../x-T047-1' 'D-a/b-T047-1' 'D-firstmate-workflow-T0.47-1' "$(printf 'D-a-T047-1\nx')"; do
+  FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --await "$badid" --timeout 1 >/dev/null 2>&1
+  assert_eq "64" "$?" "await refuses a malformed id: $(printf '%s' "$badid" | tr '\n' '~')"
+done
+# an old record for another task at an old id is never read, moved or touched
+before_sum="$(cksum < "$o/state/decisions/D-056.json")"
+assert_eq "D-firstmate-workflow-T056-1" "$(alloc --task T-056)" \
+  "with T-043's old D-056 on disk, T-056's first card is its own id"
+assert_eq "$before_sum" "$(cksum < "$o/state/decisions/D-056.json")" "and D-056 is left exactly as it was"
+rm -rf "$o"
+
 # no dependency on a watcher that has to be installed
 # the words may appear in a comment explaining the absence; a call may not
 assert_fail "grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-decide.sh' | grep -qE '\\b(fswatch|watchexec|entr)\\b'" \

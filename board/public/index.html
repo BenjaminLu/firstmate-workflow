@@ -412,6 +412,12 @@ function render(s) {
       out.push(`<a href="/file?path=design%2Fdesign.md" data-open="design/design.md" target="_blank" rel="noreferrer">&#9776; ${esc(t("viewDesign"))}</a>`);
     return out.length ? `<div class="links">${out.join('')}</div>` : '';
   };
+  // whose card it is: an id that names its owner (T-047) shows the project and
+  // task read out of it; a project's name is data and is not translated
+  const whose = d => {
+    const own = d.owner || DIAGRAM.owner(d.id);
+    return `${esc(d.id)}${own ? ` · <span class="project">${esc(own.project)}</span>` : ''} · ${esc(d.task || own?.task || '')}`;
+  };
   const full = d => {
     const gates = d.gates || [], content = localized(d), pick = picks.get(d.id);
     const options = ['A','B','C'].map(k => {
@@ -419,7 +425,7 @@ function render(s) {
       return `<button class="opt" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" ${sent.has(d.id)?'disabled':''}>${k} · ${esc(o ? words(o.description) : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'))}</button>` +
         (o ? `<p class="tradeoffs"><b>${esc(t('pros'))}</b> ${said(words(o.pros))}<br><b>${esc(t('cons'))}</b> ${said(words(o.cons))}</p>` : '');
     }).join('');
-    return `<div class="dcard" id="card-${esc(d.id)}"><div class="meta">${esc(d.id)} · ${esc(d.task || "")}` +
+    return `<div class="dcard" id="card-${esc(d.id)}"><div class="meta">${whose(d)}` +
       `</div><h3>${said(content ? words(content.title) : d.title || t("waiting"))}</h3>` + links(d) +
       `<p class="explanation">${said(content ? words(content.explanation) : t('missingDetails'))}</p>` +
       DIAGRAM.embed(d.id) + (content ? `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before))}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after))}</p></section></div>` : '') +
@@ -441,7 +447,7 @@ function render(s) {
       (pend.length > 1 ? `<p class="also" id="alsoWaiting">${esc(t("alsoWaiting"))}</p>` : '');
     const content = localized(d), pick = picks.get(d.id);
     return `<details class="dstrip" id="strip-${esc(d.id)}" data-id="${esc(d.id)}"${expanded.has(d.id) ? ' open' : ''}>` +
-      `<summary><span class="meta">${esc(d.id)} · ${esc(d.task || '')}</span> ` +
+      `<summary><span class="meta">${whose(d)}</span> ` +
       `<span class="st">${said(content ? words(content.title) : d.title || t("waiting"))}</span>` +
       (pick ? ` <i class="picked">${esc(pick === 'custom' ? t("customChoice") : pick)}</i>` : '') +
       `</summary>${full(d)}</details>`;

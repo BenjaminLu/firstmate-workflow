@@ -42,6 +42,54 @@ fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
 B="${FM_CODE_ROOT:-$REPO}/bin"
 say() { printf '  %s\n' "$*"; }
 
+# The merge card of one task, under an id that names its owner (design
+# section 15.4): D-<project>-<task>-<n>, allocated by fm-decide.sh. Never
+# derived from the task's digits - that space was shared with hand-raised
+# cards, and an old record sitting at a derived id was taken for the task's
+# own card. Only ids naming this project and task are looked at, so an old
+# D-<digits> record, whoever it belongs to, is never read, moved or replaced.
+# The project is the one this run resolves (FM_PROJECT, else the default).
+merge_card() {  # merge_card <task> <pr>
+  local task="$1" pr="$2" project key f id='' details request_out n best=''
+  if ! project="$(fm_project_resolve '' "$REPO/config.yaml" 2>&1)"; then
+    say "$task: no captain card created; no project to name it by ($project)"; return
+  fi
+  key="T${task#T-}"
+  # a card already up, or already answered, is this task's merge card
+  for f in "state/pending/D-$project-$key-"*.json; do
+    [ -f "$f" ] && jq -e --arg t "$task" '.kind=="merge" and .task==$t' "$f" >/dev/null 2>&1 || continue
+    id="${f##*/}"; say "$task: waiting on the captain (${id%.json})"; return
+  done
+  for f in "state/decisions/D-$project-$key-"*.json; do
+    [ -f "$f" ] && jq -e --arg t "$task" '.kind=="merge" and .task==$t' "$f" >/dev/null 2>&1 && return
+  done
+  # an id reserved for this merge card and not yet published is reused, so a
+  # turn that finds no details does not take a fresh id every time
+  for f in "state/decision-ids/$project/$key/"*.json; do
+    [ -f "$f" ] || continue
+    n="${f##*/}"; n="${n%.json}"
+    case "$n" in ''|*[!0-9]*) continue ;; esac
+    jq -e '.kind=="merge"' "$f" >/dev/null 2>&1 || continue
+    id="D-$project-$key-$n"
+    [ -e "state/pending/$id.json" ] || [ -e "state/decisions/$id.json" ] \
+      || [ -e "state/runtime/archived-pending/$id.json" ] && continue
+    { [ -z "$best" ] || [ "$n" -lt "${best##*-}" ]; } && best="$id"
+  done
+  id="$best"
+  if [ -z "$id" ]; then
+    id="$("$B/fm-decide.sh" --allocate --task "$task" --project "$project" --kind merge \
+      --repo "$REPO" 2>&1 </dev/null)" || {
+      say "$task: no captain card created; no decision id could be allocated ($id)"; return; }
+  fi
+  details="$REPO/state/decision-details/$id.json"
+  if request_out="$("$B/fm-decide.sh" --request "$id" --task "$task" --project "$project" --kind merge \
+    --pr "$pr" --details "$details" --repo "$REPO" 2>&1 </dev/null)"; then
+    say "$task: all seven gates green, asking the captain ($id)"
+  else
+    say "$task: no captain card created; firstmate must supply valid authored details at $details ($request_out)"
+  fi
+}
+
 turn() {
   # 1. whatever GitHub knows that the log does not
   "$B/fm-sync-prs.sh" --repo "$REPO" >/dev/null 2>&1 </dev/null || true
@@ -71,16 +119,7 @@ turn() {
     g=$?
     if [ "$g" -eq 0 ]; then
       # all seven green: the captain decides, nobody else
-      id="D-$(printf '%s' "$task" | tr -dc '0-9')"
-      [ -f "state/pending/$id.json" ] && { say "$task: waiting on the captain"; continue; }
-      [ -f "state/decisions/$id.json" ] && continue
-      details="$REPO/state/decision-details/$id.json"
-      if request_out="$("$B/fm-decide.sh" --request "$id" --task "$task" --kind merge --pr "$pr" \
-        --details "$details" --repo "$REPO" 2>&1 </dev/null)"; then
-        say "$task: all seven gates green, asking the captain ($id)"
-      else
-        say "$task: no captain card created; firstmate must supply valid authored details at $details ($request_out)"
-      fi
+      merge_card "$task" "$pr"
     elif [ "$g" -eq 7 ]; then
       say "$task: gates 1-6 green, sending it to review (round $round)"
       # exit 3 is a round that produced no verdict. Swallowing it would let
