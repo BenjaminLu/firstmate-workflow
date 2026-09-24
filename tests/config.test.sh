@@ -212,6 +212,7 @@ registry "$app"; printf '  a-name-of-twenty-five-chr:\n    github: a/b\n    base
 cat "$r/head" "$r/extra" "$r/tail" > "$c"
 refused "a registered name longer than 24" a-name-of-twenty-five-chr name fm_projects "$c"
 
+# shellcheck disable=SC2088  # the literal, unexpanded tilde is the bad value
 for bad in /Users/someone/example-app ../example-app example-app '~/src/app' '""'; do
   registry "    repo: $bad
     github: example-org/example-app
@@ -243,6 +244,15 @@ refused "a missing required_check" example-app required_check fm_project_get exa
 # the whole registry is validated, not only the entry asked about
 refused "a broken entry refuses every lookup" example-app required_check \
   fm_project_resolve self-host "$c"
+# and that includes another project's nested contract, not only its scalars
+registry "    github: example-org/example-app
+    base: main
+    required_check: check
+    project:
+      bogus: x"
+refused "a malformed nested contract refuses every lookup" example-app bogus \
+  fm_project_resolve self-host "$c"
+refused "and its own contract lookup" example-app project fm_project_contract example-app check "$c"
 
 # one source of truth: a self entry holding its own contract beside the
 # top-level block is refused, so the two can never disagree
@@ -259,6 +269,13 @@ refused "and it refuses any lookup, not only the contract" self-host project fm_
 printf 'projects:\n  only-one:\n    github: a/b\n    base: main\n    required_check: ci\n' > "$c"
 assert_eq "65" "$(rc_of fm_project_resolve '' "$c")" "nothing named and no default_project exits 65"
 assert_eq "only-one" "$(fm_project_resolve only-one "$c")" "while a named project still resolves"
+
+# a resolver whose parser is missing refuses, rather than dying in a traceback
+mkdir -p "$r/lone/bin" && cp "$ROOT/bin/fm-config.sh" "$r/lone/bin/"
+assert_eq "65" "$(rc_of bash -c '. "$1/lone/bin/fm-config.sh"; fm_project_resolve only-one "$2"' _ "$r" "$c")" \
+  "no fm-herdr.py beside fm-config.sh: exit 65"
+assert_contains "$(cat "$r/err")" "fm-herdr.py" "and the message names the missing parser"
+assert_lacks "$(cat "$r/err")" "Traceback" "not a Python traceback"
 rm -rf "$r"
 
 # --- self-hosting: this repository's own registry ------------------------

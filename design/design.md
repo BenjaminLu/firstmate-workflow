@@ -1365,8 +1365,8 @@ optional argument, and the directory holding it is the engine root:
 | `fm_project_use [explicit]` | resolves and exports `FM_PROJECT` and `FM_PROJECT_ROOT` |
 | `fm_projects` | every registered name, in file order |
 
-Every call validates the whole registry first, so one malformed entry refuses
-every lookup (exit `65`, naming the project and field) rather than only the
+Every call validates the whole registry first, each entry's nested `project:`
+block included, so one malformed entry refuses every lookup (exit `65`, naming the project and field) rather than only the
 lookups that touch it. Besides the rules in the table, it refuses an unknown
 field in an entry, a name registered twice, a second entry with `repo: .`, and
 a `design` or `tasks` path that is absolute or climbs out with `..` — the same

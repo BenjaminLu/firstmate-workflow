@@ -110,9 +110,12 @@ import importlib.util, os, re, sys, tempfile
 from pathlib import Path
 
 herdr_path, config, mode, *args = sys.argv[1:]
-if Path(config).is_file():   # the one scalar and contract parser, fm_project's
-    spec = importlib.util.spec_from_file_location('fm_herdr', herdr_path)
-    herdr = importlib.util.module_from_spec(spec); spec.loader.exec_module(herdr)
+if not Path(herdr_path).is_file():
+    print('fm-config: cannot read the registry: no fm-herdr.py beside fm-config.sh (%s)' % herdr_path,
+          file=sys.stderr); sys.exit(65)
+# the one scalar and contract parser, fm_project's
+spec = importlib.util.spec_from_file_location('fm_herdr', herdr_path)
+herdr = importlib.util.module_from_spec(spec); spec.loader.exec_module(herdr)
 FIELDS = ('repo', 'github', 'base', 'required_check', 'design', 'tasks', 'project')
 NAME = re.compile(r'[a-z0-9-]{1,24}$')
 GITHUB = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+$')
@@ -142,6 +145,17 @@ def top_block(lines, key):
         if not raw[:1].isspace(): break
         block.append(raw.expandtabs(8))
     return found
+
+
+def contract_of(name, lines, key):
+    """An entry's nested project: block, read by fm_project's parser."""
+    with tempfile.NamedTemporaryFile('w', suffix='.yaml') as block:
+        block.write('project:\n' + ''.join(line + '\n' for line in lines))
+        block.flush()
+        try:
+            return herdr.project_field(block.name, key) if key else herdr.project_contract(block.name)
+        except ValueError as error:
+            refuse(name, 'project', str(error).replace('config.yaml ', ''))
 
 
 def load(path):
@@ -206,6 +220,7 @@ def load(path):
         if has_top and entry.get('repo') == '.' and 'project' in entry:
             refuse(name, 'project', 'is also declared by the top-level project: block; '
                    'until T-050 the contract lives only there')
+        if 'project' in entry: contract_of(name, entry['project'], None)
     selves = [name for name in order if projects[name].get('repo') == '.']
     if len(selves) > 1:
         refuse(selves[1], 'repo', 'is . for %s as well; only one project is the engine itself' % selves[0])
@@ -247,13 +262,12 @@ try:
     elif mode == 'contract':
         name, key = args
         entry = registered(projects, name)
-        with tempfile.NamedTemporaryFile('w', suffix='.yaml') as block:
-            block.write('project:\n' + ''.join(line + '\n' for line in entry.get('project', [])))
-            block.flush()
-            source = config if entry.get('repo') == '.' and has_top else block.name
-            try: rc = herdr.project_field(source, key)
+        if entry.get('repo') == '.' and has_top:
+            try: rc = herdr.project_field(config, key)
             except ValueError as error:
                 refuse(name, 'project', str(error).replace('config.yaml ', ''))
+        else:
+            rc = contract_of(name, entry.get('project', []), key)
         sys.exit(rc)
     else:
         raise Refused('unknown registry mode ' + mode)
