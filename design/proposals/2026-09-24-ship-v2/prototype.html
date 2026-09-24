@@ -1,0 +1,2534 @@
+<!doctype html>
+<!--
+  PROTOTYPE v2 (T-070) - a design artefact, not production code.
+  Question: what does the captain's whole board look like when its ship sails a
+  living sea, with every motion tied to real state, and the page around it reads
+  as a ship's log and a chart table?
+  Fixture data only. Nothing is wired to a backend, nothing dispatches, and
+  nothing changes unless the captain acts on the page or presses a switch. Opens from disk with no network;
+  the two OFL faces are vendored under ./fonts (see README.md).
+  The production board is rewritten from this, not promoted from it.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prototype v2: the living ship</title>
+<style>
+/* ===== type: one engraved display face in one place, one condensed sans for everything else ===== */
+@font-face{font-family:"IM Fell English SC";font-style:normal;font-weight:400;font-display:swap;
+  src:local("IM FELL English SC"),local("IMFeENsc28P"),url("fonts/im-fell-english-sc-400.woff2") format("woff2")}
+@font-face{font-family:"Barlow Semi Condensed";font-style:normal;font-weight:400;font-display:swap;
+  src:local("Barlow Semi Condensed"),local("BarlowSemiCondensed-Regular"),url("fonts/barlow-semi-condensed-400.woff2") format("woff2")}
+@font-face{font-family:"Barlow Semi Condensed";font-style:normal;font-weight:500;font-display:swap;
+  src:local("Barlow Semi Condensed Medium"),local("BarlowSemiCondensed-Medium"),url("fonts/barlow-semi-condensed-500.woff2") format("woff2")}
+@font-face{font-family:"Barlow Semi Condensed";font-style:normal;font-weight:600;font-display:swap;
+  src:local("Barlow Semi Condensed SemiBold"),local("BarlowSemiCondensed-SemiBold"),url("fonts/barlow-semi-condensed-600.woff2") format("woff2")}
+
+/* the hour cross-fades: these are registered so a change of time interpolates instead of snapping */
+@property --sky0{syntax:"<color>";inherits:true;initial-value:#5F9EBB}
+@property --sky1{syntax:"<color>";inherits:true;initial-value:#8FC1D4}
+@property --sky2{syntax:"<color>";inherits:true;initial-value:#D3E6E8}
+@property --glow{syntax:"<color>";inherits:true;initial-value:#F4F0DC}
+@property --sea0{syntax:"<color>";inherits:true;initial-value:#A5CDD0}
+@property --sea1{syntax:"<color>";inherits:true;initial-value:#4B8E9A}
+@property --sea2{syntax:"<color>";inherits:true;initial-value:#23606F}
+@property --sea3{syntax:"<color>";inherits:true;initial-value:#153F4C}
+@property --isle{syntax:"<color>";inherits:true;initial-value:#86A8AA}
+@property --cloud{syntax:"<color>";inherits:true;initial-value:#F5F7F6}
+@property --cloudS{syntax:"<color>";inherits:true;initial-value:#BACDD3}
+@property --amb{syntax:"<color>";inherits:true;initial-value:#FFFFFF}
+@property --rim{syntax:"<color>";inherits:true;initial-value:rgba(255,248,230,.55)}
+@property --pg{syntax:"<color>";inherits:true;initial-value:#E4ECEC}
+@property --pg2{syntax:"<color>";inherits:true;initial-value:#D4E0E1}
+@property --pgText{syntax:"<color>";inherits:true;initial-value:#12283A}
+@property --pgText2{syntax:"<color>";inherits:true;initial-value:#46606E}
+@property --pgLine{syntax:"<color>";inherits:true;initial-value:#B7C8CB}
+@property --sheet{syntax:"<color>";inherits:true;initial-value:#F1F6F5}
+
+:root{
+  /* materials, not accents */
+  --tar:#3A2418; --sailcloth:#E8DDC4; --brass:#C99A3C; --ensign:#B23A2E; --seaglass:#6FA8A0; --ink:#0E2A3B;
+  --tarLit:#553623; --tarDeep:#1E130C; --timber:#6B4A33; --oak:#A58B6B; --oakShade:#7B644C;
+  --rope:#8A7350; --iron:#2C2C30;
+  --display:"IM Fell English SC","Iowan Old Style",Palatino,Georgia,serif;
+  --sans:"Barlow Semi Condensed","Avenir Next Condensed","Roboto Condensed","Arial Narrow","PingFang TC","PingFang SC","Noto Sans CJK TC","Microsoft JhengHei",system-ui,sans-serif;
+  --ambK:0%; --bL:.72; --bR:.9; --bT:1.3; --rimX:-1; --shX:-1; --lamp:0; --stars:0;
+  --dark:0; --rays:0; --foam:.4; --flagA:.6; --flagT:1.6s;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--pg);color:var(--pgText);font:400 16px/1.45 var(--sans);font-stretch:semi-condensed;
+  -webkit-font-smoothing:antialiased;overflow-x:hidden;
+  transition:--pg 1.2s ease,--pg2 1.2s ease,--pgText 1.2s ease,--pgText2 1.2s ease,--pgLine 1.2s ease,--sheet 1.2s ease}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+:focus-visible{outline:2px solid var(--pgText);outline-offset:2px}
+
+/* ===== the quiet board around the ship: a ship's log and a chart table =====
+   Every surface is the hour's page or its chart sheet; rules, not boxes, carry structure.
+   Square corners throughout: paper and brass, not rounded cards. */
+a{color:inherit}
+.top{display:flex;align-items:center;gap:10px 18px;flex-wrap:wrap;padding:12px 24px 10px}
+.brand{font-weight:600;font-size:20px;letter-spacing:.01em}
+.brand span{font-weight:400;color:var(--pgText2);font-size:16px;margin-left:8px}
+.top .spacer{flex:1}
+.clock{color:var(--pgText2);font-size:16px;font-variant-numeric:tabular-nums}
+/* page-chrome classes never share a name with the scene's state classes (.live, .s-*, .sel, .hot, .over, .l) */
+.top .livemark{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--pgText2)}
+.top .livemark i{width:8px;height:8px;border-radius:50%;background:var(--seaglass);box-shadow:0 0 0 3px color-mix(in oklab,var(--seaglass) 30%,transparent)}
+/* the engine badge is a small brass-riveted tag; the names are the config's own words */
+.engine{display:inline-flex;align-items:center;gap:7px;padding:4px 10px;font-size:13px;font-weight:600;box-shadow:inset 0 0 0 1px var(--pgLine)}
+.engine i{width:6px;height:6px;background:radial-gradient(circle at 35% 35%,#F2D9A0,var(--brass) 55%,#6E4E1A);border-radius:50%}
+.engine b{font-weight:500;color:var(--pgText2)}
+.gl{font-size:13px;color:var(--pgText2)}
+.langs{display:flex;box-shadow:inset 0 0 0 1px var(--pgLine)}
+.langs button{min-height:40px;min-width:44px;padding:4px 10px;font-size:16px}
+.langs button[aria-pressed=true]{background:var(--pgText);color:var(--pg)}
+/* the tally: six figures across the head of the log, ruled like a ledger's first line */
+.counts{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));margin:0 24px;border-top:2px solid var(--pgText);border-bottom:1px solid var(--pgLine)}
+.counts>div{padding:8px 14px 10px;border-left:1px solid var(--pgLine);min-width:0}
+.counts>div:first-child{border-left:0;padding-left:2px}
+.counts b{display:block;height:1.1em;overflow:hidden;font-weight:600;font-size:30px;line-height:1.1;font-variant-numeric:tabular-nums lining-nums}
+.counts .roll{display:block}.counts .roll>span{display:block;height:1.1em}
+.counts span.l{display:block;font-size:13px;color:var(--pgText2)}
+/* a fitting, not a highlight: a brass strip over "waiting on you", an ensign strip over "blocked" */
+.counts>div.hot{background:linear-gradient(var(--brass),var(--brass)) 0 -2px/100% 4px no-repeat}
+.counts>div.bad{background:linear-gradient(var(--ensign),var(--ensign)) 0 -2px/100% 4px no-repeat}
+h2.sec{margin:0 0 10px;font-size:20px;font-weight:600;line-height:1.2;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+h2.sec .n{font-size:16px;font-weight:500;color:var(--pgText2);font-variant-numeric:tabular-nums}
+/* the state mark: a small pennant, the same swallowtail the crew fly on deck */
+.mk{display:inline-block;flex:0 0 auto;width:13px;height:10px;background:var(--mkc,var(--pgLine));clip-path:polygon(0 0,100% 0,70% 50%,100% 100%,0 100%)}
+.mk.m-backlog{--mkc:var(--pgLine)}.mk.m-ready{--mkc:var(--pgText2)}.mk.m-working{--mkc:var(--pgText)}.mk.m-gate{--mkc:var(--ensign)}
+.mk.m-review{--mkc:var(--seaglass)}.mk.m-captain{--mkc:var(--brass)}.mk.m-merged{--mkc:color-mix(in oklab,var(--seaglass) 55%,var(--pgLine))}
+.mk.m-parked,.mk.m-closed,.mk.m-idle{--mkc:var(--pgLine)}
+/* chart sheets: square, with a double neat line like a printed chart */
+.sheet{background:var(--sheet);border:1px solid var(--pgLine);box-shadow:inset 0 0 0 3px var(--sheet),inset 0 0 0 4px color-mix(in oklab,var(--pgLine) 70%,transparent)}
+.btn2{min-height:44px;padding:8px 18px;font-size:16px;font-weight:600;background:var(--pg);box-shadow:inset 0 0 0 1px var(--pgLine)}
+.btn2:hover{box-shadow:inset 0 0 0 1px var(--pgText2)}
+/* the one button that sends an order is a brass fitting with the words cut in, like the name plate */
+.go{min-height:44px;padding:8px 22px;font-size:16px;font-weight:600;color:var(--tar);
+  background:linear-gradient(180deg,#E2BE6A 0%,var(--brass) 42%,#9C7428 100%);
+  box-shadow:0 0 0 1px #5E4316,inset 0 1px 0 rgba(255,240,200,.6);text-shadow:0 1px 0 rgba(255,236,190,.5)}
+.go:disabled{filter:saturate(.3) brightness(.9);opacity:.55;cursor:not-allowed}
+.go:not(:disabled):active{box-shadow:0 0 0 1px #5E4316,inset 0 1px 3px rgba(40,26,8,.45)}
+.danger{min-height:44px;padding:8px 18px;font-size:16px;font-weight:600;background:var(--ensign);color:var(--sailcloth)}
+
+/* ===== the decision deck: pending calls lead the page ===== */
+.deckwrap{padding:18px 24px 14px}
+.deckwrap[hidden]{display:none}
+.deckrow{display:grid;grid-template-columns:auto minmax(0,1fr);gap:22px;align-items:start}
+.capstage{width:160px;text-align:center;padding-top:4px}
+.capstage[hidden]{display:none}
+/* the captain's portrait through a brass porthole: the same figure, the same pose as on deck */
+.porthole{position:relative;width:152px;height:152px;margin:0 auto;border-radius:50%;padding:9px;
+  background:conic-gradient(from 210deg,#6E4E1A,#E4C27A 18%,#9C7428 36%,#F2D9A0 55%,#8E6A22 74%,#C99A3C 90%,#6E4E1A);
+  box-shadow:0 0 0 1px #4A3410,0 4px 10px rgba(14,42,59,.3)}
+.porthole .glass{position:relative;width:100%;height:100%;border-radius:50%;overflow:hidden;perspective:900px;
+  background:linear-gradient(180deg,var(--sky0) 0%,var(--sky2) 60%,var(--timber) 60% 67%,var(--brass) 67% 68.5%,var(--tar) 68.5%);
+  box-shadow:inset 0 0 0 2px #4A3410,inset 0 6px 14px rgba(0,0,0,.35)}
+.porthole .glass::after{content:"";position:absolute;inset:0;border-radius:50%;pointer-events:none;
+  background:radial-gradient(60% 40% at 32% 22%,rgba(255,255,255,.28),transparent 70%)}
+.porthole .ppivot{left:17px;top:62px}
+.capstage .lbl{margin-top:8px;line-height:1.25}
+.capstage .lbl b{display:block;font-size:16px;font-weight:600}
+.capstage .lbl span{display:block;font-size:13px;color:var(--pgText2)}
+.dcard{padding:18px 22px 20px;min-width:0}
+.dcard .meta{font-size:13px;color:var(--pgText2);font-variant-numeric:tabular-nums}
+.dcard h3{margin:2px 0 6px;font-size:22px;font-weight:600;line-height:1.25;max-width:40em}
+.links{display:flex;gap:18px;flex-wrap:wrap;margin:0 0 10px;font-size:16px}
+.links a{text-decoration:underline;text-decoration-color:var(--pgLine);text-underline-offset:3px;text-decoration-thickness:1.5px}
+.links a:hover{text-decoration-color:var(--pgText)}
+.dbody{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:22px 28px;align-items:start}
+.dbody>div,.deckrow>*{min-width:0}
+@media(max-width:1100px){.dbody{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:820px){.deckrow{grid-template-columns:minmax(0,1fr)}.capstage{width:auto}}
+.explanation{margin:0;font-size:16px;line-height:1.5;max-width:68ch}
+/* the authored diagram in its frame: the chart the firstmate drew for this call */
+.dg{margin:12px 0 0;padding:10px 12px 8px;background:var(--pg);border:1px solid var(--pgLine)}
+.dg .scroll{overflow-x:auto}
+/* a diagram never draws narrower than its viewBox (523 units), so a 13-unit label never renders under 13 px;
+   a narrower frame scrolls instead of shrinking the text */
+.dg svg{display:block;width:100%;min-width:523px;height:auto;font-family:var(--sans)}
+.dg figcaption{margin-top:6px;font-size:13px;color:var(--pgText2)}
+.dg .box{fill:var(--sheet);stroke:var(--pgText);stroke-width:1.2}
+.dg .box.q{stroke-dasharray:5 4;stroke:var(--pgText)}
+.dg .box.hot{fill:color-mix(in oklab,var(--brass) 22%,var(--sheet))}
+.dg .ln{stroke:var(--pgText);stroke-width:1.2;fill:none}
+.dg .t1{fill:var(--pgText);font-size:14px;font-weight:600}
+.dg .t2{fill:var(--pgText2);font-size:13px}
+.dg .hd{fill:var(--pgText2);font-size:13px;font-weight:600}
+.change-fallback{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-top:10px;font-size:16px}
+.change-fallback b{display:block;font-size:13px;font-weight:600;color:var(--pgText2)}
+.change-fallback p{margin:2px 0 0}
+.opts{margin:0;padding:0;list-style:none;border-top:1px solid var(--pgLine)}
+.opt{display:grid;grid-template-columns:30px minmax(0,1fr);gap:2px 10px;width:100%;min-height:44px;padding:9px 10px 10px 8px;text-align:left;border-bottom:1px solid var(--pgLine)}
+.opt:hover:not(:disabled){background:color-mix(in oklab,var(--pgText) 5%,transparent)}
+.opt .k{font-size:20px;font-weight:600;line-height:1.15;font-variant-numeric:tabular-nums}
+.opt .d{font-size:16px;font-weight:500;line-height:1.35}
+.opt .pc{grid-column:2;font-size:13px;line-height:1.4;color:var(--pgText2)}
+.opt .pc b{font-weight:600;color:var(--pgText)}
+.opt[aria-pressed=true]{background:color-mix(in oklab,var(--pgText) 9%,transparent);box-shadow:inset 3px 0 0 var(--pgText)}
+.opt:disabled{cursor:default;opacity:.7}
+.custom{display:block;margin-top:10px;font-size:13px;color:var(--pgText2)}
+.custom[hidden]{display:none}
+.custom textarea{display:block;width:100%;min-height:76px;margin-top:4px;padding:8px 10px;font:16px/1.4 var(--sans);color:var(--pgText);background:var(--pg);border:1px solid var(--pgLine);border-radius:0;resize:vertical}
+.acts{display:flex;gap:10px 14px;flex-wrap:wrap;align-items:center;margin-top:12px}
+.validation{font-size:13px;color:var(--pgText)}
+.validation:empty{display:none}
+.gates{margin:12px 0 0;padding:0;list-style:none;columns:2 180px;column-gap:18px;font-size:16px}
+.gates li{display:flex;gap:8px;padding:2px 0;break-inside:avoid}
+.gates li i{font-style:normal;width:14px;flex:0 0 14px;color:var(--seaglass);font-weight:600}
+.gates li.n{color:var(--pgText2)}.gates li.n i{color:var(--ensign)}
+.also{margin:14px 0 8px;font-size:16px;font-weight:600}
+.dstrip{margin-bottom:8px;min-width:0}
+.dstrip>summary{display:flex;gap:4px 12px;flex-wrap:wrap;align-items:baseline;min-height:44px;padding:11px 14px;cursor:pointer;list-style:none}
+.dstrip>summary::-webkit-details-marker{display:none}
+.dstrip>summary::before{content:"";width:0;height:0;border:5px solid transparent;border-left:7px solid var(--pgText2);align-self:center}
+.dstrip[open]>summary::before{transform:rotate(90deg)}
+.dstrip>summary .st{font-size:16px;font-weight:500}
+.dstrip>summary .picked{font-size:13px;font-weight:600;padding:1px 12px 2px 7px;background:var(--pgText);color:var(--pg);clip-path:polygon(0 0,100% 0,calc(100% - 6px) 50%,100% 100%,0 100%)}
+.dstrip>.dcard{border:0;box-shadow:none;padding-top:4px}
+#orderFeedback{margin:10px 0 0;font-size:16px}
+#orderFeedback:empty{display:none}
+
+/* ===== the crew roster: a muster list under the ship ===== */
+.rostbar{margin-left:auto}
+.roster{padding:10px 24px 6px}
+.roster[hidden]{display:none}
+.roster ul{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,330px),1fr));column-gap:30px}
+.rrow{display:grid;grid-template-columns:14px minmax(0,1fr) auto;gap:1px 10px;align-items:baseline;align-content:start;padding:8px 0 9px;border-bottom:1px solid var(--pgLine)}
+.rrow .nm{font-size:16px;font-weight:600;min-width:0;overflow-wrap:anywhere}
+.rrow .nm small{font-size:13px;font-weight:500;color:var(--pgText2);margin-left:8px}
+.rrow .rpr{font-size:13px}
+.rrow .en{grid-column:2/-1;font-size:13px;font-weight:500;color:var(--pgText)}
+.rrow .jb{grid-column:2/-1;font-size:13px;color:var(--pgText2);line-height:1.4}
+.rrow .jb b{font-weight:600;color:var(--pgText)}
+.pb{display:inline-block;width:64px;height:4px;margin:0 6px 0 8px;vertical-align:middle;background:var(--pgLine)}
+.pb i{display:block;height:100%;background:var(--pgText)}
+
+/* ===== the fleet: seven ruled columns on one chart table ===== */
+.fleet{padding:22px 24px 8px}
+.lanes{display:grid;grid-template-columns:repeat(7,minmax(0,1fr))}
+@media(max-width:1100px){.lanes{grid-template-columns:repeat(4,minmax(0,1fr))}.lane:nth-child(4n+1){border-left:0}}
+@media(max-width:700px){.lanes{grid-template-columns:repeat(2,minmax(0,1fr))}.lane:nth-child(odd){border-left:0}.lane:nth-child(even){border-left:1px solid var(--pgLine)}}
+@media(max-width:460px){.lanes{grid-template-columns:minmax(0,1fr)}.lane{border-left:0!important}}
+.lane{min-width:0;min-height:140px;padding:6px 10px 12px;border-left:1px solid var(--pgLine)}
+.lane:first-child{border-left:0}
+.lane h3{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin:0 0 2px;padding:6px 0 7px;font-size:16px;font-weight:600;border-bottom:3px double var(--pgText)}
+.lane h3 i{font-style:normal;font-weight:500;color:var(--pgText2);font-variant-numeric:tabular-nums}
+/* the captain's column is the one that asks for him: a faint ink wash, and its rule in brass */
+.lane.l-captain.has{background:color-mix(in oklab,var(--pgText) 6%,transparent)}
+.lane.l-captain.has h3{border-bottom-color:var(--brass)}
+.card{position:relative;padding:8px 2px 10px;border-bottom:1px solid var(--pgLine);background:var(--sheet)}
+.lane.l-captain.has .card{background:transparent}
+.card .hd{display:flex;align-items:center;gap:8px;min-height:32px}
+.card .id{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+.card .pr{font-size:13px;text-decoration:underline;text-decoration-color:var(--pgLine);text-underline-offset:3px}
+.card .pr:hover{text-decoration-color:var(--pgText)}
+.card .t{font-size:16px;font-weight:500;line-height:1.3;overflow-wrap:anywhere}
+.card .cw{margin-top:3px;font-size:13px;color:var(--pgText2);overflow-wrap:anywhere}
+.card .dep{margin-top:3px;font-size:13px;color:var(--pgText)}
+.card .dep::before{content:"";display:inline-block;width:7px;height:7px;margin-right:6px;border:1.5px solid var(--ensign);transform:rotate(45deg) translateY(-1px)}
+.badge{display:inline-block;margin:7px 6px 0 0;padding:1px 14px 2px 7px;font-size:13px;font-weight:600;line-height:1.35;clip-path:polygon(0 0,100% 0,calc(100% - 7px) 50%,100% 100%,0 100%)}
+.badge.b-gate{background:var(--ensign);color:var(--sailcloth)}
+.badge.b-decision{background:var(--pgText);color:var(--pg)}
+.badge.b-ask{background:var(--seaglass);color:var(--ink)}
+.cmenu{margin-left:auto;min-width:36px;min-height:32px;font-size:20px;line-height:1;color:var(--pgText2)}
+.cmenu:hover,.cmenu[aria-expanded=true]{color:var(--pgText);background:var(--pg2)}
+.cacts{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.cacts button{min-height:40px;padding:4px 14px;font-size:16px;background:var(--pg);box-shadow:inset 0 0 0 1px var(--pgLine)}
+.cacts button:hover{box-shadow:inset 0 0 0 1px var(--pgText2)}
+.card[draggable=true]{cursor:grab}
+.card.lifted{opacity:.4}
+.lane .more{margin:8px 0 0;font-size:13px;color:var(--pgText2)}
+.setaside{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,1fr);gap:12px;margin-top:12px;align-items:start}
+@media(max-width:700px){.setaside{grid-template-columns:minmax(0,1fr)}}
+#parked{background:var(--sheet);border:1px dashed var(--pgText2)}
+#parked>summary,#history>summary{min-height:44px;padding:11px 14px;font-size:16px;font-weight:600;cursor:pointer}
+#parked>summary i,#history>summary i{font-style:normal;font-weight:500;color:var(--pgText2);margin-left:6px;font-variant-numeric:tabular-nums}
+.parked-cards,.history-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,230px),1fr));column-gap:18px;padding:0 14px 10px}
+#dropzone{display:flex;align-items:center;gap:10px;min-height:44px;padding:11px 14px;font-size:16px;color:var(--pgText2);border:1.5px dashed var(--ensign)}
+#dropzone::before{content:"";width:12px;height:12px;flex:0 0 12px;background:var(--ensign);clip-path:polygon(20% 0,50% 30%,80% 0,100% 20%,70% 50%,100% 80%,80% 100%,50% 70%,20% 100%,0 80%,30% 50%,0 20%)}
+.fleet.dragging [data-zone]{outline:1.5px dashed var(--pgText2);outline-offset:3px}
+.fleet [data-zone].over{outline:2px solid var(--pgText);outline-offset:3px}
+#dropConfirm{margin-top:12px;padding:12px 16px 14px;background:var(--sheet);box-shadow:inset 4px 0 0 var(--ensign),0 0 0 1px var(--pgLine)}
+#dropConfirm[hidden]{display:none}
+#dropConfirm p{margin:0;font-size:16px;max-width:70ch}
+#taskFeedback{margin:10px 0 0;font-size:16px}
+#taskFeedback:empty{display:none}
+#history{margin-top:14px;border-top:1px solid var(--pgLine)}
+#history>summary{padding-left:2px}
+.history-cards{padding:0 2px 8px}
+.history-cards .card{background:transparent}
+
+/* ===== the live log: a ship's log, newest entry at the head ===== */
+.logwrap{padding:22px 24px 26px}
+.log{margin:0;padding:0;list-style:none;max-height:340px;overflow:auto}
+.log li{display:grid;grid-template-columns:76px 104px minmax(0,1fr);gap:12px;align-items:baseline;padding:7px 12px 8px;border-bottom:1px solid var(--pgLine)}
+.log li:last-child{border-bottom:0}
+.log time{font-size:13px;color:var(--pgText2);font-variant-numeric:tabular-nums}
+.log .who{font-size:13px;font-weight:600;overflow-wrap:anywhere}
+.log .x{display:flex;gap:8px;align-items:baseline;font-size:16px;line-height:1.4}
+.log .x .mk{transform:translateY(1px)}
+.log .empty{display:block;font-size:16px;color:var(--pgText2)}
+@media(max-width:620px){.log li{grid-template-columns:64px minmax(0,1fr)}.log .x{grid-column:1/-1}}
+@media(max-width:700px){.counts{grid-template-columns:repeat(3,minmax(0,1fr));margin:0 14px}.counts>div:nth-child(4){border-left:0;padding-left:2px}
+  .deckwrap,.fleet,.logwrap,.roster{padding-left:14px;padding-right:14px}}
+
+/* ===== the scene: the one bold thing ===== */
+.scene{position:relative;width:100%;overflow:hidden;background:var(--sky1);
+  transition:--sky0 1.2s ease,--sky1 1.2s ease,--sky2 1.2s ease,--glow 1.2s ease,--sea0 1.2s ease,--sea1 1.2s ease,
+    --sea2 1.2s ease,--sea3 1.2s ease,--isle 1.2s ease,--cloud 1.2s ease,--cloudS 1.2s ease,--amb 1.2s ease,--rim 1.2s ease;
+  user-select:none;-webkit-user-select:none}
+.scene>*{position:absolute}
+.scene svg{display:block;overflow:visible}
+#sky{left:0;top:0}
+.stars{opacity:var(--stars);transition:opacity 1.2s ease}
+.rays{opacity:var(--rays)}
+.plx{left:0;display:flex;will-change:transform;pointer-events:none}
+.plx svg{flex:0 0 auto}
+.plx.isles{filter:blur(1.1px)}
+.plx.clouds{filter:blur(.6px)}
+.plx.squallband{opacity:var(--dark)}
+.plx.near{filter:blur(.5px)}
+.plx.foam{filter:blur(2.2px)}
+.plx.crests{opacity:calc(var(--foam) * .7)}
+.glowband{left:0;right:0;pointer-events:none;background:radial-gradient(60% 100% at var(--sunX,50%) 50%,var(--glow),transparent 70%);opacity:.55}
+.darken{inset:0;pointer-events:none;background:linear-gradient(180deg,rgba(14,42,59,.55),rgba(14,42,59,.15) 60%,rgba(14,42,59,.3));opacity:calc(var(--dark)*.8)}
+#wake,#spray{left:0;top:0;pointer-events:none}
+.vessel{left:0;top:0;will-change:transform}
+.vessel>*{position:absolute;left:0;top:0}
+.hull .deckhit{cursor:grab}
+/* the hour lights the timber and canvas too, not only the crew */
+.hull,.rig,.plate{filter:brightness(var(--shipB,1)) saturate(var(--shipS,1));transition:filter 1.2s ease}
+.rig{pointer-events:none}
+.jolly{transform-box:fill-box;transform-origin:0 50%;animation:flutter var(--flagT) ease-in-out infinite;transition:transform .8s ease}
+@keyframes flutter{0%,100%{transform:skewY(calc(var(--flagA) * -7deg)) scaleX(1)}
+  50%{transform:skewY(calc(var(--flagA) * 8deg)) scaleX(calc(1 - var(--flagA) * .1))}}
+.calm .jolly{animation:none;transform:rotate(64deg) scaleX(.86)}
+.lampglow{opacity:var(--lamp);transition:opacity 1.2s ease}
+
+/* the name plate: brass is the material, the letters are cut into it */
+.plate{transform:translate(-50%,-50%);padding:5px 16px 6px;text-align:center;white-space:nowrap;
+  background:linear-gradient(180deg,#E2BE6A 0%,var(--brass) 38%,#9C7428 100%);
+  border-radius:3px;box-shadow:0 0 0 1.5px #5E4316,0 2px 4px rgba(20,12,6,.55),inset 0 1px 0 rgba(255,240,200,.6);
+  font-family:var(--display);color:var(--tar);text-shadow:0 1px 0 rgba(255,236,190,.55);pointer-events:none}
+.plate b{display:block;font-weight:400;font-size:22px;line-height:1.05;letter-spacing:.04em}
+.plate span{display:block;font-size:16px;line-height:1.1;letter-spacing:.03em}
+
+/* ===== crew: the prototype's box figures, lit by the hour ===== */
+.crew{left:0;top:0;perspective:1100px;pointer-events:none}
+.pivot,.ppivot{position:absolute;width:92px;height:100px;transform-style:preserve-3d;pointer-events:auto;cursor:grab;touch-action:none;
+  transform-origin:46px 100px;transform:rotateX(var(--rx,8deg)) rotateY(var(--ry,-26deg)) scale(var(--sc,.86));
+  transition:transform .16s ease-out}
+.pivot.dragging{cursor:grabbing;transition:none}
+.ppivot{cursor:default;pointer-events:none}
+.fig{position:absolute;inset:0;transform-style:preserve-3d}
+.fig *{position:absolute;transform-style:preserve-3d}
+.bx{width:var(--w);height:var(--h)}
+.bx>i{display:block;border-radius:1.5px;background:color-mix(in oklab,var(--c) calc(100% - var(--ambK)),var(--amb))}
+.bx>i.fr{width:var(--w);height:var(--h);transform:translateZ(calc(var(--d)/2));
+  box-shadow:inset calc(var(--rimX) * -2px) 0 0 0 var(--rim)}
+.bx>i.sd{width:var(--d);height:var(--h);left:calc(var(--w)/2 - var(--d)/2);
+  transform:rotateY(90deg) translateZ(calc(var(--w)/2));filter:brightness(var(--bR))}
+.bx>i.tp{width:var(--w);height:var(--d);top:calc(var(--h)/2 - var(--d)/2);
+  transform:rotateX(90deg) translateZ(calc(var(--h)/2));filter:brightness(var(--bT))}
+.bx>i.lf{width:var(--d);height:var(--h);left:calc(var(--w)/2 - var(--d)/2);
+  transform:rotateY(-90deg) translateZ(calc(var(--w)/2));filter:brightness(var(--bL))}
+.bx>i.bk{width:var(--w);height:var(--h);transform:translateZ(calc(var(--d)/-2)) rotateY(180deg);filter:brightness(.42)}
+/* soft contact shadow, thrown away from the key light */
+.fig .sh{left:50%;bottom:-7px;width:60px;height:14px;margin-left:calc(-30px + var(--shX) * 7px);border-radius:50%;
+  background:radial-gradient(ellipse at 50% 50%,rgba(20,12,6,.55),rgba(20,12,6,.18) 45%,transparent 72%);transform:translateZ(-14px)}
+.fig .shoeL{--w:13px;--h:6px;--d:16px;left:31px;bottom:0}
+.fig .shoeR{--w:13px;--h:6px;--d:16px;left:48px;bottom:0}
+.fig .legL{--w:11px;--h:22px;--d:12px;left:32px;bottom:5px}
+.fig .legR{--w:11px;--h:22px;--d:12px;left:49px;bottom:5px}
+.fig .torso{--w:32px;--h:34px;--d:20px;left:30px;bottom:24px}
+.fig .belt{--w:33px;--h:4px;--d:21px;left:29px;bottom:27px}
+.fig .neck{--w:10px;--h:7px;--d:10px;left:41px;bottom:55px}
+.fig .head{--w:21px;--h:20px;--d:19px;left:36px;bottom:61px}
+.fig .eye{left:41px;bottom:70px;width:3px;height:3.5px;border-radius:1px;background:#1B1A1E;box-shadow:8px 0 0 #1B1A1E;transform:translateZ(10px)}
+.fig .armL{--w:8px;--h:23px;--d:11px;left:22px;bottom:31px;transform-origin:50% 2px;transform:rotate(6deg)}
+.fig .armR{--w:8px;--h:23px;--d:11px;left:62px;bottom:31px;transform-origin:50% 2px;transform:rotate(-6deg)}
+.fig .handL,.fig .handR{--w:9px;--h:8px;--d:11px;left:-1px;bottom:-6px}
+.fig .tool{left:-4px;bottom:-9px;width:0;height:0;opacity:0}
+.fig .dprop{left:50%;bottom:-1px;margin-left:-13px;width:26px;height:20px;opacity:0;transform:translateZ(15px)}
+/* hats by role */
+.fig .brim{--w:30px;--h:3px;--d:26px;left:31px;bottom:78px}
+.fig .crown{--w:22px;--h:8px;--d:20px;left:35px;bottom:80px}
+.fig .trim{--w:31px;--h:1.5px;--d:27px;left:30.5px;bottom:80.5px;--c:var(--brass)}
+.fig .cap{--w:22px;--h:9px;--d:20px;left:35px;bottom:79px}
+.fig .capfold{--w:23px;--h:3px;--d:21px;left:34.5px;bottom:78px}
+/* role materials */
+.fig{--skin:#E9C7A2;--shirt:var(--sailcloth);--trouser:#4A3526;--shoe:#1E1712;--hat:#2A1D15}
+.fig.r-fm{--shirt:#1F3A4F;--trouser:#D9CDB2;--hat:#1C1511}
+.fig.r-r{--shirt:#3F6F69;--trouser:#2E2A26;--hat:#1C1511}
+.fig .head,.fig .neck,.fig .handL,.fig .handR{--c:var(--skin)}
+.fig .torso,.fig .armL,.fig .armR{--c:var(--shirt)}
+.fig .legL,.fig .legR{--c:var(--trouser)}
+.fig .shoeL,.fig .shoeR{--c:var(--shoe)}
+.fig .belt{--c:#2A1D15}
+.fig .brim,.fig .crown,.fig .cap{--c:var(--hat)}
+.fig .capfold{--c:color-mix(in oklab,var(--hat) 80%,#000)}
+/* state reads before action: blocked sags and dims, idle stands easy, nobody out of work moves */
+.fig.s-gate{--ambK:42%;--amb:#4A2622}
+.fig.s-gate .neck{bottom:52px}.fig.s-gate .head{bottom:57px}.fig.s-gate .eye{bottom:66px}
+.fig.s-gate .brim{bottom:74px}.fig.s-gate .crown{bottom:76px}.fig.s-gate .cap{bottom:75px}.fig.s-gate .capfold{bottom:74px}.fig.s-gate .trim{bottom:76.5px}
+.fig.s-gate .armR{transform:rotate(13deg)!important}.fig.s-gate .armL{transform:rotate(-8deg)!important}
+.fig.s-idle{--ambK:18%;--amb:#6E7478}
+
+/* ===== actions. the arms belong to the action; loops run only on a live run ===== */
+.live.a-helm .armL,.live.a-helm .armR{animation:steer 2.4s ease-in-out infinite}
+.a-helm .armL,.a-helm .armR{transform:rotate(-58deg)}
+@keyframes steer{0%,100%{transform:rotate(-52deg)}50%{transform:rotate(-64deg)}}
+.a-lookout .armR{transform:rotate(-106deg)}.a-lookout .armL{transform:rotate(-24deg)}
+.live.a-lookout{animation:scan 4.2s ease-in-out infinite}
+@keyframes scan{0%,100%{transform:rotateY(-17deg)}50%{transform:rotateY(19deg)}}
+.a-signal .armR{transform:rotate(-140deg)}.a-signal .armL{transform:rotate(-20deg)}
+.live.a-signal .armR{animation:wave .8s ease-in-out infinite}
+@keyframes wave{0%,100%{transform:rotate(-132deg)}50%{transform:rotate(-158deg)}}
+.a-point .armR{transform:rotate(-92deg)}.a-point .armL{transform:rotate(-40deg)}
+.live.a-point{animation:bob 3s ease-in-out infinite}
+.a-log .armR{transform:rotate(-70deg)}.a-log .armL{transform:rotate(-62deg)}
+.live.a-log .armR{animation:scribble .9s ease-in-out infinite}
+@keyframes scribble{0%,100%{transform:rotate(-70deg)}50%{transform:rotate(-58deg)}}
+.a-haul .armL,.a-haul .armR{transform:rotate(-64deg)}
+.live.a-haul .armL,.live.a-haul .armR{animation:haul 1.25s ease-in-out infinite}
+.live.a-haul{animation:heave 1.25s ease-in-out infinite}
+@keyframes haul{0%,100%{transform:rotate(-70deg)}50%{transform:rotate(-40deg)}}
+@keyframes heave{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+.a-capstan .armL{transform:rotate(-52deg)}.a-capstan .armR{transform:rotate(-58deg)}
+.live.a-capstan .armR{animation:crank 1.1s linear infinite}
+@keyframes crank{0%,100%{transform:rotate(-20deg)}25%{transform:rotate(-58deg)}50%{transform:rotate(-96deg)}75%{transform:rotate(-58deg)}}
+.a-carry .armL,.a-carry .armR{transform:rotate(-78deg)}
+.live.a-carry{animation:trudge 1.6s ease-in-out infinite}
+@keyframes trudge{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+.a-climb .armL{transform:rotate(-124deg)}.a-climb .armR{transform:rotate(-70deg)}
+.live.a-climb .armL{animation:climbL 1.4s ease-in-out infinite}
+.live.a-climb .armR{animation:climbR 1.4s ease-in-out infinite}
+@keyframes climbL{0%,100%{transform:rotate(-124deg)}50%{transform:rotate(-70deg)}}
+@keyframes climbR{0%,100%{transform:rotate(-70deg)}50%{transform:rotate(-124deg)}}
+.a-hammer .armR{transform:rotate(-40deg)}.a-hammer .armL{transform:rotate(-48deg)}
+.live.a-hammer .armR{animation:hammer .62s ease-in-out infinite}
+@keyframes hammer{0%,100%{transform:rotate(-14deg)}45%{transform:rotate(-86deg)}}
+.a-saw .armL{transform:rotate(-46deg)}.a-saw .armR{transform:rotate(-44deg)}
+.live.a-saw .armR{animation:saw .7s ease-in-out infinite}
+@keyframes saw{0%,100%{transform:rotate(-30deg)}50%{transform:rotate(-62deg)}}
+.a-swab .armL{transform:rotate(-34deg)}.a-swab .armR{transform:rotate(-50deg)}
+.live.a-swab .armR{animation:swab 1.5s ease-in-out infinite}
+@keyframes swab{0%,100%{transform:rotate(-34deg)}50%{transform:rotate(-72deg)}}
+.a-lean .armL,.a-lean .armR{transform:rotate(-96deg)}
+.a-coil .armL{transform:rotate(-70deg)}.a-coil .armR{transform:rotate(-62deg)}
+.a-mend .armL{transform:rotate(-66deg)}.a-mend .armR{transform:rotate(-78deg)}
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+/* the legs shift weight only while the man is working */
+.live .legL,.live .shoeL{animation:stepA var(--step,1.25s) ease-in-out infinite}
+.live .legR,.live .shoeR{animation:stepB var(--step,1.25s) ease-in-out infinite}
+.live.a-lean .legL,.live.a-lean .legR,.live.a-lean .shoeL,.live.a-lean .shoeR,
+.live.a-helm .legL,.live.a-helm .legR,.live.a-helm .shoeL,.live.a-helm .shoeR{animation:none}
+@keyframes stepA{0%,100%{transform:translateY(0) rotate(2deg)}50%{transform:translateY(-5px) rotate(-12deg)}}
+@keyframes stepB{0%,100%{transform:translateY(-5px) rotate(-12deg)}50%{transform:translateY(0) rotate(2deg)}}
+
+/* ===== tools: right hand is the job, left hand steadies it ===== */
+.a-hammer .tool:not(.l){opacity:1;width:16px;height:9px;border-radius:2px;transform:translateZ(6px);
+  background:linear-gradient(180deg,#8E959C,#3E4449);box-shadow:0 0 0 1.5px #1E2226}
+.a-hammer .tool:not(.l)::after{content:"";position:absolute;left:5px;top:8px;width:5px;height:13px;border-radius:2px;background:#6B4F2C;box-shadow:0 0 0 1px #2A2013}
+.a-hammer .tool.l{opacity:1;width:18px;height:5px;left:-5px;bottom:-4px;border-radius:1px;background:var(--oak);box-shadow:0 0 0 1px #4A3622;transform:translateZ(7px)}
+.a-saw .tool:not(.l){opacity:1;width:24px;height:6px;border-radius:1px;left:-14px;bottom:-4px;transform:translateZ(6px);
+  background:linear-gradient(90deg,#D6DCE0,#6F7980);box-shadow:0 0 0 1px #262A2E}
+.a-saw .tool.l{opacity:1;width:20px;height:5px;left:-6px;bottom:-3px;border-radius:1px;background:var(--oak);box-shadow:0 0 0 1px #4A3622;transform:translateZ(7px)}
+.a-swab .tool:not(.l){opacity:1;width:4px;height:26px;border-radius:2px;left:2px;bottom:-22px;background:#6B4F2C;transform:translateZ(6px)}
+.a-swab .tool:not(.l)::after{content:"";position:absolute;left:-6px;top:22px;width:16px;height:7px;border-radius:3px;background:#C9BEA2}
+.a-lookout .tool:not(.l){opacity:1;width:26px;height:6px;border-radius:3px;left:-17px;bottom:2px;transform:translateZ(6px);
+  background:linear-gradient(90deg,#E0B864,var(--brass) 40%,#7A5A20);box-shadow:0 0 0 1.5px #3E2C10}
+.a-haul .tool:not(.l),.a-haul .tool.l{opacity:1;width:3px;height:30px;left:3px;bottom:-26px;background:var(--rope);transform:translateZ(6px) rotate(9deg)}
+.a-carry .tool:not(.l){opacity:1;width:20px;height:16px;border-radius:2px;left:-6px;bottom:-14px;transform:translateZ(8px);
+  background:linear-gradient(160deg,#8A6440,#4A3020);box-shadow:0 0 0 1px #24160C,inset 0 5px 0 -3px #A58B6B}
+.a-capstan .tool:not(.l){opacity:1;width:14px;height:4px;border-radius:2px;left:-2px;bottom:-6px;background:#8A6438;transform:translateZ(6px)}
+.a-log .tool:not(.l){opacity:1;width:3px;height:12px;border-radius:2px;left:1px;bottom:-9px;background:var(--sailcloth);transform:translateZ(8px) rotate(24deg)}
+.a-log .tool.l{opacity:1;width:14px;height:11px;border-radius:1px;left:-4px;bottom:-8px;background:#6B2A22;box-shadow:inset 3px 0 0 #3E1812,0 0 0 1px #2A120C;transform:translateZ(8px)}
+.a-point .tool.l{opacity:1;width:6px;height:17px;border-radius:3px;left:-1px;bottom:-13px;transform:translateZ(8px) rotate(-10deg);
+  background:linear-gradient(180deg,var(--sailcloth),#A8997A);box-shadow:0 0 0 1px #5A4A2E}
+.a-signal .tool:not(.l){opacity:1;width:16px;height:11px;left:-2px;bottom:-4px;transform:translateZ(6px);background:var(--ensign);
+  clip-path:polygon(0 0,100% 0,78% 50%,100% 100%,0 100%)}
+.a-signal .tool.l{opacity:1;width:3px;height:16px;left:2px;bottom:-12px;background:#6B4F2C;transform:translateZ(6px);box-shadow:3px 1px 0 0 var(--seaglass)}
+.a-climb .tool:not(.l),.a-climb .tool.l{opacity:1;width:4px;height:9px;border-radius:2px;left:0;bottom:-7px;background:var(--rope);transform:translateZ(6px)}
+.a-lean .tool.l{opacity:1;width:9px;height:4px;border-radius:2px;left:-2px;bottom:-4px;background:#8A6438;transform:translateZ(6px)}
+.a-coil .tool.l{opacity:1;width:16px;height:16px;left:-4px;bottom:-12px;border-radius:50%;transform:translateZ(8px);
+  background:radial-gradient(circle,transparent 30%,var(--rope) 32% 44%,#6A5738 46% 54%,var(--rope) 56% 68%,transparent 70%)}
+.a-mend .tool.l{opacity:1;width:18px;height:13px;left:-4px;bottom:-10px;border-radius:1px;background:var(--sailcloth);box-shadow:inset 0 -3px 0 #CFC2A4;transform:translateZ(8px) rotate(-8deg)}
+.a-mend .tool:not(.l){opacity:1;width:2px;height:9px;left:2px;bottom:-7px;background:#B9C0C4;transform:translateZ(8px) rotate(30deg)}
+/* the firstmate waiting on the captain holds up the card */
+.fig.r-fm.s-captain .armL{transform:rotate(-128deg)!important;animation:none!important}
+.fig.r-fm.s-captain .tool.l{opacity:1;width:14px;height:17px;left:-3px;bottom:-14px;background:var(--sailcloth);border-radius:1px;
+  box-shadow:0 0 0 1px #6A5B40,inset 0 -4px 0 -2px var(--ensign);transform:translateZ(8px)}
+
+/* ===== deck props: nobody mimes ===== */
+.a-lean .dprop{opacity:1;height:22px;width:22px;margin-left:10px;border-radius:4px/7px;
+  background:linear-gradient(90deg,#3D2A18,#6B4A2A 42%,#2C1D10);
+  box-shadow:inset 0 4px 0 -2px var(--brass),inset 0 -4px 0 -2px var(--brass),0 0 0 1px #1A1109}
+.a-capstan .dprop{opacity:1;height:17px;width:30px;margin-left:-15px;border-radius:5px;background:linear-gradient(180deg,#7D5630,#33200F);box-shadow:0 0 0 1px #1A1109,inset 0 3px 0 -1px var(--brass)}
+.a-capstan .dprop::after{content:"";position:absolute;left:-7px;top:5px;width:44px;height:3px;border-radius:2px;background:#8A6438}
+.a-climb .dprop{opacity:1;height:48px;width:22px;bottom:0;margin-left:-11px;
+  background:repeating-linear-gradient(180deg,var(--rope) 0 2px,transparent 2px 9px),
+    linear-gradient(90deg,transparent 2px,var(--rope) 2px 4px,transparent 4px calc(100% - 4px),var(--rope) calc(100% - 4px) calc(100% - 2px),transparent calc(100% - 2px))}
+.a-haul .dprop{opacity:1;width:34px;height:12px;margin-left:8px;border-radius:2px;
+  background:linear-gradient(180deg,#6B4A2A,#3A2616);box-shadow:0 0 0 1px #1A1109}
+.a-haul .dprop::after{content:"";position:absolute;left:4px;top:-9px;width:26px;height:9px;
+  background:repeating-linear-gradient(90deg,#8A6438 0 3px,transparent 3px 8px)}
+.a-carry .dprop{opacity:1;width:20px;height:16px;margin-left:18px;border-radius:2px;background:linear-gradient(160deg,#8A6440,#4A3020);box-shadow:0 0 0 1px #24160C,0 -16px 0 -2px #6E4E30}
+.a-hammer .dprop{opacity:1;width:30px;height:15px;margin-left:-4px;border-radius:2px;background:linear-gradient(180deg,#6E4A2C,#3A2616);
+  box-shadow:0 0 0 1px #1A1109,inset 3px 3px 0 -1px var(--brass),inset -3px 3px 0 -1px var(--brass)}
+.a-saw .dprop{opacity:1;width:36px;height:13px;margin-left:-6px;background:
+  linear-gradient(180deg,var(--oak) 0 4px,transparent 4px),
+  linear-gradient(90deg,transparent 3px,#5A4028 3px 6px,transparent 6px calc(100% - 6px),#5A4028 calc(100% - 6px) calc(100% - 3px),transparent calc(100% - 3px))}
+.a-swab .dprop{opacity:1;width:14px;height:13px;margin-left:12px;border-radius:2px 2px 4px 4px;background:linear-gradient(90deg,#5A3E24,#7E5A36 50%,#4A321C);box-shadow:inset 0 3px 0 -1px var(--brass),0 0 0 1px #1A1109}
+.a-point .dprop,.a-log .dprop{opacity:1;width:30px;height:15px;margin-left:10px;
+  background:linear-gradient(180deg,var(--sailcloth) 0 4px,transparent 4px),
+  linear-gradient(90deg,transparent 3px,#4A3322 3px 6px,transparent 6px calc(100% - 6px),#4A3322 calc(100% - 6px) calc(100% - 3px),transparent calc(100% - 3px))}
+.a-signal .dprop{opacity:1;width:18px;height:13px;margin-left:12px;border-radius:1px;background:linear-gradient(180deg,#5A3E24,#3A2616);
+  box-shadow:inset 4px 3px 0 -1px var(--ensign),inset -4px 3px 0 -1px var(--seaglass),0 0 0 1px #1A1109}
+.a-coil .dprop{opacity:1;width:24px;height:8px;margin-left:10px;border-radius:50%;
+  background:radial-gradient(ellipse,transparent 25%,var(--rope) 28% 42%,#6A5738 44% 55%,var(--rope) 57% 70%,transparent 72%)}
+.a-mend .dprop{opacity:1;width:28px;height:9px;margin-left:8px;border-radius:3px;background:linear-gradient(180deg,var(--sailcloth),#C6B894);box-shadow:0 0 0 1px #8C7D5E}
+
+/* ===== the captain: same geometry, dressed for it ===== */
+.fig.r-cap{--skin:#E3BD96;--shirt:var(--ensign);--suitD:#7A2620;--trouser:#E2D6BC;--shoe:#15100D;--hat:#1A120D}
+.fig.r-cap .torso{--h:38px;--w:34px;bottom:23px;left:29px}
+.fig .tails{--w:32px;--h:14px;--d:20px;left:30px;bottom:12px;--c:var(--suitD)}
+.fig .sash{left:28px;bottom:37px;width:36px;height:5px;background:linear-gradient(90deg,#8E6A22,var(--brass),#E4C27A);transform:translateZ(11px) rotate(-16deg)}
+.fig .buckle{left:41px;bottom:25px;width:10px;height:7px;border-radius:2px;background:linear-gradient(180deg,#E4C27A,#8E6A22);transform:translateZ(11px)}
+.fig .epaL,.fig .epaR{--w:11px;--h:5px;--d:12px;--c:var(--brass)}
+.fig .epaL{left:20px;bottom:56px}.fig .epaR{left:53px;bottom:56px}
+.fig .tricorn{--w:38px;--h:6px;--d:32px;left:23px;bottom:79px;--c:var(--hat)}
+.fig .tricrown{--w:24px;--h:10px;--d:22px;left:30px;bottom:82px;--c:var(--hat)}
+.fig .tritrim{--w:39px;--h:1.5px;--d:33px;left:22.5px;bottom:84.5px;--c:var(--brass)}
+.fig .plume{left:52px;bottom:86px;width:22px;height:7px;border-radius:4px;background:linear-gradient(90deg,var(--sailcloth),#B9AD92);
+  transform:translateZ(6px) rotate(-16deg);clip-path:polygon(0 40%,70% 0,100% 50%,70% 100%)}
+.fig .patch{left:39px;bottom:69px;width:8px;height:7px;border-radius:2px;background:#0D0B0A;transform:translateZ(10px);box-shadow:9px -1px 0 -3px #0D0B0A}
+.fig .beard{--w:16px;--h:6px;--d:14px;left:38px;bottom:60px;--c:#3A2F28}
+.fig .scabbard{left:24px;bottom:12px;width:5px;height:24px;border-radius:2px;background:linear-gradient(180deg,#2A1D15,#140E0A);
+  box-shadow:0 0 0 1px var(--brass);transform:translateZ(11px) rotate(18deg)}
+.fig .hilt{left:25px;bottom:34px;width:9px;height:4px;border-radius:2px;background:linear-gradient(90deg,#8E6A22,#E4C27A);transform:translateZ(12px) rotate(18deg)}
+.fig .cutlass{left:1px;bottom:-24px;width:5px;height:34px;border-radius:2px;opacity:0;transition:opacity .2s;
+  background:linear-gradient(180deg,#EEF2F4,#8A949B);transform:translateZ(6px)}
+.fig .cutlass::after{content:"";position:absolute;left:-4px;top:32px;width:13px;height:5px;border-radius:2px;background:linear-gradient(90deg,#8E6A22,#E4C27A)}
+.fig.r-cap .armR,.fig.r-cap .armL{transition:transform .32s cubic-bezier(.2,.9,.3,1.3)}
+.fig.c-idle .armR{transform:rotate(-14deg)}.fig.c-idle .armL{transform:rotate(-30deg)}
+.fig.c-ready .armR{transform:rotate(-62deg)}.fig.c-ready .armL{transform:rotate(-30deg)}
+.fig.c-order .armR{transform:rotate(-142deg)}.fig.c-order .armL{transform:rotate(-34deg)}
+.fig.c-ready .cutlass,.fig.c-order .cutlass{opacity:1}
+.fig.c-ready .hilt,.fig.c-order .hilt{opacity:0}
+
+/* moments: reactions to a state change, never loops */
+.fig.react{animation:jolt .55s cubic-bezier(.2,.8,.3,1)!important}
+@keyframes jolt{0%{transform:translateY(-10px) scale(1.08)}100%{transform:none}}
+.fig.cheer .armL,.fig.cheer .armR{transform:rotate(-150deg)!important;animation:none!important}
+.fig.cheer{animation:cheerhop .8s ease-out 2!important}
+@keyframes cheerhop{0%,55%,100%{transform:none}30%{transform:translateY(-12px)}72%{transform:translateY(-5px)}}
+.fig.salute .armR{transform:rotate(-150deg)!important;animation:none!important;transition:transform .18s ease-out}
+
+/* ===== helm and bell: fittings on the top deck ===== */
+.helm,.bell{position:absolute;pointer-events:none;transform:translate(-50%,-100%)}
+.helm svg,.bell svg{display:block}
+.helm .wheel{transform-box:fill-box;transform-origin:50% 50%}
+.helm.live .wheel{animation:correct 2.4s ease-in-out infinite}
+@keyframes correct{0%,100%{transform:rotate(-14deg)}50%{transform:rotate(16deg)}}
+.helm.spin .wheel{animation:spin2 1.2s cubic-bezier(.45,0,.25,1)!important}
+@keyframes spin2{to{transform:rotate(720deg)}}
+.bell .bellbody{transform-box:fill-box;transform-origin:50% 0}
+.bell.ring .bellbody{animation:ring 1.8s cubic-bezier(.3,.6,.4,1)}
+@keyframes ring{0%{transform:rotate(0)}8%{transform:rotate(22deg)}24%{transform:rotate(-16deg)}42%{transform:rotate(10deg)}62%{transform:rotate(-5deg)}80%{transform:rotate(2deg)}100%{transform:rotate(0)}}
+
+/* ===== name tags: sailcloth pennants, not cards ===== */
+.pennants{left:0;top:0;pointer-events:none}
+.pennant{position:absolute;--tx:-50%;transform:translate(var(--tx),-100%);pointer-events:auto;cursor:pointer;
+  padding:3px 14px 4px 9px;min-width:40px;max-width:var(--pw,150px);text-align:left;
+  color:var(--ink);background:
+    repeating-linear-gradient(0deg,rgba(90,70,40,.06) 0 1px,transparent 1px 3px),
+    repeating-linear-gradient(90deg,rgba(90,70,40,.05) 0 1px,transparent 1px 3px),var(--sailcloth);
+  clip-path:polygon(0 0,100% 0,calc(100% - 9px) 50%,100% 100%,0 100%);
+  box-shadow:inset 0 -3px 0 var(--hem,transparent)}
+.pennant::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg,var(--brass),#7A5A20)}
+.pennant .who{display:block;font-weight:600;font-size:13px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pennant .job{display:block;font-weight:500;font-size:13px;line-height:1.2;color:#44505A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* the run's vendor and model is never cut: the pennant widens to it, and the name and job keep the deck's width */
+.pennant.has-eng{max-width:none}
+.pennant.has-eng .who,.pennant.has-eng .job{max-width:calc(var(--pw) - 23px)}
+.pennant .eng{display:block;font-weight:500;font-size:13px;line-height:1.2;color:#44505A;white-space:nowrap}
+.pennant.p-working{--hem:var(--tar)}
+.pennant.p-review{--hem:var(--seaglass)}
+.pennant.p-gate{--hem:var(--ensign);background:linear-gradient(90deg,transparent calc(100% - 22px),var(--ensign) calc(100% - 22px)),var(--sailcloth)}
+.pennant.p-captain{--hem:var(--brass)}
+.pennant.p-idle{opacity:.72}
+/* the captain stands aftmost, so his pennant flies aft from its staff instead of spreading over the crewman forward of him */
+.pennant.p-cap{color:var(--sailcloth);background:var(--ink);--hem:var(--ensign);max-width:210px;--tx:-14px}
+.pennant.p-cap .job{color:#B9C3C4}
+.pennant.sel{outline:2px solid var(--ink);outline-offset:2px}
+.pennant.ping{animation:ping .8s cubic-bezier(.2,.8,.3,1)}
+@keyframes ping{0%{transform:translate(var(--tx),-100%) scale(1)}35%{transform:translate(var(--tx),-100%) scale(1.1)}100%{transform:translate(var(--tx),-100%) scale(1)}}
+.pennant:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+
+/* ===== handoffs ===== */
+.fx{left:0;top:0;pointer-events:none}
+.flyer{position:absolute;left:0;top:0;width:24px;height:14px;margin:-7px 0 0 -12px;will-change:transform;pointer-events:none}
+.flyer.k-order{background:linear-gradient(180deg,#F1E8D3,var(--sailcloth) 40%,#BFB08E);border-radius:7px;box-shadow:0 1px 2px rgba(0,0,0,.4)}
+.flyer.k-order::after{content:"";position:absolute;left:8px;top:3px;width:8px;height:8px;border-radius:50%;background:var(--ensign);box-shadow:inset 0 -1px 0 #6E1E18}
+.flyer.k-pr{width:18px;height:15px;margin:-7px 0 0 -9px;border-radius:2px;background:
+  linear-gradient(90deg,transparent 7px,#5A4028 7px 9px,transparent 9px),linear-gradient(180deg,transparent 6px,#5A4028 6px 8px,transparent 8px),var(--sailcloth);
+  box-shadow:0 1px 2px rgba(0,0,0,.45)}
+.flyer.k-approve{background:var(--seaglass);clip-path:polygon(0 0,100% 0,78% 50%,100% 100%,0 100%);box-shadow:inset 3px 0 0 var(--brass)}
+.flyer.k-reject{background:var(--ensign);clip-path:polygon(0 0,100% 50%,0 100%,22% 50%)}
+.trail{fill:none;stroke-width:2;stroke-linecap:round;stroke-dasharray:2 7}
+.trail.k-order{stroke:var(--sailcloth)}.trail.k-pr{stroke:var(--sailcloth)}.trail.k-approve{stroke:var(--seaglass)}.trail.k-reject{stroke:var(--ensign)}
+.handnote{position:absolute;transform:translate(-50%,0);padding:2px 8px;font-size:13px;font-weight:600;white-space:nowrap;
+  background:var(--sailcloth);color:var(--ink);box-shadow:inset 3px 0 0 var(--kc,var(--tar))}
+/* salvo */
+.salvo .flash{opacity:0;transform-box:fill-box;transform-origin:100% 50%}
+.salvo .smoke{opacity:0;transform-box:fill-box;transform-origin:50% 50%}
+.salvo.fire .flash{animation:flash .34s ease-out both}
+.salvo.fire .smoke{animation:puff 1.7s cubic-bezier(.15,.6,.3,1) both}
+.salvo .smoke{r:18px}
+@keyframes flash{0%{opacity:0;transform:scale(.25)}18%{opacity:1;transform:scale(1.35) translateX(-5px)}100%{opacity:0;transform:scale(2) translateX(-18px)}}
+@keyframes puff{0%{opacity:0;transform:scale(.3)}16%{opacity:.95;transform:scale(1.1)}100%{opacity:0;transform:scale(3.4) translate(-12px,-14px)}}
+.banner{left:3%;top:18px;pointer-events:none;padding:8px 26px 10px 18px;background:var(--sailcloth);color:var(--ink);
+  clip-path:polygon(0 0,100% 0,calc(100% - 14px) 50%,100% 100%,0 100%);box-shadow:inset 4px 0 0 var(--brass);opacity:0}
+.banner b{display:block;font-weight:600;font-size:24px;line-height:1.1}
+.banner span{display:block;font-size:16px}
+.banner.on{animation:unfurl 3s cubic-bezier(.2,.8,.3,1) both}
+@keyframes unfurl{0%{opacity:1;clip-path:polygon(0 0,0 0,0 50%,0 100%,0 100%)}
+  16%{clip-path:polygon(0 0,100% 0,calc(100% - 14px) 50%,100% 100%,0 100%)}85%{opacity:1}100%{opacity:0;clip-path:polygon(0 0,100% 0,calc(100% - 14px) 50%,100% 100%,0 100%)}}
+
+/* ===== the caption: what just happened, in words ===== */
+.caption{display:flex;gap:18px;align-items:baseline;flex-wrap:wrap;padding:12px 24px;min-height:48px;font-size:16px;border-bottom:1px solid var(--pgLine)}
+.caption .selinfo{color:var(--pgText2)}
+
+/* ===== prototype switches (not part of the board) ===== */
+.switches{padding:14px 24px 40px;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,600px),1fr));gap:4px 40px}
+.switches h2{grid-column:1/-1;margin:6px 0 8px;font-size:16px;font-weight:600}
+.switches h2 span{font-weight:400;color:var(--pgText2);margin-left:10px}
+.row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:6px 0}
+.row>label,.row>.lab{flex:0 0 118px;font-size:16px;color:var(--pgText2)}
+.seg{display:flex;flex-wrap:wrap;gap:4px}
+.seg button,.btn{min-height:40px;padding:6px 12px;font-size:16px;border-radius:3px;background:var(--pg2);color:var(--pgText);
+  box-shadow:inset 0 0 0 1px var(--pgLine)}
+.seg button[aria-pressed=true]{background:var(--pgText);color:var(--pg);box-shadow:none}
+.seg button kbd,.btn kbd{font:500 13px var(--sans);color:inherit;opacity:.7;margin-left:6px}
+select{font:inherit;min-height:40px;padding:4px 8px;border-radius:3px;background:var(--pg2);color:var(--pgText);border:1px solid var(--pgLine)}
+.stepper{display:flex;align-items:center;gap:6px}
+.stepper output{min-width:34px;text-align:center;font-weight:600;font-variant-numeric:tabular-nums}
+.meter{grid-column:1/-1;font-size:13px;color:var(--pgText2);padding-top:6px}
+.switches{margin-top:10px;border-top:2px solid var(--pgLine)}
+
+/* ===== still: reduced motion or the motion switch off. the scene holds a key pose ===== */
+.still .fig,.still .fig *,.still .helm .wheel,.still .jolly,.still .bell .bellbody{animation:none!important}
+.still .pivot,.still .fig .armL,.still .fig .armR,.still .cutlass,.still .pennant,.still .jolly{transition:none!important}
+.still .salvo.fire .flash{animation:none;opacity:0}
+.still .salvo.fire .smoke{animation:none;opacity:.6;transform:scale(1.4)}
+.still .banner.on{animation:none;opacity:1}
+.still .scene,.still body{transition:none}
+/* a hidden tab keeps its place and costs nothing */
+.paused *,.paused *::before,.paused *::after{animation-play-state:paused!important}
+@media (max-width:700px){.top,.stats,.caption,.switches{padding-left:14px;padding-right:14px}.row>label,.row>.lab{flex-basis:100%}}
+</style>
+</head>
+<body>
+<header class="top">
+  <span class="livemark" id="live"><i aria-hidden="true"></i><span></span></span>
+  <div class="brand" id="brand"></div>
+  <div class="spacer"></div>
+  <span class="engine" id="engine"></span>
+  <span class="gl" id="gl"></span>
+  <div class="clock" id="clock"></div>
+  <div class="langs" id="langs" role="group" aria-label="Language"></div>
+</header>
+<div class="counts" id="counts" aria-live="polite"></div>
+<!-- decisions lead the page; the vessel and the readable crew stay directly below -->
+<section class="deckwrap" id="deckwrap" aria-labelledby="deckH" hidden>
+  <h2 class="sec" id="deckH"><span id="awaiting"></span><span class="n" id="pcount"></span></h2>
+  <div class="deckrow"><div class="capstage" id="capstage" hidden></div><div id="deck"></div></div>
+  <p id="orderFeedback" role="status" aria-live="polite"></p>
+</section>
+<div class="scene" id="scene" role="group" aria-label="The ship and its crew">
+  <svg id="sky" aria-hidden="true"></svg>
+  <div class="plx clouds" id="L-clouds"></div>
+  <div class="plx squallband" id="L-squall"></div>
+  <div class="glowband" id="glow"></div>
+  <div class="plx isles" id="L-isles"></div>
+  <div class="plx wavelets" id="L-far"></div>
+  <div class="plx mid" id="L-mid"></div>
+  <div class="vessel" id="vessel">
+    <svg class="hull" id="hull" aria-hidden="true"></svg>
+    <svg class="rig" id="rig" aria-hidden="true"></svg>
+    <div class="plate" id="plate"></div>
+    <div class="crew" id="crew"></div>
+    <div class="pennants" id="pennants"></div>
+    <svg class="fx" id="fxsvg" aria-hidden="true"></svg>
+    <div class="fx" id="fx"></div>
+  </div>
+  <svg id="wake" aria-hidden="true"></svg>
+  <div class="plx near" id="L-near"></div>
+  <div class="plx crests" id="L-crests"></div>
+  <div class="plx foam" id="L-foam"></div>
+  <svg id="spray" aria-hidden="true"></svg>
+  <div class="darken"></div>
+  <div class="banner" id="banner" aria-hidden="true"></div>
+</div>
+<div class="caption" id="caption"><span id="narr" aria-live="polite"></span><span class="selinfo" id="selinfo"></span>
+  <button class="btn2 rostbar" id="rosterBtn" aria-controls="roster" aria-pressed="true"></button></div>
+<section class="roster" id="roster" aria-labelledby="rosterH"></section>
+<section class="fleet" id="fleet" aria-labelledby="fleetH">
+  <h2 class="sec" id="fleetH"></h2>
+  <div class="lanes sheet" id="lanes"></div>
+  <!-- where the captain sets work aside: both are drop targets, and a card's menu reaches the same two actions -->
+  <div class="setaside">
+    <details id="parked" data-zone="park"><summary></summary><div class="parked-cards"></div></details>
+    <div id="dropzone" data-zone="drop"></div>
+  </div>
+  <div id="dropConfirm" role="alertdialog" aria-modal="false" aria-labelledby="dropConfirmText" hidden></div>
+  <p id="taskFeedback" role="status" aria-live="polite"></p>
+  <details id="history"><summary></summary><div class="history-cards"></div></details>
+</section>
+<section class="logwrap" aria-labelledby="logH">
+  <h2 class="sec" id="logH"></h2>
+  <ol class="log sheet" id="log"></ol>
+</section>
+<section class="switches" id="switches" aria-label="Prototype switches"></section>
+
+<script>
+'use strict';
+/* =====================================================================
+   0. small tools
+   ===================================================================== */
+const $ = s => document.querySelector(s);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const TAU = Math.PI * 2;
+const hash = s => { let h = 2166136261; for (const ch of s) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; };
+function seeded(seed) { let s = (seed >>> 0) || 1; return () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296); }
+const f1 = n => (Math.round(n * 10) / 10);
+const bez3 = (p0, p1, p2, p3, t) => { const u = 1 - t; return u*u*u*p0 + 3*u*u*t*p1 + 3*u*t*t*p2 + t*t*t*p3; };
+
+/* =====================================================================
+   1. the motion engine: easing, springs, tweens, one frame loop
+   ===================================================================== */
+const Ease = (() => {
+  function cubicBezier(x1, y1, x2, y2) {
+    const A = (a, b) => 1 - 3 * b + 3 * a, B = (a, b) => 3 * b - 6 * a, C = a => 3 * a;
+    const at = (t, a, b) => ((A(a, b) * t + B(a, b)) * t + C(a)) * t;
+    const slope = (t, a, b) => 3 * A(a, b) * t * t + 2 * B(a, b) * t + C(a);
+    return x => {
+      if (x <= 0) return 0; if (x >= 1) return 1;
+      let t = x;
+      for (let i = 0; i < 8; i++) { const s = slope(t, x1, x2); if (Math.abs(s) < 1e-6) break; t -= (at(t, x1, x2) - x) / s; }
+      return at(clamp(t, 0, 1), y1, y2);
+    };
+  }
+  return {
+    cubicBezier,
+    linear: x => x,
+    inOutSine: x => -(Math.cos(Math.PI * x) - 1) / 2,
+    outCubic: x => 1 - Math.pow(1 - x, 3),
+    inOutCubic: x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2,
+    order: cubicBezier(.3, 0, .2, 1),
+    approve: cubicBezier(.2, .7, .2, 1),
+    reject: cubicBezier(.6, 0, .4, 1),
+  };
+})();
+
+class Spring {
+  // a damped spring on one number; k stiffness, c damping (critical is 2*sqrt(k))
+  constructor(v, k = 12, c = 6.9) { this.v = v; this.target = v; this.vel = 0; this.k = k; this.c = c; }
+  to(t) { this.target = t; }
+  snap(t) { this.v = this.target = t; this.vel = 0; }
+  kick(dv) { this.vel += dv; }
+  step(dt) { const a = -this.k * (this.v - this.target) - this.c * this.vel; this.vel += a * dt; this.v += this.vel * dt; }
+  get settled() { return Math.abs(this.v - this.target) < 1e-3 && Math.abs(this.vel) < 1e-3; }
+}
+
+const Engine = {
+  springs: [], tweens: [], onUpdate: null, onRender: null,
+  raf: 0, last: 0, running: false, gates: { motion: true, visible: true, onscreen: true },
+  stats: { frames: 0, scriptMs: 0, since: 0, fps: 0, ms: 0, vessel: 0, vps: 0 },
+  spring(v, k, c) { const s = new Spring(v, k, c); this.springs.push(s); return s; },
+  tween(dur, ease, fn, done) { const t = { t: 0, dur, ease, fn, done }; this.tweens.push(t); this.wake(); return t; },
+  busy() { return this.tweens.length > 0 || this.springs.some(s => !s.settled) || (this.extraBusy && this.extraBusy()); },
+  allowed() { const g = this.gates; return g.motion && g.visible && g.onscreen; },
+  wake() { if (!this.raf && this.allowed()) { this.last = 0; this.raf = requestAnimationFrame(ts => this.frame(ts)); } },
+  halt() { if (this.raf) cancelAnimationFrame(this.raf); this.raf = 0; },
+  // motion switched off mid-moment: every tween lands at its end state at once, nothing is left mid-air
+  flush() { const ts = this.tweens.splice(0); for (const tw of ts) { tw.fn(tw.ease(1), 1); tw.done && tw.done(); } this.tweens.splice(0).forEach(tw => { tw.fn(1, 1); tw.done && tw.done(); }); },
+  frame(ts) {
+    this.raf = 0;
+    if (!this.allowed()) return;
+    // a calm sea holds 20 frames a second, a sea under way 30; a moment in progress gets the full rate
+    const minGap = this.busy() ? 0 : 1000 / (this.idleFps ? this.idleFps() : 30) - 2;
+    if (this.last && ts - this.last < minGap) { this.raf = requestAnimationFrame(t => this.frame(t)); return; }
+    const dt = this.last ? Math.min(0.05, (ts - this.last) / 1000) : 1 / 60;
+    this.last = ts;
+    const t0 = performance.now();
+    // fixed substeps keep the springs stable at any frame rate
+    let rem = dt; while (rem > 1e-6) { const h = Math.min(rem, 1 / 120); for (const s of this.springs) s.step(h); rem -= h; }
+    for (let i = this.tweens.length - 1; i >= 0; i--) {
+      const tw = this.tweens[i]; tw.t += dt; const p = clamp(tw.t / tw.dur, 0, 1);
+      tw.fn(tw.ease(p), p);
+      if (p >= 1) { this.tweens.splice(i, 1); tw.done && tw.done(); }
+    }
+    this.onUpdate && this.onUpdate(dt);
+    this.onRender && this.onRender();
+    const st = this.stats; st.frames++; st.scriptMs += performance.now() - t0;
+    if (!st.since) st.since = ts;
+    if (ts - st.since >= 1000) { st.fps = Math.round(st.frames * 1000 / (ts - st.since)); st.vps = Math.round(st.vessel * 1000 / (ts - st.since)); st.ms = st.scriptMs / st.frames; st.frames = 0; st.vessel = 0; st.scriptMs = 0; st.since = ts; showMeter(); }
+    this.raf = requestAnimationFrame(t => this.frame(t));
+  },
+};
+
+/* =====================================================================
+   2. the hour and the weather
+   ===================================================================== */
+const TOD = {
+  dawn: { label: 'Dawn', sky: ['#AEB0C4', '#E6DFD8', '#E7A58C'], glow: '#F3C2A6', sun: { x: .82, y: .70, r: 20, c: '#FFE8D2', halo: 'rgba(247,190,150,.6)', moon: false },
+    sea: ['#C9A79D', '#6D8391', '#34505F', '#1F3644'], isle: '#9C8E9A', cloud: '#F0D5C8', cloudS: '#A897A6', amb: '#E7A58C', ambK: '10%',
+    light: { bL: .62, bR: 1.12, bT: 1.2, rimX: 1, shX: -1, rim: 'rgba(255,212,182,.8)' }, lamp: 0, stars: 0, shipB: .94, shipS: .92,
+    pg: ['#E9E5E2', '#DCD6D3', '#1D2A33', '#4B5963', '#C8C0BC', '#F4F1EF'] },
+  day: { label: 'Day', sky: ['#5F9EBB', '#8FC1D4', '#D3E6E8'], glow: '#F4F0DC', sun: { x: .70, y: .16, r: 18, c: '#FFFBEA', halo: 'rgba(255,250,225,.55)', moon: false },
+    sea: ['#A5CDD0', '#4B8E9A', '#23606F', '#153F4C'], isle: '#86A8AA', cloud: '#F5F7F6', cloudS: '#BACDD3', amb: '#FFFFFF', ambK: '0%',
+    light: { bL: .74, bR: .92, bT: 1.34, rimX: .5, shX: -.5, rim: 'rgba(255,250,235,.5)' }, lamp: 0, stars: 0, shipB: 1, shipS: 1,
+    pg: ['#E4ECEC', '#D4E0E1', '#12283A', '#46606E', '#B7C8CB', '#F1F6F5'] },
+  dusk: { label: 'Dusk', sky: ['#5B4A7A', '#A0607A', '#D9774A'], glow: '#F2A070', sun: { x: .18, y: .66, r: 24, c: '#FFC795', halo: 'rgba(236,140,90,.6)', moon: false },
+    sea: ['#C8805F', '#5A4868', '#2B2A48', '#171A30'], isle: '#4D3D5B', cloud: '#E8A27A', cloudS: '#6D5580', amb: '#D9774A', ambK: '15%',
+    light: { bL: 1.1, bR: .6, bT: 1.12, rimX: -1, shX: 1, rim: 'rgba(255,180,120,.8)' }, lamp: 1, stars: 0, shipB: .8, shipS: .95,
+    pg: ['#2A2438', '#352E46', '#EDE3D8', '#B8AEBF', '#4A4260', '#332C45'] },
+  night: { label: 'Night', sky: ['#050E18', '#0A1A2A', '#16304A'], glow: '#2A4A66', sun: { x: .24, y: .18, r: 15, c: '#EAE7DA', halo: 'rgba(200,215,230,.35)', moon: true },
+    sea: ['#1D364A', '#0E2A3B', '#0A1F2D', '#06121B'], isle: '#0E2131', cloud: '#2B3D52', cloudS: '#15263A', amb: '#0E2A3B', ambK: '42%',
+    light: { bL: .95, bR: .55, bT: 1.05, rimX: -1, shX: 1, rim: 'rgba(190,210,235,.55)' }, lamp: 1, stars: 1, shipB: .56, shipS: .72,
+    pg: ['#0B1B29', '#132838', '#E8DDC4', '#9DAEB3', '#26405A', '#10263A'] },
+};
+function localTod(d = new Date()) { const h = d.getHours() + d.getMinutes() / 60; return h >= 5 && h < 8 ? 'dawn' : h >= 8 && h < 17 ? 'day' : h >= 17 && h < 20 ? 'dusk' : 'night'; }
+
+// weather is read from the crew's state; a switch picks the scenario the state comes from
+const WX = {
+  calm:   { speed: 0,    swellA: 3,  swellT: 7.5, pitch: .5,  dark: 0,   foam: .2,  belly: .12, flagA: 0,  flagT: 3,   spray: 0 },
+  breeze: { speed: null, swellA: 5,  swellT: 6.2, pitch: 1.1, dark: 0,   foam: .45, belly: null, flagA: null, flagT: null, spray: null },
+  squall: { speed: 1.3,  swellA: 10, swellT: 4.6, pitch: 2.4, dark: .9,  foam: .95, belly: 1,   flagA: 1,  flagT: .9,  spray: 24 },
+};
+function breezeFor(live) { const n = clamp(live, 1, 3); return { speed: .45 + .22 * n, belly: .45 + .15 * n, flagA: .35 + .15 * n, flagT: 1.9 - .25 * n, spray: 3 + 3 * n }; }
+
+/* =====================================================================
+   3. the fixture: who is aboard and what they are doing
+   ===================================================================== */
+// D-1024: at most three masts, read from the crew (1 for 1 to 3, 2 for 4 to 8, 3 from 9 up).
+// decks and length still grow with the rate the crew sets, and guns with the crew itself, so a man-o'-war is
+// longer, taller and better gunned, not more masted
+const mastsFor = n => n <= 3 ? 1 : n <= 8 ? 2 : 3;
+const gunsFor = n => 4 + Math.ceil(n / 2);
+const RATES = [
+  { n: 1, name: 'Cutter', line: 'a cutter of one mast', decks: 1, beam: .42, max: 3 },
+  { n: 2, name: 'Schooner', line: 'a schooner of two masts', decks: 1, beam: .54, max: 5 },
+  { n: 3, name: 'Frigate', line: 'a frigate of two masts, two decks', decks: 2, beam: .66, max: 8 },
+  { n: 4, name: 'Ship of the line', line: 'a ship of the line, three masts', decks: 2, beam: .74, max: 12 },
+  { n: 5, name: 'Flagship', line: 'a flagship of three masts, three decks', decks: 3, beam: .82, max: 18 },
+  { n: 6, name: "Man-o'-war", line: "a man-o'-war of three masts, four decks", decks: 4, beam: .90, max: 24 },
+];
+const rateFor = n => RATES.find(r => n <= r.max);
+const ACTIONS = {
+  helm: 'at the helm', lookout: 'on watch with a spyglass', signal: 'signalling', point: 'directing with a chart', log: 'writing the log',
+  haul: 'hauling a line', capstan: 'at the capstan', carry: 'carrying stores', climb: 'in the rigging',
+  hammer: 'hammering', saw: 'sawing', swab: 'swabbing the deck', lean: 'standing by a barrel', coil: 'coiling a line', mend: 'mending sailcloth',
+};
+const DECK_JOBS = { top: ['lookout', 'signal', 'point', 'log'], mid: ['haul', 'capstan', 'carry', 'climb'], main: ['hammer', 'saw', 'swab', 'carry'] };
+const IDLE_JOBS = ['lean', 'coil', 'mend'];
+const SKINS = ['#E9C7A2', '#C99A76', '#8D5E3F', '#F1D2B6', '#B07A55', '#5E3E2A'];
+const SHIRTS = ['#E8DDC4', '#9C4A3E', '#5E8F88', '#6B4A34', '#D4C6A6', '#7A6A55'];
+const CAPS = ['#B23A2E', '#2A1D15', '#E8DDC4', '#3F6F69'];
+
+// the page opens in a squall: one run is blocked at a gate and two calls wait on the captain,
+// so the whole board, deck included, is on screen at first sight
+const S = {
+  tod: 'local', weather: 'squall', runs: 2, crew: 8, action: 'assigned', cap: 'idle',
+  motion: !matchMedia('(prefers-reduced-motion: reduce)').matches, motionSource: 'system', sound: true,
+  clearing: false, selected: null, lang: 'en',
+};
+let CREW = [];
+const CAPTAIN = { id: 'captain', role: 'cap', st: 'captain' };
+
+// the vendor and model each run uses, as its pennant and roster row name them. fixture data: T-085 carries the
+// real values from the run to the board. the header's engine badge is the configured default; a run may differ
+const ENGINES = { w: [['claude', 'opus-5'], ['cursor-agent', 'composer'], ['claude', 'sonnet-5']], r: [['codex', 'gpt-5.5']] };
+const engLabel = c => c.eng ? c.eng[0] + ' · ' + c.eng[1] : '';
+function buildCrew() {
+  const n = S.crew, out = [{ id: 'firstmate', role: 'fm' }];
+  if (n >= 2) out.push({ id: 'worker-1', role: 'w', eng: ENGINES.w[0] });
+  if (n >= 3) out.push({ id: 'reviewer-1', role: 'r', eng: ENGINES.r[0] });
+  let k = 2; while (out.length < n) { out.push({ id: 'worker-' + k, role: 'w', eng: ENGINES.w[(k - 1) % ENGINES.w.length] }); k++; }
+  return out;
+}
+// the scenario becomes crew state on the board's own tasks, and the weather is read back from that state.
+// runs take the first open tasks in plan order; nothing is dispatched over time, a run that hands its
+// work on (a pull request opened, a merge landed) waits rather than taking new work
+function assignStates() {
+  const ws = CREW.filter(c => c.role === 'w'), rv = CREW.find(c => c.role === 'r'), fm = CREW[0];
+  CREW.forEach(c => { c.st = 'idle'; c.task = null; c.note = null; });
+  BOARD.tasks.forEach(t => { t.flight = null; });
+  const pend = pendingDecisions(), held = new Set(pend.map(d => d.task));
+  const queue = BOARD.order.map(taskOf).filter(t => t.stage === 'open' && depsMet(t) && !held.has(t.id));
+  const handed = c => BOARD.handed.has(c.id);
+  const put = (c, st, t) => { c.st = st; c.task = [t.id, t.title]; t.flight = st; };
+  const scen = S.weather;
+  if (scen !== 'calm') {
+    // the reviewer's place in the runs is decided before any hand-off, so a run that waits never
+    // moves another run's task to a different lane
+    let want = scen === 'squall' ? 2 : S.runs;
+    if (rv && want >= 2) { if (!handed(rv) && queue.length) put(rv, 'review', queue.shift()); want--; }
+    want -= ws.filter(handed).length;
+    for (const w of ws) { if (want <= 0 || !queue.length) break; if (handed(w)) continue; put(w, 'working', queue.shift()); want--; }
+    if (scen === 'squall') {
+      const g = ws.find(w => w.st === 'idle' && !handed(w)) || ws.find(w => w.st === 'working');
+      if (g && g.st === 'working') { g.st = 'gate'; taskOf(g.task[0]).flight = 'gate'; }
+      else if (g && queue.length) put(g, 'gate', queue.shift());
+      if (g && g.st === 'gate') g.note = 'gate 5 failed';
+    }
+  }
+  if (pend.length) { fm.st = 'captain'; fm.note = pend[0].id + ' waits on you'; }
+  const live = liveRuns();
+  if (fm.st !== 'captain') fm.st = live > 0 ? 'working' : 'idle';
+  CREW.forEach(c => { c.live = c.st === 'working' || c.st === 'review' || (c.role === 'fm' && c.st === 'working'); });
+  // "everyone on one action" is a look at the poses only: the figures move, the board's tasks do not
+  if (S.action !== 'assigned') CREW.forEach(c => { if (c.role !== 'fm' && c.st !== 'gate') { c.live = true; if (c.st === 'idle') c.st = 'working'; } });
+  return live;
+}
+// a live run is a worker or reviewer on a task; the firstmate coordinates them and is not one
+function liveRuns() { return CREW.filter(c => c.role !== 'fm' && (c.st === 'working' || c.st === 'review')).length; }
+// what the sea shows: never more than the state supports. a red gate or a call waiting on the captain is a squall
+function effectiveWeather() {
+  if (CREW.some(c => c.st === 'gate') || pendingDecisions().length) return 'squall';
+  return liveRuns() === 0 ? 'calm' : 'breeze';
+}
+function actionOf(c, G) {
+  if (c.role === 'fm') return 'helm';
+  if (S.action !== 'assigned') return S.action === 'helm' ? 'point' : S.action;
+  if (c.role === 'r') return c.st === 'review' ? 'lookout' : IDLE_JOBS[hash(c.id + 'i') % IDLE_JOBS.length];
+  if (c.st === 'idle') return IDLE_JOBS[hash(c.id + 'i') % IDLE_JOBS.length];
+  const top = G.decks.length - 1;
+  const lane = (top > 0 && c.deck >= top) ? 'top' : (c.deck === 1 ? 'mid' : 'main');
+  const pool = DECK_JOBS[lane];
+  return pool[hash(c.id) % pool.length];
+}
+
+/* =====================================================================
+   4. geometry: one lens curve for every deck, the hull is its extrusion
+   ===================================================================== */
+const FB = 84, SEA = 108, SKY_TOP = 24;
+let G = null;
+function geometry(lines = 2) {
+  const scene = $('#scene');
+  const W = Math.max(320, scene.clientWidth);
+  const rate = rateFor(S.crew), m = mastsFor(S.crew), nd = rate.decks;
+  const ROW = nd > 1 ? 100 : 0;
+  // the whole sail hangs above the tallest pennant flown: 16 px a line of name, vendor and model, and job
+  const C = (nd > 1 ? 104 : 118) + 16 * Math.max(2, lines);
+  const Hc = 58 + 2 * m, Ht = 44 + 2 * m, Hg = m >= 3 ? 30 : 0, royal = 20;
+  const mastAbove = C + Hc + 6 + Ht + (Hg ? 6 + Hg : 0) + 6 + royal + 14 + 26;
+  const H = Math.round(SKY_TOP + mastAbove + FB + (nd - 1) * ROW + SEA);
+  const waterY = H - SEA, horizonY = waterY - 92, cx = W / 2;
+  const L = Math.max(300, W * rate.beam);
+  const decks = [];
+  for (let i = 0; i < nd; i++) {
+    const k = 1 - .14 * i, a = L * .46 * k;
+    decks.push({ i, k, a, cx, y: waterY - FB - i * ROW, f: 10 + .035 * a, b: 8 + .022 * a });
+  }
+  const top = decks[nd - 1];
+  const spread = m === 1 ? 0 : top.a * 2 * .84;
+  const masts = [];
+  const spacing = m === 1 ? 999 : spread / (m - 1);
+  const mainIdx = Math.floor(m / 2);
+  for (let i = 0; i < m; i++) {
+    const x = m === 1 ? cx : cx - spread / 2 + spread * i / (m - 1);
+    const isMain = i === mainIdx;
+    const wC = Math.min(m === 1 ? 170 : spacing * .96, 170), wT = wC * .8, wG = wC * .62;
+    const foot = top.y - C;
+    const cTop = foot - Hc, tFoot = cTop - 6, tTop = tFoot - Ht, gFoot = tTop - 6, gTop = Hg ? gFoot - Hg : tTop;
+    const rFoot = gTop - 6, rTop = isMain ? rFoot - royal : gTop;
+    masts.push({ i, x, isMain, wC, wT, wG, foot, cTop, tFoot, tTop, gFoot, gTop, rFoot, rTop, head: rTop - 12, Hc, Ht, Hg, royal });
+  }
+  const bowX = cx - L / 2, sternX = cx + L / 2;
+  return { W, H, cx, waterY, horizonY, L, rate, nm: m, decks, top, masts, ROW, C, bowX, sternX, spacing };
+}
+
+/* =====================================================================
+   5. the sky, the far and near sea: layered SVG, built once per hour or size
+   ===================================================================== */
+function tileWidth(W) { return Math.max(1200, Math.ceil(W / 400) * 400 + 400); }
+function wavePath(TW, h, base, parts, step = 10) {
+  let d = 'M0 ' + h + ' L0 ' + f1(base);
+  for (let x = 0; x <= TW; x += step) {
+    let y = base; for (const [amp, k, ph] of parts) y += amp * Math.sin(TAU * k * x / TW + ph);
+    d += ' L' + x + ' ' + f1(y);
+  }
+  return d + ' L' + TW + ' ' + h + ' Z';
+}
+function crestPath(TW, base, parts, step = 10) {
+  let d = '';
+  for (let x = 0; x <= TW; x += step) {
+    let y = base; for (const [amp, k, ph] of parts) y += amp * Math.sin(TAU * k * x / TW + ph);
+    d += (x ? ' L' : 'M') + x + ' ' + f1(y);
+  }
+  return d;
+}
+function tile(TW, h, inner) { const one = '<svg width="' + TW + '" height="' + h + '" viewBox="0 0 ' + TW + ' ' + h + '" aria-hidden="true">' + inner + '</svg>'; return one + one; }
+function islands(TW, h) {
+  const r = seeded(7); let d = 'M0 ' + h;
+  const bumps = [];
+  for (let i = 0; i < 5; i++) bumps.push({ c: r() * TW, w: 90 + r() * 220, hgt: 10 + r() * 26 });
+  for (let x = 0; x <= TW; x += 8) {
+    let y = 0;
+    for (const b of bumps) { for (const off of [-TW, 0, TW]) { const dx = (x - b.c - off) / b.w; if (Math.abs(dx) < 1) y = Math.max(y, b.hgt * Math.pow(Math.cos(dx * Math.PI / 2), 1.6) * (1 + .12 * Math.sin(x * .07))); } }
+    d += ' L' + x + ' ' + f1(h - y);
+  }
+  return '<path d="' + d + ' L' + TW + ' ' + h + ' Z" style="fill:var(--isle)"/>';
+}
+function clouds(TW, h, dark) {
+  const r = seeded(dark ? 41 : 19); let out = '';
+  const n = dark ? 16 : 9;
+  for (let i = 0; i < n; i++) {
+    const cx = (i + r() * .6) * TW / n, cy = dark ? h * .35 + r() * h * .2 : 18 + r() * (h - 50), w = dark ? 160 + r() * 120 : 70 + r() * 110;
+    for (let j = 0; j < 4; j++) {
+      const ex = cx + (j - 1.5) * w * .28, ey = cy - (j % 2) * w * .08, rx = w * (.22 + .1 * ((j * 7) % 3)), ry = rx * (dark ? .55 : .42);
+      for (const off of [0, -TW, TW]) {
+        if (ex + off + rx < 0 || ex + off - rx > TW) continue;
+        out += '<ellipse cx="' + f1(ex + off) + '" cy="' + f1(ey + ry * .25) + '" rx="' + f1(rx) + '" ry="' + f1(ry) + '" style="fill:' + (dark ? '#2B3440' : 'var(--cloudS)') + '"/>';
+        out += '<ellipse cx="' + f1(ex + off) + '" cy="' + f1(ey) + '" rx="' + f1(rx * .92) + '" ry="' + f1(ry * .86) + '" style="fill:' + (dark ? '#3A4452' : 'var(--cloud)') + '"/>';
+      }
+    }
+  }
+  if (dark) out = '<rect x="0" y="0" width="' + TW + '" height="' + f1(h * .4) + '" fill="#2B3440"/>' + out;
+  return out;
+}
+const PLX = {};  // id -> {el, TW, off, v, drift, dy}
+function buildSea() {
+  const { W, H, waterY, horizonY } = G;
+  const TW = tileWidth(W);
+  const t = TOD[todNow()];
+  // sky: gradient, sun or moon, stars, and the rays that break through on a merge
+  const sx = t.sun.x * W, sy = t.sun.y * horizonY;
+  const r = seeded(3); let stars = '';
+  for (let i = 0; i < 60; i++) stars += '<circle cx="' + f1(r() * W) + '" cy="' + f1(r() * horizonY * .8) + '" r="' + f1(.5 + r() * 1.1) + '" fill="#E8DDC4" opacity="' + f1(.35 + r() * .6) + '"/>';
+  let rays = '';
+  for (let i = 0; i < 7; i++) { const a = (-.5 + i / 6) * 1.1 + Math.PI / 2, a2 = a + .07; const R = H * 1.4;
+    rays += '<path d="M' + f1(sx) + ' ' + f1(sy) + ' L' + f1(sx + Math.cos(a) * R) + ' ' + f1(sy + Math.sin(a) * R) + ' L' + f1(sx + Math.cos(a2) * R) + ' ' + f1(sy + Math.sin(a2) * R) + ' Z" fill="url(#rayG)"/>'; }
+  const body = t.sun.moon
+    ? '<circle cx="' + f1(sx) + '" cy="' + f1(sy) + '" r="' + (t.sun.r + 22) + '" fill="url(#haloG)"/><circle cx="' + f1(sx) + '" cy="' + f1(sy) + '" r="' + t.sun.r + '" fill="' + t.sun.c + '"/><circle cx="' + f1(sx + 6) + '" cy="' + f1(sy - 3) + '" r="' + (t.sun.r - 1) + '" style="fill:var(--sky1)" opacity=".92"/>'
+    : '<circle cx="' + f1(sx) + '" cy="' + f1(sy) + '" r="' + (t.sun.r + 46) + '" fill="url(#haloG)"/><circle cx="' + f1(sx) + '" cy="' + f1(sy) + '" r="' + t.sun.r + '" fill="' + t.sun.c + '"/>';
+  $('#sky').setAttribute('width', W); $('#sky').setAttribute('height', H); $('#sky').setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  $('#sky').innerHTML = '<defs>'
+    + '<linearGradient id="skyG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--sky0)"/><stop offset=".62" style="stop-color:var(--sky1)"/><stop offset="1" style="stop-color:var(--sky2)"/></linearGradient>'
+    + '<linearGradient id="seaG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--sea0)"/><stop offset=".25" style="stop-color:var(--sea1)"/><stop offset=".7" style="stop-color:var(--sea2)"/><stop offset="1" style="stop-color:var(--sea3)"/></linearGradient>'
+    + '<radialGradient id="haloG"><stop offset="0" stop-color="' + t.sun.halo + '"/><stop offset="1" stop-color="' + t.sun.halo + '" stop-opacity="0"/></radialGradient>'
+    + '<linearGradient id="rayG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFF6DE" stop-opacity=".7"/><stop offset="1" stop-color="#FFF6DE" stop-opacity="0"/></linearGradient>'
+    + '</defs>'
+    + '<rect width="' + W + '" height="' + (horizonY + 1) + '" fill="url(#skyG)"/>'
+    + '<g class="stars">' + stars + '</g>' + body
+    + '<rect y="' + horizonY + '" width="' + W + '" height="' + (H - horizonY) + '" fill="url(#seaG)"/>'
+    + '<g class="rays">' + rays + '</g>';
+  $('#scene').style.setProperty('--sunX', (t.sun.x * 100).toFixed(0) + '%');
+  const glow = $('#glow'); glow.style.top = (horizonY - 34) + 'px'; glow.style.height = '68px';
+  // parallax bands. v is the share of the ship's speed, drift is the swell's own run toward the bow
+  const L = (id, top, h, inner, v, drift) => {
+    const el = $('#' + id); el.style.top = top + 'px'; el.style.height = h + 'px'; el.style.width = (TW * 2) + 'px';
+    el.innerHTML = tile(TW, h, inner);
+    const prev = PLX[id];
+    PLX[id] = { el, TW, off: prev ? prev.off % TW : 0, v, drift, h, top };
+  };
+  L('L-clouds', 0, horizonY - 10, clouds(TW, horizonY - 10, false), 8, 0);
+  L('L-squall', 0, horizonY + 10, clouds(TW, horizonY + 10, true), 12, 0);
+  L('L-isles', horizonY - 40, 41, islands(TW, 41), 4, 0);
+  const farH = waterY - horizonY - 20;
+  L('L-far', horizonY, farH, '<path d="' + crestPath(TW, 8, [[1.2, 40, 0]]) + '" fill="none" stroke="#FFFFFF" stroke-opacity=".10"/>'
+    + '<path d="' + crestPath(TW, farH * .45, [[1.6, 30, 1]]) + '" fill="none" stroke="#FFFFFF" stroke-opacity=".10"/>'
+    + '<path d="' + crestPath(TW, farH * .8, [[2, 22, 2]]) + '" fill="none" style="stroke:var(--seaglass)" stroke-opacity=".2"/>', 22, 0);
+  const midParts = [[5, 6, 0], [2.4, 13, 1.3]];
+  L('L-mid', waterY - 30, 60, '<path d="' + wavePath(TW, 60, 22, midParts) + '" style="fill:var(--sea1)" opacity=".85"/>'
+    + '<path d="' + crestPath(TW, 22, midParts) + '" fill="none" style="stroke:var(--seaglass)" stroke-width="1.5" stroke-opacity=".45"/>', 44, -5);
+  const nearH = H - waterY + 10, nearParts = [[7, 4, .4], [3, 11, 2.1], [1.2, 23, .7]];
+  L('L-near', waterY - 2, nearH, '<path d="' + wavePath(TW, nearH, 14, nearParts) + '" style="fill:var(--sea2)"/>'
+    + '<path d="' + wavePath(TW, nearH, 44, [[5, 7, 2], [2, 17, 1]]) + '" style="fill:var(--sea3)" opacity=".6"/>', 80, -9);
+  L('L-crests', waterY - 2, 40, '<path d="' + crestPath(TW, 14, nearParts) + '" fill="none" stroke="#F4F1E6" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="26 60 8 90"/>', 80, -9);
+  L('L-foam', H - 46, 56, '<path d="' + wavePath(TW, 56, 18, [[8, 3, 1], [4, 9, 0]]) + '" style="fill:var(--sea3)"/>'
+    + '<path d="' + crestPath(TW, 18, [[8, 3, 1], [4, 9, 0]]) + '" fill="none" stroke="#F4F1E6" stroke-opacity=".5" stroke-width="4" stroke-dasharray="40 70 12 110"/>', 110, -12);
+  $('#wake').setAttribute('width', W); $('#wake').setAttribute('height', H);
+  $('#spray').setAttribute('width', W); $('#spray').setAttribute('height', H);
+}
+
+/* =====================================================================
+   6. the ship: hull, decks, ports, figurehead, rig
+   ===================================================================== */
+const GUN_DELAY = 0.075;
+function lensPaths(d) {
+  const { cx, a, y, f, b } = d, L = cx - a, R = cx + a;
+  const far = 'M' + f1(L) + ' ' + f1(y) + ' C' + f1(cx - a * .6) + ' ' + f1(y - f * 1.33) + ',' + f1(cx + a * .6) + ' ' + f1(y - f * 1.33) + ',' + f1(R) + ' ' + f1(y);
+  const nearC = ' C' + f1(cx + a * .6) + ' ' + f1(y + b * 1.33) + ',' + f1(cx - a * .6) + ' ' + f1(y + b * 1.33) + ',' + f1(L) + ' ' + f1(y);
+  const near = 'M' + f1(R) + ' ' + f1(y) + nearC;
+  const seam = t => { const cy = y + lerp(-f * 1.33, b * 1.33, t); return 'M' + f1(L) + ' ' + f1(y) + ' C' + f1(cx - a * .6) + ' ' + f1(cy) + ',' + f1(cx + a * .6) + ' ' + f1(cy) + ',' + f1(R) + ' ' + f1(y); };
+  const surface = far + nearC + ' Z';
+  // a wall of height h hung below the near edge: a riser, or the sheer strake
+  const wall = h => near + ' L' + f1(L) + ' ' + f1(y + h) + ' C' + f1(cx - a * .6) + ' ' + f1(y + b * 1.33 + h) + ',' + f1(cx + a * .6) + ' ' + f1(y + b * 1.33 + h) + ',' + f1(R) + ' ' + f1(y + h) + ' Z';
+  // the far bulwark rises above the far edge, its inner face lit
+  const hb = 8 + 5 * d.k, farUp = 'M' + f1(L) + ' ' + f1(y - hb * .35) + ' C' + f1(cx - a * .6) + ' ' + f1(y - f * 1.33 - hb) + ',' + f1(cx + a * .6) + ' ' + f1(y - f * 1.33 - hb) + ',' + f1(R) + ' ' + f1(y - hb * .35);
+  const bulwark = far + ' L' + f1(R) + ' ' + f1(y - hb * .35) + ' C' + f1(cx + a * .6) + ' ' + f1(y - f * 1.33 - hb) + ',' + f1(cx - a * .6) + ' ' + f1(y - f * 1.33 - hb) + ',' + f1(L) + ' ' + f1(y - hb * .35) + ' Z';
+  return { far, near, surface, seam, wall, farUp, bulwark };
+}
+function portList() {
+  // one list draws the ports and fires them: one gun, one flash, one report
+  const { cx, L, decks, sternX, bowX } = G, d0 = decks[0], y0 = d0.y, off = 30;
+  const P0 = [bowX, y0 - 14 + off], P1 = [cx - d0.a * .6, y0 + d0.b * 1.33 + off], P2 = [cx + d0.a * .6, y0 + d0.b * 1.33 + off], P3 = [sternX, y0 - 12 + off];
+  // D-1024: the broadside grows with the crew, one more gun for every two hands (5 guns for 1 or 2, 16 for 24),
+  // not with the masts. where the hull is too short for the ports at full size (a phone), they are cut smaller
+  const n = gunsFor(S.crew), out = [];
+  for (let i = 0; i < n; i++) {
+    const t = .17 + (.66 - .17) * (n === 1 ? .5 : i / (n - 1));
+    out.push({ x: bez3(P0[0], P1[0], P2[0], P3[0], t), y: bez3(P0[1], P1[1], P2[1], P3[1], t), i });
+  }
+  let gap = Infinity; for (let i = 1; i < n; i++) gap = Math.min(gap, Math.abs(out[i].x - out[i - 1].x));
+  // a port with its barrel run out is 27 units from the barrel's muzzle to the port's far edge; keep 2 clear
+  const s = clamp((gap - 2) / 27, .35, 1); out.forEach(g => { g.s = s; });
+  return out;
+}
+function figurehead(x, y, s) {
+  // gilded, leaning out over the water; drawn facing right and mirrored to lead the bow
+  return '<g transform="translate(' + f1(x) + ' ' + f1(y) + ') scale(' + (-s).toFixed(3) + ' ' + s.toFixed(3) + ') translate(-8 -30)">'
+    + '<path d="M6 8 C22 10 38 16 52 24 C36 22 20 24 6 30 Z" fill="url(#gild2)" opacity=".55"/>'
+    + '<path d="M2 20 C20 20 38 24 54 31 C36 31 18 35 4 42 Z" fill="url(#gild2)" opacity=".75"/>'
+    + '<path d="M18 16 C32 18 46 22 58 28 C56 34 50 38 42 38 C32 38 24 30 18 24 Z" fill="url(#gild)"/>'
+    + '<path d="M52 24 C60 21 69 20 76 22 L75 27 C68 26 60 28 54 30 Z" fill="url(#gild)"/>'
+    + '<circle cx="66" cy="17" r="6.4" fill="url(#gild)"/>'
+    + '<path d="M60 14 C63 9 70 8 73 11 C69 12 65 14 62 17 Z" fill="#F3D488"/>'
+    + '</g>';
+}
+function skull(x, y, s, fill, hole) {
+  return '<g transform="translate(' + f1(x) + ' ' + f1(y) + ') scale(' + s + ')">'
+    + '<path d="M-7 -8 L7 8 M7 -8 L-7 8" stroke="' + fill + '" stroke-width="2.4" stroke-linecap="round" transform="translate(0 5)"/>'
+    + '<path d="M0 -10 C-5.5 -10 -8 -6.5 -8 -2.6 C-8 0 -6.8 1.6 -5.6 2.5 L-5.6 5 L5.6 5 L5.6 2.5 C6.8 1.6 8 0 8 -2.6 C8 -6.5 5.5 -10 0 -10 Z" fill="' + fill + '"/>'
+    + '<circle cx="-3" cy="-2.6" r="2" fill="' + hole + '"/><circle cx="3" cy="-2.6" r="2" fill="' + hole + '"/><path d="M0 -.2 L-1 1.8 L1 1.8 Z" fill="' + hole + '"/>'
+    + '</g>';
+}
+function sailPath(x, yTop, w, h, belly) {
+  const hw = w / 2, bl = belly * w * .07, bf = belly * h * .16 + 3;
+  return 'M' + f1(x - hw) + ' ' + f1(yTop) + ' L' + f1(x + hw) + ' ' + f1(yTop)
+    + ' Q' + f1(x + hw + bl) + ' ' + f1(yTop + h * .55) + ' ' + f1(x + hw * .95) + ' ' + f1(yTop + h)
+    + ' Q' + f1(x) + ' ' + f1(yTop + h + bf) + ' ' + f1(x - hw * .95) + ' ' + f1(yTop + h)
+    + ' Q' + f1(x - hw - bl) + ' ' + f1(yTop + h * .55) + ' ' + f1(x - hw) + ' ' + f1(yTop) + ' Z';
+}
+let SAILS = [], drawnBelly = -1;
+function buildShip() {
+  const { W, H, cx, L, decks, waterY, bowX, sternX, masts, top } = G;
+  const d0 = decks[0], y0 = d0.y, a0 = d0.a, rn = G.rate.n;
+  const stem = { x: bowX - 4, y: y0 - 24 - 4 * rn }, tafY = y0 - 20 - 3 * rn;
+  const hullPath = 'M' + f1(cx - a0) + ' ' + f1(y0)
+    + ' C' + f1(cx - a0 - .02 * L) + ' ' + f1(y0 - 6) + ',' + f1(bowX + 12) + ' ' + f1(stem.y + 6) + ',' + f1(stem.x) + ' ' + f1(stem.y)
+    + ' C' + f1(bowX - 12) + ' ' + f1(waterY - 30) + ',' + f1(bowX + .02 * L) + ' ' + f1(waterY + 12) + ',' + f1(bowX + .09 * L) + ' ' + f1(waterY + 30)
+    + ' C' + f1(bowX + .3 * L) + ' ' + f1(waterY + 42) + ',' + f1(sternX - .3 * L) + ' ' + f1(waterY + 42) + ',' + f1(sternX - .08 * L) + ' ' + f1(waterY + 30)
+    + ' C' + f1(sternX - .02 * L) + ' ' + f1(waterY + 18) + ',' + f1(sternX) + ' ' + f1(waterY) + ',' + f1(sternX + 2) + ' ' + f1(waterY - 10)
+    + ' L' + f1(sternX + 9) + ' ' + f1(tafY)
+    + ' C' + f1(sternX - .01 * L) + ' ' + f1(tafY + 4) + ',' + f1(cx + a0 + .02 * L) + ' ' + f1(y0 - 4) + ',' + f1(cx + a0) + ' ' + f1(y0)
+    + ' C' + f1(cx + a0 * .6) + ' ' + f1(y0 + d0.b * 1.33) + ',' + f1(cx - a0 * .6) + ' ' + f1(y0 + d0.b * 1.33) + ',' + f1(cx - a0) + ' ' + f1(y0) + ' Z';
+  const wale = off => 'M' + f1(bowX - 20) + ' ' + f1(y0 - 16 + off) + ' C' + f1(cx - a0 * .6) + ' ' + f1(y0 + d0.b * 1.33 + off) + ',' + f1(cx + a0 * .6) + ' ' + f1(y0 + d0.b * 1.33 + off) + ',' + f1(sternX + 20) + ' ' + f1(y0 - 14 + off);
+  // gun ports, lids open with the ensign-red inner face, barrels run out toward the bow
+  const guns = portList(); G.guns = guns;
+  let ports = '', salvo = '';
+  for (const g of guns) {
+    ports += '<g transform="translate(' + f1(g.x) + ' ' + f1(g.y) + ')' + (g.s < 1 ? ' scale(' + g.s.toFixed(3) + ')' : '') + '">'
+      + '<rect x="-8" y="-6.5" width="16" height="13" rx="1.5" fill="#120B07" stroke="var(--brass)" stroke-width="1.3"/>'
+      + '<g transform="translate(-8 -6.5) rotate(-32)"><rect x="0" y="-12" width="16" height="12" rx="1" fill="var(--ensign)"/><rect x="0" y="-12" width="16" height="2" fill="#5A1A14"/></g>'
+      + '<rect x="-17" y="-2.4" width="15" height="4.8" rx="2.4" fill="var(--iron)"/><rect x="-19" y="-3" width="3.4" height="6" rx="1.5" fill="#3A3A40"/>'
+      + '</g>';
+    const delay = (g.i * GUN_DELAY).toFixed(3) + 's';
+    salvo += '<ellipse class="flash" cx="' + f1(g.x - 28) + '" cy="' + f1(g.y) + '" rx="12" ry="7" fill="url(#flashG)" style="animation-delay:' + delay + '"/>'
+      + '<circle class="smoke" cx="' + f1(g.x - 30) + '" cy="' + f1(g.y - 2) + '" r="14" fill="url(#smokeG)" style="animation-delay:' + delay + '"/>';
+  }
+  // decks from the main deck up: each upper deck's riser stands on the one below
+  let deckSVG = '', clips = '';
+  decks.forEach(d => {
+    const p = lensPaths(d), id = 'dk' + d.i;
+    clips += '<clipPath id="' + id + '"><path d="' + p.surface + '"/></clipPath>';
+    if (d.i > 0) deckSVG += '<path d="' + p.wall(G.ROW - 10) + '" fill="url(#riserG)"/>'
+      + '<path d="' + lensPaths({ ...d, y: d.y + (G.ROW - 10) * .55 }).near + '" fill="none" stroke="var(--brass)" stroke-width="1.2" opacity=".55"/>';
+    let seams = ''; for (let j = 1; j < 9; j++) seams += '<path d="' + p.seam(j / 9) + '"/>';
+    const rr = seeded(11 + d.i); let butts = '';
+    for (let j = 0; j < 14; j++) { const t = (j % 8 + .5) / 9, xx = d.cx - d.a * .8 + rr() * d.a * 1.6, yy = d.y + lerp(-d.f, d.b, t); butts += '<path d="M' + f1(xx) + ' ' + f1(yy - 1.5) + ' l0 3"/>'; }
+    deckSVG += '<path d="' + p.bulwark + '" fill="var(--timber)"/>'
+      + '<path d="' + p.bulwark + '" fill="url(#bulwarkG)"/>'
+      + '<path d="' + p.farUp + '" fill="none" stroke="var(--brass)" stroke-width="2.2"/>'
+      + '<path class="deckhit" d="' + p.surface + '" fill="url(#deckG)"/>'
+      + '<g clip-path="url(#' + id + ')" fill="none" stroke="#3A2A1C" stroke-opacity=".32" stroke-width="1">' + seams + butts + '</g>'
+      + '<path d="' + p.surface + '" fill="url(#poolG)" pointer-events="none"/>'
+      + (d.i > 0 ? '<path d="' + p.wall(10) + '" fill="var(--tarLit)"/>' : '')
+      + '<path d="' + p.near + '" fill="none" stroke="#1A100A" stroke-width="3" transform="translate(0 2)" opacity=".5"/>'
+      + '<path d="' + p.near + '" fill="none" stroke="var(--brass)" stroke-width="2.5"/>';
+  });
+  // stern windows and lantern light with the hour
+  let win = '';
+  for (const fr of [.3, .55, .8]) { const x = lerp(cx + a0, sternX, fr), y = lerp(y0, tafY, fr) + 9; win += '<rect x="' + f1(x - 4) + '" y="' + f1(y - 5) + '" width="8" height="10" rx="1" fill="#1A120C" stroke="var(--brass)" stroke-width=".8"/><rect class="lampglow" x="' + f1(x - 3) + '" y="' + f1(y - 4) + '" width="6" height="8" fill="#F2C46B"/>'; }
+  const lx = top.cx + top.a - 6, ly = top.y - top.f * .2;
+  const lantern = '<rect x="' + f1(lx - 1.2) + '" y="' + f1(ly - 26) + '" width="2.4" height="26" fill="#2A1D15"/>'
+    + '<circle class="lampglow" cx="' + f1(lx) + '" cy="' + f1(ly - 31) + '" r="26" fill="url(#lampG)"/>'
+    + '<rect x="' + f1(lx - 5) + '" y="' + f1(ly - 38) + '" width="10" height="13" rx="2" fill="#6B4A20" stroke="var(--brass)" stroke-width="1.2"/>'
+    + '<rect class="lampglow" x="' + f1(lx - 3) + '" y="' + f1(ly - 36) + '" width="6" height="9" fill="#FFD27A"/>';
+  // the head: figurehead, trailboard, bowsprit
+  const fs = .8 + .08 * rn;
+  const trail = '<path d="M' + f1(stem.x + 4) + ' ' + f1(stem.y + 10) + ' C' + f1(stem.x + 18) + ' ' + f1(stem.y + 22) + ',' + f1(bowX + .05 * L) + ' ' + f1(y0 + 4) + ',' + f1(bowX + .08 * L) + ' ' + f1(y0 + 14)
+    + '" fill="none" stroke="url(#gild)" stroke-width="5" stroke-linecap="round"/>'
+    + '<circle cx="' + f1(bowX + .08 * L) + '" cy="' + f1(y0 + 14) + '" r="4.5" fill="none" stroke="url(#gild)" stroke-width="2.4"/>';
+  $('#hull').setAttribute('width', W); $('#hull').setAttribute('height', H);
+  $('#hull').innerHTML = '<defs>' + clips
+    + '<linearGradient id="tarG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#553623"/><stop offset=".45" stop-color="var(--tar)"/><stop offset="1" stop-color="#1A100A"/></linearGradient>'
+    + '<linearGradient id="keyG" x1="' + (TOD[todNow()].light.rimX > 0 ? '0' : '1') + '" y1="0" x2="' + (TOD[todNow()].light.rimX > 0 ? '1' : '0') + '" y2="0"><stop offset="0" stop-color="#000" stop-opacity=".25"/><stop offset=".6" stop-color="#000" stop-opacity="0"/><stop offset="1" style="stop-color:var(--rim)" stop-opacity=".35"/></linearGradient>'
+    + '<linearGradient id="riserG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4A2E1E"/><stop offset="1" stop-color="#1E130C"/></linearGradient>'
+    + '<linearGradient id="bulwarkG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity=".3"/><stop offset="1" style="stop-color:var(--rim)" stop-opacity=".2"/></linearGradient>'
+    + '<linearGradient id="deckG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--oakShade)"/><stop offset="1" stop-color="var(--oak)"/></linearGradient>'
+    + '<radialGradient id="poolG" cx="' + (TOD[todNow()].sun.x > .5 ? '.65' : '.35') + '" cy=".6" r=".6"><stop offset="0" style="stop-color:var(--rim)" stop-opacity=".22"/><stop offset="1" stop-color="#000" stop-opacity=".12"/></radialGradient>'
+    + '<linearGradient id="gild" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#F2D9A0"/><stop offset=".5" stop-color="var(--brass)"/><stop offset="1" stop-color="#6E4E1A"/></linearGradient>'
+    + '<linearGradient id="gild2" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#7A5A1E"/><stop offset="1" stop-color="#E6C27A"/></linearGradient>'
+    + '<radialGradient id="lampG"><stop offset="0" stop-color="#FFD27A" stop-opacity=".55"/><stop offset="1" stop-color="#FFD27A" stop-opacity="0"/></radialGradient>'
+    + '<radialGradient id="flashG"><stop offset="0" stop-color="#FFFBE8"/><stop offset=".4" stop-color="#F6B447"/><stop offset="1" stop-color="#F6B447" stop-opacity="0"/></radialGradient>'
+    + '<radialGradient id="smokeG"><stop offset="0" stop-color="#E4E1DA" stop-opacity=".75"/><stop offset="1" stop-color="#E4E1DA" stop-opacity="0"/></radialGradient>'
+    + '<clipPath id="hullClip"><path d="' + hullPath + '"/></clipPath>'
+    + '</defs>'
+    // one hull volume, the main deck extruded down to the keel
+    + '<path d="' + hullPath + '" fill="url(#tarG)"/>'
+    + '<g clip-path="url(#hullClip)">'
+    +   '<path d="' + wale(18) + '" fill="none" stroke="#1A100A" stroke-width="6"/>'
+    +   '<path d="' + wale(16) + '" fill="none" stroke="var(--brass)" stroke-width="1" opacity=".7"/>'
+    +   '<path d="' + wale(44) + '" fill="none" stroke="#1A100A" stroke-width="7"/>'
+    +   '<path d="' + wale(47) + '" fill="none" stroke="var(--brass)" stroke-width="1" opacity=".6"/>'
+    +   '<path d="' + wale(70) + '" fill="none" stroke="#150C07" stroke-width="10" opacity=".7"/>'
+    +   '<rect x="' + f1(bowX - 30) + '" y="' + f1(waterY - 3) + '" width="' + f1(L + 60) + '" height="5" fill="#2A3A36" opacity=".8"/>'
+    +   '<rect x="' + f1(bowX - 30) + '" y="' + f1(y0 - 60) + '" width="' + f1(L + 60) + '" height="' + f1(waterY - y0 + 110) + '" fill="url(#keyG)"/>'
+    + '</g>'
+    + trail + figurehead(stem.x - 2, stem.y + 2, fs)
+    + ports + win + deckSVG + lantern
+    + '<g class="salvo" id="salvo">' + salvo + '</g>';
+  // rig: masts from the top deck, one main mast with the red course, skull and Jolly Roger
+  const belly = SP ? SP.belly.v : .5;
+  let rig = '<defs><linearGradient id="clothG" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#CFC3A8"/><stop offset=".45" stop-color="var(--sailcloth)"/><stop offset="1" stop-color="#BDB095"/></linearGradient>'
+    + '<linearGradient id="redG" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#8E2C23"/><stop offset=".45" stop-color="var(--ensign)"/><stop offset="1" stop-color="#7E261F"/></linearGradient>'
+    + '<linearGradient id="mastG" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#7A5636"/><stop offset="1" stop-color="#2B1A0F"/></linearGradient>'
+    + '<pattern id="seam" width="9" height="12" patternUnits="userSpaceOnUse"><rect width="1" height="12" fill="#3A2418" opacity=".13"/></pattern>'
+    + '<radialGradient id="bellyG" cx=".5" cy=".55" r=".6"><stop offset="0" stop-color="#FFF" stop-opacity=".22"/><stop offset="1" stop-color="#000" stop-opacity=".12"/></radialGradient></defs>';
+  // bowsprit, jib boom and the jib
+  // the head never leaves the frame: at the widest rates the bowsprit shortens to fit
+  const ang = -17 * Math.PI / 180, bsL = clamp((stem.x - 24) / 1.45, 34, .1 * L + 60);
+  const bs0 = { x: stem.x + 8, y: stem.y + 4 }, bs1 = { x: bs0.x - Math.cos(ang) * bsL, y: bs0.y + Math.sin(ang) * bsL }, jb = { x: bs1.x - Math.cos(ang) * bsL * .5, y: bs1.y + Math.sin(ang) * bsL * .5 };
+  const fore = masts[0];
+  rig += '<path d="M' + f1(bs0.x) + ' ' + f1(bs0.y) + ' L' + f1(bs1.x) + ' ' + f1(bs1.y) + '" stroke="#5A3A22" stroke-width="6" stroke-linecap="round"/>'
+    + '<path d="M' + f1(bs1.x + 6) + ' ' + f1(bs1.y + 2) + ' L' + f1(jb.x) + ' ' + f1(jb.y) + '" stroke="#5A3A22" stroke-width="3.5" stroke-linecap="round"/>'
+    + '<path d="M' + f1(jb.x) + ' ' + f1(jb.y) + ' L' + f1(fore.x) + ' ' + f1(fore.tTop) + '" stroke="var(--rope)" stroke-width="1.1"/>';
+  const head = { x: lerp(jb.x, fore.x, .45), y: lerp(jb.y, fore.tTop, .45) }, clew = { x: lerp(bs0.x, fore.x, .22), y: lerp(bs0.y, fore.foot, .55) };
+  rig += '<path d="M' + f1(jb.x + 4) + ' ' + f1(jb.y) + ' L' + f1(head.x) + ' ' + f1(head.y) + ' Q' + f1(lerp(head.x, clew.x, .5) + 10) + ' ' + f1(lerp(head.y, clew.y, .5)) + ' ' + f1(clew.x) + ' ' + f1(clew.y) + ' Q' + f1(lerp(jb.x, clew.x, .5)) + ' ' + f1(lerp(jb.y, clew.y, .5) + 8) + ' ' + f1(jb.x + 4) + ' ' + f1(jb.y) + ' Z" fill="url(#clothG)" stroke="#A89A7C" stroke-width=".8"/>';
+  SAILS = [];
+  masts.forEach(mm => {
+    const sh = G.top.a * .5 * (G.nm === 1 ? 1 : Math.min(1, G.spacing / 120));
+    // shrouds and ratlines down to the top deck
+    let shr = '';
+    for (const s of [-1, 1]) {
+      const bx = mm.x + s * Math.max(26, sh * .7), by = G.top.y - 2;
+      shr += '<path d="M' + f1(mm.x) + ' ' + f1(mm.cTop + 4) + ' L' + f1(bx) + ' ' + f1(by) + ' M' + f1(mm.x) + ' ' + f1(mm.cTop + 4) + ' L' + f1(bx - s * 10) + ' ' + f1(by) + '"/>';
+      for (let yy = mm.cTop + 18; yy < by - 4; yy += 9) { const t = (yy - mm.cTop - 4) / (by - mm.cTop - 4); shr += '<path d="M' + f1(mm.x + s * 2) + ' ' + f1(yy) + ' L' + f1(lerp(mm.x, bx, t)) + ' ' + f1(yy) + '"/>'; }
+    }
+    rig += '<g stroke="var(--rope)" stroke-width=".9" opacity=".5" fill="none">' + shr + '</g>';
+    rig += '<rect x="' + f1(mm.x - 3.2) + '" y="' + f1(mm.tFoot) + '" width="6.4" height="' + f1(G.top.y + 4 - mm.tFoot) + '" rx="2" fill="url(#mastG)"/>'
+      + '<rect x="' + f1(mm.x - 2.2) + '" y="' + f1(mm.head) + '" width="4.4" height="' + f1(mm.tFoot - mm.head + 2) + '" rx="1.5" fill="url(#mastG)"/>'
+      + '<ellipse cx="' + f1(mm.x) + '" cy="' + f1(mm.cTop - 3) + '" rx="' + f1(mm.wC * .16) + '" ry="3" fill="#2B1A0F"/>';
+    const sails = [['c', mm.cTop, mm.Hc, mm.wC], ['t', mm.tTop, mm.Ht, mm.wT]];
+    if (mm.Hg) sails.push(['g', mm.gTop, mm.Hg, mm.wG]);
+    if (mm.isMain) sails.push(['r', mm.rTop, mm.royal, mm.wG * .8]);
+    for (const [k, yTop, h, w] of sails) {
+      const red = mm.isMain && k === 'c';
+      rig += '<rect x="' + f1(mm.x - w * .55) + '" y="' + f1(yTop - 3) + '" width="' + f1(w * 1.1) + '" height="3.5" rx="1.75" fill="#3A2616"/>';
+      const id = 's' + SAILS.length;
+      rig += '<path id="' + id + '" d="' + sailPath(mm.x, yTop, w, h, belly) + '" fill="url(#' + (red ? 'redG' : 'clothG') + ')" stroke="' + (red ? '#6E1E18' : '#A89A7C') + '" stroke-width=".9"/>'
+        + '<path id="' + id + 'b" d="' + sailPath(mm.x, yTop, w, h, belly) + '" fill="url(#seam)"/>'
+        + '<path id="' + id + 'c" d="' + sailPath(mm.x, yTop, w, h, belly) + '" fill="url(#bellyG)" opacity="' + (.3 + .7 * belly).toFixed(2) + '"/>';
+      if (k === 'c') rig += '<path d="M' + f1(mm.x - w * .46) + ' ' + f1(yTop + h * .28) + ' L' + f1(mm.x + w * .46) + ' ' + f1(yTop + h * .28) + '" stroke="' + (red ? '#6E1E18' : '#A89A7C') + '" stroke-width=".8" stroke-dasharray="2 3"/>';
+      if (red) rig += skull(mm.x, yTop + h * .52, Math.min(1.5, w / 70), '#EFE6D2', '#8E2C23');
+      SAILS.push({ id, x: mm.x, yTop, w, h });
+    }
+    if (mm.isMain) {
+      const fx = mm.x + 2, fy = mm.head - 22;
+      rig += '<rect x="' + f1(mm.x - 1) + '" y="' + f1(fy - 4) + '" width="2" height="' + f1(mm.head - fy + 6) + '" fill="#2B1A0F"/>'
+        + '<g class="jolly"><path d="M' + f1(fx) + ' ' + f1(fy) + ' L' + f1(fx + 36) + ' ' + f1(fy + 2) + ' L' + f1(fx + 30) + ' ' + f1(fy + 12) + ' L' + f1(fx + 36) + ' ' + f1(fy + 22) + ' L' + f1(fx) + ' ' + f1(fy + 22) + ' Z" fill="#17110D"/>'
+        + skull(fx + 14, fy + 10, .62, '#EFE6D2', '#17110D') + '</g>';
+    } else {
+      rig += '<circle cx="' + f1(mm.x) + '" cy="' + f1(mm.head - 2) + '" r="2.6" fill="var(--brass)"/>';
+    }
+  });
+  // stays fore and aft
+  const aft = masts[masts.length - 1];
+  rig += '<path d="M' + f1(aft.x) + ' ' + f1(aft.tTop + 4) + ' L' + f1(sternX + 6) + ' ' + f1(tafY) + '" stroke="var(--rope)" stroke-width="1" opacity=".6"/>';
+  for (let i = 1; i < masts.length; i++) rig += '<path d="M' + f1(masts[i].x) + ' ' + f1(masts[i].tTop + 6) + ' L' + f1(masts[i - 1].x) + ' ' + f1(masts[i - 1].cTop) + '" stroke="var(--rope)" stroke-width=".8" opacity=".5"/>';
+  $('#rig').setAttribute('width', W); $('#rig').setAttribute('height', H);
+  $('#rig').innerHTML = rig;
+  drawnBelly = belly;
+  // the name plate, on the quarter, where no gun port is
+  const px = bez3(bowX, cx - a0 * .6, cx + a0 * .6, sternX, .83), py = y0 + d0.b * .5 + 30;
+  const plate = $('#plate'); plate.style.left = f1(px) + 'px'; plate.style.top = f1(py) + 'px';
+  plate.innerHTML = '<b>Firstmate</b><span>' + G.rate.line + '</span>';
+  G.stem = stem; G.tafY = tafY;
+  // the bow's waterline, for spray and the bow wave
+  G.bowPt = { x: bowX + .02 * L, y: waterY - 4 };
+  G.sternPt = { x: sternX - .02 * L, y: waterY + 2 };
+}
+function redrawSails(b) {
+  for (const s of SAILS) {
+    const d = sailPath(s.x, s.yTop, s.w, s.h, b);
+    const a = document.getElementById(s.id); if (!a) continue;
+    a.setAttribute('d', d); document.getElementById(s.id + 'b').setAttribute('d', d);
+    const c = document.getElementById(s.id + 'c'); c.setAttribute('d', d); c.setAttribute('opacity', (.3 + .7 * b).toFixed(2));
+  }
+  drawnBelly = b;
+}
+
+/* =====================================================================
+   7. the crew: DOM figures, kept for drag and click
+   ===================================================================== */
+// every face is a composited plane. at the default turn only three show (the captain faces the
+// other way, so his near side is .sd); a figure gets all five only once someone drags it
+const FACES = '<i class="fr"></i><i class="sd"></i><i class="lf"></i><i class="bk"></i><i class="tp"></i>';
+const FACES_CREW = '<i class="fr"></i><i class="lf"></i><i class="tp"></i>';
+const FACES_CAP = '<i class="fr"></i><i class="sd"></i><i class="tp"></i>';
+let faceSet = FACES;
+const bx = (cls, extra = '') => '<div class="bx ' + cls + '">' + faceSet + extra + '</div>';
+function fullFaces(pivot) {
+  if (pivot.dataset.full) return; pivot.dataset.full = '1';
+  pivot.querySelectorAll('.bx').forEach(b => {
+    const has = new Set([...b.children].filter(e => e.tagName === 'I').map(e => e.className));
+    for (const f of ['sd', 'lf', 'bk']) if (!has.has(f)) { const i = document.createElement('i'); i.className = f; b.insertBefore(i, b.firstChild); }
+  });
+}
+const ROT = {}; const DEF = { rx: 8, ry: -26 }, CAPDEF = { rx: 6, ry: 24 };
+function layoutCrew() {
+  const nd = G.decks.length, t = nd - 1;
+  const fm = CREW[0], rv = CREW.find(c => c.role === 'r'), ws = CREW.filter(c => c.role === 'w');
+  const buckets = G.decks.map(() => []);
+  const total = CREW.length + 1;
+  const sum = G.decks.reduce((s, d) => s + d.a, 0);
+  const cap = G.decks.map(d => Math.max(1, Math.round(total * d.a / sum)));
+  const rvDeck = rv ? Math.max(0, t - 1) : -1;
+  const used = G.decks.map((_, i) => (i === t ? 2 : 0) + (i === rvDeck ? 1 : 0));
+  let r = 0;
+  for (const w of ws) { while (r < t && used[r] >= cap[r]) r++; buckets[r].push(w); used[r]++; }
+  const ordered = [];
+  G.decks.forEach((d, i) => {
+    let list = buckets[i].slice();
+    if (i === rvDeck) list.push(rv);
+    if (i === t) list = [fm, ...list, CAPTAIN];
+    const lo = d.cx - d.a * .8, hi = d.cx + d.a * .8, m = list.length;
+    list.forEach((c, k) => { c.x = m === 1 ? d.cx : lo + (hi - lo) * k / (m - 1); c.deck = i; c.feetY = d.y + 3; c.spacing = m === 1 ? 300 : (hi - lo) / (m - 1); ordered.push(c); });
+  });
+  const minSp = Math.min(...ordered.map(c => c.spacing));
+  G.sc = clamp(minSp / 96, .56, nd > 1 ? .78 : .9);
+  G.figH = 90 * G.sc;
+  G.twoLine = nd === 1 && minSp >= 92;
+  G.pw = clamp(minSp - 8, 44, 160);
+}
+function figureHTML(c) {
+  faceSet = ROT[c.id] ? FACES : FACES_CREW;
+  const act = c.act = actionOf(c, G);
+  const h = hash(c.id);
+  let style = '--step:' + (1.05 + (h % 50) / 100).toFixed(2) + 's;--skin:' + SKINS[h % SKINS.length] + ';';
+  if (c.role === 'w') style += '--shirt:' + SHIRTS[(h >> 3) % SHIRTS.length] + ';--hat:' + CAPS[(h >> 5) % CAPS.length] + ';';
+  const hat = c.role === 'fm' ? bx('brim') + bx('crown') + bx('trim') : c.role === 'r' ? bx('brim') + bx('crown') : bx('cap') + bx('capfold');
+  const cls = 'fig r-' + c.role + ' s-' + c.st + ' a-' + act + (c.live ? ' live' : '');
+  return '<div class="pivot" data-pivot="' + c.id + '"' + (ROT[c.id] ? ' data-full="1"' : '') + ' style="left:' + f1(c.x - 46) + 'px;top:' + f1(c.feetY - 100) + 'px;--sc:' + G.sc.toFixed(3) + '">'
+    + '<div class="' + cls + '" data-crew="' + c.id + '" data-act="' + act + '" style="' + style + '">'
+    + '<div class="sh"></div>' + bx('armR', bx('handR', '<span class="tool"></span>'))
+    + bx('shoeR') + bx('shoeL') + bx('legR') + bx('legL') + bx('torso') + bx('belt')
+    + bx('armL', bx('handL', '<span class="tool l"></span>'))
+    + bx('neck') + bx('head') + '<div class="eye"></div>' + hat
+    + '<div class="dprop"></div></div></div>';
+}
+function captainHTML(c) {
+  faceSet = ROT.captain ? FACES : FACES_CAP;
+  return '<div class="pivot" data-pivot="captain"' + (ROT.captain ? ' data-full="1"' : '') + ' style="left:' + f1(c.x - 46) + 'px;top:' + f1(c.feetY - 100) + 'px;--sc:' + (G.sc * 1.06).toFixed(3) + '">'
+    + '<div class="fig r-cap c-' + S.cap + '" data-crew="captain">'
+    + '<div class="sh"></div>'
+    + bx('armR', bx('handR', '<span class="cutlass"></span>'))
+    + bx('shoeR') + bx('shoeL') + bx('legR') + bx('legL')
+    + bx('tails') + bx('torso') + '<div class="sash"></div><div class="buckle"></div><div class="scabbard"></div><div class="hilt"></div>'
+    + bx('epaL') + bx('epaR')
+    + bx('armL', bx('handL'))
+    + bx('neck') + bx('head') + '<div class="eye"></div><div class="patch"></div>' + bx('beard')
+    + bx('tricorn') + bx('tricrown') + bx('tritrim') + '<div class="plume"></div>'
+    + '</div></div>';
+}
+const CAP_POSE = { idle: 'sheathed, awaiting your call', ready: 'cutlass half drawn', order: 'orders given' };
+// "claude · opus-5" on one line when the deck has room for it, vendor over model when it does not
+const engStacked = c => !!c.eng && engLabel(c).length * 5.6 + 23 > G.pw + 6;
+// how many lines the tallest pennant on deck flies; the rig is hung above it
+function pennantLines() {
+  const one = c => c.role === 'cap' ? (G.pw >= 76 ? 2 : 1) : 1 + (c.eng ? (engStacked(c) ? 2 : 1) : 0) + (G.twoLine ? 1 : 0);
+  return Math.max(one(CAPTAIN), ...CREW.map(one));
+}
+function pennantHTML(c) {
+  const top = c.feetY - G.figH - 6;
+  let p, who = c.id, job = '';
+  // a crowded deck shortens the name rather than cutting it: worker-12 reads w12, never "wo..."
+  if (G.pw < 76) who = c.id.replace('worker-', 'w').replace('reviewer-', 'r').replace('firstmate', 'fm');
+  if (c.role === 'cap') { p = 'p-cap'; who = 'Captain'; job = CAP_POSE[S.cap]; }
+  else {
+    p = { working: 'p-working', review: 'p-review', gate: 'p-gate', captain: 'p-captain', idle: 'p-idle' }[c.st] || 'p-idle';
+    job = c.st === 'gate' ? (c.task[0] + ' blocked') : c.st === 'captain' ? 'waits on you' : c.role === 'fm' ? (c.st === 'working' ? 'coordinating' : 'at anchor') : c.task ? c.task[0] : 'standing by';
+  }
+  const label = describe(c);
+  // a worker's or reviewer's pennant always names the vendor and model its run uses, whatever the deck's crowding
+  // (on a crowded deck the two stack, vendor over model, rather than widen into the neighbour's pennant)
+  const eng = !c.eng ? '' : engStacked(c) ?'<span class="eng">' + c.eng[0] + '</span><span class="eng">' + c.eng[1] + '</span>' : '<span class="eng">' + engLabel(c) + '</span>';
+  return '<button class="pennant ' + p + (eng ? ' has-eng' : '') + (S.selected === c.id ? ' sel' : '') + '" data-tag="' + c.id + '" style="left:' + f1(c.x) + 'px;top:' + f1(top) + 'px;--pw:' + f1(G.pw) + 'px" aria-label="' + label + '">'
+    + '<span class="who">' + who + '</span>' + eng + (G.twoLine || (c.role === 'cap' && G.pw >= 76) ? '<span class="job">' + job + '</span>' : '') + '</button>';
+}
+function describe(c) {
+  if (c.role === 'cap') return 'Captain, ' + CAP_POSE[S.cap];
+  const act = ACTIONS[c.act] || '';
+  if (c.role === 'fm') {
+    const n = liveRuns();
+    return 'firstmate, ' + (c.st === 'captain' ? 'waiting on you with ' + c.note : n ? 'coordinating ' + n + ' live ' + (n === 1 ? 'run' : 'runs') : 'at anchor, nothing in flight') + ', ' + act;
+  }
+  const st = c.st === 'working' && !c.task ? 'at work' : { working: 'working on', review: 'reviewing', gate: 'blocked at gate 5 on', captain: 'waiting on you with', idle: 'idle' }[c.st];
+  const task = c.task ? ' ' + c.task[0] + ', ' + c.task[1] : c.note ? ' ' + c.note : '';
+  return c.id + ' on ' + engLabel(c) + ', ' + st + (c.st === 'idle' ? '' : task) + ', ' + act;
+}
+function buildCrewDOM() {
+  layoutCrew();
+  let figs = '', tags = '';
+  for (const c of CREW) { figs += figureHTML(c); tags += pennantHTML(c); }
+  const cap = CAPTAIN; figs += captainHTML(cap); tags += pennantHTML(cap);
+  // helm beside the firstmate, the bell forward on the top deck
+  const fm = CREW[0], wsz = Math.round(46 * G.sc + 6);
+  figs += '<div class="helm' + (fm.live ? ' live' : '') + '" id="helm" style="left:' + f1(fm.x + 30 * G.sc) + 'px;top:' + f1(fm.feetY + 1) + 'px">'
+    + '<svg width="' + wsz + '" height="' + (wsz + 16) + '" viewBox="-26 -26 52 68"><rect x="-3" y="4" width="6" height="38" fill="#4A3020"/><rect x="-7" y="36" width="14" height="6" fill="#2B1A0F"/>'
+    + '<g class="wheel"><circle r="18" fill="none" stroke="var(--brass)" stroke-width="4"/><circle r="18" fill="none" stroke="#5E4316" stroke-width="1" opacity=".6"/>'
+    + [0, 45, 90, 135].map(a => '<rect x="-25" y="-1.4" width="50" height="2.8" rx="1.4" fill="#6B4A2A" transform="rotate(' + a + ')"/>').join('')
+    + '<circle r="4.5" fill="#2B1A0F" stroke="var(--brass)" stroke-width="1.5"/></g></svg></div>';
+  const top = G.top, bxp = top.cx - top.a * .35;
+  figs += '<div class="bell" id="bell" style="left:' + f1(bxp) + 'px;top:' + f1(top.y - top.f * .7) + 'px"><svg width="34" height="46" viewBox="-17 -40 34 46">'
+    + '<path d="M-13 6 L-13 -36 L13 -36 L13 6" fill="none" stroke="#4A3020" stroke-width="3"/>'
+    + '<g transform="translate(0 -34)"><g class="bellbody"><path d="M-8 18 C-8 6 -6 1 0 1 C6 1 8 6 8 18 L10 21 L-10 21 Z" fill="url(#bellG)"/><circle cy="22" r="1.8" fill="#5E4316"/></g></g>'
+    + '<defs><linearGradient id="bellG" x1="0" x2="1"><stop offset="0" stop-color="#8E6A22"/><stop offset=".45" stop-color="#E4C27A"/><stop offset="1" stop-color="#7A5A1E"/></linearGradient></defs></svg></div>';
+  $('#crew').innerHTML = figs;
+  $('#crew').style.width = G.W + 'px'; $('#crew').style.height = G.H + 'px';
+  $('#pennants').innerHTML = tags;
+  applyRot();
+}
+function applyRot() {
+  document.querySelectorAll('.pivot').forEach(p => {
+    const id = p.dataset.pivot, r = ROT[id] || (id === 'captain' ? CAPDEF : DEF);
+    p.style.setProperty('--rx', r.rx + 'deg'); p.style.setProperty('--ry', r.ry + 'deg');
+  });
+}
+
+/* =====================================================================
+   8. per-frame: the swell, the parallax, spray and wake
+   ===================================================================== */
+let SP = null;       // springs for weather parameters
+let phase = 0;
+const spray = [], wake = [];
+let sprayAcc = 0, wakeAcc = 0; const rng = seeded(99);
+function initSprings() {
+  SP = {
+    speed: Engine.spring(0), swellA: Engine.spring(3), swellT: Engine.spring(7.5), pitch: Engine.spring(.5),
+    dark: Engine.spring(0), foam: Engine.spring(.2), belly: Engine.spring(.12), spray: Engine.spring(0),
+    heel: Engine.spring(0, 30, 3.2),    // underdamped: a salvo rocks her
+  };
+}
+function weatherTargets() {
+  // a clearing is a breeze of the live runs under a sky with no cloud band and light whitecaps,
+  // whatever the state would show; when it ends the sea eases back to what the state says
+  if (S.clearing) return { wx: 'clearing', ...WX.breeze, ...breezeFor(liveRuns()), dark: 0, foam: .35 };
+  const wx = effectiveWeather();
+  const base = { ...WX[wx] };
+  if (wx === 'breeze') Object.assign(base, breezeFor(liveRuns()));
+  return { wx, ...base };
+}
+function applyWeather(instant) {
+  const p = weatherTargets();
+  for (const k of ['speed', 'swellA', 'swellT', 'pitch', 'dark', 'foam', 'belly', 'spray']) instant ? SP[k].snap(p[k]) : SP[k].to(p[k]);
+  const sc = $('#scene');
+  sc.classList.toggle('calm', p.wx === 'calm');
+  sc.style.setProperty('--flagA', p.flagA); sc.style.setProperty('--flagT', p.flagT + 's');
+  if (instant || !S.motion) renderStatic();
+  Engine.wake();
+  return p.wx;
+}
+function vesselPoint(p, y, rot) {
+  // where a point on the hull is in the scene once the vessel heaves and pitches
+  const ox = G.cx, oy = G.waterY, a = rot * Math.PI / 180, dx = p.x - ox, dy = p.y - oy;
+  return { x: ox + dx * Math.cos(a) - dy * Math.sin(a), y: oy + dx * Math.sin(a) + dy * Math.cos(a) + y };
+}
+let heaveY = 0, pitchDeg = 0, prevPitch = 0;
+function update(dt) {
+  phase += dt * TAU / Math.max(2, SP.swellT.v);
+  const A = SP.swellA.v;
+  heaveY = A * (Math.sin(phase) + .35 * Math.sin(1.63 * phase + 1.1));
+  prevPitch = pitchDeg;
+  pitchDeg = SP.pitch.v * Math.cos(phase + .6) + SP.heel.v;
+  const v = SP.speed.v;
+  for (const id in PLX) { const l = PLX[id]; l.off += (l.v * v + l.drift) * dt; }
+  // spray from the bow while under way, more when she digs in
+  const bow = vesselPoint(G.bowPt, heaveY, pitchDeg);
+  const digging = pitchDeg - prevPitch < 0 ? 1 : 0;
+  sprayAcc += dt * SP.spray.v * (1 + 1.5 * digging * (SP.dark.v > .5 ? 1 : 0));
+  while (sprayAcc >= 1) {
+    sprayAcc -= 1;
+    const p = spray.find(s => s.life <= 0) || (spray.length < 36 ? (spray.push({ el: null, life: 0 }), spray[spray.length - 1]) : null);
+    if (!p) break;
+    p.x = bow.x + rng() * 6; p.y = bow.y; p.vx = -(50 + rng() * 90) * (.6 + v * .5); p.vy = -(70 + rng() * 110) * (.7 + v * .4);
+    p.r = 1.2 + rng() * 2.2; p.life = p.max = .7 + rng() * .5;
+  }
+  for (const p of spray) if (p.life > 0) { p.life -= dt; p.vy += 420 * dt; p.x += p.vx * dt; p.y += p.vy * dt; }
+  // wake: foam shed at the stern, left behind as the sea runs aft
+  const worldV = PLX['L-near'] ? PLX['L-near'].v * v : 0;
+  if (v > .05) {
+    wakeAcc += dt / .22;
+    while (wakeAcc >= 1) {
+      wakeAcc -= 1;
+      const p = wake.find(s => s.life <= 0) || (wake.length < 18 ? (wake.push({ el: null, life: 0 }), wake[wake.length - 1]) : null);
+      if (!p) break;
+      const st = vesselPoint(G.sternPt, heaveY, pitchDeg);
+      p.x = st.x; p.y = G.waterY + 4; p.life = p.max = 3.2; p.w = .8 + rng() * .4;
+    }
+  }
+  for (const p of wake) if (p.life > 0) { p.life -= dt; p.x += worldV * dt; }
+}
+let drawnHeave = 1e9, drawnPitch = 1e9;
+function render() {
+  // the vessel carries every crew face; it is re-set only once it has moved a quarter pixel,
+  // so a calm swell recomposites the crew about ten times a second instead of thirty
+  const tipPx = Math.abs(pitchDeg - drawnPitch) * Math.PI / 180 * (G ? G.L / 2 : 400);
+  if (Math.abs(heaveY - drawnHeave) >= .25 || tipPx >= .25) {
+    $('#vessel').style.transform = 'translate3d(0,' + heaveY.toFixed(2) + 'px,0) rotate(' + pitchDeg.toFixed(3) + 'deg)';
+    drawnHeave = heaveY; drawnPitch = pitchDeg; Engine.stats.vessel++;
+  }
+  const nearDy = SP.swellA.v * .45 * Math.sin(phase + 1.8);
+  for (const id in PLX) {
+    const l = PLX[id], x = ((l.off % l.TW) + l.TW) % l.TW - l.TW;
+    const dy = id === 'L-near' || id === 'L-crests' ? nearDy : id === 'L-foam' ? nearDy * 1.3 : id === 'L-mid' ? nearDy * .5 : 0;
+    l.el.style.transform = 'translate3d(' + x.toFixed(1) + 'px,' + dy.toFixed(1) + 'px,0)';
+  }
+  const sc = $('#scene').style;
+  sc.setProperty('--dark', SP.dark.v.toFixed(3)); sc.setProperty('--foam', SP.foam.v.toFixed(3));
+  if (Math.abs(SP.belly.v - drawnBelly) > .03) redrawSails(SP.belly.v);
+  drawParticles();
+}
+const SVGNS = 'http://www.w3.org/2000/svg';
+function drawParticles() {
+  const sp = $('#spray'), wk = $('#wake');
+  for (const p of spray) {
+    if (!p.el) { p.el = document.createElementNS(SVGNS, 'circle'); p.el.setAttribute('fill', '#F4F1E6'); sp.appendChild(p.el); }
+    if (p.life > 0) { p.el.setAttribute('cx', p.x.toFixed(1)); p.el.setAttribute('cy', p.y.toFixed(1)); p.el.setAttribute('r', p.r.toFixed(1)); p.el.setAttribute('opacity', (p.life / p.max * .9).toFixed(2)); }
+    else if (p.el.getAttribute('opacity') !== '0') p.el.setAttribute('opacity', '0');
+  }
+  for (const p of wake) {
+    if (!p.el) { p.el = document.createElementNS(SVGNS, 'ellipse'); p.el.setAttribute('fill', '#F4F1E6'); wk.appendChild(p.el); }
+    if (p.life > 0) { const age = 1 - p.life / p.max; p.el.setAttribute('cx', p.x.toFixed(1)); p.el.setAttribute('cy', (p.y + age * 6).toFixed(1)); p.el.setAttribute('rx', (10 + age * 46 * p.w).toFixed(1)); p.el.setAttribute('ry', (2 + age * 4).toFixed(1)); p.el.setAttribute('opacity', ((1 - age) * .55).toFixed(2)); }
+    else if (p.el.getAttribute('opacity') !== '0') p.el.setAttribute('opacity', '0');
+  }
+}
+// the still picture: speed is drawn as a standing wake and bow wave, so a still scene still says how fast
+function staticWake() {
+  const v = SP ? SP.speed.target : 0, wk = $('#wake');
+  let g = wk.querySelector('#wakeStill');
+  if (!g) { g = document.createElementNS(SVGNS, 'g'); g.id = 'wakeStill'; wk.prepend(g); }
+  if (!G) return;
+  const len = 40 + 300 * v, sx = G.sternPt.x, y = G.waterY + 3, bx = G.bowPt.x;
+  g.innerHTML = v > .05
+    ? '<path d="M' + f1(sx) + ' ' + f1(y - 2) + ' Q' + f1(sx + len * .5) + ' ' + f1(y - 5) + ' ' + f1(sx + len) + ' ' + f1(y + 8) + ' Q' + f1(sx + len * .5) + ' ' + f1(y + 10) + ' ' + f1(sx) + ' ' + f1(y + 5) + ' Z" fill="#F4F1E6" opacity=".35"/>'
+      + '<path d="M' + f1(bx + 30) + ' ' + f1(y - 3) + ' Q' + f1(bx - 6) + ' ' + f1(y - 8 - 6 * v) + ' ' + f1(bx - 14 - 16 * v) + ' ' + f1(y + 4) + ' Q' + f1(bx + 6) + ' ' + f1(y + 3) + ' ' + f1(bx + 30) + ' ' + f1(y + 4) + ' Z" fill="#F4F1E6" opacity=".6"/>'
+    : '<path d="M' + f1(bx + 10) + ' ' + f1(y) + ' L' + f1(G.sternPt.x) + ' ' + f1(y) + '" stroke="#F4F1E6" stroke-opacity=".25" stroke-width="2"/>';
+}
+function renderStatic() {
+  // no loop: hold the ship level and draw parameters at their targets
+  if (!SP || !G) return;
+  for (const k in SP) { if (k === 'heel') SP[k].snap(0); else SP[k].snap(SP[k].target); }
+  heaveY = 0; pitchDeg = 0; drawnHeave = 1e9;
+  for (const p of spray) p.life = 0; for (const p of wake) p.life = 0;
+  render(); staticWake();
+}
+Engine.onUpdate = update;
+Engine.onRender = render;
+Engine.extraBusy = () => spray.some(p => p.life > 0 && SP.spray.v < .5);
+Engine.idleFps = () => SP.speed.target < .05 ? 20 : 30;
+
+/* =====================================================================
+   9. moments: handoffs, the salvo, an order
+   ===================================================================== */
+const KIND = {
+  order: { label: 'Order', apex: 110, ease: Ease.order, spin: 360, color: 'var(--sailcloth)' },
+  pr: { label: 'Pull request', apex: 70, ease: Ease.inOutSine, spin: 40, color: 'var(--sailcloth)' },
+  approve: { label: 'Approval', apex: 50, ease: Ease.approve, spin: 0, color: 'var(--seaglass)' },
+  reject: { label: 'Rejection', apex: 36, ease: Ease.reject, spin: 0, color: 'var(--ensign)' },
+};
+const byId = id => id === 'captain' ? CAPTAIN : CREW.find(c => c.id === id);
+function handoffRoute(kind) {
+  const fm = CREW[0], rv = CREW.find(c => c.role === 'r');
+  const ws = CREW.filter(c => c.role === 'w');
+  const w = ws.find(c => c.st === 'working') || ws.find(c => c.st === 'gate') || ws[0];
+  if (kind === 'order') return w ? [fm, w] : null;
+  if (!rv || !w) return null;
+  if (kind === 'pr') return [w, rv];
+  if (kind === 'approve') return [rv, fm];
+  if (kind === 'reject') return [rv, w];
+}
+function handoff(kind, from, to) {
+  if (!from) {
+    const r = handoffRoute(kind);
+    if (!r) { narrate(KIND[kind].label + ': no ' + (kind === 'order' ? 'worker' : 'reviewer or worker') + ' aboard at this crew count, so nothing can pass.'); return; }
+    [from, to] = r;
+  }
+  const K = KIND[kind];
+  narrate(K.label + ', ' + (from.role === 'cap' ? 'the captain' : from.id) + ' to ' + to.id + '.');
+  // anchors are read from where the figures stand now
+  const hs = from.role === 'cap' ? G.sc * 1.06 : G.sc;
+  const p0 = { x: from.x, y: from.feetY - 62 * hs }, p2 = { x: to.x, y: to.feetY - 55 * G.sc };
+  const p1 = { x: (p0.x + p2.x) / 2, y: Math.min(p0.y, p2.y) - K.apex };
+  const d = 'M' + f1(p0.x) + ' ' + f1(p0.y) + ' Q' + f1(p1.x) + ' ' + f1(p1.y) + ' ' + f1(p2.x) + ' ' + f1(p2.y);
+  const svg = $('#fxsvg'); svg.setAttribute('width', G.W); svg.setAttribute('height', G.H);
+  const trail = document.createElementNS(SVGNS, 'path'); trail.setAttribute('d', d); trail.setAttribute('class', 'trail k-' + kind); svg.appendChild(trail);
+  const len = trail.getTotalLength();
+  const arrive = () => {
+    const f = document.querySelector('.fig[data-crew="' + to.id + '"]'), tg = document.querySelector('.pennant[data-tag="' + to.id + '"]');
+    if (S.motion) { f && (f.classList.remove('react'), void f.offsetWidth, f.classList.add('react')); tg && (tg.classList.remove('ping'), void tg.offsetWidth, tg.classList.add('ping')); }
+    setTimeout(() => { f && f.classList.remove('react'); tg && tg.classList.remove('ping'); }, 800);
+  };
+  if (!S.motion) {
+    // still: the arc is drawn whole and the recipient carries the directed words
+    trail.style.strokeDasharray = '2 7';
+    const note = document.createElement('div'); note.className = 'handnote';
+    note.style.left = f1(p2.x) + 'px'; note.style.top = f1(p2.y + 14) + 'px'; note.style.setProperty('--kc', K.color);
+    note.textContent = K.label + ' from ' + (from.role === 'cap' ? 'the captain' : from.id);
+    $('#fx').appendChild(note);
+    arrive();
+    setTimeout(() => { trail.remove(); note.remove(); }, 2300);
+    return;
+  }
+  const fl = document.createElement('div'); fl.className = 'flyer k-' + kind; $('#fx').appendChild(fl);
+  trail.style.strokeDasharray = len.toFixed(1); trail.style.strokeDashoffset = len.toFixed(1);
+  Engine.tween(1.4, K.ease, (e, p) => {
+    const u = 1 - e, x = u * u * p0.x + 2 * u * e * p1.x + e * e * p2.x, y = u * u * p0.y + 2 * u * e * p1.y + e * e * p2.y;
+    const wob = kind === 'reject' ? Math.sin(p * Math.PI * 3) * 6 * (1 - p) : 0;
+    const sc = .6 + .45 * Math.sin(Math.PI * Math.min(1, p * 1.1));
+    fl.style.transform = 'translate3d(' + (x + wob).toFixed(1) + 'px,' + y.toFixed(1) + 'px,0) rotate(' + (K.spin * e).toFixed(0) + 'deg) scale(' + sc.toFixed(3) + ')';
+    trail.style.strokeDashoffset = (len * (1 - e)).toFixed(1);
+    trail.style.opacity = p < .8 ? .75 : (.75 * (1 - (p - .8) / .2)).toFixed(2);
+  }, () => {
+    fl.remove(); arrive();
+    Engine.tween(.9, Ease.linear, e => { trail.style.opacity = (0).toString(); }, () => trail.remove());
+  });
+}
+function mergeTarget() {
+  // what can merge: the task on a pending merge card first, then the oldest task in review
+  const d = pendingDecisions().find(x => x.kind === 'merge');
+  if (d) return { t: taskOf(d.task), d };
+  const r = BOARD.order.map(taskOf).find(t => laneOf(t) === 'review');
+  return r ? { t: r, d: null } : null;
+}
+function merge(target) {
+  // a merge lands on the board: the card slides into merged, the tally rolls, and only then the ship
+  // answers it. the weather clears, the broadside fires gun by gun, she heels, all hands cheer, the bell rings
+  target = target || mergeTarget();
+  if (!target) { narrate('Nothing is ready to merge: no pull request is in review and no merge card waits on you. Try a breeze or a squall.'); return; }
+  const { t, d } = target;
+  if (d) BOARD.answered.add(d.id);
+  CREW.forEach(c => { if (c.task && c.task[0] === t.id) BOARD.handed.add(c.id); });
+  t.stage = 'merged'; t.mseq = ++BOARD.mseq; if (!t.pr) t.pr = ++BOARD.prSeq;
+  logEvent('captain', 'merged', { en: t.id + ' merged into main (#' + t.pr + ')', 'zh-TW': t.id + ' 已合併進 main（#' + t.pr + '）' });
+  syncShip();
+  S.clearing = true; applyWeather(); renderSwitches();
+  const guns = G.guns.length;
+  const salvo = $('#salvo'); salvo.classList.remove('fire'); void salvo.getBoundingClientRect(); salvo.classList.add('fire');
+  for (let i = 0; i < guns; i++) Audio.cannon(i * GUN_DELAY, .6 - i * .03);
+  setTimeout(() => { Audio.bell(); ringBell(); }, (guns * GUN_DELAY + .3) * 1000);
+  if (S.motion) {
+    SP.heel.kick(-20);   // about 2.4 degrees at the peak, as in v1, then rocks out within 3 s
+    Engine.tween(6, Ease.linear, (e, p) => { const r = p < .15 ? p / .15 : p > .6 ? 1 - (p - .6) / .4 : 1; $('#scene').style.setProperty('--rays', (.55 * Ease.inOutSine(r)).toFixed(3)); }, () => $('#scene').style.setProperty('--rays', 0));
+  } else { $('#scene').style.setProperty('--rays', .35); }
+  CREW.concat([CAPTAIN]).forEach((c, i) => {
+    const f = document.querySelector('.fig[data-crew="' + c.id + '"]'); if (!f) return;
+    setTimeout(() => { f.classList.add('cheer'); setTimeout(() => f.classList.remove('cheer'), 1700); }, S.motion ? i * 45 : 0);
+  });
+  banner('Ahoy!', 'Merged into main: ' + t.id);
+  narrate('Merged into main: ' + t.id + ', ' + t.title + '. The broadside fires ' + guns + ' guns and the bell rings.');
+  setTimeout(() => { salvo.classList.remove('fire'); $('#scene').style.setProperty('--rays', 0); S.clearing = false; applyWeather(); renderSwitches(); }, S.motion ? 6000 : 2300);
+}
+function giveOrder() {
+  // an order: bell and whistle (D-1010), the captain raises the cutlass, the helm spins twice, the crew answers
+  const prev = S.cap; setCapPose('order');
+  Audio.bell(); ringBell(); setTimeout(() => Audio.whistle(), 180);
+  const h = $('#helm'); if (h && S.motion) { h.classList.remove('spin'); void h.getBoundingClientRect(); h.classList.add('spin'); setTimeout(() => h.classList.remove('spin'), 1250); }
+  CREW.forEach((c, i) => {
+    const f = document.querySelector('.fig[data-crew="' + c.id + '"]'); if (!f || c.st === 'gate') return;
+    setTimeout(() => { f.classList.add('salute'); setTimeout(() => f.classList.remove('salute'), 650); }, S.motion ? 250 + i * 45 : 0);
+  });
+  setTimeout(() => handoff('order', CAPTAIN, CREW[0]), 300);
+  banner('Aye, captain', 'Orders away');
+  setTimeout(() => setCapPose(prev === 'order' ? 'idle' : prev), 1800);
+}
+function showCapPose(p) {
+  // the captain on deck and the captain in the porthole are one man in one pose
+  document.querySelectorAll('.fig.r-cap').forEach(f => { f.classList.remove('c-idle', 'c-ready', 'c-order'); f.classList.add('c-' + p); });
+  const pl = document.querySelector('#capstage .lbl span'); if (pl) pl.textContent = tr(p === 'ready' ? 'capReady' : p === 'order' ? 'capOrder' : 'capDeciding');
+}
+function ringBell() { const b = $('#bell'); if (!b || !S.motion) return; b.classList.remove('ring'); void b.getBoundingClientRect(); b.classList.add('ring'); }
+function banner(a, b) { const el = $('#banner'); el.innerHTML = '<b>' + a + '</b><span>' + b + '</span>'; el.classList.remove('on'); void el.offsetWidth; el.classList.add('on'); clearTimeout(banner.t); banner.t = setTimeout(() => el.classList.remove('on'), 3000); }
+function setCapPose(p) {
+  S.cap = p;
+  showCapPose(p);
+  const t = document.querySelector('.pennant[data-tag="captain"] .job'); if (t) t.textContent = CAP_POSE[p];
+  const tg = document.querySelector('.pennant[data-tag="captain"]'); if (tg) tg.setAttribute('aria-label', 'Captain, ' + CAP_POSE[p]);
+  renderSwitches();
+}
+
+/* =====================================================================
+   10. sound: synthesised, no files, no network
+   ===================================================================== */
+const Audio = (() => {
+  let ac = null;
+  const ctx = () => { if (!S.sound) return null; if (!ac) { const C = window.AudioContext || window.webkitAudioContext; if (!C) return null; ac = new C(); } if (ac.state === 'suspended') ac.resume(); return ac; };
+  function partial(a, f, dur, gain, at = 0) {
+    const o = a.createOscillator(), g = a.createGain(), t = a.currentTime + at;
+    o.type = 'sine'; o.frequency.setValueAtTime(f, t);
+    g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(gain, t + .006); g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+    o.connect(g).connect(a.destination); o.start(t); o.stop(t + dur + .05);
+  }
+  return {
+    bell() { const a = ctx(); if (!a) return; for (const [r, g, d] of [[1, .16, 2.6], [2.0, .07, 1.8], [2.76, .05, 1.2], [5.4, .02, .6], [.5, .05, 3]]) partial(a, 523 * r, d, g); },
+    whistle() {
+      // a bosun's call: a rising note, a trill, a falling tail
+      const a = ctx(); if (!a) return; const t = a.currentTime;
+      const o = a.createOscillator(), g = a.createGain(), lfo = a.createOscillator(), lg = a.createGain();
+      o.type = 'sine'; o.frequency.setValueAtTime(1500, t); o.frequency.exponentialRampToValueAtTime(2300, t + .35); o.frequency.setValueAtTime(2300, t + .7); o.frequency.exponentialRampToValueAtTime(1400, t + 1.05);
+      lfo.frequency.value = 14; lg.gain.setValueAtTime(0, t); lg.gain.setValueAtTime(90, t + .38); lg.gain.setValueAtTime(0, t + .7);
+      lfo.connect(lg).connect(o.frequency);
+      g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(.08, t + .05); g.gain.setValueAtTime(.08, t + .95); g.gain.exponentialRampToValueAtTime(.0001, t + 1.1);
+      o.connect(g).connect(a.destination); o.start(t); lfo.start(t); o.stop(t + 1.15); lfo.stop(t + 1.15);
+    },
+    cannon(at, gain) {
+      const a = ctx(); if (!a) return;
+      const n = Math.floor(a.sampleRate * .34), buf = a.createBuffer(1, n, a.sampleRate), d = buf.getChannelData(0), r = seeded(5 + Math.round(at * 1000));
+      for (let i = 0; i < n; i++) d[i] = (r() * 2 - 1) * Math.pow(1 - i / n, 3.2);
+      const src = a.createBufferSource(); src.buffer = buf;
+      const lp = a.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 520; lp.Q.value = 1.1;
+      const g = a.createGain(); g.gain.value = Math.max(.16, gain);
+      src.connect(lp).connect(g).connect(a.destination); src.start(a.currentTime + at);
+      partial(a, 55, .4, .25 * gain, at);
+    },
+  };
+})();
+
+/* =====================================================================
+   11. the hour, stats, caption, switches
+   ===================================================================== */
+function todNow() { return S.tod === 'local' ? localTod() : S.tod; }
+function applyTime() {
+  const t = TOD[todNow()], sc = $('#scene').style, rs = document.documentElement.style;
+  sc.setProperty('--sky0', t.sky[0]); sc.setProperty('--sky1', t.sky[1]); sc.setProperty('--sky2', t.sky[2]); sc.setProperty('--glow', t.glow);
+  t.sea.forEach((c, i) => sc.setProperty('--sea' + i, c));
+  sc.setProperty('--isle', t.isle); sc.setProperty('--cloud', t.cloud); sc.setProperty('--cloudS', t.cloudS);
+  sc.setProperty('--amb', t.amb); sc.setProperty('--ambK', t.ambK); sc.setProperty('--rim', t.light.rim);
+  sc.setProperty('--bL', t.light.bL); sc.setProperty('--bR', t.light.bR); sc.setProperty('--bT', t.light.bT);
+  sc.setProperty('--rimX', t.light.rimX); sc.setProperty('--shX', t.light.shX);
+  sc.setProperty('--lamp', t.lamp); sc.setProperty('--stars', t.stars);
+  sc.setProperty('--shipB', t.shipB); sc.setProperty('--shipS', t.shipS);
+  const [pg, pg2, tx, tx2, ln, sheet] = t.pg;
+  rs.setProperty('--pg', pg); rs.setProperty('--pg2', pg2); rs.setProperty('--pgText', tx); rs.setProperty('--pgText2', tx2); rs.setProperty('--pgLine', ln);
+  rs.setProperty('--sheet', sheet);
+  // the porthole looks out on the same hour, and lights the captain in it the same way
+  const ps = $('#capstage').style;
+  for (const k of ['--sky0', '--sky1', '--sky2', '--sea1', '--amb', '--ambK', '--rim', '--bL', '--bR', '--bT', '--rimX', '--shX']) ps.setProperty(k, sc.getPropertyValue(k));
+}
+function renderStats() { renderBoard(); }
+function tick() {
+  const d = new Date(), hh = String(d.getHours()).padStart(2, '0'), mm = String(d.getMinutes()).padStart(2, '0');
+  $('#clock').textContent = (S.tod === 'local' ? TOD[localTod(d)].label + ', local time ' : TOD[S.tod].label + ' (forced), local time ') + hh + ':' + mm;
+  if (S.tod === 'local' && tick.last && tick.last !== localTod(d)) { applyTime(); buildSea(); buildShip(); buildCrewDOM(); }
+  tick.last = localTod(d);
+}
+function narrate(s) { $('#narr').textContent = s; }
+function showSel() {
+  const c = S.selected && byId(S.selected);
+  $('#selinfo').textContent = c ? 'Selected: ' + describe(c) + '.' : 'Click a figure or its pennant to read it; drag a figure to turn it, drag the deck to turn all hands, double-click to reset.';
+}
+const WX_NAMES = { calm: 'Calm', breeze: 'Breeze', squall: 'Squall', clearing: 'Clearing' };
+const seg = (key, items, cur, keys = {}) => '<div class="seg" role="group">' + items.map(([v, l]) => '<button data-k="' + key + '" data-v="' + v + '" aria-pressed="' + (String(cur) === String(v)) + '">' + l + (keys[v] ? '<kbd>' + keys[v] + '</kbd>' : '') + '</button>').join('') + '</div>';
+function renderSwitches() {
+  const wxShown = S.clearing ? 'clearing' : S.weather;
+  const eff = effectiveWeather();
+  $('#switches').innerHTML = '<h2>Prototype switches<span>keys in brackets; none of this is on the board</span></h2>'
+    + '<div class="row"><span class="lab">Time of day</span>' + seg('tod', [['local', 'Local'], ['dawn', 'Dawn'], ['day', 'Day'], ['dusk', 'Dusk'], ['night', 'Night']], S.tod, { local: 'T' }) + '</div>'
+    + '<div class="row"><span class="lab">Weather</span>' + seg('weather', [['calm', 'Calm'], ['breeze', 'Breeze'], ['squall', 'Squall'], ['clearing', 'Clearing']], wxShown, { calm: 'W', clearing: 'M' }) + '</div>'
+    + '<div class="row"><span class="lab">Live runs</span>' + seg('runs', [[1, '1'], [2, '2'], [3, '3']], S.runs, { 1: 'L' })
+    + '<span style="color:var(--pgText2)">' + (S.weather === 'breeze' && eff === 'calm' ? 'nobody aboard can run work, so the sea stays calm' : 'the sea shows ' + WX_NAMES[S.clearing ? 'clearing' : eff].toLowerCase()) + '</span></div>'
+    + '<div class="row"><span class="lab">Rate</span>' + seg('rate', RATES.map(r => [r.n, r.n + ' ' + r.name]), rateFor(S.crew).n, { 1: '1 to 6' }) + '</div>'
+    + '<div class="row"><span class="lab">Crew</span><div class="stepper"><button class="btn" data-k="crew" data-v="-1" aria-label="One fewer">Fewer<kbd>[</kbd></button><output>' + S.crew + '</output><button class="btn" data-k="crew" data-v="1" aria-label="One more">More<kbd>]</kbd></button></div><span style="color:var(--pgText2)">1 to 24; the rate follows the crew</span></div>'
+    + '<div class="row"><label for="act">Crew action</label><select id="act" data-k="action">'
+    + '<option value="assigned"' + (S.action === 'assigned' ? ' selected' : '') + '>As assigned by deck and state</option>'
+    + Object.keys(ACTIONS).filter(a => a !== 'helm').map(a => '<option value="' + a + '"' + (S.action === a ? ' selected' : '') + '>Everyone ' + ACTIONS[a] + '</option>').join('')
+    + '</select><span style="color:var(--pgText2)">[A] cycles</span></div>'
+    + '<div class="row"><span class="lab">Captain</span>' + seg('cap', [['idle', 'Idle'], ['ready', 'Ready'], ['order', 'Order']], S.cap, { idle: 'C' }) + '</div>'
+    + '<div class="row"><span class="lab">Handoff</span><div class="seg">'
+    + '<button data-k="hand" data-v="order">Order<kbd>Q</kbd></button><button data-k="hand" data-v="pr">Pull request<kbd>P</kbd></button>'
+    + '<button data-k="hand" data-v="approve">Approval<kbd>Y</kbd></button><button data-k="hand" data-v="reject">Rejection<kbd>X</kbd></button></div></div>'
+    + '<div class="row"><span class="lab">Moments</span><div class="seg"><button data-k="merge" data-v="1">Merge salvo with bell<kbd>M</kbd></button><button data-k="order" data-v="1">Order with bell and whistle<kbd>O</kbd></button></div></div>'
+    + '<div class="row"><span class="lab">Board</span><div class="seg"><button data-k="pr" data-v="1">A pull request opens<kbd>U</kbd></button><button data-k="newtask" data-v="1">A new task arrives<kbd>N</kbd></button><button data-k="reset" data-v="1">Reset the board</button></div>'
+    + '<span style="color:var(--pgText2)">a card slides to its new lane and the tally rolls; a merge [M] slides its card into merged</span></div>'
+    + '<div class="row"><span class="lab">Motion</span>' + seg('motion', [['on', 'On'], ['off', 'Off (reduced motion)']], S.motion ? 'on' : 'off', { on: 'R' })
+    + '<span style="color:var(--pgText2)">' + (S.motionSource === 'system' ? 'following your system setting' : 'set here') + '</span></div>'
+    + '<div class="row"><span class="lab">Sound</span>' + seg('sound', [['on', 'On'], ['off', 'Off']], S.sound ? 'on' : 'off', { on: 'S' }) + '</div>'
+    + '<div class="meter" id="meter"></div>';
+  showMeter();
+}
+function showMeter() {
+  const m = $('#meter'); if (!m) return;
+  const st = Engine.stats;
+  m.textContent = !Engine.allowed() ? 'Engine stopped: ' + (!Engine.gates.motion ? 'motion is off, the scene is still' : !Engine.gates.visible ? 'the tab is hidden' : 'the scene is off screen') + '.'
+    : 'Engine: ' + st.fps + ' frames a second (capped at ' + Engine.idleFps() + ' when nothing is happening), ' + document.querySelectorAll('.crew i').length + ' crew faces, ' + st.ms.toFixed(2) + ' ms of script a frame, the vessel re-set ' + st.vps + ' times a second.';
+}
+
+/* =====================================================================
+   12. the board around the ship: the page the captain reads
+   ===================================================================== */
+// every string the reader sees on the board comes from a dictionary, as on the live board. en and zh-TW
+// are written; zh-CN is derived from zh-TW through the board's own tw2cn table (i18n/tw2cn.tsv, copied
+// below), so there is no third copy to keep in step. the ship's caption and the prototype switches stay English
+const I18N = {
+  en: {
+    brand: "Captain's board", live: 'live', engineTitle: 'The engine the crew run on, from config.yaml; review runs on the second',
+    greenlit: 'green-lit', merged: 'merged', inflight: 'in flight', waitingOnYou: 'waiting on you', blocked: 'blocked', ready: 'ready', backlog: 'backlog',
+    awaiting: 'Awaiting your call', alsoWaiting: 'Also waiting, open in place',
+    laneBacklog: 'Backlog', laneReady: 'Ready', laneWorking: 'Working', laneGate: 'Gate', laneReview: 'Review', laneCaptain: 'Captain', laneMerged: 'Merged', laneClosed: 'Closed', laneParked: 'Parked',
+    fleet: 'The fleet', parked: 'Parked', parkedTag: 'parked', droppedTag: 'dropped',
+    park: 'Park', unpark: 'Unpark', drop: 'Drop', cardActions: 'Actions for {id}',
+    dropZone: 'Drag a card here to drop it', dropConfirm: 'Drop {id}? It leaves the board and will not be done; design/tasks.json is unchanged.', dropYes: 'Drop it', cancel: 'Cancel',
+    blockedOn: 'blocked on', gateFailedN: 'gate {n} failed', optionsN: '{id}, {n} options', askPass: 'asked for the pass criteria', mergedMore: '{n} more in the completed history',
+    history: 'Completed history', roster: 'Crew roster', rosterHide: 'Hide the roster', rosterShow: 'Show the roster',
+    log: 'Live log', nothingYet: 'Nothing in the log yet',
+    openLocal: 'Open locally', viewPr: 'Pull request #{n}', viewDesign: 'design.md',
+    pros: 'Advantages', cons: 'Costs', before: 'Before', after: 'After',
+    customChoice: 'Your own answer', customHint: 'Your words, 1 to 1000 characters. Nothing is sent until you confirm.', customInvalid: 'Write between 1 and 1000 characters.',
+    confirmOrder: 'Confirm', mergeInto: 'Merge into main', sendBack: 'Send it back', hold: 'Hold',
+    recorded: 'Aye, captain. Orders away: {id}, option {c}.', customRecorded: 'Aye, captain. Your own answer to {id} is recorded for the firstmate to read.',
+    mergedFb: 'Aye, captain. {task} is merged into main.',
+    roleCaptain: 'Captain', capDeciding: 'On the quarterdeck, deciding', capReady: 'Cutlass half drawn: confirm your choice', capOrder: 'Orders away',
+    gate1: 'branch has commits', gate2: 'rebases onto main', gate3: 'ci.sh exits 0', gate4: 'diff inside scope', gate5: 'reverting turns tests red', gate6: 'required check green', gate7: 'reviewer signed',
+    diagramBy: 'Drawn by the firstmate for {id}', metaFor: '{id} for {task}',
+    stIdle: 'idle', stCoord: 'coordinating', holdsCall: 'holding {id} for you', standingBy: 'standing by, no task',
+    fbParked: '{id} parked.', fbUnparked: '{id} unparked; it goes where its dependencies say.', fbDropped: '{id} dropped; it is in the completed history.', fbRefused: '{id} cannot do that from where it is.',
+    ofN: '{a} of {b}', liveRuns: 'watching {n} live runs',
+  },
+  'zh-TW': {
+    brand: '船長看板', live: '連線中', engineTitle: '船員使用的引擎，取自 config.yaml；審核在第二個上執行',
+    greenlit: '已成案', merged: '已合併', inflight: '進行中', waitingOnYou: '等你拍板', blocked: '受阻', ready: '就緒', backlog: '待辦',
+    awaiting: '等你拍板', alsoWaiting: '其他待決（點開就地展開）',
+    laneBacklog: '待辦', laneReady: '就緒', laneWorking: '施工', laneGate: '閘門', laneReview: '審核', laneCaptain: '船長', laneMerged: '已合併', laneClosed: '已關閉', laneParked: '已擱置',
+    fleet: '全船進度', parked: '已擱置', parkedTag: '已擱置', droppedTag: '已不做',
+    park: '擱置', unpark: '恢復', drop: '不做', cardActions: '{id} 的操作',
+    dropZone: '拖曳卡片到此：不做', dropConfirm: '確定不做 {id}？此任務將離開看板，design/tasks.json 不變。', dropYes: '確定不做', cancel: '取消',
+    blockedOn: '卡在', gateFailedN: '第 {n} 道閘未過', optionsN: '{id}，{n} 個選項', askPass: '已詢問通過標準', mergedMore: '另 {n} 個在已完成歷史中',
+    history: '已完成歷史', roster: '船員名冊', rosterHide: '收起名冊', rosterShow: '展開名冊',
+    log: '即時日誌', nothingYet: '日誌還是空的',
+    openLocal: '開啟本地檔案', viewPr: '前往 PR #{n}', viewDesign: 'design.md',
+    pros: '優點', cons: '代價', before: '變更前', after: '變更後',
+    customChoice: '自訂回覆', customHint: '原文回覆，1 到 1000 個字元。確認後才送出。', customInvalid: '請輸入 1 到 1000 個字元。',
+    confirmOrder: '確認送出', mergeInto: '合併進 main', sendBack: '退回，我有意見', hold: '先擱著',
+    recorded: '遵命，船長。指令已送出：{id}，選項 {c}。', customRecorded: '遵命，船長。{id} 的自訂回覆已記錄，交由大副解讀。',
+    mergedFb: '遵命，船長。{task} 已合併進 main。',
+    roleCaptain: '船長', capDeciding: '在後甲板上裁決', capReady: '刀已半出鞘，請確認選擇', capOrder: '指令已送出',
+    gate1: '分支有 commit', gate2: 'rebase 到 main 乾淨', gate3: 'ci.sh exit 0', gate4: 'diff 未超出範圍', gate5: 'revert 後測試變紅', gate6: '必檢項目為綠', gate7: 'reviewer 已簽',
+    diagramBy: '大副為 {id} 繪製', metaFor: '{id}，關於 {task}',
+    stIdle: '待命', stCoord: '協調中', holdsCall: '為你保留 {id}', standingBy: '待命，沒有任務',
+    fbParked: '{id} 已擱置。', fbUnparked: '{id} 已恢復，依相依關係回到就緒或待辦。', fbDropped: '{id} 已不做，移入已完成歷史。', fbRefused: '{id} 目前無法這樣操作。',
+    ofN: '{a} / {b}', liveRuns: '照看 {n} 個進行中的任務',
+  },
+};
+// i18n/tw2cn.tsv as the board has it; longest match wins
+const TW2CN_TSV = '程式碼 代码|程式 程序|函式 函数|相依 依赖|佇列 队列|唯讀 只读|檔案 文件|資料夾 文件夹|伺服器 服务器|執行緒 线程|記憶體 内存|快取 缓存|介面 接口|物件 对象|陣列 数组|迴圈 循环|變數 变量|編譯 编译|除錯 调试|部署 部署|測試 测试|分支 分支|合併 合并|衝突 冲突|提交 提交|版本 版本|閘門 闸门|審核 审核|船員名冊 船员名册|船長 船长|船員 船员|任務 任务|拍板 拍板|成案 立项|已合併 已合并|進行中 进行中|受阻 受阻|排隊 排队|施工 施工|日誌 日志|待決 待决|擱著 搁着|退回 退回|乾淨 干净|範圍 范围|簽 签|開啟 打开|看板 看板|單桅帆船 单桅帆船|雙桅帆船 双桅帆船|巡防艦 巡防舰|蓋倫帆船 盖伦帆船|戰列艦 战列舰|旗艦 旗舰|等待船長下令 等待船长下令|在後甲板上裁決 在后甲板上裁决|音效開 音效开|音效關 音效关|全員注意 全员注意|變 变|後 后|優 优|點 点|價 价|舊 旧|記 记|錄 录|說 说|與 与|訂 订|覆 复|個 个|確 确|認 认|請 请|選 选|擇 择|讀 读|釋 释|無 无|語 语|聲 声|體 体|憶 忆|據 据|證 证|遲 迟|緩 缓|檢 检|線 线|態 态|機 机|測 测|佔 占|複 复|減 减|張 张|實 实|決 决|輸 输|為 为|將 将|響 响|應 应|從 从|這 这|審 审|驗 验|預 预|動 动|復 复|儲 储|寫 写|試 试|標 标|題 题|數 数|觸 触|發 发|砲 炮|雙 双|鈴 铃|鳴 鸣|齊 齐|歷 历|開 开|關 关|閉 闭|過 过|參 参|離 离|協 协|調 调|啟 启|獨 独|隱 隐|責 责|閘 闸|門 门|項 项|冊 册|禮 礼|轉 转|單 单|員 员|擊 击|緒 绪|辦 办|擱 搁';
+// characters this page uses that the table does not carry yet; the README lists them for i18n/tw2cn.tsv
+const TW2CN_EXTRA = '連 连|詢 询|會 会|風 风|雲 云|燈 灯|掛 挂|鐘 钟|來 来|繪 绘|製 制|樣 样|頁 页|畫 画|區 区|著 着|嗎 吗|問 问|號 号|紅 红|綠 绿|見 见|滾 滚|還 还|嚴 严|計 计|進 进|夠 够|於 于|該 该|麼 么|層 层|濺 溅|靜 静|訊 讯|沒 没|隨 随|強 强|維 维|條 条|規 规|敗 败|頂 顶|盞 盏|裡 里|滿 满|時 时|狀 状|訴 诉|煙 烟|組 组|對 对|閱 阅|準 准|欄 栏|兩 两|驚 惊|現 现|則 则|別 别';
+const TW2CN = (TW2CN_TSV + '|' + TW2CN_EXTRA).split('|').map(p => p.split(' ')).sort((a, b) => b[0].length - a[0].length);
+function cn(s) {
+  let out = '', i = 0;
+  outer: while (i < s.length) { for (const [tw, zc] of TW2CN) if (s.startsWith(tw, i)) { out += zc; i += tw.length; continue outer; } out += s[i++]; }
+  return out;
+}
+const tr = (k, vars) => {
+  let s = S.lang === 'en' ? I18N.en[k] : I18N['zh-TW'][k];
+  if (s == null) s = I18N.en[k] ?? k;
+  if (S.lang === 'zh-CN') s = cn(s);
+  if (vars) for (const v in vars) s = s.split('{' + v + '}').join(vars[v]);
+  return s;
+};
+// authored content carries en and zh-TW, as event summaries and decision details do on the live board
+const loc = o => !o ? '' : S.lang === 'en' ? o.en : S.lang === 'zh-TW' ? o['zh-TW'] : cn(o['zh-TW']);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+// ---- the fixture: tasks, calls, and the log, all invented for the prototype ----
+const LANES = ['backlog', 'ready', 'working', 'gate', 'review', 'captain', 'merged'];
+const MERGED_SHOWN = 5;
+const REPO = 'https://github.com/BenjaminLu/firstmate-workflow/pull/';
+// [id, title, stage, depends_on, pr]. stage is what the log has said: merged, open, parked or closed.
+// an open task is ready once every dependency has merged, backlog until then; runs take open tasks in this order
+const FIX_TASKS = [
+  ['T-040', "captain's board layout parity with the 2026-09-20 prototype", 'merged', [], 52],
+  ['T-043', "the project declares its setup and checks; the gates stop hard-coding this repo's toolchain", 'merged', [], 54],
+  ['T-044', "a completed run's pane actually closes", 'merged', [], 55],
+  ['T-045', 'design: firstmate drives other repositories from one external installation', 'merged', [], 57],
+  ['T-046', 'the project registry and the two roots', 'merged', [], 65],
+  ['T-048', 'fm-project.sh: managed clones, target verification and the guard', 'merged', [], 60],
+  ['T-049', 'spec pins: gate 4 reads a pinned scope, not the branch', 'merged', [], 61],
+  ['T-050', 'project-aware gates 1–3 and 5–7', 'merged', [], 62],
+  ['T-054', 'the board shows which project', 'merged', [], 63],
+  ['T-057', 'the board separates ready work from backlog', 'merged', [], 64],
+  ['T-065', 'the local gate runs its suites in parallel, with every threshold intact', 'merged', [], 68],
+  ['T-058', 'the captain parks or drops a task from the board', 'merged', [], 66],
+  ['T-060', 'the hull and decks from one lens curve', 'open', ['T-058'], 83],
+  ['T-061', 'crew actions pooled by deck', 'open', ['T-058'], 84],
+  ['T-062', 'handoffs fly between figures', 'open', ['T-058'], 85],
+  ['T-066', 'the sky follows local time', 'open', ['T-058'], 87],
+  ['T-072', 'a hidden tab costs nothing', 'open', ['T-058'], 88],
+  ['T-047', 'the project on events, decisions and pull request sync', 'open', ['T-046'], 77],
+  ['T-051', 'the worker and the reviewer in a target checkout', 'open', ['T-050'], 89],
+  ['T-071', 'the weather reads the board', 'open', ['T-058'], 90],
+  ['T-064', 'the salvo and the bell', 'open', ['T-058'], 86],
+  ['T-063', 'the captain on the top deck', 'open', ['T-060'], 0],
+  ['T-069', 'the page takes the motion engine', 'open', ['T-064'], 0],
+  ['T-052', "role prompts carry the project's design from the engine side", 'open', ['T-051'], 0],
+  ['T-053', 'dispatch, run and session across projects', 'open', ['T-051', 'T-052'], 0],
+  ['T-059', 'several projects on one board at once', 'open', ['T-056'], 0],
+  ['T-056', 'design: the board dispatches to several projects at the same time', 'parked', [], 0],
+  ['T-068', 'a phone layout for the board', 'parked', [], 0],
+  ['T-038', 'a second board for the reviewers', 'closed', [], 0],
+];
+// what arrives when the "new task" switch is pressed, one at a time
+const NEW_TASKS = [
+  ['T-074', 'the board keeps its place across a reload', []],
+  ['T-075', 'a quiet page on a phone', ['T-060']],
+  ['T-076', "the log reads as a ship's log", []],
+];
+// the authored activity a run reports; the roster shows it, the board invents none
+const ACTIVITY = {
+  'T-060': { en: 'drawing the riser walls from the deck curve', 'zh-TW': '從甲板曲線畫出各層的立牆' },
+  'T-061': { en: 'pooling the main-deck actions', 'zh-TW': '把主甲板的動作分組' },
+  'T-062': { en: 'timing the approval arc', 'zh-TW': '調整核准弧線的時間' },
+  'T-066': { en: 'keying the dusk palette', 'zh-TW': '設定黃昏的配色' },
+  'T-072': { en: 'stopping the loop in a hidden tab', 'zh-TW': '讓隱藏分頁停下動畫迴圈' },
+  'T-047': { en: 'syncing pull requests from the target', 'zh-TW': '從目標專案同步 PR' },
+  'T-051': { en: 'checking out the target repository', 'zh-TW': '取出目標專案的程式碼' },
+  review: { en: 'reading the diff against the spec', 'zh-TW': '對照規格閱讀 diff' },
+  gate: { en: 'stopped at gate 5: reverting the change leaves the tests green', 'zh-TW': '停在第 5 道閘：revert 後測試仍是綠的' },
+};
+// two calls wait on the captain in a squall: a choice with four options and a merge
+const FIX_DECISIONS = [
+  { id: 'D-1011', task: 'T-071', kind: 'choice', path: 'design/proposals/2026-09-24-ship-v2/README.md', pr: 90,
+    details: {
+      en: { title: 'How should the sea show a card that waits on you?',
+        explanation: 'A red gate and a card waiting on you both raise a squall today. A squall is loud: the cloud band darkens, the swell doubles and spray breaks at the bow. The firstmate asks whether a waiting card deserves all of that, or a quieter sign that still reads at a glance.',
+        options: {
+          A: { description: 'A squall, as now', pros: 'one rule for anything that needs you; unmissable', cons: 'a routine question looks as alarming as a failed gate' },
+          B: { description: 'A lantern at the main masthead, the sea unchanged', pros: 'waiting and failing read differently', cons: 'a small sign, easy to miss at night' },
+          C: { description: 'A squall only after the card has waited ten minutes', pros: 'quick calls stay quiet', cons: 'the sea would move on a timer, not on a change of state' },
+          D: { description: 'Nothing on the sea; the deck above the ship is enough', pros: 'the calmest page', cons: 'the ship stops saying that anything waits on you' },
+        },
+        before: 'A waiting card raises a squall.', after: 'The captain decides what a waiting card raises.' },
+      'zh-TW': { title: '等你拍板的卡片，海面該怎麼呈現？',
+        explanation: '現在閘門變紅和卡片等你拍板，都會掀起暴風：雲層變暗、浪高加倍、船首濺起浪花。大副想確認：等待中的卡片值得這麼大的動靜嗎，還是要一個安靜但一眼就看得到的訊號？',
+        options: {
+          A: { description: '維持暴風', pros: '凡是需要你的事都用同一條規則，不會漏看', cons: '一般的問題看起來和閘門失敗一樣嚴重' },
+          B: { description: '主桅頂掛一盞燈，海面不變', pros: '等待和失敗看得出差別', cons: '訊號小，夜裡容易漏看' },
+          C: { description: '卡片等滿十分鐘才起暴風', pros: '很快答覆的問題不會驚動海面', cons: '海面會跟著計時器動，而不是跟著狀態變化' },
+          D: { description: '海面不變，船上方的決策區就夠了', pros: '頁面最安靜', cons: '船不再告訴你有事在等你' },
+        },
+        before: '等待中的卡片會掀起暴風。', after: '由船長決定等待中的卡片掀起什麼。' },
+    } },
+  { id: 'D-1012', task: 'T-064', kind: 'merge', path: 'design/design.md', pr: 86, gates: [1, 1, 1, 1, 1, 1, 1],
+    details: {
+      en: { title: 'Merge T-064: the salvo and the bell',
+        explanation: 'All seven gates are green on the current head and reviewer-1 approved it. Merging lands the salvo, the bell and the smoke on the live board; the order moment keeps its bell and whistle from D-1010.',
+        before: 'A merge moves a card and nothing else happens.', after: 'A merge fires the broadside bow to stern, rings the bell and rolls the tally.' },
+      'zh-TW': { title: '合併 T-064：禮砲與船鐘',
+        explanation: '目前的 head 七道閘全綠，reviewer-1 已核准。合併後，正式看板會有齊射、船鐘與硝煙；下令時的鐘聲與哨音依 D-1010 保留。',
+        before: '合併只移動一張卡片，沒有其他動靜。', after: '合併時從船首到船尾依序齊射、敲鐘，計數滾動到新數字。' },
+    } },
+];
+const FIX_LOG = [
+  ['09:42:10', 'firstmate', 'decision_requested', { en: 'D-1011 waits on you: how the sea shows a card that waits', 'zh-TW': 'D-1011 等你拍板：等待中的卡片在海上怎麼呈現' }],
+  ['09:40:02', 'fm-gate', 'gate_failed', { en: 'A run failed gate 5: reverting the change leaves its tests green', 'zh-TW': '有一個任務第 5 道閘未過：revert 後測試仍是綠的' }],
+  ['09:31:50', 'firstmate', 'decision_requested', { en: 'D-1012 waits on you: merge T-064', 'zh-TW': 'D-1012 等你拍板：合併 T-064' }],
+  ['09:31:47', 'reviewer-1', 'approved', { en: 'T-064 approved on its current head', 'zh-TW': 'T-064 以目前的 head 核准' }],
+  ['09:12:05', 'worker-1', 'pr_opened', { en: 'T-064 opened pull request #86', 'zh-TW': 'T-064 開了 PR #86' }],
+  ['08:58:30', 'firstmate', 'dispatched', { en: 'Two runs dispatched from the ready lane', 'zh-TW': '從就緒欄派出兩個任務' }],
+  ['08:40:00', 'captain', 'merged', { en: 'T-058 merged into main (#66)', 'zh-TW': 'T-058 已合併進 main（#66）' }],
+  ['08:37:12', 'captain', 'parked', { en: 'T-068 parked', 'zh-TW': 'T-068 已擱置' }],
+  ['08:20:44', 'firstmate', 'greenlit', { en: 'The plan for M2 is green-lit', 'zh-TW': 'M2 計畫已成案' }],
+];
+const LOG_MARK = { merged: 'm-merged', approved: 'm-review', gate_failed: 'm-gate', decision_requested: 'm-captain', pr_opened: 'm-review', dispatched: 'm-working', parked: 'm-parked', unparked: 'm-ready', closed: 'm-closed', task_added: 'm-backlog', greenlit: 'm-ready', answered: 'm-captain' };
+
+let BOARD = null;
+const UI = { menu: null, confirming: null, dragging: null, feedback: null, orderFb: null, rosterOn: true,
+  picks: new Map(), drafts: new Map(), expanded: new Set(), booted: false, lastDeckPose: null };
+function resetBoard() {
+  const tasks = new Map();
+  let mseq = 0;
+  for (const [id, title, stage, deps, pr] of FIX_TASKS) tasks.set(id, { id, title, stage, deps: deps.slice(), pr: pr || 0, mseq: stage === 'merged' ? ++mseq : 0, flight: null });
+  BOARD = { tasks, order: FIX_TASKS.map(r => r[0]), answered: new Set(), handed: new Set(), mseq, prSeq: 90, next: 0,
+    log: FIX_LOG.map(([time, who, type, summary]) => ({ time, who, type, summary, fresh: false })) };
+}
+const taskOf = id => BOARD.tasks.get(id);
+const depsMet = t => t.deps.every(d => { const x = taskOf(d); return !x || x.stage === 'merged'; });
+function pendingDecisions() {
+  if (S.weather !== 'squall') return [];
+  return FIX_DECISIONS.filter(d => !BOARD.answered.has(d.id) && taskOf(d.task).stage === 'open');
+}
+function laneOf(t) {
+  if (t.stage === 'merged' || t.stage === 'parked' || t.stage === 'closed') return t.stage;
+  if (pendingDecisions().some(d => d.task === t.id)) return 'captain';
+  if (t.flight) return t.flight;
+  if (t.stage === 'review') return 'review';
+  return depsMet(t) ? 'ready' : 'backlog';
+}
+// the actions a card offers, as the server sends them: untouched work can be set aside, nothing in flight can
+const actionsFor = lane => lane === 'ready' || lane === 'backlog' ? ['park', 'drop'] : lane === 'parked' ? ['unpark', 'drop'] : [];
+const crewOn = id => CREW.filter(c => c.task && c.task[0] === id).map(c => c.id);
+function nowStamp() { const d = new Date(); return [d.getHours(), d.getMinutes(), d.getSeconds()].map(n => String(n).padStart(2, '0')).join(':'); }
+function logEvent(who, type, summary) { BOARD.log.unshift({ time: nowStamp(), who, type, summary, fresh: true }); }
+
+// a state change reaches the ship only when it changes what someone aboard is doing
+const crewSig = () => CREW.map(c => c.id + ':' + c.st + ':' + (c.task ? c.task[0] : '')).join('|') + '|' + pendingDecisions().length;
+function syncShip() {
+  const before = crewSig();
+  assignStates();
+  if (crewSig() !== before) { buildCrewDOM(); applyWeather(); staticWake(); renderSwitches(); showSel(); }
+  renderBoard();
+}
+
+// ---- the board's moments ----
+function taskAct(id, action) {
+  const t = taskOf(id);
+  UI.menu = null; UI.confirming = null; UI.feedback = null;
+  if (!t || !actionsFor(laneOf(t)).includes(action)) { UI.feedback = ['fbRefused', id]; renderBoard(); return; }
+  if (action === 'park') { t.stage = 'parked'; UI.feedback = ['fbParked', id]; logEvent('captain', 'parked', { en: id + ' parked', 'zh-TW': id + ' 已擱置' }); }
+  else if (action === 'unpark') {
+    // back into the plan behind the work already under way, where its dependencies say
+    t.stage = 'open'; BOARD.order = BOARD.order.filter(x => x !== id).concat(id);
+    UI.feedback = ['fbUnparked', id]; logEvent('captain', 'unparked', { en: id + ' unparked', 'zh-TW': id + ' 已恢復' });
+  } else if (action === 'drop') { t.stage = 'closed'; UI.feedback = ['fbDropped', id]; logEvent('captain', 'closed', { en: id + ' dropped; it will not be done', 'zh-TW': id + ' 已不做' }); }
+  syncShip();
+  narrate('Captain: ' + id + ' ' + (action === 'drop' ? 'dropped' : action + 'ed') + '.');
+}
+function openPR() {
+  const w = CREW.find(c => c.role === 'w' && c.st === 'working' && c.task);
+  if (!w) { narrate('No worker is on a run, so no pull request can open. Try a breeze.'); return; }
+  const t = taskOf(w.task[0]);
+  t.stage = 'review'; if (!t.pr) t.pr = ++BOARD.prSeq;
+  // the run has handed its work on: it waits for the review, it does not take the next task
+  BOARD.handed.add(w.id);
+  logEvent(w.id, 'pr_opened', { en: t.id + ' opened pull request #' + t.pr, 'zh-TW': t.id + ' 開了 PR #' + t.pr });
+  syncShip();
+  const rv = CREW.find(c => c.role === 'r');
+  if (rv) handoff('pr', w, rv);
+  narrate('Pull request #' + t.pr + ' opens on ' + t.id + ': the card slides into review and ' + w.id + ' stands by.');
+}
+function newTask() {
+  const n = NEW_TASKS[BOARD.next];
+  if (!n) { narrate('No more new tasks in the fixture; reset the board to see them arrive again.'); return; }
+  BOARD.next++;
+  const [id, title, deps] = n;
+  BOARD.tasks.set(id, { id, title, stage: 'open', deps: deps.slice(), pr: 0, mseq: 0, flight: null });
+  BOARD.order.push(id);
+  logEvent('firstmate', 'task_added', { en: id + ' joined the plan', 'zh-TW': id + ' 加入計畫' });
+  syncShip();
+  narrate(id + ' joins the plan: its card fades in on the ' + laneOf(taskOf(id)) + ' lane.');
+}
+
+// ---- rendering. the board is alive only where state changes ----
+const motionOK = () => S.motion && UI.booted;
+function rollTo(el, v) {
+  // a count rolls to its new value: up when it grows, down when it shrinks
+  const old = el._v; el._v = v;
+  const one = '<span class="roll"><span>' + v + '</span></span>';
+  if (old === undefined || old === v || !motionOK() || !el.animate) { el.innerHTML = one; return; }
+  const up = v > old;
+  // the outgoing figure is hidden from assistive tech, which reads only the new value
+  const was = '<span aria-hidden="true">' + old + '</span>', now = '<span>' + v + '</span>';
+  el.innerHTML = '<span class="roll">' + (up ? was + now : now + was) + '</span>';
+  const a = el.firstChild.animate([{ transform: 'translateY(' + (up ? '0' : '-50%') + ')' }, { transform: 'translateY(' + (up ? '-50%' : '0') + ')' }],
+    { duration: 600, easing: 'cubic-bezier(.3,0,.2,1)', fill: 'forwards' });
+  a.onfinish = () => { if (el._v === v) el.innerHTML = one; };
+}
+function flip(render) {
+  // cards keep their place in the eye: one that changes lane slides there, one that is new fades in
+  // the history repeats merged cards and is read, not watched, so only the lanes and an open parked group take part
+  const cards = () => document.querySelectorAll('#lanes [data-task], #parked[open] [data-task]');
+  const before = new Map();
+  if (motionOK()) cards().forEach(el => { const r = el.getBoundingClientRect(); if (r.width) before.set(el.dataset.task, r); });
+  render();
+  if (!motionOK()) return;
+  cards().forEach(el => {
+    const r = el.getBoundingClientRect(); if (!r.width || !el.animate) return;
+    const b = before.get(el.dataset.task);
+    if (!b) { el.animate([{ opacity: 0, transform: 'translateY(8px)' }, { opacity: 1, transform: 'none' }], { duration: 420, easing: 'cubic-bezier(.2,.7,.2,1)' }); return; }
+    const dx = b.left - r.left, dy = b.top - r.top;
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+    const far = Math.abs(dx) > 4;
+    el.animate([{ transform: 'translate(' + dx + 'px,' + dy + 'px)', boxShadow: far ? '0 8px 18px rgba(14,42,59,.28)' : 'none', zIndex: 2 },
+      { transform: 'none', boxShadow: 'none', zIndex: 2 }], { duration: far ? 560 : 320, easing: 'cubic-bezier(.2,.8,.2,1)' });
+  });
+}
+function markHTML(lane) { return '<i class="mk m-' + lane + '" aria-hidden="true"></i>'; }
+function blockerLabel(id) {
+  const b = taskOf(id);
+  return b && b.stage === 'parked' ? id + ' (' + tr('parkedTag') + ')' : b && b.stage === 'closed' ? id + ' (' + tr('droppedTag') + ')' : id;
+}
+function badgesOf(t, lane) {
+  const out = [];
+  if (lane === 'gate') out.push('<span class="badge b-gate">' + esc(tr('gateFailedN', { n: 5 })) + '</span>');
+  if (lane === 'working' && t.id === 'T-061') out.push('<span class="badge b-ask">' + esc(tr('askPass')) + '</span>');
+  const d = pendingDecisions().find(x => x.task === t.id);
+  if (d) out.push('<span class="badge b-decision">' + esc(d.kind === 'choice' ? tr('optionsN', { id: d.id, n: 4 }) : d.id) + '</span>');
+  return out.join('');
+}
+function cardHTML(t, lane) {
+  const acts = actionsFor(lane), open = UI.menu === t.id, crew = crewOn(t.id);
+  const showPr = t.pr && !['ready', 'backlog', 'parked', 'closed'].includes(lane);
+  const blockers = lane === 'backlog' || lane === 'parked' ? t.deps.filter(d => { const x = taskOf(d); return x && x.stage !== 'merged'; }) : [];
+  return '<div class="card" data-lane="' + lane + '" data-task="' + esc(t.id) + '"' + (acts.length ? ' draggable="true"' : '') + '>'
+    + '<div class="hd">' + markHTML(lane) + '<span class="id">' + esc(t.id) + '</span>'
+    + (showPr ? '<a class="pr" href="' + REPO + t.pr + '" target="_blank" rel="noreferrer">#' + t.pr + '</a>' : '')
+    + (acts.length ? '<button class="cmenu" data-menu="' + esc(t.id) + '" aria-haspopup="menu" aria-expanded="' + open + '" aria-label="' + esc(tr('cardActions', { id: t.id })) + '">&#8943;</button>' : '')
+    + '</div><div class="t">' + esc(t.title) + '</div>'
+    + (crew.length ? '<div class="cw">' + esc(crew.join(', ')) + '</div>' : '')
+    + (blockers.length ? '<div class="dep">' + esc(tr('blockedOn')) + ' ' + esc(blockers.map(blockerLabel).join(', ')) + '</div>' : '')
+    + badgesOf(t, lane)
+    + (open ? '<div class="cacts" role="menu">' + acts.map(a => '<button role="menuitem" data-act="' + a + '" data-for="' + esc(t.id) + '">' + esc(tr(a)) + '</button>').join('') + '</div>' : '')
+    + '</div>';
+}
+function renderChrome() {
+  document.documentElement.lang = S.lang;
+  $('#live').lastChild.textContent = tr('live');
+  $('#brand').innerHTML = esc(tr('brand')) + '<span>firstmate-workflow</span>';
+  const eng = $('#engine'); eng.innerHTML = '<i aria-hidden="true"></i>claude <b>&#8644; codex</b>'; eng.title = tr('engineTitle');
+  $('#gl').textContent = tr('greenlit');
+  $('#langs').innerHTML = [['en', 'EN'], ['zh-TW', '繁'], ['zh-CN', '简']].map(([l, n]) => '<button data-lang="' + l + '" aria-pressed="' + (S.lang === l) + '" lang="' + l + '">' + n + '</button>').join('');
+  $('#awaiting').textContent = tr('awaiting');
+  $('#fleetH').textContent = tr('fleet');
+  $('#logH').textContent = tr('log');
+  $('#dropzone').textContent = tr('dropZone');
+  const rb = $('#rosterBtn'); rb.textContent = tr(UI.rosterOn ? 'rosterHide' : 'rosterShow'); rb.setAttribute('aria-pressed', UI.rosterOn);
+}
+function renderCounts() {
+  const tasks = [...BOARD.tasks.values()], lanes = {};
+  for (const t of tasks) { const l = laneOf(t); lanes[l] = (lanes[l] || 0) + 1; }
+  const n = k => lanes[k] || 0, wait = pendingDecisions().length;
+  const rows = [['merged', n('merged'), ''], ['inflight', n('working') + n('gate') + n('review'), ''], ['waitingOnYou', wait, wait ? 'hot' : ''],
+    ['blocked', n('gate'), n('gate') ? 'bad' : ''], ['ready', n('ready'), ''], ['backlog', n('backlog'), '']];
+  const box = $('#counts');
+  if (!box.children.length) box.innerHTML = rows.map(([k]) => '<div data-count="' + k + '"><b></b><span class="l"></span></div>').join('');
+  rows.forEach(([k, v, cls], i) => { const d = box.children[i]; d.className = cls; d.querySelector('.l').textContent = tr(k); rollTo(d.querySelector('b'), v); });
+}
+function renderLanes() {
+  const all = BOARD.order.map(taskOf);
+  $('#lanes').innerHTML = LANES.map(k => {
+    let items = all.filter(t => laneOf(t) === k), more = '';
+    if (k === 'merged') {
+      items.sort((a, b) => b.mseq - a.mseq);
+      if (items.length > MERGED_SHOWN) more = '<p class="more">' + esc(tr('mergedMore', { n: items.length - MERGED_SHOWN })) + '</p>';
+    }
+    const total = items.length;
+    if (k === 'merged') items = items.slice(0, MERGED_SHOWN);
+    // ready and backlog take a parked card back; where it lands is up to its dependencies
+    const zone = k === 'ready' || k === 'backlog' ? ' data-zone="unpark"' : '';
+    return '<div class="lane l-' + k + (total ? ' has' : '') + '" data-lane="' + k + '"' + zone + '><h3>' + esc(tr('lane' + k[0].toUpperCase() + k.slice(1))) + '<i>' + total + '</i></h3>'
+      + items.map(t => cardHTML(t, k)).join('') + more + '</div>';
+  }).join('');
+  const parked = all.filter(t => laneOf(t) === 'parked');
+  const pg = $('#parked');
+  pg.querySelector('summary').innerHTML = esc(tr('parked')) + '<i>' + parked.length + '</i>';
+  pg.querySelector('.parked-cards').innerHTML = parked.map(t => cardHTML(t, 'parked')).join('');
+  if (UI.confirming && !actionsFor(laneOf(taskOf(UI.confirming))).includes('drop')) UI.confirming = null;
+  const cb = $('#dropConfirm'); cb.hidden = !UI.confirming;
+  cb.innerHTML = UI.confirming ? '<p id="dropConfirmText">' + esc(tr('dropConfirm', { id: UI.confirming })) + '</p><div class="acts"><button class="danger" data-confirm-drop="' + esc(UI.confirming) + '">' + esc(tr('dropYes')) + '</button><button class="btn2" data-cancel-drop="' + esc(UI.confirming) + '">' + esc(tr('cancel')) + '</button></div>' : '';
+  $('#taskFeedback').textContent = UI.feedback ? tr(UI.feedback[0], { id: UI.feedback[1] }) : '';
+  const done = all.filter(t => t.stage === 'merged' || t.stage === 'closed').sort((a, b) => (b.mseq || 0) - (a.mseq || 0));
+  const hist = $('#history');
+  hist.querySelector('summary').innerHTML = esc(tr('history')) + '<i>' + esc(tr('laneMerged')) + ' ' + done.filter(t => t.stage === 'merged').length + ', ' + esc(tr('laneClosed')) + ' ' + done.filter(t => t.stage === 'closed').length + '</i>';
+  hist.querySelector('.history-cards').innerHTML = done.map(t => cardHTML(t, t.stage)).join('');
+}
+function renderRoster() {
+  const box = $('#roster'); box.hidden = !UI.rosterOn;
+  const stage = c => c.role === 'fm' ? (c.st === 'captain' ? tr('waitingOnYou') :c.st === 'working' ? tr('stCoord') : tr('stIdle'))
+    : c.task ? tr('lane' + laneOf(taskOf(c.task[0])).replace(/^./, m => m.toUpperCase())) : tr('stIdle');
+  const job = c => {
+    if (c.role === 'fm') { const pend = pendingDecisions(); return pend.length ? tr('holdsCall', { id: pend.map(d => d.id).join(', ') }) : c.st === 'working' ? tr('liveRuns', { n: liveRuns() }) : tr('standingBy'); }
+    if (!c.task) return tr('standingBy');
+    const t = taskOf(c.task[0]);
+    const act = c.st === 'gate' ? loc(ACTIVITY.gate) : c.st === 'review' ? loc(ACTIVITY.review) : loc(ACTIVITY[t.id]) || '';
+    // a bar only where the run reports a real denominator: the review counts the files it has read
+    const pb = c.st === 'review' ? '<span class="pb" role="progressbar" aria-valuemin="0" aria-valuenow="4" aria-valuemax="9" aria-label="' + esc(tr('ofN', { a: 4, b: 9 })) + '"><i style="width:' + (4 / 9 * 100).toFixed(1) + '%"></i></span>' + esc(tr('ofN', { a: 4, b: 9 })) : '';
+    return '<b>' + esc(t.id) + '</b> ' + esc(t.title) + ', ' + esc(act) + pb;
+  };
+  const lane = c => c.role === 'fm' ? (c.st === 'captain' ? 'captain' : c.st === 'working' ? 'working' : 'idle') : c.task ? laneOf(taskOf(c.task[0])) : 'idle';
+  box.innerHTML = '<h2 class="sec" id="rosterH">' + esc(tr('roster')) + '<span class="n">' + CREW.length + '</span></h2><ul>'
+    + CREW.map(c => { const t = c.task && taskOf(c.task[0]);
+      return '<li class="rrow" data-roster="' + c.id + '">' + markHTML(lane(c)) + '<span class="nm">' + esc(c.id) + '<small>' + esc(stage(c)) + '</small></span>'
+        + '<span class="rpr">' + (t && t.pr ? '<a href="' + REPO + t.pr + '" target="_blank" rel="noreferrer">#' + t.pr + '</a>' : '') + '</span>'
+        + (c.eng ? '<span class="en">' + esc(engLabel(c)) + '</span>' : '')
+        + '<span class="jb">' + (c.role === 'fm' || !c.task ? esc(job(c)) : job(c)) + '</span></li>'; }).join('') + '</ul>';
+}
+function renderLog() {
+  const ol = $('#log');
+  ol.innerHTML = BOARD.log.length ? BOARD.log.map((e, i) => '<li data-i="' + i + '"><time>' + e.time + '</time><span class="who">' + esc(e.who) + '</span><span class="x">'
+    + '<i class="mk ' + (LOG_MARK[e.type] || 'm-ready') + '" aria-hidden="true"></i><span>' + esc(loc(e.summary)) + '</span></span></li>').join('')
+    : '<li><span class="empty">' + esc(tr('nothingYet')) + '</span></li>';
+  if (motionOK()) ol.querySelectorAll('li').forEach(li => { const e = BOARD.log[+li.dataset.i]; if (e && e.fresh && li.animate) li.animate([{ opacity: 0, transform: 'translateY(-6px)' }, { opacity: 1, transform: 'none' }], { duration: 420, easing: 'cubic-bezier(.2,.7,.2,1)' }); });
+  BOARD.log.forEach(e => { e.fresh = false; });
+}
+
+// ---- the decision deck ----
+const GATE_KEYS = [1, 2, 3, 4, 5, 6, 7];
+function diagramSVG(d) {
+  // the authored drawing, in the reader's language; on the live board it is a file bin/fm-diagram.sh wrote
+  const L = (en, tw) => esc(loc({ en, 'zh-TW': tw }));
+  const box = (x, y, w, h, t1, t2, cls = '') => '<rect class="box ' + cls + '" x="' + x + '" y="' + y + '" width="' + w + '" height="' + h + '"/>'
+    + '<text class="t1" x="' + (x + 10) + '" y="' + (y + (t2 ? 20 : h / 2 + 5)) + '">' + t1 + '</text>' + (t2 ? '<text class="t2" x="' + (x + 10) + '" y="' + (y + 38) + '">' + t2 + '</text>' : '');
+  const arrow = (x1, y1, x2, y2) => '<path class="ln" d="M' + x1 + ' ' + y1 + ' L' + x2 + ' ' + y2 + '" marker-end="url(#ah' + d.id + ')"/>';
+  const defs = '<defs><marker id="ah' + d.id + '" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" style="fill:var(--pgText)"/></marker></defs>';
+  if (d.kind === 'choice') {
+    const rows = [[L('No work in flight', '沒有任務進行'), L('Calm', '平靜')], [L('Work in flight', '任務進行中'), L('Breeze, with the runs', '微風，隨任務數增強')],
+      [L('A red gate', '閘門變紅'), L('Squall', '暴風')], [L('A card waits on you', '卡片等你拍板'), L('Your call: A, B, C or D', '由你決定：A、B、C 或 D')], [L('A merge', '合併'), L('Clearing, salvo and bell', '放晴、齊射、敲鐘')]];
+    let s = defs + '<text class="hd" x="0" y="14">' + L('On the board', '看板上') + '</text><text class="hd" x="300" y="14">' + L('On the sea', '海面上') + '</text>';
+    rows.forEach(([a, b], i) => { const y = 24 + i * 40, q = i === 3; s += box(0, y, 210, 30, a, '', q ? 'hot' : '') + arrow(214, y + 15, 294, y + 15) + box(300, y, 220, 30, b, '', q ? 'q' : ''); });
+    return '<svg viewBox="-1 0 523 226" role="img" aria-label="' + L('Board states and the weather they raise', '看板狀態與對應的天氣') + '">' + s + '</svg>';
+  }
+  const steps = [[L('You confirm A', '你確認 A'), L('merge into main', '合併進 main')], [L('merged event', 'merged 事件'), L('written to the log', '寫入日誌')],
+    [L('Broadside', '齊射'), L('bow to stern, gun by gun', '從船首到船尾依序')], [L('The bell', '船鐘'), L('and the tally rolls', '計數滾動')]];
+  // one full-width row a step, read top to bottom, so every label has the row's width and none shares a line
+  // with a neighbour's box; fitDiagrams() checks that in the reader's language
+  let s = defs;
+  steps.forEach(([a, b], i) => {
+    const y = 6 + i * 44;
+    s += '<rect class="box' + (i === 0 ? ' hot' : '') + '" x="0" y="' + y + '" width="470" height="30"/>'
+      + '<text class="t1" x="10" y="' + (y + 20) + '">' + a + '</text><text class="t2" x="170" y="' + (y + 20) + '">' + b + '</text>'
+      + (i < 3 ? arrow(24, y + 31, 24, y + 43) : '');
+  });
+  s += '<text class="hd" x="0" y="196">' + L('Before', '變更前') + '</text><text class="t2" x="70" y="196">' + L('the card moves to merged; the ship is silent', '卡片移到已合併，船上沒有動靜') + '</text>'
+    + '<text class="hd" x="0" y="218">' + L('After', '變更後') + '</text><text class="t2" x="70" y="218">' + L('the card moves, then the salvo and the bell', '卡片移動，接著齊射與鐘聲') + '</text>';
+  return '<svg viewBox="-1 0 523 226" role="img" aria-label="' + L('What a merge sets off', '合併會觸發什麼') + '">' + s + '</svg>';
+}
+// every label in a drawn diagram must end inside its box, or inside the drawing where it has none. returns the
+// labels that do not, and warns once per render; only diagrams on screen can be measured
+function fitDiagrams(root = document) {
+  const bad = [];
+  root.querySelectorAll('.dg svg').forEach(svg => {
+    if (!svg.getBoundingClientRect().width) return;
+    const vbW = svg.viewBox.baseVal.width + svg.viewBox.baseVal.x;
+    const boxes = [...svg.querySelectorAll('rect.box')].map(r => r.getBBox());
+    svg.querySelectorAll('text').forEach(t => {
+      const b = t.getBBox(), cy = b.y + b.height / 2;
+      const box = boxes.find(r => b.x >= r.x && b.x < r.x + r.width && cy >= r.y && cy <= r.y + r.height);
+      // a label keeps 4 units clear of its box's right edge, and 6 clear of the next label on its line
+      const limit = box ? box.x + box.width - 4 : vbW;
+      const next = [...svg.querySelectorAll('text')].find(o => o !== t && Math.abs(o.getBBox().y - b.y) < 2 && o.getBBox().x > b.x);
+      const end = Math.min(limit, next ? next.getBBox().x - 6 : Infinity);
+      if (b.x + b.width > end + .5) bad.push({ text: t.textContent, over: +(b.x + b.width - end).toFixed(1) });
+    });
+  });
+  if (bad.length) console.warn('diagram labels past their box:', bad);
+  return bad;
+}
+// a confirmed call leaves the deck at once, so the deck only ever holds idle or ready; the order pose is the order moment's
+function deckPose() { return UI.picks.size ? 'ready' : 'idle'; }
+function fullCard(d) {
+  const c = S.lang === 'en' ? d.details.en : d.details['zh-TW'], pick = UI.picks.get(d.id);
+  const L = s => S.lang === 'zh-CN' ? cn(s) : s;
+  const links = '<div class="links"><a href="#" data-open="' + esc(d.path) + '">' + esc(tr('openLocal')) + '</a><a href="' + REPO + d.pr + '" target="_blank" rel="noreferrer">' + esc(tr('viewPr', { n: d.pr })) + '</a><a href="#" data-open="design/design.md">' + esc(tr('viewDesign')) + '</a></div>';
+  const letters = d.kind === 'choice' ? ['A', 'B', 'C', 'D'] : ['A', 'B', 'C'], stop = S.lang === 'en' ? '.' : '。';
+  const opts = '<ul class="opts">' + letters.map(k => {
+    const o = c.options && c.options[k];
+    const label = o ? L(o.description) : tr(k === 'A' ? 'mergeInto' : k === 'B' ? 'sendBack' : 'hold');
+    return '<li><button class="opt" data-id="' + d.id + '" data-c="' + k + '" aria-pressed="' + (pick === k) + '"><span class="k">' + k + '</span><span class="d">' + esc(label) + '</span>'
+      + (o ? '<span class="pc"><b>' + esc(tr('pros')) + '</b> ' + esc(L(o.pros)) + stop + ' <b>' + esc(tr('cons')) + '</b> ' + esc(L(o.cons)) + stop + '</span>' : '') + '</button></li>';
+  }).join('') + '<li><button class="opt" data-id="' + d.id + '" data-c="custom" aria-pressed="' + (pick === 'custom') + '"><span class="k" aria-hidden="true">&#9998;</span><span class="d">' + esc(tr('customChoice')) + '</span></button></li></ul>';
+  const custom = '<label class="custom"' + (pick === 'custom' ? '' : ' hidden') + '>' + esc(tr('customHint')) + '<textarea data-id="' + d.id + '">' + esc(UI.drafts.get(d.id) || '') + '</textarea></label>';
+  const gates = d.kind === 'merge' ? '<ul class="gates">' + GATE_KEYS.map((n, i) => '<li class="' + (d.gates[i] ? 'y' : 'n') + '"><i aria-hidden="true">' + (d.gates[i] ? '&#10003;' : '&#8211;') + '</i>' + n + '. ' + esc(tr('gate' + n)) + '</li>').join('') + '</ul>' : '';
+  return '<div class="dcard sheet" id="card-' + d.id + '"><div class="meta">' + esc(tr('metaFor', { id: d.id, task: d.task })) + '</div>'
+    + '<h3>' + esc(L(c.title)) + '</h3>' + links
+    + '<div class="dbody"><div><p class="explanation">' + esc(L(c.explanation)) + '</p>'
+    + '<figure class="dg"><div class="scroll">' + diagramSVG(d) + '</div><figcaption>' + esc(tr('diagramBy', { id: d.id })) + '</figcaption></figure>' + gates + '</div>'
+    + '<div>' + opts + custom + '<div class="acts"><span class="validation" id="validation-' + d.id + '"></span><button class="go confirm" data-id="' + d.id + '" disabled>' + esc(tr('confirmOrder')) + '</button></div></div></div></div>';
+}
+function portraitHTML() {
+  faceSet = FACES_CAP;
+  return '<div class="porthole"><div class="glass"><div class="ppivot" style="--sc:1.22;--rx:4deg;--ry:22deg"><div class="fig r-cap c-' + S.cap + '">'
+    + '<div class="sh"></div>' + bx('armR', bx('handR', '<span class="cutlass"></span>')) + bx('shoeR') + bx('shoeL') + bx('legR') + bx('legL')
+    + bx('tails') + bx('torso') + '<div class="sash"></div><div class="buckle"></div><div class="scabbard"></div><div class="hilt"></div>'
+    + bx('epaL') + bx('epaR') + bx('armL', bx('handL')) + bx('neck') + bx('head') + '<div class="eye"></div><div class="patch"></div>' + bx('beard')
+    + bx('tricorn') + bx('tricrown') + bx('tritrim') + '<div class="plume"></div></div></div></div></div>'
+    + '<div class="lbl"><b>' + esc(tr('roleCaptain')) + '</b><span></span></div>';
+}
+function renderDeck() {
+  const pend = pendingDecisions(), ids = new Set(pend.map(d => d.id));
+  for (const m of [UI.picks, UI.drafts]) for (const id of [...m.keys()]) if (!ids.has(id)) m.delete(id);
+  for (const id of [...UI.expanded]) if (!ids.has(id)) UI.expanded.delete(id);
+  const wrap = $('#deckwrap');
+  wrap.hidden = !pend.length && !UI.orderFb;
+  $('#pcount').textContent = pend.length || '';
+  // keep the captain's focus and caret through a re-render
+  const f = document.activeElement, fId = f && f.dataset && f.dataset.id, fC = f && f.dataset && f.dataset.c, sel = f && f.tagName === 'TEXTAREA' ? [f.selectionStart, f.selectionEnd] : null;
+  $('#deck').innerHTML = pend.map((d, i) => {
+    if (i === 0) return fullCard(d) + (pend.length > 1 ? '<p class="also">' + esc(tr('alsoWaiting')) + '</p>' : '');
+    const c = S.lang === 'en' ? d.details.en : d.details['zh-TW'], pick = UI.picks.get(d.id);
+    return '<details class="dstrip sheet" data-id="' + d.id + '"' + (UI.expanded.has(d.id) ? ' open' : '') + '><summary><span class="meta">' + esc(tr('metaFor', { id: d.id, task: d.task })) + '</span>'
+      + '<span class="st">' + esc(S.lang === 'zh-CN' ? cn(c.title) : c.title) + '</span>' + (pick ? '<span class="picked">' + esc(pick === 'custom' ? tr('customChoice') : pick) + '</span>' : '') + '</summary>' + fullCard(d) + '</details>';
+  }).join('');
+  const stage = $('#capstage'); stage.hidden = !pend.length;
+  if (pend.length && !stage.firstChild) stage.innerHTML = portraitHTML();
+  if (stage.firstChild) stage.querySelector('.lbl b').textContent = tr('roleCaptain');
+  $('#deck').querySelectorAll('details.dstrip').forEach(el => el.addEventListener('toggle', () => { if (el.open) UI.expanded.add(el.dataset.id); else UI.expanded.delete(el.dataset.id); }));
+  pend.forEach(d => validate(d.id));
+  if (fId) {
+    const r = [...$('#deck').querySelectorAll('[data-id]')].find(el => el.dataset.id === fId && el.tagName === f.tagName && (fC ? el.dataset.c === fC : !el.dataset.c));
+    if (r) { r.focus({ preventScroll: true }); if (sel) r.setSelectionRange(...sel); }
+  }
+  // the captain's pose follows the deck: ready once a choice is picked, idle when nothing is
+  const p = deckPose();
+  if (p !== UI.lastDeckPose) { UI.lastDeckPose = p; if (S.cap !== p) setCapPose(p); }
+  showCapPose(S.cap);
+  $('#orderFeedback').textContent = UI.orderFb ? tr(UI.orderFb[0], UI.orderFb[1]) : '';
+  fitDiagrams($('#deck'));
+}
+function validate(id) {
+  const chosen = UI.picks.get(id), text = UI.drafts.get(id) || '';
+  const ok = !!chosen && (chosen !== 'custom' || (text.trim().length > 0 && [...text].length <= 1000));
+  document.querySelectorAll('.confirm[data-id="' + id + '"]').forEach(b => { b.disabled = !ok; });
+  document.querySelectorAll('#validation-' + id).forEach(l => { l.textContent = chosen === 'custom' && !ok ? tr('customInvalid') : ''; });
+  return ok;
+}
+function answer(id) {
+  if (BOARD.answered.has(id) || !validate(id)) return;
+  const d = FIX_DECISIONS.find(x => x.id === id), chosen = UI.picks.get(id), t = taskOf(d.task);
+  UI.picks.delete(id); UI.drafts.delete(id);
+  BOARD.answered.add(id);
+  logEvent('captain', 'answered', { en: id + ': ' + (chosen === 'custom' ? 'your own answer' : 'option ' + chosen), 'zh-TW': id + '：' + (chosen === 'custom' ? '自訂回覆' : '選項 ' + chosen) });
+  if (d.kind === 'merge' && chosen === 'A') {
+    UI.orderFb = ['mergedFb', { task: d.task }];
+    merge({ t, d });
+    return;
+  }
+  // any other answer is an order: the call leaves the deck and its task returns to the plan (a hold parks it).
+  // nothing is dispatched; the firstmate acts on the order in the live system
+  if (d.kind === 'merge' && chosen === 'C') t.stage = 'parked';
+  UI.orderFb = chosen === 'custom' ? ['customRecorded', { id }] : ['recorded', { id, c: chosen }];
+  S.cap = UI.picks.size ? 'ready' : 'idle'; UI.lastDeckPose = null;
+  syncShip();
+  giveOrder();
+  narrate('Order given on ' + id + ': bell and whistle, the helm spins twice, all hands answer.');
+}
+function selectLang(l) { S.lang = l; renderChrome(); renderBoard(); }
+function renderBoard() {
+  renderCounts();
+  renderDeck();
+  flip(renderLanes);
+  renderRoster();
+  renderLog();
+}
+
+// ---- the board's interactions: menu, drag and drop, the drop confirmation, the deck ----
+$('#langs').addEventListener('click', e => { const b = e.target.closest('[data-lang]'); if (b) selectLang(b.dataset.lang); });
+$('#rosterBtn').addEventListener('click', () => { UI.rosterOn = !UI.rosterOn; renderChrome(); renderRoster(); });
+$('#deck').addEventListener('click', e => {
+  const o = e.target.closest('.opt'), c = e.target.closest('.confirm'), a = e.target.closest('[data-open]');
+  if (a) { e.preventDefault(); narrate('On the live board this opens ' + a.dataset.open + ' in your editor.'); return; }
+  if (o && !o.disabled) { UI.picks.set(o.dataset.id, o.dataset.c); renderDeck(); if (o.dataset.c === 'custom') document.querySelector('textarea[data-id="' + o.dataset.id + '"]')?.focus(); }
+  else if (c && !c.disabled) answer(c.dataset.id);
+});
+$('#deck').addEventListener('input', e => { if (e.target.tagName === 'TEXTAREA') { UI.drafts.set(e.target.dataset.id, e.target.value); validate(e.target.dataset.id); } });
+const fleet = $('#fleet');
+function askDrop(id) { UI.menu = null; UI.confirming = id; renderBoard(); document.querySelector('[data-confirm-drop]')?.focus(); }
+fleet.addEventListener('click', e => {
+  const el = e.target.closest('[data-menu],[data-act],[data-confirm-drop],[data-cancel-drop]');
+  if (!el) return;
+  if (el.dataset.menu) {
+    const id = el.dataset.menu; UI.menu = UI.menu === id ? null : id; renderBoard();
+    if (UI.menu) document.querySelector('.cacts [data-for="' + id + '"]')?.focus();
+    else document.querySelector('[data-menu="' + id + '"]')?.focus();
+  } else if (el.dataset.act) { if (el.dataset.act === 'drop') askDrop(el.dataset.for); else taskAct(el.dataset.for, el.dataset.act); }
+  else if (el.dataset.confirmDrop) taskAct(el.dataset.confirmDrop, 'drop');
+  else if (el.dataset.cancelDrop) { const id = el.dataset.cancelDrop; UI.confirming = null; renderBoard(); document.querySelector('[data-menu="' + id + '"]')?.focus(); }
+});
+fleet.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || !(UI.menu || UI.confirming)) return;
+  const id = UI.menu || UI.confirming; UI.menu = null; UI.confirming = null; renderBoard();
+  document.querySelector('[data-menu="' + id + '"]')?.focus(); e.stopPropagation();
+});
+fleet.addEventListener('dragstart', e => {
+  const card = e.target.closest && e.target.closest('.card[draggable="true"]'); if (!card) return;
+  UI.dragging = card.dataset.task; e.dataTransfer.setData('text/plain', UI.dragging); e.dataTransfer.effectAllowed = 'move';
+  fleet.classList.add('dragging'); requestAnimationFrame(() => card.classList.add('lifted'));
+});
+fleet.addEventListener('dragend', () => { UI.dragging = null; fleet.classList.remove('dragging'); fleet.querySelectorAll('.over,.lifted').forEach(el => el.classList.remove('over', 'lifted')); });
+// a zone takes a card only when that card offers the zone's action
+const zoneFor = e => { const z = e.target.closest && e.target.closest('[data-zone]'); return z && UI.dragging && actionsFor(laneOf(taskOf(UI.dragging))).includes(z.dataset.zone) ? z : null; };
+fleet.addEventListener('dragover', e => { const z = zoneFor(e); if (!z) return; e.preventDefault(); e.dataTransfer.dropEffect = 'move'; z.classList.add('over'); });
+fleet.addEventListener('dragleave', e => { const z = e.target.closest && e.target.closest('[data-zone]'); if (z && !z.contains(e.relatedTarget)) z.classList.remove('over'); });
+fleet.addEventListener('drop', e => {
+  const z = zoneFor(e); if (!z) return;
+  e.preventDefault(); z.classList.remove('over');
+  const id = UI.dragging; UI.dragging = null; fleet.classList.remove('dragging');
+  if (z.dataset.zone === 'drop') askDrop(id); else taskAct(id, z.dataset.zone);
+});
+
+/* =====================================================================
+   13. putting it together
+   ===================================================================== */
+function rebuild() {
+  CREW = buildCrew();
+  assignStates();
+  // the crew's spacing does not depend on the mast height, so lay them out once to learn the tallest pennant
+  G = geometry(); layoutCrew(); G = geometry(pennantLines());
+  $('#scene').style.height = G.H + 'px';
+  applyTime();
+  buildSea();
+  buildShip();
+  buildCrewDOM();
+  applyWeather(!S.motion);
+  staticWake();
+  renderStats();
+  renderSwitches();
+  if (!S.motion) renderStatic(); else render();
+  showSel();
+}
+function restate() {
+  // a state change: crew classes change in place, the weather eases to what the state now says
+  assignStates();
+  buildCrewDOM();
+  const wx = applyWeather();
+  staticWake();
+  renderStats(); renderSwitches(); showSel();
+  const g = CREW.find(c => c.st === 'gate'), np = pendingDecisions().length;
+  narrate(wx === 'squall' ? 'Squall: ' + [g ? g.id + ' is blocked at gate 5 on ' + g.task[0] : '', np ? np + (np === 1 ? ' call waits' : ' calls wait') + ' on you' : ''].filter(Boolean).join(', and ') + '.'
+    : wx === 'clearing' ? 'Clearing: the merge still holds the sea at a breeze under a clear sky.'
+    : wx === 'calm' ? 'Calm: no work in flight. The ship rides at her mark, sails slack.'
+    : 'Breeze: ' + liveRuns() + ' live ' + (liveRuns() === 1 ? 'run' : 'runs') + '. Wind and way scale with the runs.');
+}
+function setMotion(on, source) {
+  S.motion = on; S.motionSource = source;
+  document.documentElement.classList.toggle('still', !on);
+  Engine.gates.motion = on;
+  if (on) { Engine.wake(); } else { Engine.halt(); Engine.flush(); renderStatic(); }
+  renderSwitches();
+}
+function act(k, v) {
+  if (k === 'tod') { S.tod = v; applyTime(); buildSea(); buildShip(); buildCrewDOM(); staticWake(); tick(); renderSwitches(); narrate(TOD[todNow()].label + ': the key light moves to the ' + (TOD[todNow()].sun.moon ? 'moon' : 'sun') + '.'); }
+  else if (k === 'weather') {
+    if (v === 'clearing') { merge(); return; }
+    // a new scenario starts its runs afresh; a squall brings its calls back unless their task has moved on
+    if (v !== S.weather) { BOARD.handed.clear(); if (v === 'squall') BOARD.answered.clear(); }
+    S.weather = v; restate();
+  }
+  else if (k === 'runs') { S.runs = +v; BOARD.handed.clear(); if (S.weather === 'calm') S.weather = 'breeze'; restate(); }
+  else if (k === 'rate') { const r = RATES[+v - 1]; S.crew = r.max; rebuild(); narrate(r.name + ': ' + G.nm + (G.nm === 1 ? ' mast, ' : ' masts, ') + r.decks + (r.decks === 1 ? ' deck, ' : ' decks, ') + G.guns.length + ' guns, ' + S.crew + ' aboard.'); }
+  else if (k === 'crew') { S.crew = clamp(S.crew + +v, 1, 24); rebuild(); }
+  else if (k === 'action') { S.action = v; restate(); narrate(v === 'assigned' ? 'Actions as assigned by deck and state.' : 'Everyone ' + ACTIONS[v] + '.'); }
+  else if (k === 'cap') { setCapPose(v); narrate('Captain: ' + CAP_POSE[v] + '.'); }
+  else if (k === 'hand') handoff(v);
+  else if (k === 'merge') merge();
+  else if (k === 'order') { giveOrder(); narrate('Order given: bell and whistle, the helm spins twice, all hands answer.'); }
+  else if (k === 'motion') setMotion(v === 'on', 'switch');
+  else if (k === 'sound') { S.sound = v === 'on'; renderSwitches(); }
+  else if (k === 'pr') openPR();
+  else if (k === 'newtask') newTask();
+  else if (k === 'reset') { resetBoard(); UI.menu = UI.confirming = UI.feedback = UI.orderFb = null; UI.picks.clear(); UI.drafts.clear(); restate(); narrate('The board is back to its opening fixture.'); }
+}
+$('#switches').addEventListener('click', e => { const b = e.target.closest('button[data-k]'); if (b) act(b.dataset.k, b.dataset.v); });
+$('#switches').addEventListener('change', e => { if (e.target.dataset.k === 'action') act('action', e.target.value); });
+
+const cycle = (arr, cur) => arr[(arr.indexOf(cur) + 1) % arr.length];
+addEventListener('keydown', e => {
+  // a switch key never fires while the captain types, or while focus is in a card's action menu or the drop confirmation
+  if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
+  if (e.target.closest && e.target.closest('[role="menu"],[role="alertdialog"]')) return;
+  const k = e.key;
+  const map = {
+    t: () => act('tod', cycle(['local', 'dawn', 'day', 'dusk', 'night'], S.tod)),
+    w: () => act('weather', cycle(['calm', 'breeze', 'squall'], S.weather)),
+    m: () => act('merge'), o: () => act('order'),
+    l: () => act('runs', S.runs % 3 + 1),
+    '[': () => act('crew', -1), ']': () => act('crew', 1), '-': () => act('crew', -1), '=': () => act('crew', 1), '+': () => act('crew', 1),
+    a: () => act('action', cycle(['assigned', ...Object.keys(ACTIONS).filter(a => a !== 'helm')], S.action)),
+    c: () => act('cap', cycle(['idle', 'ready', 'order'], S.cap)),
+    q: () => act('hand', 'order'), p: () => act('hand', 'pr'), y: () => act('hand', 'approve'), x: () => act('hand', 'reject'),
+    r: () => act('motion', S.motion ? 'off' : 'on'), s: () => act('sound', S.sound ? 'off' : 'on'),
+    u: () => act('pr'), n: () => act('newtask'),
+  };
+  if (/^[1-6]$/.test(k)) { act('rate', k); e.preventDefault(); return; }
+  const fn = map[k.toLowerCase()]; if (fn) { fn(); e.preventDefault(); }
+});
+
+/* drag a figure to turn it, drag the deck to turn all hands, double-click to reset; a click selects */
+let drag = null;
+$('#scene').addEventListener('pointerdown', e => {
+  const pv = e.target.closest('.pivot'), deck = e.target.closest('.deckhit');
+  if (!pv && !deck) return;
+  const ids = pv ? [pv.dataset.pivot] : [...document.querySelectorAll('.pivot')].map(p => p.dataset.pivot);
+  drag = { x: e.clientX, y: e.clientY, ids, moved: false, pid: e.pointerId, src: pv, base: Object.fromEntries(ids.map(i => [i, { ...(ROT[i] || (i === 'captain' ? CAPDEF : DEF)) }])) };
+  (pv || e.target).setPointerCapture && (pv || e.target).setPointerCapture(e.pointerId);
+  e.preventDefault();
+});
+addEventListener('pointermove', e => {
+  if (!drag || e.pointerId !== drag.pid) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+  if (!drag.moved) { drag.moved = true; drag.ids.forEach(i => { const p = document.querySelector('.pivot[data-pivot="' + i + '"]'); if (p) { p.classList.add('dragging'); fullFaces(p); } }); }
+  for (const i of drag.ids) { const b = drag.base[i]; ROT[i] = { ry: b.ry + dx * .6, rx: clamp(b.rx - dy * .35, -12, 38) }; }
+  applyRot();
+});
+addEventListener('pointerup', e => {
+  if (!drag || e.pointerId !== drag.pid) return;
+  drag.ids.forEach(i => document.querySelector('.pivot[data-pivot="' + i + '"]')?.classList.remove('dragging'));
+  if (!drag.moved && drag.src) select(drag.src.dataset.pivot);
+  drag = null;
+});
+$('#scene').addEventListener('dblclick', e => {
+  const pv = e.target.closest('.pivot');
+  if (pv) delete ROT[pv.dataset.pivot]; else if (e.target.closest('.deckhit')) for (const k in ROT) delete ROT[k];
+  applyRot();
+});
+$('#pennants').addEventListener('click', e => { const b = e.target.closest('.pennant'); if (b) select(b.dataset.tag); });
+function select(id) {
+  S.selected = S.selected === id ? null : id;
+  document.querySelectorAll('.pennant').forEach(p => p.classList.toggle('sel', p.dataset.tag === S.selected));
+  showSel();
+}
+
+/* a hidden tab, an off-screen scene or reduced motion stops the loop; CSS loops pause with it */
+document.addEventListener('visibilitychange', () => {
+  Engine.gates.visible = !document.hidden;
+  document.documentElement.classList.toggle('paused', document.hidden);
+  if (document.hidden) Engine.halt(); else Engine.wake();
+  showMeter();
+});
+new IntersectionObserver(es => { for (const en of es) { Engine.gates.onscreen = en.isIntersecting; document.documentElement.classList.toggle('paused', !en.isIntersecting || document.hidden); en.isIntersecting ? Engine.wake() : Engine.halt(); } showMeter(); }).observe($('#scene'));
+matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', e => { if (S.motionSource === 'system') setMotion(!e.matches, 'system'); });
+let rsT = 0, lastW = 0;
+new ResizeObserver(() => { const w = $('#scene').clientWidth; if (Math.abs(w - lastW) < 2) return; lastW = w; clearTimeout(rsT); rsT = setTimeout(rebuild, 120); }).observe($('#scene'));
+
+initSprings();
+document.documentElement.classList.toggle('still', !S.motion);
+Engine.gates.motion = S.motion;
+resetBoard();
+renderChrome();
+rebuild();
+restate();
+UI.booted = true;
+tick(); setInterval(tick, 30000);
+Engine.wake();
+</script>
+</body>
+</html>
