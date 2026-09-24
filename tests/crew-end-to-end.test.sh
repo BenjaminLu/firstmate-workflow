@@ -91,10 +91,23 @@ assert_eq "2" "$(printf '%s\n' "$actors" | sed '/^$/d' | wc -l | tr -d ' ')" \
   "two real runs emit two distinct actor names"
 assert_matches "$actors" '^worker-' "and they are workers by name"
 
-PORT=$(( 15000 + RANDOM % 900 ))
-FM_ROOT="$r" FM_PORT="$PORT" bun run "$r/board/server.ts" > "$d/out" 2>&1 < /dev/null &
+# The kernel picks the port and the server says which one it got. A RANDOM
+# range overlapped the other suites' ranges, and with the gate running suites
+# side by side a readiness loop could be answered by somebody else's board.
+board_port() {   # board_port <log> <pid>: the port the server printed; 1 if it died first
+  local log="$1" pid="$2" end=$(( $(date +%s) + 60 )) port
+  while [ "$(date +%s)" -le "$end" ]; do
+    port="$(sed -n 's|^board on http://127\.0\.0\.1:\([0-9][0-9]*\).*|\1|p' "$log" 2>/dev/null | head -1)"
+    [ -n "$port" ] && { printf '%s' "$port"; return 0; }
+    kill -0 "$pid" 2>/dev/null || return 1
+    sleep 0.05
+  done
+  return 1
+}
+FM_ROOT="$r" FM_PORT=0 bun run "$r/board/server.ts" > "$d/out" 2>&1 < /dev/null &
 pid=$!
 trap 'kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; rm -rf "$d"' EXIT
+PORT="$(board_port "$d/out" "$pid")"
 for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORT/api/state" >/dev/null 2>&1 && break; sleep 0.25; done
 # First with the log exactly as the two real runs left it. Both said
 # agent_finished, so both have gone home and only firstmate is aboard -
@@ -212,9 +225,9 @@ assert_eq "$first_actor" "$(jq -r '.[0].to' <<<"$handoffs")" \
 if [ -n "${FM_BOARD_CONSUMER_SOURCE:-}" ]; then
   assert_ok "test -f '$FM_BOARD_CONSUMER_SOURCE'" "the designated board consumer source exists"
   cp "$FM_BOARD_CONSUMER_SOURCE" "$r/board/designated-server.ts"
-  PORT2=$(( PORT + 1 ))
-  FM_ROOT="$r" FM_PORT="$PORT2" bun run "$r/board/designated-server.ts" > "$d/designated-board.log" 2>&1 < /dev/null &
+  FM_ROOT="$r" FM_PORT=0 bun run "$r/board/designated-server.ts" > "$d/designated-board.log" 2>&1 < /dev/null &
   pid2=$!
+  PORT2="$(board_port "$d/designated-board.log" "$pid2")"
   for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORT2/api/state" > "$d/designated-state.json" 2>/dev/null && break; sleep 0.25; done
   assert_ok "test -s '$d/designated-state.json'" "the designated board consumer answers from real producer events"
   assert_eq "1" "$(jq '[.handoffs[]|select(.kind=="reject")]|length' "$d/designated-state.json" 2>/dev/null)" \

@@ -6,6 +6,8 @@
 #   bin/ci.sh            run every stage against the repo this script lives in
 #   FM_ROOT=/path        run against another tree (used by the tests)
 #   FM_CI_MAX_SECONDS=600 select an explicit elapsed-time budget (default 180)
+#   FM_CI_JOBS=N         run N bash suites at once (default: online CPUs, at
+#                        most 6); FM_CI_JOBS=1 is the one-at-a-time run
 set -uo pipefail
 
 # Bound the string before arithmetic, avoiding overflow, octal interpretation,
@@ -15,7 +17,23 @@ if [[ ! "$ci_max_seconds" =~ ^[1-9][0-9]{0,3}$ ]] || [ "$ci_max_seconds" -gt 360
   printf '%s\n' 'ci: FM_CI_MAX_SECONDS must be a decimal integer from 1 to 3600 (no leading zeros); unset it for 180' >&2
   exit 64
 fi
+# The pool's width. Every suite still runs, every assertion in it still
+# counts, and the budget above is unchanged; what changes is how many run at
+# once. Six is the cap because past it the suites that start servers and
+# workers spend the extra width waiting on each other, not on the CPU.
+if [ -n "${FM_CI_JOBS+set}" ]; then
+  ci_jobs="$FM_CI_JOBS"
+  if [[ ! "$ci_jobs" =~ ^[1-9][0-9]?$ ]]; then
+    printf '%s\n' 'ci: FM_CI_JOBS must be a decimal integer from 1 to 99 (no leading zeros); unset it for the CPU count' >&2
+    exit 64
+  fi
+else
+  ci_jobs="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)"
+  [[ "$ci_jobs" =~ ^[1-9][0-9]*$ ]] || ci_jobs=1
+  [ "$ci_jobs" -le 6 ] || ci_jobs=6
+fi
 printf 'ci: effective budget: %ss\n' "$ci_max_seconds"
+printf 'ci: bash suites: %s at a time\n' "$ci_jobs"
 
 ROOT="${FM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT" || exit 2
@@ -47,15 +65,127 @@ pass()  { printf '  %s+%s %s\n' "$green" "$off" "$1"; }
 flunk() { printf '  %sx%s %s\n' "$red" "$off" "$1"; fail=1; }
 skip()  { printf '  %s- %s (skipped)%s\n' "$dim" "$1" "$off"; }
 
-stage "shellcheck"
+# --- the slow work starts first, and all of it at once -------------------
+# The bash suites go through a bounded pool, and the shellcheck and
+# end-to-end stages run beside it. Nothing is printed from the background:
+# each job writes to its own log, and the stages below print those logs in
+# the order they always have, so the transcript reads the same whatever
+# finished first.
+#
+# The logs live in a mktemp directory, never under FM_ROOT: the gate is run
+# against other trees, and tests/ci.test.sh's fixture cache is keyed on the
+# tree's contents - a gate that wrote into it would never hit that cache.
+ci_tmp="$(mktemp -d "${TMPDIR:-/tmp}/fm-ci.XXXXXX")" || { echo "ci: mktemp failed" >&2; exit 70; }
+bg_pids=''
+# an interrupted gate takes its jobs with it; the pool passes the signal on
+# to the suites it is running
+ci_cleanup() {
+  # shellcheck disable=SC2086  # a list of pids, split on purpose
+  [ -z "$bg_pids" ] || kill $bg_pids 2>/dev/null
+  rm -rf "$ci_tmp"
+}
+trap ci_cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+
+# end-to-end: decided now, run in the background, reported in its place
+e2e_state=run
+if [ ! -d tests/e2e ]; then e2e_state=no-suite
+elif ! command -v bunx >/dev/null 2>&1; then e2e_state=no-bunx
+elif [ ! -d node_modules/@playwright ]; then e2e_state=no-playwright
+fi
+if [ "$e2e_state" = run ]; then
+  ( bunx playwright test > "$ci_tmp/e2e.log" 2>&1 < /dev/null
+    echo "$?" > "$ci_tmp/e2e.rc" ) &
+  e2e_pid=$!; bg_pids="$bg_pids $e2e_pid"
+fi
+
+# The bash suites, glob order being the order they are reported in.
+suites=(tests/*.test.sh)
+# Slowest first, so the long ones are not the last to start. The three the
+# gate has always spent longest on lead by name; the rest follow by size,
+# which is the proxy for the rest. FM_CI_JOBS=1 keeps glob order, which is
+# the one-at-a-time run exactly as it was.
+pool_order() {
+  local i t
+  if [ "$ci_jobs" -eq 1 ]; then
+    for i in "${!suites[@]}"; do printf '%s\n' "$i"; done
+    return
+  fi
+  for i in "${!suites[@]}"; do
+    t="${suites[$i]}"
+    case "$t" in
+      tests/herdr.test.sh|tests/reconcile.test.sh|tests/worker.test.sh)
+        printf '%s %s\n' 999999999 "$i" ;;
+      *) printf '%s %s\n' "$(wc -c < "$t" | tr -d ' ')" "$i" ;;
+    esac
+  done | sort -k1,1nr -k2,2n | cut -d' ' -f2
+}
+# One suite: the environment the noise check below depends on, standard
+# input closed, and its own log - to a file, never $(...): a suite that
+# starts a server leaves a child holding its output, and a command
+# substitution waits for that to close. A small wrapper waits for the suite
+# and writes its exit status beside the log, renamed into place so a status
+# file that exists is a whole one.
+run_suite() {   # run_suite <index>
+  local i="$1" c=''
+  trap '[ -z "$c" ] || kill "$c" 2>/dev/null; exit 143' TERM INT
+  # The check below reads the shell's OWN messages, and bash localises
+  # them: on a zh-TW shell it says 命令未找到 and an English grep
+  # matches nothing, which is green for a suite that never ran half
+  # its lines. So the messages are pinned - and only the messages.
+  # LC_ALL=C pins collation and ctype too, which would run every
+  # suite's sort, grep and tr over UTF-8 in a locale no developer
+  # uses; and LC_ALL has to be cleared as well, because it outranks
+  # LC_MESSAGES wherever the caller has it set. Empty, not unset: an
+  # empty LC_ALL is the POSIX way to say "do not override", and
+  # unsetting it in a child needs a subshell.
+  LC_ALL='' LC_MESSAGES=C bash "${suites[$i]}" > "$ci_tmp/suite.$i.log" 2>&1 < /dev/null &
+  c=$!
+  wait "$c"
+  printf '%s\n' "$?" > "$ci_tmp/suite.$i.part" && mv "$ci_tmp/suite.$i.part" "$ci_tmp/suite.$i.rc"
+}
+# The pool is a background shell of its own, so the stages that print
+# before the bash suites can do so while they run. bash 3.2 has no
+# `wait -n`, so it polls: a slot is free when a suite it started has
+# written its status.
+run_pool() {
+  local i started=0 live=''
+  # shellcheck disable=SC2086  # a list of pids, split on purpose
+  trap '[ -z "$live" ] || kill $live 2>/dev/null; exit 143' TERM INT
+  for i in $(pool_order); do
+    while :; do
+      set -- "$ci_tmp"/suite.*.rc      # nullglob: $# is how many have finished
+      [ $((started - $#)) -lt "$ci_jobs" ] && break
+      sleep 0.1
+    done
+    run_suite "$i" &
+    live="$live $!"
+    started=$((started + 1))
+  done
+  wait
+}
+if [ ${#suites[@]} -gt 0 ]; then
+  run_pool < /dev/null &
+  pool_pid=$!; bg_pids="$bg_pids $pool_pid"
+fi
+
 scripts=(bin/*.sh bin/adapters/*.sh tests/*.sh)  # adapters too: bin/*.sh does not recurse
+if [ ${#scripts[@]} -gt 0 ] && command -v shellcheck >/dev/null 2>&1; then
+  ( shellcheck -x -S warning "${scripts[@]}" > "$ci_tmp/shellcheck.log" 2>&1 < /dev/null
+    echo "$?" > "$ci_tmp/shellcheck.rc" ) &
+  shellcheck_pid=$!; bg_pids="$bg_pids $shellcheck_pid"
+fi
+
+stage "shellcheck"
 if [ ${#scripts[@]} -eq 0 ]; then
   skip "no shell scripts"
 elif command -v shellcheck >/dev/null 2>&1; then
-  if out=$(shellcheck -x -S warning "${scripts[@]}" 2>&1); then
+  wait "$shellcheck_pid"
+  if [ "$(cat "$ci_tmp/shellcheck.rc" 2>/dev/null)" = 0 ]; then
     pass "${#scripts[@]} scripts clean"
   else
-    flunk "shellcheck"; printf '%s\n' "$out"
+    flunk "shellcheck"; printf '%s\n' "$(cat "$ci_tmp/shellcheck.log")"
   fi
 else
   skip "shellcheck not installed"
@@ -403,25 +533,17 @@ else
 fi
 
 stage "bash tests"
-suites=(tests/*.test.sh)
 if [ ${#suites[@]} -eq 0 ]; then
   skip "no suites yet"
 else
-  # to a file, never $(...): a suite that starts a server leaves a child
-  # holding the pipe, and command substitution waits for that pipe to close
-  tmp="$(mktemp)"
-  for t in "${suites[@]}"; do
-    # The check below reads the shell's OWN messages, and bash localises
-    # them: on a zh-TW shell it says 命令未找到 and an English grep
-    # matches nothing, which is green for a suite that never ran half
-    # its lines. So the messages are pinned - and only the messages.
-    # LC_ALL=C pins collation and ctype too, which would run every
-    # suite's sort, grep and tr over UTF-8 in a locale no developer
-    # uses; and LC_ALL has to be cleared as well, because it outranks
-    # LC_MESSAGES wherever the caller has it set. Empty, not unset: an
-    # empty LC_ALL is the POSIX way to say "do not override", and
-    # unsetting it in a child needs a subshell.
-    if LC_ALL='' LC_MESSAGES=C bash "$t" > "$tmp" 2>&1; then
+  # the pool ran them in whatever order it did; they are reported in glob
+  # order, each from its own log, as if they had run one after another
+  wait "$pool_pid"
+  for i in "${!suites[@]}"; do
+    t="${suites[$i]}"
+    tmp="$ci_tmp/suite.$i.log"
+    # no status file is a suite that never finished, which is not a pass
+    if [ "$(cat "$ci_tmp/suite.$i.rc" 2>/dev/null)" = 0 ]; then
       # A suite that calls something that does not exist prints to
       # stderr, carries on, and reaches finish green - which is how a
       # test file with two spliced lines reported the same as one
@@ -453,10 +575,9 @@ else
         pass "$t"
       fi
     else
-      flunk "$t"; cat "$tmp"
+      flunk "$t"; cat "$tmp" 2>/dev/null
     fi
   done
-  rm -f "$tmp"
 fi
 
 stage "bun tests"
@@ -479,21 +600,23 @@ else
 fi
 
 stage "end-to-end"
-if [ ! -d tests/e2e ]; then
-  skip "no e2e suite yet"
-elif ! command -v bunx >/dev/null 2>&1; then
-  skip "bunx not installed"
-elif [ ! -d node_modules/@playwright ]; then
+# started at the top, beside the pool; reported here, in its old place
+case "$e2e_state" in
+  no-suite) skip "no e2e suite yet" ;;
+  no-bunx)  skip "bunx not installed" ;;
   # an uninstalled browser is a missing tool, not a red gate: say so loudly
   # rather than failing a machine that has not run bun install yet
-  skip "playwright not installed (bun install && bunx playwright install chromium)"
-else
-  if out=$(bunx playwright test 2>&1); then
-    pass "playwright: $(printf '%s' "$out" | sed -n 's/.*[^0-9]\([0-9][0-9]*\) passed.*/\1/p' | tail -1) browser tests"
-  else
-    flunk "playwright"; printf '%s\n' "$out"
-  fi
-fi
+  no-playwright) skip "playwright not installed (bun install && bunx playwright install chromium)" ;;
+  *)
+    wait "$e2e_pid"
+    out="$(cat "$ci_tmp/e2e.log" 2>/dev/null)"
+    if [ "$(cat "$ci_tmp/e2e.rc" 2>/dev/null)" = 0 ]; then
+      pass "playwright: $(printf '%s' "$out" | sed -n 's/.*[^0-9]\([0-9][0-9]*\) passed.*/\1/p' | tail -1) browser tests"
+    else
+      flunk "playwright"; printf '%s\n' "$out"
+    fi
+    ;;
+esac
 
 # Measure the full gate without interrupting or bypassing functional checks.
 took=$(( $(date +%s) - started_at ))
@@ -502,4 +625,7 @@ if [ "$took" -gt "$ci_max_seconds" ]; then
   flunk "the gate took ${took}s, exceeds effective budget of ${ci_max_seconds}s"
 fi
 if [ "$fail" -eq 0 ]; then printf '%sci: green%s\n' "$green" "$off"; else printf '%sci: red%s\n' "$red" "$off"; fi
+# every job was waited for above; a pid that has been reaped may belong to
+# somebody else by now, so the exit trap has nothing left to signal
+bg_pids=''
 exit "$fail"

@@ -875,15 +875,28 @@ printf '%s\n' '{"tasks":[]}' > "$R/design/tasks.json"
 decision "$R" D-021 '{"id":"D-021","task":"T-004","kind":"merge","title":"merge it","pr":9}'
 "$DG" --decision D-021 --repo "$R" >/dev/null 2>&1
 
-PORT=$(( 14900 + RANDOM % 900 ))
+# The kernel picks the port and the server says which one it got. A RANDOM
+# range overlapped the other suites' ranges, and with the gate running suites
+# side by side a readiness loop could be answered by somebody else's board.
+board_port() {   # board_port <log> <pid>: the port the server printed; 1 if it died first
+  local log="$1" pid="$2" end=$(( $(date +%s) + 60 )) port
+  while [ "$(date +%s)" -le "$end" ]; do
+    port="$(sed -n 's|^board on http://127\.0\.0\.1:\([0-9][0-9]*\).*|\1|p' "$log" 2>/dev/null | head -1)"
+    [ -n "$port" ] && { printf '%s' "$port"; return 0; }
+    kill -0 "$pid" 2>/dev/null || return 1
+    sleep 0.05
+  done
+  return 1
+}
 # every descriptor detached: ci.sh runs suites inside $(...), and a child
 # holding stdout holds the command substitution open with it
-FM_ROOT="$R" FM_PORT="$PORT" bun run "$R/board/server.ts" > "$R/out" 2>&1 < /dev/null &
+FM_ROOT="$R" FM_PORT=0 bun run "$R/board/server.ts" > "$R/out" 2>&1 < /dev/null &
 pid=$!
 # recorded before the wait, not after it: the trap that kills this used to be
 # installed after the readiness loop, so a suite interrupted during those ten
 # seconds left bun running on the port it took
 SERVER_PID="$pid"
+PORT="$(board_port "$R/out" "$pid")"
 # and the loop reports what happened rather than running out. A server that
 # died - a taken port, a bun that will not start - used to leave every
 # assertion below failing on its own terms, reading as a broken diagram

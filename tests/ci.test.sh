@@ -98,6 +98,115 @@ assert_contains "$(cat "$gha")" "bun install" "CI installs the dependencies the 
 assert_contains "$(cat "$ROOT/bin/ci.sh")" "playwright test" "the gate runs the browser suite"
 assert_lacks "$(cat "$gha")" "playwright test" "and CI does not run it itself"
 rm -rf "$t"
+
+# --- the pool -------------------------------------------------------------
+# The bash suites run several at a time. Every property the one-at-a-time
+# gate had is asserted against the pool: a red suite is still red and
+# named, the noise check still reads each suite's own output, the report is
+# still in glob order, and FM_CI_JOBS=1 is still one at a time.
+# Markers the fixture suites leave go in a directory of their own, never in
+# the tree the gate is judging.
+pool_marks="$(mktemp -d)"
+
+# the width is validated like the budget, before any stage runs
+for jobs in '' 0 -1 01 1.5 ' 2' 100 x '$(touch injected)'; do
+  rc=0; out="$(FM_CI_JOBS="$jobs" FM_ROOT="$pool_marks" bash "$ROOT/bin/ci.sh" 2>&1)" || rc=$?
+  assert_eq "64" "$rc" "FM_CI_JOBS=[$jobs] is refused"
+  assert_contains "$out" 'FM_CI_JOBS must be a decimal integer from 1 to 99' "with guidance"
+  assert_lacks "$out" '== shellcheck' "and before any stage runs"
+done
+
+# the width it chose is on the first lines, from the online CPU count,
+# capped at six, and FM_CI_JOBS overrides it
+cpus="$(mktemp -d)"
+empty_tree="$(fixture)"
+for n in 2 64; do
+  printf '#!/usr/bin/env bash\necho %s\n' "$n" > "$cpus/getconf"; chmod +x "$cpus/getconf"
+  out="$(unset FM_CI_JOBS; PATH="$cpus:$PATH" FM_ROOT="$empty_tree" bash "$ROOT/bin/ci.sh" 2>&1)"
+  want=$n; [ "$n" -gt 6 ] && want=6
+  assert_contains "$out" "bash suites: $want at a time" "$n online CPUs run $want suites at a time"
+done
+out="$(PATH="$cpus:$PATH" FM_CI_JOBS=3 FM_ROOT="$empty_tree" bash "$ROOT/bin/ci.sh" 2>&1)"
+assert_contains "$out" "bash suites: 3 at a time" "FM_CI_JOBS overrides the CPU count"
+rm -rf "$cpus" "$empty_tree"
+
+# A failing suite in the pool still turns the gate red, is named, and has
+# its output printed; the one beside it still passes.
+t="$(fixture)"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$t/tests/a-green.test.sh"
+printf '#!/usr/bin/env bash\necho RED-SUITE-SAID-THIS\nexit 1\n' > "$t/tests/b-red.test.sh"
+rc=0; out="$(FM_CI_JOBS=4 FM_ROOT="$t" bash "$ROOT/bin/ci.sh" 2>&1)" || rc=$?
+assert_eq "1" "$rc" "a failing suite in the pool turns the gate red"
+assert_contains "$out" "x tests/b-red.test.sh" "and the pool names it"
+assert_contains "$out" "RED-SUITE-SAID-THIS" "and prints what it said"
+assert_contains "$out" "+ tests/a-green.test.sh" "and the suite beside it still passes"
+rm -f "$t/tests/b-red.test.sh"
+
+# and the noise check still reads each suite's own run
+{ printf '#!/usr/bin/env bash\n'
+  printf 'nosuch%s "x"\n' poolhelper
+  printf 'exit 0\n'
+} > "$t/tests/c-silent.test.sh"
+rc=0; out="$(FM_CI_JOBS=4 FM_ROOT="$t" bash "$ROOT/bin/ci.sh" 2>&1)" || rc=$?
+assert_eq "1" "$rc" "a noise-check hit in the pool is still a failure"
+assert_contains "$out" "tests/c-silent.test.sh said it passed, but something in it did not run:" \
+  "reported the way it always was"
+assert_contains "$out" "nosuchpoolhelper" "with the line it found"
+assert_contains "$out" "+ tests/a-green.test.sh" "and it is pinned to the suite that said it"
+rm -rf "$t"
+
+# Glob order whatever order they finish in. a-waits cannot finish until
+# z-quick has, so with two at a time z-quick finishes first - and a-waits
+# passing at all is the proof that the two ran at the same time. There is
+# no clock in it: a-waits waits for z-quick's marker, and gives up only so
+# that a gate running them one at a time goes red instead of hanging.
+t="$(fixture)"
+cat > "$t/tests/a-waits.test.sh" <<S
+#!/usr/bin/env bash
+end=\$(( \$(date +%s) + 30 ))
+until [ -e "$pool_marks/z-done" ]; do
+  [ "\$(date +%s)" -le "\$end" ] || { echo "z-quick never ran beside me"; exit 1; }
+  sleep 0.05
+done
+exit 0
+S
+printf '#!/usr/bin/env bash\ntouch "%s/z-done"\nexit 0\n' "$pool_marks" > "$t/tests/z-quick.test.sh"
+before="$(find "$t" -print | sort; find "$t" -type f -exec shasum {} + | sort)"
+rc=0; out="$(FM_CI_JOBS=2 FM_ROOT="$t" bash "$ROOT/bin/ci.sh" 2>&1)" || rc=$?
+assert_eq "0" "$rc" "two suites that need each other both pass: the pool ran them together"
+assert_ok "test -e '$pool_marks/z-done'" "z-quick finished while a-waits was still running"
+bash_stage="$(printf '%s\n' "$out" | sed -n '/== bash tests/,/== bun tests/p')"
+assert_ne "" "$bash_stage" "the bash stage was found in the output"
+assert_eq "  + tests/a-waits.test.sh
+  + tests/z-quick.test.sh" "$(printf '%s\n' "$bash_stage" | grep '^  [+x] tests/')" \
+  "and the report is in glob order, not the order they finished in"
+# and the gate wrote nothing into the tree it judged: the logs and the
+# statuses are all in a mktemp directory of its own
+after="$(find "$t" -print | sort; find "$t" -type f -exec shasum {} + | sort)"
+assert_eq "$before" "$after" "ci.sh writes nothing under FM_ROOT"
+rm -rf "$t"
+
+# FM_CI_JOBS=1 runs one suite at a time. Each suite holds a lock for a
+# second and records it if the lock was already taken; the same fixture at
+# three at a time is the control, so the lock is known to catch an overlap.
+t="$(fixture)"
+for s in one two three; do
+  cat > "$t/tests/$s.test.sh" <<S
+#!/usr/bin/env bash
+mkdir "$pool_marks/lock" 2>/dev/null || { echo "$s" >> "$pool_marks/overlap"; exit 0; }
+sleep 1
+rmdir "$pool_marks/lock"
+S
+done
+rm -f "$pool_marks/overlap"
+out="$(FM_CI_JOBS=3 FM_ROOT="$t" bash "$ROOT/bin/ci.sh" 2>&1)"
+assert_ok "test -s '$pool_marks/overlap'" "three at a time, the suites overlap (the control)"
+rm -rf "$pool_marks/lock" "$pool_marks/overlap"
+out="$(FM_CI_JOBS=1 FM_ROOT="$t" bash "$ROOT/bin/ci.sh" 2>&1)"
+assert_fail "test -e '$pool_marks/overlap'" "FM_CI_JOBS=1 never runs two suites at once"
+assert_contains "$out" "bash suites: 1 at a time" "and says so"
+assert_contains "$out" "ci: green" "and every suite still passes"
+rm -rf "$t" "$pool_marks"
 # the gate must never read standard input. With nullglob an empty file list
 # turns a grep into one that reads stdin, and a nested run - which is exactly
 # what this suite does - then waits for a human who is not there. The probe

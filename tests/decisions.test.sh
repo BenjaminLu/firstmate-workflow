@@ -24,9 +24,22 @@ chmod +x "$d/bin/fm-merge.sh"
 # Explicit legacy fixture: the route must keep old pending records readable.
 mkdir -p "$d/state/pending"
 printf '%s\n' '{"id":"D-1","task":"T-A","kind":"merge","title":"merge it?","pr":16}' > "$d/state/pending/D-1.json"
-PORT=$(( 15000 + RANDOM % 900 ))
-FM_ROOT="$d" FM_PORT="$PORT" bun run "$d/board/server.ts" >"$d/out" 2>&1 </dev/null &
+# The kernel picks the port and the server says which one it got. A RANDOM
+# range overlapped the other suites' ranges, and with the gate running suites
+# side by side a readiness loop could be answered by somebody else's board.
+board_port() {   # board_port <log> <pid>: the port the server printed; 1 if it died first
+  local log="$1" pid="$2" end=$(( $(date +%s) + 60 )) port
+  while [ "$(date +%s)" -le "$end" ]; do
+    port="$(sed -n 's|^board on http://127\.0\.0\.1:\([0-9][0-9]*\).*|\1|p' "$log" 2>/dev/null | head -1)"
+    [ -n "$port" ] && { printf '%s' "$port"; return 0; }
+    kill -0 "$pid" 2>/dev/null || return 1
+    sleep 0.05
+  done
+  return 1
+}
+FM_ROOT="$d" FM_PORT=0 bun run "$d/board/server.ts" >"$d/out" 2>&1 </dev/null &
 pid=$!; trap 'kill "$pid" 2>/dev/null' EXIT
+PORT="$(board_port "$d/out" "$pid")"
 for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORT/api/state" >/dev/null 2>&1 && break; sleep 0.25; done
 
 s="$(curl -sf "http://127.0.0.1:$PORT/api/state")"

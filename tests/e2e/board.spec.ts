@@ -279,15 +279,15 @@ test.afterAll(() => stopBoard(board));
 // one mechanism at a time. Setting both meant neither was covered: the
 // query parameter could have stopped working and the suite would have
 // stayed green on the stored value.
-const open = async (page: Page, lang: string, how: "query" | "stored" = "query") => {
+const open = async (page: Page, lang: string, how: "query" | "stored" = "query", url = board.url) => {
   if (how === "query") {
-    await page.goto(`${board.url}/?lang=${lang}`);
+    await page.goto(`${url}/?lang=${lang}`);
     await page.evaluate(() => localStorage.removeItem("board.lang"));
     await page.reload();
   } else {
-    await page.goto(board.url);
+    await page.goto(url);
     await page.evaluate((l) => localStorage.setItem("board.lang", l), lang);
-    await page.goto(board.url);           // no query parameter this time
+    await page.goto(url);                 // no query parameter this time
   }
   await expect(page.locator(".scene .pivot").first()).toBeVisible();
 };
@@ -882,26 +882,33 @@ test('legacy scalar records disclose missing details without invented translatio
   } finally {stopBoard(b);}
 });
 
+// its own board: it emits a merge, and with the file's tests running in
+// parallel the shared board is being read by the language tests meanwhile
 test("a crewman turns under the pointer, and the ahoy fires", async ({ page }) => {
-  await open(page, "zh-TW");
-  const crew = page.locator(".scene .pivot").first();
-  await crew.scrollIntoViewIfNeeded();
-  const before = await crew.evaluate((el) => el.style.getPropertyValue("--ry"));
-  const box = (await crew.boundingBox())!;
-  // low on the figure: a bubble sits above the head and would take the press
-  const y = box.y + box.height * 0.82;
-  await page.mouse.move(box.x + box.width / 2, y);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width / 2 + 90, y, { steps: 6 });
-  await page.mouse.up();
-  const after = await crew.evaluate((el) => el.style.getPropertyValue("--ry"));
-  expect(after).not.toBe(before);
-  expect(parseFloat(after)).toBeGreaterThan(parseFloat(before || "-26"));
+  // the start of its board counts against the test's own budget
+  test.setTimeout(40_000);
+  const own = await startBoard(makeRoot([...CREW]));
+  try {
+    await open(page, "zh-TW", "query", own.url);
+    const crew = page.locator(".scene .pivot").first();
+    await crew.scrollIntoViewIfNeeded();
+    const before = await crew.evaluate((el) => el.style.getPropertyValue("--ry"));
+    const box = (await crew.boundingBox())!;
+    // low on the figure: a bubble sits above the head and would take the press
+    const y = box.y + box.height * 0.82;
+    await page.mouse.move(box.x + box.width / 2, y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 90, y, { steps: 6 });
+    await page.mouse.up();
+    const after = await crew.evaluate((el) => el.style.getPropertyValue("--ry"));
+    expect(after).not.toBe(before);
+    expect(parseFloat(after)).toBeGreaterThan(parseFloat(before || "-26"));
 
-  emit(board.root, 'merged', 777);
-  await expect(page.locator("#vessel")).toHaveClass(/heel/);
-  await expect(page.locator("#salvo")).toHaveClass(/fire/);
-  await expect(page.locator(".scene .fig.cheer").first()).toBeVisible();
+    emit(own.root, 'merged', 777);
+    await expect(page.locator("#vessel")).toHaveClass(/heel/);
+    await expect(page.locator("#salvo")).toHaveClass(/fire/);
+    await expect(page.locator(".scene .fig.cheer").first()).toBeVisible();
+  } finally { stopBoard(own); }
 });
 
 test("nothing here can reach a model", async () => {

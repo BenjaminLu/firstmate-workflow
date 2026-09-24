@@ -422,14 +422,20 @@ started="$dkr/started"
 ( cd "$rkr" && FM_ROOT="$rkr" FM_GH="$GHkr" FM_STARTED="$started" \
     exec bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 ) &
 kp=$!
-for _ in $(seq 1 60); do [ -e "$started" ] && break; sleep 0.2; done
+# Both waits are for the real condition against a deadline wide enough for a
+# loaded machine; a count of sleeps ran out under the gate's parallel pool.
+# They return the moment the condition holds, so the kill still lands inside
+# the engine's two-second sleep.
+eventually() {   # eventually <command...>: 0 once the command is, 1 after 60s
+  local end=$(( $(date +%s) + 60 ))
+  until "$@"; do [ "$(date +%s)" -le "$end" ] || return 1; sleep 0.05; done
+}
+eventually test -e "$started"
 assert_ok "test -e '$started'" "the engine was running when the signal was sent"
 kill -TERM "$kp" 2>/dev/null
 wait "$kp" 2>/dev/null; krc=$?
-for _ in $(seq 1 40); do
-  [ "$(jq -r .type < "$rkr/state/events.jsonl" 2>/dev/null | tail -1)" = "agent_finished" ] && break
-  sleep 0.2
-done
+ended() { [ "$(jq -r .type < "$rkr/state/events.jsonl" 2>/dev/null | tail -1)" = "agent_finished" ]; }
+eventually ended
 assert_eq "1" "$(jq -r 'select(.type=="agent_finished")|.type' "$rkr/state/events.jsonl" | grep -c . || true)" \
   "a review killed mid-round ends exactly once"
 assert_eq "" "$(jq -r .type "$rkr/state/events.jsonl" | sed -n '/agent_finished/,$p' | tail -n +2)" \

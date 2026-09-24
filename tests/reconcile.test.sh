@@ -69,15 +69,34 @@ live_pid() { ( exec sleep 30 ) & LIVE=$!; }
 # "Terminated" into the middle of the suite's transcript
 kill_live() { { kill "$LIVE"; wait "$LIVE"; } 2>/dev/null; return 0; }
 # reconcile starts the replacement worker detached and exits; the file it
-# writes therefore appears a moment after the run returns
-wait_for() { local f="$1"; local _; for _ in $(seq 1 60); do [ -s "$f" ] && return 0; sleep 0.1; done; return 1; }
+# writes therefore appears a moment after the run returns.
+# A positive wait is for the real condition, against a deadline wide enough
+# for a loaded machine. It used to be a count of short sleeps, and under the
+# gate's parallel pool the count could run out before a worker that really
+# was started had written anything. Waiting longer costs nothing when the
+# condition comes true: the loop returns the moment it does.
+WAIT_SECS=60
+eventually() {   # eventually <command...>: 0 once the command is, 1 at the deadline
+  local end=$(( $(date +%s) + WAIT_SECS ))
+  until "$@"; do [ "$(date +%s)" -le "$end" ] || return 1; sleep 0.05; done
+}
+wait_for() { eventually test -s "$1"; }
 # The negative form, and the reason it is not `test -e`. At the instant
 # fm-reconcile.sh returns, a worker it really did start has not been scheduled
 # yet - measured absent 5 times out of 5 - so `assert_fail "test -e ..."`
 # passes on timing rather than on behaviour. A negative assertion about a
 # detached child has to give the child the same window the positive one gives
 # it, and only call absence a fact afterwards.
-appears() { local f="$1"; local _; for _ in $(seq 1 20); do [ -e "$f" ] && return 0; sleep 0.1; done; return 1; }
+# The window is wall clock, not a count of sleeps: a count stretches or
+# shrinks with the machine, and under the gate's parallel pool a worker that
+# really was started could miss a two-second window and pass the check
+# falsely. Five seconds, never less: the deadline is whole seconds read with
+# `-le`, so the loop only gives up once more than WINDOW_SECS have passed.
+WINDOW_SECS=5
+appears() {
+  local end=$(( $(date +%s) + WINDOW_SECS ))
+  until [ -e "$1" ]; do [ "$(date +%s)" -le "$end" ] || return 1; sleep 0.1; done
+}
 kill_pidfile() { [ -f "$1" ] && kill "$(cat "$1")" 2>/dev/null; return 0; }
 
 lines() { wc -l < "$1" | tr -d ' '; }
@@ -617,7 +636,7 @@ SH
       rm -f "$d/ready" "$d/release"
       out="$(PATH="$d/stub:$PATH" FM_ROOT="$d" FM_GH="$(rec "$d" offline <<< offline)" "$d/bin/fm-reconcile.sh" 2>&1)"
       assert_eq 0 "$?" "real offline launch succeeds ($terminal/$timing/$round)"
-      for _ in $(seq 1 100); do [ -f "$d/ready" ] && break; sleep 0.05; done
+      eventually test -f "$d/ready"
       assert_ok "test -f '$d/ready'" "real worker reaches pre-association crash point"
       assert_ok "jq -se 'last(.[]|select(.type==\"dispatched\"))|.data.recovery==true and .pr==null and .data.role==\"worker\"' '$d/state/events.jsonl'" "real no-PR dispatch is recovery"
       PATH="$d/stub:$PATH" FM_ROOT="$d" "$d/bin/fm-worker.sh" --task T-011 > "$d/duplicate" 2>&1
@@ -628,11 +647,11 @@ SH
       # One EXIT trap → one agent_finished per failed real worker. Reconcile's
       # own ending uses actor=reconcile and is excluded. Do not expect a
       # double-count from a second process that freeze/exec no longer leaves.
-      for _ in $(seq 1 100); do
+      ended() {
         count="$(jq -s '[.[]|select(.type=="agent_finished" and .actor!="reconcile")]|length' "$d/state/events.jsonl")"
-        [ "$count" -ge "$round" ] && break
-        sleep 0.05
-      done
+        [ "$count" -ge "$round" ]
+      }
+      eventually ended
       assert_eq "$round" "$count" "real failed worker records its ending"
     done
     if [ "$timing" = new-attempt ]; then
@@ -758,7 +777,7 @@ SH
     "$d/bin/fm-reconcile.sh" > "$d/output" 2>&1 &
   reconciler=$!; echo "$reconciler" > "$d/reconciler"
   if [ "$boundary" = before-publish ]; then
-    assert_ok "appears '$d/spawned'" "launcher has started before interruption"
+    assert_ok "eventually test -e '$d/spawned'" "launcher has started before interruption"
     kill -TERM "$reconciler"
   fi
   wait "$reconciler"; rc=$?
@@ -791,9 +810,11 @@ echo "$(dead_pid)" > "$d/state/worktrees/T-011.pid"
 FM_ROOT="$d" FM_GH="$(none "$d")" "$d/bin/fm-reconcile.sh" > "$d/out" 2>&1
 assert_ok "wait_for '$d/worker-args'" "first replacement starts"
 kill_pidfile "$d/state/worktrees/T-011.pid"
-for _ in $(seq 1 100); do kill -0 "$(cat "$d/state/worktrees/T-011.pid")" 2>/dev/null || break; sleep 0.01; done
+gone() { ! kill -0 "$(cat "$d/state/worktrees/T-011.pid")" 2>/dev/null; }
+eventually gone
 FM_ROOT="$d" FM_GH="$(none "$d")" "$d/bin/fm-reconcile.sh" >> "$d/out" 2>&1
-for _ in $(seq 1 100); do [ "$(lines "$d/worker-args")" = 2 ] && break; sleep 0.01; done
+two_started() { [ "$(lines "$d/worker-args")" = 2 ]; }
+eventually two_started
 assert_eq 2 "$(lines "$d/worker-args")" "death of replacement is recovered"
 assert_eq 2 "$(jq -s '[.[]|select(.type=="agent_finished" and .data.exit_code==0)]|length' "$d/state/events.jsonl")" "successful repairs each report an ending"
 kill_pidfile "$d/state/worktrees/T-011.pid"; rm -rf "$d"
