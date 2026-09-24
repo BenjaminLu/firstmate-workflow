@@ -1623,6 +1623,31 @@
         "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first: board.test.sh (the URL is derived from the registry, changes when the registry's github changes, and is absent without one) and the e2e board spec (every visible #n on a lane card, decision card, roster row and ship tag is a link to the expected URL, and clicking a lane card's #n does not start a drag or open its menu). The worker does not run the suite itself.",
         "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
       ]
+    },
+    {
+      "id": "T-073",
+      "milestone": "M2",
+      "bootstrap": false,
+      "depends_on": [
+        "T-065"
+      ],
+      "title": "the reviewer sees the worker's ask and the closed list",
+      "scope": [
+        "bin/fm-review.sh",
+        "tests/review.test.sh",
+        "tests/gh-stub.sh",
+        "skills/reviewer/SKILL.md",
+        "design/design.md",
+        "design/tasks.json"
+      ],
+      "acceptance": [
+        "The closed-list protocol breaks at the launcher. From round three the worker posts ASK-PASS-CRITERIA:<task> on the pull request, but fm-review.sh gives the reviewer only the skill, the spec and the diff, so the reviewer never sees the ask or any earlier CRITERIA-COMPLETE list. It reviews every round from scratch and raises new items indefinitely: T-067 is at round six and T-071 at round three. The captain directed firstmate to bridge what worker and reviewer cannot see of each other (D-1022). This is split out of T-066 so it can land in one small round. Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+        "From round three, when --pr is given, fm-review.sh reads the pull request's comments with gh (in the order posted) and adds to the prompt, verbatim and labelled, the latest comment containing ASK-PASS-CRITERIA:<task> and every comment containing a numbered list followed by CRITERIA-COMPLETE:<task>. If there is a list, the prompt states that it is the closed list and that findings must cite its items or be marked REGRESSION. If there is only an ask, the prompt tells the reviewer to answer with the complete numbered list and CRITERIA-COMPLETE. If there is neither, it says so plainly. Nothing else from the pull request (no worker reasoning or logs) enters the prompt, keeping the skill's rule that the reviewer never sees reasoning.",
+        "Rounds one and two and runs without --pr produce a byte-identical prompt to today. A gh failure produces a prompt that says the context could not be read, and the round still runs.",
+        "skills/reviewer/SKILL.md says where the closed list appears in the prompt.",
+        "Evidence is this pull request's required GitHub check and the seven gates. Tests written to fail first in tests/review.test.sh, with the gh stub answering in gh's real JSON shape for PR comments: a round-3 prompt contains the ask verbatim; a round-4 prompt contains the earlier list and the closed-list instruction; a PR with neither says so; round 1 is byte-identical to today; a gh failure is stated and the round continues; a comment with worker reasoning but no marker is not included. The worker does not run the suite itself.",
+        "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+      ]
     }
   ]
 }
