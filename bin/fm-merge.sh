@@ -77,8 +77,9 @@ FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor captain --type merged --pr "$PR" 
 # another project lives under that project's root, and removing
 # state/worktrees/<task> for it could remove the engine's own task of the
 # same id - so another project's cleanup is left to the task that teaches
-# cleanup about project roots, and said.
-if [ -n "$PROJECT" ] && [ "$(fm_project_get "$PROJECT" repo "$REPO/config.yaml" 2>/dev/null)" != . ]; then
+# cleanup about project roots, and said. A project is this engine when the
+# registry puts its root at the engine root, however its entry spells that.
+if [ -n "$PROJECT" ] && [ "$(fm_project_get "$PROJECT" root "$REPO/config.yaml" 2>/dev/null)" != "$(pwd -P)" ]; then
   [ -z "$TASK" ] || echo "fm-merge: $TASK's worktree in $PROJECT is not cleaned up here"
 elif [ -n "$TASK" ] && [ -x "$REPO/bin/fm-cleanup.sh" ]; then
   FM_ROOT="$REPO" FM_GH="$GH" "$REPO/bin/fm-cleanup.sh" --task "$TASK" --repo "$REPO" \

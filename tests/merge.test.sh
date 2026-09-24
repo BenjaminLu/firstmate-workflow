@@ -117,6 +117,62 @@ assert_contains "$(cat "$d/cleanup-calls" 2>/dev/null)" "--task T-009" "the self
 assert_lacks "$out" "not cleaned up here" "without saying otherwise"
 rm -rf "$d"
 
+# The self entry as the registry lets it be written (T-046): `repo` is `.`,
+# however it is quoted or commented, and that alone is the engine. An entry
+# with no repo is a managed clone, never the engine; any other repo is
+# refused before gh is asked anything.
+self_as() {   # self_as <dir> <repo line or empty>
+  { printf 'default_project: firstmate-workflow\nprojects:\n  firstmate-workflow:\n'
+    [ -z "$2" ] || printf '    %s\n' "$2"
+    printf '    github: owner/engine\n    base: main\n    required_check: ci\n'
+  } >> "$1/config.yaml"
+}
+for spelling in 'repo: .' 'repo: "."' "repo: '.'" 'repo: .   # the engine itself'; do
+  d="$(fixture OPEN t-009-board)"; self_as "$d" "$spelling"; cleanup_stub "$d"
+  out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --project firstmate-workflow 2>&1)"
+  assert_eq "0" "$?" "a self entry written [$spelling] merges"
+  assert_contains "$(cat "$d/cleanup-calls" 2>/dev/null)" "--task T-009" "and cleans up its task [$spelling]"
+  rm -rf "$d"
+done
+d="$(fixture OPEN t-009-board)"; self_as "$d" ''; cleanup_stub "$d"
+out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --project firstmate-workflow 2>&1)"
+assert_eq "0" "$?" "an entry with no repo merges on its own repository"
+assert_contains "$(grep 'pr merge' "$d/ghcalls")" "--repo owner/engine" "named by its github"
+assert_fail "test -e '$d/cleanup-calls'" "but is a managed clone, so the engine's cleanup is not run for it"
+rm -rf "$d"
+for spelling in 'repo: ./' "repo: $ROOT" 'repo: ../engine'; do
+  d="$(fixture OPEN t-009-board)"; self_as "$d" "$spelling"; cleanup_stub "$d"
+  FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --project firstmate-workflow >/dev/null 2>&1
+  assert_eq "65" "$?" "a repo written [$spelling] is refused"
+  assert_eq "" "$(cat "$d/ghcalls" 2>/dev/null)" "before gh is asked anything [$spelling]"
+  assert_fail "test -e '$d/cleanup-calls'" "and nothing is cleaned up [$spelling]"
+  rm -rf "$d"
+done
+
+# Every registered project has a github: an entry without one makes the
+# registry refuse every lookup (T-046), the self project's included. So a
+# merge naming the self project can never find it registered but with no
+# repository to merge on; it is refused before gh is asked anything, and a
+# merge naming no project still runs in the checkout as before.
+d="$(fixture OPEN t-009-board)"
+cat >> "$d/config.yaml" <<'Y'
+default_project: firstmate-workflow
+projects:
+  firstmate-workflow:
+    repo: .
+    base: main
+    required_check: ci
+Y
+FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --project firstmate-workflow >/dev/null 2>&1
+assert_eq "65" "$?" "a self project registered with no github is refused by name"
+assert_eq "" "$(cat "$d/ghcalls" 2>/dev/null)" "before gh is asked anything"
+assert_fail "bash -c '. \"$d/bin/fm-config.sh\"; fm_project_resolve firstmate-workflow \"$d/config.yaml\"'" \
+  "because the registry refuses the name itself, not only its github"
+FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 >/dev/null 2>&1
+assert_eq "0" "$?" "while a merge naming no project still runs in the checkout"
+assert_lacks "$(cat "$d/ghcalls")" "--repo" "with no repository named"
+rm -rf "$d"
+
 d="$(fixture OPEN t-009-board)"; registry "$d"
 FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --project nosuch-app >/dev/null 2>&1
 assert_eq "65" "$?" "a project the registry does not hold exits 65"

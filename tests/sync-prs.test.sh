@@ -148,6 +148,21 @@ assert_contains "$out5" "pr_opened #3" "and writes what it found"
 assert_eq "false" "$(jq -c 'select(.pr==3)|has("project")' "$d5/state/events.jsonl")" \
   "with no project, as before"
 rm -rf "$d5"
+# The same tree shipping the registry library, as a real checkout does: the
+# library finds no `projects:` map, so the sync is the same as before. The
+# script never reads config.yaml itself (tests/config.test.sh).
+d6="$(fixture)"; cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$d6/bin/"
+printf 'vendor: mock\nconcurrency: 2\n' > "$d6/config.yaml"
+OLD6="$(rec "$d6" old <<'J'
+[{"number":3,"state":"OPEN","title":"T-003: old","headRefName":"t-003-old","mergedAt":null}]
+J
+)"
+out6="$(FM_ROOT="$d6" FM_GH="$OLD6" "$d6/bin/fm-sync-prs.sh" --repo "$d6" 2>&1)"
+assert_eq "0" "$?" "a config.yaml with no projects: map read through the library syncs"
+assert_contains "$out6" "pr_opened #3" "and writes what it found"
+assert_eq "false" "$(jq -c 'select(.pr==3)|has("project")' "$d6/state/events.jsonl")" \
+  "with no project, as before"
+rm -rf "$d6"
 
 # it goes through the one writer like everyone else
 # the header comment names fm-emit.sh too; look at what runs

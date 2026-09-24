@@ -248,6 +248,28 @@ FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$id2" --task T-047 --project 
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "64" "$?" "an id whose project is not the card's project is refused"
 assert_fail "test -f '$o/state/pending/$id2.json'" "and neither publishes anything"
+# request refuses a malformed id before any path is built from it, with
+# details or without, and writes nothing for it
+for badid in D-Bad_Name-T047-1 D-firstmate-workflow-1 D-firstmate-workflow-T047-0 \
+  D-firstmate-workflow-T047-01 'D-../x-T047-1' 'D-a/b-T047-1' "$(printf 'D-a-T047-1\nx')"; do
+  FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$badid" --task T-047 --details "$d/details.json" >/dev/null 2>&1
+  assert_eq "64" "$?" "request refuses a malformed id: $(printf '%s' "$badid" | tr '\n' '~')"
+  FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$badid" --task T-047 --title t >/dev/null 2>&1
+  assert_eq "64" "$?" "and refuses it without details too: $(printf '%s' "$badid" | tr '\n' '~')"
+done
+assert_eq "" "$(find "$o/state/pending" "$o/state/decisions" \( -name '*Bad_Name*' -o -name '*T047-0*' \) | tr '\n' ' ')" \
+  "and nothing is written under a malformed id"
+# the allocator's scan reaches every store a card can be in: a pending card
+# and an archived one each push the next n past them
+mkdir -p "$o/state/runtime/archived-pending"
+printf '{"id":"D-example-app-T051-3","task":"T-051"}\n' > "$o/state/pending/D-example-app-T051-3.json"
+assert_eq "D-example-app-T051-4" "$(alloc --task T-051 --project example-app)" \
+  "a pending card nobody reserved here is past the next n"
+printf '{"id":"D-example-app-T052-7","task":"T-052"}\n' > "$o/state/runtime/archived-pending/D-example-app-T052-7.json"
+assert_eq "D-example-app-T052-8" "$(alloc --task T-052 --project example-app)" \
+  "and so is an archived one"
+assert_eq "D-firstmate-workflow-T052-1" "$(alloc --task T-052)" \
+  "while another project's cards for the same task count nothing"
 
 # await reads both forms and refuses anything else before touching a path
 printf '{"id":"%s","task":"T-047","chosen":"B"}\n' "$id" > "$o/state/decisions/$id.json"

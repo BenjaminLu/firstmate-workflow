@@ -1772,8 +1772,13 @@ spaces and a migration: **every new id names its owner**,
   joined to a path. The stores keyed by an id — `state/pending/`,
   `state/decisions/`, `state/runtime/archived-pending/`,
   `state/decision-details/`, `board/public/diagrams/`, `design/diagrams/` and
-  the watcher's `state/session/` receipts, whose own check is
-  `[A-Za-z0-9_-]+` — take the new form as a file name unchanged.
+  the watcher's `state/session/` receipts — take the new form as a file name
+  unchanged (`tests/session.test.sh` observes, lists and acknowledges an owned
+  id). The watcher's own check is only `[A-Za-z0-9_-]+`: it refuses path
+  characters, but it does not hold the id grammar, so it would also take a
+  malformed id such as `D-Bad_Name-T047-1`. No writer produces one, since
+  every card is requested through `fm-decide.sh`, which does hold it.
+  Tightening the watcher is `bin/fm-herdr.py`'s work, outside T-047.
 - **authored content is written under the allocated id.** `--allocate` comes
   first, so firstmate writes `state/decision-details/<id>.json` and any
   `design/diagrams/<id>.*` under the id the card will carry, then requests

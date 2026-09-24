@@ -175,6 +175,28 @@ for badid in D-Bad_Name-T047-1 D-firstmate-workflow-1 D-firstmate-workflow-T047-
   assert_contains "$(post "$(jq -cn --arg i "$badid" '{id:$i,chosen:"A"}')")" "bad decision id" \
     "the route refuses a malformed id: $badid"
 done
+# the stored answer carries the card's project; a card naming none stores none
+assert_eq "example-app" "$(jq -r .project "$d/state/decisions/$nid.json")" "the stored answer names the card's project"
+assert_eq "false" "$(jq 'has("project")' "$d/state/decisions/$sid.json")" "an answer to a card naming no project stores none"
+# The response listing reads only files named by a decision id, either form. A
+# file on disk under a malformed name is not an answer, whatever it holds.
+for badid in D-Bad_Name-T047-1 D-firstmate-workflow-T047-0 D-firstmate-workflow-T047-01 \
+             D-firstmate-workflow-1 D-firstmate-workflow-T-047-1 D-x.y-T047-1 D-1234567 notes; do
+  printf '{"id":"%s","chosen":"A"}\n' "$badid" > "$d/state/decisions/$badid.json"
+done
+listed="$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r '[.responses[].id]|sort|join(" ")')"
+for badid in D-Bad_Name-T047-1 D-firstmate-workflow-T047-0 D-firstmate-workflow-T047-01 \
+             D-firstmate-workflow-1 D-firstmate-workflow-T-047-1 D-x.y-T047-1 D-1234567 notes; do
+  assert_lacks " $listed " " $badid " "the response listing skips a file named $badid"
+  rm -f "$d/state/decisions/$badid.json"
+done
+assert_contains " $listed " " $nid " "while it still lists the owned answer"
+assert_contains " $listed " " D-3 " "and an old one"
+# an owner is read only out of a well-formed id
+printf '{"id":"D-Bad_Name-T047-1","task":"T-047","kind":"choice"}\n' > "$d/state/pending/D-Bad_Name-T047-1.json"
+assert_eq "null" "$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r '.pending[]|select(.id=="D-Bad_Name-T047-1")|.owner')" \
+  "a malformed id names no owner"
+rm -f "$d/state/pending/D-Bad_Name-T047-1.json"
 
 printf '%s\n' '{"id":"D-4","task":"T-A","kind":"choice"}' > "$d/state/pending/D-4.json"
 assert_eq 'true' "$(post "$(jq -cn '{id:"D-4",chosen:"custom",text:("🚢" * 1000)}')" | jq -r .ok)" '1000 Unicode code points accepted'

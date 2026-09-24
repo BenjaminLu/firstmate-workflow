@@ -140,6 +140,9 @@ const registry = (): { github: string | null; name: string | null } => {
   const { FM_PROJECT: _, ...env } = process.env;
   let found: string | null = null, name: string | null = null;
   try {
+    // One lookup for both is safe: the registry refuses every lookup when any
+    // entry lacks an owner/repo github (T-046), so a name that resolves always
+    // has a repository, and there is no state with a name but no github.
     const r = Bun.spawnSync(["bash", "-c",
       '. "$1" && name="$(fm_project_resolve "" "$2")" && printf "%s\\n" "$name" && fm_project_get "$name" github "$2"',
       "fm-board", lib, file], { env, cwd: ROOT });
