@@ -189,14 +189,28 @@ class Lifecycle(unittest.TestCase):
         self.assertIsNone(m.cli_final('codex',log))
         self.assertIsNone(m.cli_final('cursor-agent',self.run/'absent.log'))
     def test_identity_concurrency_retry_alias_and_limits(self):
-        def new(i): return m.allocate(self.root, 'worker' if i % 2 else 'reviewer', 'T-035', 'Mira ' * 30)
+        # Distinct aliases: a live alias is refused (T-089), and every one of
+        # these runs is live because none has finished.
+        def new(i): return m.allocate(self.root, 'worker' if i % 2 else 'reviewer', 'T-035', f'Mira{i} Long')
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
             runs = list(pool.map(new, range(24)))
         self.assertEqual(24, len({p.name for p in runs}))
         for p in runs:
-            self.assertRegex(p.name, r'^(worker|reviewer)-[a-z0-9-]+-t035-r[0-9]+$')
+            self.assertRegex(p.name, r'^(worker|reviewer)-mira[0-9]+-long-t035-r[0-9]+$')
             self.assertLessEqual(len(p.name), 32)
             self.assertEqual(p.name, json.loads((p / 'identity.json').read_text())['actor'])
+        # The same alias again, once its holder has finished: the counter
+        # still tells the runs apart.
+        again = []
+        for _ in range(3):
+            again.append(m.allocate(self.root, 'reviewer', 'T-035', 'Mira Long'))
+            m.save(again[-1] / 'orchestration-result.json', dict(process_exit=0))
+        self.assertEqual(3, len({p.name for p in again}))
+        self.assertEqual({'mira-long'}, {json.loads((p / 'identity.json').read_text())['name'] for p in again})
+        for p in again: self.assertLessEqual(len(p.name), 32)
+        # An alias the actor has no room for is refused, never cut (T-089).
+        with self.assertRaisesRegex(RuntimeError, 'does not fit'):
+            m.allocate(self.root, 'reviewer', 'T-035', 'Mira ' * 30)
     def test_snapshot_survives_source_change(self):
         (self.root / 'bin').mkdir(); (self.root / 'skills').mkdir()
         src = self.root / 'bin/example.sh'; src.write_text('original')
@@ -205,14 +219,211 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual('original', (snap / 'bin/example.sh').read_text())
         self.assertIn('bin/example.sh', json.loads((snap / 'manifest.json').read_text()))
 
+class Roster(unittest.TestCase):
+    """T-089: every crew member has a name of their own, from one fleet roster."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+    def name(self, run):
+        return json.loads((run / 'identity.json').read_text())['name']
+    def finish(self, run):
+        # What fm_record_end writes when a run's orchestration ends.
+        m.save(run / 'orchestration-result.json', dict(process_exit=0))
+    def test_concurrent_workers_get_different_names(self):
+        def new(i): return m.allocate(self.root, 'worker', f'T-{100 + i}', '')
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+            runs = list(pool.map(new, range(6)))
+        names = [self.name(run) for run in runs]
+        self.assertEqual(6, len(set(names)), names)
+        for run, name in zip(runs, names):
+            self.assertIn(name, m.DEFAULT_ROSTER)
+            self.assertRegex(run.name, r'^worker-' + name + r'-t1[0-9]+-r[0-9]+$')
+    def test_worker_and_reviewer_live_at_once_never_share_a_name(self):
+        worker = m.allocate(self.root, 'worker', 'T-200', '')
+        reviewer = m.allocate(self.root, 'reviewer', 'T-200', '')
+        other = m.allocate(self.root, 'reviewer', 'T-201', '')
+        self.assertEqual(3, len({self.name(worker), self.name(reviewer), self.name(other)}))
+        self.assertRegex(reviewer.name, r'^reviewer-' + self.name(reviewer) + r'-t200-r[0-9]+$')
+    def test_a_tasks_reviewer_is_not_its_workers_name_even_when_free(self):
+        worker = m.allocate(self.root, 'worker', 'T-220', '')
+        self.finish(worker)  # the roster's first name is free again
+        reviewer = m.allocate(self.root, 'reviewer', 'T-220', '')
+        self.assertEqual(m.DEFAULT_ROSTER[0], self.name(worker))
+        self.assertNotEqual(self.name(worker), self.name(reviewer))
+    def test_a_tasks_reviewer_never_takes_its_workers_name_even_when_it_is_the_only_free_one(self):
+        import io, contextlib
+        (self.root / 'config.yaml').write_text('roster:\n  - ada\n  - bo\n')
+        worker = m.allocate(self.root, 'worker', 'T-230', '')
+        m.allocate(self.root, 'worker', 'T-231', '')  # bo is live
+        self.finish(worker)          # ada is free again, and the only free name
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            reviewer = m.allocate(self.root, 'reviewer', 'T-230', '')
+        self.assertEqual('ada', self.name(worker))
+        self.assertEqual('bo2', self.name(reviewer))
+        # ada is free, so the report must not say every name is live.
+        self.assertEqual('fm-herdr: no roster name is free for this task (1 of 2 live,'
+                         ' ada held by its other role); reusing bo as bo2\n', said.getvalue())
+        # Round two of the worker, too, keeps clear of the reviewer's name.
+        self.finish(reviewer)
+        again = m.allocate(self.root, 'worker', 'T-230', '')
+        self.assertEqual('ada', self.name(again))
+        self.finish(again)
+        with self.assertRaisesRegex(RuntimeError, "ada is this task's other role"):
+            m.allocate(self.root, 'reviewer', 'T-230', 'ada')
+    def test_second_round_keeps_the_first_rounds_name_when_free(self):
+        holder = m.allocate(self.root, 'worker', 'T-300', '')
+        first = m.allocate(self.root, 'worker', 'T-301', '')
+        self.assertNotEqual(self.name(holder), self.name(first))
+        # The roster's first name is free again, yet round two is the same person.
+        self.finish(holder); self.finish(first)
+        second = m.allocate(self.root, 'worker', 'T-301', '')
+        self.assertEqual(self.name(first), self.name(second))
+        self.assertNotEqual(first.name, second.name)
+    def test_second_round_moves_on_when_the_first_name_is_live(self):
+        first = m.allocate(self.root, 'worker', 'T-310', '')
+        self.finish(first)
+        taken = m.allocate(self.root, 'worker', 'T-311', self.name(first))
+        second = m.allocate(self.root, 'worker', 'T-310', '')
+        self.assertEqual(self.name(first), self.name(taken))
+        self.assertNotEqual(self.name(first), self.name(second))
+    def test_finished_and_dead_runs_free_their_names(self):
+        first = m.allocate(self.root, 'worker', 'T-400', '')
+        self.finish(first)
+        self.assertEqual(self.name(first), self.name(m.allocate(self.root, 'reviewer', 'T-401', '')))
+    def test_an_unfinished_run_is_live_until_proven_over(self):
+        # Every path through run_is_live, one run at a time. No clock: a run
+        # allocated long ago with nothing recorded yet is still starting.
+        run = m.allocate(self.root, 'worker', 'T-410', '')
+        identity = json.loads((run / 'identity.json').read_text())
+        identity['created'] -= 86400
+        m.save(run / 'identity.json', identity)
+        self.assertTrue(m.run_is_live(run), 'no launcher record and no attempt yet')
+        # A launcher this test starts and names itself, not the test's own process.
+        token = 'fm-t089-launcher-' + run.name
+        launcher = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(600)', token])
+        self.addCleanup(lambda: (launcher.kill(), launcher.wait()))
+        alive = dict(identity, pid=launcher.pid, token=token)
+        m.save(run / 'process.json', alive)
+        self.assertTrue(m.run_is_live(run), 'its launcher is alive')
+        dead = subprocess.Popen(['true']); dead.wait()
+        m.save(run / 'process.json', dict(identity, pid=dead.pid, token='no-such-command-token'))
+        self.assertFalse(m.run_is_live(run), 'launcher gone, no attempt')
+        attempt = run / 'codex-attempt'; attempt.mkdir()
+        m.reserve_execution(attempt)
+        self.assertTrue(m.run_is_live(run), 'launcher gone, an attempt reserved but not started')
+        m.save(attempt / 'execution.json', dict(started=True))
+        with m.locked(attempt / 'execution.lock', blocking=False):
+            self.assertTrue(m.run_is_live(run), 'launcher gone, an attempt still running')
+        self.assertFalse(m.run_is_live(run), 'launcher gone, every attempt ended')
+        (run / 'process.json').unlink()
+        self.assertFalse(m.run_is_live(run), 'no launcher record, every attempt ended')
+        m.save(run / 'process.json', alive)
+        self.assertTrue(m.run_is_live(run), 'its launcher is alive again')
+        self.finish(run)
+        self.assertFalse(m.run_is_live(run), 'an orchestration result ends it whatever else is alive')
+    def test_actor_stays_within_32_when_the_counter_gains_a_digit(self):
+        import hashlib, io, contextlib
+        task = 'T-LONGTASKID'
+        slug = 'tlon' + hashlib.sha256(task.encode()).hexdigest()[:5]
+        runs = self.root / 'state/runs'
+        def at_the_boundary(taken):
+            # r99999 is taken, so the retry lands on r100000: room 6, then 5.
+            m.save(runs / 'counter.json', dict(number=99998))
+            (runs / f'reviewer-{taken}-{slug}-r99999').mkdir(exist_ok=True)
+        # A reused name that still fits is reported and recorded whole.
+        (self.root / 'config.yaml').write_text('roster:\n  - ada\n')
+        m.allocate(self.root, 'worker', 'T-700', '')  # ada is live
+        at_the_boundary('ada2')
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            run = m.allocate(self.root, 'reviewer', task, '')
+        self.assertEqual(f'reviewer-ada2-{slug}-r100000', run.name)
+        self.assertLessEqual(len(run.name), 32)
+        self.assertIn('every roster name is live (1); reusing ada as ada2', said.getvalue())
+        identity = json.loads((run / 'identity.json').read_text())
+        self.assertEqual(('ada2', 'ada'), (identity['name'], identity['reused']))
+        # A name with no room is refused, never cut into a label that is not
+        # the live holder's: sophia is live, so sophi would be her in disguise.
+        (self.root / 'config.yaml').write_text('roster:\n  - sophia\n  - sophie\n')
+        m.allocate(self.root, 'worker', 'T-701', '')  # sophia is live
+        at_the_boundary('sophie')
+        with self.assertRaisesRegex(RuntimeError, 'crew name sophie does not fit'):
+            m.allocate(self.root, 'reviewer', task, '')
+        # The alias path, straight at r100000 (room 5): a live alias is refused
+        # although only its first five letters would fit, and an alias with
+        # no room is refused, not cut.
+        m.allocate(self.root, 'worker', 'T-702', 'Abcdef')  # abcdef is live
+        for alias, refusal in (('Abcdef', 'abcdef is live'), ('Uvwxyz', 'uvwxyz does not fit')):
+            with self.subTest(alias=alias):
+                m.save(runs / 'counter.json', dict(number=99999))
+                with self.assertRaisesRegex(RuntimeError, refusal):
+                    m.allocate(self.root, 'reviewer', task, alias)
+        names = {json.loads(p.read_text())['name'] for p in runs.glob('*/identity.json')}
+        self.assertEqual({'ada', 'ada2', 'sophia', 'abcdef'}, names)
+        self.assertEqual([], [p.name for p in runs.glob('*') if len(p.name) > 32])
+    def test_exhausted_roster_is_reported_and_names_the_reused_name(self):
+        (self.root / 'config.yaml').write_text('vendor: claude\nroster:\n  - Ada\n  - Bo  # short\nconcurrency: 3\n')
+        a = m.allocate(self.root, 'worker', 'T-500', '')
+        b = m.allocate(self.root, 'reviewer', 'T-501', '')
+        self.assertEqual(['ada', 'bo'], sorted([self.name(a), self.name(b)]))
+        import io, contextlib
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            c = m.allocate(self.root, 'worker', 'T-502', '')
+        self.assertEqual('ada2', self.name(c))
+        self.assertRegex(c.name, r'^worker-ada2-t502-r[0-9]+$')
+        self.assertIn('every roster name is live', said.getvalue())
+        self.assertIn('reusing ada as ada2', said.getvalue())
+        identity = json.loads((c / 'identity.json').read_text())
+        self.assertEqual('ada', identity['reused'])
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual('ada3', self.name(m.allocate(self.root, 'worker', 'T-503', '')))
+    def test_a_run_from_before_the_roster_holds_the_name_in_its_actor(self):
+        # identity.json from before T-089: no `name`, only the actor.
+        legacy = self.root / 'state/runs/worker-mira-t035-r5'; legacy.mkdir(parents=True)
+        m.save(legacy / 'identity.json', dict(actor=legacy.name, role='worker', task='T-035',
+                                              requested_alias='', run=str(legacy), created=1.0))
+        self.assertEqual('mira', m.crew_name(json.loads((legacy / 'identity.json').read_text())))
+        fresh = m.allocate(self.root, 'worker', 'T-800', '')
+        self.assertEqual(m.DEFAULT_ROSTER[1], self.name(fresh))
+        with self.assertRaisesRegex(RuntimeError, 'mira is live'):
+            m.allocate(self.root, 'reviewer', 'T-801', 'mira')
+    def test_live_alias_is_refused(self):
+        first = m.allocate(self.root, 'worker', 'T-600', 'Juno')
+        self.assertEqual('juno', self.name(first))
+        with self.assertRaisesRegex(RuntimeError, 'juno is live'):
+            m.allocate(self.root, 'reviewer', 'T-601', 'juno')
+        with self.assertRaisesRegex(RuntimeError, 'juno is live'):
+            m.allocate(self.root, 'worker', 'T-600', 'worker-Juno')
+        self.finish(first)
+        self.assertEqual('juno', self.name(m.allocate(self.root, 'reviewer', 'T-601', 'juno')))
+    def test_roster_config_is_validated(self):
+        (self.root / 'config.yaml').write_text('roster: [Ada, bo]\n')
+        self.assertEqual(['ada', 'bo'], m.fleet_roster(self.root))
+        (self.root / 'config.yaml').write_text('roster:\n  - ada\n  - ADA\n')
+        with self.assertRaisesRegex(ValueError, 'more than once'):
+            m.fleet_roster(self.root)
+        (self.root / 'config.yaml').write_text('roster:\n  - mary-jane\n')
+        with self.assertRaisesRegex(ValueError, 'roster'):
+            m.fleet_roster(self.root)
+        (self.root / 'config.yaml').write_text('vendor: claude\n')
+        self.assertEqual(list(m.DEFAULT_ROSTER), m.fleet_roster(self.root))
+        # An empty roster is refused like any other invalid one, not defaulted.
+        for empty in ('roster:\nvendor: claude\n', 'roster: []\n', 'roster:\n'):
+            with self.subTest(empty=empty):
+                (self.root / 'config.yaml').write_text(empty)
+                with self.assertRaisesRegex(ValueError, 'roster is empty'):
+                    m.fleet_roster(self.root)
+
 class Entrypoints(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name)
         shutil.copytree(root / 'bin', self.repo / 'bin')
         shutil.copytree(root / 'skills', self.repo / 'skills')
-        (self.repo / 'design').mkdir()
-        (self.repo / 'design/tasks.json').write_text(json.dumps({'tasks':[dict(id='T-035',title='test',scope=['src/**'],depends_on=[],acceptance=['works'])]}))
+        (self.repo / 'design/tasks').mkdir(parents=True)
+        (self.repo / 'design/tasks/T-035.json').write_text(json.dumps(dict(id='T-035',title='test',scope=['src/**'],depends_on=[],acceptance=['works'])))
         (self.repo / 'design/design.md').write_text('## 6. Gates\nEvidence\n## 8. Board\n')
         (self.repo / 'config.yaml').write_text('vendor: codex\nconcurrency: 2\n')
         self.fake = self.repo / 'fakebin'; self.fake.mkdir()
@@ -335,7 +546,8 @@ if os.environ.get('FM_TEST_ASYNC')=='1':
  (r/'model.pid').write_text(str(os.getpid()))
  while not (r/'release-model').exists(): time.sleep(.02)
 # held until the test says so, rather than for a number of seconds a loaded
-# machine can spend before the test has looked
+# machine can spend before the test has looked; T-089's same-name retirement
+# test holds all three runs live here until it touches `release`
 if os.environ.get('FM_TEST_HOLD'):
  while not (r/os.environ['FM_TEST_HOLD']).exists(): time.sleep(.02)
 time.sleep(float(os.environ.get('FM_TEST_DELAY','0')))
@@ -351,7 +563,10 @@ raise SystemExit(int(os.environ.get('FM_TEST_EXIT','0')))
         self.executable('git', r'''
 import json,os,pathlib,sys
 r=pathlib.Path(os.environ['FM_TEST_ROOT']); a=sys.argv[1:]
-if a[0]=='show': print((r/'design/tasks.json').read_text())
+if a[0]=='show':
+ p=r/a[-1].split(':',1)[-1]
+ if not p.is_file(): sys.exit(128)
+ print(p.read_text())
 elif a[0] in ('show-ref','ls-remote'): sys.exit(1)
 elif a[:2]==['worktree','add']:
  pathlib.Path(a[-2]).mkdir(parents=True,exist_ok=True)
@@ -492,6 +707,33 @@ elif a[0]=='branch': print('t-035-test')
         reply=self.invoke('fm-worker.sh',['--task','T-unused','--task','T-035'])
         self.assertEqual(70,reply.returncode,reply.stderr)
         self.assertIn('already has a live worker',reply.stderr)
+    def test_entrypoints_refuse_a_live_alias_in_one_line(self):
+        live=m.allocate(self.repo,'worker','T-900','Juno')  # starting: no launcher record yet
+        for script,args in (('fm-worker.sh',['--task','T-035','--name','juno']),
+                            ('fm-review.sh',['--task','T-035','--branch','work','--name','Juno'])):
+            with self.subTest(script=script):
+                answer=self.invoke(script,args)
+                self.assertEqual(70,answer.returncode,answer.stderr)
+                self.assertIn('crew name juno is live in another run',answer.stderr)
+                self.assertNotIn('Traceback',answer.stderr)
+        self.assertEqual([live.name],[p.name for p in (self.repo/'state/runs').glob('*-juno-*')])
+    def test_entrypoints_report_an_exhausted_roster(self):
+        (self.repo/'config.yaml').write_text('vendor: codex\nconcurrency: 2\nroster:\n  - ada\n')
+        m.allocate(self.repo,'worker','T-900','')  # ada is live
+        answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'])
+        self.assertEqual(0,answer.returncode,answer.stderr)
+        self.assertIn('every roster name is live (1); reusing ada as ada2',answer.stderr)
+        self.assertRegex(json.loads(self.results()[0].read_text())['actor'],r'^reviewer-ada2-t035-r[0-9]+$')
+    def test_entrypoints_refuse_a_bad_roster_in_one_line(self):
+        for roster,said in (('roster:\n  - mary-jane\n',"config.yaml roster: 'mary-jane' is not a short given name"),
+                            ('roster: []\n','config.yaml roster is empty')):
+            with self.subTest(roster=roster):
+                (self.repo/'config.yaml').write_text('vendor: codex\n'+roster)
+                answer=self.invoke('fm-worker.sh',['--task','T-035'])
+                self.assertEqual(70,answer.returncode,answer.stderr)
+                self.assertIn(said,answer.stderr)
+                self.assertNotIn('Traceback',answer.stderr)
+        self.assertEqual([],list((self.repo/'state/runs').glob('*/identity.json')))
     def test_real_reviewer_entrypoint_identity_and_final_provenance(self):
         answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work','--name','Noah'],
                            FM_TEST_VERDICT='REJECT')
@@ -594,17 +836,26 @@ elif a[0]=='branch': print('t-035-test')
         self.assertTrue(panes)
         self.assertNotIn('pane-inflight',{p['pane_id'] for p in panes})
     def test_concurrent_same_task_reviewers_and_worker_retire_exact_actor(self):
+        # A live alias is refused (T-089), so three live runs cannot share
+        # `--name same`. A one-name roster keeps them as close as they can be:
+        # same, same2, same3, where one actor's name is a prefix of the others.
+        (self.repo/'config.yaml').write_text('vendor: codex\nconcurrency: 2\nroster:\n  - same\n')
         def launch(role):
-            args=['--task','T-035','--name','same']
+            args=['--task','T-035']
             if role=='review': args += ['--branch','work']
-            return self.invoke('fm-'+role+'.sh',args,FM_TEST_DELAY='.2')
+            return self.invoke('fm-'+role+'.sh',args,FM_TEST_HOLD='release')
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-            answers=list(pool.map(launch,['review','review','worker']))
+            futures=[pool.submit(launch,role) for role in ['review','review','worker']]
+            # All three are allocated while all three are live, then released.
+            self.wait_for(lambda:len(list((self.repo/'state/runs').glob('*-t035-r*/identity.json')))>=3)
+            (self.repo/'release').touch()
+            answers=[future.result() for future in futures]
         for answer in answers: self.assertEqual(0,answer.returncode,answer.stderr)
         events=[json.loads(s) for s in (self.repo/'state/events.jsonl').read_text().splitlines()]
         started={e['actor'] for e in events if e['type'] in ('dispatched','review_opened')}
         ended=[e['actor'] for e in events if e['type']=='agent_finished']
         self.assertEqual(3,len(started)); self.assertEqual(started,set(ended)); self.assertEqual(3,len(ended))
+        self.assertEqual({'same','same2','same3'},{a.split('-')[1] for a in started})
     def test_transport_failure_stops_worker_before_success(self):
         self.executable('herdr','raise SystemExit(7)')
         answer=self.invoke('fm-worker.sh',['--task','T-035'])

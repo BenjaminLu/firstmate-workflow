@@ -1,0 +1,20 @@
+{
+  "id": "T-007",
+  "milestone": "M0",
+  "bootstrap": true,
+  "depends_on": [
+    "T-005",
+    "T-006"
+  ],
+  "title": "fm-dispatch.sh: the DAG, the limit, and the green-light gate",
+  "scope": [
+    "bin/fm-dispatch.sh",
+    "tests/dispatch.test.sh"
+  ],
+  "acceptance": [
+    "dispatches nothing and exits non-zero when the log holds no matching greenlit event",
+    "dispatches only tasks whose depends_on are all merged",
+    "never exceeds the concurrency in config.yaml",
+    "ci.sh fails when section 14 of design.md and tasks.json disagree"
+  ]
+}

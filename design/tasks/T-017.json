@@ -1,0 +1,29 @@
+{
+  "id": "T-017",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-007"
+  ],
+  "title": "fm-reconcile.sh: reconciling after a crash",
+  "scope": [
+    "bin/fm-reconcile.sh",
+    "tests/reconcile.test.sh",
+    "tests/option-loop.test.sh",
+    "design/tasks.json",
+    "bin/fm-worker.sh",
+    "tests/worker.test.sh",
+    "bin/ci.sh",
+    "tests/ci.test.sh",
+    ".github/workflows/ci.yml",
+    "design/design.md"
+  ],
+  "acceptance": [
+    "replaying events.jsonl rebuilds the whole state with no snapshot",
+    "walks state/worktrees and gh pr list to find orphans",
+    "a worker whose pid is gone is marked worker_crashed and redispatched",
+    "reconciling is idempotent: two runs leave the same state",
+    "a merged pull request whose event carried no task is repaired from the branch name",
+    "it prints what it would change and changes nothing with --dry-run"
+  ]
+}

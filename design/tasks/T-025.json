@@ -1,0 +1,53 @@
+{
+  "id": "T-025",
+  "milestone": "M1",
+  "bootstrap": false,
+  "depends_on": [
+    "T-003",
+    "T-006",
+    "T-024"
+  ],
+  "title": "the adapter verdict: a vendor that fails silently is not one that worked",
+  "scope": [
+    "bin/adapters/**",
+    "bin/fm-config.sh",
+    "bin/fm-review.sh",
+    "bin/fm-worker.sh",
+    "bin/fm-run.sh",
+    "bin/fm-emit.sh",
+    "bin/ci.sh",
+    "board/server.ts",
+    "config.yaml",
+    "skills/reviewer/SKILL.md",
+    "tests/**",
+    "design/design.md",
+    "design/tasks.json"
+  ],
+  "acceptance": [
+    "an adapter reports unavailable when its CLI prints an outage and exits 0",
+    "a finished run whose own output discusses logins, rate limits or 429 is done, not an outage",
+    "a verdict reads only the bytes its own run added to the shared fallback log",
+    "each adapter is asserted to produce the invocation its CLI documents, not merely to be handed the prompt",
+    "the reviewer falls back through the same chain as the worker, from one implementation",
+    "no vendor runs twice however the fallback list is written",
+    "a review round must carry APPROVE or REJECT; anything else is an engine that failed, exits 3 and emits review_failed",
+    "a failed round keeps the engine's log under state/reviews and says where it is",
+    "fm-run reports a reviewer that was unavailable or produced no verdict instead of swallowing it",
+    "review_failed and worker_crashed read as blocked on the board, in counts as well as lanes",
+    "every stage the board maps is a type fm-emit will write",
+    "no stage of bin/ci.sh reads standard input, and a suite is handed /dev/null",
+    "the hygiene lint is asserted to be linting the suites it was given",
+    "no script dispatches a child without closing standard input, proved by a probe that blocks forever if it is open",
+    "the gate lints bin/adapters as well as bin, which bin/*.sh does not reach",
+    "work in the worktree is never discarded because the verdict read an outage",
+    "wording never decides finally: the caller supplies the evidence and work beats a signature",
+    "a vendor named in config.yaml with no adapter behind it is a configuration error, not an outage",
+    "a fixture that swaps a script out is paired with its restore by the harness, and a hand-rolled one fails the gate",
+    "the gate names every script that dispatches without closing standard input",
+    "an exit code never overrules produced work, in the adapters or in either caller",
+    "every signature is shaped like a failure and is read against a healthy transcript as well as a failing one",
+    "a configuration error is found before any vendor runs",
+    "each attempt reads only its own output: its own directory and its own slice of the shared log",
+    "a file that is meant to be sourced never carries the standard-input redirect"
+  ]
+}

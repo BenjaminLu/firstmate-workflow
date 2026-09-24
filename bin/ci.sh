@@ -517,37 +517,37 @@ else
 fi
 
 stage "dag"
-# a design's task table and its task list are two views of one DAG, checked
-# once for every registered project (design section 15.2). A tree with no
-# registry has the one pair it always had.
-dag_check() {   # dag_check <label> <design> <tasks>
-  local label="$1" design="$2" tasks="$3" missing='' id
-  for id in $(jq -r '.tasks[].id' "$tasks" 2>/dev/null); do
-    grep -q "| $id |" "$design" || missing="$missing $id"
-  done
-  if [ -n "$missing" ]; then
-    flunk "${label}tasks.json has ids the design does not list:$missing"
+# a task list is a directory, one file per task (T-090), checked once for
+# every registered project (design section 15.2): every file parses, its id
+# is its file name, its dependencies exist, and nothing waits on itself.
+# Nothing generated is committed, so there is no copy to agree with. A tree
+# with no registry has the one directory, design/tasks.
+dag_check() {   # dag_check <label> <dir>
+  local label="$1" dir="$2" problems n
+  if problems="$(fm_tasks_check "$dir" 2>&1)"; then
+    n="$(find "$dir" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')"
+    pass "${label}every task file parses, is named by its id, and depends only on tasks that exist, with no cycle ($n tasks)"
   else
-    pass "${label}the design and tasks.json agree"
+    flunk "${label}the task list is not a sound DAG:"
+    printf '%s\n' "$problems" | sed 's/^/      /'
   fi
 }
 if ! registry="$(fm_projects config.yaml 2>&1)"; then
   flunk "the project registry: $registry"
 elif [ -z "$registry" ]; then
-  if [ -f design/tasks.json ] && [ -f design/design.md ]; then
-    dag_check '' design/design.md design/tasks.json
+  if [ -e design/tasks ] || [ -e design/tasks.json ]; then
+    dag_check '' design/tasks
   else
     skip "no DAG yet"
   fi
 else
   for name in $registry; do
-    design="$(fm_project_get "$name" design config.yaml)" \
-      && tasks="$(fm_project_get "$name" tasks config.yaml)" \
+    tasks="$(fm_project_get "$name" tasks config.yaml)" \
       || { flunk "project ${name}: its registry entry does not resolve"; continue; }
-    if [ -f "$design" ] && [ -f "$tasks" ]; then
-      dag_check "project ${name} ($design, $tasks): " "$design" "$tasks"
+    if [ -d "$tasks" ]; then
+      dag_check "project ${name} ($tasks): " "$tasks"
     else
-      flunk "project ${name}: $design or $tasks does not exist"
+      flunk "project ${name}: $tasks does not exist"
     fi
   done
 fi

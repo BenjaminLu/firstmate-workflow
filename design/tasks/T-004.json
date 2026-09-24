@@ -1,0 +1,22 @@
+{
+  "id": "T-004",
+  "milestone": "M0",
+  "bootstrap": true,
+  "depends_on": [
+    "T-002",
+    "T-003"
+  ],
+  "title": "fm-gate.sh, the seven gates",
+  "scope": [
+    "bin/fm-gate.sh",
+    "tests/gate.test.sh"
+  ],
+  "acceptance": [
+    "each of the seven gates has one passing and one blocking case, fourteen in all",
+    "gate 5 blocks a pull request whose new test stays green after the implementation is reverted",
+    "gate 5 passes a pull request whose new test goes red when the implementation is reverted",
+    "gate 4 blocks a diff that reaches outside the task's scope globs in tasks.json",
+    "gate 7 ignores an APPROVE string that did not come from the configured reviewer account",
+    "the exit code says which gate failed"
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "id": "T-023",
+  "milestone": "M0",
+  "bootstrap": true,
+  "depends_on": [
+    "T-005"
+  ],
+  "title": "fm-cleanup.sh: a worker removes its own worktree and nothing else",
+  "scope": [
+    "bin/fm-cleanup.sh",
+    "bin/fm-worker.sh",
+    "tests/cleanup.test.sh",
+    "design/tasks.json",
+    "design/design.md"
+  ],
+  "acceptance": [
+    "removes state/worktrees/<task> and the branch's registration, after that task's pull request is merged",
+    "refuses any path that does not resolve to a direct child of the repository's own worktree root",
+    "refuses a path escaping through .. or through a symlink, with a test for each",
+    "refuses the repository root, the main worktree, and a path belonging to another repository",
+    "refuses while the pull request is still open, so an unmerged branch is never swept away",
+    "is idempotent: cleaning an already-clean task changes nothing and exits 0",
+    "every worktree lives under one root inside the repository, so the system stays self-contained"
+  ]
+}

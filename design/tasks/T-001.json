@@ -1,0 +1,21 @@
+{
+  "id": "T-001",
+  "milestone": "M0",
+  "bootstrap": true,
+  "depends_on": [],
+  "title": "repo skeleton, the one gate, and a bash test harness",
+  "scope": [
+    "bin/ci.sh",
+    "tests/**",
+    "config.yaml",
+    ".github/workflows/**",
+    ".gitignore",
+    "README.md"
+  ],
+  "acceptance": [
+    "bin/ci.sh exists, is executable, and exits 0 on a tree with no tests",
+    "every tests/*.test.sh runs; any non-zero makes the whole gate non-zero and the failing suite is named",
+    "shellcheck is clean over bin/**.sh",
+    "the GitHub Actions workflow calls bin/ci.sh rather than restating its steps"
+  ]
+}

@@ -16,13 +16,13 @@ fixture() {
   local d; d="$(mktemp -d)"
   git init -q -b main "$d/repo"; cd "$d/repo" || return 1
   git config user.email a@b.c; git config user.name t
-  mkdir -p bin design skills/reviewer src state
+  mkdir -p bin design/tasks skills/reviewer src state
   cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" bin/
   cp "$ROOT/bin/fm-herdr.py" bin/
   cp -r "$ROOT/bin/adapters" bin/
   cp "$ROOT/skills/reviewer/SKILL.md" skills/reviewer/
   printf 'vendor: mock\n' > config.yaml
-  printf '{"tasks":[{"id":"T-Z","title":"a task","activity":{"en":"Review the authored task","zh-TW":"審查已撰寫的任務"},"scope":["src/**"],"acceptance":["it exists"]}]}\n' > design/tasks.json
+  printf '{"id":"T-Z","title":"a task","activity":{"en":"Review the authored task","zh-TW":"審查已撰寫的任務"},"scope":["src/**"],"acceptance":["it exists"]}\n' > design/tasks/T-Z.json
   echo base > src/a; git add -A; git commit -qm base
   git checkout -q -b work
   echo "SECRET_WORKER_REASONING" > src/a
@@ -166,11 +166,11 @@ assert_eq "missing_review" \
 # signed final under last-result with a non-matching chain token. Recovery
 # must still post that verdict (transport interrupted mid-chain).
 recover="$(mktemp -d)"
-mkdir -p "$recover/bin" "$recover/design" "$recover/skills/reviewer" "$recover/src" "$recover/state"
+mkdir -p "$recover/bin" "$recover/design/tasks" "$recover/skills/reviewer" "$recover/src" "$recover/state"
 cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" "$ROOT/bin/fm-herdr.py" "$recover/bin/"
 cp -r "$ROOT/bin/adapters" "$recover/bin/"
 cp "$ROOT/skills/reviewer/SKILL.md" "$recover/skills/reviewer/"
-printf '{"tasks":[{"id":"T-Z","title":"z","scope":["src/**"],"depends_on":[],"acceptance":["a"]}]}\n' > "$recover/design/tasks.json"
+printf '{"id":"T-Z","title":"z","scope":["src/**"],"depends_on":[],"acceptance":["a"]}\n' > "$recover/design/tasks/T-Z.json"
 printf '## 6. Gates\n\n## 8. Board\n' > "$recover/design/design.md"
 printf 'vendor: mock\n' > "$recover/config.yaml"
 mkdir -p "$recover/src"; printf 'x\n' > "$recover/src/a"
@@ -340,18 +340,13 @@ rm -rf "$d"
 
 
 # A task that defines itself on its own branch - which is how every new
-# task arrives - was invisible: fm-review read design/tasks.json from
-# whatever was checked out and said "no task T-027" for a task sitting in
-# the diff it was handed.
+# task arrives - was invisible: fm-review read the task list from whatever
+# was checked out and said "no task T-027" for a task sitting in the diff it
+# was handed. The task's own file on the branch is what it reads (T-090).
 d9="$(fixture)"; r9="$d9/repo"; GH9="$(ghstub "$d9")"
 ( cd "$r9" && git checkout -q -b newtask main \
-  && python3 - <<'P'
-import json
-d=json.load(open("design/tasks.json"))
-d["tasks"].append({"id":"T-NEW","title":"defined on its own branch",
-                   "scope":["src/**"],"acceptance":["it exists"]})
-json.dump(d, open("design/tasks.json","w"))
-P
+  && printf '{"id":"T-NEW","title":"defined on its own branch","scope":["src/**"],"acceptance":["it exists"]}\n' \
+       > design/tasks/T-NEW.json
   git add -A && git -c user.email=a@b.c -c user.name=t commit -qm "add T-NEW"
   git checkout -q main )
 out9="$(cd "$r9" && FM_ROOT="$r9" FM_GH="$GH9" bin/fm-review.sh --task T-NEW --branch newtask 2>&1)"
@@ -365,6 +360,25 @@ assert_eq "Work description unavailable|尚無工作說明" \
 ( cd "$r9" && FM_ROOT="$r9" FM_GH="$GH9" bin/fm-review.sh --task T-NOPE --branch newtask >/dev/null 2>&1 )
 assert_eq "65" "$?" "a task that exists nowhere is still refused"
 rm -rf "$d9"
+
+# A branch opened before T-090 has no task file, only its own old
+# design/tasks.json. The reviewer reads the task from that array: one
+# defined only there is found, and one the branch revised is reviewed as
+# revised, not as main's file has it (the activity shows which was read).
+d10="$(fixture)"; r10="$d10/repo"; GH10="$(ghstub "$d10")"
+( cd "$r10" && git checkout -q -b oldbranch main && git rm -q -r design/tasks && mkdir -p design \
+  && printf '%s\n' '{"tasks":[{"id":"T-Z","title":"a task","activity":{"en":"Revised on the branch","zh-TW":"分支上修訂"},"scope":["src/**"],"acceptance":["it exists"]},{"id":"T-OLD","title":"only in the old array","scope":["src/**"],"acceptance":["it exists"]}]}' \
+       > design/tasks.json \
+  && git add design/tasks.json && git -c user.email=a@b.c -c user.name=t commit -qm "old array" \
+  && git checkout -q main )
+out10="$(cd "$r10" && FM_ROOT="$r10" FM_GH="$GH10" bin/fm-review.sh --task T-OLD --branch oldbranch 2>&1)"
+assert_ne "65" "$?" "a task defined only in the branch's old design/tasks.json is found"
+assert_lacks "$out10" "no task T-OLD" "and not reported as missing"
+( cd "$r10" && FM_ROOT="$r10" FM_GH="$GH10" bin/fm-review.sh --task T-Z --branch oldbranch >/dev/null 2>&1 )
+assert_eq "Revised on the branch" \
+  "$(jq -r 'select(.type=="review_opened" and .task=="T-Z")|.data.activity.en' "$r10/state/events.jsonl" | tail -1)" \
+  "a task the branch revised in its old array is reviewed as the branch says it"
+rm -rf "$d10"
 
 
 # Criterion 9 says every exit path, including the ones that give up -
@@ -386,7 +400,7 @@ for scenario in signed unsigned outage; do
   assert_eq "1" "$(jq -r 'select(.type=="agent_finished")|.type' "$rr/state/events.jsonl" | grep -c . || true)" \
     "and exactly once"
   assert_matches "$(jq -r 'select(.type=="agent_finished")|.actor' < "$rr/state/events.jsonl")" \
-    '^reviewer-noah-tz-r[0-9]+$' "and under its own per-run name"
+    '^reviewer-[a-z]+[0-9]*-tz-r[0-9]+$' "and under its own per-run name"
   rm -rf "$dr"
 done
 
@@ -500,7 +514,7 @@ review_c() {   # review_c <capture> <args...>
 today() {      # today <round>
   cat "$rc/skills/reviewer/SKILL.md"
   printf '\n---\n\n# The task\n\n```json\n%s\n```\n' \
-    "$(jq -r '.tasks[]|select(.id=="T-Z")' "$rc/design/tasks.json")"
+    "$(jq . "$rc/design/tasks/T-Z.json")"
   printf '\n# Round %s\n' "$1"
   [ "$1" -ge 3 ] && printf '\nThis is round three or later. If the worker has posted ASK-PASS-CRITERIA, answer with the complete numbered list and then post CRITERIA-COMPLETE:%s.\n' T-Z
   printf '\n---\n\n# The diff under review\n\n```diff\n'

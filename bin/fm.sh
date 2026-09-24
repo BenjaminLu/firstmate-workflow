@@ -9,6 +9,8 @@
 #   fm.sh self-update --adopt SK-001               after the captain says yes
 #   fm.sh sync-skills <dir> [--name NAME]          import external skills
 #   fm.sh lint                                     the two skill lints
+#   fm.sh tasks                                    the task table, on demand
+#   fm.sh tasks split [ID]                         design/tasks.json -> one file each
 #
 # The system defines its own behaviour in skills/, which makes editing a
 # skill the one thing it must not be able to do quietly. So self-update
@@ -20,9 +22,9 @@
 # first cut of this script stopped at printing instructions for a human to
 # paste. A card the captain answers with nothing downstream reading the
 # answer is decoration: --adopt reads state/decisions/D-<id>.json, refuses
-# unless the captain approved it, and only then writes the task into
-# design/tasks.json and its row into section 14 of design/design.md - the two
-# files fm-dispatch.sh and bin/ci.sh actually read. It still writes no skill.
+# unless the captain approved it, and only then writes the task into its own
+# file, design/tasks/<id>.json - the list fm-dispatch.sh and bin/ci.sh
+# actually read (T-090). It still writes no skill.
 #
 # `fm.sh lint` runs in CI today through tests/selfupdate.test.sh, which
 # asserts it against this repository and which bin/ci.sh runs like any other
@@ -37,6 +39,10 @@ exec < /dev/null
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${FM_ROOT:-$(cd "$HERE/.." && pwd)}"
+# the one reader and writer of the task list (fm_tasks, fm_tasks_write)
+[ -f "$HERE/fm-config.sh" ] || { echo "fm: missing $HERE/fm-config.sh" >&2; exit 70; }
+# shellcheck source=bin/fm-config.sh
+. "$HERE/fm-config.sh"
 
 TAB="$(printf '\t')"
 die() { printf 'fm: %s\n' "$1" >&2; exit "${2:-64}"; }
@@ -72,10 +78,20 @@ usage: fm.sh <command> [options]
         through a pull request, under the same seven gates.
 
   self-update --adopt <SK-id> [--repo DIR]
-        The captain answered the card yes. Copy the proposal into
-        design/tasks.json and its row into design/design.md, so the
-        dispatcher can pick it up. Refuses while the card is unanswered
-        or answered no. Still edits no skill.
+        The captain answered the card yes. Copy the proposal into its own
+        task file, design/tasks/<SK-id>.json, so the dispatcher can pick
+        it up. Refuses while the card is unanswered or answered no. Still
+        edits no skill.
+
+  tasks [--repo DIR]
+        Print the task table from design/tasks/, grouped by milestone:
+        id, title and dependencies. Nothing generated is committed.
+
+  tasks split [ID] [--repo DIR]
+        Move entries of the old one-array task list, design/tasks.json,
+        into design/tasks/<id>.json. Given an ID, move that entry alone
+        and overwrite its file: a branch bringing its own task over.
+        Without one, an existing file that differs is refused.
 
   sync-skills <source-dir> [--name NAME] [--repo DIR]
         Import external skills into skills/vendor/, read-only. One way:
@@ -572,7 +588,8 @@ cmd_selfupdate() {
 
   dir="$repo/state/skill-updates"
   mkdir -p "$dir" || die "self-update: cannot create $dir" 70
-  id="$(next_id "$dir" "$repo/design/tasks.json")"
+  id="$(next_id "$dir" "$repo/design/tasks")" \
+    || die "self-update: the task list in design/tasks/ does not read; no id is taken" 65
 
   # An ordinary task spec, and ordinary is the point: fm-dispatch reads it,
   # fm-worker branches from it, fm-gate gates it. The scope reaches the skill
@@ -613,11 +630,11 @@ cmd_selfupdate() {
 # the only thing that turns an approved D-SK-* into work the dispatcher can
 # see, and it refuses to run until the captain has actually said yes.
 #
-# It writes design/tasks.json and design/design.md, which is to say it writes
-# the plan. It does not write a skill: the skill is changed on a branch, by a
-# worker, through the pull request the adopted task produces.
+# It writes design/tasks/<id>.json, which is to say it writes the plan. It
+# does not write a skill: the skill is changed on a branch, by a worker,
+# through the pull request the adopted task produces.
 adopt_proposal() {
-  local repo="$1" id="$2" spec answer chosen tasks design row tmp
+  local repo="$1" id="$2" spec answer chosen tasks
   [[ "$id" =~ ^SK-[0-9]{3,}$ ]] || die "self-update: $id is not a proposal id (SK-001)"
   spec="$repo/state/skill-updates/$id.json"
   [ -f "$spec" ] || die "self-update: no proposal at state/skill-updates/$id.json"
@@ -627,39 +644,23 @@ adopt_proposal() {
   chosen="$(jq -r '.chosen // empty' "$answer" 2>/dev/null)"
   [ "$chosen" = "A" ] || die "self-update: the captain answered D-$id with ${chosen:-nothing}, not A" 1
 
-  tasks="$repo/design/tasks.json"
-  design="$repo/design/design.md"
-  [ -f "$tasks" ] || die "self-update: no design/tasks.json to adopt into"
-  [ -f "$design" ] || die "self-update: no design/design.md to adopt into"
+  tasks="$repo/design/tasks"
+  [ -d "$tasks" ] || die "self-update: no design/tasks/ to adopt into"
   [ -x "$repo/bin/fm-emit.sh" ] || die "self-update: bin/fm-emit.sh is missing" 70
 
-  if jq -e --arg id "$id" '[.tasks[]?.id] | index($id)' "$tasks" >/dev/null 2>&1; then
-    printf 'fm self-update: %s is already in design/tasks.json\n' "$id"
+  # one file of its own: adopting touches no other task's text, and there is
+  # no table to keep in step - `fm.sh tasks` prints one on demand
+  if fm_task "$id" "$tasks" >/dev/null; then
+    printf 'fm self-update: %s is already design/tasks/%s.json\n' "$id" "$id"
   else
-    tmp="$tasks.new"
-    jq --slurpfile s "$spec" '.tasks += $s' "$tasks" > "$tmp" \
-      || { rm -f "$tmp"; die "self-update: could not add $id to design/tasks.json" 70; }
-    mv "$tmp" "$tasks" || { rm -f "$tmp"; die "self-update: could not replace tasks.json" 70; }
-    printf 'fm self-update: %s added to design/tasks.json\n' "$id"
-  fi
-
-  # section 14 is a table and bin/ci.sh greps it for "| <id> |", so the row
-  # goes after the last row of the last table rather than at the end of the
-  # file, where it would satisfy the grep and read as nonsense to a human
-  if [ -f "$design" ]; then
-    if grep -q "| $id |" "$design"; then
-      printf 'fm self-update: design.md already lists %s\n' "$id"
-    else
-      row="| $id | skill-update: $(jq -r .title "$spec" | sed 's/^skill-update: //') | - |"
-      tmp="$design.new"
-      awk -v row="$row" '
-        { L[NR] = $0; if ($0 ~ /^\|/) last = NR } END {
-          for (i = 1; i <= NR; i++) { print L[i]; if (i == last) print row }
-          if (last == 0) print row
-        }' "$design" > "$tmp" || { rm -f "$tmp"; die "self-update: could not write design.md" 70; }
-      mv "$tmp" "$design" || { rm -f "$tmp"; die "self-update: could not replace design.md" 70; }
-      printf 'fm self-update: %s listed in design/design.md\n' "$id"
-    fi
+    # written beside the list and renamed in, so a failed write leaves no
+    # half-written task for the dispatcher to read
+    rm -rf "$tasks/.adopt.$id"
+    fm_tasks_write "$spec" "$tasks/.adopt.$id" \
+      && mv "$tasks/.adopt.$id/$id.json" "$tasks/$id.json" \
+      || { rm -rf "$tasks/.adopt.$id"; die "self-update: could not write design/tasks/$id.json" 70; }
+    rm -rf "$tasks/.adopt.$id"
+    printf 'fm self-update: %s added as design/tasks/%s.json\n' "$id" "$id"
   fi
 
   [ -x "$repo/bin/fm-emit.sh" ] && FM_ROOT="$repo" "$repo/bin/fm-emit.sh" \
@@ -670,17 +671,101 @@ adopt_proposal() {
 }
 
 # the next free SK id, counting both the proposals already made and any that
-# have since been adopted into the task file
+# have since been adopted into the task list. 1 when the task list does not
+# read: an id counted from half the list may be one already taken.
 next_id() {
-  local dir="$1" tasks="$2" cur max=0
+  local dir="$1" tasks="$2" cur max=0 all
+  all="$(fm_tasks "$tasks")" || return 1
   while IFS= read -r cur; do
     [ -n "$cur" ] || continue
     cur=$((10#$cur))
     [ "$cur" -gt "$max" ] && max="$cur"
   done <<< "$( { ls "$dir" 2>/dev/null | sed -n 's/^SK-\([0-9][0-9]*\)\.json$/\1/p'
-                 jq -r '.tasks[]?.id // empty' "$tasks" 2>/dev/null \
+                 printf '%s' "$all" | jq -r '.id // empty' 2>/dev/null \
                    | sed -n 's/^SK-\([0-9][0-9]*\)$/\1/p'; } )"
   printf 'SK-%03d' "$((max + 1))"
+}
+
+# =========================================================================
+# tasks: the table, printed rather than kept
+# =========================================================================
+# design.md held a hand-kept copy of the task list, and every pull request
+# edited it, so every merge conflicted with every other open pull request
+# (T-090). The table is now printed on demand from design/tasks/ and never
+# committed, so there is nothing to conflict.
+cmd_tasks() {
+  local repo="$REPO" sub=''
+  case "${1:-}" in split) sub='split'; shift ;; esac
+  if [ "$sub" = split ]; then cmd_tasks_split "$@"; return; fi
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo) need "$@"; repo="${2-}"; shift 2 ;;
+      *) die "tasks: unknown argument $1" ;;
+    esac
+  done
+  repo="$(abs "$repo")" || die "no repo at $repo"
+  [ -d "$repo/design/tasks" ] || die "tasks: no design/tasks/ in $repo" 65
+  local all
+  all="$(fm_tasks "$repo/design/tasks")" || die "tasks: a task file in design/tasks/ does not parse" 65
+  # grouped by milestone in milestone order, file order within one; a title
+  # that holds a | is escaped so the row stays a row
+  printf '%s\n' "$all" | jq -rs '
+    def cell: tostring | gsub("\\|"; "\\|") | gsub("\n"; " ");
+    group_by(.milestone // "") | .[] |
+      "### \(.[0].milestone // "(no milestone)")\n\n| id | title | depends on |\n|---|---|---|",
+      (.[] | "| \(.id | cell) | \(.title // "" | cell) | \(if ((.depends_on // []) | length) == 0
+             then "—" else (.depends_on | map(cell) | join(", ")) end) |"),
+      ""'
+}
+
+# The migration, and how a branch opened before it comes over: entries of
+# design/tasks.json move out of the one array into files of their own. Named
+# by id, a single entry moves and overwrites its file - the branch's own
+# task, which is the branch's to say. Without one every entry moves, and a
+# file that already says something different is refused, not overwritten.
+# The id is positional: tests/option-loop.test.sh pins fm.sh's flags.
+cmd_tasks_split() {
+  local repo="$REPO" from only='' tmp id
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo) need "$@"; repo="${2-}"; shift 2 ;;
+      -*) die "tasks split: unknown argument $1" ;;
+      *) [ -z "$only" ] || die "tasks split: one id at most, got $only and $1"
+         only="$1"; shift ;;
+    esac
+  done
+  repo="$(abs "$repo")" || die "no repo at $repo"
+  from="$repo/design/tasks.json"
+  [ -f "$from" ] || die "tasks split: no $from to split" 65
+  jq -e '.tasks | type == "array"' "$from" >/dev/null 2>&1 \
+    || die "tasks split: $from holds no {\"tasks\": [...]}" 65
+  tmp="$(mktemp -d)" || die "tasks split: no scratch directory" 70
+  if [ -n "$only" ]; then
+    jq -e --arg id "$only" '[.tasks[] | select(.id == $id)] | length == 1' "$from" >/dev/null 2>&1 \
+      || { rm -rf "$tmp"; die "tasks split: $from holds no single entry $only" 65; }
+    jq --arg id "$only" '.tasks | map(select(.id == $id))' "$from" > "$tmp/in.json"
+  else
+    jq '.tasks' "$from" > "$tmp/in.json"
+  fi
+  fm_tasks_write "$tmp/in.json" "$tmp/out" || { rm -rf "$tmp"; die "tasks split: could not split $from" 65; }
+  if [ -z "$only" ]; then
+    for id in "$tmp"/out/*.json; do
+      [ -f "$id" ] || continue
+      id="${id##*/}"
+      if [ -f "$repo/design/tasks/$id" ] \
+         && [ "$(jq -cS . "$repo/design/tasks/$id")" != "$(jq -cS . "$tmp/out/$id")" ]; then
+        rm -rf "$tmp"; die "tasks split: design/tasks/$id already says something else; move your own entry by its id" 1
+      fi
+    done
+  fi
+  mkdir -p "$repo/design/tasks" || { rm -rf "$tmp"; die "tasks split: cannot create design/tasks/" 70; }
+  for id in "$tmp"/out/*.json; do
+    [ -f "$id" ] || continue
+    mv "$id" "$repo/design/tasks/${id##*/}" || { rm -rf "$tmp"; die "tasks split: could not write ${id##*/}" 70; }
+    printf 'fm tasks split: design/tasks/%s\n' "${id##*/}"
+  done
+  rm -rf "$tmp"
+  printf 'fm tasks split: done; git rm design/tasks.json once nothing else in it is yours\n'
 }
 
 # =========================================================================
@@ -690,6 +775,7 @@ case "$cmd" in
   self-update) cmd_selfupdate "$@" ;;
   sync-skills) cmd_sync "$@" ;;
   lint)        cmd_lint "$@" ;;
+  tasks)       cmd_tasks "$@" ;;
   help|-h|--help) usage ;;
   *) usage >&2; die "unknown command: $cmd" ;;
 esac

@@ -36,7 +36,8 @@ fixture() {
   printf 'concurrency: 3\n' > "$d/config.yaml"
   printf '# Worker\n\nYou are one crew member on one task.\n' > "$d/skills/worker/SKILL.md"
   printf '# Reviewer\n\nFind the reason to reject.\n' > "$d/skills/reviewer/SKILL.md"
-  printf '{"tasks":[{"id":"T-001","depends_on":[],"scope":["bin/**"]}]}\n' > "$d/design/tasks.json"
+  mkdir -p "$d/design/tasks"
+  printf '{"id":"T-001","depends_on":[],"scope":["bin/**"]}\n' > "$d/design/tasks/T-001.json"
   printf '%s' "$d"
 }
 
@@ -207,15 +208,14 @@ MV
   printf '# Design\n\n| id | title | depends |\n' > "$d/design/design.md"
   "$FM" self-update --skill worker --why regression --repo "$d" >/dev/null
   printf '{"chosen":"A"}\n' > "$d/state/decisions/D-SK-001.json"
-  for target in tasks.json design.md; do
-    out="$(PATH="$failbin:$PATH" REAL_MV="$realmv" FAIL_REPLACE="$target" "$FM" self-update --adopt SK-001 --repo "$d" 2>&1)"; rc=$?
-    assert_ne 0 "$rc" "failed $target replacement fails adoption"
-    assert_lacks "$out" 'is now an ordinary task' "no false adoption success"
-    assert_lacks "$(types "$d")" greenlit "no greenlight before both files persist"
-    if [ "$target" = tasks.json ]; then
-      assert_lacks "$(cat "$d/design/tasks.json")" SK-001 "failed replacement leaves task absent"
-    fi
-  done
+  # the task file is written aside and renamed in; fail the rename
+  target=SK-001.json
+  out="$(PATH="$failbin:$PATH" REAL_MV="$realmv" FAIL_REPLACE="$target" "$FM" self-update --adopt SK-001 --repo "$d" 2>&1)"; rc=$?
+  assert_ne 0 "$rc" "failed $target rename fails adoption"
+  assert_lacks "$out" 'is now an ordinary task' "no false adoption success"
+  assert_lacks "$(types "$d")" greenlit "no greenlight before the task file persists"
+  assert_eq "T-001.json" "$(ls -A "$d/design/tasks" | paste -sd' ' -)" \
+    "failed rename leaves the task absent, and nothing half-written behind"
   cp "$d/bin/fm-emit.sh" "$failbin/emitter"
   printf '#!/usr/bin/env bash\nexit 1\n' > "$d/bin/fm-emit.sh"
   out="$("$FM" self-update --adopt SK-001 --repo "$d" 2>&1)"; rc=$?
@@ -226,7 +226,7 @@ MV
   assert_fail "'$FM' self-update --adopt SK-001 --repo '$d'" "missing emitter fails adoption"
   cp "$failbin/emitter" "$d/bin/fm-emit.sh"; chmod +x "$d/bin/fm-emit.sh"
   assert_ok "'$FM' self-update --adopt SK-001 --repo '$d'" "retry completes partially persisted adoption"
-  assert_eq 1 "$(jq '[.tasks[]|select(.id=="SK-001")]|length' "$d/design/tasks.json")" "retry does not duplicate task"
+  assert_eq "SK-001" "$(jq -r .id "$d/design/tasks/SK-001.json")" "retry writes the task's own file"
   assert_contains "$(types "$d")" greenlit "successful retry greenlights persisted task"
   printf '{}\n' > "$d/state/skill-updates/SK-999.json"
   assert_ok "'$FM' self-update --skill worker --why boundary --repo '$d'" "proposal after SK-999 succeeds"
@@ -276,6 +276,14 @@ assert_ok "test -f '$d/state/pending/D-SK-001.json'" "the decision is pending on
 
 assert_ok "'$FM' self-update --skill reviewer --why 'again' --repo '$d'" "a second proposal is accepted"
 assert_ok "test -f '$d/state/skill-updates/SK-002.json'" "and gets the next free id"
+# the next id counts the adopted tasks too, so a task list that does not
+# read is not counted from half of it: an id that may be taken is refused
+printf '{"id":"SK-009",\n' > "$d/design/tasks/SK-009.json"
+out="$("$FM" self-update --skill worker --why 'once more' --repo "$d" 2>&1)"; rc=$?
+assert_eq "65" "$rc" "a task file that does not read stops self-update from taking an id"
+assert_contains "$out" "SK-009.json" "and the file is named"
+assert_ok "test ! -e '$d/state/skill-updates/SK-003.json'" "and no id is taken"
+rm -f "$d/design/tasks/SK-009.json"
 
 assert_fail "'$FM' self-update --skill nosuch --why 'x' --repo '$d'" "it refuses a skill that does not exist"
 assert_fail "'$FM' self-update --skill worker --repo '$d'" "it refuses a change with no stated reason"
@@ -288,30 +296,75 @@ assert_eq "$before" "$(treesum "$d/skills")" "and none of the refusals wrote any
 #
 # A card nobody reads the answer to is decoration. The step between "the
 # captain said yes" and "the dispatcher can see it" used to be a human
-# retyping JSON into design/tasks.json, which meant the green light had no
+# retyping JSON into the task list, which meant the green light had no
 # mechanical consequence at all.
 # =========================================================================
-printf '# Design\n\n## 14. the tasks\n\n| id | title | depends |\n| --- | --- | --- |\n| T-001 | first | - |\n' \
-  > "$d/design/design.md"
+printf '# Design\n\n## 14. the tasks\n\nSee design/tasks/.\n' > "$d/design/design.md"
+design_before="$(cksum < "$d/design/design.md")"
 
 assert_fail "'$FM' self-update --adopt SK-001 --repo '$d'" "adopt refuses while the card is unanswered"
-assert_lacks "$(cat "$d/design/tasks.json")" "SK-001" "and the plan is untouched"
+assert_ok "test ! -e '$d/design/tasks/SK-001.json'" "and the plan is untouched"
 
 printf '{"id":"D-SK-001","task":"SK-001","chosen":"B"}\n' > "$d/state/decisions/D-SK-001.json"
 assert_fail "'$FM' self-update --adopt SK-001 --repo '$d'" "and refuses when the captain answered no"
-assert_lacks "$(cat "$d/design/tasks.json")" "SK-001" "the plan is still untouched"
+assert_ok "test ! -e '$d/design/tasks/SK-001.json'" "the plan is still untouched"
 
 printf '{"id":"D-SK-001","task":"SK-001","chosen":"A"}\n' > "$d/state/decisions/D-SK-001.json"
 assert_ok "'$FM' self-update --adopt SK-001 --repo '$d'" "a yes adopts it"
-assert_eq "SK-001" "$(jq -r '.tasks[]|select(.id=="SK-001")|.id' "$d/design/tasks.json" 2>/dev/null)" \
-  "the proposal is now a task in design/tasks.json"
-assert_contains "$(cat "$d/design/design.md")" "| SK-001 |" \
-  "and a row in design.md, which bin/ci.sh checks against tasks.json"
+assert_eq "$(jq -cS . "$d/state/skill-updates/SK-001.json")" "$(jq -cS . "$d/design/tasks/SK-001.json" 2>/dev/null)" \
+  "the proposal is now a task file of its own, design/tasks/SK-001.json, exactly as proposed"
+assert_eq "$design_before" "$(cksum < "$d/design/design.md")" \
+  "and design.md is untouched: there is no table left to keep in step (T-090)"
+assert_eq "{\"id\":\"T-001\",\"depends_on\":[],\"scope\":[\"bin/**\"]}" "$(jq -c . "$d/design/tasks/T-001.json")" \
+  "no other task's file is touched"
 assert_eq "$before" "$(treesum "$d/skills")" "adopting still edits no skill"
 assert_ok "'$FM' self-update --adopt SK-001 --repo '$d'" "adopting twice is not an error"
-assert_eq "1" "$(jq '[.tasks[]|select(.id=="SK-001")]|length' "$d/design/tasks.json" 2>/dev/null)" \
+assert_eq "SK-001.json T-001.json" "$(ls -A "$d/design/tasks" | paste -sd' ' -)" \
   "and does not add it twice"
 assert_fail "'$FM' self-update --adopt SK-999 --repo '$d'" "a proposal that was never made cannot be adopted"
+
+# =========================================================================
+# 2a. the task table is printed on demand, never kept (T-090)
+# =========================================================================
+tt="$(mktemp -d)"; mkdir -p "$tt/design/tasks"
+printf '{"id":"T-002","title":"second | piped","milestone":"M1","depends_on":["T-001","T-003"]}\n' > "$tt/design/tasks/T-002.json"
+printf '{"id":"T-001","title":"first","milestone":"M0","depends_on":[]}\n' > "$tt/design/tasks/T-001.json"
+printf '{"id":"T-003","title":"third","milestone":"M0","depends_on":["T-001"]}\n' > "$tt/design/tasks/T-003.json"
+assert_eq "### M0
+
+| id | title | depends on |
+|---|---|---|
+| T-001 | first | — |
+| T-003 | third | T-001 |
+
+### M1
+
+| id | title | depends on |
+|---|---|---|
+| T-002 | second \| piped | T-001, T-003 |" "$("$FM" tasks --repo "$tt" 2>&1)" \
+  "bin/fm.sh tasks prints the table, grouped by milestone, with id, title and dependencies"
+printf '{"id":"T-004",\n' > "$tt/design/tasks/T-004.json"
+assert_fail "'$FM' tasks --repo '$tt'" "and refuses, rather than printing half, when a file does not parse"
+rm -f "$tt/design/tasks/T-004.json"
+assert_contains "$("$FM" tasks --repo "$ROOT" 2>&1)" "| T-090 | one file per task, and no hand-kept copy of the task list | T-065 |" \
+  "this repository's own table prints, this task included"
+
+# split: the migration, and how a branch opened before it brings its entry over
+printf '{"tasks":[{"id":"T-001","title":"first","milestone":"M0","depends_on":[]},{"id":"T-005","title":"mine","depends_on":["T-001"]},{"id":"T-003","title":"stale","milestone":"M0","depends_on":[]}]}\n' \
+  > "$tt/design/tasks.json"
+assert_fail "'$FM' tasks split --repo '$tt'" "splitting everything refuses to overwrite a task file that says something else"
+assert_ok "test ! -e '$tt/design/tasks/T-005.json'" "and writes nothing when it refuses"
+assert_ok "'$FM' tasks split T-005 --repo '$tt'" "a branch moves its own entry, named by its id"
+assert_eq '{"id":"T-005","title":"mine","depends_on":["T-001"]}' "$(jq -c . "$tt/design/tasks/T-005.json")" \
+  "into its own file, exactly as it was"
+assert_eq '"third"' "$(jq -c .title "$tt/design/tasks/T-003.json")" "and leaves every other task's file alone"
+jq '.tasks |= map(select(.id != "T-003"))' "$tt/design/tasks.json" > "$tt/x" && mv "$tt/x" "$tt/design/tasks.json"
+rm -rf "$tt/design/tasks"
+assert_ok "'$FM' tasks split --repo '$tt'" "a whole list splits into an empty directory"
+assert_eq "$(jq -c .tasks "$tt/design/tasks.json")" \
+  "$(for id in T-001 T-005; do cat "$tt/design/tasks/$id.json"; done | jq -cs .)" \
+  "losslessly: the files, in the old order, are the old array"
+rm -rf "$tt"
 
 # =========================================================================
 # 3. the proposal travels the ordinary dispatcher
@@ -322,7 +375,7 @@ assert_contains "$(FM_ROOT="$d" "$d/bin/fm-dispatch.sh" --repo "$d" --dry-run 2>
 # the eighth gate, checked on a tree where nobody has green-lit anything
 d2="$(fixture)"
 "$FM" self-update --skill worker --why 'x' --repo "$d2" >/dev/null 2>&1
-jq '{tasks:[.]}' "$d2/state/skill-updates/SK-001.json" > "$d2/design/tasks.json"
+cp "$d2/state/skill-updates/SK-001.json" "$d2/design/tasks/SK-001.json"
 assert_fail "FM_ROOT='$d2' '$d2/bin/fm-dispatch.sh' --repo '$d2' --dry-run" \
   "a skill-update waits for a greenlit event like anything else"
 
@@ -339,8 +392,8 @@ GHSTATE="$(mktemp -d)"; export GHSTATE
 GH="$ROOT/tests/gh-stub.sh"
 git -C "$g" init -q -b main
 git -C "$g" config user.email a@b.c; git -C "$g" config user.name t
-mkdir -p "$g/design" "$g/skills/worker" "$g/bin" "$g/tests"
-jq '{tasks:[.]}' "$d/state/skill-updates/SK-001.json" > "$g/design/tasks.json"
+mkdir -p "$g/design/tasks" "$g/skills/worker" "$g/bin" "$g/tests"
+cp "$d/state/skill-updates/SK-001.json" "$g/design/tasks/SK-001.json"
 printf '# Worker\n' > "$g/skills/worker/SKILL.md"
 printf 'x\n' > "$g/bin/thing.sh"
 # gate 3 runs whatever bin/ci.sh the branch carries, so the fixture needs a

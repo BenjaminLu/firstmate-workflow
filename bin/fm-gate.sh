@@ -180,13 +180,17 @@ fill() {
 # ---- 4. the diff stays inside the task's declared scope ------------------
 gate4() {
   local scopes f ok
-  # from the branch: a task that defines itself in its own diff is
-  # otherwise unscoped, and gate 4 would pass anything
-  scopes="$(git show "$BRANCH:design/tasks.json" 2>/dev/null | \
-            jq -r --arg t "$TASK" '.tasks[]|select(.id==$t)|.scope[]' 2>/dev/null)"
-  [ -n "$scopes" ] || scopes="$(jq -r --arg t "$TASK" '.tasks[]|select(.id==$t)|.scope[]' \
-            design/tasks.json 2>/dev/null)"
+  # from the task's own file on the branch: a task that defines itself in
+  # its own diff is otherwise unscoped, and gate 4 would pass anything
+  scopes="$(fm_task "$TASK" design/tasks "$BRANCH" | jq -r '.scope[]' 2>/dev/null)"
+  [ -n "$scopes" ] || scopes="$(fm_task "$TASK" | jq -r '.scope[]' 2>/dev/null)"
   [ -n "$scopes" ] || return 1          # a task with no declared scope cannot be gated
+  # design/tasks.json was the shared list a task named so it could carry its
+  # own entry (T-090); it now means that entry's file, and no other
+  if grep -qxF design/tasks.json <<< "$scopes"; then
+    scopes="$scopes
+design/tasks/$TASK.json"
+  fi
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     ok=1

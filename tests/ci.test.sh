@@ -376,8 +376,8 @@ assert_contains "$out" "effective budget: ${FM_CI_MAX_SECONDS-180}s" "against th
 # it found sends the reader back to the source.
 # Each plant below is the thing its stage exists to find, not something any
 # stage would trip over: a script that dispatches and lacks the redirect, a
-# hand-rolled swap, a second vendor loop, a second writer of the log, an id
-# missing from the design, a suite that returns non-zero. None of them is a
+# hand-rolled swap, a second vendor loop, a second writer of the log, a task
+# depending on one that does not exist, a suite that returns non-zero. None of them is a
 # syntax error, and none would be caught by a different stage.
 # One gate run per fixture STATE, not one per assertion: every plant used
 # to run a full nested gate, and the stage that measures the gate's own
@@ -802,38 +802,50 @@ printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\necho x >> state
 plant "a second writer of the event log turns the lint red" "outside fm-emit.sh"
 rm -f "$q/bin/fm-sneaky.sh"
 
-# the design and tasks.json disagreeing
-mkdir -p "$q/design"
-printf '{"tasks":[{"id":"T-999","title":"nowhere in the design"}]}\n' > "$q/design/tasks.json"
-printf '# a design with no task table\n' > "$q/design/design.md"
-plant "an id the design does not list turns the dag stage red" "the design does not list"
-plant "and the stage names the id" "T-999"
+# the task list (T-090): one file per task, and the dag stage checks the
+# files themselves - there is no hand-kept table left to agree with
+mkdir -p "$q/design/tasks"
+printf '{"id":"T-001","depends_on":[]}\n' > "$q/design/tasks/T-001.json"
+printf '{"id":"T-002","depends_on":["T-001"]}\n' > "$q/design/tasks/T-002.json"
+plant "a sound task directory is green" "every task file parses, is named by its id, and depends only on tasks that exist, with no cycle (2 tasks)"
+printf '{"id":"T-003","depends_on":["T-404"]}\n' > "$q/design/tasks/T-003.json"
+plant "a missing dependency turns the dag stage red" "the task list is not a sound DAG"
+plant "and the stage names it" "T-003: depends on T-404, which has no task file"
+printf '{"id":"T-003","depends_on":["T-004"]}\n' > "$q/design/tasks/T-003.json"
+printf '{"id":"T-004","depends_on":["T-003"]}\n' > "$q/design/tasks/T-004.json"
+plant "a cycle turns the dag stage red" "a cycle: T-003 -> T-004 -> T-003"
+rm -f "$q/design/tasks/T-004.json"
+printf '{"id":"T-999","depends_on":[]}\n' > "$q/design/tasks/T-003.json"
+plant "an id that is not its file name turns it red" "T-003.json: its id is \"T-999\", not T-003"
+printf '{"id":"T-003",\n' > "$q/design/tasks/T-003.json"
+plant "a file that does not parse turns it red" "T-003.json: does not parse"
+rm -f "$q/design/tasks/T-003.json"
+printf '{"tasks":[{"id":"T-003"}]}\n' > "$q/design/tasks.json"
+plant "a design/tasks.json left behind turns it red" "design/tasks.json is still here"
 rm -rf "$q/design"
 
-# with a registry, the check runs once per registered (design, tasks) pair
-# and names the project that disagrees. The library's parser lives beside it.
+# with a registry, the check runs once per registered task directory and
+# names the project. The library's parser lives beside it.
 cp "$ROOT/bin/fm-herdr.py" "$q/bin/"
-mkdir -p "$q/design" "$q/projects/other-app"
-printf '{"tasks":[{"id":"T-001"}]}\n' > "$q/design/tasks.json"
-printf '| T-001 | the engine task |\n' > "$q/design/design.md"
-printf '{"tasks":[{"id":"T-777"}]}\n' > "$q/projects/other-app/tasks.json"
-printf '# a target design with no task table\n' > "$q/projects/other-app/design.md"
+mkdir -p "$q/design/tasks" "$q/projects/other-app/tasks"
+printf '{"id":"T-001"}\n' > "$q/design/tasks/T-001.json"
+printf '{"id":"T-777","depends_on":["T-776"]}\n' > "$q/projects/other-app/tasks/T-777.json"
 { printf 'default_project: self-host\nprojects:\n'
   printf '  self-host:\n    repo: .\n    github: o/engine\n    base: main\n    required_check: ci\n'
   printf '    design: design/design.md\n    tasks: design/tasks.json\n'
   printf '  other-app:\n    github: o/other-app\n    base: main\n    required_check: check\n'
 } > "$q/config.yaml"
-plant "a registered project's disagreement turns the dag stage red" "the design does not list"
-plant "and the stage names that project" "project other-app (projects/other-app/design.md, projects/other-app/tasks.json)"
-plant "and its id" "T-777"
-plant "the self pair is checked in the same run" \
-  "project self-host (design/design.md, design/tasks.json): the design and tasks.json agree"
-printf '| T-777 | the target task |\n' > "$q/projects/other-app/design.md"
-plant "every pair agreeing is green per project" \
-  "project other-app (projects/other-app/design.md, projects/other-app/tasks.json): the design and tasks.json agree"
+plant "a registered project's broken list turns the dag stage red" "the task list is not a sound DAG"
+plant "and the stage names that project" "project other-app (projects/other-app/tasks)"
+plant "and its problem" "T-777: depends on T-776"
+plant "the self directory is checked in the same run, from a path in the old shape" \
+  "project self-host (design/tasks): every task file parses"
+printf '{"id":"T-777"}\n' > "$q/projects/other-app/tasks/T-777.json"
+plant "every sound list is green per project" \
+  "project other-app (projects/other-app/tasks): every task file parses"
 rm -rf "$q/projects"
-plant "a registered pair that does not exist is red, not skipped" \
-  "project other-app: projects/other-app/design.md or projects/other-app/tasks.json does not exist"
+plant "a registered task directory that does not exist is red, not skipped" \
+  "project other-app: projects/other-app/tasks does not exist"
 printf '  broken-app:\n    github: not-a-repo\n    base: main\n    required_check: ci\n' >> "$q/config.yaml"
 plant "a broken registry turns the stage red" "the project registry: fm-config: project broken-app: github"
 rm -rf "$q/design" "$q/config.yaml" "$q/bin/fm-herdr.py"

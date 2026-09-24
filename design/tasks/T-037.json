@@ -1,0 +1,20 @@
+{
+  "id": "T-037",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "fm-worker.sh must reuse an existing task branch, not re-derive its name",
+  "scope": [
+    "bin/fm-worker.sh",
+    "tests/worker.test.sh",
+    "design/tasks.json",
+    "design/design.md"
+  ],
+  "acceptance": [
+    "This task's own entry, exactly as given here, must be committed into design/tasks.json on this task's branch (matching the existing convention used by other tasks that define themselves within their own diff), so the reviewer and fm-gate.sh can find it.",
+    "fm-worker.sh already computes branch_guess from existing refs/heads before deriving a fresh branch name from the task's current title. When branch_guess is non-empty, the worker must use it as the branch to continue, never independently recompute a name from the (mutable) title and fall through to creating a new branch from base when that recomputed name happens not to match any existing local or remote ref. Recomputing a slug from title is reserved for the case where branch_guess is genuinely empty (no existing ref for this task).",
+    "Add a fail-first regression test: given an existing local (or remote-only) branch for a task whose current title would slug/truncate to a different name (reproducing the observed case where an untruncated historical branch name no longer matches the current cut -c1-28 slug), running fm-worker.sh --task <id> must reuse that existing branch and worktree, and must never create a second branch from base for a task that already has one. Assert this without exercising a live captain decision, model or network API.",
+    "Do not change the branch-continuity behavior for a task that genuinely has no existing branch (branch_guess empty): it must still create a fresh branch from base exactly as today.",
+    "Run bin/ci.sh and report the observed exit status/duration for this branch."
+  ]
+}

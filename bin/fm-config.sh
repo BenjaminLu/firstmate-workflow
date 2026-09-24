@@ -73,7 +73,8 @@ fm_project() {  # fm_project <field> [file]
 #   fm_projects [file]                     -> registered names, one per line
 #   fm_project_resolve [explicit] [file]   -> the project this run is for
 #   fm_project_get <name> <field> [file]   -> repo github base required_check
-#                                             design tasks, or root
+#                                             design tasks, or root; tasks is
+#                                             a directory (see fm_tasks)
 #   fm_project_contract <name> <field> [file] -> as fm_project, for a project
 #   fm_project_use [explicit] [file]       -> exports FM_PROJECT, FM_PROJECT_ROOT
 #
@@ -243,8 +244,13 @@ def field(projects, name, key, config):
     engine = Path(config).resolve().parent
     if key == 'root':
         return str(engine if entry.get('repo') == '.' else engine / 'state/projects' / name / 'repo')
-    if key in ('design', 'tasks'):
-        return entry.get(key) or 'projects/%s/%s' % (name, 'design.md' if key == 'design' else 'tasks.json')
+    if key == 'design':
+        return entry.get(key) or 'projects/%s/design.md' % name
+    if key == 'tasks':
+        # a directory, one file per task (T-090); a path in the old shape,
+        # design/tasks.json, names the directory beside it
+        value = entry.get(key) or 'projects/%s/tasks' % name
+        return value[:-len('.json')] if value.endswith('.json') else value
     if key in ('repo', 'github', 'base', 'required_check'):
         return entry.get(key, '')
     refuse(name, key, 'is not a registry field')
@@ -278,6 +284,160 @@ except Refused as error:
     print('fm-config: ' + str(error), file=sys.stderr); sys.exit(65)
 except ValueError as error:
     print('fm-config: ' + str(error), file=sys.stderr); sys.exit(65)
+PY
+}
+
+# The task list (T-090): one file per task, design/tasks/<id>.json, holding
+# that task's entry and nothing else. It was one array in design/tasks.json
+# plus a hand-kept copy in design.md, so every pull request appended to the
+# same two places and every merge made every other open one a conflict.
+# Adding a task adds a file; revising one edits only its file. Every reader
+# goes through these, the board included.
+#
+#   fm_tasks [dir] [rev]            -> every task, one compact JSON per line,
+#                                      in id order, H-2 before H-10; all or
+#                                      nothing: 1, with no list, when any
+#                                      file does not read or the directory
+#                                      is not there
+#   fm_task <id> [dir] [rev]        -> that task's entry; 1 when it has none
+#   fm_tasks_write <file> [dir]     -> one file per entry of a {"tasks":[...]},
+#                                      an array, or a single task
+#   fm_tasks_check [dir]            -> one problem per line; 1 when any
+#
+# <dir> defaults to design/tasks. <rev> reads a commit or branch instead of
+# the working copy: the gate, the worker and the reviewer read the branch
+# under test, which is how a task defined on its own branch is seen at all.
+# A name starting with a dot (.DS_Store, a scratch directory) is not a task.
+_fm_task_id() { [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]]; }
+
+# One task file's text -> its entry on one line; 1 unless it is exactly
+# one JSON object. An empty file is not an empty task.
+_fm_task_line() { jq -cs 'if length == 1 and (.[0] | type) == "object" then .[0] else error("not one task") end' 2>/dev/null; }
+
+fm_tasks() {
+  local dir="${1:-design/tasks}" rev="${2:-}" f names out='' line
+  if [ -n "$rev" ]; then
+    names="$(git ls-tree --name-only --full-tree "$rev" -- "$dir/" 2>/dev/null)" \
+      || { echo "fm-config: cannot read $dir/ on $rev" >&2; return 1; }
+    [ -n "$names" ] || { echo "fm-config: $rev has no $dir/" >&2; return 1; }
+  else
+    [ -d "$dir" ] || { echo "fm-config: $dir is not a directory" >&2; return 1; }
+    names="$(find "$dir" -maxdepth 1 -type f -name '*.json' ! -name '.*' 2>/dev/null)" \
+      || { echo "fm-config: cannot list $dir" >&2; return 1; }
+  fi
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "${f##*/}" in .*) continue ;; *.json) ;; *) continue ;; esac
+    # read into a string first: `git show | jq` hides a show that failed
+    # behind jq's success on empty input, and a task would just vanish
+    if [ -n "$rev" ]; then
+      line="$(git show "$rev:$f" 2>/dev/null)" && line="$(printf '%s' "$line" | _fm_task_line)"
+    else
+      line="$(_fm_task_line < "$f")"
+    fi || { echo "fm-config: $f does not read as one task; no task list" >&2; return 1; }
+    out="$out$line
+"
+  done <<< "$(printf '%s\n' "$names" | LC_ALL=C sort -V)"
+  printf '%s' "$out"
+}
+
+# A branch opened before T-090 has no design/tasks/ but its own
+# design/tasks.json: its entry there is the task as that branch says it,
+# whether the task is new on the branch or revised there. So when the
+# task has no file, its entry in <dir>.json - on the rev, or in a working
+# copy still in the old layout - is read (and said so on stderr) rather
+# than main's file, which would be another text, or nothing at all.
+_fm_task_old() { jq --arg id "$1" '[.tasks[]? | select(.id == $id)] | if length == 1 then .[0] else empty end' 2>/dev/null; }
+fm_task() {
+  local id="${1:-}" dir="${2:-design/tasks}" rev="${3:-}" j
+  _fm_task_id "$id" || return 1
+  if [ -n "$rev" ]; then
+    if ! j="$(git show "$rev:$dir/$id.json" 2>/dev/null)"; then
+      j="$(git show "$rev:$dir.json" 2>/dev/null | _fm_task_old "$id")"
+      [ -n "$j" ] || return 1
+      echo "fm-config: $id is read from $rev's $dir.json, the old one-array list; bring the branch over: bin/fm.sh tasks split $id" >&2
+    fi
+  elif [ -f "$dir/$id.json" ]; then
+    j="$(cat "$dir/$id.json" 2>/dev/null)" || return 1
+  else
+    j="$(_fm_task_old "$id" 2>/dev/null < "$dir.json")"
+    [ -n "$j" ] || return 1
+    echo "fm-config: $id is read from $dir.json, the old one-array list; bring it over: bin/fm.sh tasks split $id" >&2
+  fi
+  # a file whose id is another task's is not this task
+  j="$(printf '%s' "$j" | jq --arg id "$id" 'select(type=="object" and .id==$id)' 2>/dev/null)"
+  [ -n "$j" ] || return 1
+  printf '%s\n' "$j"
+}
+
+fm_tasks_write() {
+  local src="$1" dir="${2:-design/tasks}" all line id
+  all="$(jq -c 'if type=="array" then .[] elif has("tasks") then .tasks[] else . end' "$src")" \
+    || { echo "fm-config: $src is not a task list" >&2; return 65; }
+  mkdir -p "$dir" || return 70
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    id="$(printf '%s' "$line" | jq -r '.id // empty')"
+    _fm_task_id "$id" || { echo "fm-config: a task with no usable id: $line" >&2; return 65; }
+    printf '%s' "$line" | jq . > "$dir/$id.json" || return 70
+  done <<< "$all"
+}
+
+fm_tasks_check() {
+  python3 - "${1:-design/tasks}" <<'PY'
+import json, sys
+from pathlib import Path
+
+d = Path(sys.argv[1])
+problems, tasks = [], {}
+legacy = d.parent / (d.name + '.json')
+if legacy.exists():
+    problems.append('%s is still here: each entry belongs in its own file under %s/' % (legacy, d))
+if not d.is_dir():
+    problems.append('%s is not a directory' % d)
+    files = []
+else:
+    files = sorted(d.iterdir())
+for f in files:
+    # .DS_Store, an interrupted --adopt's scratch: not a task, as fm_tasks says
+    if f.name.startswith('.'):
+        continue
+    if f.suffix != '.json' or not f.is_file():
+        problems.append('%s: not a task file (<id>.json)' % f.name); continue
+    try:
+        task = json.loads(f.read_text())
+    except (OSError, ValueError) as error:
+        problems.append('%s: does not parse: %s' % (f.name, error)); continue
+    if not isinstance(task, dict) or task.get('id') != f.stem:
+        problems.append('%s: its id is %s, not %s' % (f.name, json.dumps(task.get('id') if isinstance(task, dict) else None), f.stem))
+        continue
+    tasks[f.stem] = task
+deps = {}
+for name, task in tasks.items():
+    wants = task.get('depends_on', [])
+    if not isinstance(wants, list) or not all(isinstance(x, str) for x in wants):
+        problems.append('%s: depends_on is not a list of ids' % name); wants = []
+    for dep in wants:
+        if dep not in tasks: problems.append('%s: depends on %s, which has no task file' % (name, dep))
+    deps[name] = [dep for dep in wants if dep in tasks]
+# a cycle is a task that waits, however indirectly, on itself: nothing in it
+# can ever be dispatched. Each cycle is printed once, from its first task.
+state, seen = {}, set()
+def visit(node, path):
+    state[node] = 'open'; path.append(node)
+    for dep in deps[node]:
+        if state.get(dep) == 'open':
+            cycle = path[path.index(dep):] + [dep]
+            key = frozenset(cycle)
+            if key not in seen:
+                seen.add(key); problems.append('a cycle: ' + ' -> '.join(cycle))
+        elif dep not in state:
+            visit(dep, path)
+    path.pop(); state[node] = 'done'
+for name in sorted(deps):
+    if name not in state: visit(name, [])
+for problem in problems: print(problem)
+sys.exit(1 if problems else 0)
 PY
 }
 

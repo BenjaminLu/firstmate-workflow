@@ -1,0 +1,27 @@
+{
+  "id": "T-046",
+  "milestone": "M3",
+  "bootstrap": false,
+  "depends_on": [
+    "T-043",
+    "T-045"
+  ],
+  "title": "the project registry and the two roots",
+  "scope": [
+    "config.yaml",
+    "bin/fm-config.sh",
+    "bin/ci.sh",
+    "tests/config.test.sh",
+    "tests/ci.test.sh",
+    "design/design.md"
+  ],
+  "acceptance": [
+    "Implements design.md sections 15.1 and 15.2. config.yaml gains `default_project: firstmate-workflow` and a `projects:` map; firstmate-workflow is registered with repo `.`, github BenjaminLu/firstmate-workflow, base main, required_check ci, design design/design.md, tasks design/tasks.json. The self entry holds no copy of T-043's `project:` block; that block stays top-level until T-050 (section 15.2).",
+    "bin/fm-config.sh gains one resolver used by every later task: the project is `--project`, else FM_PROJECT, else default_project; a field lookup returns a project's value with the section 15.2 defaults for design and tasks; the project root is the engine root for repo `.` and state/projects/<name>/repo otherwise. The project is never inferred from the current directory, a git remote or a worktree.",
+    "Validation, each refused with exit 65 and a message naming the project and field: an unregistered name; a name outside [a-z0-9-] or longer than 24 characters; a repo value other than `.` or absent; a github value not shaped owner/repo; a missing base or required_check. The default project's contract resolves to T-043's top-level `project:` block, whole — every field it has, `docs` included, never a re-listed subset; a config.yaml holding both that block and a self entry `project:` is refused with exit 65.",
+    "bin/ci.sh runs its design/task-list agreement check once for every registered (design, tasks) pair and names the project on failure. No other script reads the registry yet.",
+    "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
+    "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+  ]
+}

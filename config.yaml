@@ -9,6 +9,10 @@ reviewer:               # optional: a different engine for review buys real
 #   vendor: codex       # the worker uses the top-level vendor above
 
 concurrency: 3          # workers in flight at once
+# roster:               # the fleet's given names, one person per name across
+#   - mira              # workers and reviewers; a run takes one no live run
+#   - noah              # holds. Without it bin/fm-herdr.py's DEFAULT_ROSTER
+#                       # is used. Letters only, six at most.
 editor: code            # what /open hands a file to
 
 fallback:               # tried in order when an adapter exits 2 (vendor unavailable)

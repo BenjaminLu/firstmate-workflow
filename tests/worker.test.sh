@@ -40,17 +40,14 @@ fixture() {                     # a repo with a remote, a task, and the real scr
   (
   cd "$d/repo" || exit 1
   git config user.email a@b.c; git config user.name t
-  mkdir -p bin design skills/worker state
+  mkdir -p bin design/tasks skills/worker state
   cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-worker.sh" \
      "$ROOT/bin/fm-checkpoint.sh" "$ROOT/bin/fm-guard.sh" "$ROOT/bin/fm-herdr.py" bin/
   cp -r "$ROOT/bin/adapters" bin/
   cp "$ROOT/skills/worker/SKILL.md" skills/worker/
   printf 'vendor: mock\nfallback:\n  - mock\n' > config.yaml
-  cat > design/tasks.json <<'JSON'
-{"tasks":[{"id":"T-Z","title":"a mock task","scope":["src/**"],"acceptance":["it exists"]}]}
-JSON
-  jq --arg task "$task" '.tasks[0].id=$task' design/tasks.json > design/tasks.next
-  mv design/tasks.next design/tasks.json
+  jq -n --arg task "$task" '{id:$task,title:"a mock task",scope:["src/**"],acceptance:["it exists"]}' \
+    > "design/tasks/$task.json"
   printf '# design\n## 6. gates\nseven of them\n## 8. board\n' > design/design.md
   git add -A; git commit -qm base; git remote add origin "$bare"; git push -q -u origin main
   ) || return 1
@@ -1072,8 +1069,8 @@ rm -rf "$d12"
 # network API - the fixture's mock adapter and gh stub are all it drives.
 d21="$(fixture)"; r21="$d21/repo"; GH21="$(ghstub "$d21")"
 long_title='a mock task with a title long enough that slugging it truncates to twenty eight characters'
-jq --arg t "$long_title" '.tasks[0].title=$t' "$r21/design/tasks.json" > "$r21/design/tasks.json.next"
-mv "$r21/design/tasks.json.next" "$r21/design/tasks.json"
+jq --arg t "$long_title" '.title=$t' "$r21/design/tasks/T-Z.json" > "$r21/design/T-Z.next"
+mv "$r21/design/T-Z.next" "$r21/design/tasks/T-Z.json"
 ( cd "$r21" && git add -A && git commit -qm retitle && git push -q origin main )
 cat > "$r21/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
@@ -1118,8 +1115,8 @@ rm -rf "$d21"
 # local ref is gone as well as the name.
 d22="$(fixture)"; r22="$d22/repo"; GH22="$(ghstub "$d22")"
 long_title='a mock task whose title is long enough that a fresh slug truncates differently'
-jq --arg t "$long_title" '.tasks[0].title=$t' "$r22/design/tasks.json" > "$r22/design/tasks.json.next"
-mv "$r22/design/tasks.json.next" "$r22/design/tasks.json"
+jq --arg t "$long_title" '.title=$t' "$r22/design/tasks/T-Z.json" > "$r22/design/T-Z.next"
+mv "$r22/design/T-Z.next" "$r22/design/tasks/T-Z.json"
 ( cd "$r22" && git add -A && git commit -qm retitle && git push -q origin main )
 cat > "$r22/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
@@ -1573,7 +1570,16 @@ rb_fixture() {   # rb_fixture [two-tasks]; prints the fixture dir with round one
     cd "$r" || exit 1
     mkdir -p src
     printf 'line %s\n' 1 2 3 4 5 6 7 8 9 10 > src/app.txt
-    # a second entry both sides can change, still on one line as fixture() has it
+    # The cases below were written for a base that keeps the one array,
+    # design/tasks.json, and a task table, and that path is still a real
+    # one - any project not yet split. So that is the layout, in jq's
+    # layout, unless RB_SPLIT=1 asks for one file per task (T-090).
+    if [ "${RB_SPLIT:-0}" != 1 ]; then
+      git rm -q -r design/tasks && mkdir -p design
+      jq -n '{tasks: [{id: "T-Z", title: "a mock task", scope: ["src/**"], acceptance: ["it exists"]}]}' \
+        > design/tasks.json
+    fi
+    # a second entry both sides can change, on one line
     [ "${1:-}" != two-tasks ] || printf '%s\n' \
       '{"tasks":[{"id":"T-Z","title":"a mock task","scope":["src/**"],"acceptance":["it exists"]},{"id":"T-1","title":"one","scope":[],"acceptance":[]}]}' \
       > design/tasks.json
@@ -1609,7 +1615,11 @@ sed 's/^line 5$/line 5 by the task/' src/app.txt > src/app.next && mv src/app.ne
 awk '{ if ($0 == "prose the two sides may both edit") print "prose as the task says"; else print }
      /^\| T-1 \|/ { print "| T-Z | a mock task | T-1 |" }' design/design.md > design/d.next
 mv design/d.next design/design.md
-jq '.tasks[0].depends_on=["T-1"]' design/tasks.json > design/t.next && mv design/t.next design/tasks.json
+if [ -f design/tasks.json ]; then
+  jq '.tasks[0].depends_on=["T-1"]' design/tasks.json > design/t.next && mv design/t.next design/tasks.json
+else
+  jq '.depends_on=["T-1"]' design/tasks/T-Z.json > design/t.next && mv design/t.next design/tasks/T-Z.json
+fi
 S
   ghstub "$d" >/dev/null
   ( cd "$r" && FM_ROOT="$r" FM_GH="$d/stub/gh" FM_T_STEP="$d/round-one.sh" \
@@ -2379,6 +2389,95 @@ assert_contains "$(git --git-dir="$dU2/remote.git" show "$bU2:src/app.txt")" "li
   "U2, next round: carrying the resolution"
 assert_eq "$(rb_head "$dU2" "$bU2")" "$(git -C "$dU2/repo" rev-parse "$bU2")" "U2, next round: the local branch moved onto it"
 
+# W: one file per task (T-090). main splits design/tasks.json into
+# design/tasks/<id>.json under a branch that still carries the array.
+rb_split_main() {   # rb_split_main <dir> [extra lines for main to run after the split]
+  { printf '%s\n' 'mkdir -p design/tasks' \
+      'jq -c ".tasks[]" design/tasks.json | while IFS= read -r t; do jq . <<<"$t" > "design/tasks/$(jq -r .id <<<"$t").json"; done' \
+      'git rm -q design/tasks.json'
+    [ -z "${2:-}" ] || printf '%s\n' "$2"; } > "$1/main.sh"
+  rb_move_main "$1" "$1/main.sh"
+}
+# W1: the branch changed its own entry in round one and adds a second
+# task's entry, as a design task does. The rebuild moves both into files of
+# their own and removes the array, with no worker involved.
+dW1="$(rb_fixture)"; bW1="$(rb_branch "$dW1")"
+( cd "$dW1/repo/state/worktrees/T-Z" \
+    && jq '.tasks += [{id: "T-EXTRA", title: "written by the design task", scope: [], acceptance: []}]' design/tasks.json > n \
+    && mv n design/tasks.json && rb_commit -am 'a second entry' && git push -q origin HEAD )
+oldW1="$(rb_head "$dW1" "$bW1")"
+rb_split_main "$dW1"; mainW1="$(rb_head "$dW1" main)"
+assert_fail "git --git-dir='$dW1/remote.git' cat-file -e 'main:design/tasks.json'" "W1: main no longer has design/tasks.json"
+rb_round_two "$dW1" "$rb_add"
+rb_rebuilt "$dW1" "W1"
+assert_eq "0" "$rb_rc" "W1: a branch that still carries the array is rebuilt onto the split main"
+assert_eq "$mainW1" "$(rb_head "$dW1" "$bW1^")" "W1: one commit on the new base"
+assert_fail "git --git-dir='$dW1/remote.git' cat-file -e '$bW1:design/tasks.json'" "W1: the array is gone from the branch"
+assert_eq "$(git --git-dir="$dW1/remote.git" show "$oldW1:design/tasks.json" | jq -cS '.tasks[]|select(.id=="T-Z")')" \
+  "$(git --git-dir="$dW1/remote.git" show "$bW1:design/tasks/T-Z.json" | jq -cS .)" \
+  "W1: the task's own entry, as the branch had it, is now its own file"
+assert_eq '["T-1"]' "$(git --git-dir="$dW1/remote.git" show "$bW1:design/tasks/T-Z.json" | jq -c .depends_on)" \
+  "W1: (the branch's revision, not main's text)"
+assert_eq "written by the design task" \
+  "$(git --git-dir="$dW1/remote.git" show "$bW1:design/tasks/T-EXTRA.json" 2>/dev/null | jq -r .title)" \
+  "W1: and another task's entry the branch added is moved too, not dropped"
+assert_contains "$(cat "$dW1/prompt.md")" "keeps one file per task" "W1: the worker is told the layout"
+assert_lacks "$(cat "$dW1/prompt.md")" '- `design/tasks.json`' "W1: and is not handed the array to resolve"
+# W1b: the branch and main both changed one other entry; that file is handed
+# over with markers, the round is refused until it is resolved, and neither
+# side's text is lost on the way
+dW1b="$(rb_fixture two-tasks)"; bW1b="$(rb_branch "$dW1b")"
+( cd "$dW1b/repo/state/worktrees/T-Z" \
+    && jq '(.tasks[]|select(.id=="T-1")|.title)="one, as the task says"' design/tasks.json > n \
+    && mv n design/tasks.json && rb_commit -am 'the task retitles T-1' && git push -q origin HEAD )
+oldW1b="$(rb_head "$dW1b" "$bW1b")"
+rb_split_main "$dW1b" "jq '.title=\"one, as main says\"' design/tasks/T-1.json > n && mv n design/tasks/T-1.json"
+printf '%s\n' 'cp design/tasks/T-1.json "$FM_T_DIR/t1-seen"' "$(cat "$rb_add")" > "$dW1b/look.sh"
+rb_round_two "$dW1b" "$dW1b/look.sh"
+rb_rebuilt "$dW1b" "W1b"
+assert_contains "$(cat "$dW1b/prompt.md")" '- `design/tasks/T-1.json`' "W1b: an entry both sides changed goes to the worker by its file"
+assert_contains "$(cat "$dW1b/t1-seen" 2>/dev/null)" "one, as main says" "W1b: with main's text"
+assert_contains "$(cat "$dW1b/t1-seen" 2>/dev/null)" "one, as the task says" "W1b: and the branch's"
+assert_eq "75" "$rb_rc" "W1b: left unresolved, the round is refused"
+assert_contains "$rb_out" "design/tasks/T-1.json" "W1b: naming the file"
+assert_eq "$oldW1b" "$(rb_head "$dW1b" "$bW1b")" "W1b: and nothing is pushed"
+# W2: a branch already in the one-file layout; main edits the task's own
+# file. The rebuild puts the branch's file back, byte for byte.
+dW2="$(RB_SPLIT=1 rb_fixture)"; bW2="$(rb_branch "$dW2")"
+assert_fail "git --git-dir='$dW2/remote.git' cat-file -e 'main:design/tasks.json'" "W2: (main keeps one file per task)"
+( cd "$dW2/repo/state/worktrees/T-Z" \
+    && sed 's/^line 10$/line 10 for a while/' src/app.txt > n && mv n src/app.txt && rb_commit -am 'touch line 10' \
+    && sed 's/^line 10 for a while$/line 10/' src/app.txt > n && mv n src/app.txt && rb_commit -am 'put line 10 back' \
+    && git push -q origin HEAD )
+oldW2="$(rb_head "$dW2" "$bW2")"
+printf '%s\n' "sed 's/^line 10\$/line 10 by main/' src/app.txt > n && mv n src/app.txt" \
+  "jq '.title=\"retitled on main\"' design/tasks/T-Z.json > n && mv n design/tasks/T-Z.json" > "$dW2/main.sh"
+rb_move_main "$dW2" "$dW2/main.sh"
+rb_round_two "$dW2" "$rb_add"
+rb_rebuilt "$dW2" "W2"
+assert_eq "0" "$rb_rc" "W2: the rebuild completes"
+assert_eq "$(git --git-dir="$dW2/remote.git" rev-parse "$oldW2:design/tasks/T-Z.json")" \
+  "$(git --git-dir="$dW2/remote.git" rev-parse "$bW2:design/tasks/T-Z.json" 2>/dev/null)" \
+  "W2: the task's own file comes through byte for byte as the branch had it"
+assert_contains "$(git --git-dir="$dW2/remote.git" show "$bW2:src/app.txt")" "line 10 by main" "W2: and main's other change is kept"
+assert_contains "$(cat "$dW2/prompt.md")" 'design/tasks/T-Z.json' "W2: the worker is told its own file is frozen"
+# W3: the worker starts on a task that exists only in its branch's old
+# design/tasks.json - a new task, opened before main split the list
+dW3="$(RB_SPLIT=1 rb_fixture)"
+( cd "$dW3/repo" && git checkout -q -b t-q-old-list main && git rm -q -r design/tasks && mkdir -p design \
+    && printf '%s\n' '{"tasks":[{"id":"T-Q","title":"a task only its old branch has","scope":["src/**"],"acceptance":["it exists"]}]}' \
+       > design/tasks.json \
+    && git add design/tasks.json && rb_commit -m 'T-Q on its own branch' && git push -q origin HEAD && git checkout -q main )
+: > "$dW3/ghcalls"; rm -f "$dW3/prompt.md"
+outW3="$(cd "$dW3/repo" && FM_ROOT="$dW3/repo" FM_GH="$dW3/stub/gh" FM_T_STEP="$rb_add" FM_T_DIR="$dW3" \
+  FM_CAPTURE="$dW3/prompt.md" bin/fm-worker.sh --task T-Q 2>&1)"; rcW3=$?
+assert_ne "65" "$rcW3" "W3: a task only in its branch's old design/tasks.json is found"
+assert_lacks "$outW3" "no task T-Q" "W3: and not reported as missing"
+assert_eq "0" "$rcW3" "W3: the round completes"
+[ "$rcW3" = 0 ] || printf '%s\n' "$outW3" | sed 's/^/      W3 run: /'
+assert_contains "$(cat "$dW3/prompt.md" 2>/dev/null)" "a task only its old branch has" "W3: the worker is handed its spec"
+
+rm -rf "$dW1" "$dW1b" "$dW2" "$dW3"
 rm -rf "$dA" "$dA2" "$dB" "$dC" "$dD" "$dE" "$dF" "$dG" "$dG2" "$dG3" "$dG4" "$dH" "$dI" "$dJ" "$dK" "$dK2" "$dL" \
   "$dM" "$dN" "$dP1" "$dP2" "$dP3" "$dP4" "$dP5" "$dP6" "$dP7" "$dQ1" "$dQ2" "$dQ3" "$dQ4" \
   "$dR1" "$dR2" "$dS" "$dT" "$dU1" "$dU2" "$rb_add" "$rb_more"

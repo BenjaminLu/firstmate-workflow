@@ -1,0 +1,23 @@
+{
+  "id": "T-018",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-007",
+    "T-015"
+  ],
+  "title": "self-update and sync-skills",
+  "scope": [
+    "bin/fm.sh",
+    "skills/**",
+    "tests/selfupdate.test.sh",
+    "tests/option-loop.test.sh",
+    "design/tasks.json"
+  ],
+  "acceptance": [
+    "a skill-update task travels the same pull request and the same seven gates as any other",
+    "no path exists that edits skills/ without a pull request, and a test asserts it",
+    "sync-skills imports into skills/vendor/ one way and never writes back",
+    "a lint fails on vendor-specific syntax inside skills/"
+  ]
+}

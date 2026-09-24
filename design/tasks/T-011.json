@@ -1,0 +1,24 @@
+{
+  "id": "T-011",
+  "milestone": "M1",
+  "bootstrap": false,
+  "depends_on": [
+    "T-009"
+  ],
+  "title": "i18n: dictionaries, the tw2cn table, the hardcoded-string lint",
+  "scope": [
+    "i18n/**",
+    "board/server.ts",
+    "board/public/**",
+    "tests/i18n.test.sh",
+    "design/tasks.json"
+  ],
+  "acceptance": [
+    "ui.en.json and ui.zh-TW.json hold exactly the same keys, and no value is empty",
+    "every key the page asks for exists in the dictionary",
+    "tw2cn.tsv covers the terms that differ between the two vocabularies, every row is two columns, and no term is listed twice",
+    "zh-CN is derived from zh-TW by the table at display time, so there is no third dictionary to fall out of step",
+    "the page holds no hardcoded Chinese: every string a reader sees comes from the dictionary",
+    "switching language makes no network and no model call"
+  ]
+}

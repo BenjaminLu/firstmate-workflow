@@ -1,0 +1,21 @@
+{
+  "id": "T-026",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-017"
+  ],
+  "title": "the option loop: eleven scripts spin for ever on a flag with no value",
+  "scope": [
+    "bin/**",
+    "tests/**",
+    "design/tasks.json",
+    "design/design.md"
+  ],
+  "acceptance": [
+    "no script loops for ever when a flag arrives with nothing after it",
+    "every one of them exits 64 and says which flag",
+    "the gate refuses a shift 2 that has not checked it has two",
+    "the probe runs under an alarm, because a test for a hang would hang the gate rather than fail it"
+  ]
+}

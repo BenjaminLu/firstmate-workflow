@@ -1,0 +1,30 @@
+{
+  "id": "T-048",
+  "milestone": "M3",
+  "bootstrap": false,
+  "depends_on": [
+    "T-046"
+  ],
+  "title": "fm-project.sh: managed clones, target verification and the guard",
+  "scope": [
+    "bin/fm-project.sh",
+    "bin/fm-guard.sh",
+    ".githooks/pre-commit",
+    ".githooks/pre-push",
+    "tests/project.test.sh",
+    "tests/guard.test.sh",
+    "tests/option-loop.test.sh",
+    "tests/traps.test.sh",
+    "tests/gh-stub.sh",
+    "design/design.md"
+  ],
+  "acceptance": [
+    "Implements design.md sections 15.1 (managed clone) and 15.6 (what a target needs). New bin/fm-project.sh with `sync <name>` and `verify <name>`, following section 5.3.1's option rules. For the self project both are no-ops that succeed.",
+    "sync clones the project's github repository into state/projects/<name>/repo, or fetches and prunes an existing clone; sets core.hooksPath in the clone's local git config to the engine's .githooks/; adds `.fm-*` to the clone's .git/info/exclude. It writes nothing into the target's tree and never touches any checkout outside state/projects/.",
+    "verify refuses with exit 70, naming each missing item, unless: base is protected with enforce_admins on, up to date required and required_check a required status check; the repository is public (section 15.8 — private projects wait for a captain decision); the clone's hooks path is the engine's .githooks/. The gh stub answers these API calls in the shapes GitHub returns.",
+    "fm-guard.sh and the hooks protect main, master and the project's base; the self project's protected set is unchanged.",
+    "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
+    "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+  ]
+}

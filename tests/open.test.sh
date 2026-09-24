@@ -11,7 +11,7 @@ d="$(mktemp -d)"; r="$d/repo"
 mkdir -p "$r/bin" "$r/state" "$r/design" "$r/board/public" "$r/src" "$d/outside"
 cp "$ROOT/bin/fm-emit.sh" "$r/bin/"; cp "$ROOT/board/server.ts" "$r/board/"
 cp "$ROOT/board/public/index.html" "$r/board/public/"
-printf '{"tasks":[]}\n' > "$r/design/tasks.json"
+mkdir -p "$r/design/tasks"   # no tasks: one file per task, and there are none
 # an editor that records rather than opens
 printf '#!/usr/bin/env bash\necho "$*" >> "%s/opened"\n' "$d" > "$d/fake-editor"
 chmod +x "$d/fake-editor"

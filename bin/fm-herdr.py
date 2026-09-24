@@ -65,30 +65,151 @@ def locked(path, blocking=True):
         yield lock
 
 
+# One fleet roster (T-089): workers and reviewers draw from the same list, so a
+# name is one person whichever role they are on. config.yaml's `roster:`
+# replaces it.
+DEFAULT_ROSTER = ('mira', 'noah', 'iris', 'theo', 'luca', 'ada', 'omar', 'juno',
+                  'kai', 'lena', 'ravi', 'nina', 'otto', 'sana', 'elio', 'yara')
+
+
+def fleet_roster(root):
+    """config.yaml's top-level `roster:` (a block or [flow] list), else the default."""
+    path = Path(root) / 'config.yaml'
+    names, inside = None, False
+    for raw in (path.read_text().splitlines() if path.is_file() else []):
+        line = re.sub(r'\s+#.*$', '', raw).rstrip()
+        if not inside:
+            found = re.match(r'roster:\s*(.*)$', line)
+            if not found: continue
+            names, inside = [], True
+            value = found.group(1).strip()
+            if value:
+                if not (value.startswith('[') and value.endswith(']')):
+                    raise ValueError('config.yaml roster must be a list of names')
+                names = [item.strip().strip('"\'') for item in value[1:-1].split(',') if item.strip()]
+                break
+            continue
+        if not line.strip() or line.lstrip().startswith('#'): continue
+        if not raw[:1].isspace() and not line.startswith('- '): break
+        item = re.match(r'\s*-\s+(.*)$', line)
+        if not item: raise ValueError('config.yaml roster must be a list of names')
+        names.append(item.group(1).strip().strip('"\''))
+    if names is None: return list(DEFAULT_ROSTER)
+    if not names: raise ValueError('config.yaml roster is empty; list names or remove the key')
+    roster = []
+    for name in names:
+        name = name.lower()
+        # Short enough that <role>-<name><n>-<task>-r<n> stays a readable label.
+        if not re.fullmatch(r'[a-z]{1,6}', name):
+            raise ValueError('config.yaml roster: ' + repr(name) + ' is not a short given name (letters only)')
+        if name in roster: raise ValueError('config.yaml roster names ' + name + ' more than once')
+        roster.append(name)
+    return roster
+
+
+def crew_name(identity):
+    """The crew member a run belongs to; runs before T-089 carry it in the actor."""
+    if identity.get('name'): return identity['name']
+    found = re.match(r'^(?:worker|reviewer|firstmate)-(.+)-[a-z0-9]+-r[0-9]+$', identity.get('actor', ''))
+    return found.group(1) if found else None
+
+
+def run_is_live(run):
+    """An unfinished run holds its name unless it is proven over: no
+    orchestration result, and not (its launcher gone and every attempt ended)."""
+    run = Path(run)
+    if (run / 'orchestration-result.json').exists(): return False
+    process = run / 'process.json'
+    if process.is_file():
+        try:
+            if process_matches(read(process)): return True
+        except (OSError, ValueError): pass
+    attempts = executions(run)
+    if any(item['state'] != 'terminated' for item in attempts): return True
+    # fm_identity writes process.json right after allocation and transport()
+    # writes the attempt; with neither yet the run is starting, not over.
+    return not process.is_file() and not attempts
+
+
+def choose_name(alias, roster, live, last, other_role, room):
+    """The crew name for one run, whole. Every comparison is on the whole name
+    and it is never cut: a name the final actor has no `room` for is refused.
+    Returns (name, reused roster name or None)."""
+    reused = None
+    if alias:
+        name = re.sub('[^a-z0-9]+', '-', alias.lower()).strip('-')
+        name = re.sub(r'^(worker|reviewer|firstmate)-', '', name) or 'crew'
+        if name in live:
+            raise RuntimeError('crew name ' + name + ' is live in another run; choose another --name or omit it')
+        if name in other_role:
+            raise RuntimeError('crew name ' + name + " is this task's other role; choose another --name or omit it")
+    else:
+        # A task's worker and reviewer are never the same crew member.
+        usable = [n for n in roster if n not in other_role]
+        free = [n for n in usable if n not in live]
+        if last in free: name = last  # the same crew member across a task's rounds
+        elif free: name = free[0]
+        else:
+            reused = last if last in usable else (usable or roster)[0]
+            n = 2
+            while reused + str(n) in live or reused + str(n) in other_role: n += 1
+            name = reused + str(n)
+    if len(name) > room:
+        raise RuntimeError('crew name ' + name + ' does not fit a ' + str(room)
+                           + '-character room in this actor; choose a shorter --name or roster')
+    return name, reused
+
+
 def allocate(root, role, task, alias):
     if role not in ('worker', 'reviewer', 'firstmate'):
         raise ValueError('unsupported role')
     if not re.fullmatch(r'[A-Za-z0-9_-]+', task):
         raise ValueError('invalid task identity')
-    directory = Path(root).resolve() / 'state/runs'
+    root = Path(root).resolve()
+    directory = root / 'state/runs'
+    roster = fleet_roster(root)
     with locked(directory / '.identity.lock'):
         counter = directory / 'counter.json'
         number = read(counter)['number'] + 1 if counter.exists() else 1
-        stem = re.sub('[^a-z0-9]+', '-', alias.lower()).strip('-') if alias else ('mira' if role == 'worker' else 'noah')
-        stem = re.sub(r'^(worker|reviewer|firstmate)-', '', stem) or 'crew'
         task_slug = re.sub('[^a-z0-9]', '', task.lower())
         # Long task IDs keep a digest so truncation cannot hide their mapping.
         if len(task_slug) > 9:
             task_slug = task_slug[:4] + hashlib.sha256(task.encode()).hexdigest()[:5]
+        live, previous, other_role = set(), [], set()
+        for file in directory.glob('*/identity.json'):
+            try: identity = read(file)
+            except (OSError, ValueError): continue
+            name = crew_name(identity)
+            if not name: continue
+            if identity.get('task') == task:
+                if identity.get('role') == role: previous.append((identity.get('created', 0), name))
+                else: other_role.add(name)
+            if run_is_live(file.parent): live.add(name)
+        last = max(previous)[1] if previous else None
         while True:
             suffix = f'-{task_slug}-r{number}'
-            actor = role + '-' + stem[:32-len(role)-1-len(suffix)].rstrip('-') + suffix
+            # Measured against the final suffix: a counter that gains a digit
+            # on retry must not push the actor past 32 characters.
+            room = 32 - len(role) - 1 - len(suffix)
+            name, reused = choose_name(alias, roster, live, last, other_role, room)
+            actor = role + '-' + name + suffix
             run = directory / actor
-            try: run.mkdir(); break
+            try: run.mkdir(parents=True); break
             except FileExistsError: number += 1
+        if reused:
+            # Say why: a name can be free yet held by this task's other role.
+            held = [n for n in roster if n in other_role and n not in live]
+            if held:
+                why = (f'no roster name is free for this task ({len(roster) - len(held)} of {len(roster)} live,'
+                       f" {', '.join(held)} held by its other role)")
+            else:
+                why = f'every roster name is live ({len(roster)})'
+            print(f'fm-herdr: {why}; reusing {reused} as {name}', file=sys.stderr)
         save(counter, dict(number=number))
-        save(run / 'identity.json', dict(actor=actor, role=role, task=task,
-             requested_alias=alias, run=str(run), created=time.time()))
+        record = dict(actor=actor, role=role, task=task, name=name,
+                      requested_alias=alias, run=str(run), created=time.time())
+        if reused: record['reused'] = reused
+        save(run / 'identity.json', record)
     return run
 
 

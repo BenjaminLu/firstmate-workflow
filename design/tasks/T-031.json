@@ -1,0 +1,24 @@
+{
+  "id": "T-031",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-007"
+  ],
+  "title": "a second round the worker cannot see, and a question nobody hears",
+  "scope": [
+    "bin/fm-worker.sh",
+    "tests/worker.test.sh",
+    "tests/dispatch.test.sh",
+    "design/design.md",
+    "design/tasks.json"
+  ],
+  "acceptance": [
+    "a worker dispatched on a task whose branch already has an open pull request finds that pull request itself, without being told the number",
+    "on a later round the prompt carries what review has said and the failing check, whether or not --pr was passed",
+    "the lookup keeps GitHub's exit status: answered-and-none carries on and opens a pull request, could-not-answer stops the run before the engine rather than building a blind prompt and pushing at a pull request nobody looked for",
+    "the worker's .fm-say.md reaches the pull request on any round where one exists, and the run says which pull request it went to",
+    "a message that could not be posted is an error the run reports, not a line on standard error nobody reads: asking is the whole of that round and a question that went nowhere leaves the task deadlocked",
+    "the worker's own lookup is the only path there can be: fm-dispatch never restarts a task whose pull request is open, so it has no number to pass, and the suite says so rather than the design claiming it"
+  ]
+}
