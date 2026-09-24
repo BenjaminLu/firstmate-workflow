@@ -1186,6 +1186,7 @@ gates, and the dispatcher cannot dispatch itself.
 | T-053 | dispatch, run and session across projects | T-050, T-051 |
 | T-054 | the board shows which project | T-047 |
 | T-055 | the first external project, proved end to end | T-052, T-053, T-054 |
+| T-056 | design: the board dispatches to several projects at the same time | T-045 |
 
 ---
 
@@ -1501,3 +1502,100 @@ as its own default project, still drives itself with no change to any caller.
 8. T-053 dispatch, run and session across projects.
 9. T-054 the board shows which project.
 10. T-055 a fixture target driven end to end, and the README for registering one.
+
+T-053, T-054 and T-055 each carry their part of section 15.10 in their
+acceptance; T-056 wrote that section and changed no code.
+
+### 15.10 Several projects at the same time
+
+The captain runs work in several projects at once from one board. This is a
+requirement, not a consequence of the rest of section 15, and T-053, T-054 and
+T-055 each prove their part of it with a test that has two registered projects
+live at the same time.
+
+**1. Runs in different projects are live together, up to the one global
+limit.** `config.yaml`'s `concurrency` stays one number for the whole
+installation, counted over every project: a run in `example-app` and a run in
+`firstmate-workflow` each take one slot of the same limit. Nothing
+project-scoped is shared or locked across projects:
+
+| Thing | Scoped to | Why it cannot collide |
+|---|---|---|
+| spec pins | `state/pins/<project>/<task>/` | the path carries the project |
+| worktrees | each project's own worktree root (15.3) | cleanup removes only a direct child of that project's root |
+| checkout | the engine root, or `state/projects/<name>/repo` | one clone per project; its fetch and prune never touch another |
+| guard | `core.hooksPath` in each checkout's local config, protecting that project's `base` | a hook runs in the repository it guards and nowhere else |
+| panes and runs | one tab and one owned pane per run actor (section 11) | the locked run counter makes actors unique across projects |
+| decisions | one card per request, carrying `project` | ids are global `D-<n>`; a card answers only itself |
+| merges | the project's own `github` repository | see point 3 |
+
+Three things are deliberately global, and each is a short critical section,
+not a lock held for the length of a run: the event log's writer lock
+(`fm-emit.sh`), the lock that allocates the next free decision id (15.4), and a
+**dispatch slot lock** that `fm-dispatch.sh` holds only while it counts live
+runs and emits `dispatched`. The slot lock is new. Without it two dispatches
+started at once — one per project, which is now the ordinary case — can each
+count the same free slot and together exceed the limit. Live runs are counted
+by `(project, task)`, not by task id, because two projects can both have a
+`T-004` live.
+
+**2. The limit has no per-project share; free slots are filled fairly.** A
+reserved share would idle slots: with the default limit of three and two
+projects, any split leaves a slot empty whenever one project has no ready
+work, and a share per project has to be re-cut every time a project is
+registered. Fair filling gives the same protection against starvation without
+idling anything. `fm-dispatch.sh --all-projects` fills free slots one at a
+time: each slot goes to the registered project, among those with a ready task
+whose `greenlit` matches it and whose `fm-project.sh verify` passes, that has
+the fewest live runs; a tie goes to the project whose name sorts first. So one
+project can hold every slot only while no other project has ready work, and it
+loses the next freed slot as soon as another does. `--project <name>` still
+dispatches only that project, within the same global limit and under the same
+slot lock; with neither flag, dispatch behaves as today for the default project.
+The default is therefore **no share, fair fill**. A per-project cap or a
+reserved share is a captain decision only if the captain later asks for one
+(for example to keep a slot free for one project); this design does not need
+it and does not add the knob.
+
+**3. Merge cards: parallel across projects, one at a time within one.** Two
+projects' merge cards may be pending at once: they target different
+repositories, a merge in one changes nothing another's branch is based on, and
+neither needs the other rebased. Within one project merges stay one at a time,
+because `base` is required to be up to date (15.6): each merge moves `base`,
+so every other open pull request in that project must be rebased onto it and
+gated again at its new head before it can be carded (section 6). A card raised
+before that would be stale the moment the first one merges. The rule:
+
+- **at most one pending merge card per project.** `fm-run.sh`, holding a lock
+  under `state/` named for the project, requests a merge card only if that
+  project has no pending one; otherwise it requests none, says the card waits
+  for the project's pending merge card, and leaves the branch to be rebased and
+  gated again once that card is answered. Merge, send back and hold all answer
+  a card and free the project's turn.
+- **the board never serializes one project's merge behind another's.** The
+  merge route runs `fm-merge.sh` with the card's `--project` without blocking
+  the server, refuses a second merge in the same project while one is running,
+  and lets a merge in another project run alongside it. Today's synchronous
+  call blocks the whole board while one merge runs, which is exactly the
+  cross-project coupling this section rules out.
+
+**4. The captain sees and answers several projects' cards together.** Without
+`?project=` the board shows every project (15.4): lane cards, crew bubbles and
+decision cards of all projects on one page, each with its project chip. The
+deck holds every pending card of every project in one list, oldest request
+first, so a card never hides behind another project's; the pending count counts
+all projects, or only the filtered one under `?project=`. Each card is answered
+on its own — ids are global, so answering needs no project — and answering one
+never changes, reloads away or reorders another project's pending card. There
+is no bulk answer: every merge still goes through its own card (5.2).
+
+Who proves what:
+
+| Task | Its part of this section |
+|---|---|
+| T-053 | points 1–3 in the scripts: the global count by `(project, task)`, the slot lock, `--all-projects` fair fill, and one pending merge card per project in `fm-run.sh` |
+| T-054 | points 3 and 4 on the board: several projects' live work and cards at once, and merges that run per project without blocking each other |
+| T-055 | the whole section end to end: the external project's task runs while a self-hosted task is live, and both merge cards are pending together |
+
+No task needs a file outside its existing scope for this: the slot lock and the
+merge-card lock live under `state/`, which is runtime, not a scoped file.
