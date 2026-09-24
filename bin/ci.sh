@@ -21,6 +21,8 @@ fi
 # counts, and the budget above is unchanged; what changes is how many run at
 # once. Six is the cap because past it the suites that start servers and
 # workers spend the extra width waiting on each other, not on the CPU.
+ci_cpus="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)"
+[[ "$ci_cpus" =~ ^[1-9][0-9]*$ ]] || ci_cpus=1
 if [ -n "${FM_CI_JOBS+set}" ]; then
   ci_jobs="$FM_CI_JOBS"
   if [[ ! "$ci_jobs" =~ ^[1-9][0-9]?$ ]]; then
@@ -28,12 +30,19 @@ if [ -n "${FM_CI_JOBS+set}" ]; then
     exit 64
   fi
 else
-  ci_jobs="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)"
-  [[ "$ci_jobs" =~ ^[1-9][0-9]*$ ]] || ci_jobs=1
+  ci_jobs="$ci_cpus"
   [ "$ci_jobs" -le 6 ] || ci_jobs=6
 fi
+# Playwright runs beside the pool, so the two share the machine rather than
+# each taking all of it: half the CPUs, at most the four the config asks
+# for. On a 4-vCPU runner, four browsers beside four suites starved the
+# browsers until their waits ran out.
+e2e_workers=$((ci_cpus / 2))
+[ "$e2e_workers" -ge 1 ] || e2e_workers=1
+[ "$e2e_workers" -le 4 ] || e2e_workers=4
 printf 'ci: effective budget: %ss\n' "$ci_max_seconds"
 printf 'ci: bash suites: %s at a time\n' "$ci_jobs"
+printf 'ci: end-to-end: %s workers\n' "$e2e_workers"
 
 ROOT="${FM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT" || exit 2
@@ -87,6 +96,7 @@ ci_cleanup() {
 trap ci_cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
+trap 'exit 129' HUP
 
 # end-to-end: decided now, run in the background, reported in its place
 e2e_state=run
@@ -94,9 +104,20 @@ if [ ! -d tests/e2e ]; then e2e_state=no-suite
 elif ! command -v bunx >/dev/null 2>&1; then e2e_state=no-bunx
 elif [ ! -d node_modules/@playwright ]; then e2e_state=no-playwright
 fi
+# One background stage: its command, its own log and its exit status. The
+# stage shell passes a signal on to the command, or killing the gate would
+# kill the shell and leave playwright's browsers running.
+run_stage() {   # run_stage <name> <command...>
+  local name="$1" c=''
+  shift
+  trap '[ -z "$c" ] || kill "$c" 2>/dev/null; exit 143' TERM INT HUP
+  "$@" > "$ci_tmp/$name.log" 2>&1 < /dev/null &
+  c=$!
+  wait "$c"
+  echo "$?" > "$ci_tmp/$name.rc"
+}
 if [ "$e2e_state" = run ]; then
-  ( bunx playwright test > "$ci_tmp/e2e.log" 2>&1 < /dev/null
-    echo "$?" > "$ci_tmp/e2e.rc" ) &
+  run_stage e2e bunx playwright test --workers="$e2e_workers" &
   e2e_pid=$!; bg_pids="$bg_pids $e2e_pid"
 fi
 
@@ -129,7 +150,7 @@ pool_order() {
 # file that exists is a whole one.
 run_suite() {   # run_suite <index>
   local i="$1" c=''
-  trap '[ -z "$c" ] || kill "$c" 2>/dev/null; exit 143' TERM INT
+  trap '[ -z "$c" ] || kill "$c" 2>/dev/null; exit 143' TERM INT HUP
   # The check below reads the shell's OWN messages, and bash localises
   # them: on a zh-TW shell it says 命令未找到 and an English grep
   # matches nothing, which is green for a suite that never ran half
@@ -152,7 +173,7 @@ run_suite() {   # run_suite <index>
 run_pool() {
   local i started=0 live=''
   # shellcheck disable=SC2086  # a list of pids, split on purpose
-  trap '[ -z "$live" ] || kill $live 2>/dev/null; exit 143' TERM INT
+  trap '[ -z "$live" ] || kill $live 2>/dev/null; exit 143' TERM INT HUP
   for i in $(pool_order); do
     while :; do
       set -- "$ci_tmp"/suite.*.rc      # nullglob: $# is how many have finished
@@ -172,8 +193,7 @@ fi
 
 scripts=(bin/*.sh bin/adapters/*.sh tests/*.sh)  # adapters too: bin/*.sh does not recurse
 if [ ${#scripts[@]} -gt 0 ] && command -v shellcheck >/dev/null 2>&1; then
-  ( shellcheck -x -S warning "${scripts[@]}" > "$ci_tmp/shellcheck.log" 2>&1 < /dev/null
-    echo "$?" > "$ci_tmp/shellcheck.rc" ) &
+  run_stage shellcheck shellcheck -x -S warning "${scripts[@]}" &
   shellcheck_pid=$!; bg_pids="$bg_pids $shellcheck_pid"
 fi
 

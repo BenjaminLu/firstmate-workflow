@@ -108,7 +108,11 @@ test('real directed handoffs travel, react once and retain pointer ownership thr
     await page.goto(b.url+'/?lang=en');
     await expect(page.locator('[data-crew="worker-real"]')).toBeVisible();
     await expect(page.locator('.handoff')).toHaveCount(0);
-    await page.clock.install();
+    // paused, not just installed: an installed clock still runs in real
+    // time, and on a loaded machine the real seconds between the steps
+    // below ran the 2.3 s cue out before it was read. Paused, the cue's
+    // time is only what runFor gives it.
+    await page.clock.install();await page.clock.pauseAt(Date.now()+60_000);
     emitFixture(root,'reviewer-real','T-034','review_opened','Review ready','開始審查');
     await page.evaluate("fetch('/api/state').then(r=>r.json()).then(render)");
     await page.clock.runFor(32);
@@ -390,16 +394,16 @@ test("the captain merges from the board", async ({ page }) => {
   // call to the one script allowed to merge are the half that matters. The
   // reply text is not asserted: the board re-renders as soon as it lands,
   // so a passing test would be racing the repaint.
-  await expect(page.locator(".dcard")).toHaveCount(0, { timeout: 10_000 });
+  await expect(page.locator(".dcard")).toHaveCount(0, { timeout: 15_000 });
   const decision = join(b.root, "state/decisions/D-1.json");
   // all three side-effects land asynchronously; polling one and reading the
   // others is a race, and the recorder read throws ENOENT rather than
   // failing an assertion when it loses
-  await expect.poll(() => existsSync(decision), { timeout: 10_000 }).toBe(true);
+  await expect.poll(() => existsSync(decision), { timeout: 15_000 }).toBe(true);
   await expect.poll(() => (existsSync(b.recorder) ? readFileSync(b.recorder, "utf8") : ""),
-    { timeout: 10_000 }).toContain("--pr 99");
+    { timeout: 15_000 }).toContain("--pr 99");
   await expect.poll(() => existsSync(join(b.root, "state/pending/D-1.json")),
-    { timeout: 10_000 }).toBe(false);
+    { timeout: 15_000 }).toBe(false);
   expect(JSON.parse(readFileSync(decision, "utf8")).chosen).toBe("A");
   } finally { stopBoard(b); }
 });
@@ -443,7 +447,7 @@ test("custom selection is local, literal and never merges", async ({ page }) => 
     await page.locator('[data-l="zh-CN"]').click();
     await expect(page.locator('#orderFeedback')).toContainText(literal);
     await expect(page.locator('#orderFeedback script')).toHaveCount(0);
-    await expect(page.locator('#captain')).toHaveAttribute('data-pose','idle',{timeout:5000});
+    await expect(page.locator('#captain')).toHaveAttribute('data-pose','idle',{timeout:15_000});
     await expect(page.locator('.scene #captain .r-cap')).toBeVisible();
   } finally { stopBoard(b); }
 });
@@ -496,7 +500,7 @@ const emit = (root:string, type:string, pr:number) => {
   expect(r.status).toBe(0);
 };
 test('merge identities queue absent tasks, survive refresh and never replay history', async ({page}) => {
-  test.setTimeout(30_000);
+  test.setTimeout(60_000);
   const root = makeRoot(['working']); emit(root,'merged',880);
   const b = await startBoard(root);
   try {
@@ -521,7 +525,9 @@ test('merge identities queue absent tasks, survive refresh and never replay hist
     expect(afterRefresh-beforeRefresh).toBeLessThan(.15);
     expect(await page.locator('#vessel').evaluate(el=>(el as HTMLElement).style.animationDelay)).toBe('0s');
     emit(root,'merged',881);
-    await expect(page.locator('.scene')).toHaveAttribute('data-effect','merge:882', {timeout:4000});
+    await expect(page.locator('.scene')).toHaveAttribute('data-effect','merge:882', {timeout:15_000});
+    // not widened: 882 has at most its 3.2 s left, and a replayed 881
+    // after it would add 3.2 s more, which is what this window catches
     await expect(page.locator('.scene')).not.toHaveAttribute('data-effect', /.+/, {timeout:4000});
     await page.evaluate(() => { (window as any).connect(); });
     await page.waitForTimeout(650);
@@ -552,7 +558,7 @@ test('failed merge persists failure without salute or automatic retry', async ({
 });
 
 test('a refused merge names its decision and task, and clears once that task merges', async ({page}) => {
-  test.setTimeout(30_000);
+  test.setTimeout(60_000);
   const b = await startBoard(makeRoot(['working']));
   writeFileSync(join(b.root,'bin/fm-merge.sh'),'#!/usr/bin/env bash\necho refused\nexit 1\n');
   const {task} = JSON.parse(readFileSync(join(b.root,'state/pending/D-1.json'),'utf8'));
@@ -572,7 +578,7 @@ test('a refused merge names its decision and task, and clears once that task mer
     const r = spawnSync('bash',[join(b.root,'bin/fm-emit.sh'),'--actor','github','--type','merged','--task',task,'--pr','99',
       '--en','merged by hand','--tw','手動合併'],{env:{...process.env,FM_ROOT:b.root}});
     expect(r.status).toBe(0);
-    await expect(feedback).not.toContainText(EN.mergeRefused, {timeout:5000});
+    await expect(feedback).not.toContainText(EN.mergeRefused, {timeout:15_000});
     // and a reload does not bring it back
     await page.reload();
     await expect(page.locator('.scene .pivot').first()).toBeVisible();
@@ -723,7 +729,7 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
     // its dependency merging moves the backlog card to ready over the live
     // stream: no reload, no render called by hand
     emitFixture(root,'github',first,'merged','Merged','已合併');
-    await expect(page.locator('[data-lane="ready"] [data-task="T-QUEUE"]')).toHaveCount(1, {timeout:5000});
+    await expect(page.locator('[data-lane="ready"] [data-task="T-QUEUE"]')).toHaveCount(1, {timeout:15_000});
     await expect(page.locator('[data-lane="backlog"] [data-task="T-QUEUE"]')).toHaveCount(0);
     await expect(page.locator('[data-task="T-QUEUE"] .dep')).toHaveCount(0);
     const readyNow = await page.locator('[data-lane="ready"] .card').count();
@@ -753,10 +759,10 @@ test('external outcomes override stale success and clear only their settled draf
     await expect(page.locator('#orderFeedback')).not.toContainText(EN.recorded);
     await expect(page.locator('.dcard')).toHaveCount(1);
     await expect(page.locator('#card-D-3 textarea')).toHaveValue('keep this unrelated draft');
-    await expect(page.locator('#captain')).toHaveAttribute('data-pose','ready',{timeout:7000});
+    await expect(page.locator('#captain')).toHaveAttribute('data-pose','ready',{timeout:15_000});
     await page.request.post(`${b.url}/decisions`,{data:{id:'D-3',chosen:'custom',text:'keep this unrelated draft'}});
     await expect(page.locator('.dcard')).toHaveCount(0);
-    await expect(page.locator('#captain')).toHaveAttribute('data-pose','idle',{timeout:7000});
+    await expect(page.locator('#captain')).toHaveAttribute('data-pose','idle',{timeout:15_000});
   } finally {stopBoard(b);}
 });
 
@@ -807,7 +813,7 @@ async function fakeAudio(page:Page, local = true, refused = false) {
   }, {local,refused});
 }
 test('Ahoy speech cues stay off while merge cannon, dedupe and mute remain', async ({page}) => {
-  test.setTimeout(30_000);
+  test.setTimeout(60_000);
   await fakeAudio(page);
   const b = await startBoard(makeRoot(['working']));
   const external:string[]=[];
@@ -821,7 +827,7 @@ test('Ahoy speech cues stay off while merge cannon, dedupe and mute remain', asy
     const sound = await page.evaluate(()=>(window as any).sounds);
     expect(sound.tones).toEqual([]);expect(sound.spoken).toEqual([]);expect(sound.booms).toBe(0);
     emit(b.root,'merged',885);
-    await expect(page.locator('.scene')).toHaveAttribute('data-effect','merge:885',{timeout:5000});
+    await expect(page.locator('.scene')).toHaveAttribute('data-effect','merge:885',{timeout:15_000});
     expect((await page.evaluate(()=>(window as any).sounds)).booms).toBeGreaterThan(0);
     expect((await page.evaluate(()=>(window as any).sounds)).tones).toEqual([]);
     expect((await page.evaluate(()=>(window as any).sounds)).spoken).toEqual([]);
@@ -831,7 +837,7 @@ test('Ahoy speech cues stay off while merge cannon, dedupe and mute remain', asy
     expect(await page.evaluate(()=>localStorage.getItem('board.muted'))).toBe('1');
     expect((await page.evaluate(()=>(window as any).sounds)).cancel).toBe(0);
     emit(b.root,'merged',886);
-    await expect(page.locator('.scene')).toHaveAttribute('data-effect','merge:886',{timeout:5000});
+    await expect(page.locator('.scene')).toHaveAttribute('data-effect','merge:886',{timeout:15_000});
     expect((await page.evaluate(()=>(window as any).sounds)).booms).toBe(before);
     expect((await page.evaluate(()=>(window as any).sounds)).spoken).toEqual([]);
     expect(external).toEqual([]);
@@ -886,7 +892,7 @@ test('legacy scalar records disclose missing details without invented translatio
 // parallel the shared board is being read by the language tests meanwhile
 test("a crewman turns under the pointer, and the ahoy fires", async ({ page }) => {
   // the start of its board counts against the test's own budget
-  test.setTimeout(40_000);
+  test.setTimeout(60_000);
   const own = await startBoard(makeRoot([...CREW]));
   try {
     await open(page, "zh-TW", "query", own.url);

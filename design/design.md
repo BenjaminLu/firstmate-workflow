@@ -910,9 +910,13 @@ judges. When every suite has finished, the results print in glob order with
 the same pass, flunk and noise-check lines as before. The shellcheck and
 end-to-end stages run beside the pool and print in their usual places; the
 pool polls rather than using `wait -n`, which bash 3.2 lacks. Playwright
-runs `fullyParallel` with 4 workers and no retries, so no browser test may
-change state another one reads: a test that writes to its board starts its
-own.
+runs `fullyParallel` with no retries, so no browser test may change state
+another one reads: a test that writes to its board starts its own. Its
+config asks for 4 workers; beside the pool, `ci.sh` gives it half the online
+CPUs instead (at least 1, at most 4), printed as `ci: end-to-end: N workers`,
+because four browsers beside four suites on a 4-vCPU runner starved the
+browsers. Every background job and the gate itself trap INT, TERM and HUP,
+so an interrupted gate takes its suites, browsers and logs with it.
 
 Running in parallel changes no threshold: the budget, every stage, every
 suite, every assertion and the per-suite noise check are what they were.
@@ -922,7 +926,9 @@ being idle. A suite that starts a board takes its port from the kernel
 the server prints), because the old `RANDOM` ranges overlapped and a
 readiness loop could reach another suite's server. A positive wait is for
 its real condition against a deadline wide enough for a loaded machine, and
-returns the moment the condition holds. A negative window ("nothing was
+returns the moment the condition holds; that includes the browser tests'
+expect and test timeouts, and an animation a test steps through runs on a
+paused clock rather than on real time. A negative window ("nothing was
 started within N seconds") is wall clock, never a count of sleeps, and may
 only grow: reconcile's is 5 seconds.
 

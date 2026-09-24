@@ -117,14 +117,27 @@ for jobs in '' 0 -1 01 1.5 ' 2' 100 x '$(touch injected)'; do
 done
 
 # the width it chose is on the first lines, from the online CPU count,
-# capped at six, and FM_CI_JOBS overrides it
+# capped at six, and FM_CI_JOBS overrides it. Playwright runs beside the
+# pool, so it takes half the CPUs, at most four, and is told so on its
+# command line: four browsers beside four suites on a 4-vCPU runner starved
+# the browsers until their waits ran out. The stub bunx records what
+# playwright was asked for.
 cpus="$(mktemp -d)"
 empty_tree="$(fixture)"
-for n in 2 64; do
+mkdir -p "$empty_tree/tests/e2e" "$empty_tree/node_modules/@playwright"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" > "%s/bunx.args"\necho "  1 passed"\n' "$cpus" \
+  > "$cpus/bunx"
+chmod +x "$cpus/bunx"
+for n in 1 2 4 64; do
   printf '#!/usr/bin/env bash\necho %s\n' "$n" > "$cpus/getconf"; chmod +x "$cpus/getconf"
+  rm -f "$cpus/bunx.args"
   out="$(unset FM_CI_JOBS; PATH="$cpus:$PATH" FM_ROOT="$empty_tree" bash "$ROOT/bin/ci.sh" 2>&1)"
   want=$n; [ "$n" -gt 6 ] && want=6
   assert_contains "$out" "bash suites: $want at a time" "$n online CPUs run $want suites at a time"
+  pw=$((n / 2)); [ "$pw" -ge 1 ] || pw=1; [ "$pw" -le 4 ] || pw=4
+  assert_contains "$out" "end-to-end: $pw workers" "and $pw playwright workers beside them"
+  assert_eq "playwright test --workers=$pw" "$(cat "$cpus/bunx.args" 2>/dev/null)" \
+    "and playwright is started with that many"
 done
 out="$(PATH="$cpus:$PATH" FM_CI_JOBS=3 FM_ROOT="$empty_tree" bash "$ROOT/bin/ci.sh" 2>&1)"
 assert_contains "$out" "bash suites: 3 at a time" "FM_CI_JOBS overrides the CPU count"
@@ -155,26 +168,37 @@ assert_contains "$out" "nosuchpoolhelper" "with the line it found"
 assert_contains "$out" "+ tests/a-green.test.sh" "and it is pinned to the suite that said it"
 rm -rf "$t"
 
-# Glob order whatever order they finish in. a-waits cannot finish until
-# z-quick has, so with two at a time z-quick finishes first - and a-waits
-# passing at all is the proof that the two ran at the same time. There is
-# no clock in it: a-waits waits for z-quick's marker, and gives up only so
-# that a gate running them one at a time goes red instead of hanging.
+# Glob order whatever order they finish in. z-quick sorts last and finishes
+# first: a-waits holds until z-quick's marker is there. Each suite writes
+# its name into a finish log as it ends, so the finish order is read, not
+# inferred, and the report's order is checked against it separately.
+# There is no clock in the rendezvous: a-waits gives up only so that a gate
+# running them one at a time does not hang, and it exits 0 either way, so
+# the order check never depends on whether the two ran together.
 t="$(fixture)"
 cat > "$t/tests/a-waits.test.sh" <<S
 #!/usr/bin/env bash
 end=\$(( \$(date +%s) + 30 ))
 until [ -e "$pool_marks/z-done" ]; do
-  [ "\$(date +%s)" -le "\$end" ] || { echo "z-quick never ran beside me"; exit 1; }
+  [ "\$(date +%s)" -le "\$end" ] || break
   sleep 0.05
 done
+echo a-waits >> "$pool_marks/finished"
 exit 0
 S
-printf '#!/usr/bin/env bash\ntouch "%s/z-done"\nexit 0\n' "$pool_marks" > "$t/tests/z-quick.test.sh"
+printf '#!/usr/bin/env bash\ntouch "%s/z-done"\necho z-quick >> "%s/finished"\nexit 0\n' \
+  "$pool_marks" "$pool_marks" > "$t/tests/z-quick.test.sh"
 before="$(find "$t" -print | sort; find "$t" -type f -exec shasum {} + | sort)"
+# The listing above sees what is left; the stamp sees what happened. A path
+# created, rewritten or removed under FM_ROOT during the run changes its own
+# mtime or its directory's, so anything newer than the stamp was written.
+# The second of sleep is for filesystems that keep whole seconds.
+touch "$pool_marks/stamp"; sleep 1
 rc=0; out="$(FM_CI_JOBS=2 FM_ROOT="$t" bash "$ROOT/bin/ci.sh" 2>&1)" || rc=$?
-assert_eq "0" "$rc" "two suites that need each other both pass: the pool ran them together"
-assert_ok "test -e '$pool_marks/z-done'" "z-quick finished while a-waits was still running"
+assert_eq "0" "$rc" "a suite that finishes first and sorts last: the gate is green"
+assert_eq "z-quick
+a-waits" "$(cat "$pool_marks/finished" 2>/dev/null)" \
+  "with two at a time, z-quick finished before a-waits"
 bash_stage="$(printf '%s\n' "$out" | sed -n '/== bash tests/,/== bun tests/p')"
 assert_ne "" "$bash_stage" "the bash stage was found in the output"
 assert_eq "  + tests/a-waits.test.sh
@@ -183,7 +207,19 @@ assert_eq "  + tests/a-waits.test.sh
 # and the gate wrote nothing into the tree it judged: the logs and the
 # statuses are all in a mktemp directory of its own
 after="$(find "$t" -print | sort; find "$t" -type f -exec shasum {} + | sort)"
-assert_eq "$before" "$after" "ci.sh writes nothing under FM_ROOT"
+assert_eq "$before" "$after" "ci.sh leaves nothing behind under FM_ROOT"
+assert_eq "" "$(find "$t" -newer "$pool_marks/stamp" -print)" \
+  "and wrote nothing there while it ran"
+rm -rf "$t"
+# the control: a suite that writes under FM_ROOT and cleans up after itself
+# leaves the listing as it was, and the stamp still sees it
+t="$(fixture)"
+printf '#!/usr/bin/env bash\ntouch scratch\nrm -f scratch\nexit 0\n' > "$t/tests/tidy.test.sh"
+before="$(find "$t" -print | sort)"
+touch "$pool_marks/stamp"; sleep 1
+out="$(FM_CI_JOBS=2 FM_ROOT="$t" bash "$ROOT/bin/ci.sh" 2>&1)"
+assert_eq "$before" "$(find "$t" -print | sort)" "a write that is cleaned up leaves no listing behind (the control)"
+assert_contains "$(find "$t" -newer "$pool_marks/stamp" -print)" "$t" "and the stamp catches it"
 rm -rf "$t"
 
 # FM_CI_JOBS=1 runs one suite at a time. Each suite holds a lock for a
