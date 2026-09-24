@@ -65,6 +65,27 @@ assert_eq "C
 D" "$(ready "$d2")" "a closed task frees a slot but does not count as done"
 assert_fail "ready '$d2' | grep -qx B" "a closed dependency does not unblock its dependent"
 
+# T-058: a parked task is never started until the captain unparks it, and a
+# dropped one (closed, never dispatched) is never started at all
+dp="$(fixture)"; say "$dp" greenlit
+assert_eq "A
+C" "$(ready "$dp")" "the control: A and C would start"
+say "$dp" parked A
+assert_eq "C
+D" "$(ready "$dp")" "a parked task is skipped and its slot goes to the next"
+say "$dp" dispatched C; say "$dp" merged C
+assert_eq "D" "$(ready "$dp")" "and it stays skipped when a slot is free"
+say "$dp" unparked A
+assert_eq "A
+D" "$(ready "$dp")" "an unparked task is dispatchable again"
+say "$dp" parked A; say "$dp" unparked A; say "$dp" parked A
+assert_eq "D" "$(ready "$dp")" "the last word wins: parked again is skipped again"
+say "$dp" closed D
+assert_eq "" "$(ready "$dp")" "a dropped task is never started"
+say "$dp" unparked D
+assert_eq "" "$(ready "$dp")" "and unparking a dropped task does not bring it back"
+rm -rf "$dp"
+
 # the limit comes from config.yaml and can be overridden
 d3="$(fixture)"; say "$d3" greenlit
 assert_eq "1" "$(FM_ROOT="$d3" "$d3/bin/fm-dispatch.sh" --repo "$d3" --dry-run --limit 1 | sed '/^fm-dispatch/d' | wc -l | tr -d ' ')" \

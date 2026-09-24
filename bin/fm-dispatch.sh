@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Decides what may start. Three things can stop it and all three are checks
+# Decides what may start. Four things can stop it and all four are checks
 # against the log or the filesystem, never a judgement call:
 #
 #   - no greenlit event for the work      -> nothing starts (the eighth gate)
 #   - a dependency is not merged yet      -> that task waits
+#   - the captain parked or dropped it    -> it waits until unparked, or never
 #   - concurrency is already spent        -> the rest wait
 #
 #   fm-dispatch.sh [--repo .] [--dry-run] [--limit N]
@@ -69,6 +70,12 @@ is_busy()    { grep -qx "$1" <<< "$inflight"; }
 # read once, like the others: a function that re-runs the query inside a
 # pipeline is one pipefail away from answering the wrong question
 is_closed()  { grep -qx "$1" <<< "$closed_tasks"; }
+# parked is the captain setting a task aside: it is never started while the
+# last parked/unparked event said parked. Only an unparked brings it back.
+parked_tasks="$(jq -r 'select(.type=="parked" or .type=="unparked")|select(.task // "" | . != "")
+  |"\(.task)\t\(.type)"' "$LOG" 2>/dev/null \
+  | awk -F'\t' '{ last[$1] = $2 } END { for (t in last) if (last[t] == "parked") print t }' | sort -u)"
+is_parked()  { grep -qx "$1" <<< "$parked_tasks"; }
 
 started_any=0
 while IFS= read -r id; do
@@ -77,6 +84,7 @@ while IFS= read -r id; do
   is_done "$id" && continue
   is_busy "$id" && continue
   is_closed "$id" && continue
+  is_parked "$id" && continue
   ready=1
   while IFS= read -r dep; do
     [ -n "$dep" ] || continue

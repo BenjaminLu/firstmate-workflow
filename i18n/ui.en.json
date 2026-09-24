@@ -93,5 +93,16 @@
   "alsoWaiting": "Also waiting (expand in place)",
   "viewDesign": "design.md",
   "ready": "ready",
-  "backlog": "backlog"
+  "backlog": "backlog",
+  "park": "park",
+  "unpark": "unpark",
+  "drop": "drop",
+  "parked": "parked",
+  "dropped": "dropped",
+  "cardActions": "Actions for {id}",
+  "dropZone": "Drag a card here to drop it",
+  "dropConfirm": "Drop {id}? It leaves the board and will not be done; design/tasks.json is unchanged.",
+  "dropYes": "Drop it",
+  "cancel": "Cancel",
+  "actionFailed": "The board could not record that. Refresh and try again."
 }

@@ -41,6 +41,14 @@ assert_ok "jq -e . '$log' >/dev/null" "every line is still valid JSON after the 
 assert_eq "20" "$(jq -r 'select(.type=="commit_pushed") | .actor' "$log" | sort -u | wc -l | tr -d ' ')" \
   "all 20 actors are present exactly once"
 
+# T-058: the captain parks and unparks a task from the board
+for kind in parked unparked; do
+  assert_ok "'$EMIT' --actor captain --type $kind --task T-P --en '$kind' --tw '$kind'" \
+    "accepts a $kind event"
+  assert_eq "$kind" "$(jq -r "select(.task==\"T-P\" and .type==\"$kind\") | .type" "$log")" \
+    "writes the $kind event with its type"
+done
+
 assert_fail "'$EMIT' --type dispatched --task T-1" "requires an actor"
 assert_fail "'$EMIT' --actor x" "requires a type"
 
