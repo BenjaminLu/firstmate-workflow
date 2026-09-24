@@ -160,9 +160,9 @@ assert_eq "self-host" "$(cd "$clone" && fm_project_resolve '' "$c")" \
   "the current directory, its remote and its worktree choose nothing"
 
 assert_eq "design/design.md" "$(fm_project_get self-host design "$c")" "a declared design path is read"
-assert_eq "design/tasks.json" "$(fm_project_get self-host tasks "$c")" "a declared task list is read"
+assert_eq "design/tasks" "$(fm_project_get self-host tasks "$c")" "a declared task list is read"
 assert_eq "projects/example-app/design.md" "$(fm_project_get example-app design "$c")" "design defaults under projects/<name>"
-assert_eq "projects/example-app/tasks.json" "$(fm_project_get example-app tasks "$c")" "and so does the task list"
+assert_eq "projects/example-app/tasks" "$(fm_project_get example-app tasks "$c")" "and so does the task list"
 assert_eq "example-org/example-app" "$(fm_project_get example-app github "$c")" "github is read"
 assert_eq "trunk" "$(fm_project_get example-app base "$c")" "base is read"
 assert_eq "check" "$(fm_project_get example-app required_check "$c")" "required_check is read"
@@ -288,7 +288,7 @@ rm -rf "$r"
 own="$ROOT/config.yaml"
 assert_eq "firstmate-workflow" "$(fm_project_resolve '' "$own")" "this repository is the default project"
 assert_eq "firstmate-workflow" "$(fm_project_resolve firstmate-workflow "$own")" "and resolves when named"
-assert_eq ".|BenjaminLu/firstmate-workflow|main|ci|design/design.md|design/tasks.json" \
+assert_eq ".|BenjaminLu/firstmate-workflow|main|ci|design/design.md|design/tasks" \
   "$(for k in repo github base required_check design tasks; do printf '%s|' "$(fm_project_get firstmate-workflow "$k" "$own")"; done | sed 's/|$//')" \
   "it is registered with its repo, github, base, check, design and tasks"
 assert_eq "$(cd "$ROOT" && pwd -P)" "$(fm_project_get firstmate-workflow root "$own")" \
@@ -368,4 +368,157 @@ assert_eq "65" "$(cat "$d/miss")" "a head with no adapter is a configuration err
   fm_run_chain "$d/ad" "c nosuch" "$d/prompt" "$d/tree" "$d/log"; printf '%s' "$?" ) > "$d/miss2"
 assert_eq "1" "$(cat "$d/miss2")" "a fallback entry with no adapter is passed over"
 rm -rf "$d"
+
+# --- the task list: one file per task (T-090) ----------------------------
+# Every pull request used to append to one array and one hand-kept table,
+# so every merge turned every other open pull request into a conflict. A
+# task is now design/tasks/<id>.json, and every reader goes through these.
+t="$(mktemp -d)"; r="$t"   # rc_of writes beside the fixture
+( cd "$t" && git init -q && git config user.name t && git config user.email t@t \
+    && git commit -q --allow-empty -m root && git branch -M main )
+fm_tasks_write /dev/stdin "$t/design/tasks" <<'J'
+{"$schema":"./tasks.schema.json","concurrency":3,"tasks":[
+  {"id":"T-002","title":"second","milestone":"M0","depends_on":["T-001"],"scope":["b/**"],"note":"ünïcode — kept"},
+  {"id":"T-001","title":"first","milestone":"M0","depends_on":[],"scope":["a/**"]},
+  {"id":"SK-001","title":"skill","milestone":"M2","depends_on":["T-002"],"n":1.5}]}
+J
+assert_eq "SK-001.json T-001.json T-002.json" "$(cd "$t/design/tasks" && echo *)" "one file per task, named by its id"
+assert_eq '{"id":"T-001","title":"first","milestone":"M0","depends_on":[],"scope":["a/**"]}' \
+  "$(jq -c . "$t/design/tasks/T-001.json")" "holding exactly its entry: same keys, same order, same values"
+assert_eq "SK-001 T-001 T-002" "$(fm_tasks "$t/design/tasks" | jq -r .id | paste -sd' ' -)" \
+  "fm_tasks lists every task, in id order"
+assert_eq '["b/**"]' "$(fm_task T-002 "$t/design/tasks" | jq -c .scope)" "fm_task reads one task"
+assert_eq "1" "$(rc_of fm_task T-404 "$t/design/tasks")" "a task with no file is not there"
+assert_eq "1" "$(rc_of fm_task ../T-001 "$t/design/tasks")" "and an id that is a path is not an id"
+
+# lossless: the files, concatenated in the old array's order, are the array
+old="$(jq -c '.tasks' <<'J'
+{"tasks":[{"id":"T-002","title":"second","milestone":"M0","depends_on":["T-001"],"scope":["b/**"],"note":"ünïcode — kept"},
+  {"id":"T-001","title":"first","milestone":"M0","depends_on":[],"scope":["a/**"]},
+  {"id":"SK-001","title":"skill","milestone":"M2","depends_on":["T-002"],"n":1.5}]}
+J
+)"
+assert_eq "$old" "$(for id in T-002 T-001 SK-001; do cat "$t/design/tasks/$id.json"; done | jq -cs .)" \
+  "the migration is lossless: files in the old order equal the old array"
+
+# ...and so was this repository's own. The first commit that removed
+# design/tasks.json is compared with its parent, whenever history reaches it:
+# the first, because a branch brought over later may delete it again.
+# GitHub's checkout is one commit deep; the gates run in the full repository.
+mig="$(git -C "$ROOT" log --format=%H --diff-filter=D --reverse -- design/tasks.json 2>/dev/null | sed -n 1p)"
+if [ -n "$mig" ] && git -C "$ROOT" cat-file -e "$mig^:design/tasks.json" 2>/dev/null; then
+  was="$(git -C "$ROOT" show "$mig^:design/tasks.json" | jq -c '.tasks')"
+  now="$(git -C "$ROOT" show "$mig^:design/tasks.json" | jq -r '.tasks[].id' | while IFS= read -r id; do
+           git -C "$ROOT" show "$mig:design/tasks/$id.json" 2>/dev/null || echo '"missing"'
+         done | jq -cs .)"
+  assert_eq "$was" "$now" "this repository's migration: its files, in the old order, equal the old array"
+else
+  assert_eq "" "$(git -C "$ROOT" ls-files design/tasks.json 2>/dev/null)" \
+    "(no history to compare against here; at least nothing still tracks design/tasks.json)"
+fi
+
+# reading a branch: the gate, the worker and the reviewer read the branch
+# under test, not the working copy
+( cd "$t" && git add design && git commit -q -m tasks )
+( cd "$t" && git checkout -q -b t-003 && mkdir -p design/tasks \
+    && printf '{"id":"T-003","title":"third","depends_on":[],"scope":["c/**"]}\n' > design/tasks/T-003.json \
+    && git add design && git commit -q -m t3 && git checkout -q main )
+assert_eq '["c/**"]' "$(cd "$t" && fm_task T-003 design/tasks t-003 | jq -c .scope)" "fm_task reads a task from a branch"
+assert_eq "1" "$(cd "$t" && rc_of fm_task T-003 design/tasks main)" "and not from a branch that lacks it"
+assert_eq "SK-001 T-001 T-002 T-003" "$(cd "$t" && fm_tasks design/tasks t-003 | jq -r .id | paste -sd' ' -)" \
+  "fm_tasks lists a branch's tasks"
+
+# A branch opened before T-090 has no design/tasks/, only its own old
+# design/tasks.json. Its entry there is the task as that branch says it: a
+# task defined only on the branch is found, and one the branch revised is
+# read as revised, not as main's file has it.
+( cd "$t" && git checkout -q -b old-branch main && git rm -q -r design/tasks && mkdir -p design \
+    && printf '{"tasks":[{"id":"T-001","title":"first, revised on the branch","scope":["z/**"]},{"id":"T-OLD","title":"only here","scope":["o/**"]}]}\n' \
+       > design/tasks.json && git add design && git commit -q -m old && git checkout -q main )
+assert_eq '["o/**"]' "$(cd "$t" && fm_task T-OLD design/tasks old-branch 2>/dev/null | jq -c .scope)" \
+  "fm_task finds a task defined only in a branch's old design/tasks.json"
+assert_eq '"first, revised on the branch"' "$(cd "$t" && fm_task T-001 design/tasks old-branch 2>/dev/null | jq -c .title)" \
+  "and reads a task the branch revised there as revised, not as main's file has it"
+assert_eq "0" "$(cd "$t" && rc_of fm_task T-OLD design/tasks old-branch)" "(it is found)"
+assert_contains "$(cat "$r/err")" "bin/fm.sh tasks split T-OLD" "and says it read the old array, and how to bring the branch over"
+assert_eq "1" "$(cd "$t" && rc_of fm_task T-404 design/tasks old-branch)" "an id in neither is still not there"
+assert_eq '"first"' "$(cd "$t" && fm_task T-001 design/tasks t-003 2>/dev/null | jq -c .title)" \
+  "(a branch with the task's own file is read from that file)"
+
+# All or nothing: a file that does not read is no task list, never the
+# files that did. So is a directory that is not there.
+assert_eq "1" "$(rc_of fm_tasks "$t/no-such-dir")" "a missing directory is no task list"
+printf '{"id":"T-007",\n' > "$t/design/tasks/T-007.json"
+assert_eq "1" "$(rc_of fm_tasks "$t/design/tasks")" "one file that does not parse fails the whole list"
+assert_eq "" "$(cat "$r/out")" "and nothing is listed, not the files that did parse"
+assert_contains "$(cat "$r/err")" "T-007.json" "and the file is named"
+: > "$t/design/tasks/T-007.json"
+assert_eq "1" "$(rc_of fm_tasks "$t/design/tasks")" "an empty file is not an empty task"
+assert_eq "" "$(cat "$r/out")" "(nothing listed)"
+printf '[{"id":"T-007"}]\n' > "$t/design/tasks/T-007.json"
+assert_eq "1" "$(rc_of fm_tasks "$t/design/tasks")" "nor is a file that holds something other than one object"
+rm -f "$t/design/tasks/T-007.json"
+( cd "$t" && git checkout -q -b broken main && : > design/tasks/T-002.json && git add design \
+    && git commit -q -m broken && git checkout -q main )
+assert_eq "1" "$(cd "$t" && rc_of fm_tasks design/tasks broken)" "on a branch too: an empty blob does not just drop out"
+assert_eq "" "$(cat "$r/out")" "(nothing listed from the branch)"
+assert_contains "$(cat "$r/err")" "T-002.json" "(and the file is named)"
+assert_eq "1" "$(cd "$t" && rc_of fm_tasks design/tasks old-branch)" "a branch with no design/tasks/ has no task list"
+
+# order: ids compared as versions, not as text, which a list whose ids all
+# have the same width cannot tell apart; a dotfile is not a task
+o="$(mktemp -d)"
+for id in T-10 T-9 T-2 SK-1; do printf '{"id":"%s"}\n' "$id" > "$o/$id.json"; done
+printf 'junk' > "$o/.DS_Store"; printf 'junk' > "$o/.scratch.json"
+assert_eq "SK-1 T-2 T-9 T-10" "$(fm_tasks "$o" | jq -r .id | paste -sd' ' -)" \
+  "fm_tasks lists T-2, T-9, T-10 in that order, and skips dotfiles"
+assert_eq "0" "$(rc_of fm_tasks_check "$o")" "and the check does not take a dotfile for a task"
+rm -rf "$o"
+
+# two branches that each add a task merge with no conflict: parallel work
+# never writes the same text, which the one shared array could not promise
+( cd "$t" && git checkout -q -b t-004 main && printf '{"id":"T-004","depends_on":["T-001"]}\n' > design/tasks/T-004.json \
+    && git add design && git commit -q -m t4 && git checkout -q main \
+    && git merge -q --no-edit t-003 && git merge -q --no-edit t-004 ) > "$t/merge.out" 2>&1
+assert_eq "0" "$?" "two branches that each add a task merge into main with no conflict"
+assert_eq "SK-001 T-001 T-002 T-003 T-004" "$(cd "$t" && fm_tasks | jq -r .id | paste -sd' ' -)" \
+  "and main then lists both"
+# the old shape, for contrast: two appends to the tail of one array collide
+( cd "$t" && git checkout -q -b old-a main && printf '{"tasks":[\n{"id":"T-001"}\n]}\n' > tasks.json \
+    && git add tasks.json && git commit -q -m base && git checkout -q -b old-b \
+    && printf '{"tasks":[\n{"id":"T-001"},\n{"id":"T-005"}\n]}\n' > tasks.json && git commit -qam b \
+    && git checkout -q old-a && printf '{"tasks":[\n{"id":"T-001"},\n{"id":"T-006"}\n]}\n' > tasks.json \
+    && git commit -qam a && git merge -q --no-edit old-b ) > "$t/merge.out" 2>&1
+assert_ne "0" "$?" "(while two appends to one shared array conflict)"
+( cd "$t" && git merge --abort ) 2>/dev/null
+
+# the check ci.sh runs: every file parses, names itself, depends on tasks
+# that exist, and there is no cycle
+assert_eq "0" "$(rc_of fm_tasks_check "$t/design/tasks")" "a sound task directory passes the check"
+printf '{"id":"T-009"}\n' > "$t/design/tasks/T-008.json"
+assert_eq "1" "$(rc_of fm_tasks_check "$t/design/tasks")" "an id that is not its file name fails"
+assert_contains "$(cat "$r/out")" "T-008.json" "and the check names the file"
+printf '{"id":"T-008",\n' > "$t/design/tasks/T-008.json"
+assert_eq "1" "$(rc_of fm_tasks_check "$t/design/tasks")" "a file that does not parse fails"
+printf '{"id":"T-008","depends_on":["T-404"]}\n' > "$t/design/tasks/T-008.json"
+assert_eq "1" "$(rc_of fm_tasks_check "$t/design/tasks")" "a missing dependency fails"
+assert_contains "$(cat "$r/out")" "T-404" "and the check names it"
+printf '{"id":"T-008","depends_on":["T-010"]}\n' > "$t/design/tasks/T-008.json"
+printf '{"id":"T-010","depends_on":["T-008"]}\n' > "$t/design/tasks/T-010.json"
+assert_eq "1" "$(rc_of fm_tasks_check "$t/design/tasks")" "a cycle fails"
+assert_contains "$(cat "$r/out")" "T-008 -> T-010 -> T-008" "and the check prints the cycle"
+rm -f "$t/design/tasks/T-008.json" "$t/design/tasks/T-010.json"
+printf '{"tasks":[]}\n' > "$t/design/tasks.json"
+assert_eq "1" "$(rc_of fm_tasks_check "$t/design/tasks")" "a design/tasks.json left beside the directory fails"
+assert_contains "$(cat "$r/out")" "tasks.json" "and the check says why"
+rm -f "$t/design/tasks.json"
+assert_eq "0" "$(rc_of fm_tasks_check "$t/design/tasks")" "(and the directory is sound again)"
+
+# the registry names a project's task directory; a declared path in the old
+# shape, design/tasks.json, names the directory beside it
+c2="$t/config.yaml"
+printf 'default_project: a\nprojects:\n  a:\n    repo: .\n    github: o/a\n    base: main\n    required_check: ci\n    tasks: design/tasks.json\n  b:\n    github: o/b\n    base: main\n    required_check: ci\n' > "$c2"
+assert_eq "design/tasks" "$(fm_project_get a tasks "$c2")" "a declared task list in the old shape names its directory"
+assert_eq "projects/b/tasks" "$(fm_project_get b tasks "$c2")" "and the default is projects/<name>/tasks"
+rm -rf "$t"
 finish

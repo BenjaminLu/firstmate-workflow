@@ -1,7 +1,7 @@
 // A board with a crew on it, built from an event log rather than from a mock
 // of the server: the page under test is the real one, reading real state
 // through the real endpoints. Nothing here calls a model or the network.
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, cpSync, rmSync, chmodSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, cpSync, rmSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -25,22 +25,54 @@ const EVENT_FOR: Record<Stage, string> = {
   working: "dispatched", gate: "gate_failed", review: "review_opened",
 };
 
+// The task list is one file per task under design/tasks (T-090). A spec
+// reads it whole and replaces it whole; the board notices either way. In
+// fm_tasks' order, not readdir's or a plain sort's: file names compared as
+// versions (`sort -V`), runs of digits as numbers, so T-9 comes before
+// T-10, and a dotfile is not a task. makeRoot hands stages out by position,
+// so a second ordering here would stage different tasks than the board lists.
+const chunks = (s: string) => s.match(/\d+|\D+/g) ?? [];
+export function versionCompare(a: string, b: string): number {
+  const x = chunks(a), y = chunks(b);
+  for (let i = 0; i < Math.min(x.length, y.length); i++) {
+    const p = x[i], q = y[i];
+    if (/^\d/.test(p) && /^\d/.test(q)) {
+      const d = Number(p) - Number(q);
+      if (d !== 0) return d;
+    } else if (p !== q) return p < q ? -1 : 1;
+  }
+  return x.length - y.length;
+}
+export function readTasks(root: string): any[] {
+  const dir = join(root, "design/tasks");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((f) => f.endsWith(".json") && !f.startsWith(".")).sort(versionCompare)
+    .map((f) => JSON.parse(readFileSync(join(dir, f), "utf8")));
+}
+export function writeTasks(root: string, tasks: any[]) {
+  const dir = join(root, "design/tasks");
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  for (const t of tasks) writeFileSync(join(dir, `${t.id}.json`), JSON.stringify(t, null, 2) + "\n");
+}
+
 export function makeRoot(stages: Stage[], withDecision = true, actors: "per-task" | "one-worker" = "per-task") {
   const d = mkdtempSync(join(tmpdir(), "fm-e2e-"));
   mkdirSync(join(d, "state/pending"), { recursive: true });
   mkdirSync(join(d, "design"), { recursive: true });
   cpSync(join(ROOT, "board"), join(d, "board"), { recursive: true });
   cpSync(join(ROOT, "i18n"), join(d, "i18n"), { recursive: true });
-  cpSync(join(ROOT, "design/tasks.json"), join(d, "design/tasks.json"));
+  cpSync(join(ROOT, "design/tasks"), join(d, "design/tasks"), { recursive: true });
   mkdirSync(join(d, 'bin'));
-  // fm-config.sh and the parser it loads are how the board reads the project
-  // registry (T-069); without a config.yaml they register nothing
+  // fm-config.sh is how the board reads the task list (T-090) and, with the
+  // parser it loads, the project registry (T-069); without a config.yaml they
+  // register nothing
   for (const f of ['fm-emit.sh','fm-diagram.sh','fm-decide.sh','watch-decisions.ts','fm-config.sh','fm-herdr.py']) cpSync(join(ROOT,'bin',f), join(d,'bin',f));
 
-  const tasks = JSON.parse(readFileSync(join(ROOT, "design/tasks.json"), "utf8")).tasks;
+  const tasks = readTasks(ROOT);
   if (tasks.length < stages.length) {
     throw new Error(
-      `the fixture wants ${stages.length} tasks and design/tasks.json has ${tasks.length}`);
+      `the fixture wants ${stages.length} tasks and design/tasks/ has ${tasks.length}`);
   }
   const ev: string[] = [JSON.stringify({
     ts: "2026-09-21T09:00:00Z", actor: "captain", type: "greenlit",

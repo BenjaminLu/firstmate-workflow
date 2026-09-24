@@ -646,8 +646,8 @@ for terminal in CLOSED MERGED; do
     # T-036 checkpoint + guard are launch-adjacent deps when present on the tip.
     [ -f "$ROOT/bin/fm-checkpoint.sh" ] && cp "$ROOT/bin/fm-checkpoint.sh" "$d/bin/"
     [ -f "$ROOT/bin/fm-guard.sh" ] && cp "$ROOT/bin/fm-guard.sh" "$d/bin/"
-    mkdir -p "$d/design" "$d/stub" "$d/state/worktrees/T-011"
-    echo '{"tasks":[{"id":"T-011","title":"test","scope":[]}]}' > "$d/design/tasks.json"
+    mkdir -p "$d/design/tasks" "$d/stub" "$d/state/worktrees/T-011"
+    echo '{"id":"T-011","title":"test","scope":[]}' > "$d/design/tasks/T-011.json"
     cat > "$d/stub/git" <<'SH'
 #!/usr/bin/env bash
 case "$*" in

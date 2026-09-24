@@ -1,0 +1,24 @@
+{
+  "id": "T-045",
+  "milestone": "M3",
+  "bootstrap": false,
+  "depends_on": [
+    "T-043"
+  ],
+  "title": "design: firstmate drives other repositories from one external installation",
+  "scope": [
+    "design/design.md",
+    "design/tasks.json",
+    "README.md"
+  ],
+  "acceptance": [
+    "Captain decision D-049 chose option B, external: one firstmate repository holds the engine, every project's task lists and design, and all runtime state, and drives target repositories that stay untouched. This task is the design only. It changes no code and writes the plan that implementation tasks will follow. Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+    "Add a design.md section for the external model that settles, with reasons: (1) the two roots — the engine root (this repository) and each project's repository — and how every script learns which is which; (2) a `projects:` registry in config.yaml (name, repository location, base branch, GitHub owner/repo, and the per-project setup/check/check_env/tests/test contract T-043 introduces), with firstmate-workflow itself registered as a project so self-hosting keeps working; (3) where each project's design, tasks, worktrees, runtime state and events live; (4) how the event log, board and decisions identify the project.",
+    "Redesign the gate 4 rule explicitly. Today scope is read from design/tasks.json on the task's own branch, but under B the task list no longer travels in the target PR. Define where a run's scope comes from, how it is pinned so it cannot change mid-run, and how a scope change is authorized (captain decision plus a commit to this repository). Also define how the reviewer and gates see the task spec without it being in the target diff.",
+    "Cover git and GitHub for targets: PRs opened on the target's GitHub repository, what the target needs (branch protection, required check running the declared `check`, the fm-guard hooks), and what firstmate must never write into a target repository.",
+    "Cover roles: worker and reviewer prompts receive the project's design context from the engine side; skills and AGENTS.md routing still work when the checkout being edited is not this repository.",
+    "Break the implementation into ordered tasks and add them to design/tasks.json and the design.md table: each with a title, depends_on, an exact scope file list and acceptance. Every one of them must be independently mergeable, and self-hosting (this repository as its own registered project) must keep working after each one. Evidence for those tasks is their PR's required GitHub check and the seven gates; do not ask workers to run tests themselves.",
+    "Evidence for this task is the pull request's required GitHub check (which includes the design/tasks.json–design.md agreement check) and the seven gates.",
+    "Stay inside this scope; this task edits no code. If the design cannot be settled without a captain decision, say which decision in the design and stop there rather than guessing."
+  ]
+}

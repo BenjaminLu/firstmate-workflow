@@ -77,6 +77,15 @@ parked_tasks="$(jq -r 'select(.type=="parked" or .type=="unparked")|select(.task
   | awk -F'\t' '{ last[$1] = $2 } END { for (t in last) if (last[t] == "parked") print t }' | sort -u)"
 is_parked()  { grep -qx "$1" <<< "$parked_tasks"; }
 
+# the task list, read once: one file per task under design/tasks (T-090).
+# All or nothing: dispatching from the files that happened to read is
+# dispatching from half a plan, so a file that does not read (fm_tasks
+# names it) stops the dispatch. Tasks are walked in fm_tasks' order - id
+# order, compared as versions, T-9 before T-10 - so that is the order in
+# which ready tasks take the free slots (design section 14).
+tasks="$(fm_tasks design/tasks)" \
+  || { echo "fm-dispatch: the task list in design/tasks/ does not read; nothing is dispatched" >&2; exit 65; }
+
 started_any=0
 while IFS= read -r id; do
   [ -n "$id" ] || continue
@@ -89,7 +98,7 @@ while IFS= read -r id; do
   while IFS= read -r dep; do
     [ -n "$dep" ] || continue
     is_done "$dep" || { ready=0; break; }
-  done <<< "$(jq -r --arg t "$id" '.tasks[]|select(.id==$t)|.depends_on[]?' design/tasks.json)"
+  done <<< "$(jq -r --arg t "$id" 'select(.id==$t)|.depends_on[]?' <<< "$tasks")"
   [ "$ready" -eq 1 ] || continue
 
   if [ "$DRY" -eq 1 ]; then
@@ -102,7 +111,7 @@ while IFS= read -r id; do
     echo "$id"
   fi
   slots=$(( slots - 1 )); started_any=1
-done <<< "$(jq -r '.tasks[].id' design/tasks.json)"
+done <<< "$(jq -r '.id' <<< "$tasks")"
 
 [ "$started_any" -eq 1 ] || echo "fm-dispatch: nothing is ready"
 exit 0

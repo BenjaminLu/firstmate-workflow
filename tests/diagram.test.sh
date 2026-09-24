@@ -905,7 +905,7 @@ rm -rf "$(dirname "$probe")"
 R="$(newroot)"
 cp "$ROOT/board/server.ts" "$R/board/"
 cp "$ROOT/board/public/index.html" "$ROOT/board/public/diagram.js" "$R/board/public/"
-printf '%s\n' '{"tasks":[]}' > "$R/design/tasks.json"
+mkdir -p "$R/design/tasks"   # no tasks: one file per task, and there are none
 decision "$R" D-021 '{"id":"D-021","task":"T-004","kind":"merge","title":"merge it","pr":9}'
 "$DG" --decision D-021 --repo "$R" >/dev/null 2>&1
 

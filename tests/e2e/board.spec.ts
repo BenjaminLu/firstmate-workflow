@@ -2,7 +2,7 @@
 // dictionary values, never as screenshots: a snapshot test of a ship that
 // moves would fail on the animation and pass on the wrong crew.
 import { test, expect, type Page } from "@playwright/test";
-import { makeRoot, startBoard, stopBoard, writeRegistry, ROOT, details } from "./fixture";
+import { makeRoot, startBoard, stopBoard, writeRegistry, readTasks, writeTasks, ROOT, details } from "./fixture";
 import { appendFileSync, readFileSync, existsSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -51,8 +51,8 @@ function emitFixture(root:string, actor:string, task:string, type:string, en='',
 
 test('retained actor activity is localized, run-specific and never guessed from task stage', async ({page})=>{
   const root=makeRoot([],false);
-  const file=join(root,'design/tasks.json');const spec=JSON.parse(readFileSync(file,'utf8'));
-  spec.tasks=spec.tasks.filter((t:any)=>!['T-034','T-035'].includes(t.id));writeFileSync(file,JSON.stringify(spec));
+  const spec={tasks:readTasks(root)};
+  spec.tasks=spec.tasks.filter((t:any)=>!['T-034','T-035'].includes(t.id));writeTasks(root,spec.tasks);
   emitFixture(root,'worker-rowan','T-034','dispatched','Rowan builds captain decisions','Rowan 實作船長決策',{crew_name:'Rowan',role:'worker'});
   emitFixture(root,'worker-mira','T-035','dispatched','Mira implements safe startup','Mira 實作安全啟動',{crew_name:'Mira',role:'worker'});
   emitFixture(root,'firstmate','T-034','dispatched','Coordinate the decision work','協調決策工作');
@@ -87,7 +87,7 @@ test('retained actor activity is localized, run-specific and never guessed from 
     emitFixture(root,'worker-rowan-new','T-034','dispatched','Rowan tests decisions','Rowan 測試決策',{crew_name:'Rowan',role:'worker'});
     await expect(page.locator('[data-crew="worker-rowan-new"]')).toHaveAttribute('aria-label',new RegExp(CN_ACTIVITY.test));
     spec.tasks.push({id:'T-034',title:'Scalar title is not a translation',activity:{en:'Verify literal captain orders','zh-TW':'驗證船長原文命令'},depends_on:[]});
-    writeFileSync(file,JSON.stringify(spec));
+    writeTasks(root,spec.tasks);
     emitFixture(root,'worker-rowan-new','T-034','criteria_returned');
     // T-036: replayed event activity beats static task.activity; criteria_returned
     // does not replace the dispatch summary already on the actor.
@@ -185,8 +185,7 @@ test('continuation history, readable mobile content and persistent controls', as
   }
   writeFileSync(pendingFile,JSON.stringify(first));
   writeFileSync(join(root,'state/pending/D-2.json'),JSON.stringify({id:'D-2',kind:'choice',task:'T-002',details:second}));
-  const file = join(root,'design/tasks.json');
-  const spec = JSON.parse(readFileSync(file,'utf8'));
+  const spec = {tasks:readTasks(root)};
   spec.tasks[4].title='https://example.invalid/'+ 'long-unbroken-title'.repeat(40);
   for (let i=0;i<30;i++) {
     spec.tasks.push({id:`H-${i}`,title:'Completed '+i,depends_on:[]});
@@ -195,7 +194,7 @@ test('continuation history, readable mobile content and persistent controls', as
   appendFileSync(join(root,'state/events.jsonl'), JSON.stringify({actor:'worker-ghost',task:'T-999',type:'dispatched',summary:{en:'Unknown task work','zh-TW':'未知任務工作'},data:{role:'worker'}})+'\n');
   appendFileSync(join(root,'state/events.jsonl'), JSON.stringify({actor:'github',task:'T-999',type:'merged',pr:999})+'\n');
   writeFileSync(join(root,'state/pending/D-999.json'),JSON.stringify({id:'D-999',task:'T-999',kind:'choice',details}));
-  writeFileSync(file,JSON.stringify(spec));
+  writeTasks(root,spec.tasks);
   const b = await startBoard(root);
   try {
     await page.setViewportSize({width:390,height:844});
@@ -255,12 +254,15 @@ test('continuation history, readable mobile content and persistent controls', as
         for (const selector of ['.explanation','.tradeoffs','.opt','.card .t'])
           expect(await page.locator(selector).first().evaluate(el=>parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(16);
         expect((await page.locator('.confirm').first().boundingBox())!.height).toBeGreaterThanOrEqual(44);
-        for(const selector of ['.langs','.opt','textarea','.confirm','.card','#history']) {
-          for(const el of await page.locator(selector).all()) {
-            if(!await el.isVisible())continue;
-            const box=await el.boundingBox();expect(box!.x).toBeGreaterThanOrEqual(0);expect(box!.x+box!.width).toBeLessThanOrEqual(width+1);
-          }
-        }
+        // one round trip per width: a locator call per element ran this test
+        // past its budget on the runner once the history held 30-odd cards
+        const outside=await page.evaluate(({selectors,width})=>selectors.flatMap(selector=>
+          [...document.querySelectorAll(selector)].flatMap((el,i)=>{
+            const r=el.getBoundingClientRect(),s=getComputedStyle(el);
+            if(!r.width||!r.height||s.visibility!=='visible')return [];
+            return r.x>=0&&r.x+r.width<=width+1?[]:[`${selector}[${i}] ${r.x}+${r.width}`];
+          })),{selectors:['.langs','.opt','textarea','.confirm','.card','#history'],width});
+        expect(outside).toEqual([]);
       }
     }
     await page.setViewportSize({width:1280,height:900});await page.evaluate(()=>scrollTo(0,0));
@@ -616,11 +618,11 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
   const root = makeRoot(['working','gate','review']);
   // names nothing could have hard-coded
   writeFileSync(join(root,'config.yaml'),'vendor: vendor-alpha  # top\nreviewer:\n  vendor: vendor-beta\n');
-  const file = join(root,'design/tasks.json'), spec = JSON.parse(readFileSync(file,'utf8'));
+  const spec = {tasks:readTasks(root)};
   const first = spec.tasks[0].id;
   spec.tasks.push({id:'T-QUEUE',title:'Queued behind unmerged work',depends_on:[first]});
   spec.tasks.push({id:'T-READY',title:'Nothing to wait on',depends_on:[]});
-  writeFileSync(file, JSON.stringify(spec));
+  writeTasks(root, spec.tasks);
   emitFixture(root,'worker-absent','T-ABSENT','dispatched','Work on an unlisted task','處理未列出的任務',{role:'worker'});
   emitFixture(root,'worker-2',spec.tasks[1].id,'gate_failed','Gate five failed','第五道閘未過',{gate:5});
   emitFixture(root,'worker-1',first,'crew_status','Counting gates','計算閘門',{role:'worker',progress:{done:2,total:5}});
@@ -768,15 +770,14 @@ const CN_T058 = {park:'搁置',unpark:'恢复',drop:'不做',parked:'已搁置',
 test('the captain parks, unparks and drops a card by menu and by drag, and confirms a drop in the page', async ({page}) => {
   test.setTimeout(90_000);
   const root = makeRoot([], false);
-  const file = join(root,'design/tasks.json');
-  writeFileSync(file, JSON.stringify({tasks:[
+  writeTasks(root, [
     {id:'T-A',title:'Ready to set aside',depends_on:[]},
     {id:'T-B',title:'Waits on T-A',depends_on:['T-A']},
     {id:'T-C',title:'Parked from the keyboard',depends_on:[]},
     {id:'T-D',title:'Dropped by dragging',depends_on:[]},
     {id:'T-W',title:'Already at work',depends_on:[]},
-  ]}));
-  const plan = readFileSync(file,'utf8');
+  ]);
+  const plan = JSON.stringify(readTasks(root));
   emitFixture(root,'worker-w','T-W','dispatched','On it','接下',{role:'worker'});
   const events = () => readFileSync(join(root,'state/events.jsonl'),'utf8').trim().split('\n').map(l => JSON.parse(l));
   const last = () => events()[events().length - 1];
@@ -895,7 +896,7 @@ test('the captain parks, unparks and drops a card by menu and by drag, and confi
 
     // no browser dialog at any point, and the board never edits the plan
     expect(dialogs).toEqual([]);
-    expect(readFileSync(file,'utf8')).toBe(plan);
+    expect(JSON.stringify(readTasks(root))).toBe(plan);
   } finally {stopBoard(b);}
 });
 
@@ -908,11 +909,11 @@ test('every pull request number links to its pull request on the registered repo
   const REPO = 'example-org/linked-app';
   const pull = (n:number) => `https://github.com/${REPO}/pull/${n}`;
   writeRegistry(root, REPO);
-  writeFileSync(join(root,'design/tasks.json'), JSON.stringify({tasks:[
+  writeTasks(root, [
     {id:'T-A',title:'Not started, with a pull request opened by hand',depends_on:[]},
     {id:'T-W',title:'Waiting on the captain',depends_on:[]},
     {id:'T-M',title:'Merged, after #4',depends_on:[]},
-  ]}));
+  ]);
   emitFixture(root,'worker-w','T-W','dispatched','On it','接下',
     {role:'worker',crew_name:'Wren',activity:{en:'answering the review on #3','zh-TW':'回覆 #3 的審查'}});
   // the log as the emitter writes it: --pr is a JSON number
@@ -1021,7 +1022,7 @@ test('every pull request number links to its pull request on the registered repo
 test('without a github entry a pull request number is plain text, never a guessed link', async ({page}) => {
   test.setTimeout(60_000);
   const root = makeRoot([], false);
-  writeFileSync(join(root,'design/tasks.json'), JSON.stringify({tasks:[{id:'T-W',title:'Waiting',depends_on:[]}]}));
+  writeTasks(root, [{id:'T-W',title:'Waiting',depends_on:[]}]);
   emitFixture(root,'worker-w','T-W','dispatched','On it','接下',{role:'worker'});
   appendFileSync(join(root,'state/events.jsonl'), JSON.stringify({ts:'2026-09-21T10:00:00Z',actor:'worker-w',
     task:'T-W',type:'pr_opened',pr:8,summary:{en:'opened #8','zh-TW':'開了 #8'}}) + '\n');
@@ -1229,12 +1230,13 @@ test("nothing here can reach a model", async () => {
   // fm-config.sh and the fm-herdr.py it imports (T-069) are there so the
   // board can read the project registry's `github`. The only path from them
   // to a model is fm_run_chain, which runs bin/adapters - absent above - and
-  // the board calls nothing from fm-config.sh but the two registry readers.
+  // the board calls nothing from fm-config.sh but the two registry readers
+  // and fm_tasks, which only reads design/tasks/ (T-090).
   const { readdirSync, readFileSync } = await import("node:fs");
   expect(existsSync(join(board.root, "bin/adapters"))).toBe(false);
   expect(readdirSync(join(board.root, "bin")).sort()).toEqual(["fm-config.sh", "fm-decide.sh", "fm-diagram.sh", "fm-emit.sh", "fm-herdr.py", "fm-merge.sh", "watch-decisions.ts"]);
   const called = new Set(readFileSync(join(board.root, "board/server.ts"), "utf8").match(/\bfm_[a-z_]+/g) ?? []);
-  expect([...called].sort()).toEqual(["fm_project_get", "fm_project_resolve"]);
+  expect([...called].sort()).toEqual(["fm_project_get", "fm_project_resolve", "fm_tasks"]);
 });
 
 test("no cards retains one idle captain aboard", async ({ page }) => {

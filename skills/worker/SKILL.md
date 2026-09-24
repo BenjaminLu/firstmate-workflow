@@ -15,7 +15,7 @@ Implement the task so that all seven gates pass. Read them in
 [design/design.md](../../design/design.md); the two that catch most work are:
 
 - **Gate 4** — your diff must stay inside the `scope` globs declared for your
-  task in [design/tasks.json](../../design/tasks.json). If the work genuinely needs a file outside that
+  task in its own file, [design/tasks/](../../design/tasks/)`<id>.json`. If the work genuinely needs a file outside that
   list, say so in the pull request and stop; widening scope is the captain's
   call, not yours.
 - **Gate 5** — revert your implementation and your new tests must go red. A
@@ -72,12 +72,16 @@ The rebuild leaves the worktree detached until the script commits, so
 commit in it yourself: a round whose HEAD moved off the rebuild base is
 refused.
 
-In a rebuilt round your own `design/tasks.json` entry and task-table row are
-frozen. The script carries them through exactly as your previous head had
-them; do not rewrite them while resolving. A rebuilt round that changes
-either is refused like one that leaves a marker. If the review asks you to
-change them, say so in `.fm-say.md` and change them in the next round that
-is not a rebuild.
+In a rebuilt round your own task entry is frozen: your file
+`design/tasks/<id>.json`, or, on a base that still keeps the one array, your
+`design/tasks.json` entry and task-table row. The script carries it through
+exactly as your previous head had it; do not rewrite it while resolving. A
+rebuilt round that changes it is refused like one that leaves a marker. If
+the review asks you to change it, say so in `.fm-say.md` and change it in the
+next round that is not a rebuild. A branch that still had
+`design/tasks.json` when the base moved to one file per task has already
+been brought over by the rebuild; an entry both sides changed is handed to
+you with markers like any conflict.
 
 ## Every finding is a class
 

@@ -7,19 +7,19 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib.sh"
 GATE="$ROOT/bin/fm-gate.sh"
 
-# a fixture repo whose config.yaml declares its check, a tasks.json, and main
+# a fixture repo whose config.yaml declares its check, a task file, and main
 # at a known state. The check script is the fixture's, not firstmate's: the
 # gate knows it only by what config.yaml says.
 fixture() {
   local d; d="$(mktemp -d)"
   git -C "$d" init -q -b main
   git -C "$d" config user.email a@b.c; git -C "$d" config user.name t
-  mkdir -p "$d/bin" "$d/tests" "$d/design" "$d/src"
+  mkdir -p "$d/bin" "$d/tests" "$d/design/tasks" "$d/src"
   printf '#!/usr/bin/env bash\nfor t in "${FM_ROOT:-.}"/tests/*.test.sh; do [ -e "$t" ] || continue; bash "$t" || exit 1; done\nexit 0\n' > "$d/bin/suite"
   chmod +x "$d/bin/suite"
   printf 'vendor: mock\nproject:\n  check: bin/suite\n' > "$d/config.yaml"
-  cat > "$d/design/tasks.json" <<JSON
-{"tasks":[{"id":"T-X","scope":["src/**","tests/**","bin/**","config.yaml"]}]}
+  cat > "$d/design/tasks/T-X.json" <<JSON
+{"id":"T-X","scope":["src/**","tests/**","bin/**","config.yaml"]}
 JSON
   echo base > "$d/src/thing.sh"
   git -C "$d" add -A; git -C "$d" commit -qm base
@@ -116,6 +116,43 @@ mkdir -p "$d/elsewhere"; echo x > "$d/elsewhere/f"; git -C "$d" add -A; git -C "
 git -C "$d" checkout -q main
 assert_fail "gate '$d' wide 4" "4 blocks a diff that reaches outside it"
 
+# The scope comes from the task's own file, design/tasks/<id>.json, on the
+# branch under test (T-090): a branch that widens its task in its own diff
+# is gated by what it declares there, exactly as the shared file was.
+git -C "$d" checkout -q -b ownfile green
+printf '{"id":"T-X","scope":["src/**","tests/**","bin/**","config.yaml","design/tasks/T-X.json","elsewhere/**"]}\n' \
+  > "$d/design/tasks/T-X.json"
+mkdir -p "$d/elsewhere"; echo x > "$d/elsewhere/f"; git -C "$d" add -A; git -C "$d" commit -qm ownfile
+git -C "$d" checkout -q main
+assert_ok "gate '$d' ownfile 4" "4 reads the scope from the task's own file on the branch under test"
+# a task in flight names the old shared file in its scope so that it may
+# carry its own entry; that now means its own file, and nobody else's
+git -C "$d" checkout -q -b legacy main
+printf '{"id":"T-X","scope":["src/**","design/tasks.json"]}\n' > "$d/design/tasks/T-X.json"
+git -C "$d" commit -qam legacy; git -C "$d" checkout -q main
+assert_ok "gate '$d' legacy 4" "4 reads a scope naming design/tasks.json as naming the task's own file"
+git -C "$d" checkout -q -b legacy-other legacy
+printf '{"id":"T-Y","scope":[]}\n' > "$d/design/tasks/T-Y.json"
+git -C "$d" add -A; git -C "$d" commit -qm other; git -C "$d" checkout -q main
+assert_fail "gate '$d' legacy-other 4" "and not as naming another task's file"
+# A branch opened before T-090 still carries its own design/tasks.json and
+# no design/tasks/<id>.json. Its entry there is its scope, not main's file:
+# here main's file for T-X does not allow elsewhere/**, and the branch's
+# old array does. And a task defined only in that array is gated at all.
+git -C "$d" checkout -q -b oldlist main
+git -C "$d" rm -q -r design/tasks && mkdir -p "$d/design"
+printf '{"tasks":[{"id":"T-X","scope":["src/**","design/**","elsewhere/**"]},{"id":"T-OLD","scope":["src/**","design/**"]}]}\n' \
+  > "$d/design/tasks.json"
+mkdir -p "$d/elsewhere"; echo x > "$d/elsewhere/f"; git -C "$d" add -A; git -C "$d" commit -qm oldlist
+git -C "$d" checkout -q main
+assert_ok "gate '$d' oldlist 4" "4 reads the scope from a branch's old design/tasks.json when it has no task file"
+git -C "$d" checkout -q -b oldonly oldlist
+git -C "$d" rm -q -r elsewhere; git -C "$d" commit -qm "no elsewhere"; git -C "$d" checkout -q main
+assert_fail "test -e '$d/design/tasks/T-OLD.json'" "(the task below has no file on main)"
+out="$("$GATE" --task T-OLD --repo "$d" --branch oldonly --only 4 2>&1)"; rc=$?
+assert_eq "0" "$rc" "and a task defined only in the branch's old array has a scope to be gated by"
+assert_contains "$out" "tasks split T-OLD" "and the gate says it read the old array"
+
 # --- gate 5: the one that matters ---------------------------------------
 d="$(fixture)"
 git -C "$d" checkout -q -b vacuous
@@ -145,7 +182,7 @@ assert_fail "gate '$d' untested 5" "5 blocks implementation that ships no test a
 py="$(mktemp -d)"
 git -C "$py" init -q -b main
 git -C "$py" config user.email a@b.c; git -C "$py" config user.name t
-mkdir -p "$py/calc" "$py/design"
+mkdir -p "$py/calc" "$py/design/tasks"
 printf 'def add(a, b):\n    return 0\n' > "$py/calc/calc.py"
 cat > "$py/config.yaml" <<'Y'
 project:
@@ -155,7 +192,7 @@ project:
     - "**/*_check.py"
   test: test -f .deps/ready && python3 {file}
 Y
-printf '{"tasks":[{"id":"T-X","scope":["calc/**","config.yaml"]}]}\n' > "$py/design/tasks.json"
+printf '{"id":"T-X","scope":["calc/**","config.yaml"]}\n' > "$py/design/tasks/T-X.json"
 git -C "$py" add -A; git -C "$py" commit -qm base
 
 git -C "$py" checkout -q -b honest
@@ -181,8 +218,8 @@ assert_contains "$(said "$py" badsetup 5)" "setup failed (exit 9)" "and names th
 # those: undeclared exempts nothing, and code beside docs still needs a test.
 doc="$(fixture)"
 printf '# thing\n' > "$doc/README.md"; mkdir -p "$doc/design"; printf 'v1\n' > "$doc/design/design.md"
-printf '{"tasks":[{"id":"T-X","scope":["src/**","tests/**","design/**","README.md","config.yaml"]}]}\n' \
-  > "$doc/design/tasks.json"
+printf '{"id":"T-X","scope":["src/**","tests/**","design/**","README.md","config.yaml"]}\n' \
+  > "$doc/design/tasks/T-X.json"
 # declared on main, so the branch under test changes nothing but prose
 printf 'project:\n  check: bin/suite\n  docs:\n    - design/**\n    - README.md\n' > "$doc/config.yaml"
 git -C "$doc" add -A; git -C "$doc" commit -qm docs-base

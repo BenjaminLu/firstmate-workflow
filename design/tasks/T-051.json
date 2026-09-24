@@ -1,0 +1,29 @@
+{
+  "id": "T-051",
+  "milestone": "M3",
+  "bootstrap": false,
+  "depends_on": [
+    "T-049"
+  ],
+  "title": "the worker and the reviewer in a target checkout",
+  "scope": [
+    "bin/fm-worker.sh",
+    "bin/fm-review.sh",
+    "bin/fm-checkpoint.sh",
+    "bin/fm-cleanup.sh",
+    "bin/fm-reconcile.sh",
+    "tests/worker.test.sh",
+    "tests/review.test.sh",
+    "tests/cleanup.test.sh",
+    "tests/reconcile.test.sh",
+    "design/design.md"
+  ],
+  "acceptance": [
+    "Implements design.md sections 15.3 and 15.6 for runs. For a non-default project fm-worker.sh runs fm-project.sh sync and verify first and stops on their refusal; creates the worktree at state/projects/<name>/worktrees/<task> from the managed clone at the project's base; pushes the task branch to the project's github repository; opens and looks up the pull request with gh --repo against base. The pull request body carries task id, title, acceptance, scope and the `spec pin: <project>/<task>#<n> <sha256 prefix>` line.",
+    "fm-review.sh, fm-checkpoint.sh, fm-cleanup.sh and fm-reconcile.sh take --project and act only in that project's clone, worktree root and repository. fm-cleanup.sh refuses anything that is not a direct child of that project's worktree root (section 5.2a).",
+    "Nothing in section 15.6's never-write list reaches the target: .fm-prompt.md and .fm-say.md are excluded locally and never committed, and no push goes to base. Any new worker exit code is added to section 5.3.2's list.",
+    "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
+    "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+  ]
+}

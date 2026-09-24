@@ -28,15 +28,15 @@ command -v bun >/dev/null 2>&1 || { echo "    bun not installed - crew e2e skipp
 
 d="$(mktemp -d)"; r="$d/repo"
 mkdir -p "$r"
-mkdir -p "$r/bin" "$r/design" "$r/state" "$r/skills/worker" "$r/skills/reviewer" "$r/board"
+mkdir -p "$r/bin" "$r/design/tasks" "$r/state" "$r/skills/worker" "$r/skills/reviewer" "$r/board"
 cp "$ROOT/bin/fm-worker.sh" "$ROOT/bin/fm-review.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$r/bin/"
 cp -r "$ROOT/bin/adapters" "$r/bin/"
 cp "$ROOT/board/server.ts" "$r/board/"
 cp "$ROOT/skills/worker/SKILL.md" "$r/skills/worker/"
 cp "$ROOT/skills/reviewer/SKILL.md" "$r/skills/reviewer/"
 printf 'vendor: mock\n' > "$r/config.yaml"
-printf '{"tasks":[{"id":"T-1","title":"first","activity":{"en":"Build the first fixture","zh-TW":"實作第一個測試任務"},"scope":["src/**"],"acceptance":["x"]},\n' > "$r/design/tasks.json"
-printf '          {"id":"T-2","title":"second","scope":["src/**"],"acceptance":["x"]}]}\n' >> "$r/design/tasks.json"
+printf '{"id":"T-1","title":"first","activity":{"en":"Build the first fixture","zh-TW":"實作第一個測試任務"},"scope":["src/**"],"acceptance":["x"]}\n' > "$r/design/tasks/T-1.json"
+printf '{"id":"T-2","title":"second","scope":["src/**"],"acceptance":["x"]}\n' > "$r/design/tasks/T-2.json"
 
 
 mkdir -p "$d/stub"
@@ -53,7 +53,10 @@ elif args[:2] == ['worktree', 'add']:
 elif args[0] == '-C' and 'status' in args:
     if (pathlib.Path(args[1]) / 'src/thing').exists(): print('?? src/thing')
 elif args[0] == 'show':
-    print(pathlib.Path('design/tasks.json').read_text())
+    # <rev>:<path>, answered from the working copy like the real branch would
+    path = pathlib.Path(args[-1].split(':', 1)[-1])
+    if not path.is_file(): sys.exit(128)
+    print(path.read_text())
 elif args[0] == 'diff':
     pass
 elif args[0] not in ('for-each-ref', 'worktree', '-C'):

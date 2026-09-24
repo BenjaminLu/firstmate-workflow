@@ -1,0 +1,26 @@
+{
+  "id": "T-015",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-006"
+  ],
+  "title": "fm-protocol.sh: round three and its violations",
+  "scope": [
+    "bin/fm-protocol.sh",
+    "skills/worker/**",
+    "skills/reviewer/**",
+    "tests/protocol.test.sh",
+    "design/tasks.json"
+  ],
+  "acceptance": [
+    "rounds one and two are not policed",
+    "round three with no ASK-PASS-CRITERIA from the worker is a violation, exit 3",
+    "a reviewer who never posts CRITERIA-COMPLETE leaves the list open, exit 4",
+    "after the list closes, a comment must cite an item on it, carry REGRESSION:, or be the APPROVE; anything else is a violation, exit 5",
+    "a comment from anyone but the configured reviewer does not trip it",
+    "it counts and reports how many items the closed list held",
+    "every violation is emitted so the captain sees the reviewer drip-feeding",
+    "the suite runs from recorded comment payloads and makes no network call"
+  ]
+}

@@ -136,11 +136,11 @@ trap '' HUP
 # checked out. A task defined on its own branch - which is how a new one
 # arrives - was invisible to the reviewer and to the gate: `no task
 # T-027`, for a task sitting in the diff they were handed.
-task_spec() {   # task_spec <task> [branch]
+task_spec() {   # task_spec <task> [branch]; its own file, design/tasks/<id>.json
   local t="$1" b="${2:-}" j=''
-  [ -n "$b" ] && j="$(git show "$b:design/tasks.json" 2>/dev/null)"
-  [ -n "$j" ] || j="$(cat design/tasks.json 2>/dev/null)"
-  printf '%s' "$j" | jq -r --arg t "$t" '.tasks[]|select(.id==$t)' 2>/dev/null
+  [ -n "$b" ] && j="$(fm_task "$t" design/tasks "$b")"
+  [ -n "$j" ] || j="$(fm_task "$t")"
+  printf '%s' "$j"
 }
 spec="$(task_spec "$TASK" "$BRANCH")"
 [ -n "$spec" ] || { echo "fm-review: no task $TASK" >&2; exit 65; }

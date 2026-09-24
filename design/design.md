@@ -1,8 +1,8 @@
 # firstmate-workflow — design
 
 > This is the single source of truth. `bin/fm-dispatch.sh` reads the task DAG
-> from `design/tasks.json`; section 14 mirrors that file and CI fails if the two
-> disagree.
+> from `design/tasks/`, one file per task; section 14 says how to print it and
+> CI fails if it is not a sound DAG.
 >
 > **Language:** everything in this repository is written in English — this
 > document, the skills, the code and its comments, commit messages, pull
@@ -535,7 +535,7 @@ event the round writes is the one the worker writes — there is no
 second `worker_crashed` from a caller noticing the code. The codes a
 worker can exit with are `1` a failed attempt, `2` no vendor was
 available, `64` it was called wrong, `65` no such task in
-`design/tasks.json` or an unknown configured adapter, `70` something the run
+`design/tasks/` or an unknown configured adapter, `70` something the run
 needs and cannot have — no library, no worktree, nowhere to put a scratch file,
 identity/snapshot failure, a live task lock, failed managed transport, a
 round's commit that failed (nothing is pushed or reported after it), or a
@@ -606,7 +606,22 @@ commit, publishes nothing. The next round finds the worktree dirty, copies
 it to `state/rescued/` as it does any interrupted run, recreates the
 worktree from the unmoved branch and rebuilds again.
 
-Two design files are the task's own business. Its `design/tasks.json`
+On a base that keeps one file per task (section 14) the task's own
+business is one file, `design/tasks/<id>.json`, and it comes through
+exactly as the branch had it — byte for byte from the branch's own file,
+or from its entry in the branch's old array — wherever the merge changed
+it. There is no table row to keep. A branch opened before that layout
+still carries `design/tasks.json`; the rebuild brings it over without the
+worker: every entry the branch added or changed since it left the base,
+the task's own and any other (a design task writes other tasks' entries),
+is written to its own file, an entry the branch removed is removed, and
+the array goes. Where the base changed the same entry too, that file is
+written with standard conflict markers, the base's text against the
+branch's, and handed to the worker like any conflict; the task's own entry
+is the branch's. Nothing the branch said is dropped without a word.
+
+On a base that still keeps the one array, two design files are the task's
+own business. Its `design/tasks.json`
 entry comes through exactly: when that file conflicts, it is merged by
 task id — the task's entry from the branch, entries only one side
 touched from that side — and written back in `jq`'s layout, which is
@@ -626,7 +641,8 @@ anything but the rebuild base, detached — a commit made on it mid-round
 would sit under the round, outside every check — nor while any file it
 carries, read against that base, has a line starting `<<<<<<<` or
 `>>>>>>>`, nor while a conflict with no markers is byte for byte what the
-merge left, nor while the task's `tasks.json` entry or table row differs
+merge left, nor while the task's entry (its own file, or its `tasks.json`
+entry and table row on a base that still has them) differs
 from the previous head's — however it got that way, including a worker
 that rewrote it while resolving. In a rebuilt round the task's own entry
 and row are therefore frozen: a change to either waits for a round that
@@ -675,7 +691,7 @@ did not happen.
 ## 6. Lifecycle and the seven gates
 
 ```
-grilling  ->  /prototype  ->  [captain green-lights]  ->  design.md + tasks.json
+grilling  ->  /prototype  ->  [captain green-lights]  ->  design.md + design/tasks/
                                        |
                         fm-dispatch.sh (ready tasks only, three at a time)
                                        |
@@ -814,7 +830,7 @@ dependencies have not merged, and badges read only from events and pending
 records: the failed gate's number when the `gate_failed` event carries
 `data.gate`, an `ask_pass_criteria` not yet answered by `criteria_returned`,
 and a pending decision with the number of options it actually lists. A task
-absent from `design/tasks.json` shows its id and an explicit missing-title
+absent from `design/tasks/` shows its id and an explicit missing-title
 label. The merged lane shows the latest few merges, newest first, and counts
 the rest into the history.
 
@@ -838,7 +854,7 @@ card offers (`actions`): `park`/`drop` for ready and backlog, `unpark`/`drop`
 for parked, none for a task in flight or later, which is neither draggable nor
 given a menu. An action the card does not offer is refused with 409 and nothing
 is emitted; an unknown task is 404, an unknown action 400, and a body not
-declared `application/json` 415. The board never edits `design/tasks.json`: a
+declared `application/json` 415. The board never edits `design/tasks/`: a
 drop leaves the task in the plan, and removing it from there, if the captain
 wants that, is an ordinary pull request firstmate raises afterwards. A backlog
 card whose dependency is parked or dropped says so beside the blocker's id
@@ -1412,94 +1428,84 @@ global skills.
 
 ## 14. The task DAG
 
-`design/tasks.json` is the machine-readable form, with `id`, `title`,
-`milestone`, `depends_on`, `scope`, `bootstrap` and `acceptance`. `scope` is
-the glob allowlist gate 4 enforces.
+The task list is `design/tasks/`, one file per task: `design/tasks/<id>.json`
+holds that task's entry and nothing else, with `id`, `title`, `milestone`,
+`depends_on`, `scope`, `bootstrap` and `acceptance`. `scope` is the glob
+allowlist gate 4 enforces. There is no table here: `bin/fm.sh tasks` prints
+it on demand, grouped by milestone, with id, title and dependencies. Nothing
+generated is committed.
 
 Tasks marked `bootstrap` are built by hand: they are the dispatcher and its
 gates, and the dispatcher cannot dispatch itself.
 
-### M0 — the frame (bootstrap)
+**Why one file per task (T-090).** The list used to be one array in
+`design/tasks.json` plus a hand-kept copy of it as a table in this section.
+Every pull request that added or revised a task appended to the tail of the
+same array and the same table, so with `main` requiring up-to-date branches
+every merge turned every other open pull request into a conflict, resolved by
+hand and force-pushed — once dropping a design section on the way. Parallel
+work must never write the same text: adding a task adds a file, revising one
+edits only its file, and two branches that each add a task merge cleanly.
 
-| id | title | depends on |
-|---|---|---|
-| T-001 | repo skeleton, the one gate, a bash test harness | — |
-| T-002 | `fm-emit.sh`, the only writer of the event log | T-001 |
-| T-019 | `fm-sync-prs.sh`, noticing a merge on its own | T-002 |
-| T-020 | `fm-guard.sh` and hooks: nobody writes to main | T-001 |
-| T-003 | the adapter contract, `mock.sh`, the contract test | T-001 |
-| T-004 | `fm-gate.sh`, the seven gates | T-002, T-003 |
-| T-005 | `fm-worker.sh`: worktree, adapter, commit, pull request | T-003, T-004 |
-| T-006 | `fm-review.sh`: the reviewer sees only the diff | T-005 |
-| T-007 | `fm-dispatch.sh`: the DAG, the limit, the green-light gate | T-005, T-006 |
-| T-008 | `fm-decide.sh`: decisions land, firstmate wakes | T-002 |
-| T-023 | `fm-cleanup.sh`: a worker removes its own worktree and nothing else | T-005 |
-| T-024 | `fm-run.sh`: one turn of the whole loop, proved end to end | T-007, T-013, T-015 |
+**Readers.** Every reader goes through `bin/fm-config.sh`: `fm_tasks [dir]
+[rev]` lists every task (one JSON object per line, in id order), `fm_task <id>
+[dir] [rev]` reads one, and `fm_tasks_write` writes entries out as files. With
+a `rev`, they read a branch rather than the working copy — gate 4, the worker
+and the reviewer read the branch under test. The board reads the list through
+the same `fm_tasks`. `bin/ci.sh`'s DAG stage runs `fm_tasks_check` on every
+registered task directory: every file parses, its `id` is its file name, every
+dependency has a file, no task waits on itself through any chain, and no
+`design/tasks.json` is left beside the directory.
 
-### M1 — the board
+**Order.** `fm_tasks` lists tasks by id, compared as versions (`sort -V`):
+`T-2` before `T-9` before `T-10`, `SK-001` before `T-001`. The old array's
+order was the order entries were appended, and nothing else kept it; it is
+gone with the array. That order is the dispatcher's: when there are fewer
+free slots than ready tasks, the ready tasks earliest in it start first.
 
-| id | title | depends on |
-|---|---|---|
-| T-009 | board server: SSE, static, hot reload | T-002 |
-| T-010 | board UI: the ship, the crew, the deck, the lanes, the log | T-009 |
-| T-011 | i18n: dictionaries, `tw2cn.tsv`, the hardcoded-string lint | T-009 |
-| T-012 | `/open` and the read-only diff viewer | T-009 |
-| T-013 | the decision API, including merge cards | T-008, T-009 |
-| T-014 | the board in a browser, and the gate that runs it | T-010, T-011, T-013 |
-| T-025 | the adapter verdict: a vendor that fails silently is not one that worked | T-003, T-006, T-024 |
-| T-026 | the option loop: a flag with no value must not spin for ever | T-017 |
-| T-027 | the crew are agents, not pull requests | T-010 |
+**All or nothing.** A task file that does not read as one JSON object, or a
+missing directory, is no task list: `fm_tasks` prints nothing, names the
+file and returns 1, and every caller refuses rather than act on the files
+that did read — the dispatcher dispatches nothing (`65`), `self-update`
+takes no id, `bin/fm.sh tasks` prints no table and the board shows no task.
+A name that starts with a dot (`.DS_Store`, an interrupted `--adopt`'s
+scratch) is not a task file and is not read or checked.
 
-### M2 — protocol and self-update
+**Bringing over a branch opened before this.** A branch cut before this
+landed still carries `design/tasks.json`, and nobody has to run anything
+for it:
 
-| id | title | depends on |
-|---|---|---|
-| T-015 | `fm-protocol.sh`: round three and its violations | T-006 |
-| T-016 | `fm-diagram.sh`: decision diagrams, and the board embed | T-010 |
-| T-017 | `fm-reconcile.sh`: reconciling after a crash | T-007 |
-| T-018 | self-update and `sync-skills` | T-007, T-015 |
-| T-029 | one exit code for a usage error, in every script | T-026 |
-| T-030 | the lints are blind to the files that carry them | T-026 |
-| T-031 | a second round the worker cannot see, and a question nobody hears | T-007 |
-| T-032 | the red check reaches the worker as an empty block | T-031 |
-| T-033 | firstmate startup contract | T-007, T-006, T-013 |
-| T-034 | clear localized captain decisions and reliable outcome effects | T-010, T-013, T-014 |
-| T-035 | managed firstmate session defaults | T-033, T-003, T-008, T-009 |
-| T-036 | truthful crew progress | T-034, T-002, T-010 |
-| T-037 | fm-worker.sh must reuse an existing task branch, not re-derive its name | (none) |
-| T-039 | fm-gate.sh's gate 3 must run the full local gate at the budget design.md already authorizes | — |
-| T-041 | firstmate never loses a captain order it did not act on | T-035 |
-| T-042 | a worker that changed files still opens its PR when it also leaves a note | T-005, T-031 |
-| T-044 | a completed run's pane actually closes | T-035 |
-| T-040 | captain's board layout parity with the 2026-09-20 prototype | T-034, T-036 |
-| T-043 | the project declares its setup and checks; the gates stop hard-coding this repo's toolchain | T-041, T-039 |
-| T-057 | the board separates ready work from backlog | T-040 |
-| T-065 | the local gate runs its suites in parallel, with every threshold intact | T-046 |
-| T-058 | the captain parks or drops a task from the board | T-057 |
-| T-067 | fm-worker.sh brings a task branch up to date with its base, and the worker resolves the conflicts | T-065 |
-| T-071 | two assertions that only hold on an idle machine hold under the parallel gate | T-065 |
-| T-070 | design: prototype v2 of the living ship, at a designer's standard | T-058 |
-| T-069 | every pull request number on the board links to that project's pull request | T-046, T-058 |
-| T-073 | the reviewer sees the worker's ask and the closed list | T-065 |
-| T-093 | a rebuilt branch commits under the real hooks, and the hooks keep only the main-branch rules | T-067 |
-| T-089 | every crew member has a name of their own, drawn from one fleet roster | T-065 |
+- *Reading it.* With a branch to read, `fm_task` takes the task's own file
+  there and, when the branch has none, its entry in that branch's
+  `design/tasks.json`, saying so on stderr. So the worker, the reviewer and
+  gate 4 read a task defined only on its branch, or revised there, as that
+  branch says it, never as `main` has it or not at all.
+- *Moving it.* The first round that finds such a branch no longer rebasing
+  onto `main` rebuilds it (section 5.3.3), and the rebuild moves every
+  entry the branch added or changed since it left `main` into its own file,
+  removes any it removed, and deletes the array. An entry `main` changed
+  too is handed to the worker with conflict markers, never dropped. Rows
+  the branch added to the old table go with the table.
+- *Scope.* A branch whose scope names `design/tasks.json` keeps its right
+  to carry its own entry: gate 4 reads that glob as `design/tasks/<id>.json`,
+  that task's file and no other. A design task that also wrote other tasks'
+  entries now touches their files, which gate 4 names; widening its scope
+  to `design/tasks/**` is the captain's call, as any scope change is.
 
-### M3 — driving other repositories
+By hand, the same move is `bin/fm.sh tasks split <id>` for each entry the
+branch added or changed. T-090's own branch was the first to come over.
 
-| id | title | depends on |
-|---|---|---|
-| T-045 | design: firstmate drives other repositories from one external installation | T-043 |
-| T-046 | the project registry and the two roots | T-043, T-045 |
-| T-047 | the project on events, decisions and pull request sync | T-046, T-056 |
-| T-048 | fm-project.sh: managed clones, target verification and the guard | T-046 |
-| T-049 | spec pins: gate 4 reads a pinned scope, not the branch | T-047, T-048 |
-| T-050 | project-aware gates 1–3 and 5–7 | T-049 |
-| T-051 | the worker and the reviewer in a target checkout | T-049 |
-| T-052 | role prompts carry the project's design from the engine side | T-051, T-056 |
-| T-053 | dispatch, run and session across projects | T-050, T-051, T-056 |
-| T-054 | the board shows which project | T-047, T-056 |
-| T-055 | the first external project, proved end to end | T-052, T-053, T-054, T-056 |
-| T-056 | design: the board dispatches to several projects at the same time | T-045 |
+**The migration.** It was mechanical: each entry of the array written,
+unchanged, to its own file, which is what `bin/fm.sh tasks split` does. The
+array's two top-level keys went with it: `$schema` named a
+`tasks.schema.json` that never existed, and `concurrency` had no reader —
+the dispatcher's limit is `config.yaml`'s. A test compares the first commit
+that removed `design/tasks.json` with its parent: the files, in the old
+array's order, are the old array. That comparison needs history, so it runs
+under gate 3 and locally, not on the required GitHub check, whose checkout
+is one commit deep; there the test asserts only that nothing still tracks
+`design/tasks.json`. The test that the split itself loses nothing — a
+fixture array, unicode and key order included — runs everywhere.
 
 ---
 
@@ -1511,7 +1517,7 @@ list of every project, and all runtime state under `state/`. It drives target
 repositories, which receive only the branches and pull requests of their own
 tasks and carry nothing of firstmate's.
 
-This section is the plan; the M3 tasks in section 14 implement it. Until each
+This section is the plan; the M3 tasks in `design/tasks/` implement it. Until each
 one merges, sections 5 to 12 describe the running system. Every M3 task keeps
 self-hosting working on its own: this repository is registered as a project,
 it is the default, and a script called without `--project` behaves exactly as
@@ -1565,14 +1571,14 @@ projects:
     base: main
     required_check: ci
     design: design/design.md
-    tasks: design/tasks.json
+    tasks: design/tasks                   # a directory, one file per task (T-090)
     project:                              # T-043's contract, whole, from T-050 on
       ...
   example-app:                            # an external target
     github: example-org/example-app
     base: main
     required_check: check
-    # design and tasks default to projects/example-app/design.md and .../tasks.json
+    # design and tasks default to projects/example-app/design.md and .../tasks/
     project:                              # T-043's contract, whole
       ...
 ```
@@ -1584,7 +1590,7 @@ projects:
 | `github` | `owner/repo` pull requests are opened on | required |
 | `base` | the branch tasks branch from and target | required; gates 1, 2 and the guard use it instead of a literal `main` |
 | `required_check` | the status check name branch protection requires | required; gate 6 and target verification read it |
-| `design`, `tasks` | paths **relative to the engine root** | default `projects/<name>/design.md` and `projects/<name>/tasks.json` |
+| `design`, `tasks` | paths **relative to the engine root**; `tasks` is a directory, one file per task (T-090) | default `projects/<name>/design.md` and `projects/<name>/tasks`; a `tasks` value in the old shape, `<path>.json`, names the directory `<path>` beside it |
 | `project` | T-043's `project:` block, every field of it | T-043's merged text and the README define the fields and their meaning; this section only moves the block under a project and never re-lists it, so a field T-043 has or later gains — `docs` included — moves with it |
 
 **Where gates 3 and 5 read the contract.** From the task's spec pin (15.5),
@@ -1614,11 +1620,10 @@ the project's registry entry. A pin recorded before T-050 therefore still
 verifies after T-050 merges, with no repin, and a task in flight across that
 merge keeps the contract it was pinned with.
 
-`bin/ci.sh`'s agreement check between a design's task table and its task list
-runs once for every registered `(design, tasks)` pair and names the project on
-failure; a registered pair whose files do not exist is red, not skipped. A tree
-with no `projects:` map (the test fixtures) keeps the one
-`design/design.md`/`design/tasks.json` pair it always had.
+`bin/ci.sh`'s DAG check (section 14) runs once for every registered task
+directory and names the project on failure; a registered directory that does
+not exist is red, not skipped. A tree with no `projects:` map (the test
+fixtures) keeps the one `design/tasks` directory.
 
 **The interface (T-046).** `bin/fm-config.sh` holds the resolver every later
 task calls; each function takes the engine's `config.yaml` as its last,
@@ -1644,7 +1649,7 @@ reasoning as `repo`: nothing outside the engine root may be named.
 | What | Self project | Any other project |
 |---|---|---|
 | design | `design/design.md` | `projects/<name>/design.md` (engine root, committed) |
-| task list | `design/tasks.json` | `projects/<name>/tasks.json` (engine root, committed) |
+| task list | `design/tasks/` | `projects/<name>/tasks/` (engine root, committed) |
 | checkout | the engine root | `state/projects/<name>/repo` |
 | worktrees | `state/worktrees/<task>` | `state/projects/<name>/worktrees/<task>` |
 | spec pins | `state/pins/<name>/<task>/` | `state/pins/<name>/<task>/` |
@@ -1715,8 +1720,8 @@ recovery path in section 12.
 
 ### 15.5 Gate 4 under the external model
 
-Today gate 4 reads the task's scope from `design/tasks.json` **on the task's
-own branch**, falling back to the working copy. Under option B a target's
+Today gate 4 reads the task's scope from its own file, `design/tasks/<id>.json`,
+**on the task's own branch**, falling back to the working copy (T-090). Under option B a target's
 branch has no task list, and the engine's working copy can change during a
 run. Both sources go.
 
@@ -1828,7 +1833,7 @@ The prompt carries from the engine side what the checkout cannot:
   a target has no `bin/fm-checkpoint.sh`.
 
 The worker and reviewer skills stop pointing at repository-relative files
-(`design/design.md`, `design/tasks.json`, `bin/fm-checkpoint.sh`) and refer to
+(`design/design.md`, `design/tasks/`, `bin/fm-checkpoint.sh`) and refer to
 "the design, scope and checkpoint command in your prompt". The self project
 gets the same prompt shape. The reviewer still sees the diff, the spec and the
 design — never the worker's reasoning (R2). Firstmate itself always runs in
@@ -1852,7 +1857,7 @@ The card to raise when a private project is wanted:
 
 ### 15.9 Order of work
 
-The M3 tasks in section 14 carry the exact scopes and acceptance. The order
+The M3 tasks in `design/tasks/` carry the exact scopes and acceptance. The order
 follows one rule: each merges on its own, and after each one this repository,
 as its own default project, still drives itself with no change to any caller.
 

@@ -1,0 +1,29 @@
+{
+  "id": "T-052",
+  "milestone": "M3",
+  "bootstrap": false,
+  "depends_on": [
+    "T-051",
+    "T-056"
+  ],
+  "title": "role prompts carry the project's design from the engine side",
+  "scope": [
+    "skills/worker/SKILL.md",
+    "skills/reviewer/SKILL.md",
+    "skills/firstmate/SKILL.md",
+    "bin/fm-worker.sh",
+    "bin/fm-review.sh",
+    "tests/worker.test.sh",
+    "tests/review.test.sh",
+    "tests/skills.test.sh",
+    "design/design.md"
+  ],
+  "acceptance": [
+    "Implements design.md section 15.7. Worker and reviewer prompts carry, from the engine side: the role skill, the pinned spec, the project's design file at the pin's commit bounded in size with any truncation stated in the prompt, the project's base and its pinned T-043 contract (every field), and the absolute path of the checkpoint helper in the frozen code tree.",
+    "The worker and reviewer skills stop pointing at repository-relative files (design/design.md, design/tasks.json, bin/fm-checkpoint.sh) and refer to the design, scope and checkpoint command in the prompt; they stay portable English with no vendor-specific syntax. The firstmate skill says firstmate runs in the engine root and names --project on every script it calls, with one exception from design.md section 15.10 point 2: its routine dispatch step, after a green light and whenever a run ends, calls fm-dispatch.sh with no --project so free slots are filled fairly across every registered project, and it names --project for dispatch only when the captain asks for one project's work. The firstmate skill also says every card firstmate raises by hand takes the id fm-decide.sh --allocate gives it, D-<project>-<task>-<n> (design.md section 15.10 point 1), never a number picked by hand.",
+    "The self project's prompt has the same shape; the reviewer still receives the diff, the spec and the design and never the worker's reasoning (R2).",
+    "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
+    "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+  ]
+}

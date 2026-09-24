@@ -422,8 +422,8 @@ class Entrypoints(unittest.TestCase):
         self.repo = Path(self.tmp.name)
         shutil.copytree(root / 'bin', self.repo / 'bin')
         shutil.copytree(root / 'skills', self.repo / 'skills')
-        (self.repo / 'design').mkdir()
-        (self.repo / 'design/tasks.json').write_text(json.dumps({'tasks':[dict(id='T-035',title='test',scope=['src/**'],depends_on=[],acceptance=['works'])]}))
+        (self.repo / 'design/tasks').mkdir(parents=True)
+        (self.repo / 'design/tasks/T-035.json').write_text(json.dumps(dict(id='T-035',title='test',scope=['src/**'],depends_on=[],acceptance=['works'])))
         (self.repo / 'design/design.md').write_text('## 6. Gates\nEvidence\n## 8. Board\n')
         (self.repo / 'config.yaml').write_text('vendor: codex\nconcurrency: 2\n')
         self.fake = self.repo / 'fakebin'; self.fake.mkdir()
@@ -563,7 +563,10 @@ raise SystemExit(int(os.environ.get('FM_TEST_EXIT','0')))
         self.executable('git', r'''
 import json,os,pathlib,sys
 r=pathlib.Path(os.environ['FM_TEST_ROOT']); a=sys.argv[1:]
-if a[0]=='show': print((r/'design/tasks.json').read_text())
+if a[0]=='show':
+ p=r/a[-1].split(':',1)[-1]
+ if not p.is_file(): sys.exit(128)
+ print(p.read_text())
 elif a[0] in ('show-ref','ls-remote'): sys.exit(1)
 elif a[:2]==['worktree','add']:
  pathlib.Path(a[-2]).mkdir(parents=True,exist_ok=True)

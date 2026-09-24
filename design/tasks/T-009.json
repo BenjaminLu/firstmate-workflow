@@ -1,0 +1,24 @@
+{
+  "id": "T-009",
+  "milestone": "M1",
+  "bootstrap": false,
+  "depends_on": [
+    "T-002"
+  ],
+  "title": "board server: SSE, static files, hot reload",
+  "scope": [
+    "board/server.ts",
+    "board/public/**",
+    "tests/board.test.sh",
+    "bin/ci.sh",
+    "design/tasks.json"
+  ],
+  "acceptance": [
+    "binds 127.0.0.1 only",
+    "tails events.jsonl and pushes new events over SSE",
+    "a change under board/public/** pushes a reload event",
+    "no build step: bun run board/server.ts starts it",
+    "the SSE client reconnects on its own after a drop",
+    "the board reports only what the log already holds; it derives task stage from events rather than keeping its own view"
+  ]
+}

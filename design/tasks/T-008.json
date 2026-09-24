@@ -1,0 +1,20 @@
+{
+  "id": "T-008",
+  "milestone": "M0",
+  "bootstrap": true,
+  "depends_on": [
+    "T-002"
+  ],
+  "title": "fm-decide.sh: a decision lands and firstmate wakes",
+  "scope": [
+    "bin/fm-decide.sh",
+    "bin/watch-decisions.ts",
+    "tests/decide.test.sh"
+  ],
+  "acceptance": [
+    "with bun present it uses fs.watch and returns within 200ms of the file appearing",
+    "without bun it falls back to a one-second poll with identical behaviour",
+    "it depends on neither fswatch, entr nor watchexec",
+    "a decision already on disk is not missed across a restart"
+  ]
+}

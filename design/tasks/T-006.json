@@ -1,0 +1,20 @@
+{
+  "id": "T-006",
+  "milestone": "M0",
+  "bootstrap": true,
+  "depends_on": [
+    "T-005"
+  ],
+  "title": "fm-review.sh: the reviewer sees only the diff",
+  "scope": [
+    "bin/fm-review.sh",
+    "skills/reviewer/**",
+    "tests/review.test.sh"
+  ],
+  "acceptance": [
+    "the reviewer prompt contains the diff, the task spec and the acceptance criteria and nothing else",
+    "a test asserts the prompt contains no worker log, reasoning or worktree path",
+    "the reviewer's output is posted with gh pr comment by the script",
+    "only APPROVE:<task-id> is recognised by fm-gate.sh"
+  ]
+}

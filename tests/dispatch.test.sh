@@ -12,6 +12,8 @@ export HERDR_ENV=0 FM_TRANSPORT=direct
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=bin/fm-config.sh
+. "$ROOT/bin/fm-config.sh"   # fm_tasks_write: a fixture's tasks, one file each
 
 fixture() {
   local d; d="$(mktemp -d)"
@@ -20,7 +22,7 @@ fixture() {
   cp "$ROOT/bin/fm-herdr.py" "$d/bin/"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$d/bin/fm-worker.sh"; chmod +x "$d/bin/fm-worker.sh"
   printf 'concurrency: 2\n' > "$d/config.yaml"
-  cat > "$d/design/tasks.json" <<'JSON'
+  fm_tasks_write /dev/stdin "$d/design/tasks" <<'JSON'
 {"tasks":[
  {"id":"A","depends_on":[]},
  {"id":"B","depends_on":["A"]},
@@ -91,15 +93,40 @@ d3="$(fixture)"; say "$d3" greenlit
 assert_eq "1" "$(FM_ROOT="$d3" "$d3/bin/fm-dispatch.sh" --repo "$d3" --dry-run --limit 1 | sed '/^fm-dispatch/d' | wc -l | tr -d ' ')" \
   "--limit overrides the configured concurrency"
 
-# the drift lint lives in ci.sh; check the lint's logic, not the ambient repo
-lintdir="$(mktemp -d)"; mkdir -p "$lintdir/design"
-printf '{"tasks":[{"id":"T-404"}]}\n' > "$lintdir/design/tasks.json"
-printf '# design, mentioning nothing\n' > "$lintdir/design/design.md"
+# T-090: the order ready tasks take free slots in is fm_tasks' order, ids
+# compared as versions. Ids of one width sort the same as text or as
+# versions, so these do not: as text T-10 would come first.
+dv="$(fixture)"; rm -f "$dv/design/tasks/"*.json
+for id in T-10 T-9 T-2; do printf '{"id":"%s","depends_on":[]}\n' "$id" > "$dv/design/tasks/$id.json"; done
+say "$dv" greenlit
+assert_eq "T-2
+T-9" "$(ready "$dv")" "with two slots and T-10, T-9, T-2 ready, T-2 and T-9 start"
+
+# A file that does not read is no task list: nothing is dispatched from the
+# files that did, and the file is named. The worker stub leaves a mark, and
+# the dispatcher refuses before it would start one, so no mark is final.
+db="$(fixture)"; say "$db" greenlit
+printf '#!/usr/bin/env bash\necho x >> "%s/started"\n' "$db" > "$db/bin/fm-worker.sh"
+printf '{"id":"E",\n' > "$db/design/tasks/E.json"
+out="$(FM_ROOT="$db" "$db/bin/fm-dispatch.sh" --repo "$db" 2>&1)"; rc=$?
+assert_eq "65" "$rc" "a task file that does not parse stops the dispatch"
+assert_contains "$out" "E.json" "and the file is named"
+assert_eq "" "$(printf '%s\n' "$out" | grep -xE '[A-E]' || true)" "and no task is printed as started"
+assert_fail "test -e '$db/started'" "and no worker was started from the half that did read"
+rm -rf "$db/design/tasks"
+out="$(FM_ROOT="$db" "$db/bin/fm-dispatch.sh" --repo "$db" --dry-run 2>&1)"; rc=$?
+assert_eq "65" "$rc" "a missing task directory is no task list either"
+assert_lacks "$out" "nothing is ready" "(not 'nothing is ready')"
+rm -rf "$dv" "$db"
+
+# the DAG lint lives in ci.sh; check the lint's logic, not the ambient repo
+lintdir="$(mktemp -d)"; mkdir -p "$lintdir/design/tasks"
+printf '{"id":"T-405","depends_on":["T-404"]}\n' > "$lintdir/design/tasks/T-405.json"
 cp "$ROOT/bin/ci.sh" "$lintdir/"; mkdir -p "$lintdir/bin"
 cp "$ROOT/bin/ci.sh" "$ROOT/bin/fm-config.sh" "$lintdir/bin/"
-assert_fail "FM_ROOT='$lintdir' bash '$lintdir/bin/ci.sh'" "the gate fails when the design omits a task id"
-printf '| T-404 | a task |\n' >> "$lintdir/design/design.md"
-assert_ok "FM_ROOT='$lintdir' bash '$lintdir/bin/ci.sh'" "and passes once the design lists it"
+assert_fail "FM_ROOT='$lintdir' bash '$lintdir/bin/ci.sh'" "the gate fails when a task depends on one with no file"
+printf '{"id":"T-404","depends_on":[]}\n' > "$lintdir/design/tasks/T-404.json"
+assert_ok "FM_ROOT='$lintdir' bash '$lintdir/bin/ci.sh'" "and passes once it has one"
 rm -rf "$lintdir"
 rm -rf "$d" "$d2" "$d3"
 
@@ -118,7 +145,7 @@ pr_tree() {                     # pr_tree -> a greenlit repo with T-001 and T-00
   printf '#!/usr/bin/env bash\nexit 0\n' > "$d/bin/fm-worker.sh"; chmod +x "$d/bin/fm-worker.sh"
   printf 'vendor: mock\nconcurrency: 3\n' > "$d/config.yaml"
   printf '{"tasks":[{"id":"T-001","title":"a","depends_on":[]},{"id":"T-002","title":"b","depends_on":[]}]}\n' \
-    > "$d/design/tasks.json"
+    | fm_tasks_write /dev/stdin "$d/design/tasks"
   FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --type greenlit --en go --tw 開工 >/dev/null
   printf '%s' "$d"
 }

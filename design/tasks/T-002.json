@@ -1,0 +1,20 @@
+{
+  "id": "T-002",
+  "milestone": "M0",
+  "bootstrap": true,
+  "depends_on": [
+    "T-001"
+  ],
+  "title": "fm-emit.sh, the only writer of the event log",
+  "scope": [
+    "bin/fm-emit.sh",
+    "tests/emit.test.sh",
+    "bin/ci.sh"
+  ],
+  "acceptance": [
+    "writes are serialised by a lock; 20 concurrent writers lose no lines and every line parses as JSON",
+    "an unknown type is rejected with a non-zero exit and nothing is written",
+    "an event carrying a summary must have both en and zh-TW, otherwise it is rejected",
+    "ci.sh fails if anything under bin/ or board/ appends to events.jsonl outside fm-emit.sh"
+  ]
+}

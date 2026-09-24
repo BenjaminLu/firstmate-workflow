@@ -1,0 +1,30 @@
+{
+  "id": "T-069",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-046",
+    "T-058"
+  ],
+  "title": "every pull request number on the board links to that project's pull request",
+  "scope": [
+    "board/server.ts",
+    "board/public/index.html",
+    "board/public/ship.js",
+    "board/public/ship.css",
+    "tests/board.test.sh",
+    "tests/ship.spec.ts",
+    "tests/e2e/board.spec.ts",
+    "tests/e2e/fixture.ts",
+    "design/design.md",
+    "design/tasks.json"
+  ],
+  "acceptance": [
+    "The captain asked that every place the board shows a pull request number (#n) links to that pull request on the right repository, including the #n at the top right of a lane card. Today only the decision card's 'view PR' link exists, and it hard-codes the repository (board/public/index.html:396, https://github.com/BenjaminLu/firstmate-workflow/pull/…). A board for another project would link to the wrong repository. Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+    "board/server.ts derives each pull request's URL from the project registry T-046 added (config.yaml projects.<name>.github, owner/repo), not from a literal. It resolves the project the same way the rest of the board does. Before T-054 adds per-event projects, that is the default project. /api/state carries the URL next to every pr number it returns (tasks, lanes, decisions, the roster and the log). A project with no github entry yields no URL, and the page then shows plain text, never a guessed link.",
+    "Every #n in the page is a link to that URL: the top right of each lane card (index.html:327), the roster and strip rows (:372), the decision card's link (:396, whose literal is removed), the crew name tags on the ship (ship.js:365), and PR numbers in log lines. Links open in a new tab with rel=noreferrer, keep today's look, are reachable by keyboard, and clicking one never triggers the card's drag, menu or selection.",
+    "No repository name or owner remains as a literal anywhere under board/ (a test greps for it).",
+    "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first: board.test.sh (the URL is derived from the registry, changes when the registry's github changes, and is absent without one) and the e2e board spec (every visible #n on a lane card, decision card, roster row and ship tag is a link to the expected URL, and clicking a lane card's #n does not start a drag or open its menu). The worker does not run the suite itself.",
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "id": "T-065",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-046"
+  ],
+  "title": "the local gate runs its suites in parallel, with every threshold intact",
+  "scope": [
+    "bin/ci.sh",
+    "tests/ci.test.sh",
+    "playwright.config.ts",
+    "tests/e2e/board.spec.ts",
+    "tests/board.test.sh",
+    "tests/diagram.test.sh",
+    "tests/decisions.test.sh",
+    "tests/crew-end-to-end.test.sh",
+    "tests/open.test.sh",
+    "tests/herdr.test.sh",
+    "tests/reconcile.test.sh",
+    "tests/dispatch.test.sh",
+    "tests/review.test.sh",
+    "design/design.md",
+    "design/tasks.json"
+  ],
+  "acceptance": [
+    "Gate 3 runs bin/ci.sh under the 600-second budget design.md authorizes, and on 2026-09-24 it took 624–631 seconds with no other check running, because ci.sh runs every stage and every suite one after another (about 582 seconds of serial work). The captain asked for the run time to be cut without relaxing any gate threshold: the 600-second budget, every stage, every suite, every assertion and ci.sh's per-suite noise check stay exactly as they are. Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+    "bin/ci.sh runs the bash suites through a bounded pool. The job count is the online CPU count capped at 6, and FM_CI_JOBS overrides it; 1 reproduces today's serial run. Slowest suites are started first. Each suite keeps LC_ALL='' LC_MESSAGES=C and </dev/null, writes to its own log in a mktemp directory outside FM_ROOT (tests/ci.test.sh's fixture cache requires ci.sh to write nothing under FM_ROOT), and after all finish the results are printed in glob order with the same pass, flunk and noise-check lines as today. It works on bash 3.2 (no wait -n). The shellcheck stage and the end-to-end stage run alongside the pool, and their output is printed in today's stage order.",
+    "Every suite that starts a board server gets its port from the kernel instead of a RANDOM range. Today's ranges overlap (board.test.sh:30/451/637/796, diagram.test.sh:878, decisions.test.sh:27, crew-end-to-end.test.sh:94/215 including PORT+1, open.test.sh:25), and a readiness loop can reach another suite's server. Start the server with FM_PORT=0 and read the real port from the line it prints ('board on http://127.0.0.1:PORT'), with no change to production code.",
+    "Every positive wait that depends on wall-clock speed waits for its real condition with a deadline wide enough for a loaded machine, and no assertion changes. This covers herdr.test.sh:680 (2 seconds for the first worker's prompt, which flaked twice under parallel load), herdr.test.sh:348-354 and :207, reconcile.test.sh:73, dispatch.test.sh:168/194, and review.test.sh:425. decide.test.sh's timing assertions are left as they are, since they measure the code, not the machine.",
+    "The negative window in reconcile.test.sh:80 ('nothing was started within the window') must not mean less under load. Under parallel load, a worker that really was started could miss a 2-second window and pass the check falsely. Lengthen the window to 5 seconds, or derive it from the job count so it can only grow. Never shorten it.",
+    "playwright.config.ts sets fullyParallel: true with 4 workers, and retries stay at 0. The test at tests/e2e/board.spec.ts:1023 that emits a merge into the file-level shared board gets a board of its own, so no test changes state another test reads.",
+    "tests/ci.test.sh asserts, fail first: a failing suite in the pool still turns ci red and is named; a suite's noise-check hit is still reported as it is today; results print in glob order whatever order the suites finish in; FM_CI_JOBS=1 runs one suite at a time; and ci.sh writes nothing under FM_ROOT. design.md's description of the gate names the pool, the job count and FM_CI_JOBS.",
+    "Target: the full local bin/ci.sh finishes well inside the budget. It measured 161 seconds in a scratch run with 6 jobs and 4 playwright workers, and it must stay within 600 seconds on GitHub's 4-vCPU runner. Splitting herdr, reconcile and worker into shards is a later step, not part of this task.",
+    "Evidence is this pull request's required GitHub check and the seven gates. The worker does not run the suite itself.",
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+  ]
+}

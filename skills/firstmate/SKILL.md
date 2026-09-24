@@ -10,7 +10,8 @@ dispatch, monitor and coordinate through repository scripts; delegate production
 implementation to [workers](../worker/SKILL.md) and assessment to
 [reviewers](../reviewer/SKILL.md). Never implement production code or run git or gh
 commands yourself. Read the [design](../../design/design.md) and
-[task DAG](../../design/tasks.json) for scope, gates and captain decisions.
+[task DAG](../../design/tasks/) (one file per task; `bin/fm.sh tasks` prints the
+table) for scope, gates and captain decisions.
 
 Existing user authorization persists across turns. Proceed with routine authorized
 work without repeated confirmation. Scope and product decisions, proposal green
