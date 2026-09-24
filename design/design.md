@@ -151,7 +151,12 @@ Types: `greenlit` `dispatched` `commit_pushed` `pr_opened` `gate_passed`
 `gate_failed` `review_opened` `review_failed` `ask_pass_criteria`
 `criteria_returned` `protocol_violation` `approved` `merged` `closed`
 `decision_requested` `decision_made` `worker_crashed` `vendor_unavailable`
-`agent_finished`.
+`agent_finished` `crew_status` `parked` `unparked`.
+
+`parked` and `unparked` are the captain setting untouched work aside and
+bringing it back (T-058); the last of the two for a task is the one that
+counts. A task the captain drops is the existing `closed`. All three are
+written by the board with actor `captain`; see §8, *Park and drop*.
 
 `dispatched` and `agent_finished` bracket one run of one agent, and they
 are what the board reads to decide who is aboard. An agent is running from
@@ -572,6 +577,13 @@ It checks for any such event, not a match to the proposed work. Firstmate must
 verify that authorization covers the work. Dependencies and capacity are read
 from events, so reconcile these with current PRs and live processes before launch.
 
+The captain's word on untouched work is read from events too (T-058). A task
+whose last `parked`/`unparked` event is `parked` is never started, and starts
+again only after an `unparked`. A `closed` task — which is what a drop on the
+board writes — is never started, and an `unparked` does not bring it back.
+Neither counts as merged, so a task that depends on one waits, and its backlog
+card names the parked or dropped task as its blocker.
+
 | # | Gate | How it is checked |
 |---|---|---|
 | 1 | branch exists and has commits | `git rev-list --count main..<branch>` > 0 |
@@ -647,7 +659,7 @@ percentages. The regions below are that layout.
 | The ship | a two-mast pirate vessel (three on the tallest rates) whose beam and decks track the crew |
 | Deck | crew stand on the ship with name tags over their heads, poses driven by state, handoffs fly between them |
 | Crew roster | two-column rows, shown by default and toggled from the ship's bar |
-| Lanes | seven columns left to right: backlog, ready, work, gate, review, captain, merged; closed tasks, and every merged task, in the separate initially collapsed history |
+| Lanes | seven columns left to right: backlog, ready, work, gate, review, captain, merged; closed tasks, and every merged task, in the separate initially collapsed history; below the lanes, the initially collapsed parked group and the drop target |
 | Live log | a full-width panel at the bottom; tri-lingual summaries from `events.jsonl` |
 
 **Engine badge (V7).** The server reads `config.yaml` on every state request —
@@ -670,6 +682,34 @@ and a pending decision with the number of options it actually lists. A task
 absent from `design/tasks.json` shows its id and an explicit missing-title
 label. The merged lane shows the latest few merges, newest first, and counts
 the rest into the history.
+
+**Park and drop (T-058).** The captain takes work they do not want run off the
+ready and backlog lanes on the board itself. Each card there offers two
+actions, reachable both by dragging the card and by the `⋯` menu on it (the
+menu is also the keyboard path):
+
+- **park** — reversible. The card moves to the collapsed *parked* group below
+  the lanes. It comes back by the same two routes — *unpark* in its menu, or
+  dragged onto the ready or backlog lane — and lands in ready or backlog as its
+  dependencies say, not as the lane it was dropped on says.
+- **drop** — the task will not be done. The menu item, or dragging the card onto
+  the drop target, opens one confirming step in the page (never a browser
+  dialog); confirming it takes the task off the lanes into the closed history.
+
+`POST /tasks {task, action}` writes the event through `bin/fm-emit.sh` with
+actor `captain`, like every other board write: park is `parked`, unpark is
+`unparked`, drop is the existing `closed`. The server says which actions each
+card offers (`actions`): `park`/`drop` for ready and backlog, `unpark`/`drop`
+for parked, none for a task in flight or later, which is neither draggable nor
+given a menu. An action the card does not offer is refused with 409 and nothing
+is emitted; an unknown task is 404, an unknown action 400, and a body not
+declared `application/json` 415. The board never edits `design/tasks.json`: a
+drop leaves the task in the plan, and removing it from there, if the captain
+wants that, is an ordinary pull request firstmate raises afterwards. A backlog
+card whose dependency is parked or dropped says so beside the blocker's id
+(`blocked on T-xxx (parked)`), from the `blocked_by` list the server sends.
+Labels are the dictionaries' `park` / `unpark` / `drop` / `parked`
+(擱置 / 恢復 / 不做 / 已擱置); zh-CN derives through `tw2cn.tsv`.
 
 **Refused merges.** The feedback for a refused merge names the decision and
 the task. The server flags a refusal as `superseded` once a `merged` event for

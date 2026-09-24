@@ -82,6 +82,20 @@ const STAGE: Record<string, string> = {
 // dispatched now: backlog still waits on a dependency, ready waits on nobody.
 const LANES = ["backlog", "ready", "working", "gate", "review", "captain", "merged"] as const;
 
+// What the captain may do to a card, by where it sits (T-058). Only work
+// nobody has started can be set aside: park is reversible, drop is the
+// closed event and is not. A task in flight or later offers nothing, and
+// POST /tasks refuses anything this table does not list.
+const ACTIONS: Record<string, string[]> = {
+  ready: ["park", "drop"], backlog: ["park", "drop"], parked: ["unpark", "drop"],
+};
+// the event each action writes, and the summary the log shows for it
+const ACTION_EVENT: Record<string, { type: string; en: string; tw: string }> = {
+  park: { type: "parked", en: "the captain parked {id}", tw: "船長擱置了 {id}" },
+  unpark: { type: "unparked", en: "the captain unparked {id}", tw: "船長恢復了 {id}" },
+  drop: { type: "closed", en: "the captain dropped {id}: it will not be done", tw: "船長決定不做 {id}" },
+};
+
 // The header's engine badge (V7). Read at request time, so an edit to
 // config.yaml shows on the next refresh, and never hard-coded: the names are
 // whatever the file says. Only the two keys the badge needs are read - the
@@ -132,10 +146,16 @@ const state = () => {
   const moved = new Map<string, Event>();
   const asking = new Set<string>();
   const settledAt = new Map<string, number>();
+  // The captain's own word on untouched work: the last of parked / unparked
+  // wins. It only ever matters while the task is untouched - once work has
+  // started, the stage the log gives it is what the card shows.
+  const parked = new Set<string>();
   for (const [index, e] of events.entries()) {
     if (!e.task) continue;
     if (typeof e.pr === "number") pr.set(e.task, e.pr);
     if (FINAL.has(stage.get(e.task) ?? "")) continue;
+    if (e.type === "parked") parked.add(e.task);
+    if (e.type === "unparked") parked.delete(e.task);
     if (e.type === "ask_pass_criteria") asking.add(e.task);
     if (e.type === "criteria_returned") asking.delete(e.task);
     const s = STAGE[e.type ?? ""];
@@ -175,22 +195,42 @@ const state = () => {
     }
     return out;
   };
+  const dependsOf = (id: string): string[] => {
+    const d = definitions.get(id);
+    return d && Array.isArray(d.depends_on) ? (d.depends_on as unknown[]).map(String) : [];
+  };
+  // untouched work waiting on work that is not in yet: a dependency counts
+  // as done only once it has merged, and one the log has never heard of is
+  // not done. The same list decides the lane, so a card in backlog always
+  // names what it waits on and a card in ready never does.
+  const blockersOf = (id: string) =>
+    stageOf(id) === "untouched" ? dependsOf(id).filter((dep) => stageOf(dep) !== "merged") : [];
+  // A parked task keeps the blockers it would have, so unparking it lands
+  // where its dependencies say without the page working that out.
+  const laneOf = (id: string): string => {
+    if (stageOf(id) !== "untouched") return stageOf(id);
+    if (parked.has(id)) return "parked";
+    return blockersOf(id).length ? "backlog" : "ready";
+  };
   const tasks = taskIds.map((id) => {
     const d = definitions.get(id) || {};
-    const depends: string[] = Array.isArray(d.depends_on) ? (d.depends_on as unknown[]).map(String) : [];
-    // untouched work waiting on work that is not in yet: a dependency counts
-    // as done only once it has merged, and one the log has never heard of is
-    // not done. The same list decides the lane, so a card in backlog always
-    // names what it waits on and a card in ready never does.
-    const untouched = stageOf(id) === "untouched";
-    const blockedOn = untouched ? depends.filter((dep) => stageOf(dep) !== "merged") : [];
-    const at = untouched ? (blockedOn.length ? "backlog" : "ready") : stageOf(id);
+    const depends = dependsOf(id);
+    const blockedOn = blockersOf(id);
+    const at = laneOf(id);
     return ({
     id, title: typeof d.title === 'string' ? d.title : null, milestone: d.milestone ?? null,
     depends_on: depends,
     stage: at,
     pr: pr.get(id) ?? null,
     blocked_on: blockedOn,
+    // why each blocker blocks: a dependency the captain parked or dropped
+    // will not arrive on its own, and the card has to say so. One neither
+    // the plan nor the log knows is unknown, not ready.
+    blocked_by: blockedOn.map((dep) => ({ id: dep,
+      stage: definitions.has(dep) || stage.has(dep) ? laneOf(dep) : "unknown" })),
+    // only work the plan lists can be set aside: a task the log alone knows
+    // about is not the captain's to park
+    actions: definitions.has(id) ? (ACTIONS[at] ?? []) : [],
     badges: badgesOf(id, at),
     // the aboard crew's names, filled in once the crew is known below
     crew: [] as string[],
@@ -394,6 +434,7 @@ const state = () => {
       blocked: tasks.filter((t) => t.stage === "gate").length,
       ready: tasks.filter((t) => t.stage === "ready").length,
       backlog: tasks.filter((t) => t.stage === "backlog").length,
+      parked: tasks.filter((t) => t.stage === "parked").length,
       // one per decision on the deck: the captain is what these wait on
       waiting: pend.length,
     },
@@ -559,6 +600,34 @@ const server = Bun.serve({
         const pf = join(ROOT, "state/pending", `${id}.json`);
         if (existsSync(pf)) unlinkSync(pf);
         return json({ ok: true, decision, merged, eventRecorded });
+      }).catch(() => json({ error: "bad request" }, 400));
+    }
+
+    // The captain parks, unparks or drops a task (T-058). Written as a captain
+    // event through fm-emit.sh like every other board write; the plan in
+    // design/tasks.json is never touched. The check and the write run with
+    // nothing in between - spawnSync holds the only thread - so two clicks
+    // cannot both pass the check. Declared JSON only: a cross-site form can
+    // post text/plain without asking first, but not application/json.
+    if (url.pathname === "/tasks" && req.method === "POST") {
+      if (!/^application\/json\b/i.test(req.headers.get("content-type") ?? ""))
+        return json({ error: "json only" }, 415);
+      return req.json().then((body: any) => {
+        const id = typeof body?.task === "string" ? body.task : "";
+        const action = typeof body?.action === "string" ? body.action : "";
+        const spec = Object.hasOwn(ACTION_EVENT, action) ? ACTION_EVENT[action] : null;
+        if (!spec) return json({ error: "bad action" }, 400);
+        const task = state().tasks.find((x) => x.id === id);
+        if (!task) return json({ error: "no such task" }, 404);
+        if (!task.actions.includes(action))
+          return json({ error: `cannot ${action} a task that is ${task.stage}`, stage: task.stage }, 409);
+        const r = Bun.spawnSync([join(ROOT, "bin/fm-emit.sh"),
+          "--actor", "captain", "--type", spec.type, "--task", id,
+          "--en", spec.en.replace("{id}", id), "--tw", spec.tw.replace("{id}", id)],
+          { env: { ...process.env, FM_ROOT: ROOT } });
+        if (r.exitCode !== 0)
+          return json({ error: "the event was not written", out: new TextDecoder().decode(r.stderr).trim() }, 500);
+        return json({ ok: true, task: id, action, event: spec.type });
       }).catch(() => json({ error: "bad request" }, 400));
     }
 

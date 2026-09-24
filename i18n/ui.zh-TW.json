@@ -93,5 +93,16 @@
   "alsoWaiting": "其他待決（點開就地展開）",
   "viewDesign": "design.md",
   "ready": "就緒",
-  "backlog": "待辦"
+  "backlog": "待辦",
+  "park": "擱置",
+  "unpark": "恢復",
+  "drop": "不做",
+  "parked": "已擱置",
+  "dropped": "已不做",
+  "cardActions": "{id} 的操作",
+  "dropZone": "拖曳卡片到此：不做",
+  "dropConfirm": "確定不做 {id}？此任務將離開看板，design/tasks.json 不變。",
+  "dropYes": "確定不做",
+  "cancel": "取消",
+  "actionFailed": "看板未能記錄此操作，請重新整理後再試。"
 }

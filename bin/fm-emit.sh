@@ -22,7 +22,7 @@ LOCK="$ROOT/state/.events.lock"
 TYPES="greenlit dispatched commit_pushed pr_opened gate_passed gate_failed \
 review_opened review_failed ask_pass_criteria criteria_returned protocol_violation approved \
 merged closed decision_requested decision_made worker_crashed vendor_unavailable \
-agent_finished crew_status"
+agent_finished crew_status parked unparked"
 
 # 64 is what the OPTION LOOP exits, and only the option loop: a flag with
 # no value after it, and a flag this script does not know. Everything

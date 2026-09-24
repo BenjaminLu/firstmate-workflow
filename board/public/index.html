@@ -131,6 +131,26 @@ body{font-size:16px}
 .log .who{overflow:visible;text-overflow:clip;overflow-wrap:anywhere}
 #history{margin-top:16px}#history summary{cursor:pointer;min-height:44px;padding:10px;background:var(--bg2);font-size:16px}
 .history-cards{padding-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:9px}
+/* T-058: a card's own menu, the parked group and the drop target below the
+   lanes, and the in-page step that confirms a drop */
+.card[draggable="true"]{cursor:grab}
+.card .cmenu{margin-left:auto;min-width:32px;min-height:32px;border:1px solid var(--line);border-radius:7px;
+  background:var(--bg2);color:var(--fg2);font:700 16px var(--mono);cursor:pointer;line-height:1}
+.card .cacts{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.card .cacts button{min-height:36px;padding:4px 12px;border:1px solid var(--line);border-radius:7px;
+  background:var(--bg2);color:var(--fg);font:600 14px var(--sans);cursor:pointer}
+.setaside{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,1fr);gap:9px;margin-top:12px;align-items:start}
+@media(max-width:620px){.setaside{grid-template-columns:minmax(0,1fr)}}
+#parked{background:var(--bg2);border:1px dashed var(--line);border-radius:10px}
+#parked summary{cursor:pointer;min-height:44px;padding:10px;font-size:16px}
+#parked summary i{font-style:normal;background:var(--bg3);border-radius:99px;padding:0 7px;color:var(--fg2)}
+.parked-cards{padding:0 9px 9px;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:9px}
+#dropzone{min-height:44px;padding:10px;border:1px dashed #7c322b;border-radius:10px;color:var(--fg3);font-size:14px}
+.lanes-wrap.dragging [data-zone]{outline:1px dashed var(--fg3);outline-offset:2px}
+.lanes-wrap [data-zone].over{outline:2px solid var(--accent)}
+#dropConfirm{margin-top:12px;padding:12px 14px;background:var(--bg2);border:1px solid #7c322b;border-radius:10px}
+#dropConfirm[hidden]{display:none}#dropConfirm p{margin:0;font-size:16px}
+#taskFeedback{margin:8px 0 0;color:var(--warn);font-size:14px}#taskFeedback:empty{display:none}
 @media(max-width:420px){.top,.counts,.lanes-wrap,.logwrap{padding-left:12px;padding-right:12px}.log li{grid-template-columns:1fr 2fr}.log li>span:last-child{grid-column:1/-1}}
 .top small,.counts span,section>h2,#deckwrap>h2,#gl{font-size:13px!important}
 </style>
@@ -158,6 +178,14 @@ body{font-size:16px}
 <section class="lanes-wrap">
   <h2 id="h-fleet"></h2>
   <div class="lanes" id="lanes"></div>
+  <!-- T-058: where the captain sets work aside. Both are drop targets for a
+       dragged card; the click menu on a card reaches the same two actions. -->
+  <div class="setaside">
+    <details id="parked" data-zone="park"><summary></summary><div class="parked-cards"></div></details>
+    <div id="dropzone" data-zone="drop"></div>
+  </div>
+  <div id="dropConfirm" role="alertdialog" aria-modal="false" hidden></div>
+  <p id="taskFeedback" role="status" aria-live="polite"></p>
   <details id="history"><summary></summary><div class="history-cards"></div></details>
 </section>
 <section class="logwrap">
@@ -189,6 +217,9 @@ const picks = new Map(), drafts = new Map(), sent = new Set();
 // strips the captain has opened in place; the first card is always open
 const expanded = new Set();
 let latest, feedback = null, initialized = false;
+// T-058: the card whose menu is open, the task a drop is waiting to be
+// confirmed for, the card being dragged, and what the last action said
+let menuOpen = null, confirming = null, dragging = null, taskFeedback = null;
 const seen = new Set();
 function feedbackText() {
   const el = document.getElementById('orderFeedback');
@@ -277,11 +308,26 @@ function render(s) {
   // a task the definitions do not list keeps its id and says the title is
   // missing; it never borrows one
   const title = task => `<div class="t${task.title ? '' : ' missing'}">${esc(task.title || t("titleMissing"))}</div>`;
-  const card = (task, k) => `<div class="card s-${k}" data-task="${esc(task.id)}">` +
-    `<div class="hd"><span class="id">${esc(task.id)}</span>${task.pr ? `<span class="pr">#${esc(task.pr)}</span>` : ''}</div>` +
+  // a blocker the captain parked or dropped will not arrive by itself, so
+  // the card says which it is
+  const blocker = b => b.stage === 'parked' ? `${b.id} (${t('parked')})`
+    : b.stage === 'closed' ? `${b.id} (${t('dropped')})` : b.id;
+  // T-058: the server says which actions a card offers; a card with none is
+  // neither draggable nor given a menu
+  const menu = task => {
+    const acts = task.actions || [];
+    if (!acts.length) return '';
+    const open = menuOpen === task.id;
+    return `<button class="cmenu" data-menu="${esc(task.id)}" aria-haspopup="menu" aria-expanded="${open}"` +
+      ` aria-label="${esc(t('cardActions').replace('{id}', task.id))}">&#8943;</button>` +
+      (open ? `<div class="cacts" role="menu">` + acts.map(a =>
+        `<button role="menuitem" data-act="${esc(a)}" data-for="${esc(task.id)}">${esc(t(a))}</button>`).join('') + `</div>` : '');
+  };
+  const card = (task, k) => `<div class="card s-${k}" data-task="${esc(task.id)}"${(task.actions || []).length ? ' draggable="true"' : ''}>` +
+    `<div class="hd"><span class="id">${esc(task.id)}</span>${task.pr ? `<span class="pr">#${esc(task.pr)}</span>` : ''}${menu(task)}</div>` +
     title(task) +
     ((task.crew || []).length ? `<div class="crew">${esc(task.crew.join(', '))}</div>` : '') +
-    ((task.blocked_on || []).length ? `<div class="dep">${esc(t("blockedOn"))} ${esc(task.blocked_on.join(', '))}</div>` : '') +
+    ((task.blocked_on || []).length ? `<div class="dep">${esc(t("blockedOn"))} ${esc((task.blocked_by || task.blocked_on.map(id => ({id}))).map(blocker).join(', '))}</div>` : '') +
     (task.badges || []).map(b => `<span class="badge b-${esc(b.kind)}">${esc(badge(b))}</span>`).join('') + `</div>`;
   SHIP.patch(document.getElementById("lanes"), (s.lanes || []).map(k => {
     let items = s.tasks.filter(task => task.stage === k), more = '';
@@ -293,9 +339,30 @@ function render(s) {
     }
     const total = items.length;
     if (k === 'merged') items = items.slice(0, MERGED_SHOWN);
-    return `<div class="lane l-${k}" data-lane="${k}"><h3>${esc(t(laneKey(k)))}<i>${total}</i></h3>` +
+    // ready and backlog take a parked card back; where it lands is up to its
+    // dependencies, not to which of the two it was dropped on
+    const zone = k === 'ready' || k === 'backlog' ? ' data-zone="unpark"' : '';
+    return `<div class="lane l-${k}" data-lane="${k}"${zone}><h3>${esc(t(laneKey(k)))}<i>${total}</i></h3>` +
       items.map(task => card(task, k)).join("") + more + `</div>`;
   }).join(""));
+
+  // the parked group below the lanes, collapsed until opened
+  const parkedTasks = s.tasks.filter(task => task.stage === 'parked');
+  const parkedGroup = document.getElementById('parked');
+  parkedGroup.querySelector('summary').innerHTML = `${esc(t('parked'))} <i>${parkedTasks.length}</i>`;
+  SHIP.patch(parkedGroup.querySelector('.parked-cards'), parkedTasks.map(task => card(task, 'parked')).join(''));
+  document.getElementById('dropzone').textContent = t('dropZone');
+  // the confirming step for a drop, in the page: it goes away by itself if
+  // the task stopped being droppable while it was up
+  if (confirming && !(s.tasks.find(x => x.id === confirming)?.actions || []).includes('drop')) confirming = null;
+  if (menuOpen && !(s.tasks.find(x => x.id === menuOpen)?.actions || []).length) menuOpen = null;
+  const confirmBox = document.getElementById('dropConfirm');
+  confirmBox.hidden = !confirming;
+  SHIP.patch(confirmBox, confirming ? `<p id="dropConfirmText">${esc(t('dropConfirm').replace('{id}', confirming))}</p>` +
+    `<div class="acts"><button class="go" data-confirm-drop="${esc(confirming)}">${esc(t('dropYes'))}</button>` +
+    `<button data-cancel-drop="${esc(confirming)}">${esc(t('cancel'))}</button></div>` : '');
+  confirmBox.setAttribute('aria-labelledby', 'dropConfirmText');
+  document.getElementById('taskFeedback').textContent = taskFeedback ? t(taskFeedback) : '';
 
   const completed = s.tasks.filter(item => ['merged','closed'].includes(item.stage));
   const history = document.getElementById('history');
@@ -440,6 +507,80 @@ async function answer(id) {
   render(latest);
   fetch("/api/state").then(x => x.json()).then(render).catch(() => {});
 }
+// T-058: park, unpark and drop. Two ways to each - the card's menu (which is
+// also the keyboard path) and drag and drop - and one way to the server.
+const actionsOf = id => (latest?.tasks || []).find(x => x.id === id)?.actions || [];
+async function act(id, action) {
+  menuOpen = null; confirming = null; taskFeedback = null;
+  const r = await fetch('/tasks', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ task: id, action }),
+  }).catch(() => null);
+  if (!r || !r.ok) taskFeedback = 'actionFailed';
+  const s = await fetch('/api/state').then(x => x.json()).catch(() => null);
+  render(s || latest);
+}
+function askDrop(id) {
+  menuOpen = null; confirming = id; render(latest);
+  document.querySelector('[data-confirm-drop]')?.focus();
+}
+const board = document.querySelector('.lanes-wrap');
+board.addEventListener('click', e => {
+  const el = e.target.closest('[data-menu],[data-act],[data-confirm-drop],[data-cancel-drop]');
+  if (!el) return;
+  if (el.dataset.menu) {
+    const id = el.dataset.menu;
+    menuOpen = menuOpen === id ? null : id; render(latest);
+    if (menuOpen) document.querySelector(`.cacts [data-for="${CSS.escape(id)}"]`)?.focus();
+  } else if (el.dataset.act) {
+    if (el.dataset.act === 'drop') askDrop(el.dataset.for); else act(el.dataset.for, el.dataset.act);
+  } else if (el.dataset.confirmDrop) {
+    act(el.dataset.confirmDrop, 'drop');
+  } else if (el.dataset.cancelDrop) {
+    const id = el.dataset.cancelDrop;
+    confirming = null; render(latest);
+    document.querySelector(`[data-menu="${CSS.escape(id)}"]`)?.focus();
+  }
+});
+board.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || !(menuOpen || confirming)) return;
+  const id = menuOpen || confirming;
+  menuOpen = null; confirming = null; render(latest);
+  document.querySelector(`[data-menu="${CSS.escape(id)}"]`)?.focus();
+});
+board.addEventListener('dragstart', e => {
+  const cardEl = e.target.closest?.('.card[draggable="true"]');
+  if (!cardEl) return;
+  dragging = cardEl.dataset.task;
+  e.dataTransfer.setData('text/plain', dragging);
+  e.dataTransfer.effectAllowed = 'move';
+  board.classList.add('dragging');
+});
+board.addEventListener('dragend', () => {
+  dragging = null; board.classList.remove('dragging');
+  board.querySelectorAll('.over').forEach(el => el.classList.remove('over'));
+});
+// a zone takes a card only when that card offers the zone's action
+const zoneFor = e => {
+  const z = e.target.closest?.('[data-zone]');
+  return z && dragging && actionsOf(dragging).includes(z.dataset.zone) ? z : null;
+};
+board.addEventListener('dragover', e => {
+  const z = zoneFor(e);
+  if (!z) return;
+  e.preventDefault(); e.dataTransfer.dropEffect = 'move'; z.classList.add('over');
+});
+board.addEventListener('dragleave', e => {
+  const z = e.target.closest?.('[data-zone]');
+  if (z && !z.contains(e.relatedTarget)) z.classList.remove('over');
+});
+board.addEventListener('drop', e => {
+  const z = zoneFor(e);
+  if (!z) return;
+  e.preventDefault(); z.classList.remove('over');
+  const id = dragging; dragging = null; board.classList.remove('dragging');
+  if (z.dataset.zone === 'drop') askDrop(id); else act(id, z.dataset.zone);
+});
 document.addEventListener('ship-effect', () => { pose(); feedbackText(); });
 document.addEventListener('pointerdown', () => SHIP.unlock());
 
