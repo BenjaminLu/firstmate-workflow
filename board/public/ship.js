@@ -51,6 +51,19 @@ const SHIP = (() => {
 
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  // a pull request number is a link to it, at the URL the server derived
+  // from the project registry (T-069); without one it stays plain text. The
+  // page never decides what a valid number is or builds a URL: a URL string
+  // from the server is the whole test. The page uses these two as well.
+  const prRef = (n, url, cls = "", label = "#" + esc(n)) =>
+    typeof url === "string" && url.startsWith("https://github.com/")
+      ? `<a${cls ? ` class="${cls}"` : ""} href="${esc(url)}" target="_blank" rel="noreferrer" draggable="false" data-pr="${esc(n)}">${label}</a>`
+      : cls ? `<span class="${cls}">${label}</span>` : label;
+  // every #n in already-escaped text, linked through the server's pr_urls
+  // map. The server collects the numbers with the same pattern; the lead
+  // excludes a word character and the '&' of an escaped entity like &#39;
+  const linkPrs = (html, urls) => urls ? String(html).replace(/(^|[^\w&])#([1-9][0-9]{0,8})(?![0-9])/g,
+    (m, lead, n) => Object.hasOwn(urls, n) ? lead + prRef(n, urls[n]) : m) : html;
 
   // one lens curve. The decks are that same curve clipped, so the planks the
   // crew stand on and the hull they stand in share a projection.
@@ -118,7 +131,7 @@ const SHIP = (() => {
     }
     return `<div class="bub st-${c.state}" data-bubble="${esc(c.id)}" style="--px:${c.x}%;--r:${c.row}">` +
       `<div class="who">${esc(c.name)}</div>` +
-      `<div class="job">${esc(c.job)}</div></div>`;
+      `<div class="job">${linkPrs(esc(c.job), c.pr_urls)}</div></div>`;
   }
 
   // the server sends one of these three; an unknown one is a mismatch
@@ -161,6 +174,10 @@ const SHIP = (() => {
         task: a.task || null,
         title: a.title || null,
         pr: ((s.tasks || []).find((t) => t.id === a.task) || {}).pr ?? null,
+        // the URL the server put beside the task's number (T-069), or none
+        pr_url: ((s.tasks || []).find((t) => t.id === a.task) || {}).pr_url ?? null,
+        // and every other #n the title or the activity names
+        pr_urls: s.pr_urls || null,
         progress: bounded ? { done, total } : null,
         pct: bounded ? Math.round((100 * done) / total) : null,
       };
@@ -362,10 +379,10 @@ const SHIP = (() => {
         `<div class="l1"><span class="av" aria-hidden="true"></span>` +
         `<span class="nm">${esc(c.name)}</span>` +
         `<span class="st">${esc(T("lane" + c.state[0].toUpperCase() + c.state.slice(1)))}</span>` +
-        `<span class="rpr">${c.pr ? "#" + esc(c.pr) : ""}</span></div>` +
+        `<span class="rpr">${c.pr ? prRef(c.pr, c.pr_url) : ""}</span></div>` +
         `<div class="jb">` +
-        (c.task ? `<b class="tk">${esc(c.task)}</b> <span class="tt">${esc(c.title || T("titleMissing"))}</span> ` : "") +
-        `<span class="act">${esc(c.activity)}</span>` +
+        (c.task ? `<b class="tk">${esc(c.task)}</b> <span class="tt">${linkPrs(esc(c.title || T("titleMissing")), c.pr_urls)}</span> ` : "") +
+        `<span class="act">${linkPrs(esc(c.activity), c.pr_urls)}</span>` +
         (c.progress
           ? `<span class="pb" role="progressbar" aria-valuemin="0" aria-valuenow="${c.progress.done}" ` +
             `aria-valuemax="${c.progress.total}" title="${c.progress.done}/${c.progress.total}">` +
@@ -543,7 +560,7 @@ const SHIP = (() => {
   }
 
   return { render, roster, captain, portrait, patch, enqueue, unlock, active:() => current,
-           rateFor, actionFor, crewOf, layout, RATES, ACTIONS, ROLE,
+           rateFor, actionFor, crewOf, layout, RATES, ACTIONS, ROLE, prRef, linkPrs,
            muted: (() => { try { return !!localStorage.getItem("board.muted"); } catch (_) { return false; } })(),
            // shown unless the captain hid it; the choice survives a reload
            rosterOn: (() => { try { return localStorage.getItem("board.roster") !== "hidden"; } catch (_) { return true; } })() };

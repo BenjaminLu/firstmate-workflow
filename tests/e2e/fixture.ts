@@ -33,7 +33,9 @@ export function makeRoot(stages: Stage[], withDecision = true, actors: "per-task
   cpSync(join(ROOT, "i18n"), join(d, "i18n"), { recursive: true });
   cpSync(join(ROOT, "design/tasks.json"), join(d, "design/tasks.json"));
   mkdirSync(join(d, 'bin'));
-  for (const f of ['fm-emit.sh','fm-diagram.sh','fm-decide.sh','watch-decisions.ts']) cpSync(join(ROOT,'bin',f), join(d,'bin',f));
+  // fm-config.sh and the parser it loads are how the board reads the project
+  // registry (T-069); without a config.yaml they register nothing
+  for (const f of ['fm-emit.sh','fm-diagram.sh','fm-decide.sh','watch-decisions.ts','fm-config.sh','fm-herdr.py']) cpSync(join(ROOT,'bin',f), join(d,'bin',f));
 
   const tasks = JSON.parse(readFileSync(join(ROOT, "design/tasks.json"), "utf8")).tasks;
   if (tasks.length < stages.length) {
@@ -67,6 +69,22 @@ export function makeRoot(stages: Stage[], withDecision = true, actors: "per-task
     if (result.status !== 0) throw new Error(result.stderr.toString());
   }
   return d;
+}
+
+// A project registry naming one project, the default, on `github`. The
+// repository is the test's own, never this one's, so a link to the right
+// place can only come from the registry.
+export function writeRegistry(root: string, github: string) {
+  writeFileSync(join(root, "config.yaml"), [
+    "default_project: fixture",
+    "projects:",
+    "  fixture:",
+    "    repo: .",
+    `    github: ${github}`,
+    "    base: main",
+    "    required_check: ci",
+    "",
+  ].join("\n"));
 }
 
 // the port comes from the kernel, not from a guess: a guessed port can
