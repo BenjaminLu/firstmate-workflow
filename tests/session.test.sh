@@ -269,6 +269,55 @@ class Session(unittest.TestCase):
         self.assertEqual([], json.loads(after.stdout)['unacknowledged'])
         self.assertIn('no unacknowledged captain decisions', after.stderr)
         self.assertEqual(before, self.decision_files())
+    def test_an_owned_decision_id_is_observed_listed_and_acknowledged(self):
+        """T-047: an id naming its owner, D-<project>-<task>-<n>, wakes firstmate like D-<digits> does."""
+        owned = 'D-firstmate-workflow-T047-1'
+        state = self.repo / 'state'
+        for folder in ('pending', 'decisions'): (state / folder).mkdir(parents=True, exist_ok=True)
+        (state / 'events.jsonl').write_text('')
+        (state / ('pending/%s.json' % owned)).write_text(json.dumps(
+            dict(id=owned, task='T-047', kind='merge', pr=77, project='firstmate-workflow')))
+        answer = dict(id=owned, chosen='A', task='T-047', kind='merge', pr=77, project='firstmate-workflow',
+                      ts='2026-09-24T08:00:00.000Z', identity='decision:' + owned)
+        (state / ('decisions/%s.json' % owned)).write_text(json.dumps(answer))
+        # the continuous watcher firstmate starts: it finds the answer under the owned id
+        first = m.watch_start(self.repo)
+        receipt = state / ('session/observed/%s.json' % owned)
+        try:
+            for _ in range(80):
+                if receipt.exists(): break
+                time.sleep(.05)
+            self.assertTrue(receipt.exists(), 'the watcher must observe an answer under an owned id')
+            self.assertEqual(owned, json.loads(receipt.read_text())['id'])
+            self.assertEqual('A', json.loads(receipt.read_text())['decision']['chosen'])
+        finally: m.watch_stop(self.repo)
+        # the per-decision watcher fm-decide.sh --await starts, keyed by the owned id
+        one = m.watch_start(self.repo, owned)
+        try:
+            result = Path(one['directory']) / 'result.json'
+            for _ in range(80):
+                if result.exists(): break
+                time.sleep(.05)
+            self.assertEqual('observed', json.loads(result.read_text())['status'])
+            self.assertEqual(owned, json.loads(result.read_text())['decision']['id'])
+        finally: m.watch_stop(self.repo, owned)
+
+        status = self.session_cli('status')
+        self.assertEqual(0, status.returncode, status.stderr)
+        listed = json.loads(status.stdout)['unacknowledged']
+        self.assertEqual([owned], [item['id'] for item in listed])
+        self.assertEqual('T-047', listed[0]['task'])
+        self.assertIn(owned, status.stderr)
+
+        acked = self.session_cli('ack', '--decision', owned)
+        self.assertEqual(0, acked.returncode, acked.stderr)
+        self.assertEqual(owned, json.loads((state / ('session/acknowledged/%s.json' % owned)).read_text())['id'])
+        self.assertEqual([], json.loads(self.session_cli('status').stdout)['unacknowledged'])
+        # an id carrying path characters is refused, and nothing is written for it
+        for bad in ('D-firstmate-workflow-T047-1/../x', 'D-a.b-T047-1'):
+            refused = self.session_cli('ack', '--decision', bad)
+            self.assertNotEqual(0, refused.returncode, bad)
+        self.assertEqual([owned + '.json'], sorted(p.name for p in (state / 'session/acknowledged').iterdir()))
     def start_with(self, config):
         """T-043: session start against a fixture that declares its own project contract."""
         import io, contextlib

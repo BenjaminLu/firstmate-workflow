@@ -282,8 +282,22 @@ Use one JSON document per file; the script's jq stream check is not an explicit
 single-document guard. `--title` is accepted for compatibility but ignored and
 cannot supply details. Invalid/missing details, kind, task or merge PR yield 64;
 duplicate pending or decided IDs are refused with 65, not updated.
-IDs match `^D-[0-9]{1,6}$`, tasks `^T-[A-Za-z0-9._-]{1,32}$`, kind is `choice`
-or `merge`, and a merge requires `--pr` matching `^[1-9][0-9]*$`.
+A new card's id names its owner, `D-<project>-<task>-<n>` (for example
+`D-firstmate-workflow-T047-1`; design.md section 15.4). Never pick one by hand:
+`bin/fm-decide.sh --allocate --task <task> [--project <name>] [--kind merge]
+--repo <root>` takes the next free `n` for that project's task under the
+task's own lock, reserves it and prints it; `--request` refuses an owned id
+that was not allocated (65), or whose task or project is not the card's (64).
+Allocate first, so the details and any authored drawing are written under the
+id the card will carry. Old ids (`D-<digits>`, `D-SK-<n>`) stay readable and
+are never renamed. Tasks written into an id match `^T-[A-Za-z0-9]{1,32}$`.
+Every new card you raise, merge or hand-raised, must take the owned form
+from `--allocate`. The script still accepts `--request D-<digits>` so that old
+callers and existing fixtures keep working. That is the only reason, and the
+code does not stop you misusing it, so the rule is yours to keep. In a tree
+with no `projects:` map, ids are owned by `firstmate-workflow` and the card
+records no project. Kind is
+`choice` or `merge`, and a merge requires `--pr` matching `^[1-9][0-9]*$`.
 
 Before a real request:
 
@@ -308,14 +322,18 @@ Before a real request:
 After preflight, a choice request uses:
 
 ```sh
-bin/fm-decide.sh --request D-007 --task T-004 --kind choice \
+id="$(bin/fm-decide.sh --allocate --task T-004 --repo /absolute/repo)"
+bin/fm-decide.sh --request "$id" --task T-004 --kind choice \
   --details /absolute/path/to/authored-details.json --repo /absolute/repo
 ```
 
 For a merge, use `--kind merge --pr <actual-pr>` only after current-head gates,
-CI and reviewer provenance are verified. `fm-run.sh` derives `D-<task digits>`
-and reads `<repo>/state/decision-details/<decision-id>.json` after gates pass.
-Supply the preflighted details there before the loop can request that card;
+CI and reviewer provenance are verified. `fm-run.sh` allocates the merge card's
+id itself (never `D-<task digits>`), says which id when details are missing,
+and reads `<repo>/state/decision-details/<decision-id>.json` after gates pass;
+it reuses that id on later turns. Supply the preflighted details there, or
+allocate the id with `--kind merge` first and author under it, before the loop
+can request that card;
 coordinate a single loop owner so it cannot publish ahead of diagram preflight.
 Missing/invalid details produce “no captain card created” with the diagnostic;
 inspect the actual files and error, rather than fabricating content or captain A.

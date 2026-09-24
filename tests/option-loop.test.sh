@@ -43,12 +43,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PINNED="fm 5
 fm-checkpoint 5
 fm-cleanup 2
-fm-decide 9
+fm-decide 10
 fm-diagram 4
 fm-dispatch 2
-fm-emit 7
+fm-emit 8
 fm-gate 5
-fm-merge 3
+fm-merge 4
 fm-protocol 4
 fm-reconcile 2
 fm-review 7
@@ -134,7 +134,7 @@ while read -r name want; do
     fi
   done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "68" "$total" "every pinned flag and all seven fm option branches were exercised"
+assert_eq "71" "$total" "every pinned flag and all seven fm option branches were exercised"
 
 # A script that grows an option loop has to be pinned here too, and the
 # corpus is the one bin/ci.sh judges - literally, out of

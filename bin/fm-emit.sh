@@ -4,7 +4,12 @@
 # processes appending at once and cannot grow a field nobody validates.
 #
 #   fm-emit.sh --actor worker-2 --type gate_failed --task T-004 [--pr 9]
-#              [--data '{"gate":5}'] [--en "..." --tw "..."]
+#              [--project example-app] [--data '{"gate":5}'] [--en "..." --tw "..."]
+#
+# --project names the registered project the event is about (design section
+# 15.4) and is written as a top-level `project`. An event without it belongs
+# to the default project, so every line written before projects existed keeps
+# its meaning. A name the registry does not hold exits 65 and writes nothing.
 #
 # A summary is what the board shows. It must carry both languages or nothing:
 # a half-translated event would render blank in one of the three locales.
@@ -22,7 +27,7 @@ LOCK="$ROOT/state/.events.lock"
 TYPES="greenlit dispatched commit_pushed pr_opened gate_passed gate_failed \
 review_opened review_failed ask_pass_criteria criteria_returned protocol_violation approved \
 merged closed decision_requested decision_made worker_crashed vendor_unavailable \
-agent_finished crew_status parked unparked"
+agent_finished crew_status parked unparked spec_pinned spec_repinned"
 
 # 64 is what the OPTION LOOP exits, and only the option loop: a flag with
 # no value after it, and a flag this script does not know. Everything
@@ -34,7 +39,7 @@ agent_finished crew_status parked unparked"
 die()   { printf 'fm-emit: %s\n' "$1" >&2; exit 1; }
 usage() { printf 'fm-emit: %s\n' "$1" >&2; exit 64; }
 
-actor=''; type=''; task=''; pr=''; data='{}'; en=''; tw=''
+actor=''; type=''; task=''; pr=''; data='{}'; en=''; tw=''; project=''
 # see fm_need in bin/fm-config.sh for why: `shift 2` with one argument
 # left does not shift, and the loop spins. This file deliberately depends
 # on nothing, so it carries the two lines rather than the explanation.
@@ -48,6 +53,7 @@ while [ $# -gt 0 ]; do
     --data)  need "$@"; data="${2-}";  shift 2 ;;
     --en)    need "$@"; en="${2-}";    shift 2 ;;
     --tw)    need "$@"; tw="${2-}";    shift 2 ;;
+    --project) need "$@"; project="${2-}"; shift 2 ;;
     *) usage "unknown argument: $1" ;;
   esac
 done
@@ -58,6 +64,16 @@ case " $TYPES " in *" $type "*) ;; *) die "unknown type: $type" ;; esac
 command -v jq >/dev/null 2>&1 || die "jq is required"
 jq -e . >/dev/null 2>&1 <<<"$data" || die "--data is not valid JSON"
 
+# Only a named project needs the registry, so only then is the library
+# loaded: an event about the default project still depends on nothing.
+if [ -n "$project" ]; then
+  _fm_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-config.sh"
+  [ -r "$_fm_lib" ] || { printf 'fm-emit: --project needs %s\n' "$_fm_lib" >&2; exit 70; }
+  # shellcheck source=bin/fm-config.sh
+  . "$_fm_lib"
+  project="$(fm_project_resolve "$project" "$ROOT/config.yaml")" || exit 65
+fi
+
 # half a summary is worse than none: it renders blank in one locale
 if [ -n "$en" ] || [ -n "$tw" ]; then
   [ -n "$en" ] || die "--tw given without --en (a summary needs both languages)"
@@ -67,8 +83,9 @@ fi
 line=$(jq -cn \
   --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg actor "$actor" --arg type "$type" --arg task "$task" \
-  --arg pr "$pr" --arg en "$en" --arg tw "$tw" --argjson data "$data" '
+  --arg pr "$pr" --arg en "$en" --arg tw "$tw" --arg project "$project" --argjson data "$data" '
   {ts:$ts, actor:$actor, type:$type}
+  + (if $project == "" then {} else {project:$project} end)
   + (if $task == "" then {} else {task:$task} end)
   + (if $pr   == "" then {} else {pr:($pr|tonumber)} end)
   + (if $data == {}  then {} else {data:$data} end)

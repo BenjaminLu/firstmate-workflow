@@ -8,7 +8,21 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 command -v bun >/dev/null 2>&1 || { echo "    bun not installed - decisions suite skipped"; exit 0; }
 
 d="$(mktemp -d)"; mkdir -p "$d/bin" "$d/state" "$d/design" "$d/board/public"
-cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-decide.sh" "$d/bin/"
+cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-decide.sh" "$d/bin/"
+# two projects, so a card can name one that is not the default (T-047)
+cat > "$d/config.yaml" <<'Y'
+default_project: firstmate-workflow
+projects:
+  firstmate-workflow:
+    repo: .
+    github: owner/engine
+    base: main
+    required_check: ci
+  example-app:
+    github: example-org/example-app
+    base: main
+    required_check: check
+Y
 cp "$ROOT/bin/watch-decisions.ts" "$d/bin/" 2>/dev/null || true
 cp "$ROOT/board/server.ts" "$d/board/"; cp "$ROOT/board/public/index.html" "$d/board/public/"
 printf '{"tasks":[{"id":"T-A","title":"first","milestone":"M0","depends_on":[]}]}\n' > "$d/design/tasks.json"
@@ -105,6 +119,87 @@ assert_fail "grep -q 'pr 18' '$d/state/merge-calls'" 'custom never authorizes me
 assert_eq '3' "$(jq -s 'map(select(.type=="decision_made"))|length' "$d/state/events.jsonl")" 'one event per decision, none from await or duplicate'
 assert_contains "$(post '{"id":"D-3","chosen":"A"}')" 'already recorded differently' 'conflicting repeat is truthful'
 assert_contains "$(post '{"id":"D-404","chosen":"A"}')" 'no pending decision' 'unknown decision cannot be invented'
+
+# --- T-047: a card whose id names its owner ------------------------------
+# listed with the project and task parsed out of its id, answered, and for a
+# merge handed to fm-merge.sh with the card's project
+nid=D-example-app-T004-1
+printf '{"id":"%s","task":"T-004","project":"example-app","kind":"merge","title":"merge app","pr":7}\n' "$nid" \
+  > "$d/state/pending/$nid.json"
+printf '%s\n' '{"id":"D-9","task":"T-A","kind":"choice"}' > "$d/state/pending/D-9.json"
+s="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "$nid" "$(jq -r --arg i "$nid" '.pending[]|select(.id==$i)|.id' <<<"$s")" "a new-form card is listed"
+assert_eq "example-app T-004 1" \
+  "$(jq -r --arg i "$nid" '.pending[]|select(.id==$i)|.owner|"\(.project) \(.task) \(.n)"' <<<"$s")" \
+  "with the project, task and n parsed out of its id"
+assert_eq "null" "$(jq -r '.pending[]|select(.id=="D-9")|.owner' <<<"$s")" "an old id names no owner"
+rm -f "$d/state/pending/D-9.json"
+# bodies are built by jq, never as "{\"a\":1,\"b\":2}" inside "$(...)": bash
+# 3.2 brace-expands that {a,b} and runs the substitution once per half
+answer() { jq -cn --arg i "$1" --arg c "$2" '{id:$i,chosen:$c}'; }
+r="$(post "$(answer "$nid" A)")"
+assert_eq "true" "$(jq -r .ok <<<"$r")" "a new-form card is answered"
+assert_ok "test -f '$d/state/decisions/$nid.json'" "its answer lands under its own id"
+assert_contains "$(tail -1 "$d/state/merge-calls")" "--pr 7" "a merge answer calls the merge script"
+assert_contains "$(tail -1 "$d/state/merge-calls")" "--project example-app" "with the card's project"
+assert_eq "example-app" \
+  "$(jq -r --arg i "$nid" 'select(.type=="decision_made" and .data.decision==$i)|.project' "$d/state/events.jsonl")" \
+  "and its decision_made event names the project"
+assert_eq "$nid" "$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r --arg i "$nid" '.responses[]|select(.id==$i)|.id')" \
+  "the answered new-form card is read back among the responses"
+assert_lacks "$(grep -F -- '--pr 16' "$d/state/merge-calls")" "--project" \
+  "an old card with no project merges with no --project, as before"
+# a tree with no registry names its cards by the self project but records no
+# project on them; the id's owner is not a registry name there, so a merge
+# answer passes none, exactly as an old card does
+sid=D-firstmate-workflow-T005-1
+printf '{"id":"%s","task":"T-005","kind":"merge","title":"merge self","pr":17}\n' "$sid" \
+  > "$d/state/pending/$sid.json"
+assert_eq "true" "$(post "$(answer "$sid" A)" | jq -r .ok)" "a new-form card with no project is answered"
+assert_contains "$(tail -1 "$d/state/merge-calls")" "--pr 17" "and its merge is called"
+assert_lacks "$(tail -1 "$d/state/merge-calls")" "--project" \
+  "with no --project read out of its id"
+# A card is settled by its own project's merge only. example-app merging its
+# #21 for its T-021 leaves the engine's card for #21 up; the engine's own
+# merge, written with no project and so the default's, takes it down.
+kid=D-firstmate-workflow-T021-1
+printf '{"id":"%s","task":"T-021","project":"firstmate-workflow","kind":"merge","title":"merge 21","pr":21}\n' "$kid" \
+  > "$d/state/pending/$kid.json"
+FM_ROOT="$d" bash "$d/bin/fm-emit.sh" --actor github --type merged --task T-021 --pr 21 --project example-app \
+  --en "#21 merged" --tw "#21 已合併" >/dev/null 2>&1
+assert_eq "$kid" "$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r --arg i "$kid" '.pending[]|select(.id==$i)|.id')" \
+  "another project's merge of the same number and task does not settle the card"
+FM_ROOT="$d" bash "$d/bin/fm-emit.sh" --actor github --type merged --task T-021 --pr 21 \
+  --en "#21 merged" --tw "#21 已合併" >/dev/null 2>&1
+assert_eq "" "$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r --arg i "$kid" '.pending[]|select(.id==$i)|.id')" \
+  "its own project's merge does"
+rm -f "$d/state/pending/$kid.json"
+for badid in D-Bad_Name-T047-1 D-firstmate-workflow-1 D-firstmate-workflow-T047-0 'D-../x-T047-1' 'D-a/b-T047-1'; do
+  assert_contains "$(post "$(jq -cn --arg i "$badid" '{id:$i,chosen:"A"}')")" "bad decision id" \
+    "the route refuses a malformed id: $badid"
+done
+# the stored answer carries the card's project; a card naming none stores none
+assert_eq "example-app" "$(jq -r .project "$d/state/decisions/$nid.json")" "the stored answer names the card's project"
+assert_eq "false" "$(jq 'has("project")' "$d/state/decisions/$sid.json")" "an answer to a card naming no project stores none"
+# The response listing reads only files named by a decision id, either form. A
+# file on disk under a malformed name is not an answer, whatever it holds.
+for badid in D-Bad_Name-T047-1 D-firstmate-workflow-T047-0 D-firstmate-workflow-T047-01 \
+             D-firstmate-workflow-1 D-firstmate-workflow-T-047-1 D-x.y-T047-1 D-1234567 notes; do
+  printf '{"id":"%s","chosen":"A"}\n' "$badid" > "$d/state/decisions/$badid.json"
+done
+listed="$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r '[.responses[].id]|sort|join(" ")')"
+for badid in D-Bad_Name-T047-1 D-firstmate-workflow-T047-0 D-firstmate-workflow-T047-01 \
+             D-firstmate-workflow-1 D-firstmate-workflow-T-047-1 D-x.y-T047-1 D-1234567 notes; do
+  assert_lacks " $listed " " $badid " "the response listing skips a file named $badid"
+  rm -f "$d/state/decisions/$badid.json"
+done
+assert_contains " $listed " " $nid " "while it still lists the owned answer"
+assert_contains " $listed " " D-3 " "and an old one"
+# an owner is read only out of a well-formed id
+printf '{"id":"D-Bad_Name-T047-1","task":"T-047","kind":"choice"}\n' > "$d/state/pending/D-Bad_Name-T047-1.json"
+assert_eq "null" "$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r '.pending[]|select(.id=="D-Bad_Name-T047-1")|.owner')" \
+  "a malformed id names no owner"
+rm -f "$d/state/pending/D-Bad_Name-T047-1.json"
 
 printf '%s\n' '{"id":"D-4","task":"T-A","kind":"choice"}' > "$d/state/pending/D-4.json"
 assert_eq 'true' "$(post "$(jq -cn '{id:"D-4",chosen:"custom",text:("🚢" * 1000)}')" | jq -r .ok)" '1000 Unicode code points accepted'

@@ -42,6 +42,79 @@ fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
 B="${FM_CODE_ROOT:-$REPO}/bin"
 say() { printf '  %s\n' "$*"; }
 
+# Which project this run is for, resolved once (design section 15.4). The log
+# is shared: fm-sync-prs.sh writes every registered project's pull requests
+# into it, and a pull request number is only a key together with its
+# project. So a turn advances only the events of its own project - an event
+# with no project is the default project's - and names its cards by it.
+#   RUN_PROJECT  the resolved registry name; empty in a tree registering none
+#   DEFAULT      the project an event with no `project` belongs to
+#   OWNER        the project a card's id names. A tree with no `projects:`
+#                map is the engine hosting itself, and fm-decide.sh names
+#                its cards by the self project, as here
+RUN_PROJECT=''; DEFAULT=''; OWNER=''; RUN_ERR=''
+if ! registered="$(fm_projects "$REPO/config.yaml" 2>&1)"; then
+  RUN_ERR="$registered"
+elif [ -z "$registered" ]; then
+  OWNER="${FM_PROJECT:-firstmate-workflow}"
+  [ "$OWNER" = firstmate-workflow ] || { RUN_ERR="config.yaml registers no project $OWNER"; OWNER=''; }
+elif RUN_PROJECT="$(fm_project_resolve '' "$REPO/config.yaml" 2>&1)"; then
+  OWNER="$RUN_PROJECT"
+  DEFAULT="$(FM_PROJECT='' fm_project_resolve '' "$REPO/config.yaml" 2>/dev/null)" || DEFAULT=''
+else
+  RUN_ERR="$RUN_PROJECT"; RUN_PROJECT=''
+fi
+# the events of this run's project, and only those
+OURS='((.project // $def) == $proj)'
+
+# The merge card of one task, under an id that names its owner (design
+# section 15.4): D-<project>-<task>-<n>, allocated by fm-decide.sh. Never
+# derived from the task's digits - that space was shared with hand-raised
+# cards, and an old record sitting at a derived id was taken for the task's
+# own card. Only ids naming this project and task are looked at, so an old
+# D-<digits> record, whoever it belongs to, is never read, moved or replaced.
+# The project is the one this run resolves (FM_PROJECT, else the default).
+merge_card() {  # merge_card <task> <pr>
+  local task="$1" pr="$2" project="$OWNER" key f id='' details request_out n best=''
+  if [ -z "$project" ]; then
+    say "$task: no captain card created; no project to name it by ($RUN_ERR)"; return
+  fi
+  key="T${task#T-}"
+  # a card already up, or already answered, is this task's merge card
+  for f in "state/pending/D-$project-$key-"*.json; do
+    [ -f "$f" ] && jq -e --arg t "$task" '.kind=="merge" and .task==$t' "$f" >/dev/null 2>&1 || continue
+    id="${f##*/}"; say "$task: waiting on the captain (${id%.json})"; return
+  done
+  for f in "state/decisions/D-$project-$key-"*.json; do
+    [ -f "$f" ] && jq -e --arg t "$task" '.kind=="merge" and .task==$t' "$f" >/dev/null 2>&1 && return
+  done
+  # an id reserved for this merge card and not yet published is reused, so a
+  # turn that finds no details does not take a fresh id every time
+  for f in "state/decision-ids/$project/$key/"*.json; do
+    [ -f "$f" ] || continue
+    n="${f##*/}"; n="${n%.json}"
+    case "$n" in ''|*[!0-9]*) continue ;; esac
+    jq -e '.kind=="merge"' "$f" >/dev/null 2>&1 || continue
+    id="D-$project-$key-$n"
+    [ -e "state/pending/$id.json" ] || [ -e "state/decisions/$id.json" ] \
+      || [ -e "state/runtime/archived-pending/$id.json" ] && continue
+    { [ -z "$best" ] || [ "$n" -lt "${best##*-}" ]; } && best="$id"
+  done
+  id="$best"
+  if [ -z "$id" ]; then
+    id="$("$B/fm-decide.sh" --allocate --task "$task" --project "$project" --kind merge \
+      --repo "$REPO" 2>&1 </dev/null)" || {
+      say "$task: no captain card created; no decision id could be allocated ($id)"; return; }
+  fi
+  details="$REPO/state/decision-details/$id.json"
+  if request_out="$("$B/fm-decide.sh" --request "$id" --task "$task" --project "$project" --kind merge \
+    --pr "$pr" --details "$details" --repo "$REPO" 2>&1 </dev/null)"; then
+    say "$task: all seven gates green, asking the captain ($id)"
+  else
+    say "$task: no captain card created; firstmate must supply valid authored details at $details ($request_out)"
+  fi
+}
+
 turn() {
   # 1. whatever GitHub knows that the log does not
   "$B/fm-sync-prs.sh" --repo "$REPO" >/dev/null 2>&1 </dev/null || true
@@ -51,10 +124,13 @@ turn() {
   [ -z "$started" ] || say "dispatched: $(printf '%s' "$started" | tr '\n' ' ')"
 
   # 3. advance every task that has a pull request open
-  open_prs="$(jq -r 'select(.type=="pr_opened")|[.task,(.pr|tostring)]|@tsv' state/events.jsonl 2>/dev/null | sort -u)"
+  #    of this run's project: another project's #7 is not this project's #7
+  open_prs="$(jq -r --arg proj "$RUN_PROJECT" --arg def "$DEFAULT" \
+    "select(.type==\"pr_opened\" and $OURS)|[.task,(.pr|tostring)]|@tsv" state/events.jsonl 2>/dev/null | sort -u)"
   while IFS=$'\t' read -r task pr; do
     [ -n "$task" ] && [ -n "$pr" ] || continue
-    jq -e --arg t "$task" 'select(.type=="merged" and .task==$t)' state/events.jsonl >/dev/null 2>&1 && continue
+    jq -e --arg t "$task" --arg proj "$RUN_PROJECT" --arg def "$DEFAULT" \
+      "select(.type==\"merged\" and .task==\$t and $OURS)" state/events.jsonl >/dev/null 2>&1 && continue
 
     branch="$(git branch --list "$(printf '%s' "$task" | tr 'A-Z' 'a-z')-*" --format='%(refname:short)' | head -1)"
     [ -n "$branch" ] || continue
@@ -71,16 +147,7 @@ turn() {
     g=$?
     if [ "$g" -eq 0 ]; then
       # all seven green: the captain decides, nobody else
-      id="D-$(printf '%s' "$task" | tr -dc '0-9')"
-      [ -f "state/pending/$id.json" ] && { say "$task: waiting on the captain"; continue; }
-      [ -f "state/decisions/$id.json" ] && continue
-      details="$REPO/state/decision-details/$id.json"
-      if request_out="$("$B/fm-decide.sh" --request "$id" --task "$task" --kind merge --pr "$pr" \
-        --details "$details" --repo "$REPO" 2>&1 </dev/null)"; then
-        say "$task: all seven gates green, asking the captain ($id)"
-      else
-        say "$task: no captain card created; firstmate must supply valid authored details at $details ($request_out)"
-      fi
+      merge_card "$task" "$pr"
     elif [ "$g" -eq 7 ]; then
       say "$task: gates 1-6 green, sending it to review (round $round)"
       # exit 3 is a round that produced no verdict. Swallowing it would let

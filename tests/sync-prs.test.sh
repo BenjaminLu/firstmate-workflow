@@ -59,6 +59,111 @@ J
 assert_fail "FM_ROOT='$d3' FM_GH='$JUNK' '$d3/bin/fm-sync-prs.sh' --repo '$d3'" "it rejects an unexpected response"
 assert_fail "test -s '$d3/state/events.jsonl'" "and writes nothing then either"
 
+# --- T-047: every registered project's repository, keyed (project, pr) ---
+# Both projects have a pull request #7, for a task both call T-004. Each is
+# read from its own repository and written with its own project, and one
+# project's #7 never counts as the other's.
+d4="$(fixture)"
+cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$d4/bin/"
+cat > "$d4/config.yaml" <<'Y'
+default_project: firstmate-workflow
+projects:
+  firstmate-workflow:
+    repo: .
+    github: owner/engine
+    base: main
+    required_check: ci
+  example-app:
+    github: example-org/example-app
+    base: main
+    required_check: check
+Y
+mkdir -p "$d4/ghp"
+# answers like gh: `pr list --repo <owner/repo>` lists that repository's pull
+# requests; a call without --repo would be the engine checkout's, and is
+# refused here so it cannot pass for either
+cat > "$d4/ghp/gh" <<G
+#!/usr/bin/env bash
+echo "\$*" >> "$d4/ghcalls"
+repo=''; while [ \$# -gt 0 ]; do [ "\$1" = --repo ] && repo="\$2"; shift; done
+case "\$repo" in
+  owner/engine) cat "$d4/ghp/engine.json" ;;
+  example-org/example-app) cat "$d4/ghp/app.json" ;;
+  *) echo "no repository named" >&2; exit 1 ;;
+esac
+G
+chmod +x "$d4/ghp/gh"
+printf '%s\n' '[{"number":7,"state":"OPEN","title":"T-004: engine side","headRefName":"t-004-engine","mergedAt":null}]' \
+  > "$d4/ghp/engine.json"
+printf '%s\n' '[{"number":7,"state":"MERGED","title":"T-004: app side","headRefName":"t-004-app","mergedAt":"2026-09-24T00:00:00Z"}]' \
+  > "$d4/ghp/app.json"
+# the engine's #7 was already opened before projects existed: no project on
+# the line, so it is the default project's, and is not written twice
+printf '%s\n' '{"ts":"2026-09-20T00:00:00Z","actor":"github","type":"pr_opened","task":"T-004","pr":7}' \
+  > "$d4/state/events.jsonl"
+out4="$(FM_ROOT="$d4" FM_GH="$d4/ghp/gh" "$d4/bin/fm-sync-prs.sh" --repo "$d4" 2>&1)"
+assert_eq "0" "$?" "a sync across two projects exits 0"
+assert_contains "$out4" "merged #7 (T-004) in example-app" "and says which project each new event is in"
+calls="$(cat "$d4/ghcalls")"
+assert_contains "$calls" "--repo owner/engine" "it polls the default project's repository by name"
+assert_contains "$calls" "--repo example-org/example-app" "and the other project's"
+log4="$d4/state/events.jsonl"
+assert_eq "example-app" "$(jq -r 'select(.type=="merged" and .pr==7)|.project' "$log4")" \
+  "the other project's merge is written with that project"
+assert_eq "T-004" "$(jq -r 'select(.type=="merged" and .pr==7)|.task' "$log4")" "and its task"
+assert_eq "1" "$(jq -s 'map(select(.type=="pr_opened" and .pr==7))|length' "$log4")" \
+  "the default project's #7, already in the log without a project, is not written again"
+# the app's #7 opens later in the other repository: its own event, not a
+# duplicate of the engine's pr_opened #7
+printf '%s\n' '[{"number":7,"state":"OPEN","title":"T-004: app side","headRefName":"t-004-app","mergedAt":null}]' \
+  > "$d4/ghp/app.json"
+FM_ROOT="$d4" FM_GH="$d4/ghp/gh" "$d4/bin/fm-sync-prs.sh" --repo "$d4" >/dev/null 2>&1
+assert_eq "example-app" "$(jq -r 'select(.type=="pr_opened" and .pr==7 and .project=="example-app")|.project' "$log4")" \
+  "a pull request number in one project never matches another project's event"
+n4="$(wc -l < "$log4" | tr -d ' ')"
+FM_ROOT="$d4" FM_GH="$d4/ghp/gh" "$d4/bin/fm-sync-prs.sh" --repo "$d4" >/dev/null 2>&1
+assert_eq "$n4" "$(wc -l < "$log4" | tr -d ' ')" "and a second sync writes nothing new in either project"
+# a project whose repository cannot be read does not stop the others
+printf 'not json\n' > "$d4/ghp/engine.json"
+printf '%s\n' '[{"number":8,"state":"OPEN","title":"T-005: app","headRefName":"t-005-app","mergedAt":null}]' \
+  > "$d4/ghp/app.json"
+FM_ROOT="$d4" FM_GH="$d4/ghp/gh" "$d4/bin/fm-sync-prs.sh" --repo "$d4" >/dev/null 2>&1
+assert_ne "0" "$?" "a project that cannot be read makes the sync exit non-zero"
+assert_eq "example-app" "$(jq -r 'select(.pr==8)|.project' "$log4")" "but the other project is still synced"
+rm -rf "$d4"
+
+# A tree whose config.yaml has no `projects:` map - every fixture written
+# before projects existed - still needs nothing beside the script: not the
+# registry library, which the old fixture never copied. It polls the
+# checkout's own repository and writes no project, as before.
+d5="$(fixture)"
+printf 'vendor: mock\nconcurrency: 2\n' > "$d5/config.yaml"
+OLD5="$(rec "$d5" old <<'J'
+[{"number":3,"state":"OPEN","title":"T-003: old","headRefName":"t-003-old","mergedAt":null}]
+J
+)"
+out5="$(FM_ROOT="$d5" FM_GH="$OLD5" "$d5/bin/fm-sync-prs.sh" --repo "$d5" 2>&1)"
+assert_eq "0" "$?" "a config.yaml with no projects: map syncs with only the two scripts it always had"
+assert_contains "$out5" "pr_opened #3" "and writes what it found"
+assert_eq "false" "$(jq -c 'select(.pr==3)|has("project")' "$d5/state/events.jsonl")" \
+  "with no project, as before"
+rm -rf "$d5"
+# The same tree shipping the registry library, as a real checkout does: the
+# library finds no `projects:` map, so the sync is the same as before. The
+# script never reads config.yaml itself (tests/config.test.sh).
+d6="$(fixture)"; cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$d6/bin/"
+printf 'vendor: mock\nconcurrency: 2\n' > "$d6/config.yaml"
+OLD6="$(rec "$d6" old <<'J'
+[{"number":3,"state":"OPEN","title":"T-003: old","headRefName":"t-003-old","mergedAt":null}]
+J
+)"
+out6="$(FM_ROOT="$d6" FM_GH="$OLD6" "$d6/bin/fm-sync-prs.sh" --repo "$d6" 2>&1)"
+assert_eq "0" "$?" "a config.yaml with no projects: map read through the library syncs"
+assert_contains "$out6" "pr_opened #3" "and writes what it found"
+assert_eq "false" "$(jq -c 'select(.pr==3)|has("project")' "$d6/state/events.jsonl")" \
+  "with no project, as before"
+rm -rf "$d6"
+
 # it goes through the one writer like everyone else
 # the header comment names fm-emit.sh too; look at what runs
 assert_ok "grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-sync-prs.sh' | grep -q 'fm-emit.sh'" \

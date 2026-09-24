@@ -309,6 +309,36 @@ assert_eq "D-3 D-20 D-100" "$(jq -r '[.pending[].id]|join(" ")' <<<"$sord")" \
   "pending cards are ordered by decision id, not filesystem readdir order"
 rm -f "$d/state/pending/D-100.json" "$d/state/pending/D-20.json" "$d/state/pending/D-3.json"
 
+# T-047: a card whose id names its owner is listed beside the old ones, with
+# the project and task parsed from its id, has its diagram served under that
+# id, and is answered like any other
+nid=D-firstmate-workflow-T047-2
+mkdir -p "$d/i18n"
+cp "$ROOT/bin/fm-diagram.sh" "$d/bin/"
+cp "$ROOT/i18n/ui.en.json" "$ROOT/i18n/ui.zh-TW.json" "$ROOT/i18n/tw2cn.tsv" "$d/i18n/"
+printf '{"id":"D-5","task":"T-A","kind":"choice","title":"old"}\n' > "$d/state/pending/D-5.json"
+jq -n --arg id "$nid" '{id:$id,task:"T-A",kind:"choice",title:"owned",
+  details:{en:{before:"one",after:"two"},"zh-TW":{before:"一",after:"二"}}}' > "$d/state/pending/$nid.json"
+assert_ok "FM_ROOT='$d' bash '$d/bin/fm-diagram.sh' --decision '$nid' --repo '$d'" "the new-form card is drawn"
+snew="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "D-5 $nid" "$(jq -r '[.pending[].id]|join(" ")' <<<"$snew")" "the board lists it beside an old card"
+assert_eq "firstmate-workflow T-047" \
+  "$(jq -r --arg i "$nid" '.pending[]|select(.id==$i)|.owner|"\(.project) \(.task)"' <<<"$snew")" \
+  "with its project and task parsed from the id"
+for l in en zh-TW zh-CN; do
+  assert_eq "200" "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/diagrams/$nid.$l.html")" \
+    "and serves its $l diagram under that id"
+done
+# the body is built outside the substitution: bash 3.2 brace-expands a
+# {a,b} inside "$(...)" that only escaped quotes protect, and runs it twice
+body="$(jq -cn --arg i "$nid" '{id:$i,chosen:"B"}')"
+assert_eq "true" "$(curl -s -X POST -H 'content-type: application/json' \
+  -d "$body" "http://127.0.0.1:$PORT/decisions" | jq -r .ok)" "the board answers it"
+assert_eq "B" "$(jq -r .chosen "$d/state/decisions/$nid.json")" "and the answer lands under its id"
+assert_eq "B" "$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r --arg i "$nid" '.responses[]|select(.id==$i)|.chosen')" \
+  "and is read back among the responses"
+rm -f "$d/state/pending/D-5.json"
+
 # review_failed without review_outcome is missing-review/error, never a
 # directed rejection. The additive datum makes a substantive reject handoff.
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-real --task T-D --type dispatched \

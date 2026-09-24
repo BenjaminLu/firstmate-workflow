@@ -202,6 +202,26 @@ assert_eq "3" "$(find "$R/board/public/diagrams" -name 'D-001.*' 2>/dev/null | w
 "$DG" --event not_an_event --decision D-001 --repo "$R" >/dev/null 2>&1
 assert_eq "64" "$?" "--event with a type nobody has ruled on is an error there too"
 
+# ----------------------------------- T-047: an id that names its owner
+# D-<project>-<task>-<n> is a decision id here as D-<n> is; the task stem it
+# falls back to is still the card's own task. Anything else is refused
+# before it is joined to a path.
+R="$(newroot)"
+nid=D-firstmate-workflow-T047-1
+decision "$R" "$nid" "{\"id\":\"$nid\",\"task\":\"T-047\",\"kind\":\"merge\",\"title\":\"x\"}"
+"$DG" --decision "$nid" --repo "$R" >/dev/null 2>&1
+assert_eq "0" "$?" "a new-form decision id renders"
+assert_eq "3" "$(find "$R/board/public/diagrams" -name "$nid.*" | wc -l | tr -d ' ')" \
+  "into its three files, named by the id"
+"$DG" --event decision_requested --decision D-example-app-T004-12 --repo "$R" >/dev/null 2>&1
+assert_eq "66" "$?" "an unknown new-form id is a missing decision, not a malformed one"
+for badid in D-Bad_Name-T047-1 D-abcdefghijklmnopqrstuvwxy-T047-1 D-firstmate-workflow-1 \
+  D-firstmate-workflow-T047-0 D-firstmate-workflow-T047-01 'D-../x-T047-1' 'D-a/b-T047-1' \
+  "$(printf 'D-a-T047-1\nx')"; do
+  bounded 5 "$DG" --decision "$badid" --repo "$R"
+  assert_eq "64" "$?" "fm-diagram refuses a malformed id: $(printf '%s' "$badid" | tr '\n' '~')"
+done
+
 # ------------------------------------------------------ the three languages
 R="$(newroot)"
 decision "$R" D-007 '{"id":"D-007","task":"T-004","kind":"merge","title":"合併 T-004 的程式碼","pr":9}'
@@ -755,6 +775,20 @@ if (D.src("D-007", "kl-KL") !== "diagrams/D-007.zh-TW.html") fail("unknown langu
 if (D.src("../../etc/passwd", "en") !== "") fail("a non-decision has no diagram");
 if (!D.embed("D-007").includes('data-decision="D-007"')) fail("embed names its decision");
 if (D.embed("nope") !== "") fail("embed of a non-decision is nothing");
+// T-047: an id that names its owner has a diagram like any other, and a
+// malformed one - bad project, no task, n of 0, path characters - has none
+if (D.src("D-firstmate-workflow-T047-1", "en") !== "diagrams/D-firstmate-workflow-T047-1.en.html")
+  fail("new-form src");
+if (!D.embed("D-example-app-T004-2").includes('data-decision="D-example-app-T004-2"')) fail("new-form embed");
+if (!D.isDecision("D-1") || !D.isDecision("D-007")) fail("old numeric ids still have diagrams");
+for (const bad of ["D-Bad_Name-T047-1", "D-abcdefghijklmnopqrstuvwxy-T047-1", "D-firstmate-workflow-1",
+  "D-firstmate-workflow-T047-0", "D-firstmate-workflow-T047-01", "D-../x-T047-1", "D-a/b-T047-1",
+  "D-a-T047-1\nx"])
+  if (D.isDecision(bad) || D.src(bad, "en") !== "") fail("malformed id has a diagram: " + JSON.stringify(bad));
+const own = D.owner("D-firstmate-workflow-T047-3");
+if (!own || own.project !== "firstmate-workflow" || own.task !== "T-047" || own.n !== 3)
+  fail("owner parses project, task and n out of the id: " + JSON.stringify(own));
+if (D.owner("D-047") !== null) fail("an old id names no owner");
 
 // The element under test is PARSED OUT OF D.embed(id). It used to be typed
 // out beside the module - `const attrs = { "data-decision": id }` - and that

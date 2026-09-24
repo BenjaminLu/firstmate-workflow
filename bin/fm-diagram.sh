@@ -73,11 +73,31 @@ ROOT="$(cd "$ROOT" && pwd)"
 # written that way and not only in the one that was noticed. A case glob has
 # no notion of a line: it is handed the whole value, and a newline is not in
 # [0-9] nor in [A-Za-z0-9._-].
+#
+# Two shapes (design section 15.4): the old D-<digits>, and D-<project>-
+# <task>-<n>, whose project is [a-z0-9-] up to 24, whose task is a task id
+# without its hyphen, and whose n starts at 1. The same case-glob rule holds
+# for the new shape, and the character sets are written out rather than
+# ranged, because a bracket range follows the locale's collation.
+LOWER='abcdefghijklmnopqrstuvwxyz'; UPPER='ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 is_decision_id() {
-  local rest
+  local rest project task n
   case "$1" in D-*) rest="${1#D-}" ;; *) return 1 ;; esac
-  case "$rest" in ''|*[!0-9]*) return 1 ;; esac
-  [ "${#rest}" -le 6 ]
+  case "$rest" in
+    ''|*[!0-9]*) ;;
+    *) [ "${#rest}" -le 6 ]; return ;;
+  esac
+  # n is after the last hyphen, the task before it, the project the rest
+  n="${rest##*-}"; rest="${rest%-*}"
+  [ "$rest" != "${rest%-*}" ] || return 1
+  task="${rest##*-}"; project="${rest%-*}"
+  case "$n" in ''|0*|*[!0-9]*) return 1 ;; esac
+  [ "${#n}" -le 6 ] || return 1
+  case "$task" in T?*) ;; *) return 1 ;; esac
+  case "${task#T}" in *[!0-9"$LOWER$UPPER"]*) return 1 ;; esac
+  [ "${#task}" -le 33 ] || return 1
+  case "$project" in ''|*[!0-9"$LOWER"-]*) return 1 ;; esac
+  [ "${#project}" -le 24 ]
 }
 is_task_stem() {
   local rest
@@ -116,7 +136,8 @@ RULED="decision_requested"
 ROUTINE="greenlit dispatched commit_pushed pr_opened gate_passed gate_failed \
 review_opened review_failed ask_pass_criteria criteria_returned \
 protocol_violation approved merged closed decision_made worker_crashed \
-vendor_unavailable agent_finished crew_status parked unparked"
+vendor_unavailable agent_finished crew_status parked unparked spec_pinned \
+spec_repinned"
 
 # 0 the captain must rule on it, 1 routine, 64 no ruling for it here
 wants() {
