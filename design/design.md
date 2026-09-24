@@ -236,6 +236,20 @@ Awaiters only observe the record; they do not emit a second event. Repeating
 the same response returns the stored outcome, while a conflicting response
 is rejected. Failed merges are recorded and never automatically retried.
 
+**The merge runs after the response, not inside it** (section 15.10 point 3;
+the board implements it in T-054). For choice A on a merge card the board
+first checks the card's project: if a merge in that project is already
+running it refuses with `409`, publishes nothing and leaves the card pending.
+Otherwise it publishes the response with `merge: "running"`, emits
+`decision_made`, starts `fm-merge.sh --project` in the background under the
+project's merge marker, and answers the POST at once. When the helper exits,
+the board rewrites the stored record's `merge` to `"merged"` or to
+`"failed"` with the helper's reason, and removes the marker; `fm-merge.sh`
+still emits `merged` itself. The outcome is recorded in the decision record,
+not in the POST's response; a failed merge is recorded and never retried,
+exactly as before. Repeating the same response returns the stored record with
+whatever `merge` it holds by then.
+
 Await mode uses `bun run bin/watch-decisions.ts` (`fs.watch`) when bun and the
 watcher script are present, and a one-second poll otherwise. Wake latency must
 be measured, not inferred from the watcher mechanism. **No `fswatch` dependency.**
@@ -1177,15 +1191,15 @@ gates, and the dispatcher cannot dispatch itself.
 |---|---|---|
 | T-045 | design: firstmate drives other repositories from one external installation | T-043 |
 | T-046 | the project registry and the two roots | T-043, T-045 |
-| T-047 | the project on events, decisions and pull request sync | T-046 |
+| T-047 | the project on events, decisions and pull request sync | T-046, T-056 |
 | T-048 | fm-project.sh: managed clones, target verification and the guard | T-046 |
 | T-049 | spec pins: gate 4 reads a pinned scope, not the branch | T-047, T-048 |
 | T-050 | project-aware gates 1–3 and 5–7 | T-049 |
 | T-051 | the worker and the reviewer in a target checkout | T-049 |
-| T-052 | role prompts carry the project's design from the engine side | T-051 |
-| T-053 | dispatch, run and session across projects | T-050, T-051 |
-| T-054 | the board shows which project | T-047 |
-| T-055 | the first external project, proved end to end | T-052, T-053, T-054 |
+| T-052 | role prompts carry the project's design from the engine side | T-051, T-056 |
+| T-053 | dispatch, run and session across projects | T-050, T-051, T-056 |
+| T-054 | the board shows which project | T-047, T-056 |
+| T-055 | the first external project, proved end to end | T-052, T-053, T-054, T-056 |
 | T-056 | design: the board dispatches to several projects at the same time | T-045 |
 
 ---
@@ -1334,11 +1348,14 @@ recovery path in section 12.
   stays valid. Every event about a non-default project carries it. `pr` stays
   a number; `(project, pr)` is the key.
 - **Decisions** carry `project` in the request and the response. Ids stay
-  global `D-<n>`. `fm-run.sh`'s derivation of `D-<task-number>` stays for the
-  default project only; for any other project it allocates the next free
-  number under a lock, because two projects can both have a `T-004`. Merge
-  cards name the project and link the pull request on the project's GitHub
-  repository.
+  global, and there are exactly two ways to make one, which never meet
+  (section 15.10's decisions row gives the reasons). A merge card's id is
+  derived from `(project, task)` with no lock: `D-<task-number>` for the
+  default project, as today, and `D-<project>-<task-number>` for any other,
+  because two projects can both have a `T-004`. Every other card's id is
+  allocated by `fm-decide.sh` under the decision-id lock, from `D-1000` up.
+  Merge cards name the project and link the pull request on the project's
+  GitHub repository.
 - **`fm-sync-prs.sh`** polls every registered project's repository and writes
   what it finds with that project.
 - **The board** shows a project chip on lane cards, crew bubbles and decision
@@ -1503,8 +1520,9 @@ as its own default project, still drives itself with no change to any caller.
 9. T-054 the board shows which project.
 10. T-055 a fixture target driven end to end, and the README for registering one.
 
-T-053, T-054 and T-055 each carry their part of section 15.10 in their
-acceptance; T-056 wrote that section and changed no code.
+T-047, T-052, T-053, T-054 and T-055 each carry their part of section 15.10
+in their acceptance and depend on T-056, which wrote that section and changed
+no code.
 
 ### 15.10 Several projects at the same time
 
@@ -1526,32 +1544,75 @@ project-scoped is shared or locked across projects:
 | checkout | the engine root, or `state/projects/<name>/repo` | one clone per project; its fetch and prune never touch another |
 | guard | `core.hooksPath` in each checkout's local config, protecting that project's `base` | a hook runs in the repository it guards and nowhere else |
 | panes and runs | one tab and one owned pane per run actor (section 11) | the locked run counter makes actors unique across projects |
-| decisions | one card per request, carrying `project` | ids are global `D-<n>`; a card answers only itself |
+| decisions | one card per request, carrying `project` | merge-card ids derive from `(project, task)`; every other id is allocated from `D-1000` up (below) |
 | merges | the project's own `github` repository | see point 3 |
 
-Three things are deliberately global, and each is a short critical section,
+The decisions row was checked against both allocators, because today they
+share one space and do collide. `fm-run.sh` derives `D-<task digits>` with no
+lock, and cards firstmate raises by hand take numbers in the same `D-<n>`
+range: `state/decisions/` already holds `D-057`, `D-334` and `D-338` with no
+matching task, so when T-057's gates go green `fm-run.sh` finds `D-057.json`,
+takes it for its own card and silently raises none. The fix keeps one scheme
+per kind and puts them in spaces that cannot meet:
+
+- **merge cards are derived, never allocated.** `(project, task)` is unique,
+  so the id needs no lock: `D-<task digits>` for the default project (today's
+  id, so self-hosting and `state/decision-details/<id>.json` are unchanged)
+  and `D-<project>-<task digits>` for any other. A project name is
+  `[a-z0-9-]` (15.2) and task digits never contain `-`, so the id splits at
+  its last `-` into one project and one task; it cannot equal a default id,
+  which has a single `-`, or a `D-SK-<n>` skill card, whose `SK` is upper case.
+- **every other card is allocated, never derived.** `fm-decide.sh` takes the
+  next free number under the decision-id lock, starting at `D-1000`. Task ids
+  are `T-` and three digits, so a derived default id is at most `D-999` and
+  allocation can never reach one.
+- **an existing file is not proof of ownership.** `fm-run.sh` treats
+  `D-<id>.json` as its card only when its `kind` is `merge` and its `task` and
+  `project` match; any other card under that id is reported by name, with no
+  card raised, rather than skipped in silence. That is what surfaces the three
+  records already below `D-1000`; they keep their ids and stay readable.
+
+Four things are deliberately global, and each is a short critical section,
 not a lock held for the length of a run: the event log's writer lock
-(`fm-emit.sh`), the lock that allocates the next free decision id (15.4), and a
+(`fm-emit.sh`), the run-counter lock that numbers run actors (section 11), the
+decision-id lock that allocates the next non-merge card (above), and a
 **dispatch slot lock** that `fm-dispatch.sh` holds only while it counts live
 runs and emits `dispatched`. The slot lock is new. Without it two dispatches
 started at once — one per project, which is now the ordinary case — can each
-count the same free slot and together exceed the limit. Live runs are counted
-by `(project, task)`, not by task id, because two projects can both have a
-`T-004` live.
+count the same free slot and together exceed the limit. Everything slow
+happens before it is taken: `fm-project.sh verify` (a GitHub call), reading
+each project's task list and the `greenlit` check pick the candidates first,
+and under the lock `fm-dispatch.sh` only recounts live runs, takes the free
+slots and emits. Live runs are counted by `(project, task)`, not by task id,
+because two projects can both have a `T-004` live.
 
 **2. The limit has no per-project share; free slots are filled fairly.** A
 reserved share would idle slots: with the default limit of three and two
 projects, any split leaves a slot empty whenever one project has no ready
 work, and a share per project has to be re-cut every time a project is
 registered. Fair filling gives the same protection against starvation without
-idling anything. `fm-dispatch.sh --all-projects` fills free slots one at a
-time: each slot goes to the registered project, among those with a ready task
-whose `greenlit` matches it and whose `fm-project.sh verify` passes, that has
-the fewest live runs; a tie goes to the project whose name sorts first. So one
-project can hold every slot only while no other project has ready work, and it
-loses the next freed slot as soon as another does. `--project <name>` still
-dispatches only that project, within the same global limit and under the same
-slot lock; with neither flag, dispatch behaves as today for the default project.
+idling anything.
+
+Fair fill is the normal path, not an option someone has to remember.
+`fm-dispatch.sh` with no `--project` dispatches across every registered
+project and fills free slots one at a time: each slot goes to the registered
+project, among those with a ready task whose `greenlit` matches it and whose
+`fm-project.sh verify` passes, that has the fewest live runs; a tie goes to
+the project whose name sorts first. With only the default project registered
+that is exactly today's dispatch, so no existing caller changes. The caller is
+firstmate, at every dispatch step of its loop — after a green light and
+whenever a run ends — and the firstmate skill says to dispatch with no
+`--project` (T-052). `--project <name>` dispatches only that project, within
+the same global limit and under the same slot lock; it is a deliberate
+override that bypasses fair fill, so firstmate uses it only when the captain
+asks for one project's work, never as its routine dispatch.
+
+So one project can hold every slot only while no other project has ready
+work, and it loses the next freed slot as soon as another does. There is no
+preemption: a live run is never stopped to make room. Starvation is therefore
+bounded by run length, not removed — a project whose task becomes ready while
+every slot is busy waits until the first live run anywhere ends, and then
+takes that slot, because it has fewer live runs than the project holding them.
 The default is therefore **no share, fair fill**. A per-project cap or a
 reserved share is a captain decision only if the captain later asks for one
 (for example to keep a slot free for one project); this design does not need
@@ -1566,18 +1627,30 @@ so every other open pull request in that project must be rebased onto it and
 gated again at its new head before it can be carded (section 6). A card raised
 before that would be stale the moment the first one merges. The rule:
 
-- **at most one pending merge card per project.** `fm-run.sh`, holding a lock
-  under `state/` named for the project, requests a merge card only if that
-  project has no pending one; otherwise it requests none, says the card waits
-  for the project's pending merge card, and leaves the branch to be rebased and
-  gated again once that card is answered. Merge, send back and hold all answer
-  a card and free the project's turn.
+- **at most one merge in flight per project.** A project's merge turn is
+  taken when its merge card is requested and freed only when `base` has
+  settled: by a send back or a hold, which merge nothing, or, for a merge,
+  only once the stored record says `merge: "merged"` or `"failed"` (5.2). It
+  is not freed when the captain answers merge, because `base` moves when the
+  merge completes, not when it is chosen, and a branch gated in between would
+  be gated against the old `base`.
+- **`fm-run.sh` cards only against a settled `base`.** It notes the project's
+  `base` commit before it runs the gates. After they pass it takes a lock
+  under `state/` named for the project and requests a merge card only if the
+  project's turn is free and `base` is still the commit it gated against.
+  Otherwise it requests none, says whether the card waits for the project's
+  pending or running merge or for a regate on the new `base`, and leaves the
+  branch to be rebased and gated again on a later turn.
 - **the board never serializes one project's merge behind another's.** The
-  merge route runs `fm-merge.sh` with the card's `--project` without blocking
-  the server, refuses a second merge in the same project while one is running,
-  and lets a merge in another project run alongside it. Today's synchronous
-  call blocks the whole board while one merge runs, which is exactly the
-  cross-project coupling this section rules out.
+  merge route follows 5.2's outcome contract: it runs `fm-merge.sh` with the
+  card's `--project` in the background, answers at once, and records the
+  outcome in the decision record. A second merge in the same project while one
+  is running is refused before anything is published, so that card stays
+  pending and nothing is emitted; the one-card rule means this only guards
+  against a stray or hand-raised card. A merge in another project runs
+  alongside it. Today's synchronous `Bun.spawnSync` call blocks the whole
+  board while one merge runs, which is exactly the cross-project coupling this
+  section rules out.
 
 **4. The captain sees and answers several projects' cards together.** Without
 `?project=` the board shows every project (15.4): lane cards, crew bubbles and
@@ -1593,9 +1666,13 @@ Who proves what:
 
 | Task | Its part of this section |
 |---|---|
-| T-053 | points 1–3 in the scripts: the global count by `(project, task)`, the slot lock, `--all-projects` fair fill, and one pending merge card per project in `fm-run.sh` |
-| T-054 | points 3 and 4 on the board: several projects' live work and cards at once, and merges that run per project without blocking each other |
+| T-047 | the decision ids of point 1: merge cards derived per `(project, task)`, other cards allocated from `D-1000` under the lock, and `fm-run.sh` refusing to take another card's file for its own |
+| T-052 | point 2's caller: the firstmate skill dispatches with no `--project`, and names `--project` for dispatch only when the captain asks for one project |
+| T-053 | points 1–3 in the scripts: the global count by `(project, task)`, the slot lock taken after verify, fair fill as the no-flag path, and the merge turn in `fm-run.sh` freed only when `base` has settled |
+| T-054 | points 3 and 4 on the board: 5.2's background merge and recorded outcome, the same-project refusal before publishing, the widened decision-id pattern, and several projects' live work and cards at once |
 | T-055 | the whole section end to end: the external project's task runs while a self-hosted task is live, and both merge cards are pending together |
 
-No task needs a file outside its existing scope for this: the slot lock and the
-merge-card lock live under `state/`, which is runtime, not a scoped file.
+Each of these depends on T-056, so none is pinned on its acceptance from
+before this section. No task needs a file outside its existing scope for this:
+the slot lock, the merge-turn lock and the merge marker live under `state/`,
+which is runtime, not a scoped file.
