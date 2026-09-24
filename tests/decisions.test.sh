@@ -134,7 +134,10 @@ assert_eq "example-app T-004 1" \
   "with the project, task and n parsed out of its id"
 assert_eq "null" "$(jq -r '.pending[]|select(.id=="D-9")|.owner' <<<"$s")" "an old id names no owner"
 rm -f "$d/state/pending/D-9.json"
-r="$(post "{\"id\":\"$nid\",\"chosen\":\"A\"}")"
+# bodies are built by jq, never as "{\"a\":1,\"b\":2}" inside "$(...)": bash
+# 3.2 brace-expands that {a,b} and runs the substitution once per half
+answer() { jq -cn --arg i "$1" --arg c "$2" '{id:$i,chosen:$c}'; }
+r="$(post "$(answer "$nid" A)")"
 assert_eq "true" "$(jq -r .ok <<<"$r")" "a new-form card is answered"
 assert_ok "test -f '$d/state/decisions/$nid.json'" "its answer lands under its own id"
 assert_contains "$(tail -1 "$d/state/merge-calls")" "--pr 7" "a merge answer calls the merge script"
@@ -152,7 +155,7 @@ assert_lacks "$(grep -F -- '--pr 16' "$d/state/merge-calls")" "--project" \
 sid=D-firstmate-workflow-T005-1
 printf '{"id":"%s","task":"T-005","kind":"merge","title":"merge self","pr":17}\n' "$sid" \
   > "$d/state/pending/$sid.json"
-assert_eq "true" "$(post "{\"id\":\"$sid\",\"chosen\":\"A\"}" | jq -r .ok)" "a new-form card with no project is answered"
+assert_eq "true" "$(post "$(answer "$sid" A)" | jq -r .ok)" "a new-form card with no project is answered"
 assert_contains "$(tail -1 "$d/state/merge-calls")" "--pr 17" "and its merge is called"
 assert_lacks "$(tail -1 "$d/state/merge-calls")" "--project" \
   "with no --project read out of its id"

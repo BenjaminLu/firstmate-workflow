@@ -329,8 +329,11 @@ for l in en zh-TW zh-CN; do
   assert_eq "200" "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/diagrams/$nid.$l.html")" \
     "and serves its $l diagram under that id"
 done
+# the body is built outside the substitution: bash 3.2 brace-expands a
+# {a,b} inside "$(...)" that only escaped quotes protect, and runs it twice
+body="$(jq -cn --arg i "$nid" '{id:$i,chosen:"B"}')"
 assert_eq "true" "$(curl -s -X POST -H 'content-type: application/json' \
-  -d "{\"id\":\"$nid\",\"chosen\":\"B\"}" "http://127.0.0.1:$PORT/decisions" | jq -r .ok)" "the board answers it"
+  -d "$body" "http://127.0.0.1:$PORT/decisions" | jq -r .ok)" "the board answers it"
 assert_eq "B" "$(jq -r .chosen "$d/state/decisions/$nid.json")" "and the answer lands under its id"
 assert_eq "B" "$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r --arg i "$nid" '.responses[]|select(.id==$i)|.chosen')" \
   "and is read back among the responses"
