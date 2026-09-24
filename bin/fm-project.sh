@@ -15,8 +15,8 @@
 # verify exits 70, naming every missing item, unless the base is protected
 # with enforce_admins on, up to date required and required_check a required
 # status check; the repository is public (15.8); and the clone's origin is
-# the project's repository and its hooks and guard are the engine's. For the self project (`repo: .`) both are no-ops
-# that succeed.
+# the project's repository and its hooks and guard are the engine's. For the
+# self project (`repo: .`) both are no-ops that succeed.
 #
 # FM_GITHUB_URL is where `owner/repo` is cloned from: https://github.com
 # unless a fixture stands a local directory in for GitHub.
@@ -65,23 +65,32 @@ origin="$URL/$github.git"
 # standing where the clone belongs that is not a repository of its own is
 # inside the ENGINE's checkout, and git there would find the engine: fetch
 # it, hook it, exclude in it. A symlink could lead anywhere, including the
-# captain's own checkout of the target. So the place is checked by its
-# resolved path, and the repository by its own top level and git directory.
+# captain's own checkout of the target. So no step of the path below the
+# engine root may be a symlink (REPO is already physical, and a registered
+# name is [a-z0-9-], so nothing else can lead out), and the repository is
+# checked by its own top level and git directory.
 place_ok() {
-  [ ! -L "$REPO/state" ] && [ ! -L "$REPO/state/projects" ] && [ ! -L "$home" ] && [ ! -L "$clone" ] || {
-    echo "fm-project: refusing $clone - a symlink on the way out of state/projects/" >&2; return 1; }
-  if [ -e "$home" ]; then
-    [ "$(cd "$home" && pwd -P)" = "$home" ] || {
-      echo "fm-project: refusing $home - it does not resolve to itself" >&2; return 1; }
-  fi
-  return 0
+  local p
+  for p in "$REPO/state" "$REPO/state/projects" "$home" "$clone"; do
+    [ ! -L "$p" ] || {
+      echo "fm-project: refusing $clone - $p is a symlink out of the engine's state/projects/" >&2
+      return 1; }
+  done
 }
 is_clone() {   # the clone exists and is a repository of its own, not a directory in another
   [ -d "$clone/.git" ] || return 1
   [ "$(git -C "$clone" rev-parse --show-toplevel 2>/dev/null)" = "$clone" ] || return 1
   [ "$(cd "$clone" && cd "$(git rev-parse --git-dir 2>/dev/null)" 2>/dev/null && pwd -P)" = "$clone/.git" ]
 }
-resolved() { ( cd "$1" 2>/dev/null && pwd -P ) || printf '%s' "$1"; }
+# The hooks directory git itself would run in the clone. Git expands `~` in
+# core.hooksPath and reads a relative one from the clone's top level, so the
+# answer is git's, resolved from inside the clone, never from the caller's
+# directory.
+clone_hooks() {
+  local gp
+  gp="$(git -C "$clone" rev-parse --git-path hooks 2>/dev/null)" || return 1
+  ( cd "$clone" && cd "$gp" 2>/dev/null && pwd -P )
+}
 
 sync_clone() {
   place_ok || exit 70
@@ -105,8 +114,12 @@ sync_clone() {
     && git -C "$clone" config --local firstmate.base "$base" || {
       echo "fm-project: could not configure $clone" >&2; exit 1; }
   mkdir -p "$clone/.git/info"
-  grep -qxF '.fm-*' "$clone/.git/info/exclude" 2>/dev/null \
-    || printf '%s\n' '.fm-*' >> "$clone/.git/info/exclude"
+  local ex="$clone/.git/info/exclude"
+  if ! grep -qxF '.fm-*' "$ex" 2>/dev/null; then
+    # an exclude file without a final newline would glue the line onto its last pattern
+    if [ -s "$ex" ] && [ -n "$(tail -c 1 "$ex")" ]; then printf '\n' >> "$ex"; fi
+    printf '%s\n' '.fm-*' >> "$ex"
+  fi
   exit 0
 }
 
@@ -142,16 +155,21 @@ verify_target() {
     miss "cannot read repository $github${msg:+: $msg}"
   fi
   # --- the guard in the managed clone ------------------------------------
-  if ! place_ok 2>/dev/null || ! is_clone; then
+  local why
+  if ! why="$(place_ok 2>&1)"; then
+    # sync would refuse the same place, so advising it would only lead to a second 70
+    miss "${why#fm-project: }"
+  elif ! is_clone; then
     miss "no managed clone at state/projects/$NAME/repo; run fm-project.sh sync $NAME"
   else
-    local hp gb og
+    local hp gb og want
     og="$(git -C "$clone" remote get-url origin 2>/dev/null || true)"
     [ "$og" = "$origin" ] \
       || miss "the clone's origin is '${og}', not $origin"
     hp="$(git -C "$clone" config --local --get core.hooksPath 2>/dev/null || true)"
-    [ -n "$hp" ] && [ "$(resolved "$hp")" = "$(resolved "$hooks")" ] \
-      || miss "the clone's core.hooksPath is '${hp}', not the engine's $hooks"
+    want="$(cd "$hooks" 2>/dev/null && pwd -P)"
+    [ -n "$hp" ] && [ -n "$want" ] && [ "$(clone_hooks)" = "$want" ] \
+      || miss "the clone's core.hooksPath is '${hp}', so git there does not run the engine's $hooks"
     gb="$(git -C "$clone" config --local --get firstmate.base 2>/dev/null || true)"
     [ "$gb" = "$base" ] \
       || miss "the clone's firstmate.base is '${gb}', so the guard does not protect $base"

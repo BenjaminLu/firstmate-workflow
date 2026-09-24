@@ -140,6 +140,11 @@ assert_fail "git -C '$clone' rev-parse -q --verify refs/remotes/origin/old-branc
 assert_eq "1" "$(grep -cxF '.fm-*' "$clone/.git/info/exclude")" "the exclude line is not added twice"
 assert_eq "t-001-work" "$(git -C "$clone" branch --list t-001-work --format='%(refname:short)')" \
   "and the clone's own branches are left alone"
+# an exclude file whose last pattern has no final newline keeps that pattern
+printf '# local\n*.log' > "$clone/.git/info/exclude"
+assert_eq "0" "$(run sync example-app --repo "$eng")" "sync of a clone whose exclude file lacks a final newline"
+assert_eq "1" "$(grep -cxF '*.log' "$clone/.git/info/exclude")" "keeps its last pattern intact"
+assert_eq "1" "$(grep -cxF '.fm-*' "$clone/.git/info/exclude")" "and puts .fm-* on a line of its own, once"
 git -C "$clone" config core.hooksPath /elsewhere
 git -C "$clone" config firstmate.base main
 assert_eq "0" "$(run sync example-app --repo "$eng")" "sync repairs a drifted clone"
@@ -150,16 +155,18 @@ assert_eq "trunk" "$(git -C "$clone" config --local --get firstmate.base)" "guar
 api="$gh/api/repos/example-org/example-app"
 mkdir -p "$api/branches/trunk"
 # GET /repos/{owner}/{repo}/branches/{branch}/protection, as GitHub returns it
-protection() {   # protection <strict> <enforce_admins> <context>
+protection() {   # protection <strict> <enforce_admins> <context> [both|contexts|checks]
+  local ctx="[\"$3\"]" chk="[{\"context\": \"$3\", \"app_id\": 15368}]"
+  case "${4:-both}" in contexts) chk='[]' ;; checks) ctx='[]' ;; esac
   cat > "$api/branches/trunk/protection.json" <<JSON
 {
   "url": "https://api.github.com/repos/example-org/example-app/branches/trunk/protection",
   "required_status_checks": {
     "url": "https://api.github.com/repos/example-org/example-app/branches/trunk/protection/required_status_checks",
     "strict": $1,
-    "contexts": ["$3"],
+    "contexts": $ctx,
     "contexts_url": "https://api.github.com/repos/example-org/example-app/branches/trunk/protection/required_status_checks/contexts",
-    "checks": [{"context": "$3", "app_id": 15368}]
+    "checks": $chk
   },
   "required_pull_request_reviews": {
     "url": "https://api.github.com/repos/example-org/example-app/branches/trunk/protection/required_pull_request_reviews",
@@ -212,6 +219,12 @@ assert_contains "$(cat "$t/err")" "up to date" "and names it"
 protection true true lint
 assert_eq "70" "$(run verify example-app --repo "$eng")" "required_check missing from the required checks refuses"
 assert_contains "$(cat "$t/err")" "'check' is not a required status check" "and names the check"
+# GitHub lists a required check under contexts, under checks[].context, or
+# both; each alone must count, so dropping either reading goes red
+protection true true check checks
+assert_eq "0" "$(run verify example-app --repo "$eng")" "a check required only in checks[].context verifies"
+protection true true check contexts
+assert_eq "0" "$(run verify example-app --repo "$eng")" "a check required only in contexts verifies"
 
 # a protection rule with no required status checks at all: GitHub omits the key
 protection true true check
@@ -241,6 +254,18 @@ assert_eq "70" "$(run verify example-app --repo "$eng")" "a clone not hooked to 
 assert_contains "$(cat "$t/err")" "core.hooksPath" "and names the hooks path"
 git -C "$clone" config --unset core.hooksPath
 assert_eq "70" "$(run verify example-app --repo "$eng")" "and so does one with no hooks path"
+# git reads a relative hooks path from the clone's top level, not from the
+# directory verify was started in: from the engine root, `.githooks` names
+# the engine's hooks to the caller but the clone's own (absent) ones to git
+git -C "$clone" config core.hooksPath .githooks
+assert_eq "70" "$(cd "$eng" && run verify example-app --repo "$eng")" \
+  "a relative hooks path is judged where git reads it, not where verify runs"
+assert_contains "$(cat "$t/err")" "core.hooksPath" "and names the hooks path"
+# and git expands ~ in it, so a ~ path to the engine's hooks is the engine's
+# shellcheck disable=SC2088
+git -C "$clone" config core.hooksPath "~/engine/.githooks"
+assert_eq "0" "$(HOME="$t" run verify example-app --repo "$eng")" \
+  "a ~ hooks path that git expands to the engine's .githooks verifies"
 git -C "$clone" config core.hooksPath "$eng/.githooks"
 git -C "$clone" config firstmate.base main
 assert_eq "70" "$(run verify example-app --repo "$eng")" "a guard protecting some other base refuses"
@@ -287,17 +312,67 @@ assert_contains "$(cat "$t/err")" "origin" "and the origin is named"
 assert_eq "" "$(git -C "$eng/state/projects/other-app/repo" config --local --get core.hooksPath)" "and that clone is not hooked"
 rm -rf "$eng/state/projects/other-app"
 
-# a symlink out of state/projects/ is refused, and what it points at untouched
+# A symlink out of state/projects/ is refused, and what it points at untouched.
+# Each case below is one that only its own symlink check stops: nothing else
+# in sync would refuse it before git writes through the link.
+#
+# the project directory: its repo/ does not exist yet, so without the check
+# sync would clone into the captain's checkout
 outside="$t/captains-checkout"; git clone -q "$bare" "$outside" 2>/dev/null
 git -C "$outside" remote set-url origin "$remotes/example-org/other-app.git"
 ln -s "$outside" "$eng/state/projects/other-app"
 assert_eq "70" "$(run sync other-app --repo "$eng")" "a project directory that is a symlink out is refused"
-assert_eq "" "$(git -C "$outside" config --local --get core.hooksPath)" "the checkout it points at is not hooked"
+assert_contains "$(cat "$t/err")" "symlink" "and says so"
+assert_ok "test ! -e '$outside/repo'" "nothing is cloned into the checkout it points at"
+assert_eq "" "$(git -C "$outside" config --local --get core.hooksPath)" "which is not hooked"
 assert_eq "" "$(grep -xF '.fm-*' "$outside/.git/info/exclude" 2>/dev/null)" "nor excluded"
 rm -f "$eng/state/projects/other-app"
-mkdir -p "$eng/state/projects/other-app"; ln -s "$outside" "$eng/state/projects/other-app/repo"
-assert_eq "70" "$(run sync other-app --repo "$eng")" "and so is a clone path that is a symlink"
-assert_eq "" "$(git -C "$outside" config --local --get firstmate.base)" "leaving the checkout it points at alone"
+# the clone path, dangling: nothing exists there for the clone check to
+# inspect, so without the check git would clone through the link
+nowhere="$t/nowhere"
+mkdir -p "$eng/state/projects/other-app"; ln -s "$nowhere/repo" "$eng/state/projects/other-app/repo"
+assert_eq "70" "$(run sync other-app --repo "$eng")" "a clone path that is a symlink is refused"
+assert_contains "$(cat "$t/err")" "symlink" "and says so"
+assert_ok "test ! -e '$nowhere'" "and nothing is written where it points"
+# verify names the same refusal: advising a sync that would refuse it is no help
+assert_eq "70" "$(run verify other-app --repo "$eng")" "verify of a symlinked clone path refuses"
+assert_contains "$(cat "$t/err")" "symlink" "naming the symlink"
+assert_lacks "$(cat "$t/err")" "no managed clone" "not a missing clone"
+rm -rf "$eng/state/projects/other-app"
+
+# state/ and state/projects/ themselves: a first sync would make the project
+# directory through the link and clone there
+for link in state state/projects; do
+  e="$t/engine-${link//\//-}"; away="$t/away-${link//\//-}"
+  mkdir -p "$e" "$away"; git -C "$e" init -q -b main
+  cp "$eng/config.yaml" "$e/config.yaml"; cp -R "$ROOT/.githooks" "$e/.githooks"
+  mkdir -p "$(dirname "$e/$link")"; ln -s "$away" "$e/$link"
+  assert_eq "70" "$(run sync example-app --repo "$e")" "sync refuses when $link/ is a symlink out"
+  assert_contains "$(cat "$t/err")" "symlink" "and says so"
+  assert_eq "" "$(ls -A "$away")" "leaving what $link/ points at empty"
+  assert_eq "70" "$(run verify example-app --repo "$e")" "verify refuses it too"
+  assert_contains "$(cat "$t/err")" "symlink" "naming the symlink"
+done
+
+# --- sync's own failures -------------------------------------------------
+fresh="$t/engine-fresh"; mkdir -p "$fresh"; git -C "$fresh" init -q -b main
+cp "$eng/config.yaml" "$fresh/config.yaml"; cp -R "$ROOT/.githooks" "$fresh/.githooks"
+fclone="$fresh/state/projects/example-app/repo"
+assert_ne "0" "$(FM_GITHUB_URL="$t/no-github" run sync example-app --repo "$fresh")" \
+  "sync fails when the repository cannot be cloned"
+assert_contains "$(cat "$t/err")" "could not clone" "and says so"
+assert_ok "test ! -e '$fclone'" "leaving no clone behind"
+assert_eq "0" "$(run sync example-app --repo "$fresh")" "the same engine clones once GitHub answers"
+mv "$bare" "$bare.away"
+assert_ne "0" "$(run sync example-app --repo "$fresh")" "sync fails when the clone cannot fetch"
+assert_contains "$(cat "$t/err")" "could not fetch" "and says so"
+mv "$bare.away" "$bare"
+# an engine with no .githooks/ has no guard to hook the clone to
+bare_eng="$t/engine-nohooks"; mkdir -p "$bare_eng"; git -C "$bare_eng" init -q -b main
+cp "$eng/config.yaml" "$bare_eng/config.yaml"
+assert_eq "70" "$(run sync example-app --repo "$bare_eng")" "sync refuses an engine with no .githooks/"
+assert_contains "$(cat "$t/err")" ".githooks" "and names it"
+assert_ok "test ! -e '$bare_eng/state/projects/example-app/repo'" "and clones nothing"
 
 rm -rf "$t"
 finish
