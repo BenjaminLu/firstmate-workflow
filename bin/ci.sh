@@ -367,19 +367,39 @@ else
 fi
 
 stage "dag"
-# section 14 of the design and tasks.json are two views of one DAG
-if [ -f design/tasks.json ] && [ -f design/design.md ]; then
-  missing=''
-  for id in $(jq -r '.tasks[].id' design/tasks.json 2>/dev/null); do
-    grep -q "| $id |" design/design.md || missing="$missing $id"
+# a design's task table and its task list are two views of one DAG, checked
+# once for every registered project (design section 15.2). A tree with no
+# registry has the one pair it always had.
+dag_check() {   # dag_check <label> <design> <tasks>
+  local label="$1" design="$2" tasks="$3" missing='' id
+  for id in $(jq -r '.tasks[].id' "$tasks" 2>/dev/null); do
+    grep -q "| $id |" "$design" || missing="$missing $id"
   done
   if [ -n "$missing" ]; then
-    flunk "tasks.json has ids the design does not list:$missing"
+    flunk "${label}tasks.json has ids the design does not list:$missing"
   else
-    pass "the design and tasks.json agree"
+    pass "${label}the design and tasks.json agree"
+  fi
+}
+if ! registry="$(fm_projects config.yaml 2>&1)"; then
+  flunk "the project registry: $registry"
+elif [ -z "$registry" ]; then
+  if [ -f design/tasks.json ] && [ -f design/design.md ]; then
+    dag_check '' design/design.md design/tasks.json
+  else
+    skip "no DAG yet"
   fi
 else
-  skip "no DAG yet"
+  for name in $registry; do
+    design="$(fm_project_get "$name" design config.yaml)" \
+      && tasks="$(fm_project_get "$name" tasks config.yaml)" \
+      || { flunk "project ${name}: its registry entry does not resolve"; continue; }
+    if [ -f "$design" ] && [ -f "$tasks" ]; then
+      dag_check "project ${name} ($design, $tasks): " "$design" "$tasks"
+    else
+      flunk "project ${name}: $design or $tasks does not exist"
+    fi
+  done
 fi
 
 stage "bash tests"
