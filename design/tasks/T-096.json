@@ -1,0 +1,23 @@
+{
+  "id": "T-096",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-093"
+  ],
+  "title": "a decision waiting on the captain raises a Herdr notification",
+  "scope": [
+    "bin/fm-decide.sh",
+    "config.yaml",
+    "tests/decide.test.sh",
+    "design/design.md",
+    "design/tasks.json"
+  ],
+  "acceptance": [
+    "A card the captain must answer can sit unseen when the captain is not looking at the board. Herdr can show a notification with a sound. This task raises one for exactly the things the captain has to act on, and nothing else. Herdr stays optional: without HERDR_ENV everything behaves exactly as today, and a test proves it. Any Herdr stub used in tests answers with output captured from the real Herdr CLI, not written from this code. Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch. Evidence is the required GitHub check and the seven gates.",
+    "When fm-decide.sh raises a decision (any kind, merge included), it calls 'herdr notification show' with a title naming the project, the task and the kind, a body of the card's one-line question in the captain's language, and --sound request. One notification per decision id, never repeated for the same id, and none for decisions that are answered or withdrawn.",
+    "CI turning red, a worker blocking, a review rejecting and similar crew events do not notify: they stay on the board as weather. A test asserts that only decision requests notify.",
+    "config.yaml gains notifications.herdr (default true) and notifications.sound (default true). Either false suppresses it. A failing notification never fails the decision.",
+    "design.md documents what notifies and why the rest does not. Stay inside this scope."
+  ]
+}

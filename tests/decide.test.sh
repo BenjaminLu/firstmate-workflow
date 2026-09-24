@@ -6,6 +6,9 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# a suite run inside Herdr must not ring the captain for every fixture card;
+# the T-096 cases below put HERDR_ENV back, with a stub, where they mean it
+unset HERDR_ENV HERDR_STUB FM_NOTIFY_SECONDS
 
 fixture() {
   local d; d="$(mktemp -d)"; mkdir -p "$d/bin" "$d/state" "$d/i18n" "$d/board/public"
@@ -322,6 +325,348 @@ assert_eq "false" "$(jq -c 'has("project")' "$upend")" "with no project on the c
 assert_eq "false" "$(jq -c 'select(.type=="decision_requested")|has("project")' "$u/state/events.jsonl")" \
   "and its decision_requested event is written, with no project"
 rm -rf "$u"
+
+# ------------------ T-096: a card the captain must answer raises a Herdr notice
+#
+# Only a decision request notifies, once per id, in the captain's language,
+# and only inside Herdr. Everything the stub answers was captured from the
+# real CLI, herdr 0.8.0, on the captain's machine:
+#   HERDR_ENV=1   `herdr --skill`: "Requires HERDR_ENV=1", and the check it
+#                 teaches is  test "${HERDR_ENV:-}" = 1
+#   a call        `herdr notification show <title> --body <text> --sound
+#                 request` in a Herdr with notifications disabled: the JSON
+#                 line at the end of the stub on stdout, exit 0
+#   a bad sound   `herdr notification show t --body b --sound loud`: the
+#                 refusal below on stderr, exit 2
+#   no server     `herdr --session t096-capture-none notification show t
+#                 --body b --sound none`: the error line below on stderr,
+#                 exit 1; HERDR_STUB=no-server answers that to any call
+# HERDR_STUB=hang is a Herdr that never answers. It prints nothing and does
+# not exit, which is all a hang shows, so nothing in it is made up. The stub
+# logs every call's argv, one JSON array per call, without handing it to an
+# option parser, and fails out loud when it cannot log.
+hstub="$(mktemp -d)"; hlog="$hstub/calls.jsonl"
+cat > "$hstub/herdr" <<'X'
+#!/usr/bin/env bash
+set -o pipefail
+printf '%s\0' "$@" | jq -sRc 'split("\u0000")[:-1]' >> "$HERDR_LOG" || {
+  echo "herdr stub: could not log this call to ${HERDR_LOG:-nowhere}" >&2; exit 70; }
+case "${HERDR_STUB:-}" in
+  hang) exec sleep 30 ;;
+  no-server)
+    echo '{"id":"cli:notification:show","error":{"code":"server_not_running","message":"no herdr server is running at /Users/benjamin/.config/herdr/sessions/t096-capture-none/herdr.sock; run `herdr session attach t096-capture-none` to start or attach it"}}' >&2
+    exit 1 ;;
+esac
+prev=''
+for a in "$@"; do
+  if [ "$prev" = --sound ]; then
+    case "$a" in none|done|request) ;;
+      *) echo "invalid sound: $a (expected none, done, or request)" >&2; exit 2 ;; esac
+  fi
+  prev="$a"
+done
+echo '{"id":"cli:notification:show","result":{"reason":"disabled","shown":false,"type":"notification_show"}}'
+X
+chmod +x "$hstub/herdr"
+shown='{"id":"cli:notification:show","result":{"reason":"disabled","shown":false,"type":"notification_show"}}'
+calls() { [ -s "$hlog" ] && grep -c . "$hlog" || echo 0; }
+# FM_PROJECT is taken away so the captain's shell cannot choose a project;
+# a case that means one sets it, after this, by name
+inherdr() { env -u FM_PROJECT HERDR_ENV=1 HERDR_LOG="$hlog" PATH="$hstub:$PATH" "$@"; }
+nfix() { local n; n="$(fixture)"; cp "$ROOT/bin/fm-config.sh" "$n/bin/"; printf '%s' "$n"; }
+# ask [NAME=value ...] <fixture> <id> <task> [fm-decide args]: request a card
+# inside Herdr and keep its exit code, stdout and stderr
+ask() {
+  local k=0 f id t
+  while [ $((k + 1)) -le $# ] && case "${@:k+1:1}" in [A-Z]*=*) true ;; *) false ;; esac; do k=$((k + 1)); done
+  f="${*:k+1:1}"; id="${*:k+2:1}"; t="${*:k+3:1}"
+  ask_err="$(inherdr "${@:1:k}" FM_ROOT="$f" "$f/bin/fm-decide.sh" --request "$id" --task "$t" "${@:k+4}" \
+    2>&1 >"$hstub/out")"
+  ask_rc=$?; ask_out="$(cat "$hstub/out")"
+}
+# held <fixture> <id> <task> <what>: whatever Herdr did, the request did
+# what a request does - exit 0, print only its pending file, leave the card
+# pending and write its decision_requested event
+held() {
+  assert_eq "0" "$ask_rc" "$4: exits 0"
+  assert_eq "$1/state/pending/$2.json" "$ask_out" "$4: prints only the pending file"
+  assert_ok "test -f '$1/state/pending/$2.json'" "$4: the card is pending"
+  assert_eq "1" "$(jq -s --arg t "$3" 'map(select(.type=="decision_requested" and .task==$t))|length' \
+    "$1/state/events.jsonl")" "$4: its event is written"
+}
+argv() {  # argv <title> <body> <sound>: the call notify makes, as the stub logs it
+  jq -cn --arg t "$1" --arg b "$2" --arg s "$3" '["notification","show",$t,"--body",$b,"--sound",$s]'
+}
+
+# The helper and the stub are checked before anything is concluded from
+# them, with the call notify actually makes: flags, a title with spaces and
+# ' · ', a CJK body. Every "notifies nothing" below is worth only as much as
+# a helper that would have reached a stub that would have logged.
+assert_ok "inherdr sh -c 'test \"\$HERDR_ENV\" = 1 && test -n \"\$HERDR_LOG\"'" \
+  "the Herdr helper sets HERDR_ENV=1 and the stub's log"
+: > "$hlog"
+probe="$(inherdr herdr notification show 'example-app · T-047 · merge' --body '快取索引' --sound request 2>&1)"
+assert_eq "0" "$?" "the herdr it runs is the stub, which takes notify's own call"
+assert_eq "$shown" "$probe" "and answers it with the line the real CLI printed"
+assert_eq "1" "$(calls)" "logging it once"
+assert_eq "$(argv 'example-app · T-047 · merge' '快取索引' request)" "$(tail -1 "$hlog")" \
+  "argument for argument"
+refused="$(inherdr herdr notification show 'example-app · T-047 · merge' --body '快取索引' --sound loud 2>&1 >/dev/null)"
+assert_eq "2" "$?" "it refuses a sound the real CLI refuses, with its exit code"
+assert_eq "invalid sound: loud (expected none, done, or request)" "$refused" "in its words, on stderr"
+assert_eq "2" "$(calls)" "and logs that call too"
+noserver="$(inherdr HERDR_STUB=no-server herdr notification show t --body b --sound none 2>&1 >/dev/null)"
+assert_eq "1" "$?" "with no server it exits as the real CLI did"
+assert_contains "$noserver" '"code":"server_not_running"' "and says what the real CLI said"
+nolog="$(inherdr HERDR_LOG="$hstub/no/such/dir/calls.jsonl" herdr notification show t --body b --sound none 2>&1 >/dev/null)"
+assert_eq "70" "$?" "a stub that cannot log fails"
+assert_contains "$nolog" "herdr stub: could not log" "and says so on stderr"
+n="$(nfix)"
+assert_ok "test -r '$n/bin/fm-config.sh'" "the notification fixture has the config reader"
+rm -rf "$n"
+
+# The title names the project the card is filed under - what it records,
+# else, as the board reads a card that records none, the default project,
+# else the self project - and never whatever FM_PROJECT says beside it.
+o="$(owned)"; : > "$hlog"
+oid="$(alloc --task T-047 --project example-app)"
+ask FM_PROJECT=firstmate-workflow "$o" "$oid" T-047 --project example-app --kind merge --pr 12 --details "$d/details.json"
+held "$o" "$oid" T-047 "a merge card of a registered project"
+assert_eq "1" "$(calls)" "a merge card raises one notification"
+assert_eq "$(argv 'example-app · T-047 · merge' '快取索引' request)" "$(tail -1 "$hlog")" \
+  "naming its project over FM_PROJECT, task, kind, the zh-TW question, the request sound"
+oid="$(FM_PROJECT=example-app alloc --task T-048)"
+ask FM_PROJECT=example-app "$o" "$oid" T-048 --details "$d/details.json"
+held "$o" "$oid" T-048 "a card filed under FM_PROJECT"
+assert_eq "$(argv 'example-app · T-048 · choice' '快取索引' request)" "$(tail -1 "$hlog")" \
+  "is named by the project FM_PROJECT filed it under"
+sed 's/^default_project:.*/default_project: example-app/' "$o/config.yaml" > "$o/config.new" && mv "$o/config.new" "$o/config.yaml"
+ask FM_PROJECT=firstmate-workflow "$o" D-41 T-41 --details "$d/details.json"
+held "$o" D-41 T-41 "default_project present"
+assert_eq "false" "$(jq -c 'has("project")' "$o/state/pending/D-41.json")" "a card that records no project"
+assert_eq "$(argv 'example-app · T-41 · choice' '快取索引' request)" "$(tail -1 "$hlog")" \
+  "is the default project's, whatever FM_PROJECT says"
+assert_eq "3" "$(calls)" "one notification per card"
+
+# a tree with no registry is the self project's, whatever FM_PROJECT names
+n="$(nfix)"; : > "$hlog"
+ask FM_PROJECT=example-app "$n" D-31 T-31 --details "$d/details.json"
+held "$n" D-31 T-31 "a choice card with no registry"
+assert_eq "$(argv 'firstmate-workflow · T-31 · choice' '快取索引' request)" "$(tail -1 "$hlog")" \
+  "a choice card notifies too, under the self project"
+assert_eq "1" "$(calls)" "once"
+assert_ok "test -f '$n/state/runtime/notified/D-31'" "and marks the id"
+first31="$(cat "$n/state/pending/D-31.json")"
+# never twice for one id: a refused replacement, and a withdrawn card
+# requested again under the same id. Nothing in bin/ or board/ withdraws a
+# card; firstmate archives it out of pending by hand, so the test does too.
+ask "$n" D-31 T-31 --details "$d/details.json"
+assert_eq "65" "$ask_rc" "a second request for the same id is refused"
+assert_eq "$first31" "$(cat "$n/state/pending/D-31.json")" "leaving the card as it was"
+assert_eq "1" "$(calls)" "and does not notify again"
+mkdir -p "$n/state/runtime/archived-pending"; mv "$n/state/pending/D-31.json" "$n/state/runtime/archived-pending/"
+ask "$n" D-31 T-31 --details "$d/details.json"
+assert_eq "0" "$ask_rc" "a withdrawn id requested again is requested"
+assert_eq "$n/state/pending/D-31.json" "$ask_out" "and pending again"
+assert_eq "2" "$(jq -s 'map(select(.type=="decision_requested" and .task=="T-31"))|length' "$n/state/events.jsonl")" \
+  "with its second event"
+assert_eq "1" "$(calls)" "but does not notify again"
+# an answered id is never notified: its request is refused, and awaiting it
+# returns the answer
+mkdir -p "$n/state/decisions"; printf '{"id":"D-32","chosen":"A"}\n' > "$n/state/decisions/D-32.json"
+ask "$n" D-32 T-32 --details "$d/details.json"
+assert_eq "65" "$ask_rc" "a request for an answered id is refused"
+assert_fail "test -e '$n/state/pending/D-32.json'" "and puts no card up"
+assert_eq '{"id":"D-32","chosen":"A"}' "$(cat "$n/state/decisions/D-32.json")" "leaving the answer as it was"
+assert_eq "1" "$(calls)" "and notifies nothing"
+aw="$(inherdr FM_ROOT="$n" "$n/bin/fm-decide.sh" --await D-32 --timeout 1 2>/dev/null)"
+assert_eq "0" "$?" "awaiting an answered id returns"
+assert_eq "A" "$(jq -r .chosen <<<"$aw")" "with the answer"
+assert_eq "1" "$(calls)" "and notifies nothing either"
+# the legacy skill-update card is a decision too; its title is its question
+ask "$n" D-SK-031 SK-031 --title "$leg_title"
+held "$n" D-SK-031 SK-031 "a skill-update card"
+assert_eq "$(argv 'firstmate-workflow · SK-031 · choice' "$leg_title" request)" "$(tail -1 "$hlog")" \
+  "a skill-update card notifies with its own title"
+assert_eq "2" "$(calls)" "so the fixture that stayed quiet for D-31 and D-32 still rings for a new id"
+
+# config: every way config.yaml can be read keeps the request's contract.
+# notifications.herdr and .sound default to true when the keys are absent.
+printf 'vendor: mock\n' > "$n/config.yaml"; : > "$hlog"
+ask "$n" D-42 T-42 --details "$d/details.json"
+held "$n" D-42 T-42 "a config.yaml with no notifications"
+assert_eq "$(argv 'firstmate-workflow · T-42 · choice' '快取索引' request)" "$(tail -1 "$hlog")" \
+  "rings, with the sound"
+printf 'notifications:\n  herdr: false\n' > "$n/config.yaml"; : > "$hlog"
+ask "$n" D-33 T-33 --details "$d/details.json"
+held "$n" D-33 T-33 "notifications.herdr: false"
+assert_eq "0" "$(calls)" "notifications.herdr: false raises nothing"
+printf 'notifications:\n  herdr: true\n  sound: false   # quiet\n' > "$n/config.yaml"
+ask "$n" D-34 T-34 --details "$d/details.json"
+held "$n" D-34 T-34 "notifications.sound: false"
+assert_eq "1" "$(calls)" "notifications.herdr: true in the same fixture rings"
+assert_eq "$(argv 'firstmate-workflow · T-34 · choice' '快取索引' none)" "$(tail -1 "$hlog")" \
+  "and notifications.sound: false makes it silent"
+cp "$ROOT/config.yaml" "$n/config.yaml"; : > "$hlog"
+ask "$n" D-43 T-43 --details "$d/details.json"
+held "$n" D-43 T-43 "the real config.yaml"
+assert_eq "$(argv 'firstmate-workflow · T-43 · choice' '快取索引' request)" "$(tail -1 "$hlog")" \
+  "the real config.yaml rings, under its default project"
+# a config.yaml nobody can read fails closed: its herdr: false still holds
+rm -f "$n/bin/fm-config.sh"; printf 'notifications:\n  herdr: false\n' > "$n/config.yaml"; : > "$hlog"
+ask "$n" D-44 T-44 --details "$d/details.json"
+held "$n" D-44 T-44 "a config.yaml without its reader"
+assert_eq "0" "$(calls)" "a config.yaml without its reader rings nothing"
+assert_contains "$ask_err" "cannot read notifications" "and says why"
+rm -f "$n/config.yaml"
+ask "$n" D-45 T-45 --details "$d/details.json"
+held "$n" D-45 T-45 "no config.yaml and no reader"
+assert_eq "1" "$(calls)" "while the same fixture with no config.yaml rings"
+cp "$ROOT/bin/fm-config.sh" "$n/bin/"
+
+# a notification that fails never fails the decision, and says how
+: > "$hlog"
+ask HERDR_STUB=no-server "$n" D-35 T-35 --details "$d/details.json"
+held "$n" D-35 T-35 "a Herdr with no server"
+assert_eq "1" "$(calls)" "after herdr was really called"
+assert_contains "$ask_err" "D-35" "the failure is reported against the decision"
+assert_contains "$ask_err" "herdr exited 1" "with how Herdr failed"
+assert_contains "$ask_err" "server_not_running" "in Herdr's own words"
+ask HERDR_LOG="$hstub/no/such/dir/calls.jsonl" "$n" D-46 T-46 --details "$d/details.json"
+held "$n" D-46 T-46 "a stub that cannot log"
+assert_contains "$ask_err" "herdr stub: could not log" "a stub that cannot log is heard through the request"
+# a Herdr that never answers is given up on at the bound (10s; 1 here)
+: > "$hlog"; t0=$(date +%s)
+ask HERDR_STUB=hang FM_NOTIFY_SECONDS=1 "$n" D-47 T-47 --details "$d/details.json"
+t1=$(date +%s)
+held "$n" D-47 T-47 "a Herdr that never answers"
+assert_eq "1" "$(calls)" "a hanging herdr was really called"
+assert_ok "[ $((t1 - t0)) -le 8 ]" "and given up on at the bound ($((t1 - t0))s; it sleeps 30)"
+assert_contains "$ask_err" "herdr timed out after 1s" "and said to have timed out"
+assert_lacks "$ask_err" "exited 142" "not reported as an exit code"
+# inside Herdr with no herdr on PATH: the same
+nohd="$(printf '%s\n' "$PATH" | tr ':' '\n' | while IFS= read -r p; do
+  [ -n "$p" ] && [ ! -x "$p/herdr" ] && printf '%s:' "$p"; done)"
+ask_err="$(env HERDR_ENV=1 PATH="${nohd%:}" FM_ROOT="$n" bash "$n/bin/fm-decide.sh" --request D-36 --task T-36 \
+  --details "$d/details.json" 2>&1 >"$hstub/out")"; ask_rc=$?; ask_out="$(cat "$hstub/out")"
+held "$n" D-36 T-36 "HERDR_ENV with no herdr command"
+assert_contains "$ask_err" "no herdr command" "and says why no notification was raised"
+
+# Outside Herdr everything is exactly as it was before T-096. The "before"
+# is this fm-decide.sh with notify cut out, run in a twin fixture.
+before="$hstub/before.sh"
+sed -e '/^notify() {/,/^}/d' -e '/^[[:space:]]*notify "/d' "$ROOT/bin/fm-decide.sh" > "$before"
+chmod +x "$before"
+assert_eq "0" "$(grep -vE '^[[:space:]]*#' "$before" | grep -cE '(^|[^[:alnum:]_])(notify|herdr)([^[:alnum:]_]|$)')" \
+  "the before-script is fm-decide.sh with notify cut out"
+assert_fail "cmp -s '$before' '$ROOT/bin/fm-decide.sh'" "and so differs from it"
+na="$(nfix)"; nb="$(nfix)"; cp "$before" "$na/bin/fm-decide.sh"; : > "$hlog"
+for f in "$na" "$nb"; do
+  env -u HERDR_ENV HERDR_LOG="$hlog" PATH="$hstub:$PATH" FM_ROOT="$f" "$f/bin/fm-decide.sh" \
+    --request D-37 --task T-37 --details "$d/details.json" >"$f.out" 2>"$f.err"
+  echo "$?" > "$f.rc"
+done
+assert_eq "0" "$(cat "$nb.rc")" "without HERDR_ENV the request exits 0"
+assert_eq "$(cat "$na.rc")" "$(cat "$nb.rc")" "as it did before T-096"
+assert_eq "$nb/state/pending/D-37.json" "$(cat "$nb.out")" "it prints the pending file"
+assert_eq "$(sed "s|$na|F|g" "$na.out")" "$(sed "s|$nb|F|g" "$nb.out")" "as before"
+assert_eq "$(sed "s|$na|F|g" "$na.err")" "$(sed "s|$nb|F|g" "$nb.err")" "and says what it said before on stderr"
+assert_ok "cmp -s '$na/state/pending/D-37.json' '$nb/state/pending/D-37.json'" "it writes the card it wrote before"
+assert_eq "$(jq -c 'del(.ts)' "$na/state/events.jsonl")" "$(jq -c 'del(.ts)' "$nb/state/events.jsonl")" \
+  "and the event"
+assert_eq "$(cd "$na" && find state board -print | sort)" "$(cd "$nb" && find state board -print | sort)" \
+  "and nothing else"
+assert_fail "test -e '$nb/state/runtime/notified'" "no notified directory is made at all"
+assert_eq "0" "$(calls)" "and nothing calls herdr"
+ask "$nb" D-39 T-39 --details "$d/details.json"
+held "$nb" D-39 T-39 "the same fixture with HERDR_ENV=1"
+assert_eq "1" "$(calls)" "the same fixture with HERDR_ENV=1 calls herdr"
+assert_ok "test -e '$nb/state/runtime/notified/D-39'" "and writes its marker"
+
+# Crew events are weather. Every type fm-emit.sh accepts but
+# decision_requested - which only a request writes, the path above - is
+# emitted through the same helper, and none rings. The spec's examples are
+# among them: CI red is gate_failed, a worker blocking or crashing is
+# agent_finished, worker_crashed or vendor_unavailable, a rejecting review
+# is review_failed.
+types="$(sed -n '/^TYPES="/,/"$/p' "$n/bin/fm-emit.sh" | tr -d '\\"' | sed 's/^TYPES=//' | tr ' ' '\n' \
+  | grep -v '^decision_requested$' | grep .)"
+for want in gate_failed agent_finished worker_crashed vendor_unavailable review_failed protocol_violation crew_status; do
+  assert_contains " $(printf '%s ' $types)" " $want " "the weather read from fm-emit.sh holds $want"
+done
+: > "$hlog"; wbefore="$(grep -c . "$n/state/events.jsonl")"; wn=0
+for t in $types; do
+  inherdr FM_CREW_STATUS_SECS=0 FM_ROOT="$n" "$n/bin/fm-emit.sh" --actor worker-1 --type "$t" --task T-38 \
+    --en x --tw x >/dev/null 2>&1
+  wrc=$?
+  assert_eq "0 $t" "$wrc $(tail -1 "$n/state/events.jsonl" | jq -r .type)" "weather $t is emitted and written"
+  wn=$((wn + 1))
+done
+assert_eq "$((wbefore + wn))" "$(grep -c . "$n/state/events.jsonl")" "all $wn of them"
+assert_eq "0" "$(calls)" "CI red, a blocked worker, a rejecting review and the rest notify nothing"
+ask "$n" D-38 T-38 --details "$d/details.json"
+held "$n" D-38 T-38 "a decision request after the weather"
+assert_eq "1" "$(calls)" "while a decision request through the same helper does"
+callers="$(git -C "$ROOT" grep -lE 'notification[[:space:]]+show' -- . ':!tests/' ':!design/' ':!*.md' 2>/dev/null)"
+assert_eq "bin/fm-decide.sh" "$callers" \
+  "no tracked file but fm-decide.sh, outside tests and prose, raises a notification"
+
+# No other suite rings the captain. The gate runs every suite inside Herdr, so
+# a suite that reaches a card with HERDR_ENV=1 inherited would call the real
+# herdr for its fixture cards. The suites are what bin/ci.sh runs, read from
+# its own selectors, in any language. A file raises a card if it names
+# fm-decide and --request anywhere in it, in any spelling: a shell line, an
+# argv array, a variable holding the path.
+# Without -q: under pipefail a grep that stops at its first match can SIGPIPE
+# the reader and turn a hit into a miss, and the empty-list check would pass.
+code() { grep -vE '^[[:space:]]*(#|//)' "$ROOT/$1"; }
+has() { code "$1" | grep -E -- "$2" >/dev/null; }
+both() { grep -E -- 'fm-decide' "$ROOT/$1" >/dev/null && grep -E -- '--request' "$ROOT/$1" >/dev/null; }
+names='fm-run|(^|[^A-Za-z0-9_-])fm\.sh'
+# What bin/ci.sh runs: the bash suites, bun on every *.test.ts and *.spec.ts
+# outside tests/e2e, playwright on its testDir, and its own stages. Each
+# selector is pinned, so a new place ci.sh runs from turns this red first.
+cisrc="$(code bin/ci.sh)"
+assert_contains "$cisrc" 'suites=(tests/*.test.sh)' "ci.sh runs the bash suites under tests/"
+assert_contains "$cisrc" "-name '*.test.ts' -o -name '*.spec.ts'" "ci.sh runs bun on every *.test.ts and *.spec.ts"
+assert_contains "$cisrc" 'bunx playwright test' "ci.sh runs playwright"
+assert_contains "$(code playwright.config.ts)" 'testDir: "tests/e2e"' "playwright runs tests/e2e"
+suites="$(git -C "$ROOT" ls-files -- tests '*.test.ts' '*.spec.ts' 'playwright.config.*' bin/ci.sh | sort -u)"
+for f in tests/decide.test.sh tests/lib.sh tests/ship.spec.ts tests/e2e/board.spec.ts tests/e2e/fixture.ts bin/ci.sh; do
+  assert_contains " $(printf '%s ' $suites) " " $f " "the suites hold $f"
+done
+# What raises a card: every tracked file outside the suites and the prose that
+# names both. Nothing else names those two outside a comment, so a suite
+# reaches a card only by naming fm-decide with --request, or one of them.
+raisers="$(git -C "$ROOT" ls-files -- . ':!tests/' ':!design/' ':!*.md' ':!bin/fm-decide.sh' \
+  | while read -r f; do [ -f "$ROOT/$f" ] && both "$f" && printf '%s ' "$f"; done)"
+assert_eq "bin/fm-run.sh bin/fm.sh " "$raisers" "fm-run.sh and fm.sh are the only files that raise a card"
+via="$(git -C "$ROOT" grep -lE "$names" -- . ':!tests/' ':!design/' ':!*.md' \
+  ':!bin/fm-run.sh' ':!bin/fm.sh' ':!bin/fm-decide.sh' \
+  | while read -r f; do has "$f" "$names" && printf '%s ' "$f"; done)"
+assert_eq "" "$via" "nothing else in the repository calls them outside a comment"
+direct="$(for f in $suites; do [ -f "$ROOT/$f" ] && both "$f" && printf '%s ' "$f"; done)"
+assert_eq "tests/decide.test.sh " "$direct" "no suite but decide.test.sh names fm-decide with --request"
+reach="$(for f in $suites; do
+  [ "$f" != tests/decide.test.sh ] && [ -f "$ROOT/$f" ] && has "$f" "$names" && printf '%s\n' "$f"; done)"
+assert_contains " $(printf '%s ' $reach)" " tests/e2e-loop.test.sh " "the sweep finds a suite that runs fm-run.sh"
+assert_contains " $(printf '%s ' $reach)" " tests/selfupdate.test.sh " "and one that runs fm.sh self-update"
+for f in $reach; do
+  src="$(code "$f")"
+  case "$f" in
+    tests/e2e-loop.test.sh)
+      grep -qE '^export HERDR_ENV=0' <<<"$src"; ok=$?; how="exports HERDR_ENV=0" ;;
+    tests/selfupdate.test.sh|tests/option-loop.test.sh)
+      grep -qF 'HERDR_[^=]*)=' <<<"$src"; ok=$?; how="unsets every HERDR_* before it runs anything" ;;
+    tests/herdr.test.sh)
+      grep -qE "executable\\('herdr'" <<<"$src" && grep -qF 'PATH=str(self.fake)' <<<"$src"
+      ok=$?; how="puts its own herdr first on PATH" ;;
+    *)
+      ok=1; how="runs a script that raises a card, with no guard against an inherited HERDR_ENV" ;;
+  esac
+  assert_eq "0" "$ok" "$f $how"
+done
+rm -rf "$o" "$n" "$na" "$nb" "$na".* "$nb".* "$hstub"
 
 # no dependency on a watcher that has to be installed
 # the words may appear in a comment explaining the absence; a call may not

@@ -15,6 +15,10 @@ concurrency: 3          # workers in flight at once
 #                       # is used. Letters only, six at most.
 editor: code            # what /open hands a file to
 
+notifications:          # inside Herdr, a decision card the captain must answer
+  herdr: true           # raises one notification; false raises none
+  sound: true           # false shows it silently
+
 fallback:               # tried in order when an adapter exits 2 (vendor unavailable)
   - claude
   - codex

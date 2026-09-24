@@ -184,6 +184,70 @@ draw() {
   return 0
 }
 
+# A card the captain must answer can sit unseen while the captain is not
+# looking at the board, so inside Herdr its request raises one notification
+# (T-096). Only here: CI turning red, a worker blocking, a review rejecting
+# are weather the board shows, and nothing else calls `herdr notification
+# show`. Outside Herdr (no HERDR_ENV=1, the value Herdr exports and its own
+# skill tests for) nothing changes and nothing is written.
+# config.yaml's notifications.herdr: false turns it off,
+# notifications.sound: false keeps it silent. They are read in a subshell,
+# so the reader cannot change this script's options or variables; a
+# config.yaml whose reader is missing rings nothing and says so, because a
+# `herdr: false` nobody could read is still a `herdr: false`. The body is
+# the card's zh-TW question: the captain's language is the board's default
+# locale (design I3), and the board's own choice lives where no script can
+# read it. The project is the one the card is filed under: the project it
+# records, else, as the board reads a card that records none, the default
+# project, else the self project.
+#
+# One per id, ever: the marker under state/runtime/notified/ is taken with
+# noclobber before herdr runs, so a withdrawn card requested again under the
+# same id stays quiet, and an answered or withdrawn one is never announced.
+# Like the drawing, it is decoration on the request: a notification that
+# fails is said on standard error and the request still succeeds, and perl's
+# alarm (FM_NOTIFY_SECONDS, 10) keeps a Herdr that does not answer from
+# holding the card back.
+notify() {   # notify <zh-TW question> <the project the card records, or nothing>
+  local on sound home cfg body project mark out rc secs
+  [ "${HERDR_ENV:-}" = 1 ] || return 0
+  on=true; sound=true; home=''
+  if [ -f "$REPO/config.yaml" ]; then
+    cfg="$([ -r "$HERE/fm-config.sh" ] || exit 1
+           # shellcheck source=bin/fm-config.sh
+           . "$HERE/fm-config.sh" || exit 1
+           printf '%s\n%s\n%s\n' "$(fm_cfg_in notifications herdr "$REPO/config.yaml")" \
+             "$(fm_cfg_in notifications sound "$REPO/config.yaml")" \
+             "$(fm_cfg default_project "$REPO/config.yaml")")" || {
+      printf 'fm-decide: cannot read notifications from config.yaml without %s: %s raised no notification\n' \
+        "$HERE/fm-config.sh" "$ID" >&2
+      return 0; }
+    { IFS= read -r on; IFS= read -r sound; IFS= read -r home; } <<<"$cfg"
+    on="${on:-true}"; sound="${sound:-true}"
+  fi
+  [ "$on" = false ] && return 0
+  [ -f "$PEND/$ID.json" ] && [ ! -e "$DIR/$ID.json" ] || return 0
+  command -v herdr >/dev/null 2>&1 || {
+    printf 'fm-decide: HERDR_ENV=1 but no herdr command: %s raised no notification\n' "$ID" >&2
+    return 0; }
+  mark="$REPO/state/runtime/notified/$ID"
+  mkdir -p "${mark%/*}" 2>/dev/null
+  (set -o noclobber; : > "$mark") 2>/dev/null || return 0
+  body="$(printf '%s' "$1" | tr '\r\n\t' '   ')"
+  project="${2:-${home:-$SELF_PROJECT}}"
+  if [ "$sound" = false ]; then sound=none; else sound=request; fi
+  secs="${FM_NOTIFY_SECONDS:-10}"
+  [[ "$secs" =~ ^[1-9][0-9]{0,2}$ ]] || secs=10
+  out="$(FM_NOTIFY_SECONDS="$secs" perl -e 'alarm $ENV{FM_NOTIFY_SECONDS}; exec @ARGV or exit 127' \
+         herdr notification show "$project · $TASK · $KIND" --body "$body" --sound "$sound" 2>&1 </dev/null)"; rc=$?
+  if [ "$rc" -eq 142 ]; then   # 128 + SIGALRM: the alarm, not Herdr, ended it
+    printf 'fm-decide: could not notify %s: herdr timed out after %ss\n' "$ID" "$secs" >&2
+  elif [ "$rc" -ne 0 ]; then
+    printf 'fm-decide: could not notify %s (herdr exited %s): %s\n' "$ID" "$rc" "$out" >&2
+  fi
+  return 0
+}
+
 if [ "$MODE" = request ]; then
   case "$KIND" in choice|merge) ;; *) echo 'fm-decide: bad kind' >&2; exit 64 ;; esac
   # An owned id is published only by the task and project it names, and only
@@ -239,6 +303,7 @@ if [ "$MODE" = request ]; then
     draw
     emit --type decision_requested --task "$TASK" ${PR:+--pr "$PR"} ${RECORD:+--project "$RECORD"} \
          --en "$(jq -r '.en.title' "$DETAILS")" --tw "$(jq -r '."zh-TW".title' "$DETAILS")"
+    notify "$(jq -r '."zh-TW".title' "$DETAILS")" "$RECORD"
     printf '%s\n' "$PEND/$ID.json"
     exit 0
   fi
@@ -269,6 +334,7 @@ if [ "$MODE" = request ]; then
     # Do not invent details; the board discloses missing authored content.
     emit --type decision_requested --task "$TASK" ${PR:+--pr "$PR"} \
          --en "$TITLE" --tw "$TITLE"
+    notify "$TITLE" ""   # a skill-update card records no project
     printf '%s\n' "$PEND/$ID.json"
     exit 0
   fi
