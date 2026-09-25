@@ -144,6 +144,37 @@ end-to-end stage), `check` is `bin/ci.sh` with `FM_CI_MAX_SECONDS=600`, and
 `test` runs a changed `*.test.sh` with bash. Its `docs` are `design/**` and
 `README.md`; skills are behaviour, so they are not docs.
 
+### The reviewer
+
+`config.yaml`'s `reviewer:` block names the reviewer's `vendor` and `model`,
+and they are the captain's choice: this repository reviews with `claude` and
+`opus-5`, the worker's own, so review adds no second vendor. Other vendors
+stay in `fallback:` and `--vendor`. A project that names no reviewer vendor or
+model is reported by `fm-session.sh start`, and firstmate asks the captain on
+the board; the answer lands as a `config.yaml` change in a pull request.
+
+`mode:` says what the reviewer may do. `diff`, and a project that declares
+nothing, shows it the skill, the task and the diff. `run` adds a fresh clone
+of the pull request head outside every worktree, removed when the round ends
+(or, after a SIGKILL, by the next run-mode round),
+where the reviewer runs `setup`, `check` and the changed tests and proves
+fail-first against the base. The adapter confines it with the vendor CLI's
+own permission flags - no settings, hooks or MCP servers from the clone or the
+operator, no writes outside the clone and the temp directory, and no network
+beyond the hosts `network:` lists for `setup` (plain domain names only: never
+GitHub and never a wildcard, so no push and no comments) - so only an adapter
+carrying `# fm:review-run` takes a run-mode round; today that is `claude`.
+Because the sandbox writes only in the clone and the temp directory, the
+round points `XDG_CACHE_HOME`, bun's install cache, Playwright's browsers and
+npm's cache into its own temp directory, so `setup` downloads them each round.
+The engine starts without the launcher's `FM_*`, `HERDR_*`, `GIT_*` and
+GitHub-token variables, so a `check` run in the clone gates the clone, not the
+repository the review was launched from.
+The reviewer has no GitHub access: `fm-review.sh` reads the pull request's
+state and required checks with gh before the round and puts them in the prompt, saying whether
+they ran on the head under review. `fm-review.sh` posts the verdict and
+emits the review's events in both modes. This repository declares `run`.
+
 ## State
 
 Spec is settled and the bootstrap is under way. `design/proposals/` holds the

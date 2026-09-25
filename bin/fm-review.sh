@@ -6,6 +6,13 @@
 # its reasoning, not even the path it worked in. Reasoning is persuasive; the
 # artefact is what is under review.
 #
+# config.yaml's `reviewer: mode:` says how much more it gets. `diff`, and a
+# project that declares nothing, is the above and only the above. `run` adds a
+# fresh clone of the pull request head, outside every worktree and removed
+# when the round ends, in which the reviewer may run the project's commands.
+# The adapter confines it there with the engine's own permission flags;
+# nothing in the prompt is what stops it.
+#
 #   fm-review.sh --task T-004 --branch <name> [--repo .] [--pr 9] [--round 1]
 set -uo pipefail
 # Nothing below may read standard input. A dispatched child inherits it, and
@@ -81,6 +88,15 @@ emit_once() {
 }
 emit() { emit_once "$@" || true; }
 
+# The run-mode checkout. The EXIT trap removes it on every exit the shell
+# handles - success, failure, INT, TERM. A SIGKILL runs no trap, so the next
+# run-mode round sweeps checkouts whose owning round is gone (sweep_checkouts).
+CHECKOUT_ROOT=''; CHECKOUT=''
+drop_checkout() {
+  [ -z "$CHECKOUT_ROOT" ] || rm -rf "$CHECKOUT_ROOT"
+  CHECKOUT_ROOT=''; CHECKOUT=''
+}
+
 # Mid-run activity refresh (T-036); never invents percent from lifecycle labels.
 emit_status() {
   local en="$1" tw="$2" done_n="${3-}" total_n="${4-}" data
@@ -119,6 +135,7 @@ emit_status() {
 # ending and the progress lines drift apart.
 finished() {
   fm_record_end "$?"
+  drop_checkout
   local try=3
   while [ "$try" -gt 0 ]; do
     try=$(( try - 1 ))
@@ -153,6 +170,92 @@ set_crew_activity "$spec"
 # event and agent_finished.
 emit --type review_opened --en "round $ROUND on $TASK" --tw "$TASK 第 $ROUND 輪審核"
 emit_status "Review adapter starting on $TASK" "開始審核 $TASK"
+
+# Read from the checkout running the round, like the reviewer's vendor: a
+# branch under review does not get to choose how it is reviewed.
+REVIEW_MODE="$(fm_cfg_in reviewer mode)"
+case "${REVIEW_MODE:=diff}" in
+  diff|run) ;;
+  *)
+    echo "fm-review: config.yaml's reviewer mode is '$REVIEW_MODE'; it must be diff or run" >&2
+    emit --review-outcome infrastructure_error --type review_failed \
+         --en "review round $ROUND could not start" --tw "第 $ROUND 輪審核無法開始"
+    exit 65 ;;
+esac
+# Never inherited: a leftover run-mode setting would hand a diff round's
+# adapter a checkout nobody made for it.
+unset FM_RUN_REVIEW FM_REVIEW_CHECKOUT FM_REVIEW_NETWORK
+
+# A clone rather than a worktree: a worktree shares the task's .git, so git
+# run inside it writes outside it. The clone has its own objects, the base
+# and the head under fixed names, and no remote to push to.
+build_checkout() {
+  local head
+  head="$(git rev-parse -q --verify "$BRANCH^{commit}")" || return 1
+  CHECKOUT_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/fm-review.XXXXXX")" || return 1
+  CHECKOUT_ROOT="$(cd "$CHECKOUT_ROOT" && pwd -P)" || return 1
+  printf '%s\n' "$$" > "$CHECKOUT_ROOT/owner" || return 1
+  CHECKOUT="$CHECKOUT_ROOT/checkout"
+  mkdir "$CHECKOUT_ROOT/cache" &&
+    git clone -q --no-checkout --no-hardlinks "$REPO" "$CHECKOUT" &&
+    git -C "$CHECKOUT" fetch -q --no-tags origin "+$BRANCH:refs/fm/head" "+$BASE:refs/fm/base" &&
+    [ "$(git -C "$CHECKOUT" rev-parse refs/fm/head)" = "$head" ] &&
+    git -C "$CHECKOUT" checkout -q --detach refs/fm/head &&
+    git -C "$CHECKOUT" remote remove origin
+}
+# A checkout left by a round that was SIGKILLed: its owner file names a
+# process that no longer exists. One with no owner file may be a round
+# between mktemp and writing it, and one whose owner is alive is in use;
+# both are left alone.
+sweep_checkouts() {
+  local d pid
+  for d in "${TMPDIR:-/tmp}"/fm-review.*; do
+    [ -d "$d" ] && [ -f "$d/owner" ] || continue
+    pid="$(head -1 "$d/owner" 2>/dev/null)"
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$pid" 2>/dev/null || rm -rf "$d"
+  done
+}
+if [ "$REVIEW_MODE" = run ]; then
+  emit_status "Preparing a fresh checkout of $BRANCH" "正在準備 $BRANCH 的全新 checkout"
+  sweep_checkouts
+  # The sandbox reaches only these hosts: what `setup` needs, declared by the
+  # checkout running the round. No GitHub host belongs here, since the
+  # network is what keeps a push or a gh write from leaving the sandbox.
+  # Split with read, never an unquoted expansion: that also globs, and a `*`
+  # would be checked as the file names in the current directory.
+  FM_REVIEW_NETWORK="$(fm_cfg_in reviewer network)"; export FM_REVIEW_NETWORK
+  read -r -a net_hosts <<<"$FM_REVIEW_NETWORK"
+  for h in ${net_hosts[@]+"${net_hosts[@]}"}; do
+    why=''
+    # a wildcard is refused too: `*.com` reaches github.com as surely as
+    # naming it does
+    case "$h" in *[!A-Za-z0-9.-]*|.*|*.) why="is not a plain domain name" ;; esac
+    case "$(printf '%s' "$h" | tr '[:upper:]' '[:lower:]')" in
+      github.com|*.github.com) why="is a GitHub host; a run-mode reviewer may not reach GitHub" ;;
+    esac
+    [ -z "$why" ] || {
+      echo "fm-review: config.yaml's reviewer network names $h, which $why" >&2
+      emit --review-outcome infrastructure_error --type review_failed \
+           --en "review round $ROUND could not start" --tw "第 $ROUND 輪審核無法開始"
+      exit 65; }
+  done
+  build_checkout >/dev/null 2>&1 || {
+    echo "fm-review: could not make a fresh checkout of $BRANCH against $BASE for a run-mode review" >&2
+    emit --review-outcome infrastructure_error --type review_failed \
+         --en "review round $ROUND could not prepare its checkout" --tw "第 $ROUND 輪審核無法準備 checkout"
+    exit 70; }
+  export FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$CHECKOUT"
+  # The sandbox lets commands write only in the checkout and the temp
+  # directory, and the project's setup writes its caches under $HOME by
+  # default: bun's install cache, Playwright's browsers, npm's cache, any
+  # XDG-following tool. Each is pointed into this round's directory, which
+  # sits in the temp directory and goes when the round does, so setup
+  # writes where it is allowed to rather than being refused.
+  REVIEW_CACHE="$CHECKOUT_ROOT/cache"
+  export XDG_CACHE_HOME="$REVIEW_CACHE/xdg" BUN_INSTALL_CACHE_DIR="$REVIEW_CACHE/bun" \
+         PLAYWRIGHT_BROWSERS_PATH="$REVIEW_CACHE/ms-playwright" npm_config_cache="$REVIEW_CACHE/npm"
+fi
 
 # A round that produced nothing is not a round, so review_opened is emitted
 # once the chain has actually produced a verdict - otherwise three crashed
@@ -311,6 +414,96 @@ prompt="$work/prompt.md"
   printf '```\n'
 } > "$prompt"
 
+# The project's contract as the branch under review declares it - the one the
+# gates run - so the reviewer runs what gate 3 and gate 5 would.
+contract_line() {   # contract_line <field>
+  local v
+  if ! v="$(fm_project "$1" "$CHECKOUT/config.yaml" 2>/dev/null | tr '\0\n' '  ')"; then
+    v='(config.yaml could not be read)'
+  fi
+  v="${v% }"
+  printf -- '- `%s`: %s\n' "$1" "${v:-(not declared)}"
+}
+# The read-only GitHub evidence a run-mode reviewer cannot fetch: its sandbox
+# reaches no GitHub host, because the network is what keeps a push or a gh
+# write from leaving it. So fm-review.sh reads the pull request's state and
+# its required checks with gh before the round and hands them over, bound to the head:
+# a check run on another commit is said to be one. What the checks call
+# themselves comes from the branch's own workflows, so it is fenced like a
+# quoted comment.
+github_evidence() {
+  local view checks head oid fence
+  printf '\n# GitHub evidence, read by fm-review.sh\n\n'
+  if [ -z "$PR" ]; then
+    printf 'This round was given no pull request, so there is no CI or pull request state\n'
+    printf 'to report. Say that CI was not seen.\n'
+    return 0
+  fi
+  head="$(git -C "$CHECKOUT" rev-parse fm/head 2>/dev/null)"
+  printf 'Read with gh just before this round started; you cannot reach GitHub yourself.\n\n'
+  if view="$($GH pr view "$PR" --json state,isDraft,headRefOid,mergeStateStatus,reviewDecision 2>/dev/null)" &&
+     oid="$(jq -er '.headRefOid | strings' <<<"$view" 2>/dev/null)"; then
+    jq -r --arg pr "$PR" '"Pull request #\($pr): \(.state // "unknown")\(if .isDraft then ", draft" else "" end), merge state \(.mergeStateStatus // "unknown"), review decision \(.reviewDecision // "none" | if . == "" then "none" else . end)."' <<<"$view"
+    if [ "$oid" = "$head" ]; then
+      printf 'Its head is %s, the head under review.\n' "$oid"
+    else
+      printf 'Its head is %s, NOT the head under review (%s): the checks below are for another commit and are not evidence for this one.\n' "$oid" "$head"
+    fi
+  else
+    printf 'The pull request #%s could not be read. CI was not seen; say so.\n' "$PR"
+    return 0
+  fi
+  # gh exits non-zero while a check is pending or has failed, and prints the
+  # checks all the same; the answer is whatever parses as the list. Only the
+  # required checks: they are what gate 6 and the captain's merge wait on
+  checks="$($GH pr checks "$PR" --required --json name,state,bucket,workflow 2>/dev/null)"
+  if ! jq -e 'type == "array"' <<<"$checks" >/dev/null 2>&1; then
+    printf '\nIts required checks could not be read, or none are reported. CI was not seen; say so.\n'
+    return 0
+  fi
+  fence="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+  printf '\nIts required checks (%s):\n\n----- begin checks %s -----\n' "$(jq length <<<"$checks")" "$fence"
+  jq -r '.[] | "- \(.workflow // "" | if . == "" then "" else . + " / " end)\(.name): \(.state) (\(.bucket))"' <<<"$checks"
+  printf -- '----- end checks %s -----\n' "$fence"
+}
+
+if [ "$REVIEW_MODE" = run ]; then
+  {
+    printf '\n---\n\n# Run mode\n\n'
+    printf 'This round runs in a fresh clone of the pull request head, made for this review\n'
+    printf 'and removed when it ends: `%s`. It is your working directory.\n' "$CHECKOUT"
+    printf '`fm/head` is the head under review, checked out detached; `fm/base` is %s.\n' "$BASE"
+    printf '`git diff fm/base...fm/head` is the diff above.\n\n'
+    printf 'You may run commands here: the project'"'"'s declared commands below and git.\n'
+    printf 'You may not push, comment on or edit the pull request, touch the task'"'"'s\n'
+    printf 'worktree, or write anywhere but this checkout and the system temp directory.\n'
+    printf 'The engine'"'"'s own permissions enforce that, not this text; fm-review.sh posts\n'
+    printf 'your verdict to the pull request. Commands reach the network only for these\n'
+    printf 'hosts: %s. No GitHub host is among them, so gh has nothing to talk to; the\n' "${FM_REVIEW_NETWORK:-none}"
+    printf 'base, the head and the diff are all in this checkout, and the pull request'"'"'s\n'
+    printf 'state and required checks are at the end of this prompt, read with gh for you. The\n'
+    printf 'project'"'"'s caches (XDG_CACHE_HOME, bun, Playwright, npm) point into this\n'
+    printf 'round'"'"'s temp directory, so `setup` writes where it may. A command the sandbox\n'
+    printf 'refuses is the boundary working: report what it kept you from running, as\n'
+    printf 'read, not run, rather than work around it.\n\n'
+    printf 'The project'"'"'s contract, from this checkout'"'"'s config.yaml:\n\n'
+    for f in setup check check_env tests test docs; do contract_line "$f"; done
+    printf '\nDo this, in order:\n\n'
+    printf '1. Run `setup`, then `check` with `check_env`. A stage the check says it\n'
+    printf '   skipped is unverified, not passed.\n'
+    printf '2. Run every test file the diff adds or changes - through `test` when it is\n'
+    printf '   declared - and every suite that exercises a changed non-test file.\n'
+    printf '3. Prove fail-first. Restore the base version of every changed non-test file\n'
+    printf '   (`git checkout fm/base -- <file>`; remove a file the diff adds), run the\n'
+    printf '   changed tests again and require red. Name each assertion that went red.\n'
+    printf '   Then put the head back with `git checkout fm/head -- .`.\n'
+    printf '4. End with two lists before the verdict: **Executed** - every command you\n'
+    printf '   ran and its result; **Read, not run** - every claim you checked only by\n'
+    printf '   reading. Evidence you did not execute is never reported as executed.\n'
+    github_evidence
+  } >> "$prompt"
+fi
+
 # the reviewer runs on its own engine when config.yaml names one, and falls
 # back exactly the way the worker does - one chain, one runner
 mkdir -p "$work/out"
@@ -347,7 +540,20 @@ review_is_signed() {
   case "$seen" in *"APPROVE:$TASK"*|*"REJECT:$TASK"*) return 0 ;; esac
   return 1
 }
-fm_run_chain "${FM_CODE_ROOT:-$REPO}/bin/adapters" "$(fm_vendor_chain reviewer "$VENDOR")" \
+adapters="${FM_CODE_ROOT:-$REPO}/bin/adapters"
+chain="$(fm_vendor_chain reviewer "$VENDOR")"
+# A run-mode round goes only to an engine whose adapter can confine it. The
+# reviewer's own vendor lacking that is a configuration error, said once;
+# a fallback lacking it is simply not in this round's chain.
+if [ "$REVIEW_MODE" = run ]; then
+  lead="${chain%%$'\n'*}"
+  chain="$(fm_review_run_chain "$adapters" "$chain")" || {
+    echo "fm-review: $lead has no adapter that confines a run-mode review; choose another reviewer vendor or mode" >&2
+    emit --review-outcome infrastructure_error --type review_failed \
+         --en "review round $ROUND could not start" --tw "第 $ROUND 輪審核無法開始"
+    rm -rf "$work"; exit 65; }
+fi
+fm_run_chain "$adapters" "$chain" \
   "$prompt" "$work/out" "$work/log" review_is_signed per-vendor; rc=$?
 [ -z "$FM_VENDOR_UNKNOWN" ] || {
   echo "fm-review: config.yaml names a vendor with no adapter: $FM_VENDOR_UNKNOWN" >&2

@@ -30,6 +30,40 @@ Check, in order:
 For mid-run board progress (T-036): reject invented percentages, stage→pct
 maps, missing `en`/`zh-TW` activity, or progress without a true denominator.
 
+## Run mode
+
+A project whose `config.yaml` says `reviewer: mode: run` also gives you a fresh
+clone of the pull request head, made for this round and removed when it ends.
+It is your working directory; `fm/head` is the head under review and `fm/base`
+the base. The prompt names the project's declared `setup`, `check`,
+`check_env`, `tests` and `test`. Then:
+
+1. Run `setup`, then `check`. A stage the check says it skipped is unverified.
+2. Run every test the diff adds or changes, and the suites that exercise the
+   changed code.
+3. Prove fail-first: restore the base version of every changed non-test file
+   (`git checkout fm/base -- <file>`), rerun the changed tests, require red and
+   name the assertion that went red. Put the head back afterwards. A test that
+   stays green is a finding, whatever its prose says.
+4. End with **Executed** (each command and its result) and **Read, not run**
+   (each claim checked only by reading) before the verdict.
+
+You may run the declared commands and git there. You may not push, comment on
+or edit the pull request, touch the task's worktree, or write outside the
+checkout and the system temp directory. The engine's own permission flags
+enforce that, not this text. Commands reach only the hosts the prompt names,
+which `setup` needs; GitHub is not one, so you run no gh. The base, head and
+diff are all in the checkout, and the read-only GitHub evidence - the pull
+request's state and its required checks, with whether they ran on the head under
+review - is read with gh by `fm-review.sh` and given to you at the end of the
+prompt. Judge current-head CI from that section; checks it says ran on
+another commit are not evidence for this one. The project's caches point
+into the round's temp directory, so `setup` can write them. A denied command
+is the boundary working: report what it kept you from running rather than
+work around it. `fm-review.sh` posts your verdict. In `diff` mode, the
+default, you have no checkout: check 2 above is then read, not run, and you
+say so.
+
 ## Name the class, not the instance
 
 When you find something, say what **kind** of thing it is, so the worker can
@@ -127,7 +161,8 @@ else; say that the evidence for this head is missing and leave the item open.
 ## Evidence and isolation
 
 Retain your supplied reviewer role even in an isolated directory without root
-entrypoints; do not dispatch workers or run git/gh. Require the diff, task spec,
+entrypoints; do not dispatch workers, and run git only as run mode allows it,
+inside the checkout; you run no gh in either mode. Require the diff, task spec,
 acceptance, authoritative relevant design contract and original closed criteria
 when applicable. CI and gate evidence comes only from the **The head under
 review** section; do not require or accept it from anywhere else. Ask for missing review context instead of inventing it. Do not
@@ -135,7 +170,7 @@ request worker reasoning or logs. The relevant [design](../../design/design.md)
 must be supplied in the prompt when this relative path is unavailable.
 
 Distinguish tests you executed in a checkout from supplied test results and
-static inspection. Without a checkout, do not claim to have run tests. Name
+static inspection. Without a checkout (diff mode), do not claim to have run tests. Name
 observable evidence and limitations; metadata checks cannot prove instruction
 compliance. Review current-head CI as that section shows it, and current verdict
 evidence, not stale approvals.

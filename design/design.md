@@ -389,6 +389,53 @@ role may name its own engine — `reviewer:` and `worker:` blocks in
 `fallback:`, with no vendor run twice. A reviewer whose engine is down is
 therefore not a reviewer who never ran.
 
+The reviewer's `vendor` and `model` are the captain's choice (T-066); this
+repository names `claude` and `opus-5`, the worker's own. A project naming
+neither is reported by `fm-session.sh start` and firstmate asks the captain
+through a choice card; the answer lands as a `config.yaml` pull request.
+
+`reviewer: mode:` sets how a review runs. `diff`, the default for a project
+that declares nothing, is the prompt above and nothing else. `run` makes a
+fresh clone of the pull request head under the system temp directory - never a
+worktree, whose shared `.git` would let git inside it write outside it - with
+the base at `fm/base`, the head at `fm/head` and no remote, and removes it
+from the EXIT trap on every exit the shell handles; a SIGKILL runs no trap,
+so the next run-mode round removes any `fm-review.*` checkout whose owning
+process is gone. The prompt adds the branch's own
+project contract and asks for `setup`, `check`, the touched suites, fail-first
+against the base versions of the changed non-test files, and an **Executed**
+/ **Read, not run** account. The adapter, not the prompt, confines the engine:
+`FM_RUN_REVIEW=1` and `FM_REVIEW_CHECKOUT` tell it the round is a run-mode one,
+and only an adapter carrying a `# fm:review-run` line may take it -
+`fm_review_run_chain` drops the others from the chain, refuses a head that
+lacks it with `65`, and `fm_adapter_context` refuses one before its CLI
+starts. `claude` carries it. `--restricted`, `--strict-mcp-config` and
+`--disable-slash-commands` load no user, project or local settings, MCP
+servers or skills - the clone is the branch under review, and its `.claude/`
+would otherwise add hooks and rules to the round - so only the adapter's
+`--settings` and managed policy apply: `dontAsk`, file tools only in the clone
+and the temp directory, shell commands only inside the sandbox, whose network
+reaches only the hosts `reviewer: network:` declares for `setup` (plain
+domain names: a GitHub host or a wildcard, which could match one, is refused
+by `fm-review.sh` with `65`). The declared commands write their caches under
+`$HOME` by default, where the sandbox refuses them, so the round exports
+`XDG_CACHE_HOME`, `BUN_INSTALL_CACHE_DIR`, `PLAYWRIGHT_BROWSERS_PATH` and
+`npm_config_cache` into its own temp directory; `setup` downloads afresh each
+round. The engine starts without the launcher's `FM_*`, `HERDR_*`, `GIT_*`
+and GitHub-token variables: `fm_identity` exports `FM_ROOT` at the task's
+repository, and the clone's scripts choose their tree from it, so a `check`
+the reviewer ran would otherwise gate another tree than the head under review.
+The reviewer has no GitHub access at all (captain's decision, 2026-09-26):
+before the round `fm-review.sh` reads the pull request's state and its
+required checks with gh and appends them to the prompt, fenced, stating
+whether the pull request's head is the head under review. The gate results
+reach the prompt through T-088's reader, not through this task: nothing
+here records them (`fm-run.sh` discards `fm-gate.sh`'s output). What stops a push is the
+missing remote and the unreachable GitHub; the deny list for push, gh writes
+and raw HTTP matches a literal command prefix and is only a second guard.
+Both modes emit `review_opened` and
+`approved` or `review_failed` as the reviewer; `fm-review.sh` posts the verdict.
+
 A round that produced no review exits `3` and emits `review_failed` with
 `data.review_outcome` set to `missing_review` when an attempt completed without
 a signed verdict, or `infrastructure_error` for vendor/configuration/execution
@@ -736,6 +783,7 @@ grilling  ->  /prototype  ->  [captain green-lights]  ->  design.md + design/tas
                                        |
             fm-review.sh: reviewer sees the diff, the spec, the criteria
                    and, given the PR, the head's check and gate results
+                (run mode: and runs the tests in a fresh clone of the head)
                                        |
      not passed -> worker revives and fixes (round 3+ asks first) -> back to the gates
                                        |

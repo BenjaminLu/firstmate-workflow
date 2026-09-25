@@ -47,6 +47,14 @@ _FM_SIG='authentication failed|authentication required|authentication error|erro
 fm_adapter_context() {
   local adapter="$1" code
   unset FM_CLI_EXIT
+  # A run-mode review may only reach an adapter that confines it (see
+  # fm_review_run_chain). fm-review.sh already keeps the rest out of the
+  # chain; this is the same rule where the CLI would start, for every adapter
+  # that sources this file, so no caller can hand one an unconfined round.
+  if [ "${FM_RUN_REVIEW:-}" = 1 ] && ! grep -q '^# fm:review-run' "$adapter"; then
+    echo "${adapter##*/}: cannot confine a run-mode review; refusing it" >&2
+    exit 64
+  fi
   code="$(cd "$(dirname "$adapter")/../.." && pwd)"
   if [ "${HERDR_ENV:-}" = 1 ] && [ "${FM_TRANSPORT:-herdr}" = direct ] && [ "${FM_ALLOW_DIRECT:-}" != 1 ]; then
     echo "${adapter##*/}: FM_TRANSPORT=direct is refused when HERDR_ENV=1; use stock managed Herdr via fm-worker/fm-review" >&2
@@ -56,6 +64,45 @@ fm_adapter_context() {
     # shellcheck disable=SC2154  # validated positional arguments in each adapter
     exec python3 "$code/bin/fm-herdr.py" transport "$adapter" "$prompt" "$tree" "$log"
   fi
+}
+
+# fm_adapter_review_checkout -> the run-mode checkout, resolved, or exit 64.
+# It must look like the clone fm-review.sh made: an absolute directory with
+# its own .git, never a relative path the CLI would resolve against wherever
+# it happened to start.
+fm_adapter_review_checkout() {
+  local dir="${FM_REVIEW_CHECKOUT:-}"
+  case "$dir" in /*) ;; *) echo "adapter: FM_REVIEW_CHECKOUT must be an absolute path" >&2; exit 64 ;; esac
+  [ -d "$dir/.git" ] || { echo "adapter: no checkout at $dir" >&2; exit 64; }
+  fm_adapter_rule_path "$dir"
+}
+
+# fm_adapter_review_env -> `env -u NAME ...` words, one per line, that start
+# a run-mode engine without the launcher's state. fm_identity exports FM_ROOT
+# at the task's repository and the checkout's scripts choose their tree from
+# FM_ROOT, so a `check` the reviewer runs there would gate another tree; the
+# same holds for the rest of FM_*, for HERDR_* (which routes a nested adapter
+# into the captain's panes), for GIT_* (GIT_DIR would point git inside the
+# checkout at another repository) and for the GitHub tokens, which the round
+# has no use for. Everything else, the cache redirection included, stays.
+fm_adapter_review_env() {
+  local v
+  printf 'env\n'
+  while IFS= read -r v; do
+    case "$v" in FM_*|HERDR_*|GIT_*|GH_*|GITHUB_TOKEN) printf -- '-u\n%s\n' "$v" ;; esac
+  done < <(compgen -e)
+}
+
+# fm_adapter_rule_path <dir> -> the directory resolved, or exit 64. The path
+# goes into permission rules and a JSON settings string verbatim, so one
+# that would need quoting there is refused rather than escaped.
+fm_adapter_rule_path() {
+  local dir
+  dir="$(cd "$1" 2>/dev/null && pwd -P)" || { echo "adapter: no directory at $1" >&2; exit 64; }
+  case "$dir" in
+    *[[:space:]\"\\*\(\),]*) echo "adapter: $dir cannot be written into a permission rule" >&2; exit 64 ;;
+  esac
+  printf '%s\n' "$dir"
 }
 
 # Keep the CLI's exit separately from a failed transcript writer. Either failure

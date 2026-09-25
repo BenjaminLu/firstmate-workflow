@@ -1,0 +1,42 @@
+{
+  "id": "T-066",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-065"
+  ],
+  "title": "fm-review.sh runs a reviewer that can execute the tests, and the board sees it",
+  "scope": [
+    "bin/fm-review.sh",
+    "bin/adapters/_lib.sh",
+    "bin/adapters/claude.sh",
+    "bin/adapters/cursor-agent.sh",
+    "bin/fm-config.sh",
+    "config.yaml",
+    "skills/reviewer/SKILL.md",
+    "skills/firstmate/SKILL.md",
+    "tests/review.test.sh",
+    "tests/adapter-contract.test.sh",
+    "tests/option-loop.test.sh",
+    "tests/herdr.test.sh",
+    "tests/crew-end-to-end.test.sh",
+    "tests/e2e-loop.test.sh",
+    "tests/traps.test.sh",
+    "README.md",
+    "bin/fm-session.sh",
+    "tests/session.test.sh",
+    "design/design.md",
+    "design/tasks.json"
+  ],
+  "acceptance": [
+    "The stock reviewer sees only the skill, the spec and the diff, so it cannot run tests or prove fail-first. Since 2026-09-23 firstmate has reviewed with tool-enabled reviewers launched outside fm-review.sh instead. Those runs write no review events, so the captain's board showed no reviewer and tasks never reached the review lane. The captain asked for the lasting fix. Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+    "fm-review.sh gains an execution mode, set per project in config.yaml (reviewer mode: diff or run). This repository declares run. In run mode the reviewer works in a fresh checkout of the PR head, outside the task's worktree and removed afterwards. It may run commands there (the project's declared setup, check, tests and test, and git), with no GitHub access at all: fm-review.sh fetches the pull request's state and its head's required check conclusion before the round and hands them to the reviewer in the prompt; the gate results reach the prompt through T-088's reader, not through this task (captain's decision, 2026-09-26). It may not push, comment, edit the task's worktree or write outside its checkout and the system temp directory. The adapter enforces this through the vendor CLI's own permission flags; the prompt does not enforce it. fm-review.sh itself posts the verdict comment, as it does today.",
+    "Every review, in either mode, emits review_opened when it starts and approved or review_failed with its outcome when it ends, with role reviewer and an authored activity line. The board therefore shows the reviewer and the task's review lane with no extra step by firstmate.",
+    "The run-mode prompt tells the reviewer to run the project's check and the suites the diff touches, to prove fail-first by restoring the base versions of the changed non-test files, and to report which evidence was executed and which was read. The closed-list protocol (rounds, CRITERIA-COMPLETE, REGRESSION) is unchanged.",
+    "diff mode keeps today's behaviour byte for byte, and a project that declares nothing gets diff mode. Every existing caller and fixture listed in the scope behaves as before unless it opts into run mode. A caller's file is changed only when a test needs a fixture for run mode.",
+    "skills/reviewer/SKILL.md and skills/firstmate/SKILL.md describe run mode. The firstmate skill drops the hand-launched isolated review and the hand-emitted events once this lands.",
+    "The reviewer's vendor and model are the captain's choice. On 2026-09-24 the captain chose claude opus-5, the same vendor and model as the worker, to avoid a second vendor dependency. config.yaml's `reviewer:` block now names claude and opus-5 instead of cursor-agent and composer. Other vendors remain as fallbacks and explicit overrides. When a project declares no reviewer vendor or model, fm-session.sh start reports that, and the firstmate skill has firstmate ask the captain through a choice card listing the installed adapters and their models. The answer takes effect through a config.yaml change in a pull request, never by silently defaulting. The config comment calling a second engine 'real adversarial value' is reworded to say the reviewer is the captain's choice, and the README says the same.",
+    "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first in tests/review.test.sh and tests/adapter-contract.test.sh: run mode builds and removes its checkout; the permission flags passed to each vendor forbid writes outside it and forbid push; both modes emit review_opened plus approved or review_failed with the right role and task; diff mode's prompt and events are unchanged. The worker does not run the suite itself.",
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+  ]
+}
