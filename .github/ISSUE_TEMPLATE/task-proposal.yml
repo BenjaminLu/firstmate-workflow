@@ -1,0 +1,46 @@
+name: Task proposal
+description: Propose work that could become a task in design/tasks/.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Every change starts from a task (see CONTRIBUTING.md). The captain decides whether a proposal
+        becomes one; if it does, its file design/tasks/<id>.json lands in the same pull request
+        that implements it. Write in English.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What is wrong or missing today, and who it affects. Describe the current behaviour, not the fix.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Proposed acceptance
+      description: The criteria a reviewer would check, one per line, each one observable. Say which tests should fail first.
+      placeholder: |
+        - ...
+        - New behaviour gets tests written to fail first in tests/....
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Likely scope
+      description: The files the change would touch, one per line. These become the task's scope globs that gate 4 enforces.
+      placeholder: |
+        bin/fm-....sh
+        tests/....test.sh
+        design/design.md
+        design/tasks/T-xxx.json
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: section
+    attributes:
+      label: Affected design.md section
+      description: The section of design/design.md this changes or implements, for example "6. Lifecycle and the seven gates".
+    validations:
+      required: true
