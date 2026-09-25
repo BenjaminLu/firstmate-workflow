@@ -5180,13 +5180,23 @@ const CLOCK = (() => {
       timers.forEach(id => ct0(id)); timers.clear();
       Engine.tweens = Engine.tweens.filter(tw => !tweens.has(tw)); tweens.clear();
       if (document.getAnimations) document.getAnimations().forEach(an => { if (!(window.CSSAnimation && an instanceof CSSAnimation) && !(window.CSSTransition && an instanceof CSSTransition)) an.cancel(); });
-      // what a cancelled callback would have taken down: the effect layers, the light, the shake, the banner, a slow beat
-      clearFx(); q('#fireworks').innerHTML = ''; q('#dealfx')?.replaceChildren();
+      // what a cancelled callback would have taken down. every node a deferred callback removes is made in a layer
+      // emptied here or is named here, and every class one strips is stripped here: the effect layers and the
+      // handoff's flyer, trail and note (#fx, #fxsvg), the light, the shake, the banner, a slow beat
+      clearFx(); q('#fireworks').innerHTML = ''; q('#dealfx')?.replaceChildren(); q('#fx').replaceChildren(); q('#fxsvg').replaceChildren();
       const sc = q('#scene'); sc.style.setProperty('--rays', 0); sc.classList.remove('kshake', 'shake', 'slowmo'); q('#kraken').classList.remove('hitstop');
       q('#banner').classList.remove('on'); q('#voyage').classList.remove('arrive'); q('#salvo')?.classList.remove('fire'); q('#helm')?.classList.remove('spin');
+      sc.querySelector('.bolt')?.classList.remove('on'); q('#kraken .khead')?.classList.remove('blink');
+      // arms that were leaving (their leave or its end was cancelled) and a sealed card still on the table
+      const kept = new Set(KR.arms.values());
+      document.querySelectorAll('#karms > .arm').forEach(el => { if (!kept.has(el)) el.remove(); });
+      document.querySelectorAll('#deck > .sealed').forEach(el => el.remove());
+      // an option card in flight left its place on the table hidden; a count cut mid-roll shows its new value
+      document.querySelectorAll('#deck [data-slot] .chip').forEach(el => { el.style.visibility = ''; });
+      document.querySelectorAll('.roll').forEach(r => { const el = r.parentElement; if (el && el._v !== undefined && r.children.length > 1) el.innerHTML = '<span class="roll"><span>' + el._v + '</span></span>'; });
       // a merge's clearing ends with its moment; the order pose returns to what the deck says
-      S.clearing = false; if (S.cap === 'order') S.cap = UI.picks.size ? 'ready' : 'idle';
-      document.querySelectorAll('.fig.salute,.fig.cheer,.fig.rankup,.pennant.ping,.rrow.promoted,.card.flash').forEach(el => el.classList.remove('salute', 'cheer', 'rankup', 'ping', 'promoted', 'flash'));
+      S.clearing = false; if (S.cap === 'order') setCapPose(UI.picks.size ? 'ready' : 'idle');
+      document.querySelectorAll('.fig.salute,.fig.cheer,.fig.rankup,.fig.react,.pennant.ping,.rrow.promoted,.card.flash').forEach(el => el.classList.remove('salute', 'cheer', 'rankup', 'react', 'ping', 'promoted', 'flash'));
     },
   };
 })();
@@ -5266,7 +5276,7 @@ function pgAct(k, v) {
     if (v === 'strike') { strike(id); E.lastBattleLine = B('The kraken struck the deck.', '海怪重擊甲板。'); }
     if (v === 'hit') { blow(2); E.lastBattleLine = B('A hit.', '命中。'); }
     if (v === 'storm') { thicken(); E.lastBattleLine = B('The storm thickens.', '風暴加劇。'); }
-    if (v === 'win') { E.leave[ids[ids.length - 1]] = 'win'; victory(ids[ids.length - 1], 4, true); E.fake = Math.max(0, E.fake - 1); setTimeout(syncKraken, 60); }
+    if (v === 'win') { E.leave[ids[ids.length - 1]] = 'win'; victory(ids[ids.length - 1], E.pgRounds || 3, true); E.fake = Math.max(0, E.fake - 1); setTimeout(syncKraken, 60); }
     renderBand();
   }
 }
@@ -5330,7 +5340,7 @@ function emoAct(v) {
     logEvent(w, 'pushed', B(w + ' pushed a new head to ' + tk.id, w + ' 推送了 ' + tk.id + ' 的新 head'));
     renderLog();
     if (has(E.battle, tk.id)) { blow(2); E.lastBattleLine = B('A hit: ' + w + ' pushed a new head.', '命中：' + w + ' 推送了新的 head。'); renderBand(); }
-    narrate(w + ' pushed to ' + tk.id + '.' + (has(E.battle, tk.id) ? ' A hit on its arm.' : ''));
+    narrate(w + ' pushed to ' + tk.id + '.' + (has(E.battle, tk.id) ? ' A hit on its head.' : ''));
   } else if (v === 'red') {
     const tk = inBattleOr();
     if (!tk) { narrate('Nothing in flight has a check to go red.'); return; }

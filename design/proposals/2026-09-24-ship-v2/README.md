@@ -607,7 +607,14 @@ What makes that true, for the implementation:
   the playground off, the board's reset) cancels all of them and every scripted
   animation, clears the effect layers, the light, the shake, a slow beat, a
   merge's clearing and the salvo, and moves on a generation, so nothing scheduled
-  under one mode or fixture lands in the next. No deferred callback writes state
+  under one mode or fixture lands in the next. Because a cancelled callback
+  never runs its own clean-up, the cut also takes down everything such a
+  callback would have removed: a handoff's flyer, trail and still-mode note (the
+  handoff layers), arms that were leaving, a sealed card still on the table, an
+  option card in flight, a count mid-roll, and every pose class a timer would
+  have stripped (salute, cheer, rank-up, reaction, ping, blink, lightning, the
+  order pose). The rule for new effects: a node a deferred callback removes is
+  made in a layer the cut empties, or the cut names it. No deferred callback writes state
   anywhere: a milestone's log line is written with the merge, and only the port
   ritual waits for the salvo. The ambient sea's own stop timer runs on the native
   timer, so a cut never leaves it playing.
