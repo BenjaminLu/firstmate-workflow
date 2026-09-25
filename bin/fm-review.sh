@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Runs one review round. The reviewer is given the diff, the task spec and the
 # acceptance criteria - and, from round three, the round-three protocol's own
-# comments from the pull request, and, given --pr, the head's required check
-# and gate results - and nothing else. Not the worker's log, not
+# comments from the pull request, and, given --pr, in every round the head's
+# SHA, its required check and its gate summary - and nothing else. Not the worker's log, not
 # its reasoning, not even the path it worked in. Reasoning is persuasive; the
 # artefact is what is under review.
 #

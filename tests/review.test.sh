@@ -658,18 +658,19 @@ assert_lacks "$sent" "REASONING_WITHOUT_MARKER" "and carries none of its comment
 # head under review, the required check's run for exactly that head, and the
 # head's gate summary when state/ has one - and says so when either is not
 # there. GitHub answers check runs per commit, in its own JSON shape.
-check_runs() {   # check_runs <asked-for sha> <run's head_sha> <conclusion> <run id>
+check_runs() {   # check_runs <asked-for sha> <run's head_sha> <conclusion, "" for null> <run id> [status]
   local dir="$GHSTATE/api/repos/{owner}/{repo}/commits/$1"
   mkdir -p "$dir"
-  jq -n --arg sha "$2" --arg c "$3" --argjson id "$4" '{
+  jq -n --arg sha "$2" --arg c "$3" --argjson id "$4" --arg st "${5:-completed}" '{
     total_count: 1,
     check_runs: [{
       id: $id, name: "ci", node_id: "CR_stub", head_sha: $sha, external_id: "",
       url: ("https://api.github.com/repos/o/r/check-runs/" + ($id|tostring)),
       html_url: ("https://github.com/o/r/runs/" + ($id|tostring)),
       details_url: ("https://github.com/o/r/actions/runs/" + ($id|tostring) + "/job/" + ($id|tostring)),
-      status: "completed", conclusion: $c,
-      started_at: "2026-01-01T00:00:00Z", completed_at: "2026-01-01T00:05:00Z",
+      status: $st, conclusion: (if $c == "" then null else $c end),
+      started_at: "2026-01-01T00:00:00Z",
+      completed_at: (if $st == "completed" then "2026-01-01T00:05:00Z" else null end),
       output: {title: null, summary: null, text: null, annotations_count: 0, annotations_url: ""},
       check_suite: {id: 1}, app: {slug: "github-actions"}, pull_requests: []
     }]
@@ -742,12 +743,38 @@ assert_contains "$sent" "No run of the required check ci was found for head $hea
 assert_lacks "$sent" "GATE_LINE_1" "an older head's gate summary is not this head's"
 assert_contains "$sent" "No gate summary for head $head2" "and this head's is stated missing"
 
+# a red check for this head is shown as red, and one still running as not
+# concluded: only a green one would otherwise ever reach the reviewer
+check_runs "$head2" "$head2" failure 7203
+review_c "$dc/sent-hf.md" --round 1 --pr "$prh" >/dev/null
+sent="$(cat "$dc/sent-hf.md")"
+assert_contains "$sent" "Conclusion: failure" "a failed check for this head is shown as failed"
+assert_contains "$sent" "Run: https://github.com/o/r/actions/runs/7203/job/7203" "with the run it came from"
+assert_lacks "$sent" "Conclusion: success" "and is not shown as green"
+check_runs "$head2" "$head2" "" 7204 in_progress
+review_c "$dc/sent-hp.md" --round 1 --pr "$prh" >/dev/null
+sent="$(cat "$dc/sent-hp.md")"
+assert_contains "$sent" "Conclusion: none yet, status in_progress" "a check still running has no conclusion yet"
+assert_contains "$sent" "Run: https://github.com/o/r/actions/runs/7204/job/7204" "and names its run"
+
+# the required check is readable but its runs for this head are not: that is
+# stated, and no conclusion is claimed
+( cd "$rc" && git checkout -q work && echo again >> src/a && git commit -qm again -- src/a && git checkout -q main )
+head3="$(git -C "$rc" rev-parse work)"
+review_c "$dc/sent-hu.md" --round 1 --pr "$prh" >/dev/null
+sent="$(cat "$dc/sent-hu.md")"
+assert_contains "$sent" "Head SHA: $head3" "a third head is named"
+assert_contains "$sent" "The runs of the required check ci for head $head3 could not be read from GitHub" \
+  "check runs that cannot be read are stated"
+assert_lacks "$sent" "Conclusion:" "and no conclusion is claimed"
+assert_lacks "$sent" "The required check for head $head3 could not be read" "while the required check itself was read"
+
 # gh that cannot answer is stated, and the round still runs
 : > "$GHSTATE/down"
 outd="$(review_c "$dc/sent-down.md" --round 3 --pr "$pr")"
 assert_eq "0" "$?" "a round whose comments could not be read still runs"
 assert_contains "$(cat "$dc/sent-down.md")" "could not be read" "and its prompt says the context could not be read"
-assert_contains "$(cat "$dc/sent-down.md")" "The required check for head $head2 could not be read from GitHub" \
+assert_contains "$(cat "$dc/sent-down.md")" "The required check for head $head3 could not be read from GitHub" \
   "and that the required check could not be read either"
 assert_contains "$outd" "REJECT:T-Z" "and the verdict still comes back"
 rm -f "$GHSTATE/down"
