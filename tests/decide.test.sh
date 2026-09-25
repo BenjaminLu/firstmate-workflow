@@ -656,9 +656,14 @@ assert_contains " $named" " bin/fm-config.sh " "the sweep sees fm-config.sh name
 via="$(for f in $named; do runs "$f" && printf '%s ' "$f"; done)"
 assert_eq "" "$via" "nothing else in the repository calls them outside a comment or a message"
 direct="$(for f in $suites; do [ -f "$ROOT/$f" ] && both "$f" && printf '%s ' "$f"; done)"
-assert_eq "tests/decide.test.sh " "$direct" "no suite but decide.test.sh names fm-decide with --request"
+assert_contains " $direct" " tests/decide.test.sh " "the sweep sees decide.test.sh raise cards itself"
+assert_contains " $direct" " tests/board.test.sh " "and board.test.sh, which raises readiness cards"
+# A suite that raises a card itself is held to the same guard as one that
+# reaches fm-run.sh or fm.sh. decide.test.sh carries its own unset.
 reach="$(for f in $suites; do
-  [ "$f" != tests/decide.test.sh ] && [ -f "$ROOT/$f" ] && has "$f" "$names" && printf '%s\n' "$f"; done)"
+  [ "$f" != tests/decide.test.sh ] && [ -f "$ROOT/$f" ] || continue
+  case " $direct " in *" $f "*) printf '%s\n' "$f"; continue ;; esac
+  has "$f" "$names" && printf '%s\n' "$f"; done)"
 assert_contains " $(printf '%s ' $reach)" " tests/e2e-loop.test.sh " "the sweep finds a suite that runs fm-run.sh"
 assert_contains " $(printf '%s ' $reach)" " tests/selfupdate.test.sh " "and one that runs fm.sh self-update"
 # Each suite that reaches one is held to a guard it carries, whatever its
