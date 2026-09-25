@@ -1,0 +1,36 @@
+{
+  "id": "T-059",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-057"
+  ],
+  "title": "firstmate re-judges a task when it becomes ready",
+  "scope": [
+    "bin/fm-ready.sh",
+    "skills/firstmate/SKILL.md",
+    "tests/ready.test.sh",
+    "bin/fm-dispatch.sh",
+    "tests/dispatch.test.sh",
+    "board/server.ts",
+    "board/public/index.html",
+    "tests/board.test.sh",
+    "tests/option-loop.test.sh",
+    "tests/selfupdate.test.sh",
+    "tests/herdr.test.sh",
+    "tests/e2e-loop.test.sh",
+    "design/design.md",
+    "design/tasks.json"
+  ],
+  "acceptance": [
+    "The captain asked that a task turning ready is not simply moved to the ready lane: firstmate must judge, against main as it now stands, whether the task is still worth doing and whether now is the time. Some tasks lose their value because other work already did them. Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+    "Add bin/fm-ready.sh. `fm-ready.sh list` prints every task that is ready by T-057's rule (every depends_on merged; not merged, closed, parked or in flight), and marks the ones not yet judged. `fm-ready.sh judged --task T-xxx --decision D-<n>` records that the task was put before the captain. A task is judged once per time it becomes ready, so a task that goes back to backlog and returns is judged again. Records live under state/ and are written atomically. Usage errors exit 64.",
+    "skills/firstmate/SKILL.md: after every merge, and at startup, firstmate runs `fm-ready.sh list`. For each unjudged task it re-reads the task's spec against current main (what later merges already did, whether its premise still holds) and raises one choice card per task with options: A proceed (dispatch as written), B rescope (firstmate proposes the narrower spec in the card), C park, D drop. It states its recommendation and the evidence, e.g. the lines in main that already do part of the work. The card follows the normal decision rules: authored en and zh-TW details, a bespoke diagram, ids from D-1000 up, and a background await. It then carries out the captain's choice: dispatch; rescope the entry, then dispatch; park or drop through T-058's events once T-058 has merged, and until then by not dispatching and saying so.",
+    "firstmate never dispatches a ready task that has not been judged, except when the captain orders that task directly.",
+    "Captain decision D-1003 = B added bin/fm-dispatch.sh, board/server.ts, board/public/index.html and their tests to this scope, accepting that T-058 edits board/server.ts at the same time: (1) fm-dispatch.sh skips every task that fm-ready.sh lists as unjudged, and still starts a task the captain ordered directly (tests/dispatch.test.sh, fail first); (2) the board accepts a D answer on a choice card that offers option D, as a real option and not as custom, and renders its button (tests/board.test.sh); (3) a ready task whose only open decision is its judgment card stays in the ready lane instead of moving to the captain lane (tests/board.test.sh). bin/fm-ready.sh is committed with its executable bit set.",
+    "Captain decision D-1004 = A added tests/option-loop.test.sh, tests/selfupdate.test.sh and tests/herdr.test.sh to this scope, only for the updates the dispatcher change forces: fm-ready pinned in option-loop's PINNED list with its totals, and the selfupdate and herdr dispatch fixtures recording a judgment and an A answer before they dispatch. What those suites test does not change.",
+    "Captain decision D-1007 = A: (1) tests/e2e-loop.test.sh joins this scope, only so its fixture records a judgment and an A answer before fm-run.sh dispatches, as option-loop, selfupdate and herdr did under D-1004. (2) An adopted skill update (SK-*) is cleared by its own adoption decision answered A. fm-ready.sh reads that decision, so no extra readiness card is raised. tests/selfupdate.test.sh drives this real path and does not hand-write a state/ready record or a D-1000 answer. (3) `cleared` accepts only an A answer recorded for the same task on a choice card, or the SK adoption decision. An A on another task's card or on a merge card does not clear it (tests/ready.test.sh, fail first).",
+    "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first in tests/ready.test.sh: ready versus backlog listing from a fixture log and task list, judged marking, re-judging after going back to backlog, atomic writes, and exit 64 on a usage error. The worker does not run the suite itself.",
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+  ]
+}
