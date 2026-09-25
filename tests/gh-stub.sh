@@ -82,7 +82,22 @@ case "${1-}:${2-}" in
       *) printf '{"state":"%s"}\n' "${state:-OPEN}" | emit_json ;;
     esac
     ;;
-  pr:checks)  [ -f "$S/red" ] && exit 1; echo "ci pass"; exit 0 ;;
+  pr:checks)
+    # With --json gh prints the checks, keeping only the fields asked for,
+    # and exits 0 whatever they say; without it, the table and an exit code.
+    # One required check, `ci`, red when $S/red exists.
+    fields="$(arg --json "$@")"
+    if [ -n "$fields" ]; then
+      if [ -f "$S/red" ]; then st=FAILURE; b=fail; else st=SUCCESS; b=pass; fi
+      jq -cn --arg st "$st" --arg b "$b" --arg f "$fields" '
+        ($f | split(",")) as $keep
+        | [{bucket: $b, completedAt: "2026-01-01T00:05:00Z", description: "",
+            event: "pull_request", link: "https://github.com/o/r/actions/runs/1/job/1",
+            name: "ci", startedAt: "2026-01-01T00:00:00Z", state: $st, workflow: "ci"}
+           | with_entries(select(.key as $k | $keep | index($k)))]' | emit_json
+      exit 0
+    fi
+    [ -f "$S/red" ] && exit 1; echo "ci pass"; exit 0 ;;
   pr:comment)
     n="$3"; body="$(arg --body "$@"; printf x)"; body="${body%x}"
     # one line per comment on disk, so the newlines in a review body are
