@@ -385,7 +385,12 @@ fi
 # value of an option that takes one. In front of grep it steps over `!`,
 # `{`, `(`, NAME=value assignments, and the wrappers in the BEGIN table
 # below with their own options (and their values: `env -u NAME`,
-# `nice -n 5`, `timeout -s KILL 5`, `stdbuf -o L`). What it does not catch:
+# `nice -n 5`, `timeout -s KILL 5`, `stdbuf -o L`). Options are read the
+# way getopt reads them, on both sides: a cluster whose last letter takes a
+# value takes the next word (`env -iu NAME`, `timeout -vs KILL 5`), and a
+# long option may be any prefix that names one option (`grep --quie`,
+# `env --un NAME`); an ambiguous one (`grep --co`) is refused by grep and
+# not flagged. What it does not catch:
 # grep behind any other command (`xargs`, `sudo`, ...), behind a function
 # or alias of another name, a flag held in a variable, or a `-q`/`-c` that
 # comes after a grep operand holding `|`, `;`, `&`, `)` or a backtick
@@ -395,19 +400,40 @@ fi
 # eval'd, so it is as live as one in the code.
 pipe_awk='
   BEGIN {
-    # wrapper -> its short options that take a separate value, its long
-    # ones that do, and how many operands it reads before the command
-    wv["env"] = "uC";     wl["env"] = " unset chdir "
-    wv["nice"] = "n";     wl["nice"] = " adjustment "
-    wv["time"] = "fo";    wl["time"] = " format output "
-    wv["timeout"] = "sk"; wl["timeout"] = " signal kill-after "; wp["timeout"] = 1
-    wv["stdbuf"] = "ioe"; wl["stdbuf"] = " input output error "
+    # wrapper -> its short options that take a separate value, all its long
+    # ones, and how many operands it reads before the command; gl is grep's
+    # long ones. A long option is name:kind (v takes a separate value, q is
+    # quiet or count, o is anything else), all of them, so an abbreviation
+    # getopt_long accepts resolves the way getopt_long resolves it
+    wv["env"] = "uC"
+    wl["env"] = "ignore-environment:o null:o unset:v chdir:v split-string:o block-signal:o default-signal:o ignore-signal:o list-signal-handling:o debug:o help:o version:o"
+    wv["nice"] = "n";     wl["nice"] = "adjustment:v help:o version:o"
+    wv["time"] = "fo"
+    wl["time"] = "format:v output:v append:o portability:o verbose:o quiet:o help:o version:o"
+    wv["timeout"] = "sk"; wp["timeout"] = 1
+    wl["timeout"] = "foreground:o kill-after:v preserve-status:o signal:v verbose:o help:o version:o"
+    wv["stdbuf"] = "ioe"; wl["stdbuf"] = "input:v output:v error:v help:o version:o"
     wv["exec"] = "a";     wl["exec"] = ""
     wv["command"] = "";   wl["command"] = ""
     wv["builtin"] = "";   wl["builtin"] = ""
     wv["nohup"] = "";     wl["nohup"] = ""
+    gl = "after-context:v before-context:v basic-regexp:o binary:o binary-files:v byte-offset:o color:o colour:o context:v count:q dereference-recursive:o devices:v directories:v exclude:v exclude-dir:v exclude-from:v extended-regexp:o file:v files-with-matches:o files-without-match:o fixed-strings:o group-separator:v help:o ignore-case:o include:v initial-tab:o invert-match:o label:v line-buffered:o line-number:o line-regexp:o max-count:v no-filename:o no-group-separator:o no-ignore-case:o no-messages:o null:o null-data:o only-matching:o perl-regexp:o quiet:q recursive:o regexp:v silent:q text:o version:o with-filename:o word-regexp:o"
   }
-  function hazard(s,   n, seg, i, cut, ntok, tok, j, k, t, p, c, w, mode, opts, pos, l) {
+  # the kind of long option l (no leading --) in table tab: an exact name,
+  # else every name it is a prefix of, if they agree; "" when unknown or
+  # ambiguous, which getopt_long refuses
+  function lkind(l, tab,   n, e, i, name, k, got) {
+    sub(/=.*/, "", l)
+    if (l == "") return ""
+    n = split(tab, e, " "); got = ""
+    for (i = 1; i <= n; i++) {
+      k = substr(e[i], length(e[i])); name = substr(e[i], 1, length(e[i]) - 2)
+      if (name == l) return k
+      if (index(name, l) == 1) got = (got == "" || got == k) ? k : "?"
+    }
+    return got == "?" ? "" : got
+  }
+  function hazard(s,   n, seg, i, cut, ntok, tok, j, k, t, p, c, w, mode, opts, pos) {
     gsub(sq, "", s); gsub(/"/, "", s); gsub(/\\/, "", s)
     n = split(s, seg, /[|]/)
     for (i = 2; i <= n; i++) {
@@ -420,9 +446,13 @@ pipe_awk='
         if (opts && t == "--") { opts = 0; continue }
         if (opts && t ~ /^-./) {
           if (t ~ /^--/) {
-            l = substr(t, 3)
-            if (!index(l, "=") && index(wl[mode], " " l " ")) j++
-          } else if (length(t) == 2 && index(wv[mode], substr(t, 2, 1))) j++
+            if (!index(t, "=") && lkind(substr(t, 3), wl[mode]) == "v") j++
+            continue
+          }
+          # a cluster: the first letter that takes a value takes the rest
+          # of the word, or the next word when it is the last letter
+          for (p = 2; p <= length(t); p++)
+            if (index(wv[mode], substr(t, p, 1))) { if (p == length(t)) j++; break }
           continue
         }
         opts = 0
@@ -438,8 +468,12 @@ pipe_awk='
       for (k = j + 1; k <= ntok; k++) {
         t = tok[k]
         if (t == "--") break
-        if (t ~ /^--(quiet|silent|count)$/) return 1
-        if (t ~ /^--(regexp|file|max-count|after-context|before-context|context|label|include|exclude|exclude-dir|binary-files|devices|directories)$/) { k++; continue }
+        if (t ~ /^--/) {
+          c = lkind(substr(t, 3), gl)
+          if (c == "q") return 1
+          if (c == "v" && !index(t, "=")) k++
+          continue
+        }
         if (t !~ /^-[A-Za-z]/) continue
         for (p = 2; p <= length(t); p++) {
           c = substr(t, p, 1)

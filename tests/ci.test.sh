@@ -614,12 +614,21 @@ rm -f "$q/tests/shapes.test.sh"
 # (timeout and stdbuf are not on every machine). The red half: |&, each
 # wrapper and its own options, a path, the long flags, a value that is `--`
 # (stepping over it is what reaches the -q; not stepping, `--` ends the
-# options and hides it), and a pipe inside $( ).
+# options and hides it), and a pipe inside $( ). The wrapper options include
+# a cluster ending in a letter that takes a value (it takes the next word)
+# and abbreviated long options: getopt_long takes any unambiguous prefix,
+# and so do grep's own, in `abbreviated`.
 wrapped=('env -C /' 'env --unset NAME' 'env --chdir /' 'nice --adjustment 5'
   'time -f F' 'time -o F' 'time --format F' 'time --output F'
   'timeout -k 1 5' 'timeout --signal KILL 5' 'timeout --kill-after 1 5'
   'stdbuf -i L' 'stdbuf -e L' 'stdbuf --input L' 'stdbuf --output L'
-  'stdbuf --error L' 'exec -a name')
+  'stdbuf --error L' 'exec -a name'
+  'env -iu NAME' 'timeout -vs KILL 5' 'exec -ca name'
+  'env --un NAME' 'env --ch /' 'nice --adj 5' 'time --form F' 'time --out F'
+  'timeout --sig KILL 5' 'timeout --kill 1 5' 'stdbuf --in L' 'stdbuf --out L'
+  'stdbuf --err L')
+abbreviated=('--quie x' '--sil x' '--coun x' '--reg -- -q' '--lab -- -q x'
+  '--max -- -q x' '--after -- -q x' '--exclude-f -- -q x')
 { printf '#!/usr/bin/env bash\nset -uo pipefail\n'
   printf 'printf x %s& grep -q x\n' '|'                   # 3
   printf 'printf x %s env grep -q x\n' '|'                # 4
@@ -651,12 +660,18 @@ wrapped=('env -C /' 'env --unset NAME' 'env --chdir /' 'nice --adjustment 5'
   printf 'printf x %s /usr/bin/env -u NAME grep -c x\n' '|'  # 30
   # 31 on: every other wrapper option that takes a value
   for w in "${wrapped[@]}"; do printf 'printf x %s %s grep -q x\n' '|' "$w"; done
+  for o in "${abbreviated[@]}"; do printf 'printf x %s grep %s\n' '|' "$o"; done
 } > "$q/tests/e2e/wrappers.sh"
 # The green half, in the same gate run: each line is something one
 # exclusion lets through, so deleting that exclusion names it.
 valued=(-e -f -m -A -B -C -d -D --regexp --file --max-count --after-context
   --before-context --context --label --include --exclude --exclude-dir
-  --binary-files --devices --directories)
+  --binary-files --devices --directories --exclude-from --group-separator)
+# and what the long-option and cluster readers must leave alone:
+# - an ambiguous prefix (color colour context count), which grep refuses
+# - an abbreviation with its value attached, so `--` is next and ends it
+# - an attached wrapper value: -i takes "o", so L is the command, not grep
+unflagged=('grep --co x' 'grep --reg=x -- -q' 'stdbuf -io L grep -q x')
 { printf '#!/usr/bin/env bash\nset -uo pipefail\n'
   printf 'printf x %s grep -- -q\n' '|'                   # 3
   printf 'printf x %s grep --context=3 x\n' '|'           # 4
@@ -664,6 +679,7 @@ valued=(-e -f -m -A -B -C -d -D --regexp --file --max-count --after-context
   printf 'printf x %s grep -eq x\n' '|'                   # 6
   # 7 on: a -q that is the value of each option that takes one
   for o in "${valued[@]}"; do printf 'printf x %s grep %s -q x\n' '|' "$o"; done
+  for u in "${unflagged[@]}"; do printf 'printf x %s %s\n' '|' "$u"; done
 } > "$q/tests/e2e/exclusions.sh"
 plant "|& is a pipe into grep -q" "wrappers.sh:3:"
 plant "env in front of grep does not hide it" "wrappers.sh:4:"
@@ -698,6 +714,10 @@ for w in "${wrapped[@]}"; do
   plant "nor $w" "wrappers.sh:$n:"
   n=$((n + 1))
 done
+for o in "${abbreviated[@]}"; do
+  plant "grep $o is read as getopt_long reads it" "wrappers.sh:$n:"
+  n=$((n + 1))
+done
 assert_lacks "$planted" "exclusions.sh:3:" "-- ends grep's options, so -q after it is an operand"
 assert_lacks "$planted" "exclusions.sh:4:" "--context=3 is not count"
 assert_lacks "$planted" "exclusions.sh:5:" "--color is not count"
@@ -705,6 +725,10 @@ assert_lacks "$planted" "exclusions.sh:6:" "-eq is -e with the pattern q"
 n=7
 for o in "${valued[@]}"; do
   assert_lacks "$planted" "exclusions.sh:$n:" "-q as the value of $o is not -q"
+  n=$((n + 1))
+done
+for u in "${unflagged[@]}"; do
+  assert_lacks "$planted" "exclusions.sh:$n:" "$u is not a pipe into grep -q"
   n=$((n + 1))
 done
 rm -f "$q/tests/e2e/wrappers.sh" "$q/tests/e2e/exclusions.sh"

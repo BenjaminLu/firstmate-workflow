@@ -1235,8 +1235,13 @@ wrappers `env`, `nice`, `time`, `timeout`, `stdbuf`, `exec`, `command`,
 `builtin` and `nohup` with their own options and those options' values
 (`env -u NAME`, `nice -n 5`, `timeout -s KILL 5`, `stdbuf -o L`). It flags
 `-q`/`-c` or `--quiet`/`--silent`/`--count` among grep's words, stepping over
-the value of `-e`, `-f`, `-m`, `-A`, `-B`, `-C`, `-d`, `-D` and their long
-forms, and stopping at `--`. Quotes are transparent, because an assertion
+the value of `-e`, `-f`, `-m`, `-A`, `-B`, `-C`, `-d`, `-D` and every long
+option that takes one, and stopping at `--`. Options are read the way getopt
+reads them, on the wrappers' side and on grep's: a cluster whose last letter
+takes a value takes the next word (`env -iu NAME`, `timeout -vs KILL 5`), and
+a long option may be any prefix that names one option (`grep --quie`,
+`env --un NAME`); an ambiguous one (`grep --co`) is refused by grep and not
+flagged. Quotes are transparent, because an assertion
 string is eval'd. A file that declares `# fm:lint-source` is skipped. Each of
 these has its own plant in `tests/ci.test.sh`. What it does not catch: grep
 behind any other command (`xargs`, `sudo`, ...), behind a function or alias
@@ -1260,6 +1265,24 @@ the `grep -c .` and `grep -q .` sites (`.` never matches an empty line), the
 here-string loop in `tests/pipefail-grep.test.sh`), and i18n's two `'^$'`
 checks, which use `< <(jq ...)` because `$(...)` would strip the trailing
 empty lines they look for.
+
+```
+SWEPT:T-103 pipelines into grep -q / grep -c in the test suites
+  searched: the round-1 regex, then the command-reading lint, over every *.sh
+    below bin/ and tests/ (62 files; bin/ci.sh, bin/fm-config.sh and
+    tests/pipefail-grep.test.sh skipped by their lint-source marker)
+  found 27 in 11 files under tests/, fixed 27: adapter-contract 1, board 2,
+    cleanup 1, decide 3, dispatch 2, i18n 4, lib.sh 1, open 1, review 3,
+    sync-prs 1, worker 8; plus bin/ci.sh 1
+SWEPT:T-103 converted sites where empty input meets a pattern matching an empty line
+  searched: every <<< and < <( line the branch added under tests/ and in bin/ci.sh
+  found 1 (tests/lib.sh assert_matches), fixed 1
+SWEPT:T-103 option spellings getopt accepts that the lint's readers missed
+  searched: each option reader in the lint (wrappers and grep) against
+    clusters ending in a value letter, attached values and long-option prefixes
+  found 2 (wrapper clusters like env -iu NAME; abbreviated long options on
+    both sides like grep --quie), fixed 2, each planted in tests/ci.test.sh
+```
 
 Each stage skips cleanly when its subject does not exist, so the gate is green
 from an empty tree onward. **Every e2e uses the `mock` adapter** — no model
