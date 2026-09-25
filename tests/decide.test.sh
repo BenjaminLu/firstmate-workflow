@@ -660,10 +660,22 @@ assert_contains " $direct" " tests/decide.test.sh " "the sweep sees decide.test.
 assert_contains " $direct" " tests/board.test.sh " "and board.test.sh, which raises readiness cards"
 # A suite that raises a card itself is held to the same guard as one that
 # reaches fm-run.sh or fm.sh. decide.test.sh carries its own unset.
-reach="$(for f in $suites; do
-  [ "$f" != tests/decide.test.sh ] && [ -f "$ROOT/$f" ] || continue
-  case " $direct " in *" $f "*) printf '%s\n' "$f"; continue ;; esac
-  has "$f" "$names" && printf '%s\n' "$f"; done)"
+# A function, not a loop inside $(...): bash 3.2 reads a case pattern's ")"
+# in a command substitution as its end, and the loop's own words become the
+# list of suites.
+reaching() {
+  local f
+  for f in $suites; do
+    [ "$f" != tests/decide.test.sh ] && [ -f "$ROOT/$f" ] || continue
+    case " $direct " in *" $f "*) printf '%s\n' "$f"; continue ;; esac
+    has "$f" "$names" && printf '%s\n' "$f"
+  done
+  return 0
+}
+reach="$(reaching)"
+for f in $reach; do
+  assert_ok "git -C '$ROOT' ls-files --error-unmatch -- '$f' >/dev/null 2>&1" "$f, a suite that reaches a card, is a tracked file"
+done
 assert_contains " $(printf '%s ' $reach)" " tests/e2e-loop.test.sh " "the sweep finds a suite that runs fm-run.sh"
 assert_contains " $(printf '%s ' $reach)" " tests/selfupdate.test.sh " "and one that runs fm.sh self-update"
 # Each suite that reaches one is held to a guard it carries, whatever its
