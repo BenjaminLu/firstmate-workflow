@@ -2,9 +2,14 @@
 
 vendor: claude          # every role uses this agent unless overridden below
 model:  opus-5
-reviewer:               # optional: a different engine for review buys real
-  vendor: cursor-agent  # adversarial value. delete this block to use one vendor.
-  model:  composer
+reviewer:               # the reviewer's engine is the captain's choice
+  vendor: claude        # chosen 2026-09-24: the worker's vendor and model,
+  model:  opus-5        # so review adds no second vendor dependency
+  mode:   run           # diff: the reviewer reads the diff; run: it also runs
+                        # the tests in a fresh checkout of the pull request
+  network: registry.npmjs.org cdn.playwright.dev playwright.download.prss.microsoft.com playwright.azureedge.net
+                        # the only hosts a run-mode reviewer's commands reach:
+                        # what `setup` downloads from. Never a GitHub host.
 # worker:               # the same override exists for the worker; without it
 #   vendor: codex       # the worker uses the top-level vendor above
 
@@ -51,3 +56,9 @@ project:                # how this repository is prepared and checked; see READM
   docs:                 # changes that need no test; skills are behaviour
     - design/**
     - README.md
+    - LICENSE
+    - CODE_OF_CONDUCT.md
+    - CONTRIBUTING.md
+    - SECURITY.md
+    - .github/ISSUE_TEMPLATE/**
+    - .github/pull_request_template.md

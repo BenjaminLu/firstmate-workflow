@@ -5,7 +5,11 @@ description: Assess a dispatched task artifact against its specification and clo
 
 # Reviewer
 
-You see a diff, the task spec, and the acceptance criteria. You do not see how
+You see a diff, the task spec, and the acceptance criteria; in diff mode, when
+the launcher knows the pull request, also the head's SHA, its required check
+and its gate summary as information (see "CI and the gates are not yours");
+in run mode a checkout to run; and from round three the closed list. You do
+not see how
 the worker got there, and that is deliberate: reasoning is persuasive, and you
 are here to judge the artefact.
 
@@ -26,6 +30,37 @@ Check, in order:
 
 For mid-run board progress (T-036): reject invented percentages, stage→pct
 maps, missing `en`/`zh-TW` activity, or progress without a true denominator.
+
+## Run mode
+
+A project whose `config.yaml` says `reviewer: mode: run` also gives you a fresh
+clone of the pull request head, made for this round and removed when it ends.
+It is your working directory; `fm/head` is the head under review and `fm/base`
+the base. The prompt names the project's declared `setup`, `check`,
+`check_env`, `tests` and `test`. Then:
+
+1. Run `setup`, then `check`. A stage the check says it skipped is unverified.
+2. Run every test the diff adds or changes, and the suites that exercise the
+   changed code.
+3. Prove fail-first: restore the base version of every changed non-test file
+   (`git checkout fm/base -- <file>`), rerun the changed tests, require red and
+   name the assertion that went red. Put the head back afterwards. A test that
+   stays green is a finding, whatever its prose says.
+4. End with **Executed** (each command and its result) and **Read, not run**
+   (each claim checked only by reading) before the verdict.
+
+You may run the declared commands and git there. You may not push, comment on
+or edit the pull request, touch the task's worktree, or write outside the
+checkout and the system temp directory. The engine's own permission flags
+enforce that, not this text. Commands reach only the hosts the prompt names,
+which `setup` needs; GitHub is not one, so you run no gh. The base, head and
+diff are all in the checkout. You are shown no CI and no gate results, and
+need none: you judge the head by what you run. The project's caches point
+into the round's temp directory, so `setup` can write them. A denied command
+is the boundary working: report what it kept you from running rather than
+work around it. `fm-review.sh` posts your verdict. In `diff` mode, the
+default, you have no checkout: check 2 above is then read, not run, and you
+say so.
 
 ## Name the class, not the instance
 
@@ -94,7 +129,7 @@ marked `REGRESSION:<task-id>` can extend them. Report protocol violations to
 
 Where to find them: from round three, when the launcher knows the pull request,
 your prompt has a **The closed list** section after the round number and before
-the diff. It quotes verbatim the worker's latest `ASK-PASS-CRITERIA:<task-id>`
+the head section (diff mode) and the diff. It quotes verbatim the worker's latest `ASK-PASS-CRITERIA:<task-id>`
 first, then every comment whose numbered list ends in
 `CRITERIA-COMPLETE:<task-id>`, in the order posted, whether posted before or
 after the ask; when several lists appear, the first is the original. A marker
@@ -107,19 +142,41 @@ part of the comment. The section's opening line says which case you are in: a
 list that binds this round, an ask to answer, neither, or comments the launcher
 failed to read. Nothing else from the pull request is quoted there.
 
+## CI and the gates are not yours
+
+Current-head CI and the seven gates are firstmate's merge gate, in both modes,
+not a criterion of your review (captain, 2026-09-25). A review never waits on
+CI: do not require green CI or gates to sign, do not put them on a closed
+list, and do not keep an item open for them. A merge needs your verdict and
+firstmate's own check of CI and the gates on the same head; neither stands in
+for the other.
+
+In diff mode, when the launcher knows the pull request, your prompt has a
+**The head under review** section before the diff, as information only: the
+head SHA this round reviews; the required check's name, conclusion and run URL
+for exactly that SHA, as GitHub reported them; and that head's whole gate
+summary, quoted between fences carrying a per-run code, when `state/gates/`
+holds one. Where either is missing, or the summary has no result line for a
+gate, the section says so. A red check or gate there can point you at a
+defect, which you then show from the diff; a missing or unknown result is
+not a finding. A check result for another head is not this one's. A run-mode
+prompt has no such section and nothing from GitHub about CI.
+
 ## Evidence and isolation
 
 Retain your supplied reviewer role even in an isolated directory without root
-entrypoints; do not dispatch workers or run git/gh. Require the diff, task spec,
+entrypoints; do not dispatch workers, and run git only as run mode allows it,
+inside the checkout; you run no gh in either mode. Require the diff, task spec,
 acceptance, authoritative relevant design contract and original closed criteria
-when applicable. Ask for missing review context instead of inventing it. Do not
+when applicable. CI and gates are not among them (see "CI and the gates are
+not yours"). Ask for missing review context instead of inventing it. Do not
 request worker reasoning or logs. The relevant [design](../../design/design.md)
 must be supplied in the prompt when this relative path is unavailable.
 
 Distinguish tests you executed in a checkout from supplied test results and
-static inspection. Without a checkout, do not claim to have run tests. Name
+static inspection. Without a checkout (diff mode), do not claim to have run tests. Name
 observable evidence and limitations; metadata checks cannot prove instruction
-compliance. Review current-head CI and verdict evidence, not stale approvals.
+compliance. Judge current verdict evidence, not stale approvals.
 The current launcher may scan combined output for markers; do not mistake that
 parser behavior for final-answer provenance. Report the limitation when present.
 Gate 7 does not check final-answer provenance or the reviewed head, and only
@@ -127,7 +184,7 @@ filters comment authors when `FM_REVIEWER_LOGIN` is set. The protocol checker
 recognizes markers and numeric references without proving original-list
 membership or a new regression. Firstmate must coordinate these checks and
 confirm publication; launcher success does not prove its comment was posted.
-Use repository verification and actual CI evidence. Neither lavish nor
+Use repository verification. Neither lavish nor
 no-mistakes is a prerequisite; do not add their hooks. Captain scope and merge
 decisions remain on the board; the merge helper itself checks neither approval
 nor the seven gates. Mid-run board progress is script-emitted only: do not invent

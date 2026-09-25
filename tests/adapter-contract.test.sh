@@ -132,6 +132,154 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
              assert_contains " $argv " " --skip-git-repo-check " "$name does not require a repository"
              assert_eq "-" "${argv##* }" "$name keeps the stdin marker last" ;;
     esac
+    # a diff round is today's invocation, in today's directory (T-066)
+    case "$name" in
+      claude) assert_eq "-p --permission-mode acceptEdits" "$argv" \
+                "$name's diff-mode invocation is unchanged" ;;
+    esac
+
+    # --- a run-mode review (T-066) ---------------------------------------
+    # The reviewer runs commands in fm-review.sh's checkout. What keeps it
+    # there is the CLI's own permission flags, so those are what is asserted:
+    # an adapter either carries `# fm:review-run` and confines the round, or
+    # refuses it before its CLI starts.
+    mkdir -p "$d/checkout/.git"
+    ck="$(cd "$d/checkout" && pwd -P)"
+    tmpd="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
+    printf '#!/usr/bin/env bash\ncat > /dev/null\npwd -P > "%s/cwd.run"\nprintf "%%s\\n" "$@" > "%s/argv.run"\nenv > "%s/env.run"\nprintf "ran\\n"\nexit 0\n' \
+      "$d" "$d" "$d" > "$d/fakebin/$name"
+    chmod +x "$d/fakebin/$name"
+    rm -f "$d/cwd.run" "$d/argv.run" "$d/env.run"
+    # The launcher's own state goes with it: fm_identity exports FM_ROOT at
+    # the task's repository, and the checkout's scripts pick their tree from
+    # FM_ROOT, so a `check` run in the checkout would gate another tree.
+    FM_ROOT="$d/tree" FM_CODE_ROOT="$d/tree" FM_TASK=T-Z FM_ACTOR=reviewer-x FM_GH=gh \
+      FM_PROJECT_ROOT="$d/tree" HERDR_PANE_ID=p1 GIT_DIR="$d/tree/.git" GH_TOKEN=secret GITHUB_TOKEN=secret \
+      XDG_CACHE_HOME="$d/cache" \
+      FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/checkout" PATH="$d/fakebin:/usr/bin:/bin" \
+      "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1; rrc=$?
+    if grep -q '^# fm:review-run' "$adapter"; then
+      assert_eq "0" "$rrc" "$name runs a run-mode review"
+      assert_eq "$ck" "$(cat "$d/cwd.run" 2>/dev/null)" "$name's engine works in the checkout, not its output directory"
+      assert_ok "test -s '$d/env.run'" "$name's engine environment was recorded"
+      assert_eq "" "$(grep -E '^(FM_|HERDR_|GIT_|GH_|GITHUB_TOKEN=)' "$d/env.run" 2>/dev/null || true)" \
+        "$name's run-mode engine sees none of the launcher's FM_, HERDR_, GIT_ or GitHub-token variables"
+      assert_contains "$(cat "$d/env.run" 2>/dev/null)" "XDG_CACHE_HOME=$d/cache" \
+        "$name keeps the round's cache redirection"
+      runargv="$(cat "$d/argv.run" 2>/dev/null)"
+      list_after() { awk -v f="$1" '$0==f{on=1;next} /^--/{on=0} on' "$d/argv.run"; }
+      case "$name" in
+        claude)
+          assert_contains "$runargv" "--permission-mode
+dontAsk" "$name denies every tool call no rule allows"
+          assert_lacks "$runargv" "acceptEdits" "$name does not accept edits wholesale in run mode"
+          assert_lacks "$runargv" "bypassPermissions" "$name never bypasses permissions"
+          assert_lacks "$runargv" "dangerously" "$name never skips permission checks"
+          allowed="$(list_after --allowedTools)"; denied="$(list_after --disallowedTools)"
+          assert_ne "" "$allowed" "$name names what the reviewer may do"
+          stray="$(grep -E '^(Edit|Write|Read)' <<< "$allowed" \
+            | grep -vE "^(Edit|Write|Read)\(/($ck|$tmpd)/\*\*\)$" || true)"
+          assert_eq "" "$stray" "$name allows file writes only under the checkout and the temp directory"
+          assert_contains "$allowed" "Edit(/$ck/**)" "$name lets the reviewer edit its own checkout"
+          assert_lacks "$allowed" "WebFetch" "$name gives the reviewer no web access"
+          assert_eq "" "$(grep -xE 'Bash|Bash\(.*\)' <<< "$allowed" || true)" \
+            "$name allows no shell command outside its sandbox"
+          for rule in "Bash(git push:*)" "Bash(git remote:*)" "Bash(gh pr comment:*)" \
+                      "Bash(gh pr review:*)" "Bash(gh pr merge:*)" "Bash(gh api:*)" "Bash(curl:*)"; do
+            assert_contains "
+$denied
+" "
+$rule
+" "$name denies $rule on the command line"
+          done
+          settings="$(awk 'on{print;exit} $0=="--settings"{on=1}' "$d/argv.run")"
+          assert_eq "true" "$(jq -r '.sandbox.enabled == true and .sandbox.autoAllowBashIfSandboxed == true
+                     and .sandbox.allowUnsandboxedCommands == false' <<< "$settings" 2>/dev/null)" \
+            "$name runs shell commands only inside its sandbox, which confines their writes"
+          assert_eq "true" "$(jq -r '.permissions.defaultMode == "dontAsk"
+                     and any(.permissions.deny[]; . == "Bash(git push:*)")
+                     and any(.permissions.deny[]; . == "Bash(gh pr comment:*)")' <<< "$settings" 2>/dev/null)" \
+            "$name's settings deny push and comments as well"
+          # What the adapter leaves loaded matters as much as what it adds:
+          # rules merge across settings sources, and the checkout is the
+          # branch under review, so its .claude/settings.json and .mcp.json -
+          # hooks, allow rules, sandbox exclusions, extra directories - and
+          # the operator's own ~/.claude would all join the round. Restricted
+          # mode loads none of them; only --settings and managed policy apply.
+          assert_contains "
+$runargv
+" "
+--restricted
+" "$name loads no user, project or local settings, so the branch cannot add hooks or rules"
+          assert_contains "
+$runargv
+" "
+--strict-mcp-config
+" "$name loads no MCP server the branch or the operator's config declares"
+          assert_contains "
+$runargv
+" "
+--disable-slash-commands
+" "$name loads no skill or command from the branch or the operator"
+          assert_eq "Bash,Read,Edit,Write,Grep,Glob" "$(list_after --tools)" \
+            "$name names the only tools the round has"
+          assert_eq "$tmpd" "$(list_after --add-dir)" "$name's file tools reach only the checkout and the temp directory"
+          # the barriers push actually meets: no network beyond what the
+          # project declares, and no settings excluding a command from the sandbox
+          assert_eq "[]" "$(jq -c '.sandbox.network.allowedDomains' <<< "$settings" 2>/dev/null)" \
+            "$name's sandbox reaches no network when the project declares none"
+          assert_eq "null" "$(jq -c '.sandbox.excludedCommands' <<< "$settings" 2>/dev/null)" \
+            "$name exempts no command from its sandbox"
+          FM_REVIEW_NETWORK="registry.npmjs.org cdn.playwright.dev" FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/checkout" \
+            PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+          settings="$(awk 'on{print;exit} $0=="--settings"{on=1}' "$d/argv.run")"
+          assert_eq '["registry.npmjs.org","cdn.playwright.dev"]' \
+            "$(jq -c '.sandbox.network.allowedDomains' <<< "$settings" 2>/dev/null)" \
+            "$name's sandbox reaches exactly the domains the project declares"
+          rm -f "$d/cwd.run"
+          FM_REVIEW_NETWORK='x.org","*' FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/checkout" \
+            PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+          assert_eq "64" "$?" "$name refuses a network entry that is not a domain name"
+          assert_fail "test -e '$d/cwd.run'" "and its CLI never starts"
+          # a `*` is read as itself: expanded, it became the file names in
+          # the adapter's working directory, which pass as domains
+          mkdir -p "$d/globdir"; : > "$d/globdir/x.org"; rm -f "$d/cwd.run"
+          ( cd "$d/globdir" && FM_REVIEW_NETWORK='*' FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/checkout" \
+            PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1 )
+          assert_eq "64" "$?" "$name refuses a network entry of '*' rather than globbing it"
+          assert_fail "test -e '$d/cwd.run'" "and its CLI never starts"
+          # an operator argument that touches permissions or what is loaded
+          # would undo all of it
+          for extra in "--dangerously-skip-permissions" "--setting-sources user,project" \
+                       "--mcp-config x.json" "--plugin-dir p" "--agents {}"; do
+            rm -f "$d/cwd.run"
+            FM_ADAPTER_ARGS="$extra" FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/checkout" \
+              PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+            assert_eq "64" "$?" "$name refuses a run-mode review whose extra arguments say $extra"
+            assert_fail "test -e '$d/cwd.run'" "and its CLI never starts"
+          done
+          ;;
+      esac
+      # a checkout that is not one is refused, not reviewed from wherever
+      rm -f "$d/cwd.run"
+      FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/tree" PATH="$d/fakebin:/usr/bin:/bin" \
+        "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+      assert_eq "64" "$?" "$name refuses a run-mode checkout with no .git"
+      assert_fail "test -e '$d/cwd.run'" "and its CLI never starts"
+      # no GitHub access at all, enforced where the CLI starts, not only by
+      # fm-review.sh: a caller that hands the adapter a GitHub host directly
+      # is refused the same way
+      for gh_host in github.com raw.githubusercontent.com ghcr.io x.github.io API.GitHub.com; do
+        rm -f "$d/cwd.run"
+        FM_REVIEW_NETWORK="registry.npmjs.org $gh_host" FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/checkout" \
+          PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+        assert_eq "64" "$?" "$name refuses a run-mode network naming $gh_host"
+        assert_fail "test -e '$d/cwd.run'" "and its CLI never starts ($gh_host)"
+      done
+    else
+      assert_eq "64" "$rrc" "$name cannot confine a run-mode review, so it refuses one"
+      assert_fail "test -e '$d/cwd.run'" "and its CLI never starts"
+    fi
 
     vendor_says "wrote the thing" 0
     PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
@@ -149,6 +297,25 @@ done
 # --- the verdict itself, on the transcripts that actually caused trouble ---
 # shellcheck source=bin/adapters/_lib.sh
 . "$ROOT/bin/adapters/_lib.sh"
+
+# the one rule on which hosts a run-mode sandbox may reach, shared by
+# fm-review.sh and every adapter: plain domain names, never GitHub's
+for gh_host in github.com GITHUB.COM api.github.com github.io x.github.io github.dev \
+               raw.githubusercontent.com githubusercontent.com githubassets.com githubapp.com ghcr.io; do
+  assert_contains "$(fm_review_host_refusal "$gh_host")" "GitHub host" "$gh_host is refused as a GitHub host"
+done
+for ok_host in registry.npmjs.org notgithub.com github.com.example.org cdn.playwright.dev; do
+  assert_eq "" "$(fm_review_host_refusal "$ok_host")" "$ok_host is not a GitHub host"
+done
+for bad_host in '*' '*.com' '.github.com' 'github.com.' 'a..b' 'x.org","*' ''; do
+  assert_contains "$(fm_review_host_refusal "$bad_host")" "not a plain domain name" "'$bad_host' is not a plain domain name"
+done
+assert_eq "ghcr.io, which is a GitHub host; a run-mode reviewer may not reach GitHub" \
+  "$(fm_review_network_refusal "registry.npmjs.org ghcr.io raw.githubusercontent.com")" \
+  "a network list names the first host it may not reach"
+assert_eq "" "$(fm_review_network_refusal "registry.npmjs.org cdn.playwright.dev")" "and nothing for one it may"
+assert_eq "" "$(fm_review_network_refusal "")" "and nothing for an empty one"
+
 v="$(mktemp -d)"
 verdict() { # <log contents> <rc> -> the verdict
   printf '%s' "$1" > "$v/log"
@@ -242,7 +409,22 @@ never() { false; }
 fm_run_chain "$e/ad" "half two" "$e/prompt" "$e/out" "$e/log" never per-vendor
 assert_ok "test -f '$e/out/half/partial.md'" "a dead vendor's bytes stay in its own directory"
 assert_fail "test -f '$e/out/two/partial.md'" "and are not found in the next vendor's"
+
+# a run-mode round's chain holds only adapters that can confine it (T-066)
+printf '#!/usr/bin/env bash\n# fm:review-run\nexit 0\n' > "$e/ad/boxed.sh"; chmod +x "$e/ad/boxed.sh"
+assert_eq "boxed
+nosuchvendor" "$(fm_review_run_chain "$e/ad" "boxed two nosuchvendor half")" \
+  "a fallback that cannot confine the round is dropped; a name with no adapter is left for the chain to report"
+fm_review_run_chain "$e/ad" "two boxed" >/dev/null
+assert_eq "1" "$?" "a head that cannot confine the round is refused, not replaced"
+# the chain is split, never globbed: a `*` in the head's place became the
+# file names beside it, and `boxed` among them was taken for the reviewer
+mkdir -p "$e/globdir"; : > "$e/globdir/boxed"
+assert_eq "*" "$(cd "$e/globdir" && fm_review_run_chain "$e/ad" "*")" \
+  "a chain entry of '*' is read as itself, not as the file names around it"
 rm -rf "$e"
+claude_marker="$(grep -c '^# fm:review-run' "$ROOT/bin/adapters/claude.sh")"
+assert_eq "1" "$claude_marker" "claude, the configured reviewer, can confine a run-mode review"
 # Every alternative in the list has to be shaped like a failure. A bare noun
 # is what a healthy run prints on its way up - gemini says "Loaded cached
 # credentials." before it does anything - and a `credentials?` alternative
