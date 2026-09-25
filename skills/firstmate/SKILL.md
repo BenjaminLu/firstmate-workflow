@@ -135,6 +135,17 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   events yourself; both were stopgaps for the diff-only reviewer and are
   retired. If a run-mode round cannot start (no confining adapter, no checkout),
   report the script's message and coordinate the fix.
+- Round order and the merge double check (captain, 2026-09-25; design §6).
+  Start the review round through `bin/fm-review.sh` as soon as the worker hands
+  back; never hold it for CI. CI and the seven gates are not a review criterion
+  in either mode: a run-mode reviewer is shown none, and a diff-mode reviewer
+  sees the head section as information only. A merge card needs two
+  independent checks on the same current head: the reviewer's
+  `APPROVE:<task-id>` for that head, and your own reading of that head's
+  required GitHub check (green) and the seven gates (`bin/fm-gate.sh`).
+  Neither substitutes for the other, and a head that changes after either one
+  restarts both. `fm-run.sh` still reviews only after gates 1-6 are green, so
+  do not wait for its loop to start a round.
 - Decision requests use the approved T-034 `--details` contract below. Request
   mode returns after publication; it does not wait for approval.
   `bin/fm-decide.sh --await <id> --repo <root>` returns recorded response JSON,

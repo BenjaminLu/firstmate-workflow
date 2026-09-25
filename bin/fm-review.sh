@@ -24,6 +24,12 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
+# the adapters' library, for the one rule on which hosts a run-mode sandbox
+# may reach: this script and the adapter apply the same one
+_fm_alib="$(dirname "${BASH_SOURCE[0]}")/adapters/_lib.sh"
+[ -f "$_fm_alib" ] || { echo "${0##*/}: missing $_fm_alib" >&2; exit 70; }
+# shellcheck source=bin/adapters/_lib.sh
+. "$_fm_alib"
 fm_args=("$@")
 
 REPO="$(fm_default_repo)"; TASK=''; BRANCH=''; PR=''; ROUND=1; VENDOR=''; NAME=''
@@ -221,25 +227,16 @@ if [ "$REVIEW_MODE" = run ]; then
   sweep_checkouts
   # The sandbox reaches only these hosts: what `setup` needs, declared by the
   # checkout running the round. No GitHub host belongs here, since the
-  # network is what keeps a push or a gh write from leaving the sandbox.
-  # Split with read, never an unquoted expansion: that also globs, and a `*`
-  # would be checked as the file names in the current directory.
+  # network is what keeps a push or a gh write from leaving the sandbox; the
+  # rule is the adapters' own (fm_review_network_refusal), said here as a
+  # configuration error before anything is built.
   FM_REVIEW_NETWORK="$(fm_cfg_in reviewer network)"; export FM_REVIEW_NETWORK
-  read -r -a net_hosts <<<"$FM_REVIEW_NETWORK"
-  for h in ${net_hosts[@]+"${net_hosts[@]}"}; do
-    why=''
-    # a wildcard is refused too: `*.com` reaches github.com as surely as
-    # naming it does
-    case "$h" in *[!A-Za-z0-9.-]*|.*|*.) why="is not a plain domain name" ;; esac
-    case "$(printf '%s' "$h" | tr '[:upper:]' '[:lower:]')" in
-      github.com|*.github.com) why="is a GitHub host; a run-mode reviewer may not reach GitHub" ;;
-    esac
-    [ -z "$why" ] || {
-      echo "fm-review: config.yaml's reviewer network names $h, which $why" >&2
-      emit --review-outcome infrastructure_error --type review_failed \
-           --en "review round $ROUND could not start" --tw "第 $ROUND 輪審核無法開始"
-      exit 65; }
-  done
+  bad_host="$(fm_review_network_refusal "$FM_REVIEW_NETWORK")"
+  [ -z "$bad_host" ] || {
+    echo "fm-review: config.yaml's reviewer network names $bad_host" >&2
+    emit --review-outcome infrastructure_error --type review_failed \
+         --en "review round $ROUND could not start" --tw "第 $ROUND 輪審核無法開始"
+    exit 65; }
   build_checkout >/dev/null 2>&1 || {
     echo "fm-review: could not make a fresh checkout of $BRANCH against $BASE for a run-mode review" >&2
     emit --review-outcome infrastructure_error --type review_failed \
@@ -333,11 +330,14 @@ closed_list() {
   done
 }
 
-# Given --pr, every round is shown the evidence a diff cannot carry, bound to
+# Given --pr, every diff round is shown the evidence a diff cannot carry, as
+# information only (a run-mode round is shown none of it), bound to
 # the exact head under review (T-088): the head's SHA, the required check's
 # run for that commit, and the head's gate summary when state/ has one.
-# Without it a closed-list item asking for green CI and gates could never be
-# closed, because the reviewer never saw either (T-067, round nine).
+# It was added so a closed-list item asking for green CI and gates could be
+# closed (T-067, round nine); since the captain's 2026-09-25 decision no item
+# may ask for them - CI and the gates are firstmate's merge gate - and the
+# section stays as information.
 #
 # The check comes from GitHub's check runs for the commit itself, and a run
 # that names another head is dropped: the pull request's own checks follow
@@ -408,7 +408,11 @@ prompt="$work/prompt.md"
   elif [ "$ROUND" -ge 3 ]; then
     printf '\nThis is round three or later. If the worker has posted ASK-PASS-CRITERIA, answer with the complete numbered list and then post CRITERIA-COMPLETE:%s.\n' "$TASK"
   fi
-  [ -z "$PR" ] || head_evidence
+  # A run-mode reviewer judges the head by running it, so it is shown no CI
+  # and no gates and fetches nothing from GitHub for them: both are
+  # firstmate's merge gate, never a review criterion (captain, 2026-09-25).
+  # A diff round keeps the head section, as information only.
+  [ -z "$PR" ] || [ "$REVIEW_MODE" = run ] || head_evidence
   printf '\n---\n\n# The diff under review\n\n```diff\n'
   git diff "$BASE...$BRANCH"
   printf '```\n'
@@ -424,49 +428,6 @@ contract_line() {   # contract_line <field>
   v="${v% }"
   printf -- '- `%s`: %s\n' "$1" "${v:-(not declared)}"
 }
-# The read-only GitHub evidence a run-mode reviewer cannot fetch: its sandbox
-# reaches no GitHub host, because the network is what keeps a push or a gh
-# write from leaving it. So fm-review.sh reads the pull request's state and
-# its required checks with gh before the round and hands them over, bound to the head:
-# a check run on another commit is said to be one. What the checks call
-# themselves comes from the branch's own workflows, so it is fenced like a
-# quoted comment.
-github_evidence() {
-  local view checks head oid fence
-  printf '\n# GitHub evidence, read by fm-review.sh\n\n'
-  if [ -z "$PR" ]; then
-    printf 'This round was given no pull request, so there is no CI or pull request state\n'
-    printf 'to report. Say that CI was not seen.\n'
-    return 0
-  fi
-  head="$(git -C "$CHECKOUT" rev-parse fm/head 2>/dev/null)"
-  printf 'Read with gh just before this round started; you cannot reach GitHub yourself.\n\n'
-  if view="$($GH pr view "$PR" --json state,isDraft,headRefOid,mergeStateStatus,reviewDecision 2>/dev/null)" &&
-     oid="$(jq -er '.headRefOid | strings' <<<"$view" 2>/dev/null)"; then
-    jq -r --arg pr "$PR" '"Pull request #\($pr): \(.state // "unknown")\(if .isDraft then ", draft" else "" end), merge state \(.mergeStateStatus // "unknown"), review decision \(.reviewDecision // "none" | if . == "" then "none" else . end)."' <<<"$view"
-    if [ "$oid" = "$head" ]; then
-      printf 'Its head is %s, the head under review.\n' "$oid"
-    else
-      printf 'Its head is %s, NOT the head under review (%s): the checks below are for another commit and are not evidence for this one.\n' "$oid" "$head"
-    fi
-  else
-    printf 'The pull request #%s could not be read. CI was not seen; say so.\n' "$PR"
-    return 0
-  fi
-  # gh exits non-zero while a check is pending or has failed, and prints the
-  # checks all the same; the answer is whatever parses as the list. Only the
-  # required checks: they are what gate 6 and the captain's merge wait on
-  checks="$($GH pr checks "$PR" --required --json name,state,bucket,workflow 2>/dev/null)"
-  if ! jq -e 'type == "array"' <<<"$checks" >/dev/null 2>&1; then
-    printf '\nIts required checks could not be read, or none are reported. CI was not seen; say so.\n'
-    return 0
-  fi
-  fence="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
-  printf '\nIts required checks (%s):\n\n----- begin checks %s -----\n' "$(jq length <<<"$checks")" "$fence"
-  jq -r '.[] | "- \(.workflow // "" | if . == "" then "" else . + " / " end)\(.name): \(.state) (\(.bucket))"' <<<"$checks"
-  printf -- '----- end checks %s -----\n' "$fence"
-}
-
 if [ "$REVIEW_MODE" = run ]; then
   {
     printf '\n---\n\n# Run mode\n\n'
@@ -480,8 +441,10 @@ if [ "$REVIEW_MODE" = run ]; then
     printf 'The engine'"'"'s own permissions enforce that, not this text; fm-review.sh posts\n'
     printf 'your verdict to the pull request. Commands reach the network only for these\n'
     printf 'hosts: %s. No GitHub host is among them, so gh has nothing to talk to; the\n' "${FM_REVIEW_NETWORK:-none}"
-    printf 'base, the head and the diff are all in this checkout, and the pull request'"'"'s\n'
-    printf 'state and required checks are at the end of this prompt, read with gh for you. The\n'
+    printf 'base, the head and the diff are all in this checkout. You are shown no CI and\n'
+    printf 'no gate results, and need none: you judge the head by what you run here. CI\n'
+    printf 'and the seven gates are firstmate'"'"'s merge gate, not a criterion of this\n'
+    printf 'review, so do not wait on them, require them or keep an item open for them. The\n'
     printf 'project'"'"'s caches (XDG_CACHE_HOME, bun, Playwright, npm) point into this\n'
     printf 'round'"'"'s temp directory, so `setup` writes where it may. A command the sandbox\n'
     printf 'refuses is the boundary working: report what it kept you from running, as\n'
@@ -500,7 +463,6 @@ if [ "$REVIEW_MODE" = run ]; then
     printf '4. End with two lists before the verdict: **Executed** - every command you\n'
     printf '   ran and its result; **Read, not run** - every claim you checked only by\n'
     printf '   reading. Evidence you did not execute is never reported as executed.\n'
-    github_evidence
   } >> "$prompt"
 fi
 

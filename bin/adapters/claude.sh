@@ -46,7 +46,8 @@ work="$tree"; mode=(--permission-mode acceptEdits); launch=()
 #   - dontAsk denies every tool call no rule below allows;
 #   - shell commands are allowed only inside claude's sandbox, which confines
 #     their writes to the working directory and their network to the domains
-#     config.yaml's `reviewer: network:` declares - none by default. Settings
+#     config.yaml's `reviewer: network:` declares - none by default, and never
+#     a GitHub host (fm_review_host_refusal in _lib.sh). Settings
 #     that fail validation are dropped silently under -p, and then nothing
 #     allows a shell command at all: that failure closes rather than opens.
 # What stops a push is that the clone has no remote and the sandbox reaches
@@ -62,17 +63,12 @@ if [ "${FM_RUN_REVIEW:-}" = 1 ]; then
   esac
   work="$(fm_adapter_review_checkout)" || exit 64
   tmp="$(fm_adapter_rule_path "${TMPDIR:-/tmp}")" || exit 64
-  # each name goes into the settings string verbatim, so anything but a
-  # plain domain name is refused rather than escaped. Split with read: an
-  # unquoted expansion also globs, and `*` would pass as the file names here
-  hosts=(); net=()
-  read -r -a net <<<"${FM_REVIEW_NETWORK:-}"
-  for h in ${net[@]+"${net[@]}"}; do
-    case "$h" in
-      *[!A-Za-z0-9.-]*|.*|*.) echo "claude: '$h' in reviewer network is not a domain name" >&2; exit 64 ;;
-    esac
-    hosts+=("$h")
-  done
+  # each name goes into the settings string verbatim; fm_adapter_context has
+  # already refused anything but a plain domain name, and every GitHub host.
+  # Split with read: an unquoted expansion also globs, and `*` would pass as
+  # the file names here
+  hosts=()
+  read -r -a hosts <<<"${FM_REVIEW_NETWORK:-}"
   allow=(Grep Glob "Read(/$work/**)" "Edit(/$work/**)" "Write(/$work/**)"
          "Read(/$tmp/**)" "Edit(/$tmp/**)" "Write(/$tmp/**)")
   deny=("Bash(git push:*)" "Bash(git remote:*)" "Bash(git worktree:*)" "Bash(git -C:*)"

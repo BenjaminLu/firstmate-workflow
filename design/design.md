@@ -415,9 +415,15 @@ servers or skills - the clone is the branch under review, and its `.claude/`
 would otherwise add hooks and rules to the round - so only the adapter's
 `--settings` and managed policy apply: `dontAsk`, file tools only in the clone
 and the temp directory, shell commands only inside the sandbox, whose network
-reaches only the hosts `reviewer: network:` declares for `setup` (plain
-domain names: a GitHub host or a wildcard, which could match one, is refused
-by `fm-review.sh` with `65`). The declared commands write their caches under
+reaches only the hosts `reviewer: network:` declares for `setup`. Those are
+plain domain names, and never one GitHub operates (`github.com`,
+`github.io`, `github.dev`, `githubusercontent.com`, `githubassets.com`,
+`githubapp.com`, `githubcopilot.com`, `ghcr.io`, `ghe.com` or any subdomain,
+in any case) nor a wildcard, which could match one. One rule in
+`bin/adapters/_lib.sh` (`fm_review_host_refusal`) decides it: `fm-review.sh`
+refuses such a list with `65` before anything is built, and
+`fm_adapter_context` refuses it with `64` before any CLI starts, however the
+adapter was reached. The declared commands write their caches under
 `$HOME` by default, where the sandbox refuses them, so the round exports
 `XDG_CACHE_HOME`, `BUN_INSTALL_CACHE_DIR`, `PLAYWRIGHT_BROWSERS_PATH` and
 `npm_config_cache` into its own temp directory; `setup` downloads afresh each
@@ -425,12 +431,13 @@ round. The engine starts without the launcher's `FM_*`, `HERDR_*`, `GIT_*`
 and GitHub-token variables: `fm_identity` exports `FM_ROOT` at the task's
 repository, and the clone's scripts choose their tree from it, so a `check`
 the reviewer ran would otherwise gate another tree than the head under review.
-The reviewer has no GitHub access at all (captain's decision, 2026-09-26):
-before the round `fm-review.sh` reads the pull request's state and its
-required checks with gh and appends them to the prompt, fenced, stating
-whether the pull request's head is the head under review. The gate results
-reach the prompt through T-088's reader, not through this task: nothing
-here records them (`fm-run.sh` discards `fm-gate.sh`'s output). What stops a push is the
+The reviewer has no GitHub access at all, and needs none: it judges the head
+by running it, so a run-mode round fetches no CI, no gate results and no pull
+request state for it, and its prompt carries neither T-088's head section nor
+any other CI listing (captain, 2026-09-25). CI and the gates are firstmate's
+merge gate in both modes (§6, the merge double check). The only thing it
+still reads from GitHub is the closed-list protocol's comments (§7), which
+are not evidence about the head. What stops a push is the
 missing remote and the unreachable GitHub; the deny list for push, gh writes
 and raw HTTP matches a literal command prefix and is only a second guard.
 Both modes emit `review_opened` and
@@ -782,8 +789,8 @@ grilling  ->  /prototype  ->  [captain green-lights]  ->  design.md + design/tas
                           *  fm-gate.sh, the seven gates  *
                                        |
             fm-review.sh: reviewer sees the diff, the spec, the criteria
-                   and, given the PR, the head's check and gate results
-                (run mode: and runs the tests in a fresh clone of the head)
+         (diff mode: and, given the PR, the head's check and gate results,
+          as information; run mode: runs the tests in a fresh clone instead)
                                        |
      not passed -> worker revives and fixes (round 3+ asks first) -> back to the gates
                                        |
@@ -859,6 +866,18 @@ markers; a later rejection does not invalidate an earlier matching comment.
 Firstmate must verify provenance and current readiness explicitly. Any red gate
 requires remediation regardless of praise or an `approved` event.
 
+**Round order and the merge double check (captain, 2026-09-25).** A review
+round starts as soon as the worker hands back, through `fm-review.sh`, and
+never waits on CI: CI and the seven gates are not a review criterion in
+either mode. A merge card needs two independent checks on the same current
+head: the reviewer's `APPROVE:<task-id>` for that head, and firstmate's own
+reading of that head's required GitHub check (green) and the seven gates
+(`fm-gate.sh`). Neither substitutes for the other - an approval is not green
+CI, and green gates are not an approval - and a head that changes after
+either check restarts both. `fm-run.sh`'s loop still sends a task to review
+only once gates 1-6 are green; until it follows this order, firstmate starts
+the round itself when the worker hands back.
+
 Gates 3 and 5 name no toolchain. The target repository declares its own in
 `config.yaml`'s `project:` block (`setup`, `check`, `check_env`, `tests`,
 `test`, `docs`; see the README), and the gates run exactly that, read from the
@@ -911,13 +930,16 @@ closed list; findings cite its items or are marked `REGRESSION:`), only an ask
 which case the round still runs.
 No other comment enters the prompt, so the worker's reasoning stays out.
 Rounds one and two get no closed-list section. Given `--pr`, they, like every
-round, do get the head section below; without `--pr` no round gets either,
-and the prompt is unchanged.
+diff-mode round, do get the head section below; without `--pr` no round gets
+either, and the prompt is unchanged.
 
 A diff cannot show CI or gates, so a closed-list item asking for them could
 never be closed (T-067, round nine). Current-head CI and gates are firstmate's
-evidence to establish; the launcher shows the reviewer what exists for the
-head (T-088). Given `--pr`, every round's prompt gets a **The head under
+merge gate, not a review criterion (§6, the merge double check), so no
+closed-list item may ask for them. In diff mode the launcher shows the
+reviewer what exists for the head, as information only (T-088); a run-mode
+round judges the head by running it and gets no head section and no CI from
+GitHub (T-066). Given `--pr`, every diff-mode round's prompt gets a **The head under
 review** section before the diff, verbatim and labelled: the head SHA, from
 the local branch the diff is taken from; for each name `gh pr checks <pr>
 --required --json name` lists, that check's name, conclusion and run URL from
@@ -935,8 +957,9 @@ without `--pr` is unchanged.
 The gate half is not closed yet. Nothing writes that gate summary:
 `fm-run.sh` sends `fm-gate.sh`'s stdout to `/dev/null`, and it is outside
 T-088's scope. Until a writer tees that stdout to
-`state/gates/<task-id>-<sha>.txt`, every prompt reports the head's gate
-results as unknown, and an item asking for green gates stays open. The path
+`state/gates/<task-id>-<sha>.txt`, every diff-mode prompt reports the head's
+gate results as unknown, and firstmate reads the gates from `fm-gate.sh`
+itself for the merge double check. The path
 and the `  + gate N: …` / `  x gate N: …` lines of `fm-gate.sh`'s own `say()`
 are the contract that writer must follow.
 

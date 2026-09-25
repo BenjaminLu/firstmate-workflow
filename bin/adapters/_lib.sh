@@ -45,7 +45,7 @@ _FM_SIG='authentication failed|authentication required|authentication error|erro
 # Called after argument validation and before touching a model. The Python
 # runner invokes this same adapter inside a real pane with context-ready=1.
 fm_adapter_context() {
-  local adapter="$1" code
+  local adapter="$1" code bad
   unset FM_CLI_EXIT
   # A run-mode review may only reach an adapter that confines it (see
   # fm_review_run_chain). fm-review.sh already keeps the rest out of the
@@ -54,6 +54,14 @@ fm_adapter_context() {
   if [ "${FM_RUN_REVIEW:-}" = 1 ] && ! grep -q '^# fm:review-run' "$adapter"; then
     echo "${adapter##*/}: cannot confine a run-mode review; refusing it" >&2
     exit 64
+  fi
+  # The same for the network: fm-review.sh refuses a GitHub host with 65, and
+  # an adapter reached any other way refuses it here, before its CLI starts.
+  if [ "${FM_RUN_REVIEW:-}" = 1 ]; then
+    bad="$(fm_review_network_refusal "${FM_REVIEW_NETWORK:-}")"
+    [ -z "$bad" ] || {
+      echo "${adapter##*/}: reviewer network names $bad; refusing a run-mode review" >&2
+      exit 64; }
   fi
   code="$(cd "$(dirname "$adapter")/../.." && pwd)"
   if [ "${HERDR_ENV:-}" = 1 ] && [ "${FM_TRANSPORT:-herdr}" = direct ] && [ "${FM_ALLOW_DIRECT:-}" != 1 ]; then
@@ -64,6 +72,43 @@ fm_adapter_context() {
     # shellcheck disable=SC2154  # validated positional arguments in each adapter
     exec python3 "$code/bin/fm-herdr.py" transport "$adapter" "$prompt" "$tree" "$log"
   fi
+}
+
+# The domains GitHub operates. A run-mode sandbox reaches none of them, nor
+# any subdomain: the network is what keeps a push, a comment or any other gh
+# call from leaving the round, and a prefix deny list cannot.
+FM_GITHUB_DOMAINS=(github.com github.io github.dev githubusercontent.com githubassets.com
+                   githubapp.com githubcopilot.com ghcr.io ghe.com)
+
+# fm_review_host_refusal <host> -> why a run-mode sandbox may not reach it,
+# or nothing when it may. Plain domain names only: each goes into a settings
+# string verbatim, and a wildcard such as `*.com` reaches GitHub as surely as
+# naming it. Case does not matter, and a GitHub domain is matched on a label
+# boundary, so raw.githubusercontent.com is one and notgithub.com is not.
+fm_review_host_refusal() {
+  local h d
+  case "${1-}" in
+    ''|*[!A-Za-z0-9.-]*|.*|*.|*..*) printf 'is not a plain domain name\n'; return 0 ;;
+  esac
+  h="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  for d in "${FM_GITHUB_DOMAINS[@]}"; do
+    case "$h" in
+      "$d"|*."$d") printf 'is a GitHub host; a run-mode reviewer may not reach GitHub\n'; return 0 ;;
+    esac
+  done
+}
+
+# fm_review_network_refusal <hosts> -> "<host>, which <why>" for the first of
+# the space-separated hosts a run-mode sandbox may not reach, or nothing.
+# Split with read: an unquoted expansion also globs, and `*` would be checked
+# as the file names in the current directory.
+fm_review_network_refusal() {
+  local net=() h why
+  read -r -a net <<<"${1-}"
+  for h in ${net[@]+"${net[@]}"}; do
+    why="$(fm_review_host_refusal "$h")"
+    [ -z "$why" ] || { printf '%s, which %s\n' "$h" "$why"; return 0; }
+  done
 }
 
 # fm_adapter_review_checkout -> the run-mode checkout, resolved, or exit 64.

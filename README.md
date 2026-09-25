@@ -162,7 +162,8 @@ fail-first against the base. The adapter confines it with the vendor CLI's
 own permission flags - no settings, hooks or MCP servers from the clone or the
 operator, no writes outside the clone and the temp directory, and no network
 beyond the hosts `network:` lists for `setup` (plain domain names only: never
-GitHub and never a wildcard, so no push and no comments) - so only an adapter
+a domain GitHub operates and never a wildcard, so no push and no comments;
+`fm-review.sh` and the adapter apply the same rule) - so only an adapter
 carrying `# fm:review-run` takes a run-mode round; today that is `claude`.
 Because the sandbox writes only in the clone and the temp directory, the
 round points `XDG_CACHE_HOME`, bun's install cache, Playwright's browsers and
@@ -170,10 +171,12 @@ npm's cache into its own temp directory, so `setup` downloads them each round.
 The engine starts without the launcher's `FM_*`, `HERDR_*`, `GIT_*` and
 GitHub-token variables, so a `check` run in the clone gates the clone, not the
 repository the review was launched from.
-The reviewer has no GitHub access: `fm-review.sh` reads the pull request's
-state and required checks with gh before the round and puts them in the prompt, saying whether
-they ran on the head under review. `fm-review.sh` posts the verdict and
-emits the review's events in both modes. This repository declares `run`.
+The reviewer has no GitHub access and is shown no CI: it judges the head by
+running it. In both modes CI and the seven gates are firstmate's merge gate,
+not a review criterion, so a review never waits on CI; a merge card needs
+the reviewer's approval and firstmate's own check of CI and the gates, both
+on the same head. `fm-review.sh` posts the verdict and emits the review's
+events in both modes. This repository declares `run`.
 
 ## State
 

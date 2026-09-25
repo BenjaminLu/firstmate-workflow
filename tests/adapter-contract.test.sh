@@ -266,6 +266,16 @@ $runargv
         "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
       assert_eq "64" "$?" "$name refuses a run-mode checkout with no .git"
       assert_fail "test -e '$d/cwd.run'" "and its CLI never starts"
+      # no GitHub access at all, enforced where the CLI starts, not only by
+      # fm-review.sh: a caller that hands the adapter a GitHub host directly
+      # is refused the same way
+      for gh_host in github.com raw.githubusercontent.com ghcr.io x.github.io API.GitHub.com; do
+        rm -f "$d/cwd.run"
+        FM_REVIEW_NETWORK="registry.npmjs.org $gh_host" FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/checkout" \
+          PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+        assert_eq "64" "$?" "$name refuses a run-mode network naming $gh_host"
+        assert_fail "test -e '$d/cwd.run'" "and its CLI never starts ($gh_host)"
+      done
     else
       assert_eq "64" "$rrc" "$name cannot confine a run-mode review, so it refuses one"
       assert_fail "test -e '$d/cwd.run'" "and its CLI never starts"
@@ -287,6 +297,25 @@ done
 # --- the verdict itself, on the transcripts that actually caused trouble ---
 # shellcheck source=bin/adapters/_lib.sh
 . "$ROOT/bin/adapters/_lib.sh"
+
+# the one rule on which hosts a run-mode sandbox may reach, shared by
+# fm-review.sh and every adapter: plain domain names, never GitHub's
+for gh_host in github.com GITHUB.COM api.github.com github.io x.github.io github.dev \
+               raw.githubusercontent.com githubusercontent.com githubassets.com githubapp.com ghcr.io; do
+  assert_contains "$(fm_review_host_refusal "$gh_host")" "GitHub host" "$gh_host is refused as a GitHub host"
+done
+for ok_host in registry.npmjs.org notgithub.com github.com.example.org cdn.playwright.dev; do
+  assert_eq "" "$(fm_review_host_refusal "$ok_host")" "$ok_host is not a GitHub host"
+done
+for bad_host in '*' '*.com' '.github.com' 'github.com.' 'a..b' 'x.org","*' ''; do
+  assert_contains "$(fm_review_host_refusal "$bad_host")" "not a plain domain name" "'$bad_host' is not a plain domain name"
+done
+assert_eq "ghcr.io, which is a GitHub host; a run-mode reviewer may not reach GitHub" \
+  "$(fm_review_network_refusal "registry.npmjs.org ghcr.io raw.githubusercontent.com")" \
+  "a network list names the first host it may not reach"
+assert_eq "" "$(fm_review_network_refusal "registry.npmjs.org cdn.playwright.dev")" "and nothing for one it may"
+assert_eq "" "$(fm_review_network_refusal "")" "and nothing for an empty one"
+
 v="$(mktemp -d)"
 verdict() { # <log contents> <rc> -> the verdict
   printf '%s' "$1" > "$v/log"

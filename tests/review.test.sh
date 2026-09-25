@@ -887,64 +887,55 @@ for cache in xdg bun pw npm; do
   assert_eq "1" "$under" "the $cache cache points into the round's own directory, not \$HOME ($cv)"
 done
 
-# The GitHub evidence the sandbox cannot fetch is read before the round and
-# handed over, bound to the head. This stub answers the way gh does: the
-# fields asked for, and `pr checks` printing its list while exiting 8 for a
-# pending check, 1 with nothing on stdout when it cannot answer.
-ghjson() {   # ghjson <dir> <head oid>
+# A run-mode reviewer judges the head by running it. CI and the gates are
+# firstmate's merge gate, not a review criterion (captain, 2026-09-25), so a
+# run-mode round fetches no CI from GitHub and its prompt carries neither
+# T-088's head section nor any other CI listing. This gh answers the way gh
+# does - `pr checks` prints its list and exits 8 for a pending check, `api`
+# returns the head's check runs - so a round that did read CI would show it.
+ghci() {   # ghci <dir> <head oid>
   mkdir -p "$1/stub"
   cat > "$1/stub/gh" <<M
 #!/usr/bin/env bash
 echo "gh \$*" >> "$1/ghcalls"
 case "\$1 \$2" in
-  "pr view") [ -f "$1/gh-down" ] && exit 1
-    printf '{"headRefOid":"%s","isDraft":false,"mergeStateStatus":"BLOCKED","reviewDecision":"","state":"OPEN"}\n' "$2" ;;
-  "pr checks") [ -f "$1/checks-down" ] && { echo "no checks reported on the 'work' branch" >&2; exit 1; }
-    # --required keeps only the required checks: ci and e2e, not lint
-    case " \$* " in
-      *" --required "*) printf '[{"bucket":"pass","name":"ci","state":"SUCCESS","workflow":"CI_WORKFLOW"},{"bucket":"pending","name":"e2e","state":"IN_PROGRESS","workflow":"CI_WORKFLOW"}]\n' ;;
-      *) printf '[{"bucket":"pass","name":"ci","state":"SUCCESS","workflow":"CI_WORKFLOW"},{"bucket":"pending","name":"e2e","state":"IN_PROGRESS","workflow":"CI_WORKFLOW"},{"bucket":"fail","name":"OPTIONAL_LINT","state":"FAILURE","workflow":"CI_WORKFLOW"}]\n' ;;
-    esac
+  "pr view") printf '{"comments":[],"headRefOid":"%s","state":"OPEN"}\n' "$2" ;;
+  "pr checks") case " \$* " in *" --jq "*) printf 'ci\n' ;;
+      *) printf '[{"bucket":"pass","name":"ci","state":"SUCCESS","workflow":"CI_WORKFLOW"}]\n' ;; esac
     exit 8 ;;
+  "api "*) printf '{"check_runs":[{"id":1,"name":"ci","head_sha":"%s","status":"completed","conclusion":"success","details_url":"https://x/CI_RUN"}]}\n' "$2" ;;
+  "pr comment") ;;
 esac
 exit 0
 M
   chmod +x "$1/stub/gh"; printf '%s' "$1/stub/gh"
 }
 headM="$(git -C "$rm_" rev-parse work)"
-GHj="$(ghjson "$dm" "$headM")"; : > "$dm/ghcalls"
+GHj="$(ghci "$dm" "$headM")"; : > "$dm/ghcalls"
 ( cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHj" FM_SEEN="$dm" \
-  bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
+  bin/fm-review.sh --task T-Z --branch work --round 3 --pr 9 >/dev/null 2>&1 )
+assert_eq "0" "$?" "a run-mode round given a pull request runs"
 sentG="$(cat "$dm/prompt.md")"
-assert_contains "$(cat "$dm/ghcalls")" "gh pr checks 9" "a run-mode round reads the pull request's checks with gh itself"
-assert_contains "$sentG" "# GitHub evidence, read by fm-review.sh" "and hands the reviewer the GitHub evidence it cannot fetch"
-assert_contains "$sentG" "Pull request #9: OPEN, merge state BLOCKED, review decision none." "with the pull request's state"
-assert_contains "$sentG" "Its head is $headM, the head under review." "bound to the head under review"
-assert_contains "$sentG" "- CI_WORKFLOW / ci: SUCCESS (pass)" "and every check, read even while gh exits 8 for a pending one"
-assert_contains "$sentG" "- CI_WORKFLOW / e2e: IN_PROGRESS (pending)" "the pending one included"
-assert_contains "$(cat "$dm/ghcalls")" "gh pr checks 9 --required" "it asks gh for the required checks"
-assert_contains "$sentG" "Its required checks (2):" "and says they are the required ones"
-assert_lacks "$sentG" "OPTIONAL_LINT" "a check that is not required is not handed over as CI evidence"
-assert_matches "$(grep -cE -- '^----- (begin|end) checks [0-9a-f]{16} -----$' "$dm/prompt.md")" '^2$' \
-  "and the checks, named by the branch's workflows, are fenced"
-GHj="$(ghjson "$dm" 0000000000000000000000000000000000000000)"
+callsG="$(cat "$dm/ghcalls")"
+assert_lacks "$callsG" "pr checks" "a run-mode round reads no checks from GitHub"
+assert_lacks "$callsG" "gh api" "nor any check run"
+assert_lacks "$callsG" "headRefOid" "nor the pull request's state"
+assert_contains "$callsG" "gh pr view 9 --json comments" "while the closed-list protocol still reads the comments"
+assert_contains "$callsG" "gh pr comment 9" "and fm-review.sh still posts the verdict"
+assert_fail "grep -qx '# The head under review' '$dm/prompt.md'" "the run-mode prompt has no head-under-review CI section"
+assert_lacks "$sentG" "GitHub evidence" "and no GitHub evidence block"
+assert_lacks "$sentG" "CI_RUN" "and no check run"
+assert_lacks "$sentG" "Conclusion:" "and no CI conclusion at all"
+assert_contains "$sentG" "# The closed list" "the closed-list section is still there from round three"
+assert_contains "$sentG" "firstmate's merge gate, not a criterion of this
+review" "and the prompt says CI and the gates are firstmate's merge gate"
+# the same gh in a diff round still shows the head section, as information
+printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: diff\n' > "$rm_/config.yaml"
 ( cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHj" FM_SEEN="$dm" \
   bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
-assert_contains "$(cat "$dm/prompt.md")" "NOT the head under review ($headM)" \
-  "checks on another commit are said not to be evidence for this one"
-: > "$dm/checks-down"
-( cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHj" FM_SEEN="$dm" \
-  bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
-assert_eq "0" "$?" "a round whose checks gh cannot read still runs"
-assert_contains "$(cat "$dm/prompt.md")" "Its required checks could not be read, or none are reported. CI was not seen" "and says CI was not seen"
-: > "$dm/gh-down"
-( cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHj" FM_SEEN="$dm" \
-  bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
-assert_contains "$(cat "$dm/prompt.md")" "The pull request #9 could not be read. CI was not seen" "so does one whose pull request gh cannot read"
-rm -f "$dm/checks-down" "$dm/gh-down"
-( cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHj" FM_SEEN="$dm" \
-  bin/fm-review.sh --task T-Z --branch work >/dev/null 2>&1 )
-assert_contains "$(cat "$dm/prompt.md")" "given no pull request" "a round with no pull request says there is no CI to report"
+assert_ok "grep -qx '# The head under review' '$dm/prompt.md'" "a diff round given a pull request keeps the head section"
+assert_contains "$(cat "$dm/prompt.md")" "Conclusion: success" "with the check this gh reports"
+printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n' > "$rm_/config.yaml"
 
 # a round that was SIGKILLed ran no trap; the next run-mode round removes its
 # checkout, and leaves alone one still in use or one not yet claimed
@@ -968,7 +959,9 @@ printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n  network: regis
 assert_eq "registry.npmjs.org cdn.playwright.dev" "$(seen_of network "$dm")" \
   "the adapter is handed the hosts config.yaml's reviewer network declares"
 assert_contains "$(cat "$dm/prompt.md")" "registry.npmjs.org cdn.playwright.dev" "and the prompt names them"
-for gh_host in api.github.com GitHub.com; do
+# every domain GitHub operates, any case, any subdomain - not just github.com
+for gh_host in api.github.com GitHub.com raw.githubusercontent.com ghcr.io x.github.io \
+               objects.githubusercontent.com github.githubassets.com; do
   printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n  network: registry.npmjs.org %s\n' "$gh_host" > "$rm_/config.yaml"
   : > "$dm/seen"
   outN="$(cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
@@ -977,6 +970,13 @@ for gh_host in api.github.com GitHub.com; do
   assert_contains "$outN" "may not reach GitHub" "and says why"
   assert_eq "" "$(seen_of mode "$dm")" "and no engine runs"
 done
+# matched on a label boundary: a host that merely ends in the same letters
+# is not GitHub's
+printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n  network: notgithub.com\n' > "$rm_/config.yaml"
+( cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
+  bin/fm-review.sh --task T-Z --branch work --round 3 >/dev/null 2>&1 )
+assert_eq "0" "$?" "a host that only ends like a GitHub domain is not refused"
+assert_eq "notgithub.com" "$(seen_of network "$dm")" "and reaches the adapter"
 # a wildcard reaches GitHub as surely as naming it, and a bare `*` must be
 # read as itself: expanded, it became the plain file names in the repository
 # (config.yaml, README.md), each of which passed as a domain
