@@ -1,0 +1,53 @@
+name: Bug
+description: A script, the board or a gate did something it should not have.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Write in English. For a security problem, stop here and follow SECURITY.md instead.
+        Remove local paths, tokens and anything else private from what you paste: this repository is public.
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened
+      description: What you saw, including the exit code if a script exited.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: What should have happened instead, and where design/design.md says so if it does.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: The exact commands, in order, from a fresh checkout if you can.
+      placeholder: |
+        1. bin/fm-gate.sh --task T-xxx --repo . --branch <name>
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: script
+    attributes:
+      label: Script or component
+      description: Which script, adapter, hook or board page, for example bin/fm-worker.sh or board/server.ts.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The commit you ran (git rev-parse --short HEAD), and your OS and bash version (bash --version).
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The script's output, and the relevant lines of state/events.jsonl if any.
+      render: text
