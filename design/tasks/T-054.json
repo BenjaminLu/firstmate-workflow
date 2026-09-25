@@ -15,8 +15,11 @@
     "i18n/ui.en.json",
     "i18n/ui.zh-TW.json",
     "tests/board.test.sh",
+    "tests/decisions.test.sh",
     "tests/e2e/board.spec.ts",
-    "tests/e2e/fixture.ts"
+    "tests/e2e/fixture.ts",
+    "design/tasks.json",
+    "skills/firstmate/SKILL.md"
   ],
   "acceptance": [
     "Implements the board half of design.md section 15.4. Replay keys tasks, pull requests and decisions by (project, id), so two projects with the same task id never merge into one lane card. Lane cards, crew bubbles and decision cards show a project chip; ?project= filters and its absence shows every project. Merge cards link the pull request on that project's repository.",
@@ -25,6 +28,7 @@
     "Tests with two registered projects live at the same time, written to fail first: both projects' lane cards, crew bubbles and pending decision cards (including one merge card each) render together with their chips; answering one project's card leaves the other's pending and in place; while one project's merge helper is still running, the board still serves, that card's record says merge running, and the other project's merge completes; a second merge in the first project is refused with no response file and no decision_made event; the record says merged or failed once the helper exits; a D-<project>-<task>-<n> card is listed and answerable. Recovery tests, also written to fail first, with a gh stub that answers in gh's real JSON shape: a record saying merge running whose helper pid is dead becomes merged after a board restart when the log has the merged event, merged when only GitHub says MERGED, failed when GitHub says OPEN, and stays running and marked unknown when gh fails; a record whose helper is alive is left running; each resolved record frees its project so a next merge there is no longer refused.",
     "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
     "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
-    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason.",
+    "Captain decision D-1035 = A added skills/firstmate/SKILL.md to this scope, only the paragraph that tells firstmate how to read a merge card's outcome: it reads merge (running, merged or failed) and merge_reason instead of the removed merged field, and treats running as not settled. No other part of the skill changes."
   ]
 }

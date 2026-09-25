@@ -1572,9 +1572,52 @@ pane and agent names, board events, log paths and result receipts. Existing live
 are not renamed. A foreign Herdr name collision is a reported transport failure,
 not a silently different sidebar identity.
 
-The name in the label is a crew member from one fleet roster (T-089), shared by
-workers and reviewers: `DEFAULT_ROSTER` in `bin/fm-herdr.py`, or config.yaml's
-`roster:` list of short given names. Under the identity lock a run takes a name
+The name in the label is a crew member, and a name always means one role
+(T-104). A crew member's name, rank and service record belong to one role:
+workers rise by merged tasks, reviewers by approvals that were never
+overturned, so a name that served as a worker on one task and a reviewer on
+the next would be two careers under one name. There are therefore two rosters,
+24 workers and 24 reviewers, drawn at random once per installation: 48
+distinct names taken uniformly from `POOL` in `bin/fm-herdr.py`, at least 200
+short given names of varied origin, the first 24 to workers and the rest to
+reviewers. The draw is written once to `state/crew/rosters.json`
+(`{"workers": [...], "reviewers": [...], "drawn_at": ...}`); `state/` is
+gitignored, so each installation has its own crew. The installation is the
+first time firstmate runs in a checkout until the plugin installer
+(T-075..T-083) calls the same step: `fm-session.sh start` draws when the file
+is missing, and so does every allocation, so no run lacks a crew.
+`bin/fm.sh roster` prints both rosters, `roster init` draws them if missing
+and refuses to redraw an existing crew, and `--redraw` draws again only when
+asked, saying that ranks and service records keyed by the old names stay with
+the old names. A crew file that is not two disjoint lists of names is refused,
+not quietly redrawn. `FM_ROSTER_SEED` seeds the draw and exists only for
+tests. config.yaml may pin names under `rosters:` with `workers:` and
+`reviewers:` lists, validated as T-089 validated `roster:`; any other key
+under `rosters:`, or an inline `rosters: {…}`, is refused by name; a pinned list
+replaces that role's drawn names, a drawn name pinned to the other role is
+dropped, and a name in both lists is refused with a message naming it. The
+old single `roster:` is still read: its names are workers, with one warning
+line.
+
+A worker takes a name only from the worker roster and a reviewer only from the
+reviewer roster; an explicit `--name` on the other role's roster is refused.
+The rosters say which role a name has now; the runs say which role it has
+served. Every `identity.json` records `role` and `name`, and a run allocated
+under this rule also records `one_role: true`. A name keeps the role of its
+earliest such run and is never used for the other: an explicit `--name` on
+neither roster is refused once it has served the other role, a roster name
+that served the other role (moved in config.yaml, say) is skipped, and a draw
+or `--redraw` never deals a name to the role it did not serve. So one name
+never holds a worker record and a reviewer record from here on. Runs without
+`one_role` were written under T-089, which let one name serve both roles;
+they bind no name, because history is not judged by a rule it was not written
+under. Otherwise an installation that used the old `roster:` would find every
+name that had served both roles refused for both. A name's first run under
+the rule decides its role.
+When every name of a role is taken the run fails, exit 70, with `the <role>
+roster ran out: …, and a name of the other role is never borrowed`; it never
+borrows and never reuses a name with a number. Within each roster the T-089
+rules hold. Under the identity lock a run takes a name
 no live run holds. A run is live while it is unfinished — it has no
 `orchestration-result.json` — unless it is proven over: its `process.json`
 launcher no longer matches and every attempt it recorded has terminated. A run
@@ -1583,20 +1626,21 @@ immediately after allocation and `transport()` writes its attempt, so no clock
 decides it. Reserved, unstarted and legacy attempts count as live, as they do
 for recreation. `identity.json` records the crew member whole as `name`, and the
 actor carries exactly that name; runs from before T-089 have none, so their name
-is read from the actor. Every comparison — live, previous round, other role,
-reuse — is on the whole name. A task's worker and reviewer are never the same
-crew member: a name either role of the task has used is not offered to the
-other. A task keeps its previous round's name while that name is free;
-otherwise it takes the first free name. When no name is left for the run the
-allocator reuses one as `<name><n>`, records `reused` in `identity.json`, and
-says why: `every roster name is live (N); reusing <name> as <name><n>` when all
-are live, or `no roster name is free for this task (L of N live, <names> held
-by its other role); reusing …` when the only free names are the other role's. An explicit alias wins but is refused, exit 70
-with one line, while that name is live or is the task's other role's. A name is
+is read from the actor. Every comparison — live, previous round, other role —
+is on the whole name. A task's worker and reviewer are never the same crew
+member: a name either role of the task has used is not offered to the other.
+A task keeps its previous round's name while that name is free; otherwise it
+takes the first free name in its roster. An explicit alias wins but is
+refused, exit 70 with one line, when that name is on the other role's roster,
+has served the other role, is the task's other role's, or is live, and the
+line names the first of these that holds, in that order. A refusal that never
+lifts is named before one that lifts when a run finishes, so a crew member is
+not told to wait for a name their role can never take. A name is
 never cut: one that does not fit the room the final `-<task>-r<n>` suffix
 leaves, measured again on each retry, is refused, so the actor stays within 32
-characters and no label can stand for two crew members. An empty `roster:` is
-refused like any other invalid roster, not replaced by the default.
+characters and no label can stand for two crew members. An empty `roster:`,
+`rosters.workers:` or `rosters.reviewers:` is refused like any other invalid
+list, not replaced by the drawn crew.
 
 In `HERDR_ENV=1`, Codex, Claude, Cursor Agent and Gemini adapters use shipped
 `bin/fm-herdr.py` to execute the real CLI in a dedicated new tab containing one

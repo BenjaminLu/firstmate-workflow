@@ -120,6 +120,11 @@ const SHIP = (() => {
 
   // A name tag over each head: who, and what they are on. No progress and no
   // percentage here - the roster carries a bar, and only for bounded progress.
+  // T-054: with several projects aboard, whose task it is. The name is data
+  // and shown as written; only the label is the dictionary's.
+  const projectChip = (c, T) => c.project && c.showProject
+    ? ` <span class="pchip" data-chip="${esc(c.project)}" title="${esc(T("projectChip"))}"` +
+      ` aria-label="${esc(T("projectChip"))}: ${esc(c.project)}">${esc(c.project)}</span>` : "";
   function bubble(c, T, topRow) {
     if (c.row !== topRow) {
       // the chip carries the TASK. The criterion has no crowding
@@ -127,10 +132,10 @@ const SHIP = (() => {
       // anywhere on a crowded ship said what anyone was working on. The
       // agent's own name is in the roster beside it.
       return `<div class="bub mini st-${c.state}" data-bubble="${esc(c.id)}" style="--px:${c.x}%;--r:${c.row}">` +
-        `<div class="who">${esc(c.name)} ${esc(c.task || '')}</div></div>`;
+        `<div class="who">${esc(c.name)} ${esc(c.task || '')}${projectChip(c, T)}</div></div>`;
     }
     return `<div class="bub st-${c.state}" data-bubble="${esc(c.id)}" style="--px:${c.x}%;--r:${c.row}">` +
-      `<div class="who">${esc(c.name)}</div>` +
+      `<div class="who">${esc(c.name)}${projectChip(c, T)}</div>` +
       `<div class="job">${linkPrs(esc(c.job), c.pr_urls)}</div></div>`;
   }
 
@@ -149,6 +154,12 @@ const SHIP = (() => {
     // only firstmate is named by its role; a worker or a reviewer is
     // named by its own id, and the captain is not in this list at all
     const label = { firstmate: T("roleFirstmate") };
+    // T-054: a crewman's task is its project's; two projects' T-004 are two
+    // tasks, each with its own pull request and its own links
+    const several = (s.projects || []).length > 1;
+    const projectOf = (o) => (o && o.project) || s.default_project || null;
+    const taskOf = (a) => (s.tasks || []).find((t) => t.id === a.task && projectOf(t) === projectOf(a)) || {};
+    const urlsOf = (a) => (s.pr_urls_by_project ? s.pr_urls_by_project[projectOf(a) || ""] || {} : s.pr_urls || null);
     // the limit comes from the server with the list. No fallback: a
     // number here as well is the same number in two languages, and the
     // test for it would pass through the copy.
@@ -173,11 +184,14 @@ const SHIP = (() => {
         activity,
         task: a.task || null,
         title: a.title || null,
-        pr: ((s.tasks || []).find((t) => t.id === a.task) || {}).pr ?? null,
+        // the project of the task it is on, and whether the bubble says so
+        project: a.task ? projectOf(a) : null,
+        showProject: several,
+        pr: taskOf(a).pr ?? null,
         // the URL the server put beside the task's number (T-069), or none
-        pr_url: ((s.tasks || []).find((t) => t.id === a.task) || {}).pr_url ?? null,
-        // and every other #n the title or the activity names
-        pr_urls: s.pr_urls || null,
+        pr_url: taskOf(a).pr_url ?? null,
+        // and every other #n the title or the activity names, on its project
+        pr_urls: urlsOf(a),
         progress: bounded ? { done, total } : null,
         pct: bounded ? Math.round((100 * done) / total) : null,
       };

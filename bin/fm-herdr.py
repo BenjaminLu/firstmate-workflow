@@ -14,6 +14,7 @@ import json
 import math
 import os
 from pathlib import Path
+import random
 import re
 import shlex
 import shutil
@@ -65,46 +66,226 @@ def locked(path, blocking=True):
         yield lock
 
 
-# One fleet roster (T-089): workers and reviewers draw from the same list, so a
-# name is one person whichever role they are on. config.yaml's `roster:`
-# replaces it.
-DEFAULT_ROSTER = ('mira', 'noah', 'iris', 'theo', 'luca', 'ada', 'omar', 'juno',
-                  'kai', 'lena', 'ravi', 'nina', 'otto', 'sana', 'elio', 'yara')
+# Two rosters (T-104): a crew member's name, rank and service record belong to
+# one role, so workers and reviewers never share a name. Each installation
+# draws its own crew from POOL once, into state/crew/rosters.json.
+POOL = (
+    'ada', 'alba', 'alma', 'anna', 'arlo', 'asa', 'ben', 'bea', 'cora', 'dora', 'eli', 'ella',
+    'elsa', 'emil', 'emma', 'eva', 'ezra', 'finn', 'flora', 'gus', 'hugo', 'ida', 'ines', 'iris',
+    'ivan', 'jack', 'jade', 'joel', 'jonas', 'juno', 'kit', 'lars', 'leo', 'lena', 'liam', 'lily',
+    'lotte', 'luca', 'lucy', 'mabel', 'mae', 'max', 'mila', 'mira', 'nell', 'nico', 'nina', 'noah',
+    'nora', 'olaf', 'olga', 'otto', 'pia', 'rosa', 'ruby', 'rufus', 'sara', 'silas', 'sofia',
+    'stella', 'theo', 'tilda', 'toby', 'vera', 'viola', 'wren', 'zoe',
+    'astrid', 'bjorn', 'dagny', 'elin', 'freya', 'greta', 'ingrid', 'kari', 'leif', 'linnea',
+    'maja', 'nils', 'odin', 'sigrid', 'sven', 'tove', 'ulf',
+    'anya', 'boris', 'darya', 'ilya', 'katya', 'lev', 'oksana', 'pavel', 'sasha', 'vesna', 'zora',
+    'milan',
+    'bruno', 'carla', 'diego', 'elena', 'enzo', 'gael', 'joao', 'lola', 'lucia', 'luis', 'marco',
+    'mateo', 'nuno', 'paco', 'pilar', 'raul', 'rocio', 'sol', 'tiago', 'vito',
+    'amir', 'aziz', 'dina', 'emre', 'farah', 'hana', 'idris', 'karim', 'laila', 'malik', 'nadia',
+    'omar', 'rami', 'reza', 'sami', 'samir', 'tariq', 'yara', 'yusuf', 'zain', 'zara', 'ayse',
+    'can', 'deniz', 'elif', 'kaan', 'selin', 'cyrus', 'darius', 'parisa', 'roya', 'shirin',
+    'anil', 'arjun', 'asha', 'devi', 'dev', 'ishan', 'kavya', 'kiran', 'maya', 'neha', 'nikhil',
+    'priya', 'raj', 'ravi', 'rohan', 'sana', 'tara', 'uma', 'veer', 'vikram',
+    'aiko', 'akira', 'chen', 'daiki', 'haru', 'hiro', 'jin', 'jun', 'kaito', 'kenji', 'lan', 'lei',
+    'mei', 'min', 'ming', 'riku', 'ryo', 'sakura', 'sora', 'tao', 'wei', 'yan', 'yuki', 'yuna',
+    'yuto', 'hyun', 'jiwoo', 'minho', 'seo', 'anh', 'bao', 'linh', 'minh', 'thao', 'trang',
+    'abeni', 'ade', 'amara', 'ayo', 'chidi', 'dayo', 'efua', 'femi', 'jabari', 'kofi', 'kwame',
+    'lulu', 'nia', 'obi', 'sade', 'tendai', 'thabo', 'zola', 'zuri', 'baraka', 'imani', 'jelani',
+    'kamau', 'makena', 'neema',
+    'avi', 'eitan', 'noa', 'tal', 'yael', 'ari', 'shira',
+    'aoife', 'cian', 'eoin', 'niamh', 'oisin', 'orla', 'rhys', 'sian', 'bryn', 'cara',
+    'aroha', 'kai', 'manu', 'moana', 'nalu', 'tane', 'hemi',
+    'inti', 'nayeli', 'eleni', 'nikos', 'yanni', 'juan', 'ana', 'sofie', 'kalani',
+)
+CREW_SIZE = 24
+ROLES = {'worker': 'workers', 'reviewer': 'reviewers'}
 
 
-def fleet_roster(root):
-    """config.yaml's top-level `roster:` (a block or [flow] list), else the default."""
+def _config_lines(root):
     path = Path(root) / 'config.yaml'
-    names, inside = None, False
+    lines = []
     for raw in (path.read_text().splitlines() if path.is_file() else []):
-        line = re.sub(r'\s+#.*$', '', raw).rstrip()
-        if not inside:
-            found = re.match(r'roster:\s*(.*)$', line)
-            if not found: continue
-            names, inside = [], True
-            value = found.group(1).strip()
-            if value:
-                if not (value.startswith('[') and value.endswith(']')):
-                    raise ValueError('config.yaml roster must be a list of names')
-                names = [item.strip().strip('"\'') for item in value[1:-1].split(',') if item.strip()]
+        line = '' if raw.lstrip().startswith('#') else re.sub(r'\s+#.*$', '', raw).rstrip()
+        lines.append(line)
+    return lines
+
+
+def _indent(line):
+    return len(line) - len(line.lstrip())
+
+
+def _config_key(lines, key):
+    """`key:` among lines at their shallowest indent: (inline value, child lines), or None."""
+    body = [line for line in lines if line.strip()]
+    if not body: return None
+    base = min(_indent(line) for line in body)
+    for at, line in enumerate(lines):
+        if not line.strip() or _indent(line) != base: continue
+        found = re.match(r'\s*' + re.escape(key) + r':\s*(.*)$', line)
+        if not found: continue
+        children = []
+        for child in lines[at + 1:]:
+            if child.strip() and (_indent(child) < base
+                                  or (_indent(child) == base and not child.lstrip().startswith('- '))):
                 break
-            continue
-        if not line.strip() or line.lstrip().startswith('#'): continue
-        if not raw[:1].isspace() and not line.startswith('- '): break
-        item = re.match(r'\s*-\s+(.*)$', line)
-        if not item: raise ValueError('config.yaml roster must be a list of names')
-        names.append(item.group(1).strip().strip('"\''))
-    if names is None: return list(DEFAULT_ROSTER)
-    if not names: raise ValueError('config.yaml roster is empty; list names or remove the key')
+            children.append(child)
+        return found.group(1).strip(), children
+    return None
+
+
+def _config_names(entry, label):
+    """A block or [flow] list of short given names, validated as T-089 did."""
+    inline, children = entry
+    if inline:
+        if not (inline.startswith('[') and inline.endswith(']')):
+            raise ValueError('config.yaml ' + label + ' must be a list of names')
+        names = [item.strip().strip('"\'') for item in inline[1:-1].split(',') if item.strip()]
+    else:
+        names = []
+        for line in children:
+            if not line.strip(): continue
+            item = re.match(r'\s*-\s+(.*)$', line)
+            if not item: raise ValueError('config.yaml ' + label + ' must be a list of names')
+            names.append(item.group(1).strip().strip('"\''))
+    if not names: raise ValueError('config.yaml ' + label + ' is empty; list names or remove the key')
     roster = []
     for name in names:
         name = name.lower()
-        # Short enough that <role>-<name><n>-<task>-r<n> stays a readable label.
+        # Short enough that <role>-<name>-<task>-r<n> stays a readable label.
         if not re.fullmatch(r'[a-z]{1,6}', name):
-            raise ValueError('config.yaml roster: ' + repr(name) + ' is not a short given name (letters only)')
-        if name in roster: raise ValueError('config.yaml roster names ' + name + ' more than once')
+            raise ValueError('config.yaml ' + label + ': ' + repr(name) + ' is not a short given name (letters only)')
+        if name in roster: raise ValueError('config.yaml ' + label + ' names ' + name + ' more than once')
         roster.append(name)
     return roster
+
+
+def pinned_rosters(root, warn=True):
+    """The names config.yaml pins per role: `rosters:` with `workers:` and/or
+    `reviewers:`, or the old single `roster:`, whose names are workers."""
+    lines = _config_lines(root)
+    new, old = _config_key(lines, 'rosters'), _config_key(lines, 'roster')
+    if new and old:
+        raise ValueError('config.yaml has both roster: and rosters:; move the roster: names under rosters: workers:')
+    if old:
+        if warn:
+            print('fm-herdr: config.yaml roster: is the old single roster; its names are workers only'
+                  ' now, so move them under rosters: workers:', file=sys.stderr)
+        return {'workers': _config_names(old, 'roster')}
+    if not new: return {}
+    inline, children = new
+    if inline:
+        raise ValueError('config.yaml rosters must be a block holding workers: and/or reviewers: lists,'
+                         ' not an inline value')
+    body = [line for line in children if line.strip()]
+    base = min((_indent(line) for line in body), default=0)
+    keyed = False
+    for line in body:
+        if _indent(line) != base: continue
+        # A list may sit at its key's own indent: `workers:` then `- ada`.
+        if keyed and line.lstrip().startswith('- '): continue
+        key = re.match(r'\s*([^\s:]+):', line)
+        keyed = True
+        if not key or key.group(1) not in ROLES.values():
+            raise ValueError('config.yaml rosters: ' + (key.group(1) if key else line.strip())
+                             + ' is not workers: or reviewers:')
+    pinned = {}
+    for key in ROLES.values():
+        entry = _config_key(children, key)
+        if entry: pinned[key] = _config_names(entry, 'rosters.' + key)
+    if not pinned:
+        raise ValueError('config.yaml rosters must hold a workers: or reviewers: list of names')
+    both = [name for name in pinned.get('workers', []) if name in pinned.get('reviewers', [])]
+    if both:
+        raise ValueError('config.yaml rosters: ' + both[0] + ' is in both workers and reviewers;'
+                         ' a name belongs to one role')
+    return pinned
+
+
+def rosters_path(root):
+    return Path(root) / 'state/crew/rosters.json'
+
+
+def drawn_rosters(root):
+    """state/crew/rosters.json, checked, or None before the draw."""
+    path = rosters_path(root)
+    if not path.exists(): return None
+    broken = ValueError(str(path) + ' is not a crew of two rosters; roster init --redraw draws a new one')
+    try: crew = read(path)
+    except (OSError, ValueError): raise broken
+    if not isinstance(crew, dict): raise broken
+    names = []
+    for key in ROLES.values():
+        roster = crew.get(key)
+        if not (isinstance(roster, list) and roster
+                and all(isinstance(n, str) and re.fullmatch(r'[a-z]{1,6}', n) for n in roster)):
+            raise broken
+        names += roster
+    if len(set(names)) != len(names): raise broken
+    return crew
+
+
+def served_roles(root):
+    """Each name's role: the role of its earliest run recorded under the one-role
+    rule. Runs from before T-104 are not counted: T-089 let one name serve both
+    roles, and that history is not judged by a rule it was not written under."""
+    first = {}
+    for file in (Path(root) / 'state/runs').glob('*/identity.json'):
+        try: identity = read(file)
+        except (OSError, ValueError): continue
+        if identity.get('one_role') is not True: continue
+        name, role = crew_name(identity), identity.get('role')
+        if not name or role not in ROLES: continue
+        record = (identity.get('created') or 0, role)
+        if name not in first or record < first[name]: first[name] = record
+    return {name: role for name, (_, role) in first.items()}
+
+
+def crossed(name, role, served):
+    """The role this name already belongs to when it is not `role`, or None: a
+    name keeps the role of its first record, whatever the rosters say now."""
+    held = served.get(name)
+    return held if held and held != role else None
+
+
+def draw_rosters(root, redraw=False):
+    """Draw the installation's crew once: 2 x CREW_SIZE distinct names, uniformly
+    at random from POOL; the first half are workers. Returns (crew, drawn now).
+    A name a recorded run served under one role is never drawn for the other,
+    so a redraw cannot hand an old worker's name to a reviewer.
+    FM_ROSTER_SEED seeds the draw and exists only for tests."""
+    path = rosters_path(root)
+    with locked(path.parent / '.rosters.lock'):
+        if not redraw:
+            crew = drawn_rosters(root)
+            if crew: return crew, False
+        seed = os.environ.get('FM_ROSTER_SEED')
+        chance = random.Random(seed) if seed else random.SystemRandom()
+        served = served_roles(root)
+        order = chance.sample(POOL, len(POOL))
+        workers = [n for n in order if not crossed(n, 'worker', served)][:CREW_SIZE]
+        reviewers = [n for n in order if n not in workers
+                     and not crossed(n, 'reviewer', served)][:CREW_SIZE]
+        if len(workers) < CREW_SIZE or len(reviewers) < CREW_SIZE:
+            raise ValueError('the name pool cannot fill two rosters of ' + str(CREW_SIZE)
+                             + ' without giving a name a second role')
+        crew = dict(workers=workers, reviewers=reviewers,
+                    drawn_at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
+        save(path, crew)
+        return crew, True
+
+
+def crew_rosters(root, warn=True):
+    """Each role's names: config.yaml's pinned list where it has one, else the
+    drawn crew, drawn now if this installation has none. A drawn name pinned
+    to the other role is left out, so no name ever serves both."""
+    pinned = pinned_rosters(root, warn)
+    crew, _ = draw_rosters(root)
+    rosters = {}
+    for key in ROLES.values():
+        other = [name for k, names in pinned.items() if k != key for name in names]
+        rosters[key] = pinned.get(key) or [name for name in crew[key] if name not in other]
+    return rosters
 
 
 def crew_name(identity):
@@ -131,33 +312,55 @@ def run_is_live(run):
     return not process.is_file() and not attempts
 
 
-def choose_name(alias, roster, live, last, other_role, room):
-    """The crew name for one run, whole. Every comparison is on the whole name
-    and it is never cut: a name the final actor has no `room` for is refused.
-    Returns (name, reused roster name or None)."""
-    reused = None
+def choose_name(alias, role, rosters, live, last, other_role, room, served=None):
+    """The crew name for one run, whole, from its own role's roster only. Every
+    comparison is on the whole name and it is never cut: a name the final
+    actor has no `room` for is refused. A roster that has run out fails the
+    run; it never borrows the other role's names (T-104). A name any recorded
+    run `served` under the other role is refused however it is asked for: on
+    neither roster, back from a redraw, or moved in config.yaml. The refusals
+    that never lift come before the one that does: a name that belongs to the
+    other role is refused as such even while it is live, since waiting for
+    that run to finish would not make it usable."""
+    served = served or {}
+    roster = rosters.get(ROLES.get(role), [])
+    foreign = {key[:-1]: names for key, names in rosters.items() if key != ROLES.get(role)}
     if alias:
         name = re.sub('[^a-z0-9]+', '-', alias.lower()).strip('-')
         name = re.sub(r'^(worker|reviewer|firstmate)-', '', name) or 'crew'
-        if name in live:
-            raise RuntimeError('crew name ' + name + ' is live in another run; choose another --name or omit it')
+        for other, names in foreign.items():
+            if name in names:
+                raise RuntimeError('crew name ' + name + ' is on the ' + other + ' roster and a name belongs to'
+                                   ' one role; choose another --name or omit it')
+        if crossed(name, role, served):
+            raise RuntimeError('crew name ' + name + ' has served as a ' + crossed(name, role, served)
+                               + ' and a name belongs to one role; choose another --name or omit it')
         if name in other_role:
             raise RuntimeError('crew name ' + name + " is this task's other role; choose another --name or omit it")
+        if name in live:
+            raise RuntimeError('crew name ' + name + ' is live in another run; choose another --name or omit it')
+    elif not roster:
+        raise RuntimeError(role + ' has no roster; give it a --name')
     else:
         # A task's worker and reviewer are never the same crew member.
-        usable = [n for n in roster if n not in other_role]
-        free = [n for n in usable if n not in live]
+        free = [n for n in roster if n not in other_role and n not in live
+                and not crossed(n, role, served)]
         if last in free: name = last  # the same crew member across a task's rounds
         elif free: name = free[0]
         else:
-            reused = last if last in usable else (usable or roster)[0]
-            n = 2
-            while reused + str(n) in live or reused + str(n) in other_role: n += 1
-            name = reused + str(n)
+            held = [n for n in roster if n in other_role and n not in live]
+            gone = [n for n in roster if n not in other_role and n not in live
+                    and crossed(n, role, served)]
+            also = f', {", ".join(held)} held by this task\'s other role' if held else ''
+            also += f', {", ".join(gone)} already served the other role' if gone else ''
+            raise RuntimeError(f'the {role} roster ran out: none of its {len(roster)} names is free'
+                               f' ({len(roster) - len(held) - len(gone)} live{also}), and a name of the other'
+                               f' role is never borrowed; wait for a {role} run to finish, or pin more'
+                               f' names under rosters: in config.yaml')
     if len(name) > room:
         raise RuntimeError('crew name ' + name + ' does not fit a ' + str(room)
                            + '-character room in this actor; choose a shorter --name or roster')
-    return name, reused
+    return name
 
 
 def allocate(root, role, task, alias):
@@ -167,7 +370,7 @@ def allocate(root, role, task, alias):
         raise ValueError('invalid task identity')
     root = Path(root).resolve()
     directory = root / 'state/runs'
-    roster = fleet_roster(root)
+    rosters = crew_rosters(root)
     with locked(directory / '.identity.lock'):
         counter = directory / 'counter.json'
         number = read(counter)['number'] + 1 if counter.exists() else 1
@@ -176,6 +379,7 @@ def allocate(root, role, task, alias):
         if len(task_slug) > 9:
             task_slug = task_slug[:4] + hashlib.sha256(task.encode()).hexdigest()[:5]
         live, previous, other_role = set(), [], set()
+        served = served_roles(root)
         for file in directory.glob('*/identity.json'):
             try: identity = read(file)
             except (OSError, ValueError): continue
@@ -191,24 +395,15 @@ def allocate(root, role, task, alias):
             # Measured against the final suffix: a counter that gains a digit
             # on retry must not push the actor past 32 characters.
             room = 32 - len(role) - 1 - len(suffix)
-            name, reused = choose_name(alias, roster, live, last, other_role, room)
+            name = choose_name(alias, role, rosters, live, last, other_role, room, served)
             actor = role + '-' + name + suffix
             run = directory / actor
             try: run.mkdir(parents=True); break
             except FileExistsError: number += 1
-        if reused:
-            # Say why: a name can be free yet held by this task's other role.
-            held = [n for n in roster if n in other_role and n not in live]
-            if held:
-                why = (f'no roster name is free for this task ({len(roster) - len(held)} of {len(roster)} live,'
-                       f" {', '.join(held)} held by its other role)")
-            else:
-                why = f'every roster name is live ({len(roster)})'
-            print(f'fm-herdr: {why}; reusing {reused} as {name}', file=sys.stderr)
         save(counter, dict(number=number))
-        record = dict(actor=actor, role=role, task=task, name=name,
+        # one_role: written under T-104's rule, so this run binds the name to its role.
+        record = dict(actor=actor, role=role, task=task, name=name, one_role=True,
                       requested_alias=alias, run=str(run), created=time.time())
-        if reused: record['reused'] = reused
         save(run / 'identity.json', record)
     return run
 
@@ -1238,6 +1433,34 @@ def project_field(config, field):
     return 0
 
 
+def roster_command(root, action='show', redraw=''):
+    """The roster command: print both rosters; `init` draws them once; `--redraw`
+    replaces them, and only when asked."""
+    if action not in ('show', 'init'): raise ValueError('unknown roster action ' + action)
+    if action == 'show' and not redraw:
+        crew = drawn_rosters(root)
+        if not crew:
+            print('fm roster: no crew drawn yet; roster init draws one', file=sys.stderr)
+            return 1
+    else:
+        crew, drawn = draw_rosters(root, redraw=bool(redraw))
+        if redraw:
+            print('fm roster: drew a new crew. Ranks and service records keyed by the old names'
+                  ' stay with the old names; the new names start without them. A name that'
+                  ' already served one role is never drawn for the other.')
+        elif drawn: print('fm roster: drew this installation\'s crew')
+        else:
+            print('fm roster: this installation already has a crew, drawn ' + str(crew.get('drawn_at'))
+                  + '; it is never redrawn unless you ask with --redraw', file=sys.stderr)
+            return 1
+    pinned = pinned_rosters(root)
+    rosters = crew_rosters(root, warn=False)
+    for key in ROLES.values():
+        source = 'pinned in config.yaml' if key in pinned else 'drawn ' + str(crew.get('drawn_at'))
+        print(f'{key} ({len(rosters[key])}, {source}): ' + ' '.join(rosters[key]))
+    return 0
+
+
 def main(args):
     mode, *args = args
     if mode == 'project':
@@ -1245,6 +1468,10 @@ def main(args):
         except ValueError as error:
             print('fm-config: ' + str(error), file=sys.stderr); return 65
     if mode == 'allocate': print(allocate(Path(args[0]), *args[1:])); return 0
+    if mode == 'roster':
+        try: return roster_command(*args)
+        except (OSError, ValueError) as error:
+            print('fm roster: ' + str(error), file=sys.stderr); return 65
     if mode == 'launch': launch(args[0], args[1], args[2:])
     if mode == 'transport': return transport(*args)
     if mode == 'pane-child': return pane_child(*args)
@@ -1270,6 +1497,12 @@ def main(args):
             # Close ghost actors before the board is shown or work is planned.
             reconcile = retire_dead_crew(root)
             report = inspect(root); report['deck_reconcile'] = reconcile
+            # The installation's crew is drawn the first time firstmate runs
+            # in a checkout, and never again (T-104).
+            try:
+                crew, drawn = draw_rosters(root)
+                report['crew'] = dict(crew, drawn_now=drawn)
+            except (OSError, ValueError) as error: report['crew'] = dict(error=str(error))
             # Before the board: a fresh checkout is prepared once, as the
             # project declares. A failure is reported, never fatal.
             report['project'] = project_report(root, run_setup=True)
