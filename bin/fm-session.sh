@@ -19,4 +19,23 @@ done
 cd "$REPO" || exit 64
 REPO="$(pwd -P)"
 fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
+# The reviewer's engine is the captain's to choose. A project that names none
+# is said out loud here, once per start, rather than reviewed by whatever the
+# top-level vendor happens to be: firstmate asks on the board and the answer
+# lands in config.yaml through a pull request.
+if [ "$MODE" = start ]; then
+  rv="$(fm_cfg_in reviewer vendor)"; rmodel="$(fm_cfg_in reviewer model)"
+  if [ -z "$rv" ] || [ -z "$rmodel" ]; then
+    installed=''
+    for a in "${FM_CODE_ROOT:-$REPO}"/bin/adapters/*.sh; do
+      a="${a##*/}"; a="${a%.sh}"
+      case "$a" in _*|mock) continue ;; esac
+      command -v "$a" >/dev/null 2>&1 && installed="${installed:+$installed }$a"
+    done
+    missing=''
+    [ -n "$rv" ] || missing=vendor
+    [ -n "$rmodel" ] || missing="${missing:+$missing and }model"
+    echo "fm-session: config.yaml names no reviewer $missing; the reviewer is the captain's choice - ask on the board (installed adapters: ${installed:-none})" >&2
+  fi
+fi
 exec python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" session "$MODE" "$REPO" "$DECISION"
