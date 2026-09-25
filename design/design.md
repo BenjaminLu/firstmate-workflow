@@ -249,6 +249,41 @@ missing; a later turn reuses that id rather than taking another. Missing or
 invalid authored input is reported as no card created. Only a successful
 request is announced as asking the captain.
 
+**Only a decision request rings (T-096).** A card the captain must answer can
+sit unseen while the captain is not looking at the board, so inside Herdr
+(`HERDR_ENV=1`, which Herdr exports and its own `herdr --skill` tests for) a
+successful `fm-decide.sh --request`, of any kind, merge included, calls
+`herdr notification show` once: the title names the project, the task and
+the kind, the body is the card's one-line question in the captain's
+language, `zh-TW`, the board's default locale (I3; the board's own choice
+lives in `localStorage`, where no script can read it), and the sound is
+`request`. The project is the one the card is filed under: the project it
+records, else, as the board reads a card that records none, `default_project`,
+else the self project. `FM_PROJECT` matters only through the card it chose.
+A marker under
+`state/runtime/notified/` makes it one per id, ever; an answered or withdrawn
+card is never announced, and awaiting or answering one rings nothing.
+`config.yaml`'s `notifications.herdr: false` turns it off and
+`notifications.sound: false` sends `--sound none`; both default to true when
+the keys are absent. The keys are read in a subshell, so the reader cannot
+change the request's options or variables. A `config.yaml` whose reader
+(`bin/fm-config.sh`) is missing fails closed: it rings nothing and says so,
+because a `herdr: false` nobody could read still counts. Like the diagram,
+it is decoration on the request. A `herdr` that fails, a Herdr with no
+`herdr` command, and a `herdr` that has not answered after 10 seconds
+(`FM_NOTIFY_SECONDS`) are each reported on standard error. The last is
+reported as a timeout. In every case the card is still requested and the
+request still exits 0. Outside Herdr nothing is called and nothing is written,
+not even the marker directory. The tests' Herdr stub answers only what
+herdr 0.8.0 was captured answering: a call, a refused sound (exit 2), no
+server (exit 1).
+
+Nothing else notifies. CI turning red, a worker blocking or crashing, a review
+rejecting, a protocol violation: those are crew weather, and the board shows
+them. Each is either handled by firstmate or ends in a decision card, and that
+card is what rings. A sound for every event would teach the captain to ignore
+the sound, and then the one that needs an answer is missed too.
+
 The board atomically publishes a response, invokes `fm-emit.sh` once with
 `decision_made` and `data.decision`, then handles any authorized A merge.
 Awaiters only observe the record; they do not emit a second event. Repeating
