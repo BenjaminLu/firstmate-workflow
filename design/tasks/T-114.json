@@ -24,7 +24,9 @@
     "tests/e2e-loop.test.sh",
     "tests/e2e/board.spec.ts",
     "design/design.md",
-    "design/tasks/T-114.json"
+    "design/tasks/T-114.json",
+    "i18n/ui.en.json",
+    "i18n/ui.zh-TW.json"
   ],
   "acceptance": [
     "Gate 3 is a full local run of the project check. It duplicates the required GitHub check, and on 2026-09-25 and 2026-09-26 it held CI-green heads by overrunning its 600s budget whenever run-mode reviewers or other gates ran ci.sh at the same time (1565s on T-104, and again on T-068, T-086, T-112 and T-054). The captain approved removing it (2026-09-26). This item is split out of T-107. Its own spec file, design/tasks/T-114.json, is committed on this branch.",

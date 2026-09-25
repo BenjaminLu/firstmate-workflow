@@ -473,6 +473,13 @@ assert_contains "$(code "$ROOT/tests/diagram.test.sh")" "for n in $nums; do" \
 for n in $nums; do
   assert_ok "jq -e 'has(\"gate$n\")' '$ROOT/i18n/ui.en.json' >/dev/null" "gate $n has a board label"
 done
+# The retired number keeps its key (tests/i18n.test.sh asks for gate1..7), but
+# no dictionary may still describe it as the local check.
+for dict in "$ROOT"/i18n/ui.*.json; do
+  g3="$(jq -r '.gate3 // ""' "$dict")"
+  assert_lacks "$g3" "ci.sh" "$(basename "$dict") no longer labels gate 3 as the local check"
+  assert_ok "grep -qiE 'retired|退役' <<<'$g3'" "$(basename "$dict") labels gate 3 retired"
+done
 # and nothing in the repository still counts seven gates, or calls gate 3 the
 # check. The whole tree is swept, not a list of the files a spec named, so a
 # guide or a template nobody thought of is found too. The pattern is the idea,
