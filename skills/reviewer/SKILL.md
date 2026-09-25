@@ -5,7 +5,10 @@ description: Assess a dispatched task artifact against its specification and clo
 
 # Reviewer
 
-You see a diff, the task spec, and the acceptance criteria. You do not see how
+You see a diff, the task spec, and the acceptance criteria; when the launcher
+knows the pull request, also the head's SHA, its required check and its gate
+summary (see "The head's CI and gates"), and from round three the closed
+list. You do not see how
 the worker got there, and that is deliberate: reasoning is persuasive, and you
 are here to judge the artefact.
 
@@ -94,7 +97,7 @@ marked `REGRESSION:<task-id>` can extend them. Report protocol violations to
 
 Where to find them: from round three, when the launcher knows the pull request,
 your prompt has a **The closed list** section after the round number and before
-the diff. It quotes verbatim the worker's latest `ASK-PASS-CRITERIA:<task-id>`
+the head section and the diff. It quotes verbatim the worker's latest `ASK-PASS-CRITERIA:<task-id>`
 first, then every comment whose numbered list ends in
 `CRITERIA-COMPLETE:<task-id>`, in the order posted, whether posted before or
 after the ask; when several lists appear, the first is the original. A marker
@@ -107,19 +110,35 @@ part of the comment. The section's opening line says which case you are in: a
 list that binds this round, an ask to answer, neither, or comments the launcher
 failed to read. Nothing else from the pull request is quoted there.
 
+## The head's CI and gates
+
+Current-head CI and the seven gates are firstmate's evidence to establish, not
+yours to infer from the diff. When the launcher knows the pull request, your
+prompt has a **The head under review** section before the diff: the head SHA
+this round reviews; the required check's name, conclusion and run URL for
+exactly that SHA, as GitHub reported them; and that head's whole gate summary,
+quoted between fences carrying a per-run code, when `state/gates/` holds one.
+Where either is missing, or the summary has no result line for a gate, the
+section says so. Take only what it shows. A check
+result for another head is not this one's, and a missing result is unknown,
+not green. Do not close an item that asks for green CI or gates on anything
+else; say that the evidence for this head is missing and leave the item open.
+
 ## Evidence and isolation
 
 Retain your supplied reviewer role even in an isolated directory without root
 entrypoints; do not dispatch workers or run git/gh. Require the diff, task spec,
 acceptance, authoritative relevant design contract and original closed criteria
-when applicable. Ask for missing review context instead of inventing it. Do not
+when applicable. CI and gate evidence comes only from the **The head under
+review** section; do not require or accept it from anywhere else. Ask for missing review context instead of inventing it. Do not
 request worker reasoning or logs. The relevant [design](../../design/design.md)
 must be supplied in the prompt when this relative path is unavailable.
 
 Distinguish tests you executed in a checkout from supplied test results and
 static inspection. Without a checkout, do not claim to have run tests. Name
 observable evidence and limitations; metadata checks cannot prove instruction
-compliance. Review current-head CI and verdict evidence, not stale approvals.
+compliance. Review current-head CI as that section shows it, and current verdict
+evidence, not stale approvals.
 The current launcher may scan combined output for markers; do not mistake that
 parser behavior for final-answer provenance. Report the limitation when present.
 Gate 7 does not check final-answer provenance or the reviewed head, and only
@@ -127,7 +146,8 @@ filters comment authors when `FM_REVIEWER_LOGIN` is set. The protocol checker
 recognizes markers and numeric references without proving original-list
 membership or a new regression. Firstmate must coordinate these checks and
 confirm publication; launcher success does not prove its comment was posted.
-Use repository verification and actual CI evidence. Neither lavish nor
+Use repository verification, and for CI and gates only the head section's
+evidence. Neither lavish nor
 no-mistakes is a prerequisite; do not add their hooks. Captain scope and merge
 decisions remain on the board; the merge helper itself checks neither approval
 nor the seven gates. Mid-run board progress is script-emitted only: do not invent
