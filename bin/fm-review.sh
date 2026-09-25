@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs one review round. The reviewer is given the diff, the task spec and the
 # acceptance criteria - and, from round three, the round-three protocol's own
-# comments from the pull request - and nothing else. Not the worker's log, not
+# comments from the pull request, and, given --pr, in every round the head's
+# SHA, its required check and its gate summary - and nothing else. Not the worker's log, not
 # its reasoning, not even the path it worked in. Reasoning is persuasive; the
 # artefact is what is under review.
 #
@@ -229,6 +230,68 @@ closed_list() {
   done
 }
 
+# Given --pr, every round is shown the evidence a diff cannot carry, bound to
+# the exact head under review (T-088): the head's SHA, the required check's
+# run for that commit, and the head's gate summary when state/ has one.
+# Without it a closed-list item asking for green CI and gates could never be
+# closed, because the reviewer never saw either (T-067, round nine).
+#
+# The check comes from GitHub's check runs for the commit itself, and a run
+# that names another head is dropped: the pull request's own checks follow
+# whatever head it has now, which need not be the head this round reviews.
+head_evidence() {
+  local sha names name runs shown fence
+  printf '\n# The head under review\n'
+  if ! sha="$(git rev-parse --verify -q "$BRANCH^{commit}")"; then
+    printf '\nThe head of %s could not be resolved, so no CI or gate result can be tied to it.\n' "$BRANCH"
+    return 0
+  fi
+  printf '\nHead SHA: %s\n' "$sha"
+  printf '\n## The required check for this head, from GitHub\n'
+  # read from the output, not the exit status: gh's exit code reports the
+  # checks' state, and a red check is exactly what must be shown
+  names="$($GH pr checks "$PR" --required --json name --jq '.[].name' 2>/dev/null </dev/null | awk 'NF && !s[$0]++')"
+  if [ -z "$names" ]; then
+    printf '\nThe required check for head %s could not be read from GitHub, so its CI result is unknown.\n' "$sha"
+  else
+    while IFS= read -r name; do
+      if ! runs="$($GH api "repos/{owner}/{repo}/commits/$sha/check-runs?check_name=$(jq -rn --arg n "$name" '$n|@uri')" 2>/dev/null </dev/null)"; then
+        printf '\nThe runs of the required check %s for head %s could not be read from GitHub, so its CI result for this head is unknown.\n' "$name" "$sha"
+        continue
+      fi
+      shown="$(jq -r --arg sha "$sha" --arg name "$name" '
+        [.check_runs[]? | select(.head_sha == $sha and .name == $name)] | max_by(.id) // empty
+        | "Required check: \(.name)\nConclusion: \(.conclusion // "none yet, status \(.status)")\nRun: \(.details_url // .html_url)"
+      ' <<<"$runs" 2>/dev/null)"
+      if [ -n "$shown" ]; then
+        printf '\n%s\n' "$shown"
+      else
+        printf '\nNo run of the required check %s was found for head %s, so its CI result for this head is unknown.\n' "$name" "$sha"
+      fi
+    done <<<"$names"
+  fi
+  printf '\n## The seven gates for this head\n'
+  # The whole file, unfiltered: a filter shows a summary in any other shape
+  # as an empty quote that neither reports results nor says they are missing.
+  # What is not there is then said by gate - fm-gate.sh stops at the first
+  # red one, so a summary can end early, and an empty one lacks all seven.
+  local summary="$REPO/state/gates/$TASK-$sha.txt" n lacking=''
+  if [ -f "$summary" ]; then
+    fence="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+    printf '\nFrom state/gates/%s-%s.txt, verbatim:\n\n----- begin gate summary %s -----\n' "$TASK" "$sha" "$fence"
+    cat "$summary"
+    [ -z "$(tail -c1 "$summary")" ] || printf '\n'
+    printf -- '----- end gate summary %s -----\n' "$fence"
+    for n in 1 2 3 4 5 6 7; do
+      grep -Eq "^[[:space:]]*[+x] gate $n: " "$summary" || lacking="${lacking:+$lacking, }$n"
+    done
+    [ -z "$lacking" ] ||
+      printf '\nThe gate summary for head %s has no result line for gates: %s, so those results are unknown.\n' "$sha" "$lacking"
+  else
+    printf '\nNo gate summary for head %s exists under state/gates/, so its gate results are unknown.\n' "$sha"
+  fi
+}
+
 work="$FM_RUN_DIR/review"
 mkdir -p "$work"
 prompt="$work/prompt.md"
@@ -242,6 +305,7 @@ prompt="$work/prompt.md"
   elif [ "$ROUND" -ge 3 ]; then
     printf '\nThis is round three or later. If the worker has posted ASK-PASS-CRITERIA, answer with the complete numbered list and then post CRITERIA-COMPLETE:%s.\n' "$TASK"
   fi
+  [ -z "$PR" ] || head_evidence
   printf '\n---\n\n# The diff under review\n\n```diff\n'
   git diff "$BASE...$BRANCH"
   printf '```\n'

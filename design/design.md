@@ -75,7 +75,7 @@ These bind every actor, including firstmate itself.
 | Q9 | Where pull requests live | `BenjaminLu/firstmate-workflow`, public so branch protection is available; under Q10 a task's pull request lives on its project's repository |
 | Q10 | Which repositories firstmate drives | D-049, option B: one external installation — this repository holds the engine, every project's design and task list, and all runtime state, and drives registered target repositories that carry none of it (section 15) |
 | R1 | Self-update | Skills define behaviour; writing them back travels a full pull request; external skills import read-only |
-| R2 | What the reviewer sees | The diff, the task spec and the acceptance criteria — never the worker's reasoning |
+| R2 | What the reviewer sees | The diff, the task spec and the acceptance criteria, plus, given the pull request, the head's SHA, required check and gate summary (section 7) — never the worker's reasoning |
 | R3 | Granularity | One task, one pull request, one worktree; `depends_on` forms a DAG; three in flight |
 | R4 | Branching | Every task branches from `main` and targets `main`; the worker rebases its own conflicts |
 | R5 | Writing the log | Only through `bin/fm-emit.sh` |
@@ -735,6 +735,7 @@ grilling  ->  /prototype  ->  [captain green-lights]  ->  design.md + design/tas
                           *  fm-gate.sh, the seven gates  *
                                        |
             fm-review.sh: reviewer sees the diff, the spec, the criteria
+                   and, given the PR, the head's check and gate results
                                        |
      not passed -> worker revives and fixes (round 3+ asks first) -> back to the gates
                                        |
@@ -861,7 +862,35 @@ closed list; findings cite its items or are marked `REGRESSION:`), only an ask
 (answer with the complete list), neither, or comments `gh` could not read, in
 which case the round still runs.
 No other comment enters the prompt, so the worker's reasoning stays out.
-Rounds one and two, and any round without `--pr`, get the prompt unchanged.
+Rounds one and two get no closed-list section. Given `--pr`, they, like every
+round, do get the head section below; without `--pr` no round gets either,
+and the prompt is unchanged.
+
+A diff cannot show CI or gates, so a closed-list item asking for them could
+never be closed (T-067, round nine). Current-head CI and gates are firstmate's
+evidence to establish; the launcher shows the reviewer what exists for the
+head (T-088). Given `--pr`, every round's prompt gets a **The head under
+review** section before the diff, verbatim and labelled: the head SHA, from
+the local branch the diff is taken from; for each name `gh pr checks <pr>
+--required --json name` lists, that check's name, conclusion and run URL from
+GitHub's check runs for that exact commit (`gh api
+repos/{owner}/{repo}/commits/<sha>/check-runs?check_name=<name>`), keeping
+only a run whose `head_sha` is the head and the latest of those; and the
+whole of `state/gates/<task-id>-<sha>.txt`, unfiltered and fenced with a
+per-run nonce, when that file exists. Its lines are `fm-gate.sh`'s own
+stdout: `  + gate N: …` or `  x gate N: …`. A required check that cannot be
+read, a check with no run for this head, a missing gate summary, and each
+gate the summary has no result line for (it stops at the first red gate, and
+an empty one has none) are stated plainly. Nothing else is added, and a round
+without `--pr` is unchanged.
+
+The gate half is not closed yet. Nothing writes that gate summary:
+`fm-run.sh` sends `fm-gate.sh`'s stdout to `/dev/null`, and it is outside
+T-088's scope. Until a writer tees that stdout to
+`state/gates/<task-id>-<sha>.txt`, every prompt reports the head's gate
+results as unknown, and an item asking for green gates stays open. The path
+and the `  + gate N: …` / `  x gate N: …` lines of `fm-gate.sh`'s own `say()`
+are the contract that writer must follow.
 
 The point is to end the loop where each round fixes one thing and surfaces
 another.
@@ -1930,7 +1959,8 @@ The worker and reviewer skills stop pointing at repository-relative files
 (`design/design.md`, `design/tasks/`, `bin/fm-checkpoint.sh`) and refer to
 "the design, scope and checkpoint command in your prompt". The self project
 gets the same prompt shape. The reviewer still sees the diff, the spec and the
-design — never the worker's reasoning (R2). Firstmate itself always runs in
+design, and given the pull request the head's CI and gate evidence (section
+7) — never the worker's reasoning (R2). Firstmate itself always runs in
 the engine root and names the project on every script it calls.
 
 ### 15.8 Open captain decision: private projects
