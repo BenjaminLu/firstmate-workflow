@@ -1,0 +1,331 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="t d">
+<title id="t">firstmate-workflow</title>
+<desc id="d">A captain at the helm of a flagship at dusk. A decision card rises beside the captain and is stamped approved, while a fleet of AI crew ships sails out to several islands and one arrives in port under fireworks. Command a fleet of AI engineers. You decide; they ship, with proof.</desc>
+<style>
+@font-face{font-family:"Fell";font-weight:400;src:url(__FONT_FELL__) format("woff2")}
+@font-face{font-family:"Barlow";font-weight:500;src:url(__FONT_B500__) format("woff2")}
+@font-face{font-family:"Barlow";font-weight:600;src:url(__FONT_B600__) format("woff2")}
+.fell{font-family:"Fell","IM Fell English SC",Georgia,serif}
+.bar{font-family:"Barlow","Barlow Semi Condensed","Arial Narrow",Arial,sans-serif}
+.cjk{font-family:"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif}
+.a{transform-origin:0 0;animation-duration:10s;animation-iteration-count:infinite;animation-timing-function:linear}
+.bob{animation-name:bob;animation-duration:5s;animation-timing-function:ease-in-out}
+.wave1{animation-name:w36;animation-duration:5s}
+.wave2{animation-name:w60;animation-duration:5s}
+.wave3{animation-name:w90;animation-duration:5s}
+.glint{animation-name:glint;animation-duration:2.5s;animation-timing-function:ease-in-out}
+.glint.g2{animation-delay:-1.25s}
+.flag{animation-name:flag;animation-duration:2.5s;animation-timing-function:ease-in-out}
+.lamp{animation-name:lamp;animation-duration:2.5s;animation-timing-function:ease-in-out}
+.cloud{animation-name:cloud;animation-timing-function:ease-in-out}
+.card{animation-name:card}
+.halo{animation-name:halo}
+.stamp{animation-name:stamp}
+.shipA{animation-name:shipA;animation-delay:-2s}
+.shipB{animation-name:shipB;animation-delay:-6s}
+.shipC{animation-name:shipC}
+.fw1{animation-name:fw1}
+.fw2{animation-name:fw2}
+.fw3{animation-name:fw3}
+.beam{animation-name:beam;animation-duration:2.5s;animation-timing-function:ease-in-out}
+@keyframes bob{0%,100%{transform:translateY(0) rotate(0deg)}50%{transform:translateY(3px) rotate(.6deg)}}
+@keyframes w36{from{transform:translateX(0)}to{transform:translateX(-36px)}}
+@keyframes w60{from{transform:translateX(0)}to{transform:translateX(-60px)}}
+@keyframes w90{from{transform:translateX(0)}to{transform:translateX(-90px)}}
+@keyframes glint{0%,100%{opacity:.25}50%{opacity:.8}}
+@keyframes flag{0%,100%{transform:skewY(0deg) scaleX(1)}50%{transform:skewY(5deg) scaleX(.92)}}
+@keyframes lamp{0%,100%{opacity:.75}50%{opacity:1}}
+@keyframes cloud{0%,100%{transform:translateX(0)}50%{transform:translateX(18px)}}
+@keyframes beam{0%,100%{opacity:.35}50%{opacity:.9}}
+@keyframes card{
+  0%{transform:translate(0,110px) scale(.92);opacity:0}
+  3%{transform:translate(0,110px) scale(.92);opacity:0;animation-timing-function:cubic-bezier(.2,.8,.3,1)}
+  13%{transform:translate(0,0) scale(1);opacity:1}
+  31%{transform:translate(0,0) scale(1);opacity:1;animation-timing-function:cubic-bezier(.6,0,.8,.6)}
+  37%{transform:translate(38px,262px) scale(.12);opacity:0}
+  100%{transform:translate(38px,262px) scale(.12);opacity:0}}
+@keyframes halo{0%,3%{opacity:0}13%,31%{opacity:1}36%,100%{opacity:0}}
+@keyframes stamp{
+  0%,19%{transform:scale(2.6) rotate(-4deg);opacity:0;animation-timing-function:cubic-bezier(.5,0,.9,.4)}
+  22%{transform:scale(.9) rotate(-14deg);opacity:1}
+  24%,100%{transform:scale(1) rotate(-14deg);opacity:1}}
+@keyframes shipA{
+  0%{transform:translate(0,0) scale(1);opacity:0}
+  6%{opacity:1;animation-timing-function:cubic-bezier(.25,.5,.5,1)}
+  70%{transform:translate(214px,-176px) scale(.36);opacity:1}
+  84%,100%{transform:translate(214px,-176px) scale(.36);opacity:0}}
+@keyframes shipB{
+  0%{transform:translate(0,0) scale(1);opacity:0}
+  6%{opacity:1;animation-timing-function:cubic-bezier(.25,.5,.5,1)}
+  70%{transform:translate(424px,-180px) scale(.34);opacity:1}
+  84%,100%{transform:translate(424px,-180px) scale(.34);opacity:0}}
+@keyframes shipC{
+  0%,34%{transform:translate(0,0) scale(1);opacity:0}
+  38%{opacity:1;animation-timing-function:cubic-bezier(.25,.5,.5,1)}
+  72%{transform:translate(560px,-170px) scale(.42);opacity:1}
+  95%{transform:translate(560px,-170px) scale(.42);opacity:1}
+  100%{transform:translate(560px,-170px) scale(.42);opacity:0}}
+@keyframes fw1{0%,72%{transform:scale(.15);opacity:0}73%{opacity:1}82%{transform:scale(1);opacity:.9}88%,100%{transform:scale(1.12);opacity:0}}
+@keyframes fw2{0%,77%{transform:scale(.15);opacity:0}78%{opacity:1}87%{transform:scale(1);opacity:.9}93%,100%{transform:scale(1.12);opacity:0}}
+@keyframes fw3{0%,82%{transform:scale(.15);opacity:0}83%{opacity:1}92%{transform:scale(1);opacity:.9}98%,100%{transform:scale(1.12);opacity:0}}
+@media (prefers-reduced-motion:reduce){.a{animation:none!important}}
+</style>
+<defs>
+  <clipPath id="frame"><rect width="1280" height="640" rx="18"/></clipPath>
+  <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#3E3160"/><stop offset=".45" stop-color="#5B4A7A"/><stop offset=".78" stop-color="#A0607A"/><stop offset="1" stop-color="#D9774A"/>
+  </linearGradient>
+  <linearGradient id="sea" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#C8805F"/><stop offset=".14" stop-color="#5A4868"/><stop offset=".55" stop-color="#2B2A48"/><stop offset="1" stop-color="#171A30"/>
+  </linearGradient>
+  <radialGradient id="sunGlow" cx=".5" cy=".5" r=".5">
+    <stop offset="0" stop-color="#FFC795" stop-opacity=".85"/><stop offset=".35" stop-color="#F2A070" stop-opacity=".45"/><stop offset="1" stop-color="#F2A070" stop-opacity="0"/>
+  </radialGradient>
+  <radialGradient id="cardGlow" cx=".5" cy=".5" r=".5">
+    <stop offset="0" stop-color="#F6B447" stop-opacity=".55"/><stop offset="1" stop-color="#F6B447" stop-opacity="0"/>
+  </radialGradient>
+  <linearGradient id="sail" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0" stop-color="#C9B592"/><stop offset=".55" stop-color="#EDE0C3"/><stop offset="1" stop-color="#F6D6AE"/>
+  </linearGradient>
+  <linearGradient id="hull" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#553623"/><stop offset="1" stop-color="#1E130C"/>
+  </linearGradient>
+  <pattern id="p36" width="36" height="8" patternUnits="userSpaceOnUse"><path d="M0 4 Q9 1 18 4 T36 4" fill="none" stroke="#F2C2A0" stroke-opacity=".22" stroke-width="1"/></pattern>
+  <pattern id="p60" width="60" height="14" patternUnits="userSpaceOnUse"><path d="M0 7 Q15 3 30 7 T60 7" fill="none" stroke="#E8DDC4" stroke-opacity=".12" stroke-width="1.3"/></pattern>
+  <pattern id="p90" width="90" height="22" patternUnits="userSpaceOnUse"><path d="M0 11 Q22.5 5 45 11 T90 11" fill="none" stroke="#E8DDC4" stroke-opacity=".10" stroke-width="1.8"/></pattern>
+  <g id="burst" stroke="currentColor" stroke-linecap="round" fill="currentColor">
+    <g stroke-width="2.4">
+      <line x1="0" y1="-12" x2="0" y2="-40"/><line x1="0" y1="-12" x2="0" y2="-40" transform="rotate(30)"/>
+      <line x1="0" y1="-12" x2="0" y2="-40" transform="rotate(60)"/><line x1="0" y1="-12" x2="0" y2="-40" transform="rotate(90)"/>
+      <line x1="0" y1="-12" x2="0" y2="-40" transform="rotate(120)"/><line x1="0" y1="-12" x2="0" y2="-40" transform="rotate(150)"/>
+      <line x1="0" y1="-12" x2="0" y2="-40" transform="rotate(180)"/><line x1="0" y1="-12" x2="0" y2="-40" transform="rotate(210)"/>
+      <line x1="0" y1="-12" x2="0" y2="-40" transform="rotate(240)"/><line x1="0" y1="-12" x2="0" y2="-40" transform="rotate(270)"/>
+      <line x1="0" y1="-12" x2="0" y2="-40" transform="rotate(300)"/><line x1="0" y1="-12" x2="0" y2="-40" transform="rotate(330)"/>
+    </g>
+    <g stroke="none">
+      <circle cx="24" cy="-40" r="2.2"/><circle cx="-24" cy="-40" r="2.2"/><circle cx="46" cy="0" r="2.2"/><circle cx="-46" cy="0" r="2.2"/>
+      <circle cx="24" cy="40" r="2.2"/><circle cx="-24" cy="40" r="2.2"/><circle cx="0" cy="-48" r="2.6"/><circle cx="0" cy="48" r="2.6"/>
+    </g>
+  </g>
+  <g id="crewship">
+    <path d="M-46 3 L-92 5 L-46 8Z" fill="#F4ECD8" opacity=".3"/>
+    <path d="M-40 -12 L38 -12 L50 -19 C46 -6 36 2 28 4 L-30 4 C-38 -2 -42 -7 -40 -12Z" fill="url(#hull)"/>
+    <path d="M-39 -8 L42 -8" stroke="#C99A3C" stroke-width="1.6"/>
+    <path d="M0 -12 V-80 M22 -12 V-60" stroke="#6B4A33" stroke-width="2.4"/>
+    <path d="M-19 -76 L19 -76 Q23 -64 18 -52 L-18 -52 Q-23 -64 -19 -76Z M-26 -48 L26 -48 Q31 -33 25 -18 L-25 -18 Q-31 -33 -26 -48Z" fill="url(#sail)"/>
+    <path d="M24 -58 L50 -20 L25 -20Z" fill="#EDE0C3"/>
+    <path d="M1 -80 L18 -76 L1 -72Z" fill="currentColor"/>
+  </g>
+</defs>
+
+<g clip-path="url(#frame)">
+  <!-- sky -->
+  <rect width="1280" height="422" fill="url(#sky)"/>
+  <g fill="#E8DDC4">
+    <circle cx="1052" cy="46" r="1.3" opacity=".7"/><circle cx="1130" cy="92" r="1" opacity=".5"/><circle cx="1210" cy="38" r="1.4" opacity=".8"/>
+    <circle cx="980" cy="110" r=".9" opacity=".45"/><circle cx="1240" cy="128" r="1.1" opacity=".5"/><circle cx="890" cy="54" r="1" opacity=".5"/>
+    <circle cx="1170" cy="160" r=".9" opacity=".35"/><circle cx="810" cy="30" r="1.2" opacity=".55"/>
+  </g>
+  <circle cx="905" cy="416" r="190" fill="url(#sunGlow)"/>
+  <circle cx="905" cy="418" r="44" fill="#FFC795"/>
+  <g class="a cloud" opacity=".9">
+    <path d="M640 356 Q700 336 770 346 Q820 330 880 344 Q940 338 980 356Z" fill="#6D5580"/>
+    <path d="M660 352 Q705 338 770 346 Q822 332 880 344" fill="none" stroke="#E8A27A" stroke-width="2" opacity=".8"/>
+    <path d="M1010 312 Q1060 296 1120 304 Q1170 292 1230 308 Q1260 310 1290 318 L1290 322 L1000 322Z" fill="#6D5580" opacity=".8"/>
+    <path d="M1020 309 Q1062 297 1120 304 Q1170 293 1230 308" fill="none" stroke="#E8A27A" stroke-width="1.6" opacity=".7"/>
+  </g>
+
+  <!-- islands on the horizon -->
+  <path d="M722 422 C736 404 756 398 776 400 C798 396 818 408 834 422Z" fill="#4D3D5B"/>
+  <path d="M760 402 l3 -9 l3 9z M790 399 l3 -10 l3 10z" fill="#3A2E4A"/>
+  <path d="M958 422 C972 400 1000 390 1024 393 C1052 390 1078 404 1094 422Z" fill="#4D3D5B"/>
+  <path d="M1002 394 l4 -11 l4 11z M1034 392 l3 -9 l3 9z" fill="#3A2E4A"/>
+  <!-- the port -->
+  <path d="M1112 424 C1128 398 1160 384 1196 386 C1236 382 1266 398 1290 410 L1290 424Z" fill="#4D3D5B"/>
+  <g fill="#3A2E4A">
+    <rect x="1168" y="376" width="14" height="12"/><path d="M1166 377 l9 -7 l9 7z"/>
+    <rect x="1186" y="372" width="12" height="15"/><path d="M1184 373 l8 -7 l8 7z"/>
+    <rect x="1250" y="384" width="12" height="10"/>
+  </g>
+  <g fill="#F6B447"><rect x="1172" y="380" width="3" height="3"/><rect x="1190" y="377" width="3" height="3"/><rect x="1254" y="387" width="3" height="3"/></g>
+  <path d="M1220 388 L1224 338 L1234 338 L1238 388Z" fill="#E8DDC4"/>
+  <path d="M1222 364 L1236 364 L1237 374 L1221 374Z M1223.5 345 L1234.5 345 L1235 352 L1223 352Z" fill="#B23A2E"/>
+  <rect x="1221" y="328" width="16" height="10" fill="#2B1A0F"/>
+  <path d="M1219 328 L1229 318 L1239 328Z" fill="#B23A2E"/>
+  <circle class="a beam" cx="1229" cy="333" r="16" fill="#F6B447" opacity=".7"/>
+  <circle cx="1229" cy="333" r="4" fill="#FFF6DE"/>
+  <path d="M1096 432 L1172 432" stroke="#6B4A33" stroke-width="4"/>
+  <path d="M1102 432 V441 M1122 432 V441 M1142 432 V441 M1162 432 V441" stroke="#3A2418" stroke-width="2.4"/>
+  <path d="M1164 410 V396 L1178 400 L1164 404" stroke="#3A2418" stroke-width="1.6" fill="#B23A2E"/>
+
+  <!-- sea -->
+  <rect y="421" width="1280" height="219" fill="url(#sea)"/>
+  <g>
+    <rect class="a wave1" y="424" width="1340" height="56" fill="url(#p36)"/>
+    <rect class="a wave2" y="480" width="1340" height="84" fill="url(#p60)"/>
+    <rect class="a wave3" y="564" width="1400" height="80" fill="url(#p90)"/>
+  </g>
+  <g stroke="#FFC795" stroke-linecap="round">
+    <g class="a glint"><path d="M880 430 H930 M872 446 H912 M896 462 H944" stroke-width="2"/><path d="M866 486 H918 M902 514 H952" stroke-width="2.6"/></g>
+    <g class="a glint g2"><path d="M890 438 H920 M912 454 H940 M870 472 H902" stroke-width="2"/><path d="M888 500 H936 M870 530 H906" stroke-width="2.6"/></g>
+  </g>
+
+  <!-- chart routes from the flagship to each island -->
+  <g fill="none" stroke="#E4C27A" stroke-width="1.6" stroke-dasharray="2 9" stroke-linecap="round" opacity=".5">
+    <path d="M560 604 Q690 500 776 428"/>
+    <path d="M560 604 Q800 488 1000 428"/>
+    <path d="M560 604 Q900 500 1122 436"/>
+  </g>
+  <g fill="#E4C27A" opacity=".8">
+    <path d="M776 432 l4 -4 l4 4 l-4 4z" transform="translate(-4 0)"/>
+    <path d="M1000 432 l4 -4 l4 4 l-4 4z" transform="translate(-4 0)"/>
+  </g>
+
+  <!-- the fleet -->
+  <g transform="translate(560 606)" color="#6FA8A0">
+    <g class="a shipA" transform="translate(120 -112) scale(.6)"><use href="#crewship" xlink:href="#crewship"/></g>
+  </g>
+  <g transform="translate(560 606)" color="#E4C27A">
+    <g class="a shipB" transform="translate(300 -150) scale(.44)"><use href="#crewship" xlink:href="#crewship"/></g>
+  </g>
+  <g transform="translate(560 606)" color="#E8DDC4">
+    <g class="a shipC" transform="translate(560 -170) scale(.42)"><use href="#crewship" xlink:href="#crewship"/></g>
+  </g>
+
+  <!-- fireworks over the port -->
+  <g transform="translate(1132 262)" color="#F6B447"><g class="a fw1"><use href="#burst" xlink:href="#burst"/></g></g>
+  <g transform="translate(1222 206) scale(.8)" color="#E8DDC4"><g class="a fw2"><use href="#burst" xlink:href="#burst"/></g></g>
+  <g transform="translate(1046 222) scale(.7)" color="#E7A58C"><g class="a fw3"><use href="#burst" xlink:href="#burst"/></g></g>
+
+  <!-- the flagship, bow to the left, the captain at the helm on the stern -->
+  <ellipse cx="300" cy="606" rx="210" ry="12" fill="#10132A" opacity=".55"/>
+  <g transform="translate(300 600) scale(-1 1)">
+    <g class="a bob">
+      <!-- rigging -->
+      <g stroke="#1E130C" stroke-width="1" opacity=".7" fill="none">
+        <path d="M20 -286 L-146 -80 M20 -286 L150 -44 M110 -246 L250 -95 M-70 -236 L-176 -82 M20 -286 L110 -246 M110 -246 L-70 -236"/>
+      </g>
+      <!-- masts and yards -->
+      <g stroke="#6B4A33" stroke-linecap="round">
+        <path d="M20 -44 V-290 M110 -44 V-252 M-70 -80 V-240" stroke-width="5"/>
+        <path d="M250 -95 L176 -58" stroke-width="4"/>
+        <path d="M-22 -270 H62 M-34 -218 H74 M-46 -152 H86 M78 -235 H142 M68 -188 H152 M58 -131 H162 M-98 -225 H-42 M-106 -184 H-34" stroke-width="2.4"/>
+      </g>
+      <!-- sails -->
+      <g fill="url(#sail)">
+        <path d="M-100 -225 L-40 -225 Q-35 -207 -42 -190 L-98 -190 Q-105 -207 -100 -225Z"/>
+        <path d="M-108 -184 L-32 -184 Q-26 -162 -34 -140 L-106 -140 Q-114 -162 -108 -184Z"/>
+        <path d="M-20 -270 L60 -270 Q66 -247 58 -225 L-18 -225 Q-26 -247 -20 -270Z"/>
+        <path d="M-32 -218 L72 -218 Q80 -189 70 -160 L-30 -160 Q-40 -189 -32 -218Z"/>
+        <path d="M-44 -152 L84 -152 Q94 -116 82 -80 L-42 -80 Q-54 -116 -44 -152Z"/>
+        <path d="M80 -235 L140 -235 Q146 -215 138 -195 L82 -195 Q74 -215 80 -235Z"/>
+        <path d="M70 -188 L150 -188 Q158 -163 148 -138 L72 -138 Q62 -163 70 -188Z"/>
+        <path d="M60 -131 L160 -131 Q170 -101 158 -72 L62 -72 Q52 -101 60 -131Z"/>
+      </g>
+      <path d="M114 -238 L244 -96 L120 -78Z" fill="#EDE0C3"/>
+      <path d="M-40 -116 H80 M68 -104 H154" stroke="#B89C74" stroke-width="1" opacity=".6"/>
+      <!-- flags -->
+      <g transform="translate(20 -290)"><g class="a flag"><path d="M0 0 L-44 4 L-36 8 L-44 12 L0 10Z" fill="#B23A2E"/></g></g>
+      <g transform="translate(-70 -240)"><g class="a flag"><path d="M0 0 L-28 0 L-28 18 L0 18Z" fill="#B23A2E"/><path d="M-14 4 l2 4 l4 .5 l-3 2.8 l.8 4 l-3.8 -2 l-3.8 2 l.8 -4 l-3 -2.8 l4 -.5z" fill="#E4C27A"/></g></g>
+      <!-- hull -->
+      <path d="M-182 -84 L-104 -84 L-100 -44 L150 -44 L198 -64 C192 -38 170 -8 138 4 L-140 4 C-164 -6 -180 -34 -182 -84Z" fill="url(#hull)"/>
+      <path d="M-178 -40 L-100 -40 L150 -40 L186 -54" fill="none" stroke="#C99A3C" stroke-width="2.4"/>
+      <path d="M-170 -22 L140 -22 L178 -36" fill="none" stroke="#6B4A33" stroke-width="7"/>
+      <g fill="#1E130C"><rect x="-120" y="-34" width="9" height="8"/><rect x="-92" y="-34" width="9" height="8"/><rect x="-64" y="-34" width="9" height="8"/><rect x="-36" y="-34" width="9" height="8"/><rect x="-8" y="-34" width="9" height="8"/><rect x="20" y="-34" width="9" height="8"/><rect x="48" y="-34" width="9" height="8"/><rect x="76" y="-34" width="9" height="8"/><rect x="104" y="-34" width="9" height="8"/></g>
+      <g fill="#F6B447"><rect x="-176" y="-74" width="5" height="6"/><rect x="-176" y="-62" width="5" height="6"/><rect x="-168" y="-74" width="5" height="6"/><rect x="-168" y="-62" width="5" height="6"/></g>
+      <path d="M-184 -96 H-102 M-182 -96 V-84 M-162 -96 V-84 M-142 -96 V-84 M-122 -96 V-84 M-104 -96 V-84 M-100 -56 H150 M-80 -56 V-44 M-40 -56 V-44 M0 -56 V-44 M40 -56 V-44 M80 -56 V-44 M120 -56 V-44" stroke="#6B4A33" stroke-width="2" fill="none"/>
+      <!-- stern lantern -->
+      <path d="M-186 -100 L-186 -110" stroke="#2B1A0F" stroke-width="2"/>
+      <circle class="a lamp" cx="-186" cy="-114" r="12" fill="#F6B447" opacity=".45"/>
+      <rect x="-190" y="-120" width="8" height="10" rx="2" fill="#FFD27A"/>
+      <!-- the helm -->
+      <g transform="translate(-122 -106)" stroke="#C99A3C" stroke-linecap="round">
+        <circle r="12" fill="none" stroke-width="2.6"/>
+        <path d="M0 -17 V17 M-17 0 H17 M-12 -12 L12 12 M-12 12 L12 -12" stroke-width="1.8"/>
+        <circle r="3" fill="#C99A3C"/>
+      </g>
+      <path d="M-122 -94 V-84" stroke="#6B4A33" stroke-width="3"/>
+      <!-- the captain -->
+      <g>
+        <path d="M-157 -111 L-150 -111 L-151 -88 L-156 -88Z M-147 -111 L-140 -111 L-141 -88 L-146 -88Z" fill="#E2D6BC"/>
+        <path d="M-158 -89 H-149 V-84 H-160Z M-147 -89 H-138 V-84 H-148Z" fill="#15100D"/>
+        <path d="M-162 -140 L-136 -140 L-133 -104 L-148 -108 L-165 -104Z" fill="#B23A2E"/>
+        <path d="M-149 -140 V-110" stroke="#7A2620" stroke-width="1.4"/>
+        <path d="M-162 -118 H-135" stroke="#E4C27A" stroke-width="2"/>
+        <path d="M-138 -135 L-127 -118" stroke="#B23A2E" stroke-width="6" stroke-linecap="round"/>
+        <circle cx="-126" cy="-116" r="3" fill="#E3BD96"/>
+        <circle cx="-149" cy="-148" r="8" fill="#E3BD96"/>
+        <path d="M-156 -145 Q-149 -136 -142 -145 Q-149 -141 -156 -145Z" fill="#3A2F28"/>
+        <path d="M-162 -151 Q-149 -166 -136 -151 Q-149 -155 -162 -151Z" fill="#1A120D"/>
+        <path d="M-164 -151 H-134" stroke="#1A120D" stroke-width="2.4" stroke-linecap="round"/>
+        <path d="M-164 -151 H-134" stroke="#C99A3C" stroke-width=".8" transform="translate(0 1.6)"/>
+      </g>
+    </g>
+  </g>
+
+  <!-- the decision card rising to the captain -->
+  <g transform="translate(528 318)">
+    <ellipse class="a halo" cx="86" cy="108" rx="140" ry="130" fill="url(#cardGlow)"/>
+    <g class="a card">
+      <rect x="3" y="5" width="172" height="212" rx="12" fill="#1E130C" opacity=".35"/>
+      <rect width="172" height="212" rx="12" fill="#F4ECD8" stroke="#8E6A22" stroke-width="2"/>
+      <rect x="7" y="7" width="158" height="198" rx="7" fill="none" stroke="#C99A3C" stroke-width="1"/>
+      <path d="M0 -7 l2 4.4 l4.6 .6 l-3.4 3.2 l.9 4.6 l-4.1 -2.3 l-4.1 2.3 l.9 -4.6 l-3.4 -3.2 l4.6 -.6z" fill="#B23A2E" transform="translate(20 22)"/>
+      <path d="M0 -7 l2 4.4 l4.6 .6 l-3.4 3.2 l.9 4.6 l-4.1 -2.3 l-4.1 2.3 l.9 -4.6 l-3.4 -3.2 l4.6 -.6z" fill="#B23A2E" transform="translate(155 194) rotate(180)"/>
+      <text x="86" y="40" text-anchor="middle" class="bar" font-weight="600" font-size="18" fill="#2B1A0F">Ready to merge</text>
+      <text x="86" y="58" text-anchor="middle" class="cjk" font-size="12" fill="#6B4A33">可以合併了</text>
+      <!-- before to after -->
+      <g transform="translate(18 70)">
+        <rect width="56" height="44" rx="5" fill="#E8DDC4" stroke="#A58B6B"/>
+        <path d="M8 30 H48 M14 30 Q22 30 26 16 H46" fill="none" stroke="#6B4A33" stroke-width="2" stroke-linecap="round"/>
+        <circle cx="46" cy="16" r="3" fill="#6FA8A0"/>
+        <path d="M62 22 H76 M71 17 L76 22 L71 27" fill="none" stroke="#8E6A22" stroke-width="2" stroke-linecap="round"/>
+        <rect x="80" width="56" height="44" rx="5" fill="#E8DDC4" stroke="#A58B6B"/>
+        <path d="M88 26 H128" fill="none" stroke="#6B4A33" stroke-width="2" stroke-linecap="round"/>
+        <circle cx="116" cy="26" r="3.4" fill="#6FA8A0"/>
+        <text x="28" y="58" text-anchor="middle" class="bar" font-weight="500" font-size="11" fill="#7B644C">before</text>
+        <text x="108" y="58" text-anchor="middle" class="bar" font-weight="500" font-size="11" fill="#7B644C">after</text>
+      </g>
+      <!-- seven gates -->
+      <g transform="translate(35 146)" fill="#6FA8A0">
+        <circle r="5.5"/><circle cx="17" r="5.5"/><circle cx="34" r="5.5"/><circle cx="51" r="5.5"/><circle cx="68" r="5.5"/><circle cx="85" r="5.5"/><circle cx="102" r="5.5"/>
+        <path d="M-2.5 0 l2 2 l3.5 -4 M14.5 0 l2 2 l3.5 -4 M31.5 0 l2 2 l3.5 -4 M48.5 0 l2 2 l3.5 -4 M65.5 0 l2 2 l3.5 -4 M82.5 0 l2 2 l3.5 -4 M99.5 0 l2 2 l3.5 -4" fill="none" stroke="#F4ECD8" stroke-width="1.5" stroke-linecap="round"/>
+      </g>
+      <text x="86" y="170" text-anchor="middle" class="bar" font-weight="500" font-size="12" fill="#5A4028">all seven gates passed</text>
+      <rect x="26" y="180" width="118" height="22" rx="5" fill="#B23A2E"/>
+      <text x="85" y="195.5" text-anchor="middle" class="bar" font-weight="600" font-size="13" fill="#F4ECD8">Merge</text>
+      <!-- the stamp -->
+      <g transform="translate(128 172)">
+        <g class="a stamp" transform="rotate(-14)" opacity=".92">
+          <circle r="33" fill="#F4ECD8" fill-opacity=".35" stroke="#B23A2E" stroke-width="3"/>
+          <circle r="27" fill="none" stroke="#B23A2E" stroke-width="1.2"/>
+          <text y="5" text-anchor="middle" class="fell" font-size="16" fill="#B23A2E">Approved</text>
+        </g>
+      </g>
+    </g>
+  </g>
+
+  <!-- headline, tagline, proof -->
+  <text x="62" y="120" class="fell" font-size="80" fill="#1E130C" opacity=".35" transform="translate(2 3)">firstmate-workflow</text>
+  <text x="62" y="120" class="fell" font-size="80" fill="#F4ECD8">firstmate-workflow</text>
+  <text x="64" y="170" class="bar" font-weight="500" font-size="30" fill="#F4ECD8">Command a fleet of AI engineers.</text>
+  <text x="64" y="208" class="bar" font-weight="500" font-size="30" fill="#E4C27A">You decide; they ship, with proof.</text>
+  <g class="bar" font-weight="600" font-size="18" fill="#F4ECD8">
+    <g transform="translate(64 232)">
+      <rect width="__W1__" height="34" rx="17" fill="#1E130C" fill-opacity=".42" stroke="#C99A3C" stroke-width="1.2"/>
+      <path d="M18 17 l5 -5 l5 5 l-5 5z" fill="#E4C27A"/>
+      <text x="36" y="23.5">Parallel AI crews</text>
+    </g>
+    <g transform="translate(__X2__ 232)">
+      <rect width="__W2__" height="34" rx="17" fill="#1E130C" fill-opacity=".42" stroke="#C99A3C" stroke-width="1.2"/>
+      <path d="M18 17 l5 -5 l5 5 l-5 5z" fill="#E4C27A"/>
+      <text x="36" y="23.5">Seven gates before merge</text>
+    </g>
+    <g transform="translate(__X3__ 232)">
+      <rect width="__W3__" height="34" rx="17" fill="#1E130C" fill-opacity=".42" stroke="#C99A3C" stroke-width="1.2"/>
+      <path d="M18 17 l5 -5 l5 5 l-5 5z" fill="#E4C27A"/>
+      <text x="36" y="23.5">You only decide</text>
+    </g>
+  </g>
+</g>
+</svg>

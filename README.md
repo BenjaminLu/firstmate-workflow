@@ -1,5 +1,40 @@
 # firstmate-workflow
 
+<picture>
+  <source srcset="design/marketing/hero/hero.svg" type="image/svg+xml">
+  <img src="design/marketing/hero/hero.png" width="1280" alt="A captain at the helm of a flagship at dusk. A decision card rises beside the captain and is stamped approved, while a fleet of AI crew ships sails out to several islands and one arrives in port under fireworks.">
+</picture>
+
+**Command a fleet of AI engineers. You decide; they ship, with proof.**
+
+## What it does
+
+- **One person, a whole fleet.** AI crews (Claude, Codex) work in parallel
+  across several repositories, and work that is ready is dispatched without
+  anyone asking.
+- **You only decide.** Every decision reaches you as a card in English and
+  Chinese with a before-and-after diagram. A merge happens only when you click
+  it on the board, never from chat, and only decisions ring a notification.
+- **Done means proven.** Seven gates stand before any merge card: the branch
+  rebases cleanly, the full local check passes, the diff stays in scope,
+  reverting the implementation turns the tests red, CI is green, and an
+  independent reviewer approves.
+- **Reviews converge.** From the third round the reviewer names one closed
+  list of what must change, and signs off when it is met.
+- **It heals itself.** Stale branches are rebuilt on main and published,
+  conflicts are resolved by the crew, and work is judged again when it becomes
+  ready again.
+- **Stuck work has a face.** It surfaces as a kraken you can make flee, shrink
+  or fight, and a won battle plays a victory fanfare.
+- **A living ship.** The sky follows your local time, failures are weather the
+  crew works through, milestones are ports on a voyage chart, every crew member
+  has a name, a service record and a rank, and each morning opens with a
+  greeting of true numbers.
+- **Yours to run.** It runs on your machine with your repositories and your
+  keys, works with any AI vendor, keeps main protected, and is open source.
+
+## How it is built
+
 One agent runs the crew. Three things make it up:
 
 - **`skills/`** — the content. Every role's behaviour is plain Markdown, so

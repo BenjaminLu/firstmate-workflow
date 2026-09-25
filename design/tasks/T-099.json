@@ -1,0 +1,20 @@
+{
+  "id": "T-099",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "marketing: an animated README hero that shows at a glance what firstmate-workflow is for",
+  "scope": [
+    "README.md",
+    "design/marketing/hero/**",
+    "design/design.md",
+    "design/tasks.json"
+  ],
+  "acceptance": [
+    "The captain asked for a GitHub README hero banner that makes firstmate-workflow's purpose clear in one look, in the scenery of the captain's board. No development noise anywhere: no task ids, pull request numbers, internal script names, 'in progress', 'prototype' or 'M2' wording, and no real people's names. The visual language is the captain's board (prototype v2 and T-086's emotional layer: the living ship, sky, weather, voyage chart, kraken, card-game decision cards), built with the frontend-design skill (installed as the frontend-design plugin) for a first pass and then to the standard of the board itself. Fonts come from design/proposals/2026-09-24-ship-v2/fonts or are embedded; nothing loads from the network. Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch. Evidence is the required GitHub check and the seven gates.",
+    "The selling points, all presented as shipped (never as in progress): (1) a high-output dispatch system: one person commands a fleet of AI crews (claude, codex) working in parallel across several repositories, and ready work is dispatched without being asked; (2) the captain only decides: bilingual decision cards with a before-to-after diagram, the merge happens only on a click on the board, never from chat, and only decisions ring a notification; (3) done means proven: seven gates before any merge card - the branch rebases cleanly, the full local check passes, the diff stays in scope, reverting the implementation turns the tests red, CI is green, and an independent reviewer approves; (4) reviews converge: from round three the reviewer names one closed list and signs when it is met; (5) it heals itself: stale branches are rebuilt on main and published, conflicts resolved by the crew, work re-judged when it becomes ready again; (6) stuck work surfaces as a kraken the captain can make flee, shrink or fight, and a won battle plays a victory fanfare; (7) a living ship: local-time sky, failures as weather the crew works through, ports as milestones on a voyage chart, crew with names, service records and ranks, a morning greeting of true numbers; (8) runs on your machine with your repositories and keys, vendor-neutral, protected main, open source.",
+    "Deliver design/marketing/hero/hero.svg: a self-contained animated SVG (CSS or SMIL animation only, no script, as GitHub renders SVG through <img>), 1280x640, looping seamlessly in 8 to 12 seconds, under 1 MB. In one glance: a captain at the helm of a flagship on the board's sea, a fleet of crew ships sailing out to several islands (repositories), a decision card rising to the captain, a stamp of approval, and a ship arriving in port with fireworks. The headline reads 'firstmate-workflow' with a one-line English tagline that states the purpose (for example 'Command a fleet of AI engineers. You decide; they ship - with proof.'), and three short proof chips ('Parallel AI crews', 'Seven gates before merge', 'You only decide'). It respects prefers-reduced-motion with a still frame, and is legible on GitHub's light and dark themes.",
+    "Deliver design/marketing/hero/hero.png, a still of the same banner for places that do not animate SVG, and a README.md top section that shows the hero (the SVG, with the PNG as fallback through <picture>), the tagline, and a short 'What it does' list of the selling points above in plain English. Keep the rest of README.md as it is.",
+    "Stay inside this scope."
+  ]
+}
