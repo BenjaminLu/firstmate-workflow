@@ -41,6 +41,6 @@ body:
     id: section
     attributes:
       label: Affected design.md section
-      description: The section of design/design.md this changes or implements, for example "6. Lifecycle and the seven gates".
+      description: The section of design/design.md this changes or implements, for example "6. Lifecycle and the gates".
     validations:
       required: true

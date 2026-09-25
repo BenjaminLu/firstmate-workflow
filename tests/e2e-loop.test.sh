@@ -307,7 +307,7 @@ printf 'reviewer-1\tAPPROVE:T-1\n' >> "$GHSTATE/comments.$pr"
 rounds="$(jq -r 'select(.type=="review_opened")|.task' "$r/state/events.jsonl" | wc -l | tr -d ' ')"
 assert_eq "1" "$rounds" "one review round has happened when the approval lands"
 
-# --- turn three: all seven green, so the captain is asked ---------------
+# --- turn three: every gate green, so the captain is asked --------------
 # firstmate allocates the card's id before it authors the details, so the
 # details and any drawing are written under the id the card will carry
 mkdir -p "$r/state/decision-details"

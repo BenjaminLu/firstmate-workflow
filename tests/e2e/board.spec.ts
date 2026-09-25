@@ -382,7 +382,7 @@ test("the captain merges from the board", async ({ page }) => {
   await expect(page.locator(".scene .pivot").first()).toBeVisible();
   const card = page.locator(".dcard").first();
   await expect(card).toBeVisible();
-  await expect(card.locator(".gates li")).toHaveCount(7);
+  await expect(card.locator(".gates li")).toHaveCount(6);   // gates 1, 2, 4, 5, 6, 7
   await expect(card.locator(".gates li.n")).toHaveCount(1);   // gate seven open
 
   await expect(card.locator("button.confirm")).toBeDisabled();

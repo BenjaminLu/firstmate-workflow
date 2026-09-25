@@ -19,6 +19,10 @@
     "tests/diagram.test.sh",
     "tests/selfupdate.test.sh",
     "tests/review.test.sh",
+    "CONTRIBUTING.md",
+    ".github/ISSUE_TEMPLATE/task-proposal.yml",
+    "tests/e2e-loop.test.sh",
+    "tests/e2e/board.spec.ts",
     "design/design.md",
     "design/tasks/T-114.json"
   ],
