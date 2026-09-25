@@ -14,14 +14,20 @@
 #   fm-sandbox.sh decide  --policy=<file> [--vendor=<name>] <host>
 #       -> allow or deny, and why: the rule the round's proxy applies
 #   fm-sandbox.sh run     --policy=<file> --root=<dir> [--tmp=<dir>] [--write=<dir>]... [--vendor=<name>]
-#                         [--blocked=<file>] -- <command> [args...]
-#   fm-sandbox.sh plain   --policy=<file> [--tmp=<dir>] -- <command> [args...]
+#                         [--blocked=<file>] [--started=<file>] -- <command> [args...]
+#   fm-sandbox.sh plain   --policy=<file> [--tmp=<dir>] [--started=<file>] -- <command> [args...]
 #       -> the environment scrub and the ulimits only: what an adapter's own
 #          flags stand in for when this host has no sandbox
 #
 # --tmp is the round's own temp directory, its TMPDIR and a write root;
 # `run` makes one when none is given. The caller's TMPDIR is never a root:
 # every round and every run-mode review checkout shares it.
+#
+# --started names a file that holds "started" once the sandbox is up and
+# the command is about to be exec'd, written from inside it. Without that
+# line, the exit code is this script's or the sandbox binary's, not the
+# command's: the adapter counts the vendor unavailable rather than calling
+# a round that never ran a failed attempt.
 #
 # The dimensions are the policy's: write, read, network, sockets, env,
 # repo-config, refuse, ulimit. Before a round, the adapter asks `covers` and
@@ -37,10 +43,16 @@
 # it refuses to --blocked so the round can report it; loopback only on ports
 # the round opens itself - never the board's (FM_PORT, 4173) nor one that
 # was listening when the round started; LaunchServices refused, so no
-# browser opens. Linux runs bwrap, which mounts only what the policy lets
-# the round read and gives it a /tmp of its own; it cannot filter hosts, so
-# it shares the network and leaves network, sockets and the refused
-# operations to the adapter's own flags.
+# browser opens; and no mach service that hands out a secret (the keychain,
+# the pasteboard, the account stores), which no file rule can cover. Linux
+# runs bwrap, which mounts only what the policy lets the round read and
+# gives it a /tmp and a network namespace of its own: loopback there is the
+# round's alone, and the one way out is the same proxy, over a unix socket
+# bound into the namespace. So both platforms cover every dimension, and
+# on both the proxy is what names a refused host.
+#
+# What neither can name: a connection that ignores the proxy variables is
+# refused by the OS, which sees an address or nothing at all, not a host.
 #
 # FM_SANDBOX_OS and FM_SANDBOX_TOOL name the platform and the sandbox binary
 # for the suite, which cannot run a real one on every runner.
@@ -78,6 +90,16 @@ import json, os, re, select, socket, sys, threading
 
 GITHUB = ('github.com', 'github.io', 'github.dev', 'githubusercontent.com', 'githubassets.com',
           'githubapp.com', 'githubcopilot.com', 'ghcr.io', 'ghe.com')
+# The macOS services that hand out a secret to whoever asks as the user:
+# the keychain (gh's token, git's osxkeychain helper, every saved password),
+# the pasteboard, the Internet Accounts and Apple ID stores, Kerberos
+# tickets, and Touch ID prompts. The profile starts from (allow default),
+# so each one is named; the rest of what is left open hands out no
+# credential. A name beginning with ^ is a regex.
+SECRET_SERVICES = ('com.apple.SecurityServer', r'^com\.apple\.securityd', r'^com\.apple\.secd',
+                   'com.apple.security.agent', 'com.apple.security.authhost',
+                   'com.apple.pasteboard.1', r'^com\.apple\.accountsd', r'^com\.apple\.ak\.',
+                   'com.apple.GSSCred', 'org.h5l.kcm', 'com.apple.CoreAuthentication.daemon')
 
 
 def load(path):
@@ -220,15 +242,23 @@ def darwin(p, roots, reads, auth, state, port, listening):
                   '(deny file-read* file-write* %s)' % sub(repo)]
     lines += [';; no browser, no AppleScript: LaunchServices is out of reach',
               '(deny mach-lookup (global-name "com.apple.coreservices.launchservicesd") '
-              '(global-name "com.apple.coreservices.appleevents"))']
+              '(global-name "com.apple.coreservices.appleevents"))',
+              ';; no secret a macOS service hands out: a file rule does not cover a credential',
+              ';; served over mach, and gh and git keep their tokens in the keychain',
+              '(deny mach-lookup %s)' % ' '.join(
+                  '(global-name "%s")' % n if not n.startswith('^') else '(global-name-regex #"%s")' % n
+                  for n in SECRET_SERVICES)]
     return '\n'.join(lines) + '\n'
 
 
-def linux(p, roots, reads, auth, state):
+def linux(p, roots, reads, auth, state, sock):
     # /tmp is a fresh tmpfs of the round's own: what another round leaves
-    # there is not in it
+    # there is not in it. The network is a namespace of the round's own:
+    # its loopback holds only what the round opens, so the board and every
+    # host listener are out of reach, and its one way out is the proxy's
+    # socket, bound in below and served on the round's loopback by FWD_PY.
     a = ['--die-with-parent', '--new-session', '--unshare-pid', '--unshare-ipc', '--unshare-uts',
-         '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp']
+         '--unshare-net', '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp']
     for r in reads:
         a += ['--ro-bind-try', r, r]
     for r in auth:
@@ -246,14 +276,22 @@ def linux(p, roots, reads, auth, state):
             a += ['--tmpfs', n]
         elif os.path.exists(n):
             a += ['--ro-bind', '/dev/null', n]
+    if sock:
+        a += ['--bind', sock, sock]
     a += ['--chdir', roots[0], '--']
     return '\n'.join(a) + '\n'
 
 
-def proxy(p, vendor, portfile, blocked):
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(('127.0.0.1', 0))
+def proxy(p, vendor, portfile, blocked, sock):
+    # macOS: a loopback port the profile lets the round reach. Linux: a unix
+    # socket bound into the round's own network namespace.
+    if sock:
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(sock)
+    else:
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(('127.0.0.1', 0))
     server.listen(64)
     lock, seen = threading.Lock(), set()
 
@@ -319,7 +357,7 @@ def proxy(p, vendor, portfile, blocked):
             client.close()
 
     with open(portfile + '.tmp', 'w') as f:
-        f.write(str(server.getsockname()[1]))
+        f.write('0' if sock else str(server.getsockname()[1]))
     os.rename(portfile + '.tmp', portfile)
     while True:
         client, _ = server.accept()
@@ -347,11 +385,11 @@ def main():
         print('%d %d' % (p['procs'], p['cpu']))
         return
     if mode == 'proxy':
-        proxy(p, sys.argv[3], sys.argv[4], sys.argv[5])
+        proxy(p, sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6])
         return
-    # profile <os> <root> <tmp> <vendor> <port> <listening> [write...]
-    os_, root, tmp, vendor, port, listening = sys.argv[3:9]
-    roots = roots_of(p, real(root), real(tmp) if tmp else '', sys.argv[9:])
+    # profile <os> <root> <tmp> <vendor> <port> <listening> <socket> [write...]
+    os_, root, tmp, vendor, port, listening, sock = sys.argv[3:10]
+    roots = roots_of(p, real(root), real(tmp) if tmp else '', sys.argv[10:])
     reads = [r for r in p['read'] if r] + gitdirs(real(root))
     own = p['vendors'].get(vendor, {})
     auth, state = own.get('auth', []), own.get('state', [])
@@ -359,18 +397,85 @@ def main():
         ports = None if listening == 'unknown' else [int(x) for x in listening.split(',') if x]
         sys.stdout.write(darwin(p, roots, reads, auth, state, port, ports))
     else:
-        sys.stdout.write(linux(p, roots, reads, auth, state))
+        sys.stdout.write(linux(p, roots, reads, auth, state, sock))
 
 
 main()
 PY
 
+# Inside bwrap's network namespace, the first thing that runs: it serves
+# the round's loopback as the proxy the round's commands are pointed at,
+# relays each connection to the real proxy's socket outside, then becomes
+# the round's command. The server is a child that leaves when the command
+# does, and holds none of the command's descriptors open.
+#   python3 -c "$FWD_PY" <socket> <command> [args...]
+IFS= read -r -d '' FWD_PY <<'PY'
+import os, select, socket, sys, threading
+
+sock_path, cmd = sys.argv[1], sys.argv[2:]
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.bind(('127.0.0.1', 0))
+server.listen(64)
+url = 'http://127.0.0.1:%d' % server.getsockname()[1]
+for name in ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'):
+    os.environ[name] = url
+parent = os.getpid()
+if os.fork() == 0:
+    null = os.open(os.devnull, os.O_RDWR)
+    for fd in (0, 1, 2):
+        os.dup2(null, fd)
+    for fd in range(3, 1024):
+        if fd != server.fileno():
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def relay(client):
+        try:
+            upstream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            upstream.connect(sock_path)
+            while True:
+                ready, _, _ = select.select([client, upstream], [], [], 600)
+                if not ready:
+                    return
+                for s in ready:
+                    data = s.recv(65536)
+                    if not data:
+                        return
+                    (upstream if s is client else client).sendall(data)
+        except OSError:
+            pass
+        finally:
+            client.close()
+
+    server.settimeout(1)
+    while os.getppid() == parent:
+        try:
+            client, _ = server.accept()
+        except socket.timeout:
+            continue
+        client.settimeout(None)
+        threading.Thread(target=relay, args=(client,), daemon=True).start()
+    os._exit(0)
+server.close()
+os.execvp(cmd[0], cmd)
+PY
+
+# The last thing before the round's command, inside the sandbox: it says on
+# fd 4 that the sandbox started and got this far, so a failure before this
+# line - the proxy, the profile, the sandbox binary itself - is told apart
+# from the command's own exit code.
+# shellcheck disable=SC2016  # expanded by the inner shell
+SHIM='printf "started\n" >&4; exec 4>&-; exec "$@"'
+
 # --- the option loop: every flag is --name=value --------------------------
 cmd="${1-}"; [ $# -gt 0 ] && shift
-policy=''; root=''; vendor=''; blocked=''; port=''; tmp=''; listening=''; writes=()
+policy=''; root=''; vendor=''; blocked=''; port=''; tmp=''; listening=''; started=''; writes=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --policy=*) policy="${1#*=}"; shift ;;
+    --started=*) started="${1#*=}"; shift ;;
     --root=*) root="${1#*=}"; shift ;;
     --tmp=*) tmp="${1#*=}"; shift ;;
     --listening=*) listening="${1#*=}"; shift ;;
@@ -389,13 +494,10 @@ required() { [ -n "$2" ] || { say "$cmd needs --$1=<value>"; exit 64; }; }
 # the dimensions the sandbox covers on this host for this policy
 covers() {
   [ -n "$(host_tool)" ] || return 0
-  case "$(host_os)" in
-    darwin) echo "write read network sockets env repo-config refuse ulimit" ;;
-    # bwrap cannot filter hosts, and a round whose CLI must reach its own
-    # service shares the network: sockets and the refused operations go
-    # through it, so those stay the adapter's
-    linux)  echo "write read env repo-config ulimit" ;;
-  esac
+  # both: the network is the round's proxy and nothing else, so git push, gh
+  # and a browser reach nothing; Herdr's and every other unix socket are
+  # outside what the round may reach
+  case "$(host_os)" in darwin|linux) echo "write read network sockets env repo-config refuse ulimit" ;; esac
 }
 
 case "$cmd" in
@@ -413,7 +515,7 @@ case "$cmd" in
   profile)
     required policy "$policy"; required root "$root"
     os="$(host_os)"; [ -n "$os" ] || { say "no sandbox profile for this platform"; exit 69; }
-    python3 -c "$SB_PY" profile "$policy" "$os" "$root" "$tmp" "$vendor" "${port:-0}" "$listening" \
+    python3 -c "$SB_PY" profile "$policy" "$os" "$root" "$tmp" "$vendor" "${port:-0}" "$listening" '' \
       ${writes[@]+"${writes[@]}"}
     exit $? ;;
   run|plain) ;;
@@ -446,27 +548,46 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-launcher=()
+launcher=(); inner=()
 if [ "$cmd" = run ]; then
-  work="$(mktemp -d "${TMPDIR:-/tmp}/fm-sandbox.XXXXXX")" || exit 70
+  # fm-sandbox's own files - the proxy's port or socket, the profile - are
+  # not the round's: not in its TMPDIR, which an adapter points at the
+  # round's own temp directory, a write root. /tmp is readable by no round
+  # (Linux gives each a fresh one), and a short path keeps the socket's
+  # within AF_UNIX's 104 bytes on macOS.
+  work="$(mktemp -d /tmp/fm-sb.XXXXXX)" || exit 70
+  work="$(cd "$work" && pwd -P)"
   # The proxy runs outside the sandbox and is the round's only way out: the
-  # declared registries, the vendor's own service, and nothing else. On
-  # Linux it is advisory - bwrap shares the network - but it still names
-  # the hosts a round was refused.
+  # declared registries, the vendor's own service, and nothing else. Every
+  # host it refuses is written to --blocked, which is how a round names the
+  # host it was stopped at. On macOS it listens on loopback, the one port
+  # the profile lets the round reach; on Linux on a unix socket bound into
+  # the round's own network namespace.
+  sock=''; [ "$os" = darwin ] || sock="$work/proxy.sock"
   # nothing of the caller's is held open by it: a proxy left behind by a
   # killed round must not keep the adapter's transcript pipe from closing
-  python3 -c "$SB_PY" proxy "$policy" "$vendor" "$work/port" "${blocked:-}" >/dev/null 2>&1 3<&- &
+  python3 -c "$SB_PY" proxy "$policy" "$vendor" "$work/port" "${blocked:-}" "$sock" >/dev/null 2>&1 3<&- &
   proxy_pid=$!
   i=0
   while [ ! -s "$work/port" ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
   port="$(cat "$work/port" 2>/dev/null)"
   case "$port" in ''|*[!0-9]*) say "the round's proxy did not start"; exit 70 ;; esac
-  url="http://127.0.0.1:$port"
-  # loopback goes straight to the port, where the profile decides: the
-  # round's own servers yes, the board and older listeners no
+  # loopback goes straight to the port, where the profile (macOS) or the
+  # namespace (Linux) decides: the round's own servers yes, the board and
+  # older listeners no
   loop='localhost,127.0.0.1,::1'
-  scrub+=(NO_PROXY="$loop" no_proxy="$loop" HTTP_PROXY="$url" HTTPS_PROXY="$url" http_proxy="$url"
-          https_proxy="$url" ALL_PROXY="$url" all_proxy="$url" NODE_USE_ENV_PROXY=1)
+  scrub+=(NO_PROXY="$loop" no_proxy="$loop" NODE_USE_ENV_PROXY=1)
+  if [ "$os" = darwin ]; then
+    url="http://127.0.0.1:$port"
+    scrub+=(HTTP_PROXY="$url" HTTPS_PROXY="$url" http_proxy="$url" https_proxy="$url"
+            ALL_PROXY="$url" all_proxy="$url")
+    # the keychain is out of reach, so TLS roots come from the system's file
+    # for a tool that would have asked it for them
+    [ -n "${SSL_CERT_FILE:-}" ] || [ ! -f /etc/ssl/cert.pem ] || scrub+=(SSL_CERT_FILE=/etc/ssl/cert.pem)
+  else
+    # FWD_PY sets the proxy variables to the port it serves in the namespace
+    inner=("$(command -v python3)" -c "$FWD_PY" "$sock")
+  fi
   # the round's temp directory is its own, never the caller's: that is
   # shared with every other round and holds run-mode review checkouts
   if [ -z "$tmp" ]; then tmp="$work/tmp"; mkdir -p "$tmp" || exit 70; fi
@@ -484,7 +605,7 @@ if [ "$cmd" = run ]; then
       say "cannot list loopback listeners; the round reaches no loopback port but its proxy"
     fi
   fi
-  python3 -c "$SB_PY" profile "$policy" "$os" "$root" "$tmp" "$vendor" "$port" "$listening" \
+  python3 -c "$SB_PY" profile "$policy" "$os" "$root" "$tmp" "$vendor" "$port" "$listening" "$sock" \
     ${writes[@]+"${writes[@]}"} > "$work/profile" || exit 65
   if [ "$os" = darwin ]; then
     launcher=("$tool" -f "$work/profile")
@@ -510,6 +631,13 @@ used="$(grep -c '[0-9]' <<< "$listed")"
   say "cannot count this user's processes (ps failed or saw none); refusing the round rather than setting a process limit that would stop it forking"
   exit 70; }
 procs=$((used + procs))
+# --started: the file the shim writes "started" to from inside the sandbox.
+# It is outside every write root, so the round cannot write it itself.
+shim=()
+if [ -n "$started" ]; then
+  : > "$started" || { say "cannot write $started"; exit 70; }
+  shim=(/bin/sh -c "$SHIM" fm-round)
+fi
 (
   hard="$(ulimit -Hu 2>/dev/null)"
   case "$hard" in ''|unlimited) ;; *) [ "$procs" -le "$hard" ] || procs="$hard" ;; esac
@@ -517,7 +645,12 @@ procs=$((used + procs))
   case "$hard" in ''|unlimited) ;; *) [ "$cpu" -le "$hard" ] || cpu="$hard" ;; esac
   ulimit -u "$procs" 2>/dev/null || { say "cannot set the process limit to $procs"; exit 70; }
   ulimit -t "$cpu" 2>/dev/null || { say "cannot set the CPU limit to $cpu seconds"; exit 70; }
-  exec ${launcher[@]+"${launcher[@]}"} "${scrub[@]}" "$@" <&3
+  # The limits as set, for the round to read: macOS may enforce a lower
+  # process limit than it was given (kern.maxprocperuid) and reports that
+  # one back, so `ulimit -u` inside says what the kernel did, not fm.
+  scrub+=(SANDBOX_ROUND_LIMITS="procs=$procs cpu=$cpu")
+  [ -z "$started" ] || exec 4>>"$started"
+  exec ${launcher[@]+"${launcher[@]}"} ${inner[@]+"${inner[@]}"} "${scrub[@]}" ${shim[@]+"${shim[@]}"} "$@" <&3
 )
 rc=$?
 exit "$rc"

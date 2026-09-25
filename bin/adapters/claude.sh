@@ -16,24 +16,20 @@ _fm_alib="$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 # shellcheck source=bin/adapters/_lib.sh
 . "$_fm_alib"
 
-# What claude's own flags enforce of the round's policy (T-105). Its sandbox
-# confines what the round's commands write and reach, sockets included; the
-# deny rules refuse the operations the policy names; --restricted,
+# What claude's own flags enforce of the round's policy (T-105): the deny
+# rules refuse the operations the policy names; --restricted,
 # --strict-mcp-config and --disable-slash-commands keep the repository's
 # .claude/ and .mcp.json and the operator's ~/.claude out; the launcher
 # scrubs the environment and sets the ulimits. Reading is not among them:
 # claude can deny paths, not deny everything but a few, so the OS sandbox
-# is what makes reads default-deny. On macOS that sandbox is sandbox-exec,
-# which claude's own sandbox also is, and a seatbelt cannot be applied
-# inside another: there claude's is off and the outer one confines the
-# commands instead.
-claude_native() {
-  if [ "${FM_OUTER_OS:-}" = darwin ]; then
-    echo "refuse repo-config env ulimit"
-  else
-    echo "write network sockets refuse repo-config env ulimit"
-  fi
-}
+# is what makes reads default-deny, and no round runs without it.
+#
+# claude's own sandbox is off inside the OS sandbox, on both platforms. On
+# macOS it is a seatbelt, and a seatbelt cannot be applied inside another.
+# On Linux its commands would reach the network through claude's own proxy,
+# which has no way out of the round's network namespace and records no host
+# it refuses; fm's proxy is the one that names a blocked host.
+claude_native() { echo "refuse repo-config env ulimit"; }
 if [ "${1-}" = "dimensions" ]; then
   fm_adapter_policy; read -r -a native <<<"$(claude_native)"
   fm_adapter_dimensions "${native[@]}"; exit 0
@@ -77,17 +73,23 @@ work="$(fm_adapter_rule_path "$tree")" || exit 64; launch=()
 #   - --tools names the only tools, and the file tools reach only the working
 #     directory and --add-dir: the worktree or checkout, and the temp directory;
 #   - dontAsk denies every tool call no rule below allows;
-#   - shell commands are allowed only inside a sandbox: claude's own, which
-#     confines their writes to the working directory and their network to
-#     the registries the policy declares - none by default, never a GitHub
-#     host or loopback - or, on macOS, the OS sandbox fm-sandbox.sh puts
-#     around claude itself. Settings that fail validation are dropped
+#   - shell commands are allowed because they run inside the OS sandbox
+#     fm-sandbox.sh puts around claude itself, which confines their writes
+#     to the working directory and the round's temp directory and their
+#     network to the registries the policy declares - none by default, never
+#     a GitHub host or loopback. Settings that fail validation are dropped
 #     silently under -p, and then nothing allows a shell command at all:
 #     that failure closes rather than opens.
 # What stops a push is that the sandbox reaches no GitHub host, and in run
 # mode that the clone has no remote. The deny list below is a second guard
 # that matches only a command's literal prefix (`env git push` is not `git
 # push`); the confinement does not rest on it.
+#
+# On macOS claude keeps its login in the keychain, which the OS sandbox
+# keeps out of every round's reach because gh's token is kept there too.
+# There a round signs in with CLAUDE_CODE_OAUTH_TOKEN (`claude
+# setup-token`) or ANTHROPIC_API_KEY from the environment; without either,
+# claude says it is not logged in and the chain moves on.
 if [ "${FM_RUN_REVIEW:-}" = 1 ]; then
   work="$(fm_adapter_review_checkout)" || exit 64
   # the commands the reviewer runs inherit claude's environment, so the
@@ -95,13 +97,8 @@ if [ "${FM_RUN_REVIEW:-}" = 1 ]; then
   while IFS= read -r w; do launch+=("$w"); done < <(fm_adapter_review_env)
 fi
 tmp="$(fm_adapter_rule_path "${TMPDIR:-/tmp}")" || exit 64
-# each name goes into the settings string verbatim; fm_policy has already
-# refused anything but a plain domain name, every GitHub host and loopback.
-# Split with read: an unquoted expansion also globs, and `*` would pass as
-# the file names here
-hosts=()
-read -r -a hosts <<<"${FM_POLICY_HOSTS:-}"
-allow=(Grep Glob "Read(/$work/**)" "Edit(/$work/**)" "Write(/$work/**)"
+# the shell runs under the OS sandbox, which is what confines it
+allow=(Grep Glob Bash "Read(/$work/**)" "Edit(/$work/**)" "Write(/$work/**)"
        "Read(/$tmp/**)" "Edit(/$tmp/**)" "Write(/$tmp/**)")
 deny=("Bash(git push:*)" "Bash(git remote:*)" "Bash(git worktree:*)" "Bash(git -C:*)"
       "Bash(gh:*)" "Bash(gh pr comment:*)" "Bash(gh pr review:*)" "Bash(gh pr edit:*)" "Bash(gh pr merge:*)"
@@ -119,18 +116,9 @@ while IFS= read -r p; do
   deny+=("Read(/$p/**)" "Read(/$p)")
 done < <(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["never_read"]))' "$FM_POLICY")
 rules() { local r s=''; for r in "$@"; do s="$s${s:+,}\"$r\""; done; printf '%s' "$s"; }
-if [ "${FM_OUTER_OS:-}" = darwin ]; then
-  # claude's own sandbox cannot start inside sandbox-exec; the outer one
-  # confines every command, so the shell is allowed and the deny rules stay
-  sandbox='{"enabled":false}'
-  allow+=(Bash)
-else
-  # a round's suite starts its own servers: claude's sandbox lets it bind
-  # loopback in a network namespace of its own, where the host's listeners
-  # - the board's port among them - are not
-  sandbox="{\"enabled\":true,\"autoAllowBashIfSandboxed\":true,\"allowUnsandboxedCommands\":false,\"network\":{\"allowedDomains\":[$(rules ${hosts[@]+"${hosts[@]}"})],\"allowUnixSockets\":[],\"allowLocalBinding\":true}}"
-fi
-settings="{\"permissions\":{\"defaultMode\":\"dontAsk\",\"allow\":[$(rules "${allow[@]}")],\"deny\":[$(rules "${deny[@]}")]},\"sandbox\":$sandbox}"
+# claude's own sandbox is off: the OS sandbox around claude confines every
+# command (see claude_native), and the deny rules stay
+settings="{\"permissions\":{\"defaultMode\":\"dontAsk\",\"allow\":[$(rules "${allow[@]}")],\"deny\":[$(rules "${deny[@]}")]},\"sandbox\":{\"enabled\":false}}"
 mode=(--restricted --strict-mcp-config --disable-slash-commands
       --tools "Bash,Read,Edit,Write,Grep,Glob" --add-dir "$tmp"
       --permission-mode dontAsk --settings "$settings"

@@ -16,21 +16,22 @@ _fm_alib="$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 # shellcheck source=bin/adapters/_lib.sh
 . "$_fm_alib"
 
-# What codex's own flags enforce of the round's policy (T-105). Its
-# workspace-write sandbox confines the commands' writes to the working
-# directory and the temp directories; with the network off it also keeps
-# them from every host and socket, which is what refuses a push, gh and
-# Herdr - but it has only on and off, so a round with registries declared
-# leaves the network to the OS sandbox. None of the repository files the
-# policy keeps unloaded is one codex reads, and MCP servers are emptied on
-# the command line. Reading is not among them. On macOS its sandbox is a
-# seatbelt, which cannot start inside sandbox-exec: there it is off and the
-# outer one confines the commands instead.
+# What codex's own flags enforce of the round's policy (T-105). On Linux
+# its workspace-write sandbox confines the commands' writes to the working
+# directory and the temp directories. Its network switch is on: codex has
+# only on and off, the OS sandbox is what limits the network to the
+# declared registries, and with it off the commands could not reach the
+# proxy that names a refused host. On macOS its sandbox is a seatbelt,
+# which cannot start inside sandbox-exec: there it is off and the outer one
+# confines the commands instead. Everywhere: approval never, since nobody
+# is there to approve; the commands' environment drops the policy's scrub
+# list; MCP servers are emptied; and CODEX_HOME is a directory of the
+# round's own holding only a link to the login, so the operator's
+# config.toml and profiles are not read. None of the repository files the
+# policy keeps unloaded is one codex reads. Reading is not among them.
 codex_native() {
   if [ "${FM_OUTER_OS:-}" = darwin ]; then
     echo "repo-config env ulimit"
-  elif [ -z "${FM_POLICY_HOSTS:-}" ]; then
-    echo "write network sockets refuse repo-config env ulimit"
   else
     echo "write repo-config env ulimit"
   fi
@@ -65,11 +66,22 @@ if [ "${FM_OUTER_OS:-}" = darwin ]; then
   # sandbox-exec around codex confines every command it runs
   policy_args=(--sandbox danger-full-access)
 else
-  # not `net`: _lib.sh keeps an array by that name
-  codex_net=false; [ -z "${FM_POLICY_HOSTS:-}" ] || codex_net=true
-  policy_args=(--sandbox workspace-write -c "sandbox_workspace_write.network_access=$codex_net")
+  policy_args=(--sandbox workspace-write -c "sandbox_workspace_write.network_access=true")
 fi
-policy_args+=(-c 'mcp_servers={}')
+# the scrub list as codex's own globs, for the commands it runs
+excl="$(python3 -c 'import json,sys
+s = json.load(open(sys.argv[1]))["env_scrub"]
+print(json.dumps(s["names"] + [p + "*" for p in s["prefixes"]], separators=(",", ":")))' "$FM_POLICY")" || {
+  echo "codex: the policy at $FM_POLICY does not read" >&2; exit 65; }
+policy_args+=(-c 'approval_policy="never"' -c 'mcp_servers={}'
+              -c "shell_environment_policy.exclude=$excl")
+# no user profile: a CODEX_HOME of the round's own, in its temp directory,
+# holding only a link to the login the policy lets codex read
+codex_home="$FM_ROUND_TMP/codex-home"; mkdir -p "$codex_home" || exit 70
+auth="$(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["vendors"]["codex"]["auth"]))' \
+  "$FM_POLICY" 2>/dev/null | head -1)"
+[ -z "$auth" ] || ln -sf "$auth" "$codex_home/auth.json"
+export CODEX_HOME="$codex_home"
 # the trailing "-" is codex's read-the-prompt-from-stdin marker and has to
 # be the last argument, so FM_ADAPTER_ARGS goes before it
 final_args=()

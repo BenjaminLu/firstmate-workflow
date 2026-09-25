@@ -171,10 +171,12 @@ policy:
 P="$t/worker.json"
 mkdir -p "$t/bin"
 # the stand-ins: each records what it was handed and runs the command
+# Builtins only, no fork: it runs under the round's process limit, which a
+# test below sets below what the user already runs
 cat > "$t/bin/sandbox-exec" <<S
 #!/usr/bin/env bash
 [ "\$1" = -f ] || exit 99
-cp "\$2" "$t/profile.sb"
+while IFS= read -r l; do printf '%s\n' "\$l"; done < "\$2" > "$t/profile.sb"
 shift 2
 exec "\$@"
 S
@@ -191,8 +193,8 @@ lin() { FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$t/bin/bwrap" "$SB" "$@"; }
 
 assert_eq "write read network sockets env repo-config refuse ulimit" "$(mac covers --policy="$P")" \
   "on macOS the sandbox covers every dimension"
-assert_eq "write read env repo-config ulimit" "$(lin covers --policy="$P")" \
-  "on Linux it leaves the network, sockets and refused operations to the adapter"
+assert_eq "write read network sockets env repo-config refuse ulimit" "$(lin covers --policy="$P")" \
+  "and on Linux, where the network is a namespace of the round's own"
 assert_eq "darwin" "$(mac os)" "and says which platform it is"
 assert_eq "" "$(FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/no-such-tool" "$SB" covers --policy="$P")" \
   "a host with no sandbox covers nothing"
@@ -256,6 +258,15 @@ assert_lacks "$(mac profile --policy="$P" --root="$root" --vendor=codex)" "\\.cl
 assert_contains "$prof" "(subpath \"$root/.claude\")" "the repository's .claude/ is out of reach"
 assert_contains "$prof" "(subpath \"$root/.mcp.json\")" "and its .mcp.json"
 assert_contains "$prof" "com.apple.coreservices.launchservicesd" "and no browser can be opened"
+# a credential macOS serves over mach is not a path, so no file rule covers
+# it: gh's token and git's osxkeychain helper live in the keychain
+mline="$(grep '^(deny mach-lookup' <<< "$prof" | grep SecurityServer)"
+assert_contains "$mline" '(global-name "com.apple.SecurityServer")' "the keychain is out of reach"
+assert_contains "$mline" '(global-name-regex #"^com\.apple\.securityd")' "by either of its services"
+assert_contains "$mline" '(global-name "com.apple.pasteboard.1")' "as is the pasteboard"
+assert_contains "$mline" '(global-name-regex #"^com\.apple\.accountsd")' "the Internet Accounts store"
+assert_contains "$mline" '(global-name "com.apple.GSSCred")' "and Kerberos tickets"
+assert_lacks "$mline" "trustd" "while TLS trust evaluation stays reachable"
 # the order is the rule: a later rule wins, so the floor comes after every allow
 n_allow="$(grep -n '^(allow file-read\* (literal "/")' <<< "$prof" | cut -d: -f1)"
 n_never="$(grep -n "$home/.ssh" <<< "$prof" | head -1 | cut -d: -f1)"
@@ -307,7 +318,8 @@ $home/.codex/sessions
 $home/.codex/sessions" "a vendor's session state is bound writable"
 assert_contains "$(lin profile --policy="$t/worker.json" --root="$root" --vendor=codex)" "--ro-bind-try
 $home/.codex/auth.json" "and its auth read-only"
-assert_lacks "$args" "--unshare-net" "the network is shared: the CLI has to reach its own service"
+assert_contains "$args" "--unshare-net" "the network is a namespace of the round's own: no host listener, the board's included"
+assert_lacks "$args" "proxy.sock" "and without a proxy it has no way out at all"
 
 # --- decide: the rule the round's proxy applies --------------------------------
 pol worker 'vendor: mock
@@ -345,15 +357,13 @@ for target in ('undeclared.example.org:443', 'github.com:443', 'undeclared.examp
 PY
 cat > "$t/cmd.sh" <<S
 #!/usr/bin/env bash
-printf 'procs=%s cpu=%s\n' "\$(ulimit -u)" "\$(ulimit -t)" > "$t/limits"
 printf 'TMPDIR=%s\nNO_PROXY=%s\n' "\$TMPDIR" "\${NO_PROXY:-}" > "$t/tmpdir"
 python3 "$t/probe.py" "$t/ran"
 exit 7
 S
 chmod +x "$t/cmd.sh"
 # The process count is ps's, and the suite does not ask the machine running
-# it for one: a reviewer's own sandbox may refuse ps. A stand-in answers,
-# and the policy asks for more than the hard limit, so the limit is exact.
+# it for one: a reviewer's own sandbox may refuse ps. A stand-in answers.
 mkdir -p "$t/psbin"
 printf '#!/bin/sh\nprintf "1\\n2\\n3\\n"\n' > "$t/psbin/ps"
 # and the listeners are netstat's, answered the way macOS's netstat does
@@ -365,17 +375,17 @@ printf 'tcp4       0      0  127.0.0.1.5555         *.*                    LISTE
 printf 'tcp4       0      0  10.0.0.2.52000         1.2.3.4.443            ESTABLISHED\n'
 S
 chmod +x "$t/psbin/ps" "$t/psbin/netstat"
-hard="$(ulimit -Hu)"
-want=$((3 + 1000000)); case "$hard" in unlimited) ;; *) [ "$want" -le "$hard" ] || want="$hard" ;; esac
-: > "$t/blocked"; rm -f "$t/ran" "$t/profile.sb"
+# room to fork: the stand-in's count is 3, far below what the user runs
+: > "$t/blocked"; rm -f "$t/ran" "$t/profile.sb" "$t/started"
 pol worker 'policy:
   procs: 1000000
   cpu: 90
 '
 echo "the prompt" | GH_TOKEN=x GITHUB_TOKEN=x SSH_AUTH_SOCK=/x AWS_SECRET_ACCESS_KEY=x HERDR_SOCKET=/x KEEP_ME=kept \
   FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" PATH="$t/psbin:$PATH" \
-  "$SB" run --policy="$t/worker.json" --root="$root" --blocked="$t/blocked" -- "$t/cmd.sh"
+  "$SB" run --policy="$t/worker.json" --root="$root" --blocked="$t/blocked" --started="$t/started" -- "$t/cmd.sh"
 assert_eq "7" "$?" "run exits with the command's own code"
+assert_eq "started" "$(cat "$t/started" 2>/dev/null)" "and says, from inside the sandbox, that it got as far as the command"
 # the round's temp directory: its own, in the profile's write roots, and gone after
 rtmp="$(sed -n 's/^TMPDIR=//p' "$t/tmpdir" 2>/dev/null)"
 assert_ne "" "$rtmp" "the round is given a TMPDIR"
@@ -403,20 +413,70 @@ assert_contains "$ran" "undeclared.example.org:443 HTTP/1.1 403" "which refuses 
 assert_contains "$ran" "github.com:443 HTTP/1.1 403" "and GitHub"
 assert_eq "undeclared.example.org
 github.com" "$(cat "$t/blocked")" "and names each refused host once, for the round to report"
-# the process limit is room for the policy's count on top of what the user
-# already runs, clamped to the hard limit
-assert_eq "procs=$want cpu=90" "$(cat "$t/limits" 2>/dev/null)" "the ulimits are the policy's"
 port="$(sed -n 's/.*localhost:\([0-9]*\).*/\1/p' "$t/profile.sb")"
 assert_matches "$port" '^[0-9]+$' "the profile lets the round reach only that proxy's port"
 
-# Linux: the same scrub and limits, behind bwrap
-rm -f "$t/ran" "$t/bwrap.args"
+# Linux: the same scrub, behind bwrap, in a network namespace of the
+# round's own whose only way out is the same proxy - so a refused host is
+# named there too. The stand-in shares the host's network; what it proves
+# is that the round's traffic reaches the proxy through the socket bwrap
+# binds in, and the proxy names what it refused.
+rm -f "$t/ran" "$t/bwrap.args"; : > "$t/blocked"
 echo "the prompt" | GH_TOKEN=x FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$t/bin/bwrap" PATH="$t/psbin:$PATH" \
-  "$SB" run --policy="$t/worker.json" --root="$root" -- "$t/cmd.sh"
+  "$SB" run --policy="$t/worker.json" --root="$root" --blocked="$t/blocked" -- "$t/cmd.sh"
 assert_eq "7" "$?" "under bwrap too"
 assert_ok "test -s '$t/bwrap.args'" "the command ran behind bwrap"
-assert_contains "$(cat "$t/ran" 2>/dev/null)" "GH_TOKEN=
+bargs="$(cat "$t/bwrap.args" 2>/dev/null)"
+assert_contains "$bargs" "--unshare-net" "with no network of the host's"
+sockp="$(grep -m1 '/proxy\.sock$' <<< "$bargs")"
+assert_matches "$sockp" '/fm-sb\.[A-Za-z0-9]+/proxy\.sock$' "but the proxy's socket"
+assert_contains "$bargs" "--bind
+$sockp
+$sockp" "bound into the round"
+lran="$(cat "$t/ran" 2>/dev/null)"
+assert_contains "$lran" "GH_TOKEN=
 " "with the same scrub"
+assert_contains "$lran" "proxy=set" "the round's traffic goes to the proxy, served on its own loopback"
+assert_contains "$lran" "undeclared.example.org:443 HTTP/1.1 403" "which refuses an undeclared host"
+assert_contains "$lran" "github.com:443 HTTP/1.1 403" "and GitHub"
+assert_eq "undeclared.example.org
+github.com" "$(cat "$t/blocked")" "and names each refused host once, on Linux as on macOS"
+
+# The limits, as fm-sandbox set them (SANDBOX_ROUND_LIMITS), and as the kernel
+# reports them back. Expected values are the policy's and the stand-in's,
+# not the host's: macOS may enforce a lower process limit than the one it
+# was given, so only fm's own number is compared exactly. The command and
+# the stand-in are builtins only, since 3 + 50 is far below what the user
+# already runs and a fork would fail.
+pol worker 'policy:
+  procs: 50
+  cpu: 90
+'
+limits_cmd=(/bin/sh -c 'printf "%s\n" "$SANDBOX_ROUND_LIMITS" > "$1"; ulimit -u >> "$1"; ulimit -t >> "$1"' sh)
+for mode in run plain; do
+  rm -f "$t/lim"
+  FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" PATH="$t/psbin:$PATH" \
+    "$SB" "$mode" --policy="$t/worker.json" --root="$root" -- "${limits_cmd[@]}" "$t/lim" </dev/null
+  assert_eq "procs=53 cpu=90" "$(head -1 "$t/lim" 2>/dev/null)" \
+    "$mode: the process limit is the policy's 50 more than the user runs, and the CPU limit the policy's"
+  lu="$(sed -n 2p "$t/lim" 2>/dev/null)"
+  assert_eq "1" "$([ -n "$lu" ] && [ "$lu" != unlimited ] && [ "$lu" -le 53 ] && echo 1)" \
+    "$mode: and the kernel holds the round to it, or below ($lu)"
+  assert_eq "90" "$(sed -n 3p "$t/lim" 2>/dev/null)" "$mode: CPU seconds as the policy says"
+done
+# clamped to the hard limit, which this test sets itself
+pol worker 'policy:
+  procs: 1000000
+  cpu: 90
+'
+if (ulimit -u 2000) 2>/dev/null; then
+  rm -f "$t/lim"
+  ( ulimit -u 2000
+    PATH="$t/psbin:$PATH" "$SB" plain --policy="$t/worker.json" -- "${limits_cmd[@]}" "$t/lim" </dev/null )
+  assert_eq "procs=2000 cpu=90" "$(head -1 "$t/lim" 2>/dev/null)" "a limit above the hard one is clamped to it"
+else
+  printf '    %-52s%s\n' "a limit above the hard one is clamped to it" "skipped: this host's hard limit is below 2000"
+fi
 
 # no sandbox: the round does not run unconfined
 rm -f "$t/ran"
@@ -426,14 +486,29 @@ assert_eq "69" "$?" "run with no sandbox on the host refuses"
 assert_fail "test -e '$t/ran'" "and the command never starts"
 
 # plain: what an adapter's flags stand in for - the scrub and the limits only
-rm -f "$t/ran" "$t/limits"
+rm -f "$t/ran"
 echo "the prompt" | GH_TOKEN=x KEEP_ME=kept PATH="$t/psbin:$PATH" "$SB" plain --policy="$t/worker.json" \
   --tmp="$t/round-a" -- \
-  bash -c 'printf "procs=%s\n" "$(ulimit -u)"; printf "GH_TOKEN=%s KEEP_ME=%s TMPDIR=%s\n" "${GH_TOKEN:-}" "${KEEP_ME:-}" "$TMPDIR"; cat' \
+  bash -c 'printf "%s\n" "$SANDBOX_ROUND_LIMITS"; printf "GH_TOKEN=%s KEEP_ME=%s TMPDIR=%s\n" "${GH_TOKEN:-}" "${KEEP_ME:-}" "$TMPDIR"; cat' \
   > "$t/plain" 2>&1
-assert_eq "procs=$want" "$(head -1 "$t/plain")" "plain sets the process limit"
+assert_matches "$(head -1 "$t/plain")" '^procs=[0-9]+ cpu=90$' "plain sets the limits"
 assert_eq "GH_TOKEN= KEEP_ME=kept TMPDIR=$t/round-a
 the prompt" "$(tail -n +2 "$t/plain")" "scrubs the environment, gives the round its own TMPDIR and hands on the prompt"
+
+# --started: a sandbox that fails before the command leaves it empty, so
+# the adapter can tell the launcher's exit code from the command's
+cat > "$t/bin/broken-sandbox" <<'S'
+#!/usr/bin/env bash
+echo "sandbox-exec: sandbox_apply: Operation not permitted" >&2
+exit 71
+S
+chmod +x "$t/bin/broken-sandbox"
+rm -f "$t/ran" "$t/tmpdir"; echo stale > "$t/started"
+FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/broken-sandbox" PATH="$t/psbin:$PATH" \
+  "$SB" run --policy="$t/worker.json" --root="$root" --started="$t/started" -- "$t/cmd.sh" </dev/null >/dev/null 2>&1
+assert_eq "71" "$?" "a sandbox that cannot start exits with its own code"
+assert_eq "" "$(cat "$t/started" 2>/dev/null)" "and --started stays empty, a stale line cleared"
+assert_fail "test -e '$t/tmpdir'" "and the command never ran"
 
 # A process count that cannot be taken refuses the round. Guessing 0 set
 # the limit to the policy's bare count, below what the user already runs,
@@ -443,12 +518,12 @@ printf '#!/bin/sh\nexit 0\n' > "$t/psbin/ps-empty"
 for why in failing empty; do
   [ "$why" = empty ] && mv "$t/psbin/ps-empty" "$t/psbin/ps"
   for mode in run plain; do
-    rm -f "$t/ran" "$t/limits"
+    rm -f "$t/ran" "$t/tmpdir"
     out="$(FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" PATH="$t/psbin:$PATH" \
       "$SB" "$mode" --policy="$t/worker.json" --root="$root" -- "$t/cmd.sh" </dev/null 2>&1)"
     assert_eq "70" "$?" "$mode refuses the round when ps is $why"
     assert_contains "$out" "cannot count this user's processes" "and says why"
-    assert_fail "test -e '$t/limits'" "and the command never starts ($mode, ps $why)"
+    assert_fail "test -e '$t/tmpdir'" "and the command never starts ($mode, ps $why)"
   done
 done
 

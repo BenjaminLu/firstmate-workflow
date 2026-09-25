@@ -544,7 +544,7 @@ for v in $FM_VENDOR_SKIPPED; do
 done
 # A host the round's proxy refused is reported, never allowed: firstmate
 # raises the choice card that adds it to the project's registries.
-blocked_hosts="$(fm_policy_report "$REPO" reviewer "$TASK" "$NAME" "$blocked_file")"
+blocked_hosts="$(fm_policy_report "$REPO" reviewer "$TASK" "$NAME" "$blocked_file" "$policy_file")"
 if [ -n "$blocked_hosts" ]; then
   echo "fm-review: the round was refused undeclared hosts: $blocked_hosts; adding one to the project's policy network is the captain's choice" >&2
   emit_status "Refused undeclared hosts: $blocked_hosts" "被拒的未宣告主機：${blocked_hosts}"

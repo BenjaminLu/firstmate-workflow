@@ -19,12 +19,12 @@ _fm_alib="$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 # What gemini's own flags enforce of the round's policy (T-105): nothing of
 # the OS kind. Its --sandbox is a container or a seatbelt, neither of which
 # can start inside the OS sandbox fm puts around it, so every dimension but
-# the launcher's environment scrub and ulimits is the OS sandbox's, and
-# where that sandbox does not cover them all - Linux, where bwrap leaves the
-# network - gemini refuses the round. Inside it, --approval-mode yolo lets
-# the round's commands run (headless, nobody can approve one), --extensions
-# none loads no extension, and --allowed-mcp-server-names names a server no
-# configuration declares, so none starts.
+# the launcher's environment scrub and ulimits is the OS sandbox's, and on
+# a host without one gemini refuses the round. Inside it, --approval-mode
+# yolo lets the round's commands run (headless, nobody can approve one, and
+# auto_edit would refuse every shell command), --extensions none loads no
+# extension, and --allowed-mcp-server-names names a server no configuration
+# declares, so none starts.
 gemini_native() { echo "env ulimit"; }
 if [ "${1-}" = "dimensions" ]; then
   fm_adapter_policy; read -r -a native <<<"$(gemini_native)"

@@ -2775,6 +2775,9 @@ assert_contains "$outPol" "refused undeclared hosts: npm.evil.example" "a host t
 assert_eq "worker T-Z npm.evil.example" \
   "$(jq -r '"\(.role) \(.task) \(.hosts | join(" "))"' "$rPol/state/policy/blocked-hosts.jsonl" 2>/dev/null)" \
   "once, in the record firstmate raises its choice card from"
+assert_eq 'policy.network ["registry.npmjs.org"] proxy' \
+  "$(jq -r '"\(.add_to) \(.declared | tojson) \(.source)"' "$rPol/state/policy/blocked-hosts.jsonl" 2>/dev/null)" \
+  "which names the key a card would add the host to and what the round already had"
 assert_contains "$(jq -r 'select(.type=="crew_status") | .data.activity.en' "$rPol/state/events.jsonl")" \
   "Refused undeclared hosts: npm.evil.example" "and the board is told"
 # a policy that does not read stops the round before any engine runs

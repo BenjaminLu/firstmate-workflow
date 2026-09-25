@@ -20,14 +20,16 @@ _fm_alib="$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 # used to run with -f, which lets every command through, and no sandbox.
 # Now --trust answers the workspace-trust prompt for the worktree the
 # scripts made, and --sandbox enabled runs its commands in cursor's own
-# sandbox: writes to the workspace only, and no network, which is what
-# refuses a push, gh and Herdr - on and off only, so a round with registries
-# declared leaves the network to the OS sandbox. MCP servers are never
-# approved (no --approve-mcps). The repository's .cursor/ and .mcp.json are
-# still read by cursor, and reading in general is not confined, so those
-# two are the OS sandbox's. On macOS cursor's sandbox is a seatbelt, which
-# cannot start inside sandbox-exec: there it is off and the outer one
-# confines the commands instead.
+# sandbox, which confines their writes to the workspace. The network, the
+# sockets and the refused operations are the OS sandbox's, whose proxy is
+# what names a refused host; if cursor's own sandbox cuts the network off
+# before the proxy sees a request, that refusal names no host, which the
+# canary shows per version. MCP servers are never approved (no
+# --approve-mcps). The repository's .cursor/ and .mcp.json are still read
+# by cursor, and reading in general is not confined, so those two are the
+# OS sandbox's. On macOS cursor's sandbox is a seatbelt, which cannot start
+# inside sandbox-exec: there it is off and the outer one confines the
+# commands instead.
 #
 # No `fm:review-run` line: a run-mode review needs the reviewer's writes
 # confined to a checkout by the CLI itself, which T-066 asked of claude
@@ -36,8 +38,6 @@ _fm_alib="$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 cursor_native() {
   if [ "${FM_OUTER_OS:-}" = darwin ]; then
     echo "env ulimit"
-  elif [ -z "${FM_POLICY_HOSTS:-}" ]; then
-    echo "write network sockets refuse env ulimit"
   else
     echo "write env ulimit"
   fi

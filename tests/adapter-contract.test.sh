@@ -65,14 +65,9 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
   name="$(basename "$adapter" .sh)"
   case "$name" in _*) continue ;; esac   # shared library, not an adapter
   printf '  %s\n' "$name"
-  # Linux, where bwrap leaves the network to the vendor's own flags - the
-  # T-066 assertions below are about claude's sandbox, which is on there.
-  # gemini's flags enforce no network, so it runs only where the sandbox
-  # covers it: macOS.
-  case "$name" in
-    gemini) export FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" ;;
-    *)      export FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$pk/bwrap" ;;
-  esac
+  # Linux, where the vendors' own sandboxes that can nest stay on (codex's
+  # workspace-write, cursor-agent's); macOS's below
+  export FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$pk/bwrap"
 
   assert_ok "test -x '$adapter'" "$name is executable"
   out="$("$adapter" 2>&1)"; rc=$?
@@ -188,9 +183,15 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
       codex) assert_eq "exec" "${argv%% *}" "$name asks for the non-interactive subcommand"
              assert_contains " $argv " " --skip-git-repo-check " "$name does not require a repository"
              assert_eq "-" "${argv##* }" "$name keeps the stdin marker last"
-             assert_contains " $argv " " --sandbox workspace-write -c sandbox_workspace_write.network_access=false " \
-               "$name confines its commands to the worktree, with no network when none is declared"
-             assert_contains " $argv " " -c mcp_servers={} " "$name starts no MCP server" ;;
+             # its network switch is on: codex has only on and off, and the
+             # OS sandbox is what limits it to the declared registries
+             assert_contains " $argv " " --sandbox workspace-write -c sandbox_workspace_write.network_access=true " \
+               "$name confines its commands' writes to the worktree"
+             assert_contains " $argv " ' -c approval_policy="never" ' "$name asks nobody to approve a command"
+             assert_contains " $argv " " -c mcp_servers={} " "$name starts no MCP server"
+             assert_contains "$argv" 'shell_environment_policy.exclude=["GH_TOKEN","GITHUB_TOKEN"' \
+               "$name drops the policy's scrub list from its commands' environment"
+             assert_contains "$argv" '"AWS_*"' "$name drops whole credential families by prefix" ;;
     esac
     # every round is confined now, not only a run-mode review (T-105)
     case "$name" in
@@ -248,8 +249,11 @@ dontAsk" "$name denies every tool call no rule allows"
           assert_eq "" "$stray" "$name allows file writes only under the checkout and the temp directory"
           assert_contains "$allowed" "Edit(/$ck/**)" "$name lets the reviewer edit its own checkout"
           assert_lacks "$allowed" "WebFetch" "$name gives the reviewer no web access"
-          assert_eq "" "$(grep -xE 'Bash|Bash\(.*\)' <<< "$allowed" || true)" \
-            "$name allows no shell command outside its sandbox"
+          # the shell is allowed because it runs inside the OS sandbox
+          # around claude, not claude's own (T-105)
+          assert_eq "Bash" "$(grep -xE 'Bash|Bash\(.*\)' <<< "$allowed" || true)" \
+            "$name allows the shell, and no narrower shell rule"
+          assert_ok "test -s '$pk/bwrap.args'" "$name's run-mode round ran inside the OS sandbox that confines it"
           for rule in "Bash(git push:*)" "Bash(git remote:*)" "Bash(gh pr comment:*)" \
                       "Bash(gh pr review:*)" "Bash(gh pr merge:*)" "Bash(gh api:*)" "Bash(curl:*)"; do
             assert_contains "
@@ -259,9 +263,8 @@ $rule
 " "$name denies $rule on the command line"
           done
           settings="$(awk 'on{print;exit} $0=="--settings"{on=1}' "$d/argv.run")"
-          assert_eq "true" "$(jq -r '.sandbox.enabled == true and .sandbox.autoAllowBashIfSandboxed == true
-                     and .sandbox.allowUnsandboxedCommands == false' <<< "$settings" 2>/dev/null)" \
-            "$name runs shell commands only inside its sandbox, which confines their writes"
+          assert_eq "false" "$(jq -r '.sandbox.enabled' <<< "$settings" 2>/dev/null)" \
+            "$name's own sandbox is off: its proxy would route around the one that names a refused host"
           assert_eq "true" "$(jq -r '.permissions.defaultMode == "dontAsk"
                      and any(.permissions.deny[]; . == "Bash(git push:*)")
                      and any(.permissions.deny[]; . == "Bash(gh pr comment:*)")' <<< "$settings" 2>/dev/null)" \
@@ -291,22 +294,14 @@ $runargv
             "$name names the only tools the round has"
           assert_eq "$rtmp" "$(list_after --add-dir)" "$name's file tools reach only the checkout and the round's own temp directory"
           assert_lacks "$allowed" "(/$tmpd/**)" "and not the shared one"
-          # the barriers push actually meets: no network beyond what the
-          # project declares, and no settings excluding a command from the sandbox
-          assert_eq "[]" "$(jq -c '.sandbox.network.allowedDomains' <<< "$settings" 2>/dev/null)" \
-            "$name's sandbox reaches no network when the project declares none"
+          # the barriers push actually meets: the OS sandbox's network is a
+          # namespace of the round's own, whose one way out is the proxy
+          # that reaches only the declared registries (tests/sandbox.test.sh),
+          # and no settings exclude a command from anything
+          assert_contains "$(cat "$pk/bwrap.args" 2>/dev/null)" "--unshare-net" \
+            "$name's round has no network of the host's, nor its unix sockets"
           assert_eq "null" "$(jq -c '.sandbox.excludedCommands' <<< "$settings" 2>/dev/null)" \
-            "$name exempts no command from its sandbox"
-          # the hosts come from the round's policy, which fm-review.sh also
-          # hands over as FM_REVIEW_NETWORK (T-105)
-          FM_POLICY="$pk/net.json" FM_REVIEW_NETWORK="registry.npmjs.org cdn.playwright.dev" FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/checkout" \
-            PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
-          settings="$(awk 'on{print;exit} $0=="--settings"{on=1}' "$d/argv.run")"
-          assert_eq '["registry.npmjs.org","cdn.playwright.dev"]' \
-            "$(jq -c '.sandbox.network.allowedDomains' <<< "$settings" 2>/dev/null)" \
-            "$name's sandbox reaches exactly the domains the project declares"
-          assert_eq '[]' "$(jq -c '.sandbox.network.allowUnixSockets' <<< "$settings" 2>/dev/null)" \
-            "$name's sandbox connects to no unix socket, Herdr's included"
+            "$name exempts no command from anything"
           never="$(jq -r --arg h "$(cd "$HOME" && pwd -P)" '.permissions.deny | map(select(. == "Read(/\($h)/.ssh/**)")) | length' <<< "$settings" 2>/dev/null)"
           assert_eq "1" "$never" "$name's settings deny reading ~/.ssh as well"
           rm -f "$d/cwd.run"
@@ -389,7 +384,8 @@ for v in claude codex cursor-agent gemini; do
   said="$(FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$pk/bwrap" FM_POLICY="$pk/none.json" \
     "$ROOT/bin/adapters/$v.sh" dimensions 2>/dev/null)"
   assert_contains "$said" "native: " "$v declares the dimensions its flags enforce"
-  assert_contains "$said" "sandbox: write read env repo-config ulimit" "and the ones the Linux sandbox adds"
+  assert_contains "$said" "sandbox: write read network sockets env repo-config refuse ulimit" \
+    "and the ones the Linux sandbox adds: every one"
   # no OS sandbox: reading is default-deny only there, so every vendor is refused
   assert_eq "2" "$(confined darwin "$pv/no-such-sandbox" "$pk/none.json" "$v")" \
     "$v with no OS sandbox is refused, as an unavailable vendor is"
@@ -414,28 +410,33 @@ confined darwin "$pk/sandbox-exec" "$pk/none.json" cursor-agent >/dev/null
 assert_eq "disabled" "$(awk 'on{print;exit} $0=="--sandbox"{on=1}' "$pv/argv")" "and cursor-agent's"
 assert_ne "" "$(grep -x -- --trust "$pv/argv")" "cursor-agent still trusts only the worktree it is handed"
 assert_eq "" "$(grep -x -- -f "$pv/argv")" "and never forces every command"
-# Linux: bwrap leaves the network, sockets and refused operations to the
-# vendor, so only a vendor whose own flags enforce them runs
-for v in claude codex cursor-agent; do
-  assert_eq "0" "$(confined linux "$pk/bwrap" "$pk/none.json" "$v")" "$v runs under bwrap with no registry declared"
-  assert_ok "test -s '$pk/bwrap.args'" "inside bwrap"
+# Linux: bwrap gives the round a network namespace of its own whose one way
+# out is the proxy, so every vendor runs there too, registries or not - and
+# a host it refuses is named, whichever vendor's commands asked for it
+for pol in none net; do
+  for v in claude codex cursor-agent gemini; do
+    assert_eq "0" "$(confined linux "$pk/bwrap" "$pk/$pol.json" "$v")" "$v runs under bwrap ($pol)"
+    assert_contains "$(cat "$pk/bwrap.args" 2>/dev/null)" "--unshare-net" "in a network of the round's own"
+    assert_contains "$(cat "$pk/bwrap.args" 2>/dev/null)" "proxy.sock" "reaching out only through the proxy's socket"
+  done
 done
-assert_eq "2" "$(confined linux "$pk/bwrap" "$pk/none.json" gemini)" "gemini's flags enforce no network, so under bwrap it is refused"
-assert_contains "$(cat "$pv/err")" "network sockets refuse" "and says which dimensions nobody enforces"
-assert_fail "test -e '$pv/argv'" "and gemini never starts"
-# a declared registry: codex and cursor-agent can only switch the network on
-# or off, so with one declared the network is nobody's under bwrap
-for v in codex cursor-agent gemini; do
-  assert_eq "2" "$(confined linux "$pk/bwrap" "$pk/net.json" "$v")" "$v cannot confine a registry under bwrap, so it is refused"
-done
-# the declared registries reach both layers: claude's own sandbox, and the
-# proxy that is the OS sandbox's only way out
-assert_eq "0" "$(confined linux "$pk/bwrap" "$pk/net.json" claude)" "claude confines a declared registry itself"
-assert_eq '["registry.npmjs.org","cdn.playwright.dev"]' "$(settings_of | jq -c '.sandbox.network.allowedDomains' 2>/dev/null)" \
-  "its sandbox reaches exactly the declared registries"
+# the vendors' own sandboxes on Linux: claude's off (its proxy would route
+# around fm's), codex's and cursor-agent's on, codex's network switch on so
+# its commands can reach the proxy at all
+confined linux "$pk/bwrap" "$pk/none.json" claude >/dev/null
+assert_eq "false" "$(settings_of | jq -r '.sandbox.enabled' 2>/dev/null)" "on Linux claude's own sandbox is off"
+assert_eq "null" "$(settings_of | jq -c '.sandbox.network' 2>/dev/null)" "and it carries no network of its own to route around fm's"
+confined linux "$pk/bwrap" "$pk/none.json" codex >/dev/null
+assert_eq "workspace-write" "$(awk 'on{print;exit} $0=="--sandbox"{on=1}' "$pv/argv")" "codex's own sandbox confines its writes"
+assert_ne "" "$(grep -x 'sandbox_workspace_write.network_access=true' "$pv/argv")" "with its network switch on"
+confined linux "$pk/bwrap" "$pk/none.json" cursor-agent >/dev/null
+assert_eq "enabled" "$(awk 'on{print;exit} $0=="--sandbox"{on=1}' "$pv/argv")" "cursor-agent's own sandbox is on"
+# the declared registries reach the layer that enforces the network: the
+# proxy, which lets exactly them through, and the profile, whose only way
+# off the machine is that proxy
 for h in registry.npmjs.org cdn.playwright.dev; do
   "$ROOT/bin/fm-sandbox.sh" decide --policy="$pk/net.json" "$h" >/dev/null 2>&1
-  assert_eq "0" "$?" "and the OS sandbox's proxy lets $h through"
+  assert_eq "0" "$?" "the OS sandbox's proxy lets $h through"
 done
 "$ROOT/bin/fm-sandbox.sh" decide --policy="$pk/net.json" pypi.org >/dev/null 2>&1
 assert_eq "1" "$?" "but no undeclared host"
@@ -443,6 +444,30 @@ assert_eq "0" "$(confined darwin "$pk/sandbox-exec" "$pk/net.json" codex)" "on m
 assert_eq '(allow network-outbound (remote ip "localhost:' \
   "$(grep -o '(allow network-outbound (remote ip "localhost:' "$pk/profile.sb" 2>/dev/null)" \
   "and its round reaches the network only through that proxy"
+
+# The sandbox failing before the CLI is not the model giving up: the
+# launcher's exit code is not the CLI's, and the vendor counts unavailable
+# so the chain moves on. The CLI's own non-zero exit is still a failed
+# attempt.
+cat > "$pv/broken-sandbox" <<'S'
+#!/usr/bin/env bash
+echo "sandbox-exec: sandbox_apply: Operation not permitted" >&2
+exit 70
+S
+chmod +x "$pv/broken-sandbox"
+for v in claude codex cursor-agent gemini; do
+  assert_eq "2" "$(confined darwin "$pv/broken-sandbox" "$pk/none.json" "$v")" \
+    "$v whose sandbox cannot start reports unavailable, not a failed attempt"
+  assert_fail "test -e '$pv/argv'" "and $v's CLI never started"
+  assert_contains "$(cat "$pv/err")" "did not start the CLI" "and says so"
+  printf '#!/usr/bin/env bash\ncat > /dev/null\nprintf "%%s\\n" "$@" > "%s/argv"\necho "it went wrong"\nexit 70\n' \
+    "$pv" > "$pv/fakebin/$v"
+  rm -f "$pv/argv"
+  FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" FM_POLICY="$pk/none.json" PATH="$pv/fakebin:/usr/bin:/bin" \
+    "$ROOT/bin/adapters/$v.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>&1
+  assert_eq "1" "$?" "while $v's own exit 70, inside a sandbox that started, is a failed attempt"
+  assert_ok "test -e '$pv/argv'" "($v's CLI did run)"
+done
 # loopback and GitHub are never allowed, not even by a policy file that says so
 # The hosts every adapter builds its flags from are the policy's
 # (FM_POLICY_HOSTS), so a malformed entry is refused there too - not only in

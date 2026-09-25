@@ -201,8 +201,12 @@ fm_adapter_policy() {
   FM_ROUND_TMP="$(mktemp -d "${TMPDIR:-/tmp}/fm-round.XXXXXX")" || {
     echo "adapter: cannot make the round's temp directory" >&2; exit 70; }
   FM_ROUND_TMP="$(cd "$FM_ROUND_TMP" && pwd -P)"
-  # shellcheck disable=SC2064  # the path is fixed now
-  trap "rm -rf '$FM_ROUND_TMP'" EXIT
+  # Beside it, out of the round's reach: where the sandbox says it started
+  # the CLI (fm_adapter_confine, fm_adapter_verdict).
+  FM_ROUND_CTL="$(mktemp -d "${TMPDIR:-/tmp}/fm-ctl.XXXXXX")" || {
+    rm -rf "$FM_ROUND_TMP"; echo "adapter: cannot make the round's control directory" >&2; exit 70; }
+  # shellcheck disable=SC2064  # the paths are fixed now
+  trap "rm -rf '$FM_ROUND_TMP' '$FM_ROUND_CTL'" EXIT
   export TMPDIR="$FM_ROUND_TMP" TMP="$FM_ROUND_TMP" TEMP="$FM_ROUND_TMP"
 }
 
@@ -224,14 +228,16 @@ fm_adapter_confine() {
   # absolute: the adapter starts the CLI after changing into it
   work="$(cd "$work" 2>/dev/null && pwd -P)" || { echo "$vendor: no directory at $2" >&2; exit 64; }
   FM_LAUNCH=("$_fm_engine/bin/fm-sandbox.sh")
+  FM_ROUND_STARTED="$FM_ROUND_CTL/started"
   if [ -n "$FM_OUTER_OS" ]; then
-    FM_LAUNCH+=(run --policy="$FM_POLICY" --root="$work" --tmp="$FM_ROUND_TMP" --vendor="$vendor")
+    FM_LAUNCH+=(run --policy="$FM_POLICY" --root="$work" --tmp="$FM_ROUND_TMP" --vendor="$vendor"
+                --started="$FM_ROUND_STARTED")
     # the CLI's own final answer is written where the launcher reads it
     [ -z "${FM_ATTEMPT_DIR:-}" ] || FM_LAUNCH+=(--write="$FM_ATTEMPT_DIR")
     [ -z "${FM_FINAL_PATH:-}" ] || FM_LAUNCH+=(--write="$(dirname "$FM_FINAL_PATH")")
     [ -z "${FM_POLICY_BLOCKED:-}" ] || FM_LAUNCH+=(--blocked="$FM_POLICY_BLOCKED")
   else
-    FM_LAUNCH+=(plain --policy="$FM_POLICY" --tmp="$FM_ROUND_TMP")
+    FM_LAUNCH+=(plain --policy="$FM_POLICY" --tmp="$FM_ROUND_TMP" --started="$FM_ROUND_STARTED")
   fi
   FM_LAUNCH+=(--)
 }
@@ -260,6 +266,14 @@ fm_adapter_verdict() {
   local rc="$1" log="$2" off="$3" said=''
   [ -z "${FM_ATTEMPT_DIR:-}" ] || printf '%s\n' "${FM_CLI_EXIT:-$rc}" > "$FM_ATTEMPT_DIR/cli-exit-code"
   [ -f "$log" ] && said="$(tail -c "+$((off + 1))" "$log" 2>/dev/null)"
+  # The sandbox never got as far as the CLI: its proxy, its profile, the
+  # process count or the sandbox binary failed, and the exit code is the
+  # launcher's. That is this host failing this vendor, not a model giving
+  # up, so the chain moves on to the next vendor (T-105).
+  if [ -n "${FM_ROUND_STARTED:-}" ] && ! grep -qx started "$FM_ROUND_STARTED" 2>/dev/null; then
+    echo "adapter: the OS sandbox did not start the CLI (exit $rc); counting the vendor unavailable" >&2
+    return 2
+  fi
 
   # a here-string, not a pipeline: under `set -o pipefail` a grep -q that
   # matches early kills the producer, printf takes SIGPIPE, and the pipeline

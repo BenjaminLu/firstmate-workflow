@@ -1121,7 +1121,7 @@ export FM_POLICY="$policy_file" FM_POLICY_BLOCKED="$blocked_file"
 # choice card that adds it to the project's registries.
 report_blocked_hosts() {   # report_blocked_hosts <role> <file>
   local hosts
-  hosts="$(fm_policy_report "$REPO" "$1" "$TASK" "$NAME" "$2")"
+  hosts="$(fm_policy_report "$REPO" "$1" "$TASK" "$NAME" "$2" "$policy_file")"
   [ -n "$hosts" ] || return 0
   echo "fm-worker: the round was refused undeclared hosts: $hosts; adding one to the project's policy network is the captain's choice" >&2
   emit_status "Refused undeclared hosts: $hosts" "被拒的未宣告主機：${hosts}"

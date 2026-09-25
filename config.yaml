@@ -49,7 +49,7 @@ projects:               # every repository firstmate drives; design section 15.2
     tasks: design/tasks.json
     # its contract is the top-level project: block below until T-050 moves it
     policy:             # this project's override of the crew policy above
-      network: registry.npmjs.org cdn.playwright.dev playwright.download.prss.microsoft.com playwright.azureedge.net
+      network: registry.npmjs.org cdn.playwright.dev playwright.download.prss.microsoft.com playwright.azureedge.net storage.googleapis.com
                         # the only registries a round's commands reach: what
                         # `setup` downloads from. Never a GitHub host.
 

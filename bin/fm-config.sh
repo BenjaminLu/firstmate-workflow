@@ -131,20 +131,37 @@ fm_policy() { _fm_registry "${3:-config.yaml}" policy "$1" "${2:-}"; }
 # fm_policy_blocked <file> -> each host a round's proxy refused, once
 fm_policy_blocked() { [ -s "${1:-}" ] || return 0; awk 'NF && !seen[$0]++' "$1"; }
 
-# fm_policy_report <repo> <role> <task> <actor> <file> -> the refused hosts,
-#   on one line, and one record of them appended to
+# fm_policy_report <repo> <role> <task> <actor> <file> [policy] -> the
+#   refused hosts, on one line, and one record of them appended to
 #   state/policy/blocked-hosts.jsonl. A round is never given a host it was
 #   refused: firstmate reads the record and raises a choice card to add it
 #   to the project's `policy: network:`, and only the captain's answer
-#   changes the policy.
+#   changes the policy. One JSON object per line:
+#     at        when the round ended, UTC
+#     task, role, actor
+#     project   the project whose policy the round ran under ('' for none)
+#     hosts     each refused host once, in the order it was first refused
+#     declared  the registries the round had
+#     add_to    the config.yaml key a card would add a host to:
+#               projects.<name>.policy.network, or policy.network
+#     source    proxy: fm's own proxy refused them (design 13.1 names what
+#               it cannot see)
 fm_policy_report() {
-  local hosts
+  local hosts project='' declared='[]'
   hosts="$(fm_policy_blocked "$5" | tr '\n' ' ' | sed 's/ $//')"
   [ -n "$hosts" ] || return 0
+  if [ -n "${6:-}" ] && [ -r "$6" ]; then
+    project="$(jq -r '.project // ""' "$6" 2>/dev/null)"
+    declared="$(jq -c '.network // []' "$6" 2>/dev/null)" || declared='[]'
+  fi
   mkdir -p "$1/state/policy" &&
     jq -cn --arg role "$2" --arg task "$3" --arg actor "$4" --arg hosts "$hosts" \
+      --arg project "$project" --argjson declared "${declared:-[]}" \
       --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-      '{at:$at, task:$task, role:$role, actor:$actor, hosts:($hosts | split(" "))}' \
+      '{at:$at, task:$task, role:$role, actor:$actor, project:$project,
+        hosts:($hosts | split(" ")), declared:$declared,
+        add_to:(if $project == "" then "policy.network" else "projects.\($project).policy.network" end),
+        source:"proxy"}' \
       >> "$1/state/policy/blocked-hosts.jsonl"
   printf '%s\n' "$hosts"
 }

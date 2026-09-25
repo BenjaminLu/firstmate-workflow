@@ -1692,11 +1692,28 @@ Everything else is a floor no key loosens:
 - loopback: a round may open ports of its own and connect to them, which
   every suite that starts a server needs, but never the board's port
   (`FM_PORT`, 4173) nor any port that was listening when the round started.
-  If the listeners cannot be read, no loopback port but the proxy is
-  reachable;
+  On macOS the profile says so port by port, and if the listeners cannot be
+  read no loopback port but the proxy is reachable; on Linux the round's
+  loopback is its own network namespace's, where no host listener is;
+- secrets a system service hands out: on macOS the keychain (gh's token,
+  git's osxkeychain helper), the pasteboard, the Internet Accounts and
+  Apple ID stores, Kerberos tickets and Touch ID are out of reach, since no
+  file rule covers a credential served over mach. The list is
+  `SECRET_SERVICES` in `bin/fm-sandbox.sh`; the profile starts from
+  `(allow default)` and names what it denies, because an allow list of
+  services would break toolchains in ways only the canary could find, and
+  what it leaves open hands out no credential. The canary probes the
+  keychain and the pasteboard. One consequence: claude keeps its macOS login
+  in the keychain, so there a round signs in with
+  `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`) or `ANTHROPIC_API_KEY`
+  from the environment; without either claude reports it is not logged in
+  and the chain moves on. TLS roots come from `/etc/ssl/cert.pem`
+  (`SSL_CERT_FILE`) for a tool that would have asked the keychain;
 - the process ulimit is `procs` more than the user already runs, since
   the kernel counts every process the user owns; a count that cannot be
-  taken refuses the round rather than guessing;
+  taken refuses the round rather than guessing. The limits as set reach the
+  round as `SANDBOX_ROUND_LIMITS`: macOS may enforce a lower process limit
+  than it was given, and reports that one back to `ulimit -u`;
 - no unix sockets; `GH_TOKEN`, `GITHUB_TOKEN`, `SSH_AUTH_SOCK` and cloud
   credentials scrubbed; the repository's `.claude/`, `.mcp.json`, `.cursor/`
   and `GEMINI.md` not loaded.
@@ -1707,34 +1724,60 @@ key still counts for a reviewer when no policy layer declares a network.
 **Two layers.** An adapter translates the policy into its CLI's own flags
 and declares which of the eight dimensions (`write read network sockets env
 repo-config refuse ulimit`) they enforce. `bin/fm-sandbox.sh` runs the CLI
-inside an OS sandbox built from the same policy: `sandbox-exec` on macOS,
-which covers all eight - the network is a per-round proxy that allows the
-declared registries and the vendor's own service, and is the only way off
-the machine the profile allows - and `bwrap` on Linux, which mounts only
-what the round may read and gives it a `/tmp` of its own but shares the
-network, so network, sockets and the refused operations stay the vendor's.
-There, claude's own sandbox runs the commands in a network namespace of
-its own, where they may bind loopback without reaching the host's; codex's
-and cursor-agent's cut the network off, loopback included. Before the CLI starts the adapter
-checks the union; a dimension neither covers refuses the round with 2, the
-fallback chain moves on, and nothing runs less confined than its policy.
+inside an OS sandbox built from the same policy, which covers all eight on
+both platforms. The network is a per-round proxy that allows the declared
+registries and the vendor's own service; it is the only way off the
+machine, and it records every host it refuses. On macOS that sandbox is
+`sandbox-exec`, whose profile lets the round reach the proxy's loopback
+port and nothing else off the machine. On Linux it is `bwrap`, which mounts
+only what the round may read, gives it a `/tmp` of its own and a network
+namespace of its own (`--unshare-net`), and binds the proxy's unix socket
+into it; a small forwarder serves that socket on the round's own loopback
+and points the proxy variables at it. Reading is default-deny only in the
+OS sandbox, so no round runs on a host without one. Before the CLI starts
+the adapter checks the union; a dimension neither covers refuses the round
+with 2, the fallback chain moves on, and nothing runs less confined than
+its policy. When the sandbox itself fails before it starts the CLI - its
+proxy, its profile, the process count, the sandbox binary - that is 2 as
+well, not the launcher's exit code read as a model giving up:
+`fm-sandbox.sh --started` writes `started` from inside the sandbox just
+before the CLI, and a round without that line never ran.
 
-A seatbelt cannot be applied inside another, so under macOS's sandbox the
-vendors' own seatbelt sandboxes (claude's, codex's workspace-write,
-cursor-agent's) are switched off and the outer one confines their commands;
-their permission rules stay. On Linux they stay on. claude reuses T-066's
-settings builder for every round; cursor-agent drops `-f` for `--trust
---sandbox`; gemini's flags enforce no OS dimension, so it runs only where
-the OS sandbox covers them all.
+The vendors' own flags, against the proposal's section 4
+(`design/proposals/2026-09-25-crew-permissions/design.md`):
+
+| vendor | Linux | macOS | where it departs from section 4, and why |
+|---|---|---|---|
+| claude | `--restricted --strict-mcp-config --disable-slash-commands --permission-mode dontAsk --settings`: file rules on the worktree and the round's TMPDIR, deny rules, the shell allowed | the same | its own sandbox is off, so the settings carry no `allowedDomains`. On macOS it is a seatbelt, which cannot be applied inside another. On Linux its commands would reach the network through claude's own proxy, which has no way out of the round's namespace and names no host it refuses. The registries are enforced by the OS layer's proxy instead |
+| codex | `--sandbox workspace-write` with its network switch on, `approval_policy="never"`, the scrub list as `shell_environment_policy.exclude`, `mcp_servers={}`, a `CODEX_HOME` of the round's own holding a link to the login, so no user profile | `--sandbox danger-full-access` (a seatbelt cannot nest); the rest the same | the network switch is on because codex has only on and off, and off would keep its commands from the proxy |
+| cursor-agent | `--trust --sandbox enabled`, `-f` dropped, no `--approve-mcps` | `--sandbox disabled` (a seatbelt cannot nest) | on Linux, if cursor's own sandbox cuts the network off before the proxy sees a request, that refusal names no host; the canary shows it per version |
+| gemini | `--approval-mode yolo --extensions none --allowed-mcp-server-names fm-none` | the same | no `--sandbox`: it is a container or a seatbelt, neither of which starts inside the OS sandbox. `yolo`, not `auto_edit`: headless, `auto_edit` refuses every shell command, and the OS sandbox is what confines them. No `--policy` file: which gemini versions take one is unverified, and an unknown flag would fail every gemini round |
 
 **A blocked host.** The proxy records every host it refused to the round's
-`FM_POLICY_BLOCKED` file. `fm-worker.sh` and `fm-review.sh` report them on
-stderr and on the board, and append one record to
-`state/policy/blocked-hosts.jsonl`; firstmate raises a choice card to add a
-host to the project's `policy: network:`. The crew never widens its own
-policy. The board event and firstmate's card step are outside T-105's
-scope: `fm-emit.sh` has no event type for it yet, and the firstmate skill
-does not read the record yet.
+`FM_POLICY_BLOCKED` file, on both platforms and for every vendor.
+`fm-worker.sh` and `fm-review.sh` report them on stderr and on the board
+(`crew_status`, en and zh-TW), and append one JSON line to
+`state/policy/blocked-hosts.jsonl`. That record is what firstmate reads to
+raise its choice card:
+
+```
+{"at":"<UTC>","task":"T-…","role":"worker|reviewer","actor":"…","project":"<name or ''>",
+ "hosts":["<refused>",…],"declared":["<registries the round had>",…],
+ "add_to":"projects.<name>.policy.network | policy.network","source":"proxy"}
+```
+
+The crew never widens its own policy; only the captain's answer changes it.
+The card itself is firstmate's (SK-001, T-107), not T-105's. What the
+record cannot name: a command that ignores the proxy variables and connects
+directly is refused by the OS, which sees an address, or on Linux no route
+at all - never a host name - and a refusal made by a vendor's own sandbox
+before the proxy (cursor-agent on Linux, above) never reaches it.
+
+**Accepted for now.** The worktree's shared git directory - the common
+`.git` of the repository the worktree belongs to - is readable, because git
+run in the worktree has to read it. So a round can read other tasks'
+commits and `.git/config`. It holds no credential fm puts there, and it is
+accepted as it stands until a later task closes it.
 
 **Evidence.** `tests/adapter-contract.test.sh` and `tests/sandbox.test.sh`
 check each vendor's flags and the sandbox profile against the policy, that a
@@ -1743,8 +1786,9 @@ registries reach both layers, and that loopback and GitHub never do - with a
 stand-in for the sandbox binary, since a runner cannot be relied on to have
 one. `bin/fm-canary.sh`, not part of CI, runs one real round per installed
 vendor that tries to write outside, read `~/.ssh`, reach github.com and
-127.0.0.1:4173, connect to the Herdr socket and read another round's temp
-directory, checks that it can use a loopback port it opened itself, and
+127.0.0.1:4173, connect to the Herdr socket, read another round's temp
+directory and, on macOS, read a keychain item and the pasteboard fm filled
+with a nonce, checks that it can use a loopback port it opened itself, and
 records the result per vendor and version in `state/canary/results.jsonl`.
 Which of the vendors' state files each CLI really writes is a claim only
 the canary can confirm.
