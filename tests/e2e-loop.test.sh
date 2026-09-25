@@ -212,6 +212,10 @@ run bin/fm-run.sh once --repo "$r" >/dev/null 2>&1
 assert_fail "test -s '$GHSTATE/prs'" "no green light, no pull request"
 
 run bin/fm-emit.sh --actor captain --type greenlit --en go --tw 開工 >/dev/null
+# a ready task is judged and answered A before the dispatcher starts it (T-059)
+run bash bin/fm-ready.sh judged --task T-1 --decision D-1000 --repo "$r" >/dev/null 2>&1
+mkdir -p "$r/state/decisions"
+printf '{"id":"D-1000","task":"T-1","kind":"choice","chosen":"A"}\n' > "$r/state/decisions/D-1000.json"
 
 # --- turn one: dispatch, worktree, commit, push, pull request -----------
 out1="$(run bin/fm-run.sh once --repo "$r" 2>&1)"

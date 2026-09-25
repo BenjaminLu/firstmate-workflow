@@ -718,6 +718,45 @@ board writes — is never started, and an `unparked` does not bring it back.
 Neither counts as merged, so a task that depends on one waits, and its backlog
 card names the parked or dropped task as its blocker.
 
+**A task that turns ready is judged before it is dispatched (T-059).** At startup
+and after every merge firstmate runs `bin/fm-ready.sh list`, which prints the
+tasks ready by the board's rule and marks those not yet judged. For each one it
+re-reads the spec against current `main` and raises a choice card: A proceed,
+B rescope, C park, D drop, with its recommendation and the evidence in `main`.
+The card's id is allocated with `fm-decide.sh --allocate` like any other card's,
+and a C or D is carried out as the `parked` or `closed` event the board's park
+and drop write (T-058).
+`fm-ready.sh judged --task <id> --decision <D-id>` records the card under
+`state/ready/`, written to a temporary file and renamed into place. A record
+belongs to one readiness episode — the task's dependency list and where in the
+log the last of them merged, or the task was unparked — so a task that goes
+back to backlog, or is parked, and returns is judged again. A trip can leave
+the episode as it was: a dependency added and removed again before it merged.
+So `list` and `cleared` also end every judgment whose task they see out of
+ready or on another episode, replacing its record with one that names no
+card. Firstmate runs `list` after every merge, which is how `design/tasks/`
+changes, and `fm-dispatch.sh` runs `cleared` every tick; a trip made wholly
+between two runs goes unseen. Like the board, it reads a park only on
+untouched work. A decision card about a task does not take it off the list,
+and the board keeps a ready task in the ready lane while its readiness card is
+its only open card. `fm-dispatch.sh` starts only what `fm-ready.sh cleared`
+lists: ready, judged this time, and answered A on the board, which offers D
+only on a card that does. The A must be recorded for that task on a choice
+card; an A on another task's card or on a merge card clears nothing. An
+adopted skill update (SK-*) was judged by its own adoption card, D-SK-*,
+answered A, so it gets no second card the first time it is ready; that
+answer stands only while the task has not been unparked and has never been
+seen with dependencies other than the ones it was adopted with. After either
+it is unjudged, and it cannot get a readiness card: `fm-decide.sh` allocates
+ids and takes authored details only for `T-*` tasks. So it stays held, and
+firstmate tells the captain, until the captain orders it directly.
+`fm-dispatch.sh` holds every other ready task, and
+starts nothing if it cannot read the answers. A task the captain orders
+directly, or a completed rescope, is started with
+`fm-dispatch.sh --task <id>`: the order lifts the
+judgment check and no other, so greenlit, dependencies, park, drop and the
+concurrency limit still hold, and it says which one held the task.
+
 | # | Gate | How it is checked |
 |---|---|---|
 | 1 | branch exists and has commits | `git rev-list --count main..<branch>` > 0 |

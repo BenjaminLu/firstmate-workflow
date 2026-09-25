@@ -82,10 +82,15 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
    mechanism at startup and when requested. Verify observable navigation or
    report that only the opener was invoked; if unavailable, provide the URL and
    limitation. A server start message alone does not prove the page loaded.
+5. Run `bin/fm-ready.sh list --repo <root>` and raise a card for every
+   `unjudged` ready task before any dispatch (see
+   [Judge a task when it turns ready](#judge-a-task-when-it-turns-ready)).
 
 ## Operate the shipped loop
 
-- `bin/fm-dispatch.sh --repo <root> --dry-run` previews ready tasks. Actual dispatch
+- `bin/fm-dispatch.sh --repo <root> --dry-run` previews the ready tasks the
+  captain has cleared, and names on stderr the ready ones still held (see
+  [Judge a task when it turns ready](#judge-a-task-when-it-turns-ready)). Actual dispatch
   checks for any recorded green light, merged dependency events and capacity
   derived from task events, not live process counts. Firstmate must verify the
   green light applies to the proposed work and reconcile actual capacity. When
@@ -138,6 +143,62 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   files to the worker, and pushes with a lease. Exit `75` means the rebuilt
   round was refused before its commit, and nothing was published. Send one
   such round at a time per task.
+
+## Judge a task when it turns ready
+
+A task that turns ready (every `depends_on` merged; not merged, closed, parked
+or in flight) is not simply dispatched. Work merged since it was written may
+already have done part of it, or removed its reason to exist. At startup and
+after every merge, run `bin/fm-ready.sh list --repo <root>`. Each line is
+`<id>`, `judged` or `unjudged`, the decision id or `-`, and the title. For each
+`unjudged` task, one card per task:
+
+1. Re-read its spec and acceptance against current `main`: what later merges
+   already did, whether its premise still holds, whether now is the time.
+   Collect evidence as file and line references in `main`.
+2. Raise one choice card through the normal decision rules above: authored `en`
+   and `zh-TW` details, a bespoke diagram of what the task would still change,
+   an id from `bin/fm-decide.sh --allocate --task <id>` (see
+   [Author and verify captain decisions](#author-and-verify-captain-decisions)),
+   and a background `--await`. Options: **A** proceed (dispatch as written), **B**
+   rescope (the card states the narrower spec you propose), **C** park,
+   **D** drop. Author D under `options.D` in both locales; the board shows a D
+   button and accepts D only on a card that offers it. State your
+   recommendation and the evidence in the explanation.
+3. Right after the request, record it:
+   `bin/fm-ready.sh judged --task <id> --decision <D-id> --repo <root>`. The
+   record lasts only for this time the task became ready; a task that goes back
+   to backlog, or is parked, and returns is listed `unjudged` again. That
+   includes a dependency added and removed again before it merged: `list`
+   ends the judgment when it sees the task out of ready, which is one more
+   reason to run it after every merge. While the readiness card
+   is the task's only open card, the board keeps the task in the ready lane.
+4. Carry out the answer. A: `bin/fm-dispatch.sh` starts it. B: rescope the
+   task's file, `design/tasks/<id>.json`, through a scoped
+   task, then start it with `bin/fm-dispatch.sh --task <id> --repo <root>`.
+   C or D: record it as T-058's event, through the board's park or drop
+   (`POST /tasks` with `{"task":"<id>","action":"park"}` or `"drop"`), which
+   writes `parked` or `closed`. A parked task is not dispatched until it is
+   unparked, and then it is judged again; a dropped one is never dispatched.
+
+Never dispatch a ready task that is `unjudged`, nor one whose answer was not A
+or a completed B, unless the captain orders that task directly.
+`bin/fm-dispatch.sh`, and so the dispatch step of `bin/fm-run.sh once`/`watch`,
+starts only the tasks `bin/fm-ready.sh cleared` lists: ready, judged this time,
+and answered A on a choice card for that same task; an A on another task's card
+or on a merge card clears nothing. An adopted skill update (SK-*) is listed
+`judged` by its own adoption card, D-SK-*, answered A: raise no second card for
+it the first time it is ready. Once it is unparked, or has been seen with
+dependencies other than the ones it was adopted with, it is `unjudged`, but
+it cannot get a readiness card yet: `bin/fm-decide.sh` allocates ids and takes
+authored details only for `T-*` tasks. Do not raise one under another task's
+id. Tell the captain in chat that the skill update is held and why; it starts
+only if the captain orders it directly. `bin/fm-dispatch.sh` holds every other ready task
+and says so, and starts nothing if it cannot read the answers. A task the captain orders directly, or a
+completed B, is started with `bin/fm-dispatch.sh --task <id> --repo <root>`:
+that lifts the judgment check only. Greenlit, dependencies, park, drop and the
+concurrency limit still hold, and it names the one that held the task. Do not
+go around them with `bin/fm-worker.sh --task` for a first round.
 
 ## Review and evidence
 

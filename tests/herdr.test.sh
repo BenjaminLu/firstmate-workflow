@@ -912,9 +912,16 @@ print(json.dumps({'type':'result','result':final,'response':final}))
         self.assertEqual({'completed'},{json.loads(p.read_text())['status'] for p in self.results()})
     def test_real_dispatch_and_run_paths_use_managed_adapters(self):
         # Production dispatch launches the production worker; only git/gh/model
-        # boundaries are fake. No captain decision or external account is used.
+        # boundaries are fake. No external account is used; the only captain
+        # decision is the fixture's A on T-035's readiness card, without which
+        # the dispatcher holds the task (T-059).
         subprocess.run([str(self.repo/'bin/fm-emit.sh'),'--actor','captain','--type','greenlit'],
                        env=self.env,check=True,capture_output=True)
+        subprocess.run(['bash',str(self.repo/'bin/fm-ready.sh'),'judged','--task','T-035',
+                        '--decision','D-1000','--repo',str(self.repo)],
+                       env=self.env,check=True,capture_output=True)
+        (self.repo/'state/decisions').mkdir(parents=True,exist_ok=True)
+        (self.repo/'state/decisions/D-1000.json').write_text('{"id":"D-1000","task":"T-035","kind":"choice","chosen":"A"}\n')
         answer=self.invoke('fm-dispatch.sh')
         self.assertEqual(0,answer.returncode,answer.stderr)
         paths=eventually(lambda:list((self.repo/'state/runs').glob('*/orchestration-result.json')))
