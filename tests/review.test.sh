@@ -488,6 +488,20 @@ assert_eq "$canonical" "$(jq -r 'select(.type=="agent_finished")|.actor' "$rz/st
   "completion retires exactly that canonical reviewer"
 rm -rf "$dz"
 
+# T-104: a reviewer is named from the reviewer roster the installation drew,
+# and a worker's name is refused even when asked for by --name
+dn="$(fixture)"; rn="$dn/repo"; GHn="$(ghstub "$dn")"
+( cd "$rn" && FM_ROOT="$rn" FM_GH="$GHn" FM_ROSTER_SEED=review bin/fm-review.sh --task T-Z --branch work >/dev/null 2>&1 )
+assert_eq "0" "$?" "a review round with no crew yet exits 0"
+named="$(jq -r 'select(.type=="review_opened")|.actor' "$rn/state/events.jsonl" | sed -E 's/^reviewer-([a-z]+)-tz-r[0-9]+$/\1/')"
+assert_eq "true" "$(jq --arg n "$named" 'any(.reviewers[]; . == $n) and (any(.workers[]; . == $n) | not)' "$rn/state/crew/rosters.json")" \
+  "the reviewer's name is on the drawn reviewer roster and not the worker roster"
+worker_name="$(jq -r '.workers[0]' "$rn/state/crew/rosters.json")"
+refused="$(cd "$rn" && FM_ROOT="$rn" FM_GH="$GHn" bin/fm-review.sh --name "$worker_name" --task T-Z --branch work 2>&1)"
+assert_eq "70" "$?" "a worker's name is refused for a reviewer"
+assert_contains "$refused" "crew name $worker_name is on the worker roster" "and the refusal says whose name it is"
+rm -rf "$dn"
+
 # From round three the reviewer is shown what was said about the closed list
 # on the pull request - the worker's latest ask, then every list - and nothing
 # else from it. Without that it reviewed every round from scratch and the
