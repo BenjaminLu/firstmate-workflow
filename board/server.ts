@@ -257,6 +257,8 @@ const state = () => {
   // wins. It only ever matters while the task is untouched - once work has
   // started, the stage the log gives it is what the card shows.
   const parked = new Set<string>();
+  // tasks something other than a decision card has moved
+  const worked = new Set<string>();
   for (const [index, e] of events.entries()) {
     if (!e.task) continue;
     const n = prNumber(e.pr);
@@ -268,6 +270,7 @@ const state = () => {
     if (e.type === "criteria_returned") asking.delete(e.task);
     const s = STAGE[e.type ?? ""];
     if (s) { stage.set(e.task, s); moved.set(e.task, e); }
+    if (s && e.type !== "decision_requested") worked.add(e.task);
     if (s === "merged") settledAt.set(e.task, index);
   }
   // A pending decision is a fact on disk, not a point in a history: while
@@ -279,8 +282,24 @@ const state = () => {
   for (const e of events) if (e.task && !definitions.has(e.task) && !taskIds.includes(e.task)) taskIds.push(e.task);
   // Where the log puts a task. Untouched is not yet a lane: which of backlog
   // or ready it is depends on its dependencies, decided below from this.
+  // A task that turns ready gets a readiness card before anyone starts it
+  // (T-059), and bin/fm-ready.sh records that card's id in state/ready/.
+  // While nothing else has moved the task and no other card is up, that card
+  // is the task waiting to be judged, not the task at the captain's.
+  const readinessCard = (id: string): string | null => {
+    const f = join(ROOT, "state/ready", `${id}.json`);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) || !existsSync(f)) return null;
+    try { return String(JSON.parse(readFileSync(f, "utf8")).decision ?? "") || null; } catch { return null; }
+  };
+  const judging = (id: string) => {
+    if (worked.has(id)) return false;
+    const card = readinessCard(id);
+    return card !== null && pend.every((p: Record<string, unknown>) =>
+      String(p.task ?? "") !== id || String(p.id ?? "") === card);
+  };
   const stageOf = (id: string) => {
     const terminal = FINAL.has(stage.get(id) ?? "");
+    if (!terminal && judging(id)) return "untouched";
     return !terminal && awaiting.has(id) ? "captain" : (stage.get(id) ?? "untouched");
   };
   // The badges a card carries. Only what an event or a pending record says:
@@ -657,7 +676,7 @@ const server = Bun.serve({
         const id = String(body?.id ?? "");
         const chosen = typeof body?.chosen === "string" ? body.chosen : "";
         if (!isDecisionId(id)) return json({ error: "bad decision id" }, 400);
-        if (!["A", "B", "C", "custom"].includes(chosen)) return json({ error: "bad choice" }, 400);
+        if (!["A", "B", "C", "D", "custom"].includes(chosen)) return json({ error: "bad choice" }, 400);
         // Count Unicode code points, preserving the literal text including spaces.
         const text = body?.text;
         if (chosen === "custom" && (typeof text !== "string" || !text.trim()
@@ -676,6 +695,8 @@ const server = Bun.serve({
           return json({ ok: true, already: true, decision, merged: decision.merged ?? null });
         }
         if (!p) return json({ error: "no pending decision" }, 404);
+        // D exists only on a card that offers it: a readiness card's drop (T-059)
+        if (chosen === "D" && !p.details?.en?.options?.D) return json({ error: "bad choice" }, 400);
         // the card's project is what its request recorded. A card recording
         // none is the default project's - a tree with no registry names its
         // ids by the self project but has no registry to merge by name on -

@@ -45,12 +45,13 @@ fm-checkpoint 5
 fm-cleanup 2
 fm-decide 10
 fm-diagram 4
-fm-dispatch 2
+fm-dispatch 3
 fm-emit 8
 fm-gate 5
 fm-merge 4
 fm-project 1
 fm-protocol 4
+fm-ready 3
 fm-reconcile 2
 fm-review 7
 fm-run 2
@@ -135,7 +136,7 @@ while read -r name want; do
     fi
   done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "72" "$total" "every pinned flag and all seven fm option branches were exercised"
+assert_eq "76" "$total" "every pinned flag and all seven fm option branches were exercised"
 
 # A script that grows an option loop has to be pinned here too, and the
 # corpus is the one bin/ci.sh judges - literally, out of
@@ -222,7 +223,7 @@ while IFS= read -r f; do
   grep -qE '^need\(\) \{' <<< "$(fm_strip_comments "$f")" || continue
   local_copies=$((local_copies + 1))
 done < <(fm_shell_corpus "$ROOT/bin")
-assert_eq "8" "$local_copies" "eight scripts carry a local copy of the guard"
+assert_eq "9" "$local_copies" "nine scripts carry a local copy of the guard"
 assert_eq "$(printf '%s\n' "$PINNED" | awk 'NF {n++} END {print n+0}')" \
   "$((sourced + local_copies))" \
   "and every script with an option loop does one or the other, and not both"
