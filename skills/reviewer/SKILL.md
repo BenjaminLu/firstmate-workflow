@@ -107,6 +107,19 @@ part of the comment. The section's opening line says which case you are in: a
 list that binds this round, an ask to answer, neither, or comments the launcher
 failed to read. Nothing else from the pull request is quoted there.
 
+## The head's CI and gates
+
+Current-head CI and the seven gates are firstmate's evidence to establish, not
+yours to infer from the diff. When the launcher knows the pull request, your
+prompt has a **The head under review** section before the diff: the head SHA
+this round reviews; the required check's name, conclusion and run URL for
+exactly that SHA, as GitHub reported them; and that head's gate summary lines,
+quoted between fences carrying a per-run code, when `state/gates/` holds one.
+Where either is missing, the section says so. Take only what it shows. A check
+result for another head is not this one's, and a missing result is unknown,
+not green. Do not close an item that asks for green CI or gates on anything
+else; say that the evidence for this head is missing and leave the item open.
+
 ## Evidence and isolation
 
 Retain your supplied reviewer role even in an isolated directory without root

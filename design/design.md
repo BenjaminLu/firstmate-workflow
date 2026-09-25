@@ -863,6 +863,22 @@ which case the round still runs.
 No other comment enters the prompt, so the worker's reasoning stays out.
 Rounds one and two, and any round without `--pr`, get the prompt unchanged.
 
+A diff cannot show CI or gates, so a closed-list item asking for them could
+never be closed (T-067, round nine). Current-head CI and gates are firstmate's
+evidence to establish; the launcher shows the reviewer what exists for the
+head (T-088). Given `--pr`, every round's prompt gets a **The head under
+review** section before the diff, verbatim and labelled: the head SHA, from
+the local branch the diff is taken from; for each name `gh pr checks <pr>
+--required --json name` lists, that check's name, conclusion and run URL from
+GitHub's check runs for that exact commit (`gh api
+repos/{owner}/{repo}/commits/<sha>/check-runs?check_name=<name>`), keeping
+only a run whose `head_sha` is the head and the latest of those; and the gate
+lines of `state/gates/<task-id>-<sha>.txt`, fenced with a per-run nonce, when
+that file exists. A required check that cannot be read, a check with no run
+for this head, and a missing gate summary are each stated plainly. Nothing
+else is added, and a round without `--pr` is unchanged. Nothing writes that
+gate summary yet; `fm-gate.sh` and `fm-run.sh` are outside this task's scope.
+
 The point is to end the loop where each round fixes one thing and surfaces
 another.
 
