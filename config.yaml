@@ -14,10 +14,11 @@ reviewer:               # the reviewer's engine is the captain's choice
 #   vendor: codex       # the worker uses the top-level vendor above
 
 concurrency: 3          # workers in flight at once
-# roster:               # the fleet's given names, one person per name across
-#   - mira              # workers and reviewers; a run takes one no live run
-#   - noah              # holds. Without it bin/fm-herdr.py's DEFAULT_ROSTER
-#                       # is used. Letters only, six at most.
+# rosters:              # the crew is drawn at random once per installation,
+#   workers:            # 24 workers and 24 reviewers, into state/crew/; see
+#     - mira            # bin/fm.sh roster. A list here pins that role's names
+#   reviewers:          # instead. A name belongs to one role, so one in both
+#     - noah            # lists is refused. Letters only, six at most.
 editor: code            # what /open hands a file to
 
 notifications:          # inside Herdr, a decision card the captain must answer

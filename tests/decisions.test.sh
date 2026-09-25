@@ -70,12 +70,25 @@ assert_contains "$(post '{"id":"nope","chosen":"A"}')" "bad decision id" "it rej
 assert_contains "$(post '{"id":"D-1","chosen":"rm -rf /"}')" "bad choice" "it rejects a choice that is not a letter"
 assert_contains "$(post '{"id":"D-1","chosen":["A"]}')" "bad choice" "it never coerces an array into merge authorization"
 assert_fail "test -f '$d/state/merge-calls'" "neither attempt reached the merge script"
+# The board answers a merge at once and runs fm-merge.sh in the background
+# (design 5.2), so the record says running until the helper exits. Only then
+# does merge-calls hold everything it ever will.
+settled() {   # settled <id>: the record's merge once it is no longer running
+  local f="$d/state/decisions/$1.json" end=$(( $(date +%s) + 30 )) m=""
+  while [ "$(date +%s)" -le "$end" ]; do
+    m="$(jq -r '.merge // empty' "$f" 2>/dev/null)"
+    [ -n "$m" ] && [ "$m" != running ] && break
+    sleep 0.05
+  done
+  printf '%s' "$m"
+}
 
 r="$(post '{"id":"D-1","chosen":"A"}')"
 assert_eq "true" "$(jq -r .ok <<<"$r")" "a valid answer is accepted"
 assert_ok "test -f '$d/state/decisions/D-1.json'" "the answer lands as a file, which is what firstmate waits on"
 assert_eq "A" "$(jq -r .chosen "$d/state/decisions/D-1.json")" "with the choice"
 assert_eq "T-A" "$(jq -r .task "$d/state/decisions/D-1.json")" "and the task it belongs to"
+assert_eq "merged" "$(settled D-1)" "the record says merged once the merge script exits"
 assert_contains "$(cat "$d/state/merge-calls")" "--pr 16" "merge called the merge script with the pull request"
 assert_contains "$(cat "$d/state/merge-calls")" "--task T-A" "and the task"
 assert_fail "test -f '$d/state/pending/D-1.json'" "the pending decision is cleared"
@@ -141,6 +154,7 @@ answer() { jq -cn --arg i "$1" --arg c "$2" '{id:$i,chosen:$c}'; }
 r="$(post "$(answer "$nid" A)")"
 assert_eq "true" "$(jq -r .ok <<<"$r")" "a new-form card is answered"
 assert_ok "test -f '$d/state/decisions/$nid.json'" "its answer lands under its own id"
+assert_eq "merged" "$(settled "$nid")" "its record says merged once the merge script exits"
 assert_contains "$(tail -1 "$d/state/merge-calls")" "--pr 7" "a merge answer calls the merge script"
 assert_contains "$(tail -1 "$d/state/merge-calls")" "--project example-app" "with the card's project"
 assert_eq "example-app" \
@@ -157,6 +171,7 @@ sid=D-firstmate-workflow-T005-1
 printf '{"id":"%s","task":"T-005","kind":"merge","title":"merge self","pr":17}\n' "$sid" \
   > "$d/state/pending/$sid.json"
 assert_eq "true" "$(post "$(answer "$sid" A)" | jq -r .ok)" "a new-form card with no project is answered"
+assert_eq "merged" "$(settled "$sid")" "its record says merged once the merge script exits"
 assert_contains "$(tail -1 "$d/state/merge-calls")" "--pr 17" "and its merge is called"
 assert_lacks "$(tail -1 "$d/state/merge-calls")" "--project" \
   "with no --project read out of its id"

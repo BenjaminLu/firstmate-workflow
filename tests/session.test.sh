@@ -369,6 +369,56 @@ class Session(unittest.TestCase):
         self.assertEqual(['setup', 'check', 'tests'], project['declared'])
         self.assertIsNone(project['setup'], 'status reports; it does not run')
         self.assertFalse((self.repo / 'setup-ran').exists(), 'status never runs setup')
+        self.assertFalse((self.repo / 'state/crew/rosters.json').exists(), 'status never draws a crew')
+    def test_start_draws_the_crew_once_and_a_second_start_keeps_it(self):
+        """T-104: the installation's crew is drawn the first time firstmate runs."""
+        crew = self.repo / 'state/crew/rosters.json'
+        with patch.dict(os.environ, {'FM_ROSTER_SEED': 'first'}):
+            rc, report, _ = self.start_with('vendor: mock\n')
+        self.assertEqual(0, rc)
+        self.assertTrue(report['crew']['drawn_now'])
+        drawn = json.loads(crew.read_text())
+        self.assertEqual((24, 24), (len(drawn['workers']), len(drawn['reviewers'])))
+        self.assertEqual([], [n for n in drawn['workers'] if n in drawn['reviewers']])
+        self.assertEqual(drawn['workers'], report['crew']['workers'])
+        saved = crew.read_bytes()
+        with patch.dict(os.environ, {'FM_ROSTER_SEED': 'second'}):
+            rc, report, _ = self.start_with('vendor: mock\n')
+        self.assertEqual(0, rc)
+        self.assertFalse(report['crew']['drawn_now'])
+        self.assertEqual(saved, crew.read_bytes(), 'a second start keeps the same crew')
+    def roster_cli(self, *args, seed='cli'):
+        env = {k: v for k, v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
+        env['FM_ROSTER_SEED'] = seed
+        return subprocess.run(['bash', str(self.repo / 'bin/fm.sh'), 'roster', *args, '--repo', str(self.repo)],
+                              cwd=self.repo, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    def test_fm_roster_prints_draws_once_and_redraws_only_when_asked(self):
+        crew = self.repo / 'state/crew/rosters.json'
+        none = self.roster_cli()
+        self.assertEqual(1, none.returncode, none.stderr)
+        self.assertIn('no crew drawn yet; roster init draws one', none.stderr)
+        self.assertFalse(crew.exists())
+        init = self.roster_cli('init')
+        self.assertEqual(0, init.returncode, init.stderr)
+        drawn = json.loads(crew.read_text())
+        self.assertIn('workers (24, drawn ' + drawn['drawn_at'] + '): ' + ' '.join(drawn['workers']), init.stdout)
+        self.assertIn('reviewers (24, drawn ' + drawn['drawn_at'] + '): ' + ' '.join(drawn['reviewers']), init.stdout)
+        saved = crew.read_bytes()
+        again = self.roster_cli('init', seed='other')
+        self.assertEqual(1, again.returncode, again.stderr)
+        self.assertIn('already has a crew', again.stderr)
+        self.assertIn('never redrawn unless you ask with --redraw', again.stderr)
+        self.assertEqual(saved, crew.read_bytes())
+        shown = self.roster_cli(seed='other')
+        self.assertEqual(0, shown.returncode, shown.stderr)
+        self.assertIn(' '.join(drawn['reviewers']), shown.stdout)
+        self.assertEqual(saved, crew.read_bytes())
+        redraw = self.roster_cli('init', '--redraw', seed='other')
+        self.assertEqual(0, redraw.returncode, redraw.stderr)
+        self.assertIn('Ranks and service records keyed by the old names stay with the old names', redraw.stdout)
+        redrawn = json.loads(crew.read_text())
+        self.assertNotEqual(drawn['workers'], redrawn['workers'])
+        self.assertIn(' '.join(redrawn['workers']), redraw.stdout)
     def test_emit_status_is_board_path_not_pane_heartbeat(self):
         """T-036: pane text is board activity only after emit-status."""
         d = Path(tempfile.mkdtemp()); self.addCleanup(lambda: shutil.rmtree(d, ignore_errors=True))
