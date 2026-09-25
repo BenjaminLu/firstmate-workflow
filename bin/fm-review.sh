@@ -271,12 +271,22 @@ head_evidence() {
     done <<<"$names"
   fi
   printf '\n## The seven gates for this head\n'
-  local summary="$REPO/state/gates/$TASK-$sha.txt"
+  # The whole file, unfiltered: a filter shows a summary in any other shape
+  # as an empty quote that neither reports results nor says they are missing.
+  # What is not there is then said by gate - fm-gate.sh stops at the first
+  # red one, so a summary can end early, and an empty one lacks all seven.
+  local summary="$REPO/state/gates/$TASK-$sha.txt" n lacking=''
   if [ -f "$summary" ]; then
     fence="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
     printf '\nFrom state/gates/%s-%s.txt, verbatim:\n\n----- begin gate summary %s -----\n' "$TASK" "$sha" "$fence"
-    grep -E '^[[:space:]]*[+x] gate [1-7]: ' "$summary"
+    cat "$summary"
+    [ -z "$(tail -c1 "$summary")" ] || printf '\n'
     printf -- '----- end gate summary %s -----\n' "$fence"
+    for n in 1 2 3 4 5 6 7; do
+      grep -Eq "^[[:space:]]*[+x] gate $n: " "$summary" || lacking="${lacking:+$lacking, }$n"
+    done
+    [ -z "$lacking" ] ||
+      printf '\nThe gate summary for head %s has no result line for gates: %s, so those results are unknown.\n' "$sha" "$lacking"
   else
     printf '\nNo gate summary for head %s exists under state/gates/, so its gate results are unknown.\n' "$sha"
   fi

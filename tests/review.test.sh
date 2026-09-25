@@ -528,15 +528,29 @@ say worker-1 "$pr" "$(printf 'ASK-PASS-CRITERIA:T-ZZ\nANOTHER_TASKS_ASK')"
 ask="$(printf 'Round three: before touching a line.\n\nASK-PASS-CRITERIA:T-Z\n\nLATEST_ASK_BODY with `code` and "quotes"')"
 say worker-1 "$pr" "$ask"
 
-# rounds without --pr are the prompt they always were - an ask sitting on the
-# pull request included. With --pr every round now carries the head's
-# evidence (T-088), tested below.
-for args in "--round 1" "--round 2" "--round 3"; do
+# rounds one and two, with or without --pr, and round three without it, are
+# the prompt they always were - an ask sitting on the pull request included.
+# With --pr every round also carries the head's evidence (T-088, tested
+# below); that section alone is taken out before comparing, so nothing from
+# the pull request's comments can reach rounds one and two unseen.
+sans_head() {  # the prompt without its "The head under review" section
+  awk '$0=="# The head under review"{skip=1; next}
+       skip && $0=="---"{skip=0}
+       !skip' "$1"
+}
+for args in "--round 1" "--round 2" "--round 1 --pr $pr" "--round 2 --pr $pr" "--round 3"; do
   n="$(printf '%s' "$args" | cut -d' ' -f2)"
   # shellcheck disable=SC2086
   review_c "$dc/sent-id.md" $args >/dev/null
   today "$n" > "$dc/today.md"
-  assert_ok "cmp -s '$dc/today.md' '$dc/sent-id.md'" "a prompt for $args is byte-identical to today's"
+  case "$args" in
+    *--pr*)
+      assert_ok "grep -qx '# The head under review' '$dc/sent-id.md'" "a prompt for $args carries the head's evidence"
+      sans_head "$dc/sent-id.md" > "$dc/sent-id-sans.md"
+      assert_ok "cmp -s '$dc/today.md' '$dc/sent-id-sans.md'" "and apart from it is byte-identical to today's" ;;
+    *)
+      assert_ok "cmp -s '$dc/today.md' '$dc/sent-id.md'" "a prompt for $args is byte-identical to today's" ;;
+  esac
 done
 
 review_c "$dc/sent-r3.md" --round 3 --pr "$pr" >/dev/null
@@ -672,19 +686,50 @@ assert_contains "$sent" "Conclusion: success" "and that check's conclusion for t
 assert_contains "$sent" "Run: https://github.com/o/r/actions/runs/7101/job/7101" "and the run it came from"
 assert_contains "$sent" "No gate summary for head $head1" "a missing gate summary is stated"
 
-# the seven lines of this head's gate summary, verbatim, when state/ has one
+# this head's gate summary, verbatim and whole, when state/ has one. Its
+# lines are written by fm-gate.sh's own say(), not by hand from the reader:
+# a fixture copied from the code that parses it proves only that the two agree
+eval "$(sed -n 's/^say()/gate_say()/p' "$ROOT/bin/fm-gate.sh")"
+declare -F gate_say >/dev/null || { echo "fm-gate.sh has no one-line say()" >&2; exit 1; }
+gates="$rc/state/gates/T-Z-$head1.txt"
 mkdir -p "$rc/state/gates"
-{ for g in 1 2 3 4 5 6 7; do printf '  + gate %s: GATE_LINE_%s\n' "$g" "$g"; done
-  printf '  all seven gates green\n'; } > "$rc/state/gates/T-Z-$head1.txt"
+{ for g in 1 2 3 4 5 6 7; do gate_say '+' "$g" "GATE_LINE_$g"; done
+  echo "  all seven gates green"; } > "$gates"
 review_c "$dc/sent-g.md" --round 2 --pr "$prh" >/dev/null
 sent="$(cat "$dc/sent-g.md")"
-assert_contains "$sent" "$(printf '  + gate 1: GATE_LINE_1\n  + gate 2: GATE_LINE_2')" "a head's gate summary is quoted verbatim"
-assert_contains "$sent" "  + gate 7: GATE_LINE_7" "all seven of its lines"
+begin="$(grep -m1 '^----- begin gate summary' "$dc/sent-g.md")"
+quoted="$(awk -v b="$begin" -v e="${begin/begin/end}" '$0==b{on=1;next} $0==e{on=0} on' "$dc/sent-g.md")"
+assert_eq "$(cat "$gates")" "$quoted" "a head's gate summary is quoted verbatim, every line of it"
+assert_contains "$quoted" "  + gate 7: GATE_LINE_7" "all seven of its gate lines"
 assert_lacks "$sent" "No gate summary for head" "and it is not said to be missing"
+assert_lacks "$sent" "has no result line for gates" "nor any gate said to be without a result"
+
+# fm-gate.sh stops at the first red gate: the red line is shown as it is, and
+# every gate after it is said to have no result
+{ for g in 1 2 3 4; do gate_say '+' "$g" "GATE_LINE_$g"; done; gate_say 'x' 5 "RED_GATE_LINE"; } > "$gates"
+review_c "$dc/sent-gx.md" --round 2 --pr "$prh" >/dev/null
+sent="$(cat "$dc/sent-gx.md")"
+assert_contains "$sent" "  x gate 5: RED_GATE_LINE" "a red gate is quoted as red"
+assert_contains "$sent" "The gate summary for head $head1 has no result line for gates: 6, 7" \
+  "and the gates after it are stated to have no result"
+
+# a summary with no gate line in it is not an empty quote that says nothing
+printf 'NOT_A_GATE_LINE\n' > "$gates"
+review_c "$dc/sent-g0.md" --round 2 --pr "$prh" >/dev/null
+sent="$(cat "$dc/sent-g0.md")"
+assert_contains "$sent" "NOT_A_GATE_LINE" "a summary in another shape is still quoted, not filtered away"
+assert_contains "$sent" "has no result line for gates: 1, 2, 3, 4, 5, 6, 7" "and every gate is stated to have no result"
+: > "$gates"
+review_c "$dc/sent-ge.md" --round 2 --pr "$prh" >/dev/null
+assert_contains "$(cat "$dc/sent-ge.md")" "has no result line for gates: 1, 2, 3, 4, 5, 6, 7" \
+  "an empty summary is stated to have no result for any gate"
+{ for g in 1 2 3 4 5 6 7; do gate_say '+' "$g" "GATE_LINE_$g"; done; } > "$gates"
 
 # a new head: the old head's run is not this head's, and neither is a run
-# GitHub hands back for this commit that names another head
-( cd "$rc" && git checkout -q work && echo more >> src/a && git commit -qam more && git checkout -q main )
+# GitHub hands back for this commit that names another head. Only src/a is
+# committed: the fixture's mock adapter is a working-tree change on main, and
+# `commit -a` would carry it onto work and leave main with the stock one
+( cd "$rc" && git checkout -q work && echo more >> src/a && git commit -qm more -- src/a && git checkout -q main )
 head2="$(git -C "$rc" rev-parse work)"
 check_runs "$head2" "$head1" failure 7202
 review_c "$dc/sent-h2.md" --round 1 --pr "$prh" >/dev/null

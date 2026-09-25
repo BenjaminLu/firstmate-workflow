@@ -872,12 +872,16 @@ the local branch the diff is taken from; for each name `gh pr checks <pr>
 --required --json name` lists, that check's name, conclusion and run URL from
 GitHub's check runs for that exact commit (`gh api
 repos/{owner}/{repo}/commits/<sha>/check-runs?check_name=<name>`), keeping
-only a run whose `head_sha` is the head and the latest of those; and the gate
-lines of `state/gates/<task-id>-<sha>.txt`, fenced with a per-run nonce, when
-that file exists. A required check that cannot be read, a check with no run
-for this head, and a missing gate summary are each stated plainly. Nothing
-else is added, and a round without `--pr` is unchanged. Nothing writes that
-gate summary yet; `fm-gate.sh` and `fm-run.sh` are outside this task's scope.
+only a run whose `head_sha` is the head and the latest of those; and the
+whole of `state/gates/<task-id>-<sha>.txt`, unfiltered and fenced with a
+per-run nonce, when that file exists. Its lines are `fm-gate.sh`'s own
+stdout: `  + gate N: …` or `  x gate N: …`. A required check that cannot be
+read, a check with no run for this head, a missing gate summary, and each
+gate the summary has no result line for (it stops at the first red gate, and
+an empty one has none) are stated plainly. Nothing else is added, and a round
+without `--pr` is unchanged. Nothing writes that gate summary yet:
+`fm-run.sh` sends `fm-gate.sh`'s stdout to `/dev/null`, and it is outside
+this task's scope.
 
 The point is to end the loop where each round fixes one thing and surfaces
 another.
