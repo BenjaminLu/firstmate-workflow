@@ -6,16 +6,46 @@ an adapter is allowed to do exactly one thing.
 
 ```
 usage:    <vendor>.sh run <prompt-file> <worktree-dir> <log-file>
-does:     hands the prompt to that vendor's CLI and lets it edit files in <worktree-dir>
+          <vendor>.sh dimensions
+does:     hands the prompt to that vendor's CLI and lets it edit files in <worktree-dir>,
+          confined to the round's permission policy (FM_POLICY)
 must not: run git or gh
 must not: write anywhere outside <worktree-dir> and <log-file>
 exits:    0  done
           1  ran, but did not achieve it (the model gave up, the output is unfit)
-          2  vendor unavailable (CLI missing, not logged in, out of quota, network down)
+          2  vendor unavailable (CLI missing, not logged in, out of quota, network down),
+             or the round's policy has a dimension neither its flags nor the OS sandbox enforce
 ```
 
 Only `2` falls back to the next vendor in `config.yaml`. A `1` is a normal
 failed attempt and goes to the gates and the reviewer like any other.
+
+**Every round runs under one policy fm owns (T-105).** `fm_policy` in
+`bin/fm-config.sh` resolves it per role from `config.yaml` (`policy:`, with
+a project's `projects.<name>.policy:` over it), and `fm-worker.sh` and
+`fm-review.sh` hand it over as `FM_POLICY`. The operator's own CLI settings
+are no part of it. It has eight dimensions: `write`, `read`, `network`,
+`sockets`, `env`, `repo-config`, `refuse`, `ulimit`. An adapter translates
+the policy into its CLI's own flags and says which dimensions those flags
+enforce (`<vendor>.sh dimensions` prints them); `bin/fm-sandbox.sh` runs the
+CLI inside an OS sandbox built from the same policy - `sandbox-exec` on
+macOS, `bwrap` on Linux - and covers what it can of the rest. Before the CLI
+starts, `fm_adapter_confine` in `_lib.sh` checks the union: a dimension
+neither covers refuses the round with `2`, so the fallback chain moves on,
+and nothing degrades to an unconfined round. An adapter reached without
+`FM_POLICY` takes the engine's own policy for its role, never none.
+
+| vendor | its own flags | under macOS's sandbox-exec |
+|---|---|---|
+| claude | T-066's settings for every round: `--restricted`, dontAsk, file rules on the worktree and TMPDIR, deny rules, its sandbox with the policy's registries | its sandbox off (a seatbelt cannot nest); the shell allowed, the deny rules kept |
+| codex | `--sandbox workspace-write`, network on only when a registry is declared, no MCP servers | `--sandbox danger-full-access` inside the outer one |
+| cursor-agent | `--trust --sandbox enabled` instead of `-f` | `--trust --sandbox disabled` inside the outer one |
+| gemini | `--approval-mode yolo --extensions none`, no MCP server | the same; refused where the sandbox does not cover the network (Linux) |
+
+A host the round's proxy refused lands in `FM_POLICY_BLOCKED`; the calling
+script reports it and records it under `state/policy/`, and the crew never
+widens its own policy. `bin/fm-canary.sh` runs one real round per installed
+vendor and records, per vendor and version, whether each probe was blocked.
 
 **The exit code is not the verdict.** `cursor-agent` prints
 `Authentication required` and exits `0`; a vendor that is out of quota or off

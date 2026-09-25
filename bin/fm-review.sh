@@ -192,6 +192,26 @@ esac
 # adapter a checkout nobody made for it.
 unset FM_RUN_REVIEW FM_REVIEW_CHECKOUT FM_REVIEW_NETWORK
 
+# The round's permission policy (T-105), in either mode: config.yaml's, for
+# a reviewer, with this project's override, read from the checkout running
+# the round like the mode. Every adapter confines its CLI to it or refuses
+# the round. The legacy `reviewer: network:` is checked first so its
+# refusal reads as it always has.
+bad_host="$(fm_review_network_refusal "$(fm_cfg_in reviewer network)")"
+[ -z "$bad_host" ] || {
+  echo "fm-review: config.yaml's reviewer network names $bad_host" >&2
+  emit --review-outcome infrastructure_error --type review_failed \
+       --en "review round $ROUND could not start" --tw "第 $ROUND 輪審核無法開始"
+  exit 65; }
+policy_file="$FM_RUN_DIR/policy.json"; blocked_file="$FM_RUN_DIR/blocked-hosts"
+: > "$blocked_file"
+fm_policy reviewer "" config.yaml > "$policy_file" || {
+  echo "fm-review: config.yaml's crew policy does not read; no round runs without one" >&2
+  emit --review-outcome infrastructure_error --type review_failed \
+       --en "review round $ROUND could not start" --tw "第 $ROUND 輪審核無法開始"
+  exit 65; }
+export FM_POLICY="$policy_file" FM_POLICY_BLOCKED="$blocked_file"
+
 # A clone rather than a worktree: a worktree shares the task's .git, so git
 # run inside it writes outside it. The clone has its own objects, the base
 # and the head under fixed names, and no remote to push to.
@@ -226,17 +246,11 @@ if [ "$REVIEW_MODE" = run ]; then
   emit_status "Preparing a fresh checkout of $BRANCH" "正在準備 $BRANCH 的全新 checkout"
   sweep_checkouts
   # The sandbox reaches only these hosts: what `setup` needs, declared by the
-  # checkout running the round. No GitHub host belongs here, since the
-  # network is what keeps a push or a gh write from leaving the sandbox; the
-  # rule is the adapters' own (fm_review_network_refusal), said here as a
-  # configuration error before anything is built.
-  FM_REVIEW_NETWORK="$(fm_cfg_in reviewer network)"; export FM_REVIEW_NETWORK
-  bad_host="$(fm_review_network_refusal "$FM_REVIEW_NETWORK")"
-  [ -z "$bad_host" ] || {
-    echo "fm-review: config.yaml's reviewer network names $bad_host" >&2
-    emit --review-outcome infrastructure_error --type review_failed \
-         --en "review round $ROUND could not start" --tw "第 $ROUND 輪審核無法開始"
-    exit 65; }
+  # policy the checkout running the round resolves. No GitHub host belongs
+  # here, since the network is what keeps a push or a gh write from leaving
+  # the sandbox; fm_policy has refused one, and loopback, above.
+  FM_REVIEW_NETWORK="$(python3 -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["network"]))' \
+    "$policy_file")"; export FM_REVIEW_NETWORK
   build_checkout >/dev/null 2>&1 || {
     echo "fm-review: could not make a fresh checkout of $BRANCH against $BASE for a run-mode review" >&2
     emit --review-outcome infrastructure_error --type review_failed \
@@ -528,6 +542,13 @@ for v in $FM_VENDOR_SKIPPED; do
   emit --type vendor_unavailable --en "$v unavailable, trying the next" \
        --tw "$v 不可用，換下一家"
 done
+# A host the round's proxy refused is reported, never allowed: firstmate
+# raises the choice card that adds it to the project's registries.
+blocked_hosts="$(fm_policy_report "$REPO" reviewer "$TASK" "$NAME" "$blocked_file")"
+if [ -n "$blocked_hosts" ]; then
+  echo "fm-review: the round was refused undeclared hosts: $blocked_hosts; adding one to the project's policy network is the captain's choice" >&2
+  emit_status "Refused undeclared hosts: $blocked_hosts" "被拒的未宣告主機：${blocked_hosts}"
+fi
 verdict="$(attempt_output)"
 
 # The chain says which of the two this was, and both callers read the same

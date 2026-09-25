@@ -96,6 +96,12 @@ fm_review_host_refusal() {
       "$d"|*."$d") printf 'is a GitHub host; a run-mode reviewer may not reach GitHub\n'; return 0 ;;
     esac
   done
+  # and loopback, which is the captain's board, dev servers and Herdr (T-105)
+  case "$h" in
+    localhost|*.localhost) printf 'is loopback; a crew round may not reach loopback\n'; return 0 ;;
+    *[!0-9.]*) ;;
+    *) printf 'is an address; a registry is named, and loopback is never one\n'; return 0 ;;
+  esac
 }
 
 # fm_review_network_refusal <hosts> -> "<host>, which <why>" for the first of
@@ -148,6 +154,85 @@ fm_adapter_rule_path() {
     *[[:space:]\"\\*\(\),]*) echo "adapter: $dir cannot be written into a permission rule" >&2; exit 64 ;;
   esac
   printf '%s\n' "$dir"
+}
+
+# --- the round's permission policy (T-105) --------------------------------
+# Every round runs under one policy fm owns, per role: fm_policy in
+# bin/fm-config.sh resolves it from config.yaml, fm-worker.sh and
+# fm-review.sh hand it over as FM_POLICY, and nothing about it comes from
+# the operator's own CLI settings. Each adapter translates it into its CLI's
+# flags and says which dimensions those flags enforce; bin/fm-sandbox.sh
+# enforces what it can of the rest from outside the CLI. A dimension that
+# neither enforces refuses the round with 2, before the CLI starts, so the
+# fallback chain moves on and no round runs less confined than its policy.
+FM_POLICY_DIMENSIONS="write read network sockets env repo-config refuse ulimit"
+_fm_engine="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+
+# fm_adapter_policy -> FM_POLICY, FM_POLICY_HOSTS, FM_OUTER_OS, FM_OUTER_DIMS.
+# An adapter reached without a policy - by hand, or by a caller that does
+# not know about one - takes the engine's own for its role rather than none.
+# shellcheck disable=SC2034  # read by the adapter that sourced this
+fm_adapter_policy() {
+  local f
+  if [ -n "${FM_POLICY:-}" ]; then
+    [ -r "$FM_POLICY" ] || { echo "adapter: no policy at $FM_POLICY; refusing an unconfined round" >&2; exit 65; }
+  else
+    f="$(mktemp "${TMPDIR:-/tmp}/fm-policy.XXXXXX")" || exit 70
+    # shellcheck disable=SC2016  # expanded by the inner shell
+    bash -c '. "$1/bin/fm-config.sh" && fm_policy "$2" "" "$1/config.yaml"' fm-policy \
+      "$_fm_engine" "${FM_ROLE:-worker}" > "$f" || {
+      rm -f "$f"; echo "adapter: the crew policy does not read; refusing an unconfined round" >&2; exit 65; }
+    FM_POLICY="$f"; export FM_POLICY
+  fi
+  FM_POLICY_HOSTS="$(python3 -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["network"]))' \
+    "$FM_POLICY" 2>/dev/null)" || { echo "adapter: the policy at $FM_POLICY does not read" >&2; exit 65; }
+  # fm_policy refuses these already; a policy file that says otherwise was
+  # not written by it, and no vendor flag is given GitHub or loopback
+  local bad
+  bad="$(fm_review_network_refusal "$FM_POLICY_HOSTS")"
+  [ -z "$bad" ] || { echo "adapter: the policy's network names $bad; refusing the round" >&2; exit 65; }
+  FM_OUTER_OS="$("$_fm_engine/bin/fm-sandbox.sh" os)"
+  FM_OUTER_DIMS="$("$_fm_engine/bin/fm-sandbox.sh" covers --policy="$FM_POLICY")" || {
+    echo "adapter: the policy at $FM_POLICY does not read" >&2; exit 65; }
+  [ -n "$FM_OUTER_DIMS" ] || FM_OUTER_OS=''
+}
+
+# fm_adapter_confine <vendor> <workdir> <dimension>... -> FM_LAUNCH, or exit 2.
+# The dimensions are what the vendor's own flags enforce for this round.
+# FM_LAUNCH is the words the CLI is started behind: the OS sandbox when this
+# host has one, and otherwise the environment scrub and ulimits alone.
+# shellcheck disable=SC2034  # read by the adapter that sourced this
+fm_adapter_confine() {
+  local vendor="$1" work="$2" have d missing=''
+  have=" ${*:3} $FM_OUTER_DIMS "
+  for d in $FM_POLICY_DIMENSIONS; do
+    case "$have" in *" $d "*) ;; *) missing="$missing $d" ;; esac
+  done
+  if [ -n "$missing" ]; then
+    echo "$vendor: this round's policy needs$missing, which neither $vendor's own flags nor an OS sandbox enforce on this host; refusing the round" >&2
+    exit 2
+  fi
+  # absolute: the adapter starts the CLI after changing into it
+  work="$(cd "$work" 2>/dev/null && pwd -P)" || { echo "$vendor: no directory at $2" >&2; exit 64; }
+  FM_LAUNCH=("$_fm_engine/bin/fm-sandbox.sh")
+  if [ -n "$FM_OUTER_OS" ]; then
+    FM_LAUNCH+=(run --policy="$FM_POLICY" --root="$work" --vendor="$vendor")
+    # the CLI's own final answer is written where the launcher reads it
+    [ -z "${FM_ATTEMPT_DIR:-}" ] || FM_LAUNCH+=(--write="$FM_ATTEMPT_DIR")
+    [ -z "${FM_FINAL_PATH:-}" ] || FM_LAUNCH+=(--write="$(dirname "$FM_FINAL_PATH")")
+    [ -z "${FM_POLICY_BLOCKED:-}" ] || FM_LAUNCH+=(--blocked="$FM_POLICY_BLOCKED")
+  else
+    FM_LAUNCH+=(plain --policy="$FM_POLICY")
+  fi
+  FM_LAUNCH+=(--)
+}
+
+# fm_adapter_dimensions <dimension>... -> the declaration `<vendor>.sh
+# dimensions` prints: what this vendor's flags enforce here, and what the OS
+# sandbox adds
+fm_adapter_dimensions() {
+  printf 'native: %s\n' "$*"
+  printf 'sandbox: %s\n' "${FM_OUTER_DIMS:-none}"
 }
 
 # Keep the CLI's exit separately from a failed transcript writer. Either failure

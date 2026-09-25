@@ -1652,6 +1652,78 @@ global skills.
   nothing secret may enter it — no local paths, no credentials, no customer
   content. That includes the design and task list of every registered project;
   section 15.8 names the captain decision private projects are waiting on.
+- Every crew round runs under one permission policy fm owns (13.1).
+
+### 13.1 Crew permissions (T-105)
+
+A worker used to inherit the operator's personal CLI settings: on the
+captain's machine that allowed gh-axi, Herdr, a browser, reading any path
+and editing `~/.claude/skills`, and refused bun, npm, python and chmod.
+cursor-agent ran with `-f` and no sandbox; codex and gemini ran on vendor
+defaults. Now every round, worker or reviewer, whatever its vendor, runs
+under one policy fm owns.
+
+**The policy.** `fm_policy <role>` in `bin/fm-config.sh` resolves it from
+`config.yaml`'s `policy:` block, flat keys for both roles or a `worker:` /
+`reviewer:` block for one, with the project's `projects.<name>.policy:` over
+it. The keys are `network` (the registries the round's commands may reach;
+default none; a later layer replaces an earlier one), `read` and
+`never_read` (added to, never replacing) and the `procs` / `cpu` ulimits.
+Everything else is a floor no key loosens:
+
+- writes: the worktree or checkout, and TMPDIR;
+- reads: default-deny outside the write roots and the toolchain; never
+  `~/.ssh`, `~/.config/gh`, cloud credentials, any vendor's home but for that
+  vendor's own auth, fm's `state/` and the other worktrees in it;
+- commands: allowed inside the sandbox; git push, gh, Herdr, browsers and
+  MCP refused;
+- network: the declared registries only; GitHub and loopback are refused
+  as values, and refused again by the proxy whatever a policy file says;
+- no unix sockets; `GH_TOKEN`, `GITHUB_TOKEN`, `SSH_AUTH_SOCK` and cloud
+  credentials scrubbed; the repository's `.claude/`, `.mcp.json`, `.cursor/`
+  and `GEMINI.md` not loaded.
+
+Before T-105 the run-mode reviewer's hosts were `reviewer: network:`; that
+key still counts for a reviewer when no policy layer declares a network.
+
+**Two layers.** An adapter translates the policy into its CLI's own flags
+and declares which of the eight dimensions (`write read network sockets env
+repo-config refuse ulimit`) they enforce. `bin/fm-sandbox.sh` runs the CLI
+inside an OS sandbox built from the same policy: `sandbox-exec` on macOS,
+which covers all eight - the network is a per-round proxy that allows the
+declared registries and the vendor's own service, and is the only address
+the profile lets the round reach - and `bwrap` on Linux, which mounts only
+what the round may read but shares the network, so network, sockets and
+the refused operations stay the vendor's. Before the CLI starts the adapter
+checks the union; a dimension neither covers refuses the round with 2, the
+fallback chain moves on, and nothing runs less confined than its policy.
+
+A seatbelt cannot be applied inside another, so under macOS's sandbox the
+vendors' own seatbelt sandboxes (claude's, codex's workspace-write,
+cursor-agent's) are switched off and the outer one confines their commands;
+their permission rules stay. On Linux they stay on. claude reuses T-066's
+settings builder for every round; cursor-agent drops `-f` for `--trust
+--sandbox`; gemini's flags enforce no OS dimension, so it runs only where
+the OS sandbox covers them all.
+
+**A blocked host.** The proxy records every host it refused to the round's
+`FM_POLICY_BLOCKED` file. `fm-worker.sh` and `fm-review.sh` report them on
+stderr and on the board, and append one record to
+`state/policy/blocked-hosts.jsonl`; firstmate raises a choice card to add a
+host to the project's `policy: network:`. The crew never widens its own
+policy. The board event and firstmate's card step are outside T-105's
+scope: `fm-emit.sh` has no event type for it yet, and the firstmate skill
+does not read the record yet.
+
+**Evidence.** `tests/adapter-contract.test.sh` and `tests/sandbox.test.sh`
+check each vendor's flags and the sandbox profile against the policy, that a
+vendor missing a dimension without the OS sandbox is refused, that declared
+registries reach both layers, and that loopback and GitHub never do - with a
+stand-in for the sandbox binary, since a runner cannot be relied on to have
+one. `bin/fm-canary.sh`, not part of CI, runs one real round per installed
+vendor that tries to write outside, read `~/.ssh`, reach github.com and
+127.0.0.1:4173 and connect to the Herdr socket, and records the result per
+vendor and version in `state/canary/results.jsonl`.
 
 ---
 
