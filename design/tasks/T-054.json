@@ -15,8 +15,10 @@
     "i18n/ui.en.json",
     "i18n/ui.zh-TW.json",
     "tests/board.test.sh",
+    "tests/decisions.test.sh",
     "tests/e2e/board.spec.ts",
-    "tests/e2e/fixture.ts"
+    "tests/e2e/fixture.ts",
+    "design/tasks.json"
   ],
   "acceptance": [
     "Implements the board half of design.md section 15.4. Replay keys tasks, pull requests and decisions by (project, id), so two projects with the same task id never merge into one lane card. Lane cards, crew bubbles and decision cards show a project chip; ?project= filters and its absence shows every project. Merge cards link the pull request on that project's repository.",
