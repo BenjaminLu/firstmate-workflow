@@ -66,6 +66,8 @@ them.
 3. **Merging is the captain's.** It arrives as a decision card on the board,
    never as a sentence in a conversation.
 
+How to propose and land a change is in [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Getting set up
 
 ```sh
@@ -141,8 +143,10 @@ project:
 This repository declares its own: `setup` installs Bun dependencies and the
 Playwright browser (without them a fresh worktree's `bin/ci.sh` skips its
 end-to-end stage), `check` is `bin/ci.sh` with `FM_CI_MAX_SECONDS=600`, and
-`test` runs a changed `*.test.sh` with bash. Its `docs` are `design/**` and
-`README.md`; skills are behaviour, so they are not docs.
+`test` runs a changed `*.test.sh` with bash. Its `docs` are `design/**`,
+`README.md`, `LICENSE`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `SECURITY.md`,
+`.github/ISSUE_TEMPLATE/**` and `.github/pull_request_template.md`; skills
+are behaviour, so they are not docs.
 
 ## State
 
@@ -160,3 +164,7 @@ EN / 繁 / 简.
 Driving other repositories from this one installation is designed in section
 15 of the design and not yet built: until the M3 tasks land, firstmate drives
 only this repository.
+
+## License
+
+MIT (SPDX: `MIT`). See [LICENSE](LICENSE).
