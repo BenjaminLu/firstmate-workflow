@@ -1,0 +1,17 @@
+{
+  "id": "T-101",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "README: the captain's voxel banner at the top",
+  "scope": [
+    "README.md",
+    "design/marketing/banner.png",
+    "design/tasks/T-101.json"
+  ],
+  "acceptance": [
+    "The captain chose a README banner (2026-09-25): a voxel-art frigate crewed by a captain and AI crew under a 'firstmate-workflow' sail, headline 'MORE MINDS HIGHER IMPACT'. The image file is at /private/tmp/claude-501/firstmate-banner.png (1983x793 PNG). Copy it byte for byte into design/marketing/banner.png. Do not edit, recompress or regenerate it. Its own entry must be committed as design/tasks/T-101.json on this branch. Evidence is the required GitHub check and the seven gates.",
+    "README.md opens with the banner: an <img> of design/marketing/banner.png at full width with alt text that describes the scene in one sentence, placed above everything else. Nothing else in README.md changes.",
+    "Stay inside this scope. If the image cannot be read from /private/tmp/claude-501/firstmate-banner.png, stop and say so; do not substitute another image."
+  ]
+}
