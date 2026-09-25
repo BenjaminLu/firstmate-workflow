@@ -431,6 +431,40 @@ class Session(unittest.TestCase):
         self.assertEqual('crew_status', ev['type'])
         self.assertEqual('pane heartbeat', ev['data']['activity']['en'])
         self.assertNotIn('progress', ev.get('data', {}))
+    def reviewer_report(self, config, mode='start'):
+        """T-066: fm-session.sh itself, with the session engine stubbed out.
+
+        `exec` keeps the pid, so the frozen-entry check passes without a
+        snapshot, and the stub stands in for everything after the report."""
+        (self.repo / 'bin/fm-herdr.py').write_text('import sys\nprint("stub " + " ".join(sys.argv[1:3]))\n')
+        (self.repo / 'config.yaml').write_text(config)
+        env = {k: v for k, v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
+        return subprocess.run(
+            ['bash', '-c', 'export FM_ENTRY_PID=$$ FM_ENTRY_SCRIPT=fm-session.sh; exec "$0" "$@"',
+             str(self.repo / 'bin/fm-session.sh'), mode, '--repo', str(self.repo)],
+            env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
+    def test_start_reports_a_project_that_names_no_reviewer(self):
+        for config, missing in [('vendor: claude\n', 'vendor and model'),
+                                ('vendor: claude\nreviewer:\n  vendor: claude\n', 'model'),
+                                ('reviewer:\n  model: opus-5\n', 'vendor')]:
+            result = self.reviewer_report(config)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn('stub session start', result.stdout, 'startup carries on after the report')
+            self.assertIn('config.yaml names no reviewer ' + missing + ';', result.stderr, config)
+            self.assertIn("the reviewer is the captain's choice", result.stderr)
+            self.assertIn('installed adapters:', result.stderr)
+    def test_start_is_quiet_when_the_reviewer_is_named(self):
+        result = self.reviewer_report('reviewer:\n  vendor: claude\n  model: opus-5\n')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn('stub session start', result.stdout)
+        self.assertNotIn('names no reviewer', result.stderr)
+        # and this repository names its own: claude and opus-5, the captain's choice
+        result = self.reviewer_report((root / 'config.yaml').read_text())
+        self.assertNotIn('names no reviewer', result.stderr)
+    def test_status_does_not_repeat_the_reviewer_report(self):
+        result = self.reviewer_report('vendor: claude\n', mode='status')
+        self.assertIn('stub session status', result.stdout)
+        self.assertNotIn('names no reviewer', result.stderr)
 
 unittest.main(argv=['session'], verbosity=2)
 PY

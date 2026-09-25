@@ -798,4 +798,339 @@ rm -f "$GHSTATE/down"
 unset GHSTATE
 rm -rf "$dc"
 
+# --- run mode (T-066) --------------------------------------------------------
+# A reviewer that only reads the diff cannot run a test or prove fail-first.
+# In run mode it gets a fresh clone of the head, outside every worktree, which
+# the round removes when it ends. The work branch here declares a contract of
+# its own, so the prompt can be shown to carry the branch's, not main's.
+run_fixture() {
+  local d; d="$(fixture)"
+  ( cd "$d/repo" && git checkout -q work &&
+    printf 'vendor: mock\nproject:\n  check: make check-it\n' > config.yaml &&
+    git commit -qam "declare a contract" && git checkout -q main ) >/dev/null 2>&1
+  printf '%s' "$d"
+}
+# an engine that says it can be confined, and reports what it was handed
+runner_adapter() {   # runner_adapter <repo>
+  cat > "$1/bin/adapters/runner.sh" <<'M'
+#!/usr/bin/env bash
+# fm:review-run
+[ "$1" = "run" ] || exit 64
+cp "$2" "$FM_SEEN/prompt.md"
+ck="${FM_REVIEW_CHECKOUT:-}"
+{ printf 'mode=%s\n' "${FM_RUN_REVIEW:-}"
+  printf 'checkout=%s\n' "$ck"
+  printf 'head=%s\n' "$(git -C "$ck" rev-parse HEAD 2>/dev/null)"
+  printf 'base=%s\n' "$(git -C "$ck" rev-parse fm/base 2>/dev/null)"
+  printf 'remotes=%s\n' "$(git -C "$ck" remote 2>/dev/null | tr '\n' ' ')"
+  printf 'a=%s\n' "$(cat "$ck/src/a" 2>/dev/null)"
+  printf 'network=%s\n' "${FM_REVIEW_NETWORK:-}"
+  printf 'xdg=%s\nbun=%s\npw=%s\nnpm=%s\n' "${XDG_CACHE_HOME:-}" "${BUN_INSTALL_CACHE_DIR:-}" \
+    "${PLAYWRIGHT_BROWSERS_PATH:-}" "${npm_config_cache:-}"
+} > "$FM_SEEN/seen"
+[ "${FM_RUNNER_SILENT:-}" = 1 ] && { printf 'no verdict\n' > "$3/v.txt"; exit 0; }
+printf 'Executed: make check-it\n%s\n' "${FM_VERDICT:-APPROVE:T-Z}" > "$3/v.txt"
+exit 0
+M
+  chmod +x "$1/bin/adapters/runner.sh"
+}
+# an engine that cannot be confined: it must never be handed a run-mode round
+plain_adapter() {   # plain_adapter <repo> <name>
+  cat > "$1/bin/adapters/$2.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+: > "$FM_SEEN/plain-ran"
+printf 'APPROVE:T-Z\n' > "$3/v.txt"
+exit 0
+M
+  chmod +x "$1/bin/adapters/$2.sh"
+}
+seen_of() { sed -n "s/^$1=//p" "$2/seen" 2>/dev/null; }
+
+dm="$(run_fixture)"; rm_="$dm/repo"; GHm="$(ghstub "$dm")"
+runner_adapter "$rm_"
+printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n' > "$rm_/config.yaml"
+outM="$(cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
+  bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_eq "0" "$?" "a run-mode round exits 0"
+ck="$(seen_of checkout "$dm")"
+assert_eq "1" "$(seen_of mode "$dm")" "the adapter is told the round is a run-mode one"
+assert_matches "$ck" '^/.+/checkout$' "and is handed the checkout, as an absolute path"
+rp="$(cd "$rm_" && pwd -P)"
+case "$ck/" in "$rm_"/*|"$rp"/*) inside=1 ;; *) inside=0 ;; esac
+assert_eq "0" "$inside" "the checkout is outside the repository and every worktree in it"
+assert_eq "$(git -C "$rm_" rev-parse work)" "$(seen_of head "$dm")" "the checkout is the head under review"
+assert_eq "SECRET_WORKER_REASONING" "$(seen_of a "$dm")" "with the head's files checked out"
+assert_eq "$(git -C "$rm_" rev-parse main)" "$(seen_of base "$dm")" "and the base under fm/base, for fail-first"
+assert_eq "" "$(seen_of remotes "$dm")" "and no remote to push to"
+assert_fail "test -e '$ck'" "the round removes the checkout when it ends"
+assert_fail "test -e '$(dirname "$ck")'" "and the directory made for it"
+assert_contains "$(cat "$dm/ghcalls")" "pr comment" "fm-review.sh itself posts the run-mode verdict"
+assert_contains "$outM" "APPROVE:T-Z" "and the verdict comes back"
+sentM="$(cat "$dm/prompt.md")"
+assert_contains "$sentM" "# Run mode" "the run-mode prompt says what the round is"
+assert_contains "$sentM" "$ck" "and names the checkout"
+assert_contains "$sentM" "make check-it" "and carries the contract the branch under review declares"
+assert_contains "$sentM" "git checkout fm/base -- <file>" "and says how to prove fail-first"
+assert_contains "$sentM" "**Executed**" "and asks which evidence was executed"
+assert_contains "$sentM" "**Read, not run**" "and which was only read"
+assert_contains "$sentM" "SECRET_WORKER_REASONING" "and still carries the diff"
+assert_contains "$sentM" "Find the reason to reject" "and the reviewer skill"
+assert_fail "grep -q 'state/worktrees' '$dm/prompt.md'" "the run-mode prompt names no worktree path"
+evM="$rm_/state/events.jsonl"
+assert_eq "review_opened approved agent_finished" \
+  "$(jq -r 'select(.type=="review_opened" or .type=="approved" or .type=="review_failed" or .type=="agent_finished")|.type' "$evM" | tr '\n' ' ' | sed 's/ $//')" \
+  "a run-mode round opens the review and ends it with approved"
+assert_eq "reviewer|T-Z" "$(jq -r 'select(.type=="review_opened")|[.data.role,.task]|join("|")' "$evM")" \
+  "review_opened carries the reviewer role and the task"
+assert_eq "reviewer|T-Z" "$(jq -r 'select(.type=="approved")|[.data.role,.task]|join("|")' "$evM")" \
+  "approved carries the reviewer role and the task"
+assert_eq "Review the authored task" "$(jq -r 'select(.type=="approved")|.data.activity.en' "$evM")" \
+  "with the authored activity line"
+assert_contains "$(jq -r 'select(.type=="crew_status")|.data.activity.en' "$evM")" "fresh checkout" \
+  "and the board is told the checkout is being made"
+
+assert_eq "" "$(seen_of network "$dm")" "a project that declares no reviewer network gives the sandbox none"
+assert_contains "$sentM" "network only for these
+hosts: none" "and the prompt says so"
+assert_lacks "$sentM" "read-only gh" "the prompt offers no gh, which the sandbox cannot reach"
+
+# setup's caches live under $HOME by default, where the sandbox refuses
+# writes; the round points each one into its own directory in the temp dir
+ckroot="$(dirname "$ck")"
+for cache in xdg bun pw npm; do
+  cv="$(seen_of "$cache" "$dm")"
+  case "$cv" in "$ckroot"/cache/*) under=1 ;; *) under=0 ;; esac
+  assert_eq "1" "$under" "the $cache cache points into the round's own directory, not \$HOME ($cv)"
+done
+
+# A run-mode reviewer judges the head by running it. CI and the gates are
+# firstmate's merge gate, not a review criterion (captain, 2026-09-25), so a
+# run-mode round fetches no CI from GitHub and its prompt carries neither
+# T-088's head section nor any other CI listing. This gh answers the way gh
+# does - `pr checks` prints its list and exits 8 for a pending check, `api`
+# returns the head's check runs - so a round that did read CI would show it.
+ghci() {   # ghci <dir> <head oid>
+  mkdir -p "$1/stub"
+  cat > "$1/stub/gh" <<M
+#!/usr/bin/env bash
+echo "gh \$*" >> "$1/ghcalls"
+case "\$1 \$2" in
+  "pr view") printf '{"comments":[],"headRefOid":"%s","state":"OPEN"}\n' "$2" ;;
+  "pr checks") case " \$* " in *" --jq "*) printf 'ci\n' ;;
+      *) printf '[{"bucket":"pass","name":"ci","state":"SUCCESS","workflow":"CI_WORKFLOW"}]\n' ;; esac
+    exit 8 ;;
+  "api "*) printf '{"check_runs":[{"id":1,"name":"ci","head_sha":"%s","status":"completed","conclusion":"success","details_url":"https://x/CI_RUN"}]}\n' "$2" ;;
+  "pr comment") ;;
+esac
+exit 0
+M
+  chmod +x "$1/stub/gh"; printf '%s' "$1/stub/gh"
+}
+headM="$(git -C "$rm_" rev-parse work)"
+GHj="$(ghci "$dm" "$headM")"; : > "$dm/ghcalls"
+( cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHj" FM_SEEN="$dm" \
+  bin/fm-review.sh --task T-Z --branch work --round 3 --pr 9 >/dev/null 2>&1 )
+assert_eq "0" "$?" "a run-mode round given a pull request runs"
+sentG="$(cat "$dm/prompt.md")"
+callsG="$(cat "$dm/ghcalls")"
+assert_lacks "$callsG" "pr checks" "a run-mode round reads no checks from GitHub"
+assert_lacks "$callsG" "gh api" "nor any check run"
+assert_lacks "$callsG" "headRefOid" "nor the pull request's state"
+assert_contains "$callsG" "gh pr view 9 --json comments" "while the closed-list protocol still reads the comments"
+assert_contains "$callsG" "gh pr comment 9" "and fm-review.sh still posts the verdict"
+assert_fail "grep -qx '# The head under review' '$dm/prompt.md'" "the run-mode prompt has no head-under-review CI section"
+assert_lacks "$sentG" "GitHub evidence" "and no GitHub evidence block"
+assert_lacks "$sentG" "CI_RUN" "and no check run"
+assert_lacks "$sentG" "Conclusion:" "and no CI conclusion at all"
+assert_contains "$sentG" "# The closed list" "the closed-list section is still there from round three"
+assert_contains "$sentG" "firstmate's merge gate, not a criterion of this
+review" "and the prompt says CI and the gates are firstmate's merge gate"
+# the same gh in a diff round still shows the head section, as information
+printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: diff\n' > "$rm_/config.yaml"
+( cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHj" FM_SEEN="$dm" \
+  bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
+assert_ok "grep -qx '# The head under review' '$dm/prompt.md'" "a diff round given a pull request keeps the head section"
+assert_contains "$(cat "$dm/prompt.md")" "Conclusion: success" "with the check this gh reports"
+printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n' > "$rm_/config.yaml"
+
+# a round that was SIGKILLed ran no trap; the next run-mode round removes its
+# checkout, and leaves alone one still in use or one not yet claimed
+tmpM="$dm/tmp"; mkdir -p "$tmpM/fm-review.stale/checkout" "$tmpM/fm-review.live" "$tmpM/fm-review.fresh"
+( exit 0 ) & deadpid=$!; wait "$deadpid"
+printf '%s\n' "$deadpid" > "$tmpM/fm-review.stale/owner"
+printf '%s\n' "$$" > "$tmpM/fm-review.live/owner"
+( cd "$rm_" && TMPDIR="$tmpM" FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
+  bin/fm-review.sh --task T-Z --branch work --round 3 >/dev/null 2>&1 )
+assert_eq "0" "$?" "a run-mode round with a stale checkout around still runs"
+assert_fail "test -e '$tmpM/fm-review.stale'" "and removes the checkout a killed round left behind"
+assert_ok "test -d '$tmpM/fm-review.live'" "but not one whose round is still alive"
+assert_ok "test -d '$tmpM/fm-review.fresh'" "nor one no round has claimed yet"
+assert_eq "fm-review.fresh fm-review.live" "$(cd "$tmpM" && ls -d fm-review.* | tr '\n' ' ' | sed 's/ $//')" \
+  "and its own checkout is gone when it ends"
+
+# the hosts a project's setup needs reach the adapter; a GitHub host never does
+printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n  network: registry.npmjs.org cdn.playwright.dev\n' > "$rm_/config.yaml"
+( cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
+  bin/fm-review.sh --task T-Z --branch work --round 3 >/dev/null 2>&1 )
+assert_eq "registry.npmjs.org cdn.playwright.dev" "$(seen_of network "$dm")" \
+  "the adapter is handed the hosts config.yaml's reviewer network declares"
+assert_contains "$(cat "$dm/prompt.md")" "registry.npmjs.org cdn.playwright.dev" "and the prompt names them"
+# every domain GitHub operates, any case, any subdomain - not just github.com
+for gh_host in api.github.com GitHub.com raw.githubusercontent.com ghcr.io x.github.io \
+               objects.githubusercontent.com github.githubassets.com; do
+  printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n  network: registry.npmjs.org %s\n' "$gh_host" > "$rm_/config.yaml"
+  : > "$dm/seen"
+  outN="$(cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
+    bin/fm-review.sh --task T-Z --branch work --round 3 2>&1)"
+  assert_eq "65" "$?" "a reviewer network naming $gh_host is a configuration error"
+  assert_contains "$outN" "may not reach GitHub" "and says why"
+  assert_eq "" "$(seen_of mode "$dm")" "and no engine runs"
+done
+# matched on a label boundary: a host that merely ends in the same letters
+# is not GitHub's
+printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n  network: notgithub.com\n' > "$rm_/config.yaml"
+( cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
+  bin/fm-review.sh --task T-Z --branch work --round 3 >/dev/null 2>&1 )
+assert_eq "0" "$?" "a host that only ends like a GitHub domain is not refused"
+assert_eq "notgithub.com" "$(seen_of network "$dm")" "and reaches the adapter"
+# a wildcard reaches GitHub as surely as naming it, and a bare `*` must be
+# read as itself: expanded, it became the plain file names in the repository
+# (config.yaml, README.md), each of which passed as a domain
+for wild in '*' '*.com'; do
+  printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n  network: registry.npmjs.org %s\n' "$wild" > "$rm_/config.yaml"
+  : > "$dm/seen"
+  outW="$(cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
+    bin/fm-review.sh --task T-Z --branch work --round 3 2>&1)"
+  assert_eq "65" "$?" "a reviewer network naming '$wild' is a configuration error"
+  assert_contains "$outW" "names $wild, which is not a plain domain name" "and is named as itself, not globbed"
+  assert_eq "" "$(seen_of mode "$dm")" "and no engine runs ('$wild')"
+done
+printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n' > "$rm_/config.yaml"
+
+# a signed rejection in run mode ends the review lane the same way
+: > "$dm/ghcalls"
+( cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" FM_VERDICT="REJECT:T-Z" \
+  bin/fm-review.sh --task T-Z --branch work --round 2 --pr 9 >/dev/null 2>&1 )
+assert_eq "0" "$?" "a run-mode rejection is a completed round"
+assert_eq "rejected|reviewer|T-Z" \
+  "$(jq -r 'select(.type=="review_failed")|[.data.review_outcome,.data.role,.task]|join("|")' "$evM" | tail -1)" \
+  "and emits review_failed, rejected, as the reviewer on the task"
+assert_fail "test -e '$(seen_of checkout "$dm")'" "and removes its checkout too"
+
+# a round that produced no verdict still removes its checkout
+( cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" FM_RUNNER_SILENT=1 \
+  bin/fm-review.sh --task T-Z --branch work --round 4 >/dev/null 2>&1 )
+assert_eq "3" "$?" "an unsigned run-mode round is a failed round"
+assert_eq "missing_review" \
+  "$(jq -r 'select(.type=="review_failed")|.data.review_outcome' "$evM" | tail -1)" \
+  "and says so on the board"
+assert_ne "" "$(seen_of checkout "$dm")" "the unsigned round was handed a checkout"
+assert_fail "test -e '$(seen_of checkout "$dm")'" "and the failed round removes it all the same"
+
+# a head that is not there cannot be checked out; that is said, not reviewed
+: > "$dm/seen"
+( cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
+  bin/fm-review.sh --task T-Z --branch no-such-branch >/dev/null 2>&1 )
+assert_eq "70" "$?" "a run-mode round with no head to check out fails"
+assert_eq "" "$(seen_of mode "$dm")" "and never reaches an engine"
+assert_eq "infrastructure_error" \
+  "$(jq -r 'select(.type=="review_failed")|.data.review_outcome' "$evM" | tail -1)" \
+  "and ends its review as an infrastructure failure"
+
+# the reviewer's own vendor cannot be confined: a configuration error, and
+# no engine runs - least of all the unconfined one
+plain_adapter "$rm_" plain
+printf 'vendor: mock\nreviewer:\n  vendor: plain\n  mode: run\nfallback:\n  - runner\n' > "$rm_/config.yaml"
+rm -f "$dm/plain-ran"; : > "$dm/seen"; mkdir -p "$dm/tmp65"
+outP="$(cd "$rm_" && TMPDIR="$dm/tmp65" FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
+  bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_eq "65" "$?" "a run-mode reviewer whose adapter cannot confine it is a configuration error"
+assert_eq "" "$(find "$dm/tmp65" -mindepth 1 -maxdepth 1 -name 'fm-review.*')" \
+  "and the checkout it made before refusing is removed"
+assert_contains "$outP" "plain has no adapter that confines a run-mode review" "and says which vendor"
+assert_fail "test -e '$dm/plain-ran'" "and the unconfined engine never ran"
+assert_eq "" "$(seen_of mode "$dm")" "nor did a fallback stand in for the reviewer the config named"
+assert_eq "infrastructure_error" \
+  "$(jq -r 'select(.type=="review_failed")|.data.review_outcome' "$evM" | tail -1)" \
+  "and the review ends as an infrastructure failure"
+# the same refusal for an explicit override
+( cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
+  bin/fm-review.sh --task T-Z --branch work --vendor plain >/dev/null 2>&1 )
+assert_eq "65" "$?" "an explicit --vendor that cannot be confined is refused in run mode"
+
+# a fallback that cannot be confined is left out of the round's chain
+stub_script "$rm_/bin/adapters/runner.sh" <<'M'
+#!/usr/bin/env bash
+# fm:review-run
+[ "$1" = "run" ] || exit 64
+exit 2
+M
+printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\nfallback:\n  - plain\n' > "$rm_/config.yaml"
+rm -f "$dm/plain-ran"
+( cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
+  bin/fm-review.sh --task T-Z --branch work --round 5 >/dev/null 2>&1 )
+assert_eq "2" "$?" "with the confined reviewer down, a run-mode round is an outage"
+assert_fail "test -e '$dm/plain-ran'" "not a round handed to an engine that cannot be confined"
+restore_scripts
+
+# a mode that is neither is a typo, not a quiet diff round
+printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: execute\n' > "$rm_/config.yaml"
+outQ="$(cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
+  bin/fm-review.sh --task T-Z --branch work 2>&1)"
+assert_eq "65" "$?" "an unknown reviewer mode is a configuration error"
+assert_contains "$outQ" "must be diff or run" "and says what it must be"
+rm -rf "$dm"
+
+# --- diff mode is today's round, byte for byte ------------------------------
+# The prompt is the skill, the task, the round, the head's evidence (T-088)
+# and the diff - no checkout, no
+# run-mode text - whether the project says `mode: diff` or nothing at all,
+# and a run-mode setting in the caller's environment does not leak into it.
+for declared in nothing diff; do
+  dd="$(fixture)"; rd="$dd/repo"; GHd="$(ghstub "$dd")"
+  cat > "$rd/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+cp "$2" "$FM_SEEN/prompt.md"
+printf 'mode=%s\ncheckout=%s\n' "${FM_RUN_REVIEW:-}" "${FM_REVIEW_CHECKOUT:-}" > "$FM_SEEN/seen"
+printf 'APPROVE:T-Z\n' > "$3/v.txt"
+M
+  chmod +x "$rd/bin/adapters/mock.sh"
+  [ "$declared" = diff ] && printf 'vendor: mock\nreviewer:\n  mode: diff\n' > "$rd/config.yaml"
+  ( cd "$rd" && FM_ROOT="$rd" FM_GH="$GHd" FM_SEEN="$dd" \
+    FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$dd" \
+    bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
+  assert_eq "0" "$?" "a diff round ($declared declared) exits 0"
+  ( cd "$rd" && {
+      cat skills/reviewer/SKILL.md
+      printf '\n---\n\n# The task\n\n```json\n%s\n```\n' \
+        "$(git show work:design/tasks/T-Z.json | jq .)"
+      printf '\n# Round %s\n' 1
+      # given --pr, today's round carries the head's evidence (T-088); this
+      # gh answers nothing and state/gates/ is empty, so all of it is unknown
+      hd="$(git rev-parse work)"
+      printf '\n# The head under review\n'
+      printf '\nHead SHA: %s\n' "$hd"
+      printf '\n## The required check for this head, from GitHub\n'
+      printf '\nThe required check for head %s could not be read from GitHub, so its CI result is unknown.\n' "$hd"
+      printf '\n## The seven gates for this head\n'
+      printf '\nNo gate summary for head %s exists under state/gates/, so its gate results are unknown.\n' "$hd"
+      printf '\n---\n\n# The diff under review\n\n```diff\n'
+      git diff main...work
+      printf '```\n'
+    } ) > "$dd/golden.md"
+  assert_eq "$(shasum < "$dd/golden.md")" "$(shasum < "$dd/prompt.md" 2>/dev/null)" \
+    "a diff round's prompt ($declared declared) is byte for byte today's: the skill, the task, the round, the head's evidence and the diff"
+  assert_eq "|" "$(seen_of mode "$dd")|$(seen_of checkout "$dd")" \
+    "and its adapter is handed no checkout, whatever the caller exported"
+  assert_eq "review_opened crew_status approved crew_status agent_finished" \
+    "$(jq -r .type "$rd/state/events.jsonl" | tr '\n' ' ' | sed 's/ $//')" \
+    "and its events are today's ($declared declared)"
+  assert_eq "reviewer|T-Z reviewer|T-Z" \
+    "$(jq -r 'select(.type=="review_opened" or .type=="approved")|[.data.role,.task]|join("|")' "$rd/state/events.jsonl" | tr '\n' ' ' | sed 's/ $//')" \
+    "with the reviewer role and the task on the review's opening and ending"
+  rm -rf "$dd"
+done
+
 finish
