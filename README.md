@@ -1,4 +1,4 @@
-<img src="design/marketing/banner.png" width="100%" alt="A voxel-art frigate under a blue 'firstmate-workflow' sail, its captain pointing the way while an AI crew of workers and reviewers keeps the deck, beside the headline 'MORE MINDS HIGHER IMPACT'.">
+<img src="design/marketing/banner.webp" width="100%" alt="A voxel-art frigate under a blue 'firstmate-workflow' sail, its captain pointing the way while an AI crew of workers and reviewers keeps the deck, beside the headline 'MORE MINDS HIGHER IMPACT'.">
 
 # firstmate-workflow
 
