@@ -1381,7 +1381,8 @@ runner loses that race where an idle laptop does not, which is how
 adapter-contract's completeness loop failed on CI with a different signature
 each run. The data goes in by here-string (or process substitution, where
 `$(...)` would strip trailing lines the check is looking for). The hygiene
-lint enforces it over every `*.sh` below `bin/` and `tests/`. It reads
+lint enforces it over every `*.sh` below `bin/` and `tests/`, and it catches
+exactly the shapes listed here, no others. It reads
 commands, not one spelling: comments off, continuation lines (a trailing `|`
 or `\`) joined, `||` not a pipe, and every command a single `|` or `|&`
 starts is judged, inside `$(...)` too. It is looking for `grep`, `egrep` or
@@ -1397,13 +1398,12 @@ takes a value takes the next word (`env -iu NAME`, `timeout -vs KILL 5`), and
 a long option may be any prefix that names one option (`grep --quie`,
 `env --un NAME`); an ambiguous one (`grep --co`) is refused by grep and not
 flagged. Quotes are transparent, because an assertion
-string is eval'd. A file that declares `# fm:lint-source` is skipped. Each of
-these has its own plant in `tests/ci.test.sh`. What it does not catch: grep
-behind any other command (`xargs`, `sudo`, ...), behind a function or alias
-of another name, a flag held in a variable, or a `-q`/`-c` that comes after
-a grep operand holding `|`, `;`, `&`, `)` or a backtick
-(`grep -E '(a|b)' -q`, `grep -e 'a;b' -q`): quotes are transparent, so that
-character ends grep's words where it stands.
+string is eval'd, so grep's words end at the first `|`, `;`, `&`, `)` or
+backtick, quoted or not. A file that declares `# fm:lint-source` is skipped. Each of
+these shapes has its own plant in `tests/ci.test.sh`, named by its line. Any
+other spelling is not caught: in front of grep the reader steps over only the
+words named above, and the first word it does not know ends its search. Such
+a spelling relies on review.
 
 The sweep that brought the suites under the lint (T-103) changed 27 sites in
 11 files under `tests/`: adapter-contract 1, board 2, cleanup 1, decide 3,
