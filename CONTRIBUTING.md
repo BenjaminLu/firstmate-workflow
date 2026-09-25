@@ -35,35 +35,50 @@ tasks` prints one on demand. A pull request implements one task.
 - **Firstmate** coordinates. `bin/fm-dispatch.sh` starts nothing until a
   `greenlit` event exists, then starts ready tasks up to `config.yaml`'s
   `concurrency`; `bin/fm-worker.sh` runs a worker in a worktree of its own and
-  opens the pull request; `bin/fm-review.sh` runs a reviewer that sees the
-  diff, the task spec and the acceptance criteria. When a
+  opens the pull request; `bin/fm-review.sh` runs a reviewer that is given the
+  diff, the task spec and the acceptance criteria, and from round three the
+  round-three protocol's own comments from the pull request. When a
   change needs a file outside its scope, or is ready to merge, firstmate puts
   the question to the captain as a decision on the board (`bin/fm-decide.sh`).
 - **Nobody writes to `main` or `master`**, including firstmate. Work happens
   on a branch and arrives as a pull request. Run `bin/fm-install-hooks.sh`
-  once per checkout so the local hooks refuse a commit or push to a
-  protected branch.
+  once per checkout: it points `core.hooksPath` at `.githooks/`, whose
+  `pre-commit` refuses a commit while `main` or `master` is checked out and
+  whose `pre-push` refuses a push to either. The hooks are an early warning;
+  GitHub's branch protection is the authority.
 
 ## The seven gates
 
-Every pull request, human or agent, passes all seven gates of
-`design/design.md` section 6 before it can merge. `bin/fm-gate.sh` checks
-them; none of them reads what anyone said about their own work.
+Every pull request, human or agent, must pass all seven gates of
+`design/design.md` section 6 before it is merged. `bin/fm-gate.sh` checks
+them and exits with the number of the first gate that failed. Each reads git,
+the filesystem, an exit code or GitHub; none reads what the author said about
+the work.
 
-1. The branch exists and has commits on top of `main`.
-2. It rebases onto `main` cleanly.
-3. The declared project check exits 0 in a fresh worktree.
+1. The branch exists and `git rev-list --count main..<branch>` is above 0.
+2. It rebases onto `main` without conflict, tried in a scratch worktree.
+3. In a fresh worktree of the branch, the declared `setup` succeeds and then
+   the declared `check` exits 0.
 4. **The diff stays in scope**: every changed path matches a glob in the
-   task's `scope` in `design/tasks/<id>.json`. If the work needs a file
-   outside it, say so in the pull request and stop; widening scope is the
-   captain's decision.
-5. **The new tests are not vacuous**: revert the implementation and the new
-   tests must go red. Write the test first and watch it fail. A change whose
-   every non-test path matches the project's declared `docs` globs needs no
-   new test.
-6. **The required GitHub check** (`ci`) is green.
-7. **A pull request comment contains `APPROVE:<task-id>`**, posted by the
-   reviewer.
+   task's `scope`, read from `design/tasks/<id>.json` on the branch. A scope
+   that names `design/tasks.json` (the list before T-090) covers the task's
+   own file and no other. If the work needs a file outside the scope, say so
+   in the pull request and stop; widening scope is the captain's decision.
+5. **The new tests are not vacuous**: the gate reverts every changed non-test
+   path to `main`, runs `setup`, then runs the changed tests one at a time
+   through the declared `test` (or the whole `check` once, when none is
+   declared); it passes as soon as one goes red. Write the test first and watch it fail.
+   A change whose every non-test path matches the project's declared `docs`
+   globs needs no new test.
+6. **The required GitHub check is green**: `gh pr checks <pr> --required`
+   exits 0. This repository's required check is `ci`.
+7. **A pull request comment contains `APPROVE:<task-id>`.** The gate checks
+   who wrote it only when `FM_REVIEWER_LOGIN` is set; otherwise any comment
+   with the marker passes. It does not tie the marker to the current head,
+   and a later rejection does not undo it, so firstmate checks the approval
+   against the current head before it treats a merge card as ready. The
+   marker is normally posted by the reviewer: `bin/fm-review.sh` posts its
+   verdict as a pull request comment.
 
 ## The project check
 
@@ -73,7 +88,8 @@ fresh checkout, `check` is the gate, `tests` and `docs` classify changed
 paths for gate 5. For this repository `check` is `bin/ci.sh`, the same file
 GitHub Actions runs, and `setup` is `bun install --frozen-lockfile` followed by
 the Playwright browser install. A fresh worktree has no `node_modules`; without
-setup, `bin/ci.sh` skips its end-to-end stage instead of running it.
+`node_modules/@playwright`, `bin/ci.sh` skips its end-to-end stage instead of
+running it.
 
 ```sh
 bin/fm-install-hooks.sh
@@ -81,9 +97,10 @@ bun install --frozen-lockfile && bunx playwright install chromium
 FM_CI_MAX_SECONDS=600 bin/ci.sh
 ```
 
-When `shellcheck`, `bun` or the Playwright install is missing, `bin/ci.sh`
-reports the stage that needs it as skipped, and a skipped stage is not a
-passed one: CI installs all of them, so it still runs on the pull request. Without
+When `shellcheck`, `bun`, `bunx` or the Playwright install is missing,
+`bin/ci.sh` reports the stage that needs it as skipped and does not fail for
+it. A local run with a skipped stage has therefore not checked that stage;
+the GitHub workflow installs all of them, so there it runs. Without
 `FM_CI_MAX_SECONDS` the budget is 180 seconds; GitHub and the declared
 `check_env` give it 600. Section 10 of the design describes its stages.
 
@@ -110,10 +127,12 @@ From round three the review runs on a closed list (design section 7):
 
 Everything in the repository is English: code, comments, docs, skills,
 commit messages, pull request bodies and reviews. The one exception is the
-board, which is a three-language product. Anything a script writes to the
-board's event log carries its summary in both `en` and `zh-TW` (through
-`bin/fm-emit.sh`); `zh-CN` is derived from `zh-TW` through `i18n/tw2cn.tsv`.
-Board UI text comes from the dictionaries in `i18n/`, never from a literal.
+board, which is a three-language product (design section 9). Events reach
+the board's log only through `bin/fm-emit.sh`, and a summary it writes
+carries both `en` and `zh-TW`: it refuses one language without the other.
+`zh-CN` is derived from `zh-TW` through `i18n/tw2cn.tsv`. Board UI text comes
+from the `i18n/ui.*.json` dictionaries, and a lint fails the build on a UI
+string that is not in them.
 
 ## License
 

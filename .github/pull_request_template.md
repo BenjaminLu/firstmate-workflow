@@ -40,11 +40,17 @@ config.yaml's `docs` globs needs no new test; say so if that is the case. -->
 
 ## Gates
 
+<!-- bin/fm-gate.sh checks these (design/design.md section 6). Gate 7 matches
+the marker in any comment unless FM_REVIEWER_LOGIN is set, and does not tie it
+to the current head; the approval that counts is the reviewer's, on this head. -->
+
 - [ ] 1. The branch has commits on top of `main`.
 - [ ] 2. It rebases onto `main` cleanly.
-- [ ] 3. The declared `project.check` (`bin/ci.sh`, after `setup`) exits 0.
+- [ ] 3. In a fresh worktree, `setup` succeeds and the declared
+      `project.check` (`bin/ci.sh`) exits 0.
 - [ ] 4. The diff stays inside the task's `scope`.
-- [ ] 5. The new tests go red with the implementation reverted, or every
-      non-test change is declared `docs`.
+- [ ] 5. With the non-test changes reverted, at least one changed test goes
+      red; or every non-test change is declared `docs`.
 - [ ] 6. The required GitHub check `ci` is green.
-- [ ] 7. The reviewer has posted `APPROVE:T-xxx`.
+- [ ] 7. A comment contains `APPROVE:T-xxx`, posted by the reviewer for this
+      head.
