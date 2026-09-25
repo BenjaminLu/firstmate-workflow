@@ -480,7 +480,7 @@ class Roster(unittest.TestCase):
             role = 'worker' if i < 24 else 'reviewer'
             run = runs / f'{role}-{name}-t9-r{i}'; run.mkdir(parents=True)
             m.save(run / 'identity.json', dict(actor=run.name, role=role, task='T-9', name=name,
-                                               requested_alias='', run=str(run), created=1.0))
+                                               one_role=True, requested_alias='', run=str(run), created=1.0))
             self.finish(run)
         for seed in ('a', 'b', 'c'):
             with patch.dict(os.environ, {'FM_ROSTER_SEED': seed}):
@@ -496,9 +496,57 @@ class Roster(unittest.TestCase):
             m.allocate(self.root, 'reviewer', 'T-621', '')
         with self.assertRaisesRegex(RuntimeError, 'crew name bo has served as a worker'):
             m.allocate(self.root, 'reviewer', 'T-621', 'bo')
+    def history(self, role, name, task, created, one_role=False):
+        run = self.root / 'state/runs' / f'{role}-{name}-{task.lower().replace("-", "")}-r{created}'
+        run.mkdir(parents=True)
+        record = dict(actor=run.name, role=role, task=task, name=name, requested_alias='',
+                      run=str(run), created=float(created))
+        if one_role: record['one_role'] = True
+        m.save(run / 'identity.json', record)
+        self.finish(run)
+    def test_history_from_before_the_one_role_rule_bars_no_name(self):
+        # T-089 let one name serve both roles. Those runs were not written
+        # under T-104's rule, so they bind no name to a role.
+        for role, name, task, created in (('worker', 'ada', 'T-1', 1), ('reviewer', 'bo', 'T-1', 2),
+                                          ('worker', 'bo', 'T-2', 3), ('reviewer', 'ada', 'T-2', 4)):
+            self.history(role, name, task, created)
+        self.pin('roster: [ada, bo]\n')
+        first, said = self.quiet(m.allocate, self.root, 'worker', 'T-3', '')
+        self.assertEqual('ada', self.name(first))
+        self.assertEqual(1, len(said.splitlines()), said)
+        self.assertEqual('bo', self.name(self.quiet(m.allocate, self.root, 'worker', 'T-4', '')[0]))
+        # ada's first run under the rule was as a worker (T-3): that is its role now.
+        self.finish(first)
+        self.pin('rosters:\n  workers: [dee]\n  reviewers: [eli]\n')
+        with self.assertRaisesRegex(RuntimeError, 'crew name ada has served as a worker'):
+            m.allocate(self.root, 'reviewer', 'T-7', 'ada')
+        self.assertEqual('ada', self.name(m.allocate(self.root, 'worker', 'T-7', 'ada')))
+    def test_a_pinned_name_with_both_old_roles_serves_its_pinned_role(self):
+        self.history('worker', 'bo', 'T-1', 1)
+        self.history('reviewer', 'bo', 'T-2', 2)
+        self.pin('rosters:\n  workers: [ada]\n  reviewers: [bo]\n')
+        self.assertEqual('bo', self.name(m.allocate(self.root, 'reviewer', 'T-3', '')))
+        # A --name with both old roles serves too, and is then bound.
+        self.history('reviewer', 'cy', 'T-4', 3)
+        self.history('worker', 'cy', 'T-5', 4)
+        self.assertEqual('cy', self.name(m.allocate(self.root, 'worker', 'T-6', 'cy')))
+    def test_a_name_keeps_the_role_of_its_first_record(self):
+        # Two records under the rule that disagree (a hand-edited state/):
+        # the earlier one decides, and the name still works in that role.
+        self.history('reviewer', 'cy', 'T-11', 2, one_role=True)
+        self.history('worker', 'cy', 'T-10', 1, one_role=True)
+        self.assertEqual({'cy': 'worker'}, m.served_roles(self.root))
+        self.assertEqual('cy', self.name(m.allocate(self.root, 'worker', 'T-12', 'cy')))
+        with self.assertRaisesRegex(RuntimeError, 'crew name cy has served as a worker'):
+            m.allocate(self.root, 'reviewer', 'T-13', 'cy')
+    def test_every_run_is_recorded_under_the_one_role_rule(self):
+        run = m.allocate(self.root, 'worker', 'T-14', '')
+        self.assertIs(True, json.loads((run / 'identity.json').read_text())['one_role'])
     def test_pinned_names_are_validated(self):
         self.pin('rosters:\n  workers: [Ada, bo]\n')
         self.assertEqual({'workers': ['ada', 'bo']}, m.pinned_rosters(self.root))
+        self.pin('rosters:\n  workers:\n  - ada\n  reviewers: [bo]\n')
+        self.assertEqual({'workers': ['ada'], 'reviewers': ['bo']}, m.pinned_rosters(self.root))
         self.pin('roster: [Ada, bo]\n')
         self.assertEqual({'workers': ['ada', 'bo']}, self.quiet(m.pinned_rosters, self.root)[0])
         for text, refusal in (
@@ -508,6 +556,11 @@ class Roster(unittest.TestCase):
                 ('rosters:\n  workers: [ada, Ada]\n', 'config.yaml rosters.workers names ada more than once'),
                 ('rosters:\n  workers: []\n', 'config.yaml rosters.workers is empty'),
                 ('rosters:\nvendor: claude\n', 'rosters must hold a workers: or reviewers: list'),
+                # Every key under rosters: is checked, not only looked up.
+                ('rosters:\n  workers: [ada]\n  reviewer: [bo]\n', 'config.yaml rosters: reviewer is not workers: or reviewers:'),
+                ('rosters:\n  - ada\n', 'config.yaml rosters: - ada is not workers: or reviewers:'),
+                ('rosters: {workers: [ada]}\n', 'config.yaml rosters must be a block holding workers: and/or'
+                                                ' reviewers: lists, not an inline value'),
                 ('roster: [a]\nrosters:\n  workers: [b]\n', 'both roster: and rosters:'),
                 # An empty roster is refused like any other invalid one, not defaulted.
                 ('roster:\nvendor: claude\n', 'config.yaml roster is empty'),

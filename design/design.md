@@ -1352,7 +1352,8 @@ asked, saying that ranks and service records keyed by the old names stay with
 the old names. A crew file that is not two disjoint lists of names is refused,
 not quietly redrawn. `FM_ROSTER_SEED` seeds the draw and exists only for
 tests. config.yaml may pin names under `rosters:` with `workers:` and
-`reviewers:` lists, validated as T-089 validated `roster:`; a pinned list
+`reviewers:` lists, validated as T-089 validated `roster:`; any other key
+under `rosters:`, or an inline `rosters: {…}`, is refused by name; a pinned list
 replaces that role's drawn names, a drawn name pinned to the other role is
 dropped, and a name in both lists is refused with a message naming it. The
 old single `roster:` is still read: its names are workers, with one warning
@@ -1361,12 +1362,18 @@ line.
 A worker takes a name only from the worker roster and a reviewer only from the
 reviewer roster; an explicit `--name` on the other role's roster is refused.
 The rosters say which role a name has now; the runs say which role it has
-served. Every `identity.json` records `role` and `name`, and a name any
-recorded run carried under one role is never used for the other: an explicit
-`--name` on neither roster is refused once it has served the other role, a
-roster name that served the other role (moved in config.yaml, say) is
-skipped, and a draw or `--redraw` never deals a name to the role it did not
-serve. So one name never holds a worker record and a reviewer record.
+served. Every `identity.json` records `role` and `name`, and a run allocated
+under this rule also records `one_role: true`. A name keeps the role of its
+earliest such run and is never used for the other: an explicit `--name` on
+neither roster is refused once it has served the other role, a roster name
+that served the other role (moved in config.yaml, say) is skipped, and a draw
+or `--redraw` never deals a name to the role it did not serve. So one name
+never holds a worker record and a reviewer record from here on. Runs without
+`one_role` were written under T-089, which let one name serve both roles;
+they bind no name, because history is not judged by a rule it was not written
+under. Otherwise an installation that used the old `roster:` would find every
+name that had served both roles refused for both. A name's first run under
+the rule decides its role.
 When every name of a role is taken the run fails, exit 70, with `the <role>
 roster ran out: …, and a name of the other role is never borrowed`; it never
 borrows and never reuses a name with a number. Within each roster the T-089

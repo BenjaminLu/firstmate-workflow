@@ -174,9 +174,24 @@ def pinned_rosters(root, warn=True):
         return {'workers': _config_names(old, 'roster')}
     if not new: return {}
     inline, children = new
+    if inline:
+        raise ValueError('config.yaml rosters must be a block holding workers: and/or reviewers: lists,'
+                         ' not an inline value')
+    body = [line for line in children if line.strip()]
+    base = min((_indent(line) for line in body), default=0)
+    keyed = False
+    for line in body:
+        if _indent(line) != base: continue
+        # A list may sit at its key's own indent: `workers:` then `- ada`.
+        if keyed and line.lstrip().startswith('- '): continue
+        key = re.match(r'\s*([^\s:]+):', line)
+        keyed = True
+        if not key or key.group(1) not in ROLES.values():
+            raise ValueError('config.yaml rosters: ' + (key.group(1) if key else line.strip())
+                             + ' is not workers: or reviewers:')
     pinned = {}
-    for key in ('workers', 'reviewers'):
-        entry = None if inline else _config_key(children, key)
+    for key in ROLES.values():
+        entry = _config_key(children, key)
         if entry: pinned[key] = _config_names(entry, 'rosters.' + key)
     if not pinned:
         raise ValueError('config.yaml rosters must hold a workers: or reviewers: list of names')
@@ -211,22 +226,26 @@ def drawn_rosters(root):
 
 
 def served_roles(root):
-    """Every name a recorded run has carried, with the roles it served under."""
-    served = {}
+    """Each name's role: the role of its earliest run recorded under the one-role
+    rule. Runs from before T-104 are not counted: T-089 let one name serve both
+    roles, and that history is not judged by a rule it was not written under."""
+    first = {}
     for file in (Path(root) / 'state/runs').glob('*/identity.json'):
         try: identity = read(file)
         except (OSError, ValueError): continue
-        name = crew_name(identity)
-        role = identity.get('role') or identity.get('actor', '').split('-', 1)[0]
-        if name and role in ROLES: served.setdefault(name, set()).add(role)
-    return served
+        if identity.get('one_role') is not True: continue
+        name, role = crew_name(identity), identity.get('role')
+        if not name or role not in ROLES: continue
+        record = (identity.get('created') or 0, role)
+        if name not in first or record < first[name]: first[name] = record
+    return {name: role for name, (_, role) in first.items()}
 
 
 def crossed(name, role, served):
-    """The other role this name has already served under, or None: a name
-    keeps the role of its first record, whatever the rosters say now."""
-    other = (served.get(name, set()) & set(ROLES)) - {role}
-    return min(other) if other else None
+    """The role this name already belongs to when it is not `role`, or None: a
+    name keeps the role of its first record, whatever the rosters say now."""
+    held = served.get(name)
+    return held if held and held != role else None
 
 
 def draw_rosters(root, redraw=False):
@@ -379,7 +398,8 @@ def allocate(root, role, task, alias):
             try: run.mkdir(parents=True); break
             except FileExistsError: number += 1
         save(counter, dict(number=number))
-        record = dict(actor=actor, role=role, task=task, name=name,
+        # one_role: written under T-104's rule, so this run binds the name to its role.
+        record = dict(actor=actor, role=role, task=task, name=name, one_role=True,
                       requested_alias=alias, run=str(run), created=time.time())
         save(run / 'identity.json', record)
     return run
