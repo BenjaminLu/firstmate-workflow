@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Contributing guide
+    url: https://github.com/BenjaminLu/firstmate-workflow/blob/main/CONTRIBUTING.md
+    about: How work is planned as tasks, dispatched, reviewed and gated before it merges.
+  - name: Report a vulnerability privately
+    url: https://github.com/BenjaminLu/firstmate-workflow/blob/main/SECURITY.md
+    about: Security problems go through GitHub private vulnerability reporting, never a public issue.
+  - name: Code of conduct
+    url: https://github.com/BenjaminLu/firstmate-workflow/blob/main/CODE_OF_CONDUCT.md
+    about: The Contributor Covenant 2.1, which applies to every issue and pull request.
