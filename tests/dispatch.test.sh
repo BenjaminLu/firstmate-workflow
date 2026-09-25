@@ -19,7 +19,7 @@ fixture() {
   local d; d="$(mktemp -d)"
   mkdir -p "$d/bin" "$d/design" "$d/state"
   cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-dispatch.sh" "$d/bin/"
-  cp "$ROOT/bin/fm-herdr.py" "$d/bin/"
+  cp "$ROOT/bin/fm-herdr.py" "$ROOT/bin/fm-ready.sh" "$d/bin/"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$d/bin/fm-worker.sh"; chmod +x "$d/bin/fm-worker.sh"
   printf 'concurrency: 2\n' > "$d/config.yaml"
   fm_tasks_write /dev/stdin "$d/design/tasks" <<'JSON'
@@ -33,7 +33,6 @@ JSON
   printf '%s' "$d"
 }
 say() { FM_ROOT="$1" "$1/bin/fm-emit.sh" --actor firstmate --type "$2" ${3:+--task "$3"} >/dev/null; }
-ready() { FM_ROOT="$1" "$1/bin/fm-dispatch.sh" --repo "$1" --dry-run 2>/dev/null | sed '/^fm-dispatch/d'; }
 # A detached worker's file appears a moment after the dispatcher returns. The
 # wait is for that file, against a deadline wide enough for a loaded machine:
 # a count of short sleeps ran out under the gate's parallel pool. It returns
@@ -43,6 +42,25 @@ eventually() {   # eventually <command...>: 0 once the command is, 1 at the dead
   local end=$(( $(date +%s) + WAIT_SECS ))
   until "$@"; do [ "$(date +%s)" -le "$end" ] || return 1; sleep 0.05; done
 }
+# Firstmate judges each task that turns ready and the captain answers the
+# card (T-059). The checks about dependencies and capacity are not about
+# that, so they clear every ready task first: judged, then answered A, in
+# the shape the board writes an answer.
+judge() {                       # judge <repo> <task> <D-n> [A|B|C|D]; no answer = card still open
+  bash "$1/bin/fm-ready.sh" judged --task "$2" --decision "$3" --repo "$1" >/dev/null 2>&1
+  [ -n "${4-}" ] || return 0
+  mkdir -p "$1/state/decisions"
+  # the shape the board writes (tests/board.test.sh pins it), kind included
+  printf '{"id":"%s","chosen":"%s","task":"%s","kind":"choice"}\n' "$3" "$4" "$2" > "$1/state/decisions/$3.json"
+}
+approve() {                     # approve <repo>: answer A for every unjudged ready task
+  local id mark _
+  while IFS=$'\t' read -r id mark _; do
+    [ "$mark" = unjudged ] || continue
+    judge "$1" "$id" "D-$((1000 + $(find "$1/state/decisions" -name 'D-*.json' 2>/dev/null | wc -l)))" A
+  done <<< "$(bash "$1/bin/fm-ready.sh" list --repo "$1" 2>/dev/null)"
+}
+ready() { approve "$1"; FM_ROOT="$1" "$1/bin/fm-dispatch.sh" --repo "$1" --dry-run 2>/dev/null | sed '/^fm-dispatch/d'; }
 
 d="$(fixture)"
 assert_fail "FM_ROOT='$d' '$d/bin/fm-dispatch.sh' --repo '$d' --dry-run" \
@@ -89,7 +107,7 @@ assert_eq "" "$(ready "$dp")" "and unparking a dropped task does not bring it ba
 rm -rf "$dp"
 
 # the limit comes from config.yaml and can be overridden
-d3="$(fixture)"; say "$d3" greenlit
+d3="$(fixture)"; say "$d3" greenlit; approve "$d3"
 assert_eq "1" "$(FM_ROOT="$d3" "$d3/bin/fm-dispatch.sh" --repo "$d3" --dry-run --limit 1 | sed '/^fm-dispatch/d' | wc -l | tr -d ' ')" \
   "--limit overrides the configured concurrency"
 
@@ -119,6 +137,74 @@ assert_eq "65" "$rc" "a missing task directory is no task list either"
 assert_lacks "$out" "nothing is ready" "(not 'nothing is ready')"
 rm -rf "$dv" "$db"
 
+# Ready is not cleared (T-059). The control is the tree above, where every
+# ready task was answered A and A and C started. Here, with nothing touched
+# but the answers: A's card is still up, C was answered C, D was answered A.
+j="$(fixture)"; say "$j" greenlit
+cat > "$j/bin/fm-worker.sh" <<W
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$j/argv"
+W
+chmod +x "$j/bin/fm-worker.sh"
+out="$(FM_ROOT="$j" "$j/bin/fm-dispatch.sh" --repo "$j" --dry-run 2>&1)"
+assert_eq "" "$(sed '/^fm-dispatch/d' <<<"$out")" "a ready task nobody has judged is not started"
+assert_contains "$out" "A is ready but the captain has not cleared it" "and the dispatcher says which, and why"
+judge "$j" A D-1000
+judge "$j" C D-1001 C
+judge "$j" D D-1002 A
+assert_eq "D" "$(FM_ROOT="$j" "$j/bin/fm-dispatch.sh" --repo "$j" --dry-run 2>/dev/null | sed '/^fm-dispatch/d')" \
+  "an open card and an answer other than A hold a task; only an A starts one"
+FM_ROOT="$j" "$j/bin/fm-dispatch.sh" --repo "$j" >/dev/null 2>&1
+eventually test -s "$j/argv"
+assert_contains "$(cat "$j/argv" 2>/dev/null)" "--task D" "a real run starts the task the captain cleared"
+assert_eq "1" "$(grep -c . "$j/argv" 2>/dev/null)" "and no other"
+# A task the captain orders directly (or a B rescope firstmate has carried
+# out) is the captain's own word, so it needs no A on a readiness card. It
+# lifts that check and no other. C was answered C above and is still held.
+rm -f "$j/argv"
+dir_out="$(FM_ROOT="$j" "$j/bin/fm-dispatch.sh" --repo "$j" --task C 2>&1)"
+assert_eq "C" "$(sed '/^fm-dispatch/d' <<<"$dir_out")" "a direct order starts the task the captain named, uncleared"
+eventually test -s "$j/argv"
+assert_eq "--task C --repo $(cd "$j" && pwd -P)" "$(cat "$j/argv" 2>/dev/null)" "and only that task"
+# a direct order still waits on dependencies, park, drop and capacity
+say "$j" dispatched C
+out="$(FM_ROOT="$j" "$j/bin/fm-dispatch.sh" --repo "$j" --task B --dry-run 2>&1)"
+assert_contains "$out" "B waits on A" "a direct order does not start a task whose dependency has not merged"
+assert_eq "" "$(sed '/^fm-dispatch/d' <<<"$out")" "and starts nothing"
+say "$j" parked A
+out="$(FM_ROOT="$j" "$j/bin/fm-dispatch.sh" --repo "$j" --task A --dry-run 2>&1)"
+assert_eq "" "$(sed '/^fm-dispatch/d' <<<"$out")" "a direct order does not start a parked task"
+assert_contains "$out" "A is parked" "and says why"
+say "$j" unparked A
+out="$(FM_ROOT="$j" "$j/bin/fm-dispatch.sh" --repo "$j" --task A --dry-run --limit 1 2>&1)"
+assert_eq "" "$(sed '/^fm-dispatch/d' <<<"$out")" "a direct order does not exceed the limit"
+assert_contains "$out" "A waits for a slot" "and says why"
+assert_eq "A" "$(FM_ROOT="$j" "$j/bin/fm-dispatch.sh" --repo "$j" --task A --dry-run 2>/dev/null)" \
+  "the control: with a slot free the same order starts it"
+# every other reason it holds a named task is said too
+out="$(FM_ROOT="$j" "$j/bin/fm-dispatch.sh" --repo "$j" --task C --dry-run 2>&1)"
+assert_eq "" "$(sed '/^fm-dispatch/d' <<<"$out")" "a direct order does not start a task in flight"
+assert_contains "$out" "C is already in flight" "and says why"
+assert_fail "FM_ROOT='$j' '$j/bin/fm-dispatch.sh' --repo '$j' --task Z --dry-run 2>/dev/null" \
+  "a direct order for a task with no file in design/tasks/ is refused"
+# an answer nobody can read is not a yes: without fm-ready.sh nothing starts
+rm -f "$j/bin/fm-ready.sh" "$j/argv"
+assert_fail "FM_ROOT='$j' '$j/bin/fm-dispatch.sh' --repo '$j' >/dev/null 2>&1" \
+  "a dispatcher that cannot read the captain's answers fails"
+sleep 0.5
+assert_fail "test -e '$j/argv'" "and starts nothing, not even the task that was cleared"
+# a direct order reads no answer, so it still runs here, and still holds
+# a task that is merged or closed
+say "$j" merged D
+out="$(FM_ROOT="$j" "$j/bin/fm-dispatch.sh" --repo "$j" --task D --dry-run 2>&1)"
+assert_eq "" "$(sed '/^fm-dispatch/d' <<<"$out")" "a direct order does not start a merged task"
+assert_contains "$out" "D is already merged" "and says why"
+say "$j" closed C
+out="$(FM_ROOT="$j" "$j/bin/fm-dispatch.sh" --repo "$j" --task C --dry-run 2>&1)"
+assert_eq "" "$(sed '/^fm-dispatch/d' <<<"$out")" "a direct order does not start a closed task"
+assert_contains "$out" "C is closed" "and says why"
+rm -rf "$j"
+
 # the DAG lint lives in ci.sh; check the lint's logic, not the ambient repo
 lintdir="$(mktemp -d)"; mkdir -p "$lintdir/design/tasks"
 printf '{"id":"T-405","depends_on":["T-404"]}\n' > "$lintdir/design/tasks/T-405.json"
@@ -141,12 +227,13 @@ rm -rf "$d" "$d2" "$d3"
 pr_tree() {                     # pr_tree -> a greenlit repo with T-001 and T-002
   local d; d="$(mktemp -d)"; mkdir -p "$d/bin" "$d/design" "$d/state"
   cp "$ROOT/bin/fm-dispatch.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$d/bin/"
-  cp "$ROOT/bin/fm-herdr.py" "$d/bin/"
+  cp "$ROOT/bin/fm-herdr.py" "$ROOT/bin/fm-ready.sh" "$d/bin/"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$d/bin/fm-worker.sh"; chmod +x "$d/bin/fm-worker.sh"
   printf 'vendor: mock\nconcurrency: 3\n' > "$d/config.yaml"
   printf '{"tasks":[{"id":"T-001","title":"a","depends_on":[]},{"id":"T-002","title":"b","depends_on":[]}]}\n' \
     | fm_tasks_write /dev/stdin "$d/design/tasks"
   FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor captain --type greenlit --en go --tw 開工 >/dev/null
+  approve "$d"
   printf '%s' "$d"
 }
 p="$(pr_tree)"

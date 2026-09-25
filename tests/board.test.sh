@@ -657,7 +657,7 @@ rm -rf "$p"
 # Its own fixture again: the engine badge reads config.yaml, which the other
 # two fixtures do not have, and the merge refusal needs a helper that says no.
 e="$(mktemp -d)"; mkdir -p "$e/bin" "$e/state/pending" "$e/design" "$e/board/public"
-cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$e/bin/"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-ready.sh" "$e/bin/"
 cp "$ROOT/board/server.ts" "$e/board/"
 cp "$ROOT/board/public/index.html" "$e/board/public/"
 printf '#!/usr/bin/env bash\necho refused\nexit 1\n' > "$e/bin/fm-merge.sh"
@@ -817,6 +817,92 @@ assert_eq "false" "$(jq -r '.responses[]|select(.id=="D-403")|.superseded' <<<"$
 jq '.ts="2026-01-01T00:01:00Z"' "$e/state/decisions/D-404.json" > "$e/d404" && mv "$e/d404" "$e/state/decisions/D-404.json"
 assert_eq "true" "$(jq -r '.responses[]|select(.id=="D-403")|.superseded' <<<"$(st)")" \
   "a later successful merge response for the same task clears the refusal"
+
+# --- T-059: the readiness card ----------------------------------------------
+# T-E6 is ready (above). Firstmate raises its readiness card with the real
+# fm-decide.sh, which writes the pending card and emits decision_requested,
+# and records the card with the real fm-ready.sh. No card or answer below is
+# written by hand, so what the board reads is what those scripts write.
+cp "$ROOT/bin/fm-decide.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$e/bin/"
+card4() {   # card4 <id> <task> <option keys, e.g. ABCD>: raise a choice card through fm-decide.sh
+  jq -n --arg keys "$3" '
+    ($keys | split("") | map({key: ., value: {description: ("do " + .), pros: "p", cons: "c"}})
+      | from_entries) as $o
+    | {title: "judge", explanation: "e", before: "b", after: "a", outcome: "o", options: $o} as $l
+    | {en: $l, "zh-TW": $l}' > "$e/details-$1.json"
+  FM_ROOT="$e" FM_PROJECT='' bash "$e/bin/fm-decide.sh" --request "$1" --task "$2" \
+    --details "$e/details-$1.json" --repo "$e" > "$e/decide-$1.out" 2>&1
+}
+card4 D-406 T-E6 ABCD
+assert_eq "do D|do D" \
+  "$(jq -r '"\(.details.en.options.D.description)|\(.details."zh-TW".options.D.description)"' \
+     "$e/state/pending/D-406.json" 2>/dev/null)" \
+  "fm-decide.sh accepts a card that offers D and keeps D in both locales"
+assert_eq "captain" "$(jq -r '.tasks[]|select(.id=="T-E6")|.stage' <<<"$(st)")" \
+  "the control: a card on a task with no readiness record is the captain's"
+bash "$e/bin/fm-ready.sh" judged --task T-E6 --decision D-406 --repo "$e" >/dev/null 2>&1
+sj="$(st)"
+assert_eq "ready" "$(jq -r '.tasks[]|select(.id=="T-E6")|.stage' <<<"$sj")" \
+  "a ready task whose only open card is its readiness card stays in the ready lane"
+assert_eq "D-406" "$(jq -r '.tasks[]|select(.id=="T-E6")|.badges[]|select(.kind=="decision")|.id' <<<"$sj")" \
+  "and still carries the card's badge"
+card4 D-407 T-E6 ABC
+assert_eq "captain" "$(jq -r '.tasks[]|select(.id=="T-E6")|.stage' <<<"$(st)")" \
+  "any other open card on it puts it at the captain's"
+# D is a choice only on a card that offers it
+code="$(curl -s -o "$e/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+  -d '{"id":"D-407","chosen":"D"}' "http://127.0.0.1:$PORTE/decisions")"
+assert_eq "400" "$code" "D on a card that offers A to C is refused"
+assert_fail "test -e '$e/state/decisions/D-407.json'" "and nothing is recorded"
+rm -f "$e/state/pending/D-407.json"
+code="$(curl -s -o "$e/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+  -d '{"id":"D-406","chosen":"D"}' "http://127.0.0.1:$PORTE/decisions")"
+assert_eq "200" "$code" "D on a card that offers it is accepted"
+assert_eq "D" "$(jq -r '.chosen' "$e/state/decisions/D-406.json" 2>/dev/null)" "and recorded as D"
+assert_eq "T-E6 choice" "$(jq -r '"\(.task) \(.kind)"' "$e/state/decisions/D-406.json" 2>/dev/null)" \
+  "the record names the card's task and kind, which fm-ready.sh cleared reads"
+assert_eq "D" "$(FM_ROOT="$e" bash "$e/bin/fm-decide.sh" --await D-406 --timeout 5 --repo "$e" 2>/dev/null \
+  | jq -r '.chosen' 2>/dev/null)" \
+  "and fm-decide.sh --await hands firstmate the D the captain chose"
+# The contract end to end, with no hand-written answer, under an id taken the
+# way the skill takes it: fm-decide.sh allocates and raises the card,
+# fm-ready.sh records the judgment, the board records the captain's A, and
+# fm-ready.sh reads it back.
+id8="$(FM_ROOT="$e" FM_PROJECT='' bash "$e/bin/fm-decide.sh" --allocate --task T-E6 --repo "$e" 2>"$e/alloc.err")"
+assert_eq "D-firstmate-workflow-TE6-1" "$id8" "fm-decide.sh allocates the readiness card's owned id"
+card4 "$id8" T-E6 ABCD
+bash "$e/bin/fm-ready.sh" judged --task T-E6 --decision "$id8" --repo "$e" >/dev/null 2>&1
+assert_eq "" "$(bash "$e/bin/fm-ready.sh" cleared --repo "$e" 2>&1)" \
+  "the control: while the card is open, nothing is cleared"
+code="$(curl -s -o "$e/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+  -d "$(jq -cn --arg id "$id8" '{id:$id,chosen:"A"}')" "http://127.0.0.1:$PORTE/decisions")"
+assert_eq "200" "$code" "the captain answers A on the board"
+assert_eq "T-E6" "$(bash "$e/bin/fm-ready.sh" cleared --repo "$e" 2>&1)" \
+  "and the answer the board wrote clears the task for fm-dispatch.sh"
+FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor worker-e --task T-E6 --type dispatched \
+  --en "on it" --tw "接下" >/dev/null
+assert_eq "working" "$(jq -r '.tasks[]|select(.id=="T-E6")|.stage' <<<"$(st)")" \
+  "once work moves the task, the readiness record no longer holds it in ready"
+
+# and the page renders the D button only where the card offers D. The
+# options markup is lifted out of index.html and run as written, because
+# the e2e spec is out of this task's scope.
+dbtn="$(cd "$e" && bun -e '
+const src = require("fs").readFileSync("board/public/index.html", "utf8");
+const at = src.indexOf("const options = [");
+const end = src.indexOf(".join(\x27\x27);", at);
+if (at < 0 || end < 0) { console.log("FAIL no options markup"); process.exit(1); }
+const expr = src.slice(at + "const options = ".length, end + ".join(\x27\x27)".length);
+const render = new Function("d", "content", "pick", "sent", "esc", "words", "t", "said", "return " + expr);
+const opts = (keys) => Object.fromEntries(keys.map(k => [k, { description: "do " + k, pros: "p", cons: "c" }]));
+const card = (keys) => ({ id: "D-1", kind: "choice", details: { en: { options: opts(keys) } } });
+const out = (keys) => render(card(keys), { options: opts(keys) }, undefined, new Set(), String, String, String, String);
+const four = out(["A", "B", "C", "D"]), three = out(["A", "B", "C"]);
+if (!/data-c="D"[^>]*>D · do D</.test(four)) { console.log("FAIL no D button: " + four); process.exit(1); }
+if (/data-c="D"/.test(three)) { console.log("FAIL invented D"); process.exit(1); }
+console.log("ok");
+')"
+assert_eq "ok" "$dbtn" "the page shows a D button on a card that offers D, and only there"
 
 kill "$pide" 2>/dev/null
 wait "$pide" 2>/dev/null || true

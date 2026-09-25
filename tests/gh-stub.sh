@@ -95,5 +95,27 @@ case "${1-}:${2-}" in
     tmp="$(mktemp)"; awk -F'\t' -v OFS='\t' -v n="$n" '{if($1==n)$4="MERGED"; print}' "$S/prs" > "$tmp"
     mv "$tmp" "$S/prs"; echo "merged $n"
     ;;
+  api:*)
+    # `gh api <path>` answers from $GHSTATE/api/<path>.json, which a suite
+    # writes in the shape GitHub returns. What is not there answers the way
+    # GitHub and gh do: the error document on stdout, gh's one line on
+    # stderr, exit 1 - and an unprotected branch of a repository that
+    # exists is GitHub's "Branch not protected", not a bare "Not Found".
+    path="${2#/}"
+    if [ -f "$S/api/$path.json" ]; then
+      emit_json < "$S/api/$path.json"; exit 0
+    fi
+    msg='Not Found'; doc='https://docs.github.com/rest'
+    case "$path" in
+      repos/*/*/branches/*/protection)
+        if [ -f "$S/api/${path%/branches/*}.json" ]; then
+          msg='Branch not protected'
+          doc='https://docs.github.com/rest/branches/branch-protection#get-branch-protection'
+        fi ;;
+    esac
+    printf '{"message":"%s","documentation_url":"%s","status":"404"}\n' "$msg" "$doc"
+    printf 'gh: %s (HTTP 404)\n' "$msg" >&2
+    exit 1
+    ;;
   *) exit 0 ;;
 esac
