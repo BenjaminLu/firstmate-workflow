@@ -1,0 +1,22 @@
+{
+  "id": "T-098",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-093"
+  ],
+  "title": "a clean rebuild is always published, and new scripts keep their executable bit",
+  "scope": [
+    "bin/fm-worker.sh",
+    "tests/worker.test.sh",
+    "design/design.md",
+    "design/tasks.json"
+  ],
+  "acceptance": [
+    "Two holes in fm-worker.sh's commit path have each needed the captain to push by hand. First, when fm-worker.sh rebuilds a stale branch on its base and the rebuild has no conflicts, a worker that changes nothing (or only asks, as the closed-list protocol requires from round 3) ends the round with 'the rebuild ... was not committed (exit-0); nothing is published': the branch stays on its old head and GitHub keeps it DIRTY (T-089, T-086). Second, the claude worker's sandbox refuses chmod, so every script a worker adds is committed 100644; suites that run it by path fail with 126 and reviewers raise it every round (T-048 for five rounds, T-059). Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch. Evidence is the required GitHub check and the seven gates.",
+    "A rebuild that applied is always committed and pushed, whether or not the worker changed anything, and whether or not the worker asked. The commit is the rebuild alone when the worker changed nothing, and the worker's changes on top of it otherwise. The asked outcome is still reported as asked, and the question still goes on the pull request. A rebuild with unresolved conflicts is still never published.",
+    "Before committing, fm-worker.sh gives every file the round adds under bin/ or tests/ the executable bit when it is a script (a .sh, .py or .ts with a shebang line, or any file with a shebang) and its directory's existing scripts are executable. It never removes an executable bit, and never touches a file the round did not add. The mode is set in the index (git update-index --chmod=+x), so it does not depend on the worker's sandbox.",
+    "Tests in tests/worker.test.sh, under the real hooks: a clean rebuild with no worker change is published and the pull request's branch moves to it; the same with an asking worker; a conflicting rebuild is still not published; a new script under bin/ and one under tests/ added without the bit are committed 100755, a new non-script file stays 100644, and an existing file's mode is untouched. Each test fails on the current fm-worker.sh.",
+    "design.md documents both rules. Stay inside this scope."
+  ]
+}
