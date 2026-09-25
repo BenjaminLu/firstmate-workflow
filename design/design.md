@@ -1391,8 +1391,11 @@ is on the whole name. A task's worker and reviewer are never the same crew
 member: a name either role of the task has used is not offered to the other.
 A task keeps its previous round's name while that name is free; otherwise it
 takes the first free name in its roster. An explicit alias wins but is
-refused, exit 70 with one line, while that name is live, is the task's other
-role's, is on the other role's roster, or has served the other role. A name is
+refused, exit 70 with one line, when that name is on the other role's roster,
+has served the other role, is the task's other role's, or is live, and the
+line names the first of these that holds, in that order. A refusal that never
+lifts is named before one that lifts when a run finishes, so a crew member is
+not told to wait for a name their role can never take. A name is
 never cut: one that does not fit the room the final `-<task>-r<n>` suffix
 leaves, measured again on each retry, is refused, so the actor stays within 32
 characters and no label can stand for two crew members. An empty `roster:`,

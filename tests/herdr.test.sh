@@ -357,8 +357,9 @@ class Roster(unittest.TestCase):
         reviewer, _ = self.quiet(m.allocate, self.root, 'reviewer', 'T-531', '')
         self.assertEqual(crew['reviewers'][1], self.name(reviewer))
     def test_a_tasks_other_role_alias_is_refused(self):
-        worker = m.allocate(self.root, 'worker', 'T-230', 'zed')
-        self.finish(worker)
+        # A run under the one-role rule would refuse zed for its role first;
+        # a run from before it binds no role, so only the task refuses it.
+        self.history('worker', 'zed', 'T-230', 1)
         with self.assertRaisesRegex(RuntimeError, "zed is this task's other role"):
             m.allocate(self.root, 'reviewer', 'T-230', 'zed')
     def test_second_round_keeps_the_first_rounds_name_when_free(self):
@@ -431,7 +432,7 @@ class Roster(unittest.TestCase):
         # The alias path, straight at r100000 (room 5): a live alias is refused
         # although only its first five letters would fit, and an alias with
         # no room is refused, not cut.
-        m.allocate(self.root, 'worker', 'T-702', 'Abcdef')  # abcdef is live
+        m.allocate(self.root, 'reviewer', 'T-702', 'Abcdef')  # abcdef is live, as a reviewer
         for alias, refusal in (('Abcdef', 'abcdef is live'), ('Uvwxyz', 'uvwxyz does not fit')):
             with self.subTest(alias=alias):
                 m.save(runs / 'counter.json', dict(number=99999))
@@ -450,11 +451,13 @@ class Roster(unittest.TestCase):
         fresh = m.allocate(self.root, 'worker', 'T-800', '')
         self.assertEqual('noah', self.name(fresh))
         with self.assertRaisesRegex(RuntimeError, 'mira is live'):
-            m.allocate(self.root, 'reviewer', 'T-801', 'mira')
+            m.allocate(self.root, 'worker', 'T-801', 'mira')
     def test_live_alias_is_refused(self):
         first = m.allocate(self.root, 'worker', 'T-600', 'Zed')
         self.assertEqual('zed', self.name(first))
-        with self.assertRaisesRegex(RuntimeError, 'zed is live'):
+        # Live and a worker's name: the reviewer is told the refusal that
+        # never lifts, not the one that lifts when the worker finishes.
+        with self.assertRaisesRegex(RuntimeError, 'crew name zed has served as a worker'):
             m.allocate(self.root, 'reviewer', 'T-601', 'zed')
         with self.assertRaisesRegex(RuntimeError, 'zed is live'):
             m.allocate(self.root, 'worker', 'T-600', 'worker-Zed')
@@ -536,9 +539,13 @@ class Roster(unittest.TestCase):
         self.history('reviewer', 'cy', 'T-11', 2, one_role=True)
         self.history('worker', 'cy', 'T-10', 1, one_role=True)
         self.assertEqual({'cy': 'worker'}, m.served_roles(self.root))
-        self.assertEqual('cy', self.name(m.allocate(self.root, 'worker', 'T-12', 'cy')))
+        worker = m.allocate(self.root, 'worker', 'T-12', 'cy')
+        self.assertEqual('cy', self.name(worker))
+        # Finished, so only the role can refuse it, and it does.
+        self.finish(worker)
         with self.assertRaisesRegex(RuntimeError, 'crew name cy has served as a worker'):
             m.allocate(self.root, 'reviewer', 'T-13', 'cy')
+        self.assertEqual('cy', self.name(m.allocate(self.root, 'worker', 'T-14', 'cy')))
     def test_every_run_is_recorded_under_the_one_role_rule(self):
         run = m.allocate(self.root, 'worker', 'T-14', '')
         self.assertIs(True, json.loads((run / 'identity.json').read_text())['one_role'])
@@ -866,13 +873,17 @@ elif a[0]=='branch': print('t-035-test')
         self.assertIn('already has a live worker',reply.stderr)
     def test_entrypoints_refuse_a_live_alias_in_one_line(self):
         # zed is in no roster; while it is live, no run of either role takes it.
+        # A worker is told it is live; a reviewer that it is a worker's name,
+        # the refusal that outlasts the live run.
         live=m.allocate(self.repo,'worker','T-900','Zed')  # starting: no launcher record yet
-        for script,args in (('fm-worker.sh',['--task','T-035','--name','zed']),
-                            ('fm-review.sh',['--task','T-035','--branch','work','--name','Zed'])):
+        for script,args,refusal in (('fm-worker.sh',['--task','T-035','--name','zed'],
+                                     'crew name zed is live in another run'),
+                                    ('fm-review.sh',['--task','T-035','--branch','work','--name','Zed'],
+                                     'crew name zed has served as a worker')):
             with self.subTest(script=script):
                 answer=self.invoke(script,args)
                 self.assertEqual(70,answer.returncode,answer.stderr)
-                self.assertIn('crew name zed is live in another run',answer.stderr)
+                self.assertIn(refusal,answer.stderr)
                 self.assertNotIn('Traceback',answer.stderr)
         self.assertEqual([live.name],[p.name for p in (self.repo/'state/runs').glob('*-zed-*')])
     def test_entrypoints_draw_the_crew_and_take_each_role_from_its_own_roster(self):

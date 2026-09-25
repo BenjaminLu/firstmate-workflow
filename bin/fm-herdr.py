@@ -318,17 +318,16 @@ def choose_name(alias, role, rosters, live, last, other_role, room, served=None)
     actor has no `room` for is refused. A roster that has run out fails the
     run; it never borrows the other role's names (T-104). A name any recorded
     run `served` under the other role is refused however it is asked for: on
-    neither roster, back from a redraw, or moved in config.yaml."""
+    neither roster, back from a redraw, or moved in config.yaml. The refusals
+    that never lift come before the one that does: a name that belongs to the
+    other role is refused as such even while it is live, since waiting for
+    that run to finish would not make it usable."""
     served = served or {}
     roster = rosters.get(ROLES.get(role), [])
     foreign = {key[:-1]: names for key, names in rosters.items() if key != ROLES.get(role)}
     if alias:
         name = re.sub('[^a-z0-9]+', '-', alias.lower()).strip('-')
         name = re.sub(r'^(worker|reviewer|firstmate)-', '', name) or 'crew'
-        if name in live:
-            raise RuntimeError('crew name ' + name + ' is live in another run; choose another --name or omit it')
-        if name in other_role:
-            raise RuntimeError('crew name ' + name + " is this task's other role; choose another --name or omit it")
         for other, names in foreign.items():
             if name in names:
                 raise RuntimeError('crew name ' + name + ' is on the ' + other + ' roster and a name belongs to'
@@ -336,6 +335,10 @@ def choose_name(alias, role, rosters, live, last, other_role, room, served=None)
         if crossed(name, role, served):
             raise RuntimeError('crew name ' + name + ' has served as a ' + crossed(name, role, served)
                                + ' and a name belongs to one role; choose another --name or omit it')
+        if name in other_role:
+            raise RuntimeError('crew name ' + name + " is this task's other role; choose another --name or omit it")
+        if name in live:
+            raise RuntimeError('crew name ' + name + ' is live in another run; choose another --name or omit it')
     elif not roster:
         raise RuntimeError(role + ' has no roster; give it a --name')
     else:
