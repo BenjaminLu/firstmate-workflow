@@ -396,7 +396,7 @@ class Session(unittest.TestCase):
         crew = self.repo / 'state/crew/rosters.json'
         none = self.roster_cli()
         self.assertEqual(1, none.returncode, none.stderr)
-        self.assertIn('no crew drawn yet; bin/fm.sh roster init draws one', none.stderr)
+        self.assertIn('no crew drawn yet; roster init draws one', none.stderr)
         self.assertFalse(crew.exists())
         init = self.roster_cli('init')
         self.assertEqual(0, init.returncode, init.stderr)

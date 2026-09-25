@@ -195,7 +195,7 @@ def drawn_rosters(root):
     """state/crew/rosters.json, checked, or None before the draw."""
     path = rosters_path(root)
     if not path.exists(): return None
-    broken = ValueError(str(path) + ' is not a crew of two rosters; bin/fm.sh roster init --redraw draws a new one')
+    broken = ValueError(str(path) + ' is not a crew of two rosters; roster init --redraw draws a new one')
     try: crew = read(path)
     except (OSError, ValueError): raise broken
     if not isinstance(crew, dict): raise broken
@@ -1411,13 +1411,13 @@ def project_field(config, field):
 
 
 def roster_command(root, action='show', redraw=''):
-    """`fm.sh roster`: print both rosters; `init` draws them once; `--redraw`
+    """The roster command: print both rosters; `init` draws them once; `--redraw`
     replaces them, and only when asked."""
     if action not in ('show', 'init'): raise ValueError('unknown roster action ' + action)
     if action == 'show' and not redraw:
         crew = drawn_rosters(root)
         if not crew:
-            print('fm roster: no crew drawn yet; bin/fm.sh roster init draws one', file=sys.stderr)
+            print('fm roster: no crew drawn yet; roster init draws one', file=sys.stderr)
             return 1
     else:
         crew, drawn = draw_rosters(root, redraw=bool(redraw))
