@@ -1,0 +1,37 @@
+{
+  "id": "T-068",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-065"
+  ],
+  "title": "the repository carries a license, a code of conduct, a contributing guide and issue and pull request templates",
+  "scope": [
+    "LICENSE",
+    "CODE_OF_CONDUCT.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    ".github/pull_request_template.md",
+    ".github/ISSUE_TEMPLATE/config.yml",
+    ".github/ISSUE_TEMPLATE/bug.yml",
+    ".github/ISSUE_TEMPLATE/task-proposal.yml",
+    "README.md",
+    "config.yaml",
+    "tests/config.test.sh",
+    "design/design.md",
+    "design/tasks.json"
+  ],
+  "acceptance": [
+    "GitHub's community profile reports no license, no code of conduct, no contribution guidelines, no issue template and no pull request template. The captain asked for all five, designed well for this repository. Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+    "Captain decision D-1016 = A: LICENSE carries the full MIT License text with the line 'Copyright (c) 2026 Benjamin Lu'. README.md gains a short License section naming it (SPDX: MIT), and CONTRIBUTING.md states that contributions are accepted under MIT.",
+    "Captain decision D-1017 = B: CODE_OF_CONDUCT.md adopts the Contributor Covenant 2.1, and its reporting contact is coopermilk123@gmail.com, the maintainer, Benjamin Lu. It invents nothing else: no second contact, and no enforcement committee that does not exist.",
+    "CONTRIBUTING.md explains how this repository actually works, not a generic guide. Work is planned as tasks in design/tasks.json with a row in design/design.md's table, and a change starts from a task. Firstmate dispatches workers and reviewers and puts scope and merge decisions to the captain on the board. Every pull request, human or agent, passes the seven gates in design.md (gate 4 scope from the task entry, gate 5 fail-first, gate 6 the required check, gate 7 an APPROVE). The project check is config.yaml's `project:` contract, and bin/ci.sh runs it locally with setup via `bun install --frozen-lockfile`. It covers the closed-list review protocol from round three, English for repository text with en and zh-TW summaries on the board, and contributions accepted under MIT. Every claim matches the current scripts and design.md; do not describe features that are not merged.",
+    "SECURITY.md says how to report a vulnerability privately (GitHub private vulnerability reporting), what is in scope (bin/, board/, adapters, hooks) and that no bounty exists.",
+    ".github/pull_request_template.md asks for: the task id (T-xxx) and the design.md section it implements; what changed; scope, confirming every file is in the task's scope; evidence (the required check and the gates, with fail-first); and captain decisions cited by id. It also carries a checklist that mirrors the gates. It must not conflict with the body fm-worker.sh writes for its own pull requests: read fm-worker.sh's PR body and design the template so both read naturally.",
+    ".github/ISSUE_TEMPLATE/ holds issue forms (YAML): bug.yml (what happened, what was expected, repro, the script and version, logs) and task-proposal.yml (the problem, the proposed acceptance, likely scope files, affected design.md section). config.yml disables blank issues and links to CONTRIBUTING.md, SECURITY.md and the code of conduct.",
+    "config.yaml's project `docs` globs gain every file this task adds (LICENSE, CODE_OF_CONDUCT.md, CONTRIBUTING.md, SECURITY.md and .github/ISSUE_TEMPLATE/** and .github/pull_request_template.md), so gate 5 treats them as documentation needing no test. The globs name exactly these paths; nothing that runs is exempted.",
+    "Captain decision D-1018 = A: tests/config.test.sh joins this scope for one fail-first assertion. This repository's declared project docs globs (fm_project docs config.yaml) include every path this task adds, and the assertion goes red when config.yaml is reverted. config.yaml itself is never exempted as documentation.",
+    "Evidence is this pull request's required GitHub check and the seven gates; the worker does not run the suite itself.",
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+  ]
+}
