@@ -433,6 +433,18 @@ class Entrypoints(unittest.TestCase):
         self.env.update(PATH=str(self.fake)+os.pathsep+os.environ['PATH'], HERDR_ENV='1', HERDR_PANE_ID='caller',
                         FM_ROOT=str(self.repo), FM_TEST_ROOT=str(self.repo), FM_HERDR_TIMEOUT=str(WAIT),
                         FM_GIT_NAME='t', FM_GIT_EMAIL='a@b.c')
+        # Every vendor round runs behind bin/fm-sandbox.sh (T-105), and a host
+        # with no OS sandbox refuses every vendor. A runner cannot be relied on
+        # to have one, so the sandbox binary is a stand-in, as in
+        # tests/adapter-contract.test.sh: it records what it was handed and
+        # runs the command. It lives outside fakebin, so nothing on PATH is it.
+        tool=self.repo/'sandbox-tool'; tool.mkdir()
+        (tool/'bwrap').write_text('#!/usr/bin/env bash\n'
+                                  'printf "%s\\n" "$@" >> "$FM_TEST_ROOT/sandboxed"\n'
+                                  'while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done\n'
+                                  'shift\nexec "$@"\n')
+        (tool/'bwrap').chmod(0o755)
+        self.env.update(FM_SANDBOX_OS='linux', FM_SANDBOX_TOOL=str(tool/'bwrap'))
         self.executable('herdr', r'''
 import json, os, pathlib, subprocess, sys, uuid
 r=pathlib.Path(os.environ['FM_TEST_ROOT']); a=sys.argv[1:]
@@ -867,6 +879,18 @@ elif a[0]=='branch': print('t-035-test')
         self.assertEqual(0,answer.returncode,answer.stderr)
         self.assertTrue((self.repo/'controls').exists())
         self.assertEqual(1,len(self.results()))
+    def test_managed_rounds_run_inside_the_os_sandbox(self):
+        # T-105: a worker and a reviewer each start their CLI inside the OS
+        # sandbox, confined to their own tree with no network of their own
+        for script,args in (('fm-worker.sh',['--task','T-035']),
+                            ('fm-review.sh',['--task','T-035','--branch','work'])):
+            with self.subTest(script=script):
+                (self.repo/'sandboxed').unlink(missing_ok=True)
+                answer=self.invoke(script,args)
+                self.assertEqual(0,answer.returncode,answer.stderr)
+                handed=(self.repo/'sandboxed').read_text().splitlines()
+                self.assertIn('--unshare-net',handed)
+                self.assertIn('--',handed)
     def test_unknown_adapter_remains_configuration_error(self):
         answer=self.invoke('fm-worker.sh',['--task','T-035','--vendor','unknown'])
         self.assertEqual(65,answer.returncode,answer.stderr)

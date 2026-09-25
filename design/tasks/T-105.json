@@ -23,6 +23,8 @@
     "tests/worker.test.sh",
     "tests/review.test.sh",
     "tests/sandbox.test.sh",
+    "tests/herdr.test.sh",
+    "tests/config.test.sh",
     "design/design.md",
     "design/tasks/T-105.json",
     "design/proposals/2026-09-25-crew-permissions/design.md"
