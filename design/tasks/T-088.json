@@ -1,0 +1,22 @@
+{
+  "id": "T-088",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-073"
+  ],
+  "title": "the reviewer sees the head's required check and gate results",
+  "scope": [
+    "bin/fm-review.sh",
+    "tests/review.test.sh",
+    "tests/gh-stub.sh",
+    "skills/reviewer/SKILL.md",
+    "design/design.md",
+    "design/tasks/T-088.json"
+  ],
+  "acceptance": [
+    "A diff-only reviewer cannot close a closed-list item that asks for green CI and gates, because it never sees them. T-067's round nine was rejected on evidence alone. The skill makes current-head CI and gates firstmate's evidence to establish. fm-review.sh adds to every prompt, verbatim and labelled: the head SHA under review; the required check's name, conclusion and run URL for that exact head (gh, in its real JSON shape); and, when a gate summary file for that head exists under state/, its seven lines. When either is missing, the prompt says so plainly. Nothing else is added. Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
+    "Evidence is this pull request's required GitHub check and the seven gates. Tests written to fail first: the prompt names the head and its check conclusion; a check from another head is not shown as this one's; a missing gate summary is stated; rounds without --pr are unchanged. The worker does not run the suite itself.",
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+  ]
+}

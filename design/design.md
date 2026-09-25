@@ -75,7 +75,7 @@ These bind every actor, including firstmate itself.
 | Q9 | Where pull requests live | `BenjaminLu/firstmate-workflow`, public so branch protection is available; under Q10 a task's pull request lives on its project's repository |
 | Q10 | Which repositories firstmate drives | D-049, option B: one external installation — this repository holds the engine, every project's design and task list, and all runtime state, and drives registered target repositories that carry none of it (section 15) |
 | R1 | Self-update | Skills define behaviour; writing them back travels a full pull request; external skills import read-only |
-| R2 | What the reviewer sees | The diff, the task spec and the acceptance criteria — never the worker's reasoning |
+| R2 | What the reviewer sees | The diff, the task spec and the acceptance criteria, plus, given the pull request, the head's SHA, required check and gate summary (section 7) — never the worker's reasoning |
 | R3 | Granularity | One task, one pull request, one worktree; `depends_on` forms a DAG; three in flight |
 | R4 | Branching | Every task branches from `main` and targets `main`; the worker rebases its own conflicts |
 | R5 | Writing the log | Only through `bin/fm-emit.sh` |
@@ -389,6 +389,60 @@ role may name its own engine — `reviewer:` and `worker:` blocks in
 `fallback:`, with no vendor run twice. A reviewer whose engine is down is
 therefore not a reviewer who never ran.
 
+The reviewer's `vendor` and `model` are the captain's choice (T-066); this
+repository names `claude` and `opus-5`, the worker's own. A project naming
+neither is reported by `fm-session.sh start` and firstmate asks the captain
+through a choice card; the answer lands as a `config.yaml` pull request.
+
+`reviewer: mode:` sets how a review runs. `diff`, the default for a project
+that declares nothing, is the prompt above and nothing else. `run` makes a
+fresh clone of the pull request head under the system temp directory - never a
+worktree, whose shared `.git` would let git inside it write outside it - with
+the base at `fm/base`, the head at `fm/head` and no remote, and removes it
+from the EXIT trap on every exit the shell handles; a SIGKILL runs no trap,
+so the next run-mode round removes any `fm-review.*` checkout whose owning
+process is gone. The prompt adds the branch's own
+project contract and asks for `setup`, `check`, the touched suites, fail-first
+against the base versions of the changed non-test files, and an **Executed**
+/ **Read, not run** account. The adapter, not the prompt, confines the engine:
+`FM_RUN_REVIEW=1` and `FM_REVIEW_CHECKOUT` tell it the round is a run-mode one,
+and only an adapter carrying a `# fm:review-run` line may take it -
+`fm_review_run_chain` drops the others from the chain, refuses a head that
+lacks it with `65`, and `fm_adapter_context` refuses one before its CLI
+starts. `claude` carries it. `--restricted`, `--strict-mcp-config` and
+`--disable-slash-commands` load no user, project or local settings, MCP
+servers or skills - the clone is the branch under review, and its `.claude/`
+would otherwise add hooks and rules to the round - so only the adapter's
+`--settings` and managed policy apply: `dontAsk`, file tools only in the clone
+and the temp directory, shell commands only inside the sandbox, whose network
+reaches only the hosts `reviewer: network:` declares for `setup`. Those are
+plain domain names, and never one GitHub operates (`github.com`,
+`github.io`, `github.dev`, `githubusercontent.com`, `githubassets.com`,
+`githubapp.com`, `githubcopilot.com`, `ghcr.io`, `ghe.com` or any subdomain,
+in any case) nor a wildcard, which could match one. One rule in
+`bin/adapters/_lib.sh` (`fm_review_host_refusal`) decides it: `fm-review.sh`
+refuses such a list with `65` before anything is built, and
+`fm_adapter_context` refuses it with `64` before any CLI starts, however the
+adapter was reached. The declared commands write their caches under
+`$HOME` by default, where the sandbox refuses them, so the round exports
+`XDG_CACHE_HOME`, `BUN_INSTALL_CACHE_DIR`, `PLAYWRIGHT_BROWSERS_PATH` and
+`npm_config_cache` into its own temp directory; `setup` downloads afresh each
+round. The engine starts without the launcher's `FM_*`, `HERDR_*`, `GIT_*`
+and GitHub-token variables: `fm_identity` exports `FM_ROOT` at the task's
+repository, and the clone's scripts choose their tree from it, so a `check`
+the reviewer ran would otherwise gate another tree than the head under review.
+The reviewer has no GitHub access at all, and needs none: it judges the head
+by running it, so a run-mode round fetches no CI, no gate results and no pull
+request state for it, and its prompt carries neither T-088's head section nor
+any other CI listing (captain, 2026-09-25). CI and the gates are firstmate's
+merge gate in both modes (§6, the merge double check). The only thing it
+still reads from GitHub is the closed-list protocol's comments (§7), which
+are not evidence about the head. What stops a push is the
+missing remote and the unreachable GitHub; the deny list for push, gh writes
+and raw HTTP matches a literal command prefix and is only a second guard.
+Both modes emit `review_opened` and
+`approved` or `review_failed` as the reviewer; `fm-review.sh` posts the verdict.
+
 A round that produced no review exits `3` and emits `review_failed` with
 `data.review_outcome` set to `missing_review` when an attempt completed without
 a signed verdict, or `infrastructure_error` for vendor/configuration/execution
@@ -573,7 +627,8 @@ available, `64` it was called wrong, `65` no such task in
 `design/tasks/` or an unknown configured adapter, `70` something the run
 needs and cannot have — no library, no worktree, nowhere to put a scratch file,
 identity/snapshot failure, a live task lock, failed managed transport, a
-round's commit that failed (nothing is pushed or reported after it), or a
+round's commit that failed (nothing is pushed or reported after it), a new
+script whose executable bit could not be set before it, or a
 rebuild on the base that could not be made —
 `71` the push failed — a rebuilt branch's lease refused included — `72` no
 pull request number came back, `73` the worker had
@@ -636,10 +691,33 @@ squash-merge that fails without leaving a conflict stops the round with
 
 The branch ref does not move until origin has taken the rebuilt commit,
 so a run that dies half way leaves the branch where it was, and `fm-checkpoint.sh` refuses
-the detached worktree. A round that only asks, or is refused before its
-commit, publishes nothing. The next round finds the worktree dirty, copies
-it to `state/rescued/` as it does any interrupted run, recreates the
-worktree from the unmoved branch and rebuilds again.
+the detached worktree.
+
+A rebuild that applied — nothing unresolved handed to the worker — is
+always committed and pushed, whatever the worker did with the round:
+changed files, changed nothing, left a note, or only asked, as the
+round-three protocol requires (T-098). With no change of the worker's,
+the commit is the rebuild alone; otherwise the worker's changes are in it
+on top. An asking round is still reported as asked, and its question
+still goes on the pull request: the one there is, or the one the push
+opens. A note the pull request refuses is kept under `state/unsent/` at
+once, and only once: it is never offered again, since a refusal can come
+back for a comment GitHub stored. The rebuild is still pushed, and the
+round then fails with `73`; a failure on the way to the push ends it with
+that failure's own code instead, the note already kept. Such a round used
+to publish nothing, and the branch stayed on its old head, `DIRTY` on
+GitHub, until the captain pushed it by hand (T-089, T-086).
+
+Unresolved is a conflict, with or without markers, and also the task's
+own `design/tasks.json` entry or table row when the rebuild could not
+keep it as the previous head had it — the prompt lists that file for the
+worker to put back, and the check before the commit refuses the rebuild
+as it stands, as it refuses a marker. An unresolved rebuild is never
+published. A round that only asks about one completes as asked and
+publishes nothing; one refused before its commit publishes nothing
+either. The next round finds the
+worktree dirty, copies it to `state/rescued/` as it does any interrupted
+run, recreates the worktree from the unmoved branch and rebuilds again.
 
 On a base that keeps one file per task (section 14) the task's own
 business is one file, `design/tasks/<id>.json`, and it comes through
@@ -709,6 +787,37 @@ goes into the round's `commit_pushed` (or `pr_opened`) event as
 `data.rebuilt.previous_head`, and onto the pull request as a comment for
 the reviewer, whose last reading of the branch no longer exists on it.
 
+### 5.3.4 A new script is committed executable
+
+The claude worker's sandbox refuses `chmod`, so every script a worker
+added was committed `100644`, a suite that ran it by path failed with
+`126`, and reviewers raised it every round (T-048 for five, T-059). So
+before any round's commit, plain or rebuilt, `fm-worker.sh` sets the bit
+itself (T-098), with `git update-index --chmod=+x`: the index needs no
+permission of the worker's. It also sets it on disk where it can, so the
+worktree agrees with the commit. It does so for a file that
+
+- the round adds — absent from the commit the round started from. In a
+  plain round that is `HEAD` as the adapter found it, so a script a
+  mid-run `fm-checkpoint.sh` already committed without the bit is still
+  one the round adds; in a rebuilt round it is the rebuild base, and the
+  file must be absent from the previous head too;
+- lies under `bin/` or `tests/`;
+- is a script: its first two bytes are `#!`, whatever its extension, so a
+  `.sh`, `.py` or `.ts` without a shebang line is left alone;
+- sits in a directory that already holds an executable script in the
+  commit the round started from. A directory whose only scripts are
+  sourced or imported, or a new directory, says nothing, and is left
+  alone.
+
+A bit is never removed, and no file the round did not add is touched: an
+existing `100644` script, such as a sourced library, stays as it is. The
+run names each file it marked. If the index refuses, the round's commit
+is not made and the run exits `70`; as on any exit before that commit, a
+plain round's worktree is still saved by the exit's checkpoint — through
+`fm-checkpoint.sh`, which commits the script without its bit — and a
+rebuilt one publishes nothing.
+
 ### 5.4 The pull request protocol
 
 Strings on a pull request are input to `bin/fm-gate.sh`. Wrong format means it
@@ -735,6 +844,8 @@ grilling  ->  /prototype  ->  [captain green-lights]  ->  design.md + design/tas
                           *  fm-gate.sh, the seven gates  *
                                        |
             fm-review.sh: reviewer sees the diff, the spec, the criteria
+         (diff mode: and, given the PR, the head's check and gate results,
+          as information; run mode: runs the tests in a fresh clone instead)
                                        |
      not passed -> worker revives and fixes (round 3+ asks first) -> back to the gates
                                        |
@@ -810,6 +921,18 @@ markers; a later rejection does not invalidate an earlier matching comment.
 Firstmate must verify provenance and current readiness explicitly. Any red gate
 requires remediation regardless of praise or an `approved` event.
 
+**Round order and the merge double check (captain, 2026-09-25).** A review
+round starts as soon as the worker hands back, through `fm-review.sh`, and
+never waits on CI: CI and the seven gates are not a review criterion in
+either mode. A merge card needs two independent checks on the same current
+head: the reviewer's `APPROVE:<task-id>` for that head, and firstmate's own
+reading of that head's required GitHub check (green) and the seven gates
+(`fm-gate.sh`). Neither substitutes for the other - an approval is not green
+CI, and green gates are not an approval - and a head that changes after
+either check restarts both. `fm-run.sh`'s loop still sends a task to review
+only once gates 1-6 are green; until it follows this order, firstmate starts
+the round itself when the worker hands back.
+
 Gates 3 and 5 name no toolchain. The target repository declares its own in
 `config.yaml`'s `project:` block (`setup`, `check`, `check_env`, `tests`,
 `test`, `docs`; see the README), and the gates run exactly that, read from the
@@ -861,7 +984,39 @@ closed list; findings cite its items or are marked `REGRESSION:`), only an ask
 (answer with the complete list), neither, or comments `gh` could not read, in
 which case the round still runs.
 No other comment enters the prompt, so the worker's reasoning stays out.
-Rounds one and two, and any round without `--pr`, get the prompt unchanged.
+Rounds one and two get no closed-list section. Given `--pr`, they, like every
+diff-mode round, do get the head section below; without `--pr` no round gets
+either, and the prompt is unchanged.
+
+A diff cannot show CI or gates, so a closed-list item asking for them could
+never be closed (T-067, round nine). Current-head CI and gates are firstmate's
+merge gate, not a review criterion (§6, the merge double check), so no
+closed-list item may ask for them. In diff mode the launcher shows the
+reviewer what exists for the head, as information only (T-088); a run-mode
+round judges the head by running it and gets no head section and no CI from
+GitHub (T-066). Given `--pr`, every diff-mode round's prompt gets a **The head under
+review** section before the diff, verbatim and labelled: the head SHA, from
+the local branch the diff is taken from; for each name `gh pr checks <pr>
+--required --json name` lists, that check's name, conclusion and run URL from
+GitHub's check runs for that exact commit (`gh api
+repos/{owner}/{repo}/commits/<sha>/check-runs?check_name=<name>`), keeping
+only a run whose `head_sha` is the head and the latest of those; and the
+whole of `state/gates/<task-id>-<sha>.txt`, unfiltered and fenced with a
+per-run nonce, when that file exists. Its lines are `fm-gate.sh`'s own
+stdout: `  + gate N: …` or `  x gate N: …`. A required check that cannot be
+read, a check with no run for this head, a missing gate summary, and each
+gate the summary has no result line for (it stops at the first red gate, and
+an empty one has none) are stated plainly. Nothing else is added, and a round
+without `--pr` is unchanged.
+
+The gate half is not closed yet. Nothing writes that gate summary:
+`fm-run.sh` sends `fm-gate.sh`'s stdout to `/dev/null`, and it is outside
+T-088's scope. Until a writer tees that stdout to
+`state/gates/<task-id>-<sha>.txt`, every diff-mode prompt reports the head's
+gate results as unknown, and firstmate reads the gates from `fm-gate.sh`
+itself for the merge double check. The path
+and the `  + gate N: …` / `  x gate N: …` lines of `fm-gate.sh`'s own `say()`
+are the contract that writer must follow.
 
 The point is to end the loop where each round fixes one thing and surfaces
 another.
@@ -1930,7 +2085,8 @@ The worker and reviewer skills stop pointing at repository-relative files
 (`design/design.md`, `design/tasks/`, `bin/fm-checkpoint.sh`) and refer to
 "the design, scope and checkpoint command in your prompt". The self project
 gets the same prompt shape. The reviewer still sees the diff, the spec and the
-design — never the worker's reasoning (R2). Firstmate itself always runs in
+design, and given the pull request the head's CI and gate evidence (section
+7) — never the worker's reasoning (R2). Firstmate itself always runs in
 the engine root and names the project on every script it calls.
 
 ### 15.8 Open captain decision: private projects
