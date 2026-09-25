@@ -14,7 +14,7 @@
 #   fm-sandbox.sh decide  --policy=<file> [--vendor=<name>] <host>
 #       -> allow or deny, and why: the rule the round's proxy applies
 #   fm-sandbox.sh run     --policy=<file> --root=<dir> [--tmp=<dir>] [--write=<dir>]... [--vendor=<name>]
-#                         [--blocked=<file>] [--started=<file>] -- <command> [args...]
+#                         [--blocked=<file>] [--started=<file>] [--ctl=<dir>] -- <command> [args...]
 #   fm-sandbox.sh plain   --policy=<file> [--tmp=<dir>] [--started=<file>] -- <command> [args...]
 #       -> the environment scrub and the ulimits only: what an adapter's own
 #          flags stand in for when this host has no sandbox
@@ -23,8 +23,15 @@
 # `run` makes one when none is given. The caller's TMPDIR is never a root:
 # every round and every run-mode review checkout shares it.
 #
+# --ctl is where `run` keeps its own files - the profile, the proxy's port
+# or socket - out of the round's reach: an adapter passes the control
+# directory it made beside the round's temp directory. Without it, the
+# caller's TMPDIR. A directory that would fall inside a write root refuses
+# the round.
+#
 # --started names a file that holds "started" once the sandbox is up and
-# the command is about to be exec'd, written from inside it. Without that
+# the command is about to be exec'd, written from inside it. It is emptied
+# right after the options, before anything can fail. Without that
 # line, the exit code is this script's or the sandbox binary's, not the
 # command's: the adapter counts the vendor unavailable rather than calling
 # a round that never ran a failed attempt.
@@ -471,10 +478,11 @@ SHIM='printf "started\n" >&4; exec 4>&-; exec "$@"'
 
 # --- the option loop: every flag is --name=value --------------------------
 cmd="${1-}"; [ $# -gt 0 ] && shift
-policy=''; root=''; vendor=''; blocked=''; port=''; tmp=''; listening=''; started=''; writes=()
+policy=''; root=''; vendor=''; blocked=''; port=''; tmp=''; listening=''; started=''; ctl=''; writes=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --policy=*) policy="${1#*=}"; shift ;;
+    --ctl=*) ctl="${1#*=}"; shift ;;
     --started=*) started="${1#*=}"; shift ;;
     --root=*) root="${1#*=}"; shift ;;
     --tmp=*) tmp="${1#*=}"; shift ;;
@@ -489,6 +497,11 @@ while [ $# -gt 0 ]; do
     *) break ;;
   esac
 done
+# --started is emptied before anything else can fail: a line left from an
+# earlier round would say this one got as far as its command when it did not
+if [ -n "$started" ]; then
+  : > "$started" || { say "cannot write $started"; exit 70; }
+fi
 required() { [ -n "$2" ] || { say "$cmd needs --$1=<value>"; exit 64; }; }
 
 # the dimensions the sandbox covers on this host for this policy
@@ -551,12 +564,22 @@ trap 'exit 143' TERM
 launcher=(); inner=()
 if [ "$cmd" = run ]; then
   # fm-sandbox's own files - the proxy's port or socket, the profile - are
-  # not the round's: not in its TMPDIR, which an adapter points at the
-  # round's own temp directory, a write root. /tmp is readable by no round
-  # (Linux gives each a fresh one), and a short path keeps the socket's
-  # within AF_UNIX's 104 bytes on macOS.
-  work="$(mktemp -d /tmp/fm-sb.XXXXXX)" || exit 70
+  # not the round's. They go under --ctl, which an adapter makes beside the
+  # round's temp directory and outside every write root; without one, under
+  # the caller's TMPDIR. Never a fixed /tmp: a confined caller - a run-mode
+  # reviewer, a worker running the suites - may not write there. Whichever
+  # it is, a directory inside a root the round may write is refused.
+  parent="${ctl:-${TMPDIR:-/tmp}}"
+  work="$(mktemp -d "${parent%/}/fm-sb.XXXXXX")" || {
+    say "cannot make the sandbox's own directory under $parent"; exit 70; }
   work="$(cd "$work" && pwd -P)"
+  for w in "$root" "$tmp" ${writes[@]+"${writes[@]}"}; do
+    [ -n "$w" ] && w="$(cd "$w" 2>/dev/null && pwd -P)" || continue
+    case "$work/" in "${w%/}"/*)
+      say "the sandbox's own directory $work is inside $w, which the round may write; pass --ctl=<dir> outside it"
+      exit 70 ;;
+    esac
+  done
   # The proxy runs outside the sandbox and is the round's only way out: the
   # declared registries, the vendor's own service, and nothing else. Every
   # host it refuses is written to --blocked, which is how a round names the
@@ -564,6 +587,9 @@ if [ "$cmd" = run ]; then
   # the profile lets the round reach; on Linux on a unix socket bound into
   # the round's own network namespace.
   sock=''; [ "$os" = darwin ] || sock="$work/proxy.sock"
+  # AF_UNIX paths stop at 108 bytes on Linux
+  [ "${#sock}" -le 100 ] || {
+    say "the proxy's socket path $sock is too long for AF_UNIX; pass a shorter --ctl"; exit 70; }
   # nothing of the caller's is held open by it: a proxy left behind by a
   # killed round must not keep the adapter's transcript pipe from closing
   python3 -c "$SB_PY" proxy "$policy" "$vendor" "$work/port" "${blocked:-}" "$sock" >/dev/null 2>&1 3<&- &
@@ -634,10 +660,7 @@ procs=$((used + procs))
 # --started: the file the shim writes "started" to from inside the sandbox.
 # It is outside every write root, so the round cannot write it itself.
 shim=()
-if [ -n "$started" ]; then
-  : > "$started" || { say "cannot write $started"; exit 70; }
-  shim=(/bin/sh -c "$SHIM" fm-round)
-fi
+[ -z "$started" ] || shim=(/bin/sh -c "$SHIM" fm-round)
 (
   hard="$(ulimit -Hu 2>/dev/null)"
   case "$hard" in ''|unlimited) ;; *) [ "$procs" -le "$hard" ] || procs="$hard" ;; esac

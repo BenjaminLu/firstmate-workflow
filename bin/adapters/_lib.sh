@@ -231,7 +231,7 @@ fm_adapter_confine() {
   FM_ROUND_STARTED="$FM_ROUND_CTL/started"
   if [ -n "$FM_OUTER_OS" ]; then
     FM_LAUNCH+=(run --policy="$FM_POLICY" --root="$work" --tmp="$FM_ROUND_TMP" --vendor="$vendor"
-                --started="$FM_ROUND_STARTED")
+                --started="$FM_ROUND_STARTED" --ctl="$FM_ROUND_CTL")
     # the CLI's own final answer is written where the launcher reads it
     [ -z "${FM_ATTEMPT_DIR:-}" ] || FM_LAUNCH+=(--write="$FM_ATTEMPT_DIR")
     [ -z "${FM_FINAL_PATH:-}" ] || FM_LAUNCH+=(--write="$(dirname "$FM_FINAL_PATH")")

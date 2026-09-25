@@ -1741,7 +1741,12 @@ its policy. When the sandbox itself fails before it starts the CLI - its
 proxy, its profile, the process count, the sandbox binary - that is 2 as
 well, not the launcher's exit code read as a model giving up:
 `fm-sandbox.sh --started` writes `started` from inside the sandbox just
-before the CLI, and a round without that line never ran.
+before the CLI, and a round without that line never ran. The file is
+emptied right after the options, so every earlier exit leaves it empty.
+fm-sandbox's own files (the profile, the proxy's port or socket) go under
+`--ctl`, the adapter's control directory beside the round's temp directory
+and outside every write root; never a fixed `/tmp`, which a confined
+caller (a run-mode reviewer, a worker running the suites) cannot write.
 
 The vendors' own flags, against the proposal's section 4
 (`design/proposals/2026-09-25-crew-permissions/design.md`):

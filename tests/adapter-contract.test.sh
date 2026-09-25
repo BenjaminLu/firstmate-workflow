@@ -47,6 +47,7 @@ assert_eq '["registry.npmjs.org","cdn.playwright.dev"]' "$(jq -c .network "$pk/n
 cat > "$pk/sandbox-exec" <<S
 #!/usr/bin/env bash
 [ "\$1" = -f ] || exit 99
+printf '%s\n' "\$2" > "$pk/profile.path"
 cp "\$2" "$pk/profile.sb"
 shift 2
 exec "\$@"
@@ -395,6 +396,11 @@ for v in claude codex cursor-agent gemini; do
   assert_eq "0" "$(confined darwin "$pk/sandbox-exec" "$pk/none.json" "$v")" "$v runs inside sandbox-exec"
   assert_ok "test -s '$pk/profile.sb'" "behind a profile made from the policy"
   assert_contains "$(cat "$pk/profile.sb" 2>/dev/null)" "(deny network*)" "which denies $v's round the network"
+  # the sandbox's own files are in the adapter's control directory: not the
+  # round's TMPDIR, a write root, and not a fixed /tmp a confined caller
+  # cannot write
+  assert_matches "$(cat "$pk/profile.path" 2>/dev/null)" '/fm-ctl\.[A-Za-z0-9]+/fm-sb\.[A-Za-z0-9]+/profile$' \
+    "$v's profile is kept in the adapter's control directory, out of the round's reach"
 done
 # a seatbelt cannot start inside sandbox-exec, so under it the vendors' own
 # sandboxes are off and the outer one confines their commands

@@ -176,6 +176,7 @@ mkdir -p "$t/bin"
 cat > "$t/bin/sandbox-exec" <<S
 #!/usr/bin/env bash
 [ "\$1" = -f ] || exit 99
+printf '%s\n' "\$2" > "$t/profile.path"
 while IFS= read -r l; do printf '%s\n' "\$l"; done < "\$2" > "$t/profile.sb"
 shift 2
 exec "\$@"
@@ -376,16 +377,23 @@ printf 'tcp4       0      0  10.0.0.2.52000         1.2.3.4.443            ESTAB
 S
 chmod +x "$t/psbin/ps" "$t/psbin/netstat"
 # room to fork: the stand-in's count is 3, far below what the user runs
-: > "$t/blocked"; rm -f "$t/ran" "$t/profile.sb" "$t/started"
+: > "$t/blocked"; rm -f "$t/ran" "$t/profile.sb" "$t/profile.path" "$t/started"
+mkdir -p "$t/ctl"
 pol worker 'policy:
   procs: 1000000
   cpu: 90
 '
 echo "the prompt" | GH_TOKEN=x GITHUB_TOKEN=x SSH_AUTH_SOCK=/x AWS_SECRET_ACCESS_KEY=x HERDR_SOCKET=/x KEEP_ME=kept \
   FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" PATH="$t/psbin:$PATH" \
-  "$SB" run --policy="$t/worker.json" --root="$root" --blocked="$t/blocked" --started="$t/started" -- "$t/cmd.sh"
+  "$SB" run --policy="$t/worker.json" --root="$root" --blocked="$t/blocked" --started="$t/started" \
+  --ctl="$t/ctl" -- "$t/cmd.sh"
 assert_eq "7" "$?" "run exits with the command's own code"
 assert_eq "started" "$(cat "$t/started" 2>/dev/null)" "and says, from inside the sandbox, that it got as far as the command"
+# fm-sandbox's own files are under --ctl: not a fixed /tmp, which a
+# confined caller cannot write, and in none of the round's write roots
+ppath="$(cat "$t/profile.path" 2>/dev/null)"
+assert_matches "$ppath" "^$t/ctl/fm-sb\\.[A-Za-z0-9]+/profile\$" "the profile is kept under --ctl"
+assert_eq "" "$(ls -A "$t/ctl" 2>/dev/null)" "and removed when the round ends"
 # the round's temp directory: its own, in the profile's write roots, and gone after
 rtmp="$(sed -n 's/^TMPDIR=//p' "$t/tmpdir" 2>/dev/null)"
 assert_ne "" "$rtmp" "the round is given a TMPDIR"
@@ -423,13 +431,17 @@ assert_matches "$port" '^[0-9]+$' "the profile lets the round reach only that pr
 # binds in, and the proxy names what it refused.
 rm -f "$t/ran" "$t/bwrap.args"; : > "$t/blocked"
 echo "the prompt" | GH_TOKEN=x FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$t/bin/bwrap" PATH="$t/psbin:$PATH" \
-  "$SB" run --policy="$t/worker.json" --root="$root" --blocked="$t/blocked" -- "$t/cmd.sh"
+  "$SB" run --policy="$t/worker.json" --root="$root" --blocked="$t/blocked" --ctl="$t/ctl" -- "$t/cmd.sh"
 assert_eq "7" "$?" "under bwrap too"
 assert_ok "test -s '$t/bwrap.args'" "the command ran behind bwrap"
 bargs="$(cat "$t/bwrap.args" 2>/dev/null)"
 assert_contains "$bargs" "--unshare-net" "with no network of the host's"
 sockp="$(grep -m1 '/proxy\.sock$' <<< "$bargs")"
 assert_matches "$sockp" '/fm-sb\.[A-Za-z0-9]+/proxy\.sock$' "but the proxy's socket"
+assert_matches "$sockp" "^$t/ctl/fm-sb\\." "which is under --ctl, not a fixed /tmp"
+rtmp_l="$(sed -n 's/^TMPDIR=//p' "$t/tmpdir" 2>/dev/null)"
+case "$sockp" in "$root"/*|"${rtmp_l:-/nonexistent}"/*) under=yes ;; *) under=no ;; esac
+assert_eq "no" "$under" "and in neither the root nor the round's temp directory"
 assert_contains "$bargs" "--bind
 $sockp
 $sockp" "bound into the round"
@@ -441,6 +453,27 @@ assert_contains "$lran" "undeclared.example.org:443 HTTP/1.1 403" "which refuses
 assert_contains "$lran" "github.com:443 HTTP/1.1 403" "and GitHub"
 assert_eq "undeclared.example.org
 github.com" "$(cat "$t/blocked")" "and names each refused host once, on Linux as on macOS"
+
+# Without --ctl the caller's TMPDIR holds them, never a fixed /tmp; and a
+# TMPDIR that is itself a write root - an adapter's round temp - is refused
+# rather than handing the round the profile and the proxy's socket.
+mkdir -p "$t/caller-tmp" "$t/round-c"
+rm -f "$t/bwrap.args"
+TMPDIR="$t/caller-tmp" FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$t/bin/bwrap" PATH="$t/psbin:$PATH" \
+  "$SB" run --policy="$t/worker.json" --root="$root" -- "$t/cmd.sh" </dev/null >/dev/null 2>&1
+assert_eq "7" "$?" "without --ctl the round still runs"
+assert_matches "$(grep -m1 '/proxy\.sock$' "$t/bwrap.args" 2>/dev/null)" "^$t/caller-tmp/fm-sb\\." \
+  "with the sandbox's own files under the caller's TMPDIR"
+for mode_os in darwin linux; do
+  rm -f "$t/tmpdir"
+  tool="$t/bin/sandbox-exec"; [ "$mode_os" = linux ] && tool="$t/bin/bwrap"
+  out="$(TMPDIR="$t/round-c" FM_SANDBOX_OS="$mode_os" FM_SANDBOX_TOOL="$tool" PATH="$t/psbin:$PATH" \
+    "$SB" run --policy="$t/worker.json" --root="$root" --tmp="$t/round-c" -- "$t/cmd.sh" </dev/null 2>&1)"
+  assert_eq "70" "$?" "$mode_os: a TMPDIR that is the round's own temp is refused as the sandbox's directory"
+  assert_contains "$out" "which the round may write" "and says why ($mode_os)"
+  assert_fail "test -e '$t/tmpdir'" "and the command never starts ($mode_os)"
+  assert_eq "" "$(ls -A "$t/round-c" 2>/dev/null)" "and nothing is left in it ($mode_os)"
+done
 
 # The limits, as fm-sandbox set them (SANDBOX_ROUND_LIMITS), and as the kernel
 # reports them back. Expected values are the policy's and the stand-in's,
@@ -510,6 +543,41 @@ assert_eq "71" "$?" "a sandbox that cannot start exits with its own code"
 assert_eq "" "$(cat "$t/started" 2>/dev/null)" "and --started stays empty, a stale line cleared"
 assert_fail "test -e '$t/tmpdir'" "and the command never ran"
 
+# Every exit before the command empties a stale --started, not only the
+# ones after the sandbox is built: the file is emptied right after the
+# options. A python3 stand-in fails one of fm-sandbox's own steps.
+mkdir -p "$t/pybin"
+real_py="$(command -v python3)"
+cat > "$t/pybin/python3" <<S
+#!/usr/bin/env bash
+[ "\${3:-}" = "\${FAIL_PY:-}" ] && exit 1
+exec "$real_py" "\$@"
+S
+chmod +x "$t/pybin/python3"
+stale_case() {   # stale_case <want> <why> <env...> -- <fm-sandbox args...>
+  local want="$1" why="$2" envs=()
+  shift 2
+  while [ "$1" != -- ]; do envs+=("$1"); shift; done
+  shift
+  rm -f "$t/tmpdir"; echo stale > "$t/started"
+  env ${envs[@]+"${envs[@]}"} "$SB" "$@" --started="$t/started" -- "$t/cmd.sh" </dev/null >/dev/null 2>&1
+  assert_eq "$want" "$?" "$why exits $want"
+  assert_eq "" "$(cat "$t/started" 2>/dev/null)" "and a stale --started is emptied ($why)"
+  assert_fail "test -e '$t/tmpdir'" "and the command never ran ($why)"
+}
+stale_case 69 "no sandbox tool" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/no-such-tool" \
+  -- run --policy="$t/worker.json" --root="$root" --ctl="$t/ctl"
+stale_case 65 "a policy that does not read" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" \
+  PATH="$t/psbin:$PATH" -- run --policy="$t/no-such-policy.json" --root="$root" --ctl="$t/ctl"
+stale_case 70 "the proxy failing to start" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" \
+  FAIL_PY=proxy PATH="$t/pybin:$t/psbin:$PATH" -- run --policy="$t/worker.json" --root="$root" --ctl="$t/ctl"
+stale_case 65 "the profile failing" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" \
+  FAIL_PY=profile PATH="$t/pybin:$t/psbin:$PATH" -- run --policy="$t/worker.json" --root="$root" --ctl="$t/ctl"
+stale_case 70 "an unwritable sandbox directory" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" \
+  PATH="$t/psbin:$PATH" -- run --policy="$t/worker.json" --root="$root" --ctl="$t/no-such-ctl"
+stale_case 71 "a broken sandbox binary" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/broken-sandbox" \
+  PATH="$t/psbin:$PATH" -- run --policy="$t/worker.json" --root="$root" --ctl="$t/ctl"
+
 # A process count that cannot be taken refuses the round. Guessing 0 set
 # the limit to the policy's bare count, below what the user already runs,
 # and the round could not fork at all.
@@ -518,12 +586,14 @@ printf '#!/bin/sh\nexit 0\n' > "$t/psbin/ps-empty"
 for why in failing empty; do
   [ "$why" = empty ] && mv "$t/psbin/ps-empty" "$t/psbin/ps"
   for mode in run plain; do
-    rm -f "$t/ran" "$t/tmpdir"
+    rm -f "$t/ran" "$t/tmpdir"; echo stale > "$t/started"
     out="$(FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" PATH="$t/psbin:$PATH" \
-      "$SB" "$mode" --policy="$t/worker.json" --root="$root" -- "$t/cmd.sh" </dev/null 2>&1)"
+      "$SB" "$mode" --policy="$t/worker.json" --root="$root" --ctl="$t/ctl" --started="$t/started" \
+      -- "$t/cmd.sh" </dev/null 2>&1)"
     assert_eq "70" "$?" "$mode refuses the round when ps is $why"
     assert_contains "$out" "cannot count this user's processes" "and says why"
     assert_fail "test -e '$t/tmpdir'" "and the command never starts ($mode, ps $why)"
+    assert_eq "" "$(cat "$t/started" 2>/dev/null)" "and a stale --started is emptied ($mode, ps $why)"
   done
 done
 
