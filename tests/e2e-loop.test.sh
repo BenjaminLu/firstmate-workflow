@@ -9,6 +9,9 @@ for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
   unset "$_fm_k" || true
 done
 export HERDR_ENV=0 FM_TRANSPORT=direct
+# the loop below runs the real fm-gate.sh through fm-run.sh: on a lock of its
+# own it neither waits on a real gate run on this machine nor holds one up
+FM_GATE_LOCK="$(mktemp -d)/gate.lock"; export FM_GATE_LOCK
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
@@ -178,7 +181,7 @@ cat > design/tasks/T-1.json <<'J'
 {"id":"T-1","title":"a task the loop can finish","milestone":"M0",
  "depends_on":[],"scope":["src/**","tests/**"],"acceptance":["it lands"]}
 J
-printf '# design\n## 6. gates\nseven\n## 8. board\n' > design/design.md
+printf '# design\n## 6. gates\nsix of them\n## 8. board\n' > design/design.md
 echo base > src/thing
 git add -A; git commit -qm base; git remote add origin "$bare"; git push -q -u origin main
 
@@ -227,9 +230,9 @@ branch="$(awk -F'\t' 'NR==1{print $2}' "$GHSTATE/prs")"
 assert_contains "$branch" "t-1" "on a branch named after the task"
 assert_ok "git --git-dir='$bare' rev-parse --verify '$branch'" "and it was pushed"
 
-# --- turn two: the gates run, gate seven sends it to review -------------
+# --- turn two: the gates run, gate 7 sends it to review -----------------
 out2="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
-assert_contains "$out2" "sending it to review" "gates one to six pass and it goes to review"
+assert_contains "$out2" "sending it to review" "every gate before 7 passes and it goes to review"
 assert_ok "test -s '$GHSTATE/comments.$pr'" "the reviewer commented"
 
 # fm-run must not swallow a review round that produced no verdict. The
@@ -317,7 +320,7 @@ assert_eq "D-firstmate-workflow-T1-1" "$card1" \
 cp "$DETAILS" "$r/state/decision-details/$card1.json"
 rm -rf "$caller"
 out3="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
-assert_contains "$out3" "asking the captain" "seven green means a decision, not a merge"
+assert_contains "$out3" "asking the captain" "every gate green means a decision, not a merge"
 pend="$(ls "$r/state/pending" 2>/dev/null | head -1)"
 assert_ok "[ -n \"$pend\" ]" "a decision is pending on disk"
 id="${pend%.json}"

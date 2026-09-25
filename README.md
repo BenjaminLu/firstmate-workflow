@@ -109,9 +109,11 @@ block is an error, not an empty declaration.
   whole `check` instead and says so. A missing `check` there, or a failing
   `setup`, fails the gate and says so. A diff whose every non-test path
   matches `docs` needs no new test; any other path still does.
-- **Gate runs are serialized** on one machine by a lock (`FM_GATE_LOCK`, by
-  default `fm-gate.lock` in the temp directory): a second run waits for the
-  first, and a lock whose holder died is taken over.
+- **Gate runs are serialized** on one machine by a kernel lock on a file
+  (`FM_GATE_LOCK`, by default `/tmp/fm-gate.lock`, whatever `TMPDIR` is): a
+  second run waits for the first, and the lock goes with the run that held
+  it, however it ended. A gate run inside one holding the same lock is
+  refused, so a test suite that runs the gate sets its own `FM_GATE_LOCK`.
 - **`fm-session.sh start`** runs `setup` once in the repository checkout and
   reports a `project` block: the declared keys, setup's exit status and a short
   error. A failed setup is reported as not ready; startup carries on.

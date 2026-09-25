@@ -371,6 +371,26 @@ test("either mechanism picks the language on its own", async ({ page }) => {
   }
 });
 
+// Gate 3 is retired (T-114). A gate_failed naming it names no gate the board
+// knows, so the badge carries no number; one naming gate 4 keeps its number.
+test("a failed-gate badge numbers only a gate that exists: 3 is retired, 4 is kept", async ({ page }) => {
+  const root = makeRoot([], false);
+  const [three, four] = readTasks(root);
+  emitFixture(root, 'worker-1', three.id, 'gate_failed', 'Gate three failed', '第三道閘未過', { gate: 3 });
+  emitFixture(root, 'worker-2', four.id, 'gate_failed', 'Gate four failed', '第四道閘未過', { gate: 4 });
+  const b = await startBoard(root);
+  try {
+    const state = await (await fetch(b.url + '/api/state')).json();
+    const gateBadge = (id: string) =>
+      state.tasks.find((t: any) => t.id === id).badges.filter((x: any) => x.kind === 'gate');
+    expect(gateBadge(three.id)).toEqual([{ kind: 'gate', gate: null }]);
+    expect(gateBadge(four.id)).toEqual([{ kind: 'gate', gate: 4 }]);
+    await page.goto(`${b.url}/?lang=en`);
+    await expect(page.locator(`[data-task="${three.id}"] .badge`)).toHaveText(EN.gateFailed);
+    await expect(page.locator(`[data-task="${four.id}"] .badge`)).toHaveText(EN.gateFailedN.replace('{n}', '4'));
+  } finally { stopBoard(b); }
+});
+
 test("the captain merges from the board", async ({ page }) => {
   // its own budget: this one starts a board inside the body, so the global
   // timeout has to cover the start as well as the assertions, and the
@@ -383,7 +403,7 @@ test("the captain merges from the board", async ({ page }) => {
   const card = page.locator(".dcard").first();
   await expect(card).toBeVisible();
   await expect(card.locator(".gates li")).toHaveCount(6);   // gates 1, 2, 4, 5, 6, 7
-  await expect(card.locator(".gates li.n")).toHaveCount(1);   // gate seven open
+  await expect(card.locator(".gates li.n")).toHaveCount(1);   // gate 7 open
 
   await expect(card.locator("button.confirm")).toBeDisabled();
   await card.locator('[data-c="A"]').click();

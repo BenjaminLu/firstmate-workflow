@@ -18,10 +18,11 @@
 # refused rather than reported green.
 #
 # Gate runs on one machine are serialized: a run holds FM_GATE_LOCK (by
-# default fm-gate.lock in the temp directory) from start to exit, and another
-# waits for it. A run started inside a run holding the same lock - gate 5 of
-# this repository runs its own gate tests - is part of that run and does not
-# wait for it, or it would wait for ever.
+# default /tmp/fm-gate.lock, the same path whatever TMPDIR the caller has)
+# from start to exit, and another waits for it. A run started inside a run
+# holding the same lock is refused: waiting would wait for ever, and skipping
+# the lock would not serialize. A suite that runs this script sets its own
+# FM_GATE_LOCK.
 set -uo pipefail
 # Nothing below may read standard input. A dispatched child inherits it, and
 # a child that reads it blocks the caller waiting for a human who is not
@@ -75,32 +76,38 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 cd "$REPO" || { echo "fm-gate: no repo at $REPO" >&2; exit 64; }
 
 # ---- one gate run at a time on this machine ------------------------------
-# mkdir is the lock: it is atomic everywhere, and flock is not on macOS. The
-# holder's pid is inside, so a lock left by a run that was killed is taken
-# over rather than waited on for ever.
-LOCK="${FM_GATE_LOCK:-${TMPDIR:-/tmp}/fm-gate.lock}"
-LOCK="${LOCK%/}"
-if [ "${FM_GATE_LOCK_HELD:-}" != "$LOCK" ]; then
-  waited=''
-  until mkdir "$LOCK" 2>/dev/null; do
-    holder="$(cat "$LOCK/pid" 2>/dev/null)"
-    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
-      # renamed before it is removed, so a waiter that read the same dead pid
-      # cannot remove the lock a third run has just taken
-      mv "$LOCK" "$LOCK.stale.$$" 2>/dev/null && rm -rf "$LOCK.stale.$$"
-      continue
-    fi
-    [ -n "$waited" ] || { echo "fm-gate: waiting for the gate run holding $LOCK${holder:+ (pid $holder)}" >&2; waited=1; }
-    sleep 1
-  done
-  echo "$$" > "$LOCK/pid"
-  # the signal traps only exit; the EXIT trap releases, once
-  trap 'rm -rf "$LOCK"' EXIT
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
-  trap 'exit 129' HUP
-  export FM_GATE_LOCK_HELD="$LOCK"
+# The lock is the kernel's: flock on descriptor 8, taken through perl because
+# macOS ships no flock(1). The kernel drops it when the holder exits, however
+# it exits, so nothing here judges whether a holder is alive - no pid is
+# trusted, a reused pid or another user's run cannot be misread, and no lock
+# is ever removed, which is where a check-then-act race would live. The file
+# stays; the pid written in it only names the holder to a waiter.
+#
+# The default is not under TMPDIR: that differs per user on macOS and per
+# sandbox, and two callers with two temp directories would take two locks.
+LOCK="${FM_GATE_LOCK:-/tmp/fm-gate.lock}"
+if [ "${FM_GATE_LOCK_HELD:-}" = "$LOCK" ]; then
+  echo "fm-gate: this run is inside a gate run that holds $LOCK; give it its own FM_GATE_LOCK" >&2
+  exit 70
 fi
+# made writable by every user, so each can name itself in it
+( umask 000; : >> "$LOCK" ) 2>/dev/null
+[ -r "$LOCK" ] && exec 8< "$LOCK" || {
+  echo "fm-gate: cannot open the gate lock $LOCK; set FM_GATE_LOCK to a file this user can create" >&2
+  exit 70; }
+# take_lock <wait 0|1> ; the descriptor is shared with this shell, so the
+# lock outlives perl and is held until this shell and its children let go
+take_lock() {
+  perl -MFcntl=:flock -e 'open(my $l, "<&=", 8) or exit 2;
+    exit(flock($l, $ARGV[0] ? LOCK_EX : LOCK_EX | LOCK_NB) ? 0 : 1)' "$1"
+}
+if ! take_lock 0; then
+  holder="$(head -n 1 "$LOCK" 2>/dev/null)"
+  echo "fm-gate: waiting for the gate run holding $LOCK${holder:+ (pid $holder)}" >&2
+  take_lock 1 || { echo "fm-gate: could not take the gate lock $LOCK" >&2; exit 70; }
+fi
+printf '%s\n' "$$" > "$LOCK" 2>/dev/null || :
+export FM_GATE_LOCK_HELD="$LOCK"
 
 # ---- the project contract ------------------------------------------------
 # Which toolchain a project uses is its own business. config.yaml's project:
@@ -131,12 +138,14 @@ branch_config() {  # branch_config <file> ; the branch's config.yaml, or empty
 # run_in <dir> <log> <with-check-env 0|1> <command>
 #   FM_ROOT points at <dir>: one inherited from the caller would aim the
 #   command at some other tree. check_env goes on top for check and tests.
+#   The gate lock's descriptor is closed for it: something it leaves running
+#   after a killed gate run must not go on holding the lock.
 run_in() {
   local dir="$1" log="$2" cmd="$4"
   if [ "$3" = 1 ]; then
-    ( cd "$dir" && env FM_ROOT="$dir" ${P_ENV[@]+"${P_ENV[@]}"} bash -c "$cmd" ) > "$log" 2>&1
+    ( cd "$dir" && env FM_ROOT="$dir" ${P_ENV[@]+"${P_ENV[@]}"} bash -c "$cmd" ) > "$log" 2>&1 8<&-
   else
-    ( cd "$dir" && env FM_ROOT="$dir" bash -c "$cmd" ) > "$log" 2>&1
+    ( cd "$dir" && env FM_ROOT="$dir" bash -c "$cmd" ) > "$log" 2>&1 8<&-
   fi
 }
 failed() {  # failed <stage> <exit> <command> <log> ; says which, and what it said
@@ -288,13 +297,15 @@ gate5() {
     # test file: an unchanged suite that names changed implementation is the
     # base's test of the base's code in this tree, so it can go red only for
     # some reason other than the diff, and would pass a vacuous test.
+    # The name counts only standing alone: helper.sh is not named by
+    # fm-helper.sh, nor a.test.sh by data.test.sh.
     while IFS= read -r f; do
       [ -n "$f" ] && [ -f "$w/$f" ] && is_test "$f" || continue
       grep -qxF "$f" <<< "$suites" && continue
       while IFS= read -r base; do
         [ -n "$base" ] || continue
-        name="${base##*/}"
-        if grep -qF -e "$base" -e "$name" "$w/$f" 2>/dev/null; then
+        name="$(printf '%s' "${base##*/}" | sed 's#[][\\.*^$+?(){}|/]#\\&#g')"
+        if grep -qE "(^|[^A-Za-z0-9._-])$name([^A-Za-z0-9._-]|\$)" "$w/$f" 2>/dev/null; then
           suites="$suites$f"$'\n'; break
         fi
       done <<< "$tests"

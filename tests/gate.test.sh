@@ -208,6 +208,8 @@ touched() {
   # a helper one untouched suite sources, and so exercises
   printf 'verify() { true; }\n' > "$r/tests/helper.sh"
   printf '. "${FM_ROOT:-.}/tests/helper.sh"\nverify\n' > "$r/tests/uses.test.sh"
+  # and one that names only a longer name with helper.sh inside it
+  printf 'touch %q/marks/near   # fm-helper.sh, not the helper above\n' "$r" > "$r/tests/near.test.sh"
   printf 'base\n' > "$r/src/thing.sh"
   printf '{"id":"T-X","scope":["src/**","tests/**","config.yaml"]}\n' > "$r/design/tasks/T-X.json"
   printf 'marks/\n' > "$r/.gitignore"
@@ -242,6 +244,7 @@ out="$(said "$t5" helper 5)"; rc=$?
 assert_eq "0" "$rc" "5 runs the suites that exercise a changed test file, and they go red"
 assert_contains "$out" "tests/uses.test.sh" "and names the suite it found that way"
 assert_fail "test -e '$t5/marks/other'" "and still not the suite that names no changed file"
+assert_fail "test -e '$t5/marks/near'" "nor one that names fm-helper.sh, which only has helper.sh inside it"
 assert_fail "test -e '$t5/marks/check'" "nor the whole check"
 
 # check_env reaches the suites, and is the only way a budget or a flag does:
@@ -327,31 +330,93 @@ wait "$p1"; r1=$?; wait "$p2"; r2=$?
 assert_eq "0 0" "$r1 $r2" "two gate runs started together both pass"
 assert_eq "start end start end" "$(tr '\n' ' ' < "$trail" | sed 's/ $//')" \
   "and one runs only after the other has finished"
-assert_fail "test -e '$lock'" "and the lock is gone when the last one ends"
+assert_ok "finishes 20 \"FM_GATE_LOCK='$lock' '$GATE' --task T-X --repo '$sl' --branch slow --only 1\"" \
+  "and a run after the last one ends does not wait"
 
-# one that holds the lock is waited for, and says so
-mkdir "$lock"; echo "$$" > "$lock/pid"
+# a holder the test controls: a real gate run whose suite says it has started
+# and then waits to be let go
+held="$sl/marks/held"; release="$sl/marks/release"
+git -C "$sl" checkout -q -b hold main
+printf 'real\n' > "$sl/src/thing.sh"
+printf 'echo held > %q\nwhile [ ! -e %q ]; do sleep 0.1; done\ngrep -q real "${FM_ROOT:-.}/src/thing.sh"\n' "$held" "$release" \
+  > "$sl/tests/hold.test.sh"
+git -C "$sl" add -A; git -C "$sl" commit -qm hold; git -C "$sl" checkout -q main
+# hold <lock> ; starts the holder in the background, and returns once it holds
+hold() {
+  rm -f "$held" "$release"
+  FM_GATE_LOCK="$1" "$GATE" --task T-X --repo "$sl" --branch hold --only 5 >/dev/null 2>&1 & holder=$!
+  for _ in $(seq 1 200); do [ -e "$held" ] && return 0; sleep 0.1; done
+  return 1
+}
+
+# one that holds the lock is waited for, and says whose run it is
+lock="$(mktemp -d)/gate.lock"
+assert_ok "hold '$lock'" "(a gate run holds the lock)"
 FM_GATE_LOCK="$lock" "$GATE" --task T-X --repo "$sl" --branch slow --only 1 > "$sl/marks/w.out" 2> "$sl/marks/w.err" & pw=$!
 sleep 2
 assert_ok "kill -0 $pw" "a run waits while another live run holds the lock"
-assert_contains "$(cat "$sl/marks/w.err")" "waiting for the gate run holding $lock (pid $$)" "and says whose run it waits for"
-rm -rf "$lock"
-wait "$pw"
-assert_eq "0" "$?" "and goes on once the lock is released"
+assert_contains "$(cat "$sl/marks/w.err")" "waiting for the gate run holding $lock (pid $holder)" "and says whose run it waits for"
+touch "$release"
+wait "$holder"; rh=$?; wait "$pw"; rw=$?
+assert_eq "0 0" "$rh $rw" "and goes on once the holder has finished"
 
-# one left by a run that was killed is taken over, not waited on for ever
-( exit 0 ) & dead=$!; wait "$dead"
-mkdir "$lock"; echo "$dead" > "$lock/pid"
+# A run that is killed holds nothing afterwards, and when several runs wait on
+# what it left, still only one runs at a time. A slow rename widens the window
+# in which a waiter that judged the lock dead acts on a lock another waiter
+# has just taken; the waiters start a moment apart so each lands in it.
+lock="$(mktemp -d)/gate.lock"
+assert_ok "hold '$lock'" "(a gate run holds the lock, and is then killed)"
+kill -9 "$holder"; wait "$holder" 2>/dev/null
+touch "$release"            # the killed run's suite is let go, and ends on its own
+slowbin="$(mktemp -d)"
+printf '#!/bin/sh\nsleep 0.5\nexec %q "$@"\n' "$(command -v mv)" > "$slowbin/mv"; chmod +x "$slowbin/mv"
+rm -f "$trail"; pids=''
+for _ in 1 2 3; do
+  PATH="$slowbin:$PATH" FM_GATE_LOCK="$lock" "$GATE" --task T-X --repo "$sl" --branch slow --only 5 >/dev/null 2>&1 &
+  pids="$pids $!"; sleep 0.3
+done
+rcs=''; for p in $pids; do wait "$p"; rcs="$rcs $?"; done
+assert_eq " 0 0 0" "$rcs" "three runs waiting on a killed run's lock all pass"
+assert_eq "start end start end start end" "$(tr '\n' ' ' < "$trail" | sed 's/ $//')" \
+  "and no two of them overlap"
+
+# a lock that names no holder - a run killed before it could write its pid -
+# holds nobody up
+lock="$(mktemp -d)/gate.lock"; : > "$lock"
 assert_ok "finishes 20 \"FM_GATE_LOCK='$lock' '$GATE' --task T-X --repo '$sl' --branch slow --only 1\"" \
-  "a lock whose holder is dead is taken over"
+  "a lock that names no holder is not waited on for ever"
 
-# a run inside a run that holds the lock - gate 5 of this repository runs
-# this suite - is part of that run, and waiting for it would wait for ever
-mkdir "$lock"; echo "$$" > "$lock/pid"
-assert_ok "finishes 20 \"FM_GATE_LOCK='$lock' FM_GATE_LOCK_HELD='$lock' '$GATE' --task T-X --repo '$sl' --branch slow --only 1\"" \
-  "a run nested in the holder does not wait for it"
-assert_ok "test -d '$lock'" "and leaves the holder's lock where it is"
-rm -rf "$lock"
+# A run inside a run that holds the same lock would wait for ever, and one
+# that skipped the lock would not be serialized: it is refused, and says so.
+# A suite that runs the gate takes a lock of its own (see below).
+lock="$(mktemp -d)/gate.lock"
+out="$(FM_GATE_LOCK="$lock" FM_GATE_LOCK_HELD="$lock" "$GATE" --task T-X --repo "$sl" --branch slow --only 1 2>&1)"; rc=$?
+assert_eq "70" "$rc" "a run nested in a run that holds its lock is refused, not run unlocked"
+assert_contains "$out" "inside a gate run that holds $lock" "and says why"
+
+# The default lock is one path for the machine. TMPDIR is per user on macOS
+# and per sandbox, so a default under it would give two callers two locks.
+# Shown by the lock each names when refused, so the suite never takes the
+# machine's real lock or waits on a real gate run.
+for tmp in "$(mktemp -d)" "$(mktemp -d)"; do
+  out="$(env -u FM_GATE_LOCK TMPDIR="$tmp" FM_GATE_LOCK_HELD=/tmp/fm-gate.lock \
+    "$GATE" --task T-X --repo "$sl" --branch slow --only 1 2>&1)"; rc=$?
+  assert_eq "70" "$rc" "with TMPDIR=$tmp and no FM_GATE_LOCK, the run takes the machine's one lock"
+  assert_contains "$out" "holds /tmp/fm-gate.lock;" "and it is /tmp/fm-gate.lock, whatever TMPDIR is"
+done
+
+# Every suite that runs the real gate - itself, or through a copied fm-run.sh
+# or a copy of every bin/fm-*.sh - sets a lock of its own. On the machine's
+# lock it would wait on real gate runs and hold them up, and inside one it is
+# refused. A line that only reads the script (sed, grep, cat) does not run it.
+reaching="$(cd "$ROOT" && grep -lE 'ROOT"?/bin/fm-(gate|run|\*)\.sh' tests/*.sh)"
+assert_contains " $(tr '\n' ' ' <<<"$reaching")" " tests/e2e-loop.test.sh " "the sweep finds a suite that copies fm-run.sh"
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  runs="$(grep -E 'ROOT"?/bin/fm-(gate|run|\*)\.sh' "$ROOT/$f" | grep -vE '(sed|grep|cat|awk) [^|]*ROOT"?/bin/fm-')"
+  [ -n "$runs" ] || continue
+  assert_ok "grep -qE 'FM_GATE_LOCK=' '$ROOT/$f'" "$f runs the real gate, and sets its own FM_GATE_LOCK"
+done <<<"$reaching"
 
 # --- the gate numbers are the same everywhere that reads them (T-114) ---
 # fm-gate.sh's own `g <n>` lines are the source; the board, the review
@@ -370,14 +435,24 @@ assert_contains "$(cat "$ROOT/tests/diagram.test.sh")" "for n in $nums; do" \
 for n in $nums; do
   assert_ok "jq -e 'has(\"gate$n\")' '$ROOT/i18n/ui.en.json' >/dev/null" "gate $n has a board label"
 done
-# and nothing in the repository still counts seven, or calls gate 3 the
+# and nothing in the repository still counts seven gates, or calls gate 3 the
 # check. The whole tree is swept, not a list of the files a spec named, so a
-# guide or a template nobody thought of is found too. The allowlist is the
-# record of what was true when it was written: task specs, dated proposals,
-# and this suite, which has to spell the patterns out.
-sweep="$(cd "$ROOT" && git grep -niE 'seven(-| )gates?|all seven (gates|green)|the seven gates|gates 1-6|gates 1-7|gates 3 and 5|gate 3 runs|gate 3 and gate 5' \
-  -- . ':!design/tasks/' ':!design/proposals/' ':!tests/gate.test.sh' 2>&1)"
-assert_eq "" "$sweep" "no file in the repository still says seven gates, or runs gate 3"
+# guide or a template nobody thought of is found too. The pattern is the idea,
+# not a list of phrasings: seven (or 7) near a gate or green, either way
+# round, and a run of gates from one to six or seven, in digits or words.
+count='seven[^.]{0,40}(gate|green)|(gate|green)[^.]{0,40}seven|(^|[^0-9])7 gates|gates? *(1|one) *(-|–|to|through) *(6|six|7|seven)|gates 3 and 5|gate 3 (runs|and gate 5)'
+for phrase in "seven green means a decision" "gates one to six pass" "The seven gates" "all 7 gates" \
+  "gates 1-6 are green" "gate 7 sends it; the green lights are seven" "Gate 3 runs the check"; do
+  assert_ok "grep -qiE '$count' <<<'$phrase'" "the sweep catches: $phrase"
+done
+# The allowlist, each entry a use that is not a count of the gates, or a file
+# this task cannot change. Task specs and dated proposals record what was true
+# when they were written; this suite has to spell the pattern out.
+allowed='^design/design\.md:[0-9]+:.*keeps seven slots'      # the card's gate list: one slot per number 1-7
+allowed="$allowed"'|^tests/worker\.test\.sh:[0-9]+:.*seven of them'  # a fixture design.md; outside T-114's scope, reported
+sweep="$(cd "$ROOT" && git grep -niE "$count" -- . ':!design/tasks/' ':!design/proposals/' ':!tests/gate.test.sh' 2>&1 \
+  | grep -vE "$allowed")"
+assert_eq "" "$sweep" "no file in the repository still counts seven gates, or runs gate 3"
 
 # --- a merge card's gate list has one shape everywhere (T-114) ------------
 # The board reads a card's gates by gate number, gates[n-1], so the list

@@ -117,7 +117,11 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   GitHub check runs it on the same head, and gate 6 reads that. Gate 5 runs
   only the suites the diff touches, falling back to the whole `check` only
   when it cannot tell which, and says so. Gate runs on one machine are
-  serialized by a lock, so a second one waits for the first.
+  serialized by a kernel lock on `FM_GATE_LOCK` (default `/tmp/fm-gate.lock`,
+  not under `TMPDIR`), so a second one waits for the first, even from a
+  sandbox with its own `TMPDIR`. A sandbox that cannot open that file gets
+  exit 70 naming it; do not give it a private `FM_GATE_LOCK`, which would
+  not serialize with the rest of the machine.
   `bin/fm-review.sh` runs review; `bin/fm-protocol.sh` checks the closed-list
   protocol. Read their current usage before invocation. Supply the reviewer with
   diff, spec, acceptance, authoritative relevant design and any original closed

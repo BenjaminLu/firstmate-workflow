@@ -930,19 +930,28 @@ that still sends one value per number 1-7 lines up with the checklist.
 **Gate 5 runs only the touched suites (T-114).** On the reverted tree it runs,
 through `project.test`, every test file the diff changes, then every other
 test file that names one of them by path or file name - the suites that
-source a changed helper. An unchanged suite that names only changed
+source a changed helper. A name counts only standing alone, with no other
+file-name character either side, so `helper.sh` is not named by
+`fm-helper.sh`. An unchanged suite that names only changed
 implementation is not run: in the reverted tree it is the base's test of the
 base's code, and could go red only for a reason other than the diff. When no
 suite can be determined that way - no `project.test` declared, or no touched
 test file left in the tree - gate 5 runs the whole `check` and says so on
 stderr, as it says which suites it ran.
 
-**Gate runs are serialized on one machine (T-114).** A run holds a lock
-directory, `FM_GATE_LOCK` (default `fm-gate.lock` in the temp directory),
-from start to exit, with its pid inside; a second run waits and says whose run
-it waits for. A lock whose holder is no longer alive is taken over. A run
-started inside the holder - gate 5 of this repository runs its own gate tests
-- inherits `FM_GATE_LOCK_HELD` naming the same lock and does not wait for it.
+**Gate runs are serialized on one machine (T-114).** A run holds a kernel
+`flock` on the file `FM_GATE_LOCK` (default `/tmp/fm-gate.lock`) from start to
+exit; a second run waits and says whose run it waits for, from the pid the
+holder writes in the file. The default is one path for the machine and does
+not follow `TMPDIR`, which is per user on macOS and per sandbox. The kernel
+releases the lock when the holder exits, however it exits, so no run judges
+whether another is alive and no lock is ever removed: a killed run, a reused
+pid, another user's run and a lock file that names no holder cannot be
+misread. The suites the gate runs do not inherit the descriptor. A run
+started inside a run holding the same lock (it inherits
+`FM_GATE_LOCK_HELD`) is refused with exit 70 rather than waiting for ever or
+running unlocked, so every suite that runs the real gate sets its own
+`FM_GATE_LOCK`, and `tests/gate.test.sh` checks that each one does.
 
 Require all six gates and current-head review evidence before treating a merge
 card as ready. `fm-run.sh` requests a card after gate success, but `fm-review.sh`

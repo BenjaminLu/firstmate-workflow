@@ -53,8 +53,11 @@ Every pull request, human or agent, must pass the six gates of
 `design/design.md` section 6 before it is merged: 1, 2, 4, 5, 6 and 7.
 `bin/fm-gate.sh` checks them and exits with the number of the first gate that
 failed. Each reads git, the filesystem, an exit code or GitHub; none reads
-what the author said about the work. Gates run one at a time on a machine;
-a second run waits for the first.
+what the author said about the work. Gates run one at a time on a machine:
+a run holds a kernel lock on `FM_GATE_LOCK` (by default `/tmp/fm-gate.lock`,
+whatever your `TMPDIR` is) and a second run waits for the first. A test suite
+that runs `bin/fm-gate.sh` sets its own `FM_GATE_LOCK`; a gate run inside one
+that holds the same lock is refused.
 
 1. The branch exists and `git rev-list --count main..<branch>` is above 0.
 2. It rebases onto `main` without conflict, tried in a scratch worktree.
