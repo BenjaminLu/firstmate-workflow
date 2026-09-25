@@ -1,0 +1,32 @@
+{
+  "id": "T-114",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "the gates stop repeating CI: the local full-check gate is removed, fail-first runs only the touched suites, and gate runs are serialized",
+  "scope": [
+    "bin/fm-gate.sh",
+    "bin/fm-run.sh",
+    "bin/fm.sh",
+    "bin/fm-review.sh",
+    "board/server.ts",
+    "board/public/index.html",
+    "skills/firstmate/SKILL.md",
+    "skills/reviewer/SKILL.md",
+    "skills/worker/SKILL.md",
+    "README.md",
+    "tests/gate.test.sh",
+    "tests/diagram.test.sh",
+    "tests/selfupdate.test.sh",
+    "tests/review.test.sh",
+    "design/design.md",
+    "design/tasks/T-114.json"
+  ],
+  "acceptance": [
+    "Gate 3 is a full local run of the project check. It duplicates the required GitHub check, and on 2026-09-25 and 2026-09-26 it held CI-green heads by overrunning its 600s budget whenever run-mode reviewers or other gates ran ci.sh at the same time (1565s on T-104, and again on T-068, T-086, T-112 and T-054). The captain approved removing it (2026-09-26). This item is split out of T-107. Its own spec file, design/tasks/T-114.json, is committed on this branch.",
+    "Gate 3 is removed. The evidence it gave is the required GitHub check on the same head, which gate 6 already reads. The remaining gates keep their meaning. Every place that counts or numbers the gates is updated consistently: bin/fm-gate.sh (its header, the exit codes and the say() lines), bin/fm-run.sh, bin/fm.sh, bin/fm-review.sh, the board, the skills (firstmate, reviewer, worker), README.md and design/design.md. So nothing still says 'seven gates' or refers to gate 3 as the local check. Whether the gates are renumbered or gate 3 is left as a retired number is the worker's call, stated and applied everywhere, including the board and the tests that match gate lines.",
+    "Gate 5 (reverting the implementation turns tests red) re-runs only the test suites the diff touches, or that exercise a file the diff changes where that is determinable, instead of the whole project check. When no suite can be determined, it falls back to the whole check and says so.",
+    "Gate runs on one machine are serialized by a lock, so two gate runs never overlap.",
+    "Evidence is the required GitHub check and the gates, checked by firstmate at the merge gate. Tests written to fail first in tests/gate.test.sh cover: no gate runs the project check in full; gate 5 runs only the touched suites and turns red when the implementation is reverted; two concurrent fm-gate.sh runs serialize; and the gate lines and numbers match everything that reads them (board, diagram and selfupdate suites). The worker does not run the suite itself."
+  ]
+}

@@ -109,7 +109,7 @@ merge_card() {  # merge_card <task> <pr>
   details="$REPO/state/decision-details/$id.json"
   if request_out="$("$B/fm-decide.sh" --request "$id" --task "$task" --project "$project" --kind merge \
     --pr "$pr" --details "$details" --repo "$REPO" 2>&1 </dev/null)"; then
-    say "$task: all seven gates green, asking the captain ($id)"
+    say "$task: all six gates green, asking the captain ($id)"
   else
     say "$task: no captain card created; firstmate must supply valid authored details at $details ($request_out)"
   fi
@@ -146,10 +146,11 @@ turn() {
     "$B/fm-gate.sh" --task "$task" --repo "$REPO" --branch "$branch" --pr "$pr" >/dev/null 2>&1 </dev/null
     g=$?
     if [ "$g" -eq 0 ]; then
-      # all seven green: the captain decides, nobody else
+      # all six green: the captain decides, nobody else
       merge_card "$task" "$pr"
     elif [ "$g" -eq 7 ]; then
-      say "$task: gates 1-6 green, sending it to review (round $round)"
+      # every gate before 7 is green (3 is retired, T-114)
+      say "$task: gates 1, 2, 4, 5 and 6 green, sending it to review (round $round)"
       # exit 3 is a round that produced no verdict. Swallowing it would let
       # a crashed engine read as a review that simply did not sign.
       # 65 is a typo in config.yaml, and the one line that says which name

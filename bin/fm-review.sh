@@ -373,11 +373,12 @@ head_evidence() {
       fi
     done <<<"$names"
   fi
-  printf '\n## The seven gates for this head\n'
+  printf '\n## The gates for this head\n'
   # The whole file, unfiltered: a filter shows a summary in any other shape
   # as an empty quote that neither reports results nor says they are missing.
   # What is not there is then said by gate - fm-gate.sh stops at the first
-  # red one, so a summary can end early, and an empty one lacks all seven.
+  # red one, so a summary can end early, and an empty one lacks all six. The
+  # numbers are fm-gate.sh's own: 3 is retired (T-114).
   local summary="$REPO/state/gates/$TASK-$sha.txt" n lacking=''
   if [ -f "$summary" ]; then
     fence="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
@@ -385,7 +386,7 @@ head_evidence() {
     cat "$summary"
     [ -z "$(tail -c1 "$summary")" ] || printf '\n'
     printf -- '----- end gate summary %s -----\n' "$fence"
-    for n in 1 2 3 4 5 6 7; do
+    for n in 1 2 4 5 6 7; do
       grep -Eq "^[[:space:]]*[+x] gate $n: " "$summary" || lacking="${lacking:+$lacking, }$n"
     done
     [ -z "$lacking" ] ||
@@ -419,7 +420,7 @@ prompt="$work/prompt.md"
 } > "$prompt"
 
 # The project's contract as the branch under review declares it - the one the
-# gates run - so the reviewer runs what gate 3 and gate 5 would.
+# gates run - so the reviewer runs what the required check and gate 5 would.
 contract_line() {   # contract_line <field>
   local v
   if ! v="$(fm_project "$1" "$CHECKOUT/config.yaml" 2>/dev/null | tr '\0\n' '  ')"; then
@@ -443,7 +444,7 @@ if [ "$REVIEW_MODE" = run ]; then
     printf 'hosts: %s. No GitHub host is among them, so gh has nothing to talk to; the\n' "${FM_REVIEW_NETWORK:-none}"
     printf 'base, the head and the diff are all in this checkout. You are shown no CI and\n'
     printf 'no gate results, and need none: you judge the head by what you run here. CI\n'
-    printf 'and the seven gates are firstmate'"'"'s merge gate, not a criterion of this\n'
+    printf 'and the gates are firstmate'"'"'s merge gate, not a criterion of this\n'
     printf 'review, so do not wait on them, require them or keep an item open for them. The\n'
     printf 'project'"'"'s caches (XDG_CACHE_HOME, bun, Playwright, npm) point into this\n'
     printf 'round'"'"'s temp directory, so `setup` writes where it may. A command the sandbox\n'

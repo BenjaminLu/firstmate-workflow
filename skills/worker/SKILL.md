@@ -11,7 +11,7 @@ the crew and you do not need to.
 
 ## What you do
 
-Implement the task so that all seven gates pass. Read them in
+Implement the task so that all six gates pass. Read them in
 [design/design.md](../../design/design.md); the two that catch most work are:
 
 - **Gate 4** — your diff must stay inside the `scope` globs declared for your
@@ -147,7 +147,7 @@ pass.
 Some adapters let you edit files but not execute anything. That is not a
 reason to stop or to ask. Finish the work, write in `.fm-say.md` which checks
 you could not run, and end with `WORKER_COMPLETE:<task>`. Verification is the
-job of the seven gates and the pull request's required GitHub check. Do not
+job of the gates and the pull request's required GitHub check. Do not
 claim a test passed that you did not run; gate 5 still applies to the tests
 you write.
 
@@ -175,7 +175,7 @@ firstmate rather than treating a passing script as proof of those properties.
 Never claim tests, hook removal, commits or PR actions without observable evidence.
 Run appropriate repository checks; firstmate coordinates actual GitHub CI and
 current-head gate evidence and board approval before merging; `fm-merge.sh`
-itself checks neither approval nor the seven gates. Neither lavish nor
+itself checks neither approval nor the gates. Neither lavish nor
 no-mistakes is a prerequisite; do not add their hooks.
 
 Keep repository prose and `.fm-say.md` in English. Dynamic user-facing board/event

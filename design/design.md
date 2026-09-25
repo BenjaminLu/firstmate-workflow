@@ -29,7 +29,7 @@ The agent CLI is a **replaceable engine**, not the system.
 
 - Not an auto-merge bot. A human always presses merge.
 - Not an agent that improves itself in place. Changes to `skills/` travel the
-  same pull request and the same seven gates as any other code.
+  same pull request and the same gates as any other code.
 - Not snapshot-based. The event log is the truth (section 5.1).
 
 ---
@@ -212,7 +212,7 @@ Receiving a response is not itself approval; inspect the chosen option and conte
 ```
 
 Two kinds. `choice` is an option card carrying a before/after diagram. **`merge`
-is a request to merge**, carrying the seven-gate checklist, the diff stat, the
+is a request to merge**, carrying the gate checklist, the diff stat, the
 files touched and the pull request link, answered with merge, send back, or
 hold. **Every merge goes through a card.** firstmate may not merge on its own
 and may not ask for one in conversation.
@@ -336,7 +336,7 @@ be measured, not inferred from the watcher mechanism. **No `fswatch` dependency.
 These are orchestration requirements, not enforcement inside `fm-merge.sh`.
 The board calls that helper for choice A on a pending merge card. The helper
 checks PR state and invokes GitHub merge, then attempts event emission and
-cleanup; it does not read approval decisions or run the seven gates. The board
+cleanup; it does not read approval decisions or run the gates. The board
 route does not rerun gates either. Firstmate must verify current-head gates, CI,
 reviewer provenance and board approval, and coordinate fresh verification when
 the head changes so a stale card is not treated as ready. `fm-run.sh` requests
@@ -832,7 +832,7 @@ did not happen.
 
 ---
 
-## 6. Lifecycle and the seven gates
+## 6. Lifecycle and the gates
 
 ```
 grilling  ->  /prototype  ->  [captain green-lights]  ->  design.md + design/tasks/
@@ -841,7 +841,7 @@ grilling  ->  /prototype  ->  [captain green-lights]  ->  design.md + design/tas
                                        |
               fm-worker.sh: worktree -> adapter -> commit -> pull request
                                        |
-                          *  fm-gate.sh, the seven gates  *
+                          *  fm-gate.sh, the six gates  *
                                        |
             fm-review.sh: reviewer sees the diff, the spec, the criteria
          (diff mode: and, given the PR, the head's check and gate results,
@@ -907,13 +907,41 @@ concurrency limit still hold, and it says which one held the task.
 |---|---|---|
 | 1 | branch exists and has commits | `git rev-list --count main..<branch>` > 0 |
 | 2 | rebase onto main is clean | attempt it in a scratch worktree; non-zero fails |
-| 3 | the declared `project.check` exits 0 | `config.yaml`'s `setup`, then `check` with `check_env`, in a fresh worktree |
+| 3 | *retired (T-114)* | ran the whole `project.check` locally; gate 6 reads the required GitHub check, which runs it on the same head |
 | 4 | the diff stays in scope | `git diff --name-only` within the task's `scope` globs |
-| 5 | **the new tests are not vacuous** | classify by `project.tests`, revert the implementation, run `setup`, then each test through `project.test` (else `check`); it must go red |
+| 5 | **the new tests are not vacuous** | classify by `project.tests`, revert the implementation, run `setup`, then only the suites the diff touches through `project.test`; the whole `check` only when none can be determined, said so; it must go red |
 | 6 | the required GitHub check is green | `gh pr checks <pr> --required` |
 | 7 | a PR comment contains `APPROVE:<task-id>` | author filtered only if `FM_REVIEWER_LOGIN` is set |
 
-Require all seven gates and current-head review evidence before treating a merge
+**Gate 3 is retired, and its number with it (captain, 2026-09-26; T-114).**
+It ran the whole project check in a fresh worktree: the same run the required
+GitHub check makes on the same head, which gate 6 already reads. On
+2026-09-25 and 2026-09-26 it held CI-green heads by overrunning its 600-second
+budget whenever run-mode reviewers or other gates ran the check on the same
+machine (1565 seconds on T-104; again on T-068, T-086, T-112 and T-054). The
+remaining gates keep their numbers and their meaning, so gate 5 is still the
+fail-first gate, gate 6 CI and gate 7 the approval; nothing exits 3, and
+`fm-gate.sh --only 3` is a usage error (exit 64), not a green gate. The board,
+the review prompt's gate section and `fm-run.sh` read the same six numbers.
+
+**Gate 5 runs only the touched suites (T-114).** On the reverted tree it runs,
+through `project.test`, every test file the diff changes, then every other
+test file that names one of them by path or file name - the suites that
+source a changed helper. An unchanged suite that names only changed
+implementation is not run: in the reverted tree it is the base's test of the
+base's code, and could go red only for a reason other than the diff. When no
+suite can be determined that way - no `project.test` declared, or no touched
+test file left in the tree - gate 5 runs the whole `check` and says so on
+stderr, as it says which suites it ran.
+
+**Gate runs are serialized on one machine (T-114).** A run holds a lock
+directory, `FM_GATE_LOCK` (default `fm-gate.lock` in the temp directory),
+from start to exit, with its pid inside; a second run waits and says whose run
+it waits for. A lock whose holder is no longer alive is taken over. A run
+started inside the holder - gate 5 of this repository runs its own gate tests
+- inherits `FM_GATE_LOCK_HELD` naming the same lock and does not wait for it.
+
+Require all six gates and current-head review evidence before treating a merge
 card as ready. `fm-run.sh` requests a card after gate success, but `fm-review.sh`
 can emit `approved` on an approval substring before that subsequent gate run.
 Gate 7 neither binds approval to a head nor distinguishes final, quoted or stale
@@ -923,23 +951,24 @@ requires remediation regardless of praise or an `approved` event.
 
 **Round order and the merge double check (captain, 2026-09-25).** A review
 round starts as soon as the worker hands back, through `fm-review.sh`, and
-never waits on CI: CI and the seven gates are not a review criterion in
+never waits on CI: CI and the gates are not a review criterion in
 either mode. A merge card needs two independent checks on the same current
 head: the reviewer's `APPROVE:<task-id>` for that head, and firstmate's own
-reading of that head's required GitHub check (green) and the seven gates
+reading of that head's required GitHub check (green) and the six gates
 (`fm-gate.sh`). Neither substitutes for the other - an approval is not green
 CI, and green gates are not an approval - and a head that changes after
 either check restarts both. `fm-run.sh`'s loop still sends a task to review
-only once gates 1-6 are green; until it follows this order, firstmate starts
-the round itself when the worker hands back.
+only once every gate before 7 is green; until it follows this order,
+firstmate starts the round itself when the worker hands back.
 
-Gates 3 and 5 name no toolchain. The target repository declares its own in
+Gate 5 names no toolchain. The target repository declares its own in
 `config.yaml`'s `project:` block (`setup`, `check`, `check_env`, `tests`,
 `test`, `docs`; see the README), and the gates run exactly that, read from the
 branch under test; gate 4 decides whether a branch may change `config.yaml` at
 all. Gate 5 asks for no new test only when every changed non-test path matches
 the declared `docs` globs; with none declared, nothing is exempt.
-An undeclared `check` or a failed `setup` fails the gate by name; a stage the
+An undeclared `check` where gate 5 must fall back to it, or a failed `setup`,
+fails the gate by name; a stage the
 check skipped is not a stage that passed. `bin/fm-session.sh start` runs
 `setup` once in the checkout and reports the contract; `status` only reports it.
 
@@ -1329,9 +1358,11 @@ GitHub sets `FM_CI_MAX_SECONDS=600`; its separate `timeout-minutes: 10` covers
 the entire job, including setup, so the script may have less than 600 seconds
 before GitHub cancels it. For T-017, Firstmate runs the same full local gate
 with `FM_CI_MAX_SECONDS=600 bash bin/ci.sh` before publication. Since T-043
-that budget is this repository's declared `project.check_env`, and gate 3 runs
-the declared `setup` first, so a fresh worktree has the dependencies and
-browser the end-to-end stage needs instead of skipping it. A functional
+that budget is this repository's declared `project.check_env`, and a fresh
+worktree that runs the check - gate 5's fallback, a run-mode reviewer's
+clone - runs the declared `setup` first, so it has the dependencies and
+browser the end-to-end stage needs instead of skipping it. (Gate 3 ran the
+whole check this way until T-114 retired it.) A functional
 pass at 208 seconds is within that authorized budget, but exceeds the default.
 
 ```
@@ -1617,7 +1648,7 @@ process or status marker is never PR acceptance.
 touching code.
 
 After a round, firstmate may open a `skill-update` task — **but it travels the
-same pull request, reviewer and seven gates as anything else.** The system
+same pull request, reviewer and gates as anything else.** The system
 cannot quietly edit itself.
 
 `fm.sh sync-skills` imports from an external skills directory into
@@ -1731,7 +1762,8 @@ array's two top-level keys went with it: `$schema` named a
 the dispatcher's limit is `config.yaml`'s. A test compares the first commit
 that removed `design/tasks.json` with its parent: the files, in the old
 array's order, are the old array. That comparison needs history, so it runs
-under gate 3 and locally, not on the required GitHub check, whose checkout
+locally (and ran under gate 3 until T-114 retired it), not on the required
+GitHub check, whose checkout
 is one commit deep; there the test asserts only that nothing still tracks
 `design/tasks.json`. The test that the split itself loses nothing — a
 fixture array, unicode and key order included — runs everywhere.
@@ -1822,7 +1854,7 @@ projects:
 | `design`, `tasks` | paths **relative to the engine root**; `tasks` is a directory, one file per task (T-090) | default `projects/<name>/design.md` and `projects/<name>/tasks`; a `tasks` value in the old shape, `<path>.json`, names the directory `<path>` beside it |
 | `project` | T-043's `project:` block, every field of it | T-043's merged text and the README define the fields and their meaning; this section only moves the block under a project and never re-lists it, so a field T-043 has or later gains — `docs` included — moves with it |
 
-**Where gates 3 and 5 read the contract.** From the task's spec pin (15.5),
+**Where gate 5 reads the contract.** From the task's spec pin (15.5),
 which records the contract verbatim next to the spec. Nothing else: not the
 branch under test, which in a target has no `config.yaml`, and not the engine's
 working copy, which can change during a run. The pin takes the contract from
@@ -1837,10 +1869,10 @@ pinned after T-049 merges.
 **One source of truth during the transition.** The contract is written in
 exactly one place at every commit. Until T-050, that is T-043's top-level
 `project:` block: the self entry carries no copy, `bin/fm-config.sh` resolves
-the default project's contract to the top-level block, and gates 3 and 5 keep
+the default project's contract to the top-level block, and gate 5 keeps
 T-043's behaviour. T-049's pins record that resolved contract. T-050 moves the
 block, unchanged, to `projects.firstmate-workflow.project` and deletes the
-top-level one in the same commit, and switches gates 3 and 5 to the pin. A
+top-level one in the same commit, and switches gate 5 to the pin. A
 `config.yaml` holding both the top-level block and the self entry's is refused
 (exit `65`), so the two can never disagree. Re-deriving a pinned contract
 (15.5 step 3) reads the block wherever the recorded commit's `config.yaml`
@@ -2076,8 +2108,8 @@ The prompt carries from the engine side what the checkout cannot:
 - the role skill and the pinned spec, as today;
 - the project's design context: the design file at the pin's commit, bounded
   in size, with any truncation stated in the prompt rather than silent;
-- the project's gate facts: `base` and the pinned T-043 contract that gates 3
-  and 5 will apply;
+- the project's gate facts: `base` and the pinned T-043 contract that gate 5
+  will apply;
 - the absolute path of the checkpoint helper in the frozen code tree, because
   a target has no `bin/fm-checkpoint.sh`.
 

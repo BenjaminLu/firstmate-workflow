@@ -1,12 +1,27 @@
 #!/usr/bin/env bash
-# The seven gates. Every one of them reads the filesystem, git, or an exit
-# code. None of them reads what a model said about its own work.
+# The six gates: 1, 2, 4, 5, 6 and 7. Every one of them reads the
+# filesystem, git, or an exit code. None of them reads what a model said
+# about its own work.
 #
 #   fm-gate.sh --task T-004 --repo <dir> --branch <name> [--pr 9] [--only N]
 #
-# Exits 0 when all seven pass, otherwise the number of the gate that failed.
+# Exits 0 when all six pass, otherwise the number of the gate that failed.
 # The exit code is the gate number so a caller can tell "the tests are vacuous"
 # from "the reviewer never signed".
+#
+# Gate 3 is retired, and its number with it (T-114). It ran the whole
+# project.check locally, which is what the required GitHub check already runs
+# on the same head and gate 6 already reads; run beside other checks on one
+# machine it overran its budget and held heads CI had passed. No gate runs the
+# whole check any more, except gate 5 when it cannot tell which suites the
+# diff touches, and then it says so. Nothing exits 3, and `--only 3` is
+# refused rather than reported green.
+#
+# Gate runs on one machine are serialized: a run holds FM_GATE_LOCK (by
+# default fm-gate.lock in the temp directory) from start to exit, and another
+# waits for it. A run started inside a run holding the same lock - gate 5 of
+# this repository runs its own gate tests - is part of that run and does not
+# wait for it, or it would wait for ever.
 set -uo pipefail
 # Nothing below may read standard input. A dispatched child inherits it, and
 # a child that reads it blocks the caller waiting for a human who is not
@@ -37,6 +52,9 @@ done
 [ -n "$TASK" ] && [ -n "$REPO" ] && [ -n "$BRANCH" ] || {
   echo "usage: fm-gate.sh --task <id> --repo <dir> --branch <name> [--pr N] [--only N]" >&2; exit 64; }
 
+[ "$ONLY" != 3 ] || {
+  echo "fm-gate: gate 3 is retired; the required GitHub check it duplicated is gate 6" >&2; exit 64; }
+
 say()  { printf '  %s gate %s: %s\n' "$1" "$2" "$3"; }
 want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 
@@ -56,12 +74,37 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 
 cd "$REPO" || { echo "fm-gate: no repo at $REPO" >&2; exit 64; }
 
+# ---- one gate run at a time on this machine ------------------------------
+# mkdir is the lock: it is atomic everywhere, and flock is not on macOS. The
+# holder's pid is inside, so a lock left by a run that was killed is taken
+# over rather than waited on for ever.
+LOCK="${FM_GATE_LOCK:-${TMPDIR:-/tmp}/fm-gate.lock}"
+LOCK="${LOCK%/}"
+if [ "${FM_GATE_LOCK_HELD:-}" != "$LOCK" ]; then
+  waited=''
+  until mkdir "$LOCK" 2>/dev/null; do
+    holder="$(cat "$LOCK/pid" 2>/dev/null)"
+    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+      # renamed before it is removed, so a waiter that read the same dead pid
+      # cannot remove the lock a third run has just taken
+      mv "$LOCK" "$LOCK.stale.$$" 2>/dev/null && rm -rf "$LOCK.stale.$$"
+      continue
+    fi
+    [ -n "$waited" ] || { echo "fm-gate: waiting for the gate run holding $LOCK${holder:+ (pid $holder)}" >&2; waited=1; }
+    sleep 1
+  done
+  echo "$$" > "$LOCK/pid"
+  trap 'rm -rf "$LOCK"' EXIT
+  trap 'exit 130' INT TERM HUP
+  export FM_GATE_LOCK_HELD="$LOCK"
+fi
+
 # ---- the project contract ------------------------------------------------
 # Which toolchain a project uses is its own business. config.yaml's project:
 # block declares how to prepare a fresh checkout (setup), what green means
 # (check, with check_env), which files are tests (tests) and how to run one
-# (test), and which changes need no test (docs). Gates 3 and 5 run what is
-# declared and name nothing else.
+# (test), and which changes need no test (docs). Gate 5 runs what is
+# declared and names nothing else.
 #
 # The declaration read is the branch's own: it is what the branch will be
 # checked with everywhere else, and gate 4 decides whether a branch may
@@ -117,29 +160,9 @@ gate2() {
   return "$rc"
 }
 
-# ---- 3. the declared check exits 0 ---------------------------------------
-# In a fresh detached worktree, which has nothing a checkout does not carry:
-# setup first when one is declared, then the check. A setup that fails is a
-# red gate that says so - never a check that goes green with a stage skipped
-# because what it needed was never installed.
-gate3() {
-  local w log cfg rc=0
-  w="$(mktemp -d)"; log="$(mktemp)"; cfg="$(mktemp)"
-  branch_config "$cfg"
-  if ! load_project "$cfg"; then rc=1
-  elif [ -z "$P_CHECK" ]; then no_check; rc=1
-  elif ! git worktree add -q --detach "$w" "$BRANCH" >/dev/null 2>&1; then rc=1
-  else
-    if [ -n "$P_SETUP" ]; then
-      run_in "$w" "$log" 0 "$P_SETUP" || { rc=$?; failed setup "$rc" "$P_SETUP" "$log"; }
-    fi
-    if [ "$rc" -eq 0 ]; then
-      run_in "$w" "$log" 1 "$P_CHECK" || { rc=$?; failed check "$rc" "$P_CHECK" "$log"; }
-    fi
-  fi
-  drop "$w"; rm -f "$log" "$cfg"
-  [ "$rc" -eq 0 ]
-}
+# ---- 3. retired (T-114) --------------------------------------------------
+# It ran the whole project.check; gate 6 reads the required GitHub check that
+# runs the same thing on the same head.
 
 changed() { git diff --name-only "$BASE...$BRANCH"; }
 # matches <path> <globs, one per line>. A leading **/ also matches at the top
@@ -212,11 +235,16 @@ design/tasks/$TASK.json"
 # The branch's declaration is read before anything is reverted: config.yaml
 # is implementation like any other file and goes back to the base below.
 # Setup runs on the reverted tree, since that is the tree the tests run in.
-# Each changed test runs through the declared `test` template; without one,
-# the whole check runs once and must go red. Paths matching the declared
-# `docs` globs need no test of their own, but are reverted with the rest.
+# Paths matching the declared `docs` globs need no test of their own, but are
+# reverted with the rest.
+#
+# Only the suites the diff touches run, through the declared `test` template
+# (T-114): every test file the diff changes, then every other test file that
+# names one of those - the suites that source a changed helper.
+# The whole check runs only when no suite can be determined - no `test`
+# template, or no touched test file left in the tree - and the gate says so.
 gate5() {
-  local w impl code tests f rc log cfg
+  local w impl code tests f rc log cfg suites base name
   impl=''; code=''; tests=''
   cfg="$(mktemp)"; branch_config "$cfg"
   load_project "$cfg" || { rm -f "$cfg"; return 1; }
@@ -247,15 +275,45 @@ gate5() {
     failed setup "$rc" "$P_SETUP" "$log"; drop "$w"; rm -f "$log"; return 1
   fi
 
-  rc=1                                   # assume vacuous until one test goes red
+  suites=''
   if [ -n "$P_TEST" ]; then
     while IFS= read -r f; do
-      [ -n "$f" ] || continue
-      [ -f "$w/$f" ] || continue
-      run_in "$w" "$log" 1 "$(fill "$P_TEST" "$f")" || { rc=0; break; }
+      [ -n "$f" ] && [ -f "$w/$f" ] && suites="$suites$f"$'\n'
     done <<< "$tests"
-  else
+    # the suites that exercise a changed test file - a helper they source, a
+    # fixture they read - by naming it, by path or by name. Only a changed
+    # test file: an unchanged suite that names changed implementation is the
+    # base's test of the base's code in this tree, so it can go red only for
+    # some reason other than the diff, and would pass a vacuous test.
+    while IFS= read -r f; do
+      [ -n "$f" ] && [ -f "$w/$f" ] && is_test "$f" || continue
+      grep -qxF "$f" <<< "$suites" && continue
+      while IFS= read -r base; do
+        [ -n "$base" ] || continue
+        name="${base##*/}"
+        if grep -qF -e "$base" -e "$name" "$w/$f" 2>/dev/null; then
+          suites="$suites$f"$'\n'; break
+        fi
+      done <<< "$tests"
+    done <<< "$(git -C "$w" ls-files)"
+  fi
+
+  rc=1                                   # assume vacuous until one test goes red
+  if [ -n "$suites" ]; then
+    echo "      running the suites the diff touches: $(printf '%s' "$suites" | tr '\n' ' ')" >&2
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      run_in "$w" "$log" 1 "$(fill "$P_TEST" "$f")" || { rc=0; break; }
+    done <<< "$suites"
+  elif [ -n "$P_CHECK" ]; then
+    if [ -n "$P_TEST" ]; then
+      echo "      no suite the diff touches is left in the tree, so the whole project.check runs" >&2
+    else
+      echo "      config.yaml declares no project.test to run one suite with, so the whole project.check runs" >&2
+    fi
     run_in "$w" "$log" 1 "$P_CHECK" || rc=0
+  else
+    echo "      no suite the diff touches could be run, and no project.check is declared" >&2
   fi
 
   drop "$w"; rm -f "$log"
@@ -284,10 +342,9 @@ gate7() {
 
 g 1 "branch exists and carries commits"          gate1
 g 2 "rebases onto $BASE cleanly"                 gate2
-g 3 "the declared project.check exits 0"         gate3
 g 4 "diff stays inside the declared scope"       gate4
 g 5 "reverting the implementation turns tests red" gate5
 g 6 "the required GitHub check is green"         gate6
 g 7 "the reviewer posted APPROVE:$TASK"          gate7
-echo "  all seven gates green"
+echo "  all six gates green"
 exit 0

@@ -213,7 +213,9 @@ let DICT = { en: {}, "zh-TW": {}, tw2cn: [] };
 const cn = (x) => DICT.tw2cn.reduce((acc, pair) => acc.split(pair[0]).join(pair[1]), x);
 const t = (k) => lang === "zh-CN" ? cn(DICT["zh-TW"][k] ?? DICT.en[k] ?? k)
                                   : (DICT[lang] && DICT[lang][k]) || DICT.en[k] || k;
-const GATES = () => [1,2,3,4,5,6,7].map(n => t("gate" + n));
+// bin/fm-gate.sh's numbers; 3 is retired (T-114)
+const GATE_NUMBERS = [1,2,4,5,6,7];
+const GATES = () => GATE_NUMBERS.map(n => t("gate" + n));
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':'&quot;',"'":'&#39;'}[c]));
 // T-069: a pull request number links to that pull request, at the URL the
 // server derived from the project registry. Without one it is the same text,
@@ -431,7 +433,7 @@ function render(s) {
       `<p class="explanation">${said(content ? words(content.explanation) : t('missingDetails'))}</p>` +
       DIAGRAM.embed(d.id) + (content ? `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before))}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after))}</p></section></div>` : '') +
       (d.kind === "merge" && gates.length
-        ? `<ul class="gates">${GATES().map((g,i)=>`<li class="${gates[i]?"y":"n"}"><i>${gates[i]?"&#10003;":"&#8211;"}</i>${i+1}. ${g}</li>`).join("")}</ul>`
+        ? `<ul class="gates">${GATES().map((g,i)=>`<li class="${gates[i]?"y":"n"}"><i>${gates[i]?"&#10003;":"&#8211;"}</i>${GATE_NUMBERS[i]}. ${g}</li>`).join("")}</ul>`
         : "") +
       `<div class="acts">${options}
          <button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${sent.has(d.id)?'disabled':''}>${esc(t('customChoice'))}</button>
