@@ -1384,20 +1384,23 @@ each run. The data goes in by here-string (or process substitution, where
 lint enforces it over every `*.sh` below `bin/` and `tests/`, and it catches
 exactly the shapes listed here, no others. It reads
 commands, not one spelling: comments off, continuation lines (a trailing `|`
-or `\`) joined, `||` not a pipe, and every command a single `|` or `|&`
+or `\`) joined, a backslash-newline with nothing between as bash joins it,
+`||` not a pipe, and every command a single `|` or `|&`
 starts is judged, inside `$(...)` too. It is looking for `grep`, `egrep` or
 `fgrep`, by path too, past `!`, `{`, `(`, leading assignments, and the
 wrappers `env`, `nice`, `time`, `timeout`, `stdbuf`, `exec`, `command`,
 `builtin` and `nohup` with their own options and those options' values
 (`env -u NAME`, `nice -n 5`, `timeout -s KILL 5`, `stdbuf -o L`). It flags
-`-q`/`-c` or `--quiet`/`--silent`/`--count` among grep's words, stepping over
+`-q`/`-c` (a digit is an option too: `-2q`) or `--quiet`/`--silent`/`--count`
+among grep's words, stepping over
 the value of `-e`, `-f`, `-m`, `-A`, `-B`, `-C`, `-d`, `-D` and every long
 option that takes one, and stopping at `--`. Options are read the way getopt
 reads them, on the wrappers' side and on grep's: a cluster whose last letter
 takes a value takes the next word (`env -iu NAME`, `timeout -vs KILL 5`), and
 a long option may be any prefix that names one option (`grep --quie`,
-`env --un NAME`); an ambiguous one (`grep --co`) is refused by grep and not
-flagged. Quotes are transparent, because an assertion
+`env --un NAME`); a prefix of more than one (`grep --co`, `grep --exc`) is
+refused by grep and not flagged. Quotes and backslashes are transparent,
+because an assertion
 string is eval'd, so grep's words end at the first `|`, `;`, `&`, `)` or
 backtick, quoted or not. A file that declares `# fm:lint-source` is skipped. Each of
 these shapes has its own plant in `tests/ci.test.sh`, named by its line. Any
@@ -1437,6 +1440,23 @@ SWEPT:T-103 option spellings getopt accepts that the lint's readers missed
     clusters ending in a value letter, attached values and long-option prefixes
   found 2 (wrapper clusters like env -iu NAME; abbreviated long options on
     both sides like grep --quie), fixed 2, each planted in tests/ci.test.sh
+SWEPT:T-103 statements in the lint's hazard(), lkind() and per-line rules
+    that no plant pins
+  searched: deleted each statement alone, by reading, and asked which plant
+    in tests/ci.test.sh flips; the option tables are data, pinned by their
+    value and quiet/count entries
+  found 19. 9 now pinned by new plants: the single-quote, double-quote
+    and backslash strips; the word cut (one plant per character); a
+    wrapper's --; the first operand ending a wrapper's options; the
+    wrapper long-option continue; the END flush; the joined line's printed
+    text. 10 dead and removed: the =VALUE strip and both = checks,
+    lkind's empty-name return and its "?" mapping, the j > ntok test,
+    END's buf test, the trailing-backslash sub, the space the | join
+    added, and the continue after grep's long options. Reading them also
+    turned up 3 wrong reads, fixed and planted: the space the backslash
+    join added (bash joins -\ and q into -q), a digit that was not a grep
+    option (-2q), and a prefix of several options that all take a value
+    (--exc), read as one where getopt_long refuses it
 ```
 
 Each stage skips cleanly when its subject does not exist, so the gate is green

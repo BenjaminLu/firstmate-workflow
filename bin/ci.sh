@@ -379,9 +379,11 @@ fi
 # `| LC_ALL=C grep -q`, and a pipe that ends one line with grep starting
 # the next. And it flagged `cmd || grep -q x file`, which has no pipe. So
 # the stage reads the command instead: comments off (fm_strip_comments,
-# the loop stage's stripper), continuation lines joined, `||` taken out,
+# the loop stage's stripper), continuation lines joined (a backslash-newline
+# with nothing between, as bash joins it), `||` taken out,
 # and each command that a single `|` starts is checked for being grep,
-# egrep or fgrep, with -q/-c anywhere in its options, stepping over the
+# egrep or fgrep, with -q/-c anywhere in its options (a digit is an option
+# too: `-2q`), stepping over the
 # value of an option that takes one. In front of grep it steps over `!`,
 # `{`, `(`, NAME=value assignments, and the wrappers in the BEGIN table
 # below with their own options (and their values: `env -u NAME`,
@@ -389,8 +391,9 @@ fi
 # way getopt reads them, on both sides: a cluster whose last letter takes a
 # value takes the next word (`env -iu NAME`, `timeout -vs KILL 5`), and a
 # long option may be any prefix that names one option (`grep --quie`,
-# `env --un NAME`); an ambiguous one (`grep --co`) is refused by grep and
-# not flagged. Quotes are transparent on purpose: a pipe inside
+# `env --un NAME`); a prefix of more than one (`grep --co`, `grep --exc`)
+# is refused by grep and not flagged. Quotes and backslashes are
+# transparent on purpose: a pipe inside
 # `assert_ok "..."` is eval'd, so it is as live as one in the code; grep's
 # words therefore end at the first `|`, `;`, `&`, `)` or backtick, quoted
 # or not. These are exactly the shapes it catches, each planted in
@@ -419,18 +422,19 @@ pipe_awk='
     gl = "after-context:v before-context:v basic-regexp:o binary:o binary-files:v byte-offset:o color:o colour:o context:v count:q dereference-recursive:o devices:v directories:v exclude:v exclude-dir:v exclude-from:v extended-regexp:o file:v files-with-matches:o files-without-match:o fixed-strings:o group-separator:v help:o ignore-case:o include:v initial-tab:o invert-match:o label:v line-buffered:o line-number:o line-regexp:o max-count:v no-filename:o no-group-separator:o no-ignore-case:o no-messages:o null:o null-data:o only-matching:o perl-regexp:o quiet:q recursive:o regexp:v silent:q text:o version:o with-filename:o word-regexp:o"
   }
   # the kind of long option l (no leading --) in table tab: an exact name,
-  # else every name it is a prefix of, if they agree; "" when unknown or
-  # ambiguous, which getopt_long refuses
+  # else the one name it is a prefix of; "?" when it is a prefix of more
+  # than one, which getopt_long refuses (the only aliases in the tables,
+  # color and colour, are o, and o and "?" read the same), "" when unknown.
+  # A word with =VALUE attached names nothing, so its value is never
+  # stepped over: the value is in the word
   function lkind(l, tab,   n, e, i, name, k, got) {
-    sub(/=.*/, "", l)
-    if (l == "") return ""
     n = split(tab, e, " "); got = ""
     for (i = 1; i <= n; i++) {
       k = substr(e[i], length(e[i])); name = substr(e[i], 1, length(e[i]) - 2)
       if (name == l) return k
-      if (index(name, l) == 1) got = (got == "" || got == k) ? k : "?"
+      if (index(name, l) == 1) got = got == "" ? k : "?"
     }
-    return got == "?" ? "" : got
+    return got
   }
   function hazard(s,   n, seg, i, cut, ntok, tok, j, k, t, p, c, w, mode, opts, pos) {
     gsub(sq, "", s); gsub(/"/, "", s); gsub(/\\/, "", s)
@@ -445,7 +449,7 @@ pipe_awk='
         if (opts && t == "--") { opts = 0; continue }
         if (opts && t ~ /^-./) {
           if (t ~ /^--/) {
-            if (!index(t, "=") && lkind(substr(t, 3), wl[mode]) == "v") j++
+            if (lkind(substr(t, 3), wl[mode]) == "v") j++
             continue
           }
           # a cluster: the first letter that takes a value takes the rest
@@ -461,7 +465,6 @@ pipe_awk='
         if (w in wv) { mode = w; opts = 1; pos = wp[w] + 0; continue }
         break
       }
-      if (j > ntok) continue
       w = tok[j]; sub(/.*\//, "", w)
       if (w !~ /^[ef]?grep$/) continue
       for (k = j + 1; k <= ntok; k++) {
@@ -470,11 +473,9 @@ pipe_awk='
         if (t ~ /^--/) {
           c = lkind(substr(t, 3), gl)
           if (c == "q") return 1
-          if (c == "v" && !index(t, "=")) k++
-          continue
-        }
-        if (t !~ /^-[A-Za-z]/) continue
-        for (p = 2; p <= length(t); p++) {
+          if (c == "v") k++
+        } else if (t ~ /^-/) for (p = 2; p <= length(t); p++) {
+          # a digit is an option too: -2q is context 2 and quiet
           c = substr(t, p, 1)
           if (c == "q" || c == "c") return 1
           if (index("efmABCdD", c)) { if (p == length(t)) k++; break }
@@ -483,15 +484,16 @@ pipe_awk='
     }
     return 0
   }
+  # a backslash-newline joins with nothing between, as bash joins it
+  # (`grep -\` then `q` is grep -q); hazard() takes the backslash out
   { s = $0; gsub(/[|][|]/, ";", s)
     if (buf == "") { start = FNR; text = $0 } else text = text " " $0
-    if (s ~ /\\$/) { sub(/\\$/, "", s); buf = buf s " "; next }
-    if (s ~ /[|][ \t]*$/) { buf = buf s " "; next }
     buf = buf s
+    if (s ~ /\\$/ || s ~ /[|][ \t]*$/) next
     if (hazard(buf)) print start ":" text
     buf = ""
   }
-  END { if (buf != "" && hazard(buf)) print start ":" text }'
+  END { if (hazard(buf)) print start ":" text }'
 pipefiles=()
 while IFS= read -r f; do pipefiles+=("$f"); done < <(
   fm_shell_corpus bin

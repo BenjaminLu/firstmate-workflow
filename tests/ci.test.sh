@@ -607,6 +607,9 @@ plant "egrep -q is grep -q" "shapes.test.sh:11:"
 plant "fgrep -c is grep -c" "shapes.test.sh:12:"
 plant "an assignment in front of grep does not hide it" "shapes.test.sh:13:"
 plant "nor does command" "shapes.test.sh:14:"
+# and the line it names is the whole command, both lines of it
+bar='|'
+assert_contains "$planted" "shapes.test.sh:3:printf x $bar   grep -q x" "a joined line is printed whole"
 rm -f "$q/tests/shapes.test.sh"
 
 # Every branch of the lint, one line each, so deleting a branch flips the
@@ -732,6 +735,55 @@ for u in "${unflagged[@]}"; do
   n=$((n + 1))
 done
 rm -f "$q/tests/e2e/wrappers.sh" "$q/tests/e2e/exclusions.sh"
+
+# How the reader normalises a line, one step per line, so deleting a step
+# flips the line that names it. Red: each kind of quote and the backslash
+# are taken out (`'-q'`, `"-q"` and `\grep` are -q and grep to the shell), a
+# value attached with = is not stepped over, a wrapper's long option is
+# done once its value is taken (timeout --s is --signal; read as a cluster
+# as well, its s takes KILL and the duration eats grep), a digit is a grep
+# option, and a backslash-newline joins with nothing between, as bash
+# joins it. Green: grep's words end at each of ; & ) and a backtick, `--`
+# ends a wrapper's options (-x is the command), so does its first operand,
+# a word that does not start with - is an operand however it is spelt, and
+# a prefix of more than one long option is refused even when all of them
+# take a value. tail.sh ends in the middle of a continued line.
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+  printf "printf x %s grep '-q' x\n" '|'                  # 3
+  printf 'printf x %s grep "-q" x\n' '|'                  # 4
+  printf 'printf x %s \\grep -q x\n' '|'                  # 5
+  printf 'printf x %s env --unset=NAME grep -q x\n' '|'   # 6
+  printf 'printf x %s timeout --s KILL 5 grep -q x\n' '|' # 7
+  printf 'printf x %s grep -2q x\n' '|'                   # 8
+  printf 'printf x %s grep -\\\nq x\n' '|'                # 9-10
+  printf 'printf x %s grep x; wc -c f\n' '|'              # 11
+  printf 'printf x %s grep x & wc -c f\n' '|'             # 12
+  printf 'echo "$(printf x %s grep x) -c"\n' '|'          # 13
+  printf 'echo `printf x %s grep x` -c\n' '|'             # 14
+  printf 'printf x %s env -- -x grep -q x\n' '|'          # 15
+  printf 'printf x %s env NAME=v -i grep -q x\n' '|'      # 16
+  printf 'printf x %s grep squid\n' '|'                   # 17
+  printf 'printf x %s grep --exc -- -q x\n' '|'           # 18
+} > "$q/tests/e2e/reading.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nprintf x %s grep -q x \\\n' '|' \
+  > "$q/tests/e2e/tail.sh"
+plant "a single-quoted -q is -q" "reading.sh:3:"
+plant "a double-quoted -q is -q" "reading.sh:4:"
+plant "a backslashed grep is grep" "reading.sh:5:"
+plant "a wrapper value attached with = is not stepped over" "reading.sh:6:"
+plant "a wrapper's long option is done once its value is taken" "reading.sh:7:"
+plant "a digit is a grep option: -2q is quiet" "reading.sh:8:"
+plant "a backslash-newline joins with nothing between" "reading.sh:9:"
+plant "a file that ends in a continued line is still read" "tail.sh:3:"
+assert_lacks "$planted" "reading.sh:11:" "grep's words end at ;"
+assert_lacks "$planted" "reading.sh:12:" "and at &"
+assert_lacks "$planted" "reading.sh:13:" "and at )"
+assert_lacks "$planted" "reading.sh:14:" "and at a backtick"
+assert_lacks "$planted" "reading.sh:15:" "-- ends a wrapper's options, so -x is the command"
+assert_lacks "$planted" "reading.sh:16:" "and so does its first operand"
+assert_lacks "$planted" "reading.sh:17:" "an operand with a q in it is not -q"
+assert_lacks "$planted" "reading.sh:18:" "--exc names three options, so grep refuses it"
+rm -f "$q/tests/e2e/reading.sh" "$q/tests/e2e/tail.sh"
 
 # Two scripts, and one of them with two offending lines: a stage that
 # stopped at the first hit passes a single-instance plant, which this
