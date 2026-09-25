@@ -82,7 +82,7 @@ assert_contains "$branch" "t-z" "it names the branch after the task"
 assert_ok "test -d '$r/state/worktrees/T-Z'" "it made a worktree of its own"
 assert_ok "git -C '$r' rev-parse --verify '$branch'" "the branch exists"
 assert_eq "1" "$(git -C "$r" rev-list --count "main..$branch")" "exactly one commit"
-assert_ok "git -C '$r/state/worktrees/T-Z' show --stat HEAD | grep -q mock.txt" "the adapter's file is in it"
+assert_ok "grep -q mock.txt <<<\"\$(git -C '$r/state/worktrees/T-Z' show --stat HEAD)\"" "the adapter's file is in it"
 assert_ok "cd '$ROOT' && git --git-dir='$d/remote.git' rev-parse --verify '$branch'" "it pushed to the remote"
 assert_contains "$(cat "$d/ghcalls")" "pr create" "it opened a pull request"
 
@@ -1099,7 +1099,7 @@ assert_ne "$trunc_branch" "$full_slug" "the fixture's title is long enough that 
 : > "$d21/ghcalls"
 ( cd "$r21" && FM_ROOT="$r21" FM_GH="$GH21" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
 branches_after="$(cd "$r21" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$')"
-assert_eq "1" "$(printf '%s\n' "$branches_after" | grep -c .)" \
+assert_eq "1" "$(grep -c . <<<"$branches_after")" \
   "a title-mismatched local branch is reused, never doubled"
 assert_eq "$full_slug" "$branches_after" "and it is the branch the first round pushed, not a new one from base"
 assert_ok "cd '$r21' && git cat-file -e '$full_slug:src/round-one'" "the second round keeps the first round's work"
@@ -1142,7 +1142,7 @@ assert_ok "cd '$r22' && git ls-remote --exit-code --heads origin '$full_slug'" "
 
 ( cd "$r22" && FM_ROOT="$r22" FM_GH="$GH22" bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
 branches_after="$(cd "$r22" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$')"
-assert_eq "1" "$(printf '%s\n' "$branches_after" | grep -c .)" \
+assert_eq "1" "$(grep -c . <<<"$branches_after")" \
   "a remote-only, title-mismatched branch is reused, never doubled"
 assert_eq "$full_slug" "$branches_after" "and it is the branch origin remembered, not a new one from base"
 assert_ok "cd '$r22' && git cat-file -e '$full_slug:src/round-one'" "the second round keeps the first round's work"
@@ -1199,7 +1199,7 @@ M
     "a $scenario run says when it ended"
   assert_eq "agent_finished" "$(jq -r .type < "$ra/state/events.jsonl" | tail -1)" \
     "and it is the last thing it says"
-  assert_eq "1" "$(jq -r 'select(.type=="agent_finished")|.type' "$ra/state/events.jsonl" | grep -c . || true)" \
+  assert_eq "1" "$(grep -c . <<<"$(jq -r 'select(.type=="agent_finished")|.type' "$ra/state/events.jsonl")" || true)" \
     "exactly once, not once per exit path"
   rm -rf "$da"
 done
@@ -1270,7 +1270,7 @@ exec 8>&-
 # that the run STOPPED - exactly one ending, and nothing after it - and
 # the first version of this asserted `tail -1` alone, which held whether
 # the run stopped or carried on to open a pull request.
-ends="$(jq -r 'select(.type=="agent_finished")|.type' "$rk/state/events.jsonl" | grep -c . || true)"
+ends="$(grep -c . <<<"$(jq -r 'select(.type=="agent_finished")|.type' "$rk/state/events.jsonl")" || true)"
 assert_eq "1" "$ends" "a run killed mid-flight ends exactly once"
 after="$(jq -r .type "$rk/state/events.jsonl" | sed -n '/agent_finished/,$p' | tail -n +2)"
 assert_eq "" "$after" "and says nothing after it"
@@ -1314,7 +1314,7 @@ assert_eq "0" "$?" "the same run, not killed, exits 0"
 exec 8>&-
 assert_contains "$(cat "$dl/ghcalls" 2>/dev/null)" "pr create" \
   "the same run, not killed, does reach a pull request"
-assert_eq "1" "$(jq -r 'select(.type=="agent_finished")|.type' "$rl/state/events.jsonl" | grep -c . || true)" \
+assert_eq "1" "$(grep -c . <<<"$(jq -r 'select(.type=="agent_finished")|.type' "$rl/state/events.jsonl")" || true)" \
   "and ends exactly once as well"
 rm -rf "$dl"
 
@@ -1403,7 +1403,7 @@ assert_eq "$codes" "$listed" "design.md §5.3.2 names exactly the codes fm-worke
 
 # the adapter never touches the repository
 # a comment may mention git; a call may not
-assert_fail "grep -vE '^[[:space:]]*#' '$ROOT/bin/adapters/mock.sh' | grep -qE '\\b(git|gh)\\b'" \
+assert_fail "grep -qE '\\b(git|gh)\\b' <<<\"\$(grep -vE '^[[:space:]]*#' '$ROOT/bin/adapters/mock.sh')\"" \
   "the mock adapter calls no git and no gh"
 rm -rf "$d" "$d2" "$d3"
 fi
@@ -1515,7 +1515,7 @@ git -C "$rc" worktree add -q --detach "$rc/state/worktrees/T-CK" main
 printf 'nope\n' > "$rc/state/worktrees/T-CK/bad.txt"
 assert_fail "FM_ROOT='$rc' '$rc/bin/fm-checkpoint.sh' --task T-CK --repo '$rc' --message 'should refuse main'" \
   "checkpoint refuses to write on main"
-assert_fail "cd '$ROOT' && git --git-dir='$barec' ls-tree -r main --name-only | grep -qx bad.txt" \
+assert_fail "grep -qx bad.txt <<<\"\$(cd '$ROOT' && git --git-dir='$barec' ls-tree -r main --name-only)\"" \
   "refused main checkpoint pushes nothing"
 # Unset clears the shared repo local config (worktrees share it). On a CI
 # runner with no global fallback that poisons every later commit in this

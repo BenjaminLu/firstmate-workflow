@@ -541,18 +541,44 @@ rm -rf "$bare"
 
 # an assertion that evals captured output
 { printf '#!/usr/bin/env bash\n'
-  printf 'out=hi\nassert_%s "%s '%%s' \\"$out\\" | grep -q x" "planted"\n' fail printf
+  printf 'out=hi\nassert_%s "%s '%%s' \\"$out\\" %s grep -q x" "planted"\n' fail printf '|'
 } > "$q/tests/evals.test.sh"
 plant "an assertion that evals captured output turns the hygiene stage red" "evals captured output"
 plant "and the stage names the suite" "evals.test.sh"
 rm -f "$q/tests/evals.test.sh"
 
-# a pipeline feeding grep -q
-printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\ns=hi\nprintf "%%s" "$s" | grep -q hi\n' \
+# a pipeline feeding grep -q. The pipe is passed in as an argument
+# throughout: this suite is one of the files that lint reads, and carrying
+# the literal shape would flag the suite that tests it.
+printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\ns=hi\nprintf "%%s" "$s" %s grep -q hi\n' '|' \
   > "$q/bin/fm-piped.sh"
 plant "a pipeline into grep -q turns the hygiene stage red" "feeds grep -q or -c"
 plant "and the stage names the script" "fm-piped.sh"
 rm -f "$q/bin/fm-piped.sh"
+
+# and in a test suite, which is where tests/adapter-contract.test.sh's
+# completeness loop reported a matching signature as unread at random
+# (T-103): the lint read bin/ and nothing else
+printf '#!/usr/bin/env bash\nset -uo pipefail\nl=x\nprintf "%%s\\n" "$l" %s grep -qiE X || echo unread\n' '|' \
+  > "$q/tests/piped.test.sh"
+plant "a suite that pipes into grep -q turns the stage red" "feeds grep -q or -c"
+plant "and the stage names the suite" "tests/piped.test.sh"
+rm -f "$q/tests/piped.test.sh"
+
+# below tests/ as well, and grep -c counts as much as grep -q does
+printf '#!/usr/bin/env bash\nset -uo pipefail\nn="$(jq -r .type e.jsonl %s grep -c . || true)"\n' '|' \
+  > "$q/tests/e2e/count.sh"
+plant "a helper below tests/ that pipes into grep -c turns it red" "tests/e2e/count.sh"
+rm -f "$q/tests/e2e/count.sh"
+
+# The flags come in any order. `grep -[qc]` read only the first letter, so
+# `grep -Eq` and `grep -iq` walked past it - tests/lib.sh's assert_matches
+# was one of them.
+printf '#!/usr/bin/env bash\nset -uo pipefail\nprintf x %s grep -Eq x\nprintf y %s grep -F -xc y\n' '|' '|' \
+  > "$q/tests/clustered.test.sh"
+plant "grep -q behind another flag is still grep -q" "clustered.test.sh:3:"
+plant "and so is grep -c after a separate flag" "clustered.test.sh:4:"
+rm -f "$q/tests/clustered.test.sh"
 
 # Two scripts, and one of them with two offending lines: a stage that
 # stopped at the first hit passes a single-instance plant, which this
@@ -705,7 +731,7 @@ rm -f "$q/tests/hand-rolled.test.sh"
 # catches and none for the thing it lets through is half a lint: the
 # exclusion is where the false positives live, and one of these was dead
 # code that never matched anything.
-printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n# printf x | grep -q y\necho ok\n' \
+printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n# printf x %s grep -q y\necho ok\n' '|' \
   > "$q/bin/fm-commented.sh"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 assert_contains "$out" "ci: green" "a hazard quoted in a comment is not a hazard"
@@ -717,14 +743,25 @@ out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 assert_contains "$out" "ci: green" "a dispatch quoted in a comment is not a dispatch"
 rm -f "$q/bin/fm-commented.sh"
 
-printf '#!/usr/bin/env bash\n# fm:lint-source\nset -uo pipefail\nexec < /dev/null\ns=hi\nprintf "%%s" "$s" | grep -q hi\n' \
+printf '#!/usr/bin/env bash\n# fm:lint-source\nset -uo pipefail\nexec < /dev/null\ns=hi\nprintf "%%s" "$s" %s grep -q hi\n' '|' \
   > "$q/bin/fm-quoter.sh"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 assert_contains "$out" "ci: green" "a file that declares itself a lint source is skipped"
 rm -f "$q/bin/fm-quoter.sh"
 
+# the same two exclusions hold in the suites
+printf '#!/usr/bin/env bash\n# fm:lint-source\nset -uo pipefail\nprintf x %s grep -q x\n  # printf y %s grep -c y\n' '|' '|' \
+  > "$q/tests/quoter.test.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_contains "$out" "ci: green" "a suite that declares itself a lint source is skipped"
+printf '#!/usr/bin/env bash\nset -uo pipefail\n  # printf y %s grep -c y\ngrep -q x <<<"$(printf x)"\n' '|' \
+  > "$q/tests/quoter.test.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_contains "$out" "ci: green" "a pipe quoted in a suite's comment, or a here-string, is not a hazard"
+rm -f "$q/tests/quoter.test.sh"
+
 { printf '#!/usr/bin/env bash\n'
-  printf '# assert_%s "%s '%%s' \\"$out\\" | grep -q x" "in a comment"\n' fail printf
+  printf '# assert_%s "%s '%%s' \\"$out\\" %s grep -q x" "in a comment"\n' fail printf '|'
 } > "$q/tests/commented.test.sh"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 assert_contains "$out" "ci: green" "an evalling assertion quoted in a comment is not one"

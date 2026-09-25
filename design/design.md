@@ -1219,6 +1219,17 @@ paused clock rather than on real time. A negative window ("nothing was
 started within N seconds") is wall clock, never a count of sleeps, and may
 only grow: reconcile's is 5 seconds.
 
+No script and no suite feeds `grep -q` or `grep -c` through a pipe (T-103).
+Under `pipefail`, `grep -q` leaving on its first match can kill the producer
+with SIGPIPE, and the pipeline then reports a match as a miss; a loaded
+runner loses that race where an idle laptop does not, which is how
+adapter-contract's completeness loop failed on CI with a different signature
+each run. The data goes in by here-string (or process substitution, where
+`$(...)` would strip trailing lines the check is looking for). The hygiene
+lint enforces it over every `*.sh` below `bin/` and `tests/`, with the flag
+anywhere in grep's option cluster; a full-line comment is not a hit, and a
+file that declares `# fm:lint-source` is skipped.
+
 Each stage skips cleanly when its subject does not exist, so the gate is green
 from an empty tree onward. **Every e2e uses the `mock` adapter** — no model
 call, so it is fast, free and deterministic. Real vendors run in a nightly

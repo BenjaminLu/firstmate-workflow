@@ -86,7 +86,7 @@ d2="$(fixture)"; r2="$d2/repo"; GH2="$(ghstub "$d2")"
 cp "$r/bin/adapters/mock.sh" "$r2/bin/adapters/mock.sh"
 ( cd "$r2" && FM_ROOT="$r2" FM_GH="$GH2" FM_VERDICT="this looks great, nice work" \
   bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
-assert_fail "jq -r .type < '$r2/state/events.jsonl' | grep -qx approved" "prose praise does not emit approved"
+assert_fail "grep -qx approved <<<\"\$(jq -r .type < '$r2/state/events.jsonl')\"" "prose praise does not emit approved"
 
 # round three tells the reviewer to close the list
 cap3="$d/sent3.md"
@@ -397,7 +397,7 @@ for scenario in signed unsigned outage; do
   ( cd "$rr" && FM_ROOT="$rr" FM_GH="$GHr" bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
   assert_eq "agent_finished" "$(jq -r .type < "$rr/state/events.jsonl" | tail -1)" \
     "a $scenario round says when it ended, last"
-  assert_eq "1" "$(jq -r 'select(.type=="agent_finished")|.type' "$rr/state/events.jsonl" | grep -c . || true)" \
+  assert_eq "1" "$(grep -c . <<<"$(jq -r 'select(.type=="agent_finished")|.type' "$rr/state/events.jsonl")" || true)" \
     "and exactly once"
   assert_matches "$(jq -r 'select(.type=="agent_finished")|.actor' < "$rr/state/events.jsonl")" \
     '^reviewer-[a-z]+[0-9]*-tz-r[0-9]+$' "and under its own per-run name"
@@ -450,7 +450,7 @@ kill -TERM "$kp" 2>/dev/null
 wait "$kp" 2>/dev/null; krc=$?
 ended() { [ "$(jq -r .type < "$rkr/state/events.jsonl" 2>/dev/null | tail -1)" = "agent_finished" ]; }
 eventually ended
-assert_eq "1" "$(jq -r 'select(.type=="agent_finished")|.type' "$rkr/state/events.jsonl" | grep -c . || true)" \
+assert_eq "1" "$(grep -c . <<<"$(jq -r 'select(.type=="agent_finished")|.type' "$rkr/state/events.jsonl")" || true)" \
   "a review killed mid-round ends exactly once"
 assert_eq "" "$(jq -r .type "$rkr/state/events.jsonl" | sed -n '/agent_finished/,$p' | tail -n +2)" \
   "and says nothing after it"

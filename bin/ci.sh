@@ -367,16 +367,29 @@ fi
 # fields - `^[^:]*: *#` could only ever match the line number, and never
 # did. And ci.sh is skipped the way a sourced library is: by a marker it
 # declares about itself, not by its name.
-piped="$(grep -Hn '| *grep -[qc]' bin/*.sh bin/adapters/*.sh 2>/dev/null \
+#
+# The test suites are read too, and every directory below them (T-103): the
+# lint read bin/ alone, and tests/adapter-contract.test.sh's completeness
+# loop reported a signature that matched as unread, a different one each
+# CI run. And the flag is found anywhere in the cluster - `grep -[qc]`
+# read only the first letter, so `grep -Eq` and `grep -iq` walked past.
+pipefiles=()
+while IFS= read -r f; do pipefiles+=("$f"); done < <(
+  fm_shell_corpus bin
+  [ ! -d tests ] || fm_shell_corpus tests)
+piped=''
+[ ${#pipefiles[@]} -eq 0 ] || piped="$(grep -HnE \
+    '[|][[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:space:]]+(-[A-Za-z]*[qc]|--(quiet|silent|count)([[:space:]]|$))' \
+    "${pipefiles[@]}" 2>/dev/null \
   | grep -v '^[^:]*:[0-9]*: *#' \
   | while IFS=: read -r pf rest; do
-      grep -q '^# fm:lint-source' "$pf" || printf '%s:%s\n' "$pf" "$rest"
+      fm_is_lint_source "$pf" || printf '%s:%s\n' "$pf" "$rest"
     done || true)"
 if [ -n "$piped" ]; then
   flunk "a pipeline feeds grep -q or -c; use a here-string"
   printf '%s\n' "$piped"
 else
-  pass "nothing feeds grep -q through a pipe"
+  pass "nothing feeds grep -q through a pipe (${#pipefiles[@]} scripts)"
 fi
 
 # a fixture that swaps a script out has to put it back, and a hand-rolled
@@ -505,7 +518,7 @@ if [ -d tests ] && [ -f tests/lib.sh ]; then
   called="$(printf '%s' "$called" | sed '/^$/d' | sort -u)"
   missing=''
   for a in $called; do
-    printf '%s\n' "$defined" | grep -qx "$a" || missing="$missing $a"
+    grep -qx "$a" <<<"$defined" || missing="$missing $a"
   done
   if [ -n "$missing" ]; then
     flunk "a suite calls an assertion tests/lib.sh does not define:$missing"
