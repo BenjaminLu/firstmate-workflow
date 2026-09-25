@@ -364,6 +364,18 @@ assert_eq "B" "$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r --arg i "$n
   "and is read back among the responses"
 rm -f "$d/state/pending/D-5.json"
 
+# T-112: a skill-update card, D-SK-<n>, is listed as one the board will answer,
+# with fm-decide.sh's pattern; an id no route accepts is listed as not answerable
+printf '{"id":"D-SK-001","task":"SK-001","kind":"choice","title":"adopt SK-001"}\n' > "$d/state/pending/D-SK-001.json"
+printf '{"id":"D-SK-01","task":"SK-01","kind":"choice","title":"malformed"}\n' > "$d/state/pending/D-SK-01.json"
+ssk="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "true" "$(jq -r '.pending[]|select(.id=="D-SK-001")|.answerable' <<<"$ssk")" \
+  "a skill-update card is listed as answerable"
+assert_eq "null" "$(jq -r '.pending[]|select(.id=="D-SK-001")|.owner' <<<"$ssk")" "and names no owner"
+assert_eq "false" "$(jq -r '.pending[]|select(.id=="D-SK-01")|.answerable' <<<"$ssk")" \
+  "a card under an id the route refuses is listed as not answerable"
+rm -f "$d/state/pending/D-SK-001.json" "$d/state/pending/D-SK-01.json"
+
 # review_failed without review_outcome is missing-review/error, never a
 # directed rejection. The additive datum makes a substantive reject handoff.
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-real --task T-D --type dispatched \
@@ -1257,7 +1269,7 @@ emh --actor github --task T-002 --type merged --project beta --en "beta merged" 
 # decision cards of both projects, in the order they were asked for: an old
 # numeric card, an old skill-update card, and cards whose ids name their owner
 printf '{"id":"D-7","task":"T-002","kind":"choice","title":"old numeric"}\n' > "$h/state/pending/D-7.json"
-printf '{"id":"D-SK-3","task":"SK-003","kind":"choice","title":"skill update"}\n' > "$h/state/pending/D-SK-3.json"
+printf '{"id":"D-SK-003","task":"SK-003","kind":"choice","title":"skill update"}\n' > "$h/state/pending/D-SK-003.json"
 printf '{"id":"D-beta-T001-1","project":"beta","task":"T-001","kind":"merge","pr":7,"title":"merge beta #7"}\n' \
   > "$h/state/pending/D-beta-T001-1.json"
 printf '{"id":"D-alpha-T001-1","project":"alpha","task":"T-001","kind":"merge","pr":7,"title":"merge alpha #7"}\n' \
@@ -1267,7 +1279,7 @@ printf '{"id":"D-alpha-T001-1","project":"alpha","task":"T-001","kind":"merge","
 printf '{"id":"D-alpha-T002-1","task":"T-002","kind":"merge","pr":8,"title":"merge alpha #8"}\n' \
   > "$h/state/pending/D-alpha-T002-1.json"
 touch -t 202609240900.00 "$h/state/pending/D-7.json"
-touch -t 202609240901.00 "$h/state/pending/D-SK-3.json"
+touch -t 202609240901.00 "$h/state/pending/D-SK-003.json"
 touch -t 202609240902.00 "$h/state/pending/D-beta-T001-1.json"
 touch -t 202609240903.00 "$h/state/pending/D-alpha-T001-1.json"
 touch -t 202609240904.00 "$h/state/pending/D-alpha-T002-1.json"
@@ -1319,7 +1331,7 @@ assert_eq "https://github.com/example-org/alpha-app/pull/7" "$(jq -r '.pr_urls_b
 assert_eq "https://github.com/example-org/beta-app/pull/7" \
   "$(jq -r '.recent[]|select(.type=="pr_opened" and .project=="beta")|.pr_url' <<<"$sh1")" "a log line links its own project's pull request"
 # decision cards: every project's pending card in one list, oldest request first
-assert_eq "D-7 D-SK-3 D-beta-T001-1 D-alpha-T001-1 D-alpha-T002-1" "$(jq -r '[.pending[].id]|join(" ")' <<<"$sh1")" \
+assert_eq "D-7 D-SK-003 D-beta-T001-1 D-alpha-T001-1 D-alpha-T002-1" "$(jq -r '[.pending[].id]|join(" ")' <<<"$sh1")" \
   "every project's pending cards, old ids and owned ids alike, in one list, oldest request first"
 assert_eq "5" "$(jq -r .counts.waiting <<<"$sh1")" "the pending count covers every project"
 assert_eq "https://github.com/example-org/beta-app/pull/7" \
@@ -1336,7 +1348,7 @@ assert_eq "5" "$(jq -r .counts.waiting <<<"$(sh_ '?project=..%2Fetc')")" "a filt
 
 # answering one project's card leaves every other card pending and in place
 assert_eq "200" "$(posth D-7 B)" "an old numeric card is answered"
-assert_eq "200" "$(posth D-SK-3 B)" "an old skill-update card is answered"
+assert_eq "200" "$(posth D-SK-003 B)" "an old skill-update card is answered"
 assert_eq "D-beta-T001-1 D-alpha-T001-1 D-alpha-T002-1" "$(jq -r '[.pending[].id]|join(" ")' <<<"$(sh_)")" \
   "and the other cards keep their places"
 

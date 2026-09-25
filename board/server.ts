@@ -234,10 +234,13 @@ const prNumber = (n: unknown): number | null => {
 // one that names its owner, D-<project>-<task>-<n> - a registry name, the
 // task id without its hyphen, and n from 1. The board lists and answers all
 // three; an owned id's project and task are read out of the id itself, never
-// guessed.
-const OLD_DECISION = /^D-(SK-)?[0-9]{1,6}$/;
+// guessed. A skill update's card, D-SK-<n>, is fm-decide.sh's SKILL_ID
+// (T-112): fm.sh self-update raises it, fm-decide.sh --await and fm-ready.sh
+// read its answer under that pattern only, and it names no owner.
+const OLD_DECISION = /^D-[0-9]{1,6}$/;
 const OWNED_DECISION = /^D-([a-z0-9-]{1,24})-(T[A-Za-z0-9]{1,32})-([1-9][0-9]{0,5})$/;
-const isDecisionId = (id: string) => OLD_DECISION.test(id) || OWNED_DECISION.test(id);
+const SKILL_DECISION = /^D-SK-[0-9]{3,}$/;
+const isDecisionId = (id: string) => OLD_DECISION.test(id) || OWNED_DECISION.test(id) || SKILL_DECISION.test(id);
 const ownerOf = (id: unknown): { project: string; task: string; n: number } | null => {
   const m = OWNED_DECISION.exec(String(id ?? ""));
   return m ? { project: m[1], task: `T-${m[2].slice(1)}`, n: Number(m[3]) } : null;
@@ -766,7 +769,9 @@ const pending = () => {
       const d = JSON.parse(readFileSync(join(dir, f), "utf8"));
       if (d.pr != null && settled.has(within(d.project, d.pr))) return [];
       if (d.task != null && settledTasks.has(within(d.project, d.task))) return [];
-      return [{ card: { ...d, owner: ownerOf(d.id) }, at: asked(d, f) }];
+      // answerable: POST /decisions takes this id; a card under any other
+      // name is listed, and the page shows the refusal when it is answered
+      return [{ card: { ...d, owner: ownerOf(d.id), answerable: isDecisionId(String(d.id ?? "")) }, at: asked(d, f) }];
     } catch { return []; }
   }).sort((a, b) => a.at - b.at
     || String(a.card.id ?? "").localeCompare(String(b.card.id ?? ""), "en", { numeric: true }))
