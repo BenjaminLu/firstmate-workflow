@@ -8,15 +8,20 @@
 #   fm-sandbox.sh covers  --policy=<file>
 #       -> the policy dimensions the sandbox enforces here, one line; nothing
 #          when there is no sandbox to run
-#   fm-sandbox.sh profile --policy=<file> --root=<dir> [--write=<dir>]... [--vendor=<name>] [--proxy-port=<n>]
+#   fm-sandbox.sh profile --policy=<file> --root=<dir> [--tmp=<dir>] [--write=<dir>]... [--vendor=<name>]
+#                         [--proxy-port=<n>] [--listening=<port,...>|unknown]
 #       -> macOS: the sandbox-exec profile; Linux: the bwrap arguments, one per line
 #   fm-sandbox.sh decide  --policy=<file> [--vendor=<name>] <host>
 #       -> allow or deny, and why: the rule the round's proxy applies
-#   fm-sandbox.sh run     --policy=<file> --root=<dir> [--write=<dir>]... [--vendor=<name>]
+#   fm-sandbox.sh run     --policy=<file> --root=<dir> [--tmp=<dir>] [--write=<dir>]... [--vendor=<name>]
 #                         [--blocked=<file>] -- <command> [args...]
-#   fm-sandbox.sh plain   --policy=<file> -- <command> [args...]
+#   fm-sandbox.sh plain   --policy=<file> [--tmp=<dir>] -- <command> [args...]
 #       -> the environment scrub and the ulimits only: what an adapter's own
 #          flags stand in for when this host has no sandbox
+#
+# --tmp is the round's own temp directory, its TMPDIR and a write root;
+# `run` makes one when none is given. The caller's TMPDIR is never a root:
+# every round and every run-mode review checkout shares it.
 #
 # The dimensions are the policy's: write, read, network, sockets, env,
 # repo-config, refuse, ulimit. Before a round, the adapter asks `covers` and
@@ -26,13 +31,16 @@
 #
 # macOS runs sandbox-exec with a generated profile: reads denied by default
 # but for the write roots, the toolchain and the vendor's own auth; writes
-# only to the write roots; no network but the round's own proxy, which is
-# how a named registry can be allowed at all (a profile names addresses, not
-# hosts), and which records every host it refuses to --blocked so the round
-# can report it; LaunchServices refused, so no browser opens. Linux runs
-# bwrap, which mounts only what the policy lets the round read; it cannot
-# filter hosts, so it shares the network and leaves network, sockets and the
-# refused operations to the adapter's own flags.
+# only to the write roots and the vendor's own session state; no network
+# but the round's own proxy, which is how a named registry can be allowed at
+# all (a profile names addresses, not hosts), and which records every host
+# it refuses to --blocked so the round can report it; loopback only on ports
+# the round opens itself - never the board's (FM_PORT, 4173) nor one that
+# was listening when the round started; LaunchServices refused, so no
+# browser opens. Linux runs bwrap, which mounts only what the policy lets
+# the round read and gives it a /tmp of its own; it cannot filter hosts, so
+# it shares the network and leaves network, sockets and the refused
+# operations to the adapter's own flags.
 #
 # FM_SANDBOX_OS and FM_SANDBOX_TOOL name the platform and the sandbox binary
 # for the suite, which cannot run a real one on every runner.
@@ -89,6 +97,8 @@ def never(host):
     """GitHub and loopback, whatever the policy says: a hand-edited policy
     cannot reach them either."""
     h = host.lower().rstrip('.')
+    if not re.match(r'[a-z0-9.:-]+$', h):
+        return 'not a plain domain name'
     if h == 'localhost' or h.endswith('.localhost'):
         return 'loopback'
     if re.match(r'[0-9.]+$', h) or ':' in h:
@@ -147,6 +157,8 @@ def gitdirs(root):
 def roots_of(p, root, tmp, extra):
     out = []
     for w in p['write']:
+        if '{tmp}' in w and not tmp:
+            continue
         w = w.replace('{root}', root).replace('{tmp}', tmp)
         out.append(real(w))
     out += [real(x) for x in extra]
@@ -157,11 +169,28 @@ def roots_of(p, root, tmp, extra):
     return seen
 
 
-def darwin(p, roots, reads, auth, port):
+def prefix(path):
+    """A path and everything that begins with it: a directory's subtree, and
+    the siblings a file is rewritten through (x.json.tmp.123, x.json.lock)."""
+    sbpl(path)
+    return '(regex #"^%s")' % re.sub(r'([.^$|?*+()\[\]{}])', r'\\\1', path)
+
+
+def darwin(p, roots, reads, auth, state, port, listening):
     sub = lambda paths: ' '.join('(subpath %s)' % sbpl(x) for x in paths)
+    board = int(os.environ.get('FM_PORT') or 4173)
     lines = ['(version 1)', '(allow default)',
-             ';; network: nothing but this round\'s own proxy',
+             ';; network: this round\'s own proxy, and loopback ports the round opens itself',
              '(deny network*)']
+    # None: the listeners could not be read, so no loopback port is known to
+    # be free of someone else's, and only the proxy is reachable
+    if listening is not None:
+        lines += ['(allow network-bind (local ip "localhost:*"))',
+                  '(allow network-inbound (local ip "localhost:*"))',
+                  '(allow network-outbound (remote ip "localhost:*"))',
+                  ';; never the board, nor anything that was listening before the round started']
+        for n in sorted(set([board] + listening)):
+            lines.append('(deny network-outbound (remote ip "localhost:%d"))' % n)
     if port and int(port):
         lines.append('(allow network-outbound (remote ip "localhost:%d"))' % int(port))
     lines += [';; writes: the write roots only',
@@ -180,6 +209,9 @@ def darwin(p, roots, reads, auth, port):
                   '(deny file-read* file-write* %s)' % sub(p['never_read'])]
     if auth:
         lines.append('(allow file-read* %s)' % ' '.join('(literal %s)' % sbpl(a) for a in auth))
+    if state:
+        lines += [';; the vendor\'s own session state, which its CLI writes as it runs',
+                  '(allow file-read* file-write* %s)' % ' '.join(prefix(s) for s in state)]
     lines += [';; the round\'s own roots, even under a never-readable directory',
               '(allow file-read* file-write* %s)' % sub(roots)]
     repo = [os.path.join(r, c) for r in roots[:1] for c in p['repo_config']]
@@ -192,13 +224,17 @@ def darwin(p, roots, reads, auth, port):
     return '\n'.join(lines) + '\n'
 
 
-def linux(p, roots, reads, auth):
+def linux(p, roots, reads, auth, state):
+    # /tmp is a fresh tmpfs of the round's own: what another round leaves
+    # there is not in it
     a = ['--die-with-parent', '--new-session', '--unshare-pid', '--unshare-ipc', '--unshare-uts',
-         '--proc', '/proc', '--dev', '/dev']
+         '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp']
     for r in reads:
         a += ['--ro-bind-try', r, r]
     for r in auth:
         a += ['--ro-bind-try', r, r]
+    for r in state:
+        a += ['--bind-try', r, r]
     for r in roots:
         a += ['--bind', r, r]
     bound = reads + roots
@@ -313,15 +349,17 @@ def main():
     if mode == 'proxy':
         proxy(p, sys.argv[3], sys.argv[4], sys.argv[5])
         return
-    # profile <os> <root> <tmp> <vendor> <port> [write...]
-    os_, root, tmp, vendor, port = sys.argv[3:8]
-    roots = roots_of(p, real(root), real(tmp), sys.argv[8:])
+    # profile <os> <root> <tmp> <vendor> <port> <listening> [write...]
+    os_, root, tmp, vendor, port, listening = sys.argv[3:9]
+    roots = roots_of(p, real(root), real(tmp) if tmp else '', sys.argv[9:])
     reads = [r for r in p['read'] if r] + gitdirs(real(root))
-    auth = p['vendors'].get(vendor, {}).get('auth', [])
+    own = p['vendors'].get(vendor, {})
+    auth, state = own.get('auth', []), own.get('state', [])
     if os_ == 'darwin':
-        sys.stdout.write(darwin(p, roots, reads, auth, port))
+        ports = None if listening == 'unknown' else [int(x) for x in listening.split(',') if x]
+        sys.stdout.write(darwin(p, roots, reads, auth, state, port, ports))
     else:
-        sys.stdout.write(linux(p, roots, reads, auth))
+        sys.stdout.write(linux(p, roots, reads, auth, state))
 
 
 main()
@@ -329,11 +367,13 @@ PY
 
 # --- the option loop: every flag is --name=value --------------------------
 cmd="${1-}"; [ $# -gt 0 ] && shift
-policy=''; root=''; vendor=''; blocked=''; port=''; writes=()
+policy=''; root=''; vendor=''; blocked=''; port=''; tmp=''; listening=''; writes=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --policy=*) policy="${1#*=}"; shift ;;
     --root=*) root="${1#*=}"; shift ;;
+    --tmp=*) tmp="${1#*=}"; shift ;;
+    --listening=*) listening="${1#*=}"; shift ;;
     --write=*) writes+=("${1#*=}"); shift ;;
     --vendor=*) vendor="${1#*=}"; shift ;;
     --blocked=*) blocked="${1#*=}"; shift ;;
@@ -373,7 +413,7 @@ case "$cmd" in
   profile)
     required policy "$policy"; required root "$root"
     os="$(host_os)"; [ -n "$os" ] || { say "no sandbox profile for this platform"; exit 69; }
-    python3 -c "$SB_PY" profile "$policy" "$os" "$root" "${TMPDIR:-/tmp}" "$vendor" "${port:-0}" \
+    python3 -c "$SB_PY" profile "$policy" "$os" "$root" "$tmp" "$vendor" "${port:-0}" "$listening" \
       ${writes[@]+"${writes[@]}"}
     exit $? ;;
   run|plain) ;;
@@ -422,9 +462,29 @@ if [ "$cmd" = run ]; then
   port="$(cat "$work/port" 2>/dev/null)"
   case "$port" in ''|*[!0-9]*) say "the round's proxy did not start"; exit 70 ;; esac
   url="http://127.0.0.1:$port"
-  scrub+=(-u NO_PROXY -u no_proxy HTTP_PROXY="$url" HTTPS_PROXY="$url" http_proxy="$url"
+  # loopback goes straight to the port, where the profile decides: the
+  # round's own servers yes, the board and older listeners no
+  loop='localhost,127.0.0.1,::1'
+  scrub+=(NO_PROXY="$loop" no_proxy="$loop" HTTP_PROXY="$url" HTTPS_PROXY="$url" http_proxy="$url"
           https_proxy="$url" ALL_PROXY="$url" all_proxy="$url" NODE_USE_ENV_PROXY=1)
-  python3 -c "$SB_PY" profile "$policy" "$os" "$root" "${TMPDIR:-/tmp}" "$vendor" "$port" \
+  # the round's temp directory is its own, never the caller's: that is
+  # shared with every other round and holds run-mode review checkouts
+  if [ -z "$tmp" ]; then tmp="$work/tmp"; mkdir -p "$tmp" || exit 70; fi
+  # What was listening on loopback before the round: those ports stay out of
+  # its reach, and anything it opens itself is its own. Unreadable, only the
+  # proxy is reachable.
+  if [ "$os" = darwin ]; then
+    # macOS keeps netstat in /usr/sbin, which a caller's PATH may not hold
+    ns="$(command -v netstat 2>/dev/null || echo /usr/sbin/netstat)"
+    if listing="$("$ns" -an -p tcp 2>/dev/null)"; then
+      listening="$(awk '$NF == "LISTEN" { n = split($4, a, "."); print a[n] }' <<< "$listing" \
+        | grep -E '^[0-9]+$' | sort -un | paste -sd, -)"
+    else
+      listening=unknown
+      say "cannot list loopback listeners; the round reaches no loopback port but its proxy"
+    fi
+  fi
+  python3 -c "$SB_PY" profile "$policy" "$os" "$root" "$tmp" "$vendor" "$port" "$listening" \
     ${writes[@]+"${writes[@]}"} > "$work/profile" || exit 65
   if [ "$os" = darwin ]; then
     launcher=("$tool" -f "$work/profile")
@@ -438,10 +498,17 @@ fi
 # operator's own session included, so the round is given room for `procs`
 # more than are running now - a bare `procs` below that count would stop it
 # forking at all - clamped to the hard limit rather than failing to set.
-# Linux counts threads against it as well.
-used="$(if [ "$(uname -s)" = Linux ]; then ps -L -U "$(id -u)" -o lwp= 2>/dev/null
-        else ps -U "$(id -u)" -o pid= 2>/dev/null; fi | wc -l | tr -d ' ')"
-case "$used" in ''|*[!0-9]*) used=0 ;; esac
+# Linux counts threads against it as well. A count that cannot be taken
+# refuses the round: guessing low stops it forking, guessing high is no
+# limit. The count is taken here, before bwrap's own pid namespace.
+[ -z "$tmp" ] || scrub+=(TMPDIR="$tmp" TMP="$tmp" TEMP="$tmp")
+if [ "$(uname -s)" = Linux ]; then listed="$(ps -L -U "$(id -u)" -o lwp= 2>/dev/null)"
+else listed="$(ps -U "$(id -u)" -o pid= 2>/dev/null)"; fi || listed=''
+used="$(grep -c '[0-9]' <<< "$listed")"
+# ps itself and this shell are two of them, so fewer is a count that failed
+[ "$used" -ge 2 ] || {
+  say "cannot count this user's processes (ps failed or saw none); refusing the round rather than setting a process limit that would stop it forking"
+  exit 70; }
 procs=$((used + procs))
 (
   hard="$(ulimit -Hu 2>/dev/null)"

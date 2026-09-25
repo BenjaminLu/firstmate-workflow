@@ -65,8 +65,9 @@ if [ "${FM_OUTER_OS:-}" = darwin ]; then
   # sandbox-exec around codex confines every command it runs
   policy_args=(--sandbox danger-full-access)
 else
-  net=false; [ -z "${FM_POLICY_HOSTS:-}" ] || net=true
-  policy_args=(--sandbox workspace-write -c "sandbox_workspace_write.network_access=$net")
+  # not `net`: _lib.sh keeps an array by that name
+  codex_net=false; [ -z "${FM_POLICY_HOSTS:-}" ] || codex_net=true
+  policy_args=(--sandbox workspace-write -c "sandbox_workspace_write.network_access=$codex_net")
 fi
 policy_args+=(-c 'mcp_servers={}')
 # the trailing "-" is codex's read-the-prompt-from-stdin marker and has to

@@ -34,10 +34,12 @@ starts, `fm_adapter_confine` in `_lib.sh` checks the union: a dimension
 neither covers refuses the round with `2`, so the fallback chain moves on,
 and nothing degrades to an unconfined round. An adapter reached without
 `FM_POLICY` takes the engine's own policy for its role, never none.
+`fm_adapter_policy` also gives the round a temp directory of its own, its
+`TMPDIR`, removed when the adapter exits; the caller's is never a root.
 
 | vendor | its own flags | under macOS's sandbox-exec |
 |---|---|---|
-| claude | T-066's settings for every round: `--restricted`, dontAsk, file rules on the worktree and TMPDIR, deny rules, its sandbox with the policy's registries | its sandbox off (a seatbelt cannot nest); the shell allowed, the deny rules kept |
+| claude | T-066's settings for every round: `--restricted`, dontAsk, file rules on the worktree and the round's own TMPDIR, deny rules, its sandbox with the policy's registries and loopback binding | its sandbox off (a seatbelt cannot nest); the shell allowed, the deny rules kept |
 | codex | `--sandbox workspace-write`, network on only when a registry is declared, no MCP servers | `--sandbox danger-full-access` inside the outer one |
 | cursor-agent | `--trust --sandbox enabled` instead of `-f` | `--trust --sandbox disabled` inside the outer one |
 | gemini | `--approval-mode yolo --extensions none`, no MCP server | the same; refused where the sandbox does not cover the network (Linux) |

@@ -163,9 +163,11 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
               assert_contains "$argv" "Edit(/$tr_/**)" "$name may edit files in its worktree without asking"
               assert_lacks "$argv" "acceptEdits" "$name no longer accepts every edit wholesale" ;;
     esac
+    # One branch per vendor: a combined `claude|cursor-agent)` above a
+    # `cursor-agent)` branch matched first, and the second never ran.
     case "$name" in
       # -p here means "print mode", a bare flag: stdin carries the prompt
-      claude|cursor-agent) assert_contains " $argv " " -p " "$name asks for print mode" ;;
+      claude) assert_contains " $argv " " -p " "$name asks for print mode" ;;
       # gemini's -p takes the prompt as its VALUE. The documented headless
       # form is a piped stdin and no -p at all: a bare -p leaves the flag
       # dangling and the prompt is never delivered.
@@ -173,9 +175,12 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
       gemini) assert_eq "--approval-mode yolo --extensions none --allowed-mcp-server-names fm-none" "$argv" \
                 "$name uses the documented headless form, with the policy's flags"
               assert_lacks " $argv " " -p " "$name passes no dangling -p" ;;
+      # under bwrap (this loop's platform for it) cursor's own sandbox stays on
       cursor-agent)
+              assert_contains " $argv " " -p " "$name asks for print mode"
               assert_contains " $argv " " --trust --sandbox enabled " "$name trusts the worktree and runs its sandbox"
-              assert_lacks " $argv " " -f " "$name no longer forces every command through" ;;
+              assert_lacks " $argv " " -f " "$name no longer forces every command through"
+              assert_lacks " $argv " " --force " "$name nor with --force" ;;
       # codex reads stdin only when the last argument is the marker "-"
       # codex reads a prompt only as `codex exec ... -`: the subcommand, the
       # flag that lets it run outside a repository, and the stdin marker
@@ -184,7 +189,8 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
              assert_contains " $argv " " --skip-git-repo-check " "$name does not require a repository"
              assert_eq "-" "${argv##* }" "$name keeps the stdin marker last"
              assert_contains " $argv " " --sandbox workspace-write -c sandbox_workspace_write.network_access=false " \
-               "$name confines its commands to the worktree, with no network when none is declared" ;;
+               "$name confines its commands to the worktree, with no network when none is declared"
+             assert_contains " $argv " " -c mcp_servers={} " "$name starts no MCP server" ;;
     esac
     # every round is confined now, not only a run-mode review (T-105)
     case "$name" in
@@ -223,6 +229,11 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
         "$name keeps the round's cache redirection"
       runargv="$(cat "$d/argv.run" 2>/dev/null)"
       list_after() { awk -v f="$1" '$0==f{on=1;next} /^--/{on=0} on' "$d/argv.run"; }
+      # the round's temp directory is its own, not the shared TMPDIR that
+      # holds every other round's files and run-mode checkouts (T-105)
+      rtmp="$(sed -n 's/^TMPDIR=//p' "$d/env.run" 2>/dev/null)"
+      assert_matches "$rtmp" "^$tmpd/fm-round\\.[A-Za-z0-9]+\$" "$name's engine is given a temp directory of the round's own"
+      assert_fail "test -e '$rtmp'" "which is removed when the round ends"
       case "$name" in
         claude)
           assert_contains "$runargv" "--permission-mode
@@ -233,7 +244,7 @@ dontAsk" "$name denies every tool call no rule allows"
           allowed="$(list_after --allowedTools)"; denied="$(list_after --disallowedTools)"
           assert_ne "" "$allowed" "$name names what the reviewer may do"
           stray="$(grep -E '^(Edit|Write|Read)' <<< "$allowed" \
-            | grep -vE "^(Edit|Write|Read)\(/($ck|$tmpd)/\*\*\)$" || true)"
+            | grep -vE "^(Edit|Write|Read)\(/($ck|$rtmp)/\*\*\)$" || true)"
           assert_eq "" "$stray" "$name allows file writes only under the checkout and the temp directory"
           assert_contains "$allowed" "Edit(/$ck/**)" "$name lets the reviewer edit its own checkout"
           assert_lacks "$allowed" "WebFetch" "$name gives the reviewer no web access"
@@ -278,7 +289,8 @@ $runargv
 " "$name loads no skill or command from the branch or the operator"
           assert_eq "Bash,Read,Edit,Write,Grep,Glob" "$(list_after --tools)" \
             "$name names the only tools the round has"
-          assert_eq "$tmpd" "$(list_after --add-dir)" "$name's file tools reach only the checkout and the temp directory"
+          assert_eq "$rtmp" "$(list_after --add-dir)" "$name's file tools reach only the checkout and the round's own temp directory"
+          assert_lacks "$allowed" "(/$tmpd/**)" "and not the shared one"
           # the barriers push actually meets: no network beyond what the
           # project declares, and no settings excluding a command from the sandbox
           assert_eq "[]" "$(jq -c '.sandbox.network.allowedDomains' <<< "$settings" 2>/dev/null)" \
@@ -432,15 +444,58 @@ assert_eq '(allow network-outbound (remote ip "localhost:' \
   "$(grep -o '(allow network-outbound (remote ip "localhost:' "$pk/profile.sb" 2>/dev/null)" \
   "and its round reaches the network only through that proxy"
 # loopback and GitHub are never allowed, not even by a policy file that says so
-for bad in github.com api.github.com localhost 127.0.0.1; do
+# The hosts every adapter builds its flags from are the policy's
+# (FM_POLICY_HOSTS), so a malformed entry is refused there too - not only in
+# FM_REVIEW_NETWORK, which fm_adapter_context still checks for a run-mode
+# review. A `*` is read as itself: expanded, it became the file names in
+# the working directory, which pass as domains.
+mkdir -p "$pv/globdir"; : > "$pv/globdir/x.org"
+for bad in github.com api.github.com localhost 127.0.0.1 'x.org","*' '*'; do
   jq --arg h "$bad" '.network = ["registry.npmjs.org", $h]' "$pk/net.json" > "$pv/bad.json"
   for v in claude codex cursor-agent gemini; do
-    assert_eq "65" "$(confined darwin "$pk/sandbox-exec" "$pv/bad.json" "$v")" "$v refuses a policy whose network names $bad"
+    assert_eq "65" "$(cd "$pv/globdir" && confined darwin "$pk/sandbox-exec" "$pv/bad.json" "$v")" \
+      "$v refuses a policy whose network names $bad"
     assert_fail "test -e '$pv/argv'" "and $v's CLI never starts ($bad)"
   done
   "$ROOT/bin/fm-sandbox.sh" decide --policy="$pv/bad.json" "$bad" >/dev/null 2>&1
   assert_eq "1" "$?" "and the proxy never lets $bad through"
 done
+
+# FM_ADAPTER_ARGS come after the policy's flags and the last value wins, so
+# one that touches permissions is refused in every round, not only a
+# run-mode review, and for every vendor
+for pair in "claude --dangerously-skip-permissions" "claude --permission-mode bypassPermissions" \
+            "claude --settings x.json" "claude --add-dir /" "claude --mcp-config x.json" \
+            "codex --sandbox danger-full-access" "codex --dangerously-bypass-approvals-and-sandbox" \
+            "codex -c sandbox_mode=danger-full-access" "codex --full-auto" "codex --add-dir /" \
+            "cursor-agent -f" "cursor-agent --force" "cursor-agent --sandbox disabled" "cursor-agent --approve-mcps" \
+            "gemini --sandbox false" "gemini --extensions all" "gemini --allowed-mcp-server-names x" \
+            "gemini --include-directories /"; do
+  v="${pair%% *}"; extra="${pair#* }"
+  assert_eq "64" "$(FM_ADAPTER_ARGS="$extra" confined darwin "$pk/sandbox-exec" "$pk/none.json" "$v")" \
+    "$v refuses a worker round whose extra arguments say $extra"
+  assert_fail "test -e '$pv/argv'" "and $v's CLI never starts ($extra)"
+done
+
+# An adapter reached without FM_POLICY - by hand, or by a caller that does
+# not know about one - takes the engine's own policy for its role, never none
+unset FM_POLICY
+for v in claude codex cursor-agent gemini; do
+  printf '#!/usr/bin/env bash\ncat > /dev/null\nprintf "%%s\\n" "$@" > "%s/argv"\nprintf "ran\\n"\nexit 0\n' \
+    "$pv" > "$pv/fakebin/$v"; chmod +x "$pv/fakebin/$v"
+  rm -f "$pv/argv" "$pk/profile.sb"
+  FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" PATH="$pv/fakebin:/usr/bin:/bin" \
+    "$ROOT/bin/adapters/$v.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"
+  assert_eq "0" "$?" "$v with no FM_POLICY still runs, under the engine's own policy"
+  assert_contains "$(cat "$pk/profile.sb" 2>/dev/null)" "(subpath \"$(cd "$HOME" && pwd -P)/.ssh\")" \
+    "and that policy's profile keeps ~/.ssh out of reach"
+done
+# and a policy file that is named but missing refuses the round
+FM_POLICY="$pv/no-such-policy.json" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" \
+  PATH="$pv/fakebin:/usr/bin:/bin" "$ROOT/bin/adapters/claude.sh" run "$pv/prompt" "$pv/tree" "$pv/log" \
+  >/dev/null 2>"$pv/err"
+assert_eq "65" "$?" "a named policy that is not there refuses the round"
+assert_contains "$(cat "$pv/err")" "no policy at" "and says so"
 rm -rf "$pv" "$pk"
 unset FM_POLICY FM_SANDBOX_OS FM_SANDBOX_TOOL
 

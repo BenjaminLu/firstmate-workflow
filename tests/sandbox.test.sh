@@ -35,7 +35,8 @@ w="$t/worker.json"
 assert_eq "worker" "$(jq -r .role "$w")" "for the role asked"
 assert_eq "write read network sockets env repo-config refuse ulimit" "$(jq -r '.dimensions|join(" ")' "$w")" \
   "naming every dimension a round is confined in"
-assert_eq '["{root}","{tmp}","/tmp"]' "$(jq -c .write "$w")" "writes go to the worktree or checkout and the temp directory"
+assert_eq '["{root}","{tmp}"]' "$(jq -c .write "$w")" \
+  "writes go to the worktree or checkout and the round's own temp directory - never the shared /tmp"
 assert_eq "[]" "$(jq -c .network "$w")" "and no registry is reachable unless one is declared"
 for never in "$home/.ssh" "$home/.config/gh" "$home/.aws" "$home/.claude" "$home/.codex" \
              "$home/.cursor" "$home/.gemini" "$home/.config/herdr" "$t/state"; do
@@ -56,6 +57,14 @@ assert_eq "none" "$(jq -r .sockets "$w")" "no unix sockets"
 assert_eq "2048 14400" "$(jq -r '"\(.procs) \(.cpu)"' "$w")" "and a process and CPU ulimit"
 assert_eq "true" "$(jq --arg p "$home/.claude/.credentials.json" '.vendors.claude.auth | index($p) != null' "$w")" \
   "a vendor's own auth is named, for its own round to read"
+# a vendor's session state is writable; its settings are not state
+for v in claude codex cursor-agent gemini; do
+  assert_ne "0" "$(jq --arg v "$v" '.vendors[$v].state | length' "$w")" "$v names the session state its CLI writes"
+done
+assert_eq "true" "$(jq --arg h "$home" '.vendors.claude.state | index("\($h)/.claude.json") != null
+  and index("\($h)/.claude/projects") != null' "$w")" "claude's state is ~/.claude.json and its session directories"
+assert_eq "[]" "$(jq -c '[.vendors[] | (.state + .auth)[] | select(test("settings|config\\.toml|mcp\\.json|/skills|/hooks|CLAUDE\\.md|GEMINI\\.md"))]' "$w")" \
+  "no vendor's settings, hooks, skills or MCP servers are among its auth or state"
 
 # the layers: top-level, then the project, flat keys then the role's own
 cfg='vendor: mock
@@ -194,24 +203,56 @@ assert_eq "65" "$?" "a policy that does not read covers nothing either"
 assert_eq "64" "$?" "and covers without a policy is a usage error"
 
 # --- the macOS profile ----------------------------------------------------------
-root="$t/tree"; mkdir -p "$root/.claude"
-prof="$(mac profile --policy="$P" --root="$root" --vendor=claude --proxy-port=4242 --write="$t/attempt")"
+root="$t/tree"; mkdir -p "$root/.claude" "$t/round-a" "$t/round-b"
+prof="$(mac profile --policy="$P" --root="$root" --tmp="$t/round-a" --vendor=claude --proxy-port=4242 \
+  --listening=4242,5000 --write="$t/attempt")"
 assert_contains "$prof" "(deny network*)" "the profile denies the network"
-assert_eq '(allow network-outbound (remote ip "localhost:4242"))' "$(grep 'allow network' <<< "$prof")" \
-  "and allows exactly one way out: the round's own proxy"
+# loopback: the round's own ports, and neither the board nor what was already listening
+assert_contains "$prof" '(allow network-bind (local ip "localhost:*"))' "a round may open loopback ports of its own"
+assert_contains "$prof" '(allow network-outbound (remote ip "localhost:*"))' "and connect to them"
+assert_contains "$prof" '(deny network-outbound (remote ip "localhost:4173"))' "but never to the board's port"
+assert_contains "$prof" '(deny network-outbound (remote ip "localhost:5000"))' "nor to a listener older than the round"
+assert_eq "" "$(grep 'allow network' <<< "$prof" | grep -v '"localhost:' || true)" \
+  "and nothing but loopback is allowed directly"
+n_deny="$(grep -n 'deny network-outbound (remote ip "localhost:5000")' <<< "$prof" | cut -d: -f1)"
+n_proxy="$(grep -n 'allow network-outbound (remote ip "localhost:4242")' <<< "$prof" | tail -1 | cut -d: -f1)"
+assert_eq "1" "$([ -n "$n_deny" ] && [ -n "$n_proxy" ] && [ "$n_proxy" -gt "$n_deny" ] && echo 1)" \
+  "the round's own proxy stays reachable though it was listening first"
+FM_PORT=4999 mac profile --policy="$P" --root="$root" --proxy-port=4242 --listening= > "$t/p2"
+assert_contains "$(cat "$t/p2")" '(remote ip "localhost:4999")' "the board's port is FM_PORT when that is set"
+unknown="$(mac profile --policy="$P" --root="$root" --proxy-port=4242 --listening=unknown)"
+assert_eq '(allow network-outbound (remote ip "localhost:4242"))' "$(grep 'allow network' <<< "$unknown")" \
+  "with the listeners unknown, the proxy is the only port reachable"
 assert_contains "$prof" "(deny file-write*)" "writes are denied"
 wline="$(grep '^(allow file-write\*' <<< "$prof")"
 assert_contains "$wline" "(subpath \"$root\")" "but for the round's root"
-assert_contains "$wline" "(subpath \"$(cd "${TMPDIR:-/tmp}" && pwd -P)\")" "and the temp directory"
+assert_contains "$wline" "(subpath \"$t/round-a\")" "and the round's own temp directory"
 assert_contains "$wline" "(subpath \"$t/attempt\")" "and a directory the adapter adds"
+# the shared temp directory is every round's: another round's temp, a
+# run-mode review checkout made there, fm-sandbox's own files
+callertmp="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
+for shared in "$callertmp" /tmp /private/tmp "$t/round-b"; do
+  assert_lacks "$prof" "(subpath \"$shared\")" "no round is given $shared"
+done
 assert_contains "$prof" "(deny file-read*)" "reads are denied by default"
 assert_contains "$(grep '^(allow file-read\* (literal "/")' <<< "$prof")" "(subpath \"/usr\")" "but for the toolchain"
 nline="$(grep '^(deny file-read\* file-write\*' <<< "$prof" | head -1)"
-assert_contains "$nline" "(subpath \"$home/.ssh\")" "~/.ssh is never readable"
+assert_contains "$nline" "(subpath \"$home/.ssh\")" "\$HOME/.ssh is never readable"
 assert_contains "$nline" "(subpath \"$home/.claude\")" "nor a vendor's home"
 assert_contains "$prof" "(literal \"$home/.claude/.credentials.json\")" "but its own auth, for its own round"
 assert_lacks "$(mac profile --policy="$P" --root="$root" --vendor=codex)" ".credentials.json" \
   "and not for another vendor's"
+# its session state is writable, or a real round cannot start; the rule
+# comes after the vendor home's denial, which it would otherwise lose to
+hq="$(printf '%s' "$home" | sed 's/[.^$|?*+()]/\\&/g')"
+sline="$(grep -n '^(allow file-read\* file-write\* (regex' <<< "$prof" | head -1)"
+assert_contains "$sline" "(regex #\"^$hq/\\.claude/projects\")" "claude's round may write its session files"
+assert_contains "$sline" "(regex #\"^$hq/\\.claude\\.json\")" "and ~/.claude.json, with the siblings it is rewritten through"
+assert_eq "1" "$([ -n "$sline" ] && [ "${sline%%:*}" -gt "$(grep -n "(subpath \"$home/.claude\")" <<< "$prof" | head -1 | cut -d: -f1)" ] && echo 1)" \
+  "after the rule that keeps the rest of ~/.claude unreadable"
+assert_lacks "$sline" "settings" "none of which is its settings"
+assert_lacks "$(mac profile --policy="$P" --root="$root" --vendor=codex)" "\\.claude/projects" \
+  "and another vendor's round is given none of it"
 assert_contains "$prof" "(subpath \"$root/.claude\")" "the repository's .claude/ is out of reach"
 assert_contains "$prof" "(subpath \"$root/.mcp.json\")" "and its .mcp.json"
 assert_contains "$prof" "com.apple.coreservices.launchservicesd" "and no browser can be opened"
@@ -232,8 +273,8 @@ pol worker 'vendor: mock
 policy:
   network: registry.npmjs.org
 '
-assert_lacks "$(mac profile --policy="$P" --root="$root")" "network-outbound" \
-  "without a proxy nothing gets out at all"
+assert_eq "" "$(mac profile --policy="$P" --root="$root" | grep 'allow network' | grep -v '"localhost:' || true)" \
+  "without a proxy nothing but loopback is reachable at all"
 
 # --- the Linux arguments --------------------------------------------------------
 mkdir -p "$t/data/secret"
@@ -254,6 +295,18 @@ assert_contains "$args" "--tmpfs
 $t/data/secret" "a never-readable path inside a readable one is hidden"
 assert_lacks "$args" "$home/.ssh" "and ~/.ssh is simply not mounted"
 assert_eq "--" "$(printf '%s\n' "$args" | tail -1)" "the command follows the arguments"
+assert_contains "$args" "--tmpfs
+/tmp
+" "/tmp is a fresh one of the round's own"
+n_tmpfs="$(grep -nx -- /tmp <<< "$args" | head -1 | cut -d: -f1)"
+n_root="$(grep -nx -- "$root" <<< "$args" | head -1 | cut -d: -f1)"
+assert_eq "1" "$([ -n "$n_tmpfs" ] && [ -n "$n_root" ] && [ "$n_tmpfs" -lt "$n_root" ] && echo 1)" \
+  "mounted before the roots, so a root under /tmp is still bound over it"
+assert_contains "$(lin profile --policy="$t/worker.json" --root="$root" --vendor=codex)" "--bind-try
+$home/.codex/sessions
+$home/.codex/sessions" "a vendor's session state is bound writable"
+assert_contains "$(lin profile --policy="$t/worker.json" --root="$root" --vendor=codex)" "--ro-bind-try
+$home/.codex/auth.json" "and its auth read-only"
 assert_lacks "$args" "--unshare-net" "the network is shared: the CLI has to reach its own service"
 
 # --- decide: the rule the round's proxy applies --------------------------------
@@ -293,19 +346,50 @@ PY
 cat > "$t/cmd.sh" <<S
 #!/usr/bin/env bash
 printf 'procs=%s cpu=%s\n' "\$(ulimit -u)" "\$(ulimit -t)" > "$t/limits"
+printf 'TMPDIR=%s\nNO_PROXY=%s\n' "\$TMPDIR" "\${NO_PROXY:-}" > "$t/tmpdir"
 python3 "$t/probe.py" "$t/ran"
 exit 7
 S
 chmod +x "$t/cmd.sh"
+# The process count is ps's, and the suite does not ask the machine running
+# it for one: a reviewer's own sandbox may refuse ps. A stand-in answers,
+# and the policy asks for more than the hard limit, so the limit is exact.
+mkdir -p "$t/psbin"
+printf '#!/bin/sh\nprintf "1\\n2\\n3\\n"\n' > "$t/psbin/ps"
+# and the listeners are netstat's, answered the way macOS's netstat does
+cat > "$t/psbin/netstat" <<'S'
+#!/bin/sh
+printf 'Active Internet connections (including servers)\n'
+printf 'Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)\n'
+printf 'tcp4       0      0  127.0.0.1.5555         *.*                    LISTEN\n'
+printf 'tcp4       0      0  10.0.0.2.52000         1.2.3.4.443            ESTABLISHED\n'
+S
+chmod +x "$t/psbin/ps" "$t/psbin/netstat"
+hard="$(ulimit -Hu)"
+want=$((3 + 1000000)); case "$hard" in unlimited) ;; *) [ "$want" -le "$hard" ] || want="$hard" ;; esac
 : > "$t/blocked"; rm -f "$t/ran" "$t/profile.sb"
 pol worker 'policy:
-  procs: 300
+  procs: 1000000
   cpu: 90
 '
 echo "the prompt" | GH_TOKEN=x GITHUB_TOKEN=x SSH_AUTH_SOCK=/x AWS_SECRET_ACCESS_KEY=x HERDR_SOCKET=/x KEEP_ME=kept \
-  FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" \
+  FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" PATH="$t/psbin:$PATH" \
   "$SB" run --policy="$t/worker.json" --root="$root" --blocked="$t/blocked" -- "$t/cmd.sh"
 assert_eq "7" "$?" "run exits with the command's own code"
+# the round's temp directory: its own, in the profile's write roots, and gone after
+rtmp="$(sed -n 's/^TMPDIR=//p' "$t/tmpdir" 2>/dev/null)"
+assert_ne "" "$rtmp" "the round is given a TMPDIR"
+assert_ne "$callertmp" "$(cd "$rtmp" 2>/dev/null && pwd -P || echo "$rtmp")" "which is not the caller's shared one"
+assert_contains "$(grep '^(allow file-write\*' "$t/profile.sb" 2>/dev/null)" "(subpath \"$rtmp\")" \
+  "it is the round's write root for temp files"
+assert_lacks "$(cat "$t/profile.sb" 2>/dev/null)" "(subpath \"$callertmp\")" "and the shared one is not"
+assert_fail "test -e '$rtmp'" "and it is removed when the round ends"
+assert_contains "$(cat "$t/tmpdir" 2>/dev/null)" "NO_PROXY=localhost,127.0.0.1,::1" \
+  "loopback goes straight to the port, where the profile decides"
+assert_contains "$(cat "$t/profile.sb" 2>/dev/null)" '(deny network-outbound (remote ip "localhost:4173"))' \
+  "and the board's port is out of reach"
+assert_contains "$(cat "$t/profile.sb" 2>/dev/null)" '(deny network-outbound (remote ip "localhost:5555"))' \
+  "as is every port that was listening when the round started"
 assert_ok "test -s '$t/profile.sb'" "the command ran behind the generated profile"
 ran="$(cat "$t/ran" 2>/dev/null)"
 assert_contains "$ran" "stdin=the prompt" "and was handed the prompt on stdin"
@@ -320,14 +404,14 @@ assert_contains "$ran" "github.com:443 HTTP/1.1 403" "and GitHub"
 assert_eq "undeclared.example.org
 github.com" "$(cat "$t/blocked")" "and names each refused host once, for the round to report"
 # the process limit is room for the policy's count on top of what the user
-# already runs, so only its being set is asserted; the CPU limit is exact
-assert_matches "$(cat "$t/limits" 2>/dev/null)" '^procs=[0-9]+ cpu=90$' "the ulimits are the policy's"
+# already runs, clamped to the hard limit
+assert_eq "procs=$want cpu=90" "$(cat "$t/limits" 2>/dev/null)" "the ulimits are the policy's"
 port="$(sed -n 's/.*localhost:\([0-9]*\).*/\1/p' "$t/profile.sb")"
 assert_matches "$port" '^[0-9]+$' "the profile lets the round reach only that proxy's port"
 
 # Linux: the same scrub and limits, behind bwrap
 rm -f "$t/ran" "$t/bwrap.args"
-echo "the prompt" | GH_TOKEN=x FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$t/bin/bwrap" \
+echo "the prompt" | GH_TOKEN=x FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$t/bin/bwrap" PATH="$t/psbin:$PATH" \
   "$SB" run --policy="$t/worker.json" --root="$root" -- "$t/cmd.sh"
 assert_eq "7" "$?" "under bwrap too"
 assert_ok "test -s '$t/bwrap.args'" "the command ran behind bwrap"
@@ -343,12 +427,30 @@ assert_fail "test -e '$t/ran'" "and the command never starts"
 
 # plain: what an adapter's flags stand in for - the scrub and the limits only
 rm -f "$t/ran" "$t/limits"
-echo "the prompt" | GH_TOKEN=x KEEP_ME=kept "$SB" plain --policy="$t/worker.json" -- \
-  bash -c 'printf "procs=%s\n" "$(ulimit -u)"; printf "GH_TOKEN=%s KEEP_ME=%s\n" "${GH_TOKEN:-}" "${KEEP_ME:-}"; cat' \
+echo "the prompt" | GH_TOKEN=x KEEP_ME=kept PATH="$t/psbin:$PATH" "$SB" plain --policy="$t/worker.json" \
+  --tmp="$t/round-a" -- \
+  bash -c 'printf "procs=%s\n" "$(ulimit -u)"; printf "GH_TOKEN=%s KEEP_ME=%s TMPDIR=%s\n" "${GH_TOKEN:-}" "${KEEP_ME:-}" "$TMPDIR"; cat' \
   > "$t/plain" 2>&1
-assert_matches "$(head -1 "$t/plain")" '^procs=[0-9]+$' "plain sets the process limit"
-assert_eq "GH_TOKEN= KEEP_ME=kept
-the prompt" "$(tail -n +2 "$t/plain")" "scrubs the environment and hands on the prompt"
+assert_eq "procs=$want" "$(head -1 "$t/plain")" "plain sets the process limit"
+assert_eq "GH_TOKEN= KEEP_ME=kept TMPDIR=$t/round-a
+the prompt" "$(tail -n +2 "$t/plain")" "scrubs the environment, gives the round its own TMPDIR and hands on the prompt"
+
+# A process count that cannot be taken refuses the round. Guessing 0 set
+# the limit to the policy's bare count, below what the user already runs,
+# and the round could not fork at all.
+printf '#!/bin/sh\necho "ps: operation not permitted" >&2\nexit 1\n' > "$t/psbin/ps"
+printf '#!/bin/sh\nexit 0\n' > "$t/psbin/ps-empty"
+for why in failing empty; do
+  [ "$why" = empty ] && mv "$t/psbin/ps-empty" "$t/psbin/ps"
+  for mode in run plain; do
+    rm -f "$t/ran" "$t/limits"
+    out="$(FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" PATH="$t/psbin:$PATH" \
+      "$SB" "$mode" --policy="$t/worker.json" --root="$root" -- "$t/cmd.sh" </dev/null 2>&1)"
+    assert_eq "70" "$?" "$mode refuses the round when ps is $why"
+    assert_contains "$out" "cannot count this user's processes" "and says why"
+    assert_fail "test -e '$t/limits'" "and the command never starts ($mode, ps $why)"
+  done
+done
 
 rm -rf "$t"
 finish

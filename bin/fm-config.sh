@@ -114,9 +114,10 @@ fm_projects()         { _fm_registry "${1:-config.yaml}" names; }
 #   procs, cpu:  the process and CPU-seconds ulimits
 #
 # What is not a key cannot be loosened by one: the write roots (the round's
-# worktree or checkout, TMPDIR), the never-readable floor (~/.ssh,
-# ~/.config/gh, cloud credentials, every vendor's home but for its own
-# auth, fm's state/ and the other worktrees in it), the refused operations
+# worktree or checkout, and a TMPDIR of its own), the never-readable floor
+# (~/.ssh, ~/.config/gh, cloud credentials, every vendor's home but for its
+# own auth and session state, fm's state/ and the other worktrees in it),
+# the refused operations
 # (git push, gh, herdr, browsers, MCP), no unix sockets, the environment
 # scrub, and the repository's own .claude/, .mcp.json, .cursor/ and
 # GEMINI.md staying unloaded. GitHub and loopback are never a registry: a
@@ -308,17 +309,33 @@ NEVER_READ = ['~/.ssh', '~/.gnupg', '~/.netrc', '~/.git-credentials', '~/.config
               '~/.npmrc', '~/.pypirc', '~/.config/herdr',
               '~/.claude', '~/.claude.json', '~/.codex', '~/.cursor', '~/.config/cursor',
               '~/.gemini', '{state}']
-# a vendor's own auth, readable by that vendor's round only, and the hosts
-# its CLI talks to itself: the whole CLI runs inside the OS sandbox, so its
-# own API has to be reachable through the round's proxy
+# Each vendor's home is never readable as a whole: it holds the operator's
+# settings, hooks, skills and MCP servers as well as the login. Its round
+# gets back two things. `auth` is the login, readable only. `state` is what
+# the CLI writes as it runs - session files, logs, caches and the one config
+# file it rewrites - readable and writable, each entry a prefix, so a file
+# rewritten through x.tmp.123 or x.lock stays writable too. None of `state`
+# is a credential or the operator's settings. `hosts` is the vendor's own
+# service: the whole CLI runs inside the OS sandbox, so its API has to be
+# reachable through the round's proxy.
 VENDORS = {
-    'claude': dict(auth=['~/.claude/.credentials.json', '~/.claude.json'],
+    # macOS keeps claude's login in the keychain, reached over mach, not a file
+    'claude': dict(auth=['~/.claude/.credentials.json'],
+                   state=['~/.claude.json', '~/.claude/projects', '~/.claude/todos',
+                          '~/.claude/shell-snapshots', '~/.claude/statsig', '~/.claude/session-env',
+                          '~/.claude/debug', '~/.claude/file-history', '~/.claude/plans'],
                    hosts=['anthropic.com', 'claude.ai']),
     'codex': dict(auth=['~/.codex/auth.json'],
+                  state=['~/.codex/sessions', '~/.codex/log', '~/.codex/history.jsonl',
+                         '~/.codex/version.json', '~/.codex/models_cache.json'],
                   hosts=['openai.com', 'chatgpt.com']),
     'cursor-agent': dict(auth=['~/.config/cursor/auth.json'],
+                         state=['~/.cursor/chats', '~/.cursor/projects', '~/.cursor/cli-config.json',
+                                '~/.cursor/statsig-cache.json'],
                          hosts=['cursor.sh', 'cursor.com']),
-    'gemini': dict(auth=['~/.gemini/oauth_creds.json', '~/.gemini/google_accounts.json'],
+    'gemini': dict(auth=['~/.gemini/oauth_creds.json'],
+                   state=['~/.gemini/tmp', '~/.gemini/history', '~/.gemini/google_accounts.json',
+                          '~/.gemini/installation_id', '~/.gemini/user_id'],
                    hosts=['googleapis.com']),
 }
 REFUSE = ['git push', 'gh', 'herdr', 'browser', 'mcp']
@@ -431,13 +448,16 @@ def resolve_policy(lines, projects, default, config, role, explicit):
             got['network'] = legacy
     return dict(
         role=role, project=name if projects else '', dimensions=DIMENSIONS,
-        write=['{root}', '{tmp}', '/tmp'],
+        # {tmp} is the round's own temp directory, which fm-sandbox.sh
+        # makes; never the shared one, and never /tmp
+        write=['{root}', '{tmp}'],
         read=[expand(p, engine) for p in got['read']],
         never_read=[expand(p, engine) for p in got['never_read']],
         network=got.get('network', '').split(),
         refuse=REFUSE, sockets='none', env_scrub=SCRUB, repo_config=REPO_CONFIG,
         procs=int(got['procs']), cpu=int(got['cpu']),
-        vendors={v: dict(auth=[expand(p, engine) for p in d['auth']], hosts=d['hosts'])
+        vendors={v: dict(auth=[expand(p, engine) for p in d['auth']],
+                         state=[expand(p, engine) for p in d['state']], hosts=d['hosts'])
                  for v, d in VENDORS.items()})
 
 

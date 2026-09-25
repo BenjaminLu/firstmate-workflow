@@ -125,7 +125,10 @@ if [ "${FM_OUTER_OS:-}" = darwin ]; then
   sandbox='{"enabled":false}'
   allow+=(Bash)
 else
-  sandbox="{\"enabled\":true,\"autoAllowBashIfSandboxed\":true,\"allowUnsandboxedCommands\":false,\"network\":{\"allowedDomains\":[$(rules ${hosts[@]+"${hosts[@]}"})],\"allowUnixSockets\":[],\"allowLocalBinding\":false}}"
+  # a round's suite starts its own servers: claude's sandbox lets it bind
+  # loopback in a network namespace of its own, where the host's listeners
+  # - the board's port among them - are not
+  sandbox="{\"enabled\":true,\"autoAllowBashIfSandboxed\":true,\"allowUnsandboxedCommands\":false,\"network\":{\"allowedDomains\":[$(rules ${hosts[@]+"${hosts[@]}"})],\"allowUnixSockets\":[],\"allowLocalBinding\":true}}"
 fi
 settings="{\"permissions\":{\"defaultMode\":\"dontAsk\",\"allow\":[$(rules "${allow[@]}")],\"deny\":[$(rules "${deny[@]}")]},\"sandbox\":$sandbox}"
 mode=(--restricted --strict-mcp-config --disable-slash-commands

@@ -24,7 +24,8 @@
     "tests/review.test.sh",
     "tests/sandbox.test.sh",
     "design/design.md",
-    "design/tasks/T-105.json"
+    "design/tasks/T-105.json",
+    "design/proposals/2026-09-25-crew-permissions/design.md"
   ],
   "acceptance": [
     "Problem: a worker inherits the operator's personal CLI settings. On the captain's machine that allows gh-axi, herdr, a browser, awk/find/sed with any argument, reading any path, and editing ~/.claude/skills. It refuses bun, npm, python and chmod. cursor-agent runs with -f (--force, all commands) and no sandbox; codex and gemini run on vendor defaults. The design is design/proposals/2026-09-25-crew-permissions/design.md, and its sections 3 to 5 are the specification. Its own spec file, design/tasks/T-105.json, is committed on this branch.",

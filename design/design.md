@@ -1671,14 +1671,32 @@ default none; a later layer replaces an earlier one), `read` and
 `never_read` (added to, never replacing) and the `procs` / `cpu` ulimits.
 Everything else is a floor no key loosens:
 
-- writes: the worktree or checkout, and TMPDIR;
+- writes: the worktree or checkout, and a temp directory of the round's
+  own, which is its TMPDIR. Never the caller's TMPDIR or `/tmp`: every round
+  shares those, and run-mode review checkouts are made there, so a root
+  naming them would let one round read or rewrite another's code;
 - reads: default-deny outside the write roots and the toolchain; never
-  `~/.ssh`, `~/.config/gh`, cloud credentials, any vendor's home but for that
-  vendor's own auth, fm's `state/` and the other worktrees in it;
+  `~/.ssh`, `~/.config/gh`, cloud credentials, any vendor's home, fm's
+  `state/` and the other worktrees in it. A vendor's own round gets back
+  two parts of its home: its login (`auth`), readable only, and its session
+  state (`state`: session files, logs, caches and the one config file the
+  CLI rewrites), readable and writable, or a real round cannot start. The
+  split per vendor is in `VENDORS` in `bin/fm-config.sh`; none of `state`
+  is a credential, a setting, a hook, a skill or an MCP server;
 - commands: allowed inside the sandbox; git push, gh, Herdr, browsers and
   MCP refused;
 - network: the declared registries only; GitHub and loopback are refused
-  as values, and refused again by the proxy whatever a policy file says;
+  as values, and refused again by the proxy whatever a policy file says.
+  The list names whatever the check actually fetches (Playwright's
+  Chromium comes from `storage.googleapis.com`, for one);
+- loopback: a round may open ports of its own and connect to them, which
+  every suite that starts a server needs, but never the board's port
+  (`FM_PORT`, 4173) nor any port that was listening when the round started.
+  If the listeners cannot be read, no loopback port but the proxy is
+  reachable;
+- the process ulimit is `procs` more than the user already runs, since
+  the kernel counts every process the user owns; a count that cannot be
+  taken refuses the round rather than guessing;
 - no unix sockets; `GH_TOKEN`, `GITHUB_TOKEN`, `SSH_AUTH_SOCK` and cloud
   credentials scrubbed; the repository's `.claude/`, `.mcp.json`, `.cursor/`
   and `GEMINI.md` not loaded.
@@ -1691,10 +1709,13 @@ and declares which of the eight dimensions (`write read network sockets env
 repo-config refuse ulimit`) they enforce. `bin/fm-sandbox.sh` runs the CLI
 inside an OS sandbox built from the same policy: `sandbox-exec` on macOS,
 which covers all eight - the network is a per-round proxy that allows the
-declared registries and the vendor's own service, and is the only address
-the profile lets the round reach - and `bwrap` on Linux, which mounts only
-what the round may read but shares the network, so network, sockets and
-the refused operations stay the vendor's. Before the CLI starts the adapter
+declared registries and the vendor's own service, and is the only way off
+the machine the profile allows - and `bwrap` on Linux, which mounts only
+what the round may read and gives it a `/tmp` of its own but shares the
+network, so network, sockets and the refused operations stay the vendor's.
+There, claude's own sandbox runs the commands in a network namespace of
+its own, where they may bind loopback without reaching the host's; codex's
+and cursor-agent's cut the network off, loopback included. Before the CLI starts the adapter
 checks the union; a dimension neither covers refuses the round with 2, the
 fallback chain moves on, and nothing runs less confined than its policy.
 
@@ -1722,8 +1743,11 @@ registries reach both layers, and that loopback and GitHub never do - with a
 stand-in for the sandbox binary, since a runner cannot be relied on to have
 one. `bin/fm-canary.sh`, not part of CI, runs one real round per installed
 vendor that tries to write outside, read `~/.ssh`, reach github.com and
-127.0.0.1:4173 and connect to the Herdr socket, and records the result per
-vendor and version in `state/canary/results.jsonl`.
+127.0.0.1:4173, connect to the Herdr socket and read another round's temp
+directory, checks that it can use a loopback port it opened itself, and
+records the result per vendor and version in `state/canary/results.jsonl`.
+Which of the vendors' state files each CLI really writes is a claim only
+the canary can confirm.
 
 ---
 

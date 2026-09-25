@@ -195,6 +195,15 @@ fm_adapter_policy() {
   FM_OUTER_DIMS="$("$_fm_engine/bin/fm-sandbox.sh" covers --policy="$FM_POLICY")" || {
     echo "adapter: the policy at $FM_POLICY does not read" >&2; exit 65; }
   [ -n "$FM_OUTER_DIMS" ] || FM_OUTER_OS=''
+  # The round's own temp directory, its TMPDIR from here on and its only
+  # temp write root. The caller's TMPDIR is every round's, and run-mode
+  # review checkouts are made in it; no round is given that.
+  FM_ROUND_TMP="$(mktemp -d "${TMPDIR:-/tmp}/fm-round.XXXXXX")" || {
+    echo "adapter: cannot make the round's temp directory" >&2; exit 70; }
+  FM_ROUND_TMP="$(cd "$FM_ROUND_TMP" && pwd -P)"
+  # shellcheck disable=SC2064  # the path is fixed now
+  trap "rm -rf '$FM_ROUND_TMP'" EXIT
+  export TMPDIR="$FM_ROUND_TMP" TMP="$FM_ROUND_TMP" TEMP="$FM_ROUND_TMP"
 }
 
 # fm_adapter_confine <vendor> <workdir> <dimension>... -> FM_LAUNCH, or exit 2.
@@ -216,13 +225,13 @@ fm_adapter_confine() {
   work="$(cd "$work" 2>/dev/null && pwd -P)" || { echo "$vendor: no directory at $2" >&2; exit 64; }
   FM_LAUNCH=("$_fm_engine/bin/fm-sandbox.sh")
   if [ -n "$FM_OUTER_OS" ]; then
-    FM_LAUNCH+=(run --policy="$FM_POLICY" --root="$work" --vendor="$vendor")
+    FM_LAUNCH+=(run --policy="$FM_POLICY" --root="$work" --tmp="$FM_ROUND_TMP" --vendor="$vendor")
     # the CLI's own final answer is written where the launcher reads it
     [ -z "${FM_ATTEMPT_DIR:-}" ] || FM_LAUNCH+=(--write="$FM_ATTEMPT_DIR")
     [ -z "${FM_FINAL_PATH:-}" ] || FM_LAUNCH+=(--write="$(dirname "$FM_FINAL_PATH")")
     [ -z "${FM_POLICY_BLOCKED:-}" ] || FM_LAUNCH+=(--blocked="$FM_POLICY_BLOCKED")
   else
-    FM_LAUNCH+=(plain --policy="$FM_POLICY")
+    FM_LAUNCH+=(plain --policy="$FM_POLICY" --tmp="$FM_ROUND_TMP")
   fi
   FM_LAUNCH+=(--)
 }
