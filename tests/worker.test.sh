@@ -1515,7 +1515,7 @@ git -C "$rc" worktree add -q --detach "$rc/state/worktrees/T-CK" main
 printf 'nope\n' > "$rc/state/worktrees/T-CK/bad.txt"
 assert_fail "FM_ROOT='$rc' '$rc/bin/fm-checkpoint.sh' --task T-CK --repo '$rc' --message 'should refuse main'" \
   "checkpoint refuses to write on main"
-assert_fail "grep -qx bad.txt <<<\"\$(cd '$ROOT' && git --git-dir='$barec' ls-tree -r main --name-only)\"" \
+assert_fail "grep -qx bad.txt <<<\"\$(git --git-dir='$barec' ls-tree -r main --name-only)\"" \
   "refused main checkpoint pushes nothing"
 # Unset clears the shared repo local config (worktrees share it). On a CI
 # runner with no global fallback that poisons every later commit in this

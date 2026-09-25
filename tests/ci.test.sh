@@ -580,6 +580,35 @@ plant "grep -q behind another flag is still grep -q" "clustered.test.sh:3:"
 plant "and so is grep -c after a separate flag" "clustered.test.sh:4:"
 rm -f "$q/tests/clustered.test.sh"
 
+# Every other way of writing it. A regex over one line read one spelling:
+# the pipe ending a line with grep on the next, an option with a value in
+# front of -q, the operand in front of it (GNU grep permutes), egrep and
+# fgrep, and an assignment or `command` in front of grep all walked past.
+# Each gets a line of its own, so each is named by its own number.
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+  printf 'printf x %s\n  grep -q x\n' '|'                 # 3-4
+  printf 'printf x \\\n  %s grep -q x\n' '|'              # 5-6
+  printf 'printf x %s grep -m 1 -q x\n' '|'               # 7
+  printf 'printf x %s grep -e x -q\n' '|'                 # 8
+  printf 'printf x %s grep -A 2 -c x\n' '|'               # 9
+  printf 'printf x %s grep x -q\n' '|'                    # 10
+  printf 'printf x %s egrep -q x\n' '|'                   # 11
+  printf 'printf x %s fgrep -c x\n' '|'                   # 12
+  printf 'printf x %s LC_ALL=C grep -q x\n' '|'           # 13
+  printf 'printf x %s command grep -q x\n' '|'            # 14
+} > "$q/tests/shapes.test.sh"
+plant "a pipe that ends the line, with grep -q on the next, is still one" "shapes.test.sh:3:"
+plant "and so is one continued with a backslash" "shapes.test.sh:5:"
+plant "grep -q behind an option that takes a value is grep -q" "shapes.test.sh:7:"
+plant "and behind -e and its pattern" "shapes.test.sh:8:"
+plant "grep -c behind -A and its count is grep -c" "shapes.test.sh:9:"
+plant "grep -q after its operand is grep -q" "shapes.test.sh:10:"
+plant "egrep -q is grep -q" "shapes.test.sh:11:"
+plant "fgrep -c is grep -c" "shapes.test.sh:12:"
+plant "an assignment in front of grep does not hide it" "shapes.test.sh:13:"
+plant "nor does command" "shapes.test.sh:14:"
+rm -f "$q/tests/shapes.test.sh"
+
 # Two scripts, and one of them with two offending lines: a stage that
 # stopped at the first hit passes a single-instance plant, which this
 # file's own comment says twenty lines up.
@@ -758,6 +787,12 @@ printf '#!/usr/bin/env bash\nset -uo pipefail\n  # printf y %s grep -c y\ngrep -
   > "$q/tests/quoter.test.sh"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 assert_contains "$out" "ci: green" "a pipe quoted in a suite's comment, or a here-string, is not a hazard"
+# `||` is not a pipe, and grep reading a file after it has no producer to
+# kill; -C is context, not count, and a -q that is -e's pattern is a pattern
+printf '#!/usr/bin/env bash\nset -uo pipefail\ntrue || grep -q x "$0"\nprintf x %s grep -C 2 x\nprintf x %s grep -e -q\ntrue\n' '|' '|' \
+  > "$q/tests/quoter.test.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_contains "$out" "ci: green" "an or-list into grep -q, grep -C, or -q as -e's pattern is not a hazard"
 rm -f "$q/tests/quoter.test.sh"
 
 { printf '#!/usr/bin/env bash\n'

@@ -1226,9 +1226,16 @@ runner loses that race where an idle laptop does not, which is how
 adapter-contract's completeness loop failed on CI with a different signature
 each run. The data goes in by here-string (or process substitution, where
 `$(...)` would strip trailing lines the check is looking for). The hygiene
-lint enforces it over every `*.sh` below `bin/` and `tests/`, with the flag
-anywhere in grep's option cluster; a full-line comment is not a hit, and a
-file that declares `# fm:lint-source` is skipped.
+lint enforces it over every `*.sh` below `bin/` and `tests/`. It reads
+commands, not one spelling: comments off, continuation lines (a trailing `|`
+or `\`) joined, `||` not a pipe, and every command a single `|` or `|&`
+starts is judged — `grep`, `egrep` or `fgrep`, by path too, past leading
+assignments and `command`/`env`/`exec`, with `-q`/`-c` or
+`--quiet`/`--silent`/`--count` anywhere among its words, stepping over the
+value of `-e`, `-f`, `-m`, `-A`, `-B`, `-C`. Quotes are transparent, because
+an assertion string is eval'd. A file that declares `# fm:lint-source` is
+skipped. What it does not catch: grep behind a function or alias of another
+name, or a flag held in a variable.
 
 Each stage skips cleanly when its subject does not exist, so the gate is green
 from an empty tree onward. **Every e2e uses the `mock` adapter** — no model

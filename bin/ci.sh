@@ -371,20 +371,74 @@ fi
 # The test suites are read too, and every directory below them (T-103): the
 # lint read bin/ alone, and tests/adapter-contract.test.sh's completeness
 # loop reported a signature that matched as unread, a different one each
-# CI run. And the flag is found anywhere in the cluster - `grep -[qc]`
-# read only the first letter, so `grep -Eq` and `grep -iq` walked past.
+# CI run.
+#
+# One regex over one line read one spelling of the construct and let the
+# others through: `grep -Eq` (the flag was looked for as the first letter
+# only), `| grep -m 1 -q`, `| grep pat -q` (GNU grep permutes), `egrep -q`,
+# `| LC_ALL=C grep -q`, and a pipe that ends one line with grep starting
+# the next. And it flagged `cmd || grep -q x file`, which has no pipe. So
+# the stage reads the command instead: comments off (fm_strip_comments,
+# the loop stage's stripper), continuation lines joined, `||` taken out,
+# and each command that a single `|` starts is checked for being grep,
+# egrep or fgrep - past assignments and wrappers - with -q/-c anywhere in
+# its options, stepping over the value of an option that takes one.
+# Quotes are transparent on purpose: a pipe inside `assert_ok "..."` is
+# eval'd, so it is as live as one in the code.
+pipe_awk='
+  function hazard(s,   n, seg, i, cut, ntok, tok, j, k, t, p, c, w, env) {
+    gsub(sq, "", s); gsub(/"/, "", s); gsub(/\\/, "", s)
+    n = split(s, seg, /[|]/)
+    for (i = 2; i <= n; i++) {
+      cut = seg[i]; sub(/^&/, "", cut)       # |& is a pipe too
+      if (match(cut, /[;&)`]/)) cut = substr(cut, 1, RSTART - 1)
+      ntok = split(cut, tok)
+      env = 0
+      for (j = 1; j <= ntok; j++) {
+        t = tok[j]
+        if (t == "env") { env = 1; continue }
+        if (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ || t ~ /^(command|exec|time|nice|nohup|builtin|!|[{(])$/) continue
+        if (env && t ~ /^-/) continue
+        break
+      }
+      if (j > ntok) continue
+      w = tok[j]; sub(/.*\//, "", w)
+      if (w !~ /^[ef]?grep$/) continue
+      for (k = j + 1; k <= ntok; k++) {
+        t = tok[k]
+        if (t == "--") break
+        if (t ~ /^--(quiet|silent|count)$/) return 1
+        if (t ~ /^--(regexp|file|max-count|after-context|before-context|context|label|include|exclude|exclude-dir|binary-files|devices|directories)$/) { k++; continue }
+        if (t !~ /^-[A-Za-z]/) continue
+        for (p = 2; p <= length(t); p++) {
+          c = substr(t, p, 1)
+          if (c == "q" || c == "c") return 1
+          if (index("efmABCdD", c)) { if (p == length(t)) k++; break }
+        }
+      }
+    }
+    return 0
+  }
+  { s = $0; gsub(/[|][|]/, ";", s)
+    if (buf == "") { start = FNR; text = $0 } else text = text " " $0
+    if (s ~ /\\$/) { sub(/\\$/, "", s); buf = buf s " "; next }
+    if (s ~ /[|][ \t]*$/) { buf = buf s " "; next }
+    buf = buf s
+    if (hazard(buf)) print start ":" text
+    buf = ""
+  }
+  END { if (buf != "" && hazard(buf)) print start ":" text }'
 pipefiles=()
 while IFS= read -r f; do pipefiles+=("$f"); done < <(
   fm_shell_corpus bin
   [ ! -d tests ] || fm_shell_corpus tests)
 piped=''
-[ ${#pipefiles[@]} -eq 0 ] || piped="$(grep -HnE \
-    '[|][[:space:]]*grep([[:space:]]+-[A-Za-z]+)*[[:space:]]+(-[A-Za-z]*[qc]|--(quiet|silent|count)([[:space:]]|$))' \
-    "${pipefiles[@]}" 2>/dev/null \
-  | grep -v '^[^:]*:[0-9]*: *#' \
-  | while IFS=: read -r pf rest; do
-      fm_is_lint_source "$pf" || printf '%s:%s\n' "$pf" "$rest"
-    done || true)"
+[ ${#pipefiles[@]} -eq 0 ] || for f in "${pipefiles[@]}"; do
+  fm_is_lint_source "$f" && continue
+  hits="$(fm_strip_comments "$f" | awk -v sq="'" "$pipe_awk" || true)"
+  [ -z "$hits" ] || piped="$piped$(sed "s|^|$f:|" <<<"$hits")
+"
+done
 if [ -n "$piped" ]; then
   flunk "a pipeline feeds grep -q or -c; use a here-string"
   printf '%s\n' "$piped"
