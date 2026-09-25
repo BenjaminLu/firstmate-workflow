@@ -381,24 +381,52 @@ fi
 # the stage reads the command instead: comments off (fm_strip_comments,
 # the loop stage's stripper), continuation lines joined, `||` taken out,
 # and each command that a single `|` starts is checked for being grep,
-# egrep or fgrep - past assignments and wrappers - with -q/-c anywhere in
-# its options, stepping over the value of an option that takes one.
+# egrep or fgrep, with -q/-c anywhere in its options, stepping over the
+# value of an option that takes one. In front of grep it steps over `!`,
+# `{`, `(`, NAME=value assignments, and the wrappers in the BEGIN table
+# below with their own options (and their values: `env -u NAME`,
+# `nice -n 5`, `timeout -s KILL 5`, `stdbuf -o L`). It does not see grep
+# behind a wrapper not in that table (xargs, sudo, ...), behind a function
+# or alias of another name, or a flag held in a variable.
 # Quotes are transparent on purpose: a pipe inside `assert_ok "..."` is
 # eval'd, so it is as live as one in the code.
 pipe_awk='
-  function hazard(s,   n, seg, i, cut, ntok, tok, j, k, t, p, c, w, env) {
+  BEGIN {
+    # wrapper -> its short options that take a separate value, its long
+    # ones that do, and how many operands it reads before the command
+    wv["env"] = "uC";     wl["env"] = " unset chdir "
+    wv["nice"] = "n";     wl["nice"] = " adjustment "
+    wv["time"] = "fo";    wl["time"] = " format output "
+    wv["timeout"] = "sk"; wl["timeout"] = " signal kill-after "; wp["timeout"] = 1
+    wv["stdbuf"] = "ioe"; wl["stdbuf"] = " input output error "
+    wv["exec"] = "a";     wl["exec"] = ""
+    wv["command"] = "";   wl["command"] = ""
+    wv["builtin"] = "";   wl["builtin"] = ""
+    wv["nohup"] = "";     wl["nohup"] = ""
+  }
+  function hazard(s,   n, seg, i, cut, ntok, tok, j, k, t, p, c, w, mode, opts, pos, l) {
     gsub(sq, "", s); gsub(/"/, "", s); gsub(/\\/, "", s)
     n = split(s, seg, /[|]/)
     for (i = 2; i <= n; i++) {
       cut = seg[i]; sub(/^&/, "", cut)       # |& is a pipe too
       if (match(cut, /[;&)`]/)) cut = substr(cut, 1, RSTART - 1)
       ntok = split(cut, tok)
-      env = 0
+      mode = ""; opts = 0; pos = 0
       for (j = 1; j <= ntok; j++) {
         t = tok[j]
-        if (t == "env") { env = 1; continue }
-        if (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ || t ~ /^(command|exec|time|nice|nohup|builtin|!|[{(])$/) continue
-        if (env && t ~ /^-/) continue
+        if (opts && t == "--") { opts = 0; continue }
+        if (opts && t ~ /^-./) {
+          if (t ~ /^--/) {
+            l = substr(t, 3)
+            if (!index(l, "=") && index(wl[mode], " " l " ")) j++
+          } else if (length(t) == 2 && index(wv[mode], substr(t, 2, 1))) j++
+          continue
+        }
+        opts = 0
+        if (pos > 0) { pos--; continue }
+        if (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ || t ~ /^(!|[{(])$/) continue
+        w = t; sub(/.*\//, "", w)
+        if (w in wv) { mode = w; opts = 1; pos = wp[w] + 0; continue }
         break
       }
       if (j > ntok) continue

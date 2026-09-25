@@ -609,6 +609,106 @@ plant "an assignment in front of grep does not hide it" "shapes.test.sh:13:"
 plant "nor does command" "shapes.test.sh:14:"
 rm -f "$q/tests/shapes.test.sh"
 
+# Every branch of the lint, one line each, so deleting a branch flips the
+# line that names it. Not *.test.sh: nothing here is meant to run as a suite
+# (timeout and stdbuf are not on every machine). The red half: |&, each
+# wrapper and its own options, a path, the long flags, a value that is `--`
+# (stepping over it is what reaches the -q; not stepping, `--` ends the
+# options and hides it), and a pipe inside $( ).
+wrapped=('env -C /' 'env --unset NAME' 'env --chdir /' 'nice --adjustment 5'
+  'time -f F' 'time -o F' 'time --format F' 'time --output F'
+  'timeout -k 1 5' 'timeout --signal KILL 5' 'timeout --kill-after 1 5'
+  'stdbuf -i L' 'stdbuf -e L' 'stdbuf --input L' 'stdbuf --output L'
+  'stdbuf --error L' 'exec -a name')
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+  printf 'printf x %s& grep -q x\n' '|'                   # 3
+  printf 'printf x %s env grep -q x\n' '|'                # 4
+  printf 'printf x %s env -i grep -q x\n' '|'             # 5
+  printf 'printf x %s env -u NAME grep -q x\n' '|'        # 6
+  printf 'printf x %s exec grep -q x\n' '|'               # 7
+  printf 'printf x %s time grep -q x\n' '|'               # 8
+  printf 'printf x %s time -p grep -q x\n' '|'            # 9
+  printf 'printf x %s nice grep -q x\n' '|'               # 10
+  printf 'printf x %s nice -n 5 grep -q x\n' '|'          # 11
+  printf 'printf x %s nohup grep -q x\n' '|'              # 12
+  printf 'printf x %s builtin grep -q x\n' '|'            # 13
+  printf 'printf x %s ! grep -q x\n' '|'                  # 14
+  printf 'printf x %s { grep -q x; }\n' '|'               # 15
+  printf 'printf x %s ( grep -q x )\n' '|'                # 16
+  printf 'printf x %s /usr/bin/grep -q x\n' '|'           # 17
+  printf 'printf x %s grep --quiet x\n' '|'               # 18
+  printf 'printf x %s grep --silent x\n' '|'              # 19
+  printf 'printf x %s grep --count x\n' '|'               # 20
+  printf 'printf x %s grep -f -- -q x\n' '|'              # 21
+  printf 'printf x %s grep -d -- -q x\n' '|'              # 22
+  printf 'printf x %s grep --regexp -- -q\n' '|'          # 23
+  printf 'printf x %s grep --file -- -q x\n' '|'          # 24
+  printf 'v="$(printf x %s grep -q x)"\n' '|'             # 25
+  printf 'printf x %s timeout 5 grep -q x\n' '|'          # 26
+  printf 'printf x %s timeout -s KILL 5 grep -q x\n' '|'  # 27
+  printf 'printf x %s stdbuf -oL grep -q x\n' '|'         # 28
+  printf 'printf x %s stdbuf -o L grep -q x\n' '|'        # 29
+  printf 'printf x %s /usr/bin/env -u NAME grep -c x\n' '|'  # 30
+  # 31 on: every other wrapper option that takes a value
+  for w in "${wrapped[@]}"; do printf 'printf x %s %s grep -q x\n' '|' "$w"; done
+} > "$q/tests/e2e/wrappers.sh"
+# The green half, in the same gate run: each line is something one
+# exclusion lets through, so deleting that exclusion names it.
+valued=(-e -f -m -A -B -C -d -D --regexp --file --max-count --after-context
+  --before-context --context --label --include --exclude --exclude-dir
+  --binary-files --devices --directories)
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+  printf 'printf x %s grep -- -q\n' '|'                   # 3
+  printf 'printf x %s grep --context=3 x\n' '|'           # 4
+  printf 'printf x %s grep --color x\n' '|'               # 5
+  printf 'printf x %s grep -eq x\n' '|'                   # 6
+  # 7 on: a -q that is the value of each option that takes one
+  for o in "${valued[@]}"; do printf 'printf x %s grep %s -q x\n' '|' "$o"; done
+} > "$q/tests/e2e/exclusions.sh"
+plant "|& is a pipe into grep -q" "wrappers.sh:3:"
+plant "env in front of grep does not hide it" "wrappers.sh:4:"
+plant "nor env -i" "wrappers.sh:5:"
+plant "nor env -u and its value" "wrappers.sh:6:"
+plant "nor exec" "wrappers.sh:7:"
+plant "nor time" "wrappers.sh:8:"
+plant "nor time -p" "wrappers.sh:9:"
+plant "nor nice" "wrappers.sh:10:"
+plant "nor nice -n and its value" "wrappers.sh:11:"
+plant "nor nohup" "wrappers.sh:12:"
+plant "nor builtin" "wrappers.sh:13:"
+plant "nor !" "wrappers.sh:14:"
+plant "nor a { group" "wrappers.sh:15:"
+plant "nor a ( subshell" "wrappers.sh:16:"
+plant "a path in front of grep does not hide it" "wrappers.sh:17:"
+plant "--quiet is -q" "wrappers.sh:18:"
+plant "--silent is -q" "wrappers.sh:19:"
+plant "--count is -c" "wrappers.sh:20:"
+plant "the value of -f is stepped over" "wrappers.sh:21:"
+plant "and of -d" "wrappers.sh:22:"
+plant "and of --regexp" "wrappers.sh:23:"
+plant "and of --file" "wrappers.sh:24:"
+plant "a pipe into grep -q inside \$( ) is one" "wrappers.sh:25:"
+plant "timeout and its duration do not hide grep" "wrappers.sh:26:"
+plant "nor timeout -s and its signal" "wrappers.sh:27:"
+plant "nor stdbuf -oL" "wrappers.sh:28:"
+plant "nor stdbuf -o and its mode" "wrappers.sh:29:"
+plant "nor a path-qualified env -u, into grep -c" "wrappers.sh:30:"
+n=31
+for w in "${wrapped[@]}"; do
+  plant "nor $w" "wrappers.sh:$n:"
+  n=$((n + 1))
+done
+assert_lacks "$planted" "exclusions.sh:3:" "-- ends grep's options, so -q after it is an operand"
+assert_lacks "$planted" "exclusions.sh:4:" "--context=3 is not count"
+assert_lacks "$planted" "exclusions.sh:5:" "--color is not count"
+assert_lacks "$planted" "exclusions.sh:6:" "-eq is -e with the pattern q"
+n=7
+for o in "${valued[@]}"; do
+  assert_lacks "$planted" "exclusions.sh:$n:" "-q as the value of $o is not -q"
+  n=$((n + 1))
+done
+rm -f "$q/tests/e2e/wrappers.sh" "$q/tests/e2e/exclusions.sh"
+
 # Two scripts, and one of them with two offending lines: a stage that
 # stopped at the first hit passes a single-instance plant, which this
 # file's own comment says twenty lines up.

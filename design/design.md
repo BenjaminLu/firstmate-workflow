@@ -1229,13 +1229,18 @@ each run. The data goes in by here-string (or process substitution, where
 lint enforces it over every `*.sh` below `bin/` and `tests/`. It reads
 commands, not one spelling: comments off, continuation lines (a trailing `|`
 or `\`) joined, `||` not a pipe, and every command a single `|` or `|&`
-starts is judged — `grep`, `egrep` or `fgrep`, by path too, past leading
-assignments and `command`/`env`/`exec`, with `-q`/`-c` or
-`--quiet`/`--silent`/`--count` anywhere among its words, stepping over the
-value of `-e`, `-f`, `-m`, `-A`, `-B`, `-C`. Quotes are transparent, because
-an assertion string is eval'd. A file that declares `# fm:lint-source` is
-skipped. What it does not catch: grep behind a function or alias of another
-name, or a flag held in a variable.
+starts is judged, inside `$(...)` too. It is looking for `grep`, `egrep` or
+`fgrep`, by path too, past `!`, `{`, `(`, leading assignments, and the
+wrappers `env`, `nice`, `time`, `timeout`, `stdbuf`, `exec`, `command`,
+`builtin` and `nohup` with their own options and those options' values
+(`env -u NAME`, `nice -n 5`, `timeout -s KILL 5`, `stdbuf -o L`). It flags
+`-q`/`-c` or `--quiet`/`--silent`/`--count` anywhere among grep's words,
+stepping over the value of `-e`, `-f`, `-m`, `-A`, `-B`, `-C`, `-d`, `-D` and
+their long forms, and stopping at `--`. Quotes are transparent, because an
+assertion string is eval'd. A file that declares `# fm:lint-source` is
+skipped. Each of these has its own plant in `tests/ci.test.sh`. What it does
+not catch: grep behind any other command (`xargs`, `sudo`, ...), behind a
+function or alias of another name, or a flag held in a variable.
 
 Each stage skips cleanly when its subject does not exist, so the gate is green
 from an empty tree onward. **Every e2e uses the `mock` adapter** — no model
