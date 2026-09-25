@@ -385,9 +385,12 @@ fi
 # value of an option that takes one. In front of grep it steps over `!`,
 # `{`, `(`, NAME=value assignments, and the wrappers in the BEGIN table
 # below with their own options (and their values: `env -u NAME`,
-# `nice -n 5`, `timeout -s KILL 5`, `stdbuf -o L`). It does not see grep
-# behind a wrapper not in that table (xargs, sudo, ...), behind a function
-# or alias of another name, or a flag held in a variable.
+# `nice -n 5`, `timeout -s KILL 5`, `stdbuf -o L`). What it does not catch:
+# grep behind any other command (`xargs`, `sudo`, ...), behind a function
+# or alias of another name, a flag held in a variable, or a `-q`/`-c` that
+# comes after a grep operand holding `|`, `;`, `&`, `)` or a backtick
+# (`grep -E '(a|b)' -q`, `grep -e 'a;b' -q`): quotes are transparent, so
+# that character ends grep's words where it stands.
 # Quotes are transparent on purpose: a pipe inside `assert_ok "..."` is
 # eval'd, so it is as live as one in the code.
 pipe_awk='

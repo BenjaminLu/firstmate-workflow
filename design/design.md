@@ -1234,13 +1234,32 @@ starts is judged, inside `$(...)` too. It is looking for `grep`, `egrep` or
 wrappers `env`, `nice`, `time`, `timeout`, `stdbuf`, `exec`, `command`,
 `builtin` and `nohup` with their own options and those options' values
 (`env -u NAME`, `nice -n 5`, `timeout -s KILL 5`, `stdbuf -o L`). It flags
-`-q`/`-c` or `--quiet`/`--silent`/`--count` anywhere among grep's words,
-stepping over the value of `-e`, `-f`, `-m`, `-A`, `-B`, `-C`, `-d`, `-D` and
-their long forms, and stopping at `--`. Quotes are transparent, because an
-assertion string is eval'd. A file that declares `# fm:lint-source` is
-skipped. Each of these has its own plant in `tests/ci.test.sh`. What it does
-not catch: grep behind any other command (`xargs`, `sudo`, ...), behind a
-function or alias of another name, or a flag held in a variable.
+`-q`/`-c` or `--quiet`/`--silent`/`--count` among grep's words, stepping over
+the value of `-e`, `-f`, `-m`, `-A`, `-B`, `-C`, `-d`, `-D` and their long
+forms, and stopping at `--`. Quotes are transparent, because an assertion
+string is eval'd. A file that declares `# fm:lint-source` is skipped. Each of
+these has its own plant in `tests/ci.test.sh`. What it does not catch: grep
+behind any other command (`xargs`, `sudo`, ...), behind a function or alias
+of another name, a flag held in a variable, or a `-q`/`-c` that comes after
+a grep operand holding `|`, `;`, `&`, `)` or a backtick
+(`grep -E '(a|b)' -q`, `grep -e 'a;b' -q`): quotes are transparent, so that
+character ends grep's words where it stands.
+
+The sweep that brought the suites under the lint (T-103) changed 27 sites in
+11 files under `tests/`: adapter-contract 1, board 2, cleanup 1, decide 3,
+dispatch 2, i18n 4, `lib.sh` 1, open 1, review 3, sync-prs 1, worker 8; and 1
+in `bin/ci.sh` itself, which the lint skips by its marker. A here-string
+appends a newline, so empty input becomes one empty line; every converted
+site was checked for input that can be empty meeting a pattern that can
+match an empty line. One changed its result, `tests/lib.sh`'s
+`assert_matches`, and it reads `< <(printf '%s' "$1")` instead, with
+`tests/lib.test.sh` proving `""` no longer matches `'^$'`. The rest are safe:
+the `grep -c .` and `grep -q .` sites (`.` never matches an empty line), the
+`-qx` sites (a non-empty literal), the fixed non-empty patterns
+(adapter-contract, board, cleanup, decide, open, sync-prs, worker, and the
+here-string loop in `tests/pipefail-grep.test.sh`), and i18n's two `'^$'`
+checks, which use `< <(jq ...)` because `$(...)` would strip the trailing
+empty lines they look for.
 
 Each stage skips cleanly when its subject does not exist, so the gate is green
 from an empty tree onward. **Every e2e uses the `mock` adapter** — no model
