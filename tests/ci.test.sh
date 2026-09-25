@@ -1059,4 +1059,14 @@ out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 assert_contains "$out" "ci: green" "and the fixture is green again once every plant is pulled"
 rm -rf "$q"
 
+# Every script parses. A `'` in a comment inside a single-quoted program
+# (pipe_awk's `grep's`, T-103 round 7) ends the string early, and bash only
+# finds out when it reaches that line: ci.sh died mid-stage, and every plant
+# above went red for a reason none of them names.
+unparsed=''
+while IFS= read -r f; do
+  bash -n "$f" 2>/dev/null || unparsed="$unparsed $f"
+done < <(find "$ROOT/bin" "$ROOT/tests" -type f -name '*.sh')
+assert_eq "" "$unparsed" "every script below bin/ and tests/ parses (bash -n)"
+
 finish

@@ -401,8 +401,8 @@ fi
 pipe_awk='
   BEGIN {
     # wrapper -> its short options that take a separate value, all its long
-    # ones, and how many operands it reads before the command; gl is grep's
-    # long ones. A long option is name:kind (v takes a separate value, q is
+    # ones, and how many operands it reads before the command; gl holds the
+    # long ones of grep. A long option is name:kind (v takes a separate value, q is
     # quiet or count, o is anything else), all of them, so an abbreviation
     # getopt_long accepts resolves the way getopt_long resolves it
     wv["env"] = "uC"
