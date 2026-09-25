@@ -491,7 +491,10 @@ rm -rf "$dz"
 # T-104: a reviewer is named from the reviewer roster the installation drew,
 # and a worker's name is refused even when asked for by --name
 dn="$(fixture)"; rn="$dn/repo"; GHn="$(ghstub "$dn")"
-( cd "$rn" && FM_ROOT="$rn" FM_GH="$GHn" FM_ROSTER_SEED=review bin/fm-review.sh --task T-Z --branch work >/dev/null 2>&1 )
+# the stock mock signs nothing, and an unsigned round exits 3
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$FM_VERDICT" > "$3/verdict.txt"\n' > "$rn/bin/adapters/mock.sh"
+( cd "$rn" && FM_ROOT="$rn" FM_GH="$GHn" FM_ROSTER_SEED=review FM_VERDICT="REJECT:T-Z" \
+    bin/fm-review.sh --task T-Z --branch work >/dev/null 2>&1 )
 assert_eq "0" "$?" "a review round with no crew yet exits 0"
 named="$(jq -r 'select(.type=="review_opened")|.actor' "$rn/state/events.jsonl" | sed -E 's/^reviewer-([a-z]+)-tz-r[0-9]+$/\1/')"
 assert_eq "true" "$(jq --arg n "$named" 'any(.reviewers[]; . == $n) and (any(.workers[]; . == $n) | not)' "$rn/state/crew/rosters.json")" \

@@ -1360,6 +1360,13 @@ line.
 
 A worker takes a name only from the worker roster and a reviewer only from the
 reviewer roster; an explicit `--name` on the other role's roster is refused.
+The rosters say which role a name has now; the runs say which role it has
+served. Every `identity.json` records `role` and `name`, and a name any
+recorded run carried under one role is never used for the other: an explicit
+`--name` on neither roster is refused once it has served the other role, a
+roster name that served the other role (moved in config.yaml, say) is
+skipped, and a draw or `--redraw` never deals a name to the role it did not
+serve. So one name never holds a worker record and a reviewer record.
 When every name of a role is taken the run fails, exit 70, with `the <role>
 roster ran out: …, and a name of the other role is never borrowed`; it never
 borrows and never reuses a name with a number. Within each roster the T-089
@@ -1378,7 +1385,7 @@ member: a name either role of the task has used is not offered to the other.
 A task keeps its previous round's name while that name is free; otherwise it
 takes the first free name in its roster. An explicit alias wins but is
 refused, exit 70 with one line, while that name is live, is the task's other
-role's, or is on the other role's roster. A name is
+role's, is on the other role's roster, or has served the other role. A name is
 never cut: one that does not fit the room the final `-<task>-r<n>` suffix
 leaves, measured again on each retry, is refused, so the actor stays within 32
 characters and no label can stand for two crew members. An empty `roster:`,

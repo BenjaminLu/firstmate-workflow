@@ -210,9 +210,30 @@ def drawn_rosters(root):
     return crew
 
 
+def served_roles(root):
+    """Every name a recorded run has carried, with the roles it served under."""
+    served = {}
+    for file in (Path(root) / 'state/runs').glob('*/identity.json'):
+        try: identity = read(file)
+        except (OSError, ValueError): continue
+        name = crew_name(identity)
+        role = identity.get('role') or identity.get('actor', '').split('-', 1)[0]
+        if name and role in ROLES: served.setdefault(name, set()).add(role)
+    return served
+
+
+def crossed(name, role, served):
+    """The other role this name has already served under, or None: a name
+    keeps the role of its first record, whatever the rosters say now."""
+    other = (served.get(name, set()) & set(ROLES)) - {role}
+    return min(other) if other else None
+
+
 def draw_rosters(root, redraw=False):
     """Draw the installation's crew once: 2 x CREW_SIZE distinct names, uniformly
     at random from POOL; the first half are workers. Returns (crew, drawn now).
+    A name a recorded run served under one role is never drawn for the other,
+    so a redraw cannot hand an old worker's name to a reviewer.
     FM_ROSTER_SEED seeds the draw and exists only for tests."""
     path = rosters_path(root)
     with locked(path.parent / '.rosters.lock'):
@@ -221,8 +242,15 @@ def draw_rosters(root, redraw=False):
             if crew: return crew, False
         seed = os.environ.get('FM_ROSTER_SEED')
         chance = random.Random(seed) if seed else random.SystemRandom()
-        names = chance.sample(POOL, 2 * CREW_SIZE)
-        crew = dict(workers=names[:CREW_SIZE], reviewers=names[CREW_SIZE:],
+        served = served_roles(root)
+        order = chance.sample(POOL, len(POOL))
+        workers = [n for n in order if not crossed(n, 'worker', served)][:CREW_SIZE]
+        reviewers = [n for n in order if n not in workers
+                     and not crossed(n, 'reviewer', served)][:CREW_SIZE]
+        if len(workers) < CREW_SIZE or len(reviewers) < CREW_SIZE:
+            raise ValueError('the name pool cannot fill two rosters of ' + str(CREW_SIZE)
+                             + ' without giving a name a second role')
+        crew = dict(workers=workers, reviewers=reviewers,
                     drawn_at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
         save(path, crew)
         return crew, True
@@ -265,11 +293,14 @@ def run_is_live(run):
     return not process.is_file() and not attempts
 
 
-def choose_name(alias, role, rosters, live, last, other_role, room):
+def choose_name(alias, role, rosters, live, last, other_role, room, served=None):
     """The crew name for one run, whole, from its own role's roster only. Every
     comparison is on the whole name and it is never cut: a name the final
     actor has no `room` for is refused. A roster that has run out fails the
-    run; it never borrows the other role's names (T-104)."""
+    run; it never borrows the other role's names (T-104). A name any recorded
+    run `served` under the other role is refused however it is asked for: on
+    neither roster, back from a redraw, or moved in config.yaml."""
+    served = served or {}
     roster = rosters.get(ROLES.get(role), [])
     foreign = {key[:-1]: names for key, names in rosters.items() if key != ROLES.get(role)}
     if alias:
@@ -283,18 +314,25 @@ def choose_name(alias, role, rosters, live, last, other_role, room):
             if name in names:
                 raise RuntimeError('crew name ' + name + ' is on the ' + other + ' roster and a name belongs to'
                                    ' one role; choose another --name or omit it')
+        if crossed(name, role, served):
+            raise RuntimeError('crew name ' + name + ' has served as a ' + crossed(name, role, served)
+                               + ' and a name belongs to one role; choose another --name or omit it')
     elif not roster:
         raise RuntimeError(role + ' has no roster; give it a --name')
     else:
         # A task's worker and reviewer are never the same crew member.
-        free = [n for n in roster if n not in other_role and n not in live]
+        free = [n for n in roster if n not in other_role and n not in live
+                and not crossed(n, role, served)]
         if last in free: name = last  # the same crew member across a task's rounds
         elif free: name = free[0]
         else:
             held = [n for n in roster if n in other_role and n not in live]
+            gone = [n for n in roster if n not in other_role and n not in live
+                    and crossed(n, role, served)]
             also = f', {", ".join(held)} held by this task\'s other role' if held else ''
+            also += f', {", ".join(gone)} already served the other role' if gone else ''
             raise RuntimeError(f'the {role} roster ran out: none of its {len(roster)} names is free'
-                               f' ({len(roster) - len(held)} live{also}), and a name of the other'
+                               f' ({len(roster) - len(held) - len(gone)} live{also}), and a name of the other'
                                f' role is never borrowed; wait for a {role} run to finish, or pin more'
                                f' names under rosters: in config.yaml')
     if len(name) > room:
@@ -319,6 +357,7 @@ def allocate(root, role, task, alias):
         if len(task_slug) > 9:
             task_slug = task_slug[:4] + hashlib.sha256(task.encode()).hexdigest()[:5]
         live, previous, other_role = set(), [], set()
+        served = served_roles(root)
         for file in directory.glob('*/identity.json'):
             try: identity = read(file)
             except (OSError, ValueError): continue
@@ -334,7 +373,7 @@ def allocate(root, role, task, alias):
             # Measured against the final suffix: a counter that gains a digit
             # on retry must not push the actor past 32 characters.
             room = 32 - len(role) - 1 - len(suffix)
-            name = choose_name(alias, role, rosters, live, last, other_role, room)
+            name = choose_name(alias, role, rosters, live, last, other_role, room, served)
             actor = role + '-' + name + suffix
             run = directory / actor
             try: run.mkdir(parents=True); break
@@ -1384,7 +1423,8 @@ def roster_command(root, action='show', redraw=''):
         crew, drawn = draw_rosters(root, redraw=bool(redraw))
         if redraw:
             print('fm roster: drew a new crew. Ranks and service records keyed by the old names'
-                  ' stay with the old names; the new names start without them.')
+                  ' stay with the old names; the new names start without them. A name that'
+                  ' already served one role is never drawn for the other.')
         elif drawn: print('fm roster: drew this installation\'s crew')
         else:
             print('fm roster: this installation already has a crew, drawn ' + str(crew.get('drawn_at'))

@@ -459,7 +459,43 @@ class Roster(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'zed is live'):
             m.allocate(self.root, 'worker', 'T-600', 'worker-Zed')
         self.finish(first)
-        self.assertEqual('zed', self.name(m.allocate(self.root, 'reviewer', 'T-601', 'zed')))
+        # Free again, but still a worker's name.
+        self.assertEqual('zed', self.name(m.allocate(self.root, 'worker', 'T-602', 'zed')))
+    def test_a_finished_workers_alias_is_refused_as_another_tasks_reviewer(self):
+        # zed is on neither roster; its first run makes it a worker for good.
+        worker = m.allocate(self.root, 'worker', 'T-610', 'zed')
+        self.finish(worker)
+        with self.assertRaisesRegex(RuntimeError, 'crew name zed has served as a worker and a name belongs to one role'):
+            m.allocate(self.root, 'reviewer', 'T-611', 'Zed')
+        reviewer = m.allocate(self.root, 'reviewer', 'T-612', 'quinn')
+        self.finish(reviewer)
+        with self.assertRaisesRegex(RuntimeError, 'crew name quinn has served as a reviewer'):
+            m.allocate(self.root, 'worker', 'T-613', 'quinn')
+        self.assertEqual(2, len(self.runs()))
+    def test_a_redraw_never_gives_a_name_to_the_other_role(self):
+        # Every name has served: the first 24 of the pool as workers, the rest
+        # as reviewers. Any redraw that ignored them would cross a name.
+        runs = self.root / 'state/runs'
+        for i, name in enumerate(m.POOL):
+            role = 'worker' if i < 24 else 'reviewer'
+            run = runs / f'{role}-{name}-t9-r{i}'; run.mkdir(parents=True)
+            m.save(run / 'identity.json', dict(actor=run.name, role=role, task='T-9', name=name,
+                                               requested_alias='', run=str(run), created=1.0))
+            self.finish(run)
+        for seed in ('a', 'b', 'c'):
+            with patch.dict(os.environ, {'FM_ROSTER_SEED': seed}):
+                crew, _ = m.draw_rosters(self.root, redraw=True)
+            self.assertEqual(set(m.POOL[:24]), set(crew['workers']))
+            self.assertLessEqual(set(crew['reviewers']), set(m.POOL[24:]))
+    def test_a_name_moved_to_the_other_role_in_config_is_not_used(self):
+        self.pin('rosters:\n  workers: [bo, cy]\n  reviewers: [ada]\n')
+        self.finish(m.allocate(self.root, 'worker', 'T-620', ''))  # bo served as a worker
+        self.pin('rosters:\n  workers: [cy]\n  reviewers: [bo]\n')
+        with self.assertRaisesRegex(RuntimeError, r'the reviewer roster ran out: none of its 1 names is free'
+                                                  r' \(0 live, bo already served the other role\)'):
+            m.allocate(self.root, 'reviewer', 'T-621', '')
+        with self.assertRaisesRegex(RuntimeError, 'crew name bo has served as a worker'):
+            m.allocate(self.root, 'reviewer', 'T-621', 'bo')
     def test_pinned_names_are_validated(self):
         self.pin('rosters:\n  workers: [Ada, bo]\n')
         self.assertEqual({'workers': ['ada', 'bo']}, m.pinned_rosters(self.root))
@@ -776,7 +812,7 @@ elif a[0]=='branch': print('t-035-test')
         self.assertEqual(70,reply.returncode,reply.stderr)
         self.assertIn('already has a live worker',reply.stderr)
     def test_entrypoints_refuse_a_live_alias_in_one_line(self):
-        # zed is in no roster, so either role may take it while it is free.
+        # zed is in no roster; while it is live, no run of either role takes it.
         live=m.allocate(self.repo,'worker','T-900','Zed')  # starting: no launcher record yet
         for script,args in (('fm-worker.sh',['--task','T-035','--name','zed']),
                             ('fm-review.sh',['--task','T-035','--branch','work','--name','Zed'])):
