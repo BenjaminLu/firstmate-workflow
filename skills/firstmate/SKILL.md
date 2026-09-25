@@ -468,8 +468,12 @@ is preserved in `text`. `note` is separate and truncated to 500 JavaScript code
 units; never encode custom as an A note. Identical chosen/custom-text retries
 return the recorded decision; conflicting responses return 409. A custom choice
 never invokes merge, even for a merge card. Only A on a pending merge with numeric
-PR invokes the merge helper; inspect recorded `merged` outcome and
-`eventRecorded` rather than assuming response `ok` proves merge/event success.
+PR invokes the merge helper, in the background; read the record's `merge`
+(`running`, `merged` or `failed`), `merge_reason` and `eventRecorded` rather
+than assuming response `ok` proves merge/event success. `running` is not
+settled: keep waiting or re-read the record, and never report a merge from it;
+`merge_unknown` means GitHub could not be read and the project stays held.
+`failed` is final and is never retried.
 Custom instructions still require scope/readiness coordination and do not imply
 merge approval. Awaiting a response must preserve its distinct chosen/text data.
 
