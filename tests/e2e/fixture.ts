@@ -119,6 +119,24 @@ export function writeRegistry(root: string, github: string) {
   ].join("\n"));
 }
 
+// A registry of several projects (T-054). The first hosts itself and is the
+// default; the rest are targets, each with its task list at the registry's
+// default place, projects/<name>/tasks/, one file per task (T-090), when the
+// test gives one.
+export function writeProjects(root: string, projects: Array<{ name: string; github: string; tasks?: Array<{ id: string }> }>) {
+  const lines = [`default_project: ${projects[0].name}`, "projects:"];
+  projects.forEach((p, i) => {
+    lines.push(`  ${p.name}:`, ...(i === 0 ? ["    repo: ."] : []), `    github: ${p.github}`,
+      "    base: main", "    required_check: ci");
+    if (i > 0 && p.tasks) {
+      const dir = join(root, "projects", p.name, "tasks");
+      mkdirSync(dir, { recursive: true });
+      for (const t of p.tasks) writeFileSync(join(dir, `${t.id}.json`), JSON.stringify(t) + "\n");
+    }
+  });
+  writeFileSync(join(root, "config.yaml"), lines.join("\n") + "\n");
+}
+
 // the port comes from the kernel, not from a guess: a guessed port can
 // collide with a leftover listener that answers /api/state, and the test
 // then passes against a foreign server
@@ -134,18 +152,23 @@ async function freePort(): Promise<number> {
   });
 }
 
-export async function startBoard(root: string) {
+// `env` is added to the board's environment, for a test that stands a stub in
+// for gh (FM_GH) or starts the board from a shell that exports FM_PROJECT
+export async function startBoard(root: string, env: Record<string, string> = {}) {
   const port = await freePort();
   // the board merges by shelling out to bin/fm-merge.sh in its root, so a
   // recorder there keeps the e2e off gh without teaching the server a test
-  // mode it would then be trusted with in production
+  // mode it would then be trusted with in production. A merge runs in the
+  // background (T-054); while `hold-merge` exists the recorder keeps it
+  // running, so a test can see a merge that has not finished.
   const recorder = join(root, "merge-calls");
   mkdirSync(join(root, "bin"), { recursive: true });
   const stub = join(root, "bin/fm-merge.sh");
-  writeFileSync(stub, `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "${recorder}"\necho "merged #$2"\n`);
+  writeFileSync(stub, `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "${recorder}"\n` +
+    `while [ -e "${join(root, "hold-merge")}" ]; do sleep 0.1; done\necho "merged #$2"\n`);
   chmodSync(stub, 0o755);
   const proc: ChildProcess = spawn("bun", ["run", join(root, "board/server.ts")], {
-    env: { ...process.env, FM_ROOT: root, FM_PORT: String(port) },
+    env: { ...process.env, ...env, FM_ROOT: root, FM_PORT: String(port) },
     stdio: "ignore",
   });
   const url = `http://127.0.0.1:${port}`;
