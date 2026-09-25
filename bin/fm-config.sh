@@ -458,6 +458,8 @@ fm_identity() {
   local role="$1" task="$2" alias="$3"
   # Recursion guards belong to one adapter invocation, never a new role run.
   unset FM_CONTEXT_READY FM_ATTEMPT_DIR FM_FINAL_PATH FM_CLI_EXIT FM_CHAIN_ATTEMPT
+  # and a run-mode review's checkout belongs to that one round
+  unset FM_RUN_REVIEW FM_REVIEW_CHECKOUT FM_REVIEW_NETWORK
   FM_RUN_DIR="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" allocate "$REPO" "$role" "$task" "$alias")" || return 70
   NAME="${FM_RUN_DIR##*/}"
   export FM_RUN_DIR FM_ROLE="$role" FM_TASK="$task" FM_ACTOR="$NAME" FM_ROOT="$REPO"
@@ -502,6 +504,30 @@ fm_vendor_chain() {
   # one run per vendor: a fallback list may name the head, or itself twice
   printf '%s\n' "$head"
   fm_cfg_list fallback | grep -vxF "$head" | awk '!seen[$0]++' || true
+}
+
+# fm_review_run_chain <adapters-dir> <chain>
+#   The part of a reviewer chain that may take a run-mode round: an adapter
+#   declares it can confine one with a `# fm:review-run` line, which it may
+#   carry only if its CLI's own permission flags keep the engine inside the
+#   checkout and away from push. The rest is dropped, and a head that cannot
+#   is refused (1) rather than quietly replaced by a fallback. A name with no
+#   adapter is kept, so fm_run_chain still reports a typo as a typo.
+fm_review_run_chain() {
+  local dir="$1" v first=1 kept='' names=()
+  # split on blanks and newlines as the chain is, but never globbed: an
+  # unquoted expansion would read a `*` as the file names around it
+  read -r -d '' -a names <<<"$2" || true
+  for v in ${names[@]+"${names[@]}"}; do
+    if [ -x "$dir/$v.sh" ] && ! grep -q '^# fm:review-run' "$dir/$v.sh"; then
+      [ "$first" = 1 ] && return 1
+    else
+      kept="${kept:+$kept
+}$v"
+    fi
+    first=0
+  done
+  printf '%s\n' "$kept"
 }
 
 # fm_run_chain <adapters-dir> <chain> <prompt> <tree> <log> [evidence]

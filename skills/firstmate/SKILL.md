@@ -64,6 +64,13 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
 2. Inspect configured adapters and current engine availability, including fallback
    results; do not carry forward a previous session's outage assumptions. Bound
    concurrency by config and account for existing work before dispatch.
+   The reviewer's vendor and model are the captain's choice. When `start` says
+   `config.yaml names no reviewer vendor` (or model), ask the captain with a
+   choice card listing the installed adapters it names and the models each
+   one's CLI offers, read from that CLI rather than recalled. The answer takes
+   effect only as a `config.yaml` change in a pull request. Until it merges a
+   review still runs on the top-level vendor; report that as the fallback it
+   is, never as the captain's choice, and do not pick one on their behalf.
 3. In a user-managed Herdr session (`HERDR_ENV=1`), check `herdr` availability
    there, read installed `herdr --skill` and help, and inspect the caller pane and
    live panes. *Stock launch* every worker and reviewer only through
@@ -115,6 +122,30 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   supply all that context. Built-in model adapters retain final-answer evidence;
   custom adapters still use combined output, and verdict substring matching does
   not establish current-head approval. Coordinate these remaining limitations.
+- Every review goes through `bin/fm-review.sh`, in the mode `config.yaml`
+  declares (`reviewer: mode:`). In `run` mode, which this repository declares,
+  the script gives the reviewer a fresh clone of the pull request head outside
+  every worktree, removes it afterwards, and the adapter confines the engine
+  there with the CLI's own permission flags; only adapters that can do that
+  (today `claude`) take a run-mode round. `diff` mode, the default, is the
+  diff-only review. Either way the script emits `review_opened` and then
+  `approved` or `review_failed` as the reviewer, so the board shows the reviewer
+  and the review lane with no step of yours. Do not launch a reviewer by hand
+  in an isolated directory or a conversation subagent, and do not emit review
+  events yourself; both were stopgaps for the diff-only reviewer and are
+  retired. If a run-mode round cannot start (no confining adapter, no checkout),
+  report the script's message and coordinate the fix.
+- Round order and the merge double check (captain, 2026-09-25; design §6).
+  Start the review round through `bin/fm-review.sh` as soon as the worker hands
+  back; never hold it for CI. CI and the seven gates are not a review criterion
+  in either mode: a run-mode reviewer is shown none, and a diff-mode reviewer
+  sees the head section as information only. A merge card needs two
+  independent checks on the same current head: the reviewer's
+  `APPROVE:<task-id>` for that head, and your own reading of that head's
+  required GitHub check (green) and the seven gates (`bin/fm-gate.sh`).
+  Neither substitutes for the other, and a head that changes after either one
+  restarts both. `fm-run.sh` still reviews only after gates 1-6 are green, so
+  do not wait for its loop to start a round.
 - Decision requests use the approved T-034 `--details` contract below. Request
   mode returns after publication; it does not wait for approval.
   `bin/fm-decide.sh --await <id> --repo <root>` returns recorded response JSON,

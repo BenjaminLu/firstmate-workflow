@@ -29,6 +29,11 @@ command -v cursor-agent >/dev/null 2>&1 || {
 off="$(fm_adapter_mark "$log")"
 # Non-interactive dispatch cannot answer the workspace-trust prompt; -f
 # trusts the worktree the scripts already created for this run.
+#
+# No `fm:review-run` line: -f also lets every shell command through, and
+# nothing on this CLI's command line confines those commands' writes to a
+# checkout or denies push. So cursor-agent reviews in diff mode only, and
+# fm_adapter_context refuses a run-mode round before the CLI starts.
 if [ -n "${FM_ATTEMPT_DIR:-}" ]; then
   ( cd "$tree" && cursor-agent -p -f --output-format json ${FM_ADAPTER_ARGS:-} < "$prompt" ) 2>&1 | tee -a "$log"
   fm_adapter_pipeline_status "${PIPESTATUS[@]}"

@@ -1081,6 +1081,20 @@ worker_changed_files() {
 worker_did_work() {
   worker_changed_files || [ -s "$tree/.fm-say.md" ]
 }
+# A rebuild that applied - nothing unresolved handed to the worker - is
+# this round's work on its own, and is published whatever the worker did
+# with it: nothing, a note, or a question. Left for a later round, the
+# branch stayed on its old head, DIRTY on GitHub, until the captain pushed
+# it by hand (T-098). Unresolved is a conflict, and also the task's own
+# entry or row the rebuild could not keep (rebuild_restore): the check
+# before the commit refuses that rebuild as it stands, the way it refuses
+# a marker, so it is the worker's to resolve like one.
+rebuild_unresolved() {
+  [ "${#rebuild_conflicts[@]}" -gt 0 ] || [ "${#rebuild_restore[@]}" -gt 0 ]
+}
+rebuild_publishes() {
+  [ "$rebuilt" = 1 ] && ! rebuild_unresolved
+}
 log="$FM_RUN_DIR/worker.log"; : > "$log"
 # Close fd 9 and the launch-time task lock in a subshell so adapters cannot
 # hold either. The parent keeps its copies for exclusion; if the published
@@ -1090,6 +1104,9 @@ log="$FM_RUN_DIR/worker.log"; : > "$log"
 # through FM_CODE_ROOT when a frozen snapshot is active.
 chain_result="$(scratch_new)" || exit 70
 scratch_add "$chain_result"
+# where a plain round starts: a mid-run fm-checkpoint.sh commits on top of
+# it, and what the round adds is read against this, not the last save
+round_start="$(git -C "$tree" rev-parse -q --verify HEAD 2>/dev/null)"
 emit_status "Adapter running on $TASK" "adapter 正在執行 $TASK"
 (
   exec 9>&-
@@ -1190,6 +1207,10 @@ save_unsent() {   # save_unsent <file>; copies it under state/unsent/ and says w
   fi
 }
 keep_unsent() {   # keep_unsent <file>; reads $PR, never returns
+  note_refused "$1"
+  exit 73
+}
+note_refused() {   # note_refused <file>; keeps it and says why, and returns
   # the held note included: this is its keeping, and the EXIT trap
   # must not keep it a second time
   held_settled=1
@@ -1208,7 +1229,6 @@ keep_unsent() {   # keep_unsent <file>; reads $PR, never returns
     emit --type worker_crashed --en "the worker asked before there was a pull request" \
          --tw "工人在還沒有 PR 的時候提問"
   fi
-  exit 73
 }
 # A note is not only a question. An adapter that may edit but not execute
 # finishes the work and says which checks it could not run, and on a
@@ -1233,7 +1253,7 @@ lost_held() {   # lost_held <rc>; from the EXIT trap, so it returns
        --en "the worker's note was not posted: the run ended (exit $1) before it reached a pull request" \
        --tw "工人的留言沒有貼出：執行在送到 PR 之前就結束了（exit ${1}）"
 }
-if [ "$asked" = 1 ] && [ -z "$PR" ] && worker_changed_files; then
+if [ "$asked" = 1 ] && [ -z "$PR" ] && { worker_changed_files || rebuild_publishes; }; then
   _held="$(scratch_new)" || _held=''
   [ -n "$_held" ] || { echo "fm-worker: could not make a scratch file" >&2; exit 70; }
   scratch_add "$_held"
@@ -1243,21 +1263,47 @@ fi
 if [ "$asked" = 1 ] && [ -n "$PR" ]; then
   post_note "$say" "$PR"
 fi
-# held means the note waits for the pull request opened below, which is
-# the only case where no pull request yet is not the end of the round
-if [ "$asked" = 1 ] && [ "$spoke" = 0 ] && [ -z "$held" ]; then
+# A note the pull request refused ends the round with 73, but not before a
+# rebuild the round can commit is published: exiting here would leave the
+# branch on its old head, the way the asking exit did (T-098). The note is
+# kept now, once, and never posted again - a refusal gh reported after
+# GitHub stored the comment would be a second copy - so no exit on the
+# way to the push can lose it. A later failure there ends the round with
+# its own code instead.
+refused=0
+if [ "$asked" = 1 ] && [ "$spoke" = 0 ] && [ -z "$held" ] && [ -n "$PR" ] && [ "$rebuilt" = 1 ] \
+   && { worker_changed_files || rebuild_publishes; }; then
+  note_refused "$say"
+  refused=1
+fi
+# held means the note waits for the pull request opened below: the only
+# case where the note not landing yet is not the end of the round
+if [ "$asked" = 1 ] && [ "$spoke" = 0 ] && [ -z "$held" ] && [ "$refused" = 0 ]; then
   keep_unsent "$say"
 fi
 rm -f "$say"
 
 # asking IS the work in a round that begins with a question, and the round
 # after it is the one that changes files. A rebuild this round made is not
-# a change the worker made: an asking round publishes nothing, and the next
-# round rebuilds again from the branch as it stands.
+# a change the worker made, but one that applied is published all the same
+# (rebuild_publishes). A rebuild left unresolved publishes nothing, and
+# the next round rebuilds again from the branch as it stands.
+# Said here, where it is already true, so a round that fails on the way to
+# the push still reports that it asked.
 if [ "$asked" = 1 ] && ! worker_changed_files; then
-  echo "fm-worker: the worker asked rather than changed anything; its question is on #$PR" >&2
-  printf '%s\n' "$branch"
-  exit 0
+  if ! rebuild_publishes; then
+    echo "fm-worker: the worker asked rather than changed anything; its question is on #$PR" >&2
+    printf '%s\n' "$branch"
+    exit 0
+  fi
+  if [ -n "$held" ]; then
+    asked_where="its question waits for the pull request this round opens"
+  elif [ "$refused" = 1 ]; then
+    asked_where="#$PR would not take its question"
+  else
+    asked_where="its question is on #$PR"
+  fi
+  echo "fm-worker: the worker asked rather than changed anything; $asked_where; the rebuild applied, so it is published all the same" >&2
 fi
 
 # the same predicate the chain was given, not a second spelling of it: the
@@ -1341,6 +1387,46 @@ if [ "$rebuilt" = 1 ]; then
       "任務自己的條目或表格列跟 ${rebuild_prev} 不一樣：${listed}"
   fi
 fi
+# A script the round adds keeps its executable bit. The claude worker's
+# sandbox refuses chmod, so every script a worker added was committed
+# 100644 and a suite that ran it by path failed with 126 (T-048, T-059).
+# The bit is set in the index, which needs no permission of the worker's,
+# and on disk as well where it can be, so the worktree agrees with the
+# commit. Only on a file this round adds - absent from where the round
+# started (a mid-run checkpoint does not count as a start: it commits with
+# the same missing bit), and on a rebuild from the base and the previous
+# head both - under bin/ or
+# tests/, starting with a shebang, in a directory that already holds an
+# executable script. A bit is never removed, and no other file is touched.
+dir_runs_scripts() {   # dir_runs_scripts <commit> <dir>: an executable script already there
+  local e meta tab=$'\t'
+  while IFS= read -r -d '' e; do
+    meta="${e%%"$tab"*}"
+    [ "${meta%% *}" = 100755 ] || continue
+    [ "$(git -C "$tree" cat-file blob "${meta##* }" 2>/dev/null | head -c 2 | tr -d '\0')" = '#!' ] && return 0
+  done < <(git -C "$tree" ls-tree -z "$1" -- "$2/" 2>/dev/null)
+  return 1
+}
+new_scripts_executable() {   # new_scripts_executable <commit the round started from> [<previous head>]
+  local f
+  while IFS= read -r -d '' f; do
+    case "$f" in bin/*|tests/*) ;; *) continue ;; esac
+    [ -z "${2:-}" ] || ! git -C "$tree" cat-file -e "$2:$f" 2>/dev/null || continue
+    [ "$(git -C "$tree" --literal-pathspecs ls-files -s -- "$f" | cut -c1-6)" = 100644 ] || continue
+    [ "$(git -C "$tree" cat-file blob ":$f" 2>/dev/null | head -c 2 | tr -d '\0')" = '#!' ] || continue
+    dir_runs_scripts "$1" "${f%/*}" || continue
+    # the index first: a bit it refuses is not left on disk for the exit's
+    # checkpoint to carry, as though the round had set it
+    git -C "$tree" --literal-pathspecs update-index --chmod=+x -- "$f" || return 1
+    chmod +x "$tree/$f" 2>/dev/null || true
+    echo "fm-worker: $f is a new script; it is committed executable" >&2
+  done < <(git -C "$tree" diff --cached --name-only -z --diff-filter=A "$1")
+}
+if [ "$rebuilt" = 1 ]; then
+  new_scripts_executable "$rebuild_base" "$rebuild_prev"
+else
+  new_scripts_executable "${round_start:-HEAD}"
+fi || { echo "fm-worker: could not set the executable bit on a new script on $branch; the round is not committed" >&2; exit 70; }
 # A rebuilt round is committed with commit-tree, from the staged tree and
 # parented on the fetched base, rather than by `git commit` on the detached
 # HEAD: the repository's pre-commit hook refused every commit on a detached
@@ -1492,6 +1578,9 @@ if [ -n "$held" ]; then
   [ "$spoke" = 1 ] && held_settled=1
   [ "$spoke" = 1 ] || keep_unsent "$held"
 fi
+# the note refused above was kept there; the rebuild is out, and the round
+# ends the way a refused note ends it
+[ "$refused" = 0 ] || exit 73
 printf '%s\n' "$branch"
 [ "${rc:-1}" = "0" ] || exit 1
 exit 0
