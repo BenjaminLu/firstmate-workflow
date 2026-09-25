@@ -923,6 +923,9 @@ remaining gates keep their numbers and their meaning, so gate 5 is still the
 fail-first gate, gate 6 CI and gate 7 the approval; nothing exits 3, and
 `fm-gate.sh --only 3` is a usage error (exit 64), not a green gate. The board,
 the review prompt's gate section and `fm-run.sh` read the same six numbers.
+A merge card's `gates` list keeps seven slots and the board reads it by gate
+number (`gates[n-1]`), so slot 3 is carried but never shown, and a producer
+that still sends one value per number 1-7 lines up with the checklist.
 
 **Gate 5 runs only the touched suites (T-114).** On the reverted tree it runs,
 through `project.test`, every test file the diff changes, then every other

@@ -370,11 +370,37 @@ assert_contains "$(cat "$ROOT/tests/diagram.test.sh")" "for n in $nums; do" \
 for n in $nums; do
   assert_ok "jq -e 'has(\"gate$n\")' '$ROOT/i18n/ui.en.json' >/dev/null" "gate $n has a board label"
 done
-# and nothing a reader is shown still counts seven, or calls gate 3 the check
-prose="bin/fm-gate.sh bin/fm-run.sh bin/fm.sh bin/fm-review.sh board/server.ts board/public/index.html
-  skills/firstmate/SKILL.md skills/reviewer/SKILL.md skills/worker/SKILL.md README.md design/design.md"
-assert_eq "" "$(cd "$ROOT" && grep -niE 'seven(-| )gate|all seven|gates 1-6|gates 1-7|gates 3 and 5|gate 3 runs|gate 3 and gate 5' $prose)" \
-  "no file that numbers the gates still says seven, or runs gate 3"
+# and nothing in the repository still counts seven, or calls gate 3 the
+# check. The whole tree is swept, not a list of the files a spec named, so a
+# guide or a template nobody thought of is found too. The allowlist is the
+# record of what was true when it was written: task specs, dated proposals,
+# and this suite, which has to spell the patterns out.
+sweep="$(cd "$ROOT" && git grep -niE 'seven(-| )gates?|all seven (gates|green)|the seven gates|gates 1-6|gates 1-7|gates 3 and 5|gate 3 runs|gate 3 and gate 5' \
+  -- . ':!design/tasks/' ':!design/proposals/' ':!tests/gate.test.sh' 2>&1)"
+assert_eq "" "$sweep" "no file in the repository still says seven gates, or runs gate 3"
+
+# --- a merge card's gate list has one shape everywhere (T-114) ------------
+# The board reads a card's gates by gate number, gates[n-1], so the list
+# keeps a slot per number 1-7 and the retired slot 3 is never shown. Read by
+# position, a seven-slot list shows each gate from 4 on with the value of the
+# gate before it, and gate 7 with gate 6's.
+board="$(tr -d ' ' < "$ROOT/board/public/index.html")"
+assert_contains "$board" "gates[n-1]" "the board reads a merge card's gates by gate number"
+assert_lacks "$board" "gates[i]" "and never by position in its own list"
+producers="$(cd "$ROOT" && git grep -hoE 'gates: *\[[0-9, ]*\]' -- . ':!design/proposals/' 2>&1)"
+assert_ne "" "$producers" "there are merge cards to check the shape of"
+while IFS= read -r p; do
+  [ -n "$p" ] || continue
+  slots="$(tr -cd ',' <<<"$p" | wc -c | tr -d ' ')"
+  assert_eq "6" "$slots" "a merge card's gates carry one slot per number 1-7: $p"
+done <<<"$producers"
+# and whatever renders the checklist expects one line per gate that exists
+counts="$(cd "$ROOT" && git grep -hoE '\.gates li"\)\)\.toHaveCount\([0-9]+\)' -- tests/ 2>&1)"
+assert_ne "" "$counts" "the end-to-end suite counts the checklist's lines"
+while IFS= read -r c; do
+  [ -n "$c" ] || continue
+  assert_eq "toHaveCount(6)" "${c##*.}" "the end-to-end suite expects six gate lines: $c"
+done <<<"$counts"
 
 # --- the exit code names the gate ---------------------------------------
 "$GATE" --task T-X --repo "$d" --branch untested --only 5 >/dev/null 2>&1

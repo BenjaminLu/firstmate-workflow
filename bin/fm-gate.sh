@@ -94,8 +94,11 @@ if [ "${FM_GATE_LOCK_HELD:-}" != "$LOCK" ]; then
     sleep 1
   done
   echo "$$" > "$LOCK/pid"
+  # the signal traps only exit; the EXIT trap releases, once
   trap 'rm -rf "$LOCK"' EXIT
-  trap 'exit 130' INT TERM HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
   export FM_GATE_LOCK_HELD="$LOCK"
 fi
 
