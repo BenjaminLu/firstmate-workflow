@@ -119,9 +119,11 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   when it cannot tell which, and says so. Gate runs on one machine are
   serialized by a kernel lock on `FM_GATE_LOCK` (default `/tmp/fm-gate.lock`,
   not under `TMPDIR`), so a second one waits for the first, even from a
-  sandbox with its own `TMPDIR`. A sandbox that cannot open that file gets
-  exit 70 naming it; do not give it a private `FM_GATE_LOCK`, which would
-  not serialize with the rest of the machine.
+  sandbox with its own `TMPDIR`. A run that cannot use that file (it cannot
+  open it, or it is a symlink, a hard link or not a regular file) gets exit
+  70 naming it: fix or remove the file. Do not give a real gate run a
+  private `FM_GATE_LOCK`, which would not serialize with the rest of the
+  machine; only a test fixture sets its own.
   `bin/fm-review.sh` runs review; `bin/fm-protocol.sh` checks the closed-list
   protocol. Read their current usage before invocation. Supply the reviewer with
   diff, spec, acceptance, authoritative relevant design and any original closed

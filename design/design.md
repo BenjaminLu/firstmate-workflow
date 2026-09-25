@@ -947,7 +947,12 @@ not follow `TMPDIR`, which is per user on macOS and per sandbox. The kernel
 releases the lock when the holder exits, however it exits, so no run judges
 whether another is alive and no lock is ever removed: a killed run, a reused
 pid, another user's run and a lock file that names no holder cannot be
-misread. The suites the gate runs do not inherit the descriptor. A run
+misread. The suites the gate runs do not inherit the descriptor. The path
+sits where every user writes, so it is opened once, by perl, refusing a
+symlink and anything but a regular file with that one name, and every read
+and write of it goes through that descriptor; a planted link cannot make a
+gate run create, truncate or write another file, and the run exits 70 naming
+the file instead. A run
 started inside a run holding the same lock (it inherits
 `FM_GATE_LOCK_HELD`) is refused with exit 70 rather than waiting for ever or
 running unlocked, so every suite that runs the real gate sets its own

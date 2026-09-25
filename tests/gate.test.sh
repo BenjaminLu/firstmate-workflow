@@ -3,6 +3,13 @@
 # whatever the fixture's own config.yaml declares under project:. Gate 3 is
 # retired (T-114), and this suite shows that nothing still runs it.
 set -uo pipefail
+# A gate run exports FM_GATE_LOCK_HELD, and a Herdr session its pane ids, into
+# every suite it runs. This suite runs the real gate, so it inherits none of
+# them: identity, locks and cards bind to its fixtures, not the outer run.
+for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
+  unset "$_fm_k" || true
+done
+export HERDR_ENV=0
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
@@ -386,6 +393,27 @@ lock="$(mktemp -d)/gate.lock"; : > "$lock"
 assert_ok "finishes 20 \"FM_GATE_LOCK='$lock' '$GATE' --task T-X --repo '$sl' --branch slow --only 1\"" \
   "a lock that names no holder is not waited on for ever"
 
+# The lock's path is in a directory every user writes, so another user can put
+# a link there first. A gate run follows none: it neither creates, empties nor
+# writes the file a link names, and it refuses rather than runs unlocked.
+ld="$(mktemp -d)"
+ln -s "$ld/profile" "$ld/dangling.lock"
+out="$(FM_GATE_LOCK="$ld/dangling.lock" "$GATE" --task T-X --repo "$sl" --branch slow --only 1 2>&1)"; rc=$?
+assert_eq "70" "$rc" "a lock that is a symlink to no file is refused"
+assert_fail "test -e '$ld/profile'" "and the file it names is not created"
+assert_contains "$out" "cannot use the gate lock $ld/dangling.lock" "and it names the lock"
+printf 'keep\n' > "$ld/kept"; ln -s "$ld/kept" "$ld/sym.lock"
+FM_GATE_LOCK="$ld/sym.lock" "$GATE" --task T-X --repo "$sl" --branch slow --only 1 >/dev/null 2>&1; rc=$?
+assert_eq "70" "$rc" "a lock that is a symlink to a file is refused"
+assert_eq "keep" "$(cat "$ld/kept")" "and the file it names keeps what it said"
+printf 'keep\n' > "$ld/hard"; ln "$ld/hard" "$ld/hard.lock"
+FM_GATE_LOCK="$ld/hard.lock" "$GATE" --task T-X --repo "$sl" --branch slow --only 1 >/dev/null 2>&1; rc=$?
+assert_eq "70" "$rc" "a lock that is a hard link to another file is refused"
+assert_eq "keep" "$(cat "$ld/hard")" "and that file keeps what it said"
+mkfifo "$ld/fifo.lock"
+assert_ok "finishes 20 \"FM_GATE_LOCK='$ld/fifo.lock' '$GATE' --task T-X --repo '$sl' --branch slow --only 1; test \\\$? = 70\"" \
+  "a lock that is not a regular file is refused, and does not hang the run"
+
 # A run inside a run that holds the same lock would wait for ever, and one
 # that skipped the lock would not be serialized: it is refused, and says so.
 # A suite that runs the gate takes a lock of its own (see below).
@@ -409,13 +437,23 @@ done
 # or a copy of every bin/fm-*.sh - sets a lock of its own. On the machine's
 # lock it would wait on real gate runs and hold them up, and inside one it is
 # refused. A line that only reads the script (sed, grep, cat) does not run it.
-reaching="$(cd "$ROOT" && grep -lE 'ROOT"?/bin/fm-(gate|run|\*)\.sh' tests/*.sh)"
-assert_contains " $(tr '\n' ' ' <<<"$reaching")" " tests/e2e-loop.test.sh " "the sweep finds a suite that copies fm-run.sh"
+# Every source read here and below goes through code(), so a comment that says
+# what an assertion looks for can neither satisfy it nor put a suite in a list.
+code() {  # code <file> ; its lines with shell, // and one-line HTML comments emptied
+  sed -E -e 's@^[[:space:]]*(#|//).*$@@' -e 's@[[:space:]](#|//)[[:space:]].*$@@' -e 's@<!--.*-->@@g' "$1"
+}
+cmt="$(mktemp)"
+printf '# FM_GATE_LOCK=x\n  // GATE_NUMBERS=[1];\nrun ok # FM_GATE_LOCK=y\n<!-- gates[n-1] -->\nkept\n' > "$cmt"
+assert_eq "run ok kept" "$(code "$cmt" | tr -s '\n' ' ' | sed 's/^ //; s/ $//')" \
+  "a comment line, a trailing comment and an HTML comment are not code"
+reaching="$(cd "$ROOT" && for f in tests/*.sh; do
+  code "$f" | grep -E 'ROOT"?/bin/fm-(gate|run|\*)\.sh' >/dev/null && printf '%s\n' "$f"; done)"
+assert_contains " $(tr '\n' ' ' <<<"$reaching")" " tests/e2e-loop.test.sh " "the sweep finds a suite that runs the gate through a copy"
 while IFS= read -r f; do
   [ -n "$f" ] || continue
-  runs="$(grep -E 'ROOT"?/bin/fm-(gate|run|\*)\.sh' "$ROOT/$f" | grep -vE '(sed|grep|cat|awk) [^|]*ROOT"?/bin/fm-')"
+  runs="$(code "$ROOT/$f" | grep -E 'ROOT"?/bin/fm-(gate|run|\*)\.sh' | grep -vE '(sed|grep|cat|awk) [^|]*ROOT"?/bin/fm-')"
   [ -n "$runs" ] || continue
-  assert_ok "grep -qE 'FM_GATE_LOCK=' '$ROOT/$f'" "$f runs the real gate, and sets its own FM_GATE_LOCK"
+  assert_contains "$(code "$ROOT/$f")" "FM_GATE_LOCK=" "$f runs the real gate, and sets its own FM_GATE_LOCK"
 done <<<"$reaching"
 
 # --- the gate numbers are the same everywhere that reads them (T-114) ---
@@ -424,13 +462,13 @@ done <<<"$reaching"
 nums="$(sed -n 's/^g \([0-9]*\) .*/\1/p' "$GATE" | tr '\n' ' ' | sed 's/ $//')"
 assert_eq "1 2 4 5 6 7" "$nums" "fm-gate.sh runs gates 1, 2, 4, 5, 6 and 7; 3 is retired"
 csv="$(tr ' ' ',' <<<"$nums")"
-assert_contains "$(tr -d ' ' < "$ROOT/board/public/index.html")" "GATE_NUMBERS=[$csv];" \
+assert_contains "$(code "$ROOT/board/public/index.html" | tr -d ' ')" "GATE_NUMBERS=[$csv];" \
   "the board's merge checklist lists those gates"
-assert_contains "$(tr -d ' ' < "$ROOT/board/server.ts")" "GATE_NUMBERS=[$csv];" \
+assert_contains "$(code "$ROOT/board/server.ts" | tr -d ' ')" "GATE_NUMBERS=[$csv];" \
   "the board's failed-gate badge accepts those gates"
-assert_contains "$(cat "$ROOT/bin/fm-review.sh")" "for n in $nums; do" \
+assert_contains "$(code "$ROOT/bin/fm-review.sh")" "for n in $nums; do" \
   "the review prompt looks for a result line from each of them"
-assert_contains "$(cat "$ROOT/tests/diagram.test.sh")" "for n in $nums; do" \
+assert_contains "$(code "$ROOT/tests/diagram.test.sh")" "for n in $nums; do" \
   "the diagram suite checks each of their labels"
 for n in $nums; do
   assert_ok "jq -e 'has(\"gate$n\")' '$ROOT/i18n/ui.en.json' >/dev/null" "gate $n has a board label"
@@ -459,10 +497,13 @@ assert_eq "" "$sweep" "no file in the repository still counts seven gates, or ru
 # keeps a slot per number 1-7 and the retired slot 3 is never shown. Read by
 # position, a seven-slot list shows each gate from 4 on with the value of the
 # gate before it, and gate 7 with gate 6's.
-board="$(tr -d ' ' < "$ROOT/board/public/index.html")"
+board="$(code "$ROOT/board/public/index.html" | tr -d ' ')"
 assert_contains "$board" "gates[n-1]" "the board reads a merge card's gates by gate number"
 assert_lacks "$board" "gates[i]" "and never by position in its own list"
-producers="$(cd "$ROOT" && git grep -hoE 'gates: *\[[0-9, ]*\]' -- . ':!design/proposals/' 2>&1)"
+# comment lines are dropped here too: a commented-out card is no producer
+nocomment() { grep -vE '^[[:space:]]*(#|//|\*|/\*)' || true; }
+producers="$(cd "$ROOT" && git grep -hE 'gates: *\[[0-9, ]*\]' -- . ':!design/proposals/' 2>&1 \
+  | nocomment | grep -oE 'gates: *\[[0-9, ]*\]')"
 assert_ne "" "$producers" "there are merge cards to check the shape of"
 while IFS= read -r p; do
   [ -n "$p" ] || continue
@@ -470,7 +511,8 @@ while IFS= read -r p; do
   assert_eq "6" "$slots" "a merge card's gates carry one slot per number 1-7: $p"
 done <<<"$producers"
 # and whatever renders the checklist expects one line per gate that exists
-counts="$(cd "$ROOT" && git grep -hoE '\.gates li"\)\)\.toHaveCount\([0-9]+\)' -- tests/ 2>&1)"
+counts="$(cd "$ROOT" && git grep -hE '\.gates li"\)\)\.toHaveCount\([0-9]+\)' -- tests/ 2>&1 \
+  | nocomment | grep -oE '\.gates li"\)\)\.toHaveCount\([0-9]+\)')"
 assert_ne "" "$counts" "the end-to-end suite counts the checklist's lines"
 while IFS= read -r c; do
   [ -n "$c" ] || continue

@@ -29,6 +29,8 @@ set -uo pipefail
 # there. One guarantee, in one place; the repository's own lint fails if a
 # script that dispatches is missing it.
 exec < /dev/null
+# kept whole: the lock below re-runs this script once, with the lock open
+_fm_argv=("$@")
 
 REPO=''; TASK=''; BRANCH=''; PR=''; ONLY=''
 BASE="${FM_BASE:-main}"
@@ -73,8 +75,6 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
 
-cd "$REPO" || { echo "fm-gate: no repo at $REPO" >&2; exit 64; }
-
 # ---- one gate run at a time on this machine ------------------------------
 # The lock is the kernel's: flock on descriptor 8, taken through perl because
 # macOS ships no flock(1). The kernel drops it when the holder exits, however
@@ -90,11 +90,35 @@ if [ "${FM_GATE_LOCK_HELD:-}" = "$LOCK" ]; then
   echo "fm-gate: this run is inside a gate run that holds $LOCK; give it its own FM_GATE_LOCK" >&2
   exit 70
 fi
-# made writable by every user, so each can name itself in it
-( umask 000; : >> "$LOCK" ) 2>/dev/null
-[ -r "$LOCK" ] && exec 8< "$LOCK" || {
-  echo "fm-gate: cannot open the gate lock $LOCK; set FM_GATE_LOCK to a file this user can create" >&2
-  exit 70; }
+# The path is in a directory every user writes, so anyone may have put a
+# symlink or a hard link to some other file there first. The shell's own
+# redirections follow a symlink, so none of them ever opens it: perl opens it
+# once, refusing a symlink (O_NOFOLLOW, which also never creates through one)
+# and anything but a regular file with that one name, puts it on descriptor
+# 8, and runs this script again in the same process with it open. Every read
+# and write of the lock after that goes through the descriptor. A new file is
+# made writable by every user, so each can name itself in it.
+if [ "${FM_GATE_LOCK_OPEN:-}" != "$$:$LOCK" ]; then
+  exec perl -MFcntl -MPOSIX=dup2 -e '
+    my ($path, @cmd) = @ARGV;
+    my $no = sub { print STDERR "fm-gate: cannot use the gate lock $path: $_[0]; fix or remove that file",
+      " (only a test fixture sets its own FM_GATE_LOCK; a real gate run keeps the machine lock)\n"; exit 70 };
+    my $fh; my $mask = umask 0;
+    sysopen($fh, $path, O_RDWR | O_CREAT | O_NOFOLLOW | O_NONBLOCK, 0666)
+      or sysopen($fh, $path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+      or $no->("$!");
+    umask $mask;
+    my @st = stat $fh;
+    -f _ or $no->("it is not a regular file");
+    $st[3] == 1 or $no->("it has another name, a hard link");
+    my $fd = fileno $fh;
+    if ($fd == 8) { fcntl($fh, F_SETFD, 0) or $no->("$!") }
+    else { defined dup2($fd, 8) or $no->("$!") }
+    $ENV{FM_GATE_LOCK_OPEN} = "$$:$path";
+    exec { $cmd[0] } @cmd or $no->("$!");
+  ' "$LOCK" "$BASH" "${BASH_SOURCE[0]}" ${_fm_argv[@]+"${_fm_argv[@]}"}
+fi
+unset FM_GATE_LOCK_OPEN
 # take_lock <wait 0|1> ; the descriptor is shared with this shell, so the
 # lock outlives perl and is held until this shell and its children let go
 take_lock() {
@@ -102,12 +126,18 @@ take_lock() {
     exit(flock($l, $ARGV[0] ? LOCK_EX : LOCK_EX | LOCK_NB) ? 0 : 1)' "$1"
 }
 if ! take_lock 0; then
-  holder="$(head -n 1 "$LOCK" 2>/dev/null)"
+  holder="$(perl -e 'open(my $l, "<&=", 8) or exit 0; sysseek($l, 0, 0);
+    sysread($l, my $b, 32); print $1 if defined $b && $b =~ /^(\d+)/' 2>/dev/null)"
   echo "fm-gate: waiting for the gate run holding $LOCK${holder:+ (pid $holder)}" >&2
   take_lock 1 || { echo "fm-gate: could not take the gate lock $LOCK" >&2; exit 70; }
 fi
-printf '%s\n' "$$" > "$LOCK" 2>/dev/null || :
+# through the descriptor, not the path; a lock opened read-only (another
+# user's file) keeps whatever it said
+perl -e 'open(my $l, "+<&=", 8) or exit 0; truncate($l, 0) or exit 0;
+  sysseek($l, 0, 0); syswrite($l, "$ARGV[0]\n")' "$$" 2>/dev/null || :
 export FM_GATE_LOCK_HELD="$LOCK"
+
+cd "$REPO" || { echo "fm-gate: no repo at $REPO" >&2; exit 64; }
 
 # ---- the project contract ------------------------------------------------
 # Which toolchain a project uses is its own business. config.yaml's project:
