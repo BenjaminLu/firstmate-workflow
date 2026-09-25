@@ -249,6 +249,41 @@ missing; a later turn reuses that id rather than taking another. Missing or
 invalid authored input is reported as no card created. Only a successful
 request is announced as asking the captain.
 
+**Only a decision request rings (T-096).** A card the captain must answer can
+sit unseen while the captain is not looking at the board, so inside Herdr
+(`HERDR_ENV=1`, which Herdr exports and its own `herdr --skill` tests for) a
+successful `fm-decide.sh --request`, of any kind, merge included, calls
+`herdr notification show` once: the title names the project, the task and
+the kind, the body is the card's one-line question in the captain's
+language, `zh-TW`, the board's default locale (I3; the board's own choice
+lives in `localStorage`, where no script can read it), and the sound is
+`request`. The project is the one the card is filed under: the project it
+records, else, as the board reads a card that records none, `default_project`,
+else the self project. `FM_PROJECT` matters only through the card it chose.
+A marker under
+`state/runtime/notified/` makes it one per id, ever; an answered or withdrawn
+card is never announced, and awaiting or answering one rings nothing.
+`config.yaml`'s `notifications.herdr: false` turns it off and
+`notifications.sound: false` sends `--sound none`; both default to true when
+the keys are absent. The keys are read in a subshell, so the reader cannot
+change the request's options or variables. A `config.yaml` whose reader
+(`bin/fm-config.sh`) is missing fails closed: it rings nothing and says so,
+because a `herdr: false` nobody could read still counts. Like the diagram,
+it is decoration on the request. A `herdr` that fails, a Herdr with no
+`herdr` command, and a `herdr` that has not answered after 10 seconds
+(`FM_NOTIFY_SECONDS`) are each reported on standard error. The last is
+reported as a timeout. In every case the card is still requested and the
+request still exits 0. Outside Herdr nothing is called and nothing is written,
+not even the marker directory. The tests' Herdr stub answers only what
+herdr 0.8.0 was captured answering: a call, a refused sound (exit 2), no
+server (exit 1).
+
+Nothing else notifies. CI turning red, a worker blocking or crashing, a review
+rejecting, a protocol violation: those are crew weather, and the board shows
+them. Each is either handled by firstmate or ends in a decision card, and that
+card is what rings. A sound for every event would teach the captain to ignore
+the sound, and then the one that needs an answer is missed too.
+
 The board atomically publishes a response, invokes `fm-emit.sh` once with
 `decision_made` and `data.decision`, then handles any authorized A merge.
 Awaiters only observe the record; they do not emit a second event. Repeating
@@ -772,6 +807,45 @@ again only after an `unparked`. A `closed` task — which is what a drop on the
 board writes — is never started, and an `unparked` does not bring it back.
 Neither counts as merged, so a task that depends on one waits, and its backlog
 card names the parked or dropped task as its blocker.
+
+**A task that turns ready is judged before it is dispatched (T-059).** At startup
+and after every merge firstmate runs `bin/fm-ready.sh list`, which prints the
+tasks ready by the board's rule and marks those not yet judged. For each one it
+re-reads the spec against current `main` and raises a choice card: A proceed,
+B rescope, C park, D drop, with its recommendation and the evidence in `main`.
+The card's id is allocated with `fm-decide.sh --allocate` like any other card's,
+and a C or D is carried out as the `parked` or `closed` event the board's park
+and drop write (T-058).
+`fm-ready.sh judged --task <id> --decision <D-id>` records the card under
+`state/ready/`, written to a temporary file and renamed into place. A record
+belongs to one readiness episode — the task's dependency list and where in the
+log the last of them merged, or the task was unparked — so a task that goes
+back to backlog, or is parked, and returns is judged again. A trip can leave
+the episode as it was: a dependency added and removed again before it merged.
+So `list` and `cleared` also end every judgment whose task they see out of
+ready or on another episode, replacing its record with one that names no
+card. Firstmate runs `list` after every merge, which is how `design/tasks/`
+changes, and `fm-dispatch.sh` runs `cleared` every tick; a trip made wholly
+between two runs goes unseen. Like the board, it reads a park only on
+untouched work. A decision card about a task does not take it off the list,
+and the board keeps a ready task in the ready lane while its readiness card is
+its only open card. `fm-dispatch.sh` starts only what `fm-ready.sh cleared`
+lists: ready, judged this time, and answered A on the board, which offers D
+only on a card that does. The A must be recorded for that task on a choice
+card; an A on another task's card or on a merge card clears nothing. An
+adopted skill update (SK-*) was judged by its own adoption card, D-SK-*,
+answered A, so it gets no second card the first time it is ready; that
+answer stands only while the task has not been unparked and has never been
+seen with dependencies other than the ones it was adopted with. After either
+it is unjudged, and it cannot get a readiness card: `fm-decide.sh` allocates
+ids and takes authored details only for `T-*` tasks. So it stays held, and
+firstmate tells the captain, until the captain orders it directly.
+`fm-dispatch.sh` holds every other ready task, and
+starts nothing if it cannot read the answers. A task the captain orders
+directly, or a completed rescope, is started with
+`fm-dispatch.sh --task <id>`: the order lifts the
+judgment check and no other, so greenlit, dependencies, park, drop and the
+concurrency limit still hold, and it says which one held the task.
 
 | # | Gate | How it is checked |
 |---|---|---|
@@ -1851,6 +1925,26 @@ dispatch to it; a failure refuses dispatch with exit `70` and names the item:
   protects `main`, `master` and the project's `base`. The hooks are never
   copied into the target's tree;
 - the captain's credentials able to push branches and open pull requests.
+
+`fm-project.sh sync <name>` makes the clone that way (T-048): it clones
+`<owner>/<repo>` from `FM_GITHUB_URL` (GitHub unless a fixture stands in),
+or fetches and prunes the clone already there; sets `core.hooksPath` to the
+engine root's `.githooks/` and `firstmate.base` to the project's `base` in
+the clone's local config; and adds `.fm-*` to its `.git/info/exclude`. It
+runs git only in a directory that is its own repository, reached without a
+symlink, under `state/projects/<name>/`, whose `origin` is the project's
+repository; anything else is refused with exit `70`. The guard and both
+hooks read `firstmate.base` and protect it on top of `FM_PROTECTED`
+(`main master`), so a checkout without the key — the self project's among
+them — keeps exactly that set, and a task worktree of the clone shares it.
+`verify` checks the protection, public-only (15.8) and guard items above,
+through `gh api` for the base's protection and the repository. It also
+checks the clone's `origin`, since a guarded clone of another repository
+guards nothing of the target's, and takes the hooks directory from git
+itself, which expands `~` and reads a relative path from the clone. It
+names every missing one before it exits `70`. The workflow and the
+credentials are not machine-checked yet. For the self project both
+subcommands are no-ops that succeed.
 
 **What firstmate never writes into a target:**
 

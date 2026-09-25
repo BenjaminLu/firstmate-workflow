@@ -420,9 +420,10 @@ function render(s) {
   };
   const full = d => {
     const gates = d.gates || [], content = localized(d), pick = picks.get(d.id);
-    const options = ['A','B','C'].map(k => {
+    // D only where the card offers it: a readiness card's drop (T-059)
+    const options = ['A','B','C', ...(d.details?.en?.options?.D ? ['D'] : [])].map(k => {
       const o = content?.options?.[k];
-      return `<button class="opt" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" ${sent.has(d.id)?'disabled':''}>${k} · ${esc(o ? words(o.description) : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'))}</button>` +
+      return `<button class="opt" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" ${sent.has(d.id)?'disabled':''}>${k}${o || k !== 'D' ? ' · ' : ''}${esc(o ? words(o.description) : k === 'D' ? '' : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'))}</button>` +
         (o ? `<p class="tradeoffs"><b>${esc(t('pros'))}</b> ${said(words(o.pros))}<br><b>${esc(t('cons'))}</b> ${said(words(o.cons))}</p>` : '');
     }).join('');
     return `<div class="dcard" id="card-${esc(d.id)}"><div class="meta">${whose(d)}` +

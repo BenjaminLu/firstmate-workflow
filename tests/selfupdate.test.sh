@@ -31,7 +31,8 @@ fixture() {
   local d; d="$(mktemp -d)"
   mkdir -p "$d/bin" "$d/board" "$d/design" "$d/state" "$d/skills/worker" "$d/skills/reviewer"
   cp "$ROOT/bin/fm.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-decide.sh" \
-     "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-dispatch.sh" "$ROOT/bin/fm-herdr.py" "$d/bin/"
+     "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-dispatch.sh" "$ROOT/bin/fm-ready.sh" \
+     "$ROOT/bin/fm-herdr.py" "$d/bin/"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$d/bin/fm-worker.sh"; chmod +x "$d/bin/fm-worker.sh"
   printf 'concurrency: 3\n' > "$d/config.yaml"
   printf '# Worker\n\nYou are one crew member on one task.\n' > "$d/skills/worker/SKILL.md"
@@ -369,6 +370,11 @@ rm -rf "$tt"
 # =========================================================================
 # 3. the proposal travels the ordinary dispatcher
 # =========================================================================
+# the captain's A on D-SK-001 above is its judgment (T-059): no readiness
+# card, no hand-written record, and the dispatcher still starts it
+assert_contains "$(bash "$d/bin/fm-ready.sh" list --repo "$d" 2>/dev/null)" "SK-001	judged	D-SK-001" \
+  "the adoption decision counts as the skill update's judgment"
+assert_fail "test -e '$d/state/ready/SK-001.json'" "and no readiness record was written for it"
 assert_contains "$(FM_ROOT="$d" "$d/bin/fm-dispatch.sh" --repo "$d" --dry-run 2>/dev/null | sed '/^fm-dispatch/d')" \
   "SK-001" "the same dispatcher picks it up, with no special case for a skill-update"
 
