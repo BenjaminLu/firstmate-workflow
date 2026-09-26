@@ -973,9 +973,13 @@ const json = (body: unknown, status = 200, headers: Record<string, string> = {})
 // across restarts: `<config>/firstmate/board-<port>.secret`, mode 0600, where
 // <config> is $XDG_CONFIG_HOME when that is an absolute path and ~/.config
 // otherwise. Nothing the board sends, logs or emits carries it.
-//   - the captain's browser holds a cookie derived from it, given once in
-//     exchange for a one-time code (/login) the opener derives from it;
-//   - a script on the operator's machine sends it as `Authorization: Bearer`.
+//   - the captain's tab holds a token derived from it, given once in exchange
+//     for a one-time code (/login) the opener derives from it, and kept in
+//     that tab's sessionStorage;
+//   - a script on the operator's machine sends the secret itself.
+// Both go as `Authorization: Bearer`, which a browser never adds on its own.
+// There is no cookie: a browser sends a cookie for 127.0.0.1 to every port on
+// it, so any loopback server the captain's browser visits would receive it.
 // Either way the request also carries the board's own Origin and a JSON body,
 // so no form and no page of another origin gets through.
 const CONFIG_DIR = join((() => {
@@ -1010,29 +1014,21 @@ const loadSecret = (port: number): string => {
   } finally { closeSync(fd); }
 };
 // set once the port is known, before the first request is served
-let SECRET = "", ORIGINS: string[] = [], COOKIE = "", STARTED = 0;
+let SECRET = "", ORIGINS: string[] = [], STARTED = 0;
 const mac = (message: string) => createHmac("sha256", SECRET).update(message).digest("hex");
 const same = (a: string, b: string) => {
   const x = Buffer.from(a), y = Buffer.from(b);
   return x.length === y.length && timingSafeEqual(x, y);
 };
-// The browser's session: the cookie's value is derived from the secret and
-// the port, so it outlives a board restart exactly as long as the secret does.
-const sessionValue = () => mac(`session:${ORIGINS[0]}`);
-const cookieOf = (req: Request, name: string) => {
-  for (const part of (req.headers.get("cookie") ?? "").split(";")) {
-    const at = part.indexOf("=");
-    if (at > 0 && part.slice(0, at).trim() === name) return part.slice(at + 1).trim();
-  }
-  return null;
-};
-const hasSession = (req: Request) => {
-  const v = cookieOf(req, COOKIE);
-  return v !== null && same(v, sessionValue());
-};
-const hasBearer = (req: Request) => {
+// The tab's token: derived from the secret and the board's origin, so it
+// outlives a board restart exactly as long as the secret does. Removing the
+// secret file and restarting the board revokes every token at once.
+const sessionToken = () => mac(`session:${ORIGINS[0]}`);
+// The secret (a script) or the tab's token (the captain's page). A cookie is
+// never read: what a browser volunteers says nothing about who is asking.
+const mayWrite = (req: Request) => {
   const m = /^Bearer ([^\s]+)$/.exec(req.headers.get("authorization") ?? "");
-  return m !== null && same(m[1], SECRET);
+  return m !== null && (same(m[1], SECRET) || same(m[1], sessionToken()));
 };
 // A one-time code: <issued ms>.<nonce>.<mac>, the mac over the board's origin,
 // the time and the nonce. Good for 60 seconds from its issue, never for one
@@ -1055,20 +1051,22 @@ const redeem = (code: unknown): boolean => {
 const refuse = (code: string, error: string) => json({ error, code }, 403);
 const isJson = (req: Request) => /^application\/json\s*(;|$)/i.test(req.headers.get("content-type") ?? "");
 const writeRefusal = (req: Request): Response | null => {
-  if (!hasSession(req) && !hasBearer(req)) return refuse("writeCredential", "this board is read-only without the captain's credential");
+  if (!mayWrite(req)) return refuse("writeCredential", "this board is read-only without the captain's credential");
   if (!ORIGINS.includes(req.headers.get("origin") ?? "")) return refuse("writeOrigin", "not from the board's own page");
   if (!isJson(req)) return refuse("writeJson", "json only");
   return null;
 };
 // The page that takes the one-time code out of the address, trades it for the
-// cookie and replaces itself, so the code stays in neither the address bar nor
-// the history. It holds nothing of its own.
+// tab's token, keeps that in this tab's sessionStorage (one origin, port
+// included, one tab) and replaces itself, so the code stays in neither the
+// address bar nor the history. It holds nothing of its own.
 const LOGIN_PAGE = `<!doctype html><meta charset="utf-8"><title>firstmate</title><script>
 (async () => {
   const code = location.hash.slice(1) || new URLSearchParams(location.search).get("code") || "";
   history.replaceState(null, "", "/login");
-  await fetch("/login", { method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code }) }).catch(() => null);
+  const r = await fetch("/login", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code }) }).then(x => x.ok ? x.json() : null).catch(() => null);
+  if (r && typeof r.token === "string") sessionStorage.setItem("board.token", r.token);
   location.replace("/");
 })();
 </script>`;
@@ -1097,16 +1095,17 @@ const server = Bun.serve({
 
     // whether this tab may write: the page disables its controls and says so
     // when it may not. A yes or a no, never the credential.
-    if (url.pathname === "/api/session") return json({ writable: hasSession(req) || hasBearer(req) });
+    if (url.pathname === "/api/session") return json({ writable: mayWrite(req) });
 
-    // The captain's browser gets in once, through the one-time address the
-    // opener made (bin/fm-herdr.py board_login_url). The code is traded here for
-    // the session cookie; a wrong, used or expired one changes nothing.
+    // The captain's tab gets in once, through the one-time address the opener
+    // made (bin/fm-herdr.py board_login_url). The code is traded here for the
+    // tab's token, in the body and never as a cookie; a wrong, used or expired
+    // one changes nothing.
     if (url.pathname === "/login" && req.method === "POST") {
       if (!ORIGINS.includes(req.headers.get("origin") ?? "")) return refuse("writeOrigin", "not from the board's own page");
       if (!isJson(req)) return refuse("writeJson", "json only");
       return req.json().then((body: any) => redeem(body?.code)
-        ? json({ ok: true }, 200, { "set-cookie": `${COOKIE}=${sessionValue()}; HttpOnly; SameSite=Strict; Path=/` })
+        ? json({ ok: true, token: sessionToken() }, 200, { "cache-control": "no-store" })
         : refuse("loginRefused", "that code is wrong, used or expired"))
         .catch(() => refuse("loginRefused", "that code is wrong, used or expired"));
     }
@@ -1329,7 +1328,6 @@ const server = Bun.serve({
 try {
   SECRET = loadSecret(server.port);
   ORIGINS = [`http://127.0.0.1:${server.port}`, `http://localhost:${server.port}`];
-  COOKIE = `firstmate_board_${server.port}`;
   STARTED = Date.now();
 } catch (e) {
   // the log is under state/, so it names neither the secret nor its path

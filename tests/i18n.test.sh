@@ -45,9 +45,17 @@ assert_eq "" "$missing" "every key the page asks for is in the dictionary"
 
 # The page shows a refusal by the code the server sends (T-122's 403s among
 # them), so every code the server can send is a key in both dictionaries.
-codes="$(grep -oE 'refuse\("[A-Za-z]+"|code: "[A-Za-z]+"' "$ROOT/board/server.ts" \
-  | sed -E 's/^.*"([A-Za-z]+)"$/\1/' | sort -u)"
+# The scan reads the code with its // comments off, so a comment that quotes
+# a refusal neither adds a code nor stands in for one.
+server_code() { sed -e 's#^[[:space:]]*//.*$##' -e 's#[[:space:]]//.*$##' "$1"; }
+refusal_codes() { server_code "$1" | grep -oE 'refuse\("[A-Za-z]+"|code: "[A-Za-z]+"' \
+  | sed -E 's/^.*"([A-Za-z]+)"$/\1/' | sort -u; }
+codes="$(refusal_codes "$ROOT/board/server.ts")"
 assert_contains "$codes" "writeCredential" "the scan finds the server's refusal codes"
+scratch="$(mktemp)"
+printf '  // refuse("commentedOut", "no")\n  return refuse("realOne", "yes"); // code: "trailing"\n' > "$scratch"
+assert_eq "realOne" "$(refusal_codes "$scratch")" "and none that only a comment names (the control)"
+rm -f "$scratch"
 missing=''
 for k in $codes; do
   jq -e --arg k "$k" 'has($k)' "$en" >/dev/null 2>&1 || missing="$missing en:$k"

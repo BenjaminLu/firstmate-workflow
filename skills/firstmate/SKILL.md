@@ -88,9 +88,13 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
    root and HTTP response before reuse. Open it, at startup and whenever the
    captain asks, with `bin/fm.sh board --repo <root>` (`fm-session.sh start`
    does the same): it sends the browser to a one-time `/login#<code>` address,
-   good once for 60 seconds, and only a tab opened that way can write. Never
-   open, print or paste the plain URL as the way in; a tab without the sign-in
-   is read-only and says so, and the answer is to run `bin/fm.sh board` again.
+   good once for 60 seconds, and only the tab opened that way can write. The
+   sign-in is a token kept in that tab's `sessionStorage`, not a cookie:
+   browsers send cookies to every port on 127.0.0.1, so any loopback server
+   the captain visits would receive one. A new tab or window is read-only and
+   says so; the answer is to run `bin/fm.sh board` again. Never open, print or
+   paste the plain URL as the way in. If a token or the secret may have
+   leaked, revoke them all: delete the secret file and restart the board.
    Verify observable navigation or report that only the opener was invoked; if
    unavailable, report the limitation. A server start message alone does not
    prove the page loaded.

@@ -276,13 +276,19 @@ let latest, feedback = null, initialized = false;
 let writable = null;
 const readOnly = () => writable === false;
 const NO_CREDENTIAL = 'writeCredential';
+// The credential is the token the one-time sign-in (/login) left in this
+// tab's sessionStorage, sent as a bearer header on every write. Never a
+// cookie: a browser sends those to every port on 127.0.0.1, and storage is
+// the board's origin's alone, port included, and this tab's alone.
+const token = () => { try { return sessionStorage.getItem('board.token') || ''; } catch (_) { return ''; } };
+const credential = headers => token() ? { ...headers, authorization: 'Bearer ' + token() } : headers;
 function showWritable() {
   const line = document.getElementById('readOnly');
   line.hidden = !readOnly();
   line.textContent = readOnly() ? t("readOnly") : '';
 }
 function checkSession() {
-  return fetch('/api/session').then(r => r.json()).then(s => { writable = s.writable === true; })
+  return fetch('/api/session', { headers: credential({}) }).then(r => r.json()).then(s => { writable = s.writable === true; })
     .catch(() => {}).finally(() => { showWritable(); if (latest) render(latest); });
 }
 // T-058: the card whose menu is open, the task a drop is waiting to be
@@ -550,7 +556,7 @@ function render(s) {
     // all a tab without the credential gets
     e.preventDefault();
     if (readOnly()) { open(a.href, '_blank'); return; }
-    fetch('/open', { method: 'POST', headers: { 'content-type': 'application/json' },
+    fetch('/open', { method: 'POST', headers: credential({ 'content-type': 'application/json' }),
       body: JSON.stringify({ path: a.dataset.open }) })
       .then(r => { if (r.status === 403) refusedFor(r.clone()); if (!r.ok) open(a.href, '_blank'); })
       .catch(() => open(a.href, '_blank'));
@@ -607,7 +613,7 @@ async function answer(id) {
   const chosen = picks.get(id), text = drafts.get(id), decision = latest.pending.find(d => d.id === id);
   refused.delete(id); sent.add(id); SHIP.unlock(); feedback = {key:'sending'}; render(latest);
   const r = await fetch("/decisions", {
-    method: "POST", headers: { "content-type": "application/json" },
+    method: "POST", headers: credential({ "content-type": "application/json" }),
     body: JSON.stringify({ id, chosen, ...(chosen === 'custom' ? {text} : {}) }),
   }).then(x => x.status === 403 ? refusedFor(x) : x.json()).catch(() => ({ error: t("unreachable") }));
   sent.delete(id);
@@ -640,7 +646,7 @@ async function act(k, action) {
   menuOpen = null; confirming = null; taskFeedback = null;
   const task = taskByKey(k);
   const r = task && !readOnly() ? await fetch('/tasks', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST', headers: credential({ 'content-type': 'application/json' }),
     body: JSON.stringify({ task: task.id, action, ...(task.project ? { project: task.project } : {}) }),
   }).catch(() => null) : null;
   const said = r?.status === 403 ? await refusedFor(r) : null;

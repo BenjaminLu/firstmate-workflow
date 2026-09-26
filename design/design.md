@@ -1422,15 +1422,23 @@ web page open in the captain's browser; neither can write.
   ports. So the board refuses the round itself.
 - *Who may write.* Every route that changes state or starts a process -
   `POST /decisions`, `POST /tasks`, `POST /open`, and any writing route added
-  later - requires, all three: the session cookie or an `Authorization:
-  Bearer` of the secret; an `Origin` equal to the board's own
-  (`http://127.0.0.1:<port>`, or `http://localhost:<port>`); and a body
+  later - requires, all three: an `Authorization: Bearer` holding either the
+  captain's tab token or the secret itself; an `Origin` equal to the board's
+  own (`http://127.0.0.1:<port>`, or `http://localhost:<port>`); and a body
   declared `application/json`. Anything missing or wrong is 403 with a `code`
   the page translates (`writeCredential`, `writeOrigin`, `writeJson`), and
-  nothing is written, emitted, merged or spawned. `SameSite=Strict` does not
-  stop another loopback port - every port of 127.0.0.1 is the same site - so
-  the Origin is what refuses a page served by a crew round's test server, and
-  the JSON rule is what refuses a form.
+  nothing is written, emitted, merged or spawned. The Origin refuses a page
+  served by a crew round's test server, and the JSON rule refuses a form.
+- *Why there is no cookie.* Browsers do not keep cookies apart by port: a
+  cookie set by `127.0.0.1:4173` goes with every request the browser makes to
+  any `127.0.0.1:<port>`, and `SameSite=Strict` does not help, because every
+  loopback port is the same site. A crew round's dev server that the captain
+  opens would receive the cookie in its request headers and could replay it
+  with curl, sending any `Origin` it liked (`Origin` binds only browsers).
+  So the board sets no cookie and reads none. The captain's tab holds a
+  token in its `sessionStorage`, which belongs to one origin, port included,
+  and one tab. No other server ever receives it, and the browser never sends
+  it by itself: the page adds it as a header on each write.
 - *The secret.* When the board starts it reads, or makes when missing, 256
   random bits as hex in `$XDG_CONFIG_HOME/firstmate/board-<port>.secret`
   (`~/.config/firstmate/board-<port>.secret` when `XDG_CONFIG_HOME` is not an
@@ -1441,6 +1449,11 @@ web page open in the captain's browser; neither can write.
   tab keeps working, and a new one is made only when the file is missing. It
   is never printed, logged, emitted, written under `state/`, or put in a URL
   that stays in history or in any response.
+- *Revoking.* Every token and every bearer is derived from, or is, the
+  secret. Deleting the secret file and restarting the board makes a new
+  secret, and every token a tab holds and every copy of the old secret is
+  refused from then on. The board has no other revocation, and a token
+  otherwise lives as long as the secret does.
 - *The one-time open.* `bin/fm.sh board` (and `fm-session.sh start`, through
   `bin/fm-herdr.py` `board_start`) sends the browser to `/login#<code>`, the
   code `<issued ms>.<nonce>.<HMAC-SHA256(secret, "login:<origin>:<issued>.<nonce>")>`.
@@ -1448,14 +1461,23 @@ web page open in the captain's browser; neither can write.
   issued before it started, so a restart cannot replay one.
   `FM_BOARD_CODE_TTL_MS` can shorten the 60 seconds, never lengthen them; it
   exists so a test sees expiry apart from the start-time rule. The page at
-  `/login` posts the code (with its Origin, as JSON) and gets
-  `Set-Cookie: firstmate_board_<port>=<HMAC(secret, "session:<origin>")>; HttpOnly;
-  SameSite=Strict; Path=/`, then replaces its address with `/`, so the code
-  stays in neither the address bar nor the history. A used, expired or wrong
-  code is 403 and sets nothing. On macOS the address goes to `osascript` on
+  `/login` posts the code (with its Origin, as JSON) and gets back, in the
+  JSON body, the tab's token `HMAC-SHA256(secret, "session:<origin>")`. It
+  keeps the token in `sessionStorage` (`board.token`) and replaces its
+  address with `/`, so the code stays in neither the address bar nor the
+  history. A used, expired or wrong code is 403 and gives nothing. No
+  response ever carries `Set-Cookie`. The token belongs to the tab: a
+  reload, a navigation within the board and a board restart keep it, but a
+  new tab or window is read-only until the board is opened through a new
+  one-time address. This is by design (not `localStorage`, which every tab of
+  the origin would share for ever). On macOS the address goes to `osascript` on
   stdin, never in an argument list, because `ps` shows every process's
   arguments to every other and a code read there could be redeemed first; the
-  record in `state/session/board.json` holds the board's plain URL only. On
+  record in `state/session/board.json` holds the board's plain URL only. When
+  no secret can be read or no program can open a browser, nothing is opened,
+  the record carries `sign_in_error` (never the secret's path), and
+  `bin/fm.sh board` says so in one `fm board:` line and exits non-zero, as
+  it does when the board cannot start. On
   Linux `xdg-open` takes it as an argument, which `ps` can show for the moment
   it runs.
 - *Scripts.* A script on the operator's machine reads the secret file and
@@ -1465,13 +1487,13 @@ web page open in the captain's browser; neither can write.
 - *What stays readable.* `/`, the page's files, `/api/state`, `/api/i18n`,
   `/events`, `/file`, `/diff` and `/api/session` (whether this request may
   write: a yes or a no) answer anyone on the machine, as before. None carries
-  the secret, the cookie's value or a code. `/file` and `/diff` read only
+  the secret, a token or a code. `/file` and `/diff` read only
   paths that resolve inside the repository, and the page's files are served
   only when their real path is inside `board/public/`, so a symlink to the
   secret is refused.
 - *A tab without the credential.* The page asks `/api/session` when it loads
-  and after the stream reconnects. Without the cookie, or after a write is
-  refused for want of it, it shows one translated line - the tab is
+  and after the stream reconnects, sending its token if it holds one. Without
+  one, or after a write is refused for want of it, it shows one translated line - the tab is
   read-only, and `bin/fm.sh board` reopens it - disables every option,
   confirm button and custom answer, and offers no park, drop or drag. Opening
   a file falls back to the read-only viewer.

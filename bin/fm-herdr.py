@@ -1298,7 +1298,8 @@ def board_start(root):
         opener = shutil.which('osascript') if sys.platform == 'darwin' else None
         opener = opener or shutil.which('xdg-open') or shutil.which('open')
         opened, refused = False, None
-        if opener:
+        if not opener: refused = 'no program to open a browser with was found; nothing was opened'
+        else:
             try: opened = open_address(board_login_url(url, port))
             except (OSError, RuntimeError):
                 # said without the path: state/ never names where the secret is
@@ -1613,7 +1614,16 @@ def main(args):
         try: return roster_command(*args)
         except (OSError, ValueError) as error:
             print('fm roster: ' + str(error), file=sys.stderr); return 65
-    if mode == 'board': print(json.dumps(board_start(args[0]), indent=2)); return 0
+    if mode == 'board':
+        # a board that cannot start, or a tab that could not be signed in, is
+        # said in one line and a non-zero exit, never a traceback
+        try: record = board_start(args[0])
+        except (OSError, RuntimeError) as error:
+            print('fm board: ' + str(error), file=sys.stderr); return 70
+        print(json.dumps(record, indent=2))
+        if record.get('sign_in_error'):
+            print('fm board: ' + record['sign_in_error'], file=sys.stderr); return 69
+        return 0
     if mode == 'launch': launch(args[0], args[1], args[2:])
     if mode == 'transport': return transport(*args)
     if mode == 'pane-child': return pane_child(*args)

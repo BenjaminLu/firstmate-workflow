@@ -182,7 +182,7 @@ export async function startBoard(root: string, env: Record<string, string> = {})
     try {
       if ((await fetch(`${url}/api/state`)).ok) {
         const secret = readFileSync(join(config, "firstmate", `board-${port}.secret`), "utf8").trim();
-        sessions.set(url, { name: `firstmate_board_${port}`, value: createHmac("sha256", secret).update(`session:${url}`).digest("hex") });
+        sessions.set(url, secret);
         return { url, proc, root, recorder, config, secret };
       }
     }
@@ -203,22 +203,34 @@ export function stopBoard(b: { proc: ChildProcess; root: string; url?: string; c
 }
 
 // --- T-122: the captain's credential, for tests that are about something else ---
-// Every board a test starts is one the captain signed in to: `test` below puts
-// the board's session cookie in the browser before any page.goto to it, the
-// cookie the one-time sign-in gives. The sign-in itself, and a tab without
-// the cookie, have tests of their own that use a context this does not touch.
-const sessions = new Map<string, { name: string; value: string }>();
+// Every board a test starts is one the captain signed in to: the first
+// page.goto to a board in a test's `page` goes first through a one-time
+// sign-in address, as the opener's would, and the board's /login page leaves
+// the tab's token in sessionStorage, which later navigations in the tab keep.
+// Nothing is injected. The sign-in itself, and a tab without the token, have
+// tests of their own that use pages this does not touch.
+const sessions = new Map<string, string>();
 export const test = base.extend({
   page: async ({ page }, use) => {
-    const goto = page.goto.bind(page);
+    const goto = page.goto.bind(page), signed = new Set<string>();
     page.goto = (async (address: string, options?: Parameters<Page["goto"]>[1]) => {
-      const session = sessions.get(new URL(address).origin);
-      if (session) await page.context().addCookies([{ ...session, url: new URL(address).origin, httpOnly: true, sameSite: "Strict" }]);
+      const origin = new URL(address).origin, secret = sessions.get(origin);
+      if (secret && !signed.has(origin)) {
+        await goto(signInAddress({ url: origin, secret }));
+        await page.waitForURL(`${origin}/`);
+        if (!await page.evaluate(() => sessionStorage.getItem("board.token")))
+          throw new Error(`the one-time sign-in to ${origin} left no token`);
+        signed.add(origin);
+      }
       return goto(address, options);
     }) as Page["goto"];
     await use(page);
   },
 });
+// The token the board's /login hands a tab, derived as the board derives it:
+// for tests that look for it where it must not be.
+export const tabToken = (b: { url: string; secret: string }) =>
+  createHmac("sha256", b.secret).update(`session:${b.url}`).digest("hex");
 // What a script on the operator's machine writes with: the bearer from the
 // secret file and the board's own Origin.
 export const scriptHeaders = (b: { url: string; secret: string }) =>

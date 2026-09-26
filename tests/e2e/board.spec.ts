@@ -3,7 +3,7 @@
 // moves would fail on the animation and pass on the wrong crew.
 import { expect, type Page } from "@playwright/test";
 // `test` is the fixture's: every board a test starts is signed in to (T-122)
-import { test, makeRoot, startBoard, stopBoard, writeRegistry, writeProjects, readTasks, writeTasks, ROOT, details, scriptHeaders, signInAddress } from "./fixture";
+import { test, makeRoot, startBoard, stopBoard, writeRegistry, writeProjects, readTasks, writeTasks, ROOT, details, scriptHeaders, signInAddress, tabToken } from "./fixture";
 import { appendFileSync, readFileSync, existsSync, writeFileSync, rmSync, utimesSync, mkdirSync, chmodSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -909,8 +909,9 @@ test('the captain parks, unparks and drops a card by menu and by drag, and confi
     // a card in flight offers neither action, by either path
     await expect(page.locator('[data-task="T-W"] .cmenu')).toHaveCount(0);
     await expect(page.locator('[data-task="T-W"]')).not.toHaveAttribute('draggable','true');
+    // with the tab's own token (T-122), so the 409 is the board's rule, not a 403
     const refused = await page.evaluate(async () => (await fetch('/tasks',{method:'POST',
-      headers:{'content-type':'application/json'},body:JSON.stringify({task:'T-W',action:'park'})})).status);
+      headers:{'content-type':'application/json',authorization:'Bearer '+sessionStorage.getItem('board.token')},body:JSON.stringify({task:'T-W',action:'park'})})).status);
     expect(refused).toBe(409);
     expect(events().some(e => e.type === 'parked')).toBe(false);
 
@@ -1762,9 +1763,9 @@ test("the ship grows with the crew", async ({ page }) => {
 });
 
 // --- T-122: only the captain's browser writes ---------------------------------
-// These use a context of their own, so the fixture's cookie is not in it: the
-// tab gets in through the one-time address, or not at all.
-test('the one-time address signs a tab in once, keeps no code, and the card is answered end to end', async ({browser}) => {
+// These use pages the fixture does not sign in: the tab gets in through the
+// one-time address, or not at all.
+test('the one-time address signs one tab in once, keeps no code and sets no cookie, and the card is answered end to end', async ({browser}) => {
   const b = await startBoard(makeRoot(['working']));
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -1778,22 +1779,26 @@ test('the one-time address signs a tab in once, keeps no code, and the card is a
     expect(page.url()).not.toContain(code);
     await page.goBack().catch(() => null);
     expect(page.url()).not.toContain(code);
-    const cookie = (await context.cookies(b.url)).find(c => c.name === `firstmate_board_${new URL(b.url).port}`);
-    expect(cookie?.httpOnly).toBe(true);
-    expect(cookie?.sameSite).toBe('Strict');
-    expect(cookie?.path).toBe('/');
-    // no script on the page can read it
+    // the tab holds the token, in its own storage; the browser holds no cookie
     await page.goto(`${b.url}/?lang=en`);
-    expect(await page.evaluate(() => document.cookie)).not.toContain('firstmate_board_');
+    expect(await page.evaluate(() => sessionStorage.getItem('board.token'))).toBe(tabToken(b));
+    expect(await context.cookies()).toHaveLength(0);
+    expect(await page.evaluate(() => document.cookie)).toBe('');
     await expect(page.locator('#readOnly')).toBeHidden();
     await page.locator('#card-D-1 [data-c="A"]').click();
     await page.locator('#card-D-1 .confirm').click();
     await expect(page.locator('#orderFeedback')).toContainText('AYE, CAPTAIN!');
     await expect.poll(() => existsSync(b.recorder) ? readFileSync(b.recorder, 'utf8') : '').toContain('--pr 99');
+    expect(await context.cookies()).toHaveLength(0);
+    // the token is this tab's: another tab in the same browser is read-only
+    const second = await context.newPage();
+    await second.goto(`${b.url}/?lang=en`);
+    await expect(second.locator('#readOnly')).toBeVisible();
+    await expect(second.locator('#readOnly')).toHaveText(EN.readOnly);
     // the same address a second time signs nothing in
     await other.goto(address);
     await other.waitForURL(`${b.url}/`);
-    expect(await other.context().cookies(b.url)).toHaveLength(0);
+    expect(await other.evaluate(() => sessionStorage.getItem('board.token'))).toBeNull();
     await expect(other.locator('#readOnly')).toBeVisible();
   } finally { await context.close(); await other.context().close(); stopBoard(b); }
 });
@@ -1818,6 +1823,12 @@ test('a tab without the credential says it is read-only, in both languages, and 
     const status = await page.evaluate(async () => (await fetch('/decisions', {method:'POST',
       headers:{'content-type':'application/json'}, body:JSON.stringify({id:'D-1',chosen:'A'})})).status);
     expect(status).toBe(403);
+    // and so is one carrying what a cookie session would have held: the board
+    // reads no cookie
+    await context.addCookies([{ name: `firstmate_board_${new URL(b.url).port}`, value: tabToken(b), url: b.url }]);
+    const withCookie = await page.evaluate(async () => (await fetch('/decisions', {method:'POST', credentials:'include',
+      headers:{'content-type':'application/json'}, body:JSON.stringify({id:'D-1',chosen:'A'})})).status);
+    expect(withCookie).toBe(403);
     expect(existsSync(join(root, 'state/decisions/D-1.json'))).toBe(false);
     expect(existsSync(b.recorder)).toBe(false);
     await page.goto(`${b.url}/?lang=zh-TW`);
@@ -1825,20 +1836,36 @@ test('a tab without the credential says it is read-only, in both languages, and 
   } finally { await context.close(); stopBoard(b); }
 });
 
-test('a page of another origin cannot answer a card, even in the captain\'s signed-in browser', async ({page}) => {
+test('a server on another loopback port receives nothing from the captain\'s signed-in tab, and its page cannot answer a card', async ({page}) => {
   const root = makeRoot(['working']);
   const b = await startBoard(root);
   try {
-    await page.goto(`${b.url}/?lang=en`);   // signed in: the cookie is in this browser
+    await page.goto(`${b.url}/?lang=en`);   // signed in, through the one-time address
     await expect(page.locator('#readOnly')).toBeHidden();
-    // another loopback port is the same site, so SameSite lets the cookie go;
-    // the Origin is what stops it
+    // Another loopback port is the same site, and a browser would send it a
+    // cookie set for 127.0.0.1. So the other server records every header it
+    // is sent, and none may carry the credential.
     const { createServer } = await import('node:http');
-    const evil = createServer((_, res) => { res.setHeader('content-type', 'text/html'); res.end('<title>elsewhere</title>'); });
-    await new Promise<void>(r => evil.listen(0, '127.0.0.1', () => r()));
-    const port = (evil.address() as { port: number }).port;
+    const received: string[] = [];
+    const elsewhere = createServer((req, res) => {
+      received.push(JSON.stringify(req.headers));
+      res.setHeader('content-type', 'text/html'); res.end('<title>elsewhere</title>');
+    });
+    await new Promise<void>(r => elsewhere.listen(0, '127.0.0.1', () => r()));
+    const port = (elsewhere.address() as { port: number }).port;
     try {
+      // the same tab goes there, as following a link would
       await page.goto(`http://127.0.0.1:${port}/`);
+      await page.goto(`http://127.0.0.1:${port}/again`);
+      expect(received.length).toBeGreaterThanOrEqual(2);   // the control
+      for (const headers of received) {
+        expect(headers).not.toContain(tabToken(b));
+        expect(headers).not.toContain(b.secret);
+        expect(headers).not.toContain('firstmate_board_');
+      }
+      expect(await page.context().cookies()).toHaveLength(0);
+      // its page cannot read the board's storage, and what it sends is refused
+      expect(await page.evaluate(() => sessionStorage.getItem('board.token'))).toBeNull();
       const status = await page.evaluate(async (url) => {
         const r = await fetch(url + '/decisions', { method: 'POST', mode: 'no-cors', credentials: 'include',
           headers: { 'content-type': 'text/plain' }, body: JSON.stringify({ id: 'D-1', chosen: 'A' }) }).catch(() => null);
@@ -1848,6 +1875,12 @@ test('a page of another origin cannot answer a card, even in the captain\'s sign
       await page.waitForTimeout(500);
       expect(existsSync(join(root, 'state/decisions/D-1.json'))).toBe(false);
       expect(existsSync(b.recorder)).toBe(false);
-    } finally { evil.close(); }
+      // the control: back on the board, the same tab still writes
+      await page.goto(`${b.url}/?lang=en`);
+      await expect(page.locator('#readOnly')).toBeHidden();
+      await page.locator('#card-D-1 [data-c="A"]').click();
+      await page.locator('#card-D-1 .confirm').click();
+      await expect.poll(() => existsSync(b.recorder) ? readFileSync(b.recorder, 'utf8') : '').toContain('--pr 99');
+    } finally { elsewhere.close(); }
   } finally { stopBoard(b); }
 });

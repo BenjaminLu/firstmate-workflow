@@ -49,13 +49,37 @@ board_port() {   # board_port <log> <pid>: the port the server printed; 1 if it 
 # its secret under XDG_CONFIG_HOME, pointed here at a directory of this suite's
 # own, outside every fixture root, so no run writes into the operator's home.
 XDG_CONFIG_HOME="$(mktemp -d)"; export XDG_CONFIG_HOME
-# The same holds for every suite that starts a board: each names
+# The same holds for every suite that starts a board: each sets
 # XDG_CONFIG_HOME, or its board writes a secret into the operator's home.
-starters="$(git -C "$ROOT" grep -lE 'bun run .*server\.ts|"run", join\(.*server\.ts' -- tests)"
-assert_contains " $(printf '%s ' $starters)" " tests/crew-end-to-end.test.sh " "the sweep finds the suites that start a board"
-for f in $starters; do
-  assert_ok "grep -q XDG_CONFIG_HOME '$ROOT/$f'" "$f gives its boards a config directory of its own"
+# Both the sweep and the check read code with its comments taken off, so a
+# comment that names the variable stands in for neither.
+code_of() {   # code_of <file>: its code, without # comments, or // ones in TypeScript
+  case "$1" in
+    *.ts) sed -e 's#^[[:space:]]*//.*$##' -e 's#[[:space:]]//.*$##' "$1" ;;
+    *) fm_strip_comments "$1" ;;
+  esac
+}
+starts_board='bun run .*server\.ts|"run", join\(.*server\.ts'
+sets_config='XDG_CONFIG_HOME["'\'']?[[:space:]]*[=:]'
+starters=''
+for f in $(git -C "$ROOT" ls-files -- 'tests/*.sh' 'tests/*.ts'); do
+  # a here-string, not a pipe: under pipefail, grep -q leaving early fails the writer
+  grep -qE "$starts_board" <<< "$(code_of "$ROOT/$f")" && starters="$starters $f"
 done
+assert_contains "$starters " " tests/crew-end-to-end.test.sh " "the sweep finds the suites that start a board"
+unset_config=''
+for f in $starters; do
+  grep -qE "$sets_config" <<< "$(code_of "$ROOT/$f")" || unset_config="$unset_config $f"
+done
+assert_eq "" "$unset_config" "every suite that starts a board gives it a config directory of its own"
+# the control: a comment alone neither starts a board nor sets the variable
+printf '#!/usr/bin/env bash\n# bun run board/server.ts\n# XDG_CONFIG_HOME="$d"\n' > "$d/commented.sh"
+assert_eq "" "$(code_of "$d/commented.sh" | grep -E "$starts_board|$sets_config" || true)" \
+  "a suite that only names them in comments is neither found nor passed"
+printf '// XDG_CONFIG_HOME: config\nspawn("bun", ["run", join(root, "board/server.ts")])\n' > "$d/commented.ts"
+assert_eq "spawn" "$(code_of "$d/commented.ts" | grep -oE "^spawn" || true)$(code_of "$d/commented.ts" | grep -E "$sets_config" || true)" \
+  "and in TypeScript, the call is found and the comment is not"
+rm -f "$d/commented.sh" "$d/commented.ts"
 secret_of() { cat "$XDG_CONFIG_HOME/firstmate/board-$1.secret"; }
 # wcurl <port> <curl args...>: curl as a script on this machine writes to that
 # board, with the bearer from the secret file and the board's own Origin
@@ -1776,8 +1800,19 @@ fm_tasks_write /dev/stdin "$k/design/tasks" <<'J'
 J
 FM_ROOT="$k" "$k/bin/fm-emit.sh" --actor captain --type greenlit --en "go" --tw "開工" >/dev/null
 jq -cn '{id:"D-900",kind:"merge",task:"T-K2",pr:9,title:"merge it"}' > "$k/state/pending/D-900.json"
-# the merge helper and the editor record that they ran, and do nothing else
-printf '#!/usr/bin/env bash\necho "$*" >> "%s/merge-calls"\n' "$k" > "$k/bin/fm-merge.sh"
+# The merge helper records how it was called and answers as bin/fm-merge.sh
+# does on a merge GitHub took: one line, `fm-merge: merged #<pr>`, exit 0.
+# The editor records the path and, like `code <file>`, says nothing.
+cat > "$k/bin/fm-merge.sh" <<'S'
+#!/usr/bin/env bash
+root="$(cd "$(dirname "$0")/.." && pwd)"
+printf '%s\n' "$*" >> "$root/merge-calls"
+pr=''
+while [ $# -gt 0 ]; do
+  case "$1" in --pr) pr="${2-}"; shift 2 ;; *) shift ;; esac
+done
+echo "fm-merge: merged #$pr"
+S
 printf '#!/usr/bin/env bash\necho "$*" >> "%s/opened"\n' "$k" > "$k/fake-editor"
 chmod +x "$k/bin/fm-merge.sh" "$k/fake-editor"
 printf 'editor: %s/fake-editor\n' "$k" > "$k/config.yaml"
@@ -1809,32 +1844,35 @@ import importlib.util, sys
 s = importlib.util.spec_from_file_location("m", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
 print(m.board_login_url(sys.argv[2], int(sys.argv[3])).split("#", 1)[1])' "$k/bin/fm-herdr.py" "$1" "$2"
 }
-login() {   # login <code> [curl args...]: the status; the cookie in $k/jar, headers in $k/login-headers
-  local body; body="$(jq -cn --arg c "$1" '{code:$c}')"; shift
-  curl -s -o "$k/login-body" -D "$k/login-headers" -c "$k/jar" -w '%{http_code}' -X POST \
-    -H 'content-type: application/json' "$@" -d "$body" "$uk/login"
+login() {   # login <code> [curl args...]: the status; the body in $k/login-body, headers in $k/login-headers
+  local body status; body="$(jq -cn --arg c "$1" '{code:$c}')"; shift
+  status="$(curl -s -o "$k/login-body" -D "$k/login-headers" -w '%{http_code}' -X POST \
+    -H 'content-type: application/json' "$@" -d "$body" "$uk/login")"
+  cat "$k/login-headers" >> "$k/all-headers"
+  printf '%s' "$status"
 }
+# the files holding a Set-Cookie among every response header this part keeps
+# (each login's, and every read's below): there must be none
+cookies_set() { grep -il '^set-cookie:' "$k/all-headers" "$k/reads" 2>/dev/null || true; }
 
 # (2) the one-time code: works once, then never again; expired or wrong is refused
-assert_eq "false" "$(curl -sf "$uk/api/session" | jq -r .writable)" "a tab with no cookie is not writable"
+assert_eq "false" "$(curl -sf "$uk/api/session" | jq -r .writable)" "a tab with no token is not writable"
 code1="$(mint "$uk" "$PORTK")"
 assert_matches "$code1" '^[0-9]{13}\.[0-9a-f]{32}\.[0-9a-f]{64}$' "the opener mints a code of the board's shape"
-rm -f "$k/jar"
 assert_eq "403" "$(login "$code1")" "a code posted with no Origin is refused"
 assert_eq "403" "$(login "$code1" -H 'Origin: http://evil.example')" "and one posted from another origin"
 assert_eq "200" "$(login "$code1" -H "Origin: $uk")" "the code posted from the board's own page is taken"
-setcookie="$(grep -i '^set-cookie:' "$k/login-headers" | tr -d '\r')"
-assert_contains "$setcookie" "firstmate_board_$PORTK=" "it answers with the board's session cookie"
-assert_contains "$setcookie" "HttpOnly" "which no script on the page can read"
-assert_contains "$setcookie" "SameSite=Strict" "and no other site's request carries"
-assert_contains "$setcookie" "Path=/" "for the whole board"
-cookie="$(awk -v n="firstmate_board_$PORTK" '$6 == n { print $7 }' "$k/jar")"
-assert_ne "" "$cookie" "the cookie reached the jar"
-cp "$k/jar" "$k/jar-good"
-assert_eq "true" "$(curl -sf -b "$k/jar-good" "$uk/api/session" | jq -r .writable)" "and with it the tab is writable"
-rm -f "$k/jar"
+# the tab's token comes back in the body, for the page to keep in its own
+# sessionStorage, and never as a cookie: a browser sends a cookie for
+# 127.0.0.1 to every port on it
+token="$(jq -r '.token // empty' "$k/login-body")"
+assert_matches "$token" '^[0-9a-f]{64}$' "it answers with the tab's token"
+assert_ne "$secret" "$token" "which is not the secret itself"
+assert_eq "" "$(cookies_set)" "and sets no cookie"
+assert_eq "true" "$(curl -sf -H "Authorization: Bearer $token" "$uk/api/session" | jq -r .writable)" \
+  "with the token the tab is writable"
 assert_eq "403" "$(login "$code1" -H "Origin: $uk")" "the same code a second time is refused"
-assert_eq "" "$(grep -i '^set-cookie:' "$k/login-headers" || true)" "and gives no cookie"
+assert_eq "" "$(jq -r '.token // empty' "$k/login-body")" "and gives no token"
 # (expiry is tested on its own below, on a board whose codes last 2 seconds:
 # a code 61 seconds old here was also issued before this board started)
 # a fresh code with the last digit of its signature changed
@@ -1862,19 +1900,22 @@ for route in /decisions /tasks /open; do
   assert_eq "writeCredential" "$(jq -r .code "$k/resp")" "$route says the tab has no credential"
   assert_eq "403" "$(postk "$route" "$body" -H "Origin: $uk" -H 'content-type: application/json' \
     -H "Authorization: Bearer $zeros")" "$route with a wrong bearer is refused"
+  # what a cookie session would have held, sent as a cookie: the board reads
+  # no cookie, so a server on another loopback port that caught one has nothing
   assert_eq "403" "$(postk "$route" "$body" -H "Origin: $uk" -H 'content-type: application/json' \
-    -b "firstmate_board_$PORTK=$zeros")" "$route with a forged cookie is refused"
+    -b "firstmate_board_$PORTK=$token")" "$route with the token only as a cookie is refused"
+  assert_eq "writeCredential" "$(jq -r .code "$k/resp")" "$route says a cookie is no credential"
   assert_eq "403" "$(postk "$route" "$body" -H 'Origin: http://127.0.0.1:1' -H 'content-type: application/json' \
-    -b "$k/jar-good")" "$route with a valid cookie from another loopback origin is refused"
+    -H "Authorization: Bearer $token")" "$route with a valid token from another loopback origin is refused"
   assert_eq "writeOrigin" "$(jq -r .code "$k/resp")" "$route says the request is not the board's own"
   assert_eq "403" "$(postk "$route" "$body" -H 'Origin: http://evil.example' -H 'content-type: application/json' \
-    -b "$k/jar-good")" "$route with a valid cookie from another site is refused"
+    -H "Authorization: Bearer $token")" "$route with a valid token from another site is refused"
   assert_eq "writeOrigin" "$(jq -r .code "$k/resp")" "$route says so for the other site"
-  assert_eq "403" "$(postk "$route" "$body" -H 'content-type: application/json' -b "$k/jar-good")" \
-    "$route with a valid cookie and no Origin is refused"
+  assert_eq "403" "$(postk "$route" "$body" -H 'content-type: application/json' -H "Authorization: Bearer $token")" \
+    "$route with a valid token and no Origin is refused"
   assert_eq "writeOrigin" "$(jq -r .code "$k/resp")" "$route says so with no Origin"
-  assert_eq "403" "$(postk "$route" "$body" -H "Origin: $uk" -H 'content-type: text/plain' -b "$k/jar-good")" \
-    "$route with a valid cookie and a text/plain body is refused"
+  assert_eq "403" "$(postk "$route" "$body" -H "Origin: $uk" -H 'content-type: text/plain' -H "Authorization: Bearer $token")" \
+    "$route with a valid token and a text/plain body is refused"
   assert_eq "writeJson" "$(jq -r .code "$k/resp")" "$route says it takes JSON only"
   assert_eq "403" "$(wcurl "$PORTK" -s -o "$k/resp" -w '%{http_code}' -X POST -H 'content-type: text/plain' \
     -d "$body" "$uk$route")" "$route with the bearer and a text/plain body is refused"
@@ -1887,21 +1928,21 @@ assert_ok "test -e '$k/state/pending/D-900.json'" "and the card is still pending
 assert_fail "test -e '$k/merge-calls'" "no refusal ran the merge helper"
 assert_fail "test -e '$k/opened'" "no refusal started the editor"
 
-# (3) nothing read hands out the credential: every read route, after login,
-# grepped for the secret, the cookie's value and a code not yet used
+# (3) nothing read hands out the credential: every read route, from a tab
+# holding the token, grepped for the secret, the token and a code not yet used
 unused="$(mint "$uk" "$PORTK")"
 : > "$k/reads"
 for path in / /index.html /ship.js /diagram.js /api/state /api/i18n /api/session /login \
             "/file?path=src/visible" "/diff?branch=main" /open "/open?path=src/visible" /no-such-file; do
-  curl -s -i -b "$k/jar-good" "$uk$path" >> "$k/reads"
+  curl -s -i -H "Authorization: Bearer $token" "$uk$path" >> "$k/reads"
 done
-curl -s -i -m 2 -b "$k/jar-good" "$uk/events" >> "$k/reads" || true
+curl -s -i -m 2 -H "Authorization: Bearer $token" "$uk/events" >> "$k/reads" || true
 for route in /decisions /tasks /open /login; do
   curl -s -i -X POST -H "Origin: $uk" -H 'content-type: application/json' -d '{}' "$uk$route" >> "$k/reads"
 done
 assert_ok "grep -q '\"crew\"' '$k/reads'" "the reads were made (the control)"
 assert_fail "grep -qF '$secret' '$k/reads'" "no response carries the secret"
-assert_fail "grep -qF '$cookie' '$k/reads'" "no read carries the cookie's value"
+assert_fail "grep -qF '$token' '$k/reads'" "no read carries the tab's token"
 assert_fail "grep -qF '${unused##*.}' '$k/reads'" "no response carries a valid code"
 assert_fail "grep -qF 'board-$PORTK.secret' '$k/reads'" "no response names the secret file"
 
@@ -1917,39 +1958,47 @@ assert_fail "grep -qF '$secret' '$k/resp'" "nor leaked"
 rm -f "$k/src/key" "$k/board/public/key.txt"
 
 # (6) GET /open starts nothing, credential or not
-assert_eq "405" "$(curl -s -o /dev/null -w '%{http_code}' -b "$k/jar-good" "$uk/open?path=src/visible")" \
+assert_eq "405" "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "$uk/open?path=src/visible")" \
   "GET /open is not a way to start the editor"
 sleep 1
 assert_fail "test -e '$k/opened'" "and it started nothing"
 
 # with the credential, the board works as before
-assert_eq "200" "$(postk /tasks "$tsk" -H "Origin: $uk" -H 'content-type: application/json' -b "$k/jar-good")" \
-  "the captain's cookie parks a task"
+tabk() { postk "$@" -H "Origin: $uk" -H 'content-type: application/json' -H "Authorization: Bearer $token"; }
+assert_eq "200" "$(tabk /tasks "$tsk")" "the captain's tab parks a task"
 assert_eq "parked captain T-K1" "$(tail -1 "$k/state/events.jsonl" | jq -r '"\(.type) \(.actor) \(.task)"')" \
   "and the park is the captain's event"
-assert_eq "200" "$(postk /open "$opn" -H "Origin: $uk" -H 'content-type: application/json' -b "$k/jar-good")" \
-  "the captain's cookie opens a file"
+assert_eq "200" "$(tabk /open "$opn")" "the captain's tab opens a file"
 wait_for 10 test -s "$k/opened"
 assert_contains "$(cat "$k/opened" 2>/dev/null)" "src/visible" "and the editor was handed it"
 assert_eq "200" "$(wcurl "$PORTK" -s -o "$k/resp" -w '%{http_code}' -X POST -H 'content-type: application/json' \
   -d "$dec" "$uk/decisions")" "a script with the bearer answers the merge card"
 wait_for 10 test -s "$k/merge-calls"
 assert_contains "$(cat "$k/merge-calls" 2>/dev/null)" "--pr 9" "and the merge helper ran for it"
+wait_for 20 jq -e '.merge == "merged"' "$k/state/decisions/D-900.json"
+assert_eq "merged" "$(jq -r .merge "$k/state/decisions/D-900.json" 2>/dev/null)" \
+  "and the decision settles as merged when the helper says it merged"
 
 # (4) the secret's path and value appear nowhere under state/ or in the log
 assert_eq "" "$(grep -rlF "board-$PORTK.secret" "$k/state" "$k/out" 2>/dev/null || true)" \
   "no state file or log names the secret file"
 assert_eq "" "$(grep -rlF "$secret" "$k/state" "$k/out" 2>/dev/null || true)" \
   "and none holds the secret"
+assert_eq "" "$(grep -rlF "$token" "$k/state" "$k/out" 2>/dev/null || true)" \
+  "nor the tab's token"
 
 # the secret survives a restart, so an open tab keeps working
 kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
 start_k "$PORTK"
 assert_eq "$secret" "$(cat "$key")" "a restart keeps the secret it found"
-assert_eq "true" "$(curl -sf -b "$k/jar-good" "$uk/api/session" | jq -r .writable)" \
-  "and the tab's cookie still writes after the restart"
+assert_eq "true" "$(curl -sf -H "Authorization: Bearer $token" "$uk/api/session" | jq -r .writable)" \
+  "and the board still takes the tab's token after the restart"
+assert_eq "200" "$(tabk /tasks "$(jq -cn '{task:"T-K1",action:"unpark"}')")" \
+  "which still writes: the tab unparks the task"
+assert_eq "unparked captain T-K1" "$(tail -1 "$k/state/events.jsonl" | jq -r '"\(.type) \(.actor) \(.task)"')" \
+  "and the unpark is the captain's event"
 # $unused was minted seconds ago and never redeemed: only the restart stands
-# between it and a cookie
+# between it and a token
 assert_eq "403" "$(login "$unused" -H "Origin: $uk")" "a code minted before the restart is not taken by the new board"
 kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
 
@@ -1959,12 +2008,26 @@ kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
 FM_BOARD_CODE_TTL_MS=2000 start_k "$PORTK"
 late="$(mint "$uk" "$PORTK")"
 sleep 3
-rm -f "$k/jar"
 assert_eq "403" "$(login "$late" -H "Origin: $uk")" "a code older than its lifetime is refused"
 assert_eq "loginRefused" "$(jq -r .code "$k/login-body")" "with the code the page translates"
-assert_eq "" "$(grep -i '^set-cookie:' "$k/login-headers" || true)" "and gives no cookie"
+assert_eq "" "$(jq -r '.token // empty' "$k/login-body")" "and gives no token"
 assert_eq "200" "$(login "$(mint "$uk" "$PORTK")" -H "Origin: $uk")" \
   "the control: a code minted the same way and used at once is taken"
+kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
+
+# no response this part kept, each login's among them, set a cookie
+assert_ok "grep -qi '^content-type:' '$k/all-headers'" "the login headers were kept (the control)"
+assert_eq "" "$(cookies_set)" "no response the board sent set a cookie"
+
+# revocation: remove the secret file and restart the board, and every token
+# and bearer made from the old secret is refused
+rm -f "$key"
+start_k "$PORTK"
+assert_ne "$secret" "$(cat "$key")" "a board restarted without its secret file makes a new one"
+assert_eq "403" "$(tabk /tasks "$tsk")" "and the old tab's token no longer writes"
+assert_eq "writeCredential" "$(jq -r .code "$k/resp")" "the tab is told it holds no credential"
+assert_eq "403" "$(postk /tasks "$tsk" -H "Origin: $uk" -H 'content-type: application/json' \
+  -H "Authorization: Bearer $secret")" "nor does the old secret as a bearer"
 kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
 rm -rf "$k" "$XDG_CONFIG_HOME"
 
