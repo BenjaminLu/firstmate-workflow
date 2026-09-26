@@ -104,5 +104,9 @@
   "dropConfirm": "確定不做 {id}？此任務將離開看板，design/tasks.json 不變。",
   "dropYes": "確定不做",
   "cancel": "取消",
-  "actionFailed": "看板未能記錄此操作，請重新整理後再試。"
+  "actionFailed": "看板未能記錄此操作，請重新整理後再試。",
+  "projectChip": "專案",
+  "mergeRunning": "合併進行中",
+  "mergeUnknown": "合併結果不明：無法讀取 GitHub，此專案的下一次合併需等待",
+  "mergeBusy": "未送出：此專案已有合併正在進行，卡片仍待決定"
 }

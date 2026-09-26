@@ -6,7 +6,8 @@
 // No build step and no framework: the page is a file, the stream is SSE, and
 // the state endpoint is derived from events.jsonl and design/tasks/ so the
 // board has no opinion the log does not already hold.
-import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 
 // canonical from the start: on macOS /var is a symlink to /private/var, and a
@@ -16,6 +17,15 @@ const ROOT = realpathSync(resolve(process.env.FM_ROOT ?? "."));
 const PORT = Number(process.env.FM_PORT ?? 4173);
 const LOG = join(ROOT, "state/events.jsonl");
 const PUBLIC = join(ROOT, "board/public");
+// The environment of every child the board starts, FM_PROJECT removed: a
+// project is what a card or an event names, never whatever the shell that
+// started the board exported. Without this a card naming no project - the
+// default's - was merged by fm-merge.sh in the shell's project while the
+// board's marker said the default held the merge.
+const childEnv = (): Record<string, string | undefined> => {
+  const { FM_PROJECT: _, ...env } = process.env;
+  return { ...env, FM_ROOT: ROOT };
+};
 
 type Event = Record<string, unknown> & { type?: string; task?: string; pr?: number };
 
@@ -43,6 +53,8 @@ type Crew = {
   state: CrewState;
   task: string | null;
   title: string | null;
+  // the project of the task it is on; none for a taskless firstmate
+  project?: string | null;
   activity?: Record<string, string> | null;
   crew_name?: string;
   // Bounded only: done/total with a real denominator. Never a bare percent.
@@ -125,49 +137,62 @@ const engine = (): { vendor: string; reviewer: string | null; cross: boolean } |
   return { vendor, reviewer, cross: reviewer !== null && reviewer !== vendor };
 };
 
-// The repository a pull request number belongs to (T-069): the project
-// registry's `github` (owner/repo), read through bin/fm-config.sh, the one
+// The projects (design section 15.4, T-054): each registered name with the
+// repository its pull requests live on (`github`, owner/repo) and the task
+// list its cards are titled from, read through bin/fm-config.sh, the one
 // resolver every script uses, so the board refuses a malformed registry
-// exactly as they do. Until T-054 gives events a project, the board is the
-// default project's: FM_PROJECT is not passed on, so the shell that started
-// the server cannot move it. No registry, no github, or a refused registry
-// is no repository - the page then shows plain text, never a guessed link.
+// exactly as they do. FM_PROJECT is not passed on, so the shell that started
+// the server cannot move the default. No registry, no github, or a refused
+// registry is no repository - the page then shows plain text, never a
+// guessed link - and the board is the one default project it always was.
 // Read at request time like the engine badge; the answer is kept only while
 // config.yaml is unchanged, so an edit shows on the next refresh.
-let registryRead: { stamp: string; github: string | null; name: string | null } | null = null;
-const registry = (): { github: string | null; name: string | null } => {
+type Registered = { github: string | null; tasks: string | null };
+type Registry = { name: string | null; projects: Map<string, Registered> };
+const PROJECT_NAME = /^[a-z0-9-]{1,24}$/;
+let registryRead: (Registry & { stamp: string }) | null = null;
+const registry = (): Registry => {
   const file = join(ROOT, "config.yaml"), lib = join(ROOT, "bin/fm-config.sh");
-  if (!existsSync(file) || !existsSync(lib)) return { github: null, name: null };
+  if (!existsSync(file) || !existsSync(lib)) return { name: null, projects: new Map() };
   const st = statSync(file);
   const stamp = `${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
   if (registryRead?.stamp === stamp) return registryRead;
-  const { FM_PROJECT: _, ...env } = process.env;
-  let found: string | null = null, name: string | null = null;
+  let name: string | null = null;
+  const projects = new Map<string, Registered>();
   try {
-    // One lookup for both is safe: the registry refuses every lookup when any
-    // entry lacks an owner/repo github (T-046), so a name that resolves always
-    // has a repository, and there is no state with a name but no github.
+    // One pass for all of it is safe: the registry refuses every lookup when
+    // any entry lacks an owner/repo github (T-046), so either every project
+    // answers or none does, and a refusal leaves the board with no registry.
     const r = Bun.spawnSync(["bash", "-c",
-      '. "$1" && name="$(fm_project_resolve "" "$2")" && printf "%s\\n" "$name" && fm_project_get "$name" github "$2"',
-      "fm-board", lib, file], { env, cwd: ROOT });
-    const [n = "", out = ""] = r.exitCode === 0 ? new TextDecoder().decode(r.stdout).trim().split("\n") : [];
-    found = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(out) ? out : null;
-    name = /^[a-z0-9-]{1,24}$/.test(n) ? n : null;
-  } catch { found = null; name = null; }
-  registryRead = { stamp, github: found, name };
+      '. "$1" && name="$(fm_project_resolve "" "$2")" && printf "%s\\n" "$name" && names="$(fm_projects "$2")" || exit 1\n' +
+      'for n in $names; do g="$(fm_project_get "$n" github "$2")" && t="$(fm_project_get "$n" tasks "$2")" || exit 1\n' +
+      '  printf "%s\\t%s\\t%s\\n" "$n" "$g" "$t"; done',
+      "fm-board", lib, file], { env: childEnv(), cwd: ROOT });
+    const [n = "", ...rows] = r.exitCode === 0 ? new TextDecoder().decode(r.stdout).trim().split("\n") : [];
+    name = PROJECT_NAME.test(n) ? n : null;
+    for (const row of name ? rows : []) {
+      const [p = "", g = "", t = ""] = row.split("\t");
+      if (!PROJECT_NAME.test(p)) continue;
+      projects.set(p, {
+        github: /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(g) ? g : null,
+        // the registry refuses an absolute path or one that climbs out
+        tasks: t && !t.startsWith("/") && !t.split("/").includes("..") ? t : null,
+      });
+    }
+  } catch { name = null; projects.clear(); }
+  registryRead = { stamp, name, projects };
   return registryRead;
 };
-const github = (): string | null => registry().github;
 
-// The task list (T-090): one file per task under design/tasks, read through
+// A task list (T-090): one file per task in a directory, read through
 // bin/fm-config.sh's fm_tasks - the one reader every script uses - so the
 // board and the dispatcher cannot disagree about what a task is. Read at
-// request time; the answer is kept only while no task file has changed.
-// No directory, no library or a file that does not parse is no task list,
-// never half of one.
-let tasksRead: { stamp: string; defs: Array<Record<string, unknown>> } | null = null;
-const taskDefs = (): Array<Record<string, unknown>> => {
-  const dir = join(ROOT, "design/tasks"), lib = join(ROOT, "bin/fm-config.sh");
+// request time; each directory's answer is kept only while none of its task
+// files has changed. No directory, no library or a file that does not parse
+// is no task list, never half of one.
+const tasksRead = new Map<string, { stamp: string; defs: Array<Record<string, unknown>> }>();
+const taskDefs = (rel: string): Array<Record<string, unknown>> => {
+  const dir = join(ROOT, rel), lib = join(ROOT, "bin/fm-config.sh");
   if (!existsSync(dir) || !existsSync(lib)) return [];
   let stamp = "";
   try {
@@ -177,19 +202,30 @@ const taskDefs = (): Array<Record<string, unknown>> => {
       return `${f}:${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
     }).join("|");
   } catch { return []; }
-  if (tasksRead?.stamp === stamp) return tasksRead.defs;
+  const kept = tasksRead.get(rel);
+  if (kept?.stamp === stamp) return kept.defs;
   let defs: Array<Record<string, unknown>> = [];
   try {
-    const r = Bun.spawnSync(["bash", "-c", '. "$1" && fm_tasks design/tasks', "fm-board", lib], { cwd: ROOT });
+    const r = Bun.spawnSync(["bash", "-c", '. "$1" && fm_tasks "$2"', "fm-board", lib, rel], { env: childEnv(), cwd: ROOT });
     if (r.exitCode === 0) {
       defs = new TextDecoder().decode(r.stdout).split("\n").filter(Boolean).map(line => JSON.parse(line));
     }
   } catch { defs = []; }
-  tasksRead = { stamp, defs };
+  tasksRead.set(rel, { stamp, defs });
   return defs;
 };
 // the project an event or card naming none belongs to (design section 15.4)
 const defaultProject = (): string => registry().name ?? "";
+// what a record says it belongs to: its own `project`, else the default
+const projectOf = (o: unknown): string => {
+  const p = (o as { project?: unknown } | null | undefined)?.project;
+  return typeof p === "string" && p ? p : defaultProject();
+};
+// the repository of a project's pull requests, or null when there is none
+const repoOf = (project: string): string | null => registry().projects.get(project)?.github ?? null;
+// a task, a pull request or a decision is known by (project, id): two
+// projects' T-004 are two cards, and another project's #7 is not this one's
+const keyOf = (project: string, id: unknown) => `${project}\u0000${String(id ?? "")}`;
 // The one reading of a pull request number, for every place the board takes
 // one: a positive integer, or the same digits as a string. The page never
 // judges a number itself; it links what this lets through and nothing else.
@@ -198,11 +234,12 @@ const prNumber = (n: unknown): number | null => {
   const v = typeof n === "string" && new RegExp(`^${PR_DIGITS}$`).test(n) ? Number(n) : n;
   return Number.isSafeInteger(v) && (v as number) > 0 ? v as number : null;
 };
-// A decision id (design section 15.4): the old D-<digits>, or one that names
-// its owner, D-<project>-<task>-<n> - a registry name, the task id without its
-// hyphen, and n from 1. The board lists and answers both; an owned id's
-// project and task are read out of the id itself, never guessed.
-const OLD_DECISION = /^D-[0-9]{1,6}$/;
+// A decision id (design section 15.4): the old D-<digits> and D-SK-<n>, or
+// one that names its owner, D-<project>-<task>-<n> - a registry name, the
+// task id without its hyphen, and n from 1. The board lists and answers all
+// three; an owned id's project and task are read out of the id itself, never
+// guessed.
+const OLD_DECISION = /^D-(SK-)?[0-9]{1,6}$/;
 const OWNED_DECISION = /^D-([a-z0-9-]{1,24})-(T[A-Za-z0-9]{1,32})-([1-9][0-9]{0,5})$/;
 const isDecisionId = (id: string) => OLD_DECISION.test(id) || OWNED_DECISION.test(id);
 const ownerOf = (id: unknown): { project: string; task: string; n: number } | null => {
@@ -218,8 +255,7 @@ const pullUrl = (repo: string | null, n: unknown): string | null => {
 // title, a decision's text, a crewman's activity - with its URL. The page
 // links a #n in text through this map only. The page's pattern is the same
 // one, with the same lead: no word character before the '#'.
-const mentioned = (repo: string | null, value: unknown): Record<string, string> => {
-  const out: Record<string, string> = {};
+const mentioned = (repo: string | null, value: unknown, out: Record<string, string> = {}): Record<string, string> => {
   if (!repo) return out;
   const find = new RegExp(`(?<!\\w)#(${PR_DIGITS})(?![0-9])`, "g");
   const walk = (v: unknown): void => {
@@ -231,19 +267,62 @@ const mentioned = (repo: string | null, value: unknown): Record<string, string> 
   return out;
 };
 
-const state = () => {
-  const events = readEvents();
-  const repo = github();
-  // every record that carries a pr number carries its URL beside it
-  const linked = <T extends Record<string, unknown>>(o: T): T & { pr_url?: string | null } =>
-    o && typeof o === "object" && o.pr != null ? { ...o, pr_url: pullUrl(repo, o.pr) } : o;
-  const pend = pending();
-  const responseDir = join(ROOT, 'state/decisions');
-  const responses = existsSync(responseDir) ? readdirSync(responseDir).filter(f => f.endsWith('.json') && isDecisionId(f.slice(0, -5))).flatMap(f => {
-    try { return [JSON.parse(readFileSync(join(responseDir, f), 'utf8'))]; } catch { return []; }
+// The answered decisions on disk, whatever shape of id they carry.
+const RESPONSES = join(ROOT, "state/decisions");
+const readResponses = (): Array<Record<string, any>> => existsSync(RESPONSES)
+  ? readdirSync(RESPONSES).filter(f => f.endsWith(".json") && isDecisionId(f.slice(0, -5))).flatMap(f => {
+    try { return [JSON.parse(readFileSync(join(RESPONSES, f), "utf8"))]; } catch { return []; }
   }) : [];
-  const defs = taskDefs();
-  const definitions = new Map(defs.map(d => [String(d.id), d]));
+// Where a merge answered on the board stands (design section 5.2): running
+// while the helper has not exited, then merged or failed. A record written
+// before merges ran in the background says the same with merged.ok.
+type MergeOutcome = "running" | "merged" | "failed";
+const mergeOf = (d: Record<string, any> | null | undefined): MergeOutcome | null =>
+  d?.merge === "running" || d?.merge === "merged" || d?.merge === "failed" ? d.merge
+    : d?.merged?.ok === true ? "merged" : d?.merged?.ok === false ? "failed" : null;
+// the running merges whose outcome GitHub could not tell the board: the card
+// says so by name, and the project's turn stays held until it can
+const unknownOutcome = new Set<string>();
+
+// Each project's task list, as the registry names it: a directory of task
+// files (T-090). A tree with no registry has the one design/tasks/ it always had.
+const taskLists = (): Array<{ project: string; defs: Array<Record<string, unknown>> }> => {
+  const reg = registry(), def = defaultProject();
+  // The default project's list is design/tasks/ unless the registry names
+  // one that exists: an entry that leaves `tasks` to its default
+  // (projects/<name>/tasks) must not empty the board it always had.
+  const dirs: Array<[string, string]> = reg.projects.size
+    ? [...reg.projects].map(([name, p]) => {
+      const rel = p.tasks ?? `projects/${name}/tasks`;
+      return [name, name === def && !existsSync(join(ROOT, rel)) ? "design/tasks" : rel];
+    })
+    : [[def, "design/tasks"]];
+  // the default project first, so a board of one project reads as before
+  dirs.sort((a, b) => Number(b[0] === def) - Number(a[0] === def));
+  return dirs.map(([project, rel]) => ({ project, defs: taskDefs(rel) }));
+};
+
+// `only` is ?project=: that project's work, cards and log, and the counts of
+// those. Without it, every project on one page (design section 15.10 point 4).
+const state = (only: string | null = null) => {
+  const events = readEvents();
+  const def = defaultProject();
+  // every record that carries a pr number carries its URL beside it, on its
+  // own project's repository
+  const linked = <T extends Record<string, unknown>>(o: T): T & { pr_url?: string | null } =>
+    o && typeof o === "object" && o.pr != null ? { ...o, pr_url: pullUrl(repoOf(projectOf(o)), o.pr) } : o;
+  const pend = pending();
+  const responses = readResponses();
+  // a task is its project and its id; `key` is how the rest of this reads one
+  const definitions = new Map<string, Record<string, unknown>>();
+  const taskIds: Array<{ project: string; id: string }> = [];
+  for (const list of taskLists()) for (const d of list.defs) {
+    const k = keyOf(list.project, d.id);
+    if (definitions.has(k)) continue;
+    definitions.set(k, d);
+    taskIds.push({ project: list.project, id: String(d.id) });
+  }
+  const ek = (e: Event) => keyOf(projectOf(e), e.task);
   const stage = new Map<string, string>();
   const pr = new Map<string, number>();
   // merged and closed are where a task stops. Anything said about it
@@ -265,41 +344,50 @@ const state = () => {
   const worked = new Set<string>();
   for (const [index, e] of events.entries()) {
     if (!e.task) continue;
+    const k = ek(e);
     const n = prNumber(e.pr);
-    if (n) pr.set(e.task, n);
-    if (FINAL.has(stage.get(e.task) ?? "")) continue;
-    if (e.type === "parked") parked.add(e.task);
-    if (e.type === "unparked") parked.delete(e.task);
-    if (e.type === "ask_pass_criteria") asking.add(e.task);
-    if (e.type === "criteria_returned") asking.delete(e.task);
+    if (n) pr.set(k, n);
+    if (FINAL.has(stage.get(k) ?? "")) continue;
+    if (e.type === "parked") parked.add(k);
+    if (e.type === "unparked") parked.delete(k);
+    if (e.type === "ask_pass_criteria") asking.add(k);
+    if (e.type === "criteria_returned") asking.delete(k);
     const s = STAGE[e.type ?? ""];
-    if (s) { stage.set(e.task, s); moved.set(e.task, e); }
-    if (s && e.type !== "decision_requested") worked.add(e.task);
-    if (s === "merged") settledAt.set(e.task, index);
+    if (s) { stage.set(k, s); moved.set(k, e); }
+    if (s && e.type !== "decision_requested") worked.add(k);
+    if (s === "merged") settledAt.set(k, index);
   }
   // A pending decision is a fact on disk, not a point in a history: while
   // the card is up, the task is the captain's whatever else has been said
   // since. T-016 read as "working" because a dispatch that should never
   // have happened landed after the card went up.
-  const awaiting = new Set(pend.map((p: Record<string, unknown>) => String(p.task ?? "")));
-  const taskIds = [...definitions.keys()];
-  for (const e of events) if (e.task && !definitions.has(e.task) && !taskIds.includes(e.task)) taskIds.push(e.task);
+  const awaiting = new Set(pend.map((p: Record<string, unknown>) => keyOf(projectOf(p), p.task)));
+  const known = new Set(taskIds.map((t) => keyOf(t.project, t.id)));
+  for (const e of events) {
+    if (!e.task || known.has(ek(e))) continue;
+    known.add(ek(e));
+    taskIds.push({ project: projectOf(e), id: e.task });
+  }
   // Where the log puts a task. Untouched is not yet a lane: which of backlog
   // or ready it is depends on its dependencies, decided below from this.
   // A task that turns ready gets a readiness card before anyone starts it
   // (T-059), and bin/fm-ready.sh records that card's id in state/ready/.
   // While nothing else has moved the task and no other card is up, that card
   // is the task waiting to be judged, not the task at the captain's.
+  // fm-ready.sh judges the default project's tasks only, so a record under
+  // state/ready/ is about that project's task of that id and no other's.
+  const projectOfKey = (k: string) => k.slice(0, k.indexOf("\u0000"));
+  const idOfKey = (k: string) => k.slice(k.indexOf("\u0000") + 1);
   const readinessCard = (id: string): string | null => {
     const f = join(ROOT, "state/ready", `${id}.json`);
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) || !existsSync(f)) return null;
     try { return String(JSON.parse(readFileSync(f, "utf8")).decision ?? "") || null; } catch { return null; }
   };
   const judging = (id: string) => {
-    if (worked.has(id)) return false;
-    const card = readinessCard(id);
+    if (worked.has(id) || projectOfKey(id) !== def) return false;
+    const card = readinessCard(idOfKey(id));
     return card !== null && pend.every((p: Record<string, unknown>) =>
-      String(p.task ?? "") !== id || String(p.id ?? "") === card);
+      keyOf(projectOf(p), p.task) !== id || String(p.id ?? "") === card);
   };
   const stageOf = (id: string) => {
     const terminal = FINAL.has(stage.get(id) ?? "");
@@ -319,16 +407,19 @@ const state = () => {
       out.push({ kind: "gate", gate: GATE_NUMBERS.includes(n as number) ? n as number : null });
     }
     if (!FINAL.has(at) && asking.has(id)) out.push({ kind: "ask" });
-    for (const p of pend.filter((x: Record<string, unknown>) => String(x.task ?? "") === id)) {
+    for (const p of pend.filter((x: Record<string, unknown>) => keyOf(projectOf(x), x.task) === id)) {
       const options = (p as { details?: { en?: { options?: unknown } } }).details?.en?.options;
       out.push({ kind: "decision", id: String(p.id ?? ""),
         options: options && typeof options === "object" ? Object.keys(options).length : null });
     }
     return out;
   };
+  // a dependency is a task of the same project: another project's T-001
+  // merging does not unblock this one's
   const dependsOf = (id: string): string[] => {
     const d = definitions.get(id);
-    return d && Array.isArray(d.depends_on) ? (d.depends_on as unknown[]).map(String) : [];
+    return d && Array.isArray(d.depends_on)
+      ? (d.depends_on as unknown[]).map((dep) => keyOf(projectOfKey(id), dep)) : [];
   };
   // untouched work waiting on work that is not in yet: a dependency counts
   // as done only once it has merged, and one the log has never heard of is
@@ -343,22 +434,27 @@ const state = () => {
     if (parked.has(id)) return "parked";
     return blockersOf(id).length ? "backlog" : "ready";
   };
-  const tasks = taskIds.map((id) => {
+  const tasks = taskIds.map(({ project, id: taskId }) => {
+    const id = keyOf(project, taskId);
     const d = definitions.get(id) || {};
     const depends = dependsOf(id);
     const blockedOn = blockersOf(id);
     const at = laneOf(id);
     return ({
-    id, title: typeof d.title === 'string' ? d.title : null, milestone: d.milestone ?? null,
-    depends_on: depends,
+    id: taskId,
+    // whose task it is: a project's name is data, shown as it is written.
+    // `key` is the one string that tells two projects' T-004 apart.
+    project: project || null, key: `${project}/${taskId}`,
+    title: typeof d.title === 'string' ? d.title : null, milestone: d.milestone ?? null,
+    depends_on: depends.map(idOfKey),
     stage: at,
     pr: pr.get(id) ?? null,
-    pr_url: pullUrl(repo, pr.get(id)),
-    blocked_on: blockedOn,
+    pr_url: pullUrl(repoOf(project), pr.get(id)),
+    blocked_on: blockedOn.map(idOfKey),
     // why each blocker blocks: a dependency the captain parked or dropped
     // will not arrive on its own, and the card has to say so. One neither
     // the plan nor the log knows is unknown, not ready.
-    blocked_by: blockedOn.map((dep) => ({ id: dep,
+    blocked_by: blockedOn.map((dep) => ({ id: idOfKey(dep),
       stage: definitions.has(dep) || stage.has(dep) ? laneOf(dep) : "unknown" })),
     // only work the plan lists can be set aside: a task the log alone knows
     // about is not the captain's to park
@@ -369,6 +465,8 @@ const state = () => {
     // where the merge sits in the log, so the lane can show the latest first
     merged_seq: settledAt.get(id) ?? null,
   }); });
+  const taskAt = (project: string, id: unknown) =>
+    tasks.find((x) => keyOf(x.project ?? "", x.id) === keyOf(project, id));
   // The crew are AGENTS, not tasks. A crewman on the deck is something
   // that is running: firstmate, each worker or reviewer currently engaged,
   // and the captain while a decision is waiting. Drawing one figure per
@@ -424,7 +522,8 @@ const state = () => {
     if (e.type === 'dispatched') finished.delete(actor);
     else if (finished.has(actor)) continue;
     if (e.type === 'agent_finished') finished.add(actor);
-    if (e.type === 'dispatched' || (e.task && previous?.task !== e.task)) {
+    // a crewman moving to another project's task of the same id has moved
+    if (e.type === 'dispatched' || (e.task && (previous?.task !== e.task || projectOf(previous) !== projectOf(e)))) {
       activity.delete(actor); phases.delete(actor);
       progress.delete(actor);
       if (e.type === 'dispatched') names.delete(actor);
@@ -443,7 +542,7 @@ const state = () => {
       ? (roleOf(actor,e) === 'reviewer' ? 'review' : 'working')
       : CREW_STATE(STAGE[e.type || '']));
     const peer = (role: string) => {
-      const candidates = [...lastByActor].filter(([id,event]) => id !== actor && id !== 'firstmate' && event.task === e.task && event.type !== 'agent_finished' && !finished.has(id) && (roles.get(id) || roleOf(id,event)) === role);
+      const candidates = [...lastByActor].filter(([id,event]) => id !== actor && id !== 'firstmate' && ek(event) === ek(e) && event.type !== 'agent_finished' && !finished.has(id) && (roles.get(id) || roleOf(id,event)) === role);
       // Several runs on one task are ambiguous; never pick an arbitrary actor.
       return candidates.length === 1 ? candidates[0][0] : undefined;
     };
@@ -454,10 +553,12 @@ const state = () => {
     if (e.type === 'approved') {kind='approve';from=actor;to='firstmate';}
     if (e.type === 'review_failed' && data.review_outcome === 'rejected') {kind='reject';from=actor;to=peer('worker');}
     if (e.type === 'decision_made') {kind='order';from='firstmate';to=peer('worker');}
-    if (kind) handoffs.push({identity:`handoff:${index}:${JSON.stringify(e)}`,kind,from:from || null,to:to || null,task:e.task || null});
+    if (kind) handoffs.push({identity:`handoff:${index}:${JSON.stringify(e)}`,kind,from:from || null,to:to || null,task:e.task || null,
+      ...(e.task ? { project: projectOf(e) || null } : {})});
     if (!e.actor || e.actor === "github" || e.actor === "captain") continue;
     lastByActor.delete(e.actor);
-    lastByActor.set(e.actor, {...e,task:e.task || previous?.task});
+    // an event naming no task keeps the task, and so the project, it was on
+    lastByActor.set(e.actor, e.task ? {...e, project: projectOf(e)} : {...e, task: previous?.task, project: previous ? projectOf(previous) : projectOf(e)});
   }
   for (const [actor, e] of [...lastByActor]) {
     if (e.type === "agent_finished") lastByActor.delete(actor);
@@ -477,17 +578,18 @@ const state = () => {
   // is handed the state - two answers to one question, in one response
   const greenlit = events.some((e) => e.type === "greenlit");
   const fm = lastByActor.get("firstmate");
-  const fmTask = fm?.task && !done.has(fm.task) ? fm.task : null;
-  const fmT = fmTask ? tasks.find((x) => x.id === fmTask) : undefined;
+  const fmTask = fm?.task && !done.has(ek(fm)) ? fm.task : null;
+  const fmT = fmTask ? taskAt(projectOf(fm), fmTask) : undefined;
+  const planned = (e: Event) => authored((definitions.get(ek(e)) as { activity?: unknown } | undefined)?.activity);
   const crew: Crew[] = [{
     id: "firstmate", role: "firstmate",
     state: greenlit ? (fm ? phases.get('firstmate') || 'unknown' : 'unknown') : "queued",
     task: fmTask, title: fmT?.title ?? null,
+    // firstmate is every project's; the project is the one of the task it is on
+    project: fmTask ? projectOf(fm) || null : null,
     activity: fm
       ? (activity.get("firstmate")
-        || (fmTask
-          ? authored((defs.find((d) => d.id === fmTask) as { activity?: unknown } | undefined)?.activity)
-          : null)
+        || (fmTask ? planned(fm!) : null)
         || null)
       : null,
     progress: fm ? (progress.get("firstmate") ?? null) : null,
@@ -504,8 +606,8 @@ const state = () => {
     // never got to say it - killed, or a machine that slept. When they
     // disagree, agent_finished wins: it is checked above and has already
     // removed the actor. This only catches a run that vanished.
-    if (done.has(task)) continue;
-    const t = tasks.find((x) => x.id === task);
+    if (done.has(ek(e))) continue;
+    const t = taskAt(projectOf(e), task);
     crew.push({
       id: actor,
       // stated, not guessed: the emitter writes what it is, so renaming
@@ -513,79 +615,121 @@ const state = () => {
       role: roles.get(actor) || roleOf(actor, e),
       state: phases.get(actor) || 'unknown',
       task, title: t?.title ?? null,
+      project: projectOf(e) || null,
       crew_name: names.get(actor),
       progress: progress.get(actor) ?? null,
       // Replay/event activity wins over static task.activity; never scalar title.
-      activity: activity.get(actor)
-        || authored((defs.find((d) => d.id === task) as { activity?: unknown } | undefined)?.activity)
-        || null,
+      activity: activity.get(actor) || planned(e) || null,
     });
   }
   // The permanently aboard human captain is rendered separately from agents.
 
   // A card names who is aboard on it: the agents on the deck, not whoever
   // once touched the task. firstmate is the coordinator, not the crew on it.
+  // Filtered by ?project= below, so this is every project's deck.
   const aboard = crew.slice(0, DECK_LIMIT);
   for (const t of tasks) {
-    t.crew = aboard.filter((c) => c.role !== "firstmate" && c.task === t.id).map((c) => c.crew_name || c.id);
+    t.crew = aboard.filter((c) => c.role !== "firstmate" && c.task === t.id && (c.project ?? "") === (t.project ?? ""))
+      .map((c) => c.crew_name || c.id);
   }
 
   // A refused merge stops being news once the same task or pull request is
   // merged afterwards - by a later answer on the board or any other way. The
-  // record keeps what happened; the flag says it has been overtaken.
-  const later = (a: unknown, b: unknown) => {
-    const x = Date.parse(String(a ?? "")), y = Date.parse(String(b ?? ""));
-    // event stamps are whole seconds: one in the same second is not earlier
-    return !Number.isFinite(x) || !Number.isFinite(y) || x + 1000 > y;
-  };
+  // record keeps what happened; the flag says it has been overtaken. Both
+  // are keyed by project: another project's merge of its T-001 is not this.
   const mergedEvents = events.filter((e) => e.type === "merged");
   const reviewed = responses.map((d: Record<string, any>) => {
-    if (d?.merged?.ok !== false) return d;
-    const sameWork = (task: unknown, number: unknown) =>
-      (d.task != null && task != null && String(task) === String(d.task))
-      || (d.pr != null && number != null && String(number) === String(d.pr));
-    const superseded = mergedEvents.some((e) => sameWork(e.task, e.pr) && later(e.ts, d.ts))
-      || responses.some((o: Record<string, any>) => o !== d && o?.merged?.ok === true
-        && sameWork(o.task, o.pr) && later(o.ts, d.ts));
-    return { ...d, superseded };
+    const merge = mergeOf(d);
+    const shown = { ...d, merge, ...(merge === "running" ? { merge_unknown: unknownOutcome.has(String(d.id)) } : {}) };
+    if (merge !== "failed") return shown;
+    const sameWork = (o: Record<string, unknown>) => projectOf(o) === projectOf(d) && (
+      (d.task != null && o.task != null && String(o.task) === String(d.task))
+      || (d.pr != null && o.pr != null && String(o.pr) === String(d.pr)));
+    const superseded = mergedEvents.some((e) => sameWork(e) && later(e.ts, d.ts))
+      || responses.some((o: Record<string, any>) => o !== d && mergeOf(o) === "merged"
+        && sameWork(o) && later(o.ts, d.ts));
+    return { ...shown, superseded };
   });
 
+  // The projects on the board, the default first: more than one is what
+  // makes the page put a project chip on every card, bubble and decision.
+  // Every lane card, card and answer counts, whatever its shape; firstmate,
+  // who is every project's, names none.
+  const seen = new Set<string>([def]);
+  for (const x of [...tasks, ...pend, ...responses] as Array<Record<string, unknown>>) seen.add(projectOf(x));
+  for (const c of crew) if (c.role !== "firstmate") seen.add(projectOf(c));
+  const projects = [...seen].filter(Boolean);
+  // ?project= keeps that project's records; firstmate, who is every
+  // project's, stays aboard
+  const mine = (o: unknown) => only === null || projectOf(o) === only;
+  const shownTasks = tasks.filter(mine);
+  const shownPending = pend.filter(mine);
+  const shownCrew = crew.filter((c) => c.role === "firstmate" || mine(c));
+
+  const outcomeOf = (e: Event) => e.type === "decision_made"
+    ? `decision:${(e.data as any)?.decision ?? JSON.stringify(e)}`
+    // the default project's merges keep the identity they always had
+    : projectOf(e) === def ? `merge:${e.pr ?? e.task ?? JSON.stringify(e)}`
+    : `merge:${projectOf(e)}:${e.pr ?? e.task ?? JSON.stringify(e)}`;
   const out = {
     engine: engine(),
     lanes: LANES,
+    projects,
+    // what a record naming no project belongs to, and the filter in force
+    default_project: def || null,
+    project: only,
     // The deck holds this many. One number: the server truncates and
     // tells the page what the limit was, rather than both of them
     // knowing 24 - truncating only on the client also left the server
     // building an unbounded array into every payload.
     deckLimit: DECK_LIMIT,
-    crew: crew.slice(0, DECK_LIMIT),
+    crew: shownCrew.slice(0, DECK_LIMIT),
     greenlit,
     counts: {
-      merged: tasks.filter((t) => t.stage === "merged").length,
-      inflight: tasks.filter((t) => ["working", "review"].includes(t.stage)).length,
-      blocked: tasks.filter((t) => t.stage === "gate").length,
-      ready: tasks.filter((t) => t.stage === "ready").length,
-      backlog: tasks.filter((t) => t.stage === "backlog").length,
-      parked: tasks.filter((t) => t.stage === "parked").length,
-      // one per decision on the deck: the captain is what these wait on
-      waiting: pend.length,
+      merged: shownTasks.filter((t) => t.stage === "merged").length,
+      inflight: shownTasks.filter((t) => ["working", "review"].includes(t.stage)).length,
+      blocked: shownTasks.filter((t) => t.stage === "gate").length,
+      ready: shownTasks.filter((t) => t.stage === "ready").length,
+      backlog: shownTasks.filter((t) => t.stage === "backlog").length,
+      parked: shownTasks.filter((t) => t.stage === "parked").length,
+      // one per decision on the deck: the captain is what these wait on,
+      // every project's or only the filtered one's
+      waiting: shownPending.length,
     },
-    tasks,
+    tasks: shownTasks,
     // design.md is linked from a card only when there is one to open
     designDoc: existsSync(join(ROOT, "design/design.md")),
     // Full outcome stream: a busy refresh must not lose events outside recent.
-    responses: reviewed.map(linked),
-    handoffs,
-    outcomes: [...events.filter(e => e.type === "merged" || e.type === "decision_made")
-      .map(e => linked({ ...e, identity: e.type === "decision_made"
-        ? `decision:${(e.data as any)?.decision ?? JSON.stringify(e)}` : `merge:${e.pr ?? e.task ?? JSON.stringify(e)}` })),
-      ...responses.filter(d => d.identity).map(d => ({type:'decision_made',identity:d.identity,data:{decision:d.id,chosen:d.chosen}}))],
-    recent: events.slice(-40).reverse().map(linked),
-    pending: pend.map(linked),
+    responses: reviewed.filter(mine).map(linked),
+    handoffs: handoffs.filter((h) => !("project" in h) || mine(h)),
+    outcomes: [...events.filter(e => (e.type === "merged" || e.type === "decision_made") && mine(e))
+      .map(e => linked({ ...e, identity: outcomeOf(e) })),
+      ...responses.filter(d => d.identity && mine(d)).map(d => ({type:'decision_made',identity:d.identity,data:{decision:d.id,chosen:d.chosen}}))],
+    recent: events.filter(mine).slice(-40).reverse().map(linked),
+    pending: shownPending.map(linked),
   };
-  return { ...out, pr_urls: mentioned(repo, out) };
+  // Every #n in text links to its own project's pull request: a log line,
+  // a card and a crewman's activity each read the map of the project they
+  // belong to. `pr_urls` is the default project's, which is every #n on a
+  // board of one project.
+  const byProject: Record<string, Record<string, string>> = {};
+  for (const list of [out.tasks, out.crew, out.pending, out.responses, out.recent, out.outcomes, out.handoffs] as unknown[][])
+    for (const x of list) {
+      const p = projectOf(x);
+      byProject[p] = mentioned(repoOf(p), x, byProject[p] ?? {});
+    }
+  return { ...out, pr_urls: byProject[def] ?? {}, pr_urls_by_project: byProject };
 };
 
+// whether `a` happened at or after `b`. Event stamps are whole seconds, so
+// one in the same second is not earlier.
+const later = (a: unknown, b: unknown) => {
+  const x = Date.parse(String(a ?? "")), y = Date.parse(String(b ?? ""));
+  return !Number.isFinite(x) || !Number.isFinite(y) || x + 1000 > y;
+};
+
+// when the board first saw each pending card's file, by file name
+const firstSeen = new Map<string, number>();
 // Decisions the captain has been asked for but has not answered.
 // A card for a pull request that is already merged is the board lying. It
 // happens whenever a merge goes through some other way - a decision file
@@ -605,17 +749,173 @@ const pending = () => {
       .map((e) => within((e as Record<string, unknown>).project, (e as Record<string, unknown>).pr)),
   );
   const settledTasks = new Set(terminal.filter(e => e.task).map(e => within((e as Record<string, unknown>).project, e.task)));
-  // readdirSync order is filesystem-dependent (macOS vs Linux CI). Sort by
-  // decision id so the deck and multi-card tests stay stable everywhere.
-  return readdirSync(dir).filter((f) => f.endsWith(".json")).flatMap((f) => {
+  // Oldest request first, every project's cards in one list (design section
+  // 15.10 point 4), so a card never hides behind another project's and
+  // answering one never reorders the rest. A record that states its own `ts`
+  // is taken at its word. Otherwise it is when the file was written, as the
+  // board first saw it: bin/fm-decide.sh creates a card once, with noclobber,
+  // and nothing else writes one, and should anything rewrite a card anyway it
+  // keeps its place while the board runs. The id settles a tie, never
+  // readdirSync, whose order differs between macOS and Linux.
+  const files = readdirSync(dir).filter((f) => f.endsWith(".json"));
+  for (const f of [...firstSeen.keys()]) if (!files.includes(f)) firstSeen.delete(f);
+  const asked = (d: Record<string, unknown>, f: string) => {
+    const t = Date.parse(String(d.ts ?? ""));
+    if (Number.isFinite(t)) return t;
+    if (!firstSeen.has(f)) firstSeen.set(f, statSync(join(dir, f)).mtimeMs);
+    return firstSeen.get(f)!;
+  };
+  return files.flatMap((f) => {
     try {
       const d = JSON.parse(readFileSync(join(dir, f), "utf8"));
       if (d.pr != null && settled.has(within(d.project, d.pr))) return [];
       if (d.task != null && settledTasks.has(within(d.project, d.task))) return [];
-      return [{ ...d, owner: ownerOf(d.id) }];
+      return [{ card: { ...d, owner: ownerOf(d.id) }, at: asked(d, f) }];
     } catch { return []; }
-  }).sort((a, b) => String(a.id ?? "").localeCompare(String(b.id ?? ""), "en", { numeric: true }));
+  }).sort((a, b) => a.at - b.at
+    || String(a.card.id ?? "").localeCompare(String(b.card.id ?? ""), "en", { numeric: true }))
+    .map((x) => x.card);
 };
+
+// --- Merges run after the answer, not inside it (design sections 5.2, 15.10) ---
+// One merge at a time within a project, any number across projects. The
+// board is the only writer of a decision record's `merge`: it publishes
+// "running", starts bin/fm-merge.sh detached under the project's merge
+// marker, and rewrites the record to "merged" or "failed" when the helper
+// exits. A helper that dies without a word - or a board that restarts while
+// one runs - is recovered from the marker, the log and GitHub, never guessed.
+const MERGING = join(ROOT, "state/merging");
+// a tree with no registry has one project with no name; no name can begin
+// with an underscore, so its marker cannot be taken for a project's
+const markerOf = (project: string) => join(MERGING, `${project || "_default"}.json`);
+type Marker = { decision: string; project: string; pr: number; task: string | null; pid: number; started: string; ts: string };
+const readJson = <T,>(file: string): T | null => {
+  try { return JSON.parse(readFileSync(file, "utf8")) as T; } catch { return null; }
+};
+// when a process started, as ps prints it: with the pid, what tells the
+// helper the board started apart from a later process given the same pid
+const startedAt = (pid: number): string => {
+  try {
+    const r = Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)], { stdin: "ignore", env: childEnv() });
+    return r.exitCode === 0 ? new TextDecoder().decode(r.stdout).trim().replace(/\s+/g, " ") : "";
+  } catch { return ""; }
+};
+const alive = (m: Marker | null): boolean => {
+  if (!m || !Number.isSafeInteger(m.pid) || m.pid <= 1 || !m.started) return false;
+  try { process.kill(m.pid, 0); } catch (e) { if ((e as { code?: string }).code !== "EPERM") return false; }
+  return startedAt(m.pid) === m.started;
+};
+// write a record whole or not at all: a reader never sees half of one
+const rewrite = (file: string, record: unknown) => {
+  const temporary = join(RESPONSES, `.${crypto.randomUUID()}.tmp`);
+  writeFileSync(temporary, JSON.stringify(record) + "\n", { flag: "wx" });
+  renameSync(temporary, file);
+};
+// the merges this board process started and is waiting on itself
+const ours = new Set<string>();
+// A running record's outcome, written once. The marker goes with it, so the
+// project's turn is free the moment the record says how it ended.
+const settle = (id: string, merge: "merged" | "failed", reason = "") => {
+  const file = join(RESPONSES, `${id}.json`);
+  const d = readJson<Record<string, any>>(file);
+  unknownOutcome.delete(id);
+  if (d && mergeOf(d) === "running") {
+    rewrite(file, { ...d, merge, ...(merge === "failed" ? { merge_reason: reason } : {}), merge_settled: new Date().toISOString() });
+  }
+  const marker = markerOf(projectOf(d));
+  if (readJson<Marker>(marker)?.decision === id) { try { unlinkSync(marker); } catch { /* already gone */ } }
+};
+// a project's turn is held while any of its records says running, whether
+// this board started it, a previous one did, or its outcome is unknown
+const mergeRunningIn = (project: string) =>
+  readResponses().some((d) => mergeOf(d) === "running" && projectOf(d) === project);
+const HELPER_STOPPED = "the merge helper stopped before recording an outcome";
+// Start the helper for an answered merge card. Detached, with its output in
+// a file: a board restarting under bun --watch neither kills it nor leaves
+// it writing into a closed pipe.
+const startMerge = (id: string, project: string, pr: number, task: string | null, onProject: string[]) => {
+  mkdirSync(MERGING, { recursive: true });
+  const log = join(MERGING, `${project || "_default"}.out`);
+  let child;
+  try {
+    const fd = openSync(log, "w");
+    try {
+      child = spawn(join(ROOT, "bin/fm-merge.sh"),
+        ["--pr", String(pr), ...(task ? ["--task", task] : []), ...onProject, "--repo", ROOT],
+        { detached: true, stdio: ["ignore", fd, fd], env: childEnv() });
+    } finally { closeSync(fd); }
+  } catch { settle(id, "failed", "Merge helper unavailable"); return; }
+  ours.add(id);
+  const reasonOf = (code: number | null) => {
+    let said = "";
+    try { said = readFileSync(log, "utf8").trim().split("\n").filter((l) => l.trim()).pop() ?? ""; } catch { /* none */ }
+    return (said || `the merge helper exited ${code ?? "on a signal"}`).slice(0, 500);
+  };
+  child.on("error", () => { ours.delete(id); settle(id, "failed", "Merge helper unavailable"); });
+  child.on("exit", (code) => {
+    ours.delete(id);
+    settle(id, code === 0 ? "merged" : "failed", code === 0 ? "" : reasonOf(code));
+  });
+  // not unref'd: the board runs until it is stopped anyway, and its exit
+  // handler above is how the record learns the outcome
+  if (!child.pid) return;
+  const marker: Marker = { decision: id, project, pr, task, pid: child.pid, started: startedAt(child.pid), ts: new Date().toISOString() };
+  writeFileSync(markerOf(project), JSON.stringify(marker) + "\n");
+};
+// What GitHub says of a pull request: MERGED, OPEN, CLOSED, or null when it
+// cannot be read. Asynchronous, so a slow gh never stalls the board.
+// Only ever on the repository the registry names for the record's project.
+// A project the registry does not name - unregistered since, or a registry
+// that refuses - has no repository, and its outcome is unknown: gh is not
+// asked at all, because without --repo it answers for the checkout the board
+// runs in, which is some other project's #n.
+const GH = process.env.FM_GH || "gh";
+const githubState = async (project: string, pr: number): Promise<string | null> => {
+  const repo = repoOf(project);
+  if (!repo) return null;
+  try {
+    const p = Bun.spawn([GH, "pr", "view", String(pr), "--repo", repo, "--json", "state"],
+      { cwd: ROOT, stdin: "ignore", stdout: "pipe", stderr: "ignore", env: childEnv() });
+    const timer = setTimeout(() => p.kill(), 20_000);
+    const [code, text] = await Promise.all([p.exited, new Response(p.stdout).text()]);
+    clearTimeout(timer);
+    if (code !== 0) return null;
+    const s = (JSON.parse(text) as { state?: unknown }).state;
+    return s === "MERGED" || s === "OPEN" || s === "CLOSED" ? s : null;
+  } catch { return null; }
+};
+// On start and on every poll while a record says running: a helper still
+// alive is left to finish; one that is gone has its outcome read from a
+// merged event for the card's (project, pr) after the answer, then from
+// GitHub. If GitHub cannot be read the record stays running, marked unknown,
+// and the next poll tries again.
+let recovering = false;
+const recover = async () => {
+  if (recovering) return;
+  recovering = true;
+  try {
+    for (const d of readResponses()) {
+      const id = String(d.id ?? "");
+      if (mergeOf(d) !== "running" || ours.has(id)) continue;
+      const project = projectOf(d);
+      const marker = readJson<Marker>(markerOf(project));
+      if (marker?.decision === id && alive(marker)) { unknownOutcome.delete(id); continue; }
+      const pr = prNumber(d.pr);
+      const logged = pr !== null && readEvents().some((e) => e.type === "merged"
+        && projectOf(e) === project && prNumber(e.pr) === pr && later(e.ts, d.ts));
+      if (logged) { settle(id, "merged"); continue; }
+      const gh = pr === null ? null : await githubState(project, pr);
+      // the record may have been settled while GitHub was being asked
+      if (mergeOf(readJson(join(RESPONSES, `${id}.json`))) !== "running") continue;
+      if (gh === "MERGED") settle(id, "merged");
+      else if (gh === "OPEN" || gh === "CLOSED") settle(id, "failed", HELPER_STOPPED);
+      else unknownOutcome.add(id);
+    }
+  } finally { recovering = false; }
+};
+const anyRunning = () => readResponses().some((d) => mergeOf(d) === "running" && !ours.has(String(d.id ?? "")));
+if (anyRunning()) void recover();
+setInterval(() => { if (anyRunning()) void recover(); }, 1000);
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -633,7 +933,11 @@ const server = Bun.serve({
   port: PORT,
   fetch(req) {
     const url = new URL(req.url);
-    if (url.pathname === "/api/state") return json(state());
+    // ?project= shows one project; without it, or with no project's name,
+    // every project is on the board
+    const asked = url.searchParams.get("project") ?? "";
+    const only = PROJECT_NAME.test(asked) ? asked : null;
+    if (url.pathname === "/api/state") return json(state(only));
 
     // the dictionaries, plus the table that derives zh-CN from zh-TW
     if (url.pathname === "/api/i18n") {
@@ -655,11 +959,16 @@ const server = Bun.serve({
           const enc = new TextEncoder();
           const send = (event: string, data: unknown) =>
             c.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-          send("state", state());
-          let size = existsSync(LOG) ? statSync(LOG).size : 0;
+          send("state", state(only));
+          // the log is not all the board shows: a merge's outcome lands in
+          // its decision record, and an unknown one is known only here
+          const stamp = () => [LOG, RESPONSES, join(ROOT, "state/pending")]
+            .map((f) => { try { const s = statSync(f); return `${s.size}:${s.mtimeMs}`; } catch { return "-"; } })
+            .join("|") + `|${[...unknownOutcome].sort().join(",")}`;
+          let size = stamp();
           const poll = setInterval(() => {
-            const now = existsSync(LOG) ? statSync(LOG).size : 0;
-            if (now !== size) { size = now; send("state", state()); }
+            const now = stamp();
+            if (now !== size) { size = now; send("state", state(only)); }
           }, 500);
           const beat = setInterval(() => c.enqueue(enc.encode(": beat\n\n")), 15000);
           // a change to the page itself reloads every open board
@@ -689,14 +998,15 @@ const server = Bun.serve({
         }
 
         const p = pending().find((d: any) => d.id === id);
-        const dir = join(ROOT, "state/decisions");
+        const dir = RESPONSES;
         mkdirSync(dir, { recursive: true });
         const file = join(dir, `${id}.json`);
         if (existsSync(file)) {
+          // the stored record, with whatever merge it holds by now
           const decision = JSON.parse(readFileSync(file, "utf8"));
           if (decision.chosen !== chosen || (chosen === "custom" && decision.text !== text))
             return json({ error: "decision already recorded differently" }, 409);
-          return json({ ok: true, already: true, decision, merged: decision.merged ?? null });
+          return json({ ok: true, already: true, decision, merge: mergeOf(decision) });
         }
         if (!p) return json({ error: "no pending decision" }, 404);
         // D exists only on a card that offers it: a readiness card's drop (T-059)
@@ -707,14 +1017,21 @@ const server = Bun.serve({
         // so the id's owner is never passed on as a --project
         const project = typeof p.project === "string" && p.project ? p.project : null;
         const onProject = project ? ["--project", project] : [];
-        const decision = {
+        const merging = p.kind === "merge" && chosen === "A" && prNumber(p.pr) !== null && typeof p.pr === "number";
+        // One merge at a time within a project. Refused before anything is
+        // published or emitted, so the card stays pending as it was; nothing
+        // below awaits, so no second answer can slip in between.
+        if (merging && mergeRunningIn(projectOf(p)))
+          return json({ error: "a merge is already running in this project", code: "mergeBusy", project: projectOf(p) || null }, 409);
+        const decision: Record<string, unknown> = {
           id, chosen, task: p?.task ?? null, pr: typeof p?.pr === "number" ? p.pr : null, kind: p?.kind ?? "choice",
           ...(project ? { project } : {}),
           ...(chosen === "custom" ? { text } : {}),
           note: typeof body?.note === "string" ? body.note.slice(0, 500) : "",
           ts: new Date().toISOString(),
-          identity: `decision:${id}`, merged: (p.kind === 'merge' && chosen === 'A'
-            ? {ok:false,out:'Merge outcome not confirmed'} : null) as null | { ok: boolean; out: string },
+          identity: `decision:${id}`,
+          // published running; the helper's exit rewrites it to merged or failed
+          merge: merging ? "running" : null,
         };
         // Exclusive creation makes repeated requests unable to rerun a merge.
         const temporary = join(dir, `.${id}.${crypto.randomUUID()}.tmp`);
@@ -727,25 +1044,16 @@ const server = Bun.serve({
           ...(p.task ? ["--task", p.task] : []), ...onProject,
           "--data", JSON.stringify({ decision: id, chosen, outcome: "recorded" }),
           "--en", `${id} recorded ${chosen}`, "--tw", `${id} 已記錄 ${chosen}`],
-          { env: { ...process.env, FM_ROOT: ROOT } });
+          { env: childEnv() });
           eventRecorded = emitted.exitCode === 0;
         } catch { /* the durable decision still exists; report the event failure */ }
 
-        let merged = null;
-        if (p?.kind === "merge" && chosen === "A" && typeof p.pr === "number") {
-          try {
-          const r = Bun.spawnSync([join(ROOT, "bin/fm-merge.sh"),
-            "--pr", String(p.pr), ...(p.task ? ["--task", p.task] : []), ...onProject, "--repo", ROOT],
-            { env: { ...process.env, FM_ROOT: ROOT } });
-          merged = { ok: r.exitCode === 0, out: new TextDecoder().decode(r.stdout).trim() };
-          } catch { merged = {ok:false,out:'Merge helper unavailable'}; }
-        }
-        decision.merged = merged;
-        writeFileSync(temporary, JSON.stringify(decision) + "\n", { flag: "wx" });
-        renameSync(temporary, file);
+        // the helper runs in the background; the answer does not wait for it
+        if (merging) startMerge(id, projectOf(p), p.pr, p.task ?? null, onProject);
         const pf = join(ROOT, "state/pending", `${id}.json`);
         if (existsSync(pf)) unlinkSync(pf);
-        return json({ ok: true, decision, merged, eventRecorded });
+        const stored = readJson<Record<string, unknown>>(file) ?? decision;
+        return json({ ok: true, decision: stored, merge: mergeOf(stored), eventRecorded });
       }).catch(() => json({ error: "bad request" }, 400));
     }
 
@@ -763,14 +1071,18 @@ const server = Bun.serve({
         const action = typeof body?.action === "string" ? body.action : "";
         const spec = Object.hasOwn(ACTION_EVENT, action) ? ACTION_EVENT[action] : null;
         if (!spec) return json({ error: "bad action" }, 400);
-        const task = state().tasks.find((x) => x.id === id);
+        // a task is its project and its id; naming none is the default's
+        const project = typeof body?.project === "string" && body.project ? body.project : defaultProject();
+        const task = state().tasks.find((x) => x.id === id && (x.project ?? "") === project);
         if (!task) return json({ error: "no such task" }, 404);
         if (!task.actions.includes(action))
           return json({ error: `cannot ${action} a task that is ${task.stage}`, stage: task.stage }, 409);
+        // the default project's events name none, exactly as before
+        const onProject = project && project !== defaultProject() ? ["--project", project] : [];
         const r = Bun.spawnSync([join(ROOT, "bin/fm-emit.sh"),
-          "--actor", "captain", "--type", spec.type, "--task", id,
+          "--actor", "captain", "--type", spec.type, "--task", id, ...onProject,
           "--en", spec.en.replace("{id}", id), "--tw", spec.tw.replace("{id}", id)],
-          { env: { ...process.env, FM_ROOT: ROOT } });
+          { env: childEnv() });
         if (r.exitCode !== 0)
           return json({ error: "the event was not written", out: new TextDecoder().decode(r.stderr).trim() }, 500);
         return json({ ok: true, task: id, action, event: spec.type });
@@ -802,7 +1114,7 @@ const server = Bun.serve({
       if (!abs) return json({ error: "outside the repository" }, 403);
       const editor = (readFileSync(join(ROOT, "config.yaml"), "utf8")
         .match(/^editor:\s*([^\s#]+)/m)?.[1] ?? "code");
-      Bun.spawn([editor, abs], { stdout: "ignore", stderr: "ignore" });
+      Bun.spawn([editor, abs], { stdout: "ignore", stderr: "ignore", env: childEnv() });
       return json({ ok: true, opened: abs, editor });
     }
 
@@ -818,7 +1130,7 @@ const server = Bun.serve({
       if (!localOnly(req)) return json({ error: "localhost only" }, 403);
       const branch = url.searchParams.get("branch") ?? "";
       if (!/^[A-Za-z0-9._\/-]{1,120}$/.test(branch)) return json({ error: "bad branch" }, 400);
-      const r = Bun.spawnSync(["git", "-C", ROOT, "diff", `main...${branch}`], {});
+      const r = Bun.spawnSync(["git", "-C", ROOT, "diff", `main...${branch}`], { env: childEnv() });
       if (r.exitCode !== 0) return json({ error: "no such branch" }, 404);
       return new Response(r.stdout, { headers: { "content-type": "text/plain; charset=utf-8" } });
     }
