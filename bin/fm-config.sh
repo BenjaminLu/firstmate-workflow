@@ -94,6 +94,101 @@ fm_project() {  # fm_project <field> [file]
 # the same parser fm_project uses. A self entry carrying its own `project:`
 # as well as the top-level block is refused, so the two cannot disagree.
 fm_projects()         { _fm_registry "${1:-config.yaml}" names; }
+
+# The crew's permission policy (T-105, T-117): what every crew round may do,
+# per role, whichever vendor runs it. The operator's own CLI settings are
+# not part of it - a worker used to inherit whatever the captain's machine
+# allowed, and cursor-agent ran with -f and no sandbox at all.
+#
+#   fm_policy worker|reviewer [project] [file] -> the resolved policy, JSON
+#
+# config.yaml's `policy:` block holds it, and a project's own
+# `projects.<name>.policy:` overrides it; both take the same keys, flat for
+# both roles or under `worker:` / `reviewer:` for one:
+#
+#   network:     the registries the round's commands may reach (default
+#                none); a later layer replaces an earlier one
+#   read:        more paths readable besides the write roots and the
+#                toolchain; added to, never replacing
+#   never_read:  more paths no round may read; added to
+#   procs, cpu:  the process and CPU-seconds ulimits
+#
+# What is not a key cannot be loosened by one: the write roots (the round's
+# worktree or checkout, and a TMPDIR of its own), the never-readable floor
+# (~/.ssh, ~/.config/gh, cloud credentials, every vendor's home but for its
+# own auth and session state, fm's state/ and the other worktrees in it),
+# the refused operations
+# (git push, gh, herdr, browsers, MCP), no unix sockets, the environment
+# scrub, and the repository's own .claude/, .mcp.json, .cursor/ and
+# GEMINI.md staying unloaded. GitHub and loopback are never a registry: a
+# network naming one is refused (65), as is any key or value that does not
+# read. The project is named the way fm_project_resolve names it; with no
+# project registered, only the top-level block applies. Before T-105 the
+# reviewer's hosts were `reviewer: network:`, which still counts when no
+# policy layer declares a network.
+#
+# There is deliberately no key that turns the OS sandbox off: a branch can
+# change config.yaml. The one escape hatch for a sandbox regression is
+# FM_CREW_UNSANDBOXED=1 in the operator's own shell (fm-worker.sh,
+# fm-review.sh; design 13.1).
+fm_policy() { _fm_registry "${3:-config.yaml}" policy "$1" "${2:-}"; }
+
+# fm_crew_hatch <script> -> 0, with FM_ROUND_UNSANDBOXED=1 exported, when the
+#   operator's own shell set FM_CREW_UNSANDBOXED=1 and this is not a crew
+#   round; 1 otherwise, with FM_ROUND_UNSANDBOXED unset whatever the caller
+#   inherited. The escape hatch for a sandbox regression (T-117): the
+#   adapters then run the round without the OS sandbox. It is loud on
+#   stderr here; the caller says so in the round's log and on the board.
+#   fm-sandbox.sh marks every round FM_IN_ROUND=1 and scrubs both names, so
+#   a round - or an fm script a round starts - never takes it.
+fm_crew_hatch() {
+  unset FM_ROUND_UNSANDBOXED
+  [ "${FM_CREW_UNSANDBOXED:-}" = 1 ] || return 1
+  if [ -n "${FM_IN_ROUND:-}" ]; then
+    echo "$1: FM_CREW_UNSANDBOXED is set inside a crew round; the escape hatch is the operator's, not a round's - ignoring it" >&2
+    return 1
+  fi
+  FM_ROUND_UNSANDBOXED=1; export FM_ROUND_UNSANDBOXED
+  echo "$1: !!! FM_CREW_UNSANDBOXED=1: this round runs WITHOUT the OS sandbox; unset it once the sandbox is fixed !!!" >&2
+}
+
+# fm_policy_blocked <file> -> each host a round's proxy refused, once
+fm_policy_blocked() { [ -s "${1:-}" ] || return 0; awk 'NF && !seen[$0]++' "$1"; }
+
+# fm_policy_report <repo> <role> <task> <actor> <file> [policy] -> the
+#   refused hosts, on one line, and one record of them appended to
+#   state/policy/blocked-hosts.jsonl. A round is never given a host it was
+#   refused: firstmate reads the record and raises a choice card to add it
+#   to the project's `policy: network:`, and only the captain's answer
+#   changes the policy. One JSON object per line:
+#     at        when the round ended, UTC
+#     task, role, actor
+#     project   the project whose policy the round ran under ('' for none)
+#     hosts     each refused host once, in the order it was first refused
+#     declared  the registries the round had
+#     add_to    the config.yaml key a card would add a host to:
+#               projects.<name>.policy.network, or policy.network
+#     source    proxy: fm's own proxy refused them (design 13.1 names what
+#               it cannot see)
+fm_policy_report() {
+  local hosts project='' declared='[]'
+  hosts="$(fm_policy_blocked "$5" | tr '\n' ' ' | sed 's/ $//')"
+  [ -n "$hosts" ] || return 0
+  if [ -n "${6:-}" ] && [ -r "$6" ]; then
+    project="$(jq -r '.project // ""' "$6" 2>/dev/null)"
+    declared="$(jq -c '.network // []' "$6" 2>/dev/null)" || declared='[]'
+  fi
+  mkdir -p "$1/state/policy" &&
+    jq -cn --arg role "$2" --arg task "$3" --arg actor "$4" --arg hosts "$hosts" \
+      --arg project "$project" --argjson declared "${declared:-[]}" \
+      --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{at:$at, task:$task, role:$role, actor:$actor, project:$project,
+        hosts:($hosts | split(" ")), declared:$declared,
+        add_to:(if $project == "" then "policy.network" else "projects.\($project).policy.network" end),
+        source:"proxy"}' \
+      >> "$1/state/policy/blocked-hosts.jsonl"
+  printf '%s\n' "$hosts"
+}
 fm_project_resolve()  { _fm_registry "${2:-config.yaml}" resolve "${1:-}"; }
 fm_project_get()      { _fm_registry "${3:-config.yaml}" field "$1" "$2"; }
 fm_project_contract() { _fm_registry "${3:-config.yaml}" contract "$1" "$2"; }
@@ -107,7 +202,7 @@ fm_project_use() {
 
 _fm_registry() {  # _fm_registry <file> <mode> [args...]
   python3 - "$_fm_code_dir/fm-herdr.py" "$@" <<'PY'
-import importlib.util, os, re, sys, tempfile
+import getpass, importlib.util, json, os, re, sys, tempfile
 from pathlib import Path
 
 herdr_path, config, mode, *args = sys.argv[1:]
@@ -120,7 +215,7 @@ if Path(config).is_file():
               file=sys.stderr); sys.exit(65)
     spec = importlib.util.spec_from_file_location('fm_herdr', herdr_path)
     herdr = importlib.util.module_from_spec(spec); spec.loader.exec_module(herdr)
-FIELDS = ('repo', 'github', 'base', 'required_check', 'design', 'tasks', 'project')
+FIELDS = ('repo', 'github', 'base', 'required_check', 'design', 'tasks', 'project', 'policy')
 NAME = re.compile(r'[a-z0-9-]{1,24}$')
 GITHUB = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+$')
 
@@ -200,7 +295,7 @@ def load(path):
             j += 1
             while j < len(children) and indent(children[j]) > own:
                 nested.append(children[j]); j += 1
-            if key == 'project':
+            if key in ('project', 'policy'):
                 if value and not value.startswith('#'): refuse(name, key, 'must be a block, as in T-043')
                 entry[key] = nested
             else:
@@ -225,10 +320,241 @@ def load(path):
             refuse(name, 'project', 'is also declared by the top-level project: block; '
                    'until T-050 the contract lives only there')
         if 'project' in entry: contract_of(name, entry['project'], None)
+        if 'policy' in entry: policy_layer(entry['policy'], 'projects.%s.policy' % name)
     selves = [name for name in order if projects[name].get('repo') == '.']
     if len(selves) > 1:
         refuse(selves[1], 'repo', 'is . for %s as well; only one project is the engine itself' % selves[0])
     return default, projects, has_top
+
+
+# --- the crew's permission policy (T-105, T-117; see fm_policy above) -----
+ROLES = ('worker', 'reviewer')
+POLICY_KEYS = ('network', 'read', 'never_read', 'procs', 'cpu')
+# every dimension a round is confined in; an adapter enforces some with its
+# CLI's own flags and bin/fm-sandbox.sh the rest, or the adapter refuses
+DIMENSIONS = ['write', 'read', 'network', 'sockets', 'env', 'repo-config', 'refuse', 'ulimit']
+# readable besides the write roots: what running a toolchain needs, and no
+# home directory as a whole
+TOOLCHAIN = ['/usr', '/bin', '/sbin', '/opt', '/etc', '/private/etc', '/dev', '/System',
+             '/Library/Developer', '/Library/Frameworks', '/Library/Java', '/Library/Apple',
+             '/Applications/Xcode.app', '/private/var/db/timezone', '/private/var/select',
+             '/lib', '/lib32', '/lib64', '/nix', '/snap',
+             '~/.local/bin', '~/.local/share/claude', '~/.local/share/cursor-agent',
+             '~/.bun/bin', '~/.nvm', '~/.volta', '~/.cargo/bin', '~/.rustup', '~/.pyenv',
+             '~/.local/share/mise', '~/.deno/bin', '~/go/bin']
+# never readable, whatever a layer adds to `read`. {state} is fm's state/,
+# which holds every other worktree; the round's own worktree is a write
+# root and stays reachable
+NEVER_READ = ['~/.ssh', '~/.gnupg', '~/.netrc', '~/.git-credentials', '~/.config/gh',
+              '~/.aws', '~/.azure', '~/.config/gcloud', '~/.docker', '~/.kube',
+              '~/.npmrc', '~/.pypirc', '~/.config/herdr',
+              '~/.claude', '~/.claude.json', '~/.codex', '~/.cursor', '~/.config/cursor',
+              '~/.gemini', '{state}']
+# Each vendor's home is never readable as a whole: it holds the operator's
+# settings, hooks, skills and MCP servers as well as the login. Its round
+# gets back only what it needs to start and sign in (design 13.1 names each
+# one and why):
+#
+#   auth   files readable only: the login, where the CLI keeps it in a file
+#   state  what the CLI writes as it runs - session files, logs, caches and
+#          the one config file it rewrites - readable and writable, each
+#          entry a prefix, so a file rewritten through x.tmp.123 or x.lock
+#          stays writable too. None of it is a credential or a setting.
+#   tmp    directories the CLI keeps under the system's /tmp whatever
+#          TMPDIR says, readable and writable. Only macOS needs them: on
+#          Linux the round's /tmp is a fresh one of its own.
+#   login  the login fm reads OUTSIDE the round and hands in, because the
+#          round cannot reach where the operator's login keeps it (T-117):
+#            keychain  generic-password items, by service and account,
+#                      read on macOS with security(1); the keychain itself
+#                      stays out of every round's reach
+#            file      files read when no keychain item is there
+#            field     the JSON field of the value that is the token
+#            expires   the JSON field saying when it expires, in ms; a
+#                      login past it is no login
+#            given     variables that, set in the operator's environment,
+#                      already carry a login, so nothing is read
+#            to        env:<NAME>, the token handed in as that variable;
+#                      or keychain, the item served under its own service
+#                      and account by the round's stand-in for security(1)
+#          Only an access token is handed in, never a refresh token: a
+#          round that refreshed a login would rotate the operator's out
+#          from under them.
+#   hosts  the vendor's own service: the whole CLI runs inside the OS
+#          sandbox, so its API has to be reachable through the round's proxy
+#
+# {uid} and {user} are the operator's.
+VENDORS = {
+    # A round's claude has a config directory of its own (CLAUDE_CONFIG_DIR,
+    # in the round's temp directory), so ~/.claude and ~/.claude.json are
+    # not opened at all; its login is the access token of the one the
+    # operator uses - the keychain item on macOS, the credentials file
+    # elsewhere - handed in as CLAUDE_CODE_OAUTH_TOKEN
+    'claude': dict(auth=[], state=[], tmp=['/tmp/claude-{uid}'],
+                   login=dict(keychain=[dict(service='Claude Code-credentials', account='{user}')],
+                              file=['~/.claude/.credentials.json'],
+                              field='claudeAiOauth.accessToken', expires='claudeAiOauth.expiresAt',
+                              given=['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'],
+                              to='env:CLAUDE_CODE_OAUTH_TOKEN'),
+                   hosts=['anthropic.com', 'claude.ai']),
+    'codex': dict(auth=['~/.codex/auth.json'],
+                  state=['~/.codex/sessions', '~/.codex/log', '~/.codex/history.jsonl',
+                         '~/.codex/version.json', '~/.codex/models_cache.json'],
+                  tmp=[], login={}, hosts=['openai.com', 'chatgpt.com']),
+    # `agent login` keeps the access token in the macOS keychain; the round
+    # is served that one item and no other. Elsewhere it is a file.
+    'cursor-agent': dict(auth=['~/.config/cursor/auth.json'],
+                         state=['~/.cursor/chats', '~/.cursor/projects', '~/.cursor/cli-config.json',
+                                '~/.cursor/statsig-cache.json'],
+                         tmp=[],
+                         login=dict(keychain=[dict(service='cursor-access-token', account='cursor-user')],
+                                    file=['~/.config/cursor/auth.json'], field='accessToken',
+                                    given=['CURSOR_API_KEY'], to='keychain'),
+                         hosts=['cursor.sh', 'cursor.com']),
+    'gemini': dict(auth=['~/.gemini/oauth_creds.json'],
+                   state=['~/.gemini/tmp', '~/.gemini/history', '~/.gemini/google_accounts.json',
+                          '~/.gemini/installation_id', '~/.gemini/user_id'],
+                   tmp=[], login={}, hosts=['googleapis.com']),
+}
+REFUSE = ['git push', 'gh', 'herdr', 'browser', 'mcp']
+# FM_CREW_UNSANDBOXED and FM_ROUND_UNSANDBOXED are the operator's escape
+# hatch (design 13.1): never a round's, so a nested fm run inside one
+# cannot switch its own sandbox off
+SCRUB = dict(names=['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN',
+                    'SSH_AUTH_SOCK', 'SSH_AGENT_PID', 'GOOGLE_APPLICATION_CREDENTIALS',
+                    'DISPLAY', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'BROWSER',
+                    'FM_CREW_UNSANDBOXED', 'FM_ROUND_UNSANDBOXED'],
+             prefixes=['AWS_', 'AZURE_', 'ARM_', 'CLOUDSDK_', 'GCLOUD_', 'DIGITALOCEAN_', 'HERDR_'])
+REPO_CONFIG = ['.claude', '.mcp.json', '.cursor', 'GEMINI.md']
+GITHUB_DOMAINS = ('github.com', 'github.io', 'github.dev', 'githubusercontent.com', 'githubassets.com',
+                  'githubapp.com', 'githubcopilot.com', 'ghcr.io', 'ghe.com')
+
+
+def host_refusal(host):
+    """Why a round may not reach <host>, or None. The same rule as
+    fm_review_host_refusal in bin/adapters/_lib.sh, plus loopback: a plain
+    domain name, never GitHub's, never localhost, never an address."""
+    if not re.match(r'[A-Za-z0-9.-]+$', host) or host.startswith('.') or host.endswith('.') or '..' in host:
+        return 'is not a plain domain name'
+    h = host.lower()
+    for d in GITHUB_DOMAINS:
+        if h == d or h.endswith('.' + d):
+            return 'is a GitHub host; a crew round may not reach GitHub'
+    if h == 'localhost' or h.endswith('.localhost'):
+        return 'is loopback; a crew round may not reach loopback'
+    if re.match(r'[0-9.]+$', h):
+        return 'is an address; a registry is named, and loopback is never one'
+    return None
+
+
+def policy_map(lines, where):
+    """A nested block of `key: value` lines -> a dict; comments already gone."""
+    out, i = {}, 0
+    level = indent(lines[0]) if lines else 0
+    while i < len(lines):
+        line = lines[i]
+        found = re.match(r'\s*([A-Za-z_][A-Za-z0-9_]*):(?:\s+(.*))?$', line)
+        if indent(line) != level or not found:
+            raise Refused('%s: cannot read line: %s' % (where, line.strip()))
+        key = found.group(1)
+        value = re.sub(r'(^|\s)#.*$', '', found.group(2) or '').strip()
+        if key in out: raise Refused('%s: %s is given twice' % (where, key))
+        i += 1; kids = []
+        while i < len(lines) and indent(lines[i]) > level:
+            kids.append(lines[i]); i += 1
+        if kids and value: raise Refused('%s: %s has a value and a block' % (where, key))
+        out[key] = policy_map(kids, where + '.' + key) if kids else value
+    return out
+
+
+def policy_layer(lines, where):
+    """One layer, checked: flat keys for both roles, a block per role."""
+    layer = policy_map(lines or [], where)
+    for key, value in layer.items():
+        if key in ROLES:
+            if not isinstance(value, dict):
+                raise Refused('%s.%s: must be a block of policy keys' % (where, key))
+            for sub, v in value.items():
+                policy_value(sub, v, '%s.%s' % (where, key))
+        else:
+            policy_value(key, value, where)
+    return layer
+
+
+def policy_value(key, value, where):
+    if key not in POLICY_KEYS:
+        raise Refused('%s: %s is not a policy key (known: %s)' % (where, key, ', '.join(POLICY_KEYS)))
+    if isinstance(value, dict):
+        raise Refused('%s.%s: must be a one-line value' % (where, key))
+    if key == 'network':
+        for host in value.split():
+            why = host_refusal(host)
+            if why: raise Refused('%s.network: names %s, which %s' % (where, host, why))
+    elif key in ('read', 'never_read'):
+        for path in value.split():
+            if not (path.startswith('/') or path == '~' or path.startswith('~/')) \
+                    or any(c in path for c in '"\\()*?[]'):
+                raise Refused("%s.%s: '%s' is not an absolute path a sandbox profile can hold"
+                              % (where, key, path))
+    elif not re.match(r'[1-9][0-9]*$', value):
+        raise Refused("%s.%s: must be a positive whole number, not '%s'" % (where, key, value))
+
+
+def operator(text):
+    return text.replace('{uid}', str(os.getuid())).replace('{user}', getpass.getuser())
+
+
+def expand(path, engine):
+    return os.path.realpath(os.path.expanduser(operator(path).replace('{state}', str(engine / 'state'))))
+
+
+def vendor_of(d, engine):
+    login = dict(d['login'])
+    if login:
+        login['keychain'] = [dict(service=k['service'], account=operator(k['account']))
+                             for k in login.get('keychain', [])]
+        login['file'] = [expand(p, engine) for p in login.get('file', [])]
+    return dict(auth=[expand(p, engine) for p in d['auth']],
+                state=[expand(p, engine) for p in d['state']],
+                tmp=[expand(p, engine) for p in d['tmp']],
+                login=login, hosts=d['hosts'])
+
+
+def resolve_policy(lines, projects, default, config, role, explicit):
+    if role not in ROLES:
+        raise Refused("policy: the role is worker or reviewer, not '%s'" % role)
+    engine = Path(config).resolve().parent
+    name = explicit or os.environ.get('FM_PROJECT', '') or default or ''
+    layers = [policy_layer(top_block(lines, 'policy'), 'policy')]
+    if name and projects:
+        layers.append(policy_layer(registered(projects, name).get('policy', []),
+                                   'projects.%s.policy' % name))
+    got = dict(read=list(TOOLCHAIN), never_read=list(NEVER_READ), procs='2048', cpu='14400')
+    for layer in layers:
+        for scope in (layer, layer.get(role) or {}):
+            for key, value in scope.items():
+                if key in ROLES: continue
+                if key in ('read', 'never_read'): got[key] += value.split()
+                else: got[key] = value
+    if 'network' not in got and role == 'reviewer':
+        # the pre-T-105 place for the reviewer's hosts
+        legacy = policy_map(top_block(lines, 'reviewer') or [], 'reviewer').get('network', '')
+        if isinstance(legacy, str):
+            for host in legacy.split():
+                why = host_refusal(host)
+                if why: raise Refused('reviewer.network: names %s, which %s' % (host, why))
+            got['network'] = legacy
+    return dict(
+        role=role, project=name if projects else '', dimensions=DIMENSIONS,
+        # {tmp} is the round's own temp directory, which fm-sandbox.sh
+        # makes; never the shared one, and never /tmp
+        write=['{root}', '{tmp}'],
+        read=[expand(p, engine) for p in got['read']],
+        never_read=[expand(p, engine) for p in got['never_read']],
+        network=got.get('network', '').split(),
+        refuse=REFUSE, sockets='none', env_scrub=SCRUB, repo_config=REPO_CONFIG,
+        procs=int(got['procs']), cpu=int(got['cpu']),
+        vendors={v: vendor_of(d, engine) for v, d in VENDORS.items()})
 
 
 def registered(projects, name):
@@ -278,6 +604,10 @@ try:
         else:
             rc = contract_of(name, entry.get('project', []), key)
         sys.exit(rc)
+    elif mode == 'policy':
+        lines = Path(config).read_text().splitlines() if Path(config).is_file() else []
+        print(json.dumps(resolve_policy(lines, projects, default, config, args[0], args[1] if len(args) > 1 else ''),
+                         indent=1))
     else:
         raise Refused('unknown registry mode ' + mode)
 except Refused as error:

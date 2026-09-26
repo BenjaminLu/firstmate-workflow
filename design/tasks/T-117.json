@@ -1,0 +1,43 @@
+{
+  "id": "T-117",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "T-105 again: every crew round runs under one fm-owned permission policy and an OS sandbox, and every vendor still starts on macOS with its own login",
+  "scope": [
+    "bin/adapters/_lib.sh",
+    "bin/adapters/claude.sh",
+    "bin/adapters/codex.sh",
+    "bin/adapters/cursor-agent.sh",
+    "bin/adapters/gemini.sh",
+    "bin/adapters/_contract.md",
+    "bin/fm-worker.sh",
+    "bin/fm-review.sh",
+    "bin/fm-config.sh",
+    "bin/fm-sandbox.sh",
+    "bin/fm-canary.sh",
+    "config.yaml",
+    "tests/adapter-contract.test.sh",
+    "tests/worker.test.sh",
+    "tests/review.test.sh",
+    "tests/sandbox.test.sh",
+    "tests/herdr.test.sh",
+    "tests/config.test.sh",
+    "design/design.md",
+    "design/proposals/2026-09-25-crew-permissions/design.md",
+    "design/tasks/T-117.json"
+  ],
+  "acceptance": [
+    "T-105 (PR 90) merged on 2026-09-26 at 17:02 and locked every vendor out on macOS: the claude CLI failed at start with `Error processing settings: EPERM: operation not permitted, open '/tmp/claude-501'` (state/runs/worker-imani-t116-r474), and cursor-agent reported `Authentication required` inside the sandbox although `agent status` outside it is logged in (state/runs/worker-imani-t116-r477, r478), because the sandbox denies the keychain mach services where `agent login` keeps its token. CI runs only the Linux (bwrap) path and did not see it. The captain ran the revert (PR 96) and authorised redoing T-105 on 2026-09-26. This task is T-105's change again, with the fixes below. Its own spec file, design/tasks/T-117.json, is committed on this branch.",
+    "Every acceptance item of T-105 (reproduced verbatim below) still holds, except where the next items refine it.",
+    "Each vendor starts and authenticates inside the sandbox with the login the operator already uses, and nothing more: the claude CLI gets its own state and temp directories (e.g. /tmp/claude-<uid> or a per-round TMPDIR it honours, and its config directory) and its own credential; cursor-agent reaches the credential `agent login` stored (its keychain item or config file) and nothing else in the keychain; codex and gemini likewise. The design names, per vendor, exactly which path, keychain item or mach service is opened and why. gh's token, git's credential helper and every other keychain item stay unreachable, and a test proves a crew round still cannot read them.",
+    "A real-vendor check on macOS, not a stub: a canary (bin/fm-canary.sh or a documented command) starts one trivial round per installed and logged-in vendor under the sandbox on the operator's Mac and reports started / authenticated / refused per vendor. The pull request body carries its output from the captain's machine, run by firstmate before the merge card. A vendor that is not installed or not logged in is reported as skipped, never as passing.",
+    "fm-worker.sh and fm-review.sh keep one documented escape hatch for a sandbox regression, off by default: an operator-only setting (config.yaml or an environment variable read only from the operator's shell, never from a crew round) that runs a round without the OS sandbox and says so loudly in the log and on the board, so a broken sandbox can never again stop every worker with no way to ship its own fix.",
+    "Evidence is the required GitHub check, the gates and the macOS canary output, checked by firstmate at the merge gate. Tests written to fail first cover the per-vendor allowances, the still-denied gh/keychain reads and the escape hatch. The worker does not run the suite itself.",
+    "T-105 acceptance: One policy per role (worker, reviewer) lives in config.yaml, with a project override: write roots (worktree or checkout, TMPDIR); read default-deny outside them, plus the toolchain; a never-readable list (~/.ssh, ~/.config/gh, ~/.aws, vendor config homes except the vendor's own auth, other worktrees, fm state/); commands allowed inside the sandbox; git push, gh, herdr, browsers and MCP refused; network limited to the project's declared registries (default none), with GitHub and loopback never allowed; no unix sockets; env scrub of GH_TOKEN, GITHUB_TOKEN, SSH_AUTH_SOCK and cloud credentials; repository .claude/, .mcp.json, .cursor/ and GEMINI.md not loaded; process and CPU ulimits.",
+    "T-105 acceptance: Each adapter translates the policy into its CLI's flags as design section 4 lists (claude reuses T-066's settings builder; cursor-agent drops -f for --trust --sandbox enabled). Each adapter declares which dimensions it enforces natively.",
+    "T-105 acceptance: bin/fm-sandbox.sh generates an OS sandbox profile from the same policy (sandbox-exec on macOS, bwrap on Linux) and runs the CLI inside it. Before a round, fm checks that every dimension is covered by the adapter or the outer layer. If one is not, that adapter refuses and the fallback chain moves on. Nothing degrades to an unconfined round.",
+    "T-105 acceptance: A round blocked on an undeclared host reports that host, and firstmate raises a choice card to add it to the project's registries. The crew never widens its own policy.",
+    "T-105 acceptance: Evidence is the required GitHub check and the seven gates, checked by firstmate at the merge gate. Tests written to fail first in tests/adapter-contract.test.sh and tests/sandbox.test.sh cover: flags and profile per vendor match the policy; a vendor missing a dimension without the outer layer is refused; declared registries reach both layers; loopback and GitHub are never allowed. bin/fm-canary.sh runs one real round per vendor that tries to write outside, read ~/.ssh, reach github.com, reach 127.0.0.1:4173 and connect to the Herdr socket, and records the result per vendor and version. It is not part of CI. The worker does not run the suite itself."
+  ]
+}

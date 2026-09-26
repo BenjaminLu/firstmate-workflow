@@ -1868,6 +1868,236 @@ global skills.
   nothing secret may enter it — no local paths, no credentials, no customer
   content. That includes the design and task list of every registered project;
   section 15.8 names the captain decision private projects are waiting on.
+- Every crew round runs under one permission policy fm owns (13.1).
+
+### 13.1 Crew permissions (T-105, T-117)
+
+A worker used to inherit the operator's personal CLI settings: on the
+captain's machine that allowed gh-axi, Herdr, a browser, reading any path
+and editing `~/.claude/skills`, and refused bun, npm, python and chmod.
+cursor-agent ran with `-f` and no sandbox; codex and gemini ran on vendor
+defaults. Now every round, worker or reviewer, whatever its vendor, runs
+under one policy fm owns.
+
+**T-105 once, and why it came back as T-117.** T-105 (PR 90) merged on
+2026-09-26 and locked every vendor out on macOS: claude failed at start
+with `EPERM: operation not permitted, open '/tmp/claude-501'`, because it
+keeps a directory under `/tmp` whatever `TMPDIR` says and the profile let
+the round write only its roots; and claude and cursor-agent could not sign
+in, because both keep their login in the macOS keychain, whose mach
+services the profile denies so that gh's token and git's credentials stay
+out of reach. CI runs only the Linux (bwrap) path, and saw none of it. PR 96
+reverted it. T-117 is the same change with each vendor's start and login
+provided for (below), a canary that runs the real vendors on the operator's
+Mac, and an escape hatch so that a broken sandbox can never again stop every
+worker with no way to ship its own fix.
+
+**The policy.** `fm_policy <role>` in `bin/fm-config.sh` resolves it from
+`config.yaml`'s `policy:` block, flat keys for both roles or a `worker:` /
+`reviewer:` block for one, with the project's `projects.<name>.policy:` over
+it. The keys are `network` (the registries the round's commands may reach;
+default none; a later layer replaces an earlier one), `read` and
+`never_read` (added to, never replacing) and the `procs` / `cpu` ulimits.
+Everything else is a floor no key loosens, the OS sandbox itself included:
+
+- writes: the worktree or checkout, and a temp directory of the round's
+  own, which is its TMPDIR. Never the caller's TMPDIR or `/tmp`: every round
+  shares those, and run-mode review checkouts are made there, so a root
+  naming them would let one round read or rewrite another's code;
+- reads: default-deny outside the write roots and the toolchain; never
+  `~/.ssh`, `~/.config/gh`, `~/.netrc`, `~/.git-credentials`, cloud
+  credentials, any vendor's home, fm's `state/` and the other worktrees in
+  it. A vendor's own round gets back only what it needs to start and sign
+  in, named per vendor below; none of it is another vendor's, a setting, a
+  hook, a skill or an MCP server;
+- commands: allowed inside the sandbox; git push, gh, Herdr, browsers and
+  MCP refused;
+- network: the declared registries only; GitHub and loopback are refused
+  as values, and refused again by the proxy whatever a policy file says.
+  The list names whatever the check actually fetches (Playwright's
+  Chromium comes from `storage.googleapis.com`, for one);
+- loopback: a round may open ports of its own and connect to them, which
+  every suite that starts a server needs, but never the board's port
+  (`FM_PORT`, 4173) nor any port that was listening when the round started.
+  On macOS the profile says so port by port, and if the listeners cannot be
+  read no loopback port but the proxy is reachable; on Linux the round's
+  loopback is its own network namespace's, where no host listener is;
+- secrets a system service hands out: on macOS the keychain (gh's token,
+  git's osxkeychain helper, every saved password, and the vendors' logins),
+  the pasteboard, the Internet Accounts and Apple ID stores, Kerberos
+  tickets and Touch ID are out of every round's reach, since no file rule
+  covers a credential served over mach. The list is `SECRET_SERVICES` in
+  `bin/fm-sandbox.sh`; the profile starts from `(allow default)` and names
+  what it denies, because an allow list of services would break toolchains
+  in ways only the canary could find, and what it leaves open hands out no
+  credential. No round is given back any of them: a vendor that keeps its
+  login there is handed that one login by fm (below). TLS roots come from
+  `/etc/ssl/cert.pem` (`SSL_CERT_FILE`) for a tool that would have asked the
+  keychain;
+- the process ulimit is `procs` more than the user already runs, since
+  the kernel counts every process the user owns; a count that cannot be
+  taken refuses the round rather than guessing. The limits as set reach the
+  round as `SANDBOX_ROUND_LIMITS`: macOS may enforce a lower process limit
+  than it was given, and reports that one back to `ulimit -u`;
+- no unix sockets; `GH_TOKEN`, `GITHUB_TOKEN`, `SSH_AUTH_SOCK`, cloud
+  credentials and the escape hatch's own variables scrubbed; the
+  repository's `.claude/`, `.mcp.json`, `.cursor/` and `GEMINI.md` not
+  loaded.
+
+Before T-105 the run-mode reviewer's hosts were `reviewer: network:`; that
+key still counts for a reviewer when no policy layer declares a network.
+
+**Two layers.** An adapter translates the policy into its CLI's own flags
+and declares which of the eight dimensions (`write read network sockets env
+repo-config refuse ulimit`) they enforce. `bin/fm-sandbox.sh` runs the CLI
+inside an OS sandbox built from the same policy, which covers all eight on
+both platforms. The network is a per-round proxy that allows the declared
+registries and the vendor's own service; it is the only way off the
+machine, and it records every host it refuses. On macOS that sandbox is
+`sandbox-exec`, whose profile lets the round reach the proxy's loopback
+port and nothing else off the machine. On Linux it is `bwrap`, which mounts
+only what the round may read, gives it a `/tmp` of its own and a network
+namespace of its own (`--unshare-net`), and binds the proxy's unix socket
+into it; a small forwarder serves that socket on the round's own loopback
+and points the proxy variables at it. Reading is default-deny only in the
+OS sandbox, so no round runs on a host without one, but for the escape
+hatch below. Before the CLI starts the adapter checks the union; a
+dimension neither covers refuses the round with 2, the fallback chain moves
+on, and nothing runs less confined than its policy. When the sandbox itself
+fails before it starts the CLI - the vendor's login, its proxy, its
+profile, the process count, the sandbox binary - that is 2 as well, not the
+launcher's exit code read as a model giving up: `fm-sandbox.sh --started`
+writes `started` from inside the sandbox just before the CLI, and a round
+without that line never ran. The file is emptied right after the options,
+so every earlier exit leaves it empty. fm-sandbox's own files (the profile,
+the proxy's port or socket, the login it hands in) go under `--ctl`, the
+adapter's control directory beside the round's temp directory and outside
+every write root; never a fixed `/tmp`, which a confined caller (a run-mode
+reviewer, a worker running the suites) cannot write.
+
+**Each vendor's start and login (T-117).** Each round reaches the login the
+operator already uses for that vendor, and nothing more. Where the login
+is a file the round may read, it reads it; where it is out of the round's
+reach - the keychain - `fm-sandbox.sh` reads exactly the vendor's own item,
+outside the sandbox, with `/usr/bin/security find-generic-password -s
+<service> -a <account> -w` (one item, never a search), and hands its access
+token in. The refresh token is never handed in: a round that refreshed a
+login would rotate the operator's out from under them. A login past its
+expiry, or none at all, refuses the round with 77 before the sandbox starts,
+which the adapter reads as the vendor unavailable. Per vendor, from
+`VENDORS` in `bin/fm-config.sh`:
+
+| vendor | its login, read by fm outside the round | handed in as | what of its own the round opens | temp | mach services |
+|---|---|---|---|---|---|
+| claude | macOS: keychain item `Claude Code-credentials`, account the operator's user; elsewhere `~/.claude/.credentials.json`. The field `claudeAiOauth.accessToken`, refused past `claudeAiOauth.expiresAt`. A `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` already in the operator's environment is used as is, and nothing is read | `CLAUDE_CODE_OAUTH_TOKEN`, exported, not on a command line | nothing of `~/.claude` or `~/.claude.json`: its config directory is one of the round's own (`CLAUDE_CONFIG_DIR`, in the round's temp directory), holding its sessions, todos, caches and `.claude.json` | the round's own (`CLAUDE_CODE_TMPDIR`); and `/tmp/claude-<uid>`, read and written, on macOS only, because claude opens it whatever `TMPDIR` says (T-105's EPERM). On Linux the round's `/tmp` is its own, so the directory is made afresh there | none |
+| cursor-agent | macOS: keychain item `cursor-access-token`, account `cursor-user` (what `agent login` stores); elsewhere `~/.config/cursor/auth.json`, field `accessToken`. A `CURSOR_API_KEY` already set is used as is | macOS: served under its own service and account by a stand-in for `security(1)` first on the round's `PATH`, which says every other item is not there (exit 44, as `security` does) and lets a write go without touching the keychain; elsewhere the file itself, read-only | `~/.config/cursor/auth.json` read-only; `~/.cursor/chats`, `~/.cursor/projects`, `~/.cursor/cli-config.json`, `~/.cursor/statsig-cache.json` read and written | the round's own | none |
+| codex | `~/.codex/auth.json`, read in place | a link in the round's own `CODEX_HOME`, so no `config.toml` or profile of the operator's is read | `~/.codex/auth.json` read-only; `~/.codex/sessions`, `log`, `history.jsonl`, `version.json`, `models_cache.json` read and written | the round's own | none |
+| gemini | `~/.gemini/oauth_creds.json`, read in place | - | `~/.gemini/oauth_creds.json` read-only; `~/.gemini/tmp`, `history`, `google_accounts.json`, `installation_id`, `user_id` read and written | the round's own | none |
+
+Why the stand-in and not the keychain: once a round may look up
+`com.apple.SecurityServer`, any process in it can ask for any item whose
+access list trusts a program the round can run. gh stores its token through
+`security(1)`, so `security find-generic-password -s gh:github.com -w`
+would print it, and git's helper answers for github.com the same way. There
+is no profile rule for one item. So the keychain stays denied to every
+round, fm reads the vendor's one item itself, and the round's `security` is
+fm's, knowing that item alone. What this rests on, and only the canary
+proves: that these are the service names each CLI's login writes today,
+and that cursor-agent asks for its token through `security` on its `PATH`.
+A CLI that calls the keychain API directly, or by an absolute path, is not
+served, cannot sign in, and the canary reports it `authenticated=no`; the
+fix is to this table, not to the keychain rule.
+
+What stays unreachable, whatever the vendor: gh's token (keychain denied,
+`~/.config/gh` never readable, `GH_TOKEN` and `GITHUB_TOKEN` scrubbed, and
+the stand-in answers only for the vendor's own item), git's credentials
+(keychain denied, `~/.git-credentials` and `~/.netrc` never readable), and
+every other keychain item. `tests/sandbox.test.sh` runs a round with a
+keychain stand-in holding claude's, cursor-agent's and gh's items and checks
+that fm read the vendor's item only, that the round is given its access
+token and never the refresh token, and that the round's `security` answers
+44 for gh's item and git's.
+
+**The escape hatch (T-117).** `FM_CREW_UNSANDBOXED=1`, set in the
+operator's own shell - never a `config.yaml` key, which a branch can change
+- makes `fm-worker.sh` and `fm-review.sh` run the round without the OS
+sandbox: the adapter goes through `fm-sandbox.sh plain` (the scrub, the
+ulimits and the vendor's login), the vendors' own sandboxes come back on
+(codex's `workspace-write`, cursor-agent's `--sandbox enabled`), and the
+round says so loudly - on stderr, as the first line of the round's log
+(before the vendor's first byte, so no verdict reads it), and on the board
+for the round (`Adapter running on T-… WITHOUT the OS sandbox`, en and
+zh-TW). `fm-sandbox.sh` marks every round `FM_IN_ROUND=1` and scrubs
+`FM_CREW_UNSANDBOXED` and `FM_ROUND_UNSANDBOXED` from it, and a script or
+adapter that sees `FM_IN_ROUND` ignores the hatch and says so: a round
+cannot switch its own sandbox off, nor a nested fm run inside one. It is
+off by default and is for one thing: letting a fix to a broken sandbox
+ship when every sandboxed round fails. Unset it once the fix is merged.
+
+The vendors' own flags, against the proposal's section 4
+(`design/proposals/2026-09-25-crew-permissions/design.md`):
+
+| vendor | Linux | macOS | where it departs from section 4, and why |
+|---|---|---|---|
+| claude | `--restricted --strict-mcp-config --disable-slash-commands --permission-mode dontAsk --settings`: file rules on the worktree and the round's TMPDIR, deny rules, the shell allowed | the same | its own sandbox is off, so the settings carry no `allowedDomains`. On macOS it is a seatbelt, which cannot be applied inside another. On Linux its commands would reach the network through claude's own proxy, which has no way out of the round's namespace and names no host it refuses. The registries are enforced by the OS layer's proxy instead |
+| codex | `--sandbox workspace-write` with its network switch on, `approval_policy="never"`, the scrub list as `shell_environment_policy.exclude`, `mcp_servers={}`, a `CODEX_HOME` of the round's own holding a link to the login, so no user profile | `--sandbox danger-full-access` (a seatbelt cannot nest); the rest the same | the network switch is on because codex has only on and off, and off would keep its commands from the proxy |
+| cursor-agent | `--trust --sandbox enabled`, `-f` dropped, no `--approve-mcps` | `--sandbox disabled` (a seatbelt cannot nest) | on Linux, if cursor's own sandbox cuts the network off before the proxy sees a request, that refusal names no host; the canary shows it per version |
+| gemini | `--approval-mode yolo --extensions none --allowed-mcp-server-names fm-none` | the same | no `--sandbox`: it is a container or a seatbelt, neither of which starts inside the OS sandbox. `yolo`, not `auto_edit`: headless, `auto_edit` refuses every shell command, and the OS sandbox is what confines them. No `--policy` file: which gemini versions take one is unverified, and an unknown flag would fail every gemini round |
+
+**A blocked host.** The proxy records every host it refused to the round's
+`FM_POLICY_BLOCKED` file, on both platforms and for every vendor.
+`fm-worker.sh` and `fm-review.sh` report them on stderr and on the board
+(`crew_status`, en and zh-TW), and append one JSON line to
+`state/policy/blocked-hosts.jsonl`. That record is what firstmate reads to
+raise its choice card:
+
+```
+{"at":"<UTC>","task":"T-…","role":"worker|reviewer","actor":"…","project":"<name or ''>",
+ "hosts":["<refused>",…],"declared":["<registries the round had>",…],
+ "add_to":"projects.<name>.policy.network | policy.network","source":"proxy"}
+```
+
+The crew never widens its own policy; only the captain's answer changes it.
+The card itself is firstmate's (SK-001, T-107), not T-105's. What the
+record cannot name: a command that ignores the proxy variables and connects
+directly is refused by the OS, which sees an address, or on Linux no route
+at all - never a host name - and a refusal made by a vendor's own sandbox
+before the proxy (cursor-agent on Linux, above) never reaches it.
+
+**Accepted for now.** The worktree's shared git directory - the common
+`.git` of the repository the worktree belongs to - is readable, because git
+run in the worktree has to read it. So a round can read other tasks'
+commits and `.git/config`. It holds no credential fm puts there, and it is
+accepted as it stands until a later task closes it. On macOS
+`/tmp/claude-<uid>` is shared with the operator's own claude sessions, so a
+claude round can read what they leave there; it holds scratch output, not
+a credential. A vendor's access token is readable by every command in its
+own round, which may send it only to the declared registries and the
+vendor's own service.
+
+**Evidence.** `tests/adapter-contract.test.sh` and `tests/sandbox.test.sh`
+check each vendor's flags and the sandbox profile against the policy, that a
+vendor missing a dimension without the OS sandbox is refused, that declared
+registries reach both layers, and that loopback and GitHub never do - with a
+stand-in for the sandbox binary, since a runner cannot be relied on to have
+one - and, since T-117, each vendor's temp and login allowances, that gh's
+and git's keychain items stay unreachable, and the escape hatch;
+`tests/worker.test.sh` and `tests/review.test.sh` check the hatch end to
+end. None of that runs a real vendor, and CI runs only Linux: that is how
+T-105 went green and still locked every vendor out. So `bin/fm-canary.sh`,
+not part of CI, runs one real round per installed vendor on the operator's
+Mac, under the sandbox, and reports each `started`, `authenticated`,
+`refused`, or `skipped` (not installed, or not logged in - never a pass).
+Its probe tries to write outside, read `~/.ssh`, reach github.com and
+127.0.0.1:4173, connect to the Herdr socket, read another round's temp
+directory, read gh's token and git's credential for github.com, and on
+macOS read a keychain item and the pasteboard fm filled with a nonce; it
+checks that the round can use a loopback port it opened itself, and records
+the result per vendor and version in `state/canary/results.jsonl`. It exits
+0 only when a vendor ran and every vendor that ran started, signed in and
+had every probe blocked. Firstmate runs it on the captain's Mac before the
+merge card of any change to the sandbox and puts its output in the pull
+request; the merge gate reads it with the required check and the gates.
 
 ---
 
