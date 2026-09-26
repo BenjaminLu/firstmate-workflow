@@ -185,6 +185,26 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   round was refused before its commit, and nothing was published. Send one
   such round at a time per task.
 
+## Process rules (2026-09-25)
+
+These were learned the hard way; each has cost at least one round.
+
+1. Raise one merge card at a time: merging one pull request makes every other
+   open one BEHIND and voids the head its card verified. Raise the next card
+   only after the previous merge has settled and its head is verified again.
+2. Run `gh pr update-branch` before a review round, never after an `APPROVE`:
+   a moved head restarts both checks, and T-104 lost two rounds that way. The
+   captain allows it only for a pull request that is BEHIND and MERGEABLE.
+3. A test stub answers exactly as the vendor does, in output shape, exit code
+   and a literal `null`, never as our own code expects. A stub written from
+   our code has twice hidden the very bug it was written to catch; build it
+   from the vendor's real output.
+4. Before dispatching, sweep the spec for paths that no longer exist, such as
+   `design/tasks.json` after T-090. That one cost T-066 a round and would have
+   cost T-094 one; fix the spec through a scoped task before the worker starts.
+5. Workers do not run the test suite: GitHub CI and the gates verify, and no
+   worker acceptance says to run `ci.sh` (captain's rule).
+
 ## Judge a task when it turns ready
 
 A task that turns ready (every `depends_on` merged; not merged, closed, parked
