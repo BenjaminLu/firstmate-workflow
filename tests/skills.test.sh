@@ -41,6 +41,20 @@ if router.is_file():
 entry = root / 'CLAUDE.md'
 if entry.is_file() and entry.read_text().strip() != '@AGENTS.md':
     errors.append('Claude entrypoint must import the shared router')
+# SK-001: the process rules learned on 2026-09-25, one sentence each.
+firstmate = root / 'skills' / 'firstmate' / 'SKILL.md'
+if firstmate.is_file():
+    prose = ' '.join(firstmate.read_text().split())
+    for sentence in (
+        'Within one project, raise one merge card at a time: merging one pull request makes every other open one in that project BEHIND and voids the head its card verified.',
+        'Cards of other projects are not held by it (design §15.10, point 3).',
+        'Run `gh pr update-branch` before a review round, never after an `APPROVE`: a moved head restarts both checks, and T-104 lost two rounds that way.',
+        'A test stub answers exactly as the vendor does, in output shape, exit code and a literal `null`, never as our own code expects.',
+        'Before dispatching, sweep the spec for paths that no longer exist, such as `design/tasks.json` after T-090.',
+        'Workers do not run the test suite: GitHub CI and the gates verify, and no worker acceptance says to run `ci.sh` (captain\'s rule).',
+    ):
+        if sentence not in prose:
+            errors.append(f'firstmate skill lacks process rule: {sentence}')
 if errors:
     sys.exit('\n'.join(errors))
 print('role metadata and entrypoint links: passed')
