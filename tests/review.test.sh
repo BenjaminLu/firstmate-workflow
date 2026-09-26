@@ -920,13 +920,17 @@ hosts: none" "and the prompt says so"
 assert_lacks "$sentM" "read-only gh" "the prompt offers no gh, which the sandbox cannot reach"
 
 # setup's caches live under $HOME by default, where the sandbox refuses
-# writes; the round points each one into its own directory in the temp dir
+# writes. The adapter points each one into the round's own temp directory,
+# a write root (tests/adapter-contract.test.sh checks each against the
+# profile); fm-review.sh hands the round none of its own, since a directory
+# beside the checkout is none of the round's write roots (T-117)
 ckroot="$(dirname "$ck")"
 for cache in xdg bun pw npm; do
   cv="$(seen_of "$cache" "$dm")"
-  case "$cv" in "$ckroot"/cache/*) under=1 ;; *) under=0 ;; esac
-  assert_eq "1" "$under" "the $cache cache points into the round's own directory, not \$HOME ($cv)"
+  case "$cv" in "$ckroot"/*) beside=1 ;; *) beside=0 ;; esac
+  assert_eq "0" "$beside" "fm-review.sh points no $cache cache beside the checkout, outside the round's write roots ($cv)"
 done
+assert_contains "$sentM" "this round's own temp directory (\$TMPDIR)" "and the prompt says where the caches are"
 
 # A run-mode reviewer judges the head by running it. CI and the gates are
 # firstmate's merge gate, not a review criterion (captain, 2026-09-25), so a
@@ -1097,6 +1101,68 @@ rm -f "$dm/plain-ran"
 assert_eq "2" "$?" "with the confined reviewer down, a run-mode round is an outage"
 assert_fail "test -e '$dm/plain-ran'" "not a round handed to an engine that cannot be confined"
 restore_scripts
+
+# --- the round's permission policy (T-105), in either mode --------------------
+# The reviewer's adapter is handed the policy config.yaml resolves for a
+# reviewer, and a host the round's proxy refused is reported, never allowed.
+# The runner stands in for the proxy by writing to the file it is handed.
+stub_script "$rm_/bin/adapters/runner.sh" <<'M'
+#!/usr/bin/env bash
+# fm:review-run
+[ "$1" = "run" ] || exit 64
+cp "$FM_POLICY" "$FM_SEEN/policy.json"
+printf 'mode=%s\nnetwork=%s\nhatch=%s\n' "${FM_RUN_REVIEW:-}" "${FM_REVIEW_NETWORK:-}" "${FM_ROUND_UNSANDBOXED:-}" \
+  > "$FM_SEEN/seen"
+printf 'pypi.evil.example\n' >> "$FM_POLICY_BLOCKED"
+printf 'APPROVE:T-Z\n' > "$3/v.txt"
+M
+for mode in diff run; do
+  printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: %s\npolicy:\n  reviewer:\n    network: registry.npmjs.org\n' \
+    "$mode" > "$rm_/config.yaml"
+  rm -f "$dm/policy.json"
+  outR="$(cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
+    bin/fm-review.sh --task T-Z --branch work --round 3 2>&1)"
+  assert_eq "0" "$?" "a $mode-mode round runs under the reviewer's policy"
+  assert_eq "reviewer" "$(jq -r .role "$dm/policy.json" 2>/dev/null)" "its adapter is handed the reviewer's policy ($mode)"
+  assert_eq '["registry.npmjs.org"]' "$(jq -c .network "$dm/policy.json" 2>/dev/null)" \
+    "with the registries the policy declares ($mode)"
+  assert_contains "$outR" "refused undeclared hosts: pypi.evil.example" "a host its proxy refused is reported ($mode)"
+  assert_eq "" "$(seen_of hatch "$dm")" "and the round runs under the OS sandbox ($mode)"
+done
+assert_eq "registry.npmjs.org" "$(seen_of network "$dm")" "a run-mode round's sandbox reaches the policy's registries"
+assert_eq "reviewer pypi.evil.example" \
+  "$(jq -r '"\(.role) \(.hosts | join(" "))"' "$rm_/state/policy/blocked-hosts.jsonl" 2>/dev/null | tail -1)" \
+  "and the refused host is recorded for firstmate's choice card"
+# the operator's escape hatch (T-117) reaches a review round the same way,
+# and only from outside a crew round
+rm -rf "$rm_/state/reviews"
+outU="$(cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" FM_CREW_UNSANDBOXED=1 \
+  bin/fm-review.sh --task T-Z --branch work --round 3 2>&1)"
+assert_eq "0" "$?" "a review round under the operator's hatch runs"
+assert_eq "1" "$(seen_of hatch "$dm")" "and its adapter is told to run without the OS sandbox"
+assert_contains "$outU" "WITHOUT the OS sandbox" "which is said on stderr"
+assert_contains "$(cat "$rm_"/state/reviews/T-Z-r3*.log 2>/dev/null)" \
+  "fm-review: !!! FM_CREW_UNSANDBOXED=1: this round runs WITHOUT the OS sandbox !!!" "in the round's log"
+assert_contains "$(jq -r 'select(.type=="crew_status") | .data.activity.en' "$rm_/state/events.jsonl" 2>/dev/null)" \
+  "Reviewing T-Z WITHOUT the OS sandbox (FM_CREW_UNSANDBOXED)" "and on the board"
+assert_contains "$(jq -r 'select(.type=="crew_status") | .data.activity["zh-TW"]' "$rm_/state/events.jsonl" 2>/dev/null)" \
+  "正在審核 T-Z，未使用 OS 沙箱（FM_CREW_UNSANDBOXED）" "in both languages"
+outU2="$(cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" FM_CREW_UNSANDBOXED=1 FM_IN_ROUND=1 \
+  bin/fm-review.sh --task T-Z --branch work --round 3 2>&1)"
+assert_eq "" "$(seen_of hatch "$dm")" "a review started inside a crew round cannot take it"
+assert_contains "$outU2" "ignoring it" "and says so"
+# loopback is never a registry, in either mode
+for mode in diff run; do
+  printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: %s\npolicy:\n  network: localhost\n' "$mode" > "$rm_/config.yaml"
+  : > "$dm/seen"
+  outL="$(cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
+    bin/fm-review.sh --task T-Z --branch work --round 3 2>&1)"
+  assert_eq "65" "$?" "a policy naming loopback is a configuration error ($mode)"
+  assert_contains "$outL" "may not reach loopback" "and says why ($mode)"
+  assert_eq "" "$(seen_of network "$dm")$(cat "$dm/seen")" "and no engine runs ($mode)"
+done
+restore_scripts
+printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n' > "$rm_/config.yaml"
 
 # a mode that is neither is a typo, not a quiet diff round
 printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: execute\n' > "$rm_/config.yaml"

@@ -1062,11 +1062,25 @@ say="$tree/.fm-say.md"
       printf 'come through exactly as they are at %s; a rebuilt round that changes\n' "$rebuild_prev"
       printf 'either is refused, like one that leaves a conflict marker.\n'
     fi
-    printf '\nThe worktree is detached until fm-worker.sh commits, so fm-checkpoint.sh\n'
-    printf 'refuses this round. That is expected: fm-worker.sh pushes the rebuild.\n'
-    printf 'Do not commit in it yourself: a round whose HEAD is no longer %s is\n' "$rebuild_base"
-    printf 'refused too.\n'
+    printf '\nThe worktree is detached until fm-worker.sh commits; fm-worker.sh pushes the\n'
+    printf 'rebuild. Do not commit in it yourself: a round whose HEAD is no longer %s\n' "$rebuild_base"
+    printf 'is refused.\n'
   fi
+  # T-117: a crew round runs inside the OS sandbox, whose write roots are
+  # the worktree and the round's own temp directory. The worktree's git
+  # directory lives in the repository's common .git, which is readable and
+  # not writable, and GitHub is out of the round's reach. So a round can
+  # neither commit nor push, and the skill's mid-run checkpoint is one
+  # instruction it cannot follow: saving the branch is this script's alone
+  # (design 13.1, "Saving the branch").
+  printf '\n---\n\n# Saving your branch in this round\n\n'
+  printf 'This round runs inside the OS sandbox. It may read the worktree'"'"'s git\n'
+  printf 'history but not write it, and it cannot reach GitHub, so `git commit`,\n'
+  printf '`git push` and `fm-checkpoint.sh` fail here. That overrides the mid-run\n'
+  printf 'checkpoint the worker skill asks for: do not run `fm-checkpoint.sh`, and do\n'
+  printf 'not work around the refusal. fm-worker.sh alone saves this branch: it commits\n'
+  printf 'and pushes what the worktree holds when the round ends, however it ends,\n'
+  printf 'including when it is stopped. Leave your work in the worktree.\n'
   printf '\n---\n\n# The design\n\n'
   sed -n '/^## 6\./,/^## 8\./p' design/design.md 2>/dev/null
 } > "$prompt"
@@ -1114,7 +1128,36 @@ scratch_add "$chain_result"
 # where a plain round starts: a mid-run fm-checkpoint.sh commits on top of
 # it, and what the round adds is read against this, not the last save
 round_start="$(git -C "$tree" rev-parse -q --verify HEAD 2>/dev/null)"
-emit_status "Adapter running on $TASK" "adapter 正在執行 $TASK"
+# The round's permission policy (T-105): config.yaml's, for a worker, with
+# this project's override - never the operator's own CLI settings. Every
+# adapter confines its CLI to it or refuses the round; a policy that does
+# not read is a configuration error, not an unconfined round.
+policy_file="$FM_RUN_DIR/policy.json"; blocked_file="$FM_RUN_DIR/blocked-hosts"
+: > "$blocked_file"
+fm_policy worker "" config.yaml > "$policy_file" || {
+  echo "fm-worker: config.yaml's crew policy does not read; no round runs without one" >&2; exit 65; }
+export FM_POLICY="$policy_file" FM_POLICY_BLOCKED="$blocked_file"
+# A host the round's proxy refused is reported, not allowed: the crew
+# never widens its own policy. Firstmate reads the record and raises the
+# choice card that adds it to the project's registries.
+report_blocked_hosts() {   # report_blocked_hosts <role> <file>
+  local hosts
+  hosts="$(fm_policy_report "$REPO" "$1" "$TASK" "$NAME" "$2" "$policy_file")"
+  [ -n "$hosts" ] || return 0
+  echo "fm-worker: the round was refused undeclared hosts: $hosts; adding one to the project's policy network is the captain's choice" >&2
+  emit_status "Refused undeclared hosts: $hosts" "被拒的未宣告主機：${hosts}"
+}
+# The operator's escape hatch for a sandbox regression (T-117): only their
+# own shell's FM_CREW_UNSANDBOXED=1, never inside a round. Loud on stderr,
+# in the round's log - ahead of what the vendor says, which the verdict
+# reads from its own offset - and on the board for the whole round.
+if fm_crew_hatch fm-worker; then
+  printf '%s\n' "fm-worker: !!! FM_CREW_UNSANDBOXED=1: this round runs WITHOUT the OS sandbox !!!" >> "$log"
+  emit_status "Adapter running on $TASK WITHOUT the OS sandbox (FM_CREW_UNSANDBOXED)" \
+    "adapter 正在執行 ${TASK}，未使用 OS 沙箱（FM_CREW_UNSANDBOXED）"
+else
+  emit_status "Adapter running on $TASK" "adapter 正在執行 $TASK"
+fi
 (
   exec 9>&-
   if [[ "${FM_WORKER_TASK_LOCK_FD:-}" =~ ^[0-9]+$ ]]; then
@@ -1139,6 +1182,7 @@ for v in $FM_VENDOR_SKIPPED; do
   emit --type vendor_unavailable --en "$v unavailable, trying the next" \
        --tw "$v 不可用，換下一家"
 done
+report_blocked_hosts worker "$blocked_file"
 [ "$rc" = "2" ] && { echo "fm-worker: every vendor was unavailable" >&2; exit 2; }
 
 rm -f "$prompt"

@@ -200,6 +200,31 @@ esac
 # adapter a checkout nobody made for it.
 unset FM_RUN_REVIEW FM_REVIEW_CHECKOUT FM_REVIEW_NETWORK
 
+# The round's permission policy (T-105), in either mode: config.yaml's, for
+# a reviewer, with this project's override, read from the checkout running
+# the round like the mode. Every adapter confines its CLI to it or refuses
+# the round. The legacy `reviewer: network:` is checked first so its
+# refusal reads as it always has.
+bad_host="$(fm_review_network_refusal "$(fm_cfg_in reviewer network)")"
+[ -z "$bad_host" ] || {
+  echo "fm-review: config.yaml's reviewer network names $bad_host" >&2
+  emit --review-outcome infrastructure_error --type review_failed \
+       --en "review round $ROUND could not start" --tw "第 $ROUND 輪審核無法開始"
+  exit 65; }
+policy_file="$FM_RUN_DIR/policy.json"; blocked_file="$FM_RUN_DIR/blocked-hosts"
+: > "$blocked_file"
+fm_policy reviewer "" config.yaml > "$policy_file" || {
+  echo "fm-review: config.yaml's crew policy does not read; no round runs without one" >&2
+  emit --review-outcome infrastructure_error --type review_failed \
+       --en "review round $ROUND could not start" --tw "第 $ROUND 輪審核無法開始"
+  exit 65; }
+export FM_POLICY="$policy_file" FM_POLICY_BLOCKED="$blocked_file"
+# The operator's escape hatch for a sandbox regression (T-117): only their
+# own shell's FM_CREW_UNSANDBOXED=1, never inside a round. Said on stderr
+# here, and in the round's log and on the board once the round starts.
+unsandboxed=0
+if fm_crew_hatch fm-review; then unsandboxed=1; fi
+
 # A clone rather than a worktree: a worktree shares the task's .git, so git
 # run inside it writes outside it. The clone has its own objects, the base
 # and the head under fixed names, and no remote to push to.
@@ -210,8 +235,7 @@ build_checkout() {
   CHECKOUT_ROOT="$(cd "$CHECKOUT_ROOT" && pwd -P)" || return 1
   printf '%s\n' "$$" > "$CHECKOUT_ROOT/owner" || return 1
   CHECKOUT="$CHECKOUT_ROOT/checkout"
-  mkdir "$CHECKOUT_ROOT/cache" &&
-    git clone -q --no-checkout --no-hardlinks "$REPO" "$CHECKOUT" &&
+  git clone -q --no-checkout --no-hardlinks "$REPO" "$CHECKOUT" &&
     git -C "$CHECKOUT" fetch -q --no-tags origin "+$BRANCH:refs/fm/head" "+$BASE:refs/fm/base" &&
     [ "$(git -C "$CHECKOUT" rev-parse refs/fm/head)" = "$head" ] &&
     git -C "$CHECKOUT" checkout -q --detach refs/fm/head &&
@@ -234,32 +258,22 @@ if [ "$REVIEW_MODE" = run ]; then
   emit_status "Preparing a fresh checkout of $BRANCH" "正在準備 $BRANCH 的全新 checkout"
   sweep_checkouts
   # The sandbox reaches only these hosts: what `setup` needs, declared by the
-  # checkout running the round. No GitHub host belongs here, since the
-  # network is what keeps a push or a gh write from leaving the sandbox; the
-  # rule is the adapters' own (fm_review_network_refusal), said here as a
-  # configuration error before anything is built.
-  FM_REVIEW_NETWORK="$(fm_cfg_in reviewer network)"; export FM_REVIEW_NETWORK
-  bad_host="$(fm_review_network_refusal "$FM_REVIEW_NETWORK")"
-  [ -z "$bad_host" ] || {
-    echo "fm-review: config.yaml's reviewer network names $bad_host" >&2
-    emit --review-outcome infrastructure_error --type review_failed \
-         --en "review round $ROUND could not start" --tw "第 $ROUND 輪審核無法開始"
-    exit 65; }
+  # policy the checkout running the round resolves. No GitHub host belongs
+  # here, since the network is what keeps a push or a gh write from leaving
+  # the sandbox; fm_policy has refused one, and loopback, above.
+  FM_REVIEW_NETWORK="$(python3 -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["network"]))' \
+    "$policy_file")"; export FM_REVIEW_NETWORK
   build_checkout >/dev/null 2>&1 || {
     echo "fm-review: could not make a fresh checkout of $BRANCH against $BASE for a run-mode review" >&2
     emit --review-outcome infrastructure_error --type review_failed \
          --en "review round $ROUND could not prepare its checkout" --tw "第 $ROUND 輪審核無法準備 checkout"
     exit 70; }
   export FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$CHECKOUT"
-  # The sandbox lets commands write only in the checkout and the temp
-  # directory, and the project's setup writes its caches under $HOME by
-  # default: bun's install cache, Playwright's browsers, npm's cache, any
-  # XDG-following tool. Each is pointed into this round's directory, which
-  # sits in the temp directory and goes when the round does, so setup
-  # writes where it is allowed to rather than being refused.
-  REVIEW_CACHE="$CHECKOUT_ROOT/cache"
-  export XDG_CACHE_HOME="$REVIEW_CACHE/xdg" BUN_INSTALL_CACHE_DIR="$REVIEW_CACHE/bun" \
-         PLAYWRIGHT_BROWSERS_PATH="$REVIEW_CACHE/ms-playwright" npm_config_cache="$REVIEW_CACHE/npm"
+  # The project's setup writes its caches under $HOME by default, where the
+  # sandbox refuses it. The adapter points each one into the round's own
+  # temp directory, a write root, for every round of either role (T-117,
+  # FM_ROUND_CACHES in bin/adapters/_lib.sh); a directory made here would
+  # be none of the round's write roots.
 fi
 
 # A round that produced nothing is not a round, so review_opened is emitted
@@ -468,7 +482,7 @@ if [ "$REVIEW_MODE" = run ]; then
     printf '`git diff fm/base...fm/head` is the diff above.\n\n'
     printf 'You may run commands here: the project'"'"'s declared commands below and git.\n'
     printf 'You may not push, comment on or edit the pull request, touch the task'"'"'s\n'
-    printf 'worktree, or write anywhere but this checkout and the system temp directory.\n'
+    printf 'worktree, or write anywhere but this checkout and the round'"'"'s own temp directory.\n'
     printf 'The engine'"'"'s own permissions enforce that, not this text; fm-review.sh posts\n'
     printf 'your verdict to the pull request. Commands reach the network only for these\n'
     printf 'hosts: %s. No GitHub host is among them, so gh has nothing to talk to; the\n' "${FM_REVIEW_NETWORK:-none}"
@@ -476,8 +490,9 @@ if [ "$REVIEW_MODE" = run ]; then
     printf 'no gate results, and need none: you judge the head by what you run here. CI\n'
     printf 'and the gates are firstmate'"'"'s merge gate, not a criterion of this\n'
     printf 'review, so do not wait on them, require them or keep an item open for them. The\n'
-    printf 'project'"'"'s caches (XDG_CACHE_HOME, bun, Playwright, npm) point into this\n'
-    printf 'round'"'"'s temp directory, so `setup` writes where it may. A command the sandbox\n'
+    printf 'toolchain'"'"'s caches (XDG_CACHE_HOME, bun, Playwright, npm, pip, Go) point into\n'
+    printf 'this round'"'"'s own temp directory ($TMPDIR), so `setup` writes where it may and\n'
+    printf 'starts from empty caches: it downloads what it installs. A command the sandbox\n'
     printf 'refuses is the boundary working: report what it kept you from running, as\n'
     printf 'read, not run, rather than work around it.\n\n'
     printf 'The project'"'"'s contract, from this checkout'"'"'s config.yaml:\n\n'
@@ -546,6 +561,12 @@ if [ "$REVIEW_MODE" = run ]; then
          --en "review round $ROUND could not start" --tw "第 $ROUND 輪審核無法開始"
     rm -rf "$work"; exit 65; }
 fi
+if [ "$unsandboxed" = 1 ]; then
+  # ahead of every attempt's offset, so no verdict is read from it
+  printf '%s\n' "fm-review: !!! FM_CREW_UNSANDBOXED=1: this round runs WITHOUT the OS sandbox !!!" >> "$work/log"
+  emit_status "Reviewing $TASK WITHOUT the OS sandbox (FM_CREW_UNSANDBOXED)" \
+    "正在審核 ${TASK}，未使用 OS 沙箱（FM_CREW_UNSANDBOXED）"
+fi
 fm_run_chain "$adapters" "$chain" \
   "$prompt" "$work/out" "$work/log" review_is_signed per-vendor; rc=$?
 [ -z "$FM_VENDOR_UNKNOWN" ] || {
@@ -559,6 +580,13 @@ for v in $FM_VENDOR_SKIPPED; do
   emit --type vendor_unavailable --en "$v unavailable, trying the next" \
        --tw "$v 不可用，換下一家"
 done
+# A host the round's proxy refused is reported, never allowed: firstmate
+# raises the choice card that adds it to the project's registries.
+blocked_hosts="$(fm_policy_report "$REPO" reviewer "$TASK" "$NAME" "$blocked_file" "$policy_file")"
+if [ -n "$blocked_hosts" ]; then
+  echo "fm-review: the round was refused undeclared hosts: $blocked_hosts; adding one to the project's policy network is the captain's choice" >&2
+  emit_status "Refused undeclared hosts: $blocked_hosts" "被拒的未宣告主機：${blocked_hosts}"
+fi
 verdict="$(attempt_output)"
 
 # The chain says which of the two this was, and both callers read the same
@@ -652,5 +680,11 @@ case "$decided" in
     ;;
 esac
 printf '%s\n' "$verdict"
+# A round that ran without the OS sandbox keeps its log whatever its
+# verdict: the line it opens with is the record that the hatch was used.
+if [ "$unsandboxed" = 1 ]; then
+  kept="$(keep_log)"; cp "$work/log" "$kept" 2>/dev/null || true
+  echo "fm-review: this round ran WITHOUT the OS sandbox; its log is at $kept" >&2
+fi
 rm -rf "$work"
 exit 0

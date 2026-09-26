@@ -7,11 +7,22 @@ reviewer:               # the reviewer's engine is the captain's choice
   model:  opus-5        # so review adds no second vendor dependency
   mode:   run           # diff: the reviewer reads the diff; run: it also runs
                         # the tests in a fresh checkout of the pull request
-  network: registry.npmjs.org cdn.playwright.dev playwright.download.prss.microsoft.com playwright.azureedge.net
-                        # the only hosts a run-mode reviewer's commands reach:
-                        # what `setup` downloads from. Never a GitHub host.
 # worker:               # the same override exists for the worker; without it
 #   vendor: codex       # the worker uses the top-level vendor above
+
+policy:                 # what every crew round may do, whichever vendor runs it
+  worker:               # (T-105, T-117; design section 13.1). Each adapter
+    procs: 2048         # enforces it with its CLI's flags, bin/fm-sandbox.sh
+    cpu: 14400          # with an OS sandbox, or the adapter refuses the round.
+  reviewer:             # What is not a key here cannot be loosened: the write
+    procs: 2048         # roots, the never-readable paths, git push, gh, herdr,
+    cpu: 14400          # browsers and MCP refused, no sockets, the env scrub,
+                        # the OS sandbox itself. Keys: network (registries;
+                        # default none, never GitHub or loopback), read and
+                        # never_read (added to), procs and cpu. A project
+                        # overrides them below. A sandbox regression is
+                        # FM_CREW_UNSANDBOXED=1 in the operator's shell,
+                        # never a key here.
 
 concurrency: 3          # workers in flight at once
 # rosters:              # the crew is drawn at random once per installation,
@@ -41,6 +52,10 @@ projects:               # every repository firstmate drives; design section 15.2
     design: design/design.md
     tasks: design/tasks.json
     # its contract is the top-level project: block below until T-050 moves it
+    policy:             # this project's override of the crew policy above
+      network: registry.npmjs.org cdn.playwright.dev playwright.download.prss.microsoft.com playwright.azureedge.net storage.googleapis.com
+                        # the only registries a round's commands reach: what
+                        # `setup` downloads from. Never a GitHub host.
 
 project:                # how this repository is prepared and checked; see README
   # a fresh worktree has no node_modules and no browser, and without them the
