@@ -891,4 +891,183 @@ assert_eq 1 "$rc" "rejected lifecycle ending fails the run"
 assert_contains "$out" 'ending refused' "lifecycle writer error reaches the caller"
 rm -rf "$d"
 
+# --- T-118: the captain's park and reopening, as the board reads them -------
+# The board stops the crew of a task parked in flight with SIGTERM, and
+# fm-worker.sh keeps its pid file on any exit but 0. The next reconcile must
+# read that as the park it is, not as a crash to revive.
+echo "  a task parked in flight is not revived"
+d="$(fixture)"; worker_stub "$d"
+DEAD="$(dead_pid)"
+cat > "$d/state/events.jsonl" <<'J'
+{"ts":"2026-09-26T10:00:00Z","actor":"firstmate","type":"dispatched","task":"T-011"}
+{"ts":"2026-09-26T10:02:00Z","actor":"worker-1","type":"pr_opened","task":"T-011","pr":11}
+{"ts":"2026-09-26T10:05:00Z","actor":"captain","type":"parked","task":"T-011"}
+J
+printf '%s\n' "$DEAD" > "$d/state/worktrees/T-011.pid"
+mkdir -p "$d/state/worktrees/T-011"
+dry="$(FM_ROOT="$d" FM_GH="$(none "$d")" "$d/bin/fm-reconcile.sh" --repo "$d" --dry-run 2>&1)"
+assert_lacks "$dry" "redispatch T-011" "the rehearsal does not plan to revive a parked task"
+out="$(FM_ROOT="$d" FM_GH="$(none "$d")" "$d/bin/fm-reconcile.sh" --repo "$d" 2>&1)"
+log="$d/state/events.jsonl"
+assert_contains "$out" "the captain parked the task" "it says the pid is gone because the task was parked"
+assert_eq "" "$(jq -r 'select(.type=="worker_crashed")|.task' "$log")" "a parked task's stopped worker is not a crash"
+assert_eq "1" "$(jq -r 'select(.type=="dispatched" and .task=="T-011")|.task' "$log" | wc -l | tr -d ' ')" \
+  "and no redispatch is recorded"
+assert_fail "test -e '$d/state/worktrees/T-011.pid'" "the stale pid file is retired"
+assert_ok "test -d '$d/state/worktrees/T-011'" "the worktree of the set-aside work is kept"
+assert_fail "test -e '$d/worker-args'" "no worker was started"
+out2="$(FM_ROOT="$d" FM_GH="$(none "$d")" "$d/bin/fm-reconcile.sh" --repo "$d" 2>&1)"
+assert_contains "$out2" "nothing to reconcile" "a second run leaves the parked task alone"
+rm -rf "$d"
+
+# The fold carries a fourth field, the park. The replay listing reads all
+# four as they are: a parked task's pull request is its number alone, and a
+# task with only a park keeps its empty type and pull request.
+echo "  the replay listing reads the park as its own field"
+d="$(fixture)"
+cat > "$d/state/events.jsonl" <<'J'
+{"actor":"firstmate","type":"dispatched","task":"T-011"}
+{"actor":"worker-1","type":"pr_opened","task":"T-011","pr":11}
+{"actor":"captain","type":"parked","task":"T-011"}
+{"actor":"captain","type":"parked","task":"T-020"}
+J
+out="$(FM_ROOT="$d" FM_GH="$(none "$d")" "$d/bin/fm-reconcile.sh" --repo "$d" --dry-run 2>&1)"
+assert_matches "$out" '^  T-011 +pr_opened +#11 \(parked\)$' "a parked task lists its pull request and its park apart"
+assert_lacks "$out" $'#11\tparked' "and the park is not read into its pull request"
+assert_matches "$out" '^  T-020 {23}\(parked\)$' "a task with only a park lists no type and no pull request"
+assert_lacks "$out" "T-020    parked" "and its park is not read as its type"
+rm -rf "$d"
+
+echo "  a park holds only until the captain unparks"
+d="$(fixture)"; worker_stub "$d"
+cat > "$d/state/events.jsonl" <<'J'
+{"actor":"firstmate","type":"dispatched","task":"T-011"}
+{"actor":"worker-1","type":"pr_opened","task":"T-011","pr":11}
+{"actor":"captain","type":"parked","task":"T-011"}
+{"actor":"captain","type":"unparked","task":"T-011"}
+J
+printf '%s\n' "$(dead_pid)" > "$d/state/worktrees/T-011.pid"
+out="$(FM_ROOT="$d" FM_GH="$(none "$d")" "$d/bin/fm-reconcile.sh" --repo "$d" 2>&1)"
+assert_contains "$out" "redispatch T-011 on #11" "an unparked task's dead worker is a crash again, and is revived"
+assert_ok "wait_for '$d/worker-args'" "the worker really was started"
+kill_pidfile "$d/state/worktrees/T-011.pid"; rm -rf "$d"
+
+# T-117's sequence (events 3945-3947): merged under another task's PR, then
+# reopened by the captain. A reopened task is not over, so its dead worker is
+# revived on the pull request it opened itself, not the one that was merged.
+echo "  a reopened task's dead worker is revived, not tidied away"
+d="$(fixture)"; worker_stub "$d"
+cat > "$d/state/events.jsonl" <<'J'
+{"actor":"firstmate","type":"dispatched","task":"T-117"}
+{"actor":"worker-117","type":"pr_opened","task":"T-117","pr":97}
+{"actor":"captain","type":"merged","task":"T-117","pr":96}
+{"actor":"captain","type":"reopened","task":"T-117","data":{"reason":"#96 is T-105's revert, not T-117"}}
+J
+printf '%s\n' "$(dead_pid)" > "$d/state/worktrees/T-117.pid"
+mkdir -p "$d/state/worktrees/T-117"
+out="$(FM_ROOT="$d" FM_GH="$(none "$d")" "$d/bin/fm-reconcile.sh" --repo "$d" 2>&1)"
+assert_lacks "$out" "the task has finished" "a reopened task is not read as finished"
+assert_contains "$out" "redispatch T-117 on #97" "its worker is revived on its own pull request"
+assert_ok "wait_for '$d/worker-args'" "the worker really was started"
+assert_contains "$(cat "$d/worker-args")" "--pr 97" "with --pr 97, not the merged #96"
+kill_pidfile "$d/state/worktrees/T-117.pid"; rm -rf "$d"
+
+echo "  a reopening that is not the captain's, with a reason, changes nothing"
+for reopen in '{"actor":"worker-1","type":"reopened","task":"T-117","data":{"reason":"wrong"}}' \
+              '{"actor":"captain","type":"reopened","task":"T-117"}'; do
+  d="$(fixture)"; worker_stub "$d"
+  printf '%s\n' '{"actor":"firstmate","type":"dispatched","task":"T-117"}' \
+    '{"actor":"captain","type":"merged","task":"T-117","pr":96}' "$reopen" > "$d/state/events.jsonl"
+  printf '%s\n' "$(dead_pid)" > "$d/state/worktrees/T-117.pid"
+  out="$(FM_ROOT="$d" FM_GH="$(none "$d")" "$d/bin/fm-reconcile.sh" --repo "$d" 2>&1)"
+  assert_contains "$out" "the task has finished" "the task stays merged ($reopen)"
+  assert_eq "" "$(jq -r 'select(.type=="worker_crashed")|.task' "$d/state/events.jsonl")" "and nothing is revived ($reopen)"
+  rm -rf "$d"
+done
+
+# --- T-118: the one-time card repair ---------------------------------------
+# A fixture copy of the log's damage: answered cards whose chosen park or
+# drop never happened (T-030, T-060, T-064) and T-117's false merge (events
+# 3945-3947), beside answers that need nothing and one the task moved on from.
+echo "  --repair-cards fixes the damage the old board left in the log"
+d="$(fixture)"
+mkdir -p "$d/state/decisions" "$d/state/ready"
+ev() {   # ev <actor> <type> <task> [pr] [data]: one line of the fixture log
+  jq -cn --arg a "$1" --arg y "$2" --arg t "$3" --arg pr "${4-}" --argjson data "${5:-null}" \
+    '{ts:"2026-09-26T09:00:00Z", actor:$a, type:$y, task:$t} + (if $pr == "" then {} else {pr:($pr|tonumber)} end)
+     + (if $data == null then {} else {data:$data} end)
+     + {summary:{en:($y + " " + $t), "zh-TW":($y + " " + $t)}}' >> "$d/state/events.jsonl"
+}
+answered() { ev captain decision_made "$1" "" "$(jq -cn --arg d "$2" --arg c "$3" '{decision:$d, chosen:$c, outcome:"recorded"}')"; }
+ev captain greenlit ""
+# T-030: a hand-raised card, D-1020, answered B = park; its options were never kept
+ev worker-30 dispatched T-030 "" '{"role":"worker"}'
+ev firstmate decision_requested T-030
+answered T-030 D-1020 B
+# T-060: a readiness card (C park), answered C
+printf '{"task":"T-060","decision":"D-1060","episode":"e"}\n' > "$d/state/ready/T-060.json"
+ev firstmate decision_requested T-060
+answered T-060 D-1060 C
+# T-064: an answer whose record names its effect, drop, which never happened
+ev firstmate decision_requested T-064
+answered T-064 D-1064 D
+printf '{"id":"D-1064","chosen":"D","task":"T-064","effect":"drop","effect_outcome":"failed"}\n' > "$d/state/decisions/D-1064.json"
+# T-117: its own #97 open, then a merge card for #96 raised under it and merged
+ev worker-117 dispatched T-117 "" '{"role":"worker"}'
+ev worker-117 pr_opened T-117 97
+ev worker-117 agent_finished T-117
+ev firstmate decision_requested T-117 96
+answered T-117 D-3946 A
+ev captain merged T-117 96
+# nothing to repair: a park that was carried out, a task merged by its own
+# pull request, an answer with no known effect
+printf '{"task":"T-062","decision":"D-1062","episode":"e"}\n' > "$d/state/ready/T-062.json"
+answered T-062 D-1062 C
+ev captain parked T-062 "" '{"decision":"D-1062"}'
+ev worker-70 pr_opened T-070 70
+ev captain merged T-070 70
+answered T-071 D-1071 B
+# an answer the task has moved on from: parked by the card, then dispatched
+printf '{"task":"T-061","decision":"D-1061","episode":"e"}\n' > "$d/state/ready/T-061.json"
+answered T-061 D-1061 C
+ev worker-61 dispatched T-061 "" '{"role":"worker"}'
+n0="$(wc -l < "$d/state/events.jsonl" | tr -d ' ')"
+out="$(FM_ROOT="$d" "$d/bin/fm-reconcile.sh" --repair-cards --effect D-1020=park 2>&1)"; rc=$?
+assert_eq 0 "$rc" "a dry run succeeds"
+assert_eq "$n0" "$(wc -l < "$d/state/events.jsonl" | tr -d ' ')" "and without --apply writes nothing"
+for t in T-030 T-060 T-064 T-117; do
+  line="$(grep -F "would repair $t:" <<<"$out" || true)"
+  assert_ne "" "$line" "it lists the fix for $t"
+  assert_matches "$line" ' \| 修正 ' "in English and Traditional Chinese ($t)"
+done
+assert_contains "$(grep -F 'repair T-117:' <<<"$out")" "#96" "T-117's line names the pull request that marked it merged"
+assert_contains "$(grep -F 'repair T-117:' <<<"$out")" "#97" "and its own"
+assert_contains "$out" "left alone: D-1061" "an answer the task moved on from is listed, and left alone"
+for t in T-061 T-062 T-070 T-071; do
+  assert_lacks "$(grep -F 'repair ' <<<"$out" || true)" "$t" "$t needs no repair"
+done
+# without the card's meaning, a hand-raised answer is not guessed at
+out0="$(FM_ROOT="$d" "$d/bin/fm-reconcile.sh" --repair-cards 2>&1)"
+assert_lacks "$out0" "repair T-030" "a card whose options the log never kept is not repaired on a guess"
+# --apply writes each fix as the captain's event, through fm-emit
+out2="$(FM_ROOT="$d" "$d/bin/fm-reconcile.sh" --repair-cards --apply --effect D-1020=park 2>&1)"; rc2=$?
+assert_eq 0 "$rc2" "--apply succeeds"
+fixes() { jq -rs 'map(select(.data.repair == "fm-reconcile.sh --repair-cards"))|map("\(.type) \(.actor) \(.task) \(.data.decision // "-")")|join(",")' "$d/state/events.jsonl"; }
+assert_eq "parked captain T-030 D-1020,parked captain T-060 D-1060,closed captain T-064 D-1064,reopened captain T-117 -" "$(fixes)" \
+  "the parks, the drop and the reopening, as the captain's events naming the card"
+assert_ne "" "$(jq -rs 'map(select(.type=="reopened"))|last|.data.reason' "$d/state/events.jsonl")" "the reopening says why"
+assert_eq "zh-TW" "$(jq -rs 'map(select(.type=="reopened"))|last|.summary|keys|map(select(.=="zh-TW"))|join("")' "$d/state/events.jsonl")" \
+  "and says it in Traditional Chinese too"
+# run again, there is nothing left to repair
+out3="$(FM_ROOT="$d" "$d/bin/fm-reconcile.sh" --repair-cards --effect D-1020=park 2>&1)"
+assert_lacks "$out3" "would repair" "once applied, nothing is found again"
+# usage
+assert_eq "64" "$(FM_ROOT="$d" "$d/bin/fm-reconcile.sh" --apply >/dev/null 2>&1; printf '%s' "$?")" \
+  "--apply without --repair-cards is a usage error"
+assert_eq "64" "$(FM_ROOT="$d" "$d/bin/fm-reconcile.sh" --repair-cards --effect D-1020=merge >/dev/null 2>&1; printf '%s' "$?")" \
+  "--effect names only park or drop"
+assert_eq "64" "$(FM_ROOT="$d" "$d/bin/fm-reconcile.sh" --cards >/dev/null 2>&1; printf '%s' "$?")" \
+  "and there is no standing sweep"
+rm -rf "$d"
+
 finish

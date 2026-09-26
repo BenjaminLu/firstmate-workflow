@@ -134,7 +134,7 @@ ROUTINE="greenlit dispatched commit_pushed pr_opened gate_passed gate_failed \
 review_opened review_failed ask_pass_criteria criteria_returned \
 protocol_violation approved merged closed decision_made worker_crashed \
 vendor_unavailable agent_finished crew_status parked unparked spec_pinned \
-spec_repinned"
+spec_repinned agent_lost reopened"
 
 # 0 the captain must rule on it, 1 routine, 64 no ruling for it here
 wants() {

@@ -155,6 +155,17 @@ body{font-size:16px}
 #dropConfirm{margin-top:12px;padding:12px 14px;background:var(--bg2);border:1px solid #7c322b;border-radius:10px}
 #dropConfirm[hidden]{display:none}#dropConfirm p{margin:0;font-size:16px}
 #taskFeedback{margin:8px 0 0;color:var(--warn);font-size:14px}#taskFeedback:empty{display:none}
+/* T-118: what a set-aside stops and leaves open, the reopening's reason, a
+   lost crewman, a card under a final task, an effect */
+#dropConfirm .note{margin:6px 0 0;font-size:14px;color:var(--fg2)}
+#dropConfirm label{display:block;margin-top:8px;font-size:14px}
+#dropConfirm textarea{display:block;width:100%;margin-top:4px;font:inherit;background:var(--bg3);color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:6px}
+.card .badge.b-lost{background:#7c5a1b}
+.card .badge.b-parked{background:#4a4f5c}
+.dcard .final-note{margin:8px 0 0;padding:6px 10px;border:1px solid #7c322b;border-radius:7px;color:var(--warn);font-size:14px}
+.acts .eff{font:600 12px var(--mono);font-style:normal;color:var(--brass)}
+#effects{list-style:none;margin:0 0 8px;padding:0;color:var(--bad);font-size:14px}#effects:empty{display:none}
+.log .k-agent_lost,.log .k-reopened{color:var(--warn)}
 /* T-069: a pull request number is a link to it and keeps the look it had */
 a[data-pr]{text-decoration:none}a[data-pr]:not(.pr):not(.prlink){color:inherit;font:inherit}
 a[data-pr]:not(.prlink):hover,a[data-pr]:not(.prlink):focus-visible{text-decoration:underline}
@@ -291,9 +302,16 @@ function checkSession() {
   return fetch('/api/session', { headers: credential({}) }).then(r => r.json()).then(s => { writable = s.writable === true; })
     .catch(() => {}).finally(() => { showWritable(); if (latest) render(latest); });
 }
-// T-058: the card whose menu is open, the task a drop is waiting to be
-// confirmed for, the card being dragged, and what the last action said
+// T-058: the card whose menu is open, the task an action is waiting to be
+// confirmed for, the card being dragged, and what the last action said.
+// T-118: which action is being confirmed - a drop always, a park when the
+// task has crew aboard or an open pull request, a reopening always - and the
+// reopening's reason as typed so far
 let menuOpen = null, confirming = null, dragging = null, taskFeedback = null;
+let confirmAction = null, reopenReason = '';
+const laneLabel = k => k === 'parked' ? t('parked') : t(laneKey(k));
+// an effect's label, from its name as the server and the card write it
+const effectLabel = e => t('effect' + String(e).split('_').map(w => w[0].toUpperCase() + w.slice(1)).join(''));
 const seen = new Set();
 function feedbackText() {
   const el = document.getElementById('orderFeedback');
@@ -385,7 +403,9 @@ function render(s) {
 
   const badge = b => b.kind === 'gate' ? (b.gate ? t("gateFailedN").replace('{n}', b.gate) : t("gateFailed"))
     : b.kind === 'ask' ? 'ASK-PASS-CRITERIA'
-    : b.kind === 'decision' ? (b.options ? `${b.id} · ${t("optionsN").replace('{n}', b.options)}` : b.id) : '';
+    : b.kind === 'decision' ? (b.options ? `${b.id} · ${t("optionsN").replace('{n}', b.options)}` : b.id)
+    : b.kind === 'lost' ? t("lostCrew").replace('{name}', b.actor)
+    : b.kind === 'parked' ? t("parkedPending") : '';
   // a task the definitions do not list keeps its id and says the title is
   // missing; it never borrows one
   const title = task => `<div class="t${task.title ? '' : ' missing'}">${said(task.title || t("titleMissing"), task)}</div>`;
@@ -407,7 +427,7 @@ function render(s) {
         `<button role="menuitem" data-act="${esc(a)}" data-for="${esc(task.id)}" data-key="${esc(keyOf(task))}">${esc(t(a))}</button>`).join('') + `</div>` : '');
   };
   const card = (task, k) => `<div class="card s-${k}" data-task="${esc(task.id)}" data-key="${esc(keyOf(task))}"` +
-    `${task.project ? ` data-project="${esc(task.project)}"` : ''}${(task.actions || []).length && !readOnly() ? ' draggable="true"' : ''}>` +
+    `${task.project ? ` data-project="${esc(task.project)}"` : ''}${(task.actions || []).some(a => a !== 'reopen') && !readOnly() ? ' draggable="true"' : ''}>` +
     `<div class="hd"><span class="id">${esc(task.id)}</span>${multi() ? chip(task.project) : ''}` +
     `${task.pr ? prRef(task.pr, task.pr_url) : ''}${menu(task)}</div>` +
     title(task) +
@@ -437,26 +457,46 @@ function render(s) {
   parkedGroup.querySelector('summary').innerHTML = `${esc(t('parked'))} <i>${parkedTasks.length}</i>`;
   SHIP.patch(parkedGroup.querySelector('.parked-cards'), parkedTasks.map(task => card(task, 'parked')).join(''));
   document.getElementById('dropzone').textContent = t('dropZone');
-  // the confirming step for a drop, in the page: it goes away by itself if
-  // the task stopped being droppable while it was up
-  if (confirming && !(s.tasks.find(x => keyOf(x) === confirming)?.actions || []).includes('drop')) confirming = null;
+  // the confirming step, in the page: it goes away by itself if the task
+  // stopped offering the action while it was up
+  if (confirming && !(s.tasks.find(x => keyOf(x) === confirming)?.actions || []).includes(confirmAction)) { confirming = null; confirmAction = null; }
   if (menuOpen && !(s.tasks.find(x => keyOf(x) === menuOpen)?.actions || []).length) menuOpen = null;
   const confirmBox = document.getElementById('dropConfirm');
   confirmBox.hidden = !confirming;
   const doomed = confirming ? s.tasks.find(x => keyOf(x) === confirming) : null;
-  SHIP.patch(confirmBox, doomed ? `<p id="dropConfirmText">${esc(t('dropConfirm').replace('{id}', doomed.id))}` +
+  // T-118: setting aside work in flight says what it stops and what it
+  // leaves: the crew aboard are stopped, the pull request stays open
+  const notes = doomed && confirmAction !== 'reopen' ? [
+    (doomed.crew || []).length ? t('crewStopNote').replace('{crew}', doomed.crew.map(c => c.name).join(', ')) : '',
+    doomed.pr ? t('prStaysOpen').replace('{pr}', '#' + doomed.pr) : ''].filter(Boolean) : [];
+  const question = !doomed ? '' : confirmAction === 'drop' ? t('dropConfirm').replace('{id}', doomed.id)
+    // a pending card outranks a park: parked from the captain's lane, the
+    // task stays there until its card is answered, and the text says so
+    : confirmAction === 'park' ? t(doomed.stage === 'captain' ? 'parkConfirmCaptain' : 'parkConfirm').replace('{id}', doomed.id)
+    : t('reopenConfirm').replace('{id}', doomed.id).replace('{stage}', laneLabel(doomed.stage));
+  const yes = confirmAction === 'drop' ? 'dropYes' : confirmAction === 'park' ? 'parkYes' : 'reopenYes';
+  // the drop's own attributes stay on its buttons, as T-058 named them
+  const dropMark = (a, id) => confirmAction === 'drop' ? ` ${a}="${esc(id)}"` : '';
+  const reopenForm = doomed && confirmAction === 'reopen'
+    ? `<label>${esc(t('reopenReason'))}<textarea data-reopen-reason data-key="${esc(confirming)}">${esc(reopenReason)}</textarea></label>` : '';
+  const ready = confirmAction !== 'reopen' || reopenReason.trim();
+  SHIP.patch(confirmBox, doomed ? `<p id="dropConfirmText">${esc(question)}` +
     `${multi() ? ' ' + chip(doomed.project) : ''}</p>` +
-    `<div class="acts"><button class="go" data-confirm-drop="${esc(doomed.id)}" data-key="${esc(confirming)}">${esc(t('dropYes'))}</button>` +
-    `<button data-cancel-drop="${esc(doomed.id)}" data-key="${esc(confirming)}">${esc(t('cancel'))}</button></div>` : '');
+    notes.map(n => `<p class="note">${said(n, doomed)}</p>`).join('') + reopenForm +
+    `<div class="acts"><button class="go" data-confirm="${esc(confirmAction)}"${dropMark('data-confirm-drop', doomed.id)} data-key="${esc(confirming)}"${ready ? '' : ' disabled'}>${esc(t(yes))}</button>` +
+    `<button data-cancel="${esc(confirmAction)}"${dropMark('data-cancel-drop', doomed.id)} data-key="${esc(confirming)}">${esc(t('cancel'))}</button></div>` : '');
   confirmBox.setAttribute('aria-labelledby', 'dropConfirmText');
   document.getElementById('taskFeedback').textContent = taskFeedback ? t(taskFeedback) : '';
 
   const completed = s.tasks.filter(item => ['merged','closed'].includes(item.stage));
   const history = document.getElementById('history');
   history.querySelector('summary').textContent = `${t('history')} · ${t('laneMerged')} ${completed.filter(x=>x.stage==='merged').length} · ${t('laneClosed')} ${completed.filter(x=>x.stage==='closed').length}`;
+  // T-118: a finished task the lanes do not show - every closed one, and the
+  // merged ones past the lane's first few - is reopened from here
+  const inLane = new Set([...document.querySelectorAll('#lanes [data-key]')].map(el => el.dataset.key));
   SHIP.patch(history.querySelector('.history-cards'), completed.map(item =>
-    `<div class="card s-${item.stage}"><span class="id">${esc(item.id)}</span>${multi() ? ' ' + chip(item.project) : ''} <span>${esc(t(item.stage==='merged'?'laneMerged':'laneClosed'))}</span>` +
-    (item.pr ? ` ${prRef(item.pr, item.pr_url)}` : '') + title(item) + `</div>`).join(''));
+    `<div class="card s-${item.stage}" data-history="${esc(item.id)}"><div class="hd"><span class="id">${esc(item.id)}</span>${multi() ? ' ' + chip(item.project) : ''} <span>${esc(t(item.stage==='merged'?'laneMerged':'laneClosed'))}</span>` +
+    (item.pr ? ` ${prRef(item.pr, item.pr_url)}` : '') + (inLane.has(keyOf(item)) ? '' : menu(item)) + `</div>` + title(item) + `</div>`).join(''));
 
   const deck = document.getElementById("deck");
   const wrap = document.getElementById("deckwrap");
@@ -472,7 +512,18 @@ function render(s) {
   // merges answered and still running: said by name, and "outcome unknown"
   // when GitHub could not tell the board how one ended
   const runningMerges = (s.responses || []).filter(d => d.merge === 'running');
-  wrap.hidden = pend.length === 0 && !feedback && !SHIP.active() && !runningMerges.length;
+  // T-118: an answer whose effect failed stays up with its reason until what
+  // it asked for has happened some other way; a merge's is the refusal above
+  const failedEffects = (s.responses || []).filter(d => d.effect_outcome === 'failed' && d.effect !== 'merge' && !d.effect_superseded);
+  wrap.hidden = pend.length === 0 && !feedback && !SHIP.active() && !runningMerges.length && !failedEffects.length;
+  if (!document.getElementById('effects')) {
+    const list = document.createElement('ul'); list.id = 'effects';
+    list.setAttribute('role', 'status'); list.setAttribute('aria-live', 'polite');
+    wrap.insertBefore(list, wrap.querySelector('.deckrow'));
+  }
+  SHIP.patch(document.getElementById('effects'), failedEffects.map(d =>
+    `<li id="effect-${esc(d.id)}" data-effect="${esc(d.effect)}">${esc(d.id)}${multi() ? ' · ' + chip(projOf(d)) : ''} · ${esc(d.task || '')} · ` +
+    `${esc(t('effectFailed').replace('{effect}', effectLabel(d.effect)))}: ${said(d.effect_reason || '', d)}</li>`).join(''));
   if (!document.getElementById('merging')) {
     const list = document.createElement('ul'); list.id = 'merging';
     list.setAttribute('role', 'status'); list.setAttribute('aria-live', 'polite');
@@ -517,11 +568,18 @@ function render(s) {
     // D only where the card offers it: a readiness card's drop (T-059)
     const options = ['A','B','C', ...(d.details?.en?.options?.D ? ['D'] : [])].map(k => {
       const o = content?.options?.[k];
-      return `<button class="opt" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" ${locked?'disabled':''}>${k}${o || k !== 'D' ? ' · ' : ''}${esc(o ? words(o.description) : k === 'D' ? '' : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'))}</button>` +
+      // T-118: what the option does when chosen, as the server will carry it out
+      const eff = d.details?.effect?.[k] ?? (d.kind === 'merge' ? (k === 'A' ? 'merge' : 'hold') : null);
+      return `<button class="opt" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" ${locked?'disabled':''}>${k}${o || k !== 'D' ? ' · ' : ''}${esc(o ? words(o.description) : k === 'D' ? '' : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'))}` +
+        `${eff ? ` <i class="eff">→ ${esc(effectLabel(eff))}</i>` : ''}</button>` +
         (o ? `<p class="tradeoffs"><b>${esc(t('pros'))}</b> ${said(words(o.pros), d)}<br><b>${esc(t('cons'))}</b> ${said(words(o.cons), d)}</p>` : '');
     }).join('');
     return `<div class="dcard" id="card-${esc(d.id)}"><div class="meta">${whose(d)}` +
-      `</div><h3>${said(content ? words(content.title) : d.title || t("waiting"), d)}</h3>` + links(d) +
+      `</div><h3>${said(content ? words(content.title) : d.title || t("waiting"), d)}</h3>` +
+      // T-118: a card whose task is already merged or closed is shown, and
+      // says so: it may have been raised under the wrong task
+      (d.task_final ? `<p class="final-note" role="note">${esc(t('finalNote').replace('{task}', d.task || '').replace('{stage}', laneLabel(d.task_final)))}</p>` : '') +
+      links(d) +
       `<p class="explanation">${said(content ? words(content.explanation) : t('missingDetails'), d)}</p>` +
       DIAGRAM.embed(d.id) + (content ? `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before), d)}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after), d)}</p></section></div>` : '') +
       (d.kind === "merge" && gates.length
@@ -627,10 +685,16 @@ async function answer(id) {
     picks.delete(id); drafts.delete(id);
     // a merge answers at once while it runs; its outcome arrives in the record
     const merge = r.decision?.merge ?? r.merge ?? null;
+    // T-118: an effect that failed says so, with its reason, and is never
+    // read as done; one carried out says what was done
+    const effectFailed = r.effect && r.effect !== 'merge' && r.outcome === 'failed';
+    const effectDone = r.effect && r.effect !== 'merge' && r.outcome === 'done';
     feedback = {key:merge === 'failed' ? 'mergeRefused' : merge === 'running' ? 'mergeRunning'
-      : chosen === 'custom' ? 'customRecorded' : 'recorded', decisionId:id,
+      : effectFailed ? 'effectRefused' : chosen === 'custom' ? 'customRecorded' : effectDone ? 'effectDone' : 'recorded', decisionId:id,
       task:decision?.task || r.decision?.task || null,
-      cry:'AYE, CAPTAIN! / ORDERS AWAY', decision, literal:chosen === 'custom' ? text : '', eventFailed:r.eventRecorded === false};
+      cry:effectFailed ? '' : 'AYE, CAPTAIN! / ORDERS AWAY', decision,
+      literal:chosen === 'custom' ? text : r.effect && r.effect !== 'merge' ? `${effectLabel(r.effect)}${r.reason ? ': ' + r.reason : ''}` : '',
+      eventFailed:r.eventRecorded === false};
     const identity = r.decision?.identity || `decision:${id}`;
     if (!r.already && !seen.has(identity)) {
       seen.add(identity); SHIP.enqueue(document.getElementById('scene'), 'order', identity);
@@ -644,44 +708,65 @@ async function answer(id) {
 // T-054: each is addressed by the card's key, its project and its id.
 const taskByKey = k => (latest?.tasks || []).find(x => keyOf(x) === k);
 const actionsOf = k => taskByKey(k)?.actions || [];
-async function act(k, action) {
-  menuOpen = null; confirming = null; taskFeedback = null;
+async function act(k, action, extra = {}) {
+  menuOpen = null; confirming = null; confirmAction = null; taskFeedback = null;
   const task = taskByKey(k);
   const r = task && !readOnly() ? await fetch('/tasks', {
     method: 'POST', headers: credential({ 'content-type': 'application/json' }),
-    body: JSON.stringify({ task: task.id, action, ...(task.project ? { project: task.project } : {}) }),
+    body: JSON.stringify({ task: task.id, action, ...(task.project ? { project: task.project } : {}), ...extra }),
   }).catch(() => null) : null;
-  const said = r?.status === 403 ? await refusedFor(r) : null;
-  if (!r || !r.ok) taskFeedback = said?.code || 'actionFailed';
+  // every refusal is shown by its own code - T-122's 403s, and T-118's 409
+  // asking to confirm and 400 asking for a reason - and only an unknown one
+  // falls back to the generic line
+  const said = !r || r.ok ? null : r.status === 403 ? await refusedFor(r) : await r.json().catch(() => null);
+  if (!r || !r.ok) taskFeedback = said?.code && Object.hasOwn(DICT.en, said.code) ? said.code : 'actionFailed';
+  if (action === 'reopen' && r?.ok) reopenReason = '';
   const s = await fetch(STATE_URL).then(x => x.json()).catch(() => null);
   render(s || latest);
 }
-function askDrop(k) {
-  menuOpen = null; confirming = k; render(latest);
-  document.querySelector('[data-confirm-drop]')?.focus();
+// T-118: which actions ask first - a drop always, a reopening always, a
+// park when the server says the task has crew aboard or an open pull request
+const asks = (k, action) => action === 'drop' || action === 'reopen' || (action === 'park' && taskByKey(k)?.confirm);
+function askFor(k, action) {
+  menuOpen = null; confirming = k; confirmAction = action;
+  if (action === 'reopen') reopenReason = '';
+  render(latest);
+  document.querySelector(action === 'reopen' ? '[data-reopen-reason]' : '[data-confirm]')?.focus();
 }
+const choose = (k, action) => asks(k, action) ? askFor(k, action) : act(k, action);
 const menuButton = k => document.querySelector(`.cmenu[data-key="${CSS.escape(k)}"]`);
 const board = document.querySelector('.lanes-wrap');
 board.addEventListener('click', e => {
-  const el = e.target.closest('[data-menu],[data-act],[data-confirm-drop],[data-cancel-drop]');
+  const el = e.target.closest('[data-menu],[data-act],[data-confirm],[data-cancel]');
   if (!el) return;
   const k = el.dataset.key;
   if (el.dataset.menu) {
     menuOpen = menuOpen === k ? null : k; render(latest);
     if (menuOpen) document.querySelector(`.cacts [data-key="${CSS.escape(k)}"]`)?.focus();
   } else if (el.dataset.act) {
-    if (el.dataset.act === 'drop') askDrop(k); else act(k, el.dataset.act);
-  } else if (el.dataset.confirmDrop) {
-    act(k, 'drop');
-  } else if (el.dataset.cancelDrop) {
-    confirming = null; render(latest);
+    choose(k, el.dataset.act);
+  } else if (el.dataset.confirm) {
+    // confirmed in the page: the server sets aside work in flight, and
+    // reopens a final task, only when told the captain confirmed it
+    const action = el.dataset.confirm;
+    act(k, action, action === 'reopen' ? {confirm:true, reason:reopenReason} : {confirm:true});
+  } else if (el.dataset.cancel) {
+    confirming = null; confirmAction = null; render(latest);
     menuButton(k)?.focus();
   }
+});
+// the reopening's reason, kept as typed across every render
+board.addEventListener('input', e => {
+  const el = e.target;
+  if (!el.matches?.('[data-reopen-reason]')) return;
+  reopenReason = el.value;
+  const go = document.querySelector('#dropConfirm [data-confirm="reopen"]');
+  if (go) go.disabled = !reopenReason.trim();
 });
 board.addEventListener('keydown', e => {
   if (e.key !== 'Escape' || !(menuOpen || confirming)) return;
   const k = menuOpen || confirming;
-  menuOpen = null; confirming = null; render(latest);
+  menuOpen = null; confirming = null; confirmAction = null; render(latest);
   menuButton(k)?.focus();
 });
 // T-069: a press that starts on a pull request number is a click on its
@@ -720,7 +805,7 @@ board.addEventListener('drop', e => {
   if (!z) return;
   e.preventDefault(); z.classList.remove('over');
   const id = dragging; dragging = null; board.classList.remove('dragging');
-  if (z.dataset.zone === 'drop') askDrop(id); else act(id, z.dataset.zone);
+  choose(id, z.dataset.zone);
 });
 document.addEventListener('ship-effect', () => { pose(); feedbackText(); });
 document.addEventListener('pointerdown', () => SHIP.unlock());

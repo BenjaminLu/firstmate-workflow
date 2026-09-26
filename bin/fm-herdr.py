@@ -1068,12 +1068,21 @@ def retire_dead_crew(root):
     The board paints crew from events only: an actor stays aboard until that
     actor emits agent_finished. Task-level reconcile cannot clear actor ghosts.
     This keeps event-sourcing and makes the log match process reality.
+
+    T-118: a run whose recorded process is gone and that never said
+    agent_finished was lost, not finished, and the log says so once: one
+    `agent_lost` under that exact actor, in English and Traditional Chinese,
+    which blocks its task on the board unless a later event has moved it.
+    The agent_finished that has always closed a ghost follows it; the board
+    shows the loss and not that close. A loss already written is not written
+    again, so a run interrupted between the two only adds the close.
     """
     root = Path(root).resolve()
     emit = root / 'bin/fm-emit.sh'
-    retired, kept = [], []
+    retired, kept, lost = [], [], []
     if not emit.is_file():
-        return dict(retired=retired, kept=kept)
+        return dict(retired=retired, kept=kept, lost=lost)
+    env = dict(os.environ, FM_ROOT=str(root))
     for actor, event in crew_last_events(root).items():
         if actor == 'firstmate' or event.get('type') == 'agent_finished':
             continue
@@ -1086,19 +1095,26 @@ def retire_dead_crew(root):
         task = event.get('task') or ''
         if not task:
             continue
+        pr = ['--pr', str(event['pr'])] if isinstance(event.get('pr'), int) else []
+        if event.get('type') != 'agent_lost':
+            cmd = ['bash', str(emit), '--actor', str(actor), '--type', 'agent_lost', '--task', str(task),
+                   '--data', json.dumps({'role': role, 'status': 'process_gone'}), *pr,
+                   '--en', f'{actor} was lost on {task}: its process is gone and it never said it finished',
+                   '--tw', f'{actor} 在 {task} 上失聯：行程已不在，也從未回報完成']
+            result = subprocess.run(cmd, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise RuntimeError('deck reconcile emit failed for ' + actor + ': ' + (result.stderr or result.stdout))
+            lost.append(actor)
         data = json.dumps({'role': role, 'status': 'process_gone'})
         cmd = ['bash', str(emit), '--actor', str(actor), '--type', 'agent_finished',
-               '--task', str(task), '--data', data,
+               '--task', str(task), '--data', data, *pr,
                '--en', f'deck reconcile: {actor} has no live process',
                '--tw', f'甲板對帳：{actor} 無活進程']
-        if isinstance(event.get('pr'), int):
-            cmd.extend(['--pr', str(event['pr'])])
-        env = dict(os.environ, FM_ROOT=str(root))
         result = subprocess.run(cmd, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError('deck reconcile emit failed for ' + actor + ': ' + (result.stderr or result.stdout))
         retired.append(actor)
-    return dict(retired=retired, kept=kept)
+    return dict(retired=retired, kept=kept, lost=lost)
 
 
 def watch_start(root, decision='all'):
