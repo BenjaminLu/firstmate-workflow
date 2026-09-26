@@ -207,6 +207,10 @@ fm_adapter_policy() {
     rm -rf "$FM_ROUND_TMP"; echo "adapter: cannot make the round's control directory" >&2; exit 70; }
   # shellcheck disable=SC2064  # the paths are fixed now
   trap "rm -rf '$FM_ROUND_TMP' '$FM_ROUND_CTL'" EXIT
+  # a signal becomes an EXIT path, or the round's directories outlive it
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
   export TMPDIR="$FM_ROUND_TMP" TMP="$FM_ROUND_TMP" TEMP="$FM_ROUND_TMP"
 }
 

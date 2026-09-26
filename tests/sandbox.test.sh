@@ -583,6 +583,9 @@ stale_case 71 "a broken sandbox binary" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t
 # and the round could not fork at all.
 printf '#!/bin/sh\necho "ps: operation not permitted" >&2\nexit 1\n' > "$t/psbin/ps"
 printf '#!/bin/sh\nexit 0\n' > "$t/psbin/ps-empty"
+# a new file, not a rewrite of the executable ps: without its own mode bit
+# PATH walks past it to the machine's ps, and the case tests nothing
+chmod +x "$t/psbin/ps-empty"
 for why in failing empty; do
   [ "$why" = empty ] && mv "$t/psbin/ps-empty" "$t/psbin/ps"
   for mode in run plain; do
