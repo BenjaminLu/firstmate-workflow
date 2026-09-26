@@ -83,7 +83,7 @@ D" "$(ready "$d")" "both slots free again"
 d2="$(fixture)"; say "$d2" greenlit; say "$d2" dispatched A; say "$d2" closed A
 assert_eq "C
 D" "$(ready "$d2")" "a closed task frees a slot but does not count as done"
-assert_fail "ready '$d2' | grep -qx B" "a closed dependency does not unblock its dependent"
+assert_fail "grep -qx B <<<\"\$(ready '$d2')\"" "a closed dependency does not unblock its dependent"
 
 # T-058: a parked task is never started until the captain unparks it, and a
 # dropped one (closed, never dispatched) is never started at all
@@ -331,8 +331,8 @@ FM_ROOT="$e" "$e/bin/fm-dispatch.sh" --repo "$e" >/dev/null 2>&1
 assert_eq "0" "$?" "a worker that fails does not fail the dispatcher"
 eventually test -e "$e/worker-done"
 assert_ok "test -e '$e/worker-done'" "the failing worker has run and exited"
-assert_eq "0" "$(jq -r 'select(.type=="worker_crashed")|.type' "$e/state/events.jsonl" \
-  | grep -c . || true)" "and the dispatcher writes no event about it"
+assert_eq "0" "$(grep -c . <<<"$(jq -r 'select(.type=="worker_crashed")|.type' \
+  "$e/state/events.jsonl")" || true)" "and the dispatcher writes no event about it"
 rm -rf "$b" "$e"
 
 finish

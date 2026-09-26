@@ -166,7 +166,7 @@ rm -rf "$d6"
 
 # it goes through the one writer like everyone else
 # the header comment names fm-emit.sh too; look at what runs
-assert_ok "grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-sync-prs.sh' | grep -q 'fm-emit.sh'" \
+assert_ok "grep -q 'fm-emit.sh' <<<\"\$(grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-sync-prs.sh')\"" \
   "it writes through fm-emit.sh"
 rm -rf "$d" "$d2" "$d3"
 finish

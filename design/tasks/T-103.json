@@ -1,0 +1,21 @@
+{
+  "id": "T-103",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "a test that pipes into grep -q no longer fails at random, and the lint that forbids it covers the test suites",
+  "scope": [
+    "tests/*.sh",
+    "tests/**/*.sh",
+    "bin/ci.sh",
+    "design/design.md",
+    "design/tasks/T-103.json"
+  ],
+  "acceptance": [
+    "On T-088's head, tests/adapter-contract.test.sh failed twice in CI with a different 'missing' signature each time ([status 429] [network error while], then [expired api key]), yet passed locally on main and on the branch. The cause is its completeness loop, `printf '%s\\n' \"$broken_lines\" | grep -qiE \"$alt\" || unread=...`, under `set -o pipefail`. grep -q exits on its first match, printf can then die of SIGPIPE, the pipeline returns 141, and a signature that does match gets reported as unread, at random. bin/ci.sh already forbids `| grep -q` and `| grep -c` for exactly this reason, but its lint only scans bin/*.sh and bin/adapters/*.sh, so the test suites slipped through. Commit the task's own entry as design/tasks/T-103.json on this branch. Evidence is the required GitHub check and the seven gates.",
+    "Fix the adapter-contract loop with a here-string, e.g. `grep -qiE \"$alt\" <<<\"$broken_lines\"`. Then sweep every test suite (tests/*.sh and below) for the same construct (a pipeline into grep -q or grep -c) and fix each one the same way. Report the sweep in a SWEPT: line listing the files and the count.",
+    "Extend bin/ci.sh's lint to scan the test suites too, keeping its comment filter and its fm:lint-source marker rule, so the construct cannot come back. The lint fails on a suite that reintroduces it: add a fixture or self-test that proves this, and it fails on the current code.",
+    "A deterministic test shows the old construct could misreport. Force the SIGPIPE path, for example by piping a large input through a producer that keeps writing after grep -q has matched, and show the here-string form never misreports.",
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+  ]
+}

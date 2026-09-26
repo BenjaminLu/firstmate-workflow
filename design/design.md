@@ -1461,6 +1461,91 @@ paused clock rather than on real time. A negative window ("nothing was
 started within N seconds") is wall clock, never a count of sleeps, and may
 only grow: reconcile's is 5 seconds.
 
+No script and no suite feeds `grep -q` or `grep -c` through a pipe (T-103).
+Under `pipefail`, `grep -q` leaving on its first match can kill the producer
+with SIGPIPE, and the pipeline then reports a match as a miss; a loaded
+runner loses that race where an idle laptop does not, which is how
+adapter-contract's completeness loop failed on CI with a different signature
+each run. The data goes in by here-string (or process substitution, where
+`$(...)` would strip trailing lines the check is looking for). The hygiene
+lint enforces it over every `*.sh` below `bin/` and `tests/`, and it catches
+exactly the shapes listed here, no others. It reads
+commands, not one spelling: comments off, continuation lines (a trailing `|`
+or `\`) joined, a backslash-newline with nothing between as bash joins it,
+`||` not a pipe, and every command a single `|` or `|&`
+starts is judged, inside `$(...)` too. It is looking for `grep`, `egrep` or
+`fgrep`, by path too, past `!`, `{`, `(`, leading assignments, and the
+wrappers `env`, `nice`, `time`, `timeout`, `stdbuf`, `exec`, `command`,
+`builtin` and `nohup` with their own options and those options' values
+(`env -u NAME`, `nice -n 5`, `timeout -s KILL 5`, `stdbuf -o L`). It flags
+`-q`/`-c` (a digit is an option too: `-2q`) or `--quiet`/`--silent`/`--count`
+among grep's words, stepping over
+the value of `-e`, `-f`, `-m`, `-A`, `-B`, `-C`, `-d`, `-D` and every long
+option that takes one, and stopping at `--`. Options are read the way getopt
+reads them, on the wrappers' side and on grep's: a cluster whose last letter
+takes a value takes the next word (`env -iu NAME`, `timeout -vs KILL 5`), and
+a long option may be any prefix that names one option (`grep --quie`,
+`env --un NAME`); a prefix of more than one (`grep --co`, `grep --exc`) is
+refused by grep and not flagged. Quotes and backslashes are transparent,
+because an assertion
+string is eval'd, so grep's words end at the first `|`, `;`, `&`, `)` or
+backtick, quoted or not. A file that declares `# fm:lint-source` is skipped. Each of
+these shapes has its own plant in `tests/ci.test.sh`, named by its line. Any
+other spelling is not caught: in front of grep the reader steps over only the
+words named above, and the first word it does not know ends its search. Such
+a spelling relies on review.
+
+The sweep that brought the suites under the lint (T-103) changed 27 sites in
+11 files under `tests/`: adapter-contract 1, board 2, cleanup 1, decide 3,
+dispatch 2, i18n 4, `lib.sh` 1, open 1, review 3, sync-prs 1, worker 8; and 1
+in `bin/ci.sh` itself, which the lint skips by its marker. A here-string
+appends a newline, so empty input becomes one empty line; every converted
+site was checked for input that can be empty meeting a pattern that can
+match an empty line. One changed its result, `tests/lib.sh`'s
+`assert_matches`, and it reads `< <(printf '%s' "$1")` instead, with
+`tests/lib.test.sh` proving `""` no longer matches `'^$'`. The rest are safe:
+the `grep -c .` and `grep -q .` sites (`.` never matches an empty line), the
+`-qx` sites (a non-empty literal), the fixed non-empty patterns
+(adapter-contract, board, cleanup, decide, open, sync-prs, worker, and the
+here-string loop in `tests/pipefail-grep.test.sh`), and i18n's two `'^$'`
+checks, which use `< <(jq ...)` because `$(...)` would strip the trailing
+empty lines they look for.
+
+```
+SWEPT:T-103 pipelines into grep -q / grep -c in the test suites
+  searched: the round-1 regex, then the command-reading lint, over every *.sh
+    below bin/ and tests/ (62 files; bin/ci.sh, bin/fm-config.sh and
+    tests/pipefail-grep.test.sh skipped by their lint-source marker)
+  found 27 in 11 files under tests/, fixed 27: adapter-contract 1, board 2,
+    cleanup 1, decide 3, dispatch 2, i18n 4, lib.sh 1, open 1, review 3,
+    sync-prs 1, worker 8; plus bin/ci.sh 1
+SWEPT:T-103 converted sites where empty input meets a pattern matching an empty line
+  searched: every <<< and < <( line the branch added under tests/ and in bin/ci.sh
+  found 1 (tests/lib.sh assert_matches), fixed 1
+SWEPT:T-103 option spellings getopt accepts that the lint's readers missed
+  searched: each option reader in the lint (wrappers and grep) against
+    clusters ending in a value letter, attached values and long-option prefixes
+  found 2 (wrapper clusters like env -iu NAME; abbreviated long options on
+    both sides like grep --quie), fixed 2, each planted in tests/ci.test.sh
+SWEPT:T-103 statements in the lint's hazard(), lkind() and per-line rules
+    that no plant pins
+  searched: deleted each statement alone, by reading, and asked which plant
+    in tests/ci.test.sh flips; the option tables are data, pinned by their
+    value and quiet/count entries
+  found 19. 9 now pinned by new plants: the single-quote, double-quote
+    and backslash strips; the word cut (one plant per character); a
+    wrapper's --; the first operand ending a wrapper's options; the
+    wrapper long-option continue; the END flush; the joined line's printed
+    text. 10 dead and removed: the =VALUE strip and both = checks,
+    lkind's empty-name return and its "?" mapping, the j > ntok test,
+    END's buf test, the trailing-backslash sub, the space the | join
+    added, and the continue after grep's long options. Reading them also
+    turned up 3 wrong reads, fixed and planted: the space the backslash
+    join added (bash joins -\ and q into -q), a digit that was not a grep
+    option (-2q), and a prefix of several options that all take a value
+    (--exc), read as one where getopt_long refuses it
+```
+
 Each stage skips cleanly when its subject does not exist, so the gate is green
 from an empty tree onward. **Every e2e uses the `mock` adapter** — no model
 call, so it is fast, free and deterministic. Real vendors run in a nightly
@@ -2056,7 +2141,35 @@ recovery path in section 12.
   nothing old has to leave. Every parser of ids and every store keyed by one
   (`state/pending/`, `state/decisions/`, `state/decision-details/`,
   `board/public/diagrams/`, `design/diagrams/`, the watcher's receipts)
-  accepts both forms. Merge cards name the project and link the pull request
+  accepts both forms. `D-SK-<n>` is one pattern everywhere, `fm-decide.sh`'s
+  `^D-SK-[0-9]{3,}$`: the board lists such a card as answerable and records
+  its answer like any other choice card's (T-112), and an answer the board
+  refuses is shown on its card with the server's error, never dropped. The
+  refusal is an alert only on the render that first shows it, so it is
+  announced once, and it leaves with its card, as the card's pick and draft
+  do. These are every place that validates or parses a decision id
+  (`bin/`, `board/`, `tests/`), and the pattern each one uses; `<low>`,
+  `<up>` and `<dig>` are the spelled-out character sets the bash copies use
+  in place of locale-dependent ranges. A new copy is added to this list.
+
+  | place | pattern | `D-SK-<n>` |
+  |---|---|---|
+  | `bin/fm-decide.sh` `SKILL_ID` | `^D-SK-[<dig>]{3,}$` | the reference |
+  | `bin/fm-decide.sh` `OLD_ID` | `^D-[<dig>]{1,6}$` | no; `--await` takes `OLD_ID` or `SKILL_ID` or owned |
+  | `bin/fm-decide.sh` `OWNED_ID` | `^D-([<low><dig>-]{1,24})-(T[<up><low><dig>]{1,32})-([123456789][<dig>]{0,5})$` | no |
+  | `bin/fm-decide.sh` legacy `--request` | `^D-(SK-[0-9]{3,})$`, capturing the `SK-<n>` task | yes, the only request path for it; `--details` takes `OLD_ID` or owned only |
+  | `bin/fm-ready.sh` `SKILL_CARD` | `^D-SK-[<dig>]{3,}$` | yes; reads an adoption card's answer |
+  | `bin/fm-ready.sh` `CARD_ID` | `^D-(<owned>\|[<dig>]{1,6})$` | no; `judged --decision` takes only this, as a skill update gets no readiness card |
+  | `bin/fm-diagram.sh` `is_decision_id` | `D-` then 1-6 digits, or the owned shape, by `case` globs | no, on purpose: no drawing is generated for a skill id |
+  | `bin/fm.sh` self-update | builds `D-$id` from `^SK-[0-9]{3,}$` | the producer, same shape |
+  | `bin/fm-run.sh`, `bin/fm-decide.sh --allocate` | build `D-<project>-<key>-<n>` | not a validator |
+  | `board/server.ts` `isDecisionId` | `OLD_DECISION`, `OWNED_DECISION`, `SKILL_DECISION` = `^D-SK-[0-9]{3,}$` | yes: responses listing, a pending card's `answerable`, `POST /decisions` |
+  | `board/server.ts` `ownerOf` | `OWNED_DECISION` | no owner, by design |
+  | `board/public/diagram.js` `isDecision` | `^D-[0-9]{1,6}$`, `OWNED`, `^D-SK-[0-9]{3,}$` | yes |
+  | `board/public/diagram.js` `owner` | `OWNED` | no owner, by design |
+  | `bin/watch-decisions.ts`, `tests/` | none; fixtures only | n/a |
+
+  Merge cards name the project and link the pull request
   on the project's GitHub repository. A tree with no `projects:` map (every
   tree before the registry, and the test fixtures) is the engine hosting
   itself. Its ids are owned by `firstmate-workflow`. Its cards and their

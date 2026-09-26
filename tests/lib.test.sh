@@ -51,4 +51,13 @@ restore_scripts
 assert_ok "test -e '$d/empty.sh'" "an empty original is restored rather than deleted"
 assert_eq "" "$(cat "$d/empty.sh")" "and it is still empty"
 rm -rf "$d"
+
+# empty output matches nothing, not an empty line (T-103): a here-string
+# hands grep "\n", so '^$' and '^[0-9]*$' passed on a command that printed
+# nothing. Run in a subshell so its failure is counted there, not here.
+counted() { ( _fails=0; "$@" >/dev/null; printf '%s' "$_fails" ); }
+assert_eq "1" "$(counted assert_matches "" '^$' x)" "assert_matches fails an empty string against ^\$"
+assert_eq "1" "$(counted assert_matches "" '^[0-9]*$' x)" "and against a pattern that allows nothing"
+assert_eq "0" "$(counted assert_matches "42" '^[0-9]*$' x)" "and still passes what does match"
+assert_eq "0" "$(counted assert_matches "$(printf 'a\n\nb')" '^$' x)" "and an empty line inside the text"
 finish

@@ -3,7 +3,7 @@
 // moves would fail on the animation and pass on the wrong crew.
 import { test, expect, type Page } from "@playwright/test";
 import { makeRoot, startBoard, stopBoard, writeRegistry, writeProjects, readTasks, writeTasks, ROOT, details } from "./fixture";
-import { appendFileSync, readFileSync, existsSync, writeFileSync, rmSync, utimesSync, mkdirSync, chmodSync } from "node:fs";
+import { appendFileSync, readFileSync, existsSync, writeFileSync, rmSync, utimesSync, mkdirSync, chmodSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
@@ -538,6 +538,95 @@ test('a card whose id names its project and task renders, draws and is answered'
     await card.locator('.confirm').click();
     await expect.poll(() => existsSync(join(root,`state/decisions/${id}.json`))).toBe(true);
     expect(JSON.parse(readFileSync(join(root,`state/decisions/${id}.json`),'utf8')).chosen).toBe('B');
+  } finally {stopBoard(b);}
+});
+
+// T-112: fm.sh self-update raises D-SK-<n>. The captain's A on it is recorded
+// like any other choice, and an answer the server refuses shows its error on
+// the card instead of vanishing.
+test('a skill-update card is answered, and a refused answer shows the server error on its card', async ({page}) => {
+  const root = makeRoot(['working'], false);
+  writeFileSync(join(root,'state/pending/D-SK-001.json'), JSON.stringify({id:'D-SK-001',task:'SK-001',kind:'choice',title:'adopt SK-001'}));
+  writeFileSync(join(root,'state/pending/D-SK-01.json'), JSON.stringify({id:'D-SK-01',task:'SK-01',kind:'choice',title:'malformed'}));
+  // fm-diagram.sh draws nothing for a skill id, so the drawing is placed by
+  // hand: diagram.js's isDecision alone decides whether a card embeds it
+  mkdirSync(join(root,'board/public/diagrams'), {recursive:true});
+  for (const id of ['D-SK-001','D-SK-01'])
+    writeFileSync(join(root,`board/public/diagrams/${id}.en.html`), `<!doctype html><body>drawing of ${id}</body>`);
+  const b = await startBoard(root);
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    await expect(page.locator('#card-D-SK-001')).toHaveCount(1);
+    await expect(page.locator('#card-D-SK-01')).toHaveCount(1);
+    // whichever sorts second is a strip, opened in place
+    for (const id of ['D-SK-001','D-SK-01']) {
+      const strip = page.locator(`#strip-${id}`);
+      if (await strip.count()) await strip.locator('summary').click();
+    }
+    // diagram.js accepts D-SK-<n> like server.ts: the well-formed id embeds and
+    // shows its drawing, the malformed one embeds nothing
+    const frame = page.locator('#card-D-SK-001 iframe.dg[data-decision="D-SK-001"]');
+    await expect(frame).toHaveAttribute('src', 'diagrams/D-SK-001.en.html');
+    await expect(page.locator('#card-D-SK-001').frameLocator('iframe.dg').locator('body')).toContainText('drawing of D-SK-001');
+    await expect(page.locator('#card-D-SK-01 iframe.dg')).toHaveCount(0);
+    // Every mutation a screen reader would announce: an alert put into the
+    // deck, or any change inside one. A refusal is announced once, however
+    // often the deck is rendered after it.
+    await page.evaluate(() => {
+      const w = window as any; w.alerts = [];
+      const inAlert = (n: Node | null) => (n instanceof Element ? n : n?.parentElement)?.closest('[role=alert]');
+      w.alertWatch = new MutationObserver(records => { for (const m of records) {
+        for (const n of m.addedNodes) if (n instanceof Element && (n.matches('[role=alert]') || n.querySelector('[role=alert]')))
+          w.alerts.push('inserted: ' + n.textContent);
+        if (m.type !== 'childList' && inAlert(m.target)) w.alerts.push(m.type + ': ' + (m.target as Node).textContent);
+      } });
+      w.alertWatch.observe(document.getElementById('deck'), {childList:true, subtree:true, characterData:true, attributes:true});
+    });
+    const rerender = () => page.evaluate(() => fetch('/api/state').then(r => r.json()).then((window as any).render));
+    const bad = page.locator('#card-D-SK-01');
+    await bad.locator('[data-c="A"]').click();
+    await bad.locator('.confirm').click();
+    await expect(bad.locator('.refused')).toContainText('bad decision id');
+    expect(existsSync(join(root,'state/decisions/D-SK-01.json'))).toBe(false);
+    await rerender(); await rerender();
+    await bad.locator('[data-c="B"]').click();
+    await expect(bad.locator('[data-c="B"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(bad.locator('.refused')).toContainText('bad decision id');
+    const alerts = await page.evaluate(() => { const w = window as any; w.alertWatch.disconnect(); return w.alerts; });
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatch(/^inserted: [\s\S]*bad decision id/);
+    // A card that leaves pending takes its refusal with it, as it takes its
+    // pick, draft and open strip: it comes back under the same id clean.
+    const badPending = join(root,'state/pending/D-SK-01.json'), badBody = readFileSync(badPending,'utf8');
+    unlinkSync(badPending); await rerender();
+    await expect(bad).toHaveCount(0);
+    writeFileSync(badPending, badBody); await rerender();
+    await expect(bad).toHaveCount(1);
+    await expect(bad.locator('.refused')).toHaveCount(0);
+    // A refusal is cleared by the next attempt on that card. The first answer
+    // on D-SK-001 is refused by the route below; the second is held until the
+    // page has rendered the retry, so a stale refusal would still be on screen.
+    let posts = 0, release = () => {};
+    const held = new Promise<void>(r => { release = r; });
+    await page.route('**/decisions', async route => {
+      if (route.request().method() !== 'POST') return route.continue();
+      if (++posts === 1) return route.fulfill({status:400, contentType:'application/json', body:JSON.stringify({error:'refused once by the test'})});
+      await held; return route.continue();
+    });
+    const card = page.locator('#card-D-SK-001');
+    await card.locator('[data-c="A"]').click();
+    await card.locator('.confirm').click();
+    await expect(card.locator('.refused')).toContainText('refused once by the test');
+    expect(existsSync(join(root,'state/decisions/D-SK-001.json'))).toBe(false);
+    await card.locator('[data-c="A"]').click();
+    await card.locator('.confirm').click();
+    await expect.poll(() => posts).toBe(2);
+    await expect(card).toHaveCount(1);
+    await expect(card.locator('.refused')).toHaveCount(0);
+    release();
+    await expect.poll(() => existsSync(join(root,'state/decisions/D-SK-001.json'))).toBe(true);
+    expect(JSON.parse(readFileSync(join(root,'state/decisions/D-SK-001.json'),'utf8'))).toMatchObject({chosen:'A',task:'SK-001',kind:'choice'});
+    await expect(page.locator('#orderFeedback')).toContainText('AYE, CAPTAIN!');
   } finally {stopBoard(b);}
 });
 

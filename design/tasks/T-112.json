@@ -1,0 +1,24 @@
+{
+  "id": "T-112",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "the board answers a skill-update card (D-SK-<n>), and shows a refused answer instead of dropping it",
+  "scope": [
+    "board/server.ts",
+    "board/public/diagram.js",
+    "board/public/index.html",
+    "tests/decisions.test.sh",
+    "tests/board.test.sh",
+    "tests/e2e/board.spec.ts",
+    "design/design.md",
+    "design/tasks/T-112.json"
+  ],
+  "acceptance": [
+    "The board refuses to answer a skill-update card. fm.sh self-update raises D-SK-<n> (fm-decide.sh accepts it with SKILL_ID ^D-SK-[0-9]{3,}$, and fm-ready.sh reads it), but board/server.ts's isDecisionId, and board/public/diagram.js's copy of it, accept only D-<digits> and the owned D-<project>-T<id>-<n>. So the board lists D-SK-001, and the captain's click on 2026-09-25 was refused with 400 'bad decision id', which the page did not surface. Its own spec file, design/tasks/T-112.json, is committed on this branch.",
+    "The board accepts D-SK-<n> with the same pattern fm-decide.sh uses (^D-SK-[0-9]{3,}$), everywhere it validates a decision id: server.ts's isDecisionId (listing responses and POST /decisions) and diagram.js's isDecision. An answered D-SK card writes its response exactly as any other choice card does, so fm-decide.sh --await and fm-ready.sh read it unchanged.",
+    "A refused answer is shown on the card with the server's error, never silently dropped.",
+    "Sweep: every other place that validates or parses a decision id (bin/, board/, tests/) is listed in the pull request with the one it uses, so no fourth copy of the pattern disagrees.",
+    "Evidence is the required GitHub check and the seven gates, checked by firstmate at the merge gate. Tests written to fail first: tests/decisions.test.sh answers a D-SK-001 card through POST /decisions and reads it back with fm-decide.sh --await; tests/board.test.sh lists it with an answerable state; the e2e test clicks A on a D-SK card and sees it recorded, and sees a refused answer's error shown. The worker does not run the suite itself."
+  ]
+}
