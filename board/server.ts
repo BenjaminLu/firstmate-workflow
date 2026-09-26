@@ -267,14 +267,57 @@ const prNumber = (n: unknown): number | null => {
 // guessed. A skill update's card, D-SK-<n>, is fm-decide.sh's SKILL_ID
 // (T-112): fm.sh self-update raises it, fm-decide.sh --await and fm-ready.sh
 // read its answer under that pattern only, and it names no owner.
+// --- task grammar (T-119) ---
+// The TypeScript twin of bin/fm-emit.sh's task-id grammar, the one place the
+// scripts read it from; tests/board.test.sh lifts this block out and runs it
+// against the shell functions over one table, so the two cannot drift. A
+// task is T-<3+ digits> or SK-<3+ digits>. A branch names its task, prefix in
+// either case, the hyphen after it optional, the number whole (t-117-… is
+// T-117, sk-001-… is SK-001, t-1170-… is T-1170); a title leads with it and
+// a colon ("T-117: …"); a pull request's task is its branch's, else its
+// title's. A decision id holds a task's key, the task without its hyphen,
+// and card ids have always taken T-<letters and digits> too; an owned
+// decision id is D-<project>-<key>-<n>, and ownerOf reads its project, task
+// and n back out of it.
+//
+// It is one function in plain JavaScript, with no type in it, because the
+// board's page reads it too: the server puts it in front of diagram.js when
+// it serves that file (GRAMMAR_JS below), so the page holds no copy of it.
+function taskGrammar() {
+  const TASK_ID = /^(T|SK)-[0-9]{3,}$/;
+  const TASK_KEY = "T[A-Za-z0-9]{1,32}|SK[0-9]{3,}";
+  const OWNED = new RegExp(`^D-([a-z0-9-]{1,24})-(${TASK_KEY})-([1-9][0-9]{0,5})$`);
+  const isTask = (id) => typeof id === "string" && TASK_ID.test(id);
+  const taskOfBranch = (branch) => {
+    const m = /^([tT]|[sS][kK])-?([0-9]{3,})(-.*)?$/.exec(typeof branch === "string" ? branch : "");
+    return m ? `${m[1].toUpperCase()}-${m[2]}` : null;
+  };
+  const taskOfTitle = (title) => {
+    const m = /^((T|SK)-[0-9]{3,}):/.exec(typeof title === "string" ? title : "");
+    return m ? m[1] : null;
+  };
+  const taskOfPr = (branch, title) => taskOfBranch(branch) ?? taskOfTitle(title);
+  const taskKey = (id) =>
+    isTask(id) ? id.replace("-", "")
+      : typeof id === "string" && /^T-[A-Za-z0-9]{1,32}$/.test(id) ? `T${id.slice(2)}` : null;
+  const taskOfKey = (key) => {
+    const k = typeof key === "string" ? key : "";
+    return /^SK[0-9]{3,}$/.test(k) ? `SK-${k.slice(2)}`
+      : new RegExp(`^(?:${TASK_KEY})$`).test(k) ? `T-${k.slice(1)}` : null;
+  };
+  const ownerOf = (id) => {
+    const m = OWNED.exec(String(id ?? ""));
+    return m ? { project: m[1], task: taskOfKey(m[2]), n: Number(m[3]) } : null;
+  };
+  return { OWNED, isTask, taskOfBranch, taskOfTitle, taskOfPr, taskKey, taskOfKey, ownerOf };
+}
+const { OWNED: OWNED_DECISION, isTask, taskOfBranch, taskOfTitle, taskOfPr, taskKey, taskOfKey, ownerOf } = taskGrammar();
+// --- end task grammar ---
+// what the server puts in front of diagram.js: the same function, as source
+const GRAMMAR_JS = `var TASK_GRAMMAR = (${taskGrammar.toString()})();\n`;
 const OLD_DECISION = /^D-[0-9]{1,6}$/;
-const OWNED_DECISION = /^D-([a-z0-9-]{1,24})-(T[A-Za-z0-9]{1,32})-([1-9][0-9]{0,5})$/;
 const SKILL_DECISION = /^D-SK-[0-9]{3,}$/;
 const isDecisionId = (id: string) => OLD_DECISION.test(id) || OWNED_DECISION.test(id) || SKILL_DECISION.test(id);
-const ownerOf = (id: unknown): { project: string; task: string; n: number } | null => {
-  const m = OWNED_DECISION.exec(String(id ?? ""));
-  return m ? { project: m[1], task: `T-${m[2].slice(1)}`, n: Number(m[3]) } : null;
-};
 // the pull request's page, or null when there is no number or no repository
 const pullUrl = (repo: string | null, n: unknown): string | null => {
   const k = prNumber(n);
@@ -877,7 +920,7 @@ const HELPER_STOPPED = "the merge helper stopped before recording an outcome";
 // Start the helper for an answered merge card. Detached, with its output in
 // a file: a board restarting under bun --watch neither kills it nor leaves
 // it writing into a closed pipe.
-const startMerge = (id: string, project: string, pr: number, task: string | null, onProject: string[]) => {
+const startMerge = (id: string, project: string, pr: number, task: string | null, onProject: string[], untracked = false) => {
   mkdirSync(MERGING, { recursive: true });
   const log = join(MERGING, `${project || "_default"}.out`);
   let child;
@@ -885,7 +928,7 @@ const startMerge = (id: string, project: string, pr: number, task: string | null
     const fd = openSync(log, "w");
     try {
       child = spawn(join(ROOT, "bin/fm-merge.sh"),
-        ["--pr", String(pr), ...(task ? ["--task", task] : []), ...onProject, "--repo", ROOT],
+        ["--pr", String(pr), ...(untracked ? ["--untracked"] : task ? ["--task", task] : []), ...onProject, "--repo", ROOT],
         { detached: true, stdio: ["ignore", fd, fd], env: childEnv() });
     } finally { closeSync(fd); }
   } catch { settle(id, "failed", "Merge helper unavailable"); return; }
@@ -1194,7 +1237,16 @@ const server = Bun.serve({
         // so the id's owner is never passed on as a --project
         const project = typeof p.project === "string" && p.project ? p.project : null;
         const onProject = project ? ["--project", project] : [];
-        const merging = p.kind === "merge" && chosen === "A" && prNumber(p.pr) !== null && typeof p.pr === "number";
+        // A merge card is its task's, or belongs to no task (T-119): an
+        // untracked card merges its pull request with --untracked and hands
+        // fm-merge.sh no task, whatever its file says; a task's card hands
+        // only a task the grammar holds, and fm-merge.sh refuses it unless
+        // the pull request is that task's.
+        const untracked = p.kind === "merge-untracked";
+        const merging = (p.kind === "merge" || untracked) && chosen === "A" && prNumber(p.pr) !== null && typeof p.pr === "number";
+        const mergeTask = untracked ? null : taskKey(p.task) !== null ? String(p.task) : null;
+        if (merging && !untracked && p.task != null && mergeTask === null)
+          return json({ error: "a merge card names a task id", task: String(p.task) }, 409);
         // One merge at a time within a project. Refused before anything is
         // published or emitted, so the card stays pending as it was; nothing
         // below awaits, so no second answer can slip in between.
@@ -1226,7 +1278,7 @@ const server = Bun.serve({
         } catch { /* the durable decision still exists; report the event failure */ }
 
         // the helper runs in the background; the answer does not wait for it
-        if (merging) startMerge(id, projectOf(p), p.pr, p.task ?? null, onProject);
+        if (merging) startMerge(id, projectOf(p), p.pr, mergeTask, onProject, untracked);
         const pf = join(ROOT, "state/pending", `${id}.json`);
         if (existsSync(pf)) unlinkSync(pf);
         const stored = readJson<Record<string, unknown>>(file) ?? decision;
@@ -1320,6 +1372,12 @@ const server = Bun.serve({
     }
 
     if (url.pathname === "/" || url.pathname === "") return serveFile("index.html");
+    // diagram.js reads owned decision ids through the task grammar, which it
+    // gets here, in front of the file, and holds no copy of (T-119)
+    if (url.pathname === "/diagram.js") {
+      const f = serveFile("diagram.js");
+      return f.ok ? f.text().then((s) => new Response(GRAMMAR_JS + s, { headers: f.headers })) : f;
+    }
     return serveFile(url.pathname.replace(/^\//, ""));
   },
 });

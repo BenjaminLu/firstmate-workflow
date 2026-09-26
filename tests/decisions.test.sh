@@ -254,6 +254,39 @@ for badid in D-SK-01 D-SK-1a D-sk-001 D-SK- D-SK-001-1; do
   assert_contains "$(post "$(answer "$badid" A)")" "bad decision id" "the route still refuses $badid"
 done
 
+# --- T-119: a card merges only as what it is -------------------------------
+# An untracked merge card (a revert, a hotfix: fm-decide.sh --kind
+# merge-untracked) hands the merge script --untracked and no task, even when
+# its file carries one; a skill update's owned merge card is answered like
+# any task's and hands its SK task; a task's card never hands a task the
+# grammar does not hold.
+printf '%s\n' '{"id":"D-1096","kind":"merge-untracked","title":"merge the revert","pr":96}' > "$d/state/pending/D-1096.json"
+assert_eq "true" "$(post "$(answer D-1096 A)" | jq -r .ok)" "an untracked merge card is answered"
+assert_eq "merged" "$(settled D-1096)" "and its merge is run"
+assert_contains "$(tail -1 "$d/state/merge-calls")" "--pr 96 --untracked" "with --untracked"
+assert_lacks "$(tail -1 "$d/state/merge-calls")" "--task" "and no task"
+assert_eq "merge-untracked null" "$(jq -r '"\(.kind) \(.task)"' "$d/state/decisions/D-1096.json")" \
+  "the record keeps its kind and names no task"
+printf '%s\n' '{"id":"D-1099","task":"T-A","kind":"merge-untracked","title":"merge a hotfix","pr":99}' > "$d/state/pending/D-1099.json"
+post "$(answer D-1099 A)" >/dev/null
+assert_eq "merged" "$(settled D-1099)" "an untracked card whose file names a task is merged"
+assert_contains "$(tail -1 "$d/state/merge-calls")" "--pr 99 --untracked" "as untracked"
+assert_lacks "$(tail -1 "$d/state/merge-calls")" "--task" "handing the merge script no task"
+skid='D-firstmate-workflow-SK001-1'
+printf '{"id":"%s","task":"SK-001","kind":"merge","title":"merge SK-001","pr":94}\n' "$skid" > "$d/state/pending/$skid.json"
+s="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "true firstmate-workflow SK-001 1" \
+  "$(jq -r --arg i "$skid" '.pending[]|select(.id==$i)|"\(.answerable) \(.owner.project) \(.owner.task) \(.owner.n)"' <<<"$s")" \
+  "a skill update's owned merge card is answerable, its owner read out of its id"
+post "$(answer "$skid" A)" >/dev/null
+assert_eq "merged" "$(settled "$skid")" "and its merge is run"
+assert_contains "$(tail -1 "$d/state/merge-calls")" "--pr 94 --task SK-001" "for SK-001"
+printf '%s\n' '{"id":"D-1100","task":"revert of T-105","kind":"merge","title":"merge?","pr":100}' > "$d/state/pending/D-1100.json"
+assert_contains "$(post "$(answer D-1100 A)")" "names a task id" "a merge card whose task is no task id is refused"
+assert_fail "test -e '$d/state/decisions/D-1100.json'" "and nothing is recorded"
+assert_fail "grep -q -- '--pr 100' '$d/state/merge-calls'" "or merged"
+rm -f "$d/state/pending/D-1100.json"
+
 printf '%s\n' '{"id":"D-4","task":"T-A","kind":"choice"}' > "$d/state/pending/D-4.json"
 assert_eq 'true' "$(post "$(jq -cn '{id:"D-4",chosen:"custom",text:("🚢" * 1000)}')" | jq -r .ok)" '1000 Unicode code points accepted'
 

@@ -1,0 +1,34 @@
+{
+  "id": "T-119",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "a merge card merges only the pull request of its own task, and skill-update (SK-*) tasks get merge cards and branch sync like every other task",
+  "scope": [
+    "bin/fm-merge.sh",
+    "bin/fm-decide.sh",
+    "bin/fm-sync-prs.sh",
+    "bin/fm-emit.sh",
+    "board/server.ts",
+    "tests/merge.test.sh",
+    "tests/decide.test.sh",
+    "tests/decisions.test.sh",
+    "tests/sync-prs.test.sh",
+    "tests/board.test.sh",
+    "skills/firstmate/SKILL.md",
+    "design/design.md",
+    "design/tasks/T-119.json",
+    "tests/e2e-loop.test.sh",
+    "tests/gh-stub.sh",
+    "bin/fm-diagram.sh",
+    "board/public/diagram.js",
+    "tests/diagram.test.sh"
+  ],
+  "acceptance": [
+    "Why. (a) On 2026-09-26 a merge card for PR #96, the revert of T-105 by the captain, was raised under task T-117, because the board hides the pending cards of a task already merged (T-105). The captain clicked it. fm-merge merged #96 and wrote `merged` for T-117 (events.jsonl lines 3945–3947), although #96's branch had nothing to do with T-117 and T-117's own PR #97 was open. Nothing compared the card's task with the pull request's. (b) fm-decide cannot raise a merge card for an SK-* task, whose ids are not T-<digits>. SK-001 (#94) had to be merged by hand with gh under a one-time captain permission, and fm-merge's branch-name inference (`sed 's/^\\([tT]-\\{0,1\\}[0-9]\\{3\\}\\).*/'`) and fm-sync-prs.sh do not match SK branches either. The captain approved fixing card-state confusion on 2026-09-26. Its own spec file, design/tasks/T-119.json, is committed on this branch.",
+    "A merge card names its pull request and its task, and they must agree. fm-decide --request --kind merge refuses, before any card exists, a PR whose head branch does not belong to the card's task: its task is read from the branch name by the same one function everywhere, and from the PR title's `T-xxx:` or `SK-xxx:` prefix when the branch does not say. When they disagree, it exits non-zero with a message naming both. fm-merge.sh checks again at merge time, because the branch can change between card and click, and refuses with a failed outcome (which T-118, if merged, shows on the board). It never writes `merged` for a task that is not the PR's task. A pull request that belongs to no task (a revert, a hotfix) gets its own kind of card, for example `kind: merge-untracked`. Its merge writes a `merged` event with no task, or with `data.untracked: true`, and moves no task's card. Test the #96/T-117 sequence: refused at request time, refused at merge time after a branch swap, and allowed as untracked.",
+    "One task-id grammar. Define in one place (a shared shell function and its TypeScript twin, with a test that they agree) which ids are tasks: `T-<3+ digits>`, `SK-<3+ digits>`, and any other prefix the repo already uses (grep design/tasks and state/events.jsonl for every prefix). Define also how a branch name maps to a task id (`t-117-…` → T-117, `sk-001-…` → SK-001). fm-decide, fm-merge, fm-sync-prs, fm-emit's validation and the board all use it. Test SK-001's real branch name and PR title.",
+    "SK tasks merge through the board. An SK-* task that is approved and green gets a merge card like any T-* task. Clicking A runs fm-merge, which writes `merged` for SK-xxx, and fm-sync-prs keeps SK branches in sync. skills/firstmate/SKILL.md loses the note that SK merges need a hand merge.",
+    "Tests fail-first against main. Stubs of gh answer as gh does (shape, exit codes, literal null), taken from its docs or a recorded transcript. Workers do not run the suite themselves: evidence is the required GitHub check and the gates, checked by firstmate at the merge gate. This task and T-118 both touch board/server.ts and design.md: whichever merges second rebases and resolves the conflicts per hunk. The pending-card visibility for final tasks belongs to T-118, not here."
+  ]
+}

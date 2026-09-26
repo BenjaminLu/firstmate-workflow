@@ -54,9 +54,13 @@ fi
 seen() { [ -f "$LOG" ] && jq -r --arg t "$1" --argjson p "$2" --arg proj "$3" --arg def "$default" \
   'select(.type==$t and .pr==$p and ((.project // $def) == $proj))|.pr' "$LOG" 2>/dev/null | head -1; }
 
-# a branch is named after its task: t-004-... -> T-004
-task_of() { printf '%s' "$1" | sed -n 's/^\([tT]-\{0,1\}[0-9]\{3\}\).*/\1/p' | tr 'a-z' 'A-Z' \
-            | sed 's/^T\([0-9]\)/T-\1/'; }
+# A pull request's task is its branch's (t-004-… is T-004, sk-001-… is
+# SK-001), else its title's T-xxx: or SK-xxx: prefix: the one grammar every
+# script reads, in fm-emit.sh beside this one (T-119). It is sourced, not
+# copied, so SK branches are synced like any other.
+[ -r "$HERE/fm-emit.sh" ] || { echo "fm-sync-prs: missing $HERE/fm-emit.sh" >&2; exit 70; }
+# shellcheck source=bin/fm-emit.sh
+. "$HERE/fm-emit.sh"
 
 new=0
 sync_one() {  # sync_one <project or empty> <owner/repo or empty>
@@ -76,7 +80,7 @@ sync_one() {  # sync_one <project or empty> <owner/repo or empty>
       *) continue ;;
     esac
     [ -z "$(seen "$type" "$num" "$project")" ] || continue
-    task="$(task_of "$branch")"
+    task="$(fm_task_of_pr "$branch" "$title" || true)"
     # build both summaries first: a case inside a command substitution inside an
     # argument is a parse error waiting for the day the branch is taken
     case "$state" in
