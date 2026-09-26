@@ -82,6 +82,40 @@ class Session(unittest.TestCase):
              patch.object(m.subprocess,'Popen') as spawn:
             with self.assertRaisesRegex(RuntimeError,'unverified root'): m.board_start(self.repo)
             self.assertFalse(spawn.called)
+    def test_one_time_address_never_in_an_argument_list(self):
+        # T-122: `ps` shows every process's arguments to every other; on macOS
+        # the sign-in address goes to osascript on stdin, not in argv
+        calls=[]
+        def run(argv, **kwargs):
+            calls.append((argv, kwargs.get('input'))); return subprocess.CompletedProcess(argv, 0)
+        address='http://127.0.0.1:4173/login#1790000000000.'+'a'*32+'.'+'b'*64
+        with patch.object(m.sys,'platform','darwin'), \
+             patch.object(m.shutil,'which',side_effect=lambda name: '/usr/bin/'+name), \
+             patch.object(m.subprocess,'run',side_effect=run), \
+             patch.object(m.subprocess,'call') as call:
+            self.assertTrue(m.open_address(address))
+        self.assertFalse(call.called)
+        self.assertEqual(1,len(calls))
+        argv, given = calls[0]
+        self.assertEqual(['/usr/bin/osascript'],argv)
+        self.assertNotIn('b'*64,' '.join(argv))
+        self.assertIn(address.encode(),given)
+    def test_login_url_is_signed_by_the_secret(self):
+        import hashlib, hmac as mac
+        config=tempfile.TemporaryDirectory(); self.addCleanup(config.cleanup)
+        with patch.dict(os.environ,{'XDG_CONFIG_HOME':config.name}):
+            with self.assertRaises(OSError): m.board_login_url('http://127.0.0.1:4173',4173)
+            secret=m.board_secret_file(4173); secret.parent.mkdir(parents=True)
+            secret.write_text('c'*64+'\n'); secret.chmod(0o600)
+            before=int(time.time()*1000)
+            address=m.board_login_url('http://127.0.0.1:4173',4173)
+        base, code = address.split('#',1)
+        self.assertEqual('http://127.0.0.1:4173/login',base)
+        issued, nonce, tag = code.split('.')
+        self.assertGreaterEqual(int(issued),before); self.assertEqual(13,len(issued)); self.assertEqual(32,len(nonce))
+        want=mac.new(b'c'*64,f'login:http://127.0.0.1:4173:{issued}.{nonce}'.encode(),hashlib.sha256).hexdigest()
+        self.assertEqual(want,tag)
+        self.assertNotIn('c'*64,address)
     def test_continuous_watch_restart_preserves_observation(self):
         pending=self.repo/'state/pending'; pending.mkdir(parents=True)
         decisions=self.repo/'state/decisions'; decisions.mkdir(parents=True)
@@ -118,9 +152,17 @@ class Session(unittest.TestCase):
         children=[]; original=m.subprocess.Popen
         def spawn(*args,**kwargs):
             child=original(*args,**kwargs); children.append(child); return child
+        # T-122: the board's secret goes under XDG_CONFIG_HOME, here a directory
+        # of this test's own outside the fixture root, never the operator's home
+        config=tempfile.TemporaryDirectory(); self.addCleanup(config.cleanup)
+        opened=[]
+        def browser(address):
+            opened.append(address); return True
         try:
-            with patch.dict(os.environ,{'FM_PORT':str(port)}), \
-                 patch.object(m.shutil,'which',side_effect=lambda name: bun if name=='bun' else None), \
+            with patch.dict(os.environ,{'FM_PORT':str(port),'XDG_CONFIG_HOME':config.name}), \
+                 patch.object(m.shutil,'which',side_effect=lambda name: bun if name=='bun' else '/usr/bin/'+name if name=='xdg-open' else None), \
+                 patch.object(m.sys,'platform','linux'), \
+                 patch.object(m,'open_address',side_effect=browser), \
                  patch.object(m.subprocess,'Popen',side_effect=spawn):
                 first=m.board_start(self.repo)
                 self.assertFalse(first['reused']); self.assertTrue(first['page_http_verified'])
@@ -128,6 +170,37 @@ class Session(unittest.TestCase):
                 self.assertTrue(second['reused']); self.assertEqual(1,len(children))
                 other=self.repo/'other'; other.mkdir()
                 with self.assertRaisesRegex(RuntimeError,'unverified root'): m.board_start(other)
+                # the browser was sent to a one-time sign-in address each time,
+                # and the real board takes each code once and only once
+                url=f'http://127.0.0.1:{port}'
+                self.assertEqual(2,len(opened))
+                for address in opened:
+                    self.assertTrue(address.startswith(url+'/login#'), address)
+                code=opened[0].split('#',1)[1]
+                def login(code, origin=url):
+                    import urllib.request, urllib.error
+                    request=urllib.request.Request(url+'/login',data=json.dumps(dict(code=code)).encode(),method='POST',
+                        headers={'content-type':'application/json','origin':origin})
+                    try:
+                        with urllib.request.urlopen(request,timeout=5) as reply: return reply.status, reply.headers.get('set-cookie') or ''
+                    except urllib.error.HTTPError as error:
+                        error.close(); return error.code, ''
+                status, cookie = login(code)
+                self.assertEqual(200,status); self.assertIn(f'firstmate_board_{port}=',cookie); self.assertIn('HttpOnly',cookie)
+                self.assertEqual(403,login(code)[0],'a code is good once')
+                self.assertEqual(200,login(opened[1].split('#',1)[1])[0],'each opening mints its own code')
+                # the record in state/ holds the board's URL, never a code or the secret's path
+                record=(self.repo/'state/session/board.json').read_text()
+                self.assertNotIn('#',record); self.assertNotIn('login',record)
+                self.assertNotIn(config.name,record); self.assertNotIn('.secret',record)
+                secret=m.board_secret_file(port)
+                self.assertEqual(0o600,secret.stat().st_mode & 0o777)
+                self.assertFalse(str(secret.resolve()).startswith(str(self.repo.resolve())+'/'))
+                for path in (self.repo/'state').rglob('*'):
+                    if path.is_file():
+                        text=path.read_bytes()
+                        self.assertNotIn(secret.read_bytes().strip(),text,path)
+                        self.assertNotIn(str(secret).encode(),text,path)
         finally:
             for child in children:
                 if child.poll() is None: os.killpg(child.pid,signal.SIGTERM)

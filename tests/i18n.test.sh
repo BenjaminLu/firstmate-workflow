@@ -42,6 +42,20 @@ for k in $(grep -ohE '[^A-Za-z0-9_][tT]\("[a-zA-Z0-9]+"\)' $pages \
   jq -e --arg k "$k" 'has($k)' "$en" >/dev/null 2>&1 || missing="$missing $k"
 done
 assert_eq "" "$missing" "every key the page asks for is in the dictionary"
+
+# The page shows a refusal by the code the server sends (T-122's 403s among
+# them), so every code the server can send is a key in both dictionaries.
+codes="$(grep -oE 'refuse\("[A-Za-z]+"|code: "[A-Za-z]+"' "$ROOT/board/server.ts" \
+  | sed -E 's/^.*"([A-Za-z]+)"$/\1/' | sort -u)"
+assert_contains "$codes" "writeCredential" "the scan finds the server's refusal codes"
+missing=''
+for k in $codes; do
+  jq -e --arg k "$k" 'has($k)' "$en" >/dev/null 2>&1 || missing="$missing en:$k"
+  jq -e --arg k "$k" 'has($k)' "$tw" >/dev/null 2>&1 || missing="$missing zh-TW:$k"
+done
+assert_eq "" "$missing" "every code the server refuses with is translated in both dictionaries"
+assert_ok "jq -e 'has(\"readOnly\")' '$en' >/dev/null && jq -e 'has(\"readOnly\")' '$tw' >/dev/null" \
+  "the read-only line is in both dictionaries"
 for n in 1 2 3 4 5 6 7; do
   assert_ok "jq -e 'has(\"gate$n\")' '$en' >/dev/null" "gate $n has a label"
 done

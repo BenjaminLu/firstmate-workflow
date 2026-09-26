@@ -6,8 +6,10 @@
 // No build step and no framework: the page is a file, the stream is SSE, and
 // the state endpoint is derived from events.jsonl and design/tasks/ so the
 // board has no opinion the log does not already hold.
-import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fchmodSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 // canonical from the start: on macOS /var is a symlink to /private/var, and a
@@ -959,15 +961,126 @@ const anyRunning = () => readResponses().some((d) => mergeOf(d) === "running" &&
 if (anyRunning()) void recover();
 setInterval(() => { if (anyRunning()) void recover(); }, 1000);
 
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
+
+// --- Who may write (design section 8, the board's trust boundary; T-122) ---
+// The board binds loopback, and on macOS the OS sandbox cannot keep a crew
+// round off one loopback port while leaving it the others, so every route
+// that writes or starts a program asks for a credential no crew round and no
+// other web page can read or fetch. It is a secret of 256 random bits in a
+// file of the operator's own, outside the repository, made once and kept
+// across restarts: `<config>/firstmate/board-<port>.secret`, mode 0600, where
+// <config> is $XDG_CONFIG_HOME when that is an absolute path and ~/.config
+// otherwise. Nothing the board sends, logs or emits carries it.
+//   - the captain's browser holds a cookie derived from it, given once in
+//     exchange for a one-time code (/login) the opener derives from it;
+//   - a script on the operator's machine sends it as `Authorization: Bearer`.
+// Either way the request also carries the board's own Origin and a JSON body,
+// so no form and no page of another origin gets through.
+const CONFIG_DIR = join((() => {
+  const x = process.env.XDG_CONFIG_HOME ?? "";
+  return x.startsWith("/") ? x : join(homedir(), ".config");
+})(), "firstmate");
+const secretFile = (port: number) => join(CONFIG_DIR, `board-${port}.secret`);
+// Made only when missing, through a link from a file written whole, so a
+// board that dies half way never leaves an empty secret behind. One that is
+// there is read through a descriptor that refuses a symlink, and must be the
+// operator's own regular file holding 64 hex digits or more.
+const loadSecret = (port: number): string => {
+  mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  const dir = realpathSync(CONFIG_DIR);
+  if (dir === ROOT || dir.startsWith(ROOT + "/"))
+    throw new Error("the board's secret must live outside the repository; set XDG_CONFIG_HOME elsewhere");
+  const file = secretFile(port);
+  if (!existsSync(file)) {
+    const temporary = join(CONFIG_DIR, `.board-${port}.${crypto.randomUUID()}.tmp`);
+    writeFileSync(temporary, randomBytes(32).toString("hex") + "\n", { flag: "wx", mode: 0o600 });
+    try { linkSync(temporary, file); } catch (e) { if ((e as { code?: string }).code !== "EEXIST") throw e; }
+    finally { unlinkSync(temporary); }
+  }
+  const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.uid !== process.getuid?.()) throw new Error("the secret file is not the operator's own regular file");
+    if (st.mode & 0o077) fchmodSync(fd, 0o600);
+    const secret = readFileSync(fd, "utf8").trim();
+    if (!/^[0-9a-f]{64,}$/.test(secret)) throw new Error("the secret file holds no secret; remove it and restart the board");
+    return secret;
+  } finally { closeSync(fd); }
+};
+// set once the port is known, before the first request is served
+let SECRET = "", ORIGINS: string[] = [], COOKIE = "", STARTED = 0;
+const mac = (message: string) => createHmac("sha256", SECRET).update(message).digest("hex");
+const same = (a: string, b: string) => {
+  const x = Buffer.from(a), y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+};
+// The browser's session: the cookie's value is derived from the secret and
+// the port, so it outlives a board restart exactly as long as the secret does.
+const sessionValue = () => mac(`session:${ORIGINS[0]}`);
+const cookieOf = (req: Request, name: string) => {
+  for (const part of (req.headers.get("cookie") ?? "").split(";")) {
+    const at = part.indexOf("=");
+    if (at > 0 && part.slice(0, at).trim() === name) return part.slice(at + 1).trim();
+  }
+  return null;
+};
+const hasSession = (req: Request) => {
+  const v = cookieOf(req, COOKIE);
+  return v !== null && same(v, sessionValue());
+};
+const hasBearer = (req: Request) => {
+  const m = /^Bearer ([^\s]+)$/.exec(req.headers.get("authorization") ?? "");
+  return m !== null && same(m[1], SECRET);
+};
+// A one-time code: <issued ms>.<nonce>.<mac>, the mac over the board's origin,
+// the time and the nonce. Good for 60 seconds from its issue, never for one
+// issued before this board started, and once: a used nonce is kept until its
+// code would have expired anyway.
+const CODE_TTL = 60_000;
+const usedCodes = new Map<string, number>();
+const redeem = (code: unknown): boolean => {
+  const m = /^([0-9]{13})\.([0-9a-f]{32})\.([0-9a-f]{64})$/.exec(typeof code === "string" ? code : "");
+  if (!m) return false;
+  const issued = Number(m[1]), now = Date.now();
+  for (const [n, until] of usedCodes) if (until < now) usedCodes.delete(n);
+  if (!same(m[3], mac(`login:${ORIGINS[0]}:${m[1]}.${m[2]}`))) return false;
+  if (issued < STARTED || issued > now + 2_000 || now - issued > CODE_TTL || usedCodes.has(m[2])) return false;
+  usedCodes.set(m[2], issued + CODE_TTL);
+  return true;
+};
+// Every refusal is 403 with a code the page translates; nothing is written.
+const refuse = (code: string, error: string) => json({ error, code }, 403);
+const isJson = (req: Request) => /^application\/json\s*(;|$)/i.test(req.headers.get("content-type") ?? "");
+const writeRefusal = (req: Request): Response | null => {
+  if (!hasSession(req) && !hasBearer(req)) return refuse("writeCredential", "this board is read-only without the captain's credential");
+  if (!ORIGINS.includes(req.headers.get("origin") ?? "")) return refuse("writeOrigin", "not from the board's own page");
+  if (!isJson(req)) return refuse("writeJson", "json only");
+  return null;
+};
+// The page that takes the one-time code out of the address, trades it for the
+// cookie and replaces itself, so the code stays in neither the address bar nor
+// the history. It holds nothing of its own.
+const LOGIN_PAGE = `<!doctype html><meta charset="utf-8"><title>firstmate</title><script>
+(async () => {
+  const code = location.hash.slice(1) || new URLSearchParams(location.search).get("code") || "";
+  history.replaceState(null, "", "/login");
+  await fetch("/login", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code }) }).catch(() => null);
+  location.replace("/");
+})();
+</script>`;
 
 const serveFile = (name: string) => {
   const p = join(PUBLIC, name);
-  if (!p.startsWith(PUBLIC) || !existsSync(p)) return new Response("not found", { status: 404 });
+  if (!p.startsWith(PUBLIC + "/") || !existsSync(p)) return new Response("not found", { status: 404 });
+  // the real file, not wherever a link in the tree points
+  const real = realpathSync(p), pub = realpathSync(PUBLIC);
+  if (!real.startsWith(pub + "/") || !statSync(real).isFile()) return new Response("not found", { status: 404 });
   const type = name.endsWith(".css") ? "text/css"
     : name.endsWith(".js") ? "text/javascript" : "text/html; charset=utf-8";
-  return new Response(readFileSync(p), { headers: { "content-type": type } });
+  return new Response(readFileSync(real), { headers: { "content-type": type } });
 };
 
 const server = Bun.serve({
@@ -980,6 +1093,26 @@ const server = Bun.serve({
     const asked = url.searchParams.get("project") ?? "";
     const only = PROJECT_NAME.test(asked) ? asked : null;
     if (url.pathname === "/api/state") return json(state(only));
+
+    // whether this tab may write: the page disables its controls and says so
+    // when it may not. A yes or a no, never the credential.
+    if (url.pathname === "/api/session") return json({ writable: hasSession(req) || hasBearer(req) });
+
+    // The captain's browser gets in once, through the one-time address the
+    // opener made (bin/fm-herdr.py board_login_url). The code is traded here for
+    // the session cookie; a wrong, used or expired one changes nothing.
+    if (url.pathname === "/login" && req.method === "POST") {
+      if (!ORIGINS.includes(req.headers.get("origin") ?? "")) return refuse("writeOrigin", "not from the board's own page");
+      if (!isJson(req)) return refuse("writeJson", "json only");
+      return req.json().then((body: any) => redeem(body?.code)
+        ? json({ ok: true }, 200, { "set-cookie": `${COOKIE}=${sessionValue()}; HttpOnly; SameSite=Strict; Path=/` })
+        : refuse("loginRefused", "that code is wrong, used or expired"))
+        .catch(() => refuse("loginRefused", "that code is wrong, used or expired"));
+    }
+    if (url.pathname === "/login") {
+      return new Response(LOGIN_PAGE, { headers: { "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store", "referrer-policy": "no-referrer" } });
+    }
 
     // the dictionaries, plus the table that derives zh-CN from zh-TW
     if (url.pathname === "/api/i18n") {
@@ -1027,6 +1160,8 @@ const server = Bun.serve({
     // The captain answers. The board writes the answer down and, for a merge,
     // calls the one script allowed to merge - it never shells out ad hoc.
     if (url.pathname === "/decisions" && req.method === "POST") {
+      const refused = writeRefusal(req);
+      if (refused) return refused;
       return req.json().then(async (body: any) => {
         const id = String(body?.id ?? "");
         const chosen = typeof body?.chosen === "string" ? body.chosen : "";
@@ -1103,11 +1238,11 @@ const server = Bun.serve({
     // event through fm-emit.sh like every other board write; the plan in
     // design/tasks/ is never touched. The check and the write run with
     // nothing in between - spawnSync holds the only thread - so two clicks
-    // cannot both pass the check. Declared JSON only: a cross-site form can
-    // post text/plain without asking first, but not application/json.
+    // cannot both pass the check. Declared JSON only, like every write: a
+    // cross-site form can post text/plain without asking first.
     if (url.pathname === "/tasks" && req.method === "POST") {
-      if (!/^application\/json\b/i.test(req.headers.get("content-type") ?? ""))
-        return json({ error: "json only" }, 415);
+      const refused = writeRefusal(req);
+      if (refused) return refused;
       return req.json().then((body: any) => {
         const id = typeof body?.task === "string" ? body.task : "";
         const action = typeof body?.action === "string" ? body.action : "";
@@ -1150,14 +1285,21 @@ const server = Bun.serve({
       return real === ROOT || real.startsWith(ROOT + "/") ? real : null;
     };
 
+    // Starting a program is a write: POST with the credential, the path in a
+    // JSON body. A GET, which any link or image can make, starts nothing.
     if (url.pathname === "/open") {
+      if (req.method !== "POST") return json({ error: "POST only" }, 405, { allow: "POST" });
+      const refused = writeRefusal(req);
+      if (refused) return refused;
       if (!localOnly(req)) return json({ error: "localhost only" }, 403);
-      const abs = inside(url.searchParams.get("path") ?? "");
-      if (!abs) return json({ error: "outside the repository" }, 403);
-      const editor = (readFileSync(join(ROOT, "config.yaml"), "utf8")
-        .match(/^editor:\s*([^\s#]+)/m)?.[1] ?? "code");
-      Bun.spawn([editor, abs], { stdout: "ignore", stderr: "ignore", env: childEnv() });
-      return json({ ok: true, opened: abs, editor });
+      return req.json().then((body: any) => {
+        const abs = inside(typeof body?.path === "string" ? body.path : "");
+        if (!abs) return json({ error: "outside the repository" }, 403);
+        const editor = (readFileSync(join(ROOT, "config.yaml"), "utf8")
+          .match(/^editor:\s*([^\s#]+)/m)?.[1] ?? "code");
+        Bun.spawn([editor, abs], { stdout: "ignore", stderr: "ignore", env: childEnv() });
+        return json({ ok: true, opened: abs, editor });
+      }).catch(() => json({ error: "bad request" }, 400));
     }
 
     if (url.pathname === "/file") {
@@ -1181,4 +1323,18 @@ const server = Bun.serve({
     return serveFile(url.pathname.replace(/^\//, ""));
   },
 });
+// The credential is keyed by the port, which FM_PORT=0 learns only now. No
+// request is served before this runs: it is the same synchronous turn.
+try {
+  SECRET = loadSecret(server.port);
+  ORIGINS = [`http://127.0.0.1:${server.port}`, `http://localhost:${server.port}`];
+  COOKIE = `firstmate_board_${server.port}`;
+  STARTED = Date.now();
+} catch (e) {
+  // the log is under state/, so it names neither the secret nor its path
+  const code = (e as { code?: string }).code;
+  console.error(`board refused to start: ${code ? `the secret file could not be used (${code})` : (e as Error).message}`);
+  server.stop(true);
+  process.exit(1);
+}
 console.log(`board on http://127.0.0.1:${server.port}  root=${ROOT}`);

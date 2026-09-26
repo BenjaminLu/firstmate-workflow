@@ -1,0 +1,40 @@
+{
+  "id": "T-122",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "only the captain's browser can change the board: every route that changes state or starts a program takes a credential that no crew round, and no other web page, can read or fetch",
+  "scope": [
+    "board/server.ts",
+    "board/public/index.html",
+    "board/public/ship.js",
+    "board/public/diagram.js",
+    "bin/fm-herdr.py",
+    "bin/fm.sh",
+    "tests/board.test.sh",
+    "tests/decisions.test.sh",
+    "tests/open.test.sh",
+    "tests/session.test.sh",
+    "tests/herdr.test.sh",
+    "tests/diagram.test.sh",
+    "tests/e2e/board.spec.ts",
+    "tests/e2e/fixture.ts",
+    "tests/ship.spec.ts",
+    "i18n/ui.en.json",
+    "i18n/ui.zh-TW.json",
+    "tests/i18n.test.sh",
+    "skills/firstmate/SKILL.md",
+    "design/design.md",
+    "design/tasks/T-122.json"
+  ],
+  "acceptance": [
+    "Why. The macOS canary for T-117 (PR #97, 2026-09-26 21:26 CST) showed a crew round inside the sandbox reaching the live board: `curl --noproxy '*' http://127.0.0.1:4173/` returned 200. firstmate then measured sandbox-exec on the operator's Mac (macOS 15.7.9). Once the profile allows `(remote ip \"localhost:*\")`, a later `(deny network-outbound (remote ip \"localhost:4173\"))` never takes effect, in either order, and neither does a `require-not` carve-out. Only a positive list of ports narrows loopback, and a round's own test servers need arbitrary loopback ports. So the OS sandbox cannot keep a round off the board's port. The board must refuse the round itself. Today every route is open to any local caller: `POST /decisions` answers cards (the merge card included, which runs fm-merge), `POST /tasks` parks and drops tasks, and `GET /open` starts the operator's editor on a path. Any web page in the captain's browser can also send these requests, because `localOnly` checks only the URL's host, which is 127.0.0.1 for every request the browser sends to the board. The captain approved this task on 2026-09-26 as T-122, separate from T-117. Its own spec file, design/tasks/T-122.json, is committed on this branch.",
+    "The credential. When the board starts, it creates a random secret of at least 256 bits and keeps it in a file under the operator's config directory (for example `~/.config/firstmate/board-<port>.secret`), outside the repository, `state/` and every temp directory, with mode 0600. It is created fresh when missing and never printed, logged, put in any event, state file, URL query string that stays in history, or HTTP response body. Name the path in design.md, and state that crew rounds cannot read it: on main, the OS sandbox from T-105/T-117 denies reads of the home directory except named toolchain and auth paths. If T-117 has merged when this branch is rebased, add the path explicitly to the policy's never-readable list, and add it to the policy assertion in tests/sandbox.test.sh. If T-117 has not merged, say so in the pull request body, and T-117's author or a follow-up adds it.",
+    "The captain's browser gets in once. Opening the board (fm-herdr.py board_start, and whatever `fm.sh` or the firstmate skill uses to open or reopen the board) opens a one-time URL, `/login#<code>` or `/login?code=<code>`. The code is single-use, expires within 60 seconds, and is derived from or checked against the secret file. The page exchanges the code once for a `Set-Cookie` that is `HttpOnly; SameSite=Strict; Path=/`, then replaces the URL so the code does not stay in history. A second use of the same code, an expired code or a wrong code is refused with 403 and changes nothing. No GET route, page, script, SSE stream or error ever returns the secret, the cookie value or a valid code. A round that can reach the port therefore has nothing to fetch that grants it writes.",
+    "What needs the credential. Every route that changes state or starts a process requires the session cookie, or, for scripts on the operator's machine, an `Authorization: Bearer` header built from the secret file: `POST /decisions`, `POST /tasks`, `GET /open` (which becomes POST, since a GET must not start a program), and any route added later that writes. It also requires an `Origin` header equal to the board's own origin (`http://127.0.0.1:<port>`, or `localhost` if the board serves on it), and a POST body with content-type `application/json`, so no form or cross-site request passes. Anything missing or wrong gets 403 with a translated `code` the page shows, and nothing is written, emitted, merged or spawned. Read-only routes (`/`, `/api/state`, `/api/i18n`, `/events`, `/file`, `/diff`, static assets) stay as they are, but the credential is never in their output. Check `/file` and `/diff` in particular: they read repository paths, and the secret is outside the repository by construction. Test that a symlink inside the repository pointing at the secret file is refused by `inside()`.",
+    "Every caller still works. List in the pull request body every caller of a writing route, with what it sends now: the board page (index.html `answer`, `act`, and the open-in-editor links in index.html/ship.js/diagram.js if any), fm-herdr.py (its board check uses `/file` with a nonce; confirm it needs no credential, or give it the bearer header), and every test and fixture that posts to the board (tests/board.test.sh, decisions.test.sh, open.test.sh, session.test.sh, e2e/fixture.ts, board.spec.ts, ship.spec.ts). grep the whole repository for `/decisions`, `/tasks`, `/open`, `4173` and `FM_PORT` before scoping. A caller outside the scope that has to change is named in the body, not silently left broken.",
+    "The captain's experience does not change. After the one-time open, the board works exactly as before: answering a card, parking or dropping a task, opening a file. If the cookie is missing or stale (for example after a board restart that rotated nothing, or a browser that dropped it), the page does not fail silently. It shows one translated line (en and zh-TW, in i18n/ui.*.json) saying the board is read-only in this tab and how to reopen it, and the controls that write are disabled. The secret survives board restarts, so an open tab keeps working after a restart. A new secret is made only when the file is missing.",
+    "Tests, each fail-first against main: (1) a POST to /decisions, /tasks and /open with no credential, with a wrong bearer, with a valid cookie but a foreign or missing Origin, and with a text/plain body, each gets 403, and no response file, event, merge call or spawned process follows; (2) the one-time code works once, then 403, and an expired code gets 403; (3) no response from any read route contains the secret or a valid code (fetch every route after login and grep); (4) the secret file is created 0600 outside the repository, and its path never appears in state/, events or logs; (5) the board page answers a card end to end with the cookie (Playwright, e2e/board.spec.ts), and shows the read-only line without it; (6) `GET /open` no longer starts anything. Stubs of outside tools answer as those tools do. Workers do not run the suite themselves: evidence is the required GitHub check and the gates, checked by firstmate at the merge gate.",
+    "Docs. design.md gets a section on the board's trust boundary: who may write, the secret's path and lifetime, the one-time open, the Origin rule, why the OS sandbox cannot provide this on macOS (the measured SBPL behaviour above), and what stays readable. skills/firstmate/SKILL.md step 4 says the board is opened through the one-time URL, that firstmate answers a card through the HTTP API only under an explicit, time-boxed authorisation the captain gave in chat, quoted in the answer's note (a chat merge order alone is not approval), and how firstmate's own scripts authenticate when they do."
+  ]
+}

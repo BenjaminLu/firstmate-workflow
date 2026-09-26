@@ -1,8 +1,9 @@
 // The board, in a browser. Poses are asserted as classes and text as
 // dictionary values, never as screenshots: a snapshot test of a ship that
 // moves would fail on the animation and pass on the wrong crew.
-import { test, expect, type Page } from "@playwright/test";
-import { makeRoot, startBoard, stopBoard, writeRegistry, writeProjects, readTasks, writeTasks, ROOT, details } from "./fixture";
+import { expect, type Page } from "@playwright/test";
+// `test` is the fixture's: every board a test starts is signed in to (T-122)
+import { test, makeRoot, startBoard, stopBoard, writeRegistry, writeProjects, readTasks, writeTasks, ROOT, details, scriptHeaders, signInAddress } from "./fixture";
 import { appendFileSync, readFileSync, existsSync, writeFileSync, rmSync, utimesSync, mkdirSync, chmodSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -687,7 +688,7 @@ test('failed merge persists failure without salute or automatic retry', async ({
     await expect(page.locator('#orderFeedback')).toContainText(EN.mergeRefused);
     // answering again returns the stored record, which says the merge failed,
     // and runs nothing: the helper was called once
-    const r = await page.request.post(`${b.url}/decisions`, {data:{id:'D-1',chosen:'A'}});
+    const r = await page.request.post(`${b.url}/decisions`, {data:{id:'D-1',chosen:'A'}, headers:scriptHeaders(b)});
     const again = await r.json();
     expect(again.already).toBe(true);
     expect(again.decision.merge).toBe('failed');
@@ -1451,14 +1452,14 @@ test('external outcomes override stale success and clear only their settled draf
     await page.locator('#card-D-2 [data-c="B"]').click();
     await page.locator('#card-D-2 .confirm').click();
     await expect(page.locator('#orderFeedback')).toContainText(EN.recorded);
-    const external=await page.request.post(`${b.url}/decisions`,{data:{id:'D-1',chosen:'A'}});
+    const external=await page.request.post(`${b.url}/decisions`,{data:{id:'D-1',chosen:'A'},headers:scriptHeaders(b)});
     expect(external.ok()).toBe(true);
     await expect(page.locator('#orderFeedback')).toContainText(EN.mergeRefused);
     await expect(page.locator('#orderFeedback')).not.toContainText(EN.recorded);
     await expect(page.locator('.dcard')).toHaveCount(1);
     await expect(page.locator('#card-D-3 textarea')).toHaveValue('keep this unrelated draft');
     await expect(page.locator('#captain')).toHaveAttribute('data-pose','ready',{timeout:15_000});
-    await page.request.post(`${b.url}/decisions`,{data:{id:'D-3',chosen:'custom',text:'keep this unrelated draft'}});
+    await page.request.post(`${b.url}/decisions`,{data:{id:'D-3',chosen:'custom',text:'keep this unrelated draft'},headers:scriptHeaders(b)});
     await expect(page.locator('.dcard')).toHaveCount(0);
     await expect(page.locator('#captain')).toHaveAttribute('data-pose','idle',{timeout:15_000});
   } finally {stopBoard(b);}
@@ -1758,4 +1759,95 @@ test("the ship grows with the crew", async ({ page }) => {
     });
     expect(clear).toBe(true);
   } finally { stopBoard(big); }
+});
+
+// --- T-122: only the captain's browser writes ---------------------------------
+// These use a context of their own, so the fixture's cookie is not in it: the
+// tab gets in through the one-time address, or not at all.
+test('the one-time address signs a tab in once, keeps no code, and the card is answered end to end', async ({browser}) => {
+  const b = await startBoard(makeRoot(['working']));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const other = await (await browser.newContext()).newPage();
+  try {
+    const address = signInAddress(b);
+    const code = address.split('#')[1];
+    await page.goto(address);
+    await page.waitForURL(`${b.url}/`);
+    // the code stays neither in the address nor in the entry the tab kept
+    expect(page.url()).not.toContain(code);
+    await page.goBack().catch(() => null);
+    expect(page.url()).not.toContain(code);
+    const cookie = (await context.cookies(b.url)).find(c => c.name === `firstmate_board_${new URL(b.url).port}`);
+    expect(cookie?.httpOnly).toBe(true);
+    expect(cookie?.sameSite).toBe('Strict');
+    expect(cookie?.path).toBe('/');
+    // no script on the page can read it
+    await page.goto(`${b.url}/?lang=en`);
+    expect(await page.evaluate(() => document.cookie)).not.toContain('firstmate_board_');
+    await expect(page.locator('#readOnly')).toBeHidden();
+    await page.locator('#card-D-1 [data-c="A"]').click();
+    await page.locator('#card-D-1 .confirm').click();
+    await expect(page.locator('#orderFeedback')).toContainText('AYE, CAPTAIN!');
+    await expect.poll(() => existsSync(b.recorder) ? readFileSync(b.recorder, 'utf8') : '').toContain('--pr 99');
+    // the same address a second time signs nothing in
+    await other.goto(address);
+    await other.waitForURL(`${b.url}/`);
+    expect(await other.context().cookies(b.url)).toHaveLength(0);
+    await expect(other.locator('#readOnly')).toBeVisible();
+  } finally { await context.close(); await other.context().close(); stopBoard(b); }
+});
+
+test('a tab without the credential says it is read-only, in both languages, and writes nothing', async ({browser}) => {
+  const root = makeRoot(['working']);
+  const b = await startBoard(root);
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    await expect(page.locator('#readOnly')).toBeVisible();
+    await expect(page.locator('#readOnly')).toHaveText(EN.readOnly);
+    // every control that writes is disabled, and no card offers park or drop
+    await expect(page.locator('#card-D-1 [data-c="A"]')).toBeDisabled();
+    await expect(page.locator('#card-D-1 [data-c="custom"]')).toBeDisabled();
+    await expect(page.locator('#card-D-1 .confirm')).toBeDisabled();
+    await expect(page.locator('.lanes .card')).not.toHaveCount(0);
+    await expect(page.locator('.cmenu')).toHaveCount(0);
+    await expect(page.locator('.card[draggable="true"]')).toHaveCount(0);
+    // and a write sent anyway is refused by the board, whatever the page does
+    const status = await page.evaluate(async () => (await fetch('/decisions', {method:'POST',
+      headers:{'content-type':'application/json'}, body:JSON.stringify({id:'D-1',chosen:'A'})})).status);
+    expect(status).toBe(403);
+    expect(existsSync(join(root, 'state/decisions/D-1.json'))).toBe(false);
+    expect(existsSync(b.recorder)).toBe(false);
+    await page.goto(`${b.url}/?lang=zh-TW`);
+    await expect(page.locator('#readOnly')).toHaveText(TW.readOnly);
+  } finally { await context.close(); stopBoard(b); }
+});
+
+test('a page of another origin cannot answer a card, even in the captain\'s signed-in browser', async ({page}) => {
+  const root = makeRoot(['working']);
+  const b = await startBoard(root);
+  try {
+    await page.goto(`${b.url}/?lang=en`);   // signed in: the cookie is in this browser
+    await expect(page.locator('#readOnly')).toBeHidden();
+    // another loopback port is the same site, so SameSite lets the cookie go;
+    // the Origin is what stops it
+    const { createServer } = await import('node:http');
+    const evil = createServer((_, res) => { res.setHeader('content-type', 'text/html'); res.end('<title>elsewhere</title>'); });
+    await new Promise<void>(r => evil.listen(0, '127.0.0.1', () => r()));
+    const port = (evil.address() as { port: number }).port;
+    try {
+      await page.goto(`http://127.0.0.1:${port}/`);
+      const status = await page.evaluate(async (url) => {
+        const r = await fetch(url + '/decisions', { method: 'POST', mode: 'no-cors', credentials: 'include',
+          headers: { 'content-type': 'text/plain' }, body: JSON.stringify({ id: 'D-1', chosen: 'A' }) }).catch(() => null);
+        return r ? r.type : 'failed';
+      }, b.url);
+      expect(['opaque', 'failed']).toContain(status);
+      await page.waitForTimeout(500);
+      expect(existsSync(join(root, 'state/decisions/D-1.json'))).toBe(false);
+      expect(existsSync(b.recorder)).toBe(false);
+    } finally { evil.close(); }
+  } finally { stopBoard(b); }
 });

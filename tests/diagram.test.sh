@@ -923,7 +923,10 @@ board_port() {   # board_port <log> <pid>: the port the server printed; 1 if it 
   return 1
 }
 # every descriptor detached: ci.sh runs suites inside $(...), and a child
-# holding stdout holds the command substitution open with it
+# holding stdout holds the command substitution open with it. The board keeps
+# its secret under XDG_CONFIG_HOME (T-122): this suite's own, never the
+# operator's home.
+XDG_CONFIG_HOME="$(mktemp -d)"; export XDG_CONFIG_HOME
 FM_ROOT="$R" FM_PORT=0 bun run "$R/board/server.ts" > "$R/out" 2>&1 < /dev/null &
 pid=$!
 # recorded before the wait, not after it: the trap that kills this used to be
@@ -960,6 +963,7 @@ assert_eq "200" "$(curl -s -I -o /dev/null -w '%{http_code}' "http://127.0.0.1:$
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null || true
 SERVER_PID=''
+rm -rf "$XDG_CONFIG_HOME"
 
 # ------------------------------------------- the class, not the one instance
 #

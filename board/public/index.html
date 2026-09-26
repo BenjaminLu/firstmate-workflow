@@ -161,6 +161,8 @@ a[data-pr]:not(.prlink):hover,a[data-pr]:not(.prlink):focus-visible{text-decorat
 a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
 @media(max-width:420px){.top,.counts,.lanes-wrap,.logwrap{padding-left:12px;padding-right:12px}.log li{grid-template-columns:1fr 2fr}.log li>span:last-child{grid-column:1/-1}}
 .top small,.counts span,section>h2,#deckwrap>h2,#gl{font-size:13px!important}
+#readOnly{margin:0 20px 10px;padding:8px 12px;border:1px solid var(--warn);border-radius:8px;color:var(--warn);font-size:14px}
+#readOnly[hidden]{display:none}
 </style>
 </head>
 <body>
@@ -172,6 +174,8 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
   <span id="gl" style="font:600 13px var(--mono);color:var(--brass)"></span>
   <span class="langs" id="langs"></span>
 </div>
+<!-- T-122: a tab without the captain's credential says so, once, and writes nothing -->
+<p id="readOnly" role="status" hidden></p>
 <div class="counts" id="counts"></div>
 <!-- Decisions lead the page; the vessel and readable crew remain directly below. -->
 <section id="deckwrap" style="padding:0 20px" hidden>
@@ -266,6 +270,21 @@ const refused = new Map();
 // strips the captain has opened in place; the first card is always open
 const expanded = new Set();
 let latest, feedback = null, initialized = false;
+// T-122: whether this tab holds the captain's credential, as /api/session
+// says, and false from the moment a write is refused for the lack of it.
+// Unknown until asked; only a known no takes the controls away.
+let writable = null;
+const readOnly = () => writable === false;
+const NO_CREDENTIAL = 'writeCredential';
+function showWritable() {
+  const line = document.getElementById('readOnly');
+  line.hidden = !readOnly();
+  line.textContent = readOnly() ? t("readOnly") : '';
+}
+function checkSession() {
+  return fetch('/api/session').then(r => r.json()).then(s => { writable = s.writable === true; })
+    .catch(() => {}).finally(() => { showWritable(); if (latest) render(latest); });
+}
 // T-058: the card whose menu is open, the task a drop is waiting to be
 // confirmed for, the card being dragged, and what the last action said
 let menuOpen = null, confirming = null, dragging = null, taskFeedback = null;
@@ -343,6 +362,7 @@ function render(s) {
   if (feedback?.key === 'mergeRunning'
       && (s.responses || []).some(d => d.id === feedback.decisionId && d.merge === 'merged')) feedback = {...feedback, key:'recorded'};
   document.getElementById("gl").textContent = s.greenlit ? t("greenlit") : t("notGreenlit");
+  showWritable();
   // the engine as config.yaml has it, marked when review runs elsewhere
   const engine = document.getElementById("engine"), eng = s.engine;
   engine.hidden = !eng;
@@ -373,7 +393,7 @@ function render(s) {
   // share a menu, a drag or a drop
   const menu = task => {
     const acts = task.actions || [];
-    if (!acts.length) return '';
+    if (!acts.length || readOnly()) return '';
     const open = menuOpen === keyOf(task);
     return `<button class="cmenu" data-menu="${esc(task.id)}" data-key="${esc(keyOf(task))}" aria-haspopup="menu" aria-expanded="${open}"` +
       ` aria-label="${esc(t('cardActions').replace('{id}', task.id))}">&#8943;</button>` +
@@ -381,7 +401,7 @@ function render(s) {
         `<button role="menuitem" data-act="${esc(a)}" data-for="${esc(task.id)}" data-key="${esc(keyOf(task))}">${esc(t(a))}</button>`).join('') + `</div>` : '');
   };
   const card = (task, k) => `<div class="card s-${k}" data-task="${esc(task.id)}" data-key="${esc(keyOf(task))}"` +
-    `${task.project ? ` data-project="${esc(task.project)}"` : ''}${(task.actions || []).length ? ' draggable="true"' : ''}>` +
+    `${task.project ? ` data-project="${esc(task.project)}"` : ''}${(task.actions || []).length && !readOnly() ? ' draggable="true"' : ''}>` +
     `<div class="hd"><span class="id">${esc(task.id)}</span>${multi() ? chip(task.project) : ''}` +
     `${task.pr ? prRef(task.pr, task.pr_url) : ''}${menu(task)}</div>` +
     title(task) +
@@ -489,7 +509,7 @@ function render(s) {
     // D only where the card offers it: a readiness card's drop (T-059)
     const options = ['A','B','C', ...(d.details?.en?.options?.D ? ['D'] : [])].map(k => {
       const o = content?.options?.[k];
-      return `<button class="opt" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" ${sent.has(d.id)?'disabled':''}>${k}${o || k !== 'D' ? ' · ' : ''}${esc(o ? words(o.description) : k === 'D' ? '' : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'))}</button>` +
+      return `<button class="opt" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" ${sent.has(d.id) || readOnly()?'disabled':''}>${k}${o || k !== 'D' ? ' · ' : ''}${esc(o ? words(o.description) : k === 'D' ? '' : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'))}</button>` +
         (o ? `<p class="tradeoffs"><b>${esc(t('pros'))}</b> ${said(words(o.pros), d)}<br><b>${esc(t('cons'))}</b> ${said(words(o.cons), d)}</p>` : '');
     }).join('');
     return `<div class="dcard" id="card-${esc(d.id)}"><div class="meta">${whose(d)}` +
@@ -500,8 +520,8 @@ function render(s) {
         ? `<ul class="gates">${GATES().map((g,i)=>{const n=GATE_NUMBERS[i], ok=gates[n-1];return `<li class="${ok?"y":"n"}"><i>${ok?"&#10003;":"&#8211;"}</i>${n}. ${g}</li>`;}).join("")}</ul>`
         : "") +
       `<div class="acts">${options}
-         <button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${sent.has(d.id)?'disabled':''}>${esc(t('customChoice'))}</button>
-         <label ${pick === 'custom'?'':'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${sent.has(d.id)?'disabled':''}>${esc(drafts.get(d.id) || '')}</textarea></label>
+         <button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${sent.has(d.id) || readOnly()?'disabled':''}>${esc(t('customChoice'))}</button>
+         <label ${pick === 'custom'?'':'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${sent.has(d.id) || readOnly()?'disabled':''}>${esc(drafts.get(d.id) || '')}</textarea></label>
          <span class="validation" id="validation-${esc(d.id)}"></span>
          ${refused.has(d.id) ? `<p class="refused"${refused.get(d.id).announced ? '' : ' role="alert"'}>${esc(t('orderFailed'))} · ${esc(refused.get(d.id).error)}</p>` : ''}
          <button class="go confirm" data-id="${esc(d.id)}" disabled>${esc(t('confirmOrder'))}</button>
@@ -526,9 +546,13 @@ function render(s) {
     if (el.open) DIAGRAM.mount(el, lang).catch(() => {});
   });
   deck.querySelectorAll('[data-open]').forEach(a => a.onclick = e => {
-    // hand it to the editor; the read-only view stays the fallback
+    // hand it to the editor; the read-only view stays the fallback, and is
+    // all a tab without the credential gets
     e.preventDefault();
-    fetch('/open?path=' + encodeURIComponent(a.dataset.open)).then(r => { if (!r.ok) open(a.href, '_blank'); })
+    if (readOnly()) { open(a.href, '_blank'); return; }
+    fetch('/open', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: a.dataset.open }) })
+      .then(r => { if (r.status === 403) refusedFor(r.clone()); if (!r.ok) open(a.href, '_blank'); })
       .catch(() => open(a.href, '_blank'));
   });
   SHIP.portrait(document.getElementById('capstage'), pend.length > 0, t);
@@ -568,19 +592,24 @@ function validate(id) {
   const valid = chosen && (chosen !== 'custom' || (text.trim() && [...text].length <= 1000
     && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\ud800-\udfff]/u.test(text)));
   const button = document.querySelector(`.confirm[data-id="${id}"]`);
-  if (button) button.disabled = !valid || sent.has(id);
+  if (button) button.disabled = !valid || sent.has(id) || readOnly();
   const label = document.getElementById('validation-' + id);
   if (label) label.textContent = chosen === 'custom' && !valid ? t('customInvalid') : '';
   return valid;
 }
+// a write refused for want of the credential turns the tab read-only
+function refusedFor(r) {
+  return r.json().then(x => { if (x?.code === NO_CREDENTIAL) { writable = false; showWritable(); } return x; })
+    .catch(() => ({ error: String(r.status) }));
+}
 async function answer(id) {
-  if (sent.has(id) || !validate(id)) return;
+  if (sent.has(id) || readOnly() || !validate(id)) return;
   const chosen = picks.get(id), text = drafts.get(id), decision = latest.pending.find(d => d.id === id);
   refused.delete(id); sent.add(id); SHIP.unlock(); feedback = {key:'sending'}; render(latest);
   const r = await fetch("/decisions", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ id, chosen, ...(chosen === 'custom' ? {text} : {}) }),
-  }).then(x => x.json()).catch(() => ({ error: t("unreachable") }));
+  }).then(x => x.status === 403 ? refusedFor(x) : x.json()).catch(() => ({ error: t("unreachable") }));
   sent.delete(id);
   if (r.error) {
     feedback = {key:r.code || 'orderFailed', decisionId:id, task:decision?.task || null};
@@ -610,11 +639,12 @@ const actionsOf = k => taskByKey(k)?.actions || [];
 async function act(k, action) {
   menuOpen = null; confirming = null; taskFeedback = null;
   const task = taskByKey(k);
-  const r = task ? await fetch('/tasks', {
+  const r = task && !readOnly() ? await fetch('/tasks', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ task: task.id, action, ...(task.project ? { project: task.project } : {}) }),
   }).catch(() => null) : null;
-  if (!r || !r.ok) taskFeedback = 'actionFailed';
+  const said = r?.status === 403 ? await refusedFor(r) : null;
+  if (!r || !r.ok) taskFeedback = said?.code || 'actionFailed';
   const s = await fetch(STATE_URL).then(x => x.json()).catch(() => null);
   render(s || latest);
 }
@@ -692,13 +722,16 @@ function connect() {
   es = new EventSource(EVENTS_URL);
   es.addEventListener("state", e => { document.getElementById("live").classList.remove("off"); render(JSON.parse(e.data)); });
   es.addEventListener("reload", () => location.reload());
-  es.onerror = () => { document.getElementById("live").classList.add("off"); es.close(); setTimeout(connect, 1500); };
+  es.onerror = () => { document.getElementById("live").classList.add("off"); es.close();
+    // a board that came back may hold another secret: ask again
+    setTimeout(() => { connect(); checkSession(); }, 1500); };
 }
 fetch("/api/i18n").then(r => r.json()).then(dd => { DICT = dd; })
   .catch(() => {})
   .finally(() => {
     document.documentElement.lang = lang;
     chrome();
+    checkSession();
     connect();
     fetch(STATE_URL).then(r => r.json()).then(render).catch(() => {});
   });
