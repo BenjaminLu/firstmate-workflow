@@ -277,7 +277,7 @@ assert_contains "$out" "declares no project.test to run one suite with, so the w
   "and it says so"
 
 # --- gates 6 and 7: gh is injectable so the suite makes no network call ---
-stub() {  # stub <dir> <checks-exit> <approver-login>
+stub() {  # stub <dir> <checks-exit> <approver-login> ; gate 6 only: gate 7 reads JSON, see ghc
   mkdir -p "$1/stub"
   cat > "$1/stub/gh" <<EOF
 #!/usr/bin/env bash
@@ -418,8 +418,12 @@ assert_eq "7" "$rc" "and a later REJECT supersedes it too"
 # --- no gate repeats CI (T-114) -----------------------------------------
 # A whole run, every gate, on a head CI and the reviewer have passed: the
 # project's check never runs, and the gates that do are 1, 2, 4, 5, 6 and 7.
+# gh answers as gh does: checks green, and the reviewer's comment is the one
+# fm-review.sh posts for this head, REVIEWED line included (T-113)
 rm -f "$t5/marks/check" "$t5/marks/other"
-out="$(FM_GH="$(stub "$t5" 0 reviewer-1)" FM_REVIEWER_LOGIN=reviewer-1 \
+ghc "$t5" >/dev/null
+post "$t5" reviewer-1 "APPROVE:T-X\\n\\n$(reviewed "$t5" honest APPROVE)"
+out="$(FM_GH="$t5/stub/gh" FM_REVIEWER_LOGIN=reviewer-1 \
   "$GATE" --task T-X --repo "$t5" --branch honest --pr 9 2>&1)"; rc=$?
 assert_eq "0" "$rc" "a head with green CI and an approval passes every gate"
 assert_fail "test -e '$t5/marks/check'" "and no gate ran the project's check in full"
