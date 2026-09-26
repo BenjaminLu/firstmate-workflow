@@ -1200,8 +1200,8 @@ assert_eq "REVIEWED:T-Z verdict=REJECT head=$vhead base=$vbase patch=$vpatch fil
 # rejection: the last marker on a line of its own decides, for the REVIEWED
 # line and for the event alike
 rm -f "$dv/posted"
-approvals() { jq -r .type < "$rv/state/events.jsonl" 2>/dev/null | grep -cx approved; }
-rejections() { jq -r .type < "$rv/state/events.jsonl" 2>/dev/null | grep -cx review_failed; }
+approvals() { grep -cx approved <<<"$(jq -r .type < "$rv/state/events.jsonl" 2>/dev/null)"; }
+rejections() { grep -cx review_failed <<<"$(jq -r .type < "$rv/state/events.jsonl" 2>/dev/null)"; }
 na="$(approvals)"; nr="$(rejections)"
 out="$(cd "$rv" && FM_ROOT="$rv" FM_GH="$dv/stub/gh" \
   FM_VERDICT="$(printf 'I cannot sign APPROVE:T-Z while item 1 stands\nREJECT:T-Z')" \
