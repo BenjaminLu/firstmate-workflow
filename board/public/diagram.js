@@ -17,9 +17,11 @@ const DIAGRAM = (() => {
   const DIR = "diagrams/";
   // Both id shapes of design section 15.4: the old D-<digits>, and
   // D-<project>-<task>-<n>, which names its owner. owner() reads the project
-  // and task back out of the second; an old id names none.
+  // and task back out of the second; an old id names none. A skill update's
+  // D-SK-<n> is fm-decide.sh's SKILL_ID and board/server.ts's too (T-112).
   const OWNED = /^D-([a-z0-9-]{1,24})-(T[A-Za-z0-9]{1,32})-([1-9][0-9]{0,5})$/;
-  const isDecision = (id) => /^D-[0-9]{1,6}$/.test(String(id ?? "")) || OWNED.test(String(id ?? ""));
+  const isDecision = (id) => /^D-[0-9]{1,6}$/.test(String(id ?? "")) || OWNED.test(String(id ?? ""))
+    || /^D-SK-[0-9]{3,}$/.test(String(id ?? ""));
   const owner = (id) => {
     const m = OWNED.exec(String(id ?? ""));
     return m ? { project: m[1], task: "T-" + m[2].slice(1), n: Number(m[3]) } : null;

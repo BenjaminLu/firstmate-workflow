@@ -1,0 +1,25 @@
+{
+  "id": "T-113",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "a reviewer's approval carries forward across an update onto main when the change itself is identical, while CI and the gates always rerun on the head being merged",
+  "scope": [
+    "bin/fm-gate.sh",
+    "bin/fm-review.sh",
+    "skills/firstmate/SKILL.md",
+    "skills/reviewer/SKILL.md",
+    "tests/gate.test.sh",
+    "tests/review.test.sh",
+    "design/design.md",
+    "design/tasks/T-113.json"
+  ],
+  "acceptance": [
+    "An update of a pull request onto a newer main (gh pr update-branch) forces a second review today, though the pull request's own change is identical. The rule binds the reviewer's APPROVE to the head SHA, and strict branch protection moves every head after each merge. On 2026-09-25, T-086, T-103 and T-104 each needed a second review for this reason alone. The captain approved the fix below (2026-09-26). Its own spec file, design/tasks/T-113.json, is committed on this branch.",
+    "The two checks bind to different things. The reviewer's APPROVE binds to the change: the patch-id (git patch-id --stable) of the diff between the pull request's merge-base with main and its head. Firstmate's check still binds to the head: the required GitHub check and the gates run on the exact head being merged, and they test the change combined with the current main.",
+    "fm-review.sh records, in the verdict it posts, the head SHA, the merge-base, the patch-id and the list of changed files it reviewed. The line is machine-readable, e.g. REVIEWED:T-xxx head=<sha> base=<sha> patch=<id>.",
+    "Gate 7 accepts the latest APPROVE when either the approved head is the current head, or ALL of the following hold: (1) the current change's patch-id equals the approved patch-id; (2) no commit on main between the approved merge-base and the current merge-base touches any file in the pull request's changed-file list; (3) the approval is not superseded by a later REJECT. Otherwise gate 7 fails and names which condition failed, so firstmate knows a real re-review is needed. A conflict resolution or any worker edit changes the patch-id and so always needs a new review.",
+    "skills/firstmate/SKILL.md, skills/reviewer/SKILL.md and design/design.md state the rule: the reviewer's approval carries forward across an update that leaves the change identical and touches none of its files; CI and the gates always rerun on the head being merged.",
+    "Evidence is the required GitHub check and the gates, checked by firstmate at the merge gate. Tests written to fail first in tests/gate.test.sh cover: an update-only head passes gate 7 on a carried-forward APPROVE; a changed patch-id fails; a main commit touching a changed file fails; a later REJECT fails; and the failure message names the condition. The worker does not run the suite itself."
+  ]
+}

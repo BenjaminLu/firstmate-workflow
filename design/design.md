@@ -911,7 +911,7 @@ concurrency limit still hold, and it says which one held the task.
 | 4 | the diff stays in scope | `git diff --name-only` within the task's `scope` globs |
 | 5 | **the new tests are not vacuous** | classify by `project.tests`, revert the implementation, run `setup`, then only the suites the diff touches through `project.test`; the whole `check` only when none can be determined, said so; it must go red |
 | 6 | the required GitHub check is green | `gh pr checks <pr> --required` |
-| 7 | a PR comment contains `APPROVE:<task-id>` | author filtered only if `FM_REVIEWER_LOGIN` is set |
+| 7 | the latest verdict is an `APPROVE:<task-id>` for this change | its `REVIEWED:` line names the current head, or the same patch-id with no `main` commit touching its files since (below); author filtered only if `FM_REVIEWER_LOGIN` is set |
 
 **Gate 3 is retired, and its number with it (captain, 2026-09-26; T-114).**
 It ran the whole project check in a fresh worktree: the same run the required
@@ -961,9 +961,12 @@ running unlocked, so every suite that runs the real gate sets its own
 Require all six gates and current-head review evidence before treating a merge
 card as ready. `fm-run.sh` requests a card after gate success, but `fm-review.sh`
 can emit `approved` on an approval substring before that subsequent gate run.
-Gate 7 neither binds approval to a head nor distinguishes final, quoted or stale
-markers; a later rejection does not invalidate an earlier matching comment.
-Firstmate must verify provenance and current readiness explicitly. Any red gate
+Gate 7 reads the verdict comments (the reviewer's only, when
+`FM_REVIEWER_LOGIN` is set) and takes the latest; a later rejection supersedes
+an earlier approval. It does not distinguish final from quoted markers, and an
+`APPROVE` with no `REVIEWED:` line (one posted by hand, or before T-113) is
+still read as before and binds to no head, which the gate says. Firstmate must
+verify provenance and current readiness explicitly. Any red gate
 requires remediation regardless of praise or an `approved` event.
 
 **Round order and the merge double check (captain, 2026-09-25).** A review
@@ -973,10 +976,46 @@ either mode. A merge card needs two independent checks on the same current
 head: the reviewer's `APPROVE:<task-id>` for that head, and firstmate's own
 reading of that head's required GitHub check (green) and the six gates
 (`fm-gate.sh`). Neither substitutes for the other - an approval is not green
-CI, and green gates are not an approval - and a head that changes after
-either check restarts both. `fm-run.sh`'s loop still sends a task to review
-only once every gate before 7 is green; until it follows this order,
-firstmate starts the round itself when the worker hands back.
+CI, and green gates are not an approval. A head that changes after either
+check restarts both, with the one exception below. `fm-run.sh`'s loop still
+sends a task to review only once every gate before 7 is green; until it
+follows this order, firstmate starts the round itself when the worker hands
+back.
+
+**The approval binds to the change; CI and the gates bind to the head
+(T-113, captain, 2026-09-26).** Strict branch protection moves every open
+head after each merge, and `gh pr update-branch` then forced a second review
+of a change that was identical. So the two checks bind to different things.
+`fm-review.sh` ends every verdict it posts with one line of its own, after
+the reviewer's words:
+
+```
+REVIEWED:<task-id> verdict=<APPROVE|REJECT> head=<sha> base=<merge-base> patch=<patch-id> files=<JSON array>
+```
+
+`verdict` is the last `APPROVE:<task-id>` or `REJECT:<task-id>` that stands
+on a line of its own in the reviewer's answer, never a marker mentioned in
+passing; an answer with no standalone marker is recorded as `REJECT`. The
+same reading decides the `approved` or `review_failed` event, so the event
+and the line gate 7 trusts cannot disagree.
+
+`base` is the head's merge-base with `main`; `patch` is `git patch-id
+--stable` of the diff between them, taken with `git diff-tree -p
+--no-renames`, which reads no user configuration; `files` lists every path
+that diff touches. Gate 7 accepts the latest `APPROVE` when its `head` is the
+current head, or when all of these hold:
+
+1. the current change's patch-id, merge-base to head, equals the approved one;
+2. no commit on `main` between the approved merge-base and the current one
+   touches any file in the approved list;
+3. no later `REJECT` supersedes the approval.
+
+Otherwise it fails and names the condition, so firstmate knows a real
+re-review is needed. A conflict resolution or any worker edit changes the
+patch-id, and so always needs a new review. The reviewer's approval carries
+forward across an update that leaves the change identical and touches none of
+its files; CI and the six gates always rerun on the head being merged,
+since they test the change combined with the current `main`.
 
 Gate 5 names no toolchain. The target repository declares its own in
 `config.yaml`'s `project:` block (`setup`, `check`, `check_env`, `tests`,
@@ -2102,7 +2141,35 @@ recovery path in section 12.
   nothing old has to leave. Every parser of ids and every store keyed by one
   (`state/pending/`, `state/decisions/`, `state/decision-details/`,
   `board/public/diagrams/`, `design/diagrams/`, the watcher's receipts)
-  accepts both forms. Merge cards name the project and link the pull request
+  accepts both forms. `D-SK-<n>` is one pattern everywhere, `fm-decide.sh`'s
+  `^D-SK-[0-9]{3,}$`: the board lists such a card as answerable and records
+  its answer like any other choice card's (T-112), and an answer the board
+  refuses is shown on its card with the server's error, never dropped. The
+  refusal is an alert only on the render that first shows it, so it is
+  announced once, and it leaves with its card, as the card's pick and draft
+  do. These are every place that validates or parses a decision id
+  (`bin/`, `board/`, `tests/`), and the pattern each one uses; `<low>`,
+  `<up>` and `<dig>` are the spelled-out character sets the bash copies use
+  in place of locale-dependent ranges. A new copy is added to this list.
+
+  | place | pattern | `D-SK-<n>` |
+  |---|---|---|
+  | `bin/fm-decide.sh` `SKILL_ID` | `^D-SK-[<dig>]{3,}$` | the reference |
+  | `bin/fm-decide.sh` `OLD_ID` | `^D-[<dig>]{1,6}$` | no; `--await` takes `OLD_ID` or `SKILL_ID` or owned |
+  | `bin/fm-decide.sh` `OWNED_ID` | `^D-([<low><dig>-]{1,24})-(T[<up><low><dig>]{1,32})-([123456789][<dig>]{0,5})$` | no |
+  | `bin/fm-decide.sh` legacy `--request` | `^D-(SK-[0-9]{3,})$`, capturing the `SK-<n>` task | yes, the only request path for it; `--details` takes `OLD_ID` or owned only |
+  | `bin/fm-ready.sh` `SKILL_CARD` | `^D-SK-[<dig>]{3,}$` | yes; reads an adoption card's answer |
+  | `bin/fm-ready.sh` `CARD_ID` | `^D-(<owned>\|[<dig>]{1,6})$` | no; `judged --decision` takes only this, as a skill update gets no readiness card |
+  | `bin/fm-diagram.sh` `is_decision_id` | `D-` then 1-6 digits, or the owned shape, by `case` globs | no, on purpose: no drawing is generated for a skill id |
+  | `bin/fm.sh` self-update | builds `D-$id` from `^SK-[0-9]{3,}$` | the producer, same shape |
+  | `bin/fm-run.sh`, `bin/fm-decide.sh --allocate` | build `D-<project>-<key>-<n>` | not a validator |
+  | `board/server.ts` `isDecisionId` | `OLD_DECISION`, `OWNED_DECISION`, `SKILL_DECISION` = `^D-SK-[0-9]{3,}$` | yes: responses listing, a pending card's `answerable`, `POST /decisions` |
+  | `board/server.ts` `ownerOf` | `OWNED_DECISION` | no owner, by design |
+  | `board/public/diagram.js` `isDecision` | `^D-[0-9]{1,6}$`, `OWNED`, `^D-SK-[0-9]{3,}$` | yes |
+  | `board/public/diagram.js` `owner` | `OWNED` | no owner, by design |
+  | `bin/watch-decisions.ts`, `tests/` | none; fixtures only | n/a |
+
+  Merge cards name the project and link the pull request
   on the project's GitHub repository. A tree with no `projects:` map (every
   tree before the registry, and the test fixtures) is the engine hosting
   itself. Its ids are owned by `firstmate-workflow`. Its cards and their
