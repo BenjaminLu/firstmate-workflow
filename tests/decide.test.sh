@@ -226,7 +226,7 @@ for i in $(seq 1 10); do
   ( alloc --task T-060 > "$o/par.$i" ) &
 done
 wait
-assert_eq "10" "$(cat "$o"/par.* | sort -u | grep -c '^D-firstmate-workflow-T060-')" \
+assert_eq "10" "$(grep -c '^D-firstmate-workflow-T060-' <<<"$(cat "$o"/par.* | sort -u)")" \
   "ten concurrent allocations for one task get ten distinct ids"
 assert_eq "D-firstmate-workflow-T060-10" "$(cat "$o"/par.* | sort -t- -k5 -n | tail -1)" \
   "numbered 1 to 10 with none skipped"
@@ -557,7 +557,7 @@ assert_contains "$ask_err" "no herdr command" "and says why no notification was 
 before="$hstub/before.sh"
 sed -e '/^notify() {/,/^}/d' -e '/^[[:space:]]*notify "/d' "$ROOT/bin/fm-decide.sh" > "$before"
 chmod +x "$before"
-assert_eq "0" "$(grep -vE '^[[:space:]]*#' "$before" | grep -cE '(^|[^[:alnum:]_])(notify|herdr)([^[:alnum:]_]|$)')" \
+assert_eq "0" "$(grep -cE '(^|[^[:alnum:]_])(notify|herdr)([^[:alnum:]_]|$)' <<<"$(grep -vE '^[[:space:]]*#' "$before")")" \
   "the before-script is fm-decide.sh with notify cut out"
 assert_fail "cmp -s '$before' '$ROOT/bin/fm-decide.sh'" "and so differs from it"
 na="$(nfix)"; nb="$(nfix)"; cp "$before" "$na/bin/fm-decide.sh"; : > "$hlog"
@@ -699,7 +699,7 @@ rm -rf "$o" "$n" "$na" "$nb" "$na".* "$nb".* "$hstub"
 
 # no dependency on a watcher that has to be installed
 # the words may appear in a comment explaining the absence; a call may not
-assert_fail "grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-decide.sh' | grep -qE '\\b(fswatch|watchexec|entr)\\b'" \
+assert_fail "grep -qE '\\b(fswatch|watchexec|entr)\\b' <<<\"\$(grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-decide.sh')\"" \
   "it calls neither fswatch, watchexec nor entr"
 rm -rf "$d" "$d2" "$d3" "$d4" "$d5" "$d6" "$d8" "$dstream" "$dctrl" "$dleg" "$stub"
 finish

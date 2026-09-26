@@ -47,27 +47,33 @@ tasks` prints one on demand. A pull request implements one task.
   whose `pre-push` refuses a push to either. The hooks are an early warning;
   GitHub's branch protection is the authority.
 
-## The seven gates
+## The gates
 
-Every pull request, human or agent, must pass all seven gates of
-`design/design.md` section 6 before it is merged. `bin/fm-gate.sh` checks
-them and exits with the number of the first gate that failed. Each reads git,
-the filesystem, an exit code or GitHub; none reads what the author said about
-the work.
+Every pull request, human or agent, must pass the six gates of
+`design/design.md` section 6 before it is merged: 1, 2, 4, 5, 6 and 7.
+`bin/fm-gate.sh` checks them and exits with the number of the first gate that
+failed. Each reads git, the filesystem, an exit code or GitHub; none reads
+what the author said about the work. Gates run one at a time on a machine:
+a run holds a kernel lock on `FM_GATE_LOCK` (by default `/tmp/fm-gate.lock`,
+whatever your `TMPDIR` is) and a second run waits for the first. A test suite
+that runs `bin/fm-gate.sh` sets its own `FM_GATE_LOCK`; a gate run inside one
+that holds the same lock is refused.
 
 1. The branch exists and `git rev-list --count main..<branch>` is above 0.
 2. It rebases onto `main` without conflict, tried in a scratch worktree.
-3. In a fresh worktree of the branch, the declared `setup` succeeds and then
-   the declared `check` exits 0.
+3. *Retired (T-114).* It ran the whole project check locally, which the
+   required GitHub check (gate 6) already runs on the same head. The number
+   is kept so the other gates keep theirs.
 4. **The diff stays in scope**: every changed path matches a glob in the
    task's `scope`, read from `design/tasks/<id>.json` on the branch. A scope
    that names `design/tasks.json` (the list before T-090) covers the task's
    own file and no other. If the work needs a file outside the scope, say so
    in the pull request and stop; widening scope is the captain's decision.
 5. **The new tests are not vacuous**: the gate reverts every changed non-test
-   path to `main`, runs `setup`, then runs the changed tests one at a time
-   through the declared `test` (or the whole `check` once, when none is
-   declared); it passes as soon as one goes red. Write the test first and watch it fail.
+   path to `main`, runs `setup`, then runs only the suites the diff touches
+   (the changed tests, and the tests that source one of them) one at a time
+   through the declared `test`. When no suite can be determined it runs the
+   whole `check` once and says so. It passes as soon as one goes red. Write the test first and watch it fail.
    A change whose every non-test path matches the project's declared `docs`
    globs needs no new test.
 6. **The required GitHub check is green**: `gh pr checks <pr> --required`

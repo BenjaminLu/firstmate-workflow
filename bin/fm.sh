@@ -16,7 +16,7 @@
 # The system defines its own behaviour in skills/, which makes editing a
 # skill the one thing it must not be able to do quietly. So self-update
 # writes no skill: it writes a task and a decision card, and the change
-# travels the branch, the pull request and the seven gates that every other
+# travels the branch, the pull request and the gates that every other
 # change travels. There is deliberately no flag that applies one.
 #
 # `--adopt` is the other half of that sentence, and it exists because the
@@ -76,7 +76,7 @@ usage: fm.sh <command> [options]
         Propose a change to skills/<name>. Writes a task spec under
         state/skill-updates/ and puts a decision card in front of the
         captain. It never edits the skill: that happens on a branch,
-        through a pull request, under the same seven gates.
+        through a pull request, under the same gates.
 
   self-update --adopt <SK-id> [--repo DIR]
         The captain answered the card yes. Copy the proposal into its own
@@ -173,7 +173,7 @@ corpus() {
 # which language it is. Prose is not a program - which is a limitation worth
 # saying out loud rather than hiding: a SKILL.md that tells an agent in
 # English to edit a skill is a path this lint cannot see. The reviewer and
-# the seven gates are what catch that one.
+# the gates are what catch that one.
 is_program() {
   local first=''
   # what it is beats what it is called: the executable bit and the shebang

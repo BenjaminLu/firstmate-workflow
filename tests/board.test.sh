@@ -499,7 +499,7 @@ mapped="$(sed -n '/^const STAGE/,/^};/p' "$ROOT/board/server.ts" \
 known="$(sed -n '/^TYPES=/,/"$/p' "$ROOT/bin/fm-emit.sh" | tr ' \\"' '\n\n\n' | grep -E '^[a-z_]+$' | sort -u)"
 unknown=''
 for t in $mapped; do
-  printf '%s\n' "$known" | grep -qxF "$t" || unknown="$unknown $t"
+  grep -qxF "$t" <<<"$known" || unknown="$unknown $t"
 done
 assert_eq "" "$unknown" "every stage the board maps is a type fm-emit will write"
 
@@ -1162,7 +1162,7 @@ assert_eq "https://github.com/example-org/beta-app/pull/41" \
   "$(jq -r '.pending[]|select(.id=="D-41")|.pr_url' <<<"$(sg)")" "and so does its decision card"
 assert_eq "https://github.com/example-org/beta-app/pull/42" \
   "$(jq -r '.recent[]|select(.type=="merged")|.pr_url' <<<"$(sg)")" "and a log line's #42"
-assert_eq "9" "$(urls | grep -c '=https://github\.com/example-org/beta-app/pull/')" \
+assert_eq "9" "$(grep -c '=https://github\.com/example-org/beta-app/pull/' <<<"$(urls)")" \
   "not one of them is left without it"
 
 # the registry changes, the URL follows on the next request

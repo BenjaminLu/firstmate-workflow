@@ -94,6 +94,10 @@ const STAGE: Record<string, string> = {
 // dispatched now: backlog still waits on a dependency, ready waits on nobody.
 const LANES = ["backlog", "ready", "working", "gate", "review", "captain", "merged"] as const;
 
+// The numbers bin/fm-gate.sh gives its gates. 3 is retired (T-114), so a
+// failure naming it names no gate that exists.
+const GATE_NUMBERS = [1, 2, 4, 5, 6, 7];
+
 // What the captain may do to a card, by where it sits (T-058). Only work
 // nobody has started can be set aside: park is reversible, drop is the
 // closed event and is not. A task in flight or later offers nothing, and
@@ -400,7 +404,7 @@ const state = (only: string | null = null) => {
     const last = moved.get(id);
     if (at === "gate" && last?.type === "gate_failed") {
       const n = (last.data as { gate?: unknown } | undefined)?.gate;
-      out.push({ kind: "gate", gate: Number.isInteger(n) && (n as number) >= 1 && (n as number) <= 7 ? n as number : null });
+      out.push({ kind: "gate", gate: GATE_NUMBERS.includes(n as number) ? n as number : null });
     }
     if (!FINAL.has(at) && asking.has(id)) out.push({ kind: "ask" });
     for (const p of pend.filter((x: Record<string, unknown>) => keyOf(projectOf(x), x.task) === id)) {

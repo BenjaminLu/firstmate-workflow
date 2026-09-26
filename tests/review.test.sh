@@ -86,7 +86,7 @@ d2="$(fixture)"; r2="$d2/repo"; GH2="$(ghstub "$d2")"
 cp "$r/bin/adapters/mock.sh" "$r2/bin/adapters/mock.sh"
 ( cd "$r2" && FM_ROOT="$r2" FM_GH="$GH2" FM_VERDICT="this looks great, nice work" \
   bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
-assert_fail "jq -r .type < '$r2/state/events.jsonl' | grep -qx approved" "prose praise does not emit approved"
+assert_fail "grep -qx approved <<<\"\$(jq -r .type < '$r2/state/events.jsonl')\"" "prose praise does not emit approved"
 
 # round three tells the reviewer to close the list
 cap3="$d/sent3.md"
@@ -397,7 +397,7 @@ for scenario in signed unsigned outage; do
   ( cd "$rr" && FM_ROOT="$rr" FM_GH="$GHr" bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
   assert_eq "agent_finished" "$(jq -r .type < "$rr/state/events.jsonl" | tail -1)" \
     "a $scenario round says when it ended, last"
-  assert_eq "1" "$(jq -r 'select(.type=="agent_finished")|.type' "$rr/state/events.jsonl" | grep -c . || true)" \
+  assert_eq "1" "$(grep -c . <<<"$(jq -r 'select(.type=="agent_finished")|.type' "$rr/state/events.jsonl")" || true)" \
     "and exactly once"
   assert_matches "$(jq -r 'select(.type=="agent_finished")|.actor' < "$rr/state/events.jsonl")" \
     '^reviewer-[a-z]+[0-9]*-tz-r[0-9]+$' "and under its own per-run name"
@@ -450,7 +450,7 @@ kill -TERM "$kp" 2>/dev/null
 wait "$kp" 2>/dev/null; krc=$?
 ended() { [ "$(jq -r .type < "$rkr/state/events.jsonl" 2>/dev/null | tail -1)" = "agent_finished" ]; }
 eventually ended
-assert_eq "1" "$(jq -r 'select(.type=="agent_finished")|.type' "$rkr/state/events.jsonl" | grep -c . || true)" \
+assert_eq "1" "$(grep -c . <<<"$(jq -r 'select(.type=="agent_finished")|.type' "$rkr/state/events.jsonl")" || true)" \
   "a review killed mid-round ends exactly once"
 assert_eq "" "$(jq -r .type "$rkr/state/events.jsonl" | sed -n '/agent_finished/,$p' | tail -n +2)" \
   "and says nothing after it"
@@ -711,20 +711,20 @@ eval "$(sed -n 's/^say()/gate_say()/p' "$ROOT/bin/fm-gate.sh")"
 declare -F gate_say >/dev/null || { echo "fm-gate.sh has no one-line say()" >&2; exit 1; }
 gates="$rc/state/gates/T-Z-$head1.txt"
 mkdir -p "$rc/state/gates"
-{ for g in 1 2 3 4 5 6 7; do gate_say '+' "$g" "GATE_LINE_$g"; done
-  echo "  all seven gates green"; } > "$gates"
+{ for g in 1 2 4 5 6 7; do gate_say '+' "$g" "GATE_LINE_$g"; done
+  echo "  all six gates green"; } > "$gates"
 review_c "$dc/sent-g.md" --round 2 --pr "$prh" >/dev/null
 sent="$(cat "$dc/sent-g.md")"
 begin="$(grep -m1 '^----- begin gate summary' "$dc/sent-g.md")"
 quoted="$(awk -v b="$begin" -v e="${begin/begin/end}" '$0==b{on=1;next} $0==e{on=0} on' "$dc/sent-g.md")"
 assert_eq "$(cat "$gates")" "$quoted" "a head's gate summary is quoted verbatim, every line of it"
-assert_contains "$quoted" "  + gate 7: GATE_LINE_7" "all seven of its gate lines"
+assert_contains "$quoted" "  + gate 7: GATE_LINE_7" "all six of its gate lines"
 assert_lacks "$sent" "No gate summary for head" "and it is not said to be missing"
 assert_lacks "$sent" "has no result line for gates" "nor any gate said to be without a result"
 
 # fm-gate.sh stops at the first red gate: the red line is shown as it is, and
 # every gate after it is said to have no result
-{ for g in 1 2 3 4; do gate_say '+' "$g" "GATE_LINE_$g"; done; gate_say 'x' 5 "RED_GATE_LINE"; } > "$gates"
+{ for g in 1 2 4; do gate_say '+' "$g" "GATE_LINE_$g"; done; gate_say 'x' 5 "RED_GATE_LINE"; } > "$gates"
 review_c "$dc/sent-gx.md" --round 2 --pr "$prh" >/dev/null
 sent="$(cat "$dc/sent-gx.md")"
 assert_contains "$sent" "  x gate 5: RED_GATE_LINE" "a red gate is quoted as red"
@@ -736,12 +736,12 @@ printf 'NOT_A_GATE_LINE\n' > "$gates"
 review_c "$dc/sent-g0.md" --round 2 --pr "$prh" >/dev/null
 sent="$(cat "$dc/sent-g0.md")"
 assert_contains "$sent" "NOT_A_GATE_LINE" "a summary in another shape is still quoted, not filtered away"
-assert_contains "$sent" "has no result line for gates: 1, 2, 3, 4, 5, 6, 7" "and every gate is stated to have no result"
+assert_contains "$sent" "has no result line for gates: 1, 2, 4, 5, 6, 7" "and every gate is stated to have no result"
 : > "$gates"
 review_c "$dc/sent-ge.md" --round 2 --pr "$prh" >/dev/null
-assert_contains "$(cat "$dc/sent-ge.md")" "has no result line for gates: 1, 2, 3, 4, 5, 6, 7" \
+assert_contains "$(cat "$dc/sent-ge.md")" "has no result line for gates: 1, 2, 4, 5, 6, 7" \
   "an empty summary is stated to have no result for any gate"
-{ for g in 1 2 3 4 5 6 7; do gate_say '+' "$g" "GATE_LINE_$g"; done; } > "$gates"
+{ for g in 1 2 4 5 6 7; do gate_say '+' "$g" "GATE_LINE_$g"; done; } > "$gates"
 
 # a new head: the old head's run is not this head's, and neither is a run
 # GitHub hands back for this commit that names another head. Only src/a is
@@ -1114,7 +1114,7 @@ M
       printf '\nHead SHA: %s\n' "$hd"
       printf '\n## The required check for this head, from GitHub\n'
       printf '\nThe required check for head %s could not be read from GitHub, so its CI result is unknown.\n' "$hd"
-      printf '\n## The seven gates for this head\n'
+      printf '\n## The gates for this head\n'
       printf '\nNo gate summary for head %s exists under state/gates/, so its gate results are unknown.\n' "$hd"
       printf '\n---\n\n# The diff under review\n\n```diff\n'
       git diff main...work

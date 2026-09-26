@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Nothing here edits a skill. The system changes its own behaviour the way it
-# changes anything else: a task, a branch, a pull request, seven gates. What
+# changes anything else: a task, a branch, a pull request, the gates. What
 # this suite is really asserting is the absence of a shortcut.
 #
 # Two habits this file keeps, because the last round broke both:
@@ -386,7 +386,7 @@ assert_fail "FM_ROOT='$d2' '$d2/bin/fm-dispatch.sh' --repo '$d2' --dry-run" \
   "a skill-update waits for a greenlit event like anything else"
 
 # =========================================================================
-# 4. and all seven gates, not only the one that reads the scope
+# 4. and all six gates, not only the one that reads the scope
 #
 # A skill-update changes markdown and nothing else, which is the exact shape
 # that tends to fall through a gate written with code in mind. So the whole
@@ -402,11 +402,12 @@ mkdir -p "$g/design/tasks" "$g/skills/worker" "$g/bin" "$g/tests"
 cp "$d/state/skill-updates/SK-001.json" "$g/design/tasks/SK-001.json"
 printf '# Worker\n' > "$g/skills/worker/SKILL.md"
 printf 'x\n' > "$g/bin/thing.sh"
-# gate 3 runs whatever bin/ci.sh the branch carries, so the fixture needs a
-# real one: a gate that cannot run is not a gate a skill-update passed
+# gate 5 runs whatever bin/ci.sh the branch carries when it declares no
+# project.test, so the fixture needs a real one: a gate that cannot run is
+# not a gate a skill-update passed
 printf '#!/usr/bin/env bash\nset -uo pipefail\nR="${FM_ROOT:-.}"\nrc=0\nfor t in "$R"/tests/*.test.sh; do\n  [ -f "$t" ] || continue\n  FM_ROOT="$R" bash "$t" || rc=1\ndone\nexit "$rc"\n' > "$g/bin/ci.sh"
 chmod +x "$g/bin/ci.sh"
-# and gate 3 runs only what the project declares, so it declares that
+# and gate 5 runs only what the project declares, so it declares that
 printf 'project:\n  check: bin/ci.sh\n' > "$g/config.yaml"
 git -C "$g" add -A; git -C "$g" commit -qm base
 
@@ -419,11 +420,16 @@ git -C "$g" add -A; git -C "$g" commit -qm skill; git -C "$g" checkout -q main
 pr="$("$GH" pr create --head sk-001-skill --title 'skill-update: worker' | sed 's|.*/||')"
 GH_AS=reviewer-1 "$GH" pr comment "$pr" --body "APPROVE:SK-001"
 
-gate="GHSTATE='$GHSTATE' FM_GH='$GH' FM_REVIEWER_LOGIN=reviewer-1 '$ROOT/bin/fm-gate.sh' --task SK-001 --repo '$g'"
+# its own gate lock, so a gate run elsewhere on this machine does not hold it up
+gate="GHSTATE='$GHSTATE' FM_GH='$GH' FM_REVIEWER_LOGIN=reviewer-1 FM_GATE_LOCK='$g.gate.lock' '$ROOT/bin/fm-gate.sh' --task SK-001 --repo '$g'"
 assert_ok "$gate --branch sk-001-skill --pr $pr" \
-  "a skill-update passes all seven gates, markdown diff and all"
+  "a skill-update passes all six gates, markdown diff and all"
+said="$(eval "$gate --branch sk-001-skill --pr $pr" 2>&1)"
+assert_eq "1 2 4 5 6 7" "$(sed -n 's/^  + gate \([0-9]*\): .*/\1/p' <<<"$said" | tr '\n' ' ' | sed 's/ $//')" \
+  "and those six are gates 1, 2, 4, 5, 6 and 7, each said once, in that order"
+assert_contains "$said" "all six gates green" "and it says all six are green"
 
-# and each of the seven, shown blocking. A gate nobody has seen go red is a
+# and each of the six, shown blocking. A gate nobody has seen go red is a
 # gate nobody has seen.
 assert_fail "$gate --branch nosuch --pr $pr --only 1" "1 blocks a branch that does not exist"
 
@@ -436,15 +442,9 @@ git -C "$g" commit -qam moved
 assert_fail "$gate --branch sk-001-conflict --pr $pr --only 2" "2 blocks one that will not rebase"
 git -C "$g" reset -q --hard HEAD~1
 
-# git removes a directory that has no tracked file left in it, so checking
-# main out takes tests/ with it every time
-git -C "$g" checkout -q -b sk-001-redci main
-mkdir -p "$g/tests"
-printf '# Worker\n\nthe new rule.\n' > "$g/skills/worker/SKILL.md"
-printf '#!/usr/bin/env bash\nexit 1\n' > "$g/tests/skills.test.sh"
-git -C "$g" add -A; git -C "$g" commit -qm redci; git -C "$g" checkout -q main
-assert_fail "$gate --branch sk-001-redci --pr $pr --only 3" "3 blocks one whose own suite is red"
-assert_ok "$gate --branch sk-001-skill --pr $pr --only 3" "and passes one whose suite is green"
+# gate 3 is retired (T-114): the required check, gate 6, reads the suite.
+# Asking for it is refused, not reported green.
+assert_fail "$gate --branch sk-001-skill --pr $pr --only 3" "3 is retired, and asking for it is refused"
 
 git -C "$g" checkout -q -b sk-001-code main
 printf 'y\n' > "$g/bin/thing.sh"; git -C "$g" commit -qam code; git -C "$g" checkout -q main
