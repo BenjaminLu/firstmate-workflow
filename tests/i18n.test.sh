@@ -11,8 +11,11 @@ assert_ok "test -f '$en' && test -f '$tw' && test -f '$tbl'" "the dictionaries a
 
 ke="$(jq -r 'keys[]' "$en" | sort)"; kt="$(jq -r 'keys[]' "$tw" | sort)"
 assert_eq "$ke" "$kt" "both dictionaries hold exactly the same keys"
-assert_fail "jq -r '.[]' '$en' | grep -q '^$'" "no English value is empty"
-assert_fail "jq -r '.[]' '$tw' | grep -q '^$'" "no Chinese value is empty"
+# fed by process substitution, not a pipe (under pipefail jq can die of
+# SIGPIPE once grep -q has left) and not a here-string: $(...) would strip
+# the trailing empty lines this is looking for
+assert_fail "grep -q '^$' < <(jq -r '.[]' '$en')" "no English value is empty"
+assert_fail "grep -q '^$' < <(jq -r '.[]' '$tw')" "no Chinese value is empty"
 
 # every key the page asks for has to exist
 missing=''
@@ -47,8 +50,8 @@ done
 for term in 程式 函式 相依 佇列 唯讀; do
   assert_ok "grep -q '^$term	' '$tbl'" "the table converts $term"
 done
-assert_fail "grep -vE '^#|^$' '$tbl' | awk -F'\t' 'NF!=2' | grep -q ." "every table row is exactly two columns"
-assert_fail "grep -vE '^#|^$' '$tbl' | cut -f1 | sort | uniq -d | grep -q ." "no term is listed twice"
+assert_fail "grep -q . <<<\"\$(grep -vE '^#|^$' '$tbl' | awk -F'\t' 'NF!=2')\"" "every table row is exactly two columns"
+assert_fail "grep -q . <<<\"\$(grep -vE '^#|^$' '$tbl' | cut -f1 | sort | uniq -d)\"" "no term is listed twice"
 
 # applying the table to the zh-TW dictionary must change something and break nothing
 cnout="$(jq -r '.gate4' "$tw")"

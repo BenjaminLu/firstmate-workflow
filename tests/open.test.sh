@@ -49,7 +49,7 @@ assert_contains "$(curl -s "$u/file?path=src/visible")" "inside the repo" "and i
 assert_eq "403" "$(code "$u/file?path=../outside/secret")" "a path climbing out with .. is refused"
 assert_eq "403" "$(code "$u/file?path=src/escape")" "a symlink pointing out is refused"
 assert_eq "403" "$(code "$u/file?path=/etc/passwd")" "an absolute path outside is refused"
-assert_fail "curl -s '$u/file?path=src/escape' | grep -q 'not yours'" "and none of them leaked the contents"
+assert_fail "grep -q 'not yours' <<<\"\$(curl -s '$u/file?path=src/escape')\"" "and none of them leaked the contents"
 
 assert_eq "200" "$(code "$u/open?path=src/visible")" "a file inside the repository can be opened"
 # the editor is launched, not waited on, so the response beats the process
