@@ -78,6 +78,20 @@ assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --request D-SK-002 --task 
 assert_fail "test -f '$dleg/state/pending/D-SK-002.json'" "legacy without title creates no card"
 assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --request D-SK-002 --task SK-002 --details '$d/details.json'" \
   "skill-update ids cannot take the strict --details path"
+# a legacy D-SK merge card's pull request must be its task's too (T-119)
+pr_is "$dleg" 94 'sk-001-skill-update-firstmate' 'SK-001: skill-update: firstmate'
+FM_GH="$dleg/gh" FM_ROOT="$dleg" "$dleg/bin/fm-decide.sh" --request D-SK-003 --task SK-003 --kind merge --pr 94 \
+  --title "$leg_title" >/dev/null 2>&1
+assert_eq "65" "$?" "a legacy D-SK merge card is refused for another task's pull request"
+assert_fail "test -e '$dleg/state/pending/D-SK-003.json'" "raising nothing"
+leg="$(FM_GH="$dleg/gh" FM_ROOT="$dleg" "$dleg/bin/fm-decide.sh" --request D-SK-004 --task SK-001 --kind merge --pr 94 \
+  --title "$leg_title" 2>/dev/null)"
+assert_eq "64" "$?" "and a D-SK id is still its own task's only"
+pr_is "$dleg" 95 'sk-004-skill-update-worker' 'SK-004: skill-update: worker'
+leg="$(FM_GH="$dleg/gh" FM_ROOT="$dleg" "$dleg/bin/fm-decide.sh" --request D-SK-004 --task SK-004 --kind merge --pr 95 \
+  --title "$leg_title" 2>/dev/null)"
+assert_eq "SK-004 95 merge" "$(jq -r '"\(.task) \(.pr) \(.kind)"' "$leg" 2>/dev/null)" \
+  "while one for its own pull request goes up"
 dstream="$(fixture)"
 { printf '%s\n' '{}'; cat "$d/details.json"; } > "$dstream/stream.json"
 assert_fail "FM_ROOT='$dstream' '$dstream/bin/fm-decide.sh' --request D-97 --task T-1 --details '$dstream/stream.json'" \
@@ -360,14 +374,34 @@ rm -rf "$u"
 
 # ------------------ T-119: a merge card's pull request is its task's
 #
-# The card and its pull request must agree before the card exists. #96 as
-# GitHub holds it, read back with
-#   gh api repos/BenjaminLu/firstmate-workflow/pulls/96 --jq '[.head.ref,.title]'
-# is T-105's revert; on 2026-09-26 its card was raised under T-117.
+# The card and its pull request must agree before the card exists. On
+# 2026-09-26 #96's card was raised under T-117. #96 as GitHub holds it,
+# recorded that day:
+#   $ gh api repos/BenjaminLu/firstmate-workflow/pulls/96 \
+#       --jq '{number: .number, head: .head.ref, title: .title}'
+#   head: t-105-revert
+#   number: 96
+#   title: "T-105: revert the crew sandbox, which locks every vendor out on macOS"
+# (main's squash commit fe396a5 carries git's revert subject, not this
+# title.) By the grammar, #96 is T-105's pull request.
 o="$(owned)"
-R96_BRANCH=t-105-revert
+R96_BRANCH='t-105-revert'
 R96_TITLE='T-105: revert the crew sandbox, which locks every vendor out on macOS'
-nreq() { jq -s 'map(select(.type=="decision_requested"))|length' "$1/state/events.jsonl" 2>/dev/null || echo 0; }
+# A revert that belongs to no task. NOT recorded: the pull request GitHub's
+# Revert button would have opened for #90, built from two recorded values -
+# the title is fe396a5's subject without " (#96)", the branch the button's
+# revert-<n>-<head> around #90's head as recorded:
+#   $ gh api repos/BenjaminLu/firstmate-workflow/pulls/90 --jq '{head: .head.ref}'
+#   head: t-105-every-crew-round-runs-under
+REV_BRANCH='revert-90-t-105-every-crew-round-runs-under'
+REV_TITLE="Revert \"T-105: every crew round runs under one fm-owned permission policy, enforced by the vendor's own flags and an OS sandbox, for every vendor (#90)\""
+# jq -s on a missing file prints its 0 and still fails, so no fallback
+# follows it: the missing log is decided first
+nreq() {
+  if [ -f "$1/state/events.jsonl" ]; then
+    jq -s 'map(select(.type=="decision_requested"))|length' "$1/state/events.jsonl"
+  else echo 0; fi
+}
 pr_is "$o" 96 "$R96_BRANCH" "$R96_TITLE"
 id117="$(alloc --task T-117 --kind merge)"
 err="$(FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$id117" --task T-117 --kind merge --pr 96 \
@@ -386,27 +420,51 @@ FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$id117" --task 
 assert_eq "0" "$?" "a pull request whose branch is the card's task's gets its card"
 assert_eq "T-117 96 merge" "$(jq -r '"\(.task) \(.pr) \(.kind)"' "$o/state/pending/$id117.json" 2>/dev/null)" \
   "naming both"
-# #96 as it really was, on an untracked card: no task, a hand-raised id
+# #96 as it really was is T-105's: it gets T-105's card, and no untracked one
 pr_is "$o" 96 "$R96_BRANCH" "$R96_TITLE"
-FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request D-1096 --kind merge-untracked --pr 96 \
+id105="$(alloc --task T-105 --kind merge)"
+FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$id105" --task T-105 --kind merge --pr 96 \
   --details "$d/details.json" >/dev/null 2>&1
-assert_eq "0" "$?" "#96 is raised as an untracked merge card"
-assert_eq "merge-untracked 96 false" \
-  "$(jq -r '"\(.kind) \(.pr) \(has("task"))"' "$o/state/pending/D-1096.json" 2>/dev/null)" \
+assert_eq "0" "$?" "#96 is raised as T-105's merge card"
+before="$(nreq "$o")"
+err="$(FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request D-1096 --kind merge-untracked --pr 96 \
+  --details "$d/details.json" 2>&1 >/dev/null)"
+assert_eq "65" "$?" "#96, T-105's by its branch, is refused an untracked card at request time"
+assert_contains "$err" "--kind merge --task T-105" "pointing at T-105's card"
+assert_fail "test -e '$o/state/pending/D-1096.json'" "before any card exists"
+assert_eq "$before" "$(nreq "$o")" "and with no decision_requested event"
+# the title alone makes it a task's
+pr_is "$o" 97 hotfix-board "$R96_TITLE"
+FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request D-1099 --kind merge-untracked --pr 97 \
+  --details "$d/details.json" >/dev/null 2>&1
+assert_eq "65" "$?" "an untracked card is refused when only the title names a task"
+FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request D-1099 --kind merge-untracked --pr 404 \
+  --details "$d/details.json" >/dev/null 2>&1
+assert_eq "1" "$?" "and an untracked card for a pull request gh cannot read is not raised on a guess"
+assert_fail "test -e '$o/state/pending/D-1099.json'" "raising nothing"
+# a revert that belongs to no task, on an untracked card: a hand-raised id
+pr_is "$o" 98 "$REV_BRANCH" "$REV_TITLE"
+FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request D-1098 --kind merge-untracked --pr 98 \
+  --details "$d/details.json" >/dev/null 2>&1
+assert_eq "0" "$?" "a pull request of no task is raised as an untracked merge card"
+assert_eq "merge-untracked 98 false" \
+  "$(jq -r '"\(.kind) \(.pr) \(has("task"))"' "$o/state/pending/D-1098.json" 2>/dev/null)" \
   "which names its pull request and no task"
-assert_eq "false" "$(jq -c 'select(.type=="decision_requested" and .pr==96)|has("task")' "$o/state/events.jsonl" | tail -1)" \
+assert_eq "false" "$(jq -c 'select(.type=="decision_requested" and .pr==98)|has("task")' "$o/state/events.jsonl" | tail -1)" \
   "and its decision_requested event names no task"
 FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request D-1097 --task T-117 --kind merge-untracked --pr 96 \
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "64" "$?" "an untracked card that names a task is refused"
 assert_fail "test -e '$o/state/pending/D-1097.json'" "and not raised"
-FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request D-1098 --kind merge-untracked \
+FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request D-1095 --kind merge-untracked \
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "64" "$?" "an untracked merge card needs its pull request"
+FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$id117" --kind merge-untracked --pr 98 \
+  --details "$d/details.json" >/dev/null 2>&1
+assert_eq "64" "$?" "and takes no task's owned id"
 FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --allocate --task T-117 --kind merge-untracked >/dev/null 2>&1
 assert_eq "64" "$?" "and no task allocates an id for one"
 # a pull request of no task gets no task's card
-pr_is "$o" 98 revert-90-t-105-every-crew-round 'Revert "T-105: every crew round"'
 id105="$(alloc --task T-105 --kind merge)"
 err="$(FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$id105" --task T-105 --kind merge --pr 98 \
   --details "$d/details.json" 2>&1 >/dev/null)"
@@ -426,7 +484,12 @@ FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$id116" --task 
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "0" "$?" "a branch naming no task defers to the title's T-xxx: prefix"
 # a skill update gets a merge card like any task. SK-001's #94 as GitHub
-# holds it: gh api repos/BenjaminLu/firstmate-workflow/pulls/94 --jq '.head.ref'
+# holds it, recorded on 2026-09-26:
+#   $ gh api repos/BenjaminLu/firstmate-workflow/pulls/94 \
+#       --jq '{number: .number, head: .head.ref, title: .title}'
+#   head: sk-001-skill-update-firstmate
+#   number: 94
+#   title: "SK-001: skill-update: firstmate"
 pr_is "$o" 94 sk-001-skill-update-firstmate 'SK-001: skill-update: firstmate'
 sid="$(alloc --task SK-001 --kind merge)"
 assert_eq "D-firstmate-workflow-SK001-1" "$sid" "an SK task allocates an owned merge card id"
@@ -484,7 +547,9 @@ echo '{"id":"cli:notification:show","result":{"reason":"disabled","shown":false,
 X
 chmod +x "$hstub/herdr"
 shown='{"id":"cli:notification:show","result":{"reason":"disabled","shown":false,"type":"notification_show"}}'
-calls() { [ -s "$hlog" ] && grep -c . "$hlog" || echo 0; }
+# grep -c prints its 0 and exits 1 on no match, so a fallback after it would
+# print a second 0: the missing file is decided first
+calls() { if [ -s "$hlog" ]; then grep -c . "$hlog"; else echo 0; fi; }
 # FM_PROJECT is taken away so the captain's shell cannot choose a project;
 # a case that means one sets it, after this, by name
 inherdr() { env -u FM_PROJECT HERDR_ENV=1 HERDR_LOG="$hlog" PATH="$hstub:$PATH" "$@"; }
@@ -563,6 +628,13 @@ assert_eq "false" "$(jq -c 'has("project")' "$o/state/pending/D-41.json")" "a ca
 assert_eq "$(argv 'example-app · T-41 · choice' '快取索引' request)" "$(tail -1 "$hlog")" \
   "is the default project's, whatever FM_PROJECT says"
 assert_eq "3" "$(calls)" "one notification per card"
+# an untracked merge card names no task, so its title names the pull request
+pr_is "$o" 98 "$REV_BRANCH" "$REV_TITLE"
+inherdr FM_GH="$o/gh" FM_ROOT="$o" "$o/bin/fm-decide.sh" --request D-1098 --kind merge-untracked --pr 98 \
+  --details "$d/details.json" >/dev/null 2>&1
+assert_eq "0" "$?" "an untracked merge card is raised inside Herdr"
+assert_eq "$(argv 'example-app · #98 · merge-untracked' '快取索引' request)" "$(tail -1 "$hlog")" \
+  "and its notification names the pull request where a task would be"
 
 # a tree with no registry is the self project's, whatever FM_PROJECT names
 n="$(nfix)"; : > "$hlog"

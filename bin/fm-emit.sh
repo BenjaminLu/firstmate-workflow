@@ -119,11 +119,17 @@ done
 case " $TYPES " in *" $type "*) ;; *) die "unknown type: $type" ;; esac
 command -v jq >/dev/null 2>&1 || die "jq is required"
 jq -e . >/dev/null 2>&1 <<<"$data" || die "--data is not valid JSON"
-# A merged event moves its task's card, so the task is one the grammar holds
-# (a task id, or a card key's T-<letters and digits>), never a branch name or
-# a title. An untracked merge belongs to no task, and names none.
+# A merged event moves its task's card, so its task is never a branch name or
+# a title: a value the grammar reads a task out of (t-117-…, "T-117: …")
+# without its being that task id is refused, naming the task it holds. Any
+# other name passes, as the suites' fixture tasks (A, C, T-1) always have;
+# fm-merge.sh, the one writer of merged, already refuses a task that is not
+# the pull request's. An untracked merge belongs to no task, and names none.
 if [ "$type" = merged ] && [ -n "$task" ]; then
-  fm_task_key "$task" >/dev/null || die "a merged event names a task id, got --task $task"
+  if ! fm_task_is "$task"; then
+    held="$(fm_task_of_branch "$task" || fm_task_of_title "$task")" \
+      && die "a merged event names a task id ($held), not a branch or a title; got --task $task"
+  fi
   if jq -e 'type == "object" and .untracked == true' >/dev/null 2>&1 <<<"$data"; then
     die "a merged event marked untracked names no task, got --task $task"
   fi

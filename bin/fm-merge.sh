@@ -19,7 +19,10 @@
 # pull request's own task is the one merged. A pull request that belongs to no
 # task (a revert, a hotfix) merges only from an untracked card, --untracked:
 # its merged event names no task, says `data.untracked: true`, and moves no
-# task's card.
+# task's card. --untracked on a pull request whose branch or title names a
+# task is refused the same way, so a task's own merge never goes untracked.
+# Summaries brace every name: bash 3.2 reads the bytes of a CJK character
+# after a bare $name as part of the name (bin/fm-reconcile.sh says more).
 set -uo pipefail
 # Nothing below may read standard input. A dispatched child inherits it, and
 # a child that reads it blocks the caller waiting for a human who is not
@@ -80,7 +83,11 @@ if fm_task_of_branch "$branch" >/dev/null; then by='its branch name'; else by='i
 # refused before anything is merged - or, for one GitHub already merged,
 # before "already merged" settles the wrong card.
 if [ -n "$UNTRACKED" ]; then
-  [ -z "$owner" ] || echo "fm-merge: #$PR names $owner by $by; merged as untracked, it moves no task"
+  # the other direction: a task's own pull request merged as untracked would
+  # write a merged event with no task, and the task's card would never move
+  [ -z "$owner" ] || {
+    echo "fm-merge: #$PR is $owner's pull request (by $by), not untracked; merge it with --task $owner; nothing merged" >&2
+    exit 1; }
 elif [ -n "$TASK" ]; then
   if [ -z "$owner" ]; then
     echo "fm-merge: #$PR belongs to no task (branch '$branch'), not to $TASK; merge it from an untracked card" >&2
@@ -106,12 +113,12 @@ $GH pr merge "$PR" ${ON[@]+"${ON[@]}"} --squash --delete-branch >/dev/null 2>&1 
 if [ -n "$UNTRACKED" ]; then
   FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor captain --type merged --pr "$PR" \
     ${PROJECT:+--project "$PROJECT"} --data '{"untracked":true}' \
-    --en "merged #$PR from the board, belonging to no task" --tw "從看板合併 #$PR（不屬於任何任務）" \
+    --en "merged #${PR} from the board, belonging to no task" --tw "從看板合併 #${PR}（不屬於任何任務）" \
     >/dev/null 2>&1 </dev/null || true
 else
   FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor captain --type merged --pr "$PR" \
     --task "$TASK" ${PROJECT:+--project "$PROJECT"} \
-    --en "merged #$PR from the board" --tw "從看板合併 #$PR" \
+    --en "merged #${PR} from the board" --tw "從看板合併 #${PR}" \
     >/dev/null 2>&1 </dev/null || true
 fi
 # Cleanup knows one worktree root, the engine's own (section 15.3). A task of

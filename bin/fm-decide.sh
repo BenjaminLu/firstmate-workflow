@@ -17,7 +17,9 @@
 # of no task, or one gh cannot read gets no card. A pull request that belongs
 # to no task (a revert, a hotfix) gets a `merge-untracked` card instead: it
 # names no task, so it takes a hand-raised D-<digits> id, and its merge moves
-# no task's card. fm-merge.sh checks the pair again at merge time.
+# no task's card. That card is read the same way and refused for a pull
+# request whose branch or title names a task. fm-merge.sh checks the pair
+# again at merge time.
 #
 # A new decision id names its owner: D-<project>-<task>-<n> (design section
 # 15.4). <project> is the registry name the run resolves - --project, then
@@ -273,7 +275,9 @@ notify() {   # notify <zh-TW question> <the project the card records, or nothing
 # before any card exists - on the project's repository when the card records
 # one, else the checkout's, the same repository fm-merge.sh merges on for it -
 # and judged by fm-emit.sh's grammar: the branch's task, else the title's.
-pr_agrees() {   # pr_agrees: returns when --pr is --task's pull request; else says why and exits
+# An untracked card's pull request must name no task: a task's own pull
+# request merged untracked would never move that task's card.
+pr_agrees() {   # pr_agrees: returns when --pr is --task's pull request (none for untracked); else says why and exits
   local on=() github doc branch title owner
   if [ -n "$RECORD" ]; then
     github="$(fm_project_get "$RECORD" github "$REPO/config.yaml")" || exit 65
@@ -281,9 +285,15 @@ pr_agrees() {   # pr_agrees: returns when --pr is --task's pull request; else sa
   fi
   doc="$($GH pr view "$PR" ${on[@]+"${on[@]}"} --json headRefName,title 2>/dev/null </dev/null)" \
     && branch="$(jq -er '.headRefName | strings' 2>/dev/null <<<"$doc")" || {
-    echo "fm-decide: cannot read #$PR's branch from GitHub; no card raised for $TASK" >&2; exit 1; }
+    echo "fm-decide: cannot read #$PR's branch from GitHub; no card raised for ${TASK:-an untracked merge}" >&2; exit 1; }
   title="$(jq -r '.title // empty' <<<"$doc")"
   owner="$(fm_task_of_pr "$branch" "$title" || true)"
+  if [ "$KIND" = merge-untracked ]; then
+    [ -z "$owner" ] || {
+      echo "fm-decide: #$PR is $owner's pull request (branch '$branch'), not untracked; raise --kind merge --task $owner" >&2
+      exit 65; }
+    return 0
+  fi
   [ -n "$owner" ] || {
     echo "fm-decide: #$PR belongs to no task (branch '$branch'), not to $TASK; raise it with --kind merge-untracked" >&2
     exit 65; }
@@ -348,7 +358,7 @@ if [ "$MODE" = request ]; then
       echo 'fm-decide: --details requires complete authored en and zh-TW title, explanation, before, after, outcome and A/B/C description/pros/cons' >&2; exit 64;
     }
     # the last check before anything is written: GitHub's word on the pair
-    [ "$KIND" != merge ] || pr_agrees
+    [ "$KIND" = choice ] || pr_agrees
     payload="$(jq -cn --arg id "$ID" --arg task "$TASK" --arg kind "$KIND" --arg pr "$PR" \
       --arg project "$RECORD" --slurpfile details "$DETAILS" \
       '{id:$id} + (if $task=="" then {} else {task:$task} end)

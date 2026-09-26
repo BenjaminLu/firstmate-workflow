@@ -245,7 +245,17 @@ no task, so no task can own its id and it takes a hand-raised `D-<digits>`;
 `fm-merge.sh --untracked`, handing no task whatever the card's file says,
 and the merge writes `merged` with no task and `data.untracked: true`, which
 moves no task's card; `fm-emit.sh` refuses a `merged` event that says
-`untracked` and names a task. The board hands a task's merge card to
+`untracked` and names a task. The pairing holds in this direction too: a
+task's own pull request merged as untracked would write no task, and that
+task's card would never move (`fm-sync-prs.sh` sees the merge as already
+recorded). So `fm-decide.sh --kind merge-untracked` reads the pull request
+the same way and refuses, before any card exists, one whose branch or title
+names a task, pointing at that task's `--kind merge` card; and
+`fm-merge.sh --untracked` refuses it at the click, pointing at `--task`.
+#96 itself is such a pull request: GitHub holds its branch as
+`t-105-revert` and its title as `T-105: revert the crew sandbox, …` (main's
+squash commit carries git's `Revert "…"` subject instead), so by the grammar
+it is T-105's, and its card is a merge card for T-105. The board hands a task's merge card to
 `fm-merge.sh` only with a task the grammar holds, and refuses the answer
 (`409`, `mergeTask`) otherwise.
 
@@ -264,9 +274,17 @@ T-1170, never T-117. A title leads with the task and a colon; GitHub's
 `Revert "T-105: …"` names none. A decision id holds a task's key, the task
 without its hyphen (`T047`, `SK001`); card ids have always taken
 `T-<letters and digits>` too, and the fixtures (`T-A`, `T-1`) still do, so a
-key is that or a task. `fm-emit.sh` refuses a `merged` event whose task has
-no key. It checks no other event's task: the suites dispatch fixture tasks
-named `A` and `C`, and the log is theirs to write.
+key is that or a task. `fm-emit.sh` reads a `merged` event's task through the
+grammar: a value it reads a task out of without its being that task id - a
+branch name such as `t-117-…`, a title such as `T-117: …` - is refused,
+naming the task it holds. Any other name passes, because the suites write
+`merged` for fixture tasks named `A`, `C` and `D`; `fm-merge.sh`, the one
+writer of `merged` outside the suites and `fm-sync-prs.sh`, already refuses
+a task that is not the pull request's. It checks no other event's task.
+One copy of the old reading is left, outside T-119's scope, and is **open**:
+`bin/fm-reconcile.sh`'s `task_of` still has the old `sed` (no `sk-…`
+branch; `t-1170-…` read as T-117) and its `is_task_id` takes only
+`T-<3 digits>`, so recovery misses SK merges; it should source this grammar.
 
 So a skill update merges through the board like any task: an approved,
 green SK-* task gets an owned merge card, `D-<project>-SK<n>-<m>` from
@@ -393,7 +411,7 @@ be measured, not inferred from the watcher mechanism. **No `fswatch` dependency.
 These are orchestration requirements, not enforcement inside `fm-merge.sh`.
 The board calls that helper for choice A on a pending merge card. The helper
 checks that the pull request is the card's task's (or, `--untracked`, that
-the card claims none), checks PR state and invokes GitHub merge, then
+its branch and title name no task), checks PR state and invokes GitHub merge, then
 attempts event emission and cleanup; it does not read approval decisions or
 run the gates. The board
 route does not rerun gates either. Firstmate must verify current-head gates, CI,
@@ -2287,13 +2305,13 @@ recovery path in section 12.
   | `bin/fm-decide.sh` legacy `--request` | `^D-(SK-[0-9]{3,})$`, capturing the `SK-<n>` task | yes, the only request path for it; `--details` takes `OLD_ID` or owned only |
   | `bin/fm-ready.sh` `SKILL_CARD` | `^D-SK-[<dig>]{3,}$` | yes; reads an adoption card's answer |
   | `bin/fm-ready.sh` `CARD_ID` | `^D-(<owned>\|[<dig>]{1,6})$` | no; `judged --decision` takes only this, as a skill update gets no readiness card |
-  | `bin/fm-diagram.sh` `is_decision_id` | `D-` then 1-6 digits, or the owned shape, by `case` globs | no, on purpose: no drawing is generated for a skill id |
+  | `bin/fm-diagram.sh` `is_decision_id` | `D-` then 1-6 digits, or the owned shape with a task part `T?*`, by `case` globs | no, on purpose: no drawing is generated for a skill id. It also refuses an SK task's owned card `D-<project>-SK<n>-<m>`, so that card is raised with "could not draw" and no drawing: **open**, outside T-119's scope, awaiting firstmate's scope decision |
   | `bin/fm.sh` self-update | builds `D-$id` from `^SK-[0-9]{3,}$` | the producer, same shape |
   | `bin/fm-run.sh`, `bin/fm-decide.sh --allocate` | build `D-<project>-<key>-<n>` | not a validator |
   | `board/server.ts` `isDecisionId` | `OLD_DECISION`, `OWNED_DECISION` (task part `T[A-Za-z0-9]{1,32}\|SK[0-9]{3,}`, as `OWNED_ID`), `SKILL_DECISION` = `^D-SK-[0-9]{3,}$` | yes: responses listing, a pending card's `answerable`, `POST /decisions` |
   | `board/server.ts` `ownerOf` | `OWNED_DECISION`, its task read back from the key by `taskOfKey` | no owner, by design |
-  | `board/public/diagram.js` `isDecision` | `^D-[0-9]{1,6}$`, `OWNED`, `^D-SK-[0-9]{3,}$` | yes |
-  | `board/public/diagram.js` `owner` | `OWNED` | no owner, by design |
+  | `board/public/diagram.js` `isDecision` | `^D-[0-9]{1,6}$`, `OWNED` (task part `T[A-Za-z0-9]{1,32}` only), `^D-SK-[0-9]{3,}$` | yes. It refuses an SK task's owned card, which so embeds no diagram: **open**, as `fm-diagram.sh` above |
+  | `board/public/diagram.js` `owner` | `OWNED` | no owner, by design; none for an SK task's owned card either, **open** as above |
   | `bin/watch-decisions.ts`, `tests/` | none; fixtures only | n/a |
 
   Merge cards name the project and link the pull request
@@ -2542,7 +2560,8 @@ spaces and a migration: **every new id names its owner**,
   cross-task lock. Merge cards (`fm-run.sh`) and hand-raised cards take their
   ids the same way.
 - **nothing old moves.** A project name is `[a-z0-9-]` and the task part
-  starts with an upper-case `T`, so an owned id can never equal a
+  starts with an upper-case `T`, or `SK` for a skill update's merge card
+  (T-119), so an owned id can never equal a
   `D-<digits>` or `D-SK-<n>` id. Old records therefore keep their ids and
   every store keyed by them; nothing is renumbered, no map is kept, and no
   reader has to resolve one id through another. `fm-run.sh` looks only at ids
@@ -2563,6 +2582,9 @@ spaces and a migration: **every new id names its owner**,
   malformed id such as `D-Bad_Name-T047-1`. No writer produces one, since
   every card is requested through `fm-decide.sh`, which does hold it.
   Tightening the watcher is `bin/fm-herdr.py`'s work, outside T-047.
+  An SK task's owned card (`SK<n>` as the task part, T-119) is not yet taken
+  by every reader: `fm-diagram.sh` and `board/public/diagram.js` refuse it
+  (the parser table above). That is open, outside T-119's scope.
 - **authored content is written under the allocated id.** `--allocate` comes
   first, so firstmate writes `state/decision-details/<id>.json` and any
   `design/diagrams/<id>.*` under the id the card will carry, then requests

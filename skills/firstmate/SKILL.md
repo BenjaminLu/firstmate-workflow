@@ -455,11 +455,16 @@ T-117 on 2026-09-26. A pull request that belongs to no task (a revert, a
 hotfix) takes an untracked card: `--request D-<digits> --kind
 merge-untracked --pr <n> --details <file>` with no `--task`, under a
 hand-raised id, since no task owns it. Its merge writes `merged` with no task
-and moves no task's card. `fm-merge.sh` checks the pair again at the click
-and records a failed outcome when the branch no longer agrees. A skill
+and moves no task's card. An untracked card is refused the same way for a
+pull request whose branch or title names a task: raise that task's `--kind
+merge` card instead (#96's branch is `t-105-revert`, so its card is
+T-105's). `fm-merge.sh` checks the pair again at the click, in both
+directions, and records a failed outcome when the branch no longer agrees. A skill
 update (SK-*) that is approved and green gets its merge card like any task:
 `--allocate --task SK-<n> --kind merge`, then `--request` with its pull
-request; no hand merge.
+request; no hand merge. Until `fm-diagram.sh` and `board/public/diagram.js`
+take an SK owned id (open; design §15.4), that card is raised with no
+drawing and `fm-decide.sh` says it could not draw it; the card still stands.
 
 Before a real request:
 

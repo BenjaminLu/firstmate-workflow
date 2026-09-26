@@ -258,7 +258,7 @@ post "$(answer D-1099 A)" >/dev/null
 assert_eq "merged" "$(settled D-1099)" "an untracked card whose file names a task is merged"
 assert_contains "$(tail -1 "$d/state/merge-calls")" "--pr 99 --untracked" "as untracked"
 assert_lacks "$(tail -1 "$d/state/merge-calls")" "--task" "handing the merge script no task"
-skid=D-firstmate-workflow-SK001-1
+skid='D-firstmate-workflow-SK001-1'
 printf '{"id":"%s","task":"SK-001","kind":"merge","title":"merge SK-001","pr":94}\n' "$skid" > "$d/state/pending/$skid.json"
 s="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
 assert_eq "true firstmate-workflow SK-001 1" \
