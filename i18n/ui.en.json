@@ -21,7 +21,7 @@
   "fmWaiting": "Awaiting the captain's green light",
   "gate1": "branch has commits",
   "gate2": "rebases onto main",
-  "gate3": "ci.sh exits 0",
+  "gate3": "retired (T-114)",
   "gate4": "diff inside scope",
   "gate5": "reverting turns tests red",
   "gate6": "required check green",
