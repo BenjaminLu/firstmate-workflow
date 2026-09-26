@@ -108,5 +108,19 @@
   "projectChip": "專案",
   "mergeRunning": "合併進行中",
   "mergeUnknown": "合併結果不明：無法讀取 GitHub，此專案的下一次合併需等待",
-  "mergeBusy": "未送出：此專案已有合併正在進行，卡片仍待決定"
+  "mergeBusy": "未送出：此專案已有合併正在進行，卡片仍待決定",
+  "roleWorker": "船員",
+  "roleReviewer": "審查員",
+  "crewName": "名字",
+  "crewRole": "職務",
+  "crewTask": "任務",
+  "crewRound": "輪次",
+  "crewAttempt": "重試",
+  "crewPr": "PR",
+  "crewState": "狀態",
+  "crewActivity": "目前工作",
+  "crewUnknown": "未知",
+  "crewCard": "船員詳情",
+  "rosterSort": "排序",
+  "rosterGroup": "依專案分組"
 }

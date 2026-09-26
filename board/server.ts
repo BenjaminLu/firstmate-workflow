@@ -57,9 +57,33 @@ type Crew = {
   project?: string | null;
   activity?: Record<string, string> | null;
   crew_name?: string;
+  // T-116: who it is, as separate fields the run recorded (identity.json,
+  // carried on every payload as data.identity). The name of a run from
+  // before them is read from its old actor once, here; its round never is,
+  // since that actor's r<n> was a global counter. Unknown is null.
+  name?: string | null;
+  round?: number | null;
+  attempt?: number | null;
   // Bounded only: done/total with a real denominator. Never a bare percent.
   progress?: { done: number; total: number } | null;
 };
+// A task card's crew, one chip each: never a string joined from actors.
+type CrewChip = { id: string; name: string; role: Crew["role"]; round: number | null; attempt: number | null };
+// What a run said about itself: the fields fm-worker.sh and fm-review.sh
+// send as data.identity. Anything else is not an identity.
+type Identity = { name: string | null; project: string | null; round: number | null; attempt: number | null };
+const identityOf = (v: unknown): Identity | null => {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  const text = (x: unknown) => typeof x === "string" && x.trim() ? x : null;
+  const count = (x: unknown) => typeof x === "number" && Number.isInteger(x) && x > 0 ? x : null;
+  return { name: text(o.name), project: text(o.project), round: count(o.round), attempt: count(o.attempt) };
+};
+// The one reading of an actor, for runs recorded before T-116 only:
+// <role>-<name>-<task slug>-r<n>[<attempt mark>], as bin/fm-herdr.py's ACTOR
+// reads it. An actor of another shape has no name to find.
+const legacyName = (actor: string): string | null =>
+  /^(?:worker|reviewer|firstmate)-(.+)-[a-z0-9]+-r[0-9]+[a-z]*$/.exec(actor)?.[1] ?? null;
 // What an agent says it is. fm-review emits role "reviewer", fm-worker
 // "worker"; a run that says nothing is a worker, which is what a
 // dispatch is. The old version read the actor's NAME, so `rev-$$` or
@@ -463,8 +487,8 @@ const state = (only: string | null = null) => {
     // about is not the captain's to park
     actions: definitions.has(id) ? (ACTIONS[at] ?? []) : [],
     badges: badgesOf(id, at),
-    // the aboard crew's names, filled in once the crew is known below
-    crew: [] as string[],
+    // the aboard crew, one chip each, filled in once the crew is known below
+    crew: [] as CrewChip[],
     // where the merge sits in the log, so the lane can show the latest first
     merged_seq: settledAt.get(id) ?? null,
   }); });
@@ -502,6 +526,7 @@ const state = (only: string | null = null) => {
   const activity = new Map<string, Record<string,string>>();
   const phases = new Map<string, CrewState>();
   const names = new Map<string,string>();
+  const identities = new Map<string, Identity>();
   const progress = new Map<string, { done: number; total: number }>();
   const roles = new Map<string,'worker'|'reviewer'>();
   const finished = new Set<string>();
@@ -529,9 +554,11 @@ const state = (only: string | null = null) => {
     if (e.type === 'dispatched' || (e.task && (previous?.task !== e.task || projectOf(previous) !== projectOf(e)))) {
       activity.delete(actor); phases.delete(actor);
       progress.delete(actor);
-      if (e.type === 'dispatched') names.delete(actor);
+      if (e.type === 'dispatched') { names.delete(actor); identities.delete(actor); }
     }
     if (typeof data.crew_name === 'string') names.set(actor, data.crew_name);
+    const said = identityOf(data.identity);
+    if (said) identities.set(actor, said);
     const nextProgress = bounded(data.progress);
     if (nextProgress) progress.set(actor, nextProgress);
     if (e.type === 'dispatched' || data.role) roles.set(actor, roleOf(actor,e));
@@ -610,7 +637,11 @@ const state = (only: string | null = null) => {
     // disagree, agent_finished wins: it is checked above and has already
     // removed the actor. This only catches a run that vanished.
     if (done.has(ek(e))) continue;
-    const t = taskAt(projectOf(e), task);
+    const who = identities.get(actor);
+    // the project the run recorded; an old run's is its events'
+    const project = who?.project ?? projectOf(e);
+    const t = taskAt(project, task);
+    const named = names.get(actor);
     crew.push({
       id: actor,
       // stated, not guessed: the emitter writes what it is, so renaming
@@ -618,8 +649,13 @@ const state = (only: string | null = null) => {
       role: roles.get(actor) || roleOf(actor, e),
       state: phases.get(actor) || 'unknown',
       task, title: t?.title ?? null,
-      project: projectOf(e) || null,
-      crew_name: names.get(actor),
+      project: project || null,
+      crew_name: named,
+      // the fields the run sent; for a run that sent none, the name its old
+      // actor or its crew_name gives, and a round nobody knows
+      name: who?.name ?? (named && named !== actor ? named : null) ?? legacyName(actor),
+      round: who?.round ?? null,
+      attempt: who?.attempt ?? null,
       progress: progress.get(actor) ?? null,
       // Replay/event activity wins over static task.activity; never scalar title.
       activity: activity.get(actor) || planned(e) || null,
@@ -633,7 +669,8 @@ const state = (only: string | null = null) => {
   const aboard = crew.slice(0, DECK_LIMIT);
   for (const t of tasks) {
     t.crew = aboard.filter((c) => c.role !== "firstmate" && c.task === t.id && (c.project ?? "") === (t.project ?? ""))
-      .map((c) => c.crew_name || c.id);
+      .map((c) => ({ id: c.id, name: c.name || c.crew_name || c.id, role: c.role,
+        round: c.round ?? null, attempt: c.attempt ?? null }));
   }
 
   // A refused merge stops being news once the same task or pull request is

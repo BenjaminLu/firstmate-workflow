@@ -781,7 +781,7 @@ assert_eq "merged" "$(jq -r '.tasks[]|select(.id=="T-E1")|.stage' <<<"$sm1")" "m
 FM_ROOT="$e" "$e/bin/fm-emit.sh" --actor worker-e --task T-E4 --type dispatched \
   --data '{"role":"worker","crew_name":"Wren"}' --en "on it" --tw "接下" >/dev/null
 sb0="$(st)"
-assert_eq "Wren" "$(jq -r '.tasks[]|select(.id=="T-E4")|.crew|join(",")' <<<"$sb0")" \
+assert_eq "Wren" "$(jq -r '.tasks[]|select(.id=="T-E4")|.crew|map(.name)|join(",")' <<<"$sb0")" \
   "a card names the crew aboard on it"
 assert_eq "0" "$(jq -r '.tasks[]|select(.id=="T-E4")|.badges|length' <<<"$sb0")" \
   "a task at work with nothing to report carries no badge"
@@ -1312,7 +1312,7 @@ assert_eq "D-alpha-T001-1|D-beta-T001-1" \
   "and its badge names its own project's card, not the other's"
 assert_eq "https://github.com/example-org/alpha-app/pull/7|https://github.com/example-org/beta-app/pull/7" \
   "$(field_h alpha T-001 .pr_url)|$(field_h beta T-001 .pr_url)" "each #7 links to its own project's pull request"
-assert_eq "Ada|Bo" "$(field_h alpha T-001 '.crew|join(",")')|$(field_h beta T-001 '.crew|join(",")')" \
+assert_eq "Ada|Bo" "$(field_h alpha T-001 '.crew|map(.name)|join(",")')|$(field_h beta T-001 '.crew|map(.name)|join(",")')" \
   "each card names only its own project's crew"
 # alpha's T-002 waits on the captain (D-7 below is its card), not merged
 assert_eq "merged|captain|backlog T-002" \
@@ -1569,6 +1569,168 @@ kill "$pidh" 2>/dev/null
 wait "$pidh" 2>/dev/null || true
 kill "$live" 2>/dev/null || true
 rm -rf "$h"
+
+# --- T-116: each crew member's fields, separately ---------------------------
+# The server reads name, project, round and attempt from the identity a run
+# sends (data.identity) and never parses them out of the actor; a run from
+# before them still renders, its name read from its old actor once and its
+# round unknown, since that actor's r<n> was the global run counter.
+q="$(mktemp -d)"; mkdir -p "$q/bin" "$q/state" "$q/design" "$q/board/public"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$q/bin/"
+cp "$ROOT/board/server.ts" "$q/board/"
+cp "$ROOT/board/public/index.html" "$ROOT/board/public/ship.js" "$q/board/public/"
+fm_tasks_write /dev/stdin "$q/design/tasks" <<'J'
+{"tasks":[{"id":"T-Q1","title":"structured crew","milestone":"M2","depends_on":[]},
+          {"id":"T-Q2","title":"an old run","milestone":"M2","depends_on":[]}]}
+J
+emq() { FM_ROOT="$q" "$q/bin/fm-emit.sh" "$@" >/dev/null; }
+emq --actor captain --type greenlit --en "go" --tw "開工"
+emq --actor worker-shira-tq1-r3b --task T-Q1 --type dispatched \
+  --data "$(jq -cn '{role:"worker",crew_name:"worker-shira-tq1-r3b",
+    identity:{name:"shira",role:"worker",project:null,task:"T-Q1",round:3,attempt:2}}')" --en "on it" --tw "接下"
+emq --actor reviewer-quinn-tq1-r3 --task T-Q1 --type review_opened \
+  --data "$(jq -cn '{role:"reviewer",crew_name:"reviewer-quinn-tq1-r3",
+    identity:{name:"quinn",role:"reviewer",project:null,task:"T-Q1",round:3,attempt:1}}')" --en "round 3" --tw "第 3 輪"
+# recorded before T-116: the actor's r465 is the global counter, not a round
+emq --actor worker-mira-tq2-r465 --task T-Q2 --type dispatched \
+  --data '{"role":"worker","crew_name":"worker-mira-tq2-r465"}' --en "on it" --tw "接下"
+FM_ROOT="$q" FM_PORT=0 bun run "$q/board/server.ts" > "$q/out" 2>&1 < /dev/null &
+pidq=$!
+PORTQ="$(board_port "$q/out" "$pidq")"
+for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORTQ/api/state" >/dev/null 2>&1 && break; sleep 0.25; done
+sq="$(curl -sf "http://127.0.0.1:$PORTQ/api/state")"
+assert_eq "shira 3 2" "$(jq -r '.crew[]|select(.id=="worker-shira-tq1-r3b")|"\(.name) \(.round) \(.attempt)"' <<<"$sq")" \
+  "a run's name, round and attempt reach the board as separate fields"
+assert_eq "mira null null" "$(jq -r '.crew[]|select(.id=="worker-mira-tq2-r465")|"\(.name) \(.round) \(.attempt)"' <<<"$sq")" \
+  "an old run without the fields still loads: its name from the old actor, its round unknown, never 465"
+assert_eq '[{"name":"quinn","role":"reviewer","round":3},{"name":"shira","role":"worker","round":3}]' \
+  "$(jq -c '[.tasks[]|select(.id=="T-Q1")|.crew[]|{name,role,round}]|sort_by(.name)' <<<"$sq")" \
+  "a task card's crew are separate chips of name, role and round, not a joined string"
+kill "$pidq" 2>/dev/null; wait "$pidq" 2>/dev/null || true
+
+# The page, through ship.js itself: the tag, the card, the roster, the deck.
+t116="$(cd "$q" && bun -e '
+const SHIP = require("./board/public/ship.js");
+const T = (k) => k, L = (a) => a && a.en;
+const stub = () => ({ onclick: null, textContent: "", style: {}, classList: { add() {}, remove() {} },
+  setAttribute() {}, querySelectorAll: () => [] });
+const host = () => ({ dataset: {}, innerHTML: "", style: { setProperty() {} },
+  querySelector: () => stub(), querySelectorAll: () => [] });
+const fail = (m) => { console.log("FAIL " + m); process.exit(1); };
+const url = "https://github.com/example-org/app/pull/41";
+const state = (projects) => ({ greenlit: true, deckLimit: 24, projects, default_project: projects[0],
+  tasks: [{ id: "T-Q1", title: "structured crew", project: projects[0], pr: 41, pr_url: url },
+          { id: "T-Q2", title: "an old run", project: projects[projects.length - 1] }],
+  crew: [{ id: "firstmate", role: "firstmate", state: "working", task: null },
+    { id: "worker-shira-tq1-r3b", role: "worker", state: "working", task: "T-Q1", title: "structured crew",
+      project: projects[0], name: "shira", round: 3, attempt: 2, crew_name: "worker-shira-tq1-r3b",
+      activity: { en: "Writing the roster" } },
+    { id: "worker-mira-tq2-r465", role: "worker", state: "review", task: "T-Q2", title: "an old run",
+      project: projects[projects.length - 1], name: "mira", round: null, attempt: null,
+      activity: { en: "Reading" } }] });
+const h = host();
+const crew = SHIP.render(h, state(["alpha"]), T, L);
+const tag = (id) => (h.innerHTML.match(new RegExp(`<div class="bub[^"]*" data-bubble="${id}"[^>]*>([\\s\\S]*?)<div class="crewcard`)) || [])[1];
+// the tag: the name and a pennant in the project colour, and nothing else
+const shira = tag("worker-shira-tq1-r3b");
+if (!shira) fail("no tag for shira");
+const pennant = shira.match(/<i class="pennant"[^>]*style="--pc:([^"]*)"[^>]*data-project="alpha"/);
+if (!pennant) fail("no alpha pennant on the tag: " + shira);
+if (pennant[1] !== SHIP.projectColor("alpha")) fail("pennant colour is not the project colour");
+const said = shira.replace(/<[^>]*>/g, "");
+if (said !== "shira") fail("the tag says more than the name: [" + said + "]");
+for (const extra of ["T-Q1", "#41", "Writing", "structured", "crewRound"]) if (shira.includes(extra)) fail("tag carries " + extra);
+if (tag("worker-mira-tq2-r465").replace(/<[^>]*>/g, "") !== "mira") fail("an old run is not named on its tag");
+// a board of one project has no .pchip (T-054); with two the pennant is the
+// chip of the tag, naming its project in hidden text and drawing only the name
+if (/pchip/.test(h.innerHTML)) fail("a one-project board draws a project chip");
+const h3 = host(); SHIP.render(h3, state(["alpha", "beta"]), T, L);
+const tag2 = (id) => (h3.innerHTML.match(new RegExp(`<div class="bub[^"]*" data-bubble="${id}"[^>]*>([\\s\\S]*?)<div class="crewcard`)) || [])[1] || "";
+for (const [id, p, n] of [["worker-shira-tq1-r3b", "alpha", "shira"], ["worker-mira-tq2-r465", "beta", "mira"]]) {
+  const chips = tag2(id).match(/<i class="pennant pchip"[^>]*>[\s\S]*?<\/i>/g) || [];
+  if (chips.length !== 1) fail(`${id} has ${chips.length} project chips on its tag`);
+  if (chips[0].replace(/<[^>]*>/g, "") !== p || !/<span class="sr">/.test(chips[0])) fail(`${id} chip says [${chips[0]}]`);
+  if (tag2(id).replace(/<span class="sr">[^<]*<\/span>/g, "").replace(/<[^>]*>/g, "") !== n) fail(`${id} tag draws more than its name`);
+}
+const card2 = (h3.innerHTML.match(/<div class="crewcard" id="crewcard-worker-shira-tq1-r3b"[\s\S]*?<\/dl><\/div>/) || [])[0];
+if (/pchip/.test(card2)) fail("the card carries a second project chip inside the bubble");
+// the card: one labelled line per field, each on its own
+const card = (h.innerHTML.match(/<div class="crewcard" id="crewcard-worker-shira-tq1-r3b"[\s\S]*?<\/dl><\/div>/) || [])[0];
+if (!card) fail("no card for shira");
+if (!/ hidden[ >]/.test(card.slice(0, card.indexOf(">") + 1))) fail("a card is open before anyone asked");
+const dd = (cls) => ((card.match(new RegExp(`<dt>([^<]*)</dt><dd class="${cls}">([\\s\\S]*?)</dd>`)) || []).slice(1));
+const want = { cname: ["crewName", "shira"], crole: ["crewRole", "roleWorker"], cproject: ["projectChip", "alpha"],
+  ctask: ["crewTask", "T-Q1 structured crew"], cround: ["crewRound", "3 crewAttempt 2"], cpr: ["crewPr", "#41"],
+  cstate: ["crewState", "laneWorking"], job: ["crewActivity", "Writing the roster"] };
+for (const [cls, [label, value]] of Object.entries(want)) {
+  const [dt, body] = dd(cls);
+  if (dt !== label) fail(`card line ${cls} is labelled ${dt}`);
+  if ((body || "").replace(/<[^>]*>/g, "").trim() !== value) fail(`card line ${cls} says [${body}]`);
+}
+if (!card.includes(`href="${url}"`)) fail("the card does not link the pull request");
+const old = (h.innerHTML.match(/<div class="crewcard" id="crewcard-worker-mira-tq2-r465"[\s\S]*?<\/dl><\/div>/) || [])[0];
+if (!old || !/<dd class="cround">crewUnknown<\/dd>/.test(old)) fail("the round of an old run is not shown as unknown");
+// one card at a time: the open one is the one SHIP names, and only it
+SHIP.openCard = "worker-mira-tq2-r465";
+const h2 = host(); SHIP.render(h2, state(["alpha"]), T, L);
+const shown = [...h2.innerHTML.matchAll(/<div class="crewcard" id="crewcard-([^"]*)"[^>]*>/g)].filter((m) => !/ hidden/.test(m[0])).map((m) => m[1]);
+if (shown.join() !== "worker-mira-tq2-r465") fail("open cards: " + shown.join());
+SHIP.openCard = null;
+// the roster: a project column with one project and with two
+for (const projects of [["alpha"], ["alpha", "beta"]]) {
+  const r = { innerHTML: "", ownerDocument: null };
+  SHIP.roster(r, SHIP.crewOf(state(projects), T, L), T);
+  if (!/<div class="rhead"[\s\S]*data-sort="project"/.test(r.innerHTML)) fail("no project column header with " + projects.length);
+  const rows = [...r.innerHTML.matchAll(/<li class="rrow [^"]*"[\s\S]*?<\/li>/g)].map((m) => m[0]);
+  if (rows.length !== 3) fail("roster rows " + rows.length);
+  for (const row of rows.slice(1)) for (const cls of ["nm", "rl", "pj", "rd", "st", "rpr", "jb"])
+    if (!row.includes(`class="${cls}"`)) fail(`roster row lacks its ${cls} cell`);
+  const pj = rows.slice(1).map((row) => (row.match(/<span class="pj"[^>]*>([\s\S]*?)<\/span>/) || [])[1].replace(/<[^>]*>/g, ""));
+  if (pj.join() !== [projects[0], projects[projects.length - 1]].join()) fail("project column says " + pj.join());
+  const rd = (rows[1].match(/<span class="rd"[^>]*>([\s\S]*?)<\/span><span class="st"/) || [])[1].replace(/<[^>]*>/g, "");
+  if (rd !== "3 crewAttempt 2") fail("round column says " + rd);
+  if (!rows[1].includes(`style="--pc:${SHIP.projectColor(projects[0])}"`)) fail("the roster project colour differs");
+  SHIP.rosterGroup = true;
+  const g = { innerHTML: "", ownerDocument: null };
+  SHIP.roster(g, SHIP.crewOf(state(projects), T, L), T);
+  const groups = [...g.innerHTML.matchAll(/<h4 class="rgroup"/g)].length;
+  if (groups !== projects.length + 1) fail(`grouped by project: ${groups} groups for ${projects.length} projects and a taskless firstmate`);
+  SHIP.rosterGroup = false;
+  SHIP.rosterSort = "project";
+  const s = { innerHTML: "", ownerDocument: null };
+  SHIP.roster(s, SHIP.crewOf(state(projects), T, L), T);
+  if (!s.innerHTML.includes(`data-sort="project" aria-pressed="true"`)) fail("sorting by project is not shown");
+  SHIP.rosterSort = null;
+}
+// 24 aboard: no two tags on one deck and one level can reach each other
+const full = { greenlit: true, deckLimit: 24, tasks: [], crew: Array.from({ length: 24 }, (_, i) =>
+  ({ id: i ? "worker-" + i : "firstmate", role: i ? "worker" : "firstmate", state: "working", task: i ? "T-" + i : null,
+     name: "abcdefghijkl".slice(0, 1 + (i % 12)) })) };
+const deck = SHIP.render(host(), full, T, L);
+for (const a of deck) for (const b of deck) {
+  if (a === b || a.row !== b.row || !!a.alt !== !!b.alt) continue;
+  if (Math.abs(a.x - b.x) < (a.tagW + b.tagW) / 2 - 1e-6) fail(`tags ${a.id} and ${b.id} overlap`);
+}
+console.log("ok");
+')"
+assert_eq "ok" "$t116" "the ship tag holds the name and project pennant only, the card and the roster hold every field apart, and 24 tags do not overlap"
+
+# the card's crew chips, as index.html draws them
+chips="$(cd "$q" && bun -e '
+const html = require("fs").readFileSync("board/public/index.html", "utf8");
+const src = (html.match(/const crewChip = [\s\S]*?<\/span><\/span>`;/) || [])[0];
+if (!src) { console.log("FAIL no crewChip in index.html"); process.exit(1); }
+if (/task\.crew\.join/.test(html)) { console.log("FAIL a card still joins its crew"); process.exit(1); }
+const esc = (s) => String(s ?? ""), t = (k) => k;
+const crewChip = eval(src.replace(/^const crewChip = /, "").replace(/;$/, ""));
+const out = [{ id: "a", name: "shira", role: "worker", round: 3, attempt: 2 },
+             { id: "b", name: "quinn", role: "reviewer", round: null, attempt: null }].map(crewChip);
+const text = (m) => m.replace(/<[^>]*>/g, "|").split("|").filter(Boolean);
+console.log(JSON.stringify(out.map(text)));
+')"
+assert_eq '[["shira","roleWorker","crewRound 3 · crewAttempt 2"],["quinn","roleReviewer","crewRound crewUnknown"]]' "$chips" \
+  "each crew member on a card is a chip of its own, with name, role and round apart"
+rm -rf "$q"
 
 # the repository is data in the registry, never a literal in the board: no
 # registered owner or repository name appears anywhere under board/

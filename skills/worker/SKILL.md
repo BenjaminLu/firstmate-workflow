@@ -28,6 +28,14 @@ Board mid-run status (phase / authored `data.activity` / optional bounded
 at script-known nodes. Do not invent percentages from lifecycle labels or
 scalar titles; heartbeat pane text is not board state until emitted.
 
+Your canonical crew identity, e.g. `worker-mira-t035-r3` or
+`worker-mira-t035-r3b`, is `<role>-<name>-<task slug>-r<round>` plus an attempt
+mark for a retry: `r3` is the task's review round (a first run is `r1`), and
+`b` is the second attempt at that round. `identity.json` records `name`,
+`role`, `project`, `task`, `round` and `attempt` as separate fields, and the
+script sends them as `data.identity` on every crew payload; the board reads
+those, never the actor. Do not rename, parse or rewrite the actor.
+
 ## What you never do
 
 You never merge, never write to `main`/`master`, never open or edit a pull

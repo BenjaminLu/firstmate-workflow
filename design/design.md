@@ -1273,13 +1273,41 @@ rather than `transform`, so it composes with the pose animations instead of
 replacing them. **Shoes animate with their leg** — otherwise the leg turns
 while the shoe stays nailed to the deck and all you see is a bobbing body.
 
-**Each crewman carries a bubble above his head**: identity and task, with full
-localized work and lifecycle phase in the accessible figure label and readable
-roster. The tag carries no progress and no percentage; the roster draws a
-bar only for explicit bounded progress data, with the border colour carrying
-state. A landing handoff pulses the recipient's
-bubble. Deck spacing must exceed body height plus bubble height or a bubble
+**Each crewman carries a quiet name tag above his head (T-116)**: his name and
+a small pennant in his project's colour, and nothing else - never the task,
+round, pull request or activity text. A project's colour is derived from its
+name (`SHIP.projectColor`) and is the same on the pennant, the roster's project
+column and a card's project chip. A tag is never wider than the gap to its
+neighbour, and a longer name ends in an ellipsis, so 24 tags do not overlap;
+firstmate, standing off the deck's spacing at the helm, has its tag one line
+up; on a narrow screen the far decks of a crowded ship keep only the pennant.
+The tag carries no progress and no percentage. A landing handoff pulses the
+recipient's tag. Deck spacing must exceed body height plus tag height or a tag
 covers the crew on the deck above.
+
+**The details are in a card on demand.** Hovering or focusing a figure, or
+tapping it on a phone (a touch that did not turn him), opens a small card in
+that figure's tag, with one labelled line per field: name, role, project, task
+id and title, round (and attempt, for a retry), pull request (linked), state
+and current activity. An unknown field says unknown. Esc (focus returns to the
+figure), a second tap, a tap elsewhere or moving away closes it; one card is
+open at a time and stays open across re-renders. The figure is focusable,
+names the crew member and state in its label, and is described by and
+controls its card (`aria-describedby`, `aria-controls`, `aria-expanded`).
+
+**The roster shows the same fields in separate columns**: name, role, project,
+task (id and title, with the authored activity and any bounded progress bar),
+round, pull request and state, under one header. The project column is shown
+with one project as with several. A header click sorts by that column, and a
+toggle groups the rows by project; both choices survive a reload. On a phone
+each row folds into two lines of the same cells, each labelled. A task card
+lists its crew as separate chips of name, role and round, never a string
+joined from actors.
+
+The new labels (`roleWorker`, `roleReviewer`, `crewName`, `crewRole`,
+`crewTask`, `crewRound`, `crewAttempt`, `crewPr`, `crewState`,
+`crewActivity`, `crewUnknown`, `crewCard`, `rosterSort`, `rosterGroup`) come
+from the board's dictionaries in English and 繁體中文, like every other label.
 
 ### The captain
 
@@ -1303,8 +1331,9 @@ history uses a native keyboard-operable disclosure, with distinct merged and
 closed counts. Its open state survives refresh and locale changes; new merges
 do not open it. Pending decisions come from pending records, not task stages.
 
-Crew payloads add `activity: {en, "zh-TW"}`, `crew_name` and optional bounded
-`progress` without changing canonical actor IDs or roles. Replay retains each
+Crew payloads add `activity: {en, "zh-TW"}`, `crew_name`, the run's
+`identity` (T-116, section 11) and optional bounded `progress` without
+changing canonical actor IDs or roles. Replay retains each
 actor's dispatch/activity description and last applicable lifecycle phase
 across technical events, independently of the 40-event recent list. Localized
 task activity takes precedence when available; scalar titles are not guessed
@@ -1649,11 +1678,46 @@ T-017 PID/flock reconciliation integration requires separate validation.
 Concurrent reviewers and worker/reviewer runs have distinct artifacts and actors.
 
 Every new worker/reviewer obtains one canonical human-readable machine label,
-such as `worker-mira-t035-r2` or `reviewer-noah-t018-r8`. Labels retain role prefixes,
-fit Herdr's 32-character syntax and include task/run identity. A locked repository
-counter disambiguates concurrent runs, retries and repeated requested aliases;
-normalization and the requested alias are recorded in `identity.json` and printed
-at launch. Extremely long task labels retain a digest and the full original task
+`<role>-<name>-<task slug>-r<round>[<attempt mark>]`, such as
+`worker-mira-t035-r2` or `reviewer-noah-t018-r3b`. Labels retain role prefixes,
+fit Herdr's 32-character syntax and include task/run identity. **The `r<n>` is
+the task's review round (T-116)**, the round the pull request's review is on,
+so `r3` reads as round three: `fm-review.sh --round <n>` names it (as
+`FM_ROUND`), and otherwise it is one past the `review_opened` events the log
+holds for the task in the run's project. A worker's first run is round 1, and
+the review that follows is round 1 too. `fm-run.sh` counts rounds differently:
+its loop counts every `review_opened` for the task id across all projects and
+passes that as `--round`. With the same task id in two projects the counts
+differ, so a reviewer `fm-run.sh` starts can carry a higher round than the
+worker it reviews.
+Before T-116 the `r<n>` was a global run counter (`state/runs/counter.json`,
+472 on 2026-09-26), which read as round 465 on a task in its first round; the
+counter no longer appears in any actor. A second run of the same role, task,
+project and round is a retry and gets the next attempt with a short mark:
+`r12`, `r12b`, `r12c`, … `r12z`, `r12aa`. A run directory that already exists
+(a pre-T-116 actor whose counter equals the round, or a racing retry) also
+moves to the next attempt, so every run keeps a distinct identity. Allocation
+is under one lock; the 32-character room is measured against the final suffix,
+mark included, and a name with no room is refused, never cut.
+
+`identity.json` records the run's identity as separate fields, and these are
+what the board reads: `name` (the roster name, `mira`), `role`, `project` (the
+resolved project, `FM_PROJECT` else `default_project`, the default included;
+`null` when neither names one), `task`, `round` and `attempt`. For example:
+
+```json
+{"actor": "reviewer-noah-t018-r3b", "name": "noah", "role": "reviewer",
+ "project": "firstmate-workflow", "task": "T-018", "round": 3, "attempt": 2}
+```
+
+`fm-worker.sh` and `fm-review.sh` carry the same six fields as `data.identity`
+on every crew payload they emit, and `fm-herdr.py emit-status` does for a run
+that recorded them. No consumer parses them out of the actor. A run recorded
+before T-116 has no such fields and still loads: the board takes its name from
+the old actor (the one place an actor is read, `fm-herdr.py`'s `ACTOR` and the
+server's `legacyName`, both accepting `-r<n>` with or without a mark) and shows
+its round and attempt as unknown, never the counter. Normalization and the
+requested alias are recorded in `identity.json` and printed at launch. Extremely long task labels retain a digest and the full original task
 in metadata. The exact canonical actor appears in invocation context, Herdr tab,
 pane and agent names, board events, log paths and result receipts. Existing live actors
 are not renamed. A foreign Herdr name collision is a reported transport failure,
@@ -2443,8 +2507,9 @@ recovery path in section 12.
   cards, and filters with `?project=`; without it, it shows all projects. Chip
   labels come from the UI dictionaries; a project's name is data and is not
   translated. Dynamic summaries still carry `en` and `zh-TW`.
-- **Crew identity** is unchanged: the locked run counter already makes labels
-  unique across projects. `identity.json` records the project.
+- **Crew identity**: allocation under one lock makes labels unique across
+  projects, and `identity.json` records the project as a field of its own
+  (T-116); the board shows it on every tag, roster row and card.
 
 ### 15.5 Gate 4 under the external model
 
@@ -2645,7 +2710,7 @@ project-scoped is shared or locked across projects:
 | worktrees | each project's own worktree root (15.3) | cleanup removes only a direct child of that project's root |
 | checkout | the engine root, or `state/projects/<name>/repo` | one clone per project; its fetch and prune never touch another |
 | guard | `core.hooksPath` in each checkout's local config, protecting that project's `base` | a hook runs in the repository it guards and nowhere else |
-| panes and runs | one tab and one owned pane per run actor (section 11) | the locked run counter makes actors unique across projects |
+| panes and runs | one tab and one owned pane per run actor (section 11) | allocation under one lock makes actors unique across projects; a retry takes an attempt mark |
 | decisions | one card per request, carrying `project` | every id names its project and task, `D-<project>-<task>-<n>`, with `n` allocated under that task's own lock (below) |
 | merges | the project's own `github` repository | see point 3 |
 
@@ -2748,7 +2813,7 @@ from the repository root:
 
 Three things are deliberately global, and each is a short critical section,
 not a lock held for the length of a run: the event log's writer lock
-(`fm-emit.sh`), the run-counter lock that numbers run actors (section 11), and a
+(`fm-emit.sh`), the identity lock under which run actors are allocated (section 11), and a
 **dispatch slot lock** that `fm-dispatch.sh` holds only while it counts live
 runs and emits `dispatched`. The slot lock is new. Without it two dispatches
 started at once — one per project, which is now the ordinary case — can each
