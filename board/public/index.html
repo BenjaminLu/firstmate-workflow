@@ -247,6 +247,11 @@ const localized = d => d?.details?.[lang === 'en' ? 'en' : 'zh-TW'];
 const keyOf = task => task?.key || task?.id;
 const words = s => lang === 'zh-CN' ? cn(String(s ?? '')) : String(s ?? '');
 const picks = new Map(), drafts = new Map(), sent = new Set();
+// T-112: the error an answer came back with, shown on its own card until the
+// next attempt - a refusal is never dropped between the POST and the deck.
+// It is an alert only on the render that first shows it; every later render
+// keeps the text without the role, so one refusal is announced once.
+const refused = new Map();
 // strips the captain has opened in place; the first card is always open
 const expanded = new Set();
 let latest, feedback = null, initialized = false;
@@ -426,6 +431,7 @@ function render(s) {
   for (const id of [...drafts.keys()]) if (!pendingIds.has(id)) drafts.delete(id);
   for (const id of [...sent]) if (!pendingIds.has(id)) sent.delete(id);
   for (const id of [...expanded]) if (!pendingIds.has(id)) expanded.delete(id);
+  for (const id of [...refused.keys()]) if (!pendingIds.has(id)) refused.delete(id);
   // merges answered and still running: said by name, and "outcome unknown"
   // when GitHub could not tell the board how one ended
   const runningMerges = (s.responses || []).filter(d => d.merge === 'running');
@@ -486,6 +492,7 @@ function render(s) {
          <button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${sent.has(d.id)?'disabled':''}>${esc(t('customChoice'))}</button>
          <label ${pick === 'custom'?'':'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${sent.has(d.id)?'disabled':''}>${esc(drafts.get(d.id) || '')}</textarea></label>
          <span class="validation" id="validation-${esc(d.id)}"></span>
+         ${refused.has(d.id) ? `<p class="refused"${refused.get(d.id).announced ? '' : ' role="alert"'}>${esc(t('orderFailed'))} · ${esc(refused.get(d.id).error)}</p>` : ''}
          <button class="go confirm" data-id="${esc(d.id)}" disabled>${esc(t('confirmOrder'))}</button>
        </div></div>`;
   };
@@ -502,6 +509,7 @@ function render(s) {
       (pick ? ` <i class="picked">${esc(pick === 'custom' ? t("customChoice") : pick)}</i>` : '') +
       `</summary>${full(d)}</details>`;
   }).join(""));
+  for (const r of refused.values()) r.announced = true;
   deck.querySelectorAll('details.dstrip').forEach(el => el.ontoggle = () => {
     if (el.open) expanded.add(el.dataset.id); else expanded.delete(el.dataset.id);
     if (el.open) DIAGRAM.mount(el, lang).catch(() => {});
@@ -557,13 +565,16 @@ function validate(id) {
 async function answer(id) {
   if (sent.has(id) || !validate(id)) return;
   const chosen = picks.get(id), text = drafts.get(id), decision = latest.pending.find(d => d.id === id);
-  sent.add(id); SHIP.unlock(); feedback = {key:'sending'}; render(latest);
+  refused.delete(id); sent.add(id); SHIP.unlock(); feedback = {key:'sending'}; render(latest);
   const r = await fetch("/decisions", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ id, chosen, ...(chosen === 'custom' ? {text} : {}) }),
   }).then(x => x.json()).catch(() => ({ error: t("unreachable") }));
   sent.delete(id);
-  if (r.error) feedback = {key:r.code || 'orderFailed', decisionId:id, task:decision?.task || null};
+  if (r.error) {
+    feedback = {key:r.code || 'orderFailed', decisionId:id, task:decision?.task || null};
+    refused.set(id, {error:String(r.error), announced:false});
+  }
   else {
     picks.delete(id); drafts.delete(id);
     // a merge answers at once while it runs; its outcome arrives in the record

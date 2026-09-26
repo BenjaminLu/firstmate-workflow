@@ -2102,7 +2102,35 @@ recovery path in section 12.
   nothing old has to leave. Every parser of ids and every store keyed by one
   (`state/pending/`, `state/decisions/`, `state/decision-details/`,
   `board/public/diagrams/`, `design/diagrams/`, the watcher's receipts)
-  accepts both forms. Merge cards name the project and link the pull request
+  accepts both forms. `D-SK-<n>` is one pattern everywhere, `fm-decide.sh`'s
+  `^D-SK-[0-9]{3,}$`: the board lists such a card as answerable and records
+  its answer like any other choice card's (T-112), and an answer the board
+  refuses is shown on its card with the server's error, never dropped. The
+  refusal is an alert only on the render that first shows it, so it is
+  announced once, and it leaves with its card, as the card's pick and draft
+  do. These are every place that validates or parses a decision id
+  (`bin/`, `board/`, `tests/`), and the pattern each one uses; `<low>`,
+  `<up>` and `<dig>` are the spelled-out character sets the bash copies use
+  in place of locale-dependent ranges. A new copy is added to this list.
+
+  | place | pattern | `D-SK-<n>` |
+  |---|---|---|
+  | `bin/fm-decide.sh` `SKILL_ID` | `^D-SK-[<dig>]{3,}$` | the reference |
+  | `bin/fm-decide.sh` `OLD_ID` | `^D-[<dig>]{1,6}$` | no; `--await` takes `OLD_ID` or `SKILL_ID` or owned |
+  | `bin/fm-decide.sh` `OWNED_ID` | `^D-([<low><dig>-]{1,24})-(T[<up><low><dig>]{1,32})-([123456789][<dig>]{0,5})$` | no |
+  | `bin/fm-decide.sh` legacy `--request` | `^D-(SK-[0-9]{3,})$`, capturing the `SK-<n>` task | yes, the only request path for it; `--details` takes `OLD_ID` or owned only |
+  | `bin/fm-ready.sh` `SKILL_CARD` | `^D-SK-[<dig>]{3,}$` | yes; reads an adoption card's answer |
+  | `bin/fm-ready.sh` `CARD_ID` | `^D-(<owned>\|[<dig>]{1,6})$` | no; `judged --decision` takes only this, as a skill update gets no readiness card |
+  | `bin/fm-diagram.sh` `is_decision_id` | `D-` then 1-6 digits, or the owned shape, by `case` globs | no, on purpose: no drawing is generated for a skill id |
+  | `bin/fm.sh` self-update | builds `D-$id` from `^SK-[0-9]{3,}$` | the producer, same shape |
+  | `bin/fm-run.sh`, `bin/fm-decide.sh --allocate` | build `D-<project>-<key>-<n>` | not a validator |
+  | `board/server.ts` `isDecisionId` | `OLD_DECISION`, `OWNED_DECISION`, `SKILL_DECISION` = `^D-SK-[0-9]{3,}$` | yes: responses listing, a pending card's `answerable`, `POST /decisions` |
+  | `board/server.ts` `ownerOf` | `OWNED_DECISION` | no owner, by design |
+  | `board/public/diagram.js` `isDecision` | `^D-[0-9]{1,6}$`, `OWNED`, `^D-SK-[0-9]{3,}$` | yes |
+  | `board/public/diagram.js` `owner` | `OWNED` | no owner, by design |
+  | `bin/watch-decisions.ts`, `tests/` | none; fixtures only | n/a |
+
+  Merge cards name the project and link the pull request
   on the project's GitHub repository. A tree with no `projects:` map (every
   tree before the registry, and the test fixtures) is the engine hosting
   itself. Its ids are owned by `firstmate-workflow`. Its cards and their
