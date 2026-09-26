@@ -9,7 +9,7 @@
 #       -> the policy dimensions the sandbox enforces here, one line; nothing
 #          when there is no sandbox to run
 #   fm-sandbox.sh profile --policy=<file> --root=<dir> [--tmp=<dir>] [--write=<dir>]... [--vendor=<name>]
-#                         [--proxy-port=<n>] [--listening=<port,...>|unknown] [--login=<dir>]
+#                         [--proxy-port=<n>] [--listening=<port,...>|unknown]
 #       -> macOS: the sandbox-exec profile; Linux: the bwrap arguments, one per line
 #   fm-sandbox.sh decide  --policy=<file> [--vendor=<name>] <host>
 #       -> allow or deny, and why: the rule the round's proxy applies
@@ -68,16 +68,17 @@
 # refused host.
 #
 # The vendor's login (T-117). Where the operator's login is kept out of the
-# round's reach - claude's and cursor-agent's live in the macOS keychain,
-# with gh's token and git's - it is read here, outside the sandbox, from
-# exactly the items and files the policy names for that vendor
-# (vendors.<name>.login), and handed in: as a variable (claude's
-# CLAUDE_CODE_OAUTH_TOKEN), or served by a stand-in for security(1) first
-# on the round's PATH that knows that one item and says every other is not
-# there (cursor-agent). Where the login is a file (codex, gemini, and
-# cursor-agent off macOS), no round reads it in place: fm writes a copy with
-# its refresh token emptied into the round's own temp directory, where the
-# adapter points the CLI. Only an access token is handed in, never a refresh
+# round's reach - claude's lives in the macOS keychain, with gh's token and
+# git's - it is read here, outside the sandbox, from exactly the items and
+# files the policy names for that vendor (vendors.<name>.login), and handed
+# in as a variable: claude's access token as CLAUDE_CODE_OAUTH_TOKEN, and
+# cursor-agent's API key, which the operator keeps for the crew in an item
+# or file of fm's own, as CURSOR_API_KEY. cursor-agent reads `agent login`'s
+# token through the keychain API, which nothing inside a round can answer
+# without the keychain itself. Where the login is a file (codex, gemini),
+# no round reads it in place: fm writes a copy with its refresh token
+# emptied into the round's own temp directory, where the adapter points the
+# CLI. Only an access token or an API key is handed in, never a refresh
 # token. A vendor whose login is not there refuses the round with 77 before
 # the sandbox starts, which the adapter counts as unavailable.
 #
@@ -132,10 +133,6 @@ SECRET_SERVICES = ('com.apple.SecurityServer', r'^com\.apple\.securityd', r'^com
                    'com.apple.security.agent', 'com.apple.security.authhost',
                    'com.apple.pasteboard.1', r'^com\.apple\.accountsd', r'^com\.apple\.ak\.',
                    'com.apple.GSSCred', 'org.h5l.kcm', 'com.apple.CoreAuthentication.daemon')
-# what security(1) says when an item is not there, and exits with
-NOT_FOUND = 'security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.'
-# in the round's own temp directory: the items the keychain stand-in was asked for
-ASKED = '.fm-keychain-asked'
 
 
 def load(path):
@@ -234,7 +231,7 @@ def prefix(path):
     return '(regex #"^%s")' % re.sub(r'([.^$|?*+()\[\]{}])', r'\\\1', path)
 
 
-def darwin(p, roots, reads, own, port, listening, login):
+def darwin(p, roots, reads, own, port, listening):
     sub = lambda paths: ' '.join('(subpath %s)' % sbpl(x) for x in paths)
     auth, state, vtmp = own.get('auth', []), own.get('state', []), own.get('tmp', [])
     board = int(os.environ.get('FM_PORT') or 4173)
@@ -274,9 +271,6 @@ def darwin(p, roots, reads, own, port, listening, login):
     if vtmp:
         lines += [';; the directory the vendor\'s CLI keeps under /tmp whatever TMPDIR says',
                   '(allow file-read* file-write* %s)' % sub(vtmp)]
-    if login:
-        lines += [';; the vendor\'s own login, read by fm outside the round, and nothing else of the keychain',
-                  '(allow file-read* %s)' % sub([login])]
     lines += [';; the round\'s own roots, even under a never-readable directory',
               '(allow file-read* file-write* %s)' % sub(roots)]
     repo = [os.path.join(r, c) for r in roots[:1] for c in p['repo_config']]
@@ -398,6 +392,8 @@ def login_of(p, vendor, os_):
         for path in spec.get('file', []):
             tried.append(path)
             try:
+                if spec.get('private') and os.stat(path).st_mode & 0o077:
+                    return None, '%s can be read by others than the operator; chmod 600 it' % path, None
                 value = open(path).read().strip()
             except OSError:
                 continue
@@ -405,7 +401,8 @@ def login_of(p, vendor, os_):
                 found.append(('file:' + path, value, None))
                 break
     if not found:
-        return None, 'no %s' % ' and no '.join(tried or ['login named']), None
+        why = 'no %s' % ' and no '.join(tried or ['login named'])
+        return None, why + ('; ' + spec['hint'] if spec.get('hint') else ''), None
     source, value, item = found[0]
     # `field` may name alternatives: codex's file holds an access token or
     # an API key
@@ -466,57 +463,15 @@ def without_refresh(doc, drop):
     return doc
 
 
-SHIM = r'''#!/bin/sh
-# fm-sandbox's stand-in for security(1) in a crew round (T-117). The
-# keychain is out of the round's reach; this serves the one login fm read
-# for the round's own vendor, and says every other item is not there. What
-# the round writes is never the operator's keychain: it is let go.
-cmd="${1-}"; [ $# -gt 0 ] && shift
-svc=''; acct=''; show=''
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -s) svc="${2-}"; [ $# -gt 1 ] && shift ;;
-    -a) acct="${2-}"; [ $# -gt 1 ] && shift ;;
-    -w) show=w ;;
-    -g) show=g ;;
-  esac
-  shift
-done
-# which items the round asked for, never what it was answered: fm-sandbox
-# says so after the round, so a vendor that never asks here is seen
-printf '%%s %%s/%%s\n' "$cmd" "$svc" "$acct" >> %(asked)s 2>/dev/null
-case "$cmd" in
-  find-generic-password) ;;
-  add-generic-password|delete-generic-password) exit 0 ;;
-  *) echo "security: this crew round has no keychain" >&2; exit 1 ;;
-esac
-case "$svc|$acct" in
-%(cases)s
-  *) echo "%(not_found)s" >&2; exit 44 ;;
-esac
-if [ "$show" = w ]; then cat "$f"; echo; exit 0; fi
-printf 'keychain: "fm-round"\nclass: "genp"\nattributes:\n    "acct"<blob>="%%s"\n    "svce"<blob>="%%s"\n' "$acct" "$svc"
-if [ "$show" = g ]; then { printf 'password: "'; cat "$f"; printf '"\n'; } >&2; fi
-exit 0
-'''
-
-
-def sh_quote(text):
-    if "'" in text or '\n' in text:
-        sys.exit("fm-sandbox: %r cannot be named in the round's keychain stand-in" % text)
-    return "'%s'" % text
-
-
-def login(p, vendor, os_, where, sandboxed, home):
+def login(p, vendor, os_, where, home):
     """Hand the vendor's login in: <where>/env holds NAME=VALUE for the
-    launcher to export; <where>/bin/security serves a keychain item; a
-    login file's copy, less its refresh token, goes to <home>/<copy>, in
+    launcher to export; a login file's copy, less its refresh token, goes to <home>/<copy>, in
     the round's own temp directory. Exit 77 when the operator is not
     logged in to <vendor>."""
     spec = p['vendors'].get(vendor, {}).get('login') or {}
     if not spec:
         return
-    source, token, item = login_of(p, vendor, os_)
+    source, token, _ = login_of(p, vendor, os_)
     if source is None:
         print('fm-sandbox: %s is not logged in: %s' % (vendor, token), file=sys.stderr)
         sys.exit(77)
@@ -540,20 +495,6 @@ def login(p, vendor, os_, where, sandboxed, home):
         fd = os.open(os.path.join(where, 'env'), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, 'w') as f:
             f.write('%s=%s\n' % (to[len('env:'):], token))
-    elif to == 'keychain' and item and sandboxed:
-        os.makedirs(os.path.join(where, 'bin'), mode=0o700, exist_ok=True)
-        path = os.path.join(where, 'item-0')
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, 'w') as f:
-            f.write(token)
-        key = sh_quote('%s|%s' % (item['service'], item['account']))
-        bare = sh_quote('%s|' % item['service'])
-        cases = "  %s|%s) f=%s ;;" % (key, bare, sh_quote(path))
-        shim = os.path.join(where, 'bin', 'security')
-        with open(shim, 'w') as f:
-            f.write(SHIM % dict(cases=cases, not_found=NOT_FOUND,
-                                asked=sh_quote(os.path.join(home, ASKED))))
-        os.chmod(shim, 0o700)
 
 
 def proxy(p, vendor, portfile, blocked, sock):
@@ -669,17 +610,17 @@ def main():
         print(source)
         return
     if mode == 'login':
-        # login <vendor> <os> <dir> <sandboxed: 1|0> <round tmp>
-        login(p, sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6] == '1', sys.argv[7])
+        # login <vendor> <os> <dir> <round tmp>
+        login(p, sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6])
         return
-    # profile <os> <root> <tmp> <vendor> <port> <listening> <socket> <login> [write...]
-    os_, root, tmp, vendor, port, listening, sock, login_dir = sys.argv[3:11]
-    roots = roots_of(p, real(root), real(tmp) if tmp else '', sys.argv[11:])
+    # profile <os> <root> <tmp> <vendor> <port> <listening> <socket> [write...]
+    os_, root, tmp, vendor, port, listening, sock = sys.argv[3:10]
+    roots = roots_of(p, real(root), real(tmp) if tmp else '', sys.argv[10:])
     reads = [r for r in p['read'] if r] + gitdirs(real(root))
     own = p['vendors'].get(vendor, {})
     if os_ == 'darwin':
         ports = None if listening == 'unknown' else [int(x) for x in listening.split(',') if x]
-        sys.stdout.write(darwin(p, roots, reads, own, port, ports, real(login_dir) if login_dir else ''))
+        sys.stdout.write(darwin(p, roots, reads, own, port, ports))
     else:
         sys.stdout.write(linux(p, roots, reads, own, sock))
 
@@ -788,7 +729,7 @@ loopback_reached() {
 
 # --- the option loop: every flag is --name=value --------------------------
 cmd="${1-}"; [ $# -gt 0 ] && shift
-policy=''; root=''; vendor=''; blocked=''; port=''; tmp=''; listening=''; started=''; ctl=''; login_dir=''
+policy=''; root=''; vendor=''; blocked=''; port=''; tmp=''; listening=''; started=''; ctl=''
 writes=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -802,7 +743,6 @@ while [ $# -gt 0 ]; do
     --vendor=*) vendor="${1#*=}"; shift ;;
     --blocked=*) blocked="${1#*=}"; shift ;;
     --proxy-port=*) port="${1#*=}"; shift ;;
-    --login=*) login_dir="${1#*=}"; shift ;;
     --) shift
         break ;;
     --*) say "unknown argument $1"; exit 64 ;;
@@ -844,7 +784,7 @@ case "$cmd" in
     required policy "$policy"; required root "$root"
     os="$(host_os)"; [ -n "$os" ] || { say "no sandbox profile for this platform"; exit 69; }
     python3 -c "$SB_PY" profile "$policy" "$os" "$root" "$tmp" "$vendor" "${port:-0}" "$listening" '' \
-      "$login_dir" ${writes[@]+"${writes[@]}"}
+      ${writes[@]+"${writes[@]}"}
     exit $? ;;
   run|plain) ;;
   *) echo "usage: fm-sandbox.sh os|covers|profile|decide|login-source|run|plain --policy=<file> ..." >&2; exit 64 ;;
@@ -907,24 +847,16 @@ if [ "$cmd" = run ] || [ -n "$vendor" ]; then make_work; fi
 # policy names for it. Not logged in refuses the round (77) before the
 # sandbox starts, so the adapter counts the vendor unavailable.
 if [ -n "$vendor" ]; then
-  sandboxed=0; [ "$cmd" = run ] && sandboxed=1
   # a login file's copy goes in the round's own temp directory, so the
   # round has one before the login is read
   if [ -z "$tmp" ]; then tmp="$work/tmp"; mkdir -p "$tmp" || exit 70; fi
-  python3 -c "$SB_PY" login "$policy" "$vendor" "${os:-none}" "$work/login" "$sandboxed" "$tmp" || exit $?
+  python3 -c "$SB_PY" login "$policy" "$vendor" "${os:-none}" "$work/login" "$tmp" || exit $?
   if [ -s "$work/login/env" ]; then
     # exported, not put on a command line, where ps would show it
     while IFS='=' read -r n v; do
       [ -n "$n" ] && secret_env+=("$n=$v")
     done < "$work/login/env"
     rm -f "$work/login/env"
-  fi
-  # the keychain stand-in, first on the round's PATH, and the one thing of
-  # fm-sandbox's own the profile lets the round read. It is made only when
-  # the item came from the macOS keychain, so bwrap never needs it bound.
-  if [ -x "$work/login/bin/security" ]; then
-    scrub+=(PATH="$work/login/bin:$PATH")
-    login_dir="$work/login"
   fi
 fi
 if [ "$cmd" = run ]; then
@@ -981,7 +913,7 @@ if [ "$cmd" = run ]; then
   fi
   make_profile() {
     python3 -c "$SB_PY" profile "$policy" "$os" "$root" "$tmp" "$vendor" "$port" "$listening" "$sock" \
-      "$login_dir" ${writes[@]+"${writes[@]}"} > "$work/profile" || exit 65
+      ${writes[@]+"${writes[@]}"} > "$work/profile" || exit 65
   }
   make_profile
   # The profile's per-port loopback denials are a rule the kernel applies,
@@ -992,23 +924,33 @@ if [ "$cmd" = run ]; then
   # round is given no loopback but its proxy - its own servers go with it,
   # which it says - and a profile that still lets one through refuses the
   # round. A check that could not run inside the profile tightens it too.
+  check=()
   if [ "$os" = darwin ] && [ "$listening" != unknown ]; then
-    check=()
     IFS=, read -r -a listed_ports <<< "$listening"
     for n in ${listed_ports[@]+"${listed_ports[@]}"}; do [ "$n" = "$port" ] || check+=("$n"); done
     if [ "${#check[@]}" -gt 0 ]; then
       board="${FM_PORT:-4173}"
       if ! reached="$(loopback_reached "${check[@]}")"; then
-        say "cannot try the profile's loopback denials on this host; the round reaches no loopback port but its proxy, so a server it starts itself is out of its reach too"
+        say "cannot try the profile's loopback denials on this host, so they are not relied on"
         listening=unknown; make_profile
       elif [ -n "$reached" ]; then
-        say "the profile's loopback denials do not hold on this host: a round could reach port(s) $reached, which were listening before it (the board's is $board); the round reaches no loopback port but its proxy, so a server it starts itself is out of its reach too"
+        say "the profile's loopback denials do not hold on this host: a round could reach port(s) $reached, which were listening before it (the board's is $board)"
         listening=unknown; make_profile
         if reached="$(loopback_reached "${check[@]}")" && [ -n "$reached" ]; then
           say "and even that profile lets a round reach port(s) $reached; refusing the round"
           exit 70
         fi
       fi
+    fi
+  fi
+  # Which loopback profile the round got, always, in one line: the canary
+  # prints it per vendor, so what a round could reach is never inferred
+  # from what it did not say (2026-09-26).
+  if [ "$os" = darwin ]; then
+    if [ "$listening" = unknown ]; then
+      say "loopback: the round's profile allows it no port but its proxy's ($port), its own servers' included"
+    else
+      say "loopback: the round's profile allows its proxy's port ($port) and ports it opens itself; tried behind it and closed to it: ${check[*]:-nothing else was listening}"
     fi
   fi
   if [ "$os" = darwin ]; then
@@ -1054,18 +996,4 @@ shim=()
   [ -z "$started" ] || exec 4>>"$started"
   exec ${launcher[@]+"${launcher[@]}"} ${inner[@]+"${inner[@]}"} "${scrub[@]}" ${shim[@]+"${shim[@]}"} "$@" <&3
 )
-rc=$?
-# What the vendor asked the keychain stand-in for: the item names only. A
-# vendor that never asked reads its login some other way - security(1) by
-# its absolute path, or the keychain API - and cannot sign in inside the
-# round; the canary shows this line. The round can write the file, so it
-# is a clue for the operator, never a decision.
-if [ -n "$login_dir" ]; then
-  if [ -s "$tmp/.fm-keychain-asked" ]; then
-    say "the keychain stand-in was asked for: $(sort -u "$tmp/.fm-keychain-asked" | paste -sd';' -)"
-  else
-    say "the keychain stand-in was never asked: $vendor did not look for its item through security(1) on its PATH"
-  fi
-  rm -f "$tmp/.fm-keychain-asked"
-fi
-exit "$rc"
+exit $?

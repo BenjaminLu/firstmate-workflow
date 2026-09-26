@@ -49,7 +49,7 @@ assert_eq "[]" "$(jq -c .network "$w")" "and no registry is reachable unless one
 # holds the signing keys
 for never in "$home/.ssh" "$home/.config/gh" "$home/.aws" "$home/.claude" "$home/.claude.json" "$home/.codex" \
              "$home/.cursor" "$home/.gemini" "$home/.config/herdr" "$t/state" \
-             "$home/.git-credentials" "$home/.netrc" "$home/.gnupg"; do
+             "$home/.git-credentials" "$home/.netrc" "$home/.gnupg" "$home/.config/firstmate"; do
   assert_eq "true" "$(jq --arg p "$never" '.never_read | index($p) != null' "$w")" \
     "never readable: ${never#"$home"/}"
 done
@@ -74,9 +74,11 @@ assert_eq "[]" "$(jq -c '[.vendors | to_entries[] | select((.value.login.file //
   "every login read from a file goes in as a token or a copy, never as the file"
 assert_eq "[]" "$(jq -c '[.vendors | to_entries[] | select(.value.login.copy) | select((.value.login.drop // []) | length == 0) | .key]' "$w")" \
   "and every copy names the refresh token it empties"
-assert_eq "codex-home/auth.json tokens.refresh_token|gemini-home/.gemini/oauth_creds.json refresh_token|cursor-config/cursor/auth.json refreshToken" \
-  "$(jq -r '[.vendors.codex, .vendors.gemini, .vendors."cursor-agent"] | map("\(.login.copy) \(.login.drop | join(","))") | join("|")' "$w")" \
-  "codex's, gemini's and cursor-agent's login files each go in as a copy, less the refresh token"
+assert_eq "codex-home/auth.json tokens.refresh_token|gemini-home/.gemini/oauth_creds.json refresh_token" \
+  "$(jq -r '[.vendors.codex, .vendors.gemini] | map("\(.login.copy) \(.login.drop | join(","))") | join("|")' "$w")" \
+  "codex's and gemini's login files each go in as a copy, less the refresh token"
+assert_eq '["codex","gemini"]' "$(jq -c '[.vendors | to_entries[] | select(.value.login.copy) | .key]' "$w")" \
+  "and no other vendor's login goes in as a file"
 # a vendor's session state is writable; its settings are not state
 for v in codex cursor-agent gemini; do
   assert_ne "0" "$(jq --arg v "$v" '.vendors[$v].state | length' "$w")" "$v names the session state its CLI writes"
@@ -97,9 +99,19 @@ assert_eq "Claude Code-credentials $me env:CLAUDE_CODE_OAUTH_TOKEN claudeAiOauth
   "claude's login is its own keychain item, handed in as an access token"
 assert_eq "$home/.claude/.credentials.json" "$(jq -r '.vendors.claude.login.file[0]' "$w")" \
   "or its credentials file where there is no keychain"
-assert_eq "cursor-access-token cursor-user keychain" \
+# cursor-agent reads `agent login`'s token through the keychain API, which
+# no round reaches (the canary, 2026-09-26), so its round signs in with a
+# Cursor API key the operator keeps for the crew in fm's own item or file
+assert_eq "firstmate-cursor-api-key $me env:CURSOR_API_KEY" \
   "$(jq -r '.vendors."cursor-agent".login | "\(.keychain[0].service) \(.keychain[0].account) \(.to)"' "$w")" \
-  "cursor-agent's login is the access token agent login keeps in the keychain"
+  "cursor-agent's login is the crew's Cursor API key, handed in as CURSOR_API_KEY"
+assert_eq "[\"$home/.config/firstmate/cursor-api-key\"] true" \
+  "$(jq -r '.vendors."cursor-agent".login | "\(.file | tojson) \(.private)"' "$w")" \
+  "or a file of fm's that only the operator may read"
+assert_eq "[]" "$(jq -c '[.vendors."cursor-agent".login | (.keychain // [])[].service, (.file // [])[] | select(test("cursor-access-token|cursor-refresh-token|\\.config/cursor"))]' "$w")" \
+  "and never agent login's own items or files, which hold its refresh token"
+assert_eq '[]' "$(jq -c '[.vendors[].login | select(.to) | .to | select(startswith("env:") | not)]' "$w")" \
+  "every login read outside the round goes in as a variable or a copy, nothing served from inside it"
 # no vendor's login is anyone else's: gh's token, git's credential helper
 assert_eq "[]" "$(jq -c '[.vendors[].login.keychain // [] | .[].service | select(test("^gh:|github|git|refresh"; "i"))]' "$w")" \
   "no login names gh's, git's or a refresh token's keychain item"
@@ -321,11 +333,9 @@ n_allow="$(grep -n '^(allow file-read\* (literal "/")' <<< "$prof" | cut -d: -f1
 n_never="$(grep -n "$home/.ssh" <<< "$prof" | head -1 | cut -d: -f1)"
 assert_eq "1" "$([ "$n_never" -gt "$n_allow" ] && echo 1)" "the never-readable rule comes after the toolchain's"
 # claude's round (T-117): its own directory under /tmp, read and written;
-# nothing of the operator's ~/.claude; and, when fm hands a login in through
-# the keychain stand-in, that directory readable and still no keychain
+# nothing of the operator's ~/.claude; and still no keychain
 ctmp="$(cd /tmp && pwd -P)/claude-$(id -u)"
-mkdir -p "$t/login"
-cprof="$(mac profile --policy="$P" --root="$root" --vendor=claude --login="$t/login")"
+cprof="$(mac profile --policy="$P" --root="$root" --vendor=claude)"
 assert_contains "$cprof" "(allow file-read* file-write* (subpath \"$ctmp\"))" \
   "claude's round may use the directory claude keeps under /tmp"
 n_ctmp="$(grep -n "(subpath \"$ctmp\")" <<< "$cprof" | head -1 | cut -d: -f1)"
@@ -336,9 +346,8 @@ assert_lacks "$(mac profile --policy="$P" --root="$root" --vendor=codex)" "claud
   "and no other vendor's round may"
 assert_lacks "$cprof" "(regex #\"^$hq/\\.claude" "claude's round is given none of the operator's ~/.claude"
 assert_lacks "$cprof" "(literal \"$home/.claude/.credentials.json\")" "not even its credentials file: fm reads that"
-assert_contains "$cprof" "(allow file-read* (subpath \"$t/login\"))" "the login fm hands in is readable"
 assert_contains "$(grep '^(deny mach-lookup' <<< "$cprof" | grep SecurityServer)" '(global-name "com.apple.SecurityServer")' \
-  "and the keychain itself is still out of reach"
+  "the keychain itself is out of reach"
 assert_eq "" "$(grep 'allow mach-lookup' <<< "$cprof" || true)" "nothing lets any mach service back in"
 # a project that adds all of $HOME to read still cannot read ~/.ssh
 pol worker 'policy:
@@ -583,11 +592,18 @@ assert_eq "7" "$(lo_round holds)" "denials that hold: the round runs"
 assert_contains "$(cat "$t/lo.checks" 2>/dev/null)" "fm-loopback-check $lport" \
   "after the profile was tried on the port that was listening"
 assert_contains "$(cat "$t/lo.profile.sb" 2>/dev/null)" "$wild" "and it keeps loopback ports of its own"
+# which loopback profile the round got is said every time, so the canary
+# never infers it from a note that is not there (2026-09-26)
+assert_contains "$(cat "$t/lo.err")" "loopback: the round's profile allows its proxy's port" \
+  "which it says"
+assert_contains "$(grep 'loopback: ' "$t/lo.err")" "closed to it: $lport" "naming the ports tried and closed to it"
 lo_proxy="$(sed -n 's/.*allow network-outbound (remote ip "localhost:\([0-9][0-9]*\)").*/\1/p' "$t/lo.profile.sb" | tail -1)"
 assert_lacks " $(cat "$t/lo.checks" 2>/dev/null) " " $lo_proxy " "the round's own proxy is not tried: it is meant to be reached"
 assert_eq "7" "$(lo_round tight)" "denials that do not hold: the round still runs"
 assert_contains "$(cat "$t/lo.err")" "do not hold" "and says so"
 assert_contains "$(cat "$t/lo.err")" "$lport" "naming the port it could reach"
+assert_contains "$(cat "$t/lo.err")" "loopback: the round's profile allows it no port but its proxy's" \
+  "and that the profile it got allows no loopback but the proxy"
 assert_lacks "$(cat "$t/lo.profile.sb" 2>/dev/null)" "$wild" "behind a profile with no loopback of its own"
 assert_contains "$(cat "$t/lo.profile.sb" 2>/dev/null)" '(allow network-outbound (remote ip "localhost:' \
   "but its proxy"
@@ -596,6 +612,8 @@ assert_eq "70" "$(lo_round open)" "a profile that lets a listener through even w
 assert_contains "$(cat "$t/lo.err")" "refusing the round" "and says so"
 assert_eq "7" "$(lo_round broken)" "a check that could not run behind the profile: the round runs"
 assert_contains "$(cat "$t/lo.err")" "cannot try the profile's loopback denials" "and says so"
+assert_contains "$(cat "$t/lo.err")" "loopback: the round's profile allows it no port but its proxy's" \
+  "and which profile it got"
 assert_lacks "$(cat "$t/lo.profile.sb" 2>/dev/null)" "$wild" "with no loopback but its proxy"
 kill "$lsn_pid" 2>/dev/null; wait "$lsn_pid" 2>/dev/null
 # the policy the cases below were written against
@@ -657,13 +675,13 @@ for mode_os in darwin linux; do
 done
 
 # --- the vendor's login (T-117) -----------------------------------------------
-# On macOS claude's and cursor-agent's logins are in the keychain, with
-# gh's token and git's, and the round reaches none of it. fm reads the
-# vendor's own item outside the round - that item and no other - and hands
-# in its access token: claude's as CLAUDE_CODE_OAUTH_TOKEN, cursor-agent's
-# through a stand-in for security(1) that serves it and nothing else. The
-# operator's keychain here is a stand-in too: it holds claude's and
-# cursor-agent's logins and gh's token, and records every item asked for.
+# On macOS claude's login is in the keychain, with gh's token and git's,
+# and the round reaches none of it. fm reads the vendor's own item outside
+# the round - that item and no other - and hands it in as a variable:
+# claude's access token as CLAUDE_CODE_OAUTH_TOKEN, and the crew's Cursor
+# API key as CURSOR_API_KEY. The operator's keychain here is a stand-in: it
+# holds claude's login, the crew's Cursor key, cursor-agent's own `agent
+# login` items and gh's token, and records every item asked for.
 mkdir -p "$t/kc"
 future=$(( ($(date +%s) + 3600) * 1000 ))
 printf '{"claudeAiOauth":{"accessToken":"at-claude","refreshToken":"rt-claude-secret","expiresAt":%s}}' \
@@ -674,35 +692,30 @@ printf '%s\n' "\$*" >> "$t/kc/calls"
 s=''; while [ \$# -gt 0 ]; do [ "\$1" = -s ] && s="\${2-}"; shift; done
 case "\$s" in
   'Claude Code-credentials') cat "$t/kc/claude" ;;
+  firstmate-cursor-api-key) printf 'key-cursor-crew\n' ;;
   cursor-access-token) printf 'at-cursor\n' ;;
+  cursor-refresh-token) printf 'rt-cursor-secret\n' ;;
   gh:github.com) printf 'gho_ghsecret\n' ;;
   *) echo "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain." >&2; exit 44 ;;
 esac
 S
 chmod +x "$t/kc/security"
-# What the round sees of its login, and, given `kc`, what it can make of
-# the keychain. Only a round that has the stand-in first on its PATH asks
-# it: the stand-in sandbox enforces nothing, and on a Mac the security(1)
-# found otherwise is the real one, holding the real tokens.
+# What the round sees of its login. It asks no keychain itself: the
+# stand-in sandbox enforces nothing, and on a Mac the security(1) it would
+# find is the real one, holding the real tokens. That the round cannot
+# reach the keychain is the profile's mach-lookup denial, asserted above.
 cat > "$t/login.sh" <<'S'
 #!/usr/bin/env bash
 out="$1"
 { printf 'token=%s\n' "${CLAUDE_CODE_OAUTH_TOKEN:-}"
-  printf 'path0=%s\n' "${PATH%%:*}"
+  printf 'cursorkey=%s\n' "${CURSOR_API_KEY:-}"
+  printf 'path=%s\n' "$PATH"
   # every login copy fm put in the round's own temp directory, and what it holds
   find "${TMPDIR:-/nonexistent}" -type f -name '*.json' -print -exec cat {} \; 2>/dev/null; echo
-  if [ "${2:-}" != kc ]; then env; exit 0; fi
-  printf 'cursor=%s rc=%s\n' "$(security find-generic-password -s cursor-access-token -a cursor-user -w 2>/dev/null)" "$?"
-  printf 'cursor-bare=%s\n' "$(security find-generic-password -s cursor-access-token -w 2>/dev/null)"
-  printf 'gh=%s rc=%s\n' "$(security find-generic-password -s gh:github.com -w 2>/dev/null)" "$?"
-  printf 'cursor-other-account=%s\n' "$(security find-generic-password -s cursor-access-token -a someone -w 2>/dev/null)"
-  printf 'git=%s rc=%s\n' "$(security find-internet-password -s github.com -w 2>/dev/null)" "$?"
-  printf 'write rc=%s\n' "$(security add-generic-password -s cursor-access-token -a cursor-user -w new >/dev/null 2>&1; echo $?)"
   env
 } > "$out"
 S
 chmod +x "$t/login.sh"
-# the security(1) the round finds must be the stand-in, never the host's:
 # a PATH holding only what the command needs
 lpath="$t/psbin:/usr/bin:/bin"
 command -v python3 >/dev/null && lpath="$t/psbin:$(dirname "$(command -v python3)"):/usr/bin:/bin"
@@ -713,7 +726,7 @@ kc() {   # kc <mode> <os> <vendor> [env...] -> exit code; the round's view in $t
   rm -f "$t/login.out" "$t/profile.sb" "$t/kc/calls"; echo stale > "$t/started"
   env FM_SANDBOX_OS="$os_" FM_SANDBOX_TOOL="$tool" FM_KEYCHAIN_TOOL="$t/kc/security" PATH="$lpath" "$@" \
     "$SB" "$mode" --policy="$t/worker.json" --root="$root" --vendor="$v" --ctl="$t/ctl" --started="$t/started" \
-    -- "$t/login.sh" "$t/login.out" "${KC_PROBE:-}" </dev/null >/dev/null 2>"$t/login.err"
+    -- "$t/login.sh" "$t/login.out" </dev/null >/dev/null 2>"$t/login.err"
   echo $?
 }
 pol worker 'vendor: mock
@@ -726,37 +739,29 @@ assert_lacks "$lo" "rt-claude-secret" "the refresh token never enters the round"
 assert_eq "find-generic-password -s Claude Code-credentials -a $me -w" "$(cat "$t/kc/calls" 2>/dev/null)" \
   "and fm read one item of the keychain: claude's"
 assert_eq "" "$(ls -A "$t/ctl" 2>/dev/null)" "nothing of the login is left behind"
-# cursor-agent: its one item, served by the stand-in first on the round's
-# PATH; gh's token and git's credentials are not there to be had
-assert_eq "0" "$(KC_PROBE=kc kc run darwin cursor-agent)" "cursor-agent's round starts on macOS with the operator's own login"
+# cursor-agent (round 6): the canary on 2026-09-26 showed cursor-agent never
+# asking a security(1) on its PATH for `agent login`'s token - it reads the
+# keychain through the API, which no round reaches - so its round signs in
+# with the crew's Cursor API key, read by fm from fm's own item and handed
+# in as CURSOR_API_KEY. cursor's own login items, their refresh token and
+# gh's token are never read, and nothing on the round's PATH or in its
+# profile answers for the keychain.
+assert_eq "0" "$(kc run darwin cursor-agent)" "cursor-agent's round starts on macOS with the crew's Cursor API key"
 lo="$(cat "$t/login.out" 2>/dev/null)"
-assert_contains "$lo" "cursor=at-cursor rc=0" "its own keychain item is served to it"
-assert_contains "$lo" "cursor-bare=at-cursor" "by service alone too"
-assert_contains "$lo" "gh= rc=44" "gh's token is not there: the item is not found"
-assert_contains "$lo" "cursor-other-account=
-" "nor is its service under another account"
-assert_matches "$(grep '^git=' <<< "$lo")" '^git= rc=[1-9]' "nor git's internet password"
-assert_contains "$lo" "write rc=0" "and a write is let go, never reaching the operator's keychain"
-assert_matches "$(sed -n 's/^path0=//p' <<< "$lo")" "^$t/ctl/fm-sb\\.[A-Za-z0-9]+/login/bin\$" \
-  "the stand-in is first on the round's PATH"
-assert_lacks "$lo" "gho_ghsecret" "gh's token appears nowhere in the round"
-assert_eq "find-generic-password -s cursor-access-token -a cursor-user -w" "$(cat "$t/kc/calls" 2>/dev/null)" \
-  "fm read one item of the keychain: cursor-agent's, never gh's"
-assert_contains "$(cat "$t/profile.sb" 2>/dev/null)" "(allow file-read* (subpath \"$t/ctl/fm-sb." \
-  "the round may read the login fm put beside it"
+assert_contains "$lo" "cursorkey=key-cursor-crew" "handed in as CURSOR_API_KEY"
+assert_lacks "$lo" "at-cursor" "never agent login's own access token"
+assert_lacks "$lo" "rt-cursor-secret" "nor its refresh token"
+assert_lacks "$lo" "gho_ghsecret" "nor gh's token"
+assert_eq "find-generic-password -s firstmate-cursor-api-key -a $me -w" "$(cat "$t/kc/calls" 2>/dev/null)" \
+  "fm read one item of the keychain: the crew's key, never cursor's own login nor gh's"
+assert_lacks "$(sed -n 's/^path=//p' <<< "$lo")" "$t/ctl" "nothing of fm's is put on the round's PATH"
+assert_lacks "$(cat "$t/profile.sb" 2>/dev/null)" "(subpath \"$t/ctl/fm-sb." "nor made readable in its profile"
 assert_contains "$(grep '^(deny mach-lookup' "$t/profile.sb" 2>/dev/null | grep SecurityServer)" \
-  '(global-name "com.apple.SecurityServer")' "and still not the keychain"
-assert_eq "" "$(ls -A "$t/ctl" 2>/dev/null)" "and the served item is removed with the round"
-# After the round fm-sandbox says which items the vendor asked the stand-in
-# for, by name and never by value: on 2026-09-26 cursor-agent said it was not
-# logged in with the stand-in on its PATH, and nothing said whether it asked.
-assert_contains "$(cat "$t/login.err")" "the keychain stand-in was asked for: " "which items it was asked for is said"
-assert_contains "$(cat "$t/login.err")" "find-generic-password cursor-access-token/cursor-user" "by service and account"
-assert_lacks "$(cat "$t/login.err")" "at-cursor" "never with what it answered"
-assert_eq "0" "$(kc run darwin cursor-agent)" "a cursor-agent round that never asks still runs"
-assert_contains "$(cat "$t/login.err")" "the keychain stand-in was never asked" "and fm says it never asked"
-assert_eq "0" "$(kc run darwin claude)" "claude's login is a variable, not the stand-in"
-assert_lacks "$(cat "$t/login.err")" "keychain stand-in" "so nothing is said of one"
+  '(global-name "com.apple.SecurityServer")' "and the keychain stays out of its reach"
+assert_eq "" "$(ls -A "$t/ctl" 2>/dev/null)" "and nothing of the login is left behind"
+assert_eq "0" "$(kc run darwin cursor-agent CURSOR_API_KEY=key-from-env)" "a CURSOR_API_KEY already set is used"
+assert_contains "$(cat "$t/login.out" 2>/dev/null)" "cursorkey=key-from-env" "as it is"
+assert_eq "" "$(cat "$t/kc/calls" 2>/dev/null)" "and the keychain is not read for it"
 # a login already in the operator's environment is used as it is
 assert_eq "0" "$(kc run darwin claude CLAUDE_CODE_OAUTH_TOKEN=from-env)" "a CLAUDE_CODE_OAUTH_TOKEN already set is used"
 assert_contains "$(cat "$t/login.out" 2>/dev/null)" "token=from-env" "as it is"
@@ -782,15 +787,23 @@ for v in claude codex cursor-agent gemini; do
   assert_contains "$(cat "$t/login.err")" "$v is not logged in" "and says so"
   assert_fail "test -e '$t/login.out'" "and the command never starts ($v)"
 done
+# the one step the operator takes for cursor-agent is said with the refusal
+assert_eq "77" "$(kc run darwin cursor-agent FM_KEYCHAIN_TOOL="$t/no-such-security")" "no crew Cursor key refuses cursor-agent's round"
+assert_contains "$(cat "$t/login.err")" "security add-generic-password -s firstmate-cursor-api-key" \
+  "and says how to keep one for the crew"
 # Linux: no keychain; claude's credentials file, read by fm, not the round
-mkdir -p "$t/lhome/.claude" "$t/lhome/.codex" "$t/lhome/.gemini" "$t/lhome/.config/cursor"
+mkdir -p "$t/lhome/.claude" "$t/lhome/.codex" "$t/lhome/.gemini" "$t/lhome/.config/cursor" "$t/lhome/.config/firstmate"
 cp "$t/kc/claude" "$t/lhome/.claude/.credentials.json"
-# codex's, gemini's and cursor-agent's login files, each with its refresh token
+# codex's and gemini's login files, each with its refresh token; agent
+# login's file, which cursor-agent's round never reads; and the crew's
+# Cursor key in fm's own file
 printf '{"OPENAI_API_KEY":null,"tokens":{"id_token":"id-codex","access_token":"at-codex","refresh_token":"rt-codex-secret","account_id":"acct"},"last_refresh":"2026-09-26T00:00:00Z"}' \
   > "$t/lhome/.codex/auth.json"
 printf '{"access_token":"at-gemini","refresh_token":"rt-gemini-secret","token_type":"Bearer","expiry_date":%s}' \
   "$future" > "$t/lhome/.gemini/oauth_creds.json"
 printf '{"accessToken":"at-cursor-file","refreshToken":"rt-cursor-secret"}' > "$t/lhome/.config/cursor/auth.json"
+printf 'key-cursor-file\n' > "$t/lhome/.config/firstmate/cursor-api-key"
+chmod 644 "$t/lhome/.config/firstmate/cursor-api-key"
 ( export HOME="$t/lhome"
   pol worker 'vendor: mock
 ' )
@@ -798,16 +811,27 @@ assert_eq "0" "$(kc run linux claude)" "on Linux claude's round starts with its 
 assert_contains "$(cat "$t/login.out" 2>/dev/null)" "token=at-claude" "its access token handed in the same way"
 assert_eq "" "$(cat "$t/kc/calls" 2>/dev/null)" "and no keychain asked"
 assert_lacks "$(cat "$t/bwrap.args" 2>/dev/null)" "$t/lhome/.claude" "and the file itself not mounted in the round"
-# codex, gemini, and cursor-agent off macOS (T-117 round 2): the login file
-# holds a refresh token, so the round never reads it. fm does, and writes a
-# copy with the refresh token emptied into the round's own temp directory,
-# where the adapter points the CLI. A round that could refresh the
-# operator's login, but not write the result back, would spend it.
+# cursor-agent off macOS: the crew's key from fm's file, which must be the
+# operator's alone; agent login's own file is never read
+assert_eq "77" "$(kc run linux cursor-agent)" "a crew Cursor key file others can read refuses the round"
+assert_contains "$(cat "$t/login.err")" "chmod 600" "and says what to do"
+assert_fail "test -e '$t/login.out'" "and the command never starts"
+chmod 600 "$t/lhome/.config/firstmate/cursor-api-key"
+assert_eq "0" "$(kc run linux cursor-agent)" "with the file the operator's alone, cursor-agent's round starts on Linux"
+lo="$(cat "$t/login.out" 2>/dev/null)"
+assert_contains "$lo" "cursorkey=key-cursor-file" "the key handed in as CURSOR_API_KEY"
+assert_lacks "$lo" "at-cursor-file" "never agent login's token"
+assert_lacks "$lo" "rt-cursor-secret" "nor its refresh token"
+assert_lacks "$(cat "$t/bwrap.args" 2>/dev/null)" "$t/lhome/.config" "and neither file is bound in the round"
+# codex and gemini (T-117 round 2): the login file holds a refresh token,
+# so the round never reads it. fm does, and writes a copy with the refresh
+# token emptied into the round's own temp directory, where the adapter
+# points the CLI. A round that could refresh the operator's login, but not
+# write the result back, would spend it.
 for lf in "codex linux at-codex rt-codex-secret codex-home/auth.json .codex/auth.json" \
           "codex darwin at-codex rt-codex-secret codex-home/auth.json .codex/auth.json" \
           "gemini linux at-gemini rt-gemini-secret gemini-home/.gemini/oauth_creds.json .gemini/oauth_creds.json" \
-          "gemini darwin at-gemini rt-gemini-secret gemini-home/.gemini/oauth_creds.json .gemini/oauth_creds.json" \
-          "cursor-agent linux at-cursor-file rt-cursor-secret cursor-config/cursor/auth.json .config/cursor/auth.json"; do
+          "gemini darwin at-gemini rt-gemini-secret gemini-home/.gemini/oauth_creds.json .gemini/oauth_creds.json"; do
   read -r lf_v lf_os lf_at lf_rt lf_copy lf_file <<< "$lf"
   rm -f "$t/bwrap.args"
   assert_eq "0" "$(kc run "$lf_os" "$lf_v")" "$lf_v's round starts on $lf_os with its login file's login"
@@ -848,13 +872,12 @@ assert_lacks "$src" "at-claude" "and never prints it"
 FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" FM_KEYCHAIN_TOOL="$t/no-such-security" \
   "$SB" login-source --policy="$t/nohome.json" --vendor=cursor-agent >/dev/null 2>&1
 assert_eq "77" "$?" "and says 77 when the operator is not logged in"
-# plain, the operator's hatch: claude still gets its login; no stand-in is
-# needed where the keychain is not walled off
+# plain, the operator's hatch: every vendor still gets its login
 assert_eq "0" "$(kc plain darwin claude)" "under the hatch claude's round starts"
 assert_contains "$(cat "$t/login.out" 2>/dev/null)" "token=at-claude" "with its login handed in"
 assert_contains "$(cat "$t/login.out" 2>/dev/null)" "FM_IN_ROUND=1" "and marked a round"
 assert_eq "0" "$(kc plain darwin cursor-agent)" "and cursor-agent's"
-assert_lacks "$(sed -n 's/^path0=//p' "$t/login.out" 2>/dev/null)" "login/bin" "with no stand-in for the keychain"
+assert_contains "$(cat "$t/login.out" 2>/dev/null)" "cursorkey=key-cursor-crew" "with the crew's Cursor key"
 
 # The limits, as fm-sandbox set them (SANDBOX_ROUND_LIMITS), and as the kernel
 # reports them back. Expected values are the policy's and the stand-in's,

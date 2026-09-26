@@ -46,20 +46,22 @@ inside the sandbox just before the CLI, and a round without it never ran.
 
 **The vendor's login (T-117).** A round reaches the login the operator
 already uses, and nothing more. Where that login lives out of the round's
-reach - claude's and cursor-agent's in the macOS keychain, beside gh's
-token and git's - `fm-sandbox.sh` reads exactly the vendor's own item or
-file, named in the policy's `vendors.<name>.login`, outside the sandbox,
-and hands in its access token (never a refresh token): claude's as
+reach - claude's in the macOS keychain, beside gh's token and git's -
+`fm-sandbox.sh` reads exactly the vendor's own item or file, named in the
+policy's `vendors.<name>.login`, outside the sandbox, and hands it in as a
+variable (never a refresh token): claude's access token as
 `CLAUDE_CODE_OAUTH_TOKEN`, with a config directory (`CLAUDE_CONFIG_DIR`)
-and temp directory (`CLAUDE_CODE_TMPDIR`) of the round's own; cursor-agent's
-through a stand-in for `security(1)` first on the round's `PATH` that serves
-that one item and says every other is not there. A login kept in a file -
-codex's `auth.json`, gemini's `oauth_creds.json`, cursor-agent's off macOS -
-is never read in place, since each holds a refresh token: fm writes a copy
-with the refresh token emptied into the round's temp directory, and the
-adapter points its CLI there (`CODEX_HOME`, gemini's `HOME`,
-cursor-agent's `XDG_CONFIG_HOME`, set off macOS only). The keychain's mach
-services stay denied to every round. No login refuses the round with `77`,
+and temp directory (`CLAUDE_CODE_TMPDIR`) of the round's own. cursor-agent
+reads `agent login`'s token through the keychain API, which nothing inside
+a round can answer for, so its round signs in with a Cursor API key the
+operator keeps once for the crew - fm's keychain item
+`firstmate-cursor-api-key`, or `~/.config/firstmate/cursor-api-key` at mode
+600 - handed in as `CURSOR_API_KEY`. A login kept in a file - codex's
+`auth.json`, gemini's `oauth_creds.json` - is never read in place, since
+each holds a refresh token: fm writes a copy with the refresh token emptied
+into the round's temp directory, and the adapter points its CLI there
+(`CODEX_HOME`, gemini's `HOME`). The keychain's mach services stay denied
+to every round. No login refuses the round with `77`,
 which the adapter reads as unavailable. Design 13.1 names each vendor's
 path, item and service, and why.
 

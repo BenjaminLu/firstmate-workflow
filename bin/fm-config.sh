@@ -349,7 +349,7 @@ NEVER_READ = ['~/.ssh', '~/.gnupg', '~/.netrc', '~/.git-credentials', '~/.config
               '~/.aws', '~/.azure', '~/.config/gcloud', '~/.docker', '~/.kube',
               '~/.npmrc', '~/.pypirc', '~/.config/herdr',
               '~/.claude', '~/.claude.json', '~/.codex', '~/.cursor', '~/.config/cursor',
-              '~/.gemini', '{state}']
+              '~/.gemini', '~/.config/firstmate', '{state}']
 # Each vendor's home is never readable as a whole: it holds the operator's
 # settings, hooks, skills and MCP servers as well as the login. Its round
 # gets back only what it needs to start and sign in (design 13.1 names each
@@ -371,15 +371,18 @@ NEVER_READ = ['~/.ssh', '~/.gnupg', '~/.netrc', '~/.git-credentials', '~/.config
 #                      read on macOS with security(1); the keychain itself
 #                      stays out of every round's reach
 #            file      files read when no keychain item is there
-#            field     the JSON field of the value that is the token
+#            private   the file must be the operator's alone (no group or
+#                      other bits), or it is no login
+#            field     the JSON field of the value that is the token; none,
+#                      and the whole value is
 #            expires   the JSON field saying when it expires, in ms; a
 #                      login past it is no login
 #            given     variables that, set in the operator's environment,
 #                      already carry a login, so nothing is read
-#            to        env:<NAME>, the token handed in as that variable;
-#                      or keychain, the item served under its own service
-#                      and account by the round's stand-in for security(1)
-#            copy      for a login read from a file: the path, under the
+#            to        env:<NAME>, the token handed in as that variable
+#            hint      what the operator does once when there is no login,
+#                      said with the refusal
+#            copy     for a login read from a file: the path, under the
 #                      round's own temp directory, where fm writes that
 #                      file with `drop` emptied, for the adapter to point
 #                      the CLI at (T-117 round 2)
@@ -417,18 +420,27 @@ VENDORS = {
                              drop=['tokens.refresh_token'], given=['CODEX_API_KEY'],
                              copy='codex-home/auth.json'),
                   hosts=['openai.com', 'chatgpt.com']),
-    # `agent login` keeps the access token in the macOS keychain; the round
-    # is served that one item and no other. Elsewhere it is a file holding
-    # the refresh token too, and the round's XDG_CONFIG_HOME holds a copy
-    # without it.
+    # cursor-agent reads `agent login`'s token through the keychain API,
+    # which no round reaches and nothing on the round's PATH can answer for
+    # (the canary, 2026-09-26: a security(1) stand-in was never asked). So
+    # its round signs in with a Cursor API key the operator makes once for
+    # the crew, kept by fm outside every round - a keychain item of fm's own
+    # on macOS, else a file only the operator can read - and handed in as
+    # CURSOR_API_KEY, the variable cursor-agent documents. Neither `agent
+    # login`'s items nor ~/.config/cursor are read, so no refresh token of
+    # cursor's is anywhere near a round.
     'cursor-agent': dict(auth=[],
                          state=['~/.cursor/chats', '~/.cursor/projects', '~/.cursor/cli-config.json',
                                 '~/.cursor/statsig-cache.json'],
                          tmp=[],
-                         login=dict(keychain=[dict(service='cursor-access-token', account='cursor-user')],
-                                    file=['~/.config/cursor/auth.json'], field='accessToken',
-                                    drop=['refreshToken'], given=['CURSOR_API_KEY'], to='keychain',
-                                    copy='cursor-config/cursor/auth.json'),
+                         login=dict(keychain=[dict(service='firstmate-cursor-api-key', account='{user}')],
+                                    file=['~/.config/firstmate/cursor-api-key'], private=True,
+                                    given=['CURSOR_API_KEY'], to='env:CURSOR_API_KEY',
+                                    hint='make a Cursor API key (cursor.com, Settings, API keys) and keep it '
+                                         'for the crew once, outside any round: '
+                                         'security add-generic-password -s firstmate-cursor-api-key '
+                                         '-a "$USER" -w (it asks for the key), or write it to '
+                                         '~/.config/firstmate/cursor-api-key with mode 600'),
                          hosts=['cursor.sh', 'cursor.com']),
     # gemini's login file holds its refresh token too. The round's gemini
     # runs with a HOME of its own, whose .gemini holds a copy without it.

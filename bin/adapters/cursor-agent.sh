@@ -31,13 +31,14 @@ _fm_alib="$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 # inside sandbox-exec: there it is off and the outer one confines the
 # commands instead.
 #
-# Its login (T-117): on macOS `agent login` keeps the access token in the
-# keychain, which no round reaches. fm-sandbox.sh reads that one item
-# (cursor-access-token) outside the round and serves it, and no other, to
-# the round through a stand-in for security(1) first on its PATH.
-# Elsewhere the login is ~/.config/cursor/auth.json, which holds the
-# refresh token too, and no round reads it: fm-sandbox.sh writes a copy with
-# the refresh token emptied under the round's own XDG_CONFIG_HOME.
+# Its login (T-117): `agent login` keeps its token where cursor-agent reads
+# it through the keychain API, which no round reaches, and a stand-in for
+# security(1) on the round's PATH was never asked for it (the canary,
+# 2026-09-26). So the round signs in with a Cursor API key the operator
+# keeps for the crew - fm's keychain item firstmate-cursor-api-key, or
+# ~/.config/firstmate/cursor-api-key - which fm-sandbox.sh reads outside the
+# round and hands in as CURSOR_API_KEY. A CURSOR_API_KEY already set is
+# used as is.
 #
 # No `fm:review-run` line: a run-mode review needs the reviewer's writes
 # confined to a checkout by the CLI itself, which T-066 asked of claude
@@ -79,16 +80,6 @@ fm_adapter_policy
 sandbox=enabled; [ "${FM_OUTER_OS:-}" != darwin ] || sandbox=disabled
 read -r -a native <<<"$(cursor_native)"
 fm_adapter_confine cursor-agent "$tree" "${native[@]}"
-# where fm-sandbox.sh puts the login file's copy, when the login is a file.
-# Not on macOS, where the login is the keychain item and nothing is copied:
-# there a config home of the round's own would only move cursor-agent off
-# ~/.cursor/cli-config.json, which says who is logged in. The canary on
-# 2026-09-26 saw it report `Authentication required` on macOS with it
-# moved; whether that was the cause, the next canary says.
-if [ "${FM_OUTER_OS:-$(uname -s | tr '[:upper:]' '[:lower:]')}" != darwin ]; then
-  mkdir -p "$FM_ROUND_TMP/cursor-config" || exit 70
-  export XDG_CONFIG_HOME="$FM_ROUND_TMP/cursor-config"
-fi
 if [ -n "${FM_ATTEMPT_DIR:-}" ]; then
   ( cd "$tree" && "${FM_LAUNCH[@]}" cursor-agent -p --trust --sandbox "$sandbox" --output-format json ${FM_ADAPTER_ARGS:-} < "$prompt" ) 2>&1 | tee -a "$log"
   fm_adapter_pipeline_status "${PIPESTATUS[@]}"

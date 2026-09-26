@@ -165,10 +165,13 @@ it. The captain reverted it (PR 96) and asked for it again with:
   uses, and nothing more. The keychain stays denied to every round - there
   is no rule for one item, and gh's token is one `security` call away once
   the keychain is reachable - so fm reads the vendor's own item outside the
-  round and hands its access token in, never a refresh token. A login kept
-  in a file (codex's, gemini's, cursor-agent's off macOS) holds a refresh
-  token too, so no round reads it in place: fm hands in a copy with the
-  refresh token emptied, in the round's own temp directory. claude gets a
+  round and hands its access token in, never a refresh token. cursor-agent
+  reads `agent login`'s token through the keychain API, which nothing in a
+  round can answer for, so its round signs in with a Cursor API key the
+  operator keeps once for the crew, handed in as `CURSOR_API_KEY`. A login
+  kept in a file (codex's, gemini's) holds a refresh token too, so no round
+  reads it in place: fm hands in a copy with the refresh token emptied, in
+  the round's own temp directory. claude gets a
   config directory and temp directory of the round's own, plus the one
   directory it keeps under `/tmp`. Design section 13.1 names every path,
   item and service per vendor;

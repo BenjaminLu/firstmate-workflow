@@ -514,8 +514,7 @@ round_locations() {   # round_locations <vendor> <os> -> the variables naming a 
   case "$1" in
     claude) printf '%s\n' CLAUDE_CONFIG_DIR CLAUDE_CODE_TMPDIR ;;
     codex) printf '%s\n' CODEX_HOME ;;
-    # on macOS its login is the keychain item and its config home stays its own
-    cursor-agent) [ "$2" = darwin ] || printf '%s\n' XDG_CONFIG_HOME ;;
+    # cursor-agent is handed no location of its own: its login is a variable
     gemini) printf '%s\n' HOME GEMINI_CLI_HOME ;;
   esac
 }
@@ -547,11 +546,11 @@ for loc_role in worker run-review; do
         writable_in "$loc_os" "$loc_p"
         assert_eq "0" "$?" "and may write it: $loc_n=$loc_p ($loc_at)"
       done < <(round_locations "$v" "$loc_os")
-      # cursor-agent on macOS keeps ~/.cursor/cli-config.json, which says who
-      # is logged in: no config home of fm's moves it off (T-117, canary)
-      if [ "$v" = cursor-agent ] && [ "$loc_os" = darwin ]; then
+      # cursor-agent's login is CURSOR_API_KEY (T-117 round 6): no config
+      # home of fm's moves it off its own ~/.cursor/cli-config.json
+      if [ "$v" = cursor-agent ]; then
         assert_eq "${XDG_CONFIG_HOME:-}" "$(sed -n 's/^XDG_CONFIG_HOME=//p' <<< "$loc_env")" \
-          "cursor-agent on macOS is handed no XDG_CONFIG_HOME of fm's ($loc_at)"
+          "cursor-agent is handed no XDG_CONFIG_HOME of fm's ($loc_at)"
       fi
       # and every other directory the round is handed that the caller did
       # not already have: a location added later is checked too
@@ -680,14 +679,15 @@ for nl_v in claude codex cursor-agent gemini; do
 done
 
 # --- a login kept in a file (T-117 round 2) ----------------------------------
-# codex's auth.json, gemini's oauth_creds.json and, off macOS,
-# cursor-agent's auth.json each hold a refresh token beside the access
-# token. No round reads them in place: fm hands in a copy with the refresh
-# token emptied, where the adapter points its CLI, so a round can neither
-# refresh the operator's login nor spend a single-use refresh token. The
-# fake CLI reports the login it finds where its vendor looks.
+# codex's auth.json and gemini's oauth_creds.json each hold a refresh
+# token beside the access token. No round reads them in place: fm hands in
+# a copy with the refresh token emptied, where the adapter points its CLI,
+# so a round can neither refresh the operator's login nor spend a
+# single-use refresh token. The fake CLI reports the login it finds where
+# its vendor looks. cursor-agent's agent login file is here too, and its
+# round never sees it.
 lh="$pv/loginhome"
-mkdir -p "$lh/.codex" "$lh/.gemini" "$lh/.config/cursor"
+mkdir -p "$lh/.codex" "$lh/.gemini" "$lh/.config/cursor" "$lh/.config/firstmate"
 future_ms=$(( ($(date +%s) + 3600) * 1000 ))
 printf '{"OPENAI_API_KEY":null,"tokens":{"id_token":"id-codex","access_token":"at-codex","refresh_token":"rt-codex-secret","account_id":"acct"},"last_refresh":"2026-09-26T00:00:00Z"}' \
   > "$lh/.codex/auth.json"
@@ -708,7 +708,7 @@ cat > /dev/null
 case "\$(basename "\$0")" in
   codex) f="\$CODEX_HOME/auth.json" ;;
   gemini) f="\$HOME/.gemini/oauth_creds.json" ;;
-  cursor-agent) f="\$XDG_CONFIG_HOME/cursor/auth.json" ;;
+  *) f=/dev/null ;;
 esac
 { printf 'file=%s\n' "\$f"; cat "\$f" 2>&1; echo; env; } > "$pv/copy"
 printf 'ran\n'
@@ -716,8 +716,7 @@ S
 for lf in "codex darwin at-codex rt-codex-secret .codex/auth.json" \
           "codex linux at-codex rt-codex-secret .codex/auth.json" \
           "gemini darwin at-gemini rt-gemini-secret .gemini/oauth_creds.json" \
-          "gemini linux at-gemini rt-gemini-secret .gemini/oauth_creds.json" \
-          "cursor-agent linux at-cursor rt-cursor-secret .config/cursor/auth.json"; do
+          "gemini linux at-gemini rt-gemini-secret .gemini/oauth_creds.json"; do
   read -r lf_v lf_os lf_at lf_rt lf_file <<< "$lf"
   cp "$pv/copyfake" "$pv/fakebin/$lf_v"; chmod +x "$pv/fakebin/$lf_v"
   rm -f "$pv/copy" "$pk/profile.sb" "$pk/bwrap.args"
@@ -736,6 +735,42 @@ for lf in "codex darwin at-codex rt-codex-secret .codex/auth.json" \
   assert_lacks "$(sed -n 's/^file=//p' <<< "$lf_seen")" "$lh" "the file it reads is a copy, not the operator's ($lf_v, $lf_os)"
   assert_lacks "$(grep -v '^(deny' "$pk/profile.sb" "$pk/bwrap.args" 2>/dev/null)" "$lh/$lf_file" \
     "and the round is given no way to the operator's login file ($lf_v, $lf_os)"
+done
+# cursor-agent (T-117 round 6) reads agent login's token through the
+# keychain API, which no round reaches, so its round signs in with the
+# crew's Cursor API key: fm's own keychain item on macOS, fm's own file
+# elsewhere, handed in as CURSOR_API_KEY. The operator's keychain here
+# holds that key and agent login's own items.
+printf 'key-crew-file\n' > "$lh/.config/firstmate/cursor-api-key"
+chmod 600 "$lh/.config/firstmate/cursor-api-key"
+cat > "$pv/cursor-security" <<'S'
+#!/usr/bin/env bash
+s=''; while [ $# -gt 0 ]; do [ "$1" = -s ] && s="${2-}"; shift; done
+case "$s" in
+  firstmate-cursor-api-key) printf 'key-crew-kc\n' ;;
+  cursor-access-token) printf 'at-cursor\n' ;;
+  cursor-refresh-token) printf 'rt-cursor-secret\n' ;;
+  *) echo "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain." >&2; exit 44 ;;
+esac
+S
+chmod +x "$pv/cursor-security"
+cp "$pv/copyfake" "$pv/fakebin/cursor-agent"; chmod +x "$pv/fakebin/cursor-agent"
+for cur in "darwin key-crew-kc" "linux key-crew-file"; do
+  read -r cur_os cur_key <<< "$cur"
+  rm -f "$pv/copy"
+  cur_tool="$pk/sandbox-exec"; [ "$cur_os" = linux ] && cur_tool="$pk/bwrap"
+  cur_rc="$(
+    unset CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY ANTHROPIC_API_KEY CODEX_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
+    export FM_KEYCHAIN_TOOL="$pv/cursor-security"
+    FM_SANDBOX_OS="$cur_os" FM_SANDBOX_TOOL="$cur_tool" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:/usr/bin:/bin" \
+      "$ROOT/bin/adapters/cursor-agent.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"
+    echo $?
+  )"
+  cur_seen="$(cat "$pv/copy" 2>/dev/null)"
+  assert_eq "0" "$cur_rc" "cursor-agent's round starts on $cur_os with the crew's Cursor API key"
+  assert_contains "$cur_seen" "CURSOR_API_KEY=$cur_key" "handed in as CURSOR_API_KEY ($cur_os)"
+  assert_lacks "$cur_seen" "at-cursor" "never agent login's own token ($cur_os)"
+  assert_lacks "$cur_seen" "rt-cursor-secret" "nor its refresh token ($cur_os)"
 done
 # gemini is told its login is Google's, and runs with a HOME of the round's own
 cp "$pv/copyfake" "$pv/fakebin/gemini"; chmod +x "$pv/fakebin/gemini"
