@@ -16,7 +16,7 @@ for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
   unset "$_fm_k" || true
 done
 # a login already in this shell would be handed in instead of the stand-in's
-unset CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY CURSOR_API_KEY
+unset CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY CURSOR_API_KEY CODEX_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
@@ -61,8 +61,18 @@ assert_eq '[".claude",".mcp.json",".cursor","GEMINI.md"]' "$(jq -c .repo_config 
   "the repository's own agent configuration is not loaded"
 assert_eq "none" "$(jq -r .sockets "$w")" "no unix sockets"
 assert_eq "2048 14400" "$(jq -r '"\(.procs) \(.cpu)"' "$w")" "and a process and CPU ulimit"
-assert_eq "true" "$(jq --arg p "$home/.codex/auth.json" '.vendors.codex.auth | index($p) != null' "$w")" \
-  "a vendor's own auth file is named, for its own round to read"
+# Every vendor's login file holds a refresh token (T-117 round 2), so none
+# is read in place: fm reads it and hands in its access token, or a copy
+# with the refresh token emptied
+assert_eq "[]" "$(jq -c '[.vendors[].auth[]]' "$w")" "no vendor's round reads its login file in place"
+assert_eq "[]" "$(jq -c '[.vendors | to_entries[] | select((.value.login.file // []) | length > 0)
+    | select((.value.login.copy // "") == "" and ((.value.login.to // "") | startswith("env:") | not)) | .key]' "$w")" \
+  "every login read from a file goes in as a token or a copy, never as the file"
+assert_eq "[]" "$(jq -c '[.vendors | to_entries[] | select(.value.login.copy) | select((.value.login.drop // []) | length == 0) | .key]' "$w")" \
+  "and every copy names the refresh token it empties"
+assert_eq "codex-home/auth.json tokens.refresh_token|gemini-home/.gemini/oauth_creds.json refresh_token|cursor-config/cursor/auth.json refreshToken" \
+  "$(jq -r '[.vendors.codex, .vendors.gemini, .vendors."cursor-agent"] | map("\(.login.copy) \(.login.drop | join(","))") | join("|")' "$w")" \
+  "codex's, gemini's and cursor-agent's login files each go in as a copy, less the refresh token"
 # a vendor's session state is writable; its settings are not state
 for v in codex cursor-agent gemini; do
   assert_ne "0" "$(jq --arg v "$v" '.vendors[$v].state | length' "$w")" "$v names the session state its CLI writes"
@@ -273,9 +283,9 @@ nline="$(grep '^(deny file-read\* file-write\*' <<< "$prof" | head -1)"
 assert_contains "$nline" "(subpath \"$home/.ssh\")" "\$HOME/.ssh is never readable"
 assert_contains "$nline" "(subpath \"$home/.codex\")" "nor a vendor's home"
 assert_contains "$nline" "(subpath \"$home/.config/gh\")" "nor gh's"
-assert_contains "$prof" "(literal \"$home/.codex/auth.json\")" "but its own auth, for its own round"
-assert_lacks "$(mac profile --policy="$P" --root="$root" --vendor=gemini)" "auth.json" \
-  "and not for another vendor's"
+assert_lacks "$prof" "(literal \"$home/.codex/auth.json\")" "not even its own login file, which holds its refresh token"
+assert_lacks "$(mac profile --policy="$P" --root="$root" --vendor=gemini)" "oauth_creds.json" \
+  "nor gemini's"
 # its session state is writable, or a real round cannot start; the rule
 # comes after the vendor home's denial, which it would otherwise lose to
 hq="$(printf '%s' "$home" | sed 's/[.^$|?*+()]/\\&/g')"
@@ -368,8 +378,8 @@ assert_eq "1" "$([ -n "$n_tmpfs" ] && [ -n "$n_root" ] && [ "$n_tmpfs" -lt "$n_r
 assert_contains "$(lin profile --policy="$t/worker.json" --root="$root" --vendor=codex)" "--bind-try
 $home/.codex/sessions
 $home/.codex/sessions" "a vendor's session state is bound writable"
-assert_contains "$(lin profile --policy="$t/worker.json" --root="$root" --vendor=codex)" "--ro-bind-try
-$home/.codex/auth.json" "and its auth read-only"
+assert_lacks "$(lin profile --policy="$t/worker.json" --root="$root" --vendor=codex)" "$home/.codex/auth.json" \
+  "and its login file is not bound at all"
 assert_lacks "$(lin profile --policy="$t/worker.json" --root="$root" --vendor=claude)" "claude-$(id -u)" \
   "claude's directory under /tmp is made afresh in the round's own /tmp, not bound from the host's"
 assert_contains "$args" "--unshare-net" "the network is a namespace of the round's own: no host listener, the board's included"
@@ -565,6 +575,8 @@ cat > "$t/login.sh" <<'S'
 out="$1"
 { printf 'token=%s\n' "${CLAUDE_CODE_OAUTH_TOKEN:-}"
   printf 'path0=%s\n' "${PATH%%:*}"
+  # every login copy fm put in the round's own temp directory, and what it holds
+  find "${TMPDIR:-/nonexistent}" -type f -name '*.json' -print -exec cat {} \; 2>/dev/null; echo
   if [ "${2:-}" != kc ]; then env; exit 0; fi
   printf 'cursor=%s rc=%s\n' "$(security find-generic-password -s cursor-access-token -a cursor-user -w 2>/dev/null)" "$?"
   printf 'cursor-bare=%s\n' "$(security find-generic-password -s cursor-access-token -w 2>/dev/null)"
@@ -621,9 +633,6 @@ assert_contains "$(cat "$t/profile.sb" 2>/dev/null)" "(allow file-read* (subpath
 assert_contains "$(grep '^(deny mach-lookup' "$t/profile.sb" 2>/dev/null | grep SecurityServer)" \
   '(global-name "com.apple.SecurityServer")' "and still not the keychain"
 assert_eq "" "$(ls -A "$t/ctl" 2>/dev/null)" "and the served item is removed with the round"
-# codex and gemini keep their logins in files the policy names
-assert_eq "0" "$(kc run darwin codex)" "codex's round reads no keychain"
-assert_eq "" "$(cat "$t/kc/calls" 2>/dev/null)" "not one item of it"
 # a login already in the operator's environment is used as it is
 assert_eq "0" "$(kc run darwin claude CLAUDE_CODE_OAUTH_TOKEN=from-env)" "a CLAUDE_CODE_OAUTH_TOKEN already set is used"
 assert_contains "$(cat "$t/login.out" 2>/dev/null)" "token=from-env" "as it is"
@@ -644,14 +653,20 @@ mkdir -p "$t/nohome"
   pol worker 'vendor: mock
 '
   cp "$t/worker.json" "$t/nohome.json" )
-for v in claude cursor-agent; do
+for v in claude codex cursor-agent gemini; do
   assert_eq "77" "$(kc run darwin "$v" FM_KEYCHAIN_TOOL="$t/no-such-security")" "$v with no login anywhere refuses the round"
   assert_contains "$(cat "$t/login.err")" "$v is not logged in" "and says so"
   assert_fail "test -e '$t/login.out'" "and the command never starts ($v)"
 done
 # Linux: no keychain; claude's credentials file, read by fm, not the round
-mkdir -p "$t/lhome/.claude"
+mkdir -p "$t/lhome/.claude" "$t/lhome/.codex" "$t/lhome/.gemini" "$t/lhome/.config/cursor"
 cp "$t/kc/claude" "$t/lhome/.claude/.credentials.json"
+# codex's, gemini's and cursor-agent's login files, each with its refresh token
+printf '{"OPENAI_API_KEY":null,"tokens":{"id_token":"id-codex","access_token":"at-codex","refresh_token":"rt-codex-secret","account_id":"acct"},"last_refresh":"2026-09-26T00:00:00Z"}' \
+  > "$t/lhome/.codex/auth.json"
+printf '{"access_token":"at-gemini","refresh_token":"rt-gemini-secret","token_type":"Bearer","expiry_date":%s}' \
+  "$future" > "$t/lhome/.gemini/oauth_creds.json"
+printf '{"accessToken":"at-cursor-file","refreshToken":"rt-cursor-secret"}' > "$t/lhome/.config/cursor/auth.json"
 ( export HOME="$t/lhome"
   pol worker 'vendor: mock
 ' )
@@ -659,6 +674,46 @@ assert_eq "0" "$(kc run linux claude)" "on Linux claude's round starts with its 
 assert_contains "$(cat "$t/login.out" 2>/dev/null)" "token=at-claude" "its access token handed in the same way"
 assert_eq "" "$(cat "$t/kc/calls" 2>/dev/null)" "and no keychain asked"
 assert_lacks "$(cat "$t/bwrap.args" 2>/dev/null)" "$t/lhome/.claude" "and the file itself not mounted in the round"
+# codex, gemini, and cursor-agent off macOS (T-117 round 2): the login file
+# holds a refresh token, so the round never reads it. fm does, and writes a
+# copy with the refresh token emptied into the round's own temp directory,
+# where the adapter points the CLI. A round that could refresh the
+# operator's login, but not write the result back, would spend it.
+for lf in "codex linux at-codex rt-codex-secret codex-home/auth.json .codex/auth.json" \
+          "codex darwin at-codex rt-codex-secret codex-home/auth.json .codex/auth.json" \
+          "gemini linux at-gemini rt-gemini-secret gemini-home/.gemini/oauth_creds.json .gemini/oauth_creds.json" \
+          "gemini darwin at-gemini rt-gemini-secret gemini-home/.gemini/oauth_creds.json .gemini/oauth_creds.json" \
+          "cursor-agent linux at-cursor-file rt-cursor-secret cursor-config/cursor/auth.json .config/cursor/auth.json"; do
+  read -r lf_v lf_os lf_at lf_rt lf_copy lf_file <<< "$lf"
+  rm -f "$t/bwrap.args"
+  assert_eq "0" "$(kc run "$lf_os" "$lf_v")" "$lf_v's round starts on $lf_os with its login file's login"
+  lo="$(cat "$t/login.out" 2>/dev/null)"
+  assert_matches "$(grep -m1 "/$lf_copy\$" <<< "$lo")" "^$t/ctl/fm-sb\\.[A-Za-z0-9]+/tmp/$lf_copy\$" \
+    "a copy in the round's own temp directory ($lf_v, $lf_os)"
+  assert_contains "$lo" "$lf_at" "holding the access token ($lf_v, $lf_os)"
+  assert_lacks "$lo" "$lf_rt" "and never the refresh token ($lf_v, $lf_os)"
+  assert_eq "" "$(cat "$t/kc/calls" 2>/dev/null)" "no keychain item read for it ($lf_v, $lf_os)"
+  assert_lacks "$(grep -v '^(deny' "$t/profile.sb" "$t/bwrap.args" 2>/dev/null)" "$t/lhome/$lf_file" \
+    "and the operator's file is neither readable nor bound in the round ($lf_v, $lf_os)"
+done
+assert_contains "$(cat "$t/lhome/.codex/auth.json")" "rt-codex-secret" "the operator's own file is left as it was"
+# the copy is the round's, not a trace of the operator's: gone with the round
+assert_eq "" "$(ls -A "$t/ctl" 2>/dev/null)" "and the copy goes with the round"
+# a refresh token under a name the policy does not drop is refused, not handed in
+cp "$t/lhome/.gemini/oauth_creds.json" "$t/gemini.good"
+printf '{"access_token":"at-gemini","refresh_token":"","refreshToken":"rt-moved-secret","expiry_date":%s}' \
+  "$future" > "$t/lhome/.gemini/oauth_creds.json"
+assert_eq "65" "$(kc run linux gemini)" "a login file still holding a refresh token under another name refuses the round"
+assert_contains "$(cat "$t/login.err")" "refreshToken" "and names the field"
+assert_fail "test -e '$t/login.out'" "and the command never starts"
+# an expired gemini login is no login: it is refreshed outside a round or not at all
+printf '{"access_token":"at-gemini","refresh_token":"rt","expiry_date":%s}' "$past" > "$t/lhome/.gemini/oauth_creds.json"
+assert_eq "77" "$(kc run linux gemini)" "an expired gemini login refuses the round"
+assert_contains "$(cat "$t/login.err")" "has expired" "and says so"
+cp "$t/gemini.good" "$t/lhome/.gemini/oauth_creds.json"
+# an API key already in the operator's environment is used as it is, and no file read
+assert_eq "0" "$(kc run linux codex CODEX_API_KEY=from-env)" "a CODEX_API_KEY already set is used"
+assert_lacks "$(cat "$t/login.out" 2>/dev/null)" "at-codex" "and codex's login file is not copied in"
 # login-source: where a login would come from, never the login
 pol worker 'vendor: mock
 '

@@ -1976,23 +1976,43 @@ every write root; never a fixed `/tmp`, which a confined caller (a run-mode
 reviewer, a worker running the suites) cannot write.
 
 **Each vendor's start and login (T-117).** Each round reaches the login the
-operator already uses for that vendor, and nothing more. Where the login
-is a file the round may read, it reads it; where it is out of the round's
-reach - the keychain - `fm-sandbox.sh` reads exactly the vendor's own item,
-outside the sandbox, with `/usr/bin/security find-generic-password -s
-<service> -a <account> -w` (one item, never a search), and hands its access
-token in. The refresh token is never handed in: a round that refreshed a
-login would rotate the operator's out from under them. A login past its
-expiry, or none at all, refuses the round with 77 before the sandbox starts,
-which the adapter reads as the vendor unavailable. Per vendor, from
-`VENDORS` in `bin/fm-config.sh`:
+operator already uses for that vendor, and nothing more. No round reads a
+login where the operator keeps it. Where it is in the keychain,
+`fm-sandbox.sh` reads exactly the vendor's own item, outside the sandbox,
+with `/usr/bin/security find-generic-password -s <service> -a <account> -w`
+(one item, never a search), and hands its access token in. Where it is a
+file, fm reads the file and writes a copy with its refresh token emptied
+into the round's own temp directory, where the adapter points the CLI; the
+operator's file is neither readable in the round nor bound into it. The
+refresh token is never handed in: a round that refreshed a login would
+rotate the operator's out from under them, and one that refreshed it but
+could not write the result back (the file read-only, as T-117's first round
+had it for codex and gemini) would spend a single-use refresh token and
+log the operator out. A copy that still holds a field named like a refresh
+token (`refresh_token`, `refreshToken`, any case) that the policy does not
+empty refuses the round with 65, so a CLI that moves its refresh token is
+refused rather than handed it. A login past its expiry, or none at all,
+refuses the round with 77 before the sandbox starts, which the adapter reads
+as the vendor unavailable: an expired access token is refreshed by running
+the CLI once outside a round, never inside one. Per vendor, from `VENDORS`
+in `bin/fm-config.sh`:
 
 | vendor | its login, read by fm outside the round | handed in as | what of its own the round opens | temp | mach services |
 |---|---|---|---|---|---|
 | claude | macOS: keychain item `Claude Code-credentials`, account the operator's user; elsewhere `~/.claude/.credentials.json`. The field `claudeAiOauth.accessToken`, refused past `claudeAiOauth.expiresAt`. A `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` already in the operator's environment is used as is, and nothing is read | `CLAUDE_CODE_OAUTH_TOKEN`, exported, not on a command line | nothing of `~/.claude` or `~/.claude.json`: its config directory is one of the round's own (`CLAUDE_CONFIG_DIR`, in the round's temp directory), holding its sessions, todos, caches and `.claude.json` | the round's own (`CLAUDE_CODE_TMPDIR`); and `/tmp/claude-<uid>`, read and written, on macOS only, because claude opens it whatever `TMPDIR` says (T-105's EPERM). On Linux the round's `/tmp` is its own, so the directory is made afresh there | none |
-| cursor-agent | macOS: keychain item `cursor-access-token`, account `cursor-user` (what `agent login` stores); elsewhere `~/.config/cursor/auth.json`, field `accessToken`. A `CURSOR_API_KEY` already set is used as is | macOS: served under its own service and account by a stand-in for `security(1)` first on the round's `PATH`, which says every other item is not there (exit 44, as `security` does) and lets a write go without touching the keychain; elsewhere the file itself, read-only | `~/.config/cursor/auth.json` read-only; `~/.cursor/chats`, `~/.cursor/projects`, `~/.cursor/cli-config.json`, `~/.cursor/statsig-cache.json` read and written | the round's own | none |
-| codex | `~/.codex/auth.json`, read in place | a link in the round's own `CODEX_HOME`, so no `config.toml` or profile of the operator's is read | `~/.codex/auth.json` read-only; `~/.codex/sessions`, `log`, `history.jsonl`, `version.json`, `models_cache.json` read and written | the round's own | none |
-| gemini | `~/.gemini/oauth_creds.json`, read in place | - | `~/.gemini/oauth_creds.json` read-only; `~/.gemini/tmp`, `history`, `google_accounts.json`, `installation_id`, `user_id` read and written | the round's own | none |
+| cursor-agent | macOS: keychain item `cursor-access-token`, account `cursor-user` (what `agent login` stores); elsewhere `~/.config/cursor/auth.json`, field `accessToken`, which holds `refreshToken` too. A `CURSOR_API_KEY` already set is used as is | macOS: served under its own service and account by a stand-in for `security(1)` first on the round's `PATH`, which says every other item is not there (exit 44, as `security` does) and lets a write go without touching the keychain; elsewhere a copy of the file with `refreshToken` emptied, at `cursor/auth.json` under an `XDG_CONFIG_HOME` of the round's own | nothing of `~/.config/cursor`; `~/.cursor/chats`, `~/.cursor/projects`, `~/.cursor/cli-config.json`, `~/.cursor/statsig-cache.json` read and written | the round's own | none |
+| codex | `~/.codex/auth.json`, field `tokens.access_token` or `OPENAI_API_KEY`; the file holds `tokens.refresh_token` too. A `CODEX_API_KEY` already set is used as is | a copy of the file with `tokens.refresh_token` emptied, as `auth.json` in the round's own `CODEX_HOME`, so no `config.toml` or profile of the operator's is read either | nothing of `~/.codex/auth.json`; `~/.codex/sessions`, `log`, `history.jsonl`, `version.json`, `models_cache.json` read and written | the round's own | none |
+| gemini | `~/.gemini/oauth_creds.json`, field `access_token`, refused past `expiry_date`; the file holds `refresh_token` too. A `GEMINI_API_KEY` or `GOOGLE_API_KEY` already set is used as is | a copy of the file with `refresh_token` emptied, at `.gemini/oauth_creds.json` under a `HOME` (and `GEMINI_CLI_HOME`) of the round's own, with `GOOGLE_GENAI_USE_GCA=true` when no API key is set. The commands gemini runs inherit that `HOME` | nothing of `~/.gemini/oauth_creds.json`; `~/.gemini/tmp`, `history`, `google_accounts.json`, `installation_id`, `user_id` read and written | the round's own | none |
+
+A Google access token lasts an hour, so a gemini round started more than an
+hour after gemini last ran outside one is refused as not logged in until the
+operator runs gemini once; that is the price of never letting a round
+refresh the operator's login. What only the canary proves: that codex reads
+`auth.json` from `CODEX_HOME` and signs in with the access token alone, that
+gemini takes its home from `HOME` and its login type from
+`GOOGLE_GENAI_USE_GCA`, and that cursor-agent off macOS reads
+`$XDG_CONFIG_HOME/cursor/auth.json`. A wrong guess shows as
+`authenticated=no`, never as a refresh token handed in.
 
 Why the stand-in and not the keychain: once a round may look up
 `com.apple.SecurityServer`, any process in it can ask for any item whose
@@ -2016,7 +2036,11 @@ every other keychain item. `tests/sandbox.test.sh` runs a round with a
 keychain stand-in holding claude's, cursor-agent's and gh's items and checks
 that fm read the vendor's item only, that the round is given its access
 token and never the refresh token, and that the round's `security` answers
-44 for gh's item and git's.
+44 for gh's item and git's. It also runs codex's, gemini's and cursor-agent's
+rounds with login files holding refresh tokens and checks that the round
+finds a copy with the access token, never the refresh token, and that the
+operator's file is neither readable nor bound; `tests/adapter-contract.test.sh`
+checks the same through each adapter, where its CLI looks.
 
 **The escape hatch (T-117).** `FM_CREW_UNSANDBOXED=1`, set in the
 operator's own shell - never a `config.yaml` key, which a branch can change
@@ -2040,7 +2064,7 @@ The vendors' own flags, against the proposal's section 4
 | vendor | Linux | macOS | where it departs from section 4, and why |
 |---|---|---|---|
 | claude | `--restricted --strict-mcp-config --disable-slash-commands --permission-mode dontAsk --settings`: file rules on the worktree and the round's TMPDIR, deny rules, the shell allowed | the same | its own sandbox is off, so the settings carry no `allowedDomains`. On macOS it is a seatbelt, which cannot be applied inside another. On Linux its commands would reach the network through claude's own proxy, which has no way out of the round's namespace and names no host it refuses. The registries are enforced by the OS layer's proxy instead |
-| codex | `--sandbox workspace-write` with its network switch on, `approval_policy="never"`, the scrub list as `shell_environment_policy.exclude`, `mcp_servers={}`, a `CODEX_HOME` of the round's own holding a link to the login, so no user profile | `--sandbox danger-full-access` (a seatbelt cannot nest); the rest the same | the network switch is on because codex has only on and off, and off would keep its commands from the proxy |
+| codex | `--sandbox workspace-write` with its network switch on, `approval_policy="never"`, the scrub list as `shell_environment_policy.exclude`, `mcp_servers={}`, a `CODEX_HOME` of the round's own holding a copy of the login less its refresh token, so no user profile | `--sandbox danger-full-access` (a seatbelt cannot nest); the rest the same | the network switch is on because codex has only on and off, and off would keep its commands from the proxy |
 | cursor-agent | `--trust --sandbox enabled`, `-f` dropped, no `--approve-mcps` | `--sandbox disabled` (a seatbelt cannot nest) | on Linux, if cursor's own sandbox cuts the network off before the proxy sees a request, that refusal names no host; the canary shows it per version |
 | gemini | `--approval-mode yolo --extensions none --allowed-mcp-server-names fm-none` | the same | no `--sandbox`: it is a container or a seatbelt, neither of which starts inside the OS sandbox. `yolo`, not `auto_edit`: headless, `auto_edit` refuses every shell command, and the OS sandbox is what confines them. No `--policy` file: which gemini versions take one is unverified, and an unknown flag would fail every gemini round |
 

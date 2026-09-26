@@ -61,12 +61,13 @@ exec "\$@"
 S
 chmod +x "$pk/sandbox-exec" "$pk/bwrap"
 export FM_POLICY="$pk/none.json"
-# claude's and cursor-agent's rounds need a login fm can hand in (T-117),
-# and this runner has none: these two say one is already in the
-# environment, so nothing of the runner's keychain or home is read. What
-# fm reads when neither is set is tests/sandbox.test.sh's, and the case
-# with no login at all is below.
-export CLAUDE_CODE_OAUTH_TOKEN=fm-suite-token CURSOR_API_KEY=fm-suite-key
+# Every vendor's round needs a login fm can hand in (T-117), and this
+# runner has none: these say one is already in the environment, so nothing
+# of the runner's keychain or home is read. What fm reads when none is set
+# is tests/sandbox.test.sh's and the login-file cases below, and the case
+# with no login at all is below too.
+export CLAUDE_CODE_OAUTH_TOKEN=fm-suite-token CURSOR_API_KEY=fm-suite-key \
+  CODEX_API_KEY=fm-suite-key GEMINI_API_KEY=fm-suite-key
 
 for adapter in "$ROOT"/bin/adapters/*.sh; do
   name="$(basename "$adapter" .sh)"
@@ -560,27 +561,108 @@ for pair in "claude --dangerously-skip-permissions" "claude --permission-mode by
 done
 
 # --- a vendor with no login (T-117) -------------------------------------------
-# claude's and cursor-agent's logins are read outside the round and handed
-# in. A round with none to hand is refused before the sandbox starts, and
-# reads as the vendor unavailable, so the chain moves on - never as a CLI
-# that started and failed.
+# Every vendor's login is read outside the round and handed in. A round
+# with none to hand is refused before the sandbox starts, and reads as the
+# vendor unavailable, so the chain moves on - never as a CLI that started
+# and failed.
 # The home is an empty one and the keychain's reader is not there, so
-# whatever this runner is logged in to stays out of it.
+# whatever this runner is logged in to stays out of it. The policy is
+# resolved once, before the loop: fm-config.sh's own loops use `v` too.
 mkdir -p "$pv/nohome"
-for v in claude cursor-agent; do
+(
+  export HOME="$pv/nohome"
+  # shellcheck source=bin/fm-config.sh
+  . "$ROOT/bin/fm-config.sh"
+  printf 'vendor: mock\n' > "$pv/nl.yaml"; fm_policy worker "" "$pv/nl.yaml" > "$pv/nl.json"
+)
+for nl_v in claude codex cursor-agent gemini; do
   rm -f "$pv/log"
   rc_nl="$(
-    unset CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY ANTHROPIC_API_KEY
+    unset CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY ANTHROPIC_API_KEY CODEX_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
     export HOME="$pv/nohome" FM_KEYCHAIN_TOOL="$pv/no-such-security"
-    ( # shellcheck source=bin/fm-config.sh
-      . "$ROOT/bin/fm-config.sh"
-      printf 'vendor: mock\n' > "$pv/nl.yaml"; fm_policy worker "" "$pv/nl.yaml" > "$pv/nl.json" )
-    confined darwin "$pk/sandbox-exec" "$pv/nl.json" "$v"
+    confined darwin "$pk/sandbox-exec" "$pv/nl.json" "$nl_v"
   )"
-  assert_eq "2" "$rc_nl" "$v with no login to hand in is unavailable"
-  assert_fail "test -e '$pv/argv'" "and $v's CLI never starts"
-  assert_contains "$(cat "$pv/log" "$pv/err" 2>/dev/null)" "$v is not logged in" "and it says so"
+  assert_eq "2" "$rc_nl" "$nl_v with no login to hand in is unavailable"
+  assert_fail "test -e '$pv/argv'" "and $nl_v's CLI never starts"
+  assert_contains "$(cat "$pv/log" "$pv/err" 2>/dev/null)" "$nl_v is not logged in" "and it says so"
 done
+
+# --- a login kept in a file (T-117 round 2) ----------------------------------
+# codex's auth.json, gemini's oauth_creds.json and, off macOS,
+# cursor-agent's auth.json each hold a refresh token beside the access
+# token. No round reads them in place: fm hands in a copy with the refresh
+# token emptied, where the adapter points its CLI, so a round can neither
+# refresh the operator's login nor spend a single-use refresh token. The
+# fake CLI reports the login it finds where its vendor looks.
+lh="$pv/loginhome"
+mkdir -p "$lh/.codex" "$lh/.gemini" "$lh/.config/cursor"
+future_ms=$(( ($(date +%s) + 3600) * 1000 ))
+printf '{"OPENAI_API_KEY":null,"tokens":{"id_token":"id-codex","access_token":"at-codex","refresh_token":"rt-codex-secret","account_id":"acct"},"last_refresh":"2026-09-26T00:00:00Z"}' \
+  > "$lh/.codex/auth.json"
+printf '{"access_token":"at-gemini","refresh_token":"rt-gemini-secret","scope":"s","token_type":"Bearer","expiry_date":%s}' \
+  "$future_ms" > "$lh/.gemini/oauth_creds.json"
+printf '{"accessToken":"at-cursor","refreshToken":"rt-cursor-secret"}' > "$lh/.config/cursor/auth.json"
+(
+  export HOME="$lh"
+  # shellcheck source=bin/fm-config.sh
+  . "$ROOT/bin/fm-config.sh"
+  printf 'vendor: mock\n' > "$pv/lh.yaml"; fm_policy worker "" "$pv/lh.yaml" > "$pv/lh.json"
+)
+assert_eq "[]" "$(jq -c '[.vendors[].auth[]]' "$pv/lh.json")" "no vendor's round reads a login file in place"
+# where each vendor's CLI looks for its login, from the environment it is started with
+cat > "$pv/copyfake" <<S
+#!/usr/bin/env bash
+cat > /dev/null
+case "\$(basename "\$0")" in
+  codex) f="\$CODEX_HOME/auth.json" ;;
+  gemini) f="\$HOME/.gemini/oauth_creds.json" ;;
+  cursor-agent) f="\$XDG_CONFIG_HOME/cursor/auth.json" ;;
+esac
+{ printf 'file=%s\n' "\$f"; cat "\$f" 2>&1; echo; env; } > "$pv/copy"
+printf 'ran\n'
+S
+for lf in "codex darwin at-codex rt-codex-secret .codex/auth.json" \
+          "codex linux at-codex rt-codex-secret .codex/auth.json" \
+          "gemini darwin at-gemini rt-gemini-secret .gemini/oauth_creds.json" \
+          "gemini linux at-gemini rt-gemini-secret .gemini/oauth_creds.json" \
+          "cursor-agent linux at-cursor rt-cursor-secret .config/cursor/auth.json"; do
+  read -r lf_v lf_os lf_at lf_rt lf_file <<< "$lf"
+  cp "$pv/copyfake" "$pv/fakebin/$lf_v"; chmod +x "$pv/fakebin/$lf_v"
+  rm -f "$pv/copy" "$pk/profile.sb" "$pk/bwrap.args"
+  lf_tool="$pk/sandbox-exec"; [ "$lf_os" = linux ] && lf_tool="$pk/bwrap"
+  lf_rc="$(
+    unset CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY ANTHROPIC_API_KEY CODEX_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
+    export FM_KEYCHAIN_TOOL="$pv/no-such-security"
+    FM_SANDBOX_OS="$lf_os" FM_SANDBOX_TOOL="$lf_tool" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:/usr/bin:/bin" \
+      "$ROOT/bin/adapters/$lf_v.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"
+    echo $?
+  )"
+  lf_seen="$(cat "$pv/copy" 2>/dev/null)"
+  assert_eq "0" "$lf_rc" "$lf_v's round starts on $lf_os with the login kept in its file"
+  assert_contains "$lf_seen" "$lf_at" "$lf_v finds its access token where it looks ($lf_os)"
+  assert_lacks "$lf_seen" "$lf_rt" "and never the refresh token ($lf_v, $lf_os)"
+  assert_lacks "$(sed -n 's/^file=//p' <<< "$lf_seen")" "$lh" "the file it reads is a copy, not the operator's ($lf_v, $lf_os)"
+  assert_lacks "$(grep -v '^(deny' "$pk/profile.sb" "$pk/bwrap.args" 2>/dev/null)" "$lh/$lf_file" \
+    "and the round is given no way to the operator's login file ($lf_v, $lf_os)"
+done
+# gemini is told its login is Google's, and runs with a HOME of the round's own
+cp "$pv/copyfake" "$pv/fakebin/gemini"; chmod +x "$pv/fakebin/gemini"
+( unset GEMINI_API_KEY GOOGLE_API_KEY CODEX_API_KEY
+  FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:/usr/bin:/bin" \
+    "$ROOT/bin/adapters/gemini.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>&1 )
+assert_contains "$(cat "$pv/copy" 2>/dev/null)" "GOOGLE_GENAI_USE_GCA=true" "gemini with no API key signs in with the copy"
+assert_matches "$(sed -n 's/^HOME=//p' "$pv/copy" 2>/dev/null)" '/fm-round\.[A-Za-z0-9]+/gemini-home$' \
+  "from a HOME of the round's own"
+# a login file whose refresh token the policy does not name is refused, not handed in
+printf '{"access_token":"at-gemini","refresh_token":"","refreshToken":"rt-moved-secret","expiry_date":%s}' \
+  "$future_ms" > "$lh/.gemini/oauth_creds.json"
+rm -f "$pv/copy"
+lf_rc="$(unset GEMINI_API_KEY GOOGLE_API_KEY
+  FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:/usr/bin:/bin" \
+    "$ROOT/bin/adapters/gemini.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"; echo $?)"
+assert_eq "2" "$lf_rc" "a login file still holding a refresh token under another name refuses the round"
+assert_fail "test -e '$pv/copy'" "and the CLI never starts"
+assert_contains "$(cat "$pv/err")" "refresh token" "and says why"
 
 # --- the operator's escape hatch (T-117) --------------------------------------
 # FM_ROUND_UNSANDBOXED is set by fm-worker.sh and fm-review.sh only from the
@@ -629,7 +711,7 @@ FM_POLICY="$pv/no-such-policy.json" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sa
 assert_eq "65" "$?" "a named policy that is not there refuses the round"
 assert_contains "$(cat "$pv/err")" "no policy at" "and says so"
 rm -rf "$pv" "$pk"
-unset FM_POLICY FM_SANDBOX_OS FM_SANDBOX_TOOL CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY
+unset FM_POLICY FM_SANDBOX_OS FM_SANDBOX_TOOL CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY CODEX_API_KEY GEMINI_API_KEY
 
 # --- the verdict itself, on the transcripts that actually caused trouble ---
 # shellcheck source=bin/adapters/_lib.sh

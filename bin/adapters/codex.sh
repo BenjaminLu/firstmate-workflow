@@ -26,8 +26,8 @@ _fm_alib="$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 # confines the commands instead. Everywhere: approval never, since nobody
 # is there to approve; the commands' environment drops the policy's scrub
 # list; MCP servers are emptied; and CODEX_HOME is a directory of the
-# round's own holding only a link to the login, so the operator's
-# config.toml and profiles are not read. None of the repository files the
+# round's own holding only a copy of the login less its refresh token, so
+# the operator's config.toml and profiles are not read. None of the repository files the
 # policy keeps unloaded is one codex reads. Reading is not among them.
 codex_native() {
   if [ "${FM_OUTER_OS:-}" = darwin ]; then
@@ -75,12 +75,11 @@ print(json.dumps(s["names"] + [p + "*" for p in s["prefixes"]], separators=(",",
   echo "codex: the policy at $FM_POLICY does not read" >&2; exit 65; }
 policy_args+=(-c 'approval_policy="never"' -c 'mcp_servers={}'
               -c "shell_environment_policy.exclude=$excl")
-# no user profile: a CODEX_HOME of the round's own, in its temp directory,
-# holding only a link to the login the policy lets codex read
+# no user profile: a CODEX_HOME of the round's own, in its temp directory.
+# fm-sandbox.sh writes the login into it as it starts the round: a copy of
+# the operator's auth.json with the refresh token emptied (T-117), never
+# the file itself, which the round cannot read
 codex_home="$FM_ROUND_TMP/codex-home"; mkdir -p "$codex_home" || exit 70
-auth="$(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["vendors"]["codex"]["auth"]))' \
-  "$FM_POLICY" 2>/dev/null | head -1)"
-[ -z "$auth" ] || ln -sf "$auth" "$codex_home/auth.json"
 export CODEX_HOME="$codex_home"
 # the trailing "-" is codex's read-the-prompt-from-stdin marker and has to
 # be the last argument, so FM_ADAPTER_ARGS goes before it

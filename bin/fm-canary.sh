@@ -188,9 +188,12 @@ if python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys
 if cat "$other/secret" >/dev/null 2>&1; then say other-round-tmp reached; else say other-round-tmp blocked; fi
 if command -v gh >/dev/null 2>&1 && [ -n "\$(gh auth token 2>/dev/null)" ]; then
   say gh-token reached; else say gh-token blocked; fi
-if printf 'protocol=https\nhost=github.com\n\n' | GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= SSH_ASKPASS= \
-     git credential fill 2>/dev/null | grep -q '^password='; then
-  say git-credential reached; else say git-credential blocked; fi
+cred="\$(printf 'protocol=https\nhost=github.com\n\n' | GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= SSH_ASKPASS= \
+  git credential fill 2>/dev/null)"
+case "\$cred" in
+  *password=?*) say git-credential reached ;;
+  *) say git-credential blocked ;;
+esac
 if [ -n "${kc_nonce:+1}" ]; then
   if security find-generic-password -a fm-canary -s "$kc_service" -w > keychain.out 2>/dev/null; then
     say keychain reached; else say keychain blocked; fi

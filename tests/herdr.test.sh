@@ -609,10 +609,11 @@ class Entrypoints(unittest.TestCase):
                                   'shift\nexec "$@"\n')
         (tool/'bwrap').chmod(0o755)
         self.env.update(FM_SANDBOX_OS='linux', FM_SANDBOX_TOOL=str(tool/'bwrap'))
-        # claude's and cursor-agent's rounds are handed the operator's login
-        # (T-117) and refused without one. These say one is already in the
-        # environment, so the runner's own keychain and home are never read.
-        self.env.update(CLAUDE_CODE_OAUTH_TOKEN='fm-suite-token', CURSOR_API_KEY='fm-suite-key')
+        # Every vendor's round is handed the operator's login (T-117) and
+        # refused without one. These say one is already in the environment,
+        # so the runner's own keychain and home are never read.
+        self.env.update(CLAUDE_CODE_OAUTH_TOKEN='fm-suite-token', CURSOR_API_KEY='fm-suite-key',
+                        CODEX_API_KEY='fm-suite-key', GEMINI_API_KEY='fm-suite-key')
         self.executable('herdr', r'''
 import json, os, pathlib, subprocess, sys, uuid
 r=pathlib.Path(os.environ['FM_TEST_ROOT']); a=sys.argv[1:]

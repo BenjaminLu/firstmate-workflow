@@ -72,7 +72,10 @@
 # (vendors.<name>.login), and handed in: as a variable (claude's
 # CLAUDE_CODE_OAUTH_TOKEN), or served by a stand-in for security(1) first
 # on the round's PATH that knows that one item and says every other is not
-# there (cursor-agent). Only an access token is handed in, never a refresh
+# there (cursor-agent). Where the login is a file (codex, gemini, and
+# cursor-agent off macOS), no round reads it in place: fm writes a copy with
+# its refresh token emptied into the round's own temp directory, where the
+# adapter points the CLI. Only an access token is handed in, never a refresh
 # token. A vendor whose login is not there refuses the round with 77 before
 # the sandbox starts, which the adapter counts as unavailable.
 #
@@ -400,15 +403,63 @@ def login_of(p, vendor, os_):
     if not found:
         return None, 'no %s' % ' and no '.join(tried or ['login named']), None
     source, value, item = found[0]
-    token, doc = dig(value, spec.get('field'))
+    # `field` may name alternatives: codex's file holds an access token or
+    # an API key
+    fields = spec.get('field') or ''
+    fields = fields if isinstance(fields, list) else [fields]
+    token = doc = None
+    for field in fields:
+        token, doc = dig(value, field)
+        if isinstance(token, str) and token:
+            break
     if not isinstance(token, str) or not token:
-        return None, '%s holds no %s' % (source, spec.get('field') or 'token'), None
+        return None, '%s holds no %s' % (source, ' or '.join(f for f in fields if f) or 'token'), None
     ends = expiry(doc, spec.get('expires'))
     if ends is not None and ends < (time.time() + 60) * 1000:
         return None, '%s has expired; start %s once outside a round to refresh it' % (source, vendor), None
     if '\n' in token:
         return None, '%s is not one line' % source, None
+    if source.startswith('file:') and spec.get('copy'):
+        # the whole login file goes in, as a copy, less its refresh token
+        return source, doc if doc is not None else value, item
     return source, token, item
+
+
+REFRESH = re.compile(r'refresh_?token', re.I)
+
+
+def without_refresh(doc, drop):
+    """<doc> with every `drop` field emptied, or exit 65 if any field named
+    like a refresh token still holds one: a vendor that moved its refresh
+    token to a field the policy does not name is refused, not handed it."""
+    for field in drop:
+        parts = field.split('.')
+        at = doc
+        for part in parts[:-1]:
+            at = at.get(part) if isinstance(at, dict) else None
+        if isinstance(at, dict) and parts[-1] in at:
+            at[parts[-1]] = ''
+
+    def left(node, path):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if REFRESH.search(k) and v:
+                    return path + k
+                found = left(v, path + k + '.')
+                if found:
+                    return found
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                found = left(v, '%s%d.' % (path, i))
+                if found:
+                    return found
+        return None
+    still = left(doc, '')
+    if still:
+        print('fm-sandbox: the login file still holds a refresh token (%s) the policy does not drop; '
+              'refusing to hand it to the round' % still, file=sys.stderr)
+        sys.exit(65)
+    return doc
 
 
 SHIM = r'''#!/bin/sh
@@ -449,10 +500,12 @@ def sh_quote(text):
     return "'%s'" % text
 
 
-def login(p, vendor, os_, where, sandboxed):
+def login(p, vendor, os_, where, sandboxed, home):
     """Hand the vendor's login in: <where>/env holds NAME=VALUE for the
-    launcher to export; <where>/bin/security serves a keychain item. Exit
-    77 when the operator is not logged in to <vendor>."""
+    launcher to export; <where>/bin/security serves a keychain item; a
+    login file's copy, less its refresh token, goes to <home>/<copy>, in
+    the round's own temp directory. Exit 77 when the operator is not
+    logged in to <vendor>."""
     spec = p['vendors'].get(vendor, {}).get('login') or {}
     if not spec:
         return
@@ -464,7 +517,19 @@ def login(p, vendor, os_, where, sandboxed):
         return
     to = spec.get('to', '')
     os.makedirs(where, mode=0o700, exist_ok=True)
-    if to.startswith('env:'):
+    if source.startswith('file:') and spec.get('copy'):
+        rel = spec['copy']
+        if not home or rel.startswith('/') or '..' in rel.split('/'):
+            print("fm-sandbox: %s's login copy '%s' has no place in the round's temp directory"
+                  % (vendor, rel), file=sys.stderr)
+            sys.exit(65)
+        doc = without_refresh(token, spec.get('drop', [])) if isinstance(token, dict) else token
+        path = os.path.join(home, rel)
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w') as f:
+            f.write(json.dumps(doc) if isinstance(doc, dict) else doc)
+    elif to.startswith('env:'):
         fd = os.open(os.path.join(where, 'env'), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, 'w') as f:
             f.write('%s=%s\n' % (to[len('env:'):], token))
@@ -596,8 +661,8 @@ def main():
         print(source)
         return
     if mode == 'login':
-        # login <vendor> <os> <dir> <sandboxed: 1|0>
-        login(p, sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6] == '1')
+        # login <vendor> <os> <dir> <sandboxed: 1|0> <round tmp>
+        login(p, sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6] == '1', sys.argv[7])
         return
     # profile <os> <root> <tmp> <vendor> <port> <listening> <socket> <login> [write...]
     os_, root, tmp, vendor, port, listening, sock, login_dir = sys.argv[3:11]
@@ -802,7 +867,10 @@ if [ "$cmd" = run ] || [ -n "$vendor" ]; then make_work; fi
 # sandbox starts, so the adapter counts the vendor unavailable.
 if [ -n "$vendor" ]; then
   sandboxed=0; [ "$cmd" = run ] && sandboxed=1
-  python3 -c "$SB_PY" login "$policy" "$vendor" "${os:-none}" "$work/login" "$sandboxed" || exit $?
+  # a login file's copy goes in the round's own temp directory, so the
+  # round has one before the login is read
+  if [ -z "$tmp" ]; then tmp="$work/tmp"; mkdir -p "$tmp" || exit 70; fi
+  python3 -c "$SB_PY" login "$policy" "$vendor" "${os:-none}" "$work/login" "$sandboxed" "$tmp" || exit $?
   if [ -s "$work/login/env" ]; then
     # exported, not put on a command line, where ps would show it
     while IFS='=' read -r n v; do

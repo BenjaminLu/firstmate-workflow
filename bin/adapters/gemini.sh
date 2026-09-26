@@ -55,14 +55,24 @@ fm_adapter_policy
 read -r -a native <<<"$(gemini_native)"
 fm_adapter_confine gemini "$tree" "${native[@]}"
 policy_args=(--approval-mode yolo --extensions none --allowed-mcp-server-names fm-none)
+# Its login (T-117): gemini keeps it in ~/.gemini/oauth_creds.json with the
+# refresh token beside the access token, and the round reads neither. gemini
+# runs with a HOME of its own, in the round's temp directory, whose .gemini
+# holds the copy fm-sandbox.sh writes as it starts the round: the access
+# token, the refresh token emptied. The commands gemini runs inherit that
+# HOME, so none of the operator's dotfiles is read through it. With no API
+# key the copy is the login, so say which.
+gemini_home="$FM_ROUND_TMP/gemini-home"; mkdir -p "$gemini_home/.gemini" || exit 70
+gemini_env=(HOME="$gemini_home" GEMINI_CLI_HOME="$gemini_home")
+[ -n "${GEMINI_API_KEY:-}${GOOGLE_API_KEY:-}" ] || gemini_env+=(GOOGLE_GENAI_USE_GCA=true)
 # no -p here: gemini's -p takes the prompt as its value, so an empty
 # FM_ADAPTER_ARGS left the flag dangling and the prompt was never delivered.
 # A piped stdin is what puts it in headless mode.
 if [ -n "${FM_ATTEMPT_DIR:-}" ]; then
-  ( cd "$tree" && "${FM_LAUNCH[@]}" gemini "${policy_args[@]}" --output-format json ${FM_ADAPTER_ARGS:-} < "$prompt" ) 2>&1 | tee -a "$log"
+  ( cd "$tree" && "${FM_LAUNCH[@]}" env "${gemini_env[@]}" gemini "${policy_args[@]}" --output-format json ${FM_ADAPTER_ARGS:-} < "$prompt" ) 2>&1 | tee -a "$log"
   fm_adapter_pipeline_status "${PIPESTATUS[@]}"
 else
-  ( cd "$tree" && "${FM_LAUNCH[@]}" gemini "${policy_args[@]}" ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
+  ( cd "$tree" && "${FM_LAUNCH[@]}" env "${gemini_env[@]}" gemini "${policy_args[@]}" ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
 fi
 rc=$?
 fm_adapter_verdict "$rc" "$log" "$off"

@@ -35,8 +35,9 @@ _fm_alib="$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 # keychain, which no round reaches. fm-sandbox.sh reads that one item
 # (cursor-access-token) outside the round and serves it, and no other, to
 # the round through a stand-in for security(1) first on its PATH.
-# Elsewhere the login is ~/.config/cursor/auth.json, readable to cursor's
-# own round only.
+# Elsewhere the login is ~/.config/cursor/auth.json, which holds the
+# refresh token too, and no round reads it: fm-sandbox.sh writes a copy with
+# the refresh token emptied under the round's own XDG_CONFIG_HOME.
 #
 # No `fm:review-run` line: a run-mode review needs the reviewer's writes
 # confined to a checkout by the CLI itself, which T-066 asked of claude
@@ -78,6 +79,9 @@ fm_adapter_policy
 sandbox=enabled; [ "${FM_OUTER_OS:-}" != darwin ] || sandbox=disabled
 read -r -a native <<<"$(cursor_native)"
 fm_adapter_confine cursor-agent "$tree" "${native[@]}"
+# where fm-sandbox.sh puts the login file's copy, when the login is a file
+mkdir -p "$FM_ROUND_TMP/cursor-config" || exit 70
+export XDG_CONFIG_HOME="$FM_ROUND_TMP/cursor-config"
 if [ -n "${FM_ATTEMPT_DIR:-}" ]; then
   ( cd "$tree" && "${FM_LAUNCH[@]}" cursor-agent -p --trust --sandbox "$sandbox" --output-format json ${FM_ADAPTER_ARGS:-} < "$prompt" ) 2>&1 | tee -a "$log"
   fm_adapter_pipeline_status "${PIPESTATUS[@]}"

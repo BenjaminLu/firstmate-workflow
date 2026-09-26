@@ -355,7 +355,9 @@ NEVER_READ = ['~/.ssh', '~/.gnupg', '~/.netrc', '~/.git-credentials', '~/.config
 # gets back only what it needs to start and sign in (design 13.1 names each
 # one and why):
 #
-#   auth   files readable only: the login, where the CLI keeps it in a file
+#   auth   files readable only, in place. No vendor has one: every login
+#          file holds a refresh token, so fm reads it and hands in a copy
+#          without one (login.copy below)
 #   state  what the CLI writes as it runs - session files, logs, caches and
 #          the one config file it rewrites - readable and writable, each
 #          entry a prefix, so a file rewritten through x.tmp.123 or x.lock
@@ -377,9 +379,17 @@ NEVER_READ = ['~/.ssh', '~/.gnupg', '~/.netrc', '~/.git-credentials', '~/.config
 #            to        env:<NAME>, the token handed in as that variable;
 #                      or keychain, the item served under its own service
 #                      and account by the round's stand-in for security(1)
+#            copy      for a login read from a file: the path, under the
+#                      round's own temp directory, where fm writes that
+#                      file with `drop` emptied, for the adapter to point
+#                      the CLI at (T-117 round 2)
+#            drop      the JSON fields of that file that are its refresh
+#                      token, emptied in the copy
 #          Only an access token is handed in, never a refresh token: a
 #          round that refreshed a login would rotate the operator's out
-#          from under them.
+#          from under them, and one that could not write the refreshed
+#          login back would leave the operator's spent. fm-sandbox.sh
+#          refuses a copy that still holds any refresh_token field.
 #   hosts  the vendor's own service: the whole CLI runs inside the OS
 #          sandbox, so its API has to be reachable through the round's proxy
 #
@@ -397,24 +407,39 @@ VENDORS = {
                               given=['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'],
                               to='env:CLAUDE_CODE_OAUTH_TOKEN'),
                    hosts=['anthropic.com', 'claude.ai']),
-    'codex': dict(auth=['~/.codex/auth.json'],
+    # codex's login file holds its refresh token beside the access token.
+    # The round's CODEX_HOME is its own, and holds a copy without it.
+    'codex': dict(auth=[],
                   state=['~/.codex/sessions', '~/.codex/log', '~/.codex/history.jsonl',
                          '~/.codex/version.json', '~/.codex/models_cache.json'],
-                  tmp=[], login={}, hosts=['openai.com', 'chatgpt.com']),
+                  tmp=[],
+                  login=dict(file=['~/.codex/auth.json'], field=['tokens.access_token', 'OPENAI_API_KEY'],
+                             drop=['tokens.refresh_token'], given=['CODEX_API_KEY'],
+                             copy='codex-home/auth.json'),
+                  hosts=['openai.com', 'chatgpt.com']),
     # `agent login` keeps the access token in the macOS keychain; the round
-    # is served that one item and no other. Elsewhere it is a file.
-    'cursor-agent': dict(auth=['~/.config/cursor/auth.json'],
+    # is served that one item and no other. Elsewhere it is a file holding
+    # the refresh token too, and the round's XDG_CONFIG_HOME holds a copy
+    # without it.
+    'cursor-agent': dict(auth=[],
                          state=['~/.cursor/chats', '~/.cursor/projects', '~/.cursor/cli-config.json',
                                 '~/.cursor/statsig-cache.json'],
                          tmp=[],
                          login=dict(keychain=[dict(service='cursor-access-token', account='cursor-user')],
                                     file=['~/.config/cursor/auth.json'], field='accessToken',
-                                    given=['CURSOR_API_KEY'], to='keychain'),
+                                    drop=['refreshToken'], given=['CURSOR_API_KEY'], to='keychain',
+                                    copy='cursor-config/cursor/auth.json'),
                          hosts=['cursor.sh', 'cursor.com']),
-    'gemini': dict(auth=['~/.gemini/oauth_creds.json'],
+    # gemini's login file holds its refresh token too. The round's gemini
+    # runs with a HOME of its own, whose .gemini holds a copy without it.
+    'gemini': dict(auth=[],
                    state=['~/.gemini/tmp', '~/.gemini/history', '~/.gemini/google_accounts.json',
                           '~/.gemini/installation_id', '~/.gemini/user_id'],
-                   tmp=[], login={}, hosts=['googleapis.com']),
+                   tmp=[],
+                   login=dict(file=['~/.gemini/oauth_creds.json'], field='access_token', expires='expiry_date',
+                              drop=['refresh_token'], given=['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
+                              copy='gemini-home/.gemini/oauth_creds.json'),
+                   hosts=['googleapis.com']),
 }
 REFUSE = ['git push', 'gh', 'herdr', 'browser', 'mcp']
 # FM_CREW_UNSANDBOXED and FM_ROUND_UNSANDBOXED are the operator's escape
