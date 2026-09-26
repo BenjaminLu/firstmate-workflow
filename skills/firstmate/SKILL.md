@@ -187,18 +187,19 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
 
 ## Process rules (2026-09-25)
 
-These were learned the hard way; each has cost at least one round.
+Learned on 2026-09-25, from a round or a hidden bug each one cost, or
+set by the captain.
 
-1. Raise one merge card at a time: merging one pull request makes every other
-   open one BEHIND and voids the head its card verified. Raise the next card
-   only after the previous merge has settled and its head is verified again.
+1. Within one project, raise one merge card at a time: merging one pull
+   request makes every other open one in that project BEHIND and voids the
+   head its card verified. Raise that project's next card only after the
+   previous merge has settled and its head is verified again. Cards of other
+   projects are not held by it (design §3).
 2. Run `gh pr update-branch` before a review round, never after an `APPROVE`:
-   a moved head restarts both checks, and T-104 lost two rounds that way. The
-   captain allows it only for a pull request that is BEHIND and MERGEABLE.
+   a moved head restarts both checks, and T-104 lost two rounds that way.
 3. A test stub answers exactly as the vendor does, in output shape, exit code
    and a literal `null`, never as our own code expects. A stub written from
-   our code has twice hidden the very bug it was written to catch; build it
-   from the vendor's real output.
+   our code has twice hidden the very bug it was written to catch.
 4. Before dispatching, sweep the spec for paths that no longer exist, such as
    `design/tasks.json` after T-090. That one cost T-066 a round and would have
    cost T-094 one; fix the spec through a scoped task before the worker starts.
