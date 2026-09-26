@@ -93,7 +93,7 @@ so in the round's log and on the board. `fm-sandbox.sh` marks every round
 |---|---|---|
 | claude | T-066's settings for every round: `--restricted --strict-mcp-config --disable-slash-commands`, dontAsk, file rules on the worktree and the round's own TMPDIR, deny rules; its own sandbox off, the shell allowed under the OS one; a config and temp directory of the round's own | the same |
 | codex | `--sandbox workspace-write` with its network switch on (the OS sandbox limits it), approval never, the scrub list as `shell_environment_policy.exclude`, no MCP servers, a `CODEX_HOME` of the round's own | `--sandbox danger-full-access` inside the outer one; the rest the same |
-| cursor-agent | `--trust --sandbox enabled` instead of `-f`, no `--approve-mcps` | `--trust --sandbox disabled` inside the outer one |
+| cursor-agent | `--trust --sandbox enabled` instead of `-f`, no `--approve-mcps` | `--trust --sandbox disabled -f` inside the outer one: with its own sandbox off, print mode approves no shell command, so the OS sandbox confines what `-f` lets through; never under the hatch |
 | gemini | `--approval-mode yolo --extensions none`, no MCP server | the same |
 
 claude's, codex's and cursor-agent's own sandboxes are seatbelts on macOS,

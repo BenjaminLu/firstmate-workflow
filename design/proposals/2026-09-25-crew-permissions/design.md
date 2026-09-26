@@ -187,4 +187,8 @@ it. The captain reverted it (PR 96) and asked for it again with:
 - every location a round is handed - its temp directory, the toolchain's
   caches, the vendors' config homes - inside a write root, so a round's
   `setup` can install; and saving the branch left to `fm-worker.sh`, since a
-  round can neither write the git directory nor reach GitHub (design 13.1).
+  round can neither write the git directory nor reach GitHub (design 13.1);
+- on macOS, cursor-agent's `-f` back inside the OS sandbox: with its own
+  sandbox off, print mode approves no shell command, and the canary saw it
+  sign in and exit 0 without running its probe. Section 4's "drop `-f`"
+  still holds on Linux and under the hatch, where cursor's own sandbox runs.

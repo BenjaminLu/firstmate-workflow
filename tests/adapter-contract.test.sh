@@ -461,7 +461,11 @@ assert_lacks "$(cat "$pk/profile.sb" 2>/dev/null)" "claude-$(id -u)" "and anothe
 confined darwin "$pk/sandbox-exec" "$pk/none.json" cursor-agent >/dev/null
 assert_eq "disabled" "$(awk 'on{print;exit} $0=="--sandbox"{on=1}' "$pv/argv")" "and cursor-agent's"
 assert_ne "" "$(grep -x -- --trust "$pv/argv")" "cursor-agent still trusts only the worktree it is handed"
-assert_eq "" "$(grep -x -- -f "$pv/argv")" "and never forces every command"
+# with its own sandbox off, a print-mode round approves no shell command
+# unless forced (the canary, 2026-09-26: signed in, exit 0, no probe run);
+# inside sandbox-exec the OS sandbox confines them, as it does claude's Bash
+assert_ne "" "$(grep -x -- -f "$pv/argv")" "and its commands go through to the OS sandbox around it"
+assert_eq "" "$(grep -x -- --approve-mcps "$pv/argv")" "while MCP servers stay unapproved"
 # Linux: bwrap gives the round a network namespace of its own whose one way
 # out is the proxy, so every vendor runs there too, registries or not - and
 # a host it refuses is named, whichever vendor's commands asked for it
@@ -483,6 +487,7 @@ assert_eq "workspace-write" "$(awk 'on{print;exit} $0=="--sandbox"{on=1}' "$pv/a
 assert_ne "" "$(grep -x 'sandbox_workspace_write.network_access=true' "$pv/argv")" "with its network switch on"
 confined linux "$pk/bwrap" "$pk/none.json" cursor-agent >/dev/null
 assert_eq "enabled" "$(awk 'on{print;exit} $0=="--sandbox"{on=1}' "$pv/argv")" "cursor-agent's own sandbox is on"
+assert_eq "" "$(grep -xE -- '-f|--force' "$pv/argv")" "and cursor-agent is not forced on Linux, where its sandbox runs the commands"
 
 # --- every location a round is handed is one it may write (T-117) ----------
 # A round is handed directories through its environment: its temp
@@ -810,6 +815,7 @@ done
 FM_ROUND_UNSANDBOXED=1 confined darwin "$pv/no-such-sandbox" "$pk/none.json" cursor-agent >/dev/null
 assert_eq "enabled" "$(awk 'on{print;exit} $0=="--sandbox"{on=1}' "$pv/argv")" \
   "under the hatch cursor-agent's own sandbox is back on"
+assert_eq "" "$(grep -xE -- '-f|--force' "$pv/argv")" "and it is not forced: no OS sandbox is there to confine what -f lets through"
 FM_ROUND_UNSANDBOXED=1 confined darwin "$pv/no-such-sandbox" "$pk/none.json" codex >/dev/null
 assert_eq "workspace-write" "$(awk 'on{print;exit} $0=="--sandbox"{on=1}' "$pv/argv")" "and codex's"
 # and claude's, with T-066's settings: every shell command inside it, none

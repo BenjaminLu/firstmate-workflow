@@ -28,8 +28,8 @@ _fm_alib="$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 # --approve-mcps). The repository's .cursor/ and .mcp.json are still read
 # by cursor, and reading in general is not confined, so those two are the
 # OS sandbox's. On macOS cursor's sandbox is a seatbelt, which cannot start
-# inside sandbox-exec: there it is off and the outer one confines the
-# commands instead.
+# inside sandbox-exec: there it is off, -f comes back so that print mode
+# runs any command at all, and the outer one confines the commands instead.
 #
 # Its login (T-117): `agent login` keeps its token where cursor-agent reads
 # it through the keychain API, which no round reaches, and a stand-in for
@@ -77,14 +77,22 @@ case " ${FM_ADAPTER_ARGS:-} " in
     echo "cursor-agent: FM_ADAPTER_ARGS changes permissions; refusing the round" >&2; exit 64 ;;
 esac
 fm_adapter_policy
-sandbox=enabled; [ "${FM_OUTER_OS:-}" != darwin ] || sandbox=disabled
+# On macOS cursor's own sandbox cannot start inside sandbox-exec, and with
+# it off a print-mode round approves no shell command at all: the canary on
+# 2026-09-26 saw cursor-agent sign in, exit 0 and never run its probe.
+# There the OS sandbox is what confines every command, as it is for
+# claude's Bash, so -f lets them through to it. Anywhere else - bwrap, or
+# the hatch with no outer sandbox - cursor's own sandbox runs the commands
+# and -f is never passed.
+perms=(--trust --sandbox enabled)
+[ "${FM_OUTER_OS:-}" != darwin ] || perms=(--trust --sandbox disabled -f)
 read -r -a native <<<"$(cursor_native)"
 fm_adapter_confine cursor-agent "$tree" "${native[@]}"
 if [ -n "${FM_ATTEMPT_DIR:-}" ]; then
-  ( cd "$tree" && "${FM_LAUNCH[@]}" cursor-agent -p --trust --sandbox "$sandbox" --output-format json ${FM_ADAPTER_ARGS:-} < "$prompt" ) 2>&1 | tee -a "$log"
+  ( cd "$tree" && "${FM_LAUNCH[@]}" cursor-agent -p "${perms[@]}" --output-format json ${FM_ADAPTER_ARGS:-} < "$prompt" ) 2>&1 | tee -a "$log"
   fm_adapter_pipeline_status "${PIPESTATUS[@]}"
 else
-  ( cd "$tree" && "${FM_LAUNCH[@]}" cursor-agent -p --trust --sandbox "$sandbox" ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
+  ( cd "$tree" && "${FM_LAUNCH[@]}" cursor-agent -p "${perms[@]}" ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
 fi
 rc=$?
 fm_adapter_verdict "$rc" "$log" "$off"

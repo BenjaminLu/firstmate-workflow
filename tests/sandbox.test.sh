@@ -755,7 +755,12 @@ assert_lacks "$lo" "gho_ghsecret" "nor gh's token"
 assert_eq "find-generic-password -s firstmate-cursor-api-key -a $me -w" "$(cat "$t/kc/calls" 2>/dev/null)" \
   "fm read one item of the keychain: the crew's key, never cursor's own login nor gh's"
 assert_lacks "$(sed -n 's/^path=//p' <<< "$lo")" "$t/ctl" "nothing of fm's is put on the round's PATH"
-assert_lacks "$(cat "$t/profile.sb" 2>/dev/null)" "(subpath \"$t/ctl/fm-sb." "nor made readable in its profile"
+# with no --tmp the round's own temp directory is fm-sb.*/tmp, and that one
+# is the round's; nothing else of fm-sandbox's directory may be named
+assert_eq "" "$(grep -o "\"$t/ctl/fm-sb\.[^\"]*\"" "$t/profile.sb" 2>/dev/null | grep -v '/tmp"$')" \
+  "nor made readable in its profile"
+assert_contains "$(cat "$t/profile.sb" 2>/dev/null)" "(subpath \"$t/ctl/fm-sb." \
+  "(the round's own temp directory is the one path under it the profile names)"
 assert_contains "$(grep '^(deny mach-lookup' "$t/profile.sb" 2>/dev/null | grep SecurityServer)" \
   '(global-name "com.apple.SecurityServer")' "and the keychain stays out of its reach"
 assert_eq "" "$(ls -A "$t/ctl" 2>/dev/null)" "and nothing of the login is left behind"

@@ -43,7 +43,8 @@
 # what fm cannot see from outside (whether ~/.ssh listed, whether github
 # answered, whether gh printed a token). A probe the round never ran is
 # untested, which is not blocked. One record per vendor and version goes to
-# state/canary/results.jsonl.
+# state/canary/results.jsonl; a vendor with any probe untested also leaves
+# its whole transcript in state/canary/transcript-<vendor>-<time>/.
 #
 # It spends real model calls and needs the vendors logged in, so it is not
 # part of CI and nothing runs it on its own. Firstmate runs it on the
@@ -322,9 +323,22 @@ PROMPT
     case " $write_v $ssh_v $gh_v $lo_v $so_v $ot_v $ght_v $gc_v $kc_v $pb_v " in
       *" reached "*|*" untested "*) failed=1 ;;
     esac
+    # A probe the round never ran leaves nothing in its tree to say why:
+    # the model declined, or its shell was refused (cursor-agent, 2026-09-26:
+    # signed in, exit 0, no probe). So the whole transcript is kept - the
+    # log, what the adapter said, the prompt and the tree - and its last
+    # words printed. The nonces in it are already taken back.
+    case " $write_v $ssh_v $gh_v $lo_v $so_v $ot_v $ght_v $gc_v $kc_v $pb_v $own_v " in
+      *" untested "*)
+        kept="$out/transcript-$name-$(date -u +%Y%m%dT%H%M%SZ)"
+        rm -rf "$kept"
+        if mv "$d" "$kept" 2>/dev/null; then d=''; else kept="(could not keep it)"; fi
+        printf '    a probe went untested; transcript kept at %s, the log ends: %s\n' "$kept" \
+          "$(tail -5 "$kept/log" 2>/dev/null | tr '\n' ' ' | cut -c1-400)" ;;
+    esac
   fi
   ran=$((ran + 1))
-  rm -rf "$d"
+  [ -z "$d" ] || rm -rf "$d"
 done
 rm -f "$policy_all"
 echo "results: $results"

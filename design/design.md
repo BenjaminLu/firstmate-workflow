@@ -2163,6 +2163,19 @@ refresh token, and that the operator's file is neither readable nor bound;
 `tests/adapter-contract.test.sh` checks the same through each adapter,
 where its CLI looks.
 
+**The trade-off accepted (captain, 2026-09-26, option A).** The vendor's
+own token is readable by the model in the round; no other credential is.
+A round's `CLAUDE_CODE_OAUTH_TOKEN`, `CURSOR_API_KEY`, or codex's or
+gemini's access-token copy is in its environment or its own temp
+directory, where the model can read it and send it out through the
+vendor's own service. GitHub and git credentials never enter a round,
+pushing and pull requests stay with `fm-worker.sh` outside the sandbox,
+all outbound traffic goes through fm's proxy, and loopback is closed but
+for the proxy wherever the per-port denials do not hold. No credential
+broker or TLS interception is built. For cursor-agent the amended
+acceptance takes the crew's Cursor API key in place of `agent login`'s
+own login.
+
 **The escape hatch (T-117).** `FM_CREW_UNSANDBOXED=1`, set in the
 operator's own shell - never a `config.yaml` key, which a branch can change
 - makes `fm-worker.sh` and `fm-review.sh` run the round without the OS
@@ -2200,7 +2213,7 @@ The vendors' own flags, against the proposal's section 4
 |---|---|---|---|
 | claude | `--restricted --strict-mcp-config --disable-slash-commands --permission-mode dontAsk --settings`: file rules on the worktree and the round's TMPDIR, deny rules, the shell allowed | the same | its own sandbox is off, so the settings carry no `allowedDomains` (under the escape hatch it is on, with them). On macOS it is a seatbelt, which cannot be applied inside another. On Linux its commands would reach the network through claude's own proxy, which has no way out of the round's namespace and names no host it refuses. The registries are enforced by the OS layer's proxy instead |
 | codex | `--sandbox workspace-write` with its network switch on, `approval_policy="never"`, the scrub list as `shell_environment_policy.exclude`, `mcp_servers={}`, a `CODEX_HOME` of the round's own holding a copy of the login less its refresh token, so no user profile | `--sandbox danger-full-access` (a seatbelt cannot nest); the rest the same | the network switch is on because codex has only on and off, and off would keep its commands from the proxy |
-| cursor-agent | `--trust --sandbox enabled`, `-f` dropped, no `--approve-mcps` | `--sandbox disabled` (a seatbelt cannot nest) | on Linux, if cursor's own sandbox cuts the network off before the proxy sees a request, that refusal names no host; the canary shows it per version |
+| cursor-agent | `--trust --sandbox enabled`, `-f` dropped, no `--approve-mcps` | `--trust --sandbox disabled -f` (a seatbelt cannot nest) | on macOS `-f` comes back, inside the OS sandbox only: with its own sandbox off, a print-mode round approves no shell command, and the canary on 2026-09-26 saw cursor-agent sign in, exit 0 and never run its probe. The OS sandbox confines what `-f` lets through, as it does claude's shell; under the escape hatch there is no OS sandbox, so its own is on and `-f` is not passed. On Linux, if cursor's own sandbox cuts the network off before the proxy sees a request, that refusal names no host; the canary shows it per version |
 | gemini | `--approval-mode yolo --extensions none --allowed-mcp-server-names fm-none` | the same | no `--sandbox`: it is a container or a seatbelt, neither of which starts inside the OS sandbox. `yolo`, not `auto_edit`: headless, `auto_edit` refuses every shell command, and the OS sandbox is what confines them. No `--policy` file: which gemini versions take one is unverified, and an unknown flag would fail every gemini round |
 
 **A blocked host.** The proxy records every host it refused to the round's
