@@ -13,6 +13,62 @@
 #
 # A summary is what the board shows. It must carry both languages or nothing:
 # a half-translated event would render blank in one of the three locales.
+#
+# A `merged` event that says `data.untracked: true` is the merge of a pull
+# request that belongs to no task (a revert, a hotfix; T-119). It names no
+# task, and one that names both is refused: it would move a task's card for
+# work that was not the task's.
+
+# --- The task-id grammar (T-119) --------------------------------------------
+# Which ids are tasks, and which task a branch or a pull request title names,
+# written once. fm-decide.sh, fm-merge.sh and fm-sync-prs.sh source this file
+# for it (sourced, it runs nothing past this block), and board/server.ts
+# carries the TypeScript twin between its `task grammar` markers, which
+# tests/board.test.sh runs against these functions over one table.
+#
+# A task is T-<3+ digits> (the plan's) or SK-<3+ digits> (a skill update's);
+# those are the only prefixes design/tasks/, the log and the branches use.
+# Digits are spelled out: a bracket range follows the locale's collation.
+FM_TASK_DIG=0123456789
+FM_TASK_ID="^(T|SK)-[${FM_TASK_DIG}]{3,}$"
+fm_task_is() { [[ "${1-}" =~ $FM_TASK_ID ]]; }   # fm_task_is <id>
+# A branch is named after its task, prefix in either case: t-117-… is T-117,
+# sk-001-… is SK-001. The hyphen after the prefix may be missing, as in the
+# earliest t004-… branches; the number is the whole run of digits, so
+# t-1170-… is T-1170, never T-117. Anything else names no task.
+fm_task_of_branch() {   # fm_task_of_branch <branch> -> the task, or 1
+  local re="^([tT]|[sS][kK])-?([${FM_TASK_DIG}]{3,})(-.*)?$" p
+  [[ "${1-}" =~ $re ]] || return 1
+  p="${BASH_REMATCH[1]}"
+  case "$p" in t|T) p=T ;; *) p=SK ;; esac
+  printf '%s-%s' "$p" "${BASH_REMATCH[2]}"
+}
+# A pull request's title leads with its task and a colon, exactly as every
+# worker opens one: "T-117: …", "SK-001: …". GitHub's 'Revert "T-105: …"'
+# leads with no task, and so names none.
+fm_task_of_title() {    # fm_task_of_title <title> -> the task, or 1
+  local re="^((T|SK)-[${FM_TASK_DIG}]{3,}):"
+  [[ "${1-}" =~ $re ]] || return 1
+  printf '%s' "${BASH_REMATCH[1]}"
+}
+# The task a pull request belongs to: its branch's, and its title's only
+# when the branch names none.
+fm_task_of_pr() {       # fm_task_of_pr <branch> <title> -> the task, or 1
+  fm_task_of_branch "${1-}" || fm_task_of_title "${2-}"
+}
+# A decision id holds its task without the hyphen: T-047 is T047, SK-001 is
+# SK001. Card ids have always taken T-<letters and digits> as well, and the
+# fixtures still use them (T-A, T-1), so a key is that or a task.
+fm_task_key() {         # fm_task_key <task> -> its key, or 1
+  local legacy="^T-([ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz${FM_TASK_DIG}]{1,32})$"
+  if fm_task_is "${1-}"; then printf '%s' "${1/-/}"
+  elif [[ "${1-}" =~ $legacy ]]; then printf 'T%s' "${BASH_REMATCH[1]}"
+  else return 1
+  fi
+}
+# sourced for the grammar alone: stop here
+(return 0 2>/dev/null) && return 0
+
 set -uo pipefail
 # Nothing below may read standard input. A dispatched child inherits it, and
 # a child that reads it blocks the caller waiting for a human who is not
@@ -63,6 +119,15 @@ done
 case " $TYPES " in *" $type "*) ;; *) die "unknown type: $type" ;; esac
 command -v jq >/dev/null 2>&1 || die "jq is required"
 jq -e . >/dev/null 2>&1 <<<"$data" || die "--data is not valid JSON"
+# A merged event moves its task's card, so the task is one the grammar holds
+# (a task id, or a card key's T-<letters and digits>), never a branch name or
+# a title. An untracked merge belongs to no task, and names none.
+if [ "$type" = merged ] && [ -n "$task" ]; then
+  fm_task_key "$task" >/dev/null || die "a merged event names a task id, got --task $task"
+  if jq -e 'type == "object" and .untracked == true' >/dev/null 2>&1 <<<"$data"; then
+    die "a merged event marked untracked names no task, got --task $task"
+  fi
+fi
 
 # Only a named project needs the registry, so only then is the library
 # loaded: an event about the default project still depends on nothing.

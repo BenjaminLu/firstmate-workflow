@@ -164,6 +164,29 @@ assert_eq "false" "$(jq -c 'select(.pr==3)|has("project")' "$d6/state/events.jso
   "with no project, as before"
 rm -rf "$d6"
 
+# --- T-119: every task's branch, by the one grammar -----------------------
+# SK-001's pull request (#94) as GitHub holds it:
+#   gh api repos/BenjaminLu/firstmate-workflow/pulls/94 --jq '.head.ref'
+# and #96, the revert, whose branch names T-105. A branch that names nothing
+# defers to the title's prefix; GitHub's 'Revert "…"' title names no task.
+d7="$(fixture)"
+SK="$(rec "$d7" sk <<'J'
+[{"number":94,"state":"MERGED","title":"SK-001: skill-update: firstmate","headRefName":"sk-001-skill-update-firstmate","mergedAt":"2026-09-26T07:46:54Z"},
+ {"number":95,"state":"OPEN","title":"T-116: the board shows each crew member","headRefName":"board-fields","mergedAt":null},
+ {"number":98,"state":"OPEN","title":"Revert \"T-105: every crew round\"","headRefName":"revert-90-t-105-every-crew-round","mergedAt":null},
+ {"number":99,"state":"OPEN","title":"T-1170: a longer number","headRefName":"t-1170-other","mergedAt":null}]
+J
+)"
+out7="$(FM_ROOT="$d7" FM_GH="$SK" "$d7/bin/fm-sync-prs.sh" --repo "$d7" 2>&1)"
+assert_eq "0" "$?" "a sync with a skill update's pull request exits 0"
+log7="$d7/state/events.jsonl"
+assert_eq "SK-001" "$(jq -r 'select(.pr==94)|.task' "$log7")" "sk-001-… syncs as SK-001"
+assert_contains "$out7" "merged #94 (SK-001)" "and says so"
+assert_eq "T-116" "$(jq -r 'select(.pr==95)|.task' "$log7")" "a branch naming no task defers to the title's prefix"
+assert_eq "none" "$(jq -r 'select(.pr==98)|.task // "none"' "$log7")" "a revert names no task"
+assert_eq "T-1170" "$(jq -r 'select(.pr==99)|.task' "$log7")" "t-1170-… is T-1170, the whole number"
+rm -rf "$d7"
+
 # it goes through the one writer like everyone else
 # the header comment names fm-emit.sh too; look at what runs
 assert_ok "grep -q 'fm-emit.sh' <<<\"\$(grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-sync-prs.sh')\"" \

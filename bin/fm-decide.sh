@@ -6,7 +6,18 @@
 #   fm-decide.sh --request D-firstmate-workflow-T047-1 --task T-047 --kind merge \
 #                --details details.json --pr 9 [--project <name>]
 #   fm-decide.sh --request D-SK-001 --task SK-001 --kind choice --title "..."
+#   fm-decide.sh --request D-1096 --kind merge-untracked --pr 96 --details details.json
 #   fm-decide.sh --await   D-firstmate-workflow-T047-1 [--timeout 3600]
+#
+# A merge card names its pull request and its task, and they must agree
+# (T-119). Before any card exists, --request --kind merge reads the pull
+# request (`gh pr view --json headRefName,title`, on the project's repository)
+# and takes its task from the branch, else from the title's T-xxx:/SK-xxx:
+# prefix, by the one grammar in fm-emit.sh. A pull request of another task,
+# of no task, or one gh cannot read gets no card. A pull request that belongs
+# to no task (a revert, a hotfix) gets a `merge-untracked` card instead: it
+# names no task, so it takes a hand-raised D-<digits> id, and its merge moves
+# no task's card. fm-merge.sh checks the pair again at merge time.
 #
 # A new decision id names its owner: D-<project>-<task>-<n> (design section
 # 15.4). <project> is the registry name the run resolves - --project, then
@@ -31,9 +42,13 @@ set -uo pipefail
 exec < /dev/null
 
 REPO="${FM_ROOT:-$(pwd)}"; MODE=''; ID=''; TASK=''; KIND='choice'; TITLE=''; PR=''; TIMEOUT=0; DETAILS=''
-PROJECT=''; ID_PROJECT=''; ID_TASK=''; ID_N=''
+PROJECT=''; ID_PROJECT=''; ID_TASK=''; ID_N=''; GH="${FM_GH:-gh}"
 # the registry library lives beside this script, wherever --repo points
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# the task-id grammar (T-119), beside this script too
+[ -r "$HERE/fm-emit.sh" ] || { echo "fm-decide: missing $HERE/fm-emit.sh" >&2; exit 70; }
+# shellcheck source=bin/fm-emit.sh
+. "$HERE/fm-emit.sh"
 # see fm_need in bin/fm-config.sh for why: `shift 2` with one argument
 # left does not shift, and the loop spins. This file deliberately depends
 # on nothing, so it carries the two lines rather than the explanation.
@@ -55,27 +70,27 @@ while [ $# -gt 0 ]; do
   esac
 done
 { [ -n "$MODE" ] && { [ -n "$ID" ] || [ "$MODE" = allocate ]; }; } || {
-  echo "usage: fm-decide.sh --allocate --task <id> [--project <name>] | --request <id> --task <id> [--kind merge] | --await <id>" >&2; exit 64; }
+  echo "usage: fm-decide.sh --allocate --task <id> [--project <name>] | --request <id> --task <id> [--kind merge] | --request <D-digits> --kind merge-untracked --pr <n> | --await <id>" >&2; exit 64; }
 cd "$REPO" || { echo "fm-decide: no repo at $REPO" >&2; exit 64; }
 
 # The id grammar, spelled out letter by letter rather than as a-z ranges: a
 # bracket range follows the locale's collation, and in some locales [a-z]
 # takes upper-case letters too. The project part is the registry's name rule
-# ([a-z0-9-], at most 24); the task part is a task id without its hyphen and
-# starts with an upper-case T, which no project name can hold, so the id
-# splits one way only. n starts at 1 and has no leading zero.
+# ([a-z0-9-], at most 24); the task part is a task's key, fm_task_key's
+# (T047, SK001, or a fixture's TA), and starts with an upper-case T or S,
+# which no project name can hold, so the id splits one way only. n starts at
+# 1 and has no leading zero.
 LOW=abcdefghijklmnopqrstuvwxyz; UP=ABCDEFGHIJKLMNOPQRSTUVWXYZ; DIG=0123456789
-OWNED_ID="^D-([${LOW}${DIG}-]{1,24})-(T[${UP}${LOW}${DIG}]{1,32})-([123456789][${DIG}]{0,5})$"
-TASK_ID="^T-([${UP}${LOW}${DIG}]{1,32})$"
+OWNED_ID="^D-([${LOW}${DIG}-]{1,24})-(T[${UP}${LOW}${DIG}]{1,32}|SK[${DIG}]{3,})-([123456789][${DIG}]{0,5})$"
 OLD_ID="^D-[${DIG}]{1,6}$"
 SKILL_ID="^D-SK-[${DIG}]{3,}$"
 owned() {       # owned <id>: sets ID_PROJECT ID_TASK ID_N when <id> is D-<project>-<task>-<n>
   [[ "$1" =~ $OWNED_ID ]] || return 1
   ID_PROJECT="${BASH_REMATCH[1]}"; ID_TASK="${BASH_REMATCH[2]}"; ID_N="${BASH_REMATCH[3]}"
 }
-task_key() {    # task_key <task> -> T047 for T-047; 64 for a task no id can hold
-  [[ "$1" =~ $TASK_ID ]] || { echo "fm-decide: bad task '$1' (a decision id holds T-<letters and digits>)" >&2; exit 64; }
-  printf 'T%s' "${BASH_REMATCH[1]}"
+task_key() {    # task_key <task> -> T047 for T-047, SK001 for SK-001; 64 for a task no id can hold
+  fm_task_key "$1" || {
+    echo "fm-decide: bad task '$1' (a decision id holds T-<letters and digits> or SK-<digits>)" >&2; exit 64; }
 }
 # A tree that registers no project (no `projects:` map: every tree before the
 # registry, and the test fixtures) is the engine hosting itself. Its ids are
@@ -118,7 +133,13 @@ emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate "$@" >/dev/nul
 # n is never handed out twice. "Free" means past every n that task already
 # has anywhere a card can be: reserved, pending, answered or archived.
 if [ "$MODE" = allocate ]; then
-  case "$KIND" in choice|merge) ;; *) echo 'fm-decide: bad kind' >&2; exit 64 ;; esac
+  case "$KIND" in
+    choice|merge) ;;
+    merge-untracked)
+      echo 'fm-decide: an untracked merge card names no task to own its id; give it a hand-raised D-<digits> id' >&2
+      exit 64 ;;
+    *) echo 'fm-decide: bad kind' >&2; exit 64 ;;
+  esac
   key="$(task_key "$TASK")" || exit 64
   resolve_project
   own="$IDS/$PROJECT/$key"; lock="$own.lock"
@@ -239,7 +260,7 @@ notify() {   # notify <zh-TW question> <the project the card records, or nothing
   secs="${FM_NOTIFY_SECONDS:-10}"
   [[ "$secs" =~ ^[1-9][0-9]{0,2}$ ]] || secs=10
   out="$(FM_NOTIFY_SECONDS="$secs" perl -e 'alarm $ENV{FM_NOTIFY_SECONDS}; exec @ARGV or exit 127' \
-         herdr notification show "$project · $TASK · $KIND" --body "$body" --sound "$sound" 2>&1 </dev/null)"; rc=$?
+         herdr notification show "$project · ${TASK:-#$PR} · $KIND" --body "$body" --sound "$sound" 2>&1 </dev/null)"; rc=$?
   if [ "$rc" -eq 142 ]; then   # 128 + SIGALRM: the alarm, not Herdr, ended it
     printf 'fm-decide: could not notify %s: herdr timed out after %ss\n' "$ID" "$secs" >&2
   elif [ "$rc" -ne 0 ]; then
@@ -248,8 +269,39 @@ notify() {   # notify <zh-TW question> <the project the card records, or nothing
   return 0
 }
 
+# A merge card's pull request must be its task's (T-119). Read from GitHub
+# before any card exists - on the project's repository when the card records
+# one, else the checkout's, the same repository fm-merge.sh merges on for it -
+# and judged by fm-emit.sh's grammar: the branch's task, else the title's.
+pr_agrees() {   # pr_agrees: returns when --pr is --task's pull request; else says why and exits
+  local on=() github doc branch title owner
+  if [ -n "$RECORD" ]; then
+    github="$(fm_project_get "$RECORD" github "$REPO/config.yaml")" || exit 65
+    on=(--repo "$github")
+  fi
+  doc="$($GH pr view "$PR" ${on[@]+"${on[@]}"} --json headRefName,title 2>/dev/null </dev/null)" \
+    && branch="$(jq -er '.headRefName | strings' 2>/dev/null <<<"$doc")" || {
+    echo "fm-decide: cannot read #$PR's branch from GitHub; no card raised for $TASK" >&2; exit 1; }
+  title="$(jq -r '.title // empty' <<<"$doc")"
+  owner="$(fm_task_of_pr "$branch" "$title" || true)"
+  [ -n "$owner" ] || {
+    echo "fm-decide: #$PR belongs to no task (branch '$branch'), not to $TASK; raise it with --kind merge-untracked" >&2
+    exit 65; }
+  [ "$owner" = "$TASK" ] || {
+    echo "fm-decide: #$PR is $owner's pull request (branch '$branch'), not $TASK's; no card raised" >&2; exit 65; }
+}
+
 if [ "$MODE" = request ]; then
-  case "$KIND" in choice|merge) ;; *) echo 'fm-decide: bad kind' >&2; exit 64 ;; esac
+  case "$KIND" in choice|merge|merge-untracked) ;; *) echo 'fm-decide: bad kind' >&2; exit 64 ;; esac
+  # An untracked merge card belongs to no task: it names none, and so takes
+  # the only id no task owns, a hand-raised D-<digits>.
+  if [ "$KIND" = merge-untracked ]; then
+    [ -z "$TASK" ] || {
+      echo "fm-decide: an untracked merge card belongs to no task; drop --task $TASK, or raise --kind merge for it" >&2
+      exit 64; }
+    [[ "$ID" =~ $OLD_ID ]] || {
+      echo 'fm-decide: an untracked merge card takes a hand-raised D-<digits> id' >&2; exit 64; }
+  fi
   # An owned id is published only by the task and project it names, and only
   # once --allocate has reserved it: n is never picked by hand.
   if owned "$ID"; then
@@ -273,8 +325,11 @@ if [ "$MODE" = request ]; then
     # for custom text (C0 except tab/LF/CR, DEL, C1, lone surrogates) before
     # any pending write, so U+007F never reaches persistence.
     [[ "$ID" =~ $OLD_ID ]] || [ -n "$ID_PROJECT" ] || { echo 'fm-decide: bad decision id' >&2; exit 64; }
-    [[ "$TASK" =~ ^T-[A-Za-z0-9._-]{1,32}$ ]] || { echo 'fm-decide: bad task' >&2; exit 64; }
-    if [ "$KIND" = merge ]; then
+    # a task id, or the T-<...> a card has always taken; an untracked merge
+    # card has none, checked above
+    [ "$KIND" = merge-untracked ] || [[ "$TASK" =~ ^T-[A-Za-z0-9._-]{1,32}$ ]] || fm_task_is "$TASK" \
+      || { echo 'fm-decide: bad task' >&2; exit 64; }
+    if [ "$KIND" = merge ] || [ "$KIND" = merge-untracked ]; then
       [[ "$PR" =~ ^[1-9][0-9]*$ ]] || { echo 'fm-decide: merge requires a positive PR' >&2; exit 64; }
     fi
     [ -f "$DETAILS" ] && jq -e -s '
@@ -292,16 +347,19 @@ if [ "$MODE" = request ]; then
     ' "$DETAILS" >/dev/null 2>&1 || {
       echo 'fm-decide: --details requires complete authored en and zh-TW title, explanation, before, after, outcome and A/B/C description/pros/cons' >&2; exit 64;
     }
+    # the last check before anything is written: GitHub's word on the pair
+    [ "$KIND" != merge ] || pr_agrees
     payload="$(jq -cn --arg id "$ID" --arg task "$TASK" --arg kind "$KIND" --arg pr "$PR" \
       --arg project "$RECORD" --slurpfile details "$DETAILS" \
-      '{id:$id,task:$task,kind:$kind,details:$details[0],title:$details[0].en.title}
+      '{id:$id} + (if $task=="" then {} else {task:$task} end)
+       + {kind:$kind,details:$details[0],title:$details[0].en.title}
        + (if $project=="" then {} else {project:$project} end)
        + (if $pr=="" then {} else {pr:($pr|tonumber)} end)')" || exit 64
     (set -o noclobber; printf '%s\n' "$payload" > "$PEND/$ID.json") || exit 65
     # after the pending file and before the event: the generator reads the file
     # it is drawing, and the event is what wakes anything watching
     draw
-    emit --type decision_requested --task "$TASK" ${PR:+--pr "$PR"} ${RECORD:+--project "$RECORD"} \
+    emit --type decision_requested ${TASK:+--task "$TASK"} ${PR:+--pr "$PR"} ${RECORD:+--project "$RECORD"} \
          --en "$(jq -r '.en.title' "$DETAILS")" --tw "$(jq -r '."zh-TW".title' "$DETAILS")"
     notify "$(jq -r '."zh-TW".title' "$DETAILS")" "$RECORD"
     printf '%s\n' "$PEND/$ID.json"
@@ -325,6 +383,7 @@ if [ "$MODE" = request ]; then
     }
     if [ "$KIND" = merge ]; then
       [[ "$PR" =~ ^[1-9][0-9]*$ ]] || { echo 'fm-decide: merge requires a positive PR' >&2; exit 64; }
+      pr_agrees
     fi
     payload="$(jq -cn --arg id "$ID" --arg task "$TASK" --arg kind "$KIND" --arg title "$TITLE" --arg pr "$PR" \
       '{id:$id,task:$task,kind:$kind,title:$title}

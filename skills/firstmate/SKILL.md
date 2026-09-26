@@ -180,7 +180,8 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   presenting a merge card, and coordinate renewed verification if the head changes.
   The board calls `bin/fm-merge.sh` directly for choice A on a pending merge card;
   neither that route nor the merge helper rechecks the gates. The helper
-  checks PR state, invokes the GitHub merge and attempts an event and cleanup;
+  checks that the pull request is the card's task's (T-119), checks PR state,
+  invokes the GitHub merge and attempts an event and cleanup;
   it does not read or validate captain decision approval. `fm-run.sh` requests a
   card after gate success but does not consume decisions or perform the merge.
   Approval and readiness are orchestration requirements, not guarantees of
@@ -262,9 +263,8 @@ or on a merge card clears nothing. An adopted skill update (SK-*) is listed
 `judged` by its own adoption card, D-SK-*, answered A: raise no second card for
 it the first time it is ready. Once it is unparked, or has been seen with
 dependencies other than the ones it was adopted with, it is `unjudged`, but
-it cannot get a readiness card yet: `bin/fm-decide.sh` allocates ids and takes
-authored details only for `T-*` tasks. Do not raise one under another task's
-id. Tell the captain in chat that the skill update is held and why; it starts
+it cannot get a readiness card yet: `bin/fm-ready.sh judged` takes only a
+`T-*` task's owned id. Do not raise one under another task's id. Tell the captain in chat that the skill update is held and why; it starts
 only if the captain orders it directly. `bin/fm-dispatch.sh` holds every other ready task
 and says so, and starts nothing if it cannot read the answers. A task the captain orders directly, or a
 completed B, is started with `bin/fm-dispatch.sh --task <id> --repo <root>`:
@@ -433,14 +433,33 @@ task's own lock, reserves it and prints it; `--request` refuses an owned id
 that was not allocated (65), or whose task or project is not the card's (64).
 Allocate first, so the details and any authored drawing are written under the
 id the card will carry. Old ids (`D-<digits>`, `D-SK-<n>`) stay readable and
-are never renamed. Tasks written into an id match `^T-[A-Za-z0-9]{1,32}$`.
+are never renamed. Tasks written into an id match `^T-[A-Za-z0-9]{1,32}$` or
+`^SK-[0-9]{3,}$`: a skill update's merge card is `D-<project>-SK<n>-<m>`.
 Every new card you raise, merge or hand-raised, must take the owned form
-from `--allocate`. The script still accepts `--request D-<digits>` so that old
+from `--allocate`, except an untracked merge card (below), which has no task
+to own its id. The script still accepts `--request D-<digits>` so that old
 callers and existing fixtures keep working. That is the only reason, and the
 code does not stop you misusing it, so the rule is yours to keep. In a tree
 with no `projects:` map, ids are owned by `firstmate-workflow` and the card
 records no project. Kind is
-`choice` or `merge`, and a merge requires `--pr` matching `^[1-9][0-9]*$`.
+`choice`, `merge` or `merge-untracked`, and a merge requires `--pr` matching
+`^[1-9][0-9]*$`.
+
+A merge card names its pull request and its task, and they must agree
+(T-119; design §5.2). `--kind merge` reads the pull request from GitHub and
+refuses a card, before it exists, when the pull request's branch (else its
+title's `T-xxx:`/`SK-xxx:` prefix) names another task, no task, or cannot be
+read; the refusal names both. Never work around it by raising the card under
+whatever task is still open: that is how #96, T-105's revert, was merged as
+T-117 on 2026-09-26. A pull request that belongs to no task (a revert, a
+hotfix) takes an untracked card: `--request D-<digits> --kind
+merge-untracked --pr <n> --details <file>` with no `--task`, under a
+hand-raised id, since no task owns it. Its merge writes `merged` with no task
+and moves no task's card. `fm-merge.sh` checks the pair again at the click
+and records a failed outcome when the branch no longer agrees. A skill
+update (SK-*) that is approved and green gets its merge card like any task:
+`--allocate --task SK-<n> --kind merge`, then `--request` with its pull
+request; no hand merge.
 
 Before a real request:
 
@@ -510,8 +529,8 @@ U+000E–001F and lone surrogates. Valid literal text, including surrounding spa
 is preserved in `text`. `note` is separate and truncated to 500 JavaScript code
 units; never encode custom as an A note. Identical chosen/custom-text retries
 return the recorded decision; conflicting responses return 409. A custom choice
-never invokes merge, even for a merge card. Only A on a pending merge with numeric
-PR invokes the merge helper, in the background; read the record's `merge`
+never invokes merge, even for a merge card. Only A on a pending merge or
+merge-untracked card with numeric PR invokes the merge helper, in the background; read the record's `merge`
 (`running`, `merged` or `failed`), `merge_reason` and `eventRecorded` rather
 than assuming response `ok` proves merge/event success. `running` is not
 settled: keep waiting or re-read the record, and never report a merge from it;

@@ -8,23 +8,39 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 
-fixture() {                       # <pr state> <head branch>
+fixture() {                       # <pr state> <head branch> [title] [number]
   local d; d="$(mktemp -d)"
   mkdir -p "$d/bin" "$d/state" "$d/stub"
   cp "$ROOT/bin/fm-merge.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$d/bin/"
   printf 'vendor: mock\n' > "$d/config.yaml"
+  pr_is "$d" "$1" "$2" "${3-}" "${4-}"
+  # Answers as gh does. `gh pr view <n> --json a,b` prints an object of
+  # exactly those fields, keys sorted (Go's encoding of a map); `--jq` applies
+  # the filter to it and prints raw strings. A number with no pull request
+  # behind it is GraphQL's error on stderr and exit 1, nothing on stdout.
+  # `gh pr merge` prints nothing on stdout when it is not a terminal.
   cat > "$d/stub/gh" <<G
 #!/usr/bin/env bash
 echo "gh \$*" >> "$d/ghcalls"
-case " \$* " in
-  *" state "*)       echo "$1" ;;
-  *" headRefName "*) echo "$2" ;;
+arg() { local w="\$1"; shift; while [ \$# -gt 0 ]; do [ "\$1" = "\$w" ] && { printf '%s' "\${2-}"; return; }; shift; done; }
+case "\${1-}:\${2-}" in
+  pr:view)
+    doc="\$(jq -c --arg n "\$3" 'select((.number|tostring)==\$n)' "$d/pr.json")"
+    [ -n "\$doc" ] || { echo "GraphQL: Could not resolve to a PullRequest with the number of \$3. (repository.pullRequest)" >&2; exit 1; }
+    out="\$(jq -cS --arg f "\$(arg --json "\$@")" '. as \$d | reduce (\$f|split(","))[] as \$k ({}; .[\$k] = \$d[\$k])' <<<"\$doc")"
+    q="\$(arg --jq "\$@")"
+    if [ -n "\$q" ]; then jq -r "\$q" <<<"\$out"; else printf '%s\n' "\$out"; fi ;;
+  pr:merge) : ;;
 esac
 exit 0
 G
   chmod +x "$d/stub/gh"
   printf '%s' "$d"
 }
+# pr_is <fixture> <state> <head branch> [title] [number]: what GitHub holds
+# for that pull request (#9 unless named) now
+pr_is() { jq -cn --arg s "$2" --arg b "$3" --arg t "${4:-a pull request}" --argjson n "${5:-9}" \
+  '{number:$n,state:$s,headRefName:$b,title:$t}' > "$1/pr.json"; }
 types() { jq -r '.type + " " + (.task // "-")' "$1/state/events.jsonl" 2>/dev/null | tr '\n' ' '; }
 
 # --- what it refuses ----------------------------------------------------
@@ -63,8 +79,8 @@ assert_contains "$out" "by its branch name" "which it read off the branch"
 rm -rf "$d"
 
 d="$(fixture OPEN t-009-board-server)"
-FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --task T-042 >/dev/null 2>&1
-assert_contains "$(types "$d")" "merged T-042" "an explicit task wins over the branch"
+FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --task T-009 >/dev/null 2>&1
+assert_contains "$(types "$d")" "merged T-009" "a task named by the card and the branch alike merges as that task"
 rm -rf "$d"
 
 # --- T-047: the project's own repository ---------------------------------
@@ -187,9 +203,92 @@ assert_eq "false" "$(jq -c 'select(.type=="merged")|has("project")' "$d/state/ev
   "and its event carries no project, as before"
 rm -rf "$d"
 
-d="$(fixture OPEN some-branch-with-no-task)"
+# --- T-119: a merge card merges only the pull request of its own task ------
+# The sequence of 2026-09-26: a card for #96 raised under T-117, clicked, and
+# fm-merge wrote `merged` for T-117 although #96 was T-105's revert. #96's
+# branch and title are GitHub's own, read back with
+#   gh api repos/BenjaminLu/firstmate-workflow/pulls/96 --jq '[.head.ref,.title]'
+R96_BRANCH=t-105-revert
+R96_TITLE='T-105: revert the crew sandbox, which locks every vendor out on macOS'
+cleanup_calls() { cat "$1/cleanup-calls" 2>/dev/null; }
+
+# the card was raised while #96 looked like T-117's; by the click it is not
+d="$(fixture OPEN t-117-t-105-again-every-crew-round 'T-117: T-105 again' 96)"; cleanup_stub "$d"
+pr_is "$d" OPEN "$R96_BRANCH" "$R96_TITLE" 96
+out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 96 --task T-117 2>&1)"
+rc=$?
+assert_ne "0" "$rc" "#96 is refused at merge time under T-117's card, its branch now T-105's"
+assert_contains "$out" "T-105" "the refusal names the task the pull request belongs to"
+assert_contains "$out" "T-117" "and the card's task"
+assert_lacks "$(cat "$d/ghcalls")" "pr merge" "nothing is merged"
+assert_eq "" "$(types "$d")" "and no merged event is written, for T-117 or anyone"
+assert_eq "" "$(cleanup_calls "$d")" "and T-117's worktree is left alone"
+rm -rf "$d"
+
+# the same pull request, clicked on an untracked card
+d="$(fixture OPEN "$R96_BRANCH" "$R96_TITLE" 96)"; cleanup_stub "$d"
+out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 96 --untracked 2>&1)"
+assert_eq "0" "$?" "#96 merges from an untracked card"
+assert_contains "$(cat "$d/ghcalls")" "pr merge 96 --squash" "through gh, squashed"
+assert_eq "merged -" "$(types "$d" | sed 's/ $//')" "its merged event names no task"
+assert_eq "true" "$(jq -r 'select(.type=="merged")|.data.untracked' "$d/state/events.jsonl")" \
+  "and says it belongs to no task"
+assert_eq "" "$(cleanup_calls "$d")" "and no task's worktree is cleaned up"
+assert_contains "$out" "T-105" "the output says which task the branch names, though it moves none"
+rm -rf "$d"
+d="$(fixture OPEN t-009-board)"
+FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --task T-009 --untracked >/dev/null 2>&1
+assert_eq "64" "$?" "a card is a task's or untracked, never both"
+assert_eq "" "$(cat "$d/ghcalls" 2>/dev/null)" "and gh is not asked"
+rm -rf "$d"
+
+# a pull request that belongs to no task is not merged as if it did
+d="$(fixture OPEN revert-90-t-105-every-crew-round 'Revert "T-105: every crew round"')"
 out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 2>&1)"
-assert_eq "0" "$?" "a branch with no task in its name still merges"
-assert_contains "$(types "$d")" "merged -" "and the event simply has no task"
+assert_ne "0" "$?" "a pull request of no task is refused without an untracked card"
+assert_contains "$out" "no task" "and says it belongs to no task"
+assert_lacks "$(cat "$d/ghcalls")" "pr merge" "merging nothing"
+FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --task T-105 >/dev/null 2>&1
+assert_ne "0" "$?" "nor under a task its branch and title do not name"
+assert_lacks "$(cat "$d/ghcalls")" "pr merge" "still merging nothing"
+rm -rf "$d"
+# an already merged pull request under another task's card is refused too:
+# "already merged" would settle the wrong card as merged
+d="$(fixture MERGED "$R96_BRANCH" "$R96_TITLE" 96)"
+FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 96 --task T-117 >/dev/null 2>&1
+assert_ne "0" "$?" "an already merged pull request of another task is not reported merged for this one"
+rm -rf "$d"
+# a pull request gh cannot read is not merged on a guess
+d="$(fixture OPEN t-009-board)"
+FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 10 --task T-009 >/dev/null 2>&1
+assert_ne "0" "$?" "a pull request gh cannot find is refused"
+assert_lacks "$(cat "$d/ghcalls")" "pr merge" "and not merged"
+rm -rf "$d"
+
+# the branch says nothing, the title does
+d="$(fixture OPEN board-fields 'T-116: the board shows each crew member')"
+FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --task T-116 >/dev/null 2>&1
+assert_eq "0" "$?" "a branch with no task defers to the title's T-xxx: prefix"
+assert_contains "$(types "$d")" "merged T-116" "and merges as the title's task"
+rm -rf "$d"
+# a task id is its whole number: t-1170 is not T-117
+d="$(fixture OPEN t-1170-other)"
+FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --task T-117 >/dev/null 2>&1
+assert_ne "0" "$?" "t-1170-… is T-1170's branch, not T-117's"
+rm -rf "$d"
+
+# --- T-119: a skill update merges through the board like any task --------
+# SK-001 (#94) as GitHub holds it:
+#   gh api repos/BenjaminLu/firstmate-workflow/pulls/94 --jq '.head.ref'
+d="$(fixture OPEN sk-001-skill-update-firstmate 'SK-001: skill-update: firstmate' 94)"; cleanup_stub "$d"
+out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 94 --task SK-001 2>&1)"
+assert_eq "0" "$?" "SK-001's merge card merges #94"
+assert_contains "$(types "$d")" "merged SK-001" "and writes merged for SK-001"
+assert_contains "$(cleanup_calls "$d")" "--task SK-001" "and cleans up SK-001's worktree"
+rm -rf "$d"
+d="$(fixture OPEN sk-001-skill-update-firstmate 'SK-001: skill-update: firstmate' 94)"
+out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 94 2>&1)"
+assert_contains "$(types "$d")" "merged SK-001" "with no --task, SK-001 is read off its branch"
+assert_contains "$out" "by its branch name" "and says so"
 rm -rf "$d"
 finish
