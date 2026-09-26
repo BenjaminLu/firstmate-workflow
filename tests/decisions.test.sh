@@ -2,6 +2,12 @@
 # The captain answers on the board and the answer reaches firstmate. For a
 # merge the board does not merge: it calls the one script that may.
 set -uo pipefail
+# This suite raises a card through fm-decide.sh --request (T-112), so an
+# inherited HERDR_ENV would page the captain from a fixture. Same guard as
+# board.test.sh: unset every FM_* and HERDR_* before anything runs.
+for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
+  unset "$_fm_k" || true
+done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
@@ -70,12 +76,25 @@ assert_contains "$(post '{"id":"nope","chosen":"A"}')" "bad decision id" "it rej
 assert_contains "$(post '{"id":"D-1","chosen":"rm -rf /"}')" "bad choice" "it rejects a choice that is not a letter"
 assert_contains "$(post '{"id":"D-1","chosen":["A"]}')" "bad choice" "it never coerces an array into merge authorization"
 assert_fail "test -f '$d/state/merge-calls'" "neither attempt reached the merge script"
+# The board answers a merge at once and runs fm-merge.sh in the background
+# (design 5.2), so the record says running until the helper exits. Only then
+# does merge-calls hold everything it ever will.
+settled() {   # settled <id>: the record's merge once it is no longer running
+  local f="$d/state/decisions/$1.json" end=$(( $(date +%s) + 30 )) m=""
+  while [ "$(date +%s)" -le "$end" ]; do
+    m="$(jq -r '.merge // empty' "$f" 2>/dev/null)"
+    [ -n "$m" ] && [ "$m" != running ] && break
+    sleep 0.05
+  done
+  printf '%s' "$m"
+}
 
 r="$(post '{"id":"D-1","chosen":"A"}')"
 assert_eq "true" "$(jq -r .ok <<<"$r")" "a valid answer is accepted"
 assert_ok "test -f '$d/state/decisions/D-1.json'" "the answer lands as a file, which is what firstmate waits on"
 assert_eq "A" "$(jq -r .chosen "$d/state/decisions/D-1.json")" "with the choice"
 assert_eq "T-A" "$(jq -r .task "$d/state/decisions/D-1.json")" "and the task it belongs to"
+assert_eq "merged" "$(settled D-1)" "the record says merged once the merge script exits"
 assert_contains "$(cat "$d/state/merge-calls")" "--pr 16" "merge called the merge script with the pull request"
 assert_contains "$(cat "$d/state/merge-calls")" "--task T-A" "and the task"
 assert_fail "test -f '$d/state/pending/D-1.json'" "the pending decision is cleared"
@@ -141,6 +160,7 @@ answer() { jq -cn --arg i "$1" --arg c "$2" '{id:$i,chosen:$c}'; }
 r="$(post "$(answer "$nid" A)")"
 assert_eq "true" "$(jq -r .ok <<<"$r")" "a new-form card is answered"
 assert_ok "test -f '$d/state/decisions/$nid.json'" "its answer lands under its own id"
+assert_eq "merged" "$(settled "$nid")" "its record says merged once the merge script exits"
 assert_contains "$(tail -1 "$d/state/merge-calls")" "--pr 7" "a merge answer calls the merge script"
 assert_contains "$(tail -1 "$d/state/merge-calls")" "--project example-app" "with the card's project"
 assert_eq "example-app" \
@@ -157,6 +177,7 @@ sid=D-firstmate-workflow-T005-1
 printf '{"id":"%s","task":"T-005","kind":"merge","title":"merge self","pr":17}\n' "$sid" \
   > "$d/state/pending/$sid.json"
 assert_eq "true" "$(post "$(answer "$sid" A)" | jq -r .ok)" "a new-form card with no project is answered"
+assert_eq "merged" "$(settled "$sid")" "its record says merged once the merge script exits"
 assert_contains "$(tail -1 "$d/state/merge-calls")" "--pr 17" "and its merge is called"
 assert_lacks "$(tail -1 "$d/state/merge-calls")" "--project" \
   "with no --project read out of its id"
@@ -201,6 +222,23 @@ printf '{"id":"D-Bad_Name-T047-1","task":"T-047","kind":"choice"}\n' > "$d/state
 assert_eq "null" "$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r '.pending[]|select(.id=="D-Bad_Name-T047-1")|.owner')" \
   "a malformed id names no owner"
 rm -f "$d/state/pending/D-Bad_Name-T047-1.json"
+
+# --- T-112: a skill-update card -------------------------------------------
+# fm.sh self-update raises D-SK-<n>, which fm-decide.sh and fm-ready.sh take
+# with ^D-SK-[0-9]{3,}$. The board answers it through the same route, and the
+# answer is read back by fm-decide.sh --await like any other.
+FM_ROOT="$d" "$d/bin/fm-decide.sh" --request D-SK-001 --task SK-001 --kind choice --title "adopt SK-001" >/dev/null 2>&1
+assert_ok "test -f '$d/state/pending/D-SK-001.json'" "fm-decide.sh raises the skill-update card"
+r="$(post "$(answer D-SK-001 A)")"
+assert_eq "true" "$(jq -r .ok <<<"$r")" "the board answers a skill-update card"
+got="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --await D-SK-001 --timeout 5)"
+assert_eq "A SK-001 choice" "$(jq -r '"\(.chosen) \(.task) \(.kind)"' <<<"$got")" \
+  "fm-decide.sh --await reads the board's answer to it"
+assert_eq "A" "$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r '.responses[]|select(.id=="D-SK-001")|.chosen')" \
+  "and the answer is read back among the responses"
+for badid in D-SK-01 D-SK-1a D-sk-001 D-SK- D-SK-001-1; do
+  assert_contains "$(post "$(answer "$badid" A)")" "bad decision id" "the route still refuses $badid"
+done
 
 printf '%s\n' '{"id":"D-4","task":"T-A","kind":"choice"}' > "$d/state/pending/D-4.json"
 assert_eq 'true' "$(post "$(jq -cn '{id:"D-4",chosen:"custom",text:("🚢" * 1000)}')" | jq -r .ok)" '1000 Unicode code points accepted'

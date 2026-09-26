@@ -541,18 +541,249 @@ rm -rf "$bare"
 
 # an assertion that evals captured output
 { printf '#!/usr/bin/env bash\n'
-  printf 'out=hi\nassert_%s "%s '%%s' \\"$out\\" | grep -q x" "planted"\n' fail printf
+  printf 'out=hi\nassert_%s "%s '%%s' \\"$out\\" %s grep -q x" "planted"\n' fail printf '|'
 } > "$q/tests/evals.test.sh"
 plant "an assertion that evals captured output turns the hygiene stage red" "evals captured output"
 plant "and the stage names the suite" "evals.test.sh"
 rm -f "$q/tests/evals.test.sh"
 
-# a pipeline feeding grep -q
-printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\ns=hi\nprintf "%%s" "$s" | grep -q hi\n' \
+# a pipeline feeding grep -q. The pipe is passed in as an argument
+# throughout: this suite is one of the files that lint reads, and carrying
+# the literal shape would flag the suite that tests it.
+printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\ns=hi\nprintf "%%s" "$s" %s grep -q hi\n' '|' \
   > "$q/bin/fm-piped.sh"
 plant "a pipeline into grep -q turns the hygiene stage red" "feeds grep -q or -c"
 plant "and the stage names the script" "fm-piped.sh"
 rm -f "$q/bin/fm-piped.sh"
+
+# and in a test suite, which is where tests/adapter-contract.test.sh's
+# completeness loop reported a matching signature as unread at random
+# (T-103): the lint read bin/ and nothing else
+printf '#!/usr/bin/env bash\nset -uo pipefail\nl=x\nprintf "%%s\\n" "$l" %s grep -qiE X || echo unread\n' '|' \
+  > "$q/tests/piped.test.sh"
+plant "a suite that pipes into grep -q turns the stage red" "feeds grep -q or -c"
+plant "and the stage names the suite" "tests/piped.test.sh"
+rm -f "$q/tests/piped.test.sh"
+
+# below tests/ as well, and grep -c counts as much as grep -q does
+printf '#!/usr/bin/env bash\nset -uo pipefail\nn="$(jq -r .type e.jsonl %s grep -c . || true)"\n' '|' \
+  > "$q/tests/e2e/count.sh"
+plant "a helper below tests/ that pipes into grep -c turns it red" "tests/e2e/count.sh"
+rm -f "$q/tests/e2e/count.sh"
+
+# The flags come in any order. `grep -[qc]` read only the first letter, so
+# `grep -Eq` and `grep -iq` walked past it - tests/lib.sh's assert_matches
+# was one of them.
+printf '#!/usr/bin/env bash\nset -uo pipefail\nprintf x %s grep -Eq x\nprintf y %s grep -F -xc y\n' '|' '|' \
+  > "$q/tests/clustered.test.sh"
+plant "grep -q behind another flag is still grep -q" "clustered.test.sh:3:"
+plant "and so is grep -c after a separate flag" "clustered.test.sh:4:"
+rm -f "$q/tests/clustered.test.sh"
+
+# Every other way of writing it. A regex over one line read one spelling:
+# the pipe ending a line with grep on the next, an option with a value in
+# front of -q, the operand in front of it (GNU grep permutes), egrep and
+# fgrep, and an assignment or `command` in front of grep all walked past.
+# Each gets a line of its own, so each is named by its own number.
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+  printf 'printf x %s\n  grep -q x\n' '|'                 # 3-4
+  printf 'printf x \\\n  %s grep -q x\n' '|'              # 5-6
+  printf 'printf x %s grep -m 1 -q x\n' '|'               # 7
+  printf 'printf x %s grep -e x -q\n' '|'                 # 8
+  printf 'printf x %s grep -A 2 -c x\n' '|'               # 9
+  printf 'printf x %s grep x -q\n' '|'                    # 10
+  printf 'printf x %s egrep -q x\n' '|'                   # 11
+  printf 'printf x %s fgrep -c x\n' '|'                   # 12
+  printf 'printf x %s LC_ALL=C grep -q x\n' '|'           # 13
+  printf 'printf x %s command grep -q x\n' '|'            # 14
+} > "$q/tests/shapes.test.sh"
+plant "a pipe that ends the line, with grep -q on the next, is still one" "shapes.test.sh:3:"
+plant "and so is one continued with a backslash" "shapes.test.sh:5:"
+plant "grep -q behind an option that takes a value is grep -q" "shapes.test.sh:7:"
+plant "and behind -e and its pattern" "shapes.test.sh:8:"
+plant "grep -c behind -A and its count is grep -c" "shapes.test.sh:9:"
+plant "grep -q after its operand is grep -q" "shapes.test.sh:10:"
+plant "egrep -q is grep -q" "shapes.test.sh:11:"
+plant "fgrep -c is grep -c" "shapes.test.sh:12:"
+plant "an assignment in front of grep does not hide it" "shapes.test.sh:13:"
+plant "nor does command" "shapes.test.sh:14:"
+# and the line it names is the whole command, both lines of it
+bar='|'
+assert_contains "$planted" "shapes.test.sh:3:printf x $bar   grep -q x" "a joined line is printed whole"
+rm -f "$q/tests/shapes.test.sh"
+
+# Every branch of the lint, one line each, so deleting a branch flips the
+# line that names it. Not *.test.sh: nothing here is meant to run as a suite
+# (timeout and stdbuf are not on every machine). The red half: |&, each
+# wrapper and its own options, a path, the long flags, a value that is `--`
+# (stepping over it is what reaches the -q; not stepping, `--` ends the
+# options and hides it), and a pipe inside $( ). The wrapper options include
+# a cluster ending in a letter that takes a value (it takes the next word)
+# and abbreviated long options: getopt_long takes any unambiguous prefix,
+# and so do grep's own, in `abbreviated`.
+wrapped=('env -C /' 'env --unset NAME' 'env --chdir /' 'nice --adjustment 5'
+  'time -f F' 'time -o F' 'time --format F' 'time --output F'
+  'timeout -k 1 5' 'timeout --signal KILL 5' 'timeout --kill-after 1 5'
+  'stdbuf -i L' 'stdbuf -e L' 'stdbuf --input L' 'stdbuf --output L'
+  'stdbuf --error L' 'exec -a name'
+  'env -iu NAME' 'timeout -vs KILL 5' 'exec -ca name'
+  'env --un NAME' 'env --ch /' 'nice --adj 5' 'time --form F' 'time --out F'
+  'timeout --sig KILL 5' 'timeout --kill 1 5' 'stdbuf --in L' 'stdbuf --out L'
+  'stdbuf --err L')
+abbreviated=('--quie x' '--sil x' '--coun x' '--reg -- -q' '--lab -- -q x'
+  '--max -- -q x' '--after -- -q x' '--exclude-f -- -q x')
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+  printf 'printf x %s& grep -q x\n' '|'                   # 3
+  printf 'printf x %s env grep -q x\n' '|'                # 4
+  printf 'printf x %s env -i grep -q x\n' '|'             # 5
+  printf 'printf x %s env -u NAME grep -q x\n' '|'        # 6
+  printf 'printf x %s exec grep -q x\n' '|'               # 7
+  printf 'printf x %s time grep -q x\n' '|'               # 8
+  printf 'printf x %s time -p grep -q x\n' '|'            # 9
+  printf 'printf x %s nice grep -q x\n' '|'               # 10
+  printf 'printf x %s nice -n 5 grep -q x\n' '|'          # 11
+  printf 'printf x %s nohup grep -q x\n' '|'              # 12
+  printf 'printf x %s builtin grep -q x\n' '|'            # 13
+  printf 'printf x %s ! grep -q x\n' '|'                  # 14
+  printf 'printf x %s { grep -q x; }\n' '|'               # 15
+  printf 'printf x %s ( grep -q x )\n' '|'                # 16
+  printf 'printf x %s /usr/bin/grep -q x\n' '|'           # 17
+  printf 'printf x %s grep --quiet x\n' '|'               # 18
+  printf 'printf x %s grep --silent x\n' '|'              # 19
+  printf 'printf x %s grep --count x\n' '|'               # 20
+  printf 'printf x %s grep -f -- -q x\n' '|'              # 21
+  printf 'printf x %s grep -d -- -q x\n' '|'              # 22
+  printf 'printf x %s grep --regexp -- -q\n' '|'          # 23
+  printf 'printf x %s grep --file -- -q x\n' '|'          # 24
+  printf 'v="$(printf x %s grep -q x)"\n' '|'             # 25
+  printf 'printf x %s timeout 5 grep -q x\n' '|'          # 26
+  printf 'printf x %s timeout -s KILL 5 grep -q x\n' '|'  # 27
+  printf 'printf x %s stdbuf -oL grep -q x\n' '|'         # 28
+  printf 'printf x %s stdbuf -o L grep -q x\n' '|'        # 29
+  printf 'printf x %s /usr/bin/env -u NAME grep -c x\n' '|'  # 30
+  # 31 on: every other wrapper option that takes a value
+  for w in "${wrapped[@]}"; do printf 'printf x %s %s grep -q x\n' '|' "$w"; done
+  for o in "${abbreviated[@]}"; do printf 'printf x %s grep %s\n' '|' "$o"; done
+} > "$q/tests/e2e/wrappers.sh"
+# The green half, in the same gate run: each line is something one
+# exclusion lets through, so deleting that exclusion names it.
+valued=(-e -f -m -A -B -C -d -D --regexp --file --max-count --after-context
+  --before-context --context --label --include --exclude --exclude-dir
+  --binary-files --devices --directories --exclude-from --group-separator)
+# and what the long-option and cluster readers must leave alone:
+# - an ambiguous prefix (color colour context count), which grep refuses
+# - an abbreviation with its value attached, so `--` is next and ends it
+# - an attached wrapper value: -i takes "o", so L is the command, not grep
+unflagged=('grep --co x' 'grep --reg=x -- -q' 'stdbuf -io L grep -q x')
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+  printf 'printf x %s grep -- -q\n' '|'                   # 3
+  printf 'printf x %s grep --context=3 x\n' '|'           # 4
+  printf 'printf x %s grep --color x\n' '|'               # 5
+  printf 'printf x %s grep -eq x\n' '|'                   # 6
+  # 7 on: a -q that is the value of each option that takes one
+  for o in "${valued[@]}"; do printf 'printf x %s grep %s -q x\n' '|' "$o"; done
+  for u in "${unflagged[@]}"; do printf 'printf x %s %s\n' '|' "$u"; done
+} > "$q/tests/e2e/exclusions.sh"
+plant "|& is a pipe into grep -q" "wrappers.sh:3:"
+plant "env in front of grep does not hide it" "wrappers.sh:4:"
+plant "nor env -i" "wrappers.sh:5:"
+plant "nor env -u and its value" "wrappers.sh:6:"
+plant "nor exec" "wrappers.sh:7:"
+plant "nor time" "wrappers.sh:8:"
+plant "nor time -p" "wrappers.sh:9:"
+plant "nor nice" "wrappers.sh:10:"
+plant "nor nice -n and its value" "wrappers.sh:11:"
+plant "nor nohup" "wrappers.sh:12:"
+plant "nor builtin" "wrappers.sh:13:"
+plant "nor !" "wrappers.sh:14:"
+plant "nor a { group" "wrappers.sh:15:"
+plant "nor a ( subshell" "wrappers.sh:16:"
+plant "a path in front of grep does not hide it" "wrappers.sh:17:"
+plant "--quiet is -q" "wrappers.sh:18:"
+plant "--silent is -q" "wrappers.sh:19:"
+plant "--count is -c" "wrappers.sh:20:"
+plant "the value of -f is stepped over" "wrappers.sh:21:"
+plant "and of -d" "wrappers.sh:22:"
+plant "and of --regexp" "wrappers.sh:23:"
+plant "and of --file" "wrappers.sh:24:"
+plant "a pipe into grep -q inside \$( ) is one" "wrappers.sh:25:"
+plant "timeout and its duration do not hide grep" "wrappers.sh:26:"
+plant "nor timeout -s and its signal" "wrappers.sh:27:"
+plant "nor stdbuf -oL" "wrappers.sh:28:"
+plant "nor stdbuf -o and its mode" "wrappers.sh:29:"
+plant "nor a path-qualified env -u, into grep -c" "wrappers.sh:30:"
+n=31
+for w in "${wrapped[@]}"; do
+  plant "nor $w" "wrappers.sh:$n:"
+  n=$((n + 1))
+done
+for o in "${abbreviated[@]}"; do
+  plant "grep $o is read as getopt_long reads it" "wrappers.sh:$n:"
+  n=$((n + 1))
+done
+assert_lacks "$planted" "exclusions.sh:3:" "-- ends grep's options, so -q after it is an operand"
+assert_lacks "$planted" "exclusions.sh:4:" "--context=3 is not count"
+assert_lacks "$planted" "exclusions.sh:5:" "--color is not count"
+assert_lacks "$planted" "exclusions.sh:6:" "-eq is -e with the pattern q"
+n=7
+for o in "${valued[@]}"; do
+  assert_lacks "$planted" "exclusions.sh:$n:" "-q as the value of $o is not -q"
+  n=$((n + 1))
+done
+for u in "${unflagged[@]}"; do
+  assert_lacks "$planted" "exclusions.sh:$n:" "$u is not a pipe into grep -q"
+  n=$((n + 1))
+done
+rm -f "$q/tests/e2e/wrappers.sh" "$q/tests/e2e/exclusions.sh"
+
+# How the reader normalises a line, one step per line, so deleting a step
+# flips the line that names it. Red: each kind of quote and the backslash
+# are taken out (`'-q'`, `"-q"` and `\grep` are -q and grep to the shell), a
+# value attached with = is not stepped over, a wrapper's long option is
+# done once its value is taken (timeout --s is --signal; read as a cluster
+# as well, its s takes KILL and the duration eats grep), a digit is a grep
+# option, and a backslash-newline joins with nothing between, as bash
+# joins it. Green: grep's words end at each of ; & ) and a backtick, `--`
+# ends a wrapper's options (-x is the command), so does its first operand,
+# a word that does not start with - is an operand however it is spelt, and
+# a prefix of more than one long option is refused even when all of them
+# take a value. tail.sh ends in the middle of a continued line.
+{ printf '#!/usr/bin/env bash\nset -uo pipefail\n'
+  printf "printf x %s grep '-q' x\n" '|'                  # 3
+  printf 'printf x %s grep "-q" x\n' '|'                  # 4
+  printf 'printf x %s \\grep -q x\n' '|'                  # 5
+  printf 'printf x %s env --unset=NAME grep -q x\n' '|'   # 6
+  printf 'printf x %s timeout --s KILL 5 grep -q x\n' '|' # 7
+  printf 'printf x %s grep -2q x\n' '|'                   # 8
+  printf 'printf x %s grep -\\\nq x\n' '|'                # 9-10
+  printf 'printf x %s grep x; wc -c f\n' '|'              # 11
+  printf 'printf x %s grep x & wc -c f\n' '|'             # 12
+  printf 'echo "$(printf x %s grep x) -c"\n' '|'          # 13
+  printf 'echo `printf x %s grep x` -c\n' '|'             # 14
+  printf 'printf x %s env -- -x grep -q x\n' '|'          # 15
+  printf 'printf x %s env NAME=v -i grep -q x\n' '|'      # 16
+  printf 'printf x %s grep squid\n' '|'                   # 17
+  printf 'printf x %s grep --exc -- -q x\n' '|'           # 18
+} > "$q/tests/e2e/reading.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nprintf x %s grep -q x \\\n' '|' \
+  > "$q/tests/e2e/tail.sh"
+plant "a single-quoted -q is -q" "reading.sh:3:"
+plant "a double-quoted -q is -q" "reading.sh:4:"
+plant "a backslashed grep is grep" "reading.sh:5:"
+plant "a wrapper value attached with = is not stepped over" "reading.sh:6:"
+plant "a wrapper's long option is done once its value is taken" "reading.sh:7:"
+plant "a digit is a grep option: -2q is quiet" "reading.sh:8:"
+plant "a backslash-newline joins with nothing between" "reading.sh:9:"
+plant "a file that ends in a continued line is still read" "tail.sh:3:"
+assert_lacks "$planted" "reading.sh:11:" "grep's words end at ;"
+assert_lacks "$planted" "reading.sh:12:" "and at &"
+assert_lacks "$planted" "reading.sh:13:" "and at )"
+assert_lacks "$planted" "reading.sh:14:" "and at a backtick"
+assert_lacks "$planted" "reading.sh:15:" "-- ends a wrapper's options, so -x is the command"
+assert_lacks "$planted" "reading.sh:16:" "and so does its first operand"
+assert_lacks "$planted" "reading.sh:17:" "an operand with a q in it is not -q"
+assert_lacks "$planted" "reading.sh:18:" "--exc names three options, so grep refuses it"
+rm -f "$q/tests/e2e/reading.sh" "$q/tests/e2e/tail.sh"
 
 # Two scripts, and one of them with two offending lines: a stage that
 # stopped at the first hit passes a single-instance plant, which this
@@ -705,7 +936,7 @@ rm -f "$q/tests/hand-rolled.test.sh"
 # catches and none for the thing it lets through is half a lint: the
 # exclusion is where the false positives live, and one of these was dead
 # code that never matched anything.
-printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n# printf x | grep -q y\necho ok\n' \
+printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null\n# printf x %s grep -q y\necho ok\n' '|' \
   > "$q/bin/fm-commented.sh"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 assert_contains "$out" "ci: green" "a hazard quoted in a comment is not a hazard"
@@ -717,14 +948,31 @@ out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 assert_contains "$out" "ci: green" "a dispatch quoted in a comment is not a dispatch"
 rm -f "$q/bin/fm-commented.sh"
 
-printf '#!/usr/bin/env bash\n# fm:lint-source\nset -uo pipefail\nexec < /dev/null\ns=hi\nprintf "%%s" "$s" | grep -q hi\n' \
+printf '#!/usr/bin/env bash\n# fm:lint-source\nset -uo pipefail\nexec < /dev/null\ns=hi\nprintf "%%s" "$s" %s grep -q hi\n' '|' \
   > "$q/bin/fm-quoter.sh"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 assert_contains "$out" "ci: green" "a file that declares itself a lint source is skipped"
 rm -f "$q/bin/fm-quoter.sh"
 
+# the same two exclusions hold in the suites
+printf '#!/usr/bin/env bash\n# fm:lint-source\nset -uo pipefail\nprintf x %s grep -q x\n  # printf y %s grep -c y\n' '|' '|' \
+  > "$q/tests/quoter.test.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_contains "$out" "ci: green" "a suite that declares itself a lint source is skipped"
+printf '#!/usr/bin/env bash\nset -uo pipefail\n  # printf y %s grep -c y\ngrep -q x <<<"$(printf x)"\n' '|' \
+  > "$q/tests/quoter.test.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_contains "$out" "ci: green" "a pipe quoted in a suite's comment, or a here-string, is not a hazard"
+# `||` is not a pipe, and grep reading a file after it has no producer to
+# kill; -C is context, not count, and a -q that is -e's pattern is a pattern
+printf '#!/usr/bin/env bash\nset -uo pipefail\ntrue || grep -q x "$0"\nprintf x %s grep -C 2 x\nprintf x %s grep -e -q\ntrue\n' '|' '|' \
+  > "$q/tests/quoter.test.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_contains "$out" "ci: green" "an or-list into grep -q, grep -C, or -q as -e's pattern is not a hazard"
+rm -f "$q/tests/quoter.test.sh"
+
 { printf '#!/usr/bin/env bash\n'
-  printf '# assert_%s "%s '%%s' \\"$out\\" | grep -q x" "in a comment"\n' fail printf
+  printf '# assert_%s "%s '%%s' \\"$out\\" %s grep -q x" "in a comment"\n' fail printf '|'
 } > "$q/tests/commented.test.sh"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 assert_contains "$out" "ci: green" "an evalling assertion quoted in a comment is not one"
@@ -862,5 +1110,15 @@ rm -rf "$q/bin/adapters"   # the broken adapter planted further up
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 assert_contains "$out" "ci: green" "and the fixture is green again once every plant is pulled"
 rm -rf "$q"
+
+# Every script parses. A `'` in a comment inside a single-quoted program
+# (pipe_awk's `grep's`, T-103 round 7) ends the string early, and bash only
+# finds out when it reaches that line: ci.sh died mid-stage, and every plant
+# above went red for a reason none of them names.
+unparsed=''
+while IFS= read -r f; do
+  bash -n "$f" 2>/dev/null || unparsed="$unparsed $f"
+done < <(find "$ROOT/bin" "$ROOT/tests" -type f -name '*.sh')
+assert_eq "" "$unparsed" "every script below bin/ and tests/ parses (bash -n)"
 
 finish

@@ -105,6 +105,18 @@ scans combined output rather than extracting a final answer. A marker in a
 quote or intermediate output can therefore pass its check; its success is not
 proof that a review satisfying this contract occurred.
 
+You do not write the record of what you reviewed: `fm-review.sh` appends a
+`REVIEWED:<task-id>` line after your verdict, naming the head, its merge-base
+with `main`, the patch-id of the change and the files it touches. Its verdict
+is your last marker on a line of its own; a marker you mention in passing
+does not count, and with no standalone marker the round is recorded as a
+rejection. Your
+approval binds to that change (T-113, captain, 2026-09-26): it carries forward
+across an update onto a newer `main` that leaves the change identical and
+touches none of its files, and any other change to the head - a conflict
+resolution, a worker edit - needs a new review. CI and the gates always rerun
+on the head being merged; they are firstmate's, not yours.
+
 ## From round three
 
 If no original closed list exists, the worker will post `ASK-PASS-CRITERIA:<task-id>`. Answer with a **numbered
@@ -144,7 +156,7 @@ failed to read. Nothing else from the pull request is quoted there.
 
 ## CI and the gates are not yours
 
-Current-head CI and the seven gates are firstmate's merge gate, in both modes,
+Current-head CI and the gates are firstmate's merge gate, in both modes,
 not a criterion of your review (captain, 2026-09-25). A review never waits on
 CI: do not require green CI or gates to sign, do not put them on a closed
 list, and do not keep an item open for them. A merge needs your verdict and
@@ -179,15 +191,16 @@ observable evidence and limitations; metadata checks cannot prove instruction
 compliance. Judge current verdict evidence, not stale approvals.
 The current launcher may scan combined output for markers; do not mistake that
 parser behavior for final-answer provenance. Report the limitation when present.
-Gate 7 does not check final-answer provenance or the reviewed head, and only
-filters comment authors when `FM_REVIEWER_LOGIN` is set. The protocol checker
+Gate 7 does not check final-answer provenance; it binds an approval to the
+change its `REVIEWED:` line records, lets a later rejection supersede it, and
+only filters comment authors when `FM_REVIEWER_LOGIN` is set. The protocol checker
 recognizes markers and numeric references without proving original-list
 membership or a new regression. Firstmate must coordinate these checks and
 confirm publication; launcher success does not prove its comment was posted.
 Use repository verification. Neither lavish nor
 no-mistakes is a prerequisite; do not add their hooks. Captain scope and merge
 decisions remain on the board; the merge helper itself checks neither approval
-nor the seven gates. Mid-run board progress is script-emitted only: do not invent
+nor the gates. Mid-run board progress is script-emitted only: do not invent
 percentages from coarse lifecycle state in review prose or fixtures.
 
 Managed launches create a dedicated tab with one owned root pane and the same

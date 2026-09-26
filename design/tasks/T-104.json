@@ -1,0 +1,28 @@
+{
+  "id": "T-104",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-089"
+  ],
+  "title": "each installation draws 24 worker and 24 reviewer names at random, and a name always means one role",
+  "scope": [
+    "bin/fm-herdr.py",
+    "bin/fm.sh",
+    "bin/fm-session.sh",
+    "config.yaml",
+    "tests/herdr.test.sh",
+    "tests/worker.test.sh",
+    "tests/review.test.sh",
+    "tests/session.test.sh",
+    "design/design.md",
+    "design/tasks/T-104.json"
+  ],
+  "acceptance": [
+    "The captain asked on 2026-09-26 for worker and reviewer names to be separate. T-089 gave the fleet one shared roster, so the same name can turn up as a worker on one task and as a reviewer on the next. A name then no longer means one crew member with one role, one rank ladder and one service record: workers rise by merged tasks, reviewers by approvals that were never overturned. This task gives each role its own roster of 24 names, drawn at random once per installation (captain, 2026-09-26). Commit the task's own entry as design/tasks/T-104.json on this branch. Evidence is the required GitHub check and the seven gates.",
+    "The crew is 24 workers and 24 reviewers. Their names are drawn at random when firstmate-workflow is installed, and never again. The installation is the first time firstmate runs in a checkout, until the plugin installer (T-075..T-083) exists and calls the same step. Drawing means taking 48 distinct names, uniformly at random, from a built-in pool of at least 200 short given names (letters only, at most six letters, varied in origin) held in bin/fm-herdr.py. The first 24 go to workers and the rest to reviewers. The result is written once to state/crew/rosters.json ({\"workers\": [...], \"reviewers\": [...], \"drawn_at\": ...}). state/ is gitignored, so each installation gets its own crew. `bin/fm.sh roster` prints both rosters. `bin/fm.sh roster init` draws them if they are missing and refuses to redraw an existing crew. `--redraw` redraws, only when asked, and says that ranks and service records keyed by the old names stay with the old names. fm-session.sh start runs the draw when state/crew/rosters.json is missing, and so do fm-worker.sh and fm-review.sh when they need a name, so no run ever lacks a crew. config.yaml may still pin names with `rosters:` (`workers:` and `reviewers:` lists, validated as T-089 validates `roster:`); when present they override the drawn crew. A name in both lists is refused with a message naming it. The old single `roster:` key is still read (its names go to workers, with one warning line).",
+    "fm-worker.sh draws only from the worker roster and fm-review.sh only from the reviewer roster, through bin/fm-herdr.py's choose_name. A name is never used for the other role, even when its own roster is exhausted. When all names of a role are taken, the run fails with a message saying which roster ran out, and never borrows from the other one. The one-live-run-per-name rule from T-089 still holds within each roster.",
+    "Tests: the draw gives 24 + 24 distinct names with no overlap, all from the pool; a second start keeps the same crew; `roster init` refuses to redraw an existing crew and `--redraw` replaces it; two workers and a reviewer running together get three distinct names from the right rosters; a name in both config lists is refused; the legacy `roster:` key still works with its warning; an exhausted reviewer roster fails without borrowing a worker name. Randomness is injectable (a seed via an environment variable used only by tests), so tests are deterministic. Each test fails on the current code.",
+    "design.md states the rule and why: a crew member's name, rank and service record belong to one role. Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+  ]
+}

@@ -29,7 +29,7 @@ The agent CLI is a **replaceable engine**, not the system.
 
 - Not an auto-merge bot. A human always presses merge.
 - Not an agent that improves itself in place. Changes to `skills/` travel the
-  same pull request and the same seven gates as any other code.
+  same pull request and the same gates as any other code.
 - Not snapshot-based. The event log is the truth (section 5.1).
 
 ---
@@ -212,7 +212,7 @@ Receiving a response is not itself approval; inspect the chosen option and conte
 ```
 
 Two kinds. `choice` is an option card carrying a before/after diagram. **`merge`
-is a request to merge**, carrying the seven-gate checklist, the diff stat, the
+is a request to merge**, carrying the gate checklist, the diff stat, the
 files touched and the pull request link, answered with merge, send back, or
 hold. **Every merge goes through a card.** firstmate may not merge on its own
 and may not ask for one in conversation.
@@ -336,7 +336,7 @@ be measured, not inferred from the watcher mechanism. **No `fswatch` dependency.
 These are orchestration requirements, not enforcement inside `fm-merge.sh`.
 The board calls that helper for choice A on a pending merge card. The helper
 checks PR state and invokes GitHub merge, then attempts event emission and
-cleanup; it does not read approval decisions or run the seven gates. The board
+cleanup; it does not read approval decisions or run the gates. The board
 route does not rerun gates either. Firstmate must verify current-head gates, CI,
 reviewer provenance and board approval, and coordinate fresh verification when
 the head changes so a stale card is not treated as ready. `fm-run.sh` requests
@@ -832,7 +832,7 @@ did not happen.
 
 ---
 
-## 6. Lifecycle and the seven gates
+## 6. Lifecycle and the gates
 
 ```
 grilling  ->  /prototype  ->  [captain green-lights]  ->  design.md + design/tasks/
@@ -841,7 +841,7 @@ grilling  ->  /prototype  ->  [captain green-lights]  ->  design.md + design/tas
                                        |
               fm-worker.sh: worktree -> adapter -> commit -> pull request
                                        |
-                          *  fm-gate.sh, the seven gates  *
+                          *  fm-gate.sh, the six gates  *
                                        |
             fm-review.sh: reviewer sees the diff, the spec, the criteria
          (diff mode: and, given the PR, the head's check and gate results,
@@ -907,39 +907,124 @@ concurrency limit still hold, and it says which one held the task.
 |---|---|---|
 | 1 | branch exists and has commits | `git rev-list --count main..<branch>` > 0 |
 | 2 | rebase onto main is clean | attempt it in a scratch worktree; non-zero fails |
-| 3 | the declared `project.check` exits 0 | `config.yaml`'s `setup`, then `check` with `check_env`, in a fresh worktree |
+| 3 | *retired (T-114)* | ran the whole `project.check` locally; gate 6 reads the required GitHub check, which runs it on the same head |
 | 4 | the diff stays in scope | `git diff --name-only` within the task's `scope` globs |
-| 5 | **the new tests are not vacuous** | classify by `project.tests`, revert the implementation, run `setup`, then each test through `project.test` (else `check`); it must go red |
+| 5 | **the new tests are not vacuous** | classify by `project.tests`, revert the implementation, run `setup`, then only the suites the diff touches through `project.test`; the whole `check` only when none can be determined, said so; it must go red |
 | 6 | the required GitHub check is green | `gh pr checks <pr> --required` |
-| 7 | a PR comment contains `APPROVE:<task-id>` | author filtered only if `FM_REVIEWER_LOGIN` is set |
+| 7 | the latest verdict is an `APPROVE:<task-id>` for this change | its `REVIEWED:` line names the current head, or the same patch-id with no `main` commit touching its files since (below); author filtered only if `FM_REVIEWER_LOGIN` is set |
 
-Require all seven gates and current-head review evidence before treating a merge
+**Gate 3 is retired, and its number with it (captain, 2026-09-26; T-114).**
+It ran the whole project check in a fresh worktree: the same run the required
+GitHub check makes on the same head, which gate 6 already reads. On
+2026-09-25 and 2026-09-26 it held CI-green heads by overrunning its 600-second
+budget whenever run-mode reviewers or other gates ran the check on the same
+machine (1565 seconds on T-104; again on T-068, T-086, T-112 and T-054). The
+remaining gates keep their numbers and their meaning, so gate 5 is still the
+fail-first gate, gate 6 CI and gate 7 the approval; nothing exits 3, and
+`fm-gate.sh --only 3` is a usage error (exit 64), not a green gate. The board,
+the review prompt's gate section and `fm-run.sh` read the same six numbers.
+A merge card's `gates` list keeps seven slots and the board reads it by gate
+number (`gates[n-1]`), so slot 3 is carried but never shown, and a producer
+that still sends one value per number 1-7 lines up with the checklist.
+
+**Gate 5 runs only the touched suites (T-114).** On the reverted tree it runs,
+through `project.test`, every test file the diff changes, then every other
+test file that names one of them by path or file name - the suites that
+source a changed helper. A name counts only standing alone, with no other
+file-name character either side, so `helper.sh` is not named by
+`fm-helper.sh`. An unchanged suite that names only changed
+implementation is not run: in the reverted tree it is the base's test of the
+base's code, and could go red only for a reason other than the diff. When no
+suite can be determined that way - no `project.test` declared, or no touched
+test file left in the tree - gate 5 runs the whole `check` and says so on
+stderr, as it says which suites it ran.
+
+**Gate runs are serialized on one machine (T-114).** A run holds a kernel
+`flock` on the file `FM_GATE_LOCK` (default `/tmp/fm-gate.lock`) from start to
+exit; a second run waits and says whose run it waits for, from the pid the
+holder writes in the file. The default is one path for the machine and does
+not follow `TMPDIR`, which is per user on macOS and per sandbox. The kernel
+releases the lock when the holder exits, however it exits, so no run judges
+whether another is alive and no lock is ever removed: a killed run, a reused
+pid, another user's run and a lock file that names no holder cannot be
+misread. The suites the gate runs do not inherit the descriptor. The path
+sits where every user writes, so it is opened once, by perl, refusing a
+symlink and anything but a regular file with that one name, and every read
+and write of it goes through that descriptor; a planted link cannot make a
+gate run create, truncate or write another file, and the run exits 70 naming
+the file instead. A run
+started inside a run holding the same lock (it inherits
+`FM_GATE_LOCK_HELD`) is refused with exit 70 rather than waiting for ever or
+running unlocked, so every suite that runs the real gate sets its own
+`FM_GATE_LOCK`, and `tests/gate.test.sh` checks that each one does.
+
+Require all six gates and current-head review evidence before treating a merge
 card as ready. `fm-run.sh` requests a card after gate success, but `fm-review.sh`
 can emit `approved` on an approval substring before that subsequent gate run.
-Gate 7 neither binds approval to a head nor distinguishes final, quoted or stale
-markers; a later rejection does not invalidate an earlier matching comment.
-Firstmate must verify provenance and current readiness explicitly. Any red gate
+Gate 7 reads the verdict comments (the reviewer's only, when
+`FM_REVIEWER_LOGIN` is set) and takes the latest; a later rejection supersedes
+an earlier approval. It does not distinguish final from quoted markers, and an
+`APPROVE` with no `REVIEWED:` line (one posted by hand, or before T-113) is
+still read as before and binds to no head, which the gate says. Firstmate must
+verify provenance and current readiness explicitly. Any red gate
 requires remediation regardless of praise or an `approved` event.
 
 **Round order and the merge double check (captain, 2026-09-25).** A review
 round starts as soon as the worker hands back, through `fm-review.sh`, and
-never waits on CI: CI and the seven gates are not a review criterion in
+never waits on CI: CI and the gates are not a review criterion in
 either mode. A merge card needs two independent checks on the same current
 head: the reviewer's `APPROVE:<task-id>` for that head, and firstmate's own
-reading of that head's required GitHub check (green) and the seven gates
+reading of that head's required GitHub check (green) and the six gates
 (`fm-gate.sh`). Neither substitutes for the other - an approval is not green
-CI, and green gates are not an approval - and a head that changes after
-either check restarts both. `fm-run.sh`'s loop still sends a task to review
-only once gates 1-6 are green; until it follows this order, firstmate starts
-the round itself when the worker hands back.
+CI, and green gates are not an approval. A head that changes after either
+check restarts both, with the one exception below. `fm-run.sh`'s loop still
+sends a task to review only once every gate before 7 is green; until it
+follows this order, firstmate starts the round itself when the worker hands
+back.
 
-Gates 3 and 5 name no toolchain. The target repository declares its own in
+**The approval binds to the change; CI and the gates bind to the head
+(T-113, captain, 2026-09-26).** Strict branch protection moves every open
+head after each merge, and `gh pr update-branch` then forced a second review
+of a change that was identical. So the two checks bind to different things.
+`fm-review.sh` ends every verdict it posts with one line of its own, after
+the reviewer's words:
+
+```
+REVIEWED:<task-id> verdict=<APPROVE|REJECT> head=<sha> base=<merge-base> patch=<patch-id> files=<JSON array>
+```
+
+`verdict` is the last `APPROVE:<task-id>` or `REJECT:<task-id>` that stands
+on a line of its own in the reviewer's answer, never a marker mentioned in
+passing; an answer with no standalone marker is recorded as `REJECT`. The
+same reading decides the `approved` or `review_failed` event, so the event
+and the line gate 7 trusts cannot disagree.
+
+`base` is the head's merge-base with `main`; `patch` is `git patch-id
+--stable` of the diff between them, taken with `git diff-tree -p
+--no-renames`, which reads no user configuration; `files` lists every path
+that diff touches. Gate 7 accepts the latest `APPROVE` when its `head` is the
+current head, or when all of these hold:
+
+1. the current change's patch-id, merge-base to head, equals the approved one;
+2. no commit on `main` between the approved merge-base and the current one
+   touches any file in the approved list;
+3. no later `REJECT` supersedes the approval.
+
+Otherwise it fails and names the condition, so firstmate knows a real
+re-review is needed. A conflict resolution or any worker edit changes the
+patch-id, and so always needs a new review. The reviewer's approval carries
+forward across an update that leaves the change identical and touches none of
+its files; CI and the six gates always rerun on the head being merged,
+since they test the change combined with the current `main`.
+
+Gate 5 names no toolchain. The target repository declares its own in
 `config.yaml`'s `project:` block (`setup`, `check`, `check_env`, `tests`,
 `test`, `docs`; see the README), and the gates run exactly that, read from the
 branch under test; gate 4 decides whether a branch may change `config.yaml` at
 all. Gate 5 asks for no new test only when every changed non-test path matches
 the declared `docs` globs; with none declared, nothing is exempt.
-An undeclared `check` or a failed `setup` fails the gate by name; a stage the
+An undeclared `check` where gate 5 must fall back to it, or a failed `setup`,
+fails the gate by name; a stage the
 check skipped is not a stage that passed. `bin/fm-session.sh start` runs
 `setup` once in the checkout and reports the contract; `status` only reports it.
 
@@ -1329,9 +1414,11 @@ GitHub sets `FM_CI_MAX_SECONDS=600`; its separate `timeout-minutes: 10` covers
 the entire job, including setup, so the script may have less than 600 seconds
 before GitHub cancels it. For T-017, Firstmate runs the same full local gate
 with `FM_CI_MAX_SECONDS=600 bash bin/ci.sh` before publication. Since T-043
-that budget is this repository's declared `project.check_env`, and gate 3 runs
-the declared `setup` first, so a fresh worktree has the dependencies and
-browser the end-to-end stage needs instead of skipping it. A functional
+that budget is this repository's declared `project.check_env`, and a fresh
+worktree that runs the check - gate 5's fallback, a run-mode reviewer's
+clone - runs the declared `setup` first, so it has the dependencies and
+browser the end-to-end stage needs instead of skipping it. (Gate 3 ran the
+whole check this way until T-114 retired it.) A functional
 pass at 208 seconds is within that authorized budget, but exceeds the default.
 
 ```
@@ -1373,6 +1460,91 @@ expect and test timeouts, and an animation a test steps through runs on a
 paused clock rather than on real time. A negative window ("nothing was
 started within N seconds") is wall clock, never a count of sleeps, and may
 only grow: reconcile's is 5 seconds.
+
+No script and no suite feeds `grep -q` or `grep -c` through a pipe (T-103).
+Under `pipefail`, `grep -q` leaving on its first match can kill the producer
+with SIGPIPE, and the pipeline then reports a match as a miss; a loaded
+runner loses that race where an idle laptop does not, which is how
+adapter-contract's completeness loop failed on CI with a different signature
+each run. The data goes in by here-string (or process substitution, where
+`$(...)` would strip trailing lines the check is looking for). The hygiene
+lint enforces it over every `*.sh` below `bin/` and `tests/`, and it catches
+exactly the shapes listed here, no others. It reads
+commands, not one spelling: comments off, continuation lines (a trailing `|`
+or `\`) joined, a backslash-newline with nothing between as bash joins it,
+`||` not a pipe, and every command a single `|` or `|&`
+starts is judged, inside `$(...)` too. It is looking for `grep`, `egrep` or
+`fgrep`, by path too, past `!`, `{`, `(`, leading assignments, and the
+wrappers `env`, `nice`, `time`, `timeout`, `stdbuf`, `exec`, `command`,
+`builtin` and `nohup` with their own options and those options' values
+(`env -u NAME`, `nice -n 5`, `timeout -s KILL 5`, `stdbuf -o L`). It flags
+`-q`/`-c` (a digit is an option too: `-2q`) or `--quiet`/`--silent`/`--count`
+among grep's words, stepping over
+the value of `-e`, `-f`, `-m`, `-A`, `-B`, `-C`, `-d`, `-D` and every long
+option that takes one, and stopping at `--`. Options are read the way getopt
+reads them, on the wrappers' side and on grep's: a cluster whose last letter
+takes a value takes the next word (`env -iu NAME`, `timeout -vs KILL 5`), and
+a long option may be any prefix that names one option (`grep --quie`,
+`env --un NAME`); a prefix of more than one (`grep --co`, `grep --exc`) is
+refused by grep and not flagged. Quotes and backslashes are transparent,
+because an assertion
+string is eval'd, so grep's words end at the first `|`, `;`, `&`, `)` or
+backtick, quoted or not. A file that declares `# fm:lint-source` is skipped. Each of
+these shapes has its own plant in `tests/ci.test.sh`, named by its line. Any
+other spelling is not caught: in front of grep the reader steps over only the
+words named above, and the first word it does not know ends its search. Such
+a spelling relies on review.
+
+The sweep that brought the suites under the lint (T-103) changed 27 sites in
+11 files under `tests/`: adapter-contract 1, board 2, cleanup 1, decide 3,
+dispatch 2, i18n 4, `lib.sh` 1, open 1, review 3, sync-prs 1, worker 8; and 1
+in `bin/ci.sh` itself, which the lint skips by its marker. A here-string
+appends a newline, so empty input becomes one empty line; every converted
+site was checked for input that can be empty meeting a pattern that can
+match an empty line. One changed its result, `tests/lib.sh`'s
+`assert_matches`, and it reads `< <(printf '%s' "$1")` instead, with
+`tests/lib.test.sh` proving `""` no longer matches `'^$'`. The rest are safe:
+the `grep -c .` and `grep -q .` sites (`.` never matches an empty line), the
+`-qx` sites (a non-empty literal), the fixed non-empty patterns
+(adapter-contract, board, cleanup, decide, open, sync-prs, worker, and the
+here-string loop in `tests/pipefail-grep.test.sh`), and i18n's two `'^$'`
+checks, which use `< <(jq ...)` because `$(...)` would strip the trailing
+empty lines they look for.
+
+```
+SWEPT:T-103 pipelines into grep -q / grep -c in the test suites
+  searched: the round-1 regex, then the command-reading lint, over every *.sh
+    below bin/ and tests/ (62 files; bin/ci.sh, bin/fm-config.sh and
+    tests/pipefail-grep.test.sh skipped by their lint-source marker)
+  found 27 in 11 files under tests/, fixed 27: adapter-contract 1, board 2,
+    cleanup 1, decide 3, dispatch 2, i18n 4, lib.sh 1, open 1, review 3,
+    sync-prs 1, worker 8; plus bin/ci.sh 1
+SWEPT:T-103 converted sites where empty input meets a pattern matching an empty line
+  searched: every <<< and < <( line the branch added under tests/ and in bin/ci.sh
+  found 1 (tests/lib.sh assert_matches), fixed 1
+SWEPT:T-103 option spellings getopt accepts that the lint's readers missed
+  searched: each option reader in the lint (wrappers and grep) against
+    clusters ending in a value letter, attached values and long-option prefixes
+  found 2 (wrapper clusters like env -iu NAME; abbreviated long options on
+    both sides like grep --quie), fixed 2, each planted in tests/ci.test.sh
+SWEPT:T-103 statements in the lint's hazard(), lkind() and per-line rules
+    that no plant pins
+  searched: deleted each statement alone, by reading, and asked which plant
+    in tests/ci.test.sh flips; the option tables are data, pinned by their
+    value and quiet/count entries
+  found 19. 9 now pinned by new plants: the single-quote, double-quote
+    and backslash strips; the word cut (one plant per character); a
+    wrapper's --; the first operand ending a wrapper's options; the
+    wrapper long-option continue; the END flush; the joined line's printed
+    text. 10 dead and removed: the =VALUE strip and both = checks,
+    lkind's empty-name return and its "?" mapping, the j > ntok test,
+    END's buf test, the trailing-backslash sub, the space the | join
+    added, and the continue after grep's long options. Reading them also
+    turned up 3 wrong reads, fixed and planted: the space the backslash
+    join added (bash joins -\ and q into -q), a digit that was not a grep
+    option (-2q), and a prefix of several options that all take a value
+    (--exc), read as one where getopt_long refuses it
+```
 
 Each stage skips cleanly when its subject does not exist, so the gate is green
 from an empty tree onward. **Every e2e uses the `mock` adapter** — no model
@@ -1487,9 +1659,52 @@ pane and agent names, board events, log paths and result receipts. Existing live
 are not renamed. A foreign Herdr name collision is a reported transport failure,
 not a silently different sidebar identity.
 
-The name in the label is a crew member from one fleet roster (T-089), shared by
-workers and reviewers: `DEFAULT_ROSTER` in `bin/fm-herdr.py`, or config.yaml's
-`roster:` list of short given names. Under the identity lock a run takes a name
+The name in the label is a crew member, and a name always means one role
+(T-104). A crew member's name, rank and service record belong to one role:
+workers rise by merged tasks, reviewers by approvals that were never
+overturned, so a name that served as a worker on one task and a reviewer on
+the next would be two careers under one name. There are therefore two rosters,
+24 workers and 24 reviewers, drawn at random once per installation: 48
+distinct names taken uniformly from `POOL` in `bin/fm-herdr.py`, at least 200
+short given names of varied origin, the first 24 to workers and the rest to
+reviewers. The draw is written once to `state/crew/rosters.json`
+(`{"workers": [...], "reviewers": [...], "drawn_at": ...}`); `state/` is
+gitignored, so each installation has its own crew. The installation is the
+first time firstmate runs in a checkout until the plugin installer
+(T-075..T-083) calls the same step: `fm-session.sh start` draws when the file
+is missing, and so does every allocation, so no run lacks a crew.
+`bin/fm.sh roster` prints both rosters, `roster init` draws them if missing
+and refuses to redraw an existing crew, and `--redraw` draws again only when
+asked, saying that ranks and service records keyed by the old names stay with
+the old names. A crew file that is not two disjoint lists of names is refused,
+not quietly redrawn. `FM_ROSTER_SEED` seeds the draw and exists only for
+tests. config.yaml may pin names under `rosters:` with `workers:` and
+`reviewers:` lists, validated as T-089 validated `roster:`; any other key
+under `rosters:`, or an inline `rosters: {…}`, is refused by name; a pinned list
+replaces that role's drawn names, a drawn name pinned to the other role is
+dropped, and a name in both lists is refused with a message naming it. The
+old single `roster:` is still read: its names are workers, with one warning
+line.
+
+A worker takes a name only from the worker roster and a reviewer only from the
+reviewer roster; an explicit `--name` on the other role's roster is refused.
+The rosters say which role a name has now; the runs say which role it has
+served. Every `identity.json` records `role` and `name`, and a run allocated
+under this rule also records `one_role: true`. A name keeps the role of its
+earliest such run and is never used for the other: an explicit `--name` on
+neither roster is refused once it has served the other role, a roster name
+that served the other role (moved in config.yaml, say) is skipped, and a draw
+or `--redraw` never deals a name to the role it did not serve. So one name
+never holds a worker record and a reviewer record from here on. Runs without
+`one_role` were written under T-089, which let one name serve both roles;
+they bind no name, because history is not judged by a rule it was not written
+under. Otherwise an installation that used the old `roster:` would find every
+name that had served both roles refused for both. A name's first run under
+the rule decides its role.
+When every name of a role is taken the run fails, exit 70, with `the <role>
+roster ran out: …, and a name of the other role is never borrowed`; it never
+borrows and never reuses a name with a number. Within each roster the T-089
+rules hold. Under the identity lock a run takes a name
 no live run holds. A run is live while it is unfinished — it has no
 `orchestration-result.json` — unless it is proven over: its `process.json`
 launcher no longer matches and every attempt it recorded has terminated. A run
@@ -1498,20 +1713,21 @@ immediately after allocation and `transport()` writes its attempt, so no clock
 decides it. Reserved, unstarted and legacy attempts count as live, as they do
 for recreation. `identity.json` records the crew member whole as `name`, and the
 actor carries exactly that name; runs from before T-089 have none, so their name
-is read from the actor. Every comparison — live, previous round, other role,
-reuse — is on the whole name. A task's worker and reviewer are never the same
-crew member: a name either role of the task has used is not offered to the
-other. A task keeps its previous round's name while that name is free;
-otherwise it takes the first free name. When no name is left for the run the
-allocator reuses one as `<name><n>`, records `reused` in `identity.json`, and
-says why: `every roster name is live (N); reusing <name> as <name><n>` when all
-are live, or `no roster name is free for this task (L of N live, <names> held
-by its other role); reusing …` when the only free names are the other role's. An explicit alias wins but is refused, exit 70
-with one line, while that name is live or is the task's other role's. A name is
+is read from the actor. Every comparison — live, previous round, other role —
+is on the whole name. A task's worker and reviewer are never the same crew
+member: a name either role of the task has used is not offered to the other.
+A task keeps its previous round's name while that name is free; otherwise it
+takes the first free name in its roster. An explicit alias wins but is
+refused, exit 70 with one line, when that name is on the other role's roster,
+has served the other role, is the task's other role's, or is live, and the
+line names the first of these that holds, in that order. A refusal that never
+lifts is named before one that lifts when a run finishes, so a crew member is
+not told to wait for a name their role can never take. A name is
 never cut: one that does not fit the room the final `-<task>-r<n>` suffix
 leaves, measured again on each retry, is refused, so the actor stays within 32
-characters and no label can stand for two crew members. An empty `roster:` is
-refused like any other invalid roster, not replaced by the default.
+characters and no label can stand for two crew members. An empty `roster:`,
+`rosters.workers:` or `rosters.reviewers:` is refused like any other invalid
+list, not replaced by the drawn crew.
 
 In `HERDR_ENV=1`, Codex, Claude, Cursor Agent and Gemini adapters use shipped
 `bin/fm-herdr.py` to execute the real CLI in a dedicated new tab containing one
@@ -1617,7 +1833,7 @@ process or status marker is never PR acceptance.
 touching code.
 
 After a round, firstmate may open a `skill-update` task — **but it travels the
-same pull request, reviewer and seven gates as anything else.** The system
+same pull request, reviewer and gates as anything else.** The system
 cannot quietly edit itself.
 
 `fm.sh sync-skills` imports from an external skills directory into
@@ -1876,7 +2092,8 @@ array's two top-level keys went with it: `$schema` named a
 the dispatcher's limit is `config.yaml`'s. A test compares the first commit
 that removed `design/tasks.json` with its parent: the files, in the old
 array's order, are the old array. That comparison needs history, so it runs
-under gate 3 and locally, not on the required GitHub check, whose checkout
+locally (and ran under gate 3 until T-114 retired it), not on the required
+GitHub check, whose checkout
 is one commit deep; there the test asserts only that nothing still tracks
 `design/tasks.json`. The test that the split itself loses nothing — a
 fixture array, unicode and key order included — runs everywhere.
@@ -1967,7 +2184,7 @@ projects:
 | `design`, `tasks` | paths **relative to the engine root**; `tasks` is a directory, one file per task (T-090) | default `projects/<name>/design.md` and `projects/<name>/tasks`; a `tasks` value in the old shape, `<path>.json`, names the directory `<path>` beside it |
 | `project` | T-043's `project:` block, every field of it | T-043's merged text and the README define the fields and their meaning; this section only moves the block under a project and never re-lists it, so a field T-043 has or later gains — `docs` included — moves with it |
 
-**Where gates 3 and 5 read the contract.** From the task's spec pin (15.5),
+**Where gate 5 reads the contract.** From the task's spec pin (15.5),
 which records the contract verbatim next to the spec. Nothing else: not the
 branch under test, which in a target has no `config.yaml`, and not the engine's
 working copy, which can change during a run. The pin takes the contract from
@@ -1982,10 +2199,10 @@ pinned after T-049 merges.
 **One source of truth during the transition.** The contract is written in
 exactly one place at every commit. Until T-050, that is T-043's top-level
 `project:` block: the self entry carries no copy, `bin/fm-config.sh` resolves
-the default project's contract to the top-level block, and gates 3 and 5 keep
+the default project's contract to the top-level block, and gate 5 keeps
 T-043's behaviour. T-049's pins record that resolved contract. T-050 moves the
 block, unchanged, to `projects.firstmate-workflow.project` and deletes the
-top-level one in the same commit, and switches gates 3 and 5 to the pin. A
+top-level one in the same commit, and switches gate 5 to the pin. A
 `config.yaml` holding both the top-level block and the self entry's is refused
 (exit `65`), so the two can never disagree. Re-deriving a pinned contract
 (15.5 step 3) reads the block wherever the recorded commit's `config.yaml`
@@ -2069,7 +2286,35 @@ recovery path in section 12.
   nothing old has to leave. Every parser of ids and every store keyed by one
   (`state/pending/`, `state/decisions/`, `state/decision-details/`,
   `board/public/diagrams/`, `design/diagrams/`, the watcher's receipts)
-  accepts both forms. Merge cards name the project and link the pull request
+  accepts both forms. `D-SK-<n>` is one pattern everywhere, `fm-decide.sh`'s
+  `^D-SK-[0-9]{3,}$`: the board lists such a card as answerable and records
+  its answer like any other choice card's (T-112), and an answer the board
+  refuses is shown on its card with the server's error, never dropped. The
+  refusal is an alert only on the render that first shows it, so it is
+  announced once, and it leaves with its card, as the card's pick and draft
+  do. These are every place that validates or parses a decision id
+  (`bin/`, `board/`, `tests/`), and the pattern each one uses; `<low>`,
+  `<up>` and `<dig>` are the spelled-out character sets the bash copies use
+  in place of locale-dependent ranges. A new copy is added to this list.
+
+  | place | pattern | `D-SK-<n>` |
+  |---|---|---|
+  | `bin/fm-decide.sh` `SKILL_ID` | `^D-SK-[<dig>]{3,}$` | the reference |
+  | `bin/fm-decide.sh` `OLD_ID` | `^D-[<dig>]{1,6}$` | no; `--await` takes `OLD_ID` or `SKILL_ID` or owned |
+  | `bin/fm-decide.sh` `OWNED_ID` | `^D-([<low><dig>-]{1,24})-(T[<up><low><dig>]{1,32})-([123456789][<dig>]{0,5})$` | no |
+  | `bin/fm-decide.sh` legacy `--request` | `^D-(SK-[0-9]{3,})$`, capturing the `SK-<n>` task | yes, the only request path for it; `--details` takes `OLD_ID` or owned only |
+  | `bin/fm-ready.sh` `SKILL_CARD` | `^D-SK-[<dig>]{3,}$` | yes; reads an adoption card's answer |
+  | `bin/fm-ready.sh` `CARD_ID` | `^D-(<owned>\|[<dig>]{1,6})$` | no; `judged --decision` takes only this, as a skill update gets no readiness card |
+  | `bin/fm-diagram.sh` `is_decision_id` | `D-` then 1-6 digits, or the owned shape, by `case` globs | no, on purpose: no drawing is generated for a skill id |
+  | `bin/fm.sh` self-update | builds `D-$id` from `^SK-[0-9]{3,}$` | the producer, same shape |
+  | `bin/fm-run.sh`, `bin/fm-decide.sh --allocate` | build `D-<project>-<key>-<n>` | not a validator |
+  | `board/server.ts` `isDecisionId` | `OLD_DECISION`, `OWNED_DECISION`, `SKILL_DECISION` = `^D-SK-[0-9]{3,}$` | yes: responses listing, a pending card's `answerable`, `POST /decisions` |
+  | `board/server.ts` `ownerOf` | `OWNED_DECISION` | no owner, by design |
+  | `board/public/diagram.js` `isDecision` | `^D-[0-9]{1,6}$`, `OWNED`, `^D-SK-[0-9]{3,}$` | yes |
+  | `board/public/diagram.js` `owner` | `OWNED` | no owner, by design |
+  | `bin/watch-decisions.ts`, `tests/` | none; fixtures only | n/a |
+
+  Merge cards name the project and link the pull request
   on the project's GitHub repository. A tree with no `projects:` map (every
   tree before the registry, and the test fixtures) is the engine hosting
   itself. Its ids are owned by `firstmate-workflow`. Its cards and their
@@ -2221,8 +2466,8 @@ The prompt carries from the engine side what the checkout cannot:
 - the role skill and the pinned spec, as today;
 - the project's design context: the design file at the pin's commit, bounded
   in size, with any truncation stated in the prompt rather than silent;
-- the project's gate facts: `base` and the pinned T-043 contract that gates 3
-  and 5 will apply;
+- the project's gate facts: `base` and the pinned T-043 contract that gate 5
+  will apply;
 - the absolute path of the checkpoint helper in the frozen code tree, because
   a target has no `bin/fm-checkpoint.sh`.
 

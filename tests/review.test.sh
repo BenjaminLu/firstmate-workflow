@@ -86,7 +86,7 @@ d2="$(fixture)"; r2="$d2/repo"; GH2="$(ghstub "$d2")"
 cp "$r/bin/adapters/mock.sh" "$r2/bin/adapters/mock.sh"
 ( cd "$r2" && FM_ROOT="$r2" FM_GH="$GH2" FM_VERDICT="this looks great, nice work" \
   bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
-assert_fail "jq -r .type < '$r2/state/events.jsonl' | grep -qx approved" "prose praise does not emit approved"
+assert_fail "grep -qx approved <<<\"\$(jq -r .type < '$r2/state/events.jsonl')\"" "prose praise does not emit approved"
 
 # round three tells the reviewer to close the list
 cap3="$d/sent3.md"
@@ -397,7 +397,7 @@ for scenario in signed unsigned outage; do
   ( cd "$rr" && FM_ROOT="$rr" FM_GH="$GHr" bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
   assert_eq "agent_finished" "$(jq -r .type < "$rr/state/events.jsonl" | tail -1)" \
     "a $scenario round says when it ended, last"
-  assert_eq "1" "$(jq -r 'select(.type=="agent_finished")|.type' "$rr/state/events.jsonl" | grep -c . || true)" \
+  assert_eq "1" "$(grep -c . <<<"$(jq -r 'select(.type=="agent_finished")|.type' "$rr/state/events.jsonl")" || true)" \
     "and exactly once"
   assert_matches "$(jq -r 'select(.type=="agent_finished")|.actor' < "$rr/state/events.jsonl")" \
     '^reviewer-[a-z]+[0-9]*-tz-r[0-9]+$' "and under its own per-run name"
@@ -450,7 +450,7 @@ kill -TERM "$kp" 2>/dev/null
 wait "$kp" 2>/dev/null; krc=$?
 ended() { [ "$(jq -r .type < "$rkr/state/events.jsonl" 2>/dev/null | tail -1)" = "agent_finished" ]; }
 eventually ended
-assert_eq "1" "$(jq -r 'select(.type=="agent_finished")|.type' "$rkr/state/events.jsonl" | grep -c . || true)" \
+assert_eq "1" "$(grep -c . <<<"$(jq -r 'select(.type=="agent_finished")|.type' "$rkr/state/events.jsonl")" || true)" \
   "a review killed mid-round ends exactly once"
 assert_eq "" "$(jq -r .type "$rkr/state/events.jsonl" | sed -n '/agent_finished/,$p' | tail -n +2)" \
   "and says nothing after it"
@@ -487,6 +487,23 @@ assert_eq "reviewer" "$(jq -r --arg actor "$canonical" 'select(.actor==$actor)|.
 assert_eq "$canonical" "$(jq -r 'select(.type=="agent_finished")|.actor' "$rz/state/events.jsonl")" \
   "completion retires exactly that canonical reviewer"
 rm -rf "$dz"
+
+# T-104: a reviewer is named from the reviewer roster the installation drew,
+# and a worker's name is refused even when asked for by --name
+dn="$(fixture)"; rn="$dn/repo"; GHn="$(ghstub "$dn")"
+# the stock mock signs nothing, and an unsigned round exits 3
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$FM_VERDICT" > "$3/verdict.txt"\n' > "$rn/bin/adapters/mock.sh"
+( cd "$rn" && FM_ROOT="$rn" FM_GH="$GHn" FM_ROSTER_SEED=review FM_VERDICT="REJECT:T-Z" \
+    bin/fm-review.sh --task T-Z --branch work >/dev/null 2>&1 )
+assert_eq "0" "$?" "a review round with no crew yet exits 0"
+named="$(jq -r 'select(.type=="review_opened")|.actor' "$rn/state/events.jsonl" | sed -E 's/^reviewer-([a-z]+)-tz-r[0-9]+$/\1/')"
+assert_eq "true" "$(jq --arg n "$named" 'any(.reviewers[]; . == $n) and (any(.workers[]; . == $n) | not)' "$rn/state/crew/rosters.json")" \
+  "the reviewer's name is on the drawn reviewer roster and not the worker roster"
+worker_name="$(jq -r '.workers[0]' "$rn/state/crew/rosters.json")"
+refused="$(cd "$rn" && FM_ROOT="$rn" FM_GH="$GHn" bin/fm-review.sh --name "$worker_name" --task T-Z --branch work 2>&1)"
+assert_eq "70" "$?" "a worker's name is refused for a reviewer"
+assert_contains "$refused" "crew name $worker_name is on the worker roster" "and the refusal says whose name it is"
+rm -rf "$dn"
 
 # From round three the reviewer is shown what was said about the closed list
 # on the pull request - the worker's latest ask, then every list - and nothing
@@ -694,20 +711,20 @@ eval "$(sed -n 's/^say()/gate_say()/p' "$ROOT/bin/fm-gate.sh")"
 declare -F gate_say >/dev/null || { echo "fm-gate.sh has no one-line say()" >&2; exit 1; }
 gates="$rc/state/gates/T-Z-$head1.txt"
 mkdir -p "$rc/state/gates"
-{ for g in 1 2 3 4 5 6 7; do gate_say '+' "$g" "GATE_LINE_$g"; done
-  echo "  all seven gates green"; } > "$gates"
+{ for g in 1 2 4 5 6 7; do gate_say '+' "$g" "GATE_LINE_$g"; done
+  echo "  all six gates green"; } > "$gates"
 review_c "$dc/sent-g.md" --round 2 --pr "$prh" >/dev/null
 sent="$(cat "$dc/sent-g.md")"
 begin="$(grep -m1 '^----- begin gate summary' "$dc/sent-g.md")"
 quoted="$(awk -v b="$begin" -v e="${begin/begin/end}" '$0==b{on=1;next} $0==e{on=0} on' "$dc/sent-g.md")"
 assert_eq "$(cat "$gates")" "$quoted" "a head's gate summary is quoted verbatim, every line of it"
-assert_contains "$quoted" "  + gate 7: GATE_LINE_7" "all seven of its gate lines"
+assert_contains "$quoted" "  + gate 7: GATE_LINE_7" "all six of its gate lines"
 assert_lacks "$sent" "No gate summary for head" "and it is not said to be missing"
 assert_lacks "$sent" "has no result line for gates" "nor any gate said to be without a result"
 
 # fm-gate.sh stops at the first red gate: the red line is shown as it is, and
 # every gate after it is said to have no result
-{ for g in 1 2 3 4; do gate_say '+' "$g" "GATE_LINE_$g"; done; gate_say 'x' 5 "RED_GATE_LINE"; } > "$gates"
+{ for g in 1 2 4; do gate_say '+' "$g" "GATE_LINE_$g"; done; gate_say 'x' 5 "RED_GATE_LINE"; } > "$gates"
 review_c "$dc/sent-gx.md" --round 2 --pr "$prh" >/dev/null
 sent="$(cat "$dc/sent-gx.md")"
 assert_contains "$sent" "  x gate 5: RED_GATE_LINE" "a red gate is quoted as red"
@@ -719,12 +736,12 @@ printf 'NOT_A_GATE_LINE\n' > "$gates"
 review_c "$dc/sent-g0.md" --round 2 --pr "$prh" >/dev/null
 sent="$(cat "$dc/sent-g0.md")"
 assert_contains "$sent" "NOT_A_GATE_LINE" "a summary in another shape is still quoted, not filtered away"
-assert_contains "$sent" "has no result line for gates: 1, 2, 3, 4, 5, 6, 7" "and every gate is stated to have no result"
+assert_contains "$sent" "has no result line for gates: 1, 2, 4, 5, 6, 7" "and every gate is stated to have no result"
 : > "$gates"
 review_c "$dc/sent-ge.md" --round 2 --pr "$prh" >/dev/null
-assert_contains "$(cat "$dc/sent-ge.md")" "has no result line for gates: 1, 2, 3, 4, 5, 6, 7" \
+assert_contains "$(cat "$dc/sent-ge.md")" "has no result line for gates: 1, 2, 4, 5, 6, 7" \
   "an empty summary is stated to have no result for any gate"
-{ for g in 1 2 3 4 5 6 7; do gate_say '+' "$g" "GATE_LINE_$g"; done; } > "$gates"
+{ for g in 1 2 4 5 6 7; do gate_say '+' "$g" "GATE_LINE_$g"; done; } > "$gates"
 
 # a new head: the old head's run is not this head's, and neither is a run
 # GitHub hands back for this commit that names another head. Only src/a is
@@ -1139,7 +1156,7 @@ M
       printf '\nHead SHA: %s\n' "$hd"
       printf '\n## The required check for this head, from GitHub\n'
       printf '\nThe required check for head %s could not be read from GitHub, so its CI result is unknown.\n' "$hd"
-      printf '\n## The seven gates for this head\n'
+      printf '\n## The gates for this head\n'
       printf '\nNo gate summary for head %s exists under state/gates/, so its gate results are unknown.\n' "$hd"
       printf '\n---\n\n# The diff under review\n\n```diff\n'
       git diff main...work
@@ -1157,5 +1174,84 @@ M
     "with the reviewer role and the task on the review's opening and ending"
   rm -rf "$dd"
 done
+
+# --- the verdict says what it reviewed (T-113) -----------------------------
+# Gate 7 carries an approval across an update onto main only when the change
+# is the one approved, so the posted verdict records it: the head, the
+# merge-base, the patch-id and the changed files, on one line the script
+# writes after the reviewer's own words.
+dv="$(fixture)"; rv="$dv/repo"
+# the branch work comes first: main moves on after work forked, so the
+# merge-base is not main and the diff main...work is not main..work
+git -C "$rv" checkout -q work
+printf 'second\n' > "$rv/src/b"; git -C "$rv" add src/b; git -C "$rv" commit -qm "a second file"
+git -C "$rv" checkout -q main
+printf 'moved on\n' > "$rv/src/c"; git -C "$rv" add src/c; git -C "$rv" commit -qm "main moves"
+# the adapter is written after every commit and checkout, as a working-tree
+# change on main: a commit or a checkout after it would fold it into the
+# change under review or put the stock one back
+mkdir -p "$dv/stub"
+cat > "$dv/stub/gh" <<S
+#!/usr/bin/env bash
+if [ "\$1 \$2" = "pr comment" ]; then
+  while [ \$# -gt 0 ]; do [ "\$1" = --body ] && { printf '%s' "\$2" > "$dv/posted"; break; }; shift; done
+fi
+exit 0
+S
+chmod +x "$dv/stub/gh"
+cat > "$rv/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+cp "$2" "${FM_CAPTURE:-/dev/null}" 2>/dev/null
+printf 'the change is sound\n%s\n' "${FM_VERDICT:-no verdict}" > "$3/verdict.txt"
+exit 0
+M
+chmod +x "$rv/bin/adapters/mock.sh"
+# every expected value comes from git's porcelain, and each is checked to be
+# there before the line built from them is trusted
+vhead="$(git -C "$rv" rev-parse work)"; vbase="$(git -C "$rv" merge-base main work)"
+vpatch="$(git -C "$rv" diff main...work | git -C "$rv" patch-id --stable | cut -d' ' -f1)"
+assert_matches "$vhead $vbase $vpatch" '^[0-9a-f]{40} [0-9a-f]{40} [0-9a-f]{40}$' \
+  "(the expected head, merge-base and patch-id are all there)"
+assert_ne "$(git -C "$rv" rev-parse main)" "$vbase" "(main has moved past the merge-base)"
+vfiles='["src/a","src/b"]'
+want="REVIEWED:T-Z verdict=APPROVE head=$vhead base=$vbase patch=$vpatch files=$vfiles"
+out="$(cd "$rv" && FM_ROOT="$rv" FM_GH="$dv/stub/gh" FM_CAPTURE="$dv/sent.md" FM_VERDICT="APPROVE:T-Z" \
+  bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_eq "0" "$?" "(a round that records what it reviewed exits 0)"
+posted="$(cat "$dv/posted" 2>/dev/null)"
+assert_contains "$posted" "the change is sound" "(the posted verdict keeps the reviewer's own words)"
+assert_eq "$want" "$(grep '^REVIEWED:T-Z ' <<<"$posted")" \
+  "and carries one REVIEWED line: the verdict, head, merge-base, patch-id and changed files"
+assert_eq "$want" "$(tail -1 <<<"$posted")" "which is the comment's last line"
+assert_contains "$(sed '$d' <<<"$posted")" "APPROVE:T-Z" "after the reviewer's own verdict"
+assert_contains "$out" "$want" "and the verdict printed carries the same line"
+# the prompt's diff is the change the line names: merge-base to head, with
+# none of what main did since
+sent="$(cat "$dv/sent.md" 2>/dev/null)"
+# (these hold on the base too: main...work is the same diff in this fixture)
+assert_contains "$sent" "$(git -C "$rv" diff main...work)" "(the prompt's diff is the change from the merge-base)"
+assert_contains "$sent" "+second" "(which carries the branch's second file)"
+assert_lacks "$sent" "moved on" "(and none of main's later work)"
+rm -f "$dv/posted"
+out="$(cd "$rv" && FM_ROOT="$rv" FM_GH="$dv/stub/gh" FM_VERDICT="REJECT:T-Z" \
+  bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_eq "REVIEWED:T-Z verdict=REJECT head=$vhead base=$vbase patch=$vpatch files=$vfiles" \
+  "$(tail -1 "$dv/posted" 2>/dev/null)" "a REJECT records what it rejected the same way"
+# a rejection that mentions the approve marker on the way is still a
+# rejection: the last marker on a line of its own decides, for the REVIEWED
+# line and for the event alike
+rm -f "$dv/posted"
+approvals() { grep -cx approved <<<"$(jq -r .type < "$rv/state/events.jsonl" 2>/dev/null)"; }
+rejections() { grep -cx review_failed <<<"$(jq -r .type < "$rv/state/events.jsonl" 2>/dev/null)"; }
+na="$(approvals)"; nr="$(rejections)"
+out="$(cd "$rv" && FM_ROOT="$rv" FM_GH="$dv/stub/gh" \
+  FM_VERDICT="$(printf 'I cannot sign APPROVE:T-Z while item 1 stands\nREJECT:T-Z')" \
+  bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_eq "REVIEWED:T-Z verdict=REJECT head=$vhead base=$vbase patch=$vpatch files=$vfiles" \
+  "$(tail -1 "$dv/posted" 2>/dev/null)" "a REJECT that mentions the approve marker earlier is recorded as REJECT"
+assert_eq "$na" "$(approvals)" "and emits no approved"
+assert_eq "$((nr + 1))" "$(rejections)" "but review_failed, as the REVIEWED line says"
+rm -rf "$dv"
 
 finish

@@ -46,8 +46,8 @@ The project contract is `config.yaml`'s `project:` block: `setup`, `check`,
 keys, setup's exit status and error, and `ready`; `status` reports the same
 declaration without running anything. Report the contract at startup, including
 a missing `check` or a failed setup, which is not ready rather than a reason to
-stop startup. Any fresh verification worktree — gate 3, gate 5, or any check
-you coordinate outside the gates — runs the declared `setup` before `check`. A
+stop startup. Any fresh verification worktree — gate 5, or any check you
+coordinate outside the gates — runs the declared `setup` before `check`. A
 check whose output says a stage was skipped is not evidence that the stage
 passed: a skipped stage is an unverified stage, whatever the exit status.
 
@@ -112,9 +112,18 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   `watch` repeats it. It reports failed gates but does not restart failed workers.
   Explicitly coordinate remediation with the assigned worker, inspect its final
   results, then rerun the relevant checks. Avoid competing loop owners.
-- `bin/fm-gate.sh` checks seven gates; gate 3 runs the project's declared
-  `setup` and `check`, which for this repository is `bin/ci.sh`, the shared
-  local/CI check.
+- `bin/fm-gate.sh` checks six gates, numbered 1, 2, 4, 5, 6 and 7. Gate 3,
+  the local run of the whole project `check`, is retired (T-114): the required
+  GitHub check runs it on the same head, and gate 6 reads that. Gate 5 runs
+  only the suites the diff touches, falling back to the whole `check` only
+  when it cannot tell which, and says so. Gate runs on one machine are
+  serialized by a kernel lock on `FM_GATE_LOCK` (default `/tmp/fm-gate.lock`,
+  not under `TMPDIR`), so a second one waits for the first, even from a
+  sandbox with its own `TMPDIR`. A run that cannot use that file (it cannot
+  open it, or it is a symlink, a hard link or not a regular file) gets exit
+  70 naming it: fix or remove the file. Do not give a real gate run a
+  private `FM_GATE_LOCK`, which would not serialize with the rest of the
+  machine; only a test fixture sets its own.
   `bin/fm-review.sh` runs review; `bin/fm-protocol.sh` checks the closed-list
   protocol. Read their current usage before invocation. Supply the reviewer with
   diff, spec, acceptance, authoritative relevant design and any original closed
@@ -137,15 +146,26 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   report the script's message and coordinate the fix.
 - Round order and the merge double check (captain, 2026-09-25; design §6).
   Start the review round through `bin/fm-review.sh` as soon as the worker hands
-  back; never hold it for CI. CI and the seven gates are not a review criterion
+  back; never hold it for CI. CI and the gates are not a review criterion
   in either mode: a run-mode reviewer is shown none, and a diff-mode reviewer
   sees the head section as information only. A merge card needs two
   independent checks on the same current head: the reviewer's
   `APPROVE:<task-id>` for that head, and your own reading of that head's
-  required GitHub check (green) and the seven gates (`bin/fm-gate.sh`).
+  required GitHub check (green) and the six gates (`bin/fm-gate.sh`).
   Neither substitutes for the other, and a head that changes after either one
-  restarts both. `fm-run.sh` still reviews only after gates 1-6 are green, so
-  do not wait for its loop to start a round.
+  restarts both, with one exception. `fm-run.sh` still reviews only after
+  every gate before 7 is green, so do not wait for its loop to start a round.
+- The approval binds to the change; CI and the gates bind to the head (T-113,
+  captain, 2026-09-26; design §6). The reviewer's approval carries forward
+  across an update that leaves the change identical and touches none of its
+  files; CI and the gates always rerun on the head being merged. After
+  `gh pr update-branch`, do not start a second review by reflex: run
+  `bin/fm-gate.sh` on the new head. Gate 7 accepts the latest APPROVE when its
+  `REVIEWED:` line names that head, or when the change's patch-id is the one
+  approved, no `main` commit since the approved merge-base touches a file it
+  reviewed, and no later REJECT supersedes it. When it fails it names the
+  condition, and that is a real re-review. A conflict resolution or any worker
+  edit changes the patch-id and always needs a new review.
 - Decision requests use the approved T-034 `--details` contract below. Request
   mode returns after publication; it does not wait for approval.
   `bin/fm-decide.sh --await <id> --repo <root>` returns recorded response JSON,
@@ -159,7 +179,7 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
 - Firstmate must establish current-head gates, CI and reviewer provenance before
   presenting a merge card, and coordinate renewed verification if the head changes.
   The board calls `bin/fm-merge.sh` directly for choice A on a pending merge card;
-  neither that route nor the merge helper rechecks the seven gates. The helper
+  neither that route nor the merge helper rechecks the gates. The helper
   checks PR state, invokes the GitHub merge and attempts an event and cleanup;
   it does not read or validate captain decision approval. `fm-run.sh` requests a
   card after gate success but does not consume decisions or perform the merge.
@@ -249,10 +269,12 @@ Require final-answer provenance, the configured reviewer identity and evidence
 for the current PR head. Old CI or an old approval does not establish readiness;
 inspect actual required GitHub CI results as well as local checks. If the script
 cannot establish this, report the gap and coordinate remediation before a merge
-card is treated as ready. Gate 7 searches PR comment bodies for an approval
-substring and filters the author only when `FM_REVIEWER_LOGIN` is set; it does
-not bind approval to a head, reject quoted markers or supersede an old approval
-with a later rejection. The review launcher also ignores comment publication
+card is treated as ready. Gate 7 takes the latest verdict comment, filtering
+the author only when `FM_REVIEWER_LOGIN` is set, and binds an APPROVE to the
+change its `REVIEWED:` line records; a later rejection supersedes it. It does
+not reject quoted markers, and an APPROVE with no `REVIEWED:` line (posted by
+hand, or before T-113) still passes and binds to no head: the gate says so,
+and you confirm it covers the head. The review launcher also ignores comment publication
 failure, so inspect the published result rather than trusting its exit status.
 Neither lavish nor no-mistakes is a prerequisite. Do not introduce their startup
 or verification hooks; use repository checks and actual CI evidence.
@@ -468,8 +490,12 @@ is preserved in `text`. `note` is separate and truncated to 500 JavaScript code
 units; never encode custom as an A note. Identical chosen/custom-text retries
 return the recorded decision; conflicting responses return 409. A custom choice
 never invokes merge, even for a merge card. Only A on a pending merge with numeric
-PR invokes the merge helper; inspect recorded `merged` outcome and
-`eventRecorded` rather than assuming response `ok` proves merge/event success.
+PR invokes the merge helper, in the background; read the record's `merge`
+(`running`, `merged` or `failed`), `merge_reason` and `eventRecorded` rather
+than assuming response `ok` proves merge/event success. `running` is not
+settled: keep waiting or re-read the record, and never report a merge from it;
+`merge_unknown` means GitHub could not be read and the project stays held.
+`failed` is final and is never retried.
 Custom instructions still require scope/readiness coordination and do not imply
 merge approval. Awaiting a response must preserve its distinct chosen/text data.
 

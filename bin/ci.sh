@@ -367,16 +367,149 @@ fi
 # fields - `^[^:]*: *#` could only ever match the line number, and never
 # did. And ci.sh is skipped the way a sourced library is: by a marker it
 # declares about itself, not by its name.
-piped="$(grep -Hn '| *grep -[qc]' bin/*.sh bin/adapters/*.sh 2>/dev/null \
-  | grep -v '^[^:]*:[0-9]*: *#' \
-  | while IFS=: read -r pf rest; do
-      grep -q '^# fm:lint-source' "$pf" || printf '%s:%s\n' "$pf" "$rest"
-    done || true)"
+#
+# The test suites are read too, and every directory below them (T-103): the
+# lint read bin/ alone, and tests/adapter-contract.test.sh's completeness
+# loop reported a signature that matched as unread, a different one each
+# CI run.
+#
+# One regex over one line read one spelling of the construct and let the
+# others through: `grep -Eq` (the flag was looked for as the first letter
+# only), `| grep -m 1 -q`, `| grep pat -q` (GNU grep permutes), `egrep -q`,
+# `| LC_ALL=C grep -q`, and a pipe that ends one line with grep starting
+# the next. And it flagged `cmd || grep -q x file`, which has no pipe. So
+# the stage reads the command instead: comments off (fm_strip_comments,
+# the loop stage's stripper), continuation lines joined (a backslash-newline
+# with nothing between, as bash joins it), `||` taken out,
+# and each command that a single `|` starts is checked for being grep,
+# egrep or fgrep, with -q/-c anywhere in its options (a digit is an option
+# too: `-2q`), stepping over the
+# value of an option that takes one. In front of grep it steps over `!`,
+# `{`, `(`, NAME=value assignments, and the wrappers in the BEGIN table
+# below with their own options (and their values: `env -u NAME`,
+# `nice -n 5`, `timeout -s KILL 5`, `stdbuf -o L`). Options are read the
+# way getopt reads them, on both sides: a cluster whose last letter takes a
+# value takes the next word (`env -iu NAME`, `timeout -vs KILL 5`), and a
+# long option may be any prefix that names one option (`grep --quie`,
+# `env --un NAME`); a prefix of more than one (`grep --co`, `grep --exc`)
+# is refused by grep and not flagged. Quotes and backslashes are
+# transparent on purpose: a pipe inside
+# `assert_ok "..."` is eval'd, so it is as live as one in the code; grep's
+# words therefore end at the first `|`, `;`, `&`, `)` or backtick, quoted
+# or not. These are exactly the shapes it catches, each planted in
+# tests/ci.test.sh and named by its line. Any other spelling is not caught: in front of grep
+# the reader steps over only the words named above, and the first word it
+# does not know ends its search. Such a spelling relies on review.
+pipe_awk='
+  BEGIN {
+    # wrapper -> its short options that take a separate value, all its long
+    # ones, and how many operands it reads before the command; gl holds the
+    # long ones of grep. A long option is name:kind (v takes a separate value, q is
+    # quiet or count, o is anything else), all of them, so an abbreviation
+    # getopt_long accepts resolves the way getopt_long resolves it
+    wv["env"] = "uC"
+    wl["env"] = "ignore-environment:o null:o unset:v chdir:v split-string:o block-signal:o default-signal:o ignore-signal:o list-signal-handling:o debug:o help:o version:o"
+    wv["nice"] = "n";     wl["nice"] = "adjustment:v help:o version:o"
+    wv["time"] = "fo"
+    wl["time"] = "format:v output:v append:o portability:o verbose:o quiet:o help:o version:o"
+    wv["timeout"] = "sk"; wp["timeout"] = 1
+    wl["timeout"] = "foreground:o kill-after:v preserve-status:o signal:v verbose:o help:o version:o"
+    wv["stdbuf"] = "ioe"; wl["stdbuf"] = "input:v output:v error:v help:o version:o"
+    wv["exec"] = "a";     wl["exec"] = ""
+    wv["command"] = "";   wl["command"] = ""
+    wv["builtin"] = "";   wl["builtin"] = ""
+    wv["nohup"] = "";     wl["nohup"] = ""
+    gl = "after-context:v before-context:v basic-regexp:o binary:o binary-files:v byte-offset:o color:o colour:o context:v count:q dereference-recursive:o devices:v directories:v exclude:v exclude-dir:v exclude-from:v extended-regexp:o file:v files-with-matches:o files-without-match:o fixed-strings:o group-separator:v help:o ignore-case:o include:v initial-tab:o invert-match:o label:v line-buffered:o line-number:o line-regexp:o max-count:v no-filename:o no-group-separator:o no-ignore-case:o no-messages:o null:o null-data:o only-matching:o perl-regexp:o quiet:q recursive:o regexp:v silent:q text:o version:o with-filename:o word-regexp:o"
+  }
+  # the kind of long option l (no leading --) in table tab: an exact name,
+  # else the one name it is a prefix of; "?" when it is a prefix of more
+  # than one, which getopt_long refuses (the only aliases in the tables,
+  # color and colour, are o, and o and "?" read the same), "" when unknown.
+  # A word with =VALUE attached names nothing, so its value is never
+  # stepped over: the value is in the word
+  function lkind(l, tab,   n, e, i, name, k, got) {
+    n = split(tab, e, " "); got = ""
+    for (i = 1; i <= n; i++) {
+      k = substr(e[i], length(e[i])); name = substr(e[i], 1, length(e[i]) - 2)
+      if (name == l) return k
+      if (index(name, l) == 1) got = got == "" ? k : "?"
+    }
+    return got
+  }
+  function hazard(s,   n, seg, i, cut, ntok, tok, j, k, t, p, c, w, mode, opts, pos) {
+    gsub(sq, "", s); gsub(/"/, "", s); gsub(/\\/, "", s)
+    n = split(s, seg, /[|]/)
+    for (i = 2; i <= n; i++) {
+      cut = seg[i]; sub(/^&/, "", cut)       # |& is a pipe too
+      if (match(cut, /[;&)`]/)) cut = substr(cut, 1, RSTART - 1)
+      ntok = split(cut, tok)
+      mode = ""; opts = 0; pos = 0
+      for (j = 1; j <= ntok; j++) {
+        t = tok[j]
+        if (opts && t == "--") { opts = 0; continue }
+        if (opts && t ~ /^-./) {
+          if (t ~ /^--/) {
+            if (lkind(substr(t, 3), wl[mode]) == "v") j++
+            continue
+          }
+          # a cluster: the first letter that takes a value takes the rest
+          # of the word, or the next word when it is the last letter
+          for (p = 2; p <= length(t); p++)
+            if (index(wv[mode], substr(t, p, 1))) { if (p == length(t)) j++; break }
+          continue
+        }
+        opts = 0
+        if (pos > 0) { pos--; continue }
+        if (t ~ /^[A-Za-z_][A-Za-z0-9_]*=/ || t ~ /^(!|[{(])$/) continue
+        w = t; sub(/.*\//, "", w)
+        if (w in wv) { mode = w; opts = 1; pos = wp[w] + 0; continue }
+        break
+      }
+      w = tok[j]; sub(/.*\//, "", w)
+      if (w !~ /^[ef]?grep$/) continue
+      for (k = j + 1; k <= ntok; k++) {
+        t = tok[k]
+        if (t == "--") break
+        if (t ~ /^--/) {
+          c = lkind(substr(t, 3), gl)
+          if (c == "q") return 1
+          if (c == "v") k++
+        } else if (t ~ /^-/) for (p = 2; p <= length(t); p++) {
+          # a digit is an option too: -2q is context 2 and quiet
+          c = substr(t, p, 1)
+          if (c == "q" || c == "c") return 1
+          if (index("efmABCdD", c)) { if (p == length(t)) k++; break }
+        }
+      }
+    }
+    return 0
+  }
+  # a backslash-newline joins with nothing between, as bash joins it
+  # (`grep -\` then `q` is grep -q); hazard() takes the backslash out
+  { s = $0; gsub(/[|][|]/, ";", s)
+    if (buf == "") { start = FNR; text = $0 } else text = text " " $0
+    buf = buf s
+    if (s ~ /\\$/ || s ~ /[|][ \t]*$/) next
+    if (hazard(buf)) print start ":" text
+    buf = ""
+  }
+  END { if (hazard(buf)) print start ":" text }'
+pipefiles=()
+while IFS= read -r f; do pipefiles+=("$f"); done < <(
+  fm_shell_corpus bin
+  [ ! -d tests ] || fm_shell_corpus tests)
+piped=''
+[ ${#pipefiles[@]} -eq 0 ] || for f in "${pipefiles[@]}"; do
+  fm_is_lint_source "$f" && continue
+  hits="$(fm_strip_comments "$f" | awk -v sq="'" "$pipe_awk" || true)"
+  [ -z "$hits" ] || piped="$piped$(sed "s|^|$f:|" <<<"$hits")
+"
+done
 if [ -n "$piped" ]; then
   flunk "a pipeline feeds grep -q or -c; use a here-string"
   printf '%s\n' "$piped"
 else
-  pass "nothing feeds grep -q through a pipe"
+  pass "nothing feeds grep -q through a pipe (${#pipefiles[@]} scripts)"
 fi
 
 # a fixture that swaps a script out has to put it back, and a hand-rolled
@@ -505,7 +638,7 @@ if [ -d tests ] && [ -f tests/lib.sh ]; then
   called="$(printf '%s' "$called" | sed '/^$/d' | sort -u)"
   missing=''
   for a in $called; do
-    printf '%s\n' "$defined" | grep -qx "$a" || missing="$missing $a"
+    grep -qx "$a" <<<"$defined" || missing="$missing $a"
   done
   if [ -n "$missing" ]; then
     flunk "a suite calls an assertion tests/lib.sh does not define:$missing"

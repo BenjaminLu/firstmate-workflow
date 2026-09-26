@@ -21,7 +21,7 @@
   "fmWaiting": "Awaiting the captain's green light",
   "gate1": "branch has commits",
   "gate2": "rebases onto main",
-  "gate3": "ci.sh exits 0",
+  "gate3": "retired (T-114)",
   "gate4": "diff inside scope",
   "gate5": "reverting turns tests red",
   "gate6": "required check green",
@@ -104,5 +104,9 @@
   "dropConfirm": "Drop {id}? It leaves the board and will not be done; design/tasks.json is unchanged.",
   "dropYes": "Drop it",
   "cancel": "Cancel",
-  "actionFailed": "The board could not record that. Refresh and try again."
+  "actionFailed": "The board could not record that. Refresh and try again.",
+  "projectChip": "Project",
+  "mergeRunning": "merge running",
+  "mergeUnknown": "merge outcome unknown: GitHub could not be read, this project's next merge waits",
+  "mergeBusy": "not sent: a merge is already running in this project; the card stays pending"
 }

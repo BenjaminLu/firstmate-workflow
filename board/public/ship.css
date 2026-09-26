@@ -346,3 +346,11 @@
 .pivot.react .fig{animation:receive .7s ease-out}.bub.ping{outline:3px solid var(--brass)}
 @keyframes receive{50%{translate:0 -9px}}
 @media(prefers-reduced-motion:reduce){.pivot.react .fig{animation:none}}
+/* T-054: whose task it is, when more than one project is aboard. The name
+   is data; the chip only frames it, on the ship and on the page alike. */
+.pchip{display:inline-block;max-width:100%;padding:0 6px;border:1px solid #4a3a1a;border-radius:99px;
+  font:600 13px ui-monospace,SFMono-Regular,Menlo,monospace;color:#e0b45c;background:rgba(217,164,65,.08);
+  line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+#merging{list-style:none;margin:0 0 10px;padding:0}
+#merging li{font-size:16px;padding:6px 0;color:#93a7bd;overflow-wrap:anywhere}
+#merging li.unknown{color:#f2b544}

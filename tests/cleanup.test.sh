@@ -64,7 +64,7 @@ assert_contains "$(jq -r .type < "$r/state/events.jsonl" 2>/dev/null | tr '\n' '
 assert_ok "FM_GH='$MERGED' '$r/bin/fm-cleanup.sh' --task T-A --repo '$r'" "cleaning an already-clean task exits 0"
 
 # --- one root, inside the repository ------------------------------------
-assert_fail "grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-cleanup.sh' | grep -qE 'treehouse|\\\$HOME|~/'" \
+assert_fail "grep -qE 'treehouse|\\\$HOME|~/' <<<\"\$(grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-cleanup.sh')\"" \
   "it writes nothing outside the repository"
 rm -rf "$d"
 finish

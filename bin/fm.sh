@@ -11,11 +11,12 @@
 #   fm.sh lint                                     the two skill lints
 #   fm.sh tasks                                    the task table, on demand
 #   fm.sh tasks split [ID]                         design/tasks.json -> one file each
+#   fm.sh roster [init] [--redraw]                 the installation's crew
 #
 # The system defines its own behaviour in skills/, which makes editing a
 # skill the one thing it must not be able to do quietly. So self-update
 # writes no skill: it writes a task and a decision card, and the change
-# travels the branch, the pull request and the seven gates that every other
+# travels the branch, the pull request and the gates that every other
 # change travels. There is deliberately no flag that applies one.
 #
 # `--adopt` is the other half of that sentence, and it exists because the
@@ -75,7 +76,7 @@ usage: fm.sh <command> [options]
         Propose a change to skills/<name>. Writes a task spec under
         state/skill-updates/ and puts a decision card in front of the
         captain. It never edits the skill: that happens on a branch,
-        through a pull request, under the same seven gates.
+        through a pull request, under the same gates.
 
   self-update --adopt <SK-id> [--repo DIR]
         The captain answered the card yes. Copy the proposal into its own
@@ -92,6 +93,12 @@ usage: fm.sh <command> [options]
         into design/tasks/<id>.json. Given an ID, move that entry alone
         and overwrite its file: a branch bringing its own task over.
         Without one, an existing file that differs is refused.
+
+  roster [init] [--redraw] [--repo DIR]
+        Print this installation's worker and reviewer rosters. `init`
+        draws them, 24 names each, if they are missing and refuses to
+        redraw an existing crew; `--redraw` draws a new one, and ranks
+        and service records keyed by the old names stay with those names.
 
   sync-skills <source-dir> [--name NAME] [--repo DIR]
         Import external skills into skills/vendor/, read-only. One way:
@@ -166,7 +173,7 @@ corpus() {
 # which language it is. Prose is not a program - which is a limitation worth
 # saying out loud rather than hiding: a SKILL.md that tells an agent in
 # English to edit a skill is a path this lint cannot see. The reviewer and
-# the seven gates are what catch that one.
+# the gates are what catch that one.
 is_program() {
   local first=''
   # what it is beats what it is called: the executable bit and the shebang
@@ -768,6 +775,22 @@ cmd_tasks_split() {
   printf 'fm tasks split: done; git rm design/tasks.json once nothing else in it is yours\n'
 }
 
+# The installation's crew (T-104): 24 worker and 24 reviewer names, drawn once
+# into state/crew/rosters.json by bin/fm-herdr.py, which also keeps the pool.
+cmd_roster() {
+  local repo="$REPO" action=show redraw=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      init) action=init; shift ;;
+      --redraw) redraw=1; shift ;;
+      --repo) need "$@"; repo="${2-}"; shift 2 ;;
+      *) die "roster: unknown argument $1" ;;
+    esac
+  done
+  repo="$(abs "$repo")" || die "no repo at $repo"
+  python3 "$HERE/fm-herdr.py" roster "$repo" "$action" "$redraw"
+}
+
 # =========================================================================
 cmd="${1:-help}"
 [ $# -eq 0 ] || shift
@@ -776,6 +799,7 @@ case "$cmd" in
   sync-skills) cmd_sync "$@" ;;
   lint)        cmd_lint "$@" ;;
   tasks)       cmd_tasks "$@" ;;
+  roster)      cmd_roster "$@" ;;
   help|-h|--help) usage ;;
   *) usage >&2; die "unknown command: $cmd" ;;
 esac

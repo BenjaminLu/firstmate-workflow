@@ -213,7 +213,10 @@ let DICT = { en: {}, "zh-TW": {}, tw2cn: [] };
 const cn = (x) => DICT.tw2cn.reduce((acc, pair) => acc.split(pair[0]).join(pair[1]), x);
 const t = (k) => lang === "zh-CN" ? cn(DICT["zh-TW"][k] ?? DICT.en[k] ?? k)
                                   : (DICT[lang] && DICT[lang][k]) || DICT.en[k] || k;
-const GATES = () => [1,2,3,4,5,6,7].map(n => t("gate" + n));
+// bin/fm-gate.sh's numbers; 3 is retired (T-114). A merge card's gates list
+// is read by gate number, gates[n-1], so slot 3 is kept and never shown.
+const GATE_NUMBERS = [1,2,4,5,6,7];
+const GATES = () => GATE_NUMBERS.map(n => t("gate" + n));
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':'&quot;',"'":'&#39;'}[c]));
 // T-069: a pull request number links to that pull request, at the URL the
 // server derived from the project registry. Without one it is the same text,
@@ -222,11 +225,33 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 const prRef = (n, url, cls = 'pr', label = `#${esc(n)}`) => SHIP.prRef(n, url, cls, label);
 // the server's pr_urls for this render: every #n anywhere in /api/state
 let prUrls = null;
-// text someone wrote, escaped, with every #n in it linked
-const said = s => SHIP.linkPrs(esc(s), prUrls);
+// T-054: ?project= shows one project; without it the board shows them all.
+// The page asks the server for exactly what the address asks for.
+const PROJECT = new URLSearchParams(location.search).get('project') || '';
+const STATE_URL = '/api/state' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : '');
+const EVENTS_URL = '/events' + (PROJECT ? '?project=' + encodeURIComponent(PROJECT) : '');
+// the project a record belongs to: its own, else the default
+const projOf = o => o?.project || latest?.default_project || null;
+// more than one project on the board is what puts a chip on everything
+const multi = () => (latest?.projects || []).length > 1;
+// a project's name is data and is shown as written; only its label is the
+// dictionary's
+const chip = p => p ? `<span class="project pchip" data-chip="${esc(p)}" title="${esc(t('projectChip'))}"` +
+  ` aria-label="${esc(t('projectChip'))}: ${esc(p)}">${esc(p)}</span>` : '';
+// text someone wrote, escaped, with every #n in it linked to the pull request
+// of the project the text belongs to
+const said = (s, owner) => SHIP.linkPrs(esc(s),
+  owner && latest?.pr_urls_by_project ? latest.pr_urls_by_project[projOf(owner) || ''] || {} : prUrls);
 const localized = d => d?.details?.[lang === 'en' ? 'en' : 'zh-TW'];
+// a task card's identity: its project and its id, as the server wrote it
+const keyOf = task => task?.key || task?.id;
 const words = s => lang === 'zh-CN' ? cn(String(s ?? '')) : String(s ?? '');
 const picks = new Map(), drafts = new Map(), sent = new Set();
+// T-112: the error an answer came back with, shown on its own card until the
+// next attempt - a refusal is never dropped between the POST and the deck.
+// It is an alert only on the render that first shows it; every later render
+// keeps the text without the role, so one refusal is announced once.
+const refused = new Map();
 // strips the captain has opened in place; the first card is always open
 const expanded = new Set();
 let latest, feedback = null, initialized = false;
@@ -242,7 +267,7 @@ function feedbackText() {
   const which = feedback?.key === 'mergeRefused' ? [feedback.decisionId, feedback.task].filter(Boolean).join(' · ') : '';
   el.innerHTML = feedback ? [feedback.cry || '', t(feedback.key), which,
     words(localized(feedback.decision)?.outcome || ''), feedback.literal || '', feedback.eventFailed ? t('eventFailed') : '']
-    .filter(Boolean).map(said).join(' · ') : '';
+    .filter(Boolean).map(x => said(x, feedback.decision)).join(' · ') : '';
 }
 function pose() {
   const cap = document.getElementById('captain');
@@ -282,7 +307,7 @@ function chrome() {
       // straight away, so the drawing changes language with the chrome
       // rather than after the state comes back
       DIAGRAM.mount(document.getElementById("deck"), lang).catch(() => {});
-      fetch("/api/state").then(x => x.json()).then(render).catch(() => {}); });
+      fetch(STATE_URL).then(x => x.json()).then(render).catch(() => {}); });
 }
 
 function render(s) {
@@ -294,13 +319,18 @@ function render(s) {
   prUrls = s.pr_urls || null;
   // A refused merge stays up until the same task or pull request is merged
   // afterwards; the server says which refusals have been overtaken.
-  const failures = (s.responses || []).filter(d => d.merged?.ok === false && !d.superseded)
+  // A merge runs after the answer (T-054): its record says running until the
+  // helper exits, then merged or failed.
+  const failures = (s.responses || []).filter(d => (d.merge === 'failed' || (!d.merge && d.merged?.ok === false)) && !d.superseded)
     .sort((a,b) => String(a.ts || '').localeCompare(String(b.ts || '')));
   const failed = failures[failures.length - 1];
   if (failed && (feedback?.decisionId !== failed.id || feedback.key !== 'mergeRefused'))
     feedback = {key:'mergeRefused',decisionId:failed.id,task:failed.task};
   if (feedback?.key === 'mergeRefused'
       && (s.responses || []).some(d => d.id === feedback.decisionId && d.superseded)) feedback = null;
+  // a merge said running until its record says it went through
+  if (feedback?.key === 'mergeRunning'
+      && (s.responses || []).some(d => d.id === feedback.decisionId && d.merge === 'merged')) feedback = {...feedback, key:'recorded'};
   document.getElementById("gl").textContent = s.greenlit ? t("greenlit") : t("notGreenlit");
   // the engine as config.yaml has it, marked when review runs elsewhere
   const engine = document.getElementById("engine"), eng = s.engine;
@@ -321,24 +351,28 @@ function render(s) {
     : b.kind === 'decision' ? (b.options ? `${b.id} · ${t("optionsN").replace('{n}', b.options)}` : b.id) : '';
   // a task the definitions do not list keeps its id and says the title is
   // missing; it never borrows one
-  const title = task => `<div class="t${task.title ? '' : ' missing'}">${said(task.title || t("titleMissing"))}</div>`;
+  const title = task => `<div class="t${task.title ? '' : ' missing'}">${said(task.title || t("titleMissing"), task)}</div>`;
   // a blocker the captain parked or dropped will not arrive by itself, so
   // the card says which it is
   const blocker = b => b.stage === 'parked' ? `${b.id} (${t('parked')})`
     : b.stage === 'closed' ? `${b.id} (${t('dropped')})` : b.id;
   // T-058: the server says which actions a card offers; a card with none is
   // neither draggable nor given a menu
+  // T-054: a card is its project and its id, so two projects' T-004 never
+  // share a menu, a drag or a drop
   const menu = task => {
     const acts = task.actions || [];
     if (!acts.length) return '';
-    const open = menuOpen === task.id;
-    return `<button class="cmenu" data-menu="${esc(task.id)}" aria-haspopup="menu" aria-expanded="${open}"` +
+    const open = menuOpen === keyOf(task);
+    return `<button class="cmenu" data-menu="${esc(task.id)}" data-key="${esc(keyOf(task))}" aria-haspopup="menu" aria-expanded="${open}"` +
       ` aria-label="${esc(t('cardActions').replace('{id}', task.id))}">&#8943;</button>` +
       (open ? `<div class="cacts" role="menu">` + acts.map(a =>
-        `<button role="menuitem" data-act="${esc(a)}" data-for="${esc(task.id)}">${esc(t(a))}</button>`).join('') + `</div>` : '');
+        `<button role="menuitem" data-act="${esc(a)}" data-for="${esc(task.id)}" data-key="${esc(keyOf(task))}">${esc(t(a))}</button>`).join('') + `</div>` : '');
   };
-  const card = (task, k) => `<div class="card s-${k}" data-task="${esc(task.id)}"${(task.actions || []).length ? ' draggable="true"' : ''}>` +
-    `<div class="hd"><span class="id">${esc(task.id)}</span>${task.pr ? prRef(task.pr, task.pr_url) : ''}${menu(task)}</div>` +
+  const card = (task, k) => `<div class="card s-${k}" data-task="${esc(task.id)}" data-key="${esc(keyOf(task))}"` +
+    `${task.project ? ` data-project="${esc(task.project)}"` : ''}${(task.actions || []).length ? ' draggable="true"' : ''}>` +
+    `<div class="hd"><span class="id">${esc(task.id)}</span>${multi() ? chip(task.project) : ''}` +
+    `${task.pr ? prRef(task.pr, task.pr_url) : ''}${menu(task)}</div>` +
     title(task) +
     ((task.crew || []).length ? `<div class="crew">${esc(task.crew.join(', '))}</div>` : '') +
     ((task.blocked_on || []).length ? `<div class="dep">${esc(t("blockedOn"))} ${esc((task.blocked_by || task.blocked_on.map(id => ({id}))).map(blocker).join(', '))}</div>` : '') +
@@ -368,13 +402,15 @@ function render(s) {
   document.getElementById('dropzone').textContent = t('dropZone');
   // the confirming step for a drop, in the page: it goes away by itself if
   // the task stopped being droppable while it was up
-  if (confirming && !(s.tasks.find(x => x.id === confirming)?.actions || []).includes('drop')) confirming = null;
-  if (menuOpen && !(s.tasks.find(x => x.id === menuOpen)?.actions || []).length) menuOpen = null;
+  if (confirming && !(s.tasks.find(x => keyOf(x) === confirming)?.actions || []).includes('drop')) confirming = null;
+  if (menuOpen && !(s.tasks.find(x => keyOf(x) === menuOpen)?.actions || []).length) menuOpen = null;
   const confirmBox = document.getElementById('dropConfirm');
   confirmBox.hidden = !confirming;
-  SHIP.patch(confirmBox, confirming ? `<p id="dropConfirmText">${esc(t('dropConfirm').replace('{id}', confirming))}</p>` +
-    `<div class="acts"><button class="go" data-confirm-drop="${esc(confirming)}">${esc(t('dropYes'))}</button>` +
-    `<button data-cancel-drop="${esc(confirming)}">${esc(t('cancel'))}</button></div>` : '');
+  const doomed = confirming ? s.tasks.find(x => keyOf(x) === confirming) : null;
+  SHIP.patch(confirmBox, doomed ? `<p id="dropConfirmText">${esc(t('dropConfirm').replace('{id}', doomed.id))}` +
+    `${multi() ? ' ' + chip(doomed.project) : ''}</p>` +
+    `<div class="acts"><button class="go" data-confirm-drop="${esc(doomed.id)}" data-key="${esc(confirming)}">${esc(t('dropYes'))}</button>` +
+    `<button data-cancel-drop="${esc(doomed.id)}" data-key="${esc(confirming)}">${esc(t('cancel'))}</button></div>` : '');
   confirmBox.setAttribute('aria-labelledby', 'dropConfirmText');
   document.getElementById('taskFeedback').textContent = taskFeedback ? t(taskFeedback) : '';
 
@@ -382,19 +418,33 @@ function render(s) {
   const history = document.getElementById('history');
   history.querySelector('summary').textContent = `${t('history')} · ${t('laneMerged')} ${completed.filter(x=>x.stage==='merged').length} · ${t('laneClosed')} ${completed.filter(x=>x.stage==='closed').length}`;
   SHIP.patch(history.querySelector('.history-cards'), completed.map(item =>
-    `<div class="card s-${item.stage}"><span class="id">${esc(item.id)}</span> <span>${esc(t(item.stage==='merged'?'laneMerged':'laneClosed'))}</span>` +
+    `<div class="card s-${item.stage}"><span class="id">${esc(item.id)}</span>${multi() ? ' ' + chip(item.project) : ''} <span>${esc(t(item.stage==='merged'?'laneMerged':'laneClosed'))}</span>` +
     (item.pr ? ` ${prRef(item.pr, item.pr_url)}` : '') + title(item) + `</div>`).join(''));
 
   const deck = document.getElementById("deck");
   const wrap = document.getElementById("deckwrap");
-  const pend = [...(s.pending || [])].sort((a, b) =>
-    String(a.id || "").localeCompare(String(b.id || ""), "en", { numeric: true }));
+  // in the server's order: every project's cards in one list, oldest request
+  // first, so answering one never moves another
+  const pend = [...(s.pending || [])];
   const pendingIds = new Set(pend.map(d => d.id));
   for (const id of [...picks.keys()]) if (!pendingIds.has(id)) picks.delete(id);
   for (const id of [...drafts.keys()]) if (!pendingIds.has(id)) drafts.delete(id);
   for (const id of [...sent]) if (!pendingIds.has(id)) sent.delete(id);
   for (const id of [...expanded]) if (!pendingIds.has(id)) expanded.delete(id);
-  wrap.hidden = pend.length === 0 && !feedback && !SHIP.active();
+  for (const id of [...refused.keys()]) if (!pendingIds.has(id)) refused.delete(id);
+  // merges answered and still running: said by name, and "outcome unknown"
+  // when GitHub could not tell the board how one ended
+  const runningMerges = (s.responses || []).filter(d => d.merge === 'running');
+  wrap.hidden = pend.length === 0 && !feedback && !SHIP.active() && !runningMerges.length;
+  if (!document.getElementById('merging')) {
+    const list = document.createElement('ul'); list.id = 'merging';
+    list.setAttribute('role', 'status'); list.setAttribute('aria-live', 'polite');
+    wrap.insertBefore(list, wrap.querySelector('.deckrow'));
+  }
+  SHIP.patch(document.getElementById('merging'), runningMerges.map(d =>
+    `<li id="merging-${esc(d.id)}" class="${d.merge_unknown ? 'unknown' : 'running'}">${esc(d.id)}` +
+    `${multi() ? ' · ' + chip(projOf(d)) : ''}${d.pr ? ' · ' + prRef(d.pr, d.pr_url) : ''} · ` +
+    `${esc(t(d.merge_unknown ? 'mergeUnknown' : 'mergeRunning'))}</li>`).join(''));
   if (!document.getElementById('orderFeedback')) {
     const status = document.createElement('p'); status.id = 'orderFeedback';
     status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
@@ -413,10 +463,15 @@ function render(s) {
     return out.length ? `<div class="links">${out.join('')}</div>` : '';
   };
   // whose card it is: an id that names its owner (T-047) shows the project and
-  // task read out of it; a project's name is data and is not translated
+  // task read out of it; a project's name is data and is not translated. With
+  // several projects on the board every card carries its recorded project,
+  // which is also the one its merge runs in (T-054). A board of one project
+  // shows an owned id exactly as it did before, with no chip.
   const whose = d => {
     const own = d.owner || DIAGRAM.owner(d.id);
-    return `${esc(d.id)}${own ? ` · <span class="project">${esc(own.project)}</span>` : ''} · ${esc(d.task || own?.task || '')}`;
+    const p = multi() ? chip(projOf(d))
+      : own ? `<span class="project">${esc(own.project)}</span>` : '';
+    return `${esc(d.id)}${p ? ` · ${p}` : ''} · ${esc(d.task || own?.task || '')}`;
   };
   const full = d => {
     const gates = d.gates || [], content = localized(d), pick = picks.get(d.id);
@@ -424,19 +479,20 @@ function render(s) {
     const options = ['A','B','C', ...(d.details?.en?.options?.D ? ['D'] : [])].map(k => {
       const o = content?.options?.[k];
       return `<button class="opt" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" ${sent.has(d.id)?'disabled':''}>${k}${o || k !== 'D' ? ' · ' : ''}${esc(o ? words(o.description) : k === 'D' ? '' : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'))}</button>` +
-        (o ? `<p class="tradeoffs"><b>${esc(t('pros'))}</b> ${said(words(o.pros))}<br><b>${esc(t('cons'))}</b> ${said(words(o.cons))}</p>` : '');
+        (o ? `<p class="tradeoffs"><b>${esc(t('pros'))}</b> ${said(words(o.pros), d)}<br><b>${esc(t('cons'))}</b> ${said(words(o.cons), d)}</p>` : '');
     }).join('');
     return `<div class="dcard" id="card-${esc(d.id)}"><div class="meta">${whose(d)}` +
-      `</div><h3>${said(content ? words(content.title) : d.title || t("waiting"))}</h3>` + links(d) +
-      `<p class="explanation">${said(content ? words(content.explanation) : t('missingDetails'))}</p>` +
-      DIAGRAM.embed(d.id) + (content ? `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before))}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after))}</p></section></div>` : '') +
+      `</div><h3>${said(content ? words(content.title) : d.title || t("waiting"), d)}</h3>` + links(d) +
+      `<p class="explanation">${said(content ? words(content.explanation) : t('missingDetails'), d)}</p>` +
+      DIAGRAM.embed(d.id) + (content ? `<div class="change-fallback"><section><b>${esc(t('before'))}</b><p>${said(words(content.before), d)}</p></section><span aria-hidden="true">→</span><section><b>${esc(t('after'))}</b><p>${said(words(content.after), d)}</p></section></div>` : '') +
       (d.kind === "merge" && gates.length
-        ? `<ul class="gates">${GATES().map((g,i)=>`<li class="${gates[i]?"y":"n"}"><i>${gates[i]?"&#10003;":"&#8211;"}</i>${i+1}. ${g}</li>`).join("")}</ul>`
+        ? `<ul class="gates">${GATES().map((g,i)=>{const n=GATE_NUMBERS[i], ok=gates[n-1];return `<li class="${ok?"y":"n"}"><i>${ok?"&#10003;":"&#8211;"}</i>${n}. ${g}</li>`;}).join("")}</ul>`
         : "") +
       `<div class="acts">${options}
          <button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${sent.has(d.id)?'disabled':''}>${esc(t('customChoice'))}</button>
          <label ${pick === 'custom'?'':'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${sent.has(d.id)?'disabled':''}>${esc(drafts.get(d.id) || '')}</textarea></label>
          <span class="validation" id="validation-${esc(d.id)}"></span>
+         ${refused.has(d.id) ? `<p class="refused"${refused.get(d.id).announced ? '' : ' role="alert"'}>${esc(t('orderFailed'))} · ${esc(refused.get(d.id).error)}</p>` : ''}
          <button class="go confirm" data-id="${esc(d.id)}" disabled>${esc(t('confirmOrder'))}</button>
        </div></div>`;
   };
@@ -449,10 +505,11 @@ function render(s) {
     const content = localized(d), pick = picks.get(d.id);
     return `<details class="dstrip" id="strip-${esc(d.id)}" data-id="${esc(d.id)}"${expanded.has(d.id) ? ' open' : ''}>` +
       `<summary><span class="meta">${whose(d)}</span> ` +
-      `<span class="st">${said(content ? words(content.title) : d.title || t("waiting"))}</span>` +
+      `<span class="st">${said(content ? words(content.title) : d.title || t("waiting"), d)}</span>` +
       (pick ? ` <i class="picked">${esc(pick === 'custom' ? t("customChoice") : pick)}</i>` : '') +
       `</summary>${full(d)}</details>`;
   }).join(""));
+  for (const r of refused.values()) r.announced = true;
   deck.querySelectorAll('details.dstrip').forEach(el => el.ontoggle = () => {
     if (el.open) expanded.add(el.dataset.id); else expanded.delete(el.dataset.id);
     if (el.open) DIAGRAM.mount(el, lang).catch(() => {});
@@ -491,7 +548,7 @@ function render(s) {
     const t = (e.ts || "").slice(11, 19);
     const text = words(e.summary?.[lang === 'en' ? 'en' : 'zh-TW'] || e.summary?.en || e.type);
     return `<li><time>${esc(t)}</time><span class="who">${esc(e.actor)}</span>` +
-      `<span class="k-${esc(e.type)}">${said(text)}</span></li>`;
+      `<span class="k-${esc(e.type)}">${said(text, e)}</span></li>`;
   }).join("") : `<li class="empty">${esc(t("nothingYet"))}</li>`;
 }
 
@@ -508,16 +565,22 @@ function validate(id) {
 async function answer(id) {
   if (sent.has(id) || !validate(id)) return;
   const chosen = picks.get(id), text = drafts.get(id), decision = latest.pending.find(d => d.id === id);
-  sent.add(id); SHIP.unlock(); feedback = {key:'sending'}; render(latest);
+  refused.delete(id); sent.add(id); SHIP.unlock(); feedback = {key:'sending'}; render(latest);
   const r = await fetch("/decisions", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ id, chosen, ...(chosen === 'custom' ? {text} : {}) }),
   }).then(x => x.json()).catch(() => ({ error: t("unreachable") }));
   sent.delete(id);
-  if (r.error) feedback = {key:r.code || 'orderFailed'};
+  if (r.error) {
+    feedback = {key:r.code || 'orderFailed', decisionId:id, task:decision?.task || null};
+    refused.set(id, {error:String(r.error), announced:false});
+  }
   else {
     picks.delete(id); drafts.delete(id);
-    feedback = {key:r.merged && !r.merged.ok ? 'mergeRefused' : chosen === 'custom' ? 'customRecorded' : 'recorded', decisionId:id,
+    // a merge answers at once while it runs; its outcome arrives in the record
+    const merge = r.decision?.merge ?? r.merge ?? null;
+    feedback = {key:merge === 'failed' ? 'mergeRefused' : merge === 'running' ? 'mergeRunning'
+      : chosen === 'custom' ? 'customRecorded' : 'recorded', decisionId:id,
       task:decision?.task || r.decision?.task || null,
       cry:'AYE, CAPTAIN! / ORDERS AWAY', decision, literal:chosen === 'custom' ? text : '', eventFailed:r.eventRecorded === false};
     const identity = r.decision?.identity || `decision:${id}`;
@@ -526,48 +589,51 @@ async function answer(id) {
     }
   }
   render(latest);
-  fetch("/api/state").then(x => x.json()).then(render).catch(() => {});
+  fetch(STATE_URL).then(x => x.json()).then(render).catch(() => {});
 }
 // T-058: park, unpark and drop. Two ways to each - the card's menu (which is
 // also the keyboard path) and drag and drop - and one way to the server.
-const actionsOf = id => (latest?.tasks || []).find(x => x.id === id)?.actions || [];
-async function act(id, action) {
+// T-054: each is addressed by the card's key, its project and its id.
+const taskByKey = k => (latest?.tasks || []).find(x => keyOf(x) === k);
+const actionsOf = k => taskByKey(k)?.actions || [];
+async function act(k, action) {
   menuOpen = null; confirming = null; taskFeedback = null;
-  const r = await fetch('/tasks', {
+  const task = taskByKey(k);
+  const r = task ? await fetch('/tasks', {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ task: id, action }),
-  }).catch(() => null);
+    body: JSON.stringify({ task: task.id, action, ...(task.project ? { project: task.project } : {}) }),
+  }).catch(() => null) : null;
   if (!r || !r.ok) taskFeedback = 'actionFailed';
-  const s = await fetch('/api/state').then(x => x.json()).catch(() => null);
+  const s = await fetch(STATE_URL).then(x => x.json()).catch(() => null);
   render(s || latest);
 }
-function askDrop(id) {
-  menuOpen = null; confirming = id; render(latest);
+function askDrop(k) {
+  menuOpen = null; confirming = k; render(latest);
   document.querySelector('[data-confirm-drop]')?.focus();
 }
+const menuButton = k => document.querySelector(`.cmenu[data-key="${CSS.escape(k)}"]`);
 const board = document.querySelector('.lanes-wrap');
 board.addEventListener('click', e => {
   const el = e.target.closest('[data-menu],[data-act],[data-confirm-drop],[data-cancel-drop]');
   if (!el) return;
+  const k = el.dataset.key;
   if (el.dataset.menu) {
-    const id = el.dataset.menu;
-    menuOpen = menuOpen === id ? null : id; render(latest);
-    if (menuOpen) document.querySelector(`.cacts [data-for="${CSS.escape(id)}"]`)?.focus();
+    menuOpen = menuOpen === k ? null : k; render(latest);
+    if (menuOpen) document.querySelector(`.cacts [data-key="${CSS.escape(k)}"]`)?.focus();
   } else if (el.dataset.act) {
-    if (el.dataset.act === 'drop') askDrop(el.dataset.for); else act(el.dataset.for, el.dataset.act);
+    if (el.dataset.act === 'drop') askDrop(k); else act(k, el.dataset.act);
   } else if (el.dataset.confirmDrop) {
-    act(el.dataset.confirmDrop, 'drop');
+    act(k, 'drop');
   } else if (el.dataset.cancelDrop) {
-    const id = el.dataset.cancelDrop;
     confirming = null; render(latest);
-    document.querySelector(`[data-menu="${CSS.escape(id)}"]`)?.focus();
+    menuButton(k)?.focus();
   }
 });
 board.addEventListener('keydown', e => {
   if (e.key !== 'Escape' || !(menuOpen || confirming)) return;
-  const id = menuOpen || confirming;
+  const k = menuOpen || confirming;
   menuOpen = null; confirming = null; render(latest);
-  document.querySelector(`[data-menu="${CSS.escape(id)}"]`)?.focus();
+  menuButton(k)?.focus();
 });
 // T-069: a press that starts on a pull request number is a click on its
 // link, never the start of dragging the card it sits on
@@ -577,8 +643,8 @@ board.addEventListener('dragstart', e => {
   if (pressedOn?.closest?.('a[data-pr]')) { e.preventDefault(); return; }
   const cardEl = e.target.closest?.('.card[draggable="true"]');
   if (!cardEl) return;
-  dragging = cardEl.dataset.task;
-  e.dataTransfer.setData('text/plain', dragging);
+  dragging = cardEl.dataset.key || cardEl.dataset.task;
+  e.dataTransfer.setData('text/plain', cardEl.dataset.task);
   e.dataTransfer.effectAllowed = 'move';
   board.classList.add('dragging');
 });
@@ -612,7 +678,7 @@ document.addEventListener('pointerdown', () => SHIP.unlock());
 
 let es;
 function connect() {
-  es = new EventSource("/events");
+  es = new EventSource(EVENTS_URL);
   es.addEventListener("state", e => { document.getElementById("live").classList.remove("off"); render(JSON.parse(e.data)); });
   es.addEventListener("reload", () => location.reload());
   es.onerror = () => { document.getElementById("live").classList.add("off"); es.close(); setTimeout(connect, 1500); };
@@ -623,7 +689,7 @@ fetch("/api/i18n").then(r => r.json()).then(dd => { DICT = dd; })
     document.documentElement.lang = lang;
     chrome();
     connect();
-    fetch("/api/state").then(r => r.json()).then(render).catch(() => {});
+    fetch(STATE_URL).then(r => r.json()).then(render).catch(() => {});
   });
 </script>
 </body>

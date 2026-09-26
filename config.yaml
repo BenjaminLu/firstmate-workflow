@@ -22,10 +22,11 @@ policy:                 # what every crew round may do, whichever vendor runs it
                         # procs and cpu. A project overrides them below.
 
 concurrency: 3          # workers in flight at once
-# roster:               # the fleet's given names, one person per name across
-#   - mira              # workers and reviewers; a run takes one no live run
-#   - noah              # holds. Without it bin/fm-herdr.py's DEFAULT_ROSTER
-#                       # is used. Letters only, six at most.
+# rosters:              # the crew is drawn at random once per installation,
+#   workers:            # 24 workers and 24 reviewers, into state/crew/; see
+#     - mira            # bin/fm.sh roster. A list here pins that role's names
+#   reviewers:          # instead. A name belongs to one role, so one in both
+#     - noah            # lists is refused. Letters only, six at most.
 editor: code            # what /open hands a file to
 
 notifications:          # inside Herdr, a decision card the captain must answer
@@ -68,3 +69,9 @@ project:                # how this repository is prepared and checked; see READM
   docs:                 # changes that need no test; skills are behaviour
     - design/**
     - README.md
+    - LICENSE
+    - CODE_OF_CONDUCT.md
+    - CONTRIBUTING.md
+    - SECURITY.md
+    - .github/ISSUE_TEMPLATE/**
+    - .github/pull_request_template.md
