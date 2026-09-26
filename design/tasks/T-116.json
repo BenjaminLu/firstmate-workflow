@@ -23,7 +23,12 @@
     "skills/worker/SKILL.md",
     "skills/reviewer/SKILL.md",
     "design/design.md",
-    "design/tasks/T-116.json"
+    "design/tasks/T-116.json",
+    "i18n/ui.en.json",
+    "i18n/ui.zh-TW.json",
+    "tests/i18n.test.sh",
+    "tests/e2e/board.spec.ts",
+    "tests/ship.spec.ts"
   ],
   "acceptance": [
     "Today the board shows each worker and reviewer as one string, the canonical actor, e.g. worker-shira-sk001-r465. The captain cannot see at a glance which project each one works for: the project chip appears only when several projects are live (ship.js showProject), and the roster has no project at all. The r<n> in the actor is not the review round: fm-herdr.py allocate takes it from the global counter state/runs/counter.json (472 on 2026-09-26), so r465 reads as round 465. The captain approved this task on 2026-09-26: the board shows name, role, project, task, round and pull request as separate fields, never joined into one string, and the ship stays uncluttered. Its own spec file, design/tasks/T-116.json, is committed on this branch.",
@@ -33,7 +38,7 @@
     "Details on demand. Hovering or focusing a figure, or tapping it on a phone, opens a small detail card anchored to that figure, with one labelled line per field: name, role, project, task id and title, round, pull request (linked), state and current activity. Esc, a second tap or moving away closes it; only one card is open at a time; it is keyboard reachable and announced to screen readers.",
     "The roster (the crew list) shows the same fields in separate columns: name, role, project, task (id and title), round, pull request, state. The project column is always shown, even with one project. The roster can be sorted and grouped by project. On a phone the columns collapse into two lines per row, still as separate labelled fields.",
     "Task cards on the board list their crew as separate chips (name and role, round), not as a comma-joined string of actors (index.html line 377).",
-    "All new labels exist in English and 繁體中文 in the board's translation table in index.html, matching the board's current languages.",
+    "All new labels exist in English and 繁體中文 in the board's translation files i18n/ui.en.json and i18n/ui.zh-TW.json (scope corrected by firstmate after round 2), matching the board's current languages.",
     "design/design.md and the worker and reviewer skills describe the structured identity and the round-based actor, with examples.",
     "Evidence is the required GitHub check and the gates, checked by firstmate at the merge gate. Tests written to fail first cover: identity.json carries the separate fields; the actor's round equals the task's review round, and a retry gets a distinct attempt mark within 32 characters; an old run without the fields still renders; the ship label contains the name and the project marker only; the detail card lists every field separately; the roster shows a project column with one project and with two; task cards list crew as separate chips. The worker does not run the suite itself."
   ]

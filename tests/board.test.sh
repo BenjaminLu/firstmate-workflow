@@ -1642,7 +1642,7 @@ if (said !== "shira") fail("the tag says more than the name: [" + said + "]");
 for (const extra of ["T-Q1", "#41", "Writing", "structured", "crewRound"]) if (shira.includes(extra)) fail("tag carries " + extra);
 if (tag("worker-mira-tq2-r465").replace(/<[^>]*>/g, "") !== "mira") fail("an old run is not named on its tag");
 // a board of one project has no .pchip (T-054); with two the pennant is the
-// tag's chip, naming its project in hidden text and drawing only the name
+// chip of the tag, naming its project in hidden text and drawing only the name
 if (/pchip/.test(h.innerHTML)) fail("a one-project board draws a project chip");
 const h3 = host(); SHIP.render(h3, state(["alpha", "beta"]), T, L);
 const tag2 = (id) => (h3.innerHTML.match(new RegExp(`<div class="bub[^"]*" data-bubble="${id}"[^>]*>([\\s\\S]*?)<div class="crewcard`)) || [])[1] || "";
@@ -1669,7 +1669,7 @@ for (const [cls, [label, value]] of Object.entries(want)) {
 }
 if (!card.includes(`href="${url}"`)) fail("the card does not link the pull request");
 const old = (h.innerHTML.match(/<div class="crewcard" id="crewcard-worker-mira-tq2-r465"[\s\S]*?<\/dl><\/div>/) || [])[0];
-if (!old || !/<dd class="cround">crewUnknown<\/dd>/.test(old)) fail("an old run's round is not shown as unknown");
+if (!old || !/<dd class="cround">crewUnknown<\/dd>/.test(old)) fail("the round of an old run is not shown as unknown");
 // one card at a time: the open one is the one SHIP names, and only it
 SHIP.openCard = "worker-mira-tq2-r465";
 const h2 = host(); SHIP.render(h2, state(["alpha"]), T, L);

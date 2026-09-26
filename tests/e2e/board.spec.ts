@@ -318,11 +318,12 @@ for (const lang of ["en", "zh-TW", "zh-CN"]) {
     const cards = await page.locator(".dcard").count();
     await expect(page.locator("#pcount")).toHaveText(String(cards));
     expect(cards).toBeGreaterThan(0);
-    // every crewman says who he is and what he is on, over his own head
+    // every crewman says who he is over his own head, and what he is on in
+    // the card that head holds (T-116)
     await expect(page.locator(".scene .bub")).toHaveCount(CREW.length + 1);
     await expect(page.locator(".scene .bub:not(.mini) .job").first()).not.toBeEmpty();
-    // the full bubbles name the agent; the chips below them name the
-    // task, because a chip with only a name says nothing about the work
+    // the full bubbles name the agent; the chips below them name him too,
+    // and the work is in each card and the roster (T-116)
     const named = await page.locator(".scene .bub:not(.mini) .who").allInnerTexts();
     const listed = await page.locator(".roster .nm").allInnerTexts();
     for (const n of named) expect(listed).toContain(n);
@@ -1692,21 +1693,23 @@ test("captain and left helm stay on the real deck at every width and rate", asyn
 test("a crewman below the top deck still names the task he is on", async ({ page }) => {
   test.setTimeout(60_000);
   // Criterion 3 has no viewport qualifier, and a crowded ship is where
-  // the name chips appear - the full bubble would blindfold the crew
-  // standing over it, so the chip has to carry the name and the roster
-  // the job. Nothing covered the chip.
+  // the name chips appear. T-116 made every tag quiet: it carries the
+  // name only, and the task he is on is in his detail card and the roster.
   const many = await startBoard(makeRoot(Array(9).fill("working"), false));
   try {
     await page.goto(`${many.url}/?lang=en`);
     await expect(page.locator(".scene .pivot").first()).toBeVisible();
     const minis = page.locator(".scene .bub.mini");
-    expect(await minis.count()).toBeGreaterThan(0);
-    // the task, not merely non-empty: a chip holding the agent's name is
-    // also non-empty, which is what it held before and why "not blank"
-    // was an assertion that passed on the old code
+    const count = await minis.count();
+    expect(count).toBeGreaterThan(0);
+    // the name exactly: no task, round or activity rides on the tag
     for (const text of await minis.locator(".who").allInnerTexts()) {
-      expect(text.trim()).toMatch(/^(worker|reviewer)-\d+ T-\d+$/);
+      expect(text.trim()).toMatch(/^(worker|reviewer)-\d+$/);
     }
+    // the task, not merely non-empty: each chip's own card names it
+    const tasks = await minis.locator(".crewcard .ctask").allTextContents();
+    expect(tasks.length).toBe(count);
+    for (const t of tasks) expect(t.trim()).toMatch(/^T-\d+ /);
     // and the roster still carries what each of them is on
     const jobs = await page.locator(".roster .jb").allInnerTexts();
     expect(jobs.filter((j) => /^T-\d+/.test(j)).length).toBe(9);

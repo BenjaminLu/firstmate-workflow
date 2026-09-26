@@ -169,7 +169,8 @@ const SHIP = (() => {
   // between the two halves, and .fig.r-unknown draws it as one. Exported
   // because the sheet has to carry a rule for every value in here and
   // nothing can check that against a constant it cannot see.
-  const ROLE = { firstmate: "fm", worker: "w", reviewer: "r" };   // no captain: see captain()  // The crew are AGENTS. The server derives them from the actors in the
+  const ROLE = { firstmate: "fm", worker: "w", reviewer: "r" };   // no captain: see captain()
+  // The crew are AGENTS. The server derives them from the actors in the
   // event log - who is running, and what each one is on - because a
   // crewman standing on the deck is something doing work, not a task
   // waiting for someone. Drawing one per in-flight task put pull requests
@@ -478,7 +479,8 @@ const SHIP = (() => {
           `<i style="width:${c.pct}%"></i></span>`
         : "") +
       `</div></li>`;
-    const head = `<div class="rhead" role="group" aria-label="${esc(T("rosterSort"))}">` +[["name", T("crewName")], ["role", T("crewRole")], ["project", T("projectChip")],
+    const head = `<div class="rhead" role="group" aria-label="${esc(T("rosterSort"))}">` +
+      [["name", T("crewName")], ["role", T("crewRole")], ["project", T("projectChip")],
       ["round", T("crewRound")], ["state", T("crewState")], [null, T("crewPr")], ["task", T("crewTask")]]
       .map(([k, label]) => k
         ? `<button class="rsort" data-sort="${k}" aria-pressed="${key === k}">${esc(label)}</button>`
