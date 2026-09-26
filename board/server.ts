@@ -1111,7 +1111,7 @@ const server = Bun.serve({
         const merging = (p.kind === "merge" || untracked) && chosen === "A" && prNumber(p.pr) !== null && typeof p.pr === "number";
         const mergeTask = untracked ? null : taskKey(p.task) !== null ? String(p.task) : null;
         if (merging && !untracked && p.task != null && mergeTask === null)
-          return json({ error: "a merge card names a task id", code: "mergeTask", task: String(p.task) }, 409);
+          return json({ error: "a merge card names a task id", task: String(p.task) }, 409);
         // One merge at a time within a project. Refused before anything is
         // published or emitted, so the card stays pending as it was; nothing
         // below awaits, so no second answer can slip in between.

@@ -257,7 +257,8 @@ names a task, pointing at that task's `--kind merge` card; and
 squash commit carries git's `Revert "…"` subject instead), so by the grammar
 it is T-105's, and its card is a merge card for T-105. The board hands a task's merge card to
 `fm-merge.sh` only with a task the grammar holds, and refuses the answer
-(`409`, `mergeTask`) otherwise.
+(`409`, with no code of its own, so the page reports it as a failed order
+with the server's reason) otherwise.
 
 **One task-id grammar (T-119).** Which ids are tasks, and which task a branch
 or title names, is written once, in `bin/fm-emit.sh`, which every script
@@ -2587,9 +2588,6 @@ spaces and a migration: **every new id names its owner**,
   malformed id such as `D-Bad_Name-T047-1`. No writer produces one, since
   every card is requested through `fm-decide.sh`, which does hold it.
   Tightening the watcher is `bin/fm-herdr.py`'s work, outside T-047.
-  An SK task's owned card (`SK<n>` as the task part, T-119) is not yet taken
-  by every reader: `fm-diagram.sh` and `board/public/diagram.js` refuse it
-  (the parser table above). That is open, outside T-119's scope.
 - **authored content is written under the allocated id.** `--allocate` comes
   first, so firstmate writes `state/decision-details/<id>.json` and any
   `design/diagrams/<id>.*` under the id the card will carry, then requests
