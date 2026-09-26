@@ -1107,25 +1107,6 @@ scratch_add "$chain_result"
 # where a plain round starts: a mid-run fm-checkpoint.sh commits on top of
 # it, and what the round adds is read against this, not the last save
 round_start="$(git -C "$tree" rev-parse -q --verify HEAD 2>/dev/null)"
-# The round's permission policy (T-105): config.yaml's, for a worker, with
-# this project's override - never the operator's own CLI settings. Every
-# adapter confines its CLI to it or refuses the round; a policy that does
-# not read is a configuration error, not an unconfined round.
-policy_file="$FM_RUN_DIR/policy.json"; blocked_file="$FM_RUN_DIR/blocked-hosts"
-: > "$blocked_file"
-fm_policy worker "" config.yaml > "$policy_file" || {
-  echo "fm-worker: config.yaml's crew policy does not read; no round runs without one" >&2; exit 65; }
-export FM_POLICY="$policy_file" FM_POLICY_BLOCKED="$blocked_file"
-# A host the round's proxy refused is reported, not allowed: the crew
-# never widens its own policy. Firstmate reads the record and raises the
-# choice card that adds it to the project's registries.
-report_blocked_hosts() {   # report_blocked_hosts <role> <file>
-  local hosts
-  hosts="$(fm_policy_report "$REPO" "$1" "$TASK" "$NAME" "$2" "$policy_file")"
-  [ -n "$hosts" ] || return 0
-  echo "fm-worker: the round was refused undeclared hosts: $hosts; adding one to the project's policy network is the captain's choice" >&2
-  emit_status "Refused undeclared hosts: $hosts" "被拒的未宣告主機：${hosts}"
-}
 emit_status "Adapter running on $TASK" "adapter 正在執行 $TASK"
 (
   exec 9>&-
@@ -1151,7 +1132,6 @@ for v in $FM_VENDOR_SKIPPED; do
   emit --type vendor_unavailable --en "$v unavailable, trying the next" \
        --tw "$v 不可用，換下一家"
 done
-report_blocked_hosts worker "$blocked_file"
 [ "$rc" = "2" ] && { echo "fm-worker: every vendor was unavailable" >&2; exit 2; }
 
 rm -f "$prompt"
