@@ -436,7 +436,9 @@ test("custom selection is local, literal and never merges", async ({ page }) => 
   const b = await startBoard(makeRoot(["working"]));
   try {
     let posts = 0;
-    page.on('request', r => { if (r.method() === 'POST') posts++; });
+    // the fixture's one-time sign-in POSTs /login on the first visit; that
+    // exchange answers nothing, so only every other POST counts
+    page.on('request', r => { if (r.method() === 'POST' && new URL(r.url()).pathname !== '/login') posts++; });
     await page.goto(`${b.url}/?lang=en`);
     const card = page.locator('.dcard');
     expect(await page.locator('#captain .tool').evaluate(el=>({height:getComputedStyle(el).height,background:getComputedStyle(el).backgroundColor,opacity:getComputedStyle(el).opacity})))
@@ -743,7 +745,8 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
   emitFixture(root,'worker-1',first,'crew_status','Counting gates','計算閘門',{role:'worker',progress:{done:2,total:5}});
   writeFileSync(join(root,'state/pending/D-2.json'),JSON.stringify({id:'D-2',kind:'choice',task:spec.tasks[2].id,details}));
   const b = await startBoard(root);
-  let posts = 0; page.on('request', r => { if (r.method() === 'POST') posts++; });
+  // the one-time sign-in's POST /login answers nothing; every other POST counts
+  let posts = 0; page.on('request', r => { if (r.method() === 'POST' && new URL(r.url()).pathname !== '/login') posts++; });
   try {
     await page.setViewportSize({width:1280,height:900});
     await page.goto(`${b.url}/?lang=en`);

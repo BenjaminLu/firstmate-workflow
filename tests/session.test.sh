@@ -20,7 +20,7 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 sys.dont_write_bytecode = True  # Import production code without dirtying the checkout.
 root = Path(sys.argv[1])
@@ -174,7 +174,7 @@ class Session(unittest.TestCase):
         kind = dict(side_effect=outcome) if isinstance(outcome,Exception) else dict(return_value=outcome)
         with patch.object(m,'board_start',**kind) as start, contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             rc=m.main(['board',str(self.repo)])
-        start.assert_called_once_with(str(self.repo))
+        self.assertEqual([call(str(self.repo))],start.call_args_list)
         return rc, out.getvalue(), err.getvalue()
     def test_main_board_mode_reports_in_one_line_never_a_traceback(self):
         for error in (RuntimeError('board requires Bun'), OSError('no space left')):
