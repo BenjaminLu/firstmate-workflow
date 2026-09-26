@@ -49,6 +49,13 @@ board_port() {   # board_port <log> <pid>: the port the server printed; 1 if it 
 # its secret under XDG_CONFIG_HOME, pointed here at a directory of this suite's
 # own, outside every fixture root, so no run writes into the operator's home.
 XDG_CONFIG_HOME="$(mktemp -d)"; export XDG_CONFIG_HOME
+# The same holds for every suite that starts a board: each names
+# XDG_CONFIG_HOME, or its board writes a secret into the operator's home.
+starters="$(git -C "$ROOT" grep -lE 'bun run .*server\.ts|"run", join\(.*server\.ts' -- tests)"
+assert_contains " $(printf '%s ' $starters)" " tests/crew-end-to-end.test.sh " "the sweep finds the suites that start a board"
+for f in $starters; do
+  assert_ok "grep -q XDG_CONFIG_HOME '$ROOT/$f'" "$f gives its boards a config directory of its own"
+done
 secret_of() { cat "$XDG_CONFIG_HOME/firstmate/board-$1.secret"; }
 # wcurl <port> <curl args...>: curl as a script on this machine writes to that
 # board, with the bearer from the secret file and the board's own Origin
@@ -1802,13 +1809,6 @@ import importlib.util, sys
 s = importlib.util.spec_from_file_location("m", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
 print(m.board_login_url(sys.argv[2], int(sys.argv[3])).split("#", 1)[1])' "$k/bin/fm-herdr.py" "$1" "$2"
 }
-# forge <issued ms>: a correctly signed code issued at that time
-forge() {
-  python3 -c '
-import hashlib, hmac, sys, uuid
-key, origin, issued = open(sys.argv[1]).read().strip(), sys.argv[2], sys.argv[3]; nonce = uuid.uuid4().hex
-print(f"{issued}.{nonce}." + hmac.new(key.encode(), f"login:{origin}:{issued}.{nonce}".encode(), hashlib.sha256).hexdigest())' "$key" "$uk" "$1"
-}
 login() {   # login <code> [curl args...]: the status; the cookie in $k/jar, headers in $k/login-headers
   local body; body="$(jq -cn --arg c "$1" '{code:$c}')"; shift
   curl -s -o "$k/login-body" -D "$k/login-headers" -c "$k/jar" -w '%{http_code}' -X POST \
@@ -1835,8 +1835,8 @@ assert_eq "true" "$(curl -sf -b "$k/jar-good" "$uk/api/session" | jq -r .writabl
 rm -f "$k/jar"
 assert_eq "403" "$(login "$code1" -H "Origin: $uk")" "the same code a second time is refused"
 assert_eq "" "$(grep -i '^set-cookie:' "$k/login-headers" || true)" "and gives no cookie"
-now_ms="$(( $(date +%s) * 1000 ))"
-assert_eq "403" "$(login "$(forge "$(( now_ms - 61000 ))")" -H "Origin: $uk")" "a code issued more than 60 seconds ago is refused"
+# (expiry is tested on its own below, on a board whose codes last 2 seconds:
+# a code 61 seconds old here was also issued before this board started)
 # a fresh code with the last digit of its signature changed
 good="$(mint "$uk" "$PORTK")"
 case "$good" in *0) flipped="${good%?}1" ;; *) flipped="${good%?}0" ;; esac
@@ -1869,13 +1869,16 @@ for route in /decisions /tasks /open; do
   assert_eq "writeOrigin" "$(jq -r .code "$k/resp")" "$route says the request is not the board's own"
   assert_eq "403" "$(postk "$route" "$body" -H 'Origin: http://evil.example' -H 'content-type: application/json' \
     -b "$k/jar-good")" "$route with a valid cookie from another site is refused"
+  assert_eq "writeOrigin" "$(jq -r .code "$k/resp")" "$route says so for the other site"
   assert_eq "403" "$(postk "$route" "$body" -H 'content-type: application/json' -b "$k/jar-good")" \
     "$route with a valid cookie and no Origin is refused"
+  assert_eq "writeOrigin" "$(jq -r .code "$k/resp")" "$route says so with no Origin"
   assert_eq "403" "$(postk "$route" "$body" -H "Origin: $uk" -H 'content-type: text/plain' -b "$k/jar-good")" \
     "$route with a valid cookie and a text/plain body is refused"
   assert_eq "writeJson" "$(jq -r .code "$k/resp")" "$route says it takes JSON only"
-  assert_eq "403" "$(wcurl "$PORTK" -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: text/plain' \
+  assert_eq "403" "$(wcurl "$PORTK" -s -o "$k/resp" -w '%{http_code}' -X POST -H 'content-type: text/plain' \
     -d "$body" "$uk$route")" "$route with the bearer and a text/plain body is refused"
+  assert_eq "writeJson" "$(jq -r .code "$k/resp")" "$route says so to the bearer too"
 done
 sleep 1   # an editor or a merge a refusal started would have run by now
 assert_eq "$n0" "$(lines_k)" "no refusal emitted an event"
@@ -1945,7 +1948,23 @@ start_k "$PORTK"
 assert_eq "$secret" "$(cat "$key")" "a restart keeps the secret it found"
 assert_eq "true" "$(curl -sf -b "$k/jar-good" "$uk/api/session" | jq -r .writable)" \
   "and the tab's cookie still writes after the restart"
-assert_eq "403" "$(login "$code1" -H "Origin: $uk")" "a code minted before the restart is not taken by the new board"
+# $unused was minted seconds ago and never redeemed: only the restart stands
+# between it and a cookie
+assert_eq "403" "$(login "$unused" -H "Origin: $uk")" "a code minted before the restart is not taken by the new board"
+kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
+
+# expiry on its own: codes last 2 seconds on this board, and each code here is
+# issued after it started, correctly signed, from its own origin and unused,
+# so the clock is the only rule that can refuse the first
+FM_BOARD_CODE_TTL_MS=2000 start_k "$PORTK"
+late="$(mint "$uk" "$PORTK")"
+sleep 3
+rm -f "$k/jar"
+assert_eq "403" "$(login "$late" -H "Origin: $uk")" "a code older than its lifetime is refused"
+assert_eq "loginRefused" "$(jq -r .code "$k/login-body")" "with the code the page translates"
+assert_eq "" "$(grep -i '^set-cookie:' "$k/login-headers" || true)" "and gives no cookie"
+assert_eq "200" "$(login "$(mint "$uk" "$PORTK")" -H "Origin: $uk")" \
+  "the control: a code minted the same way and used at once is taken"
 kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
 rm -rf "$k" "$XDG_CONFIG_HOME"
 

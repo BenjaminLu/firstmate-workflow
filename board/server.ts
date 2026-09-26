@@ -1037,8 +1037,9 @@ const hasBearer = (req: Request) => {
 // A one-time code: <issued ms>.<nonce>.<mac>, the mac over the board's origin,
 // the time and the nonce. Good for 60 seconds from its issue, never for one
 // issued before this board started, and once: a used nonce is kept until its
-// code would have expired anyway.
-const CODE_TTL = 60_000;
+// code would have expired anyway. FM_BOARD_CODE_TTL_MS can shorten the 60
+// seconds, never lengthen them, so a test can see expiry on its own.
+const CODE_TTL = Math.min(60_000, Number(process.env.FM_BOARD_CODE_TTL_MS) || 60_000);
 const usedCodes = new Map<string, number>();
 const redeem = (code: unknown): boolean => {
   const m = /^([0-9]{13})\.([0-9a-f]{32})\.([0-9a-f]{64})$/.exec(typeof code === "string" ? code : "");

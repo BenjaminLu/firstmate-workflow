@@ -1445,7 +1445,9 @@ web page open in the captain's browser; neither can write.
   `bin/fm-herdr.py` `board_start`) sends the browser to `/login#<code>`, the
   code `<issued ms>.<nonce>.<HMAC-SHA256(secret, "login:<origin>:<issued>.<nonce>")>`.
   The board takes a code once, within 60 seconds of its issue, and never one
-  issued before it started, so a restart cannot replay one. The page at
+  issued before it started, so a restart cannot replay one.
+  `FM_BOARD_CODE_TTL_MS` can shorten the 60 seconds, never lengthen them; it
+  exists so a test sees expiry apart from the start-time rule. The page at
   `/login` posts the code (with its Origin, as JSON) and gets
   `Set-Cookie: firstmate_board_<port>=<HMAC(secret, "session:<origin>")>; HttpOnly;
   SameSite=Strict; Path=/`, then replaces its address with `/`, so the code

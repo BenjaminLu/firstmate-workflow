@@ -17,6 +17,7 @@
     "tests/session.test.sh",
     "tests/herdr.test.sh",
     "tests/diagram.test.sh",
+    "tests/crew-end-to-end.test.sh",
     "tests/e2e/board.spec.ts",
     "tests/e2e/fixture.ts",
     "tests/ship.spec.ts",

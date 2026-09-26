@@ -27,6 +27,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 command -v bun >/dev/null 2>&1 || { echo "    bun not installed - crew e2e skipped"; exit 0; }
 
 d="$(mktemp -d)"; r="$d/repo"
+# T-122: the board keeps its secret under XDG_CONFIG_HOME; this suite's own,
+# outside the fixture root, so no run writes into the operator's home
+XDG_CONFIG_HOME="$d/config"; export XDG_CONFIG_HOME
 mkdir -p "$r"
 mkdir -p "$r/bin" "$r/design/tasks" "$r/state" "$r/skills/worker" "$r/skills/reviewer" "$r/board"
 cp "$ROOT/bin/fm-worker.sh" "$ROOT/bin/fm-review.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$r/bin/"
