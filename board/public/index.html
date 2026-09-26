@@ -512,10 +512,12 @@ function render(s) {
   };
   const full = d => {
     const gates = d.gates || [], content = localized(d), pick = picks.get(d.id);
+    // an answered card, or a tab that cannot write (T-122), takes no choice
+    const locked = sent.has(d.id) || readOnly();
     // D only where the card offers it: a readiness card's drop (T-059)
     const options = ['A','B','C', ...(d.details?.en?.options?.D ? ['D'] : [])].map(k => {
       const o = content?.options?.[k];
-      return `<button class="opt" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" ${sent.has(d.id) || readOnly()?'disabled':''}>${k}${o || k !== 'D' ? ' · ' : ''}${esc(o ? words(o.description) : k === 'D' ? '' : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'))}</button>` +
+      return `<button class="opt" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" ${locked?'disabled':''}>${k}${o || k !== 'D' ? ' · ' : ''}${esc(o ? words(o.description) : k === 'D' ? '' : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'))}</button>` +
         (o ? `<p class="tradeoffs"><b>${esc(t('pros'))}</b> ${said(words(o.pros), d)}<br><b>${esc(t('cons'))}</b> ${said(words(o.cons), d)}</p>` : '');
     }).join('');
     return `<div class="dcard" id="card-${esc(d.id)}"><div class="meta">${whose(d)}` +
@@ -526,8 +528,8 @@ function render(s) {
         ? `<ul class="gates">${GATES().map((g,i)=>{const n=GATE_NUMBERS[i], ok=gates[n-1];return `<li class="${ok?"y":"n"}"><i>${ok?"&#10003;":"&#8211;"}</i>${n}. ${g}</li>`;}).join("")}</ul>`
         : "") +
       `<div class="acts">${options}
-         <button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${sent.has(d.id) || readOnly()?'disabled':''}>${esc(t('customChoice'))}</button>
-         <label ${pick === 'custom'?'':'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${sent.has(d.id) || readOnly()?'disabled':''}>${esc(drafts.get(d.id) || '')}</textarea></label>
+         <button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${locked?'disabled':''}>${esc(t('customChoice'))}</button>
+         <label ${pick === 'custom'?'':'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${locked?'disabled':''}>${esc(drafts.get(d.id) || '')}</textarea></label>
          <span class="validation" id="validation-${esc(d.id)}"></span>
          ${refused.has(d.id) ? `<p class="refused"${refused.get(d.id).announced ? '' : ' role="alert"'}>${esc(t('orderFailed'))} · ${esc(refused.get(d.id).error)}</p>` : ''}
          <button class="go confirm" data-id="${esc(d.id)}" disabled>${esc(t('confirmOrder'))}</button>
