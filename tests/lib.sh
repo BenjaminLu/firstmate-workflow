@@ -17,9 +17,12 @@ assert_contains() { _t "$3"; case "$1" in *"$2"*) ok;; *) bad "missing [$2]";; e
 # assertion meant to read it - and whether the result parses varies run to
 # run, which made a real failure report ok about half the time.
 assert_lacks() { _t "$3"; case "$1" in *"$2"*) bad "found [$2]";; *) ok;; esac; }
-# a shape, without handing the string to the shell
+# a shape, without handing the string to the shell. Not a pipe (under
+# pipefail grep -q leaving early can kill the writer, T-103), and not a
+# here-string either: that adds a newline, so empty output became one empty
+# line and matched '^$' or '^[0-9]*$'. Exactly the bytes of $1.
 assert_matches() { _t "$3"
-  if printf '%s' "$1" | grep -Eq -- "$2"; then ok; else bad "[$1] does not match /$2/"; fi; }
+  if grep -Eq -- "$2" < <(printf '%s' "$1"); then ok; else bad "[$1] does not match /$2/"; fi; }
 # Swapping a script out for a stub is the commonest fixture move and the
 # commonest fixture bug: the restore gets parked at the end of the file,
 # where the next edit duplicates it or loses it. Pair them here instead, and

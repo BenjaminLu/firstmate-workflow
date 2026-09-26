@@ -497,7 +497,10 @@ assert_ne "" "$sig" "the signature list was found"
 unread=''
 saved_ifs="$IFS"; IFS='|'
 for alt in $sig; do
-  printf '%s\n' "$broken_lines" | grep -qiE "$alt" || unread="$unread [$alt]"
+  # a here-string, not a pipe: under pipefail grep -q leaving on the match
+  # let printf die of SIGPIPE, and a signature that matched was reported
+  # unread - a different one each CI run (T-103)
+  grep -qiE "$alt" <<<"$broken_lines" || unread="$unread [$alt]"
 done
 IFS="$saved_ifs"
 assert_eq "" "$unread" "every signature has a transcript that carries it"
