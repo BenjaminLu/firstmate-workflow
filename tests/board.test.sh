@@ -45,6 +45,49 @@ board_port() {   # board_port <log> <pid>: the port the server printed; 1 if it 
   return 1
 }
 
+# T-122: every route that writes takes the board's credential. The board keeps
+# its secret under XDG_CONFIG_HOME, pointed here at a directory of this suite's
+# own, outside every fixture root, so no run writes into the operator's home.
+XDG_CONFIG_HOME="$(mktemp -d)"; export XDG_CONFIG_HOME
+# The same holds for every suite that starts a board: each sets
+# XDG_CONFIG_HOME, or its board writes a secret into the operator's home.
+# Both the sweep and the check read code with its comments taken off, so a
+# comment that names the variable stands in for neither.
+code_of() {   # code_of <file>: its code, without # comments, or // ones in TypeScript
+  case "$1" in
+    *.ts) sed -e 's#^[[:space:]]*//.*$##' -e 's#[[:space:]]//.*$##' "$1" ;;
+    *) fm_strip_comments "$1" ;;
+  esac
+}
+starts_board='bun run .*server\.ts|"run", join\(.*server\.ts'
+sets_config='XDG_CONFIG_HOME["'\'']?[[:space:]]*[=:]'
+starters=''
+for f in $(git -C "$ROOT" ls-files -- 'tests/*.sh' 'tests/*.ts'); do
+  # a here-string, not a pipe: under pipefail, grep -q leaving early fails the writer
+  grep -qE "$starts_board" <<< "$(code_of "$ROOT/$f")" && starters="$starters $f"
+done
+assert_contains "$starters " " tests/crew-end-to-end.test.sh " "the sweep finds the suites that start a board"
+unset_config=''
+for f in $starters; do
+  grep -qE "$sets_config" <<< "$(code_of "$ROOT/$f")" || unset_config="$unset_config $f"
+done
+assert_eq "" "$unset_config" "every suite that starts a board gives it a config directory of its own"
+# the control: a comment alone neither starts a board nor sets the variable
+printf '#!/usr/bin/env bash\n# bun run board/server.ts\n# XDG_CONFIG_HOME="$d"\n' > "$d/commented.sh"
+assert_eq "" "$(code_of "$d/commented.sh" | grep -E "$starts_board|$sets_config" || true)" \
+  "a suite that only names them in comments is neither found nor passed"
+printf '// XDG_CONFIG_HOME: config\nspawn("bun", ["run", join(root, "board/server.ts")])\n' > "$d/commented.ts"
+assert_eq "spawn" "$(code_of "$d/commented.ts" | grep -oE "^spawn" || true)$(code_of "$d/commented.ts" | grep -E "$sets_config" || true)" \
+  "and in TypeScript, the call is found and the comment is not"
+rm -f "$d/commented.sh" "$d/commented.ts"
+secret_of() { cat "$XDG_CONFIG_HOME/firstmate/board-$1.secret"; }
+# wcurl <port> <curl args...>: curl as a script on this machine writes to that
+# board, with the bearer from the secret file and the board's own Origin
+wcurl() {
+  local port="$1"; shift
+  curl -H "Origin: http://127.0.0.1:$port" -H "Authorization: Bearer $(secret_of "$port")" "$@"
+}
+
 # Merges run in the background (T-054), so their outcome is something to wait
 # for, with a bound: a helper that never finishes fails the assertion after it
 # rather than hanging the suite.
@@ -357,7 +400,7 @@ done
 # the body is built outside the substitution: bash 3.2 brace-expands a
 # {a,b} inside "$(...)" that only escaped quotes protect, and runs it twice
 body="$(jq -cn --arg i "$nid" '{id:$i,chosen:"B"}')"
-assert_eq "true" "$(curl -s -X POST -H 'content-type: application/json' \
+assert_eq "true" "$(wcurl "$PORT" -s -X POST -H 'content-type: application/json' \
   -d "$body" "http://127.0.0.1:$PORT/decisions" | jq -r .ok)" "the board answers it"
 assert_eq "B" "$(jq -r .chosen "$d/state/decisions/$nid.json")" "and the answer lands under its id"
 assert_eq "B" "$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r --arg i "$nid" '.responses[]|select(.id==$i)|.chosen')" \
@@ -820,7 +863,7 @@ rm -f "$e/state/pending/D-402.json"
 # a refused merge is flagged as overtaken once that task is merged afterwards.
 # The merge runs after the answer (T-054): the record says how it ended once
 # the helper has exited.
-curl -sf -X POST -H 'content-type: application/json' -d '{"id":"D-401","chosen":"A"}' \
+wcurl "$PORTE" -sf -X POST -H 'content-type: application/json' -d '{"id":"D-401","chosen":"A"}' \
   "http://127.0.0.1:$PORTE/decisions" > "$e/post" || true
 assert_eq "true" "$(jq -r '.ok' "$e/post")" "the merge answer is recorded"
 wait_for 20 jq -e '.merge=="failed"' "$e/state/decisions/D-401.json"
@@ -890,12 +933,12 @@ card4 D-407 T-E6 ABC
 assert_eq "captain" "$(jq -r '.tasks[]|select(.id=="T-E6")|.stage' <<<"$(st)")" \
   "any other open card on it puts it at the captain's"
 # D is a choice only on a card that offers it
-code="$(curl -s -o "$e/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+code="$(wcurl "$PORTE" -s -o "$e/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
   -d '{"id":"D-407","chosen":"D"}' "http://127.0.0.1:$PORTE/decisions")"
 assert_eq "400" "$code" "D on a card that offers A to C is refused"
 assert_fail "test -e '$e/state/decisions/D-407.json'" "and nothing is recorded"
 rm -f "$e/state/pending/D-407.json"
-code="$(curl -s -o "$e/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+code="$(wcurl "$PORTE" -s -o "$e/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
   -d '{"id":"D-406","chosen":"D"}' "http://127.0.0.1:$PORTE/decisions")"
 assert_eq "200" "$code" "D on a card that offers it is accepted"
 assert_eq "D" "$(jq -r '.chosen' "$e/state/decisions/D-406.json" 2>/dev/null)" "and recorded as D"
@@ -914,7 +957,7 @@ card4 "$id8" T-E6 ABCD
 bash "$e/bin/fm-ready.sh" judged --task T-E6 --decision "$id8" --repo "$e" >/dev/null 2>&1
 assert_eq "" "$(bash "$e/bin/fm-ready.sh" cleared --repo "$e" 2>&1)" \
   "the control: while the card is open, nothing is cleared"
-code="$(curl -s -o "$e/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+code="$(wcurl "$PORTE" -s -o "$e/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
   -d "$(jq -cn --arg id "$id8" '{id:$id,chosen:"A"}')" "http://127.0.0.1:$PORTE/decisions")"
 assert_eq "200" "$code" "the captain answers A on the board"
 assert_eq "T-E6" "$(bash "$e/bin/fm-ready.sh" cleared --repo "$e" 2>&1)" \
@@ -933,16 +976,21 @@ const at = src.indexOf("const options = [");
 const end = src.indexOf(".join(\x27\x27);", at);
 if (at < 0 || end < 0) { console.log("FAIL no options markup"); process.exit(1); }
 const expr = src.slice(at + "const options = ".length, end + ".join(\x27\x27)".length);
-const render = new Function("d", "content", "pick", "sent", "esc", "words", "t", "said", "return " + expr);
+const render = new Function("d", "content", "pick", "locked", "esc", "words", "t", "said", "return " + expr);
 const opts = (keys) => Object.fromEntries(keys.map(k => [k, { description: "do " + k, pros: "p", cons: "c" }]));
 const card = (keys) => ({ id: "D-1", kind: "choice", details: { en: { options: opts(keys) } } });
-const out = (keys) => render(card(keys), { options: opts(keys) }, undefined, new Set(), String, String, String, String);
+const out = (keys, locked = false) => render(card(keys), { options: opts(keys) }, undefined, locked, String, String, String, String);
 const four = out(["A", "B", "C", "D"]), three = out(["A", "B", "C"]);
 if (!/data-c="D"[^>]*>D · do D</.test(four)) { console.log("FAIL no D button: " + four); process.exit(1); }
 if (/data-c="D"/.test(three)) { console.log("FAIL invented D"); process.exit(1); }
+// a card that is answered, or in a tab that cannot write (T-122), is drawn
+// with every option disabled; one that can still be answered with none
+if (/disabled/.test(four)) { console.log("FAIL an open card is disabled: " + four); process.exit(1); }
+const shut = out(["A", "B", "C", "D"], true);
+if ((shut.match(/<button[^>]*\sdisabled>/g) || []).length !== 4) { console.log("FAIL a locked card still takes a choice: " + shut); process.exit(1); }
 console.log("ok");
 ')"
-assert_eq "ok" "$dbtn" "the page shows a D button on a card that offers D, and only there"
+assert_eq "ok" "$dbtn" "the page shows a D button on a card that offers D, and only there, and disables every option on a card that is locked"
 
 kill "$pide" 2>/dev/null
 wait "$pide" 2>/dev/null || true
@@ -981,7 +1029,7 @@ done
 sf() { curl -sf "http://127.0.0.1:$PORTF/api/state"; }
 lines() { wc -l < "$f/state/events.jsonl" | tr -d ' '; }
 # act TASK ACTION -> the HTTP status; the body lands in $f/resp
-act() { curl -s -o "$f/resp" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+act() { wcurl "$PORTF" -s -o "$f/resp" -w '%{http_code}' -X POST -H 'content-type: application/json' \
   -d "{\"task\":\"$1\",\"action\":\"$2\"}" "http://127.0.0.1:$PORTF/tasks"; }
 field() { jq -r --arg t "$1" ".tasks[]|select(.id==\$t)|$2" <<<"$(sf)"; }
 last_event() { tail -1 "$f/state/events.jsonl"; }
@@ -1063,9 +1111,9 @@ assert_eq "closed" "$(field T-P2 .stage)" "and is closed"
 n5="$(lines)"
 assert_eq "404" "$(act T-NOPE park)" "a task the plan does not list is 404"
 assert_eq "400" "$(act T-P1 sink)" "an action that is not park, unpark or drop is 400"
-assert_eq "415" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: text/plain' \
+assert_eq "403" "$(wcurl "$PORTF" -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: text/plain' \
   -d '{"task":"T-P1","action":"park"}' "http://127.0.0.1:$PORTF/tasks")" \
-  "a body that is not declared JSON is refused, so a cross-site form cannot post it"
+  "a body that is not declared JSON is refused, even with the credential, so a cross-site form cannot post it"
 assert_eq "$n5" "$(lines)" "and none of them writes anything"
 
 # the board never edits the plan
@@ -1295,7 +1343,7 @@ start_h
 sh_() { curl -sf -m 5 "http://127.0.0.1:$PORTH/api/state${1-}"; }
 posth() {   # posth <id> <choice>: the HTTP status, the body in $h/post
   local body; body="$(jq -cn --arg i "$1" --arg c "$2" '{id:$i,chosen:$c}')"
-  curl -s -m 5 -o "$h/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+  wcurl "$PORTH" -s -m 5 -o "$h/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
     -d "$body" "http://127.0.0.1:$PORTH/decisions"
 }
 sh1="$(sh_)"
@@ -1408,7 +1456,7 @@ assert_eq "0" "$(jq -r .counts.waiting <<<"$(sh_)")" "nothing is left waiting"
 postt() {   # postt <task> <action> [project]: the HTTP status, the body in $h/post
   local body
   body="$(jq -cn --arg t "$1" --arg a "$2" --arg p "${3-}" '{task:$t,action:$a} + (if $p == "" then {} else {project:$p} end)')"
-  curl -s -m 5 -o "$h/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+  wcurl "$PORTH" -s -m 5 -o "$h/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
     -d "$body" "http://127.0.0.1:$PORTH/tasks"
 }
 stage4() { sh_ | jq -r '[.tasks[]|select(.id=="T-004")|"\(.project) \(.stage)"]|sort|join("|")'; }
@@ -1741,5 +1789,251 @@ for repo in $gh_repos; do
     assert_eq "" "$(grep -rnF -- "$part" "$ROOT/board" || true)" "board/ holds no literal '${part}' from the registry"
   done
 done
+
+# --- T-122: only the captain's browser, or a script holding the secret, writes ---
+# A crew round can reach the board's port (the macOS sandbox cannot keep it
+# off one loopback port), and so can any page in the captain's browser. Every
+# route that writes or starts a program is refused to both, and nothing either
+# can read hands them what it would take.
+k="$(mktemp -d)"; mkdir -p "$k/bin" "$k/state/pending" "$k/design" "$k/board/public" "$k/src"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$k/bin/"
+cp "$ROOT/board/server.ts" "$k/board/"
+cp "$ROOT/board/public/index.html" "$ROOT/board/public/ship.js" "$ROOT/board/public/diagram.js" "$k/board/public/"
+fm_tasks_write /dev/stdin "$k/design/tasks" <<'J'
+{"tasks":[{"id":"T-K1","title":"ready work","milestone":"M2","depends_on":[]},
+          {"id":"T-K2","title":"awaiting its merge","milestone":"M2","depends_on":[]}]}
+J
+FM_ROOT="$k" "$k/bin/fm-emit.sh" --actor captain --type greenlit --en "go" --tw "開工" >/dev/null
+jq -cn '{id:"D-900",kind:"merge",task:"T-K2",pr:9,title:"merge it"}' > "$k/state/pending/D-900.json"
+# The merge helper records how it was called and answers as bin/fm-merge.sh
+# does on a merge GitHub took: one line, `fm-merge: merged #<pr>`, exit 0.
+# The editor records the path and, like `code <file>`, says nothing.
+cat > "$k/bin/fm-merge.sh" <<'S'
+#!/usr/bin/env bash
+root="$(cd "$(dirname "$0")/.." && pwd)"
+printf '%s\n' "$*" >> "$root/merge-calls"
+pr=''
+while [ $# -gt 0 ]; do
+  case "$1" in --pr) pr="${2-}"; shift 2 ;; *) shift ;; esac
+done
+echo "fm-merge: merged #$pr"
+S
+printf '#!/usr/bin/env bash\necho "$*" >> "%s/opened"\n' "$k" > "$k/fake-editor"
+chmod +x "$k/bin/fm-merge.sh" "$k/fake-editor"
+printf 'editor: %s/fake-editor\n' "$k" > "$k/config.yaml"
+echo "inside the repo" > "$k/src/visible"
+start_k() {   # start_k <port>: the board on $k, its pid in pidk and port in PORTK
+  FM_ROOT="$k" FM_PORT="$1" bun run "$k/board/server.ts" > "$k/out" 2>&1 < /dev/null &
+  pidk=$!
+  PORTK="$(board_port "$k/out" "$pidk")"
+  wait_for 60 curl -sf "http://127.0.0.1:$PORTK/api/state"
+}
+start_k 0
+uk="http://127.0.0.1:$PORTK"
+key="$XDG_CONFIG_HOME/firstmate/board-$PORTK.secret"
+lines_k() { wc -l < "$k/state/events.jsonl" | tr -d ' '; }
+
+# (4) the secret: made at start, 0600, outside the repository, 256 bits or more
+assert_ok "test -f '$key'" "the board made its secret file under the config directory"
+assert_eq "600" "$(perl -e 'printf "%o", (stat shift)[2] & 07777' "$key")" "the secret file is mode 0600"
+case "$(cd "$(dirname "$key")" && pwd -P)/" in "$(cd "$k" && pwd -P)/"*) inrepo=yes ;; *) inrepo=no ;; esac
+assert_eq "no" "$inrepo" "the secret file is outside the repository"
+secret="$(cat "$key")"
+assert_ok "grep -Eq '^[0-9a-f]{64,}$' '$key'" "the secret is at least 256 bits of hex"
+
+# mint <origin> <port>: a one-time code the way the opener makes one
+# (bin/fm-herdr.py board_login_url), printed as the part after /login#
+mint() {
+  PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import importlib.util, sys
+s = importlib.util.spec_from_file_location("m", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+print(m.board_login_url(sys.argv[2], int(sys.argv[3])).split("#", 1)[1])' "$k/bin/fm-herdr.py" "$1" "$2"
+}
+login() {   # login <code> [curl args...]: the status; the body in $k/login-body, headers in $k/login-headers
+  local body status; body="$(jq -cn --arg c "$1" '{code:$c}')"; shift
+  status="$(curl -s -o "$k/login-body" -D "$k/login-headers" -w '%{http_code}' -X POST \
+    -H 'content-type: application/json' "$@" -d "$body" "$uk/login")"
+  cat "$k/login-headers" >> "$k/all-headers"
+  printf '%s' "$status"
+}
+# the files holding a Set-Cookie among every response header this part keeps
+# (each login's, and every read's below): there must be none
+cookies_set() { grep -il '^set-cookie:' "$k/all-headers" "$k/reads" 2>/dev/null || true; }
+
+# (2) the one-time code: works once, then never again; expired or wrong is refused
+assert_eq "false" "$(curl -sf "$uk/api/session" | jq -r .writable)" "a tab with no token is not writable"
+code1="$(mint "$uk" "$PORTK")"
+assert_matches "$code1" '^[0-9]{13}\.[0-9a-f]{32}\.[0-9a-f]{64}$' "the opener mints a code of the board's shape"
+assert_eq "403" "$(login "$code1")" "a code posted with no Origin is refused"
+assert_eq "403" "$(login "$code1" -H 'Origin: http://evil.example')" "and one posted from another origin"
+assert_eq "200" "$(login "$code1" -H "Origin: $uk")" "the code posted from the board's own page is taken"
+# the tab's token comes back in the body, for the page to keep in its own
+# sessionStorage, and never as a cookie: a browser sends a cookie for
+# 127.0.0.1 to every port on it
+token="$(jq -r '.token // empty' "$k/login-body")"
+assert_matches "$token" '^[0-9a-f]{64}$' "it answers with the tab's token"
+assert_ne "$secret" "$token" "which is not the secret itself"
+assert_eq "" "$(cookies_set)" "and sets no cookie"
+assert_eq "true" "$(curl -sf -H "Authorization: Bearer $token" "$uk/api/session" | jq -r .writable)" \
+  "with the token the tab is writable"
+assert_eq "403" "$(login "$code1" -H "Origin: $uk")" "the same code a second time is refused"
+assert_eq "" "$(jq -r '.token // empty' "$k/login-body")" "and gives no token"
+# (expiry is tested on its own below, on a board whose codes last 2 seconds:
+# a code 61 seconds old here was also issued before this board started)
+# a fresh code with the last digit of its signature changed
+good="$(mint "$uk" "$PORTK")"
+case "$good" in *0) flipped="${good%?}1" ;; *) flipped="${good%?}0" ;; esac
+assert_eq "403" "$(login "$flipped" -H "Origin: $uk")" "a code whose signature is wrong is refused"
+assert_eq "403" "$(login "not-a-code" -H "Origin: $uk")" "and so is one that is not a code"
+assert_eq "loginRefused" "$(jq -r .code "$k/login-body")" "with a code the page translates"
+assert_eq "200" "$(login "$good" -H "Origin: $uk")" "the control: the same code unaltered is taken"
+
+# (1) the refusals: every writing route, every missing or wrong part, 403 and nothing done
+dec="$(jq -cn '{id:"D-900",chosen:"A"}')"
+tsk="$(jq -cn '{task:"T-K1",action:"park"}')"
+opn="$(jq -cn '{path:"src/visible"}')"
+postk() {   # postk <route> <body> <curl args...>: the status; the body in $k/resp
+  local route="$1" body="$2"; shift 2
+  curl -s -o "$k/resp" -w '%{http_code}' -X POST "$@" -d "$body" "$uk$route"
+}
+zeros="$(printf '%064d' 0)"
+n0="$(lines_k)"
+for route in /decisions /tasks /open; do
+  case "$route" in /decisions) body="$dec" ;; /tasks) body="$tsk" ;; *) body="$opn" ;; esac
+  assert_eq "403" "$(postk "$route" "$body" -H "Origin: $uk" -H 'content-type: application/json')" \
+    "$route with no credential is refused"
+  assert_eq "writeCredential" "$(jq -r .code "$k/resp")" "$route says the tab has no credential"
+  assert_eq "403" "$(postk "$route" "$body" -H "Origin: $uk" -H 'content-type: application/json' \
+    -H "Authorization: Bearer $zeros")" "$route with a wrong bearer is refused"
+  # what a cookie session would have held, sent as a cookie: the board reads
+  # no cookie, so a server on another loopback port that caught one has nothing
+  assert_eq "403" "$(postk "$route" "$body" -H "Origin: $uk" -H 'content-type: application/json' \
+    -b "firstmate_board_$PORTK=$token")" "$route with the token only as a cookie is refused"
+  assert_eq "writeCredential" "$(jq -r .code "$k/resp")" "$route says a cookie is no credential"
+  assert_eq "403" "$(postk "$route" "$body" -H 'Origin: http://127.0.0.1:1' -H 'content-type: application/json' \
+    -H "Authorization: Bearer $token")" "$route with a valid token from another loopback origin is refused"
+  assert_eq "writeOrigin" "$(jq -r .code "$k/resp")" "$route says the request is not the board's own"
+  assert_eq "403" "$(postk "$route" "$body" -H 'Origin: http://evil.example' -H 'content-type: application/json' \
+    -H "Authorization: Bearer $token")" "$route with a valid token from another site is refused"
+  assert_eq "writeOrigin" "$(jq -r .code "$k/resp")" "$route says so for the other site"
+  assert_eq "403" "$(postk "$route" "$body" -H 'content-type: application/json' -H "Authorization: Bearer $token")" \
+    "$route with a valid token and no Origin is refused"
+  assert_eq "writeOrigin" "$(jq -r .code "$k/resp")" "$route says so with no Origin"
+  assert_eq "403" "$(postk "$route" "$body" -H "Origin: $uk" -H 'content-type: text/plain' -H "Authorization: Bearer $token")" \
+    "$route with a valid token and a text/plain body is refused"
+  assert_eq "writeJson" "$(jq -r .code "$k/resp")" "$route says it takes JSON only"
+  assert_eq "403" "$(wcurl "$PORTK" -s -o "$k/resp" -w '%{http_code}' -X POST -H 'content-type: text/plain' \
+    -d "$body" "$uk$route")" "$route with the bearer and a text/plain body is refused"
+  assert_eq "writeJson" "$(jq -r .code "$k/resp")" "$route says so to the bearer too"
+done
+sleep 1   # an editor or a merge a refusal started would have run by now
+assert_eq "$n0" "$(lines_k)" "no refusal emitted an event"
+assert_fail "test -e '$k/state/decisions/D-900.json'" "no refusal recorded an answer"
+assert_ok "test -e '$k/state/pending/D-900.json'" "and the card is still pending"
+assert_fail "test -e '$k/merge-calls'" "no refusal ran the merge helper"
+assert_fail "test -e '$k/opened'" "no refusal started the editor"
+
+# (3) nothing read hands out the credential: every read route, from a tab
+# holding the token, grepped for the secret, the token and a code not yet used
+unused="$(mint "$uk" "$PORTK")"
+: > "$k/reads"
+for path in / /index.html /ship.js /diagram.js /api/state /api/i18n /api/session /login \
+            "/file?path=src/visible" "/diff?branch=main" /open "/open?path=src/visible" /no-such-file; do
+  curl -s -i -H "Authorization: Bearer $token" "$uk$path" >> "$k/reads"
+done
+curl -s -i -m 2 -H "Authorization: Bearer $token" "$uk/events" >> "$k/reads" || true
+for route in /decisions /tasks /open /login; do
+  curl -s -i -X POST -H "Origin: $uk" -H 'content-type: application/json' -d '{}' "$uk$route" >> "$k/reads"
+done
+assert_ok "grep -q '\"crew\"' '$k/reads'" "the reads were made (the control)"
+assert_fail "grep -qF '$secret' '$k/reads'" "no response carries the secret"
+assert_fail "grep -qF '$token' '$k/reads'" "no read carries the tab's token"
+assert_fail "grep -qF '${unused##*.}' '$k/reads'" "no response carries a valid code"
+assert_fail "grep -qF 'board-$PORTK.secret' '$k/reads'" "no response names the secret file"
+
+# the secret sits outside the repository, so no path the board reads reaches it
+ln -s "$key" "$k/src/key"
+assert_eq "403" "$(curl -s -o "$k/resp" -w '%{http_code}' "$uk/file?path=src/key")" \
+  "a symlink in the repository pointing at the secret is refused by /file"
+assert_fail "grep -qF '$secret' '$k/resp'" "and does not leak it"
+ln -s "$key" "$k/board/public/key.txt"
+assert_eq "404" "$(curl -s -o "$k/resp" -w '%{http_code}' "$uk/key.txt")" \
+  "and a symlink among the page's own files is not served either"
+assert_fail "grep -qF '$secret' '$k/resp'" "nor leaked"
+rm -f "$k/src/key" "$k/board/public/key.txt"
+
+# (6) GET /open starts nothing, credential or not
+assert_eq "405" "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "$uk/open?path=src/visible")" \
+  "GET /open is not a way to start the editor"
+sleep 1
+assert_fail "test -e '$k/opened'" "and it started nothing"
+
+# with the credential, the board works as before
+tabk() { postk "$@" -H "Origin: $uk" -H 'content-type: application/json' -H "Authorization: Bearer $token"; }
+assert_eq "200" "$(tabk /tasks "$tsk")" "the captain's tab parks a task"
+assert_eq "parked captain T-K1" "$(tail -1 "$k/state/events.jsonl" | jq -r '"\(.type) \(.actor) \(.task)"')" \
+  "and the park is the captain's event"
+assert_eq "200" "$(tabk /open "$opn")" "the captain's tab opens a file"
+wait_for 10 test -s "$k/opened"
+assert_contains "$(cat "$k/opened" 2>/dev/null)" "src/visible" "and the editor was handed it"
+assert_eq "200" "$(wcurl "$PORTK" -s -o "$k/resp" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+  -d "$dec" "$uk/decisions")" "a script with the bearer answers the merge card"
+wait_for 10 test -s "$k/merge-calls"
+assert_contains "$(cat "$k/merge-calls" 2>/dev/null)" "--pr 9" "and the merge helper ran for it"
+wait_for 20 jq -e '.merge == "merged"' "$k/state/decisions/D-900.json"
+assert_eq "merged" "$(jq -r .merge "$k/state/decisions/D-900.json" 2>/dev/null)" \
+  "and the decision settles as merged when the helper says it merged"
+
+# (4) the secret's path and value appear nowhere under state/ or in the log
+assert_eq "" "$(grep -rlF "board-$PORTK.secret" "$k/state" "$k/out" 2>/dev/null || true)" \
+  "no state file or log names the secret file"
+assert_eq "" "$(grep -rlF "$secret" "$k/state" "$k/out" 2>/dev/null || true)" \
+  "and none holds the secret"
+assert_eq "" "$(grep -rlF "$token" "$k/state" "$k/out" 2>/dev/null || true)" \
+  "nor the tab's token"
+
+# the secret survives a restart, so an open tab keeps working
+kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
+start_k "$PORTK"
+assert_eq "$secret" "$(cat "$key")" "a restart keeps the secret it found"
+assert_eq "true" "$(curl -sf -H "Authorization: Bearer $token" "$uk/api/session" | jq -r .writable)" \
+  "and the board still takes the tab's token after the restart"
+assert_eq "200" "$(tabk /tasks "$(jq -cn '{task:"T-K1",action:"unpark"}')")" \
+  "which still writes: the tab unparks the task"
+assert_eq "unparked captain T-K1" "$(tail -1 "$k/state/events.jsonl" | jq -r '"\(.type) \(.actor) \(.task)"')" \
+  "and the unpark is the captain's event"
+# $unused was minted seconds ago and never redeemed: only the restart stands
+# between it and a token
+assert_eq "403" "$(login "$unused" -H "Origin: $uk")" "a code minted before the restart is not taken by the new board"
+kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
+
+# expiry on its own: codes last 2 seconds on this board, and each code here is
+# issued after it started, correctly signed, from its own origin and unused,
+# so the clock is the only rule that can refuse the first
+FM_BOARD_CODE_TTL_MS=2000 start_k "$PORTK"
+late="$(mint "$uk" "$PORTK")"
+sleep 3
+assert_eq "403" "$(login "$late" -H "Origin: $uk")" "a code older than its lifetime is refused"
+assert_eq "loginRefused" "$(jq -r .code "$k/login-body")" "with the code the page translates"
+assert_eq "" "$(jq -r '.token // empty' "$k/login-body")" "and gives no token"
+assert_eq "200" "$(login "$(mint "$uk" "$PORTK")" -H "Origin: $uk")" \
+  "the control: a code minted the same way and used at once is taken"
+kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
+
+# no response this part kept, each login's among them, set a cookie
+assert_ok "grep -qi '^content-type:' '$k/all-headers'" "the login headers were kept (the control)"
+assert_eq "" "$(cookies_set)" "no response the board sent set a cookie"
+
+# revocation: remove the secret file and restart the board, and every token
+# and bearer made from the old secret is refused
+rm -f "$key"
+start_k "$PORTK"
+assert_ne "$secret" "$(cat "$key")" "a board restarted without its secret file makes a new one"
+assert_eq "403" "$(tabk /tasks "$tsk")" "and the old tab's token no longer writes"
+assert_eq "writeCredential" "$(jq -r .code "$k/resp")" "the tab is told it holds no credential"
+assert_eq "403" "$(postk /tasks "$tsk" -H "Origin: $uk" -H 'content-type: application/json' \
+  -H "Authorization: Bearer $secret")" "nor does the old secret as a bearer"
+kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
+rm -rf "$k" "$XDG_CONFIG_HOME"
 
 finish

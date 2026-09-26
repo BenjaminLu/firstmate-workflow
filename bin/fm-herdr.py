@@ -10,6 +10,7 @@ vendor refreshes authored activity through one path.
 import contextlib
 import fcntl
 import hashlib
+import hmac
 import json
 import math
 import os
@@ -1227,6 +1228,44 @@ def board_matches(root, url):
     finally: (root / relative).unlink()
 
 
+def board_secret_file(port):
+    """The board's secret (T-122), where board/server.ts keeps it: outside the
+    repository, under the operator's config directory, mode 0600."""
+    base = os.environ.get('XDG_CONFIG_HOME', '')
+    base = Path(base) if base.startswith('/') else Path.home() / '.config'
+    return base / 'firstmate' / f'board-{port}.secret'
+
+
+def board_secret(port):
+    """Read the secret through a descriptor that refuses a symlink. Never printed."""
+    fd = os.open(board_secret_file(port), os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+    with os.fdopen(fd) as f: secret = f.read().strip()
+    if not re.fullmatch(r'[0-9a-f]{64,}', secret): raise RuntimeError('the board secret holds no secret')
+    return secret
+
+
+def board_login_url(url, port):
+    """A one-time address for the captain's browser: /login#<code>. The code
+    is the issue time, a nonce and an HMAC over them and the board's origin,
+    keyed by the secret; the board takes it once, within 60 seconds."""
+    issued = str(int(time.time() * 1000)); nonce = uuid.uuid4().hex
+    tag = hmac.new(board_secret(port).encode(), f'login:{url}:{issued}.{nonce}'.encode(), hashlib.sha256).hexdigest()
+    return f'{url}/login#{issued}.{nonce}.{tag}'
+
+
+def open_address(address):
+    """Hand an address to the browser. On macOS it goes to osascript on stdin,
+    never in an argument list: `ps` shows every process's arguments to every
+    other, and a one-time code read there could be redeemed before the
+    captain's browser gets to it."""
+    if sys.platform == 'darwin' and shutil.which('osascript'):
+        return subprocess.run([shutil.which('osascript')], input=f'open location "{address}"\n'.encode(),
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    opener = shutil.which('xdg-open') or shutil.which('open')
+    if not opener: return False
+    return subprocess.call([opener, address], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
+
+
 def board_start(root):
     root = Path(root).resolve(); port = int(os.environ.get('FM_PORT', '4173'))
     url = f'http://127.0.0.1:{port}'
@@ -1251,10 +1290,23 @@ def board_start(root):
                 time.sleep(.1)
             if not board_matches(root, url): raise RuntimeError('board did not verify; inspect state/session/board.log')
         page = bool(http_get(url))
-        opener = shutil.which('open') or shutil.which('xdg-open')
-        opened = subprocess.call([opener, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0 if opener else False
+        # The browser is sent to a one-time sign-in address (T-122), which
+        # alone lets the page write. The address is never recorded: `url`
+        # below is the board's own, without a code.
+        # A board with no secret file is one started before T-122, open to
+        # every local caller: it is reported, and nothing is opened on it.
+        opener = shutil.which('osascript') if sys.platform == 'darwin' else None
+        opener = opener or shutil.which('xdg-open') or shutil.which('open')
+        opened, refused = False, None
+        if not opener: refused = 'no program to open a browser with was found; nothing was opened'
+        else:
+            try: opened = open_address(board_login_url(url, port))
+            except (OSError, RuntimeError):
+                # said without the path: state/ never names where the secret is
+                refused = 'the board secret could not be read; restart the board'
         record = dict(root=str(root), url=url, reused=reused, page_http_verified=page,
                       opener_invoked=opened, browser_navigation_verified=False)
+        if refused: record['sign_in_error'] = refused
         save(base / 'board.json', record)
         return record
 
@@ -1562,6 +1614,16 @@ def main(args):
         try: return roster_command(*args)
         except (OSError, ValueError) as error:
             print('fm roster: ' + str(error), file=sys.stderr); return 65
+    if mode == 'board':
+        # a board that cannot start, or a tab that could not be signed in, is
+        # said in one line and a non-zero exit, never a traceback
+        try: record = board_start(args[0])
+        except (OSError, RuntimeError) as error:
+            print('fm board: ' + str(error), file=sys.stderr); return 70
+        print(json.dumps(record, indent=2))
+        if record.get('sign_in_error'):
+            print('fm board: ' + record['sign_in_error'], file=sys.stderr); return 69
+        return 0
     if mode == 'launch': launch(args[0], args[1], args[2:])
     if mode == 'transport': return transport(*args)
     if mode == 'pane-child': return pane_child(*args)

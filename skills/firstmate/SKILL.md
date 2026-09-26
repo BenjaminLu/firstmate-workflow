@@ -85,10 +85,29 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
 4. Start or reuse the captain board. The shipped server command is
    `FM_ROOT=<root> bun --watch board/server.ts` from the repository, with
    `FM_PORT` defaulting to 4173 and a loopback URL. Check the existing server's
-   root and HTTP response before reuse. Open that URL using the available browser
-   mechanism at startup and when requested. Verify observable navigation or
-   report that only the opener was invoked; if unavailable, provide the URL and
-   limitation. A server start message alone does not prove the page loaded.
+   root and HTTP response before reuse. Open it, at startup and whenever the
+   captain asks, with `bin/fm.sh board --repo <root>` (`fm-session.sh start`
+   does the same): it sends the browser to a one-time `/login#<code>` address,
+   good once for 60 seconds, and only the tab opened that way can write. The
+   sign-in is a token kept in that tab's `sessionStorage`, not a cookie:
+   browsers send cookies to every port on 127.0.0.1, so any loopback server
+   the captain visits would receive one. A new tab or window is read-only and
+   says so; the answer is to run `bin/fm.sh board` again. Never open, print or
+   paste the plain URL as the way in. If a token or the secret may have
+   leaked, revoke them all: delete the secret file and restart the board.
+   Verify observable navigation or report that only the opener was invoked; if
+   unavailable, report the limitation. A server start message alone does not
+   prove the page loaded.
+   The captain answers cards on the board. Firstmate answers one through the
+   HTTP API only under an explicit, time-boxed authorisation the captain gave
+   in chat, naming the card, and quotes that authorisation in the answer's
+   `note`; a chat merge order alone is not approval. Firstmate's own scripts
+   authenticate with the secret the board keeps in
+   `${XDG_CONFIG_HOME:-~/.config}/firstmate/board-<port>.secret`: they send it
+   as `Authorization: Bearer`, with `Origin: http://127.0.0.1:<port>` and a
+   JSON body, and never put it in an argument list, a log, an event or
+   `state/` (for curl, `-H @<(printf 'Authorization: Bearer %s\n' "$(cat <file>)")`).
+   See the board's trust boundary in design section 8.
 5. Run `bin/fm-ready.sh list --repo <root>` and raise a card for every
    `unjudged` ready task before any dispatch (see
    [Judge a task when it turns ready](#judge-a-task-when-it-turns-ready)).

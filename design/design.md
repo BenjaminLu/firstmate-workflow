@@ -79,7 +79,7 @@ These bind every actor, including firstmate itself.
 | R3 | Granularity | One task, one pull request, one worktree; `depends_on` forms a DAG; three in flight |
 | R4 | Branching | Every task branches from `main` and targets `main`; the worker rebases its own conflicts |
 | R5 | Writing the log | Only through `bin/fm-emit.sh` |
-| R6 | Opening a file | `/open` hands it to the editor — localhost only, path must resolve inside the repo — plus a read-only viewer |
+| R6 | Opening a file | `POST /open` hands it to the editor — the captain's credential, localhost only, path must resolve inside the repo — plus a read-only viewer |
 | R7 | CI | The local gate and GitHub Actions run the same `bin/ci.sh` |
 | R8 | Recovery | Replay the event log, then reconcile on start |
 | R9 | Hot reload | SSE pushes `reload` to the front end; `bun --watch` restarts the server |
@@ -1167,8 +1167,10 @@ actor `captain`, like every other board write: park is `parked`, unpark is
 card offers (`actions`): `park`/`drop` for ready and backlog, `unpark`/`drop`
 for parked, none for a task in flight or later, which is neither draggable nor
 given a menu. An action the card does not offer is refused with 409 and nothing
-is emitted; an unknown task is 404, an unknown action 400, and a body not
-declared `application/json` 415. The board never edits `design/tasks/`: a
+is emitted; an unknown task is 404, an unknown action 400, and a request
+without the captain's credential, the board's own `Origin` or a body declared
+`application/json` 403, before anything else is read (the trust boundary,
+below). The board never edits `design/tasks/`: a
 drop leaves the task in the plan, and removing it from there, if the captain
 wants that, is an ordinary pull request firstmate raises afterwards. A backlog
 card whose dependency is parked or dropped says so beside the blocker's id
@@ -1396,9 +1398,111 @@ in addition to pose classes; source text alone does not establish behavior.
 change to `board/server.ts` restarts under `bun --watch` and the client
 reconnects. Decisions are already on disk, so a restart loses none.
 
-**`/open`:** `GET /open?path=` hands the file to the editor. Localhost only,
-and `realpath` must resolve inside the repository or it is a 403. A read-only
-diff viewer covers the case where you would rather not leave the board.
+**`/open`:** `POST /open {path}` hands the file to the editor. Starting a
+program is a write, so it takes the credential, the Origin and the JSON body
+every write takes (below); a `GET /open`, which any link or image could make,
+is 405 and starts nothing (T-122). Localhost only, and `realpath` must resolve
+inside the repository or it is a 403. A read-only viewer (`/file`) and diff
+viewer (`/diff`) cover the case where you would rather not leave the board,
+and are all a tab without the credential gets.
+
+**The board's trust boundary (T-122).** Only the captain's browser, and
+firstmate's own scripts on the operator's machine, change the board or start a
+program through it. A crew round can reach the board's port, and so can any
+web page open in the captain's browser; neither can write.
+
+- *Why the OS sandbox cannot do this.* The macOS canary for T-117 (PR #97,
+  2026-09-26) showed a crew round inside the sandbox fetching the live board:
+  `curl --noproxy '*' http://127.0.0.1:4173/` answered 200. Measured with
+  `sandbox-exec` on macOS 15.7.9: once a profile allows
+  `(remote ip "localhost:*")`, a `(deny network-outbound (remote ip
+  "localhost:4173"))` never takes effect, placed before it or after it, and
+  neither does a `require-not` carve-out. Only a positive list of ports
+  narrows loopback, and a round's own test servers need arbitrary loopback
+  ports. So the board refuses the round itself.
+- *Who may write.* Every route that changes state or starts a process -
+  `POST /decisions`, `POST /tasks`, `POST /open`, and any writing route added
+  later - requires, all three: an `Authorization: Bearer` holding either the
+  captain's tab token or the secret itself; an `Origin` equal to the board's
+  own (`http://127.0.0.1:<port>`, or `http://localhost:<port>`); and a body
+  declared `application/json`. Anything missing or wrong is 403 with a `code`
+  the page translates (`writeCredential`, `writeOrigin`, `writeJson`), and
+  nothing is written, emitted, merged or spawned. The Origin refuses a page
+  served by a crew round's test server, and the JSON rule refuses a form.
+- *Why there is no cookie.* Browsers do not keep cookies apart by port: a
+  cookie set by `127.0.0.1:4173` goes with every request the browser makes to
+  any `127.0.0.1:<port>`, and `SameSite=Strict` does not help, because every
+  loopback port is the same site. A crew round's dev server that the captain
+  opens would receive the cookie in its request headers and could replay it
+  with curl, sending any `Origin` it liked (`Origin` binds only browsers).
+  So the board sets no cookie and reads none. The captain's tab holds a
+  token in its `sessionStorage`, which belongs to one origin, port included,
+  and one tab. No other server ever receives it, and the browser never sends
+  it by itself: the page adds it as a header on each write.
+- *The secret.* When the board starts it reads, or makes when missing, 256
+  random bits as hex in `$XDG_CONFIG_HOME/firstmate/board-<port>.secret`
+  (`~/.config/firstmate/board-<port>.secret` when `XDG_CONFIG_HOME` is not an
+  absolute path), mode 0600, in a directory made 0700. It is outside the
+  repository, `state/` and every temp directory, and the board refuses to
+  start if the directory resolves inside its root. It is made once, through a
+  link from a file written whole, and kept: a restart reuses it, so an open
+  tab keeps working, and a new one is made only when the file is missing. It
+  is never printed, logged, emitted, written under `state/`, or put in a URL
+  that stays in history or in any response.
+- *Revoking.* Every token and every bearer is derived from, or is, the
+  secret. Deleting the secret file and restarting the board makes a new
+  secret, and every token a tab holds and every copy of the old secret is
+  refused from then on. The board has no other revocation, and a token
+  otherwise lives as long as the secret does.
+- *The one-time open.* `bin/fm.sh board` (and `fm-session.sh start`, through
+  `bin/fm-herdr.py` `board_start`) sends the browser to `/login#<code>`, the
+  code `<issued ms>.<nonce>.<HMAC-SHA256(secret, "login:<origin>:<issued>.<nonce>")>`.
+  The board takes a code once, within 60 seconds of its issue, and never one
+  issued before it started, so a restart cannot replay one.
+  `FM_BOARD_CODE_TTL_MS` can shorten the 60 seconds, never lengthen them; it
+  exists so a test sees expiry apart from the start-time rule. The page at
+  `/login` posts the code (with its Origin, as JSON) and gets back, in the
+  JSON body, the tab's token `HMAC-SHA256(secret, "session:<origin>")`. It
+  keeps the token in `sessionStorage` (`board.token`) and replaces its
+  address with `/`, so the code stays in neither the address bar nor the
+  history. A used, expired or wrong code is 403 and gives nothing. No
+  response ever carries `Set-Cookie`. The token belongs to the tab: a
+  reload, a navigation within the board and a board restart keep it, but a
+  new tab or window is read-only until the board is opened through a new
+  one-time address. This is by design (not `localStorage`, which every tab of
+  the origin would share for ever). On macOS the address goes to `osascript` on
+  stdin, never in an argument list, because `ps` shows every process's
+  arguments to every other and a code read there could be redeemed first; the
+  record in `state/session/board.json` holds the board's plain URL only. When
+  no secret can be read or no program can open a browser, nothing is opened,
+  the record carries `sign_in_error` (never the secret's path), and
+  `bin/fm.sh board` says so in one `fm board:` line and exits non-zero, as
+  it does when the board cannot start. On
+  Linux `xdg-open` takes it as an argument, which `ps` can show for the moment
+  it runs.
+- *Scripts.* A script on the operator's machine reads the secret file and
+  sends it as `Authorization: Bearer`, with the board's Origin and a JSON
+  body, keeping the secret out of every argument list: for curl,
+  `-H @<(printf 'Authorization: Bearer %s\n' "$(cat <file>)")`.
+- *What stays readable.* `/`, the page's files, `/api/state`, `/api/i18n`,
+  `/events`, `/file`, `/diff` and `/api/session` (whether this request may
+  write: a yes or a no) answer anyone on the machine, as before. None carries
+  the secret, a token or a code. `/file` and `/diff` read only
+  paths that resolve inside the repository, and the page's files are served
+  only when their real path is inside `board/public/`, so a symlink to the
+  secret is refused.
+- *A tab without the credential.* The page asks `/api/session` when it loads
+  and after the stream reconnects, sending its token if it holds one. Without
+  one, or after a write is refused for want of it, it shows one translated line - the tab is
+  read-only, and `bin/fm.sh board` reopens it - disables every option,
+  confirm button and custom answer, and offers no park, drop or drag. Opening
+  a file falls back to the read-only viewer.
+- *Crew rounds cannot read the secret* only while the OS sandbox denies reads
+  of the home directory outside named toolchain and auth paths. On `main` that
+  sandbox (T-105) was reverted and T-117 has not merged, so today a crew
+  round running as the operator can read `~/.config`: the credential keeps
+  other web pages out now, and keeps crew rounds out once T-117 lands and
+  names this path in its never-readable list.
 
 **One source for shared numbers.** CSS custom properties are written from the
 JavaScript constants. `--rowStep` once drifted from `ROWSTEP` and the decks were
@@ -1926,6 +2030,10 @@ global skills.
 
 - `/open` accepts localhost only, and the resolved path must sit inside the
   repository.
+- Every board route that writes or starts a program takes the captain's
+  credential, the board's own Origin and a JSON body (section 8, the board's
+  trust boundary; T-122). The secret lives in the operator's config
+  directory, never in the repository or `state/`.
 - Adapters may not run git or gh; a worker never holds a GitHub token.
 - The board binds `127.0.0.1` and opens no external port.
 - The repository is public so that branch protection is available, which means

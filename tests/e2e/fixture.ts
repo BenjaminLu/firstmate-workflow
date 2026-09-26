@@ -5,6 +5,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, exist
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { createHmac, randomUUID } from "node:crypto";
+import { test as base, type Page } from "@playwright/test";
 
 // No import.meta here: it is ESM-only and the runner transpiles to
 // CommonJS. cwd is the repository root because bin/ci.sh is the only thing
@@ -167,23 +169,75 @@ export async function startBoard(root: string, env: Record<string, string> = {})
   writeFileSync(stub, `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "${recorder}"\n` +
     `while [ -e "${join(root, "hold-merge")}" ]; do sleep 0.1; done\necho "merged #$2"\n`);
   chmodSync(stub, 0o755);
+  // T-122: the board keeps its secret under XDG_CONFIG_HOME; each board gets
+  // a directory of its own, outside its root and the operator's home
+  const config = mkdtempSync(join(tmpdir(), "fm-e2e-config-"));
   const proc: ChildProcess = spawn("bun", ["run", join(root, "board/server.ts")], {
-    env: { ...process.env, ...env, FM_ROOT: root, FM_PORT: String(port) },
+    env: { ...process.env, ...env, FM_ROOT: root, FM_PORT: String(port), XDG_CONFIG_HOME: config },
     stdio: "ignore",
   });
   const url = `http://127.0.0.1:${port}`;
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    try { if ((await fetch(`${url}/api/state`)).ok) return { url, proc, root, recorder }; }
+    try {
+      if ((await fetch(`${url}/api/state`)).ok) {
+        const secret = readFileSync(join(config, "firstmate", `board-${port}.secret`), "utf8").trim();
+        sessions.set(url, secret);
+        return { url, proc, root, recorder, config, secret };
+      }
+    }
     catch { /* not up yet */ }
     await new Promise((r) => setTimeout(r, 120));
   }
   proc.kill(9);
   rmSync(root, { recursive: true, force: true });   // not only on the happy path
+  rmSync(config, { recursive: true, force: true });
   throw new Error("the board did not come up");
 }
 
-export function stopBoard(b: { proc: ChildProcess; root: string }) {
+export function stopBoard(b: { proc: ChildProcess; root: string; url?: string; config?: string }) {
   b.proc.kill(9);
   rmSync(b.root, { recursive: true, force: true });
+  if (b.config) rmSync(b.config, { recursive: true, force: true });
+  if (b.url) sessions.delete(b.url);
+}
+
+// --- T-122: the captain's credential, for tests that are about something else ---
+// Every board a test starts is one the captain signed in to: the first
+// page.goto to a board in a test's `page` goes first through a one-time
+// sign-in address, as the opener's would, and the board's /login page leaves
+// the tab's token in sessionStorage, which later navigations in the tab keep.
+// Nothing is injected. The sign-in itself, and a tab without the token, have
+// tests of their own that use pages this does not touch.
+const sessions = new Map<string, string>();
+export const test = base.extend({
+  page: async ({ page }, use) => {
+    const goto = page.goto.bind(page), signed = new Set<string>();
+    page.goto = (async (address: string, options?: Parameters<Page["goto"]>[1]) => {
+      const origin = new URL(address).origin, secret = sessions.get(origin);
+      if (secret && !signed.has(origin)) {
+        await goto(signInAddress({ url: origin, secret }));
+        await page.waitForURL(`${origin}/`);
+        if (!await page.evaluate(() => sessionStorage.getItem("board.token")))
+          throw new Error(`the one-time sign-in to ${origin} left no token`);
+        signed.add(origin);
+      }
+      return goto(address, options);
+    }) as Page["goto"];
+    await use(page);
+  },
+});
+// The token the board's /login hands a tab, derived as the board derives it:
+// for tests that look for it where it must not be.
+export const tabToken = (b: { url: string; secret: string }) =>
+  createHmac("sha256", b.secret).update(`session:${b.url}`).digest("hex");
+// What a script on the operator's machine writes with: the bearer from the
+// secret file and the board's own Origin.
+export const scriptHeaders = (b: { url: string; secret: string }) =>
+  ({ origin: b.url, authorization: `Bearer ${b.secret}` });
+// A one-time sign-in address, made as bin/fm-herdr.py makes one.
+export function signInAddress(b: { url: string; secret: string }, issued = Date.now()) {
+  const nonce = randomUUID().replace(/-/g, "");
+  const tag = createHmac("sha256", b.secret).update(`login:${b.url}:${issued}.${nonce}`).digest("hex");
+  return `${b.url}/login#${issued}.${nonce}.${tag}`;
 }
