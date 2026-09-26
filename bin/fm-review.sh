@@ -32,7 +32,7 @@ _fm_alib="$(dirname "${BASH_SOURCE[0]}")/adapters/_lib.sh"
 . "$_fm_alib"
 fm_args=("$@")
 
-REPO="$(fm_default_repo)"; TASK=''; BRANCH=''; PR=''; ROUND=1; VENDOR=''; NAME=''
+REPO="$(fm_default_repo)"; TASK=''; BRANCH=''; PR=''; ROUND=1; VENDOR=''; NAME=''; ROUND_GIVEN=''
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -40,7 +40,7 @@ while [ $# -gt 0 ]; do
     --branch) fm_need "fm-review" "$@"; BRANCH="${2-}"; shift 2 ;;
     --repo) fm_need "fm-review" "$@"; REPO="${2-}"; shift 2 ;;
     --pr) fm_need "fm-review" "$@"; PR="${2-}"; shift 2 ;;
-    --round) fm_need "fm-review" "$@"; ROUND="${2-}"; shift 2 ;;
+    --round) fm_need "fm-review" "$@"; ROUND="${2-}"; ROUND_GIVEN=1; shift 2 ;;
     --vendor) fm_need "fm-review" "$@"; VENDOR="${2-}"; shift 2 ;;
     --name) fm_need "fm-review" "$@"; NAME="${2-}"; shift 2 ;;
     *) echo "fm-review: unknown argument $1" >&2; exit 64 ;;
@@ -55,10 +55,18 @@ fm_refuse_herdr_bypass fm-review || exit $?
 # per run, like the worker's: a constant actor collapses two concurrent
 # rounds into one crewman carrying whichever task the second one touched
 fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
+# The actor carries the review round (T-116): the one --round names, else
+# the allocation reads it from the log. Never one inherited from the shell.
+if [ -n "$ROUND_GIVEN" ]; then export FM_ROUND="$ROUND"; else unset FM_ROUND; fi
 fm_identity reviewer "$TASK" "$NAME" || exit 70
-CREW_DATA="$(jq -cn --arg role reviewer --arg name "$NAME" \
+unset FM_ROUND
+# T-116: name, role, project, task, round and attempt ride every crew
+# payload as separate fields, so the board never parses them out of the actor
+CREW_IDENTITY="$(jq -c '{name,role,project,task,round,attempt}' "$FM_RUN_DIR/identity.json" 2>/dev/null)"
+[ -n "$CREW_IDENTITY" ] || CREW_IDENTITY=null
+CREW_DATA="$(jq -cn --arg role reviewer --arg name "$NAME" --argjson identity "$CREW_IDENTITY" \
   --arg en 'Work description unavailable' --arg tw '尚無工作說明' \
-  '{role:$role,crew_name:$name,activity:{en:$en,"zh-TW":$tw}}')"
+  '{role:$role,crew_name:$name,identity:$identity,activity:{en:$en,"zh-TW":$tw}}')"
 set_crew_activity() {
   local authored
   authored="$(jq -c '

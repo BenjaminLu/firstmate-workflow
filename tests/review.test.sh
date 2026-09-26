@@ -400,7 +400,7 @@ for scenario in signed unsigned outage; do
   assert_eq "1" "$(grep -c . <<<"$(jq -r 'select(.type=="agent_finished")|.type' "$rr/state/events.jsonl")" || true)" \
     "and exactly once"
   assert_matches "$(jq -r 'select(.type=="agent_finished")|.actor' < "$rr/state/events.jsonl")" \
-    '^reviewer-[a-z]+[0-9]*-tz-r[0-9]+$' "and under its own per-run name"
+    '^reviewer-[a-z]+[0-9]*-tz-r[0-9]+[a-z]*$' "and under its own per-run name"
   rm -rf "$dr"
 done
 
@@ -481,12 +481,36 @@ rm -rf "$dlr"
 dz="$(fixture)"; rz="$dz/repo"; GHz="$(ghstub "$dz")"
 ( cd "$rz" && FM_ROOT="$rz" FM_GH="$GHz" bin/fm-review.sh --name rev-7 --task T-Z --branch work >/dev/null 2>&1 )
 canonical="$(jq -r 'select(.type=="review_opened")|.actor' "$rz/state/events.jsonl")"
-assert_matches "$canonical" '^reviewer-rev-7-tz-r[0-9]+$' "requested alias maps to a canonical reviewer identity"
+assert_matches "$canonical" '^reviewer-rev-7-tz-r[0-9]+[a-z]*$' "requested alias maps to a canonical reviewer identity"
 assert_eq "reviewer" "$(jq -r --arg actor "$canonical" 'select(.actor==$actor)|.data.role' "$rz/state/events.jsonl" | sort -u)" \
   "a reviewer states its role on every event under the allocated actor"
 assert_eq "$canonical" "$(jq -r 'select(.type=="agent_finished")|.actor' "$rz/state/events.jsonl")" \
   "completion retires exactly that canonical reviewer"
 rm -rf "$dz"
+
+# T-116: the reviewer's identity rides every payload as separate fields, and
+# the actor's r<n> is the review round: --round when given, else one past the
+# rounds the log has opened on the task - never the global run counter
+dq="$(fixture)"; rq="$dq/repo"; GHq="$(ghstub "$dq")"
+mkdir -p "$rq/state/runs"; printf '{"number":472}\n' > "$rq/state/runs/counter.json"
+( cd "$rq" && FM_ROOT="$rq" FM_GH="$GHq" bin/fm-review.sh --task T-Z --branch work >/dev/null 2>&1 )
+first="$(jq -r 'select(.type=="review_opened")|.actor' "$rq/state/events.jsonl" | head -1)"
+assert_matches "$first" '^reviewer-[a-z]+-tz-r1$' "a task's first review round is r1, not the run counter"
+fields="$(jq -c --arg a "$first" 'select(.actor==$a)|.data.identity|[.role,.task,.round,.attempt,(.name|type),has("project")]' \
+  "$rq/state/events.jsonl" | sort -u)"
+assert_eq '["reviewer","T-Z",1,1,"string",true]' "$fields" \
+  "every payload of the run carries role, task, round, attempt, name and project as fields"
+assert_eq "${first#reviewer-}" "$(jq -r --arg a "$first" 'select(.actor==$a and .type=="review_opened")|.data.identity.name' \
+  "$rq/state/events.jsonl")-tz-r1" "and the name field is the crew member's own, not the actor"
+( cd "$rq" && FM_ROOT="$rq" FM_GH="$GHq" bin/fm-review.sh --task T-Z --branch work >/dev/null 2>&1 )
+assert_matches "$(jq -r 'select(.type=="review_opened")|.actor' "$rq/state/events.jsonl" | sed -n 2p)" \
+  '^reviewer-[a-z]+-tz-r2$' "the next round, with one opened in the log, is r2"
+( cd "$rq" && FM_ROOT="$rq" FM_GH="$GHq" bin/fm-review.sh --task T-Z --branch work --round 7 >/dev/null 2>&1 )
+told="$(jq -r 'select(.type=="review_opened")|.actor' "$rq/state/events.jsonl" | sed -n 3p)"
+assert_matches "$told" '^reviewer-[a-z]+-tz-r7$' "a round given with --round is the actor's round"
+assert_eq "7" "$(jq -r --arg a "$told" 'select(.actor==$a and .type=="review_opened")|.data.identity.round' \
+  "$rq/state/events.jsonl")" "and the payload's round field"
+rm -rf "$dq"
 
 # T-104: a reviewer is named from the reviewer roster the installation drew,
 # and a worker's name is refused even when asked for by --name
@@ -496,7 +520,7 @@ printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$FM_VERDICT" > "$3/verdict.txt"\n'
 ( cd "$rn" && FM_ROOT="$rn" FM_GH="$GHn" FM_ROSTER_SEED=review FM_VERDICT="REJECT:T-Z" \
     bin/fm-review.sh --task T-Z --branch work >/dev/null 2>&1 )
 assert_eq "0" "$?" "a review round with no crew yet exits 0"
-named="$(jq -r 'select(.type=="review_opened")|.actor' "$rn/state/events.jsonl" | sed -E 's/^reviewer-([a-z]+)-tz-r[0-9]+$/\1/')"
+named="$(jq -r 'select(.type=="review_opened")|.actor' "$rn/state/events.jsonl" | sed -E 's/^reviewer-([a-z]+)-tz-r[0-9]+[a-z]*$/\1/')"
 assert_eq "true" "$(jq --arg n "$named" 'any(.reviewers[]; . == $n) and (any(.workers[]; . == $n) | not)' "$rn/state/crew/rosters.json")" \
   "the reviewer's name is on the drawn reviewer roster and not the worker roster"
 worker_name="$(jq -r '.workers[0]' "$rn/state/crew/rosters.json")"

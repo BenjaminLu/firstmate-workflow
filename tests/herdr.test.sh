@@ -196,11 +196,11 @@ class Lifecycle(unittest.TestCase):
             runs = list(pool.map(new, range(24)))
         self.assertEqual(24, len({p.name for p in runs}))
         for p in runs:
-            self.assertRegex(p.name, r'^(worker|reviewer)-mira[0-9]+-long-t035-r[0-9]+$')
+            self.assertRegex(p.name, r'^(worker|reviewer)-mira[0-9]+-long-t035-r[0-9]+[a-z]*$')
             self.assertLessEqual(len(p.name), 32)
             self.assertEqual(p.name, json.loads((p / 'identity.json').read_text())['actor'])
-        # The same alias again, once its holder has finished: the counter
-        # still tells the runs apart.
+        # The same alias again, once its holder has finished: the attempt
+        # mark still tells the runs apart (T-116).
         again = []
         for _ in range(3):
             again.append(m.allocate(self.root, 'reviewer', 'T-035', 'Mira Long'))
@@ -227,6 +227,8 @@ class Roster(unittest.TestCase):
         self.root = Path(self.tmp.name)
         seeded = patch.dict(os.environ, {'FM_ROSTER_SEED': 't104'})
         seeded.start(); self.addCleanup(seeded.stop)
+        # the round and the project are the run's own (T-116), never the shell's
+        for key in ('FM_ROUND', 'FM_PROJECT'): os.environ.pop(key, None)
     def name(self, run):
         return json.loads((run / 'identity.json').read_text())['name']
     def finish(self, run):
@@ -300,7 +302,7 @@ class Roster(unittest.TestCase):
         self.assertIn(names[1], crew['workers'])
         self.assertIn(names[2], crew['reviewers'])
         for run, (role, task) in zip(runs, jobs):
-            self.assertRegex(run.name, '^' + role + '-' + self.name(run) + '-' + task.lower().replace('-', '') + '-r[0-9]+$')
+            self.assertRegex(run.name, '^' + role + '-' + self.name(run) + '-' + task.lower().replace('-', '') + '-r[0-9]+[a-z]*$')
     def test_concurrent_workers_get_different_names(self):
         def new(i): return m.allocate(self.root, 'worker', f'T-{100 + i}', '')
         with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
@@ -413,14 +415,14 @@ class Roster(unittest.TestCase):
         self.assertTrue(m.run_is_live(run), 'its launcher is alive again')
         self.finish(run)
         self.assertFalse(m.run_is_live(run), 'an orchestration result ends it whatever else is alive')
-    def test_actor_stays_within_32_when_the_counter_gains_a_digit(self):
+    def test_actor_stays_within_32_when_a_retry_adds_its_attempt_mark(self):
         import hashlib
         task = 'T-LONGTASKID'
         slug = 'tlon' + hashlib.sha256(task.encode()).hexdigest()[:5]
         runs = self.root / 'state/runs'
         def at_the_boundary(taken):
-            # r99999 is taken, so the retry lands on r100000: room 6, then 5.
-            m.save(runs / 'counter.json', dict(number=99998))
+            # r99999 is taken, so the retry lands on r99999b: room 6, then 5.
+            os.environ['FM_ROUND'] = '99999'
             (runs / f'reviewer-{taken}-{slug}-r99999').mkdir(parents=True, exist_ok=True)
         # A name with no room is refused, never cut into a label that is not
         # the crew member's own.
@@ -432,15 +434,88 @@ class Roster(unittest.TestCase):
         # The alias path, straight at r100000 (room 5): a live alias is refused
         # although only its first five letters would fit, and an alias with
         # no room is refused, not cut.
+        os.environ.pop('FM_ROUND')
         m.allocate(self.root, 'reviewer', 'T-702', 'Abcdef')  # abcdef is live, as a reviewer
         for alias, refusal in (('Abcdef', 'abcdef is live'), ('Uvwxyz', 'uvwxyz does not fit')):
             with self.subTest(alias=alias):
-                m.save(runs / 'counter.json', dict(number=99999))
+                os.environ['FM_ROUND'] = '100000'
                 with self.assertRaisesRegex(RuntimeError, refusal):
                     m.allocate(self.root, 'reviewer', task, alias)
         names = {json.loads(p.read_text())['name'] for p in runs.glob('*/identity.json')}
         self.assertEqual({'sophia', 'abcdef'}, names)
         self.assertEqual([], [p.name for p in runs.glob('*') if len(p.name) > 32])
+    # --- T-116: the identity is separate fields, and the actor's r<n> is the round
+    def review_opened(self, task, times, project=None):
+        log = self.root / 'state/events.jsonl'; log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open('a') as out:
+            for _ in range(times):
+                event = dict(type='review_opened', task=task, actor='reviewer-x-t0-r1')
+                if project: event['project'] = project
+                out.write(json.dumps(event) + '\n')
+    def identity(self, run):
+        return json.loads((run / 'identity.json').read_text())
+    def test_identity_json_carries_name_role_project_task_round_and_attempt(self):
+        self.pin('default_project: alpha\n')
+        # a counter far along, so a counter-numbered actor could not end in r1
+        (self.root / 'state/runs').mkdir(parents=True, exist_ok=True)
+        m.save(self.root / 'state/runs/counter.json', dict(number=472))
+        run = m.allocate(self.root, 'worker', 'T-900', '')
+        record = self.identity(run)
+        for key in ('name', 'role', 'project', 'task', 'round', 'attempt'): self.assertIn(key, record)
+        self.assertEqual(('worker', 'alpha', 'T-900', 1, 1),
+                         (record['role'], record['project'], record['task'], record['round'], record['attempt']))
+        self.assertEqual(run.name, 'worker-' + record['name'] + '-t900-r1')
+        # the project a run is for: FM_PROJECT over the default
+        with patch.dict(os.environ, {'FM_PROJECT': 'beta'}):
+            self.assertEqual('beta', self.identity(m.allocate(self.root, 'reviewer', 'T-901', ''))['project'])
+        # and none named anywhere is the one default, recorded as such
+        self.pin('')
+        self.assertIsNone(self.identity(m.allocate(self.root, 'worker', 'T-902', ''))['project'])
+    def test_the_actors_round_is_the_tasks_review_round_not_a_global_counter(self):
+        # the global counter is far along; it must not reach the actor
+        (self.root / 'state/runs').mkdir(parents=True)
+        m.save(self.root / 'state/runs/counter.json', dict(number=472))
+        first = m.allocate(self.root, 'worker', 'T-910', '')
+        self.assertTrue(first.name.endswith('-t910-r1'), first.name)
+        self.finish(first)
+        # two review rounds opened: the worker answering them is on round 3,
+        # and so is the reviewer that follows before its review_opened
+        self.review_opened('T-910', 2)
+        # another project's rounds and another task's are not this task's
+        self.review_opened('T-910', 5, project='elsewhere')
+        self.review_opened('T-911', 4)
+        worker = m.allocate(self.root, 'worker', 'T-910', '')
+        self.assertEqual(3, self.identity(worker)['round'])
+        self.assertTrue(worker.name.endswith('-t910-r3'), worker.name)
+        reviewer = m.allocate(self.root, 'reviewer', 'T-910', '')
+        self.assertTrue(reviewer.name.endswith('-t910-r3'), reviewer.name)
+        # a caller that knows the round (fm-review.sh --round) says it
+        with patch.dict(os.environ, {'FM_ROUND': '12'}):
+            told = m.allocate(self.root, 'reviewer', 'T-912', '')
+        self.assertEqual((12, 1), (self.identity(told)['round'], self.identity(told)['attempt']))
+        self.assertTrue(told.name.endswith('-t912-r12'), told.name)
+        self.assertNotIn('472', ''.join(p.name for p in (first, worker, reviewer, told)))
+    def test_a_retry_of_the_same_round_gets_its_own_attempt_mark_within_32(self):
+        with patch.dict(os.environ, {'FM_ROUND': '12'}):
+            runs = []
+            for _ in range(3):
+                runs.append(m.allocate(self.root, 'reviewer', 'T-LONGTASKID', ''))
+                self.finish(runs[-1])
+        self.assertEqual([1, 2, 3], [self.identity(p)['attempt'] for p in runs])
+        self.assertEqual([12, 12, 12], [self.identity(p)['round'] for p in runs])
+        self.assertEqual(['r12', 'r12b', 'r12c'], [p.name.rsplit('-', 1)[1] for p in runs])
+        self.assertEqual(3, len({p.name for p in runs}))
+        for p in runs: self.assertLessEqual(len(p.name), 32)
+        # the other role's run of that round is its own first attempt
+        with patch.dict(os.environ, {'FM_ROUND': '12'}):
+            self.assertEqual(1, self.identity(m.allocate(self.root, 'worker', 'T-LONGTASKID', ''))['attempt'])
+        self.assertEqual('', m.attempt_mark(1))
+        self.assertEqual(['b', 'z', 'aa', 'ab'], [m.attempt_mark(n) for n in (2, 26, 27, 28)])
+    def test_every_actor_reader_takes_both_the_old_and_the_new_form(self):
+        for actor, name in (('worker-shira-sk001-r465', 'shira'), ('worker-shira-sk001-r12', 'shira'),
+                            ('reviewer-mira-t116-r12b', 'mira'), ('worker-ada-lee-t035-r3c', 'ada-lee')):
+            with self.subTest(actor=actor):
+                self.assertEqual(name, m.crew_name(dict(actor=actor)))
     def test_a_run_from_before_the_roster_holds_the_name_in_its_actor(self):
         # identity.json from before T-089: no `name`, only the actor.
         self.pin('rosters:\n  workers: [mira, noah]\n')
@@ -922,7 +997,7 @@ elif a[0]=='branch': print('t-035-test')
                            FM_TEST_VERDICT='REJECT')
         self.assertEqual(0,answer.returncode,answer.stderr)
         result=json.loads(self.results()[0].read_text()); actor=result['actor']
-        self.assertRegex(actor,r'^reviewer-quinn-t035-r[0-9]+$')
+        self.assertRegex(actor,r'^reviewer-quinn-t035-r[0-9]+[a-z]*$')
         events=[json.loads(s) for s in (self.repo/'state/events.jsonl').read_text().splitlines()]
         self.assertEqual({actor},{e['actor'] for e in events})
         self.assertEqual(1,len([e for e in events if e['type']=='agent_finished']))
@@ -1270,6 +1345,23 @@ class EmitStatus(unittest.TestCase):
         self.assertEqual('still running', ev[0]['data']['activity']['en'])
         self.assertEqual('仍在跑', ev[0]['data']['activity']['zh-TW'])
         self.assertNotIn('progress', ev[0].get('data', {}))
+
+    def test_a_status_carries_the_runs_identity_fields(self):
+        # T-116: the board reads name, project and round from the payload,
+        # never out of the actor
+        run = self.root/'state/runs/worker-shira-t116-r3b'; run.mkdir(parents=True)
+        m.save(run/'identity.json', dict(actor=run.name, name='shira', role='worker', project='alpha',
+                                         task='T-116', round=3, attempt=2, one_role=True))
+        self.assertEqual(0, m.main(['emit-status','--root',str(self.root),'--actor',run.name,
+                                    '--task','T-116','--role','worker','--en','x','--tw','y']))
+        self.assertEqual(dict(name='shira', role='worker', project='alpha', task='T-116', round=3, attempt=2),
+                         self.events()[-1]['data']['identity'])
+        # a run from before T-116 has no such fields, and none are invented
+        old = self.root/'state/runs/worker-mira-t035-r465'; old.mkdir(parents=True)
+        m.save(old/'identity.json', dict(actor=old.name, name='mira', role='worker', task='T-035'))
+        m.main(['emit-status','--root',str(self.root),'--actor',old.name,
+                '--task','T-035','--role','worker','--en','x','--tw','y'])
+        self.assertNotIn('identity', self.events()[-1]['data'])
 
     def test_bounded_progress_and_refusals(self):
         self.assertEqual(0, m.main(['emit-status','--root',str(self.root),'--actor','worker-h',

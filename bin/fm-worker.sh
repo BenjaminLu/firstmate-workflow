@@ -35,11 +35,18 @@ cd "$REPO" || { echo "fm-worker: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
 fm_refuse_herdr_bypass fm-worker || exit $?
 fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
+# A worker's round is the task's, read from the log by the allocation
+# (T-116); one inherited from a reviewer's shell is not this run's.
+unset FM_ROUND
 fm_identity worker "$TASK" "$NAME" || exit 70
 EMIT="${FM_CODE_ROOT:-$REPO}/bin/fm-emit.sh"
-CREW_DATA="$(jq -cn --arg role worker --arg name "$NAME" \
+# T-116: name, role, project, task, round and attempt ride every crew
+# payload as separate fields, so the board never parses them out of the actor
+CREW_IDENTITY="$(jq -c '{name,role,project,task,round,attempt}' "$FM_RUN_DIR/identity.json" 2>/dev/null)"
+[ -n "$CREW_IDENTITY" ] || CREW_IDENTITY=null
+CREW_DATA="$(jq -cn --arg role worker --arg name "$NAME" --argjson identity "$CREW_IDENTITY" \
   --arg en 'Work description unavailable' --arg tw '尚無工作說明' \
-  '{role:$role,crew_name:$name,activity:{en:$en,"zh-TW":$tw}}')"
+  '{role:$role,crew_name:$name,identity:$identity,activity:{en:$en,"zh-TW":$tw}}')"
 set_crew_activity() {
   local authored
   authored="$(jq -c '
