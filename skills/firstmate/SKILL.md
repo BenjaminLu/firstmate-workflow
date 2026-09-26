@@ -153,9 +153,19 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   `APPROVE:<task-id>` for that head, and your own reading of that head's
   required GitHub check (green) and the six gates (`bin/fm-gate.sh`).
   Neither substitutes for the other, and a head that changes after either one
-  restarts both. `fm-run.sh` still reviews only after every gate before 7 is
-  green, so
-  do not wait for its loop to start a round.
+  restarts both, with one exception. `fm-run.sh` still reviews only after
+  every gate before 7 is green, so do not wait for its loop to start a round.
+- The approval binds to the change; CI and the gates bind to the head (T-113,
+  captain, 2026-09-26; design §6). The reviewer's approval carries forward
+  across an update that leaves the change identical and touches none of its
+  files; CI and the gates always rerun on the head being merged. After
+  `gh pr update-branch`, do not start a second review by reflex: run
+  `bin/fm-gate.sh` on the new head. Gate 7 accepts the latest APPROVE when its
+  `REVIEWED:` line names that head, or when the change's patch-id is the one
+  approved, no `main` commit since the approved merge-base touches a file it
+  reviewed, and no later REJECT supersedes it. When it fails it names the
+  condition, and that is a real re-review. A conflict resolution or any worker
+  edit changes the patch-id and always needs a new review.
 - Decision requests use the approved T-034 `--details` contract below. Request
   mode returns after publication; it does not wait for approval.
   `bin/fm-decide.sh --await <id> --repo <root>` returns recorded response JSON,
@@ -280,10 +290,12 @@ Require final-answer provenance, the configured reviewer identity and evidence
 for the current PR head. Old CI or an old approval does not establish readiness;
 inspect actual required GitHub CI results as well as local checks. If the script
 cannot establish this, report the gap and coordinate remediation before a merge
-card is treated as ready. Gate 7 searches PR comment bodies for an approval
-substring and filters the author only when `FM_REVIEWER_LOGIN` is set; it does
-not bind approval to a head, reject quoted markers or supersede an old approval
-with a later rejection. The review launcher also ignores comment publication
+card is treated as ready. Gate 7 takes the latest verdict comment, filtering
+the author only when `FM_REVIEWER_LOGIN` is set, and binds an APPROVE to the
+change its `REVIEWED:` line records; a later rejection supersedes it. It does
+not reject quoted markers, and an APPROVE with no `REVIEWED:` line (posted by
+hand, or before T-113) still passes and binds to no head: the gate says so,
+and you confirm it covers the head. The review launcher also ignores comment publication
 failure, so inspect the published result rather than trusting its exit status.
 Neither lavish nor no-mistakes is a prerequisite. Do not introduce their startup
 or verification hooks; use repository checks and actual CI evidence.
