@@ -222,6 +222,24 @@ for badid in D-Bad_Name-T047-1 D-abcdefghijklmnopqrstuvwxy-T047-1 D-firstmate-wo
   assert_eq "64" "$?" "fm-diagram refuses a malformed id: $(printf '%s' "$badid" | tr '\n' '~')"
 done
 
+# T-119: an SK task's merge card, D-<project>-SK<n>-<m>, is owned like a T
+# task's, through the shared grammar's FM_OWNED_ID, and is drawn. It used to be
+# refused as malformed, so fm-decide raised the card with "could not draw".
+# The task's own authored drawing is found under SK-001 as T-004's is.
+skid='D-firstmate-workflow-SK001-1'
+printf '<svg class="sk-by-task"></svg>\n' > "$R/design/diagrams/SK-001.html"
+decision "$R" "$skid" "{\"id\":\"$skid\",\"task\":\"SK-001\",\"kind\":\"merge\",\"title\":\"x\",\"pr\":94}"
+"$DG" --decision "$skid" --repo "$R" >/dev/null 2>&1
+assert_eq "0" "$?" "an SK task's owned merge card renders"
+assert_eq "3" "$(find "$R/board/public/diagrams" -name "$skid.*" | wc -l | tr -d ' ')" \
+  "into its three files, named by the id"
+assert_contains "$(cat "$R/board/public/diagrams/$skid.en.html" 2>/dev/null)" "sk-by-task" \
+  "and an SK task's authored drawing is its fallback"
+for badid in D-firstmate-workflow-SK01-1 D-firstmate-workflow-SKA-1 D-firstmate-workflow-SK001-0; do
+  bounded 5 "$DG" --decision "$badid" --repo "$R"
+  assert_eq "64" "$?" "fm-diagram refuses a malformed SK id: $badid"
+done
+
 # ------------------------------------------------------ the three languages
 R="$(newroot)"
 decision "$R" D-007 '{"id":"D-007","task":"T-004","kind":"merge","title":"合併 T-004 的程式碼","pr":9}'
@@ -762,9 +780,17 @@ assert_contains "$page" "DIAGRAM.mount"   "and still names DIAGRAM.mount for the
 assert_ok "test -f '$ROOT/board/public/diagram.js'" "the module is there"
 
 probe="$(mktemp -d)/embed.js"
+# The page reads owned ids through the task grammar, which the server puts in
+# front of diagram.js (T-119). The probe hands the module the same function,
+# lifted from board/server.ts, as the served file does; the server section
+# below checks the file as served.
+sed -n '/^\/\/ --- task grammar (T-119) ---$/,/^\/\/ --- end task grammar ---$/p' \
+  "$ROOT/board/server.ts" > "$(dirname "$probe")/grammar.ts"
+printf 'export { taskGrammar };\n' >> "$(dirname "$probe")/grammar.ts"
 cat > "$probe" <<'JS'
 // A DOM small enough to read. The module is loaded from the repository, so
 // what is asserted here is the file the board serves.
+globalThis.TASK_GRAMMAR = require(process.env.GRAMMAR).taskGrammar();
 const D = require(process.env.MOD);
 const fail = (m) => { console.log("FAIL " + m); process.exitCode = 1; };
 
@@ -789,6 +815,14 @@ const own = D.owner("D-firstmate-workflow-T047-3");
 if (!own || own.project !== "firstmate-workflow" || own.task !== "T-047" || own.n !== 3)
   fail("owner parses project, task and n out of the id: " + JSON.stringify(own));
 if (D.owner("D-047") !== null) fail("an old id names no owner");
+// T-119: an SK task's owned card has a diagram and an owner like a T task's
+if (D.src("D-firstmate-workflow-SK001-1", "en") !== "diagrams/D-firstmate-workflow-SK001-1.en.html")
+  fail("an SK task's owned card has a diagram");
+const skown = D.owner("D-firstmate-workflow-SK001-2");
+if (!skown || skown.project !== "firstmate-workflow" || skown.task !== "SK-001" || skown.n !== 2)
+  fail("an SK task's owned card is owned by SK-001: " + JSON.stringify(skown));
+for (const bad of ["D-a-SK01-1", "D-a-SKA-1", "D-a-SK001-0"])
+  if (D.isDecision(bad)) fail("malformed SK id has a diagram: " + bad);
 
 // The element under test is PARSED OUT OF D.embed(id). It used to be typed
 // out beside the module - `const attrs = { "data-decision": id }` - and that
@@ -879,11 +913,18 @@ console.log("embed class=" + a.attrs.class);
 if (!process.exitCode) console.log("embed ok");
 })();
 JS
-MOD="$ROOT/board/public/diagram.js" bun run "$probe" > "$probe.out" 2>&1
+GRAMMAR="$(dirname "$probe")/grammar.ts" MOD="$ROOT/board/public/diagram.js" bun run "$probe" > "$probe.out" 2>&1
 rc=$?
 assert_eq "0" "$rc" "the embed module behaves"
 assert_contains "$(cat "$probe.out" 2>/dev/null)" "embed ok" "and said so"
 [ "$rc" = 0 ] || cat "$probe.out"
+# loaded without the grammar, the module knows no owned id, rather than an
+# old copy of one, and still knows the ids that name no owner
+bare="$(MOD="$ROOT/board/public/diagram.js" bun -e '
+const D = require(process.env.MOD);
+console.log([D.isDecision("D-007"), D.isDecision("D-SK-001"), D.isDecision("D-firstmate-workflow-T047-1"),
+  D.owner("D-firstmate-workflow-T047-1")].join(" "));' 2>&1)"
+assert_eq "true true false " "$bare" "without the task grammar diagram.js holds no owned id of its own"
 
 # embed() ships the frame hidden and mount reveals it, which only means
 # anything if the page's stylesheet hides it in the meantime. The class comes
@@ -956,6 +997,17 @@ assert_eq "404" "$(curl -s -I -o /dev/null -w '%{http_code}' "http://127.0.0.1:$
   "a decision with no diagram answers HEAD with 404"
 assert_eq "200" "$(curl -s -I -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/diagrams/D-021.en.html")" \
   "and one that has a diagram answers HEAD with 200"
+
+# T-119: diagram.js as the board serves it carries the task grammar in front
+# of it, so the page reads an SK task's owned card as the server does
+served="$R/served-diagram.js"
+curl -sf "http://127.0.0.1:$PORT/diagram.js" > "$served"
+assert_contains "$(head -c 40 "$served")" "var TASK_GRAMMAR" "the board serves diagram.js with the task grammar in front of it"
+got="$(MOD="$served" bun -e '
+const D = require(process.env.MOD);
+const o = D.owner("D-firstmate-workflow-SK001-1");
+console.log(D.isDecision("D-firstmate-workflow-SK001-1") + " " + (o && o.task) + " " + D.isDecision("D-a-SK01-1"));' 2>&1)"
+assert_eq "true SK-001 false" "$got" "and the served page reads an SK task's owned card as SK-001's"
 
 kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null || true

@@ -462,9 +462,7 @@ T-105's). `fm-merge.sh` checks the pair again at the click, in both
 directions, and records a failed outcome when the branch no longer agrees. A skill
 update (SK-*) that is approved and green gets its merge card like any task:
 `--allocate --task SK-<n> --kind merge`, then `--request` with its pull
-request; no hand merge. Until `fm-diagram.sh` and `board/public/diagram.js`
-take an SK owned id (open; design §15.4), that card is raised with no
-drawing and `fm-decide.sh` says it could not draw it; the card still stands.
+request; no hand merge. The card is drawn and embedded like a T task's.
 
 Before a real request:
 

@@ -499,6 +499,7 @@ assert_eq "0" "$?" "and raises it for its own pull request"
 assert_eq "SK-001 94 merge firstmate-workflow" \
   "$(jq -r '"\(.task) \(.pr) \(.kind) \(.project)"' "$o/state/pending/$sid.json" 2>/dev/null)" \
   "a card naming SK-001, #94 and its project"
+assert_ok "test -s '$o/board/public/diagrams/$sid.en.html'" "and drawn like a T task's card, under its own id"
 FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$sid" --task SK-002 --kind merge --pr 94 \
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "64" "$?" "an SK id is still its own task's only"

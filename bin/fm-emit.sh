@@ -59,13 +59,30 @@ fm_task_of_pr() {       # fm_task_of_pr <branch> <title> -> the task, or 1
 # A decision id holds its task without the hyphen: T-047 is T047, SK-001 is
 # SK001. Card ids have always taken T-<letters and digits> as well, and the
 # fixtures still use them (T-A, T-1), so a key is that or a task.
+FM_TASK_UP=ABCDEFGHIJKLMNOPQRSTUVWXYZ; FM_TASK_LOW=abcdefghijklmnopqrstuvwxyz
+FM_TASK_KEY="T[${FM_TASK_UP}${FM_TASK_LOW}${FM_TASK_DIG}]{1,32}|SK[${FM_TASK_DIG}]{3,}"
 fm_task_key() {         # fm_task_key <task> -> its key, or 1
-  local legacy="^T-([ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz${FM_TASK_DIG}]{1,32})$"
+  local legacy="^T-([${FM_TASK_UP}${FM_TASK_LOW}${FM_TASK_DIG}]{1,32})$"
   if fm_task_is "${1-}"; then printf '%s' "${1/-/}"
   elif [[ "${1-}" =~ $legacy ]]; then printf 'T%s' "${BASH_REMATCH[1]}"
   else return 1
   fi
 }
+fm_task_of_key() {      # fm_task_of_key <key> -> the task it holds, or 1
+  local sk="^SK([${FM_TASK_DIG}]{3,})$" any="^(${FM_TASK_KEY})$"
+  if [[ "${1-}" =~ $sk ]]; then printf 'SK-%s' "${BASH_REMATCH[1]}"
+  elif [[ "${1-}" =~ $any ]]; then printf 'T-%s' "${1#T}"
+  else return 1
+  fi
+}
+# A decision id that names its owner (design section 15.4): D-<project>-
+# <key>-<n>, the project a registry name ([a-z0-9-], at most 24), n from 1
+# with no leading zero. A key starts with an upper-case T or S, which no
+# project name holds, so the id splits one way only. A match leaves project,
+# key and n in BASH_REMATCH[1], [2] and [3]. fm-decide.sh and fm-diagram.sh
+# read owned ids through this and nothing else.
+# shellcheck disable=SC2034 # read by the scripts that source this block
+FM_OWNED_ID="^D-([${FM_TASK_LOW}${FM_TASK_DIG}-]{1,24})-(${FM_TASK_KEY})-([123456789][${FM_TASK_DIG}]{0,5})$"
 # sourced for the grammar alone: stop here
 (return 0 2>/dev/null) && return 0
 

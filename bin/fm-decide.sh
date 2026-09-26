@@ -75,15 +75,12 @@ done
   echo "usage: fm-decide.sh --allocate --task <id> [--project <name>] | --request <id> --task <id> [--kind merge] | --request <D-digits> --kind merge-untracked --pr <n> | --await <id>" >&2; exit 64; }
 cd "$REPO" || { echo "fm-decide: no repo at $REPO" >&2; exit 64; }
 
-# The id grammar, spelled out letter by letter rather than as a-z ranges: a
-# bracket range follows the locale's collation, and in some locales [a-z]
-# takes upper-case letters too. The project part is the registry's name rule
-# ([a-z0-9-], at most 24); the task part is a task's key, fm_task_key's
-# (T047, SK001, or a fixture's TA), and starts with an upper-case T or S,
-# which no project name can hold, so the id splits one way only. n starts at
-# 1 and has no leading zero.
-LOW=abcdefghijklmnopqrstuvwxyz; UP=ABCDEFGHIJKLMNOPQRSTUVWXYZ; DIG=0123456789
-OWNED_ID="^D-([${LOW}${DIG}-]{1,24})-(T[${UP}${LOW}${DIG}]{1,32}|SK[${DIG}]{3,})-([123456789][${DIG}]{0,5})$"
+# The id grammar, spelled out digit by digit rather than as ranges: a
+# bracket range follows the locale's collation. An owned id, D-<project>-
+# <key>-<n>, is the shared grammar's FM_OWNED_ID (bin/fm-emit.sh): its task
+# part is a task's key, fm_task_key's (T047, SK001, or a fixture's TA).
+DIG=0123456789
+OWNED_ID="$FM_OWNED_ID"
 OLD_ID="^D-[${DIG}]{1,6}$"
 SKILL_ID="^D-SK-[${DIG}]{3,}$"
 owned() {       # owned <id>: sets ID_PROJECT ID_TASK ID_N when <id> is D-<project>-<task>-<n>

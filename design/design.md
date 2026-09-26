@@ -290,7 +290,11 @@ So a skill update merges through the board like any task: an approved,
 green SK-* task gets an owned merge card, `D-<project>-SK<n>-<m>` from
 `fm-decide.sh --allocate --task SK-<n> --kind merge`; A runs `fm-merge.sh`,
 which writes `merged` for SK-<n>; and `fm-sync-prs.sh` reads `sk-<n>-…`
-branches like any other.
+branches like any other. Its card is drawn and embedded like a T task's:
+`fm-diagram.sh` reads owned ids through the grammar's `FM_OWNED_ID`, and the
+page's `diagram.js` through `taskGrammar()`, the board's twin, which the
+server puts in front of that file when it serves it, so neither holds a
+copy of the id's shape (section 15.4).
 
 Selecting an option is local; a separate CONFIRM submits it. A fourth custom
 choice carries the captain's own bounded text,
@@ -2301,17 +2305,18 @@ recovery path in section 12.
   |---|---|---|
   | `bin/fm-decide.sh` `SKILL_ID` | `^D-SK-[<dig>]{3,}$` | the reference |
   | `bin/fm-decide.sh` `OLD_ID` | `^D-[<dig>]{1,6}$` | no; `--await` takes `OLD_ID` or `SKILL_ID` or owned |
-  | `bin/fm-decide.sh` `OWNED_ID` | `^D-([<low><dig>-]{1,24})-(T[<up><low><dig>]{1,32}\|SK[<dig>]{3,})-([123456789][<dig>]{0,5})$` | no; `SK[<dig>]{3,}` is an SK task's owned card (T-119), not this id |
+  | `bin/fm-emit.sh` `FM_OWNED_ID` (the task grammar, sourced) | `^D-([<low><dig>-]{1,24})-(T[<up><low><dig>]{1,32}\|SK[<dig>]{3,})-([123456789][<dig>]{0,5})$`, the key part `FM_TASK_KEY`, read back by `fm_task_of_key` | no; `SK[<dig>]{3,}` is an SK task's owned card (T-119), not this id |
+  | `bin/fm-decide.sh` `OWNED_ID` | `FM_OWNED_ID` | as above |
   | `bin/fm-decide.sh` legacy `--request` | `^D-(SK-[0-9]{3,})$`, capturing the `SK-<n>` task | yes, the only request path for it; `--details` takes `OLD_ID` or owned only |
   | `bin/fm-ready.sh` `SKILL_CARD` | `^D-SK-[<dig>]{3,}$` | yes; reads an adoption card's answer |
   | `bin/fm-ready.sh` `CARD_ID` | `^D-(<owned>\|[<dig>]{1,6})$` | no; `judged --decision` takes only this, as a skill update gets no readiness card |
-  | `bin/fm-diagram.sh` `is_decision_id` | `D-` then 1-6 digits, or the owned shape with a task part `T?*`, by `case` globs | no, on purpose: no drawing is generated for a skill id. It also refuses an SK task's owned card `D-<project>-SK<n>-<m>`, so that card is raised with "could not draw" and no drawing: **open**, outside T-119's scope, awaiting firstmate's scope decision |
+  | `bin/fm-diagram.sh` `is_decision_id` | `D-` then 1-6 digits by `case` globs, or `FM_OWNED_ID` | no, on purpose: no drawing is generated for a skill id. An SK task's owned card `D-<project>-SK<n>-<m>` is drawn like a T task's, and its task's authored drawing is `design/diagrams/SK-<n>.*` (T-119) |
   | `bin/fm.sh` self-update | builds `D-$id` from `^SK-[0-9]{3,}$` | the producer, same shape |
   | `bin/fm-run.sh`, `bin/fm-decide.sh --allocate` | build `D-<project>-<key>-<n>` | not a validator |
-  | `board/server.ts` `isDecisionId` | `OLD_DECISION`, `OWNED_DECISION` (task part `T[A-Za-z0-9]{1,32}\|SK[0-9]{3,}`, as `OWNED_ID`), `SKILL_DECISION` = `^D-SK-[0-9]{3,}$` | yes: responses listing, a pending card's `answerable`, `POST /decisions` |
-  | `board/server.ts` `ownerOf` | `OWNED_DECISION`, its task read back from the key by `taskOfKey` | no owner, by design |
-  | `board/public/diagram.js` `isDecision` | `^D-[0-9]{1,6}$`, `OWNED` (task part `T[A-Za-z0-9]{1,32}` only), `^D-SK-[0-9]{3,}$` | yes. It refuses an SK task's owned card, which so embeds no diagram: **open**, as `fm-diagram.sh` above |
-  | `board/public/diagram.js` `owner` | `OWNED` | no owner, by design; none for an SK task's owned card either, **open** as above |
+  | `board/server.ts` `isDecisionId` | `OLD_DECISION`, `OWNED_DECISION` (`taskGrammar()`'s `OWNED`, the twin of `FM_OWNED_ID`), `SKILL_DECISION` = `^D-SK-[0-9]{3,}$` | yes: responses listing, a pending card's `answerable`, `POST /decisions` |
+  | `board/server.ts` `ownerOf` | `taskGrammar()`'s `ownerOf`: `OWNED`, its task read back from the key by `taskOfKey` | no owner, by design |
+  | `board/public/diagram.js` `isDecision` | `^D-[0-9]{1,6}$`, `TASK_GRAMMAR.OWNED`, `^D-SK-[0-9]{3,}$`. `TASK_GRAMMAR` is `taskGrammar()`, which the server puts in front of the file when it serves `/diagram.js`; loaded without it, the file takes no owned id | yes. An SK task's owned card embeds its diagram like a T task's |
+  | `board/public/diagram.js` `owner` | `TASK_GRAMMAR.ownerOf` | no owner, by design |
   | `bin/watch-decisions.ts`, `tests/` | none; fixtures only | n/a |
 
   Merge cards name the project and link the pull request

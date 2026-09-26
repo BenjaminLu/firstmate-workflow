@@ -274,32 +274,48 @@ const prNumber = (n: unknown): number | null => {
 // T-117, sk-001-… is SK-001, t-1170-… is T-1170); a title leads with it and
 // a colon ("T-117: …"); a pull request's task is its branch's, else its
 // title's. A decision id holds a task's key, the task without its hyphen,
-// and card ids have always taken T-<letters and digits> too.
-const TASK_ID = /^(T|SK)-[0-9]{3,}$/;
-const isTask = (id: unknown): boolean => typeof id === "string" && TASK_ID.test(id);
-const taskOfBranch = (branch: unknown): string | null => {
-  const m = /^([tT]|[sS][kK])-?([0-9]{3,})(-.*)?$/.exec(typeof branch === "string" ? branch : "");
-  return m ? `${m[1].toUpperCase()}-${m[2]}` : null;
-};
-const taskOfTitle = (title: unknown): string | null => {
-  const m = /^((T|SK)-[0-9]{3,}):/.exec(typeof title === "string" ? title : "");
-  return m ? m[1] : null;
-};
-const taskOfPr = (branch: unknown, title: unknown): string | null => taskOfBranch(branch) ?? taskOfTitle(title);
-const taskKey = (id: unknown): string | null =>
-  isTask(id) ? (id as string).replace("-", "")
-    : typeof id === "string" && /^T-[A-Za-z0-9]{1,32}$/.test(id) ? `T${id.slice(2)}` : null;
-const taskOfKey = (key: string): string =>
-  /^SK[0-9]{3,}$/.test(key) ? `SK-${key.slice(2)}` : `T-${key.slice(1)}`;
+// and card ids have always taken T-<letters and digits> too; an owned
+// decision id is D-<project>-<key>-<n>, and ownerOf reads its project, task
+// and n back out of it.
+//
+// It is one function in plain JavaScript, with no type in it, because the
+// board's page reads it too: the server puts it in front of diagram.js when
+// it serves that file (GRAMMAR_JS below), so the page holds no copy of it.
+function taskGrammar() {
+  const TASK_ID = /^(T|SK)-[0-9]{3,}$/;
+  const TASK_KEY = "T[A-Za-z0-9]{1,32}|SK[0-9]{3,}";
+  const OWNED = new RegExp(`^D-([a-z0-9-]{1,24})-(${TASK_KEY})-([1-9][0-9]{0,5})$`);
+  const isTask = (id) => typeof id === "string" && TASK_ID.test(id);
+  const taskOfBranch = (branch) => {
+    const m = /^([tT]|[sS][kK])-?([0-9]{3,})(-.*)?$/.exec(typeof branch === "string" ? branch : "");
+    return m ? `${m[1].toUpperCase()}-${m[2]}` : null;
+  };
+  const taskOfTitle = (title) => {
+    const m = /^((T|SK)-[0-9]{3,}):/.exec(typeof title === "string" ? title : "");
+    return m ? m[1] : null;
+  };
+  const taskOfPr = (branch, title) => taskOfBranch(branch) ?? taskOfTitle(title);
+  const taskKey = (id) =>
+    isTask(id) ? id.replace("-", "")
+      : typeof id === "string" && /^T-[A-Za-z0-9]{1,32}$/.test(id) ? `T${id.slice(2)}` : null;
+  const taskOfKey = (key) => {
+    const k = typeof key === "string" ? key : "";
+    return /^SK[0-9]{3,}$/.test(k) ? `SK-${k.slice(2)}`
+      : new RegExp(`^(?:${TASK_KEY})$`).test(k) ? `T-${k.slice(1)}` : null;
+  };
+  const ownerOf = (id) => {
+    const m = OWNED.exec(String(id ?? ""));
+    return m ? { project: m[1], task: taskOfKey(m[2]), n: Number(m[3]) } : null;
+  };
+  return { OWNED, isTask, taskOfBranch, taskOfTitle, taskOfPr, taskKey, taskOfKey, ownerOf };
+}
+const { OWNED: OWNED_DECISION, isTask, taskOfBranch, taskOfTitle, taskOfPr, taskKey, taskOfKey, ownerOf } = taskGrammar();
 // --- end task grammar ---
+// what the server puts in front of diagram.js: the same function, as source
+const GRAMMAR_JS = `var TASK_GRAMMAR = (${taskGrammar.toString()})();\n`;
 const OLD_DECISION = /^D-[0-9]{1,6}$/;
-const OWNED_DECISION = /^D-([a-z0-9-]{1,24})-(T[A-Za-z0-9]{1,32}|SK[0-9]{3,})-([1-9][0-9]{0,5})$/;
 const SKILL_DECISION = /^D-SK-[0-9]{3,}$/;
 const isDecisionId = (id: string) => OLD_DECISION.test(id) || OWNED_DECISION.test(id) || SKILL_DECISION.test(id);
-const ownerOf = (id: unknown): { project: string; task: string; n: number } | null => {
-  const m = OWNED_DECISION.exec(String(id ?? ""));
-  return m ? { project: m[1], task: taskOfKey(m[2]), n: Number(m[3]) } : null;
-};
 // the pull request's page, or null when there is no number or no repository
 const pullUrl = (repo: string | null, n: unknown): string | null => {
   const k = prNumber(n);
@@ -1214,6 +1230,12 @@ const server = Bun.serve({
     }
 
     if (url.pathname === "/" || url.pathname === "") return serveFile("index.html");
+    // diagram.js reads owned decision ids through the task grammar, which it
+    // gets here, in front of the file, and holds no copy of (T-119)
+    if (url.pathname === "/diagram.js") {
+      const f = serveFile("diagram.js");
+      return f.ok ? f.text().then((s) => new Response(GRAMMAR_JS + s, { headers: f.headers })) : f;
+    }
     return serveFile(url.pathname.replace(/^\//, ""));
   },
 });
