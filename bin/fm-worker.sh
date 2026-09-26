@@ -1062,11 +1062,25 @@ say="$tree/.fm-say.md"
       printf 'come through exactly as they are at %s; a rebuilt round that changes\n' "$rebuild_prev"
       printf 'either is refused, like one that leaves a conflict marker.\n'
     fi
-    printf '\nThe worktree is detached until fm-worker.sh commits, so fm-checkpoint.sh\n'
-    printf 'refuses this round. That is expected: fm-worker.sh pushes the rebuild.\n'
-    printf 'Do not commit in it yourself: a round whose HEAD is no longer %s is\n' "$rebuild_base"
-    printf 'refused too.\n'
+    printf '\nThe worktree is detached until fm-worker.sh commits; fm-worker.sh pushes the\n'
+    printf 'rebuild. Do not commit in it yourself: a round whose HEAD is no longer %s\n' "$rebuild_base"
+    printf 'is refused.\n'
   fi
+  # T-117: a crew round runs inside the OS sandbox, whose write roots are
+  # the worktree and the round's own temp directory. The worktree's git
+  # directory lives in the repository's common .git, which is readable and
+  # not writable, and GitHub is out of the round's reach. So a round can
+  # neither commit nor push, and the skill's mid-run checkpoint is one
+  # instruction it cannot follow: saving the branch is this script's alone
+  # (design 13.1, "Saving the branch").
+  printf '\n---\n\n# Saving your branch in this round\n\n'
+  printf 'This round runs inside the OS sandbox. It may read the worktree'"'"'s git\n'
+  printf 'history but not write it, and it cannot reach GitHub, so `git commit`,\n'
+  printf '`git push` and `fm-checkpoint.sh` fail here. That overrides the mid-run\n'
+  printf 'checkpoint the worker skill asks for: do not run `fm-checkpoint.sh`, and do\n'
+  printf 'not work around the refusal. fm-worker.sh alone saves this branch: it commits\n'
+  printf 'and pushes what the worktree holds when the round ends, however it ends,\n'
+  printf 'including when it is stopped. Leave your work in the worktree.\n'
   printf '\n---\n\n# The design\n\n'
   sed -n '/^## 6\./,/^## 8\./p' design/design.md 2>/dev/null
 } > "$prompt"

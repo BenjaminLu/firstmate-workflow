@@ -28,7 +28,8 @@ _fm_alib="$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 # macOS it is a seatbelt, and a seatbelt cannot be applied inside another.
 # On Linux its commands would reach the network through claude's own proxy,
 # which has no way out of the round's network namespace and records no host
-# it refuses; fm's proxy is the one that names a blocked host.
+# it refuses; fm's proxy is the one that names a blocked host. Under the
+# operator's hatch, with no OS sandbox around claude, its own is back on.
 claude_native() { echo "refuse repo-config env ulimit"; }
 if [ "${1-}" = "dimensions" ]; then
   fm_adapter_policy; read -r -a native <<<"$(claude_native)"
@@ -105,8 +106,7 @@ CLAUDE_CONFIG_DIR="$FM_ROUND_TMP/claude-config"
 mkdir -p "$CLAUDE_CONFIG_DIR" || exit 70
 CLAUDE_CODE_TMPDIR="$FM_ROUND_TMP"
 export CLAUDE_CONFIG_DIR CLAUDE_CODE_TMPDIR
-# the shell runs under the OS sandbox, which is what confines it
-allow=(Grep Glob Bash "Read(/$work/**)" "Edit(/$work/**)" "Write(/$work/**)"
+allow=(Grep Glob "Read(/$work/**)" "Edit(/$work/**)" "Write(/$work/**)"
        "Read(/$tmp/**)" "Edit(/$tmp/**)" "Write(/$tmp/**)")
 deny=("Bash(git push:*)" "Bash(git remote:*)" "Bash(git worktree:*)" "Bash(git -C:*)"
       "Bash(gh:*)" "Bash(gh pr comment:*)" "Bash(gh pr review:*)" "Bash(gh pr edit:*)" "Bash(gh pr merge:*)"
@@ -124,9 +124,21 @@ while IFS= read -r p; do
   deny+=("Read(/$p/**)" "Read(/$p)")
 done < <(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["never_read"]))' "$FM_POLICY")
 rules() { local r s=''; for r in "$@"; do s="$s${s:+,}\"$r\""; done; printf '%s' "$s"; }
-# claude's own sandbox is off: the OS sandbox around claude confines every
-# command (see claude_native), and the deny rules stay
-settings="{\"permissions\":{\"defaultMode\":\"dontAsk\",\"allow\":[$(rules "${allow[@]}")],\"deny\":[$(rules "${deny[@]}")]},\"sandbox\":{\"enabled\":false}}"
+if [ -n "${FM_UNSANDBOXED:-}" ]; then
+  # The operator's hatch (T-117): no OS sandbox around claude, so its own
+  # comes back on with T-066's settings - every shell command inside it,
+  # none let out of it, its network the policy's registries and nothing
+  # else. Bash is then allowed only because it is sandboxed, not by a rule.
+  hosts=(); read -r -a hosts <<<"${FM_POLICY_HOSTS:-}"
+  sandbox="{\"enabled\":true,\"autoAllowBashIfSandboxed\":true,\"allowUnsandboxedCommands\":false,\"network\":{\"allowedDomains\":[$(rules ${hosts[@]+"${hosts[@]}"})]}}"
+else
+  # claude's own sandbox is off: the OS sandbox around claude confines
+  # every command (see claude_native), so the shell is allowed, and the
+  # deny rules stay
+  sandbox='{"enabled":false}'
+  allow=(Bash "${allow[@]}")
+fi
+settings="{\"permissions\":{\"defaultMode\":\"dontAsk\",\"allow\":[$(rules "${allow[@]}")],\"deny\":[$(rules "${deny[@]}")]},\"sandbox\":$sandbox}"
 mode=(--restricted --strict-mcp-config --disable-slash-commands
       --tools "Bash,Read,Edit,Write,Grep,Glob" --add-dir "$tmp"
       --permission-mode dontAsk --settings "$settings"

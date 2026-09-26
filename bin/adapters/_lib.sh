@@ -170,8 +170,9 @@ fm_adapter_rule_path() {
 # fm-worker.sh and fm-review.sh set FM_ROUND_UNSANDBOXED=1 only when the
 # operator's own shell says FM_CREW_UNSANDBOXED=1 and they are not
 # themselves inside a round. Then the round runs without the OS sandbox -
-# the vendors' own sandboxes on, the scrub, the ulimits and the login as
-# ever - and says so on stderr. fm-sandbox.sh marks every round with
+# claude's, codex's and cursor-agent's own sandboxes on (gemini runs with
+# none: the adapter never turns its container or seatbelt on), the scrub, the ulimits and the login as ever - and
+# says so on stderr. fm-sandbox.sh marks every round with
 # FM_IN_ROUND=1 and scrubs both names, so a round never reaches it.
 FM_POLICY_DIMENSIONS="write read network sockets env repo-config refuse ulimit"
 _fm_engine="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
@@ -209,8 +210,9 @@ fm_adapter_policy() {
     fi
   fi
   if [ -n "$FM_UNSANDBOXED" ]; then
-    # the vendors' own sandboxes stay on where they have one: they are
-    # seatbelts that could not nest inside the OS one, and now need not
+    # the vendors' own sandboxes come back on where the adapter has one to
+    # turn on (claude, codex, cursor-agent): they are seatbelts that could
+    # not nest inside the OS one, and now need not
     FM_OUTER_OS=''; FM_OUTER_DIMS=''
   else
     FM_OUTER_OS="$("$_fm_engine/bin/fm-sandbox.sh" os)"
@@ -236,7 +238,24 @@ fm_adapter_policy() {
   trap 'exit 143' TERM
   trap 'exit 129' HUP
   export TMPDIR="$FM_ROUND_TMP" TMP="$FM_ROUND_TMP" TEMP="$FM_ROUND_TMP"
+  # The toolchain's caches (T-117). By default each lives under the
+  # operator's home - bun's install cache, Playwright's browsers, npm's,
+  # pip's, Go's, anything following XDG - where a round may neither read
+  # nor write, so a round's `setup` or end-to-end check would be refused.
+  # Each is pointed into the round's own temp directory, which is a write
+  # root on both platforms and in both roles, whatever the caller or the
+  # operator's shell set it to: an inherited value is a path the policy
+  # never made writable. It goes when the round does, so no round reads a
+  # cache another round wrote.
+  local kv
+  for kv in $FM_ROUND_CACHES; do
+    export "${kv%%=*}=$FM_ROUND_TMP/cache/${kv#*=}"
+  done
 }
+# name=directory under the round's cache, for every toolchain cache a round
+# is handed (fm_adapter_policy); tests/adapter-contract.test.sh checks each
+# one against the generated profile and bwrap arguments
+FM_ROUND_CACHES="XDG_CACHE_HOME=xdg BUN_INSTALL_CACHE_DIR=bun PLAYWRIGHT_BROWSERS_PATH=ms-playwright npm_config_cache=npm PIP_CACHE_DIR=pip GOCACHE=go-build GOMODCACHE=go-mod"
 
 # fm_adapter_confine <vendor> <workdir> <dimension>... -> FM_LAUNCH, or exit 2.
 # The dimensions are what the vendor's own flags enforce for this round.

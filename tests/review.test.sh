@@ -920,13 +920,17 @@ hosts: none" "and the prompt says so"
 assert_lacks "$sentM" "read-only gh" "the prompt offers no gh, which the sandbox cannot reach"
 
 # setup's caches live under $HOME by default, where the sandbox refuses
-# writes; the round points each one into its own directory in the temp dir
+# writes. The adapter points each one into the round's own temp directory,
+# a write root (tests/adapter-contract.test.sh checks each against the
+# profile); fm-review.sh hands the round none of its own, since a directory
+# beside the checkout is none of the round's write roots (T-117)
 ckroot="$(dirname "$ck")"
 for cache in xdg bun pw npm; do
   cv="$(seen_of "$cache" "$dm")"
-  case "$cv" in "$ckroot"/cache/*) under=1 ;; *) under=0 ;; esac
-  assert_eq "1" "$under" "the $cache cache points into the round's own directory, not \$HOME ($cv)"
+  case "$cv" in "$ckroot"/*) beside=1 ;; *) beside=0 ;; esac
+  assert_eq "0" "$beside" "fm-review.sh points no $cache cache beside the checkout, outside the round's write roots ($cv)"
 done
+assert_contains "$sentM" "this round's own temp directory (\$TMPDIR)" "and the prompt says where the caches are"
 
 # A run-mode reviewer judges the head by running it. CI and the gates are
 # firstmate's merge gate, not a review criterion (captain, 2026-09-25), so a
@@ -1131,13 +1135,18 @@ assert_eq "reviewer pypi.evil.example" \
   "and the refused host is recorded for firstmate's choice card"
 # the operator's escape hatch (T-117) reaches a review round the same way,
 # and only from outside a crew round
+rm -rf "$rm_/state/reviews"
 outU="$(cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" FM_CREW_UNSANDBOXED=1 \
   bin/fm-review.sh --task T-Z --branch work --round 3 2>&1)"
 assert_eq "0" "$?" "a review round under the operator's hatch runs"
 assert_eq "1" "$(seen_of hatch "$dm")" "and its adapter is told to run without the OS sandbox"
 assert_contains "$outU" "WITHOUT the OS sandbox" "which is said on stderr"
+assert_contains "$(cat "$rm_"/state/reviews/T-Z-r3*.log 2>/dev/null)" \
+  "fm-review: !!! FM_CREW_UNSANDBOXED=1: this round runs WITHOUT the OS sandbox !!!" "in the round's log"
 assert_contains "$(jq -r 'select(.type=="crew_status") | .data.activity.en' "$rm_/state/events.jsonl" 2>/dev/null)" \
   "Reviewing T-Z WITHOUT the OS sandbox (FM_CREW_UNSANDBOXED)" "and on the board"
+assert_contains "$(jq -r 'select(.type=="crew_status") | .data.activity["zh-TW"]' "$rm_/state/events.jsonl" 2>/dev/null)" \
+  "正在審核 T-Z，未使用 OS 沙箱（FM_CREW_UNSANDBOXED）" "in both languages"
 outU2="$(cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" FM_CREW_UNSANDBOXED=1 FM_IN_ROUND=1 \
   bin/fm-review.sh --task T-Z --branch work --round 3 2>&1)"
 assert_eq "" "$(seen_of hatch "$dm")" "a review started inside a crew round cannot take it"

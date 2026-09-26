@@ -2774,6 +2774,7 @@ cat > "$rPol/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
 cp "$FM_POLICY" "$FM_T_POL/seen-policy.json"
+cp "$2" "$FM_T_POL/prompt.md"
 printf '%s\n' "${FM_ROUND_UNSANDBOXED:-}" > "$FM_T_POL/hatch"
 printf 'npm.evil.example\nnpm.evil.example\n' >> "$FM_POLICY_BLOCKED"
 mkdir -p "$3/src"; printf 'work\n' > "$3/src/work"
@@ -2795,6 +2796,17 @@ assert_eq 'policy.network ["registry.npmjs.org"] proxy' \
   "which names the key a card would add the host to and what the round already had"
 assert_contains "$(jq -r 'select(.type=="crew_status") | .data.activity.en' "$rPol/state/events.jsonl")" \
   "Refused undeclared hosts: npm.evil.example" "and the board is told"
+# T-117: the round cannot write the worktree's git directory or reach
+# GitHub, so the prompt gives it no save to make: the skill's mid-run
+# checkpoint is overridden, after the skill, and saving is fm-worker.sh's
+pPol="$(cat "$dPol/prompt.md" 2>/dev/null)"
+assert_contains "$pPol" "# Saving your branch in this round" "the prompt says who saves the branch"
+assert_contains "$pPol" "do not run \`fm-checkpoint.sh\`" "and tells the round not to checkpoint, which it cannot"
+assert_contains "$pPol" "fm-worker.sh alone saves this branch" "since fm-worker.sh saves it"
+n_skill="$(grep -n 'Mid-run checkpoint (required)' "$dPol/prompt.md" 2>/dev/null | head -1 | cut -d: -f1)"
+n_save="$(grep -n '# Saving your branch in this round' "$dPol/prompt.md" 2>/dev/null | head -1 | cut -d: -f1)"
+assert_eq "1" "$([ -n "$n_save" ] && { [ -z "$n_skill" ] || [ "$n_save" -gt "$n_skill" ]; } && echo 1)" \
+  "after the skill's checkpoint instruction, which it overrides"
 # a policy that does not read stops the round before any engine runs
 dPol2="$(fixture)"; rPol2="$dPol2/repo"; GHPol2="$(ghstub "$dPol2")"
 printf 'vendor: mock\nfallback:\n  - mock\npolicy:\n  network: github.com\n' > "$rPol2/config.yaml"

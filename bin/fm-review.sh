@@ -235,8 +235,7 @@ build_checkout() {
   CHECKOUT_ROOT="$(cd "$CHECKOUT_ROOT" && pwd -P)" || return 1
   printf '%s\n' "$$" > "$CHECKOUT_ROOT/owner" || return 1
   CHECKOUT="$CHECKOUT_ROOT/checkout"
-  mkdir "$CHECKOUT_ROOT/cache" &&
-    git clone -q --no-checkout --no-hardlinks "$REPO" "$CHECKOUT" &&
+  git clone -q --no-checkout --no-hardlinks "$REPO" "$CHECKOUT" &&
     git -C "$CHECKOUT" fetch -q --no-tags origin "+$BRANCH:refs/fm/head" "+$BASE:refs/fm/base" &&
     [ "$(git -C "$CHECKOUT" rev-parse refs/fm/head)" = "$head" ] &&
     git -C "$CHECKOUT" checkout -q --detach refs/fm/head &&
@@ -270,15 +269,11 @@ if [ "$REVIEW_MODE" = run ]; then
          --en "review round $ROUND could not prepare its checkout" --tw "第 $ROUND 輪審核無法準備 checkout"
     exit 70; }
   export FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$CHECKOUT"
-  # The sandbox lets commands write only in the checkout and the temp
-  # directory, and the project's setup writes its caches under $HOME by
-  # default: bun's install cache, Playwright's browsers, npm's cache, any
-  # XDG-following tool. Each is pointed into this round's directory, which
-  # sits in the temp directory and goes when the round does, so setup
-  # writes where it is allowed to rather than being refused.
-  REVIEW_CACHE="$CHECKOUT_ROOT/cache"
-  export XDG_CACHE_HOME="$REVIEW_CACHE/xdg" BUN_INSTALL_CACHE_DIR="$REVIEW_CACHE/bun" \
-         PLAYWRIGHT_BROWSERS_PATH="$REVIEW_CACHE/ms-playwright" npm_config_cache="$REVIEW_CACHE/npm"
+  # The project's setup writes its caches under $HOME by default, where the
+  # sandbox refuses it. The adapter points each one into the round's own
+  # temp directory, a write root, for every round of either role (T-117,
+  # FM_ROUND_CACHES in bin/adapters/_lib.sh); a directory made here would
+  # be none of the round's write roots.
 fi
 
 # A round that produced nothing is not a round, so review_opened is emitted
@@ -487,7 +482,7 @@ if [ "$REVIEW_MODE" = run ]; then
     printf '`git diff fm/base...fm/head` is the diff above.\n\n'
     printf 'You may run commands here: the project'"'"'s declared commands below and git.\n'
     printf 'You may not push, comment on or edit the pull request, touch the task'"'"'s\n'
-    printf 'worktree, or write anywhere but this checkout and the system temp directory.\n'
+    printf 'worktree, or write anywhere but this checkout and the round'"'"'s own temp directory.\n'
     printf 'The engine'"'"'s own permissions enforce that, not this text; fm-review.sh posts\n'
     printf 'your verdict to the pull request. Commands reach the network only for these\n'
     printf 'hosts: %s. No GitHub host is among them, so gh has nothing to talk to; the\n' "${FM_REVIEW_NETWORK:-none}"
@@ -495,8 +490,9 @@ if [ "$REVIEW_MODE" = run ]; then
     printf 'no gate results, and need none: you judge the head by what you run here. CI\n'
     printf 'and the gates are firstmate'"'"'s merge gate, not a criterion of this\n'
     printf 'review, so do not wait on them, require them or keep an item open for them. The\n'
-    printf 'project'"'"'s caches (XDG_CACHE_HOME, bun, Playwright, npm) point into this\n'
-    printf 'round'"'"'s temp directory, so `setup` writes where it may. A command the sandbox\n'
+    printf 'toolchain'"'"'s caches (XDG_CACHE_HOME, bun, Playwright, npm, pip, Go) point into\n'
+    printf 'this round'"'"'s own temp directory ($TMPDIR), so `setup` writes where it may and\n'
+    printf 'starts from empty caches: it downloads what it installs. A command the sandbox\n'
     printf 'refuses is the boundary working: report what it kept you from running, as\n'
     printf 'read, not run, rather than work around it.\n\n'
     printf 'The project'"'"'s contract, from this checkout'"'"'s config.yaml:\n\n'
@@ -684,5 +680,11 @@ case "$decided" in
     ;;
 esac
 printf '%s\n' "$verdict"
+# A round that ran without the OS sandbox keeps its log whatever its
+# verdict: the line it opens with is the record that the hatch was used.
+if [ "$unsandboxed" = 1 ]; then
+  kept="$(keep_log)"; cp "$work/log" "$kept" 2>/dev/null || true
+  echo "fm-review: this round ran WITHOUT the OS sandbox; its log is at $kept" >&2
+fi
 rm -rf "$work"
 exit 0

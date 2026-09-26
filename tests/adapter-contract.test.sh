@@ -237,13 +237,15 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
       assert_eq "" "$(grep -E '^(FM_|HERDR_|GIT_|GH_|GITHUB_TOKEN=)' "$d/env.run" 2>/dev/null | grep -vx 'FM_IN_ROUND=1' || true)" \
         "$name's run-mode engine sees none of the launcher's FM_, HERDR_, GIT_ or GitHub-token variables"
       assert_contains "$(cat "$d/env.run" 2>/dev/null)" "FM_IN_ROUND=1" "and knows it is inside a round"
-      assert_contains "$(cat "$d/env.run" 2>/dev/null)" "XDG_CACHE_HOME=$d/cache" \
-        "$name keeps the round's cache redirection"
       runargv="$(cat "$d/argv.run" 2>/dev/null)"
       list_after() { awk -v f="$1" '$0==f{on=1;next} /^--/{on=0} on' "$d/argv.run"; }
       # the round's temp directory is its own, not the shared TMPDIR that
       # holds every other round's files and run-mode checkouts (T-105)
       rtmp="$(sed -n 's/^TMPDIR=//p' "$d/env.run" 2>/dev/null)"
+      # a cache location the caller handed in is not one the round may
+      # write: the adapter points it into the round's own (T-117)
+      assert_eq "$rtmp/cache/xdg" "$(sed -n 's/^XDG_CACHE_HOME=//p' "$d/env.run" 2>/dev/null)" \
+        "$name points the round's caches into its own temp directory, not where the caller said"
       assert_matches "$rtmp" "^$tmpd/fm-round\\.[A-Za-z0-9]+\$" "$name's engine is given a temp directory of the round's own"
       assert_fail "test -e '$rtmp'" "which is removed when the round ends"
       case "$name" in
@@ -481,6 +483,89 @@ assert_eq "workspace-write" "$(awk 'on{print;exit} $0=="--sandbox"{on=1}' "$pv/a
 assert_ne "" "$(grep -x 'sandbox_workspace_write.network_access=true' "$pv/argv")" "with its network switch on"
 confined linux "$pk/bwrap" "$pk/none.json" cursor-agent >/dev/null
 assert_eq "enabled" "$(awk 'on{print;exit} $0=="--sandbox"{on=1}' "$pv/argv")" "cursor-agent's own sandbox is on"
+
+# --- every location a round is handed is one it may write (T-117) ----------
+# A round is handed directories through its environment: its temp
+# directory, the toolchain's caches (bun's, Playwright's, npm's, pip's,
+# Go's, XDG's), each vendor's config home, and the directory its final
+# answer goes to. Each has to be inside what the generated profile (macOS)
+# or bwrap arguments (Linux) let the round write, or `setup` and the
+# vendor itself are refused. The caller here hands in cache locations of
+# its own, the way fm-review.sh once did beside its checkout and the
+# operator's shell may: none is a write root, so none may reach the round.
+writable_in() {   # writable_in <os> <path> -> 0 when the round may write <path>
+  local r roots
+  if [ "$1" = darwin ]; then
+    # the write roots are the one rule that follows (deny file-write*)
+    roots="$(grep '^(allow file-write\* ' "$pk/profile.sb" 2>/dev/null \
+      | grep -o '(subpath "[^"]*")' | sed 's/^(subpath "//; s/")$//')"
+  else
+    roots="$(awk 'prev=="--bind"{print} {prev=$0}' "$pk/bwrap.args" 2>/dev/null)"
+  fi
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    case "$2/" in "${r%/}"/*) return 0 ;; esac
+  done <<< "$roots"
+  return 1
+}
+round_locations() {   # round_locations <vendor> -> the variables naming a location its CLI is handed
+  printf '%s\n' TMPDIR TMP TEMP XDG_CACHE_HOME BUN_INSTALL_CACHE_DIR PLAYWRIGHT_BROWSERS_PATH \
+    npm_config_cache PIP_CACHE_DIR GOCACHE GOMODCACHE
+  case "$1" in
+    claude) printf '%s\n' CLAUDE_CONFIG_DIR CLAUDE_CODE_TMPDIR ;;
+    codex) printf '%s\n' CODEX_HOME ;;
+    cursor-agent) printf '%s\n' XDG_CONFIG_HOME ;;
+    gemini) printf '%s\n' HOME GEMINI_CLI_HOME ;;
+  esac
+}
+mkdir -p "$pv/elsewhere/checkout/.git" "$pv/attempt"
+for loc_role in worker run-review; do
+  for loc_os in darwin linux; do
+    loc_tool="$pk/sandbox-exec"; [ "$loc_os" = linux ] && loc_tool="$pk/bwrap"
+    for v in claude codex cursor-agent gemini; do
+      if [ "$loc_role" = run-review ]; then
+        grep -q '^# fm:review-run' "$ROOT/bin/adapters/$v.sh" || continue
+        loc_rc="$(FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$pv/elsewhere/checkout" \
+          XDG_CACHE_HOME="$pv/elsewhere/xdg" BUN_INSTALL_CACHE_DIR="$pv/elsewhere/bun" \
+          PLAYWRIGHT_BROWSERS_PATH="$pv/elsewhere/pw" npm_config_cache="$pv/elsewhere/npm" \
+          confined "$loc_os" "$loc_tool" "$pk/none.json" "$v")"
+      else
+        loc_rc="$(FM_ATTEMPT_DIR="$pv/attempt" FM_FINAL_PATH="$pv/attempt/final.txt" \
+          XDG_CACHE_HOME="$pv/elsewhere/xdg" BUN_INSTALL_CACHE_DIR="$pv/elsewhere/bun" \
+          PLAYWRIGHT_BROWSERS_PATH="$pv/elsewhere/pw" npm_config_cache="$pv/elsewhere/npm" \
+          confined "$loc_os" "$loc_tool" "$pk/none.json" "$v")"
+      fi
+      loc_at="$v, $loc_role, $loc_os"
+      assert_eq "0" "$loc_rc" "$v's round starts ($loc_role, $loc_os)"
+      # the CLI's own view of its environment, as the fake sandbox ran it
+      loc_env="$(cat "$pv/env" 2>/dev/null)"
+      while IFS= read -r loc_n; do
+        loc_p="$(sed -n "s/^$loc_n=//p" <<< "$loc_env" | head -1)"
+        assert_ne "" "$loc_p" "$v's round is handed $loc_n ($loc_at)"
+        [ -n "$loc_p" ] || continue
+        writable_in "$loc_os" "$loc_p"
+        assert_eq "0" "$?" "and may write it: $loc_n=$loc_p ($loc_at)"
+      done < <(round_locations "$v")
+      # and every other directory the round is handed that the caller did
+      # not already have: a location added later is checked too
+      while IFS='=' read -r loc_n loc_p; do
+        case "$loc_n" in PWD|OLDPWD|''|*[!A-Za-z0-9_]*) continue ;; esac
+        case "$loc_p" in /*) ;; *) continue ;; esac
+        [ -d "$loc_p" ] || continue
+        [ "$(printenv "$loc_n" 2>/dev/null)" != "$loc_p" ] || continue
+        writable_in "$loc_os" "$loc_p"
+        assert_eq "0" "$?" "every directory $v's round is handed may be written: $loc_n=$loc_p ($loc_at)"
+      done <<< "$loc_env"
+      # the final answer is written by the CLI itself for codex; wherever
+      # it is, its directory is a write root
+      if [ "$loc_role" = worker ]; then
+        writable_in "$loc_os" "$(cd "$pv/attempt" && pwd -P)/final.txt"
+        assert_eq "0" "$?" "and the directory its final answer goes to ($loc_at)"
+      fi
+    done
+  done
+done
+rm -f "$pv/attempt/cli-exit-code"
 # the declared registries reach the layer that enforces the network: the
 # proxy, which lets exactly them through, and the profile, whose only way
 # off the machine is that proxy
@@ -656,13 +741,15 @@ assert_matches "$(sed -n 's/^HOME=//p' "$pv/copy" 2>/dev/null)" '/fm-round\.[A-Z
 # a login file whose refresh token the policy does not name is refused, not handed in
 printf '{"access_token":"at-gemini","refresh_token":"","refreshToken":"rt-moved-secret","expiry_date":%s}' \
   "$future_ms" > "$lh/.gemini/oauth_creds.json"
-rm -f "$pv/copy"
+rm -f "$pv/copy" "$pv/log"
 lf_rc="$(unset GEMINI_API_KEY GOOGLE_API_KEY
   FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:/usr/bin:/bin" \
     "$ROOT/bin/adapters/gemini.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"; echo $?)"
 assert_eq "2" "$lf_rc" "a login file still holding a refresh token under another name refuses the round"
 assert_fail "test -e '$pv/copy'" "and the CLI never starts"
-assert_contains "$(cat "$pv/err")" "refresh token" "and says why"
+# fm-sandbox.sh says it where the adapter sends everything the launch says:
+# the round's log
+assert_contains "$(cat "$pv/log" "$pv/err" 2>/dev/null)" "refresh token" "and says why"
 
 # --- the operator's escape hatch (T-117) --------------------------------------
 # FM_ROUND_UNSANDBOXED is set by fm-worker.sh and fm-review.sh only from the
@@ -683,6 +770,30 @@ assert_eq "enabled" "$(awk 'on{print;exit} $0=="--sandbox"{on=1}' "$pv/argv")" \
   "under the hatch cursor-agent's own sandbox is back on"
 FM_ROUND_UNSANDBOXED=1 confined darwin "$pv/no-such-sandbox" "$pk/none.json" codex >/dev/null
 assert_eq "workspace-write" "$(awk 'on{print;exit} $0=="--sandbox"{on=1}' "$pv/argv")" "and codex's"
+# and claude's, with T-066's settings: every shell command inside it, none
+# let out, its network the policy's registries and nothing else - and the
+# shell allowed because it is sandboxed, not by a rule of its own. Under the
+# OS sandbox the same adapter turns it off (above).
+for hat_pol in none net; do
+  FM_ROUND_UNSANDBOXED=1 confined darwin "$pv/no-such-sandbox" "$pk/$hat_pol.json" claude >/dev/null
+  hat_set="$(settings_of)"
+  assert_eq "true" "$(jq -r '.sandbox.enabled' <<< "$hat_set" 2>/dev/null)" \
+    "under the hatch claude's own sandbox is back on ($hat_pol)"
+  assert_eq "true false" "$(jq -r '"\(.sandbox.autoAllowBashIfSandboxed) \(.sandbox.allowUnsandboxedCommands)"' <<< "$hat_set" 2>/dev/null)" \
+    "every shell command runs inside it and none is let out ($hat_pol)"
+  assert_eq "$(jq -c .network "$pk/$hat_pol.json")" "$(jq -c '.sandbox.network.allowedDomains' <<< "$hat_set" 2>/dev/null)" \
+    "and its network is the policy's registries ($hat_pol)"
+  assert_eq "" "$(awk '$0=="--allowedTools"{on=1;next} /^--/{on=0} on' "$pv/argv" | grep -x Bash || true)" \
+    "no rule allows the shell outside it ($hat_pol)"
+  assert_eq "false" "$(jq -r 'any(.permissions.allow[]; . == "Bash")' <<< "$hat_set" 2>/dev/null)" \
+    "in the settings either ($hat_pol)"
+  assert_ne "" "$(awk '$0=="--disallowedTools"{on=1;next} /^--/{on=0} on' "$pv/argv" | grep -xF 'Bash(git push:*)')" \
+    "and its deny rules still refuse a push ($hat_pol)"
+done
+# gemini's own sandbox is a container or a seatbelt the adapter never turns
+# on, so under the hatch its round has none (design 13.1 says so)
+FM_ROUND_UNSANDBOXED=1 confined darwin "$pv/no-such-sandbox" "$pk/none.json" gemini >/dev/null
+assert_eq "" "$(grep -xE -- '--sandbox|-s' "$pv/argv" || true)" "under the hatch gemini runs with no sandbox of its own"
 # inside a round the hatch is not there to take
 for v in claude codex cursor-agent gemini; do
   assert_eq "2" "$(FM_ROUND_UNSANDBOXED=1 FM_IN_ROUND=1 confined darwin "$pv/no-such-sandbox" "$pk/none.json" "$v")" \

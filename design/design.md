@@ -1620,7 +1620,11 @@ Mid-run branch saves use `bin/fm-checkpoint.sh`: after each logical commit the
 worker commits (if dirty) and immediately pushes the feature branch. Waiting
 until `WORKER_COMPLETE` for the only push is forbidden. Checkpoint never
 merges, never writes `main`/`master`, and never opens a pull request;
-`fm-worker.sh` may still run a final sweep through the same helper.
+`fm-worker.sh` may still run a final sweep through the same helper. A crew
+round inside the OS sandbox (13.1) can neither write the git directory nor
+reach GitHub, so there saving is `fm-worker.sh`'s alone - its final sweep
+and its EXIT trap - and the prompt it builds tells the round not to
+checkpoint (13.1, "Saving the branch").
 
 ### Managed session defaults
 
@@ -1968,6 +1972,24 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
   own, which is its TMPDIR. Never the caller's TMPDIR or `/tmp`: every round
   shares those, and run-mode review checkouts are made there, so a root
   naming them would let one round read or rewrite another's code;
+- every location a round is handed through its environment is inside a
+  write root. The toolchain's caches live under the operator's home by
+  default - bun's install cache, Playwright's browsers, npm's, pip's, Go's,
+  anything following `XDG_CACHE_HOME` - where a round may neither read nor
+  write, so `setup` or an end-to-end check would be refused. The adapter
+  points each of them (`FM_ROUND_CACHES` in `bin/adapters/_lib.sh`) into the
+  round's own temp directory, for both roles, whatever the caller or the
+  operator's shell set it to: an inherited value names a directory the
+  policy never made writable, as the one `fm-review.sh` used to make beside
+  its run-mode checkout did. The vendors' config homes (`CLAUDE_CONFIG_DIR`,
+  `CODEX_HOME`, gemini's `HOME`, cursor-agent's `XDG_CONFIG_HOME`) are there
+  too, and the directory a CLI writes its final answer to is a write root of
+  its own (`--write`). The price: every round starts from empty caches and
+  downloads what its `setup` installs, from the registries the policy
+  declares, and no round reads a cache another wrote.
+  `tests/adapter-contract.test.sh` checks every such location, for every
+  vendor, both roles and both platforms, against the generated profile and
+  bwrap arguments, and every other directory the round is handed with it;
 - reads: default-deny outside the write roots and the toolchain; never
   `~/.ssh`, `~/.config/gh`, `~/.netrc`, `~/.git-credentials`, cloud
   credentials, any vendor's home, fm's `state/` and the other worktrees in
@@ -2110,12 +2132,26 @@ checks the same through each adapter, where its CLI looks.
 operator's own shell - never a `config.yaml` key, which a branch can change
 - makes `fm-worker.sh` and `fm-review.sh` run the round without the OS
 sandbox: the adapter goes through `fm-sandbox.sh plain` (the scrub, the
-ulimits and the vendor's login), the vendors' own sandboxes come back on
-(codex's `workspace-write`, cursor-agent's `--sandbox enabled`), and the
-round says so loudly - on stderr, as the first line of the round's log
+ulimits and the vendor's login), and what is left in place is, per vendor:
+
+- claude: its own sandbox back on with T-066's settings - `enabled`,
+  `autoAllowBashIfSandboxed`, `allowUnsandboxedCommands: false`, and
+  `network.allowedDomains` the policy's registries - so every shell command
+  runs inside it and none is let out; no rule allows the shell on its own.
+  The permission rules, `--restricted` and the deny list stay;
+- codex: its own `workspace-write` sandbox, with its network switch on;
+- cursor-agent: its own `--sandbox enabled`;
+- gemini: no sandbox of its own. The adapter never turns on its container
+  or seatbelt, so under the hatch a gemini round's commands run with the
+  operator's own permissions, confined only by the scrub and the ulimits.
+  An operator who needs the hatch and cannot accept that takes gemini out of
+  the chain for the while.
+
+The round says so loudly - on stderr, as the first line of the round's log
 (before the vendor's first byte, so no verdict reads it), and on the board
 for the round (`Adapter running on T-… WITHOUT the OS sandbox`, en and
-zh-TW). `fm-sandbox.sh` marks every round `FM_IN_ROUND=1` and scrubs
+zh-TW). A review round under the hatch keeps its log in `state/reviews/`
+whatever its verdict, as the record that the hatch was used. `fm-sandbox.sh` marks every round `FM_IN_ROUND=1` and scrubs
 `FM_CREW_UNSANDBOXED` and `FM_ROUND_UNSANDBOXED` from it, and a script or
 adapter that sees `FM_IN_ROUND` ignores the hatch and says so: a round
 cannot switch its own sandbox off, nor a nested fm run inside one. It is
@@ -2127,7 +2163,7 @@ The vendors' own flags, against the proposal's section 4
 
 | vendor | Linux | macOS | where it departs from section 4, and why |
 |---|---|---|---|
-| claude | `--restricted --strict-mcp-config --disable-slash-commands --permission-mode dontAsk --settings`: file rules on the worktree and the round's TMPDIR, deny rules, the shell allowed | the same | its own sandbox is off, so the settings carry no `allowedDomains`. On macOS it is a seatbelt, which cannot be applied inside another. On Linux its commands would reach the network through claude's own proxy, which has no way out of the round's namespace and names no host it refuses. The registries are enforced by the OS layer's proxy instead |
+| claude | `--restricted --strict-mcp-config --disable-slash-commands --permission-mode dontAsk --settings`: file rules on the worktree and the round's TMPDIR, deny rules, the shell allowed | the same | its own sandbox is off, so the settings carry no `allowedDomains` (under the escape hatch it is on, with them). On macOS it is a seatbelt, which cannot be applied inside another. On Linux its commands would reach the network through claude's own proxy, which has no way out of the round's namespace and names no host it refuses. The registries are enforced by the OS layer's proxy instead |
 | codex | `--sandbox workspace-write` with its network switch on, `approval_policy="never"`, the scrub list as `shell_environment_policy.exclude`, `mcp_servers={}`, a `CODEX_HOME` of the round's own holding a copy of the login less its refresh token, so no user profile | `--sandbox danger-full-access` (a seatbelt cannot nest); the rest the same | the network switch is on because codex has only on and off, and off would keep its commands from the proxy |
 | cursor-agent | `--trust --sandbox enabled`, `-f` dropped, no `--approve-mcps` | `--sandbox disabled` (a seatbelt cannot nest) | on Linux, if cursor's own sandbox cuts the network off before the proxy sees a request, that refusal names no host; the canary shows it per version |
 | gemini | `--approval-mode yolo --extensions none --allowed-mcp-server-names fm-none` | the same | no `--sandbox`: it is a container or a seatbelt, neither of which starts inside the OS sandbox. `yolo`, not `auto_edit`: headless, `auto_edit` refuses every shell command, and the OS sandbox is what confines them. No `--policy` file: which gemini versions take one is unverified, and an unknown flag would fail every gemini round |
@@ -2152,11 +2188,40 @@ directly is refused by the OS, which sees an address, or on Linux no route
 at all - never a host name - and a refusal made by a vendor's own sandbox
 before the proxy (cursor-agent on Linux, above) never reaches it.
 
+**Saving the branch (T-117).** A worker round cannot save its own branch,
+and is not asked to. Its write roots are the worktree and its temp
+directory; the worktree's git directory lives in the repository's common
+`.git`, which the round reads (so `git log`, `diff` and `status` work) and
+never writes, and GitHub is out of its reach. So `git commit`, `git push`
+and `fm-checkpoint.sh` fail inside a round. That is on purpose: a common
+`.git` the round could write would let it move any branch's ref or rewrite
+the objects another task's worktree reads, and no profile rule can give it
+its own ref and not the others. Saving is `fm-worker.sh`'s alone: it
+commits and pushes what the worktree holds when the round ends, and its
+EXIT trap does the same when the round is stopped (TERM, INT). The prompt
+`fm-worker.sh` builds says so after the worker skill, overriding the
+skill's mid-run checkpoint, which a sandboxed round cannot follow. The
+cost is that a round's work reaches the pull request only when the round
+ends; a machine that dies mid-round loses what the worktree held only if
+the worktree goes with it. `tests/sandbox.test.sh` checks that the git
+directories are readable and not writable on both platforms, and
+`tests/worker.test.sh` that the prompt carries the override.
+`skills/worker/SKILL.md` ("Mid-run checkpoint (required)") is outside
+T-117's scope and still asks for the checkpoint; the prompt's section
+overrides it until the skill is changed.
+
 **Accepted for now.** The worktree's shared git directory - the common
 `.git` of the repository the worktree belongs to - is readable, because git
 run in the worktree has to read it. So a round can read other tasks'
 commits and `.git/config`. It holds no credential fm puts there, and it is
-accepted as it stands until a later task closes it. On macOS
+accepted as it stands until a later task closes it. On macOS a loopback
+port first opened after the round started is reachable by the round:
+another round's dev server, a suite's server, or a board restarted on
+another port than `FM_PORT`. The profile denies only the board's port and
+the ports that were listening when the round started, because it is written
+before the round runs and cannot tell a port the round opens itself from
+one someone else opens later. On Linux the round's loopback is its own
+namespace's, so the gap is macOS's alone. On macOS
 `/tmp/claude-<uid>` is shared with the operator's own claude sessions, so a
 claude round can read what they leave there; it holds scratch output, not
 a credential. A vendor's access token is readable by every command in its

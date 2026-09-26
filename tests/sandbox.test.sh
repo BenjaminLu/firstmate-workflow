@@ -44,8 +44,12 @@ assert_eq "write read network sockets env repo-config refuse ulimit" "$(jq -r '.
 assert_eq '["{root}","{tmp}"]' "$(jq -c .write "$w")" \
   "writes go to the worktree or checkout and the round's own temp directory - never the shared /tmp"
 assert_eq "[]" "$(jq -c .network "$w")" "and no registry is reachable unless one is declared"
+# git's own credential stores (T-117): design 13.1 names ~/.git-credentials
+# and ~/.netrc as how git's credentials stay out of reach, and ~/.gnupg
+# holds the signing keys
 for never in "$home/.ssh" "$home/.config/gh" "$home/.aws" "$home/.claude" "$home/.claude.json" "$home/.codex" \
-             "$home/.cursor" "$home/.gemini" "$home/.config/herdr" "$t/state"; do
+             "$home/.cursor" "$home/.gemini" "$home/.config/herdr" "$t/state" \
+             "$home/.git-credentials" "$home/.netrc" "$home/.gnupg"; do
   assert_eq "true" "$(jq --arg p "$never" '.never_read | index($p) != null' "$w")" \
     "never readable: ${never#"$home"/}"
 done
@@ -283,6 +287,9 @@ nline="$(grep '^(deny file-read\* file-write\*' <<< "$prof" | head -1)"
 assert_contains "$nline" "(subpath \"$home/.ssh\")" "\$HOME/.ssh is never readable"
 assert_contains "$nline" "(subpath \"$home/.codex\")" "nor a vendor's home"
 assert_contains "$nline" "(subpath \"$home/.config/gh\")" "nor gh's"
+assert_contains "$nline" "(subpath \"$home/.git-credentials\")" "nor git's credential store"
+assert_contains "$nline" "(subpath \"$home/.netrc\")" "nor ~/.netrc, which git and curl read credentials from"
+assert_contains "$nline" "(subpath \"$home/.gnupg\")" "nor the signing keys in ~/.gnupg"
 assert_lacks "$prof" "(literal \"$home/.codex/auth.json\")" "not even its own login file, which holds its refresh token"
 assert_lacks "$(mac profile --policy="$P" --root="$root" --vendor=gemini)" "oauth_creds.json" \
   "nor gemini's"
@@ -371,6 +378,29 @@ assert_eq "--" "$(printf '%s\n' "$args" | tail -1)" "the command follows the arg
 assert_contains "$args" "--tmpfs
 /tmp
 " "/tmp is a fresh one of the round's own"
+
+# --- a worktree's git directory: read, never written (T-117) ----------------
+# A worktree's .git is a file naming its git directory inside the
+# repository's common .git, which holds every branch's objects and refs. A
+# round reads it, so git log, diff and status work; it never writes it, so a
+# round cannot commit, move a ref or rewrite another branch. Saving the
+# branch is fm-worker.sh's alone (design 13.1), and its prompt says so.
+mkdir -p "$t/repo.git/worktrees/wt" "$t/wt"
+printf 'gitdir: %s\n' "$t/repo.git/worktrees/wt" > "$t/wt/.git"
+printf '../..\n' > "$t/repo.git/worktrees/wt/commondir"
+printf 'vendor: mock\n' > "$t/g.yaml"; fm_policy worker "" "$t/g.yaml" > "$t/g.json"
+gprof="$(mac profile --policy="$t/g.json" --root="$t/wt" --tmp="$t/round-a")"
+assert_contains "$(grep '^(allow file-read\* (literal "/")' <<< "$gprof")" "(subpath \"$t/repo.git\")" \
+  "a worktree's common git directory is readable (macOS)"
+assert_contains "$(grep '^(allow file-read\* (literal "/")' <<< "$gprof")" "(subpath \"$t/repo.git/worktrees/wt\")" \
+  "and so is its own git directory"
+assert_lacks "$(grep 'file-write' <<< "$gprof")" "$t/repo.git" "and neither is writable"
+gargs="$(lin profile --policy="$t/g.json" --root="$t/wt" --tmp="$t/round-a")"
+assert_contains "$gargs" "--ro-bind-try
+$t/repo.git
+$t/repo.git" "on Linux the common git directory is mounted read-only"
+assert_lacks "$gargs" "--bind
+$t/repo.git" "and never read-write"
 n_tmpfs="$(grep -nx -- /tmp <<< "$args" | head -1 | cut -d: -f1)"
 n_root="$(grep -nx -- "$root" <<< "$args" | head -1 | cut -d: -f1)"
 assert_eq "1" "$([ -n "$n_tmpfs" ] && [ -n "$n_root" ] && [ "$n_tmpfs" -lt "$n_root" ] && echo 1)" \

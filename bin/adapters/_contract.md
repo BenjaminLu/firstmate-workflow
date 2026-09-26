@@ -63,11 +63,26 @@ services stay denied to every round. No login refuses the round with `77`,
 which the adapter reads as unavailable. Design 13.1 names each vendor's
 path, item and service, and why.
 
+**Every location a round is handed is one it may write (T-117).**
+`fm_adapter_policy` points the toolchain's caches (`FM_ROUND_CACHES`:
+`XDG_CACHE_HOME`, bun's, Playwright's, npm's, pip's, Go's) into the round's
+own temp directory, whatever the caller set them to, and every config home
+an adapter hands its CLI is there too; the directory a CLI writes its final
+answer to is passed as `--write`. A new location goes inside one of those,
+or is a `--write` of its own: `tests/adapter-contract.test.sh` checks every
+directory the CLI is handed against the profile and the bwrap arguments.
+
 **The operator's escape hatch (T-117).** `FM_CREW_UNSANDBOXED=1` in the
 operator's own shell makes `fm-worker.sh` and `fm-review.sh` set
 `FM_ROUND_UNSANDBOXED=1` for the adapter, which then runs the CLI through
-`fm-sandbox.sh plain` - the scrub, the ulimits and the login, no OS sandbox,
-the vendors' own sandboxes back on - and says so on stderr; the scripts say
+`fm-sandbox.sh plain` - the scrub, the ulimits and the login, no OS sandbox -
+and says so on stderr. The vendors' own sandboxes come back on where the
+adapter has one to turn on: claude's with T-066's settings (enabled, every
+command inside it, none let out, the policy's registries as its
+`allowedDomains`), codex's `workspace-write`, cursor-agent's `--sandbox
+enabled`. gemini has none: the adapter never turns on its container or
+seatbelt, so under the hatch its commands are confined only by the scrub
+and the ulimits. The scripts say
 so in the round's log and on the board. `fm-sandbox.sh` marks every round
 `FM_IN_ROUND=1` and scrubs both names, and an adapter or script that sees
 `FM_IN_ROUND` ignores the hatch, so no round can take it.

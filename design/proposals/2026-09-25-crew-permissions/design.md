@@ -179,4 +179,9 @@ it. The captain reverted it (PR 96) and asked for it again with:
   own shell, that runs a round without the OS sandbox and says so on
   stderr, in the round's log and on the board, and that no round can take,
   so that a broken sandbox can never again stop every worker with no way to
-  ship its own fix.
+  ship its own fix. Under it claude's, codex's and cursor-agent's own
+  sandboxes come back on (claude's with T-066's settings); gemini has none;
+- every location a round is handed - its temp directory, the toolchain's
+  caches, the vendors' config homes - inside a write root, so a round's
+  `setup` can install; and saving the branch left to `fm-worker.sh`, since a
+  round can neither write the git directory nor reach GitHub (design 13.1).
