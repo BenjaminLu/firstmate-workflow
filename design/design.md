@@ -911,7 +911,7 @@ concurrency limit still hold, and it says which one held the task.
 | 4 | the diff stays in scope | `git diff --name-only` within the task's `scope` globs |
 | 5 | **the new tests are not vacuous** | classify by `project.tests`, revert the implementation, run `setup`, then only the suites the diff touches through `project.test`; the whole `check` only when none can be determined, said so; it must go red |
 | 6 | the required GitHub check is green | `gh pr checks <pr> --required` |
-| 7 | a PR comment contains `APPROVE:<task-id>` | author filtered only if `FM_REVIEWER_LOGIN` is set |
+| 7 | the latest verdict is an `APPROVE:<task-id>` for this change | its `REVIEWED:` line names the current head, or the same patch-id with no `main` commit touching its files since (below); author filtered only if `FM_REVIEWER_LOGIN` is set |
 
 **Gate 3 is retired, and its number with it (captain, 2026-09-26; T-114).**
 It ran the whole project check in a fresh worktree: the same run the required
@@ -961,9 +961,12 @@ running unlocked, so every suite that runs the real gate sets its own
 Require all six gates and current-head review evidence before treating a merge
 card as ready. `fm-run.sh` requests a card after gate success, but `fm-review.sh`
 can emit `approved` on an approval substring before that subsequent gate run.
-Gate 7 neither binds approval to a head nor distinguishes final, quoted or stale
-markers; a later rejection does not invalidate an earlier matching comment.
-Firstmate must verify provenance and current readiness explicitly. Any red gate
+Gate 7 reads the verdict comments (the reviewer's only, when
+`FM_REVIEWER_LOGIN` is set) and takes the latest; a later rejection supersedes
+an earlier approval. It does not distinguish final from quoted markers, and an
+`APPROVE` with no `REVIEWED:` line (one posted by hand, or before T-113) is
+still read as before and binds to no head, which the gate says. Firstmate must
+verify provenance and current readiness explicitly. Any red gate
 requires remediation regardless of praise or an `approved` event.
 
 **Round order and the merge double check (captain, 2026-09-25).** A review
@@ -973,10 +976,46 @@ either mode. A merge card needs two independent checks on the same current
 head: the reviewer's `APPROVE:<task-id>` for that head, and firstmate's own
 reading of that head's required GitHub check (green) and the six gates
 (`fm-gate.sh`). Neither substitutes for the other - an approval is not green
-CI, and green gates are not an approval - and a head that changes after
-either check restarts both. `fm-run.sh`'s loop still sends a task to review
-only once every gate before 7 is green; until it follows this order,
-firstmate starts the round itself when the worker hands back.
+CI, and green gates are not an approval. A head that changes after either
+check restarts both, with the one exception below. `fm-run.sh`'s loop still
+sends a task to review only once every gate before 7 is green; until it
+follows this order, firstmate starts the round itself when the worker hands
+back.
+
+**The approval binds to the change; CI and the gates bind to the head
+(T-113, captain, 2026-09-26).** Strict branch protection moves every open
+head after each merge, and `gh pr update-branch` then forced a second review
+of a change that was identical. So the two checks bind to different things.
+`fm-review.sh` ends every verdict it posts with one line of its own, after
+the reviewer's words:
+
+```
+REVIEWED:<task-id> verdict=<APPROVE|REJECT> head=<sha> base=<merge-base> patch=<patch-id> files=<JSON array>
+```
+
+`verdict` is the last `APPROVE:<task-id>` or `REJECT:<task-id>` that stands
+on a line of its own in the reviewer's answer, never a marker mentioned in
+passing; an answer with no standalone marker is recorded as `REJECT`. The
+same reading decides the `approved` or `review_failed` event, so the event
+and the line gate 7 trusts cannot disagree.
+
+`base` is the head's merge-base with `main`; `patch` is `git patch-id
+--stable` of the diff between them, taken with `git diff-tree -p
+--no-renames`, which reads no user configuration; `files` lists every path
+that diff touches. Gate 7 accepts the latest `APPROVE` when its `head` is the
+current head, or when all of these hold:
+
+1. the current change's patch-id, merge-base to head, equals the approved one;
+2. no commit on `main` between the approved merge-base and the current one
+   touches any file in the approved list;
+3. no later `REJECT` supersedes the approval.
+
+Otherwise it fails and names the condition, so firstmate knows a real
+re-review is needed. A conflict resolution or any worker edit changes the
+patch-id, and so always needs a new review. The reviewer's approval carries
+forward across an update that leaves the change identical and touches none of
+its files; CI and the six gates always rerun on the head being merged,
+since they test the change combined with the current `main`.
 
 Gate 5 names no toolchain. The target repository declares its own in
 `config.yaml`'s `project:` block (`setup`, `check`, `check_env`, `tests`,

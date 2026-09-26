@@ -396,6 +396,27 @@ head_evidence() {
   fi
 }
 
+# What this round reviews, pinned once: the head, its merge-base with the
+# base, the patch-id of the change between them and the files it touches.
+# The verdict carries all four in its REVIEWED line, and gate 7 carries an
+# APPROVE across an update onto a newer base only when the change is the
+# same one (T-113). The patch-id comes from plumbing, which reads no user
+# configuration, with renames off, exactly as fm-gate.sh takes it.
+R_HEAD="$(git rev-parse --verify -q "$BRANCH^{commit}")" || R_HEAD=''
+R_BASE=''; R_PATCH=''; R_FILES=''
+if [ -n "$R_HEAD" ] && R_BASE="$(git merge-base "$BASE" "$R_HEAD" 2>/dev/null)"; then
+  R_PATCH="$(git diff-tree -r -p --no-renames "$R_BASE" "$R_HEAD" 2>/dev/null | git patch-id --stable | cut -d' ' -f1)"
+  R_FILES="$(git diff-tree -r -z --name-only --no-renames "$R_BASE" "$R_HEAD" 2>/dev/null |
+    jq -Rsc 'split("\u0000") | map(select(length > 0))')" || R_FILES=''
+else
+  R_BASE=''
+fi
+reviewed_line() {  # reviewed_line <APPROVE|REJECT>
+  [ -n "$R_HEAD" ] && [ -n "$R_BASE" ] && [ -n "$R_FILES" ] || return 0
+  printf '\n\nREVIEWED:%s verdict=%s head=%s base=%s patch=%s files=%s' \
+    "$TASK" "$1" "$R_HEAD" "$R_BASE" "$R_PATCH" "$R_FILES"
+}
+
 work="$FM_RUN_DIR/review"
 mkdir -p "$work"
 prompt="$work/prompt.md"
@@ -415,7 +436,8 @@ prompt="$work/prompt.md"
   # A diff round keeps the head section, as information only.
   [ -z "$PR" ] || [ "$REVIEW_MODE" = run ] || head_evidence
   printf '\n---\n\n# The diff under review\n\n```diff\n'
-  git diff "$BASE...$BRANCH"
+  # the change the REVIEWED line names, not whatever the branch is by now
+  if [ -n "$R_BASE" ]; then git diff "$R_BASE" "$R_HEAD"; else git diff "$BASE...$BRANCH"; fi
   printf '```\n'
 } > "$prompt"
 
@@ -589,15 +611,33 @@ if [ "$signed" = "0" ]; then
        --tw "第 $ROUND 輪審核沒有已簽署的結果"
   rm -rf "$work"; exit 3
 fi
+# The verdict is the last marker standing on a line of its own. A reviewer
+# who rejects may well mention the approve marker in passing ("I cannot sign
+# APPROVE:..."), so finding it somewhere in the text proves nothing, and a
+# review with no standalone marker is not an approval. This one reading
+# decides both the REVIEWED line gate 7 trusts and the event, so the two
+# cannot disagree.
+decided="$(printf '%s\n' "$verdict" | awk -v a="APPROVE:$TASK" -v r="REJECT:$TASK" '
+  { sub(/\r$/, ""); gsub(/^[ \t]+|[ \t]+$/, "") }
+  $0 == a { v = "APPROVE" }
+  $0 == r { v = "REJECT" }
+  END { print v }')"
+if [ -z "$decided" ]; then
+  echo "fm-review: no APPROVE:$TASK or REJECT:$TASK stands on a line of its own; recorded as REJECT" >&2
+  decided=REJECT
+fi
+# the script's record of what was reviewed goes last, after the reviewer's
+# words, so it is the one gate 7 reads whatever the reviewer quoted above it
+verdict="${verdict%"${verdict##*[![:space:]]}"}$(reviewed_line "$decided")"
 if [ -n "$PR" ]; then
   $GH pr comment "$PR" --body "$verdict" >/dev/null 2>&1 || true
 fi
-case "$verdict" in
-  *"APPROVE:$TASK"*)
+case "$decided" in
+  APPROVE)
     emit --type approved --en "reviewer signed $TASK" --tw "reviewer 已簽 $TASK"
     emit_status "Verdict signed: APPROVE:$TASK" "已簽署裁決：APPROVE:$TASK"
     ;;
-  *"REJECT:$TASK"*)
+  REJECT)
     emit --review-outcome rejected --type review_failed \
          --en "reviewer rejected $TASK" --tw "reviewer 拒絕 $TASK"
     emit_status "Verdict signed: REJECT:$TASK" "已簽署裁決：REJECT:$TASK"
