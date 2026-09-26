@@ -96,6 +96,12 @@ fm_review_host_refusal() {
       "$d"|*."$d") printf 'is a GitHub host; a run-mode reviewer may not reach GitHub\n'; return 0 ;;
     esac
   done
+  # and loopback, which is the captain's board, dev servers and Herdr (T-105)
+  case "$h" in
+    localhost|*.localhost) printf 'is loopback; a crew round may not reach loopback\n'; return 0 ;;
+    *[!0-9.]*) ;;
+    *) printf 'is an address; a registry is named, and loopback is never one\n'; return 0 ;;
+  esac
 }
 
 # fm_review_network_refusal <hosts> -> "<host>, which <why>" for the first of
@@ -150,6 +156,104 @@ fm_adapter_rule_path() {
   printf '%s\n' "$dir"
 }
 
+# --- the round's permission policy (T-105) --------------------------------
+# Every round runs under one policy fm owns, per role: fm_policy in
+# bin/fm-config.sh resolves it from config.yaml, fm-worker.sh and
+# fm-review.sh hand it over as FM_POLICY, and nothing about it comes from
+# the operator's own CLI settings. Each adapter translates it into its CLI's
+# flags and says which dimensions those flags enforce; bin/fm-sandbox.sh
+# enforces what it can of the rest from outside the CLI. A dimension that
+# neither enforces refuses the round with 2, before the CLI starts, so the
+# fallback chain moves on and no round runs less confined than its policy.
+FM_POLICY_DIMENSIONS="write read network sockets env repo-config refuse ulimit"
+_fm_engine="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+
+# fm_adapter_policy -> FM_POLICY, FM_POLICY_HOSTS, FM_OUTER_OS, FM_OUTER_DIMS.
+# An adapter reached without a policy - by hand, or by a caller that does
+# not know about one - takes the engine's own for its role rather than none.
+# shellcheck disable=SC2034  # read by the adapter that sourced this
+fm_adapter_policy() {
+  local f
+  if [ -n "${FM_POLICY:-}" ]; then
+    [ -r "$FM_POLICY" ] || { echo "adapter: no policy at $FM_POLICY; refusing an unconfined round" >&2; exit 65; }
+  else
+    f="$(mktemp "${TMPDIR:-/tmp}/fm-policy.XXXXXX")" || exit 70
+    # shellcheck disable=SC2016  # expanded by the inner shell
+    bash -c '. "$1/bin/fm-config.sh" && fm_policy "$2" "" "$1/config.yaml"' fm-policy \
+      "$_fm_engine" "${FM_ROLE:-worker}" > "$f" || {
+      rm -f "$f"; echo "adapter: the crew policy does not read; refusing an unconfined round" >&2; exit 65; }
+    FM_POLICY="$f"; export FM_POLICY
+  fi
+  FM_POLICY_HOSTS="$(python3 -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["network"]))' \
+    "$FM_POLICY" 2>/dev/null)" || { echo "adapter: the policy at $FM_POLICY does not read" >&2; exit 65; }
+  # fm_policy refuses these already; a policy file that says otherwise was
+  # not written by it, and no vendor flag is given GitHub or loopback
+  local bad
+  bad="$(fm_review_network_refusal "$FM_POLICY_HOSTS")"
+  [ -z "$bad" ] || { echo "adapter: the policy's network names $bad; refusing the round" >&2; exit 65; }
+  FM_OUTER_OS="$("$_fm_engine/bin/fm-sandbox.sh" os)"
+  FM_OUTER_DIMS="$("$_fm_engine/bin/fm-sandbox.sh" covers --policy="$FM_POLICY")" || {
+    echo "adapter: the policy at $FM_POLICY does not read" >&2; exit 65; }
+  [ -n "$FM_OUTER_DIMS" ] || FM_OUTER_OS=''
+  # The round's own temp directory, its TMPDIR from here on and its only
+  # temp write root. The caller's TMPDIR is every round's, and run-mode
+  # review checkouts are made in it; no round is given that.
+  FM_ROUND_TMP="$(mktemp -d "${TMPDIR:-/tmp}/fm-round.XXXXXX")" || {
+    echo "adapter: cannot make the round's temp directory" >&2; exit 70; }
+  FM_ROUND_TMP="$(cd "$FM_ROUND_TMP" && pwd -P)"
+  # Beside it, out of the round's reach: where the sandbox says it started
+  # the CLI (fm_adapter_confine, fm_adapter_verdict).
+  FM_ROUND_CTL="$(mktemp -d "${TMPDIR:-/tmp}/fm-ctl.XXXXXX")" || {
+    rm -rf "$FM_ROUND_TMP"; echo "adapter: cannot make the round's control directory" >&2; exit 70; }
+  # shellcheck disable=SC2064  # the paths are fixed now
+  trap "rm -rf '$FM_ROUND_TMP' '$FM_ROUND_CTL'" EXIT
+  # a signal becomes an EXIT path, or the round's directories outlive it
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+  export TMPDIR="$FM_ROUND_TMP" TMP="$FM_ROUND_TMP" TEMP="$FM_ROUND_TMP"
+}
+
+# fm_adapter_confine <vendor> <workdir> <dimension>... -> FM_LAUNCH, or exit 2.
+# The dimensions are what the vendor's own flags enforce for this round.
+# FM_LAUNCH is the words the CLI is started behind: the OS sandbox when this
+# host has one, and otherwise the environment scrub and ulimits alone.
+# shellcheck disable=SC2034  # read by the adapter that sourced this
+fm_adapter_confine() {
+  local vendor="$1" work="$2" have d missing=''
+  have=" ${*:3} $FM_OUTER_DIMS "
+  for d in $FM_POLICY_DIMENSIONS; do
+    case "$have" in *" $d "*) ;; *) missing="$missing $d" ;; esac
+  done
+  if [ -n "$missing" ]; then
+    echo "$vendor: this round's policy needs$missing, which neither $vendor's own flags nor an OS sandbox enforce on this host; refusing the round" >&2
+    exit 2
+  fi
+  # absolute: the adapter starts the CLI after changing into it
+  work="$(cd "$work" 2>/dev/null && pwd -P)" || { echo "$vendor: no directory at $2" >&2; exit 64; }
+  FM_LAUNCH=("$_fm_engine/bin/fm-sandbox.sh")
+  FM_ROUND_STARTED="$FM_ROUND_CTL/started"
+  if [ -n "$FM_OUTER_OS" ]; then
+    FM_LAUNCH+=(run --policy="$FM_POLICY" --root="$work" --tmp="$FM_ROUND_TMP" --vendor="$vendor"
+                --started="$FM_ROUND_STARTED" --ctl="$FM_ROUND_CTL")
+    # the CLI's own final answer is written where the launcher reads it
+    [ -z "${FM_ATTEMPT_DIR:-}" ] || FM_LAUNCH+=(--write="$FM_ATTEMPT_DIR")
+    [ -z "${FM_FINAL_PATH:-}" ] || FM_LAUNCH+=(--write="$(dirname "$FM_FINAL_PATH")")
+    [ -z "${FM_POLICY_BLOCKED:-}" ] || FM_LAUNCH+=(--blocked="$FM_POLICY_BLOCKED")
+  else
+    FM_LAUNCH+=(plain --policy="$FM_POLICY" --tmp="$FM_ROUND_TMP" --started="$FM_ROUND_STARTED")
+  fi
+  FM_LAUNCH+=(--)
+}
+
+# fm_adapter_dimensions <dimension>... -> the declaration `<vendor>.sh
+# dimensions` prints: what this vendor's flags enforce here, and what the OS
+# sandbox adds
+fm_adapter_dimensions() {
+  printf 'native: %s\n' "$*"
+  printf 'sandbox: %s\n' "${FM_OUTER_DIMS:-none}"
+}
+
 # Keep the CLI's exit separately from a failed transcript writer. Either failure
 # fails the adapter, but only the first pipeline member is the model process.
 fm_adapter_pipeline_status() {
@@ -166,6 +270,14 @@ fm_adapter_verdict() {
   local rc="$1" log="$2" off="$3" said=''
   [ -z "${FM_ATTEMPT_DIR:-}" ] || printf '%s\n' "${FM_CLI_EXIT:-$rc}" > "$FM_ATTEMPT_DIR/cli-exit-code"
   [ -f "$log" ] && said="$(tail -c "+$((off + 1))" "$log" 2>/dev/null)"
+  # The sandbox never got as far as the CLI: its proxy, its profile, the
+  # process count or the sandbox binary failed, and the exit code is the
+  # launcher's. That is this host failing this vendor, not a model giving
+  # up, so the chain moves on to the next vendor (T-105).
+  if [ -n "${FM_ROUND_STARTED:-}" ] && ! grep -qx started "$FM_ROUND_STARTED" 2>/dev/null; then
+    echo "adapter: the OS sandbox did not start the CLI (exit $rc); counting the vendor unavailable" >&2
+    return 2
+  fi
 
   # a here-string, not a pipeline: under `set -o pipefail` a grep -q that
   # matches early kills the producer, printf takes SIGPIPE, and the pipeline

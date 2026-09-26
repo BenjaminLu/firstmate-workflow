@@ -1,0 +1,40 @@
+{
+  "id": "T-105",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-066"
+  ],
+  "title": "every crew round runs under one fm-owned permission policy, enforced by the vendor's own flags and an OS sandbox, for every vendor",
+  "scope": [
+    "bin/adapters/_lib.sh",
+    "bin/adapters/claude.sh",
+    "bin/adapters/codex.sh",
+    "bin/adapters/cursor-agent.sh",
+    "bin/adapters/gemini.sh",
+    "bin/adapters/_contract.md",
+    "bin/fm-worker.sh",
+    "bin/fm-review.sh",
+    "bin/fm-config.sh",
+    "bin/fm-sandbox.sh",
+    "bin/fm-canary.sh",
+    "config.yaml",
+    "tests/adapter-contract.test.sh",
+    "tests/worker.test.sh",
+    "tests/review.test.sh",
+    "tests/sandbox.test.sh",
+    "tests/herdr.test.sh",
+    "tests/config.test.sh",
+    "design/design.md",
+    "design/tasks/T-105.json",
+    "design/proposals/2026-09-25-crew-permissions/design.md"
+  ],
+  "acceptance": [
+    "Problem: a worker inherits the operator's personal CLI settings. On the captain's machine that allows gh-axi, herdr, a browser, awk/find/sed with any argument, reading any path, and editing ~/.claude/skills. It refuses bun, npm, python and chmod. cursor-agent runs with -f (--force, all commands) and no sandbox; codex and gemini run on vendor defaults. The design is design/proposals/2026-09-25-crew-permissions/design.md, and its sections 3 to 5 are the specification. Its own spec file, design/tasks/T-105.json, is committed on this branch.",
+    "One policy per role (worker, reviewer) lives in config.yaml, with a project override: write roots (worktree or checkout, TMPDIR); read default-deny outside them, plus the toolchain; a never-readable list (~/.ssh, ~/.config/gh, ~/.aws, vendor config homes except the vendor's own auth, other worktrees, fm state/); commands allowed inside the sandbox; git push, gh, herdr, browsers and MCP refused; network limited to the project's declared registries (default none), with GitHub and loopback never allowed; no unix sockets; env scrub of GH_TOKEN, GITHUB_TOKEN, SSH_AUTH_SOCK and cloud credentials; repository .claude/, .mcp.json, .cursor/ and GEMINI.md not loaded; process and CPU ulimits.",
+    "Each adapter translates the policy into its CLI's flags as design section 4 lists (claude reuses T-066's settings builder; cursor-agent drops -f for --trust --sandbox enabled). Each adapter declares which dimensions it enforces natively.",
+    "bin/fm-sandbox.sh generates an OS sandbox profile from the same policy (sandbox-exec on macOS, bwrap on Linux) and runs the CLI inside it. Before a round, fm checks that every dimension is covered by the adapter or the outer layer. If one is not, that adapter refuses and the fallback chain moves on. Nothing degrades to an unconfined round.",
+    "A round blocked on an undeclared host reports that host, and firstmate raises a choice card to add it to the project's registries. The crew never widens its own policy.",
+    "Evidence is the required GitHub check and the seven gates, checked by firstmate at the merge gate. Tests written to fail first in tests/adapter-contract.test.sh and tests/sandbox.test.sh cover: flags and profile per vendor match the policy; a vendor missing a dimension without the outer layer is refused; declared registries reach both layers; loopback and GitHub are never allowed. bin/fm-canary.sh runs one real round per vendor that tries to write outside, read ~/.ssh, reach github.com, reach 127.0.0.1:4173 and connect to the Herdr socket, and records the result per vendor and version. It is not part of CI. The worker does not run the suite itself."
+  ]
+}

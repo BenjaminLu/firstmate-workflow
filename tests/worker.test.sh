@@ -2749,6 +2749,51 @@ assert_eq "0" "$rb_rc" "X3: the round completes"
 assert_eq "100755" "$(git --git-dir="$dX3/remote.git" ls-tree "$bX3" -- bin/fm-mid | cut -c1-6)" \
   "X3: a new script a checkpoint committed without the bit is committed 100755"
 
+# --- the round's permission policy (T-105) ------------------------------------
+# The worker hands its adapter the policy config.yaml resolves for a worker,
+# never the operator's own settings, and reports - does not allow - a host
+# the round's proxy refused. The mock stands in for the proxy by writing to
+# the file it is handed.
+dPol="$(fixture)"; rPol="$dPol/repo"; GHPol="$(ghstub "$dPol")"
+printf 'vendor: mock\nfallback:\n  - mock\npolicy:\n  network: registry.npmjs.org\n  worker:\n    cpu: 600\n' \
+  > "$rPol/config.yaml"
+cat > "$rPol/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+cp "$FM_POLICY" "$FM_T_POL/seen-policy.json"
+printf 'npm.evil.example\nnpm.evil.example\n' >> "$FM_POLICY_BLOCKED"
+mkdir -p "$3/src"; printf 'work\n' > "$3/src/work"
+M
+chmod +x "$rPol/bin/adapters/mock.sh"
+outPol="$(cd "$rPol" && FM_ROOT="$rPol" FM_GH="$GHPol" FM_T_POL="$dPol" bin/fm-worker.sh --task T-Z 2>&1)"
+assert_eq "0" "$?" "a round under the crew policy runs"
+assert_eq "worker" "$(jq -r .role "$dPol/seen-policy.json" 2>/dev/null)" "the adapter is handed the worker's policy"
+assert_eq '["registry.npmjs.org"]' "$(jq -c .network "$dPol/seen-policy.json" 2>/dev/null)" \
+  "with the registries config.yaml declares"
+assert_eq "600" "$(jq -r .cpu "$dPol/seen-policy.json" 2>/dev/null)" "and the worker's own limits"
+assert_contains "$outPol" "refused undeclared hosts: npm.evil.example" "a host the round was refused is reported"
+assert_eq "worker T-Z npm.evil.example" \
+  "$(jq -r '"\(.role) \(.task) \(.hosts | join(" "))"' "$rPol/state/policy/blocked-hosts.jsonl" 2>/dev/null)" \
+  "once, in the record firstmate raises its choice card from"
+assert_eq 'policy.network ["registry.npmjs.org"] proxy' \
+  "$(jq -r '"\(.add_to) \(.declared | tojson) \(.source)"' "$rPol/state/policy/blocked-hosts.jsonl" 2>/dev/null)" \
+  "which names the key a card would add the host to and what the round already had"
+assert_contains "$(jq -r 'select(.type=="crew_status") | .data.activity.en' "$rPol/state/events.jsonl")" \
+  "Refused undeclared hosts: npm.evil.example" "and the board is told"
+# a policy that does not read stops the round before any engine runs
+dPol2="$(fixture)"; rPol2="$dPol2/repo"; GHPol2="$(ghstub "$dPol2")"
+printf 'vendor: mock\nfallback:\n  - mock\npolicy:\n  network: github.com\n' > "$rPol2/config.yaml"
+cat > "$rPol2/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+: > "$FM_T_POL/engine-ran"
+M
+chmod +x "$rPol2/bin/adapters/mock.sh"
+outPol2="$(cd "$rPol2" && FM_ROOT="$rPol2" FM_GH="$GHPol2" FM_T_POL="$dPol2" bin/fm-worker.sh --task T-Z 2>&1)"
+assert_eq "65" "$?" "a policy whose network names GitHub is a configuration error"
+assert_contains "$outPol2" "may not reach GitHub" "and says why"
+assert_fail "test -e '$dPol2/engine-ran'" "and no engine runs without its policy"
+rm -rf "$dPol" "$dPol2"
+
 rm -rf "$dA" "$dA2" "$dB" "$dC" "$dD" "$dE" "$dF" "$dG" "$dG2" "$dG3" "$dG4" "$dH" "$dI" "$dJ" "$dK" "$dK2" "$dL" \
   "$dM" "$dN" "$dP1" "$dP2" "$dP3" "$dP4" "$dP5" "$dP6" "$dP7" "$dQ1" "$dQ2" "$dQ3" "$dQ4" \
   "$dR1" "$dR2" "$dS" "$dT" "$dU1" "$dU2" "$dV0" "$dV1" "$dV2" "$dV3" "$dV4" "$dV5" "$dV5b" "$dV5c" "$dV6" \
