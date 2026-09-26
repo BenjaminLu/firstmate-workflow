@@ -46,8 +46,8 @@ The project contract is `config.yaml`'s `project:` block: `setup`, `check`,
 keys, setup's exit status and error, and `ready`; `status` reports the same
 declaration without running anything. Report the contract at startup, including
 a missing `check` or a failed setup, which is not ready rather than a reason to
-stop startup. Any fresh verification worktree — gate 3, gate 5, or any check
-you coordinate outside the gates — runs the declared `setup` before `check`. A
+stop startup. Any fresh verification worktree — gate 5, or any check you
+coordinate outside the gates — runs the declared `setup` before `check`. A
 check whose output says a stage was skipped is not evidence that the stage
 passed: a skipped stage is an unverified stage, whatever the exit status.
 
@@ -112,9 +112,18 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   `watch` repeats it. It reports failed gates but does not restart failed workers.
   Explicitly coordinate remediation with the assigned worker, inspect its final
   results, then rerun the relevant checks. Avoid competing loop owners.
-- `bin/fm-gate.sh` checks seven gates; gate 3 runs the project's declared
-  `setup` and `check`, which for this repository is `bin/ci.sh`, the shared
-  local/CI check.
+- `bin/fm-gate.sh` checks six gates, numbered 1, 2, 4, 5, 6 and 7. Gate 3,
+  the local run of the whole project `check`, is retired (T-114): the required
+  GitHub check runs it on the same head, and gate 6 reads that. Gate 5 runs
+  only the suites the diff touches, falling back to the whole `check` only
+  when it cannot tell which, and says so. Gate runs on one machine are
+  serialized by a kernel lock on `FM_GATE_LOCK` (default `/tmp/fm-gate.lock`,
+  not under `TMPDIR`), so a second one waits for the first, even from a
+  sandbox with its own `TMPDIR`. A run that cannot use that file (it cannot
+  open it, or it is a symlink, a hard link or not a regular file) gets exit
+  70 naming it: fix or remove the file. Do not give a real gate run a
+  private `FM_GATE_LOCK`, which would not serialize with the rest of the
+  machine; only a test fixture sets its own.
   `bin/fm-review.sh` runs review; `bin/fm-protocol.sh` checks the closed-list
   protocol. Read their current usage before invocation. Supply the reviewer with
   diff, spec, acceptance, authoritative relevant design and any original closed
@@ -137,14 +146,15 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   report the script's message and coordinate the fix.
 - Round order and the merge double check (captain, 2026-09-25; design §6).
   Start the review round through `bin/fm-review.sh` as soon as the worker hands
-  back; never hold it for CI. CI and the seven gates are not a review criterion
+  back; never hold it for CI. CI and the gates are not a review criterion
   in either mode: a run-mode reviewer is shown none, and a diff-mode reviewer
   sees the head section as information only. A merge card needs two
   independent checks on the same current head: the reviewer's
   `APPROVE:<task-id>` for that head, and your own reading of that head's
-  required GitHub check (green) and the seven gates (`bin/fm-gate.sh`).
+  required GitHub check (green) and the six gates (`bin/fm-gate.sh`).
   Neither substitutes for the other, and a head that changes after either one
-  restarts both. `fm-run.sh` still reviews only after gates 1-6 are green, so
+  restarts both. `fm-run.sh` still reviews only after every gate before 7 is
+  green, so
   do not wait for its loop to start a round.
 - Decision requests use the approved T-034 `--details` contract below. Request
   mode returns after publication; it does not wait for approval.
@@ -159,7 +169,7 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
 - Firstmate must establish current-head gates, CI and reviewer provenance before
   presenting a merge card, and coordinate renewed verification if the head changes.
   The board calls `bin/fm-merge.sh` directly for choice A on a pending merge card;
-  neither that route nor the merge helper rechecks the seven gates. The helper
+  neither that route nor the merge helper rechecks the gates. The helper
   checks PR state, invokes the GitHub merge and attempts an event and cleanup;
   it does not read or validate captain decision approval. `fm-run.sh` requests a
   card after gate success but does not consume decisions or perform the merge.
