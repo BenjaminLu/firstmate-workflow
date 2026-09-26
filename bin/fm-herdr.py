@@ -1403,6 +1403,7 @@ def launch(script, root, args):
         # surviving adapter after SIGKILL of the published PID must not keep
         # the lock or recovery relaunch blocks forever.
         env['FM_WORKER_TASK_LOCK_FD'] = str(fd)
+    if script.name in ('fm-worker.sh', 'fm-review.sh'): own_group(code, root)
     os.execve('/bin/bash', ['bash', str(code / 'bin' / script.name), *args], env)
 
 
@@ -1416,6 +1417,332 @@ def crew_identity(run):
     except (OSError, ValueError): return None
     if not isinstance(record, dict) or 'round' not in record: return None
     return {key: record.get(key) for key in IDENTITY_FIELDS}
+
+
+def own_group(code, root):
+    """A crew run leads a process group of its own (T-107), so stop() below
+    can end everything it started - an engine's orphaned child included -
+    without reaching the caller that launched it: a background `&` from a
+    script without job control otherwise shares the caller's group. A run
+    typed at an interactive shell already leads its job's group, so nothing
+    changes for it; its standard input is /dev/null either way.
+
+    Leaving the caller's group must not leave its signals behind: a guard is
+    started in that group first (guard(), below), and a signal sent to the
+    group still ends the round. A run whose guard cannot start stays in the
+    caller's group, where the signal reaches it directly."""
+    try:
+        if os.getpgrp() == os.getpid(): return
+        subprocess.Popen([sys.executable, str(Path(code) / 'bin/fm-herdr.py'), 'guard', str(root), str(os.getpid())],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         close_fds=True)
+        os.setpgid(0, 0)
+    except OSError: pass
+
+
+def _git(repo, *args):
+    return subprocess.run(['git', '-C', str(repo), *args], capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL)
+
+
+def _checkout_of(repo, branch):
+    """The worktree the branch is checked out in, or None."""
+    path = None
+    for line in _git(repo, 'worktree', 'list', '--porcelain').stdout.splitlines():
+        if line.startswith('worktree '): path = line[len('worktree '):]
+        elif line == 'branch refs/heads/' + branch: return path
+    return None
+
+
+def sync_head(who, repo, branch, *rest):
+    """Bring the local branch to origin's before a round judges it (T-107).
+
+    `gh pr update-branch` moves only the remote branch, and every crew script
+    reads the local one, so a round could judge a head that was no longer the
+    pull request's. The local branch equal to origin's stands. Behind it, it
+    is fast-forwarded - in the worktree that has it checked out, which must be
+    clean. Anything else is refused, naming both heads. A repository with no
+    origin, a branch origin does not have yet, and a branch with no local
+    head have nothing to compare.
+    Prints the head that stands; 0 when it does, 1 refused, 2 origin unread.
+
+    `--expect <head>` asks the same question after a round, and moves
+    nothing: the head that stood before it must stand now, read by this same
+    rule. So a state that let a round start cannot, unchanged, withhold its
+    verdict, and a state that would have refused it cannot let one through."""
+    expect = None
+    if rest:
+        if len(rest) != 2 or rest[0] != '--expect':
+            print(f'{who}: usage: sync-head <who> <repo> <branch> [--expect <head>]', file=sys.stderr)
+            return 64
+        expect = rest[1]
+    local = _git(repo, 'rev-parse', '-q', '--verify', 'refs/heads/' + branch + '^{commit}').stdout.strip()
+    if expect is not None and local != expect:
+        print(f'{who}: {branch} moved from {expect or "no commit"} to {local or "no commit"}'
+              ' while the round ran', file=sys.stderr)
+        return 1
+    if not local or _git(repo, 'remote', 'get-url', 'origin').returncode:
+        print(local); return 0
+    # success with nothing listed is a branch origin does not have
+    listed = _git(repo, 'ls-remote', '--heads', 'origin', 'refs/heads/' + branch)
+    if listed.returncode:
+        print(f'{who}: could not read origin\'s {branch}, so the local head {local} cannot be shown'
+              ' to be the pull request\'s; refusing', file=sys.stderr)
+        return 2
+    remote = listed.stdout.split()[0] if listed.stdout.split() else ''
+    if not remote:
+        print(local); return 0
+    if remote == local:
+        print(local); return 0
+    if expect is not None:
+        print(f'{who}: origin\'s {branch} moved to {remote} while the round judged {local}', file=sys.stderr)
+        return 1
+    tracking = 'refs/remotes/origin/' + branch
+    if _git(repo, 'fetch', '-q', '--no-tags', 'origin', '+refs/heads/' + branch + ':' + tracking).returncode:
+        print(f'{who}: could not fetch origin\'s {branch} at {remote}; the local head is {local}; refusing',
+              file=sys.stderr)
+        return 2
+    remote = _git(repo, 'rev-parse', '-q', '--verify', tracking + '^{commit}').stdout.strip() or remote
+    if _git(repo, 'merge-base', '--is-ancestor', local, remote).returncode:
+        print(f'{who}: the local {branch} is at {local} and origin\'s is at {remote}; the local head is'
+              ' not behind origin\'s, so it cannot be fast-forwarded; refusing', file=sys.stderr)
+        return 1
+    tree = _checkout_of(repo, branch)
+    if tree and os.path.isdir(tree):
+        dirty = _git(tree, 'status', '--porcelain', '--', '.',
+                     ':(exclude).fm-prompt.md', ':(exclude).fm-say.md').stdout.strip()
+        if dirty:
+            print(f'{who}: the local {branch} at {local} is behind origin\'s {remote}, and {tree}, which has'
+                  ' it checked out, has uncommitted changes; refusing', file=sys.stderr)
+            return 1
+        moved = _git(tree, 'merge', '-q', '--ff-only', remote)
+    else:
+        moved = _git(repo, 'update-ref', 'refs/heads/' + branch, remote, local)
+    if moved.returncode:
+        print(f'{who}: could not fast-forward {branch} from {local} to origin\'s {remote}: '
+              + (moved.stderr.strip() or 'git refused'), file=sys.stderr)
+        return 1
+    print(f'{who}: fast-forwarded {branch} from {local} to origin\'s {remote}', file=sys.stderr)
+    print(remote); return 0
+
+
+def _processes():
+    """pid -> (ppid, pgid, stat, command) for every process, commands unclipped."""
+    listed = subprocess.run(['ps', '-Aww', '-o', 'pid=,ppid=,pgid=,stat=,command='],
+                            capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    table = {}
+    for line in listed.stdout.splitlines():
+        parts = line.split(None, 4)
+        if len(parts) < 4 or not all(p.isdigit() for p in parts[:3]): continue
+        table[int(parts[0])] = (int(parts[1]), int(parts[2]), parts[3], parts[4] if len(parts) > 4 else '')
+    return table
+
+
+def _alive(table, pid):
+    return pid in table and not table[pid][2].startswith('Z')
+
+
+def _crew_roots(run, table):
+    """The processes a live run owns, each confirmed by its own command line so
+    a reused pid is never taken for one: the launcher, and each unfinished
+    attempt's runner and adapter."""
+    roots = set()
+    def take(pid, token):
+        if isinstance(pid, int) and token and _alive(table, pid) and token in table[pid][3]: roots.add(pid)
+    try: record = read(run / 'process.json')
+    except (OSError, ValueError): record = {}
+    take(record.get('pid'), record.get('token'))
+    for item in executions(run):
+        if item.get('state') == 'terminated': continue
+        take(item.get('runner_pid'), 'fm-herdr.py')
+        take(item.get('pid'), item.get('token'))
+    return roots
+
+
+def _crew_tree(roots, table, spared, groups):
+    """The roots, every descendant, and every member of a group a crew process
+    leads - where an orphaned child still is once its parent has gone. The
+    groups found are added to `groups`, so a later look still finds a group
+    whose leader has exited. The caller's own group and its ancestors are
+    spared."""
+    children = {}
+    for pid, (ppid, _, _, _) in table.items(): children.setdefault(ppid, []).append(pid)
+    own = os.getpgrp()
+    found = set()
+    todo = [pid for pid in roots if _alive(table, pid)]
+    todo += [pid for pid, row in table.items() if row[1] in groups]
+    while todo:
+        pid = todo.pop()
+        if pid in found or pid in spared or not _alive(table, pid): continue
+        found.add(pid); todo.extend(children.get(pid, []))
+        group = table[pid][1]
+        if group == pid and group != own and group not in groups:
+            groups.add(group)
+            todo.extend(p for p, row in table.items() if row[1] == group)
+    return found
+
+
+def _signal(pids, sig):
+    for pid in pids:
+        try: os.kill(pid, sig)
+        except (ProcessLookupError, PermissionError): pass
+
+
+def stop(root, task):
+    """End a task's live crew runs and their process groups (T-107).
+
+    Killing a round's launcher left its engine running: a worker went on
+    editing to a superseded spec, and a reviewer posted a verdict on a stale
+    head. Each live worker or reviewer run of the task gets stopped.json
+    first - a reviewer that outlives the signal reads it and posts nothing -
+    then TERM for every process it owns, and KILL for any still there after
+    FM_STOP_GRACE seconds. The stop is recorded under state/stops/, and an
+    actor that could not say it ended is taken off the deck."""
+    root = Path(root).resolve()
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', task): raise ValueError('invalid task identity')
+    grace = _stop_grace()
+    table = _processes()
+    spared = _ancestry(table, os.getpid())
+    runs = []
+    for file in sorted((root / 'state/runs').glob('*/identity.json')):
+        try: identity = read(file)
+        except (OSError, ValueError): continue
+        if identity.get('task') != task or identity.get('role') not in ('worker', 'reviewer'): continue
+        if run_is_live(file.parent): runs.append((file.parent, identity))
+    record = _stop_runs(root, task, runs, table, spared, grace)
+    save(root / 'state/stops' / f'{task}-{int(record["stopped_at"] * 1000)}.json', record)
+    finished = retire_stopped(root, [identity.get('actor') for _, identity in runs])
+    record['retired'] = finished
+    return record
+
+
+def _stop_grace():
+    grace = float(os.environ.get('FM_STOP_GRACE', '10'))
+    if not math.isfinite(grace) or grace < 0: raise ValueError('FM_STOP_GRACE must be non-negative seconds')
+    return grace
+
+
+def _ancestry(table, pid):
+    """The pid and every ancestor of it: never signalled by a stop."""
+    found = set()
+    while pid in table and pid not in found:
+        found.add(pid); pid = table[pid][0]
+    return found
+
+
+def _stop_runs(root, task, runs, table, spared, grace, extra=(), by=None):
+    """stopped.json in each run, then TERM for everything the runs own - the
+    `extra` roots too - and KILL for whatever is left after `grace` seconds.
+    `by` says what stopped them, in stopped.json too: the record under
+    state/stops/ is written only once the crew is gone, so it can come after
+    anyone watching the crew end has looked."""
+    roots, record = set(extra), dict(task=task, stopped_at=time.time(), runs=[])
+    if by: record['by'] = by
+    for run, identity in runs:
+        owned = _crew_roots(run, table)
+        roots |= owned
+        # before any signal, so no verdict can slip out between the two
+        mark = dict(actor=identity.get('actor'), role=identity.get('role'), task=task,
+                    stopped_at=record['stopped_at'], pids=sorted(owned))
+        if by: mark['by'] = by
+        save(run / 'stopped.json', mark)
+        record['runs'].append(dict(actor=identity.get('actor'), role=identity.get('role'), pids=sorted(owned)))
+    groups = set()
+    targets = _crew_tree(roots, table, spared, groups)
+    seen = {pid: table[pid][3] for pid in targets}
+    _signal(targets, signal.SIGTERM)
+    deadline = time.monotonic() + grace
+    while True:
+        table = _processes()
+        # an EXIT trap may start new children on the way out; they are the
+        # run's too. A pid counts again only while it runs the same command.
+        same = {pid for pid, command in seen.items() if _alive(table, pid) and table[pid][3] == command}
+        live = _crew_tree(same, table, spared, groups)
+        if not live or time.monotonic() >= deadline: break
+        time.sleep(0.1)
+    killed = sorted(live)
+    _signal(live, signal.SIGKILL)
+    deadline = time.monotonic() + 5
+    while True:
+        table = _processes()
+        left = sorted(p for p in set(targets) | set(killed) if _alive(table, p))
+        if not left or time.monotonic() >= deadline: break
+        time.sleep(0.1)
+    record.update(signalled=sorted(targets), killed=killed, remaining=left)
+    return record
+
+
+def guard(root, run_pid):
+    """Carry a signal sent to the caller's process group to the run (T-107).
+
+    A crew run leads a group of its own (own_group), so Ctrl-C at the
+    terminal, or a harness killing the caller's group, would reach the caller
+    and not the round: the round ran on and could post, which is the failure
+    a stopped round exists to end. This guard stays in the caller's group,
+    a child of the run, for as long as the run lives. A TERM, INT or QUIT that
+    reaches it - one the run did not already ignore when it was launched, as
+    a non-interactive shell's `&` ignores INT and QUIT - stops that run the
+    way stop() below stops a task's: stopped.json first, so nothing is posted
+    or published, then its whole tree and groups. A SIGKILL to the caller's
+    group cannot be caught; stopping the task ends such a round."""
+    root, run_pid = Path(root).resolve(), int(run_pid)
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    hit = []
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGQUIT):
+        if signal.getsignal(sig) is not signal.SIG_IGN:
+            signal.signal(sig, lambda number, _frame: hit.append(number))
+    while not hit and os.getppid() == run_pid:
+        time.sleep(0.2)
+    if not hit or os.getppid() != run_pid: return 0
+    stop_run(root, run_pid, 'caller-group-' + signal.Signals(hit[0]).name)
+    return 0
+
+
+def stop_run(root, run_pid, by):
+    """Stop the one crew run whose launcher is run_pid, as stop() stops a
+    task's. A run a task stop is already ending is left to it; a launch
+    that has not recorded its run yet is ended through its group alone."""
+    grace = _stop_grace()
+    table = _processes()
+    if not _alive(table, run_pid): return None
+    runs = []
+    for file in sorted((root / 'state/runs').glob('*/process.json')):
+        try: process, identity = read(file), read(file.parent / 'identity.json')
+        except (OSError, ValueError): continue
+        if process.get('pid') != run_pid or identity.get('role') not in ('worker', 'reviewer'): continue
+        if not run_is_live(file.parent): continue
+        if (file.parent / 'stopped.json').exists(): return None
+        runs.append((file.parent, identity))
+    # this guard, and the caller above the run, are never the run's to end
+    spared = {os.getpid()} | _ancestry(table, table[run_pid][0])
+    task = str(runs[0][1].get('task') or '') if runs else ''
+    record = _stop_runs(root, task, runs, table, spared, grace, extra={run_pid}, by=by)
+    if runs:
+        save(root / 'state/stops' / f'{task}-{int(record["stopped_at"] * 1000)}.json', record)
+        record['retired'] = retire_stopped(root, [identity.get('actor') for _, identity in runs])
+    return record
+
+
+def retire_stopped(root, actors):
+    """agent_finished for a stopped actor whose run could not say it ended."""
+    last = crew_last_events(root)
+    emit, retired = Path(root) / 'bin/fm-emit.sh', []
+    for actor in actors:
+        event = last.get(actor)
+        if not event or event.get('type') == 'agent_finished' or not emit.is_file(): continue
+        data = event.get('data') if isinstance(event.get('data'), dict) else {}
+        role = data.get('role') if data.get('role') in ('worker', 'reviewer') else (
+            'reviewer' if str(actor).startswith('reviewer') else 'worker')
+        payload = {'role': role, 'status': 'stopped'}
+        fields = crew_identity(Path(root) / 'state/runs' / str(actor))
+        if fields: payload['identity'] = fields
+        cmd = ['bash', str(emit), '--actor', str(actor), '--type', 'agent_finished', '--task', str(event.get('task') or ''),
+               '--data', json.dumps(payload),
+               '--en', f'{actor} was stopped', '--tw', f'{actor} 已被停下']
+        result = subprocess.run(cmd, env=dict(os.environ, FM_ROOT=str(root)), stdin=subprocess.DEVNULL,
+                                capture_output=True, text=True)
+        if result.returncode == 0: retired.append(actor)
+    return retired
 
 
 def emit_status(root, actor, task, en, tw, role='worker', crew_name=None,
@@ -1641,6 +1968,12 @@ def main(args):
             print('fm board: ' + record['sign_in_error'], file=sys.stderr); return 69
         return 0
     if mode == 'launch': launch(args[0], args[1], args[2:])
+    if mode == 'sync-head': return sync_head(*args)
+    if mode == 'guard': return guard(*args)
+    if mode == 'stop':
+        record = stop(*args)
+        print(json.dumps(record, indent=2))
+        return 1 if record['remaining'] else 0
     if mode == 'transport': return transport(*args)
     if mode == 'pane-child': return pane_child(*args)
     if mode == 'watch-child': return watch_child(*args)

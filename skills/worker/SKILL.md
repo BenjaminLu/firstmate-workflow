@@ -55,7 +55,10 @@ bin/fm-checkpoint.sh --dir . --message "<short why>"
 That commits and immediately pushes the feature branch only. Do not wait
 until `WORKER_COMPLETE` for the only push. `fm-worker.sh` still does a
 final sweep through the same helper and will also publish a dirty
-worktree on EXIT (TERM/INT), but mid-run saves are your job.
+worktree on EXIT (TERM/INT), unless the round was stopped - with
+`bin/fm.sh stop`, or by a signal to its caller's group - or refused (see
+"The head you start from"), but mid-run saves are
+your job.
 
 ## When the base moved under your branch
 
@@ -145,6 +148,29 @@ with no changed files and no PR is a premature question: it is kept under
 `state/unsent/` and the round fails. Inspect its reported publication result;
 writing the file alone does not establish that the reviewer received it.
 Preserve any reported recovery copy on failure.
+
+The script ends the posted comment with a line `WORKER-REPORT:<task-id>`
+(T-107); do not write that line yourself. The next reviewer is handed every
+such comment since the last verdict, verbatim, as claims to verify: a
+run-mode reviewer re-runs any search or command you say you ran. So state
+each one exactly as it can be re-run - the `SWEPT:` search as the command
+itself - and report only what you actually ran.
+
+## The head you start from
+
+A round starts from the pull request's head (T-107). `gh pr update-branch`
+moves only origin's branch, so before your round `fm-worker.sh` compares
+the local branch with origin's: behind it, and with a clean worktree, it is
+fast-forwarded; diverged, ahead, or behind with uncommitted work in the
+worktree, or an origin that cannot be read, the round is refused (exit 76)
+with the heads named, and nothing runs or is published; uncommitted work
+stays in the worktree. Firstmate settles that; do not work around it.
+
+A round `bin/fm.sh stop <task>` ends is over: its processes are ended, and
+the script publishes nothing from it - edits left in the worktree are
+rescued to `state/rescued/` by the next round, not pushed. A signal sent to
+the group of whatever launched the round - Ctrl-C, a harness killing its
+caller - ends it the same way.
 
 A round in which you only ask is a complete round. Do not change files as
 well as asking: the point of asking is that you do not yet know what would

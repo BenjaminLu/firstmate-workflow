@@ -7,7 +7,10 @@
 #
 # Exits 0 when all six pass, otherwise the number of the gate that failed.
 # The exit code is the gate number so a caller can tell "the tests are vacuous"
-# from "the reviewer never signed".
+# from "the reviewer never signed". 76 is a branch whose local head cannot be
+# shown to be origin's - diverged, behind a dirty worktree, or origin could
+# not be read: nothing was judged (T-107).
+# Every run writes its own stdout lines to state/gates/<task>-<head>.txt.
 #
 # Gate 3 is retired, and its number with it (T-114). It ran the whole
 # project.check locally, which is what the required GitHub check already runs
@@ -58,7 +61,8 @@ done
 [ "$ONLY" != 3 ] || {
   echo "fm-gate: gate 3 is retired; the required GitHub check it duplicated is gate 6" >&2; exit 64; }
 
-say()  { printf '  %s gate %s: %s\n' "$1" "$2" "$3"; }
+# every line said is also kept for the head's gate summary (T-107), below
+say()  { printf '  %s gate %s: %s\n' "$1" "$2" "$3"; [ -z "${SUMMARY_OUT:-}" ] || printf '  %s gate %s: %s\n' "$1" "$2" "$3" >> "$SUMMARY_OUT"; }
 want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 
 g() {   # g <n> <description> ; body reads stdin-free, returns 0/1
@@ -67,13 +71,15 @@ g() {   # g <n> <description> ; body reads stdin-free, returns 0/1
   shift 1
   local desc="$1"; shift
   if "$@"; then say '+' "$n" "$desc"; return 0; fi
-  say 'x' "$n" "$desc"; exit "$n"
+  say 'x' "$n" "$desc"; publish_summary; exit "$n"
 }
 
 _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "fm-gate: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
+# resolved now: the gates run after `cd "$REPO"`, and this path may be relative
+_fm_bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 # ---- one gate run at a time on this machine ------------------------------
 # The lock is the kernel's: flock on descriptor 8, taken through perl because
@@ -139,6 +145,46 @@ export FM_GATE_LOCK_HELD="$LOCK"
 
 cd "$REPO" || { echo "fm-gate: no repo at $REPO" >&2; exit 64; }
 
+# ---- the head judged (T-107) ---------------------------------------------
+# `gh pr update-branch` moves only the remote branch, and every gate reads
+# the local one: heads were gated that were no longer the pull request's.
+# So the local branch is brought to origin's first - fast-forwarded when it
+# is behind and its worktree is clean - and anything else is refused (76),
+# naming both heads. fm-herdr.py holds the one rule the worker and the
+# reviewer apply too.
+HEAD_SHA="$(python3 "$_fm_bin/fm-herdr.py" sync-head fm-gate "$(pwd -P)" "$BRANCH")" || {
+  echo "fm-gate: $BRANCH is not the pull request's head here; nothing is judged" >&2; exit 76; }
+# Every gate below judges that one commit, never the branch looked up again by
+# name: a review round's own fast-forward or a worker's checkpoint can move
+# the branch while the gates run, and the summary names this head. A branch
+# with no head at all is left to gate 1 to refuse.
+REV="${HEAD_SHA:-$BRANCH}"
+
+# The gate summary: this run's own stdout lines, written to
+# state/gates/<task>-<head>.txt for the head judged, which the review prompt
+# quotes (T-088). A run that judges one gate with --only replaces that gate's
+# line and keeps the others, and the closing line stands only while all six
+# say green. Written beside the file and renamed in, so a reader never sees
+# half of one.
+SUMMARY_OUT=''; GATES_DIR="$(pwd -P)/state/gates"
+if [ -n "$HEAD_SHA" ] && mkdir -p "$GATES_DIR" 2>/dev/null; then
+  SUMMARY_OUT="$(mktemp "$GATES_DIR/.$TASK-$HEAD_SHA.XXXXXX" 2>/dev/null)" || SUMMARY_OUT=''
+fi
+publish_summary() {
+  [ -n "$SUMMARY_OUT" ] && [ -f "$SUMMARY_OUT" ] || return 0
+  local final="$GATES_DIR/$TASK-$HEAD_SHA.txt" merged n all=1
+  if [ -n "$ONLY" ]; then
+    merged="$(mktemp "$GATES_DIR/.$TASK-$HEAD_SHA.XXXXXX")" || { rm -f "$SUMMARY_OUT"; return 0; }
+    { [ ! -f "$final" ] || grep -Ev "^  [+x] gate $ONLY: |^  all six gates green\$" "$final"
+      grep -E '^  [+x] gate ' "$SUMMARY_OUT"; } > "$merged"
+    for n in 1 2 4 5 6 7; do grep -Eq "^  [+] gate $n: " "$merged" || all=0; done
+    [ "$all" = 0 ] || echo "  all six gates green" >> "$merged"
+    rm -f "$SUMMARY_OUT"; SUMMARY_OUT="$merged"
+  fi
+  mv -f "$SUMMARY_OUT" "$final" 2>/dev/null || rm -f "$SUMMARY_OUT"
+  SUMMARY_OUT=''
+}
+
 # ---- the project contract ------------------------------------------------
 # Which toolchain a project uses is its own business. config.yaml's project:
 # block declares how to prepare a fresh checkout (setup), what green means
@@ -162,7 +208,7 @@ load_project() {  # load_project <config.yaml of the branch>
   while IFS= read -r -d '' kv; do P_ENV+=("$kv"); done < <(fm_project check_env "$cfg")
 }
 branch_config() {  # branch_config <file> ; the branch's config.yaml, or empty
-  git show "$BRANCH:config.yaml" > "$1" 2>/dev/null || : > "$1"
+  git show "$REV:config.yaml" > "$1" 2>/dev/null || : > "$1"
 }
 
 # run_in <dir> <log> <with-check-env 0|1> <command>
@@ -187,15 +233,15 @@ drop() { git worktree remove --force "$1" >/dev/null 2>&1; rm -rf "$1"; }
 
 # ---- 1. the branch exists and carries work -------------------------------
 gate1() {
-  git rev-parse --verify "$BRANCH" >/dev/null 2>&1 || return 1
-  [ "$(git rev-list --count "$BASE..$BRANCH" 2>/dev/null || echo 0)" -gt 0 ]
+  git rev-parse --verify "$REV^{commit}" >/dev/null 2>&1 || return 1
+  [ "$(git rev-list --count "$BASE..$REV" 2>/dev/null || echo 0)" -gt 0 ]
 }
 
 # ---- 2. it rebases onto the base cleanly ---------------------------------
 gate2() {
   local w rc
   w="$(mktemp -d)"
-  git worktree add -q --detach "$w" "$BRANCH" 2>/dev/null || { rm -rf "$w"; return 1; }
+  git worktree add -q --detach "$w" "$REV" 2>/dev/null || { rm -rf "$w"; return 1; }
   ( cd "$w" && git rebase "$BASE" >/dev/null 2>&1 ); rc=$?
   ( cd "$w" && git rebase --abort >/dev/null 2>&1 )
   git worktree remove --force "$w" >/dev/null 2>&1; rm -rf "$w"
@@ -206,7 +252,7 @@ gate2() {
 # It ran the whole project.check; gate 6 reads the required GitHub check that
 # runs the same thing on the same head.
 
-changed() { git diff --name-only "$BASE...$BRANCH"; }
+changed() { git diff --name-only "$BASE...$REV"; }
 # matches <path> <globs, one per line>. A leading **/ also matches at the top
 # level, as it does everywhere else.
 matches() {
@@ -247,7 +293,7 @@ gate4() {
   local scopes f ok
   # from the task's own file on the branch: a task that defines itself in
   # its own diff is otherwise unscoped, and gate 4 would pass anything
-  scopes="$(fm_task "$TASK" design/tasks "$BRANCH" | jq -r '.scope[]' 2>/dev/null)"
+  scopes="$(fm_task "$TASK" design/tasks "$REV" | jq -r '.scope[]' 2>/dev/null)"
   [ -n "$scopes" ] || scopes="$(fm_task "$TASK" | jq -r '.scope[]' 2>/dev/null)"
   [ -n "$scopes" ] || return 1          # a task with no declared scope cannot be gated
   # design/tasks.json was the shared list a task named so it could carry its
@@ -305,7 +351,7 @@ gate5() {
   [ -n "$P_TEST" ] || [ -n "$P_CHECK" ] || { no_check; return 1; }
 
   w="$(mktemp -d)"; log="$(mktemp)"
-  git worktree add -q --detach "$w" "$BRANCH" >/dev/null 2>&1 || { rm -rf "$w" "$log"; return 1; }
+  git worktree add -q --detach "$w" "$REV" >/dev/null 2>&1 || { rm -rf "$w" "$log"; return 1; }
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     ( cd "$w" && git checkout "$BASE" -- "$f" >/dev/null 2>&1 || rm -f "$f" )
@@ -427,11 +473,11 @@ gate7() {
     echo "      the latest APPROVE:$TASK has no REVIEWED:$TASK line, so it names no head or change it approved; firstmate confirms it covers this head" >&2
     return 0
   fi
-  head="$(git rev-parse --verify -q "$BRANCH^{commit}")" || return 1
+  head="$(git rev-parse --verify -q "$REV^{commit}")" || return 1
   [ "$(jq -r .head <<<"$last")" != "$head" ] || return 0
 
   at="$(jq -r .base <<<"$last")"
-  mb="$(git merge-base "$BASE" "$BRANCH" 2>/dev/null)" || refused "no merge-base between $BRANCH and $BASE" || return 1
+  mb="$(git merge-base "$BASE" "$REV" 2>/dev/null)" || refused "no merge-base between $BRANCH and $BASE" || return 1
   patch="$(patch_of "$mb" "$head")"
   [ -n "$patch" ] && [ "$patch" = "$(jq -r .patch <<<"$last")" ] ||
     refused "condition 1 failed: the change's patch-id is ${patch:-empty}, the approved one was $(jq -r '.patch|if .=="" then "empty" else . end' <<<"$last") (approved head $(jq -r .head <<<"$last"))" ||
@@ -457,4 +503,6 @@ g 5 "reverting the implementation turns tests red" gate5
 g 6 "the required GitHub check is green"         gate6
 g 7 "the reviewer posted APPROVE:$TASK"          gate7
 echo "  all six gates green"
+[ -z "$SUMMARY_OUT" ] || echo "  all six gates green" >> "$SUMMARY_OUT"
+publish_summary
 exit 0

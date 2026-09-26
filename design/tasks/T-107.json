@@ -1,0 +1,35 @@
+{
+  "id": "T-107",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-117"
+  ],
+  "title": "crew rounds refuse a stale head, gates record their own results, a stopped round takes its crew with it, and the reviewer sees the worker's report",
+  "scope": [
+    "bin/fm-review.sh",
+    "bin/fm-gate.sh",
+    "bin/fm-worker.sh",
+    "bin/fm-run.sh",
+    "bin/fm.sh",
+    "bin/fm-herdr.py",
+    "skills/worker/SKILL.md",
+    "skills/reviewer/SKILL.md",
+    "tests/review.test.sh",
+    "tests/gate.test.sh",
+    "tests/worker.test.sh",
+    "tests/stop.test.sh",
+    "tests/herdr.test.sh",
+    "skills/firstmate/SKILL.md",
+    "design/design.md",
+    "design/tasks/T-107.json"
+  ],
+  "acceptance": [
+    "Four failures from 2026-09-25 each cost rounds, and each was worked around by hand in firstmate's scratchpad. They are listed below, one per item. Its own spec file, design/tasks/T-107.json, is committed on this branch.",
+    "1. Stale local head. gh pr update-branch moves only the remote branch, and fm-review.sh, fm-gate.sh and fm-worker.sh read the local branch. So T-068, T-086 and T-104 were approved and gated on heads that were no longer the pull request's. Before a round, each script compares the local branch with origin/<branch>. When the local branch is an ancestor and the task worktree is clean, it fast-forwards. Otherwise it refuses with a message naming both SHAs. Every review verdict and gate summary names the SHA it judged, and that SHA is the pull request's head at the time.",
+    "2. Gate summary writer. design.md says nothing writes state/gates/<task>-<sha>.txt. fm-gate.sh writes its own stdout lines there for the head it judged, on every run including a partial --only, and fm-run.sh stops sending that output to /dev/null.",
+    "3. A stopped round takes its crew with it. Killing the launcher of a round left its worker or reviewer running: a T-066 worker kept editing to a superseded spec, and a T-104 reviewer posted a verdict on a stale head. bin/fm.sh stop <task> ends that task's live crew runs and their process groups, and records the stop. A reviewer that is stopped, or whose head moved while it ran, posts no verdict.",
+    "4. The worker's report reaches the reviewer. Nothing is put into the diff. fm-worker.sh already posts the worker's comment through its say() path. It now marks that comment with a line WORKER-REPORT:<task>. fm-review.sh hands the reviewer every WORKER-REPORT comment posted since the last review verdict, verbatim and fenced with a per-run nonce, as T-073 does for the ask and closed lists. It is labelled as claims by the worker to verify, not evidence by themselves: a run-mode reviewer re-runs a stated search in its checkout. The reviewer skill says so. No other pull request comment is handed over.",
+    "Evidence is the required GitHub check and the seven gates, checked by firstmate at the merge gate. Tests written to fail first (a new tests/stop.test.sh for fm.sh stop) cover: a local branch behind origin is fast-forwarded, and a diverged one is refused; the gate summary file is written for the head judged; fm.sh stop leaves no crew process alive; a stale-head reviewer posts nothing; the WORKER-REPORT comments since the last verdict, and only those, reach the prompt fenced. Any gh stub answers exactly as gh does. The worker does not run the suite itself."
+  ]
+}

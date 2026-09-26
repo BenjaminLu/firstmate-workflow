@@ -719,7 +719,10 @@ say which pull request the branch has, `75` a rebuilt round was refused
 before its commit — a conflict marker left, a conflict with no markers left
 exactly as the merge left it, a HEAD no longer on the rebuild base, or the
 task's own entry or table row not as the previous head had it — and nothing
-was published, and `130`, `143` — a signal, 128
+was published, `76` the local branch is not the pull request's head —
+behind origin's with a dirty worktree, ahead of it or diverged from it,
+origin could not be read, or the branch moved after it was checked — so the
+round does not start and nothing is published (T-107), and `130`, `143` — a signal, 128
 plus its number, from the INT/TERM traps that make a killed run stop
 rather than carry on. `SIGHUP` is ignored (same as `fm-config.sh`) so a
 managed transport wait and PR publish survive a launching agent shell
@@ -1041,6 +1044,34 @@ started inside a run holding the same lock (it inherits
 running unlocked, so every suite that runs the real gate sets its own
 `FM_GATE_LOCK`, and `tests/gate.test.sh` checks that each one does.
 
+**Every round judges the pull request's head (T-107).** `gh pr update-branch`
+moves only origin's branch, and `fm-worker.sh`, `fm-review.sh` and
+`fm-gate.sh` read the local one, so T-068, T-086 and T-104 were approved and
+gated on heads the pull request no longer had. Before a round each compares
+the local branch with origin's, through one rule in `fm-herdr.py`
+(`sync-head`): equal stands; behind is fast-forwarded, in the worktree that
+has the branch checked out, only when that worktree is clean; anything else -
+diverged, ahead, behind a dirty worktree, or an origin that cannot be read -
+is refused with exit 76 and a message naming both heads (the local one alone
+when origin cannot be read), and nothing is judged. A repository with no
+`origin`, a branch origin does not have yet, and a branch with no local head
+have nothing to compare. The worker asks before an interrupted round's edits
+are rescued, so work made on the old head is never carried onto a new one; a
+round refused that way also publishes nothing on its way out, since saving
+those edits onto the old head would leave the branch diverged from origin's
+for good. They stay in the worktree for a human to resolve.
+The head `sync-head` names is the one judged from then on, never the branch
+looked up again by name: every gate reads that commit, and a worker whose
+fresh worktree holds anything else refuses the round (76), since a review
+round's own fast-forward or a save from elsewhere can move the branch
+meanwhile. Every verdict's `REVIEWED:` line and every gate summary's file
+name carry the head judged. A reviewer checks again before it posts, by the
+same rule (`sync-head --expect <head>`, which moves nothing), so a state that
+let the round start cannot, unchanged, withhold its verdict, nor the reverse:
+a head that moved, on origin or here, while the round ran, an origin that can
+no longer be read, or a round `fm.sh stop` stopped, posts no verdict and emits
+none (§12).
+
 Require all six gates and current-head review evidence before treating a merge
 card as ready. `fm-run.sh` requests a card after gate success, but `fm-review.sh`
 can emit `approved` on an approval substring before that subsequent gate run.
@@ -1151,10 +1182,28 @@ trailing newlines survive. It then says which case holds: a list (it is the
 closed list; findings cite its items or are marked `REGRESSION:`), only an ask
 (answer with the complete list), neither, or comments `gh` could not read, in
 which case the round still runs.
-No other comment enters the prompt, so the worker's reasoning stays out.
+No other comment enters that section, so the worker's reasoning stays out.
 Rounds one and two get no closed-list section. Given `--pr`, they, like every
 diff-mode round, do get the head section below; without `--pr` no round gets
 either, and the prompt is unchanged.
+
+**The worker's report reaches the reviewer (T-107).** Nothing is put into the
+diff. `fm-worker.sh` posts the worker's `.fm-say.md` note ending in a line of
+its own, `WORKER-REPORT:<task-id>`. Given `--pr`, in every round and either
+mode, `fm-review.sh` reads the pull request's comments and hands the reviewer
+every comment holding that line and posted since the last review verdict, in
+the order posted, under **The worker's report**, after the closed list and
+before the head section. A verdict is a comment carrying `fm-review.sh`'s
+`REVIEWED:<task-id>` line or a standalone `APPROVE:` or `REJECT:` marker, and
+a comment marked as a report is never one, whatever it quotes. Each report is
+quoted verbatim, printed straight from `jq` and fenced with a per-run nonce,
+as the closed list is, and labelled as claims by the worker to verify, not
+evidence by themselves: a diff-mode reviewer checks them against the diff, a
+run-mode reviewer re-runs any search or command a report states in its
+checkout. A marker mentioned in passing, another task's marker, and every
+comment without the line stay out. With no report since the last verdict the
+section is absent, so such a prompt is as it was; comments `gh` could not
+read are said to be unread.
 
 A diff cannot show CI or gates, so a closed-list item asking for them could
 never be closed (T-067, round nine). Current-head CI and gates are firstmate's
@@ -1177,14 +1226,16 @@ gate the summary has no result line for (it stops at the first red gate, and
 an empty one has none) are stated plainly. Nothing else is added, and a round
 without `--pr` is unchanged.
 
-The gate half is not closed yet. Nothing writes that gate summary:
-`fm-run.sh` sends `fm-gate.sh`'s stdout to `/dev/null`, and it is outside
-T-088's scope. Until a writer tees that stdout to
-`state/gates/<task-id>-<sha>.txt`, every diff-mode prompt reports the head's
-gate results as unknown, and firstmate reads the gates from `fm-gate.sh`
-itself for the merge double check. The path
-and the `  + gate N: …` / `  x gate N: …` lines of `fm-gate.sh`'s own `say()`
-are the contract that writer must follow.
+`fm-gate.sh` writes that summary itself (T-107): every run writes its own
+stdout lines, the `  + gate N: …` / `  x gate N: …` lines of its `say()` and
+the closing `  all six gates green`, to `state/gates/<task-id>-<sha>.txt` for
+the head it judged, beside the file and renamed in. A run with `--only N`
+replaces gate N's line and keeps the others, and the closing line stands only
+while all six say green. `fm-run.sh` no longer sends that stdout to
+`/dev/null`; it prints it under the task, and says a gate or review round
+that exits 76 judged no head that is the pull request's. The summary is information for the
+reviewer; firstmate still reads the gates on the head being merged for the
+merge double check.
 
 The point is to end the loop where each round fixes one thing and surfaces
 another.
@@ -2277,6 +2328,41 @@ global skills.
   system itself**, not reported to it by a person.
 - An adapter exiting `2` moves to the next vendor in `config.yaml` and emits
   `vendor_unavailable`.
+- **A stopped round takes its crew with it (T-107).** Killing a round's
+  launcher left its engine running: a T-066 worker kept editing to a
+  superseded spec, and a T-104 reviewer posted a verdict on a stale head.
+  Each crew run leads a process group of its own, and `bin/fm.sh stop <task>`
+  ends every live worker and reviewer run of the task: it writes the run's
+  `stopped.json` first, then sends TERM to every process the run owns - the
+  launcher and each unfinished attempt's runner and adapter, each confirmed by
+  its command line, their descendants, and every member of a group one of
+  them leads, where an orphaned child still is - and KILL to whatever is left
+  after `FM_STOP_GRACE` seconds (10). The caller's own group and ancestors are
+  never touched. The stop is recorded under `state/stops/`, an actor that
+  could not say it ended is given `agent_finished`, and the command prints
+  what it stopped and anything still `remaining` (exit 1). A stopped reviewer
+  posts no verdict, and a stopped worker publishes nothing; its worktree is
+  rescued by the next round.
+- **A signal to the caller's group still ends the round (T-107).** Leading
+  its own group takes a run out of the reach of a signal sent to its
+  caller's: Ctrl-C at the terminal, or a harness or timeout killing the
+  caller's group, would reach `fm-run.sh` and not the review round it runs in
+  the foreground, which ran on and could post. So before a run leaves the
+  caller's group it starts a guard there (`fm-herdr.py guard`), a child of the
+  run that lives as long as the run does. A TERM, INT or QUIT that reaches the
+  guard stops that one run exactly as `fm.sh stop` does - `stopped.json`
+  first, then TERM to its tree and groups and KILL after the grace - and the
+  stop is recorded as `caller-group-SIG…`, naming the signal the group
+  received: in `stopped.json`, before any signal, and under `state/stops/`
+  once the run's processes are gone. So the engine,
+  its children and its orphans end, the reviewer posts nothing and the worker
+  publishes nothing. A signal the run already ignored when it was launched is
+  not carried: a non-interactive shell's `&` ignores INT and QUIT, so Ctrl-C
+  does not reach a background worker, as it never did. A run that already
+  leads its group - a job typed at an interactive shell - needs no guard, and
+  a run whose guard cannot start stays in the caller's group. A SIGKILL to the
+  caller's group cannot be caught by anything; `fm.sh stop <task>` ends such
+  a round.
 - Compaction waits until the log is large enough to slow a replay.
 
 ---

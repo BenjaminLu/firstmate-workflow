@@ -185,6 +185,39 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   reviewed, and no later REJECT supersedes it. When it fails it names the
   condition, and that is a real re-review. A conflict resolution or any worker
   edit changes the patch-id and always needs a new review.
+- Every round judges the pull request's head (T-107; design §6). `gh pr
+  update-branch` moves only origin's branch, so `bin/fm-worker.sh`,
+  `bin/fm-review.sh` and `bin/fm-gate.sh` each compare the local branch with
+  origin's first: behind, with a clean worktree, it is fast-forwarded and the
+  script says so; diverged, ahead, behind a dirty worktree, or with an origin
+  that cannot be read, the round is
+  refused with exit `76`, naming both heads, and nothing is judged; a refused
+  worker publishes nothing, and a dirty worktree's edits stay in it. Settle
+  which head is the pull request's before running it again; do not fetch or
+  reset by hand. A reviewer whose head moves while it runs posts no verdict
+  and exits `76`; its words are kept under `state/reviews/`.
+- Every gate run writes its own stdout lines to
+  `state/gates/<task>-<head>.txt` for the head it judged, and a `--only` run
+  replaces that gate's line and keeps the rest; `fm-run.sh` prints them. That
+  file is what a diff-mode review prompt quotes. It is information: your merge
+  double check still reads the gates on the head being merged.
+- To end a round - a spec that changed under a worker, a reviewer on a head
+  that has moved - run `bin/fm.sh stop <task>`, never a kill of the launcher
+  alone. It ends every live worker and reviewer run of the task and every
+  process they own, their process groups included, records each run's
+  `stopped.json` and a record under `state/stops/`, and takes stopped actors
+  off the deck. A stopped reviewer posts no verdict and exits `143`, with
+  outcome `stopped`, and a stopped worker
+  publishes nothing; the next worker round rescues its worktree. Its JSON
+  names what it stopped and anything still `remaining`, which exits 1.
+  A TERM, INT or QUIT sent to the group of a round's caller (Ctrl-C on a
+  foreground `fm-run.sh`, a timeout killing it) stops that round the same
+  way, recorded as `caller-group-SIG…`; a SIGKILL cannot be caught, so after
+  one run `bin/fm.sh stop <task>`.
+- The worker's `.fm-say.md` note is posted ending in a line
+  `WORKER-REPORT:<task>`, and the next review round is handed every such
+  comment since the last verdict, fenced, as claims to verify (design §7).
+  No other comment reaches the reviewer.
 - Decision requests use the approved T-034 `--details` contract below. Request
   mode returns after publication; it does not wait for approval.
   `bin/fm-decide.sh --await <id> --repo <root>` returns recorded response JSON,

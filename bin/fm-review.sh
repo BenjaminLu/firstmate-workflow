@@ -2,9 +2,16 @@
 # Runs one review round. The reviewer is given the diff, the task spec and the
 # acceptance criteria - and, from round three, the round-three protocol's own
 # comments from the pull request, and, given --pr, in every round the head's
-# SHA, its required check and its gate summary - and nothing else. Not the worker's log, not
-# its reasoning, not even the path it worked in. Reasoning is persuasive; the
-# artefact is what is under review.
+# SHA, its required check and its gate summary, and the worker's own
+# WORKER-REPORT comments since the last verdict, as claims to verify - and
+# nothing else. Not the worker's log, not its other comments, not even the
+# path it worked in. Reasoning is persuasive; the artefact is what is under
+# review.
+#
+# It judges only the pull request's head: the local branch is brought to
+# origin's before the round, or the round is refused (76), and a verdict on a
+# head that moved while the round ran, or from a round that was stopped, is
+# never posted (T-107).
 #
 # config.yaml's `reviewer: mode:` says how much more it gets. `diff`, and a
 # project that declares nothing, is the above and only the above. `run` adds a
@@ -163,6 +170,24 @@ trap 'exit 143' TERM
 # Keep SIGHUP ignored (fm-config). Exiting on hangup orphans managed
 # transport wait / durable last-result recovery / PR publish.
 trap '' HUP
+
+# The head this round judges is the pull request's (T-107). `gh pr
+# update-branch` moves only the remote branch, and this round reads the local
+# one: T-068, T-086 and T-104 were approved on heads the pull request no
+# longer had. The local branch is fast-forwarded to origin's when it is
+# behind and its worktree is clean; anything else is refused, naming both
+# heads, before a word of the prompt is written. fm-herdr.py holds the one
+# rule the worker and the gate apply too, and the same rule is asked again
+# before the verdict is posted (head_moved, below).
+stale_head() {   # stale_head <en> <tw>
+  emit --review-outcome stale_head --type review_failed --en "$1" --tw "$2"
+}
+if ! SYNCED_HEAD="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" sync-head fm-review "$REPO" "$BRANCH")"; then
+  echo "fm-review: $BRANCH here is not the pull request's head; no round is run" >&2
+  stale_head "review round $ROUND refused a head that is not the pull request's" \
+             "第 $ROUND 輪審核拒絕了不是 PR 的 head"
+  exit 76
+fi
 
 # The task spec comes from the branch under review, not from whatever is
 # checked out. A task defined on its own branch - which is how a new one
@@ -352,6 +377,50 @@ closed_list() {
   done
 }
 
+# Given --pr, the reviewer is handed what the worker reported on the pull
+# request since the last verdict (T-107): every comment marked with a line
+# WORKER-REPORT:<task>, which is how the worker's own notes are posted, and
+# no other comment. A verdict is a comment carrying this script's REVIEWED
+# line or a standalone APPROVE or REJECT marker, and never one marked as a
+# report. Each report is quoted verbatim inside a per-run fence, like the
+# closed list above, and labelled as claims to verify: a diff round checks
+# them against the diff, a run-mode round re-runs what they say was run.
+# Nothing is added when there is nothing to hand over.
+worker_reports() {
+  local json picked n i fence
+  if ! json="$($GH pr view "$PR" --json comments 2>/dev/null)" ||
+     ! picked="$(jq -c --arg t "$TASK" '
+       ($t | gsub("(?<c>[.*+?^$(){}|\\[\\]\\\\/])"; "\\\(.c)")) as $e
+       | "(^|\\n)[ \\t]*WORKER-REPORT:\($e)[ \\t\\r]*(\\n|$)" as $report
+       | "(^|\\n)(REVIEWED:\($e) verdict=|[ \\t]*(APPROVE|REJECT):\($e)[ \\t\\r]*(\\n|$))" as $verdict
+       | [.comments[] | .body | strings] as $b
+       | ([range(0; $b | length) | select(($b[.] | test($report) | not) and ($b[.] | test($verdict)))]
+          | last // -1) as $last
+       | [$b[($last + 1):][] | select(test($report))]
+     ' <<<"$json" 2>/dev/null)" || [ -z "$picked" ]; then
+    printf '\n# The worker'"'"'s report\n\nThe pull request'"'"'s comments could not be read, so whatever the worker reported with WORKER-REPORT:%s since the last verdict is not shown.\n' "$TASK"
+    return 0
+  fi
+  n="$(jq 'length' <<<"$picked")"
+  [ "$n" -gt 0 ] || return 0
+  fence="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+  printf '\n# The worker'"'"'s report\n\n'
+  printf 'Below, verbatim, is every comment the worker posted on the pull request with WORKER-REPORT:%s since the last review verdict. They are claims by the worker to verify, not evidence by themselves: a count, a search or a test result stated there proves nothing until you have checked it.' "$TASK"
+  if [ "$REVIEW_MODE" = run ]; then
+    printf ' Re-run in your checkout any search or command it says it ran, and judge by what you find.\n'
+  else
+    printf ' Check each against the diff; a claim the diff cannot show stays unverified.\n'
+  fi
+  i=0
+  while [ "$i" -lt "$n" ]; do
+    printf '\n## Worker report %s of %s, verbatim from the pull request\n\n----- begin comment %s -----\n' \
+      "$((i + 1))" "$n" "$fence"
+    jq -r --argjson i "$i" '.[$i]' <<<"$picked"
+    printf -- '----- end comment %s -----\n' "$fence"
+    i=$((i + 1))
+  done
+}
+
 # Given --pr, every diff round is shown the evidence a diff cannot carry, as
 # information only (a run-mode round is shown none of it), bound to
 # the exact head under review (T-088): the head's SHA, the required check's
@@ -425,6 +494,15 @@ head_evidence() {
 # same one (T-113). The patch-id comes from plumbing, which reads no user
 # configuration, with renames off, exactly as fm-gate.sh takes it.
 R_HEAD="$(git rev-parse --verify -q "$BRANCH^{commit}")" || R_HEAD=''
+# the head pinned is the one shown to be the pull request's, or the round
+# does not start: the branch can move in between, by another round's
+# fast-forward or a worker's save
+if [ -n "$SYNCED_HEAD" ] && [ "$R_HEAD" != "$SYNCED_HEAD" ]; then
+  echo "fm-review: $BRANCH moved from $SYNCED_HEAD to ${R_HEAD:-no commit} after it was checked against origin's; no round is run" >&2
+  stale_head "review round $ROUND refused a head that is not the pull request's" \
+             "第 $ROUND 輪審核拒絕了不是 PR 的 head"
+  exit 76
+fi
 R_BASE=''; R_PATCH=''; R_FILES=''
 if [ -n "$R_HEAD" ] && R_BASE="$(git merge-base "$BASE" "$R_HEAD" 2>/dev/null)"; then
   R_PATCH="$(git diff-tree -r -p --no-renames "$R_BASE" "$R_HEAD" 2>/dev/null | git patch-id --stable | cut -d' ' -f1)"
@@ -452,6 +530,7 @@ prompt="$work/prompt.md"
   elif [ "$ROUND" -ge 3 ]; then
     printf '\nThis is round three or later. If the worker has posted ASK-PASS-CRITERIA, answer with the complete numbered list and then post CRITERIA-COMPLETE:%s.\n' "$TASK"
   fi
+  [ -z "$PR" ] || worker_reports
   # A run-mode reviewer judges the head by running it, so it is shown no CI
   # and no gates and fetches nothing from GitHub for them: both are
   # firstmate's merge gate, never a review criterion (captain, 2026-09-25).
@@ -665,6 +744,35 @@ fi
 # the script's record of what was reviewed goes last, after the reviewer's
 # words, so it is the one gate 7 reads whatever the reviewer quoted above it
 verdict="${verdict%"${verdict##*[![:space:]]}"}$(reviewed_line "$decided")"
+
+# A verdict counts only for the head it judged, and only from a round that
+# is still wanted (T-107): a T-104 reviewer posted on a head the pull request
+# had left. A round `fm.sh stop` stopped, or whose head moved here or on
+# origin while it ran, posts nothing and emits no verdict; what the reviewer
+# said is kept under state/reviews/ for whoever wants to read it.
+# The question is the one asked before the round, by the same rule in
+# fm-herdr.py, which here moves nothing: the head that stood then must stand
+# now, locally and on origin, and an origin that cannot be read withholds.
+head_moved() {   # says why and succeeds when the head judged is no longer the pull request's
+  python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" sync-head fm-review "$REPO" "$BRANCH" \
+    --expect "$SYNCED_HEAD" >/dev/null && return 1
+  return 0
+}
+withheld() {   # withheld <exit> <outcome> <en> <tw>
+  local kept; kept="$(keep_log)"
+  printf '%s\n' "$verdict" > "$kept"
+  echo "fm-review: the verdict was not posted; it is kept at $kept" >&2
+  emit --review-outcome "$2" --type review_failed --en "$3" --tw "$4"
+  rm -rf "$work"; exit "$1"
+}
+if [ -n "${FM_RUN_DIR:-}" ] && [ -e "$FM_RUN_DIR/stopped.json" ]; then
+  echo "fm-review: this round was stopped by fm.sh stop" >&2
+  withheld 143 stopped "review round $ROUND was stopped; no verdict posted" "第 $ROUND 輪審核已停止，沒有貼出裁決"
+fi
+if head_moved; then
+  withheld 76 stale_head "review round $ROUND judged a head that is no longer the pull request's; no verdict posted" \
+    "第 $ROUND 輪審核判的 head 已不是 PR 的 head，沒有貼出裁決"
+fi
 if [ -n "$PR" ]; then
   $GH pr comment "$PR" --body "$verdict" >/dev/null 2>&1 || true
 fi

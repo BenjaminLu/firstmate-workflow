@@ -162,6 +162,22 @@ publish_wip_if_dirty() {
   dirty="$(git -C "$tree" status --porcelain -- . \
     ":(exclude).fm-prompt.md" ":(exclude).fm-say.md" 2>/dev/null || true)"
   [ -n "$dirty" ] || return 0
+  # A round `fm.sh stop` ended is not wanted on the branch (T-107): a
+  # stopped worker went on to publish edits made to a superseded spec. Its
+  # edits stay in the worktree, which the next round rescues to
+  # state/rescued/ before it starts.
+  if [ -n "${FM_RUN_DIR:-}" ] && [ -e "$FM_RUN_DIR/stopped.json" ]; then
+    echo "fm-worker: this round was stopped by fm.sh stop; its edits stay in $tree and nothing is published" >&2
+    return 0
+  fi
+  # Nor is a round refused because the branch is not the pull request's head
+  # (T-107). An interrupted round's edits were made on the old head, and a
+  # checkpoint would commit them onto it, leaving the branch diverged from
+  # origin's so that every later round is refused too.
+  if [ "${head_refused:-0}" = 1 ]; then
+    echo "fm-worker: this round did not start on the pull request's head; the edits stay in $tree and nothing is published" >&2
+    return 0
+  fi
   # An uncommitted rebuild is not a checkpoint: it sits detached on the
   # base, possibly with markers, and pushing it would replace the branch.
   # The branch ref was never moved, the next round rescues this worktree
@@ -351,6 +367,43 @@ emit_status "Adapter starting on $TASK" "開始在 $TASK 上跑 adapter"
 # session ended, someone pressed ctrl-c - leaves its files here
 # uncommitted, and this used to remove them before the next round could
 # see them. Tonight that nearly cost two finished tasks.
+#
+# The round starts from the pull request's head (T-107): `gh pr
+# update-branch` moves only the remote branch, and a round that read the
+# stale local one worked on a head the pull request no longer had.
+# fm-herdr.py holds the one rule the reviewer and the gate apply too: equal
+# stands, behind is fast-forwarded when the worktree holding the branch is
+# clean, and anything else is refused (76), naming both heads. It is asked
+# here first, while an interrupted round's edits are still in the worktree,
+# so work made on the old head is never carried onto a new one; a rebuilt
+# push this run has not settled yet is settled first, below, and asked then.
+synced_head=''
+sync_head() {
+  synced_head="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" sync-head fm-worker "$REPO" "$branch")" && return 0
+  head_refused=1
+  echo "fm-worker: $branch here is not the pull request's head; this round does not start" >&2
+  emit --type worker_crashed ${PR:+--pr "$PR"} --en "$branch here is not the pull request's head; the round did not start" \
+       --tw "這裡的 $branch 不是 PR 的 head，這一輪沒有開始"
+  exit 76
+}
+# The worktree is checked out by the branch's name, so it holds whatever the
+# branch points at by then. A branch moved after it was checked - a review
+# round's own fast-forward, a save from elsewhere - is not the head that was
+# shown to be the pull request's, and the round does not start on it.
+on_synced_head() {
+  local now
+  now="$(git -C "$tree" rev-parse -q --verify HEAD 2>/dev/null)"
+  { [ -z "$synced_head" ] || [ "$now" = "$synced_head" ]; } && return 0
+  head_refused=1
+  echo "fm-worker: $branch moved from $synced_head to ${now:-nothing} after it was checked against origin's; this round does not start" >&2
+  emit --type worker_crashed ${PR:+--pr "$PR"} --en "$branch moved after it was checked against origin's; the round did not start" \
+       --tw "$branch 在和 origin 比對之後又動了，這一輪沒有開始"
+  exit 76
+}
+if git show-ref --verify --quiet "refs/heads/$branch" \
+   && ! git rev-parse -q --verify "refs/fm-rebuilt/$branch" >/dev/null 2>&1; then
+  sync_head
+fi
 if [ -d "$tree" ] && [ -n "$(git -C "$tree" status --porcelain 2>/dev/null \
      -- . ":(exclude).fm-prompt.md" ":(exclude).fm-say.md")" ]; then
   rescue="$REPO/state/rescued/$TASK-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -372,11 +425,11 @@ round_two=0
 if git show-ref --verify --quiet "refs/heads/$branch"; then
   round_two=1
   # Origin's head may be ahead of the local branch: a round whose rebuild
-  # the lease refused, or a save from elsewhere. Fast-forward only - no `+`,
-  # so a local branch that has diverged or is ahead is never rewound - and
-  # a failure here leaves the local branch as it was.
-  git fetch -q origin "refs/heads/$branch:refs/heads/$branch" >/dev/null 2>&1 || true
-  git worktree add -q "$tree" "$branch"
+  # the lease refused, a save from elsewhere, an update-branch. Fast-forward
+  # only, through the same rule as above; a local branch that has diverged
+  # or is ahead is never rewound, and the round is refused instead.
+  sync_head
+  git worktree add -q "$tree" "$branch" && on_synced_head
 elif git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
   round_two=1
   git fetch -q origin "$branch:$branch" 2>/dev/null
@@ -1203,10 +1256,20 @@ spoke=0
 # request to find out - no permission, rate limited, locked, wrong
 # number. The run said where the text is and not what went wrong.
 say_err=''
+#
+# The comment ends with a line WORKER-REPORT:<task> (T-107): that is how
+# fm-review.sh finds the worker's report and hands it to the next reviewer,
+# fenced and labelled as claims to verify. The note itself is kept as the
+# worker wrote it; the marked copy is a scratch file.
 post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
+  local body
   say_err="$(scratch_new)" || say_err=''
   [ -z "$say_err" ] || scratch_add "$say_err"
-  if $GH pr comment "$2" --body-file "$1" >/dev/null 2>"${say_err:-/dev/null}" </dev/null; then
+  body="$(scratch_new)" || { echo "fm-worker: could not make a scratch file" >&2; return 0; }
+  scratch_add "$body"
+  { cat "$1"; [ -z "$(tail -c1 "$1")" ] || printf '\n'; printf '\nWORKER-REPORT:%s\n' "$TASK"; } > "$body" \
+    || { echo "fm-worker: could not mark the worker's note" >&2; return 0; }
+  if $GH pr comment "$2" --body-file "$body" >/dev/null 2>"${say_err:-/dev/null}" </dev/null; then
     spoke=1
     emit --type ask_pass_criteria --pr "$2" --en "the worker spoke on #$2" \
          --tw "工人在 #$2 上發言"

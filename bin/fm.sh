@@ -12,6 +12,7 @@
 #   fm.sh tasks                                    the task table, on demand
 #   fm.sh tasks split [ID]                         design/tasks.json -> one file each
 #   fm.sh roster [init] [--redraw]                 the installation's crew
+#   fm.sh stop <task>                              end the task's live crew runs
 #
 # The system defines its own behaviour in skills/, which makes editing a
 # skill the one thing it must not be able to do quietly. So self-update
@@ -105,6 +106,13 @@ usage: fm.sh <command> [options]
         send the browser to a one-time sign-in address (good once, for
         60 seconds). Only a tab opened this way can answer cards, move
         tasks or open files; any other tab is read-only.
+
+  stop <task> [--repo DIR]
+        End the task's live worker and reviewer runs and every process
+        they own, their process groups included: TERM, then KILL for
+        whatever is still there after FM_STOP_GRACE seconds (10). The
+        stop is recorded in each run's stopped.json and under
+        state/stops/, and a stopped reviewer posts no verdict.
 
   sync-skills <source-dir> [--name NAME] [--repo DIR]
         Import external skills into skills/vendor/, read-only. One way:
@@ -814,6 +822,25 @@ cmd_board() {
   python3 "$HERE/fm-herdr.py" board "$repo"
 }
 
+# A stopped round takes its crew with it (T-107). Killing a round's launcher
+# left its engine running: a worker kept editing to a superseded spec, and a
+# reviewer posted a verdict on a stale head. The work is bin/fm-herdr.py's,
+# which keeps the run records it reads.
+cmd_stop() {
+  local repo="$REPO" task=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo) need "$@"; repo="${2-}"; shift 2 ;;
+      -*) die "stop: unknown argument $1" ;;
+      *) [ -z "$task" ] || die "stop: one task at a time, got $task and $1"
+         task="$1"; shift ;;
+    esac
+  done
+  [ -n "$task" ] || die "stop: which task? fm.sh stop <task>"
+  repo="$(abs "$repo")" || die "no repo at $repo"
+  python3 "$HERE/fm-herdr.py" stop "$repo" "$task"
+}
+
 # =========================================================================
 cmd="${1:-help}"
 [ $# -eq 0 ] || shift
@@ -824,6 +851,7 @@ case "$cmd" in
   tasks)       cmd_tasks "$@" ;;
   roster)      cmd_roster "$@" ;;
   board)       cmd_board "$@" ;;
+  stop)        cmd_stop "$@" ;;
   help|-h|--help) usage ;;
   *) usage >&2; die "unknown command: $cmd" ;;
 esac
