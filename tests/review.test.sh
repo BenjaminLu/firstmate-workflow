@@ -1074,48 +1074,6 @@ assert_eq "2" "$?" "with the confined reviewer down, a run-mode round is an outa
 assert_fail "test -e '$dm/plain-ran'" "not a round handed to an engine that cannot be confined"
 restore_scripts
 
-# --- the round's permission policy (T-105), in either mode --------------------
-# The reviewer's adapter is handed the policy config.yaml resolves for a
-# reviewer, and a host the round's proxy refused is reported, never allowed.
-# The runner stands in for the proxy by writing to the file it is handed.
-stub_script "$rm_/bin/adapters/runner.sh" <<'M'
-#!/usr/bin/env bash
-# fm:review-run
-[ "$1" = "run" ] || exit 64
-cp "$FM_POLICY" "$FM_SEEN/policy.json"
-printf 'mode=%s\nnetwork=%s\n' "${FM_RUN_REVIEW:-}" "${FM_REVIEW_NETWORK:-}" > "$FM_SEEN/seen"
-printf 'pypi.evil.example\n' >> "$FM_POLICY_BLOCKED"
-printf 'APPROVE:T-Z\n' > "$3/v.txt"
-M
-for mode in diff run; do
-  printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: %s\npolicy:\n  reviewer:\n    network: registry.npmjs.org\n' \
-    "$mode" > "$rm_/config.yaml"
-  rm -f "$dm/policy.json"
-  outR="$(cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
-    bin/fm-review.sh --task T-Z --branch work --round 3 2>&1)"
-  assert_eq "0" "$?" "a $mode-mode round runs under the reviewer's policy"
-  assert_eq "reviewer" "$(jq -r .role "$dm/policy.json" 2>/dev/null)" "its adapter is handed the reviewer's policy ($mode)"
-  assert_eq '["registry.npmjs.org"]' "$(jq -c .network "$dm/policy.json" 2>/dev/null)" \
-    "with the registries the policy declares ($mode)"
-  assert_contains "$outR" "refused undeclared hosts: pypi.evil.example" "a host its proxy refused is reported ($mode)"
-done
-assert_eq "registry.npmjs.org" "$(seen_of network "$dm")" "a run-mode round's sandbox reaches the policy's registries"
-assert_eq "reviewer pypi.evil.example" \
-  "$(jq -r '"\(.role) \(.hosts | join(" "))"' "$rm_/state/policy/blocked-hosts.jsonl" 2>/dev/null | tail -1)" \
-  "and the refused host is recorded for firstmate's choice card"
-# loopback is never a registry, in either mode
-for mode in diff run; do
-  printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: %s\npolicy:\n  network: localhost\n' "$mode" > "$rm_/config.yaml"
-  : > "$dm/seen"
-  outL="$(cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
-    bin/fm-review.sh --task T-Z --branch work --round 3 2>&1)"
-  assert_eq "65" "$?" "a policy naming loopback is a configuration error ($mode)"
-  assert_contains "$outL" "may not reach loopback" "and says why ($mode)"
-  assert_eq "" "$(seen_of network "$dm")$(cat "$dm/seen")" "and no engine runs ($mode)"
-done
-restore_scripts
-printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n' > "$rm_/config.yaml"
-
 # a mode that is neither is a typo, not a quiet diff round
 printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: execute\n' > "$rm_/config.yaml"
 outQ="$(cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \

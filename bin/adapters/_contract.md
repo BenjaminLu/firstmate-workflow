@@ -6,60 +6,16 @@ an adapter is allowed to do exactly one thing.
 
 ```
 usage:    <vendor>.sh run <prompt-file> <worktree-dir> <log-file>
-          <vendor>.sh dimensions
-does:     hands the prompt to that vendor's CLI and lets it edit files in <worktree-dir>,
-          confined to the round's permission policy (FM_POLICY)
+does:     hands the prompt to that vendor's CLI and lets it edit files in <worktree-dir>
 must not: run git or gh
 must not: write anywhere outside <worktree-dir> and <log-file>
 exits:    0  done
           1  ran, but did not achieve it (the model gave up, the output is unfit)
-          2  vendor unavailable (CLI missing, not logged in, out of quota, network down),
-             or the round's policy has a dimension neither its flags nor the OS sandbox enforce,
-             or the OS sandbox failed before it started the CLI
+          2  vendor unavailable (CLI missing, not logged in, out of quota, network down)
 ```
 
 Only `2` falls back to the next vendor in `config.yaml`. A `1` is a normal
 failed attempt and goes to the gates and the reviewer like any other.
-
-**Every round runs under one policy fm owns (T-105).** `fm_policy` in
-`bin/fm-config.sh` resolves it per role from `config.yaml` (`policy:`, with
-a project's `projects.<name>.policy:` over it), and `fm-worker.sh` and
-`fm-review.sh` hand it over as `FM_POLICY`. The operator's own CLI settings
-are no part of it. It has eight dimensions: `write`, `read`, `network`,
-`sockets`, `env`, `repo-config`, `refuse`, `ulimit`. An adapter translates
-the policy into its CLI's own flags and says which dimensions those flags
-enforce (`<vendor>.sh dimensions` prints them); `bin/fm-sandbox.sh` runs the
-CLI inside an OS sandbox built from the same policy - `sandbox-exec` on
-macOS, `bwrap` with a network namespace of its own on Linux - which covers
-all eight on both. Before the CLI starts, `fm_adapter_confine` in `_lib.sh`
-checks the union: a dimension neither covers refuses the round with `2`, so
-the fallback chain moves on, and nothing degrades to an unconfined round.
-Reading is default-deny only in the OS sandbox, so no round runs on a host
-without one. An adapter reached without `FM_POLICY` takes the engine's own
-policy for its role, never none. `fm_adapter_policy` also gives the round a
-temp directory of its own, its `TMPDIR`, removed when the adapter exits; the
-caller's is never a root. When the sandbox fails before it starts the CLI -
-its proxy, its profile, the process count, the sandbox binary - the
-adapter's verdict is `2`, not the launcher's exit code read as a model
-giving up: `fm-sandbox.sh --started` writes `started` from inside the
-sandbox just before the CLI, and a round without it never ran.
-
-| vendor | Linux (bwrap) | macOS (sandbox-exec) |
-|---|---|---|
-| claude | T-066's settings for every round: `--restricted --strict-mcp-config --disable-slash-commands`, dontAsk, file rules on the worktree and the round's own TMPDIR, deny rules; its own sandbox off, the shell allowed under the OS one | the same |
-| codex | `--sandbox workspace-write` with its network switch on (the OS sandbox limits it), approval never, the scrub list as `shell_environment_policy.exclude`, no MCP servers, a `CODEX_HOME` of the round's own | `--sandbox danger-full-access` inside the outer one; the rest the same |
-| cursor-agent | `--trust --sandbox enabled` instead of `-f`, no `--approve-mcps` | `--trust --sandbox disabled` inside the outer one |
-| gemini | `--approval-mode yolo --extensions none`, no MCP server | the same |
-
-claude's, codex's and cursor-agent's own sandboxes are seatbelts on macOS,
-and a seatbelt cannot be applied inside another. claude's is off on Linux
-too: its commands would reach the network through claude's own proxy, which
-has no way out of the round's namespace and names no host it refuses.
-
-A host the round's proxy refused lands in `FM_POLICY_BLOCKED`; the calling
-script reports it and records it in `state/policy/blocked-hosts.jsonl`
-(design 13.1), and the crew never widens its own policy. `bin/fm-canary.sh` runs one real round per installed
-vendor and records, per vendor and version, whether each probe was blocked.
 
 **The exit code is not the verdict.** `cursor-agent` prints
 `Authentication required` and exits `0`; a vendor that is out of quota or off
@@ -69,7 +25,6 @@ reviewer would spend a round on nothing. So the verdict is decided by what
 the CLI *said*, in `_lib.sh`, in one place for every adapter:
 
 - the run's own output matches an unavailability signature -> `2`, whatever it exited
-- the OS sandbox never started the CLI (no `started` line) -> `2`
 - the exit code is one vendors use for unavailable (`2 4 41 69 75`) -> `2`
 - a non-zero exit -> `1`
 - exit `0` having said nothing at all -> `1`
