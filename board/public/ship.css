@@ -361,6 +361,11 @@
 /* the project's pennant: one colour per project, the same everywhere */
 .pennant{display:inline-block;width:9px;height:12px;margin-left:6px;vertical-align:-1px;
   background:var(--pc,#d9a441);clip-path:polygon(0 0,100% 50%,0 100%)}
+/* with several projects the pennant is also the tag's .pchip: keep its shape */
+.pennant.pchip{padding:0;border:0;border-radius:0;max-width:none;line-height:normal;overflow:visible}
+/* read by a screen reader, never drawn */
+.sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;overflow:hidden;
+  clip-path:inset(50%);white-space:nowrap}
 .pdot{display:inline-block;width:8px;height:8px;margin-right:6px;border-radius:2px;background:var(--pc,#d9a441)}
 .pchip[style*="--pc"]{border-color:var(--pc);color:var(--pc)}
 /* a tag off the deck's spacing - firstmate's, at the helm - stacks one line up */

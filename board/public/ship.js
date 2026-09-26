@@ -122,9 +122,17 @@ const SHIP = (() => {
   // pennant on a name tag, the roster's project column, a card's chip. Read
   // off the name, so it needs no registry and never changes between pages.
   const projectColor = (p) => `hsl(${hash(p) % 360} 62% 60%)`;
-  const pennant = (c, T) => c.project
-    ? `<i class="pennant" role="img" style="--pc:${projectColor(c.project)}" data-project="${esc(c.project)}"` +
-      ` aria-label="${esc(T("projectChip"))}: ${esc(c.project)}" title="${esc(c.project)}"></i>` : "";
+  // On a tag the pennant names its project to a screen reader, since a
+  // colour alone says nothing to one. With several projects live it is the
+  // tag's project chip (T-054) and holds the name as hidden text; a board of
+  // one project has no chip anywhere, so there the name is its label.
+  const pennant = (c, T) => !c.project ? ""
+    : `<i class="pennant${c.showProject ? " pchip" : ""}" style="--pc:${projectColor(c.project)}" data-project="${esc(c.project)}"` +
+      ` title="${esc(T("projectChip"))}: ${esc(c.project)}"` + (c.showProject
+        ? `><span class="sr">${esc(c.project)}</span></i>`
+        : ` role="img" aria-label="${esc(T("projectChip"))}: ${esc(c.project)}"></i>`);
+  // the card writes the project out beside it, so there it is only colour
+  const swatch = (c) => `<i class="pennant" style="--pc:${projectColor(c.project)}" aria-hidden="true"></i>`;
   // A quiet name tag over each head (T-116): the crew member's name and the
   // pennant of the project, and nothing else - no task, round, pull request
   // or activity, which crowded 24 tags into one another. Those are in the
@@ -146,7 +154,7 @@ const SHIP = (() => {
       `${open ? "" : " hidden"}><dl>` +
       line("cname", T("crewName"), esc(c.name)) +
       line("crole", T("crewRole"), esc(c.roleLabel)) +
-      line("cproject", T("projectChip"), c.project ? `${pennant(c, T)} ${esc(c.project)}` : unknown) +
+      line("cproject", T("projectChip"), c.project ? `${swatch(c)} ${esc(c.project)}` : unknown) +
       line("ctask", T("crewTask"), c.task
         ? `<b>${esc(c.task)}</b> ${linkPrs(esc(c.title || T("titleMissing")), c.pr_urls)}` : unknown) +
       line("cround", T("crewRound"), round) +
@@ -368,9 +376,10 @@ const SHIP = (() => {
     for (const c of crew) {
       const p = [...host.querySelectorAll('[data-crew]')].find(el=>el.dataset.crew===c.id);
       if (p) {
-        // the figure names its crew member; the card, which it describes
-        // and controls, carries every other field (T-116)
-        p.setAttribute('aria-label',`${c.name} · ${T('lane'+c.state[0].toUpperCase()+c.state.slice(1))}`); p.tabIndex=0;
+        // the figure names its crew member and what it is doing, to a
+        // screen reader only; the card, which it describes and controls,
+        // carries every other field (T-116)
+        p.setAttribute('aria-label',`${c.name} · ${T('lane'+c.state[0].toUpperCase()+c.state.slice(1))} · ${c.activity}`); p.tabIndex=0;
         p.setAttribute('aria-describedby',`crewcard-${c.id}`); p.setAttribute('aria-controls',`crewcard-${c.id}`);
         p.setAttribute('aria-haspopup','dialog'); p.setAttribute('aria-expanded',String(SHIP.openCard===c.id));
       }

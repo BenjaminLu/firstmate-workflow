@@ -1641,6 +1641,19 @@ const said = shira.replace(/<[^>]*>/g, "");
 if (said !== "shira") fail("the tag says more than the name: [" + said + "]");
 for (const extra of ["T-Q1", "#41", "Writing", "structured", "crewRound"]) if (shira.includes(extra)) fail("tag carries " + extra);
 if (tag("worker-mira-tq2-r465").replace(/<[^>]*>/g, "") !== "mira") fail("an old run is not named on its tag");
+// a board of one project has no .pchip (T-054); with two the pennant is the
+// tag's chip, naming its project in hidden text and drawing only the name
+if (/pchip/.test(h.innerHTML)) fail("a one-project board draws a project chip");
+const h3 = host(); SHIP.render(h3, state(["alpha", "beta"]), T, L);
+const tag2 = (id) => (h3.innerHTML.match(new RegExp(`<div class="bub[^"]*" data-bubble="${id}"[^>]*>([\\s\\S]*?)<div class="crewcard`)) || [])[1] || "";
+for (const [id, p, n] of [["worker-shira-tq1-r3b", "alpha", "shira"], ["worker-mira-tq2-r465", "beta", "mira"]]) {
+  const chips = tag2(id).match(/<i class="pennant pchip"[^>]*>[\s\S]*?<\/i>/g) || [];
+  if (chips.length !== 1) fail(`${id} has ${chips.length} project chips on its tag`);
+  if (chips[0].replace(/<[^>]*>/g, "") !== p || !/<span class="sr">/.test(chips[0])) fail(`${id} chip says [${chips[0]}]`);
+  if (tag2(id).replace(/<span class="sr">[^<]*<\/span>/g, "").replace(/<[^>]*>/g, "") !== n) fail(`${id} tag draws more than its name`);
+}
+const card2 = (h3.innerHTML.match(/<div class="crewcard" id="crewcard-worker-shira-tq1-r3b"[\s\S]*?<\/dl><\/div>/) || [])[0];
+if (/pchip/.test(card2)) fail("the card carries a second project chip inside the bubble");
 // the card: one labelled line per field, each on its own
 const card = (h.innerHTML.match(/<div class="crewcard" id="crewcard-worker-shira-tq1-r3b"[\s\S]*?<\/dl><\/div>/) || [])[0];
 if (!card) fail("no card for shira");
