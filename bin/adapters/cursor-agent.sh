@@ -79,9 +79,16 @@ fm_adapter_policy
 sandbox=enabled; [ "${FM_OUTER_OS:-}" != darwin ] || sandbox=disabled
 read -r -a native <<<"$(cursor_native)"
 fm_adapter_confine cursor-agent "$tree" "${native[@]}"
-# where fm-sandbox.sh puts the login file's copy, when the login is a file
-mkdir -p "$FM_ROUND_TMP/cursor-config" || exit 70
-export XDG_CONFIG_HOME="$FM_ROUND_TMP/cursor-config"
+# where fm-sandbox.sh puts the login file's copy, when the login is a file.
+# Not on macOS, where the login is the keychain item and nothing is copied:
+# there a config home of the round's own would only move cursor-agent off
+# ~/.cursor/cli-config.json, which says who is logged in. The canary on
+# 2026-09-26 saw it report `Authentication required` on macOS with it
+# moved; whether that was the cause, the next canary says.
+if [ "${FM_OUTER_OS:-$(uname -s | tr '[:upper:]' '[:lower:]')}" != darwin ]; then
+  mkdir -p "$FM_ROUND_TMP/cursor-config" || exit 70
+  export XDG_CONFIG_HOME="$FM_ROUND_TMP/cursor-config"
+fi
 if [ -n "${FM_ATTEMPT_DIR:-}" ]; then
   ( cd "$tree" && "${FM_LAUNCH[@]}" cursor-agent -p --trust --sandbox "$sandbox" --output-format json ${FM_ADAPTER_ARGS:-} < "$prompt" ) 2>&1 | tee -a "$log"
   fm_adapter_pipeline_status "${PIPESTATUS[@]}"

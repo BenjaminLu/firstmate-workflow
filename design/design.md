@@ -2006,8 +2006,18 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
   every suite that starts a server needs, but never the board's port
   (`FM_PORT`, 4173) nor any port that was listening when the round started.
   On macOS the profile says so port by port, and if the listeners cannot be
-  read no loopback port but the proxy is reachable; on Linux the round's
-  loopback is its own network namespace's, where no host listener is;
+  read no loopback port but the proxy is reachable. A per-port denial is a
+  rule the kernel applies, not one fm can read back, and the canary on
+  2026-09-26 found a claude round reaching the live board through a profile
+  that denied its port. So before every macOS round `fm-sandbox.sh` tries
+  the profile: behind it, it connects to each port that was listening but
+  the proxy's. A connection that gets through means the round's would, and
+  the round is given a profile with no loopback but the proxy instead - its
+  own servers go with it, and it says so on stderr and in the round's log; a
+  profile that lets one through even then refuses the round (70). A check
+  that could not run behind the profile tightens it the same way. On Linux
+  the round's loopback is its own network namespace's, where no host
+  listener is;
 - secrets a system service hands out: on macOS the keychain (gh's token,
   git's osxkeychain helper, every saved password, and the vendors' logins),
   the pasteboard, the Internet Accounts and Apple ID stores, Kerberos
@@ -2086,7 +2096,7 @@ in `bin/fm-config.sh`:
 | vendor | its login, read by fm outside the round | handed in as | what of its own the round opens | temp | mach services |
 |---|---|---|---|---|---|
 | claude | macOS: keychain item `Claude Code-credentials`, account the operator's user; elsewhere `~/.claude/.credentials.json`. The field `claudeAiOauth.accessToken`, refused past `claudeAiOauth.expiresAt`. A `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` already in the operator's environment is used as is, and nothing is read | `CLAUDE_CODE_OAUTH_TOKEN`, exported, not on a command line | nothing of `~/.claude` or `~/.claude.json`: its config directory is one of the round's own (`CLAUDE_CONFIG_DIR`, in the round's temp directory), holding its sessions, todos, caches and `.claude.json` | the round's own (`CLAUDE_CODE_TMPDIR`); and `/tmp/claude-<uid>`, read and written, on macOS only, because claude opens it whatever `TMPDIR` says (T-105's EPERM). On Linux the round's `/tmp` is its own, so the directory is made afresh there | none |
-| cursor-agent | macOS: keychain item `cursor-access-token`, account `cursor-user` (what `agent login` stores); elsewhere `~/.config/cursor/auth.json`, field `accessToken`, which holds `refreshToken` too. A `CURSOR_API_KEY` already set is used as is | macOS: served under its own service and account by a stand-in for `security(1)` first on the round's `PATH`, which says every other item is not there (exit 44, as `security` does) and lets a write go without touching the keychain; elsewhere a copy of the file with `refreshToken` emptied, at `cursor/auth.json` under an `XDG_CONFIG_HOME` of the round's own | nothing of `~/.config/cursor`; `~/.cursor/chats`, `~/.cursor/projects`, `~/.cursor/cli-config.json`, `~/.cursor/statsig-cache.json` read and written | the round's own | none |
+| cursor-agent | macOS: keychain item `cursor-access-token`, account `cursor-user` (what `agent login` stores); elsewhere `~/.config/cursor/auth.json`, field `accessToken`, which holds `refreshToken` too. A `CURSOR_API_KEY` already set is used as is | macOS: served under its own service and account by a stand-in for `security(1)` first on the round's `PATH`, which says every other item is not there (exit 44, as `security` does) and lets a write go without touching the keychain; elsewhere a copy of the file with `refreshToken` emptied, at `cursor/auth.json` under an `XDG_CONFIG_HOME` of the round's own. On macOS it is given no `XDG_CONFIG_HOME` of fm's, which could move it off `~/.cursor/cli-config.json`, where it records who is logged in | nothing of `~/.config/cursor`; `~/.cursor/chats`, `~/.cursor/projects`, `~/.cursor/cli-config.json`, `~/.cursor/statsig-cache.json` read and written | the round's own | none |
 | codex | `~/.codex/auth.json`, field `tokens.access_token` or `OPENAI_API_KEY`; the file holds `tokens.refresh_token` too. A `CODEX_API_KEY` already set is used as is | a copy of the file with `tokens.refresh_token` emptied, as `auth.json` in the round's own `CODEX_HOME`, so no `config.toml` or profile of the operator's is read either | nothing of `~/.codex/auth.json`; `~/.codex/sessions`, `log`, `history.jsonl`, `version.json`, `models_cache.json` read and written | the round's own | none |
 | gemini | `~/.gemini/oauth_creds.json`, field `access_token`, refused past `expiry_date`; the file holds `refresh_token` too. A `GEMINI_API_KEY` or `GOOGLE_API_KEY` already set is used as is | a copy of the file with `refresh_token` emptied, at `.gemini/oauth_creds.json` under a `HOME` (and `GEMINI_CLI_HOME`) of the round's own, with `GOOGLE_GENAI_USE_GCA=true` when no API key is set. The commands gemini runs inherit that `HOME` | nothing of `~/.gemini/oauth_creds.json`; `~/.gemini/tmp`, `history`, `google_accounts.json`, `installation_id`, `user_id` read and written | the round's own | none |
 
@@ -2112,7 +2122,12 @@ proves: that these are the service names each CLI's login writes today,
 and that cursor-agent asks for its token through `security` on its `PATH`.
 A CLI that calls the keychain API directly, or by an absolute path, is not
 served, cannot sign in, and the canary reports it `authenticated=no`; the
-fix is to this table, not to the keychain rule.
+fix is to this table, not to the keychain rule. So after every round with a
+stand-in, `fm-sandbox.sh` says on stderr, into the round's log, which items
+it was asked for - service and account, never the answer - or that it was
+never asked, which is how the canary tells a CLI that bypassed it from one
+that asked and was refused. The round can write that record, so it is a
+clue for the operator, never an input to a decision.
 
 What stays unreachable, whatever the vendor: gh's token (keychain denied,
 `~/.config/gh` never readable, `GH_TOKEN` and `GITHUB_TOKEN` scrubbed, and
@@ -2218,7 +2233,8 @@ accepted as it stands until a later task closes it. On macOS a loopback
 port first opened after the round started is reachable by the round:
 another round's dev server, a suite's server, or a board restarted on
 another port than `FM_PORT`. The profile denies only the board's port and
-the ports that were listening when the round started, because it is written
+the ports that were listening when the round started (and the check above
+tries only those), because it is written
 before the round runs and cannot tell a port the round opens itself from
 one someone else opens later. On Linux the round's loopback is its own
 namespace's, so the gap is macOS's alone. On macOS

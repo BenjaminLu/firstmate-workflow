@@ -508,13 +508,14 @@ writable_in() {   # writable_in <os> <path> -> 0 when the round may write <path>
   done <<< "$roots"
   return 1
 }
-round_locations() {   # round_locations <vendor> -> the variables naming a location its CLI is handed
+round_locations() {   # round_locations <vendor> <os> -> the variables naming a location its CLI is handed
   printf '%s\n' TMPDIR TMP TEMP XDG_CACHE_HOME BUN_INSTALL_CACHE_DIR PLAYWRIGHT_BROWSERS_PATH \
     npm_config_cache PIP_CACHE_DIR GOCACHE GOMODCACHE
   case "$1" in
     claude) printf '%s\n' CLAUDE_CONFIG_DIR CLAUDE_CODE_TMPDIR ;;
     codex) printf '%s\n' CODEX_HOME ;;
-    cursor-agent) printf '%s\n' XDG_CONFIG_HOME ;;
+    # on macOS its login is the keychain item and its config home stays its own
+    cursor-agent) [ "$2" = darwin ] || printf '%s\n' XDG_CONFIG_HOME ;;
     gemini) printf '%s\n' HOME GEMINI_CLI_HOME ;;
   esac
 }
@@ -545,7 +546,13 @@ for loc_role in worker run-review; do
         [ -n "$loc_p" ] || continue
         writable_in "$loc_os" "$loc_p"
         assert_eq "0" "$?" "and may write it: $loc_n=$loc_p ($loc_at)"
-      done < <(round_locations "$v")
+      done < <(round_locations "$v" "$loc_os")
+      # cursor-agent on macOS keeps ~/.cursor/cli-config.json, which says who
+      # is logged in: no config home of fm's moves it off (T-117, canary)
+      if [ "$v" = cursor-agent ] && [ "$loc_os" = darwin ]; then
+        assert_eq "${XDG_CONFIG_HOME:-}" "$(sed -n 's/^XDG_CONFIG_HOME=//p' <<< "$loc_env")" \
+          "cursor-agent on macOS is handed no XDG_CONFIG_HOME of fm's ($loc_at)"
+      fi
       # and every other directory the round is handed that the caller did
       # not already have: a location added later is checked too
       while IFS='=' read -r loc_n loc_p; do

@@ -58,7 +58,7 @@ codex's `auth.json`, gemini's `oauth_creds.json`, cursor-agent's off macOS -
 is never read in place, since each holds a refresh token: fm writes a copy
 with the refresh token emptied into the round's temp directory, and the
 adapter points its CLI there (`CODEX_HOME`, gemini's `HOME`,
-`XDG_CONFIG_HOME`). The keychain's mach
+cursor-agent's `XDG_CONFIG_HOME`, set off macOS only). The keychain's mach
 services stay denied to every round. No login refuses the round with `77`,
 which the adapter reads as unavailable. Design 13.1 names each vendor's
 path, item and service, and why.

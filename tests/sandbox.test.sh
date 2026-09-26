@@ -520,6 +520,90 @@ github.com" "$(cat "$t/blocked")" "and names each refused host once, for the rou
 port="$(sed -n 's/.*localhost:\([0-9]*\).*/\1/p' "$t/profile.sb")"
 assert_matches "$port" '^[0-9]+$' "the profile lets the round reach only that proxy's port"
 
+# --- the profile's loopback denials are tried before the round (T-117) ------
+# The canary on 2026-09-26 found a claude round on macOS reaching the live
+# board on 127.0.0.1:4173 through a profile that denied the port. So before
+# a round fm-sandbox connects, behind the round's own profile, to every port
+# that was listening but the proxy's. A connection that gets through means
+# the round's would: it drops to a profile with no loopback but the proxy,
+# and refuses the round if even that one lets it through. The stand-in
+# plays the kernel: LO_MODE=holds honours the per-port denials, tight only
+# the profile without loopback, broken never runs the check, open none.
+lsn="$t/listener.port"; rm -f "$lsn"
+python3 - "$lsn" >/dev/null 2>&1 <<'PY' &
+import os, socket, sys
+s = socket.socket(); s.bind(('127.0.0.1', 0)); s.listen(8)
+with open(sys.argv[1] + '.tmp', 'w') as f:
+    f.write(str(s.getsockname()[1]))
+os.rename(sys.argv[1] + '.tmp', sys.argv[1])
+while True:
+    c, _ = s.accept(); c.close()
+PY
+lsn_pid=$!
+i=0; while [ ! -s "$lsn" ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
+lport="$(cat "$lsn" 2>/dev/null)"
+assert_matches "$lport" '^[0-9]+$' "a listener older than the round is up"
+mkdir -p "$t/lobin"; cp "$t/psbin/ps" "$t/lobin/ps"
+cat > "$t/lobin/netstat" <<S
+#!/bin/sh
+printf 'Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)\n'
+printf 'tcp4       0      0  127.0.0.1.$lport         *.*                    LISTEN\n'
+S
+chmod +x "$t/lobin/netstat"
+cat > "$t/bin/sandbox-exec-lo" <<S
+#!/usr/bin/env bash
+[ "\$1" = -f ] || exit 99
+prof="\$2"; shift 2
+while IFS= read -r l; do printf '%s\n' "\$l"; done < "\$prof" > "$t/lo.profile.sb"
+case " \$* " in
+  *" fm-loopback-check "*)
+    printf '%s\n' "\$*" >> "$t/lo.checks"
+    wild=0; grep -qF '(allow network-outbound (remote ip "localhost:*"))' "\$prof" && wild=1
+    case "\${LO_MODE:-open}:\$wild" in
+      holds:*|tight:0) echo checked; exit 0 ;;
+      broken:*) exit 1 ;;
+    esac ;;
+esac
+exec "\$@"
+S
+printf '#!/bin/sh\nexit 7\n' > "$t/seven.sh"
+chmod +x "$t/bin/sandbox-exec-lo" "$t/seven.sh"
+pol worker 'vendor: mock
+policy:
+  procs: 1000000
+'
+lo_round() {   # lo_round <mode> -> exit code; stderr in $t/lo.err
+  rm -f "$t/lo.profile.sb" "$t/lo.checks"
+  LO_MODE="$1" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec-lo" PATH="$t/lobin:$PATH" \
+    "$SB" run --policy="$t/worker.json" --root="$root" --ctl="$t/ctl" -- "$t/seven.sh" </dev/null 2>"$t/lo.err"
+  echo $?
+}
+wild='(allow network-outbound (remote ip "localhost:*"))'
+assert_eq "7" "$(lo_round holds)" "denials that hold: the round runs"
+assert_contains "$(cat "$t/lo.checks" 2>/dev/null)" "fm-loopback-check $lport" \
+  "after the profile was tried on the port that was listening"
+assert_contains "$(cat "$t/lo.profile.sb" 2>/dev/null)" "$wild" "and it keeps loopback ports of its own"
+lo_proxy="$(sed -n 's/.*allow network-outbound (remote ip "localhost:\([0-9][0-9]*\)").*/\1/p' "$t/lo.profile.sb" | tail -1)"
+assert_lacks " $(cat "$t/lo.checks" 2>/dev/null) " " $lo_proxy " "the round's own proxy is not tried: it is meant to be reached"
+assert_eq "7" "$(lo_round tight)" "denials that do not hold: the round still runs"
+assert_contains "$(cat "$t/lo.err")" "do not hold" "and says so"
+assert_contains "$(cat "$t/lo.err")" "$lport" "naming the port it could reach"
+assert_lacks "$(cat "$t/lo.profile.sb" 2>/dev/null)" "$wild" "behind a profile with no loopback of its own"
+assert_contains "$(cat "$t/lo.profile.sb" 2>/dev/null)" '(allow network-outbound (remote ip "localhost:' \
+  "but its proxy"
+assert_eq "2" "$(grep -c "fm-loopback-check" "$t/lo.checks" 2>/dev/null)" "which was tried as well"
+assert_eq "70" "$(lo_round open)" "a profile that lets a listener through even without loopback refuses the round"
+assert_contains "$(cat "$t/lo.err")" "refusing the round" "and says so"
+assert_eq "7" "$(lo_round broken)" "a check that could not run behind the profile: the round runs"
+assert_contains "$(cat "$t/lo.err")" "cannot try the profile's loopback denials" "and says so"
+assert_lacks "$(cat "$t/lo.profile.sb" 2>/dev/null)" "$wild" "with no loopback but its proxy"
+kill "$lsn_pid" 2>/dev/null; wait "$lsn_pid" 2>/dev/null
+# the policy the cases below were written against
+pol worker 'policy:
+  procs: 1000000
+  cpu: 90
+'
+
 # Linux: the same scrub, behind bwrap, in a network namespace of the
 # round's own whose only way out is the same proxy - so a refused host is
 # named there too. The stand-in shares the host's network; what it proves
@@ -663,6 +747,16 @@ assert_contains "$(cat "$t/profile.sb" 2>/dev/null)" "(allow file-read* (subpath
 assert_contains "$(grep '^(deny mach-lookup' "$t/profile.sb" 2>/dev/null | grep SecurityServer)" \
   '(global-name "com.apple.SecurityServer")' "and still not the keychain"
 assert_eq "" "$(ls -A "$t/ctl" 2>/dev/null)" "and the served item is removed with the round"
+# After the round fm-sandbox says which items the vendor asked the stand-in
+# for, by name and never by value: on 2026-09-26 cursor-agent said it was not
+# logged in with the stand-in on its PATH, and nothing said whether it asked.
+assert_contains "$(cat "$t/login.err")" "the keychain stand-in was asked for: " "which items it was asked for is said"
+assert_contains "$(cat "$t/login.err")" "find-generic-password cursor-access-token/cursor-user" "by service and account"
+assert_lacks "$(cat "$t/login.err")" "at-cursor" "never with what it answered"
+assert_eq "0" "$(kc run darwin cursor-agent)" "a cursor-agent round that never asks still runs"
+assert_contains "$(cat "$t/login.err")" "the keychain stand-in was never asked" "and fm says it never asked"
+assert_eq "0" "$(kc run darwin claude)" "claude's login is a variable, not the stand-in"
+assert_lacks "$(cat "$t/login.err")" "keychain stand-in" "so nothing is said of one"
 # a login already in the operator's environment is used as it is
 assert_eq "0" "$(kc run darwin claude CLAUDE_CODE_OAUTH_TOKEN=from-env)" "a CLAUDE_CODE_OAUTH_TOKEN already set is used"
 assert_contains "$(cat "$t/login.out" 2>/dev/null)" "token=from-env" "as it is"

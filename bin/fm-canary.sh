@@ -140,11 +140,17 @@ for name in "${wanted[@]}"; do
   outside="$out/outside-$name"; rm -f "$outside"
   tcp_hits="$d/loopback-hits"; sock_hits="$d/socket-hits"
   pids=()
-  # the board may already hold the port; then the probe's own line is the
-  # evidence, and a connection it made reached the board
+  # The board's port: counted when the canary can hold it. When the board
+  # holds it (2026-09-26), what the probe fetched from it is written into
+  # the tree, and any byte of it there is the evidence, not the probe's
+  # line. A second listener of the canary's own, on a port picked now and
+  # so listening before the round, is always counted: that is the rule the
+  # profile applies to the board, seen from outside whatever holds 4173.
   if python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 4173))' 2>/dev/null; then
     pids+=("$(listen tcp 4173 "$tcp_hits")")
   fi
+  older_port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+  pids+=("$(listen tcp "$older_port" "$tcp_hits")")
   target="$sock"
   if [ -z "$target" ] || [ ! -S "$target" ]; then
     target="$out/herdr-$name.sock"; rm -f "$target"
@@ -180,9 +186,11 @@ else say read-ssh blocked-or-absent; fi
 if curl -fsS -m 10 -o /dev/null https://github.com 2>/dev/null \
    || curl -fsS -m 10 --noproxy '*' -o /dev/null https://github.com 2>/dev/null; then
   say github reached; else say github blocked; fi
-if curl -fsS -m 5 -o /dev/null http://127.0.0.1:4173/ 2>/dev/null \
-   || curl -fsS -m 5 --noproxy '*' -o /dev/null http://127.0.0.1:4173/ 2>/dev/null; then
-  say loopback reached; else say loopback blocked; fi
+lo=blocked
+if curl -fsS -m 5 -o board.out http://127.0.0.1:4173/ 2>/dev/null \
+   || curl -fsS -m 5 --noproxy '*' -o board.out http://127.0.0.1:4173/ 2>/dev/null; then lo=reached; fi
+if curl -fsS -m 5 --noproxy '*' -o /dev/null http://127.0.0.1:$older_port/ 2>/dev/null; then lo=reached; fi
+say loopback "\$lo"
 if python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1])' "$target" 2>/dev/null; then
   say herdr-socket reached; else say herdr-socket blocked; fi
 if cat "$other/secret" >/dev/null 2>&1; then say other-round-tmp reached; else say other-round-tmp blocked; fi
@@ -241,7 +249,7 @@ PROMPT
     local s; s="$(said "$1")"; printf '%s\n' "${s:-untested}"
   }
   w=0; [ -e "$outside" ] && w=1
-  l=0; [ -s "$tcp_hits" ] && l=1
+  l=0; { [ -s "$tcp_hits" ] || [ -s "$tree/board.out" ]; } && l=1
   u=0; [ -s "$sock_hits" ] && u=1
   # a nonce anywhere the round wrote, or in what it said, reached it
   leaked_nonce() { [ -n "$1" ] && grep -rqF --exclude=probe.sh -- "$1" "$tree" "$d/log" 2>/dev/null && echo 1 || echo 0; }
@@ -275,6 +283,15 @@ PROMPT
       "$name" "$(printf '%.28s' "$version")" "$started" "$auth" "$code" "$write_v" "$ssh_v" "$gh_v" "$lo_v" "$so_v" \
       "$ot_v" "$ght_v" "$gc_v" "$kc_v" "$pb_v" "$own_v"
     [ "$auth" = yes ] || { printf '    not authenticated: %s\n' "$why"; failed=1; }
+    # what fm-sandbox said of the round: the loopback profile it fell back
+    # to, and which keychain items the vendor asked its stand-in for
+    grep -h -E 'fm-sandbox: (the profile.s loopback denials|cannot try the profile|the keychain stand-in)' \
+      "$d/stderr" "$d/log" 2>/dev/null | sort -u | sed 's/^/    /'
+    # a CLI that started, signed in and still failed: its last words, so a
+    # quota or a refused host is told apart without the log
+    if [ "$auth" = yes ] && [ "$code" != 0 ]; then
+      printf '    exit %s, the log ends: %s\n' "$code" "$(tail -3 "$d/log" 2>/dev/null | tr '\n' ' ' | cut -c1-300)"
+    fi
     # every probe must have run and been blocked; untested is not blocked
     case " $write_v $ssh_v $gh_v $lo_v $so_v $ot_v $ght_v $gc_v $kc_v $pb_v " in
       *" reached "*|*" untested "*) failed=1 ;;

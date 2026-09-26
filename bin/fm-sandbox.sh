@@ -55,7 +55,9 @@
 # registry can be allowed at all (a profile names addresses, not hosts), and
 # which records every host it refuses to --blocked so the round can report
 # it; loopback only on ports the round opens itself - never the board's
-# (FM_PORT, 4173) nor one that was listening when the round started;
+# (FM_PORT, 4173) nor one that was listening when the round started, which
+# `run` tries behind the profile before the round and tightens to the proxy
+# alone when the kernel lets one through (design 13.1);
 # LaunchServices refused, so no browser opens; and no mach service that
 # hands out a secret (the keychain, the pasteboard, the account stores),
 # which no file rule can cover. Linux runs bwrap, which mounts only what the
@@ -132,6 +134,8 @@ SECRET_SERVICES = ('com.apple.SecurityServer', r'^com\.apple\.securityd', r'^com
                    'com.apple.GSSCred', 'org.h5l.kcm', 'com.apple.CoreAuthentication.daemon')
 # what security(1) says when an item is not there, and exits with
 NOT_FOUND = 'security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.'
+# in the round's own temp directory: the items the keychain stand-in was asked for
+ASKED = '.fm-keychain-asked'
 
 
 def load(path):
@@ -478,6 +482,9 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+# which items the round asked for, never what it was answered: fm-sandbox
+# says so after the round, so a vendor that never asks here is seen
+printf '%%s %%s/%%s\n' "$cmd" "$svc" "$acct" >> %(asked)s 2>/dev/null
 case "$cmd" in
   find-generic-password) ;;
   add-generic-password|delete-generic-password) exit 0 ;;
@@ -544,7 +551,8 @@ def login(p, vendor, os_, where, sandboxed, home):
         cases = "  %s|%s) f=%s ;;" % (key, bare, sh_quote(path))
         shim = os.path.join(where, 'bin', 'security')
         with open(shim, 'w') as f:
-            f.write(SHIM % dict(cases=cases, not_found=NOT_FOUND))
+            f.write(SHIM % dict(cases=cases, not_found=NOT_FOUND,
+                                asked=sh_quote(os.path.join(home, ASKED))))
         os.chmod(shim, 0o700)
 
 
@@ -745,6 +753,39 @@ PY
 # shellcheck disable=SC2016  # expanded by the inner shell
 SHIM='printf "started\n" >&4; exec 4>&-; exec "$@"'
 
+# Run behind the round's own profile before the round (macOS): it says
+# `checked` once it is running there, then each of the ports it is given
+# that it could connect to on loopback.
+#   python3 -c "$LOOP_PY" fm-loopback-check <port>...
+IFS= read -r -d '' LOOP_PY <<'PY'
+import socket, sys
+print('checked', flush=True)
+for port in sys.argv[2:]:
+    for family, address in ((socket.AF_INET, '127.0.0.1'), (socket.AF_INET6, '::1')):
+        try:
+            s = socket.socket(family, socket.SOCK_STREAM)
+        except OSError:
+            continue
+        s.settimeout(2)
+        try:
+            s.connect((address, int(port)))
+        except OSError:
+            continue
+        finally:
+            s.close()
+        print(port, flush=True)
+        break
+PY
+
+# loopback_reached <port>...: the ports a command behind $work/profile could
+# connect to, comma-separated; status 1 when the check never ran behind it
+loopback_reached() {
+  local got
+  got="$("$tool" -f "$work/profile" "$(command -v python3)" -c "$LOOP_PY" fm-loopback-check "$@" 2>/dev/null)"
+  [ "${got%%$'\n'*}" = checked ] || return 1
+  printf '%s\n' "$got" | sed 1d | paste -sd, -
+}
+
 # --- the option loop: every flag is --name=value --------------------------
 cmd="${1-}"; [ $# -gt 0 ] && shift
 policy=''; root=''; vendor=''; blocked=''; port=''; tmp=''; listening=''; started=''; ctl=''; login_dir=''
@@ -938,8 +979,38 @@ if [ "$cmd" = run ]; then
       say "cannot list loopback listeners; the round reaches no loopback port but its proxy"
     fi
   fi
-  python3 -c "$SB_PY" profile "$policy" "$os" "$root" "$tmp" "$vendor" "$port" "$listening" "$sock" \
-    "$login_dir" ${writes[@]+"${writes[@]}"} > "$work/profile" || exit 65
+  make_profile() {
+    python3 -c "$SB_PY" profile "$policy" "$os" "$root" "$tmp" "$vendor" "$port" "$listening" "$sock" \
+      "$login_dir" ${writes[@]+"${writes[@]}"} > "$work/profile" || exit 65
+  }
+  make_profile
+  # The profile's per-port loopback denials are a rule the kernel applies,
+  # not one fm can read back, and the canary on 2026-09-26 found a round
+  # reaching the board through them. So the profile is tried before the
+  # round, on every port that was listening but the proxy's: a connection
+  # the profile lets through means the round would get it too. Then the
+  # round is given no loopback but its proxy - its own servers go with it,
+  # which it says - and a profile that still lets one through refuses the
+  # round. A check that could not run inside the profile tightens it too.
+  if [ "$os" = darwin ] && [ "$listening" != unknown ]; then
+    check=()
+    IFS=, read -r -a listed_ports <<< "$listening"
+    for n in ${listed_ports[@]+"${listed_ports[@]}"}; do [ "$n" = "$port" ] || check+=("$n"); done
+    if [ "${#check[@]}" -gt 0 ]; then
+      board="${FM_PORT:-4173}"
+      if ! reached="$(loopback_reached "${check[@]}")"; then
+        say "cannot try the profile's loopback denials on this host; the round reaches no loopback port but its proxy, so a server it starts itself is out of its reach too"
+        listening=unknown; make_profile
+      elif [ -n "$reached" ]; then
+        say "the profile's loopback denials do not hold on this host: a round could reach port(s) $reached, which were listening before it (the board's is $board); the round reaches no loopback port but its proxy, so a server it starts itself is out of its reach too"
+        listening=unknown; make_profile
+        if reached="$(loopback_reached "${check[@]}")" && [ -n "$reached" ]; then
+          say "and even that profile lets a round reach port(s) $reached; refusing the round"
+          exit 70
+        fi
+      fi
+    fi
+  fi
   if [ "$os" = darwin ]; then
     launcher=("$tool" -f "$work/profile")
   else
@@ -984,4 +1055,17 @@ shim=()
   exec ${launcher[@]+"${launcher[@]}"} ${inner[@]+"${inner[@]}"} "${scrub[@]}" ${shim[@]+"${shim[@]}"} "$@" <&3
 )
 rc=$?
+# What the vendor asked the keychain stand-in for: the item names only. A
+# vendor that never asked reads its login some other way - security(1) by
+# its absolute path, or the keychain API - and cannot sign in inside the
+# round; the canary shows this line. The round can write the file, so it
+# is a clue for the operator, never a decision.
+if [ -n "$login_dir" ]; then
+  if [ -s "$tmp/.fm-keychain-asked" ]; then
+    say "the keychain stand-in was asked for: $(sort -u "$tmp/.fm-keychain-asked" | paste -sd';' -)"
+  else
+    say "the keychain stand-in was never asked: $vendor did not look for its item through security(1) on its PATH"
+  fi
+  rm -f "$tmp/.fm-keychain-asked"
+fi
 exit "$rc"
