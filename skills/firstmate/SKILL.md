@@ -255,7 +255,9 @@ after every merge, run `bin/fm-ready.sh list --repo <root>`. Each line is
    and a background `--await`. Options: **A** proceed (dispatch as written), **B**
    rescope (the card states the narrower spec you propose), **C** park,
    **D** drop. Author D under `options.D` in both locales; the board shows a D
-   button and accepts D only on a card that offers it. State your
+   button and accepts D only on a card that offers it. Name the effects in the
+   details, `"effect": {"A": "dispatch", "C": "park", "D": "drop"}`, so the
+   board carries out the answer itself (T-118); B has none. State your
    recommendation and the evidence in the explanation.
 3. Right after the request, record it:
    `bin/fm-ready.sh judged --task <id> --decision <D-id> --repo <root>`. The
@@ -265,13 +267,17 @@ after every merge, run `bin/fm-ready.sh list --repo <root>`. Each line is
    ends the judgment when it sees the task out of ready, which is one more
    reason to run it after every merge. While the readiness card
    is the task's only open card, the board keeps the task in the ready lane.
-4. Carry out the answer. A: `bin/fm-dispatch.sh` starts it. B: rescope the
-   task's file, `design/tasks/<id>.json`, through a scoped
-   task, then start it with `bin/fm-dispatch.sh --task <id> --repo <root>`.
-   C or D: record it as T-058's event, through the board's park or drop
-   (`POST /tasks` with `{"task":"<id>","action":"park"}` or `"drop"`), which
-   writes `parked` or `closed`. A parked task is not dispatched until it is
-   unparked, and then it is judged again; a dropped one is never dispatched.
+4. Check the answer was carried out. The board carries out a named effect
+   when the captain answers and records the outcome on `decision_made`
+   (`data.effect`, `data.outcome`, `data.reason`): A runs
+   `bin/fm-dispatch.sh --task <id>`, C writes `parked`, D writes `closed`. An
+   outcome of `failed` is not done: read its reason, fix what held it, and
+   carry it out yourself - A through `bin/fm-dispatch.sh --task <id> --repo
+   <root>`, C or D through the board's park or drop (`POST /tasks`). B: rescope
+   the task's file, `design/tasks/<id>.json`, through a scoped task, then start
+   it with `bin/fm-dispatch.sh --task <id> --repo <root>`. A parked task is not
+   dispatched until it is unparked, and then it is judged again; a dropped one
+   is never dispatched.
 
 Never dispatch a ready task that is `unjudged`, nor one whose answer was not A
 or a completed B, unless the captain orders that task directly.
@@ -441,7 +447,27 @@ listed here must be a string with a non-whitespace character and at most 2000
 Unicode code points (jq `length`), not an array. Extra keys are not rejected.
 This validator does not assess truth, translation quality or diagram quality.
 Use one JSON document per file; the script's jq stream check is not an explicit
-single-document guard. `--title` is accepted for compatibility but ignored and
+single-document guard.
+
+An option that should do something when chosen names it in the optional
+top-level `effect` map (T-118): `{"B": "park"}` and so on, one of `merge`
+(merge cards only), `hold`, `park`, `drop`, `dispatch` or `send_back`, for an
+option the card offers; anything else exits 64 before a card exists. The
+board carries the effect out through the script that owns it and records
+`done`, `failed` with the reason, or `recorded` on `decision_made`. A merge
+card that names none merges on A and holds on B and C. Say in the option's
+own text what it does; the board also labels it. Never raise a card under a
+task it is not about: a card is filed by its task, and the merge card for #96
+filed under T-117 marked T-117 merged. When a final state is wrong, the only
+way back is the captain's `reopened`: the captain uses `reopen` on the
+board's merged or closed card, or answers a card you raise for it, after which
+you emit it as the captain - `bin/fm-emit.sh --actor captain --type reopened
+--task <id> --data '{"reason":"..."}'`. The damage the board left before
+T-118 is repaired once, not swept for: after T-118 merges, run
+`bin/fm-reconcile.sh --repair-cards --repo <root>` (a dry run), add
+`--effect D-id=park|drop` for each hand-raised answer whose meaning the log
+never kept and you can show the captain, put the listed fixes to the captain,
+and on the captain's word run it again with `--apply`. `--title` is accepted for compatibility but ignored and
 cannot supply details. Invalid/missing details, kind, task or merge PR yield 64;
 duplicate pending or decided IDs are refused with 65, not updated.
 A new card's id names its owner, `D-<project>-<task>-<n>` (for example

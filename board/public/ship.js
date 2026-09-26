@@ -695,9 +695,12 @@ const SHIP = (() => {
     src.start(t0); src.stop(t0 + len);
   }
 
-  function applyEffect(host) {
+  // `now` is the moment the effect is drawn at: the effect's own start when it
+  // begins, so its first delay is exactly 0s however the clock ticks between
+  // two reads, and the current time when a render redraws one in progress
+  function applyEffect(host, now = Date.now()) {
     if (!current) return;
-    const elapsed = (Date.now() - current.start) / 1000;
+    const elapsed = (now - current.start) / 1000;
     const banner = host.querySelector('#ahoy');
     banner.textContent = current.kind === 'order' ? 'AYE, CAPTAIN! / ORDERS AWAY' : 'AHOY! / MERGED INTO MAIN';
     banner.classList.add('active');
@@ -725,7 +728,7 @@ const SHIP = (() => {
   function nextEffect(host) {
     if (current || !effects.length) return;
     current = {...effects.shift(), start:Date.now()};
-    applyEffect(host); if (current.audio) sound(current.kind, host);
+    applyEffect(host, current.start); if (current.audio) sound(current.kind, host);
     document.dispatchEvent(new Event('ship-effect'));
     setTimeout(() => {
       current = null;

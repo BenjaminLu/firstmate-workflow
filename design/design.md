@@ -1231,8 +1231,8 @@ absent from `design/tasks/` shows its id and an explicit missing-title
 label. The merged lane shows the latest few merges, newest first, and counts
 the rest into the history.
 
-**Park and drop (T-058).** The captain takes work they do not want run off the
-ready and backlog lanes on the board itself. Each card there offers two
+**Park and drop (T-058, T-118).** The captain takes work they do not want run
+off the lanes on the board itself. Each unfinished card offers two
 actions, reachable both by dragging the card and by the `⋯` menu on it (the
 menu is also the keyboard path):
 
@@ -1247,13 +1247,31 @@ menu is also the keyboard path):
 `POST /tasks {task, action}` writes the event through `bin/fm-emit.sh` with
 actor `captain`, like every other board write: park is `parked`, unpark is
 `unparked`, drop is the existing `closed`. The server says which actions each
-card offers (`actions`): `park`/`drop` for ready and backlog, `unpark`/`drop`
-for parked, none for a task in flight or later, which is neither draggable nor
-given a menu. An action the card does not offer is refused with 409 and nothing
-is emitted; an unknown task is 404, an unknown action 400, and a request
-without the captain's credential, the board's own `Origin` or a body declared
-`application/json` 403, before anything else is read (the trust boundary,
-below). The board never edits `design/tasks/`: a
+card offers (`actions`). Since T-118 the captain can set aside any unfinished
+task: `park`/`drop` in every lane but merged and closed (backlog, ready, work,
+gate, review and the captain's), `unpark`/`drop` for parked, and only
+`reopen` (below) for merged and closed. A task with crew aboard or a pull
+request open (`confirm: true` on the card) is set aside only once the
+captain has confirmed it in the page: the confirming step says whose crew is
+stopped and that the pull request stays open, and the server refuses the
+request without `confirm: true` (409, `code: confirmRequired`); a reopening
+with no usable reason is 400, `code: reopenNeedsReason`. Every refusal code
+the server sends has its own text in both dictionaries, and the page shows a
+refused action by that text, falling back to the generic line only for a
+code it does not know. Setting it
+aside writes the event and then stops its crew through the stop path main
+has: SIGTERM to the round's own script, whose pid `bin/fm-worker.sh`
+publishes at `state/worktrees/<task>.pid` and whose TERM trap saves and
+pushes the worktree, to the script each run of the task names in its
+`process.json`, and to each vendor CLI its attempts' `execution.json` name - each
+only while `ps` still shows the program it was recorded for. T-107's
+`fm.sh stop <task>` replaces this path once it merges. The pull request is
+never closed: nothing closes it without the captain. An action the card does
+not offer is refused with 409 and nothing is emitted; an unknown task is 404,
+an unknown action 400, and a request without the captain's credential, the
+board's own `Origin` or a body declared `application/json` 403, before
+anything else is read (the trust boundary, below). The board never edits
+`design/tasks/`: a
 drop leaves the task in the plan, and removing it from there, if the captain
 wants that, is an ordinary pull request firstmate raises afterwards. A backlog
 card whose dependency is parked or dropped says so beside the blocker's id
@@ -1288,6 +1306,155 @@ the task. The server flags a refusal as `superseded` once a `merged` event for
 the same task or pull request — or a later successful merge response — is
 recorded afterwards, and the page stops showing it; a reload cannot bring it
 back.
+
+**Lane derivation (T-118).** Every card sits where its task really is. The
+server derives each task's lane from the log and the pending cards on disk,
+and nothing else. The events that give a lane:
+
+| Event | Lane it gives |
+|---|---|
+| `dispatched`, `commit_pushed` | working |
+| `pr_opened`, `gate_passed`, `review_opened`, `approved` | review |
+| `gate_failed`, `review_failed`, `worker_crashed` | gate (blocked) |
+| `agent_lost` | gate (blocked), unless the task was given a lane since the lost actor last spoke |
+| `merged` | merged (final) |
+| `closed` (a drop) | closed (final) |
+| `parked` / `unparked` | the parked group, until unparked / the lane the other events give |
+| `reopened` (captain only, with a reason) | none: it clears merged or closed, and later events place the task |
+
+Every other event - `decision_requested`, `decision_made`, `greenlit`,
+`ask_pass_criteria`, `criteria_returned`, `protocol_violation`,
+`vendor_unavailable`, `agent_finished`, `crew_status`, `spec_pinned`,
+`spec_repinned` - gives no lane. In particular no event gives the captain's
+lane. `decision_requested` and `approved` once did, and nothing took it away
+again, so an answered card left its task there until something else moved it
+(T-030, T-060, T-064). `decision_requested` is out of `STAGE`, and an
+approval waits in review for firstmate's merge card. A task no event has
+moved is untouched: backlog or ready by its dependencies, as above.
+
+Precedence, highest first:
+
+1. **Reopened.** The captain's `reopened` (below) is folded in where it
+   stands in the log, and is the only event that moves a task out of merged
+   or closed. The task then starts again from nothing: its later events
+   place it, and with none it is untouched.
+2. **Final.** A merged or closed task stays there; nothing said afterwards -
+   a late review round, a sync, a pending card - moves it. A pending card on
+   a final task is shown, with a note that the task is final (below).
+3. **Pending card.** The captain's lane means a pending card and nothing
+   else: while a card for the task is pending in `state/pending/` (the
+   `awaiting` set), the task is there, whatever the log says after it; once
+   the card is answered or withdrawn it is where the rest says. A readiness
+   card that is the task's only card leaves it in ready (T-059).
+4. **Park.** The last of `parked` / `unparked` wins, for any unfinished task.
+   A task parked while its card is pending stays in the captain's lane, by
+   rule 3: its crew is stopped at once, the card carries a `parked` badge,
+   and it offers what a parked task offers (`unpark`, `drop`), never a
+   second park. The confirming step in that lane says so
+   (`parkConfirmCaptain`) rather than promising the task leaves the lanes.
+   Once the card is answered or withdrawn, the park places it.
+5. **Liveness.** A crewman's `agent_lost` (below) blocks its task, with a
+   `lost` badge naming the actor, unless the task was given a lane after the
+   crewman last spoke - a redispatch, another round's review.
+6. **The log.** Otherwise the lane of the task's last lane-giving event.
+
+**Crew liveness (T-118).** A crewman is aboard only while its run is alive,
+and the launcher side, never the model and never the board, says when it is
+not. There is no heartbeat. `bin/fm-herdr.py`'s deck reconcile, which
+`fm-session.sh start` and `status` already run (below, managed session
+defaults), checks each aboard actor against its recorded process -
+`process.json`'s pid and token, or a live attempt lock. A run whose process is
+gone and that never said `agent_finished` gets one `agent_lost` under that
+exact actor through `bin/fm-emit.sh`, in English and Traditional Chinese,
+followed by the `agent_finished` (`data.status: process_gone`) that has always
+closed a ghost. The board takes the run off the deck at `agent_lost`, shows
+the loss once in the log and not the close after it, and blocks the task by
+the rule above. An `agent_finished` arriving after the loss changes nothing:
+the run is already off the deck and the task is where its events put it. A
+loss already written is not written again. A `dispatched` brings the actor
+back aboard, as it always has.
+
+**Card effects (T-118).** An answer does what its option says, carried out
+by the one script that owns the effect, and the outcome is recorded on the
+`decision_made` event (`data.effect`, `data.outcome`, `data.reason`) and on
+the decision record (`effect`, `effect_outcome`, `effect_reason`): `done`,
+`failed` with the reason, `running` for a merge until its helper exits, or
+`recorded` for an option with no effect. A card names its effects in
+`details.effect`, a map from option to effect, which `bin/fm-decide.sh`
+refuses unless every key is an option the card offers and every value is one
+of these:
+
+| Effect | Carried out by | Result |
+|---|---|---|
+| `merge` | `bin/fm-merge.sh`, in the background (merge cards only) | `merged`; the record says merged or failed |
+| `hold` | nothing | done: the task stays where its events put it |
+| `park` | `bin/fm-emit.sh` `parked`, then the crew stopped | the parked group |
+| `drop` | `bin/fm-emit.sh` `closed`, then the crew stopped | closed |
+| `dispatch` | `bin/fm-dispatch.sh --task <id>`, the captain's order | working once the worker starts; failed with the dispatcher's reason when it holds the task |
+| `send_back` | `bin/fm-worker.sh --task <id> --pr <n>`, detached | another round on the same pull request; failed with the worker's words when its lock refuses |
+
+The card kinds and their effects: a **merge card** (`--kind merge`) that
+names none merges on A and holds on B and C, as it always has; sending work
+back starts a worker, so only a card that says so does it. An **untracked
+merge card** (`--kind merge-untracked`, T-119) is read the same way, and its
+merge hands `fm-merge.sh` `--untracked` and no task; it has no task to park,
+drop, dispatch or send back, so any of those fails with that reason. A
+**readiness card** (T-059) names `{"A":"dispatch","C":"park","D":"drop"}`;
+its B, rescope, has no effect and is recorded. A **choice card** has only
+the effects it names. A **skill-update card** (`D-SK-*`, title only) names
+none: a merge one merges on A and holds on B and C like any merge card, and
+a choice one only records. A custom answer never has an effect. An effect that failed stays on the board
+with its reason until what it asked for has happened some other way, and is
+never shown as done.
+
+**Reopening a wrong final state (T-118).** Preventing a merge card from
+merging under the wrong task is T-119's; this is the way back when it has
+happened. `reopened` is the captain's event, with a `data.reason`, and the
+board honours it only from the captain and only with a reason; the log takes
+it from anyone, like every type. It is the only event that moves a task out of
+merged or closed, and the task then starts again from nothing: its later
+events place it, and with none it is untouched, in ready or backlog by its
+dependencies, showing the pull request it opened itself rather than the one a
+wrong card merged. The board offers it as `reopen` on merged and closed
+cards, behind a confirming step that takes the reason. A pending card whose
+task is merged or closed is never hidden: it is listed with `task_final`, and
+the card says the task is already final, so a card raised under the wrong
+task - the merge card for #96 filed under T-117 on 2026-09-26 - stays where
+the captain can see it. A card for a pull request that has merged is still
+withdrawn from the deck.
+
+**The standing reconcile reads the captain's words too (T-118).**
+`bin/fm-reconcile.sh`, which revives a worker whose pid is gone, reads a park
+and a reopening as the board does. Setting a task aside stops its worker with
+SIGTERM, and `fm-worker.sh` keeps its pid file on any exit but 0, so the next
+reconcile finds a dead pid on a parked task: it retires the pid file, keeps
+the worktree, and neither records a crash nor revives the task until an
+`unparked`. A task the captain reopened, with a reason, is not over: a dead
+worker on it is a crash and is revived, on the pull request the task opened
+itself. A `reopened` that is not the captain's, or has no reason, changes
+nothing. `bin/fm-run.sh`, `bin/fm-dispatch.sh` and `bin/fm-ready.sh` keep
+their own readings and are not changed by this task.
+
+**The one-time card repair (T-118).** There is no standing sweep: the rules
+above make the old inconsistencies impossible, and `fm-sync-prs.sh` already
+brings GitHub's state in. What the old board left in the log is repaired once,
+by `bin/fm-reconcile.sh --repair-cards`, a dry run unless given `--apply`,
+which writes only through `bin/fm-emit.sh`. It reads the log and the records
+beside it and fixes two things, one line each in English and Traditional
+Chinese:
+
+- an answered card whose chosen park or drop never happened (T-030, T-060,
+  T-064): it writes the `parked` or `closed` the answer asked for, as the
+  captain whose answer it was, naming the card. What an option did is read
+  from the decision record's `effect`, from a readiness card's record under
+  `state/ready/` (C park, D drop), or from `--effect D-id=park|drop` for a
+  hand-raised card whose options the log never kept; an answer whose meaning
+  none of these gives is not guessed at. An answer the task has moved on
+  from since - dispatched, answered again, set aside another way - or whose
+  task is already final is listed and left alone.
+- a task marked merged by a pull request other than the one it opened
+  (T-117, merged by the card for #96 while its own #97 was open): it writes
+  the captain's `reopened`, with the reason.
 
 **Roster and tags.** Roster rows carry a status dot, the crew name, a stage
 pill and the pull request, over the task id and title and the authored
@@ -1821,7 +1988,8 @@ Before the board is shown, and again on `status`, session bootstrap runs deck
 reconcile: for each non-`firstmate` actor whose last event is not
 `agent_finished`, it corroborates that actor against `state/runs/<actor>/`
 process receipts (not task-level pidfiles). Actors with no live process receive
-`agent_finished` under that exact actor with `data.status: process_gone`, so the
+one `agent_lost` (T-118, crew liveness above) and then `agent_finished`, both
+under that exact actor with `data.status: process_gone`, so the
 event-sourced crew list matches process reality. Task-level reconcile alone
 cannot clear these ghosts. `status` and `start` report the reconcile result as
 `deck_reconcile`. `status` reads the live process receipts and durable watch

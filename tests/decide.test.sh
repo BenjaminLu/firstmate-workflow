@@ -92,6 +92,44 @@ leg="$(FM_GH="$dleg/gh" FM_ROOT="$dleg" "$dleg/bin/fm-decide.sh" --request D-SK-
   --title "$leg_title" 2>/dev/null)"
 assert_eq "SK-004 95 merge" "$(jq -r '"\(.task) \(.pr) \(.kind)"' "$leg" 2>/dev/null)" \
   "while one for its own pull request goes up"
+# T-118: a card may name what each option does - the effect the board carries
+# out when the captain picks it. Only an effect the board knows, only for an
+# option the card offers, and a merge only on a merge card; anything else is
+# refused before a card exists, with the one message that says so.
+deff="$(fixture)"
+with_effect() { jq --argjson e "$1" '. + {effect:$e}' "$d/details.json" > "$deff/effect-$2.json"; printf '%s' "$deff/effect-$2.json"; }
+req_effect() {   # req_effect <id> <kind> <details> [pr]: the exit status, the output in $deff/out
+  FM_GH="$deff/gh" FM_ROOT="$deff" "$deff/bin/fm-decide.sh" --request "$1" --task T-1 --kind "$2" ${4:+--pr "$4"} \
+    --details "$3" > "$deff/out" 2>&1
+  printf '%s' "$?"
+}
+assert_eq "0" "$(req_effect D-120 choice "$(with_effect '{"C":"park","B":"dispatch"}' ok)")" \
+  "a card naming known effects for options it offers is raised"
+assert_eq '{"C":"park","B":"dispatch"}' "$(jq -c .details.effect "$deff/state/pending/D-120.json")" \
+  "and keeps them on the card for the board"
+assert_eq "64" "$(req_effect D-121 choice "$(with_effect '{"A":"launch"}' unknown)")" "an effect the board does not know is refused"
+assert_contains "$(cat "$deff/out")" "details.effect" "with a message naming details.effect"
+assert_eq "64" "$(req_effect D-122 choice "$(with_effect '{"A":"ar"}' partial)")" "part of an effect's name is not an effect"
+assert_eq "64" "$(req_effect D-123 choice "$(with_effect '{"D":"drop"}' notoffered)")" \
+  "an effect for an option the card does not offer is refused"
+assert_eq "64" "$(req_effect D-124 choice "$(with_effect '{"A":"merge"}' choicemerge)")" "a merge on a choice card is refused"
+assert_eq "64" "$(req_effect D-125 choice "$(with_effect '"park"' notobject)")" "an effect that is not a map is refused"
+# a merge card's pull request is its task's on GitHub (T-119)
+pr_is "$deff" 7 't-1-cache-index' 'T-1: cache index'
+assert_eq "0" "$(req_effect D-126 merge "$(with_effect '{"A":"merge","B":"send_back","C":"hold"}' merge)" 7)" \
+  "a merge card may name merge, send back and hold"
+# an untracked merge card (T-119) merges too: it may name merge and hold
+pr_is "$deff" 8 'revert-96-cache' 'Revert "T-105: cache"'
+FM_GH="$deff/gh" FM_ROOT="$deff" "$deff/bin/fm-decide.sh" --request D-127 --kind merge-untracked --pr 8 \
+  --details "$(with_effect '{"A":"merge","B":"hold"}' untracked)" > "$deff/out" 2>&1
+assert_eq "0" "$?" "an untracked merge card may name merge and hold"
+assert_eq '{"A":"merge","B":"hold"}' "$(jq -c .details.effect "$deff/state/pending/D-127.json" 2>/dev/null)" \
+  "and keeps them on the card"
+for n in 121 122 123 124 125; do
+  assert_fail "test -f '$deff/state/pending/D-$n.json'" "a refused effect leaves no card (D-$n)"
+done
+rm -rf "$deff"
+
 dstream="$(fixture)"
 { printf '%s\n' '{}'; cat "$d/details.json"; } > "$dstream/stream.json"
 assert_fail "FM_ROOT='$dstream' '$dstream/bin/fm-decide.sh' --request D-97 --task T-1 --details '$dstream/stream.json'" \

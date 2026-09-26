@@ -354,6 +354,21 @@ if [ "$MODE" = request ]; then
     ' "$DETAILS" >/dev/null 2>&1 || {
       echo 'fm-decide: --details requires complete authored en and zh-TW title, explanation, before, after, outcome and A/B/C description/pros/cons' >&2; exit 64;
     }
+    # What each option does when the captain picks it (T-118): an optional
+    # `effect` object naming, for an option the card offers, one effect the
+    # board carries out by the script that owns it. A merge is only a merge
+    # card's. Anything else is refused here, before a card exists, because the
+    # board would have to record an answer it cannot carry out.
+    jq -e -s --arg kind "$KIND" '
+      .[0] | .en.options as $o | (.effect // null) as $e
+      | $e == null or ($e | type == "object" and all(to_entries[];
+          .key as $k | .value as $v
+          | ($o | has($k)) and ($v | type == "string")
+          and ($v | IN("merge","hold","park","drop","dispatch","send_back"))
+          and ($v != "merge" or $kind == "merge" or $kind == "merge-untracked")))
+    ' "$DETAILS" >/dev/null 2>&1 || {
+      echo 'fm-decide: details.effect names, for an option the card offers, one of merge (merge cards only), hold, park, drop, dispatch or send_back' >&2; exit 64;
+    }
     # the last check before anything is written: GitHub's word on the pair
     [ "$KIND" = choice ] || pr_agrees
     payload="$(jq -cn --arg id "$ID" --arg task "$TASK" --arg kind "$KIND" --arg pr "$PR" \
