@@ -456,6 +456,9 @@ class Roster(unittest.TestCase):
         return json.loads((run / 'identity.json').read_text())
     def test_identity_json_carries_name_role_project_task_round_and_attempt(self):
         self.pin('default_project: alpha\n')
+        # a counter far along, so a counter-numbered actor could not end in r1
+        (self.root / 'state/runs').mkdir(parents=True, exist_ok=True)
+        m.save(self.root / 'state/runs/counter.json', dict(number=472))
         run = m.allocate(self.root, 'worker', 'T-900', '')
         record = self.identity(run)
         for key in ('name', 'role', 'project', 'task', 'round', 'attempt'): self.assertIn(key, record)

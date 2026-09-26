@@ -314,8 +314,9 @@ def attempt_mark(attempt):
 
 
 def run_project(root):
-    """The project a run is for, resolved as fm_project_resolve does without an
-    explicit one: FM_PROJECT, then config.yaml's default_project."""
+    """The project a run is for: FM_PROJECT, then config.yaml's default_project.
+    That is the order the registry's resolve takes without an explicit name,
+    but nothing here checks the name is registered or refuses when none is."""
     return os.environ.get('FM_PROJECT') or default_project(root)
 
 
@@ -335,8 +336,10 @@ def default_project(root):
 def review_round(root, task, project):
     """The task's review round for a run starting now: FM_ROUND when the caller
     knows it (fm-review.sh --round), else one past the review rounds the log
-    has opened on this task of this project, as fm-run.sh counts them. A
-    worker's first run is round 1, and the review that follows it is too."""
+    has opened on this task of this project. Only this project's: the round
+    loop's own count takes every project's, so the two can differ when two
+    projects share a task id. A worker's first run is round 1, and the review
+    that follows it is too."""
     given = os.environ.get('FM_ROUND', '')
     if re.fullmatch(r'[1-9][0-9]{0,5}', given): return int(given)
     opened, default = 0, default_project(root)

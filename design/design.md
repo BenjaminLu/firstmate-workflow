@@ -1684,8 +1684,12 @@ fit Herdr's 32-character syntax and include task/run identity. **The `r<n>` is
 the task's review round (T-116)**, the round the pull request's review is on,
 so `r3` reads as round three: `fm-review.sh --round <n>` names it (as
 `FM_ROUND`), and otherwise it is one past the `review_opened` events the log
-holds for the task in the run's project, which is how `fm-run.sh` counts rounds.
-A worker's first run is round 1, and the review that follows is round 1 too.
+holds for the task in the run's project. A worker's first run is round 1, and
+the review that follows is round 1 too. `fm-run.sh` counts rounds differently:
+its loop counts every `review_opened` for the task id across all projects and
+passes that as `--round`. With the same task id in two projects the counts
+differ, so a reviewer `fm-run.sh` starts can carry a higher round than the
+worker it reviews.
 Before T-116 the `r<n>` was a global run counter (`state/runs/counter.json`,
 472 on 2026-09-26), which read as round 465 on a task in its first round; the
 counter no longer appears in any actor. A second run of the same role, task,

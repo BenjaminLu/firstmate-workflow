@@ -75,6 +75,9 @@ G
 
 if [ "${FM_WORKER_LIVENESS_ONLY:-0}" != 1 ]; then
 d="$(fixture)"; r="$d/repo"; GH="$(ghstub "$d")"
+# T-116: a global run counter far along, so the round-1 actor below cannot
+# come from a counter that happens to start at 1
+mkdir -p "$r/state/runs"; printf '{"number":472}\n' > "$r/state/runs/counter.json"
 out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-worker.sh --task T-Z --name worker-1 2>&1)"; rc=$?
 assert_eq "0" "$rc" "a clean run exits 0"
 branch="$(printf '%s' "$out" | tail -1)"
