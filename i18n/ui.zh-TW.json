@@ -122,5 +122,10 @@
   "crewUnknown": "未知",
   "crewCard": "船員詳情",
   "rosterSort": "排序",
-  "rosterGroup": "依專案分組"
+  "rosterGroup": "依專案分組",
+  "readOnly": "此分頁為唯讀：只有開啟看板時的那個分頁持有船長的登入憑證。請大副重新開啟看板，才能在這裡回覆卡片與移動任務。",
+  "writeCredential": "未送出：此分頁為唯讀；請大副重新開啟看板",
+  "writeOrigin": "未送出：這個請求不是來自看板自己的頁面",
+  "writeJson": "未送出：看板只接受 JSON",
+  "loginRefused": "這個登入連結錯誤、已使用或已過期；請大副重新開啟看板"
 }

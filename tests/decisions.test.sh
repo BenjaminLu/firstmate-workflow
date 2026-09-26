@@ -58,6 +58,9 @@ board_port() {   # board_port <log> <pid>: the port the server printed; 1 if it 
   done
   return 1
 }
+# T-122: the board keeps its secret under XDG_CONFIG_HOME; this suite's own,
+# outside the fixture root and the operator's home
+XDG_CONFIG_HOME="$(mktemp -d)"; export XDG_CONFIG_HOME
 FM_ROOT="$d" FM_PORT=0 bun run "$d/board/server.ts" >"$d/out" 2>&1 </dev/null &
 pid=$!; trap 'kill "$pid" 2>/dev/null' EXIT
 PORT="$(board_port "$d/out" "$pid")"
@@ -71,7 +74,18 @@ assert_eq "merge" "$(jq -r '.pending[0].kind' <<<"$s")" "with its kind"
 assert_contains "$(curl -sf "http://127.0.0.1:$PORT/")" 'id="deck"' "the page has a decision deck"
 
 # no -f here: a rejection is a 400 with a body, and -f throws the body away
-post() { curl -s -X POST "http://127.0.0.1:$PORT/decisions" -H 'content-type: application/json' -d "$1"; }
+# and the credential a script on this machine answers with (T-122): the bearer
+# from the board's secret file, and the board's own Origin
+post() {
+  curl -s -X POST "http://127.0.0.1:$PORT/decisions" -H 'content-type: application/json' \
+    -H "Origin: http://127.0.0.1:$PORT" \
+    -H "Authorization: Bearer $(cat "$XDG_CONFIG_HOME/firstmate/board-$PORT.secret")" -d "$1"
+}
+# without it the merge card is not answered, and nothing merges
+bare="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/decisions" \
+  -H 'content-type: application/json' -H "Origin: http://127.0.0.1:$PORT" -d '{"id":"D-1","chosen":"A"}')"
+assert_eq "403" "$bare" "an answer with no credential is refused"
+assert_fail "test -f '$d/state/decisions/D-1.json'" "and records nothing"
 assert_contains "$(post '{"id":"nope","chosen":"A"}')" "bad decision id" "it rejects an id that is not a decision id"
 assert_contains "$(post '{"id":"D-1","chosen":"rm -rf /"}')" "bad choice" "it rejects a choice that is not a letter"
 assert_contains "$(post '{"id":"D-1","chosen":["A"]}')" "bad choice" "it never coerces an array into merge authorization"
@@ -284,5 +298,5 @@ assert_eq 'false' "$(jq -r .eventRecorded <<<"$r")" 'event failure is disclosed'
 assert_eq 'decision:D-5' "$(jq -r .decision.identity <<<"$r")" 'recording has an observable stable identity without an awaiter'
 
 kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null || true
-rm -rf "$d"
+rm -rf "$d" "$XDG_CONFIG_HOME"
 finish

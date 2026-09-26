@@ -122,5 +122,10 @@
   "crewUnknown": "unknown",
   "crewCard": "Crew member details",
   "rosterSort": "Sort by",
-  "rosterGroup": "Group by project"
+  "rosterGroup": "Group by project",
+  "readOnly": "This tab is read-only: only the tab the board was opened in holds the captain's sign-in. Ask firstmate to reopen the board to answer cards and move tasks here.",
+  "writeCredential": "not sent: this tab is read-only; ask firstmate to reopen the board",
+  "writeOrigin": "not sent: the request did not come from the board's own page",
+  "writeJson": "not sent: the board takes JSON only",
+  "loginRefused": "that sign-in link is wrong, used or expired; ask firstmate to reopen the board"
 }
