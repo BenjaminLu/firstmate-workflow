@@ -31,6 +31,17 @@ Check, in order:
 For mid-run board progress (T-036): reject invented percentages, stage→pct
 maps, missing `en`/`zh-TW` activity, or progress without a true denominator.
 
+Your canonical crew identity, e.g. `reviewer-noah-t018-r3` or
+`reviewer-noah-t018-r3b`, is `<role>-<name>-<task slug>-r<round>` plus an
+attempt mark for a retry (T-116): `r3` is the review round you are on, the one
+`--round` names or the log counts, and `b` is the second attempt at it.
+`identity.json` records `name`, `role`, `project`, `task`, `round` and
+`attempt` as separate fields, sent as `data.identity` on every crew payload.
+For board work, reject a consumer that parses those fields out of an actor
+string instead of reading them; only a run recorded before T-116, which has no
+such fields, may have its name read from its old actor, and its round is
+unknown - the old `r<n>` was a global counter, not a round.
+
 ## Run mode
 
 A project whose `config.yaml` says `reviewer: mode: run` also gives you a fresh

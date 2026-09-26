@@ -1,0 +1,40 @@
+{
+  "id": "T-116",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "the board shows each crew member's project, task and round as separate fields, with a quiet name tag on the ship and the details in a card on demand",
+  "scope": [
+    "bin/fm-herdr.py",
+    "bin/fm-worker.sh",
+    "bin/fm-review.sh",
+    "board/server.ts",
+    "board/public/ship.js",
+    "board/public/index.html",
+    "board/public/ship.css",
+    "tests/board.test.sh",
+    "tests/herdr.test.sh",
+    "tests/worker.test.sh",
+    "tests/review.test.sh",
+    "tests/crew-end-to-end.test.sh",
+    "tests/emit.test.sh",
+    "tests/reconcile.test.sh",
+    "tests/sync-prs.test.sh",
+    "skills/worker/SKILL.md",
+    "skills/reviewer/SKILL.md",
+    "design/design.md",
+    "design/tasks/T-116.json"
+  ],
+  "acceptance": [
+    "Today the board shows each worker and reviewer as one string, the canonical actor, e.g. worker-shira-sk001-r465. The captain cannot see at a glance which project each one works for: the project chip appears only when several projects are live (ship.js showProject), and the roster has no project at all. The r<n> in the actor is not the review round: fm-herdr.py allocate takes it from the global counter state/runs/counter.json (472 on 2026-09-26), so r465 reads as round 465. The captain approved this task on 2026-09-26: the board shows name, role, project, task, round and pull request as separate fields, never joined into one string, and the ship stays uncluttered. Its own spec file, design/tasks/T-116.json, is committed on this branch.",
+    "Structured identity. fm-herdr.py allocate writes, in each run's identity.json, separate fields: name (the roster name, e.g. shira), role, project (the resolved project, the default one included), task, round (the task's review round for this run, 1 for a first worker run) and attempt (1, 2, ... for a retry of the same role, task and round). fm-worker.sh and fm-review.sh carry these fields in every crew payload they emit. Every consumer on the board reads the fields; none parses them out of the actor string. Runs recorded before this change, which have no such fields, still load and display, with the fields derived from the old actor where possible and shown as unknown otherwise.",
+    "The round is real. The actor suffix becomes -<task slug>-r<round>, plus a short attempt mark only for a retry (e.g. r12b), so it matches the pull request's review round; the global counter no longer appears in the actor. The canonical actor keeps T-035's rules: at most 32 characters, unique among live runs, identical across Herdr pane, logs, events and result metadata, and a retry still gets a distinct run identity. Every parser of the actor (fm-herdr.py crew_name at line 294, and each test that matches -r[0-9]+) accepts both the old and the new form.",
+    "A quiet ship. The label above a figure on the ship shows only the crew member's name, plus a small coloured project marker (a flag or pennant in the project's colour, the same colour everywhere that project appears on the board). It never shows the task, round, pull request or activity text. At 24 crew aboard, name tags do not overlap: they shrink, stack or hide by distance, and the figure stays readable.",
+    "Details on demand. Hovering or focusing a figure, or tapping it on a phone, opens a small detail card anchored to that figure, with one labelled line per field: name, role, project, task id and title, round, pull request (linked), state and current activity. Esc, a second tap or moving away closes it; only one card is open at a time; it is keyboard reachable and announced to screen readers.",
+    "The roster (the crew list) shows the same fields in separate columns: name, role, project, task (id and title), round, pull request, state. The project column is always shown, even with one project. The roster can be sorted and grouped by project. On a phone the columns collapse into two lines per row, still as separate labelled fields.",
+    "Task cards on the board list their crew as separate chips (name and role, round), not as a comma-joined string of actors (index.html line 377).",
+    "All new labels exist in English and 繁體中文 in the board's translation table in index.html, matching the board's current languages.",
+    "design/design.md and the worker and reviewer skills describe the structured identity and the round-based actor, with examples.",
+    "Evidence is the required GitHub check and the gates, checked by firstmate at the merge gate. Tests written to fail first cover: identity.json carries the separate fields; the actor's round equals the task's review round, and a retry gets a distinct attempt mark within 32 characters; an old run without the fields still renders; the ship label contains the name and the project marker only; the detail card lists every field separately; the roster shows a project column with one project and with two; task cards list crew as separate chips. The worker does not run the suite itself."
+  ]
+}

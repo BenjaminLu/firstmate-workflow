@@ -152,13 +152,15 @@
 /* a bubble over every head, clear of the deck above */
 .bub{position:absolute;left:var(--px);transform:translateX(-50%);z-index:5;
   bottom:calc(var(--deckY0) + var(--r,0) * var(--rowStep) + var(--figH,62px) + 10px);
-  width:var(--bubW,15%);min-width:0;max-width:206px;background:rgba(12,19,27,.94);
+  width:max-content;min-width:0;max-width:min(var(--tagW,15%),206px);background:rgba(12,19,27,.94);
   border:1px solid var(--bubEdge,#2c3f52);border-radius:9px;padding:5px 8px 6px;text-align:center;
   box-shadow:0 6px 18px rgba(0,0,0,.55)}
 .bub::after{content:"";position:absolute;left:50%;bottom:-6px;width:10px;height:10px;margin-left:-5px;
   transform:rotate(45deg);background:rgba(12,19,27,.94);
   border-right:1px solid var(--bubEdge,#2c3f52);border-bottom:1px solid var(--bubEdge,#2c3f52)}
-.bub .who{display:flex;align-items:center;justify-content:center;gap:6px;
+/* T-116: the tag is the name and the project's pennant; a name wider than
+   its gap is cut with an ellipsis, never allowed to reach the next tag */
+.bub .who{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   font:650 13px var(--mono);color:#dbe8f4}
 .bub .job{margin-top:3px;font-size:13px;color:#9dbdd6;line-height:1.3;overflow:hidden;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
@@ -335,9 +337,9 @@
 .scene{touch-action:none}
 .roster .jb{white-space:normal;overflow:visible;text-overflow:clip;font-size:16px;overflow-wrap:anywhere}
 .roster .nm,.roster .st,.roster h3,.shipbar,.shipbar .tier,.shipbar button,.bub .who,.bub .job,.bub.mini .who{font-size:13px}
-.roster li{grid-template-columns:16px minmax(0,1fr) minmax(0,1fr);font-size:16px}
-.roster .jb{grid-column:2/-1}.roster .nm{overflow-wrap:anywhere}
-.roster ul{max-height:280px}.bub.mini .who{white-space:normal;overflow-wrap:anywhere}
+.roster li{font-size:16px}
+.roster .nm{overflow-wrap:anywhere}
+.roster ul{max-height:280px}
 .fig.s-unknown{--baseAnim:bobk}.st-unknown{--bubEdge:#566777}
 .handoffs{position:absolute;inset:0;pointer-events:none;z-index:8}
 .stern{position:absolute;right:0;top:0;width:10px;height:18px;border:2px solid var(--brass);background:#806431;border-radius:3px}
@@ -354,3 +356,59 @@
 #merging{list-style:none;margin:0 0 10px;padding:0}
 #merging li{font-size:16px;padding:6px 0;color:#93a7bd;overflow-wrap:anywhere}
 #merging li.unknown{color:#f2b544}
+
+/* --- T-116: a quiet name tag, a detail card on demand, a roster in columns */
+/* the project's pennant: one colour per project, the same everywhere */
+.pennant{display:inline-block;width:9px;height:12px;margin-left:6px;vertical-align:-1px;
+  background:var(--pc,#d9a441);clip-path:polygon(0 0,100% 50%,0 100%)}
+.pdot{display:inline-block;width:8px;height:8px;margin-right:6px;border-radius:2px;background:var(--pc,#d9a441)}
+.pchip[style*="--pc"]{border-color:var(--pc);color:var(--pc)}
+/* a tag off the deck's spacing - firstmate's, at the helm - stacks one line up */
+.bub.alt{bottom:calc(var(--deckY0) + var(--r,0) * var(--rowStep) + var(--figH,62px) + 38px)}
+.bub.mini .who{white-space:nowrap;overflow-wrap:normal}
+/* a far deck of a crowded ship, on a narrow screen, keeps only its pennant */
+@media(max-width:640px){.bub.far .who{font-size:0;text-overflow:clip}.bub.far .pennant{margin:0}}
+.bub.open{z-index:20}
+.crewcard{position:absolute;left:50%;bottom:calc(100% + 10px);transform:translateX(-50%);z-index:20;
+  width:max-content;max-width:min(340px,86vw);padding:8px 11px;text-align:left;pointer-events:auto;
+  background:#0c131b;border:1px solid var(--bubEdge,#2c3f52);border-radius:10px;
+  box-shadow:0 10px 26px rgba(0,0,0,.6)}
+.crewcard[hidden]{display:none}
+.crewcard dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 12px;margin:0}
+.crewcard dt{font:600 13px var(--mono);color:#7f9db5}
+.crewcard dd{margin:0;font-size:13px;color:#dbe8f4;overflow-wrap:anywhere}
+.crewcard dd.job{display:block;margin:0;-webkit-line-clamp:unset;color:var(--brass,#d9a441)}
+.crewcard a[data-pr]{color:inherit;pointer-events:auto}
+.crewcard .att,.roster .att{color:#7f9db5;font-size:13px}
+/* the roster: one row per crew member, one column per field */
+.roster h3 .rgroupbtn{margin-left:auto;margin-right:10px;font:650 11px var(--mono);color:#9dc0d8;cursor:pointer;
+  background:rgba(9,20,30,.72);border:1px solid #27455e;border-radius:99px;padding:1px 9px}
+.roster h3 .rgroupbtn[aria-pressed="true"]{background:#1d4b7a;border-color:#1d4b7a;color:#fff}
+.roster .rhead,.roster li.rrow{display:grid;align-items:center;column-gap:10px;
+  grid-template-columns:8px minmax(70px,1fr) minmax(62px,.7fr) minmax(80px,1fr) minmax(44px,.5fr)
+    minmax(64px,.7fr) minmax(44px,.5fr) minmax(0,2.6fr);
+  grid-template-areas:"av nm rl pj rd st pr jb"}
+.roster .rhead{padding:5px 13px;border-bottom:1px solid var(--line);background:rgba(9,20,30,.5)}
+.roster .rhead>:first-child{grid-column:2}
+.roster .rhead .rsort,.roster .rhead .rcol{font:650 11px var(--mono);letter-spacing:.04em;color:#7f9db5;
+  background:none;border:0;padding:0;text-align:left;cursor:pointer}
+.roster .rhead .rcol{cursor:default}
+.roster .rhead .rsort[aria-pressed="true"]{color:var(--brass,#d9a441);text-decoration:underline}
+.roster ul.rows{grid-template-columns:minmax(0,1fr)}
+.roster li.rrow .l1{display:contents}
+.roster li.rrow .av{grid-area:av}.roster li.rrow .nm{grid-area:nm}.roster li.rrow .rl{grid-area:rl}
+.roster li.rrow .pj{grid-area:pj}.roster li.rrow .rd{grid-area:rd}.roster li.rrow .st{grid-area:st;justify-self:start}
+.roster li.rrow .rpr{grid-area:pr;margin-left:0}.roster li.rrow .jb{grid-area:jb}
+.roster .rl,.roster .pj,.roster .rd{font-size:13px;color:#c6d8e8;min-width:0;overflow-wrap:anywhere}
+.roster h4.rgroup{margin:0;padding:6px 13px;font:650 12px var(--mono);color:#c6d8e8;
+  background:rgba(217,164,65,.05);border-top:1px solid var(--line)}
+.roster h4.rgroup span{color:#7f9db5}
+/* on a phone each row is two lines of the same cells, each labelled */
+@media(max-width:640px){
+  .roster .rhead .rcol,.roster .rhead .rsort[data-sort="task"]{display:none}
+  .roster .rhead{display:flex;flex-wrap:wrap;gap:4px 12px}
+  .roster li.rrow{grid-template-columns:8px minmax(0,1fr) auto auto auto;row-gap:4px;
+    grid-template-areas:"av nm rl pj st" ". jb jb rd pr"}
+  .roster li.rrow [data-label]::before{content:attr(data-label) " ";display:block;
+    font:600 11px var(--mono);color:#7f9db5}
+}

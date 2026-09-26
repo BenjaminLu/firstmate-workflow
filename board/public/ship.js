@@ -118,33 +118,50 @@ const SHIP = (() => {
       body(c) + `</div>`;
   }
 
-  // A name tag over each head: who, and what they are on. No progress and no
-  // percentage here - the roster carries a bar, and only for bounded progress.
-  // T-054: with several projects aboard, whose task it is. The name is data
-  // and shown as written; only the label is the dictionary's.
-  const projectChip = (c, T) => c.project && c.showProject
-    ? ` <span class="pchip" data-chip="${esc(c.project)}" title="${esc(T("projectChip"))}"` +
-      ` aria-label="${esc(T("projectChip"))}: ${esc(c.project)}">${esc(c.project)}</span>` : "";
+  // T-116: a project's one colour, wherever it appears on the board - the
+  // pennant on a name tag, the roster's project column, a card's chip. Read
+  // off the name, so it needs no registry and never changes between pages.
+  const projectColor = (p) => `hsl(${hash(p) % 360} 62% 60%)`;
+  const pennant = (c, T) => c.project
+    ? `<i class="pennant" role="img" style="--pc:${projectColor(c.project)}" data-project="${esc(c.project)}"` +
+      ` aria-label="${esc(T("projectChip"))}: ${esc(c.project)}" title="${esc(c.project)}"></i>` : "";
+  // A quiet name tag over each head (T-116): the crew member's name and the
+  // pennant of the project, and nothing else - no task, round, pull request
+  // or activity, which crowded 24 tags into one another. Those are in the
+  // detail card, which the same tag holds closed until the figure is
+  // hovered, focused or tapped. No progress and no percentage anywhere here.
   function bubble(c, T, topRow) {
-    if (c.row !== topRow) {
-      // the chip carries the TASK. The criterion has no crowding
-      // qualifier, and a chip with only the agent's name meant no bubble
-      // anywhere on a crowded ship said what anyone was working on. The
-      // agent's own name is in the roster beside it.
-      return `<div class="bub mini st-${c.state}" data-bubble="${esc(c.id)}" style="--px:${c.x}%;--r:${c.row}">` +
-        `<div class="who">${esc(c.name)} ${esc(c.task || '')}${projectChip(c, T)}</div></div>`;
-    }
-    return `<div class="bub st-${c.state}" data-bubble="${esc(c.id)}" style="--px:${c.x}%;--r:${c.row}">` +
-      `<div class="who">${esc(c.name)}${projectChip(c, T)}</div>` +
-      `<div class="job">${linkPrs(esc(c.job), c.pr_urls)}</div></div>`;
+    const open = SHIP.openCard === c.id;
+    return `<div class="bub${c.row !== topRow ? " mini" : ""} st-${c.state}${c.alt ? " alt" : ""}${c.far ? " far" : ""}${open ? " open" : ""}"` +
+      ` data-bubble="${esc(c.id)}" style="--px:${c.x}%;--r:${c.row};--tagW:${c.tagW}%">` +
+      `<div class="who">${esc(c.name)}${pennant(c, T)}</div>${detail(c, T, open)}</div>`;
+  }
+  // One labelled line per field, each on its own: never a joined string.
+  function detail(c, T, open) {
+    const unknown = esc(T("crewUnknown"));
+    const line = (key, label, value) => `<dt>${esc(label)}</dt><dd class="${key}">${value}</dd>`;
+    const round = c.round == null ? unknown
+      : esc(c.round) + (c.attempt > 1 ? ` <span class="att">${esc(T("crewAttempt"))} ${esc(c.attempt)}</span>` : "");
+    return `<div class="crewcard" id="crewcard-${esc(c.id)}" role="dialog" aria-label="${esc(T("crewCard"))}: ${esc(c.name)}"` +
+      `${open ? "" : " hidden"}><dl>` +
+      line("cname", T("crewName"), esc(c.name)) +
+      line("crole", T("crewRole"), esc(c.roleLabel)) +
+      line("cproject", T("projectChip"), c.project ? `${pennant(c, T)} ${esc(c.project)}` : unknown) +
+      line("ctask", T("crewTask"), c.task
+        ? `<b>${esc(c.task)}</b> ${linkPrs(esc(c.title || T("titleMissing")), c.pr_urls)}` : unknown) +
+      line("cround", T("crewRound"), round) +
+      line("cpr", T("crewPr"), c.pr ? prRef(c.pr, c.pr_url) : unknown) +
+      line("cstate", T("crewState"), esc(T("lane" + c.state[0].toUpperCase() + c.state.slice(1)))) +
+      // .job: the current activity, the one line the tag used to carry
+      line("job", T("crewActivity"), linkPrs(esc(c.activity), c.pr_urls)) +
+      `</dl></div>`;
   }
 
   // the server sends one of these three; an unknown one is a mismatch
   // between the two halves, and .fig.r-unknown draws it as one. Exported
   // because the sheet has to carry a rule for every value in here and
   // nothing can check that against a constant it cannot see.
-  const ROLE = { firstmate: "fm", worker: "w", reviewer: "r" };   // no captain: see captain()
-  // The crew are AGENTS. The server derives them from the actors in the
+  const ROLE = { firstmate: "fm", worker: "w", reviewer: "r" };   // no captain: see captain()  // The crew are AGENTS. The server derives them from the actors in the
   // event log - who is running, and what each one is on - because a
   // crewman standing on the deck is something doing work, not a task
   // waiting for someone. Drawing one per in-flight task put pull requests
@@ -175,18 +192,27 @@ const SHIP = (() => {
       return {
         id: a.id,
         role: ROLE[a.role] || "unknown",
+        // the role as a reader names it, from the dictionary
+        roleLabel: a.role === "worker" ? T("roleWorker") : a.role === "reviewer" ? T("roleReviewer")
+          : a.role === "firstmate" ? T("roleFirstmate") : T("crewUnknown"),
         state: a.state || "unknown",
-        // the agent's own name, and what it is on underneath
-        name: a.role === "firstmate" ? label.firstmate : a.crew_name || a.id,
+        // T-116: the crew member's own name, a field the server sends; a
+        // run that recorded none is known by its crew_name, then its id
+        name: a.role === "firstmate" ? label.firstmate : a.name || a.crew_name || a.id,
+        // the task's review round and the retry within it; null is unknown
+        round: Number.isInteger(a.round) ? a.round : null,
+        attempt: Number.isInteger(a.attempt) ? a.attempt : null,
         // only firstmate can be aboard without a task: the server skips a
         // taskless worker or reviewer, so there is no third case to write
         job: a.task ? `${a.task} · ${activity}` : activity,
         activity,
         task: a.task || null,
         title: a.title || null,
-        // the project of the task it is on, and whether the bubble says so
+        // the project of the task it is on: shown on every tag and roster
+        // row, one project or several (T-116)
         project: a.task ? projectOf(a) : null,
         showProject: several,
+        color: a.task && projectOf(a) ? projectColor(projectOf(a)) : null,
         pr: taskOf(a).pr ?? null,
         // the URL the server put beside the task's number (T-069), or none
         pr_url: taskOf(a).pr_url ?? null,
@@ -247,14 +273,22 @@ const SHIP = (() => {
     let k = 0;
     for (let r = rows - 1; r >= 0; r--) {
       const n = per[r], span = rate.w * taper(r, rows) * 0.9;
+      // T-116: a name tag shrinks to the gap to its neighbour, so 24 tags
+      // cannot overlap, and a far deck of a crowded ship keeps only its
+      // pennant on a narrow screen (ship.css).
+      const gap = span / (n + (r === rows - 1 ? 1 : 0));
       for (let i = 0; i < n; i++, k++) {
         crew[k].row = r;
         crew[k].x = +(50 - span / 2 + (span * (i + 0.5)) / (n + (r === rows-1 ? 1 : 0))).toFixed(2);
         crew[k].action = crew[k].role === 'fm' ? 'helm' : actionFor(crew[k].id, crew[k].state);
+        crew[k].tagW = +Math.min(15, gap * 0.95).toFixed(2);
+        crew[k].far = crew.length > 14 && rows - 1 - r >= 2;
       }
     }
     const firstmate = crew.find(c=>c.role==='fm');
-    if (firstmate) firstmate.x = 50 - rate.w * .3;
+    // firstmate stands at the helm, off the deck's spacing, so its tag is
+    // stacked one line above the others rather than into its neighbour's
+    if (firstmate) { firstmate.x = 50 - rate.w * .3; firstmate.alt = true; }
 
     // one gun list: ports, flashes and the count of shots all read it
     const guns = [];
@@ -277,7 +311,6 @@ const SHIP = (() => {
     host.style.setProperty("--deckW", rate.w + "%");
     host.style.setProperty("--hullBottom", HULL_BOTTOM + "px");
     host.style.setProperty("--figH", Math.round(FIG_H * rate.sc) + "px");
-    host.style.setProperty("--bubW", Math.max(9, Math.min(15, 96 / crew.length)) + "%");
     host.dataset.rate = rate.key;
     host.dataset.crew = String(crew.length);
 
@@ -334,7 +367,13 @@ const SHIP = (() => {
     if (layer?.remove) host.append(layer);
     for (const c of crew) {
       const p = [...host.querySelectorAll('[data-crew]')].find(el=>el.dataset.crew===c.id);
-      if (p) { p.setAttribute('aria-label',`${c.name} · ${c.job} · ${T('lane'+c.state[0].toUpperCase()+c.state.slice(1))}`); p.tabIndex=0; }
+      if (p) {
+        // the figure names its crew member; the card, which it describes
+        // and controls, carries every other field (T-116)
+        p.setAttribute('aria-label',`${c.name} · ${T('lane'+c.state[0].toUpperCase()+c.state.slice(1))}`); p.tabIndex=0;
+        p.setAttribute('aria-describedby',`crewcard-${c.id}`); p.setAttribute('aria-controls',`crewcard-${c.id}`);
+        p.setAttribute('aria-haspopup','dialog'); p.setAttribute('aria-expanded',String(SHIP.openCard===c.id));
+      }
     }
 
     host.querySelector("#muteBtn").onclick = (e) => {
@@ -356,6 +395,7 @@ const SHIP = (() => {
     host.querySelector("#ahoyDemo").onclick = () => enqueue(host, "merge", `demo:merge:${++demos}`);
     host.querySelector("#orderDemo").onclick = () => enqueue(host, "order", `demo:order:${++demos}`);
     drag(host);
+    cards(host);
     applyEffect(host);
     if (host.ownerDocument) handoffs(host,s.handoffs || [],T,crew);
     return crew;
@@ -386,23 +426,135 @@ const SHIP = (() => {
   // Two-column rows, as the prototype lays them out: status dot, name, stage
   // pill and pull request over the task and the authored activity. A bar only
   // for bounded progress, and never a percentage.
+  //
+  // T-116: the fields are separate columns - name, role, project, task (id
+  // and title), round, pull request, state - under one header, and the
+  // project column is there with one project as with several. On a phone
+  // each row folds into two lines of the same cells, each labelled by its
+  // data-label (ship.css). The roster sorts by any column and can group its
+  // rows by project; both choices survive a reload.
+  const SORTS = {
+    name: (c) => c.name, role: (c) => c.roleLabel, project: (c) => c.project || "",
+    task: (c) => c.task || "", round: (c) => c.round ?? -1, state: (c) => c.state,
+  };
   function roster(host, crew, T) {
     if (host.ownerDocument) host.hidden = !SHIP.rosterOn;
-    patch(host, `<h3><span>${esc(T("roster"))}</span><span>${crew.length}</span></h3><ul class="rows">` +
-      crew.map((c) => `<li class="rrow st-${c.state}" data-roster="${esc(c.id)}">` +
-        `<div class="l1"><span class="av" aria-hidden="true"></span>` +
-        `<span class="nm">${esc(c.name)}</span>` +
-        `<span class="st">${esc(T("lane" + c.state[0].toUpperCase() + c.state.slice(1)))}</span>` +
-        `<span class="rpr">${c.pr ? prRef(c.pr, c.pr_url) : ""}</span></div>` +
-        `<div class="jb">` +
-        (c.task ? `<b class="tk">${esc(c.task)}</b> <span class="tt">${linkPrs(esc(c.title || T("titleMissing")), c.pr_urls)}</span> ` : "") +
-        `<span class="act">${linkPrs(esc(c.activity), c.pr_urls)}</span>` +
-        (c.progress
-          ? `<span class="pb" role="progressbar" aria-valuemin="0" aria-valuenow="${c.progress.done}" ` +
-            `aria-valuemax="${c.progress.total}" title="${c.progress.done}/${c.progress.total}">` +
-            `<i style="width:${c.pct}%"></i></span>`
-          : "") +
-        `</div></li>`).join("") + `</ul>`);
+    host._roster = { crew, T };
+    const unknown = esc(T("crewUnknown"));
+    const key = SORTS[SHIP.rosterSort] ? SHIP.rosterSort : null;
+    // firstmate heads the list whatever the order, as it heads the deck
+    const cmp = (a, b) => {
+      if ((a.role === "fm") !== (b.role === "fm")) return a.role === "fm" ? -1 : 1;
+      const x = SORTS[key](a), y = SORTS[key](b);
+      return typeof x === "number" ? x - y : String(x).localeCompare(String(y));
+    };
+    const order = key ? [...crew].sort(cmp) : crew;
+    const cell = (cls, label, value) => `<span class="${cls}" data-label="${esc(label)}">${value}</span>`;
+    const row = (c) => `<li class="rrow st-${c.state}" data-roster="${esc(c.id)}"${c.project ? ` data-project="${esc(c.project)}"` : ""}>` +
+      `<div class="l1"><span class="av" aria-hidden="true"></span>` +
+      `<span class="nm" data-label="${esc(T("crewName"))}">${esc(c.name)}</span>` +
+      cell("rl", T("crewRole"), esc(c.roleLabel)) +
+      cell("pj", T("projectChip"), c.project
+        ? `<i class="pdot" style="--pc:${projectColor(c.project)}" aria-hidden="true"></i>${esc(c.project)}` : unknown) +
+      cell("rd", T("crewRound"), c.round == null ? unknown
+        : esc(c.round) + (c.attempt > 1 ? ` <span class="att">${esc(T("crewAttempt"))} ${esc(c.attempt)}</span>` : "")) +
+      `<span class="st" data-label="${esc(T("crewState"))}">${esc(T("lane" + c.state[0].toUpperCase() + c.state.slice(1)))}</span>` +
+      `<span class="rpr" data-label="${esc(T("crewPr"))}">${c.pr ? prRef(c.pr, c.pr_url) : ""}</span></div>` +
+      `<div class="jb" data-label="${esc(T("crewTask"))}">` +
+      (c.task ? `<b class="tk">${esc(c.task)}</b> <span class="tt">${linkPrs(esc(c.title || T("titleMissing")), c.pr_urls)}</span> ` : "") +
+      `<span class="act">${linkPrs(esc(c.activity), c.pr_urls)}</span>` +
+      (c.progress
+        ? `<span class="pb" role="progressbar" aria-valuemin="0" aria-valuenow="${c.progress.done}" ` +
+          `aria-valuemax="${c.progress.total}" title="${c.progress.done}/${c.progress.total}">` +
+          `<i style="width:${c.pct}%"></i></span>`
+        : "") +
+      `</div></li>`;
+    const head = `<div class="rhead" role="group" aria-label="${esc(T("rosterSort"))}">` +[["name", T("crewName")], ["role", T("crewRole")], ["project", T("projectChip")],
+      ["round", T("crewRound")], ["state", T("crewState")], [null, T("crewPr")], ["task", T("crewTask")]]
+      .map(([k, label]) => k
+        ? `<button class="rsort" data-sort="${k}" aria-pressed="${key === k}">${esc(label)}</button>`
+        : `<span class="rcol">${esc(label)}</span>`).join("") + `</div>`;
+    let lists;
+    if (SHIP.rosterGroup) {
+      const groups = new Map();
+      for (const c of order) {
+        const g = c.project || "";
+        if (!groups.has(g)) groups.set(g, []);
+        groups.get(g).push(c);
+      }
+      lists = [...groups].map(([g, rows]) => `<h4 class="rgroup"${g ? ` data-project="${esc(g)}"` : ""}>` +
+        (g ? `<i class="pdot" style="--pc:${projectColor(g)}" aria-hidden="true"></i>${esc(g)}` : unknown) +
+        ` <span>${rows.length}</span></h4><ul class="rows">${rows.map(row).join("")}</ul>`).join("");
+    } else lists = `<ul class="rows">${order.map(row).join("")}</ul>`;
+    patch(host, `<h3><span>${esc(T("roster"))}</span>` +
+      `<button class="rgroupbtn" data-group aria-pressed="${!!SHIP.rosterGroup}">${esc(T("rosterGroup"))}</button>` +
+      `<span>${crew.length}</span></h3>` + head + lists);
+    if (!host.ownerDocument || host._rosterBound) return;
+    host._rosterBound = true;
+    host.addEventListener("click", (e) => {
+      const sort = e.target.closest("[data-sort]"), group = e.target.closest("[data-group]");
+      if (!sort && !group) return;
+      if (sort) SHIP.rosterSort = SHIP.rosterSort === sort.dataset.sort ? null : sort.dataset.sort;
+      if (group) SHIP.rosterGroup = !SHIP.rosterGroup;
+      try {
+        localStorage.setItem("board.rosterSort", SHIP.rosterSort || "");
+        localStorage.setItem("board.rosterGroup", SHIP.rosterGroup ? "1" : "");
+      } catch (_) {}
+      roster(host, host._roster.crew, host._roster.T);
+    });
+  }
+
+  // The detail card (T-116): one open at a time, anchored in the figure's own
+  // name tag. Hover or focus opens it and leaving closes it; a tap - a touch
+  // or a pen that did not drag - toggles it; Esc closes it and hands focus
+  // back to the figure. Which card is open lives here, so a re-render from
+  // /api/state keeps it open.
+  function showCard(host, id) {
+    SHIP.openCard = id;
+    for (const b of host.querySelectorAll('[data-bubble]')) {
+      const on = b.dataset.bubble === id;
+      b.classList.toggle('open', on);
+      const card = b.querySelector('.crewcard');
+      if (card) card.hidden = !on;
+    }
+    for (const p of host.querySelectorAll('.pivot[data-crew]'))
+      if (p.hasAttribute('aria-expanded')) p.setAttribute('aria-expanded', String(p.dataset.crew === id));
+  }
+  function cards(host) {
+    if (!host.ownerDocument) return;
+    let timer = null;
+    const later = () => { clearTimeout(timer); timer = setTimeout(() => showCard(host, null), 250); };
+    const keep = () => clearTimeout(timer);
+    const idOf = (el) => el.closest('[data-crew],[data-bubble]');
+    host.querySelectorAll('.pivot[data-crew],[data-bubble]').forEach((el) => {
+      if (el._cardBound || el.closest('#captain')) return;
+      el._cardBound = true;
+      const id = () => el.dataset.crew || el.dataset.bubble;
+      el.addEventListener('pointerenter', (e) => { if (e.pointerType === 'mouse') { keep(); showCard(host, id()); } });
+      el.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') later(); });
+      if (!el.dataset.crew) return;
+      el.addEventListener('focus', () => { if (host._cardQuiet) return; keep(); showCard(host, id()); });
+      el.addEventListener('blur', later);
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showCard(host, SHIP.openCard === id() ? null : id()); }
+      });
+      el.addEventListener('fm-tap', () => showCard(host, SHIP.openCard === id() ? null : id()));
+    });
+    if (host._cardKeys) return;
+    host._cardKeys = true;
+    host.ownerDocument.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || !SHIP.openCard) return;
+      const was = SHIP.openCard;
+      showCard(host, null);
+      // back to the figure, without the focus reopening what Esc closed
+      host._cardQuiet = true;
+      [...host.querySelectorAll('.pivot[data-crew]')].find((p) => p.dataset.crew === was)?.focus({ preventScroll: true });
+      host._cardQuiet = false;
+    });
+    // a tap anywhere else on the page closes the card a tap opened
+    host.ownerDocument.addEventListener('pointerdown', (e) => {
+      if (SHIP.openCard && e.pointerType !== 'mouse' && !idOf(e.target)) showCard(host, null);
+    });
   }
 
   // Drag to turn a crewman; the pointer owns him until it lets go.
@@ -413,20 +565,26 @@ const SHIP = (() => {
     host.querySelectorAll(".pivot").forEach((p) => {
       if (p._dragBound) return;
       p._dragBound = true;
-      let x0 = 0, y0 = 0, ry = -26, rx = 8, on = false;
+      let x0 = 0, y0 = 0, ry = -26, rx = 8, on = false, moved = false;
       p.addEventListener("pointerdown", (e) => {
-        e.stopPropagation(); on = true; x0 = e.clientX; y0 = e.clientY;
+        e.stopPropagation(); on = true; moved = false; x0 = e.clientX; y0 = e.clientY;
         ry = parseFloat(p.style.getPropertyValue("--ry")) || -26;
         rx = parseFloat(p.style.getPropertyValue("--rx")) || 8;
         p.classList.add("dragging"); p.setPointerCapture(e.pointerId); e.preventDefault();
       });
       p.addEventListener("pointermove", (e) => {
         if (!on) return;
+        if (Math.abs(e.clientX - x0) + Math.abs(e.clientY - y0) > 6) moved = true;
         p.style.setProperty("--ry", (ry + (e.clientX - x0) * 0.6) + "deg");
         p.style.setProperty("--rx", Math.max(-32, Math.min(42, rx - (e.clientY - y0) * 0.4)) + "deg");
       });
       const up = () => { on = false; p.classList.remove("dragging"); };
-      p.addEventListener("pointerup", up);
+      // a touch that did not turn him is a tap: it toggles his card (T-116)
+      p.addEventListener("pointerup", (e) => {
+        const tap = on && !moved && e.pointerType !== "mouse";
+        up();
+        if (tap) p.dispatchEvent(new Event("fm-tap"));
+      });
       p.addEventListener("pointercancel", up);
       p.addEventListener('dblclick',e=>{e.stopPropagation();p.style.removeProperty('--rx');p.style.removeProperty('--ry');});
     });
@@ -434,7 +592,7 @@ const SHIP = (() => {
     host._deckDrag = true;
     let start = null;
     host.addEventListener('pointerdown', e=>{
-      if (e.target.closest('button,a,.pivot')) return;
+      if (e.target.closest('button,a,.pivot,.crewcard')) return;
       start = {x:e.clientX,y:e.clientY,crew:[...host.querySelectorAll('.pivot')].map(p=>[p,parseFloat(p.style.getPropertyValue('--ry')) || -26,parseFloat(p.style.getPropertyValue('--rx')) || 8])};
       host.setPointerCapture(e.pointerId);e.preventDefault();
     });
@@ -574,7 +732,11 @@ const SHIP = (() => {
   }
 
   return { render, roster, captain, portrait, patch, enqueue, unlock, active:() => current,
-           rateFor, actionFor, crewOf, layout, RATES, ACTIONS, ROLE, prRef, linkPrs,
+           rateFor, actionFor, crewOf, layout, RATES, ACTIONS, ROLE, prRef, linkPrs, projectColor,
+           // T-116: the one open detail card, and the roster's order and grouping
+           openCard: null,
+           rosterSort: (() => { try { return localStorage.getItem("board.rosterSort") || null; } catch (_) { return null; } })(),
+           rosterGroup: (() => { try { return !!localStorage.getItem("board.rosterGroup"); } catch (_) { return false; } })(),
            muted: (() => { try { return !!localStorage.getItem("board.muted"); } catch (_) { return false; } })(),
            // shown unless the captain hid it; the choice survives a reload
            rosterOn: (() => { try { return localStorage.getItem("board.roster") !== "hidden"; } catch (_) { return true; } })() };

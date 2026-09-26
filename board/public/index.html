@@ -39,6 +39,10 @@ section>h2{margin:0 0 10px;font:600 13px var(--mono);color:var(--fg3);
 .card .t.missing{color:var(--fg3);font-style:italic}
 .card .crew,.card .dep{font:13px var(--mono);color:var(--fg2);margin-top:4px}
 .card .dep{color:var(--warn)}
+/* T-116: one chip per crew member on a card: name, role, round */
+.card .crew{display:flex;flex-wrap:wrap;gap:4px}
+.card .cchip{display:inline-flex;gap:6px;align-items:baseline;padding:1px 7px;border:1px solid var(--line);border-radius:99px}
+.card .cchip .cn{color:var(--fg)}.card .cchip .cr,.card .cchip .cd{color:var(--fg2)}
 .card .badge{display:inline-block;margin:6px 6px 0 0;font:700 13px var(--mono);color:#fff;
   background:#6b3fa0;border-radius:5px;padding:2px 7px}
 .card .badge.b-gate{background:#7c322b}
@@ -236,8 +240,15 @@ const projOf = o => o?.project || latest?.default_project || null;
 const multi = () => (latest?.projects || []).length > 1;
 // a project's name is data and is shown as written; only its label is the
 // dictionary's
-const chip = p => p ? `<span class="project pchip" data-chip="${esc(p)}" title="${esc(t('projectChip'))}"` +
+const chip = p => p ? `<span class="project pchip" data-chip="${esc(p)}" style="--pc:${SHIP.projectColor(p)}" title="${esc(t('projectChip'))}"` +
   ` aria-label="${esc(t('projectChip'))}: ${esc(p)}">${esc(p)}</span>` : '';
+// T-116: a card's crew, one chip each - name, role and round as separate
+// fields the server sent, never a string joined from actors
+const crewChip = c => `<span class="cchip r-${esc(c.role)}" data-crew-chip="${esc(c.id)}">` +
+  `<b class="cn">${esc(c.name)}</b>` +
+  `<span class="cr">${esc(c.role === 'reviewer' ? t("roleReviewer") : c.role === 'worker' ? t("roleWorker") : t("crewUnknown"))}</span>` +
+  `<span class="cd">${esc(t("crewRound"))} ${c.round == null ? esc(t("crewUnknown")) : esc(c.round)}` +
+  `${c.attempt > 1 ? ` · ${esc(t("crewAttempt"))} ${esc(c.attempt)}` : ''}</span></span>`;
 // text someone wrote, escaped, with every #n in it linked to the pull request
 // of the project the text belongs to
 const said = (s, owner) => SHIP.linkPrs(esc(s),
@@ -374,7 +385,7 @@ function render(s) {
     `<div class="hd"><span class="id">${esc(task.id)}</span>${multi() ? chip(task.project) : ''}` +
     `${task.pr ? prRef(task.pr, task.pr_url) : ''}${menu(task)}</div>` +
     title(task) +
-    ((task.crew || []).length ? `<div class="crew">${esc(task.crew.join(', '))}</div>` : '') +
+    ((task.crew || []).length ? `<div class="crew">${task.crew.map(crewChip).join('')}</div>` : '') +
     ((task.blocked_on || []).length ? `<div class="dep">${esc(t("blockedOn"))} ${esc((task.blocked_by || task.blocked_on.map(id => ({id}))).map(blocker).join(', '))}</div>` : '') +
     (task.badges || []).map(b => `<span class="badge b-${esc(b.kind)}">${esc(badge(b))}</span>`).join('') + `</div>`;
   SHIP.patch(document.getElementById("lanes"), (s.lanes || []).map(k => {

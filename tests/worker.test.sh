@@ -92,6 +92,16 @@ assert_contains "$(jq -r .type < "$log" | tr '\n' ' ')" "pr_opened" "it emitted 
 assert_eq "$(jq -r 'select(.type=="dispatched")|.actor' "$log")" \
   "$(jq -r 'select(.type=="dispatched")|.data.crew_name' "$log")" \
   "the worker publishes its exact canonical actor as crew_name"
+# T-116: the identity rides every payload of the run as separate fields, and
+# a task's first worker run is round 1, attempt 1
+wactor="$(jq -r 'select(.type=="dispatched")|.actor' "$log")"
+assert_matches "$wactor" '^worker-[a-z0-9-]+-tz-r1$' "a first worker run's actor carries round 1, not a run counter"
+assert_eq '["worker","T-Z",1,1,"string",true]' \
+  "$(jq -c --arg a "$wactor" 'select(.actor==$a)|.data.identity|[.role,.task,.round,.attempt,(.name|type),has("project")]' "$log" | sort -u)" \
+  "every payload of the worker run carries role, task, round, attempt, name and project as fields"
+assert_eq "$(jq -r '[.name,.round,.attempt]|join(" ")' "$r/state/runs/$wactor/identity.json")" \
+  "$(jq -r 'select(.type=="dispatched")|.data.identity|[.name,.round,.attempt]|join(" ")' "$log")" \
+  "and they are the fields identity.json records"
 assert_ne "null" "$(jq -r 'select(.type=="dispatched")|.data.activity.en' "$log")" \
   "the worker emits authored activity.en (never invents from a missing field as null-only)"
 assert_ne "null" "$(jq -r 'select(.type=="dispatched")|.data.activity["zh-TW"]' "$log")" \

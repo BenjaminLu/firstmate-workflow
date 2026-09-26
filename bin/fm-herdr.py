@@ -288,11 +288,70 @@ def crew_rosters(root, warn=True):
     return rosters
 
 
+# An actor is <role>-<name>-<task slug>-r<n>[<attempt mark>]. Before T-116 <n>
+# was the global run counter; since, it is the task's review round, and a
+# retry of the same role, task and round adds a letter (r12b). One pattern
+# reads both forms; which one <n> is comes from identity.json, never from here.
+ACTOR = re.compile(r'^(worker|reviewer|firstmate)-(.+)-([a-z0-9]+)-r([0-9]+)([a-z]*)$')
+
+
 def crew_name(identity):
     """The crew member a run belongs to; runs before T-089 carry it in the actor."""
     if identity.get('name'): return identity['name']
-    found = re.match(r'^(?:worker|reviewer|firstmate)-(.+)-[a-z0-9]+-r[0-9]+$', identity.get('actor', ''))
-    return found.group(1) if found else None
+    found = ACTOR.match(identity.get('actor', ''))
+    return found.group(2) if found else None
+
+
+def attempt_mark(attempt):
+    """'' for a first attempt, then b, c, ... z, ba, bb: bijective base 26, so
+    every attempt has its own mark and 2 is b, the second."""
+    mark, n = '', int(attempt)
+    if n <= 1: return ''
+    while n:
+        n, digit = divmod(n - 1, 26)
+        mark = chr(ord('a') + digit) + mark
+    return mark
+
+
+def run_project(root):
+    """The project a run is for, resolved as fm_project_resolve does without an
+    explicit one: FM_PROJECT, then config.yaml's default_project."""
+    return os.environ.get('FM_PROJECT') or default_project(root)
+
+
+def default_project(root):
+    """config.yaml's default_project: the project an event naming none is
+    about. None when it names none, which is the board's one default."""
+    config = Path(root) / 'config.yaml'
+    if not config.is_file(): return None
+    for raw in config.read_text().splitlines():
+        found = re.match(r'default_project:(?:\s+(.*))?$', raw)
+        if found:
+            try: return _project_scalar(found.group(1) or '', 'config.yaml default_project') or None
+            except ValueError: return None
+    return None
+
+
+def review_round(root, task, project):
+    """The task's review round for a run starting now: FM_ROUND when the caller
+    knows it (fm-review.sh --round), else one past the review rounds the log
+    has opened on this task of this project, as fm-run.sh counts them. A
+    worker's first run is round 1, and the review that follows it is too."""
+    given = os.environ.get('FM_ROUND', '')
+    if re.fullmatch(r'[1-9][0-9]{0,5}', given): return int(given)
+    opened, default = 0, default_project(root)
+    log = Path(root) / 'state/events.jsonl'
+    try: lines = log.read_text().splitlines() if log.is_file() else []
+    except OSError: lines = []
+    for line in lines:
+        try: event = json.loads(line)
+        except ValueError: continue
+        if not isinstance(event, dict): continue
+        if event.get('type') != 'review_opened' or event.get('task') != task: continue
+        # an event naming no project is the default project's
+        if (event.get('project') or default) != project: continue
+        opened += 1
+    return opened + 1
 
 
 def run_is_live(run):
@@ -371,14 +430,17 @@ def allocate(root, role, task, alias):
     root = Path(root).resolve()
     directory = root / 'state/runs'
     rosters = crew_rosters(root)
+    project = run_project(root)
     with locked(directory / '.identity.lock'):
-        counter = directory / 'counter.json'
-        number = read(counter)['number'] + 1 if counter.exists() else 1
+        # The actor carries the task's review round, not a global counter
+        # (T-116): r465 read as round 465 on a task in its first round.
+        number = review_round(root, task, project)
         task_slug = re.sub('[^a-z0-9]', '', task.lower())
         # Long task IDs keep a digest so truncation cannot hide their mapping.
         if len(task_slug) > 9:
             task_slug = task_slug[:4] + hashlib.sha256(task.encode()).hexdigest()[:5]
         live, previous, other_role = set(), [], set()
+        attempt = 1
         served = served_roles(root)
         for file in directory.glob('*/identity.json'):
             try: identity = read(file)
@@ -388,21 +450,32 @@ def allocate(root, role, task, alias):
             if identity.get('task') == task:
                 if identity.get('role') == role: previous.append((identity.get('created', 0), name))
                 else: other_role.add(name)
+                # a retry of this role, task and round is the next attempt;
+                # a run from before T-116 records no round and is none of them
+                if (identity.get('role') == role and identity.get('round') == number
+                        and identity.get('project') == project
+                        and isinstance(identity.get('attempt'), int)):
+                    attempt = max(attempt, identity['attempt'] + 1)
             if run_is_live(file.parent): live.add(name)
         last = max(previous)[1] if previous else None
         while True:
-            suffix = f'-{task_slug}-r{number}'
-            # Measured against the final suffix: a counter that gains a digit
-            # on retry must not push the actor past 32 characters.
+            suffix = f'-{task_slug}-r{number}{attempt_mark(attempt)}'
+            # Measured against the final suffix: an attempt mark added on
+            # retry must not push the actor past 32 characters.
             room = 32 - len(role) - 1 - len(suffix)
             name = choose_name(alias, role, rosters, live, last, other_role, room, served)
             actor = role + '-' + name + suffix
             run = directory / actor
+            # a directory already there - a run from before T-116 whose counter
+            # happened to equal this round, or a racing retry - is another
+            # attempt, so every run still has its own identity
             try: run.mkdir(parents=True); break
-            except FileExistsError: number += 1
-        save(counter, dict(number=number))
+            except FileExistsError: attempt += 1
         # one_role: written under T-104's rule, so this run binds the name to its role.
-        record = dict(actor=actor, role=role, task=task, name=name, one_role=True,
+        # name, role, project, task, round and attempt are the board's fields
+        # (T-116): nothing reads them back out of the actor.
+        record = dict(actor=actor, role=role, task=task, name=name, project=project,
+                      round=number, attempt=attempt, one_role=True,
                       requested_alias=alias, run=str(run), created=time.time())
         save(run / 'identity.json', record)
     return run
@@ -1262,6 +1335,18 @@ def launch(script, root, args):
     os.execve('/bin/bash', ['bash', str(code / 'bin' / script.name), *args], env)
 
 
+IDENTITY_FIELDS = ('name', 'role', 'project', 'task', 'round', 'attempt')
+
+
+def crew_identity(run):
+    """A run's identity as the board reads it: the separate fields of its
+    identity.json (T-116), or None for a run that recorded none of them."""
+    try: record = read(Path(run) / 'identity.json')
+    except (OSError, ValueError): return None
+    if not isinstance(record, dict) or 'round' not in record: return None
+    return {key: record.get(key) for key in IDENTITY_FIELDS}
+
+
 def emit_status(root, actor, task, en, tw, role='worker', crew_name=None,
                 done=None, total=None, env=None):
     """Write a crew_status event. Bare percents are never invented here."""
@@ -1275,6 +1360,8 @@ def emit_status(root, actor, task, en, tw, role='worker', crew_name=None,
         'crew_name': name,
         'activity': {'en': en, 'zh-TW': tw},
     }
+    fields = crew_identity(root / 'state/runs' / actor)
+    if fields: data['identity'] = fields
     if done is not None and total is not None:
         done_n, total_n = int(done), int(total)
         if total_n <= 0 or done_n < 0 or done_n > total_n:
