@@ -47,6 +47,7 @@ if firstmate.is_file():
     prose = ' '.join(firstmate.read_text().split())
     for sentence in (
         'Within one project, raise one merge card at a time: merging one pull request makes every other open one in that project BEHIND and voids the head its card verified.',
+        'Cards of other projects are not held by it (design §15.10, point 3).',
         'Run `gh pr update-branch` before a review round, never after an `APPROVE`: a moved head restarts both checks, and T-104 lost two rounds that way.',
         'A test stub answers exactly as the vendor does, in output shape, exit code and a literal `null`, never as our own code expects.',
         'Before dispatching, sweep the spec for paths that no longer exist, such as `design/tasks.json` after T-090.',

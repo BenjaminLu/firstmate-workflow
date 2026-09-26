@@ -194,7 +194,7 @@ set by the captain.
    request makes every other open one in that project BEHIND and voids the
    head its card verified. Raise that project's next card only after the
    previous merge has settled and its head is verified again. Cards of other
-   projects are not held by it (design §3).
+   projects are not held by it (design §15.10, point 3).
 2. Run `gh pr update-branch` before a review round, never after an `APPROVE`:
    a moved head restarts both checks, and T-104 lost two rounds that way.
 3. A test stub answers exactly as the vendor does, in output shape, exit code
