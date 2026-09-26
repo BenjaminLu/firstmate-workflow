@@ -370,6 +370,14 @@ done
 # runs less confined than its policy.
 pv="$(mktemp -d)"; pv="$(cd "$pv" && pwd -P)"; mkdir -p "$pv/fakebin" "$pv/tree"
 echo "do it" > "$pv/prompt"
+# The loopback listeners are netstat's, answered the way macOS's does, so the
+# profile's loopback rules are the stand-in's and not the machine's
+cat > "$pv/fakebin/netstat" <<'S'
+#!/bin/sh
+printf 'Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)\n'
+printf 'tcp4       0      0  127.0.0.1.5555         *.*                    LISTEN\n'
+S
+chmod +x "$pv/fakebin/netstat"
 confined() {   # confined <os> <tool> <policy> <vendor> -> its exit code; argv in $pv/argv
   printf '#!/usr/bin/env bash\ncat > /dev/null\nprintf "%%s\\n" "$@" > "%s/argv"\nprintf "ran\\n"\nexit 0\n' \
     "$pv" > "$pv/fakebin/$4"
@@ -447,9 +455,17 @@ done
 "$ROOT/bin/fm-sandbox.sh" decide --policy="$pk/net.json" pypi.org >/dev/null 2>&1
 assert_eq "1" "$?" "but no undeclared host"
 assert_eq "0" "$(confined darwin "$pk/sandbox-exec" "$pk/net.json" codex)" "on macOS codex runs with registries declared"
-assert_eq '(allow network-outbound (remote ip "localhost:' \
-  "$(grep -o '(allow network-outbound (remote ip "localhost:' "$pk/profile.sb" 2>/dev/null)" \
+# Off the machine only through the proxy: nothing but loopback is allowed.
+# Loopback itself holds two allows - the ports the round opens, and the
+# proxy's again after the denies of what was already listening.
+cprof="$(cat "$pk/profile.sb" 2>/dev/null)"
+assert_ne "" "$cprof" "and a profile was made for it"
+assert_eq "" "$(grep 'allow network' <<< "$cprof" | grep -v '"localhost:' || true)" \
   "and its round reaches the network only through that proxy"
+assert_matches "$(grep 'allow network-outbound' <<< "$cprof" | tail -1)" '"localhost:[0-9]+"' \
+  "whose port is the last allowed, after every deny"
+assert_contains "$cprof" '(deny network-outbound (remote ip "localhost:5555"))' \
+  "while a listener older than the round stays out of reach"
 
 # The sandbox failing before the CLI is not the model giving up: the
 # launcher's exit code is not the CLI's, and the vendor counts unavailable

@@ -485,7 +485,8 @@ pol worker 'policy:
   procs: 50
   cpu: 90
 '
-limits_cmd=(/bin/sh -c 'printf "%s\n" "$SANDBOX_ROUND_LIMITS" > "$1"; ulimit -u >> "$1"; ulimit -t >> "$1"' sh)
+# bash, not sh: dash, Ubuntu's sh, has no `ulimit -u`
+limits_cmd=(/bin/bash -c 'printf "%s\n" "$SANDBOX_ROUND_LIMITS" > "$1"; ulimit -u >> "$1"; ulimit -t >> "$1"' sh)
 for mode in run plain; do
   rm -f "$t/lim"
   FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" PATH="$t/psbin:$PATH" \
