@@ -143,9 +143,17 @@ turn() {
         || { say "$task: protocol violation in round $round"; continue; }
     fi
 
-    "$B/fm-gate.sh" --task "$task" --repo "$REPO" --branch "$branch" --pr "$pr" >/dev/null 2>&1 </dev/null
+    # The gate's own lines are what it wrote to its summary for the head it
+    # judged, state/gates/<task>-<head>.txt, which the review prompt quotes;
+    # they are said here too rather than thrown away (T-107).
+    gout="$("$B/fm-gate.sh" --task "$task" --repo "$REPO" --branch "$branch" --pr "$pr" 2>/dev/null </dev/null)"
     g=$?
-    if [ "$g" -eq 0 ]; then
+    while IFS= read -r gline; do
+      [ -z "$gline" ] || say "$task:$gline"
+    done <<< "$gout"
+    if [ "$g" -eq 76 ]; then
+      say "$task: $branch here cannot be shown to be the pull request's head (it diverged, is behind a dirty worktree, or origin could not be read); nothing was gated"
+    elif [ "$g" -eq 0 ]; then
       # all six green: the captain decides, nobody else
       merge_card "$task" "$pr"
     elif [ "$g" -eq 7 ]; then
@@ -170,6 +178,7 @@ turn() {
         2) say "$task: no reviewer engine was available${rvsaid:+ ($rvsaid)}, leaving it for the next turn" ;;
         3) say "$task: the reviewer produced no verdict${rvsaid:+ ($rvsaid)}" ;;
         65) say "$task: ${rvsaid:-config.yaml names a vendor with no adapter}" ;;
+        76) say "$task: the review round judged no head that is the pull request's, and posted nothing" ;;
         *) say "$task: the review round failed" ;;
       esac
     else

@@ -34,6 +34,9 @@ fixture() {
 {"id":"T-X","scope":["src/**","tests/**","bin/**","config.yaml"]}
 JSON
   echo base > "$d/src/thing.sh"
+  # every gate run writes its summary under state/gates/ (T-107), which git
+  # ignores in a real tree; a branch made here after a run must not carry it
+  printf 'state/\n' > "$d/.gitignore"
   git -C "$d" add -A; git -C "$d" commit -qm base
   printf '%s' "$d"
 }
@@ -153,6 +156,7 @@ project:
   test: test -f .deps/ready && python3 {file}
 Y
 printf '{"id":"T-X","scope":["calc/**","config.yaml"]}\n' > "$py/design/tasks/T-X.json"
+printf 'state/\n' > "$py/.gitignore"
 git -C "$py" add -A; git -C "$py" commit -qm base
 
 git -C "$py" checkout -q -b honest
@@ -219,7 +223,7 @@ touched() {
   printf 'touch %q/marks/near   # fm-helper.sh, not the helper above\n' "$r" > "$r/tests/near.test.sh"
   printf 'base\n' > "$r/src/thing.sh"
   printf '{"id":"T-X","scope":["src/**","tests/**","config.yaml"]}\n' > "$r/design/tasks/T-X.json"
-  printf 'marks/\n' > "$r/.gitignore"
+  printf 'marks/\nstate/\n' > "$r/.gitignore"
   git -C "$r" add -A; git -C "$r" commit -qm base
   printf '%s' "$r"
 }
@@ -431,6 +435,170 @@ assert_eq "1 2 4 5 6 7" "$(sed -n 's/^  + gate \([0-9]*\): .*/\1/p' <<<"$out" | 
   "the gates are 1, 2, 4, 5, 6 and 7, each said once, in that order"
 assert_contains "$out" "all six gates green" "and the run says all six are green"
 assert_lacks "$out" "seven" "and nowhere seven"
+
+# --- the gate summary is written by the gate (T-107) ---------------------
+# state/gates/<task>-<head>.txt, which the review prompt quotes, holds the
+# run's own stdout lines for the head it judged - nothing wrote it before
+honest_head="$(git -C "$t5" rev-parse honest)"
+summary="$t5/state/gates/T-X-$honest_head.txt"
+rm -f "$summary"
+stdout="$(FM_GH="$t5/stub/gh" FM_REVIEWER_LOGIN=reviewer-1 \
+  "$GATE" --task T-X --repo "$t5" --branch honest --pr 9 2>/dev/null)"
+assert_ok "test -f '$summary'" "a whole run writes the summary for the head it judged"
+assert_eq "$stdout" "$(cat "$summary" 2>/dev/null)" "and it is the run's own stdout, line for line"
+# a partial run replaces its own gate's line and keeps the rest
+cat > "$t5/stub/gh.red" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1 $2" = "pr checks" ]; then exit 1; fi
+exit 0
+EOF
+chmod +x "$t5/stub/gh.red"
+FM_GH="$t5/stub/gh.red" "$GATE" --task T-X --repo "$t5" --branch honest --pr 9 --only 6 >/dev/null 2>&1
+assert_contains "$(cat "$summary")" "  x gate 6: the required GitHub check is green" "a partial run writes its own red line"
+assert_contains "$(cat "$summary")" "  + gate 5: " "and keeps the lines of the gates it did not run"
+assert_lacks "$(cat "$summary")" "  + gate 6: " "and no longer says the gate it ran again was green"
+assert_lacks "$(cat "$summary")" "all six gates green" "and does not claim all six once one is red"
+FM_GH="$t5/stub/gh" "$GATE" --task T-X --repo "$t5" --branch honest --pr 9 --only 6 >/dev/null 2>&1
+assert_contains "$(cat "$summary")" "  + gate 6: " "a partial run that goes green again says so"
+assert_contains "$(cat "$summary")" "all six gates green" "and the summary is whole again"
+# a partial run with no summary before it writes just its own gate's line
+fresh="$(fixture)"; git -C "$fresh" checkout -q -b one; echo x >> "$fresh/src/thing.sh"
+git -C "$fresh" commit -qam one; git -C "$fresh" checkout -q main
+"$GATE" --task T-X --repo "$fresh" --branch one --only 1 >/dev/null 2>&1
+assert_eq "  + gate 1: branch exists and carries commits" \
+  "$(cat "$fresh/state/gates/T-X-$(git -C "$fresh" rev-parse one).txt" 2>/dev/null)" \
+  "a --only run writes its line under the head it judged"
+
+# --- every gate judges the head the run named (T-107) ---------------------
+# The head is read once, when the branch is brought to origin's, and the
+# summary is filed under it. A gate that looked the branch up again by name
+# would judge wherever it had moved by then - a review round's own
+# fast-forward, a worker's checkpoint - under the first head's name. Here the
+# branch moves while gate 7 asks gh for the verdicts: the approval is for the
+# head the run named, and the head it moved to is another change.
+dh="$(fixture)"; ghc "$dh" >/dev/null
+git -C "$dh" checkout -q -b named; echo judged >> "$dh/src/thing.sh"; git -C "$dh" commit -qam named
+git -C "$dh" checkout -q -b moved; echo later >> "$dh/src/thing.sh"; git -C "$dh" commit -qam later
+git -C "$dh" checkout -q main
+judged="$(git -C "$dh" rev-parse named)"; later="$(git -C "$dh" rev-parse moved)"
+post "$dh" reviewer-1 "APPROVE:T-X\\n\\n$(reviewed "$dh" named APPROVE)"
+cat > "$dh/stub/gh-moving" <<EOF
+#!/usr/bin/env bash
+if [ "\$1 \$2" = "pr view" ]; then git -C "$dh" update-ref refs/heads/named "$later"; fi
+exec "$dh/stub/gh" "\$@"
+EOF
+chmod +x "$dh/stub/gh-moving"
+out="$(FM_GH="$dh/stub/gh-moving" FM_REVIEWER_LOGIN=reviewer-1 \
+  "$GATE" --task T-X --repo "$dh" --branch named --only 7 --pr 9 2>&1)"; rc=$?
+assert_eq "$later" "$(git -C "$dh" rev-parse named)" "(the branch moved while the gate ran)"
+assert_eq "0" "$rc" "a gate judges the head the run named, not where the branch moved during it"
+assert_contains "$(cat "$dh/state/gates/T-X-$judged.txt" 2>/dev/null)" "  + gate 7: " \
+  "and the summary for that head carries that gate's result"
+assert_fail "test -e '$dh/state/gates/T-X-$later.txt'" "and nothing is filed for a head no gate named"
+rm -rf "$dh"
+
+# --- the head judged is the pull request's (T-107) ----------------------
+# gh pr update-branch moves only origin's branch. A local branch behind it is
+# fast-forwarded before anything is judged; one that is not behind it is
+# refused (76), naming both heads, and nothing is judged or written.
+so="$(fixture)"; sbare="$(mktemp -d)/origin.git"
+git init -q --bare "$sbare"; git -C "$so" remote add origin "$sbare"
+git -C "$so" checkout -q -b pr; echo one >> "$so/src/thing.sh"; git -C "$so" commit -qam one
+git -C "$so" checkout -q main; git -C "$so" push -q origin main pr
+other="$(mktemp -d)/clone"; git clone -q -b pr "$sbare" "$other"
+git -C "$other" config user.email a@b.c; git -C "$other" config user.name t
+echo two >> "$other/src/thing.sh"; git -C "$other" commit -qam two
+git -C "$other" push -q origin pr
+old="$(git -C "$so" rev-parse pr)"; new="$(git -C "$other" rev-parse pr)"
+assert_ne "$old" "$new" "(origin's branch moved on without the local one)"
+out="$("$GATE" --task T-X --repo "$so" --branch pr --only 1 2>&1)"; rc=$?
+assert_eq "0" "$rc" "a local branch behind origin's is gated"
+assert_eq "$new" "$(git -C "$so" rev-parse pr)" "after it is fast-forwarded to origin's head"
+assert_contains "$out" "fast-forwarded pr from $old to origin's $new" "and the gate says so, naming both heads"
+assert_ok "test -f '$so/state/gates/T-X-$new.txt'" "and the summary names the pull request's head"
+assert_fail "test -f '$so/state/gates/T-X-$old.txt'" "not the stale local one"
+# behind, but its worktree has uncommitted work: nothing is moved under it
+git -C "$other" commit -q --allow-empty -m three; git -C "$other" push -q origin pr
+wt="$(mktemp -d)/wt"; git -C "$so" worktree add -q "$wt" pr; echo dirty >> "$wt/src/thing.sh"
+out="$("$GATE" --task T-X --repo "$so" --branch pr --only 1 2>&1)"; rc=$?
+assert_eq "76" "$rc" "a branch behind origin's with a dirty worktree is refused"
+assert_eq "$new" "$(git -C "$so" rev-parse pr)" "and left where it was"
+assert_contains "$out" "uncommitted changes" "and the gate says why"
+git -C "$wt" checkout -q -- src/thing.sh; git -C "$so" worktree remove --force "$wt"
+# diverged: the local branch has a commit origin never had
+git -C "$so" checkout -q pr; echo local >> "$so/src/thing.sh"; git -C "$so" commit -qam local
+git -C "$so" checkout -q main
+diverged="$(git -C "$so" rev-parse pr)"; remote_now="$(git -C "$other" rev-parse pr)"
+out="$("$GATE" --task T-X --repo "$so" --branch pr --only 1 2>&1)"; rc=$?
+assert_eq "76" "$rc" "a local branch that diverged from origin's is refused"
+assert_contains "$out" "$diverged" "and the refusal names the local head"
+assert_contains "$out" "$remote_now" "and origin's head"
+assert_eq "$diverged" "$(git -C "$so" rev-parse pr)" "and the local branch is not rewound"
+assert_fail "test -f '$so/state/gates/T-X-$diverged.txt'" "and nothing is judged for it"
+# an origin that cannot be read: the local head cannot be shown to be the pull
+# request's, so it is refused, named, and nothing is judged or written for it.
+# The path has no repository behind it, which real git cannot read.
+git -C "$so" update-ref refs/heads/pr "$remote_now"
+git -C "$so" remote set-url origin "$(dirname "$sbare")/nowhere.git"
+before="$(ls "$so/state/gates" 2>/dev/null)"
+out="$("$GATE" --task T-X --repo "$so" --branch pr --only 1 2>&1)"; rc=$?
+assert_eq "76" "$rc" "a branch whose origin cannot be read is refused"
+assert_contains "$out" "could not read origin's pr, so the local head $remote_now" "and the refusal names the local head"
+assert_lacks "$out" "+ gate" "and no gate is judged"
+assert_eq "$before" "$(ls "$so/state/gates" 2>/dev/null)" "and no summary is written"
+git -C "$so" remote set-url origin "$sbare"
+
+# --- a turn says what the gate and the review round said (T-107) ----------
+# fm-run.sh used to send the gate's stdout to /dev/null. Now each line the gate
+# said for the head it judged is said under the task, and a gate or a review
+# round that refused a stale head (76) is named as that, not as a gate
+# numbered 76 or a round that failed. Everything the turn calls is a stub, and
+# git answers only the branch lookup, as in the end-to-end suite's caller.
+rn="$(mktemp -d)"; mkdir -p "$rn/bin" "$rn/state"
+cp "$ROOT/bin/fm-run.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-decide.sh" \
+   "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-herdr.py" "$rn/bin/"
+for script in fm-sync-prs fm-dispatch; do
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$rn/bin/$script.sh"; chmod +x "$rn/bin/$script.sh"
+done
+cat > "$rn/bin/fm-gate.sh" <<EOF
+#!/usr/bin/env bash
+cat "$rn/gate.out"; printf 'GATE_STDERR_LINE\n' >&2
+exit "\$(cat "$rn/gate.rc")"
+EOF
+cat > "$rn/bin/fm-review.sh" <<EOF
+#!/usr/bin/env bash
+echo "fm-review \$*" >> "$rn/calls"
+exit "\$(cat "$rn/review.rc")"
+EOF
+printf '#!/usr/bin/env bash\nprintf "t-991-fixture\\n"\n' > "$rn/bin/git"
+chmod +x "$rn/bin/fm-gate.sh" "$rn/bin/fm-review.sh" "$rn/bin/git"
+printf '{"type":"pr_opened","task":"T-991","pr":991}\n' > "$rn/state/events.jsonl"
+turn_says() { FM_TRANSPORT=direct PATH="$rn/bin:$PATH" bash "$rn/bin/fm-run.sh" once --repo "$rn" 2>&1; }
+# a red gate: its lines, and where it stopped
+printf '  + gate 1: branch exists and carries commits\n  x gate 2: rebases onto main cleanly\n' > "$rn/gate.out"
+echo 2 > "$rn/gate.rc"; : > "$rn/calls"
+out="$(turn_says)"
+assert_contains "$out" "T-991:  + gate 1: branch exists and carries commits" "a turn says each line the gate said, under the task"
+assert_contains "$out" "T-991:  x gate 2: rebases onto main cleanly" "its red line too"
+assert_contains "$out" "T-991: stopped at gate 2" "and still where it stopped"
+assert_lacks "$out" "GATE_STDERR_LINE" "but not what the gate said on stderr"
+# a gate that refused a stale head judged nothing, and nothing goes to review
+: > "$rn/gate.out"; echo 76 > "$rn/gate.rc"; : > "$rn/calls"
+out="$(turn_says)"
+assert_contains "$out" "T-991: t-991-fixture here cannot be shown to be the pull request's head (it diverged, is behind a dirty worktree, or origin could not be read); nothing was gated" \
+  "a gate that refused a stale head is said to have gated nothing"
+assert_lacks "$out" "stopped at gate 76" "not taken for a gate numbered 76"
+assert_eq "" "$(cat "$rn/calls")" "and nothing is sent to review"
+# a review round that refused a stale head posted nothing, and says so
+printf '  + gate 6: the required GitHub check is green\n  x gate 7: the reviewer posted APPROVE:T-991\n' > "$rn/gate.out"
+echo 7 > "$rn/gate.rc"; echo 76 > "$rn/review.rc"; : > "$rn/calls"
+out="$(turn_says)"
+assert_contains "$(cat "$rn/calls")" "fm-review --task T-991" "(a gate 7 turn runs the review round)"
+assert_contains "$out" "T-991:  x gate 7: the reviewer posted APPROVE:T-991" "the turn says gate 7's line before the round"
+assert_contains "$out" "T-991: the review round judged no head that is the pull request's, and posted nothing" \
+  "a review round that refused a stale head is said to have posted nothing"
+assert_lacks "$out" "the review round failed" "not reported as a round that failed"
+rm -rf "$rn"
 
 # --- gate runs on one machine never overlap (T-114) ---------------------
 # finishes <seconds> <command> ; true when it ended, with status 0, in time

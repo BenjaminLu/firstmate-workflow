@@ -400,8 +400,10 @@ assert_contains "$calls8w" "pr comment 42" "and the note goes to the pull reques
 # has nowhere to land
 assert_eq "pr create" "$(grep -o 'pr create\|pr comment' "$d8w/ghcalls" 2>/dev/null | head -1)" \
   "the pull request is opened before the note is posted"
-assert_eq "COULD NOT RUN: tests/worker.test.sh" "$(cat "$d8w/commented" 2>/dev/null)" \
-  "with the worker's own words as the comment body"
+# and marked as the worker's report on a line of its own (T-107), which is
+# how fm-review.sh finds it and hands it to the next reviewer
+assert_eq "$(printf 'COULD NOT RUN: tests/worker.test.sh\n\nWORKER-REPORT:T-Z')" "$(cat "$d8w/commented" 2>/dev/null)" \
+  "with the worker's own words as the comment body, then the WORKER-REPORT:T-Z line"
 b8w="$(cd "$r8w" && git for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1)"
 assert_ok "cd '$ROOT' && git --git-dir='$d8w/remote.git' cat-file -e '$b8w:src/done.txt'" \
   "the work was committed and pushed"
@@ -2124,20 +2126,77 @@ assert_ok "git --git-dir='$dN/remote.git' cat-file -e '$bN:src/line-5.txt'" "and
 # the branch as it is. Every one is set up where a rebuild would otherwise
 # happen, so a guard that is deleted shows.
 # P1: origin's branch has a commit the local one lacks, and the local one a
-# commit origin lacks: the lease head is not in what would be rebuilt, so
-# a rebuild would overwrite it. Not rebuilt; the plain push is refused.
+# commit origin lacks. Since T-107 the round does not start at all: the local
+# head is not the pull request's and cannot be fast-forwarded to it, so the
+# run refuses before the engine, naming both heads (76). Nothing is rebuilt,
+# pushed or overwritten, and the unpushed local commit is kept.
 dP1="$(rb_fixture)"; bP1="$(rb_branch "$dP1")"
 rb_replay_conflict "$dP1"
 ( cd "$dP1/repo/state/worktrees/T-Z" && printf 'local\n' > src/local.txt && git add src/local.txt \
     && rb_commit -m 'not pushed' )
+localP1="$(git -C "$dP1/repo" rev-parse "$bP1")"
 git clone -q -b "$bP1" "$dP1/remote.git" "$dP1/racer" \
   && ( cd "$dP1/racer" && rb_commit --allow-empty -m 'pushed from elsewhere' && git push -q origin HEAD )
 raceP1="$(git -C "$dP1/racer" rev-parse HEAD)"
 rb_round_two "$dP1" "$rb_add"
 rb_not_rebuilt "$dP1" "P1"
-assert_contains "$rb_out" "origin's $bP1 has commits this worktree lacks" "origin ahead: says why it is not rebuilt"
-assert_eq "71" "$rb_rc" "and the plain push is refused"
+assert_eq "76" "$rb_rc" "a local branch that diverged from origin's: the round is refused"
+assert_contains "$rb_out" "$localP1" "and the refusal names the local head"
+assert_contains "$rb_out" "$raceP1" "and origin's"
+assert_fail "test -e '$dP1/prompt.md'" "before any engine runs"
 assert_eq "$raceP1" "$(rb_head "$dP1" "$bP1")" "the commit only origin had is not overwritten"
+assert_eq "$localP1" "$(git -C "$dP1/repo" rev-parse "$bP1")" "and the local commit is not rewound"
+# P1b: origin's branch moved on - gh pr update-branch - and the local one is
+# only behind it. The round fast-forwards and works on the pull request's head.
+dP1b="$(rb_fixture)"; bP1b="$(rb_branch "$dP1b")"
+git clone -q -b "$bP1b" "$dP1b/remote.git" "$dP1b/racer" \
+  && ( cd "$dP1b/racer" && printf 'from origin\n' > src/updated.txt && git add src/updated.txt \
+       && rb_commit -m 'update-branch' && git push -q origin HEAD )
+updP1b="$(git -C "$dP1b/racer" rev-parse HEAD)"
+staleP1b="$(git -C "$dP1b/repo" rev-parse "$bP1b")"
+assert_ne "$updP1b" "$staleP1b" "(the local branch is behind origin's)"
+rb_round_two "$dP1b" "$rb_add"
+assert_eq "0" "$rb_rc" "a local branch behind origin's: the round completes"
+assert_contains "$rb_out" "fast-forwarded $bP1b from $staleP1b to origin's $updP1b" "after fast-forwarding, naming both heads"
+assert_eq "$updP1b" "$(rb_head "$dP1b" "$bP1b^")" "and its work sits on the pull request's head"
+assert_ok "git --git-dir='$dP1b/remote.git' cat-file -e '$bP1b:src/updated.txt'" "keeping what origin had"
+# P1c: origin moved on as in P1b, but the last round was interrupted and left
+# uncommitted edits in the worktree that has the branch checked out. They were
+# made on the old head, so the branch is not moved under them, and they are
+# not saved onto it on the way out either: that would leave the branch
+# diverged from origin's for good. The round is refused (76), naming both
+# heads, and the edits stay where they are.
+dP1c="$(rb_fixture)"; bP1c="$(rb_branch "$dP1c")"
+git clone -q -b "$bP1c" "$dP1c/remote.git" "$dP1c/racer" \
+  && ( cd "$dP1c/racer" && rb_commit --allow-empty -m 'update-branch' && git push -q origin HEAD )
+updP1c="$(git -C "$dP1c/racer" rev-parse HEAD)"
+staleP1c="$(git -C "$dP1c/repo" rev-parse "$bP1c")"
+assert_ne "$updP1c" "$staleP1c" "(the local branch is behind origin's)"
+printf 'interrupted\n' > "$dP1c/repo/state/worktrees/T-Z/src/half.txt"
+rb_round_two "$dP1c" "$rb_add"
+assert_eq "76" "$rb_rc" "behind origin's with uncommitted edits in its worktree: the round is refused"
+assert_contains "$rb_out" "uncommitted changes" "and says why"
+assert_contains "$rb_out" "$staleP1c" "naming the local head"
+assert_contains "$rb_out" "$updP1c" "and origin's"
+assert_fail "test -e '$dP1c/prompt.md'" "before any engine runs"
+assert_eq "$staleP1c" "$(git -C "$dP1c/repo" rev-parse "$bP1c")" "the local branch is neither moved under the edits nor saved onto"
+assert_eq "$updP1c" "$(rb_head "$dP1c" "$bP1c")" "origin's is not touched"
+assert_contains "$rb_out" "nothing is published" "and the way out says it published nothing"
+assert_eq "interrupted" "$(cat "$dP1c/repo/state/worktrees/T-Z/src/half.txt" 2>/dev/null)" "the edits stay in the worktree"
+# P1d: origin cannot be read at all - its path has no repository behind it,
+# which real git cannot read - so the local head cannot be shown to be the
+# pull request's. The round is refused (76), naming the local head, before
+# any engine, and nothing is published.
+dP1d="$(rb_fixture)"; bP1d="$(rb_branch "$dP1d")"
+headP1d="$(git -C "$dP1d/repo" rev-parse "$bP1d")"
+originP1d="$(rb_head "$dP1d" "$bP1d")"
+git -C "$dP1d/repo" remote set-url origin "$dP1d/nowhere.git"
+rb_round_two "$dP1d" "$rb_add"
+assert_eq "76" "$rb_rc" "an origin that cannot be read: the round is refused"
+assert_contains "$rb_out" "could not read origin's $bP1d, so the local head $headP1d" "naming the local head"
+assert_fail "test -e '$dP1d/prompt.md'" "before any engine runs"
+assert_eq "$headP1d" "$(git -C "$dP1d/repo" rev-parse "$bP1d")" "the local branch is not moved"
+assert_eq "$originP1d" "$(rb_head "$dP1d" "$bP1d")" "and nothing reaches origin's"
 # P2: the base cannot be fetched.
 dP2="$(rb_fixture)"; bP2="$(rb_branch "$dP2")"
 rb_replay_conflict "$dP2"; oldP2="$(rb_head "$dP2" "$bP2")"

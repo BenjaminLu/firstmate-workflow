@@ -823,7 +823,16 @@ if a[0]=='show':
  p=r/a[-1].split(':',1)[-1]
  if not p.is_file(): sys.exit(128)
  print(p.read_text())
-elif a[0] in ('show-ref','ls-remote'): sys.exit(1)
+elif a[0]=='show-ref': sys.exit(1)
+# This repository has no origin and no refs, and git says so as git does,
+# asked here or with -C: no such remote (2), an unreadable origin (128), no
+# such ref (1).
+elif (a[2:] if a[:1]==['-C'] else a)[:2]==['remote','get-url']:
+ sys.stderr.write("error: No such remote '"+a[-1]+"'\n"); sys.exit(2)
+elif (a[2:] if a[:1]==['-C'] else a)[:1]==['ls-remote']:
+ sys.stderr.write("fatal: 'origin' does not appear to be a git repository\nfatal: Could not read from remote repository.\n"); sys.exit(128)
+elif (a[2:] if a[:1]==['-C'] else a)[:1]==['rev-parse'] and '--verify' in a \
+  and any(x.startswith('refs/') or x.endswith('^{commit}') for x in a): sys.exit(1)
 elif a[:2]==['worktree','add']:
  pathlib.Path(a[-2]).mkdir(parents=True,exist_ok=True)
 elif 'status' in a:
@@ -831,7 +840,10 @@ elif 'status' in a:
 elif a[0]=='diff': print('diff --git a/test b/test\n+change')
 elif a[0]=='branch': print('t-035-test')
 ''')
-        self.executable('gh', "import sys\nprint('https://example.invalid/pull/35' if 'create' in sys.argv else '[]')\n")
+        # a pull request's comments come as gh prints them, an object
+        self.executable('gh', "import sys\na=sys.argv[1:]\n"
+                        "print('https://example.invalid/pull/35' if 'create' in a else "
+                        "'{\"comments\":[]}' if a[:2]==['pr','view'] and 'comments' in a else '[]')\n")
     def executable(self, name, content):
         p=self.fake/name; p.write_text('#!'+sys.executable+'\n'+content); p.chmod(0o755)
     def invoke(self, script, args=(), **env):
