@@ -51,7 +51,7 @@ and links, not model behavior. Neither lavish nor no-mistakes is a prerequisite;
 their hooks are not part of startup or verification. `fm-decide.sh --request`
 creates a card and returns; `--await` waits for the response. Firstmate must
 verify current readiness and board approval: `fm-merge.sh` itself checks neither
-decision approval nor the seven gates, and the board merge route does not rerun
+decision approval nor the gates, and the board merge route does not rerun
 them.
 
 ## Rules that bind everyone
@@ -97,12 +97,23 @@ written; quote a value in YAML only if it contains ` #` or starts with a YAML
 indicator such as `*`. An unknown key, a `test` without `{file}` or a malformed
 block is an error, not an empty declaration.
 
-- **Gate 3** runs `setup` and then `check` in a fresh detached worktree. A
-  missing `check` or a failing `setup` fails the gate and says so.
+- **No gate runs the whole `check`** as a matter of course. The gates are
+  numbered 1, 2, 4, 5, 6 and 7: gate 3, which ran `check` locally, is
+  retired, because the required GitHub check runs it on the same head and
+  gate 6 reads that.
 - **Gate 5** classifies the diff with `tests`, reverts the implementation, runs
-  `setup`, then runs each changed test through `test` — or the whole `check`
-  when there is no `test` — and requires red. A diff whose every non-test
-  path matches `docs` needs no new test; any other path still does.
+  `setup`, then runs through `test` only the suites the diff touches: each
+  changed test, then each other test file that names one of them (a suite
+  sourcing a changed helper). It requires red. When no suite can be run that
+  way — no `test` declared, or no touched test left in the tree — it runs the
+  whole `check` instead and says so. A missing `check` there, or a failing
+  `setup`, fails the gate and says so. A diff whose every non-test path
+  matches `docs` needs no new test; any other path still does.
+- **Gate runs are serialized** on one machine by a kernel lock on a file
+  (`FM_GATE_LOCK`, by default `/tmp/fm-gate.lock`, whatever `TMPDIR` is): a
+  second run waits for the first, and the lock goes with the run that held
+  it, however it ended. A gate run inside one holding the same lock is
+  refused, so a test suite that runs the gate sets its own `FM_GATE_LOCK`.
 - **`fm-session.sh start`** runs `setup` once in the repository checkout and
   reports a `project` block: the declared keys, setup's exit status and a short
   error. A failed setup is reported as not ready; startup carries on.
@@ -176,7 +187,7 @@ The engine starts without the launcher's `FM_*`, `HERDR_*`, `GIT_*` and
 GitHub-token variables, so a `check` run in the clone gates the clone, not the
 repository the review was launched from.
 The reviewer has no GitHub access and is shown no CI: it judges the head by
-running it. In both modes CI and the seven gates are firstmate's merge gate,
+running it. In both modes CI and the gates are firstmate's merge gate,
 not a review criterion, so a review never waits on CI; a merge card needs
 the reviewer's approval and firstmate's own check of CI and the gates, both
 on the same head. `fm-review.sh` posts the verdict and emits the review's

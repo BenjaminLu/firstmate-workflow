@@ -246,8 +246,8 @@ assert_contains "$cnb" 'lang="zh-CN"'         "the zh-CN page says so"
 assert_lacks "$enb" '<h1>' 'diagram has no duplicate card title'
 assert_lacks "$enb" '<ol class="lanes">' 'diagram has no duplicate lane strip'
 
-# the seven gates, because this one is a merge
-for n in 1 2 3 4 5 6 7; do
+# the gates, because this one is a merge: fm-gate.sh's numbers, 3 retired
+for n in 1 2 4 5 6 7; do
   assert_lacks "$enb" "$(jq -r ".gate$n" "$ROOT/i18n/ui.en.json")" "gate $n is not duplicated in the diagram"
 done
 assert_lacks "$enb" "Merge into main" "diagram does not duplicate action controls"

@@ -144,7 +144,7 @@ failed to read. Nothing else from the pull request is quoted there.
 
 ## CI and the gates are not yours
 
-Current-head CI and the seven gates are firstmate's merge gate, in both modes,
+Current-head CI and the gates are firstmate's merge gate, in both modes,
 not a criterion of your review (captain, 2026-09-25). A review never waits on
 CI: do not require green CI or gates to sign, do not put them on a closed
 list, and do not keep an item open for them. A merge needs your verdict and
@@ -187,7 +187,7 @@ confirm publication; launcher success does not prove its comment was posted.
 Use repository verification. Neither lavish nor
 no-mistakes is a prerequisite; do not add their hooks. Captain scope and merge
 decisions remain on the board; the merge helper itself checks neither approval
-nor the seven gates. Mid-run board progress is script-emitted only: do not invent
+nor the gates. Mid-run board progress is script-emitted only: do not invent
 percentages from coarse lifecycle state in review prose or fixtures.
 
 Managed launches create a dedicated tab with one owned root pane and the same
