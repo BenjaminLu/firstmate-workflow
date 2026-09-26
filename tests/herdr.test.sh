@@ -1403,5 +1403,66 @@ class EmitStatus(unittest.TestCase):
             m.emit_status(self.root, 'worker-h', 'T-H', 'x', 'y', done=9, total=3)
 
 
+class AgentLost(unittest.TestCase):
+    """T-118: a run whose recorded process is gone and that never said
+    agent_finished gets one agent_lost, from the launcher side's deck
+    reconcile through fm-emit, never from the model; a live run gets none."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root/'bin').mkdir(); (self.root/'state/runs').mkdir(parents=True)
+        shutil.copy(root/'bin/fm-emit.sh', self.root/'bin/fm-emit.sh')
+        self.log = self.root/'state/events.jsonl'
+        # a pid that existed and is gone: its own child, started and reaped
+        gone = subprocess.Popen(['true']); gone.wait(); self.dead = gone.pid
+
+    def say(self, actor, type_, task='T-118', data=None):
+        line = dict(ts='2026-09-26T10:00:00Z', actor=actor, type=type_, task=task,
+                    data=data or {'role': 'worker'}, summary={'en': type_, 'zh-TW': type_})
+        with self.log.open('a') as f: f.write(json.dumps(line) + '\n')
+
+    def events(self):
+        return [json.loads(l) for l in self.log.read_text().splitlines() if l.strip()]
+
+    def recorded(self, actor, pid, token):
+        run = self.root/'state/runs'/actor; run.mkdir()
+        m.save(run/'process.json', dict(actor=actor, role='worker', task='T-118', pid=pid, token=token))
+
+    def test_a_vanished_pid_is_lost_once_and_a_live_one_is_kept(self):
+        ghost, live, done = 'worker-ghost-t118-r1', 'worker-live-t118-r2', 'worker-done-t118-r1'
+        for actor in (ghost, live, done): self.say(actor, 'dispatched')
+        self.say(done, 'agent_finished')
+        token = 'fm-live-' + live
+        holder = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)', token],
+                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: (holder.kill(), holder.wait()))
+        self.recorded(ghost, self.dead, 'fm-worker.sh')
+        self.recorded(live, holder.pid, token)
+        first = m.retire_dead_crew(self.root)
+        self.assertEqual([ghost], first['lost'])
+        self.assertEqual([live], first['kept'])
+        after = self.events()
+        lost = [e for e in after if e['type'] == 'agent_lost']
+        self.assertEqual([ghost], [e['actor'] for e in lost], 'only the vanished run is lost, and once')
+        self.assertEqual('T-118', lost[0]['task'])
+        self.assertIn('lost', lost[0]['summary']['en'])
+        self.assertIn('失聯', lost[0]['summary']['zh-TW'])
+        # the close that has always followed a ghost still follows it
+        self.assertEqual(['agent_lost', 'agent_finished'], [e['type'] for e in after if e['actor'] == ghost][1:])
+        # read again, nothing more is written: the run is already off the deck
+        second = m.retire_dead_crew(self.root)
+        self.assertEqual([], second['lost'])
+        self.assertEqual(after, self.events())
+
+    def test_a_loss_already_written_is_not_written_again(self):
+        ghost = 'worker-half-t118-r1'
+        self.say(ghost, 'dispatched'); self.say(ghost, 'agent_lost')
+        self.recorded(ghost, self.dead, 'fm-worker.sh')
+        result = m.retire_dead_crew(self.root)
+        self.assertEqual([], result['lost'])
+        self.assertEqual([ghost], result['retired'])
+        self.assertEqual(['dispatched', 'agent_lost', 'agent_finished'], [e['type'] for e in self.events()])
+
+
 unittest.main(argv=['herdr', *os.environ.get('FM_TEST_CASES','').split()], verbosity=2)
 PY

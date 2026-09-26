@@ -1,10 +1,11 @@
 // The board, in a browser. Poses are asserted as classes and text as
 // dictionary values, never as screenshots: a snapshot test of a ship that
 // moves would fail on the animation and pass on the wrong crew.
-import { test, expect, type Page } from "@playwright/test";
-import { makeRoot, startBoard, stopBoard, writeRegistry, writeProjects, readTasks, writeTasks, ROOT, details } from "./fixture";
+import { expect, type Page } from "@playwright/test";
+// `test` is the fixture's: every board a test starts is signed in to (T-122)
+import { test, makeRoot, startBoard, stopBoard, writeRegistry, writeProjects, readTasks, writeTasks, ROOT, details, scriptHeaders, signInAddress, tabToken } from "./fixture";
 import { appendFileSync, readFileSync, existsSync, writeFileSync, rmSync, utimesSync, mkdirSync, chmodSync, unlinkSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { join } from "node:path";
 
 const EN = JSON.parse(readFileSync(join(ROOT, "i18n/ui.en.json"), "utf8"));
@@ -202,7 +203,9 @@ test('continuation history, readable mobile content and persistent controls', as
     await expect(page.locator('#history')).toHaveJSProperty('open',false);
     await expect(page.locator('#history summary')).toContainText('31');
     await expect(page.locator('[data-crew="worker-ghost"]')).toHaveCount(0);
-    await expect(page.locator('#card-D-999')).toHaveCount(0);
+    // a pending card under a merged task is shown, not hidden, and says the task is final (T-118)
+    await expect(page.locator('#card-D-999 .final-note')).toContainText(
+      EN.finalNote.replace('{task}','T-999').replace('{stage}',EN.laneMerged));
     for(const selector of ['.bub .who','.bub .job','.shipbar button','.roster .nm','.roster .st'])
       expect(await page.locator(selector).first().evaluate(el=>parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(13);
     await expect(page.locator('#history .card').first()).not.toBeVisible();
@@ -435,7 +438,9 @@ test("custom selection is local, literal and never merges", async ({ page }) => 
   const b = await startBoard(makeRoot(["working"]));
   try {
     let posts = 0;
-    page.on('request', r => { if (r.method() === 'POST') posts++; });
+    // the fixture's one-time sign-in POSTs /login on the first visit; that
+    // exchange answers nothing, so only every other POST counts
+    page.on('request', r => { if (r.method() === 'POST' && new URL(r.url()).pathname !== '/login') posts++; });
     await page.goto(`${b.url}/?lang=en`);
     const card = page.locator('.dcard');
     expect(await page.locator('#captain .tool').evaluate(el=>({height:getComputedStyle(el).height,background:getComputedStyle(el).backgroundColor,opacity:getComputedStyle(el).opacity})))
@@ -687,7 +692,7 @@ test('failed merge persists failure without salute or automatic retry', async ({
     await expect(page.locator('#orderFeedback')).toContainText(EN.mergeRefused);
     // answering again returns the stored record, which says the merge failed,
     // and runs nothing: the helper was called once
-    const r = await page.request.post(`${b.url}/decisions`, {data:{id:'D-1',chosen:'A'}});
+    const r = await page.request.post(`${b.url}/decisions`, {data:{id:'D-1',chosen:'A'}, headers:scriptHeaders(b)});
     const again = await r.json();
     expect(again.already).toBe(true);
     expect(again.decision.merge).toBe('failed');
@@ -742,7 +747,8 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
   emitFixture(root,'worker-1',first,'crew_status','Counting gates','計算閘門',{role:'worker',progress:{done:2,total:5}});
   writeFileSync(join(root,'state/pending/D-2.json'),JSON.stringify({id:'D-2',kind:'choice',task:spec.tasks[2].id,details}));
   const b = await startBoard(root);
-  let posts = 0; page.on('request', r => { if (r.method() === 'POST') posts++; });
+  // the one-time sign-in's POST /login answers nothing; every other POST counts
+  let posts = 0; page.on('request', r => { if (r.method() === 'POST' && new URL(r.url()).pathname !== '/login') posts++; });
   try {
     await page.setViewportSize({width:1280,height:900});
     await page.goto(`${b.url}/?lang=en`);
@@ -879,7 +885,7 @@ test('the prototype layout: engine badge, six lanes, portrait and strips, roster
 
 // T-058: park, unpark and drop, each by the card's menu and by drag and drop
 const CN_T058 = {park:'搁置',unpark:'恢复',drop:'不做',parked:'已搁置',dropped:'已不做',
-  cardActions:'{id} 的操作',dropZone:'拖曳卡片到此：不做',dropConfirm:'确定不做 {id}？此任务将离开看板，design/tasks.json 不变。',
+  cardActions:'{id} 的操作',dropZone:'拖曳卡片到此：不做',dropConfirm:'确定不做 {id}？此任务将离开各列，不再做；design/tasks/ 不变。',
   dropYes:'确定不做',cancel:'取消',actionFailed:'看板未能记录此操作，请重新整理后再试。'};
 test('the captain parks, unparks and drops a card by menu and by drag, and confirms a drop in the page', async ({page}) => {
   test.setTimeout(90_000);
@@ -905,11 +911,15 @@ test('the captain parks, unparks and drops a card by menu and by drag, and confi
     await page.goto(`${b.url}/?lang=en`);
     await expect(lane('ready','T-A')).toHaveCount(1);
     await expect(lane('backlog','T-B')).toHaveCount(1);
-    // a card in flight offers neither action, by either path
-    await expect(page.locator('[data-task="T-W"] .cmenu')).toHaveCount(0);
-    await expect(page.locator('[data-task="T-W"]')).not.toHaveAttribute('draggable','true');
+    // T-118: a card in flight offers both actions, by either path, but the
+    // server sets it aside only once the captain has confirmed it
+    await page.locator('[data-menu="T-W"]').click();
+    await expect(page.locator('[data-task="T-W"] .cacts button')).toHaveText([EN.park, EN.drop]);
+    await page.locator('[data-menu="T-W"]').click();
+    await expect(page.locator('[data-task="T-W"]')).toHaveAttribute('draggable','true');
+    // with the tab's own token (T-122), so the 409 is the board's rule, not a 403
     const refused = await page.evaluate(async () => (await fetch('/tasks',{method:'POST',
-      headers:{'content-type':'application/json'},body:JSON.stringify({task:'T-W',action:'park'})})).status);
+      headers:{'content-type':'application/json',authorization:'Bearer '+sessionStorage.getItem('board.token')},body:JSON.stringify({task:'T-W',action:'park'})})).status);
     expect(refused).toBe(409);
     expect(events().some(e => e.type === 'parked')).toBe(false);
 
@@ -985,9 +995,13 @@ test('the captain parks, unparks and drops a card by menu and by drag, and confi
     await expect(page.locator('#lanes [data-task="T-D"]')).toHaveCount(0);
     expect(last()).toMatchObject({type:'closed',actor:'captain',task:'T-D'});
 
-    // an in-flight card dragged onto a zone does nothing
+    // an in-flight card dragged onto the drop target asks first, and says its
+    // crew will be stopped; cancelling writes nothing
     const n = events().length;
     await page.locator('[data-task="T-W"]').dragTo(page.locator('#dropzone'));
+    await expect(page.locator('#dropConfirm')).toBeVisible();
+    await expect(page.locator('#dropConfirm')).toContainText(EN.crewStopNote.split('{crew}')[0]);
+    await page.locator('[data-cancel-drop="T-W"]').click();
     await expect(page.locator('#dropConfirm')).toBeHidden();
     expect(events().length).toBe(n);
 
@@ -1451,14 +1465,14 @@ test('external outcomes override stale success and clear only their settled draf
     await page.locator('#card-D-2 [data-c="B"]').click();
     await page.locator('#card-D-2 .confirm').click();
     await expect(page.locator('#orderFeedback')).toContainText(EN.recorded);
-    const external=await page.request.post(`${b.url}/decisions`,{data:{id:'D-1',chosen:'A'}});
+    const external=await page.request.post(`${b.url}/decisions`,{data:{id:'D-1',chosen:'A'},headers:scriptHeaders(b)});
     expect(external.ok()).toBe(true);
     await expect(page.locator('#orderFeedback')).toContainText(EN.mergeRefused);
     await expect(page.locator('#orderFeedback')).not.toContainText(EN.recorded);
     await expect(page.locator('.dcard')).toHaveCount(1);
     await expect(page.locator('#card-D-3 textarea')).toHaveValue('keep this unrelated draft');
     await expect(page.locator('#captain')).toHaveAttribute('data-pose','ready',{timeout:15_000});
-    await page.request.post(`${b.url}/decisions`,{data:{id:'D-3',chosen:'custom',text:'keep this unrelated draft'}});
+    await page.request.post(`${b.url}/decisions`,{data:{id:'D-3',chosen:'custom',text:'keep this unrelated draft'},headers:scriptHeaders(b)});
     await expect(page.locator('.dcard')).toHaveCount(0);
     await expect(page.locator('#captain')).toHaveAttribute('data-pose','idle',{timeout:15_000});
   } finally {stopBoard(b);}
@@ -1758,4 +1772,441 @@ test("the ship grows with the crew", async ({ page }) => {
     });
     expect(clear).toBe(true);
   } finally { stopBoard(big); }
+});
+
+// --- T-122: only the captain's browser writes ---------------------------------
+// These use pages the fixture does not sign in: the tab gets in through the
+// one-time address, or not at all.
+test('the one-time address signs one tab in once, keeps no code and sets no cookie, and the card is answered end to end', async ({browser}) => {
+  const b = await startBoard(makeRoot(['working']));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const other = await (await browser.newContext()).newPage();
+  try {
+    const address = signInAddress(b);
+    const code = address.split('#')[1];
+    await page.goto(address);
+    await page.waitForURL(`${b.url}/`);
+    // the code stays neither in the address nor in the entry the tab kept
+    expect(page.url()).not.toContain(code);
+    await page.goBack().catch(() => null);
+    expect(page.url()).not.toContain(code);
+    // the tab holds the token, in its own storage; the browser holds no cookie
+    await page.goto(`${b.url}/?lang=en`);
+    expect(await page.evaluate(() => sessionStorage.getItem('board.token'))).toBe(tabToken(b));
+    expect(await context.cookies()).toHaveLength(0);
+    expect(await page.evaluate(() => document.cookie)).toBe('');
+    await expect(page.locator('#readOnly')).toBeHidden();
+    await page.locator('#card-D-1 [data-c="A"]').click();
+    await page.locator('#card-D-1 .confirm').click();
+    await expect(page.locator('#orderFeedback')).toContainText('AYE, CAPTAIN!');
+    await expect.poll(() => existsSync(b.recorder) ? readFileSync(b.recorder, 'utf8') : '').toContain('--pr 99');
+    expect(await context.cookies()).toHaveLength(0);
+    // the token is this tab's: another tab in the same browser is read-only
+    const second = await context.newPage();
+    await second.goto(`${b.url}/?lang=en`);
+    await expect(second.locator('#readOnly')).toBeVisible();
+    await expect(second.locator('#readOnly')).toHaveText(EN.readOnly);
+    // the same address a second time signs nothing in
+    await other.goto(address);
+    await other.waitForURL(`${b.url}/`);
+    expect(await other.evaluate(() => sessionStorage.getItem('board.token'))).toBeNull();
+    await expect(other.locator('#readOnly')).toBeVisible();
+  } finally { await context.close(); await other.context().close(); stopBoard(b); }
+});
+
+test('a tab without the credential says it is read-only, in both languages, and writes nothing', async ({browser}) => {
+  const root = makeRoot(['working']);
+  const b = await startBoard(root);
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    await expect(page.locator('#readOnly')).toBeVisible();
+    await expect(page.locator('#readOnly')).toHaveText(EN.readOnly);
+    // every control that writes is disabled, and no card offers park or drop
+    await expect(page.locator('#card-D-1 [data-c="A"]')).toBeDisabled();
+    await expect(page.locator('#card-D-1 [data-c="custom"]')).toBeDisabled();
+    await expect(page.locator('#card-D-1 .confirm')).toBeDisabled();
+    await expect(page.locator('.lanes .card')).not.toHaveCount(0);
+    await expect(page.locator('.cmenu')).toHaveCount(0);
+    await expect(page.locator('.card[draggable="true"]')).toHaveCount(0);
+    // and a write sent anyway is refused by the board, whatever the page does
+    const status = await page.evaluate(async () => (await fetch('/decisions', {method:'POST',
+      headers:{'content-type':'application/json'}, body:JSON.stringify({id:'D-1',chosen:'A'})})).status);
+    expect(status).toBe(403);
+    // and so is one carrying what a cookie session would have held: the board
+    // reads no cookie
+    await context.addCookies([{ name: `firstmate_board_${new URL(b.url).port}`, value: tabToken(b), url: b.url }]);
+    const withCookie = await page.evaluate(async () => (await fetch('/decisions', {method:'POST', credentials:'include',
+      headers:{'content-type':'application/json'}, body:JSON.stringify({id:'D-1',chosen:'A'})})).status);
+    expect(withCookie).toBe(403);
+    expect(existsSync(join(root, 'state/decisions/D-1.json'))).toBe(false);
+    expect(existsSync(b.recorder)).toBe(false);
+    await page.goto(`${b.url}/?lang=zh-TW`);
+    await expect(page.locator('#readOnly')).toHaveText(TW.readOnly);
+  } finally { await context.close(); stopBoard(b); }
+});
+
+test('a server on another loopback port receives nothing from the captain\'s signed-in tab, and its page cannot answer a card', async ({page}) => {
+  const root = makeRoot(['working']);
+  const b = await startBoard(root);
+  try {
+    await page.goto(`${b.url}/?lang=en`);   // signed in, through the one-time address
+    await expect(page.locator('#readOnly')).toBeHidden();
+    // Another loopback port is the same site, and a browser would send it a
+    // cookie set for 127.0.0.1. So the other server records every header it
+    // is sent, and none may carry the credential.
+    const { createServer } = await import('node:http');
+    const received: string[] = [];
+    const elsewhere = createServer((req, res) => {
+      received.push(JSON.stringify(req.headers));
+      res.setHeader('content-type', 'text/html'); res.end('<title>elsewhere</title>');
+    });
+    await new Promise<void>(r => elsewhere.listen(0, '127.0.0.1', () => r()));
+    const port = (elsewhere.address() as { port: number }).port;
+    try {
+      // the same tab goes there, as following a link would
+      await page.goto(`http://127.0.0.1:${port}/`);
+      await page.goto(`http://127.0.0.1:${port}/again`);
+      expect(received.length).toBeGreaterThanOrEqual(2);   // the control
+      for (const headers of received) {
+        expect(headers).not.toContain(tabToken(b));
+        expect(headers).not.toContain(b.secret);
+        expect(headers).not.toContain('firstmate_board_');
+      }
+      expect(await page.context().cookies()).toHaveLength(0);
+      // its page cannot read the board's storage, and what it sends is refused
+      expect(await page.evaluate(() => sessionStorage.getItem('board.token'))).toBeNull();
+      const status = await page.evaluate(async (url) => {
+        const r = await fetch(url + '/decisions', { method: 'POST', mode: 'no-cors', credentials: 'include',
+          headers: { 'content-type': 'text/plain' }, body: JSON.stringify({ id: 'D-1', chosen: 'A' }) }).catch(() => null);
+        return r ? r.type : 'failed';
+      }, b.url);
+      expect(['opaque', 'failed']).toContain(status);
+      await page.waitForTimeout(500);
+      expect(existsSync(join(root, 'state/decisions/D-1.json'))).toBe(false);
+      expect(existsSync(b.recorder)).toBe(false);
+      // the control: back on the board, the same tab still writes
+      await page.goto(`${b.url}/?lang=en`);
+      await expect(page.locator('#readOnly')).toBeHidden();
+      await page.locator('#card-D-1 [data-c="A"]').click();
+      await page.locator('#card-D-1 .confirm').click();
+      await expect.poll(() => existsSync(b.recorder) ? readFileSync(b.recorder, 'utf8') : '').toContain('--pr 99');
+    } finally { elsewhere.close(); }
+  } finally { stopBoard(b); }
+});
+
+// --- T-118: every card sits where its task really is -------------------------
+// a line of the fixture log with a pull request, which emitFixture does not carry
+function emitPr(root:string, actor:string, task:string, type:string, pr:number, data={}) {
+  const args=[join(root,'bin/fm-emit.sh'),'--actor',actor,'--task',task,'--type',type,'--pr',String(pr),
+    '--data',JSON.stringify(data),'--en',`${type} #${pr}`,'--tw',`${type} #${pr}`];
+  const result=spawnSync('bash',args,{env:{...process.env,FM_ROOT:root}});
+  expect(result.status,result.stderr.toString()).toBe(0);
+}
+const t118Events = (root:string) => readFileSync(join(root,'state/events.jsonl'),'utf8').trim().split('\n').map(l => JSON.parse(l));
+
+test('T-118: an answered card leaves the captain lane, and a park chosen on a card is carried out', async ({page}) => {
+  const root = makeRoot([], false);
+  writeTasks(root, [{id:'T-030',title:'Answered B, park',depends_on:[]},{id:'T-031',title:'A merge card held',depends_on:[]}]);
+  emitFixture(root,'worker-30','T-030','dispatched','On it','接下',{role:'worker'});
+  emitFixture(root,'worker-31','T-031','dispatched','On it','接下',{role:'worker'});
+  emitPr(root,'worker-31','T-031','pr_opened',31);
+  emitFixture(root,'reviewer-31','T-031','approved','Approved','通過',{role:'reviewer'});
+  writeFileSync(join(root,'state/pending/D-1020.json'), JSON.stringify({id:'D-1020',kind:'choice',task:'T-030',
+    ts:'2026-09-26T09:00:00Z',title:'Park T-030?',details:{...details,effect:{B:'park'}}}));
+  writeFileSync(join(root,'state/pending/D-1031.json'), JSON.stringify({id:'D-1031',kind:'merge',task:'T-031',pr:31,
+    ts:'2026-09-26T09:00:01Z',title:'Merge #31',details,gates:[1,1,1,1,1,1,1]}));
+  const b = await startBoard(root);
+  const inLane = (k:string, id:string) => page.locator(`[data-lane="${k}"] [data-task="${id}"]`);
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    await expect(inLane('captain','T-030')).toHaveCount(1);
+    await expect(inLane('captain','T-031')).toHaveCount(1);
+    // the card says what each option does before the captain picks it
+    await expect(page.locator('#card-D-1020 .opt[data-c="B"] .eff')).toHaveText(`→ ${EN.effectPark}`);
+    await page.locator('#card-D-1020 .opt[data-c="B"]').click();
+    await page.locator('#card-D-1020 .confirm').click();
+    // the park is carried out: the parked event, and the card leaves the lane
+    await expect(page.locator('#parked [data-task="T-030"]')).toHaveCount(1);
+    await expect(inLane('captain','T-030')).toHaveCount(0);
+    expect(t118Events(root).filter(e => e.type === 'parked').pop()).toMatchObject({actor:'captain',task:'T-030',data:{decision:'D-1020'}});
+    expect(t118Events(root).filter(e => e.type === 'decision_made').pop()).toMatchObject({data:{decision:'D-1020',effect:'park',outcome:'done'}});
+    // a merge card answered B holds: the task leaves the captain lane for
+    // review, where its approval puts it, and nothing is merged
+    await expect(page.locator('#card-D-1031 .opt[data-c="B"] .eff')).toHaveText(`→ ${EN.effectHold}`);
+    await page.locator('#card-D-1031 .opt[data-c="B"]').click();
+    await page.locator('#card-D-1031 .confirm').click();
+    await expect(inLane('review','T-031')).toHaveCount(1);
+    await expect(inLane('captain','T-031')).toHaveCount(0);
+    expect(existsSync(b.recorder)).toBe(false);
+  } finally {stopBoard(b);}
+});
+
+test('T-118: park and drop a working card only after confirming, which stops its crew and leaves its pull request open', async ({page}) => {
+  const root = makeRoot([], false);
+  writeTasks(root, [{id:'T-051',title:'At work, with a pull request',depends_on:[]}]);
+  emitFixture(root,'worker-51','T-051','dispatched','On it','接下',{role:'worker'});
+  emitPr(root,'worker-51','T-051','pr_opened',51);
+  // a stand-in for the round's own script, published where fm-worker.sh
+  // publishes its pid: the board's stop path signals it
+  mkdirSync(join(root,'stub'),{recursive:true}); mkdirSync(join(root,'state/worktrees'),{recursive:true});
+  writeFileSync(join(root,'stub/fm-worker.sh'),'#!/usr/bin/env bash\nsleep 60 &\nwait\n');
+  const fake = spawn('bash',[join(root,'stub/fm-worker.sh')],{stdio:'ignore'});
+  const ended = new Promise<string|null>(r => fake.on('exit',(_code,signal) => r(signal)));
+  writeFileSync(join(root,'state/worktrees/T-051.pid'), `${fake.pid}\n`);
+  const b = await startBoard(root);
+  const card = page.locator('#lanes [data-task="T-051"]');
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    await expect(page.locator('[data-lane="review"] [data-task="T-051"]')).toHaveCount(1);
+    // park asks first, and says what it stops and what it leaves
+    await page.locator('[data-menu="T-051"]').click();
+    await expect(page.locator('[data-task="T-051"] .cacts button')).toHaveText([EN.park, EN.drop]);
+    await page.locator('[data-task="T-051"] [data-act="park"]').click();
+    const box = page.locator('#dropConfirm');
+    await expect(box).toBeVisible();
+    await expect(box).toContainText(EN.parkConfirm.replace('{id}','T-051'));
+    await expect(box).toContainText(EN.crewStopNote.replace('{crew}','worker-51'));
+    await expect(box).toContainText(EN.prStaysOpen.replace('{pr}','#51'));
+    const before = t118Events(root).length;
+    await page.locator('#dropConfirm [data-cancel="park"]').click();
+    await expect(box).toBeHidden();
+    expect(t118Events(root).length).toBe(before);
+    await expect(card).toHaveCount(1);
+    // confirmed: parked, and the crew stopped
+    await page.locator('[data-menu="T-051"]').click();
+    await page.locator('[data-task="T-051"] [data-act="park"]').click();
+    await page.locator('#dropConfirm [data-confirm="park"]').click();
+    await expect(page.locator('#parked [data-task="T-051"]')).toHaveCount(1);
+    await expect(card).toHaveCount(0);
+    expect(t118Events(root).pop()).toMatchObject({type:'parked',actor:'captain',task:'T-051'});
+    expect(await ended).toBe('SIGTERM');
+    // unparked, it returns to the lane its events give it
+    await page.locator('#parked > summary').click();
+    await page.locator('#parked [data-menu="T-051"]').click();
+    await page.locator('#parked [data-act="unpark"]').click();
+    await expect(page.locator('[data-lane="review"] [data-task="T-051"]')).toHaveCount(1);
+    // drop asks first too, with the same notes, and the pull request stays open
+    await page.locator('[data-menu="T-051"]').click();
+    await page.locator('[data-task="T-051"] [data-act="drop"]').click();
+    await expect(box).toContainText(EN.dropConfirm.replace('{id}','T-051'));
+    await expect(box).toContainText(EN.prStaysOpen.replace('{pr}','#51'));
+    await page.locator('[data-confirm-drop="T-051"]').click();
+    await expect(card).toHaveCount(0);
+    expect(t118Events(root).pop()).toMatchObject({type:'closed',actor:'captain',task:'T-051'});
+    expect(t118Events(root).some(e => e.type === 'merged')).toBe(false);
+  } finally { fake.kill('SIGKILL'); stopBoard(b); }
+});
+
+test('T-118: a card in the working lane is parked and dropped only after confirming, and its crew is stopped', async ({page}) => {
+  const root = makeRoot([], false);
+  writeTasks(root, [{id:'T-052',title:'At work, no pull request yet',depends_on:[]}]);
+  emitFixture(root,'worker-52','T-052','dispatched','On it','接下',{role:'worker'});
+  mkdirSync(join(root,'stub'),{recursive:true}); mkdirSync(join(root,'state/worktrees'),{recursive:true});
+  writeFileSync(join(root,'stub/fm-worker.sh'),'#!/usr/bin/env bash\nsleep 60 &\nwait\n');
+  const fake = spawn('bash',[join(root,'stub/fm-worker.sh')],{stdio:'ignore'});
+  const ended = new Promise<string|null>(r => fake.on('exit',(_code,signal) => r(signal)));
+  writeFileSync(join(root,'state/worktrees/T-052.pid'), `${fake.pid}\n`);
+  const b = await startBoard(root);
+  const working = page.locator('[data-lane="working"] [data-task="T-052"]');
+  const box = page.locator('#dropConfirm');
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    await expect(working).toHaveCount(1);
+    // park from the working lane: asked first, then carried out
+    await page.locator('[data-menu="T-052"]').click();
+    await expect(page.locator('[data-task="T-052"] .cacts button')).toHaveText([EN.park, EN.drop]);
+    await page.locator('[data-task="T-052"] [data-act="park"]').click();
+    await expect(box).toBeVisible();
+    await expect(box).toContainText(EN.parkConfirm.replace('{id}','T-052'));
+    await expect(box).toContainText(EN.crewStopNote.replace('{crew}','worker-52'));
+    await page.locator('#dropConfirm [data-confirm="park"]').click();
+    await expect(page.locator('#parked [data-task="T-052"]')).toHaveCount(1);
+    await expect(working).toHaveCount(0);
+    expect(t118Events(root).pop()).toMatchObject({type:'parked',actor:'captain',task:'T-052'});
+    expect(await ended).toBe('SIGTERM');
+    // unparked, it is back in the working lane, and a drop from there asks first too
+    await page.locator('#parked > summary').click();
+    await page.locator('#parked [data-menu="T-052"]').click();
+    await page.locator('#parked [data-act="unpark"]').click();
+    await expect(working).toHaveCount(1);
+    await page.locator('[data-menu="T-052"]').click();
+    await page.locator('[data-task="T-052"] [data-act="drop"]').click();
+    await expect(box).toContainText(EN.dropConfirm.replace('{id}','T-052'));
+    await expect(box).toContainText(EN.crewStopNote.replace('{crew}','worker-52'));
+    await page.locator('[data-confirm-drop="T-052"]').click();
+    await expect(working).toHaveCount(0);
+    expect(t118Events(root).pop()).toMatchObject({type:'closed',actor:'captain',task:'T-052'});
+  } finally { fake.kill('SIGKILL'); stopBoard(b); }
+});
+
+test('T-118: a task parked while its card is pending stays in the captain lane, says so, and offers unpark', async ({page}) => {
+  const root = makeRoot([], false);
+  writeTasks(root, [{id:'T-060',title:'Parked with its card up',depends_on:[]}]);
+  emitFixture(root,'worker-60','T-060','dispatched','On it','接下',{role:'worker'});
+  writeFileSync(join(root,'state/pending/D-1060.json'), JSON.stringify({id:'D-1060',kind:'choice',task:'T-060',
+    ts:'2026-09-26T09:00:00Z',title:'What next for T-060?',details}));
+  const b = await startBoard(root);
+  const captain = page.locator('[data-lane="captain"] [data-task="T-060"]');
+  const box = page.locator('#dropConfirm');
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    await expect(captain).toHaveCount(1);
+    await page.locator('[data-menu="T-060"]').click();
+    await expect(page.locator('[data-task="T-060"] .cacts button')).toHaveText([EN.park, EN.drop]);
+    await page.locator('[data-task="T-060"] [data-act="park"]').click();
+    // the confirm step says what a park does in this lane: the card holds it here
+    await expect(box).toContainText(EN.parkConfirmCaptain.replace('{id}','T-060'));
+    await expect(box).not.toContainText(EN.parkConfirm.replace('{id}','T-060'));
+    await page.locator('#dropConfirm [data-confirm="park"]').click();
+    await expect(captain.locator('.badge.b-parked')).toHaveText(EN.parkedPending);
+    await expect(page.locator('#parked [data-task="T-060"]')).toHaveCount(0);
+    expect(t118Events(root).pop()).toMatchObject({type:'parked',actor:'captain',task:'T-060'});
+    // it offers unpark now, not a second park
+    await page.locator('[data-menu="T-060"]').click();
+    await expect(page.locator('[data-task="T-060"] .cacts button')).toHaveText([EN.unpark, EN.drop]);
+    // a refusal the server sends is shown by its own text, not the generic line
+    await page.route('**/tasks', route => route.fulfill({status:409, contentType:'application/json',
+      body:JSON.stringify({error:'confirm before you unpark T-060', code:'confirmRequired'})}));
+    await page.locator('[data-task="T-060"] [data-act="unpark"]').click();
+    await expect(page.locator('#taskFeedback')).toHaveText(EN.confirmRequired);
+    await page.unroute('**/tasks');
+    await page.locator('[data-menu="T-060"]').click();
+    await page.locator('[data-task="T-060"] [data-act="unpark"]').click();
+    await expect(captain.locator('.badge.b-parked')).toHaveCount(0);
+    await expect(page.locator('#taskFeedback')).toHaveText('');
+    // parked again and the card withdrawn: the park is what places it
+    await page.locator('[data-menu="T-060"]').click();
+    await page.locator('[data-task="T-060"] [data-act="park"]').click();
+    await page.locator('#dropConfirm [data-confirm="park"]').click();
+    await expect(captain.locator('.badge.b-parked')).toHaveCount(1);
+    unlinkSync(join(root,'state/pending/D-1060.json'));
+    await expect(captain).toHaveCount(0);
+    await page.locator('#parked > summary').click();
+    await expect(page.locator('#parked [data-task="T-060"]')).toHaveCount(1);
+  } finally {stopBoard(b);}
+});
+
+test('T-118: an effect that failed is listed with its reason on the page until it is overtaken', async ({page}) => {
+  const root = makeRoot([], false);
+  writeTasks(root, [{id:'T-070',title:'A dispatch the dispatcher holds',depends_on:[]}]);
+  // fm-dispatch.sh as the real one answers when it holds a task: the reason
+  // on stderr, the tally on stdout, exit 0, and no task id printed
+  writeFileSync(join(root,'bin/fm-dispatch.sh'), '#!/usr/bin/env bash\n' +
+    'echo "fm-dispatch: T-070 waits for a slot: 3 in flight, limit 3" >&2\n' +
+    'echo "fm-dispatch: 3 in flight, limit 3 - nothing to start"\n');
+  chmodSync(join(root,'bin/fm-dispatch.sh'), 0o755);
+  writeFileSync(join(root,'state/pending/D-1070.json'), JSON.stringify({id:'D-1070',kind:'choice',task:'T-070',
+    ts:'2026-09-26T09:00:00Z',title:'Start T-070?',details:{...details,effect:{A:'dispatch'}}}));
+  const b = await startBoard(root);
+  const listed = page.locator('#effects #effect-D-1070');
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    await expect(listed).toHaveCount(0);
+    await page.locator('#card-D-1070 .opt[data-c="A"]').click();
+    await page.locator('#card-D-1070 .confirm').click();
+    await expect(page.locator('#orderFeedback')).toContainText(EN.effectRefused);
+    // listed by its effect's name and the dispatcher's own reason
+    await expect(listed).toContainText(EN.effectFailed.replace('{effect}', EN.effectDispatch));
+    await expect(listed).toContainText('T-070 waits for a slot: 3 in flight, limit 3');
+    await expect(listed).toHaveAttribute('data-effect', 'dispatch');
+    expect(t118Events(root).filter(e => e.type === 'decision_made').pop()).toMatchObject({data:{decision:'D-1070',effect:'dispatch',outcome:'failed'}});
+    // dispatched some other way after the answer: the failure is overtaken
+    emitFixture(root,'worker-70','T-070','dispatched','On it','接下',{role:'worker'});
+    await expect(listed).toHaveCount(0);
+  } finally {stopBoard(b);}
+});
+
+test('T-118: a closed task is reopened from the history menu, behind a confirm step with a reason', async ({page}) => {
+  const root = makeRoot([], false);
+  writeTasks(root, [{id:'T-080',title:'Dropped by mistake',depends_on:[]}]);
+  emitFixture(root,'worker-80','T-080','dispatched','On it','接下',{role:'worker'});
+  emitFixture(root,'worker-80','T-080','agent_finished');
+  emitFixture(root,'captain','T-080','closed','the captain dropped T-080','船長決定不做 T-080');
+  const b = await startBoard(root);
+  const inHistory = page.locator('#history [data-history="T-080"]');
+  const box = page.locator('#dropConfirm');
+  const reopen = async () => {
+    await page.locator('#history [data-menu="T-080"]').click();
+    await expect(page.locator('#history [data-history="T-080"] .cacts button')).toHaveText([EN.reopen]);
+    await page.locator('#history [data-act="reopen"]').click();
+    await expect(box).toContainText(EN.reopenConfirm.replace('{id}','T-080').replace('{stage}',EN.laneClosed));
+    await page.locator('#dropConfirm [data-reopen-reason]').fill('dropped by mistake');
+    await page.locator('#dropConfirm [data-confirm="reopen"]').click();
+  };
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    // closed tasks sit in no lane: the history is the only place to reopen one
+    await expect(page.locator('#lanes [data-task="T-080"]')).toHaveCount(0);
+    await page.locator('#history > summary').click();
+    await expect(inHistory).toHaveCount(1);
+    // a refusal for want of a reason is shown by its own text
+    await page.route('**/tasks', route => route.fulfill({status:400, contentType:'application/json',
+      body:JSON.stringify({error:'reopening needs a reason', code:'reopenNeedsReason'})}));
+    await reopen();
+    await expect(page.locator('#taskFeedback')).toHaveText(EN.reopenNeedsReason);
+    await expect(inHistory).toHaveCount(1);
+    await page.unroute('**/tasks');
+    await reopen();
+    // reopened with no later events: untouched work again, in ready
+    await expect(page.locator('[data-lane="ready"] [data-task="T-080"]')).toHaveCount(1);
+    await expect(inHistory).toHaveCount(0);
+    expect(t118Events(root).pop()).toMatchObject({type:'reopened',actor:'captain',task:'T-080',
+      data:{reason:'dropped by mistake',from:'closed'}});
+  } finally {stopBoard(b);}
+});
+
+test('T-118: reopening moves a merged card out of merged, and a card under a final task is shown', async ({page}) => {
+  const root = makeRoot([], false);
+  writeTasks(root, [{id:'T-117',title:'T-105 again',depends_on:[]}]);
+  // T-117's sequence: its own #97 open, then a merge card for #96 raised
+  // under it, answered, and merged
+  emitFixture(root,'worker-117','T-117','dispatched','On it','接下',{role:'worker'});
+  emitPr(root,'worker-117','T-117','pr_opened',97);
+  emitFixture(root,'worker-117','T-117','agent_finished');
+  emitPr(root,'firstmate','T-117','decision_requested',96);
+  emitPr(root,'captain','T-117','merged',96);
+  writeFileSync(join(root,'state/pending/D-1118.json'), JSON.stringify({id:'D-1118',kind:'choice',task:'T-117',
+    title:'A card under a merged task',details}));
+  const b = await startBoard(root);
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    await expect(page.locator('[data-lane="merged"] [data-task="T-117"]')).toHaveCount(1);
+    // the card under the merged task is shown, and says the task is final
+    await expect(page.locator('#card-D-1118 .final-note')).toContainText(
+      EN.finalNote.replace('{task}','T-117').replace('{stage}',EN.laneMerged));
+    await page.locator('#card-D-1118 .opt[data-c="C"]').click();
+    await page.locator('#card-D-1118 .confirm').click();
+    await expect(page.locator('#card-D-1118')).toHaveCount(0);
+    // the merged card offers reopening, behind a confirm step that needs a reason
+    await page.locator('[data-lane="merged"] [data-menu="T-117"]').click();
+    await expect(page.locator('[data-task="T-117"] .cacts button')).toHaveText([EN.reopen]);
+    await page.locator('[data-task="T-117"] [data-act="reopen"]').click();
+    const box = page.locator('#dropConfirm');
+    await expect(box).toContainText(EN.reopenConfirm.replace('{id}','T-117').replace('{stage}',EN.laneMerged));
+    const go = page.locator('#dropConfirm [data-confirm="reopen"]');
+    await expect(go).toBeDisabled();
+    await page.locator('#dropConfirm [data-reopen-reason]').fill('the merge card for #96 was raised under T-117');
+    await expect(go).toBeEnabled();
+    await go.click();
+    // out of merged: with no later events it is untouched work again, and
+    // shows its own pull request, not the one the wrong card merged
+    await expect(page.locator('[data-lane="merged"] [data-task="T-117"]')).toHaveCount(0);
+    const card = page.locator('[data-lane="ready"] [data-task="T-117"]');
+    await expect(card).toHaveCount(1);
+    await expect(card.locator('.pr')).toHaveText('#97');
+    expect(t118Events(root).pop()).toMatchObject({type:'reopened',actor:'captain',task:'T-117',
+      data:{reason:'the merge card for #96 was raised under T-117'}});
+    await expect(page.locator('#log li').first()).toContainText('the captain reopened T-117');
+    // a later merge card for #97 is shown and answerable
+    writeFileSync(join(root,'state/pending/D-1119.json'), JSON.stringify({id:'D-1119',kind:'merge',task:'T-117',pr:97,
+      title:'Merge #97',details,gates:[1,1,1,1,1,1,1]}));
+    await expect(page.locator('#card-D-1119')).toHaveCount(1);
+    await expect(page.locator('#card-D-1119 .final-note')).toHaveCount(0);
+    await page.locator('#card-D-1119 .opt[data-c="A"]').click();
+    await page.locator('#card-D-1119 .confirm').click();
+    await expect.poll(() => existsSync(b.recorder) ? readFileSync(b.recorder,'utf8') : '').toContain('--pr 97 --task T-117');
+  } finally {stopBoard(b);}
 });

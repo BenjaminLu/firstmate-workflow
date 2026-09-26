@@ -75,32 +75,29 @@ ROOT="$(cd "$ROOT" && pwd)"
 # [0-9] nor in [A-Za-z0-9._-].
 #
 # Two shapes (design section 15.4): the old D-<digits>, and D-<project>-
-# <task>-<n>, whose project is [a-z0-9-] up to 24, whose task is a task id
-# without its hyphen, and whose n starts at 1. The same case-glob rule holds
-# for the new shape, and the character sets are written out rather than
-# ranged, because a bracket range follows the locale's collation.
-LOWER='abcdefghijklmnopqrstuvwxyz'; UPPER='ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+# <task>-<n>, whose task part is a task's key: T047, SK001, or a fixture's
+# TA. The second is the shared task grammar's FM_OWNED_ID (bin/fm-emit.sh,
+# T-119), not a copy of it here, so an SK task's merge card is drawn like a
+# T task's. A bash =~ match is also whole-string: without REG_NEWLINE, ^ and
+# $ anchor the value and not a line, and no class in it holds a newline.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -r "$HERE/fm-emit.sh" ] || die "missing $HERE/fm-emit.sh" 70
+# shellcheck source=bin/fm-emit.sh
+. "$HERE/fm-emit.sh"
 is_decision_id() {
-  local rest project task n
+  local rest
   case "$1" in D-*) rest="${1#D-}" ;; *) return 1 ;; esac
   case "$rest" in
     ''|*[!0-9]*) ;;
     *) [ "${#rest}" -le 6 ]; return ;;
   esac
-  # n is after the last hyphen, the task before it, the project the rest
-  n="${rest##*-}"; rest="${rest%-*}"
-  [ "$rest" != "${rest%-*}" ] || return 1
-  task="${rest##*-}"; project="${rest%-*}"
-  case "$n" in ''|0*|*[!0-9]*) return 1 ;; esac
-  [ "${#n}" -le 6 ] || return 1
-  case "$task" in T?*) ;; *) return 1 ;; esac
-  case "${task#T}" in *[!0-9"$LOWER$UPPER"]*) return 1 ;; esac
-  [ "${#task}" -le 33 ] || return 1
-  case "$project" in ''|*[!0-9"$LOWER"-]*) return 1 ;; esac
-  [ "${#project}" -le 24 ]
+  [[ "$1" =~ $FM_OWNED_ID ]]
 }
+# a task, or a fixture's T-<name>: an SK task's authored drawing is found
+# under its own id, as a T task's is
 is_task_stem() {
   local rest
+  fm_task_is "$1" && return 0
   case "$1" in T-*) rest="${1#T-}" ;; *) return 1 ;; esac
   case "$rest" in ''|*[!A-Za-z0-9._-]*) return 1 ;; esac
   [ "${#rest}" -le 32 ]
@@ -137,7 +134,7 @@ ROUTINE="greenlit dispatched commit_pushed pr_opened gate_passed gate_failed \
 review_opened review_failed ask_pass_criteria criteria_returned \
 protocol_violation approved merged closed decision_made worker_crashed \
 vendor_unavailable agent_finished crew_status parked unparked spec_pinned \
-spec_repinned"
+spec_repinned agent_lost reopened"
 
 # 0 the captain must rule on it, 1 routine, 64 no ruling for it here
 wants() {

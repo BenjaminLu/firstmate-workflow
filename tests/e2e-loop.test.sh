@@ -38,6 +38,24 @@ caller_fixture() {   # caller_fixture <task branch> <event lines> [registry] -> 
   done
   printf '#!/usr/bin/env bash\nprintf "%s\\n"\n' "$1" > "$c/bin/git"
   chmod +x "$c/bin/git"
+  # A merge card reads its pull request's branch and title before it exists
+  # (T-119), so the fixture carries a gh that answers as gh does. Every pull
+  # request the log opened is on the task branch, titled "T-xxx: fixture";
+  # `--json a,b` prints exactly those fields, keys sorted, `--jq` filters,
+  # and any other number is GraphQL's error on stderr, exit 1.
+  cat > "$c/bin/gh" <<G
+#!/usr/bin/env bash
+arg() { local w="\$1"; shift; while [ \$# -gt 0 ]; do [ "\$1" = "\$w" ] && { printf '%s' "\${2-}"; return; }; shift; done; }
+[ "\${1-}:\${2-}" = pr:view ] || { echo "gh stub: fm-run's card asks nothing but pr view" >&2; exit 1; }
+jq -e --argjson n "\$3" 'select(.type=="pr_opened" and .pr==\$n)' "$c/state/events.jsonl" >/dev/null 2>&1 || {
+  echo "GraphQL: Could not resolve to a PullRequest with the number of \$3. (repository.pullRequest)" >&2; exit 1; }
+out="\$(jq -cnS --argjson n "\$3" --arg f "\$(arg --json "\$@")" \\
+  '{number:\$n, headRefName:"$1", title:"$(printf '%s' "$1" | sed -E 's/^t-([0-9]+).*/T-\1/'): fixture", state:"OPEN"} as \$d
+   | reduce (\$f|split(","))[] as \$k ({}; .[\$k] = \$d[\$k])')"
+q="\$(arg --jq "\$@")"
+if [ -n "\$q" ]; then jq -r "\$q" <<<"\$out"; else printf '%s\n' "\$out"; fi
+G
+  chmod +x "$c/bin/gh"
   printf '%s' "${3-$REGISTRY}" > "$c/config.yaml"
   printf '%s\n' "$2" > "$c/state/events.jsonl"
   printf '%s' "$c"
@@ -177,8 +195,8 @@ cp "$ROOT/skills/reviewer/SKILL.md" skills/reviewer/
 printf 'vendor: mock\nconcurrency: 2\nfallback:\n  - mock\nproject:\n  check: bin/ci.sh\n  test: bash {file}\n' > config.yaml
 printf '#!/usr/bin/env bash\nexit 0\n' > bin/ci.sh; chmod +x bin/ci.sh
 mkdir -p design/tasks
-cat > design/tasks/T-1.json <<'J'
-{"id":"T-1","title":"a task the loop can finish","milestone":"M0",
+cat > design/tasks/T-101.json <<'J'
+{"id":"T-101","title":"a task the loop can finish","milestone":"M0",
  "depends_on":[],"scope":["src/**","tests/**"],"acceptance":["it lands"]}
 J
 printf '# design\n## 6. gates\nsix of them\n## 8. board\n' > design/design.md
@@ -199,7 +217,7 @@ cat > bin/adapters/mock.sh <<'M'
 [ "$1" = "run" ] || exit 64
 echo "mock ran" >> "$4"
 if grep -q "Find the reason to reject" "$2"; then
-  printf '%s\nREJECT:T-1\n' "${FM_VERDICT:-round one: name the helper and cover the empty case}" > "$3/verdict.txt"
+  printf '%s\nREJECT:T-101\n' "${FM_VERDICT:-round one: name the helper and cover the empty case}" > "$3/verdict.txt"
   exit 0
 fi
 printf 'implemented\n' > "$3/src/thing"
@@ -216,18 +234,18 @@ assert_fail "test -s '$GHSTATE/prs'" "no green light, no pull request"
 
 run bin/fm-emit.sh --actor captain --type greenlit --en go --tw 開工 >/dev/null
 # a ready task is judged and answered A before the dispatcher starts it (T-059)
-run bash bin/fm-ready.sh judged --task T-1 --decision D-1000 --repo "$r" >/dev/null 2>&1
+run bash bin/fm-ready.sh judged --task T-101 --decision D-1000 --repo "$r" >/dev/null 2>&1
 mkdir -p "$r/state/decisions"
-printf '{"id":"D-1000","task":"T-1","kind":"choice","chosen":"A"}\n' > "$r/state/decisions/D-1000.json"
+printf '{"id":"D-1000","task":"T-101","kind":"choice","chosen":"A"}\n' > "$r/state/decisions/D-1000.json"
 
 # --- turn one: dispatch, worktree, commit, push, pull request -----------
 out1="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
-assert_contains "$out1" "dispatched: T-1" "turn one dispatches the ready task"
+assert_contains "$out1" "dispatched: T-101" "turn one dispatches the ready task"
 for _ in $(seq 1 40); do [ -s "$GHSTATE/prs" ] && break; sleep 0.25; done
 assert_ok "test -s '$GHSTATE/prs'" "a pull request exists"
 pr="$(awk -F'\t' 'NR==1{print $1}' "$GHSTATE/prs")"
 branch="$(awk -F'\t' 'NR==1{print $2}' "$GHSTATE/prs")"
-assert_contains "$branch" "t-1" "on a branch named after the task"
+assert_contains "$branch" "t-101" "on a branch named after the task"
 assert_ok "git --git-dir='$bare' rev-parse --verify '$branch'" "and it was pushed"
 
 # --- turn two: the gates run, gate 7 sends it to review -----------------
@@ -243,20 +261,20 @@ assert_ok "test -s '$GHSTATE/comments.$pr'" "the reviewer commented"
 # rather than against a path fm-run reconstructed
 stub_script "$r/bin/fm-review.sh" <<'S'
 #!/usr/bin/env bash
-echo "fm-review: nothing to show; its log is at state/reviews/T-1-r1.7.log" >&2
+echo "fm-review: nothing to show; its log is at state/reviews/T-101-r1.7.log" >&2
 exit 3
 S
 outX="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
 assert_contains "$outX" "produced no verdict" "a review round with no verdict is reported, not counted"
-assert_contains "$outX" "T-1-r1.7.log" "and the path it prints is the one the reviewer wrote"
+assert_contains "$outX" "T-101-r1.7.log" "and the path it prints is the one the reviewer wrote"
 stub_script "$r/bin/fm-review.sh" <<'S'
 #!/usr/bin/env bash
-echo "fm-review: every reviewer vendor was unavailable; their log is at state/reviews/T-1-r1.9.log" >&2
+echo "fm-review: every reviewer vendor was unavailable; their log is at state/reviews/T-101-r1.9.log" >&2
 exit 2
 S
 outY="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
 assert_contains "$outY" "no reviewer engine was available" "and so is a reviewer with no engine"
-assert_contains "$outY" "T-1-r1.9.log" "which also carries the log the reviewer kept"
+assert_contains "$outY" "T-101-r1.9.log" "which also carries the log the reviewer kept"
 stub_script "$r/bin/fm-review.sh" <<'S'
 #!/usr/bin/env bash
 exit 64
@@ -293,7 +311,7 @@ restore_scripts
 # used to interpolate one into JSON by hand, which put a raw control
 # character in the document, and gate 7 then read an approval sitting right
 # there as nothing at all.
-body="$(printf 'Two findings:\n1. the "helper" is unnamed\n2. a path like C:\\tmp is unhandled\nREJECT:T-1')"
+body="$(printf 'Two findings:\n1. the "helper" is unnamed\n2. a path like C:\\tmp is unhandled\nREJECT:T-101')"
 run "$GH" pr comment "$pr" --body "$body" >/dev/null 2>&1
 back="$(run "$GH" pr view "$pr" --json comments --jq '.comments[-1].body')"
 assert_eq "$body" "$back" "a review body with newlines and quotes comes back byte for byte"
@@ -301,7 +319,7 @@ assert_eq "reviewer-1" "$(run "$GH" pr view "$pr" --json comments --jq '.comment
   "and the author is not split off by one of its newlines"
 
 # the reviewer in this fixture signs off
-printf 'reviewer-1\tAPPROVE:T-1\n' >> "$GHSTATE/comments.$pr"
+printf 'reviewer-1\tAPPROVE:T-101\n' >> "$GHSTATE/comments.$pr"
 
 # The fixture's reviewer signs REJECT before it signs APPROVE, and the round
 # counter is what decides whether the next turn runs the round-three
@@ -314,8 +332,8 @@ assert_eq "1" "$rounds" "one review round has happened when the approval lands"
 # firstmate allocates the card's id before it authors the details, so the
 # details and any drawing are written under the id the card will carry
 mkdir -p "$r/state/decision-details"
-card1="$(run bin/fm-decide.sh --allocate --task T-1 --kind merge --repo "$r" 2>/dev/null)"
-assert_eq "D-firstmate-workflow-T1-1" "$card1" \
+card1="$(run bin/fm-decide.sh --allocate --task T-101 --kind merge --repo "$r" 2>/dev/null)"
+assert_eq "D-firstmate-workflow-T101-1" "$card1" \
   "firstmate allocates the merge card's id; a tree with no registry is the self project"
 cp "$DETAILS" "$r/state/decision-details/$card1.json"
 rm -rf "$caller"
@@ -334,15 +352,15 @@ assert_eq "OPEN" "$(awk -F'\t' -v n="$pr" '$1==n{print $4}' "$GHSTATE/prs")" \
 
 # --- the captain answers, and only then does it merge -------------------
 mkdir -p "$r/state/decisions"
-printf '{"id":"%s","task":"T-1","kind":"merge","chosen":"A"}\n' "$id" > "$r/state/decisions/$id.json"
-run bin/fm-merge.sh --pr "$pr" --task T-1 --repo "$r" >/dev/null 2>&1
+printf '{"id":"%s","task":"T-101","kind":"merge","chosen":"A"}\n' "$id" > "$r/state/decisions/$id.json"
+run bin/fm-merge.sh --pr "$pr" --task T-101 --repo "$r" >/dev/null 2>&1
 assert_eq "MERGED" "$(awk -F'\t' -v n="$pr" '$1==n{print $4}' "$GHSTATE/prs")" "the pull request is merged"
 
 types="$(jq -r .type < "$r/state/events.jsonl" | tr '\n' ' ')"
 for want in greenlit dispatched commit_pushed pr_opened review_opened decision_requested merged; do
   assert_contains "$types" "$want" "the log records $want"
 done
-assert_fail "test -d '$r/state/worktrees/T-1'" "the worktree is cleaned up after the merge"
+assert_fail "test -d '$r/state/worktrees/T-101'" "the worktree is cleaned up after the merge"
 
 cd "$ROOT" || exit 1
 rm -rf "$d"

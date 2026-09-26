@@ -19,13 +19,15 @@ const DIAGRAM = (() => {
   // D-<project>-<task>-<n>, which names its owner. owner() reads the project
   // and task back out of the second; an old id names none. A skill update's
   // D-SK-<n> is fm-decide.sh's SKILL_ID and board/server.ts's too (T-112).
-  const OWNED = /^D-([a-z0-9-]{1,24})-(T[A-Za-z0-9]{1,32})-([1-9][0-9]{0,5})$/;
-  const isDecision = (id) => /^D-[0-9]{1,6}$/.test(String(id ?? "")) || OWNED.test(String(id ?? ""))
+  // The owned shape is the task grammar's, board/server.ts's taskGrammar(),
+  // which the server puts in front of this file as TASK_GRAMMAR (T-119): an
+  // SK task's card (D-<project>-SK001-<n>) is owned like a T task's. Loaded
+  // without it, this file knows no owned id at all rather than a stale one.
+  const G = typeof TASK_GRAMMAR !== "undefined" ? TASK_GRAMMAR : null;
+  const isDecision = (id) => /^D-[0-9]{1,6}$/.test(String(id ?? ""))
+    || (G !== null && G.OWNED.test(String(id ?? "")))
     || /^D-SK-[0-9]{3,}$/.test(String(id ?? ""));
-  const owner = (id) => {
-    const m = OWNED.exec(String(id ?? ""));
-    return m ? { project: m[1], task: "T-" + m[2].slice(1), n: Number(m[3]) } : null;
-  };
+  const owner = (id) => (G !== null ? G.ownerOf(id) : null);
 
   const src = (id, lang) =>
     isDecision(id) ? DIR + id + "." + (LANGS.includes(lang) ? lang : "zh-TW") + ".html" : "";

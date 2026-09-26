@@ -6,8 +6,10 @@
 // No build step and no framework: the page is a file, the stream is SSE, and
 // the state endpoint is derived from events.jsonl and design/tasks/ so the
 // board has no opinion the log does not already hold.
-import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fchmodSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 // canonical from the start: on macOS /var is a symlink to /private/var, and a
@@ -101,14 +103,34 @@ const CREW_STATE = (s: string | undefined): CrewState =>
   s === "queued" || s === "working" || s === "gate" || s === "review" || s === "captain"
     ? s : "unknown";
 
+// The lane each event gives a task (design section 8, lane derivation;
+// T-118). Nothing here
+// gives the captain's lane: a task is the captain's only while a card for it
+// is pending, which is a fact on disk, not a point in the log. So an answered
+// card leaves that lane by itself, and an approval waits in review for
+// firstmate's merge card rather than at the captain's with nothing to answer.
 const STAGE: Record<string, string> = {
   dispatched: "working", commit_pushed: "working", pr_opened: "review",
   gate_failed: "gate", gate_passed: "review", review_opened: "review",
-  approved: "captain", decision_requested: "captain",
+  approved: "review",
   merged: "merged", closed: "closed",
   // a task whose review never happened, or whose worker died, is blocked -
   // it must not sit in a lane that says work is under way
   review_failed: "gate", worker_crashed: "gate",
+};
+// What a crewman is doing, which is not the same question as where its task
+// sits: the one that asked the captain, or whose approval is waiting on him,
+// is waiting on the captain.
+const phaseOf = (type: string | undefined): CrewState | null =>
+  type === "decision_requested" || type === "approved" ? "captain"
+    : STAGE[type ?? ""] ? CREW_STATE(STAGE[type ?? ""]) : null;
+// The one event that moves a task out of merged or closed (T-118): the
+// captain's `reopened`, with a reason. Afterwards the task's lane comes from
+// its later events, or from the untouched rules when there are none. Any
+// other actor's, or one with no reason, is not a reopening.
+const reopens = (e: Event): boolean => {
+  const reason = (e.data as { reason?: unknown } | undefined)?.reason;
+  return e.type === "reopened" && e.actor === "captain" && typeof reason === "string" && reason.trim() !== "";
 };
 
 // The lanes, left to right, in lifecycle order. The page reads this list
@@ -122,18 +144,55 @@ const LANES = ["backlog", "ready", "working", "gate", "review", "captain", "merg
 // failure naming it names no gate that exists.
 const GATE_NUMBERS = [1, 2, 4, 5, 6, 7];
 
-// What the captain may do to a card, by where it sits (T-058). Only work
-// nobody has started can be set aside: park is reversible, drop is the
-// closed event and is not. A task in flight or later offers nothing, and
-// POST /tasks refuses anything this table does not list.
+// What the captain may do to a card, by where it sits (T-058, T-118). Any
+// unfinished task can be set aside: park is reversible, drop is the closed
+// event and is not, and a task with crew aboard or an open pull request asks
+// first and has its crew stopped. A merged or closed task offers only
+// reopening. A task parked while its card is pending stays in the captain's
+// lane (the card outranks the park) and offers the parked row. POST /tasks
+// refuses anything this table does not list.
+const SET_ASIDE = ["park", "drop"];
 const ACTIONS: Record<string, string[]> = {
-  ready: ["park", "drop"], backlog: ["park", "drop"], parked: ["unpark", "drop"],
+  backlog: SET_ASIDE, ready: SET_ASIDE, working: SET_ASIDE, gate: SET_ASIDE,
+  review: SET_ASIDE, captain: SET_ASIDE,
+  parked: ["unpark", "drop"],
+  merged: ["reopen"], closed: ["reopen"],
 };
 // the event each action writes, and the summary the log shows for it
 const ACTION_EVENT: Record<string, { type: string; en: string; tw: string }> = {
   park: { type: "parked", en: "the captain parked {id}", tw: "船長擱置了 {id}" },
   unpark: { type: "unparked", en: "the captain unparked {id}", tw: "船長恢復了 {id}" },
   drop: { type: "closed", en: "the captain dropped {id}: it will not be done", tw: "船長決定不做 {id}" },
+  reopen: { type: "reopened", en: "the captain reopened {id}: {reason}", tw: "船長重新開啟了 {id}：{reason}" },
+};
+
+// --- Crew liveness (T-118) --------------------------------------------------
+// A crewman is aboard only while its run is alive, and the launcher side, not
+// the board, says when it is not: bin/fm-herdr.py's deck reconcile checks each
+// aboard actor's recorded process and gives one whose process is gone, and
+// that never said agent_finished, one `agent_lost` event through fm-emit. The
+// board reads that event like agent_finished for the deck, shows it once in
+// the log, and blocks the task unless a later event has moved it.
+
+// --- Card effects (T-118) ----------------------------------------------------
+// What an answer does, by the one script that owns it. A card names the effect
+// of each option in its details (`details.effect`, e.g. {"C":"park"}); a merge
+// card, a task's or an untracked one (T-119), that names none merges on A and
+// holds on B and C, as it always has -
+// sending work back starts a worker, so only a card that says so does it. An
+// option with no effect, and a custom answer, is recorded and nothing else.
+// bin/fm-decide.sh refuses a card naming any effect not listed here.
+const EFFECTS = ["merge", "hold", "park", "drop", "dispatch", "send_back"] as const;
+type Effect = typeof EFFECTS[number];
+// the words the decision_made summary uses, in the second language it carries
+const EFFECT_TW: Record<Effect, string> = { merge: "合併", hold: "暫緩", park: "擱置", drop: "不做", dispatch: "派工", send_back: "退回重做" };
+const OUTCOME_TW: Record<string, string> = { done: "已完成", failed: "失敗", recorded: "已記錄", running: "進行中" };
+const effectOf = (p: Record<string, any>, chosen: string): Effect | null => {
+  if (chosen === "custom") return null;
+  const named = p?.details?.effect?.[chosen];
+  if (typeof named === "string") return (EFFECTS as readonly string[]).includes(named) ? named as Effect : null;
+  if (p?.kind === "merge" || p?.kind === "merge-untracked") return chosen === "A" ? "merge" : "hold";
+  return null;
 };
 
 // The header's engine badge (V7). Read at request time, so an edit to
@@ -265,14 +324,57 @@ const prNumber = (n: unknown): number | null => {
 // guessed. A skill update's card, D-SK-<n>, is fm-decide.sh's SKILL_ID
 // (T-112): fm.sh self-update raises it, fm-decide.sh --await and fm-ready.sh
 // read its answer under that pattern only, and it names no owner.
+// --- task grammar (T-119) ---
+// The TypeScript twin of bin/fm-emit.sh's task-id grammar, the one place the
+// scripts read it from; tests/board.test.sh lifts this block out and runs it
+// against the shell functions over one table, so the two cannot drift. A
+// task is T-<3+ digits> or SK-<3+ digits>. A branch names its task, prefix in
+// either case, the hyphen after it optional, the number whole (t-117-… is
+// T-117, sk-001-… is SK-001, t-1170-… is T-1170); a title leads with it and
+// a colon ("T-117: …"); a pull request's task is its branch's, else its
+// title's. A decision id holds a task's key, the task without its hyphen,
+// and card ids have always taken T-<letters and digits> too; an owned
+// decision id is D-<project>-<key>-<n>, and ownerOf reads its project, task
+// and n back out of it.
+//
+// It is one function in plain JavaScript, with no type in it, because the
+// board's page reads it too: the server puts it in front of diagram.js when
+// it serves that file (GRAMMAR_JS below), so the page holds no copy of it.
+function taskGrammar() {
+  const TASK_ID = /^(T|SK)-[0-9]{3,}$/;
+  const TASK_KEY = "T[A-Za-z0-9]{1,32}|SK[0-9]{3,}";
+  const OWNED = new RegExp(`^D-([a-z0-9-]{1,24})-(${TASK_KEY})-([1-9][0-9]{0,5})$`);
+  const isTask = (id) => typeof id === "string" && TASK_ID.test(id);
+  const taskOfBranch = (branch) => {
+    const m = /^([tT]|[sS][kK])-?([0-9]{3,})(-.*)?$/.exec(typeof branch === "string" ? branch : "");
+    return m ? `${m[1].toUpperCase()}-${m[2]}` : null;
+  };
+  const taskOfTitle = (title) => {
+    const m = /^((T|SK)-[0-9]{3,}):/.exec(typeof title === "string" ? title : "");
+    return m ? m[1] : null;
+  };
+  const taskOfPr = (branch, title) => taskOfBranch(branch) ?? taskOfTitle(title);
+  const taskKey = (id) =>
+    isTask(id) ? id.replace("-", "")
+      : typeof id === "string" && /^T-[A-Za-z0-9]{1,32}$/.test(id) ? `T${id.slice(2)}` : null;
+  const taskOfKey = (key) => {
+    const k = typeof key === "string" ? key : "";
+    return /^SK[0-9]{3,}$/.test(k) ? `SK-${k.slice(2)}`
+      : new RegExp(`^(?:${TASK_KEY})$`).test(k) ? `T-${k.slice(1)}` : null;
+  };
+  const ownerOf = (id) => {
+    const m = OWNED.exec(String(id ?? ""));
+    return m ? { project: m[1], task: taskOfKey(m[2]), n: Number(m[3]) } : null;
+  };
+  return { OWNED, isTask, taskOfBranch, taskOfTitle, taskOfPr, taskKey, taskOfKey, ownerOf };
+}
+const { OWNED: OWNED_DECISION, isTask, taskOfBranch, taskOfTitle, taskOfPr, taskKey, taskOfKey, ownerOf } = taskGrammar();
+// --- end task grammar ---
+// what the server puts in front of diagram.js: the same function, as source
+const GRAMMAR_JS = `var TASK_GRAMMAR = (${taskGrammar.toString()})();\n`;
 const OLD_DECISION = /^D-[0-9]{1,6}$/;
-const OWNED_DECISION = /^D-([a-z0-9-]{1,24})-(T[A-Za-z0-9]{1,32})-([1-9][0-9]{0,5})$/;
 const SKILL_DECISION = /^D-SK-[0-9]{3,}$/;
 const isDecisionId = (id: string) => OLD_DECISION.test(id) || OWNED_DECISION.test(id) || SKILL_DECISION.test(id);
-const ownerOf = (id: unknown): { project: string; task: string; n: number } | null => {
-  const m = OWNED_DECISION.exec(String(id ?? ""));
-  return m ? { project: m[1], task: `T-${m[2].slice(1)}`, n: Number(m[3]) } : null;
-};
 // the pull request's page, or null when there is no number or no repository
 const pullUrl = (repo: string | null, n: unknown): string | null => {
   const k = prNumber(n);
@@ -363,25 +465,50 @@ const state = (only: string | null = null) => {
   const moved = new Map<string, Event>();
   const asking = new Set<string>();
   const settledAt = new Map<string, number>();
-  // The captain's own word on untouched work: the last of parked / unparked
-  // wins. It only ever matters while the task is untouched - once work has
-  // started, the stage the log gives it is what the card shows.
+  // The captain's own word: the last of parked / unparked wins. Since T-118
+  // it holds for any unfinished task, in flight or not; unparking returns the
+  // task to the lane its other events give it.
   const parked = new Set<string>();
   // tasks something other than a decision card has moved
   const worked = new Set<string>();
+  // where in the log each task was last given a lane, and where each actor
+  // last spoke: a lost crewman blocks only a task nothing has moved since
+  const movedAt = new Map<string, number>();
+  const spokeAt = new Map<string, number>();
+  // the pull request each task opened itself, which a reopened task shows
+  // again rather than one a card raised under the wrong task merged
+  const opened = new Map<string, number>();
   for (const [index, e] of events.entries()) {
+    const actor = String(e.actor ?? "");
+    const spoke = spokeAt.get(actor) ?? -1;
+    spokeAt.set(actor, index);
     if (!e.task) continue;
     const k = ek(e);
     const n = prNumber(e.pr);
     if (n) pr.set(k, n);
+    if (n && e.type === "pr_opened") opened.set(k, n);
+    // The captain's reopening is the one way out of merged or closed. The
+    // task starts again from nothing: its later events place it, or, with
+    // none, the untouched rules do. On an unfinished task it does nothing.
+    if (reopens(e)) {
+      if (!FINAL.has(stage.get(k) ?? "")) continue;
+      stage.delete(k); moved.delete(k); movedAt.delete(k); settledAt.delete(k);
+      worked.delete(k); parked.delete(k); asking.delete(k);
+      const own = opened.get(k);
+      if (own) pr.set(k, own); else pr.delete(k);
+      continue;
+    }
     if (FINAL.has(stage.get(k) ?? "")) continue;
     if (e.type === "parked") parked.add(k);
     if (e.type === "unparked") parked.delete(k);
     if (e.type === "ask_pass_criteria") asking.add(k);
     if (e.type === "criteria_returned") asking.delete(k);
-    const s = STAGE[e.type ?? ""];
-    if (s) { stage.set(k, s); moved.set(k, e); }
-    if (s && e.type !== "decision_requested") worked.add(k);
+    // A lost crewman blocks its task, unless the task has been given a lane
+    // since the crewman last spoke - a redispatch, another round's review.
+    // Kept out of STAGE: bin/fm-ready.sh replays STAGE's keys as the events
+    // that take work off its ready list, and a loss never starts work.
+    const s = e.type === "agent_lost" ? ((movedAt.get(k) ?? -1) <= spoke ? "gate" : undefined) : STAGE[e.type ?? ""];
+    if (s) { stage.set(k, s); moved.set(k, e); movedAt.set(k, index); worked.add(k); }
     if (s === "merged") settledAt.set(k, index);
   }
   // A pending decision is a fact on disk, not a point in a history: while
@@ -425,7 +552,8 @@ const state = (only: string | null = null) => {
   // the gate that failed when the failure named it, an open ASK-PASS-CRITERIA,
   // and a waiting decision with the number of options it actually offers.
   type Badge = { kind: "gate"; gate: number | null } | { kind: "ask" }
-    | { kind: "decision"; id: string; options: number | null };
+    | { kind: "decision"; id: string; options: number | null }
+    | { kind: "lost"; actor: string } | { kind: "parked" };
   const badgesOf = (id: string, at: string): Badge[] => {
     const out: Badge[] = [];
     const last = moved.get(id);
@@ -433,6 +561,11 @@ const state = (only: string | null = null) => {
       const n = (last.data as { gate?: unknown } | undefined)?.gate;
       out.push({ kind: "gate", gate: GATE_NUMBERS.includes(n as number) ? n as number : null });
     }
+    // T-118: blocked because its crewman was lost, which the card names
+    if (at === "gate" && last?.type === "agent_lost") out.push({ kind: "lost", actor: String(last.actor ?? "") });
+    // a pending card outranks a park, so a task parked while its card is up
+    // stays in the captain's lane, and the card says it is parked
+    if (at === "captain" && parked.has(id)) out.push({ kind: "parked" });
     if (!FINAL.has(at) && asking.has(id)) out.push({ kind: "ask" });
     for (const p of pend.filter((x: Record<string, unknown>) => keyOf(projectOf(x), x.task) === id)) {
       const options = (p as { details?: { en?: { options?: unknown } } }).details?.en?.options;
@@ -455,10 +588,17 @@ const state = (only: string | null = null) => {
   const blockersOf = (id: string) =>
     stageOf(id) === "untouched" ? dependsOf(id).filter((dep) => stageOf(dep) !== "merged") : [];
   // A parked task keeps the blockers it would have, so unparking it lands
-  // where its dependencies say without the page working that out.
+  // where its dependencies say without the page working that out. Since
+  // T-118 any unfinished task can be parked, and unparking one in flight
+  // returns it to the lane its events give it. Precedence (design section 8,
+  // lane derivation): a reopening has already been folded in above; then
+  // final; then a pending card; then the captain's park; then the log, where
+  // a lost crewman has already blocked its task.
   const laneOf = (id: string): string => {
-    if (stageOf(id) !== "untouched") return stageOf(id);
+    const s = stageOf(id);
+    if (FINAL.has(s) || s === "captain") return s;
     if (parked.has(id)) return "parked";
+    if (s !== "untouched") return s;
     return blockersOf(id).length ? "backlog" : "ready";
   };
   const tasks = taskIds.map(({ project, id: taskId }) => {
@@ -484,8 +624,14 @@ const state = (only: string | null = null) => {
     blocked_by: blockedOn.map((dep) => ({ id: idOfKey(dep),
       stage: definitions.has(dep) || stage.has(dep) ? laneOf(dep) : "unknown" })),
     // only work the plan lists can be set aside: a task the log alone knows
-    // about is not the captain's to park
-    actions: definitions.has(id) ? (ACTIONS[at] ?? []) : [],
+    // about is not the captain's to park. Any final task can be reopened.
+    // A parked task whose card is pending stays in the captain's lane, and
+    // offers what a parked task offers: unpark, not a second park.
+    actions: FINAL.has(at) || definitions.has(id)
+      ? (ACTIONS[at === "captain" && parked.has(id) ? "parked" : at] ?? []) : [],
+    // whether setting it aside asks first: crew aboard or an open pull
+    // request, filled in once the crew is known below
+    confirm: false,
     badges: badgesOf(id, at),
     // the aboard crew, one chip each, filled in once the crew is known below
     crew: [] as CrewChip[],
@@ -549,7 +695,9 @@ const state = (only: string | null = null) => {
     const previous = lastByActor.get(actor);
     if (e.type === 'dispatched') finished.delete(actor);
     else if (finished.has(actor)) continue;
-    if (e.type === 'agent_finished') finished.add(actor);
+    // T-118: a run the launcher side found lost has left the deck as surely
+    // as one that finished, and an agent_finished after it changes nothing
+    if (e.type === 'agent_finished' || e.type === 'agent_lost') finished.add(actor);
     // a crewman moving to another project's task of the same id has moved
     if (e.type === 'dispatched' || (e.task && (previous?.task !== e.task || projectOf(previous) !== projectOf(e)))) {
       activity.delete(actor); phases.delete(actor);
@@ -568,9 +716,10 @@ const state = (only: string | null = null) => {
       || (e.type === 'dispatched' || e.type === 'review_opened' ? authored(e.summary) : null);
     if (description) activity.set(actor,description);
     // crew_status refreshes activity/progress only; it must not invent a phase.
-    if (STAGE[e.type || '']) phases.set(actor,e.type === 'dispatched'
+    const phase = phaseOf(e.type);
+    if (phase) phases.set(actor,e.type === 'dispatched'
       ? (roleOf(actor,e) === 'reviewer' ? 'review' : 'working')
-      : CREW_STATE(STAGE[e.type || '']));
+      : phase);
     const peer = (role: string) => {
       const candidates = [...lastByActor].filter(([id,event]) => id !== actor && id !== 'firstmate' && ek(event) === ek(e) && event.type !== 'agent_finished' && !finished.has(id) && (roles.get(id) || roleOf(id,event)) === role);
       // Several runs on one task are ambiguous; never pick an arbitrary actor.
@@ -591,7 +740,7 @@ const state = (only: string | null = null) => {
     lastByActor.set(e.actor, e.task ? {...e, project: projectOf(e)} : {...e, task: previous?.task, project: previous ? projectOf(previous) : projectOf(e)});
   }
   for (const [actor, e] of [...lastByActor]) {
-    if (e.type === "agent_finished") lastByActor.delete(actor);
+    if (e.type === "agent_finished" || e.type === "agent_lost") lastByActor.delete(actor);
   }
   const done = new Set([...stage].filter(([,value]) => FINAL.has(value)).map(([id]) => id));
   // firstmate carries its task like anyone else. Pinning it to
@@ -672,15 +821,37 @@ const state = (only: string | null = null) => {
       .map((c) => ({ id: c.id, name: c.name || c.crew_name || c.id, role: c.role,
         round: c.round ?? null, attempt: c.attempt ?? null }));
   }
+  // bin/fm-herdr.py's deck reconcile follows each agent_lost with the
+  // agent_finished (`data.status: process_gone`) that has always closed a
+  // vanished run; the log shows the loss and not that close as well
+  const closesLoss = new Set<Event>();
+  const lostLast = new Set<string>();
+  for (const e of events) {
+    const actor = String(e.actor ?? "");
+    if (e.type === "agent_finished" && lostLast.has(actor)
+      && (e.data as { status?: unknown } | undefined)?.status === "process_gone") closesLoss.add(e);
+    if (e.type === "agent_lost") lostLast.add(actor); else lostLast.delete(actor);
+  }
+  // setting aside a task with crew aboard or an open pull request asks first
+  // and stops that crew; the pull request is left open
+  for (const t of tasks) t.confirm = t.crew.length > 0 || (t.pr !== null && !FINAL.has(t.stage));
 
   // A refused merge stops being news once the same task or pull request is
   // merged afterwards - by a later answer on the board or any other way. The
   // record keeps what happened; the flag says it has been overtaken. Both
   // are keyed by project: another project's merge of its T-001 is not this.
   const mergedEvents = events.filter((e) => e.type === "merged");
+  // An answer whose effect failed stays up, with its reason, until what it
+  // asked for has happened some other way: the task parked, closed or
+  // dispatched after the answer. A merge's failure is the refusal below.
+  const EFFECT_EVENT: Record<string, string> = { park: "parked", drop: "closed", dispatch: "dispatched", send_back: "dispatched" };
   const reviewed = responses.map((d: Record<string, any>) => {
     const merge = mergeOf(d);
-    const shown = { ...d, merge, ...(merge === "running" ? { merge_unknown: unknownOutcome.has(String(d.id)) } : {}) };
+    const overtaken = d.effect_outcome === "failed" && EFFECT_EVENT[d.effect] !== undefined
+      && events.some((e) => e.type === EFFECT_EVENT[d.effect] && e.task != null && String(e.task) === String(d.task)
+        && projectOf(e) === projectOf(d) && later(e.ts, d.ts));
+    const shown = { ...d, merge, ...(merge === "running" ? { merge_unknown: unknownOutcome.has(String(d.id)) } : {}),
+      ...(d.effect_outcome === "failed" ? { effect_superseded: overtaken } : {}) };
     if (merge !== "failed") return shown;
     const sameWork = (o: Record<string, unknown>) => projectOf(o) === projectOf(d) && (
       (d.task != null && o.task != null && String(o.task) === String(d.task))
@@ -745,7 +916,9 @@ const state = (only: string | null = null) => {
     outcomes: [...events.filter(e => (e.type === "merged" || e.type === "decision_made") && mine(e))
       .map(e => linked({ ...e, identity: outcomeOf(e) })),
       ...responses.filter(d => d.identity && mine(d)).map(d => ({type:'decision_made',identity:d.identity,data:{decision:d.id,chosen:d.chosen}}))],
-    recent: events.filter(mine).slice(-40).reverse().map(linked),
+    // a lost run shows once: its agent_lost, not also the agent_finished the
+    // deck reconcile closes it with
+    recent: events.filter((e) => mine(e) && !closesLoss.has(e)).slice(-40).reverse().map(linked),
     pending: shownPending.map(linked),
   };
   // Every #n in text links to its own project's pull request: a log line,
@@ -778,7 +951,8 @@ const firstSeen = new Map<string, number>();
 const pending = () => {
   const dir = join(ROOT, "state/pending");
   if (!existsSync(dir)) return [];
-  const terminal = readEvents().filter((e) => e.type === "merged" || e.type === "closed");
+  const logged = readEvents();
+  const terminal = logged.filter((e) => e.type === "merged" || e.type === "closed");
   // (project, pr) and (project, task) are the keys: another project's merged
   // #7 does not settle this project's card for #7. Naming none is the default's.
   const def = defaultProject();
@@ -788,7 +962,18 @@ const pending = () => {
       .filter((e) => e.type === "merged" || e.type === "closed")
       .map((e) => within((e as Record<string, unknown>).project, (e as Record<string, unknown>).pr)),
   );
-  const settledTasks = new Set(terminal.filter(e => e.task).map(e => within((e as Record<string, unknown>).project, e.task)));
+  // A card whose task is merged or closed is shown, never hidden (T-118): a
+  // card raised under the wrong task - the merge card for #96 filed under
+  // T-117 - must stay where the captain can see it. It says the task is final.
+  // The same reading as the board's lanes: the first merged or closed makes a
+  // task final, and only the captain's reopening undoes it.
+  const finalTasks = new Map<string, string>();
+  for (const e of logged) {
+    if (!e.task) continue;
+    const k = within((e as Record<string, unknown>).project, e.task);
+    if (reopens(e)) finalTasks.delete(k);
+    else if ((e.type === "merged" || e.type === "closed") && !finalTasks.has(k)) finalTasks.set(k, e.type);
+  }
   // Oldest request first, every project's cards in one list (design section
   // 15.10 point 4), so a card never hides behind another project's and
   // answering one never reorders the rest. A record that states its own `ts`
@@ -809,10 +994,10 @@ const pending = () => {
     try {
       const d = JSON.parse(readFileSync(join(dir, f), "utf8"));
       if (d.pr != null && settled.has(within(d.project, d.pr))) return [];
-      if (d.task != null && settledTasks.has(within(d.project, d.task))) return [];
+      const final = d.task != null ? finalTasks.get(within(d.project, d.task)) ?? null : null;
       // answerable: POST /decisions takes this id; a card under any other
       // name is listed, and the page shows the refusal when it is answered
-      return [{ card: { ...d, owner: ownerOf(d.id), answerable: isDecisionId(String(d.id ?? "")) }, at: asked(d, f) }];
+      return [{ card: { ...d, owner: ownerOf(d.id), answerable: isDecisionId(String(d.id ?? "")), task_final: final }, at: asked(d, f) }];
     } catch { return []; }
   }).sort((a, b) => a.at - b.at
     || String(a.card.id ?? "").localeCompare(String(b.card.id ?? ""), "en", { numeric: true }))
@@ -862,7 +1047,9 @@ const settle = (id: string, merge: "merged" | "failed", reason = "") => {
   const d = readJson<Record<string, any>>(file);
   unknownOutcome.delete(id);
   if (d && mergeOf(d) === "running") {
-    rewrite(file, { ...d, merge, ...(merge === "failed" ? { merge_reason: reason } : {}), merge_settled: new Date().toISOString() });
+    rewrite(file, { ...d, merge, ...(merge === "failed" ? { merge_reason: reason } : {}), merge_settled: new Date().toISOString(),
+      // the answer's effect was the merge, and this is how it ended
+      ...(d.effect === "merge" ? { effect_outcome: merge === "merged" ? "done" : "failed", effect_reason: reason } : {}) });
   }
   const marker = markerOf(projectOf(d));
   if (readJson<Marker>(marker)?.decision === id) { try { unlinkSync(marker); } catch { /* already gone */ } }
@@ -875,7 +1062,7 @@ const HELPER_STOPPED = "the merge helper stopped before recording an outcome";
 // Start the helper for an answered merge card. Detached, with its output in
 // a file: a board restarting under bun --watch neither kills it nor leaves
 // it writing into a closed pipe.
-const startMerge = (id: string, project: string, pr: number, task: string | null, onProject: string[]) => {
+const startMerge = (id: string, project: string, pr: number, task: string | null, onProject: string[], untracked = false) => {
   mkdirSync(MERGING, { recursive: true });
   const log = join(MERGING, `${project || "_default"}.out`);
   let child;
@@ -883,7 +1070,7 @@ const startMerge = (id: string, project: string, pr: number, task: string | null
     const fd = openSync(log, "w");
     try {
       child = spawn(join(ROOT, "bin/fm-merge.sh"),
-        ["--pr", String(pr), ...(task ? ["--task", task] : []), ...onProject, "--repo", ROOT],
+        ["--pr", String(pr), ...(untracked ? ["--untracked"] : task ? ["--task", task] : []), ...onProject, "--repo", ROOT],
         { detached: true, stdio: ["ignore", fd, fd], env: childEnv() });
     } finally { closeSync(fd); }
   } catch { settle(id, "failed", "Merge helper unavailable"); return; }
@@ -904,6 +1091,128 @@ const startMerge = (id: string, project: string, pr: number, task: string | null
   const marker: Marker = { decision: id, project, pr, task, pid: child.pid, started: startedAt(child.pid), ts: new Date().toISOString() };
   writeFileSync(markerOf(project), JSON.stringify(marker) + "\n");
 };
+// --- Setting a task aside, and what an answer does (T-118) -----------------
+const decode = (b: Uint8Array | undefined) => new TextDecoder().decode(b ?? new Uint8Array()).trim();
+const lastLine = (s: string) => s.split("\n").filter((l) => l.trim()).pop() ?? "";
+// one captain event through the one writer of the log
+const emitCaptain = (args: string[]): { ok: boolean; error: string } => {
+  try {
+    const r = Bun.spawnSync([join(ROOT, "bin/fm-emit.sh"), "--actor", "captain", ...args], { env: childEnv(), stdin: "ignore" });
+    return { ok: r.exitCode === 0, error: r.exitCode === 0 ? "" : lastLine(decode(r.stderr)) || `fm-emit.sh exited ${r.exitCode}` };
+  } catch { return { ok: false, error: "fm-emit.sh could not be started" }; }
+};
+const onProjectOf = (project: string) => project && project !== defaultProject() ? ["--project", project] : [];
+// what ps says a process is running, or "" once it is gone
+const commandOf = (pid: number): string => {
+  try {
+    const r = Bun.spawnSync(["ps", "-o", "command=", "-p", String(pid)], { stdin: "ignore", env: childEnv() });
+    return r.exitCode === 0 ? decode(r.stdout) : "";
+  } catch { return ""; }
+};
+// Stop every crewman on a task, by the stop path main has (T-107's `fm.sh
+// stop` has not merged): SIGTERM to the round's own script - bin/fm-worker.sh
+// publishes its pid at state/worktrees/<task>.pid, and its TERM trap saves and
+// pushes the worktree before it exits - to every run's script named in its
+// process.json, and to each vendor CLI its attempts' execution.json name. A pid
+// is signalled only while ps still shows the program it was recorded for, so
+// a pid the system has since handed to someone else is left alone. The pull
+// request is never touched.
+const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const stopCrew = (project: string, task: string): { stopped: string[]; failed: string[] } => {
+  const out = { stopped: [] as string[], failed: [] as string[] }, done = new Set<number>();
+  const signal = (label: string, pid: unknown, token: unknown) => {
+    if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 1 || done.has(pid)) return;
+    if (typeof token !== "string" || !token) return;
+    const cmd = commandOf(pid);
+    if (!cmd || !cmd.includes(token)) return;   // gone, or no longer ours
+    done.add(pid);
+    try { process.kill(pid, "SIGTERM"); out.stopped.push(label); }
+    catch (e) { out.failed.push(`${label}: ${(e as { code?: string }).code ?? "not stopped"}`); }
+  };
+  if (!SAFE_NAME.test(task)) return out;
+  const pidfile = join(ROOT, "state/worktrees", `${task}.pid`);
+  try {
+    const pid = Number(readFileSync(pidfile, "utf8").trim());
+    signal(`worker ${pid}`, pid, "fm-worker.sh");
+  } catch { /* no worker published */ }
+  const runs = join(ROOT, "state/runs");
+  let names: string[] = [];
+  try { names = readdirSync(runs).filter((n) => SAFE_NAME.test(n)); } catch { /* no runs */ }
+  for (const actor of names) {
+    const who = readJson<Record<string, unknown>>(join(runs, actor, "identity.json"));
+    if (!who || who.task !== task) continue;
+    if ((typeof who.project === "string" && who.project ? who.project : defaultProject()) !== project) continue;
+    // each attempt's vendor CLI, as bin/fm-herdr.py recorded it on launch
+    let attempts: string[] = [];
+    try { attempts = readdirSync(join(runs, actor)).filter((n) => SAFE_NAME.test(n)); } catch { /* none */ }
+    for (const a of attempts) {
+      const cli = readJson<Record<string, unknown>>(join(runs, actor, a, "execution.json"));
+      if (cli?.started === true) signal(`${actor} ${cli.pid}`, cli.pid, cli.token);
+    }
+    const proc = readJson<Record<string, unknown>>(join(runs, actor, "process.json"));
+    if (proc) signal(`${actor} ${proc.pid}`, proc.pid, proc.token);
+  }
+  return out;
+};
+type Carried = { outcome: "done" | "failed" | "recorded" | "running"; reason: string; stopped?: string[] };
+// park or drop: the parked or closed event, then the crew stopped. The event
+// first, so a crewman that dies saying something cannot move the task back.
+const setAside = (project: string, task: string, action: "park" | "drop", decision: string | null): Carried => {
+  const spec = ACTION_EVENT[action];
+  const via = decision ? { en: ` (${decision})`, tw: `（${decision}）` } : { en: "", tw: "" };
+  const r = emitCaptain(["--type", spec.type, "--task", task, ...onProjectOf(project),
+    ...(decision ? ["--data", JSON.stringify({ decision })] : []),
+    "--en", spec.en.replace("{id}", task) + via.en, "--tw", spec.tw.replace("{id}", task) + via.tw]);
+  if (!r.ok) return { outcome: "failed", reason: `the ${spec.type} event was not written: ${r.error}` };
+  const stop = stopCrew(project, task);
+  if (stop.failed.length) return { outcome: "failed", reason: `${spec.type}, but crew not stopped: ${stop.failed.join("; ")}`, stopped: stop.stopped };
+  return { outcome: "done", reason: "", stopped: stop.stopped };
+};
+// dispatch: bin/fm-dispatch.sh --task, the captain's order, which still holds
+// the task for greenlit, dependencies, park, drop and the concurrency limit
+// and says which held it. It prints the id of a task it started. Awaited,
+// not spawnSync: a slow dispatcher must not freeze the rest of the board.
+const dispatchTask = async (project: string, task: string): Promise<Carried> => {
+  try {
+    const child = Bun.spawn([join(ROOT, "bin/fm-dispatch.sh"), "--task", task, "--repo", ROOT],
+      { env: { ...childEnv(), ...(project && project !== defaultProject() ? { FM_PROJECT: project } : {}) },
+        stdin: "ignore", stdout: "pipe", stderr: "pipe", cwd: ROOT });
+    const timer = setTimeout(() => child.kill(), 60_000);
+    const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    clearTimeout(timer);
+    if (code === 0 && out.split("\n").includes(task)) return { outcome: "done", reason: "" };
+    return { outcome: "failed", reason: lastLine(err) || lastLine(out) || `fm-dispatch.sh exited ${code}` };
+  } catch { return { outcome: "failed", reason: "fm-dispatch.sh could not be started" }; }
+};
+// send back: another worker round on the same branch and pull request, by
+// bin/fm-worker.sh, which holds the task's own lock, so a second round on top
+// of a running one refuses rather than doubling up. It runs detached; a round
+// that refuses within the first seconds is reported with what it said.
+const sendBack = async (project: string, task: string, pr: number | null): Promise<Carried> => {
+  if (!SAFE_NAME.test(task)) return { outcome: "failed", reason: "no task to send back" };
+  const dir = join(ROOT, "state/dispatch");
+  mkdirSync(dir, { recursive: true });
+  const log = join(dir, `${task}.log`);
+  let child;
+  try {
+    const fd = openSync(log, "a");
+    try {
+      child = spawn(join(ROOT, "bin/fm-worker.sh"), ["--task", task, "--repo", ROOT, ...(pr ? ["--pr", String(pr)] : [])],
+        { detached: true, stdio: ["ignore", fd, fd], env: { ...childEnv(), ...(project && project !== defaultProject() ? { FM_PROJECT: project } : {}) } });
+    } finally { closeSync(fd); }
+  } catch { return { outcome: "failed", reason: "fm-worker.sh could not be started" }; }
+  const exited = await new Promise<number | null | "running">((settled) => {
+    const timer = setTimeout(() => settled("running"), 3000);
+    child.on("error", () => { clearTimeout(timer); settled(127); });
+    child.on("exit", (code) => { clearTimeout(timer); settled(code); });
+  });
+  child.unref();
+  if (exited === "running" || exited === 0) return { outcome: "done", reason: "" };
+  let said = "";
+  try { said = lastLine(readFileSync(log, "utf8")); } catch { /* none */ }
+  return { outcome: "failed", reason: (said || `fm-worker.sh exited ${exited ?? "on a signal"}`).slice(0, 500) };
+};
+
 // What GitHub says of a pull request: MERGED, OPEN, CLOSED, or null when it
 // cannot be read. Asynchronous, so a slow gh never stalls the board.
 // Only ever on the repository the registry names for the record's project.
@@ -959,15 +1268,125 @@ const anyRunning = () => readResponses().some((d) => mergeOf(d) === "running" &&
 if (anyRunning()) void recover();
 setInterval(() => { if (anyRunning()) void recover(); }, 1000);
 
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
+
+// --- Who may write (design section 8, the board's trust boundary; T-122) ---
+// The board binds loopback, and on macOS the OS sandbox cannot keep a crew
+// round off one loopback port while leaving it the others, so every route
+// that writes or starts a program asks for a credential no crew round and no
+// other web page can read or fetch. It is a secret of 256 random bits in a
+// file of the operator's own, outside the repository, made once and kept
+// across restarts: `<config>/firstmate/board-<port>.secret`, mode 0600, where
+// <config> is $XDG_CONFIG_HOME when that is an absolute path and ~/.config
+// otherwise. Nothing the board sends, logs or emits carries it.
+//   - the captain's tab holds a token derived from it, given once in exchange
+//     for a one-time code (/login) the opener derives from it, and kept in
+//     that tab's sessionStorage;
+//   - a script on the operator's machine sends the secret itself.
+// Both go as `Authorization: Bearer`, which a browser never adds on its own.
+// There is no cookie: a browser sends a cookie for 127.0.0.1 to every port on
+// it, so any loopback server the captain's browser visits would receive it.
+// Either way the request also carries the board's own Origin and a JSON body,
+// so no form and no page of another origin gets through.
+const CONFIG_DIR = join((() => {
+  const x = process.env.XDG_CONFIG_HOME ?? "";
+  return x.startsWith("/") ? x : join(homedir(), ".config");
+})(), "firstmate");
+const secretFile = (port: number) => join(CONFIG_DIR, `board-${port}.secret`);
+// Made only when missing, through a link from a file written whole, so a
+// board that dies half way never leaves an empty secret behind. One that is
+// there is read through a descriptor that refuses a symlink, and must be the
+// operator's own regular file holding 64 hex digits or more.
+const loadSecret = (port: number): string => {
+  mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  const dir = realpathSync(CONFIG_DIR);
+  if (dir === ROOT || dir.startsWith(ROOT + "/"))
+    throw new Error("the board's secret must live outside the repository; set XDG_CONFIG_HOME elsewhere");
+  const file = secretFile(port);
+  if (!existsSync(file)) {
+    const temporary = join(CONFIG_DIR, `.board-${port}.${crypto.randomUUID()}.tmp`);
+    writeFileSync(temporary, randomBytes(32).toString("hex") + "\n", { flag: "wx", mode: 0o600 });
+    try { linkSync(temporary, file); } catch (e) { if ((e as { code?: string }).code !== "EEXIST") throw e; }
+    finally { unlinkSync(temporary); }
+  }
+  const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.uid !== process.getuid?.()) throw new Error("the secret file is not the operator's own regular file");
+    if (st.mode & 0o077) fchmodSync(fd, 0o600);
+    const secret = readFileSync(fd, "utf8").trim();
+    if (!/^[0-9a-f]{64,}$/.test(secret)) throw new Error("the secret file holds no secret; remove it and restart the board");
+    return secret;
+  } finally { closeSync(fd); }
+};
+// set once the port is known, before the first request is served
+let SECRET = "", ORIGINS: string[] = [], STARTED = 0;
+const mac = (message: string) => createHmac("sha256", SECRET).update(message).digest("hex");
+const same = (a: string, b: string) => {
+  const x = Buffer.from(a), y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+};
+// The tab's token: derived from the secret and the board's origin, so it
+// outlives a board restart exactly as long as the secret does. Removing the
+// secret file and restarting the board revokes every token at once.
+const sessionToken = () => mac(`session:${ORIGINS[0]}`);
+// The secret (a script) or the tab's token (the captain's page). A cookie is
+// never read: what a browser volunteers says nothing about who is asking.
+const mayWrite = (req: Request) => {
+  const m = /^Bearer ([^\s]+)$/.exec(req.headers.get("authorization") ?? "");
+  return m !== null && (same(m[1], SECRET) || same(m[1], sessionToken()));
+};
+// A one-time code: <issued ms>.<nonce>.<mac>, the mac over the board's origin,
+// the time and the nonce. Good for 60 seconds from its issue, never for one
+// issued before this board started, and once: a used nonce is kept until its
+// code would have expired anyway. FM_BOARD_CODE_TTL_MS can shorten the 60
+// seconds, never lengthen them, so a test can see expiry on its own.
+const CODE_TTL = Math.min(60_000, Number(process.env.FM_BOARD_CODE_TTL_MS) || 60_000);
+const usedCodes = new Map<string, number>();
+const redeem = (code: unknown): boolean => {
+  const m = /^([0-9]{13})\.([0-9a-f]{32})\.([0-9a-f]{64})$/.exec(typeof code === "string" ? code : "");
+  if (!m) return false;
+  const issued = Number(m[1]), now = Date.now();
+  for (const [n, until] of usedCodes) if (until < now) usedCodes.delete(n);
+  if (!same(m[3], mac(`login:${ORIGINS[0]}:${m[1]}.${m[2]}`))) return false;
+  if (issued < STARTED || issued > now + 2_000 || now - issued > CODE_TTL || usedCodes.has(m[2])) return false;
+  usedCodes.set(m[2], issued + CODE_TTL);
+  return true;
+};
+// Every refusal is 403 with a code the page translates; nothing is written.
+const refuse = (code: string, error: string) => json({ error, code }, 403);
+const isJson = (req: Request) => /^application\/json\s*(;|$)/i.test(req.headers.get("content-type") ?? "");
+const writeRefusal = (req: Request): Response | null => {
+  if (!mayWrite(req)) return refuse("writeCredential", "this board is read-only without the captain's credential");
+  if (!ORIGINS.includes(req.headers.get("origin") ?? "")) return refuse("writeOrigin", "not from the board's own page");
+  if (!isJson(req)) return refuse("writeJson", "json only");
+  return null;
+};
+// The page that takes the one-time code out of the address, trades it for the
+// tab's token, keeps that in this tab's sessionStorage (one origin, port
+// included, one tab) and replaces itself, so the code stays in neither the
+// address bar nor the history. It holds nothing of its own.
+const LOGIN_PAGE = `<!doctype html><meta charset="utf-8"><title>firstmate</title><script>
+(async () => {
+  const code = location.hash.slice(1) || new URLSearchParams(location.search).get("code") || "";
+  history.replaceState(null, "", "/login");
+  const r = await fetch("/login", { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code }) }).then(x => x.ok ? x.json() : null).catch(() => null);
+  if (r && typeof r.token === "string") sessionStorage.setItem("board.token", r.token);
+  location.replace("/");
+})();
+</script>`;
 
 const serveFile = (name: string) => {
   const p = join(PUBLIC, name);
-  if (!p.startsWith(PUBLIC) || !existsSync(p)) return new Response("not found", { status: 404 });
+  if (!p.startsWith(PUBLIC + "/") || !existsSync(p)) return new Response("not found", { status: 404 });
+  // the real file, not wherever a link in the tree points
+  const real = realpathSync(p), pub = realpathSync(PUBLIC);
+  if (!real.startsWith(pub + "/") || !statSync(real).isFile()) return new Response("not found", { status: 404 });
   const type = name.endsWith(".css") ? "text/css"
     : name.endsWith(".js") ? "text/javascript" : "text/html; charset=utf-8";
-  return new Response(readFileSync(p), { headers: { "content-type": type } });
+  return new Response(readFileSync(real), { headers: { "content-type": type } });
 };
 
 const server = Bun.serve({
@@ -980,6 +1399,27 @@ const server = Bun.serve({
     const asked = url.searchParams.get("project") ?? "";
     const only = PROJECT_NAME.test(asked) ? asked : null;
     if (url.pathname === "/api/state") return json(state(only));
+
+    // whether this tab may write: the page disables its controls and says so
+    // when it may not. A yes or a no, never the credential.
+    if (url.pathname === "/api/session") return json({ writable: mayWrite(req) });
+
+    // The captain's tab gets in once, through the one-time address the opener
+    // made (bin/fm-herdr.py board_login_url). The code is traded here for the
+    // tab's token, in the body and never as a cookie; a wrong, used or expired
+    // one changes nothing.
+    if (url.pathname === "/login" && req.method === "POST") {
+      if (!ORIGINS.includes(req.headers.get("origin") ?? "")) return refuse("writeOrigin", "not from the board's own page");
+      if (!isJson(req)) return refuse("writeJson", "json only");
+      return req.json().then((body: any) => redeem(body?.code)
+        ? json({ ok: true, token: sessionToken() }, 200, { "cache-control": "no-store" })
+        : refuse("loginRefused", "that code is wrong, used or expired"))
+        .catch(() => refuse("loginRefused", "that code is wrong, used or expired"));
+    }
+    if (url.pathname === "/login") {
+      return new Response(LOGIN_PAGE, { headers: { "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store", "referrer-policy": "no-referrer" } });
+    }
 
     // the dictionaries, plus the table that derives zh-CN from zh-TW
     if (url.pathname === "/api/i18n") {
@@ -1027,6 +1467,8 @@ const server = Bun.serve({
     // The captain answers. The board writes the answer down and, for a merge,
     // calls the one script allowed to merge - it never shells out ad hoc.
     if (url.pathname === "/decisions" && req.method === "POST") {
+      const refused = writeRefusal(req);
+      if (refused) return refused;
       return req.json().then(async (body: any) => {
         const id = String(body?.id ?? "");
         const chosen = typeof body?.chosen === "string" ? body.chosen : "";
@@ -1059,10 +1501,22 @@ const server = Bun.serve({
         // so the id's owner is never passed on as a --project
         const project = typeof p.project === "string" && p.project ? p.project : null;
         const onProject = project ? ["--project", project] : [];
-        const merging = p.kind === "merge" && chosen === "A" && prNumber(p.pr) !== null && typeof p.pr === "number";
+        // A merge card is its task's, or belongs to no task (T-119): an
+        // untracked card merges its pull request with --untracked and hands
+        // fm-merge.sh no task, whatever its file says; a task's card hands
+        // only a task the grammar holds, and fm-merge.sh refuses it unless
+        // the pull request is that task's. What the answer does (T-118) is
+        // carried out below by the script that owns it.
+        const untracked = p.kind === "merge-untracked";
+        const effect = effectOf(p, chosen);
+        const merging = effect === "merge" && (p.kind === "merge" || untracked) && prNumber(p.pr) !== null && typeof p.pr === "number";
+        const mergeTask = untracked ? null : taskKey(p.task) !== null ? String(p.task) : null;
+        if (merging && !untracked && p.task != null && mergeTask === null)
+          return json({ error: "a merge card names a task id", task: String(p.task) }, 409);
         // One merge at a time within a project. Refused before anything is
         // published or emitted, so the card stays pending as it was; nothing
-        // below awaits, so no second answer can slip in between.
+        // awaits before the record below is created, so no second answer can
+        // slip in between, and one that comes later finds the record.
         if (merging && mergeRunningIn(projectOf(p)))
           return json({ error: "a merge is already running in this project", code: "mergeBusy", project: projectOf(p) || null }, 409);
         const decision: Record<string, unknown> = {
@@ -1074,28 +1528,63 @@ const server = Bun.serve({
           identity: `decision:${id}`,
           // published running; the helper's exit rewrites it to merged or failed
           merge: merging ? "running" : null,
+          // the effect the answer carries, and until it is carried out, running
+          effect,
+          effect_outcome: effect ? "running" : "recorded",
         };
-        // Exclusive creation makes repeated requests unable to rerun a merge.
+        // Exclusive creation makes repeated requests unable to rerun a merge,
+        // or any other effect.
         const temporary = join(dir, `.${id}.${crypto.randomUUID()}.tmp`);
         writeFileSync(temporary, JSON.stringify(decision) + "\n", { flag: "wx" });
         try { linkSync(temporary, file); } finally { unlinkSync(temporary); }
+        // Carried out now, by the one script that owns each effect, and never
+        // silently: the outcome is done, failed with its reason, or recorded
+        // for an option with no effect. A merge runs in the background and
+        // its record says how it ended.
+        const cardProject = projectOf(p);
+        const task = typeof p.task === "string" && p.task ? p.task : null;
+        let carried: Carried = { outcome: "recorded", reason: "" };
+        if (effect === "merge") carried = merging ? { outcome: "running", reason: "" }
+          : { outcome: "failed", reason: "a merge needs a merge card with a pull request" };
+        else if (effect === "hold") carried = { outcome: "done", reason: "" };
+        else if (effect && !task) carried = { outcome: "failed", reason: "the card names no task" };
+        else if (effect === "park" || effect === "drop") {
+          const now = state().tasks.find((x) => x.id === task && (x.project ?? "") === cardProject);
+          carried = now?.stage === "merged" || (now?.stage === "closed" && effect === "park")
+            ? { outcome: "failed", reason: `${task} is already ${now.stage}` }
+            : now?.stage === (effect === "park" ? "parked" : "closed") ? { outcome: "done", reason: `${task} was already ${now.stage}` }
+            : setAside(cardProject, task!, effect, id);
+        }
+        else if (effect === "dispatch") carried = await dispatchTask(cardProject, task!);
+        else if (effect === "send_back") carried = await sendBack(cardProject, task!, prNumber(p.pr));
+        if (effect && effect !== "merge") {
+          const now = readJson<Record<string, unknown>>(file) ?? decision;
+          rewrite(file, { ...now, effect_outcome: carried.outcome, effect_reason: carried.reason,
+            ...(carried.stopped ? { stopped: carried.stopped } : {}) });
+        }
         let eventRecorded = false;
+        const said = effect
+          ? { en: `${id}: ${chosen}, ${effect.replace("_", " ")} ${carried.outcome}${carried.reason ? `: ${carried.reason}` : ""}`,
+              tw: `${id}：${chosen}，${EFFECT_TW[effect]}${OUTCOME_TW[carried.outcome]}${carried.reason ? `：${carried.reason}` : ""}` }
+          : { en: `${id} recorded ${chosen}`, tw: `${id} 已記錄 ${chosen}` };
         try {
           const emitted = Bun.spawnSync([join(ROOT, "bin/fm-emit.sh"),
           "--actor", "captain", "--type", "decision_made",
           ...(p.task ? ["--task", p.task] : []), ...onProject,
-          "--data", JSON.stringify({ decision: id, chosen, outcome: "recorded" }),
-          "--en", `${id} recorded ${chosen}`, "--tw", `${id} 已記錄 ${chosen}`],
+          "--data", JSON.stringify({ decision: id, chosen, outcome: carried.outcome,
+            ...(effect ? { effect } : {}), ...(carried.reason ? { reason: carried.reason } : {}) }),
+          "--en", said.en, "--tw", said.tw],
           { env: childEnv() });
           eventRecorded = emitted.exitCode === 0;
         } catch { /* the durable decision still exists; report the event failure */ }
 
         // the helper runs in the background; the answer does not wait for it
-        if (merging) startMerge(id, projectOf(p), p.pr, p.task ?? null, onProject);
+        if (merging) startMerge(id, projectOf(p), p.pr, mergeTask, onProject, untracked);
         const pf = join(ROOT, "state/pending", `${id}.json`);
         if (existsSync(pf)) unlinkSync(pf);
         const stored = readJson<Record<string, unknown>>(file) ?? decision;
-        return json({ ok: true, decision: stored, merge: mergeOf(stored), eventRecorded });
+        return json({ ok: true, decision: stored, merge: mergeOf(stored), eventRecorded,
+          effect, outcome: carried.outcome, ...(carried.reason ? { reason: carried.reason } : {}) });
       }).catch(() => json({ error: "bad request" }, 400));
     }
 
@@ -1103,11 +1592,11 @@ const server = Bun.serve({
     // event through fm-emit.sh like every other board write; the plan in
     // design/tasks/ is never touched. The check and the write run with
     // nothing in between - spawnSync holds the only thread - so two clicks
-    // cannot both pass the check. Declared JSON only: a cross-site form can
-    // post text/plain without asking first, but not application/json.
+    // cannot both pass the check. Declared JSON only, like every write: a
+    // cross-site form can post text/plain without asking first.
     if (url.pathname === "/tasks" && req.method === "POST") {
-      if (!/^application\/json\b/i.test(req.headers.get("content-type") ?? ""))
-        return json({ error: "json only" }, 415);
+      const refused = writeRefusal(req);
+      if (refused) return refused;
       return req.json().then((body: any) => {
         const id = typeof body?.task === "string" ? body.task : "";
         const action = typeof body?.action === "string" ? body.action : "";
@@ -1119,14 +1608,36 @@ const server = Bun.serve({
         if (!task) return json({ error: "no such task" }, 404);
         if (!task.actions.includes(action))
           return json({ error: `cannot ${action} a task that is ${task.stage}`, stage: task.stage }, 409);
-        // the default project's events name none, exactly as before
-        const onProject = project && project !== defaultProject() ? ["--project", project] : [];
-        const r = Bun.spawnSync([join(ROOT, "bin/fm-emit.sh"),
-          "--actor", "captain", "--type", spec.type, "--task", id, ...onProject,
-          "--en", spec.en.replace("{id}", id), "--tw", spec.tw.replace("{id}", id)],
-          { env: childEnv() });
-        if (r.exitCode !== 0)
-          return json({ error: "the event was not written", out: new TextDecoder().decode(r.stderr).trim() }, 500);
+        // T-118: a task with crew aboard or an open pull request is set aside
+        // only once the captain has confirmed it, and a reopening always asks
+        const confirmed = body?.confirm === true;
+        if ((action === "reopen" || ((action === "park" || action === "drop") && task.confirm)) && !confirmed)
+          return json({ error: `confirm before you ${action} ${id}`, code: "confirmRequired",
+            crew: task.crew.map((c) => c.id), pr: task.pr }, 409);
+        if (action === "reopen") {
+          const reason = typeof body?.reason === "string" ? body.reason.trim() : "";
+          if (!reason || [...reason].length > 500 || /[\u0000-\u001f\u007f-\u009f\ud800-\udfff]/u.test(reason))
+            return json({ error: "reopening needs a reason", code: "reopenNeedsReason" }, 400);
+          const r = emitCaptain(["--type", "reopened", "--task", id, ...onProjectOf(project),
+            "--data", JSON.stringify({ reason, from: task.stage }),
+            // functions, not strings: a `$&` in the reason is text, not a pattern
+            "--en", spec.en.replace("{id}", () => id).replace("{reason}", () => reason),
+            "--tw", spec.tw.replace("{id}", () => id).replace("{reason}", () => reason)]);
+          if (!r.ok) return json({ error: "the event was not written", out: r.error }, 500);
+          return json({ ok: true, task: id, action, event: spec.type });
+        }
+        if (action === "park" || action === "drop") {
+          // the event, then the crew stopped; the pull request is left open
+          const r = setAside(project, id, action, null);
+          if (r.outcome !== "done" && !r.stopped)
+            return json({ error: "the event was not written", out: r.reason }, 500);
+          return json({ ok: r.outcome === "done", task: id, action, event: spec.type,
+            stopped: r.stopped ?? [], pr_left_open: task.pr, ...(r.outcome === "done" ? {} : { error: r.reason }) },
+            r.outcome === "done" ? 200 : 500);
+        }
+        const r = emitCaptain(["--type", spec.type, "--task", id, ...onProjectOf(project),
+          "--en", spec.en.replace("{id}", id), "--tw", spec.tw.replace("{id}", id)]);
+        if (!r.ok) return json({ error: "the event was not written", out: r.error }, 500);
         return json({ ok: true, task: id, action, event: spec.type });
       }).catch(() => json({ error: "bad request" }, 400));
     }
@@ -1150,14 +1661,21 @@ const server = Bun.serve({
       return real === ROOT || real.startsWith(ROOT + "/") ? real : null;
     };
 
+    // Starting a program is a write: POST with the credential, the path in a
+    // JSON body. A GET, which any link or image can make, starts nothing.
     if (url.pathname === "/open") {
+      if (req.method !== "POST") return json({ error: "POST only" }, 405, { allow: "POST" });
+      const refused = writeRefusal(req);
+      if (refused) return refused;
       if (!localOnly(req)) return json({ error: "localhost only" }, 403);
-      const abs = inside(url.searchParams.get("path") ?? "");
-      if (!abs) return json({ error: "outside the repository" }, 403);
-      const editor = (readFileSync(join(ROOT, "config.yaml"), "utf8")
-        .match(/^editor:\s*([^\s#]+)/m)?.[1] ?? "code");
-      Bun.spawn([editor, abs], { stdout: "ignore", stderr: "ignore", env: childEnv() });
-      return json({ ok: true, opened: abs, editor });
+      return req.json().then((body: any) => {
+        const abs = inside(typeof body?.path === "string" ? body.path : "");
+        if (!abs) return json({ error: "outside the repository" }, 403);
+        const editor = (readFileSync(join(ROOT, "config.yaml"), "utf8")
+          .match(/^editor:\s*([^\s#]+)/m)?.[1] ?? "code");
+        Bun.spawn([editor, abs], { stdout: "ignore", stderr: "ignore", env: childEnv() });
+        return json({ ok: true, opened: abs, editor });
+      }).catch(() => json({ error: "bad request" }, 400));
     }
 
     if (url.pathname === "/file") {
@@ -1178,7 +1696,26 @@ const server = Bun.serve({
     }
 
     if (url.pathname === "/" || url.pathname === "") return serveFile("index.html");
+    // diagram.js reads owned decision ids through the task grammar, which it
+    // gets here, in front of the file, and holds no copy of (T-119)
+    if (url.pathname === "/diagram.js") {
+      const f = serveFile("diagram.js");
+      return f.ok ? f.text().then((s) => new Response(GRAMMAR_JS + s, { headers: f.headers })) : f;
+    }
     return serveFile(url.pathname.replace(/^\//, ""));
   },
 });
+// The credential is keyed by the port, which FM_PORT=0 learns only now. No
+// request is served before this runs: it is the same synchronous turn.
+try {
+  SECRET = loadSecret(server.port);
+  ORIGINS = [`http://127.0.0.1:${server.port}`, `http://localhost:${server.port}`];
+  STARTED = Date.now();
+} catch (e) {
+  // the log is under state/, so it names neither the secret nor its path
+  const code = (e as { code?: string }).code;
+  console.error(`board refused to start: ${code ? `the secret file could not be used (${code})` : (e as Error).message}`);
+  server.stop(true);
+  process.exit(1);
+}
 console.log(`board on http://127.0.0.1:${server.port}  root=${ROOT}`);

@@ -182,4 +182,21 @@ assert_eq "4" "$(jq -r 'select(.type=="crew_status") | .actor' "$b/state/events.
   "progress change is not dropped by the burst cap"
 rm -rf "$b"
 
+# T-118: two new events. `agent_lost` is the launcher side's word that a run
+# vanished; `reopened` is the captain's one way out of merged or closed, with
+# a reason. The board honours a reopening only from the captain, so the log
+# takes both from anyone, like every other type.
+c="$(mktemp -d)"
+code_c() { FM_ROOT="$c" "$EMIT" "$@" >/dev/null 2>&1; printf '%s' "$?"; }
+assert_eq "0" "$(code_c --actor worker-x --type agent_lost --task T-1 \
+  --data '{"role":"worker","status":"process_gone"}' --en "worker-x was lost" --tw "worker-x 失聯")" \
+  "agent_lost is an event type"
+assert_eq "0" "$(code_c --actor captain --type reopened --task T-117 \
+  --data '{"reason":"the merge card for #96 was raised under T-117"}' --en "reopened" --tw "重新開啟")" \
+  "reopened is an event type"
+assert_eq "agent_lost worker-x|reopened captain the merge card for #96 was raised under T-117" \
+  "$(jq -rs 'map("\(.type) \(.actor)" + (if .data.reason then " " + .data.reason else "" end))|join("|")' "$c/state/events.jsonl")" \
+  "both are written as given"
+rm -rf "$c"
+
 finish

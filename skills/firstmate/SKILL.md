@@ -85,10 +85,29 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
 4. Start or reuse the captain board. The shipped server command is
    `FM_ROOT=<root> bun --watch board/server.ts` from the repository, with
    `FM_PORT` defaulting to 4173 and a loopback URL. Check the existing server's
-   root and HTTP response before reuse. Open that URL using the available browser
-   mechanism at startup and when requested. Verify observable navigation or
-   report that only the opener was invoked; if unavailable, provide the URL and
-   limitation. A server start message alone does not prove the page loaded.
+   root and HTTP response before reuse. Open it, at startup and whenever the
+   captain asks, with `bin/fm.sh board --repo <root>` (`fm-session.sh start`
+   does the same): it sends the browser to a one-time `/login#<code>` address,
+   good once for 60 seconds, and only the tab opened that way can write. The
+   sign-in is a token kept in that tab's `sessionStorage`, not a cookie:
+   browsers send cookies to every port on 127.0.0.1, so any loopback server
+   the captain visits would receive one. A new tab or window is read-only and
+   says so; the answer is to run `bin/fm.sh board` again. Never open, print or
+   paste the plain URL as the way in. If a token or the secret may have
+   leaked, revoke them all: delete the secret file and restart the board.
+   Verify observable navigation or report that only the opener was invoked; if
+   unavailable, report the limitation. A server start message alone does not
+   prove the page loaded.
+   The captain answers cards on the board. Firstmate answers one through the
+   HTTP API only under an explicit, time-boxed authorisation the captain gave
+   in chat, naming the card, and quotes that authorisation in the answer's
+   `note`; a chat merge order alone is not approval. Firstmate's own scripts
+   authenticate with the secret the board keeps in
+   `${XDG_CONFIG_HOME:-~/.config}/firstmate/board-<port>.secret`: they send it
+   as `Authorization: Bearer`, with `Origin: http://127.0.0.1:<port>` and a
+   JSON body, and never put it in an argument list, a log, an event or
+   `state/` (for curl, `-H @<(printf 'Authorization: Bearer %s\n' "$(cat <file>)")`).
+   See the board's trust boundary in design section 8.
 5. Run `bin/fm-ready.sh list --repo <root>` and raise a card for every
    `unjudged` ready task before any dispatch (see
    [Judge a task when it turns ready](#judge-a-task-when-it-turns-ready)).
@@ -180,7 +199,8 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   presenting a merge card, and coordinate renewed verification if the head changes.
   The board calls `bin/fm-merge.sh` directly for choice A on a pending merge card;
   neither that route nor the merge helper rechecks the gates. The helper
-  checks PR state, invokes the GitHub merge and attempts an event and cleanup;
+  checks that the pull request is the card's task's (T-119), checks PR state,
+  invokes the GitHub merge and attempts an event and cleanup;
   it does not read or validate captain decision approval. `fm-run.sh` requests a
   card after gate success but does not consume decisions or perform the merge.
   Approval and readiness are orchestration requirements, not guarantees of
@@ -235,7 +255,9 @@ after every merge, run `bin/fm-ready.sh list --repo <root>`. Each line is
    and a background `--await`. Options: **A** proceed (dispatch as written), **B**
    rescope (the card states the narrower spec you propose), **C** park,
    **D** drop. Author D under `options.D` in both locales; the board shows a D
-   button and accepts D only on a card that offers it. State your
+   button and accepts D only on a card that offers it. Name the effects in the
+   details, `"effect": {"A": "dispatch", "C": "park", "D": "drop"}`, so the
+   board carries out the answer itself (T-118); B has none. State your
    recommendation and the evidence in the explanation.
 3. Right after the request, record it:
    `bin/fm-ready.sh judged --task <id> --decision <D-id> --repo <root>`. The
@@ -245,13 +267,17 @@ after every merge, run `bin/fm-ready.sh list --repo <root>`. Each line is
    ends the judgment when it sees the task out of ready, which is one more
    reason to run it after every merge. While the readiness card
    is the task's only open card, the board keeps the task in the ready lane.
-4. Carry out the answer. A: `bin/fm-dispatch.sh` starts it. B: rescope the
-   task's file, `design/tasks/<id>.json`, through a scoped
-   task, then start it with `bin/fm-dispatch.sh --task <id> --repo <root>`.
-   C or D: record it as T-058's event, through the board's park or drop
-   (`POST /tasks` with `{"task":"<id>","action":"park"}` or `"drop"`), which
-   writes `parked` or `closed`. A parked task is not dispatched until it is
-   unparked, and then it is judged again; a dropped one is never dispatched.
+4. Check the answer was carried out. The board carries out a named effect
+   when the captain answers and records the outcome on `decision_made`
+   (`data.effect`, `data.outcome`, `data.reason`): A runs
+   `bin/fm-dispatch.sh --task <id>`, C writes `parked`, D writes `closed`. An
+   outcome of `failed` is not done: read its reason, fix what held it, and
+   carry it out yourself - A through `bin/fm-dispatch.sh --task <id> --repo
+   <root>`, C or D through the board's park or drop (`POST /tasks`). B: rescope
+   the task's file, `design/tasks/<id>.json`, through a scoped task, then start
+   it with `bin/fm-dispatch.sh --task <id> --repo <root>`. A parked task is not
+   dispatched until it is unparked, and then it is judged again; a dropped one
+   is never dispatched.
 
 Never dispatch a ready task that is `unjudged`, nor one whose answer was not A
 or a completed B, unless the captain orders that task directly.
@@ -262,9 +288,8 @@ or on a merge card clears nothing. An adopted skill update (SK-*) is listed
 `judged` by its own adoption card, D-SK-*, answered A: raise no second card for
 it the first time it is ready. Once it is unparked, or has been seen with
 dependencies other than the ones it was adopted with, it is `unjudged`, but
-it cannot get a readiness card yet: `bin/fm-decide.sh` allocates ids and takes
-authored details only for `T-*` tasks. Do not raise one under another task's
-id. Tell the captain in chat that the skill update is held and why; it starts
+it cannot get a readiness card yet: `bin/fm-ready.sh judged` takes only a
+`T-*` task's owned id. Do not raise one under another task's id. Tell the captain in chat that the skill update is held and why; it starts
 only if the captain orders it directly. `bin/fm-dispatch.sh` holds every other ready task
 and says so, and starts nothing if it cannot read the answers. A task the captain orders directly, or a
 completed B, is started with `bin/fm-dispatch.sh --task <id> --repo <root>`:
@@ -422,7 +447,27 @@ listed here must be a string with a non-whitespace character and at most 2000
 Unicode code points (jq `length`), not an array. Extra keys are not rejected.
 This validator does not assess truth, translation quality or diagram quality.
 Use one JSON document per file; the script's jq stream check is not an explicit
-single-document guard. `--title` is accepted for compatibility but ignored and
+single-document guard.
+
+An option that should do something when chosen names it in the optional
+top-level `effect` map (T-118): `{"B": "park"}` and so on, one of `merge`
+(merge cards only), `hold`, `park`, `drop`, `dispatch` or `send_back`, for an
+option the card offers; anything else exits 64 before a card exists. The
+board carries the effect out through the script that owns it and records
+`done`, `failed` with the reason, or `recorded` on `decision_made`. A merge
+card that names none merges on A and holds on B and C. Say in the option's
+own text what it does; the board also labels it. Never raise a card under a
+task it is not about: a card is filed by its task, and the merge card for #96
+filed under T-117 marked T-117 merged. When a final state is wrong, the only
+way back is the captain's `reopened`: the captain uses `reopen` on the
+board's merged or closed card, or answers a card you raise for it, after which
+you emit it as the captain - `bin/fm-emit.sh --actor captain --type reopened
+--task <id> --data '{"reason":"..."}'`. The damage the board left before
+T-118 is repaired once, not swept for: after T-118 merges, run
+`bin/fm-reconcile.sh --repair-cards --repo <root>` (a dry run), add
+`--effect D-id=park|drop` for each hand-raised answer whose meaning the log
+never kept and you can show the captain, put the listed fixes to the captain,
+and on the captain's word run it again with `--apply`. `--title` is accepted for compatibility but ignored and
 cannot supply details. Invalid/missing details, kind, task or merge PR yield 64;
 duplicate pending or decided IDs are refused with 65, not updated.
 A new card's id names its owner, `D-<project>-<task>-<n>` (for example
@@ -433,14 +478,36 @@ task's own lock, reserves it and prints it; `--request` refuses an owned id
 that was not allocated (65), or whose task or project is not the card's (64).
 Allocate first, so the details and any authored drawing are written under the
 id the card will carry. Old ids (`D-<digits>`, `D-SK-<n>`) stay readable and
-are never renamed. Tasks written into an id match `^T-[A-Za-z0-9]{1,32}$`.
+are never renamed. Tasks written into an id match `^T-[A-Za-z0-9]{1,32}$` or
+`^SK-[0-9]{3,}$`: a skill update's merge card is `D-<project>-SK<n>-<m>`.
 Every new card you raise, merge or hand-raised, must take the owned form
-from `--allocate`. The script still accepts `--request D-<digits>` so that old
+from `--allocate`, except an untracked merge card (below), which has no task
+to own its id. The script still accepts `--request D-<digits>` so that old
 callers and existing fixtures keep working. That is the only reason, and the
 code does not stop you misusing it, so the rule is yours to keep. In a tree
 with no `projects:` map, ids are owned by `firstmate-workflow` and the card
 records no project. Kind is
-`choice` or `merge`, and a merge requires `--pr` matching `^[1-9][0-9]*$`.
+`choice`, `merge` or `merge-untracked`, and a merge requires `--pr` matching
+`^[1-9][0-9]*$`.
+
+A merge card names its pull request and its task, and they must agree
+(T-119; design §5.2). `--kind merge` reads the pull request from GitHub and
+refuses a card, before it exists, when the pull request's branch (else its
+title's `T-xxx:`/`SK-xxx:` prefix) names another task, no task, or cannot be
+read; the refusal names both. Never work around it by raising the card under
+whatever task is still open: that is how #96, T-105's revert, was merged as
+T-117 on 2026-09-26. A pull request that belongs to no task (a revert, a
+hotfix) takes an untracked card: `--request D-<digits> --kind
+merge-untracked --pr <n> --details <file>` with no `--task`, under a
+hand-raised id, since no task owns it. Its merge writes `merged` with no task
+and moves no task's card. An untracked card is refused the same way for a
+pull request whose branch or title names a task: raise that task's `--kind
+merge` card instead (#96's branch is `t-105-revert`, so its card is
+T-105's). `fm-merge.sh` checks the pair again at the click, in both
+directions, and records a failed outcome when the branch no longer agrees. A skill
+update (SK-*) that is approved and green gets its merge card like any task:
+`--allocate --task SK-<n> --kind merge`, then `--request` with its pull
+request; no hand merge. The card is drawn and embedded like a T task's.
 
 Before a real request:
 
@@ -510,8 +577,8 @@ U+000E–001F and lone surrogates. Valid literal text, including surrounding spa
 is preserved in `text`. `note` is separate and truncated to 500 JavaScript code
 units; never encode custom as an A note. Identical chosen/custom-text retries
 return the recorded decision; conflicting responses return 409. A custom choice
-never invokes merge, even for a merge card. Only A on a pending merge with numeric
-PR invokes the merge helper, in the background; read the record's `merge`
+never invokes merge, even for a merge card. Only A on a pending merge or
+merge-untracked card with numeric PR invokes the merge helper, in the background; read the record's `merge`
 (`running`, `merged` or `failed`), `merge_reason` and `eventRecorded` rather
 than assuming response `ok` proves merge/event success. `running` is not
 settled: keep waiting or re-read the record, and never report a merge from it;

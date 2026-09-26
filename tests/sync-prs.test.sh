@@ -164,6 +164,44 @@ assert_eq "false" "$(jq -c 'select(.pr==3)|has("project")' "$d6/state/events.jso
   "with no project, as before"
 rm -rf "$d6"
 
+# --- T-119: every task's branch, by the one grammar -----------------------
+# SK-001's pull request (#94) and the revert #96 as GitHub holds them,
+# recorded on 2026-09-26 (#96 is taken as still open here):
+#   $ gh api repos/BenjaminLu/firstmate-workflow/pulls/94 \
+#       --jq '{number: .number, head: .head.ref, title: .title, merged_at: .merged_at}'
+#   head: sk-001-skill-update-firstmate
+#   merged_at: "2026-09-26T07:46:54Z"
+#   number: 94
+#   title: "SK-001: skill-update: firstmate"
+#   $ gh api repos/BenjaminLu/firstmate-workflow/pulls/96 \
+#       --jq '{number: .number, head: .head.ref, title: .title}'
+#   head: t-105-revert
+#   number: 96
+#   title: "T-105: revert the crew sandbox, which locks every vendor out on macOS"
+# #95, #98 and #99 are made up. #98 is the pull request GitHub's Revert
+# button would open for #90 (recorded head t-105-every-crew-round-runs-under;
+# the title is main's squash subject fe396a5 without " (#96)"): its branch
+# and title name no task. A branch that names nothing defers to the title.
+d7="$(fixture)"
+SK="$(rec "$d7" sk <<'J'
+[{"number":94,"state":"MERGED","title":"SK-001: skill-update: firstmate","headRefName":"sk-001-skill-update-firstmate","mergedAt":"2026-09-26T07:46:54Z"},
+ {"number":95,"state":"OPEN","title":"T-116: the board shows each crew member","headRefName":"board-fields","mergedAt":null},
+ {"number":96,"state":"OPEN","title":"T-105: revert the crew sandbox, which locks every vendor out on macOS","headRefName":"t-105-revert","mergedAt":null},
+ {"number":98,"state":"OPEN","title":"Revert \"T-105: every crew round runs under one fm-owned permission policy, enforced by the vendor's own flags and an OS sandbox, for every vendor (#90)\"","headRefName":"revert-90-t-105-every-crew-round-runs-under","mergedAt":null},
+ {"number":99,"state":"OPEN","title":"T-1170: a longer number","headRefName":"t-1170-other","mergedAt":null}]
+J
+)"
+out7="$(FM_ROOT="$d7" FM_GH="$SK" "$d7/bin/fm-sync-prs.sh" --repo "$d7" 2>&1)"
+assert_eq "0" "$?" "a sync with a skill update's pull request exits 0"
+log7="$d7/state/events.jsonl"
+assert_eq "SK-001" "$(jq -r 'select(.pr==94)|.task' "$log7")" "sk-001-… syncs as SK-001"
+assert_contains "$out7" "merged #94 (SK-001)" "and says so"
+assert_eq "T-116" "$(jq -r 'select(.pr==95)|.task' "$log7")" "a branch naming no task defers to the title's prefix"
+assert_eq "T-105" "$(jq -r 'select(.pr==96)|.task' "$log7")" "#96's t-105-revert is T-105's"
+assert_eq "none" "$(jq -r 'select(.pr==98)|.task // "none"' "$log7")" "a revert of no task names no task"
+assert_eq "T-1170" "$(jq -r 'select(.pr==99)|.task' "$log7")" "t-1170-… is T-1170, the whole number"
+rm -rf "$d7"
+
 # it goes through the one writer like everyone else
 # the header comment names fm-emit.sh too; look at what runs
 assert_ok "grep -q 'fm-emit.sh' <<<\"\$(grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-sync-prs.sh')\"" \

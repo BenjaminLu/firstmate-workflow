@@ -40,9 +40,8 @@ case "${1-}:${2-}" in
   pr:view)
     # real gh resolves a branch name to its pull request, so the stub must too
     ref="$3"
-    n="$(awk -F'\t' -v x="$ref" '$1==x||$2==x{print $1}' "$S/prs" | tail -1)"
+    n="$(awk -F'\t' -v x="$ref" '$1==x||$2==x{print $1}' "$S/prs" 2>/dev/null | tail -1)"
     [ -n "$n" ] || n="$ref"
-    state="$(awk -F'\t' -v n="$n" '$1==n{print $4}' "$S/prs" | tail -1)"
     case " $* " in
       *" comments "*)
         # jq builds the JSON, because a real review body has newlines and
@@ -79,7 +78,26 @@ case "${1-}:${2-}" in
         printf ']}\n'
         } | emit_json
         ;;
-      *) printf '{"state":"%s"}\n' "${state:-OPEN}" | emit_json ;;
+      *)
+        # `gh pr view <n> --json a,b` prints an object of exactly the fields
+        # asked for, keys sorted (Go's encoding of a map), from what the
+        # stub remembers of that pull request. A number or branch with no
+        # pull request behind it is gh's own error on stderr, nothing on
+        # stdout, exit 1 - never a made-up OPEN state.
+        line="$(awk -F'\t' -v n="$n" '$1==n' "$S/prs" 2>/dev/null | tail -1)"
+        if [ -z "$line" ]; then
+          case "$ref" in
+            *[!0-9]*) printf 'no pull requests found for branch "%s"\n' "$ref" >&2 ;;
+            *) printf 'GraphQL: Could not resolve to a PullRequest with the number of %s. (repository.pullRequest)\n' "$ref" >&2 ;;
+          esac
+          exit 1
+        fi
+        IFS=$'\t' read -r _ head title state <<<"$line"
+        jq -cnS --argjson n "$n" --arg h "$head" --arg t "$title" --arg s "$state" \
+          --arg f "$(arg --json "$@")" \
+          '{number:$n, headRefName:$h, title:$t, state:$s} as $d
+           | reduce ($f|split(","))[] as $k ({}; .[$k] = $d[$k])' | emit_json
+        ;;
     esac
     ;;
   pr:checks)

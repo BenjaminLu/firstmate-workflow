@@ -45,6 +45,49 @@ board_port() {   # board_port <log> <pid>: the port the server printed; 1 if it 
   return 1
 }
 
+# T-122: every route that writes takes the board's credential. The board keeps
+# its secret under XDG_CONFIG_HOME, pointed here at a directory of this suite's
+# own, outside every fixture root, so no run writes into the operator's home.
+XDG_CONFIG_HOME="$(mktemp -d)"; export XDG_CONFIG_HOME
+# The same holds for every suite that starts a board: each sets
+# XDG_CONFIG_HOME, or its board writes a secret into the operator's home.
+# Both the sweep and the check read code with its comments taken off, so a
+# comment that names the variable stands in for neither.
+code_of() {   # code_of <file>: its code, without # comments, or // ones in TypeScript
+  case "$1" in
+    *.ts) sed -e 's#^[[:space:]]*//.*$##' -e 's#[[:space:]]//.*$##' "$1" ;;
+    *) fm_strip_comments "$1" ;;
+  esac
+}
+starts_board='bun run .*server\.ts|"run", join\(.*server\.ts'
+sets_config='XDG_CONFIG_HOME["'\'']?[[:space:]]*[=:]'
+starters=''
+for f in $(git -C "$ROOT" ls-files -- 'tests/*.sh' 'tests/*.ts'); do
+  # a here-string, not a pipe: under pipefail, grep -q leaving early fails the writer
+  grep -qE "$starts_board" <<< "$(code_of "$ROOT/$f")" && starters="$starters $f"
+done
+assert_contains "$starters " " tests/crew-end-to-end.test.sh " "the sweep finds the suites that start a board"
+unset_config=''
+for f in $starters; do
+  grep -qE "$sets_config" <<< "$(code_of "$ROOT/$f")" || unset_config="$unset_config $f"
+done
+assert_eq "" "$unset_config" "every suite that starts a board gives it a config directory of its own"
+# the control: a comment alone neither starts a board nor sets the variable
+printf '#!/usr/bin/env bash\n# bun run board/server.ts\n# XDG_CONFIG_HOME="$d"\n' > "$d/commented.sh"
+assert_eq "" "$(code_of "$d/commented.sh" | grep -E "$starts_board|$sets_config" || true)" \
+  "a suite that only names them in comments is neither found nor passed"
+printf '// XDG_CONFIG_HOME: config\nspawn("bun", ["run", join(root, "board/server.ts")])\n' > "$d/commented.ts"
+assert_eq "spawn" "$(code_of "$d/commented.ts" | grep -oE "^spawn" || true)$(code_of "$d/commented.ts" | grep -E "$sets_config" || true)" \
+  "and in TypeScript, the call is found and the comment is not"
+rm -f "$d/commented.sh" "$d/commented.ts"
+secret_of() { cat "$XDG_CONFIG_HOME/firstmate/board-$1.secret"; }
+# wcurl <port> <curl args...>: curl as a script on this machine writes to that
+# board, with the bearer from the secret file and the board's own Origin
+wcurl() {
+  local port="$1"; shift
+  curl -H "Origin: http://127.0.0.1:$port" -H "Authorization: Bearer $(secret_of "$port")" "$@"
+}
+
 # Merges run in the background (T-054), so their outcome is something to wait
 # for, with a bound: a helper that never finishes fails the assertion after it
 # rather than hanging the suite.
@@ -97,27 +140,34 @@ done
 
 
 page="$(curl -sf "http://127.0.0.1:$PORT/")"
-# a task the captain has been asked about is the captain's, whatever was
-# said about it before. It was reading as "working" because a dispatch
-# that should never have happened was the last thing in the log.
+# T-118: a task is the captain's only while a card for it is pending. The
+# request event on its own is not a card: once the card is answered or gone,
+# the request left behind in the log must not keep the task in his lane.
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-C --type dispatched \
   --en "picked up" --tw "接下" >/dev/null
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor firstmate --task T-C --type decision_requested \
   --pr 12 --en "asked the captain" --tw "請示船長" >/dev/null
 sc="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
 assert_ne "" "$sc" "the board is answering"
-assert_eq "captain" "$(jq -r '.tasks[]|select(.id=="T-C")|.stage' <<<"$sc")" \
-  "a task the captain has been asked about waits on the captain"
-# and it keeps waiting: while the card is up, nothing said afterwards
-# moves the task out of the captain's lane
+assert_eq "working" "$(jq -r '.tasks[]|select(.id=="T-C")|.stage' <<<"$sc")" \
+  "a request with no card pending does not hold the captain's lane"
+# a task the captain has been asked about is the captain's, whatever was
+# said about it before, and it keeps waiting: while the card is up, nothing
+# said afterwards moves the task out of the captain's lane. It was reading as
+# "working" because a dispatch that should never have happened was the last
+# thing in the log.
 mkdir -p "$d/state/pending"
 printf '{"id":"D-12","task":"T-C","kind":"merge","pr":12,"title":"ready"}\n' > "$d/state/pending/D-12.json"
+assert_eq "captain" "$(jq -r '.tasks[]|select(.id=="T-C")|.stage' <<<"$(curl -sf "http://127.0.0.1:$PORT/api/state")")" \
+  "a task with a card pending waits on the captain"
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-C --type dispatched \
   --en "a stray dispatch" --tw "多餘的派工" >/dev/null
 sc2="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
 assert_eq "captain" "$(jq -r '.tasks[]|select(.id=="T-C")|.stage' <<<"$sc2")" \
   "and stays there while the card is up, whatever is said after"
 rm -f "$d/state/pending/D-12.json"
+assert_eq "working" "$(jq -r '.tasks[]|select(.id=="T-C")|.stage' <<<"$(curl -sf "http://127.0.0.1:$PORT/api/state")")" \
+  "and once the card is gone the task is where its other events put it"
 
 # firstmate's own state, which nothing read: on a green-lit board with
 # nothing assigned it is the most visible crewman, and an earlier version
@@ -304,8 +354,10 @@ FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor github --task T-999 --type merged --pr 
 sterm="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
 assert_eq "merged" "$(jq -r '.tasks[]|select(.id=="T-B")|.stage' <<<"$sterm")" \
   "a pending card cannot move a merged task back to captain"
-assert_lacks "$(jq -r '.pending[].id' <<<"$sterm" | tr '\n' ' ')" "D-88" \
-  "pending for a terminal task is not offered"
+# T-118: never hidden - a card raised under the wrong task must stay where the
+# captain can see it - and it says its task is final
+assert_eq "merged" "$(jq -r '.pending[]|select(.id=="D-88")|.task_final' <<<"$sterm")" \
+  "a pending card for a merged task is shown, marked as on a final task"
 assert_eq "merged" "$(jq -r '.tasks[]|select(.id=="T-999")|.stage' <<<"$sterm")" \
   "completed identity from events reaches state without a current definition"
 assert_eq "999" "$(jq -r '.tasks[]|select(.id=="T-999")|.pr' <<<"$sterm")" \
@@ -327,6 +379,8 @@ touch -t 202601010100.00 "$d/state/pending/D-100.json" "$d/state/pending/D-3.jso
 sord="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
 assert_eq "D-20 D-3 D-100" "$(jq -r '[.pending[].id]|join(" ")' <<<"$sord")" \
   "pending cards are listed oldest request first, a tie by id, never readdir order"
+assert_eq "null" "$(jq -r '.pending[]|select(.id=="D-3")|.task_final' <<<"$sord")" \
+  "a card on open work carries no final-task mark"
 # bin/fm-decide.sh creates a card once and nothing rewrites one; a card that
 # is rewritten anyway keeps the place it was asked for
 touch -t 202601010200.00 "$d/state/pending/D-20.json"
@@ -357,7 +411,7 @@ done
 # the body is built outside the substitution: bash 3.2 brace-expands a
 # {a,b} inside "$(...)" that only escaped quotes protect, and runs it twice
 body="$(jq -cn --arg i "$nid" '{id:$i,chosen:"B"}')"
-assert_eq "true" "$(curl -s -X POST -H 'content-type: application/json' \
+assert_eq "true" "$(wcurl "$PORT" -s -X POST -H 'content-type: application/json' \
   -d "$body" "http://127.0.0.1:$PORT/decisions" | jq -r .ok)" "the board answers it"
 assert_eq "B" "$(jq -r .chosen "$d/state/decisions/$nid.json")" "and the answer lands under its id"
 assert_eq "B" "$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r --arg i "$nid" '.responses[]|select(.id==$i)|.chosen')" \
@@ -820,7 +874,7 @@ rm -f "$e/state/pending/D-402.json"
 # a refused merge is flagged as overtaken once that task is merged afterwards.
 # The merge runs after the answer (T-054): the record says how it ended once
 # the helper has exited.
-curl -sf -X POST -H 'content-type: application/json' -d '{"id":"D-401","chosen":"A"}' \
+wcurl "$PORTE" -sf -X POST -H 'content-type: application/json' -d '{"id":"D-401","chosen":"A"}' \
   "http://127.0.0.1:$PORTE/decisions" > "$e/post" || true
 assert_eq "true" "$(jq -r '.ok' "$e/post")" "the merge answer is recorded"
 wait_for 20 jq -e '.merge=="failed"' "$e/state/decisions/D-401.json"
@@ -890,12 +944,12 @@ card4 D-407 T-E6 ABC
 assert_eq "captain" "$(jq -r '.tasks[]|select(.id=="T-E6")|.stage' <<<"$(st)")" \
   "any other open card on it puts it at the captain's"
 # D is a choice only on a card that offers it
-code="$(curl -s -o "$e/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+code="$(wcurl "$PORTE" -s -o "$e/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
   -d '{"id":"D-407","chosen":"D"}' "http://127.0.0.1:$PORTE/decisions")"
 assert_eq "400" "$code" "D on a card that offers A to C is refused"
 assert_fail "test -e '$e/state/decisions/D-407.json'" "and nothing is recorded"
 rm -f "$e/state/pending/D-407.json"
-code="$(curl -s -o "$e/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+code="$(wcurl "$PORTE" -s -o "$e/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
   -d '{"id":"D-406","chosen":"D"}' "http://127.0.0.1:$PORTE/decisions")"
 assert_eq "200" "$code" "D on a card that offers it is accepted"
 assert_eq "D" "$(jq -r '.chosen' "$e/state/decisions/D-406.json" 2>/dev/null)" "and recorded as D"
@@ -914,7 +968,7 @@ card4 "$id8" T-E6 ABCD
 bash "$e/bin/fm-ready.sh" judged --task T-E6 --decision "$id8" --repo "$e" >/dev/null 2>&1
 assert_eq "" "$(bash "$e/bin/fm-ready.sh" cleared --repo "$e" 2>&1)" \
   "the control: while the card is open, nothing is cleared"
-code="$(curl -s -o "$e/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+code="$(wcurl "$PORTE" -s -o "$e/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
   -d "$(jq -cn --arg id "$id8" '{id:$id,chosen:"A"}')" "http://127.0.0.1:$PORTE/decisions")"
 assert_eq "200" "$code" "the captain answers A on the board"
 assert_eq "T-E6" "$(bash "$e/bin/fm-ready.sh" cleared --repo "$e" 2>&1)" \
@@ -933,16 +987,21 @@ const at = src.indexOf("const options = [");
 const end = src.indexOf(".join(\x27\x27);", at);
 if (at < 0 || end < 0) { console.log("FAIL no options markup"); process.exit(1); }
 const expr = src.slice(at + "const options = ".length, end + ".join(\x27\x27)".length);
-const render = new Function("d", "content", "pick", "sent", "esc", "words", "t", "said", "return " + expr);
+const render = new Function("d", "content", "pick", "locked", "esc", "words", "t", "said", "return " + expr);
 const opts = (keys) => Object.fromEntries(keys.map(k => [k, { description: "do " + k, pros: "p", cons: "c" }]));
 const card = (keys) => ({ id: "D-1", kind: "choice", details: { en: { options: opts(keys) } } });
-const out = (keys) => render(card(keys), { options: opts(keys) }, undefined, new Set(), String, String, String, String);
+const out = (keys, locked = false) => render(card(keys), { options: opts(keys) }, undefined, locked, String, String, String, String);
 const four = out(["A", "B", "C", "D"]), three = out(["A", "B", "C"]);
 if (!/data-c="D"[^>]*>D · do D</.test(four)) { console.log("FAIL no D button: " + four); process.exit(1); }
 if (/data-c="D"/.test(three)) { console.log("FAIL invented D"); process.exit(1); }
+// a card that is answered, or in a tab that cannot write (T-122), is drawn
+// with every option disabled; one that can still be answered with none
+if (/disabled/.test(four)) { console.log("FAIL an open card is disabled: " + four); process.exit(1); }
+const shut = out(["A", "B", "C", "D"], true);
+if ((shut.match(/<button[^>]*\sdisabled>/g) || []).length !== 4) { console.log("FAIL a locked card still takes a choice: " + shut); process.exit(1); }
 console.log("ok");
 ')"
-assert_eq "ok" "$dbtn" "the page shows a D button on a card that offers D, and only there"
+assert_eq "ok" "$dbtn" "the page shows a D button on a card that offers D, and only there, and disables every option on a card that is locked"
 
 kill "$pide" 2>/dev/null
 wait "$pide" 2>/dev/null || true
@@ -981,7 +1040,7 @@ done
 sf() { curl -sf "http://127.0.0.1:$PORTF/api/state"; }
 lines() { wc -l < "$f/state/events.jsonl" | tr -d ' '; }
 # act TASK ACTION -> the HTTP status; the body lands in $f/resp
-act() { curl -s -o "$f/resp" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+act() { wcurl "$PORTF" -s -o "$f/resp" -w '%{http_code}' -X POST -H 'content-type: application/json' \
   -d "{\"task\":\"$1\",\"action\":\"$2\"}" "http://127.0.0.1:$PORTF/tasks"; }
 field() { jq -r --arg t "$1" ".tasks[]|select(.id==\$t)|$2" <<<"$(sf)"; }
 last_event() { tail -1 "$f/state/events.jsonl"; }
@@ -989,8 +1048,11 @@ last_event() { tail -1 "$f/state/events.jsonl"; }
 # the server says which actions a card offers, so the page never guesses
 assert_eq "park,drop" "$(field T-P1 '.actions|join(",")')" "a ready card offers park and drop"
 assert_eq "park,drop" "$(field T-P2 '.actions|join(",")')" "a backlog card offers park and drop"
-assert_eq "" "$(field T-P3 '.actions|join(",")')" "a card in flight offers neither"
-assert_eq "" "$(field T-P6 '.actions|join(",")')" "nor does a merged one"
+# T-118: any unfinished task can be set aside; a finished one only reopened
+assert_eq "park,drop" "$(field T-P3 '.actions|join(",")')" "a card in flight offers park and drop too"
+assert_eq "reopen" "$(field T-P6 '.actions|join(",")')" "a merged one offers only reopening"
+assert_eq "false" "$(field T-P1 .confirm)" "untouched work with nobody aboard sets aside without asking"
+assert_eq "true" "$(field T-P3 .confirm)" "a task with crew aboard asks first"
 
 # park: a parked event from the captain, and the card leaves the lanes
 n0="$(lines)"
@@ -1032,10 +1094,15 @@ assert_eq "parked" "$(field T-P2 .stage)" "and is parked"
 assert_eq "200" "$(act T-P2 unpark)" "and unparked"
 assert_eq "backlog" "$(field T-P2 .stage)" "back to backlog, as its dependency says"
 
-# in flight or later: refused, nothing emitted, for all three actions
+# T-118: a task in flight is set aside only once the captain confirms it, and
+# a merged task is never parked, unparked or dropped
 n3="$(lines)"
+for a in park drop; do
+  assert_eq "409" "$(act T-P3 "$a")" "$a without confirming is refused for a task with crew aboard"
+  assert_eq "confirmRequired" "$(jq -r .code "$f/resp")" "and the refusal says to confirm first"
+done
+assert_eq "409" "$(act T-P3 unpark)" "unpark is refused for a task that is not parked"
 for a in park unpark drop; do
-  assert_eq "409" "$(act T-P3 "$a")" "$a is refused for a task in flight"
   assert_eq "409" "$(act T-P6 "$a")" "$a is refused for a merged task"
 done
 assert_eq "$n3" "$(lines)" "a refused action writes nothing"
@@ -1046,7 +1113,9 @@ assert_eq "200" "$(act T-P4 drop)" "drop answers 200 for a ready task"
 assert_eq "closed captain T-P4" "$(jq -r '"\(.type) \(.actor) \(.task)"' <<<"$(last_event)")" \
   "a drop is the closed event, from the captain"
 assert_eq "closed" "$(field T-P4 .stage)" "a dropped task is closed, in no lane"
-assert_eq "" "$(field T-P4 '.actions|join(",")')" "and offers nothing more"
+# a closed task is final: no park, unpark or drop, only the reopening a
+# wrong final state needs (T-118), behind its confirm step
+assert_eq "reopen" "$(field T-P4 '.actions|join(",")')" "and offers nothing more than reopening"
 assert_eq "T-P4:closed" "$(field T-P5 '.blocked_by|map("\(.id):\(.stage)")|join(",")')" \
   "a task that depends on a dropped task shows the dropped task as its blocker"
 n4="$(lines)"
@@ -1063,9 +1132,9 @@ assert_eq "closed" "$(field T-P2 .stage)" "and is closed"
 n5="$(lines)"
 assert_eq "404" "$(act T-NOPE park)" "a task the plan does not list is 404"
 assert_eq "400" "$(act T-P1 sink)" "an action that is not park, unpark or drop is 400"
-assert_eq "415" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: text/plain' \
+assert_eq "403" "$(wcurl "$PORTF" -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: text/plain' \
   -d '{"task":"T-P1","action":"park"}' "http://127.0.0.1:$PORTF/tasks")" \
-  "a body that is not declared JSON is refused, so a cross-site form cannot post it"
+  "a body that is not declared JSON is refused, even with the credential, so a cross-site form cannot post it"
 assert_eq "$n5" "$(lines)" "and none of them writes anything"
 
 # the board never edits the plan
@@ -1295,7 +1364,7 @@ start_h
 sh_() { curl -sf -m 5 "http://127.0.0.1:$PORTH/api/state${1-}"; }
 posth() {   # posth <id> <choice>: the HTTP status, the body in $h/post
   local body; body="$(jq -cn --arg i "$1" --arg c "$2" '{id:$i,chosen:$c}')"
-  curl -s -m 5 -o "$h/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+  wcurl "$PORTH" -s -m 5 -o "$h/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
     -d "$body" "http://127.0.0.1:$PORTH/decisions"
 }
 sh1="$(sh_)"
@@ -1408,7 +1477,7 @@ assert_eq "0" "$(jq -r .counts.waiting <<<"$(sh_)")" "nothing is left waiting"
 postt() {   # postt <task> <action> [project]: the HTTP status, the body in $h/post
   local body
   body="$(jq -cn --arg t "$1" --arg a "$2" --arg p "${3-}" '{task:$t,action:$a} + (if $p == "" then {} else {project:$p} end)')"
-  curl -s -m 5 -o "$h/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+  wcurl "$PORTH" -s -m 5 -o "$h/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
     -d "$body" "http://127.0.0.1:$PORTH/tasks"
 }
 stage4() { sh_ | jq -r '[.tasks[]|select(.id=="T-004")|"\(.project) \(.stage)"]|sort|join("|")'; }
@@ -1732,6 +1801,499 @@ assert_eq '[["shira","roleWorker","crewRound 3 · crewAttempt 2"],["quinn","role
   "each crew member on a card is a chip of its own, with name, role and round apart"
 rm -rf "$q"
 
+# --- T-119: one task-id grammar, in the scripts and in the board ------------
+# bin/fm-emit.sh holds the grammar every script sources; board/server.ts
+# carries its twin, taskGrammar(), between the task-grammar markers, and
+# serves it to the page in front of diagram.js. The block is lifted out as
+# written and run against the shell functions over one table: ids, branches
+# (SK-001's and #96's real ones among them), titles, keys and owned ids.
+grammar_cases='T-117
+SK-001
+T-001
+T-1
+T-1170
+SK-01
+sk-001
+SK-A
+T-A
+T-E6
+t-117
+X-117
+T-117x
+
+t-117-t-105-again-every-crew-round
+sk-001-skill-update-firstmate
+SK-001-caps
+t-105-revert
+t004-old
+t-1170-other
+t-117x
+tt-117-x
+revert-90-t-105-every-crew-round
+board-fields
+T-117: T-105 again
+SK-001: skill-update: firstmate
+Revert "T-105: every crew round"
+T-1: too short
+t-117: lower case
+T-117 no colon'
+grammar_pairs="$(printf '%s\t%s\n' \
+  t-105-revert 'T-105: revert the crew sandbox' \
+  t-117-t-105-again 'T-105: a title that disagrees' \
+  board-fields 'T-116: the board shows each crew member' \
+  board-fields 'Revert "T-116: the board"' \
+  revert-90-t-105 'Revert "T-105: every crew round"' \
+  sk-001-skill-update-firstmate 'SK-001: skill-update: firstmate' \
+  hotfix-typo 'SK-002: a title alone')"
+# a decision id's key, and an owned decision id, D-<project>-<key>-<n>
+grammar_keys='SK001
+T119
+TA
+T1
+TSK001
+SK01
+SKA
+X001
+T'
+grammar_owned='D-firstmate-workflow-SK001-1
+D-firstmate-workflow-T119-2
+D-example-app-TA-3
+D-a-SK01-1
+D-a-SKA-1
+D-a-X001-1
+D-a-T119-0
+D-a-T119-01
+D-Bad-T119-1
+D-abcdefghijklmnopqrstuvwxy-T119-1
+D-007
+D-SK-001'
+sh_grammar="$(
+  # shellcheck source=bin/fm-emit.sh
+  . "$ROOT/bin/fm-emit.sh"
+  while IFS= read -r s; do
+    printf '%s|%s|%s|%s|%s\n' "$s" "$(fm_task_is "$s" && echo y || echo n)" "$(fm_task_key "$s" || echo -)" \
+      "$(fm_task_of_branch "$s" || echo -)" "$(fm_task_of_title "$s" || echo -)"
+  done <<<"$grammar_cases"
+  while IFS=$'\t' read -r b t; do printf '%s\t%s|%s\n' "$b" "$t" "$(fm_task_of_pr "$b" "$t" || echo -)"; done <<<"$grammar_pairs"
+  while IFS= read -r k; do printf 'key %s|%s\n' "$k" "$(fm_task_of_key "$k" || echo -)"; done <<<"$grammar_keys"
+  while IFS= read -r id; do
+    if [[ "$id" =~ $FM_OWNED_ID ]]; then
+      p="${BASH_REMATCH[1]}"; k="${BASH_REMATCH[2]}"; n="${BASH_REMATCH[3]}"
+      printf 'owned %s|%s|%s|%s\n' "$id" "$p" "$(fm_task_of_key "$k" || echo -)" "$n"
+    else printf 'owned %s|-\n' "$id"
+    fi
+  done <<<"$grammar_owned"
+)"
+gdir="$(mktemp -d)"
+sed -n '/^\/\/ --- task grammar (T-119) ---$/,/^\/\/ --- end task grammar ---$/p' "$ROOT/board/server.ts" > "$gdir/grammar.ts"
+assert_ok "grep -q 'const taskOfPr' '$gdir/grammar.ts'" "board/server.ts carries the grammar between its markers"
+printf 'export { isTask, taskKey, taskOfBranch, taskOfTitle, taskOfPr, taskOfKey, ownerOf };\n' >> "$gdir/grammar.ts"
+ts_grammar="$(G="$gdir/grammar.ts" CASES="$grammar_cases" PAIRS="$grammar_pairs" KEYS="$grammar_keys" OWNED="$grammar_owned" bun -e '
+const g = require(process.env.G);
+const or = (v) => v ?? "-";
+const out = process.env.CASES.split("\n").map((s) =>
+  [s, g.isTask(s) ? "y" : "n", or(g.taskKey(s)), or(g.taskOfBranch(s)), or(g.taskOfTitle(s))].join("|"));
+for (const line of process.env.PAIRS.split("\n")) {
+  const [b, t] = line.split("\t");
+  out.push(`${b}\t${t}|${or(g.taskOfPr(b, t))}`);
+}
+for (const k of process.env.KEYS.split("\n")) out.push(`key ${k}|${or(g.taskOfKey(k))}`);
+for (const id of process.env.OWNED.split("\n")) {
+  const o = g.ownerOf(id);
+  out.push(o ? `owned ${id}|${o.project}|${or(o.task)}|${o.n}` : `owned ${id}|-`);
+}
+// a key reads back as its task, for every task the table holds
+for (const s of process.env.CASES.split("\n")) {
+  const k = g.taskKey(s);
+  if (k !== null && g.taskOfKey(k) !== s) out.push(`FAIL ${s} -> ${k} -> ${g.taskOfKey(k)}`);
+}
+console.log(out.join("\n"));
+')"
+assert_eq "$sh_grammar" "$ts_grammar" "the board's grammar and the scripts' agree on every id, branch, title and pull request"
+assert_contains "$sh_grammar" "sk-001-skill-update-firstmate|n|-|SK-001|-" "SK-001's real branch is SK-001"
+assert_contains "$sh_grammar" "SK-001: skill-update: firstmate|n|-|-|SK-001" "and its real title"
+assert_contains "$sh_grammar" "t-105-revert|n|-|T-105|-" "#96's branch is T-105's"
+assert_contains "$sh_grammar" "t-1170-other|n|-|T-1170|-" "a task number is read whole"
+assert_contains "$sh_grammar" "SK-001|y|SK001|SK-001|-" "SK-001 is a task, keyed SK001"
+assert_contains "$sh_grammar" "T-A|n|TA|-|-" "a fixture's T-A is no task but still a card key"
+assert_contains "$sh_grammar" "$(printf 'board-fields\tRevert "T-116: the board"|-')" "a revert's title names no task"
+assert_contains "$sh_grammar" "key SK001|SK-001" "the key SK001 reads back as SK-001"
+assert_contains "$sh_grammar" "key SKA|-" "and SKA is no key"
+assert_contains "$sh_grammar" "owned D-firstmate-workflow-SK001-1|firstmate-workflow|SK-001|1" \
+  "an SK task's owned card id is owned by SK-001, in both grammars"
+assert_contains "$sh_grammar" "owned D-example-app-TA-3|example-app|T-A|3" "a fixture's T-A card is still owned"
+assert_contains "$sh_grammar" "owned D-a-SK01-1|-" "an SK key of two digits is no owned id"
+rm -rf "$gdir"
+
+# --- T-118: every card sits where its task really is -------------------------
+# An answered card leaves the captain's lane; the effect an answer names is
+# carried out by the script that owns it, or said to have failed; a run that
+# is not alive leaves the deck; any unfinished task can be set aside; and a
+# wrong final state can be reopened. Every outside script is a stub that
+# answers the way the real one does: fm-merge.sh writes the merged event and
+# says "fm-merge: merged #n"; fm-dispatch.sh prints the id of a task it
+# started, or says on stderr what held it and exits 0; fm-worker.sh exits 70
+# naming the lock when another round holds the task.
+x="$(mktemp -d)"; mkdir -p "$x/bin" "$x/state/pending" "$x/state/runs" "$x/state/worktrees" "$x/design" "$x/board/public" "$x/stub"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-decide.sh" "$x/bin/"
+cp "$ROOT/board/server.ts" "$x/board/"
+cp "$ROOT/board/public/index.html" "$x/board/public/"
+fm_tasks_write /dev/stdin "$x/design/tasks" <<'J'
+{"tasks":[{"id":"T-030","title":"answered B, park","milestone":"M2","depends_on":[]},
+          {"id":"T-031","title":"a merge card answered B, hold","milestone":"M2","depends_on":[]},
+          {"id":"T-032","title":"dropped from a card","milestone":"M2","depends_on":[]},
+          {"id":"T-033","title":"dispatched from a card","milestone":"M2","depends_on":[]},
+          {"id":"T-034","title":"a dispatch the dispatcher holds","milestone":"M2","depends_on":[]},
+          {"id":"T-035","title":"sent back","milestone":"M2","depends_on":[]},
+          {"id":"T-036","title":"sent back onto a running round","milestone":"M2","depends_on":[]},
+          {"id":"T-037","title":"a card withdrawn","milestone":"M2","depends_on":[]},
+          {"id":"T-038","title":"answered, no effect","milestone":"M2","depends_on":[]},
+          {"id":"T-039","title":"merged from a card","milestone":"M2","depends_on":[]},
+          {"id":"T-044","title":"a run that vanished","milestone":"M2","depends_on":[]},
+          {"id":"T-045","title":"a run that is alive","milestone":"M2","depends_on":[]},
+          {"id":"T-046","title":"redispatched, then the old run found lost","milestone":"M2","depends_on":[]},
+          {"id":"T-050","title":"set aside in flight","milestone":"M2","depends_on":[]},
+          {"id":"T-051","title":"parked while its card is pending","milestone":"M2","depends_on":[]},
+          {"id":"T-117","title":"T-105 again","milestone":"M2","depends_on":[]}]}
+J
+cat > "$x/bin/fm-merge.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FM_ROOT/merge-calls"
+pr=''; task=''
+while [ $# -gt 0 ]; do case "$1" in --pr) pr="$2"; shift 2 ;; --task) task="$2"; shift 2 ;; *) shift ;; esac; done
+"$FM_ROOT/bin/fm-emit.sh" --actor captain --type merged --pr "$pr" ${task:+--task "$task"} \
+  --en "merged #$pr from the board" --tw "從看板合併 #$pr" >/dev/null 2>&1 </dev/null
+echo "fm-merge: merged #$pr"
+SH
+cat > "$x/bin/fm-dispatch.sh" <<'SH'
+#!/usr/bin/env bash
+task=''
+while [ $# -gt 0 ]; do case "$1" in --task) task="$2"; shift 2 ;; *) shift ;; esac; done
+printf '%s\n' "$task" >> "$FM_ROOT/dispatch-calls"
+if [ -e "$FM_ROOT/hold-$task" ]; then
+  echo "fm-dispatch: $task waits for a slot: 3 in flight, limit 3" >&2
+  echo "fm-dispatch: 3 in flight, limit 3 - nothing to start"
+  exit 0
+fi
+# the worker it starts says it started, as a real one does
+"$FM_ROOT/bin/fm-emit.sh" --actor "worker-$task" --task "$task" --type dispatched \
+  --data '{"role":"worker"}' --en "picked up $task" --tw "接下 $task" >/dev/null 2>&1 </dev/null
+echo "$task"
+SH
+cat > "$x/bin/fm-worker.sh" <<'SH'
+#!/usr/bin/env bash
+# the arguments as given, before the loop below shifts them all away
+args="$*"
+task=''
+while [ $# -gt 0 ]; do case "$1" in --task) task="$2"; shift 2 ;; *) shift ;; esac; done
+if [ -e "$FM_ROOT/locked-$task" ]; then
+  echo "fm-worker: cannot lock $task; another worker may be running" >&2; exit 70
+fi
+printf '%s\n' "$args" >> "$FM_ROOT/worker-calls"
+printf '%s\n' "$$" > "$FM_ROOT/worker-pid"
+exec sleep 30
+SH
+# A merge card's pull request is read from GitHub before the card exists
+# (T-119). gh as gh answers `pr view <n> --json a,b`: an object of exactly
+# those fields, keys sorted, and for a number with no pull request GraphQL's
+# error on stderr, exit 1. What GitHub holds is prs.jsonl.
+cat > "$x/bin/gh" <<'SH'
+#!/usr/bin/env bash
+here="$(cd "$(dirname "$0")/.." && pwd)"
+arg() { local w="$1"; shift; while [ $# -gt 0 ]; do [ "$1" = "$w" ] && { printf '%s' "${2-}"; return; }; shift; done; }
+case "${1-}:${2-}" in
+  pr:view)
+    doc="$(jq -c --arg n "$3" 'select((.number|tostring)==$n)' "$here/prs.jsonl" 2>/dev/null | tail -1)"
+    [ -n "$doc" ] || {
+      echo "GraphQL: Could not resolve to a PullRequest with the number of $3. (repository.pullRequest)" >&2; exit 1; }
+    out="$(jq -cS --arg f "$(arg --json "$@")" '. as $d | reduce ($f|split(","))[] as $k ({}; .[$k] = $d[$k])' <<<"$doc")"
+    q="$(arg --jq "$@")"
+    if [ -n "$q" ]; then jq -r "$q" <<<"$out"; else printf '%s\n' "$out"; fi ;;
+  *) echo "gh stub: fm-decide asks nothing but pr view" >&2; exit 1 ;;
+esac
+SH
+for pair in '31 T-031' '35 T-035' '39 T-039' '97 T-117'; do
+  set -- $pair
+  jq -cn --argjson n "$1" --arg b "$(tr 'T' 't' <<<"$2")-branch" --arg t "$2: title" \
+    '{number:$n,state:"OPEN",headRefName:$b,title:$t}' >> "$x/prs.jsonl"
+done
+chmod +x "$x/bin/fm-merge.sh" "$x/bin/fm-dispatch.sh" "$x/bin/fm-worker.sh" "$x/bin/gh"
+emx() { FM_ROOT="$x" "$x/bin/fm-emit.sh" "$@" >/dev/null; }
+emx --actor captain --type greenlit --en "go" --tw "開工"
+FM_ROOT="$x" FM_PORT=0 bun run "$x/board/server.ts" > "$x/out" 2>&1 < /dev/null &
+pidx=$!
+PORTX="$(board_port "$x/out" "$pidx")"
+for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORTX/api/state" >/dev/null 2>&1 && break; sleep 0.25; done
+sx() { curl -sf -m 10 "http://127.0.0.1:$PORTX/api/state"; }
+lane() { jq -r --arg t "$1" '.tasks[]|select(.id==$t)|.stage' <<<"$(sx)"; }
+record() { jq -r "$2" "$x/state/decisions/$1.json" 2>/dev/null; }
+made() { jq -rs --arg d "$1" "map(select(.type==\"decision_made\" and .data.decision==\$d))|last|$2" "$x/state/events.jsonl"; }
+# a card raised the way firstmate raises one, through the real fm-decide.sh,
+# which validates the effect it names
+card() {   # card <id> <task> <kind> <effect JSON or null> [pr]
+  jq -n --argjson effect "$4" '
+    ({A:{description:"do A",pros:"p",cons:"c"},B:{description:"do B",pros:"p",cons:"c"},C:{description:"do C",pros:"p",cons:"c"}}) as $o
+    | {title:"judge",explanation:"e",before:"b",after:"a",outcome:"o",options:$o} as $l
+    | {en:$l,"zh-TW":$l} + (if $effect == null then {} else {effect:$effect} end)' > "$x/details-$1.json"
+  FM_GH="$x/bin/gh" FM_ROOT="$x" FM_PROJECT='' bash "$x/bin/fm-decide.sh" --request "$1" --task "$2" --kind "$3" ${5:+--pr "$5"} \
+    --details "$x/details-$1.json" --repo "$x" > "$x/decide-$1.out" 2>&1
+}
+answer() {   # answer <id> <choice>: the HTTP status, the body in $x/post
+  local body; body="$(jq -cn --arg i "$1" --arg c "$2" '{id:$i,chosen:$c}')"
+  wcurl "$PORTX" -s -m 30 -o "$x/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+    -d "$body" "http://127.0.0.1:$PORTX/decisions"
+}
+setaside() {   # setaside <task> <action> [extra JSON]: the HTTP status, the body in $x/resp
+  local body extra="${3-}"
+  [ -n "$extra" ] || extra='{}'
+  body="$(jq -cn --arg t "$1" --arg a "$2" --argjson e "$extra" '{task:$t,action:$a} + $e')"
+  wcurl "$PORTX" -s -m 30 -o "$x/resp" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+    -d "$body" "http://127.0.0.1:$PORTX/tasks"
+}
+
+# T-030's real sequence: a dispatch in its history, a card asking for a
+# decision, the captain's B. The card names B's effect, park, as a card now
+# does; the answer is carried out, and the task leaves the captain's lane
+emx --actor worker-30 --task T-030 --type dispatched --data '{"role":"worker"}' --en "on it" --tw "接下"
+card D-1020 T-030 choice '{"B":"park"}'
+assert_ok "test -f '$x/state/pending/D-1020.json'" "fm-decide.sh raises a card that names an effect"
+assert_eq "park" "$(jq -r '.details.effect.B' "$x/state/pending/D-1020.json")" "and keeps the effect on the card"
+assert_eq "captain" "$(lane T-030)" "while the card is pending, the task is the captain's"
+assert_eq "200" "$(answer D-1020 B)" "the captain answers B"
+assert_eq "park done" "$(jq -r '"\(.effect) \(.outcome)"' "$x/post")" "the answer says its effect was carried out"
+assert_eq "parked" "$(lane T-030)" "a chosen park parks the task: it does not stay in the captain's lane"
+assert_eq "parked captain D-1020" "$(jq -rs 'map(select(.task=="T-030" and .type=="parked"))|last|"\(.type) \(.actor) \(.data.decision)"' "$x/state/events.jsonl")" \
+  "the park is the parked event, from the captain, naming the card"
+assert_eq "done park" "$(made D-1020 '"\(.data.outcome) \(.data.effect)"')" "decision_made records the effect and that it was done"
+assert_eq "done" "$(record D-1020 .effect_outcome)" "and so does the decision record"
+
+# the same, with no effect named: the task is where its other events put it
+emx --actor worker-38 --task T-038 --type dispatched --data '{"role":"worker"}' --en "on it" --tw "接下"
+card D-1038 T-038 choice null
+assert_eq "200" "$(answer D-1038 B)" "an answer with no effect is recorded"
+assert_eq "working" "$(lane T-038)" "and the task goes back to the lane its events give it"
+assert_eq "recorded" "$(made D-1038 .data.outcome)" "decision_made says it was only recorded"
+
+# a merge card answered B: hold. It leaves the captain's lane for where its
+# events put it, review after an approval, and nothing is merged
+emx --actor worker-31 --task T-031 --type dispatched --data '{"role":"worker"}' --en "on it" --tw "接下"
+emx --actor worker-31 --task T-031 --type pr_opened --pr 31 --en "opened #31" --tw "開了 #31"
+emx --actor reviewer-31 --task T-031 --type approved --data '{"role":"reviewer"}' --en "approved" --tw "通過"
+assert_eq "review" "$(lane T-031)" "an approval with no card up waits in review, not at the captain's"
+card D-1031 T-031 merge null 31
+assert_eq "captain" "$(lane T-031)" "its merge card puts it at the captain's"
+assert_eq "200" "$(answer D-1031 B)" "the captain answers B"
+assert_eq "hold done" "$(jq -r '"\(.effect) \(.outcome)"' "$x/post")" "a merge card's B holds"
+assert_eq "review" "$(lane T-031)" "and the task leaves the captain's lane for review"
+assert_fail "test -e '$x/merge-calls'" "and nothing was merged"
+
+# drop from a card: the closed event
+card D-1032 T-032 choice '{"C":"drop"}'
+assert_eq "200" "$(answer D-1032 C)" "the captain answers C, drop"
+assert_eq "drop done" "$(jq -r '"\(.effect) \(.outcome)"' "$x/post")" "the drop is carried out"
+assert_eq "closed" "$(lane T-032)" "and the task is closed"
+assert_eq "closed captain" "$(jq -rs 'map(select(.task=="T-032" and .type=="closed"))|last|"\(.type) \(.actor)"' "$x/state/events.jsonl")" \
+  "by the captain's closed event"
+
+# dispatch from a card, through fm-dispatch.sh --task
+card D-1033 T-033 choice '{"A":"dispatch"}'
+assert_eq "200" "$(answer D-1033 A)" "the captain answers A, dispatch"
+assert_eq "dispatch done" "$(jq -r '"\(.effect) \(.outcome)"' "$x/post")" "the dispatcher started it"
+assert_eq "T-033" "$(cat "$x/dispatch-calls")" "through fm-dispatch.sh --task, the captain's order"
+assert_eq "working" "$(lane T-033)" "and the task is at work"
+# a dispatch the dispatcher holds is a failure, with the dispatcher's reason
+: > "$x/hold-T-034"
+card D-1034 T-034 choice '{"A":"dispatch"}'
+assert_eq "200" "$(answer D-1034 A)" "the answer itself is recorded"
+assert_eq "dispatch failed" "$(jq -r '"\(.effect) \(.outcome)"' "$x/post")" "a held dispatch is not reported done"
+assert_contains "$(jq -r .reason "$x/post")" "waits for a slot" "it says why, in the dispatcher's words"
+assert_eq "failed" "$(made D-1034 .data.outcome)" "decision_made records the failure"
+assert_contains "$(made D-1034 .data.reason)" "waits for a slot" "with its reason"
+sfx="$(sx)"
+assert_eq "failed false" "$(jq -r '.responses[]|select(.id=="D-1034")|"\(.effect_outcome) \(.effect_superseded)"' <<<"$sfx")" \
+  "the board keeps the failed effect up"
+assert_contains "$(jq -r '.responses[]|select(.id=="D-1034")|.effect_reason' <<<"$sfx")" "waits for a slot" "with its reason"
+assert_eq "ready" "$(lane T-034)" "and the task stays where it was, not in the captain's lane"
+# once the task is dispatched some other way, the failure is overtaken
+emx --actor worker-T-034 --task T-034 --type dispatched --data '{"role":"worker"}' --en "picked up T-034" --tw "接下 T-034"
+assert_eq "failed true" "$(jq -r '.responses[]|select(.id=="D-1034")|"\(.effect_outcome) \(.effect_superseded)"' <<<"$(sx)")" \
+  "a failed dispatch is superseded once the task is dispatched after it"
+
+# send back: another worker round on the same pull request, by fm-worker.sh
+emx --actor worker-35 --task T-035 --type dispatched --data '{"role":"worker"}' --en "on it" --tw "接下"
+emx --actor worker-35 --task T-035 --type pr_opened --pr 35 --en "opened #35" --tw "開了 #35"
+emx --actor worker-35 --task T-035 --type agent_finished --en "done" --tw "完成"
+card D-1035 T-035 merge '{"A":"merge","B":"send_back"}' 35
+assert_eq "200" "$(answer D-1035 B)" "the captain answers B, send back"
+assert_eq "send_back done" "$(jq -r '"\(.effect) \(.outcome)"' "$x/post")" "the round was started"
+assert_contains "$(cat "$x/worker-calls" 2>/dev/null)" "--task T-035" "by fm-worker.sh, for the task"
+assert_contains "$(cat "$x/worker-calls" 2>/dev/null)" "--pr 35" "on its pull request"
+kill "$(cat "$x/worker-pid" 2>/dev/null)" 2>/dev/null || true
+# and a round that refuses, because another holds the task, is a failure
+emx --actor worker-36 --task T-036 --type dispatched --data '{"role":"worker"}' --en "on it" --tw "接下"
+: > "$x/locked-T-036"
+card D-1036 T-036 choice '{"B":"send_back"}'
+assert_eq "200" "$(answer D-1036 B)" "the answer is recorded"
+assert_eq "send_back failed" "$(jq -r '"\(.effect) \(.outcome)"' "$x/post")" "a refused round is not reported done"
+assert_contains "$(jq -r .reason "$x/post")" "cannot lock T-036" "it says why, in the worker's words"
+
+# merge from a card, as before, now with the effect recorded
+emx --actor worker-39 --task T-039 --type pr_opened --pr 39 --en "opened #39" --tw "開了 #39"
+card D-1039 T-039 merge null 39
+assert_eq "200" "$(answer D-1039 A)" "the captain answers A, merge"
+assert_eq "merge running" "$(jq -r '"\(.effect) \(.outcome)"' "$x/post")" "a merge runs in the background"
+wait_for 20 jq -e '.merge=="merged"' "$x/state/decisions/D-1039.json"
+assert_eq "merged done" "$(record D-1039 '"\(.merge) \(.effect_outcome)"')" "and its record says it was done once it merged"
+assert_eq "merged" "$(lane T-039)" "the task is merged"
+
+# --- set aside in flight: confirmed, crew stopped, the pull request left open
+emx --actor worker-50 --task T-050 --type dispatched --data '{"role":"worker"}' --en "on it" --tw "接下"
+emx --actor worker-50 --task T-050 --type pr_opened --pr 50 --en "opened #50" --tw "開了 #50"
+printf '#!/usr/bin/env bash\nsleep 30 &\nwait\n' > "$x/stub/fm-worker.sh"
+# every descriptor detached: its sleep outlives it, and must not hold the
+# suite's output open
+bash "$x/stub/fm-worker.sh" >/dev/null 2>&1 </dev/null &
+fake=$!
+printf '%s\n' "$fake" > "$x/state/worktrees/T-050.pid"
+assert_eq "park,drop true" "$(jq -r '.tasks[]|select(.id=="T-050")|"\(.actions|join(",")) \(.confirm)"' <<<"$(sx)")" \
+  "a task in review offers park and drop, and asks first"
+n50="$(wc -l < "$x/state/events.jsonl")"
+assert_eq "409" "$(setaside T-050 park)" "parking it without confirming is refused"
+assert_eq "$n50" "$(wc -l < "$x/state/events.jsonl")" "and writes nothing"
+assert_ok "kill -0 $fake" "and stops nobody"
+assert_eq "200" "$(setaside T-050 park '{"confirm":true}')" "confirmed, it is parked"
+assert_eq "parked" "$(lane T-050)" "and leaves its lane"
+assert_contains "$(jq -r '.stopped|join(" ")' "$x/resp")" "worker $fake" "its worker is stopped by the stop path"
+assert_eq "50" "$(jq -r .pr_left_open "$x/resp")" "and its pull request is left open, and said so"
+wait "$fake" 2>/dev/null; rc=$?
+assert_eq "143" "$rc" "the worker got SIGTERM"
+assert_eq "200" "$(setaside T-050 unpark)" "unparked"
+assert_eq "review" "$(lane T-050)" "it returns to the lane its events give it"
+assert_eq "200" "$(setaside T-050 drop '{"confirm":true}')" "and a confirmed drop closes it"
+assert_eq "closed" "$(lane T-050)" "closed"
+
+# --- parked while its card is pending: the card outranks the park, so the
+# task stays in the captain's lane, says it is parked, and offers unpark
+# rather than a second park; answered or withdrawn, the park shows
+emx --actor worker-51 --task T-051 --type dispatched --data '{"role":"worker"}' --en "on it" --tw "接下"
+card D-1051 T-051 choice null
+t51() { jq -r '.tasks[]|select(.id=="T-051")|"\(.stage) \(.actions|join(",")) \([.badges[]|select(.kind=="parked")]|length)"' <<<"$(sx)"; }
+assert_eq "captain park,drop 0" "$(t51)" "a task whose card is pending offers park and drop"
+assert_eq "200" "$(setaside T-051 park '{"confirm":true}')" "confirmed, it is parked"
+assert_eq "captain unpark,drop 1" "$(t51)" \
+  "it stays in the captain's lane while its card is pending, marked parked, and offers unpark, not park"
+n51="$(wc -l < "$x/state/events.jsonl")"
+assert_eq "409" "$(setaside T-051 park '{"confirm":true}')" "a second park is refused"
+assert_eq "$n51" "$(wc -l < "$x/state/events.jsonl")" "and writes nothing"
+assert_eq "200" "$(setaside T-051 unpark)" "unparking it is accepted"
+assert_eq "captain park,drop 0" "$(t51)" "unparked, it is the captain's card again, with nothing parked"
+assert_eq "200" "$(setaside T-051 park '{"confirm":true}')" "parked again"
+rm -f "$x/state/pending/D-1051.json"
+assert_eq "parked unpark,drop 0" "$(t51)" "once no card is pending, the park is what places it"
+
+# --- a card withdrawn unanswered: the task is where its events put it
+emx --actor worker-37 --task T-037 --type dispatched --data '{"role":"worker"}' --en "on it" --tw "接下"
+card D-1037 T-037 choice null
+assert_eq "captain" "$(lane T-037)" "while its card is pending, the task is the captain's"
+rm -f "$x/state/pending/D-1037.json"
+assert_eq "working" "$(lane T-037)" "withdrawn, the card no longer holds it there"
+
+# --- liveness: a run the launcher side found lost leaves the deck. The
+# events are the ones bin/fm-herdr.py's deck reconcile writes for a run whose
+# process is gone: agent_lost, then the agent_finished that closes it.
+crew_ids() { jq -r '[.crew[].id]|join(" ")' <<<"$1"; }
+lost_by_reconcile() {   # lost_by_reconcile <actor> <task>
+  emx --actor "$1" --task "$2" --type agent_lost --data '{"role":"worker","status":"process_gone"}' \
+    --en "$1 was lost on $2: its process is gone and it never said it finished" \
+    --tw "$1 在 $2 上失聯：行程已不在，也從未回報完成"
+  emx --actor "$1" --task "$2" --type agent_finished --data '{"role":"worker","status":"process_gone"}' \
+    --en "deck reconcile: $1 has no live process" --tw "甲板對帳：$1 無活進程"
+}
+emx --actor worker-gone --task T-044 --type dispatched --data '{"role":"worker"}' --en "on it" --tw "接下"
+emx --actor worker-live --task T-045 --type dispatched --data '{"role":"worker"}' --en "on it" --tw "接下"
+assert_contains "$(crew_ids "$(sx)")" "worker-gone" "before it is found lost, the run is aboard"
+lost_by_reconcile worker-gone T-044
+sl="$(sx)"
+assert_lacks "$(crew_ids "$sl")" "worker-gone" "a vanished run is off the deck"
+assert_contains "$(crew_ids "$sl")" "worker-live" "a live one stays aboard"
+assert_eq "working" "$(jq -r '.tasks[]|select(.id=="T-045")|.stage' <<<"$sl")" "and its task stays at work"
+assert_eq "gate lost worker-gone" "$(jq -r '.tasks[]|select(.id=="T-044")|"\(.stage) \(.badges|map(.kind)|join(",")) \(.badges[0].actor)"' <<<"$sl")" \
+  "the lost run's task is blocked, and the card names who was lost"
+assert_eq "agent_lost" "$(jq -r '[.recent[]|select(.actor=="worker-gone" and (.type=="agent_lost" or .type=="agent_finished"))|.type]|join(",")' <<<"$sl")" \
+  "the log shows it lost, once, and not also the close that follows"
+assert_contains "$(jq -r '.recent[]|select(.type=="agent_lost")|.summary.en' <<<"$sl")" "lost" "in English"
+assert_contains "$(jq -r '.recent[]|select(.type=="agent_lost")|.summary["zh-TW"]' <<<"$sl")" "失聯" "and in Traditional Chinese"
+# agent_finished arriving after lost: still off the deck, the task where its
+# events put it, and the loss still shown once
+emx --actor worker-gone --task T-044 --type agent_finished --data '{"role":"worker"}' --en "finished" --tw "結束"
+sa="$(sx)"
+assert_lacks "$(crew_ids "$sa")" "worker-gone" "agent_finished after lost does not bring it back"
+assert_eq "gate" "$(jq -r '.tasks[]|select(.id=="T-044")|.stage' <<<"$sa")" "and its task stays blocked"
+assert_eq "1" "$(jq -r '[.recent[]|select(.type=="agent_lost" and .actor=="worker-gone")]|length' <<<"$sa")" "the loss is still shown once"
+# a task redispatched before its old crewman was found lost is not blocked
+emx --actor worker-old --task T-046 --type dispatched --data '{"role":"worker"}' --en "on it" --tw "接下"
+emx --actor worker-new --task T-046 --type dispatched --data '{"role":"worker","recovery":true}' --en "again" --tw "再來"
+lost_by_reconcile worker-old T-046
+sr="$(sx)"
+assert_eq "working" "$(jq -r '.tasks[]|select(.id=="T-046")|.stage' <<<"$sr")" "a redispatched task stays at work when the old run is found lost"
+assert_contains "$(crew_ids "$sr")" "worker-new" "with its new crewman aboard"
+# and a redispatch after the loss unblocks it, with the crewman aboard again
+emx --actor worker-gone --task T-044 --type dispatched --data '{"role":"worker"}' --en "back" --tw "回來"
+sb="$(sx)"
+assert_eq "working" "$(jq -r '.tasks[]|select(.id=="T-044")|.stage' <<<"$sb")" "a redispatch after the loss moves the task on"
+assert_contains "$(crew_ids "$sb")" "worker-gone" "and a dispatched run is aboard again"
+
+# --- reopening a wrong final state: T-117's exact sequence (events 3945-3947)
+emx --actor worker-117 --task T-117 --type dispatched --data '{"role":"worker"}' --en "on it" --tw "接下"
+emx --actor worker-117 --task T-117 --type pr_opened --pr 97 --en "opened #97" --tw "開了 #97"
+emx --actor worker-117 --task T-117 --type agent_finished --en "done" --tw "完成"
+emx --actor firstmate --task T-117 --type decision_requested --pr 96 --en "merge #96, the revert of T-105" --tw "合併 #96"
+emx --actor captain --task T-117 --type decision_made --data '{"decision":"D-3946","chosen":"A","outcome":"recorded"}' \
+  --en "D-3946 recorded A" --tw "D-3946 已記錄 A"
+emx --actor captain --task T-117 --type merged --pr 96 --en "merged #96 from the board" --tw "從看板合併 #96"
+assert_eq "merged 96 reopen" "$(jq -r '.tasks[]|select(.id=="T-117")|"\(.stage) \(.pr) \(.actions|join(","))"' <<<"$(sx)")" \
+  "T-117 shows as merged with #96, and offers reopening"
+# a card raised under a final task is shown, and says the task is final
+card D-1118 T-117 choice null
+assert_eq "merged" "$(jq -r '.pending[]|select(.id=="D-1118")|.task_final' <<<"$(sx)")" \
+  "a pending card under a merged task is shown, marked final"
+assert_eq "merged" "$(lane T-117)" "and does not move the task"
+assert_eq "200" "$(answer D-1118 B)" "and it can be answered"
+# reopening asks first and needs a reason; only the captain's counts
+n117="$(wc -l < "$x/state/events.jsonl")"
+assert_eq "409" "$(setaside T-117 reopen '{"reason":"wrong card"}')" "a reopening not confirmed is refused"
+assert_eq "confirmRequired" "$(jq -r .code "$x/resp")" "with the code that asks to confirm"
+assert_eq "400" "$(setaside T-117 reopen '{"confirm":true}')" "and one with no reason"
+assert_eq "reopenNeedsReason" "$(jq -r .code "$x/resp")" \
+  "with a refusal code of its own, not the reason box's label key"
+assert_eq "$n117" "$(wc -l < "$x/state/events.jsonl")" "neither writes anything"
+emx --actor firstmate --task T-117 --type reopened --data '{"reason":"not mine to reopen"}' --en "reopened" --tw "重新開啟"
+assert_eq "merged" "$(lane T-117)" "a reopened event from anyone but the captain moves nothing"
+assert_eq "200" "$(setaside T-117 reopen '{"confirm":true,"reason":"the merge card for #96 was raised under T-117"}')" \
+  "the captain reopens T-117"
+assert_eq "reopened captain" "$(tail -1 "$x/state/events.jsonl" | jq -r '"\(.type) \(.actor)"')" \
+  "as a reopened event from the captain"
+assert_contains "$(tail -1 "$x/state/events.jsonl" | jq -r .data.reason)" "raised under T-117" "with its reason"
+s117="$(sx)"
+assert_eq "ready 97" "$(jq -r '.tasks[]|select(.id=="T-117")|"\(.stage) \(.pr)"' <<<"$s117")" \
+  "T-117 leaves merged: with no later events it is untouched work again, showing its own #97"
+assert_eq "reopened" "$(jq -r 'first(.recent[]|select(.task=="T-117")|.type)' <<<"$s117")" "the log shows the reopening"
+# a later merge card for #97 is shown and answerable, and later events move
+# the task as they always do
+card D-1119 T-117 merge null 97
+s119="$(sx)"
+assert_eq "null true" "$(jq -r '.pending[]|select(.id=="D-1119")|"\(.task_final) \(.answerable)"' <<<"$s119")" \
+  "the merge card for #97 is shown and answerable"
+assert_eq "captain" "$(jq -r '.tasks[]|select(.id=="T-117")|.stage' <<<"$s119")" "and the task waits on the captain for it"
+assert_eq "200" "$(answer D-1119 A)" "the captain merges #97"
+wait_for 20 jq -e '.merge=="merged"' "$x/state/decisions/D-1119.json"
+assert_contains "$(cat "$x/merge-calls")" "--pr 97 --task T-117" "through fm-merge.sh, for #97"
+assert_eq "merged 97" "$(jq -r '.tasks[]|select(.id=="T-117")|"\(.stage) \(.pr)"' <<<"$(sx)")" "and T-117 is merged with #97"
+
+kill "$pidx" 2>/dev/null
+wait "$pidx" 2>/dev/null || true
+rm -rf "$x"
+
 # the repository is data in the registry, never a literal in the board: no
 # registered owner or repository name appears anywhere under board/
 gh_repos="$(sed -n 's/^[[:space:]]*github:[[:space:]]*\([^[:space:]#]*\).*/\1/p' "$ROOT/config.yaml")"
@@ -1741,5 +2303,251 @@ for repo in $gh_repos; do
     assert_eq "" "$(grep -rnF -- "$part" "$ROOT/board" || true)" "board/ holds no literal '${part}' from the registry"
   done
 done
+
+# --- T-122: only the captain's browser, or a script holding the secret, writes ---
+# A crew round can reach the board's port (the macOS sandbox cannot keep it
+# off one loopback port), and so can any page in the captain's browser. Every
+# route that writes or starts a program is refused to both, and nothing either
+# can read hands them what it would take.
+k="$(mktemp -d)"; mkdir -p "$k/bin" "$k/state/pending" "$k/design" "$k/board/public" "$k/src"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$k/bin/"
+cp "$ROOT/board/server.ts" "$k/board/"
+cp "$ROOT/board/public/index.html" "$ROOT/board/public/ship.js" "$ROOT/board/public/diagram.js" "$k/board/public/"
+fm_tasks_write /dev/stdin "$k/design/tasks" <<'J'
+{"tasks":[{"id":"T-K1","title":"ready work","milestone":"M2","depends_on":[]},
+          {"id":"T-K2","title":"awaiting its merge","milestone":"M2","depends_on":[]}]}
+J
+FM_ROOT="$k" "$k/bin/fm-emit.sh" --actor captain --type greenlit --en "go" --tw "開工" >/dev/null
+jq -cn '{id:"D-900",kind:"merge",task:"T-K2",pr:9,title:"merge it"}' > "$k/state/pending/D-900.json"
+# The merge helper records how it was called and answers as bin/fm-merge.sh
+# does on a merge GitHub took: one line, `fm-merge: merged #<pr>`, exit 0.
+# The editor records the path and, like `code <file>`, says nothing.
+cat > "$k/bin/fm-merge.sh" <<'S'
+#!/usr/bin/env bash
+root="$(cd "$(dirname "$0")/.." && pwd)"
+printf '%s\n' "$*" >> "$root/merge-calls"
+pr=''
+while [ $# -gt 0 ]; do
+  case "$1" in --pr) pr="${2-}"; shift 2 ;; *) shift ;; esac
+done
+echo "fm-merge: merged #$pr"
+S
+printf '#!/usr/bin/env bash\necho "$*" >> "%s/opened"\n' "$k" > "$k/fake-editor"
+chmod +x "$k/bin/fm-merge.sh" "$k/fake-editor"
+printf 'editor: %s/fake-editor\n' "$k" > "$k/config.yaml"
+echo "inside the repo" > "$k/src/visible"
+start_k() {   # start_k <port>: the board on $k, its pid in pidk and port in PORTK
+  FM_ROOT="$k" FM_PORT="$1" bun run "$k/board/server.ts" > "$k/out" 2>&1 < /dev/null &
+  pidk=$!
+  PORTK="$(board_port "$k/out" "$pidk")"
+  wait_for 60 curl -sf "http://127.0.0.1:$PORTK/api/state"
+}
+start_k 0
+uk="http://127.0.0.1:$PORTK"
+key="$XDG_CONFIG_HOME/firstmate/board-$PORTK.secret"
+lines_k() { wc -l < "$k/state/events.jsonl" | tr -d ' '; }
+
+# (4) the secret: made at start, 0600, outside the repository, 256 bits or more
+assert_ok "test -f '$key'" "the board made its secret file under the config directory"
+assert_eq "600" "$(perl -e 'printf "%o", (stat shift)[2] & 07777' "$key")" "the secret file is mode 0600"
+case "$(cd "$(dirname "$key")" && pwd -P)/" in "$(cd "$k" && pwd -P)/"*) inrepo=yes ;; *) inrepo=no ;; esac
+assert_eq "no" "$inrepo" "the secret file is outside the repository"
+secret="$(cat "$key")"
+assert_ok "grep -Eq '^[0-9a-f]{64,}$' '$key'" "the secret is at least 256 bits of hex"
+
+# mint <origin> <port>: a one-time code the way the opener makes one
+# (bin/fm-herdr.py board_login_url), printed as the part after /login#
+mint() {
+  PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import importlib.util, sys
+s = importlib.util.spec_from_file_location("m", sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)
+print(m.board_login_url(sys.argv[2], int(sys.argv[3])).split("#", 1)[1])' "$k/bin/fm-herdr.py" "$1" "$2"
+}
+login() {   # login <code> [curl args...]: the status; the body in $k/login-body, headers in $k/login-headers
+  local body status; body="$(jq -cn --arg c "$1" '{code:$c}')"; shift
+  status="$(curl -s -o "$k/login-body" -D "$k/login-headers" -w '%{http_code}' -X POST \
+    -H 'content-type: application/json' "$@" -d "$body" "$uk/login")"
+  cat "$k/login-headers" >> "$k/all-headers"
+  printf '%s' "$status"
+}
+# the files holding a Set-Cookie among every response header this part keeps
+# (each login's, and every read's below): there must be none
+cookies_set() { grep -il '^set-cookie:' "$k/all-headers" "$k/reads" 2>/dev/null || true; }
+
+# (2) the one-time code: works once, then never again; expired or wrong is refused
+assert_eq "false" "$(curl -sf "$uk/api/session" | jq -r .writable)" "a tab with no token is not writable"
+code1="$(mint "$uk" "$PORTK")"
+assert_matches "$code1" '^[0-9]{13}\.[0-9a-f]{32}\.[0-9a-f]{64}$' "the opener mints a code of the board's shape"
+assert_eq "403" "$(login "$code1")" "a code posted with no Origin is refused"
+assert_eq "403" "$(login "$code1" -H 'Origin: http://evil.example')" "and one posted from another origin"
+assert_eq "200" "$(login "$code1" -H "Origin: $uk")" "the code posted from the board's own page is taken"
+# the tab's token comes back in the body, for the page to keep in its own
+# sessionStorage, and never as a cookie: a browser sends a cookie for
+# 127.0.0.1 to every port on it
+token="$(jq -r '.token // empty' "$k/login-body")"
+assert_matches "$token" '^[0-9a-f]{64}$' "it answers with the tab's token"
+assert_ne "$secret" "$token" "which is not the secret itself"
+assert_eq "" "$(cookies_set)" "and sets no cookie"
+assert_eq "true" "$(curl -sf -H "Authorization: Bearer $token" "$uk/api/session" | jq -r .writable)" \
+  "with the token the tab is writable"
+assert_eq "403" "$(login "$code1" -H "Origin: $uk")" "the same code a second time is refused"
+assert_eq "" "$(jq -r '.token // empty' "$k/login-body")" "and gives no token"
+# (expiry is tested on its own below, on a board whose codes last 2 seconds:
+# a code 61 seconds old here was also issued before this board started)
+# a fresh code with the last digit of its signature changed
+good="$(mint "$uk" "$PORTK")"
+case "$good" in *0) flipped="${good%?}1" ;; *) flipped="${good%?}0" ;; esac
+assert_eq "403" "$(login "$flipped" -H "Origin: $uk")" "a code whose signature is wrong is refused"
+assert_eq "403" "$(login "not-a-code" -H "Origin: $uk")" "and so is one that is not a code"
+assert_eq "loginRefused" "$(jq -r .code "$k/login-body")" "with a code the page translates"
+assert_eq "200" "$(login "$good" -H "Origin: $uk")" "the control: the same code unaltered is taken"
+
+# (1) the refusals: every writing route, every missing or wrong part, 403 and nothing done
+dec="$(jq -cn '{id:"D-900",chosen:"A"}')"
+tsk="$(jq -cn '{task:"T-K1",action:"park"}')"
+opn="$(jq -cn '{path:"src/visible"}')"
+postk() {   # postk <route> <body> <curl args...>: the status; the body in $k/resp
+  local route="$1" body="$2"; shift 2
+  curl -s -o "$k/resp" -w '%{http_code}' -X POST "$@" -d "$body" "$uk$route"
+}
+zeros="$(printf '%064d' 0)"
+n0="$(lines_k)"
+for route in /decisions /tasks /open; do
+  case "$route" in /decisions) body="$dec" ;; /tasks) body="$tsk" ;; *) body="$opn" ;; esac
+  assert_eq "403" "$(postk "$route" "$body" -H "Origin: $uk" -H 'content-type: application/json')" \
+    "$route with no credential is refused"
+  assert_eq "writeCredential" "$(jq -r .code "$k/resp")" "$route says the tab has no credential"
+  assert_eq "403" "$(postk "$route" "$body" -H "Origin: $uk" -H 'content-type: application/json' \
+    -H "Authorization: Bearer $zeros")" "$route with a wrong bearer is refused"
+  # what a cookie session would have held, sent as a cookie: the board reads
+  # no cookie, so a server on another loopback port that caught one has nothing
+  assert_eq "403" "$(postk "$route" "$body" -H "Origin: $uk" -H 'content-type: application/json' \
+    -b "firstmate_board_$PORTK=$token")" "$route with the token only as a cookie is refused"
+  assert_eq "writeCredential" "$(jq -r .code "$k/resp")" "$route says a cookie is no credential"
+  assert_eq "403" "$(postk "$route" "$body" -H 'Origin: http://127.0.0.1:1' -H 'content-type: application/json' \
+    -H "Authorization: Bearer $token")" "$route with a valid token from another loopback origin is refused"
+  assert_eq "writeOrigin" "$(jq -r .code "$k/resp")" "$route says the request is not the board's own"
+  assert_eq "403" "$(postk "$route" "$body" -H 'Origin: http://evil.example' -H 'content-type: application/json' \
+    -H "Authorization: Bearer $token")" "$route with a valid token from another site is refused"
+  assert_eq "writeOrigin" "$(jq -r .code "$k/resp")" "$route says so for the other site"
+  assert_eq "403" "$(postk "$route" "$body" -H 'content-type: application/json' -H "Authorization: Bearer $token")" \
+    "$route with a valid token and no Origin is refused"
+  assert_eq "writeOrigin" "$(jq -r .code "$k/resp")" "$route says so with no Origin"
+  assert_eq "403" "$(postk "$route" "$body" -H "Origin: $uk" -H 'content-type: text/plain' -H "Authorization: Bearer $token")" \
+    "$route with a valid token and a text/plain body is refused"
+  assert_eq "writeJson" "$(jq -r .code "$k/resp")" "$route says it takes JSON only"
+  assert_eq "403" "$(wcurl "$PORTK" -s -o "$k/resp" -w '%{http_code}' -X POST -H 'content-type: text/plain' \
+    -d "$body" "$uk$route")" "$route with the bearer and a text/plain body is refused"
+  assert_eq "writeJson" "$(jq -r .code "$k/resp")" "$route says so to the bearer too"
+done
+sleep 1   # an editor or a merge a refusal started would have run by now
+assert_eq "$n0" "$(lines_k)" "no refusal emitted an event"
+assert_fail "test -e '$k/state/decisions/D-900.json'" "no refusal recorded an answer"
+assert_ok "test -e '$k/state/pending/D-900.json'" "and the card is still pending"
+assert_fail "test -e '$k/merge-calls'" "no refusal ran the merge helper"
+assert_fail "test -e '$k/opened'" "no refusal started the editor"
+
+# (3) nothing read hands out the credential: every read route, from a tab
+# holding the token, grepped for the secret, the token and a code not yet used
+unused="$(mint "$uk" "$PORTK")"
+: > "$k/reads"
+for path in / /index.html /ship.js /diagram.js /api/state /api/i18n /api/session /login \
+            "/file?path=src/visible" "/diff?branch=main" /open "/open?path=src/visible" /no-such-file; do
+  curl -s -i -H "Authorization: Bearer $token" "$uk$path" >> "$k/reads"
+done
+curl -s -i -m 2 -H "Authorization: Bearer $token" "$uk/events" >> "$k/reads" || true
+for route in /decisions /tasks /open /login; do
+  curl -s -i -X POST -H "Origin: $uk" -H 'content-type: application/json' -d '{}' "$uk$route" >> "$k/reads"
+done
+assert_ok "grep -q '\"crew\"' '$k/reads'" "the reads were made (the control)"
+assert_fail "grep -qF '$secret' '$k/reads'" "no response carries the secret"
+assert_fail "grep -qF '$token' '$k/reads'" "no read carries the tab's token"
+assert_fail "grep -qF '${unused##*.}' '$k/reads'" "no response carries a valid code"
+assert_fail "grep -qF 'board-$PORTK.secret' '$k/reads'" "no response names the secret file"
+
+# the secret sits outside the repository, so no path the board reads reaches it
+ln -s "$key" "$k/src/key"
+assert_eq "403" "$(curl -s -o "$k/resp" -w '%{http_code}' "$uk/file?path=src/key")" \
+  "a symlink in the repository pointing at the secret is refused by /file"
+assert_fail "grep -qF '$secret' '$k/resp'" "and does not leak it"
+ln -s "$key" "$k/board/public/key.txt"
+assert_eq "404" "$(curl -s -o "$k/resp" -w '%{http_code}' "$uk/key.txt")" \
+  "and a symlink among the page's own files is not served either"
+assert_fail "grep -qF '$secret' '$k/resp'" "nor leaked"
+rm -f "$k/src/key" "$k/board/public/key.txt"
+
+# (6) GET /open starts nothing, credential or not
+assert_eq "405" "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "$uk/open?path=src/visible")" \
+  "GET /open is not a way to start the editor"
+sleep 1
+assert_fail "test -e '$k/opened'" "and it started nothing"
+
+# with the credential, the board works as before
+tabk() { postk "$@" -H "Origin: $uk" -H 'content-type: application/json' -H "Authorization: Bearer $token"; }
+assert_eq "200" "$(tabk /tasks "$tsk")" "the captain's tab parks a task"
+assert_eq "parked captain T-K1" "$(tail -1 "$k/state/events.jsonl" | jq -r '"\(.type) \(.actor) \(.task)"')" \
+  "and the park is the captain's event"
+assert_eq "200" "$(tabk /open "$opn")" "the captain's tab opens a file"
+wait_for 10 test -s "$k/opened"
+assert_contains "$(cat "$k/opened" 2>/dev/null)" "src/visible" "and the editor was handed it"
+assert_eq "200" "$(wcurl "$PORTK" -s -o "$k/resp" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+  -d "$dec" "$uk/decisions")" "a script with the bearer answers the merge card"
+wait_for 10 test -s "$k/merge-calls"
+assert_contains "$(cat "$k/merge-calls" 2>/dev/null)" "--pr 9" "and the merge helper ran for it"
+wait_for 20 jq -e '.merge == "merged"' "$k/state/decisions/D-900.json"
+assert_eq "merged" "$(jq -r .merge "$k/state/decisions/D-900.json" 2>/dev/null)" \
+  "and the decision settles as merged when the helper says it merged"
+
+# (4) the secret's path and value appear nowhere under state/ or in the log
+assert_eq "" "$(grep -rlF "board-$PORTK.secret" "$k/state" "$k/out" 2>/dev/null || true)" \
+  "no state file or log names the secret file"
+assert_eq "" "$(grep -rlF "$secret" "$k/state" "$k/out" 2>/dev/null || true)" \
+  "and none holds the secret"
+assert_eq "" "$(grep -rlF "$token" "$k/state" "$k/out" 2>/dev/null || true)" \
+  "nor the tab's token"
+
+# the secret survives a restart, so an open tab keeps working
+kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
+start_k "$PORTK"
+assert_eq "$secret" "$(cat "$key")" "a restart keeps the secret it found"
+assert_eq "true" "$(curl -sf -H "Authorization: Bearer $token" "$uk/api/session" | jq -r .writable)" \
+  "and the board still takes the tab's token after the restart"
+assert_eq "200" "$(tabk /tasks "$(jq -cn '{task:"T-K1",action:"unpark"}')")" \
+  "which still writes: the tab unparks the task"
+assert_eq "unparked captain T-K1" "$(tail -1 "$k/state/events.jsonl" | jq -r '"\(.type) \(.actor) \(.task)"')" \
+  "and the unpark is the captain's event"
+# $unused was minted seconds ago and never redeemed: only the restart stands
+# between it and a token
+assert_eq "403" "$(login "$unused" -H "Origin: $uk")" "a code minted before the restart is not taken by the new board"
+kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
+
+# expiry on its own: codes last 2 seconds on this board, and each code here is
+# issued after it started, correctly signed, from its own origin and unused,
+# so the clock is the only rule that can refuse the first
+FM_BOARD_CODE_TTL_MS=2000 start_k "$PORTK"
+late="$(mint "$uk" "$PORTK")"
+sleep 3
+assert_eq "403" "$(login "$late" -H "Origin: $uk")" "a code older than its lifetime is refused"
+assert_eq "loginRefused" "$(jq -r .code "$k/login-body")" "with the code the page translates"
+assert_eq "" "$(jq -r '.token // empty' "$k/login-body")" "and gives no token"
+assert_eq "200" "$(login "$(mint "$uk" "$PORTK")" -H "Origin: $uk")" \
+  "the control: a code minted the same way and used at once is taken"
+kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
+
+# no response this part kept, each login's among them, set a cookie
+assert_ok "grep -qi '^content-type:' '$k/all-headers'" "the login headers were kept (the control)"
+assert_eq "" "$(cookies_set)" "no response the board sent set a cookie"
+
+# revocation: remove the secret file and restart the board, and every token
+# and bearer made from the old secret is refused
+rm -f "$key"
+start_k "$PORTK"
+assert_ne "$secret" "$(cat "$key")" "a board restarted without its secret file makes a new one"
+assert_eq "403" "$(tabk /tasks "$tsk")" "and the old tab's token no longer writes"
+assert_eq "writeCredential" "$(jq -r .code "$k/resp")" "the tab is told it holds no credential"
+assert_eq "403" "$(postk /tasks "$tsk" -H "Origin: $uk" -H 'content-type: application/json' \
+  -H "Authorization: Bearer $secret")" "nor does the old secret as a bearer"
+kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
+rm -rf "$k" "$XDG_CONFIG_HOME"
 
 finish

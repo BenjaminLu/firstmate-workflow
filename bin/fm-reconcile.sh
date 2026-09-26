@@ -7,9 +7,27 @@
 # bin/fm-emit.sh; every one it cannot, it prints.
 #
 #   fm-reconcile.sh [--repo .] [--dry-run] [--limit 50]
+#   fm-reconcile.sh --repair-cards [--apply] [--effect D-id=park|drop]... [--repo .]
 #
 # --dry-run prints exactly the same plan and performs none of it. A repair
 # tool nobody can rehearse is a repair tool nobody runs.
+#
+# --repair-cards (T-118) is a one-time repair of the damage the board did
+# before T-118, not a standing sweep, and does nothing else. It reads only
+# the log and the records beside it, and finds two things:
+#   - an answered card whose chosen park or drop never happened (T-030, T-060,
+#     T-064): it writes the `parked` or `closed` the answer asked for, as the
+#     captain whose answer it was. What an option did is read from the
+#     decision record's `effect` (answers since T-118), from a readiness card
+#     (T-059: C park, D drop), or from `--effect D-id=park|drop` for a card
+#     whose options the log never kept. An answer the task has moved on from
+#     since - redispatched, answered again, set aside another way - or whose
+#     task is already final is listed and left alone.
+#   - a task marked merged by a pull request other than its own (T-117, marked
+#     merged by the merge card for #96, the revert of T-105, while its own #97
+#     was open): it writes the captain's `reopened`.
+# Each fix is one line, in English and Traditional Chinese. It is a dry run
+# unless --apply is given, and --apply only emits through bin/fm-emit.sh.
 #
 # Completed tasks consume stale evidence. Recovery keeps dead PID evidence
 # until a locked launcher atomically replaces it, so interruptions are retryable.
@@ -34,20 +52,40 @@ set -uo pipefail
 # dispatches is missing it.
 exec < /dev/null
 
-REPO="${FM_ROOT:-$(pwd)}"; DRY=0; LIMIT=50; GH="${FM_GH:-gh}"
+REPO="${FM_ROOT:-$(pwd)}"; DRY=0; LIMIT=50; GH="${FM_GH:-gh}"; REPAIR=0; APPLY=0; EFFECTS='{}'
 # `shift 2` with one argument left consumes nothing and returns non-zero, so
 # a trailing `--repo` with no value spins this loop forever - a hang, with no
 # output, which is the worst way for an argument mistake to present itself.
 # The value is demanded before the shift rather than defaulted after it.
 need() { [ $# -ge 2 ] || { echo "fm-reconcile: $1 needs a value" >&2; exit 64; }; }
+# --effect D-id=park|drop: what a hand-raised card's option meant, which the
+# card never recorded. Checked here, so the loop's branch stays one guarded
+# `shift 2` that the option-loop lint in bin/ci.sh can read.
+add_effect() {
+  case "$1" in
+    *=park|*=drop) ;;
+    *) echo "fm-reconcile: --effect takes D-id=park or D-id=drop, not $1" >&2; exit 64 ;;
+  esac
+  [[ "${1%=*}" =~ ^D-[A-Za-z0-9._-]+$ ]] || { echo "fm-reconcile: --effect names a card id, not ${1%=*}" >&2; exit 64; }
+  EFFECTS="$(jq -c --arg id "${1%=*}" --arg e "${1##*=}" '. + {($id): $e}' <<< "$EFFECTS")"
+}
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo)  need "$@"; REPO="$2";  shift 2 ;;
     --limit) need "$@"; LIMIT="$2"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
+    --repair-cards) REPAIR=1; shift ;;
+    --apply) APPLY=1; shift ;;
+    --effect) need "$@"; add_effect "$2"; shift 2 ;;
     *) echo "fm-reconcile: unknown argument $1" >&2; exit 64 ;;
   esac
 done
+if [ "$REPAIR" -eq 0 ] && { [ "$APPLY" -eq 1 ] || [ "$EFFECTS" != '{}' ]; }; then
+  echo "fm-reconcile: --apply and --effect go with --repair-cards" >&2; exit 64
+fi
+# the repair is a dry run unless told to apply; the ending event below is
+# written only by a run that wrote something
+[ "$REPAIR" -eq 0 ] || { [ "$APPLY" -eq 1 ] && DRY=0 || DRY=1; }
 cd "$REPO" || { echo "fm-reconcile: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
 LOG="$REPO/state/events.jsonl"
@@ -95,15 +133,29 @@ if [ -e "$LOG" ]; then
 fi
 # Only lifecycle transitions change status. A fresh dispatch clears its PR;
 # ancillary events (including agent_finished) never reopen a completed task.
+# The captain's two words on a task are read as the board reads them (T-118):
+# a park holds until an unpark, and only a reopening - the captain's, with a
+# reason, on a task that has ended - takes a task out of merged or closed. It
+# starts the task over: nothing parked, and the pull request it opened itself.
 fold() {
-  jq -r 'reduce .[] as $e ({};
+  jq -r 'def final: .type == "merged" or .type == "closed";
+    reduce .[] as $e ({};
     if ($e.task // "") == "" or ($e.data.historical // false) then .
+    elif $e.type == "reopened" then
+      if $e.actor == "captain" and (($e.data.reason // "") | tostring | test("\\S"))
+         and ((.[$e.task] // {}) | final)
+      then .[$e.task] |= (.type = "reopened" | .parked = false | .pr = (.opened // ""))
+      else . end
+    elif $e.type == "parked" or $e.type == "unparked" then
+      if ((.[$e.task] // {}) | final) then .
+      else .[$e.task] = ((.[$e.task] // {pr:"", type:""}) | .parked = ($e.type == "parked")) end
     elif (["greenlit","dispatched","pr_opened","worker_crashed","merged","closed"] | index($e.type)) == null then .
     else .[$e.task] = ((.[$e.task] // {pr:""}) |
       .type = $e.type |
+      if $e.type == "pr_opened" and $e.pr != null then .opened = $e.pr else . end |
       if $e.type == "dispatched" then .pr = ($e.pr // "")
       elif $e.pr != null then .pr = $e.pr else . end)
-    end) | to_entries[] | [.key,.value.type,(.value.pr|tostring)] | @tsv' | sort
+    end) | to_entries[] | [.key, .value.type, (.value.pr | tostring), (if .value.parked then "parked" else "" end)] | @tsv' | sort
 }
 state="$(fold <<< "$events")" || exit 1
 # Emit an ending only for a run that acted as an actor. A no-op must remain
@@ -127,6 +179,7 @@ n_tasks="$(printf '%s\n' "$state" | sed '/^$/d' | wc -l | tr -d ' ')"
 
 task_state() { awk -F'\t' -v t="$1" '$1==t{print $2}' <<< "$state"; }
 task_pr()    { awk -F'\t' -v t="$1" '$1==t{print $3}' <<< "$state"; }
+is_parked()  { [ "$(awk -F'\t' -v t="$1" '$1==t{print $4}' <<< "$state")" = parked ]; }
 # The fold is a value, not a file, and a repair amends it the moment it is
 # planned. In memory rather than by re-reading the log, for two reasons:
 # --dry-run writes nothing and must still print the same plan as a real run,
@@ -163,11 +216,116 @@ worker_alive() { local p; p="$(worker_pid "$1")" || return 1; kill -0 "$p" 2>/de
 revived=' '; blocked=' '
 was_revived() { case "$revived" in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
+# --- the one-time card repair (T-118) --------------------------------------
+if [ "$REPAIR" -eq 1 ]; then
+  # What each answered card's options did, as far as anything beside the log
+  # kept it: a decision record's effect, and the card a readiness record names.
+  # A record that cannot be read is skipped, never fatal.
+  records="$(for f in "$REPO"/state/decisions/*.json; do
+      jq -c 'select(type == "object" and (.id | type) == "string") | {(.id): (.effect // null)}' "$f" 2>/dev/null
+    done | jq -cs 'add // {}')"
+  ready="$(for f in "$REPO"/state/ready/*.json; do
+      jq -c '. as $r | select(type == "object" and (.task | type) == "string")
+             | [.decision, .ended] | map(select(type == "string" and . != "") | {(.): $r.task}) | add // empty' "$f" 2>/dev/null
+    done | jq -cs 'add // {}')"
+  # Files, not arguments: a real log is larger than an argument list may be.
+  findings="$(jq -c -n --slurpfile E <(printf '%s' "$events") --argjson R "$records" \
+      --argjson Y "$ready" --argjson O "$EFFECTS" '
+    def proj: (.project // "");
+    def same($t; $p): (.task // "") == $t and proj == $p;
+    ($E[0] | to_entries) as $ix
+    # where each task stops now: the first merged or closed, undone only by
+    # a reopening from the captain, as the board reads it
+    | (reduce $ix[] as $x ({}; $x.value as $e
+        | ([($e.task // ""), ($e | proj)] | tostring) as $k
+        | if ($e.task // "") == "" then .
+          elif $e.type == "reopened" and $e.actor == "captain"
+               and (($e.data.reason // "") | tostring | test("\\S")) then del(.[$k])
+          elif ($e.type == "merged" or $e.type == "closed") and .[$k] == null
+            then .[$k] = {type: $e.type, at: $x.key, pr: $e.pr}
+          else . end)) as $final
+    | (
+      # 1. an answered card whose chosen park or drop never happened
+      ([$ix[] | select(.value.type == "decision_made" and (.value.task // "") != ""
+          and ((.value.data.decision // "") | type) == "string" and (.value.data.decision // "") != "")]
+        | group_by(.value.data.decision) | map(last) | .[]
+        | . as $x | $x.value as $d | $d.data.decision as $id | ($d.data.chosen // "" | tostring) as $c
+        | $d.task as $t | ($d | proj) as $p
+        | (if ($R[$id] // null) != null then $R[$id]
+           elif $p == "" and ($Y[$id] // null) == $t then ({C: "park", D: "drop"}[$c] // null)
+           else ($O[$id] // null) end) as $effect
+        | select($effect == "park" or $effect == "drop")
+        | ({park: "parked", drop: "closed"}[$effect]) as $want
+        | [$ix[] | select(.key > $x.key) | .value | select(same($t; $p))] as $after
+        | select([$after[] | select(.type == $want)] | length == 0)
+        | ([$after[] | select(.type | IN("parked", "unparked", "closed", "merged", "dispatched",
+            "reopened", "decision_made"))] | .[0]) as $moved
+        | ([$t, $p] | tostring) as $key | $final[$key] as $fin
+        | {kind: "card", task: $t, project: $p, decision: $id, chosen: $c, effect: $effect, type: $want}
+          + (if $moved != null then {left_en: "\($t) has moved on since (\($moved.type))",
+                                     left_tw: "\($t) 之後已有變動（\($moved.type)）"}
+             elif $fin != null then {left_en: "\($t) is already \($fin.type)",
+                                     left_tw: "\($t) 已經是 \($fin.type)"}
+             else {} end)),
+      # 2. a task merged by a pull request other than the one it opened
+      ($final | to_entries[] | select(.value.type == "merged" and .value.pr != null)
+        | (.key | fromjson) as [$t, $p] | .value as $m
+        | ([$ix[] | select(.key < $m.at) | .value
+            | select(.type == "pr_opened" and same($t; $p) and .pr != null) | .pr] | last) as $own
+        | select($own != null and $own != $m.pr)
+        | {kind: "merge", task: $t, project: $p, pr: $m.pr, own: $own})
+    )')" || { say "cannot read the log for the card repair; nothing changed" >&2; exit 1; }
+  # one captain event, through the one writer of the log: each repair carries
+  # out the captain's own answer, or the reopening the captain approved
+  emit_captain() { local err
+    if ! err="$(FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor captain "$@" 2>&1 </dev/null)"; then
+      say "fm-emit refused the event: $err" >&2; return 1
+    fi; }
+  tw_effect() { case "$1" in park) printf '擱置' ;; drop) printf '不做' ;; esac; }
+  found=0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    found=$(( found + 1 ))
+    IFS=$'\037' read -r kind task project id chosen effect type pr own left_en left_tw < <(jq -r \
+      '[.kind, .task, .project, (.decision // ""), (.chosen // ""), (.effect // ""), (.type // ""),
+        ((.pr // "") | tostring), ((.own // "") | tostring), (.left_en // ""), (.left_tw // "")]
+       | map(tostring | gsub("[\u001f\n]"; " ")) | join("\u001f")' <<< "$f")
+    on=(); [ -z "$project" ] || on=(--project "$project")
+    effect_tw="$(tw_effect "$effect")"
+    if [ "$kind" = card ] && [ -n "$left_en" ]; then
+      say "left alone: ${id} chose ${chosen} (${effect}) for ${task}, but ${left_en} | 未修正：${id} 對 ${task} 選了 ${chosen}（${effect_tw}），但${left_tw}"
+      continue
+    fi
+    if [ "$kind" = card ]; then
+      act "repair ${task}: ${id} chose ${chosen} (${effect}), and no ${type} event followed - write it | 修正 ${task}：${id} 選了 ${chosen}（${effect_tw}），之後卻沒有 ${type} 事件 - 補寫"
+      [ "$DRY" -eq 1 ] && continue
+      emit_captain --type "$type" --task "$task" "${on[@]+"${on[@]}"}" \
+        --data "$(jq -cn --arg d "$id" '{decision: $d, repair: "fm-reconcile.sh --repair-cards"}')" \
+        --en "the captain's answer ${id} carried out: ${task} ${type}" \
+        --tw "執行船長的答覆 ${id}：${task} ${effect_tw}" \
+        || undo "the ${type} event for ${task} was not written"
+    else
+      act "repair ${task}: marked merged by #${pr}, but its own pull request is #${own} - reopen it | 修正 ${task}：因 #${pr} 被標為已合併，但它自己的拉取請求是 #${own} - 重新開啟"
+      [ "$DRY" -eq 1 ] && continue
+      emit_captain --type reopened --task "$task" "${on[@]+"${on[@]}"}" \
+        --data "$(jq -cn --argjson pr "$pr" --argjson own "$own" \
+          '{reason: "marked merged by #\($pr), a merge card raised under this task; its own pull request is #\($own)",
+            merged_pr: $pr, own_pr: $own, repair: "fm-reconcile.sh --repair-cards"}')" \
+        --en "the captain reopened ${task}: it was marked merged by #${pr}, not its own #${own}" \
+        --tw "船長重新開啟了 ${task}：它被 #${pr} 標為已合併，而不是它自己的 #${own}" \
+        || undo "the reopened event for ${task} was not written"
+    fi
+  done <<< "$findings"
+  [ "$found" -gt 0 ] || say "cards: nothing to repair | 卡片：沒有需要修正的地方"
+  [ "$failed" -eq 0 ] || exit 1
+  exit 0
+fi
+
 say "replayed $n_events events into $n_tasks tasks (no snapshot)"
-while IFS=$'\t' read -r t ty p; do
-  [ -n "$t" ] || continue
-  printf '  %-8s %-18s %s\n' "$t" "$ty" "${p:+#$p}"
-done <<< "$state"
+# awk, not `read`: tab is whitespace to IFS, so `read` folds a run of empty
+# fields into one and a task with only a park would print `parked` as its type
+awk -F'\t' '$1 != "" { printf "  %-8s %-18s %s%s\n", $1, $2, ($3 == "" ? "" : "#" $3),
+  ($4 == "" ? "" : ($3 == "" ? "" : " ") "(" $4 ")") }' <<< "$state"
 
 # --- 2. the pull requests GitHub is holding -------------------------------
 # A branch is named after its task, and the branch is the only place that id
@@ -274,6 +432,14 @@ while IFS= read -r t; do
   fi
   [ "$pid" != 0 ] && kill -0 "$pid" 2>/dev/null && continue
 
+  if is_parked "$t"; then
+    # the captain set the task aside, and the stop that parked it is why the
+    # pid is gone. Not a crash: nothing is revived until an unpark (T-118).
+    [ -e "$pidfile" ] || continue
+    act "remove the stale pid file for $t (pid $pid is gone, and the captain parked the task)"
+    [ "$DRY" -eq 1 ] || rm -f "$pidfile" || { undo "could not remove stale pid evidence for $t"; blocked="$blocked$t "; }
+    continue
+  fi
   if is_over "$t"; then
     # the work landed and nobody tidied up. Not a crash: there is nothing to
     # revive, and marking it one would put a finished task back in flight.

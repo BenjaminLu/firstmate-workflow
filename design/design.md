@@ -79,7 +79,7 @@ These bind every actor, including firstmate itself.
 | R3 | Granularity | One task, one pull request, one worktree; `depends_on` forms a DAG; three in flight |
 | R4 | Branching | Every task branches from `main` and targets `main`; the worker rebases its own conflicts |
 | R5 | Writing the log | Only through `bin/fm-emit.sh` |
-| R6 | Opening a file | `/open` hands it to the editor — localhost only, path must resolve inside the repo — plus a read-only viewer |
+| R6 | Opening a file | `POST /open` hands it to the editor — the captain's credential, localhost only, path must resolve inside the repo — plus a read-only viewer |
 | R7 | CI | The local gate and GitHub Actions run the same `bin/ci.sh` |
 | R8 | Recovery | Replay the event log, then reconcile on start |
 | R9 | Hot reload | SSE pushes `reload` to the front end; `bun --watch` restarts the server |
@@ -217,6 +217,86 @@ files touched and the pull request link, answered with merge, send back, or
 hold. **Every merge goes through a card.** firstmate may not merge on its own
 and may not ask for one in conversation.
 
+**A merge card merges only the pull request of its own task (T-119).** On
+2026-09-26 a card for #96, the captain's revert of T-105, was raised under
+T-117; the captain clicked it, and `fm-merge.sh` merged #96 and wrote
+`merged` for T-117 while T-117's own #97 was open. Nothing compared the
+card's task with the pull request's. Now a merge card names its pull request
+and its task, and they must agree. A pull request's task is its head
+branch's, and its title's `T-xxx:` or `SK-xxx:` prefix only when the branch
+names none, read by the one task-id grammar (below). `fm-decide.sh --request
+--kind merge` reads the pull request (`gh pr view --json headRefName,title`,
+on the card's project's repository, else the checkout's) before any card
+exists, and refuses, non-zero and naming both, a pull request of another
+task, of no task, or one `gh` cannot read. `fm-merge.sh` reads it again at
+merge time, because the branch can change between card and click: a
+`--task` that is not the pull request's task, or a pull request of no task
+without `--untracked`, is refused before anything merges, and the board
+records the failed outcome with that reason. It never writes `merged` for
+another task, and it checks before its "already merged" answer, which would
+otherwise settle the wrong card. Given no `--task`, it merges as the pull
+request's own task.
+
+A pull request that belongs to no task (a revert, a hotfix) gets a card of
+its own kind, **`merge-untracked`**: `fm-decide.sh --request <D-digits>
+--kind merge-untracked --pr <n> --details <file>`, with no `--task`. It names
+no task, so no task can own its id and it takes a hand-raised `D-<digits>`;
+`--allocate` refuses the kind. The board answers A on it by running
+`fm-merge.sh --untracked`, handing no task whatever the card's file says,
+and the merge writes `merged` with no task and `data.untracked: true`, which
+moves no task's card; `fm-emit.sh` refuses a `merged` event that says
+`untracked` and names a task. The pairing holds in this direction too: a
+task's own pull request merged as untracked would write no task, and that
+task's card would never move (`fm-sync-prs.sh` sees the merge as already
+recorded). So `fm-decide.sh --kind merge-untracked` reads the pull request
+the same way and refuses, before any card exists, one whose branch or title
+names a task, pointing at that task's `--kind merge` card; and
+`fm-merge.sh --untracked` refuses it at the click, pointing at `--task`.
+#96 itself is such a pull request: GitHub holds its branch as
+`t-105-revert` and its title as `T-105: revert the crew sandbox, …` (main's
+squash commit carries git's `Revert "…"` subject instead), so by the grammar
+it is T-105's, and its card is a merge card for T-105. The board hands a task's merge card to
+`fm-merge.sh` only with a task the grammar holds, and refuses the answer
+(`409`, with no code of its own, so the page reports it as a failed order
+with the server's reason) otherwise.
+
+**One task-id grammar (T-119).** Which ids are tasks, and which task a branch
+or title names, is written once, in `bin/fm-emit.sh`, which every script
+already depends on; `fm-decide.sh`, `fm-merge.sh` and `fm-sync-prs.sh` source
+it (sourced, `fm-emit.sh` runs nothing past the grammar), and
+`board/server.ts` carries its TypeScript twin between `// --- task grammar
+(T-119) ---` markers, which `tests/board.test.sh` lifts out and runs against
+the shell functions over one table. A task is `T-<3+ digits>` or
+`SK-<3+ digits>`, the only prefixes `design/tasks/`, the branches and the
+merged pull requests use. A branch names its task with the prefix in either
+case, the hyphen after it optional as in the earliest `t004-…`, and the whole
+run of digits: `t-117-…` is T-117, `sk-001-…` is SK-001, `t-1170-…` is
+T-1170, never T-117. A title leads with the task and a colon; GitHub's
+`Revert "T-105: …"` names none. A decision id holds a task's key, the task
+without its hyphen (`T047`, `SK001`); card ids have always taken
+`T-<letters and digits>` too, and the fixtures (`T-A`, `T-1`) still do, so a
+key is that or a task. `fm-emit.sh` reads a `merged` event's task through the
+grammar: a value it reads a task out of without its being that task id - a
+branch name such as `t-117-…`, a title such as `T-117: …` - is refused,
+naming the task it holds. Any other name passes, because the suites write
+`merged` for fixture tasks named `A`, `C` and `D`; `fm-merge.sh`, the one
+writer of `merged` outside the suites and `fm-sync-prs.sh`, already refuses
+a task that is not the pull request's. It checks no other event's task.
+One copy of the old reading is left, outside T-119's scope, and is **open**:
+`bin/fm-reconcile.sh`'s `task_of` still has the old `sed` (no `sk-…`
+branch; `t-1170-…` read as T-117) and its `is_task_id` takes only
+`T-<3 digits>`, so recovery misses SK merges; it should source this grammar.
+
+So a skill update merges through the board like any task: an approved,
+green SK-* task gets an owned merge card, `D-<project>-SK<n>-<m>` from
+`fm-decide.sh --allocate --task SK-<n> --kind merge`; A runs `fm-merge.sh`,
+which writes `merged` for SK-<n>; and `fm-sync-prs.sh` reads `sk-<n>-…`
+branches like any other. Its card is drawn and embedded like a T task's:
+`fm-diagram.sh` reads owned ids through the grammar's `FM_OWNED_ID`, and the
+page's `diagram.js` through `taskGrammar()`, the board's twin, which the
+server puts in front of that file when it serves it, so neither holds a
+copy of the id's shape (section 15.4).
+
 Selecting an option is local; a separate CONFIRM submits it. A fourth custom
 choice carries the captain's own bounded text,
 stored as data under the distinct `chosen` value `custom`, not a note on
@@ -335,8 +415,10 @@ be measured, not inferred from the watcher mechanism. **No `fswatch` dependency.
 
 These are orchestration requirements, not enforcement inside `fm-merge.sh`.
 The board calls that helper for choice A on a pending merge card. The helper
-checks PR state and invokes GitHub merge, then attempts event emission and
-cleanup; it does not read approval decisions or run the gates. The board
+checks that the pull request is the card's task's (or, `--untracked`, that
+its branch and title name no task), checks PR state and invokes GitHub merge, then
+attempts event emission and cleanup; it does not read approval decisions or
+run the gates. The board
 route does not rerun gates either. Firstmate must verify current-head gates, CI,
 reviewer provenance and board approval, and coordinate fresh verification when
 the head changes so a stale card is not treated as ready. `fm-run.sh` requests
@@ -894,7 +976,8 @@ answered A, so it gets no second card the first time it is ready; that
 answer stands only while the task has not been unparked and has never been
 seen with dependencies other than the ones it was adopted with. After either
 it is unjudged, and it cannot get a readiness card: `fm-decide.sh` allocates
-ids and takes authored details only for `T-*` tasks. So it stays held, and
+an SK task its merge card's id (T-119), but `fm-ready.sh judged` takes only a
+`T-*` task's owned id. So it stays held, and
 firstmate tells the captain, until the captain orders it directly.
 `fm-dispatch.sh` holds every other ready task, and
 starts nothing if it cannot read the answers. A task the captain orders
@@ -1148,8 +1231,8 @@ absent from `design/tasks/` shows its id and an explicit missing-title
 label. The merged lane shows the latest few merges, newest first, and counts
 the rest into the history.
 
-**Park and drop (T-058).** The captain takes work they do not want run off the
-ready and backlog lanes on the board itself. Each card there offers two
+**Park and drop (T-058, T-118).** The captain takes work they do not want run
+off the lanes on the board itself. Each unfinished card offers two
 actions, reachable both by dragging the card and by the `⋯` menu on it (the
 menu is also the keyboard path):
 
@@ -1164,11 +1247,31 @@ menu is also the keyboard path):
 `POST /tasks {task, action}` writes the event through `bin/fm-emit.sh` with
 actor `captain`, like every other board write: park is `parked`, unpark is
 `unparked`, drop is the existing `closed`. The server says which actions each
-card offers (`actions`): `park`/`drop` for ready and backlog, `unpark`/`drop`
-for parked, none for a task in flight or later, which is neither draggable nor
-given a menu. An action the card does not offer is refused with 409 and nothing
-is emitted; an unknown task is 404, an unknown action 400, and a body not
-declared `application/json` 415. The board never edits `design/tasks/`: a
+card offers (`actions`). Since T-118 the captain can set aside any unfinished
+task: `park`/`drop` in every lane but merged and closed (backlog, ready, work,
+gate, review and the captain's), `unpark`/`drop` for parked, and only
+`reopen` (below) for merged and closed. A task with crew aboard or a pull
+request open (`confirm: true` on the card) is set aside only once the
+captain has confirmed it in the page: the confirming step says whose crew is
+stopped and that the pull request stays open, and the server refuses the
+request without `confirm: true` (409, `code: confirmRequired`); a reopening
+with no usable reason is 400, `code: reopenNeedsReason`. Every refusal code
+the server sends has its own text in both dictionaries, and the page shows a
+refused action by that text, falling back to the generic line only for a
+code it does not know. Setting it
+aside writes the event and then stops its crew through the stop path main
+has: SIGTERM to the round's own script, whose pid `bin/fm-worker.sh`
+publishes at `state/worktrees/<task>.pid` and whose TERM trap saves and
+pushes the worktree, to the script each run of the task names in its
+`process.json`, and to each vendor CLI its attempts' `execution.json` name - each
+only while `ps` still shows the program it was recorded for. T-107's
+`fm.sh stop <task>` replaces this path once it merges. The pull request is
+never closed: nothing closes it without the captain. An action the card does
+not offer is refused with 409 and nothing is emitted; an unknown task is 404,
+an unknown action 400, and a request without the captain's credential, the
+board's own `Origin` or a body declared `application/json` 403, before
+anything else is read (the trust boundary, below). The board never edits
+`design/tasks/`: a
 drop leaves the task in the plan, and removing it from there, if the captain
 wants that, is an ordinary pull request firstmate raises afterwards. A backlog
 card whose dependency is parked or dropped says so beside the blocker's id
@@ -1203,6 +1306,155 @@ the task. The server flags a refusal as `superseded` once a `merged` event for
 the same task or pull request — or a later successful merge response — is
 recorded afterwards, and the page stops showing it; a reload cannot bring it
 back.
+
+**Lane derivation (T-118).** Every card sits where its task really is. The
+server derives each task's lane from the log and the pending cards on disk,
+and nothing else. The events that give a lane:
+
+| Event | Lane it gives |
+|---|---|
+| `dispatched`, `commit_pushed` | working |
+| `pr_opened`, `gate_passed`, `review_opened`, `approved` | review |
+| `gate_failed`, `review_failed`, `worker_crashed` | gate (blocked) |
+| `agent_lost` | gate (blocked), unless the task was given a lane since the lost actor last spoke |
+| `merged` | merged (final) |
+| `closed` (a drop) | closed (final) |
+| `parked` / `unparked` | the parked group, until unparked / the lane the other events give |
+| `reopened` (captain only, with a reason) | none: it clears merged or closed, and later events place the task |
+
+Every other event - `decision_requested`, `decision_made`, `greenlit`,
+`ask_pass_criteria`, `criteria_returned`, `protocol_violation`,
+`vendor_unavailable`, `agent_finished`, `crew_status`, `spec_pinned`,
+`spec_repinned` - gives no lane. In particular no event gives the captain's
+lane. `decision_requested` and `approved` once did, and nothing took it away
+again, so an answered card left its task there until something else moved it
+(T-030, T-060, T-064). `decision_requested` is out of `STAGE`, and an
+approval waits in review for firstmate's merge card. A task no event has
+moved is untouched: backlog or ready by its dependencies, as above.
+
+Precedence, highest first:
+
+1. **Reopened.** The captain's `reopened` (below) is folded in where it
+   stands in the log, and is the only event that moves a task out of merged
+   or closed. The task then starts again from nothing: its later events
+   place it, and with none it is untouched.
+2. **Final.** A merged or closed task stays there; nothing said afterwards -
+   a late review round, a sync, a pending card - moves it. A pending card on
+   a final task is shown, with a note that the task is final (below).
+3. **Pending card.** The captain's lane means a pending card and nothing
+   else: while a card for the task is pending in `state/pending/` (the
+   `awaiting` set), the task is there, whatever the log says after it; once
+   the card is answered or withdrawn it is where the rest says. A readiness
+   card that is the task's only card leaves it in ready (T-059).
+4. **Park.** The last of `parked` / `unparked` wins, for any unfinished task.
+   A task parked while its card is pending stays in the captain's lane, by
+   rule 3: its crew is stopped at once, the card carries a `parked` badge,
+   and it offers what a parked task offers (`unpark`, `drop`), never a
+   second park. The confirming step in that lane says so
+   (`parkConfirmCaptain`) rather than promising the task leaves the lanes.
+   Once the card is answered or withdrawn, the park places it.
+5. **Liveness.** A crewman's `agent_lost` (below) blocks its task, with a
+   `lost` badge naming the actor, unless the task was given a lane after the
+   crewman last spoke - a redispatch, another round's review.
+6. **The log.** Otherwise the lane of the task's last lane-giving event.
+
+**Crew liveness (T-118).** A crewman is aboard only while its run is alive,
+and the launcher side, never the model and never the board, says when it is
+not. There is no heartbeat. `bin/fm-herdr.py`'s deck reconcile, which
+`fm-session.sh start` and `status` already run (below, managed session
+defaults), checks each aboard actor against its recorded process -
+`process.json`'s pid and token, or a live attempt lock. A run whose process is
+gone and that never said `agent_finished` gets one `agent_lost` under that
+exact actor through `bin/fm-emit.sh`, in English and Traditional Chinese,
+followed by the `agent_finished` (`data.status: process_gone`) that has always
+closed a ghost. The board takes the run off the deck at `agent_lost`, shows
+the loss once in the log and not the close after it, and blocks the task by
+the rule above. An `agent_finished` arriving after the loss changes nothing:
+the run is already off the deck and the task is where its events put it. A
+loss already written is not written again. A `dispatched` brings the actor
+back aboard, as it always has.
+
+**Card effects (T-118).** An answer does what its option says, carried out
+by the one script that owns the effect, and the outcome is recorded on the
+`decision_made` event (`data.effect`, `data.outcome`, `data.reason`) and on
+the decision record (`effect`, `effect_outcome`, `effect_reason`): `done`,
+`failed` with the reason, `running` for a merge until its helper exits, or
+`recorded` for an option with no effect. A card names its effects in
+`details.effect`, a map from option to effect, which `bin/fm-decide.sh`
+refuses unless every key is an option the card offers and every value is one
+of these:
+
+| Effect | Carried out by | Result |
+|---|---|---|
+| `merge` | `bin/fm-merge.sh`, in the background (merge cards only) | `merged`; the record says merged or failed |
+| `hold` | nothing | done: the task stays where its events put it |
+| `park` | `bin/fm-emit.sh` `parked`, then the crew stopped | the parked group |
+| `drop` | `bin/fm-emit.sh` `closed`, then the crew stopped | closed |
+| `dispatch` | `bin/fm-dispatch.sh --task <id>`, the captain's order | working once the worker starts; failed with the dispatcher's reason when it holds the task |
+| `send_back` | `bin/fm-worker.sh --task <id> --pr <n>`, detached | another round on the same pull request; failed with the worker's words when its lock refuses |
+
+The card kinds and their effects: a **merge card** (`--kind merge`) that
+names none merges on A and holds on B and C, as it always has; sending work
+back starts a worker, so only a card that says so does it. An **untracked
+merge card** (`--kind merge-untracked`, T-119) is read the same way, and its
+merge hands `fm-merge.sh` `--untracked` and no task; it has no task to park,
+drop, dispatch or send back, so any of those fails with that reason. A
+**readiness card** (T-059) names `{"A":"dispatch","C":"park","D":"drop"}`;
+its B, rescope, has no effect and is recorded. A **choice card** has only
+the effects it names. A **skill-update card** (`D-SK-*`, title only) names
+none: a merge one merges on A and holds on B and C like any merge card, and
+a choice one only records. A custom answer never has an effect. An effect that failed stays on the board
+with its reason until what it asked for has happened some other way, and is
+never shown as done.
+
+**Reopening a wrong final state (T-118).** Preventing a merge card from
+merging under the wrong task is T-119's; this is the way back when it has
+happened. `reopened` is the captain's event, with a `data.reason`, and the
+board honours it only from the captain and only with a reason; the log takes
+it from anyone, like every type. It is the only event that moves a task out of
+merged or closed, and the task then starts again from nothing: its later
+events place it, and with none it is untouched, in ready or backlog by its
+dependencies, showing the pull request it opened itself rather than the one a
+wrong card merged. The board offers it as `reopen` on merged and closed
+cards, behind a confirming step that takes the reason. A pending card whose
+task is merged or closed is never hidden: it is listed with `task_final`, and
+the card says the task is already final, so a card raised under the wrong
+task - the merge card for #96 filed under T-117 on 2026-09-26 - stays where
+the captain can see it. A card for a pull request that has merged is still
+withdrawn from the deck.
+
+**The standing reconcile reads the captain's words too (T-118).**
+`bin/fm-reconcile.sh`, which revives a worker whose pid is gone, reads a park
+and a reopening as the board does. Setting a task aside stops its worker with
+SIGTERM, and `fm-worker.sh` keeps its pid file on any exit but 0, so the next
+reconcile finds a dead pid on a parked task: it retires the pid file, keeps
+the worktree, and neither records a crash nor revives the task until an
+`unparked`. A task the captain reopened, with a reason, is not over: a dead
+worker on it is a crash and is revived, on the pull request the task opened
+itself. A `reopened` that is not the captain's, or has no reason, changes
+nothing. `bin/fm-run.sh`, `bin/fm-dispatch.sh` and `bin/fm-ready.sh` keep
+their own readings and are not changed by this task.
+
+**The one-time card repair (T-118).** There is no standing sweep: the rules
+above make the old inconsistencies impossible, and `fm-sync-prs.sh` already
+brings GitHub's state in. What the old board left in the log is repaired once,
+by `bin/fm-reconcile.sh --repair-cards`, a dry run unless given `--apply`,
+which writes only through `bin/fm-emit.sh`. It reads the log and the records
+beside it and fixes two things, one line each in English and Traditional
+Chinese:
+
+- an answered card whose chosen park or drop never happened (T-030, T-060,
+  T-064): it writes the `parked` or `closed` the answer asked for, as the
+  captain whose answer it was, naming the card. What an option did is read
+  from the decision record's `effect`, from a readiness card's record under
+  `state/ready/` (C park, D drop), or from `--effect D-id=park|drop` for a
+  hand-raised card whose options the log never kept; an answer whose meaning
+  none of these gives is not guessed at. An answer the task has moved on
+  from since - dispatched, answered again, set aside another way - or whose
+  task is already final is listed and left alone.
+- a task marked merged by a pull request other than the one it opened
+  (T-117, merged by the card for #96 while its own #97 was open): it writes
+  the captain's `reopened`, with the reason.
 
 **Roster and tags.** Roster rows carry a status dot, the crew name, a stage
 pill and the pull request, over the task id and title and the authored
@@ -1396,9 +1648,111 @@ in addition to pose classes; source text alone does not establish behavior.
 change to `board/server.ts` restarts under `bun --watch` and the client
 reconnects. Decisions are already on disk, so a restart loses none.
 
-**`/open`:** `GET /open?path=` hands the file to the editor. Localhost only,
-and `realpath` must resolve inside the repository or it is a 403. A read-only
-diff viewer covers the case where you would rather not leave the board.
+**`/open`:** `POST /open {path}` hands the file to the editor. Starting a
+program is a write, so it takes the credential, the Origin and the JSON body
+every write takes (below); a `GET /open`, which any link or image could make,
+is 405 and starts nothing (T-122). Localhost only, and `realpath` must resolve
+inside the repository or it is a 403. A read-only viewer (`/file`) and diff
+viewer (`/diff`) cover the case where you would rather not leave the board,
+and are all a tab without the credential gets.
+
+**The board's trust boundary (T-122).** Only the captain's browser, and
+firstmate's own scripts on the operator's machine, change the board or start a
+program through it. A crew round can reach the board's port, and so can any
+web page open in the captain's browser; neither can write.
+
+- *Why the OS sandbox cannot do this.* The macOS canary for T-117 (PR #97,
+  2026-09-26) showed a crew round inside the sandbox fetching the live board:
+  `curl --noproxy '*' http://127.0.0.1:4173/` answered 200. Measured with
+  `sandbox-exec` on macOS 15.7.9: once a profile allows
+  `(remote ip "localhost:*")`, a `(deny network-outbound (remote ip
+  "localhost:4173"))` never takes effect, placed before it or after it, and
+  neither does a `require-not` carve-out. Only a positive list of ports
+  narrows loopback, and a round's own test servers need arbitrary loopback
+  ports. So the board refuses the round itself.
+- *Who may write.* Every route that changes state or starts a process -
+  `POST /decisions`, `POST /tasks`, `POST /open`, and any writing route added
+  later - requires, all three: an `Authorization: Bearer` holding either the
+  captain's tab token or the secret itself; an `Origin` equal to the board's
+  own (`http://127.0.0.1:<port>`, or `http://localhost:<port>`); and a body
+  declared `application/json`. Anything missing or wrong is 403 with a `code`
+  the page translates (`writeCredential`, `writeOrigin`, `writeJson`), and
+  nothing is written, emitted, merged or spawned. The Origin refuses a page
+  served by a crew round's test server, and the JSON rule refuses a form.
+- *Why there is no cookie.* Browsers do not keep cookies apart by port: a
+  cookie set by `127.0.0.1:4173` goes with every request the browser makes to
+  any `127.0.0.1:<port>`, and `SameSite=Strict` does not help, because every
+  loopback port is the same site. A crew round's dev server that the captain
+  opens would receive the cookie in its request headers and could replay it
+  with curl, sending any `Origin` it liked (`Origin` binds only browsers).
+  So the board sets no cookie and reads none. The captain's tab holds a
+  token in its `sessionStorage`, which belongs to one origin, port included,
+  and one tab. No other server ever receives it, and the browser never sends
+  it by itself: the page adds it as a header on each write.
+- *The secret.* When the board starts it reads, or makes when missing, 256
+  random bits as hex in `$XDG_CONFIG_HOME/firstmate/board-<port>.secret`
+  (`~/.config/firstmate/board-<port>.secret` when `XDG_CONFIG_HOME` is not an
+  absolute path), mode 0600, in a directory made 0700. It is outside the
+  repository, `state/` and every temp directory, and the board refuses to
+  start if the directory resolves inside its root. It is made once, through a
+  link from a file written whole, and kept: a restart reuses it, so an open
+  tab keeps working, and a new one is made only when the file is missing. It
+  is never printed, logged, emitted, written under `state/`, or put in a URL
+  that stays in history or in any response.
+- *Revoking.* Every token and every bearer is derived from, or is, the
+  secret. Deleting the secret file and restarting the board makes a new
+  secret, and every token a tab holds and every copy of the old secret is
+  refused from then on. The board has no other revocation, and a token
+  otherwise lives as long as the secret does.
+- *The one-time open.* `bin/fm.sh board` (and `fm-session.sh start`, through
+  `bin/fm-herdr.py` `board_start`) sends the browser to `/login#<code>`, the
+  code `<issued ms>.<nonce>.<HMAC-SHA256(secret, "login:<origin>:<issued>.<nonce>")>`.
+  The board takes a code once, within 60 seconds of its issue, and never one
+  issued before it started, so a restart cannot replay one.
+  `FM_BOARD_CODE_TTL_MS` can shorten the 60 seconds, never lengthen them; it
+  exists so a test sees expiry apart from the start-time rule. The page at
+  `/login` posts the code (with its Origin, as JSON) and gets back, in the
+  JSON body, the tab's token `HMAC-SHA256(secret, "session:<origin>")`. It
+  keeps the token in `sessionStorage` (`board.token`) and replaces its
+  address with `/`, so the code stays in neither the address bar nor the
+  history. A used, expired or wrong code is 403 and gives nothing. No
+  response ever carries `Set-Cookie`. The token belongs to the tab: a
+  reload, a navigation within the board and a board restart keep it, but a
+  new tab or window is read-only until the board is opened through a new
+  one-time address. This is by design (not `localStorage`, which every tab of
+  the origin would share for ever). On macOS the address goes to `osascript` on
+  stdin, never in an argument list, because `ps` shows every process's
+  arguments to every other and a code read there could be redeemed first; the
+  record in `state/session/board.json` holds the board's plain URL only. When
+  no secret can be read or no program can open a browser, nothing is opened,
+  the record carries `sign_in_error` (never the secret's path), and
+  `bin/fm.sh board` says so in one `fm board:` line and exits non-zero, as
+  it does when the board cannot start. On
+  Linux `xdg-open` takes it as an argument, which `ps` can show for the moment
+  it runs.
+- *Scripts.* A script on the operator's machine reads the secret file and
+  sends it as `Authorization: Bearer`, with the board's Origin and a JSON
+  body, keeping the secret out of every argument list: for curl,
+  `-H @<(printf 'Authorization: Bearer %s\n' "$(cat <file>)")`.
+- *What stays readable.* `/`, the page's files, `/api/state`, `/api/i18n`,
+  `/events`, `/file`, `/diff` and `/api/session` (whether this request may
+  write: a yes or a no) answer anyone on the machine, as before. None carries
+  the secret, a token or a code. `/file` and `/diff` read only
+  paths that resolve inside the repository, and the page's files are served
+  only when their real path is inside `board/public/`, so a symlink to the
+  secret is refused.
+- *A tab without the credential.* The page asks `/api/session` when it loads
+  and after the stream reconnects, sending its token if it holds one. Without
+  one, or after a write is refused for want of it, it shows one translated line - the tab is
+  read-only, and `bin/fm.sh board` reopens it - disables every option,
+  confirm button and custom answer, and offers no park, drop or drag. Opening
+  a file falls back to the read-only viewer.
+- *Crew rounds cannot read the secret* only while the OS sandbox denies reads
+  of the home directory outside named toolchain and auth paths. On `main` that
+  sandbox (T-105) was reverted and T-117 has not merged, so today a crew
+  round running as the operator can read `~/.config`: the credential keeps
+  other web pages out now, and keeps crew rounds out once T-117 lands and
+  names this path in its never-readable list.
 
 **One source for shared numbers.** CSS custom properties are written from the
 JavaScript constants. `--rowStep` once drifted from `ROWSTEP` and the decks were
@@ -1638,7 +1992,8 @@ Before the board is shown, and again on `status`, session bootstrap runs deck
 reconcile: for each non-`firstmate` actor whose last event is not
 `agent_finished`, it corroborates that actor against `state/runs/<actor>/`
 process receipts (not task-level pidfiles). Actors with no live process receive
-`agent_finished` under that exact actor with `data.status: process_gone`, so the
+one `agent_lost` (T-118, crew liveness above) and then `agent_finished`, both
+under that exact actor with `data.status: process_gone`, so the
 event-sourced crew list matches process reality. Task-level reconcile alone
 cannot clear these ghosts. `status` and `start` report the reconcile result as
 `deck_reconcile`. `status` reads the live process receipts and durable watch
@@ -1930,6 +2285,10 @@ global skills.
 
 - `/open` accepts localhost only, and the resolved path must sit inside the
   repository.
+- Every board route that writes or starts a program takes the captain's
+  credential, the board's own Origin and a JSON body (section 8, the board's
+  trust boundary; T-122). The secret lives in the operator's config
+  directory, never in the repository or `state/`.
 - Adapters may not run git or gh; a worker never holds a GitHub token.
 - The board binds `127.0.0.1` and opens no external port.
 - The repository is public so that branch protection is available, which means
@@ -2566,8 +2925,11 @@ recovery path in section 12.
   counter and no lock across tasks or projects. Merge cards and hand-raised
   cards use the same form: `fm-run.sh` allocates its merge card's id this way
   and never derives `D-<task digits>` again. A project name is `[a-z0-9-]`
-  and the task part starts with an upper-case `T`, so the id splits one way
-  only; the board shows the project and task read out of it. Ids made before
+  and the task part is a task's key (section 5.2's grammar: `T047`, a skill
+  update's `SK001`, a fixture's `TA`), starting with an upper-case `T` or
+  `S`, so the id splits one way only; the board shows the project and task
+  read out of it. The one card with no task, `merge-untracked`, takes a
+  hand-raised `D-<digits>` instead (T-119). Ids made before
   this — `D-<digits>` and `D-SK-<n>` — stay valid wherever an id is read and
   are never renamed or moved: no id a new card takes can equal one, so
   nothing old has to leave. Every parser of ids and every store keyed by one
@@ -2588,17 +2950,18 @@ recovery path in section 12.
   |---|---|---|
   | `bin/fm-decide.sh` `SKILL_ID` | `^D-SK-[<dig>]{3,}$` | the reference |
   | `bin/fm-decide.sh` `OLD_ID` | `^D-[<dig>]{1,6}$` | no; `--await` takes `OLD_ID` or `SKILL_ID` or owned |
-  | `bin/fm-decide.sh` `OWNED_ID` | `^D-([<low><dig>-]{1,24})-(T[<up><low><dig>]{1,32})-([123456789][<dig>]{0,5})$` | no |
+  | `bin/fm-emit.sh` `FM_OWNED_ID` (the task grammar, sourced) | `^D-([<low><dig>-]{1,24})-(T[<up><low><dig>]{1,32}\|SK[<dig>]{3,})-([123456789][<dig>]{0,5})$`, the key part `FM_TASK_KEY`, read back by `fm_task_of_key` | no; `SK[<dig>]{3,}` is an SK task's owned card (T-119), not this id |
+  | `bin/fm-decide.sh` `OWNED_ID` | `FM_OWNED_ID` | as above |
   | `bin/fm-decide.sh` legacy `--request` | `^D-(SK-[0-9]{3,})$`, capturing the `SK-<n>` task | yes, the only request path for it; `--details` takes `OLD_ID` or owned only |
   | `bin/fm-ready.sh` `SKILL_CARD` | `^D-SK-[<dig>]{3,}$` | yes; reads an adoption card's answer |
   | `bin/fm-ready.sh` `CARD_ID` | `^D-(<owned>\|[<dig>]{1,6})$` | no; `judged --decision` takes only this, as a skill update gets no readiness card |
-  | `bin/fm-diagram.sh` `is_decision_id` | `D-` then 1-6 digits, or the owned shape, by `case` globs | no, on purpose: no drawing is generated for a skill id |
+  | `bin/fm-diagram.sh` `is_decision_id` | `D-` then 1-6 digits by `case` globs, or `FM_OWNED_ID` | no, on purpose: no drawing is generated for a skill id. An SK task's owned card `D-<project>-SK<n>-<m>` is drawn like a T task's, and its task's authored drawing is `design/diagrams/SK-<n>.*` (T-119) |
   | `bin/fm.sh` self-update | builds `D-$id` from `^SK-[0-9]{3,}$` | the producer, same shape |
   | `bin/fm-run.sh`, `bin/fm-decide.sh --allocate` | build `D-<project>-<key>-<n>` | not a validator |
-  | `board/server.ts` `isDecisionId` | `OLD_DECISION`, `OWNED_DECISION`, `SKILL_DECISION` = `^D-SK-[0-9]{3,}$` | yes: responses listing, a pending card's `answerable`, `POST /decisions` |
-  | `board/server.ts` `ownerOf` | `OWNED_DECISION` | no owner, by design |
-  | `board/public/diagram.js` `isDecision` | `^D-[0-9]{1,6}$`, `OWNED`, `^D-SK-[0-9]{3,}$` | yes |
-  | `board/public/diagram.js` `owner` | `OWNED` | no owner, by design |
+  | `board/server.ts` `isDecisionId` | `OLD_DECISION`, `OWNED_DECISION` (`taskGrammar()`'s `OWNED`, the twin of `FM_OWNED_ID`), `SKILL_DECISION` = `^D-SK-[0-9]{3,}$` | yes: responses listing, a pending card's `answerable`, `POST /decisions` |
+  | `board/server.ts` `ownerOf` | `taskGrammar()`'s `ownerOf`: `OWNED`, its task read back from the key by `taskOfKey` | no owner, by design |
+  | `board/public/diagram.js` `isDecision` | `^D-[0-9]{1,6}$`, `TASK_GRAMMAR.OWNED`, `^D-SK-[0-9]{3,}$`. `TASK_GRAMMAR` is `taskGrammar()`, which the server puts in front of the file when it serves `/diagram.js`; loaded without it, the file takes no owned id | yes. An SK task's owned card embeds its diagram like a T task's |
+  | `board/public/diagram.js` `owner` | `TASK_GRAMMAR.ownerOf` | no owner, by design |
   | `bin/watch-decisions.ts`, `tests/` | none; fixtures only | n/a |
 
   Merge cards name the project and link the pull request
@@ -2847,7 +3210,8 @@ spaces and a migration: **every new id names its owner**,
   cross-task lock. Merge cards (`fm-run.sh`) and hand-raised cards take their
   ids the same way.
 - **nothing old moves.** A project name is `[a-z0-9-]` and the task part
-  starts with an upper-case `T`, so an owned id can never equal a
+  starts with an upper-case `T`, or `SK` for a skill update's merge card
+  (T-119), so an owned id can never equal a
   `D-<digits>` or `D-SK-<n>` id. Old records therefore keep their ids and
   every store keyed by them; nothing is renumbered, no map is kept, and no
   reader has to resolve one id through another. `fm-run.sh` looks only at ids
