@@ -98,8 +98,8 @@ assert_eq "SK-004 95 merge" "$(jq -r '"\(.task) \(.pr) \(.kind)"' "$leg" 2>/dev/
 # refused before a card exists, with the one message that says so.
 deff="$(fixture)"
 with_effect() { jq --argjson e "$1" '. + {effect:$e}' "$d/details.json" > "$deff/effect-$2.json"; printf '%s' "$deff/effect-$2.json"; }
-req_effect() {   # req_effect <id> <kind> <details> [pr]: the exit status, the output in $deff/out
-  FM_GH="$deff/gh" FM_ROOT="$deff" "$deff/bin/fm-decide.sh" --request "$1" --task T-1 --kind "$2" ${4:+--pr "$4"} \
+req_effect() {   # req_effect <id> <kind> <details> [pr] [task]: the exit status, the output in $deff/out
+  FM_GH="$deff/gh" FM_ROOT="$deff" "$deff/bin/fm-decide.sh" --request "$1" --task "${5:-T-1}" --kind "$2" ${4:+--pr "$4"} \
     --details "$3" > "$deff/out" 2>&1
   printf '%s' "$?"
 }
@@ -114,10 +114,13 @@ assert_eq "64" "$(req_effect D-123 choice "$(with_effect '{"D":"drop"}' notoffer
   "an effect for an option the card does not offer is refused"
 assert_eq "64" "$(req_effect D-124 choice "$(with_effect '{"A":"merge"}' choicemerge)")" "a merge on a choice card is refused"
 assert_eq "64" "$(req_effect D-125 choice "$(with_effect '"park"' notobject)")" "an effect that is not a map is refused"
-# a merge card's pull request is its task's on GitHub (T-119)
-pr_is "$deff" 7 't-1-cache-index' 'T-1: cache index'
-assert_eq "0" "$(req_effect D-126 merge "$(with_effect '{"A":"merge","B":"send_back","C":"hold"}' merge)" 7)" \
+# a merge card's pull request is its task's on GitHub (T-119), and only a
+# task number of three digits or more names a task there
+pr_is "$deff" 7 't-100-cache-index' 'T-100: cache index'
+assert_eq "0" "$(req_effect D-126 merge "$(with_effect '{"A":"merge","B":"send_back","C":"hold"}' merge)" 7 T-100)" \
   "a merge card may name merge, send back and hold"
+assert_eq '{"A":"merge","B":"send_back","C":"hold"}' "$(jq -c .details.effect "$deff/state/pending/D-126.json" 2>/dev/null)" \
+  "and keeps its effects on the card"
 # an untracked merge card (T-119) merges too: it may name merge and hold
 pr_is "$deff" 8 'revert-96-cache' 'Revert "T-105: cache"'
 FM_GH="$deff/gh" FM_ROOT="$deff" "$deff/bin/fm-decide.sh" --request D-127 --kind merge-untracked --pr 8 \

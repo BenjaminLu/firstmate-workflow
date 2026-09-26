@@ -28,7 +28,9 @@
     "skills/firstmate/SKILL.md",
     "design/design.md",
     "design/tasks/T-118.json",
-    "tests/option-loop.test.sh"
+    "tests/option-loop.test.sh",
+    "bin/fm-diagram.sh",
+    "tests/diagram.test.sh"
   ],
   "acceptance": [
     "Why. On 2026-09-26 the captain asked why the board held so many stale cards. firstmate traced each class to a rule in board/server.ts. (a) `STAGE` maps `decision_requested` to the captain's lane, but nothing maps `decision_made`. So once a card is answered, the task stays in the captain's lane until some other event moves it. Examples: T-030 was answered B = park (D-1020, events.jsonl line 1406) and still sat in the captain's lane, never parked; the same holds for T-060 and T-064. (b) An answer is only recorded (`outcome: recorded`). An effect the card offered (park, drop, send back, dispatch) is never carried out, and nothing says it was not. (c) Crew stay aboard until `agent_finished`. A run that was killed, or whose machine slept, stays on deck, and a worker the log last saw crashing keeps its task in a lane. (d) `ACTIONS` lets the captain park or drop only untouched work (ready, backlog, parked). A task in working, gate, review or the captain's lane cannot be set aside from the board at all, although the captain must be able to order that directly. (e) `FINAL = {merged, closed}` is irreversible, and there is no event to correct it. On 2026-09-26 09:33Z a merge card for PR #96, the revert of T-105, was raised under T-117, and fm-merge wrote `merged` for T-117 (events.jsonl line 3947). T-117 has shown as merged ever since, although its own PR #97 is open, and nothing can put it back. The captain approved fixing card-state confusion on 2026-09-26. Its own spec file, design/tasks/T-118.json, is committed on this branch.",
