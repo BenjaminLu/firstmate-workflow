@@ -294,10 +294,126 @@ assert_ok   "FM_GH='$(stub "$d2" 0 reviewer-1)' gate '$d2' b 6 --pr 9" "6 passes
 assert_fail "FM_GH='$(stub "$d2" 1 reviewer-1)' gate '$d2' b 6 --pr 9" "6 blocks when it is not"
 assert_fail "'$GATE' --task T-X --repo '$d2' --branch b --only 6" "6 blocks with no pull request at all"
 
-assert_ok   "FM_GH='$(stub "$d2" 0 reviewer-1)' FM_REVIEWER_LOGIN=reviewer-1 gate '$d2' b 7 --pr 9" \
-  "7 passes on APPROVE from the reviewer"
-assert_fail "FM_GH='$(stub "$d2" 0 someone-else)' FM_REVIEWER_LOGIN=reviewer-1 gate '$d2' b 7 --pr 9" \
-  "7 ignores APPROVE from anyone else"
+# --- gate 7: the approval binds to the change, not the head (T-113) --------
+# `gh pr view <pr> --json comments` answers with the comments as JSON, the
+# way GitHub does, and with --jq runs the filter over it and prints strings
+# raw, the way gh does, so a gate that filters with --jq is read as it would
+# be for real. Each comment is one line of comments.tsv: author, then the
+# body with \n for its newlines.
+ghc() {  # ghc <dir> ; a gh whose pr view answers from <dir>/comments.tsv
+  mkdir -p "$1/stub"
+  : > "$1/comments.tsv"
+  cat > "$1/stub/gh" <<EOF
+#!/usr/bin/env bash
+if [ "\$1 \$2" = "pr view" ]; then
+  filter=.
+  while [ \$# -gt 0 ]; do [ "\$1" = --jq ] && { filter="\$2"; break; }; shift; done
+  jq -Rn '{comments:[inputs|split("\t")|{author:{login:.[0]},body:(.[1]|gsub("\\\\\\\n";"\n"))}]}' < "$1/comments.tsv" |
+    if [ "\$filter" = . ]; then cat; else jq -r "\$filter"; fi
+  exit
+fi
+exit 0
+EOF
+  chmod +x "$1/stub/gh"; printf '%s' "$1/stub/gh"
+}
+# reviewed <repo> <branch> <verdict> ; the line fm-review.sh posts, worked
+# out here from git's porcelain rather than from the script under test
+reviewed() {
+  local h b p f
+  h="$(git -C "$1" rev-parse "$2")"; b="$(git -C "$1" merge-base main "$2")"
+  p="$(git -C "$1" diff "main...$2" | git -C "$1" patch-id --stable | cut -d' ' -f1)"
+  f="$(git -C "$1" diff --name-only "main...$2" | jq -Rnc '[inputs]')"
+  printf 'REVIEWED:T-X verdict=%s head=%s base=%s patch=%s files=%s' "$3" "$h" "$b" "$p" "$f"
+}
+post() { printf '%s\t%s\n' "$2" "$3" >> "$1/comments.tsv"; }   # post <dir> <author> <body>
+g7() { FM_GH="$d7/stub/gh" FM_REVIEWER_LOGIN=reviewer-1 "$GATE" --task T-X --repo "$d7" --branch "$1" --only 7 --pr 9 2>&1; }
+
+d7="$(fixture)"; ghc "$d7" >/dev/null
+# thing.sh long enough that main can change its far end and still merge cleanly
+seq 1 30 > "$d7/src/thing.sh"; echo notes > "$d7/README.md"
+git -C "$d7" add -A; git -C "$d7" commit -qm "longer thing"
+git -C "$d7" checkout -q -b pr main
+sed -i.bak '1s/.*/changed by the pull request/' "$d7/src/thing.sh"; rm -f "$d7/src/thing.sh.bak"
+git -C "$d7" commit -qam "the change"; git -C "$d7" checkout -q main
+# every line below is built by reviewed(), so it must carry real values: an
+# empty head or patch-id would make both sides of a comparison agree on nothing
+assert_matches "$(reviewed "$d7" pr APPROVE)" \
+  '^REVIEWED:T-X verdict=APPROVE head=[0-9a-f]{40} base=[0-9a-f]{40} patch=[0-9a-f]{40} files=\["src/thing\.sh"\]$' \
+  "(the REVIEWED line the tests post carries a head, merge-base, patch-id and the changed file)"
+
+post "$d7" reviewer-1 "looks right\\nAPPROVE:T-X\\n\\n$(reviewed "$d7" pr APPROVE)"
+out="$(g7 pr)"; rc=$?
+assert_eq "0" "$rc" "(7 passes on an APPROVE for the current head, as it did before)"
+: > "$d7/comments.tsv"
+post "$d7" someone-else "APPROVE:T-X\\n\\n$(reviewed "$d7" pr APPROVE)"
+out="$(g7 pr)"; rc=$?
+assert_eq "7" "$rc" "(7 ignores APPROVE from anyone but the reviewer, as it did before)"
+
+# the reviewer approves the pull request as it stands ...
+: > "$d7/comments.tsv"
+post "$d7" reviewer-1 "APPROVE:T-X\\n\\n$(reviewed "$d7" pr APPROVE)"
+approved_head="$(git -C "$d7" rev-parse pr)"
+# ... then main moves on, touching none of its files, and the pull request is
+# brought up to date with a merge, as gh pr update-branch does
+echo "more notes" >> "$d7/README.md"; git -C "$d7" commit -qam "main: notes"
+git -C "$d7" checkout -q -b updated pr; git -C "$d7" merge -q --no-edit main
+git -C "$d7" checkout -q main
+assert_ne "$approved_head" "$(git -C "$d7" rev-parse updated)" "(the update moved the head)"
+out="$(g7 updated)"; rc=$?
+assert_eq "0" "$rc" "(7 carries the APPROVE forward across an update-only head; the base passed any head)"
+
+# the worker edits after the approval: another change, another review
+git -C "$d7" checkout -q -b edited updated
+sed -i.bak '2s/.*/and a worker edit/' "$d7/src/thing.sh"; rm -f "$d7/src/thing.sh.bak"
+git -C "$d7" commit -qam "an edit"; git -C "$d7" checkout -q main
+out="$(g7 edited)"; rc=$?
+assert_eq "7" "$rc" "7 blocks a head whose change has a different patch-id"
+assert_contains "$out" "condition 1" "and names the condition that failed"
+assert_contains "$out" "patch-id" "which is the patch-id"
+
+# main touches a file the pull request changes, far enough away to merge
+# cleanly and leave the patch-id as it was: the approval saw another file
+sed -i.bak '30s/.*/main changed the end/' "$d7/src/thing.sh"; rm -f "$d7/src/thing.sh.bak"
+git -C "$d7" commit -qam "main: thing"
+git -C "$d7" checkout -q -b touched updated; git -C "$d7" merge -q --no-edit main
+git -C "$d7" checkout -q main
+assert_eq "$(git -C "$d7" diff main...pr | git -C "$d7" patch-id --stable | cut -d' ' -f1)" \
+  "$(git -C "$d7" diff main...touched | git -C "$d7" patch-id --stable | cut -d' ' -f1)" \
+  "(the change itself is identical)"
+out="$(g7 touched)"; rc=$?
+assert_eq "7" "$rc" "7 blocks a carry-forward when main touched a file the pull request changes"
+assert_contains "$out" "condition 2" "and names the condition that failed"
+assert_contains "$out" "src/thing.sh" "and the file main touched"
+
+# a later REJECT supersedes the APPROVE, carried forward or not
+post "$d7" reviewer-1 "REJECT:T-X\\n\\n$(reviewed "$d7" pr REJECT)"
+out="$(g7 updated)"; rc=$?
+assert_eq "7" "$rc" "7 blocks an APPROVE superseded by a later REJECT"
+assert_contains "$out" "condition 3" "and names the condition that failed"
+assert_contains "$out" "REJECT" "which is the later REJECT"
+: > "$d7/comments.tsv"
+post "$d7" reviewer-1 "APPROVE:T-X\\n\\n$(reviewed "$d7" pr APPROVE)"
+post "$d7" reviewer-1 "REJECT:T-X"
+out="$(g7 pr)"; rc=$?
+assert_eq "7" "$rc" "7 blocks even the approved head once a REJECT follows"
+# a rejection that mentions the approve marker on the way, posted the way
+# fm-review.sh posts it: the reviewer's words, then the REVIEWED line
+: > "$d7/comments.tsv"
+post "$d7" reviewer-1 "I cannot sign APPROVE:T-X while item 1 stands\\nREJECT:T-X\\n\\n$(reviewed "$d7" pr REJECT)"
+out="$(g7 pr)"; rc=$?
+assert_eq "7" "$rc" "7 blocks a REJECT whose text mentions the approve marker"
+assert_contains "$out" "the latest verdict is REJECT:T-X" "and says the latest verdict is REJECT"
+
+# an APPROVE posted by hand records nothing it reviewed: it is read as it
+# always was, and the gate says it binds to no head
+: > "$d7/comments.tsv"
+post "$d7" reviewer-1 "APPROVE:T-X"
+out="$(g7 updated)"; rc=$?
+assert_eq "0" "$rc" "(7 still reads an APPROVE with no REVIEWED line as before)"
+assert_contains "$out" "no REVIEWED:T-X line" "and says it binds to no head"
+post "$d7" reviewer-1 "REJECT:T-X"
+out="$(g7 updated)"; rc=$?
+assert_eq "7" "$rc" "and a later REJECT supersedes it too"
 
 # --- no gate repeats CI (T-114) -----------------------------------------
 # A whole run, every gate, on a head CI and the reviewer have passed: the

@@ -1133,4 +1133,83 @@ M
   rm -rf "$dd"
 done
 
+# --- the verdict says what it reviewed (T-113) -----------------------------
+# Gate 7 carries an approval across an update onto main only when the change
+# is the one approved, so the posted verdict records it: the head, the
+# merge-base, the patch-id and the changed files, on one line the script
+# writes after the reviewer's own words.
+dv="$(fixture)"; rv="$dv/repo"
+# the branch work comes first: main moves on after work forked, so the
+# merge-base is not main and the diff main...work is not main..work
+git -C "$rv" checkout -q work
+printf 'second\n' > "$rv/src/b"; git -C "$rv" add src/b; git -C "$rv" commit -qm "a second file"
+git -C "$rv" checkout -q main
+printf 'moved on\n' > "$rv/src/c"; git -C "$rv" add src/c; git -C "$rv" commit -qm "main moves"
+# the adapter is written after every commit and checkout, as a working-tree
+# change on main: a commit or a checkout after it would fold it into the
+# change under review or put the stock one back
+mkdir -p "$dv/stub"
+cat > "$dv/stub/gh" <<S
+#!/usr/bin/env bash
+if [ "\$1 \$2" = "pr comment" ]; then
+  while [ \$# -gt 0 ]; do [ "\$1" = --body ] && { printf '%s' "\$2" > "$dv/posted"; break; }; shift; done
+fi
+exit 0
+S
+chmod +x "$dv/stub/gh"
+cat > "$rv/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+cp "$2" "${FM_CAPTURE:-/dev/null}" 2>/dev/null
+printf 'the change is sound\n%s\n' "${FM_VERDICT:-no verdict}" > "$3/verdict.txt"
+exit 0
+M
+chmod +x "$rv/bin/adapters/mock.sh"
+# every expected value comes from git's porcelain, and each is checked to be
+# there before the line built from them is trusted
+vhead="$(git -C "$rv" rev-parse work)"; vbase="$(git -C "$rv" merge-base main work)"
+vpatch="$(git -C "$rv" diff main...work | git -C "$rv" patch-id --stable | cut -d' ' -f1)"
+assert_matches "$vhead $vbase $vpatch" '^[0-9a-f]{40} [0-9a-f]{40} [0-9a-f]{40}$' \
+  "(the expected head, merge-base and patch-id are all there)"
+assert_ne "$(git -C "$rv" rev-parse main)" "$vbase" "(main has moved past the merge-base)"
+vfiles='["src/a","src/b"]'
+want="REVIEWED:T-Z verdict=APPROVE head=$vhead base=$vbase patch=$vpatch files=$vfiles"
+out="$(cd "$rv" && FM_ROOT="$rv" FM_GH="$dv/stub/gh" FM_CAPTURE="$dv/sent.md" FM_VERDICT="APPROVE:T-Z" \
+  bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_eq "0" "$?" "(a round that records what it reviewed exits 0)"
+posted="$(cat "$dv/posted" 2>/dev/null)"
+assert_contains "$posted" "the change is sound" "(the posted verdict keeps the reviewer's own words)"
+assert_eq "$want" "$(grep '^REVIEWED:T-Z ' <<<"$posted")" \
+  "and carries one REVIEWED line: the verdict, head, merge-base, patch-id and changed files"
+assert_eq "$want" "$(tail -1 <<<"$posted")" "which is the comment's last line"
+assert_contains "$(sed '$d' <<<"$posted")" "APPROVE:T-Z" "after the reviewer's own verdict"
+assert_contains "$out" "$want" "and the verdict printed carries the same line"
+# the prompt's diff is the change the line names: merge-base to head, with
+# none of what main did since
+sent="$(cat "$dv/sent.md" 2>/dev/null)"
+# (these hold on the base too: main...work is the same diff in this fixture)
+assert_contains "$sent" "$(git -C "$rv" diff main...work)" "(the prompt's diff is the change from the merge-base)"
+assert_contains "$sent" "+second" "(which carries the branch's second file)"
+assert_lacks "$sent" "moved on" "(and none of main's later work)"
+rm -f "$dv/posted"
+out="$(cd "$rv" && FM_ROOT="$rv" FM_GH="$dv/stub/gh" FM_VERDICT="REJECT:T-Z" \
+  bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_eq "REVIEWED:T-Z verdict=REJECT head=$vhead base=$vbase patch=$vpatch files=$vfiles" \
+  "$(tail -1 "$dv/posted" 2>/dev/null)" "a REJECT records what it rejected the same way"
+# a rejection that mentions the approve marker on the way is still a
+# rejection: the last marker on a line of its own decides, for the REVIEWED
+# line and for the event alike
+rm -f "$dv/posted"
+approvals() { jq -r .type < "$rv/state/events.jsonl" 2>/dev/null | grep -cx approved; }
+rejections() { jq -r .type < "$rv/state/events.jsonl" 2>/dev/null | grep -cx review_failed; }
+na="$(approvals)"; nr="$(rejections)"
+out="$(cd "$rv" && FM_ROOT="$rv" FM_GH="$dv/stub/gh" \
+  FM_VERDICT="$(printf 'I cannot sign APPROVE:T-Z while item 1 stands\nREJECT:T-Z')" \
+  bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_eq "REVIEWED:T-Z verdict=REJECT head=$vhead base=$vbase patch=$vpatch files=$vfiles" \
+  "$(tail -1 "$dv/posted" 2>/dev/null)" "a REJECT that mentions the approve marker earlier is recorded as REJECT"
+assert_eq "$na" "$(approvals)" "and emits no approved"
+assert_eq "$((nr + 1))" "$(rejections)" "but review_failed, as the REVIEWED line says"
+rm -rf "$dv"
+
 finish
