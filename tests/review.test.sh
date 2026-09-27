@@ -1270,6 +1270,67 @@ assert_eq "2" "$?" "with the confined reviewer down, a run-mode round is an outa
 assert_fail "test -e '$dm/plain-ran'" "not a round handed to an engine that cannot be confined"
 restore_scripts
 
+# --- a destroyed run-mode checkout is retried once (T-128) -------------------
+# Review checkouts are disposable, unlike a worker's branch: there is
+# nothing in one worth mirroring, only worth noticing and rebuilding, at the
+# same path the prompt already named, so nothing else about the round has
+# to change.
+dRc="$(run_fixture)"; rc_="$dRc/repo"; GHrc="$(ghstub "$dRc")"
+cat > "$rc_/bin/adapters/wrecker.sh" <<'M'
+#!/usr/bin/env bash
+# fm:review-run
+[ "$1" = "run" ] || exit 64
+ck="${FM_REVIEW_CHECKOUT:-}"
+mark="$FM_SEEN/wrecker-tries"
+tries=0
+[ -s "$mark" ] && tries="$(cat "$mark")"
+tries=$((tries + 1))
+printf '%s' "$tries" > "$mark"
+if [ "$tries" = 1 ]; then
+  rm -rf "$ck"
+  exit 0
+fi
+printf 'checkout=%s\n' "$ck" >> "$FM_SEEN/wrecker-seen"
+printf 'head=%s\n' "$(git -C "$ck" rev-parse HEAD 2>/dev/null)" >> "$FM_SEEN/wrecker-seen"
+printf 'APPROVE:T-Z\n' > "$3/v.txt"
+exit 0
+M
+chmod +x "$rc_/bin/adapters/wrecker.sh"
+printf 'vendor: mock\nreviewer:\n  vendor: wrecker\n  mode: run\n' > "$rc_/config.yaml"
+rm -f "$dRc/wrecker-tries" "$dRc/wrecker-seen"
+outRc="$(cd "$rc_" && FM_ROOT="$rc_" FM_GH="$GHrc" FM_SEEN="$dRc" \
+  bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_eq "0" "$?" "a round-mode reviewer whose checkout was destroyed still completes"
+assert_eq "2" "$(cat "$dRc/wrecker-tries" 2>/dev/null)" "it retried the round exactly once"
+assert_contains "$outRc" "APPROVE:T-Z" "and the retried round's verdict comes back"
+assert_contains "$(cat "$dRc/wrecker-seen" 2>/dev/null)" "$(git -C "$rc_" rev-parse work)" \
+  "the fresh checkout the retry got is the same head under review"
+assert_contains "$outRc" "destroyed" "fm-review.sh reports the checkout destroyed, not silence"
+evRc="$rc_/state/events.jsonl"
+# bin/fm-emit.sh's TYPES enum has no type of its own for this; it rides
+# worker_crashed, named by .data.event_kind (bin/fm-review.sh).
+assert_eq "review_checkout_destroyed" \
+  "$(jq -r 'select(.type=="worker_crashed" and .data.event_kind=="review_checkout_destroyed")|.data.event_kind' "$evRc" | tail -1)" \
+  "and records it as an event"
+restore_scripts
+
+# a checkout destroyed on every attempt is not retried a second time: the
+# round fails as any other unsigned run does, not silently or forever
+dRc2="$(run_fixture)"; rc2_="$dRc2/repo"; GHrc2="$(ghstub "$dRc2")"
+cat > "$rc2_/bin/adapters/wrecker.sh" <<'M'
+#!/usr/bin/env bash
+# fm:review-run
+[ "$1" = "run" ] || exit 64
+rm -rf "${FM_REVIEW_CHECKOUT:-}"
+exit 0
+M
+chmod +x "$rc2_/bin/adapters/wrecker.sh"
+printf 'vendor: mock\nreviewer:\n  vendor: wrecker\n  mode: run\n' > "$rc2_/config.yaml"
+( cd "$rc2_" && FM_ROOT="$rc2_" FM_GH="$GHrc2" FM_SEEN="$dRc2" \
+  bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
+assert_eq "3" "$?" "a checkout destroyed again on the retry ends the round, not another retry"
+restore_scripts
+
 # --- the round's permission policy (T-105), in either mode --------------------
 # The reviewer's adapter is handed the policy config.yaml resolves for a
 # reviewer, and a host the round's proxy refused is reported, never allowed.

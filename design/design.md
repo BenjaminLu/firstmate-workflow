@@ -2866,6 +2866,170 @@ had every probe blocked. Firstmate runs it on the captain's Mac before the
 merge card of any change to the sandbox and puts its output in the pull
 request; the merge gate reads it with the required check and the gates.
 
+### 13.2 A round cannot destroy its own work (T-128)
+
+**Why, from first principles.** On 2026-09-27, four crew rounds lost their
+whole working tree mid-round: T-121, T-126 and T-127 workers, and T-107 and
+T-123 reviewers. In each case, code running inside the round deleted it - a
+test that turned an empty variable into the current directory and `rm -rf`ed
+it. Fixing our own tests removes one trigger, but it cannot protect an
+external project, whose tests, build scripts and package hooks firstmate does
+not control, and it cannot protect against the model's own commands either.
+The root cause is structural: the only copy of the round's work lived in the
+one directory that arbitrary code in the round may write, the worktree,
+which is a write root by design. A second, contributing cause: the sandbox
+made ordinary defaults fail - bare `mktemp -d` fell back to a per-user temp
+dir that was not a write root, which pushed code into untested error paths.
+The invariant this section establishes, for the self project and for every
+external project alike: **the work a round produces survives whatever runs
+in the round, and a round's environment is normal enough that ordinary code
+takes its ordinary paths.** The captain approved this on 2026-09-27; it is a
+prerequisite of T-055, the first external project.
+
+**The mirror: work kept where the round cannot write.** While a worker round
+runs, `fm-worker.sh` - outside the sandbox, like the rest of it - keeps a
+mirror of the worktree at `state/mirrors/<project>/<task>/<generation>`.
+`<project>` is read from the tree's own path when it sits under a project's
+managed clone (`state/projects/<name>/...`), else `FM_PROJECT`, else `self`;
+the mechanism is identical for the self project (`repo: .`, worktrees under
+`state/worktrees`) and for an external one (worktrees of the managed clone
+under `state/projects/<name>/`). A mirror generation excludes `.git` - never
+itself the round's work, and protected a different way, below - and the
+project's own `.gitignore` when the worktree has one, the same build caches
+git itself would not track. It is written by copying the worktree wholesale
+for the first generation, trying a copy-on-write clone first where the
+filesystem offers one (APFS `clonefile`, or `cp --reflink=auto` on a Linux
+filesystem that supports it) before falling back to `rsync`; every later
+generation is an `rsync --link-dest` against the previous one, so hard-links
+carry an unchanged file forward at no cost and only what changed is written
+fresh. A mirror update never writes into the worktree - the one thing that
+does, restoring, is described next - and keeps the last three generations,
+so a slow corruption (files emptied rather than deleted, not only a file
+outright removed) can be rolled back past.
+
+Updates happen twice over: once before the round's adapter starts, so a
+generation exists even if the very first thing the round does is destroy
+the tree, and then on a short poll (every ten seconds by default,
+`FM_MIRROR_INTERVAL`) from a background watcher that runs for as long as the
+adapter does - a fixed interval, not fsevents or inotify, portable to both
+platforms and simple enough to reason about; the interval keeps the
+detection-to-restoration lag well under the roughly thirty seconds the
+design allows. A final check runs once more when the round ends, since the
+watcher polls and the very end of a round can land in the gap between two
+ticks.
+
+**Detect and restore.** Each check (`mirror_health` in `bin/fm-worker.sh`)
+asks whether the tree looks as it should: present, its `.git` link intact,
+and neither its file count nor its total bytes down by more than half from
+what the last mirror generation saw - unless `HEAD` has moved since, because
+a real commit legitimately removing files is not a wreck. When it has not,
+`mirror_restore` keeps the wreck aside under `state/rescued/`, rebuilds the
+tree from the latest generation, and repairs the worktree's `.git` link with
+`git worktree repair` when that is what went - the object database and the
+worktree's admin directory live in the repository's common `.git`, which is
+never inside the write roots (design 13.1), so whatever a round deletes,
+`git` in that tree still works and every committed change survives. A
+worker round that finds its tree restored mid-run is told so in its next
+prompt, not left to notice on its own, and the round that destroyed its own
+tree is reported as exactly that - `destroyed its own tree rather than
+changing nothing` - never as one that changed nothing, which is a different
+and much less alarming thing to have happened.
+
+`bin/fm-emit.sh`'s `TYPES` enum is outside this task's own scope (its file
+is not in `design/tasks/T-128.json`'s `scope`), so there is no
+`worktree_restored` event type of its own yet. What the design calls that
+event rides the existing `worker_crashed` type - already the type for "an
+earlier round left something behind that this one found and saved" - named
+precisely by `.data.event_kind: "worktree_restored"`, with `en` and `zh-TW`
+summaries and the round's actor, exactly as any other board-facing event
+carries them (section 9). A later task that is in scope for
+`bin/fm-emit.sh` can give it a type of its own without changing anything
+that reads `.data.event_kind` today. Review checkouts get the same
+treatment for the analogous `review_checkout_destroyed`, below.
+
+**The tree's link to git cannot be destroyed from inside.** The sandbox
+profile denies deleting or rewriting the worktree's own `.git`, after the
+write-roots allow, since SBPL is last-rule-wins - a read-only bind on Linux,
+over the round's own read-write root - for workers and for run-mode review
+checkouts alike. On macOS this names exactly that path: a literal deny when
+`.git` is a file, as it is in a worktree, and a `subpath` deny, reaching
+everything under it and nothing beside it, when `.git` is a directory, as it
+is in a review checkout's plain clone (`own_git_sbpl`,
+`bin/fm-sandbox.sh`) - never the unanchored prefix regex `prefix()` uses
+elsewhere for a vendor's own rewritten state files, which would also deny
+`.gitignore`, `.gitattributes`, `.gitmodules` and everything under
+`.github/`, all of them siblings that merely start with the same four
+characters (round 1 review). This is narrower than the write roots' own
+reach: a round may still delete everything else in its tree, including the
+tree's own directory once emptied, but not this one path, which is what
+lets `git` still answer inside whatever is left. `tests/sandbox.test.sh`
+asserts the generated profile and bwrap arguments carry this on every host,
+and, only on a host that can actually nest a real sandbox (never inside
+another one, which is why the rest of the suite uses a stand-in - design
+13.1; the round that authored this section could not, and said so rather
+than claiming it ran), runs it for real, in the block guarded by
+`real_sandbox_ok`: inside `fm-sandbox.sh run`, `rm -rf "$tree"` leaves `.git`
+and `git -C $tree status` still works, and, in the same block, a write to
+`.gitignore` and to `.github/workflows/ci.yml` succeeds while `.git` itself
+stays denied.
+
+**A normal environment inside every round.** Every round, worker or
+reviewer, self or external, gets its own writable `HOME`, `TMPDIR` (already
+a write root since T-105/T-117; also the value bare `mktemp -d` resolves to
+on macOS), and `XDG_CACHE_HOME`/`XDG_CONFIG_HOME`/`XDG_DATA_HOME`, all under
+the round's own temp directory - the one place both `fm-sandbox.sh run` and
+`plain` pass through, so the guarantee holds whatever called it, the adapter
+layer or a direct invocation, and whatever the caller or the operator's own
+shell had set them to. The toolchain's own caches (`FM_ROUND_CACHES` in
+`bin/adapters/_lib.sh`, T-117) already pointed into the same directory.
+`mktemp -d`, `mktemp -t`, `~/.cache`, and `npm`/`bun`/`pip` defaults all
+succeed without a special-cased path; the same real-sandbox check in
+`tests/sandbox.test.sh` proves it, alongside the `.git` denial, in the one
+round it makes.
+
+**Review checkouts are disposable.** Unlike a worker's branch, there is
+nothing in a run-mode checkout worth mirroring - only worth noticing and
+rebuilding. When `checkout_ok` (`bin/fm-review.sh`) finds the checkout gone
+or its `.git` no longer answering after an attempt, the round reports it,
+records the analogous event (`worker_crashed`, `.data.event_kind:
+"review_checkout_destroyed"`, the same scope reasoning as above), rebuilds
+the checkout at the same path the prompt already named - never a fresh
+`mktemp`, which would send the reviewer to a directory it was never told
+about - and retries the chain once. A checkout destroyed again on the retry
+is not retried a second time: the round ends the way any other run that
+produced no signed verdict does.
+
+**Proved for both kinds of project.** `bin/fm-canary.sh --sections=destroy`
+(the default sections are `vendors,destroy`; `tests/canary.test.sh` asks for
+`destroy` alone, so it spends no model call and needs no vendor logged in)
+runs a scripted hostile workload - never a real vendor's improvisation,
+since destruction has to be exact and repeatable to prove recovery rather
+than luck - against two throwaway fixtures of its own, never the operator's
+checkout: the self project's shape, and an external project cloned through
+`fm-project.sh sync` from a local bare repository standing in for GitHub
+(`FM_GITHUB_URL`), exactly the mechanism design 15.1 describes for a target.
+Five hostile modes, run through a stand-in adapter
+(`tests/fixtures/hostile-adapter/`) rather than `bin/adapters/mock.sh`
+itself, which stays exactly what every other test expects it to be: delete
+the whole tree; delete only `.git`; `rm -rf "$EMPTY$tree"`, an empty
+variable built into a destructive command the same way the four real
+incidents were, bounded to this round's own tree by construction rather
+than the literal unconfined `rm -rf "$EMPTY/"`, which only a real OS sandbox
+can run safely (that shape is what the real-sandbox check above proves,
+under genuine kernel confinement); truncate files in place; and fill the
+round's own temp directory. For `tree`, `git` and the empty-variable mode,
+which unmistakably wreck the tree, it asserts a `worktree_restored` event,
+naming the actor, with both languages; committed work survives every mode
+(the tree's own `HEAD`, `.git`, and `git status` all still answer); a file
+written just before the wreck reaches the round's own commit, proving
+uncommitted work is restored from the mirror within the lag; `truncate` and
+`fill-tmp` do not touch enough of a small fixture's files to cross the
+file-or-byte-loss threshold live, which is exactly why generations are kept
+- a slow corruption is rolled back past, not necessarily caught by this
+round's own live restore. Firstmate reruns the canary at the merge gate for
+any change here, the same as the per-vendor probes; workers do not run the
+suite themselves.
+
 ---
 
 ## 14. The task DAG

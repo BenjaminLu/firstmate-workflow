@@ -2863,4 +2863,57 @@ rm -rf "$dA" "$dA2" "$dB" "$dC" "$dD" "$dE" "$dF" "$dG" "$dG2" "$dG3" "$dG4" "$d
   "$dR1" "$dR2" "$dS" "$dT" "$dU1" "$dU2" "$dV0" "$dV1" "$dV2" "$dV3" "$dV4" "$dV5" "$dV5b" "$dV5c" "$dV6" \
   "$dX" "$dX2" "$dX3" "$dX4" "$dX5" "$dX6" "$rb_add" "$rb_more"
 
+# --- the mirror: a round that destroys its own tree is restored (T-128) ----
+# A hostile adapter, not a real vendor: destruction has to be exact and
+# repeatable to prove recovery, not left to a model's mood. It runs
+# unsandboxed (like mock.sh, the adapter it replaces here) - the mirror and
+# the restore this proves live in fm-worker.sh itself, outside the sandbox,
+# and do not depend on the OS sandbox being the thing that stops the
+# deletion; tests/sandbox.test.sh's real-sandbox check covers that half.
+dMir="$(fixture T-MIR)"
+# a short pause after writing before-the-wreck.txt, so the watcher (polling
+# every second) has a real chance to mirror it before the tree is destroyed -
+# without one, an adapter this fast can write and destroy a file inside one
+# poll's gap, and nothing here could tell that apart from the file never
+# having existed. fm-canary.sh's own hostile workload does the same.
+cat > "$dMir/repo/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+tree="$3"
+: > "$tree/before-the-wreck.txt"
+sleep 2
+rm -rf "$tree"
+exit 0
+M
+chmod +x "$dMir/repo/bin/adapters/mock.sh"
+GHMir="$(ghstub "$dMir")"
+outMir="$(cd "$dMir/repo" && FM_ROOT="$dMir/repo" FM_GH="$GHMir" FM_MIRROR_INTERVAL=1 \
+  bin/fm-worker.sh --task T-MIR --name worker-mir 2>&1)"; rcMir=$?
+assert_eq "0" "$rcMir" "a round that destroys its own tree, having left uncommitted work the mirror already caught, still completes"
+assert_contains "$outMir" "destroyed its own tree" "and says so, rather than reporting it as a round that changed nothing"
+assert_ok "test -e '$dMir/repo/state/worktrees/T-MIR/.git'" "and the worktree's .git is there afterward"
+assert_ok "git -C '$dMir/repo/state/worktrees/T-MIR' status" "and git works in it"
+assert_contains "$(git -C "$dMir/repo/state/worktrees/T-MIR" show --stat HEAD 2>/dev/null)" "before-the-wreck.txt" \
+  "the file written just before the wreck reached the commit fm-worker.sh pushed"
+mirlog="$dMir/repo/state/events.jsonl"
+# bin/fm-emit.sh's TYPES enum is out of this task's scope and has no
+# worktree_restored type; it rides worker_crashed, named by .data.event_kind
+# (bin/fm-worker.sh's mirror_restore).
+assert_eq "worktree_restored" \
+  "$(jq -r 'select(.type=="worker_crashed" and .data.event_kind=="worktree_restored") | .data.event_kind' "$mirlog" | tail -1)" \
+  "a worktree_restored event is recorded"
+assert_eq "true" \
+  "$(jq -r 'select(.type=="worker_crashed" and .data.event_kind=="worktree_restored") | .summary.en | (type=="string" and test("\\S"))' "$mirlog" 2>/dev/null | tail -1)" \
+  "with an English summary"
+assert_eq "true" \
+  "$(jq -r 'select(.type=="worker_crashed" and .data.event_kind=="worktree_restored") | .summary."zh-TW" | (type=="string" and test("\\S"))' "$mirlog" 2>/dev/null | tail -1)" \
+  "and a zh-TW one (design section 9)"
+# the mirror itself, outside both of the round's write roots
+assert_ok "test -d '$dMir/repo/state/mirrors/self/T-MIR'" "the mirror lives outside the worktree and the round's own temp directory"
+# gate 5: revert bin/fm-worker.sh's mirror mechanism (the sandbox.test.sh
+# static profile checks are this test's fail-first for the sandbox half) -
+# left to the reviewer's run, since it needs the real script reverted, not
+# a fixture copy; this suite proves the mechanism works, not its absence
+rm -rf "$dMir"
+
 finish

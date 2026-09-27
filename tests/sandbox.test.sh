@@ -424,6 +424,47 @@ assert_lacks "$(lin profile --policy="$t/worker.json" --root="$root" --vendor=cl
 assert_contains "$args" "--unshare-net" "the network is a namespace of the round's own: no host listener, the board's included"
 assert_lacks "$args" "proxy.sock" "and without a proxy it has no way out at all"
 
+# --- the tree's own .git may not be deleted or rewritten from inside (T-128) --
+# A round may write anywhere in its own root, including deleting the whole
+# thing - that is what a worktree write root means. But the one path that
+# would sever this tree's link to git, its own .git (a worktree's link file,
+# or a clone's whole git directory), is denied write no matter what: whatever
+# else a round destroys, git run in this tree still works, and fm-worker.sh's
+# mirror restores the rest.
+own_prof="$(mac profile --policy="$t/g.json" --root="$t/wt" --tmp="$t/round-a")"
+# an exact literal, not a regex prefix (own_git_sbpl in bin/fm-sandbox.sh,
+# T-128 review round 1): a worktree's .git is one file, and (literal ...)
+# matches that path and nothing that merely starts with it, unlike the
+# prefix() regex used elsewhere for a vendor's rewritten state files, which
+# would also deny .gitignore, .gitattributes, .gitmodules and everything
+# under .github/
+assert_contains "$own_prof" "(deny file-write* (literal \"$t/wt/.git\"))" \
+  "macOS denies writing the worktree's own .git (an exact literal deny, after the write-roots allow)"
+n_allow="$(grep -n "(allow file-write\* .*subpath \"$t/wt\"" <<< "$own_prof" | tail -1 | cut -d: -f1)"
+n_git_deny="$(grep -n "(deny file-write\* (literal \"$t/wt/.git\"))" <<< "$own_prof" | tail -1 | cut -d: -f1)"
+assert_eq "1" "$([ -n "$n_allow" ] && [ -n "$n_git_deny" ] && [ "$n_git_deny" -gt "$n_allow" ] && echo 1)" \
+  "the .git deny comes after the write-roots allow, so it is the one that applies (SBPL is last-match)"
+own_args="$(lin profile --policy="$t/g.json" --root="$t/wt" --tmp="$t/round-a")"
+assert_contains "$own_args" "--ro-bind
+$t/wt/.git
+$t/wt/.git" "on Linux the same path is bound read-only, over the round's own read-write root"
+# a clone (run-mode review), whose .git is a directory of its own: the same
+# rule, but a subpath deny - it covers everything under it, and nothing
+# beside it (never a sibling like .gitignore or .github/, T-128 review round 1)
+mkdir -p "$t/clone/.git/objects"
+cprof="$(mac profile --policy="$t/g.json" --root="$t/clone" --tmp="$t/round-a")"
+assert_contains "$cprof" "(deny file-write* (subpath \"$t/clone/.git\"))" \
+  "a clone's whole .git directory is named by the same deny, as a subpath"
+cargs="$(lin profile --policy="$t/g.json" --root="$t/clone" --tmp="$t/round-a")"
+assert_contains "$cargs" "--ro-bind
+$t/clone/.git
+$t/clone/.git" "and read-only bound on Linux, covering the directory git run there reads"
+# a root with no .git yet (a task branch not yet checked out anywhere real)
+# names nothing to protect, and the profile is generated the same as before
+mkdir -p "$t/plain"
+plain_prof="$(mac profile --policy="$t/g.json" --root="$t/plain" --tmp="$t/round-a")"
+assert_lacks "$plain_prof" "the tree's own link to git" "a root with no .git of its own adds no deny rule for one"
+
 # --- decide: the rule the round's proxy applies --------------------------------
 pol worker 'vendor: mock
 policy:
@@ -1144,6 +1185,66 @@ for why in failing empty; do
     assert_eq "" "$(cat "$t/started" 2>/dev/null)" "and a stale --started is emptied ($mode, ps $why)"
   done
 done
+
+# --- a real sandbox, when this host can run one (T-128) ---------------------
+# Everything above uses a stand-in for sandbox-exec/bwrap, because a runner
+# cannot be relied on to have a real one and a macOS profile cannot be
+# applied inside another (design 13.1). Here, only when this host both has
+# the real tool AND can actually apply a profile (nested inside another
+# sandbox, as a worker round itself may be, sandbox_apply is refused, and
+# skipping is the honest answer, not a false pass): the literal behaviour
+# the acceptance criteria ask for, with the real kernel enforcing the write
+# roots rather than a script asserting what a profile says.
+real_sandbox_ok() {
+  case "$(uname -s)" in
+    Darwin) command -v sandbox-exec >/dev/null 2>&1 \
+      && sandbox-exec -p '(version 1)(allow default)' true >/dev/null 2>&1 ;;
+    Linux) command -v bwrap >/dev/null 2>&1 \
+      && bwrap --ro-bind / / --unshare-all true >/dev/null 2>&1 ;;
+    *) return 1 ;;
+  esac
+}
+if real_sandbox_ok; then
+  rt="$(safe_tmpdir)"
+  git init -q "$rt/tree" >/dev/null 2>&1
+  printf 'vendor: mock\n' > "$rt/config.yaml"
+  rpol="$(fm_policy worker "" "$rt/config.yaml")"
+  printf '%s' "$rpol" > "$rt/policy.json"
+  rout="$(FM_ALLOW_DIRECT=1 "$SB" run --policy="$rt/policy.json" --root="$rt/tree" --tmp="$rt/tmp" \
+    -- bash -c 'rm -rf "$1"; echo "rm rc=$?"' _ "$rt/tree" 2>&1)"
+  assert_contains "$rout" "rm rc=" "and the in-sandbox rm -rf actually ran (real sandbox)"
+  assert_ok "test -e '$rt/tree/.git'" "real sandbox: rm -rf \"\$tree\" from inside leaves .git behind"
+  assert_ok "git -C '$rt/tree' status" "and git -C \$tree status still works"
+  # a normal environment (T-128): bare mktemp, mktemp -t, ~/.cache and
+  # python's own tempfile module all succeed under the round's own
+  # directory, no special-cased path needed
+  envout="$(FM_ALLOW_DIRECT=1 "$SB" run --policy="$rt/policy.json" --root="$rt/tree" --tmp="$rt/tmp" \
+    -- bash -c '
+      set -e
+      d1="$(mktemp -d)" && [ -w "$d1" ] || exit 1
+      d2="$(mktemp -t fmtest)" && [ -w "$d2" ] || exit 1
+      mkdir -p "$HOME/.cache" && echo x > "$HOME/.cache/probe" || exit 1
+      python3 -c "import tempfile; open(tempfile.mkdtemp()+\"/x\",\"w\").close()" || exit 1
+      case "$d1" in "$TMPDIR"/*) ;; *) exit 1 ;; esac
+      echo ALL_OK
+    ' 2>&1)"
+  assert_contains "$envout" "ALL_OK" "real sandbox: mktemp -d, mktemp -t, \$HOME/.cache and python's tempfile all succeed under the round's own directory"
+  # the .git deny must not reach a sibling that merely starts with the same
+  # four characters, or a workflow file under .github/ (T-128 review round 1)
+  gout="$(FM_ALLOW_DIRECT=1 "$SB" run --policy="$rt/policy.json" --root="$rt/tree" --tmp="$rt/tmp" \
+    -- bash -c '
+      set -e
+      echo x >> .gitignore
+      mkdir -p .github/workflows && echo x > .github/workflows/ci.yml
+      echo ALL_OK
+    ' 2>&1)"
+  assert_contains "$gout" "ALL_OK" "real sandbox: writing .gitignore and .github/workflows/ci.yml succeeds"
+  assert_ok "test -s '$rt/tree/.gitignore'" "and .gitignore actually took the write"
+  assert_ok "test -s '$rt/tree/.github/workflows/ci.yml'" "and .github/workflows/ci.yml actually took the write"
+  safe_rm_rf "$rt"
+else
+  echo "    (skipped: no real sandbox nestable on this host - real-sandbox behaviour untested here)"
+fi
 
 safe_rm_rf "$t"
 finish

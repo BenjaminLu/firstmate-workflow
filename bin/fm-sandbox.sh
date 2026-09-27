@@ -26,7 +26,10 @@
 #
 # --tmp is the round's own temp directory, its TMPDIR and a write root;
 # `run` makes one when none is given. The caller's TMPDIR is never a root:
-# every round and every run-mode review checkout shares it.
+# every round and every run-mode review checkout shares it. HOME,
+# XDG_CACHE_HOME, XDG_CONFIG_HOME and XDG_DATA_HOME are set under it too
+# (T-128), so ordinary code - mktemp, ~/.cache, a toolchain's XDG defaults -
+# takes its ordinary path rather than falling back into one nothing tests.
 #
 # --ctl is where `run` keeps its own files - the profile, the proxy's port
 # or socket, the vendor's login - out of the round's reach but for the
@@ -209,6 +212,19 @@ def gitdirs(root):
     return out
 
 
+def own_git(root):
+    """The tree's OWN .git - a worktree's link file, or a clone's whole git
+    directory - if it has one yet. Never the common .git or gitdir another
+    worktree shares (gitdirs, above): this is the one entry inside the
+    write root itself that write access must not reach (T-128), because it
+    is the only thing standing between a deleted tree and one `git` in it
+    can still read: gitdirs() keeps the object database and the admin dir
+    readable, and this keeps this one path unwritable so nothing here can
+    sever the link between them."""
+    dot = os.path.join(root, '.git')
+    return dot if os.path.exists(dot) or os.path.islink(dot) else None
+
+
 def roots_of(p, root, tmp, extra):
     out = []
     for w in p['write']:
@@ -229,6 +245,18 @@ def prefix(path):
     the siblings a file is rewritten through (x.json.tmp.123, x.json.lock)."""
     sbpl(path)
     return '(regex #"^%s")' % re.sub(r'([.^$|?*+()\[\]{}])', r'\\\1', path)
+
+
+def own_git_sbpl(path):
+    """own_git's own path, exactly - never prefix(): that matches any sibling
+    that merely starts with the same characters, and '.git' is a prefix of
+    '.gitignore', '.gitattributes', '.gitmodules' and every name under
+    '.github/' (T-128 review round 1). A worktree's .git is one file, so a
+    literal is exact; a clone's .git is a directory holding the whole object
+    database, so subpath reaches its contents too, without reaching past the
+    directory name itself into an unrelated dotted sibling."""
+    kind = 'subpath' if os.path.isdir(path) else 'literal'
+    return '(%s %s)' % (kind, sbpl(path))
 
 
 def darwin(p, roots, reads, own, port, listening):
@@ -273,6 +301,11 @@ def darwin(p, roots, reads, own, port, listening):
                   '(allow file-read* file-write* %s)' % sub(vtmp)]
     lines += [';; the round\'s own roots, even under a never-readable directory',
               '(allow file-read* file-write* %s)' % sub(roots)]
+    git_own = own_git(roots[0]) if roots else None
+    if git_own:
+        lines += [';; the tree\'s own link to git (T-128) may not be deleted or rewritten from',
+                  ';; inside it: whatever else a round deletes, git run in this tree still works',
+                  '(deny file-write* %s)' % own_git_sbpl(git_own)]
     repo = [os.path.join(r, c) for r in roots[:1] for c in p['repo_config']]
     if repo:
         lines += [';; the repository\'s own agent configuration is not loaded',
@@ -306,6 +339,11 @@ def linux(p, roots, reads, own, sock):
         a += ['--bind-try', r, r]
     for r in roots:
         a += ['--bind', r, r]
+    # the tree's own link to git (T-128), read-only over the read-write bind
+    # above: whatever else a round deletes, git run in this tree still works
+    git_own = own_git(roots[0]) if roots else None
+    if git_own:
+        a += ['--ro-bind', git_own, git_own]
     bound = reads + roots
     under = lambda x: any(x == b or x.startswith(b.rstrip('/') + '/') for b in bound)
     hide = [n for n in p['never_read'] if under(n)]
@@ -1024,7 +1062,21 @@ MKTEMP
   scrub+=(PATH="$fmbin:$PATH")
 fi
 
-[ -z "$tmp" ] || scrub+=(TMPDIR="$tmp" TMP="$tmp" TEMP="$tmp")
+# A normal environment (T-128). Bare `mktemp -d` and `mktemp -t` resolve
+# under TMPDIR - via the stand-in above on macOS, directly on Linux; `~/.cache`,
+# `npm`/`bun`/`pip` and every XDG-following tool resolve under HOME or the
+# three XDG variables - all four inside the round's own temp directory, a
+# write root, so ordinary code takes its ordinary path instead of an
+# untested one. Set here, in the one place both `run` and `plain` pass
+# through, so the guarantee holds whatever the caller or the operator's
+# shell set them to - the same reasoning as FM_ROUND_CACHES in
+# bin/adapters/_lib.sh, which points the toolchain's own caches here too.
+if [ -n "$tmp" ]; then
+  home="$tmp/home"
+  mkdir -p "$home" "$tmp/cache/xdg" "$home/.config" "$home/.local/share" || exit 70
+  scrub+=(TMPDIR="$tmp" TMP="$tmp" TEMP="$tmp" HOME="$home"
+          XDG_CACHE_HOME="$tmp/cache/xdg" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share")
+fi
 if [ "$(uname -s)" = Linux ]; then listed="$(ps -L -U "$(id -u)" -o lwp= 2>/dev/null)"
 else listed="$(ps -U "$(id -u)" -o pid= 2>/dev/null)"; fi || listed=''
 used="$(grep -c '[0-9]' <<< "$listed")"
