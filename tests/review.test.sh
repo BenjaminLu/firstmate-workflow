@@ -18,14 +18,28 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 real_tmp="${TMPDIR:-/tmp}"
 isolate_tmpdir
 
-# A decoy left in the real TMPDIR, shaped exactly like a checkout an old
-# sweep would call abandoned (a dead pid, no lock held on its owner file):
-# it must survive the whole suite untouched, since every fm-review.sh call
-# below runs under the isolated TMPDIR above and never globs the real one
-# at all (T-123).
+eventually() {   # eventually <command...>: 0 once the command is, 1 after 60s
+  local end=$(( $(date +%s) + 60 ))
+  until "$@"; do [ "$(date +%s)" -le "$end" ] || return 1; sleep 0.05; done
+}
+
+# A decoy left in the real TMPDIR, owned by a genuinely live process that
+# holds a kernel flock on its owner file (T-123 round 13) - the same shape
+# checkout_is_free treats as in use, not the dead-pid shape a stale sweep
+# would remove regardless of isolation. It must survive the whole suite
+# untouched, since every fm-review.sh call below runs under the isolated
+# TMPDIR above and never globs the real one at all (T-123).
 decoy_root="$(mktemp -d "$real_tmp/fm-review.XXXXXX")"
-( exit 0 ) & _decoy_pid=$!; wait "$_decoy_pid"
-printf '%s\n' "$_decoy_pid" > "$decoy_root/owner"
+printf '1\n' > "$decoy_root/owner"
+decoy_lockmark="$real_tmp/fm-review-decoy-lock.$$"
+perl -MFcntl=:flock -e '
+  open(my $l, "+<", $ARGV[0]) or exit 2;
+  flock($l, LOCK_EX) or exit 1;
+  open(my $m, ">", $ARGV[1]) or exit 1; print $m "locked\n"; close $m;
+  sleep 3600;
+' "$decoy_root/owner" "$decoy_lockmark" &
+decoy_holder=$!
+eventually test -e "$decoy_lockmark"
 
 fixture() {
   local d; d="$(safe_tmpdir)"
@@ -455,10 +469,6 @@ kp=$!
 # loaded machine; a count of sleeps ran out under the gate's parallel pool.
 # They return the moment the condition holds, so the kill still lands inside
 # the engine's two-second sleep.
-eventually() {   # eventually <command...>: 0 once the command is, 1 after 60s
-  local end=$(( $(date +%s) + 60 ))
-  until "$@"; do [ "$(date +%s)" -le "$end" ] || return 1; sleep 0.05; done
-}
 eventually test -e "$started"
 assert_ok "test -e '$started'" "the engine was running when the signal was sent"
 kill -TERM "$kp" 2>/dev/null
@@ -1503,6 +1513,7 @@ rm -rf "$victim_root"
 # proof that none of them ever swept the real TMPDIR at all
 assert_ok "test -d '$decoy_root'" \
   "the suite's real-TMPDIR decoy checkout survives the whole run-mode suite untouched"
-rm -rf "$decoy_root"
+kill "$decoy_holder" 2>/dev/null; wait "$decoy_holder" 2>/dev/null
+rm -rf "$decoy_root" "$decoy_lockmark"
 
 finish

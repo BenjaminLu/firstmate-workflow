@@ -329,6 +329,54 @@ $runargv
             "$name exempts no command from anything"
           never="$(jq -r --arg h "$(cd "$HOME" && pwd -P)" '.permissions.deny | map(select(. == "Read(/\($h)/.ssh/**)")) | length' <<< "$settings" 2>/dev/null)"
           assert_eq "1" "$never" "$name's settings deny reading ~/.ssh as well"
+          # A never_read path that CONTAINS the round's own tree must not
+          # become a blanket deny of everything under it: on the self
+          # project, state is never_read and a worker's worktree or a
+          # reviewer's checkout lives at state/worktrees/<task> - a
+          # blanket "Read(/state/**)" would deny the round's own tree too,
+          # since a deny beats the Read(/$work/**) allow rule above in
+          # claude's own rule order. That overlap refused a live
+          # reviewer's checkout under main's policy (T-123). Build the
+          # same shape - state/worktrees/T-Z (the round's own tree),
+          # a sibling worktree, state/runs and state/events.jsonl - and
+          # check the generated deny rules carve around the round's own
+          # tree instead of swallowing it.
+          nr="$(safe_tmpdir)"
+          mkdir -p "$nr/state/worktrees/T-Z" "$nr/state/worktrees/T-Y" \
+            "$nr/state/runs/run1" "$nr/state/other-worktree"
+          : > "$nr/state/events.jsonl"
+          printf 'vendor: mock\n' > "$nr/carve.yaml"
+          (
+            # shellcheck source=bin/fm-config.sh
+            . "$ROOT/bin/fm-config.sh"
+            fm_policy worker "" "$nr/carve.yaml" \
+              | jq --arg s "$nr/state" '.never_read += [$s]' > "$nr/carve.json"
+          )
+          printf '#!/usr/bin/env bash\ncat > /dev/null\nprintf "%%s\\n" "$@" > "%s/carve.argv"\nprintf "ran\\n"\nexit 0\n' \
+            "$nr" > "$d/fakebin/$name"
+          chmod +x "$d/fakebin/$name"
+          FM_POLICY="$nr/carve.json" PATH="$d/fakebin:/usr/bin:/bin" \
+            "$adapter" run "$d/prompt" "$nr/state/worktrees/T-Z" "$d/log" >/dev/null 2>&1
+          csettings="$(awk 'on{print;exit} $0=="--settings"{on=1}' "$nr/carve.argv" 2>/dev/null)"
+          cwork="$(cd "$nr/state/worktrees/T-Z" && pwd -P)"
+          swallowed="$(printf '%s' "$csettings" | jq -r --arg work "$cwork" '
+            .permissions.deny[]
+            | sub("^Read\\("; "") | sub("\\)$"; "") | sub("/\\*\\*$"; "") | sub("^/+"; "/")
+            | . as $p
+            | select($p == $work or ($work | startswith($p + "/")))
+          ' 2>/dev/null)"
+          assert_eq "" "$swallowed" \
+            "$name's deny rules do not swallow the round's own tree when a never_read path is its ancestor"
+          assert_contains "$csettings" "state/runs" \
+            "but a sibling under the same never_read ancestor is still denied"
+          assert_contains "$csettings" "state/events.jsonl" \
+            "and a file directly under it"
+          assert_contains "$csettings" "state/other-worktree" \
+            "and a sibling directory beside the branch that leads to the round's tree"
+          assert_contains "$csettings" "state/worktrees/T-Y" \
+            "and a sibling worktree one level further down, on the branch itself"
+          assert_lacks "$csettings" "state/worktrees/T-Z" \
+            "but never the round's own tree, at any level"
           rm -f "$d/cwd.run"
           FM_REVIEW_NETWORK='x.org","*' FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/checkout" \
             PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1

@@ -2522,6 +2522,39 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
   variable (`kctmp`) records the one path `kc()` actually passes, and every
   assertion reads it from there instead of re-deriving or re-guessing the
   shape (T-123 round 11);
+- that `kctmp` variable (round 11) was assigned inside `kc()`, and every
+  call to `kc()` is itself wrapped in `$(kc ...)` to capture its echoed
+  exit code - a command substitution, which bash always runs in a
+  subshell. A plain assignment made there never reaches back into the
+  script's own variables, so every assertion after the first `kc()` call
+  that read `$kctmp` was reading one `set -u` had never actually seen set
+  in this shell - `kctmp: unbound variable`, on the real CI runner, not
+  this suite's own author's machine, where nothing forced the read to
+  happen before some other assignment coincidentally supplied a value.
+  `kctmp` is now declared once, at the top level before any `kc()` call,
+  and `kc()` only clears and recreates the directory it already names
+  (T-123 round 13);
+- a `never_read` policy path that is an ancestor of the round's own work
+  or temp directory must not become a blanket deny of everything under
+  it: claude's own deny rule beats its `Read(/$work/**)` /
+  `Read(/$tmp/**)` allow rule, so denying a repo-relative ancestor such
+  as `state` (whose own `state/worktrees/<task>` is a worker's tree or a
+  reviewer's checkout on the self project) denied the round's own tree
+  too, and refused a live reviewer's own checkout under `main`'s policy
+  (round 12). The claude adapter now carves around it instead of
+  denying it whole: it walks from that ancestor down to the round's own
+  tree and denies every other entry at each level - a sibling worktree,
+  `state/runs`, `state/events.jsonl` - and never the branch that leads to
+  `$work` or `$tmp` themselves (T-123 round 13);
+- the decoy this suite plants in the real `TMPDIR` to prove isolation
+  (above) was built with an already-reaped pid, the same shape as the
+  suite's own *stale* fixture - proving TMPDIR isolation, not that a
+  genuinely in-use checkout survives, which is what the acceptance text
+  asks for. It now holds a real kernel `flock` the same way the
+  `fm-review.live` fixture does; the mark file it waits on is a bare path,
+  never `mktemp`-created, since `mktemp` itself creates an empty file at
+  that name immediately, which made the wait succeed before the lock was
+  ever taken (T-123 round 13);
 - network: the declared registries only; GitHub and loopback are refused
   as values, and refused again by the proxy whatever a policy file says.
   The list names whatever the check actually fetches (Playwright's

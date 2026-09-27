@@ -772,6 +772,14 @@ done
 # API key as CURSOR_API_KEY. The operator's keychain here is a stand-in: it
 # holds claude's login, the crew's Cursor key, cursor-agent's own `agent
 # login` items and gh's token, and records every item asked for.
+# kctmp is declared here, at top level, not inside kc(): every kc()
+# call runs through $(...) command substitution to capture its echoed
+# exit code, which forks a subshell - a plain assignment made inside
+# that subshell's copy of kc() never reaches back into this script's
+# own variables (T-123 round 13; every assertion below that reads
+# $kctmp after a kc() call was reading one that command substitution
+# had already thrown away, unbound under set -u on a real run).
+kctmp="$t/kc-tmp"
 mkdir -p "$t/kc"
 future=$(( ($(date +%s) + 3600) * 1000 ))
 printf '{"claudeAiOauth":{"accessToken":"at-claude","refreshToken":"rt-claude-secret","expiresAt":%s}}' \
@@ -817,8 +825,8 @@ kc() {   # kc <mode> <os> <vendor> [env...] -> exit code; the round's view in $t
   # its own --tmp (T-123 round 9), same as any real caller passes: with
   # none, the round's own temp directory falls back to under --ctl, and the
   # mktemp stand-in the round installs there then reads as fm's own control
-  # directory on the round's PATH, not the round's own business
-  kctmp="$t/kc-tmp"   # the one path every kc() assertion below reads (T-123 round 11)
+  # directory on the round's PATH, not the round's own business. $kctmp
+  # is the caller's own (T-123 round 13); kc() only clears and recreates it.
   rm -rf "$kctmp"; mkdir -p "$kctmp"
   env FM_SANDBOX_OS="$os_" FM_SANDBOX_TOOL="$tool" FM_KEYCHAIN_TOOL="$t/kc/security" PATH="$lpath" "$@" \
     "$SB" "$mode" --policy="$t/worker.json" --root="$root" --vendor="$v" --ctl="$t/ctl" --tmp="$kctmp" --started="$t/started" \
