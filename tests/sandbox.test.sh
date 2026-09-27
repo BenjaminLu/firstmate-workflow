@@ -24,7 +24,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/bin/fm-config.sh"
 SB="$ROOT/bin/fm-sandbox.sh"
 
-t="$(mktemp -d)"; t="$(cd "$t" && pwd -P)"
+t="$(safe_tmpdir)"
 home="$(cd "$HOME" && pwd -P)"
 # the operator's name as fm_policy reads it
 me="$(python3 -c 'import getpass; print(getpass.getuser())')"
@@ -1013,5 +1013,5 @@ for why in failing empty; do
   done
 done
 
-rm -rf "$t"
+safe_rm_rf "$t"
 finish

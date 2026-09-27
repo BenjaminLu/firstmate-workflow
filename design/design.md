@@ -2412,9 +2412,13 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
   `safe_rm_rf`, which refuses to remove an empty path, the current
   directory, the repository root, or anything that does not resolve
   strictly inside `$TMPDIR`, whatever the caller passes it (T-123).
-  `tests/adapter-contract.test.sh` uses both; the same pattern in
-  `tests/sandbox.test.sh` and `tests/project.test.sh` is outside this
-  task scope;
+  `tests/adapter-contract.test.sh`, `tests/sandbox.test.sh` and
+  `tests/project.test.sh` all use both, closing every instance of the shape
+  found by grepping every suite for a variable both assigned from a bare
+  `mktemp -d` and later resolved by `cd`-ing into itself (the exact shape a
+  third worktree, T-126's, was lost to the same day); `bin/ci.sh`'s test
+  hygiene stage now refuses that self-resolving shape in any `tests/*.test.sh`
+  it lints, in either mode, so it cannot come back unnoticed (T-123 round 4);
 - network: the declared registries only; GitHub and loopback are refused
   as values, and refused again by the proxy whatever a policy file says.
   The list names whatever the check actually fetches (Playwright's

@@ -932,6 +932,31 @@ plant "a hand-rolled swap turns the hygiene stage red" "saves a script by hand"
 plant "and the stage names the suite" "hand-rolled.test.sh"
 rm -f "$q/tests/hand-rolled.test.sh"
 
+# T-123: a scratch variable resolved by cd-ing into its own (possibly
+# empty, on a refused mktemp -d) value is exactly the shape that lost a
+# worker's worktree and a run-mode reviewer's checkout to a silent mktemp
+# failure. The lint has to flag the shape itself, not a keyword, so the
+# planted line does not mention mktemp at all - the danger is the
+# self-resolving cd, whatever put the value there first.
+printf '#!/usr/bin/env bash\nx="$(mktemp -d)"; x="$(cd "$x" && pwd -P)"\n' \
+  > "$q/tests/self-launder.test.sh"
+plant "a scratch path that cds into its own value turns the hygiene stage red" \
+  "cd-ing into its own value"
+plant "and the stage names the line" 'x="$(cd "$x"'
+rm -f "$q/tests/self-launder.test.sh"
+
+# The false-positive half: cd-ing into a DIFFERENT variable to resolve one
+# (an engine root read from another fixture path, say) is the ordinary,
+# safe idiom used throughout the suites themselves, and safe_tmpdir's own
+# body does exactly this, once, on a mktemp result it has already checked.
+# Neither may trip the lint, or every suite in the repository would.
+printf '#!/usr/bin/env bash\nother="$(mktemp -d)"; engine="$(cd "$other" && pwd -P)"\n' \
+  > "$q/tests/resolve-other.test.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_lacks "$out" "cd-ing into its own value" \
+  "resolving one variable by cd-ing into a different one is not the hazard"
+rm -f "$q/tests/resolve-other.test.sh"
+
 # The negative half of each exclusion. A lint with a plant for the thing it
 # catches and none for the thing it lets through is half a lint: the
 # exclusion is where the false positives live, and one of these was dead

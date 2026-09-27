@@ -529,6 +529,33 @@ else
   pass "every swapped script is paired with its restore"
 fi
 
+# A scratch directory a suite builds for itself with a bare, template-less
+# `mktemp -d` prints nothing and exits nonzero the moment the sandbox this
+# stage itself may be running under refuses one (no explicit template, so
+# TMPDIR is not even consulted on macOS); `X="$(cd "$X" && pwd -P)"` on that
+# empty result does not then fail - bash's `cd ""` succeeds and simply
+# stays where the shell already was - so X quietly becomes the suite's own
+# checkout or worktree, for a later `rm -rf "$X"` to remove outright. A
+# worker's own worktree (T-121, T-126) and a run-mode reviewer's checkout
+# (T-107) were each lost this exact way. tests/lib.sh's safe_tmpdir closes
+# it: an explicit template, and exit 70 the instant mktemp itself fails,
+# so a var it hands back is never empty for a cd to launder into "here".
+# This lint bans the shape safe_tmpdir replaces - a variable resolved by
+# cd-ing into itself - in every suite, so the class cannot come back
+# unnoticed; a legitimate resolution goes through safe_tmpdir instead,
+# which uses the same shape once, internally, on a mktemp result it has
+# already confirmed is real.
+selflaunder=''
+if [ ${#suitefiles[@]} -gt 0 ]; then
+  selflaunder="$(grep -HnE '\b([A-Za-z_][A-Za-z0-9_]*)="\$\(cd "\$\1"[^)]*\)"' "${suitefiles[@]}" 2>/dev/null || true)"
+fi
+if [ -n "$selflaunder" ]; then
+  flunk "a scratch path resolves itself by cd-ing into its own value; use safe_tmpdir (T-123)"
+  printf '%s\n' "$selflaunder"
+else
+  pass "no scratch path launders a failed mktemp into the current directory (${#suitefiles[@]} suites)"
+fi
+
 # The guarantee that nothing reads standard input, checked against every
 # script that looks like it starts a child. "Looks like" is the honest word:
 # the test is a grep for command substitution, a call to another fm script,
