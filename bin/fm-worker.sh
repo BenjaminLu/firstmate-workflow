@@ -566,8 +566,18 @@ mirror_watch_start() {
   mirror_watch_stop_file="$FM_RUN_DIR/mirror-stop"
   rm -f "$mirror_watch_stop_file"
   (
+    interval="${FM_MIRROR_INTERVAL:-10}"
     while [ ! -e "$mirror_watch_stop_file" ]; do
-      sleep "${FM_MIRROR_INTERVAL:-10}"
+      # Polls the stop file once a second rather than sleeping the whole
+      # interval in one call: a round that ends well inside it must not
+      # have mirror_watch_stop's wait held up for the rest of it (a CI
+      # run with dozens of short rounds turned that into minutes of
+      # nothing but this wait, T-128 round 3).
+      waited=0
+      while [ "$waited" -lt "$interval" ] && [ ! -e "$mirror_watch_stop_file" ]; do
+        sleep 1
+        waited=$((waited + 1))
+      done
       [ ! -e "$mirror_watch_stop_file" ] || break
       if why="$(mirror_health)"; then
         mirror_sync >/dev/null 2>&1

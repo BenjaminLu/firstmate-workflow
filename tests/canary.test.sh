@@ -17,7 +17,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 
-t="$(mktemp -d)"; t="$(cd "$t" && pwd -P)"
+t="$(safe_tmpdir)"
 
 # fm-canary.sh appends one line per fixture and mode, run over run: a stale
 # state/canary/ from an earlier run (in this suite, or the operator's own)
@@ -71,6 +71,7 @@ assert_eq "true" "$(jq -r '.worktree_restored.summary.en | (type == "string" and
 assert_eq "true" "$(jq -r '.worktree_restored.summary."zh-TW" | (type == "string" and test("\\S"))' <<<"$tree_row" 2>/dev/null)" \
   "and a zh-TW one (design section 9)"
 
-rm -rf "$ROOT/state/canary" "$t"
+rm -rf "$ROOT/state/canary"
+safe_rm_rf "$t"
 
 finish

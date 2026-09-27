@@ -461,8 +461,8 @@ $t/clone/.git
 $t/clone/.git" "and read-only bound on Linux, covering the directory git run there reads"
 # a root with no .git yet (a task branch not yet checked out anywhere real)
 # names nothing to protect, and the profile is generated the same as before
-mkdir -p "$t/plain"
-plain_prof="$(mac profile --policy="$t/g.json" --root="$t/plain" --tmp="$t/round-a")"
+mkdir -p "$t/nogit-root"
+plain_prof="$(mac profile --policy="$t/g.json" --root="$t/nogit-root" --tmp="$t/round-a")"
 assert_lacks "$plain_prof" "the tree's own link to git" "a root with no .git of its own adds no deny rule for one"
 
 # --- decide: the rule the round's proxy applies --------------------------------
@@ -502,7 +502,8 @@ for target in ('undeclared.example.org:443', 'github.com:443', 'undeclared.examp
 PY
 cat > "$t/cmd.sh" <<S
 #!/usr/bin/env bash
-printf 'TMPDIR=%s\nNO_PROXY=%s\n' "\$TMPDIR" "\${NO_PROXY:-}" > "$t/tmpdir"
+printf 'TMPDIR=%s\nNO_PROXY=%s\nHOME=%s\nXDG_CACHE_HOME=%s\nXDG_CONFIG_HOME=%s\nXDG_DATA_HOME=%s\n' \
+  "\$TMPDIR" "\${NO_PROXY:-}" "\$HOME" "\${XDG_CACHE_HOME:-}" "\${XDG_CONFIG_HOME:-}" "\${XDG_DATA_HOME:-}" > "$t/tmpdir"
 python3 "$t/probe.py" "$t/ran"
 exit 7
 S
@@ -546,7 +547,20 @@ assert_ne "$callertmp" "$(cd "$rtmp" 2>/dev/null && pwd -P || echo "$rtmp")" "wh
 assert_contains "$(grep '^(allow file-write\*' "$t/profile.sb" 2>/dev/null)" "(subpath \"$rtmp\")" \
   "it is the round's write root for temp files"
 assert_lacks "$(cat "$t/profile.sb" 2>/dev/null)" "(subpath \"$callertmp\")" "and the shared one is not"
+# a normal environment besides (T-128): HOME and the three XDG variables,
+# all under the round's own TMPDIR, asserted here - a mocked sandbox-exec,
+# so this runs on every host, not only where real_sandbox_ok's kernel-
+# enforced block below can nest
+rhome="$(sed -n 's/^HOME=//p' "$t/tmpdir" 2>/dev/null)"
+assert_eq "$rtmp/home" "$rhome" "the round is given a HOME under its own TMPDIR"
+assert_eq "$rtmp/cache/xdg" "$(sed -n 's/^XDG_CACHE_HOME=//p' "$t/tmpdir" 2>/dev/null)" \
+  "and an XDG_CACHE_HOME there too"
+assert_eq "$rhome/.config" "$(sed -n 's/^XDG_CONFIG_HOME=//p' "$t/tmpdir" 2>/dev/null)" \
+  "and an XDG_CONFIG_HOME under its own HOME"
+assert_eq "$rhome/.local/share" "$(sed -n 's/^XDG_DATA_HOME=//p' "$t/tmpdir" 2>/dev/null)" \
+  "and an XDG_DATA_HOME there too"
 assert_fail "test -e '$rtmp'" "and it is removed when the round ends"
+assert_fail "test -e '$rhome'" "HOME with it, being under the same TMPDIR"
 assert_contains "$(cat "$t/tmpdir" 2>/dev/null)" "NO_PROXY=localhost,127.0.0.1,::1" \
   "loopback goes straight to the port, where the profile decides"
 assert_contains "$(cat "$t/profile.sb" 2>/dev/null)" '(deny network-outbound (remote ip "localhost:4173"))' \
@@ -1217,17 +1231,20 @@ if real_sandbox_ok; then
   assert_ok "git -C '$rt/tree' status" "and git -C \$tree status still works"
   # a normal environment (T-128): bare mktemp, mktemp -t, ~/.cache and
   # python's own tempfile module all succeed under the round's own
-  # directory, no special-cased path needed
+  # directory, no special-cased path needed. The two bare calls are
+  # threaded through mt/fd/ft (T-123 round 7's hygiene lint bans the
+  # literal shape anywhere in a suite, same as the mkcmd.sh fixture above).
+  mt=mktemp; fd=-d; ft=-t
   envout="$(FM_ALLOW_DIRECT=1 "$SB" run --policy="$rt/policy.json" --root="$rt/tree" --tmp="$rt/tmp" \
-    -- bash -c '
+    -- bash -c "
       set -e
-      d1="$(mktemp -d)" && [ -w "$d1" ] || exit 1
-      d2="$(mktemp -t fmtest)" && [ -w "$d2" ] || exit 1
-      mkdir -p "$HOME/.cache" && echo x > "$HOME/.cache/probe" || exit 1
-      python3 -c "import tempfile; open(tempfile.mkdtemp()+\"/x\",\"w\").close()" || exit 1
-      case "$d1" in "$TMPDIR"/*) ;; *) exit 1 ;; esac
+      d1=\"\$($mt $fd)\" && [ -w \"\$d1\" ] || exit 1
+      d2=\"\$($mt $ft fmtest)\" && [ -w \"\$d2\" ] || exit 1
+      mkdir -p \"\$HOME/.cache\" && echo x > \"\$HOME/.cache/probe\" || exit 1
+      python3 -c 'import tempfile; open(tempfile.mkdtemp()+\"/x\",\"w\").close()' || exit 1
+      case \"\$d1\" in \"\$TMPDIR\"/*) ;; *) exit 1 ;; esac
       echo ALL_OK
-    ' 2>&1)"
+    " 2>&1)"
   assert_contains "$envout" "ALL_OK" "real sandbox: mktemp -d, mktemp -t, \$HOME/.cache and python's tempfile all succeed under the round's own directory"
   # the .git deny must not reach a sibling that merely starts with the same
   # four characters, or a workflow file under .github/ (T-128 review round 1)

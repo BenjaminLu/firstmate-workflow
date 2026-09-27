@@ -2916,7 +2916,11 @@ platforms and simple enough to reason about; the interval keeps the
 detection-to-restoration lag well under the roughly thirty seconds the
 design allows. A final check runs once more when the round ends, since the
 watcher polls and the very end of a round can land in the gap between two
-ticks.
+ticks. The watcher itself checks for the round's own shutdown signal once a
+second while it waits out the rest of the interval, so a round that ends
+well inside it - the common case, most rounds far shorter than ten seconds -
+is not held up waiting for the watcher; only the sync/restore check itself
+still runs at most once per interval.
 
 **Detect and restore.** Each check (`mirror_health` in `bin/fm-worker.sh`)
 asks whether the tree looks as it should: present, its `.git` link intact,
