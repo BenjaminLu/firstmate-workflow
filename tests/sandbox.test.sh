@@ -818,9 +818,10 @@ kc() {   # kc <mode> <os> <vendor> [env...] -> exit code; the round's view in $t
   # none, the round's own temp directory falls back to under --ctl, and the
   # mktemp stand-in the round installs there then reads as fm's own control
   # directory on the round's PATH, not the round's own business
-  rm -rf "$t/kc-tmp"; mkdir -p "$t/kc-tmp"
+  kctmp="$t/kc-tmp"   # the one path every kc() assertion below reads (T-123 round 11)
+  rm -rf "$kctmp"; mkdir -p "$kctmp"
   env FM_SANDBOX_OS="$os_" FM_SANDBOX_TOOL="$tool" FM_KEYCHAIN_TOOL="$t/kc/security" PATH="$lpath" "$@" \
-    "$SB" "$mode" --policy="$t/worker.json" --root="$root" --vendor="$v" --ctl="$t/ctl" --tmp="$t/kc-tmp" --started="$t/started" \
+    "$SB" "$mode" --policy="$t/worker.json" --root="$root" --vendor="$v" --ctl="$t/ctl" --tmp="$kctmp" --started="$t/started" \
     -- "$t/login.sh" "$t/login.out" </dev/null >/dev/null 2>"$t/login.err"
   echo $?
 }
@@ -850,12 +851,14 @@ assert_lacks "$lo" "gho_ghsecret" "nor gh's token"
 assert_eq "find-generic-password -s firstmate-cursor-api-key -a $me -w" "$(cat "$t/kc/calls" 2>/dev/null)" \
   "fm read one item of the keychain: the crew's key, never cursor's own login nor gh's"
 assert_lacks "$(sed -n 's/^path=//p' <<< "$lo")" "$t/ctl" "nothing of fm's is put on the round's PATH"
-# with no --tmp the round's own temp directory is fm-sb.*/tmp, and that one
-# is the round's; nothing else of fm-sandbox's directory may be named
-assert_eq "" "$(grep -o "\"$t/ctl/fm-sb\.[^\"]*\"" "$t/profile.sb" 2>/dev/null | grep -v '/tmp"$')" \
+# kc() always passes its own --tmp ($kctmp, T-123 round 9), so the round's
+# own temp directory is exactly that path, never nested under --ctl; and
+# with an explicit --tmp nothing under --ctl is the round's temp directory
+# any more, so nothing under it may be named readable in the profile at all
+assert_eq "" "$(grep -o "\"$t/ctl/fm-sb\.[^\"]*\"" "$t/profile.sb" 2>/dev/null)" \
   "nor made readable in its profile"
-assert_contains "$(cat "$t/profile.sb" 2>/dev/null)" "(subpath \"$t/ctl/fm-sb." \
-  "(the round's own temp directory is the one path under it the profile names)"
+assert_contains "$(cat "$t/profile.sb" 2>/dev/null)" "(subpath \"$kctmp\")" \
+  "(the round's own temp directory, wherever --tmp points it, is what the profile names)"
 assert_contains "$(grep '^(deny mach-lookup' "$t/profile.sb" 2>/dev/null | grep SecurityServer)" \
   '(global-name "com.apple.SecurityServer")' "and the keychain stays out of its reach"
 assert_eq "" "$(ls -A "$t/ctl" 2>/dev/null)" "and nothing of the login is left behind"
@@ -936,7 +939,7 @@ for lf in "codex linux at-codex rt-codex-secret codex-home/auth.json .codex/auth
   rm -f "$t/bwrap.args"
   assert_eq "0" "$(kc run "$lf_os" "$lf_v")" "$lf_v's round starts on $lf_os with its login file's login"
   lo="$(cat "$t/login.out" 2>/dev/null)"
-  assert_matches "$(grep -m1 "/$lf_copy\$" <<< "$lo")" "^$t/ctl/fm-sb\\.[A-Za-z0-9]+/tmp/$lf_copy\$" \
+  assert_eq "$kctmp/$lf_copy" "$(grep -m1 "/$lf_copy\$" <<< "$lo")" \
     "a copy in the round's own temp directory ($lf_v, $lf_os)"
   assert_contains "$lo" "$lf_at" "holding the access token ($lf_v, $lf_os)"
   assert_lacks "$lo" "$lf_rt" "and never the refresh token ($lf_v, $lf_os)"

@@ -2513,6 +2513,15 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
   test claimed to exercise ever ran (round 7 review). The test now creates
   that directory first, so the branch it names is the one that returns 70
   (T-123 round 9);
+- the `kc()` helper in `tests/sandbox.test.sh` (round 9) passes its own
+  `--tmp` on every call, so the round's own temp directory is never the
+  `ctl/fm-sb.*/tmp` fallback shape several assertions still assumed after that
+  change: the profile's own `(subpath ...)` line, and the codex/gemini x
+  linux/darwin login-copy check (four times), each hard-coded that fallback
+  layout regardless of what `--tmp` was actually given. Fixed at the root: one
+  variable (`kctmp`) records the one path `kc()` actually passes, and every
+  assertion reads it from there instead of re-deriving or re-guessing the
+  shape (T-123 round 11);
 - network: the declared registries only; GitHub and loopback are refused
   as values, and refused again by the proxy whatever a policy file says.
   The list names whatever the check actually fetches (Playwright's
