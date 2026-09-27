@@ -105,7 +105,15 @@ tmp="$(fm_adapter_rule_path "${TMPDIR:-/tmp}")" || exit 64
 CLAUDE_CONFIG_DIR="$FM_ROUND_TMP/claude-config"
 mkdir -p "$CLAUDE_CONFIG_DIR" || exit 70
 CLAUDE_CODE_TMPDIR="$FM_ROUND_TMP"
-export CLAUDE_CONFIG_DIR CLAUDE_CODE_TMPDIR
+# claude's own quiet-refusals switch (documented by claude): turns off its
+# non-essential network traffic - telemetry and error reporting - so a round
+# no longer has the proxy refuse a host like
+# http-intake.logs.us5.datadoghq.com and report it as one the project's
+# network policy must add (T-123). The proxy's own refusal is unchanged for
+# anything this does not cover; this is claude's alone, never another
+# vendor's environment.
+CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+export CLAUDE_CONFIG_DIR CLAUDE_CODE_TMPDIR CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
 allow=(Grep Glob "Read(/$work/**)" "Edit(/$work/**)" "Write(/$work/**)"
        "Read(/$tmp/**)" "Edit(/$tmp/**)" "Write(/$tmp/**)")
 deny=("Bash(git push:*)" "Bash(git remote:*)" "Bash(git worktree:*)" "Bash(git -C:*)"
@@ -117,10 +125,42 @@ deny=("Bash(git push:*)" "Bash(git remote:*)" "Bash(git worktree:*)" "Bash(git -
       "Bash(herdr:*)" "Bash(open:*)" "Bash(xdg-open:*)" "Bash(osascript:*)"
       "Bash(curl:*)" "Bash(wget:*)")
 # the never-readable paths, as rules too: the OS sandbox is what makes
-# every other path unreadable
+# every other path unreadable. A never_read path that CONTAINS the
+# round's own work or temp directory - state, on the self project, whose
+# own state/worktrees/<task> is a worker's tree, or a reviewer's
+# checkout - must not become a blanket deny of everything under it: a
+# deny beats the Read(/$work/**) / Read(/$tmp/**) allow rules above in
+# claude's own rule order, so denying the ancestor denies the round's
+# own tree too (T-123, found by a live reviewer whose own checkout was
+# refused this way under main's policy). fm_adapter_carve_deny walks
+# from that ancestor down to the protected directory and denies every
+# other entry at each level instead - state/runs/**, state/events.jsonl,
+# every other worktree - and never the branch that leads to $work or
+# $tmp themselves.
+fm_adapter_carve_deny() {
+  local anc="$1" protect="$2" cur seg entry other
+  cur="$anc"
+  if [ "$protect" = "$work" ]; then other="$tmp"; else other="$work"; fi
+  while [ "$cur" != "$protect" ]; do
+    case "$protect" in "$cur"/*) ;; *) return 0 ;; esac
+    seg="${protect#"$cur"/}"; seg="${seg%%/*}"
+    while IFS= read -r entry; do
+      [ "${entry##*/}" = "$seg" ] && continue
+      case "$entry" in *[[:space:]\"\\*\(\),]*) continue ;; esac
+      case "$other" in "$entry") continue ;; "$entry"/*) continue ;; esac
+      case "$entry" in "$other"/*) continue ;; esac
+      deny+=("Read(/$entry/**)" "Read(/$entry)")
+    done < <(find "$cur" -mindepth 1 -maxdepth 1 2>/dev/null)
+    cur="$cur/$seg"
+  done
+}
 while IFS= read -r p; do
   case "$p" in /*) ;; *) continue ;; esac
   case "$p" in *[[:space:]\"\\*\(\),]*) continue ;; esac
+  carved=''
+  case "$work" in "$p"|"$p"/*) fm_adapter_carve_deny "$p" "$work"; carved=1 ;; esac
+  case "$tmp" in "$p"|"$p"/*) fm_adapter_carve_deny "$p" "$tmp"; carved=1 ;; esac
+  [ -n "$carved" ] && continue
   deny+=("Read(/$p/**)" "Read(/$p)")
 done < <(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["never_read"]))' "$FM_POLICY")
 rules() { local r s=''; for r in "$@"; do s="$s${s:+,}\"$r\""; done; printf '%s' "$s"; }

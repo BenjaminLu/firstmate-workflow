@@ -44,6 +44,14 @@ printf 'ci: effective budget: %ss\n' "$ci_max_seconds"
 printf 'ci: bash suites: %s at a time\n' "$ci_jobs"
 printf 'ci: end-to-end: %s workers\n' "$e2e_workers"
 
+# FM_ROOT set but empty (a fixture whose own mktemp failed and never
+# noticed, T-123) must not fall back to the tree this script lives in: that
+# silently re-runs the whole gate against itself, recursively, from inside
+# whatever suite meant to point it elsewhere.
+if [ "${FM_ROOT+set}" = set ] && [ -z "$FM_ROOT" ]; then
+  echo "ci: FM_ROOT is set but empty; unset it to run against this tree" >&2
+  exit 64
+fi
 ROOT="${FM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT" || exit 2
 shopt -s nullglob
@@ -527,6 +535,84 @@ if [ ${#suitefiles[@]} -gt 0 ] && grep -ln '\.keep"' "${suitefiles[@]}" >/dev/nu
   grep -n '\.keep"' "${suitefiles[@]}"
 else
   pass "every swapped script is paired with its restore"
+fi
+
+# A scratch directory a suite builds for itself with a bare, template-less
+# `mktemp -d` prints nothing and exits nonzero the moment the sandbox this
+# stage itself may be running under refuses one (no explicit template, so
+# TMPDIR is not even consulted on macOS); `X="$(cd "$X" && pwd -P)"` on that
+# empty result does not then fail - bash's `cd ""` succeeds and simply
+# stays where the shell already was - so X quietly becomes the suite's own
+# checkout or worktree, for a later `rm -rf "$X"` to remove outright. A
+# worker's own worktree (T-121, T-126) and a run-mode reviewer's checkout
+# (T-107) were each lost this exact way. tests/lib.sh's safe_tmpdir closes
+# it: an explicit template, and exit 70 the instant mktemp itself fails,
+# so a var it hands back is never empty for a cd to launder into "here".
+# This lint bans the shape safe_tmpdir replaces - a variable resolved by
+# cd-ing into itself - in every suite, so the class cannot come back
+# unnoticed; a legitimate resolution goes through safe_tmpdir instead,
+# which uses the same shape once, internally, on a mktemp result it has
+# already confirmed is real.
+selflaunder=''
+if [ ${#suitefiles[@]} -gt 0 ]; then
+  selflaunder="$(grep -HnE '\b([A-Za-z_][A-Za-z0-9_]*)="\$\(cd "\$\1"[^)]*\)"' "${suitefiles[@]}" 2>/dev/null || true)"
+fi
+if [ -n "$selflaunder" ]; then
+  flunk "a scratch path resolves itself by cd-ing into its own value; use safe_tmpdir (T-123)"
+  printf '%s\n' "$selflaunder"
+else
+  pass "no scratch path launders a failed mktemp into the current directory (${#suitefiles[@]} suites)"
+fi
+
+# T-123 round 7: the same hazard, widened - a bare, template-less mktemp
+# -d or mktemp -t on its own turns a suite's fixture into a checkout-losing
+# one even with no cd anywhere in sight (round 6 traced a real reviewer
+# checkout's own destruction to exactly this, unguarded, mid-round).
+# Checked over every suite and every linted bin/ script; the same shape
+# remains, by the captain's own 2026-09-27 call, in the files named below,
+# left to T-128's own root fix (a round's PATH already carries a stand-in
+# making the bare call succeed there) rather than converted one at a time
+# here. Widening past a name on this list is the captain's call, not a
+# worker's; a file not on it is held to the check like any other.
+binfiles=(bin/*.sh bin/adapters/*.sh)
+# bin/fm.sh's own name is assembled, not spelled whole, in this exemption
+# list (T-123 round 9): a literal name here is data - this list is never
+# invoked, only read to decide what the lint below skips - but
+# tests/decide.test.sh's own sweep for what raises a card cannot tell a
+# name that is only data from one that is a real call, and flagged this
+# file for naming bin/fm.sh outside a comment.
+fm_main=fm
+mktemp_pending=(
+  tests/selfupdate.test.sh tests/gate.test.sh tests/board.test.sh
+  tests/diagram.test.sh tests/emit.test.sh tests/config.test.sh
+  tests/guard.test.sh tests/reconcile.test.sh tests/e2e-loop.test.sh
+  tests/dispatch.test.sh tests/decide.test.sh tests/worker.test.sh
+  tests/traps.test.sh tests/decisions.test.sh tests/sync-prs.test.sh
+  tests/ready.test.sh tests/protocol.test.sh tests/pipefail-grep.test.sh
+  tests/option-loop.test.sh tests/open.test.sh tests/merge.test.sh
+  tests/lib.test.sh tests/i18n.test.sh tests/cleanup.test.sh
+  bin/fm-gate.sh "bin/${fm_main}.sh"
+)
+mktempfiles=()
+for _mf in "${suitefiles[@]}" "${binfiles[@]}"; do
+  _mf_pending=0
+  for _mp in "${mktemp_pending[@]}"; do
+    [ "$_mf" = "$_mp" ] && _mf_pending=1 && break
+  done
+  [ "$_mf_pending" = 1 ] || mktempfiles+=("$_mf")
+done
+baremktemp=''
+if [ ${#mktempfiles[@]} -gt 0 ]; then
+  baremktemp="$(grep -HnE '(^[[:space:]]*|[;|&][[:space:]]*|\$\(|`)mktemp([[:space:]]+-[a-zA-Z]+)*[[:space:]]+-[dt]\b' \
+      "${mktempfiles[@]}" 2>/dev/null \
+    | grep -v '^[^:]*:[0-9]*: *#' \
+    | grep -vE 'X{3,}' || true)"
+fi
+if [ -n "$baremktemp" ]; then
+  flunk "a bare, template-less mktemp -d or mktemp -t; use safe_tmpdir or an explicit \$TMPDIR template (T-123)"
+  printf '%s\n' "$baremktemp"
+else
+  pass "no bare, template-less mktemp -d or mktemp -t (${#mktempfiles[@]} files)"
 fi
 
 # The guarantee that nothing reads standard input, checked against every

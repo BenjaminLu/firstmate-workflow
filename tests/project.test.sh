@@ -14,7 +14,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib.sh"
 P="$ROOT/bin/fm-project.sh"
 
-t="$(mktemp -d)"; t="$(cd "$t" && pwd -P)"
+t="$(safe_tmpdir)"
 eng="$t/engine"
 mkdir -p "$eng"
 git -C "$eng" init -q -b main
@@ -374,5 +374,5 @@ assert_eq "70" "$(run sync example-app --repo "$bare_eng")" "sync refuses an eng
 assert_contains "$(cat "$t/err")" ".githooks" "and names it"
 assert_ok "test ! -e '$bare_eng/state/projects/example-app/repo'" "and clones nothing"
 
-rm -rf "$t"
+safe_rm_rf "$t"
 finish

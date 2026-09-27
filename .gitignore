@@ -6,3 +6,4 @@ playwright-report/
 state/rescued/
 .fm-prompt.md
 .fm-say.md
+__pycache__/

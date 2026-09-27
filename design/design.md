@@ -482,10 +482,15 @@ fresh clone of the pull request head under the system temp directory - never a
 worktree, whose shared `.git` would let git inside it write outside it - with
 the base at `fm/base`, the head at `fm/head` and no remote, and removes it
 from the EXIT trap on every exit the shell handles; a SIGKILL runs no trap,
-so the next run-mode round removes any `fm-review.*` checkout whose owning
-process is gone. The prompt adds the branch's own
+so the next run-mode round sweeps any `fm-review.*` checkout its owning round
+no longer holds a kernel `flock` on (T-123; §13.1 says why not a pid), not
+one whose recorded pid merely fails `kill -0`. The prompt adds the branch's own
 project contract and asks for `setup`, `check`, the touched suites, fail-first
-against the base versions of the changed non-test files, and an **Executed**
+against the base versions of the changed non-test files, run every one of
+them to completion in the foreground - splitting a check too slow for one
+command into suites run one after another rather than backgrounding it,
+since the round's one turn ends when its answer does and a backgrounded job
+is never checked on (T-123) - and an **Executed**
 / **Read, not run** account. The adapter, not the prompt, confines the engine:
 `FM_RUN_REVIEW=1` and `FM_REVIEW_CHECKOUT` tell it the round is a run-mode one,
 and only an adapter carrying a `# fm:review-run` line may take it -
@@ -2277,6 +2282,25 @@ global skills.
   system itself**, not reported to it by a person.
 - An adapter exiting `2` moves to the next vendor in `config.yaml` and emits
   `vendor_unavailable`.
+- A review round that ends its one turn with no signed verdict is retried
+  once, automatically, by `fm-review.sh` itself, before it is reported
+  failed, and says so on the board (en and zh-TW). This is what a
+  backgrounded check left the round without: a run-mode reviewer that starts
+  a long check in the background and ends its turn waiting on it gets no
+  later turn to check back on it, since the round is one headless
+  invocation - it happened three times (T-119 r1, T-119 r6, T-122 r2). The
+  retry is gated on `fm_run_chain`'s own `FM_VENDOR_SPOKE`: only an attempt
+  that produced some output - bytes in the log, or, per vendor, in its own
+  output directory - and still ended without a verdict is retried. One that
+  produced nothing at all is not: that is an environment this round's own
+  launch was refused by (a caller's changed focus, an uncertain pane, a
+  vanished caller), which reads the same way twice, and re-reading it can
+  even turn a real refusal into a false success - the environment "changed"
+  once and then stays changed, so a second, fresh reading of it no longer
+  differs from itself and the retry's own launch goes on to succeed where
+  the first was rightly refused (T-123 review round 2). A second empty
+  ending, from an attempt that did speak, is reported exactly as an
+  unretried one always was (T-123).
 - Compaction waits until the log is large enough to slow a replay.
 
 ---
@@ -2356,7 +2380,181 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
   in, named per vendor below; none of it is another vendor's, a setting, a
   hook, a skill or an MCP server;
 - commands: allowed inside the sandbox; git push, gh, Herdr, browsers and
-  MCP refused;
+  MCP refused; signals and `ps` are refused too, which is why nothing here
+  reads a sibling process's liveness by pid. `fm-review.sh`'s run-mode
+  checkout is owned by a kernel `flock` its round holds on the checkout's own
+  `owner` file for as long as it runs, never a pid `sweep_checkouts` sends
+  `kill -0`: inside this sandbox that signal is refused whatever it is aimed
+  at, so a live sibling's pid fails it exactly as a dead one's would, and a
+  sweep run from inside a round would read a checkout still in use as
+  abandoned and delete it (T-123, the first round after T-117 merged, PR
+  #98 rounds r8 and r8b). The kernel drops the lock the moment its last open
+  reference to the file closes, a SIGKILLed round's included, which is the
+  one liveness signal this sandbox cannot fake. The owner file is built and
+  locked under a name `sweep_checkouts`' glob never matches, and made
+  visible under the name it does match only by a same-filesystem rename
+  once the lock is already held - never created under the visible name
+  first and locked a moment later, which would leave a window in which a
+  concurrent sweep's own non-blocking flock on the same unlocked file
+  succeeds and it deletes the checkout before its owner ever gets to it
+  (found in review round 2 of T-123 itself);
+- a suite that builds its own scratch directories for `bin/fm-review.sh` to
+  run against never does so with a bare `mktemp -d` and a later `cd "$var"`:
+  a `mktemp -d` this sandbox refuses prints nothing and exits nonzero, and
+  `cd ""` on that empty result succeeds in bash and simply stays where it
+  already was, so the very worktree or checkout the suite runs from came
+  back as the value of that variable, for a later `rm -rf "$var"` to remove
+  (a T-121 worker worktree, and, running `bin/ci.sh`, a T-107 review
+  checkout, both lost this way on 2026-09-27). `tests/lib.sh` adds two
+  helpers for it: `safe_tmpdir`, which takes an explicit template under
+  `$TMPDIR` (or `/tmp`) and exits 70 the moment `mktemp` itself fails,
+  instead of handing back an empty result for `cd` to turn into "here"; and
+  `safe_rm_rf`, which refuses to remove an empty path, the current
+  directory, the repository root, or anything that does not resolve
+  strictly inside `$TMPDIR`, whatever the caller passes it (T-123).
+  `tests/adapter-contract.test.sh`, `tests/sandbox.test.sh` and
+  `tests/project.test.sh` all use both, closing every instance of the shape
+  found by grepping every suite for a variable both assigned from a bare
+  `mktemp -d` and later resolved by `cd`-ing into itself (the exact shape a
+  third worktree, T-126's, was lost to the same day); `bin/ci.sh`'s test
+  hygiene stage now refuses that self-resolving shape in any `tests/*.test.sh`
+  it lints, in either mode, so it cannot come back unnoticed (T-123 round 4);
+- the mktemp refusal the fix just above was itself built around: on macOS,
+  `mktemp -d`'s bare form, and its `-t`, both ask
+  `confstr(_CS_DARWIN_USER_TEMP_DIR)` for where to create, not `$TMPDIR` - a
+  directory outside every root a round may write, so the call is refused
+  there rather than landing anywhere `TMPDIR="$tmp"` says (round 6's own
+  reproduction, on the reviewer's host: `mkdtemp failed on
+  /var/folders/.../T/tmp.xxx: Operation not permitted`, a path under
+  neither the round's TMPDIR nor the caller's). Only an explicit template
+  already worked, which is what `safe_tmpdir` builds by hand.
+  `bin/fm-sandbox.sh run` closes it at the root instead, for every
+  command a round runs, not only the ones this repository's own suites
+  happen to call through a helper: on darwin it puts a small stand-in ahead
+  of the real tool on the round's own `PATH`, under the round's own `$tmp`,
+  that turns a bare call or `-t` into the one form that already worked - an
+  explicit template under `$TMPDIR` - and hands anything else (an explicit
+  template, `-p`, or a flag it does not recognise) straight to the real
+  `/usr/bin/mktemp`, unchanged. Linux needs none of this: GNU's own
+  `mktemp`, which bwrap gives a round, already honours `$TMPDIR`.
+  `tests/sandbox.test.sh` runs a bare `mktemp -d`, `-t`, and an explicit
+  template through `fm-sandbox.sh run` on both platforms and checks where
+  each one landed (T-123 round 7). The same emptied `mktemp -d` result is
+  also what `tests/ci.test.sh`'s own `fixture()` fed to `FM_ROOT`, which
+  `bin/ci.sh` then read with `${FM_ROOT:-...}` - empty and unset look the
+  same to that form - and ran the whole gate against the real tree instead
+  of the fixture, recursively, from inside a live review round (round 5,
+  which lost its own checkout to exactly this). `fixture()` now uses
+  `safe_tmpdir`, and `bin/ci.sh` refuses an `FM_ROOT` that is set but empty
+  rather than defaulting to the tree it lives in;
+- the stand-in above still left four call sites unconverted, and round 6's
+  reviewer lost a live checkout to exactly this while running the project's
+  own suites: `fixture()`, `recover` and `victim_root` in
+  `tests/review.test.sh`, and the top-level scratch root in
+  `tests/crew-end-to-end.test.sh`, all a bare, template-less `mktemp -d`
+  with nothing guarding a refused result. All four now go through
+  `safe_tmpdir` (round 7). `bin/ci.sh`'s test hygiene stage widens from
+  banning only the self-resolving `cd` shape to banning a bare,
+  template-less `mktemp -d` or `mktemp -t` on its own, with no `cd`
+  anywhere in sight, over every suite `bin/ci.sh` already lints plus the
+  bin/ scripts most likely to build one (`bin/ci.sh`, `bin/fm-review.sh`,
+  `bin/fm-sandbox.sh`, and every adapter). A named, commented list in the
+  stage itself (`mktemp_pending`) carries the roughly one hundred sites in
+  some two dozen other files the captain judged, on 2026-09-27, better left
+  to the `fm-sandbox.sh` stand-in above than converted one call at a time;
+  a file not on that list is held to the new check like any other, so it
+  cannot silently regrow where this round already closed it. The lint's own
+  match is anchored to where `mktemp` is actually about to run - the start
+  of a line, after `;`, `|` or `&`, or straight inside a `$(...)` - so a
+  comment or an assertion's own message that merely mentions the words
+  never trips it, matching how the pattern-widening this round needed for
+  `tests/sandbox.test.sh`'s and `tests/ci.test.sh`'s own fixtures, which
+  must keep writing a genuinely bare call for the round or suite they
+  build to run against, threads the literal words through a variable
+  instead of writing them out whole, the same way the self-resolving-`cd`
+  check's own fixture already had to (T-123 round 7);
+- the round's own temporary directory - where the mktemp stand-in above
+  lives - is never nested under `--ctl`: fm's own control files (the
+  profile, a vendor's login copy, the proxy's port or socket) live under
+  `--ctl`, and nothing of fm's belongs on the round's own `PATH`. A test
+  helper that omits `--tmp` gets the fallback `$work/tmp`, which the round's
+  `--ctl` genuinely contains; `tests/sandbox.test.sh`'s `kc()` now passes
+  its own `--tmp`, as every real caller already does, so that assertion
+  keeps meaning what it says (T-123 round 9);
+- a directory a round's own temp directory holds is only guaranteed to
+  exist for the life of the round: `fm-sandbox.sh run`'s own exit trap
+  removes it, `--ctl` included, the moment the round ends. A test that
+  asked `test -d` on a path under it after `"$SB" run` had already returned
+  was asking whether cleanup it elsewhere asserts had somehow not
+  happened; the mktemp stand-in's own tests now check what a round made
+  from inside the round, while it is still there to look (T-123 round 9);
+- a name that is only data - a path listed as a value, never invoked - can
+  still read as a call to a naive, repository-wide text sweep for one:
+  `bin/ci.sh`'s own list of files still left to `mktemp_pending` names
+  `bin/fm.sh` as one of them, which is exactly the shape
+  `tests/decide.test.sh`'s sweep for "what raises a card" is watching for,
+  so it assembles that one name from a variable rather than spelling it
+  whole, the same way a fixture that must write a genuinely bare `mktemp`
+  call already threads it (T-123 round 9);
+- a fixture that builds its own throwaway repository and `cd`s into it,
+  then writes a relative `skills/reviewer` path there, reads to a
+  repository-wide lint elsewhere (the skills self-update feature's bounded
+  writer check, `bin/fm.sh lint`) exactly like a write to this checkout's
+  own `skills/reviewer` - that lint's own narrow recognition of a fixture's
+  `cd` looks for the literal `mktemp -d` shape safe_tmpdir now replaces
+  everywhere, so it no longer sees this one as a fixture at all.
+  `tests/review.test.sh`'s fixture writes those two paths through its own
+  root variable instead (`"$d/repo/skills/reviewer"`), which that lint
+  already treats as a fixture path on its own terms, rather than teaching
+  it a second way to recognise `safe_tmpdir` (T-123 round 9);
+- `safe_rm_rf`'s own test for a path outside its TMPDIR asked for a
+  `TMPDIR` that was never created, so the function's first guard - that
+  `TMPDIR` itself resolves - refused it before the "outside" comparison the
+  test claimed to exercise ever ran (round 7 review). The test now creates
+  that directory first, so the branch it names is the one that returns 70
+  (T-123 round 9);
+- the `kc()` helper in `tests/sandbox.test.sh` (round 9) passes its own
+  `--tmp` on every call, so the round's own temp directory is never the
+  `ctl/fm-sb.*/tmp` fallback shape several assertions still assumed after that
+  change: the profile's own `(subpath ...)` line, and the codex/gemini x
+  linux/darwin login-copy check (four times), each hard-coded that fallback
+  layout regardless of what `--tmp` was actually given. Fixed at the root: one
+  variable (`kctmp`) records the one path `kc()` actually passes, and every
+  assertion reads it from there instead of re-deriving or re-guessing the
+  shape (T-123 round 11);
+- that `kctmp` variable (round 11) was assigned inside `kc()`, and every
+  call to `kc()` is itself wrapped in `$(kc ...)` to capture its echoed
+  exit code - a command substitution, which bash always runs in a
+  subshell. A plain assignment made there never reaches back into the
+  script's own variables, so every assertion after the first `kc()` call
+  that read `$kctmp` was reading one `set -u` had never actually seen set
+  in this shell - `kctmp: unbound variable`, on the real CI runner, not
+  this suite's own author's machine, where nothing forced the read to
+  happen before some other assignment coincidentally supplied a value.
+  `kctmp` is now declared once, at the top level before any `kc()` call,
+  and `kc()` only clears and recreates the directory it already names
+  (T-123 round 13);
+- a `never_read` policy path that is an ancestor of the round's own work
+  or temp directory must not become a blanket deny of everything under
+  it: claude's own deny rule beats its `Read(/$work/**)` /
+  `Read(/$tmp/**)` allow rule, so denying a repo-relative ancestor such
+  as `state` (whose own `state/worktrees/<task>` is a worker's tree or a
+  reviewer's checkout on the self project) denied the round's own tree
+  too, and refused a live reviewer's own checkout under `main`'s policy
+  (round 12). The claude adapter now carves around it instead of
+  denying it whole: it walks from that ancestor down to the round's own
+  tree and denies every other entry at each level - a sibling worktree,
+  `state/runs`, `state/events.jsonl` - and never the branch that leads to
+  `$work` or `$tmp` themselves (T-123 round 13);
+- the decoy this suite plants in the real `TMPDIR` to prove isolation
+  (above) was built with an already-reaped pid, the same shape as the
+  suite's own *stale* fixture - proving TMPDIR isolation, not that a
+  genuinely in-use checkout survives, which is what the acceptance text
+  asks for. It now holds a real kernel `flock` the same way the
+  `fm-review.live` fixture does; the mark file it waits on is a bare path,
+  never `mktemp`-created, since `mktemp` itself creates an empty file at
+  that name immediately, which made the wait succeed before the lock was
+  ever taken (T-123 round 13);
 - network: the declared registries only; GitHub and loopback are refused
   as values, and refused again by the proxy whatever a policy file says.
   The list names whatever the check actually fetches (Playwright's
@@ -2471,6 +2669,14 @@ in `bin/fm-config.sh`:
 | cursor-agent | the crew's Cursor API key, which the operator makes once in Cursor's dashboard and keeps for fm outside every round: macOS keychain item `firstmate-cursor-api-key`, account the operator's user; else `~/.config/firstmate/cursor-api-key`, refused unless its mode is the operator's alone (600). A `CURSOR_API_KEY` already set is used as is. Never `agent login`'s own items (`cursor-access-token`, `cursor-refresh-token`) or `~/.config/cursor/auth.json`, which hold its refresh token. With none, the refusal says the one-time step | `CURSOR_API_KEY`, exported, not on a command line; the variable cursor-agent documents in its own `Authentication required` message | nothing of `~/.config/cursor` or `~/.config/firstmate`; `~/.cursor/chats`, `~/.cursor/projects`, `~/.cursor/cli-config.json`, `~/.cursor/statsig-cache.json` read and written | the round's own | none |
 | codex | `~/.codex/auth.json`, field `tokens.access_token` or `OPENAI_API_KEY`; the file holds `tokens.refresh_token` too. A `CODEX_API_KEY` already set is used as is | a copy of the file with `tokens.refresh_token` emptied, as `auth.json` in the round's own `CODEX_HOME`, so no `config.toml` or profile of the operator's is read either | nothing of `~/.codex/auth.json`; `~/.codex/sessions`, `log`, `history.jsonl`, `version.json`, `models_cache.json` read and written | the round's own | none |
 | gemini | `~/.gemini/oauth_creds.json`, field `access_token`, refused past `expiry_date`; the file holds `refresh_token` too. A `GEMINI_API_KEY` or `GOOGLE_API_KEY` already set is used as is | a copy of the file with `refresh_token` emptied, at `.gemini/oauth_creds.json` under a `HOME` (and `GEMINI_CLI_HOME`) of the round's own, with `GOOGLE_GENAI_USE_GCA=true` when no API key is set. The commands gemini runs inherit that `HOME` | nothing of `~/.gemini/oauth_creds.json`; `~/.gemini/tmp`, `history`, `google_accounts.json`, `installation_id`, `user_id` read and written | the round's own | none |
+
+claude's round also carries `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`,
+the variable claude documents for turning off its own non-essential network
+traffic - telemetry and error reporting - never set for another vendor. A
+review round used to have the proxy refuse `http-intake.logs.us5.datadoghq.com`
+as an undeclared host and report it as one the project's network policy
+must add; the traffic that host was for is now off at the source, and the
+proxy's refusal of anything else claude asks for is unchanged (T-123).
 
 A Google access token lasts an hour, so a gemini round started more than an
 hour after gemini last ran outside one is refused as not logged in until the
