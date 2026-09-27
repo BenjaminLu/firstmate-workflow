@@ -581,17 +581,43 @@ assert_eq "ok" "$(cat "$t/mktflag.exists" 2>/dev/null)" "so is the one -t named"
 mkdir -p "$t/gnubin"
 cat > "$t/gnubin/mktemp" <<'S'
 #!/bin/sh
-prefix=tmp
+# Plays real GNU mktemp on this darwin test box: an explicit template is
+# passed straight through, since it already works on the real
+# /usr/bin/mktemp underneath this fake too, and only a bare call or -t is
+# rebuilt under $TMPDIR - the same route/transform split as the real
+# stand-in bin/fm-sandbox.sh installs for darwin. Without this split
+# (T-123 round 14), this fake sat on fm-sandbox.sh's own PATH for the
+# whole "$SB run" invocation and clobbered its own explicit-template
+# mktemp call that builds the round's --ctl work directory, so the round
+# ended up under the outer TMPDIR instead of under --ctl.
+real=/usr/bin/mktemp
+route=transform
+want=0
+for a in "$@"; do
+  if [ "$want" = 1 ]; then want=0; continue; fi
+  case "$a" in
+    -d) ;;
+    -t) want=1 ;;
+    -q|-u) ;;
+    *) route=passthrough ;;
+  esac
+done
+if [ "$route" = passthrough ]; then
+  exec "$real" "$@"
+fi
 dir=''
+prefix=tmp
+extra=''
 want=0
 for a in "$@"; do
   if [ "$want" = 1 ]; then prefix="$a"; want=0; continue; fi
   case "$a" in
     -d) dir=-d ;;
     -t) want=1 ;;
+    -q|-u) extra="$extra $a" ;;
   esac
 done
-exec /usr/bin/mktemp $dir "${TMPDIR:-/tmp}/$prefix.XXXXXXXXXX"
+exec "$real" $dir $extra "${TMPDIR:-/tmp}/$prefix.XXXXXXXXXX"
 S
 chmod +x "$t/gnubin/mktemp"
 cat > "$t/mkcmd-lin.sh" <<S

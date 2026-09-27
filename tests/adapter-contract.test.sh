@@ -375,8 +375,14 @@ $runargv
             "and a sibling directory beside the branch that leads to the round's tree"
           assert_contains "$csettings" "state/worktrees/T-Y" \
             "and a sibling worktree one level further down, on the branch itself"
-          assert_lacks "$csettings" "state/worktrees/T-Z" \
-            "but never the round's own tree, at any level"
+          # "but never the round's own tree, at any level" is exactly what
+          # $swallowed above already proves, on the deny list alone, with
+          # an ancestor-prefix match at every depth (T-123 round 14). A
+          # plain assert_lacks "$csettings" "state/worktrees/T-Z" here
+          # (round 12's finding) greps the *whole* settings JSON, allow
+          # rules included, which correctly name the round's own tree via
+          # Read(/$work/**) - so it fails on the fix exactly as it would on
+          # the bug it was meant to catch, and is dropped as a duplicate.
           rm -f "$d/cwd.run"
           FM_REVIEW_NETWORK='x.org","*' FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/checkout" \
             PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
