@@ -1,0 +1,25 @@
+{
+  "id": "T-123",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "a review round under the sandbox keeps its own checkout, runs its checks to the end in the foreground, and is retried once when it ends without a verdict",
+  "scope": [
+    "bin/fm-review.sh",
+    "bin/adapters/claude.sh",
+    "skills/reviewer/SKILL.md",
+    "tests/review.test.sh",
+    "tests/adapter-contract.test.sh",
+    "tests/lib.sh",
+    "design/design.md",
+    "design/tasks/T-123.json"
+  ],
+  "acceptance": [
+    "Why. The first review round after T-117 merged (T-107 #98, rounds r8 and r8b on 2026-09-27) lost its own run-mode checkout mid-round, twice. The directory under the reviewer's TMPDIR was deleted while bin/ci.sh and the suites ran, and writes outside the checkout then failed. firstmate's reading, to be confirmed or refuted by the worker with evidence: `sweep_checkouts` in bin/fm-review.sh deletes every `${TMPDIR:-/tmp}/fm-review.*` whose owner pid fails `kill -0`. The suites the reviewer runs invoke fm-review.sh, so the sweep runs inside the sandboxed round. There, `kill -0` on a live pid outside the round can fail with EPERM, because signals and `ps` are denied, so a live checkout reads as abandoned and is removed. Separately, run-mode reviewers have three times backgrounded a long check and ended their turn waiting for it (T-122 r2, T-119 r1, T-119 r6). Headless rounds have no later turn, so fm-review reported 'claude produced no review' and firstmate reran the review by hand. The captain approved this task on 2026-09-27. Its own spec file, design/tasks/T-123.json, is committed on this branch.",
+    "A live checkout is never swept. `sweep_checkouts` removes a checkout only when its owner is provably gone. `kill -0` failing with EPERM means alive, or the sweep uses a liveness signal the sandbox cannot fake, such as a lock the owning round holds (flock on the owner file). No sweep run from inside a round touches a checkout it does not own. Test, fail-first: with an owner pid that `kill -0` refuses with EPERM (simulated faithfully, the way the real call fails), the checkout survives; with a pid that is gone, it is removed; a round started inside another round's TMPDIR does not delete the outer round's checkout.",
+    "Suites never touch the real TMPDIR's checkouts. Every suite that runs fm-review.sh gives it a TMPDIR of its own (tests/lib.sh helper), so running bin/ci.sh inside a review round cannot sweep the reviewer's checkout. Add a test that runs the review suite with a decoy `fm-review.*` checkout, owned by a live process, in the outer TMPDIR, and shows the decoy survives.",
+    "Checks run in the foreground to completion. The reviewer's instructions (skills/reviewer/SKILL.md, and the run-mode prompt fm-review.sh builds) say plainly: every command the review relies on runs in the foreground until it finishes; no verdict waits on a background job; a check too long for one command is split into suites run one after another. The claude adapter does not offer background execution to review rounds, if claude's flags allow that. fm-review.sh detects a transcript that ends without a verdict line (`REVIEWED:<task> verdict=` / `REVIEWER_BLOCKED:`) and retries the round once, automatically, saying so on the board (en and zh-TW). A second empty ending is reported as today. Test the retry with a stub vendor whose first run ends with no verdict and whose second posts one, and the no-second-retry case.",
+    "Quiet refusals. The claude adapter sets the environment claude documents for turning off non-essential traffic (telemetry and error reporting, e.g. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, checked against claude's own docs), so a round no longer reports `http-intake.logs.us5.datadoghq.com` as a refused host. The proxy's refusal behaviour is unchanged. Test that the variable is in claude's round environment under the policy, and in no other vendor's.",
+    "Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate; workers do not run the suite themselves. Stubs answer as the real tools do (kill's EPERM, the vendor's transcript shape). design.md §12/13.1 describe the sweep's liveness rule and the retry."
+  ]
+}

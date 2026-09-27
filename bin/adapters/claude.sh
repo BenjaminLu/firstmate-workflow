@@ -105,7 +105,15 @@ tmp="$(fm_adapter_rule_path "${TMPDIR:-/tmp}")" || exit 64
 CLAUDE_CONFIG_DIR="$FM_ROUND_TMP/claude-config"
 mkdir -p "$CLAUDE_CONFIG_DIR" || exit 70
 CLAUDE_CODE_TMPDIR="$FM_ROUND_TMP"
-export CLAUDE_CONFIG_DIR CLAUDE_CODE_TMPDIR
+# claude's own quiet-refusals switch (documented by claude): turns off its
+# non-essential network traffic - telemetry and error reporting - so a round
+# no longer has the proxy refuse a host like
+# http-intake.logs.us5.datadoghq.com and report it as one the project's
+# network policy must add (T-123). The proxy's own refusal is unchanged for
+# anything this does not cover; this is claude's alone, never another
+# vendor's environment.
+CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+export CLAUDE_CONFIG_DIR CLAUDE_CODE_TMPDIR CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
 allow=(Grep Glob "Read(/$work/**)" "Edit(/$work/**)" "Write(/$work/**)"
        "Read(/$tmp/**)" "Edit(/$tmp/**)" "Write(/$tmp/**)")
 deny=("Bash(git push:*)" "Bash(git remote:*)" "Bash(git worktree:*)" "Bash(git -C:*)"

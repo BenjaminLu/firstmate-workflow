@@ -60,6 +60,14 @@ the base. The prompt names the project's declared `setup`, `check`,
 4. End with **Executed** (each command and its result) and **Read, not run**
    (each claim checked only by reading) before the verdict.
 
+Run every one of those commands to completion in the foreground. This round
+is one turn: it ends the moment your answer does, so a command you background
+and mean to check on later is never checked on, and your turn ends with
+nothing signed - which is what backgrounding a long check has cost three
+review rounds already. A check too slow for one command is not a reason to
+background it; split it into the suites `test` names and run each to its own
+end before starting the next.
+
 You may run the declared commands and git there. You may not push, comment on
 or edit the pull request, touch the task's worktree, or write outside the
 checkout and the system temp directory. The engine's own permission flags

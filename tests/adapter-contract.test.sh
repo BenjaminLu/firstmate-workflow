@@ -310,8 +310,13 @@ $runargv
 " "
 --disable-slash-commands
 " "$name loads no skill or command from the branch or the operator"
+          # A closed list: BashOutput and KillShell, which is what a
+          # background job would need checked on, are not among them, so a
+          # review round has no way to read a job it backgrounded even if it
+          # tried to start one (T-123). This one exact match is what keeps
+          # either from being added back quietly beside Bash.
           assert_eq "Bash,Read,Edit,Write,Grep,Glob" "$(list_after --tools)" \
-            "$name names the only tools the round has"
+            "$name names the only tools the round has, offering it no way to check on a backgrounded job"
           assert_eq "$rtmp" "$(list_after --add-dir)" "$name's file tools reach only the checkout and the round's own temp directory"
           assert_lacks "$allowed" "(/$tmpd/**)" "and not the shared one"
           # the barriers push actually meets: the OS sandbox's network is a
@@ -433,6 +438,17 @@ for v in claude codex cursor-agent gemini; do
   assert_contains "$(grep '^(deny mach-lookup' "$pk/profile.sb" 2>/dev/null)" '(global-name "com.apple.SecurityServer")' \
     "$v's round cannot reach the keychain"
   assert_eq "" "$(grep 'allow mach-lookup' "$pk/profile.sb" 2>/dev/null || true)" "and nothing lets it back in"
+  # claude's own quiet-refusals switch (T-123): turns off its non-essential
+  # network traffic (telemetry, error reporting), so the proxy no longer
+  # reports one of those hosts (http-intake.logs.us5.datadoghq.com, for one)
+  # as a refused host needing the project's network policy. Claude's alone,
+  # never another vendor's round.
+  case "$v" in
+    claude) assert_contains "$(cat "$pv/env" 2>/dev/null)" "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1" \
+              "$v turns off its own non-essential network traffic (telemetry, error reporting)" ;;
+    *) assert_lacks "$(cat "$pv/env" 2>/dev/null)" "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" \
+         "$v is given none of claude's quiet-refusals variable" ;;
+  esac
 done
 # a seatbelt cannot start inside sandbox-exec, so under it the vendors' own
 # sandboxes are off and the outer one confines their commands

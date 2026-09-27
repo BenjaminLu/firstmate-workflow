@@ -482,10 +482,15 @@ fresh clone of the pull request head under the system temp directory - never a
 worktree, whose shared `.git` would let git inside it write outside it - with
 the base at `fm/base`, the head at `fm/head` and no remote, and removes it
 from the EXIT trap on every exit the shell handles; a SIGKILL runs no trap,
-so the next run-mode round removes any `fm-review.*` checkout whose owning
-process is gone. The prompt adds the branch's own
+so the next run-mode round sweeps any `fm-review.*` checkout its owning round
+no longer holds a kernel `flock` on (T-123; §13.1 says why not a pid), not
+one whose recorded pid merely fails `kill -0`. The prompt adds the branch's own
 project contract and asks for `setup`, `check`, the touched suites, fail-first
-against the base versions of the changed non-test files, and an **Executed**
+against the base versions of the changed non-test files, run every one of
+them to completion in the foreground - splitting a check too slow for one
+command into suites run one after another rather than backgrounding it,
+since the round's one turn ends when its answer does and a backgrounded job
+is never checked on (T-123) - and an **Executed**
 / **Read, not run** account. The adapter, not the prompt, confines the engine:
 `FM_RUN_REVIEW=1` and `FM_REVIEW_CHECKOUT` tell it the round is a run-mode one,
 and only an adapter carrying a `# fm:review-run` line may take it -
@@ -2277,6 +2282,15 @@ global skills.
   system itself**, not reported to it by a person.
 - An adapter exiting `2` moves to the next vendor in `config.yaml` and emits
   `vendor_unavailable`.
+- A review round that ends its one turn with no signed verdict is retried
+  once, automatically, by `fm-review.sh` itself, before it is reported
+  failed, and says so on the board (en and zh-TW). This is what a
+  backgrounded check left the round without: a run-mode reviewer that starts
+  a long check in the background and ends its turn waiting on it gets no
+  later turn to check back on it, since the round is one headless
+  invocation - it happened three times (T-119 r1, T-119 r6, T-122 r2). A
+  second empty ending is reported exactly as an unretried one always was
+  (T-123).
 - Compaction waits until the log is large enough to slow a replay.
 
 ---
@@ -2356,7 +2370,17 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
   in, named per vendor below; none of it is another vendor's, a setting, a
   hook, a skill or an MCP server;
 - commands: allowed inside the sandbox; git push, gh, Herdr, browsers and
-  MCP refused;
+  MCP refused; signals and `ps` are refused too, which is why nothing here
+  reads a sibling process's liveness by pid. `fm-review.sh`'s run-mode
+  checkout is owned by a kernel `flock` its round holds on the checkout's own
+  `owner` file for as long as it runs, never a pid `sweep_checkouts` sends
+  `kill -0`: inside this sandbox that signal is refused whatever it is aimed
+  at, so a live sibling's pid fails it exactly as a dead one's would, and a
+  sweep run from inside a round would read a checkout still in use as
+  abandoned and delete it (T-123, the first round after T-117 merged, PR
+  #98 rounds r8 and r8b). The kernel drops the lock the moment its last open
+  reference to the file closes, a SIGKILLed round's included, which is the
+  one liveness signal this sandbox cannot fake;
 - network: the declared registries only; GitHub and loopback are refused
   as values, and refused again by the proxy whatever a policy file says.
   The list names whatever the check actually fetches (Playwright's
@@ -2471,6 +2495,14 @@ in `bin/fm-config.sh`:
 | cursor-agent | the crew's Cursor API key, which the operator makes once in Cursor's dashboard and keeps for fm outside every round: macOS keychain item `firstmate-cursor-api-key`, account the operator's user; else `~/.config/firstmate/cursor-api-key`, refused unless its mode is the operator's alone (600). A `CURSOR_API_KEY` already set is used as is. Never `agent login`'s own items (`cursor-access-token`, `cursor-refresh-token`) or `~/.config/cursor/auth.json`, which hold its refresh token. With none, the refusal says the one-time step | `CURSOR_API_KEY`, exported, not on a command line; the variable cursor-agent documents in its own `Authentication required` message | nothing of `~/.config/cursor` or `~/.config/firstmate`; `~/.cursor/chats`, `~/.cursor/projects`, `~/.cursor/cli-config.json`, `~/.cursor/statsig-cache.json` read and written | the round's own | none |
 | codex | `~/.codex/auth.json`, field `tokens.access_token` or `OPENAI_API_KEY`; the file holds `tokens.refresh_token` too. A `CODEX_API_KEY` already set is used as is | a copy of the file with `tokens.refresh_token` emptied, as `auth.json` in the round's own `CODEX_HOME`, so no `config.toml` or profile of the operator's is read either | nothing of `~/.codex/auth.json`; `~/.codex/sessions`, `log`, `history.jsonl`, `version.json`, `models_cache.json` read and written | the round's own | none |
 | gemini | `~/.gemini/oauth_creds.json`, field `access_token`, refused past `expiry_date`; the file holds `refresh_token` too. A `GEMINI_API_KEY` or `GOOGLE_API_KEY` already set is used as is | a copy of the file with `refresh_token` emptied, at `.gemini/oauth_creds.json` under a `HOME` (and `GEMINI_CLI_HOME`) of the round's own, with `GOOGLE_GENAI_USE_GCA=true` when no API key is set. The commands gemini runs inherit that `HOME` | nothing of `~/.gemini/oauth_creds.json`; `~/.gemini/tmp`, `history`, `google_accounts.json`, `installation_id`, `user_id` read and written | the round's own | none |
+
+claude's round also carries `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`,
+the variable claude documents for turning off its own non-essential network
+traffic - telemetry and error reporting - never set for another vendor. A
+review round used to have the proxy refuse `http-intake.logs.us5.datadoghq.com`
+as an undeclared host and report it as one the project's network policy
+must add; the traffic that host was for is now off at the source, and the
+proxy's refusal of anything else claude asks for is unchanged (T-123).
 
 A Google access token lasts an hour, so a gemini round started more than an
 hour after gemini last ran outside one is refused as not logged in until the

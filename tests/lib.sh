@@ -52,4 +52,25 @@ restore_scripts() {
   done
   _swapped=''
 }
-finish() { restore_scripts; [ "$_fails" -eq 0 ] || exit 1; }
+# Every suite that runs fm-review.sh in run mode has it call sweep_checkouts
+# against ${TMPDIR:-/tmp}. A suite that leaves the host's own TMPDIR in place
+# runs that sweep against the real one - which, invoked from inside a live
+# review round's own bin/ci.sh, is the very directory the round's checkout
+# lives under (T-123). isolate_tmpdir gives the rest of the suite, and every
+# fm-review.sh it runs from here on, a TMPDIR of its own; call it once, before
+# the first such invocation. restore_tmpdir (finish calls it) puts the
+# caller's own TMPDIR back and removes the one made for the suite.
+_orig_tmpdir="${TMPDIR-}"; _had_tmpdir="${TMPDIR+1}"; _isolated_tmpdir=''
+isolate_tmpdir() {
+  _isolated_tmpdir="$(mktemp -d)"
+  TMPDIR="$_isolated_tmpdir"; export TMPDIR
+}
+restore_tmpdir() {
+  if [ -n "$_isolated_tmpdir" ]; then
+    if [ -n "$_had_tmpdir" ]; then TMPDIR="$_orig_tmpdir"; export TMPDIR
+    else unset TMPDIR
+    fi
+    rm -rf "$_isolated_tmpdir"; _isolated_tmpdir=''
+  fi
+}
+finish() { restore_scripts; restore_tmpdir; [ "$_fails" -eq 0 ] || exit 1; }
