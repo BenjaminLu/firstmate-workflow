@@ -62,7 +62,7 @@ restore_scripts() {
 # caller's own TMPDIR back and removes the one made for the suite.
 _orig_tmpdir="${TMPDIR-}"; _had_tmpdir="${TMPDIR+1}"; _isolated_tmpdir=''
 isolate_tmpdir() {
-  _isolated_tmpdir="$(mktemp -d)"
+  _isolated_tmpdir="$(safe_tmpdir)"
   TMPDIR="$_isolated_tmpdir"; export TMPDIR
 }
 restore_tmpdir() {
@@ -70,7 +70,54 @@ restore_tmpdir() {
     if [ -n "$_had_tmpdir" ]; then TMPDIR="$_orig_tmpdir"; export TMPDIR
     else unset TMPDIR
     fi
-    rm -rf "$_isolated_tmpdir"; _isolated_tmpdir=''
+    safe_rm_rf "$_isolated_tmpdir"; _isolated_tmpdir=''
   fi
 }
+
+# A mktemp the sandbox refuses prints nothing and exits nonzero; a caller
+# that then runs cd "$var" && pwd -P on that empty result gets back its own
+# current directory, because cd "" succeeds in bash and simply stays put
+# (T-123, the pk/pv variables in tests/adapter-contract.test.sh). safe_tmpdir
+# never hands back an empty result for that to happen to: it takes an
+# explicit template under $TMPDIR (or /tmp with none set) and exits 70,
+# loudly, the moment mktemp itself fails.
+safe_tmpdir() {
+  local d
+  d="$(mktemp -d "${TMPDIR:-/tmp}/fm-test.XXXXXX")" || {
+    echo "safe_tmpdir: mktemp refused a directory under ${TMPDIR:-/tmp}" >&2
+    exit 70
+  }
+  d="$(cd "$d" && pwd -P)" || { echo "safe_tmpdir: cannot resolve $d" >&2; exit 70; }
+  printf '%s\n' "$d"
+}
+
+# The other half of the same bug: rm -rf "$var" on a var mktemp never
+# actually set is rm -rf on whatever string was left lying around - empty,
+# a dot, or the directory the suite happens to be running in. safe_rm_rf
+# refuses anything that, once resolved, is not strictly inside $TMPDIR (or
+# /tmp), and refuses the current directory and the repository root itself
+# even when they happen to resolve there too.
+safe_rm_rf() {
+  local base p resolved
+  base="$(cd "${TMPDIR:-/tmp}" && pwd -P)" || { echo "safe_rm_rf: no such TMPDIR ${TMPDIR:-/tmp}" >&2; exit 70; }
+  for p in "$@"; do
+    if [ -z "$p" ] || [ "$p" = / ]; then
+      echo "safe_rm_rf: refusing to remove [$p]" >&2; exit 70
+    fi
+    if [ ! -e "$p" ]; then continue; fi
+    resolved="$(cd "$p" 2>/dev/null && pwd -P)" || resolved="$p"
+    case "$resolved" in
+      "$base"|"$base"/*) : ;;
+      *) echo "safe_rm_rf: refusing [$resolved], outside $base" >&2; exit 70 ;;
+    esac
+    if [ -n "${ROOT:-}" ]; then
+      case "$resolved" in
+        "$ROOT"|"$ROOT"/*) echo "safe_rm_rf: refusing repository path [$resolved]" >&2; exit 70 ;;
+      esac
+    fi
+    [ "$resolved" = "$(pwd -P)" ] && { echo "safe_rm_rf: refusing the current directory [$resolved]" >&2; exit 70; }
+    rm -rf "$resolved"
+  done
+}
+
 finish() { restore_scripts; restore_tmpdir; [ "$_fails" -eq 0 ] || exit 1; }

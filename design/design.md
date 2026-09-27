@@ -2398,6 +2398,23 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
   concurrent sweep's own non-blocking flock on the same unlocked file
   succeeds and it deletes the checkout before its owner ever gets to it
   (found in review round 2 of T-123 itself);
+- a suite that builds its own scratch directories for `bin/fm-review.sh` to
+  run against never does so with a bare `mktemp -d` and a later `cd "$var"`:
+  a `mktemp -d` this sandbox refuses prints nothing and exits nonzero, and
+  `cd ""` on that empty result succeeds in bash and simply stays where it
+  already was, so the very worktree or checkout the suite runs from came
+  back as the value of that variable, for a later `rm -rf "$var"` to remove
+  (a T-121 worker worktree, and, running `bin/ci.sh`, a T-107 review
+  checkout, both lost this way on 2026-09-27). `tests/lib.sh` adds two
+  helpers for it: `safe_tmpdir`, which takes an explicit template under
+  `$TMPDIR` (or `/tmp`) and exits 70 the moment `mktemp` itself fails,
+  instead of handing back an empty result for `cd` to turn into "here"; and
+  `safe_rm_rf`, which refuses to remove an empty path, the current
+  directory, the repository root, or anything that does not resolve
+  strictly inside `$TMPDIR`, whatever the caller passes it (T-123).
+  `tests/adapter-contract.test.sh` uses both; the same pattern in
+  `tests/sandbox.test.sh` and `tests/project.test.sh` is outside this
+  task scope;
 - network: the declared registries only; GitHub and loopback are refused
   as values, and refused again by the proxy whatever a policy file says.
   The list names whatever the check actually fetches (Playwright's

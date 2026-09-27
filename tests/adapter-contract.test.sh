@@ -32,7 +32,7 @@ make_sandbox() {
 # one - so FM_SANDBOX_TOOL names a stand-in that records what it was handed
 # and runs the command, on the platform FM_SANDBOX_OS says. The sandbox
 # itself is tests/sandbox.test.sh's.
-pk="$(mktemp -d)"; pk="$(cd "$pk" && pwd -P)"
+pk="$(safe_tmpdir)"
 (
   # shellcheck source=bin/fm-config.sh
   . "$ROOT/bin/fm-config.sh"
@@ -82,7 +82,7 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
   assert_eq "64" "$rc" "$name rejects a missing subcommand"
   assert_contains "$out" "usage" "$name prints usage"
 
-  d="$(mktemp -d)"; make_sandbox "$d"
+  d="$(safe_tmpdir)"; make_sandbox "$d"
   mkdir -p "$d/tree" "$d/outside"
   echo "do the thing" > "$d/prompt"
   echo "canary" > "$d/outside/canary"
@@ -384,7 +384,7 @@ $runargv
   after="$(find "$d/outside" -type f -exec shasum {} + | shasum)"
   assert_eq "$before" "$after" "$name wrote nothing outside the worktree"
   assert_ok "test -f '$d/log'" "$name wrote to the log it was given"
-  rm -rf "$d"
+  safe_rm_rf "$d"
 done
 
 # --- one policy, every vendor (T-105) ----------------------------------------
@@ -392,7 +392,7 @@ done
 # the rest; a dimension neither covers refuses the round with 2 - the
 # fallback chain's "try the next one" - before the CLI starts, so no round
 # runs less confined than its policy.
-pv="$(mktemp -d)"; pv="$(cd "$pv" && pwd -P)"; mkdir -p "$pv/fakebin" "$pv/tree"
+pv="$(safe_tmpdir)"; mkdir -p "$pv/fakebin" "$pv/tree"
 echo "do it" > "$pv/prompt"
 # The loopback listeners are netstat's, answered the way macOS's does, so the
 # profile's loopback rules are the stand-in's and not the machine's
@@ -885,7 +885,7 @@ FM_POLICY="$pv/no-such-policy.json" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sa
   >/dev/null 2>"$pv/err"
 assert_eq "65" "$?" "a named policy that is not there refuses the round"
 assert_contains "$(cat "$pv/err")" "no policy at" "and says so"
-rm -rf "$pv" "$pk"
+safe_rm_rf "$pv" "$pk"
 unset FM_POLICY FM_SANDBOX_OS FM_SANDBOX_TOOL CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY CODEX_API_KEY GEMINI_API_KEY
 
 # --- the verdict itself, on the transcripts that actually caused trouble ---
@@ -910,7 +910,7 @@ assert_eq "ghcr.io, which is a GitHub host; a run-mode reviewer may not reach Gi
 assert_eq "" "$(fm_review_network_refusal "registry.npmjs.org cdn.playwright.dev")" "and nothing for one it may"
 assert_eq "" "$(fm_review_network_refusal "")" "and nothing for an empty one"
 
-v="$(mktemp -d)"
+v="$(safe_tmpdir)"
 verdict() { # <log contents> <rc> -> the verdict
   printf '%s' "$1" > "$v/log"
   fm_adapter_verdict "$2" "$v/log" 0; printf '%s' "$?"
@@ -937,7 +937,7 @@ assert_eq "2" "$(verdict "$gem" 0)" "a long stack trace is still an outage when 
 # --- and what actually settles it: the caller's evidence -----------------
 # shellcheck source=bin/fm-config.sh
 . "$ROOT/bin/fm-config.sh"
-e="$(mktemp -d)"; mkdir -p "$e/ad" "$e/out"; echo p > "$e/prompt"
+e="$(safe_tmpdir)"; mkdir -p "$e/ad" "$e/out"; echo p > "$e/prompt"
 # an adapter whose CLI wrote a review that quotes the words an outage uses
 cat > "$e/ad/one.sh" <<'A'
 #!/usr/bin/env bash
@@ -1016,7 +1016,7 @@ assert_eq "1" "$?" "a head that cannot confine the round is refused, not replace
 mkdir -p "$e/globdir"; : > "$e/globdir/boxed"
 assert_eq "*" "$(cd "$e/globdir" && fm_review_run_chain "$e/ad" "*")" \
   "a chain entry of '*' is read as itself, not as the file names around it"
-rm -rf "$e"
+safe_rm_rf "$e"
 claude_marker="$(grep -c '^# fm:review-run' "$ROOT/bin/adapters/claude.sh")"
 assert_eq "1" "$claude_marker" "claude, the configured reviewer, can confine a run-mode review"
 # Every alternative in the list has to be shaped like a failure. A bare noun
@@ -1162,7 +1162,7 @@ off="$(fm_adapter_mark "$v/log")"
 printf '%s' "the second vendor reviewed it fine" >> "$v/log"
 fm_adapter_verdict 0 "$v/log" "$off"
 assert_eq "0" "$?" "the previous vendor's auth error does not condemn the next"
-rm -rf "$v"
+safe_rm_rf "$v"
 
 assert_ok "test -f '$ROOT/bin/adapters/_contract.md'" "the contract is written down"
 assert_contains "$(cat "$ROOT/bin/adapters/_contract.md")" "must not: run git or gh" \
