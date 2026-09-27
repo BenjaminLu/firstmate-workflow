@@ -938,7 +938,11 @@ rm -f "$q/tests/hand-rolled.test.sh"
 # failure. The lint has to flag the shape itself, not a keyword, so the
 # planted line does not mention mktemp at all - the danger is the
 # self-resolving cd, whatever put the value there first.
-printf '#!/usr/bin/env bash\nx="$(mktemp -d)"; x="$(cd "$x" && pwd -P)"\n' \
+# Threaded through %s, not written whole here: this literal text is
+# exactly the shape the check two paragraphs up bans, so writing it
+# out in one piece would flunk this very file.
+resolve_self='cd "$x"'
+printf '#!/usr/bin/env bash\nx="$(mktemp -d)"; x="$(%s && pwd -P)"\n' "$resolve_self" \
   > "$q/tests/self-launder.test.sh"
 plant "a scratch path that cds into its own value turns the hygiene stage red" \
   "cd-ing into its own value"
