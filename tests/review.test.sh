@@ -887,6 +887,28 @@ assert_contains "$out2" "produced no review" "and says so the same way as always
 assert_eq "2" "$(wc -l < "$tries2" | tr -d ' ')" "and retried exactly once, never a second time"
 rm -rf "$dret2"
 
+# A round with nothing to retry: an adapter that produced no output at all -
+# no bytes in the log, nothing in its own output directory - is never retried,
+# unsigned or not. This is the shape a managed launch this round's own
+# environment refused (a caller's changed focus, an uncertain pane) takes: no
+# engine ever ran, so retrying would only ask the same refused environment
+# again, and a stale refusal from the first attempt can even read as settled
+# on a second, turning a real refusal into a false success (T-123 review round 2).
+dret3="$(fixture)"; rret3="$dret3/repo"; GHret3="$(ghstub "$dret3")"
+tries3="$dret3/tries"; : > "$tries3"
+cat > "$rret3/bin/adapters/mock.sh" <<'M3'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+echo x >> "$FM_TRIES"
+exit 0
+M3
+chmod +x "$rret3/bin/adapters/mock.sh"
+out3="$(cd "$rret3" && FM_ROOT="$rret3" FM_GH="$GHret3" FM_TRIES="$tries3" bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_eq "3" "$?" "a round whose adapter said nothing at all is reported failed on its first try"
+assert_contains "$out3" "produced no review" "and says so the same way as always"
+assert_eq "1" "$(wc -l < "$tries3" | tr -d ' ')" "and is never retried when nothing spoke at all"
+rm -rf "$dret3"
+
 # --- run mode (T-066) --------------------------------------------------------
 # A reviewer that only reads the diff cannot run a test or prove fail-first.
 # In run mode it gets a fresh clone of the head, outside every worktree, which
@@ -1101,6 +1123,37 @@ assert_eq "0" "$?" "a round started inside another round's TMPDIR still runs"
 assert_ok "test -d '$tmpM/fm-review.outer'" \
   "and never sweeps the outer round's checkout, which sits outside its own TMPDIR"
 kill "$outerholder" 2>/dev/null; wait "$outerholder" 2>/dev/null
+
+# The owner file that says a checkout is claimed used to be written under its
+# final, visible fm-review.* name and locked only a moment later (round 2's
+# own finding on T-123): a sweep landing in that gap saw an unlocked owner
+# file and read the checkout as free. build_checkout closes the gap by
+# building under a name sweep_checkouts never globs and renaming it into
+# place only once the lock is already held, so no sweep - however many run
+# concurrently, however tightly - can ever observe this checkout before its
+# lock exists, by construction: sweep_checkouts' own glob cannot match a
+# name it is never given. This is a soak test, not a reliable reproduction
+# of the pre-fix race by itself - the original window was a handful of
+# syscalls wide and did not turn red here against the pre-fix code either,
+# even under heavier hammering than shipped below - but it does exercise
+# real concurrent sweep pressure throughout a real checkout's construction,
+# and the round's own checkout must never be the one a concurrent sweeper
+# reads as free.
+tmpRace="$dm/tmpRace"; mkdir -p "$tmpRace"
+: > "$tmpRace/.keep-racing"
+sweepers=()
+for _s in $(seq 1 4); do
+  (while [ -e "$tmpRace/.keep-racing" ]; do (cd "$rm_" && TMPDIR="$tmpRace" FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" bin/fm-review.sh --task T-Z --branch no-such-branch-xyz --round 3 >/dev/null 2>&1); done) &
+  sweepers+=("$!")
+done
+race_failed=0
+for _r in $(seq 1 3); do
+  outR="$(cd "$rm_" && TMPDIR="$tmpRace" FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" bin/fm-review.sh --task T-Z --branch work --round 3 2>&1)"
+  case "$outR" in *"could not prepare its checkout"*) race_failed=1 ;; esac
+done
+rm -f "$tmpRace/.keep-racing"
+for _p in "${sweepers[@]}"; do kill "$_p" 2>/dev/null; wait "$_p" 2>/dev/null; done
+assert_eq "0" "$race_failed" "a round building its own checkout survives sweepers hammering the same TMPDIR throughout"
 
 # the hosts a project's setup needs reach the adapter; a GitHub host never does
 printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n  network: registry.npmjs.org cdn.playwright.dev\n' > "$rm_/config.yaml"

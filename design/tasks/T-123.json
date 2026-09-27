@@ -11,6 +11,9 @@
     "tests/review.test.sh",
     "tests/adapter-contract.test.sh",
     "tests/lib.sh",
+    "tests/crew-end-to-end.test.sh",
+    ".gitignore",
+    "bin/__pycache__/**",
     "design/design.md",
     "design/tasks/T-123.json"
   ],

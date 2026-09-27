@@ -26,6 +26,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 command -v bun >/dev/null 2>&1 || { echo "    bun not installed - crew e2e skipped"; exit 0; }
 
+# This suite copies the real, unstubbed fm-review.sh into its fixture and
+# calls it for real (below): config.yaml here never declares reviewer mode:
+# run, so it never reaches sweep_checkouts (T-123's guard is
+# `if [ "$REVIEW_MODE" = run ]`), but isolating its TMPDIR anyway costs
+# nothing and forecloses a future fixture edit here from ever sweeping the
+# host's real one.
+isolate_tmpdir
+
 d="$(mktemp -d)"; r="$d/repo"
 # T-122: the board keeps its secret under XDG_CONFIG_HOME; this suite's own,
 # outside the fixture root, so no run writes into the operator's home

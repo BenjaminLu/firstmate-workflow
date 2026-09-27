@@ -2288,9 +2288,19 @@ global skills.
   backgrounded check left the round without: a run-mode reviewer that starts
   a long check in the background and ends its turn waiting on it gets no
   later turn to check back on it, since the round is one headless
-  invocation - it happened three times (T-119 r1, T-119 r6, T-122 r2). A
-  second empty ending is reported exactly as an unretried one always was
-  (T-123).
+  invocation - it happened three times (T-119 r1, T-119 r6, T-122 r2). The
+  retry is gated on `fm_run_chain`'s own `FM_VENDOR_SPOKE`: only an attempt
+  that produced some output - bytes in the log, or, per vendor, in its own
+  output directory - and still ended without a verdict is retried. One that
+  produced nothing at all is not: that is an environment this round's own
+  launch was refused by (a caller's changed focus, an uncertain pane, a
+  vanished caller), which reads the same way twice, and re-reading it can
+  even turn a real refusal into a false success - the environment "changed"
+  once and then stays changed, so a second, fresh reading of it no longer
+  differs from itself and the retry's own launch goes on to succeed where
+  the first was rightly refused (T-123 review round 2). A second empty
+  ending, from an attempt that did speak, is reported exactly as an
+  unretried one always was (T-123).
 - Compaction waits until the log is large enough to slow a replay.
 
 ---
@@ -2380,7 +2390,14 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
   abandoned and delete it (T-123, the first round after T-117 merged, PR
   #98 rounds r8 and r8b). The kernel drops the lock the moment its last open
   reference to the file closes, a SIGKILLed round's included, which is the
-  one liveness signal this sandbox cannot fake;
+  one liveness signal this sandbox cannot fake. The owner file is built and
+  locked under a name `sweep_checkouts`' glob never matches, and made
+  visible under the name it does match only by a same-filesystem rename
+  once the lock is already held - never created under the visible name
+  first and locked a moment later, which would leave a window in which a
+  concurrent sweep's own non-blocking flock on the same unlocked file
+  succeeds and it deletes the checkout before its owner ever gets to it
+  (found in review round 2 of T-123 itself);
 - network: the declared registries only; GitHub and loopback are refused
   as values, and refused again by the proxy whatever a policy file says.
   The list names whatever the check actually fetches (Playwright's

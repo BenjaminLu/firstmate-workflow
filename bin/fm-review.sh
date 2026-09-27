@@ -233,24 +233,33 @@ if fm_crew_hatch fm-review; then unsandboxed=1; fi
 # run inside it writes outside it. The clone has its own objects, the base
 # and the head under fixed names, and no remote to push to.
 build_checkout() {
-  local head
+  local head staging staging_base
   head="$(git rev-parse -q --verify "$BRANCH^{commit}")" || return 1
-  CHECKOUT_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/fm-review.XXXXXX")" || return 1
-  CHECKOUT_ROOT="$(cd "$CHECKOUT_ROOT" && pwd -P)" || return 1
-  printf '%s\n' "$$" > "$CHECKOUT_ROOT/owner" || return 1
-  # This checkout's liveness for the sweep below is a kernel flock this
-  # process holds on its own owner file - descriptor 9, opened once here and
-  # never closed until drop_checkout or this process exits, whichever comes
-  # first - never the pid just written above. Inside a sandboxed round
-  # `kill -0` and `ps` are both denied, so a live sibling's pid can fail a
-  # signal exactly as a dead one's does, and a sweep run from inside a round
-  # would delete a checkout still in use (T-123). The kernel drops the lock
-  # the instant its holder's last open reference to the file closes, however
-  # that happens - a clean exit, drop_checkout, or a SIGKILL that runs no
-  # trap at all - which is the one liveness signal the sandbox cannot fake.
-  exec 9<>"$CHECKOUT_ROOT/owner" || return 1
+  # Built under a name sweep_checkouts never globs (it matches only
+  # fm-review.*, and this starts with a dot, which that pattern's literal
+  # "fm-review." prefix cannot match) and renamed into that name only once
+  # this round's own kernel flock on its owner file is held. A bare mktemp
+  # straight under the visible name leaves a window between the owner file
+  # existing and being locked, in which a concurrent sweep's own
+  # non-blocking flock on that same file succeeds - nobody holds it yet -
+  # and it removes the checkout out from under this round before this round
+  # gets to it (T-123 review round 2). Staging first, and making the
+  # directory visible under fm-review.* only by a same-filesystem rename
+  # after the lock is already held, closes that window rather than
+  # narrowing it: sweep_checkouts can never see this checkout before its
+  # lock exists.
+  staging="$(mktemp -d "${TMPDIR:-/tmp}/.fm-review-staging.XXXXXX")" || return 1
+  staging="$(cd "$staging" && pwd -P)" || return 1
+  printf '%s\n' "$$" > "$staging/owner" || { rm -rf "$staging"; return 1; }
+  exec 9<>"$staging/owner" || { rm -rf "$staging"; return 1; }
   perl -MFcntl=:flock -e 'open(my $l, "<&=", 9) or exit 2;
-    exit(flock($l, LOCK_EX | LOCK_NB) ? 0 : 1)' || { { exec 9<&-; } 2>/dev/null; return 1; }
+    exit(flock($l, LOCK_EX | LOCK_NB) ? 0 : 1)' || {
+    { exec 9<&-; } 2>/dev/null; rm -rf "$staging"; return 1; }
+  staging_base="${staging##*/}"
+  CHECKOUT_ROOT="${staging%/*}/fm-review.${staging_base#.fm-review-staging.}"
+  if [ -e "$CHECKOUT_ROOT" ] || ! mv "$staging" "$CHECKOUT_ROOT"; then
+    { exec 9<&-; } 2>/dev/null; rm -rf "$staging"; CHECKOUT_ROOT=""; return 1
+  fi
   OWNER_LOCK_HELD=1
   CHECKOUT="$CHECKOUT_ROOT/checkout"
   git clone -q --no-checkout --no-hardlinks "$REPO" "$CHECKOUT" &&
@@ -669,6 +678,19 @@ if [ "$signed" = "0" ] && [ -n "${FM_RUN_DIR:-}" ] && [ -f "$FM_RUN_DIR/last-res
   fi
 fi
 [ "$signed" = "1" ] && break
+[ "${FM_VENDOR_SPOKE:-0}" = "1" ] || break
+# Retrying is for an engine that ran and ended its turn with nothing signed -
+# T-119/T-122's backgrounded check, which leaves a transcript with no verdict
+# marker in it. It is never for a round that produced no output at all: a
+# managed launch this round's own environment refused (changed focus, an
+# uncertain pane, a caller that vanished) fails identically read twice, and
+# retrying it can even let a stale refusal from the first attempt read as
+# settled on the second (the environment "changed" once, then stays that
+# way, so a fresh reading of it no longer differs from itself) - turning a
+# real refusal into a false success instead of reporting it. FM_VENDOR_SPOKE
+# is fm_run_chain's own answer to "did anything happen", set from bytes this
+# attempt actually added to the log or its own output directory; nothing
+# added means nothing to retry.
 [ "$attempt_n" -ge 2 ] && break
 attempt_n=$((attempt_n + 1))
 echo "fm-review: round $ROUND ended with no signed verdict; retrying automatically (attempt $attempt_n)" >&2
