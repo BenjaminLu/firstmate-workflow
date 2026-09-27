@@ -545,12 +545,14 @@ mt=mktemp; fd=-d; ft=-t
 cat > "$t/mkcmd.sh" <<S
 #!/usr/bin/env bash
 set -e
-$mt $fd > "$t/mkbare"
-$mt $fd $ft fm-x > "$t/mktflag"
+b="\$($mt $fd)"; printf '%s' "\$b" > "$t/mkbare"
+[ -d "\$b" ] && printf ok > "$t/mkbare.exists" || printf no > "$t/mkbare.exists"
+f="\$($mt $fd $ft fm-x)"; printf '%s' "\$f" > "$t/mktflag"
+[ -d "\$f" ] && printf ok > "$t/mktflag.exists" || printf no > "$t/mktflag.exists"
 $mt $fd "\$TMPDIR/fm-tmpl.XXXXXX" > "$t/mktmpl"
 S
 chmod +x "$t/mkcmd.sh"
-rm -f "$t/mkbare" "$t/mktflag" "$t/mktmpl"
+rm -f "$t/mkbare" "$t/mktflag" "$t/mktmpl" "$t/mkbare.exists" "$t/mktflag.exists"
 echo | FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" PATH="$t/psbin:$PATH" \
   "$SB" run --policy="$P" --root="$root" --ctl="$t/ctl" -- "$t/mkcmd.sh"
 assert_eq "0" "$?" "a bare mktemp -d, mktemp -t, and an explicit template all succeed inside a round"
@@ -563,8 +565,15 @@ assert_matches "$mktflag" "^$t/ctl/fm-sb\.[A-Za-z0-9]+/tmp/fm-x\." \
   "and so does mktemp -t, under its own prefix"
 assert_matches "$mktmpl" "^$t/ctl/fm-sb\.[A-Za-z0-9]+/tmp/fm-tmpl\." \
   "an explicit template is untouched, and already lands there too"
-assert_ok "test -d '$mkbare'" "and the directory the bare call named is real"
-assert_ok "test -d '$mktflag'" "so is the one -t named"
+# checked from inside the round (T-123 round 9): fm-sandbox.sh's own exit
+# trap removes the round's whole --ctl-nested work directory - the round's
+# own tmp included - the moment "$SB run" returns (line ~508 above asserts
+# exactly this is true of every round), so a test -d on the named path
+# AFTER the round has already ended checks a directory gone by design, on
+# every platform - not a Linux-only quirk. The round records what it saw
+# of its own directory while it was still alive to look.
+assert_eq "ok" "$(cat "$t/mkbare.exists" 2>/dev/null)" "and the directory the bare call named is real"
+assert_eq "ok" "$(cat "$t/mktflag.exists" 2>/dev/null)" "so is the one -t named"
 
 # Linux gets none of this: GNU's own mktemp already honours $TMPDIR, so
 # bin/fm-sandbox.sh installs no stand-in on that side. This plays GNU's own
@@ -588,11 +597,13 @@ chmod +x "$t/gnubin/mktemp"
 cat > "$t/mkcmd-lin.sh" <<S
 #!/usr/bin/env bash
 set -e
-$mt $fd > "$t/mkbare-lin"
-$mt $fd $ft fm-x > "$t/mktflag-lin"
+b="\$($mt $fd)"; printf '%s' "\$b" > "$t/mkbare-lin"
+[ -d "\$b" ] && printf ok > "$t/mkbare-lin.exists" || printf no > "$t/mkbare-lin.exists"
+f="\$($mt $fd $ft fm-x)"; printf '%s' "\$f" > "$t/mktflag-lin"
+[ -d "\$f" ] && printf ok > "$t/mktflag-lin.exists" || printf no > "$t/mktflag-lin.exists"
 S
 chmod +x "$t/mkcmd-lin.sh"
-rm -f "$t/mkbare-lin" "$t/mktflag-lin"
+rm -f "$t/mkbare-lin" "$t/mktflag-lin" "$t/mkbare-lin.exists" "$t/mktflag-lin.exists"
 echo | FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$t/bin/bwrap" PATH="$t/gnubin:$t/psbin:$PATH" \
   "$SB" run --policy="$P" --root="$root" --ctl="$t/ctl" -- "$t/mkcmd-lin.sh"
 assert_eq "0" "$?" "and on Linux, where GNU's mktemp already honours TMPDIR, the round succeeds with no stand-in"
@@ -602,6 +613,11 @@ assert_matches "$mkbarelin" "^$t/ctl/fm-sb\.[A-Za-z0-9]+/tmp/tmp\." \
   "a bare mktemp -d lands under the round's own TMPDIR there too"
 assert_matches "$mktflaglin" "^$t/ctl/fm-sb\.[A-Za-z0-9]+/tmp/fm-x\." \
   "and so does mktemp -t"
+# checked from inside the round too (T-123 round 9), for the same reason as
+# the darwin pair above: the directory is only guaranteed to exist for the
+# life of the round.
+assert_eq "ok" "$(cat "$t/mkbare-lin.exists" 2>/dev/null)" "and its directory is real there too"
+assert_eq "ok" "$(cat "$t/mktflag-lin.exists" 2>/dev/null)" "and so is the -t one's"
 
 # --- the profile's loopback denials are tried before the round (T-117) ------
 # The canary on 2026-09-26 found a claude round on macOS reaching the live
@@ -798,8 +814,13 @@ kc() {   # kc <mode> <os> <vendor> [env...] -> exit code; the round's view in $t
   shift 3
   [ "$os_" = linux ] && tool="$t/bin/bwrap"
   rm -f "$t/login.out" "$t/profile.sb" "$t/kc/calls"; echo stale > "$t/started"
+  # its own --tmp (T-123 round 9), same as any real caller passes: with
+  # none, the round's own temp directory falls back to under --ctl, and the
+  # mktemp stand-in the round installs there then reads as fm's own control
+  # directory on the round's PATH, not the round's own business
+  rm -rf "$t/kc-tmp"; mkdir -p "$t/kc-tmp"
   env FM_SANDBOX_OS="$os_" FM_SANDBOX_TOOL="$tool" FM_KEYCHAIN_TOOL="$t/kc/security" PATH="$lpath" "$@" \
-    "$SB" "$mode" --policy="$t/worker.json" --root="$root" --vendor="$v" --ctl="$t/ctl" --started="$t/started" \
+    "$SB" "$mode" --policy="$t/worker.json" --root="$root" --vendor="$v" --ctl="$t/ctl" --tmp="$t/kc-tmp" --started="$t/started" \
     -- "$t/login.sh" "$t/login.out" </dev/null >/dev/null 2>"$t/login.err"
   echo $?
 }

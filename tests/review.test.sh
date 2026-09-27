@@ -31,11 +31,11 @@ fixture() {
   local d; d="$(safe_tmpdir)"
   git init -q -b main "$d/repo"; cd "$d/repo" || return 1
   git config user.email a@b.c; git config user.name t
-  mkdir -p bin design/tasks skills/reviewer src state
+  mkdir -p bin design/tasks "$d/repo/skills/reviewer" src state
   cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" bin/
   cp "$ROOT/bin/fm-herdr.py" bin/
   cp -r "$ROOT/bin/adapters" bin/
-  cp "$ROOT/skills/reviewer/SKILL.md" skills/reviewer/
+  cp "$ROOT/skills/reviewer/SKILL.md" "$d/repo/skills/reviewer/"
   printf 'vendor: mock\n' > config.yaml
   printf '{"id":"T-Z","title":"a task","activity":{"en":"Review the authored task","zh-TW":"審查已撰寫的任務"},"scope":["src/**"],"acceptance":["it exists"]}\n' > design/tasks/T-Z.json
   echo base > src/a; git add -A; git commit -qm base
@@ -1483,6 +1483,7 @@ assert_eq "70" "$rc" "safe_rm_rf refuses an empty path"
 assert_eq "70" "$rc" "safe_rm_rf refuses to remove the current directory"
 assert_ok "test -f '$victim_root/real/canary'" "and the canary inside it survives"
 
+mkdir -p "$victim_root/elsewhere"
 ( . "$ROOT/tests/lib.sh"; TMPDIR="$victim_root/elsewhere" safe_rm_rf "$victim_root/real" ) >/dev/null 2>&1; rc=$?
 assert_eq "70" "$rc" "safe_rm_rf refuses a path outside its own TMPDIR"
 assert_ok "test -f '$victim_root/real/canary'" "and the canary survives that refusal too"

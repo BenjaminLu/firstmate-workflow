@@ -2473,6 +2473,46 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
   build to run against, threads the literal words through a variable
   instead of writing them out whole, the same way the self-resolving-`cd`
   check's own fixture already had to (T-123 round 7);
+- the round's own temporary directory - where the mktemp stand-in above
+  lives - is never nested under `--ctl`: fm's own control files (the
+  profile, a vendor's login copy, the proxy's port or socket) live under
+  `--ctl`, and nothing of fm's belongs on the round's own `PATH`. A test
+  helper that omits `--tmp` gets the fallback `$work/tmp`, which the round's
+  `--ctl` genuinely contains; `tests/sandbox.test.sh`'s `kc()` now passes
+  its own `--tmp`, as every real caller already does, so that assertion
+  keeps meaning what it says (T-123 round 9);
+- a directory a round's own temp directory holds is only guaranteed to
+  exist for the life of the round: `fm-sandbox.sh run`'s own exit trap
+  removes it, `--ctl` included, the moment the round ends. A test that
+  asked `test -d` on a path under it after `"$SB" run` had already returned
+  was asking whether cleanup it elsewhere asserts had somehow not
+  happened; the mktemp stand-in's own tests now check what a round made
+  from inside the round, while it is still there to look (T-123 round 9);
+- a name that is only data - a path listed as a value, never invoked - can
+  still read as a call to a naive, repository-wide text sweep for one:
+  `bin/ci.sh`'s own list of files still left to `mktemp_pending` names
+  `bin/fm.sh` as one of them, which is exactly the shape
+  `tests/decide.test.sh`'s sweep for "what raises a card" is watching for,
+  so it assembles that one name from a variable rather than spelling it
+  whole, the same way a fixture that must write a genuinely bare `mktemp`
+  call already threads it (T-123 round 9);
+- a fixture that builds its own throwaway repository and `cd`s into it,
+  then writes a relative `skills/reviewer` path there, reads to a
+  repository-wide lint elsewhere (the skills self-update feature's bounded
+  writer check, `bin/fm.sh lint`) exactly like a write to this checkout's
+  own `skills/reviewer` - that lint's own narrow recognition of a fixture's
+  `cd` looks for the literal `mktemp -d` shape safe_tmpdir now replaces
+  everywhere, so it no longer sees this one as a fixture at all.
+  `tests/review.test.sh`'s fixture writes those two paths through its own
+  root variable instead (`"$d/repo/skills/reviewer"`), which that lint
+  already treats as a fixture path on its own terms, rather than teaching
+  it a second way to recognise `safe_tmpdir` (T-123 round 9);
+- `safe_rm_rf`'s own test for a path outside its TMPDIR asked for a
+  `TMPDIR` that was never created, so the function's first guard - that
+  `TMPDIR` itself resolves - refused it before the "outside" comparison the
+  test claimed to exercise ever ran (round 7 review). The test now creates
+  that directory first, so the branch it names is the one that returns 70
+  (T-123 round 9);
 - network: the declared registries only; GitHub and loopback are refused
   as values, and refused again by the proxy whatever a policy file says.
   The list names whatever the check actually fetches (Playwright's
