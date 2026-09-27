@@ -733,6 +733,56 @@ else
   done
 fi
 
+stage "voyage2d"
+# T-125: games/voyage-2d own suite (node --test), and the Live build the
+# board serves as static files. The bundle is committed, so this refuses one
+# that a source change left stale: it rebuilds into a scratch copy at the
+# same relative depth and diffs the result byte for byte.
+if [ ! -d games/voyage-2d ]; then
+  skip "no games/voyage-2d yet"
+elif ! command -v node >/dev/null 2>&1; then
+  skip "node not installed"
+elif ! command -v python3 >/dev/null 2>&1; then
+  skip "python3 not installed"
+else
+  if v2d_out=$(cd games/voyage-2d && node --test tests/ 2>&1); then
+    pass "games/voyage-2d node --test"
+  else
+    flunk "games/voyage-2d node --test"; printf "%s\n" "$v2d_out"
+  fi
+  if ! command -v bun >/dev/null 2>&1; then
+    skip "bun not installed (games/voyage-2d live build)"
+  else
+    v2d_tmp="$(mktemp -d "${TMPDIR:-/tmp}/fm-ci-voyage2d.XXXXXX")" || v2d_tmp=""
+    if [ -z "$v2d_tmp" ]; then
+      flunk "could not stage a scratch copy of games/voyage-2d for the freshness check"
+    else
+      mkdir -p "$v2d_tmp/games"
+      if cp -R games/voyage-2d "$v2d_tmp/games/voyage-2d" 2>/dev/null; then
+        rm -rf "$v2d_tmp/games/voyage-2d/build" "$v2d_tmp/games/voyage-2d/node_modules"
+        if v2d_build_out=$(cd "$v2d_tmp/games/voyage-2d" && python3 tools/build.py --live 2>&1); then
+          fresh="$v2d_tmp/board/public/voyage2d/live.html"
+          committed="board/public/voyage2d/live.html"
+          if [ ! -f "$committed" ]; then
+            flunk "board/public/voyage2d/live.html is missing: run (cd games/voyage-2d && python3 tools/build.py --live)"
+          elif [ ! -f "$fresh" ]; then
+            flunk "the live build did not produce board/public/voyage2d/live.html"
+          elif diff -q "$committed" "$fresh" >/dev/null 2>&1; then
+            pass "board/public/voyage2d/live.html matches a fresh build"
+          else
+            flunk "board/public/voyage2d/live.html is stale: rerun (cd games/voyage-2d && python3 tools/build.py --live) and commit it"
+          fi
+        else
+          flunk "games/voyage-2d live build"; printf "%s\n" "$v2d_build_out"
+        fi
+      else
+        flunk "could not copy games/voyage-2d into the scratch tree"
+      fi
+      rm -rf "$v2d_tmp"
+    fi
+  fi
+fi
+
 stage "bun tests"
 # tests/e2e belongs to playwright, which owns its own runner; bun picking
 # those files up runs them without a browser and calls the result an error

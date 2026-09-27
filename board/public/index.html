@@ -95,6 +95,13 @@ section>h2{margin:0 0 10px;font:600 13px var(--mono);color:var(--fg3);
 .log .k-approved{color:var(--ok)} .log .k-decision_requested{color:var(--wait)}
 .log .k-greenlit{color:var(--brass)} .log .k-vendor_unavailable{color:var(--warn)}
 .empty{color:var(--fg3);font-size:12px;padding:10px 13px}
+.modes{display:flex;border:1px solid var(--line);border-radius:7px;overflow:hidden;margin-left:12px}
+.modes button{padding:4px 11px;font:12px var(--sans);color:var(--fg2);background:none;border:none;cursor:pointer}
+.modes button+button{border-left:1px solid var(--line)}
+.modes button[aria-pressed=true]{background:#1d4b7a;color:#fff}
+.modes button:disabled{color:var(--fg3);cursor:not-allowed}
+#gamewrap{position:fixed;inset:0;z-index:1;background:#000}
+#gamewrap .voyage2dFrame{display:block;width:100%;height:100%;border:0}
 .langs{display:flex;border:1px solid var(--line);border-radius:7px;overflow:hidden;margin-left:12px}
 .langs button{padding:4px 11px;font:12px var(--sans);color:var(--fg2);background:none;border:none;cursor:pointer}
 .langs button+button{border-left:1px solid var(--line)}
@@ -183,10 +190,12 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
   <span class="spacer"></span>
   <span class="vend" id="engine" hidden></span>
   <span id="gl" style="font:600 13px var(--mono);color:var(--brass)"></span>
+  <span class="modes" id="modes"></span>
   <span class="langs" id="langs"></span>
 </div>
 <!-- T-122: a tab without the captain's credential says so, once, and writes nothing -->
 <p id="readOnly" role="status" hidden></p>
+<div id="v1root">
 <div class="counts" id="counts"></div>
 <!-- Decisions lead the page; the vessel and readable crew remain directly below. -->
 <section id="deckwrap" style="padding:0 20px" hidden>
@@ -215,8 +224,11 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
   <h2 id="h-log"></h2>
   <div class="log"><ul id="log"></ul></div>
 </section>
+</div><!-- #v1root -->
+<div id="gamewrap" hidden><div id="gamehost"></div></div>
 <script src="ship.js"></script>
 <script src="diagram.js"></script>
+<script src="game.js"></script>
 <script>
 // the lanes come from the server, in lifecycle order; this is only how many
 // merged cards the merged lane shows before pointing at the history
@@ -347,6 +359,41 @@ function observe(outcomes) {
   initialized = true;
 }
 
+// T-125: Board / Voyage 2.5D / Voyage 3D. The chosen mode is this tabs
+// own (sessionStorage: never localStorage, and never sent anywhere), and
+// never changes what any of them read - every mode reads the same
+// GET /api/state and SSE /events already wired below. 3D is not built
+// yet, so it can never be the mode that comes back on reload.
+const MODES = ["board", "voyage2d", "voyage3d"];
+let mode = (() => { try { return sessionStorage.getItem("board.mode") || "board"; } catch (_) { return "board"; } })();
+if (!MODES.includes(mode) || mode === "voyage3d") mode = "board";
+// The boss key (Esc Esc, from anywhere in the game) and the switchs own
+// Board button both land here: the second, visible way back T-125 asks
+// for. Switching mode never touches /api/state, /events or any write.
+function applyMode() {
+  const gaming = mode === "voyage2d";
+  document.getElementById("v1root").hidden = gaming;
+  document.getElementById("gamewrap").hidden = !gaming;
+  renderModes();
+  if (gaming) window.VoyageGame.mount(document.getElementById("gamehost"),
+    { base: "", token: token(), project: PROJECT || null, onBossKey: () => setMode("board") });
+  else window.VoyageGame.unmount();
+}
+function setMode(next) {
+  if (next === "voyage3d" || !MODES.includes(next) || next === mode) return;
+  mode = next;
+  try { sessionStorage.setItem("board.mode", mode); } catch (_) {}
+  applyMode();
+}
+function renderModes() {
+  const el = document.getElementById("modes");
+  SHIP.patch(el, MODES.map(m => {
+    const disabled = m === "voyage3d";
+    const label = t("mode" + m[0].toUpperCase() + m.slice(1));
+    return `<button aria-pressed="${m === mode}" data-m="${esc(m)}"${disabled ? ` disabled title="${esc(t("mode3dComing"))}"` : ""}>${esc(label)}</button>`;
+  }).join(""));
+  el.querySelectorAll("button").forEach(b => { if (!b.disabled) b.onclick = () => setMode(b.dataset.m); });
+}
 function chrome() {
   document.getElementById("h-brand").innerHTML =
     esc(t("brand")) + "<small>" + esc(t("sub")) + "</small>";
@@ -362,6 +409,7 @@ function chrome() {
       // rather than after the state comes back
       DIAGRAM.mount(document.getElementById("deck"), lang).catch(() => {});
       fetch(STATE_URL).then(x => x.json()).then(render).catch(() => {}); });
+  renderModes();
 }
 
 function render(s) {
@@ -824,6 +872,7 @@ fetch("/api/i18n").then(r => r.json()).then(dd => { DICT = dd; })
   .finally(() => {
     document.documentElement.lang = lang;
     chrome();
+    applyMode();
     checkSession();
     connect();
     fetch(STATE_URL).then(r => r.json()).then(render).catch(() => {});

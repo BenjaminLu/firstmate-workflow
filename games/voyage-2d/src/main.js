@@ -4,6 +4,23 @@
 // flashes, the vignette; then the cut-ins and the HUD on top.
 import { createSim, step } from "../v3src/sim/sim.js";
 import { HUD, projectOf, BOARD_ACTIONS } from "./hud.js";
+import { BoardSource } from "./boardsource.js";
+import { viewToSim, liveEmptySim } from "./live-adapter.js";
+// Live boot: board/public/game.js loads this bundle in an iframe whose
+// URL hash carries {base, token, project} - the same place T-122 own
+// one-time login code travels, so it never reaches a server log or the
+// top window history. Read once, then cleared, exactly as /login does it.
+// Absent (no hash, or not valid JSON), the game is the Playground it has
+// always been.
+const LIVE = (() => {
+  try {
+    const h = location.hash.slice(1);
+    if (!h) return null;
+    const cfg = JSON.parse(decodeURIComponent(h));
+    history.replaceState(null, "", location.pathname + location.search);
+    return cfg && typeof cfg === "object" ? cfg : null;
+  } catch { return null; }
+})();
 import { CLASSES } from "./ship.js";
 import { CREW_FIXTURE } from "../v3src/sim/config.js";
 import { loadImages, MOTION } from "./puppet.js";
@@ -66,7 +83,7 @@ function resize() {
   if (G.ready) ui.render(sim);
 }
 
-let sim = createSim(G.seed);
+let sim = LIVE ? liveEmptySim(rituals) : createSim(G.seed);
 const sound = new Sound2D();
 let ui, world, camera, director, battle, overlay, helm, mini;
 
@@ -98,9 +115,10 @@ function handle(e) {
 ui = new HUD({
   // the captain's two board actions: set work aside (park / drop, where the board allows it),
   // and answer a card by clicking it. In Playground both only change the simulated voyage.
-  cardAction: (kind, id) => {
-    if (kind === "park" || kind === "drop") source.command({ type: kind, task: id });
-  },
+  // docs/interface.md section 2: a card offers only what the boards own
+  // tasks[].actions lists (park, unpark, drop); the board itself refuses
+  // anything else, so forwarding any kind here invents no new write.
+  cardAction: (kind, id) => { source.command({ type: kind, task: id }); },
   answer: (id, key) => source.command({ type: "answer", decision: id, chosen: key }),
   ritual: (name, on) => { rituals[name] = on; ui.setFlag("r-" + name, on); apply({ type: "ritual", name, on }); },
   sound: () => toggleSound(),
@@ -128,11 +146,17 @@ ui.setFlag("style", false, G.style);
 // POST /decisions. Playground (this standalone build): the simulated voyage, driven by the sim
 // on its own. Playground has no network code at all: the build refuses fetch, XHR, WebSocket
 // and sendBeacon, so nothing in it can ever reach the board.
-const MODE = "playground";
-const source = {
+const MODE = LIVE ? "live" : "playground";
+// Live: BoardSource is the whole seam (docs/interface.md section 2). It
+// reads GET /api/state and SSE /events and writes only POST /decisions and
+// POST /tasks, with the tab own bearer token; nothing else ever leaves the
+// page. Playground: the captain own commands only ever change the sim.
+const source = LIVE
+  ? new BoardSource({ base: LIVE.base || "", token: LIVE.token || "", project: LIVE.project || null,
+      onError: (e) => showError("board connection", e) })
+  : {
   mode: MODE,
   writes: 0,
-  // the captain's commands; in Playground they only ever change the sim
   command(c) {
     source.writes++;
     if (c.type === "answer") return apply({ type: "answer", decision: c.decision, key: c.chosen });
@@ -144,6 +168,21 @@ const source = {
     return [];
   },
 };
+// Live: BoardSource own snapshots and mapped events drive the same render
+// pipeline apply() uses for a local action - viewToSim translates one
+// /api/state view into the sim shape World, HUD, Director and BattleView
+// already read, and each mapped event still goes through handle(), so every
+// ritual keys off the same board event vocabulary either way.
+let unsubscribeLive = null;
+if (MODE === "live") {
+  unsubscribeLive = source.subscribe((view, events) => {
+    try {
+      sim = viewToSim(view, sim);
+      for (const e of events) handle(e);
+      if (G.ready) ui.render(sim);
+    } catch (e) { showError("live snapshot", e); }
+  });
+}
 
 // ---------------------------------------------------------------- hands aboard
 // The ship's class follows the crew: hire a hand past a class's cap and the ship grows (a
@@ -330,6 +369,29 @@ addEventListener("keyup", (e) => {
   if (mini?.active) mini.key(e.key, false);
 });
 addEventListener("blur", () => helm?.held.clear());
+// The boss key (T-125): Esc twice within about 400 ms, from anywhere,
+// on the second keydown, before the next frame. A capture-phase listener
+// of its own, so a single Esc keeps every meaning it already has (closing
+// a menu, a card, a mini-game) and a text field or the decision card own
+// keys are never swallowed - this only ever adds a teardown, and never
+// calls preventDefault or stopPropagation.
+let lastEscAt = -1;
+const BOSS_KEY_WINDOW_MS = 400;
+function bossKeyTeardown() {
+  cancelAnimationFrame(rafId);
+  sound.enable(false);
+  if (unsubscribeLive) { try { unsubscribeLive(); } catch { /* already gone */ } unsubscribeLive = null; }
+  G.ready = false;
+  if (window.__voyage2d) window.__voyage2d.bossKeyFired = true;
+  try { if (window.parent && window.parent !== window) window.parent.postMessage({ type: "voyage2d:boss-key" }, location.origin); } catch { /* not embedded, or a foreign parent */ }
+  dispatchEvent(new CustomEvent("voyage2d:boss-key"));
+}
+addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || e.metaKey || e.ctrlKey || e.altKey) return;
+  const now = performance.now();
+  if (now - lastEscAt < BOSS_KEY_WINDOW_MS) { lastEscAt = -1; bossKeyTeardown(); }
+  else lastEscAt = now;
+}, { capture: true });
 // ---------------------------------------------------------------- click / tap first
 // In the fight a tap anywhere does what the prompt says. Out of it, the one thing to tap on
 // stage is the kraken once the captain has chosen to fight (to take the fight up again).
@@ -440,10 +502,10 @@ function botFight() {
 }
 
 // ---------------------------------------------------------------- the frame
-let last = performance.now(), fpsN = 0, fpsT = 0;
+let last = performance.now(), fpsN = 0, fpsT = 0, rafId = 0;
 G.fps = 0;
 function frame(now) {
-  requestAnimationFrame(frame);
+  rafId = requestAnimationFrame(frame);
   const dtReal = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (!G.ready) return;
@@ -592,11 +654,12 @@ function placard(ctx) {
 
 addEventListener("resize", resize);
 resize();
-requestAnimationFrame(frame);
+rafId = requestAnimationFrame(frame);
 build().catch((e) => showError("build", e));
 
 // ---------------------------------------------------------------- test hooks
 window.__voyage2d = {
+  bossKeyFired: false, mode: MODE,
   prompt: () => battle?.prompt() || null,
   targets: () => stageTargets().map(({ id, at, key }) => ({ id, at, label: ui.t[key] })),
   hire, dismiss, setHands, get ui() { return ui; }, get helm() { return helm; }, get mini() { return mini; }, source,

@@ -150,5 +150,9 @@
   "parkConfirmCaptain": "Park {id}? Its card is still waiting for you, so it stays in your lane until the card is answered or withdrawn; after that it leaves the lanes until you unpark it.",
   "parkedPending": "parked; waits on its card",
   "confirmRequired": "not done: this task has crew aboard or an open pull request; choose it again and confirm",
-  "reopenNeedsReason": "not reopened: say why it is wrong, in one line of plain text"
+  "reopenNeedsReason": "not reopened: say why it is wrong, in one line of plain text",
+  "modeBoard": "Board",
+  "modeVoyage2d": "Voyage 2.5D",
+  "modeVoyage3d": "Voyage 3D",
+  "mode3dComing": "coming"
 }

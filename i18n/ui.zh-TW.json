@@ -150,5 +150,9 @@
   "parkConfirmCaptain": "確定擱置 {id}？它的卡片仍在等你答覆，所以在卡片被答覆或撤回前，它會留在你的欄位；之後在你恢復它之前，它會離開各欄。",
   "parkedPending": "已擱置；等候卡片答覆",
   "confirmRequired": "未執行：此任務有船員在船上或有開啟中的拉取請求；請再選一次並確認",
-  "reopenNeedsReason": "未重新開啟：請用一行純文字說明為什麼它是錯的"
+  "reopenNeedsReason": "未重新開啟：請用一行純文字說明為什麼它是錯的",
+  "modeBoard": "看板",
+  "modeVoyage2d": "航海 2.5D",
+  "modeVoyage3d": "航海 3D",
+  "mode3dComing": "尚未推出"
 }

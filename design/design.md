@@ -1763,6 +1763,68 @@ The production board is **rewritten** from the prototype in
 `design/proposals/`, not promoted from it: that prototype was written with no
 tests and no error handling.
 
+**A third view of the same state: the 2.5D voyage (T-125).** The board header
+gains a three-way switch, Board / Voyage 2.5D / Voyage 3D, sitting beside the
+language switch. The choice is the tabs own (sessionStorage, not localStorage
+and never a URL parameter, so it cannot be shared or bookmarked into a
+different tabs state) and never changes what any of them read: every mode is
+the same `GET /api/state` and SSE `/events` this section already
+describes. Voyage 3D is shown disabled with a translated coming until its own
+task; on a browser restart or a tab that lost its session it can never be the
+mode that comes back, so a captain is never stranded on a game that is not
+there.
+
+The 2.5D game (`games/voyage-2d/`, vendored from the standalone prototype at
+tag `v2d-9`; its own contract is `games/voyage-2d/docs/interface.md`) is
+served by the board as static files under `board/public/voyage2d/`, built by
+`tools/build.py --live` from the same source the standalone Playground
+bundle builds from. The seam between the two is one module,
+`games/voyage-2d/src/boardsource.js`s `BoardSource`: it reads
+`GET /api/state` and the SSE `/events` snapshots (mapping the boards
+`stage` onto the games own `lane` vocabulary, and the last-40-events
+window onto the small, typed event list the games rituals key off), and it
+writes only the two routes this section already grants a credentialed tab,
+`POST /decisions` and `POST /tasks`, with that tabs own bearer token and
+nothing else - there is no writing route the game has that v1 does not.
+`games/voyage-2d/src/live-adapter.js`s `viewToSim` turns one such
+snapshot into the shape the games existing renderer (World, HUD, Director,
+BattleView) already reads in its standalone Playground mode, so the same
+rendering code runs from live data without knowing the difference. A lane the
+Playground never had (the boards `gate` and `captain`) folds into the
+nearest one that already exists (`working` with a red flag, and `review`)
+rather than adding a new one, per the games own interface doc.
+
+The game is mounted in an `<iframe>` (`board/public/game.js`), not inlined
+into the boards own document: removing that iframe discards its whole
+browsing context at once, which is the only way to guarantee every
+`requestAnimationFrame` loop, `AudioContext` and interval the game owns
+stops immediately, with nothing left running, rather than trusting the games
+own cleanup code to remember all three. Its boot config (the boards origin
+and the tabs own token - never the boards secret) travels in the iframes URL
+hash, the same place the boards own one-time `/login` code travels (section
+8 above), so it never reaches a server log or the top windows history. The
+boss key - Esc twice within about 400 ms, from anywhere in the game, on the
+second keydown - and a second, visible Board button both remove the iframe
+and show v1 again; switching back remounts a fresh iframe, which resumes from
+whatever the board currently says, since nothing about the games own state
+survives a teardown and nothing needs to.
+
+**What is not built yet.** The kraken (the review-round-count creature that
+grabs a task past three lost rounds) is not wired for Live in this round: the
+40-event window `/events` carries is not enough for its full round history,
+and doing this properly needs either a wider window or a dedicated endpoint.
+Until then the games kraken arms stay empty in Live; the fight is still
+playable for its own sake, but nothing forces it. Mini-games and free captain
+movement stay exactly as the games own interface doc already scopes them:
+mini-games never show in Live, and captain movement is cosmetic and never
+writes, in either mode.
+
+**Voyage 3D (follow-up).** A third mode, sharing the same `BoardSource` seam
+and the same two writing routes, rendered with a 3D engine instead of the 2.5D
+games Canvas2D one. Its own task turns the disabled switch on; nothing about
+this seam is expected to change for it, since `BoardSource` and the boss key
+are already engine-agnostic.
+
 ---
 
 ## 9. Three languages

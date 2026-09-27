@@ -1,0 +1,34 @@
+{
+  "id": "T-125",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "the board can be played: v1, the 2.5D voyage and later the 3D one show the same tasks from the same data, the game writes only through the board's own authenticated routes, and Esc Esc puts the plain board back at once",
+  "scope": [
+    "games/voyage-2d/**",
+    "board/server.ts",
+    "board/public/index.html",
+    "board/public/game.js",
+    "board/public/voyage2d/**",
+    "i18n/ui.en.json",
+    "i18n/ui.zh-TW.json",
+    "tests/i18n.test.sh",
+    "tests/board.test.sh",
+    "tests/e2e/board.spec.ts",
+    "tests/e2e/game.spec.ts",
+    "tests/e2e/fixture.ts",
+    "bin/ci.sh",
+    "skills/firstmate/SKILL.md",
+    "README.md",
+    "design/design.md",
+    "design/tasks/T-125.json"
+  ],
+  "acceptance": [
+    "Why. The captain asked on 2026-09-26 for the board to switch between the plain view (v1), the 2.5D game and the 3D game, with task lists and states consistent across all three and a key that brings v1 back at once. The captain chose 2.5D first, then 3D through the same interface, and Esc Esc as that key. The captain approved starting on 2026-09-27. The 2.5D game's source is in games/voyage-2d/. firstmate brings it in as this branch's first commit, from ~/Desktop/voyage-games at tag v2d-9, because a round cannot read outside its worktree. games/voyage-2d/docs/interface.md is the contract: what the game reads, what it may send, and what is simulation-only. Its own spec file, design/tasks/T-125.json, is committed on this branch.",
+    "Mode switch. The board header gains a three-way switch: Board / Voyage 2.5D / Voyage 3D. 3D is shown disabled with 'coming' in en and zh-TW until its own task. The chosen mode persists per tab (sessionStorage) and never changes data. Every mode reads the same GET /api/state and SSE /events, so a task's lane, its cards, its crew and its PR are the same in v1 and in the game at the same moment. Test: after each of a dispatch, a verdict, a card, a park and a merge (fixture events), v1's lanes and the game's BoardSource model hold the same tasks in the same lanes, compared field by field.",
+    "The game in Live mode. games/voyage-2d gains the BoardSource its interface doc describes, plus a Live build (tools/build.py --live -> board/public/voyage2d/) that the board serves. The Playground build keeps its no-network guarantee, and only the Live build contains fetch or EventSource. In Live mode the game only watches the real crew. The captain's actions go only through the board's existing writing routes, POST /decisions and POST /tasks. They use the tab's session token, sent as Authorization: Bearer with the board's Origin (T-122), and nothing else. There is no new writing route. The game offers only what the board offers: a card's own options and its named effects (T-118), and a task's actions. The Live kraken rule, the Playground-only mini-games and captain movement, and the no-writes-in-fights rule stay as the interface doc says. A refused write shows the board's own translated refusal. Test that every request the Live game makes is one of the board's routes, carries the token, and that no other request leaves the page.",
+    "The boss key. Esc pressed twice within about 400 ms, from anywhere in the game, returns to v1 at once. It happens on the second keydown, before the next frame. The game's canvas, audio and timers stop and unload: no sound, no animation frame still running, nothing left behind. The page title and favicon are v1's. A single Esc keeps its in-game meaning (close the innermost thing), and a text field or the decision card's own keys are never swallowed. Switching back to the game resumes from the same live state. A second, visible 'Board' button does the same for mouse and touch. Test with Playwright: Esc Esc from the fight, from a card, from captain control and from a mini-game each lands on v1 within one frame, and afterwards no requestAnimationFrame loop, audio context or interval from the game is running.",
+    "Bundle and hygiene. The board serves the Live bundle as static files. bin/ci.sh runs games/voyage-2d's own test suite (node --test) and the build, and refuses a committed board/public/voyage2d/ bundle that doesn't match a fresh build. The game's node_modules, proofs and build caches are not committed. Fonts are loaded as the board already loads them, with no new third-party origin. README and skills/firstmate/SKILL.md mention the modes and the boss key. design.md describes the seam (BoardSource, the allowed writes) and the 3D follow-up.",
+    "Evidence is the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suite themselves. Stubs answer as the real routes do."
+  ]
+}

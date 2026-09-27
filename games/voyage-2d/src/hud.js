@@ -344,7 +344,10 @@ export class HUD {
       return `<div class="lane" data-lane="${lane}"><h3>${esc(t.lanes[li])}<b>${n}</b></h3>` + cards.map((x, j) => {
         const red = s.gate[x.id] === "red", w = x.worker && s.crew.find((c) => c.id === x.worker);
         const tags = [x.milestone, x.issue ? t.issue : t.chat, x.round ? `R${x.round}` : "", red ? t.gateRed : "", held.has(x.id) ? t.kraken : "", x.approved && lane === "review" ? t.approved : "", x.course ? "⚑" + x.course : "", w ? w.name : ""].filter(Boolean);
-        const acts = (BOARD_ACTIONS[lane] || []).map((k) => [k, t[k]]);
+        // Live tasks carry their own actions (board/server.ts ACTIONS,
+        // read through the game boardsource.js); a Playground task never
+        // sets this field, so it keeps reading the simulator own table.
+        const acts = (x.actions || BOARD_ACTIONS[lane] || []).map((k) => [k, t[k]]).filter(([k]) => t[k]);
         return `<div class="card${red ? " red" : ""}${held.has(x.id) ? " held" : ""}${lane === "merged" ? " done" : ""}" style="--r:${j % 2 ? 0.8 : -1}deg"><b>${esc(x.id)}</b>${esc(x.title)}<div class="tags">${tags.map((g) => `<i>${esc(g)}</i>`).join("")}</div>${acts.length ? `<div class="acts">${acts.map(([k, l]) => `<button data-card="${k}" data-id="${x.id}">${esc(l)}</button>`).join("")}</div>` : ""}</div>`;
       }).join("") + `</div>`;
     }).join("") + `</div>`;

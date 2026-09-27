@@ -98,6 +98,13 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
    Verify observable navigation or report that only the opener was invoked; if
    unavailable, report the limitation. A server start message alone does not
    prove the page loaded.
+   The header switches between the plain board (v1) and the Voyage 2.5D game
+   (Voyage 3D, disabled, is a follow-up task); the choice is that tabs own and
+   never changes what either reads (the same `GET /api/state` and SSE
+   `/events`). The game writes only through `POST /decisions` and
+   `POST /tasks` with the tabs own session token - no new writing route.
+   Esc pressed twice within about 400 ms, or the visible Board button, tears
+   the game down and returns to v1 at once (T-125; games/voyage-2d/docs/interface.md).
    The captain answers cards on the board. Firstmate answers one through the
    HTTP API only under an explicit, time-boxed authorisation the captain gave
    in chat, naming the card, and quotes that authorisation in the answer's

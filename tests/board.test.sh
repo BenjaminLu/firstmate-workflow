@@ -2551,3 +2551,33 @@ kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
 rm -rf "$k" "$XDG_CONFIG_HOME"
 
 finish
+
+# T-125: v1 and the games own BoardSource model hold the same tasks in the
+# same lanes after the same fixture events (a dispatch, a verdict, a card,
+# a park and a merge), compared field by field - not two readings that
+# happen to agree today.
+if command -v node >/dev/null 2>&1 && [ -f "$ROOT/games/voyage-2d/src/boardsource.js" ]; then
+  d3="$(mktemp -d)"; mkdir -p "$d3/bin" "$d3/state/pending" "$d3/design" "$d3/board/public"
+  cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$d3/bin/"
+  cp "$ROOT/board/server.ts" "$d3/board/"
+  cp "$ROOT/board/public/index.html" "$d3/board/public/"
+  printf '%s\n' '{"tasks":[{"id":"T-P1","title":"one","milestone":"M1","depends_on":[]},{"id":"T-P2","title":"two","milestone":"M1","depends_on":[]},{"id":"T-P3","title":"three","milestone":"M1","depends_on":[]},{"id":"T-P4","title":"four","milestone":"M1","depends_on":[]}]}' > "$d3/tasks.json"
+  fm_tasks_write "$d3/tasks.json" "$d3/design/tasks"
+  FM_ROOT="$d3" "$d3/bin/fm-emit.sh" --actor captain --type greenlit --en "go" --tw "\u958b\u5de5" >/dev/null
+  FM_ROOT="$d3" "$d3/bin/fm-emit.sh" --actor worker-1 --task T-P1 --type dispatched --en "picked up" --tw "\u9818\u8d70" >/dev/null
+  FM_ROOT="$d3" "$d3/bin/fm-emit.sh" --actor reviewer-1 --task T-P1 --type approved --en "approved" --tw "\u5df2\u6838\u51c6" >/dev/null
+  printf '%s\n' '{"id":"D-P1","task":"T-P2","kind":"choice","title":"pick"}' > "$d3/state/pending/D-P1.json"
+  FM_ROOT="$d3" "$d3/bin/fm-emit.sh" --actor captain --type parked --task T-P3 --en "parked" --tw "\u651c\u7f6e" >/dev/null
+  FM_ROOT="$d3" "$d3/bin/fm-emit.sh" --actor github --task T-P4 --pr 9 --type merged --en "merged" --tw "\u5df2\u5408\u4f75" >/dev/null
+  XDG_CONFIG_HOME3="$(mktemp -d)"
+  FM_ROOT="$d3" FM_PORT=0 XDG_CONFIG_HOME="$XDG_CONFIG_HOME3" bun run "$d3/board/server.ts" > "$d3/out" 2>&1 < /dev/null &
+  pid3=$!
+  PORT3="$(board_port "$d3/out" "$pid3")"
+  for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORT3/api/state" >/dev/null 2>&1 && break; sleep 0.25; done
+  cmp_out="$(BOARDSOURCE_URL="http://127.0.0.1:$PORT3/api/state" BOARDSOURCE_MODULE="$ROOT/games/voyage-2d/src/boardsource.js" node --input-type=module -e 'const raw = await fetch(process.env.BOARDSOURCE_URL).then((r) => r.json()); const { mapView } = await import(process.env.BOARDSOURCE_MODULE); const view = mapView(raw); const byId = new Map(view.tasks.map((t) => [t.id, t])); const bad = []; for (const t of raw.tasks) { const g = byId.get(t.id); if (!g) { bad.push(t.id + ': missing from BoardSource'); continue; } if (g.lane !== t.stage) bad.push(t.id + ': lane ' + g.lane + ' != stage ' + t.stage); if ((g.pr ?? null) !== (t.pr ?? null)) bad.push(t.id + ': pr mismatch'); if ((g.title ?? null) !== (t.title ?? null)) bad.push(t.id + ': title mismatch'); } console.log(bad.length ? bad.join('\n') : 'OK');')"
+  assert_eq "OK" "$cmp_out" "v1 and the games BoardSource model hold the same tasks in the same lanes after the same fixture events"
+  kill "$pid3" 2>/dev/null; wait "$pid3" 2>/dev/null || true
+  rm -rf "$d3" "$XDG_CONFIG_HOME3"
+fi
+
+finish

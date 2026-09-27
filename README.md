@@ -10,6 +10,14 @@ One agent runs the crew. Three things make it up:
   command results; review checks also scan model-produced verdict markers.
   Firstmate must account for the enforcement gaps documented in the contract.
 - **`board/`** — the captain's only console. Live state, open decisions, orders.
+  Its header switches between the plain board (v1), the Voyage 2.5D game
+  and, once it ships, Voyage 3D - the choice is the tabs own (sessionStorage)
+  and never changes what any of them read: every mode is the same
+  `GET /api/state` and SSE `/events`. The game writes only through the
+  boards own `POST /decisions` and `POST /tasks`, with the tabs session
+  token (T-122) - there is no other writing route. Esc pressed twice within
+  about 400 ms, or the visible Board button, returns to v1 at once and tears
+  the game down completely (T-125).
 
 The agent CLI is a replaceable engine, not the system.
 
