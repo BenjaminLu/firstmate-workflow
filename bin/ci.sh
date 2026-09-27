@@ -44,6 +44,14 @@ printf 'ci: effective budget: %ss\n' "$ci_max_seconds"
 printf 'ci: bash suites: %s at a time\n' "$ci_jobs"
 printf 'ci: end-to-end: %s workers\n' "$e2e_workers"
 
+# FM_ROOT set but empty (a fixture whose own mktemp failed and never
+# noticed, T-123) must not fall back to the tree this script lives in: that
+# silently re-runs the whole gate against itself, recursively, from inside
+# whatever suite meant to point it elsewhere.
+if [ "${FM_ROOT+set}" = set ] && [ -z "$FM_ROOT" ]; then
+  echo "ci: FM_ROOT is set but empty; unset it to run against this tree" >&2
+  exit 64
+fi
 ROOT="${FM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$ROOT" || exit 2
 shopt -s nullglob

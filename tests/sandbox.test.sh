@@ -529,6 +529,73 @@ github.com" "$(cat "$t/blocked")" "and names each refused host once, for the rou
 port="$(sed -n 's/.*localhost:\([0-9]*\).*/\1/p' "$t/profile.sb")"
 assert_matches "$port" '^[0-9]+$' "the profile lets the round reach only that proxy's port"
 
+# --- mktemp on the round's own PATH (T-123) ----------------------------------
+# macOS's own mktemp ignores $TMPDIR for a bare call or -t (round 6's own
+# reproduction: `mkdtemp failed on /var/folders/.../T/tmp.xxx`, outside every
+# root a round may write, whatever TMPDIR says). fm-sandbox.sh puts a stand-in
+# ahead of it on the round's own PATH: a bare call and -t both land under the
+# round's own TMPDIR, where an explicit template already did.
+cat > "$t/mkcmd.sh" <<S
+#!/usr/bin/env bash
+set -e
+mktemp -d > "$t/mkbare"
+mktemp -d -t fm-x > "$t/mktflag"
+mktemp -d "\$TMPDIR/fm-tmpl.XXXXXX" > "$t/mktmpl"
+S
+chmod +x "$t/mkcmd.sh"
+rm -f "$t/mkbare" "$t/mktflag" "$t/mktmpl"
+echo | FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" PATH="$t/psbin:$PATH" \
+  "$SB" run --policy="$P" --root="$root" --ctl="$t/ctl" -- "$t/mkcmd.sh"
+assert_eq "0" "$?" "a bare mktemp -d, mktemp -t, and an explicit template all succeed inside a round"
+mkbare="$(cat "$t/mkbare" 2>/dev/null)"
+mktflag="$(cat "$t/mktflag" 2>/dev/null)"
+mktmpl="$(cat "$t/mktmpl" 2>/dev/null)"
+assert_matches "$mkbare" "^$t/ctl/fm-sb\.[A-Za-z0-9]+/tmp/tmp\." \
+  "a bare mktemp -d lands under the round's own TMPDIR, not the host's"
+assert_matches "$mktflag" "^$t/ctl/fm-sb\.[A-Za-z0-9]+/tmp/fm-x\." \
+  "and so does mktemp -t, under its own prefix"
+assert_matches "$mktmpl" "^$t/ctl/fm-sb\.[A-Za-z0-9]+/tmp/fm-tmpl\." \
+  "an explicit template is untouched, and already lands there too"
+assert_ok "test -d '$mkbare'" "and the directory the bare call named is real"
+assert_ok "test -d '$mktflag'" "so is the one -t named"
+
+# Linux gets none of this: GNU's own mktemp already honours $TMPDIR, so
+# bin/fm-sandbox.sh installs no stand-in on that side. This plays GNU's own
+# tool (no bwrap runs here either) to show the round succeeds without one.
+mkdir -p "$t/gnubin"
+cat > "$t/gnubin/mktemp" <<'S'
+#!/bin/sh
+prefix=tmp
+dir=''
+want=0
+for a in "$@"; do
+  if [ "$want" = 1 ]; then prefix="$a"; want=0; continue; fi
+  case "$a" in
+    -d) dir=-d ;;
+    -t) want=1 ;;
+  esac
+done
+exec /usr/bin/mktemp $dir "${TMPDIR:-/tmp}/$prefix.XXXXXXXXXX"
+S
+chmod +x "$t/gnubin/mktemp"
+cat > "$t/mkcmd-lin.sh" <<S
+#!/usr/bin/env bash
+set -e
+mktemp -d > "$t/mkbare-lin"
+mktemp -d -t fm-x > "$t/mktflag-lin"
+S
+chmod +x "$t/mkcmd-lin.sh"
+rm -f "$t/mkbare-lin" "$t/mktflag-lin"
+echo | FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$t/bin/bwrap" PATH="$t/gnubin:$t/psbin:$PATH" \
+  "$SB" run --policy="$P" --root="$root" --ctl="$t/ctl" -- "$t/mkcmd-lin.sh"
+assert_eq "0" "$?" "and on Linux, where GNU's mktemp already honours TMPDIR, the round succeeds with no stand-in"
+mkbarelin="$(cat "$t/mkbare-lin" 2>/dev/null)"
+mktflaglin="$(cat "$t/mktflag-lin" 2>/dev/null)"
+assert_matches "$mkbarelin" "^$t/ctl/fm-sb\.[A-Za-z0-9]+/tmp/tmp\." \
+  "a bare mktemp -d lands under the round's own TMPDIR there too"
+assert_matches "$mktflaglin" "^$t/ctl/fm-sb\.[A-Za-z0-9]+/tmp/fm-x\." \
+  "and so does mktemp -t"
+
 # --- the profile's loopback denials are tried before the round (T-117) ------
 # The canary on 2026-09-26 found a claude round on macOS reaching the live
 # board on 127.0.0.1:4173 through a profile that denied the port. So before

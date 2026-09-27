@@ -2419,6 +2419,34 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
   third worktree, T-126's, was lost to the same day); `bin/ci.sh`'s test
   hygiene stage now refuses that self-resolving shape in any `tests/*.test.sh`
   it lints, in either mode, so it cannot come back unnoticed (T-123 round 4);
+- the mktemp refusal the fix just above was itself built around: on macOS,
+  `mktemp -d`'s bare form, and its `-t`, both ask
+  `confstr(_CS_DARWIN_USER_TEMP_DIR)` for where to create, not `$TMPDIR` - a
+  directory outside every root a round may write, so the call is refused
+  there rather than landing anywhere `TMPDIR="$tmp"` says (round 6's own
+  reproduction, on the reviewer's host: `mkdtemp failed on
+  /var/folders/.../T/tmp.xxx: Operation not permitted`, a path under
+  neither the round's TMPDIR nor the caller's). Only an explicit template
+  already worked, which is what `safe_tmpdir` builds by hand.
+  `bin/fm-sandbox.sh run` closes it at the root instead, for every
+  command a round runs, not only the ones this repository's own suites
+  happen to call through a helper: on darwin it puts a small stand-in ahead
+  of the real tool on the round's own `PATH`, under the round's own `$tmp`,
+  that turns a bare call or `-t` into the one form that already worked - an
+  explicit template under `$TMPDIR` - and hands anything else (an explicit
+  template, `-p`, or a flag it does not recognise) straight to the real
+  `/usr/bin/mktemp`, unchanged. Linux needs none of this: GNU's own
+  `mktemp`, which bwrap gives a round, already honours `$TMPDIR`.
+  `tests/sandbox.test.sh` runs a bare `mktemp -d`, `-t`, and an explicit
+  template through `fm-sandbox.sh run` on both platforms and checks where
+  each one landed (T-123 round 7). The same emptied `mktemp -d` result is
+  also what `tests/ci.test.sh`'s own `fixture()` fed to `FM_ROOT`, which
+  `bin/ci.sh` then read with `${FM_ROOT:-...}` - empty and unset look the
+  same to that form - and ran the whole gate against the real tree instead
+  of the fixture, recursively, from inside a live review round (round 5,
+  which lost its own checkout to exactly this). `fixture()` now uses
+  `safe_tmpdir`, and `bin/ci.sh` refuses an `FM_ROOT` that is set but empty
+  rather than defaulting to the tree it lives in;
 - network: the declared registries only; GitHub and loopback are refused
   as values, and refused again by the proxy whatever a policy file says.
   The list names whatever the check actually fetches (Playwright's

@@ -19,7 +19,8 @@
     "bin/ci.sh",
     "tests/ci.test.sh",
     "tests/sandbox.test.sh",
-    "tests/project.test.sh"
+    "tests/project.test.sh",
+    "bin/fm-sandbox.sh"
   ],
   "acceptance": [
     "Why. The first review round after T-117 merged (T-107 #98, rounds r8 and r8b on 2026-09-27) lost its own run-mode checkout mid-round, twice. The directory under the reviewer's TMPDIR was deleted while bin/ci.sh and the suites ran, and writes outside the checkout then failed. firstmate's reading, to be confirmed or refuted by the worker with evidence: `sweep_checkouts` in bin/fm-review.sh deletes every `${TMPDIR:-/tmp}/fm-review.*` whose owner pid fails `kill -0`. The suites the reviewer runs invoke fm-review.sh, so the sweep runs inside the sandboxed round. There, `kill -0` on a live pid outside the round can fail with EPERM, because signals and `ps` are denied, so a live checkout reads as abandoned and is removed. Separately, run-mode reviewers have three times backgrounded a long check and ended their turn waiting for it (T-122 r2, T-119 r1, T-119 r6). Headless rounds have no later turn, so fm-review reported 'claude produced no review' and firstmate reran the review by hand. The captain approved this task on 2026-09-27. Its own spec file, design/tasks/T-123.json, is committed on this branch.",

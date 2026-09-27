@@ -6,7 +6,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib.sh"
 
 fixture() {                      # a throwaway repo root for ci.sh to operate on
-  d="$(mktemp -d)"; mkdir -p "$d/bin" "$d/tests"; printf '%s' "$d"
+  # safe_tmpdir, not a bare mktemp -d: this result feeds FM_ROOT, and a
+  # mktemp this sandbox refuses used to hand back an empty string here,
+  # which FM_ROOT="${FM_ROOT:-...}" then read as unset and ran the whole
+  # gate against the real tree instead (T-123, round 5).
+  d="$(safe_tmpdir)"; mkdir -p "$d/bin" "$d/tests"; printf '%s' "$d"
 }
 
 
@@ -59,6 +63,14 @@ budget_probe 600 208 1
 assert_contains "$out" 'x tests/red.test.sh' "functional failure still fails under 600"
 assert_contains "$out" 'effective budget: 600s' "failed run also reports its budget"
 rm -rf "$budget_tree" "$clock_dir"
+
+# FM_ROOT="" (set, but empty) must not fall back to the tree this script
+# lives in: that is exactly the fixture bug that let tests/ci.test.sh's own
+# fixture() run the whole gate against the real repository, recursively,
+# from inside a live review round (T-123, round 5).
+rc=0; out="$(FM_ROOT="" bash "$ROOT/bin/ci.sh" 2>&1)" || rc=$?
+assert_eq "64" "$rc" "FM_ROOT set but empty is refused, not read as unset"
+assert_contains "$out" "FM_ROOT is set but empty" "and says so"
 
 t="$(fixture)"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$t/tests/green.test.sh"
