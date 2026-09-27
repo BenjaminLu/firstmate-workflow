@@ -28,7 +28,7 @@ decoy_root="$(mktemp -d "$real_tmp/fm-review.XXXXXX")"
 printf '%s\n' "$_decoy_pid" > "$decoy_root/owner"
 
 fixture() {
-  local d; d="$(mktemp -d)"
+  local d; d="$(safe_tmpdir)"
   git init -q -b main "$d/repo"; cd "$d/repo" || return 1
   git config user.email a@b.c; git config user.name t
   mkdir -p bin design/tasks skills/reviewer src state
@@ -180,7 +180,7 @@ assert_eq "missing_review" \
 # Durable handoff: chain returns unsigned, but pane-child already published a
 # signed final under last-result with a non-matching chain token. Recovery
 # must still post that verdict (transport interrupted mid-chain).
-recover="$(mktemp -d)"
+recover="$(safe_tmpdir)"
 mkdir -p "$recover/bin" "$recover/design/tasks" "$recover/skills/reviewer" "$recover/src" "$recover/state"
 cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" "$ROOT/bin/fm-herdr.py" "$recover/bin/"
 cp -r "$ROOT/bin/adapters" "$recover/bin/"
@@ -1472,7 +1472,7 @@ rm -rf "$dv"
 ( mktemp() { return 1; }; . "$ROOT/tests/lib.sh"; safe_tmpdir ) >/dev/null 2>&1; rc=$?
 assert_eq "70" "$rc" "safe_tmpdir refuses rather than silently handing back the directory it ran in, when mktemp is refused"
 
-victim_root="$(mktemp -d)"
+victim_root="$(safe_tmpdir)"
 mkdir -p "$victim_root/real"
 : > "$victim_root/real/canary"
 

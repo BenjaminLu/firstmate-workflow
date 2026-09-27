@@ -17,7 +17,7 @@ fixture() {                      # a throwaway repo root for ci.sh to operate on
 # Budget probes run the real gate against a tiny tree with a deterministic
 # two-reading clock. No sleep and no full repository CI run is needed.
 budget_tree="$(fixture)"
-clock_dir="$(mktemp -d)"
+clock_dir="$(safe_tmpdir)"
 cat > "$clock_dir/date" <<'CLOCK'
 #!/usr/bin/env bash
 if [ -f "$FM_TEST_CLOCK_STATE" ]; then
@@ -118,7 +118,7 @@ rm -rf "$t"
 # still in glob order, and FM_CI_JOBS=1 is still one at a time.
 # Markers the fixture suites leave go in a directory of their own, never in
 # the tree the gate is judging.
-pool_marks="$(mktemp -d)"
+pool_marks="$(safe_tmpdir)"
 
 # the width is validated like the budget, before any stage runs
 for jobs in '' 0 -1 01 1.5 ' 2' 100 x '$(touch injected)'; do
@@ -134,7 +134,7 @@ done
 # command line: four browsers beside four suites on a 4-vCPU runner starved
 # the browsers until their waits ran out. The stub bunx records what
 # playwright was asked for.
-cpus="$(mktemp -d)"
+cpus="$(safe_tmpdir)"
 empty_tree="$(fixture)"
 mkdir -p "$empty_tree/tests/e2e" "$empty_tree/node_modules/@playwright"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" > "%s/bunx.args"\necho "  1 passed"\n' "$cpus" \
@@ -299,7 +299,7 @@ probe_gate() { # <fixture-dir> <label>
   wait "$pid" 2>/dev/null
   exec 8>&-; rm -f "$p/openpipe"
 }
-p="$(mktemp -d)"; mkdir -p "$p/bin"; cp "$ROOT/bin/ci.sh" "$ROOT/bin/fm-config.sh" "$p/bin/"
+p="$(safe_tmpdir)"; mkdir -p "$p/bin"; cp "$ROOT/bin/ci.sh" "$ROOT/bin/fm-config.sh" "$p/bin/"
 probe_gate "$p" "the gate finishes on a tree with no tests at all"
 mkdir -p "$p/tests"
 printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n' > "$p/tests/reads-stdin.test.sh"
@@ -336,7 +336,7 @@ rm -rf "$p"
 # them without a browser and calls the result an error, so the bun stage has
 # to leave them alone - and the e2e stage has to say it skipped rather than
 # quietly passing when the browser is not installed.
-q="$(mktemp -d)"; mkdir -p "$q/bin" "$q/tests/e2e"
+q="$(safe_tmpdir)"; mkdir -p "$q/bin" "$q/tests/e2e"
 cp "$ROOT/bin/ci.sh" "$ROOT/bin/fm-config.sh" "$q/bin/"
 printf 'import { test, expect } from "bun:test";\ntest("a", () => expect(1).toBe(1));\n' \
   > "$q/tests/unit.spec.ts"
@@ -441,7 +441,7 @@ assert_eq "$((before_runs + 2))" "$planted_runs" "a changed fixture is not serve
 # appearing or disappearing. The version keyed on `ls -ld` did not: its
 # mtime is minute-granular here, so a rewrite of the same size seconds
 # later was invisible and the next assertion read the previous run.
-sigdir="$(mktemp -d)"; q_save="$q"; q="$sigdir"
+sigdir="$(safe_tmpdir)"; q_save="$q"; q="$sigdir"
 printf 'AAAA' > "$q/f"; sig_a="$(fixture_sig)"
 sleep 1
 printf 'BBBB' > "$q/f"; sig_b="$(fixture_sig)"
@@ -546,7 +546,7 @@ printf '#!/usr/bin/env bash\nr=/tmp\ncp "$r/bin/x.sh" "$r/x.%s"\n' 'keep"' > "$q
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 n="$(find "$q/tests" -name '*.test.sh' | wc -l | tr -d ' ')"
 assert_contains "$out" "($n suites)" "the hygiene stage says how many suites it linted"
-bare="$(mktemp -d)"; mkdir -p "$bare/bin"; cp "$q/bin/ci.sh" "$q/bin/fm-config.sh" "$bare/bin/"
+bare="$(safe_tmpdir)"; mkdir -p "$bare/bin"; cp "$q/bin/ci.sh" "$q/bin/fm-config.sh" "$bare/bin/"
 assert_contains "$(FM_ROOT="$bare" bash "$bare/bin/ci.sh" 2>&1)" "(0 suites)" \
   "and says zero rather than passing silently when there are none"
 rm -rf "$bare"
@@ -935,7 +935,7 @@ rm -rf "$q/bin/inner"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 assert_matches "$out" 'spin on a flag with no value \([0-9]+ scripts\)' \
   "the option-loop stage says how many scripts it read"
-bare2="$(mktemp -d)"; mkdir -p "$bare2/bin"; cp "$q/bin/ci.sh" "$q/bin/fm-config.sh" "$bare2/bin/"
+bare2="$(safe_tmpdir)"; mkdir -p "$bare2/bin"; cp "$q/bin/ci.sh" "$q/bin/fm-config.sh" "$bare2/bin/"
 assert_contains "$(FM_ROOT="$bare2" bash "$bare2/bin/ci.sh" 2>&1)" "value (0 scripts)" \
   "and says zero on a tree with none"
 rm -rf "$bare2"
@@ -952,9 +952,12 @@ rm -f "$q/tests/hand-rolled.test.sh"
 # self-resolving cd, whatever put the value there first.
 # Threaded through %s, not written whole here: this literal text is
 # exactly the shape the check two paragraphs up bans, so writing it
-# out in one piece would flunk this very file.
+# out in one piece would flunk this very file. Round 7 widens that check
+# to a bare mktemp -d/-t on its own, with no cd at all, so mt/fd below are
+# threaded the same way, for the same reason.
 resolve_self='cd "$x"'
-printf '#!/usr/bin/env bash\nx="$(mktemp -d)"; x="$(%s && pwd -P)"\n' "$resolve_self" \
+mt=mktemp; fd=-d
+printf '#!/usr/bin/env bash\nx="$(%s %s)"; x="$(%s && pwd -P)"\n' "$mt" "$fd" "$resolve_self" \
   > "$q/tests/self-launder.test.sh"
 plant "a scratch path that cds into its own value turns the hygiene stage red" \
   "cd-ing into its own value"
@@ -966,12 +969,41 @@ rm -f "$q/tests/self-launder.test.sh"
 # safe idiom used throughout the suites themselves, and safe_tmpdir's own
 # body does exactly this, once, on a mktemp result it has already checked.
 # Neither may trip the lint, or every suite in the repository would.
-printf '#!/usr/bin/env bash\nother="$(mktemp -d)"; engine="$(cd "$other" && pwd -P)"\n' \
+printf '#!/usr/bin/env bash\nother="$(%s %s)"; engine="$(cd "$other" && pwd -P)"\n' "$mt" "$fd" \
   > "$q/tests/resolve-other.test.sh"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 assert_lacks "$out" "cd-ing into its own value" \
   "resolving one variable by cd-ing into a different one is not the hazard"
 rm -f "$q/tests/resolve-other.test.sh"
+
+# T-123 round 7: the widened half of the same lint - a bare mktemp -d or
+# mktemp -t is now its own violation, with no cd anywhere in sight at all.
+# Threaded through mt/fd/ft the same way, so this suite's own examples do
+# not flunk themselves.
+ft=-t
+printf '#!/usr/bin/env bash\nv="$(%s %s)"\necho "$v"\n' "$mt" "$fd" \
+  > "$q/tests/bare-mktemp.test.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_contains "$out" "a bare, template-less mktemp" \
+  "a suite calling mktemp -d with no explicit template turns the hygiene stage red"
+assert_contains "$out" "bare-mktemp.test.sh" "and the stage names the file"
+rm -f "$q/tests/bare-mktemp.test.sh"
+
+printf '#!/usr/bin/env bash\nv="$(%s %s %s fm-x)"\necho "$v"\n' "$mt" "$fd" "$ft" \
+  > "$q/tests/bare-mktemp-t.test.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_contains "$out" "a bare, template-less mktemp" \
+  "and so does mktemp -t with no explicit template"
+rm -f "$q/tests/bare-mktemp-t.test.sh"
+
+# The false-positive half: an explicit template under TMPDIR is exactly
+# what safe_tmpdir itself does internally, and is not the hazard.
+printf '#!/usr/bin/env bash\nv="$(%s %s "\${TMPDIR:-/tmp}/probe.XXXXXX")"\necho "$v"\n' "$mt" "$fd" \
+  > "$q/tests/templated-mktemp.test.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+assert_lacks "$out" "a bare, template-less mktemp" \
+  "an explicit template under TMPDIR is not the hazard"
+rm -f "$q/tests/templated-mktemp.test.sh"
 
 # The negative half of each exclusion. A lint with a plant for the thing it
 # catches and none for the thing it lets through is half a lint: the

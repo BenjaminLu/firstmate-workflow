@@ -2447,6 +2447,32 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
   which lost its own checkout to exactly this). `fixture()` now uses
   `safe_tmpdir`, and `bin/ci.sh` refuses an `FM_ROOT` that is set but empty
   rather than defaulting to the tree it lives in;
+- the stand-in above still left four call sites unconverted, and round 6's
+  reviewer lost a live checkout to exactly this while running the project's
+  own suites: `fixture()`, `recover` and `victim_root` in
+  `tests/review.test.sh`, and the top-level scratch root in
+  `tests/crew-end-to-end.test.sh`, all a bare, template-less `mktemp -d`
+  with nothing guarding a refused result. All four now go through
+  `safe_tmpdir` (round 7). `bin/ci.sh`'s test hygiene stage widens from
+  banning only the self-resolving `cd` shape to banning a bare,
+  template-less `mktemp -d` or `mktemp -t` on its own, with no `cd`
+  anywhere in sight, over every suite `bin/ci.sh` already lints plus the
+  bin/ scripts most likely to build one (`bin/ci.sh`, `bin/fm-review.sh`,
+  `bin/fm-sandbox.sh`, and every adapter). A named, commented list in the
+  stage itself (`mktemp_pending`) carries the roughly one hundred sites in
+  some two dozen other files the captain judged, on 2026-09-27, better left
+  to the `fm-sandbox.sh` stand-in above than converted one call at a time;
+  a file not on that list is held to the new check like any other, so it
+  cannot silently regrow where this round already closed it. The lint's own
+  match is anchored to where `mktemp` is actually about to run - the start
+  of a line, after `;`, `|` or `&`, or straight inside a `$(...)` - so a
+  comment or an assertion's own message that merely mentions the words
+  never trips it, matching how the pattern-widening this round needed for
+  `tests/sandbox.test.sh`'s and `tests/ci.test.sh`'s own fixtures, which
+  must keep writing a genuinely bare call for the round or suite they
+  build to run against, threads the literal words through a variable
+  instead of writing them out whole, the same way the self-resolving-`cd`
+  check's own fixture already had to (T-123 round 7);
 - network: the declared registries only; GitHub and loopback are refused
   as values, and refused again by the proxy whatever a policy file says.
   The list names whatever the check actually fetches (Playwright's

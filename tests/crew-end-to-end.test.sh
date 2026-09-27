@@ -34,7 +34,7 @@ command -v bun >/dev/null 2>&1 || { echo "    bun not installed - crew e2e skipp
 # host's real one.
 isolate_tmpdir
 
-d="$(mktemp -d)"; r="$d/repo"
+d="$(safe_tmpdir)"; r="$d/repo"
 # T-122: the board keeps its secret under XDG_CONFIG_HOME; this suite's own,
 # outside the fixture root, so no run writes into the operator's home
 XDG_CONFIG_HOME="$d/config"; export XDG_CONFIG_HOME

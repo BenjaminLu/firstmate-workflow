@@ -535,12 +535,19 @@ assert_matches "$port" '^[0-9]+$' "the profile lets the round reach only that pr
 # root a round may write, whatever TMPDIR says). fm-sandbox.sh puts a stand-in
 # ahead of it on the round's own PATH: a bare call and -t both land under the
 # round's own TMPDIR, where an explicit template already did.
+# T-123 round 7: the hygiene lint now also bans a bare, template-less
+# mktemp -d/-t anywhere in a suite - not only the shape that then cds into
+# it - so this fixture's own two bare calls are threaded through mt/fd/ft
+# rather than written whole, the same way the self-launder fixture above
+# threads its cd; the third call already carries an explicit template and
+# needs no such care.
+mt=mktemp; fd=-d; ft=-t
 cat > "$t/mkcmd.sh" <<S
 #!/usr/bin/env bash
 set -e
-mktemp -d > "$t/mkbare"
-mktemp -d -t fm-x > "$t/mktflag"
-mktemp -d "\$TMPDIR/fm-tmpl.XXXXXX" > "$t/mktmpl"
+$mt $fd > "$t/mkbare"
+$mt $fd $ft fm-x > "$t/mktflag"
+$mt $fd "\$TMPDIR/fm-tmpl.XXXXXX" > "$t/mktmpl"
 S
 chmod +x "$t/mkcmd.sh"
 rm -f "$t/mkbare" "$t/mktflag" "$t/mktmpl"
@@ -581,8 +588,8 @@ chmod +x "$t/gnubin/mktemp"
 cat > "$t/mkcmd-lin.sh" <<S
 #!/usr/bin/env bash
 set -e
-mktemp -d > "$t/mkbare-lin"
-mktemp -d -t fm-x > "$t/mktflag-lin"
+$mt $fd > "$t/mkbare-lin"
+$mt $fd $ft fm-x > "$t/mktflag-lin"
 S
 chmod +x "$t/mkcmd-lin.sh"
 rm -f "$t/mkbare-lin" "$t/mktflag-lin"

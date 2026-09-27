@@ -564,6 +564,50 @@ else
   pass "no scratch path launders a failed mktemp into the current directory (${#suitefiles[@]} suites)"
 fi
 
+# T-123 round 7: the same hazard, widened - a bare, template-less mktemp
+# -d or mktemp -t on its own turns a suite's fixture into a checkout-losing
+# one even with no cd anywhere in sight (round 6 traced a real reviewer
+# checkout's own destruction to exactly this, unguarded, mid-round).
+# Checked over every suite and every linted bin/ script; the same shape
+# remains, by the captain's own 2026-09-27 call, in the files named below,
+# left to T-128's own root fix (a round's PATH already carries a stand-in
+# making the bare call succeed there) rather than converted one at a time
+# here. Widening past a name on this list is the captain's call, not a
+# worker's; a file not on it is held to the check like any other.
+binfiles=(bin/*.sh bin/adapters/*.sh)
+mktemp_pending=(
+  tests/selfupdate.test.sh tests/gate.test.sh tests/board.test.sh
+  tests/diagram.test.sh tests/emit.test.sh tests/config.test.sh
+  tests/guard.test.sh tests/reconcile.test.sh tests/e2e-loop.test.sh
+  tests/dispatch.test.sh tests/decide.test.sh tests/worker.test.sh
+  tests/traps.test.sh tests/decisions.test.sh tests/sync-prs.test.sh
+  tests/ready.test.sh tests/protocol.test.sh tests/pipefail-grep.test.sh
+  tests/option-loop.test.sh tests/open.test.sh tests/merge.test.sh
+  tests/lib.test.sh tests/i18n.test.sh tests/cleanup.test.sh
+  bin/fm-gate.sh bin/fm.sh
+)
+mktempfiles=()
+for _mf in "${suitefiles[@]}" "${binfiles[@]}"; do
+  _mf_pending=0
+  for _mp in "${mktemp_pending[@]}"; do
+    [ "$_mf" = "$_mp" ] && _mf_pending=1 && break
+  done
+  [ "$_mf_pending" = 1 ] || mktempfiles+=("$_mf")
+done
+baremktemp=''
+if [ ${#mktempfiles[@]} -gt 0 ]; then
+  baremktemp="$(grep -HnE '(^[[:space:]]*|[;|&][[:space:]]*|\$\(|`)mktemp([[:space:]]+-[a-zA-Z]+)*[[:space:]]+-[dt]\b' \
+      "${mktempfiles[@]}" 2>/dev/null \
+    | grep -v '^[^:]*:[0-9]*: *#' \
+    | grep -vE 'X{3,}' || true)"
+fi
+if [ -n "$baremktemp" ]; then
+  flunk "a bare, template-less mktemp -d or mktemp -t; use safe_tmpdir or an explicit \$TMPDIR template (T-123)"
+  printf '%s\n' "$baremktemp"
+else
+  pass "no bare, template-less mktemp -d or mktemp -t (${#mktempfiles[@]} files)"
+fi
+
 # The guarantee that nothing reads standard input, checked against every
 # script that looks like it starts a child. "Looks like" is the honest word:
 # the test is a grep for command substitution, a call to another fm script,
