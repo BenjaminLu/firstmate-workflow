@@ -1,0 +1,17 @@
+<!doctype html><html><head><meta charset="utf-8"><title>puppets</title><style>body{margin:0;background:#3a4a7a}canvas{display:block}</style></head><body><canvas id="c"></canvas>
+<script type="module">
+import { Puppet, loadImages } from "../src/puppet.js";
+const Q = new URLSearchParams(location.search);
+const bake = await (await fetch("../bake/sprites.json")).json();
+const imgs = await loadImages(bake);
+const c = document.getElementById("c"); c.width = innerWidth; c.height = innerHeight;
+const ctx = c.getContext("2d");
+const ids = Object.keys(bake.crew);
+const view = Q.get("view") || "q", shot = Q.get("shot"), at = +(Q.get("t") || 0.5), loop = Q.get("loop");
+const ps = ids.map((id, i) => { const p = new Puppet(id, bake.crew[id], imgs.crew[id], { props: imgs.props, scale: +(Q.get("s") || 0.3) }); p.view = view; p.x = 110 + i * (innerWidth - 180) / (ids.length - 1); p.y = innerHeight - 60; if (loop) p.setLoop(loop); if (shot) p.shot(shot); if (Q.get("dir") === "-1") p.dir = -1; return p; });
+const T = shot || loop ? at : 0.2;
+for (let t = 0; t < T; t += 1 / 60) for (const p of ps) p.update(1 / 60);
+ctx.fillStyle = "#6a4a2a"; ctx.fillRect(0, innerHeight - 60, innerWidth, 60);
+for (const p of ps) p.draw(ctx);
+window.__ok = true;
+</script></body></html>
