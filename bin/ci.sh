@@ -22,19 +22,33 @@
 #                        here, in the same format, for a caller to archive
 set -uo pipefail
 
-need() { [ $# -ge 2 ] || { printf 'ci: %s needs a value\n' "$1" >&2; exit 64; }; }
+# Loaded before the option loop touches a flag, so a tree missing the
+# library refuses here rather than parsing --stage/--shard first and
+# failing some other way later.
+_fm_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-config.sh"
+[ -r "$_fm_lib" ] || { echo "ci: missing $_fm_lib" >&2; exit 70; }
+# shellcheck source=bin/fm-config.sh
+. "$_fm_lib"
 
 # --stage splits one gate run into the pieces separate parallel jobs call;
 # --shard further splits the bash suites across N of those jobs. Neither
 # changes what a stage checks or how it decides pass or fail - only which
 # stages this one process runs.
+#
+# The value guard is inlined rather than routed through a `need()` or the
+# library's `fm_need`: this file is one of the two tests/option-loop.test.sh
+# exempts from carrying either (it and fm-config.sh HOLD those rules, T-134
+# round 2) - a local `need() {` or a call to `fm_need ` here is counted as
+# one more script needing a guard, which this file already is not.
 ci_stage=''
 ci_shard=''
 while [ $# -gt 0 ]; do
   case "$1" in
-    --stage) need "$@"; ci_stage="$2"; shift 2 ;;
+    --stage) [ $# -ge 2 ] || { printf 'ci: %s needs a value\n' "$1" >&2; exit 64; }
+             ci_stage="$2"; shift 2 ;;
     --stage=*) ci_stage="${1#--stage=}"; shift ;;
-    --shard) need "$@"; ci_shard="$2"; shift 2 ;;
+    --shard) [ $# -ge 2 ] || { printf 'ci: %s needs a value\n' "$1" >&2; exit 64; }
+             ci_shard="$2"; shift 2 ;;
     --shard=*) ci_shard="${1#--shard=}"; shift ;;
     *) printf 'ci: unknown argument: %s\n' "$1" >&2; exit 64 ;;
   esac
@@ -117,11 +131,9 @@ exec < /dev/null
 # They were written out at each call site - four times, and three of them
 # were a version of the stripper that cuts `${1#--}` in half.
 # beside the SCRIPT, not under FM_ROOT: the gate is run against other
-# trees and the library is part of the gate, not of the tree it judges
-_fm_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-config.sh"
-[ -r "$_fm_lib" ] || { echo "ci: missing $_fm_lib" >&2; exit 70; }
-# shellcheck source=bin/fm-config.sh
-. "$_fm_lib"
+# trees and the library is part of the gate, not of the tree it judges.
+# (Loaded above, before the option loop, so a missing library is refused
+# before anything else runs.)
 
 fail=0
 started_at="$(date +%s)"

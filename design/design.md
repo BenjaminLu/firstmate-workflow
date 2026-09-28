@@ -1979,16 +1979,20 @@ uploading its own as `suite-timings-<shard>`, so a slow suite is visible by
 name; `bun`; and `e2e`. A final job named `ci` — the required check's own
 name — `needs` all four and fails if any of them failed or was skipped, so
 branch protection and gate 6 read exactly what they read before. Every job
-keeps its own 10-minute `timeout-minutes`; bun's dependencies and the
-Playwright browser are cached per job the way the one job cached them
-before. `tests/ci.test.sh` proves the flags' validation, that `--stage`
-runs only its own group of stages, that `--shard`'s shards union to exactly
-`tests/*.test.sh` with no suite in two (including a suite added after the
-fixture was first split), that `FM_CI_TIMINGS_OUT` is written only when
-asked, and that `FM_CI_TIMINGS_IN`'s recorded duration — not a suite's real
-size — decides the split; and reads the workflow file for the job names,
-the shard flag, the final `ci` job's `needs`, the per-job timeout and the
-cache step.
+keeps its own 10-minute `timeout-minutes`. Sharding turned the one
+`bun install` main had into six — the four `bash` shards, `bun` and `e2e` —
+so every one of those jobs, not just one, caches bun's install cache
+(`~/.bun/install/cache`, keyed on `hashFiles('bun.lock')` and the runner
+OS) ahead of its `bun install` step; `e2e` also keeps the pre-existing
+Playwright-browser cache the one job had. `tests/ci.test.sh` proves the
+flags' validation, that `--stage` runs only its own group of stages, that
+`--shard`'s shards union to exactly `tests/*.test.sh` with no suite in two
+(including a suite added after the fixture was first split), that
+`FM_CI_TIMINGS_OUT` is written only when asked, and that
+`FM_CI_TIMINGS_IN`'s recorded duration — not a suite's real size — decides
+the split; and reads the workflow file for the job names, the shard flag,
+the final `ci` job's `needs`, the per-job timeout, and, for every job that
+runs `bun install`, a `bun.lock`-keyed cache step positioned before it.
 
 ---
 

@@ -43,6 +43,11 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - name: cache bun's install cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
       - name: install dependencies
         run: bun install --frozen-lockfile
       # Best effort: the durations the previous green run on main recorded,
@@ -84,6 +89,11 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - name: cache bun's install cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
       - name: install dependencies
         run: bun install --frozen-lockfile
       - name: bin/ci.sh --stage bun
@@ -98,6 +108,11 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - name: cache bun's install cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
       - name: install dependencies
         run: bun install --frozen-lockfile
       - name: cache the browser
