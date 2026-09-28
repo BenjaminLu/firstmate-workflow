@@ -55,6 +55,14 @@ if firstmate.is_file():
     ):
         if sentence not in prose:
             errors.append(f'firstmate skill lacks process rule: {sentence}')
+    # SK-002: firstmate must brief every worker round with evidence, not symptoms.
+    for sentence in (
+        'A worker round needs a brief, not a symptom: firstmate coordinates and must hand every worker round the evidence to fix its problem, never make the worker hunt (captain, 2026-09-28).',
+        'Before each round, read the failing checks\' logs and the review, open the code, and post a brief naming per item the failing assertion with its log lines, the file:line and source around it, the verified root cause, the expected change and what must not change; update a BEHIND branch first, and do not run rounds with overlapping scope in parallel.',
+        'A brief that only relays symptoms ("CI is red, find out why") is not a brief: rounds with such briefs converged in ~20 minutes, rounds without took 30-70 minutes and 150-290 turns, and workers still do not run the suites.',
+    ):
+        if sentence not in prose:
+            errors.append(f'firstmate skill lacks process rule: {sentence}')
 if errors:
     sys.exit('\n'.join(errors))
 print('role metadata and entrypoint links: passed')
