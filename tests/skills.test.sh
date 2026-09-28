@@ -87,6 +87,20 @@ if firstmate.is_file():
             errors.append(f'firstmate skill lacks SK-003 fix: {sentence}')
     if prose.count('Do not edit a shell script or runtime wrapper while a live process executes it.') != 1:
         errors.append('firstmate skill should carry that sentence exactly once (SK-003: duplicate removed)')
+# SK-005: fixes to stale reviewer text found in the 2026-09-29 audit against bb8a5aa.
+reviewer = root / 'skills' / 'reviewer' / 'SKILL.md'
+if reviewer.is_file():
+    rprose = ' '.join(reviewer.read_text().split())
+    for sentence in (
+        'The engine\'s permission flags and, since T-117, an OS sandbox enforce that, not this text.',
+        'Only the declared registries are reachable, which `setup` needs; never GitHub or loopback, so you run no gh.',
+        'The checkout is your round\'s own and is held by a lock the round owns (T-123), so nothing sweeps it while you work.',
+        'A round that ends without a verdict is retried once.',
+        '`fm-review.sh` reads the verdict from the adapter\'s final answer, `final.txt` (fm-review.sh:618-620), not from the transcript',
+        'A `REJECT` must state its findings in that same final answer, each with the evidence for it and its class.',
+    ):
+        if sentence not in rprose:
+            errors.append(f'reviewer skill lacks SK-005 fix: {sentence}')
 if errors:
     sys.exit('\n'.join(errors))
 print('role metadata and entrypoint links: passed')
