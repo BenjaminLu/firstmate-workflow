@@ -105,8 +105,12 @@ emit() { emit_once "$@" || true; }
 # The run-mode checkout. The EXIT trap removes it on every exit the shell
 # handles - success, failure, INT, TERM. A SIGKILL runs no trap, so the next
 # run-mode round sweeps checkouts whose owning round is gone (sweep_checkouts).
-CHECKOUT_ROOT=''; CHECKOUT=''
+CHECKOUT_ROOT=''; CHECKOUT=''; OWNER_LOCK_HELD=''
 drop_checkout() {
+  if [ -n "$OWNER_LOCK_HELD" ]; then
+    { exec 9<&-; } 2>/dev/null || true
+    OWNER_LOCK_HELD=''
+  fi
   [ -z "$CHECKOUT_ROOT" ] || rm -rf "$CHECKOUT_ROOT"
   CHECKOUT_ROOT=''; CHECKOUT=''
 }
@@ -236,11 +240,34 @@ if fm_crew_hatch fm-review; then unsandboxed=1; fi
 # run inside it writes outside it. The clone has its own objects, the base
 # and the head under fixed names, and no remote to push to.
 build_checkout() {
-  local head
+  local head staging staging_base
   head="$(git rev-parse -q --verify "$BRANCH^{commit}")" || return 1
-  CHECKOUT_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/fm-review.XXXXXX")" || return 1
-  CHECKOUT_ROOT="$(cd "$CHECKOUT_ROOT" && pwd -P)" || return 1
-  printf '%s\n' "$$" > "$CHECKOUT_ROOT/owner" || return 1
+  # Built under a name sweep_checkouts never globs (it matches only
+  # fm-review.*, and this starts with a dot, which that pattern's literal
+  # "fm-review." prefix cannot match) and renamed into that name only once
+  # this round's own kernel flock on its owner file is held. A bare mktemp
+  # straight under the visible name leaves a window between the owner file
+  # existing and being locked, in which a concurrent sweep's own
+  # non-blocking flock on that same file succeeds - nobody holds it yet -
+  # and it removes the checkout out from under this round before this round
+  # gets to it (T-123 review round 2). Staging first, and making the
+  # directory visible under fm-review.* only by a same-filesystem rename
+  # after the lock is already held, closes that window rather than
+  # narrowing it: sweep_checkouts can never see this checkout before its
+  # lock exists.
+  staging="$(mktemp -d "${TMPDIR:-/tmp}/.fm-review-staging.XXXXXX")" || return 1
+  staging="$(cd "$staging" && pwd -P)" || return 1
+  printf '%s\n' "$$" > "$staging/owner" || { rm -rf "$staging"; return 1; }
+  exec 9<>"$staging/owner" || { rm -rf "$staging"; return 1; }
+  perl -MFcntl=:flock -e 'open(my $l, "<&=", 9) or exit 2;
+    exit(flock($l, LOCK_EX | LOCK_NB) ? 0 : 1)' || {
+    { exec 9<&-; } 2>/dev/null; rm -rf "$staging"; return 1; }
+  staging_base="${staging##*/}"
+  CHECKOUT_ROOT="${staging%/*}/fm-review.${staging_base#.fm-review-staging.}"
+  if [ -e "$CHECKOUT_ROOT" ] || ! mv "$staging" "$CHECKOUT_ROOT"; then
+    { exec 9<&-; } 2>/dev/null; rm -rf "$staging"; CHECKOUT_ROOT=""; return 1
+  fi
+  OWNER_LOCK_HELD=1
   CHECKOUT="$CHECKOUT_ROOT/checkout"
   git clone -q --no-checkout --no-hardlinks "$REPO" "$CHECKOUT" &&
     git -C "$CHECKOUT" fetch -q --no-tags origin "+$BRANCH:refs/fm/head" "+$BASE:refs/fm/base" &&
@@ -248,17 +275,23 @@ build_checkout() {
     git -C "$CHECKOUT" checkout -q --detach refs/fm/head &&
     git -C "$CHECKOUT" remote remove origin
 }
-# A checkout left by a round that was SIGKILLed: its owner file names a
-# process that no longer exists. One with no owner file may be a round
-# between mktemp and writing it, and one whose owner is alive is in use;
-# both are left alone.
+# A checkout left by a round that was SIGKILLed: nothing holds its owner
+# file's lock any more. One with no owner file may be a round between
+# mktemp and writing it, and one still locked is in use; both are left
+# alone. Tested by trying to take the same lock, non-blocking: acquiring it
+# proves nobody holds it, and releasing it again straight after costs
+# nothing, since nothing here needs to keep it. Never `kill -0` on the pid
+# recorded in the file (see build_checkout) - that misreads a live round the
+# sandbox denies a signal to as a dead one, and deletes a checkout in use.
+checkout_is_free() {   # checkout_is_free <owner-file>
+  perl -MFcntl=:flock -e 'open(my $l, "<", $ARGV[0]) or exit 2;
+    exit(flock($l, LOCK_EX | LOCK_NB) ? 0 : 1)' "$1"
+}
 sweep_checkouts() {
-  local d pid
+  local d
   for d in "${TMPDIR:-/tmp}"/fm-review.*; do
     [ -d "$d" ] && [ -f "$d/owner" ] || continue
-    pid="$(head -1 "$d/owner" 2>/dev/null)"
-    case "$pid" in ''|*[!0-9]*) continue ;; esac
-    kill -0 "$pid" 2>/dev/null || rm -rf "$d"
+    checkout_is_free "$d/owner" && rm -rf "$d"
   done
 }
 if [ "$REVIEW_MODE" = run ]; then
@@ -501,7 +534,12 @@ if [ "$REVIEW_MODE" = run ]; then
     printf 'this round'"'"'s own temp directory ($TMPDIR), so `setup` writes where it may and\n'
     printf 'starts from empty caches: it downloads what it installs. A command the sandbox\n'
     printf 'refuses is the boundary working: report what it kept you from running, as\n'
-    printf 'read, not run, rather than work around it.\n\n'
+    printf 'read, not run, rather than work around it. Run every command to completion in\n'
+    printf 'the foreground: this round is one turn, which ends when your answer does, so a\n'
+    printf 'job left running in the background is never checked on and never finishes\n'
+    printf 'before the verdict is due. A check too long for one command is not shortened\n'
+    printf 'by backgrounding it - split it into the suites `test` names and run each one,\n'
+    printf 'in the foreground, to its own end before starting the next.\n\n'
     printf 'The project'"'"'s contract, from this checkout'"'"'s config.yaml:\n\n'
     for f in setup check check_env tests test docs; do contract_line "$f"; done
     printf '\nDo this, in order:\n\n'
@@ -574,6 +612,15 @@ if [ "$unsandboxed" = 1 ]; then
   emit_status "Reviewing $TASK WITHOUT the OS sandbox (FM_CREW_UNSANDBOXED)" \
     "正在審核 ${TASK}，未使用 OS 沙箱（FM_CREW_UNSANDBOXED）"
 fi
+# A round that ends its one turn with no signed verdict is retried once,
+# automatically, before it is reported failed: a check a run-mode reviewer
+# backgrounded and then waited on has ended the round's only turn with
+# nothing signed three times (T-119 r1, T-119 r6, T-122 r2), and a headless
+# round gets no later turn to check back on it. A second empty ending is
+# reported exactly as the first always was; a genuinely broken engine fails
+# the same way both times, so nothing changes for it but one more attempt.
+attempt_n=1
+while :; do
 fm_run_chain "$adapters" "$chain" \
   "$prompt" "$work/out" "$work/log" review_is_signed per-vendor; rc=$?
 [ -z "$FM_VENDOR_UNKNOWN" ] || {
@@ -610,7 +657,9 @@ verdict="$(attempt_output)"
 # answer: rc 2 with nothing said is a vendor that was not there, and only
 # that earns a 2. An engine that ran and said something unsigned is a
 # failed round - exit 2 there would have fm-run retry the same input every
-# turn, for ever.
+# turn, for ever. An outage is never retried below: a vendor that is not
+# there will not be there a moment later either, so this exits the round
+# straight away, same as ever.
 if [ "$rc" = "2" ] && [ "${FM_VENDOR_SPOKE:-0}" = "0" ]; then
   kept="$(keep_log)"
   cp "$work/log" "$kept" 2>/dev/null || : > "$kept"
@@ -674,6 +723,26 @@ if [ "$signed" = "0" ] && [ -n "${FM_RUN_DIR:-}" ] && [ -f "$FM_RUN_DIR/last-res
     esac
   fi
 fi
+[ "$signed" = "1" ] && break
+[ "${FM_VENDOR_SPOKE:-0}" = "1" ] || break
+# Retrying is for an engine that ran and ended its turn with nothing signed -
+# T-119/T-122's backgrounded check, which leaves a transcript with no verdict
+# marker in it. It is never for a round that produced no output at all: a
+# managed launch this round's own environment refused (changed focus, an
+# uncertain pane, a caller that vanished) fails identically read twice, and
+# retrying it can even let a stale refusal from the first attempt read as
+# settled on the second (the environment "changed" once, then stays that
+# way, so a fresh reading of it no longer differs from itself) - turning a
+# real refusal into a false success instead of reporting it. FM_VENDOR_SPOKE
+# is fm_run_chain's own answer to "did anything happen", set from bytes this
+# attempt actually added to the log or its own output directory; nothing
+# added means nothing to retry.
+[ "$attempt_n" -ge 2 ] && break
+attempt_n=$((attempt_n + 1))
+echo "fm-review: round $ROUND ended with no signed verdict; retrying automatically (attempt $attempt_n)" >&2
+emit_status "Round $ROUND had no verdict; retrying automatically" \
+  "第 $ROUND 輪沒有裁決；自動重試中"
+done
 # An exit code does not overrule produced work - not here either. A CLI that
 # prints a complete signed review and then exits non-zero on some teardown
 # has still reviewed it, and throwing that away repeats the round for ever.

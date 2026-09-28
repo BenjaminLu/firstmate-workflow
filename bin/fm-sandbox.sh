@@ -968,6 +968,62 @@ fi
 # Linux counts threads against it as well. A count that cannot be taken
 # refuses the round: guessing low stops it forking, guessing high is no
 # limit. The count is taken here, before bwrap's own pid namespace.
+# macOS's own mktemp(1) ignores $TMPDIR for a bare call or -t: mkdtemp(3)
+# there asks confstr(_CS_DARWIN_USER_TEMP_DIR) instead, a directory outside
+# every root a round may write, so the real tool is refused there rather
+# than creating under the round's own temp directory. Round 6 traced a
+# review round's own destroyed checkout to this: a suite's fixture read
+# that refusal's empty result as "no FM_ROOT given" and ran the whole gate
+# against the real tree instead (bin/ci.sh and tests/ci.test.sh, this same
+# task); an earlier round traced a worker's lost worktree to the same
+# refusal laundered a different way, through a self-resolving cd
+# (tests/lib.sh's safe_tmpdir). An explicit template is the one form that
+# already worked, so a stand-in ahead of the real tool on the round's PATH
+# only ever turns the two ignored forms into that one; anything it does not
+# fully recognise - an explicit template, -p, or an unknown flag - it hands
+# straight to the real /usr/bin/mktemp, unchanged. GNU's own mktemp, which
+# Linux gets under bwrap, already honours TMPDIR: nothing is added to its
+# PATH there.
+if [ "$cmd" = run ] && [ "$os" = darwin ] && [ -n "$tmp" ]; then
+  fmbin="$tmp/.fm-mktemp"
+  mkdir -p "$fmbin" || { say "cannot make $fmbin"; exit 70; }
+  cat > "$fmbin/mktemp" <<'MKTEMP'
+#!/bin/sh
+# A stand-in for macOS's own mktemp(1) on a round's PATH (bin/fm-sandbox.sh,
+# T-123): see the comment where this is installed for why.
+real=/usr/bin/mktemp
+route=transform
+want=0
+for a in "$@"; do
+  if [ "$want" = 1 ]; then want=0; continue; fi
+  case "$a" in
+    -d) ;;
+    -t) want=1 ;;
+    -q|-u) ;;
+    *) route=passthrough ;;
+  esac
+done
+if [ "$route" = passthrough ]; then
+  exec "$real" "$@"
+fi
+dir=''
+prefix=tmp
+extra=''
+want=0
+for a in "$@"; do
+  if [ "$want" = 1 ]; then prefix="$a"; want=0; continue; fi
+  case "$a" in
+    -d) dir=-d ;;
+    -t) want=1 ;;
+    -q|-u) extra="$extra $a" ;;
+  esac
+done
+exec "$real" $dir $extra "${TMPDIR:-/tmp}/$prefix.XXXXXXXXXX"
+MKTEMP
+  chmod +x "$fmbin/mktemp" || { say "cannot make $fmbin/mktemp executable"; exit 70; }
+  scrub+=(PATH="$fmbin:$PATH")
+fi
+
 [ -z "$tmp" ] || scrub+=(TMPDIR="$tmp" TMP="$tmp" TEMP="$tmp")
 if [ "$(uname -s)" = Linux ]; then listed="$(ps -L -U "$(id -u)" -o lwp= 2>/dev/null)"
 else listed="$(ps -U "$(id -u)" -o pid= 2>/dev/null)"; fi || listed=''

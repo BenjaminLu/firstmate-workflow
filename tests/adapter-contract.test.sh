@@ -32,7 +32,7 @@ make_sandbox() {
 # one - so FM_SANDBOX_TOOL names a stand-in that records what it was handed
 # and runs the command, on the platform FM_SANDBOX_OS says. The sandbox
 # itself is tests/sandbox.test.sh's.
-pk="$(mktemp -d)"; pk="$(cd "$pk" && pwd -P)"
+pk="$(safe_tmpdir)"
 (
   # shellcheck source=bin/fm-config.sh
   . "$ROOT/bin/fm-config.sh"
@@ -82,7 +82,7 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
   assert_eq "64" "$rc" "$name rejects a missing subcommand"
   assert_contains "$out" "usage" "$name prints usage"
 
-  d="$(mktemp -d)"; make_sandbox "$d"
+  d="$(safe_tmpdir)"; make_sandbox "$d"
   mkdir -p "$d/tree" "$d/outside"
   echo "do the thing" > "$d/prompt"
   echo "canary" > "$d/outside/canary"
@@ -367,8 +367,13 @@ $runargv
 " "
 --disable-slash-commands
 " "$name loads no skill or command from the branch or the operator"
+          # A closed list: BashOutput and KillShell, which is what a
+          # background job would need checked on, are not among them, so a
+          # review round has no way to read a job it backgrounded even if it
+          # tried to start one (T-123). This one exact match is what keeps
+          # either from being added back quietly beside Bash.
           assert_eq "Bash,Read,Edit,Write,Grep,Glob" "$(list_after --tools)" \
-            "$name names the only tools the round has"
+            "$name names the only tools the round has, offering it no way to check on a backgrounded job"
           assert_eq "$rtmp" "$(list_after --add-dir)" "$name's file tools reach only the checkout and the round's own temp directory"
           assert_lacks "$allowed" "(/$tmpd/**)" "and not the shared one"
           # the barriers push actually meets: the OS sandbox's network is a
@@ -381,6 +386,60 @@ $runargv
             "$name exempts no command from anything"
           never="$(jq -r --arg h "$(cd "$HOME" && pwd -P)" '.permissions.deny | map(select(. == "Read(/\($h)/.ssh/**)")) | length' <<< "$settings" 2>/dev/null)"
           assert_eq "1" "$never" "$name's settings deny reading ~/.ssh as well"
+          # A never_read path that CONTAINS the round's own tree must not
+          # become a blanket deny of everything under it: on the self
+          # project, state is never_read and a worker's worktree or a
+          # reviewer's checkout lives at state/worktrees/<task> - a
+          # blanket "Read(/state/**)" would deny the round's own tree too,
+          # since a deny beats the Read(/$work/**) allow rule above in
+          # claude's own rule order. That overlap refused a live
+          # reviewer's checkout under main's policy (T-123). Build the
+          # same shape - state/worktrees/T-Z (the round's own tree),
+          # a sibling worktree, state/runs and state/events.jsonl - and
+          # check the generated deny rules carve around the round's own
+          # tree instead of swallowing it.
+          nr="$(safe_tmpdir)"
+          mkdir -p "$nr/state/worktrees/T-Z" "$nr/state/worktrees/T-Y" \
+            "$nr/state/runs/run1" "$nr/state/other-worktree"
+          : > "$nr/state/events.jsonl"
+          printf 'vendor: mock\n' > "$nr/carve.yaml"
+          (
+            # shellcheck source=bin/fm-config.sh
+            . "$ROOT/bin/fm-config.sh"
+            fm_policy worker "" "$nr/carve.yaml" \
+              | jq --arg s "$nr/state" '.never_read += [$s]' > "$nr/carve.json"
+          )
+          printf '#!/usr/bin/env bash\ncat > /dev/null\nprintf "%%s\\n" "$@" > "%s/carve.argv"\nprintf "ran\\n"\nexit 0\n' \
+            "$nr" > "$d/fakebin/$name"
+          chmod +x "$d/fakebin/$name"
+          FM_POLICY="$nr/carve.json" PATH="$d/fakebin:/usr/bin:/bin" \
+            "$adapter" run "$d/prompt" "$nr/state/worktrees/T-Z" "$d/log" >/dev/null 2>&1
+          csettings="$(awk 'on{print;exit} $0=="--settings"{on=1}' "$nr/carve.argv" 2>/dev/null)"
+          cwork="$(cd "$nr/state/worktrees/T-Z" && pwd -P)"
+          swallowed="$(printf '%s' "$csettings" | jq -r --arg work "$cwork" '
+            .permissions.deny[]
+            | sub("^Read\\("; "") | sub("\\)$"; "") | sub("/\\*\\*$"; "") | sub("^/+"; "/")
+            | . as $p
+            | select($p == $work or ($work | startswith($p + "/")))
+          ' 2>/dev/null)"
+          assert_eq "" "$swallowed" \
+            "$name's deny rules do not swallow the round's own tree when a never_read path is its ancestor"
+          assert_contains "$csettings" "state/runs" \
+            "but a sibling under the same never_read ancestor is still denied"
+          assert_contains "$csettings" "state/events.jsonl" \
+            "and a file directly under it"
+          assert_contains "$csettings" "state/other-worktree" \
+            "and a sibling directory beside the branch that leads to the round's tree"
+          assert_contains "$csettings" "state/worktrees/T-Y" \
+            "and a sibling worktree one level further down, on the branch itself"
+          # "but never the round's own tree, at any level" is exactly what
+          # $swallowed above already proves, on the deny list alone, with
+          # an ancestor-prefix match at every depth (T-123 round 14). A
+          # plain assert_lacks "$csettings" "state/worktrees/T-Z" here
+          # (round 12's finding) greps the *whole* settings JSON, allow
+          # rules included, which correctly name the round's own tree via
+          # Read(/$work/**) - so it fails on the fix exactly as it would on
+          # the bug it was meant to catch, and is dropped as a duplicate.
           rm -f "$d/cwd.run"
           FM_REVIEW_NETWORK='x.org","*' FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/checkout" \
             PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
@@ -436,7 +495,7 @@ $runargv
   after="$(find "$d/outside" -type f -exec shasum {} + | shasum)"
   assert_eq "$before" "$after" "$name wrote nothing outside the worktree"
   assert_ok "test -f '$d/log'" "$name wrote to the log it was given"
-  rm -rf "$d"
+  safe_rm_rf "$d"
 done
 
 # --- one policy, every vendor (T-105) ----------------------------------------
@@ -444,7 +503,7 @@ done
 # the rest; a dimension neither covers refuses the round with 2 - the
 # fallback chain's "try the next one" - before the CLI starts, so no round
 # runs less confined than its policy.
-pv="$(mktemp -d)"; pv="$(cd "$pv" && pwd -P)"; mkdir -p "$pv/fakebin" "$pv/tree"
+pv="$(safe_tmpdir)"; mkdir -p "$pv/fakebin" "$pv/tree"
 echo "do it" > "$pv/prompt"
 # The loopback listeners are netstat's, answered the way macOS's does, so the
 # profile's loopback rules are the stand-in's and not the machine's
@@ -490,6 +549,17 @@ for v in claude codex cursor-agent gemini; do
   assert_contains "$(grep '^(deny mach-lookup' "$pk/profile.sb" 2>/dev/null)" '(global-name "com.apple.SecurityServer")' \
     "$v's round cannot reach the keychain"
   assert_eq "" "$(grep 'allow mach-lookup' "$pk/profile.sb" 2>/dev/null || true)" "and nothing lets it back in"
+  # claude's own quiet-refusals switch (T-123): turns off its non-essential
+  # network traffic (telemetry, error reporting), so the proxy no longer
+  # reports one of those hosts (http-intake.logs.us5.datadoghq.com, for one)
+  # as a refused host needing the project's network policy. Claude's alone,
+  # never another vendor's round.
+  case "$v" in
+    claude) assert_contains "$(cat "$pv/env" 2>/dev/null)" "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1" \
+              "$v turns off its own non-essential network traffic (telemetry, error reporting)" ;;
+    *) assert_lacks "$(cat "$pv/env" 2>/dev/null)" "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" \
+         "$v is given none of claude's quiet-refusals variable" ;;
+  esac
 done
 # a seatbelt cannot start inside sandbox-exec, so under it the vendors' own
 # sandboxes are off and the outer one confines their commands
@@ -926,7 +996,7 @@ FM_POLICY="$pv/no-such-policy.json" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sa
   >/dev/null 2>"$pv/err"
 assert_eq "65" "$?" "a named policy that is not there refuses the round"
 assert_contains "$(cat "$pv/err")" "no policy at" "and says so"
-rm -rf "$pv" "$pk"
+safe_rm_rf "$pv" "$pk"
 unset FM_POLICY FM_SANDBOX_OS FM_SANDBOX_TOOL CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY CODEX_API_KEY GEMINI_API_KEY
 
 # --- the verdict itself, on the transcripts that actually caused trouble ---
@@ -951,7 +1021,7 @@ assert_eq "ghcr.io, which is a GitHub host; a run-mode reviewer may not reach Gi
 assert_eq "" "$(fm_review_network_refusal "registry.npmjs.org cdn.playwright.dev")" "and nothing for one it may"
 assert_eq "" "$(fm_review_network_refusal "")" "and nothing for an empty one"
 
-v="$(mktemp -d)"
+v="$(safe_tmpdir)"
 verdict() { # <log contents> <rc> -> the verdict
   printf '%s' "$1" > "$v/log"
   fm_adapter_verdict "$2" "$v/log" 0; printf '%s' "$?"
@@ -978,7 +1048,7 @@ assert_eq "2" "$(verdict "$gem" 0)" "a long stack trace is still an outage when 
 # --- and what actually settles it: the caller's evidence -----------------
 # shellcheck source=bin/fm-config.sh
 . "$ROOT/bin/fm-config.sh"
-e="$(mktemp -d)"; mkdir -p "$e/ad" "$e/out"; echo p > "$e/prompt"
+e="$(safe_tmpdir)"; mkdir -p "$e/ad" "$e/out"; echo p > "$e/prompt"
 # an adapter whose CLI wrote a review that quotes the words an outage uses
 cat > "$e/ad/one.sh" <<'A'
 #!/usr/bin/env bash
@@ -1057,7 +1127,7 @@ assert_eq "1" "$?" "a head that cannot confine the round is refused, not replace
 mkdir -p "$e/globdir"; : > "$e/globdir/boxed"
 assert_eq "*" "$(cd "$e/globdir" && fm_review_run_chain "$e/ad" "*")" \
   "a chain entry of '*' is read as itself, not as the file names around it"
-rm -rf "$e"
+safe_rm_rf "$e"
 claude_marker="$(grep -c '^# fm:review-run' "$ROOT/bin/adapters/claude.sh")"
 assert_eq "1" "$claude_marker" "claude, the configured reviewer, can confine a run-mode review"
 # Every alternative in the list has to be shaped like a failure. A bare noun
@@ -1203,7 +1273,7 @@ off="$(fm_adapter_mark "$v/log")"
 printf '%s' "the second vendor reviewed it fine" >> "$v/log"
 fm_adapter_verdict 0 "$v/log" "$off"
 assert_eq "0" "$?" "the previous vendor's auth error does not condemn the next"
-rm -rf "$v"
+safe_rm_rf "$v"
 
 assert_ok "test -f '$ROOT/bin/adapters/_contract.md'" "the contract is written down"
 assert_contains "$(cat "$ROOT/bin/adapters/_contract.md")" "must not: run git or gh" \

@@ -11,16 +11,45 @@ export HERDR_ENV=0 FM_TRANSPORT=direct
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# This suite runs fm-review.sh in run mode, which sweeps ${TMPDIR:-/tmp} for
+# abandoned checkouts (T-123): give it a TMPDIR of its own before any of that,
+# so running this suite from inside a live review round's bin/ci.sh can never
+# sweep the round's own checkout.
+real_tmp="${TMPDIR:-/tmp}"
+isolate_tmpdir
+
+eventually() {   # eventually <command...>: 0 once the command is, 1 after 60s
+  local end=$(( $(date +%s) + 60 ))
+  until "$@"; do [ "$(date +%s)" -le "$end" ] || return 1; sleep 0.05; done
+}
+
+# A decoy left in the real TMPDIR, owned by a genuinely live process that
+# holds a kernel flock on its owner file (T-123 round 13) - the same shape
+# checkout_is_free treats as in use, not the dead-pid shape a stale sweep
+# would remove regardless of isolation. It must survive the whole suite
+# untouched, since every fm-review.sh call below runs under the isolated
+# TMPDIR above and never globs the real one at all (T-123).
+decoy_root="$(mktemp -d "$real_tmp/fm-review.XXXXXX")"
+printf '1\n' > "$decoy_root/owner"
+decoy_lockmark="$real_tmp/fm-review-decoy-lock.$$"
+perl -MFcntl=:flock -e '
+  open(my $l, "+<", $ARGV[0]) or exit 2;
+  flock($l, LOCK_EX) or exit 1;
+  open(my $m, ">", $ARGV[1]) or exit 1; print $m "locked\n"; close $m;
+  sleep 3600;
+' "$decoy_root/owner" "$decoy_lockmark" &
+decoy_holder=$!
+eventually test -e "$decoy_lockmark"
 
 fixture() {
-  local d; d="$(mktemp -d)"
+  local d; d="$(safe_tmpdir)"
   git init -q -b main "$d/repo"; cd "$d/repo" || return 1
   git config user.email a@b.c; git config user.name t
-  mkdir -p bin design/tasks skills/reviewer src state
+  mkdir -p bin design/tasks "$d/repo/skills/reviewer" src state
   cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" bin/
   cp "$ROOT/bin/fm-herdr.py" bin/
   cp -r "$ROOT/bin/adapters" bin/
-  cp "$ROOT/skills/reviewer/SKILL.md" skills/reviewer/
+  cp "$ROOT/skills/reviewer/SKILL.md" "$d/repo/skills/reviewer/"
   printf 'vendor: mock\n' > config.yaml
   printf '{"id":"T-Z","title":"a task","activity":{"en":"Review the authored task","zh-TW":"審查已撰寫的任務"},"scope":["src/**"],"acceptance":["it exists"]}\n' > design/tasks/T-Z.json
   echo base > src/a; git add -A; git commit -qm base
@@ -165,7 +194,7 @@ assert_eq "missing_review" \
 # Durable handoff: chain returns unsigned, but pane-child already published a
 # signed final under last-result with a non-matching chain token. Recovery
 # must still post that verdict (transport interrupted mid-chain).
-recover="$(mktemp -d)"
+recover="$(safe_tmpdir)"
 mkdir -p "$recover/bin" "$recover/design/tasks" "$recover/skills/reviewer" "$recover/src" "$recover/state"
 cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" "$ROOT/bin/fm-herdr.py" "$recover/bin/"
 cp -r "$ROOT/bin/adapters" "$recover/bin/"
@@ -440,10 +469,6 @@ kp=$!
 # loaded machine; a count of sleeps ran out under the gate's parallel pool.
 # They return the moment the condition holds, so the kill still lands inside
 # the engine's two-second sleep.
-eventually() {   # eventually <command...>: 0 once the command is, 1 after 60s
-  local end=$(( $(date +%s) + 60 ))
-  until "$@"; do [ "$(date +%s)" -le "$end" ] || return 1; sleep 0.05; done
-}
 eventually test -e "$started"
 assert_ok "test -e '$started'" "the engine was running when the signal was sent"
 kill -TERM "$kp" 2>/dev/null
@@ -822,6 +847,78 @@ rm -f "$GHSTATE/down"
 unset GHSTATE
 rm -rf "$dc"
 
+# --- the retry a round with no verdict gets, once (T-123) -------------------
+# A run-mode reviewer that backgrounds a long check and ends its turn waiting
+# on it has ended the round with nothing signed three times (T-119 r1, T-119
+# r6, T-122 r2): a headless round gets no later turn to check back on it.
+# fm-review.sh retries such a round once, automatically, before reporting it
+# failed - so an engine that only tripped once still gets a verdict posted.
+dret="$(fixture)"; rret="$dret/repo"; GHret="$(ghstub "$dret")"
+tries="$dret/tries"; : > "$tries"
+cat > "$rret/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+echo x >> "$FM_TRIES"
+if [ "$(wc -l < "$FM_TRIES" | tr -d ' ')" -ge 2 ]; then
+  printf 'APPROVE:T-Z\n' > "$3/verdict.txt"
+else
+  printf 'I backgrounded the check and am waiting on it.\n' > "$3/verdict.txt"
+fi
+exit 0
+M
+chmod +x "$rret/bin/adapters/mock.sh"
+out="$(cd "$rret" && FM_ROOT="$rret" FM_GH="$GHret" FM_TRIES="$tries" \
+  bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_eq "0" "$?" "a round with no verdict on its first try still succeeds, after one automatic retry"
+assert_contains "$out" "APPROVE:T-Z" "and the retry's own verdict is the one posted"
+assert_eq "2" "$(wc -l < "$tries" | tr -d ' ')" "the adapter ran exactly twice: the try and its one retry"
+board="$(jq -r 'select(.type=="crew_status")|[.data.activity.en,.data.activity["zh-TW"]]|join("|")' "$rret/state/events.jsonl" | tr '\n' ' ')"
+assert_contains "$board" "retrying" "and the board is told, in English"
+assert_contains "$board" "重試" "and in Chinese"
+rm -rf "$dret"
+
+# a second empty ending is reported exactly as an unretried one always was -
+# never a third attempt, since a genuinely broken engine fails the same way
+# every time
+dret2="$(fixture)"; rret2="$dret2/repo"; GHret2="$(ghstub "$dret2")"
+tries2="$dret2/tries"; : > "$tries2"
+cat > "$rret2/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+echo x >> "$FM_TRIES"
+printf 'Still waiting on the backgrounded check.\n' > "$3/verdict.txt"
+exit 0
+M
+chmod +x "$rret2/bin/adapters/mock.sh"
+out2="$(cd "$rret2" && FM_ROOT="$rret2" FM_GH="$GHret2" FM_TRIES="$tries2" \
+  bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_eq "3" "$?" "a round with no verdict on either try is reported failed exactly as before"
+assert_contains "$out2" "produced no review" "and says so the same way as always"
+assert_eq "2" "$(wc -l < "$tries2" | tr -d ' ')" "and retried exactly once, never a second time"
+rm -rf "$dret2"
+
+# A round with nothing to retry: an adapter that produced no output at all -
+# no bytes in the log, nothing in its own output directory - is never retried,
+# unsigned or not. This is the shape a managed launch this round's own
+# environment refused (a caller's changed focus, an uncertain pane) takes: no
+# engine ever ran, so retrying would only ask the same refused environment
+# again, and a stale refusal from the first attempt can even read as settled
+# on a second, turning a real refusal into a false success (T-123 review round 2).
+dret3="$(fixture)"; rret3="$dret3/repo"; GHret3="$(ghstub "$dret3")"
+tries3="$dret3/tries"; : > "$tries3"
+cat > "$rret3/bin/adapters/mock.sh" <<'M3'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+echo x >> "$FM_TRIES"
+exit 0
+M3
+chmod +x "$rret3/bin/adapters/mock.sh"
+out3="$(cd "$rret3" && FM_ROOT="$rret3" FM_GH="$GHret3" FM_TRIES="$tries3" bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_eq "3" "$?" "a round whose adapter said nothing at all is reported failed on its first try"
+assert_contains "$out3" "produced no review" "and says so the same way as always"
+assert_eq "1" "$(wc -l < "$tries3" | tr -d ' ')" "and is never retried when nothing spoke at all"
+rm -rf "$dret3"
+
 # --- run mode (T-066) --------------------------------------------------------
 # A reviewer that only reads the diff cannot run a test or prove fail-first.
 # In run mode it gets a fresh clone of the head, outside every worktree, which
@@ -982,20 +1079,91 @@ assert_ok "grep -qx '# The head under review' '$dm/prompt.md'" "a diff round giv
 assert_contains "$(cat "$dm/prompt.md")" "Conclusion: success" "with the check this gh reports"
 printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n' > "$rm_/config.yaml"
 
-# a round that was SIGKILLed ran no trap; the next run-mode round removes its
-# checkout, and leaves alone one still in use or one not yet claimed
+# A round that was SIGKILLed ran no trap; the next run-mode round removes its
+# checkout, and leaves alone one still in use or one not yet claimed. Never
+# `kill -0` on the pid an owner file names to decide it (T-123): inside a
+# sandboxed round `kill -0` and `ps` are both denied, so a live sibling's pid
+# can fail a signal exactly as a dead one's would, and pid 1 - always alive,
+# but never signallable by this non-root user - is a faithful, real instance
+# of that same failure (`kill -0 1` here fails with EPERM, not ESRCH). Only a
+# kernel flock on the owner file, held by a background process standing in
+# for the round that made it, says a checkout is still in use.
 tmpM="$dm/tmp"; mkdir -p "$tmpM/fm-review.stale/checkout" "$tmpM/fm-review.live" "$tmpM/fm-review.fresh"
 ( exit 0 ) & deadpid=$!; wait "$deadpid"
 printf '%s\n' "$deadpid" > "$tmpM/fm-review.stale/owner"
-printf '%s\n' "$$" > "$tmpM/fm-review.live/owner"
+printf '1\n' > "$tmpM/fm-review.live/owner"
+livelock="$dm/live-locked"
+perl -MFcntl=:flock -e '
+  open(my $l, "+<", $ARGV[0]) or exit 2;
+  flock($l, LOCK_EX) or exit 1;
+  open(my $m, ">", $ARGV[1]) or exit 1; print $m "locked\n"; close $m;
+  sleep 60;
+' "$tmpM/fm-review.live/owner" "$livelock" &
+liveholder=$!
+eventually test -e "$livelock"
 ( cd "$rm_" && TMPDIR="$tmpM" FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
   bin/fm-review.sh --task T-Z --branch work --round 3 >/dev/null 2>&1 )
 assert_eq "0" "$?" "a run-mode round with a stale checkout around still runs"
-assert_fail "test -e '$tmpM/fm-review.stale'" "and removes the checkout a killed round left behind"
-assert_ok "test -d '$tmpM/fm-review.live'" "but not one whose round is still alive"
+assert_fail "test -e '$tmpM/fm-review.stale'" "and removes a checkout whose owner pid is gone and whose lock nothing holds"
+assert_ok "test -d '$tmpM/fm-review.live'" \
+  "but not one a live process still locks, whatever kill -0 on its recorded pid 1 says (EPERM here, not ESRCH)"
 assert_ok "test -d '$tmpM/fm-review.fresh'" "nor one no round has claimed yet"
 assert_eq "fm-review.fresh fm-review.live" "$(cd "$tmpM" && ls -d fm-review.* | tr '\n' ' ' | sed 's/ $//')" \
   "and its own checkout is gone when it ends"
+kill "$liveholder" 2>/dev/null; wait "$liveholder" 2>/dev/null
+
+# A suite invoked from inside another round's own TMPDIR - as running this
+# suite from inside a live review round's bin/ci.sh would, before
+# isolate_tmpdir existed - must not reach that outer round's checkout: its
+# sweep only ever globs its own TMPDIR, never an ancestor's.
+outerlock="$dm/outer-locked"
+mkdir -p "$tmpM/fm-review.outer" "$tmpM/nested"
+printf '1\n' > "$tmpM/fm-review.outer/owner"
+perl -MFcntl=:flock -e '
+  open(my $l, "+<", $ARGV[0]) or exit 2;
+  flock($l, LOCK_EX) or exit 1;
+  open(my $m, ">", $ARGV[1]) or exit 1; print $m "locked\n"; close $m;
+  sleep 60;
+' "$tmpM/fm-review.outer/owner" "$outerlock" &
+outerholder=$!
+eventually test -e "$outerlock"
+( cd "$rm_" && TMPDIR="$tmpM/nested" FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
+  bin/fm-review.sh --task T-Z --branch work --round 3 >/dev/null 2>&1 )
+assert_eq "0" "$?" "a round started inside another round's TMPDIR still runs"
+assert_ok "test -d '$tmpM/fm-review.outer'" \
+  "and never sweeps the outer round's checkout, which sits outside its own TMPDIR"
+kill "$outerholder" 2>/dev/null; wait "$outerholder" 2>/dev/null
+
+# The owner file that says a checkout is claimed used to be written under its
+# final, visible fm-review.* name and locked only a moment later (round 2's
+# own finding on T-123): a sweep landing in that gap saw an unlocked owner
+# file and read the checkout as free. build_checkout closes the gap by
+# building under a name sweep_checkouts never globs and renaming it into
+# place only once the lock is already held, so no sweep - however many run
+# concurrently, however tightly - can ever observe this checkout before its
+# lock exists, by construction: sweep_checkouts' own glob cannot match a
+# name it is never given. This is a soak test, not a reliable reproduction
+# of the pre-fix race by itself - the original window was a handful of
+# syscalls wide and did not turn red here against the pre-fix code either,
+# even under heavier hammering than shipped below - but it does exercise
+# real concurrent sweep pressure throughout a real checkout's construction,
+# and the round's own checkout must never be the one a concurrent sweeper
+# reads as free.
+tmpRace="$dm/tmpRace"; mkdir -p "$tmpRace"
+: > "$tmpRace/.keep-racing"
+sweepers=()
+for _s in $(seq 1 4); do
+  (while [ -e "$tmpRace/.keep-racing" ]; do (cd "$rm_" && TMPDIR="$tmpRace" FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" bin/fm-review.sh --task T-Z --branch no-such-branch-xyz --round 3 >/dev/null 2>&1); done) &
+  sweepers+=("$!")
+done
+race_failed=0
+for _r in $(seq 1 3); do
+  outR="$(cd "$rm_" && TMPDIR="$tmpRace" FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" bin/fm-review.sh --task T-Z --branch work --round 3 2>&1)"
+  case "$outR" in *"could not prepare its checkout"*) race_failed=1 ;; esac
+done
+rm -f "$tmpRace/.keep-racing"
+for _p in "${sweepers[@]}"; do kill "$_p" 2>/dev/null; wait "$_p" 2>/dev/null; done
+assert_eq "0" "$race_failed" "a round building its own checkout survives sweepers hammering the same TMPDIR throughout"
 
 # the hosts a project's setup needs reach the adapter; a GitHub host never does
 printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n  network: registry.npmjs.org cdn.playwright.dev\n' > "$rm_/config.yaml"
@@ -1301,5 +1469,51 @@ assert_eq "REVIEWED:T-Z verdict=REJECT head=$vhead base=$vbase patch=$vpatch fil
 assert_eq "$na" "$(approvals)" "and emits no approved"
 assert_eq "$((nr + 1))" "$(rejections)" "but review_failed, as the REVIEWED line says"
 rm -rf "$dv"
+
+# T-123: the mktemp+cd+rm class that deleted a live checkout twice (the
+# pk/pv variables in tests/adapter-contract.test.sh, before this fix) - a
+# mktemp the sandbox refuses prints nothing and exits nonzero, and cd "" on
+# that empty result succeeds in bash and simply stays where it already was,
+# so the directory the caller happened to be running in came back for a
+# later rm -rf to remove. safe_tmpdir and safe_rm_rf (tests/lib.sh) close
+# it, and both exit 70 rather than return an ordinary status: exit inside a
+# function ends the whole subshell it runs in, which is what fails hard
+# means here, so each case below reads the subshell own exit status.
+( mktemp() { return 1; }; . "$ROOT/tests/lib.sh"; safe_tmpdir ) >/dev/null 2>&1; rc=$?
+assert_eq "70" "$rc" "safe_tmpdir refuses rather than silently handing back the directory it ran in, when mktemp is refused"
+
+victim_root="$(safe_tmpdir)"
+mkdir -p "$victim_root/real"
+: > "$victim_root/real/canary"
+
+( . "$ROOT/tests/lib.sh"; TMPDIR="$victim_root" safe_rm_rf "" ) >/dev/null 2>&1; rc=$?
+assert_eq "70" "$rc" "safe_rm_rf refuses an empty path"
+
+( cd "$victim_root/real" && . "$ROOT/tests/lib.sh" && TMPDIR="$victim_root" safe_rm_rf "$(pwd -P)" ) >/dev/null 2>&1; rc=$?
+assert_eq "70" "$rc" "safe_rm_rf refuses to remove the current directory"
+assert_ok "test -f '$victim_root/real/canary'" "and the canary inside it survives"
+
+mkdir -p "$victim_root/elsewhere"
+( . "$ROOT/tests/lib.sh"; TMPDIR="$victim_root/elsewhere" safe_rm_rf "$victim_root/real" ) >/dev/null 2>&1; rc=$?
+assert_eq "70" "$rc" "safe_rm_rf refuses a path outside its own TMPDIR"
+assert_ok "test -f '$victim_root/real/canary'" "and the canary survives that refusal too"
+
+fake_repo="$victim_root/fakerepo"; mkdir -p "$fake_repo"
+( . "$ROOT/tests/lib.sh"; TMPDIR="$victim_root" ROOT="$fake_repo" safe_rm_rf "$fake_repo" ) >/dev/null 2>&1; rc=$?
+assert_eq "70" "$rc" "safe_rm_rf refuses the repository root even when it resolves inside TMPDIR"
+assert_ok "test -d '$fake_repo'" "and it is not removed"
+
+victim="$victim_root/gone"; mkdir -p "$victim"
+( . "$ROOT/tests/lib.sh"; TMPDIR="$victim_root" safe_rm_rf "$victim" )
+assert_fail "test -d '$victim_root/gone'" "a real temp directory inside its own TMPDIR is still actually removed"
+rm -rf "$victim_root"
+
+# T-123: the decoy planted in the real TMPDIR before isolate_tmpdir, above,
+# outlives every run-mode fm-review.sh call this whole suite has made -
+# proof that none of them ever swept the real TMPDIR at all
+assert_ok "test -d '$decoy_root'" \
+  "the suite's real-TMPDIR decoy checkout survives the whole run-mode suite untouched"
+kill "$decoy_holder" 2>/dev/null; wait "$decoy_holder" 2>/dev/null
+rm -rf "$decoy_root" "$decoy_lockmark"
 
 finish
