@@ -251,6 +251,10 @@ fm_adapter_policy() {
   for kv in $FM_ROUND_CACHES; do
     export "${kv%%=*}=$FM_ROUND_TMP/cache/${kv#*=}"
   done
+  # A normal environment besides (T-128): HOME and the three XDG variables
+  # are set the same way, under FM_ROUND_TMP, by fm-sandbox.sh itself (both
+  # `run` and `plain`) once it knows the round's --tmp, so the guarantee
+  # holds whatever called it - this adapter layer, or a direct invocation.
 }
 # name=directory under the round's cache, for every toolchain cache a round
 # is handed (fm_adapter_policy); tests/adapter-contract.test.sh checks each

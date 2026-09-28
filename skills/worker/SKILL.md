@@ -57,6 +57,19 @@ until `WORKER_COMPLETE` for the only push. `fm-worker.sh` still does a
 final sweep through the same helper and will also publish a dirty
 worktree on EXIT (TERM/INT), but mid-run saves are your job.
 
+**Your worktree is mirrored outside the round, and restored if it is
+destroyed.** `fm-worker.sh` keeps a copy of your work where nothing in your
+round can write, and watches your tree while your round runs. If your tree
+is deleted, loses its link to git, or loses most of its files - whatever
+ran, including a command you did not expect to be destructive - it is put
+back from that copy, and the round is reported as having destroyed its own
+tree, not as having changed nothing. If an earlier round on this task was
+restored this way, your prompt says so. That report is information, not
+something to work around, hide, or leave unmentioned: say what happened in
+your own account of the round the same way you would report any other
+failure, and do not try to defeat, disable or route around the mirror or
+the restore.
+
 ## When the base moved under your branch
 
 On a later round `fm-worker.sh` may rebuild your branch as one change on the
