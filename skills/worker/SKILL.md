@@ -42,20 +42,25 @@ You never merge, never write to `main`/`master`, never open or edit a pull
 request, and never rebase onto protected branches. Raw `git` / `gh` for those
 operations stays forbidden.
 
-**Mid-run checkpoint (required):** after each logical unit of work — and
-before any `ASK-PASS-CRITERIA` if you also changed files — run the stock
-helper so the PR is never a black box waiting for the final script commit:
+## Inside the sandbox
 
-```bash
-bin/fm-checkpoint.sh --task <TASK> --message "<short why>" --repo <root>
-# or, from inside the worktree:
-bin/fm-checkpoint.sh --dir . --message "<short why>"
-```
+Every round, worker or reviewer, runs inside an OS sandbox fm itself builds
+(T-105, T-117). It writes only to the worktree and a temp directory of the
+round's own; its network reaches only the registries `config.yaml`'s policy
+declares, and never GitHub, `gh`, or loopback. `HOME`, `TMPDIR` and the
+`XDG_*` cache and data directories are a normal, writable environment of the
+round's own, so ordinary code — `mktemp`, `~/.cache`, `npm`/`bun`/`pip`
+defaults — takes no broken path inside it (T-128). A command the sandbox
+denies is the boundary, to be reported, not worked around: do not retry it
+under a different name, chase a bypass, or disable the sandbox yourself.
 
-That commits and immediately pushes the feature branch only. Do not wait
-until `WORKER_COMPLETE` for the only push. `fm-worker.sh` still does a
-final sweep through the same helper and will also publish a dirty
-worktree on EXIT (TERM/INT), but mid-run saves are your job.
+**A round cannot commit or push.** The sandbox denies write access to the
+worktree's git directory and all network access to GitHub, so `git commit`,
+`git push` and `bin/fm-checkpoint.sh` all fail inside a round. Do not run
+them and do not work around the refusal: leave your work uncommitted in the
+worktree, and `fm-worker.sh` commits and pushes it, outside the sandbox,
+when the round ends — however it ends, including when it is stopped — so
+the branch is never a black box waiting on a push you cannot make.
 
 **Your worktree is mirrored outside the round, and restored if it is
 destroyed.** `fm-worker.sh` keeps a copy of your work where nothing in your
@@ -94,15 +99,11 @@ commit in it yourself: a round whose HEAD moved off the rebuild base is
 refused.
 
 In a rebuilt round your own task entry is frozen: your file
-`design/tasks/<id>.json`, or, on a base that still keeps the one array, your
-`design/tasks.json` entry and task-table row. The script carries it through
-exactly as your previous head had it; do not rewrite it while resolving. A
-rebuilt round that changes it is refused like one that leaves a marker. If
-the review asks you to change it, say so in `.fm-say.md` and change it in the
-next round that is not a rebuild. A branch that still had
-`design/tasks.json` when the base moved to one file per task has already
-been brought over by the rebuild; an entry both sides changed is handed to
-you with markers like any conflict.
+`design/tasks/<id>.json` (T-090). The script carries it through exactly as
+your previous head had it; do not rewrite it while resolving. A rebuilt
+round that changes it is refused like one that leaves a marker. If the
+review asks you to change it, say so in `.fm-say.md` and change it in the
+next round that is not a rebuild.
 
 ## Every finding is a class
 
@@ -125,6 +126,12 @@ SWEPT:<task-id> assertions that read the ambient machine
 
 ## Rounds
 
+Start from firstmate's brief on the pull request and the evidence it names —
+the failing assertion, its log lines, the file:line and source around it,
+the verified root cause, the expected change and what must not change —
+before reading files (SK-002). A brief that only relays a symptom is
+incomplete; report that back to firstmate rather than hunting from nothing.
+
 Rounds one and two: read the review, fix the class it names, say what you
 changed and what else the sweep turned up.
 
@@ -144,9 +151,6 @@ If the reviewer then raises something that was not on the list and is not a
 regression you just introduced, say so plainly and carry on with the list.
 
 ## Saying something on the pull request
-
-You may not open, merge, or rewrite pull requests with raw `git` / `gh`. Branch
-saves go through `bin/fm-checkpoint.sh`.
 
 When you need to say something where the reviewer will see it — and when
 requesting the initial closed list that is the whole of your turn, because you
@@ -186,18 +190,20 @@ old off-list complaints plainly; only a newly introduced, marked
 `REGRESSION:<task-id>` extends the work. Report protocol violations for board
 coordination and satisfy all remaining original items in one pass.
 
-Record tests actually executed, commands, observed failures before implementation
-and results afterward. A metadata/link check proves structure, not model
-compliance; report instruction-only validation limits and do not waive gate 5.
-These are role requirements: the review launcher and gate 7 do not establish
-final-answer or current-head provenance, and the protocol checker does not
-prove original-list membership or that a regression is new. Report gaps to
-firstmate rather than treating a passing script as proof of those properties.
-Never claim tests, hook removal, commits or PR actions without observable evidence.
-Run appropriate repository checks; firstmate coordinates actual GitHub CI and
-current-head gate evidence and board approval before merging; `fm-merge.sh`
-itself checks neither approval nor the gates. Neither lavish nor
-no-mistakes is a prerequisite; do not add their hooks.
+Workers do not run the test suite or `ci.sh`: GitHub CI and the gates verify
+(captain's rule; SK-002). Write the fail-first test and name, in the pull
+request, the assertion that should go red when your implementation is
+reverted, with the file:line it lives at. A metadata/link check proves
+structure, not model compliance; report instruction-only validation limits
+and do not waive gate 5. These are role requirements: the review launcher
+and gate 7 do not establish final-answer or current-head provenance, and the
+protocol checker does not prove original-list membership or that a
+regression is new. Report gaps to firstmate rather than treating a passing
+script as proof of those properties. Never claim tests, hook removal,
+commits or PR actions without observable evidence. Firstmate coordinates
+actual GitHub CI and current-head gate evidence and board approval before
+merging; `fm-merge.sh` itself checks neither approval nor the gates. Neither
+lavish nor no-mistakes is a prerequisite; do not add their hooks.
 
 Keep repository prose and `.fm-say.md` in English. Dynamic user-facing board/event
 summaries require both `en` and `zh-TW`; static UI dictionaries do not supply them.
@@ -205,14 +211,4 @@ Do not invent mid-run board progress: scripts emit phase and authored activity
 through `fm-emit.sh`; bounded `{done,total}` only when a real denominator exists.
 Do not edit scripts or runtime wrappers executing in a live process. Coordinate
 immutable run snapshots if needed and revalidate interrupted or duplicated runs.
-
-Managed launches create a dedicated tab with one owned root pane and the same
-canonical actor as the tab, pane and sidebar label. Creation uses `--no-focus`,
-records the caller tab/pane and verifies unchanged UI focus. Never split or reuse
-the captain's view. Before fallback reuse or completion close, verify the recorded
-tab still contains only its owned pane, with unchanged task/run/actor, terminal
-and shell identities and shell-only state. Added panes, moved/shared/reused tabs,
-unknown observations and incomplete results retain resources. Close only the
-verified pane; its single-pane tab may disappear as a consequence, never through
-unconditional whole-tab deletion. Preserve explicit transport/auto-close opt-outs.
 
