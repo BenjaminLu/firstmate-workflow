@@ -101,6 +101,31 @@ if reviewer.is_file():
     ):
         if sentence not in rprose:
             errors.append(f'reviewer skill lacks SK-005 fix: {sentence}')
+# SK-004: the worker skill matches the sandboxed round (T-117/T-128): it
+# cannot commit or push, does not run the suites, its rebuild-frozen rule
+# names only the current task file, and it starts from firstmate's brief.
+worker = root / 'skills' / 'worker' / 'SKILL.md'
+if worker.is_file():
+    prose = ' '.join(worker.read_text().split())
+    for sentence in (
+        'The sandbox denies write access to the worktree\'s git directory and all network access to GitHub, so `git commit`, `git push` and `bin/fm-checkpoint.sh` all fail inside a round.',
+        'Do not run them and do not work around the refusal: leave your work uncommitted in the worktree, and `fm-worker.sh` commits and pushes it, outside the sandbox, when the round ends — however it ends, including when it is stopped — so the branch is never a black box waiting on a push you cannot make.',
+        'It writes only to the worktree and a temp directory of the round\'s own; its network reaches only the registries `config.yaml`\'s policy declares, and never GitHub, `gh`, or loopback.',
+        'A command the sandbox denies is the boundary, to be reported, not worked around: do not retry it under a different name, chase a bypass, or disable the sandbox yourself.',
+        'Workers do not run the test suite or `ci.sh`: GitHub CI and the gates verify (captain\'s rule; SK-002).',
+        'Write the fail-first test and name, in the pull request, the assertion that should go red when your implementation is reverted, with the file:line it lives at.',
+        'In a rebuilt round your own task entry is frozen: your file `design/tasks/<id>.json` (T-090).',
+        'Start from firstmate\'s brief on the pull request and the evidence it names — the failing assertion, its log lines, the file:line and source around it, the verified root cause, the expected change and what must not change — before reading files (SK-002).',
+    ):
+        if sentence not in prose:
+            errors.append(f'worker skill lacks SK-004 update: {sentence}')
+    for gone in (
+        'entry and task-table row',
+        'Branch saves go through `bin/fm-checkpoint.sh`.',
+        'Managed launches create a dedicated tab with one owned root pane',
+    ):
+        if gone in prose:
+            errors.append(f'worker skill still carries retired text: {gone}')
 if errors:
     sys.exit('\n'.join(errors))
 print('role metadata and entrypoint links: passed')
