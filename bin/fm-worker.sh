@@ -472,13 +472,25 @@ mirror_sync() {
   git -C "$tree" rev-parse -q --verify HEAD 2>/dev/null > "$mirror_root/.head" || : > "$mirror_root/.head"
   printf '%s\n' "$next"
 }
+# tree_git_ok: whether git itself still recognises $tree as a repository -
+# what git says, not a guess from a path or a file type (T-128 round 5
+# review): a worktree's .git is a file, a clone's is a directory, and a test
+# fixture's git may be a stub that never creates either, and all three must
+# be judged the same way. GIT_CEILING_DIRECTORIES stops the search at
+# $tree's own parent, so a real worktree - always nested inside its own
+# repository's working copy, both for the self project and an external one
+# - never has a missing .git papered over by git discovering the outer
+# repository instead and answering for that one.
+tree_git_ok() {
+  GIT_CEILING_DIRECTORIES="$(dirname "$tree")" git -C "$tree" rev-parse -q --verify HEAD >/dev/null 2>&1
+}
 # 0 and silent when the tree looks as it should; 1 and a reason on stdout
 # when it needs restoring - gone, its .git link gone, or missing more than
 # mirror_loss_pct of the files or the bytes the last mirror generation saw
 # with HEAD unmoved since, so nothing here can be a real commit's doing.
 mirror_health() {
   [ -d "$tree" ] || { printf 'the worktree is gone'; return 1; }
-  [ -e "$tree/.git" ] || { printf 'its .git link is gone'; return 1; }
+  tree_git_ok || { printf 'its .git link is gone'; return 1; }
   local baseline_n baseline_b current_n current_b
   baseline_n="$(cat "$mirror_root/.count" 2>/dev/null)"
   baseline_b="$(cat "$mirror_root/.bytes" 2>/dev/null)"
@@ -513,9 +525,15 @@ mirror_restore() {
   [ ! -e "$tree" ] || cp -R "$tree" "$wreck" 2>/dev/null
   total="$(find "$mirror_root/$gen" -type f 2>/dev/null | wc -l | tr -d ' ')"
   mkdir -p "$tree"
-  find "$tree" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} + 2>/dev/null
-  rsync -a "$mirror_root/$gen/" "$tree/" >/dev/null 2>&1
-  if [ ! -e "$tree/.git" ]; then
+  # Never wipe $tree before restoring into it: a file the round wrote since
+  # the mirror's last generation is newer than that generation's copy, and a
+  # restore that deletes it first and finds nothing to put back in its place
+  # is worse than no restore at all (T-128 round 5 review). -u/--update
+  # skips a destination file already as new or newer than the mirror's copy
+  # and only fills in what is missing or older; no --delete, so nothing this
+  # round wrote is ever removed by a restore, only ever added to.
+  rsync -au "$mirror_root/$gen/" "$tree/" >/dev/null 2>&1
+  if ! tree_git_ok; then
     git -C "$REPO" worktree repair "$tree" >/dev/null 2>&1 || true
   fi
   echo "fm-worker: $tree was restored from mirror generation $gen ($why); it destroyed its own tree" >&2

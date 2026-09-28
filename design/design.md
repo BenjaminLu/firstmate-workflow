@@ -2932,18 +2932,36 @@ exits instead (round 4 review).
 asks whether the tree looks as it should: present, its `.git` link intact,
 and neither its file count nor its total bytes down by more than half from
 what the last mirror generation saw - unless `HEAD` has moved since, because
-a real commit legitimately removing files is not a wreck. When it has not,
-`mirror_restore` keeps the wreck aside under `state/rescued/`, rebuilds the
-tree from the latest generation, and repairs the worktree's `.git` link with
-`git worktree repair` when that is what went - the object database and the
-worktree's admin directory live in the repository's common `.git`, which is
-never inside the write roots (design 13.1), so whatever a round deletes,
-`git` in that tree still works and every committed change survives. A
-worker round that finds its tree restored mid-run is told so in its next
-prompt, not left to notice on its own, and the round that destroyed its own
-tree is reported as exactly that - `destroyed its own tree rather than
-changing nothing` - never as one that changed nothing, which is a different
-and much less alarming thing to have happened.
+a real commit legitimately removing files is not a wreck. Whether `.git` is
+intact is asked of git itself (`tree_git_ok`, `git -C "$tree" rev-parse -q
+--verify HEAD`), not guessed from a path or a file type - a worktree's `.git`
+is a file, a clone's is a directory, and a test fixture's stub git may lay
+down neither, and all three must be judged the same way (round 5 review, a
+false "its .git link is gone" against exactly such a fixture lost a live
+round's own uncommitted work to a stale restore). `GIT_CEILING_DIRECTORIES`
+is set to the tree's own parent for that check, since every real worktree
+sits nested inside its own repository's working copy: without it, a
+worktree whose `.git` really has gone missing would have git's own
+directory search walk up and find the enclosing repository instead, and
+answer for that one - a false negative undoing the very detection this
+exists for. When the tree does not look as it should, `mirror_restore` keeps
+the wreck aside under `state/rescued/`, then merges the latest mirror
+generation into the tree with `rsync -au` - never wiping the tree first, as
+an earlier round did: a file the round wrote since that generation is newer
+than the mirror's copy, and `-u`/`--update` leaves anything already as new
+or newer alone, filling in only what is missing or older, with no `--delete`
+to ever remove what the round itself put there (round 5 review: a restore
+that costs a file the tree already had is worse than no restore). It then
+repairs the worktree's `.git` link with `git worktree repair` when
+`tree_git_ok` still says no - the object database and the worktree's admin
+directory live in the repository's common `.git`, which is never inside the
+write roots (design 13.1), so whatever a round deletes, `git` in that tree
+still works and every committed change survives. A worker round that finds
+its tree restored mid-run is told so in its next prompt, not left to notice
+on its own, and the round that destroyed its own tree is reported as exactly
+that - `destroyed its own tree rather than changing nothing` - never as one
+that changed nothing, which is a different and much less alarming thing to
+have happened.
 
 `bin/fm-emit.sh`'s `TYPES` enum is outside this task's own scope (its file
 is not in `design/tasks/T-128.json`'s `scope`), so there is no

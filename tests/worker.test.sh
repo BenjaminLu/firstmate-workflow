@@ -2916,6 +2916,96 @@ assert_ok "test -d '$dMir/repo/state/mirrors/self/T-MIR'" "the mirror lives outs
 # a fixture copy; this suite proves the mechanism works, not its absence
 rm -rf "$dMir"
 
+# --- detection asks git, not a guess from file type or path (T-128 round 5) -
+# on 2026-09-27 the required check found four real crew rounds (T-035's
+# fixture among them, in tests/herdr.test.sh, out of this task's own scope)
+# whose git never lays down a real .git of its own - a stub that answers
+# every unhandled command with silent success, exactly what
+# tests/herdr.test.sh's and tests/crew-end-to-end.test.sh's own stub git do
+# - judged "its .git link is gone" by a check that only asked whether the
+# path existed, restored an older mirror generation over a tree that was
+# never wrecked, and lost the round's own file that generation predated.
+# tree_git_ok (bin/fm-worker.sh) is extracted here verbatim, not retyped by
+# hand, so reverting the real function empties this block and the call
+# below fails outright rather than quietly passing.
+dGitOk="$(safe_tmpdir)"
+mkdir -p "$dGitOk/stub" "$dGitOk/tree"
+cat > "$dGitOk/stub/git" <<'G'
+#!/usr/bin/env python3
+import sys, pathlib
+a = sys.argv[1:]
+if a[:2] == ['worktree', 'add']:
+    pathlib.Path(a[-2]).mkdir(parents=True, exist_ok=True)
+elif a[0] in ('show-ref', 'ls-remote'):
+    sys.exit(1)
+# every other command, including -C <tree> rev-parse -q --verify HEAD,
+# answers with silent success - an unhandled command falling through with no
+# branch of its own, the same shape both real fixtures' stub git take
+G
+chmod +x "$dGitOk/stub/git"
+{
+  sed -n '/^tree_git_ok() {/,/^}/p' "$ROOT/bin/fm-worker.sh"
+  printf 'tree="$1"\n'
+  printf 'tree_git_ok && echo healthy || echo wrecked\n'
+} > "$dGitOk/probe.sh"
+outGitOk="$(PATH="$dGitOk/stub:$PATH" bash "$dGitOk/probe.sh" "$dGitOk/tree" 2>/dev/null)"
+assert_eq "healthy" "$outGitOk" \
+  "a tree whose git never lays down a .git of its own is not judged wrecked"
+# and the same function must still catch a real worktree's .git actually
+# going missing - the ceiling this fix relies on (GIT_CEILING_DIRECTORIES)
+# must stop short of finding this repository's own outer .git and answering
+# for that one instead, since every real worktree sits nested inside it
+rm -rf "$dGitOk/tree"
+(
+  cd "$dGitOk" || exit 1
+  git init -q -b main >/dev/null 2>&1
+  git config user.email a@b.c; git config user.name t
+  echo hi > f.txt
+  git add -A; git commit -qm base >/dev/null 2>&1
+  git worktree add -q tree -b t-x-branch >/dev/null 2>&1
+)
+outGitOkReal="$(bash "$dGitOk/probe.sh" "$dGitOk/tree" 2>/dev/null)"
+assert_eq "healthy" "$outGitOkReal" "and a real, intact worktree nested in its own repository is judged healthy"
+rm -f "$dGitOk/tree/.git"
+outGitOkGone="$(bash "$dGitOk/probe.sh" "$dGitOk/tree" 2>/dev/null)"
+assert_eq "wrecked" "$outGitOkGone" \
+  "and that same worktree's .git actually gone is still caught, not papered over by the enclosing repository"
+safe_rm_rf "$dGitOk"
+
+# --- restore must never lose work newer than the mirror (T-128 round 5) ----
+# Even a genuine wreck must not cost a file the round wrote since the
+# mirror's last generation: wiping the tree before copying the mirror back
+# in, as an earlier round did, deletes such a file first and then has
+# nothing newer to put in its place - a restore that makes a file vanish is
+# worse than no restore. FM_MIRROR_INTERVAL is generous here so only the
+# deterministic before/after-the-round syncs run, never the background
+# watcher, so the new file is provably absent from every mirror generation
+# when the round ends, not merely absent by timing luck.
+dPreserve="$(fixture T-PRESERVE)"
+cat > "$dPreserve/repo/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+tree="$3"
+echo new-content > "$tree/new-since-mirror.txt"
+rm -f "$tree/.git"
+exit 0
+M
+chmod +x "$dPreserve/repo/bin/adapters/mock.sh"
+GHPreserve="$(ghstub "$dPreserve")"
+outPreserve="$(cd "$dPreserve/repo" && FM_ROOT="$dPreserve/repo" FM_GH="$GHPreserve" FM_MIRROR_INTERVAL=60 \
+  bin/fm-worker.sh --task T-PRESERVE --name worker-preserve 2>&1)"; rcPreserve=$?
+assert_eq "0" "$rcPreserve" "a round that deletes only its own .git, having written a file since the last mirror generation, still completes"
+assert_contains "$outPreserve" "destroyed its own tree" "and is reported as one that destroyed its own tree"
+assert_ok "test -e '$dPreserve/repo/state/worktrees/T-PRESERVE/.git'" "its .git is repaired"
+assert_ok "git -C '$dPreserve/repo/state/worktrees/T-PRESERVE' status" "and git works in it again"
+assert_eq "new-content" \
+  "$(cat "$dPreserve/repo/state/worktrees/T-PRESERVE/new-since-mirror.txt" 2>/dev/null)" \
+  "the file written after the last mirror generation was not overwritten by the restore"
+assert_contains "$(git -C "$dPreserve/repo/state/worktrees/T-PRESERVE" show --stat HEAD 2>/dev/null)" \
+  "new-since-mirror.txt" \
+  "and reached the commit fm-worker.sh pushed, not lost to the restore that repaired .git"
+rm -rf "$dPreserve"
+
 # --- the watcher does not outlive a round killed outright (T-128 round 4) --
 # SIGKILL runs no trap, so a round killed outright never reaches
 # mirror_watch_stop to write the stop file; without its own check the
