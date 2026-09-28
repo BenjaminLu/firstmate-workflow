@@ -1511,7 +1511,7 @@ CREW_DATA="$(jq -c --argjson identity "$CREW_IDENTITY" '.identity=$identity' <<<
 if [ -n "$model_requested" ] && [ -n "$model_reported" ] && [ "$model_reported" != "$model_requested" ]; then
   echo "fm-worker: requested model $model_requested but $FM_VENDOR_USED ran on $model_reported" >&2
   emit --type model_mismatch --en "requested $model_requested but ran on $model_reported" \
-       --tw "要求的是 $model_requested，實際跑在 $model_reported" \
+       --tw "要求的是 ${model_requested}，實際跑在 ${model_reported}" \
        --data "$(jq -cn --arg vendor "$FM_VENDOR_USED" --arg requested "$model_requested" \
                   --arg reported "$model_reported" \
                   '{vendor:$vendor,model_requested:$requested,model:$reported}')"
@@ -1519,7 +1519,7 @@ if [ -n "$model_requested" ] && [ -n "$model_reported" ] && [ "$model_reported" 
   # (above); this crew_status line is what refreshes the board's activity
   # line with the same news.
   emit_status "requested $model_requested but ran on $model_reported" \
-              "要求的是 $model_requested，實際跑在 $model_reported"
+              "要求的是 ${model_requested}，實際跑在 ${model_reported}"
 fi
 
 rm -f "$prompt"

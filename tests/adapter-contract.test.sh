@@ -122,8 +122,13 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
   # has no CLI to lie to it. Its own promise is checked just below instead.
   if [ "$name" != "mock" ]; then
     vendor_says() {  # <stdout> <exit code>
-      printf '#!/usr/bin/env bash\nprintf "%%s\\n" %s\nexit %s\n' "$(printf '%q' "$1")" "$2" \
-        > "$d/fakebin/$name"
+      # cursor-agent's own preflight (T-127) asks `--list-models` before
+      # every round with a model configured; a stub built for the real
+      # invocation's transcript answers that separate call as a CLI with no
+      # session yet would - silently (exit 1) - so a canned body meant for
+      # the round's own transcript is never misread as its model catalogue.
+      printf '#!/usr/bin/env bash\nif [ "$1" = "--list-models" ]; then exit 1; fi\nprintf "%%s\\n" %s\nexit %s\n' \
+        "$(printf '%q' "$1")" "$2" > "$d/fakebin/$name"
       chmod +x "$d/fakebin/$name"
     }
     for line in "Error: Authentication required. Please run 'agent login' first" \
@@ -146,7 +151,12 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     # the invocation each vendor documents.
     # stdin and argv are recorded apart, so each adapter can be held to the
     # half its CLI actually documents
-    printf '#!/usr/bin/env bash\ncat >> "%s/stdin" 2>/dev/null\nprintf "%%s" "$*" >> "%s/argv"\nprintf "ran\\n"\nexit 0\n' \
+    # cursor-agent's own preflight (T-127) asks `--list-models` before every
+    # round with a model configured; this stub is reused below with
+    # FM_MODEL=claude-opus-5-5, so it answers that separate call with a
+    # catalogue naming it, rather than recording it into argv/stdin as
+    # though it were the round's own invocation.
+    printf '#!/usr/bin/env bash\nif [ "$1" = "--list-models" ]; then printf "claude-opus-5-5 - Claude Opus\\n"; exit 0; fi\ncat >> "%s/stdin" 2>/dev/null\nprintf "%%s" "$*" >> "%s/argv"\nprintf "ran\\n"\nexit 0\n' \
       "$d" "$d" > "$d/fakebin/$name"
     chmod +x "$d/fakebin/$name"
     : > "$d/stdin"; : > "$d/argv"

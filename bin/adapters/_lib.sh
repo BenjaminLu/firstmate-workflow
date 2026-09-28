@@ -378,12 +378,18 @@ fm_adapter_model_refusal() {
 # that could not actually ask the vendor. This runs before the round, on a
 # lightweight call that touches no worktree - unlike
 # fm_adapter_model_refusal, which reads the real round's own transcript
-# after the fact.
+# after the fact. The call is given no stdin (nothing is waiting to answer a
+# prompt it never asked) and a deadline (an unauthenticated CLI that waits on
+# the network or a login prompt must never hang a round that has not even
+# started): perl's alarm, since `timeout` is not on every platform this
+# runs on; a run past the deadline is exactly "could not be run", silent.
 fm_adapter_model_listcheck() {
   local vendor="$1" model="$2" out rc line id
   shift 2
   [ -n "$model" ] || return 1
-  out="$("$@" 2>/dev/null)"; rc=$?
+  out="$(FM_MODEL_LISTCHECK_SECS="${FM_MODEL_LISTCHECK_SECS:-10}" \
+    perl -e 'alarm $ENV{FM_MODEL_LISTCHECK_SECS}; exec @ARGV or exit 127' "$@" 2>/dev/null </dev/null)"
+  rc=$?
   [ "$rc" -eq 0 ] && [ -n "$out" ] || return 1
   while IFS= read -r line; do
     id="${line%% - *}"
