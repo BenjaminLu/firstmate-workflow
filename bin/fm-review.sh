@@ -287,6 +287,48 @@ checkout_is_free() {   # checkout_is_free <owner-file>
   perl -MFcntl=:flock -e 'open(my $l, "<", $ARGV[0]) or exit 2;
     exit(flock($l, LOCK_EX | LOCK_NB) ? 0 : 1)' "$1"
 }
+# checkout_ok: 0 unless run mode's checkout has been destroyed mid-round -
+# gone, or its .git no longer answers (T-128). Review checkouts are
+# disposable, unlike a worker's branch: there is nothing in one worth
+# mirroring, only worth noticing and rebuilding.
+checkout_ok() {
+  [ "$REVIEW_MODE" = run ] || return 0
+  [ -d "$CHECKOUT" ] && git -C "$CHECKOUT" rev-parse -q --verify HEAD >/dev/null 2>&1
+}
+# rebuild_checkout: build_checkout again, at the SAME CHECKOUT_ROOT/CHECKOUT
+# path - never a fresh mktemp - because the prompt already names that path
+# in its "Run mode" section; a new path there would send the reviewer to a
+# directory that was never built. Goes through the same staging + flock
+# dance build_checkout does: the old fd 9 (if any) is dropped first, so a
+# concurrent sweep_checkouts (T-123) checking the old owner file's lock
+# never blocks on this round, and the new owner file's lock is held before
+# the directory is renamed into the visible name.
+rebuild_checkout() {
+  local head staging
+  head="$(git rev-parse -q --verify "$BRANCH^{commit}")" || return 1
+  if [ -n "$OWNER_LOCK_HELD" ]; then
+    { exec 9<&-; } 2>/dev/null || true
+    OWNER_LOCK_HELD=''
+  fi
+  rm -rf "$CHECKOUT_ROOT"
+  staging="$(mktemp -d "${TMPDIR:-/tmp}/.fm-review-staging.XXXXXX")" || return 1
+  staging="$(cd "$staging" && pwd -P)" || return 1
+  printf '%s\n' "$$" > "$staging/owner" || { rm -rf "$staging"; return 1; }
+  exec 9<>"$staging/owner" || { rm -rf "$staging"; return 1; }
+  perl -MFcntl=:flock -e 'open(my $l, "<&=", 9) or exit 2;
+    exit(flock($l, LOCK_EX | LOCK_NB) ? 0 : 1)' || {
+    { exec 9<&-; } 2>/dev/null; rm -rf "$staging"; return 1; }
+  if ! mv "$staging" "$CHECKOUT_ROOT"; then
+    { exec 9<&-; } 2>/dev/null; rm -rf "$staging"; return 1
+  fi
+  OWNER_LOCK_HELD=1
+  CHECKOUT="$CHECKOUT_ROOT/checkout"
+  git clone -q --no-checkout --no-hardlinks "$REPO" "$CHECKOUT" &&
+    git -C "$CHECKOUT" fetch -q --no-tags origin "+$BRANCH:refs/fm/head" "+$BASE:refs/fm/base" &&
+    [ "$(git -C "$CHECKOUT" rev-parse refs/fm/head)" = "$head" ] &&
+    git -C "$CHECKOUT" checkout -q --detach refs/fm/head &&
+    git -C "$CHECKOUT" remote remove origin
+}
 sweep_checkouts() {
   local d
   for d in "${TMPDIR:-/tmp}"/fm-review.*; do
@@ -623,6 +665,26 @@ attempt_n=1
 while :; do
 fm_run_chain "$adapters" "$chain" \
   "$prompt" "$work/out" "$work/log" review_is_signed per-vendor; rc=$?
+# Review checkouts are disposable (T-128): when one is destroyed mid-round -
+# by the round's own commands, deliberately or not - there is no mirror to
+# restore from and none needed, only a fresh checkout at the same path the
+# prompt already names, and the round retried once.
+if ! checkout_ok; then
+  echo "fm-review: the run-mode checkout was destroyed mid-round" >&2
+  # bin/fm-emit.sh's TYPES enum is out of this task's scope and has no type
+  # of its own for this; it rides worker_crashed, the type already carrying
+  # bin/fm-worker.sh's own analogous worktree_restored, named the same way,
+  # by .data.event_kind, not by .type.
+  emit --type worker_crashed --en "the checkout was destroyed; retrying once with a fresh one" \
+       --tw "checkout 被摧毀；用新的重試一次" --data '{"event_kind":"review_checkout_destroyed"}'
+  if rebuild_checkout >/dev/null 2>&1; then
+    fm_run_chain "$adapters" "$chain" \
+      "$prompt" "$work/out" "$work/log" review_is_signed per-vendor; rc=$?
+    checkout_ok || echo "fm-review: the fresh checkout was destroyed too; not retrying again" >&2
+  else
+    echo "fm-review: could not rebuild the checkout to retry $BRANCH after it was destroyed" >&2
+  fi
+fi
 [ -z "$FM_VENDOR_UNKNOWN" ] || {
   echo "fm-review: config.yaml names a vendor with no adapter: $FM_VENDOR_UNKNOWN" >&2
   emit --review-outcome infrastructure_error --type review_failed \

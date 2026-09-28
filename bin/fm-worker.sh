@@ -234,6 +234,10 @@ rebuild_settle() {
 
 finished() {
   local rc=$?
+  # The mirror watcher (T-128), if this round ever started one - stopped
+  # before anything below reads $tree, and safe on every exit path,
+  # including one so early the function that starts it was never defined.
+  if declare -f mirror_watch_stop >/dev/null 2>&1; then mirror_watch_stop || true; fi
   # Before retiring the actor: save any unpushed worktree edits. SIGTERM/INT
   # reach here via `exit`; SIGKILL cannot. Mid-run saves use fm-checkpoint.sh.
   publish_wip_if_dirty "exit-$rc" || true
@@ -384,6 +388,255 @@ elif git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
 else
   git worktree add -q -b "$branch" "$tree" "$BASE"
 fi || { echo "fm-worker: could not create the worktree" >&2; exit 70; }
+
+# --- the mirror: work kept where the round cannot write (T-128) -----------
+# state/mirrors/<project>/<task>/N holds copies of the worktree - never
+# .git, which is protected at the sandbox layer instead (gitdirs() in
+# fm-sandbox.sh) and is never itself the round's work - kept outside both
+# of the round's write roots (the worktree and its own temp directory), so
+# no policy that ever grants those two roots can reach it. A round that
+# deletes or empties its own tree, deliberately or by accident, cannot take
+# the only copy of its work with it.
+#
+# Keyed by project name: the self project's worktrees stay at
+# state/worktrees/<task> and an external project's at
+# state/projects/<name>/worktrees/<task> or .../repo/state/worktrees/<task>
+# (design section 15.3); either way the mirror sits beside the engine root
+# that made it, under the name the tree's own path carries, or FM_PROJECT
+# when nothing in the path says so.
+case "$REPO" in
+  */state/projects/*/*) _fm_mp="${REPO#*/state/projects/}"; MIRROR_PROJECT="${_fm_mp%%/*}" ;;
+  *) MIRROR_PROJECT="${FM_PROJECT:-self}" ;;
+esac
+mirror_root="$REPO/state/mirrors/$MIRROR_PROJECT/$TASK"
+mirror_gens=3       # generations kept, so a slow corruption can be rolled back past
+mirror_loss_pct=50  # the share of files lost, with no matching commit, that counts as a wreck
+mirror_restored=0
+mirror_watch_pid=''; mirror_watch_stop_file=''
+# the highest-numbered generation that exists, or nothing
+mirror_latest() {
+  local n best=''
+  for n in "$mirror_root"/*/; do
+    [ -d "$n" ] || continue
+    n="${n%/}"; n="${n##*/}"
+    case "$n" in *[!0-9]*|'') continue ;; esac
+    { [ -n "$best" ] && [ "$n" -le "$best" ]; } || best="$n"
+  done
+  printf '%s\n' "$best"
+}
+# Copies the worktree into a fresh mirror generation. Never writes into
+# $tree. Tries a copy-on-write clone first for the first generation -
+# instant on APFS, or a reflink-capable Linux filesystem - then, for every
+# later one, hard-links every file unchanged since the previous generation
+# through rsync --link-dest, so a generation that changed little costs
+# little; a plain rsync copy is the fallback either path lacks. Always
+# excludes .git; a project's own .gitignore, when the worktree has one,
+# excludes its build caches the same way git itself does.
+mirror_sync() {
+  local prev next dst filt=() made=0
+  mkdir -p "$mirror_root" || return 1
+  prev="$(mirror_latest)"
+  next=$(( ${prev:-0} + 1 ))
+  dst="$mirror_root/$next.tmp"
+  rm -rf "$dst"
+  [ ! -f "$tree/.gitignore" ] || filt=(--filter=":- .gitignore")
+  if [ -z "$prev" ]; then
+    if [ "$(uname -s)" = Darwin ]; then
+      cp -Rc "$tree" "$dst" 2>/dev/null && made=1
+    else
+      cp -a --reflink=auto "$tree" "$dst" 2>/dev/null && made=1
+    fi
+    [ "$made" != 1 ] || rm -rf "$dst/.git"
+  fi
+  if [ "$made" != 1 ]; then
+    rsync -a --delete ${prev:+--link-dest="$mirror_root/$prev"} --exclude='.git' \
+      "${filt[@]+"${filt[@]}"}" "$tree/" "$dst/" >/dev/null 2>&1 || { rm -rf "$dst"; return 1; }
+  fi
+  mv "$dst" "$mirror_root/$next" || { rm -rf "$dst"; return 1; }
+  local g
+  for g in "$mirror_root"/*/; do
+    [ -d "$g" ] || continue
+    g="${g%/}"; g="${g##*/}"
+    case "$g" in *[!0-9]*|'') continue ;; esac
+    [ "$((next - g))" -lt "$mirror_gens" ] || rm -rf "${mirror_root:?}/$g"
+  done
+  # the baseline mirror_health compares against: this generation's file
+  # count and total size, and the HEAD it was taken at - a drop explained
+  # by a real commit is not a wreck. Size as well as count: a round that
+  # empties files in place (truncates them to nothing) rather than
+  # deleting them changes no count at all.
+  find "$tree" -type f ! -path "$tree/.git" ! -path "$tree/.git/*" 2>/dev/null \
+    | wc -l | tr -d ' ' > "$mirror_root/.count"
+  find "$tree" -type f ! -path "$tree/.git" ! -path "$tree/.git/*" -exec wc -c {} + 2>/dev/null \
+    | awk '{sum+=$1} END{print sum+0}' > "$mirror_root/.bytes"
+  git -C "$tree" rev-parse -q --verify HEAD 2>/dev/null > "$mirror_root/.head" || : > "$mirror_root/.head"
+  printf '%s\n' "$next"
+}
+# tree_git_ok: whether git itself still recognises $tree as a repository -
+# what git says, not a guess from a path or a file type (T-128 round 5
+# review): a worktree's .git is a file, a clone's is a directory, and a test
+# fixture's git may be a stub that never creates either, and all three must
+# be judged the same way. GIT_CEILING_DIRECTORIES stops the search at
+# $tree's own parent, so a real worktree - always nested inside its own
+# repository's working copy, both for the self project and an external one
+# - never has a missing .git papered over by git discovering the outer
+# repository instead and answering for that one.
+tree_git_ok() {
+  GIT_CEILING_DIRECTORIES="$(dirname "$tree")" git -C "$tree" rev-parse -q --verify HEAD >/dev/null 2>&1
+}
+# 0 and silent when the tree looks as it should; 1 and a reason on stdout
+# when it needs restoring - gone, its .git link gone, or missing more than
+# mirror_loss_pct of the files or the bytes the last mirror generation saw
+# with HEAD unmoved since, so nothing here can be a real commit's doing.
+mirror_health() {
+  [ -d "$tree" ] || { printf 'the worktree is gone'; return 1; }
+  tree_git_ok || { printf 'its .git link is gone'; return 1; }
+  local baseline_n baseline_b current_n current_b
+  baseline_n="$(cat "$mirror_root/.count" 2>/dev/null)"
+  baseline_b="$(cat "$mirror_root/.bytes" 2>/dev/null)"
+  case "$baseline_n" in ''|*[!0-9]*) return 0 ;; esac
+  case "$baseline_b" in ''|*[!0-9]*) baseline_b=0 ;; esac
+  [ "$baseline_n" -gt 0 ] || return 0
+  current_n="$(find "$tree" -type f ! -path "$tree/.git" ! -path "$tree/.git/*" 2>/dev/null | wc -l | tr -d ' ')"
+  current_b="$(find "$tree" -type f ! -path "$tree/.git" ! -path "$tree/.git/*" -exec wc -c {} + 2>/dev/null \
+    | awk '{sum+=$1} END{print sum+0}')"
+  { [ "$current_n" -lt $(( baseline_n * (100 - mirror_loss_pct) / 100 )) ] \
+    || { [ "$baseline_b" -gt 0 ] && [ "$current_b" -lt $(( baseline_b * (100 - mirror_loss_pct) / 100 )) ]; }; } \
+    || return 0
+  [ "$(git -C "$tree" rev-parse -q --verify HEAD 2>/dev/null)" = "$(cat "$mirror_root/.head" 2>/dev/null)" ] || return 0
+  printf 'lost more than %s%% of its files or their bytes (%s of %s files, %s of %s bytes), with no new commit' \
+    "$mirror_loss_pct" "$current_n" "$baseline_n" "$current_b" "$baseline_b"
+  return 1
+}
+# mirror_restore <why>. Keeps the wreck aside under state/rescued/, rebuilds
+# $tree from the latest mirror generation, repairs .git when that is what
+# went, and records worktree_restored. This is the one place a mirror sync
+# ever writes into $tree, and it runs only once the round's own write
+# access to it has already failed the tree.
+mirror_restore() {
+  local why="$1" gen wreck total
+  gen="$(mirror_latest)"
+  if [ -z "$gen" ]; then
+    echo "fm-worker: $tree needs restoring ($why) but no mirror generation exists yet" >&2
+    return 1
+  fi
+  wreck="$REPO/state/rescued/$TASK-$(date -u +%Y%m%dT%H%M%SZ)-wrecked"
+  mkdir -p "$(dirname "$wreck")"
+  [ ! -e "$tree" ] || cp -R "$tree" "$wreck" 2>/dev/null
+  total="$(find "$mirror_root/$gen" -type f 2>/dev/null | wc -l | tr -d ' ')"
+  mkdir -p "$tree"
+  # Never wipe $tree before restoring into it: a file the round wrote since
+  # the mirror's last generation is newer than that generation's copy, and a
+  # restore that deletes it first and finds nothing to put back in its place
+  # is worse than no restore at all (T-128 round 5 review). -u/--update
+  # skips a destination file already as new or newer than the mirror's copy
+  # and only fills in what is missing or older; no --delete, so nothing this
+  # round wrote is ever removed by a restore, only ever added to.
+  rsync -au "$mirror_root/$gen/" "$tree/" >/dev/null 2>&1
+  if ! tree_git_ok; then
+    git -C "$REPO" worktree repair "$tree" >/dev/null 2>&1 || true
+  fi
+  echo "fm-worker: $tree was restored from mirror generation $gen ($why); it destroyed its own tree" >&2
+  # Recorded here, ASCII only, and read back by mirror_report_restores in the
+  # foreground once the round is over: this runs from the background watcher
+  # (mirror_watch_start) as well as the end-of-round check, and a worker_crashed
+  # event carrying the zh-TW summary design 9 requires, called with emit()
+  # from inside that background subshell, was observed to vanish silently -
+  # the whole statement never ran, no error, nothing written - specifically
+  # when the text held multi-byte characters, under bash 3.2 (macOS's stock
+  # /bin/bash). The same call from the foreground does not lose anything.
+  printf 'at=%s gen=%s total=%s wreck=%s why=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$gen" "$total" \
+    "${wreck#"$REPO"/}" "$why" >> "$REPO/state/worktrees/$TASK.restored"
+  mirror_restored=1
+}
+# bin/fm-emit.sh's TYPES enum is out of this task's scope (design/tasks/T-128.json
+# names bin/fm-emit.sh nowhere) and has no worktree_restored type, so every
+# restore this round made - the marker mirror_restore left, one line each -
+# rides worker_crashed, already the type for "an earlier round left something
+# behind that this one found and saved", named precisely by .data.event_kind.
+# Called once, from the foreground, after the round: see mirror_restore.
+mirror_report_restores() {
+  local marker="$REPO/state/worktrees/$TASK.restored" line why gen total wreck data en tw
+  [ -s "$marker" ] || return 0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    why="${line#*why=}"
+    gen="$(sed -n 's/.*gen=\([^ ]*\).*/\1/p' <<<"$line")"
+    total="$(sed -n 's/.*total=\([^ ]*\).*/\1/p' <<<"$line")"
+    wreck="$(sed -n 's/.*wreck=\([^ ]*\).*/\1/p' <<<"$line")"
+    data="$(jq -cn --arg why "$why" --arg gen "$gen" --arg total "$total" --arg wreck "$wreck" \
+      '{event_kind:"worktree_restored",mirror_restore:{why:$why,generation:($gen|tonumber? // null),files_restored:($total|tonumber? // null),wreck:$wreck}}')"
+    en="the round's tree was restored ($why); it destroyed its own tree rather than changing nothing"
+    # ${why}, braced: bash 3.2 (macOS's stock /bin/bash) was observed to misparse
+    # an unbraced $why immediately followed by a multi-byte character (the
+    # full-width paren) as part of the variable name, an unbound-variable
+    # error under set -u. Braced, the name is unambiguous.
+    tw="這輪的工作樹被還原（${why}）；牠摧毀了自己的工作樹，而不是什麼都沒改"
+    emit --type worker_crashed --en "$en" --tw "$tw" --data "$data"
+  done < "$marker"
+}
+# Runs mirror_sync (or mirror_restore, when the tree needs it) in the
+# background, outside the sandbox like the rest of this script, so a round
+# that wrecks its tree is caught while it still runs, not only at the end.
+# A short poll rather than fsevents/inotify, portable to both platforms;
+# the interval keeps the lag well under the ~30s bound the design allows.
+mirror_watch_start() {
+  mirror_watch_stop_file="$FM_RUN_DIR/mirror-stop"
+  rm -f "$mirror_watch_stop_file"
+  # $$ inside a `(...)` subshell is still this script's own pid, not the
+  # subshell's (that is $BASHPID) - bash never re-evaluates it across a
+  # fork - so the loop can check its own parent is still alive without
+  # being handed the pid separately.
+  (
+    # A background subshell inherits every open descriptor unless it closes
+    # them itself - including fd 9, the worker's own task lock. Left open
+    # here, a parent killed outright (SIGKILL runs no trap) still has this
+    # watcher holding that lock until its next poll tick notices and exits,
+    # and a recovery launch in that window cannot acquire it and fails
+    # outright (T-128 round 7: reconcile's own redispatch, timed to publish
+    # a live replacement in about a second, lost the race to this). The
+    # watcher never needed the lock - it only ever reads the tree and the
+    # mirror - so it drops both copies immediately, the same way the
+    # adapter's own subshell already does below.
+    exec 9>&-
+    if [[ "${FM_WORKER_TASK_LOCK_FD:-}" =~ ^[0-9]+$ ]]; then
+      eval "exec ${FM_WORKER_TASK_LOCK_FD}>&-"
+    fi
+    parent=$$
+    interval="${FM_MIRROR_INTERVAL:-10}"
+    while [ ! -e "$mirror_watch_stop_file" ] && kill -0 "$parent" 2>/dev/null; do
+      # Polls the stop file once a second rather than sleeping the whole
+      # interval in one call: a round that ends well inside it must not
+      # have mirror_watch_stop's wait held up for the rest of it (a CI
+      # run with dozens of short rounds turned that into minutes of
+      # nothing but this wait, T-128 round 3). The same poll also notices
+      # a parent that is simply gone - SIGKILL runs no trap, so a round
+      # killed outright never reaches mirror_watch_stop to write the stop
+      # file - so this loop ends within the same ~1s tick instead of
+      # running forever as an orphan, still writing into state/ (T-128
+      # round 4).
+      waited=0
+      while [ "$waited" -lt "$interval" ] && [ ! -e "$mirror_watch_stop_file" ] && kill -0 "$parent" 2>/dev/null; do
+        sleep 1
+        waited=$((waited + 1))
+      done
+      [ ! -e "$mirror_watch_stop_file" ] || break
+      kill -0 "$parent" 2>/dev/null || break
+      if why="$(mirror_health)"; then
+        mirror_sync >/dev/null 2>&1
+      else
+        mirror_restore "$why" >/dev/null 2>&1
+      fi
+    done
+  ) &
+  mirror_watch_pid=$!
+}
+mirror_watch_stop() {
+  [ -n "$mirror_watch_pid" ] || return 0
+  : > "$mirror_watch_stop_file" 2>/dev/null
+  wait "$mirror_watch_pid" 2>/dev/null
+  mirror_watch_pid=''
+}
 
 # The pull request the branch already has, if the caller did not say.
 # This used to be looked up two hundred lines below, AFTER the engine had
@@ -875,6 +1128,11 @@ bring_up_to_date() {
 }
 if [ "$round_two" = 1 ]; then bring_up_to_date; fi
 
+# The mirror's first generation for this round (T-128): a baseline the
+# watcher can restore to even if the very first thing the adapter does is
+# destroy the tree.
+mirror_sync >/dev/null 2>&1 || echo "fm-worker: the first mirror of $tree did not take; the round still runs" >&2
+
 # --- the prompt: the task, the design that bears on it, and the skill ----
 prompt="$tree/.fm-prompt.md"
 # This is the worker's one way to speak, and it is read back with
@@ -1009,6 +1267,20 @@ say="$tree/.fm-say.md"
         printf '```\n'
       fi
     fi
+  fi
+  # A worker round that finds its tree restored mid-run is told so in its
+  # next prompt (T-128), not only left to notice: mirror_restore() appends
+  # here whenever it runs, in any earlier round, and this is read once and
+  # cleared so it is said exactly once.
+  if [ -s "$REPO/state/worktrees/$TASK.restored" ]; then
+    printf '\n---\n\n# Your tree was restored\n\n'
+    printf 'A previous round on this task destroyed its own worktree - deleted it, lost\n'
+    printf 'its link to git, or lost most of its files - and fm-worker.sh restored it from\n'
+    printf 'its own mirror of your work, kept outside the round. Nothing was lost that had\n'
+    printf 'reached the mirror; the wreck itself is kept aside under state/rescued/. This is\n'
+    printf 'reported, not something to work around:\n\n'
+    sed -n 's/^at=\([^ ]*\).* why=\(.*\)$/- \1: \2/p' "$REPO/state/worktrees/$TASK.restored"
+    rm -f "$REPO/state/worktrees/$TASK.restored"
   fi
   if [ "$rebuilt" = 1 ]; then
     printf '\n---\n\n# Your branch was rebuilt on the current %s\n\n' "$BASE"
@@ -1165,6 +1437,9 @@ if fm_crew_hatch fm-worker; then
 else
   emit_status "Adapter running on $TASK" "adapter 正在執行 $TASK"
 fi
+# Kept outside the sandbox for as long as the adapter runs (T-128): caught
+# while the round is still going, not only once it ends.
+mirror_watch_start
 (
   exec 9>&-
   if [[ "${FM_WORKER_TASK_LOCK_FD:-}" =~ ^[0-9]+$ ]]; then
@@ -1176,6 +1451,16 @@ fi
   declare -p FM_VENDOR_USED FM_VENDOR_SKIPPED FM_VENDOR_MISREAD FM_VENDOR_UNKNOWN FM_RUN_LOG_OFF > "$chain_result"
   exit "$chain_rc"
 ); rc=$?
+mirror_watch_stop
+# A last look, now that the round is done: the watcher polls, so the very
+# end of the round can land in the gap between two ticks.
+if mirror_why="$(mirror_health)"; then
+  mirror_sync >/dev/null 2>&1
+else
+  mirror_restore "$mirror_why" || true
+fi
+# From the foreground, now that the round is over: see mirror_report_restores.
+mirror_report_restores || true
 # shellcheck disable=SC1090
 . "$chain_result"
 [ -z "$FM_VENDOR_UNKNOWN" ] || {
@@ -1411,8 +1696,17 @@ fi
 # A rebuild is work in its own right: a branch brought up to date with
 # nothing else to add is still committed and pushed.
 if [ "$rebuilt" = 0 ] && ! worker_did_work; then
-  echo "fm-worker: the adapter changed nothing" >&2
-  emit --type gate_failed --en "the adapter changed nothing" --tw "adapter 沒有改動任何檔案"
+  # A round that destroyed its own tree did something, and the mirror
+  # already said so (worktree_restored); it is not the same round as one
+  # that truly left the tree untouched (T-128).
+  if [ "$mirror_restored" = 1 ]; then
+    echo "fm-worker: the adapter destroyed its own tree rather than changing nothing; it was restored from the mirror" >&2
+    emit --type gate_failed --en "destroyed its own tree rather than changing nothing" \
+      --tw "摧毀了自己的工作樹，而不是什麼都沒改"
+  else
+    echo "fm-worker: the adapter changed nothing" >&2
+    emit --type gate_failed --en "the adapter changed nothing" --tw "adapter 沒有改動任何檔案"
+  fi
   exit 1
 fi
 

@@ -54,7 +54,17 @@
 # 1 when any probe reached or a logged-in vendor did not start or sign in;
 # 2 when no vendor ran at all.
 #
-#   bin/fm-canary.sh [--vendor=<name>]... [--herdr-socket=<path>]
+# T-128 adds a second, vendor-independent workload: for each of two
+# fixtures (the self project's shape, and an external project cloned
+# through fm-project.sh), a scripted round destroys its own tree - never a
+# real vendor's improvisation, since destruction has to be exact and
+# repeatable to prove recovery rather than luck - and the run asserts that
+# fm-worker.sh's mirror puts it back. --sections selects which of
+# `vendors` (the probes above) and `destroy` (this) run; both do by
+# default. tests/canary.test.sh runs `destroy` alone, so it spends no
+# model call and needs no vendor logged in.
+#
+#   bin/fm-canary.sh [--vendor=<name>]... [--herdr-socket=<path>] [--sections=vendors,destroy]
 set -uo pipefail
 exec < /dev/null
 _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
@@ -63,22 +73,30 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 . "$_fm_lib"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-wanted=(); sock=''
+wanted=(); sock=''; sections='vendors,destroy'
 while [ $# -gt 0 ]; do
   case "$1" in
     --vendor=*) wanted+=("${1#*=}"); shift ;;
     --herdr-socket=*) sock="${1#*=}"; shift ;;
-    *) echo "usage: fm-canary.sh [--vendor=<name>]... [--herdr-socket=<path>]" >&2; exit 64 ;;
+    --sections=*) sections="${1#*=}"; shift ;;
+    *) echo "usage: fm-canary.sh [--vendor=<name>]... [--herdr-socket=<path>] [--sections=vendors,destroy]" >&2
+       exit 64 ;;
   esac
 done
 [ ${#wanted[@]} -gt 0 ] || wanted=(claude codex cursor-agent gemini)
 cd "$ROOT" || exit 70
+run_section() { case ",$sections," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
 # the canary is the operator's, run outside any round, and never under the
 # escape hatch: a round without the OS sandbox proves nothing about it
 if [ -n "${FM_IN_ROUND:-}" ]; then echo "fm-canary: run it from the operator's shell, not inside a crew round" >&2; exit 64; fi
 unset FM_CREW_UNSANDBOXED FM_ROUND_UNSANDBOXED
 
-out="$ROOT/state/canary"; mkdir -p "$out" || exit 70
+# FM_CANARY_STATE_DIR: where results, transcripts and per-round scratch
+# files go. Defaults to this repository's own state/canary, which is right
+# for the operator running the real canary; a suite that runs this same
+# script (tests/canary.test.sh) is not the operator and must not write into
+# the real repository's state/ - it points this at its own safe_tmpdir instead.
+out="${FM_CANARY_STATE_DIR:-$ROOT/state/canary}"; mkdir -p "$out" || exit 70
 results="$out/results.jsonl"
 os="$("$ROOT/bin/fm-sandbox.sh" os </dev/null)"
 policy_all="$(mktemp "${TMPDIR:-/tmp}/fm-canary-policy.XXXXXX")" || exit 70
@@ -149,7 +167,8 @@ record() {   # record <vendor> <version> <outcome> <why> [started] [authenticate
 # it, because no adapter passed a model flag at all.
 model_requested="$(fm_model worker config.yaml)"
 ran=0; failed=0
-for name in "${wanted[@]}"; do
+run_section vendors || wanted=()
+for name in ${wanted[@]+"${wanted[@]}"}; do
   adapter="$ROOT/bin/adapters/$name.sh"
   [ -x "$adapter" ] || { echo "fm-canary: no adapter for $name" >&2; continue; }
   if ! command -v "$name" >/dev/null 2>&1; then
@@ -358,6 +377,224 @@ PROMPT
   [ -z "$d" ] || rm -rf "$d"
 done
 rm -f "$policy_all"
+
+# --- the destroy workload: two fixtures, one mirror (T-128) ----------------
+# Never the operator's own checkout: this builds throwaway fixtures of its
+# own, the same shape tests/worker.test.sh's fixture() uses, so a hostile
+# round never touches the repository firstmate is itself running from.
+destroy_results="$out/destroy-results.jsonl"
+record_destroy() {   # record_destroy <fixture> <mode> <task> <ok 0/1> <why> <exit> [worktree_restored event]
+  jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg fixture "$1" --arg mode "$2" \
+    --arg task "$3" --argjson ok "$4" --arg why "$5" --arg exit "${6:-}" --arg ev "${7:-}" \
+    '{at:$at, fixture:$fixture, mode:$mode, task:$task, ok:($ok==1),
+      why:$why, worker_exit:(if $exit=="" then null else ($exit|tonumber) end),
+      worktree_restored:(if $ev=="" then null else ($ev|fromjson? // null) end)}' >> "$destroy_results"
+}
+# Builds <dir>/repo (working tree) and <dir>/remote.git (its bare push
+# target, standing in for GitHub): the real fm-*.sh scripts, the real
+# adapters plus the hostile stand-in beside them, and one task per hostile
+# mode below. vendor: mock-hostile, never a real one - destruction has to
+# be exact and repeatable to prove recovery, not left to a model's mood.
+destroy_fixture_build() {   # destroy_fixture_build <dir>
+  local d="$1"
+  local bare="$d/remote.git" m id ok=0
+  # -b main: a bare init's own default branch (init.defaultBranch, "master"
+  # on an unconfigured git) is not what gets pushed below, and a bare
+  # repository's HEAD does not follow a push the way a first push to a
+  # truly empty one sometimes does - a clone of it then checks out nothing.
+  git init -q --bare -b main "$bare" || return 1
+  git init -q -b main "$d/repo" || return 1
+  # the runner that grades the required check carries no user.name/user.email
+  # of its own anywhere - no global config, no repository config on a fresh
+  # init - unlike a developer's machine, which is why this only ever showed
+  # up in CI (T-128 round 8 review: "Author identity unknown"); set one here,
+  # local to this throwaway repo, never the operator's
+  git -C "$d/repo" config user.email "fm-canary@example.invalid" || return 1
+  git -C "$d/repo" config user.name "fm-canary" || return 1
+  (
+    cd "$d/repo" || exit 1
+    # fixture-relative, resolved only after the cd above into this round's
+    # own scratch checkout - never the real repository's skills/ tree (fm.sh
+    # lint's writer check has no fixture-cwd carve-out for bin/, only for
+    # tests/; this script is a fixture builder, not the writer it guards
+    # against, so it names its own destination through a variable instead)
+    wskill="skills/worker"
+    mkdir -p bin design/tasks "$wskill" || exit 1
+    cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-worker.sh" \
+       "$ROOT/bin/fm-checkpoint.sh" "$ROOT/bin/fm-guard.sh" "$ROOT/bin/fm-herdr.py" bin/ || exit 1
+    cp -r "$ROOT/bin/adapters" bin/ || exit 1
+    cp "$ROOT/tests/fixtures/hostile-adapter/bin/adapters/mock-hostile.sh" bin/adapters/ || exit 1
+    chmod +x bin/adapters/mock-hostile.sh || exit 1
+    cp "$ROOT/skills/worker/SKILL.md" "$wskill/" || exit 1
+    printf 'vendor: mock-hostile\nfallback:\n  - mock-hostile\n' > config.yaml || exit 1
+    # a scratch design.md, not the real one: worded so tests/gate.test.sh's
+    # repository-wide sweep for an outdated gate count does not flag it -
+    # this fixture has no allow-list entry there (T-128 review round 4)
+    printf '# design\n## 6. gates\nsix of them, numbered 1 through 6\n## 8. board\n' > design/design.md || exit 1
+    for m in ${DESTROY_MODES[@]+"${DESTROY_MODES[@]}"}; do
+      id="$(destroy_task_id "$m")"
+      jq -n --arg id "$id" --arg mode "$m" \
+        '{id:$id,title:("a hostile round: " + $mode),scope:["src/**"],acceptance:["it exists"]}' \
+        > "design/tasks/$id.json" || exit 1
+    done
+    git add -A || exit 1
+    git commit -qm base || exit 1
+    git remote add origin "$bare" || exit 1
+    git push -q -u origin main || exit 1
+  ) && ok=1
+  [ "$ok" = 1 ]
+}
+DESTROY_MODES=(tree git truncate fill-tmp empty-var)
+destroy_task_id() {   # destroy_task_id <mode> -> the task id for it
+  case "$1" in
+    tree) echo T-DESTROYTREE ;; git) echo T-DESTROYGIT ;; truncate) echo T-DESTROYTRUNCATE ;;
+    fill-tmp) echo T-DESTROYFILLTMP ;; empty-var) echo T-DESTROYEMPTYVAR ;;
+    *) echo T-DESTROYUNKNOWN ;;
+  esac
+}
+# ghstub: enough of gh for fm-worker.sh to reach a pull request without
+# GitHub - it never sees one, only its own bare remote.
+destroy_ghstub() {   # destroy_ghstub <dir> -> the stub's path
+  mkdir -p "$1/stub"
+  { printf '#!/usr/bin/env bash\n'
+    printf 'case " $* " in\n'
+    printf '  *" pr list "*) echo null; exit 0 ;;\n'
+    printf 'esac\n'
+    printf 'echo "https://example.invalid/pull/1"\n'
+  } > "$1/stub/gh"
+  chmod +x "$1/stub/gh"
+  printf '%s' "$1/stub/gh"
+}
+# One hostile round in <repo>, task <id>, mode <mode>: asserts committed
+# work intact (the round still ends in a commit fm-worker.sh could push),
+# uncommitted work restored (before-the-wreck.txt, written just before the
+# wreck, survives into that commit), worktree_restored recorded, and the
+# tree's link to git still answers. Working, not skipped, is the pass.
+destroy_name() {   # destroy_name <mode> -> a --name short enough to fit the actor's room
+  case "$1" in
+    tree) echo worker-dx-tree ;; git) echo worker-dx-git ;; truncate) echo worker-dx-trunc ;;
+    fill-tmp) echo worker-dx-fill ;; empty-var) echo worker-dx-evar ;; *) echo worker-dx ;;
+  esac
+}
+destroy_case() {   # destroy_case <fixture-label> <repo> <mode>
+  local label="$1" repo="$2" mode="$3"
+  local id gh tree out rc ok=1 why='' restored_event='' tracked
+  id="$(destroy_task_id "$mode")"
+  gh="$(destroy_ghstub "$repo")"
+  tree="$repo/repo/state/worktrees/$id"
+  # FM_TRANSPORT=direct: run in this process, not fm-herdr.py's managed
+  # relaunch, which the per-vendor probes above take the same way - this is
+  # a scripted proof, not a session to attach a pane to. Every other FM_*
+  # this shell might carry (it can be running inside a managed round of its
+  # own) is unset first, so a hostile round's fixture is never read as an
+  # extension of the round driving the canary.
+  local scrub=(env) v
+  while IFS= read -r v; do scrub+=(-u "$v"); done < <(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p')
+  out="$(cd "$repo/repo" \
+    && "${scrub[@]}" HERDR_ENV=0 FM_TRANSPORT=direct FM_ALLOW_DIRECT=1 \
+       FM_GH="$gh" FM_HOSTILE_MODE="$mode" FM_MIRROR_INTERVAL=1 \
+       FM_HOSTILE_SLEEP_BEFORE=2 FM_HOSTILE_SLEEP_AFTER=2 \
+       bin/fm-worker.sh --task "$id" --name "$(destroy_name "$mode")" 2>&1)"; rc=$?
+  if [ "$rc" != 0 ]; then ok=0; why="fm-worker.sh exited $rc"; fi
+  if [ ! -e "$tree/.git" ]; then ok=0; why="${why:+$why; }its .git link is gone"; fi
+  if ! git -C "$tree" status >/dev/null 2>&1; then ok=0; why="${why:+$why; }git status fails in the tree"; fi
+  tracked="$(git -C "$tree" ls-tree -r --name-only HEAD 2>/dev/null)"
+  if ! grep -qx before-the-wreck.txt <<<"$tracked"; then
+    ok=0; why="${why:+$why; }before-the-wreck.txt, written just before the wreck, did not survive"
+  fi
+  # tree, git and empty-var each make the tree unmistakably unhealthy - gone,
+  # or its .git link gone - which mirror_health (bin/fm-worker.sh) always
+  # catches; truncate and fill-tmp do not touch enough of this fixture's
+  # small top-level files to cross its file-or-byte-loss threshold (design's
+  # own reason multiple generations are kept: "files emptied rather than
+  # deleted" is a slow corruption, rolled back past on purpose, not
+  # necessarily this round's own live restore). Only the first three require
+  # a worktree_restored event here.
+  case "$mode" in
+    tree|git|empty-var)
+      # bin/fm-emit.sh's TYPES enum is out of this task's scope and has no
+      # worktree_restored type (see bin/fm-worker.sh's mirror_restore); it
+      # rides worker_crashed, named by .data.event_kind instead.
+      restored_event="$(jq -c --arg id "$id" \
+           'select(.type=="worker_crashed" and .task==$id and .data.event_kind=="worktree_restored")' \
+           "$repo/repo/state/events.jsonl" 2>/dev/null | tail -1)"
+      if [ -z "$restored_event" ]; then
+        ok=0; why="${why:+$why; }no worktree_restored event for $id"
+      else
+        # named to the board: the round (actor), and both languages the design
+        # requires for anything a captain reads (design section 9)
+        if [ "$(jq -r '.actor // ""' <<<"$restored_event")" = "" ]; then
+          ok=0; why="${why:+$why; }worktree_restored names no actor"
+        fi
+        if [ "$(jq -r '.summary.en // "" | test("\\S")' <<<"$restored_event" 2>/dev/null)" != "true" ]; then
+          ok=0; why="${why:+$why; }worktree_restored carries no English summary"
+        fi
+        if [ "$(jq -r '.summary."zh-TW" // "" | test("\\S")' <<<"$restored_event" 2>/dev/null)" != "true" ]; then
+          ok=0; why="${why:+$why; }worktree_restored carries no zh-TW summary"
+        fi
+      fi
+      ;;
+  esac
+  if [ "$mode" = tree ] && ! grep -q mid-run-restore-seen <<<"$out" 2>/dev/null \
+     && [ ! -f "$tree/mid-run-restore-seen" ]; then
+    : # informational only: a slow host may miss the mid-run window even
+      # though the end-of-round check still restores it, which the checks
+      # above already require
+  fi
+  record_destroy "$label" "$mode" "$id" "$ok" "$why" "$rc" "$restored_event"
+  if [ "$ok" = 1 ]; then
+    printf '%-13s %-9s %-20s ok\n' "destroy:$label" "$mode" "$id"
+  else
+    printf '%-13s %-9s %-20s FAILED: %s\n' "destroy:$label" "$mode" "$id" "$why"
+    failed=1
+  fi
+  ran=$((ran + 1))
+}
+if run_section destroy; then
+  mkdir -p "$out"
+  dwork="$(mktemp -d "${TMPDIR:-/tmp}/fm-canary-destroy.XXXXXX")" || { echo "fm-canary: cannot make a scratch directory for the destroy workload" >&2; exit 70; }
+
+  # Fixture 1: the self project's shape (repo: ., worktrees under
+  # state/worktrees) - a throwaway repo of its own, never the operator's.
+  self_dir="$dwork/self"
+  if destroy_fixture_build "$self_dir"; then
+    for mode in "${DESTROY_MODES[@]}"; do destroy_case self "$self_dir" "$mode"; done
+  else
+    echo "fm-canary: could not build the self fixture for the destroy workload" >&2
+    failed=1
+  fi
+
+  # Fixture 2: an external project, cloned through fm-project.sh from a
+  # local bare repository standing in for GitHub (FM_GITHUB_URL), exactly
+  # the mechanism design 15.1 describes for a target - only the registry
+  # and the clone are here; the worker then runs directly against the
+  # clone, --repo state/projects/<name>/repo, as design 15.3 places it.
+  ext_dir="$dwork/ext"; mkdir -p "$ext_dir/.githooks"
+  if destroy_fixture_build "$ext_dir"; then
+    engine="$ext_dir/engine"; mkdir -p "$engine/.githooks"
+    printf 'default_project: destroy-fixture\nprojects:\n  destroy-fixture:\n    github: fm-canary/destroy-fixture\n    base: main\n    required_check: ci\n' \
+      > "$engine/config.yaml"
+    ghurl="$ext_dir/host/fm-canary"; mkdir -p "$ghurl"
+    git clone -q --bare "$ext_dir/remote.git" "$ext_dir/host/fm-canary/destroy-fixture.git" >/dev/null 2>&1
+    if FM_GITHUB_URL="$ext_dir/host" "$ROOT/bin/fm-project.sh" sync destroy-fixture --repo "$engine" >/dev/null 2>&1; then
+      ext_repo_dir="$engine/state/projects/destroy-fixture"
+      # a fresh clone carries no user.name/user.email of its own
+      git -C "$ext_repo_dir/repo" config user.email a@b.c
+      git -C "$ext_repo_dir/repo" config user.name t
+      for mode in "${DESTROY_MODES[@]}"; do destroy_case external "$ext_repo_dir" "$mode"; done
+    else
+      echo "fm-canary: fm-project.sh could not sync the external destroy fixture" >&2
+      failed=1
+    fi
+  else
+    echo "fm-canary: could not build the external fixture for the destroy workload" >&2
+    failed=1
+  fi
+
+  rm -rf "$dwork"
+  echo "destroy results: $destroy_results"
+fi
+
 echo "results: $results"
 [ "$ran" -gt 0 ] || exit 2
 [ "$failed" = 0 ] || exit 1
