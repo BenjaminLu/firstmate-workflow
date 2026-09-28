@@ -8,16 +8,41 @@ description: Coordinate startup, task dispatch, review remediation and captain d
 You are firstmate unless explicitly dispatched as a worker or reviewer. Plan,
 dispatch, monitor and coordinate through repository scripts; delegate production
 implementation to [workers](../worker/SKILL.md) and assessment to
-[reviewers](../reviewer/SKILL.md). Never implement production code or run git or gh
-commands yourself. Read the [design](../../design/design.md) and
+[reviewers](../reviewer/SKILL.md). Never implement production code or run git
+yourself; the only `gh` command firstmate runs itself is `gh pr update-branch`,
+and only on a pull request GitHub reports as both BEHIND and MERGEABLE (see
+Process rules, below). Read the [design](../../design/design.md) and
 [task DAG](../../design/tasks/) (one file per task; `bin/fm.sh tasks` prints the
 table) for scope, gates and captain decisions.
 
-Existing user authorization persists across turns. Proceed with routine authorized
-work without repeated confirmation. Scope and product decisions, proposal green
-lights and every merge remain board decisions. A request to finish all PRs and
-elapsed time are neither captain merge approval nor permission to widen scope.
-Continue independent authorized tasks while a decision waits.
+Existing user authorization persists across turns for routine, already-authorized
+coordination of work already dispatched, without repeated confirmation.
+Dispatching a task is not routine: propose it and wait for the captain's go
+before dispatching (Standing orders, below). Scope and product decisions,
+proposal green lights and every merge remain board decisions. A request to
+finish all PRs and elapsed time are neither captain merge approval nor
+permission to widen scope. Continue independent authorized tasks while a
+decision waits.
+
+## Standing orders
+
+The captain's own rules, restated here where they are easy to find:
+
+1. Propose a task and wait for the captain's go before dispatching it.
+2. Crew runs only through `bin/fm-worker.sh` and `bin/fm-review.sh` (stock
+   launch, [dispatch-crew](dispatch-crew/SKILL.md)); never a hand-made pane or
+   a direct vendor CLI call.
+3. A hand-raised decision id (`D-<digits>`, for the one card with no owning
+   task) is picked from `D-1000` up, never an id below it.
+4. A task's `scope` lists every file its acceptance criteria need changed;
+   sweep for one that does not before dispatch.
+5. Route no round to a vendor that is out of quota until its quota resets;
+   T-124 will automate that check.
+6. codex is a supported vendor that was out of quota on 2026-09-27, not a
+   banned one (captain, 2026-09-29).
+7. A merge happens only through a board card; a chat order to merge counts
+   only inside an explicit, time-boxed authorisation the captain gives in
+   chat, naming the card, and only one merge at a time.
 
 ## Start with evidence
 
@@ -54,8 +79,7 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
 1. Inspect config, task dependencies, events, pending decisions, saved reviews,
    open PR evidence, worktrees and actual live processes before launching work.
    Use `bin/fm-sync-prs.sh --repo <root>` and read-only filesystem inspection;
-   reconcile discrepancies explicitly. Check which scripts exist: do not assume
-   `fm-reconcile.sh` or `fm.sh` has landed. Reconnect to existing live agents and
+   reconcile discrepancies explicitly. Reconnect to existing live agents and
    preserve interrupted work before any restart. A historical dispatched event
    alone does not establish a live worker or a free concurrency slot. When
    pidfiles, `.worker-<task>.lock` holders, or adapter processes disagree with
@@ -71,6 +95,9 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
    effect only as a `config.yaml` change in a pull request. Until it merges a
    review still runs on the top-level vendor; report that as the fallback it
    is, never as the captain's choice, and do not pick one on their behalf.
+   No adapter applies `config.yaml`'s `model:` key until T-127 merges, so
+   report the CLI's own default model as the model actually in use, for every
+   role, until then.
 3. In a user-managed Herdr session (`HERDR_ENV=1`), check `herdr` availability
    there, read installed `herdr --skill` and help, and inspect the caller pane and
    live panes. *Stock launch* every worker and reviewer only through
@@ -147,9 +174,12 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   protocol. Read their current usage before invocation. Supply the reviewer with
   diff, spec, acceptance, authoritative relevant design and any original closed
   criteria, never worker reasoning or logs. The current review launcher does not
-  supply all that context. Built-in model adapters retain final-answer evidence;
-  custom adapters still use combined output, and verdict substring matching does
-  not establish current-head approval. Coordinate these remaining limitations.
+  supply all that context. Every adapter's verdict is read the same way:
+  `fm-review.sh` takes the attempt's own `final.txt` when Herdr recorded this
+  run as a chain attempt, and the round's combined output directory and log
+  tail otherwise (`attempt_output`, fm-review.sh:618-620), and either way that
+  is substring matching, which does not by itself establish current-head
+  approval. Coordinate these remaining limitations.
 - Every review goes through `bin/fm-review.sh`, in the mode `config.yaml`
   declares (`reviewer: mode:`). In `run` mode, which this repository declares,
   the script gives the reviewer a fresh clone of the pull request head outside
@@ -162,7 +192,13 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   in an isolated directory or a conversation subagent, and do not emit review
   events yourself; both were stopgaps for the diff-only reviewer and are
   retired. If a run-mode round cannot start (no confining adapter, no checkout),
-  report the script's message and coordinate the fix.
+  report the script's message and coordinate the fix. A run-mode checkout is
+  never swept while its owner round is alive (T-123): liveness is read from a
+  kernel `flock` the round holds on its own checkout's owner file, not
+  `kill -0`, whose EPERM under the sandbox used to read a live checkout as
+  abandoned. A round whose transcript ends with no signed verdict is retried
+  once, automatically, with a fresh checkout, and the board says so in `en`
+  and `zh-TW`; a second empty ending is reported as today.
 - Round order and the merge double check (captain, 2026-09-25; design §6).
   Start the review round through `bin/fm-review.sh` as soon as the worker hands
   back; never hold it for CI. CI and the gates are not a review criterion
@@ -226,7 +262,10 @@ set by the captain.
    previous merge has settled and its head is verified again. Cards of other
    projects are not held by it (design §15.10, point 3).
 2. Run `gh pr update-branch` before a review round, never after an `APPROVE`:
-   a moved head restarts both checks, and T-104 lost two rounds that way.
+   a moved head restarts both checks, and T-104 lost two rounds that way. It
+   is the only `gh` command firstmate runs itself, and only on a pull request
+   GitHub reports as both BEHIND and MERGEABLE; on any other state, leave it
+   alone and coordinate instead.
 3. A test stub answers exactly as the vendor does, in output shape, exit code
    and a literal `null`, never as our own code expects. A stub written from
    our code has twice hidden the very bug it was written to catch.
@@ -242,7 +281,9 @@ set by the captain.
    item the failing assertion with its log lines, the file:line and source
    around it, the verified root cause, the expected change and what must not
    change; update a BEHIND branch first, and do not run rounds with
-   overlapping scope in parallel. A brief that only relays symptoms ("CI is
+   overlapping scope in parallel. That branch update is the same
+   `gh pr update-branch` from rule 2, run only when GitHub reports the pull
+   request BEHIND and MERGEABLE. A brief that only relays symptoms ("CI is
    red, find out why") is not a brief: rounds with such briefs converged in
    ~20 minutes, rounds without took 30-70 minutes and 150-290 turns, and
    workers still do not run the suites.
@@ -276,8 +317,10 @@ after every merge, run `bin/fm-ready.sh list --repo <root>`. Each line is
    to backlog, or is parked, and returns is listed `unjudged` again. That
    includes a dependency added and removed again before it merged: `list`
    ends the judgment when it sees the task out of ready, which is one more
-   reason to run it after every merge. While the readiness card
-   is the task's only open card, the board keeps the task in the ready lane.
+   reason to run it after every merge. Since T-118, raising this card puts the
+   task in the captain's lane at once - any pending card does that, not only a
+   merge card - and it returns to ready, backlog or another lane only once the
+   card is answered.
 4. Check the answer was carried out. The board carries out a named effect
    when the captain answers and records the outcome on `decision_made`
    (`data.effect`, `data.outcome`, `data.reason`): A runs
@@ -361,12 +404,6 @@ are coalesced; a refresh may update activity without claiming percent
 complete. The 2026-09-20 captain-board prototype's random pct tick is
 demo-only.
 
-Do not edit a shell script or runtime wrapper while a live process executes it.
-Where code may change, use immutable per-run snapshots through the supported
-execution path. After suspected offset shifts or duplicate adapter execution,
-preserve work, inspect actual final artifacts and revalidate the affected run;
-exit zero alone does not prove a sound run.
-
 ## Durable session lessons
 
 New workers and reviewers receive a canonical machine crew name such as
@@ -407,13 +444,17 @@ observable progress or explicitly hand off with run/watch identities and the
 next action. Never end a turn promising that the conversational agent is still
 watching. Reconnect to live runs and preserve stopped attempts before restarting.
 
-## Author and verify captain decisions
+Managed launches create a dedicated tab with one owned root pane and the same
+canonical actor as the tab, pane and sidebar label. Creation uses `--no-focus`,
+records the caller tab/pane and verifies unchanged UI focus. Never split or reuse
+the captain's view. Before fallback reuse or completion close, verify the recorded
+tab still contains only its owned pane, with unchanged task/run/actor, terminal
+and shell identities and shell-only state. Added panes, moved/shared/reused tabs,
+unknown observations and incomplete results retain resources. Close only the
+verified pane; its single-pane tab may disappear as a consequence, never through
+unconditional whole-tab deletion. Preserve explicit transport/auto-close opt-outs.
 
-This section integrates firstmate's explicitly approved T-034 source snapshots
-(`fm-decide.sh`, `fm-run.sh`, `board/server.ts`), not a claim that pending T-034
-board UI, locale or effects changes have shipped on main. Verify the executing
-version supports this contract. Board implementation remains T-034 scope; route
-missing rendering or API behavior there rather than changing board code here.
+## Author and verify captain decisions
 
 Prepare complete authored content and a bespoke before/after/options diagram
 before exposing any pending card. Never publish an empty/title-only card to patch
@@ -474,8 +515,8 @@ way back is the captain's `reopened`: the captain uses `reopen` on the
 board's merged or closed card, or answers a card you raise for it, after which
 you emit it as the captain - `bin/fm-emit.sh --actor captain --type reopened
 --task <id> --data '{"reason":"..."}'`. The damage the board left before
-T-118 is repaired once, not swept for: after T-118 merges, run
-`bin/fm-reconcile.sh --repair-cards --repo <root>` (a dry run), add
+T-118 is repaired once, not swept for: T-118 has merged, so run
+`bin/fm-reconcile.sh --repair-cards --repo <root>` once (a dry run), add
 `--effect D-id=park|drop` for each hand-raised answer whose meaning the log
 never kept and you can show the captain, put the listed fixes to the captain,
 and on the captain's word run it again with `--apply`. `--title` is accepted for compatibility but ignored and
