@@ -1349,7 +1349,7 @@ for j in $job_names; do
     f && /^  [a-zA-Z_-]+:[[:space:]]*$/ { exit }
     f { print }
   ' "$gha")"
-  printf '%s\n' "$block" | grep -q "bun install" || continue
+  grep -q "bun install" <<< "$block" || continue
   install_line="$(printf '%s\n' "$block" | grep -n "bun install" | head -1 | cut -d: -f1)"
   cache_line="$(printf '%s\n' "$block" | grep -n "actions/cache" | head -1 | cut -d: -f1)"
   key_line="$(printf '%s\n' "$block" | grep -n "bun\.lock" | head -1 | cut -d: -f1)"
