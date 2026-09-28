@@ -427,10 +427,9 @@ assert_lacks "$args" "proxy.sock" "and without a proxy it has no way out at all"
 # --- the tree's own .git may not be deleted or rewritten from inside (T-128) --
 # A round may write anywhere in its own root, including deleting the whole
 # thing - that is what a worktree write root means. But the one path that
-# would sever this tree's link to git, its own .git (a worktree's link file,
-# or a clone's whole git directory), is denied write no matter what: whatever
-# else a round destroys, git run in this tree still works, and fm-worker.sh's
-# mirror restores the rest.
+# would sever this tree's link to git, a worktree's .git link file, is denied
+# write no matter what: whatever else a round destroys, git run in this tree
+# still works, and fm-worker.sh's mirror restores the rest.
 own_prof="$(mac profile --policy="$t/g.json" --root="$t/wt" --tmp="$t/round-a")"
 # an exact literal, not a regex prefix (own_git_sbpl in bin/fm-sandbox.sh,
 # T-128 review round 1): a worktree's .git is one file, and (literal ...)
@@ -448,17 +447,19 @@ own_args="$(lin profile --policy="$t/g.json" --root="$t/wt" --tmp="$t/round-a")"
 assert_contains "$own_args" "--ro-bind
 $t/wt/.git
 $t/wt/.git" "on Linux the same path is bound read-only, over the round's own read-write root"
-# a clone (run-mode review), whose .git is a directory of its own: the same
-# rule, but a subpath deny - it covers everything under it, and nothing
-# beside it (never a sibling like .gitignore or .github/, T-128 review round 1)
+# a clone (run-mode review), whose .git is a whole directory holding the
+# object database and the index: no deny rule at all (T-128 review round 4).
+# Denying writes there as a subpath would also deny ordinary git commands
+# (checkout, add, commit) that a review round runs routinely, since those
+# write inside .git itself, not just delete or rewrite it. A clone is a
+# review checkout, disposable by design: fm-review.sh's own retry (checkout_ok
+# / rebuild_checkout) covers one a round destroys, in place of write denial.
 mkdir -p "$t/clone/.git/objects"
 cprof="$(mac profile --policy="$t/g.json" --root="$t/clone" --tmp="$t/round-a")"
-assert_contains "$cprof" "(deny file-write* (subpath \"$t/clone/.git\"))" \
-  "a clone's whole .git directory is named by the same deny, as a subpath"
+assert_lacks "$cprof" "$t/clone/.git" "a clone's .git directory adds no deny rule of its own"
 cargs="$(lin profile --policy="$t/g.json" --root="$t/clone" --tmp="$t/round-a")"
-assert_contains "$cargs" "--ro-bind
-$t/clone/.git
-$t/clone/.git" "and read-only bound on Linux, covering the directory git run there reads"
+assert_lacks "$cargs" "--ro-bind
+$t/clone/.git" "nor a read-only bind on Linux: it stays inside the round's ordinary read-write root"
 # a root with no .git yet (a task branch not yet checked out anywhere real)
 # names nothing to protect, and the profile is generated the same as before
 mkdir -p "$t/nogit-root"
@@ -528,8 +529,11 @@ pol worker 'policy:
   procs: 1000000
   cpu: 90
 '
+# an ambient XDG_CONFIG_HOME of the caller's, distinct from the round's own
+# TMPDIR/HOME, so the assertion below can tell "left alone" from "moved"
+callerconfig="$t/caller-config"; mkdir -p "$callerconfig"
 echo "the prompt" | GH_TOKEN=x GITHUB_TOKEN=x SSH_AUTH_SOCK=/x AWS_SECRET_ACCESS_KEY=x HERDR_SOCKET=/x KEEP_ME=kept \
-  FM_CREW_UNSANDBOXED=1 FM_ROUND_UNSANDBOXED=1 \
+  FM_CREW_UNSANDBOXED=1 FM_ROUND_UNSANDBOXED=1 XDG_CONFIG_HOME="$callerconfig" \
   FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" PATH="$t/psbin:$PATH" \
   "$SB" run --policy="$t/worker.json" --root="$root" --blocked="$t/blocked" --started="$t/started" \
   --ctl="$t/ctl" -- "$t/cmd.sh"
@@ -547,18 +551,24 @@ assert_ne "$callertmp" "$(cd "$rtmp" 2>/dev/null && pwd -P || echo "$rtmp")" "wh
 assert_contains "$(grep '^(allow file-write\*' "$t/profile.sb" 2>/dev/null)" "(subpath \"$rtmp\")" \
   "it is the round's write root for temp files"
 assert_lacks "$(cat "$t/profile.sb" 2>/dev/null)" "(subpath \"$callertmp\")" "and the shared one is not"
-# a normal environment besides (T-128): HOME and the three XDG variables,
-# all under the round's own TMPDIR, asserted here - a mocked sandbox-exec,
-# so this runs on every host, not only where real_sandbox_ok's kernel-
-# enforced block below can nest
+# a normal environment besides (T-128): HOME, XDG_CACHE_HOME and
+# XDG_DATA_HOME, all under the round's own TMPDIR, asserted here - a mocked
+# sandbox-exec, so this runs on every host, not only where real_sandbox_ok's
+# kernel-enforced block below can nest
 rhome="$(sed -n 's/^HOME=//p' "$t/tmpdir" 2>/dev/null)"
 assert_eq "$rtmp/home" "$rhome" "the round is given a HOME under its own TMPDIR"
 assert_eq "$rtmp/cache/xdg" "$(sed -n 's/^XDG_CACHE_HOME=//p' "$t/tmpdir" 2>/dev/null)" \
   "and an XDG_CACHE_HOME there too"
-assert_eq "$rhome/.config" "$(sed -n 's/^XDG_CONFIG_HOME=//p' "$t/tmpdir" 2>/dev/null)" \
-  "and an XDG_CONFIG_HOME under its own HOME"
 assert_eq "$rhome/.local/share" "$(sed -n 's/^XDG_DATA_HOME=//p' "$t/tmpdir" 2>/dev/null)" \
   "and an XDG_DATA_HOME there too"
+# XDG_CONFIG_HOME is the one exception (T-128 review round 4): a vendor's own
+# config directory is already a separate, existing contract per adapter
+# (CLAUDE_CONFIG_DIR, CODEX_HOME, gemini's own HOME); overriding it here too
+# would move cursor-agent off wherever the caller already had it, which
+# tests/adapter-contract.test.sh's "cursor-agent is handed no XDG_CONFIG_HOME
+# of fm's" checks directly. So it passes through the caller's own value.
+assert_eq "$callerconfig" "$(sed -n 's/^XDG_CONFIG_HOME=//p' "$t/tmpdir" 2>/dev/null)" \
+  "the round is handed the caller's own XDG_CONFIG_HOME, not one of fm's"
 assert_fail "test -e '$rtmp'" "and it is removed when the round ends"
 assert_fail "test -e '$rhome'" "HOME with it, being under the same TMPDIR"
 assert_contains "$(cat "$t/tmpdir" 2>/dev/null)" "NO_PROXY=localhost,127.0.0.1,::1" \
@@ -1220,7 +1230,16 @@ real_sandbox_ok() {
 }
 if real_sandbox_ok; then
   rt="$(safe_tmpdir)"
-  git init -q "$rt/tree" >/dev/null 2>&1
+  # a real git worktree, exactly what fm-worker.sh gives a worker round
+  # (git worktree add): its .git is a file pointing elsewhere, which is the
+  # shape own_git() protects (T-128 review round 4) - a plain `git init`
+  # would make .git a directory instead, and would not exercise the same
+  # code path a real worker round runs under.
+  git init -q "$rt/hub" >/dev/null 2>&1
+  echo committed > "$rt/hub/f.txt"
+  git -C "$rt/hub" add f.txt
+  git -C "$rt/hub" -c user.email=a@b.c -c user.name=t commit -q -m f >/dev/null 2>&1
+  git -C "$rt/hub" worktree add -q "$rt/tree" -b wt-branch >/dev/null 2>&1
   printf 'vendor: mock\n' > "$rt/config.yaml"
   rpol="$(fm_policy worker "" "$rt/config.yaml")"
   printf '%s' "$rpol" > "$rt/policy.json"
@@ -1258,6 +1277,28 @@ if real_sandbox_ok; then
   assert_contains "$gout" "ALL_OK" "real sandbox: writing .gitignore and .github/workflows/ci.yml succeeds"
   assert_ok "test -s '$rt/tree/.gitignore'" "and .gitignore actually took the write"
   assert_ok "test -s '$rt/tree/.github/workflows/ci.yml'" "and .github/workflows/ci.yml actually took the write"
+  # a clone (run-mode review checkout): .git is a whole directory, and
+  # ordinary git commands write inside it - git checkout writes .git/index -
+  # so it must stay writable rather than denied as a subpath (T-128 review
+  # round 4). Clone $rt/hub (already carrying the "f" commit above), stage an
+  # unrelated change, then check the committed file back out from its own
+  # ref: that is exactly the write the review's fail-first protocol step, and
+  # any ordinary reviewer git command, depends on.
+  git clone -q "$rt/hub" "$rt/clone" >/dev/null 2>&1
+  printf 'vendor: mock\n' > "$rt/cconfig.yaml"
+  ccpol="$(fm_policy worker "" "$rt/cconfig.yaml")"
+  printf '%s' "$ccpol" > "$rt/cpolicy.json"
+  ckout="$(FM_ALLOW_DIRECT=1 "$SB" run --policy="$rt/cpolicy.json" --root="$rt/clone" --tmp="$rt/ctmp" \
+    -- bash -c '
+      set -e
+      echo mine > f.txt
+      git add f.txt
+      git checkout HEAD -- f.txt
+      cat f.txt
+      echo ALL_OK
+    ' 2>&1)"
+  assert_contains "$ckout" "ALL_OK" "real sandbox: git add and git checkout -- <path> succeed in a clone checkout"
+  assert_contains "$ckout" "committed" "and the checkout actually restored the committed content"
   safe_rm_rf "$rt"
 else
   echo "    (skipped: no real sandbox nestable on this host - real-sandbox behaviour untested here)"

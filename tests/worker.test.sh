@@ -2916,4 +2916,50 @@ assert_ok "test -d '$dMir/repo/state/mirrors/self/T-MIR'" "the mirror lives outs
 # a fixture copy; this suite proves the mechanism works, not its absence
 rm -rf "$dMir"
 
+# --- the watcher does not outlive a round killed outright (T-128 round 4) --
+# SIGKILL runs no trap, so a round killed outright never reaches
+# mirror_watch_stop to write the stop file; without its own check the
+# watcher would run forever as an orphan, still writing into state/. `exec`
+# inside the backgrounded subshell below replaces it with fm-worker.sh
+# itself, so the captured pid is the round's own, and killing only that one
+# pid (never its process group) leaves every child, the watcher included, to
+# fend for itself - exactly an uncatchable kill of the parent alone.
+mirror_gen_latest() {   # mirror_gen_latest <mirror-dir> -> highest generation number, or 0
+  local n best=0
+  for n in "$1"/*/; do
+    [ -d "$n" ] || continue
+    n="${n%/}"; n="${n##*/}"
+    case "$n" in *[!0-9]*|'') continue ;; esac
+    [ "$n" -le "$best" ] || best="$n"
+  done
+  printf '%s\n' "$best"
+}
+dKill="$(fixture T-KILL)"; rKill="$dKill/repo"; GHKill="$(ghstub "$dKill")"
+cat > "$rKill/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+: > "${FM_STARTED:?}"
+echo $$ > "${FM_ADAPTER_PID:?}"
+sleep 60
+M
+chmod +x "$rKill/bin/adapters/mock.sh"
+startedKill="$dKill/started"; adapterpidKill="$dKill/adapter.pid"; mirdirKill="$rKill/state/mirrors/self/T-KILL"
+( cd "$rKill" && FM_ROOT="$rKill" FM_GH="$GHKill" FM_MIRROR_INTERVAL=1 FM_STARTED="$startedKill" \
+    FM_ADAPTER_PID="$adapterpidKill" exec bin/fm-worker.sh --task T-KILL --name worker-kill >/dev/null 2>&1 ) &
+kpKill=$!
+for _ in $(seq 1 60); do [ -e "$startedKill" ] && break; sleep 0.2; done
+assert_ok "test -e '$startedKill'" "T-KILL: the adapter started, so the round and its watcher are both up"
+sleep 2.5
+g1="$(mirror_gen_latest "$mirdirKill")"
+assert_ok "[ \"$g1\" -ge 1 ]" "T-KILL: the watcher ticked at least once while the round ran"
+kill -KILL "$kpKill" 2>/dev/null
+wait "$kpKill" 2>/dev/null
+sleep 3
+g2="$(mirror_gen_latest "$mirdirKill")"
+g1plus1=$(( g1 + 1 ))
+assert_ok "[ \"$g2\" -le \"$g1plus1\" ]" \
+  "T-KILL: the watcher stops within its own poll tick once its parent is gone (killed alone, no trap runs), not left running as an orphan"
+kill -KILL "$(cat "$adapterpidKill" 2>/dev/null)" 2>/dev/null
+rm -rf "$dKill"
+
 finish

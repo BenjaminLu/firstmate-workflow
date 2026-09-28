@@ -565,20 +565,31 @@ mirror_report_restores() {
 mirror_watch_start() {
   mirror_watch_stop_file="$FM_RUN_DIR/mirror-stop"
   rm -f "$mirror_watch_stop_file"
+  # $$ inside a `(...)` subshell is still this script's own pid, not the
+  # subshell's (that is $BASHPID) - bash never re-evaluates it across a
+  # fork - so the loop can check its own parent is still alive without
+  # being handed the pid separately.
   (
+    parent=$$
     interval="${FM_MIRROR_INTERVAL:-10}"
-    while [ ! -e "$mirror_watch_stop_file" ]; do
+    while [ ! -e "$mirror_watch_stop_file" ] && kill -0 "$parent" 2>/dev/null; do
       # Polls the stop file once a second rather than sleeping the whole
       # interval in one call: a round that ends well inside it must not
       # have mirror_watch_stop's wait held up for the rest of it (a CI
       # run with dozens of short rounds turned that into minutes of
-      # nothing but this wait, T-128 round 3).
+      # nothing but this wait, T-128 round 3). The same poll also notices
+      # a parent that is simply gone - SIGKILL runs no trap, so a round
+      # killed outright never reaches mirror_watch_stop to write the stop
+      # file - so this loop ends within the same ~1s tick instead of
+      # running forever as an orphan, still writing into state/ (T-128
+      # round 4).
       waited=0
-      while [ "$waited" -lt "$interval" ] && [ ! -e "$mirror_watch_stop_file" ]; do
+      while [ "$waited" -lt "$interval" ] && [ ! -e "$mirror_watch_stop_file" ] && kill -0 "$parent" 2>/dev/null; do
         sleep 1
         waited=$((waited + 1))
       done
       [ ! -e "$mirror_watch_stop_file" ] || break
+      kill -0 "$parent" 2>/dev/null || break
       if why="$(mirror_health)"; then
         mirror_sync >/dev/null 2>&1
       else

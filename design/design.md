@@ -2920,7 +2920,13 @@ ticks. The watcher itself checks for the round's own shutdown signal once a
 second while it waits out the rest of the interval, so a round that ends
 well inside it - the common case, most rounds far shorter than ten seconds -
 is not held up waiting for the watcher; only the sync/restore check itself
-still runs at most once per interval.
+still runs at most once per interval. The same one-second check also covers
+a round killed outright: SIGKILL runs no trap, so `fm-worker.sh` never
+reaches its own shutdown signal, and the watcher would otherwise run forever
+as an orphan, still writing into `state/`. It checks its own parent is still
+alive (`kill -0`, the pid `$$` already names inside the backgrounded
+subshell) alongside the stop file, so it notices within the same tick and
+exits instead (round 4 review).
 
 **Detect and restore.** Each check (`mirror_health` in `bin/fm-worker.sh`)
 asks whether the tree looks as it should: present, its `.git` link intact,
@@ -2951,15 +2957,12 @@ carries them (section 9). A later task that is in scope for
 that reads `.data.event_kind` today. Review checkouts get the same
 treatment for the analogous `review_checkout_destroyed`, below.
 
-**The tree's link to git cannot be destroyed from inside.** The sandbox
-profile denies deleting or rewriting the worktree's own `.git`, after the
-write-roots allow, since SBPL is last-rule-wins - a read-only bind on Linux,
-over the round's own read-write root - for workers and for run-mode review
-checkouts alike. On macOS this names exactly that path: a literal deny when
-`.git` is a file, as it is in a worktree, and a `subpath` deny, reaching
-everything under it and nothing beside it, when `.git` is a directory, as it
-is in a review checkout's plain clone (`own_git_sbpl`,
-`bin/fm-sandbox.sh`) - never the unanchored prefix regex `prefix()` uses
+**The tree's link to git cannot be destroyed from inside - a worker's
+worktree only.** The sandbox profile denies deleting or rewriting a
+worktree's own `.git`, after the write-roots allow, since SBPL is
+last-rule-wins - a read-only bind on Linux, over the round's own read-write
+root. On macOS this names exactly that path: a literal deny (`own_git_sbpl`,
+`bin/fm-sandbox.sh`), never the unanchored prefix regex `prefix()` uses
 elsewhere for a vendor's own rewritten state files, which would also deny
 `.gitignore`, `.gitattributes`, `.gitmodules` and everything under
 `.github/`, all of them siblings that merely start with the same four
@@ -2970,26 +2973,54 @@ lets `git` still answer inside whatever is left. `tests/sandbox.test.sh`
 asserts the generated profile and bwrap arguments carry this on every host,
 and, only on a host that can actually nest a real sandbox (never inside
 another one, which is why the rest of the suite uses a stand-in - design
-13.1; the round that authored this section could not, and said so rather
-than claiming it ran), runs it for real, in the block guarded by
-`real_sandbox_ok`: inside `fm-sandbox.sh run`, `rm -rf "$tree"` leaves `.git`
-and `git -C $tree status` still works, and, in the same block, a write to
-`.gitignore` and to `.github/workflows/ci.yml` succeeds while `.git` itself
-stays denied.
+13.1), runs it for real, in the block guarded by `real_sandbox_ok`: inside
+`fm-sandbox.sh run`, `rm -rf "$tree"` leaves `.git` and `git -C $tree status`
+still works, and, in the same block, a write to `.gitignore` and to
+`.github/workflows/ci.yml` succeeds while `.git` itself stays denied.
+
+A review checkout's `.git` is not protected the same way (round 4 review): a
+plain `git clone` makes `.git` a whole directory holding the object database
+and the index, not a pointer elsewhere, and ordinary git commands write
+inside it - `git checkout`, `git add`, `git commit` all touch `.git/index`.
+Denying writes there as a `subpath`, as an earlier round did, stops exactly
+those ordinary commands, including the review protocol's own fail-first
+step; `own_git` (`bin/fm-sandbox.sh`) only ever returns a worktree's link
+*file*, never a clone's directory, so no deny rule is generated for it at
+all. A clone is a review checkout, disposable by design (below): the
+protection a directory `.git` gets is `fm-review.sh`'s own retry, not write
+denial. `tests/sandbox.test.sh`'s `real_sandbox_ok` block proves both halves
+in the same run: `git checkout <ref> -- <path>` succeeds in a clone
+checkout, next to the worktree's `rm -rf`/`.gitignore` assertions above.
 
 **A normal environment inside every round.** Every round, worker or
 reviewer, self or external, gets its own writable `HOME`, `TMPDIR` (already
 a write root since T-105/T-117; also the value bare `mktemp -d` resolves to
-on macOS), and `XDG_CACHE_HOME`/`XDG_CONFIG_HOME`/`XDG_DATA_HOME`, all under
-the round's own temp directory - the one place both `fm-sandbox.sh run` and
-`plain` pass through, so the guarantee holds whatever called it, the adapter
-layer or a direct invocation, and whatever the caller or the operator's own
-shell had set them to. The toolchain's own caches (`FM_ROUND_CACHES` in
+on macOS), and `XDG_CACHE_HOME`/`XDG_DATA_HOME`, all under the round's own
+temp directory - the one place both `fm-sandbox.sh run` and `plain` pass
+through, so the guarantee holds whatever called it, the adapter layer or a
+direct invocation, and whatever the caller or the operator's own shell had
+set them to. The toolchain's own caches (`FM_ROUND_CACHES` in
 `bin/adapters/_lib.sh`, T-117) already pointed into the same directory.
 `mktemp -d`, `mktemp -t`, `~/.cache`, and `npm`/`bun`/`pip` defaults all
 succeed without a special-cased path; the same real-sandbox check in
 `tests/sandbox.test.sh` proves it, alongside the `.git` denial, in the one
 round it makes.
+
+`XDG_CONFIG_HOME` is the one exception, left exactly as the caller had it
+(round 4 review): a vendor's own config directory is already a separate,
+existing contract, set per adapter, not by a generic XDG variable here -
+`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, gemini's own `HOME`. cursor-agent has no
+config-directory variable of its own at all (its login is `CURSOR_API_KEY`);
+overriding `XDG_CONFIG_HOME` here too would move it off wherever the
+caller's environment already put it, which
+`tests/adapter-contract.test.sh`'s "cursor-agent is handed no
+`XDG_CONFIG_HOME` of fm's" asserts against directly, one instance of the
+broader rule that this task adds a normal environment without changing an
+existing per-vendor contract. `HOME` still moves, so `~/.config` (the XDG
+default when `XDG_CONFIG_HOME` is unset) already moves with it for anything
+that falls back to that default; `tests/sandbox.test.sh` asserts the round is
+handed the caller's own `XDG_CONFIG_HOME` unchanged, next to the `HOME`/
+`XDG_CACHE_HOME`/`XDG_DATA_HOME` assertions above it.
 
 **Review checkouts are disposable.** Unlike a worker's branch, there is
 nothing in a run-mode checkout worth mirroring - only worth noticing and

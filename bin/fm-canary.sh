@@ -394,7 +394,10 @@ destroy_fixture_build() {   # destroy_fixture_build <dir>
     chmod +x bin/adapters/mock-hostile.sh || exit 1
     cp "$ROOT/skills/worker/SKILL.md" skills/worker/ || exit 1
     printf 'vendor: mock-hostile\nfallback:\n  - mock-hostile\n' > config.yaml || exit 1
-    printf '# design\n## 6. gates\nseven of them\n## 8. board\n' > design/design.md || exit 1
+    # a scratch design.md, not the real one: worded so tests/gate.test.sh's
+    # repository-wide sweep for an outdated gate count does not flag it -
+    # this fixture has no allow-list entry there (T-128 review round 4)
+    printf '# design\n## 6. gates\nsix of them, numbered 1 through 6\n## 8. board\n' > design/design.md || exit 1
     for m in ${DESTROY_MODES[@]+"${DESTROY_MODES[@]}"}; do
       id="$(destroy_task_id "$m")"
       jq -n --arg id "$id" --arg mode "$m" \
