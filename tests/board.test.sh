@@ -1780,8 +1780,8 @@ for (const projects of [["alpha"], ["alpha", "beta"]]) {
   for (const row of rows.slice(1)) if (!/class="rm( warn)?"/.test(row)) fail("roster row lacks its rm cell");
   const pj = rows.slice(1).map((row) => (row.match(/<span class="pj"[^>]*>([\s\S]*?)<\/span>/) || [])[1].replace(/<[^>]*>/g, ""));
   if (pj.join() !== [projects[0], projects[projects.length - 1]].join()) fail("project column says " + pj.join());
-  // T-127: the roster's own vendor and model columns, sortable and groupable
-  // like the others; shira's model is the warning class since it mismatches
+  // T-127: the roster own vendor and model columns, sortable and groupable
+  // like the others; the model of shira is the warning class since it mismatches
   if (!/<div class="rhead"[\s\S]*data-sort="vendor"/.test(r.innerHTML)) fail("no vendor column header");
   if (!/<div class="rhead"[\s\S]*data-sort="model"/.test(r.innerHTML)) fail("no model column header");
   if (!(rows[1].match(/<span class="rv"[^>]*>([\s\S]*?)<\/span>/) || [])[1]?.includes("claude"))
