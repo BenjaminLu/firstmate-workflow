@@ -1184,6 +1184,153 @@ out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 assert_contains "$out" "ci: green" "and the fixture is green again once every plant is pulled"
 rm -rf "$q"
 
+# --- --stage and --shard: one gate run, split into a workflow's parallel
+# jobs (T-134) -------------------------------------------------------------
+# Neither flag changes what a stage checks; with neither, bin/ci.sh runs
+# every stage in one process, exactly as every assertion above this section
+# already proves. --stage picks which group of stages this process runs,
+# and --shard, only within --stage bash, picks which slice of the bash
+# suites it runs.
+
+# validated like every other flag, before any stage runs
+sf="$(fixture)"
+rc=0; out="$(FM_ROOT="$sf" bash "$ROOT/bin/ci.sh" --stage bogus 2>&1)" || rc=$?
+assert_eq "64" "$rc" "--stage bogus is refused"
+assert_contains "$out" "--stage must be one of: fast, bash, bun, e2e" "with guidance"
+assert_lacks "$out" "effective budget" "and before any stage runs"
+
+rc=0; out="$(FM_ROOT="$sf" bash "$ROOT/bin/ci.sh" --shard 1/2 2>&1)" || rc=$?
+assert_eq "64" "$rc" "--shard with no --stage bash is refused"
+assert_contains "$out" "--shard requires --stage bash" "with guidance"
+
+for bad in 0/2 2/0 x/2 2 2/ /2 01/2; do
+  rc=0; out="$(FM_ROOT="$sf" bash "$ROOT/bin/ci.sh" --stage bash --shard "$bad" 2>&1)" || rc=$?
+  assert_eq "64" "$rc" "--shard $bad is refused"
+  assert_contains "$out" "--shard must look like i/n" "with guidance"
+done
+rc=0; out="$(FM_ROOT="$sf" bash "$ROOT/bin/ci.sh" --stage bash --shard 3/2 2>&1)" || rc=$?
+assert_eq "64" "$rc" "--shard i greater than n is refused"
+assert_contains "$out" "--shard i must not exceed n (got 3/2)" "and says which"
+rm -rf "$sf"
+
+# --stage fast is the shellcheck, lint, hygiene, stdin, assertions and dag
+# stages, and none of the others
+sf="$(fixture)"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$sf/tests/green.test.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$sf/bin/placeholder.sh"
+out="$(FM_ROOT="$sf" bash "$ROOT/bin/ci.sh" --stage fast 2>&1)"
+for want in shellcheck lint "test hygiene" stdin assertions dag; do
+  assert_contains "$out" "== $want" "--stage fast runs the $want stage"
+done
+for skip in "bash tests" "bun tests" "end-to-end"; do
+  assert_lacks "$out" "== $skip" "--stage fast does not run the $skip stage"
+done
+assert_lacks "$out" "tests/green.test.sh" "and does not run a suite either"
+
+# --stage bash is only the bash suites
+out="$(FM_ROOT="$sf" bash "$ROOT/bin/ci.sh" --stage bash 2>&1)"
+assert_contains "$out" "== bash tests" "--stage bash runs the bash tests stage"
+assert_contains "$out" "+ tests/green.test.sh" "and runs the suite"
+for skip in shellcheck lint "test hygiene" stdin assertions dag "bun tests" "end-to-end"; do
+  assert_lacks "$out" "== $skip" "--stage bash does not run the $skip stage"
+done
+
+# --stage bun is only the bun stage
+mkdir -p "$sf/tests/e2e"
+printf 'import { test, expect } from "bun:test";\ntest("a", () => expect(1).toBe(1));\n' \
+  > "$sf/unit.spec.ts"
+out="$(FM_ROOT="$sf" bash "$ROOT/bin/ci.sh" --stage bun 2>&1)"
+assert_contains "$out" "== bun tests" "--stage bun runs the bun tests stage"
+for skip in shellcheck lint "test hygiene" stdin assertions dag "bash tests" "end-to-end"; do
+  assert_lacks "$out" "== $skip" "--stage bun does not run the $skip stage"
+done
+assert_lacks "$out" "tests/green.test.sh" "and does not run the bash suite either"
+
+# --stage e2e is only the end-to-end stage
+out="$(FM_ROOT="$sf" bash "$ROOT/bin/ci.sh" --stage e2e 2>&1)"
+assert_contains "$out" "== end-to-end" "--stage e2e runs the end-to-end stage"
+for skip in shellcheck lint "test hygiene" stdin assertions dag "bash tests" "bun tests"; do
+  assert_lacks "$out" "== $skip" "--stage e2e does not run the $skip stage"
+done
+rm -f "$sf/unit.spec.ts"; rm -rf "$sf/tests/e2e"
+
+# The bar for gate 4: --shard splits tests/*.test.sh into exactly n shards
+# whose union is every suite, with no suite in two. Balanced by duration is
+# a quality, not a correctness property, so this reads only membership: it
+# collects the "+ path" line every shard printed and compares the combined
+# set (sorted) against the fixture's own suite list (sorted), then checks
+# no name repeats. A suite added after the split - "new" here - lands in
+# exactly one shard too, with nothing telling ci.sh which.
+sh_dir="$(fixture)"
+for n in one two three four five; do
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$sh_dir/tests/$n.test.sh"
+done
+shard_seen=''
+for i in 1 2 3; do
+  out="$(FM_ROOT="$sh_dir" bash "$ROOT/bin/ci.sh" --stage bash --shard "$i/3" 2>&1)"
+  shard_seen="$shard_seen$(printf '%s\n' "$out" | grep -oE 'tests/[a-z]+\.test\.sh')
+"
+done
+want_list="$(cd "$sh_dir" && printf '%s\n' tests/*.test.sh | sort)"
+got_list="$(printf '%s\n' "$shard_seen" | sed '/^$/d' | sort)"
+assert_eq "$want_list" "$got_list" "the union of 3 shards is every suite, each exactly once"
+dupes="$(printf '%s\n' "$shard_seen" | sed '/^$/d' | sort | uniq -d)"
+assert_eq "" "$dupes" "and no suite is in two shards"
+
+# a suite added after that split - a new one, unknown to any prior run -
+# still lands in exactly one shard when the split runs again
+printf '#!/usr/bin/env bash\nexit 0\n' > "$sh_dir/tests/sixnew.test.sh"
+shard_seen=''
+for i in 1 2 3; do
+  out="$(FM_ROOT="$sh_dir" bash "$ROOT/bin/ci.sh" --stage bash --shard "$i/3" 2>&1)"
+  shard_seen="$shard_seen$(printf '%s\n' "$out" | grep -oE 'tests/[a-z]+\.test\.sh')
+"
+done
+want_list="$(cd "$sh_dir" && printf '%s\n' tests/*.test.sh | sort)"
+got_list="$(printf '%s\n' "$shard_seen" | sed '/^$/d' | sort)"
+assert_eq "$want_list" "$got_list" "a newly added suite is covered too, still exactly once"
+assert_contains "$got_list" "tests/sixnew.test.sh" "by name"
+rm -rf "$sh_dir"
+
+# FM_CI_TIMINGS_OUT records what each suite took, in "path seconds" lines,
+# only when asked - the plain run pays for none of it and writes nothing
+tm_dir="$(fixture)"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$tm_dir/tests/quick.test.sh"
+timings_out="$(safe_tmpdir)/timings.txt"
+FM_ROOT="$tm_dir" FM_CI_TIMINGS_OUT="$timings_out" bash "$ROOT/bin/ci.sh" --stage bash >/dev/null 2>&1
+assert_ok "test -s '$timings_out'" "FM_CI_TIMINGS_OUT is written when asked for"
+assert_contains "$(cat "$timings_out")" "tests/quick.test.sh " "and names the suite"
+
+# FM_CI_TIMINGS_IN feeds --shard's balance; a suite it names goes by that
+# duration, one it does not name (new, or the file absent) falls back to
+# its byte size - proved by forcing a tiny suite to outweigh a huge one and
+# watching the split follow the forced number, not the files' real sizes
+bal_dir="$(fixture)"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$bal_dir/tests/tiny.test.sh"
+{ printf '#!/usr/bin/env bash\n# padding to make this file the larger one on disk\n'
+  for _ in $(seq 1 200); do printf '# %s\n' "0123456789012345678901234567890123456789"; done
+  printf 'exit 0\n'
+} > "$bal_dir/tests/huge.test.sh"
+forced="$(safe_tmpdir)/forced.txt"
+printf 'tests/tiny.test.sh 100\ntests/huge.test.sh 1\n' > "$forced"
+one="$(FM_ROOT="$bal_dir" FM_CI_TIMINGS_IN="$forced" bash "$ROOT/bin/ci.sh" --stage bash --shard 1/2 2>&1 | grep -oE 'tests/[a-z]+\.test\.sh')"
+two="$(FM_ROOT="$bal_dir" FM_CI_TIMINGS_IN="$forced" bash "$ROOT/bin/ci.sh" --stage bash --shard 2/2 2>&1 | grep -oE 'tests/[a-z]+\.test\.sh')"
+assert_eq "tests/tiny.test.sh" "$one" "FM_CI_TIMINGS_IN's forced duration, not the file's real size, decides the split"
+assert_eq "tests/huge.test.sh" "$two" "so the two land in different shards by the numbers given, not by size"
+rm -rf "$sf" "$tm_dir" "$bal_dir"
+
+# --- the workflow: separate jobs behind one required `ci` check -----------
+wf="$(cat "$gha")"
+assert_contains "$wf" "--stage fast" "the workflow runs the fast checks as their own job"
+assert_contains "$wf" "--stage bash" "and the bash suites as their own job(s)"
+assert_contains "$wf" "--shard" "sharded across more than one"
+assert_contains "$wf" "--stage bun" "and the bun tests as their own job"
+assert_contains "$wf" "--stage e2e" "and playwright as their own job"
+assert_matches "$wf" 'ci:[[:space:]]*$' "a final job is named ci, the required check's own name"
+assert_contains "$wf" "needs:" "and it needs the others"
+assert_matches "$wf" 'timeout-minutes:[[:space:]]*10' "every job keeps the 10-minute limit"
+assert_contains "$wf" "actions/cache" "bun dependencies or the browser are cached"
+
 # Every script parses. A `'` in a comment inside a single-quoted program
 # (pipe_awk's `grep's`, T-103 round 7) ends the string early, and bash only
 # finds out when it reaches that line: ci.sh died mid-stage, and every plant
