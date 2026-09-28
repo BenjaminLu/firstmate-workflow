@@ -2139,13 +2139,13 @@ before the round has run carries them as absent, and a run recorded before
 T-127 never gains them. `model_mismatch` costs the round nothing extra to
 raise on the board: the board reads it straight off `data.identity` the way it
 already reads `round` and `attempt`, on whichever payload happens to carry it.
-A dedicated `model_mismatch` event type belongs in `bin/fm-diagram.sh`'s
-`ROUTINE` list too (the acceptance names it explicitly), but that list must
-equal `bin/fm-emit.sh`'s `TYPES` exactly (`tests/diagram.test.sh`), and neither
-`bin/fm-emit.sh` nor that test is in T-127's scope; until a change touching
-both adds it, the worker and the reviewer say a mismatch through the existing
-`crew_status` type instead, which already carries `data.identity` and already
-refreshes the board's activity line.
+It is also its own `model_mismatch` event type, in `bin/fm-diagram.sh`'s
+`ROUTINE` list (the acceptance names it explicitly) and `bin/fm-emit.sh`'s
+`TYPES`, which that list must equal exactly (`tests/diagram.test.sh`); the
+worker and the reviewer emit it, `--data` carrying `vendor`, `model_requested`
+and `model`, alongside the `crew_status` line that already carries
+`data.identity` and already refreshes the board's activity line with the
+same news.
 
 **Where `model` comes from, per vendor**, is what `bin/adapters/_contract.md`
 documents: every adapter is asked for JSON output unconditionally now (not
@@ -2157,24 +2157,57 @@ result, codex's `--json` event stream - so a later report in the same run,
 such as a fallback model the CLI itself chose, wins over an earlier one.
 
 **A wrong model name refuses the round before it does anything, loudly
-(T-127)**, the same way a missing login or a policy that will not read does:
-`fm_adapter_model_refusal` in `bin/adapters/_lib.sh` reads the CLI's own
-words in that same log slice against one signature list, shared by every
-vendor the way `_FM_SIG` is - claude's own answer is
-`[claude-code:unrecognized_model]` - and the adapter exits 64 rather than
-reaching `fm_adapter_verdict`: never read as the vendor being unavailable
-(which would quietly fall back to another vendor, on another model) and never
-as a normal failed attempt that would still reach the gates. The message,
-naming the vendor and the model, is written to `FM_MODEL_REFUSED` when the
-caller set one - the same pattern `FM_POLICY_BLOCKED` uses for a refused host
-- and `fm-worker.sh`/`fm-review.sh` raise it on the board (bilingual, both
-languages naming the vendor and the model) via the existing `worker_crashed` /
-`review_failed` types, for the same scope reason `model_mismatch` above gives.
+(T-127)**, the same way a missing login or a policy that will not read does.
+Two checks, one before the round starts and one after:
+
+`cursor-agent` is the one vendor of the four whose CLI can list its own
+models offline (`cursor-agent --list-models`, once it holds a real login);
+`fm_adapter_model_listcheck` in `bin/adapters/_lib.sh` runs it before the
+round, and `bin/adapters/cursor-agent.sh` calls it right after the
+`FM_ADAPTER_ARGS` model-flag check, before `fm_adapter_policy`: a lightweight
+call that touches no worktree and needs no confinement of its own, the same
+way `command -v cursor-agent` above it is unconfined. When the list command
+itself cannot be run, exits non-zero, or says nothing - no login yet - the
+check is silent and the round starts anyway; the CLI's own answer at round
+time, below, stays the final word. codex and gemini document no listing
+command of their own, so they get no preflight, and this is stated here
+rather than left for a reader to wonder whether one was missed.
+
+After the round, `fm_adapter_model_refusal` in `bin/adapters/_lib.sh` reads
+the CLI's own words in the slice of the log this attempt wrote. Unlike
+`_FM_SIG`'s outage check, which the caller's evidence predicate can still
+rescue (work beats a signature), a model refusal must never discard a
+completed round: review round 5 found a broad, exit-code-blind phrase list
+would misread a transcript that merely discussed "an invalid model" or "no
+such model found" - ordinary English, including in this very codebase's own
+prose - as a configuration failure. So the check fires only when the
+attempt's own exit code is non-zero (a completed round, exit 0, is never
+read as a refusal) and the log slice reports no `"model":"..."` field at all
+(a report of the model that ran means a turn happened, whatever text follows
+it). claude names its refusal exactly - `[claude-code:unrecognized_model]` -
+read literally; codex, cursor-agent and gemini have no such fixed token
+documented, so they are read against one generic, vendor-agnostic phrase
+list instead, the way `_FM_SIG` is for an outage, but anchored to the start
+of a line (`Error: …`) - the shape a CLI's own one-line usage error has,
+which ordinary prose discussing models in passing does not. Either way the
+adapter exits 64 rather than reaching `fm_adapter_verdict`: never read as the
+vendor being unavailable (which would quietly fall back to another vendor,
+on another model) and never as a normal failed attempt that would still
+reach the gates. The message, naming the vendor and the model, is written to
+`FM_MODEL_REFUSED` when the caller set one - the same pattern
+`FM_POLICY_BLOCKED` uses for a refused host - and `fm-worker.sh`/
+`fm-review.sh` raise it on the board (bilingual, both languages naming the
+vendor and the model) via the existing `worker_crashed` / `review_failed`
+types.
+
 `fm-session.sh`'s startup report, which already said when a project names no
 reviewer vendor or model, now also says when the configured model is not one
 the vendor is known to accept (`fm_model_known` in `bin/fm-config.sh`, a
 small offline catalogue for claude - the CLI itself, at round time, is
-always the final word for a name not yet in it).
+always the final word for a name not yet in it). cursor-agent's own list
+needs a live login this config check has no session to ask for, so it stays
+uncatalogued (rc 2) here, the same as codex and gemini; its check is the
+round-time preflight above.
 
 **Applied, not only recorded.** `config.yaml`'s `model` (top level,
 `worker.model`, `reviewer.model` - `fm_model` resolves a role's own over the

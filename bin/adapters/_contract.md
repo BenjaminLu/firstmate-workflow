@@ -155,19 +155,42 @@ place a model is chosen, and an operator argument after it would otherwise
 win silently. An adapter reached with no `FM_MODEL` passes none, and the CLI
 runs on whatever it defaults to.
 
-A model the vendor does not recognise refuses the round with a usage error,
-loudly, rather than running on the CLI's default: `fm_adapter_model_refusal`
-reads the CLI's own words in the slice of the log this attempt wrote against
-one signature list, shared by every vendor the way `_FM_SIG` is - claude's
-own answer is `[claude-code:unrecognized_model]` - and the adapter exits 64
-before `fm_adapter_verdict` runs, so it is never read as the vendor being
-unavailable (which would fall back to the next one, quietly, on another
-model) nor as a normal failed attempt. When the caller set `FM_MODEL_REFUSED`
-to a file path, the adapter appends `<vendor>\t<model>\t<message>` to it, the
-way `FM_POLICY_BLOCKED` records a refused host, so `fm-worker.sh` and
-`fm-review.sh` can raise a bilingual, board-visible event naming the vendor
-and the model rather than the generic "adapter transport/configuration
-failed".
+**Before the round, where the CLI can list its models.** cursor-agent is the
+one vendor of the four that can (`cursor-agent --list-models`, once it holds
+a real login): `fm_adapter_model_listcheck` in `_lib.sh` runs the list
+command, parses the first column of each line (`id - Name`), and refuses the
+round (64) when `FM_MODEL` names none of them. It is silent - the round
+starts, unrefused - when the list command cannot be run, exits non-zero, or
+prints nothing (no login yet); the CLI's own answer below, at round time,
+stays the final word. codex and gemini document no listing command of their
+own and get no such preflight.
+
+After the round, a model the vendor does not recognise refuses it with a
+usage error, loudly, rather than running on the CLI's default:
+`fm_adapter_model_refusal` reads the CLI's own words in the slice of the log
+this attempt wrote - but only when the attempt's own exit code is non-zero
+(a completed round, exit 0, is never read as a refusal - see below) and that
+slice reports no `"model":"..."` field of its own (a report of the model
+that ran means a turn happened). claude's own answer is
+`[claude-code:unrecognized_model]`, matched literally; the other three have
+no such fixed token documented, so they are matched against one generic
+phrase list instead, shared the way `_FM_SIG` is, anchored to the start of a
+line (`Error: …`) so it cannot fire on prose that merely discusses a model in
+passing. Either way the adapter exits 64 before `fm_adapter_verdict` runs, so
+it is never read as the vendor being unavailable (which would fall back to
+the next one, quietly, on another model) nor as a normal failed attempt.
+When the caller set `FM_MODEL_REFUSED` to a file path, the adapter appends
+`<vendor>\t<model>\t<message>` to it, the way `FM_POLICY_BLOCKED` records a
+refused host, so `fm-worker.sh` and `fm-review.sh` can raise a bilingual,
+board-visible event naming the vendor and the model rather than the generic
+"adapter transport/configuration failed".
+
+The exit-code and no-evidence guards exist because a broad, unconditional
+phrase list would otherwise misread a genuinely completed round - real
+edits, exit 0 - whose transcript happened to contain one of its ordinary
+English phrases (review round 5, T-127): an ORM/data-model/ML change, or this
+codebase's own prose about the check itself, saying "an invalid model" or
+"no such model found" is not the CLI refusing to start.
 
 **What the round ran on, read from the run itself (T-127).** Every adapter is
 asked for JSON output (`--output-format json` for claude, cursor-agent and

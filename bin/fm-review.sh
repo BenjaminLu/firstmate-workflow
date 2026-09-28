@@ -752,11 +752,14 @@ CREW_IDENTITY="$(jq -c '{name,role,project,task,round,attempt,vendor,model_reque
 CREW_DATA="$(jq -c --argjson identity "$CREW_IDENTITY" '.identity=$identity' <<<"$CREW_DATA")"
 if [ -n "$model_requested" ] && [ -n "$model_reported" ] && [ "$model_reported" != "$model_requested" ]; then
   echo "fm-review: requested model $model_requested but $FM_VENDOR_USED ran on $model_reported" >&2
+  emit --type model_mismatch --en "requested $model_requested but ran on $model_reported" \
+       --tw "要求的是 $model_requested，實際跑在 $model_reported" \
+       --data "$(jq -cn --arg vendor "$FM_VENDOR_USED" --arg requested "$model_requested" \
+                  --arg reported "$model_reported" \
+                  '{vendor:$vendor,model_requested:$requested,model:$reported}')"
   # data.identity.model_mismatch already rides every payload from here on
-  # (above); this crew_status line is what puts it in the log and the
-  # activity line too. bin/fm-emit.sh's TYPES is a closed list outside this
-  # task's scope (see bin/fm-diagram.sh), so this is crew_status - which the
-  # board already reads for activity - rather than a dedicated event type.
+  # (above); this crew_status line is what refreshes the board's activity
+  # line with the same news.
   emit_status "requested $model_requested but ran on $model_reported" \
               "要求的是 $model_requested，實際跑在 $model_reported"
 fi

@@ -79,6 +79,20 @@ case " ${FM_ADAPTER_ARGS:-} " in
   *--model*)
     echo "cursor-agent: FM_ADAPTER_ARGS names a model; config.yaml is the one place a model is chosen; refusing the round" >&2; exit 64 ;;
 esac
+# cursor-agent can list its own models (T-127); checked before the round
+# starts, so a name it does not recognise never spends an attempt. Silent
+# when the list itself could not be asked (no login yet) - the CLI's own
+# answer at round time, read by fm_adapter_model_refusal below, stays the
+# final word either way. This call touches no worktree and needs no policy
+# confinement of its own; it is the same lightweight preflight
+# `command -v cursor-agent` above already is.
+if [ -n "${FM_MODEL:-}" ]; then
+  lc_msg="$(fm_adapter_model_listcheck cursor-agent "$FM_MODEL" cursor-agent --list-models)" && {
+    echo "$lc_msg; refusing the round" >&2
+    [ -z "${FM_MODEL_REFUSED:-}" ] || printf 'cursor-agent\t%s\t%s\n' "$FM_MODEL" "$lc_msg" >> "$FM_MODEL_REFUSED"
+    exit 64
+  }
+fi
 fm_adapter_policy
 # On macOS cursor's own sandbox cannot start inside sandbox-exec, and with
 # it off a print-mode round approves no shell command at all: the canary on
@@ -103,7 +117,7 @@ else
     ${model_args[@]+"${model_args[@]}"} ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
 fi
 rc=$?
-msg="$(fm_adapter_model_refusal cursor-agent "${FM_MODEL:-}" "$log" "$off")" && {
+msg="$(fm_adapter_model_refusal cursor-agent "${FM_MODEL:-}" "$log" "$off" "$rc")" && {
   echo "$msg; refusing the round" >&2
   [ -z "${FM_MODEL_REFUSED:-}" ] || printf 'cursor-agent\t%s\t%s\n' "$FM_MODEL" "$msg" >> "$FM_MODEL_REFUSED"
   exit 64

@@ -208,7 +208,7 @@ rc=$?
 # A model claude does not recognise refuses the round loudly (T-127), rather
 # than running silently on whatever it defaulted to: not vendor-unavailable
 # (which would fall back to the next one) and not a normal failed attempt.
-msg="$(fm_adapter_model_refusal claude "${FM_MODEL:-}" "$log" "$off")" && {
+msg="$(fm_adapter_model_refusal claude "${FM_MODEL:-}" "$log" "$off" "$rc")" && {
   echo "$msg; refusing the round" >&2
   [ -z "${FM_MODEL_REFUSED:-}" ] || printf 'claude\t%s\t%s\n' "$FM_MODEL" "$msg" >> "$FM_MODEL_REFUSED"
   exit 64

@@ -83,7 +83,7 @@ else
     ${model_args[@]+"${model_args[@]}"} ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
 fi
 rc=$?
-msg="$(fm_adapter_model_refusal gemini "${FM_MODEL:-}" "$log" "$off")" && {
+msg="$(fm_adapter_model_refusal gemini "${FM_MODEL:-}" "$log" "$off" "$rc")" && {
   echo "$msg; refusing the round" >&2
   [ -z "${FM_MODEL_REFUSED:-}" ] || printf 'gemini\t%s\t%s\n' "$FM_MODEL" "$msg" >> "$FM_MODEL_REFUSED"
   exit 64

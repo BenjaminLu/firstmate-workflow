@@ -254,8 +254,13 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     IFS="$saved_ifs2"
     # a model the vendor does not recognise refuses the round loudly, named
     # on the board, rather than falling back to another vendor or running on
-    # the CLI's default: claude's own answer, verbatim
-    vendor_says '[claude-code:unrecognized_model] the model "bad-model-9000" was not recognised' 1
+    # the CLI's default: claude's own answer, verbatim; the others against
+    # a generic phrase list, the way _FM_SIG covers an outage for all four
+    case "$name" in
+      claude) refusal_line='[claude-code:unrecognized_model] the model "bad-model-9000" was not recognised' ;;
+      *)      refusal_line='Error: unrecognized model "bad-model-9000"' ;;
+    esac
+    vendor_says "$refusal_line" 1
     refused_dir="$(mktemp -d)"; : > "$refused_dir/refused"
     FM_MODEL="bad-model-9000" FM_MODEL_REFUSED="$refused_dir/refused" \
       PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/model-refusal.log" \
@@ -264,6 +269,65 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     assert_contains "$(cat "$d/model-refusal.err")" "bad-model-9000" "and names the model on stderr"
     assert_contains "$(cat "$refused_dir/refused")" "bad-model-9000" "and records it for the caller to raise on the board"
     rm -rf "$refused_dir"
+
+    # --- false positives (T-127 review round 5) ---------------------------
+    # A completed round (exit 0) is never read as a refusal, however the
+    # words in its transcript happen to fall: the whole point of the check
+    # is that a signature alone must never discard real work.
+    vendor_says "$refusal_line" 0
+    : > "$d/model-ok.log"
+    FM_MODEL="bad-model-9000" PATH="$d/fakebin:/usr/bin:/bin" \
+      "$adapter" run "$d/prompt" "$d/tree" "$d/model-ok.log" >/dev/null 2>"$d/model-ok.err"
+    assert_ne "64" "$?" "$name does not refuse a completed round even carrying the refusal's words"
+    # Ordinary prose that merely discusses models - the kind this very
+    # codebase's own commits now contain - must never trip it either, exit
+    # code aside: it does not open the line the way a CLI's own usage error
+    # does.
+    for prose in "Reviewed the ORM's invalid model names and fixed the migration." \
+                 "The data model was unknown to the linter; renamed the field." \
+                 "No such model found in the fixtures; added one."; do
+      vendor_says "$prose" 1
+      : > "$d/model-prose.log"
+      FM_MODEL="bad-model-9000" PATH="$d/fakebin:/usr/bin:/bin" \
+        "$adapter" run "$d/prompt" "$d/tree" "$d/model-prose.log" >/dev/null 2>"$d/model-prose.err"
+      assert_ne "64" "$?" "$name does not refuse on prose alone: \"${prose%% *}...\""
+    done
+    # A vendor that reports the model it actually ran on already ran a
+    # turn: whatever error text follows in the same transcript is not "the
+    # CLI never started", so it is never read as a model refusal either.
+    vendor_says "{\"type\":\"result\",\"model\":\"claude-opus-5-5\"} then: $refusal_line" 1
+    : > "$d/model-worked.log"
+    FM_MODEL="bad-model-9000" PATH="$d/fakebin:/usr/bin:/bin" \
+      "$adapter" run "$d/prompt" "$d/tree" "$d/model-worked.log" >/dev/null 2>"$d/model-worked.err"
+    assert_ne "64" "$?" "$name does not refuse a transcript that already reports a model ran"
+
+    # --- cursor-agent can list its own models, before the round (T-127) ---
+    if [ "$name" = "cursor-agent" ]; then
+      # a stub that answers --list-models differently from a real round, the
+      # way the live CLI's two purposes differ
+      printf '#!/usr/bin/env bash\nif [ "$1" = "--list-models" ]; then\n  printf "gpt-visor-1 - GPT Visor\\nclaude-opus-5-5 - Claude Opus\\n"\n  exit 0\nfi\nprintf "{\\"type\\":\\"result\\",\\"model\\":\\"claude-opus-5-5\\"}\\n"\nexit 0\n' \
+        > "$d/fakebin/cursor-agent"
+      chmod +x "$d/fakebin/cursor-agent"
+      : > "$d/list-unknown.log"
+      FM_MODEL="not-a-real-model" PATH="$d/fakebin:/usr/bin:/bin" \
+        "$adapter" run "$d/prompt" "$d/tree" "$d/list-unknown.log" >/dev/null 2>"$d/list-unknown.err"
+      assert_eq "64" "$?" "cursor-agent refuses before the round when --list-models names no such model"
+      assert_contains "$(cat "$d/list-unknown.err")" "not-a-real-model" "and names the model on stderr"
+      : > "$d/list-known.log"
+      FM_MODEL="claude-opus-5-5" PATH="$d/fakebin:/usr/bin:/bin" \
+        "$adapter" run "$d/prompt" "$d/tree" "$d/list-known.log" >/dev/null 2>"$d/list-known.err"
+      assert_ne "64" "$?" "and lets a name the list does carry through"
+
+      # a vendor with no session yet cannot list anything; the check must
+      # stay silent, not refuse a round it could not actually ask about
+      printf '#!/usr/bin/env bash\nif [ "$1" = "--list-models" ]; then\n  echo "Error: Authentication required." >&2\n  exit 1\nfi\nprintf "{\\"type\\":\\"result\\",\\"model\\":\\"claude-opus-5-5\\"}\\n"\nexit 0\n' \
+        > "$d/fakebin/cursor-agent"
+      chmod +x "$d/fakebin/cursor-agent"
+      : > "$d/list-noauth.log"
+      FM_MODEL="whatever-model" PATH="$d/fakebin:/usr/bin:/bin" \
+        "$adapter" run "$d/prompt" "$d/tree" "$d/list-noauth.log" >/dev/null 2>"$d/list-noauth.err"
+      assert_ne "64" "$?" "and a list command that cannot run refuses nothing"
+    fi
 
     # --- a run-mode review (T-066) ---------------------------------------
     # The reviewer runs commands in fm-review.sh's checkout. What keeps it
