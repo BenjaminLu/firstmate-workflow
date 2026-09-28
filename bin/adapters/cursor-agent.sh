@@ -75,6 +75,9 @@ off="$(fm_adapter_mark "$log")"
 case " ${FM_ADAPTER_ARGS:-} " in
   *" -f "*|*--force*|*--sandbox*|*--approve-mcps*|*--yolo*)
     echo "cursor-agent: FM_ADAPTER_ARGS changes permissions; refusing the round" >&2; exit 64 ;;
+  # config.yaml's model is the one place a model is chosen (T-127)
+  *--model*)
+    echo "cursor-agent: FM_ADAPTER_ARGS names a model; config.yaml is the one place a model is chosen; refusing the round" >&2; exit 64 ;;
 esac
 fm_adapter_policy
 # On macOS cursor's own sandbox cannot start inside sandbox-exec, and with
@@ -86,14 +89,24 @@ fm_adapter_policy
 # and -f is never passed.
 perms=(--trust --sandbox enabled)
 [ "${FM_OUTER_OS:-}" != darwin ] || perms=(--trust --sandbox disabled -f)
+# config.yaml's model, applied with cursor-agent's own flag (T-127)
+model_args=(); while IFS= read -r _fm_ma; do model_args+=("$_fm_ma"); done \
+  < <(fm_adapter_model_args --model)
 read -r -a native <<<"$(cursor_native)"
 fm_adapter_confine cursor-agent "$tree" "${native[@]}"
 if [ -n "${FM_ATTEMPT_DIR:-}" ]; then
-  ( cd "$tree" && "${FM_LAUNCH[@]}" cursor-agent -p "${perms[@]}" --output-format json ${FM_ADAPTER_ARGS:-} < "$prompt" ) 2>&1 | tee -a "$log"
+  ( cd "$tree" && "${FM_LAUNCH[@]}" cursor-agent -p "${perms[@]}" --output-format json \
+    ${model_args[@]+"${model_args[@]}"} ${FM_ADAPTER_ARGS:-} < "$prompt" ) 2>&1 | tee -a "$log"
   fm_adapter_pipeline_status "${PIPESTATUS[@]}"
 else
-  ( cd "$tree" && "${FM_LAUNCH[@]}" cursor-agent -p "${perms[@]}" ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
+  ( cd "$tree" && "${FM_LAUNCH[@]}" cursor-agent -p "${perms[@]}" --output-format json \
+    ${model_args[@]+"${model_args[@]}"} ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
 fi
 rc=$?
+msg="$(fm_adapter_model_refusal cursor-agent "${FM_MODEL:-}" "$log" "$off")" && {
+  echo "$msg; refusing the round" >&2
+  [ -z "${FM_MODEL_REFUSED:-}" ] || printf 'cursor-agent\t%s\t%s\n' "$FM_MODEL" "$msg" >> "$FM_MODEL_REFUSED"
+  exit 64
+}
 fm_adapter_verdict "$rc" "$log" "$off"
 exit $?

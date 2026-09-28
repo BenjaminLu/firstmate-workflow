@@ -1656,10 +1656,14 @@ emq() { FM_ROOT="$q" "$q/bin/fm-emit.sh" "$@" >/dev/null; }
 emq --actor captain --type greenlit --en "go" --tw "開工"
 emq --actor worker-shira-tq1-r3b --task T-Q1 --type dispatched \
   --data "$(jq -cn '{role:"worker",crew_name:"worker-shira-tq1-r3b",
-    identity:{name:"shira",role:"worker",project:null,task:"T-Q1",round:3,attempt:2}}')" --en "on it" --tw "接下"
+    identity:{name:"shira",role:"worker",project:null,task:"T-Q1",round:3,attempt:2,
+      vendor:"claude",model_requested:"claude-opus-5-5",model:"claude-sonnet-5",
+      cli_version:"2.1.0",model_mismatch:true}}')" --en "on it" --tw "接下"
 emq --actor reviewer-quinn-tq1-r3 --task T-Q1 --type review_opened \
   --data "$(jq -cn '{role:"reviewer",crew_name:"reviewer-quinn-tq1-r3",
-    identity:{name:"quinn",role:"reviewer",project:null,task:"T-Q1",round:3,attempt:1}}')" --en "round 3" --tw "第 3 輪"
+    identity:{name:"quinn",role:"reviewer",project:null,task:"T-Q1",round:3,attempt:1,
+      vendor:"claude",model_requested:"claude-opus-5-5",model:"claude-opus-5-5",
+      cli_version:"2.1.0",model_mismatch:false}}')" --en "round 3" --tw "第 3 輪"
 # recorded before T-116: the actor's r465 is the global counter, not a round
 emq --actor worker-mira-tq2-r465 --task T-Q2 --type dispatched \
   --data '{"role":"worker","crew_name":"worker-mira-tq2-r465"}' --en "on it" --tw "接下"
@@ -1672,6 +1676,18 @@ assert_eq "shira 3 2" "$(jq -r '.crew[]|select(.id=="worker-shira-tq1-r3b")|"\(.
   "a run's name, round and attempt reach the board as separate fields"
 assert_eq "mira null null" "$(jq -r '.crew[]|select(.id=="worker-mira-tq2-r465")|"\(.name) \(.round) \(.attempt)"' <<<"$sq")" \
   "an old run without the fields still loads: its name from the old actor, its round unknown, never 465"
+# T-127: vendor, model, model_requested, cli_version and model_mismatch reach
+# the board as separate fields too, read from the run's own identity
+assert_eq 'claude claude-opus-5-5 claude-sonnet-5 2.1.0 true' \
+  "$(jq -r '.crew[]|select(.id=="worker-shira-tq1-r3b")|"\(.vendor) \(.model_requested) \(.model) \(.cli_version) \(.model_mismatch)"' <<<"$sq")" \
+  "a run's vendor, requested model, actual model, CLI version and mismatch flag are separate fields"
+assert_eq 'null null null null false' \
+  "$(jq -r '.crew[]|select(.id=="worker-mira-tq2-r465")|"\(.vendor) \(.model_requested) \(.model) \(.cli_version) \(.model_mismatch)"' <<<"$sq")" \
+  "a run recorded before T-127 shows them as unknown, never guessed"
+# the header's engine badge shows the vendors actually aboard: two claude
+# crewmen (shira and quinn), grouped into one count
+assert_eq '[{"vendor":"claude","count":2}]' "$(jq -c '.engineLive' <<<"$sq")" \
+  "the engine badge counts the vendors actually running now"
 assert_eq '[{"name":"quinn","role":"reviewer","round":3},{"name":"shira","role":"worker","round":3}]' \
   "$(jq -c '[.tasks[]|select(.id=="T-Q1")|.crew[]|{name,role,round}]|sort_by(.name)' <<<"$sq")" \
   "a task card's crew are separate chips of name, role and round, not a joined string"
@@ -1693,6 +1709,8 @@ const state = (projects) => ({ greenlit: true, deckLimit: 24, projects, default_
   crew: [{ id: "firstmate", role: "firstmate", state: "working", task: null },
     { id: "worker-shira-tq1-r3b", role: "worker", state: "working", task: "T-Q1", title: "structured crew",
       project: projects[0], name: "shira", round: 3, attempt: 2, crew_name: "worker-shira-tq1-r3b",
+      vendor: "claude", model: "claude-sonnet-5", model_requested: "claude-opus-5-5",
+      cli_version: "2.1.0", model_mismatch: true,
       activity: { en: "Writing the roster" } },
     { id: "worker-mira-tq2-r465", role: "worker", state: "review", task: "T-Q2", title: "an old run",
       project: projects[projects.length - 1], name: "mira", round: null, attempt: null,
@@ -1730,12 +1748,16 @@ if (!/ hidden[ >]/.test(card.slice(0, card.indexOf(">") + 1))) fail("a card is o
 const dd = (cls) => ((card.match(new RegExp(`<dt>([^<]*)</dt><dd class="${cls}">([\\s\\S]*?)</dd>`)) || []).slice(1));
 const want = { cname: ["crewName", "shira"], crole: ["crewRole", "roleWorker"], cproject: ["projectChip", "alpha"],
   ctask: ["crewTask", "T-Q1 structured crew"], cround: ["crewRound", "3 crewAttempt 2"], cpr: ["crewPr", "#41"],
-  cstate: ["crewState", "laneWorking"], job: ["crewActivity", "Writing the roster"] };
+  cstate: ["crewState", "laneWorking"], job: ["crewActivity", "Writing the roster"],
+  cvendor: ["crewVendor", "claude"], ccli: ["crewCli", "2.1.0"] };
 for (const [cls, [label, value]] of Object.entries(want)) {
   const [dt, body] = dd(cls);
   if (dt !== label) fail(`card line ${cls} is labelled ${dt}`);
   if ((body || "").replace(/<[^>]*>/g, "").trim() !== value) fail(`card line ${cls} says [${body}]`);
 }
+// T-127: a model other than the one requested is the warning class, naming both
+const modelLine = (card.match(/<dt>crewModel<\/dt><dd class="cmodel warn">([\s\S]*?)<\/dd>/) || [])[1];
+if ((modelLine || "").trim() !== "modelMismatch") fail(`card model line is [${modelLine}]`);
 if (!card.includes(`href="${url}"`)) fail("the card does not link the pull request");
 const old = (h.innerHTML.match(/<div class="crewcard" id="crewcard-worker-mira-tq2-r465"[\s\S]*?<\/dl><\/div>/) || [])[0];
 if (!old || !/<dd class="cround">crewUnknown<\/dd>/.test(old)) fail("the round of an old run is not shown as unknown");
@@ -1752,10 +1774,20 @@ for (const projects of [["alpha"], ["alpha", "beta"]]) {
   if (!/<div class="rhead"[\s\S]*data-sort="project"/.test(r.innerHTML)) fail("no project column header with " + projects.length);
   const rows = [...r.innerHTML.matchAll(/<li class="rrow [^"]*"[\s\S]*?<\/li>/g)].map((m) => m[0]);
   if (rows.length !== 3) fail("roster rows " + rows.length);
-  for (const row of rows.slice(1)) for (const cls of ["nm", "rl", "pj", "rd", "st", "rpr", "jb"])
+  for (const row of rows.slice(1)) for (const cls of ["nm", "rl", "pj", "rv", "rd", "st", "rpr", "jb"])
     if (!row.includes(`class="${cls}"`)) fail(`roster row lacks its ${cls} cell`);
+  // rm is checked apart: a mismatched model carries an extra "warn" class
+  for (const row of rows.slice(1)) if (!/class="rm( warn)?"/.test(row)) fail("roster row lacks its rm cell");
   const pj = rows.slice(1).map((row) => (row.match(/<span class="pj"[^>]*>([\s\S]*?)<\/span>/) || [])[1].replace(/<[^>]*>/g, ""));
   if (pj.join() !== [projects[0], projects[projects.length - 1]].join()) fail("project column says " + pj.join());
+  // T-127: the roster's own vendor and model columns, sortable and groupable
+  // like the others; shira's model is the warning class since it mismatches
+  if (!/<div class="rhead"[\s\S]*data-sort="vendor"/.test(r.innerHTML)) fail("no vendor column header");
+  if (!/<div class="rhead"[\s\S]*data-sort="model"/.test(r.innerHTML)) fail("no model column header");
+  if (!(rows[1].match(/<span class="rv"[^>]*>([\s\S]*?)<\/span>/) || [])[1]?.includes("claude"))
+    fail("roster vendor cell for shira: " + rows[1]);
+  const rmCell = rows[1].match(/<span class="rm warn"[^>]*>([\s\S]*?)<\/span>/);
+  if (!rmCell) fail("roster model cell for shira is not the warning class: " + rows[1]);
   const rd = (rows[1].match(/<span class="rd"[^>]*>([\s\S]*?)<\/span><span class="st"/) || [])[1].replace(/<[^>]*>/g, "");
   if (rd !== "3 crewAttempt 2") fail("round column says " + rd);
   if (!rows[1].includes(`style="--pc:${SHIP.projectColor(projects[0])}"`)) fail("the roster project colour differs");

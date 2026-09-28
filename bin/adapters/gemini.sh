@@ -50,11 +50,17 @@ off="$(fm_adapter_mark "$log")"
 case " ${FM_ADAPTER_ARGS:-} " in
   *--sandbox*|*" -s "*|*--extensions*|*" -e "*|*--allowed-mcp*|*--include-directories*)
     echo "gemini: FM_ADAPTER_ARGS changes permissions; refusing the round" >&2; exit 64 ;;
+  # config.yaml's model is the one place a model is chosen (T-127)
+  *" -m "*|*--model*)
+    echo "gemini: FM_ADAPTER_ARGS names a model; config.yaml is the one place a model is chosen; refusing the round" >&2; exit 64 ;;
 esac
 fm_adapter_policy
 read -r -a native <<<"$(gemini_native)"
 fm_adapter_confine gemini "$tree" "${native[@]}"
 policy_args=(--approval-mode yolo --extensions none --allowed-mcp-server-names fm-none)
+# config.yaml's model, applied with gemini's own flag (T-127)
+model_args=(); while IFS= read -r _fm_ma; do model_args+=("$_fm_ma"); done \
+  < <(fm_adapter_model_args -m)
 # Its login (T-117): gemini keeps it in ~/.gemini/oauth_creds.json with the
 # refresh token beside the access token, and the round reads neither. gemini
 # runs with a HOME of its own, in the round's temp directory, whose .gemini
@@ -69,11 +75,18 @@ gemini_env=(HOME="$gemini_home" GEMINI_CLI_HOME="$gemini_home")
 # FM_ADAPTER_ARGS left the flag dangling and the prompt was never delivered.
 # A piped stdin is what puts it in headless mode.
 if [ -n "${FM_ATTEMPT_DIR:-}" ]; then
-  ( cd "$tree" && "${FM_LAUNCH[@]}" env "${gemini_env[@]}" gemini "${policy_args[@]}" --output-format json ${FM_ADAPTER_ARGS:-} < "$prompt" ) 2>&1 | tee -a "$log"
+  ( cd "$tree" && "${FM_LAUNCH[@]}" env "${gemini_env[@]}" gemini "${policy_args[@]}" --output-format json \
+    ${model_args[@]+"${model_args[@]}"} ${FM_ADAPTER_ARGS:-} < "$prompt" ) 2>&1 | tee -a "$log"
   fm_adapter_pipeline_status "${PIPESTATUS[@]}"
 else
-  ( cd "$tree" && "${FM_LAUNCH[@]}" env "${gemini_env[@]}" gemini "${policy_args[@]}" ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
+  ( cd "$tree" && "${FM_LAUNCH[@]}" env "${gemini_env[@]}" gemini "${policy_args[@]}" --output-format json \
+    ${model_args[@]+"${model_args[@]}"} ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
 fi
 rc=$?
+msg="$(fm_adapter_model_refusal gemini "${FM_MODEL:-}" "$log" "$off")" && {
+  echo "$msg; refusing the round" >&2
+  [ -z "${FM_MODEL_REFUSED:-}" ] || printf 'gemini\t%s\t%s\n' "$FM_MODEL" "$msg" >> "$FM_MODEL_REFUSED"
+  exit 64
+}
 fm_adapter_verdict "$rc" "$log" "$off"
 exit $?

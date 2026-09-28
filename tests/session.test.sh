@@ -640,6 +640,24 @@ class Session(unittest.TestCase):
         # and this repository names its own: claude and opus-5, the captain's choice
         result = self.reviewer_report((root / 'config.yaml').read_text())
         self.assertNotIn('names no reviewer', result.stderr)
+    def test_start_reports_a_model_the_vendor_does_not_accept(self):
+        """T-127: a missing model was already reported; an unrecognised one
+        is too - opus-5 is not a name claude accepts, only a name it fell
+        back to before the model was applied at all."""
+        result = self.reviewer_report('reviewer:\n  vendor: claude\n  model: opus-5\n')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("reviewer model 'opus-5' is not one claude is known to accept", result.stderr)
+        self.assertNotIn('names no reviewer', result.stderr)
+    def test_start_is_quiet_about_a_model_the_vendor_does_accept(self):
+        for model in ['claude-opus-5-5', 'opus', 'claude-sonnet-5']:
+            result = self.reviewer_report('reviewer:\n  vendor: claude\n  model: ' + model + '\n')
+            self.assertNotIn('is not one claude is known to accept', result.stderr, model)
+        # this repository's own config names one claude accepts
+        result = self.reviewer_report((root / 'config.yaml').read_text())
+        self.assertNotIn('is not one claude is known to accept', result.stderr)
+    def test_start_reports_the_worker_model_too(self):
+        result = self.reviewer_report('vendor: claude\nmodel: opus-5\nreviewer:\n  vendor: claude\n  model: claude-opus-5-5\n')
+        self.assertIn("worker model 'opus-5' is not one claude is known to accept", result.stderr)
     def test_status_does_not_repeat_the_reviewer_report(self):
         result = self.reviewer_report('vendor: claude\n', mode='status')
         self.assertIn('stub session status', result.stdout)

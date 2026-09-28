@@ -38,6 +38,29 @@ assert_eq "cursor-agent" "$(fm_cfg_in reviewer vendor "$f")" "a nested value wit
 assert_eq "composer"     "$(fm_cfg_in reviewer model "$f")"  "a nested value without one"
 assert_eq "" "$(fm_cfg_in reviewer nothere "$f")" "a nested key that is absent"
 
+# --- the configured model (T-127) -----------------------------------------
+# worker.model / reviewer.model override the top-level model:, exactly as
+# vendor does; a role with no override runs the top-level one.
+assert_eq "composer" "$(fm_model reviewer "$f")" "a role's own model overrides the top-level one"
+assert_eq "opus-5"   "$(fm_model worker "$f")"   "a role with no override runs the top-level model"
+m2="$(mktemp)"
+printf 'vendor: claude\nworker:\n  model: o1\n' > "$m2"
+assert_eq "o1"     "$(fm_model worker "$m2")"   "a worker: block names the worker's own model"
+assert_eq ""       "$(fm_model reviewer "$m2")" "and leaves an unconfigured role empty, never a guess"
+rm -f "$m2"
+
+# fm_model_known: an offline catalogue for claude, so config's check has
+# something to compare against before any round runs. Not exhaustive - the
+# CLI itself is the final word at round time - so an unknown vendor is
+# neither known nor refused, just uncatalogued (rc 2).
+for ok in claude-opus-5-5 opus claude-sonnet-5 sonnet claude-haiku-4-5-20251001 haiku claude-fable-5-1 fable; do
+  assert_ok "fm_model_known claude '$ok'" "claude accepts $ok"
+done
+assert_fail "fm_model_known claude opus-5" "opus-5 is not a name claude accepts"
+assert_fail "fm_model_known claude ''" "an empty model is not known"
+assert_eq "2" "$(fm_model_known cursor-agent claude-opus-5-5; echo $?)" \
+  "a vendor with no catalogue is neither known nor refused"
+
 assert_eq "claude
 cursor-agent
 gemini" "$(fm_cfg_list fallback "$f")" "a list, comments stripped per item"
@@ -529,4 +552,40 @@ printf 'default_project: a\nprojects:\n  a:\n    repo: .\n    github: o/a\n    b
 assert_eq "design/tasks" "$(fm_project_get a tasks "$c2")" "a declared task list in the old shape names its directory"
 assert_eq "projects/b/tasks" "$(fm_project_get b tasks "$c2")" "and the default is projects/<name>/tasks"
 rm -rf "$t"
+
+# --- what the round ran on, read from its own transcript (T-127) ---------
+mv="$(mktemp -d)"
+printf 'noise before it\n{"type":"result","subtype":"success","model":"claude-opus-5-5","usage":{}}\n' > "$mv/log"
+assert_eq "claude-opus-5-5" "$(fm_vendor_model "$mv/log" 0)" \
+  "fm_vendor_model reads the last literal \"model\":\"...\" in the slice"
+off="$(wc -c < "$mv/log" | tr -d ' ')"
+printf '{"type":"result","model":"claude-sonnet-5"}\n' >> "$mv/log"
+assert_eq "claude-sonnet-5" "$(fm_vendor_model "$mv/log" "$off")" \
+  "and only the bytes after the given offset, so one vendor's report never names another's model"
+assert_eq "claude-sonnet-5" "$(fm_vendor_model "$mv/log" 0)" \
+  "a later report - a fallback model - wins over an earlier one in the same slice"
+assert_eq "" "$(fm_vendor_model "$mv/no-such-log" 0)" "a log that is not there says nothing, never a guess"
+printf 'no model field here at all\n' > "$mv/plain.log"
+assert_eq "" "$(fm_vendor_model "$mv/plain.log" 0)" "and neither does a transcript with no such field"
+assert_eq "unknown" "$(fm_vendor_cli_version "fm-no-such-vendor-cli-anywhere")" \
+  "fm_vendor_cli_version says unknown for a command that is not there"
+rm -rf "$mv"
+
+# --- record-model merges into identity.json (T-127) -----------------------
+rm="$(mktemp -d)"
+printf '{"actor":"worker-x","role":"worker","task":"T-1","name":"x","project":"p","round":1,"attempt":1}\n' \
+  > "$rm/identity.json"
+python3 "$ROOT/bin/fm-herdr.py" record-model "$rm" claude claude-opus-5-5 claude-sonnet-5 "2.1.0" >/dev/null
+assert_eq "claude"          "$(jq -r .vendor "$rm/identity.json")"          "record-model records the vendor"
+assert_eq "claude-opus-5-5" "$(jq -r .model_requested "$rm/identity.json")" "the model config.yaml asked for"
+assert_eq "claude-sonnet-5" "$(jq -r .model "$rm/identity.json")"           "the model the vendor actually reported"
+assert_eq "2.1.0"           "$(jq -r .cli_version "$rm/identity.json")"    "and the CLI's own version"
+assert_eq "true"            "$(jq -r .model_mismatch "$rm/identity.json")" "requested and actual differ: a mismatch"
+assert_eq "worker-x"        "$(jq -r .actor "$rm/identity.json")"          "the fields already there survive"
+python3 "$ROOT/bin/fm-herdr.py" record-model "$rm" claude claude-opus-5-5 claude-opus-5-5 "2.1.0" >/dev/null
+assert_eq "false" "$(jq -r .model_mismatch "$rm/identity.json")" "and no mismatch when they agree"
+python3 "$ROOT/bin/fm-herdr.py" record-model "$rm" claude claude-opus-5-5 "" "2.1.0" >/dev/null
+assert_eq "unknown" "$(jq -r .model "$rm/identity.json")" "a vendor that reported nothing is unknown, never guessed"
+assert_eq "false" "$(jq -r .model_mismatch "$rm/identity.json")" "and unknown is never reported as a mismatch"
+rm -rf "$rm"
 finish

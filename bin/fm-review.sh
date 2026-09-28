@@ -219,6 +219,13 @@ fm_policy reviewer "" config.yaml > "$policy_file" || {
        --en "review round $ROUND could not start" --tw "第 $ROUND 輪審核無法開始"
   exit 65; }
 export FM_POLICY="$policy_file" FM_POLICY_BLOCKED="$blocked_file"
+# config.yaml's model, applied (T-127): the reviewer's, resolved once and
+# handed to whichever adapter runs; a refusal it writes is recorded here
+# rather than read as the vendor being unavailable.
+model_requested="$(fm_model reviewer config.yaml)"
+export FM_MODEL="$model_requested"
+model_refused_file="$FM_RUN_DIR/model-refused"; : > "$model_refused_file"
+export FM_MODEL_REFUSED="$model_refused_file"
 # The operator's escape hatch for a sandbox regression (T-117): only their
 # own shell's FM_CREW_UNSANDBOXED=1, never inside a round. Said on stderr
 # here, and in the round's log and on the board once the round starts.
@@ -574,6 +581,16 @@ fm_run_chain "$adapters" "$chain" \
   emit --review-outcome infrastructure_error --type review_failed \
        --en "review round $ROUND could not start" --tw "第 $ROUND 輪審核無法開始"
   rm -rf "$work"; exit 65; }
+# A model the vendor did not recognise (T-127): refused loudly, named on the
+# board in both languages, never read as the vendor being unavailable or as
+# a review that simply produced nothing.
+if [ -s "$model_refused_file" ]; then
+  IFS=$'\t' read -r mr_vendor mr_model mr_msg < "$model_refused_file"
+  echo "fm-review: $mr_msg" >&2
+  emit --review-outcome infrastructure_error --type review_failed \
+       --en "$mr_msg" --tw "${mr_vendor} 無法辨識模型「${mr_model}」；已拒絕這一輪"
+  rm -rf "$work"; exit 65
+fi
 [ -z "$FM_VENDOR_MISREAD" ] || \
   echo "fm-review: $FM_VENDOR_MISREAD was read as unavailable, but it signed a verdict - keeping it" >&2
 for v in $FM_VENDOR_SKIPPED; do
@@ -602,6 +619,29 @@ if [ "$rc" = "2" ] && [ "${FM_VENDOR_SPOKE:-0}" = "0" ]; then
        --en "review round $ROUND could not reach a reviewer" \
        --tw "第 $ROUND 輪審核無法連線至 reviewer"
   rm -rf "$work"; exit 2
+fi
+# What the round actually ran on, read from the run itself (T-127): recorded
+# in identity.json beside name/role/project/task/round/attempt, and carried
+# on every crew payload from here on the way those already are.
+model_reported=''
+[ -z "$FM_VENDOR_USED" ] || model_reported="$(fm_vendor_model "$work/log" "${FM_RUN_LOG_OFF:-0}")"
+cli_version='unknown'
+[ -z "$FM_VENDOR_USED" ] || cli_version="$(fm_vendor_cli_version "$FM_VENDOR_USED")"
+python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" record-model "$FM_RUN_DIR" "$FM_VENDOR_USED" \
+  "$model_requested" "$model_reported" "$cli_version" >/dev/null 2>&1 || true
+CREW_IDENTITY="$(jq -c '{name,role,project,task,round,attempt,vendor,model_requested,model,cli_version,model_mismatch}' \
+  "$FM_RUN_DIR/identity.json" 2>/dev/null)"
+[ -n "$CREW_IDENTITY" ] || CREW_IDENTITY=null
+CREW_DATA="$(jq -c --argjson identity "$CREW_IDENTITY" '.identity=$identity' <<<"$CREW_DATA")"
+if [ -n "$model_requested" ] && [ -n "$model_reported" ] && [ "$model_reported" != "$model_requested" ]; then
+  echo "fm-review: requested model $model_requested but $FM_VENDOR_USED ran on $model_reported" >&2
+  # data.identity.model_mismatch already rides every payload from here on
+  # (above); this crew_status line is what puts it in the log and the
+  # activity line too. bin/fm-emit.sh's TYPES is a closed list outside this
+  # task's scope (see bin/fm-diagram.sh), so this is crew_status - which the
+  # board already reads for activity - rather than a dedicated event type.
+  emit_status "requested $model_requested but ran on $model_reported" \
+              "要求的是 $model_requested，實際跑在 $model_reported"
 fi
 # a review that did not happen must never look like one that did. An empty
 # verdict used to reach the pull request as the adapter's own log, and gate 7

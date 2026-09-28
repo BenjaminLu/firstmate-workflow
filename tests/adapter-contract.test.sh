@@ -175,8 +175,8 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
       # form is a piped stdin and no -p at all: a bare -p leaves the flag
       # dangling and the prompt is never delivered.
       # and, since T-105, only the flags that carry the policy
-      gemini) assert_eq "--approval-mode yolo --extensions none --allowed-mcp-server-names fm-none" "$argv" \
-                "$name uses the documented headless form, with the policy's flags"
+      gemini) assert_eq "--approval-mode yolo --extensions none --allowed-mcp-server-names fm-none --output-format json" "$argv" \
+                "$name uses the documented headless form, with the policy's flags, and JSON output for its record (T-127)"
               assert_lacks " $argv " " -p " "$name passes no dangling -p" ;;
       # under bwrap (this loop's platform for it) cursor's own sandbox stays on
       cursor-agent)
@@ -207,6 +207,63 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     esac
     assert_ok "test -s '$pk/bwrap.args' || test -s '$pk/profile.sb'" "$name's CLI ran inside the OS sandbox"
     rm -f "$pk/bwrap.args" "$pk/profile.sb"
+
+    # --- config.yaml's model, applied (T-127) -----------------------------
+    : > "$d/argv"
+    FM_MODEL="claude-opus-5-5" PATH="$d/fakebin:/usr/bin:/bin" \
+      "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+    model_argv="$(cat "$d/argv")"
+    case "$name" in
+      claude|cursor-agent)
+        assert_contains " $model_argv " " --model claude-opus-5-5 " \
+          "$name passes the configured model with --model" ;;
+      codex|gemini)
+        assert_contains " $model_argv " " -m claude-opus-5-5 " \
+          "$name passes the configured model with -m" ;;
+    esac
+    # every vendor is asked for JSON output now, unconditionally, since that
+    # is where the round's own model comes back (T-127)
+    case "$name" in
+      claude|cursor-agent|gemini) assert_contains " $model_argv " " --output-format json " \
+        "$name asks for JSON output so its round's model can be read back" ;;
+      codex) assert_contains " $model_argv " " --json " "$name asks for JSON output too" ;;
+    esac
+    # with no FM_MODEL at all, none of these flags appear
+    : > "$d/argv"
+    PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+    no_model_argv="$(cat "$d/argv")"
+    assert_lacks " $no_model_argv " " --model " "$name passes no --model when none is configured"
+    assert_lacks " $no_model_argv " " -m " "$name passes no -m when none is configured"
+    # config.yaml is the one place a model is chosen: an operator argument
+    # naming one is refused, for every vendor, in every round
+    case "$name" in
+      claude) model_extras="--model gpt-5|--fallback-model gpt-5" ;;
+      cursor-agent) model_extras="--model gpt-5" ;;
+      codex|gemini) model_extras="-m gpt-5|--model gpt-5" ;;
+    esac
+    saved_ifs2="$IFS"; IFS='|'
+    for extra in $model_extras; do
+      IFS="$saved_ifs2"
+      FM_ADAPTER_ARGS="$extra" PATH="$d/fakebin:/usr/bin:/bin" \
+        "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>"$d/model-err"
+      assert_eq "64" "$?" "$name refuses FM_ADAPTER_ARGS naming a model ($extra)"
+      assert_contains "$(cat "$d/model-err")" "config.yaml is the one place a model is chosen" \
+        "and says why ($name, $extra)"
+      IFS='|'
+    done
+    IFS="$saved_ifs2"
+    # a model the vendor does not recognise refuses the round loudly, named
+    # on the board, rather than falling back to another vendor or running on
+    # the CLI's default: claude's own answer, verbatim
+    vendor_says '[claude-code:unrecognized_model] the model "bad-model-9000" was not recognised' 1
+    refused_dir="$(mktemp -d)"; : > "$refused_dir/refused"
+    FM_MODEL="bad-model-9000" FM_MODEL_REFUSED="$refused_dir/refused" \
+      PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/model-refusal.log" \
+      >/dev/null 2>"$d/model-refusal.err"
+    assert_eq "64" "$?" "$name refuses a round whose model it does not recognise"
+    assert_contains "$(cat "$d/model-refusal.err")" "bad-model-9000" "and names the model on stderr"
+    assert_contains "$(cat "$refused_dir/refused")" "bad-model-9000" "and records it for the caller to raise on the board"
+    rm -rf "$refused_dir"
 
     # --- a run-mode review (T-066) ---------------------------------------
     # The reviewer runs commands in fm-review.sh's checkout. What keeps it

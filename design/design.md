@@ -472,9 +472,15 @@ role may name its own engine — `reviewer:` and `worker:` blocks in
 therefore not a reviewer who never ran.
 
 The reviewer's `vendor` and `model` are the captain's choice (T-066); this
-repository names `claude` and `opus-5`, the worker's own. A project naming
-neither is reported by `fm-session.sh start` and firstmate asks the captain
-through a choice card; the answer lands as a `config.yaml` pull request.
+repository names `claude` and `claude-opus-5-5`, the worker's own. A project
+naming neither is reported by `fm-session.sh start` and firstmate asks the
+captain through a choice card; the answer lands as a `config.yaml` pull
+request. **`model` is applied, not only recorded (T-127)**: `fm_model` in
+`bin/fm-config.sh` resolves it per role, `fm-worker.sh` and `fm-review.sh`
+hand it to the adapter as `FM_MODEL`, and each adapter passes it with its
+CLI's own flag; section 11 above and `bin/adapters/_contract.md` have the
+whole of it, including what refuses a round whose model the vendor does not
+recognise, and what the run records once it has actually run on one.
 
 `reviewer: mode:` sets how a review runs. `diff`, the default for a project
 that declares nothing, is the prompt above and nothing else. `run` makes a
@@ -1535,30 +1541,52 @@ firstmate, standing off the deck's spacing at the helm, has its tag one line
 up; on a narrow screen the far decks of a crowded ship keep only the pennant.
 The tag carries no progress and no percentage. A landing handoff pulses the
 recipient's tag. Deck spacing must exceed body height plus tag height or a tag
-covers the crew on the deck above.
+covers the crew on the deck above. **A small vendor mark joins the tag
+(T-127)**: a dot in the vendor's own colour, named for a screen reader, and
+nothing more - never the model string, which stays in the card and the
+roster; the tag stays as quiet as T-116 made it.
 
 **The details are in a card on demand.** Hovering or focusing a figure, or
 tapping it on a phone (a touch that did not turn him), opens a small card in
 that figure's tag, with one labelled line per field: name, role, project, task
-id and title, round (and attempt, for a retry), pull request (linked), state
-and current activity. An unknown field says unknown. Esc (focus returns to the
+id and title, round (and attempt, for a retry), pull request (linked), state,
+**vendor, model and CLI version (T-127, below)**, and current activity. An
+unknown field says unknown. Esc (focus returns to the
 figure), a second tap, a tap elsewhere or moving away closes it; one card is
 open at a time and stays open across re-renders. The figure is focusable,
 names the crew member and state in its label, and is described by and
 controls its card (`aria-describedby`, `aria-controls`, `aria-expanded`).
 
 **The roster shows the same fields in separate columns**: name, role, project,
-task (id and title, with the authored activity and any bounded progress bar),
-round, pull request and state, under one header. The project column is shown
-with one project as with several. A header click sorts by that column, and a
-toggle groups the rows by project; both choices survive a reload. On a phone
-each row folds into two lines of the same cells, each labelled. A task card
-lists its crew as separate chips of name, role and round, never a string
-joined from actors.
+**vendor, model**, task (id and title, with the authored activity and any
+bounded progress bar), round, pull request and state, under one header. The
+project column is shown with one project as with several. A header click
+sorts by that column, and a toggle groups the rows by project; both choices
+survive a reload. On a phone each row folds into two lines of the same
+cells, each labelled. A task card lists its crew as separate chips of name,
+role and round, never a string joined from actors.
+
+**What the round actually ran on, read from the run itself, never guessed
+(T-127).** `vendor` is the adapter; `model` is what the vendor's own CLI
+reported it used, read from its transcript, section 5.3 below; `model_requested`
+is what `config.yaml` asked for; `cli_version` is the CLI's own version
+string. All four ride the crew payload's `identity` (section 11) beside
+`name`, `project`, `round` and `attempt`, unknown (`null`/empty) until the
+round has actually run and always unknown for a run recorded before T-127.
+When `model` differs from `model_requested`, `model_mismatch` is `true` and
+the card's and the roster's Model field carry the warning colour, with both
+names in the text (`modelMismatch`, en and zh-TW).
+
+**The header's engine badge shows the vendors actually running now**, such as
+"claude ×2 · cursor-agent ×1" - counted from the crew aboard, whichever
+project, read at request time from the crew list the way the fields above are
+- and falls back to `config.yaml`'s configured default (as it did before
+T-127) only when no crew is aboard whose vendor is known.
 
 The new labels (`roleWorker`, `roleReviewer`, `crewName`, `crewRole`,
 `crewTask`, `crewRound`, `crewAttempt`, `crewPr`, `crewState`,
-`crewActivity`, `crewUnknown`, `crewCard`, `rosterSort`, `rosterGroup`) come
+`crewActivity`, `crewUnknown`, `crewCard`, `rosterSort`, `rosterGroup`,
+`crewVendor`, `crewModel`, `crewCli`, `modelMismatch`, `engineLive`) come
 from the board's dictionaries in English and 繁體中文, like every other label.
 
 ### The captain
@@ -2081,6 +2109,78 @@ in metadata. The exact canonical actor appears in invocation context, Herdr tab,
 pane and agent names, board events, log paths and result receipts. Existing live actors
 are not renamed. A foreign Herdr name collision is a reported transport failure,
 not a silently different sidebar identity.
+
+**What the round actually ran on (T-127)**, added to `identity.json` once the
+adapter has run - `bin/fm-herdr.py record-model`, called by `fm-worker.sh` and
+`fm-review.sh` after `fm_run_chain` returns - never at allocation, since none
+of it is known before the round runs: `vendor` (the adapter that ran, e.g.
+`claude`), `model_requested` (`config.yaml`'s, resolved before the round ran,
+via `fm_model` in `bin/fm-config.sh`), `model` (what the vendor's own CLI
+reported using, read from the slice of its log this attempt wrote,
+`fm_vendor_model`; `"unknown"` when the transcript says nothing, never a
+guess), `cli_version` (`<vendor> --version`, `fm_vendor_cli_version`;
+`"unknown"` when the command is missing or silent), and `model_mismatch`
+(`true` only when both `model_requested` and `model` are known and differ).
+For example, continuing the record above:
+
+```json
+{"vendor": "claude", "model_requested": "claude-opus-5-5",
+ "model": "claude-sonnet-5", "cli_version": "2.1.0", "model_mismatch": true}
+```
+
+These five ride `data.identity` on every crew payload from the point they are
+known onward, the same way the six above always have; a payload emitted
+before the round has run carries them as absent, and a run recorded before
+T-127 never gains them. `model_mismatch` costs the round nothing extra to
+raise on the board: the board reads it straight off `data.identity` the way it
+already reads `round` and `attempt`, on whichever payload happens to carry it.
+A dedicated `model_mismatch` event type belongs in `bin/fm-diagram.sh`'s
+`ROUTINE` list too (the acceptance names it explicitly), but that list must
+equal `bin/fm-emit.sh`'s `TYPES` exactly (`tests/diagram.test.sh`), and neither
+`bin/fm-emit.sh` nor that test is in T-127's scope; until a change touching
+both adds it, the worker and the reviewer say a mismatch through the existing
+`crew_status` type instead, which already carries `data.identity` and already
+refreshes the board's activity line.
+
+**Where `model` comes from, per vendor**, is what `bin/adapters/_contract.md`
+documents: every adapter is asked for JSON output unconditionally now (not
+only when a managed attempt reads its final answer from it), and
+`fm_vendor_model` reads the *last* literal `"model":"..."` field in that JSON
+across every vendor generically - claude's `--output-format json` result (and
+its `init` message), cursor-agent's and gemini's own `--output-format json`
+result, codex's `--json` event stream - so a later report in the same run,
+such as a fallback model the CLI itself chose, wins over an earlier one.
+
+**A wrong model name refuses the round before it does anything, loudly
+(T-127)**, the same way a missing login or a policy that will not read does:
+`fm_adapter_model_refusal` in `bin/adapters/_lib.sh` reads the CLI's own
+words in that same log slice against one signature list, shared by every
+vendor the way `_FM_SIG` is - claude's own answer is
+`[claude-code:unrecognized_model]` - and the adapter exits 64 rather than
+reaching `fm_adapter_verdict`: never read as the vendor being unavailable
+(which would quietly fall back to another vendor, on another model) and never
+as a normal failed attempt that would still reach the gates. The message,
+naming the vendor and the model, is written to `FM_MODEL_REFUSED` when the
+caller set one - the same pattern `FM_POLICY_BLOCKED` uses for a refused host
+- and `fm-worker.sh`/`fm-review.sh` raise it on the board (bilingual, both
+languages naming the vendor and the model) via the existing `worker_crashed` /
+`review_failed` types, for the same scope reason `model_mismatch` above gives.
+`fm-session.sh`'s startup report, which already said when a project names no
+reviewer vendor or model, now also says when the configured model is not one
+the vendor is known to accept (`fm_model_known` in `bin/fm-config.sh`, a
+small offline catalogue for claude - the CLI itself, at round time, is
+always the final word for a name not yet in it).
+
+**Applied, not only recorded.** `config.yaml`'s `model` (top level,
+`worker.model`, `reviewer.model` - `fm_model` resolves a role's own over the
+top-level one, exactly as `vendor` does) is the vendor's own model name.
+`fm-worker.sh` and `fm-review.sh` resolve it once per round and hand it to
+whichever adapter runs as `FM_MODEL`; each adapter passes it with its own
+CLI's flag - claude and cursor-agent `--model`, codex and gemini `-m` - and
+refuses a round whose `FM_ADAPTER_ARGS` also names one (`--model`, `-m`,
+claude's `--fallback-model`), so `config.yaml` is the one place a model is
+ever chosen. `config.yaml`'s own values are `claude-opus-5-5`, top level and
+reviewer, per the captain (2026-09-28).
 
 The name in the label is a crew member, and a name always means one role
 (T-104). A crew member's name, rank and service record belong to one role:
@@ -2659,6 +2759,15 @@ the result per vendor and version in `state/canary/results.jsonl`. It exits
 had every probe blocked. Firstmate runs it on the captain's Mac before the
 merge card of any change to the sandbox and puts its output in the pull
 request; the merge gate reads it with the required check and the gates.
+**It runs each vendor exactly as a worker round would (T-127)**, model
+included: it resolves `config.yaml`'s worker model once and hands it in as
+`FM_MODEL` for every vendor's probe, the same way a real worker round would -
+which is deliberate, since the captain's finding that started T-127 was
+exactly this gap surfacing nowhere, on a hand re-dispatch across three
+vendors. It reads the model each CLI actually reported back beside its
+version, and prints both next to the verdict; a model that vendor refuses is
+reported `refused` with the message named, the same as any other
+before-the-round refusal.
 
 ---
 

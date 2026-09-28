@@ -363,6 +363,10 @@
   background:var(--pc,#d9a441);clip-path:polygon(0 0,100% 50%,0 100%)}
 /* with several projects the pennant is also the tag's .pchip: keep its shape */
 .pennant.pchip{padding:0;border:0;border-radius:0;max-width:none;line-height:normal;overflow:visible}
+/* T-127: a small vendor mark, a dot in the vendor's own colour - never the
+   model, which stays in the detail card; the tag stays quiet */
+.vmark{display:inline-block;width:6px;height:6px;margin-left:5px;border-radius:50%;
+  background:var(--vc,#7f9db5);vertical-align:1px}
 /* read by a screen reader, never drawn */
 .sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;border:0;overflow:hidden;
   clip-path:inset(50%);white-space:nowrap}
@@ -383,6 +387,9 @@
 .crewcard dt{font:600 13px var(--mono);color:#7f9db5}
 .crewcard dd{margin:0;font-size:13px;color:#dbe8f4;overflow-wrap:anywhere}
 .crewcard dd.job{display:block;margin:0;-webkit-line-clamp:unset;color:var(--brass,#d9a441)}
+/* T-127: a model other than the one requested is the warning colour, the
+   same one a failed gate uses, with both names in the text itself */
+.crewcard dd.cmodel.warn{color:#e0967d;font-weight:650}
 .crewcard a[data-pr]{color:inherit;pointer-events:auto}
 .crewcard .att,.roster .att{color:#7f9db5;font-size:13px}
 /* the roster: one row per crew member, one column per field */
@@ -390,9 +397,9 @@
   background:rgba(9,20,30,.72);border:1px solid #27455e;border-radius:99px;padding:1px 9px}
 .roster h3 .rgroupbtn[aria-pressed="true"]{background:#1d4b7a;border-color:#1d4b7a;color:#fff}
 .roster .rhead,.roster li.rrow{display:grid;align-items:center;column-gap:10px;
-  grid-template-columns:8px minmax(70px,1fr) minmax(62px,.7fr) minmax(80px,1fr) minmax(44px,.5fr)
-    minmax(64px,.7fr) minmax(44px,.5fr) minmax(0,2.6fr);
-  grid-template-areas:"av nm rl pj rd st pr jb"}
+  grid-template-columns:8px minmax(70px,1fr) minmax(62px,.7fr) minmax(80px,1fr) minmax(70px,.8fr)
+    minmax(70px,.8fr) minmax(44px,.5fr) minmax(64px,.7fr) minmax(44px,.5fr) minmax(0,2.6fr);
+  grid-template-areas:"av nm rl pj rv rm rd st pr jb"}
 .roster .rhead{padding:5px 13px;border-bottom:1px solid var(--line);background:rgba(9,20,30,.5)}
 .roster .rhead>:first-child{grid-column:2}
 .roster .rhead .rsort,.roster .rhead .rcol{font:650 11px var(--mono);letter-spacing:.04em;color:#7f9db5;
@@ -403,8 +410,12 @@
 .roster li.rrow .l1{display:contents}
 .roster li.rrow .av{grid-area:av}.roster li.rrow .nm{grid-area:nm}.roster li.rrow .rl{grid-area:rl}
 .roster li.rrow .pj{grid-area:pj}.roster li.rrow .rd{grid-area:rd}.roster li.rrow .st{grid-area:st;justify-self:start}
+.roster li.rrow .rv{grid-area:rv}.roster li.rrow .rm{grid-area:rm}
 .roster li.rrow .rpr{grid-area:pr;margin-left:0}.roster li.rrow .jb{grid-area:jb}
-.roster .rl,.roster .pj,.roster .rd{font-size:13px;color:#c6d8e8;min-width:0;overflow-wrap:anywhere}
+.roster .rl,.roster .pj,.roster .rd,.roster .rv,.roster .rm{font-size:13px;color:#c6d8e8;min-width:0;overflow-wrap:anywhere}
+/* T-127: the vendor and model the round actually ran on; the warning colour
+   is the same one a failed gate uses, so a mismatch reads as a problem */
+.roster .rm.warn{color:#e0967d;font-weight:650}
 .roster h4.rgroup{margin:0;padding:6px 13px;font:650 12px var(--mono);color:#c6d8e8;
   background:rgba(217,164,65,.05);border-top:1px solid var(--line)}
 .roster h4.rgroup span{color:#7f9db5}
@@ -413,7 +424,7 @@
   .roster .rhead .rcol,.roster .rhead .rsort[data-sort="task"]{display:none}
   .roster .rhead{display:flex;flex-wrap:wrap;gap:4px 12px}
   .roster li.rrow{grid-template-columns:8px minmax(0,1fr) auto auto auto;row-gap:4px;
-    grid-template-areas:"av nm rl pj st" ". jb jb rd pr"}
+    grid-template-areas:"av nm rl pj st" ". jb jb rd pr" ". rv rv rm rm"}
   .roster li.rrow [data-label]::before{content:attr(data-label) " ";display:block;
     font:600 11px var(--mono);color:#7f9db5}
 }

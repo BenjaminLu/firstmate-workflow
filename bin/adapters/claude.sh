@@ -57,6 +57,10 @@ off="$(fm_adapter_mark "$log")"
 case " ${FM_ADAPTER_ARGS:-} " in
   *-permission*|*--allow*|*--setting*|*--add-dir*|*--tools*|*--disallow*|*--mcp*|*--plugin*|*--agents*|*--bare*|*--sandbox*)
     echo "claude: FM_ADAPTER_ARGS changes permissions; refusing the round" >&2; exit 64 ;;
+  # config.yaml's model is the one place a model is chosen (T-127); an
+  # operator argument after it would win and quietly run on another model
+  *--model*|*--fallback-model*)
+    echo "claude: FM_ADAPTER_ARGS names a model; config.yaml is the one place a model is chosen; refusing the round" >&2; exit 64 ;;
 esac
 fm_adapter_policy
 # A worker edits its worktree; a reviewer works in its output directory, or
@@ -139,18 +143,35 @@ else
   allow=(Bash "${allow[@]}")
 fi
 settings="{\"permissions\":{\"defaultMode\":\"dontAsk\",\"allow\":[$(rules "${allow[@]}")],\"deny\":[$(rules "${deny[@]}")]},\"sandbox\":$sandbox}"
+# --output-format json always, not only when a managed attempt reads the
+# final answer from it (T-127): it is also how the round's own model comes
+# back, in the result message's "model" field, for the run's record.
 mode=(--restricted --strict-mcp-config --disable-slash-commands
       --tools "Bash,Read,Edit,Write,Grep,Glob" --add-dir "$tmp"
-      --permission-mode dontAsk --settings "$settings"
+      --permission-mode dontAsk --settings "$settings" --output-format json
       --allowedTools "${allow[@]}" --disallowedTools "${deny[@]}")
+# config.yaml's model, applied with claude's own flag (T-127); FM_ADAPTER_ARGS
+# may not name one (refused above), so this is the one place it comes from
+model_args=(); while IFS= read -r _fm_ma; do model_args+=("$_fm_ma"); done \
+  < <(fm_adapter_model_args --model)
 read -r -a native <<<"$(claude_native)"
 fm_adapter_confine claude "$work" "${native[@]}"
 if [ -n "${FM_ATTEMPT_DIR:-}" ]; then
-  ( cd "$work" && "${FM_LAUNCH[@]}" ${launch[@]+"${launch[@]}"} claude -p "${mode[@]}" --output-format json ${FM_ADAPTER_ARGS:-} < "$prompt" ) 2>&1 | tee -a "$log"
+  ( cd "$work" && "${FM_LAUNCH[@]}" ${launch[@]+"${launch[@]}"} claude -p "${mode[@]}" \
+    ${model_args[@]+"${model_args[@]}"} ${FM_ADAPTER_ARGS:-} < "$prompt" ) 2>&1 | tee -a "$log"
   fm_adapter_pipeline_status "${PIPESTATUS[@]}"
 else
-  ( cd "$work" && "${FM_LAUNCH[@]}" ${launch[@]+"${launch[@]}"} claude -p "${mode[@]}" ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
+  ( cd "$work" && "${FM_LAUNCH[@]}" ${launch[@]+"${launch[@]}"} claude -p "${mode[@]}" \
+    ${model_args[@]+"${model_args[@]}"} ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
 fi
 rc=$?
+# A model claude does not recognise refuses the round loudly (T-127), rather
+# than running silently on whatever it defaulted to: not vendor-unavailable
+# (which would fall back to the next one) and not a normal failed attempt.
+msg="$(fm_adapter_model_refusal claude "${FM_MODEL:-}" "$log" "$off")" && {
+  echo "$msg; refusing the round" >&2
+  [ -z "${FM_MODEL_REFUSED:-}" ] || printf 'claude\t%s\t%s\n' "$FM_MODEL" "$msg" >> "$FM_MODEL_REFUSED"
+  exit 64
+}
 fm_adapter_verdict "$rc" "$log" "$off"
 exit $?

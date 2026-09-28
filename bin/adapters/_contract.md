@@ -143,6 +143,58 @@ review round on nothing.
 Every adapter passes `tests/adapter-contract.test.sh`. Add a vendor by adding a
 file here and a line to `config.yaml`; nothing else in the system changes.
 
+**The configured model is applied, not only recorded (T-127).** `config.yaml`'s
+`model` (top level, `worker.model`, `reviewer.model`) is the vendor's own
+model name; `fm_model` in `bin/fm-config.sh` resolves it per role, and
+`fm-worker.sh` / `fm-review.sh` hand it over as `FM_MODEL`, the way `FM_POLICY`
+is handed over. Each adapter passes it with its CLI's own flag - claude and
+cursor-agent `--model`, codex and gemini `-m` - through `fm_adapter_model_args`
+in `_lib.sh`, and refuses a round whose `FM_ADAPTER_ARGS` also names one
+(`--model`, `-m`, or claude's `--fallback-model`): config.yaml is the one
+place a model is chosen, and an operator argument after it would otherwise
+win silently. An adapter reached with no `FM_MODEL` passes none, and the CLI
+runs on whatever it defaults to.
+
+A model the vendor does not recognise refuses the round with a usage error,
+loudly, rather than running on the CLI's default: `fm_adapter_model_refusal`
+reads the CLI's own words in the slice of the log this attempt wrote against
+one signature list, shared by every vendor the way `_FM_SIG` is - claude's
+own answer is `[claude-code:unrecognized_model]` - and the adapter exits 64
+before `fm_adapter_verdict` runs, so it is never read as the vendor being
+unavailable (which would fall back to the next one, quietly, on another
+model) nor as a normal failed attempt. When the caller set `FM_MODEL_REFUSED`
+to a file path, the adapter appends `<vendor>\t<model>\t<message>` to it, the
+way `FM_POLICY_BLOCKED` records a refused host, so `fm-worker.sh` and
+`fm-review.sh` can raise a bilingual, board-visible event naming the vendor
+and the model rather than the generic "adapter transport/configuration
+failed".
+
+**What the round ran on, read from the run itself (T-127).** Every adapter is
+asked for JSON output (`--output-format json` for claude, cursor-agent and
+gemini; `--json` for codex, alongside its own `--output-format` for the final
+answer), unconditionally, whether or not a managed attempt reads the final
+answer from it: it is also how the model the CLI actually used comes back.
+`fm_vendor_model` in `bin/fm-config.sh` reads the *last* literal
+`"model":"..."` field in that JSON, generic across vendors, so a later report
+in the same run - a fallback model the CLI itself chose - wins over an
+earlier one; empty when the transcript says nothing, which the caller
+records as `unknown`, never a guess. Per vendor, where that field comes from:
+
+| vendor | where `"model"` appears |
+|---|---|
+| claude | `--output-format json`'s result message: `{"type":"result",...,"model":"claude-opus-5-5",...}` (and its `init` message, before any result) |
+| codex | `--json`'s event stream: a `token_count` or `turn_completed` event carrying `"model":"..."` |
+| cursor-agent | `--output-format json`'s result object: `{"type":"result",...,"model":"...",...}` |
+| gemini | `--output-format json`'s result object: `{"response":"...","stats":{...},"model":"..."}` |
+
+`fm_vendor_cli_version` reads the CLI's own version directly (`<cmd>
+--version`, first line), never out of a transcript that may say nothing of
+it; missing or silent is `unknown`. Both are recorded in `identity.json`
+(`bin/fm-herdr.py record-model`), in the crew payloads `fm-worker.sh` and
+`fm-review.sh` emit, and in `bin/fm-canary.sh`'s report, beside
+`model_requested` (config's) and `model_mismatch` (true only when both are
+known and differ).
+
 The four shipped model adapters also participate in the
 [managed session contract](../../design/design.md#managed-session-defaults).
 With a dispatched run identity, their launcher owns private per-attempt artifacts

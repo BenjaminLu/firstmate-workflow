@@ -313,6 +313,37 @@ fm_adapter_pipeline_status() {
 # fm_adapter_mark <log> -> byte offset to read from after the run
 fm_adapter_mark() { if [ -f "$1" ]; then wc -c < "$1" | tr -d ' '; else echo 0; fi; }
 
+# --- the configured model (T-127) -----------------------------------------
+# config.yaml's model is applied, not only recorded: fm-worker.sh and
+# fm-review.sh resolve it and hand it in as FM_MODEL, and each adapter passes
+# it with its own CLI's flag. A model the vendor does not recognise refuses
+# the round with a usage error, loudly, rather than running on whatever the
+# CLI happened to default to - claude's own answer is
+# `[claude-code:unrecognized_model]`; the others are read the same generic
+# way. This is one signature list for every vendor, the way _FM_SIG is,
+# because a CLI names a bad model in its own words and there is no
+# vendor-specific parsing worth keeping four copies of.
+_FM_MODEL_SIG='\[claude-code:unrecognized_model\]|unrecognized model|unrecognised model|unknown model|invalid model|not a valid model|no such model|model not found'
+
+# fm_adapter_model_refusal <vendor> <model> <log> <off> -> a one-line message
+# naming the vendor and the model when the CLI's own words, in the slice of
+# the log this attempt wrote, say it did not recognise the model; nothing
+# when it is silent on the question, an empty model asked for nothing.
+fm_adapter_model_refusal() {
+  local vendor="$1" model="$2" log="$3" off="$4" said=''
+  [ -n "$model" ] || return 1
+  [ -f "$log" ] && said="$(tail -c "+$((off + 1))" "$log" 2>/dev/null)"
+  grep -qiE "$_FM_MODEL_SIG" <<< "$said" || return 1
+  printf "%s: model '%s' is not recognised by %s\n" "$vendor" "$model" "$vendor"
+}
+
+# fm_adapter_model_args <flag> -> "$flag" "$FM_MODEL" when a model is
+# configured, nothing otherwise; the words to splice into a CLI's own argv.
+fm_adapter_model_args() {
+  [ -n "${FM_MODEL:-}" ] || return 0
+  printf '%s\n%s\n' "$1" "$FM_MODEL"
+}
+
 # fm_adapter_verdict <rc> <log> <offset> -> 0 done / 1 unfit / 2 unavailable
 fm_adapter_verdict() {
   local rc="$1" log="$2" off="$3" said=''

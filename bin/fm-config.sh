@@ -873,6 +873,65 @@ fm_vendor_chain() {
   fm_cfg_list fallback | grep -vxF "$head" | awk '!seen[$0]++' || true
 }
 
+# The model config.yaml names for a role (T-127): the vendor's own model
+# name, never guessed from a run. `worker.model` / `reviewer.model` override
+# the top-level `model:`, exactly as `vendor` does above - a role with no
+# override runs the top-level one, and a config with neither runs whatever
+# the adapter's CLI defaults to (never a value fm invents).
+#
+#   fm_model worker|reviewer [file] -> the configured model, or empty
+fm_model() {
+  local role="${1:-}" f="${2:-config.yaml}" m=''
+  [ -n "$role" ] && m="$(fm_cfg_in "$role" model "$f")"
+  [ -n "$m" ] || m="$(fm_cfg model "$f")"
+  printf '%s\n' "$m"
+}
+
+# What a vendor's own transcript says it ran on (T-127): the last literal
+# `"model":"..."` field in the slice of the log this attempt wrote, so a
+# later report - a fallback model the CLI itself chose - wins over an
+# earlier one. One generic reading for every vendor: each adapter is asked
+# to produce JSON carrying this field (documented per vendor in
+# bin/adapters/_contract.md), so no vendor-specific parser is needed here.
+# Empty when the transcript carries no such field; the caller records that
+# as "unknown", never a guess.
+fm_vendor_model() {
+  local log="$1" off="${2:-0}" said=''
+  [ -f "$log" ] && said="$(tail -c "+$((off + 1))" "$log" 2>/dev/null)"
+  grep -o '"model"[[:space:]]*:[[:space:]]*"[^"]*"' <<< "$said" 2>/dev/null | tail -1 \
+    | sed -E 's/^.*"([^"]*)"$/\1/'
+}
+
+# A name claude accepts, offline (T-127): the CLI itself is the final word
+# (fm_adapter_model_refusal reads its own `unrecognized_model` answer at
+# round time), but `fm-session.sh`'s config check runs before any round, with
+# no CLI to ask, so it checks against this list - the names anthropic
+# documents and their short aliases - and says so of anything else, the way
+# it already says so of a model left unset. Not exhaustive by design: a name
+# added upstream and not yet here is still caught by the CLI at round time.
+_FM_CLAUDE_MODELS="claude-opus-5-5 opus claude-sonnet-5 sonnet claude-haiku-4-5-20251001 haiku claude-fable-5-1 fable"
+fm_model_known() {   # fm_model_known <vendor> <model> -> 0 known, 1 not, 2 no catalogue for this vendor
+  local vendor="$1" model="$2" m
+  [ -n "$model" ] || return 1
+  case "$vendor" in
+    claude)
+      for m in $_FM_CLAUDE_MODELS; do [ "$m" = "$model" ] && return 0; done
+      return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+# The CLI's own version string (T-127), read directly from the vendor's
+# binary - never out of the transcript, which may say nothing of it. Missing
+# or silent is "unknown", never a guess; the canary and the crew's records
+# both read it this same way.
+fm_vendor_cli_version() {
+  local cmd="$1" v=''
+  command -v "$cmd" >/dev/null 2>&1 || { printf 'unknown\n'; return 0; }
+  v="$("$cmd" --version 2>/dev/null | head -1 | tr -d '\r')"
+  printf '%s\n' "${v:-unknown}"
+}
+
 # fm_review_run_chain <adapters-dir> <chain>
 #   The part of a reviewer chain that may take a run-mode round: an adapter
 #   declares it can confine one with a `# fm:review-run` line, which it may

@@ -60,6 +60,9 @@ off="$(fm_adapter_mark "$log")"
 case " ${FM_ADAPTER_ARGS:-} " in
   *--sandbox*|*" -s "*|*--dangerously*|*--full-auto*|*--yolo*|*" -c "*|*--config*|*--add-dir*)
     echo "codex: FM_ADAPTER_ARGS changes permissions; refusing the round" >&2; exit 64 ;;
+  # config.yaml's model is the one place a model is chosen (T-127)
+  *" -m "*|*--model*)
+    echo "codex: FM_ADAPTER_ARGS names a model; config.yaml is the one place a model is chosen; refusing the round" >&2; exit 64 ;;
 esac
 fm_adapter_policy
 if [ "${FM_OUTER_OS:-}" = darwin ]; then
@@ -85,14 +88,26 @@ export CODEX_HOME="$codex_home"
 # be the last argument, so FM_ADAPTER_ARGS goes before it
 final_args=()
 [ -z "${FM_FINAL_PATH:-}" ] || final_args=(--output-last-message "$FM_FINAL_PATH")
+# --json for a transcript the round's model comes back in (T-127), and
+# config.yaml's model applied with codex's own flag
+final_args+=(--json)
+model_args=(); while IFS= read -r _fm_ma; do model_args+=("$_fm_ma"); done \
+  < <(fm_adapter_model_args -m)
 read -r -a native <<<"$(codex_native)"
 fm_adapter_confine codex "$tree" "${native[@]}"
 if [ -n "${FM_ATTEMPT_DIR:-}" ]; then
-  ( cd "$tree" && "${FM_LAUNCH[@]}" codex exec --skip-git-repo-check "${policy_args[@]}" ${final_args[@]+"${final_args[@]}"} ${FM_ADAPTER_ARGS:-} - < "$prompt" ) 2>&1 | tee -a "$log"
+  ( cd "$tree" && "${FM_LAUNCH[@]}" codex exec --skip-git-repo-check "${policy_args[@]}" \
+    ${final_args[@]+"${final_args[@]}"} ${model_args[@]+"${model_args[@]}"} ${FM_ADAPTER_ARGS:-} - < "$prompt" ) 2>&1 | tee -a "$log"
   fm_adapter_pipeline_status "${PIPESTATUS[@]}"
 else
-  ( cd "$tree" && "${FM_LAUNCH[@]}" codex exec --skip-git-repo-check "${policy_args[@]}" ${final_args[@]+"${final_args[@]}"} ${FM_ADAPTER_ARGS:-} - < "$prompt" ) >> "$log" 2>&1
+  ( cd "$tree" && "${FM_LAUNCH[@]}" codex exec --skip-git-repo-check "${policy_args[@]}" \
+    ${final_args[@]+"${final_args[@]}"} ${model_args[@]+"${model_args[@]}"} ${FM_ADAPTER_ARGS:-} - < "$prompt" ) >> "$log" 2>&1
 fi
 rc=$?
+msg="$(fm_adapter_model_refusal codex "${FM_MODEL:-}" "$log" "$off")" && {
+  echo "$msg; refusing the round" >&2
+  [ -z "${FM_MODEL_REFUSED:-}" ] || printf 'codex\t%s\t%s\n' "$FM_MODEL" "$msg" >> "$FM_MODEL_REFUSED"
+  exit 64
+}
 fm_adapter_verdict "$rc" "$log" "$off"
 exit $?

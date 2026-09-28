@@ -135,6 +135,13 @@ review_opened review_failed ask_pass_criteria criteria_returned \
 protocol_violation approved merged closed decision_made worker_crashed \
 vendor_unavailable agent_finished crew_status parked unparked spec_pinned \
 spec_repinned agent_lost reopened"
+# T-127: model_mismatch and model_refused belong here too (the acceptance
+# names model_mismatch explicitly), but tests/diagram.test.sh enforces exact
+# set equality between this list and bin/fm-emit.sh's TYPES, and neither
+# bin/fm-emit.sh nor tests/diagram.test.sh is in this task's scope. Adding
+# them here alone would fail that check for a type fm-emit still refuses to
+# write. Flagged in the pull request; bin/fm-emit.sh's TYPES needs
+# `model_mismatch model_refused` added in the same change that adds them here.
 
 # 0 the captain must rule on it, 1 routine, 64 no ruling for it here
 wants() {

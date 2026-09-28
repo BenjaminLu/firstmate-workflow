@@ -384,6 +384,32 @@ class Roster(unittest.TestCase):
         first = m.allocate(self.root, 'worker', 'T-400', '')
         self.finish(first)
         self.assertEqual(self.name(first), self.name(m.allocate(self.root, 'worker', 'T-401', '')))
+    def test_record_model_merges_what_the_round_ran_on(self):
+        """T-127: vendor, model, model_requested, cli_version and
+        model_mismatch join identity.json once the round has run - never at
+        allocation, since none of it is known before then - beside the six
+        fields T-116 already put there, and nothing already there is lost."""
+        run = m.allocate(self.root, 'worker', 'T-600', '')
+        before = json.loads((run / 'identity.json').read_text())
+        identity = m.record_model(run, 'claude', 'claude-opus-5-5', 'claude-sonnet-5', '2.1.0')
+        self.assertEqual('claude', identity['vendor'])
+        self.assertEqual('claude-opus-5-5', identity['model_requested'])
+        self.assertEqual('claude-sonnet-5', identity['model'])
+        self.assertEqual('2.1.0', identity['cli_version'])
+        self.assertTrue(identity['model_mismatch'])
+        for k, v in before.items(): self.assertEqual(v, identity[k], k)
+        on_disk = json.loads((run / 'identity.json').read_text())
+        self.assertEqual(identity, on_disk)
+        # requested and actual agree: no mismatch
+        agree = m.record_model(run, 'claude', 'claude-opus-5-5', 'claude-opus-5-5', '2.1.0')
+        self.assertFalse(agree['model_mismatch'])
+        # the vendor said nothing: unknown, never guessed, and never a mismatch
+        silent = m.record_model(run, 'claude', 'claude-opus-5-5', '', '2.1.0')
+        self.assertEqual('unknown', silent['model'])
+        self.assertFalse(silent['model_mismatch'])
+        # no model configured at all: nothing to compare against, so no mismatch
+        unset = m.record_model(run, 'claude', '', 'claude-sonnet-5', '2.1.0')
+        self.assertFalse(unset['model_mismatch'])
     def test_an_unfinished_run_is_live_until_proven_over(self):
         # Every path through run_is_live, one run at a time. No clock: a run
         # allocated long ago with nothing recorded yet is still starting.
