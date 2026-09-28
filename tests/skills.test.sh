@@ -63,6 +63,44 @@ if firstmate.is_file():
     ):
         if sentence not in prose:
             errors.append(f'firstmate skill lacks process rule: {sentence}')
+    # SK-003: fixes to stale text found in the 2026-09-29 audit against bb8a5aa.
+    for sentence in (
+        'the only `gh` command firstmate runs itself is `gh pr update-branch`, and only on a pull request GitHub reports as both BEHIND and MERGEABLE (see Process rules, below).',
+        'Dispatching a task is not routine: propose it and wait for the captain\'s go before dispatching (Standing orders, below).',
+        'Propose a task and wait for the captain\'s go before dispatching it.',
+        'A hand-raised decision id (`D-<digits>`, for the one card with no owning task) is picked from `D-1000` up, never an id below it.',
+        'A task\'s `scope` lists every file its acceptance criteria need changed; sweep for one that does not before dispatch.',
+        'Route no round to a vendor that is out of quota until its quota resets; T-124 will automate that check.',
+        'codex is a supported vendor that was out of quota on 2026-09-27, not a banned one (captain, 2026-09-29).',
+        'A merge happens only through a board card; a chat order to merge counts only inside an explicit, time-boxed authorisation the captain gives in chat, naming the card, and only one merge at a time.',
+        'reconcile discrepancies explicitly. Reconnect to existing live agents and preserve interrupted work before any restart.',
+        'No adapter applies `config.yaml`\'s `model:` key until T-127 merges, so report the CLI\'s own default model as the model actually in use, for every role, until then.',
+        '`fm-review.sh` takes the attempt\'s own `final.txt` when Herdr recorded this run as a chain attempt, and the round\'s combined output directory and log tail otherwise (`attempt_output`, fm-review.sh:618-620), and either way that is substring matching, which does not by itself establish current-head approval.',
+        'A run-mode checkout is never swept while its owner round is alive (T-123): liveness is read from a kernel `flock` the round holds on its own checkout\'s owner file, not `kill -0`, whose EPERM under the sandbox used to read a live checkout as abandoned.',
+        'A round whose transcript ends with no signed verdict is retried once, automatically, with a fresh checkout, and the board says so in `en` and `zh-TW`; a second empty ending is reported as today.',
+        'Since T-118, raising this card puts the task in the captain\'s lane at once - any pending card does that, not only a merge card - and it returns to ready, backlog or another lane only once the card is answered.',
+        '## Author and verify captain decisions Prepare complete authored content and a bespoke before/after/options diagram',
+        'The damage the board left before T-118 is repaired once, not swept for: T-118 has merged, so run `bin/fm-reconcile.sh --repair-cards --repo <root>` once (a dry run)',
+        'Managed launches create a dedicated tab with one owned root pane and the same canonical actor as the tab, pane and sidebar label.',
+    ):
+        if sentence not in prose:
+            errors.append(f'firstmate skill lacks SK-003 fix: {sentence}')
+    if prose.count('Do not edit a shell script or runtime wrapper while a live process executes it.') != 1:
+        errors.append('firstmate skill should carry that sentence exactly once (SK-003: duplicate removed)')
+# SK-005: fixes to stale reviewer text found in the 2026-09-29 audit against bb8a5aa.
+reviewer = root / 'skills' / 'reviewer' / 'SKILL.md'
+if reviewer.is_file():
+    rprose = ' '.join(reviewer.read_text().split())
+    for sentence in (
+        'The engine\'s permission flags and, since T-117, an OS sandbox enforce that, not this text.',
+        'Only the declared registries are reachable, which `setup` needs; never GitHub or loopback, so you run no gh.',
+        'The checkout is your round\'s own and is held by a lock the round owns (T-123), so nothing sweeps it while you work.',
+        'A round that ends without a verdict is retried once.',
+        '`fm-review.sh` reads the verdict from the adapter\'s final answer, `final.txt` (fm-review.sh:618-620), not from the transcript',
+        'A `REJECT` must state its findings in that same final answer, each with the evidence for it and its class.',
+    ):
+        if sentence not in rprose:
+            errors.append(f'reviewer skill lacks SK-005 fix: {sentence}')
 if errors:
     sys.exit('\n'.join(errors))
 print('role metadata and entrypoint links: passed')
