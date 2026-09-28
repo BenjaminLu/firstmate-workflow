@@ -658,6 +658,15 @@ class Session(unittest.TestCase):
     def test_start_reports_the_worker_model_too(self):
         result = self.reviewer_report('vendor: claude\nmodel: opus-5\nreviewer:\n  vendor: claude\n  model: claude-opus-5-5\n')
         self.assertIn("worker model 'opus-5' is not one claude is known to accept", result.stderr)
+    def test_start_is_quiet_about_a_vendor_with_no_offline_catalogue(self):
+        """T-127: fm_model_known returns 2 (no catalogue) for a vendor other
+        than claude - not 1 (not known) - and a config check that reads that
+        as any nonzero code would wrongly warn about every codex/cursor-agent
+        /gemini model, however real, that it simply cannot check."""
+        for config in ('vendor: codex\nmodel: o1\nreviewer:\n  vendor: claude\n  model: claude-opus-5-5\n',
+                       'vendor: claude\nmodel: claude-opus-5-5\nreviewer:\n  vendor: cursor-agent\n  model: gpt-5\n'):
+            result = self.reviewer_report(config)
+            self.assertNotIn('is not one', result.stderr, config)
     def test_status_does_not_repeat_the_reviewer_report(self):
         result = self.reviewer_report('vendor: claude\n', mode='status')
         self.assertIn('stub session status', result.stdout)

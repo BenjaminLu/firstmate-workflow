@@ -622,11 +622,17 @@ if [ "$rc" = "2" ] && [ "${FM_VENDOR_SPOKE:-0}" = "0" ]; then
 fi
 # What the round actually ran on, read from the run itself (T-127): recorded
 # in identity.json beside name/role/project/task/round/attempt, and carried
-# on every crew payload from here on the way those already are.
-model_reported=''
-[ -z "$FM_VENDOR_USED" ] || model_reported="$(fm_vendor_model "$work/log" "${FM_RUN_LOG_OFF:-0}")"
-cli_version='unknown'
-[ -z "$FM_VENDOR_USED" ] || cli_version="$(fm_vendor_cli_version "$FM_VENDOR_USED")"
+# on every crew payload from here on the way those already are. A vendor
+# whose own attempt exited 64+ never reached its CLI at all - a config
+# error, a refused model, or, above fm_run_chain, an ownership-uncertain
+# fallback pane (fm-herdr.py's own "retained" refusal) - so probing its
+# binary for a version here would touch the vendor a refused round must
+# never touch (a fallback model must not start; T-127 review round 2).
+model_reported=''; cli_version='unknown'
+if [ -n "$FM_VENDOR_USED" ] && [ "$rc" -lt 64 ]; then
+  model_reported="$(fm_vendor_model "$work/log" "${FM_RUN_LOG_OFF:-0}")"
+  cli_version="$(fm_vendor_cli_version "$FM_VENDOR_USED")"
+fi
 python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" record-model "$FM_RUN_DIR" "$FM_VENDOR_USED" \
   "$model_requested" "$model_reported" "$cli_version" >/dev/null 2>&1 || true
 CREW_IDENTITY="$(jq -c '{name,role,project,task,round,attempt,vendor,model_requested,model,cli_version,model_mismatch}' \

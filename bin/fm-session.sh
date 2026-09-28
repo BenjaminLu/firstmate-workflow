@@ -36,12 +36,14 @@ if [ "$MODE" = start ]; then
     [ -n "$rv" ] || missing=vendor
     [ -n "$rmodel" ] || missing="${missing:+$missing and }model"
     echo "fm-session: config.yaml names no reviewer $missing; the reviewer is the captain's choice - ask on the board (installed adapters: ${installed:-none})" >&2
-  elif ! fm_model_known "$rv" "$rmodel"; then
-    echo "fm-session: config.yaml's reviewer model '$rmodel' is not one $rv is known to accept; check it before dispatching (T-127)" >&2
+  else
+    fm_model_known "$rv" "$rmodel"
+    [ $? -eq 1 ] && echo "fm-session: config.yaml's reviewer model '$rmodel' is not one $rv is known to accept; check it before dispatching (T-127)" >&2
   fi
   wv="$(fm_cfg vendor)"; wmodel="$(fm_model worker config.yaml)"
-  if [ -n "$wv" ] && [ -n "$wmodel" ] && ! fm_model_known "$wv" "$wmodel"; then
-    echo "fm-session: config.yaml's worker model '$wmodel' is not one $wv is known to accept; check it before dispatching (T-127)" >&2
+  if [ -n "$wv" ] && [ -n "$wmodel" ]; then
+    fm_model_known "$wv" "$wmodel"
+    [ $? -eq 1 ] && echo "fm-session: config.yaml's worker model '$wmodel' is not one $wv is known to accept; check it before dispatching (T-127)" >&2
   fi
 fi
 exec python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" session "$MODE" "$REPO" "$DECISION"
