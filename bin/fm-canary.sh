@@ -91,7 +91,12 @@ run_section() { case ",$sections," in *",$1,"*) return 0 ;; *) return 1 ;; esac;
 if [ -n "${FM_IN_ROUND:-}" ]; then echo "fm-canary: run it from the operator's shell, not inside a crew round" >&2; exit 64; fi
 unset FM_CREW_UNSANDBOXED FM_ROUND_UNSANDBOXED
 
-out="$ROOT/state/canary"; mkdir -p "$out" || exit 70
+# FM_CANARY_STATE_DIR: where results, transcripts and per-round scratch
+# files go. Defaults to this repository's own state/canary, which is right
+# for the operator running the real canary; a suite that runs this same
+# script (tests/canary.test.sh) is not the operator and must not write into
+# the real repository's state/ - it points this at its own safe_tmpdir instead.
+out="${FM_CANARY_STATE_DIR:-$ROOT/state/canary}"; mkdir -p "$out" || exit 70
 results="$out/results.jsonl"
 os="$("$ROOT/bin/fm-sandbox.sh" os </dev/null)"
 policy_all="$(mktemp "${TMPDIR:-/tmp}/fm-canary-policy.XXXXXX")" || exit 70
@@ -382,6 +387,13 @@ destroy_fixture_build() {   # destroy_fixture_build <dir>
   # truly empty one sometimes does - a clone of it then checks out nothing.
   git init -q --bare -b main "$bare" || return 1
   git init -q -b main "$d/repo" || return 1
+  # the runner that grades the required check carries no user.name/user.email
+  # of its own anywhere - no global config, no repository config on a fresh
+  # init - unlike a developer's machine, which is why this only ever showed
+  # up in CI (T-128 round 8 review: "Author identity unknown"); set one here,
+  # local to this throwaway repo, never the operator's
+  git -C "$d/repo" config user.email "fm-canary@example.invalid" || return 1
+  git -C "$d/repo" config user.name "fm-canary" || return 1
   (
     cd "$d/repo" || exit 1
     # fixture-relative, resolved only after the cd above into this round's

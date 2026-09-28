@@ -3006,6 +3006,54 @@ assert_contains "$(git -C "$dPreserve/repo/state/worktrees/T-PRESERVE" show --st
   "and reached the commit fm-worker.sh pushed, not lost to the restore that repaired .git"
 rm -rf "$dPreserve"
 
+# --- a restored round is told so in its NEXT prompt (T-128 round 8, review) -
+# Acceptance 4's own words: "a worker round that finds its tree restored
+# mid-run is told so in its next prompt." fm-worker.sh:1275-1283 reads and
+# clears state/worktrees/<task>.restored while building the prompt, but
+# nothing before this ran fm-worker.sh a second time to see it happen - round
+# 1 destroys the tree (the same proven shape T-MIR uses above), round 2 is a
+# plain adapter that only captures the prompt it was handed, and round 3
+# proves the marker was cleared, not merely never written.
+dRP="$(fixture T-RESTOREPROMPT)"
+cat > "$dRP/repo/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+tree="$3"
+: > "$tree/before-the-wreck.txt"
+sleep 2
+rm -rf "$tree"
+exit 0
+M
+chmod +x "$dRP/repo/bin/adapters/mock.sh"
+GHRP="$(ghstub "$dRP")"
+( cd "$dRP/repo" && FM_ROOT="$dRP/repo" FM_GH="$GHRP" FM_MIRROR_INTERVAL=1 \
+    bin/fm-worker.sh --task T-RESTOREPROMPT --name worker-rp1 >/dev/null 2>&1 )
+assert_ok "test -s '$dRP/repo/state/worktrees/T-RESTOREPROMPT.restored'" \
+  "round 1 destroyed its tree and left a marker for the next round to read"
+
+cat > "$dRP/repo/bin/adapters/mock.sh" <<'M2'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+cp "$2" "${FM_CAPTURE:-/dev/null}" 2>/dev/null
+: > "$3/round-two.txt"
+exit 0
+M2
+chmod +x "$dRP/repo/bin/adapters/mock.sh"
+capRP2="$dRP/prompt2.md"
+( cd "$dRP/repo" && FM_ROOT="$dRP/repo" FM_GH="$GHRP" FM_CAPTURE="$capRP2" \
+    bin/fm-worker.sh --task T-RESTOREPROMPT --name worker-rp2 >/dev/null 2>&1 )
+assert_contains "$(cat "$capRP2" 2>/dev/null)" "Your tree was restored" \
+  "round 2's own prompt says the tree was restored mid-run"
+assert_ok "[ ! -s '$dRP/repo/state/worktrees/T-RESTOREPROMPT.restored' ]" \
+  "and the marker is cleared after being read once"
+
+capRP3="$dRP/prompt3.md"
+( cd "$dRP/repo" && FM_ROOT="$dRP/repo" FM_GH="$GHRP" FM_CAPTURE="$capRP3" \
+    bin/fm-worker.sh --task T-RESTOREPROMPT --name worker-rp3 >/dev/null 2>&1 )
+assert_lacks "$(cat "$capRP3" 2>/dev/null)" "Your tree was restored" \
+  "round 3, with nothing left to report, is not told again"
+rm -rf "$dRP"
+
 # --- the watcher does not outlive a round killed outright (T-128 round 4) --
 # SIGKILL runs no trap, so a round killed outright never reaches
 # mirror_watch_stop to write the stop file; without its own check the

@@ -19,19 +19,19 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 t="$(safe_tmpdir)"
 
-# fm-canary.sh appends one line per fixture and mode, run over run: a stale
-# state/canary/ from an earlier run (in this suite, or the operator's own)
-# would be read back alongside this run's, and the counts and per-row
-# assertions below are for this run's ten alone.
-rm -rf "$ROOT/state/canary"
+# This suite is not the operator: fm-canary.sh's own state (results,
+# transcripts, per-round scratch) goes under this run's own safe_tmpdir, not
+# the real repository's state/canary - a suite that wrote there would corrupt
+# an operator's own canary history, and did (T-128 round 8 review).
+canary_state="$t/canary"
 
-out="$(cd "$ROOT" && TMPDIR="$t" bin/fm-canary.sh --sections=destroy 2>"$t/stderr")"; rc=$?
+out="$(cd "$ROOT" && TMPDIR="$t" FM_CANARY_STATE_DIR="$canary_state" bin/fm-canary.sh --sections=destroy 2>"$t/stderr")"; rc=$?
 _t "the destroy workload exits 0: every fixture and mode restored what the round destroyed"
 if [ "$rc" = 0 ]; then ok
 else bad "exit $rc; stdout: $(tr '\n' ' ' <<<"$out" | cut -c1-400); stderr: $(tr '\n' ' ' < "$t/stderr" | cut -c1-400)"
 fi
 
-results="$ROOT/state/canary/destroy-results.jsonl"
+results="$canary_state/destroy-results.jsonl"
 assert_ok "test -f '$results'" "it records one line per fixture and mode"
 
 n="$(jq -c . < "$results" 2>/dev/null | wc -l | tr -d ' ')"
@@ -71,7 +71,6 @@ assert_eq "true" "$(jq -r '.worktree_restored.summary.en | (type == "string" and
 assert_eq "true" "$(jq -r '.worktree_restored.summary."zh-TW" | (type == "string" and test("\\S"))' <<<"$tree_row" 2>/dev/null)" \
   "and a zh-TW one (design section 9)"
 
-rm -rf "$ROOT/state/canary"
 safe_rm_rf "$t"
 
 finish
