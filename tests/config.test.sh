@@ -569,6 +569,25 @@ printf 'no model field here at all\n' > "$mv/plain.log"
 assert_eq "" "$(fm_vendor_model "$mv/plain.log" 0)" "and neither does a transcript with no such field"
 assert_eq "unknown" "$(fm_vendor_cli_version "fm-no-such-vendor-cli-anywhere")" \
   "fm_vendor_cli_version says unknown for a command that is not there"
+# fm_identity exports FM_ACTOR/FM_ROLE/FM_TASK/FM_RUN_DIR for the whole
+# process (emit() and its kin read them); a version probe run in that same
+# shell must not hand them, or its own stdin, to the vendor's CLI - a CLI, or
+# a test fixture standing in for one, that treats their presence as "this is
+# the round" would otherwise answer a bare --version as if it were another
+# attempt of the round that already ran.
+cat > "$mv/fake-cli" <<'CLI'
+#!/usr/bin/env bash
+if [ -n "${FM_ACTOR:-}${FM_ROLE:-}${FM_TASK:-}${FM_RUN_DIR:-}" ]; then
+  echo "leaked-identity"; exit 0
+fi
+if read -t 0.2 -r line 2>/dev/null; then echo "leaked-stdin"; exit 0; fi
+echo "9.9.9"
+CLI
+chmod +x "$mv/fake-cli"
+export FM_ACTOR=reviewer-x-t1-r1 FM_ROLE=reviewer FM_TASK=T-1 FM_RUN_DIR="$mv"
+assert_eq "9.9.9" "$(echo not-the-prompt | fm_vendor_cli_version "$mv/fake-cli")" \
+  "fm_vendor_cli_version hands the CLI neither the round's identity env nor its stdin"
+unset FM_ACTOR FM_ROLE FM_TASK FM_RUN_DIR
 rm -rf "$mv"
 
 # --- record-model merges into identity.json (T-127) -----------------------

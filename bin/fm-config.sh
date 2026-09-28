@@ -928,7 +928,14 @@ fm_model_known() {   # fm_model_known <vendor> <model> -> 0 known, 1 not, 2 no c
 fm_vendor_cli_version() {
   local cmd="$1" v=''
   command -v "$cmd" >/dev/null 2>&1 || { printf 'unknown\n'; return 0; }
-  v="$("$cmd" --version 2>/dev/null | head -1 | tr -d '\r')"
+  # A bare version probe, never the round: the caller's shell still carries
+  # the round's own FM_ACTOR/FM_ROLE/FM_TASK/FM_RUN_DIR (fm_identity exports
+  # them for the whole process, for emit() and its kin), and hands the CLI a
+  # closed stdin rather than let it read whatever the caller's happens to be
+  # - both would otherwise let a CLI, or a test fixture standing in for one,
+  # mistake this probe for another attempt of the round that just ran.
+  v="$(env -u FM_ACTOR -u FM_ROLE -u FM_TASK -u FM_RUN_DIR "$cmd" --version \
+       < /dev/null 2>/dev/null | head -1 | tr -d '\r')"
   printf '%s\n' "${v:-unknown}"
 }
 
