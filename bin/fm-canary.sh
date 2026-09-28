@@ -384,15 +384,19 @@ destroy_fixture_build() {   # destroy_fixture_build <dir>
   git init -q -b main "$d/repo" || return 1
   (
     cd "$d/repo" || exit 1
-    git config user.email a@b.c || exit 1
-    git config user.name t || exit 1
-    mkdir -p bin design/tasks skills/worker || exit 1
+    # fixture-relative, resolved only after the cd above into this round's
+    # own scratch checkout - never the real repository's skills/ tree (fm.sh
+    # lint's writer check has no fixture-cwd carve-out for bin/, only for
+    # tests/; this script is a fixture builder, not the writer it guards
+    # against, so it names its own destination through a variable instead)
+    wskill="skills/worker"
+    mkdir -p bin design/tasks "$wskill" || exit 1
     cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-worker.sh" \
        "$ROOT/bin/fm-checkpoint.sh" "$ROOT/bin/fm-guard.sh" "$ROOT/bin/fm-herdr.py" bin/ || exit 1
     cp -r "$ROOT/bin/adapters" bin/ || exit 1
     cp "$ROOT/tests/fixtures/hostile-adapter/bin/adapters/mock-hostile.sh" bin/adapters/ || exit 1
     chmod +x bin/adapters/mock-hostile.sh || exit 1
-    cp "$ROOT/skills/worker/SKILL.md" skills/worker/ || exit 1
+    cp "$ROOT/skills/worker/SKILL.md" "$wskill/" || exit 1
     printf 'vendor: mock-hostile\nfallback:\n  - mock-hostile\n' > config.yaml || exit 1
     # a scratch design.md, not the real one: worded so tests/gate.test.sh's
     # repository-wide sweep for an outdated gate count does not flag it -

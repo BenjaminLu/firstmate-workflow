@@ -588,6 +588,20 @@ mirror_watch_start() {
   # fork - so the loop can check its own parent is still alive without
   # being handed the pid separately.
   (
+    # A background subshell inherits every open descriptor unless it closes
+    # them itself - including fd 9, the worker's own task lock. Left open
+    # here, a parent killed outright (SIGKILL runs no trap) still has this
+    # watcher holding that lock until its next poll tick notices and exits,
+    # and a recovery launch in that window cannot acquire it and fails
+    # outright (T-128 round 7: reconcile's own redispatch, timed to publish
+    # a live replacement in about a second, lost the race to this). The
+    # watcher never needed the lock - it only ever reads the tree and the
+    # mirror - so it drops both copies immediately, the same way the
+    # adapter's own subshell already does below.
+    exec 9>&-
+    if [[ "${FM_WORKER_TASK_LOCK_FD:-}" =~ ^[0-9]+$ ]]; then
+      eval "exec ${FM_WORKER_TASK_LOCK_FD}>&-"
+    fi
     parent=$$
     interval="${FM_MIRROR_INTERVAL:-10}"
     while [ ! -e "$mirror_watch_stop_file" ] && kill -0 "$parent" 2>/dev/null; do
