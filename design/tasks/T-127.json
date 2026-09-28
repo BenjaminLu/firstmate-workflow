@@ -36,7 +36,10 @@
     "tests/session.test.sh",
     "tests/config.test.sh",
     "bin/fm-emit.sh",
-    "tests/emit.test.sh"
+    "tests/emit.test.sh",
+    "tests/worker.test.sh",
+    "tests/review.test.sh",
+    "tests/canary.test.sh"
   ],
   "acceptance": [
     "Why. The captain noticed on 2026-09-27 that the board cannot tell which vendor or which model a crewman runs on. identity.json holds name, role, project, task, round and attempt, but no vendor or model. The header's engine badge shows config.yaml's default, not what a round actually runs; that day T-126 was re-dispatched by hand with codex, then cursor-agent, then claude, and the board showed none of it. A second finding on 2026-09-28: config.yaml's `model` is never applied. No adapter passes a model flag, so every claude round since T-117 ran on the CLI's default (claude-sonnet-5, per each run's modelUsage) while config.yaml said `opus-5`, and `opus-5` is not even a name claude accepts (`claude -p --model opus-5` answers `[claude-code:unrecognized_model]`; `opus` and `claude-opus-5-5` both resolve to claude-opus-5-5). The captain approved this task on 2026-09-27, and on 2026-09-28 folded the fix into it, choosing `claude-opus-5-5` for both worker and reviewer. Its own spec file, design/tasks/T-127.json, is committed on this branch.",

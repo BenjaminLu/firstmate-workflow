@@ -383,9 +383,16 @@ fm_adapter_model_refusal() {
 # the network or a login prompt must never hang a round that has not even
 # started): perl's alarm, since `timeout` is not on every platform this
 # runs on; a run past the deadline is exactly "could not be run", silent.
+#
+# Consumes its own two positional arguments as two single shifts, not one
+# `shift 2`: this is a library helper, never an option loop reading a
+# round's command line, and a literal `shift 2` pulls this file into the
+# option-loop lint's own pinned corpus (tests/option-loop.test.sh, out of
+# this task's scope) for a shape that lint was never written to check.
 fm_adapter_model_listcheck() {
   local vendor="$1" model="$2" out rc line id
-  shift 2
+  [ "$#" -ge 2 ] || return 1
+  shift; shift
   [ -n "$model" ] || return 1
   out="$(FM_MODEL_LISTCHECK_SECS="${FM_MODEL_LISTCHECK_SECS:-10}" \
     perl -e 'alarm $ENV{FM_MODEL_LISTCHECK_SECS}; exec @ARGV or exit 127' "$@" 2>/dev/null </dev/null)"

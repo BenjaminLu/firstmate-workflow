@@ -271,14 +271,14 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
       *)      refusal_line='Error: unrecognized model "bad-model-9000"' ;;
     esac
     vendor_says "$refusal_line" 1
-    refused_dir="$(mktemp -d)"; : > "$refused_dir/refused"
+    refused_dir="$(safe_tmpdir)"; : > "$refused_dir/refused"
     FM_MODEL="bad-model-9000" FM_MODEL_REFUSED="$refused_dir/refused" \
       PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/model-refusal.log" \
       >/dev/null 2>"$d/model-refusal.err"
     assert_eq "64" "$?" "$name refuses a round whose model it does not recognise"
     assert_contains "$(cat "$d/model-refusal.err")" "bad-model-9000" "and names the model on stderr"
     assert_contains "$(cat "$refused_dir/refused")" "bad-model-9000" "and records it for the caller to raise on the board"
-    rm -rf "$refused_dir"
+    safe_rm_rf "$refused_dir"
 
     # --- false positives (T-127 review round 5) ---------------------------
     # A completed round (exit 0) is never read as a refusal, however the
