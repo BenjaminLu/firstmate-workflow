@@ -235,6 +235,17 @@ set by the captain.
    cost T-094 one; fix the spec through a scoped task before the worker starts.
 5. Workers do not run the test suite: GitHub CI and the gates verify, and no
    worker acceptance says to run `ci.sh` (captain's rule).
+6. A worker round needs a brief, not a symptom: firstmate coordinates and
+   must hand every worker round the evidence to fix its problem, never make
+   the worker hunt (captain, 2026-09-28). Before each round, read the failing
+   checks' logs and the review, open the code, and post a brief naming per
+   item the failing assertion with its log lines, the file:line and source
+   around it, the verified root cause, the expected change and what must not
+   change; update a BEHIND branch first, and do not run rounds with
+   overlapping scope in parallel. A brief that only relays symptoms ("CI is
+   red, find out why") is not a brief: rounds with such briefs converged in
+   ~20 minutes, rounds without took 30-70 minutes and 150-290 turns, and
+   workers still do not run the suites.
 
 ## Judge a task when it turns ready
 
