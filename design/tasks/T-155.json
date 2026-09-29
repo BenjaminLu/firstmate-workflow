@@ -1,0 +1,20 @@
+{
+  "id": "T-155",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-153"
+  ],
+  "title": "a review waits for the head's CI even when GitHub has not created the checks yet: the required check names come from the branch protection, not from the checks that happen to exist",
+  "scope": [
+    "bin/fm-review.sh",
+    "tests/review.test.sh",
+    "design/**",
+    "design/tasks/T-155.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-09-30 00:20, T-145's first review started while its CI was still running and told the reviewer 'the required check could not be read'. bin/fm-review.sh's ci_wait (T-153) takes the names to wait on from `gh pr checks --required`, which lists only checks that already exist on the pull request; right after the worker's push GitHub has created none, so the list is empty and ci_wait returns at once. Its own spec file, design/tasks/T-155.json, is committed on this branch.",
+    "The names come from what is required, not what exists: the base branch's protection (`gh api repos/{owner}/{repo}/branches/<base>/protection/required_status_checks` -> .contexts, and .checks[].context), falling back to `gh pr checks --required` and then to config.yaml's declared required check when protection cannot be read. A required check with no run yet for the head is waited on as missing, within FM_REVIEW_CI_WAIT; only when no source names any required check is the wait skipped, and then the prompt says so plainly.",
+    "Tests with a stubbed gh answering as GitHub does: protection names `ci` and no check run exists yet, then it appears queued, then completed - the review starts only after completion; protection unreadable falls back; the bound is still honoured and names what is still running. Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves."
+  ]
+}
