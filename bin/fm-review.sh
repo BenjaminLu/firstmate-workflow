@@ -2,18 +2,23 @@
 # Runs one review round. The reviewer is given the diff, the task spec and the
 # acceptance criteria - and, from round two, the closed-list protocol's own
 # comments from the pull request, and, given --pr, in every round the head's
-# SHA, its required check and its gate summary - and nothing else. Not the worker's log, not
+# SHA, its required check, every CI job's result, the failing assertions from
+# the failed jobs' logs, the fail-first report and its gate summary - once the
+# required checks have finished, or a bounded wait has run out (T-153) - and
+# nothing else. Not the worker's log, not
 # its reasoning, not even the path it worked in. Reasoning is persuasive; the
 # artefact is what is under review.
 #
 # config.yaml's `reviewer: mode:` says how much more it gets. `diff`, and a
 # project that declares nothing, is the above and only the above. `run` adds a
 # fresh clone of the pull request head, outside every worktree and removed
-# when the round ends, in which the reviewer may run the project's commands.
+# when the round ends, in which the reviewer may run small commands to check
+# a claim; the suites are the machine's to run (T-153).
 # The adapter confines it there with the engine's own permission flags;
 # nothing in the prompt is what stops it.
 #
 #   fm-review.sh --task T-004 --branch <name> [--repo .] [--pr 9] [--round 1]
+#   FM_REVIEW_CI_WAIT=<seconds, default 1200>  FM_REVIEW_CI_POLL=<seconds, default 30>
 set -uo pipefail
 # Nothing below may read standard input. A dispatched child inherits it, and
 # a child that reads it blocks the caller waiting for a human who is not
@@ -48,6 +53,12 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$TASK" ] && [ -n "$BRANCH" ] || {
   echo "usage: fm-review.sh --task <id> --branch <name> [--pr N] [--round N]" >&2; exit 64; }
+# How long a round given --pr waits for the head's required checks before it
+# starts the reviewer anyway, and how often it asks GitHub meanwhile (T-153).
+CI_WAIT="${FM_REVIEW_CI_WAIT:-1200}"; CI_POLL="${FM_REVIEW_CI_POLL:-30}"
+case "$CI_WAIT" in ''|*[!0-9]*) echo "fm-review: FM_REVIEW_CI_WAIT must be whole seconds" >&2; exit 64 ;; esac
+case "$CI_POLL" in ''|*[!0-9]*|0) echo "fm-review: FM_REVIEW_CI_POLL must be whole seconds, at least 1" >&2; exit 64 ;; esac
+CI_WAIT=$((10#$CI_WAIT)); CI_POLL=$((10#$CI_POLL))
 cd "$REPO" || { echo "fm-review: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
 fm_refuse_herdr_bypass fm-review || exit $?
@@ -92,9 +103,22 @@ set_crew_activity() {
 # --data into the crew payload so extras cannot wipe crew_name or activity.
 emit_once() {
   crew_refresh_identity
-  local data="$CREW_DATA" args=()
+  local data="$CREW_DATA" args=() now
   while [ $# -gt 0 ]; do
     case "$1" in
+      --type)
+        fm_need "fm-review" "$@"
+        # A verdict event is the round's result: it carries the round's own
+        # wall-clock, from just before review_opened to now (T-153), which
+        # /api/state's last_review reads, and how much of it was spent
+        # waiting for the head's CI before the reviewer started
+        if [ -n "$ROUND_STARTED" ] && { [ "${2-}" = approved ] || [ "${2-}" = review_failed ]; }; then
+          now="$(date +%s)"
+          data="$(jq -c --argjson s "$ROUND_STARTED" --argjson e "$now" --argjson w "${CI_WAITED:-0}" \
+            '.wall_clock={started:$s,ended:$e,seconds:($e-$s),ci_wait:$w}' <<<"$data")" || return 1
+        fi
+        args+=("$1" "${2-}"); shift 2
+        ;;
       --review-outcome)
         fm_need "fm-review" "$@"
         data="$(jq -c --arg outcome "${2-}" '.review_outcome=$outcome' <<<"$data")" || return 1
@@ -112,6 +136,8 @@ emit_once() {
     ${args[@]+"${args[@]}"} >/dev/null 2>&1 </dev/null
 }
 emit() { emit_once "$@" || true; }
+# when the round began, in epoch seconds: set just before review_opened
+ROUND_STARTED=''
 
 # The run-mode checkout. The EXIT trap removes it on every exit the shell
 # handles - success, failure, INT, TERM. A SIGKILL runs no trap, so the next
@@ -213,6 +239,7 @@ set_crew_activity "$spec"
 # small spec lookup above supplies the authored brief and refuses a nonexistent
 # task; the minutes-long engine invocation remains entirely bracketed by this
 # event and agent_finished.
+ROUND_STARTED="$(date +%s)"
 emit --type review_opened --en "round $ROUND on $TASK" --tw "$TASK 第 $ROUND 輪審核"
 emit_status "Review adapter starting on $TASK" "開始審核 $TASK"
 
@@ -462,35 +489,104 @@ closed_list() {
   done
 }
 
-# Given --pr, every diff round is shown the evidence a diff cannot carry, as
-# information only (a run-mode round is shown none of it), bound to
-# the exact head under review (T-088): the head's SHA, the required check's
-# run for that commit, and the head's gate summary when state/ has one.
-# It was added so a closed-list item asking for green CI and gates could be
-# closed (T-067, round nine); since the captain's 2026-09-25 decision no item
-# may ask for them - CI and the gates are firstmate's merge gate - and the
-# section stays as information.
+# Given --pr, every round, in either mode, is shown what the machine found
+# on the exact head under review (T-088, T-153): the head's SHA; the required
+# check's run for that commit; every CI job's result; the failing assertions
+# with their log lines, from each failed job's log; the fail-first report
+# (bin/fm-failfirst.sh, the `fail-first` job's artifact); and the head's gate
+# summary when state/ has one. The machine runs the tests, fail-first
+# included, on GitHub's runner, which has no outer sandbox; the reviewer
+# judges with what it found, and re-runs none of it in its own sandbox,
+# where the suites that start rounds cannot run (captain, 2026-09-29).
 #
 # The check comes from GitHub's check runs for the commit itself, and a run
 # that names another head is dropped: the pull request's own checks follow
 # whatever head it has now, which need not be the head this round reviews.
+
+# required_names: the required checks' names, one per line; nothing when
+# they cannot be read. From the output, not the exit status: gh's exit code
+# reports the checks' state, and a red check is exactly what must be shown.
+required_names() {
+  $GH pr checks "$PR" --required --json name --jq '.[].name' 2>/dev/null </dev/null | awk 'NF && !s[$0]++'
+}
+# check_runs_of <sha> <query>: GitHub's check runs for that commit, as it
+# answers them; status 1 when gh could not, or answered something else
+check_runs_of() {
+  local got
+  got="$($GH api "repos/{owner}/{repo}/commits/$1/check-runs?$2" 2>/dev/null </dev/null)" || return 1
+  jq -e '.check_runs | type == "array"' >/dev/null 2>&1 <<<"$got" || return 1
+  printf '%s' "$got"
+}
+
+# The reviewer starts once the head's required checks have finished, so it
+# is handed their results rather than a run still going (T-153): every
+# required check whose runs for this head GitHub answers is waited on until
+# its latest run for the head is completed, for at most FM_REVIEW_CI_WAIT
+# seconds (default 1200), asked every FM_REVIEW_CI_POLL (default 30). A check
+# whose runs cannot be read is not waited on - it is said to be unknown - and
+# nothing is waited on without --pr. What is still running when the bound is
+# reached is said in the prompt, by name.
+CI_WAITED=0; CI_PENDING=''
+ci_wait() {
+  local sha names name runs status start now told=''
+  sha="$R_HEAD"; [ -n "$sha" ] || return 0
+  names="$(required_names)"; [ -n "$names" ] || return 0
+  start="$(date +%s)"
+  while :; do
+    CI_PENDING=''
+    while IFS= read -r name; do
+      runs="$(check_runs_of "$sha" "check_name=$(jq -rn --arg n "$name" '$n|@uri')")" || continue
+      status="$(jq -r --arg sha "$sha" --arg name "$name" '
+        [.check_runs[] | select(.head_sha == $sha and .name == $name)] | max_by(.id) // {} | .status // "missing"
+      ' <<<"$runs" 2>/dev/null)"
+      [ "$status" = completed ] || CI_PENDING="${CI_PENDING:+$CI_PENDING, }$name"
+    done <<<"$names"
+    now="$(date +%s)"; CI_WAITED=$((now - start))
+    [ -n "$CI_PENDING" ] && [ "$CI_WAITED" -lt "$CI_WAIT" ] || break
+    if [ -z "$told" ]; then
+      told=1
+      emit_status "Waiting for CI on $TASK's head before the review: $CI_PENDING" \
+        "審核前等待 $TASK 的 CI 完成：$CI_PENDING"
+    fi
+    sleep "$(( CI_WAIT - CI_WAITED < CI_POLL ? CI_WAIT - CI_WAITED : CI_POLL ))"
+  done
+}
+
+# failed_lines <job id>: a failed job's failing assertions and the lines
+# around them, from its log: each assertion line ending FAIL with the detail
+# line under it, each red suite or stage (`  x ...`), and the runner's own
+# errors - timestamps and colour codes off, at most 80 lines.
+failed_lines() {
+  local log
+  log="$($GH run view --job "$1" --log-failed 2>/dev/null </dev/null)" || return 1
+  printf '%s\n' "$log" | sed -E $'s/\033\\[[0-9;]*m//g; s/^[^\t]*\t[^\t]*\t//; s/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z ?//' |
+    awk '/FAIL[[:space:]]*$/ { print; d = 1; next }
+         d && /^      / { print; d = 0; next }
+         { d = 0 }
+         /^[[:space:]]*x / || /##\[error\]/ { print }' | head -n 80
+}
+
 head_evidence() {
-  local sha names name runs shown fence
+  local sha names name runs shown fence all lines rid dir
   printf '\n# The head under review\n'
   if ! sha="$(git rev-parse --verify -q "$BRANCH^{commit}")"; then
     printf '\nThe head of %s could not be resolved, so no CI or gate result can be tied to it.\n' "$BRANCH"
     return 0
   fi
   printf '\nHead SHA: %s\n' "$sha"
+  if [ -n "$CI_PENDING" ]; then
+    printf '\nThis round waited %s seconds for CI, its bound, and started with these required checks still running for this head, or not yet started: %s. Their results below are not final.\n' \
+      "$CI_WAITED" "$CI_PENDING"
+  elif [ "$CI_WAITED" -gt 0 ]; then
+    printf '\nThis round waited %s seconds for the required checks to finish for this head before it started.\n' "$CI_WAITED"
+  fi
   printf '\n## The required check for this head, from GitHub\n'
-  # read from the output, not the exit status: gh's exit code reports the
-  # checks' state, and a red check is exactly what must be shown
-  names="$($GH pr checks "$PR" --required --json name --jq '.[].name' 2>/dev/null </dev/null | awk 'NF && !s[$0]++')"
+  names="$(required_names)"
   if [ -z "$names" ]; then
     printf '\nThe required check for head %s could not be read from GitHub, so its CI result is unknown.\n' "$sha"
   else
     while IFS= read -r name; do
-      if ! runs="$($GH api "repos/{owner}/{repo}/commits/$sha/check-runs?check_name=$(jq -rn --arg n "$name" '$n|@uri')" 2>/dev/null </dev/null)"; then
+      if ! runs="$(check_runs_of "$sha" "check_name=$(jq -rn --arg n "$name" '$n|@uri')")"; then
         printf '\nThe runs of the required check %s for head %s could not be read from GitHub, so its CI result for this head is unknown.\n' "$name" "$sha"
         continue
       fi
@@ -504,6 +600,61 @@ head_evidence() {
         printf '\nNo run of the required check %s was found for head %s, so its CI result for this head is unknown.\n' "$name" "$sha"
       fi
     done <<<"$names"
+  fi
+  # Every job, not only the required one: `ci` only says that some job
+  # failed, and which one is what the reviewer needs. The latest run of each
+  # name for exactly this head.
+  # Unread, each of the three sections still stands and says what was not
+  # fetched: a missing section would read as "nothing failed".
+  printf '\n## Every CI job for this head\n'
+  if ! runs="$(check_runs_of "$sha" "per_page=100")"; then
+    printf '\nThe CI jobs of head %s could not be read from GitHub, so their results are unknown.\n' "$sha"
+    printf '\n## Failing assertions, from the failed jobs'"'"' logs\n'
+    printf '\nNot available: the CI jobs of head %s could not be read, so which assertions failed is unknown.\n' "$sha"
+    printf '\n## The fail-first report\n'
+    printf '\nNot available: the CI jobs of head %s could not be read, so no fail-first report was fetched.\n' "$sha"
+  else
+    all="$(jq -c --arg sha "$sha" '[.check_runs[] | select(.head_sha == $sha)] | group_by(.name) | map(max_by(.id)) | sort_by(.name)' <<<"$runs")"
+    if [ "$(jq 'length' <<<"$all")" = 0 ]; then
+      printf '\nNo CI job has run for head %s yet.\n' "$sha"
+    else
+      printf '\n'
+      jq -r '.[] | "- \(.name): \(.conclusion // "none yet, status \(.status)") (\(.details_url // .html_url))"' <<<"$all"
+    fi
+    printf '\n## Failing assertions, from the failed jobs'"'"' logs\n'
+    fence="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+    if [ "$(jq '[.[] | select(.conclusion == "failure" or .conclusion == "timed_out")] | length' <<<"$all")" = 0 ]; then
+      printf '\nNo CI job failed for this head.\n'
+    fi
+    while IFS=$'\t' read -r id name; do
+      [ -n "$id" ] || continue
+      if ! lines="$(failed_lines "$id")"; then
+        printf '\nThe log of the failed job %s could not be read from GitHub.\n' "$name"
+      elif [ -z "$lines" ]; then
+        printf '\nThe failed job %s logged no failing assertion line; read its log for why.\n' "$name"
+      else
+        printf '\n%s, verbatim from its log (trimmed to the failing lines):\n\n----- begin log %s -----\n%s\n----- end log %s -----\n' \
+          "$name" "$fence" "$lines" "$fence"
+      fi
+    done < <(jq -r '.[] | select(.conclusion == "failure" or .conclusion == "timed_out") | "\(.id)\t\(.name)"' <<<"$all")
+    # The fail-first report is the fail-first job's artifact; the job's run
+    # is the one its details URL names.
+    printf '\n## The fail-first report\n'
+    rid="$(jq -r '.[] | select(.name == "fail-first") | (.details_url // .html_url // "") | capture("/actions/runs/(?<r>[0-9]+)").r // empty' <<<"$all" 2>/dev/null)"
+    dir="$work/fail-first"
+    if [ -z "$(jq -r '.[] | select(.name == "fail-first") | .name' <<<"$all")" ]; then
+      printf '\nNo fail-first job has run for head %s, so there is no fail-first report.\n' "$sha"
+    elif [ -n "$rid" ] && rm -rf "$dir" && mkdir -p "$dir" &&
+         $GH run download "$rid" -n fail-first-report -D "$dir" >/dev/null 2>&1 </dev/null &&
+         [ -s "$dir/fail-first.md" ]; then
+      printf '\nFrom the fail-first job'"'"'s artifact, verbatim:\n\n----- begin fail-first report %s -----\n' "$fence"
+      cat "$dir/fail-first.md"
+      [ -z "$(tail -c1 "$dir/fail-first.md")" ] || printf '\n'
+      printf -- '----- end fail-first report %s -----\n' "$fence"
+    else
+      printf '\nThe fail-first job ran for head %s (%s), but its report could not be read from GitHub.\n' \
+        "$sha" "$(jq -r '.[] | select(.name == "fail-first") | .conclusion // "none yet, status \(.status)"' <<<"$all")"
+    fi
   fi
   printf '\n## The gates for this head\n'
   # The whole file, unfiltered: a filter shows a summary in any other shape
@@ -552,6 +703,9 @@ reviewed_line() {  # reviewed_line <APPROVE|REJECT>
 work="$FM_RUN_DIR/review"
 mkdir -p "$work"
 prompt="$work/prompt.md"
+# the head's required checks first, bounded, so the prompt carries their
+# results (T-153); nothing to wait on without a pull request
+[ -z "$PR" ] || ci_wait
 {
   cat "${FM_CODE_ROOT:-$REPO}/skills/reviewer/SKILL.md"
   printf '\n---\n\n# The task\n\n```json\n%s\n```\n' "$spec"
@@ -562,11 +716,9 @@ prompt="$work/prompt.md"
   elif [ "$ROUND" -ge 3 ]; then
     printf '\nThis is round three or later. If the worker has posted ASK-PASS-CRITERIA, answer with the complete numbered list and then post CRITERIA-COMPLETE:%s.\n' "$TASK"
   fi
-  # A run-mode reviewer judges the head by running it, so it is shown no CI
-  # and no gates and fetches nothing from GitHub for them: both are
-  # firstmate's merge gate, never a review criterion (captain, 2026-09-25).
-  # A diff round keeps the head section, as information only.
-  [ -z "$PR" ] || [ "$REVIEW_MODE" = run ] || head_evidence
+  # Either mode: the reviewer judges with what CI found on this head, and
+  # re-runs none of it (T-153, captain 2026-09-29)
+  [ -z "$PR" ] || head_evidence
   printf '\n---\n\n# The diff under review\n\n```diff\n'
   # the change the REVIEWED line names, not whatever the branch is by now
   if [ -n "$R_BASE" ]; then git diff "$R_BASE" "$R_HEAD"; else git diff "$BASE...$BRANCH"; fi
@@ -590,16 +742,20 @@ if [ "$REVIEW_MODE" = run ]; then
     printf 'and removed when it ends: `%s`. It is your working directory.\n' "$CHECKOUT"
     printf '`fm/head` is the head under review, checked out detached; `fm/base` is %s.\n' "$BASE"
     printf '`git diff fm/base...fm/head` is the diff above.\n\n'
-    printf 'You may run commands here: the project'"'"'s declared commands below and git.\n'
+    printf 'You may run small commands here to check a claim: reading, grepping, git, a\n'
+    printf 'single script invocation that needs no second sandbox.\n'
     printf 'You may not push, comment on or edit the pull request, touch the task'"'"'s\n'
     printf 'worktree, or write anywhere but this checkout and the round'"'"'s own temp directory.\n'
     printf 'The engine'"'"'s own permissions enforce that, not this text; fm-review.sh posts\n'
     printf 'your verdict to the pull request. Commands reach the network only for these\n'
     printf 'hosts: %s. No GitHub host is among them, so gh has nothing to talk to; the\n' "${FM_REVIEW_NETWORK:-none}"
-    printf 'base, the head and the diff are all in this checkout. You are shown no CI and\n'
-    printf 'no gate results, and need none: you judge the head by what you run here. CI\n'
-    printf 'and the gates are firstmate'"'"'s merge gate, not a criterion of this\n'
-    printf 'review, so do not wait on them, require them or keep an item open for them. The\n'
+    printf 'base, the head and the diff are all in this checkout. The tests have been run\n'
+    printf 'by the machine: the head section above carries what CI found on this head -\n'
+    printf 'each job'"'"'s result, the failing assertions and the fail-first report - when\n'
+    printf 'the round was given the pull request. Green CI and gates are still\n'
+    printf 'firstmate'"'"'s merge gate, not a criterion of this review, so do not require\n'
+    printf 'them or keep an item open for them; a red job points you at a defect you then\n'
+    printf 'show from the diff. The\n'
     printf 'toolchain'"'"'s caches (XDG_CACHE_HOME, bun, Playwright, npm, pip, Go) point into\n'
     printf 'this round'"'"'s own temp directory ($TMPDIR), so `setup` writes where it may and\n'
     printf 'starts from empty caches: it downloads what it installs. A command the sandbox\n'
@@ -607,21 +763,21 @@ if [ "$REVIEW_MODE" = run ]; then
     printf 'read, not run, rather than work around it. Run every command to completion in\n'
     printf 'the foreground: this round is one turn, which ends when your answer does, so a\n'
     printf 'job left running in the background is never checked on and never finishes\n'
-    printf 'before the verdict is due. A run too long for one command is not shortened\n'
-    printf 'by backgrounding it - split it into the suites `test` names and run each one,\n'
-    printf 'in the foreground, to its own end before starting the next.\n\n'
+    printf 'before the verdict is due.\n\n'
     printf 'The project'"'"'s contract, from this checkout'"'"'s config.yaml:\n\n'
     for f in setup check check_env tests test docs; do contract_line "$f"; done
     printf '\nDo this, in order:\n\n'
-    printf '1. Run `setup`. Do not run the full `check`: it is the required GitHub\n'
-    printf '   check on this same head, which firstmate verifies at the merge gate.\n'
-    printf '2. Run every test file the diff adds or changes - through `test` when it is\n'
-    printf '   declared - and every suite that exercises a changed non-test file. A\n'
-    printf '   stage a suite says it skipped is unverified, not passed.\n'
-    printf '3. Prove fail-first. Restore the base version of every changed non-test file\n'
-    printf '   (`git checkout fm/base -- <file>`; remove a file the diff adds), run the\n'
-    printf '   changed tests again and require red. Name each assertion that went red.\n'
-    printf '   Then put the head back with `git checkout fm/head -- .`.\n'
+    printf '1. Read what CI found on this head, in the head section: each job'"'"'s\n'
+    printf '   result, the failing assertions with their log lines, and the fail-first\n'
+    printf '   report. Do not run the full `check`: it is the required GitHub check on\n'
+    printf '   this same head, which firstmate verifies at the merge gate. Run no suite\n'
+    printf '   that starts rounds, a board or a browser: the machine ran them where they\n'
+    printf '   can run.\n'
+    printf '2. Judge the diff against the spec with that evidence. Fail-first is not\n'
+    printf '   yours to prove by hand: read the report, and challenge a test the change\n'
+    printf '   relies on that it lists only as a guard - green on base too.\n'
+    printf '3. Check a claim with a small command where reading is not enough: reading,\n'
+    printf '   grepping, git, a single script invocation that needs no second sandbox.\n'
     printf '4. End with two lists before the verdict: **Executed** - every command you\n'
     printf '   ran and its result; **Read, not run** - every claim you checked only by\n'
     printf '   reading. Evidence you did not execute is never reported as executed.\n'

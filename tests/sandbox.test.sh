@@ -245,6 +245,11 @@ mkdir -p "$t/bin"
 cat > "$t/bin/sandbox-exec" <<S
 #!/usr/bin/env bash
 [ "\$1" = -f ] || exit 99
+# It applies no profile, so it answers fm-sandbox's loopback check before the
+# round the way a profile that holds does: run behind it, the check would
+# bind and connect on the machine running the suite, the board's port
+# included (T-153). What the check does is the loopback cases' own stand-in.
+case " \$* " in *" fm-loopback-check "*) echo checked; exit 0 ;; esac
 printf '%s\n' "\$2" > "$t/profile.path"
 while IFS= read -r l; do printf '%s\n' "\$l"; done < "\$2" > "$t/profile.sb"
 shift 2
@@ -284,6 +289,16 @@ assert_contains "$prof" '(allow network-bind (local ip "localhost:*"))' "a round
 assert_contains "$prof" '(allow network-outbound (remote ip "localhost:*"))' "and connect to them"
 assert_contains "$prof" '(deny network-outbound (remote ip "localhost:4173"))' "but never to the board's port"
 assert_contains "$prof" '(deny network-outbound (remote ip "localhost:5000"))' "nor to a listener older than the round"
+# T-153: nor bound or accepted on, which the outbound deny alone left open -
+# a suite's fixture board took the captain's 127.0.0.1:4173 while it was down
+assert_contains "$prof" '(deny network-bind network-inbound (local ip "localhost:4173"))' \
+  "and the board's port can be neither bound nor accepted on"
+assert_contains "$prof" '(deny network-bind network-inbound (local ip "localhost:5000"))' \
+  "nor a listener's older than the round"
+n_bind="$(grep -n 'allow network-bind (local ip "localhost:\*")' <<< "$prof" | cut -d: -f1)"
+n_bdeny="$(grep -n 'deny network-bind network-inbound (local ip "localhost:4173")' <<< "$prof" | cut -d: -f1)"
+assert_eq "1" "$([ -n "$n_bind" ] && [ -n "$n_bdeny" ] && [ "$n_bdeny" -gt "$n_bind" ] && echo 1)" \
+  "the deny follows the loopback allow it carves the port out of"
 assert_eq "" "$(grep 'allow network' <<< "$prof" | grep -v '"localhost:' || true)" \
   "and nothing but loopback is allowed directly"
 n_deny="$(grep -n 'deny network-outbound (remote ip "localhost:5000")' <<< "$prof" | cut -d: -f1)"
@@ -292,9 +307,13 @@ assert_eq "1" "$([ -n "$n_deny" ] && [ -n "$n_proxy" ] && [ "$n_proxy" -gt "$n_d
   "the round's own proxy stays reachable though it was listening first"
 FM_PORT=4999 mac profile --policy="$P" --root="$root" --proxy-port=4242 --listening= > "$t/p2"
 assert_contains "$(cat "$t/p2")" '(remote ip "localhost:4999")' "the board's port is FM_PORT when that is set"
+assert_contains "$(cat "$t/p2")" '(deny network-bind network-inbound (local ip "localhost:4999"))' \
+  "for binding as for connecting"
 unknown="$(mac profile --policy="$P" --root="$root" --proxy-port=4242 --listening=unknown)"
 assert_eq '(allow network-outbound (remote ip "localhost:4242"))' "$(grep 'allow network' <<< "$unknown")" \
   "with the listeners unknown, the proxy is the only port reachable"
+assert_contains "$unknown" '(deny network-bind network-inbound (local ip "localhost:4173"))' \
+  "and the board's port is denied by name there too, the listeners unknown (T-153)"
 assert_contains "$prof" "(deny file-write*)" "writes are denied"
 wline="$(grep '^(allow file-write\*' <<< "$prof")"
 assert_contains "$wline" "(subpath \"$root\")" "but for the round's root"
@@ -760,10 +779,19 @@ prof="\$2"; shift 2
 while IFS= read -r l; do printf '%s\n' "\$l"; done < "\$prof" > "$t/lo.profile.sb"
 case " \$* " in
   *" fm-loopback-check "*)
-    printf '%s\n' "\$*" >> "$t/lo.checks"
+    # only the marker and the probes after it: the check's own source is an
+    # argument too, and names 'bind:' itself (T-153)
+    probes=''; seen=0
+    for a in "\$@"; do
+      if [ "\$seen" = 1 ]; then probes="\$probes \$a"
+      elif [ "\$a" = fm-loopback-check ]; then seen=1
+      fi
+    done
+    printf 'fm-loopback-check%s\n' "\$probes" >> "$t/lo.checks"
     wild=0; grep -qF '(allow network-outbound (remote ip "localhost:*"))' "\$prof" && wild=1
     case "\${LO_MODE:-open}:\$wild" in
-      holds:*|tight:0) echo checked; exit 0 ;;
+      holds:*|tight:0|bindleak:0) echo checked; exit 0 ;;
+      bindleak:1) echo checked; echo "bind:\$FM_PORT"; exit 0 ;;
       broken:*) exit 1 ;;
     esac ;;
 esac
@@ -775,9 +803,13 @@ pol worker 'vendor: mock
 policy:
   procs: 1000000
 '
-lo_round() {   # lo_round <mode> -> exit code; stderr in $t/lo.err
+# The board's port for these rounds is one of the suite's own that nothing
+# holds, never the operator's 4173: behind a stand-in that plays no kernel
+# the check really binds it (T-153).
+fport="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+lo_round() {   # lo_round <mode> [board port] -> exit code; stderr in $t/lo.err
   rm -f "$t/lo.profile.sb" "$t/lo.checks"
-  LO_MODE="$1" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec-lo" PATH="$t/lobin:$PATH" \
+  LO_MODE="$1" FM_PORT="${2:-$fport}" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec-lo" PATH="$t/lobin:$PATH" \
     "$SB" run --policy="$t/worker.json" --root="$root" --ctl="$t/ctl" -- "$t/seven.sh" </dev/null 2>"$t/lo.err"
   echo $?
 }
@@ -791,6 +823,10 @@ assert_contains "$(cat "$t/lo.profile.sb" 2>/dev/null)" "$wild" "and it keeps lo
 assert_contains "$(cat "$t/lo.err")" "loopback: the round's profile allows its proxy's port" \
   "which it says"
 assert_contains "$(grep 'loopback: ' "$t/lo.err")" "closed to it: $lport" "naming the ports tried and closed to it"
+assert_contains "$(cat "$t/lo.checks" 2>/dev/null)" "bind:$fport" \
+  "and, the board's port not listening, whether a round could bind it (T-153)"
+assert_contains "$(grep 'loopback: ' "$t/lo.err")" "the port of the board, $fport, not listening, cannot be bound" \
+  "which it says too"
 lo_proxy="$(sed -n 's/.*allow network-outbound (remote ip "localhost:\([0-9][0-9]*\)").*/\1/p' "$t/lo.profile.sb" | tail -1)"
 assert_lacks " $(cat "$t/lo.checks" 2>/dev/null) " " $lo_proxy " "the round's own proxy is not tried: it is meant to be reached"
 assert_eq "7" "$(lo_round tight)" "denials that do not hold: the round still runs"
@@ -809,6 +845,40 @@ assert_contains "$(cat "$t/lo.err")" "cannot try the profile's loopback denials"
 assert_contains "$(cat "$t/lo.err")" "loopback: the round's profile allows it no port but its proxy's" \
   "and which profile it got"
 assert_lacks "$(cat "$t/lo.profile.sb" 2>/dev/null)" "$wild" "with no loopback but its proxy"
+# T-153: a profile that would let a round bind the board's port, while the
+# board is down, is not relied on either: the round gets no loopback but its
+# proxy, and says which bind got through
+assert_eq "7" "$(lo_round bindleak)" "a bind of the board's port that gets through: the round still runs"
+assert_contains "$(cat "$t/lo.err")" "a bind of the board's port $fport, which nothing held" "and says so"
+assert_contains "$(cat "$t/lo.err")" "loopback: the round's profile allows it no port but its proxy's" \
+  "behind a profile with no loopback but its proxy"
+assert_lacks "$(cat "$t/lo.profile.sb" 2>/dev/null)" "$wild" "which binds nothing on loopback"
+# a board that is listening holds its port: no round can bind it, and it is
+# only tried by connecting, like every other listener
+assert_eq "7" "$(lo_round holds "$lport")" "the board listening: the round runs"
+assert_lacks "$(cat "$t/lo.checks" 2>/dev/null)" "bind:" "and no bind is tried on a port something already holds"
+assert_contains "$(cat "$t/lo.checks" 2>/dev/null)" "fm-loopback-check $lport" "while connecting to it is"
+# whether the board's port is held is asked of the port, not read from a
+# listing: a netstat whose lines cannot be parsed still tries no bind on a
+# board that is listening (T-153; the Linux runner's netstat)
+mkdir -p "$t/lobin-garbled"; cp "$t/psbin/ps" "$t/lobin-garbled/ps"
+printf '#!/bin/sh\nprintf "Active Internet connections\\nsomething else entirely\\n"\n' > "$t/lobin-garbled/netstat"
+chmod +x "$t/lobin-garbled/netstat"
+rm -f "$t/lo.profile.sb" "$t/lo.checks"
+LO_MODE=holds FM_PORT="$lport" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec-lo" PATH="$t/lobin-garbled:$PATH" \
+  "$SB" run --policy="$t/worker.json" --root="$root" --ctl="$t/ctl" -- "$t/seven.sh" </dev/null 2>"$t/lo.err"
+assert_eq "7" "$?" "the board listening where netstat shows nothing: the round runs"
+assert_lacks "$(cat "$t/lo.checks" 2>/dev/null)" "bind:" "and no bind is tried on the board's port it holds"
+assert_contains "$(cat "$t/lo.checks" 2>/dev/null)" "fm-loopback-check $lport" "it is tried by connecting, as a listener"
+assert_contains "$(cat "$t/lo.profile.sb" 2>/dev/null)" "(deny network-bind network-inbound (local ip \"localhost:$lport\"))" \
+  "and its deny line is in the profile"
+# Linux: the round's loopback is its network namespace's own, so a bind
+# there is never the board's and nothing is tried before the round
+rm -f "$t/lo.checks"
+FM_PORT="$fport" FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$t/bin/bwrap" PATH="$t/lobin:$PATH" \
+  "$SB" run --policy="$t/worker.json" --root="$root" --ctl="$t/ctl" -- "$t/seven.sh" </dev/null 2>"$t/lo.err"
+assert_eq "7" "$?" "on Linux the round runs"
+assert_lacks "$(cat "$t/lo.err")" "the board's port" "and no bind of the board's port was tried: the namespace is the round's"
 kill "$lsn_pid" 2>/dev/null; wait "$lsn_pid" 2>/dev/null
 # the policy the cases below were written against
 pol worker 'policy:

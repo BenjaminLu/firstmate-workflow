@@ -524,13 +524,13 @@ from the EXIT trap on every exit the shell handles; a SIGKILL runs no trap,
 so the next run-mode round sweeps any `fm-review.*` checkout its owning round
 no longer holds a kernel `flock` on (T-123; §13.1 says why not a pid), not
 one whose recorded pid merely fails `kill -0`. The prompt adds the branch's own
-project contract and asks for `setup`, `check`, the touched suites, fail-first
-against the base versions of the changed non-test files, run every one of
-them to completion in the foreground - splitting a check too slow for one
-command into suites run one after another rather than backgrounding it,
-since the round's one turn ends when its answer does and a backgrounded job
-is never checked on (T-123) - and an **Executed**
-/ **Read, not run** account. The adapter, not the prompt, confines the engine:
+project contract and asks the reviewer to read what CI found on the head,
+judge the diff with it, and check a claim with a small command where reading
+is not enough - never the full `check`, never a suite that starts rounds, a
+board or a browser, and never fail-first by hand, which the `fail-first` CI
+job does (T-153) - every command run to completion in the foreground, since
+the round's one turn ends when its answer does and a backgrounded job is
+never checked on (T-123) - and an **Executed** / **Read, not run** account. The adapter, not the prompt, confines the engine:
 `FM_RUN_REVIEW=1` and `FM_REVIEW_CHECKOUT` tell it the round is a run-mode one,
 and only an adapter carrying a `# fm:review-run` line may take it -
 `fm_review_run_chain` drops the others from the chain, refuses a head that
@@ -555,15 +555,13 @@ adapter was reached. The declared commands write their caches under
 `npm_config_cache` into its own temp directory; `setup` downloads afresh each
 round. The engine starts without the launcher's `FM_*`, `HERDR_*`, `GIT_*`
 and GitHub-token variables: `fm_identity` exports `FM_ROOT` at the task's
-repository, and the clone's scripts choose their tree from it, so a `check`
-the reviewer ran would otherwise gate another tree than the head under review.
-The reviewer has no GitHub access at all, and needs none: it judges the head
-by running it, so a run-mode round fetches no CI, no gate results and no pull
-request state for it, and its prompt carries neither T-088's head section nor
-any other CI listing (captain, 2026-09-25). CI and the gates are firstmate's
-merge gate in both modes (§6, the merge double check). The only thing it
-still reads from GitHub is the closed-list protocol's comments (§7), which
-are not evidence about the head. What stops a push is the
+repository, and the clone's scripts choose their tree from it, so a script
+the reviewer ran would otherwise act on another tree than the head under review.
+The reviewer has no GitHub access at all, and needs none: `fm-review.sh`,
+outside the round, reads what CI found on the head and puts it in the prompt,
+in either mode (§7; T-153). Green CI and the gates are still firstmate's
+merge gate in both modes (§6, the merge double check), not a review
+criterion. What stops a push is the
 missing remote and the unreachable GitHub; the deny list for push, gh writes
 and raw HTTP matches a literal command prefix and is only a second guard.
 Both modes emit `review_opened` and
@@ -588,6 +586,15 @@ the additive `data.review_outcome: "rejected"` contract. T-035 owns emitting
 that datum after it has authoritative final-answer evidence; old logs remain
 truthful without it. Crew phase follows each actor's dispatched role, so a
 reviewer is reviewing even while a worker on the same task has another phase.
+
+A round's result records its wall-clock (T-153): every `approved` and
+`review_failed` a round emits carries `data.wall_clock {started, ended,
+seconds, ci_wait}` - epoch seconds from just before its `review_opened` to
+the verdict, and how many of them it spent waiting for the head's CI.
+`/api/state` gives each task `last_review {actor, seconds, outcome}` for its
+latest ended round: the verdict's own `wall_clock.seconds` where it carries
+one, else the log's time from that reviewer's `review_opened` to its verdict;
+`null` before any round has ended. Showing it on the review card is T-145's.
 
 The judgement about outages can never be right on wording alone, because
 there is no phrase a model cannot write — this repository contains
@@ -970,9 +977,10 @@ grilling  ->  /prototype  ->  [captain green-lights]  ->  design.md + design/tas
                                        |
                           *  fm-gate.sh, the six gates  *
                                        |
-            fm-review.sh: reviewer sees the diff, the spec, the criteria
-         (diff mode: and, given the PR, the head's check and gate results,
-          as information; run mode: runs the tests in a fresh clone instead)
+    fm-review.sh: given the PR, waits (bounded) for the head's required checks;
+       the reviewer sees the diff, the spec, the criteria and what CI found -
+          every job, the failing assertions, the fail-first report - and
+         judges; run mode adds a fresh clone to check claims in (T-153)
                                        |
      not passed -> worker revives and fixes the closed list -> back to the gates
                                        |
@@ -1098,9 +1106,11 @@ verify provenance and current readiness explicitly. Any red gate
 requires remediation regardless of praise or an `approved` event.
 
 **Round order and the merge double check (captain, 2026-09-25).** A review
-round starts as soon as the worker hands back, through `fm-review.sh`, and
-never waits on CI: CI and the gates are not a review criterion in
-either mode. A merge card needs two independent checks on the same current
+round starts as soon as the worker hands back, through `fm-review.sh`. Given
+`--pr`, the round itself waits for the head's required checks, bounded, before
+it starts the reviewer, so the reviewer is handed their results (T-153; §7);
+nobody else holds a round for CI. Green CI and the gates are not a review
+criterion in either mode. A merge card needs two independent checks on the same current
 head: the reviewer's `APPROVE:<task-id>` for that head, and firstmate's own
 reading of that head's required GitHub check (green) and the six gates
 (`fm-gate.sh`). Neither substitutes for the other - an approval is not green
@@ -1230,10 +1240,9 @@ either, and the prompt is unchanged.
 A diff cannot show CI or gates, so a closed-list item asking for them could
 never be closed (T-067, round nine). Current-head CI and gates are firstmate's
 merge gate, not a review criterion (§6, the merge double check), so no
-closed-list item may ask for them. In diff mode the launcher shows the
-reviewer what exists for the head, as information only (T-088); a run-mode
-round judges the head by running it and gets no head section and no CI from
-GitHub (T-066). Given `--pr`, every diff-mode round's prompt gets a **The head under
+closed-list item may ask for them. The launcher shows the reviewer what
+exists for the head, in either mode (T-088; T-153). Given `--pr`, every
+round's prompt gets a **The head under
 review** section before the diff, verbatim and labelled: the head SHA, from
 the local branch the diff is taken from; for each name `gh pr checks <pr>
 --required --json name` lists, that check's name, conclusion and run URL from
@@ -1245,8 +1254,81 @@ per-run nonce, when that file exists. Its lines are `fm-gate.sh`'s own
 stdout: `  + gate N: …` or `  x gate N: …`. A required check that cannot be
 read, a check with no run for this head, a missing gate summary, and each
 gate the summary has no result line for (it stops at the first red gate, and
-an empty one has none) are stated plainly. Nothing else is added, and a round
-without `--pr` is unchanged.
+an empty one has none) are stated plainly. A round without `--pr` is
+unchanged.
+
+**The machine runs the tests; the reviewer judges (captain, 2026-09-29;
+T-153).** On 2026-09-29 review rounds took 17 minutes to over two hours
+(T-121 r9's ran past 1h50m), most of it re-running suites inside the round's
+sandbox that start rounds of their own. macOS will not apply a sandbox inside
+a sandbox (`sandbox_apply: Operation not permitted`), so those suites failed
+or waited out timeouts there, while GitHub's runner, which has no outer
+sandbox, runs them correctly in minutes. Rounds 1 and 2 of T-153 let a round
+nest inside a round, and review found that it widened trust and loosened the
+sandbox; that work was reverted. Instead:
+
+1. **fm-review.sh waits for the head's CI.** Given `--pr`, in either mode,
+   before the prompt is built it asks GitHub for every required check's runs
+   for the head, and waits until the latest run of each is `completed`, for
+   at most `FM_REVIEW_CI_WAIT` seconds (default 1200), asking every
+   `FM_REVIEW_CI_POLL` (default 30). A check whose runs cannot be read is not
+   waited on; it is stated unknown. While it waits the board is told, in `en`
+   and `zh-TW`. Past the bound the round starts anyway, and the head section
+   names every required check still running, or not yet started. The verdict
+   event's `data.wall_clock` carries `ci_wait`, the seconds of the round
+   spent waiting.
+2. **The head section carries what CI found**, after the required check:
+   every CI job of the head (`gh api .../commits/<sha>/check-runs?per_page=100`,
+   the latest run of each name whose `head_sha` is the head) with its result
+   and run; for each job that failed or timed out, the failing lines of its
+   log (`gh run view --job <id> --log-failed`: each assertion line ending
+   `FAIL` with the detail line under it, each red suite or stage `  x …`,
+   and the runner's `##[error]` lines, timestamps and colour codes removed,
+   at most 80 lines), fenced with a per-run nonce; and the fail-first report,
+   the `fail-first-report` artifact of the run the `fail-first` job's URL
+   names (`gh run download`), fenced the same way. A job list, a log or a
+   report that cannot be read is stated. The three sections are always
+   there: when the job list cannot be read, the failing-assertions and
+   fail-first sections each say "Not available" and why, so the prompt
+   never reads as "nothing failed" from evidence it did not fetch.
+3. **The reviewer judges with that evidence** (skills/reviewer/SKILL.md). It
+   never runs the full check, nor a suite that starts rounds, a board or a
+   browser; it may run small commands that need no second sandbox - reading,
+   grepping, git, a single script invocation - and lists them under
+   **Executed**. Fail-first by hand is no longer its step: it reads the
+   report and challenges a test the report lists only as a guard.
+
+**Fail-first in CI (T-153).** `bin/fm-failfirst.sh <base-ref>` asks gate 5's
+question on GitHub's runner, as the `fail-first` job of every pull request,
+which the required `ci` job needs. From the merge-base of the base ref and
+the head it splits the change into test files (the declared `tests` globs;
+`tests/*`, `*.test.*`, `*.spec.*` when none) and the rest. Behaviour is a
+non-test file under `bin/`, `board/` or `adapters/`. It makes two worktrees of
+the head; in the base one every changed non-test file is restored from the
+merge-base and every file the change adds is removed, while the head's tests
+stay. The declared `setup` - or `--setup`, which CI sets to the dependency
+install alone - runs in each, then every changed test file runs in both,
+through the declared `test` template, at most six at a time, each run with a
+session of its own (T-151). The head is re-run there, beside the base, rather
+than read from CI's shards, so both runs see the same runner. Assertion lines
+(`    <name>    ok|FAIL`, tests/lib.sh's shape) are compared by name and
+occurrence: one that passes on the head and fails on the base, or is never
+reached there because the base run failed, **went red on base**; one that
+passes on both is a **guard**; one failing on the head is listed apart and
+counts neither way. A suite that prints no assertion line counts as red only
+when its base run fails and its head run passes.
+
+The verdict is **not applicable** (exit 0) when the change touches no
+behaviour - docs, skills, tests or CI only - and says why; **fail** (exit 1)
+when it touches behaviour and adds or changes no suite, when no `test` is
+declared, or when no assertion of a changed suite went red on base, naming
+the guards; **pass** (exit 0) when at least one went red. The one reading
+T-153's spec leaves open is taken this way: a behaviour change with no test
+change fails, as gate 5 fails it, rather than being not applicable. The
+report - per suite, the exit of each tree, the assertions red on base by
+name and the guards - goes to stdout, to `--report` (the artifact) and to
+`$GITHUB_STEP_SUMMARY`. It exits 70 when it cannot run (no merge-base, a
+worktree it cannot make, a setup that fails) and 64 on bad usage.
 
 The gate half is not closed yet. Nothing writes that gate summary:
 `fm-run.sh` sends `fm-gate.sh`'s stdout to `/dev/null`, and it is outside
@@ -1943,6 +2025,13 @@ CPUs instead (at least 1, at most 4), printed as `ci: end-to-end: N workers`,
 because four browsers beside four suites on a 4-vCPU runner starved the
 browsers. Every background job and the gate itself trap INT, TERM and HUP,
 so an interrupted gate takes its suites, browsers and logs with it.
+
+One job of the workflow is not a stage of `bin/ci.sh`: `fail-first` runs
+`bin/fm-failfirst.sh` on a pull request's head against its base (§7, T-153),
+with the history (`fetch-depth: 0`) to find the merge-base, and uploads its
+report as the `fail-first-report` artifact. The `ci` job needs it with the
+others; it alone may be `skipped`, and only on an event other than a pull
+request, where there is no base to revert to.
 
 Running in parallel changes no threshold: the budget, every stage, every
 suite, every assertion and the per-suite noise check are what they were.
@@ -3089,7 +3178,27 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
   that could not run behind the profile tightens it the same way. On the
   captain's Mac (macOS 15.7.9) firstmate measured that a port-specific deny
   never carves a port out of a `localhost:*` allow, in either order, so
-  there every round gets the profile with no loopback but the proxy. Every
+  there every round gets the profile with no loopback but the proxy.
+  Binding is the other half (T-153). On 2026-09-29, with the captain's board
+  down, a review round ran `tests/board.test.sh`, and a fixture board bound
+  127.0.0.1:4173 - the board's own address - because the suite's `start_k`
+  passed `FM_PORT="$PORTK"` with `PORTK` empty and Bun reads a variable set
+  but empty as unset; the captain's answers went to the fixture. So the
+  profile also denies `network-bind` and `network-inbound` on the board's
+  port and on every port listening when the round started, after the
+  loopback allow, and writes the board's deny even when the listeners could
+  not be read. While nothing holds the board's port, `run` also binds it
+  behind the profile before the round: a bind that gets through is treated
+  like a connection that does, the round getting no loopback but its proxy,
+  or being refused. Whether something holds the board's port is asked of
+  the port - a plain connect outside the profile - not read from netstat,
+  whose listing can miss it; a port that answers is treated as listening,
+  tried by connecting and never bound. That is macOS only, where loopback is the host's; on
+  Linux the round's network namespace makes any bind the round's own. At the
+  other end `board/server.ts` refuses `FM_PORT` set but not a port, empty
+  included, with exit 64 - it reads the variable through libc's `getenv`,
+  since Bun drops an empty one from `process.env` - and the board suite's
+  helpers refuse an empty port. Every
   macOS round says in one `fm-sandbox: loopback:` line which profile it got
   - its proxy and ports of its own, with the ports tried and closed to it,
   or its proxy alone - and the canary prints that line per vendor, so what

@@ -3,7 +3,9 @@ name: ci
 # --shard into jobs that run in parallel: the fast checks, the bash suites
 # sharded across N jobs, the bun tests, and the browser tests. Do not add a
 # step here that is not in that script, or the two will disagree about what
-# green means. The final `ci` job is the one required status check; it
+# green means. One job is not a piece of that script: `fail-first` runs
+# bin/fm-failfirst.sh on a pull request (T-153), which is gate 5's question
+# asked by the machine, not a stage of the check. The final `ci` job is the one required status check; it
 # needs every other job and fails if any of them failed or was skipped, so
 # branch protection and gate 6 read the same thing they always did (T-134).
 on:
@@ -133,19 +135,60 @@ jobs:
       - name: bin/ci.sh --stage e2e
         run: bash bin/ci.sh --stage e2e
 
+  # Fail-first, run by the machine (T-153): the change's behaviour reverted
+  # to the merge-base, its changed suites run on both trees, and each
+  # assertion that went red on base named. A pull request only: on a push to
+  # main there is no base to revert to. Its report is the job summary and
+  # the fail-first-report artifact, which fm-review.sh puts in the prompt.
+  fail-first:
+    name: fail-first
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: cache bun's install cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+      # the dependencies alone, in each tree: the suites it runs are bash
+      # suites, which need no browser
+      - name: bin/fm-failfirst.sh
+        run: |
+          bash bin/fm-failfirst.sh --setup 'bun install --frozen-lockfile' \
+            --report /tmp/fail-first.md "origin/${{ github.base_ref }}"
+      - name: upload the fail-first report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fail-first-report
+          path: /tmp/fail-first.md
+          if-no-files-found: ignore
+
   # The one required status check (gate 6, branch protection): it needs
   # every job above and fails if any of them failed or was skipped, so a
   # required check that stays named `ci` still means every stage passed.
+  # fail-first alone may be skipped, and only where it does not run: on a
+  # push to main.
   ci:
     name: ci
-    needs: [fast, bash, bun, e2e]
+    needs: [fast, bash, bun, e2e, fail-first]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: every stage passed
         run: |
-          echo "fast=${{ needs.fast.result }} bash=${{ needs.bash.result }} bun=${{ needs.bun.result }} e2e=${{ needs.e2e.result }}"
-          results="${{ needs.fast.result }} ${{ needs.bash.result }} ${{ needs.bun.result }} ${{ needs.e2e.result }}"
+          echo "fast=${{ needs.fast.result }} bash=${{ needs.bash.result }} bun=${{ needs.bun.result }} e2e=${{ needs.e2e.result }} fail-first=${{ needs.fail-first.result }}"
+          ff="${{ needs.fail-first.result }}"
+          if [ "${{ github.event_name }}" != pull_request ] && [ "$ff" = skipped ]; then ff=success; fi
+          results="${{ needs.fast.result }} ${{ needs.bash.result }} ${{ needs.bun.result }} ${{ needs.e2e.result }} $ff"
           for r in $results; do
             if [ "$r" != "success" ]; then
               echo "ci: a required job did not succeed" >&2

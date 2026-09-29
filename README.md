@@ -187,8 +187,9 @@ the board; the answer lands as a `config.yaml` change in a pull request.
 nothing, shows it the skill, the task and the diff. `run` adds a fresh clone
 of the pull request head outside every worktree, removed when the round ends
 (or, after a SIGKILL, by the next run-mode round),
-where the reviewer runs `setup`, `check` and the changed tests and proves
-fail-first against the base. The adapter confines it with the vendor CLI's
+where the reviewer may check a claim with a small command - reading,
+grepping, git, a single script invocation. It runs no suite: the machine does
+(T-153). The adapter confines it with the vendor CLI's
 own permission flags - no settings, hooks or MCP servers from the clone or the
 operator, no writes outside the clone and the temp directory, and no network
 beyond the hosts `network:` lists for `setup` (plain domain names only: never
@@ -199,13 +200,21 @@ Because the sandbox writes only in the clone and the temp directory, the
 round points `XDG_CACHE_HOME`, bun's install cache, Playwright's browsers and
 npm's cache into its own temp directory, so `setup` downloads them each round.
 The engine starts without the launcher's `FM_*`, `HERDR_*`, `GIT_*` and
-GitHub-token variables, so a `check` run in the clone gates the clone, not the
-repository the review was launched from.
-The reviewer has no GitHub access and is shown no CI: it judges the head by
-running it. In both modes CI and the gates are firstmate's merge gate,
-not a review criterion, so a review never waits on CI; a merge card needs
-the reviewer's approval and firstmate's own check of CI and the gates, both
-on the same head. `fm-review.sh` posts the verdict and emits the review's
+GitHub-token variables, so a command run in the clone acts on the clone, not
+the repository the review was launched from.
+
+The machine runs the tests and the reviewer judges (T-153). Every pull
+request's `fail-first` CI job runs `bin/fm-failfirst.sh`, which puts the
+change's non-test files back as the base has them, runs the changed suites on
+both trees and reports each assertion that went red on base, and each guard
+that stayed green. Given `--pr`, `fm-review.sh` waits, bounded
+(`FM_REVIEW_CI_WAIT`, 1200 seconds by default), for the head's required
+checks, and hands the reviewer, in either mode, every CI job's result, the
+failing assertions from the failed jobs' logs and the fail-first report. The
+reviewer itself has no GitHub access. Green CI and the gates are firstmate's
+merge gate, not a review criterion: a merge card needs the reviewer's
+approval and firstmate's own check of CI and the gates, both on the same
+head. `fm-review.sh` posts the verdict and emits the review's
 events in both modes. This repository declares `run`.
 
 ## Firstmate is never blind

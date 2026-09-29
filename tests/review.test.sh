@@ -8,6 +8,9 @@ for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
   unset "$_fm_k" || true
 done
 export HERDR_ENV=0 FM_TRANSPORT=direct
+# A round given --pr waits for the head's required checks (T-153); the
+# fixtures' checks never finish, so no case waits unless it says so
+export FM_REVIEW_CI_WAIT=0
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
@@ -110,6 +113,21 @@ assert_eq "Review the authored task" \
 assert_eq "審查已撰寫的任務" \
   "$(jq -r 'select(.type=="review_opened")|.data.activity["zh-TW"]' "$r/state/events.jsonl")" \
   "the reviewer publishes the authored zh-TW work brief"
+# T-153: the round's result records its own wall-clock - started before its
+# review_opened, ended at the verdict, and the seconds between - on the
+# verdict event /api/state's last_review reads
+wall_clock_ok() {   # wall_clock_ok <verdict type> <events> -> 1 when its latest carries the round's clock
+  jq -rs --arg ty "$1" '
+    (map(select(.type=="review_opened"))|last|.ts|fromdateiso8601) as $o
+    | (map(select(.type==$ty))|last|.data.wall_clock) as $w
+    | if ($w|type)=="object" and ($w.started|type)=="number" and ($w.ended|type)=="number"
+         and $w.started<=$o and $w.ended>=$o and $w.seconds==($w.ended-$w.started)
+      then 1 else 0 end' "$2" 2>/dev/null
+}
+assert_eq "1" "$(wall_clock_ok approved "$r/state/events.jsonl")" \
+  "an approving round's verdict event records its wall-clock: started, ended and seconds"
+assert_eq "null" "$(jq -c 'select(.type=="review_opened")|.data.wall_clock' "$r/state/events.jsonl")" \
+  "and only the verdict does: review_opened carries none"
 
 # praise is not an approval
 d2="$(fixture)"; r2="$d2/repo"; GH2="$(ghstub "$d2")"
@@ -365,6 +383,8 @@ assert_eq "$reject_actor" \
 assert_eq "Review the authored task|審查已撰寫的任務" \
   "$(jq -r 'select(.type=="review_failed")|[.data.activity.en,.data.activity["zh-TW"]]|join("|")' "$r/state/events.jsonl" | tail -1)" \
   "the rejection preserves the authored bilingual activity"
+assert_eq "1" "$(wall_clock_ok review_failed "$r/state/events.jsonl")" \
+  "a rejecting round records its wall-clock the same way (T-153)"
 
 rm -rf "$d"
 
@@ -996,8 +1016,8 @@ assert_eq "1" "$(wc -l < "$tries3" | tr -d ' ')" "and is never retried when noth
 rm -rf "$dret3"
 
 # --- run mode (T-066) --------------------------------------------------------
-# A reviewer that only reads the diff cannot run a test or prove fail-first.
-# In run mode it gets a fresh clone of the head, outside every worktree, which
+# In run mode the reviewer gets a fresh clone of the head, outside every
+# worktree, to check claims in (the tests are CI's since T-153), which
 # the round removes when it ends. The work branch here declares a contract of
 # its own, so the prompt can be shown to carry the branch's, not main's.
 run_fixture() {
@@ -1068,12 +1088,23 @@ sentM="$(cat "$dm/prompt.md")"
 assert_contains "$sentM" "# Run mode" "the run-mode prompt says what the round is"
 assert_contains "$sentM" "$ck" "and names the checkout"
 assert_contains "$sentM" "make check-it" "and carries the contract the branch under review declares"
-assert_contains "$sentM" "git checkout fm/base -- <file>" "and says how to prove fail-first"
+# T-153: the machine runs the tests, fail-first included; the reviewer reads
+# what it found and proves nothing by hand
+assert_lacks "$sentM" "git checkout fm/base -- <file>" "the run-mode steps no longer ask for fail-first by hand"
+assert_lacks "$sentM" "Prove fail-first" "nor name it a step"
+assert_contains "$sentM" "1. Read what CI found on this head, in the head section: each job's
+   result, the failing assertions with their log lines, and the fail-first
+   report." "the first step reads CI's results and the fail-first report"
 # SK-007: the full check is the required GitHub check on the same head, not
 # the reviewer's; the step text says so, apart from the skill it quotes
-assert_contains "$sentM" "1. Run \`setup\`. Do not run the full \`check\`: it is the required GitHub
-   check on this same head" "the run-mode steps tell the reviewer not to run the full check"
+assert_contains "$sentM" "Do not run the full \`check\`: it is the required GitHub check on
+   this same head" "the run-mode steps tell the reviewer not to run the full check"
+assert_contains "$sentM" "Run no suite
+   that starts rounds, a board or a browser" "nor any suite that starts rounds, a board or a browser"
+assert_contains "$sentM" "challenge a test the change
+   relies on that it lists only as a guard" "and to challenge a test fail-first found only green-guarded"
 assert_lacks "$sentM" "Run \`setup\`, then \`check\`" "and no longer tell it to run setup, then check"
+assert_lacks "$sentM" "2. Run every test file the diff adds or changes" "nor to run the changed suites itself"
 assert_contains "$sentM" "**Executed**" "and asks which evidence was executed"
 assert_contains "$sentM" "**Read, not run**" "and which was only read"
 assert_contains "$sentM" "SECRET_WORKER_REASONING" "and still carries the diff"
@@ -1110,12 +1141,12 @@ for cache in xdg bun pw npm; do
 done
 assert_contains "$sentM" "this round's own temp directory (\$TMPDIR)" "and the prompt says where the caches are"
 
-# A run-mode reviewer judges the head by running it. CI and the gates are
-# firstmate's merge gate, not a review criterion (captain, 2026-09-25), so a
-# run-mode round fetches no CI from GitHub and its prompt carries neither
-# T-088's head section nor any other CI listing. This gh answers the way gh
-# does - `pr checks` prints its list and exits 8 for a pending check, `api`
-# returns the head's check runs - so a round that did read CI would show it.
+# T-153: a run-mode reviewer no longer judges the head by running it; the
+# machine ran the tests, and the round is shown what it found exactly as a
+# diff round is. Green CI and the gates are still firstmate's merge gate, not
+# a review criterion (captain, 2026-09-25). This gh answers the way gh does -
+# `pr checks` prints its list and exits 8 for a pending check, `api` returns
+# the head's check runs.
 ghci() {   # ghci <dir> <head oid>
   mkdir -p "$1/stub"
   cat > "$1/stub/gh" <<M
@@ -1140,18 +1171,16 @@ GHj="$(ghci "$dm" "$headM")"; : > "$dm/ghcalls"
 assert_eq "0" "$?" "a run-mode round given a pull request runs"
 sentG="$(cat "$dm/prompt.md")"
 callsG="$(cat "$dm/ghcalls")"
-assert_lacks "$callsG" "pr checks" "a run-mode round reads no checks from GitHub"
-assert_lacks "$callsG" "gh api" "nor any check run"
-assert_lacks "$callsG" "headRefOid" "nor the pull request's state"
+assert_contains "$callsG" "pr checks" "a run-mode round reads the head's checks from GitHub (T-153)"
+assert_contains "$callsG" "gh api" "and their runs"
 assert_contains "$callsG" "gh pr view 9 --json comments" "while the closed-list protocol still reads the comments"
 assert_contains "$callsG" "gh pr comment 9" "and fm-review.sh still posts the verdict"
-assert_fail "grep -qx '# The head under review' '$dm/prompt.md'" "the run-mode prompt has no head-under-review CI section"
-assert_lacks "$sentG" "GitHub evidence" "and no GitHub evidence block"
-assert_lacks "$sentG" "CI_RUN" "and no check run"
-assert_lacks "$sentG" "Conclusion:" "and no CI conclusion at all"
+assert_ok "grep -qx '# The head under review' '$dm/prompt.md'" "the run-mode prompt carries the head-under-review section"
+assert_contains "$sentG" "Conclusion: success" "with the required check's conclusion"
+assert_contains "$sentG" "CI_RUN" "and its run"
 assert_contains "$sentG" "# The closed list" "the closed-list section is still there from round three"
-assert_contains "$sentG" "firstmate's merge gate, not a criterion of this
-review" "and the prompt says CI and the gates are firstmate's merge gate"
+assert_contains "$sentG" "firstmate's merge gate, not a criterion of this review" \
+  "and the prompt says green CI and the gates are firstmate's merge gate"
 # the same gh in a diff round still shows the head section, as information
 printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: diff\n' > "$rm_/config.yaml"
 ( cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHj" FM_SEEN="$dm" \
@@ -1159,6 +1188,136 @@ printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: diff\n' > "$rm_/confi
 assert_ok "grep -qx '# The head under review' '$dm/prompt.md'" "a diff round given a pull request keeps the head section"
 assert_contains "$(cat "$dm/prompt.md")" "Conclusion: success" "with the check this gh reports"
 printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n' > "$rm_/config.yaml"
+
+# T-153: the reviewer starts once the head's required checks have finished,
+# and is handed what CI found: every job's result, the failing assertions
+# with their log lines from each failed job's log, and the fail-first report,
+# the fail-first job's artifact. This gh answers the way GitHub does: the
+# required check's runs per commit, every job's runs for the commit (an older
+# run of a job and a run of another head among them), a failed job's log in
+# `gh run view --log-failed`'s tab-separated shape, and the artifact.
+# GH_PENDING_POLLS is how many times the required check is still running
+# before it completes.
+ghjobs() {   # ghjobs <dir> <head oid>
+  mkdir -p "$1/stub"
+  cat > "$1/stub/gh" <<M
+#!/usr/bin/env bash
+echo "gh \$*" >> "$1/ghcalls"
+case "\$1 \$2" in
+  "pr view") printf '{"comments":[]}\n' ;;
+  "pr checks") printf 'ci\n'; exit 1 ;;
+  "api "*)
+    case "\$2" in
+      *check_name=ci)
+        n="\$(cat "$1/polls" 2>/dev/null || echo 0)"; echo \$((n + 1)) > "$1/polls"
+        if [ "\$n" -lt "\${GH_PENDING_POLLS:-0}" ]; then st=in_progress; c=null; else st=completed; c='"failure"'; fi
+        printf '{"check_runs":[{"id":10,"name":"ci","head_sha":"%s","status":"%s","conclusion":%s,"details_url":"https://github.com/o/r/actions/runs/500/job/10"}]}\n' "$2" "\$st" "\$c" ;;
+      *per_page=100)
+        [ -z "\${GH_JOBS_DOWN:-}" ] || exit 1
+        ff='{"id":13,"name":"fail-first","head_sha":"$2","status":"completed","conclusion":"success","details_url":"https://github.com/o/r/actions/runs/500/job/13"},'
+        [ -z "\${GH_NO_FAILFIRST:-}" ] || ff=''
+        printf '{"check_runs":[%s
+ {"id":11,"name":"bash suites (shard 1/4)","head_sha":"$2","status":"completed","conclusion":"failure","details_url":"https://github.com/o/r/actions/runs/500/job/11"},
+ {"id":12,"name":"fast checks","head_sha":"$2","status":"completed","conclusion":"success","details_url":"https://github.com/o/r/actions/runs/500/job/12"},
+ {"id":9,"name":"fast checks","head_sha":"$2","status":"completed","conclusion":"failure","details_url":"https://github.com/o/r/actions/runs/499/job/OLDER_RUN"},
+ {"id":14,"name":"bun tests","head_sha":"0000000","status":"completed","conclusion":"failure","details_url":"https://github.com/o/r/actions/runs/1/job/OTHER_HEAD_RUN"}]}\n' "\$ff" ;;
+      *) exit 1 ;;
+    esac ;;
+  "run view")
+    [ "\$3 \$4 \$5" = "--job 11 --log-failed" ] || exit 1
+    p='bash suites (shard 1/4)\tUNKNOWN STEP\t2026-09-29T14:33:08.2265145Z '
+    printf "\$p%s\n" \
+      '    a passing assertion                                 ok' \
+      '    the board refuses an empty port                     FAIL' \
+      '      expected [64] got [0]' \
+      '  + tests/review.test.sh' \
+      '  x tests/board.test.sh' \
+      '##[error]Process completed with exit code 1.' ;;
+  "run download")
+    [ -z "\${GH_ARTIFACT_DOWN:-}" ] || exit 1
+    [ "\$3 \$4 \$5" = "500 -n fail-first-report" ] || exit 1
+    d=''; while [ \$# -gt 0 ]; do [ "\$1" = -D ] && d="\${2-}"; shift; done
+    [ -n "\$d" ] && printf '## Fail-first: pass\n\nFF_REPORT_BODY\n' > "\$d/fail-first.md" ;;
+  "pr comment") ;;
+esac
+exit 0
+M
+  chmod +x "$1/stub/gh"; printf '%s' "$1/stub/gh"
+}
+GHk="$(ghjobs "$dm" "$headM")"
+jobs_round() {   # jobs_round [env...]: a run-mode round against this gh; its prompt in $dm/prompt.md
+  rm -f "$dm/polls" "$dm/prompt.md"; : > "$dm/ghcalls"
+  ( cd "$rm_" && env FM_ROOT="$rm_" FM_GH="$GHk" FM_SEEN="$dm" "$@" \
+    bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
+}
+jobs_round
+sentK="$(cat "$dm/prompt.md" 2>/dev/null)"
+jobsK="$(awk '/^## Every CI job for this head/{f=1;next} /^## /{f=0} f' <<< "$sentK")"
+assert_contains "$jobsK" "- bash suites (shard 1/4): failure (https://github.com/o/r/actions/runs/500/job/11)" \
+  "the prompt lists every CI job of the head with its result and run"
+assert_contains "$jobsK" "- fast checks: success" "the latest run of each job"
+assert_lacks "$jobsK" "OLDER_RUN" "not an older run of it"
+assert_lacks "$jobsK" "OTHER_HEAD_RUN" "nor a run of another head"
+assert_contains "$jobsK" "- fail-first: success" "the fail-first job among them"
+failK="$(awk '/^## Failing assertions, from the failed jobs/{f=1;next} /^## /{f=0} f' <<< "$sentK")"
+assert_contains "$failK" "bash suites (shard 1/4), verbatim from its log" "the failed job's log is quoted"
+assert_contains "$failK" "    the board refuses an empty port                     FAIL" "with its failing assertion"
+assert_contains "$failK" "      expected [64] got [0]" "and the line that says how it failed"
+assert_contains "$failK" "  x tests/board.test.sh" "and the red suite"
+assert_lacks "$failK" "a passing assertion" "but not the assertions that passed"
+assert_lacks "$failK" "tests/review.test.sh" "nor the suites that passed"
+assert_lacks "$failK" "2026-09-29T14:33:08" "and without the runner's timestamps"
+assert_contains "$(cat "$dm/ghcalls")" "gh run view --job 11 --log-failed" "read from the failed job's own log"
+ffK="$(awk '/^## The fail-first report/{f=1;next} /^## The gates for this head/{f=0} f' <<< "$sentK")"
+assert_contains "$ffK" "FF_REPORT_BODY" "the fail-first report is quoted"
+assert_contains "$ffK" "----- begin fail-first report" "fenced"
+assert_contains "$(cat "$dm/ghcalls")" "gh run download 500 -n fail-first-report" "from the fail-first job's own run"
+assert_lacks "$sentK" "This round waited" "a head whose checks had finished is not waited on"
+
+jobs_round GH_NO_FAILFIRST=1
+assert_contains "$(cat "$dm/prompt.md" 2>/dev/null)" "No fail-first job has run for head $headM" \
+  "a head with no fail-first job says so"
+jobs_round GH_ARTIFACT_DOWN=1
+assert_contains "$(cat "$dm/prompt.md" 2>/dev/null)" "The fail-first job ran for head $headM (success), but its report could not be read" \
+  "a report that cannot be downloaded is stated, with the job's result"
+jobs_round GH_JOBS_DOWN=1
+assert_contains "$(cat "$dm/prompt.md" 2>/dev/null)" "The CI jobs of head $headM could not be read from GitHub" \
+  "CI jobs that cannot be read are stated"
+# and the two sections that depend on them still stand, saying plainly that
+# nothing was fetched - never absent, which would read as nothing failed
+sentJ="$(cat "$dm/prompt.md" 2>/dev/null)"
+failJ="$(awk '/^## Failing assertions, from the failed jobs/{f=1;next} /^## /{f=0} f' <<< "$sentJ")"
+assert_contains "$failJ" "Not available: the CI jobs of head $headM could not be read, so which assertions failed is unknown." \
+  "with no CI data the failing-assertions section says it is not available"
+assert_lacks "$sentJ" "No CI job failed" "and never claims that nothing failed"
+ffJ="$(awk '/^## The fail-first report/{f=1;next} /^## The gates for this head/{f=0} f' <<< "$sentJ")"
+assert_contains "$ffJ" "Not available: the CI jobs of head $headM could not be read, so no fail-first report was fetched." \
+  "and the fail-first section says so too"
+
+# the wait: the required check runs for two more polls, then completes; the
+# round starts only then, with its result, and says it waited
+jobs_round GH_PENDING_POLLS=2 FM_REVIEW_CI_WAIT=60 FM_REVIEW_CI_POLL=1
+sentW="$(cat "$dm/prompt.md" 2>/dev/null)"
+assert_ok "[ \"\$(cat '$dm/polls' 2>/dev/null || echo 0)\" -ge 3 ]" "a round asks again while the required check is still running"
+assert_contains "$sentW" "waited" "and says it waited for the required checks"
+assert_contains "$sentW" "Conclusion: failure" "and is handed the finished check's result"
+assert_lacks "$sentW" "required checks still running" "with nothing still running"
+evK="$rm_/state/events.jsonl"
+assert_contains "$(jq -r 'select(.type=="crew_status")|.data.activity.en' "$evK")" "Waiting for CI on T-Z" \
+  "the board is told the round is waiting for CI"
+assert_contains "$(jq -r 'select(.type=="crew_status")|.data.activity["zh-TW"]' "$evK")" "等待 T-Z 的 CI" "in Chinese too"
+assert_ok "[ \"\$(jq -s '[.[]|select(.type==\"approved\")]|last|.data.wall_clock.ci_wait' '$evK')\" -ge 2 ]" \
+  "and the round's wall-clock records how long it waited"
+# a bounded wait: past it the round starts anyway, naming what still runs
+jobs_round GH_PENDING_POLLS=1000 FM_REVIEW_CI_WAIT=2 FM_REVIEW_CI_POLL=1
+sentB="$(cat "$dm/prompt.md" 2>/dev/null)"
+assert_contains "$sentB" "started with these required checks still running for this head, or not yet started: ci" \
+  "past the bound the round starts, naming the checks still running"
+assert_contains "$sentB" "Conclusion: none yet, status in_progress" "and shows them as not concluded"
+assert_ok "[ \"\$(cat '$dm/polls' 2>/dev/null || echo 0)\" -le 8 ]" "and it did not wait on past its bound"
+( cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHk" FM_SEEN="$dm" FM_REVIEW_CI_WAIT=soon \
+  bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
+assert_eq "64" "$?" "a wait that is not whole seconds is refused"
 
 # A round that was SIGKILLed ran no trap; the next run-mode round removes its
 # checkout, and leaves alone one still in use or one not yet claimed. Never
@@ -1514,6 +1673,14 @@ M
       printf '\nHead SHA: %s\n' "$hd"
       printf '\n## The required check for this head, from GitHub\n'
       printf '\nThe required check for head %s could not be read from GitHub, so its CI result is unknown.\n' "$hd"
+      # T-153 added these three sections: every CI job, the failing
+      # assertions and the fail-first report, each saying it is unknown here
+      printf '\n## Every CI job for this head\n'
+      printf '\nThe CI jobs of head %s could not be read from GitHub, so their results are unknown.\n' "$hd"
+      printf "\n## Failing assertions, from the failed jobs' logs\n"
+      printf '\nNot available: the CI jobs of head %s could not be read, so which assertions failed is unknown.\n' "$hd"
+      printf '\n## The fail-first report\n'
+      printf '\nNot available: the CI jobs of head %s could not be read, so no fail-first report was fetched.\n' "$hd"
       printf '\n## The gates for this head\n'
       printf '\nNo gate summary for head %s exists under state/gates/, so its gate results are unknown.\n' "$hd"
       printf '\n---\n\n# The diff under review\n\n```diff\n'

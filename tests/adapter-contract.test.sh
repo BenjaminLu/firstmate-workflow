@@ -47,6 +47,11 @@ assert_eq '["registry.npmjs.org","cdn.playwright.dev"]' "$(jq -c .network "$pk/n
 cat > "$pk/sandbox-exec" <<S
 #!/usr/bin/env bash
 [ "\$1" = -f ] || exit 99
+# It applies no profile, so it answers fm-sandbox's loopback check before the
+# round the way a profile that holds does: run behind it, the check would
+# bind and connect on the machine running the suite, the board's port
+# included (T-153). tests/sandbox.test.sh's loopback cases test the check.
+case " \$* " in *" fm-loopback-check "*) echo checked; exit 0 ;; esac
 printf '%s\n' "\$2" > "$pk/profile.path"
 cp "\$2" "$pk/profile.sb"
 shift 2
@@ -812,6 +817,8 @@ assert_matches "$(grep 'allow network-outbound' <<< "$cprof" | tail -1)" '"local
   "whose port is the last allowed, after every deny"
 assert_contains "$cprof" '(deny network-outbound (remote ip "localhost:5555"))' \
   "while a listener older than the round stays out of reach"
+assert_contains "$cprof" '(deny network-bind network-inbound (local ip "localhost:5555"))' \
+  "and cannot be bound or accepted on either (T-153)"
 
 # The sandbox failing before the CLI is not the model giving up: the
 # launcher's exit code is not the CLI's, and the vendor counts unavailable

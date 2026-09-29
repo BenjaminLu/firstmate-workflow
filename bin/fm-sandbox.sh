@@ -64,8 +64,9 @@
 # which records every host it refuses to --blocked so the round can report
 # it; loopback only on ports the round opens itself - never the board's
 # (FM_PORT, 4173) nor one that was listening when the round started, which
-# `run` tries behind the profile before the round and tightens to the proxy
-# alone when the kernel lets one through (design 13.1);
+# it may neither connect to nor bind nor accept on, and which `run` tries
+# behind the profile before the round and tightens to the proxy alone when
+# the kernel lets one through (design 13.1, T-153);
 # LaunchServices refused, so no browser opens; and no mach service that
 # hands out a secret (the keychain, the pasteboard, the account stores),
 # which no file rule can cover. Linux runs bwrap, which mounts only what the
@@ -334,6 +335,15 @@ def darwin(p, roots, reads, own, port, listening):
                   ';; never the board, nor anything that was listening before the round started']
         for n in sorted(set([board] + listening)):
             lines.append('(deny network-outbound (remote ip "localhost:%d"))' % n)
+    # The board's port, and every port listening when the round started, is
+    # never bound or accepted on (T-153: a suite's fixture board took
+    # 127.0.0.1:4173 while the captain's board was down). It follows the
+    # allow above, which it carves out of, and is written whether or not the
+    # listeners could be read, so no profile lacks the board's; with no
+    # allow above it repeats what (deny network*) already says.
+    lines.append(';; never bound or accepted on: the board, nor anything listening before the round started')
+    for n in sorted(set([board] + (listening or []))):
+        lines.append('(deny network-bind network-inbound (local ip "localhost:%d"))' % n)
     if port and int(port):
         lines.append('(allow network-outbound (remote ip "localhost:%d"))' % int(port))
     lines += [';; writes: the write roots only',
@@ -937,12 +947,15 @@ SHIM='printf "started\n" >&4; exec 4>&-; exec "$@"'
 
 # Run behind the round's own profile before the round (macOS): it says
 # `checked` once it is running there, then each of the ports it is given
-# that it could connect to on loopback.
-#   python3 -c "$LOOP_PY" fm-loopback-check <port>...
+# that it could connect to on loopback, and each `bind:<port>` it could
+# bind there.
+#   python3 -c "$LOOP_PY" fm-loopback-check <port>|bind:<port>...
 IFS= read -r -d '' LOOP_PY <<'PY'
 import socket, sys
 print('checked', flush=True)
-for port in sys.argv[2:]:
+for arg in sys.argv[2:]:
+    bind = arg.startswith('bind:')
+    port = int(arg[len('bind:'):] if bind else arg)
     for family, address in ((socket.AF_INET, '127.0.0.1'), (socket.AF_INET6, '::1')):
         try:
             s = socket.socket(family, socket.SOCK_STREAM)
@@ -950,17 +963,31 @@ for port in sys.argv[2:]:
             continue
         s.settimeout(2)
         try:
-            s.connect((address, int(port)))
+            if bind:
+                s.bind((address, port))
+            else:
+                s.connect((address, port))
         except OSError:
             continue
         finally:
             s.close()
-        print(port, flush=True)
+        print(arg, flush=True)
         break
 PY
 
-# loopback_reached <port>...: the ports a command behind $work/profile could
-# connect to, comma-separated; status 1 when the check never ran behind it
+# loopback_said <reached>: what loopback_reached found, in words
+loopback_said() {
+  local conn bound
+  conn="$(tr , '\n' <<< "$1" | grep -v '^bind:' | paste -sd, -)"
+  bound="$(tr , '\n' <<< "$1" | sed -n 's/^bind://p' | paste -sd, -)"
+  [ -z "$conn" ] || printf 'port(s) %s, which were listening before it' "$conn"
+  [ -z "$conn" ] || [ -z "$bound" ] || printf ', and '
+  [ -z "$bound" ] || printf "a bind of the board's port %s, which nothing held" "$bound"
+}
+
+# loopback_reached <port>|bind:<port>...: the ports a command behind
+# $work/profile could connect to, and the bind:<port> it could bind,
+# comma-separated; status 1 when the check never ran behind it
 loopback_reached() {
   local got
   got="$("$tool" -f "$work/profile" "$(command -v python3)" -c "$LOOP_PY" fm-loopback-check "$@" 2>/dev/null)"
@@ -1150,11 +1177,27 @@ if [ "$cmd" = run ]; then
     # macOS keeps netstat in /usr/sbin, which a caller's PATH may not hold
     ns="$(command -v netstat 2>/dev/null || echo /usr/sbin/netstat)"
     if listing="$("$ns" -an -p tcp 2>/dev/null)"; then
-      listening="$(awk '$NF == "LISTEN" { n = split($4, a, "."); print a[n] }' <<< "$listing" \
+      # the separator is the regex /[.]/, never the string ".": mawk (Linux's
+      # default awk) reads a one-character string as a regex, and "." then
+      # splits on every character and no port is read (T-153)
+      listening="$(awk '$NF == "LISTEN" { n = split($4, a, /[.]/); print a[n] }' <<< "$listing" \
         | grep -E '^[0-9]+$' | sort -un | paste -sd, -)"
     else
       listening=unknown
       say "cannot list loopback listeners; the round reaches no loopback port but its proxy"
+    fi
+    # Whether something holds the board's port is asked of the port itself,
+    # by connecting to it here, outside the profile: a listing can miss it
+    # (another netstat's format, a listener it does not show), and then the
+    # round would try to bind a port that is held (T-153).
+    held_board="${FM_PORT:-4173}"
+    if [ "$listening" != unknown ]; then
+      case ",$listening," in
+        *",$held_board,"*) ;;
+        *) if [ "$(python3 -c "$LOOP_PY" fm-loopback-check "$held_board" 2>/dev/null | sed 1d)" = "$held_board" ]; then
+             listening="${listening:+$listening,}$held_board"
+           fi ;;
+      esac
     fi
   fi
   make_profile() {
@@ -1162,28 +1205,35 @@ if [ "$cmd" = run ]; then
       ${writes[@]+"${writes[@]}"} > "$work/profile" || exit 65
   }
   make_profile
-  # The profile's per-port loopback denials are a rule the kernel applies,
-  # not one fm can read back, and the canary on 2026-09-26 found a round
-  # reaching the board through them. So the profile is tried before the
-  # round, on every port that was listening but the proxy's: a connection
-  # the profile lets through means the round would get it too. Then the
-  # round is given no loopback but its proxy - its own servers go with it,
-  # which it says - and a profile that still lets one through refuses the
-  # round. A check that could not run inside the profile tightens it too.
-  check=()
+  # A profile's loopback rules are ones the kernel applies, not ones fm can
+  # read back: the canary on 2026-09-26 found a round reaching the board
+  # through a per-port denial. So the profile is tried before the round,
+  # behind itself: it connects to every port that was listening but the
+  # proxy's, and - while nothing holds the board's port - binds that port
+  # (T-153: a suite's fixture board took 127.0.0.1:4173 while the
+  # captain's board was down). Either getting through means the round's
+  # would: it is given no loopback but its proxy instead - its own servers
+  # go with it, which it says - and a profile that still lets one through
+  # refuses the round. A check that could not run inside the profile
+  # tightens it too. macOS only: its loopback is the host's. On Linux the
+  # round has a network namespace of its own, so a bind there is the
+  # round's and never the board's, and nothing is tried.
+  check=(); probe=()
+  board="${FM_PORT:-4173}"
   if [ "$os" = darwin ] && [ "$listening" != unknown ]; then
     IFS=, read -r -a listed_ports <<< "$listening"
     for n in ${listed_ports[@]+"${listed_ports[@]}"}; do [ "$n" = "$port" ] || check+=("$n"); done
-    if [ "${#check[@]}" -gt 0 ]; then
-      board="${FM_PORT:-4173}"
-      if ! reached="$(loopback_reached "${check[@]}")"; then
+    case ",$listening," in *",$board,"*) ;; *) probe=("bind:$board") ;; esac
+    tried=(${check[@]+"${check[@]}"} ${probe[@]+"${probe[@]}"})
+    if [ "${#tried[@]}" -gt 0 ]; then
+      if ! reached="$(loopback_reached "${tried[@]}")"; then
         say "cannot try the profile's loopback denials on this host, so they are not relied on"
         listening=unknown; make_profile
       elif [ -n "$reached" ]; then
-        say "the profile's loopback denials do not hold on this host: a round could reach port(s) $reached, which were listening before it (the board's is $board)"
+        say "the profile's loopback denials do not hold on this host: a round could reach $(loopback_said "$reached") (the board's is $board)"
         listening=unknown; make_profile
-        if reached="$(loopback_reached "${check[@]}")" && [ -n "$reached" ]; then
-          say "and even that profile lets a round reach port(s) $reached; refusing the round"
+        if reached="$(loopback_reached "${tried[@]}")" && [ -n "$reached" ]; then
+          say "and even that profile lets a round reach $(loopback_said "$reached"); refusing the round"
           exit 70
         fi
       fi
@@ -1196,7 +1246,7 @@ if [ "$cmd" = run ]; then
     if [ "$listening" = unknown ]; then
       say "loopback: the round's profile allows it no port but its proxy's ($port), its own servers' included"
     else
-      say "loopback: the round's profile allows its proxy's port ($port) and ports it opens itself; tried behind it and closed to it: ${check[*]:-nothing else was listening}"
+      say "loopback: the round's profile allows its proxy's port ($port) and ports it opens itself; tried behind it and closed to it: ${check[*]:-nothing else was listening}${probe[*]:+; and the port of the board, $board, not listening, cannot be bound}"
     fi
   fi
   if [ "$os" = darwin ]; then
