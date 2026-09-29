@@ -78,6 +78,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 sys.dont_write_bytecode = True
 root = Path(sys.argv[1])
@@ -98,6 +99,16 @@ def gone(pid, within):
             return True
         time.sleep(.05)
     return False
+
+
+def command_of(pid):
+    """pid's command line, test-side: /proc, else the kernel list the
+    library reads (not ps, which a sandbox refuses)."""
+    try:
+        with open(f'/proc/{pid}/cmdline', 'rb') as f:
+            return f.read().replace(b'\0', b' ').decode(errors='replace')
+    except OSError:
+        return next((command for p, command, _ in life._darwin_processes() if p == pid), '')
 
 
 def stop(pid):
@@ -181,6 +192,94 @@ time.sleep(300)
         self.assertIn('already gone', refused.stderr)
         time.sleep(.5)
         self.assertFalse(pidfile.exists(), 'nothing was started for an owner that is gone')
+
+    def test_the_ci_session_stands_in_for_a_scrubbed_fm_session_pid(self):
+        # suites scrub FM_*, and bin/ci.sh names their session again under a
+        # name they keep (T-151 review round 2); FM_SESSION_PID still wins
+        with mock.patch.dict(os.environ):
+            os.environ.pop('FM_SESSION_PID', None)
+            os.environ['FIRSTMATE_CI_SESSION'] = '4242'
+            self.assertEqual(4242, life.session_owner(), 'the gate\'s session, not an ancestor')
+            os.environ['FM_SESSION_PID'] = '4343'
+            self.assertEqual(4343, life.session_owner(), 'a session named by FM_SESSION_PID comes first')
+
+    def test_an_owner_that_cannot_be_found_is_refused_never_guessed(self):
+        # every way the walk can fail raises; none returns getppid(), the
+        # short-lived launcher a long-lived process would then die with
+        cases = {
+            'the parent cannot be read': lambda pid: (None, ''),
+            'the walk reaches pid 1': lambda pid: (1, 'bash'),
+            'the walk runs out of hops': lambda pid: (pid + 1, 'bash'),
+        }
+        for why, parent_of in cases.items():
+            with self.subTest(why), mock.patch.dict(os.environ), \
+                    mock.patch.object(life, '_parent_of', parent_of):
+                os.environ.pop('FM_SESSION_PID', None); os.environ.pop('FIRSTMATE_CI_SESSION', None)
+                with self.assertRaises(RuntimeError, msg=why):
+                    life.session_owner()
+        # and the command line says so and starts nothing: exit 70
+        env = {k: v for k, v in os.environ.items() if k not in ('FM_SESSION_PID', 'FIRSTMATE_CI_SESSION')}
+        refused = subprocess.run([sys.executable, '-c', '''
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("l", sys.argv[1]); l = importlib.util.module_from_spec(spec); spec.loader.exec_module(l)
+l._parent_of = lambda pid: (None, "")
+sys.argv[1:] = ["session-owner"]
+try: sys.exit(l.main(sys.argv[1:]))
+except RuntimeError as e: print("fm-lifeline: " + str(e), file=sys.stderr); sys.exit(70)
+''', str(LIB)], env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+        self.assertEqual(70, refused.returncode, refused.stdout + refused.stderr)
+        self.assertEqual('', refused.stdout, 'no pid is printed for an owner nobody named')
+        self.assertIn('cannot be read', refused.stderr)
+
+    def test_the_session_is_read_from_the_kernel_without_ps(self):
+        # xargs is not a launcher, so it is the session of what runs under
+        # it; ps is refused. On macOS (uname Darwin) the parent comes from
+        # libproc, and this is red for a walk that needs ps; on Linux it
+        # comes from /proc either way, so there it checks the walk only.
+        stub = self.dir / 'stub'; stub.mkdir()
+        (stub / 'ps').write_text('#!/bin/sh\necho "ps: operation not permitted" >&2\nexit 1\n')
+        (stub / 'ps').chmod(0o755)
+        env = {k: v for k, v in os.environ.items() if k not in ('FM_SESSION_PID', 'FIRSTMATE_CI_SESSION')}
+        env['PATH'] = f'{stub}:{env.get("PATH", "")}'
+        got = subprocess.run(['xargs', '-I{}', 'bash', '-c', 'echo "$PPID"; "$0" "$1" session-owner; true',
+                              sys.executable, str(LIB)],
+                             input='x\n', env=env, capture_output=True, text=True, timeout=30)
+        lines = got.stdout.split()
+        self.assertEqual(2, len(lines), got.stdout + got.stderr)
+        self.assertEqual(lines[0], lines[1],
+                         f'on {os.uname().sysname} the session is the nearest non-launcher (xargs), '
+                         'not the shell that ran the command, with ps refused')
+
+    def test_the_documented_launch_recipe_logs_and_prints_the_keeper(self):
+        # dispatch-crew starts every round with `fm-lifeline.sh --log <file>`:
+        # the program's stdout and stderr both land in the file, and the pid
+        # printed is the keeper's, which holds the lifeline, not the program's
+        pidfile = self.dir / 'logged.pid'; log = self.dir / 'round.log'
+        owner = subprocess.Popen(['sleep', '300'], stdin=subprocess.DEVNULL)
+        self.addCleanup(lambda: (owner.poll() is None and owner.kill(), owner.wait()))
+        program = ('import os, sys, time\n'
+                   'open(sys.argv[2], "w").write(str(os.getppid()))\n'
+                   'open(sys.argv[1], "w").write(str(os.getpid()))\n'
+                   'print("to stdout", flush=True); print("to stderr", file=sys.stderr, flush=True)\n'
+                   'time.sleep(300)\n')
+        run = subprocess.run(['bash', str(WRAPPER), '--owner-pid', str(owner.pid), '--log', str(log), '--',
+                              sys.executable, '-c', program, str(pidfile), str(self.dir / 'parent')],
+                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+        self.assertEqual(0, run.returncode, run.stderr)
+        keeper = int(run.stdout); self.addCleanup(stop, keeper)
+        child = self.pid_of(pidfile)
+        for _ in range(100):
+            said = log.read_text() if log.exists() else ''
+            if 'to stdout' in said and 'to stderr' in said: break
+            time.sleep(.05)
+        self.assertIn('to stdout', said, 'the program\'s stdout is in --log\'s file')
+        self.assertIn('to stderr', said, 'and so is its stderr')
+        self.assertNotEqual(child, keeper, 'the pid printed is not the program\'s')
+        self.assertIn('keep', command_of(keeper), 'it is the keeper\'s, which holds the lifeline')
+        self.assertEqual(str(keeper), (self.dir / 'parent').read_text(), 'and the program runs under it')
+        owner.kill(); owner.wait()
+        self.assertTrue(gone(child, 5), 'the program ends with its owner')
+        self.assertTrue(gone(keeper, 5), 'and so does the keeper the recipe printed')
 
     def test_the_keeper_exits_with_its_program_and_takes_what_it_left(self):
         left = self.dir / 'left.pid'

@@ -54,12 +54,15 @@ exactly as long.
                                  FIRSTMATE_CI_SCOPE=<marker>, or naming a DIR
                                  in its command line, as "pid command"
 
-The session is FM_SESSION_PID when it is set; otherwise the nearest
-ancestor that is not a shell or an interpreter running one of fm's
-scripts. A keeper watching a pid exports it as FM_SESSION_PID, so what it
+The session is FM_SESSION_PID when it is set; else FIRSTMATE_CI_SESSION,
+which bin/ci.sh sets to each suite's own runner under a name the suites
+do not scrub; otherwise the nearest ancestor that is not a shell or an
+interpreter running one of fm's scripts, read from the kernel (/proc,
+libproc). When no ancestor can be read, it refuses (exit 70) rather than
+guessing. A keeper watching a pid exports it as FM_SESSION_PID, so what it
 starts (the board) hands the same owner to what it starts in turn (a
-merge). A test names its own owner through FM_SESSION_PID and never
-depends on the operator's real session.
+merge). A test names its own owner through FM_SESSION_PID or the gate's
+FIRSTMATE_CI_SESSION and never depends on the operator's real session.
 """
 import errno
 import os
@@ -140,15 +143,48 @@ class ProcessExit:
 
 
 def _is_launcher(command):
-    """A shell, or an interpreter/wrapper standing between the owner and fm."""
+    """A shell, or an interpreter/wrapper standing between the owner and fm.
+    Any case: macOS names a framework Python `Python`."""
     name = os.path.basename(command.strip().split(' ')[0] if command.strip() else '').lstrip('-')
     return bool(re.fullmatch(r'(ba|z|da|k|c|tc|fi)?sh|env|timeout|nice|sudo|sandbox-exec|bwrap|'
-                             r'perl[0-9.]*|python[0-9.]*', name))
+                             r'perl[0-9.]*|python[0-9.]*', name, re.IGNORECASE))
+
+
+def _darwin_parent_of(pid):
+    """(parent pid, command) of pid from the kernel: libproc's
+    proc_pidinfo(PROC_PIDTBSDINFO), struct proc_bsdinfo. Not ps, which is
+    setuid on macOS and which a sandboxed round may not run."""
+    import ctypes
+    class BsdInfo(ctypes.Structure):
+        _fields_ = [('pbi_flags', ctypes.c_uint32), ('pbi_status', ctypes.c_uint32),
+                    ('pbi_xstatus', ctypes.c_uint32), ('pbi_pid', ctypes.c_uint32),
+                    ('pbi_ppid', ctypes.c_uint32), ('pbi_uid', ctypes.c_uint32),
+                    ('pbi_gid', ctypes.c_uint32), ('pbi_ruid', ctypes.c_uint32),
+                    ('pbi_rgid', ctypes.c_uint32), ('pbi_svuid', ctypes.c_uint32),
+                    ('pbi_svgid', ctypes.c_uint32), ('rfu_1', ctypes.c_uint32),
+                    ('pbi_comm', ctypes.c_char * 16), ('pbi_name', ctypes.c_char * 32),
+                    ('pbi_nfiles', ctypes.c_uint32), ('pbi_pgid', ctypes.c_uint32),
+                    ('pbi_pjobc', ctypes.c_uint32), ('e_tdev', ctypes.c_uint32),
+                    ('e_tpgid', ctypes.c_uint32), ('pbi_nice', ctypes.c_int32),
+                    ('pbi_start_tvsec', ctypes.c_uint64), ('pbi_start_tvusec', ctypes.c_uint64)]
+    try:
+        libproc = ctypes.CDLL('/usr/lib/libproc.dylib')
+    except OSError:
+        return None, ''
+    info = BsdInfo()
+    PROC_PIDTBSDINFO = 3
+    got = libproc.proc_pidinfo(int(pid), PROC_PIDTBSDINFO, ctypes.c_uint64(0),
+                               ctypes.byref(info), ctypes.sizeof(info))
+    if got != ctypes.sizeof(info):
+        return None, ''
+    name = (info.pbi_name or info.pbi_comm).decode(errors='replace')
+    return int(info.pbi_ppid), name
 
 
 def _parent_of(pid):
     """(parent pid, command) of pid, or (None, '') when it cannot be read.
-    /proc where there is one; ps, which a sandbox may refuse, elsewhere."""
+    From the kernel: /proc on Linux, libproc on macOS; ps only where there
+    is neither."""
     try:
         with open(f'/proc/{pid}/stat', 'rb') as f:
             stat_line = f.read().decode(errors='replace')
@@ -157,6 +193,8 @@ def _parent_of(pid):
         return int(stat_line[stat_line.rindex(')') + 2:].split()[1]), command
     except (OSError, ValueError, IndexError):
         pass
+    if sys.platform == 'darwin':
+        return _darwin_parent_of(pid)
     try:
         out = subprocess.run(['ps', '-o', 'ppid=', '-o', 'comm=', '-p', str(pid)],
                              stdin=subprocess.DEVNULL, capture_output=True, text=True)
@@ -168,24 +206,37 @@ def _parent_of(pid):
     return int(fields[0]), fields[1]
 
 
+# the session a suite of bin/ci.sh belongs to: not an FM_* name, because
+# suites scrub FM_* before they start, and a suite that lost FM_SESSION_PID
+# would otherwise walk up to the operator's own harness
+CI_SESSION = 'FIRSTMATE_CI_SESSION'
+
+
 def session_owner():
-    """The pid of the session fm's long-lived processes belong to."""
-    given = os.environ.get('FM_SESSION_PID', '')
-    if given:
-        if not re.fullmatch(r'[1-9][0-9]*', given):
-            raise ValueError('FM_SESSION_PID must be a pid')
-        return int(given)
+    """The pid of the session fm's long-lived processes belong to:
+    FM_SESSION_PID, else FIRSTMATE_CI_SESSION, else the nearest ancestor
+    that is not a launcher. Never a guess: when the walk cannot read a
+    parent, reaches pid 1 or runs out of hops, it raises RuntimeError and
+    nothing is started for an owner nobody named."""
+    for key in ('FM_SESSION_PID', CI_SESSION):
+        given = os.environ.get(key, '')
+        if given:
+            if not re.fullmatch(r'[1-9][0-9]*', given):
+                raise ValueError(f'{key} must be a pid')
+            return int(given)
     pid = os.getppid()
     for _ in range(64):
         if pid <= 1:
-            break
+            raise RuntimeError('no session found: every ancestor up to pid 1 is a launcher; '
+                               'name one with FM_SESSION_PID')
         parent, command = _parent_of(pid)
         if parent is None:
-            break
+            raise RuntimeError(f'no session found: the parent of {pid} cannot be read; '
+                               'name one with FM_SESSION_PID')
         if not _is_launcher(command):
             return pid
         pid = parent
-    return os.getppid()
+    raise RuntimeError('no session found within 64 ancestors; name one with FM_SESSION_PID')
 
 
 def _keeper_argv(argv, fd=None, pid=None, name=None):

@@ -177,8 +177,10 @@ trap 'exit 129' HUP
 # whatever still carries its marker is a process that outlived its owner:
 # it is killed, and the suite is red, naming it. The marker is not an FM_*
 # name, because suites scrub FM_* from their environment before they start.
-# FM_SESSION_PID names the suite's own runner as the session, so nothing a
-# suite starts under "the session" belongs to the operator's real one.
+# The suite's own runner is named as the session twice: FM_SESSION_PID,
+# and FIRSTMATE_CI_SESSION, which survives the suites that scrub FM_* and
+# which bin/lib/fm_lifeline.py reads next. So nothing a suite starts under
+# "the session" belongs to the operator's real one, scrubbed or not.
 # The kernel is asked, not ps: /proc on Linux, libproc on macOS. Each suite
 # also gets a temp root of its own (TMPDIR), and every fixture it makes
 # lives under it, so a process naming that root in its argv is the suite's
@@ -233,10 +235,13 @@ fi
 # stage shell passes a signal on to the command, or killing the gate would
 # kill the shell and leave playwright's browsers running.
 run_stage() {   # run_stage <name> <command...>
-  local name="$1" c='' rc
+  local name="$1" c='' rc me
   shift
   trap '[ -z "$c" ] || kill "$c" 2>/dev/null; exit 143' TERM INT HUP
-  FIRSTMATE_CI_SCOPE="$ci_scope.$name" "$@" > "$ci_tmp/$name.log" 2>&1 < /dev/null &
+  # the stage shell is the session of what the stage starts, as a suite's
+  # runner is a suite's (see containment above)
+  me="$(exec sh -c 'echo "$PPID"')"
+  FIRSTMATE_CI_SCOPE="$ci_scope.$name" FIRSTMATE_CI_SESSION="$me" "$@" > "$ci_tmp/$name.log" 2>&1 < /dev/null &
   c=$!
   wait "$c"
   rc=$?
@@ -396,7 +401,7 @@ run_suite() {   # run_suite <index>
   # the suite's own temp root, which every fixture it makes lives under, so
   # a process naming it is the suite's (see containment above)
   root="$(ci_root "$i")" || root=''
-  FIRSTMATE_CI_SCOPE="$ci_scope.$i" FM_SESSION_PID="$me" TMPDIR="${root:-${TMPDIR:-/tmp}}" \
+  FIRSTMATE_CI_SCOPE="$ci_scope.$i" FIRSTMATE_CI_SESSION="$me" FM_SESSION_PID="$me" TMPDIR="${root:-${TMPDIR:-/tmp}}" \
     LC_ALL='' LC_MESSAGES=C bash "${suites[$i]}" > "$ci_tmp/suite.$i.log" 2>&1 < /dev/null &
   c=$!
   wait "$c"

@@ -55,7 +55,7 @@ fm-ready 3
 fm-reconcile 3
 fm-review 7
 fm-run 2
-fm-session 2
+fm-session 3
 fm-sync-prs 2
 fm-worker 5"
 
@@ -138,7 +138,7 @@ while read -r name want; do
     fi
   done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "79" "$total" "every pinned flag and all nine fm option cases were exercised"
+assert_eq "80" "$total" "every pinned flag and all nine fm option cases were exercised"
 
 # A script that grows an option loop has to be pinned here too, and the
 # corpus is the one bin/ci.sh judges - literally, out of

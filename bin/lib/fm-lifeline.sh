@@ -7,9 +7,11 @@
 # Starts <command> in the background under a keeper that ends it when its
 # owner dies, and prints the keeper's pid, which lives exactly as long as
 # the command. The owner is the session by default: FM_SESSION_PID, else
-# the nearest ancestor that is not a shell - the harness firstmate runs in,
-# not the short-lived shell that ran this line. Output goes to --log, or
-# nowhere. Nothing is ever started without an owner, and there is no
+# FIRSTMATE_CI_SESSION (a suite's runner under bin/ci.sh), else the nearest
+# ancestor that is not a shell - the harness firstmate runs in, not the
+# short-lived shell that ran this line - read from the kernel; when none
+# can be read it refuses (exit 70) rather than guess. Output goes to --log,
+# or nowhere. Nothing is ever started without an owner, and there is no
 # `setsid ... &` to reach for instead.
 #
 #   bin/lib/fm-lifeline.sh ring <root> <line>

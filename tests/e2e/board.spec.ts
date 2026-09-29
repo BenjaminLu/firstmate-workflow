@@ -2012,6 +2012,24 @@ test('T-118: an answered card leaves the captain lane, and a park chosen on a ca
   } finally {stopBoard(b);}
 });
 
+// A stand-in for a round's own script: a bash that waits on a sleep. On
+// SIGTERM it ends its sleep and then dies of the same signal, so the stop
+// path is seen as a SIGTERM; and the test's finally ends both, so no sleep
+// outlives the test, which bin/ci.sh would turn red (T-151).
+function stubWorker(root: string) {
+  const child = join(root, "stub/child.pid");
+  writeFileSync(join(root, "stub/fm-worker.sh"), "#!/usr/bin/env bash\n" +
+    "trap 'kill $! 2>/dev/null; trap - TERM; kill -TERM $$' TERM\n" +
+    `sleep 60 &\necho $! > '${child}'\nwait\n`);
+  const fake = spawn("bash", [join(root, "stub/fm-worker.sh")], {stdio: "ignore"});
+  const ended = new Promise<string|null>(r => fake.on("exit", (_code, signal) => r(signal)));
+  const stop = () => {
+    fake.kill("SIGKILL");
+    try { process.kill(Number(readFileSync(child, "utf8")), "SIGKILL"); } catch { /* gone, or never started */ }
+  };
+  return {fake, ended, stop};
+}
+
 test('T-118: park and drop a working card only after confirming, which stops its crew and leaves its pull request open', async ({page}) => {
   const root = makeRoot([], false);
   writeTasks(root, [{id:'T-051',title:'At work, with a pull request',depends_on:[]}]);
@@ -2020,9 +2038,7 @@ test('T-118: park and drop a working card only after confirming, which stops its
   // a stand-in for the round's own script, published where fm-worker.sh
   // publishes its pid: the board's stop path signals it
   mkdirSync(join(root,'stub'),{recursive:true}); mkdirSync(join(root,'state/worktrees'),{recursive:true});
-  writeFileSync(join(root,'stub/fm-worker.sh'),'#!/usr/bin/env bash\nsleep 60 &\nwait\n');
-  const fake = spawn('bash',[join(root,'stub/fm-worker.sh')],{stdio:'ignore'});
-  const ended = new Promise<string|null>(r => fake.on('exit',(_code,signal) => r(signal)));
+  const {fake, ended, stop: stopFake} = stubWorker(root);
   writeFileSync(join(root,'state/worktrees/T-051.pid'), `${fake.pid}\n`);
   const b = await startBoard(root);
   const card = page.locator('#lanes [data-task="T-051"]');
@@ -2065,7 +2081,7 @@ test('T-118: park and drop a working card only after confirming, which stops its
     await expect(card).toHaveCount(0);
     expect(t118Events(root).pop()).toMatchObject({type:'closed',actor:'captain',task:'T-051'});
     expect(t118Events(root).some(e => e.type === 'merged')).toBe(false);
-  } finally { fake.kill('SIGKILL'); stopBoard(b); }
+  } finally { stopFake(); stopBoard(b); }
 });
 
 test('T-118: a card in the working lane is parked and dropped only after confirming, and its crew is stopped', async ({page}) => {
@@ -2073,9 +2089,7 @@ test('T-118: a card in the working lane is parked and dropped only after confirm
   writeTasks(root, [{id:'T-052',title:'At work, no pull request yet',depends_on:[]}]);
   emitFixture(root,'worker-52','T-052','dispatched','On it','接下',{role:'worker'});
   mkdirSync(join(root,'stub'),{recursive:true}); mkdirSync(join(root,'state/worktrees'),{recursive:true});
-  writeFileSync(join(root,'stub/fm-worker.sh'),'#!/usr/bin/env bash\nsleep 60 &\nwait\n');
-  const fake = spawn('bash',[join(root,'stub/fm-worker.sh')],{stdio:'ignore'});
-  const ended = new Promise<string|null>(r => fake.on('exit',(_code,signal) => r(signal)));
+  const {fake, ended, stop: stopFake} = stubWorker(root);
   writeFileSync(join(root,'state/worktrees/T-052.pid'), `${fake.pid}\n`);
   const b = await startBoard(root);
   const working = page.locator('[data-lane="working"] [data-task="T-052"]');
@@ -2107,7 +2121,7 @@ test('T-118: a card in the working lane is parked and dropped only after confirm
     await page.locator('[data-confirm-drop="T-052"]').click();
     await expect(working).toHaveCount(0);
     expect(t118Events(root).pop()).toMatchObject({type:'closed',actor:'captain',task:'T-052'});
-  } finally { fake.kill('SIGKILL'); stopBoard(b); }
+  } finally { stopFake(); stopBoard(b); }
 });
 
 test('T-118: a task parked while its card is pending stays in the captain lane, says so, and offers unpark', async ({page}) => {

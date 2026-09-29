@@ -99,6 +99,20 @@ wait_for() {   # wait_for <seconds> <command...>: 0 once the command succeeds, 1
     sleep 0.1
   done
 }
+# stop_pids <file>: TERM every pid listed in <file>, wait (bounded) until
+# each is gone, then KILL what is not. A suite ends with nothing it
+# started still running: bin/ci.sh turns a survivor red (T-151).
+stop_pids() {
+  local p n
+  [ -f "$1" ] || return 0
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    kill -TERM "$p" 2>/dev/null || continue
+    n=0
+    while kill -0 "$p" 2>/dev/null && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+    kill -KILL "$p" 2>/dev/null || true
+  done < "$1"
+}
 
 # detach every descriptor: ci.sh runs suites inside $(...), and a child that
 # keeps stdout open holds the command substitution open with it
@@ -2036,6 +2050,7 @@ if [ -e "$FM_ROOT/locked-$task" ]; then
 fi
 printf '%s\n' "$args" >> "$FM_ROOT/worker-calls"
 printf '%s\n' "$$" > "$FM_ROOT/worker-pid"
+printf '%s\n' "$$" >> "$FM_ROOT/worker-pids"
 exec sleep 30
 SH
 # A merge card's pull request is read from GitHub before the card exists
@@ -2173,7 +2188,10 @@ assert_eq "200" "$(answer D-1035 B)" "the captain answers B, send back"
 assert_eq "send_back done" "$(jq -r '"\(.effect) \(.outcome)"' "$x/post")" "the round was started"
 assert_contains "$(cat "$x/worker-calls" 2>/dev/null)" "--task T-035" "by fm-worker.sh, for the task"
 assert_contains "$(cat "$x/worker-calls" 2>/dev/null)" "--pr 35" "on its pull request"
-kill "$(cat "$x/worker-pid" 2>/dev/null)" 2>/dev/null || true
+# the round it started is stopped, and gone, before the block moves on:
+# a stub left sleeping outlives the suite, which bin/ci.sh turns red (T-151)
+wait_for 10 test -s "$x/worker-pid"
+stop_pids "$x/worker-pids"
 # and a round that refuses, because another holds the task, is a failure
 emx --actor worker-36 --task T-036 --type dispatched --data '{"role":"worker"}' --en "on it" --tw "接下"
 : > "$x/locked-T-036"
@@ -2194,8 +2212,9 @@ assert_eq "merged" "$(lane T-039)" "the task is merged"
 # --- set aside in flight: confirmed, crew stopped, the pull request left open
 emx --actor worker-50 --task T-050 --type dispatched --data '{"role":"worker"}' --en "on it" --tw "接下"
 emx --actor worker-50 --task T-050 --type pr_opened --pr 50 --en "opened #50" --tw "開了 #50"
-printf '#!/usr/bin/env bash\nsleep 30 &\nwait\n' > "$x/stub/fm-worker.sh"
-# every descriptor detached: its sleep outlives it, and must not hold the
+# on TERM it ends its sleep too, so stopping the worker leaves nothing (T-151)
+printf '#!/usr/bin/env bash\ntrap '"'"'kill $! 2>/dev/null; exit 143'"'"' TERM\nsleep 30 &\nwait\n' > "$x/stub/fm-worker.sh"
+# every descriptor detached: while it runs, its sleep must not hold the
 # suite's output open
 bash "$x/stub/fm-worker.sh" >/dev/null 2>&1 </dev/null &
 fake=$!
@@ -2353,6 +2372,8 @@ assert_eq "merged 97" "$(jq -r '.tasks[]|select(.id=="T-117")|"\(.stage) \(.pr)"
 
 kill "$pidx" 2>/dev/null
 wait "$pidx" 2>/dev/null || true
+# every round a send back started here, stopped and gone (T-151)
+stop_pids "$x/worker-pids"
 rm -rf "$x"
 
 # the repository is data in the registry, never a literal in the board: no

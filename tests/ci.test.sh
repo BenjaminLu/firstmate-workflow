@@ -108,6 +108,15 @@ printf '%s\n' '#!/usr/bin/env bash' \
 printf '%s\n' '#!/usr/bin/env bash' \
   "printf '%s\\n' \"\${FM_SESSION_PID-}\" > '$leaked/session'" \
   'exit 0' > "$t/tests/tidy.test.sh"
+# Most suites scrub FM_* before they start, FM_SESSION_PID with it, and
+# then start rounds whose owner is "the session" (T-151 review round 2).
+# The gate's runner must still be the one they resolve, not an ancestor
+# above the gate - on a developer's machine, the operator's own harness.
+printf '%s\n' '#!/usr/bin/env bash' \
+  "printf '%s\\n' \"\${FM_SESSION_PID-}\" > '$leaked/given'" \
+  'for k in $(compgen -e | grep "^FM_"); do unset "$k"; done' \
+  "python3 '$ROOT/bin/lib/fm_lifeline.py' session-owner > '$leaked/resolved' 2>&1" \
+  'exit 0' > "$t/tests/scrubbed.test.sh"
 rc=0; out="$(FM_ROOT="$t" bash "$ROOT/bin/ci.sh" --stage bash 2>&1)" || rc=$?
 assert_eq "1" "$rc" "a suite that leaves a process running is red, though it exited 0"
 assert_contains "$out" "tests/leaky.test.sh left processes running after it ended (killed now):" \
@@ -118,6 +127,9 @@ assert_fail "kill -0 '${lp:-0}'" "which is no longer running"
 assert_lacks "$out" "tests/tidy.test.sh left" "a suite that leaves nothing is not named"
 assert_matches "$(cat "$leaked/session" 2>/dev/null)" '^[1-9][0-9]*$' \
   "every suite is handed a session of the gate's own, never the operator's"
+assert_matches "$(cat "$leaked/given" 2>/dev/null)" '^[1-9][0-9]*$' "the scrubbing suite was handed one too"
+assert_eq "$(cat "$leaked/given" 2>/dev/null)" "$(cat "$leaked/resolved" 2>/dev/null)" \
+  "a suite that scrubs FM_* still resolves the gate's runner as its session, not an ancestor above the gate"
 rm -f "$t/tests/leaky.test.sh"
 assert_ok "FM_ROOT='$t' bash '$ROOT/bin/ci.sh' --stage bash" "without the leak the same tree is green"
 rm -rf "$t" "$leaked"

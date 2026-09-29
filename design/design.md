@@ -2166,9 +2166,14 @@ and, when the owner is gone, ends the round's process group - SIGTERM, then
 SIGKILL after the grace, from a helper outside the group. Its pid and group
 stay the round's, which `fm.sh stop` and the board's park and drop signal.
 
-The session is `FM_SESSION_PID` when set, else the nearest ancestor that is
-not a shell or an interpreter - the harness, not the short-lived tool
-shell. A keeper watching a pid exports it as `FM_SESSION_PID`, so the board
+The session is `FM_SESSION_PID` when set, else `FIRSTMATE_CI_SESSION`
+(below), else the nearest ancestor that is not a shell or an interpreter -
+the harness, not the short-lived tool shell. The walk reads each parent
+from the kernel: `/proc` on Linux, libproc `PROC_PIDTBSDINFO` on macOS,
+`ps` only where there is neither, since a sandbox may refuse it. It never
+guesses: when a parent cannot be read, the walk reaches pid 1, or it runs
+64 hops, it refuses (`session-owner` exits 70) and nothing is started, so
+a long-lived process never ends up owned by the shell that launched it. A keeper watching a pid exports it as `FM_SESSION_PID`, so the board
 hands its own owner on to what it starts. A process that must outlive its
 starter names the longer-lived owner it belongs to, never none.
 `tests/lifeline.test.sh` fails on any `start_new_session`, `setsid`,
@@ -2217,8 +2222,9 @@ retired watcher wrote under `state/session/observed/` are still read.
 *Tests are contained.* `bin/ci.sh` runs every suite - each bash suite, the
 bun tests and the browser suite - with a scope marker,
 `FIRSTMATE_CI_SCOPE`, in its environment, inherited across setsid, and with
-`FM_SESSION_PID` naming the suite's own runner, so nothing a suite starts
-under "the session" belongs to the operator's. Each suite also gets a temp
+the suite's own runner named as its session twice: `FM_SESSION_PID`, and
+`FIRSTMATE_CI_SESSION`, which the suites that scrub `FM_*` keep. So nothing
+a suite starts under "the session" belongs to the operator's. Each suite also gets a temp
 root of its own (`TMPDIR`), under which every fixture it makes lives. When
 the suite ends it lists the processes still carrying the marker, or naming
 that root in their command line - `/proc` on Linux, libproc on macOS -
