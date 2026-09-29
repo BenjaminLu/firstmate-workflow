@@ -197,6 +197,16 @@ defect, which you then show from the diff; a missing or unknown result is
 not a finding. A check result for another head is not this one's. A run-mode
 prompt has no such section and nothing from GitHub about CI.
 
+## Processes
+
+Every background process has an owner and ends with it; a wake is pushed by
+the writer, never found by polling; a process that outlives its owner is a
+bug. A diff that starts a background process any way but through
+`bin/lib/fm_lifeline.py` naming its owner, that decides liveness by polling
+a pid or a directory, or whose test leaves a process running is a finding
+of that class (T-151). In run mode, whatever you start in the checkout you
+stop before you answer.
+
 ## Evidence
 
 Require the diff, task spec, acceptance, relevant design contract and original

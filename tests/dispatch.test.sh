@@ -42,6 +42,19 @@ eventually() {   # eventually <command...>: 0 once the command is, 1 at the dead
   local end=$(( $(date +%s) + WAIT_SECS ))
   until "$@"; do [ "$(date +%s)" -le "$end" ] || return 1; sleep 0.05; done
 }
+# stop_workers <file>: TERM every pid listed in <file>, wait (bounded) until
+# each is gone, and KILL what is not. A suite ends with nothing it started
+# still running (T-151).
+stop_workers() {
+  local pid n
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    kill -TERM "$pid" 2>/dev/null || continue
+    n=0
+    while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+    kill -KILL "$pid" 2>/dev/null || true
+  done < "$1"
+}
 # Firstmate judges each task that turns ready and the captain answers the
 # card (T-059). The checks about dependencies and capacity are not about
 # that, so they clear every ready task first: judged, then answered A, in
@@ -276,11 +289,18 @@ rm -rf "$p"
 #
 # A worker that takes its time: if the dispatcher waited, this would
 # take as long as the worker does.
+#
+# Every worker it starts records itself, and ends its sleep with it when it
+# is stopped: a TERM that ended only the bash would leave the sleep running
+# after the suite, and bin/ci.sh turns that red (T-151).
 b="$(pr_tree)"
 cat > "$b/bin/fm-worker.sh" <<W
 #!/usr/bin/env bash
+trap 'kill "\$!" 2>/dev/null; exit 143' TERM
+echo \$\$ >> "$b/worker-pids"
 echo \$\$ > "$b/worker-pid"
-sleep 5
+sleep 5 &
+wait "\$!"
 echo done >> "$b/worker-finished"
 W
 chmod +x "$b/bin/fm-worker.sh"
@@ -297,7 +317,10 @@ assert_ne "" "$wpid" "a worker was started, and said which process it is"
 # threshold to tune against whatever the runner is doing.
 assert_ok "kill -0 '$wpid' 2>/dev/null" "and the dispatcher returned while it was still running"
 assert_fail "test -e '$b/worker-finished'" "so the worker had not finished when the dispatcher did"
-kill -TERM "$wpid" 2>/dev/null
+# both tasks were dispatched, so both workers are stopped, not only the one
+# asserted on, and the block waits until they are gone
+eventually test "$(grep -c . "$b/worker-pids" 2>/dev/null)" -ge 2
+stop_workers "$b/worker-pids"
 
 # and the conclusion criterion 6 rests on, rather than the premise: the
 # worker the dispatcher starts is not handed a number. The two states

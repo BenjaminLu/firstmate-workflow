@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# A decision lands as a file and firstmate wakes. Both paths - bun's fs.watch
-# and the poll - have to behave the same, because the poll is what runs on a
-# machine that never installed bun.
+# A decision lands as a file and firstmate wakes: the writer rings every
+# waiter's own doorbell, and each wait blocks on its own; nothing polls
+# (T-151).
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
@@ -16,8 +16,9 @@ fixture() {
   # decision draws it, so a fixture without them is not a fixture for
   # --request at all
   cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-decide.sh" "$ROOT/bin/fm-diagram.sh" "$d/bin/"
+  # the doorbell --await registers and the board rings (T-151)
+  cp -R "$ROOT/bin/lib" "$d/bin/"
   cp "$ROOT/i18n/ui.en.json" "$ROOT/i18n/ui.zh-TW.json" "$ROOT/i18n/tw2cn.tsv" "$d/i18n/"
-  [ -f "$ROOT/bin/watch-decisions.ts" ] && cp "$ROOT/bin/watch-decisions.ts" "$d/bin/"
   jq -n '{en:{title:"Cache index",explanation:"Read once",before:"Repeated reads",after:"One read",outcome:"Choice recorded",options:{A:{description:"Cache",pros:"Fast",cons:"Memory"},B:{description:"Read",pros:"Simple",cons:"Slow"},C:{description:"Wait",pros:"Measure",cons:"Delay"}}},"zh-TW":{title:"快取索引",explanation:"讀取一次",before:"重複讀取",after:"讀取一次",outcome:"已記錄選擇",options:{A:{description:"快取",pros:"快速",cons:"記憶體"},B:{description:"讀取",pros:"簡單",cons:"較慢"},C:{description:"等待",pros:"測量",cons:"延後"}}}}' > "$d/details.json"
   # A merge request reads its pull request from GitHub (T-119), so every
   # fixture carries a gh that answers as gh does: `gh pr view <n> --json a,b`
@@ -232,24 +233,115 @@ assert_eq "A" "$(jq -r .chosen <<<"$got")" "an answer already on disk is not mis
 assert_eq "0" "$(jq -s 'map(select(.type=="decision_made"))|length' "$d/state/events.jsonl")" "await never emits duplicate semantic events"
 assert_fail "test -f '$d/state/pending/D-1.json'" "answering clears the pending file"
 
-# the interesting case: blocked, then answered from outside
-d2="$(fixture)"
-( sleep 1; mkdir -p "$d2/state/decisions"
-  printf '{"id":"D-2","task":"T-2","chosen":"B"}\n' > "$d2/state/decisions/D-2.json" ) &
-t=$(elapsed env FM_ROOT="$d2" "$d2/bin/fm-decide.sh" --await D-2 --timeout 20)
-wait
-assert_ok "[ '$t' -le 4 ]" "it wakes within seconds of the file appearing (${t}s)"
-assert_ok "test -f '$d2/state/decisions/D-2.json'" "the answer is on disk"
+# The wake (T-151): the board writes the answer, then rings every waiter's
+# own doorbell under state/session/wake.d through bin/lib/fm_lifeline.py -
+# the same call it makes, so a test rings exactly as the board does.
+ring() { python3 "$ROOT/bin/lib/fm_lifeline.py" ring "$1" "$2" >/dev/null; }
+bells() { find "$1/state/session/wake.d" -name '*.fifo' 2>/dev/null | wc -l | tr -d ' '; }
+until_bells() {   # until_bells <root> <n>: wait (10s at most) for n registered doorbells
+  local i=0
+  while [ "$(bells "$1")" != "$2" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+}
+now_ms() { python3 -c 'import time; print(int(time.time() * 1000))'; }
 
-# the poll path must behave the same with bun hidden
+# the interesting case: blocked, then answered from outside and rung
+d2="$(fixture)"; mkdir -p "$d2/state/decisions"
+FM_ROOT="$d2" "$d2/bin/fm-decide.sh" --await D-2 --timeout 20 > "$d2/got" 2>/dev/null & a2=$!
+until_bells "$d2" 1
+assert_eq "1" "$(bells "$d2")" "the wait registers a doorbell of its own"
+s2="$(now_ms)"
+printf '{"id":"D-2","task":"T-2","chosen":"B"}\n' > "$d2/state/decisions/D-2.json"
+ring "$d2" D-2
+wait "$a2"; rc2=$?
+t2=$(( $(now_ms) - s2 ))
+assert_eq "0" "$rc2" "it returns once rung"
+assert_eq "B" "$(jq -r .chosen "$d2/got" 2>/dev/null)" "with the answer"
+assert_ok "[ '$t2' -lt 2000 ]" "within a moment of the ring (${t2}ms)"
+assert_eq "0" "$(bells "$d2")" "and its doorbell goes with it"
+
+# Nothing polls state/decisions (T-151): an answer that arrives with no ring
+# is not found by looking again. The wait looks once it has registered, and
+# after that only when rung - so this one runs to its timeout.
 d3="$(fixture)"
 ( sleep 1; mkdir -p "$d3/state/decisions"
   printf '{"id":"D-3","chosen":"C"}\n' > "$d3/state/decisions/D-3.json" ) &
-stub="$(mktemp -d)"   # a PATH with a shell but no bun
-t3=$(elapsed env PATH="/usr/bin:/bin:$stub" FM_ROOT="$d3" bash "$d3/bin/fm-decide.sh" --await D-3 --timeout 20)
+t3=$(elapsed env FM_ROOT="$d3" bash "$d3/bin/fm-decide.sh" --await D-3 --timeout 4)
 wait
-assert_ok "test -f '$d3/state/decisions/D-3.json'" "the poll path also returns"
-assert_ok "[ '$t3' -le 5 ]" "the poll path wakes within seconds too (${t3}s)"
+assert_ok "[ '$t3' -ge 4 ]" "an answer with no wake is not polled for (${t3}s)"
+assert_ok "test -f '$d3/state/decisions/D-3.json'" "although it is on disk"
+# a ring for another decision wakes nothing that matters; its own does
+( sleep 1; ring "$d3" D-other; sleep 1
+  printf '{"id":"D-4","chosen":"B"}\n' > "$d3/state/decisions/D-4.json"
+  ring "$d3" D-4 ) &
+s4=$(date +%s)
+got4="$(FM_ROOT="$d3" bash "$d3/bin/fm-decide.sh" --await D-4 --timeout 20)"
+t4=$(( $(date +%s) - s4 ))
+wait
+assert_eq "B" "$(jq -r .chosen <<<"$got4")" "past another decision's ring, its own returns the answer"
+assert_ok "[ '$t4' -le 5 ]" "within seconds (${t4}s)"
+
+# Two waiters at once (T-151 review round 1): a FIFO hands each line to one
+# reader, so one shared FIFO gave D-1's wake to D-2's wait and D-1 sat out its
+# timeout. Each waiter has a bell of its own, and every ring reaches both.
+d5="$(fixture)"; mkdir -p "$d5/state/decisions"
+FM_ROOT="$d5" bash "$d5/bin/fm-decide.sh" --await D-1 --timeout 20 > "$d5/got1" 2>/dev/null & w1=$!
+FM_ROOT="$d5" bash "$d5/bin/fm-decide.sh" --await D-2 --timeout 20 > "$d5/got2" 2>/dev/null & w2=$!
+until_bells "$d5" 2
+assert_eq "2" "$(bells "$d5")" "two waiters hold two doorbells"
+s5="$(now_ms)"
+printf '{"id":"D-1","chosen":"A"}\n' > "$d5/state/decisions/D-1.json"
+ring "$d5" D-1
+wait "$w1"; rc5=$?
+t5=$(( $(now_ms) - s5 ))
+assert_eq "0" "$rc5" "with two waiters, the first's answer and one ring return the first"
+assert_eq "A" "$(jq -r .chosen "$d5/got1" 2>/dev/null)" "with its answer"
+assert_ok "[ '$t5' -lt 2000 ]" "within a moment, not at its timeout (${t5}ms)"
+assert_ok "kill -0 '$w2'" "while the second still waits for its own"
+printf '{"id":"D-2","chosen":"C"}\n' > "$d5/state/decisions/D-2.json"
+ring "$d5" D-2
+wait "$w2"
+assert_eq "C" "$(jq -r .chosen "$d5/got2" 2>/dev/null)" "then its answer and a ring return the second"
+rm -rf "$d5"
+
+# an --await beside a session wait (fm-session.sh wait): one answer, one
+# ring - the board's queue line and its ring - and both return
+d6="$(fixture)"; mkdir -p "$d6/state/decisions" "$d6/state/session"
+cp "$ROOT/bin/fm-herdr.py" "$d6/bin/"
+FM_ROOT="$d6" bash "$d6/bin/fm-decide.sh" --await D-6 --timeout 20 > "$d6/got" 2>/dev/null & w6=$!
+python3 "$d6/bin/fm-herdr.py" session wait "$d6" all 20 > "$d6/woken" 2>/dev/null & s6w=$!
+until_bells "$d6" 2
+s6="$(now_ms)"
+printf '{"id":"D-6","task":"T-6","chosen":"B"}\n' > "$d6/state/decisions/D-6.json"
+printf '{"id":"D-6","reason":"answered","decision":{"id":"D-6","task":"T-6","chosen":"B"},"woken":%s}\n' \
+  "$(date +%s)" >> "$d6/state/session/wake.jsonl"
+ring "$d6" D-6
+wait "$w6"; r6a=$?
+wait "$s6w"; r6b=$?
+t6=$(( $(now_ms) - s6 ))
+assert_eq "0 0" "$r6a $r6b" "an --await and a session wait both return on one ring"
+assert_eq "B" "$(jq -r .chosen "$d6/got" 2>/dev/null)" "the await with its answer"
+assert_eq "D-6" "$(jq -r '.[0].id' "$d6/woken" 2>/dev/null)" "the session wait with the wake"
+assert_ok "[ '$t6' -lt 3000 ]" "both within moments (${t6}ms)"
+rm -rf "$d6"
+
+# a waiter killed outright leaves its doorbell; the next ring removes it and
+# does not block on it
+d7="$(fixture)"
+FM_ROOT="$d7" bash "$d7/bin/fm-decide.sh" --await D-7 --timeout 30 > /dev/null 2>&1 & w7=$!
+until_bells "$d7" 1
+assert_eq "1" "$(bells "$d7")" "a waiter holds its doorbell"
+# a doorbell is named for the process that holds it; SIGKILL leaves that
+# process no chance to remove it
+b7="$(find "$d7/state/session/wake.d" -name '*.fifo' 2>/dev/null | head -1)"; b7="${b7##*/}"
+kill -KILL "${b7%%-*}" 2>/dev/null
+wait "$w7" 2>/dev/null
+assert_eq "1" "$(bells "$d7")" "killed outright, it leaves its doorbell behind"
+s7="$(now_ms)"
+ring "$d7" D-7
+t7=$(( $(now_ms) - s7 ))
+assert_eq "0" "$(bells "$d7")" "the next ring removes a doorbell nobody holds"
+assert_ok "[ '$t7' -lt 2000 ]" "and does not block on it (${t7}ms)"
+rm -rf "$d7"
 
 # it waits for nobody's opinion, but it does give up
 d4="$(fixture)"
@@ -931,5 +1023,5 @@ rm -rf "$o" "$n" "$na" "$nb" "$na".* "$nb".* "$hstub"
 # the words may appear in a comment explaining the absence; a call may not
 assert_fail "grep -qE '\\b(fswatch|watchexec|entr)\\b' <<<\"\$(grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-decide.sh')\"" \
   "it calls neither fswatch, watchexec nor entr"
-rm -rf "$d" "$d2" "$d3" "$d4" "$d5" "$d6" "$d8" "$dstream" "$dctrl" "$dleg" "$stub"
+rm -rf "$d" "$d2" "$d3" "$d4" "$d5" "$d6" "$d8" "$dstream" "$dctrl" "$dleg"
 finish

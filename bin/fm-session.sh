@@ -7,12 +7,17 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
 fm_args=("$@")
-REPO="${FM_ROOT:-$(pwd)}"; MODE=start; DECISION=all
+REPO="${FM_ROOT:-$(pwd)}"; MODE=start; DECISION=all; TIMEOUT=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    start|status|watch|stop|ack) MODE="$1"; shift ;;
+    start|status|wait|ack) MODE="$1"; shift ;;
+    # T-151: nothing watches for a decision any more; the writer pushes the
+    # wake, and `wait` is the caller's own foreground read of it
+    watch|stop) echo "fm-session: $1 is gone (T-151): the board pushes every wake; run fm-session.sh wait to block on it" >&2; exit 64 ;;
     --repo) fm_need "fm-session" "$@"; REPO="$2"; shift 2 ;;
     --decision) fm_need "fm-session" "$@"; DECISION="$2"; shift 2 ;;
+    --timeout) fm_need "fm-session" "$@"; TIMEOUT="$2"; shift 2
+               [[ "$TIMEOUT" =~ ^[0-9]{1,6}$ ]] || { echo "fm-session: --timeout takes whole seconds" >&2; exit 64; } ;;
     *) echo "fm-session: unknown argument $1" >&2; exit 64 ;;
   esac
 done
@@ -46,4 +51,4 @@ if [ "$MODE" = start ]; then
     [ $? -eq 1 ] && echo "fm-session: config.yaml's worker model '$wmodel' is not one $wv is known to accept; check it before dispatching (T-127)" >&2
   fi
 fi
-exec python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" session "$MODE" "$REPO" "$DECISION"
+exec python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" session "$MODE" "$REPO" "$DECISION" "$TIMEOUT"

@@ -44,6 +44,7 @@ fixture() {                     # a repo with a remote, a task, and the real scr
   cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-worker.sh" \
      "$ROOT/bin/fm-checkpoint.sh" "$ROOT/bin/fm-guard.sh" "$ROOT/bin/fm-herdr.py" bin/
   cp -r "$ROOT/bin/adapters" bin/
+  cp -R "$ROOT/bin/lib" bin/   # the lifeline a round's runner holds (T-151)
   cp "$ROOT/skills/worker/SKILL.md" skills/worker/
   printf 'vendor: mock\nfallback:\n  - mock\n' > config.yaml
   jq -n --arg task "$task" '{id:$task,title:"a mock task",scope:["src/**"],acceptance:["it exists"]}' \
@@ -3196,7 +3197,9 @@ cat > "$rKill/bin/adapters/mock.sh" <<'M'
 [ "$1" = "run" ] || exit 64
 : > "${FM_STARTED:?}"
 echo $$ > "${FM_ADAPTER_PID:?}"
-sleep 60
+# one process, so the kill below ends all of it: a bash that ran sleep as
+# its child would leave the sleep behind (T-151)
+exec sleep 60
 M
 chmod +x "$rKill/bin/adapters/mock.sh"
 startedKill="$dKill/started"; adapterpidKill="$dKill/adapter.pid"; mirdirKill="$rKill/state/mirrors/self/T-KILL"
@@ -3215,7 +3218,13 @@ g2="$(mirror_gen_latest "$mirdirKill")"
 g1plus1=$(( g1 + 1 ))
 assert_ok "[ \"$g2\" -le \"$g1plus1\" ]" \
   "T-KILL: the watcher stops within its own poll tick once its parent is gone (killed alone, no trap runs), not left running as an orphan"
-kill -KILL "$(cat "$adapterpidKill" 2>/dev/null)" 2>/dev/null
+# the adapter outlived the round on purpose here; the block ends it and
+# waits until it is gone, so nothing it started runs past the suite (T-151)
+apKill="$(cat "$adapterpidKill" 2>/dev/null)"
+if [ -n "$apKill" ]; then
+  kill -KILL "$apKill" 2>/dev/null
+  for _ in $(seq 1 50); do kill -0 "$apKill" 2>/dev/null || break; sleep 0.1; done
+fi
 rm -rf "$dKill"
 
 finish

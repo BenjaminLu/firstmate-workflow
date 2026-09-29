@@ -716,7 +716,10 @@ class Entrypoints(unittest.TestCase):
         # commit needs is the fixture's own: a worker whose commit fails stops.
         self.env.update(PATH=str(self.fake)+os.pathsep+os.environ['PATH'], HERDR_ENV='1', HERDR_PANE_ID='caller',
                         FM_ROOT=str(self.repo), FM_TEST_ROOT=str(self.repo), FM_HERDR_TIMEOUT=str(WAIT),
-                        FM_GIT_NAME='t', FM_GIT_EMAIL='a@b.c')
+                        FM_GIT_NAME='t', FM_GIT_EMAIL='a@b.c',
+                        # the session a round belongs to is this test, never the
+                        # operator's own (T-151): a round ends when it does
+                        FM_SESSION_PID=str(os.getpid()))
         # Every vendor round runs behind bin/fm-sandbox.sh (T-105), and a host
         # with no OS sandbox refuses every vendor. A runner cannot be relied on
         # to have one, so the sandbox binary is a stand-in, as in
@@ -1283,6 +1286,36 @@ elif a[0]=='branch': print('t-035-test')
                         if launcher.poll() is None:
                             os.killpg(launcher.pid,signal.SIGKILL); launcher.wait(timeout=5)
                         self.wait_for(self.no_live_runs)
+    def test_a_round_belongs_to_its_session_and_ends_with_it(self):
+        # T-151: a round outlives the fm-worker.sh that launched it on purpose,
+        # so it names the longer-lived owner it belongs to - the session - and
+        # holds a lifeline to it. The launcher killed outright leaves the round
+        # running; the session ending ends it, adapter and model included.
+        for name in ('release-model','model.pid'):
+            (self.repo/name).unlink(missing_ok=True)
+        session=subprocess.Popen(['sleep','300'])
+        self.addCleanup(lambda: session.poll() is None and (session.kill(), session.wait()))
+        env=dict(self.env,FM_TEST_ASYNC='1',FM_HERDR_TIMEOUT=str(WAIT),HERDR_ENV='0',FM_SESSION_PID=str(session.pid))
+        with tempfile.TemporaryFile(mode='w+') as output:
+            launcher=subprocess.Popen(['bash',str(self.repo/'bin/fm-worker.sh'),'--task','T-035'],
+                env=env,stdout=output,stderr=output,start_new_session=True)
+            try:
+                self.wait_for(lambda:(self.repo/'model.pid').exists())
+                model=int((self.repo/'model.pid').read_text())
+                actor=(self.repo/'state/worktrees/T-035/surviving-work').read_text()
+                runner=int(next((self.repo/'state/runs'/actor).glob('*/runner.pid')).read_text())
+                self.assertEqual(runner,os.getpgid(runner),'the round is still a process group of its own')
+                os.killpg(launcher.pid,signal.SIGKILL); launcher.wait(timeout=WAIT)
+                time.sleep(.5)
+                os.kill(runner,0); os.kill(model,0)  # the launcher's death takes nothing
+                session.kill(); session.wait()
+                self.wait_for(lambda:not m.process_matches(dict(pid=runner,token='fm-herdr.py')))
+                self.wait_for(lambda:not m.process_matches(dict(pid=model,token=str(self.fake/'codex'))))
+            finally:
+                (self.repo/'release-model').touch()
+                if launcher.poll() is None:
+                    os.killpg(launcher.pid,signal.SIGKILL); launcher.wait(timeout=5)
+                self.wait_for(self.no_live_runs)
     def test_fm_follow_shows_an_actors_latest_round(self):
         answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],HERDR_ENV='0')
         self.assertEqual(0,answer.returncode,answer.stderr)

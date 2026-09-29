@@ -26,13 +26,18 @@ and never launch a crew.
 
 Portable bootstrap is `bin/fm-session.sh start --repo <root>`. It inspects live
 tasks/processes/panes, retires dead crew actors whose events still show them
-aboard, starts or reuses the correct-root captain board, and starts or reuses a
-cancellable decision watcher. It does not authorize work or invent success when
+aboard, and starts or reuses the correct-root captain board, owned by the
+session and ending with it. Nothing watches for decisions: the board pushes
+each wake as it writes one, ringing every waiter's own doorbell, and
+`fm-session.sh wait` blocks on one (T-151).
+Every background process fm starts goes through `bin/lib/fm-lifeline.sh`,
+has an owner and ends with it. It does not authorize work or invent success when
 Herdr/transport is missing. Declared adapters only: do not claim arbitrary
 engines load AGENTS.md.
 
 Crew rounds run headless: `fm-worker` / `fm-review` / `fm-dispatch` / `fm-run`
-start each round as a process group fm supervises itself (`setsid`, output in
+start each round as a process group fm supervises itself (a session of its
+own, owned by the fm session through `bin/lib/fm_lifeline.py`, output in
 the run's `run.log`, `runner.pid` and `runner.exit` beside it), so no terminal
 host is needed. `host:` in `config.yaml` (`none|herdr|cmux|tmux`, detected when
 unset) only opens a window for people to watch: with Herdr, one dedicated
@@ -45,10 +50,11 @@ log without a window, and `bin/fm.sh stop <actor>` or `stop --task <id>` stops
 rounds by their process groups, the same stop the board's park and drop use.
 Transport or empty/partial output is never reported as fabricated success.
 
-Options: `FM_TRANSPORT=direct` (no window), `FM_HOST`, `FM_AUTOCLOSE=0`,
-`FM_STOP_GRACE` (seconds between a stop's TERM and KILL, default 5), and
-`fm-session.sh stop` for decision watching. Scope and merge approval still go through the captain
-board.
+Options: `FM_TRANSPORT=direct` (no window), `FM_HOST`, `FM_AUTOCLOSE=0`, and
+`FM_STOP_GRACE` (seconds between a stop's TERM and KILL, default 5). A round
+belongs to the session and ends with it (T-151). Nothing watches for
+decisions: the board rings whoever waits (`fm-session.sh wait`). Scope and
+merge approval still go through the captain board.
 
 Firstmate inspects existing work and live agents, then coordinates repository
 scripts and remediation. Read the contract for retained authorization,

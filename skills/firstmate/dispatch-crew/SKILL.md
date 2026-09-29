@@ -14,23 +14,26 @@ supervision; a Herdr, cmux or tmux window is only a view of the run's log.
 ## Recipe (worker)
 
 From the firstmate Herdr pane (or any shell with `HERDR_ENV=1` and a known
-`HERDR_PANE_ID`), launch through a durable process group so the orchestrator
-survives the agent shell exiting (SIGHUP). Managed transport also ignores
-SIGHUP on the waiter and pane-child, but `setsid` is still required for
-background dispatch from a conversational agent:
+`HERDR_PANE_ID`), launch through the lifeline (T-151): the round runs in a
+session of its own, so the agent tool shell exiting (SIGHUP) does not take
+it, and it is owned by firstmate's session, so it ends when that session
+does instead of running on as an orphan:
 
 ```bash
-setsid bin/fm-worker.sh --task <TASK> --repo <root> [--pr <N>] [--vendor <adapter>] [--name <alias>] </dev/null >/tmp/fm-worker-<TASK>.log 2>&1 &
+bin/lib/fm-lifeline.sh --session --log /tmp/fm-worker-<TASK>.log -- bin/fm-worker.sh --task <TASK> --repo <root> [--pr <N>] [--vendor <adapter>] [--name <alias>]
 ```
 
-Do not set `FM_TRANSPORT`. Do not write a wrapper script. Do not pre-create
-the worker tab; managed transport creates the owned tab/root pane.
+It prints the keeper's pid, which lives exactly as long as the round. Do not
+set `FM_TRANSPORT`. Do not write a wrapper script. Do not pre-create the
+worker tab; managed transport creates the owned tab/root pane.
 
-**Failure mode without setsid:** a background `bin/fm-worker.sh ... &` from an
-agent tool shell often receives SIGHUP when that shell ends. The pane-child can
-still finish and write `last-result.json` / autoclose, but the caller-side
-commit/push/PR comment path is orphaned until a later recovery. Prefer `setsid`
-(or equivalent new session) for every stock background launch.
+**Never `setsid`, `nohup`, `disown` or a bare `&`.** A bare
+`bin/fm-worker.sh ... &` from an agent tool shell often receives SIGHUP when
+that shell ends, orphaning the caller-side commit/push/PR comment path; a
+`setsid` one survives everything, the session that started it included,
+which is how processes outlived their owners by a day. The lifeline is the
+one way to start in the background: every background process has an owner
+and ends with it.
 
 **Done when:** `herdr agent list` (or `bin/fm-session.sh status --repo <root>`)
 shows the canonical actor for that task as live/`working`, and
@@ -39,11 +42,11 @@ shows the canonical actor for that task as live/`working`, and
 ## Recipe (reviewer)
 
 ```bash
-setsid bin/fm-review.sh --task <TASK> --branch <branch> --repo <root> [--pr <N>] [--round <N>] [--vendor <adapter>] [--name <alias>] </dev/null >/tmp/fm-review-<TASK>.log 2>&1 &
+bin/lib/fm-lifeline.sh --session --log /tmp/fm-review-<TASK>.log -- bin/fm-review.sh --task <TASK> --branch <branch> --repo <root> [--pr <N>] [--round <N>] [--vendor <adapter>] [--name <alias>]
 ```
 
-Same rules: no `FM_TRANSPORT`, no wrappers, no raw adapter panes. Use `setsid`
-for background launches for the same SIGHUP reason.
+Same rules: no `FM_TRANSPORT`, no wrappers, no raw adapter panes, and the
+lifeline for every background launch, for the same reasons.
 
 **Done when:** a review round artifact exists under the run dir and events
 show `review_opened` / completion for that exact actor — or a truthful

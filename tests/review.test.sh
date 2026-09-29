@@ -49,6 +49,7 @@ fixture() {
   cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" bin/
   cp "$ROOT/bin/fm-herdr.py" bin/
   cp -r "$ROOT/bin/adapters" bin/
+  cp -R "$ROOT/bin/lib" bin/   # the lifeline a round's runner holds (T-151)
   cp "$ROOT/skills/reviewer/SKILL.md" "$d/repo/skills/reviewer/"
   printf 'vendor: mock\n' > config.yaml
   printf '{"id":"T-Z","title":"a task","activity":{"en":"Review the authored task","zh-TW":"審查已撰寫的任務"},"scope":["src/**"],"acceptance":["it exists"]}\n' > design/tasks/T-Z.json
@@ -198,6 +199,7 @@ recover="$(safe_tmpdir)"
 mkdir -p "$recover/bin" "$recover/design/tasks" "$recover/skills/reviewer" "$recover/src" "$recover/state"
 cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" "$ROOT/bin/fm-herdr.py" "$recover/bin/"
 cp -r "$ROOT/bin/adapters" "$recover/bin/"
+cp -R "$ROOT/bin/lib" "$recover/bin/"   # the lifeline a round's runner holds (T-151)
 cp "$ROOT/skills/reviewer/SKILL.md" "$recover/skills/reviewer/"
 printf '{"id":"T-Z","title":"z","scope":["src/**"],"depends_on":[],"acceptance":["a"]}\n' > "$recover/design/tasks/T-Z.json"
 printf '## 6. Gates\n\n## 8. Board\n' > "$recover/design/design.md"

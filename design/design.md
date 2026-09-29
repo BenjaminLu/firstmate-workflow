@@ -67,7 +67,7 @@ These bind every actor, including firstmate itself.
 | Q1 | Execution substrate | Shell starts an independent agent process, one git worktree per task |
 | Q2 | Shape of firstmate | A long-running session, with the board as a second input channel |
 | Q3 | Source of truth | Local append-only `state/events.jsonl`; GitHub is the outward face |
-| Q4 | Board to firstmate | Decision lands as a file; firstmate blocks on it (bun `fs.watch`, polling fallback) |
+| Q4 | Board to firstmate | Decision lands as a file; the board pushes the wake as it writes it, and every waiter's own doorbell is rung (T-151; nothing polls) |
 | Q5 | Board stack | Bun + SSE + vanilla HTML, no build step |
 | Q6 | Where determinism ends | Scripts decide whether it ran; models only judge whether it is right |
 | Q7 | Round three | `ASK-PASS-CRITERIA` plus a numbered, closed checklist |
@@ -387,7 +387,8 @@ whatever `merge` it holds by then.
 **A `running` merge whose outcome was never written is recovered by the
 board.** The board is the only writer of `merge`, so it is the one that
 repairs it; `fm-reconcile.sh` does not touch decision records. The helper is
-started detached, and the project's merge marker records the decision id,
+started under the lifeline, owned by the session (T-151, "Owners and
+wakes"), and the project's merge marker records the decision id,
 the helper's pid and its start time. On start, and again on every poll while
 any record says `running`, the board reads each such record's marker:
 
@@ -409,9 +410,14 @@ any record says `running`, the board reads each such record's marker:
 A board that is down starts no merges, so a turn held while it is down holds
 back nothing that could have run.
 
-Await mode uses `bun run bin/watch-decisions.ts` (`fs.watch`) when bun and the
-watcher script are present, and a one-second poll otherwise. Wake latency must
-be measured, not inferred from the watcher mechanism. **No `fswatch` dependency.**
+Await mode blocks on a doorbell of its own (T-151, "Owners and wakes"):
+`fm-decide.sh --await` registers one under `state/session/wake.d/`, looks
+for the answer file once it has, and looks again each time the board rings,
+which it does whenever it writes an answer. Any number of waiters each hear
+every ring. Nothing polls `state/decisions/`; an answer that arrives with
+no ring is not found until the next one. Wake latency must be measured, not inferred from the
+mechanism. **No `fswatch` dependency.** `bin/watch-decisions.ts` is no longer
+called by anything; deleting it is outside T-151's scope.
 
 These are orchestration requirements, not enforcement inside `fm-merge.sh`.
 The board calls that helper for choice A on a pending merge card. The helper
@@ -1434,7 +1440,7 @@ of these:
 | `park` | `bin/fm-emit.sh` `parked`, then the crew stopped | the parked group |
 | `drop` | `bin/fm-emit.sh` `closed`, then the crew stopped | closed |
 | `dispatch` | `bin/fm-dispatch.sh --task <id>`, the captain's order | working once the worker starts; failed with the dispatcher's reason when it holds the task |
-| `send_back` | `bin/fm-worker.sh --task <id> --pr <n>`, detached | another round on the same pull request; failed with the worker's words when its lock refuses |
+| `send_back` | `bin/fm-worker.sh --task <id> --pr <n>`, owned by the session (T-151) | another round on the same pull request; failed with the worker's words when its lock refuses |
 
 The card kinds and their effects: a **merge card** (`--kind merge`) that
 names none merges on A and holds on B and C, as it always has; sending work
@@ -2136,7 +2142,7 @@ checkpoint (13.1, "Saving the branch").
 `bin/fm-session.sh start --repo <root>` is the portable service bootstrap.
 It reports actual recorded process liveness, worktrees, pending decisions and
 (inside `HERDR_ENV=1`) observed Herdr panes. It starts or reuses the correct-root
-board and a cancellable decision watch. It does not dispatch work or invent a
+board, owned by the session; it starts no watcher (T-151). It does not dispatch work or invent a
 captain choice. Firstmate reconciles legacy/unrecorded processes and existing
 authorization before dispatch; stopped work is preserved for explicit resumption.
 Before the board is shown, and again on `status`, session bootstrap runs deck
@@ -2147,22 +2153,142 @@ one `agent_lost` (T-118, crew liveness above) and then `agent_finished`, both
 under that exact actor with `data.status: process_gone`, so the
 event-sourced crew list matches process reality. Task-level reconcile alone
 cannot clear these ghosts. `status` and `start` report the reconcile result as
-`deck_reconcile`. `status` reads the live process receipts and durable watch
-results. `watch` and `stop`, optionally with `--decision D-id`, manage the
-watcher independently.
+`deck_reconcile`. `status` reads the live process receipts and the wake
+queue. `wait`, optionally with `--decision D-id` and `--timeout <seconds>`,
+is the caller's own foreground wait on a doorbell of its own: it returns (exit 0,
+the items as JSON) as soon as an unacknowledged wake is on the queue, and
+exits 1 when the timeout ends first. `watch` and `stop` are gone and say so.
 
 Board reuse is verified with a fresh random file under the requested root and
 the board's existing `/file?path=<relative-path>` endpoint. An HTTP response on
 the configured port is insufficient; a different or unverifiable root is refused.
 The bootstrap verifies HTTP page retrieval and reports whether `open` or
 `xdg-open` was invoked. It cannot verify browser navigation. Bun is required for
-the board. The watch polls `state/decisions/*.json` directly into durable
-observation receipts; it does not invoke `fm-decide.sh --await`, so it neither
-rejects non-numeric ids nor rewrites `events.jsonl`. It has a real PID and
-process identity. Its continuous mode scans pending IDs between bounded waits;
-it is not a sub-200ms guarantee across multiple IDs. It never wakes a completed
-API conversation. Firstmate keeps pending authorized work actively monitored or
-explicitly hands it off before ending the turn.
+the board. Nothing watches `state/decisions/`: the board pushes each wake as
+it writes the decision (below), and neither rewrites `events.jsonl`. A wake
+never reaches a completed API conversation by itself; firstmate keeps
+pending authorized work actively monitored - a `wait` running as the
+harness's own background task is how a turn is told - or explicitly hands it
+off before ending the turn.
+
+### Owners and wakes (T-151)
+
+**The rule: every background process has an owner and ends with it; a wake
+is pushed by the writer, never found by polling; a process that outlives its
+owner is a bug.** On 2026-09-29 the captain's machine held 207 orphaned
+processes, 192 of them `watch-child` watchers from suite runs inside crew
+rounds, some over a day old, polling a fixture directory that had been
+deleted. A watcher whose only exit is SIGTERM, started in a session of its
+own so that nothing dying takes it along, cannot be fixed by stopping it
+more carefully; it has to be unable to outlive what needs it.
+
+*The lifeline.* `bin/lib/fm_lifeline.py` (and `bin/lib/fm-lifeline.sh`, its
+command line) is the one way fm starts a background process. The owner
+keeps the write end of a pipe and the child the read end, and the child's
+loop blocks on that descriptor together with its own work; it reads EOF
+when every holder of the write end has died, which the kernel delivers for
+SIGKILL as for anything else, and across setsid. An owner fm did not start
+- the harness's session - is watched by its pid instead: kqueue
+`EVFILT_PROC NOTE_EXIT` on macOS, a pidfd on Linux, both blocking until the
+kernel reports the exit. No liveness is ever decided by polling a pid or a
+directory. A program that cannot watch a descriptor runs under the keeper,
+`fm_lifeline.py keep`: in a session of its own, with the program in a
+process group of its own below it; when the owner goes it sends the group
+SIGTERM, then SIGKILL after `FM_LIFELINE_GRACE` seconds (5), and when the
+program ends first, whatever it left in its group goes too. The keeper's
+pid stands for the program and exits with its status. An owner already gone
+starts nothing, and says so.
+
+*Owners.* Each start names its owner:
+
+| Start | Owner |
+|---|---|
+| `bin/fm-herdr.py` board start (`fm-session.sh start`, `fm.sh board`) | the session: it outlives the command on purpose |
+| the pane-child's closer (`close_from_child`) | the pane-child, by a forked lifeline; it closes once that exits |
+| `board/server.ts`'s `fm-merge.sh` (a merge the captain clicked) and `fm-worker.sh` (send back) | the session the board belongs to; the board itself when it was started by hand |
+| firstmate's stock crew launch (`dispatch-crew`) | the session, through `bin/lib/fm-lifeline.sh --session` |
+| T-144's round runner (`spawn_runner`, the `pane-child`) | the session: a round outlives the fm-worker.sh that launched it on purpose (retained, to be stopped or resumed) |
+
+The runner is fm's own Python, so it holds its lifeline itself rather than
+under a keeper: `start(..., direct=True)` starts it in a session of its own
+and hands the line over, and the runner's `hold()` blocks on it in a thread
+and, when the owner is gone, ends the round's process group - SIGTERM, then
+SIGKILL after the grace, from a helper outside the group. Its pid and group
+stay the round's, which `fm.sh stop` and the board's park and drop signal.
+
+The session is `FM_SESSION_PID` when set, else `FIRSTMATE_CI_SESSION`
+(below), else the nearest ancestor that is not a shell or an interpreter -
+the harness, not the short-lived tool shell. The walk reads each parent
+from the kernel: `/proc` on Linux, libproc `PROC_PIDTBSDINFO` on macOS,
+`ps` only where there is neither, since a sandbox may refuse it. It never
+guesses: when a parent cannot be read, the walk reaches pid 1, or it runs
+64 hops, it refuses (`session-owner` exits 70) and nothing is started, so
+a long-lived process never ends up owned by the shell that launched it. A keeper watching a pid exports it as `FM_SESSION_PID`, so the board
+hands its own owner on to what it starts. A process that must outlive its
+starter names the longer-lived owner it belongs to, never none.
+`tests/lifeline.test.sh` fails on any `start_new_session`, `setsid`,
+`nohup`, `disown` or `detached: true` in the code of `bin/`, `board/` or the
+skills outside the primitive. `bin/fm-worker.sh`'s mirror watcher (13.1) still
+checks its parent with `kill -0` once a second; it is a plain `&` child that
+ends with its round, and moving it onto the lifeline is `fm-worker.sh`'s
+work, outside T-151's scope.
+
+*The wake.* The watcher is deleted: `watch-child`, the decision watch and
+`fm-session.sh watch`/`stop` are gone. Whoever writes a decision delivers
+the wake at write time - the board, on the captain's click and again when a
+merge it started settles. It appends the item to the wake queue,
+`state/session/wake.jsonl` (`{id, reason, decision, woken}`), which is read
+again at every session start and status, and then rings every waiter's
+doorbell. A FIFO hands each line to exactly one reader, so one shared FIFO
+loses a wake as soon as two waiters hold it - and firstmate routinely has
+several (review round 1 of T-151 lost one to a second `--await`). So each
+waiter has a bell of its own, and all three steps live in
+`bin/lib/fm_lifeline.py` (`Doorbell`, `ring`, `await`), which the board, `fm-decide.sh`
+and `fm-herdr.py` share:
+
+1. *Register.* A waiter makes its own FIFO under a temporary name, opens it
+   `O_RDWR` (so no closing writer is ever an end-of-file), and only then
+   renames it to `state/session/wake.d/<pid>-<random>.fifo`, so a ringer
+   never finds a registered bell nobody holds. It removes the bell when it
+   exits, on TERM, INT and HUP too.
+2. *Check after registering, before blocking.* The waiter reads the durable
+   state for its own condition once: the answer file for `--await <id>`,
+   unacknowledged queue items for `session wait`. A wake written between
+   that read and the registration is therefore found, never missed.
+3. *Ring every bell.* A writer appends to the queue first, then opens every
+   `wake.d/*.fifo` `O_WRONLY|O_NONBLOCK` and writes one line: `ENXIO` is a
+   bell nobody holds any more (a waiter killed outright), and is unlinked;
+   `EAGAIN` is a bell already full, so already rung. Ringing never blocks.
+
+On any ring each waiter reads the durable state again and returns or blocks
+again; the line's content is a hint, never the answer. The waiters are
+`fm-session.sh wait` and `fm-decide.sh --await`. `fm-decide.sh` writes no
+decision - it requests cards and awaits answers - so it is a waiter, not a
+writer. `status` and `start` list every
+wake not acknowledged since it was pushed; `ack` records one, and a later
+wake for the same id (its merge settled) lists it again. Observations the
+retired watcher wrote under `state/session/observed/` are still read.
+
+*Tests are contained.* `bin/ci.sh` runs every suite - each bash suite, the
+bun tests and the browser suite - with a scope marker,
+`FIRSTMATE_CI_SCOPE`, in its environment, inherited across setsid, and with
+the suite's own runner named as its session twice: `FM_SESSION_PID`, and
+`FIRSTMATE_CI_SESSION`, which the suites that scrub `FM_*` keep. So nothing
+a suite starts under "the session" belongs to the operator's. Each suite also gets a temp
+root of its own (`TMPDIR`), under which every fixture it makes lives. When
+the suite ends it lists the processes still carrying the marker, or naming
+that root in their command line - `/proc` on Linux, libproc on macOS -
+kills them, and the suite is red, naming each one. macOS withholds the
+environment of its own platform binaries (`/bin/bash`, `/bin/sleep`), so
+there the marker cannot see a leaked bash `fm-worker.sh` or mock adapter;
+their argv is visible, and the root finds them. What that still misses on a
+Mac - a platform binary with no fixture path in its argv - the gate says
+once per run, never passing as having looked: `leak check: macOS hides the
+environment of /bin binaries; matched by fixture root as well - the
+required check (Linux) is authoritative`. A test that starts a
+background process on purpose stops it or ends its owner. The ops-side sweep
+firstmate runs is a fuse that should reap zero; anything it reaps is a bug
+to be found by this rule.
 
 The normal `fm-run`, `fm-dispatch`, `fm-worker` and `fm-review` entrypoints freeze
 `bin/` and `skills/` from the entrypoint's own code tree into a private per-launch
@@ -2427,7 +2553,8 @@ list, not replaced by the drawn crew.
 **A round is headless and fm's own; a terminal host is a window onto it
 (T-144, captain, 2026-09-29).** Codex, Claude, Cursor Agent and Gemini adapters
 run through shipped `bin/fm-herdr.py` `transport`, which starts the real CLI as a
-supervised process group of fm's own: `setsid`, its stdout and stderr in the
+supervised process group of fm's own: a session of its own, started through
+the lifeline and owned by the fm session (T-151), its stdout and stderr in the
 attempt's `run.log`, its pid in `runner.pid` and its exit code in `runner.exit`,
 with the same sandbox, `FM_HERDR_TIMEOUT` and lifetime lock as before. It is
 never a child of a pane, so a pane that closes or crashes cannot end a round, and a
@@ -2563,9 +2690,9 @@ policy, not an atomicity or race-free guarantee. `FM_AUTOCLOSE=0` retains all pa
 `FM_HERDR_TIMEOUT` (seconds, default 21600) bounds waiting; a timeout preserves the
 process and evidence for inspection, never kills an uncertain pane.
 
-`FM_WATCH=0` opts out of automatic watch startup; stop an already-running watch
-explicitly. Watch identity and results live under `state/session/`; a stopped
-watch can be restarted, and continuous observation receipts survive restarts.
+There is no watch to opt out of (T-151): the wake queue and the waiters'
+doorbells live under `state/session/`, the queue survives restarts, and
+nothing runs to keep it.
 No global hooks, lavish or no-mistakes installation is needed. Existing user
 authorization persists, while scope/product choices and merge approval remain
 captain board decisions. The self-update request is not a fabricated board choice.

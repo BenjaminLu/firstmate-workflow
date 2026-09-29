@@ -42,6 +42,7 @@ mkdir -p "$r"
 mkdir -p "$r/bin" "$r/design/tasks" "$r/state" "$r/skills/worker" "$r/skills/reviewer" "$r/board"
 cp "$ROOT/bin/fm-worker.sh" "$ROOT/bin/fm-review.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$r/bin/"
 cp -r "$ROOT/bin/adapters" "$r/bin/"
+cp -R "$ROOT/bin/lib" "$r/bin/"   # the lifeline a round's runner holds (T-151)
 cp "$ROOT/board/server.ts" "$r/board/"
 cp "$ROOT/skills/worker/SKILL.md" "$r/skills/worker/"
 cp "$ROOT/skills/reviewer/SKILL.md" "$r/skills/reviewer/"

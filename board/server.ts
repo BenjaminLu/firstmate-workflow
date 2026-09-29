@@ -6,7 +6,7 @@
 // No build step and no framework: the page is a file, the stream is SSE, and
 // the state endpoint is derived from events.jsonl and design/tasks/ so the
 // board has no opinion the log does not already hold.
-import { closeSync, constants, existsSync, fchmodSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, constants, existsSync, fchmodSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { homedir } from "node:os";
@@ -1077,11 +1077,46 @@ const pending = () => {
     .map((x) => x.card);
 };
 
+// --- Owners and wakes (T-151) ----------------------------------------------
+// Nothing the board starts outlives its owner. A merge the captain clicked
+// and a round sent back must outlive a board restart, so they belong to the
+// session the board belongs to: FM_SESSION_PID, which the keeper that
+// started the board exports. A board started by hand has no session, and
+// owns them itself. Either way they run under bin/lib/fm_lifeline.py's
+// keeper, which the kernel tells when the owner exits; the board never
+// detaches anything itself, and never starts one without an owner.
+const LIFELINE = join(ROOT, "bin/lib/fm_lifeline.py");
+const OWNER = /^[1-9][0-9]{0,9}$/.test(process.env.FM_SESSION_PID ?? "") ? String(process.env.FM_SESSION_PID) : String(process.pid);
+const startOwned = (name: string, argv: string[], fd: number, env: Record<string, string | undefined>) => {
+  if (!existsSync(LIFELINE)) throw new Error("no bin/lib/fm_lifeline.py: nothing is started without an owner");
+  return spawn("python3", [LIFELINE, "keep", "--pid", OWNER, "--name", name, "--", ...argv],
+    { stdio: ["ignore", fd, fd], env });
+};
+// Whoever writes a decision delivers the wake: the item goes on the wake
+// queue, which every session start and status reads again, and then every
+// waiter's own doorbell under state/session/wake.d is rung, by the one
+// implementation fm-decide.sh --await and fm-session.sh wait register
+// with (bin/lib/fm_lifeline.py ring). Each waiter has a bell of its own,
+// so none takes another's wake; a bell nobody holds is removed, and with no
+// waiter the queue alone carries it. Nothing ever polls state/decisions.
+const WAKE_QUEUE = join(ROOT, "state/session/wake.jsonl");
+const pushWake = (id: string, reason: "answered" | "merge_settled", decision: unknown) => {
+  try {
+    mkdirSync(join(ROOT, "state/session"), { recursive: true });
+    appendFileSync(WAKE_QUEUE, JSON.stringify({ id, reason, decision, woken: Date.now() / 1000 }) + "\n");
+  } catch (e) { console.error(`wake queue not written for ${id}: ${(e as Error).message}`); }
+  try {
+    // ringing never blocks: every bell is opened O_NONBLOCK
+    const r = Bun.spawnSync(["python3", LIFELINE, "ring", ROOT, id], { stdin: "ignore", env: childEnv() });
+    if (r.exitCode !== 0) console.error(`wake not rung for ${id}: ${new TextDecoder().decode(r.stderr).trim()}`);
+  } catch (e) { console.error(`wake not rung for ${id}: ${(e as Error).message}; the queue carries it`); }
+};
+
 // --- Merges run after the answer, not inside it (design sections 5.2, 15.10) ---
 // One merge at a time within a project, any number across projects. The
 // board is the only writer of a decision record's `merge`: it publishes
-// "running", starts bin/fm-merge.sh detached under the project's merge
-// marker, and rewrites the record to "merged" or "failed" when the helper
+// "running", starts bin/fm-merge.sh, owned by the session, under the
+// project's merge marker, and rewrites the record to "merged" or "failed" when the helper
 // exits. A helper that dies without a word - or a board that restarts while
 // one runs - is recovered from the marker, the log and GitHub, never guessed.
 const MERGING = join(ROOT, "state/merging");
@@ -1123,6 +1158,7 @@ const settle = (id: string, merge: "merged" | "failed", reason = "") => {
     rewrite(file, { ...d, merge, ...(merge === "failed" ? { merge_reason: reason } : {}), merge_settled: new Date().toISOString(),
       // the answer's effect was the merge, and this is how it ended
       ...(d.effect === "merge" ? { effect_outcome: merge === "merged" ? "done" : "failed", effect_reason: reason } : {}) });
+    pushWake(id, "merge_settled", readJson(file));
   }
   const marker = markerOf(projectOf(d));
   if (readJson<Marker>(marker)?.decision === id) { try { unlinkSync(marker); } catch { /* already gone */ } }
@@ -1132,9 +1168,9 @@ const settle = (id: string, merge: "merged" | "failed", reason = "") => {
 const mergeRunningIn = (project: string) =>
   readResponses().some((d) => mergeOf(d) === "running" && projectOf(d) === project);
 const HELPER_STOPPED = "the merge helper stopped before recording an outcome";
-// Start the helper for an answered merge card. Detached, with its output in
-// a file: a board restarting under bun --watch neither kills it nor leaves
-// it writing into a closed pipe.
+// Start the helper for an answered merge card. Owned by the session (T-151),
+// with its output in a file: a board restarting under bun --watch neither
+// kills it nor leaves it writing into a closed pipe.
 const startMerge = (id: string, project: string, pr: number, task: string | null, onProject: string[], untracked = false) => {
   mkdirSync(MERGING, { recursive: true });
   const log = join(MERGING, `${project || "_default"}.out`);
@@ -1142,9 +1178,9 @@ const startMerge = (id: string, project: string, pr: number, task: string | null
   try {
     const fd = openSync(log, "w");
     try {
-      child = spawn(join(ROOT, "bin/fm-merge.sh"),
-        ["--pr", String(pr), ...(untracked ? ["--untracked"] : task ? ["--task", task] : []), ...onProject, "--repo", ROOT],
-        { detached: true, stdio: ["ignore", fd, fd], env: childEnv() });
+      child = startOwned("fm-merge.sh", [join(ROOT, "bin/fm-merge.sh"),
+        "--pr", String(pr), ...(untracked ? ["--untracked"] : task ? ["--task", task] : []), ...onProject, "--repo", ROOT],
+        fd, childEnv());
     } finally { closeSync(fd); }
   } catch { settle(id, "failed", "Merge helper unavailable"); return; }
   ours.add(id);
@@ -1232,8 +1268,9 @@ const dispatchTask = async (project: string, task: string): Promise<Carried> => 
 };
 // send back: another worker round on the same branch and pull request, by
 // bin/fm-worker.sh, which holds the task's own lock, so a second round on top
-// of a running one refuses rather than doubling up. It runs detached; a round
-// that refuses within the first seconds is reported with what it said.
+// of a running one refuses rather than doubling up. It runs owned by the
+// session, like a merge (T-151); a round that refuses within the first
+// seconds is reported with what it said.
 const sendBack = async (project: string, task: string, pr: number | null): Promise<Carried> => {
   if (!SAFE_NAME.test(task)) return { outcome: "failed", reason: "no task to send back" };
   const dir = join(ROOT, "state/dispatch");
@@ -1243,8 +1280,8 @@ const sendBack = async (project: string, task: string, pr: number | null): Promi
   try {
     const fd = openSync(log, "a");
     try {
-      child = spawn(join(ROOT, "bin/fm-worker.sh"), ["--task", task, "--repo", ROOT, ...(pr ? ["--pr", String(pr)] : [])],
-        { detached: true, stdio: ["ignore", fd, fd], env: { ...childEnv(), ...(project && project !== defaultProject() ? { FM_PROJECT: project } : {}) } });
+      child = startOwned("fm-worker.sh", [join(ROOT, "bin/fm-worker.sh"), "--task", task, "--repo", ROOT, ...(pr ? ["--pr", String(pr)] : [])],
+        fd, { ...childEnv(), ...(project && project !== defaultProject() ? { FM_PROJECT: project } : {}) });
     } finally { closeSync(fd); }
   } catch { return { outcome: "failed", reason: "fm-worker.sh could not be started" }; }
   const exited = await new Promise<number | null | "running">((settled) => {
@@ -1583,6 +1620,8 @@ const server = Bun.serve({
         const temporary = join(dir, `.${id}.${crypto.randomUUID()}.tmp`);
         writeFileSync(temporary, JSON.stringify(decision) + "\n", { flag: "wx" });
         try { linkSync(temporary, file); } finally { unlinkSync(temporary); }
+        // the wake, at write time: firstmate is told by the writer, never by a watcher
+        pushWake(id, "answered", decision);
         // Carried out now, by the one script that owns each effect, and never
         // silently: the outcome is done, failed with its reason, or recorded
         // for an option with no effect. A merge runs in the background and
