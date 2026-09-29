@@ -98,17 +98,26 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
    No adapter applies `config.yaml`'s `model:` key until T-127 merges, so
    report the CLI's own default model as the model actually in use, for every
    role, until then.
-3. In a user-managed Herdr session (`HERDR_ENV=1`), check `herdr` availability
-   there, read installed `herdr --skill` and help, and inspect the caller pane and
-   live panes. *Stock launch* every worker and reviewer only through
+3. *Stock launch* every worker and reviewer only through
    [dispatch-crew](dispatch-crew/SKILL.md) (`bin/fm-worker.sh` /
-   `bin/fm-review.sh`). Managed transport creates the owned tab; do not invent
-   wrappers, set `FM_TRANSPORT=direct`, or run vendor CLIs in hand-made panes.
-   Reuse existing live agents. An internal conversation subagent, a background
-   CLI or a tail-only log pane is not evidence of a separate Herdr agent. Never
-   fabricate lifecycle events for log panes. Outside that session do not control
-   someone else's Herdr. If stock launch fails, follow the failure table in
-   dispatch-crew — report the limitation; do not invent a bypass.
+   `bin/fm-review.sh`); do not invent wrappers or run vendor CLIs in hand-made
+   panes. Since T-144 every round runs headless, whatever the terminal: a
+   process group fm starts and supervises, with `runner.pid`, `runner.exit`
+   and `run.log` in its attempt directory under `state/runs/<actor>/`. A
+   terminal host (`host:` in `config.yaml`, or Herdr, cmux or tmux detected)
+   only adds a window that follows `run.log`: a Herdr tab, a cmux workspace or
+   a tmux window, labelled with the actor. Every window is a log follower, so a
+   window is never evidence that a round is alive, and closing one stops
+   nothing; the round's own `runner.pid` and lifetime lock are. Its
+   `window.json` records the window, `none` included. `FM_TRANSPORT=direct`
+   only asks for no window. Stop a round with `bin/fm.sh stop <actor>` or
+   `bin/fm.sh stop --task <id>` (the same `bin/fm-herdr.py stop` the board's
+   park and drop run), and watch one with `bin/fm.sh follow <actor>`. Reuse
+   existing live agents. An internal conversation subagent is not a crew
+   round. Never fabricate lifecycle events. In a user-managed Herdr session
+   (`HERDR_ENV=1`), read the installed `herdr --skill` and help, and do not
+   control someone else's Herdr. If stock launch fails, follow the failure
+   table in dispatch-crew — report the limitation; do not invent a bypass.
 4. Start or reuse the captain board. The shipped server command is
    `FM_ROOT=<root> bun --watch board/server.ts` from the repository, with
    `FM_PORT` defaulting to 4173 and a loopback URL. Check the existing server's
@@ -146,9 +155,10 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   [Judge a task when it turns ready](#judge-a-task-when-it-turns-ready)). Actual dispatch
   checks for any recorded green light, merged dependency events and capacity
   derived from task events, not live process counts. Firstmate must verify the
-  green light applies to the proposed work and reconcile actual capacity. When
-  `HERDR_ENV=1`, crew launch is *stock launch* only (see
-  [dispatch-crew](dispatch-crew/SKILL.md)); `FM_TRANSPORT=direct` is refused.
+  green light applies to the proposed work and reconcile actual capacity. Crew
+  launch is *stock launch* only (see [dispatch-crew](dispatch-crew/SKILL.md)),
+  with or without a terminal host; `FM_TRANSPORT=direct` runs the same
+  supervised round with no window.
 - `bin/fm-worker.sh --task <id> --repo <root>` owns worktree setup, adapter calls,
   commits, push, PR creation and publishing `.fm-say.md`. Inspect preserved work
   before restarting: the script can recreate a worktree. Resume a live process
@@ -474,6 +484,10 @@ and shell identities and shell-only state. Added panes, moved/shared/reused tabs
 unknown observations and incomplete results retain resources. Close only the
 verified pane; its single-pane tab may disappear as a consequence, never through
 unconditional whole-tab deletion. Preserve explicit transport/auto-close opt-outs.
+Those rules guard the window, not the round (T-144): the round's process is
+fm's, in its own process group, so a pane that closes, crashes or is retained
+never ends or keeps a round. A cmux workspace is closed by its ref and a tmux
+window closes itself when its follower exits.
 
 ## Author and verify captain decisions
 

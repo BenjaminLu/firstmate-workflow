@@ -64,10 +64,6 @@ fm_adapter_context() {
       exit 64; }
   fi
   code="$(cd "$(dirname "$adapter")/../.." && pwd)"
-  if [ "${HERDR_ENV:-}" = 1 ] && [ "${FM_TRANSPORT:-herdr}" = direct ] && [ "${FM_ALLOW_DIRECT:-}" != 1 ]; then
-    echo "${adapter##*/}: FM_TRANSPORT=direct is refused when HERDR_ENV=1; use stock managed Herdr via fm-worker/fm-review" >&2
-    exit 70
-  fi
   if [ "${FM_CONTEXT_READY:-}" != 1 ] && { [ -n "${FM_RUN_DIR:-}" ] || { [ "${HERDR_ENV:-}" = 1 ] && [ "${FM_TRANSPORT:-herdr}" != direct ]; }; }; then
     # shellcheck disable=SC2154  # validated positional arguments in each adapter
     exec python3 "$code/bin/fm-herdr.py" transport "$adapter" "$prompt" "$tree" "$log"

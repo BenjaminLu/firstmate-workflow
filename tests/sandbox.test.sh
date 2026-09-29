@@ -1690,7 +1690,7 @@ if real_sandbox_ok; then
   printf 'vendor: mock\n' > "$rt/config.yaml"
   rpol="$(fm_policy worker "" "$rt/config.yaml")"
   printf '%s' "$rpol" > "$rt/policy.json"
-  rout="$(FM_ALLOW_DIRECT=1 "$SB" run --policy="$rt/policy.json" --root="$rt/tree" --tmp="$rt/tmp" \
+  rout="$("$SB" run --policy="$rt/policy.json" --root="$rt/tree" --tmp="$rt/tmp" \
     -- bash -c 'rm -rf "$1"; echo "rm rc=$?"' _ "$rt/tree" 2>&1)"
   assert_contains "$rout" "rm rc=" "and the in-sandbox rm -rf actually ran (real sandbox)"
   assert_ok "test -e '$rt/tree/.git'" "real sandbox: rm -rf \"\$tree\" from inside leaves .git behind"
@@ -1701,7 +1701,7 @@ if real_sandbox_ok; then
   # threaded through mt/fd/ft (T-123 round 7's hygiene lint bans the
   # literal shape anywhere in a suite, same as the mkcmd.sh fixture above).
   mt=mktemp; fd=-d; ft=-t
-  envout="$(FM_ALLOW_DIRECT=1 "$SB" run --policy="$rt/policy.json" --root="$rt/tree" --tmp="$rt/tmp" \
+  envout="$("$SB" run --policy="$rt/policy.json" --root="$rt/tree" --tmp="$rt/tmp" \
     -- bash -c "
       set -e
       d1=\"\$($mt $fd)\" && [ -w \"\$d1\" ] || exit 1
@@ -1714,7 +1714,7 @@ if real_sandbox_ok; then
   assert_contains "$envout" "ALL_OK" "real sandbox: mktemp -d, mktemp -t, \$HOME/.cache and python's tempfile all succeed under the round's own directory"
   # the .git deny must not reach a sibling that merely starts with the same
   # four characters, or a workflow file under .github/ (T-128 review round 1)
-  gout="$(FM_ALLOW_DIRECT=1 "$SB" run --policy="$rt/policy.json" --root="$rt/tree" --tmp="$rt/tmp" \
+  gout="$("$SB" run --policy="$rt/policy.json" --root="$rt/tree" --tmp="$rt/tmp" \
     -- bash -c '
       set -e
       echo x >> .gitignore
@@ -1735,7 +1735,7 @@ if real_sandbox_ok; then
   printf 'vendor: mock\n' > "$rt/cconfig.yaml"
   ccpol="$(fm_policy worker "" "$rt/cconfig.yaml")"
   printf '%s' "$ccpol" > "$rt/cpolicy.json"
-  ckout="$(FM_ALLOW_DIRECT=1 "$SB" run --policy="$rt/cpolicy.json" --root="$rt/clone" --tmp="$rt/ctmp" \
+  ckout="$("$SB" run --policy="$rt/cpolicy.json" --root="$rt/clone" --tmp="$rt/ctmp" \
     -- bash -c '
       set -e
       echo mine > f.txt

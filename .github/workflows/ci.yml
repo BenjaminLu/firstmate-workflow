@@ -54,8 +54,9 @@ jobs:
       # so the shards are balanced by how long each suite actually took, not
       # only by its size. A first run, a fresh fork, or no permission to read
       # actions here all leave this file empty or absent, and bin/ci.sh reads
-      # that exactly like any other suite it has no duration for - its byte
-      # size instead. Nothing here fails the job.
+      # that exactly like any other suite it has no duration for - estimated
+      # in seconds from its size, or by size alone when nothing was recorded
+      # (T-148). Nothing here fails the job.
       - name: previous suite timings
         env:
           GH_TOKEN: ${{ github.token }}
