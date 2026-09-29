@@ -3190,7 +3190,10 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
   not be read. While nothing holds the board's port, `run` also binds it
   behind the profile before the round: a bind that gets through is treated
   like a connection that does, the round getting no loopback but its proxy,
-  or being refused. That is macOS only, where loopback is the host's; on
+  or being refused. Whether something holds the board's port is asked of
+  the port - a plain connect outside the profile - not read from netstat,
+  whose listing can miss it; a port that answers is treated as listening,
+  tried by connecting and never bound. That is macOS only, where loopback is the host's; on
   Linux the round's network namespace makes any bind the round's own. At the
   other end `board/server.ts` refuses `FM_PORT` set but not a port, empty
   included, with exit 64 - it reads the variable through libc's `getenv`,

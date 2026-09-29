@@ -1183,6 +1183,19 @@ if [ "$cmd" = run ]; then
       listening=unknown
       say "cannot list loopback listeners; the round reaches no loopback port but its proxy"
     fi
+    # Whether something holds the board's port is asked of the port itself,
+    # by connecting to it here, outside the profile: a listing can miss it
+    # (another netstat's format, a listener it does not show), and then the
+    # round would try to bind a port that is held (T-153).
+    held_board="${FM_PORT:-4173}"
+    if [ "$listening" != unknown ]; then
+      case ",$listening," in
+        *",$held_board,"*) ;;
+        *) if [ "$(python3 -c "$LOOP_PY" fm-loopback-check "$held_board" 2>/dev/null | sed 1d)" = "$held_board" ]; then
+             listening="${listening:+$listening,}$held_board"
+           fi ;;
+      esac
+    fi
   fi
   make_profile() {
     python3 -c "$SB_PY" profile "$policy" "$os" "$root" "$tmp" "$vendor" "$port" "$listening" "$sock" \

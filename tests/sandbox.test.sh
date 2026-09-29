@@ -850,6 +850,20 @@ assert_lacks "$(cat "$t/lo.profile.sb" 2>/dev/null)" "$wild" "which binds nothin
 assert_eq "7" "$(lo_round holds "$lport")" "the board listening: the round runs"
 assert_lacks "$(cat "$t/lo.checks" 2>/dev/null)" "bind:" "and no bind is tried on a port something already holds"
 assert_contains "$(cat "$t/lo.checks" 2>/dev/null)" "fm-loopback-check $lport" "while connecting to it is"
+# whether the board's port is held is asked of the port, not read from a
+# listing: a netstat whose lines cannot be parsed still tries no bind on a
+# board that is listening (T-153; the Linux runner's netstat)
+mkdir -p "$t/lobin-garbled"; cp "$t/psbin/ps" "$t/lobin-garbled/ps"
+printf '#!/bin/sh\nprintf "Active Internet connections\\nsomething else entirely\\n"\n' > "$t/lobin-garbled/netstat"
+chmod +x "$t/lobin-garbled/netstat"
+rm -f "$t/lo.profile.sb" "$t/lo.checks"
+LO_MODE=holds FM_PORT="$lport" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec-lo" PATH="$t/lobin-garbled:$PATH" \
+  "$SB" run --policy="$t/worker.json" --root="$root" --ctl="$t/ctl" -- "$t/seven.sh" </dev/null 2>"$t/lo.err"
+assert_eq "7" "$?" "the board listening where netstat shows nothing: the round runs"
+assert_lacks "$(cat "$t/lo.checks" 2>/dev/null)" "bind:" "and no bind is tried on the board's port it holds"
+assert_contains "$(cat "$t/lo.checks" 2>/dev/null)" "fm-loopback-check $lport" "it is tried by connecting, as a listener"
+assert_contains "$(cat "$t/lo.profile.sb" 2>/dev/null)" "(deny network-bind network-inbound (local ip \"localhost:$lport\"))" \
+  "and its deny line is in the profile"
 # Linux: the round's loopback is its network namespace's own, so a bind
 # there is never the board's and nothing is tried before the round
 rm -f "$t/lo.checks"
