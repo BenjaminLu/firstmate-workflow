@@ -1288,6 +1288,17 @@ fm_herdr_emit_status() {  # fm_herdr_emit_status <root> <actor> <task> <en> <tw>
   fi
 }
 
+# The wake (T-137): the writer of an event that needs firstmate pushes it -
+# onto state/session/wake.jsonl, then a ring of every doorbell - so nothing
+# has to watch for it. <line> is the short reason firstmate is woken with,
+# `finished: T-134 worker-mira-t134-r1 ok`. Best effort, like a progress
+# line: the round's own agent_finished is the record, the wake a courtesy
+# on top, and a push that fails says so on stderr and changes nothing else.
+fm_wake_push() {   # fm_wake_push <root> <id> <reason> <line> [json]
+  python3 "$_fm_code_dir/lib/fm_lifeline.py" push "$@" >/dev/null </dev/null \
+    || echo "fm: the wake for $2 was not pushed; the event log still records it" >&2
+}
+
 fm_strip_comments() { sed -e 's/^[[:space:]]*#.*$//' -e 's/[[:space:]]#.*$//' "$1"; }
 
 # It descends: `bin/*.sh` misses a subdirectory, and bin/adapters has

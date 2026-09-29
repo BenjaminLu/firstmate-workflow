@@ -46,6 +46,8 @@ exactly as long.
   fm_lifeline.py ring <root> <line>
                                  ring every waiter's doorbell under
                                  <root>/state/session/wake.d; print how many
+  fm_lifeline.py push <root> <id> <reason> <line> [json]
+                                 append a wake to the queue, then ring (T-137)
   fm_lifeline.py await <root> <file> [seconds]
                                  register a doorbell, then wait until <file>
                                  exists (0) or the seconds run out (1)
@@ -484,6 +486,90 @@ def ring(root, line):
     return rang
 
 
+WAKE_QUEUE = 'state/session/wake.jsonl'
+
+
+def push(root, ident, reason, line, extra=None):
+    """Push one wake (T-137): append it to the wake queue, then ring every
+    doorbell. The writer of the event is the one that calls this - a round
+    ending (fm-worker.sh, fm-review.sh), a run found lost (fm-herdr.py), a
+    gate result (fm-emit.sh) - so nothing ever has to look for it. `line`
+    is the short machine-readable reason firstmate is woken with
+    (`review: T-134 APPROVE 4ea1ec2`); `extra` is kept on the item.
+    Returns how many doorbells rang."""
+    import fcntl
+    import json
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', str(ident)):
+        raise ValueError('a wake id is letters, digits, - and _')
+    line = ' '.join(str(line).split())
+    item = dict(extra or {})
+    item.update(id=str(ident), reason=str(reason), line=line, woken=time.time())
+    path = os.path.join(str(root), WAKE_QUEUE)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        os.write(fd, (json.dumps(item) + '\n').encode())
+    finally:
+        os.close(fd)
+    return ring(root, line)
+
+
+# One record of what firstmate has been given (T-137). Every reader of the
+# wake queue - the watch that hands a wake to the harness's hook, and
+# `fm-session.sh wait/status/start` - counts a wake as delivered by this
+# record alone, so a wake one of them delivered is never delivered again by
+# the other. `fm-session.sh ack` and the watch's take both write it here.
+ACK_DIR = 'state/session/acknowledged'
+
+
+def acknowledged(root, ident):
+    """When the wake `ident` was last acknowledged; None for never."""
+    import json
+    try:
+        with open(os.path.join(str(root), ACK_DIR, str(ident) + '.json')) as f:
+            record = json.load(f)
+        return float(record.get('acknowledged') or 0)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def is_acknowledged(root, ident, woken):
+    """Whether the wake `ident`, woken at `woken`, was delivered."""
+    seen = acknowledged(root, ident)
+    return seen is not None and seen >= (woken or 0)
+
+
+def acknowledge(root, ident, woken, wakes=1):
+    """Record that the wake `ident`, woken at `woken`, was delivered; a later
+    wake with the same id (its merge settled) is listed again. Idempotent,
+    under state/session/.ack.lock, written whole. Returns the record."""
+    import fcntl
+    import json
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', str(ident)):
+        raise ValueError('a wake id is letters, digits, - and _')
+    base = os.path.join(str(root), 'state/session')
+    os.makedirs(os.path.join(base, 'acknowledged'), exist_ok=True)
+    path = os.path.join(str(root), ACK_DIR, str(ident) + '.json')
+    lock = os.open(os.path.join(base, '.ack.lock'), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if is_acknowledged(root, ident, woken):
+            with open(path) as f:
+                return json.load(f)
+        record = dict(id=str(ident), acknowledged=max(time.time(), woken or 0), wakes=wakes)
+        temp = f'{path}.{os.getpid()}.new'
+        with open(temp, 'w') as out:
+            json.dump(record, out, indent=2)
+            out.write('\n')
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(temp, path)
+        return record
+    finally:
+        os.close(lock)
+
+
 def doorbells(root):
     """How many waiters hold a doorbell now (a stale one counts until rung)."""
     import glob
@@ -736,6 +822,15 @@ def main(args):
         if len(args) != 2 or not args[0]:
             return _usage()
         print(ring(args[0], args[1]))
+        return 0
+    if mode == 'push':
+        if len(args) not in (4, 5) or not args[0]:
+            return _usage()
+        import json
+        extra = json.loads(args[4]) if len(args) == 5 and args[4] else {}
+        if not isinstance(extra, dict):
+            raise ValueError('the extra fields of a wake are a JSON object')
+        print(push(args[0], args[1], args[2], args[3], extra))
         return 0
     if mode == 'await':
         if len(args) not in (2, 3) or not args[0]:

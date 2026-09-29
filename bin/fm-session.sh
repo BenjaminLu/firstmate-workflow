@@ -51,4 +51,14 @@ if [ "$MODE" = start ]; then
     [ $? -eq 1 ] && echo "fm-session: config.yaml's worker model '$wmodel' is not one $wv is known to accept; check it before dispatching (T-127)" >&2
   fi
 fi
+# The hooks that wake firstmate (T-137) are armed from the first session:
+# start installs them, for the harness it detects, into that harness's
+# local, uncommitted config (bin/lib/fm_hooks.py, which the fm command
+# line's hooks runs too). A harness it cannot name is said, and the session
+# starts anyway.
+if [ "$MODE" = start ]; then
+  if ! python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_hooks.py" install --detect --repo "$REPO" >&2; then
+    echo "fm-session: the hooks that wake firstmate were not installed; run bin/lib/fm_hooks.py install --harness claude|codex|cursor" >&2
+  fi
+fi
 exec python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" session "$MODE" "$REPO" "$DECISION" "$TIMEOUT"

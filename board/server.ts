@@ -479,6 +479,86 @@ const taskLists = (): Array<{ project: string; defs: Array<Record<string, unknow
   return dirs.map(([project, rel]) => ({ project, defs: taskDefs(rel) }));
 };
 
+// Whether firstmate is watched (T-137), read from the watch's own files
+// under state/watch (the board runs none of the watch's code). The live cycle names its doorbell in owner.json, and a
+// doorbell is a FIFO its waiter holds open: opening it to write without
+// blocking succeeds only while a reader holds it, and fails (ENXIO) the moment
+// that waiter has died - the kernel's answer, never a pid or a file's age.
+// Nothing is written to it, so nobody is rung. The beacon is that doorbell,
+// and its age is how long the cycle has held the watch. A gap is work in
+// flight - crew aboard, or a card the captain has not answered - with no
+// live cycle; it opens when the last cycle ended, or when the work began if
+// that was later or nothing has ever watched. `waiting` counts the wakes
+// nothing has delivered yet: what a harness that cannot be woken idle reads
+// at its next turn start.
+const WATCH_DIR = join(ROOT, "state/watch");
+const watchJson = (name: string): Record<string, unknown> | null => {
+  try { return JSON.parse(readFileSync(join(WATCH_DIR, name), "utf8")); } catch { return null; }
+};
+const watchWaiting = () => {
+  let n = 0;
+  try {
+    for (const f of readdirSync(join(WATCH_DIR, "wake")).filter((f) => f.endsWith(".json"))) {
+      try { n += (JSON.parse(readFileSync(join(WATCH_DIR, "wake", f), "utf8")).lines ?? []).length; } catch { /* being claimed */ }
+    }
+  } catch { /* none written */ }
+  // the queue, less what the one record of delivery says firstmate was given
+  // (state/session/acknowledged: `fm-session.sh ack`, or the watch's take)
+  const latest = new Map<string, number>();
+  try {
+    for (const l of readFileSync(join(ROOT, "state/session/wake.jsonl"), "utf8").split("\n").slice(0, -1)) {
+      try {
+        const item = JSON.parse(l);
+        if (typeof item?.id === "string" && /^[A-Za-z0-9_-]+$/.test(item.id)) latest.set(item.id, Number(item.woken) || 0);
+      } catch { /* a line that does not parse is skipped */ }
+    }
+  } catch { /* nothing pushed */ }
+  for (const [id, woken] of latest) {
+    let acked: number | null = null;
+    try { acked = Number(JSON.parse(readFileSync(join(ROOT, "state/session/acknowledged", `${id}.json`), "utf8")).acknowledged) || 0; } catch { /* never */ }
+    if (acked === null || acked < woken) n++;
+  }
+  return n;
+};
+const watchState = (events: Event[], aboard: string[], cards: Array<{ ts?: unknown }>) => {
+  const owner = watchJson("owner.json");
+  let alive = false;
+  const bell = typeof owner?.bell === "string" ? owner.bell : "";
+  try {
+    // only a doorbell of this tree's own
+    if (bell && realpathSync(join(bell, "..")) === realpathSync(join(ROOT, "state/session/wake.d"))) {
+      const fd = openSync(bell, constants.O_WRONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+      try { alive = fstatSync(fd).isFIFO(); } finally { closeSync(fd); }
+    }
+  } catch { /* ENXIO: nobody holds it; ENOENT: it is gone */ }
+  const started = alive && typeof owner?.started === "string" ? owner.started : null;
+  const wake = watchJson("last-wake.json");
+  // when each aboard crewman first appears, and when each card was raised
+  const first = new Map<string, number>();
+  for (const e of events) {
+    const a = String(e.actor ?? ""), t = Date.parse(String(e.ts ?? ""));
+    if (aboard.includes(a) && !first.has(a) && !Number.isNaN(t)) first.set(a, t);
+  }
+  const begun = [...first.values(), ...cards.map((c) => Date.parse(String(c.ts ?? ""))).filter((t) => !Number.isNaN(t))];
+  const inflight = aboard.length + cards.length;
+  let gap: { since: string | null; inflight: number } | null = null;
+  if (inflight > 0 && !alive) {
+    const ended = Date.parse(String(owner?.ended ?? ""));
+    const from = Math.max(begun.length ? Math.min(...begun) : NaN, Number.isNaN(ended) ? -Infinity : ended);
+    // to the second, as the log and the watch write their times
+    gap = { since: Number.isFinite(from) ? new Date(from).toISOString().replace(/\.\d{3}Z$/, "Z") : null, inflight };
+  }
+  return {
+    alive,
+    since: started,
+    beaconAge: started ? Math.max(0, Math.floor((Date.now() - Date.parse(started)) / 1000)) : null,
+    gen: typeof owner?.gen === "number" ? owner.gen : null,
+    lastWake: wake ? { ts: String(wake.ts ?? ""), reason: String(wake.reason ?? "") } : null,
+    waiting: watchWaiting(),
+    gap,
+  };
+};
+
 // `only` is ?project=: that project's work, cards and log, and the counts of
 // those. Without it, every project on one page (design section 15.10 point 4).
 const state = (only: string | null = null) => {
@@ -1004,7 +1084,8 @@ const state = (only: string | null = null) => {
       const p = projectOf(x);
       byProject[p] = mentioned(repoOf(p), x, byProject[p] ?? {});
     }
-  return { ...out, pr_urls: byProject[def] ?? {}, pr_urls_by_project: byProject };
+  const watched = watchState(events, shownCrew.filter((c) => c.role !== "firstmate").map((c) => c.id), shownPending);
+  return { ...out, watch: watched, pr_urls: byProject[def] ?? {}, pr_urls_by_project: byProject };
 };
 
 // whether `a` happened at or after `b`. Event stamps are whole seconds, so
@@ -1154,14 +1235,20 @@ const settle = (id: string, merge: "merged" | "failed", reason = "") => {
   const file = join(RESPONSES, `${id}.json`);
   const d = readJson<Record<string, any>>(file);
   unknownOutcome.delete(id);
+  const marker = markerOf(projectOf(d));
+  const release = () => {
+    if (readJson<Marker>(marker)?.decision === id) { try { unlinkSync(marker); } catch { /* already gone */ } }
+  };
   if (d && mergeOf(d) === "running") {
     rewrite(file, { ...d, merge, ...(merge === "failed" ? { merge_reason: reason } : {}), merge_settled: new Date().toISOString(),
       // the answer's effect was the merge, and this is how it ended
       ...(d.effect === "merge" ? { effect_outcome: merge === "merged" ? "done" : "failed", effect_reason: reason } : {}) });
+    // the marker goes with the record, before anything else is done:
+    // a reader that sees the outcome never sees the turn still held
+    release();
     pushWake(id, "merge_settled", readJson(file));
   }
-  const marker = markerOf(projectOf(d));
-  if (readJson<Marker>(marker)?.decision === id) { try { unlinkSync(marker); } catch { /* already gone */ } }
+  release();
 };
 // a project's turn is held while any of its records says running, whether
 // this board started it, a previous one did, or its outcome is unknown

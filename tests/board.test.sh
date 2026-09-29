@@ -132,6 +132,45 @@ assert_eq "backlog" "$(jq -r '.tasks[]|select(.id=="T-B")|.stage' <<<"$s")" "an 
 assert_eq "ready"   "$(jq -r '.tasks[]|select(.id=="T-C")|.stage' <<<"$s")" "an untouched task with nothing to wait on reads as ready"
 assert_eq "1" "$(jq -r .counts.inflight <<<"$s")" "the counts follow the log"
 
+# T-137: whether firstmate is watched, read from the real watch
+# (bin/fm-watch-arm.sh, bin/lib/fm_watch.py). Nothing has ever watched this
+# fixture, and worker-1 is aboard T-A: the board says firstmate is not
+# watched, with an open gap that began when worker-1 did. A cycle holding
+# the watch reads as watched, with no gap; a wake claimed is the last wake,
+# with its reason; a wake no arm has taken yet is waiting; and once the
+# cycle's owner is gone the gap is open again, from when the cycle ended.
+began="$(jq -r 'select(.actor=="worker-1")|.ts' "$d/state/events.jsonl" | head -1)"
+assert_eq "false" "$(jq -r .watch.alive <<<"$s")" "with no watcher the board says firstmate is not watched"
+assert_eq "1 $began" "$(jq -r '"\(.watch.gap.inflight) \(.watch.gap.since)"' <<<"$s")" \
+  "work in flight with nothing ever watching is an open gap, from when the work began"
+# the stand-in session that owns the cycle, ended and awaited below
+sleep 300 & watch_owner=$!
+# run from the fixture: a checkout under state/worktrees is a crew round's,
+# and never arms
+watchcli() { (cd "$d" && FM_SESSION_PID="$watch_owner" FM_LIFELINE_GRACE=1 "$ROOT/bin/fm-watch-arm.sh" --repo "$d" "$@"); }
+wake_written() { [ -n "$(ls "$d/state/watch/wake/" 2>/dev/null)" ]; }
+unwatched() { [ "$(watchcli --status 2>/dev/null | jq -r .watched)" = false ]; }
+watchcli --ensure >/dev/null 2>&1
+sw="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "true 1 null" "$(jq -r '"\(.watch.alive) \(.watch.gen) \(.watch.gap)"' <<<"$sw")" \
+  "a cycle holding the watch reads as watched, with no gap"
+python3 "$ROOT/bin/lib/fm_lifeline.py" push "$d" reviewer-1 verdict "review: T-A APPROVE 4ea1ec2" >/dev/null
+assert_eq "review: T-A APPROVE 4ea1ec2" "$(watchcli --max-wait 10 2>/dev/null)" "an arm claims the wake"
+python3 "$ROOT/bin/lib/fm_lifeline.py" push "$d" worker-1 round_end "finished: T-A worker-1 ok" >/dev/null
+wait_for 10 wake_written
+sw="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "review: T-A APPROVE 4ea1ec2" "$(jq -r .watch.lastWake.reason <<<"$sw")" "the last wake and its reason are shown"
+assert_eq "1" "$(jq -r .watch.waiting <<<"$sw")" "and a wake no arm has taken yet is waiting"
+kill "$watch_owner" 2>/dev/null; wait "$watch_owner" 2>/dev/null
+wait_for 15 unwatched
+sw="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+ended="$(jq -r .ended "$d/state/watch/owner.json" 2>/dev/null)"
+assert_ne "null" "$ended" "the cycle says when it ended"
+assert_eq "false $ended" "$(jq -r '"\(.watch.alive) \(.watch.gap.since)"' <<<"$sw")" \
+  "with its owner gone the board is not watched, and the gap runs from when the cycle ended"
+assert_eq "1" "$(grep -c 'data-watch' "$d/board/public/index.html")" "the page carries the watch line"
+rm -rf "$d/state/watch" "$d/state/session"
+
 
 # a task whose review never happened, or whose worker died, must not keep
 # reading as work in progress

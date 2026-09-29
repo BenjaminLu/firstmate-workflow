@@ -432,6 +432,20 @@ for scenario in signed unsigned outage; do
     "and exactly once"
   assert_matches "$(jq -r 'select(.type=="agent_finished")|.actor' < "$rr/state/events.jsonl")" \
     '^reviewer-[a-z]+[0-9]*-tz-r[0-9]+[a-z]*$' "and under its own per-run name"
+  # T-137: the verdict wakes firstmate - one item on the wake queue, pushed
+  # by the round after its agent_finished, and nothing else (its progress
+  # and its approved/review_failed push nothing of their own)
+  actor_r="$(jq -r 'select(.type=="agent_finished")|.actor' < "$rr/state/events.jsonl")"
+  assert_eq "1" "$(grep -c . "$rr/state/session/wake.jsonl" 2>/dev/null || echo 0)" \
+    "a $scenario round's end is one wake on the queue, and nothing else is"
+  assert_eq "$actor_r verdict" "$(jq -r '"\(.id) \(.reason)"' "$rr/state/session/wake.jsonl" 2>/dev/null)" \
+    "under the round's own name"
+  case "$scenario" in
+    signed) want='^review: T-Z APPROVE( [0-9a-f]{7})? #9$' ;;
+    *)      want='^review: T-Z no verdict exit [1-9][0-9]*( [0-9a-f]{7})? #9$' ;;
+  esac
+  assert_matches "$(jq -r .line "$rr/state/session/wake.jsonl" 2>/dev/null)" "$want" \
+    "a $scenario round wakes firstmate with its verdict"
   rm -rf "$dr"
 done
 

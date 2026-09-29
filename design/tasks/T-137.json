@@ -1,0 +1,48 @@
+{
+  "id": "T-137",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-151"
+  ],
+  "title": "firstmate is woken for every queued judgment, whatever harness it runs in: a bridge from T-141's wake queue to each harness's hooks (Claude Code, Codex, Cursor), never relying on firstmate to remember",
+  "scope": [
+    "bin/fm-watch.sh",
+    "bin/fm-watch-arm.sh",
+    "bin/fm-turnend-guard.sh",
+    "bin/hooks/**",
+    "bin/lib/**",
+    "board/**",
+    "i18n/**",
+    "tests/**",
+    "design/**",
+    "skills/firstmate/SKILL.md",
+    "docs/**",
+    "README.md",
+    "bin/fm-emit.sh",
+    "bin/fm-diagram.sh",
+    "bin/fm-herdr.py",
+    "bin/fm.sh",
+    "bin/fm-config.sh",
+    ".gitignore",
+    "config.yaml",
+    "design/tasks/T-137.json",
+    "bin/fm-worker.sh",
+    "bin/fm-review.sh",
+    "bin/fm-decide.sh",
+    "bin/fm-session.sh"
+  ],
+  "acceptance": [
+    "Why. On 2026-09-28/29 finished crew rounds sat unhandled for up to six hours because firstmate's waits were hand-made per round and lapsed whenever a turn ended without one (the captain: 'you have no watcher, it happens often'). kunchenguid/firstmate solves this by taking re-arming away from the model: a one-shot watcher, re-armed by the harness's own Stop hook, wakes the session on an actionable event. The captain approved this direction on 2026-09-29, and on the same day re-scoped it: watching is done by scripts (T-141's resident autopilot), and this task only bridges the autopilot's wake queue to the harness and asked that it work for every primary harness (Claude Code, Codex, Cursor and others). Here the crew side is already uniform - every worker and reviewer round is run by fm-worker.sh/fm-review.sh, whatever the vendor, and emits the same events - so only the primary's wake path is per harness. Its own spec file, design/tasks/T-137.json, is committed on this branch.",
+    "Revised 2026-09-29 after firstmate's spike (captain approved): the wake is pushed, never watched. The writer of a wake item (T-141's autopilot, board/server.ts, bin/fm-decide.sh) appends it to state/wake-queue and writes one line to the session's wake FIFO; there is no separate watcher process and no polling. Claude Code: a Stop hook with asyncRewake blocks on the FIFO and on its owning claude's exit (kqueue NOTE_EXIT / pidfd), exits 2 with the reason on stderr to wake the session, and exits 0 when its owner dies. Verified on Claude Code 2.1.284: an idle interactive session was woken and answered with its earlier context; the hook re-armed at the next turn end; a plain blocking hook was orphaned (ppid 1) when claude was SIGKILLed and, still reading the FIFO, stole the next wake line - which is why the owner watch is required. Codex: firstmate on Codex is woken through app-server `turn/start` into its thread when its TUI is attached to the shared app-server daemon (verify with the Codex version in docs/verification/supervision.md); otherwise, and for Cursor, the queue is read at the next turn start and the board shows the item waiting. Where this contradicts the older lines below (a watcher, fm-watch.sh's blocking loop, a beacon), this line wins; the single-flight arming and the turn-end guard stay.",
+    "Scheduled 2026-09-29 by the captain ('Hook全面取代也要排進去') right after T-151, no longer behind T-141: the push path stands on its own. Writers in this task are every event that needs firstmate today - a crew round ending (fm-worker.sh and fm-review.sh at their end: verdict, failure, lost), a captain decision (board, fm-decide.sh), a PR check finishing when fm already watches it - each appending to state/wake-queue and ringing the FIFO. With this merged, firstmate needs no hand-made waiter of any kind (the ops scripts' `until grep` loops are retired). T-141's autopilot, when it lands, is one more writer through the same call; nothing here waits for it.",
+    "Installing the hooks (firstmate ruling, 2026-09-29, after round 3): no harness config is committed - a round's sandbox cannot write .claude/ or .cursor/, and firstmate makes no commits. `fm hooks install [--harness claude|codex|cursor]` writes or merges the hook entries into each harness's local, uncommitted config for this repository (Claude Code: .claude/settings.local.json; Codex and Cursor: their documented local equivalents, named in docs/verification/supervision.md), idempotently, printing what it changed; `fm hooks uninstall` removes exactly those entries. `bin/fm-session.sh start` runs the install for the harness it detects, so the hook is armed from the first session without a manual step. Tests run install, a second install (no change), uninstall, and a merge into an existing settings file, in a temp directory. docs/verification/supervision.md is written by the round: Claude Code with the facts firstmate measured on 2026-09-29 (2.1.284: idle wake via asyncRewake exit 2; a plain hook orphaned on SIGKILL and stealing the next wake; the owner watch), Codex and Cursor marked unverified until firstmate records a live check after merge - and nothing claims an unverified path works.",
+    "The watcher waits on T-141's state/wake-queue (and nothing else): it blocks until an unhandled wake exists, prints its reason lines and exits; a cursor file makes each wake close once; a beacon proves it is alive. Everything mechanical is done by the autopilot service, so the watcher never polls GitHub itself.",
+    "Zero tokens while idle: the harness hook parks on the wake queue inside its own process (a blocked read, not a model turn); the model runs only when a wake item arrives. No ScheduleWakeup, /loop or timed self-wake is used for watching.",
+    "Arming (bin/fm-watch-arm.sh). Single-flight: one watcher per repository, by a lock plus a generation number, so repeated hook firings attach to the live cycle instead of starting another; a dead or stale owner is superseded. After an actionable close it starts the successor watcher before the wake is delivered, so coverage has no gap while firstmate handles the wake.",
+    "Per-harness re-arm, each verified against the real harness and recorded with its version in docs/verification/supervision.md: Claude Code - a Stop hook with asyncRewake and a long timeout parks on fm-watch-arm.sh and wakes an idle session through exit 2 with the reason on stderr, plus a synchronous Stop guard that refuses to end a turn while work is in flight and no watcher is alive; Codex - its Stop hook (.codex/hooks.json) with the protocol Codex supports (if it cannot wake an idle session, the guard makes the turn park on fm-watch-arm.sh as a foreground call); Cursor - its stop hook (.cursor/hooks.json) parks on the arm and returns the reason as its follow-up, bounded by loop_limit. A harness with no hook support is named as unsupported, and firstmate there falls back to a Herdr pane running the watcher plus a desktop notification; nothing is claimed that was not verified.",
+    "Only the primary arms: crew rounds and their worktrees never arm or wake (they are identified by FM_IN_ROUND and their paths). While the captain has set an away mode (a later task), the hooks stand down.",
+    "Visible accountability. The board shows whether firstmate is watched (beacon age), the last wake and its reason, and any gap - time with work in flight and no live watcher - in en and zh-TW. skills/firstmate/SKILL.md states the rule: a turn never ends blind while work is in flight.",
+    "Tests (fail first; stubs answer as each harness does, taken from its docs or recorded payloads): each event kind wakes exactly once; progress is absorbed; two arms attach to one watcher; a dead owner is superseded; the successor starts before the wake; each harness hook's stop and wake contract; crew rounds never arm. Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate, plus the recorded live verification per harness. Workers do not run the suites themselves."
+  ]
+}

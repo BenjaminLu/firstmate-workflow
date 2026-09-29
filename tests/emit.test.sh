@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # fm-emit.sh is the only thing allowed to touch state/events.jsonl.
 set -uo pipefail
+# nothing inherited from a session: no FM_* setting and no HERDR_ENV, so no
+# event written here reaches the real herdr (tests/decide.test.sh's guard)
+for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
+  unset "$_fm_k" || true
+done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
@@ -209,5 +214,27 @@ assert_eq "agent_lost worker-x|reopened captain the merge card for #96 was raise
   "$(jq -rs 'map("\(.type) \(.actor)" + (if .data.reason then " " + .data.reason else "" end))|join("|")' "$c/state/events.jsonl")" \
   "both are written as given"
 rm -rf "$c"
+
+# T-137: a gate result wakes firstmate. The writer pushes the wake - one
+# item on state/session/wake.jsonl with the line firstmate is woken with -
+# so nothing watches GitHub for the required check. A crew round's own
+# gate_failed does not (its round's end wakes firstmate), and neither does
+# any other event: in the same log, only the gate runner's result wakes.
+g="$(mktemp -d)"
+wq="$g/state/session/wake.jsonl"
+FM_ROOT="$g" "$EMIT" --actor fm-run --type gate_failed --task T-137 --pr 117 --data '{"gate":6}' >/dev/null 2>&1
+assert_eq "gate gate: T-137 failed gate 6 #117" "$(jq -r '"\(.reason) \(.line)"' "$wq" 2>/dev/null)" \
+  "a gate result wakes firstmate with its line"
+FM_ROOT="$g" "$EMIT" --actor fm-run --type gate_passed --task T-137 --pr 117 >/dev/null 2>&1
+assert_eq "gate: T-137 passed #117" "$(jq -r .line "$wq" 2>/dev/null | tail -1)" "and a pass does too"
+FM_ROOT="$g" "$EMIT" --actor worker-ayo-t137-r4 --type gate_failed --task T-137 >/dev/null 2>&1
+FM_ROOT="$g" "$EMIT" --actor worker-ayo-t137-r4 --type crew_status --task T-137 \
+  --data '{"progress":{"done":1,"total":2}}' --en "half" --tw "一半" >/dev/null 2>&1
+FM_ROOT="$g" "$EMIT" --actor fm-run --type dispatched --task T-137 >/dev/null 2>&1
+assert_eq "5" "$(grep -c . "$g/state/events.jsonl")" "every one of the five events is written"
+assert_eq "2" "$(grep -c . "$wq" 2>/dev/null || echo 0)" \
+  "and only the gate runner's two results woke firstmate: not a round's gate, its progress, or a dispatch"
+assert_fail "test -e '$g/state/.events.lock'" "and the log's lock is released"
+rm -rf "$g"
 
 finish
