@@ -1908,11 +1908,14 @@ fm_tasks_write /dev/stdin "$qv/design/tasks" <<'J'
 J
 emv() { FM_ROOT="$qv" "$qv/bin/fm-emit.sh" "$@" >/dev/null; }
 # <actor> <task> <type> <identity beyond the six, as jq>
+# The program is single-quoted and the extra identity passed as --argjson:
+# bash 3.2 brace-expands a {a,b} inside "$(...)" that only escaped quotes protect.
 said() {
-  local six; six="$(jq -cn --arg t "$2" '{name:"vic",role:"worker",project:null,task:$t,round:1,attempt:1}')"
-  emv --actor "$1" --task "$2" --type "$3" \
-    --data "$(jq -cn --argjson i "$six" "{role:\"worker\",identity:(\$i + $4),activity:{en:\"on\",\"zh-TW\":\"進行\"}}")" \
-    --en "on" --tw "進行"
+  local six prog data
+  six="$(jq -cn --arg t "$2" '{name:"vic",role:"worker",project:null,task:$t,round:1,attempt:1}')"
+  prog='{role:"worker",identity:($i + $x),activity:{en:"on","zh-TW":"進行"}}'
+  data="$(jq -cn --argjson i "$six" --argjson x "$(jq -cn "$4")" "$prog")"
+  emv --actor "$1" --task "$2" --type "$3" --data "$data" --en "on" --tw "進行"
 }
 claude_ran='{vendor:"claude",model_requested:"claude-opus-5-5",model:"claude-opus-5-5",cli_version:"2.1.0",model_mismatch:false}'
 codex_starts='{vendor:"codex",model_requested:"gpt-6-astra",model:null,cli_version:null,model_mismatch:null}'
