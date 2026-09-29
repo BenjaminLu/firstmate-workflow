@@ -391,7 +391,7 @@ sed -i.bak '1s/.*/main changed the start/' "$d7/src/thing.sh"; rm -f "$d7/src/th
 git -C "$d7" commit -qam "main: the start"
 git -C "$d7" checkout -q -b resolved touched
 git -C "$d7" merge -q --no-edit main >/dev/null 2>&1 || true
-sed -n 1p "$d7/src/thing.sh" | grep -q '^<<<<<<<' || echo "(fixture: expected a conflict)" >&2
+assert_contains "$(sed -n 1p "$d7/src/thing.sh")" "<<<<<<<" "(fixture) merging main into the PR branch conflicts on the line both changed"
 { echo "changed by the pull request, after main changed the start"; sed -n '/^>>>>>>>/,$p' "$d7/src/thing.sh" | sed 1d; } > "$d7/src/thing.sh.new"
 mv "$d7/src/thing.sh.new" "$d7/src/thing.sh"
 git -C "$d7" commit -qam "resolve the conflict"; git -C "$d7" checkout -q main
