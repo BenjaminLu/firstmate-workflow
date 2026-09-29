@@ -118,7 +118,8 @@ fm_projects()         { _fm_registry "${1:-config.yaml}" names; }
 # (~/.ssh, ~/.config/gh, cloud credentials, every vendor's home but for its
 # own auth and session state, fm's state/ and the other worktrees in it),
 # the refused operations
-# (git push, gh, herdr, browsers, MCP), no unix sockets, the environment
+# (git push, gh, herdr, browsers, MCP), no unix sockets but those inside
+# the round's own write roots (bin/fm-sandbox.sh, T-153), the environment
 # scrub, and the repository's own .claude/, .mcp.json, .cursor/ and
 # GEMINI.md staying unloaded. GitHub and loopback are never a registry: a
 # network naming one is refused (65), as is any key or value that does not

@@ -1352,6 +1352,16 @@ card whose dependency is parked or dropped says so beside the blocker's id
 Labels are the dictionaries' `park` / `unpark` / `drop` / `parked`
 (擱置 / 恢復 / 不做 / 已擱置); zh-CN derives through `tw2cn.tsv`.
 
+**A review round's wall-clock (T-153).** Each task in `/api/state` carries
+`last_review`: its latest ended review round's reviewer, `seconds` from that
+reviewer's `review_opened` to its own `approved` or `review_failed`, and the
+outcome (`approved`, or the `review_outcome` the failure names), or `null`
+before any round has ended. Both ends are events `fm-emit.sh` stamped, so it
+is the log's clock, not the board's. A verdict with no `review_opened` of its
+reviewer's own is not timed. The review card showing it (`board/index.html`)
+and the round's own result recording it (`bin/fm-review.sh`) are outside
+T-153's scope, and are not done yet.
+
 **Pull request links (T-069).** Every `#n` the board shows — the top right of
 a lane card, a history row, the decision card's link, a roster row, and any
 `#n` written in text: a log line, a task title, a decision's text, a
@@ -1784,7 +1794,23 @@ web page open in the captain's browser; neither can write.
   "localhost:4173"))` never takes effect, placed before it or after it, and
   neither does a `require-not` carve-out. Only a positive list of ports
   narrows loopback, and a round's own test servers need arbitrary loopback
-  ports. So the board refuses the round itself.
+  ports. So the board refuses the round itself. Since T-153 a round's
+  profile does connect only to such a list - the kernel's ephemeral range,
+  less the board's port and every one listening at round start (13.1) - so
+  on a host where it holds, a round does not reach the board either; the
+  board's own refusal stays the boundary wherever it does not.
+- *The board's port is never a test's (T-153).* On 2026-09-29, with the
+  captain's board down, a review round ran `tests/board.test.sh` and a
+  fixture board bound 127.0.0.1:4173: the suite restarted it with
+  `FM_PORT="$PORTK"`, `PORTK` had come out empty, and Bun leaves a variable
+  that is set but empty out of `process.env` altogether, so the board read
+  it as unset and took 4173. firstmate's answers to merge cards then went
+  to the fixture. So `board/server.ts` reads `FM_PORT` as the process was
+  given it (libc's `getenv`, through `bun:ffi`), and a value that is set
+  but is not a port - empty included - refuses to start (64) rather than
+  meaning 4173. The suite's `start_k` refuses an empty port before it
+  starts anything, and a round's profile may not bind the board's port
+  (13.1).
 - *Who may write.* Every route that changes state or starts a process -
   `POST /decisions`, `POST /tasks`, `POST /open`, and any writing route added
   later - requires, all three: an `Authorization: Bearer` holding either the
@@ -3039,28 +3065,99 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
 - loopback: a round may open ports of its own and connect to them, which
   every suite that starts a server needs, but never the board's port
   (`FM_PORT`, 4173) nor any port that was listening when the round started.
-  On macOS the profile says so port by port, and if the listeners cannot be
-  read no loopback port but the proxy is reachable. A per-port denial is a
-  rule the kernel applies, not one fm can read back, and the canary on
-  2026-09-26 found a claude round reaching the live board through a profile
-  that denied its port. So before every macOS round `fm-sandbox.sh` tries
-  the profile: behind it, it connects to each port that was listening but
-  the proxy's. A connection that gets through means the round's would, and
-  the round is given a profile with no loopback but the proxy instead - its
-  own servers go with it, and it says so on stderr and in the round's log; a
-  profile that lets one through even then refuses the round (70). A check
-  that could not run behind the profile tightens it the same way. On the
-  captain's Mac (macOS 15.7.9) firstmate measured that a port-specific deny
-  never carves a port out of a `localhost:*` allow, in either order, so
-  there every round gets the profile with no loopback but the proxy. Every
-  macOS round says in one `fm-sandbox: loopback:` line which profile it got
-  - its proxy and ports of its own, with the ports tried and closed to it,
-  or its proxy alone - and the canary prints that line per vendor, so what
-  a round could reach is never inferred from a note that is not there. The
-  canary's own listeners count only requests carrying the round's nonce,
-  so `fm-sandbox.sh`'s check, which connects before the round starts, is
-  never read as the round reaching them. On Linux the round's loopback is
-  its own network namespace's, where no host listener is;
+  If the listeners cannot be read, no loopback port but the proxy is
+  reachable. On macOS the profile is built from the one kind of rule the
+  kernel was measured to hold (T-153). On the captain's Mac (macOS 15.7.9)
+  firstmate measured that a port-specific deny never carves a port out of
+  a `localhost:*` allow, in either order, while a port-specific allow does
+  hold: the proxy's. So a round's profile:
+  - binds and accepts on `localhost:*` - the only way to allow a bind to
+    port 0, since `localhost:0` is not a port a profile may name, and
+    every fixture server in the suites binds port 0 - with a
+    `network-bind`/`network-inbound` deny on the board's port and on each
+    one listening at round start;
+  - connects only to a positive list: every port of the kernel's own
+    ephemeral range (`net.inet.ip.portrange.first`-`last`, 49152-65535 by
+    default), which is where a server bound to port 0 lands, less the
+    board's and every one that was listening. A profile of 16,384 such
+    allows compiles; one rule naming 8,000 filters did not, so each port
+    is a rule of its own. A server a round opens on a fixed port outside
+    that range can be bound but not connected to; the suites' servers
+    all bind port 0.
+
+  A loopback rule is one the kernel applies, not one fm can read back, and
+  the canary on 2026-09-26 found a claude round reaching the live board
+  through a profile that denied its port. So before every macOS round
+  `fm-sandbox.sh` tries the profile, behind it: it connects to each port
+  that was listening but the proxy's, and, while nothing holds the board's
+  port, binds that port (T-153: on 2026-09-29 a suite's fixture board took
+  127.0.0.1:4173 while the captain's board was down). Either getting
+  through means the round's would. The round is then given a profile with
+  no loopback but the proxy instead - its own servers go with it, and it
+  says so on stderr and in the round's log - and a profile that lets one
+  through even then refuses the round (70). A check that could not run
+  behind the profile tightens it the same way. While the board is up its
+  port is held, so no round can bind it whatever the profile says, and only
+  a connection is tried. Every macOS round says in one `fm-sandbox:
+  loopback:` line which profile it got - its proxy and ports of its own,
+  with the ports tried and closed to it and whether the board's port was
+  tried for a bind, or its proxy alone - and the canary prints that line
+  per vendor, so what a round could reach is never inferred from a note
+  that is not there. The canary's own listeners count only requests
+  carrying the round's nonce, so `fm-sandbox.sh`'s check, which connects
+  before the round starts, is never read as the round reaching them. On
+  Linux the round's loopback is its own network namespace's, where no host
+  listener is;
+- what a review round is asked to run (T-153). Until SK-007 a review round
+  ran the whole declared `check` in its sandbox, and 12-13 suites failed
+  there every time for the sandbox's reasons, not the code's: loopback
+  refused, `ps` not permitted, `bunx` unable to read its working
+  directory, here-document temp files refused. Each is now the round's own
+  to have, and none opens egress, the operator's home or a credential:
+  - loopback, above: ports of the round's own, never the board's nor one
+    that was listening, and the proxy still the only way off the machine;
+  - `ps`: `/bin/ps` is setuid root on macOS, and no sandboxed process may
+    run a setuid binary. `fm-sandbox.sh` puts a `ps` of its own first on a
+    macOS round's `PATH`, beside its `mktemp`. It asks the kernel as the
+    round's own user - libproc, and `/proc` where it runs on Linux - and
+    lists that user's processes only: a pid or user that is not the
+    round's lists nothing and exits 1. Without setuid, the kernel itself
+    refuses another user's arguments to a process that is not root. It
+    takes the options fm and its suites use (`-A -e -a -x -p -U -u -o`,
+    `name=` for no header). On Linux bwrap's pid namespace already holds
+    the round's processes alone;
+  - a readable working directory: bun (`bunx`, `bun run`) opens every
+    directory above its working directory and refuses to start when one
+    cannot be read (`CouldntReadCurrentDirectory`). Each directory above a
+    write root - up to, not including, `/` - is readable as itself, a
+    `literal`, never its subtree: the names in it, nothing in it. That
+    includes the operator's home directory and fm's `state/` when a
+    worktree lives under them - their entries' names, never a file in
+    them, which stay unreadable;
+  - its own temp files: zsh writes a here-document's temp file under
+    `TMPPREFIX`, `/tmp/zsh` unless set, whatever `TMPDIR` says. A round's
+    `TMPPREFIX` is under its own temp directory, as `TMPDIR` is;
+  - unix sockets inside its own write roots only - where nothing but the
+    round makes one, such as the proxy of a round it starts (below) -
+    never Herdr's or any other.
+- a round started inside a round (T-153): a round's suites start rounds,
+  and `sandbox-exec` cannot apply a profile inside a sandbox
+  (`sandbox_apply: Operation not permitted`, 71), so every such round
+  failed or waited out its timeout (T-137 r4's review spent over 20
+  minutes in `tests/herdr.test.sh`). `fm-sandbox.sh run` runs one under the
+  outer round's confinement when two marks both say it is inside one: the
+  round's `FM_IN_ROUND`, and the kernel's own word - `sandbox_check(2)` on
+  macOS, a pid namespace whose pid 1 is `bwrap` on Linux. Nothing outside
+  a sandbox can make the kernel say so, so a top-level round is never let
+  off its own, and the mark alone, set in any shell, changes nothing. Only
+  the platform's own tool is nested: a stand-in (`FM_SANDBOX_TOOL`, the
+  suites') applies no kernel sandbox and runs as it always has. The nested
+  round keeps this policy's scrub, limits, login and temp directory, and a
+  proxy of its own that applies this policy and leaves through the outer
+  round's proxy, which applies the outer one's: a host either refuses is
+  refused. It says on stderr that it is nested. An outer round with no
+  loopback gives the inner proxy nowhere to listen, and the inner round
+  exits 70 at once, saying so, rather than running without it;
 - secrets a system service hands out: on macOS the keychain (gh's token,
   git's osxkeychain helper, every saved password, and the vendors' logins),
   the pasteboard, the Internet Accounts and Apple ID stores, Kerberos
@@ -3078,7 +3175,8 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
   taken refuses the round rather than guessing. The limits as set reach the
   round as `SANDBOX_ROUND_LIMITS`: macOS may enforce a lower process limit
   than it was given, and reports that one back to `ulimit -u`;
-- no unix sockets; `GH_TOKEN`, `GITHUB_TOKEN`, `SSH_AUTH_SOCK`, cloud
+- no unix sockets but inside the round's own write roots (above);
+  `GH_TOKEN`, `GITHUB_TOKEN`, `SSH_AUTH_SOCK`, cloud
   credentials and the escape hatch's own variables scrubbed; the
   repository's `.claude/`, `.mcp.json`, `.cursor/` and `GEMINI.md` not
   loaded.

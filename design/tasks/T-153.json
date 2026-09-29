@@ -1,0 +1,26 @@
+{
+  "id": "T-153",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-151"
+  ],
+  "title": "a review round's sandbox can run the suites the reviewer is asked to: loopback inside the round, its own process list, a readable cwd for bunx, and its own TMPDIR - with no new egress",
+  "scope": [
+    "bin/fm-sandbox.sh",
+    "bin/fm-config.sh",
+    "tests/**",
+    "design/**",
+    "design/tasks/T-153.json",
+    "board/server.ts",
+    "tests/board.test.sh"
+  ],
+  "acceptance": [
+    "Why. On 2026-09-29 the last five review rounds took 17-41 minutes (T-146 r3 over an hour). Until SK-007, step 1 of the reviewer skill ran the declared `check` (bin/ci.sh) in full inside the round's sandbox: 1100-1200 s every round, past its own 600 s budget, while GitHub's required check runs the same suites on the same head on Linux with everything they need. Inside the sandbox 12-13 suites fail for environmental reasons every time (loopback bind refused, ps not permitted, bunx cannot read its cwd, heredoc temp files), so the reviewer spends time classifying noise and ends with board and adapter behaviour 'read, not run' - which is how findings surface a round late. Its own spec file, design/tasks/T-153.json, is committed on this branch.",
+    "Firstmate's diagnosis, 2026-09-29 (the captain asked for this fixed as fast as possible). (1) Nesting: a review runs inside fm-sandbox, and the suites it runs start rounds that call fm-sandbox.sh run again; macOS sandbox-exec cannot be applied inside a sandbox ('sandbox_apply: Operation not permitted', rc 71), so every such case fails or waits out its timeout - T-137 r4's review spent over 20 minutes in tests/herdr.test.sh, which takes 4-5 minutes on the Linux runner. Decide and implement how a round started inside a round is confined (for example: fm-sandbox.sh run detects it is already inside a round's sandbox - FM_IN_ROUND plus a marker only the outer sandbox sets - and runs the inner command under the outer confinement with its own policy checks, saying so on stderr; or the suites detect nesting and skip only the assertions that need a second OS sandbox, reporting them as skipped, never passed). Whatever is chosen must keep every inner-round assertion meaningful or visibly skipped, and must not weaken a top-level round. (2) The board port: darwin() in bin/fm-sandbox.sh (:321-338) denies network-outbound to the board port but still allows network-bind on localhost:*, so a round could bind 127.0.0.1:4173 while the board was down - which happened at ~17:47. Deny network-bind (and inbound) on the board port and every port listening at round start, as outbound already is; the Linux netns already isolates it. (3) Measure: report in the PR body the wall-clock of tests/herdr.test.sh, tests/board.test.sh and tests/sandbox.test.sh inside a review round before and after.",
+    "The round can run what it is asked to. fm-sandbox.sh's review and worker policies allow: binding and connecting on loopback inside the round (the board and e2e suites serve on 127.0.0.1; egress stays proxy-only), listing the round's own processes (ps for its own uid), and a readable working directory for bunx; the heredoc temp-file failures are fixed with the round's own TMPDIR. Each is justified in design.md's sandbox section and none opens network egress, the operator's home, or credentials (T-126, credential option A).",
+    "Measured. A round's result records its wall-clock; the board's review card shows it. The PR body of this task reports the review durations of its own rounds against the 17-41 minute baseline.",
+    "The operator's board port is never a test's. On 2026-09-29 ~17:47, with the captain's board down, T-151's review ran tests/board.test.sh inside its round and a fixture board bound 127.0.0.1:4173 - the captain's board address - because start_k passes FM_PORT=\"$PORTK\" and an empty PORTK falls back to the default port (the same helper is on main). firstmate's merge card answers then went to the fixture and were refused. Fix both ends: board/server.ts treats FM_PORT set but empty as an error (exit 64) instead of the default; the board suite's helpers refuse an empty port; and a round's sandbox policy denies binding the operator's configured board port even when loopback is allowed.",
+    "Tests: the review prompt no longer asks for the full check and names the selected suites; the sandbox policy lets a fixture bind 127.0.0.1 and list its own processes and still refuses an outside connection and another uid's process list. Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves."
+  ]
+}

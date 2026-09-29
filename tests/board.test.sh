@@ -2541,12 +2541,40 @@ printf '#!/usr/bin/env bash\necho "$*" >> "%s/opened"\n' "$k" > "$k/fake-editor"
 chmod +x "$k/bin/fm-merge.sh" "$k/fake-editor"
 printf 'editor: %s/fake-editor\n' "$k" > "$k/config.yaml"
 echo "inside the repo" > "$k/src/visible"
+# An empty port is refused here, never handed on (T-153): on 2026-09-29 a
+# restart given an empty PORTK - an earlier board_port that found nothing -
+# bound the operator's own 4173 while the captain's board was down.
+given_port() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; }
 start_k() {   # start_k <port>: the board on $k, its pid in pidk and port in PORTK
+  given_port "$1" || {
+    assert_eq "a port" "[$1]" "start_k is handed a port, never an empty one"; PORTK=''; return 1; }
   FM_ROOT="$k" FM_PORT="$1" bun run "$k/board/server.ts" > "$k/out" 2>&1 < /dev/null &
   pidk=$!
-  PORTK="$(board_port "$k/out" "$pidk")"
+  PORTK="$(board_port "$k/out" "$pidk")" || PORTK=''
+  [ -n "$PORTK" ] || { assert_eq "a port" "[]" "the fixture board on $k said which port it bound"; return 1; }
   wait_for 60 curl -sf "http://127.0.0.1:$PORTK/api/state"
 }
+assert_eq "1 1 0" "$(given_port ''; a=$?; given_port 41x; b=$?; given_port 0; echo "$a $b $?")" \
+  "the suite's board helper refuses an empty or non-numeric port and takes a real one"
+# FM_PORT set but not a port is refused by the board itself (64), never read
+# as unset: Bun drops an empty variable from process.env, so `FM_PORT=` was
+# the operator's 4173. A board that does start is stopped the moment it says
+# where it listens, so this never leaves one bound.
+port_refusal() {   # port_refusal <FM_PORT value> -> the board's exit code, or "started"
+  FM_ROOT="$k" FM_PORT="$1" bun run "$k/board/server.ts" > "$k/port.out" 2>&1 < /dev/null &
+  local p=$! n=0
+  while kill -0 "$p" 2>/dev/null && [ "$n" -lt 300 ]; do
+    grep -q '^board on ' "$k/port.out" 2>/dev/null && break
+    sleep 0.1; n=$((n + 1))
+  done
+  if kill -0 "$p" 2>/dev/null; then kill "$p" 2>/dev/null; wait "$p" 2>/dev/null; echo started
+  else wait "$p"; echo "$?"; fi
+}
+for bad in '' ' ' abc 70000; do
+  assert_eq "64" "$(port_refusal "$bad")" "a board given FM_PORT='$bad' refuses to start (64)"
+  assert_contains "$(cat "$k/port.out" 2>/dev/null)" "FM_PORT is set but is not a port" \
+    "and says why (FM_PORT='$bad')"
+done
 start_k 0
 uk="http://127.0.0.1:$PORTK"
 key="$XDG_CONFIG_HOME/firstmate/board-$PORTK.secret"
@@ -2863,6 +2891,32 @@ assert_ok "dead '$wk'" "and so does the round it sent back"
 rm -f "$w/hold-worker"
 assert_eq "" "$(grep -n 'detached' "$w/board/server.ts" | grep -v '//' || true)" "and the board detaches nothing itself"
 rm -f "$w/hold-1"
+rm -rf "$w"
+
+# T-153: a review round's wall-clock, from the log. The latest round of each
+# task, from its reviewer's review_opened to that reviewer's own verdict
+# event; nothing for a round still running or a verdict nobody opened.
+w="$(make_w)"
+cat >> "$w/state/events.jsonl" <<'J'
+{"ts":"2026-09-29T10:00:00Z","type":"review_opened","actor":"reviewer-a-tr1-r1","task":"T-R1"}
+{"ts":"2026-09-29T10:17:30Z","type":"review_failed","actor":"reviewer-a-tr1-r1","task":"T-R1","data":{"review_outcome":"rejected"}}
+{"ts":"2026-09-29T11:00:00Z","type":"review_opened","actor":"reviewer-a-tr1-r2","task":"T-R1"}
+{"ts":"2026-09-29T11:00:10Z","type":"review_opened","actor":"reviewer-b-tr2-r1","task":"T-R2"}
+{"ts":"2026-09-29T11:05:00Z","type":"approved","actor":"reviewer-a-tr1-r2","task":"T-R1"}
+{"ts":"2026-09-29T11:06:00Z","type":"approved","actor":"reviewer-c-tr3-r1","task":"T-R3"}
+{"ts":"2026-09-29T12:00:00Z","type":"review_opened","actor":"reviewer-d-tr4-r1","task":"T-R4"}
+{"ts":"2026-09-29T12:41:00Z","type":"review_failed","actor":"reviewer-d-tr4-r1","task":"T-R4","data":{"review_outcome":"rejected"}}
+J
+start_w "$w" ""
+sw="$(curl -sf "http://127.0.0.1:$PORTW/api/state")"
+assert_eq '{"actor":"reviewer-a-tr1-r2","seconds":300,"outcome":"approved"}' \
+  "$(jq -c '.tasks[]|select(.id=="T-R1")|.last_review' <<<"$sw")" \
+  "a task's card carries its latest review round's wall-clock, reviewer and outcome"
+assert_eq '2460 rejected' "$(jq -r '.tasks[]|select(.id=="T-R4")|.last_review|"\(.seconds) \(.outcome)"' <<<"$sw")" \
+  "a rejecting round is timed the same way (41 minutes)"
+assert_eq "null null" "$(jq -r '[.tasks[]|select(.id=="T-R2" or .id=="T-R3")|.last_review]|map(tostring)|join(" ")' <<<"$sw")" \
+  "a round still running, or a verdict with no review_opened of its own, has no wall-clock"
+kill "$pidw" 2>/dev/null; wait "$pidw" 2>/dev/null
 rm -rf "$w"
 
 rm -rf "$k" "$XDG_CONFIG_HOME"

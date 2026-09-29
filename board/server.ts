@@ -8,6 +8,7 @@
 // board has no opinion the log does not already hold.
 import { appendFileSync, closeSync, constants, existsSync, fchmodSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { CString, dlopen, FFIType } from "bun:ffi";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -16,7 +17,34 @@ import { join, resolve } from "node:path";
 // path check that compares a resolved path against an unresolved root refuses
 // every legitimate file in the repository
 const ROOT = realpathSync(resolve(process.env.FM_ROOT ?? "."));
-const PORT = Number(process.env.FM_PORT ?? 4173);
+// A variable as the process was given it. Bun leaves a variable that is set
+// but empty out of process.env altogether, so `FM_PORT=` reads there exactly
+// as unset; libc's own environment still holds it. Where libc cannot be
+// opened, process.env is all there is.
+const givenEnv = (name: string): string | undefined => {
+  if (process.env[name] !== undefined) return process.env[name];
+  try {
+    const libc = dlopen(process.platform === "darwin" ? "/usr/lib/libSystem.B.dylib" : "libc.so.6",
+      { getenv: { args: [FFIType.cstring], returns: FFIType.ptr } });
+    try {
+      const at = libc.symbols.getenv(Buffer.from(`${name}\0`));
+      return at === null ? undefined : new CString(at).toString();
+    } finally { libc.close(); }
+  } catch { return undefined; }
+};
+// FM_PORT unset is the operator's board, 4173. Set, it must be a port: an
+// empty one is a caller whose port variable came out empty, and reading it as
+// unset put a suite's fixture board on the captain's own address while the
+// captain's board was down (T-153, 2026-09-29), so it is refused (64), never defaulted.
+const PORT = (() => {
+  const given = givenEnv("FM_PORT");
+  if (given === undefined) return 4173;
+  if (!/^[0-9]{1,5}$/.test(given) || Number(given) > 65535) {
+    console.error(`board refused to start: FM_PORT is set but is not a port: '${given}'`);
+    process.exit(64);
+  }
+  return Number(given);
+})();
 const LOG = join(ROOT, "state/events.jsonl");
 const PUBLIC = join(ROOT, "board/public");
 // The environment of every child the board starts, FM_PROJECT removed: a
@@ -526,12 +554,28 @@ const state = (only: string | null = null) => {
   // the pull request each task opened itself, which a reopened task shows
   // again rather than one a card raised under the wrong task merged
   const opened = new Map<string, number>();
+  // T-153: how long each task's latest review round took, wall-clock, from
+  // the reviewer's review_opened to its own approved or review_failed. Both
+  // are stamped by fm-emit.sh, so this is the log's, not the board's, clock.
+  const reviewFrom = new Map<string, { k: string; ts: number }>();
+  const lastReview = new Map<string, { actor: string; seconds: number; outcome: string }>();
   for (const [index, e] of events.entries()) {
     const actor = String(e.actor ?? "");
     const spoke = spokeAt.get(actor) ?? -1;
     spokeAt.set(actor, index);
     if (!e.task) continue;
     const k = ek(e);
+    const at = Date.parse(String(e.ts ?? ""));
+    if (e.type === "review_opened" && Number.isFinite(at)) reviewFrom.set(actor, { k, ts: at });
+    if (e.type === "approved" || e.type === "review_failed") {
+      const from = reviewFrom.get(actor);
+      if (from && from.k === k && Number.isFinite(at) && at >= from.ts) {
+        const outcome = e.type === "approved" ? "approved"
+          : String((e.data as { review_outcome?: unknown } | undefined)?.review_outcome ?? "failed");
+        lastReview.set(k, { actor, seconds: Math.round((at - from.ts) / 1000), outcome });
+      }
+      reviewFrom.delete(actor);
+    }
     const n = prNumber(e.pr);
     if (n) pr.set(k, n);
     if (n && e.type === "pr_opened") opened.set(k, n);
@@ -685,6 +729,10 @@ const state = (only: string | null = null) => {
     crew: [] as CrewChip[],
     // where the merge sits in the log, so the lane can show the latest first
     merged_seq: settledAt.get(id) ?? null,
+    // the latest review round's wall-clock (T-153): its reviewer, seconds
+    // from review_opened to the verdict event, and the outcome; null before
+    // any round has ended
+    last_review: lastReview.get(id) ?? null,
   }); });
   const taskAt = (project: string, id: unknown) =>
     tasks.find((x) => keyOf(x.project ?? "", x.id) === keyOf(project, id));
