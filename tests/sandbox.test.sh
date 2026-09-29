@@ -1003,7 +1003,7 @@ pol worker 'vendor: mock
 # claude (T-126): the crew's own long-lived token is tried first, never
 # the operator's interactive login while one exists
 rm -rf "$board/state"
-assert_eq "0" "$(kc run darwin claude FM_ROOT="$board" FM_TASK=T-board FM_ACTOR=worker-board)" \
+assert_eq "0" "$(kc run darwin claude FM_ROOT="$board" FM_TASK=T-board FM_ACTOR=worker-board FM_ROLE=worker)" \
   "claude's round starts on macOS with the crew's own token"
 lo="$(cat "$t/login.out" 2>/dev/null)"
 assert_contains "$lo" "token=crew-claude-token" "handed in as CLAUDE_CODE_OAUTH_TOKEN"
@@ -1030,7 +1030,7 @@ mkdir -p "$t/chome/.config/firstmate"
 rm -rf "$board/state"
 rm -f "$t/kc/secret-tool-guard-calls"
 assert_eq "0" "$(kc run darwin claude FM_KEYCHAIN_TOOL="$t/kc/security-nocrew" \
-    FM_ROOT="$board" FM_TASK=T-board FM_ACTOR=worker-board)" \
+    FM_ROOT="$board" FM_TASK=T-board FM_ACTOR=worker-board FM_ROLE=worker)" \
   "with no crew token, claude's round still starts on the interactive login"
 lo="$(cat "$t/login.out" 2>/dev/null)"
 assert_contains "$lo" "token=at-claude" "handed in the same way as before T-126"
@@ -1050,6 +1050,30 @@ assert_eq "true" "$(jq -r '(.summary.en // "") | test("no crew token")' <<< "${w
   "in the event's own summary too (en)"
 assert_eq "true" "$(jq -r '(.summary."zh-TW" // "") | test("\\S")' <<< "${warn_ev:-null}")" \
   "and (zh-TW)"
+assert_eq "worker" "$(jq -r '.data.role // ""' <<< "${warn_ev:-null}")" \
+  "under the run's own role, worker"
+
+# the same fallback on a reviewer round (T-126 round 9): the board event
+# carries the run's own FM_ROLE, never fm_herdr_emit_status's worker default
+rm -rf "$board/state"
+assert_eq "0" "$(kc run darwin claude FM_KEYCHAIN_TOOL="$t/kc/security-nocrew" \
+    FM_ROOT="$board" FM_TASK=T-board FM_ACTOR=reviewer-board FM_ROLE=reviewer)" \
+  "a reviewer round with no crew token still starts on the interactive login"
+assert_contains "$(cat "$t/login.err")" "has no crew token" "and warns in its log"
+rv_ev="$(jq -c 'select(.type=="crew_status" and .task=="T-board" and .actor=="reviewer-board")' \
+  "$board/state/events.jsonl" 2>/dev/null | tail -1)"
+assert_eq "reviewer" "$(jq -r '.data.role // ""' <<< "${rv_ev:-null}")" \
+  "and its board warning names the run's own role, reviewer, never worker"
+
+# with no FM_ROLE the role is never guessed: no board event, and the log
+# warning still stands (passed empty, so an FM_ROLE in the environment
+# running this suite cannot stand in for it)
+rm -rf "$board/state"
+assert_eq "0" "$(kc run darwin claude FM_KEYCHAIN_TOOL="$t/kc/security-nocrew" \
+    FM_ROOT="$board" FM_TASK=T-board FM_ACTOR=worker-board FM_ROLE=)" \
+  "a round with no FM_ROLE and no crew token still starts"
+assert_contains "$(cat "$t/login.err")" "has no crew token" "still warning in the log without FM_ROLE"
+assert_fail "test -e '$board/state/events.jsonl'" "but posting no board event with no role to name"
 
 # fm-canary.sh's own probe rounds set no FM_ROOT/FM_TASK/FM_ACTOR (T-126
 # round 2): the warning still reaches the round's log, but posting to a

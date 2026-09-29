@@ -127,9 +127,12 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 # adapter piped it in, but the crew is not meant to have to read a
 # transcript to learn its round is one login refresh away from dying.
 # fm-sandbox.sh runs outside the round, on the caller's own identity
-# (fm_identity exports FM_ROOT, FM_TASK, FM_ACTOR before any adapter
-# starts), so it can say so itself; best effort only, since fm-canary.sh's
-# own probe rounds set none of these and are meant to stay off the board.
+# (fm_identity exports FM_ROOT, FM_TASK, FM_ACTOR and FM_ROLE before any
+# adapter starts), so it can say so itself; best effort only, since
+# fm-canary.sh's own probe rounds set none of these and are meant to stay
+# off the board. The role is the run's own, never guessed: without FM_ROLE
+# the warning is skipped, since fm_herdr_emit_status would default it to
+# worker and a reviewer round would show on the board as a worker.
 #
 # Posted through fm_herdr_emit_status (bin/fm-config.sh), never a direct
 # `fm-emit.sh --actor "$FM_ACTOR" --task ...` call here: tests/traps.test.sh
@@ -144,10 +147,10 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 fm_sandbox_board_warn() {   # fm_sandbox_board_warn <vendor> <en>
   local vendor="$1" en="$2" root tw
   root="${FM_ROOT:-}"
-  [ -n "$root" ] && [ -n "${FM_TASK:-}" ] && [ -n "${FM_ACTOR:-}" ] || return 0
+  [ -n "$root" ] && [ -n "${FM_TASK:-}" ] && [ -n "${FM_ACTOR:-}" ] && [ -n "${FM_ROLE:-}" ] || return 0
   declare -F fm_herdr_emit_status >/dev/null 2>&1 || return 0
   tw="${vendor} 沒有自己的 crew token，改用操作者本人的互動式登入；該登入刷新時，本回合可能因此中斷"
-  fm_herdr_emit_status "$root" "$FM_ACTOR" "$FM_TASK" "$en" "$tw" >/dev/null 2>&1 </dev/null || true
+  fm_herdr_emit_status "$root" "$FM_ACTOR" "$FM_TASK" "$en" "$tw" "$FM_ROLE" >/dev/null 2>&1 </dev/null || true
 }
 
 host_os() {
