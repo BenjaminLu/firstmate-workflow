@@ -107,6 +107,7 @@ emit_once() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --type)
+        fm_need "fm-review" "$@"
         # A verdict event is the round's result: it carries the round's own
         # wall-clock, from just before review_opened to now (T-153), which
         # /api/state's last_review reads, and how much of it was spent
@@ -589,9 +590,15 @@ head_evidence() {
   # Every job, not only the required one: `ci` only says that some job
   # failed, and which one is what the reviewer needs. The latest run of each
   # name for exactly this head.
+  # Unread, each of the three sections still stands and says what was not
+  # fetched: a missing section would read as "nothing failed".
   printf '\n## Every CI job for this head\n'
   if ! runs="$(check_runs_of "$sha" "per_page=100")"; then
     printf '\nThe CI jobs of head %s could not be read from GitHub, so their results are unknown.\n' "$sha"
+    printf '\n## Failing assertions, from the failed jobs'"'"' logs\n'
+    printf '\nNot available: the CI jobs of head %s could not be read, so which assertions failed is unknown.\n' "$sha"
+    printf '\n## The fail-first report\n'
+    printf '\nNot available: the CI jobs of head %s could not be read, so no fail-first report was fetched.\n' "$sha"
   else
     all="$(jq -c --arg sha "$sha" '[.check_runs[] | select(.head_sha == $sha)] | group_by(.name) | map(max_by(.id)) | sort_by(.name)' <<<"$runs")"
     if [ "$(jq 'length' <<<"$all")" = 0 ]; then

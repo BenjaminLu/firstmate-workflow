@@ -1287,7 +1287,10 @@ sandbox; that work was reverted. Instead:
    at most 80 lines), fenced with a per-run nonce; and the fail-first report,
    the `fail-first-report` artifact of the run the `fail-first` job's URL
    names (`gh run download`), fenced the same way. A job list, a log or a
-   report that cannot be read is stated.
+   report that cannot be read is stated. The three sections are always
+   there: when the job list cannot be read, the failing-assertions and
+   fail-first sections each say "Not available" and why, so the prompt
+   never reads as "nothing failed" from evidence it did not fetch.
 3. **The reviewer judges with that evidence** (skills/reviewer/SKILL.md). It
    never runs the full check, nor a suite that starts rounds, a board or a
    browser; it may run small commands that need no second sandbox - reading,

@@ -1269,6 +1269,16 @@ assert_contains "$(cat "$dm/prompt.md" 2>/dev/null)" "The fail-first job ran for
 jobs_round GH_JOBS_DOWN=1
 assert_contains "$(cat "$dm/prompt.md" 2>/dev/null)" "The CI jobs of head $headM could not be read from GitHub" \
   "CI jobs that cannot be read are stated"
+# and the two sections that depend on them still stand, saying plainly that
+# nothing was fetched - never absent, which would read as nothing failed
+sentJ="$(cat "$dm/prompt.md" 2>/dev/null)"
+failJ="$(awk '/^## Failing assertions, from the failed jobs/{f=1;next} /^## /{f=0} f' <<< "$sentJ")"
+assert_contains "$failJ" "Not available: the CI jobs of head $headM could not be read, so which assertions failed is unknown." \
+  "with no CI data the failing-assertions section says it is not available"
+assert_lacks "$sentJ" "No CI job failed" "and never claims that nothing failed"
+ffJ="$(awk '/^## The fail-first report/{f=1;next} /^## The gates for this head/{f=0} f' <<< "$sentJ")"
+assert_contains "$ffJ" "Not available: the CI jobs of head $headM could not be read, so no fail-first report was fetched." \
+  "and the fail-first section says so too"
 
 # the wait: the required check runs for two more polls, then completes; the
 # round starts only then, with its result, and says it waited
@@ -1649,6 +1659,14 @@ M
       printf '\nHead SHA: %s\n' "$hd"
       printf '\n## The required check for this head, from GitHub\n'
       printf '\nThe required check for head %s could not be read from GitHub, so its CI result is unknown.\n' "$hd"
+      # T-153 added these three sections: every CI job, the failing
+      # assertions and the fail-first report, each saying it is unknown here
+      printf '\n## Every CI job for this head\n'
+      printf '\nThe CI jobs of head %s could not be read from GitHub, so their results are unknown.\n' "$hd"
+      printf "\n## Failing assertions, from the failed jobs' logs\n"
+      printf '\nNot available: the CI jobs of head %s could not be read, so which assertions failed is unknown.\n' "$hd"
+      printf '\n## The fail-first report\n'
+      printf '\nNot available: the CI jobs of head %s could not be read, so no fail-first report was fetched.\n' "$hd"
       printf '\n## The gates for this head\n'
       printf '\nNo gate summary for head %s exists under state/gates/, so its gate results are unknown.\n' "$hd"
       printf '\n---\n\n# The diff under review\n\n```diff\n'

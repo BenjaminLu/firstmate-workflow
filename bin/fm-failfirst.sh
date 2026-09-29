@@ -38,13 +38,19 @@ set -uo pipefail
 # Nothing below may read standard input; see fm-gate.sh.
 exec < /dev/null
 
+# The library first: its fm_need guards the option loop, as in the other
+# scripts that take it from there (tests/option-loop.test.sh pins them).
+_fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
+[ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
+# shellcheck source=bin/fm-config.sh
+. "$_fm_lib"
+
 REPORT=''; SETUP=''; SETUP_GIVEN=''; JOBS=''; BASE_REF=''
-need() { [ "$#" -ge 2 ] || { echo "fm-failfirst: $1 needs a value" >&2; exit 64; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
-    --report) need "$@"; REPORT="${2-}"; shift 2 ;;
-    --setup) need "$@"; SETUP="${2-}"; SETUP_GIVEN=1; shift 2 ;;
-    --jobs) need "$@"; JOBS="${2-}"; shift 2 ;;
+    --report) fm_need "fm-failfirst" "$@"; REPORT="${2-}"; shift 2 ;;
+    --setup) fm_need "fm-failfirst" "$@"; SETUP="${2-}"; SETUP_GIVEN=1; shift 2 ;;
+    --jobs) fm_need "fm-failfirst" "$@"; JOBS="${2-}"; shift 2 ;;
     -*) echo "fm-failfirst: unknown argument $1" >&2; exit 64 ;;
     *) [ -z "$BASE_REF" ] || { echo "fm-failfirst: one base ref, not $1 as well" >&2; exit 64; }
        BASE_REF="$1"; shift ;;
@@ -58,11 +64,6 @@ case "$JOBS" in
       [ "$JOBS" -le 6 ] || JOBS=6 ;;
   *[!0-9]*|0) echo "fm-failfirst: --jobs must be a positive integer" >&2; exit 64 ;;
 esac
-
-_fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
-[ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
-# shellcheck source=bin/fm-config.sh
-. "$_fm_lib"
 
 say() { echo "fm-failfirst: $*" >&2; }
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || { say "not inside a git checkout"; exit 70; }
