@@ -40,7 +40,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Scripts and distinct value-taking flag names. fm repeats --repo in three
 # subcommands; its seven parser branches are exercised separately below.
-PINNED="fm 5
+PINNED="fm 7
 fm-checkpoint 5
 fm-cleanup 2
 fm-decide 10
@@ -107,7 +107,9 @@ while read -r name want; do
 --skill self-update
 --why self-update
 --adopt self-update
---repo self-update'
+--repo self-update
+--task stop
+--project stop'
     assert_eq "$flags" "$(printf '%s\n' "$cases" | awk '{print $1}' | sort -u)" \
       "fm subcommand probes cover every discovered flag"
   else

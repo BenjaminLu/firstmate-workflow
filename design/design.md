@@ -2354,9 +2354,14 @@ never a child of a pane, so a pane that closes or crashes cannot end a round, an
 machine with no Herdr, cmux or tmux runs the same round with no window at all.
 `bin/fm-herdr.py stop` is the one way fm stops crew. `stop <root> <actor>`
 ends that actor's live rounds by their process groups (TERM, then KILL after
-`FM_STOP_GRACE` seconds, default 5, and only for a runner still running
-`fm-herdr.py`); a group whose every member has exited, zombies included, is
-gone. `stop <root> --task <id> [--project P] [--default D]` stops a whole task:
+`FM_STOP_GRACE` seconds, default 5); a group whose every member has exited,
+zombies included, is gone. A round is live while its runner still runs
+`fm-herdr.py`, or while its lifetime lock (`execution.lock`) is held, or, until
+it has a `runner.exit` or `result.json`, while any member of its group lives: a
+killed runner can leave its adapter running, and that round is stopped by its
+group all the same, reported as `<actor> <pid> (runner gone)`, and then its
+CLI by the pid `execution.json` names. `follow` judges the end of a round by
+the same rule, never by the runner's pid alone. `stop <root> --task <id> [--project P] [--default D]` stops a whole task:
 TERM to its `fm-worker.sh` (`state/worktrees/<id>.pid`, whose trap saves and
 pushes the worktree), then each of the project's runs on it, by group, and the
 script that launched it (`process.json`), by TERM. A round from before T-144,
@@ -2381,7 +2386,10 @@ window is best effort. Every attempt's `window.json` records the window it got:
 `{"host": "none", "status": "none"}` when there is no host, so no window is
 recorded, never inferred from a missing file. Any failure or uncertainty is
 written there with its reason, the pane is left alone, and the round runs
-without one. The round's own transport closes the window when the round ends,
+without one. A Herdr window that fails after the round was handed its pane
+gives the pane back: the round's `HERDR_PANE_ID`, `HERDR_TAB_ID` and
+`HERDR_WORKSPACE_ID` (and `environment.json`) are the caller's again, and the
+disowned pane is reported `idle`, best effort, so it is not left `working`. The round's own transport closes the window when the round ends,
 and closing a window stops nothing.
 
 tmux gets `new-window -d -P -F '#{window_id}' -n <actor> -c <tree> <follower>`,

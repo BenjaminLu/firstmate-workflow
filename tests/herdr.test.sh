@@ -730,6 +730,12 @@ def pane(p):
  if p=='caller': return dict(pane_id=p, terminal_id='caller-terminal',tab_id='caller-tab',workspace_id='workspace')
  return json.loads((r/p).read_text())
 result={}
+# A Herdr command that fails exits non-zero, as the real one does: the pane
+# run, or only the report that the pane is working, so the idle one still lands.
+fail=os.environ.get('FM_TEST_HERDR_FAIL')
+if (fail=='pane-run' and a[:2]==['pane','run']) or (
+        fail=='report-working' and a[:2]==['pane','report-agent'] and a[a.index('--state')+1]=='working'):
+ print('error: '+' '.join(a[:2])+' failed',file=sys.stderr); raise SystemExit(1)
 if a[:2]==['tab','create']:
  assert '--no-focus' in a and '--focus' not in a
  assert a[a.index('--workspace')+1]=='workspace'
@@ -910,6 +916,30 @@ elif a[0]=='branch': print('t-035-test')
                         self.assertEqual(70,retry.returncode,retry.stderr)
                         self.assertEqual(actor,(tree/'surviving-work').read_text())
                         self.assertEqual('retained evidence',(tree/'.fm-say.md').read_text())
+                        if ending in ('runner-kill','direct-runner-kill'):
+                            # the runner is gone but its adapter runs on: the
+                            # round is still live, so a window keeps following
+                            # it and the one stop path still stops it
+                            cli=json.loads(execution.read_text())
+                            follower=subprocess.Popen([sys.executable,str(self.repo/'bin/fm-herdr.py'),'follow',str(execution.parent)],
+                                                      env=self.env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                            try:
+                                time.sleep(1)
+                                self.assertIsNone(follower.poll(),'follow ended while the adapter still ran')
+                                if ending=='runner-kill':
+                                    argv=['bash',str(self.repo/'bin/fm.sh'),'stop',actor,'--repo',str(self.repo)]
+                                else:
+                                    argv=['bash',str(self.repo/'bin/fm.sh'),'stop','--task','T-035','--repo',str(self.repo)]
+                                stopped=subprocess.run(argv,env=self.env,capture_output=True,text=True,timeout=WAIT)
+                                self.assertEqual(0,stopped.returncode,stopped.stderr)
+                                said=json.loads(stopped.stdout)
+                                self.assertIn(f'{actor} {runner} (runner gone)',said['stopped'])
+                                self.assertEqual([],said['failed'])
+                                self.wait_for(lambda:not m.process_matches(dict(pid=cli['pid'],token=cli['token'])))
+                                self.wait_for(lambda:not m.process_matches(dict(pid=model,token=str(self.fake/'codex'))))
+                                self.assertEqual(0,follower.wait(timeout=WAIT))
+                            finally:
+                                if follower.poll() is None: follower.kill(); follower.wait(timeout=5)
                     finally:
                         (self.repo/'release-model').touch()
                         if launcher.poll() is None:
@@ -1432,6 +1462,30 @@ else: sys.exit('Error: Unknown command '+(a[0] if a else ''))
         self.assertEqual(('herdr','none'),(window['host'],window['status']))
         self.assertIn('Herdr command failed',window['reason'])
         self.assertEqual('0',(attempt/'runner.exit').read_text().strip())
+    def test_a_herdr_window_that_fails_late_gives_its_pane_back(self):
+        # A window that fails after the round was handed its pane: the round
+        # runs headless with the caller's Herdr context again, and the pane
+        # fm disowned is reported idle, not left working for ever.
+        for fail in ('pane-run','report-working'):
+            with self.subTest(fail=fail):
+                (self.repo/'controls').unlink(missing_ok=True)
+                answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],FM_TEST_HERDR_FAIL=fail)
+                self.assertEqual(0,answer.returncode,answer.stderr)
+                latest=max(self.results(),key=lambda p:p.stat().st_mtime_ns)
+                result=json.loads(latest.read_text()); attempt=Path(result['attempt'])
+                self.assertEqual('completed',result['status'])
+                window=json.loads((attempt/'window.json').read_text())
+                self.assertEqual(('herdr','none'),(window['host'],window['status']))
+                self.assertTrue((attempt/'runner.exit').is_file())
+                environment=json.loads((attempt/'environment.json').read_text())
+                self.assertEqual('caller',environment['HERDR_PANE_ID'])
+                self.assertNotIn('HERDR_TAB_ID',environment)
+                self.assertNotIn('HERDR_WORKSPACE_ID',environment)
+                pane=json.loads((attempt/'owner.failed.json').read_text())['pane_id']
+                calls=[json.loads(s) for s in (self.repo/'controls').read_text().splitlines()]
+                states=[c[c.index('--state')+1] for c in calls if c[:3]==['pane','report-agent',pane]]
+                self.assertEqual(['working','idle'],states)
+                self.assertFalse(any(c[:2] in (['pane','close'],['tab','close']) for c in calls))
     def test_new_role_resets_inherited_adapter_guard(self):
         answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],
                            FM_CONTEXT_READY='1',FM_ATTEMPT_DIR='/unused-parent',FM_FINAL_PATH='/unused-parent/final')

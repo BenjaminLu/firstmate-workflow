@@ -703,7 +703,8 @@ def run_supervised(attempt):
 
 def follow(attempt, poll=0.2):
     """What a window shows: the run's log from its start, followed until the
-    round ends (result or exit file, or a runner that is gone). Stopping this
+    round ends (result or exit file, or nothing of the round left running:
+    round_live, never the runner's pid alone). Stopping this
     - a closed pane - stops nothing else."""
     attempt = Path(attempt); log = attempt / 'run.log'; at = 0; unseen = time.monotonic()
     out = sys.stdout.buffer
@@ -711,8 +712,11 @@ def follow(attempt, poll=0.2):
         over = (attempt / 'result.json').exists() or (attempt / 'runner.exit').exists()
         pid = attempt / 'runner.pid'
         if not over and pid.is_file():
-            try: os.kill(int(pid.read_text()), 0)
+            try: runner = int(pid.read_text())
             except (ValueError, OSError): over = True
+            else:
+                try: os.kill(runner, 0)
+                except OSError: over = not round_live(attempt, runner)
         elif not over and time.monotonic() - unseen > float(os.environ.get('FM_FOLLOW_GRACE', '120')):
             over = True  # no round ever started under this window
         if log.is_file():
@@ -748,6 +752,22 @@ def group_live(pgid):
                for fields in (line.split() for line in listing.stdout.splitlines()) if len(fields) >= 2)
 
 
+def round_live(attempt, pid):
+    """Whether a round still runs, judged by the round and not by its runner
+    alone: the runner itself, or the lifetime lock still held (a killed runner
+    can leave its adapter running, holding the lock), or, while the round has
+    no exit or result file, any member of its process group. A group id is
+    not reused while a member lives, and a finished round's is never read."""
+    attempt = Path(attempt)
+    if process_matches(dict(pid=pid, token='fm-herdr.py')): return True
+    try: state = execution_state(attempt)
+    except (OSError, ValueError): state = None
+    if state and state.get('live'): return True
+    if (attempt / 'runner.exit').exists() or (attempt / 'result.json').exists(): return False
+    try: return group_live(pid)
+    except PermissionError: return True  # a group is there, if not one fm may signal
+
+
 def stop_group(pid, grace):
     """TERM a round's process group, and KILL whatever of it is left after the
     grace. True once the group is gone. A group id is not reused while any
@@ -766,8 +786,10 @@ def stop_group(pid, grace):
 
 
 def stop_run(root, actor, grace=5.0, out=None):
-    """Stop every live round of one actor by its process group. Only a runner
-    ps still shows running fm-herdr.py is signalled. A round from before
+    """Stop every live round of one actor by its process group. A round is
+    live while round_live says so, so a round whose runner was killed but
+    whose adapter still runs is stopped by its group, then by the CLI pid it
+    recorded. A round from before
     T-144 has no runner: its vendor CLI is sent TERM by the pid it recorded,
     as the board did, and only while ps still shows that CLI."""
     out = out if out is not None else dict(stopped=[], failed=[])
@@ -778,13 +800,16 @@ def stop_run(root, actor, grace=5.0, out=None):
         if pidfile.is_file():
             try: pid = int(pidfile.read_text())
             except (ValueError, OSError): continue
-            if not process_matches(dict(pid=pid, token='fm-herdr.py')): continue
+            runner = process_matches(dict(pid=pid, token='fm-herdr.py'))
+            if not (runner or round_live(attempt, pid)): continue
+            label = f'{actor} {pid}' if runner else f'{actor} {pid} (runner gone)'
             try: gone = stop_group(pid, grace)
             except OSError as error: gone, why = False, error.strerror or str(error)
             else: why = 'still running after KILL'
-            (out['stopped'] if gone else out['failed']).append(
-                f'{actor} {pid}' if gone else f'{actor} {pid}: {why}')
-            continue
+            (out['stopped'] if gone else out['failed']).append(label if gone else f'{label}: {why}')
+            if runner: continue
+            # a runner that is gone recorded its CLI: TERM it as for a round
+            # from before T-144, a no-op once the group stop took it
         try: cli = read(attempt / 'execution.json')
         except (OSError, ValueError): continue
         if cli.get('started') is True: signal_recorded(out, f'{actor} {cli.get("pid")}', cli)
@@ -803,7 +828,7 @@ def signal_recorded(out, label, record):
 
 def stop_task(root, task, project, default, grace=5.0):
     """Every crewman on one task of one project, stopped by the one stop path
-    the board and `fm.sh stop` share. First the task's bin/fm-worker.sh, with
+    the board and fm's stop command share. First the task's bin/fm-worker.sh, with
     TERM, whose trap saves and pushes the worktree; then each of the task's
     runs: its rounds by process group (stop_run) and the script that launched
     it (process.json), by TERM. A run names its project, or is the default's.
@@ -1063,6 +1088,9 @@ def transport(adapter, prompt, tree, log):
     # window.json always says what window the round has, `none` included, so
     # a round with no window is recorded as one, never inferred from absence.
     owner = control = window = None
+    # the caller's own Herdr context, put back if a window fails after
+    # open_herdr_window has already handed the round its pane
+    caller = {key: env.get(key) for key in ('HERDR_PANE_ID', 'HERDR_TAB_ID', 'HERDR_WORKSPACE_ID')}
     try:
         if host == 'herdr':
             owner, control = open_herdr_window(attempt, logical, tree, actor, task, env, command)
@@ -1078,6 +1106,22 @@ def transport(adapter, prompt, tree, log):
         # never let a pane the round is not running in be closed by the round
         if (attempt / 'owner.json').exists(): (attempt / 'owner.json').rename(attempt / 'owner.failed.json')
         owner = control = None
+        # nor run with, or leave reported as working, a pane fm has disowned
+        if any(env.get(key) != value for key, value in caller.items()):
+            for key, value in caller.items():
+                if value is None: env.pop(key, None)
+                else: env[key] = value
+            save(attempt / 'environment.json', env); (attempt / 'environment.json').chmod(0o600)
+        disowned = attempt / 'owner.failed.json'
+        if host == 'herdr' and disowned.is_file():
+            try:
+                pane = read(disowned)['pane_id']
+                Herdr(attempt)('pane', 'report-agent', pane, '--source', 'firstmate', '--agent', actor,
+                               '--state', 'idle', '--agent-session-id', actor,
+                               '--message', task + ': no window')
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError,
+                    subprocess.SubprocessError) as report:
+                print(f'{actor}: could not report the disowned pane idle ({report})', file=sys.stderr)
         # a cmux workspace opened but not labelled is still closed at the end
         opened = read(attempt / 'window.json') if (attempt / 'window.json').is_file() else {}
         window = dict(host=host, status='open' if opened.get('status') == 'open' else 'none',

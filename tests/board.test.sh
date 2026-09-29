@@ -1011,7 +1011,8 @@ rm -rf "$e"
 # Its own fixture: every action here writes to the log, and the counts below
 # are lines in that log, so nothing else may be writing to it.
 f="$(mktemp -d)"; mkdir -p "$f/bin" "$f/state" "$f/design" "$f/board/public"
-cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$f/bin/"
+# fm-herdr.py: the stop path park and drop run (T-144)
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$f/bin/"
 cp "$ROOT/board/server.ts" "$f/board/"
 cp "$ROOT/board/public/index.html" "$f/board/public/"
 fm_tasks_write /dev/stdin "$f/design/tasks" <<'J'
@@ -1054,7 +1055,10 @@ assert_eq "reopen" "$(field T-P6 '.actions|join(",")')" "a merged one offers onl
 assert_eq "false" "$(field T-P1 .confirm)" "untouched work with nobody aboard sets aside without asking"
 assert_eq "true" "$(field T-P3 .confirm)" "a task with crew aboard asks first"
 
-# park: a parked event from the captain, and the card leaves the lanes
+# park: a parked event from the captain, and the card leaves the lanes.
+# With nobody aboard, the stop park runs stops nothing, and that is success.
+assert_eq '{"stopped":[],"failed":[]}' "$(python3 "$f/bin/fm-herdr.py" stop "$f" --task T-P1 | jq -c .)" \
+  "with no crew on the task, the stop park and drop run stops nothing and fails nothing"
 n0="$(lines)"
 assert_eq "200" "$(act T-P1 park)" "park answers 200 for a ready task"
 assert_eq "$((n0 + 1))" "$(lines)" "park writes exactly one event"
