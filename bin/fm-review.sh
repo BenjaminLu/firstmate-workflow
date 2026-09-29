@@ -503,11 +503,34 @@ closed_list() {
 # that names another head is dropped: the pull request's own checks follow
 # whatever head it has now, which need not be the head this round reviews.
 
-# required_names: the required checks' names, one per line; nothing when
-# they cannot be read. From the output, not the exit status: gh's exit code
-# reports the checks' state, and a red check is exactly what must be shown.
+# The required checks are what the base branch requires, not the checks that
+# happen to exist on the pull request (T-155): right after the worker's push
+# GitHub has created none, and `gh pr checks --required` lists only checks
+# that exist, so a round read from it alone waited on nothing and told the
+# reviewer the check could not be read. So, in order, the first source that
+# names any: the base branch's protection (.contexts and .checks[].context),
+# then `gh pr checks --required`, then config.yaml's declared required_check.
+# Read once per round, so the wait and the prompt name the same checks.
+#
+# REQ_NAMES: the names, one per line; empty when no source names one.
+# REQ_SOURCE: where they came from, in words, for the prompt.
+REQ_NAMES=''; REQ_SOURCE=''
 required_names() {
-  $GH pr checks "$PR" --required --json name --jq '.[].name' 2>/dev/null </dev/null | awk 'NF && !s[$0]++'
+  local got p
+  if got="$($GH api "repos/{owner}/{repo}/branches/$BASE/protection/required_status_checks" 2>/dev/null </dev/null)"; then
+    REQ_NAMES="$(jq -r '(.contexts[]?, .checks[]?.context) | strings' <<<"$got" 2>/dev/null | awk 'NF && !s[$0]++')"
+    REQ_SOURCE="the protection of the base branch $BASE"
+    [ -z "$REQ_NAMES" ] || return 0
+  fi
+  # From the output, not the exit status: gh's exit code reports the checks'
+  # state, and a red check is exactly what must be shown.
+  REQ_NAMES="$($GH pr checks "$PR" --required --json name --jq '.[].name' 2>/dev/null </dev/null | awk 'NF && !s[$0]++')"
+  REQ_SOURCE="the pull request's required checks"
+  [ -z "$REQ_NAMES" ] || return 0
+  p="$(fm_project_resolve "" config.yaml 2>/dev/null)" &&
+    REQ_NAMES="$(fm_project_get "$p" required_check config.yaml 2>/dev/null | awk 'NF && !s[$0]++')" || REQ_NAMES=''
+  REQ_SOURCE="config.yaml's required_check"
+  [ -n "$REQ_NAMES" ] || REQ_SOURCE=''
 }
 # check_runs_of <sha> <query>: GitHub's check runs for that commit, as it
 # answers them; status 1 when gh could not, or answered something else
@@ -522,15 +545,17 @@ check_runs_of() {
 # is handed their results rather than a run still going (T-153): every
 # required check whose runs for this head GitHub answers is waited on until
 # its latest run for the head is completed, for at most FM_REVIEW_CI_WAIT
-# seconds (default 1200), asked every FM_REVIEW_CI_POLL (default 30). A check
-# whose runs cannot be read is not waited on - it is said to be unknown - and
-# nothing is waited on without --pr. What is still running when the bound is
-# reached is said in the prompt, by name.
+# seconds (default 1200), asked every FM_REVIEW_CI_POLL (default 30). A
+# required check with no run for the head yet is waited on as missing (T-155).
+# A check whose runs cannot be read is not waited on - it is said to be
+# unknown - and nothing is waited on without --pr, or when no source names a
+# required check, which the prompt then says. What is still running when the
+# bound is reached is said in the prompt, by name.
 CI_WAITED=0; CI_PENDING=''
 ci_wait() {
   local sha names name runs status start now told=''
   sha="$R_HEAD"; [ -n "$sha" ] || return 0
-  names="$(required_names)"; [ -n "$names" ] || return 0
+  names="$REQ_NAMES"; [ -n "$names" ] || return 0
   start="$(date +%s)"
   while :; do
     CI_PENDING=''
@@ -581,10 +606,12 @@ head_evidence() {
     printf '\nThis round waited %s seconds for the required checks to finish for this head before it started.\n' "$CI_WAITED"
   fi
   printf '\n## The required check for this head, from GitHub\n'
-  names="$(required_names)"
+  names="$REQ_NAMES"
   if [ -z "$names" ]; then
     printf '\nThe required check for head %s could not be read from GitHub, so its CI result is unknown.\n' "$sha"
+    printf '\nNo source named any required check - not the protection of the base branch %s, not the pull request'"'"'s required checks, not config.yaml'"'"'s required_check - so this round did not wait for CI before it started.\n' "$BASE"
   else
+    printf '\nRequired checks, from %s: %s.\n' "$REQ_SOURCE" "$(paste -sd, - <<<"$names" | sed 's/,/, /g')"
     while IFS= read -r name; do
       if ! runs="$(check_runs_of "$sha" "check_name=$(jq -rn --arg n "$name" '$n|@uri')")"; then
         printf '\nThe runs of the required check %s for head %s could not be read from GitHub, so its CI result for this head is unknown.\n' "$name" "$sha"
@@ -704,8 +731,9 @@ work="$FM_RUN_DIR/review"
 mkdir -p "$work"
 prompt="$work/prompt.md"
 # the head's required checks first, bounded, so the prompt carries their
-# results (T-153); nothing to wait on without a pull request
-[ -z "$PR" ] || ci_wait
+# results (T-153); nothing to wait on without a pull request. The names are
+# read once, from what the base requires (T-155)
+[ -z "$PR" ] || { required_names; ci_wait; }
 {
   cat "${FM_CODE_ROOT:-$REPO}/skills/reviewer/SKILL.md"
   printf '\n---\n\n# The task\n\n```json\n%s\n```\n' "$spec"
