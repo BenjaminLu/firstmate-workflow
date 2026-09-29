@@ -1,0 +1,27 @@
+{
+  "id": "SK-007",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "skill-update: reviewer",
+  "why": "The captain, 2026-09-29: two review rules, as rules of firstmate-workflow.\n(1) Closed list from the first REJECT. Every REJECT, from round one, ends with CRITERIA-COMPLETE:<task-id> and the numbered, complete set of changes that would make this head pass (what the round-three answer is today). Later rounds judge against that list; a new objection is admissible only as REGRESSION:<task-id> or where the latest change touched new ground, labelled off-list either way. ASK-PASS-CRITERIA stays for a worker who finds the list missing or unclear. Why: T-126 took ten rounds, one new finding per round from round 7 on.\n(2) No full check in review. The reviewer runs setup, the tests the diff adds or changes, the suites that exercise the changed code, and fail-first; it does not run the full declared `check` - that is the required GitHub check on the same head, which firstmate verifies at the merge gate. Why: the full check took 1100-1800 s of every 17-60 minute review, inside a sandbox where 12-13 suites fail for environmental reasons. The step text fm-review.sh prints into the prompt (bin/fm-review.sh:586-588, \"Run setup, then check\") must say the same, so this update needs that file in its scope.\nRound 2 (firstmate): bin/fm-protocol.sh still gated round three on the worker's ask, so a list closed in round one would stall every task there; its tests and the worker skill's statement of the rule come into scope.\nRound 3 (firstmate): the board end-to-end test matched only T-<n> task ids, and a crewman on this branch is on SK-007, so tests/e2e/board.spec.ts comes into scope.",
+  "scope": [
+    "skills/reviewer/**",
+    "tests/skills.test.sh",
+    "bin/fm-review.sh",
+    "tests/review.test.sh",
+    "design/design.md",
+    "design/tasks/SK-007.json",
+    "bin/fm-protocol.sh",
+    "tests/protocol.test.sh",
+    "skills/worker/SKILL.md",
+    "tests/e2e/board.spec.ts"
+  ],
+  "acceptance": [
+    "skills/reviewer/SKILL.md says it, in English, in plain markdown",
+    "tests/skills.test.sh asserts the sentence that carries it",
+    "reverting skills/reviewer/SKILL.md turns that assertion red",
+    "no file outside the declared scope is touched",
+    "Also retire the old carry-forward rule in skills/reviewer/SKILL.md (line ~139: an approval carries forward only across an update that 'touches none of its files'); after SK-008 the rule is: an APPROVE carries forward across any base update that leaves the change's patch-id unchanged."
+  ]
+}
