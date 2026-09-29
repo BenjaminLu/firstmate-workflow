@@ -122,8 +122,13 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
   # has no CLI to lie to it. Its own promise is checked just below instead.
   if [ "$name" != "mock" ]; then
     vendor_says() {  # <stdout> <exit code>
-      printf '#!/usr/bin/env bash\nprintf "%%s\\n" %s\nexit %s\n' "$(printf '%q' "$1")" "$2" \
-        > "$d/fakebin/$name"
+      # cursor-agent's own preflight (T-127) asks `--list-models` before
+      # every round with a model configured; a stub built for the real
+      # invocation's transcript answers that separate call as a CLI with no
+      # session yet would - silently (exit 1) - so a canned body meant for
+      # the round's own transcript is never misread as its model catalogue.
+      printf '#!/usr/bin/env bash\nif [ "$1" = "--list-models" ]; then exit 1; fi\nprintf "%%s\\n" %s\nexit %s\n' \
+        "$(printf '%q' "$1")" "$2" > "$d/fakebin/$name"
       chmod +x "$d/fakebin/$name"
     }
     for line in "Error: Authentication required. Please run 'agent login' first" \
@@ -146,7 +151,12 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     # the invocation each vendor documents.
     # stdin and argv are recorded apart, so each adapter can be held to the
     # half its CLI actually documents
-    printf '#!/usr/bin/env bash\ncat >> "%s/stdin" 2>/dev/null\nprintf "%%s" "$*" >> "%s/argv"\nprintf "ran\\n"\nexit 0\n' \
+    # cursor-agent's own preflight (T-127) asks `--list-models` before every
+    # round with a model configured; this stub is reused below with
+    # FM_MODEL=claude-opus-5-5, so it answers that separate call with a
+    # catalogue naming it, rather than recording it into argv/stdin as
+    # though it were the round's own invocation.
+    printf '#!/usr/bin/env bash\nif [ "$1" = "--list-models" ]; then printf "claude-opus-5-5 - Claude Opus\\n"; exit 0; fi\ncat >> "%s/stdin" 2>/dev/null\nprintf "%%s" "$*" >> "%s/argv"\nprintf "ran\\n"\nexit 0\n' \
       "$d" "$d" > "$d/fakebin/$name"
     chmod +x "$d/fakebin/$name"
     : > "$d/stdin"; : > "$d/argv"
@@ -175,8 +185,8 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
       # form is a piped stdin and no -p at all: a bare -p leaves the flag
       # dangling and the prompt is never delivered.
       # and, since T-105, only the flags that carry the policy
-      gemini) assert_eq "--approval-mode yolo --extensions none --allowed-mcp-server-names fm-none" "$argv" \
-                "$name uses the documented headless form, with the policy's flags"
+      gemini) assert_eq "--approval-mode yolo --extensions none --allowed-mcp-server-names fm-none --output-format json" "$argv" \
+                "$name uses the documented headless form, with the policy's flags, and JSON output for its record (T-127)"
               assert_lacks " $argv " " -p " "$name passes no dangling -p" ;;
       # under bwrap (this loop's platform for it) cursor's own sandbox stays on
       cursor-agent)
@@ -207,6 +217,127 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     esac
     assert_ok "test -s '$pk/bwrap.args' || test -s '$pk/profile.sb'" "$name's CLI ran inside the OS sandbox"
     rm -f "$pk/bwrap.args" "$pk/profile.sb"
+
+    # --- config.yaml's model, applied (T-127) -----------------------------
+    : > "$d/argv"
+    FM_MODEL="claude-opus-5-5" PATH="$d/fakebin:/usr/bin:/bin" \
+      "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+    model_argv="$(cat "$d/argv")"
+    case "$name" in
+      claude|cursor-agent)
+        assert_contains " $model_argv " " --model claude-opus-5-5 " \
+          "$name passes the configured model with --model" ;;
+      codex|gemini)
+        assert_contains " $model_argv " " -m claude-opus-5-5 " \
+          "$name passes the configured model with -m" ;;
+    esac
+    # every vendor is asked for JSON output now, unconditionally, since that
+    # is where the round's own model comes back (T-127)
+    case "$name" in
+      claude|cursor-agent|gemini) assert_contains " $model_argv " " --output-format json " \
+        "$name asks for JSON output so its round's model can be read back" ;;
+      codex) assert_contains " $model_argv " " --json " "$name asks for JSON output too" ;;
+    esac
+    # with no FM_MODEL at all, none of these flags appear
+    : > "$d/argv"
+    PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+    no_model_argv="$(cat "$d/argv")"
+    assert_lacks " $no_model_argv " " --model " "$name passes no --model when none is configured"
+    assert_lacks " $no_model_argv " " -m " "$name passes no -m when none is configured"
+    # config.yaml is the one place a model is chosen: an operator argument
+    # naming one is refused, for every vendor, in every round
+    case "$name" in
+      claude) model_extras="--model gpt-5|--fallback-model gpt-5" ;;
+      cursor-agent) model_extras="--model gpt-5" ;;
+      codex|gemini) model_extras="-m gpt-5|--model gpt-5" ;;
+    esac
+    saved_ifs2="$IFS"; IFS='|'
+    for extra in $model_extras; do
+      IFS="$saved_ifs2"
+      FM_ADAPTER_ARGS="$extra" PATH="$d/fakebin:/usr/bin:/bin" \
+        "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>"$d/model-err"
+      assert_eq "64" "$?" "$name refuses FM_ADAPTER_ARGS naming a model ($extra)"
+      assert_contains "$(cat "$d/model-err")" "config.yaml is the one place a model is chosen" \
+        "and says why ($name, $extra)"
+      IFS='|'
+    done
+    IFS="$saved_ifs2"
+    # a model the vendor does not recognise refuses the round loudly, named
+    # on the board, rather than falling back to another vendor or running on
+    # the CLI's default: claude's own answer, verbatim; the others against
+    # a generic phrase list, the way _FM_SIG covers an outage for all four
+    case "$name" in
+      claude) refusal_line='[claude-code:unrecognized_model] the model "bad-model-9000" was not recognised' ;;
+      *)      refusal_line='Error: unrecognized model "bad-model-9000"' ;;
+    esac
+    vendor_says "$refusal_line" 1
+    refused_dir="$(safe_tmpdir)"; : > "$refused_dir/refused"
+    FM_MODEL="bad-model-9000" FM_MODEL_REFUSED="$refused_dir/refused" \
+      PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/model-refusal.log" \
+      >/dev/null 2>"$d/model-refusal.err"
+    assert_eq "64" "$?" "$name refuses a round whose model it does not recognise"
+    assert_contains "$(cat "$d/model-refusal.err")" "bad-model-9000" "and names the model on stderr"
+    assert_contains "$(cat "$refused_dir/refused")" "bad-model-9000" "and records it for the caller to raise on the board"
+    safe_rm_rf "$refused_dir"
+
+    # --- false positives (T-127 review round 5) ---------------------------
+    # A completed round (exit 0) is never read as a refusal, however the
+    # words in its transcript happen to fall: the whole point of the check
+    # is that a signature alone must never discard real work.
+    vendor_says "$refusal_line" 0
+    : > "$d/model-ok.log"
+    FM_MODEL="bad-model-9000" PATH="$d/fakebin:/usr/bin:/bin" \
+      "$adapter" run "$d/prompt" "$d/tree" "$d/model-ok.log" >/dev/null 2>"$d/model-ok.err"
+    assert_ne "64" "$?" "$name does not refuse a completed round even carrying the refusal's words"
+    # Ordinary prose that merely discusses models - the kind this very
+    # codebase's own commits now contain - must never trip it either, exit
+    # code aside: it does not open the line the way a CLI's own usage error
+    # does.
+    for prose in "Reviewed the ORM's invalid model names and fixed the migration." \
+                 "The data model was unknown to the linter; renamed the field." \
+                 "No such model found in the fixtures; added one."; do
+      vendor_says "$prose" 1
+      : > "$d/model-prose.log"
+      FM_MODEL="bad-model-9000" PATH="$d/fakebin:/usr/bin:/bin" \
+        "$adapter" run "$d/prompt" "$d/tree" "$d/model-prose.log" >/dev/null 2>"$d/model-prose.err"
+      assert_ne "64" "$?" "$name does not refuse on prose alone: \"${prose%% *}...\""
+    done
+    # A vendor that reports the model it actually ran on already ran a
+    # turn: whatever error text follows in the same transcript is not "the
+    # CLI never started", so it is never read as a model refusal either.
+    vendor_says "{\"type\":\"result\",\"model\":\"claude-opus-5-5\"} then: $refusal_line" 1
+    : > "$d/model-worked.log"
+    FM_MODEL="bad-model-9000" PATH="$d/fakebin:/usr/bin:/bin" \
+      "$adapter" run "$d/prompt" "$d/tree" "$d/model-worked.log" >/dev/null 2>"$d/model-worked.err"
+    assert_ne "64" "$?" "$name does not refuse a transcript that already reports a model ran"
+
+    # --- cursor-agent can list its own models, before the round (T-127) ---
+    if [ "$name" = "cursor-agent" ]; then
+      # a stub that answers --list-models differently from a real round, the
+      # way the live CLI's two purposes differ
+      printf '#!/usr/bin/env bash\nif [ "$1" = "--list-models" ]; then\n  printf "gpt-visor-1 - GPT Visor\\nclaude-opus-5-5 - Claude Opus\\n"\n  exit 0\nfi\nprintf "{\\"type\\":\\"result\\",\\"model\\":\\"claude-opus-5-5\\"}\\n"\nexit 0\n' \
+        > "$d/fakebin/cursor-agent"
+      chmod +x "$d/fakebin/cursor-agent"
+      : > "$d/list-unknown.log"
+      FM_MODEL="not-a-real-model" PATH="$d/fakebin:/usr/bin:/bin" \
+        "$adapter" run "$d/prompt" "$d/tree" "$d/list-unknown.log" >/dev/null 2>"$d/list-unknown.err"
+      assert_eq "64" "$?" "cursor-agent refuses before the round when --list-models names no such model"
+      assert_contains "$(cat "$d/list-unknown.err")" "not-a-real-model" "and names the model on stderr"
+      : > "$d/list-known.log"
+      FM_MODEL="claude-opus-5-5" PATH="$d/fakebin:/usr/bin:/bin" \
+        "$adapter" run "$d/prompt" "$d/tree" "$d/list-known.log" >/dev/null 2>"$d/list-known.err"
+      assert_ne "64" "$?" "and lets a name the list does carry through"
+
+      # a vendor with no session yet cannot list anything; the check must
+      # stay silent, not refuse a round it could not actually ask about
+      printf '#!/usr/bin/env bash\nif [ "$1" = "--list-models" ]; then\n  echo "Error: Authentication required." >&2\n  exit 1\nfi\nprintf "{\\"type\\":\\"result\\",\\"model\\":\\"claude-opus-5-5\\"}\\n"\nexit 0\n' \
+        > "$d/fakebin/cursor-agent"
+      chmod +x "$d/fakebin/cursor-agent"
+      : > "$d/list-noauth.log"
+      FM_MODEL="whatever-model" PATH="$d/fakebin:/usr/bin:/bin" \
+        "$adapter" run "$d/prompt" "$d/tree" "$d/list-noauth.log" >/dev/null 2>"$d/list-noauth.err"
+      assert_ne "64" "$?" "and a list command that cannot run refuses nothing"
+    fi
 
     # --- a run-mode review (T-066) ---------------------------------------
     # The reviewer runs commands in fm-review.sh's checkout. What keeps it

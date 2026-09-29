@@ -117,6 +117,60 @@ assert_eq "0" "$(jq -c 'select(.type=="crew_status" and (.data.progress!=null))'
 # the prompt carries the task and the skill, and is not left lying around
 assert_fail "test -f '$r/state/worktrees/T-Z/.fm-prompt.md'" "the prompt is cleaned up"
 
+# T-127: the crew runs on the model config.yaml names, and the round
+# records vendor, model and cli_version as separate fields, read from the
+# run itself. FM_MOCK_MODEL stands in for a real vendor's transcript
+# reporting the model it actually ran on (bin/adapters/mock.sh).
+d3="$(fixture)"; r3="$d3/repo"; GH3="$(ghstub "$d3")"
+printf 'model: mock-model-a\n' >> "$r3/config.yaml"
+( cd "$r3" && FM_ROOT="$r3" FM_GH="$GH3" FM_MOCK_MODEL="mock-model-b" bin/fm-worker.sh --task T-Z --name worker-m >/dev/null 2>&1 )
+assert_eq "0" "$?" "a round with a configured model still exits 0"
+log3="$r3/state/events.jsonl"
+m3actor="$(jq -r 'select(.type=="dispatched")|.actor' "$log3")"
+# the model is only known once the round's own CLI has run, so only the
+# payloads from that point on (commit_pushed onward) carry it; dispatched,
+# emitted before any adapter runs, correctly cannot yet
+assert_eq '["mock","mock-model-a","mock-model-b","unknown"]' \
+  "$(jq -c 'select(.type=="commit_pushed")|.data.identity|[.vendor,.model_requested,.model,.cli_version]' "$log3" | sort -u)" \
+  "the round's crew payloads carry vendor, model_requested, model and cli_version as separate fields"
+assert_eq '["mock","mock-model-a","mock-model-b","unknown"]' \
+  "$(jq -c '[.vendor,.model_requested,.model,.cli_version]' "$r3/state/runs/$m3actor/identity.json")" \
+  "and identity.json records the same four fields"
+assert_eq "true" "$(jq -r '.model_mismatch' "$r3/state/runs/$m3actor/identity.json")" \
+  "flagged as a mismatch since the run reported a different model than config.yaml asked for"
+assert_contains "$(jq -r .type < "$log3" | tr '\n' ' ')" "model_mismatch" \
+  "the run emits model_mismatch when they differ"
+mrow3="$(jq -c 'select(.type=="model_mismatch")' "$log3")"
+assert_eq "mock-model-a" "$(jq -r '.data.model_requested' <<<"$mrow3")" "naming what was requested"
+assert_eq "mock-model-b" "$(jq -r '.data.model' <<<"$mrow3")" "and what it actually ran on"
+assert_ne "" "$(jq -r '.summary.en' <<<"$mrow3")" "with an English summary"
+assert_ne "" "$(jq -r '.summary."zh-TW"' <<<"$mrow3")" "and a zh-TW one"
+
+# no mismatch when the run reports the model it was asked for
+d4="$(fixture)"; r4="$d4/repo"; GH4="$(ghstub "$d4")"
+printf 'model: mock-model-a\n' >> "$r4/config.yaml"
+( cd "$r4" && FM_ROOT="$r4" FM_GH="$GH4" FM_MOCK_MODEL="mock-model-a" bin/fm-worker.sh --task T-Z --name worker-n >/dev/null 2>&1 )
+log4="$r4/state/events.jsonl"
+m4actor="$(jq -r 'select(.type=="dispatched")|.actor' "$log4")"
+assert_eq "false" "$(jq -r '.model_mismatch' "$r4/state/runs/$m4actor/identity.json")" \
+  "and no mismatch when the run reports the model it was asked for"
+assert_eq "0" "$(jq -c 'select(.type=="model_mismatch")' "$log4" | wc -l | tr -d ' ')" \
+  "so no model_mismatch event either"
+
+# no model configured at all: the round runs on whatever the CLI defaults
+# to, reported as unknown, never guessed - and the fields still ride the
+# run, an old-run's-worth of them, so a run with none configured still
+# renders the same shape the board reads
+d4b="$(fixture)"; r4b="$d4b/repo"; GH4b="$(ghstub "$d4b")"
+( cd "$r4b" && FM_ROOT="$r4b" FM_GH="$GH4b" bin/fm-worker.sh --task T-Z --name worker-o >/dev/null 2>&1 )
+log4b="$r4b/state/events.jsonl"
+m4bactor="$(jq -r 'select(.type=="dispatched")|.actor' "$log4b")"
+assert_eq '["mock","","unknown","unknown"]' \
+  "$(jq -c '[.vendor,.model_requested,.model,.cli_version]' "$r4b/state/runs/$m4bactor/identity.json")" \
+  "with no model configured, the round still records vendor and cli_version; model is unknown, never guessed"
+assert_eq "false" "$(jq -r '.model_mismatch' "$r4b/state/runs/$m4bactor/identity.json")" \
+  "asking for nothing and getting nothing is never a mismatch"
+
 # an adapter that cannot reach its vendor falls through to the next one
 d2="$(fixture)"; r2="$d2/repo"; GH2="$(ghstub "$d2")"
 ( cd "$r2" && FM_ROOT="$r2" FM_GH="$GH2" FM_MOCK_EXIT=2 bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
