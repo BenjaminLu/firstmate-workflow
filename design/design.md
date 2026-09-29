@@ -2923,14 +2923,22 @@ its secret-tool item, when the tool is present; then its file; only with
 none of those does it fall back to the operator's own interactive login as
 before T-126 - never silently: it says so, in the round's log and on the
 board (`en` and `zh-TW`), as a warning that the round can die when that
-login refreshes. A crew keychain, secret-tool or file entry that exists but
-fails - a `claude-token` file others can read, say - refuses the round
-outright, the way an expired or malformed login always has, rather than
-quietly falling back to a weaker login; secret-tool's own absence, unlike
-that, is skipped rather than refused, since it names no entry at all to
-fail. `bin/fm-sandbox.sh login-source` reports which tier answered
-(`primary` or `fallback`, never the login), and `bin/fm-canary.sh` turns that
-into `crew-token` or `interactive-fallback` for claude specifically; firstmate
+login refreshes. Every read has three outcomes, found, missing or failed
+(T-126 round 7), and only missing lets the lookup go on: `security` exiting
+44 (no such item), `secret-tool` exiting 1 with nothing on stderr (no such
+item) or not installed at all, and a file that is not there. A crew entry
+that exists but fails - `security` exiting anything else (36, "User
+interaction is not allowed"), a keychain or secret-tool read that times out
+(30 seconds), `secret-tool` saying why on stderr (no D-Bus session, a locked
+collection), a `claude-token` file others can read, one that cannot be
+opened (mode 000, a directory) or is empty - refuses the round outright,
+naming the source and its error, the way an expired or malformed login always
+has, and nothing after it is read: `Claude Code-credentials` is never asked
+for. `bin/fm-sandbox.sh login-source` prints one line on stdout,
+`tier=<primary|fallback> source=<source>`, never the login, and
+`bin/fm-canary.sh` reads that line alone, never stderr, and turns the tier
+into `crew-token` or `interactive-fallback` for claude specifically, on its
+status line and as `login_source` in its results; firstmate
 reruns the canary at the merge gate for a change here, and workers do not run
 it themselves. The operator revokes the crew token at claude.ai, Settings,
 Claude Code.

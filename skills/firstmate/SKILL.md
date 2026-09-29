@@ -256,7 +256,9 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   request. It spends real model calls, so it never runs in CI and workers
   never run it themselves. It reports which login source each round's
   claude used, `crew-token` or `interactive-fallback` (`bin/fm-sandbox.sh
-  login-source`'s tier), never the login itself. The operator makes
+  login-source`'s `tier=` line), never the login itself. A crew token that
+  exists but fails to read (a locked keychain item, a timeout, an unreadable
+  file) refuses the round rather than falling back. The operator makes
   claude's own crew token once, outside any round, with `claude setup-token`
   (https://code.claude.com/docs/en/authentication - one year, bills to the
   subscription, model requests only), then keeps it the way T-117 keeps

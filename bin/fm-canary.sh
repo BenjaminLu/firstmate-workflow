@@ -181,18 +181,22 @@ for name in ${wanted[@]+"${wanted[@]}"}; do
     continue
   fi
   version="$("$name" --version </dev/null 2>&1 | head -1)"
-  # logged in: where the operator's login is, never the login itself. Two
-  # lines: the source, then which tier answered - `fallback` only when a
-  # vendor's own crew login named nothing at all and the round fell back to
-  # the operator's interactive one (T-126). For claude that tier is worth a
+  # logged in: where the operator's login is, never the login itself. One
+  # line on stdout, `tier=<primary|fallback> source=<source>`, read from
+  # stdout alone (T-126 round 7): stderr, a warning or a timed-out read,
+  # is only ever the reason a refusal gives. `fallback` only when a
+  # vendor's own crew login was missing and the round fell back to the
+  # operator's interactive one (T-126). For claude that tier is worth a
   # plainer name than "primary"/"fallback": crew-token or interactive-fallback.
-  if ! src="$("$ROOT/bin/fm-sandbox.sh" login-source --policy="$policy_all" --vendor="$name" 2>&1)"; then
+  if ! src="$("$ROOT/bin/fm-sandbox.sh" login-source --policy="$policy_all" --vendor="$name" 2>"$out/login-source.err")"; then
+    src="$(grep -m1 '^fm-sandbox: ' "$out/login-source.err")"; rm -f "$out/login-source.err"
     printf '%-13s skipped: not logged in (%s)\n' "$name" "${src#fm-sandbox: }"
     record "$name" "$version" skipped "not logged in: ${src#fm-sandbox: }"
     continue
   fi
-  login_tier_name="$(sed -n '2p' <<< "$src")"
-  login_label="$login_tier_name"
+  rm -f "$out/login-source.err"
+  login_tier_name="$(sed -n 's/^tier=\([a-z]*\) source=.*$/\1/p' <<< "$src" | head -1)"
+  login_label="${login_tier_name:-unknown}"
   if [ "$name" = claude ]; then
     case "$login_tier_name" in
       fallback) login_label=interactive-fallback ;;
@@ -354,7 +358,7 @@ PROMPT
   [ "$model_reported" != "$model_requested" ] && [ -n "$model_reported" ] && model_shown="$model_shown (ran on $model_reported)"
   [ -s "$model_refused_file" ] && model_shown="$model_shown, refused: $(cat "$model_refused_file" | tr -d '\n' | cut -c1-120)"
   if [ "$outcome" = refused ]; then
-    printf '%-13s %-28s %-40s refused: started=no  %s\n' "$name" "$(printf '%.28s' "$version")" "$model_shown" "$why"
+    printf '%-13s %-28s %-40s refused: started=no  login=%s  %s\n' "$name" "$(printf '%.28s' "$version")" "$model_shown" "$login_label" "$why"
     sed 's/^/    /' "$d/stderr" | head -3
     failed=1
   else

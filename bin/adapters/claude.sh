@@ -210,12 +210,19 @@ if [ -n "${FM_ATTEMPT_DIR:-}" ]; then
 else
   # stderr goes to the log, as it always has; the launcher's own lines
   # (`fm-sandbox: ...`, which carry the login-fallback warning) are also
-  # said on the adapter's stderr, so a caller sees them on every OS
-  errs="$(mktemp "${TMPDIR:-/tmp}/fm-claude-err.XXXXXX")" || errs=/dev/null
+  # said on the adapter's stderr, so a caller sees them on every OS. The
+  # file sits in the round's control directory, out of the round's reach,
+  # which fm_adapter_policy already made or refused the round over; a file
+  # that still cannot be made there refuses the round too, rather than
+  # dropping its stderr (T-126 round 7).
+  errs="$FM_ROUND_CTL/claude-stderr"
+  : > "$errs" || { echo "claude: cannot keep the round's stderr at $errs; refusing the round" >&2; exit 70; }
   ( cd "$work" && "${FM_LAUNCH[@]}" ${launch[@]+"${launch[@]}"} claude -p "${mode[@]}" \
     ${model_args[@]+"${model_args[@]}"} ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2> "$errs"
   rc=$?
-  [ "$errs" = /dev/null ] || { cat "$errs" >> "$log"; grep '^fm-sandbox: ' "$errs" >&2 || true; rm -f "$errs"; }
+  cat "$errs" >> "$log"
+  grep '^fm-sandbox: ' "$errs" >&2 || true
+  rm -f "$errs"
 fi
 # A model claude does not recognise refuses the round loudly (T-127), rather
 # than running silently on whatever it defaulted to: not vendor-unavailable

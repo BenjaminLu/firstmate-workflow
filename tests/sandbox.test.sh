@@ -1109,6 +1109,86 @@ assert_contains "$lo" "token=crew-claude-secret" "so the secret-tool item answer
 assert_lacks "$lo" "crew-file-token" "and never the file while libsecret answers"
 rm -f "$t/kc/secret-calls"
 
+# A crew token that exists but cannot be read is not a missing one (T-126
+# round 7): it refuses the round, naming the source and its error, and the
+# operator's interactive login is never asked for. Only security(1)'s exit
+# 44, secret-tool's silent exit 1 and a file that is not there are missing.
+# The operator's interactive login is there on both OSes throughout (the
+# keychain stand-ins below answer for it; on Linux, its credentials file),
+# so a read failure taken for absence would start the round on it.
+rm -f "$t/chome/.config/firstmate/claude-token"
+mkdir -p "$t/chome/.claude"
+cp "$t/kc/claude" "$t/chome/.claude/.credentials.json"
+# security(1) as it answers for an item it will not open: exit 36, "User
+# interaction is not allowed" - and one that never answers at all
+sed "s/^  firstmate-claude-token).*/  firstmate-claude-token) echo 'security: SecKeychainItemCopyContent: User interaction is not allowed.' >\&2; exit 36 ;;/" \
+  "$t/kc/security" > "$t/kc/security-locked"
+sed "s/^  firstmate-claude-token).*/  firstmate-claude-token) exec sleep 5 ;;/" "$t/kc/security" > "$t/kc/security-hang"
+chmod +x "$t/kc/security-locked" "$t/kc/security-hang"
+# secret-tool(1) as it answers when it cannot reach libsecret at all: exit
+# 1 like "no such item", but saying why on stderr
+cat > "$t/kc/secret-tool-broken" <<S
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$t/kc/secret-calls"
+echo "secret-tool: Cannot autolaunch D-Bus without X11 \\\$DISPLAY" >&2
+exit 1
+S
+chmod +x "$t/kc/secret-tool-broken"
+crew_fail() {   # crew_fail <label> <reason text> <kc args...>: refused, and the fallback never asked
+  local label="$1" reason="$2"
+  shift 2
+  assert_eq "77" "$(kc "$@")" "$label refuses the round"
+  assert_contains "$(cat "$t/login.err" 2>/dev/null)" "$reason" "naming the source and its error ($label)"
+  assert_fail "test -e '$t/login.out'" "and the command never starts ($label)"
+  assert_lacks "$(cat "$t/kc/calls" 2>/dev/null)" "Claude Code-credentials" \
+    "and the operator's interactive login is never asked for ($label)"
+  assert_lacks "$(cat "$t/login.err" 2>/dev/null)" "has no crew token" "nor said to be missing ($label)"
+}
+crew_fail "a crew keychain item that will not open (security exit 36)" \
+  "keychain item 'firstmate-claude-token' could not be read (exit 36" \
+  run darwin claude FM_KEYCHAIN_TOOL="$t/kc/security-locked"
+assert_contains "$(cat "$t/login.err" 2>/dev/null)" "User interaction is not allowed" "with security's own words"
+crew_fail "a crew keychain read that never answers" "reading the keychain item 'firstmate-claude-token' timed out" \
+  run darwin claude FM_KEYCHAIN_TOOL="$t/kc/security-hang" FM_LOGIN_READ_TIMEOUT=1
+crew_fail "a secret-tool that cannot reach libsecret" "Cannot autolaunch D-Bus" \
+  run darwin claude FM_KEYCHAIN_TOOL="$t/kc/security-nocrew" FM_SECRET_TOOL="$t/kc/secret-tool-broken"
+crew_fail "the same secret-tool error on Linux" "secret-tool item 'firstmate-claude-token' could not be read" \
+  run linux claude FM_SECRET_TOOL="$t/kc/secret-tool-broken"
+printf 'crew-file-token\n' > "$t/chome/.config/firstmate/claude-token"
+chmod 000 "$t/chome/.config/firstmate/claude-token"
+if [ -r "$t/chome/.config/firstmate/claude-token" ]; then
+  # root reads a mode-000 file anyway, so there is no unreadable file to test
+  echo "  (skipped: a mode-000 crew file is readable to this user, $(id -un))"
+else
+  crew_fail "a mode-000 crew token file" "claude-token could not be read" \
+    run darwin claude FM_KEYCHAIN_TOOL="$t/kc/security-nocrew"
+fi
+rm -f "$t/chome/.config/firstmate/claude-token"
+mkdir -m 700 "$t/chome/.config/firstmate/claude-token"
+crew_fail "a directory where the crew token file should be" "claude-token could not be read" \
+  run darwin claude FM_KEYCHAIN_TOOL="$t/kc/security-nocrew"
+rmdir "$t/chome/.config/firstmate/claude-token"
+: > "$t/chome/.config/firstmate/claude-token"
+chmod 600 "$t/chome/.config/firstmate/claude-token"
+crew_fail "an empty crew token file" "claude-token is empty" \
+  run darwin claude FM_KEYCHAIN_TOOL="$t/kc/security-nocrew"
+rm -f "$t/chome/.config/firstmate/claude-token"
+# the same refusal through login-source, which fm-canary.sh reads
+FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" FM_KEYCHAIN_TOOL="$t/kc/security-locked" \
+  "$SB" login-source --policy="$t/worker.json" --vendor=claude >"$t/ls.out" 2>"$t/ls.err"
+assert_eq "77" "$?" "login-source says 77 for a crew item that will not open"
+assert_eq "" "$(cat "$t/ls.out")" "and names no source on stdout"
+# and true absence, with every one of these stubs saying missing, still
+# falls back and warns - on both OSes
+assert_eq "0" "$(kc run darwin claude FM_KEYCHAIN_TOOL="$t/kc/security-nocrew")" \
+  "with the crew token truly missing, the round still falls back"
+assert_contains "$(cat "$t/login.out" 2>/dev/null)" "token=at-claude" "to the interactive login"
+assert_contains "$(cat "$t/login.err" 2>/dev/null)" "has no crew token" "and warns"
+assert_eq "0" "$(kc run linux claude)" "and on Linux too"
+assert_contains "$(cat "$t/login.out" 2>/dev/null)" "token=at-claude" "to the interactive login's file (Linux)"
+assert_contains "$(cat "$t/login.err" 2>/dev/null)" "has no crew token" "and warns (Linux)"
+rm -f "$t/kc/secret-calls"
+
 rm -rf "$t/chome"
 pol worker 'vendor: mock
 '
@@ -1252,15 +1332,13 @@ pol worker 'vendor: mock
 '
 src="$(FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" FM_KEYCHAIN_TOOL="$t/kc/security" \
   "$SB" login-source --policy="$t/worker.json" --vendor=claude 2>&1)"
-assert_eq "keychain:firstmate-claude-token
-primary" "$src" "login-source names where claude's login is, and that it is the crew's own (T-126)"
+assert_eq "tier=primary source=keychain:firstmate-claude-token" "$src" "login-source names where claude's login is, and that it is the crew's own (T-126)"
 assert_lacks "$src" "crew-claude-token" "and never prints it"
 # off macOS, with no keychain, login-source names the libsecret item instead
 # (T-126 round 2)
 src="$(FM_SANDBOX_OS=linux FM_SECRET_TOOL="$t/kc/secret-tool" \
   "$SB" login-source --policy="$t/worker.json" --vendor=claude 2>&1)"
-assert_eq "secret:firstmate-claude-token
-primary" "$src" "and, on Linux, that it is the crew's libsecret item"
+assert_eq "tier=primary source=secret:firstmate-claude-token" "$src" "and, on Linux, that it is the crew's libsecret item"
 assert_lacks "$src" "crew-claude-secret" "and never prints it either"
 # with no crew token, login-source says the fallback tier answered instead.
 # FM_SECRET_TOOL is fm's own stub, never left to the host's real
@@ -1270,14 +1348,51 @@ rm -f "$t/kc/secret-tool-guard-calls"
 src="$(FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" FM_KEYCHAIN_TOOL="$t/kc/security-nocrew" \
   FM_SECRET_TOOL="$t/kc/secret-tool-guard" \
   "$SB" login-source --policy="$t/worker.json" --vendor=claude 2>&1)"
-assert_eq "keychain:Claude Code-credentials
-fallback" "$src" "and that a fallback tier answered when there is no crew token"
+assert_eq "tier=fallback source=keychain:Claude Code-credentials" "$src" "and that a fallback tier answered when there is no crew token"
 assert_lacks "$src" "at-claude" "and never prints it either"
 assert_contains "$(cat "$t/kc/secret-tool-guard-calls" 2>/dev/null)" "firstmate-claude-token" \
   "and fm's own secret-tool stand-in answered here too, never the host's"
 FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" FM_KEYCHAIN_TOOL="$t/no-such-security" \
   "$SB" login-source --policy="$t/nohome.json" --vendor=cursor-agent >/dev/null 2>&1
 assert_eq "77" "$?" "and says 77 when the operator is not logged in"
+
+# fm-canary.sh reports which login a claude round used (T-126 round 7):
+# crew-token or interactive-fallback, read from login-source's stdout line
+# alone, in its status line and its results record - never the token. The
+# real bin/fm-canary.sh, the way tests/canary.test.sh runs it, with claude
+# stood in: no OS sandbox tool, so the adapter refuses the round before
+# anything starts and no model call is spent; the login is judged first.
+cvh="$t/canary-home"; cvs="$t/canary-state"; cvt="$t/canary-tmp"
+mkdir -p "$cvh/.config/firstmate" "$cvh/.claude" "$t/canary-bin" "$cvt"
+printf '#!/usr/bin/env bash\n[ "$1" = --version ] && { echo "9.9.9 (Claude Code)"; exit 0; }\ncat >/dev/null; exit 0\n' \
+  > "$t/canary-bin/claude"
+chmod +x "$t/canary-bin/claude"
+canary_claude() {   # canary_claude -> the canary's stdout in $t/canary.out, stderr in $t/canary.err
+  rm -rf "$cvs"
+  ( cd "$ROOT" && env -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY HOME="$cvh" TMPDIR="$cvt" \
+      FM_CANARY_STATE_DIR="$cvs" FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$t/no-such-bwrap" \
+      FM_SECRET_TOOL="$t/kc/secret-tool-guard" PATH="$t/canary-bin:$PATH" \
+      bin/fm-canary.sh --sections=vendors --vendor=claude </dev/null >"$t/canary.out" 2>"$t/canary.err" )
+}
+printf 'crew-canary-token-SECRET\n' > "$cvh/.config/firstmate/claude-token"
+chmod 600 "$cvh/.config/firstmate/claude-token"
+printf '{"claudeAiOauth":{"accessToken":"at-canary-interactive-SECRET","refreshToken":"rt","expiresAt":%s}}' \
+  "$future" > "$cvh/.claude/.credentials.json"
+canary_claude
+assert_eq "crew-token" "$(jq -r 'select(.vendor=="claude") | .login_source' "$cvs/results.jsonl" 2>/dev/null)" \
+  "the canary records a claude round on the crew's own token as crew-token"
+assert_contains "$(cat "$t/canary.out")" "login=crew-token" "and says so beside the vendor"
+assert_eq "" "$(grep -rlF crew-canary-token-SECRET "$t/canary.out" "$t/canary.err" "$cvs" "$cvt" 2>/dev/null)" \
+  "and the token itself appears in none of its output, records or scratch"
+rm -f "$cvh/.config/firstmate/claude-token"
+canary_claude
+assert_eq "interactive-fallback" \
+  "$(jq -r 'select(.vendor=="claude") | .login_source' "$cvs/results.jsonl" 2>/dev/null)" \
+  "with no crew token, it records interactive-fallback"
+assert_contains "$(cat "$t/canary.out")" "login=interactive-fallback" "and says so beside the vendor"
+assert_eq "" "$(grep -rlF at-canary-interactive-SECRET "$t/canary.out" "$t/canary.err" "$cvs" "$cvt" 2>/dev/null)" \
+  "and the interactive login appears in none of its output, records or scratch either"
+rm -rf "$cvh" "$cvs" "$cvt" "$t/canary-bin"
 # plain, the operator's hatch: every vendor still gets its login
 assert_eq "0" "$(kc plain darwin claude)" "under the hatch claude's round starts, with the crew's own token"
 assert_contains "$(cat "$t/login.out" 2>/dev/null)" "token=crew-claude-token" "with its login handed in"

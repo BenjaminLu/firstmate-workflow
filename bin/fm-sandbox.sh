@@ -14,12 +14,14 @@
 #   fm-sandbox.sh decide  --policy=<file> [--vendor=<name>] <host>
 #       -> allow or deny, and why: the rule the round's proxy applies
 #   fm-sandbox.sh login-source --policy=<file> --vendor=<name>
-#       -> two lines: where the vendor's login would come from (keychain:<service>,
-#          file:<path>, env:<name>, auth:<path>), never the login itself; then
-#          `primary` or `fallback` - `fallback` only when a vendor's `fallback`
-#          login tier answered because its primary one named nothing at all
+#       -> one line on stdout, `tier=<primary|fallback> source=<source>`: the
+#          tier is `fallback` only when a vendor's `fallback` login tier
+#          answered because every source of its primary one was missing
 #          (T-126: claude's own crew token vs. the operator's interactive
-#          login). exit 77 when the operator is not logged in to it
+#          login); the source is where the login would come from
+#          (keychain:<service>, secret:<service>, file:<path>, env:<name>,
+#          auth:<path>), never the login itself. exit 77 when the operator
+#          is not logged in to it, or a login that exists fails to read
 #   fm-sandbox.sh run     --policy=<file> --root=<dir> [--tmp=<dir>] [--write=<dir>]... [--vendor=<name>]
 #                         [--blocked=<file>] [--started=<file>] [--ctl=<dir>] -- <command> [args...]
 #   fm-sandbox.sh plain   --policy=<file> [--tmp=<dir>] [--vendor=<name>] [--started=<file>] [--ctl=<dir>]
@@ -437,84 +439,124 @@ def expiry(doc, field):
     return out if isinstance(out, (int, float)) else None
 
 
+# A login read has three outcomes (T-126 round 7): found, missing, or
+# failed. Only `missing` lets a caller try the next source, or a fallback
+# tier: an item that exists but cannot be read refuses the round, never a
+# quiet step down to a weaker login.
+FOUND, MISSING, FAILED = 'found', 'missing', 'failed'
+
+
+def read_timeout():
+    """Seconds one keychain or secret-tool read may take; the suite shortens
+    it to prove a hung read refuses the round."""
+    try:
+        return max(1, int(os.environ.get('FM_LOGIN_READ_TIMEOUT') or 30))
+    except ValueError:
+        return 30
+
+
+def tool_read(what, argv, missing, slow=''):
+    """-> (outcome, value or why). <missing>(returncode, stderr) says whether
+    a non-zero exit is the tool's own "no such item"; a tool that is not
+    installed at all has no item either. Every read is time-bounded."""
+    try:
+        got = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                             timeout=read_timeout())
+    except subprocess.TimeoutExpired:
+        return FAILED, 'reading %s timed out%s' % (what, slow)
+    except FileNotFoundError:
+        return MISSING, None
+    except OSError as e:
+        return FAILED, '%s could not be read (%s)' % (what, e.strerror or e)
+    if got.returncode != 0:
+        if missing(got.returncode, got.stderr or ''):
+            return MISSING, None
+        err = (got.stderr or '').strip().splitlines()
+        return FAILED, '%s could not be read (exit %d%s)' % (what, got.returncode,
+                                                           ': ' + err[-1] if err else '')
+    value = got.stdout.rstrip('\n')
+    if not value:
+        return FAILED, '%s is empty' % what
+    return FOUND, value
+
+
 def keychain_read(service, account):
     """One generic-password item, by service and account, from the
-    operator's keychain: never a search, never another item."""
+    operator's keychain: never a search, never another item. security(1)
+    exits 44 when no such item exists; any other exit (36, "User interaction
+    is not allowed"; a locked keychain) is an item that failed to read."""
     tool = os.environ.get('FM_KEYCHAIN_TOOL') or '/usr/bin/security'
-    try:
-        got = subprocess.run([tool, 'find-generic-password', '-s', service, '-a', account, '-w'],
-                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
-    except subprocess.TimeoutExpired:
-        print("fm-sandbox: reading the keychain item '%s' timed out; macOS may be asking the operator "
-              "to allow it" % service, file=sys.stderr)
-        return None
-    except OSError:
-        return None
-    if got.returncode != 0:
-        return None
-    return got.stdout.rstrip('\n') or None
+    return tool_read("the keychain item '%s'" % service,
+                     [tool, 'find-generic-password', '-s', service, '-a', account, '-w'],
+                     lambda rc, _: rc == 44, '; macOS may be asking the operator to allow it')
 
 
 def secret_read(service, account):
     """One libsecret item, by service and account, through secret-tool(1) -
-    the keychain's rough equivalent off macOS (T-126). Never a search, never
-    another item. secret-tool absent or erroring reads as no item, not a
-    refusal: a tier this names is tried, not required."""
+    the keychain's rough equivalent off macOS (T-126 round 2). Never a
+    search, never another item. secret-tool with no matching item exits 1
+    and says nothing; an error (no D-Bus session, a locked collection) exits
+    1 too but says why on stderr, and is a failed read. secret-tool not
+    installed is no item."""
     tool = os.environ.get('FM_SECRET_TOOL') or '/usr/bin/secret-tool'
+    return tool_read("the secret-tool item '%s'" % service,
+                     [tool, 'lookup', 'service', service, 'account', account],
+                     lambda rc, err: rc == 1 and not err.strip())
+
+
+def file_read(path, private):
+    """-> (outcome, value or why) for one login file. Only a file that is
+    not there is missing; one that is there but cannot be read (a directory,
+    mode 000, an I/O error), is empty, or is readable by others fails."""
     try:
-        got = subprocess.run([tool, 'lookup', 'service', service, 'account', account],
-                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
-    except subprocess.TimeoutExpired:
-        print("fm-sandbox: reading the secret-tool item '%s' timed out" % service, file=sys.stderr)
-        return None
-    except OSError:
-        return None
-    if got.returncode != 0:
-        return None
-    return got.stdout.rstrip('\n') or None
+        if private and os.stat(path).st_mode & 0o077:
+            return FAILED, '%s can be read by others than the operator; chmod 600 it' % path
+        with open(path) as f:
+            value = f.read().strip()
+    except FileNotFoundError:
+        return MISSING, None
+    except OSError as e:
+        return FAILED, '%s could not be read (%s)' % (path, e.strerror or e)
+    if not value:
+        return FAILED, '%s is empty' % path
+    return FOUND, value
 
 
 def login_tier(vendor, spec, os_):
     """One tier of a vendor's login (a primary or `fallback` block) ->
-    (source, token, item, absent). absent is True only when this tier
-    names nothing at all - no keychain item, no secret-tool item, no file -
-    which is the one case a caller may try another tier for; anything else
-    (a locked-down file, an expired or malformed token) is a specific
-    refusal and is never silently downgraded to a weaker login."""
-    tried = []
-    found = []
+    (source, token, item, absent). absent is True only when every source
+    this tier names says its item is missing - no keychain item, no
+    secret-tool item, no file - which is the one case a caller may try
+    another tier for. Anything else (an item that exists but fails to read,
+    a locked-down file, an expired or malformed token) is a specific refusal
+    naming its source, nothing after it is read, and it is never downgraded
+    to a weaker login (T-126 round 7)."""
+    sources = []
     if os_ == 'darwin':
         for item in spec.get('keychain', []):
-            tried.append("keychain item '%s'" % item['service'])
-            value = keychain_read(item['service'], item['account'])
-            if value:
-                found.append(('keychain:' + item['service'], value, item))
-                break
-    if not found:
-        # libsecret, off macOS's own keychain (T-126 round 2): tried only
-        # when the tool is there at all - its absence is not a refusal
-        for item in spec.get('secret', []):
-            tried.append("secret-tool item '%s'" % item['service'])
-            value = secret_read(item['service'], item['account'])
-            if value:
-                found.append(('secret:' + item['service'], value, item))
-                break
-    if not found:
-        for path in spec.get('file', []):
-            tried.append(path)
-            try:
-                if spec.get('private') and os.stat(path).st_mode & 0o077:
-                    return None, '%s can be read by others than the operator; chmod 600 it' % path, None, False
-                value = open(path).read().strip()
-            except OSError:
-                continue
-            if value:
-                found.append(('file:' + path, value, None))
-                break
+            sources.append(("keychain item '%s'" % item['service'], 'keychain:' + item['service'], item,
+                            lambda i=item: keychain_read(i['service'], i['account'])))
+    # libsecret, off macOS's own keychain (T-126 round 2): secret-tool not
+    # installed is a missing item, not a refusal
+    for item in spec.get('secret', []):
+        sources.append(("secret-tool item '%s'" % item['service'], 'secret:' + item['service'], item,
+                        lambda i=item: secret_read(i['service'], i['account'])))
+    for path in spec.get('file', []):
+        sources.append((path, 'file:' + path, None, lambda x=path: file_read(x, spec.get('private'))))
+    tried = []
+    found = None
+    for what, source, item, read in sources:
+        tried.append(what)
+        outcome, value = read()
+        if outcome == FAILED:
+            return None, value, None, False
+        if outcome == FOUND:
+            found = (source, value, item)
+            break
     if not found:
         why = 'no %s' % ' and no '.join(tried or ['login named'])
         return None, why + ('; ' + spec['hint'] if spec.get('hint') else ''), None, True
-    source, value, item = found[0]
+    source, value, item = found
     # `field` may name alternatives: codex's file holds an access token or
     # an API key
     fields = spec.get('field') or ''
@@ -541,7 +583,7 @@ def login_of(p, vendor, os_):
     """-> (source, token, item, warn) or (None, why, None, None). The
     operator's login for <vendor>, read here, outside the round. <warn> is
     a line to say, in the round's log and on the board, when a `fallback`
-    tier answered because the primary one named nothing at all (T-126);
+    tier answered because every source of the primary one was missing (T-126);
     never set when the primary tier was refused for a specific reason."""
     own = p['vendors'].get(vendor, {})
     spec = own.get('login') or {}
@@ -759,11 +801,13 @@ def main():
         if source is None:
             print('fm-sandbox: %s is not logged in: %s' % (sys.argv[3], why), file=sys.stderr)
             sys.exit(77)
-        print(source)
-        # the tier that answered - 'fallback' only when a `fallback` block
-        # answered because the primary one named nothing at all (T-126),
-        # so a caller such as fm-canary.sh can say which without the login
-        print('fallback' if warn else 'primary')
+        # one machine-readable line on stdout (T-126 round 7): the tier
+        # that answered - 'fallback' only when a `fallback` block answered
+        # because the primary one was missing - then the source,
+        # last because it may hold spaces. Never the login itself; anything
+        # else goes to stderr, so a caller such as fm-canary.sh reads this
+        # line alone.
+        print('tier=%s source=%s' % ('fallback' if warn else 'primary', source))
         return
     if mode == 'login':
         # login <vendor> <os> <dir> <round tmp>

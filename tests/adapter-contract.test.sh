@@ -998,23 +998,28 @@ case "$s" in
 esac
 S
 chmod +x "$pv/claude-security"
-cp "$pv/copyfake" "$pv/fakebin/claude"; chmod +x "$pv/fakebin/claude"
+# claude as copyfake, saying one line of its own on stderr first: the
+# round's stderr must reach its log (T-126 round 7)
+{ head -1 "$pv/copyfake"; echo 'echo claude-own-stderr-line >&2'; tail -n +2 "$pv/copyfake"; } > "$pv/fakebin/claude"
+chmod +x "$pv/fakebin/claude"
 # The default FM_SECRET_TOOL for every claude block below that does not name
 # its own (T-126 round 4): never the host's real secret-tool(1). On Linux
 # login_tier reads no keychain at all, so a claude case here that leaves
 # FM_SECRET_TOOL unset would, on a runner that happens to have secret-tool
 # on PATH and no D-Bus session to answer it, get whatever that produces
 # instead of the fixture's own answer. This stub answers like the real tool
-# - nothing on stdout, exit 1 - and records every call.
+# - nothing on stdout, nothing on stderr, exit 1: "no such item", which a
+# stderr line would turn into a failed read (T-126 round 7) - and records
+# every call.
 cat > "$pv/claude-secret-tool-guard" <<'S'
 #!/usr/bin/env bash
-echo "$*" >> "$FM_SECRET_TOOL_GUARD_LOG"
+[ -z "${FM_SECRET_TOOL_GUARD_LOG:-}" ] || echo "$*" >> "$FM_SECRET_TOOL_GUARD_LOG" 2>/dev/null
 exit 1
 S
 chmod +x "$pv/claude-secret-tool-guard"
 for cl in "darwin crew-claude-kc" "linux crew-claude-file"; do
   read -r cl_os cl_key <<< "$cl"
-  rm -f "$pv/copy" "$pv/secret-guard-calls"
+  rm -f "$pv/copy" "$pv/secret-guard-calls" "$pv/log"
   cl_tool="$pk/sandbox-exec"; [ "$cl_os" = linux ] && cl_tool="$pk/bwrap"
   cl_rc="$(
     unset CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY ANTHROPIC_API_KEY CODEX_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
@@ -1028,6 +1033,10 @@ for cl in "darwin crew-claude-kc" "linux crew-claude-file"; do
   assert_eq "0" "$cl_rc" "claude's round starts on $cl_os with the crew's own token (T-126)"
   assert_contains "$cl_seen" "CLAUDE_CODE_OAUTH_TOKEN=$cl_key" "handed in as CLAUDE_CODE_OAUTH_TOKEN ($cl_os)"
   assert_lacks "$cl_seen" "at-claude-interactive" "never the operator's interactive login while a crew token exists ($cl_os)"
+  assert_contains "$(cat "$pv/log" 2>/dev/null)" "claude-own-stderr-line" \
+    "and claude's own stderr reaches the round's log, never dropped ($cl_os)"
+  assert_lacks "$(cat "$pv/err" 2>/dev/null)" "claude-own-stderr-line" \
+    "while only fm-sandbox's own lines are repeated on the adapter's stderr ($cl_os)"
   if [ "$cl_os" = linux ]; then
     assert_contains "$(cat "$pv/secret-guard-calls" 2>/dev/null)" "firstmate-claude-token" \
       "and, with no keychain on Linux, fm's own secret-tool stand-in was asked, never the host's real one"
@@ -1089,6 +1098,25 @@ assert_contains "$(cat "$pv/err" 2>/dev/null)" "has no crew token" "and the fall
 assert_contains "$(cat "$pv/err" 2>/dev/null)" "claude setup-token" "naming the fix, the crew tier's own hint"
 assert_contains "$(cat "$pv/secret-guard-calls" 2>/dev/null)" "firstmate-claude-token" \
   "and fm's own secret-tool stand-in was asked while reaching that fallback, never the host's real one"
+# a crew keychain item that exists but will not open (security exit 36) is
+# not a missing one (T-126 round 7): the round is refused through the real
+# adapter too, saying why, and never started on the interactive login the
+# stand-in still answers for
+sed "s/^  firstmate-claude-token).*/  firstmate-claude-token) echo 'security: SecKeychainItemCopyContent: User interaction is not allowed.' >\&2; exit 36 ;;/" \
+  "$pv/claude-security" > "$pv/claude-security-locked"
+chmod +x "$pv/claude-security-locked"
+rm -f "$pv/copy" "$pv/err"
+cl_rc="$(
+  unset CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY ANTHROPIC_API_KEY CODEX_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
+  export FM_KEYCHAIN_TOOL="$pv/claude-security-locked" FM_SECRET_TOOL="$pv/claude-secret-tool-guard"
+  FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:/usr/bin:/bin" \
+    "$ROOT/bin/adapters/claude.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"
+  echo $?
+)"
+assert_ne "0" "$cl_rc" "a crew keychain item that will not open refuses claude's round"
+assert_contains "$(cat "$pv/err" 2>/dev/null)" "'firstmate-claude-token' could not be read (exit 36" \
+  "saying which item and why, on the adapter's stderr"
+assert_fail "test -e '$pv/copy'" "and claude never starts, on the interactive login or any other"
 rm -f "$lh/.claude/.credentials.json"
 # gemini is told its login is Google's, and runs with a HOME of the round's own
 cp "$pv/copyfake" "$pv/fakebin/gemini"; chmod +x "$pv/fakebin/gemini"
