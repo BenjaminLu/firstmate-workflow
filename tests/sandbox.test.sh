@@ -779,7 +779,15 @@ prof="\$2"; shift 2
 while IFS= read -r l; do printf '%s\n' "\$l"; done < "\$prof" > "$t/lo.profile.sb"
 case " \$* " in
   *" fm-loopback-check "*)
-    printf '%s\n' "\$*" >> "$t/lo.checks"
+    # only the marker and the probes after it: the check's own source is an
+    # argument too, and names 'bind:' itself (T-153)
+    probes=''; seen=0
+    for a in "\$@"; do
+      if [ "\$seen" = 1 ]; then probes="\$probes \$a"
+      elif [ "\$a" = fm-loopback-check ]; then seen=1
+      fi
+    done
+    printf 'fm-loopback-check%s\n' "\$probes" >> "$t/lo.checks"
     wild=0; grep -qF '(allow network-outbound (remote ip "localhost:*"))' "\$prof" && wild=1
     case "\${LO_MODE:-open}:\$wild" in
       holds:*|tight:0|bindleak:0) echo checked; exit 0 ;;
