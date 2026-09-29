@@ -2928,13 +2928,19 @@ login refreshes. Every read has three outcomes, found, missing or failed
 44 (no such item), `secret-tool` exiting 1 with nothing on stderr (no such
 item) or not installed at all, and a file that is not there. A crew entry
 that exists but fails - `security` exiting anything else (36, "User
-interaction is not allowed"), a keychain or secret-tool read that times out
-(30 seconds), `secret-tool` saying why on stderr (no D-Bus session, a locked
-collection), a `claude-token` file others can read, one that cannot be
-opened (mode 000, a directory) or is empty - refuses the round outright,
-naming the source and its error, the way an expired or malformed login always
-has, and nothing after it is read: `Claude Code-credentials` is never asked
-for. `bin/fm-sandbox.sh login-source` prints one line on stdout,
+interaction is not allowed"), a keychain read that times out (30 seconds),
+`secret-tool` saying why on stderr (a locked collection), a `claude-token`
+file others can read, one that cannot be opened (mode 000, a directory) or is
+empty - refuses the round outright, naming the source and its error, the way
+an expired or malformed login always has, and nothing after it is read:
+`Claude Code-credentials` is never asked for. A secret store that cannot be
+reached at all - `secret-tool` saying on stderr it has no D-Bus session or
+no secret service, or timing out on a hung bus, as on a headless or SSH Linux
+host - says nothing about whether the crew token is in it, so it is a fourth
+outcome, unreachable (T-126 round 10): the lookup goes on to the next crew
+source, the file, and says in the round's log that it did; if no crew source
+answers, the round is refused, naming the unreachable store, and never falls
+back to the interactive login. `bin/fm-sandbox.sh login-source` prints one line on stdout,
 `tier=<primary|fallback> source=<source>`, never the login, and
 `bin/fm-canary.sh` reads that line alone, never stderr, and turns the tier
 into `crew-token` or `interactive-fallback` for claude specifically, on its

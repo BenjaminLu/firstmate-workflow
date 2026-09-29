@@ -935,9 +935,9 @@ chmod +x "$t/kc/secret-tool"
 # secret-tool(1). CI's runner has one on PATH, and secret_read() looks it
 # up on PATH when FM_SECRET_TOOL is unset (T-126 round 8) - naming no
 # FM_SECRET_TOOL at all here would reach it for real, outside any sandbox,
-# with no D-Bus session to answer it, which read exactly as "no crew token"
-# to a run on one machine and something else (an error line, a long
-# timeout) on another. This stub answers like secret-tool always does -
+# with no D-Bus session to answer it: an unreachable store, passed over for
+# the crew file or refusing the round (T-126 round 10), on one machine and
+# "no item" on another. This stub answers like secret-tool always does -
 # nothing on stdout, exit 1 - and records every call, so a test can assert
 # fm's own stub, not the host's, was asked.
 cat > "$t/kc/secret-tool-guard" <<S
@@ -1213,10 +1213,59 @@ crew_fail "a crew keychain item that will not open (security exit 36)" \
 assert_contains "$(cat "$t/login.err" 2>/dev/null)" "User interaction is not allowed" "with security's own words"
 crew_fail "a crew keychain read that never answers" "reading the keychain item 'firstmate-claude-token' timed out" \
   run darwin claude FM_KEYCHAIN_TOOL="$t/kc/security-hang" FM_LOGIN_READ_TIMEOUT=1
+# a store that cannot be reached, with no crew file behind it, still
+# refuses: it is never read as "no crew token" (T-126 round 10)
 crew_fail "a secret-tool that cannot reach libsecret" "Cannot autolaunch D-Bus" \
   run darwin claude FM_KEYCHAIN_TOOL="$t/kc/security-nocrew" FM_SECRET_TOOL="$t/kc/secret-tool-broken"
-crew_fail "the same secret-tool error on Linux" "secret-tool item 'firstmate-claude-token' could not be read" \
+crew_fail "the same secret-tool error on Linux" "secret-tool item 'firstmate-claude-token' could not be reached" \
   run linux claude FM_SECRET_TOOL="$t/kc/secret-tool-broken"
+assert_contains "$(cat "$t/login.err" 2>/dev/null)" "Cannot autolaunch D-Bus" "with secret-tool's own words (Linux)"
+# An unreachable store says nothing about whether the crew token is in it,
+# so the next crew source - the 0600 file - is read (T-126 round 10): a
+# headless or SSH Linux host, or CI, with secret-tool installed and no D-Bus
+# session. Only the step to the interactive login is a downgrade.
+printf 'crew-file-token\n' > "$t/chome/.config/firstmate/claude-token"
+chmod 600 "$t/chome/.config/firstmate/claude-token"
+rm -f "$t/kc/secret-calls"
+assert_eq "0" "$(kc run linux claude FM_SECRET_TOOL="$t/kc/secret-tool-broken")" \
+  "a secret-tool with no D-Bus session passes over to the 0600 crew file, and the round starts"
+lo="$(cat "$t/login.out" 2>/dev/null)"
+assert_contains "$lo" "token=crew-file-token" "on the crew file's token (no D-Bus)"
+assert_lacks "$lo" "at-claude" "never the interactive login's (no D-Bus)"
+assert_contains "$(cat "$t/kc/secret-calls" 2>/dev/null)" "firstmate-claude-token" "after secret-tool was asked (no D-Bus)"
+le="$(cat "$t/login.err" 2>/dev/null)"
+assert_contains "$le" "could not be reached" "and the round's log says the secret-tool store was unreachable"
+assert_contains "$le" "claude-token instead" "and that the crew file was used"
+assert_lacks "$le" "has no crew token" "and no fallback warning (no D-Bus)"
+src="$(FM_SANDBOX_OS=linux FM_SECRET_TOOL="$t/kc/secret-tool-broken" \
+  "$SB" login-source --policy="$t/worker.json" --vendor=claude 2>/dev/null)"
+assert_eq "0" "$?" "login-source answers when the secret-tool store is unreachable and the crew file is there"
+assert_eq "tier=primary source=file:$t/chome/.config/firstmate/claude-token" "$src" \
+  "and names the crew file, the crew's own tier"
+# a hung bus is the same: the read times out and the file is used
+cat > "$t/kc/secret-tool-hang" <<S
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$t/kc/secret-calls"
+exec sleep 5
+S
+chmod +x "$t/kc/secret-tool-hang"
+assert_eq "0" "$(kc run linux claude FM_SECRET_TOOL="$t/kc/secret-tool-hang" FM_LOGIN_READ_TIMEOUT=1)" \
+  "a secret-tool that never answers passes over to the 0600 crew file"
+assert_contains "$(cat "$t/login.out" 2>/dev/null)" "token=crew-file-token" "on the crew file's token (hung bus)"
+assert_contains "$(cat "$t/login.err" 2>/dev/null)" "timed out" "and the round's log says the read timed out"
+# but a store that is there and fails - a locked collection - still refuses,
+# with the working crew file right behind it
+cat > "$t/kc/secret-tool-locked" <<S
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$t/kc/secret-calls"
+echo "secret-tool: Cannot get secret of a locked object" >&2
+exit 1
+S
+chmod +x "$t/kc/secret-tool-locked"
+crew_fail "a secret-tool item in a locked collection" "secret-tool item 'firstmate-claude-token' could not be read" \
+  run linux claude FM_SECRET_TOOL="$t/kc/secret-tool-locked"
+assert_contains "$(cat "$t/login.err" 2>/dev/null)" "locked object" "with secret-tool's own words (locked)"
+rm -f "$t/kc/secret-calls"
 printf 'crew-file-token\n' > "$t/chome/.config/firstmate/claude-token"
 chmod 000 "$t/chome/.config/firstmate/claude-token"
 if [ -r "$t/chome/.config/firstmate/claude-token" ]; then

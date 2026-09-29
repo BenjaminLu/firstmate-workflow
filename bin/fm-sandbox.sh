@@ -94,7 +94,9 @@
 # instead (T-126 round 2): libsecret through secret-tool(1), the same shape
 # as the keychain - service and account, never a search - read only when
 # the tool is on the operator's PATH; absent, it is skipped, not refused,
-# and the file tier is tried next.
+# and the file tier is tried next. A secret-tool that cannot reach its
+# store (no D-Bus session, a hung bus) is passed over for the file too, but
+# refuses the round if the file is not there either, never falling back.
 #
 # What neither can name: a connection that ignores the proxy variables is
 # refused by the OS, which sees an address or nothing at all, not a host.
@@ -446,8 +448,15 @@ def expiry(doc, field):
 # A login read has three outcomes (T-126 round 7): found, missing, or
 # failed. Only `missing` lets a caller try the next source, or a fallback
 # tier: an item that exists but cannot be read refuses the round, never a
-# quiet step down to a weaker login.
-FOUND, MISSING, FAILED = 'found', 'missing', 'failed'
+# quiet step down to a weaker login. A fourth, unreachable (T-126 round
+# 10), is a store that cannot be asked at all - secret-tool with no D-Bus
+# session, or a hung bus - which says nothing about whether the item is
+# there: the lookup goes on to the tier's next source, but the tier is
+# never absent, so it can never reach a fallback tier.
+FOUND, MISSING, FAILED, UNREACHABLE = 'found', 'missing', 'failed', 'unreachable'
+# what secret-tool says on stderr when the bus or the secret service itself
+# cannot be reached, as opposed to an item or collection that failed
+NO_BUS = re.compile(r'd-?bus|autolaunch|org\.freedesktop\.secrets', re.I)
 
 
 def read_timeout():
@@ -459,15 +468,17 @@ def read_timeout():
         return 30
 
 
-def tool_read(what, argv, missing, slow=''):
+def tool_read(what, argv, missing, slow='', unreachable=None):
     """-> (outcome, value or why). <missing>(returncode, stderr) says whether
     a non-zero exit is the tool's own "no such item"; a tool that is not
-    installed at all has no item either. Every read is time-bounded."""
+    installed at all has no item either. <unreachable>(returncode, stderr),
+    when given, says whether it is the store that could not be reached, and
+    a timeout is then read the same way. Every read is time-bounded."""
     try:
         got = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                              timeout=read_timeout())
     except subprocess.TimeoutExpired:
-        return FAILED, 'reading %s timed out%s' % (what, slow)
+        return (UNREACHABLE if unreachable else FAILED), 'reading %s timed out%s' % (what, slow)
     except FileNotFoundError:
         return MISSING, None
     except OSError as e:
@@ -476,8 +487,10 @@ def tool_read(what, argv, missing, slow=''):
         if missing(got.returncode, got.stderr or ''):
             return MISSING, None
         err = (got.stderr or '').strip().splitlines()
-        return FAILED, '%s could not be read (exit %d%s)' % (what, got.returncode,
-                                                           ': ' + err[-1] if err else '')
+        said = ' (exit %d%s)' % (got.returncode, ': ' + err[-1] if err else '')
+        if unreachable and unreachable(got.returncode, got.stderr or ''):
+            return UNREACHABLE, '%s could not be reached%s' % (what, said)
+        return FAILED, '%s could not be read%s' % (what, said)
     value = got.stdout.rstrip('\n')
     if not value:
         return FAILED, '%s is empty' % what
@@ -499,16 +512,21 @@ def secret_read(service, account):
     """One libsecret item, by service and account, through secret-tool(1) -
     the keychain's rough equivalent off macOS (T-126 round 2). Never a
     search, never another item. secret-tool with no matching item exits 1
-    and says nothing; an error (no D-Bus session, a locked collection) exits
-    1 too but says why on stderr, and is a failed read. secret-tool not
-    installed is no item. Unless FM_SECRET_TOOL names one, it is looked up
-    on the operator's PATH - this process's, before the round's is scrubbed."""
+    and says nothing. One that says on stderr it cannot reach the bus or the
+    secret service (no D-Bus session: headless, SSH, CI), or that times out
+    on a hung bus, could not ask the store at all - unreachable, so the next
+    crew source is tried (T-126 round 10). Any other error (a locked
+    collection) exits 1 too but says why on stderr, and is a failed read.
+    secret-tool not installed is no item. Unless FM_SECRET_TOOL names one,
+    it is looked up on the operator's PATH - this process's, before the
+    round's is scrubbed."""
     tool = os.environ.get('FM_SECRET_TOOL') or shutil.which('secret-tool') or ''
     if not tool:
         return MISSING, None
     return tool_read("the secret-tool item '%s'" % service,
                      [tool, 'lookup', 'service', service, 'account', account],
-                     lambda rc, err: rc == 1 and not err.strip())
+                     lambda rc, err: rc == 1 and not err.strip(),
+                     unreachable=lambda rc, err: bool(NO_BUS.search(err)))
 
 
 def file_read(path, private):
@@ -537,7 +555,10 @@ def login_tier(vendor, spec, os_):
     another tier for. Anything else (an item that exists but fails to read,
     a locked-down file, an expired or malformed token) is a specific refusal
     naming its source, nothing after it is read, and it is never downgraded
-    to a weaker login (T-126 round 7)."""
+    to a weaker login (T-126 round 7). A store that cannot be reached is
+    passed over for the tier's next source, with a line in the round's log
+    when one answers, and a refusal naming it when none does - never absent
+    (T-126 round 10)."""
     sources = []
     if os_ == 'darwin':
         for item in spec.get('keychain', []):
@@ -551,19 +572,32 @@ def login_tier(vendor, spec, os_):
     for path in spec.get('file', []):
         sources.append((path, 'file:' + path, None, lambda x=path: file_read(x, spec.get('private'))))
     tried = []
+    unreached = []
     found = None
     for what, source, item, read in sources:
         tried.append(what)
         outcome, value = read()
         if outcome == FAILED:
             return None, value, None, False
+        if outcome == UNREACHABLE:
+            # the store could not be asked: the next source may answer,
+            # but this tier is not absent (T-126 round 10)
+            unreached.append(value)
+            tried.pop()
+            continue
         if outcome == FOUND:
             found = (source, value, item)
             break
+    hint = '; ' + spec['hint'] if spec.get('hint') else ''
+    if not found and unreached:
+        return None, '%s, and no other source answered%s%s' % (
+            '; '.join(unreached), ' (no %s)' % ' and no '.join(tried) if tried else '', hint), None, False
     if not found:
         why = 'no %s' % ' and no '.join(tried or ['login named'])
-        return None, why + ('; ' + spec['hint'] if spec.get('hint') else ''), None, True
+        return None, why + hint, None, True
     source, value, item = found
+    for why in unreached:
+        print('fm-sandbox: %s; using %s instead' % (why, source), file=sys.stderr)
     # `field` may name alternatives: codex's file holds an access token or
     # an API key
     fields = spec.get('field') or ''
