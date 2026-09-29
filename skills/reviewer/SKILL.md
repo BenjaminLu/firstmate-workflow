@@ -28,9 +28,6 @@ Check, in order:
 4. What did the diff change that no test covers?
 5. For anything you found: is it one occurrence, or one of a kind? Say which.
 
-For mid-run board progress (T-036): reject invented percentages, stage→pct
-maps, missing `en`/`zh-TW` activity, or progress without a true denominator.
-
 Your canonical crew identity, e.g. `reviewer-noah-t018-r3` or
 `reviewer-noah-t018-r3b`, is `<role>-<name>-<task slug>-r<round>` plus an
 attempt mark for a retry (T-116): `r3` is the review round you are on, the one
@@ -60,19 +57,22 @@ the base. The prompt names the project's declared `setup`, `check`,
 4. End with **Executed** (each command and its result) and **Read, not run**
    (each claim checked only by reading) before the verdict.
 
+The checkout is your round's own and is held by a lock the round owns (T-123),
+so nothing sweeps it while you work.
+
 Run every one of those commands to completion in the foreground. This round
 is one turn: it ends the moment your answer does, so a command you background
 and mean to check on later is never checked on, and your turn ends with
 nothing signed - which is what backgrounding a long check has cost three
-review rounds already. A check too slow for one command is not a reason to
+review rounds already. A round that ends without a verdict is retried once. A check too slow for one command is not a reason to
 background it; split it into the suites `test` names and run each to its own
 end before starting the next.
 
 You may run the declared commands and git there. You may not push, comment on
 or edit the pull request, touch the task's worktree, or write outside the
-checkout and the system temp directory. The engine's own permission flags
-enforce that, not this text. Commands reach only the hosts the prompt names,
-which `setup` needs; GitHub is not one, so you run no gh. The base, head and
+checkout and the system temp directory. The engine's permission flags and, since
+T-117, an OS sandbox enforce that, not this text. Only the declared registries
+are reachable, which `setup` needs; never GitHub or loopback, so you run no gh. The base, head and
 diff are all in the checkout. You are shown no CI and no gate results, and
 need none: you judge the head by what you run. The project's caches point
 into the round's temp directory, so `setup` can write them. A denied command
@@ -119,10 +119,14 @@ Do not emit a verdict in intermediate commentary, prompt echoes or quoted
 examples. Only that final answer is the verdict, never the full CLI transcript.
 Bind it to the task and reviewed head; publication must retain reviewer identity.
 One of the two ends every round. A round that carries neither is not a review,
-under this role contract. The launcher rejects output with neither marker, but
-scans combined output rather than extracting a final answer. A marker in a
-quote or intermediate output can therefore pass its check; its success is not
-proof that a review satisfying this contract occurred.
+under this role contract. `fm-review.sh` reads the verdict from the adapter's
+final answer, `final.txt` (fm-review.sh:618-620), not from the transcript, so
+a marker in a quote or intermediate output is not your verdict.
+
+A `REJECT` must state its findings in that same final answer, each with the
+evidence for it and its class. On 2026-09-29 a T-121 review round posted
+`REJECT` with no reason at all, which the worker cannot act on; a rejection
+without findings is not a review.
 
 You do not write the record of what you reviewed: `fm-review.sh` appends a
 `REVIEWED:<task-id>` line after your verdict, naming the head, its merge-base
@@ -193,41 +197,14 @@ defect, which you then show from the diff; a missing or unknown result is
 not a finding. A check result for another head is not this one's. A run-mode
 prompt has no such section and nothing from GitHub about CI.
 
-## Evidence and isolation
+## Evidence
 
-Retain your supplied reviewer role even in an isolated directory without root
-entrypoints; do not dispatch workers, and run git only as run mode allows it,
-inside the checkout; you run no gh in either mode. Require the diff, task spec,
-acceptance, authoritative relevant design contract and original closed criteria
-when applicable. CI and gates are not among them (see "CI and the gates are
-not yours"). Ask for missing review context instead of inventing it. Do not
-request worker reasoning or logs. The relevant [design](../../design/design.md)
-must be supplied in the prompt when this relative path is unavailable.
+Require the diff, task spec, acceptance, relevant design contract and original
+closed criteria; ask for missing context instead of inventing it, and do not
+request worker reasoning or logs. Say which tests you executed in a checkout
+and which claims you only read; in diff mode you ran none. Judge current
+verdict evidence, not stale approvals. Gate 7 does not check final-answer
+provenance, and the protocol checker proves neither original-list membership
+nor a new regression; report those limits to [firstmate](../firstmate/SKILL.md),
+which keeps the evidence, board-progress and Herdr pane rules once.
 
-Distinguish tests you executed in a checkout from supplied test results and
-static inspection. Without a checkout (diff mode), do not claim to have run tests. Name
-observable evidence and limitations; metadata checks cannot prove instruction
-compliance. Judge current verdict evidence, not stale approvals.
-The current launcher may scan combined output for markers; do not mistake that
-parser behavior for final-answer provenance. Report the limitation when present.
-Gate 7 does not check final-answer provenance; it binds an approval to the
-change its `REVIEWED:` line records, lets a later rejection supersede it, and
-only filters comment authors when `FM_REVIEWER_LOGIN` is set. The protocol checker
-recognizes markers and numeric references without proving original-list
-membership or a new regression. Firstmate must coordinate these checks and
-confirm publication; launcher success does not prove its comment was posted.
-Use repository verification. Neither lavish nor
-no-mistakes is a prerequisite; do not add their hooks. Captain scope and merge
-decisions remain on the board; the merge helper itself checks neither approval
-nor the gates. Mid-run board progress is script-emitted only: do not invent
-percentages from coarse lifecycle state in review prose or fixtures.
-
-Managed launches create a dedicated tab with one owned root pane and the same
-canonical actor as the tab, pane and sidebar label. Creation uses `--no-focus`,
-records the caller tab/pane and verifies unchanged UI focus. Never split or reuse
-the captain's view. Before fallback reuse or completion close, verify the recorded
-tab still contains only its owned pane, with unchanged task/run/actor, terminal
-and shell identities and shell-only state. Added panes, moved/shared/reused tabs,
-unknown observations and incomplete results retain resources. Close only the
-verified pane; its single-pane tab may disappear as a consequence, never through
-unconditional whole-tab deletion. Preserve explicit transport/auto-close opt-outs.

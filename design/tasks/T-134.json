@@ -1,0 +1,23 @@
+{
+  "id": "T-134",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "CI runs as parallel jobs that finish in a few minutes, every suite exactly once, behind the same required `ci` check",
+  "scope": [
+    ".github/workflows/**",
+    "bin/ci.sh",
+    "tests/ci.test.sh",
+    "tests/lib.sh",
+    "design/**",
+    "README.md",
+    "design/tasks/T-134.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-09-28 main's required check took about 8 minutes of its 10-minute limit, and two pull requests (T-127, T-121) were cancelled at the limit only because they added tests. Every merge then waits on one serial job, and every re-run after a base update costs the full 8-10 minutes. The captain moved this ahead of the refactoring series (T-129..T-133) on 2026-09-28. Its own spec file, design/tasks/T-134.json, is committed on this branch.",
+    "Parallel jobs. The workflow runs the stages as separate jobs: the fast checks (shellcheck, lint, hygiene, stdin, assertions, dag), the bash suites sharded across N jobs, the bun tests, and the Playwright e2e. A final job named `ci` needs all of them and fails if any failed or was skipped, so branch protection's required check and gate 6 are unchanged. Wall-clock time on main is at most about 4 minutes, reported from real runs; each job keeps a 10-minute limit.",
+    "Every suite runs exactly once. bin/ci.sh gains `--shard i/n` and `--stage <name>`; with neither it behaves as today, so a local `bin/ci.sh` still runs everything. Shards are assigned deterministically, balanced by the per-suite durations ci.sh records (a timings file committed and refreshed, or the previous run's artifact), and a test proves that the union of all shards is exactly tests/*.test.sh with no suite in two shards, including a newly added suite.",
+    "Speed without weakening. bun dependencies and the Playwright browser are cached; nothing a check verified today is dropped; ci.sh's existing refusals (empty FM_ROOT, the lint rules) hold in every job. Each job uploads its suite timings, so a slow suite is visible by name.",
+    "Evidence: the required GitHub check on this branch shows the parallel jobs and their times, and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves."
+  ]
+}

@@ -8,7 +8,72 @@
 #   FM_CI_MAX_SECONDS=600 select an explicit elapsed-time budget (default 180)
 #   FM_CI_JOBS=N         run N bash suites at once (default: online CPUs, at
 #                        most 6); FM_CI_JOBS=1 is the one-at-a-time run
+#   --stage fast|bash|bun|e2e   run only that group of stages (with neither
+#                        --stage nor --shard, every stage runs, exactly as a
+#                        plain `bin/ci.sh` always has); "fast" is shellcheck,
+#                        lint, hygiene, stdin, assertions and dag
+#   --shard i/n          within --stage bash, run only the i-th of n shards
+#                        of tests/*.test.sh, balanced by recorded duration
+#                        (FM_CI_TIMINGS_IN, else each suite's byte size)
+#   FM_CI_TIMINGS_IN=path  previous per-suite durations ("path seconds" per
+#                        line) used to balance --shard; a suite missing from
+#                        it, new or old, falls back to its byte size
+#   FM_CI_TIMINGS_OUT=path the bash stage writes the durations it observed
+#                        here, in the same format, for a caller to archive
 set -uo pipefail
+
+# Loaded before the option loop touches a flag, so a tree missing the
+# library refuses here rather than parsing --stage/--shard first and
+# failing some other way later.
+_fm_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-config.sh"
+[ -r "$_fm_lib" ] || { echo "ci: missing $_fm_lib" >&2; exit 70; }
+# shellcheck source=bin/fm-config.sh
+. "$_fm_lib"
+
+# --stage splits one gate run into the pieces separate parallel jobs call;
+# --shard further splits the bash suites across N of those jobs. Neither
+# changes what a stage checks or how it decides pass or fail - only which
+# stages this one process runs.
+#
+# The value guard is inlined rather than routed through a `need()` or the
+# library's `fm_need`: this file is one of the two tests/option-loop.test.sh
+# exempts from carrying either (it and fm-config.sh HOLD those rules, T-134
+# round 2) - a local `need() {` or a call to `fm_need ` here is counted as
+# one more script needing a guard, which this file already is not.
+ci_stage=''
+ci_shard=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --stage) [ $# -ge 2 ] || { printf 'ci: %s needs a value\n' "$1" >&2; exit 64; }
+             ci_stage="$2"; shift 2 ;;
+    --stage=*) ci_stage="${1#--stage=}"; shift ;;
+    --shard) [ $# -ge 2 ] || { printf 'ci: %s needs a value\n' "$1" >&2; exit 64; }
+             ci_shard="$2"; shift 2 ;;
+    --shard=*) ci_shard="${1#--shard=}"; shift ;;
+    *) printf 'ci: unknown argument: %s\n' "$1" >&2; exit 64 ;;
+  esac
+done
+case "$ci_stage" in
+  ''|fast|bash|bun|e2e) : ;;
+  *) printf 'ci: --stage must be one of: fast, bash, bun, e2e\n' >&2; exit 64 ;;
+esac
+ci_shard_i=''; ci_shard_n=''
+if [ -n "$ci_shard" ]; then
+  if [ "$ci_stage" != bash ]; then
+    printf 'ci: --shard requires --stage bash\n' >&2
+    exit 64
+  fi
+  if [[ ! "$ci_shard" =~ ^([1-9][0-9]*)/([1-9][0-9]*)$ ]]; then
+    printf 'ci: --shard must look like i/n, e.g. 2/4\n' >&2
+    exit 64
+  fi
+  ci_shard_i="${BASH_REMATCH[1]}"; ci_shard_n="${BASH_REMATCH[2]}"
+  if [ "$ci_shard_i" -gt "$ci_shard_n" ]; then
+    printf 'ci: --shard i must not exceed n (got %s/%s)\n' "$ci_shard_i" "$ci_shard_n" >&2
+    exit 64
+  fi
+fi
+want_stage() { [ -z "$ci_stage" ] || [ "$ci_stage" = "$1" ]; }
 
 # Bound the string before arithmetic, avoiding overflow, octal interpretation,
 # and accidental unlimited runs. An explicitly empty value is invalid.
@@ -66,11 +131,9 @@ exec < /dev/null
 # They were written out at each call site - four times, and three of them
 # were a version of the stripper that cuts `${1#--}` in half.
 # beside the SCRIPT, not under FM_ROOT: the gate is run against other
-# trees and the library is part of the gate, not of the tree it judges
-_fm_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-config.sh"
-[ -r "$_fm_lib" ] || { echo "ci: missing $_fm_lib" >&2; exit 70; }
-# shellcheck source=bin/fm-config.sh
-. "$_fm_lib"
+# trees and the library is part of the gate, not of the tree it judges.
+# (Loaded above, before the option loop, so a missing library is refused
+# before anything else runs.)
 
 fail=0
 started_at="$(date +%s)"
@@ -124,24 +187,68 @@ run_stage() {   # run_stage <name> <command...>
   wait "$c"
   echo "$?" > "$ci_tmp/$name.rc"
 }
-if [ "$e2e_state" = run ]; then
+if [ "$e2e_state" = run ] && want_stage e2e; then
   run_stage e2e bunx playwright test --workers="$e2e_workers" &
   e2e_pid=$!; bg_pids="$bg_pids $e2e_pid"
 fi
 
 # The bash suites, glob order being the order they are reported in.
 suites=(tests/*.test.sh)
+# How long a suite took last time, for --shard to balance by: a line
+# "path seconds" in FM_CI_TIMINGS_IN. A suite that line does not name -
+# new, or the file is absent - falls back to its byte size, the same
+# proxy pool_order below has always used, so a newly added suite still
+# gets a duration and so a deterministic shard.
+ci_suite_duration() {   # ci_suite_duration <suite-path>
+  local p="$1" n=0
+  if [ -n "${FM_CI_TIMINGS_IN:-}" ] && [ -r "$FM_CI_TIMINGS_IN" ]; then
+    n="$(awk -v p="$p" '$1==p{v=$2} END{print v+0}' "$FM_CI_TIMINGS_IN")"
+  fi
+  if [ "$n" -gt 0 ] 2>/dev/null; then
+    printf '%s\n' "$n"
+  else
+    wc -c < "$p" | tr -d ' '
+  fi
+}
+# --shard i/n: which of the suites this process runs. Longest-processing-time
+# bin packing - suites taken slowest first, each to whichever of the n
+# buckets is lightest so far - so every suite lands in exactly one bucket
+# and the buckets come out balanced, not just evenly counted. Ties (equal
+# duration, most often every suite falling back to byte size together)
+# break on the suite's own index, so the assignment is the same on every
+# run and every shard agrees on where each suite went.
+shard_suites() {   # shard_suites <want 1..n> <n>
+  local want="$1" total="$2" i t
+  for i in "${!suites[@]}"; do
+    t="${suites[$i]}"
+    printf '%s %s\n' "$(ci_suite_duration "$t")" "$i"
+  done | sort -k1,1nr -k2,2n | awk -v want="$want" -v total="$total" '
+    {
+      idx = $2
+      minb = 1
+      for (b = 2; b <= total; b++) if (load[b] < load[minb]) minb = b
+      load[minb] += $1
+      if (minb == want) print idx
+    }'
+}
+shard_indices=()
+if [ -n "$ci_shard_n" ]; then
+  while IFS= read -r i; do shard_indices+=("$i"); done < <(shard_suites "$ci_shard_i" "$ci_shard_n")
+else
+  for i in "${!suites[@]}"; do shard_indices+=("$i"); done
+fi
 # Slowest first, so the long ones are not the last to start. The three the
 # gate has always spent longest on lead by name; the rest follow by size,
 # which is the proxy for the rest. FM_CI_JOBS=1 keeps glob order, which is
-# the one-at-a-time run exactly as it was.
+# the one-at-a-time run exactly as it was. Only this process's shard is
+# ordered - with no --shard, shard_indices is every suite, unchanged.
 pool_order() {
   local i t
   if [ "$ci_jobs" -eq 1 ]; then
-    for i in "${!suites[@]}"; do printf '%s\n' "$i"; done
+    for i in "${shard_indices[@]}"; do printf '%s\n' "$i"; done
     return
   fi
-  for i in "${!suites[@]}"; do
+  for i in "${shard_indices[@]}"; do
     t="${suites[$i]}"
     case "$t" in
       tests/herdr.test.sh|tests/reconcile.test.sh|tests/worker.test.sh)
@@ -157,8 +264,12 @@ pool_order() {
 # and writes its exit status beside the log, renamed into place so a status
 # file that exists is a whole one.
 run_suite() {   # run_suite <index>
-  local i="$1" c=''
+  local i="$1" c='' t0=''
   trap '[ -z "$c" ] || kill "$c" 2>/dev/null; exit 143' TERM INT HUP
+  # Timed only when someone asked for the timings (FM_CI_TIMINGS_OUT): the
+  # plain, flag-less run pays for none of this, and is exactly the run it
+  # always was.
+  [ -z "${FM_CI_TIMINGS_OUT:-}" ] || t0="$(date +%s)"
   # The check below reads the shell's OWN messages, and bash localises
   # them: on a zh-TW shell it says 命令未找到 and an English grep
   # matches nothing, which is green for a suite that never ran half
@@ -173,6 +284,7 @@ run_suite() {   # run_suite <index>
   c=$!
   wait "$c"
   printf '%s\n' "$?" > "$ci_tmp/suite.$i.part" && mv "$ci_tmp/suite.$i.part" "$ci_tmp/suite.$i.rc"
+  [ -z "$t0" ] || printf '%s\n' "$(( $(date +%s) - t0 ))" > "$ci_tmp/suite.$i.dur"
 }
 # The pool is a background shell of its own, so the stages that print
 # before the bash suites can do so while they run. bash 3.2 has no
@@ -194,11 +306,12 @@ run_pool() {
   done
   wait
 }
-if [ ${#suites[@]} -gt 0 ]; then
+if [ ${#shard_indices[@]} -gt 0 ] && want_stage bash; then
   run_pool < /dev/null &
   pool_pid=$!; bg_pids="$bg_pids $pool_pid"
 fi
 
+if want_stage fast; then
 scripts=(bin/*.sh bin/adapters/*.sh tests/*.sh)  # adapters too: bin/*.sh does not recurse
 if [ ${#scripts[@]} -gt 0 ] && command -v shellcheck >/dev/null 2>&1; then
   run_stage shellcheck shellcheck -x -S warning "${scripts[@]}" &
@@ -770,17 +883,25 @@ else
     fi
   done
 fi
+fi # want_stage fast
 
+if want_stage bash; then
 stage "bash tests"
-if [ ${#suites[@]} -eq 0 ]; then
+ci_timings=''
+if [ ${#shard_indices[@]} -eq 0 ]; then
   skip "no suites yet"
 else
   # the pool ran them in whatever order it did; they are reported in glob
   # order, each from its own log, as if they had run one after another
   wait "$pool_pid"
-  for i in "${!suites[@]}"; do
+  for i in "${shard_indices[@]}"; do
     t="${suites[$i]}"
     tmp="$ci_tmp/suite.$i.log"
+    if [ -n "${FM_CI_TIMINGS_OUT:-}" ]; then
+      dur="$(cat "$ci_tmp/suite.$i.dur" 2>/dev/null || echo 0)"
+      ci_timings="$ci_timings$t $dur
+"
+    fi
     # no status file is a suite that never finished, which is not a pass
     if [ "$(cat "$ci_tmp/suite.$i.rc" 2>/dev/null)" = 0 ]; then
       # A suite that calls something that does not exist prints to
@@ -818,7 +939,16 @@ else
     fi
   done
 fi
+# so a slow suite is visible by name, and --shard has something to balance
+# against next time: the durations this process observed, one line per
+# suite it ran, "path seconds". Written only when asked (FM_CI_TIMINGS_OUT),
+# never under FM_ROOT - the gate leaves nothing behind in the tree it judges.
+if [ -n "${FM_CI_TIMINGS_OUT:-}" ]; then
+  mkdir -p "$(dirname "$FM_CI_TIMINGS_OUT")" && printf '%s' "$ci_timings" > "$FM_CI_TIMINGS_OUT"
+fi
+fi # want_stage bash
 
+if want_stage bun; then
 stage "bun tests"
 # tests/e2e belongs to playwright, which owns its own runner; bun picking
 # those files up runs them without a browser and calls the result an error
@@ -837,7 +967,9 @@ else
     flunk "bun test"; printf '%s\n' "$out"
   fi
 fi
+fi # want_stage bun
 
+if want_stage e2e; then
 stage "end-to-end"
 # started at the top, beside the pool; reported here, in its old place
 case "$e2e_state" in
@@ -856,6 +988,7 @@ case "$e2e_state" in
     fi
     ;;
 esac
+fi # want_stage e2e
 
 # Measure the full gate without interrupting or bypassing functional checks.
 took=$(( $(date +%s) - started_at ))
