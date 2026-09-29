@@ -40,7 +40,7 @@ if [ "$MODE" = start ]; then
     fm_model_known "$rv" "$rmodel"
     [ $? -eq 1 ] && echo "fm-session: config.yaml's reviewer model '$rmodel' is not one $rv is known to accept; check it before dispatching (T-127)" >&2
   fi
-  wv="$(fm_cfg vendor)"; wmodel="$(fm_model worker config.yaml)"
+  wv="$(fm_role_vendor worker config.yaml)"; wmodel="$(fm_model_for worker "$wv" config.yaml)"
   if [ -n "$wv" ] && [ -n "$wmodel" ]; then
     fm_model_known "$wv" "$wmodel"
     [ $? -eq 1 ] && echo "fm-session: config.yaml's worker model '$wmodel' is not one $wv is known to accept; check it before dispatching (T-127)" >&2

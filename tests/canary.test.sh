@@ -84,11 +84,16 @@ assert_eq "true" "$(jq -r '.worktree_restored.summary."zh-TW" | (type == "string
 vpk="$(safe_tmpdir)"
 mkdir -p "$vpk/fakebin"
 # cursor-agent's own CLI, stood in: --version answers plainly; --list-models
-# names a catalogue without config.yaml's own model
-# (claude-opus-5-5 - this repository's own, read as is, the canary being
-# the operator's own project, never a fixture), so its own preflight
-# refuses the round before it starts, the way an operator would actually
-# see it.
+# names a catalogue without config.yaml's cursor-agent model, so its own
+# preflight refuses the round before it starts, the way an operator would
+# actually see it.
+#
+# T-146: a model is named per vendor, and this repository's config.yaml
+# names none for cursor-agent (it runs on its CLI's default). So the probe
+# runs from a copy of this checkout's bin/ beside a copy of its config.yaml
+# that puts the worker on codex and gives cursor-agent a model of its own:
+# the probe must be handed cursor-agent's model, never the worker vendor's
+# (gpt-6-astra) - which the canary did while it resolved one model per role.
 cat > "$vpk/fakebin/cursor-agent" <<'S'
 #!/usr/bin/env bash
 if [ "$1" = --version ]; then printf '1.2.3 (Cursor Agent)\n'; exit 0; fi
@@ -98,9 +103,18 @@ printf '{"type":"result","model":"gpt-visor-1"}\n'
 exit 0
 S
 chmod +x "$vpk/fakebin/cursor-agent"
+vroot="$vpk/root"; mkdir -p "$vroot"
+cp -R "$ROOT/bin" "$vroot/bin"
+awk '/^vendor:/ { print "vendor: codex"; next }
+     { print }
+     /^models:/ { print "  cursor-agent: gpt-cursor-canary" }' "$ROOT/config.yaml" > "$vroot/config.yaml"
+assert_eq "codex gpt-6-astra gpt-cursor-canary" \
+  "$(cd "$vroot" && . bin/fm-config.sh && printf '%s %s %s' "$(fm_role_vendor worker config.yaml)" \
+     "$(fm_cfg_in models codex config.yaml)" "$(fm_cfg_in models cursor-agent config.yaml)")" \
+  "the fixture's worker runs on codex, and codex and cursor-agent each name a model"
 canary_vendors="$t/canary-vendors"
 vtmp="$t/canary-vendors-tmp"; mkdir -p "$vtmp"
-vout="$(cd "$ROOT" && TMPDIR="$vtmp" FM_CANARY_STATE_DIR="$canary_vendors" \
+vout="$(cd "$vroot" && TMPDIR="$vtmp" FM_CANARY_STATE_DIR="$canary_vendors" \
   FM_SANDBOX_OS=linux \
   CURSOR_API_KEY=fm-canary-test-key \
   PATH="$vpk/fakebin:$PATH" \
@@ -108,13 +122,15 @@ vout="$(cd "$ROOT" && TMPDIR="$vtmp" FM_CANARY_STATE_DIR="$canary_vendors" \
 vresults="$canary_vendors/results.jsonl"
 assert_ok "test -f '$vresults'" "the vendor probe records one line for cursor-agent"
 crow="$(jq -c 'select(.vendor=="cursor-agent")' "$vresults" 2>/dev/null)"
-assert_eq "claude-opus-5-5" "$(jq -r '.model_requested' <<<"$crow")" \
-  "it records the model config.yaml asked for"
+assert_eq "gpt-cursor-canary" "$(jq -r '.model_requested' <<<"$crow")" \
+  "it records the model config.yaml asked for: cursor-agent's own, not the codex worker's (T-146)"
 assert_contains "$(jq -r '.version' <<<"$crow")" "1.2.3" "and the CLI's own version"
 assert_eq "refused" "$(jq -r '.outcome' <<<"$crow")" \
   "a model the CLI's own catalogue does not name refuses the round before it starts"
-assert_contains "$vout" "model=claude-opus-5-5" \
+assert_contains "$vout" "model=gpt-cursor-canary" \
   "the verdict line beside the vendor names the model config.yaml asked for"
+_t "and never the worker vendor's model, which cursor-agent would refuse"
+case "$vout" in *gpt-6-astra*) bad "the verdict line names gpt-6-astra: $vout" ;; *) ok ;; esac
 assert_contains "$vout" "refused: started=no" \
   "and says the round was refused, not that it merely failed"
 safe_rm_rf "$vpk"
