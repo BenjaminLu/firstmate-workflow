@@ -953,8 +953,8 @@ did not happen.
 |---|---|---|
 | `APPROVE:<task-id>` | reviewer | the only valid pass signal |
 | `ASK-PASS-CRITERIA:<task-id>` | worker | the round-three question |
-| `CRITERIA-COMPLETE:<task-id>` | reviewer | the numbered list that follows is the complete set |
-| `REGRESSION:<task-id>` | reviewer | off-list but newly introduced, so admissible |
+| `CRITERIA-COMPLETE:<task-id>` | reviewer | closes every `REJECT`, from round one: the numbered list before it is the complete set |
+| `REGRESSION:<task-id>` | reviewer | off-list but newly introduced, so admissible (labelled off-list) |
 
 ---
 
@@ -973,7 +973,7 @@ grilling  ->  /prototype  ->  [captain green-lights]  ->  design.md + design/tas
          (diff mode: and, given the PR, the head's check and gate results,
           as information; run mode: runs the tests in a fresh clone instead)
                                        |
-     not passed -> worker revives and fixes (round 3+ asks first) -> back to the gates
+     not passed -> worker revives and fixes the closed list -> back to the gates
                                        |
               APPROVE -> firstmate summarises -> [captain merges on the board]
 ```
@@ -1160,9 +1160,17 @@ check skipped is not a stage that passed. `bin/fm-session.sh start` runs
 
 ---
 
-## 7. The round-three protocol
+## 7. The closed list and the round-three protocol
 
-Rounds one and two: the reviewer picks holes as usual.
+**The closed list comes with the first REJECT (captain, 2026-09-29; SK-007).**
+Every `REJECT`, from round one, ends with the numbered, complete set of
+changes that would make this head pass, closed by `CRITERIA-COMPLETE:<task-id>`
+on a line of its own, before the verdict line - what the round-three answer
+used to be. Later rounds judge against that list: a new objection is
+admissible only as `REGRESSION:<task-id>`, or where the latest change touched
+new ground, and is labelled off-list either way. T-126 took ten rounds, one
+new finding per round from round seven on. `ASK-PASS-CRITERIA` stays for a
+worker who finds the list missing or unclear:
 
 **From round three:**
 
@@ -1185,7 +1193,7 @@ Rounds one and two: the reviewer picks holes as usual.
    check does not establish compliance with this role contract.
 
 The reviewer cannot see the pull request, so the launcher carries the protocol
-across (T-073). From round three, given `--pr`, `fm-review.sh` reads the pull
+across (T-073). From round two (SK-007), given `--pr`, `fm-review.sh` reads the pull
 request's comments with `gh` and quotes into the prompt, verbatim, first the
 latest comment holding `ASK-PASS-CRITERIA:<task-id>`, then every comment whose
 numbered list is followed by `CRITERIA-COMPLETE:<task-id>`, in the order
@@ -1195,11 +1203,13 @@ list, so a worker's numbered change log that mentions a marker in passing is
 not taken for the closed list. Each quote is fenced with a per-run nonce, so a
 comment cannot close its own quote, and printed straight from `jq`, so its
 trailing newlines survive. It then says which case holds: a list (it is the
-closed list; findings cite its items or are marked `REGRESSION:`), only an ask
+closed list; findings cite its items, are marked `REGRESSION:`, or object to new
+ground the latest change touched, labelled off-list), only an ask
 (answer with the complete list), neither, or comments `gh` could not read, in
-which case the round still runs.
+which case the round still runs; in the last two a `REJECT` still ends with
+its complete list.
 No other comment enters the prompt, so the worker's reasoning stays out.
-Rounds one and two get no closed-list section. Given `--pr`, they, like every
+Round one gets no closed-list section. Given `--pr`, it, like every
 diff-mode round, do get the head section below; without `--pr` no round gets
 either, and the prompt is unchanged.
 
@@ -1889,8 +1899,7 @@ the entire job, including setup, so the script may have less than 600 seconds
 before GitHub cancels it. For T-017, Firstmate runs the same full local gate
 with `FM_CI_MAX_SECONDS=600 bash bin/ci.sh` before publication. Since T-043
 that budget is this repository's declared `project.check_env`, and a fresh
-worktree that runs the check - gate 5's fallback, a run-mode reviewer's
-clone - runs the declared `setup` first, so it has the dependencies and
+worktree that runs the check - gate 5's fallback - runs the declared `setup` first, so it has the dependencies and
 browser the end-to-end stage needs instead of skipping it. (Gate 3 ran the
 whole check this way until T-114 retired it.) A functional
 pass at 208 seconds is within that authorized budget, but exceeds the default.

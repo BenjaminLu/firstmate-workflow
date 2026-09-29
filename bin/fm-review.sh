@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs one review round. The reviewer is given the diff, the task spec and the
-# acceptance criteria - and, from round three, the round-three protocol's own
+# acceptance criteria - and, from round two, the closed-list protocol's own
 # comments from the pull request, and, given --pr, in every round the head's
 # SHA, its required check and its gate summary - and nothing else. Not the worker's log, not
 # its reasoning, not even the path it worked in. Reasoning is persuasive; the
@@ -384,13 +384,14 @@ keep_log() {
   printf '%s' "$p"
 }
 
-# From round three the reviewer is shown what was said about the closed list
+# From round two the reviewer is shown what was said about the closed list
 # on the pull request, verbatim: first the latest ASK-PASS-CRITERIA from the
 # worker, then every comment holding a numbered list closed by
 # CRITERIA-COMPLETE, in the order posted. Without it every round was reviewed
 # from scratch and a list the reviewer had closed bound nothing. Only those
 # comments cross over; the rest of the pull request is the worker's reasoning
-# and stays out.
+# and stays out. Round two, because every REJECT from round one closes its
+# list (captain, 2026-09-29; SK-007), so the second round is already bound.
 #
 # A marker counts only as a line of its own. Matched anywhere, a worker's
 # "1. fixed X ... please post CRITERIA-COMPLETE:T-1" became the closed list
@@ -413,7 +414,7 @@ closed_list() {
                     | ([match($done; "g").offset] | last) as $at
                     | select($at != null and ($x[0:$at] | test("(^|\\n)[ \\t]*[0-9]+[.)][ \\t]"))) ] }
      ' <<<"$json" 2>/dev/null)" || [ -z "$picked" ]; then
-    printf '\nThe pull request'"'"'s comments could not be read, so whether the worker has asked with ASK-PASS-CRITERIA:%s or a closed list with CRITERIA-COMPLETE:%s already exists is unknown. Review this round as usual; if your findings close a list, number them and post CRITERIA-COMPLETE:%s.\n' \
+    printf '\nThe pull request'"'"'s comments could not be read, so whether the worker has asked with ASK-PASS-CRITERIA:%s or a closed list with CRITERIA-COMPLETE:%s already exists is unknown. Review this round as usual; if you reject, end with the complete numbered list of what would make this head pass, closed by CRITERIA-COMPLETE:%s.\n' \
       "$TASK" "$TASK" "$TASK"
     return 0
   fi
@@ -421,14 +422,14 @@ closed_list() {
   fence="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
   n="$(jq '.lists | length' <<<"$picked")"
   if [ "$n" -gt 0 ]; then
-    printf '\nThe numbered list below, posted with CRITERIA-COMPLETE:%s, is the closed list for this task. If more than one appears, the first is the original. Every finding this round must cite a numbered item from it, or be a regression this round newly introduced, marked REGRESSION:%s. Raise nothing else.\n' \
+    printf '\nThe numbered list below, posted with CRITERIA-COMPLETE:%s, is the closed list for this task. If more than one appears, the first is the original. Every finding this round must cite a numbered item from it, or be a regression this round newly introduced, marked REGRESSION:%s, or an objection to new ground the latest change touched; label either of those off-list. Raise nothing else.\n' \
       "$TASK" "$TASK"
   elif [ "$(jq '.ask != null' <<<"$picked")" = true ]; then
     printf '\nThe worker has asked for the pass criteria with ASK-PASS-CRITERIA:%s, quoted below. There is no closed list yet: answer with the complete numbered list of everything that must change for this task to pass, and then post CRITERIA-COMPLETE:%s.\n' \
       "$TASK" "$TASK"
   else
-    printf '\nThe pull request has neither an ASK-PASS-CRITERIA:%s from the worker nor a numbered list closed by CRITERIA-COMPLETE:%s. There is no closed list yet; review this round as usual.\n' \
-      "$TASK" "$TASK"
+    printf '\nThe pull request has neither an ASK-PASS-CRITERIA:%s from the worker nor a numbered list closed by CRITERIA-COMPLETE:%s. There is no closed list yet: review this round as usual, and if you reject, end with the complete numbered list of what would make this head pass, closed by CRITERIA-COMPLETE:%s.\n' \
+      "$TASK" "$TASK" "$TASK"
   fi
   # jq prints each body itself: through $(...) a comment's trailing newlines
   # were stripped, and the quote was no longer verbatim
@@ -541,7 +542,7 @@ prompt="$work/prompt.md"
   cat "${FM_CODE_ROOT:-$REPO}/skills/reviewer/SKILL.md"
   printf '\n---\n\n# The task\n\n```json\n%s\n```\n' "$spec"
   printf '\n# Round %s\n' "$ROUND"
-  if [ "$ROUND" -ge 3 ] && [ -n "$PR" ]; then
+  if [ "$ROUND" -ge 2 ] && [ -n "$PR" ]; then
     printf '\n# The closed list\n'
     closed_list
   elif [ "$ROUND" -ge 3 ]; then
@@ -592,16 +593,17 @@ if [ "$REVIEW_MODE" = run ]; then
     printf 'read, not run, rather than work around it. Run every command to completion in\n'
     printf 'the foreground: this round is one turn, which ends when your answer does, so a\n'
     printf 'job left running in the background is never checked on and never finishes\n'
-    printf 'before the verdict is due. A check too long for one command is not shortened\n'
+    printf 'before the verdict is due. A run too long for one command is not shortened\n'
     printf 'by backgrounding it - split it into the suites `test` names and run each one,\n'
     printf 'in the foreground, to its own end before starting the next.\n\n'
     printf 'The project'"'"'s contract, from this checkout'"'"'s config.yaml:\n\n'
     for f in setup check check_env tests test docs; do contract_line "$f"; done
     printf '\nDo this, in order:\n\n'
-    printf '1. Run `setup`, then `check` with `check_env`. A stage the check says it\n'
-    printf '   skipped is unverified, not passed.\n'
+    printf '1. Run `setup`. Do not run the full `check`: it is the required GitHub\n'
+    printf '   check on this same head, which firstmate verifies at the merge gate.\n'
     printf '2. Run every test file the diff adds or changes - through `test` when it is\n'
-    printf '   declared - and every suite that exercises a changed non-test file.\n'
+    printf '   declared - and every suite that exercises a changed non-test file. A\n'
+    printf '   stage a suite says it skipped is unverified, not passed.\n'
     printf '3. Prove fail-first. Restore the base version of every changed non-test file\n'
     printf '   (`git checkout fm/base -- <file>`; remove a file the diff adds), run the\n'
     printf '   changed tests again and require red. Name each assertion that went red.\n'

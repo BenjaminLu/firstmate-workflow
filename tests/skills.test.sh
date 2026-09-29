@@ -116,6 +116,23 @@ if reviewer.is_file():
     ):
         if sentence not in rprose:
             errors.append(f'reviewer skill lacks SK-005 fix: {sentence}')
+    # SK-007: the closed list comes with the first REJECT, the reviewer runs no
+    # full check, and an APPROVE carries forward on an unchanged patch-id.
+    for sentence in (
+        'Every `REJECT`, from round one, ends with the numbered, complete set of changes that would make this head pass, closed by `CRITERIA-COMPLETE:<task-id>` on a line of its own, before the verdict line.',
+        'Later rounds judge against that list: a new objection is admissible only as `REGRESSION:<task-id>`, or where the latest change touched new ground, and is labelled off-list either way.',
+        '`ASK-PASS-CRITERIA:<task-id>` stays for a worker who finds the list missing or unclear; answer it with the complete list.',
+        'Do not run the full declared `check`: that is the required GitHub check on the same head, which firstmate verifies at the merge gate (captain, 2026-09-29).',
+        'An APPROVE carries forward across any update of the branch from its base that leaves the change\'s patch-id, merge-base to head, as approved (SK-008);',
+    ):
+        if sentence not in rprose:
+            errors.append(f'reviewer skill lacks SK-007 rule: {sentence}')
+    for gone in (
+        'touches none of its files',
+        'Run `setup`, then `check`.',
+    ):
+        if gone in rprose:
+            errors.append(f'reviewer skill still carries retired text (SK-007): {gone}')
 # SK-004: the worker skill matches the sandboxed round (T-117/T-128): it
 # cannot commit or push, does not run the suites, its rebuild-frozen rule
 # names only the current task file, and it starts from firstmate's brief.

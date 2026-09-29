@@ -633,17 +633,18 @@ say worker-1 "$pr" "$(printf 'ASK-PASS-CRITERIA:T-ZZ\nANOTHER_TASKS_ASK')"
 ask="$(printf 'Round three: before touching a line.\n\nASK-PASS-CRITERIA:T-Z\n\nLATEST_ASK_BODY with `code` and "quotes"')"
 say worker-1 "$pr" "$ask"
 
-# rounds one and two, with or without --pr, and round three without it, are
+# round one, with or without --pr, and rounds two and three without it, are
 # the prompt they always were - an ask sitting on the pull request included.
+# Round two with --pr carries the closed list (SK-007), tested below.
 # With --pr every round also carries the head's evidence (T-088, tested
 # below); that section alone is taken out before comparing, so nothing from
-# the pull request's comments can reach rounds one and two unseen.
+# the pull request's comments can reach round one unseen.
 sans_head() {  # the prompt without its "The head under review" section
   awk '$0=="# The head under review"{skip=1; next}
        skip && $0=="---"{skip=0}
        !skip' "$1"
 }
-for args in "--round 1" "--round 2" "--round 1 --pr $pr" "--round 2 --pr $pr" "--round 3"; do
+for args in "--round 1" "--round 2" "--round 1 --pr $pr" "--round 3"; do
   n="$(printf '%s' "$args" | cut -d' ' -f2)"
   # shellcheck disable=SC2086
   review_c "$dc/sent-id.md" $args >/dev/null
@@ -684,6 +685,17 @@ assert_lacks "$sent" "REASONING_WITHOUT_MARKER" "and the reasoning stays out"
 first="$(grep -n FIRST_LIST_ITEM "$dc/sent-r4.md" | head -1 | cut -d: -f1)"
 second="$(grep -n SECOND_LIST_ITEM "$dc/sent-r4.md" | head -1 | cut -d: -f1)"
 assert_ok "[ '${first:-0}' -gt 0 ] && [ '${second:-0}' -gt '${first:-0}' ]" "every list is shown, in the order posted"
+
+# SK-007: every REJECT from round one closes its list, so round two is bound
+# by it too, and is shown it; round one has no earlier REJECT to be bound by
+review_c "$dc/sent-r2.md" --round 2 --pr "$pr" >/dev/null
+sent="$(cat "$dc/sent-r2.md")"
+assert_contains "$sent" "# The closed list" "a round-two prompt given --pr has the closed-list section"
+assert_contains "$sent" "1. Name the helper FIRST_LIST_ITEM." "and carries the list the first REJECT closed"
+assert_contains "$sent" "is the closed list" "and says it binds the round"
+assert_contains "$sent" "label either of those off-list" "and admits an objection to new ground, labelled off-list"
+review_c "$dc/sent-r1.md" --round 1 --pr "$pr" >/dev/null
+assert_lacks "$(cat "$dc/sent-r1.md")" "FIRST_LIST_ITEM" "round one is shown no list"
 
 # a marker counts only on a line of its own, and a comment that asks is never
 # a list: otherwise the worker's own change log, numbered and mentioning the
@@ -1032,6 +1044,11 @@ assert_contains "$sentM" "# Run mode" "the run-mode prompt says what the round i
 assert_contains "$sentM" "$ck" "and names the checkout"
 assert_contains "$sentM" "make check-it" "and carries the contract the branch under review declares"
 assert_contains "$sentM" "git checkout fm/base -- <file>" "and says how to prove fail-first"
+# SK-007: the full check is the required GitHub check on the same head, not
+# the reviewer's; the step text says so, apart from the skill it quotes
+assert_contains "$sentM" "1. Run \`setup\`. Do not run the full \`check\`: it is the required GitHub
+   check on this same head" "the run-mode steps tell the reviewer not to run the full check"
+assert_lacks "$sentM" "Run \`setup\`, then \`check\`" "and no longer tell it to run setup, then check"
 assert_contains "$sentM" "**Executed**" "and asks which evidence was executed"
 assert_contains "$sentM" "**Read, not run**" "and which was only read"
 assert_contains "$sentM" "SECRET_WORKER_REASONING" "and still carries the diff"
