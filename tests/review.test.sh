@@ -1796,6 +1796,10 @@ M
       printf '\nHead SHA: %s\n' "$hd"
       printf '\n## The required check for this head, from GitHub\n'
       printf '\nThe required check for head %s could not be read from GitHub, so its CI result is unknown.\n' "$hd"
+      # T-155 changed the CI-wait lines: the names come from the base's
+      # protection, the pull request, then config.yaml; this gh and config
+      # name none, so the prompt says the round did not wait for CI
+      printf '\nNo source named any required check - not the protection of the base branch %s, not the pull request'"'"'s required checks, not config.yaml'"'"'s required_check - so this round did not wait for CI before it started.\n' main
       # T-153 added these three sections: every CI job, the failing
       # assertions and the fail-first report, each saying it is unknown here
       printf '\n## Every CI job for this head\n'
