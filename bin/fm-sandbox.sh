@@ -67,8 +67,9 @@
 # started, and connects only to the kernel's ephemeral ports, where a server
 # bound to port 0 lands, less those - which `run` tries behind the profile
 # before the round and tightens to the proxy alone when the kernel lets one
-# through (design 13.1, T-153); unix sockets only inside its own write
-# roots; the names in each directory above them, so bun can start there;
+# through (design 13.1, T-153); no unix socket; the names in each directory
+# above its roots, so bun's resolver can start there - but never in the
+# operator's home or a never-readable directory, or anything under either;
 # a ps(1) of its own ahead of the setuid one it may not run, which lists
 # its own user's processes only; LaunchServices refused, so no browser
 # opens; and no mach service that
@@ -82,12 +83,13 @@
 #
 # A round started inside a round (T-153) - a suite, or fm itself, run by a
 # crew round - cannot have a second OS sandbox: macOS refuses to apply one
-# inside another. `run` knows it is there only when the round's mark,
-# FM_IN_ROUND, and the kernel both say so (nested_round), and then runs the
-# command under the outer round's confinement, with this policy's scrub,
-# limits, login, temp directory and a proxy of its own that leaves through
-# the outer round's, and says so on stderr. It never applies to a round
-# started outside one, and never to a stand-in sandbox tool.
+# inside another. `run` knows it is there only by a mark fm's own outer
+# round alone can make - a nonce in a file the round can read and not write
+# (nested_round) - and then runs the command under the outer round's
+# confinement, with this policy's scrub, limits, login, temp directory and a
+# proxy of its own that leaves through the outer round's, and says so on
+# stderr. A round started outside one, or under any other sandbox, applies
+# its own.
 #
 # The vendor's login (T-117). Where the operator's login is kept out of the
 # round's reach - claude's lives in the macOS keychain, with gh's token and
@@ -332,15 +334,34 @@ def own_git_sbpl(path):
     return '(literal %s)' % sbpl(path)
 
 
-def ancestors(paths):
+def homes():
+    """The operator's home directories: $HOME as fm-sandbox was started
+    with it, and the account's own."""
+    import pwd
+    try:
+        account = pwd.getpwuid(os.getuid()).pw_dir
+    except KeyError:
+        account = ''
+    out = []
+    for h in (os.environ.get('HOME', ''), account):
+        if h and h != '/':
+            h = os.path.realpath(h)
+            if h not in out:
+                out.append(h)
+    return out
+
+
+def ancestors(paths, closed):
     """Every directory above each path, up to but not including /: listed
     one by one, never as a subtree, so their names are readable and nothing
-    in them is."""
+    in them is. Never one in `closed` or under it - the operator's home and
+    every never-readable directory: not even the names in those."""
+    inside = lambda x, c: x == c or x.startswith(c.rstrip('/') + '/')
     out = []
     for path in paths:
         up = os.path.dirname(path.rstrip('/'))
         while up and up != '/':
-            if up not in out and up not in paths:
+            if up not in out and up not in paths and not any(inside(up, c) for c in closed):
                 out.append(up)
             up = os.path.dirname(up)
     return out
@@ -353,11 +374,11 @@ def darwin(p, roots, reads, own, port, listening, ephemeral):
     lines = ['(version 1)', '(allow default)',
              ';; network: this round\'s own proxy, and loopback ports the round opens itself',
              '(deny network*)']
+    proxy_port = int(port) if port and int(port) else None
+    closed = sorted(set([board] + (listening or [])) - {proxy_port})
     # None: the listeners could not be read, so no loopback port is known to
     # be free of someone else's, and only the proxy is reachable
     if listening is not None:
-        proxy_port = int(port) if port and int(port) else None
-        closed = sorted(set([board] + listening) - {proxy_port})
         first, last = ephemeral
         # A server the round opens binds port 0, and the kernel hands it a
         # port from its ephemeral range: bind and accept take localhost:*,
@@ -368,21 +389,22 @@ def darwin(p, roots, reads, own, port, listening, ephemeral):
         # an outbound localhost:* allow (measured on macOS 15.7.9, design
         # 8), while a port-specific allow does hold (the proxy's own).
         lines += ['(allow network-bind (local ip "localhost:*"))',
-                  '(allow network-inbound (local ip "localhost:*"))',
-                  ';; never the board, nor anything that was listening before the round started:',
-                  ';; not bound, not accepted on']
-        for n in closed:
-            lines.append('(deny network-bind network-inbound (local ip "localhost:%d"))' % n)
+                  '(allow network-inbound (local ip "localhost:*"))']
+    # The board's port, and every port listening when the round started, is
+    # never bound or accepted on: after the allow above, which it carves out
+    # of, and written whether or not the listeners could be read, so a
+    # profile never lacks the board's deny (T-153). With no allow above it
+    # repeats what (deny network*) already says.
+    lines += [';; never the board, nor anything that was listening before the round started:',
+              ';; not bound, not accepted on']
+    for n in closed:
+        lines.append('(deny network-bind network-inbound (local ip "localhost:%d"))' % n)
+    if listening is not None:
         lines.append(';; connected to: the ports the kernel hands a server of the round\'s own, %d-%d, '
                      'less those' % (first, last))
         for n in range(first, last + 1):
             if n not in closed:
                 lines.append('(allow network-outbound (remote ip "localhost:%d"))' % n)
-    # unix sockets: only inside the round's own write roots, where nothing
-    # but the round itself makes one - its proxy's, when a round starts a
-    # round; Herdr's and every other socket stay out of reach
-    lines += [';; unix sockets: only those inside the round\'s own write roots',
-              '(allow network-bind network-outbound %s)' % sub(roots)]
     if port and int(port):
         lines.append('(allow network-outbound (remote ip "localhost:%d"))' % int(port))
     lines += [';; writes: the write roots only',
@@ -409,15 +431,27 @@ def darwin(p, roots, reads, own, port, listening, ephemeral):
                   '(allow file-read* file-write* %s)' % sub(vtmp)]
     lines += [';; the round\'s own roots, even under a never-readable directory',
               '(allow file-read* file-write* %s)' % sub(roots)]
-    # bun (bunx, bun run) opens every directory above its working directory
-    # and refuses to start when one cannot be read (CouldntReadCurrentDirectory,
-    # 2026-09-29), and git and node walk up the same way. Each directory
-    # above a root is listed by itself - a literal, never its subtree - so
-    # the names in it are readable and no file or directory in it is.
-    above = ancestors(roots)
+    # `bunx <package>` resolves through bun's module resolver, which lists
+    # every directory from / down to its working directory and refuses to
+    # start at the first it may not (CouldntReadCurrentDirectory; measured
+    # 2026-09-29 in a worker round: `bunx --version` needs none of them,
+    # `bunx playwright --version` fails from any directory with one it cannot
+    # list and runs from /usr/share). Each directory above a root is listed by
+    # itself - a literal, never its subtree - so the names in it are readable
+    # and no file or directory in it is. Never the operator's home or
+    # anything under it, nor a never-readable directory (fm's state/): a
+    # worktree there keeps bun's resolver refused, and a round runs bunx from
+    # its own temp directory, which is not under either.
+    above = ancestors(roots, homes() + list(p['never_read']))
     if above:
-        lines += [';; the directories above the roots: their names, nothing in them',
+        lines += [';; the directories above the roots, but the operator\'s home and the never-readable:',
+                  ';; their names, nothing in them',
                   '(allow file-read* %s)' % ' '.join('(literal %s)' % sbpl(a) for a in above)]
+    # the mark a round started inside this one reads to know it is (nested_round)
+    mark = os.environ.get('FM_SB_MARK', '')
+    if mark:
+        lines += [';; the round\'s mark, readable and nothing else beside it',
+                  '(allow file-read* (literal %s))' % sbpl(mark)]
     git_own = own_git(roots[0]) if roots else None
     if git_own:
         lines += [';; the tree\'s own link to git (T-128) may not be deleted or rewritten from',
@@ -472,6 +506,10 @@ def linux(p, roots, reads, own, sock):
             a += ['--ro-bind', '/dev/null', n]
     if sock:
         a += ['--bind', sock, sock]
+    # the round's mark (nested_round), in a directory of its own, read-only
+    mark = os.environ.get('FM_SB_MARK', '')
+    if mark:
+        a += ['--ro-bind', os.path.dirname(mark), os.path.dirname(mark)]
     a += ['--chdir', roots[0], '--']
     return '\n'.join(a) + '\n'
 
@@ -1298,16 +1336,37 @@ ephemeral_range() {
 # Already inside a round's own OS sandbox (T-153)? A second sandbox cannot be
 # applied inside one - macOS refuses sandbox_apply (71) - so a round a round
 # starts (a suite, a reviewer running fm) would fail or wait out its timeout.
-# Two marks, both needed: FM_IN_ROUND, which fm-sandbox.sh gives every round
-# and a round cannot lose; and the kernel's own word that this process is
-# sandboxed - sandbox_check(2) on macOS, and on Linux a pid namespace whose
-# pid 1 is bwrap. Nothing outside a sandbox can make the kernel say so, so a
-# top-level round is never let off its own; and a mark alone, set in the
-# operator's shell, changes nothing. Only the platform's own tool is ever
-# nested: a stand-in (FM_SANDBOX_TOOL, the suites') applies no kernel
-# sandbox, and runs as it always has.
+#
+# Being in some sandbox is not being in fm's: sandbox_check(2) says yes under
+# any (Claude Code's, codex's seatbelt, an App Sandbox), and FM_IN_ROUND is
+# an environment variable anyone can set. So the proof is a mark only fm's
+# own outer `run` makes (make_mark): a random nonce in a file of its own
+# work directory, outside every write root, which its profile lets the round
+# read and nothing beside it; the round is told the file's path and the
+# nonce (FM_ROUND_MARK, FM_ROUND_NONCE). A round is nested only when all of
+# these hold:
+#   - FM_IN_ROUND is set;
+#   - the file it was told of holds exactly the nonce it was told - a mark
+#     outlives neither its outer round (its work directory goes with it) nor
+#     a copy of the variables pointed at another file;
+#   - it cannot write the file's directory. Nothing outside a round stops
+#     the user writing a directory of the user's own; fm's outer profile
+#     does (bwrap binds it read-only). A foreign sandbox with FM_IN_ROUND=1
+#     has no such file, so it applies its own profile as a top-level round;
+#   - and, with the platform's own tool, the kernel's word too: sandbox_check
+#     on macOS, a pid namespace whose pid 1 is bwrap on Linux. A stand-in
+#     (FM_SANDBOX_TOOL, the suites') applies no sandbox at all and no kernel
+#     can be asked about it; there the mark and the directory are the check.
+#   - the mark was made by the sandbox tool this round would apply: a
+#     suite's stand-in round inside a real one is not nested, and runs its
+#     stand-in as it always has;
 nested_round() {
-  [ -n "${FM_IN_ROUND:-}" ] && [ -z "${FM_SANDBOX_TOOL:-}" ] || return 1
+  local mark="${FM_ROUND_MARK:-}" nonce="${FM_ROUND_NONCE:-}" probe
+  [ -n "${FM_IN_ROUND:-}" ] && [ -n "$mark" ] && [[ "$nonce" =~ ^[0-9a-f]{32}$ ]] || return 1
+  [ -f "$mark" ] && [ "$(cat "$mark" 2>/dev/null)" = "$nonce $tool" ] || return 1
+  probe="$(dirname "$mark")/.fm-nest-probe.$$"
+  if ( : > "$probe" ) 2>/dev/null; then rm -f "$probe"; return 1; fi
+  [ -z "${FM_SANDBOX_TOOL:-}" ] || return 0
   case "$os" in
     darwin)
       python3 -c 'import ctypes, os, sys
@@ -1411,6 +1470,17 @@ make_work() {
 
 launcher=(); inner=(); secret_env=()
 if [ "$cmd" = run ] || [ -n "$vendor" ]; then make_work; fi
+# The round's mark (nested_round): a nonce in a file of fm-sandbox's own
+# directory, which the profile lets the round read and not write. Made by a
+# round that applies its own sandbox; a nested one keeps its outer round's.
+mark=''
+if [ "$cmd" = run ] && [ -z "$nested" ]; then
+  nonce="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  { [[ "$nonce" =~ ^[0-9a-f]{32}$ ]] && mkdir "$work/mark" && printf '%s %s' "$nonce" "$tool" > "$work/mark/nonce"; } || {
+    say "cannot make the round's mark under $work"; exit 70; }
+  mark="$work/mark/nonce"
+  scrub+=(FM_ROUND_MARK="$mark" FM_ROUND_NONCE="$nonce")
+fi
 # The vendor's login, read here, outside the round, from exactly what the
 # policy names for it. Not logged in refuses the round (77) before the
 # sandbox starts, so the adapter counts the vendor unavailable.
@@ -1494,7 +1564,7 @@ if [ "$cmd" = run ]; then
     fi
   fi
   make_profile() {
-    python3 -c "$SB_PY" profile "$policy" "$os" "$root" "$tmp" "$vendor" "$port" "$listening" "$sock" \
+    FM_SB_MARK="$mark" python3 -c "$SB_PY" profile "$policy" "$os" "$root" "$tmp" "$vendor" "$port" "$listening" "$sock" \
       "${span:-$(ephemeral_range)}" ${writes[@]+"${writes[@]}"} > "$work/profile" || exit 65
   }
   # Nested, no profile is applied: the outer round's already is.

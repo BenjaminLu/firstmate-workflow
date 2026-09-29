@@ -110,6 +110,21 @@ assert_eq "Review the authored task" \
 assert_eq "審查已撰寫的任務" \
   "$(jq -r 'select(.type=="review_opened")|.data.activity["zh-TW"]' "$r/state/events.jsonl")" \
   "the reviewer publishes the authored zh-TW work brief"
+# T-153: the round's result records its own wall-clock - started before its
+# review_opened, ended at the verdict, and the seconds between - on the
+# verdict event /api/state's last_review reads
+wall_clock_ok() {   # wall_clock_ok <verdict type> <events> -> 1 when its latest carries the round's clock
+  jq -rs --arg ty "$1" '
+    (map(select(.type=="review_opened"))|last|.ts|fromdateiso8601) as $o
+    | (map(select(.type==$ty))|last|.data.wall_clock) as $w
+    | if ($w|type)=="object" and ($w.started|type)=="number" and ($w.ended|type)=="number"
+         and $w.started<=$o and $w.ended>=$o and $w.seconds==($w.ended-$w.started)
+      then 1 else 0 end' "$2" 2>/dev/null
+}
+assert_eq "1" "$(wall_clock_ok approved "$r/state/events.jsonl")" \
+  "an approving round's verdict event records its wall-clock: started, ended and seconds"
+assert_eq "null" "$(jq -c 'select(.type=="review_opened")|.data.wall_clock' "$r/state/events.jsonl")" \
+  "and only the verdict does: review_opened carries none"
 
 # praise is not an approval
 d2="$(fixture)"; r2="$d2/repo"; GH2="$(ghstub "$d2")"
@@ -365,6 +380,8 @@ assert_eq "$reject_actor" \
 assert_eq "Review the authored task|審查已撰寫的任務" \
   "$(jq -r 'select(.type=="review_failed")|[.data.activity.en,.data.activity["zh-TW"]]|join("|")' "$r/state/events.jsonl" | tail -1)" \
   "the rejection preserves the authored bilingual activity"
+assert_eq "1" "$(wall_clock_ok review_failed "$r/state/events.jsonl")" \
+  "a rejecting round records its wall-clock the same way (T-153)"
 
 rm -rf "$d"
 

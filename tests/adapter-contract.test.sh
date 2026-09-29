@@ -47,6 +47,11 @@ assert_eq '["registry.npmjs.org","cdn.playwright.dev"]' "$(jq -c .network "$pk/n
 cat > "$pk/sandbox-exec" <<S
 #!/usr/bin/env bash
 [ "\$1" = -f ] || exit 99
+# It applies no profile, so it answers fm-sandbox's loopback check before the
+# round the way a profile that holds does: run behind it, the check would
+# bind and connect on the machine running the suite, the board's port
+# included (T-153). tests/sandbox.test.sh's loopback cases test the check.
+case " \$* " in *" fm-loopback-check "*) echo checked; exit 0 ;; esac
 printf '%s\n' "\$2" > "$pk/profile.path"
 cp "\$2" "$pk/profile.sb"
 shift 2
@@ -806,14 +811,8 @@ assert_eq "0" "$(confined darwin "$pk/sandbox-exec" "$pk/net.json" codex)" "on m
 # proxy's again after the denies of what was already listening.
 cprof="$(cat "$pk/profile.sb" 2>/dev/null)"
 assert_ne "" "$cprof" "and a profile was made for it"
-# Unix sockets aside (T-153): only those inside the round's own write roots,
-# where only the round makes one.
-uline='^(allow network-bind network-outbound (subpath "[^"]*")( (subpath "[^"]*"))*)$'
-assert_eq "" "$(grep 'allow network' <<< "$cprof" | grep -v '"localhost:' | grep -Ev "$uline" || true)" \
-  "and its round reaches the network only through that proxy"
-assert_eq "$(grep -A1 "round's own roots, even under" <<< "$cprof" | tail -1 | grep -o '(subpath "[^"]*")' | sort)" \
-  "$(grep '^(allow network-bind network-outbound' <<< "$cprof" | grep -o '(subpath "[^"]*")' | sort)" \
-  "and its unix sockets only inside its own write roots"
+assert_eq "" "$(grep 'allow network' <<< "$cprof" | grep -v '"localhost:' || true)" \
+  "and its round reaches the network only through that proxy, and no unix socket at all"
 assert_matches "$(grep 'allow network-outbound' <<< "$cprof" | tail -1)" '"localhost:[0-9]+"' \
   "whose port is the last allowed, after every deny"
 assert_contains "$cprof" '(deny network-bind network-inbound (local ip "localhost:5555"))' \

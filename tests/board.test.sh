@@ -2906,6 +2906,9 @@ cat >> "$w/state/events.jsonl" <<'J'
 {"ts":"2026-09-29T11:06:00Z","type":"approved","actor":"reviewer-c-tr3-r1","task":"T-R3"}
 {"ts":"2026-09-29T12:00:00Z","type":"review_opened","actor":"reviewer-d-tr4-r1","task":"T-R4"}
 {"ts":"2026-09-29T12:41:00Z","type":"review_failed","actor":"reviewer-d-tr4-r1","task":"T-R4","data":{"review_outcome":"rejected"}}
+{"ts":"2026-09-29T13:00:00Z","type":"review_opened","actor":"reviewer-e-tr5-r1","task":"T-R5"}
+{"ts":"2026-09-29T13:20:00Z","type":"approved","actor":"reviewer-e-tr5-r1","task":"T-R5","data":{"wall_clock":{"started":1790686805,"ended":1790687825,"seconds":1020}}}
+{"ts":"2026-09-29T13:30:00Z","type":"review_failed","actor":"reviewer-f-tr6-r1","task":"T-R6","data":{"review_outcome":"infrastructure_error","wall_clock":{"started":1790688540,"ended":1790688600,"seconds":60}}}
 J
 start_w "$w" ""
 sw="$(curl -sf "http://127.0.0.1:$PORTW/api/state")"
@@ -2916,6 +2919,12 @@ assert_eq '2460 rejected' "$(jq -r '.tasks[]|select(.id=="T-R4")|.last_review|"\
   "a rejecting round is timed the same way (41 minutes)"
 assert_eq "null null" "$(jq -r '[.tasks[]|select(.id=="T-R2" or .id=="T-R3")|.last_review]|map(tostring)|join(" ")' <<<"$sw")" \
   "a round still running, or a verdict with no review_opened of its own, has no wall-clock"
+# the round's own record (fm-review.sh's data.wall_clock) is its wall-clock
+# where the verdict carries one: 17 minutes, not the 20 between the events
+assert_eq '1020 approved' "$(jq -r '.tasks[]|select(.id=="T-R5")|.last_review|"\(.seconds) \(.outcome)"' <<<"$sw")" \
+  "a round's own recorded wall-clock is the one the card carries"
+assert_eq '60 infrastructure_error' "$(jq -r '.tasks[]|select(.id=="T-R6")|.last_review|"\(.seconds) \(.outcome)"' <<<"$sw")" \
+  "and a verdict that records its own needs no review_opened to be timed"
 kill "$pidw" 2>/dev/null; wait "$pidw" 2>/dev/null
 rm -rf "$w"
 

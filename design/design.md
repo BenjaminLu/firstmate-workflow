@@ -1352,15 +1352,19 @@ card whose dependency is parked or dropped says so beside the blocker's id
 Labels are the dictionaries' `park` / `unpark` / `drop` / `parked`
 (擱置 / 恢復 / 不做 / 已擱置); zh-CN derives through `tw2cn.tsv`.
 
-**A review round's wall-clock (T-153).** Each task in `/api/state` carries
-`last_review`: its latest ended review round's reviewer, `seconds` from that
-reviewer's `review_opened` to its own `approved` or `review_failed`, and the
-outcome (`approved`, or the `review_outcome` the failure names), or `null`
-before any round has ended. Both ends are events `fm-emit.sh` stamped, so it
-is the log's clock, not the board's. A verdict with no `review_opened` of its
-reviewer's own is not timed. The review card showing it (`board/index.html`)
-and the round's own result recording it (`bin/fm-review.sh`) are outside
-T-153's scope, and are not done yet.
+**A review round's wall-clock (T-153).** A round's result records its own
+wall-clock. `fm-review.sh` takes the time just before it emits `review_opened`,
+and every verdict event it emits carries `data.wall_clock`: `started`,
+`ended` (epoch seconds) and `seconds`, the difference. That covers `approved`
+and every `review_failed`, a round that could not start included. Each task in
+`/api/state` carries `last_review`: its latest ended review round's reviewer,
+`seconds` and outcome (`approved`, or the `review_outcome` the failure names),
+or `null` before any round has ended. `seconds` is the round's own
+`wall_clock` where its verdict event carries one. For an older event it is the
+time from that reviewer's `review_opened` to its verdict, both stamped by
+`fm-emit.sh`. A verdict with neither, meaning no clock of its own and no
+`review_opened` from its reviewer, is not timed. Showing it on the review card
+is T-145's.
 
 **Pull request links (T-069).** Every `#n` the board shows — the top right of
 a lane card, a history row, the decision card's link, a roster row, and any
@@ -3075,7 +3079,9 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
     port 0, since `localhost:0` is not a port a profile may name, and
     every fixture server in the suites binds port 0 - with a
     `network-bind`/`network-inbound` deny on the board's port and on each
-    one listening at round start;
+    one listening at round start. The board's deny is in every profile,
+    whether or not the listeners could be read, although with them
+    unknown `(deny network*)` already covers it;
   - connects only to a positive list: every port of the kernel's own
     ephemeral range (`net.inet.ip.portrange.first`-`last`, 49152-65535 by
     default), which is where a server bound to port 0 lands, less the
@@ -3107,7 +3113,14 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
   carrying the round's nonce, so `fm-sandbox.sh`'s check, which connects
   before the round starts, is never read as the round reaching them. On
   Linux the round's loopback is its own network namespace's, where no host
-  listener is;
+  listener is and a bind of the board's port is the round's own, so nothing
+  is tried there. The suites' stand-in `sandbox-exec`s apply no profile, so
+  they answer the check the way a profile that holds does. Otherwise the
+  check, run behind a stand-in, would bind the real board port of the
+  machine running the suite whenever nothing held it. That is how every
+  macOS-mode round on the Linux runner was refused. Only the loopback
+  cases' own stand-in lets the check through, and there the board's port is
+  a free one of the suite's own;
 - what a review round is asked to run (T-153). Until SK-007 a review round
   ran the whole declared `check` in its sandbox, and 12-13 suites failed
   there every time for the sandbox's reasons, not the code's: loopback
@@ -3126,32 +3139,53 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
     takes the options fm and its suites use (`-A -e -a -x -p -U -u -o`,
     `name=` for no header). On Linux bwrap's pid namespace already holds
     the round's processes alone;
-  - a readable working directory: bun (`bunx`, `bun run`) opens every
-    directory above its working directory and refuses to start when one
-    cannot be read (`CouldntReadCurrentDirectory`). Each directory above a
-    write root - up to, not including, `/` - is readable as itself, a
-    `literal`, never its subtree: the names in it, nothing in it. That
-    includes the operator's home directory and fm's `state/` when a
-    worktree lives under them - their entries' names, never a file in
-    them, which stay unreadable;
+  - a readable working directory for bun's resolver. Measured in a worker
+    round on 2026-09-29: `bunx --version` needs no directory above its
+    working directory. `bunx <package>` needs every one of them: it fails
+    with `CouldntReadCurrentDirectory` from any directory with one it may
+    not list, even with the package in `./node_modules`, and runs from
+    `/usr/share`. Each directory above a write root is listable as itself,
+    a `literal`, never its subtree: the names in it, nothing in it. This
+    stops short of `/` itself. The exceptions are the operator's home
+    (`$HOME` and the account's own), fm's `state/` and every other
+    never-readable directory, and anything under them. From a worktree
+    under them, the names in `$HOME` (`.ssh`, `.aws`), in `state/` and in
+    the other worktrees stay unlistable, and bun's resolver stays refused
+    there. A round runs `bunx` from a directory outside them instead: its
+    own temp directory, where a run-mode review's checkout also lives;
   - its own temp files: zsh writes a here-document's temp file under
     `TMPPREFIX`, `/tmp/zsh` unless set, whatever `TMPDIR` says. A round's
-    `TMPPREFIX` is under its own temp directory, as `TMPDIR` is;
-  - unix sockets inside its own write roots only - where nothing but the
-    round makes one, such as the proxy of a round it starts (below) -
-    never Herdr's or any other.
+    `TMPPREFIX` is under its own temp directory, as `TMPDIR` is.
 - a round started inside a round (T-153): a round's suites start rounds,
   and `sandbox-exec` cannot apply a profile inside a sandbox
   (`sandbox_apply: Operation not permitted`, 71), so every such round
   failed or waited out its timeout (T-137 r4's review spent over 20
   minutes in `tests/herdr.test.sh`). `fm-sandbox.sh run` runs one under the
-  outer round's confinement when two marks both say it is inside one: the
-  round's `FM_IN_ROUND`, and the kernel's own word - `sandbox_check(2)` on
-  macOS, a pid namespace whose pid 1 is `bwrap` on Linux. Nothing outside
-  a sandbox can make the kernel say so, so a top-level round is never let
-  off its own, and the mark alone, set in any shell, changes nothing. Only
-  the platform's own tool is nested: a stand-in (`FM_SANDBOX_TOOL`, the
-  suites') applies no kernel sandbox and runs as it always has. The nested
+  outer round's confinement only on a mark fm's own outer round alone can
+  make. Being in *a* sandbox proves nothing: `sandbox_check(2)` answers yes
+  under any of them (Claude Code's, codex's seatbelt, an App Sandbox), and
+  `FM_IN_ROUND` is an environment variable anyone can set. So every round
+  that applies its own sandbox writes a random nonce to a file in
+  fm-sandbox's own work directory. That directory is outside every write
+  root; the macOS profile lets the round read that one file, and bwrap
+  binds its directory read-only. The round is told the file's path and the
+  nonce (`FM_ROUND_MARK`, `FM_ROUND_NONCE`). A round started inside it is
+  nested only when all of these hold:
+  - `FM_IN_ROUND` is set;
+  - the file holds exactly that nonce and the sandbox tool this round
+    would apply. A suite's stand-in round inside a real round is not
+    nested, and runs its stand-in as before;
+  - it cannot write the file's directory, a directory of the user's own
+    that only fm's outer profile keeps it from writing;
+  - with the platform's own tool, the kernel says it is sandboxed.
+
+  The mark goes with its outer round, since the work directory is removed
+  when the round ends. A foreign sandbox with `FM_IN_ROUND=1` has no mark,
+  so the round started there applies its own profile, as does any round
+  started outside one. A stand-in tool (`FM_SANDBOX_TOOL`, the suites')
+  applies no sandbox at all, so no kernel can be asked about it: there the
+  mark and the unwritable directory are the whole check, which is what lets
+  the suites test the nested path without a real sandbox. The nested
   round keeps this policy's scrub, limits, login and temp directory, and a
   proxy of its own that applies this policy and leaves through the outer
   round's proxy, which applies the outer one's: a host either refuses is
@@ -3175,7 +3209,8 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
   taken refuses the round rather than guessing. The limits as set reach the
   round as `SANDBOX_ROUND_LIMITS`: macOS may enforce a lower process limit
   than it was given, and reports that one back to `ulimit -u`;
-- no unix sockets but inside the round's own write roots (above);
+- no unix sockets: a round started inside a round serves its proxy on
+  loopback TCP, never on a socket;
   `GH_TOKEN`, `GITHUB_TOKEN`, `SSH_AUTH_SOCK`, cloud
   credentials and the escape hatch's own variables scrubbed; the
   repository's `.claude/`, `.mcp.json`, `.cursor/` and `GEMINI.md` not

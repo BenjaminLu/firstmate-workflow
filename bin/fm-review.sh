@@ -92,9 +92,20 @@ set_crew_activity() {
 # --data into the crew payload so extras cannot wipe crew_name or activity.
 emit_once() {
   crew_refresh_identity
-  local data="$CREW_DATA" args=()
+  local data="$CREW_DATA" args=() now
   while [ $# -gt 0 ]; do
     case "$1" in
+      --type)
+        # A verdict event is the round's result: it carries the round's own
+        # wall-clock, from just before review_opened to now (T-153), which
+        # /api/state's last_review reads
+        if [ -n "$ROUND_STARTED" ] && { [ "${2-}" = approved ] || [ "${2-}" = review_failed ]; }; then
+          now="$(date +%s)"
+          data="$(jq -c --argjson s "$ROUND_STARTED" --argjson e "$now" \
+            '.wall_clock={started:$s,ended:$e,seconds:($e-$s)}' <<<"$data")" || return 1
+        fi
+        args+=("$1" "${2-}"); shift 2
+        ;;
       --review-outcome)
         fm_need "fm-review" "$@"
         data="$(jq -c --arg outcome "${2-}" '.review_outcome=$outcome' <<<"$data")" || return 1
@@ -112,6 +123,8 @@ emit_once() {
     ${args[@]+"${args[@]}"} >/dev/null 2>&1 </dev/null
 }
 emit() { emit_once "$@" || true; }
+# when the round began, in epoch seconds: set just before review_opened
+ROUND_STARTED=''
 
 # The run-mode checkout. The EXIT trap removes it on every exit the shell
 # handles - success, failure, INT, TERM. A SIGKILL runs no trap, so the next
@@ -199,6 +212,7 @@ set_crew_activity "$spec"
 # small spec lookup above supplies the authored brief and refuses a nonexistent
 # task; the minutes-long engine invocation remains entirely bracketed by this
 # event and agent_finished.
+ROUND_STARTED="$(date +%s)"
 emit --type review_opened --en "round $ROUND on $TASK" --tw "$TASK 第 $ROUND 輪審核"
 emit_status "Review adapter starting on $TASK" "開始審核 $TASK"
 

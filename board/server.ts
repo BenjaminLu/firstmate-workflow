@@ -554,9 +554,10 @@ const state = (only: string | null = null) => {
   // the pull request each task opened itself, which a reopened task shows
   // again rather than one a card raised under the wrong task merged
   const opened = new Map<string, number>();
-  // T-153: how long each task's latest review round took, wall-clock, from
-  // the reviewer's review_opened to its own approved or review_failed. Both
-  // are stamped by fm-emit.sh, so this is the log's, not the board's, clock.
+  // T-153: how long each task's latest review round took, wall-clock: the
+  // round's own data.wall_clock on its verdict event, or else from the
+  // reviewer's review_opened to its own approved or review_failed, both
+  // stamped by fm-emit.sh. Either way the log's clock, not the board's.
   const reviewFrom = new Map<string, { k: string; ts: number }>();
   const lastReview = new Map<string, { actor: string; seconds: number; outcome: string }>();
   for (const [index, e] of events.entries()) {
@@ -569,10 +570,16 @@ const state = (only: string | null = null) => {
     if (e.type === "review_opened" && Number.isFinite(at)) reviewFrom.set(actor, { k, ts: at });
     if (e.type === "approved" || e.type === "review_failed") {
       const from = reviewFrom.get(actor);
-      if (from && from.k === k && Number.isFinite(at) && at >= from.ts) {
-        const outcome = e.type === "approved" ? "approved"
-          : String((e.data as { review_outcome?: unknown } | undefined)?.review_outcome ?? "failed");
-        lastReview.set(k, { actor, seconds: Math.round((at - from.ts) / 1000), outcome });
+      const data = e.data as { review_outcome?: unknown; wall_clock?: { seconds?: unknown } } | undefined;
+      // the round's own record of its wall-clock (fm-review.sh), where the
+      // verdict carries one; else the log's, review_opened to the verdict
+      const own = data?.wall_clock?.seconds;
+      const seconds = typeof own === "number" && Number.isInteger(own) && own >= 0 ? own
+        : from && from.k === k && Number.isFinite(at) && at >= from.ts ? Math.round((at - from.ts) / 1000)
+        : null;
+      if (seconds !== null) {
+        const outcome = e.type === "approved" ? "approved" : String(data?.review_outcome ?? "failed");
+        lastReview.set(k, { actor, seconds, outcome });
       }
       reviewFrom.delete(actor);
     }
