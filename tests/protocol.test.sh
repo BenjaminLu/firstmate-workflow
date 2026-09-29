@@ -52,11 +52,7 @@ assert_eq "4" "$(code "$d2" "$ASKED")" "an unclosed list is a violation"
 d3="$(fixture)"
 GOOD="$(rec "$d3" good <<'J'
 worker-1	ASK-PASS-CRITERIA:T-Z
-reviewer-1	Here is everything:
-1. name the helper
-2. cover the empty case
-3. drop the dead branch
-CRITERIA-COMPLETE:T-Z
+reviewer-1	Here is everything:1. name the helper2. cover the empty case3. drop the dead branchCRITERIA-COMPLETE:T-Z
 reviewer-1	2. still not covered when the list is empty
 reviewer-1	APPROVE:T-Z
 J
@@ -70,12 +66,8 @@ assert_contains "$(jq -r 'select(.type=="criteria_returned")|.summary.en' "$d3/s
 d4="$(fixture)"
 DRIP="$(rec "$d4" drip <<'J'
 worker-1	ASK-PASS-CRITERIA:T-Z
-reviewer-1	Everything:
-1. name the helper
-2. cover the empty case
-CRITERIA-COMPLETE:T-Z
-reviewer-1	while I am here, the logging is also wrong
-REJECT:T-Z
+reviewer-1	Everything:1. name the helper2. cover the empty caseCRITERIA-COMPLETE:T-Z
+reviewer-1	while I am here, the logging is also wrongREJECT:T-Z
 J
 )"
 assert_eq "5" "$(code "$d4" "$DRIP")" "an off-list complaint after the list closes is a violation"
@@ -86,9 +78,7 @@ assert_contains "$(jq -r 'select(.type=="protocol_violation")|.summary.en' "$d4/
 d5="$(fixture)"
 REG="$(rec "$d5" reg <<'J'
 worker-1	ASK-PASS-CRITERIA:T-Z
-reviewer-1	Everything:
-1. name the helper
-CRITERIA-COMPLETE:T-Z
+reviewer-1	Everything:1. name the helperCRITERIA-COMPLETE:T-Z
 reviewer-1	REGRESSION:T-Z the rename broke the caller in two places
 J
 )"
@@ -98,11 +88,8 @@ assert_eq "0" "$(code "$d5" "$REG")" "a marked regression is allowed off the lis
 d6="$(fixture)"
 BYSTANDER="$(rec "$d6" bystander <<'J'
 worker-1	ASK-PASS-CRITERIA:T-Z
-reviewer-1	Everything:
-1. name the helper
-CRITERIA-COMPLETE:T-Z
-passer-by	drive-by opinion with no numbers in it
-REJECT:T-Z
+reviewer-1	Everything:1. name the helperCRITERIA-COMPLETE:T-Z
+passer-by	drive-by opinion with no numbers in itREJECT:T-Z
 J
 )"
 assert_eq "0" "$(FM_REVIEWER_LOGIN=reviewer-1 code "$d6" "$BYSTANDER")" \
