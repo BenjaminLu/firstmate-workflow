@@ -479,8 +479,8 @@ const taskLists = (): Array<{ project: string; defs: Array<Record<string, unknow
   return dirs.map(([project, rel]) => ({ project, defs: taskDefs(rel) }));
 };
 
-// Whether firstmate is watched (T-137), read from bin/lib/fm_watch.py's files
-// under state/watch. The live cycle names its doorbell in owner.json, and a
+// Whether firstmate is watched (T-137), read from the watch's own files
+// under state/watch (the board runs none of the watch's code). The live cycle names its doorbell in owner.json, and a
 // doorbell is a FIFO its waiter holds open: opening it to write without
 // blocking succeeds only while a reader holds it, and fails (ENXIO) the moment
 // that waiter has died - the kernel's answer, never a pid or a file's age.
@@ -502,11 +502,22 @@ const watchWaiting = () => {
       try { n += (JSON.parse(readFileSync(join(WATCH_DIR, "wake", f), "utf8")).lines ?? []).length; } catch { /* being claimed */ }
     }
   } catch { /* none written */ }
+  // the queue, less what the one record of delivery says firstmate was given
+  // (state/session/acknowledged: `fm-session.sh ack`, or the watch's take)
+  const latest = new Map<string, number>();
   try {
-    const at = Number(readFileSync(join(WATCH_DIR, "cursor"), "utf8").trim());
-    const queue = readFileSync(join(ROOT, "state/session/wake.jsonl"));
-    if (Number.isInteger(at) && at >= 0) n += queue.subarray(at <= queue.length ? at : 0).toString("utf8").split("\n").slice(0, -1).filter((l) => l.trim()).length;
-  } catch { /* never watched: the queue so far is fm-session.sh status's to report */ }
+    for (const l of readFileSync(join(ROOT, "state/session/wake.jsonl"), "utf8").split("\n").slice(0, -1)) {
+      try {
+        const item = JSON.parse(l);
+        if (typeof item?.id === "string" && /^[A-Za-z0-9_-]+$/.test(item.id)) latest.set(item.id, Number(item.woken) || 0);
+      } catch { /* a line that does not parse is skipped */ }
+    }
+  } catch { /* nothing pushed */ }
+  for (const [id, woken] of latest) {
+    let acked: number | null = null;
+    try { acked = Number(JSON.parse(readFileSync(join(ROOT, "state/session/acknowledged", `${id}.json`), "utf8")).acknowledged) || 0; } catch { /* never */ }
+    if (acked === null || acked < woken) n++;
+  }
   return n;
 };
 const watchState = (events: Event[], aboard: string[], cards: Array<{ ts?: unknown }>) => {
@@ -1224,14 +1235,20 @@ const settle = (id: string, merge: "merged" | "failed", reason = "") => {
   const file = join(RESPONSES, `${id}.json`);
   const d = readJson<Record<string, any>>(file);
   unknownOutcome.delete(id);
+  const marker = markerOf(projectOf(d));
+  const release = () => {
+    if (readJson<Marker>(marker)?.decision === id) { try { unlinkSync(marker); } catch { /* already gone */ } }
+  };
   if (d && mergeOf(d) === "running") {
     rewrite(file, { ...d, merge, ...(merge === "failed" ? { merge_reason: reason } : {}), merge_settled: new Date().toISOString(),
       // the answer's effect was the merge, and this is how it ended
       ...(d.effect === "merge" ? { effect_outcome: merge === "merged" ? "done" : "failed", effect_reason: reason } : {}) });
+    // the marker goes with the record, before anything else is done:
+    // a reader that sees the outcome never sees the turn still held
+    release();
     pushWake(id, "merge_settled", readJson(file));
   }
-  const marker = markerOf(projectOf(d));
-  if (readJson<Marker>(marker)?.decision === id) { try { unlinkSync(marker); } catch { /* already gone */ } }
+  release();
 };
 // a project's turn is held while any of its records says running, whether
 // this board started it, a previous one did, or its outcome is unknown

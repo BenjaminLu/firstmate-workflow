@@ -2262,11 +2262,18 @@ and `fm-herdr.py` share:
 
 On any ring each waiter reads the durable state again and returns or blocks
 again; the line's content is a hint, never the answer. The waiters are
-`fm-session.sh wait` and `fm-decide.sh --await`. `fm-decide.sh` writes no
+`fm-session.sh wait` and `fm-decide.sh --await`, tools for scripts that
+block on an answer; firstmate itself keeps none running, because the
+harness's hooks hand it every wake (T-137, below). `fm-decide.sh` writes no
 decision - it requests cards and awaits answers - so it is a waiter, not a
 writer. `status` and `start` list every
-wake not acknowledged since it was pushed; `ack` records one, and a later
-wake for the same id (its merge settled) lists it again. Observations the
+wake not delivered since it was pushed; `ack` records one, and a later
+wake for the same id (its merge settled) lists it again. There is one record
+of delivery, `state/session/acknowledged/<id>.json`, written by
+`fm_lifeline.py acknowledge`: `ack` writes it, and so does the watch
+below when it takes a wake, so a wake the hook delivered is neither listed
+nor returned by `wait` again, and one acknowledged here is not handed to
+the hook. Observations the
 retired watcher wrote under `state/session/observed/` are still read.
 
 *Waking the harness (T-137).* Every event that needs firstmate is pushed by
@@ -2283,7 +2290,8 @@ The harness side is `bin/lib/fm_watch.py`. One watcher cycle per repository
 owned by the harness session) holds `state/watch/cycle.lock`, so whether
 one lives is the kernel's answer; `arm.lock` lets one arm at a time start
 one, and a generation number counts them. The cycle blocks on its doorbell
-until a wake is past `state/watch/cursor`, takes it, starts its successor,
+until a wake is past `state/watch/cursor` and not yet delivered, takes it
+(acknowledging it), starts its successor,
 and only then writes it for an arm to claim - a rename, so exactly one arm
 does. An arm parks on its doorbell, its owner's exit and the live cycle's
 exit together; it exits when its owner does and takes nothing, which is
@@ -2292,8 +2300,8 @@ what a plain FIFO-reading hook orphaned by a SIGKILLed claude failed to do
 harness's protocol - Claude Code's asyncRewake exit 2, Codex's `decision:
 block`, Cursor's `followup_message` - and a synchronous guard refuses a
 turn end that would be blind. Crew rounds, crew worktrees, linked git
-worktrees and an away captain (`state/away`) never arm. `fm.sh hooks
-install` writes the hooks into each harness's local, uncommitted config,
+worktrees and an away captain (`state/away`) never arm.
+`bin/lib/fm_hooks.py install` (the fm command line's `hooks`) writes the hooks into each harness's local, uncommitted config,
 and `fm-session.sh start` runs it for the harness it detects. What is
 verified per harness is in `docs/verification/supervision.md`; the board
 shows the watch, the last wake, what waits and any gap.

@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # fm-emit.sh is the only thing allowed to touch state/events.jsonl.
 set -uo pipefail
+# nothing inherited from a session: no FM_* setting and no HERDR_ENV, so no
+# event written here reaches the real herdr (tests/decide.test.sh's guard)
+for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
+  unset "$_fm_k" || true
+done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"

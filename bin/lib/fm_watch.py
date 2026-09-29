@@ -36,8 +36,8 @@ Each harness hook is one of these, spoken in that harness's protocol:
   cursor  stop: `fm-turnend-guard.sh --hook cursor` answers
           {"followup_message":...} the same way, bounded by loop_limit.
 
-`fm_watch.py hooks install|uninstall [--harness H]` writes and removes
-exactly those entries in each harness's local, uncommitted config.
+bin/lib/fm_hooks.py writes and removes exactly those entries in each
+harness's local, uncommitted config.
 
 Files, all under state/watch/: cycle.lock (held by the live cycle, so
 the kernel says whether one lives), arm.lock (who may start a cycle),
@@ -182,12 +182,23 @@ def _cursor(root):
         return None
 
 
+def delivered(root, item):
+    """Whether firstmate was already given this item: the one record every
+    reader of the queue keeps (bin/lib/fm_lifeline.py acknowledged)."""
+    ident = item.get('id')
+    if not isinstance(ident, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', ident):
+        return False
+    return life.is_acknowledged(root, ident, item.get('woken'))
+
+
 def take(root):
-    """Every wake pushed since the cursor, the cursor moved past them under
-    a lock: each is taken once, by whichever taker comes first. The first
-    time the watch runs, the cursor starts at the end of the queue: what
-    was pushed before is reported by `fm-session.sh status`, not replayed
-    as a wake."""
+    """Every wake pushed since the cursor and not yet delivered, the cursor
+    moved past them under a lock: each is taken once, by whichever taker
+    comes first, and acknowledged as it is taken - the same record
+    `fm-session.sh ack` writes - so `fm-session.sh wait` and `status` never
+    hand it to firstmate a second time. The first time the watch runs, the
+    cursor starts at the end of the queue: what was pushed before is
+    reported by `fm-session.sh status`, not replayed as a wake."""
     with Locked(wdir(root) / 'cursor.lock'):
         offset = _cursor(root)
         if offset is None:
@@ -195,16 +206,24 @@ def take(root):
             save(wdir(root) / 'cursor', str(queue.stat().st_size if queue.exists() else 0))
             return []
         items, end = _queue_from(root, offset)
+        items = [item for item in items if not delivered(root, item)]
+        for item in items:
+            if isinstance(item.get('id'), str) and re.fullmatch(r'[A-Za-z0-9_-]+', item['id']):
+                life.acknowledge(root, item['id'], item.get('woken') or 0)
         if end != offset:
             save(wdir(root) / 'cursor', str(end))
         return items
 
 
 def waiting(root):
-    """How many wakes wait for firstmate, taken by nothing that delivered
-    them yet: pushed past the cursor, or written by a cycle and unclaimed."""
-    offset = _cursor(root)
-    queued = 0 if offset is None else len(_queue_from(root, offset)[0])
+    """How many wakes wait for firstmate: in the queue and not delivered by
+    the one record (the latest item of each id, as `fm-session.sh status`
+    reads it), or taken by a cycle and written for an arm, and unclaimed."""
+    latest = {}
+    for item in _queue_from(root, 0)[0]:
+        if isinstance(item.get('id'), str) and re.fullmatch(r'[A-Za-z0-9_-]+', item['id']):
+            latest[item['id']] = item
+    queued = sum(1 for item in latest.values() if not delivered(root, item))
     written = 0
     for path in (wdir(root) / 'wake').glob('*.json') if (wdir(root) / 'wake').is_dir() else []:
         written += len(read_json(path).get('lines') or [])
@@ -592,117 +611,6 @@ def follow(root, owner, count=0):
             return 0
 
 
-# --- Installing the hooks -------------------------------------------------------
-
-def hook_config(root, harness):
-    """(the local config's path under root, {event: [entries]})."""
-    q = shlex.quote
-    arm_cmd = q(str(Path(root) / 'bin/fm-watch-arm.sh'))
-    guard_cmd = q(str(Path(root) / 'bin/fm-turnend-guard.sh'))
-    if harness == 'claude':
-        return '.claude/settings.local.json', {
-            'Stop': [{'hooks': [
-                {'type': 'command', 'command': f'{guard_cmd} --hook claude', 'timeout': 30},
-                {'type': 'command', 'command': f'{arm_cmd} --hook claude', 'asyncRewake': True,
-                 'timeout': CLAUDE_TIMEOUT}]}],
-            'UserPromptSubmit': [{'hooks': [
-                {'type': 'command', 'command': f'{arm_cmd} --turn-start claude', 'timeout': 30}]}]}
-    if harness == 'codex':
-        return '.codex/hooks.json', {
-            'Stop': [{'hooks': [{'type': 'command', 'command': f'{guard_cmd} --hook codex', 'timeout': 60}]}],
-            'UserPromptSubmit': [{'hooks': [
-                {'type': 'command', 'command': f'{arm_cmd} --turn-start codex', 'timeout': 30}]}]}
-    if harness == 'cursor':
-        return '.cursor/hooks.json', {
-            'stop': [{'command': f'{guard_cmd} --hook cursor', 'timeout': 60, 'loop_limit': 5}]}
-    raise ValueError(f'no such harness: {harness} (claude, codex, cursor)')
-
-
-OURS = re.compile(r'/bin/(fm-watch-arm|fm-turnend-guard)\.sh\'? --(hook|turn-start) ')
-
-
-def _strip(entries):
-    """entries without ours: a Claude/Codex group keeps its other hooks and
-    goes when it held only ours; a Cursor entry is one command."""
-    kept = []
-    for entry in entries if isinstance(entries, list) else []:
-        if not isinstance(entry, dict):
-            kept.append(entry)
-            continue
-        if isinstance(entry.get('hooks'), list):
-            inner = [h for h in entry['hooks'] if not (isinstance(h, dict) and OURS.search(str(h.get('command', '')) + ' '))]
-            if inner or not entry['hooks']:
-                kept.append(dict(entry, hooks=inner))
-        elif not OURS.search(str(entry.get('command', '')) + ' '):
-            kept.append(entry)
-    return kept
-
-
-def hooks_change(root, harness, install):
-    """Install or uninstall ours in one harness's local config; returns
-    what it did, in one line."""
-    root = Path(root).resolve()
-    rel, entries = hook_config(root, harness)
-    path = root / rel
-    if install and not (root / 'bin/fm-watch-arm.sh').is_file():
-        raise ValueError(f'{root} carries no bin/fm-watch-arm.sh to point the hooks at')
-    data = {}
-    if path.exists():
-        data = json.loads(path.read_text() or '{}')
-        if not isinstance(data, dict):
-            raise ValueError(f'{rel} is not a JSON object; left as it is')
-    before = json.dumps(data, sort_keys=True)
-    hooks = data.get('hooks') if isinstance(data.get('hooks'), dict) else {}
-    changed = []
-    for event in sorted(set(hooks) | set(entries)):
-        old = hooks.get(event, [])
-        new = _strip(old) + (entries.get(event, []) if install else [])
-        if new != old:
-            changed.append(event)
-        if new:
-            hooks[event] = new
-        else:
-            hooks.pop(event, None)
-    if hooks:
-        data['hooks'] = hooks
-        if harness == 'cursor':
-            data.setdefault('version', 1)
-    else:
-        data.pop('hooks', None)
-        if harness == 'cursor' and set(data) == {'version'}:
-            data = {}
-    if json.dumps(data, sort_keys=True) == before:
-        return f'{rel}: nothing to change ({"already installed" if install else "none of ours"})'
-    if data:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        save(path, json.dumps(data, indent=2) + '\n')
-    else:
-        path.unlink()
-        try:
-            path.parent.rmdir()     # only when nothing else is in it
-        except OSError:
-            pass
-    return f'{rel}: {"installed" if install else "removed"} {", ".join(changed)}'
-
-
-def detect():
-    """The harness this session runs in: FM_HARNESS, else the name of the
-    session's own process (bin/lib/fm_lifeline.py's session_owner), else
-    CLAUDECODE=1, which Claude Code sets for every command it runs (its
-    process can be named `node`)."""
-    given = os.environ.get('FM_HARNESS', '')
-    if given:
-        return given
-    try:
-        _, name = life._parent_of(life.session_owner())
-    except (RuntimeError, ValueError, OSError):
-        name = ''
-    for harness in HARNESSES:
-        if harness in (name or '').lower():
-            return harness
-    return 'claude' if os.environ.get('CLAUDECODE') == '1' else None
-
-
 # --- The command line -----------------------------------------------------------
 
 USAGE = '''usage:
@@ -710,8 +618,7 @@ USAGE = '''usage:
   fm-watch-arm.sh --ensure | --status | --pending
   fm-watch-arm.sh --follow [--background] [--count N]
   fm-watch-arm.sh --hook claude | --turn-start claude|codex
-  fm-turnend-guard.sh [--hook claude|codex|cursor]
-  fm.sh hooks install|uninstall [--harness claude|codex|cursor] [--repo DIR]'''
+  fm-turnend-guard.sh [--hook claude|codex|cursor]'''
 
 
 def options(args, flags, values):
@@ -801,24 +708,6 @@ def main(argv):
             if not harness:
                 print(json.dumps(status(root)))
             return guard(root, harness)
-        if mode == 'hooks':
-            if not args or args[0] not in ('install', 'uninstall'):
-                print(USAGE, file=sys.stderr)
-                return 64
-            got = options(args[1:], {'--detect'}, {'--repo', '--harness'})
-            root = root_of(got)
-            why = standing_down(root) if '--detect' in got else None
-            if why:
-                print(f'fm hooks: not installed: {why}', file=sys.stderr)
-                return 0
-            harness = got.get('--harness') or (detect() if '--detect' in got else None)
-            if '--detect' in got and not harness:
-                print('fm hooks: no harness detected; run fm.sh hooks install --harness claude|codex|cursor',
-                      file=sys.stderr)
-                return 0
-            for name in [harness] if harness else list(HARNESSES):
-                print('fm hooks: ' + hooks_change(root, name, args[0] == 'install'))
-            return 0
     except ValueError as error:
         print(f'fm-watch: {error}', file=sys.stderr)
         return 64

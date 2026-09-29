@@ -58,13 +58,13 @@ Every background process has an owner and ends with it; a wake is pushed by
 the writer, never found by polling; a process that outlives its owner is a
 bug. The board pushes a wake when it writes a decision - onto the queue
 `state/session/wake.jsonl`, then a ring of every waiter's own doorbell under
-`state/session/wake.d/` - and again when a merge it started settles. To be
-told, keep **one** `bin/fm-session.sh wait --repo <root> [--timeout <s>]`
-running as the harness's own background task: it exits with every
-unacknowledged wake, for any card or crew round (T-137), as soon as there is one. Act on each,
-`ack` it, and start the next `wait`. Do not keep one `fm-decide.sh --await`
-per pending card; `--await` is for scripts that wait on one answer. Any
-number of waiters each hear every ring, so none takes another's wake. Start every background process
+`state/session/wake.d/` - and again when a merge it started settles; crew
+rounds, lost runs and gate results push theirs the same way (T-137). You
+are told by your harness's hooks, which the watch rings (see
+[Never end a turn blind](#never-end-a-turn-blind-t-137)); keep no waiter of
+your own running for it, neither a background `fm-session.sh wait` nor one
+`fm-decide.sh --await` per pending card. `fm-session.sh wait` and
+`--await` are tools for scripts that block on an answer. Start every background process
 through `bin/lib/fm-lifeline.sh` (see [dispatch-crew](dispatch-crew/SKILL.md)),
 never `setsid`, `nohup`, `disown` or a bare `&`. The ops-side sweep for
 orphaned processes is a fuse that should reap zero; anything it reaps is a
@@ -257,13 +257,12 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   removes the pending file and emits no duplicate decision event. Exit zero is
   observation, not approval. Inspect chosen response and task/PR context; keep
   independent work moving while waiting.
-- While any card is pending, keep one notifying wait whose completion reaches
-  the conversation: a single `bin/fm-session.sh wait --repo <root>` running as
-  a background task that the host reports on when it finishes. It returns
-  every unacknowledged wake, whichever card it is for, so one wait covers all
-  pending cards; after acting on and acknowledging them, start it again. Do
-  not start one `--await` per card for this. Do not end a turn while any card
-  is pending without such a live wait.
+- While any card is pending, the captain's answer reaches you through your
+  harness's hooks: the board pushes the wake and the watch hands it to the
+  hook ([Never end a turn blind](#never-end-a-turn-blind-t-137)). Start no
+  background `fm-session.sh wait` and no `--await` per card for this. A
+  pending card counts as work in flight, so the turn-end guard refuses a
+  turn end while nothing watches.
 - Firstmate must establish current-head gates, CI and reviewer provenance before
   presenting a merge card, and coordinate renewed verification if the head changes.
   The board calls `bin/fm-merge.sh` directly for choice A on a pending merge card;
@@ -331,6 +330,12 @@ self-wake.
   `gate: T-134 failed gate 6 #9`, `card: D-51 answered A`,
   `merge: D-51 failed`. Handle each, then end the turn; the next watcher
   already holds the watch.
+- One record of delivery: a wake the watch hands to your hook is
+  acknowledged as it is taken, the same record `fm-session.sh ack` writes,
+  so `fm-session.sh status` and `start` do not list it again, and a wake you
+  acknowledged there is not handed to the hook. `status` lists only what
+  no hook has delivered - what a harness that is not woken idle reads at its
+  next turn start.
 - `bin/fm-turnend-guard.sh` refuses a turn end with work in flight and no
   watcher. If it refuses, or a Codex or Cursor Stop hook orders you to
   park, run `bin/fm-watch-arm.sh --max-wait 3000` in the foreground and
@@ -405,7 +410,7 @@ after every merge, run `bin/fm-ready.sh list --repo <root>`. Each line is
    and `zh-TW` details, a bespoke diagram of what the task would still change,
    an id from `bin/fm-decide.sh --allocate --task <id>` (see
    [Author and verify captain decisions](#author-and-verify-captain-decisions)),
-   and the one background `fm-session.sh wait`. Options: **A** proceed (dispatch as written), **B**
+   and its answer comes back through your harness's hooks. Options: **A** proceed (dispatch as written), **B**
    rescope (the card states the narrower spec you propose), **C** park,
    **D** drop. Author D under `options.D` in both locales; the board shows a D
    button and accepts D only on a card that offers it. Name the effects in the
@@ -535,8 +540,8 @@ last check and close. Never describe that policy as atomic or race-free.
 
 `FM_AUTOCLOSE=0` retains even completed owned panes. There is no decision
 watcher (T-151): the wake queue is durable under `state/session/`, but nothing
-wakes a completed API conversation; only the `fm-session.sh wait` the harness is
-running, or the next turn's `status` check, brings a decision back to
+wakes a completed API conversation by itself; only the harness's hooks
+(T-137), or the next turn's `status` check, bring a decision back to
 firstmate. While authorized work or decisions remain pending, keep the active
 turn monitoring observable progress or explicitly hand off with run identities
 and the next action. Never end a turn promising that the conversational agent is still

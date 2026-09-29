@@ -1575,6 +1575,8 @@ def unacknowledged(root):
                                  woken=receipt.get('observed'), reason='observed')
     found = []
     for ident, item in latest.items():
+        # the one record of delivery (T-137): acknowledged here, or taken
+        # by the watch that handed it to the harness's hook
         ack = base / 'acknowledged' / (ident + '.json')
         if ack.exists() and (read(ack).get('acknowledged') or 0) >= (item.get('woken') or 0): continue
         answer = item.get('decision') or {}
@@ -1635,12 +1637,8 @@ def acknowledge(root, decision):
     if not items and not observation.exists():
         raise LookupError(f'no wake for {decision}; nothing to acknowledge')
     woken = max([item.get('woken') or 0 for item in items] or [0])
-    receipt = base / 'acknowledged' / (decision + '.json')
-    with locked(base / '.ack.lock'):
-        if receipt.exists() and (read(receipt).get('acknowledged') or 0) >= woken: return read(receipt)
-        record = dict(id=decision, acknowledged=max(time.time(), woken), wakes=len(items))
-        save(receipt, record)
-        return record
+    # the same record the watch writes when it takes a wake (T-137)
+    return lifeline().acknowledge(root, decision, woken, wakes=len(items))
 
 
 def http_get(url):

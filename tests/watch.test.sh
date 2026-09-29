@@ -40,6 +40,9 @@ ARM, GUARD, FM = root / 'bin/fm-watch-arm.sh', root / 'bin/fm-turnend-guard.sh',
 LIFELINE, EMIT = root / 'bin/lib/fm_lifeline.py', root / 'bin/fm-emit.sh'
 spec = importlib.util.spec_from_file_location('fm_watch', root / 'bin/lib/fm_watch.py')
 W = importlib.util.module_from_spec(spec); spec.loader.exec_module(W)
+spec = importlib.util.spec_from_file_location('fm_herdr', root / 'bin/fm-herdr.py')
+H = importlib.util.module_from_spec(spec); spec.loader.exec_module(H)
+HOOKS = root / 'bin/lib/fm_hooks.py'
 
 
 def until(check, within=15):
@@ -56,6 +59,10 @@ def stop(p):
     if p.poll() is None:
         p.kill()
     p.wait()
+    # every pipe the test opened is closed with it
+    for f in (p.stdin, p.stdout, p.stderr):
+        if f is not None and not f.closed:
+            f.close()
 
 
 def gone(pid):
@@ -104,12 +111,15 @@ class Watch(unittest.TestCase):
     def park(self, *args, payload=None, owner=None, where=None, **extra):
         """An arm left running, as a harness leaves its hook."""
         where = where or self.root
-        p = subprocess.Popen(['bash', str(ARM), '--repo', str(where), *args],
-                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             text=True, env=self.env(owner, **extra), cwd=where)
+        # the payload is a file the hook reads to its end, as a harness's
+        # pipe is: no stdin pipe is left for communicate() to flush
+        given = Path(tempfile.mkstemp(dir=self.tmp.name, suffix='.json')[1])
+        given.write_text(json.dumps(payload) if payload is not None else '')
+        with given.open('rb') as said:
+            p = subprocess.Popen(['bash', str(ARM), '--repo', str(where), *args],
+                                 stdin=said, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 text=True, env=self.env(owner, **extra), cwd=where)
         self.addCleanup(stop, p)
-        p.stdin.write(json.dumps(payload) if payload is not None else '')
-        p.stdin.close()
         return p
 
     def push(self, ident, reason, line, where=None):
@@ -176,6 +186,41 @@ class Wakes(Watch):
         woke = self.run_(ARM, '--max-wait', '10')
         self.assertEqual('finished: T-1 worker-a-t1-r1 ok', woke.stdout.strip(),
                          "a round's progress never wakes firstmate; its end does")
+
+
+class OneRecord(Watch):
+    """Every reader of the wake queue counts delivery by one record, so a
+    wake the watch handed to the hook is not handed over again by
+    `fm-session.sh wait` or listed by its status, and the reverse."""
+
+    def session_wait(self):
+        return subprocess.run([sys.executable, str(root / 'bin/fm-herdr.py'), 'session', 'wait', str(self.root), 'all', '1'],
+                              capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=30)
+
+    def test_a_wake_the_watch_delivered_is_not_delivered_again_by_the_session(self):
+        self.run_(ARM, '--pending')          # the watch starts from here
+        self.push('worker-a-t1-r1', 'round_end', 'finished: T-1 worker-a-t1-r1 ok')
+        # the control: before the watch delivers it, the session sees it
+        self.assertIn('worker-a-t1-r1 finished: T-1 worker-a-t1-r1 ok', H.pending_summary(H.unacknowledged(self.root)))
+        self.assertEqual(1, W.waiting(self.root))
+        got = self.run_(ARM, '--pending')
+        self.assertEqual('finished: T-1 worker-a-t1-r1 ok', got.stdout.strip(), 'the watch delivers it')
+        self.assertEqual('fm-session: no unacknowledged captain decisions', H.pending_summary(H.unacknowledged(self.root)),
+                         'and the session no longer lists it')
+        waited = self.session_wait()
+        self.assertEqual((1, []), (waited.returncode, json.loads(waited.stdout)), 'nor does fm-session.sh wait return for it')
+        self.assertEqual(0, W.waiting(self.root), 'and nothing is counted as waiting')
+
+    def test_a_wake_the_session_acknowledged_is_not_delivered_again_by_the_watch(self):
+        self.run_(ARM, '--pending')
+        self.push('reviewer-c-t1-r1', 'verdict', 'review: T-1 APPROVE 4ea1ec2')
+        self.push('worker-a-t1-r2', 'round_end', 'finished: T-1 worker-a-t1-r2 ok')
+        waited = self.session_wait()
+        self.assertEqual(0, waited.returncode, 'the session is given both')
+        H.acknowledge(self.root, 'reviewer-c-t1-r1')
+        got = self.run_(ARM, '--pending')
+        self.assertEqual('finished: T-1 worker-a-t1-r2 ok', got.stdout.strip(),
+                         'the watch hands over only what was not acknowledged')
 
 
 class SingleFlight(Watch):
@@ -404,14 +449,14 @@ class Install(Watch):
             self.assertFalse((self.root / rel).exists(), f'{rel}: what install made, uninstall takes away')
 
     def test_session_start_installs_for_the_harness_it_detects_and_never_in_a_round(self):
-        detect = [sys.executable, str(root / 'bin/lib/fm_watch.py'), 'hooks', 'install', '--detect', '--repo', str(self.root)]
+        detect = [sys.executable, str(HOOKS), 'install', '--detect', '--repo', str(self.root)]
         subprocess.run(detect, env=self.env(FM_HARNESS='cursor', FM_IN_ROUND='1'), cwd=self.root, capture_output=True)
         self.assertFalse((self.root / '.cursor').exists(), 'a crew round installs nothing')
         subprocess.run(detect, env=self.env(FM_HARNESS='cursor'), cwd=self.root, capture_output=True)
         self.assertTrue((self.root / '.cursor/hooks.json').exists(), 'the primary installs its harness')
         self.assertFalse((self.root / '.claude').exists(), 'and only that one')
         session = (root / 'bin/fm-session.sh').read_text()
-        self.assertIn('fm_watch.py" hooks install --detect --repo "$REPO"', session,
+        self.assertIn('fm_hooks.py" install --detect --repo "$REPO"', session,
                       'bin/fm-session.sh start runs that install')
 
 
@@ -442,7 +487,7 @@ class NoPolling(unittest.TestCase):
         return '\n'.join(re.sub(r'(^|\s)#.*$', '', line) for line in text.splitlines())
 
     def test_nothing_in_the_watch_polls_or_detaches(self):
-        for rel in ('bin/lib/fm_watch.py', 'bin/fm-watch.sh', 'bin/fm-watch-arm.sh', 'bin/fm-turnend-guard.sh'):
+        for rel in ('bin/lib/fm_watch.py', 'bin/lib/fm_hooks.py', 'bin/fm-watch.sh', 'bin/fm-watch-arm.sh', 'bin/fm-turnend-guard.sh'):
             self.assertEqual([], self.PATTERN.findall(self.code(root / rel)), rel)
 
     def test_the_sweep_sees_what_it_looks_for(self):

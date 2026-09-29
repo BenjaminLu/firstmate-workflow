@@ -515,6 +515,61 @@ def push(root, ident, reason, line, extra=None):
     return ring(root, line)
 
 
+# One record of what firstmate has been given (T-137). Every reader of the
+# wake queue - the watch that hands a wake to the harness's hook, and
+# `fm-session.sh wait/status/start` - counts a wake as delivered by this
+# record alone, so a wake one of them delivered is never delivered again by
+# the other. `fm-session.sh ack` and the watch's take both write it here.
+ACK_DIR = 'state/session/acknowledged'
+
+
+def acknowledged(root, ident):
+    """When the wake `ident` was last acknowledged; None for never."""
+    import json
+    try:
+        with open(os.path.join(str(root), ACK_DIR, str(ident) + '.json')) as f:
+            record = json.load(f)
+        return float(record.get('acknowledged') or 0)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def is_acknowledged(root, ident, woken):
+    """Whether the wake `ident`, woken at `woken`, was delivered."""
+    seen = acknowledged(root, ident)
+    return seen is not None and seen >= (woken or 0)
+
+
+def acknowledge(root, ident, woken, wakes=1):
+    """Record that the wake `ident`, woken at `woken`, was delivered; a later
+    wake with the same id (its merge settled) is listed again. Idempotent,
+    under state/session/.ack.lock, written whole. Returns the record."""
+    import fcntl
+    import json
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', str(ident)):
+        raise ValueError('a wake id is letters, digits, - and _')
+    base = os.path.join(str(root), 'state/session')
+    os.makedirs(os.path.join(base, 'acknowledged'), exist_ok=True)
+    path = os.path.join(str(root), ACK_DIR, str(ident) + '.json')
+    lock = os.open(os.path.join(base, '.ack.lock'), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if is_acknowledged(root, ident, woken):
+            with open(path) as f:
+                return json.load(f)
+        record = dict(id=str(ident), acknowledged=max(time.time(), woken or 0), wakes=wakes)
+        temp = f'{path}.{os.getpid()}.new'
+        with open(temp, 'w') as out:
+            json.dump(record, out, indent=2)
+            out.write('\n')
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(temp, path)
+        return record
+    finally:
+        os.close(lock)
+
+
 def doorbells(root):
     """How many waiters hold a doorbell now (a stale one counts until rung)."""
     import glob

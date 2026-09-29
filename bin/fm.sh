@@ -859,11 +859,11 @@ cmd_stop() {
   fi
 }
 
-# The hooks that wake firstmate (T-137): bin/lib/fm_watch.py reads its own
-# options, --repo included (else this script's repository), and says what
-# it changed.
+# The hooks that wake firstmate (T-137): bin/lib/fm_hooks.py, which
+# fm-session.sh start runs too, reads its own options, --repo included
+# (else this script's repository), and says what it changed.
 cmd_hooks() {
-  FM_ROOT="$REPO" python3 "$HERE/lib/fm_watch.py" hooks "$@"
+  FM_ROOT="$REPO" python3 "$HERE/lib/fm_hooks.py" "$@"
 }
 
 cmd_follow() {
