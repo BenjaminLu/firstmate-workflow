@@ -932,8 +932,8 @@ S
 chmod +x "$t/kc/secret-tool"
 # The default FM_SECRET_TOOL for every claude test below that does not name
 # its own (T-126 round 4): a stub of fm's own, never the host's real
-# secret-tool(1). CI's runner has one on PATH, and secret_read()'s own
-# default is the absolute path '/usr/bin/secret-tool' - naming no
+# secret-tool(1). CI's runner has one on PATH, and secret_read() looks it
+# up on PATH when FM_SECRET_TOOL is unset (T-126 round 8) - naming no
 # FM_SECRET_TOOL at all here would reach it for real, outside any sandbox,
 # with no D-Bus session to answer it, which read exactly as "no crew token"
 # to a run on one machine and something else (an error line, a long
@@ -1096,9 +1096,48 @@ rm -f "$t/kc/secret-calls"
 # secret-tool's own absence is skipped, not refused: the file tier is
 # reached next, and refused on its own terms (still 0644)
 assert_eq "77" "$(kc run linux claude FM_SECRET_TOOL="$t/no-such-secret-tool")" \
-  "with no secret-tool on the round's PATH, the 0644 crew file is reached next and refuses the round"
+  "an FM_SECRET_TOOL that does not exist is skipped, and the 0644 crew file is reached next and refuses the round"
 assert_contains "$(cat "$t/login.err")" "chmod 600" "and says what to do"
 assert_fail "test -e '$t/login.out'" "and the command never starts"
+
+# With FM_SECRET_TOOL unset (empty here, over kc()'s guard default),
+# secret-tool is looked up on the operator's PATH (T-126 round 8), wherever
+# it lives - Nix, Homebrew on Linux, /usr/local/bin - never only
+# /usr/bin/secret-tool.
+mkdir -p "$t/secret-path"
+cp "$t/kc/secret-tool" "$t/secret-path/secret-tool"
+rm -f "$t/kc/secret-calls"
+assert_eq "0" "$(kc run linux claude FM_SECRET_TOOL= PATH="$t/secret-path:$lpath")" \
+  "a secret-tool first on the operator's PATH is found with FM_SECRET_TOOL unset"
+lo="$(cat "$t/login.out" 2>/dev/null)"
+assert_contains "$lo" "token=crew-claude-secret" "and its crew item is handed in as CLAUDE_CODE_OAUTH_TOKEN"
+assert_eq "lookup service firstmate-claude-token account $me" "$(cat "$t/kc/secret-calls" 2>/dev/null)" \
+  "and that secret-tool on PATH was the one asked"
+assert_lacks "$(cat "$t/login.err" 2>/dev/null)" "has no crew token" \
+  "and no fallback warning when the secret-tool on PATH answers"
+src="$(FM_SANDBOX_OS=linux FM_SECRET_TOOL='' PATH="$t/secret-path:$lpath" \
+  "$SB" login-source --policy="$t/worker.json" --vendor=claude 2>/dev/null)"
+assert_eq "tier=primary source=secret:firstmate-claude-token" "$src" \
+  "login-source names that item as the crew's own tier (crew-token)"
+rm -f "$t/kc/secret-calls"
+# and with no secret-tool anywhere on PATH, the tier is skipped and the
+# 0644 crew file is reached next. The PATH is lpath's own tools, linked
+# into one directory with any secret-tool left out, so a runner that has
+# one installed (CI's does) cannot answer here.
+mkdir -p "$t/nosecret-path"
+IFS=: read -ra nsp_dirs <<< "$lpath"
+for nsp_d in "${nsp_dirs[@]}"; do
+  for nsp_f in "$nsp_d"/*; do
+    nsp_n="${nsp_f##*/}"
+    [ "$nsp_n" = secret-tool ] && continue
+    [ -x "$nsp_f" ] && [ ! -e "$t/nosecret-path/$nsp_n" ] && ln -s "$nsp_f" "$t/nosecret-path/$nsp_n"
+  done
+done
+assert_fail "PATH='$t/nosecret-path' command -v secret-tool" "(no secret-tool on that PATH)"
+assert_eq "77" "$(kc run linux claude FM_SECRET_TOOL= PATH="$t/nosecret-path")" \
+  "with FM_SECRET_TOOL unset and no secret-tool on PATH, the 0644 crew file is reached next and refuses the round"
+assert_contains "$(cat "$t/login.err")" "chmod 600" "and says what to do (no secret-tool on PATH)"
+assert_fail "test -e '$t/login.out'" "and the command never starts (no secret-tool on PATH)"
 
 # a working file behind a working secret-tool: libsecret still wins
 chmod 600 "$t/chome/.config/firstmate/claude-token"
@@ -1288,6 +1327,22 @@ assert_contains "$lo" "cursorkey=key-cursor-file" "the key handed in as CURSOR_A
 assert_lacks "$lo" "at-cursor-file" "never agent login's token"
 assert_lacks "$lo" "rt-cursor-secret" "nor its refresh token"
 assert_lacks "$(cat "$t/bwrap.args" 2>/dev/null)" "$t/lhome/.config" "and neither file is bound in the round"
+# cursor-agent's keychain item that exists but will not open refuses the
+# round, the same as claude's crew item (T-126 round 7); it never falls
+# through to the key file behind it. With the item truly missing (security
+# exit 44), that same 0600 file is reached, so the refusal is the exit 36's.
+sed "s/^  firstmate-cursor-api-key).*/  firstmate-cursor-api-key) echo 'security: SecKeychainItemCopyContent: User interaction is not allowed.' >\&2; exit 36 ;;/" \
+  "$t/kc/security" > "$t/kc/security-cursor-locked"
+sed "/firstmate-cursor-api-key)/d" "$t/kc/security" > "$t/kc/security-cursor-missing"
+chmod +x "$t/kc/security-cursor-locked" "$t/kc/security-cursor-missing"
+assert_eq "0" "$(kc run darwin cursor-agent FM_KEYCHAIN_TOOL="$t/kc/security-cursor-missing")" \
+  "a missing crew Cursor keychain item on macOS falls through to the 0600 key file"
+assert_contains "$(cat "$t/login.out" 2>/dev/null)" "cursorkey=key-cursor-file" "which is handed in"
+assert_eq "77" "$(kc run darwin cursor-agent FM_KEYCHAIN_TOOL="$t/kc/security-cursor-locked")" \
+  "a crew Cursor keychain item that will not open (security exit 36) refuses cursor-agent's round"
+assert_contains "$(cat "$t/login.err" 2>/dev/null)" "keychain item 'firstmate-cursor-api-key' could not be read (exit 36" \
+  "naming the item and its error"
+assert_fail "test -e '$t/login.out'" "and the command never starts, on the key file behind it or otherwise"
 # codex and gemini (T-117 round 2): the login file holds a refresh token,
 # so the round never reads it. fm does, and writes a copy with the refresh
 # token emptied into the round's own temp directory, where the adapter

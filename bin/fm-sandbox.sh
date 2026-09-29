@@ -103,7 +103,8 @@
 # FM_KEYCHAIN_TOOL the security(1) that reads the operator's keychain,
 # FM_SECRET_TOOL the secret-tool(1) that reads a libsecret item (T-126,
 # Linux's rough equivalent of the keychain) for the suite, which cannot run
-# a real one on every runner.
+# a real one on every runner; when it is unset, secret-tool is looked up on
+# PATH.
 #
 # Flags are --name=value: this script takes no `shift 2`.
 set -uo pipefail
@@ -169,7 +170,7 @@ host_tool() {
 # The policy's reading, the profiles, the login and the proxy, in one
 # place, so the rule the proxy applies is the rule `decide` prints.
 IFS= read -r -d '' SB_PY <<'PY'
-import json, os, re, select, socket, subprocess, sys, threading, time
+import json, os, re, select, shutil, socket, subprocess, sys, threading, time
 
 GITHUB = ('github.com', 'github.io', 'github.dev', 'githubusercontent.com', 'githubassets.com',
           'githubapp.com', 'githubcopilot.com', 'ghcr.io', 'ghe.com')
@@ -497,8 +498,11 @@ def secret_read(service, account):
     search, never another item. secret-tool with no matching item exits 1
     and says nothing; an error (no D-Bus session, a locked collection) exits
     1 too but says why on stderr, and is a failed read. secret-tool not
-    installed is no item."""
-    tool = os.environ.get('FM_SECRET_TOOL') or '/usr/bin/secret-tool'
+    installed is no item. Unless FM_SECRET_TOOL names one, it is looked up
+    on the operator's PATH - this process's, before the round's is scrubbed."""
+    tool = os.environ.get('FM_SECRET_TOOL') or shutil.which('secret-tool') or ''
+    if not tool:
+        return MISSING, None
     return tool_read("the secret-tool item '%s'" % service,
                      [tool, 'lookup', 'service', service, 'account', account],
                      lambda rc, err: rc == 1 and not err.strip())
