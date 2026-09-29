@@ -1730,6 +1730,71 @@ test("a crewman below the top deck still names the task he is on", async ({ page
   } finally { stopBoard(many); }
 });
 
+test("T-127: vendor, model and CLI version are separate fields, read from the run itself", async ({ page }) => {
+  test.setTimeout(60_000);
+  const root = makeRoot(["working", "review"], false);
+  const spec = { tasks: readTasks(root) };
+  // a mismatch: the round ran on a different model than config.yaml asked for
+  emitFixture(root, "worker-1", spec.tasks[0].id, "dispatched", "on it", "接下", {
+    role: "worker", identity: { name: "worker-1", vendor: "claude",
+      model_requested: "claude-opus-5-5", model: "claude-sonnet-5",
+      cli_version: "2.1.0", model_mismatch: true } });
+  // no mismatch, and a different vendor: the engine badge counts both
+  emitFixture(root, "reviewer-1", spec.tasks[1].id, "review_opened", "round 1", "第 1 輪", {
+    role: "reviewer", identity: { name: "reviewer-1", vendor: "codex",
+      model_requested: "o1", model: "o1", cli_version: "0.9.0", model_mismatch: false } });
+  const b = await startBoard(root);
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    await expect(page.locator(".scene .pivot").first()).toBeVisible();
+
+    // the header's engine badge shows the vendors actually running now
+    await expect(page.locator("#engine")).toContainText("claude");
+    await expect(page.locator("#engine")).toContainText("codex");
+
+    // the roster's Vendor and Model columns, sortable like the others
+    await expect(page.locator('.roster [data-sort="vendor"]')).toHaveCount(1);
+    await expect(page.locator('.roster [data-sort="model"]')).toHaveCount(1);
+    const w1 = page.locator('.roster [data-roster="worker-1"]');
+    await expect(w1.locator(".rv")).toHaveText("claude");
+    await expect(w1.locator(".rm")).toHaveClass(/\bwarn\b/);
+    await expect(w1.locator(".rm")).toContainText("claude-opus-5-5");
+    await expect(w1.locator(".rm")).toContainText("claude-sonnet-5");
+    const r1 = page.locator('.roster [data-roster="reviewer-1"]');
+    await expect(r1.locator(".rv")).toHaveText("codex");
+    await expect(r1.locator(".rm")).not.toHaveClass(/\bwarn\b/);
+    await expect(r1.locator(".rm")).toHaveText("o1");
+
+    // the detail card gains Vendor, Model and CLI rows
+    const card = page.locator('[data-bubble="worker-1"] .crewcard');
+    await expect(card.locator(".cvendor")).toHaveText("claude");
+    await expect(card.locator(".cmodel")).toHaveClass(/\bwarn\b/);
+    await expect(card.locator(".ccli")).toHaveText("2.1.0");
+
+    // the name tag stays quiet: no model string anywhere on it
+    const tag = page.locator('[data-bubble="worker-1"] .who');
+    await expect(tag).not.toContainText("claude-sonnet-5");
+    await expect(tag).not.toContainText("claude-opus-5-5");
+  } finally { stopBoard(b); }
+});
+
+test("T-127: an old run without vendor or model still renders", async ({ page }) => {
+  test.setTimeout(60_000);
+  const root = makeRoot(["working"], false);
+  const spec = { tasks: readTasks(root) };
+  emitFixture(root, "worker-1", spec.tasks[0].id, "dispatched", "on it", "接下", { role: "worker" });
+  const b = await startBoard(root);
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    await expect(page.locator(".scene .pivot").first()).toBeVisible();
+    const card = page.locator('[data-bubble="worker-1"] .crewcard');
+    await expect(card.locator(".cvendor")).toHaveText(EN.crewUnknown);
+    await expect(card.locator(".cmodel")).toHaveText(EN.crewUnknown);
+    await expect(card.locator(".cmodel")).not.toHaveClass(/\bwarn\b/);
+    await expect(card.locator(".ccli")).toHaveText(EN.crewUnknown);
+  } finally { stopBoard(b); }
+});
+
 test("the ship follows the crew, not the backlog", async ({ page }) => {
   test.setTimeout(60_000);
   // The bug this task replaces: one figure per in-flight task. A fixture

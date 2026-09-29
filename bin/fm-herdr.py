@@ -485,6 +485,26 @@ def allocate(root, role, task, alias):
     return run
 
 
+def record_model(run, vendor, model_requested, model, cli_version):
+    """T-127: what the round actually ran on, read from the round itself and
+    merged into identity.json beside name/role/project/task/round/attempt -
+    never guessed, and never read back out of the actor. `model` is what the
+    vendor's own CLI reported (empty/'unknown' when it said nothing);
+    `model_requested` is config.yaml's, resolved before the round ran.
+    model_mismatch is true only when both are known and they differ, so a
+    config with no model set, or a vendor that said nothing, is never
+    reported as a mismatch of nothing against nothing."""
+    run = Path(run)
+    identity = read(run / 'identity.json')
+    model = model or 'unknown'
+    cli_version = cli_version or 'unknown'
+    mismatch = bool(model_requested) and model != 'unknown' and model != model_requested
+    identity.update(vendor=vendor or 'unknown', model_requested=model_requested or '',
+                     model=model, cli_version=cli_version, model_mismatch=mismatch)
+    save(run / 'identity.json', identity)
+    return identity
+
+
 def snapshot(root):
     root = Path(root).resolve()
     base = root / 'state/snapshots'; base.mkdir(parents=True, exist_ok=True)
@@ -1811,6 +1831,9 @@ def main(args):
         except ValueError as error:
             print('fm-config: ' + str(error), file=sys.stderr); return 65
     if mode == 'allocate': print(allocate(Path(args[0]), *args[1:])); return 0
+    if mode == 'record-model':
+        run, vendor, model_requested, model, cli_version = args
+        print(json.dumps(record_model(run, vendor, model_requested, model, cli_version))); return 0
     if mode == 'roster':
         try: return roster_command(*args)
         except (OSError, ValueError) as error:

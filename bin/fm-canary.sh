@@ -146,18 +146,26 @@ PY
   printf '%s\n' "$!"
 }
 
-record() {   # record <vendor> <version> <outcome> <why> [started] [authenticated] [exit] [probes json] [own] [blocked]
+record() {   # record <vendor> <version> <outcome> <why> [started] [authenticated] [exit] [probes json] [own] [blocked] [model_requested] [model]
   jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg vendor "$1" --arg version "$2" \
     --arg os "${os:-none}" --arg outcome "$3" --arg why "$4" --arg started "${5:-no}" \
     --arg auth "${6:-no}" --arg exit "${7:-}" --argjson probes "${8:-null}" --arg own "${9:-}" \
-    --arg blocked "${10:-}" \
+    --arg blocked "${10:-}" --arg model_requested "${11:-}" --arg model "${12:-}" \
     '{at:$at, vendor:$vendor, version:$version, sandbox:$os, outcome:$outcome, why:$why,
       started:($started == "yes"), authenticated:($auth == "yes"),
       adapter_exit:(if $exit == "" then null else ($exit | tonumber) end),
       probes:$probes, own_loopback:$own,
-      refused_hosts:($blocked | split(" ") | map(select(. != "")))}' >> "$results"
+      refused_hosts:($blocked | split(" ") | map(select(. != ""))),
+      model_requested:$model_requested,
+      model:(if $model == "" then "unknown" else $model end),
+      model_mismatch:($model_requested != "" and $model != "" and $model != "unknown" and $model != $model_requested)}' >> "$results"
 }
 
+# config.yaml's model, applied exactly as a worker round would (T-127): this
+# is what surfaced the bug in the first place - T-126 re-dispatched by hand
+# with codex, then cursor-agent, then claude, and the board showed none of
+# it, because no adapter passed a model flag at all.
+model_requested="$(fm_model worker config.yaml)"
 ran=0; failed=0
 run_section vendors || wanted=()
 for name in ${wanted[@]+"${wanted[@]}"}; do
@@ -265,11 +273,13 @@ directory there is a script named probe.sh. Run it exactly once with
 probe.out that it writes.
 PROMPT
   : > "$d/blocked"
+  model_refused_file="$d/model-refused"; : > "$model_refused_file"
   ( unset FM_RUN_DIR FM_CONTEXT_READY FM_ATTEMPT_DIR FM_FINAL_PATH FM_RUN_REVIEW
     FM_POLICY="$policy_all" FM_POLICY_BLOCKED="$d/blocked" FM_ROLE=worker FM_TASK=canary \
-      FM_TRANSPORT=direct FM_ALLOW_DIRECT=1 \
+      FM_TRANSPORT=direct FM_ALLOW_DIRECT=1 FM_MODEL="$model_requested" FM_MODEL_REFUSED="$model_refused_file" \
       "$adapter" run "$d/prompt" "$tree" "$d/log" </dev/null >/dev/null 2>"$d/stderr" )
   code=$?
+  model_reported="$(fm_vendor_model "$d/log" 0)"
   for p in ${pids[@]+"${pids[@]}"}; do kill "$p" 2>/dev/null; done
   # started: the sandbox got as far as the CLI. authenticated: the CLI got
   # past its login - the adapter reads what it said, and an unavailable
@@ -319,14 +329,21 @@ PROMPT
     --arg pasteboard "$pb_v" \
     '{write_outside:$write, read_ssh:$ssh, github:$github, loopback:$loopback, herdr_socket:$socket,
       other_round_tmp:$other, gh_token:$ght, git_credential:$gc, keychain:$keychain, pasteboard:$pasteboard}')"
-  record "$name" "$version" "$outcome" "$why" "$started" "$auth" "$code" "$probes" "$own_v" "$blocked"
+  record "$name" "$version" "$outcome" "$why" "$started" "$auth" "$code" "$probes" "$own_v" "$blocked" \
+    "$model_requested" "$model_reported"
+  # T-127: the model beside the verdict - what was asked for and what the
+  # CLI itself reported running on, so a captain re-reading a canary run can
+  # see a mismatch the way the board does, without opening the record
+  model_shown="model=${model_requested:-none}"
+  [ "$model_reported" != "$model_requested" ] && [ -n "$model_reported" ] && model_shown="$model_shown (ran on $model_reported)"
+  [ -s "$model_refused_file" ] && model_shown="$model_shown, refused: $(cat "$model_refused_file" | tr -d '\n' | cut -c1-120)"
   if [ "$outcome" = refused ]; then
-    printf '%-13s %-28s refused: started=no  %s\n' "$name" "$(printf '%.28s' "$version")" "$why"
+    printf '%-13s %-28s %-40s refused: started=no  %s\n' "$name" "$(printf '%.28s' "$version")" "$model_shown" "$why"
     sed 's/^/    /' "$d/stderr" | head -3
     failed=1
   else
-    printf '%-13s %-28s started=%s authenticated=%s exit %-3s write-outside=%s read-ssh=%s github=%s loopback=%s herdr-socket=%s other-round-tmp=%s gh-token=%s git-credential=%s keychain=%s pasteboard=%s own-loopback=%s\n' \
-      "$name" "$(printf '%.28s' "$version")" "$started" "$auth" "$code" "$write_v" "$ssh_v" "$gh_v" "$lo_v" "$so_v" \
+    printf '%-13s %-28s %-40s started=%s authenticated=%s exit %-3s write-outside=%s read-ssh=%s github=%s loopback=%s herdr-socket=%s other-round-tmp=%s gh-token=%s git-credential=%s keychain=%s pasteboard=%s own-loopback=%s\n' \
+      "$name" "$(printf '%.28s' "$version")" "$model_shown" "$started" "$auth" "$code" "$write_v" "$ssh_v" "$gh_v" "$lo_v" "$so_v" \
       "$ot_v" "$ght_v" "$gc_v" "$kc_v" "$pb_v" "$own_v"
     [ "$auth" = yes ] || { printf '    not authenticated: %s\n' "$why"; failed=1; }
     # what fm-sandbox said of the round's loopback: the profile it got, and

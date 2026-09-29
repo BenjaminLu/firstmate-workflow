@@ -71,6 +71,54 @@ assert_eq "true" "$(jq -r '.worktree_restored.summary.en | (type == "string" and
 assert_eq "true" "$(jq -r '.worktree_restored.summary."zh-TW" | (type == "string" and test("\\S"))' <<<"$tree_row" 2>/dev/null)" \
   "and a zh-TW one (design section 9)"
 
+# --- the model beside the verdict (T-127) -------------------------------
+# fm-canary.sh's own docstring says the per-vendor probes need real logins
+# and real model calls, so they are not part of CI on their own; that does
+# not excuse the model/version reporting this task adds to them from a
+# test. cursor-agent is stood in for entirely - its own binary, its own
+# login var - the same way tests/adapter-contract.test.sh stands in for
+# every vendor's CLI, so no real network call or real login is spent. Its
+# own model-list preflight (bin/adapters/cursor-agent.sh,
+# fm_adapter_model_listcheck) refuses the round before fm-sandbox.sh's own
+# confinement ever starts, so this needs no OS sandbox stand-in either.
+vpk="$(safe_tmpdir)"
+mkdir -p "$vpk/fakebin"
+# cursor-agent's own CLI, stood in: --version answers plainly; --list-models
+# names a catalogue without config.yaml's own model
+# (claude-opus-5-5 - this repository's own, read as is, the canary being
+# the operator's own project, never a fixture), so its own preflight
+# refuses the round before it starts, the way an operator would actually
+# see it.
+cat > "$vpk/fakebin/cursor-agent" <<'S'
+#!/usr/bin/env bash
+if [ "$1" = --version ]; then printf '1.2.3 (Cursor Agent)\n'; exit 0; fi
+if [ "$1" = --list-models ]; then printf 'gpt-visor-1 - GPT Visor\n'; exit 0; fi
+cat >/dev/null
+printf '{"type":"result","model":"gpt-visor-1"}\n'
+exit 0
+S
+chmod +x "$vpk/fakebin/cursor-agent"
+canary_vendors="$t/canary-vendors"
+vtmp="$t/canary-vendors-tmp"; mkdir -p "$vtmp"
+vout="$(cd "$ROOT" && TMPDIR="$vtmp" FM_CANARY_STATE_DIR="$canary_vendors" \
+  FM_SANDBOX_OS=linux \
+  CURSOR_API_KEY=fm-canary-test-key \
+  PATH="$vpk/fakebin:$PATH" \
+  bin/fm-canary.sh --sections=vendors --vendor=cursor-agent 2>"$vpk/stderr")"
+vresults="$canary_vendors/results.jsonl"
+assert_ok "test -f '$vresults'" "the vendor probe records one line for cursor-agent"
+crow="$(jq -c 'select(.vendor=="cursor-agent")' "$vresults" 2>/dev/null)"
+assert_eq "claude-opus-5-5" "$(jq -r '.model_requested' <<<"$crow")" \
+  "it records the model config.yaml asked for"
+assert_contains "$(jq -r '.version' <<<"$crow")" "1.2.3" "and the CLI's own version"
+assert_eq "refused" "$(jq -r '.outcome' <<<"$crow")" \
+  "a model the CLI's own catalogue does not name refuses the round before it starts"
+assert_contains "$vout" "model=claude-opus-5-5" \
+  "the verdict line beside the vendor names the model config.yaml asked for"
+assert_contains "$vout" "refused: started=no" \
+  "and says the round was refused, not that it merely failed"
+safe_rm_rf "$vpk"
+
 safe_rm_rf "$t"
 
 finish

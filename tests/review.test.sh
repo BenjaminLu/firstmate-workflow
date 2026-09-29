@@ -537,6 +537,43 @@ assert_eq "7" "$(jq -r --arg a "$told" 'select(.actor==$a and .type=="review_ope
   "$rq/state/events.jsonl")" "and the payload's round field"
 rm -rf "$dq"
 
+# T-127: the reviewer runs on the model config.yaml names, and the round
+# records vendor, model and cli_version as separate fields, read from the
+# run itself. FM_MOCK_MODEL stands in for a real vendor's transcript
+# reporting the model it actually ran on.
+dm="$(fixture)"; rmv="$dm/repo"; GHm="$(ghstub "$dm")"
+printf 'reviewer:\n  model: mock-model-a\n' >> "$rmv/config.yaml"
+cat > "$rmv/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+cp "$2" "${FM_CAPTURE:-/dev/null}" 2>/dev/null
+[ -z "${FM_MOCK_MODEL:-}" ] || printf '{"type":"result","model":"%s"}\n' "$FM_MOCK_MODEL" >> "$4"
+printf '%s\n' "${FM_VERDICT:-no verdict}" > "$3/verdict.txt"
+exit "${FM_MOCK_EXIT:-0}"
+M
+chmod +x "$rmv/bin/adapters/mock.sh"
+( cd "$rmv" && FM_ROOT="$rmv" FM_GH="$GHm" FM_MOCK_MODEL="mock-model-b" FM_VERDICT="REJECT:T-Z" \
+    bin/fm-review.sh --task T-Z --branch work >/dev/null 2>&1 )
+logm="$rmv/state/events.jsonl"
+# the model is only known once the round's own CLI has run, so only the
+# payloads from that point on - the signed verdict's own review_failed,
+# never review_opened, emitted before any adapter runs - carry it
+assert_eq '["mock","mock-model-a","mock-model-b","unknown"]' \
+  "$(jq -c 'select(.type=="review_failed" and .data.review_outcome=="rejected")|.data.identity|[.vendor,.model_requested,.model,.cli_version]' "$logm" | sort -u)" \
+  "the round's crew payloads carry vendor, model_requested, model and cli_version as separate fields"
+mactor="$(jq -r 'select(.type=="review_opened")|.actor' "$logm")"
+assert_eq '["mock","mock-model-a","mock-model-b","unknown"]' \
+  "$(jq -c '[.vendor,.model_requested,.model,.cli_version]' "$rmv/state/runs/$mactor/identity.json")" \
+  "and identity.json records the same four fields"
+assert_eq "true" "$(jq -r '.model_mismatch' "$rmv/state/runs/$mactor/identity.json")" \
+  "flagged as a mismatch since the run reported a different model than config.yaml asked for"
+mrowv="$(jq -c 'select(.type=="model_mismatch")' "$logm")"
+assert_eq "mock-model-a" "$(jq -r '.data.model_requested' <<<"$mrowv")" "naming what was requested"
+assert_eq "mock-model-b" "$(jq -r '.data.model' <<<"$mrowv")" "and what it actually ran on"
+assert_ne "" "$(jq -r '.summary.en' <<<"$mrowv")" "with an English summary"
+assert_ne "" "$(jq -r '.summary."zh-TW"' <<<"$mrowv")" "and a zh-TW one"
+rm -rf "$dm"
+
 # T-104: a reviewer is named from the reviewer roster the installation drew,
 # and a worker's name is refused even when asked for by --name
 dn="$(fixture)"; rn="$dn/repo"; GHn="$(ghstub "$dn")"

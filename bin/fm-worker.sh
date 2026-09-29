@@ -1409,6 +1409,13 @@ policy_file="$FM_RUN_DIR/policy.json"; blocked_file="$FM_RUN_DIR/blocked-hosts"
 fm_policy worker "" config.yaml > "$policy_file" || {
   echo "fm-worker: config.yaml's crew policy does not read; no round runs without one" >&2; exit 65; }
 export FM_POLICY="$policy_file" FM_POLICY_BLOCKED="$blocked_file"
+# config.yaml's model, applied (T-127): resolved once, handed to whichever
+# adapter runs as FM_MODEL, and a refusal it writes recorded here rather than
+# read as the vendor being unavailable.
+model_requested="$(fm_model worker config.yaml)"
+export FM_MODEL="$model_requested"
+model_refused_file="$FM_RUN_DIR/model-refused"; : > "$model_refused_file"
+export FM_MODEL_REFUSED="$model_refused_file"
 # A host the round's proxy refused is reported, not allowed: the crew
 # never widens its own policy. Firstmate reads the record and raises the
 # choice card that adds it to the project's registries.
@@ -1441,7 +1448,7 @@ mirror_watch_start
   fm_run_chain "${FM_CODE_ROOT:-$REPO}/bin/adapters" "$(fm_vendor_chain worker "$VENDOR")" \
     "$prompt" "$tree" "$log" worker_did_work
   chain_rc=$?
-  declare -p FM_VENDOR_USED FM_VENDOR_SKIPPED FM_VENDOR_MISREAD FM_VENDOR_UNKNOWN > "$chain_result"
+  declare -p FM_VENDOR_USED FM_VENDOR_SKIPPED FM_VENDOR_MISREAD FM_VENDOR_UNKNOWN FM_RUN_LOG_OFF > "$chain_result"
   exit "$chain_rc"
 ); rc=$?
 mirror_watch_stop
@@ -1458,6 +1465,24 @@ mirror_report_restores || true
 . "$chain_result"
 [ -z "$FM_VENDOR_UNKNOWN" ] || {
   echo "fm-worker: config.yaml names a vendor with no adapter: $FM_VENDOR_UNKNOWN" >&2; exit 65; }
+# A model the vendor did not recognise (T-127): refused loudly, named on the
+# board in both languages, never read as the vendor being unavailable or as
+# a normal failed attempt that would still reach the gates.
+if [ -s "$model_refused_file" ]; then
+  IFS=$'\t' read -r mr_vendor mr_model mr_msg < "$model_refused_file"
+  echo "fm-worker: $mr_msg" >&2
+  # bin/fm-emit.sh's TYPES is a closed list and is not in this task's scope
+  # (see the note in bin/fm-diagram.sh); worker_crashed is its existing type
+  # for a round that did not proceed normally, so the refusal still reaches
+  # the board and the log rather than being silently refused by fm-emit.sh
+  # itself. --data carries the reason as a separate field for a future
+  # dedicated model_refused type to pick up without changing this shape.
+  emit --type worker_crashed --en "$mr_msg" \
+       --tw "${mr_vendor} 無法辨識模型「${mr_model}」；已拒絕這一輪" \
+       --data "$(jq -cn --arg reason model_refused --arg vendor "$mr_vendor" --arg model "$mr_model" \
+                  '{reason:$reason,vendor:$vendor,model:$model}')"
+  exit 65
+fi
 [ "$rc" -lt 64 ] || { echo "fm-worker: adapter transport/configuration failed; artifacts at $FM_RUN_DIR" >&2; exit 70; }
 [ -z "$FM_VENDOR_MISREAD" ] || {
   echo "fm-worker: $FM_VENDOR_MISREAD was read as unavailable, but it changed files - keeping them" >&2
@@ -1469,6 +1494,33 @@ for v in $FM_VENDOR_SKIPPED; do
 done
 report_blocked_hosts worker "$blocked_file"
 [ "$rc" = "2" ] && { echo "fm-worker: every vendor was unavailable" >&2; exit 2; }
+
+# What the round actually ran on, read from the run itself (T-127): recorded
+# in identity.json beside name/role/project/task/round/attempt, and carried
+# on every crew payload from here on the way those already are.
+model_reported=''
+[ -z "$FM_VENDOR_USED" ] || model_reported="$(fm_vendor_model "$log" "${FM_RUN_LOG_OFF:-0}")"
+cli_version='unknown'
+[ -z "$FM_VENDOR_USED" ] || cli_version="$(fm_vendor_cli_version "$FM_VENDOR_USED")"
+python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" record-model "$FM_RUN_DIR" "$FM_VENDOR_USED" \
+  "$model_requested" "$model_reported" "$cli_version" >/dev/null 2>&1 || true
+CREW_IDENTITY="$(jq -c '{name,role,project,task,round,attempt,vendor,model_requested,model,cli_version,model_mismatch}' \
+  "$FM_RUN_DIR/identity.json" 2>/dev/null)"
+[ -n "$CREW_IDENTITY" ] || CREW_IDENTITY=null
+CREW_DATA="$(jq -c --argjson identity "$CREW_IDENTITY" '.identity=$identity' <<<"$CREW_DATA")"
+if [ -n "$model_requested" ] && [ -n "$model_reported" ] && [ "$model_reported" != "$model_requested" ]; then
+  echo "fm-worker: requested model $model_requested but $FM_VENDOR_USED ran on $model_reported" >&2
+  emit --type model_mismatch --en "requested $model_requested but ran on $model_reported" \
+       --tw "要求的是 ${model_requested}，實際跑在 ${model_reported}" \
+       --data "$(jq -cn --arg vendor "$FM_VENDOR_USED" --arg requested "$model_requested" \
+                  --arg reported "$model_reported" \
+                  '{vendor:$vendor,model_requested:$requested,model:$reported}')"
+  # data.identity.model_mismatch already rides every payload from here on
+  # (above); this crew_status line is what refreshes the board's activity
+  # line with the same news.
+  emit_status "requested $model_requested but ran on $model_reported" \
+              "要求的是 ${model_requested}，實際跑在 ${model_reported}"
+fi
 
 rm -f "$prompt"
 

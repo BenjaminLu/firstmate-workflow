@@ -1,14 +1,16 @@
 # firstmate-workflow
 
 vendor: claude          # every role uses this agent unless overridden below
-model:  opus-5
+model:  claude-opus-5-5 # the vendor's own model name (T-127); applied with
+                        # the adapter's own flag, never guessed from a run
 reviewer:               # the reviewer's engine is the captain's choice
   vendor: claude        # chosen 2026-09-24: the worker's vendor and model,
-  model:  opus-5        # so review adds no second vendor dependency
+  model:  claude-opus-5-5   # so review adds no second vendor dependency
   mode:   run           # diff: the reviewer reads the diff; run: it also runs
                         # the tests in a fresh checkout of the pull request
 # worker:               # the same override exists for the worker; without it
-#   vendor: codex       # the worker uses the top-level vendor above
+#   vendor: codex       # the worker uses the top-level vendor and model above
+#   model:  o1
 
 policy:                 # what every crew round may do, whichever vendor runs it
   worker:               # (T-105, T-117; design section 13.1). Each adapter

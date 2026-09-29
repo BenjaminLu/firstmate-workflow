@@ -66,6 +66,16 @@ type Crew = {
   name?: string | null;
   round?: number | null;
   attempt?: number | null;
+  // T-127: what the round actually ran on, read from the run itself - never
+  // config.yaml's guess. vendor is the adapter; model is what the vendor's
+  // own CLI reported (null until the round has run); model_requested is
+  // config's; cli_version is the CLI's own version string. A run recorded
+  // before T-127 carries none of them, which is unknown, not a guess.
+  vendor?: string | null;
+  model?: string | null;
+  model_requested?: string | null;
+  cli_version?: string | null;
+  model_mismatch?: boolean;
   // Bounded only: done/total with a real denominator. Never a bare percent.
   progress?: { done: number; total: number } | null;
 };
@@ -73,13 +83,23 @@ type Crew = {
 type CrewChip = { id: string; name: string; role: Crew["role"]; round: number | null; attempt: number | null };
 // What a run said about itself: the fields fm-worker.sh and fm-review.sh
 // send as data.identity. Anything else is not an identity.
-type Identity = { name: string | null; project: string | null; round: number | null; attempt: number | null };
+type Identity = {
+  name: string | null; project: string | null; round: number | null; attempt: number | null;
+  // T-127: absent until the round has actually run (fm-worker.sh/fm-review.sh
+  // add them once the adapter has); a run recorded before T-127 has none.
+  vendor: string | null; model: string | null; model_requested: string | null;
+  cli_version: string | null; model_mismatch: boolean;
+};
 const identityOf = (v: unknown): Identity | null => {
   if (!v || typeof v !== "object" || Array.isArray(v)) return null;
   const o = v as Record<string, unknown>;
   const text = (x: unknown) => typeof x === "string" && x.trim() ? x : null;
   const count = (x: unknown) => typeof x === "number" && Number.isInteger(x) && x > 0 ? x : null;
-  return { name: text(o.name), project: text(o.project), round: count(o.round), attempt: count(o.attempt) };
+  return {
+    name: text(o.name), project: text(o.project), round: count(o.round), attempt: count(o.attempt),
+    vendor: text(o.vendor), model: text(o.model), model_requested: text(o.model_requested),
+    cli_version: text(o.cli_version), model_mismatch: o.model_mismatch === true,
+  };
 };
 // The one reading of an actor, for runs recorded before T-116 only:
 // <role>-<name>-<task slug>-r<n>[<attempt mark>], as bin/fm-herdr.py's ACTOR
@@ -805,6 +825,13 @@ const state = (only: string | null = null) => {
       name: who?.name ?? (named && named !== actor ? named : null) ?? legacyName(actor),
       round: who?.round ?? null,
       attempt: who?.attempt ?? null,
+      // T-127: read from the run itself, never guessed; unknown until the
+      // round has run, and always unknown for a run recorded before this
+      vendor: who?.vendor ?? null,
+      model: who?.model ?? null,
+      model_requested: who?.model_requested ?? null,
+      cli_version: who?.cli_version ?? null,
+      model_mismatch: who?.model_mismatch ?? false,
       progress: progress.get(actor) ?? null,
       // Replay/event activity wins over static task.activity; never scalar title.
       activity: activity.get(actor) || planned(e) || null,
@@ -882,8 +909,22 @@ const state = (only: string | null = null) => {
     // the default project's merges keep the identity they always had
     : projectOf(e) === def ? `merge:${e.pr ?? e.task ?? JSON.stringify(e)}`
     : `merge:${projectOf(e)}:${e.pr ?? e.task ?? JSON.stringify(e)}`;
+  // T-127: the header's engine badge shows the vendors actually running now
+  // (every project's, the way the config default it falls back to is), null
+  // with no crew aboard whose vendor is known - the badge then falls back
+  // to config.yaml's default, which is what engine() above already reads.
+  const vendorCounts = new Map<string, number>();
+  for (const c of crew) {
+    if (c.role === "firstmate" || !c.vendor) continue;
+    vendorCounts.set(c.vendor, (vendorCounts.get(c.vendor) ?? 0) + 1);
+  }
+  const engineLive = vendorCounts.size
+    ? [...vendorCounts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .map(([vendor, count]) => ({ vendor, count }))
+    : null;
   const out = {
     engine: engine(),
+    engineLive,
     lanes: LANES,
     projects,
     // what a record naming no project belongs to, and the filter in force
