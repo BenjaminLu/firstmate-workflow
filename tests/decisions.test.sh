@@ -29,7 +29,7 @@ projects:
     base: main
     required_check: check
 Y
-cp "$ROOT/bin/watch-decisions.ts" "$d/bin/" 2>/dev/null || true
+cp -R "$ROOT/bin/lib" "$d/bin/"   # the lifeline the board starts its merges under (T-151)
 cp "$ROOT/board/server.ts" "$d/board/"; cp "$ROOT/board/public/index.html" "$d/board/public/"
 mkdir -p "$d/design/tasks"
 printf '{"id":"T-A","title":"first","milestone":"M0","depends_on":[]}\n' > "$d/design/tasks/T-A.json"

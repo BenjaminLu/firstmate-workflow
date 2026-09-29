@@ -1,0 +1,32 @@
+{
+  "id": "T-151",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "no process fm starts can outlive its owner: every background process holds a lifeline the kernel closes when its owner dies, the decision watcher is replaced by the writer pushing the wake, and a suite that leaves a process behind is red",
+  "scope": [
+    "bin/lib/**",
+    "bin/fm-herdr.py",
+    "bin/fm-decide.sh",
+    "bin/fm-session.sh",
+    "bin/fm.sh",
+    "bin/ci.sh",
+    "board/server.ts",
+    "tests/**",
+    "design/**",
+    "skills/firstmate/**",
+    "skills/worker/**",
+    "skills/reviewer/**",
+    "README.md",
+    "design/tasks/T-151.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-09-29 firstmate found 207 orphaned processes on the captain's machine, 192 of them `fm-herdr.py watch-child` started by suite runs inside crew rounds, some over a day old, polling every 0.2 s a fixture directory that had already been deleted, plus leaked fm-worker.sh and mock adapters from T-999 fixtures. Root cause, read from the code: watch_child is a `while True` loop whose only exit is SIGTERM, it is started with start_new_session=True so nothing that dies takes it along, glob() on a deleted root returns nothing instead of failing, tests/session.test.sh starts watchers without stopping them, and bin/ci.sh has no check that a suite leaves nothing behind. The captain asked for a root fix from first principles: a process exists only while an owner that needs it lives. Its own spec file, design/tasks/T-151.json, is committed on this branch.",
+    "Lifeline, one primitive. bin/lib gains the one way fm starts a background process (a Python helper and a bash wrapper): the owner keeps the write end of a pipe and the child inherits the read end, and the child's loop blocks on that fd together with its own work (select/kqueue/poll), exiting when it reads EOF - which the kernel delivers when every owner has died, SIGKILL included, across setsid. When the owner is a process fm did not start (the harness's session), the child watches its pid by kqueue EVFILT_PROC NOTE_EXIT on macOS and pidfd on Linux instead. No liveness is ever decided by polling a pid or a directory. firstmate verified on 2026-09-29 on the captain's Mac: a setsid child of a SIGKILLed owner saw EOF within 1 s using 0.018 s CPU, and kqueue NOTE_EXIT reported a non-child's exit.",
+    "Every detached start goes through it. fm-herdr.py's watch start, the setsid closer, T-144's runner, board_start's server, and board/server.ts's detached fm-merge.sh and fm-worker.sh each name their owner and hold a lifeline to it; a grep test fails on any start_new_session, setsid, nohup, disown or `detached: true` outside the primitive. A process that must deliberately outlive its starter (the board, a merge the captain clicked) names the longer-lived owner it belongs to (the fm session) rather than none.",
+    "No watcher. `watch-child` and the decision watch are deleted. Whoever writes a decision (board/server.ts on the captain's click, bin/fm-decide.sh) delivers the wake at write time: it appends the item to the wake queue (durable, read again at every session start) and writes one line to the session's wake FIFO when a reader is present (open O_NONBLOCK; no reader means the queue alone carries it). Nothing polls state/decisions.",
+    "Tests are contained. bin/ci.sh runs every suite with a scope marker in its environment (inherited across setsid) and, when the suite ends, lists processes still carrying it; any survivor is killed and the suite is red, naming the process. A test that starts a background process on purpose stops it or ends its owner. Removing the lifeline from any one start makes its test red (fail first). No test depends on the operator's real session.",
+    "Rule, written down. design.md and the firstmate, worker and reviewer skills state it: every background process has an owner and ends with it; wakes are pushed by the writer, never found by polling; a process that outlives its owner is a bug. The ops-side sweep firstmate runs becomes a fuse that should reap zero.",
+    "Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves."
+  ]
+}

@@ -20,6 +20,7 @@ command -v bun >/dev/null 2>&1 || { echo "    bun not installed - board suite sk
 # fixture carries the library
 d="$(mktemp -d)"; mkdir -p "$d/bin" "$d/state" "$d/design" "$d/board/public"
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$d/bin/"
+cp -R "$ROOT/bin/lib" "$d/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$d/board/"
 cp "$ROOT/board/public/index.html" "$d/board/public/"
 fm_tasks_write /dev/stdin "$d/design/tasks" <<'J'
@@ -573,6 +574,7 @@ assert_eq "" "$unknown" "every stage the board maps is a type fm-emit will write
 # Separate fixture: the crowd above floods the deck and would drown these.
 p="$(mktemp -d)"; mkdir -p "$p/bin" "$p/state" "$p/design" "$p/board/public"
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$p/bin/"
+cp -R "$ROOT/bin/lib" "$p/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$p/board/"
 cp "$ROOT/board/public/index.html" "$p/board/public/"
 fm_tasks_write /dev/stdin "$p/design/tasks" <<'J'
@@ -745,6 +747,7 @@ rm -rf "$p"
 # two fixtures do not have, and the merge refusal needs a helper that says no.
 e="$(mktemp -d)"; mkdir -p "$e/bin" "$e/state/pending" "$e/design" "$e/board/public"
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-ready.sh" "$e/bin/"
+cp -R "$ROOT/bin/lib" "$e/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$e/board/"
 cp "$ROOT/board/public/index.html" "$e/board/public/"
 printf '#!/usr/bin/env bash\necho refused\nexit 1\n' > "$e/bin/fm-merge.sh"
@@ -1013,6 +1016,7 @@ rm -rf "$e"
 f="$(mktemp -d)"; mkdir -p "$f/bin" "$f/state" "$f/design" "$f/board/public"
 # fm-herdr.py: the stop path park and drop run (T-144)
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$f/bin/"
+cp -R "$ROOT/bin/lib" "$f/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$f/board/"
 cp "$ROOT/board/public/index.html" "$f/board/public/"
 fm_tasks_write /dev/stdin "$f/design/tasks" <<'J'
@@ -1156,6 +1160,7 @@ rm -rf "$f"
 # started the board exported (T-054 covers events that name one, below).
 g="$(mktemp -d)"; mkdir -p "$g/bin" "$g/state/pending" "$g/state/decisions" "$g/design" "$g/board/public"
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$g/bin/"
+cp -R "$ROOT/bin/lib" "$g/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$g/board/"
 cp "$ROOT/board/public/index.html" "$g/board/public/"
 fm_tasks_write /dev/stdin "$g/design/tasks" <<'J'
@@ -1281,6 +1286,7 @@ rm -rf "$g"
 # in one project neither waits for nor frees the other's.
 h="$(mktemp -d)"; mkdir -p "$h/bin" "$h/state/pending" "$h/state/decisions" "$h/design" "$h/projects/beta" "$h/board/public"
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$h/bin/"
+cp -R "$ROOT/bin/lib" "$h/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$h/board/"
 cp "$ROOT/board/public/index.html" "$h/board/public/"
 two_projects() {   # the registry: alpha hosts itself and is the default, beta is a target
@@ -1650,6 +1656,7 @@ rm -rf "$h"
 # round unknown, since that actor's r<n> was the global run counter.
 q="$(mktemp -d)"; mkdir -p "$q/bin" "$q/state" "$q/design" "$q/board/public"
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$q/bin/"
+cp -R "$ROOT/bin/lib" "$q/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$q/board/"
 cp "$ROOT/board/public/index.html" "$ROOT/board/public/ship.js" "$q/board/public/"
 fm_tasks_write /dev/stdin "$q/design/tasks" <<'J'
@@ -1973,6 +1980,7 @@ rm -rf "$gdir"
 x="$(mktemp -d)"; mkdir -p "$x/bin" "$x/state/pending" "$x/state/runs" "$x/state/worktrees" "$x/design" "$x/board/public" "$x/stub"
 # fm-herdr.py: the stop path park and drop run (T-144)
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-decide.sh" "$ROOT/bin/fm-herdr.py" "$x/bin/"
+cp -R "$ROOT/bin/lib" "$x/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$x/board/"
 cp "$ROOT/board/public/index.html" "$x/board/public/"
 fm_tasks_write /dev/stdin "$x/design/tasks" <<'J'
@@ -2364,6 +2372,7 @@ done
 # can read hands them what it would take.
 k="$(mktemp -d)"; mkdir -p "$k/bin" "$k/state/pending" "$k/design" "$k/board/public" "$k/src"
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$k/bin/"
+cp -R "$ROOT/bin/lib" "$k/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$k/board/"
 cp "$ROOT/board/public/index.html" "$ROOT/board/public/ship.js" "$ROOT/board/public/diagram.js" "$k/board/public/"
 fm_tasks_write /dev/stdin "$k/design/tasks" <<'J'
@@ -2601,6 +2610,118 @@ assert_eq "writeCredential" "$(jq -r .code "$k/resp")" "the tab is told it holds
 assert_eq "403" "$(postk /tasks "$tsk" -H "Origin: $uk" -H 'content-type: application/json' \
   -H "Authorization: Bearer $secret")" "nor does the old secret as a bearer"
 kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
+# --- T-151: the board pushes the wake, and owns what it starts ---------------
+# Whoever writes a decision delivers the wake: the item on the wake queue,
+# and a ring of every waiter's own doorbell under state/session/wake.d. And
+# nothing the board starts outlives its owner: a merge belongs to the
+# session the board names (FM_SESSION_PID), and to the board itself when it
+# names none, and ends when that owner does - even a SIGKILLed one.
+make_w() {   # make_w: a fixture with three merge cards, D-51..D-53, its path on stdout
+  local w; w="$(mktemp -d)"; mkdir -p "$w/bin" "$w/state/pending" "$w/design" "$w/board/public"
+  cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$w/bin/"
+  cp -R "$ROOT/bin/lib" "$w/bin/"
+  cp "$ROOT/board/server.ts" "$w/board/"; cp "$ROOT/board/public/index.html" "$w/board/public/"
+  mkdir -p "$w/design/tasks"
+  printf '{"id":"T-A","title":"first","milestone":"M0","depends_on":[]}\n' > "$w/design/tasks/T-A.json"
+  # the merge helper says who it is and holds while told to
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'root="$(cd "$(dirname "$0")/.." && pwd)"' \
+    'pr=""; while [ $# -gt 0 ]; do case "$1" in --pr) pr="$2"; shift 2 ;; *) shift ;; esac; done' \
+    'echo $$ > "$root/merge-$pr.pid"' \
+    'while [ -e "$root/hold-$pr" ]; do sleep 0.1; done' \
+    'echo "fm-merge: merged #$pr"' > "$w/bin/fm-merge.sh"
+  chmod +x "$w/bin/fm-merge.sh"
+  for n in 1 2 3; do
+    printf '{"id":"D-5%s","task":"T-A","kind":"merge","pr":%s,"title":"merge #%s"}\n' "$n" "$n" "$n" > "$w/state/pending/D-5$n.json"
+  done
+  printf '%s' "$w"
+}
+start_w() {   # start_w <root> <session pid or empty>: the board, its pid in pidw and port in PORTW
+  FM_SESSION_PID="$2" FM_ROOT="$1" FM_PORT=0 bun run "$1/board/server.ts" > "$1/out" 2>&1 < /dev/null &
+  pidw=$!
+  PORTW="$(board_port "$1/out" "$pidw")"
+  wait_for 60 curl -sf "http://127.0.0.1:$PORTW/api/state"
+}
+postw() {   # postw <id> <choice>: the HTTP status
+  wcurl "$PORTW" -s -m 5 -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' \
+    -d "$(jq -cn --arg i "$1" --arg c "$2" '{id:$i,chosen:$c}')" "http://127.0.0.1:$PORTW/decisions"
+}
+alive() { kill -0 "$1" 2>/dev/null; }
+dead() { ! kill -0 "$1" 2>/dev/null; }
+
+# the wake, pushed by the writer
+w="$(make_w)"
+sleep 300 & sess=$!
+start_w "$w" "$sess"
+# two waiters, each with a doorbell of its own (what fm-decide.sh --await and
+# fm-session.sh wait register), and one left by a waiter killed outright
+bells="$w/state/session/wake.d"; mkdir -p "$bells"
+mkfifo "$bells/1-a.fifo" "$bells/2-b.fifo" "$bells/3-stale.fifo"
+exec 7<> "$bells/1-a.fifo" 8<> "$bells/2-b.fifo"
+assert_eq "200" "$(postw D-51 A)" "the captain answers a merge card"
+line=''; IFS= read -r -t 10 -u 7 line || true
+assert_eq "D-51" "$line" "the board rings the first waiter's bell at once"
+line=''; IFS= read -r -t 10 -u 8 line || true
+assert_eq "D-51" "$line" "and the second's: every waiter hears every wake"
+assert_fail "test -e '$bells/3-stale.fifo'" "a bell nobody holds any more is removed by the ring"
+assert_eq "D-51 answered A" "$(jq -r 'select(.reason=="answered")|"\(.id) \(.reason) \(.decision.chosen)"' "$w/state/session/wake.jsonl" 2>/dev/null)" \
+  "and the item onto the durable wake queue"
+wait_for 20 jq -e '.merge=="merged"' "$w/state/decisions/D-51.json"
+line=''; IFS= read -r -t 10 -u 7 line || true
+assert_eq "D-51" "$line" "the merge settling wakes firstmate again"
+assert_eq "merged" "$(jq -r 'select(.reason=="merge_settled")|.decision.merge' "$w/state/session/wake.jsonl" 2>/dev/null)" \
+  "with the outcome on the queue"
+exec 7<&- 8<&-
+rm -f "$bells/1-a.fifo" "$bells/2-b.fifo"
+# no waiter: ringing never blocks the answer, and the queue carries it
+assert_eq "200" "$(postw D-52 B)" "an answer with nobody waiting is not held up"
+assert_eq "1" "$(grep -c '"id":"D-52"' "$w/state/session/wake.jsonl")" "and still reaches the queue"
+
+# a merge the captain clicked belongs to the session, not to the board
+touch "$w/hold-3"
+assert_eq "200" "$(postw D-53 A)" "a merge starts and holds"
+wait_for 20 test -s "$w/merge-3.pid"
+m3="$(cat "$w/merge-3.pid" 2>/dev/null)"
+assert_ok "alive '$m3'" "the merge helper runs"
+kill -9 "$pidw" 2>/dev/null; wait "$pidw" 2>/dev/null
+sleep 1
+assert_ok "alive '$m3'" "a board that dies does not take the session's merge with it"
+kill "$sess" 2>/dev/null; wait "$sess" 2>/dev/null
+wait_for 10 dead "$m3"
+assert_ok "dead '$m3'" "the session ends, and the merge ends with it"
+rm -f "$w/hold-3"
+rm -rf "$w"
+
+# a board with no session owns what it starts, and a SIGKILL to it is enough
+w="$(make_w)"
+# a round sent back: the worker says who it is and holds while told to
+printf '%s\n' '#!/usr/bin/env bash' 'root="$(cd "$(dirname "$0")/.." && pwd)"' \
+  'echo $$ > "$root/worker.pid"' 'while [ -e "$root/hold-worker" ]; do sleep 0.1; done' > "$w/bin/fm-worker.sh"
+chmod +x "$w/bin/fm-worker.sh"
+jq -cn '({A:{description:"send back",pros:"p",cons:"c"},B:{description:"hold",pros:"p",cons:"c"},C:{description:"wait",pros:"p",cons:"c"}}) as $o
+  | {title:"send it back",explanation:"e",before:"b",after:"a",outcome:"o",options:$o} as $l
+  | {id:"D-54",task:"T-A",kind:"choice",pr:4,title:"send it back",details:{en:$l,"zh-TW":$l,effect:{A:"send_back"}}}' \
+  > "$w/state/pending/D-54.json"
+start_w "$w" ""
+touch "$w/hold-1" "$w/hold-worker"
+assert_eq "200" "$(postw D-51 A)" "a merge starts under a board that names no session"
+wait_for 20 test -s "$w/merge-1.pid"
+m1="$(cat "$w/merge-1.pid" 2>/dev/null)"
+assert_ok "alive '$m1'" "the merge helper runs"
+assert_eq "200" "$(postw D-54 A)" "and a round is sent back"
+wait_for 20 test -s "$w/worker.pid"
+wk="$(cat "$w/worker.pid" 2>/dev/null)"
+assert_ok "alive '$wk'" "the round runs"
+kill -9 "$pidw" 2>/dev/null; wait "$pidw" 2>/dev/null
+wait_for 10 dead "$m1"
+assert_ok "dead '$m1'" "the board killed outright, the merge it owned ends with it"
+wait_for 10 dead "$wk"
+assert_ok "dead '$wk'" "and so does the round it sent back"
+rm -f "$w/hold-worker"
+assert_eq "" "$(grep -n 'detached' "$w/board/server.ts" | grep -v '//' || true)" "and the board detaches nothing itself"
+rm -f "$w/hold-1"
+rm -rf "$w"
+
 rm -rf "$k" "$XDG_CONFIG_HOME"
 
 finish

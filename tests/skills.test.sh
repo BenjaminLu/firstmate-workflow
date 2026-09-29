@@ -126,6 +126,13 @@ if worker.is_file():
     ):
         if gone in prose:
             errors.append(f'worker skill still carries retired text: {gone}')
+# T-151: the process rule, written down for every role, the same words each time.
+rule = ('Every background process has an owner and ends with it; a wake is pushed by the writer, '
+        'never found by polling; a process that outlives its owner is a bug.')
+for role in roles:
+    path = root / 'skills' / role / 'SKILL.md'
+    if path.is_file() and rule not in ' '.join(path.read_text().split()):
+        errors.append(f'{role} skill lacks the T-151 process rule: {rule}')
 if errors:
     sys.exit('\n'.join(errors))
 print('role metadata and entrypoint links: passed')

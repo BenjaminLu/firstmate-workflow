@@ -643,6 +643,7 @@ for terminal in CLOSED MERGED; do
   for timing in historical current new-attempt; do
     d="$(fixture)"; cleanup_stub "$d"
     cp "$ROOT/bin/fm-worker.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$d/bin/"
+    cp -R "$ROOT/bin/lib" "$d/bin/"   # the lifeline a round's runner holds (T-151)
     # T-036 checkpoint + guard are launch-adjacent deps when present on the tip.
     [ -f "$ROOT/bin/fm-checkpoint.sh" ] && cp "$ROOT/bin/fm-checkpoint.sh" "$d/bin/"
     [ -f "$ROOT/bin/fm-guard.sh" ] && cp "$ROOT/bin/fm-guard.sh" "$d/bin/"

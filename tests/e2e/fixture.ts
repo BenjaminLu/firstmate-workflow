@@ -70,6 +70,8 @@ export function makeRoot(stages: Stage[], withDecision = true, actors: "per-task
   // parser it loads, the project registry (T-069); without a config.yaml they
   // register nothing
   for (const f of ['fm-emit.sh','fm-diagram.sh','fm-decide.sh','watch-decisions.ts','fm-config.sh','fm-herdr.py']) cpSync(join(ROOT,'bin',f), join(d,'bin',f));
+  // the lifeline every merge the board starts runs under (T-151)
+  cpSync(join(ROOT,'bin/lib'), join(d,'bin/lib'), { recursive: true });
 
   const tasks = readTasks(ROOT);
   if (tasks.length < stages.length) {
@@ -172,8 +174,11 @@ export async function startBoard(root: string, env: Record<string, string> = {})
   // T-122: the board keeps its secret under XDG_CONFIG_HOME; each board gets
   // a directory of its own, outside its root and the operator's home
   const config = mkdtempSync(join(tmpdir(), "fm-e2e-config-"));
+  // T-151: no session is passed on, so the board owns what it starts and a
+  // board stopped below takes its merges with it, never the operator's session
+  const { FM_SESSION_PID: _session, ...inherited } = process.env;
   const proc: ChildProcess = spawn("bun", ["run", join(root, "board/server.ts")], {
-    env: { ...process.env, ...env, FM_ROOT: root, FM_PORT: String(port), XDG_CONFIG_HOME: config },
+    env: { ...inherited, ...env, FM_ROOT: root, FM_PORT: String(port), XDG_CONFIG_HOME: config },
     stdio: "ignore",
   });
   const url = `http://127.0.0.1:${port}`;

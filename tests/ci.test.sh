@@ -94,6 +94,67 @@ assert_contains "$empty" "no suites yet" "with no suites the bash stage skips"
 assert_fail "grep -qE '^  [+x] tests/' <<< \"\$empty\"" \
   "and reports on no suite at all, so nothing decides green on the other arm"
 
+# --- containment (T-151) --------------------------------------------------
+# A suite that leaves a process behind is red, and the process is killed:
+# every suite runs with a scope marker in its environment, inherited across
+# setsid, and whatever still carries it when the suite ends is named. The
+# leak here is the shape that left 192 watchers running for a day: started
+# in a session of its own, by a suite that never stopped it.
+t="$(fixture)"
+leaked="$(safe_tmpdir)"
+printf '%s\n' '#!/usr/bin/env bash' \
+  "python3 -c 'import subprocess, sys; p = subprocess.Popen([sys.executable, \"-c\", \"import time; time.sleep(120)\"], start_new_session=True); open(sys.argv[1], \"w\").write(str(p.pid))' '$leaked/pid'" \
+  'exit 0' > "$t/tests/leaky.test.sh"
+printf '%s\n' '#!/usr/bin/env bash' \
+  "printf '%s\\n' \"\${FM_SESSION_PID-}\" > '$leaked/session'" \
+  'exit 0' > "$t/tests/tidy.test.sh"
+rc=0; out="$(FM_ROOT="$t" bash "$ROOT/bin/ci.sh" --stage bash 2>&1)" || rc=$?
+assert_eq "1" "$rc" "a suite that leaves a process running is red, though it exited 0"
+assert_contains "$out" "tests/leaky.test.sh left processes running after it ended (killed now):" \
+  "and the gate says which suite left it"
+lp="$(cat "$leaked/pid" 2>/dev/null)"
+assert_contains "$out" "$lp" "naming the process it left"
+assert_fail "kill -0 '${lp:-0}'" "which is no longer running"
+assert_lacks "$out" "tests/tidy.test.sh left" "a suite that leaves nothing is not named"
+assert_matches "$(cat "$leaked/session" 2>/dev/null)" '^[1-9][0-9]*$' \
+  "every suite is handed a session of the gate's own, never the operator's"
+rm -f "$t/tests/leaky.test.sh"
+assert_ok "FM_ROOT='$t' bash '$ROOT/bin/ci.sh' --stage bash" "without the leak the same tree is green"
+rm -rf "$t" "$leaked"
+
+# A leak the marker cannot see (T-151 review round 1). macOS withholds the
+# environment of its platform binaries, so a leaked /bin/bash fm-worker.sh or
+# mock adapter carries the marker invisibly; its argv, which names the
+# fixture it runs in, is visible. Every suite gets a temp root of its own
+# (TMPDIR) and every fixture lives under it, so the root finds it. Here the
+# marker is taken off with env -u, so the same leak is invisible to the
+# marker on Linux too, and the root alone must find it on either.
+t="$(fixture)"; leaked="$(safe_tmpdir)"
+printf '%s\n' '#!/usr/bin/env bash' \
+  'fx="$(mktemp -d "${TMPDIR:-/tmp}/fx.XXXXXX")"' \
+  'ln -s /bin/sleep "$fx/sleep"' \
+  'env -u FIRSTMATE_CI_SCOPE "$fx/sleep" 30 > /dev/null 2>&1 < /dev/null &' \
+  "echo \"\$!\" > '$leaked/pid'" \
+  'exit 0' > "$t/tests/hidden.test.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$t/tests/quiet.test.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$t/tests/still.test.sh"
+rc=0; out="$(FM_ROOT="$t" bash "$ROOT/bin/ci.sh" --stage bash 2>&1)" || rc=$?
+assert_eq "1" "$rc" "a suite that leaves /bin/sleep running with its fixture root in argv is red"
+assert_contains "$out" "tests/hidden.test.sh left processes running after it ended (killed now):" \
+  "found by the suite's own temp root, not by the marker"
+hp="$(cat "$leaked/pid" 2>/dev/null)"
+assert_contains "$out" "$hp " "naming the process it left"
+assert_fail "kill -0 '${hp:-0}'" "which is no longer running"
+assert_lacks "$out" "tests/quiet.test.sh left" "a suite that leaves nothing is not named"
+if [ "$(uname -s)" = Darwin ]; then
+  assert_eq "1" "$(grep -c 'leak check: macOS hides the environment of /bin binaries; matched by fixture root as well - the required check (Linux) is authoritative' <<<"$out")" \
+    "on macOS (uname Darwin; asserted only there) the blind spot is said exactly once per run, not per suite"
+else
+  assert_lacks "$out" "leak check: macOS hides" \
+    "off macOS (uname $(uname -s); the Darwin-only note is asserted on a Mac) the note is not printed"
+fi
+rm -rf "$t" "$leaked"
+
 assert_ok "test -x '$ROOT/bin/ci.sh'" "ci.sh is executable"
 gha="$ROOT/.github/workflows/ci.yml"
 assert_ok "test -f '$gha'" "a GitHub Actions workflow exists"

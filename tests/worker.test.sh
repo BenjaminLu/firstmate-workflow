@@ -44,6 +44,7 @@ fixture() {                     # a repo with a remote, a task, and the real scr
   cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-worker.sh" \
      "$ROOT/bin/fm-checkpoint.sh" "$ROOT/bin/fm-guard.sh" "$ROOT/bin/fm-herdr.py" bin/
   cp -r "$ROOT/bin/adapters" bin/
+  cp -R "$ROOT/bin/lib" bin/   # the lifeline a round's runner holds (T-151)
   cp "$ROOT/skills/worker/SKILL.md" skills/worker/
   printf 'vendor: mock\nfallback:\n  - mock\n' > config.yaml
   jq -n --arg task "$task" '{id:$task,title:"a mock task",scope:["src/**"],acceptance:["it exists"]}' \

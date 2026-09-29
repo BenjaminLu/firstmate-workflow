@@ -28,7 +28,25 @@ import urllib.parse
 import urllib.request
 import uuid
 
-_children = []  # Keep Popen objects until a status/stop operation can reap them.
+_lifeline = None
+
+
+def lifeline():
+    """bin/lib/fm_lifeline.py, beside this file: the one way fm starts a
+    background process (T-151). Loaded when first needed, so a fixture that
+    copies this file alone to read the registry does not need bin/lib."""
+    global _lifeline
+    if _lifeline is None:
+        import importlib.util
+        path = Path(__file__).resolve().parent / 'lib/fm_lifeline.py'
+        spec = importlib.util.spec_from_file_location('fm_lifeline', path)
+        module = importlib.util.module_from_spec(spec)
+        # no __pycache__ in bin/lib: the tree stays exactly what was committed
+        written, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+        try: spec.loader.exec_module(module)
+        finally: sys.dont_write_bytecode = written
+        _lifeline = module
+    return _lifeline
 
 
 def save(path, value):
@@ -670,15 +688,22 @@ class AlreadyStarted(RuntimeError):
 
 def spawn_runner(attempt):
     """Start the round as a process group of its own, owned by fm and not by
-    any terminal: setsid, stdout and stderr to the run's log, its pid on file.
-    A pane that closes or crashes cannot take it down."""
+    any terminal: a session of its own, stdout and stderr to the run's log,
+    its pid on file. A pane that closes or crashes cannot take it down.
+
+    A round outlives the script that launched it on purpose (a killed
+    fm-worker.sh leaves its round retained, to be stopped or resumed), so it
+    names the longer-lived owner it belongs to - the session - and holds a
+    lifeline to it (T-151): when the session is gone, so is the round. It
+    is started through bin/lib/fm_lifeline.py, and holds the line itself
+    (run_supervised), so its pid and its group are the round's."""
     attempt = Path(attempt)
+    owner = lifeline().session_owner()
     reserve_execution(attempt)
     with (attempt / 'run.log').open('ab') as out:
-        proc = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), 'pane-child', str(attempt)],
-                                stdin=subprocess.DEVNULL, stdout=out, stderr=out,
-                                start_new_session=True, close_fds=True)
-    _children.append(proc)
+        proc = lifeline().start([sys.executable, str(Path(__file__).resolve()), 'pane-child', str(attempt)],
+                                owner=owner, direct=True,
+                                stdin=subprocess.DEVNULL, stdout=out, stderr=out, close_fds=True)
     (attempt / 'runner.pid').write_text(f'{proc.pid}\n')
     return proc
 
@@ -690,7 +715,14 @@ def write_exit(attempt, rc):
 
 
 def run_supervised(attempt):
-    """The runner's own entry: the round, then its exit code on file."""
+    """The runner's own entry: the round, then its exit code on file. It
+    holds the lifeline spawn_runner handed it first, and runs nothing
+    without one, or for an owner already gone (T-151)."""
+    try:
+        lifeline().hold()
+    except RuntimeError as error:  # OwnerGone included
+        print('fm runner: ' + str(error), file=sys.stderr)
+        write_exit(attempt, 70); return 70
     try:
         rc = pane_child(attempt)
     except (AlreadyStarted, BlockingIOError):
@@ -1226,10 +1258,11 @@ def close_from_child(attempt, owner, result, control=None, wait_pid=None):
     """Ownership-safe autoclose after this pane-child leaves the foreground.
 
     Evaluating shell_only while we are still the pane's foreground process can
-    never succeed on a real Herdr. By default, fork a setsid closer that waits
-    for our PID to exit, then rechecks ownership and closes. Pass wait_pid=0 to
-    close inline (unit tests with an injected control). The transport waiter may
-    race; record_close keeps the first durable closed receipt.
+    never succeed on a real Herdr. By default, fork a closer through the
+    lifeline (bin/lib/fm_lifeline.py) that waits for this process to exit,
+    then rechecks ownership and closes. Pass wait_pid=0 to close inline (unit
+    tests with an injected control). The transport waiter may race;
+    record_close keeps the first durable closed receipt.
     """
     if os.environ.get('FM_AUTOCLOSE', '1') == '0':
         return 'retained: auto-close disabled'
@@ -1255,26 +1288,20 @@ def close_from_child(attempt, owner, result, control=None, wait_pid=None):
                                    status=close, source='pane-child'))
         return close
 
-    parent = os.getpid() if wait_pid is None else wait_pid
+    # The closer is owned by this pane-child through a lifeline (T-151): it
+    # sits in a session of its own, so closing the pane does not take it,
+    # and reads EOF the moment this process exits, however it exits. It
+    # never asks whether a pid is alive: a zombie answers yes, and a reused
+    # pid answers yes for somebody else.
     try:
-        child = os.fork()
+        child, lifeline_fd = lifeline().fork()
     except OSError as error:
         return 'retained: cleanup observation failed: ' + str(error)
     if child != 0:
         return 'scheduled'
     try:
-        try:
-            os.setsid()
-        except OSError:
-            pass
-        deadline = time.monotonic() + float(os.environ.get('FM_HERDR_SHELL_WAIT', '60'))
-        while time.monotonic() < deadline:
-            try:
-                os.kill(parent, 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.05)
-        else:
+        wait = float(os.environ.get('FM_HERDR_SHELL_WAIT', '60'))
+        if not lifeline().wait_owner(lifeline_fd, wait):
             record_close(attempt, dict(actor=owner.get('actor'), pane=owner.get('pane_id'),
                                        status='retained: closer timed out waiting for child exit',
                                        source='pane-child'))
@@ -1486,110 +1513,100 @@ def retire_dead_crew(root):
     return dict(retired=retired, kept=kept, lost=lost)
 
 
-def watch_start(root, decision='all'):
-    root = Path(root).resolve()
-    if not re.fullmatch(r'[A-Za-z0-9_-]+', decision): raise ValueError('invalid decision ID')
-    base = root / 'state/session'; base.mkdir(parents=True, exist_ok=True)
-    registry = base / ('watch-' + decision + '.json')
-    with locked(base / '.watch.lock'):
-        if registry.exists() and process_matches(read(registry)): return read(registry)
-        directory = Path(tempfile.mkdtemp(prefix='watch-', dir=base))
-        code = snapshot(root)
-        token = str(directory)
-        with (directory / 'log').open('ab') as log:
-            child = subprocess.Popen([sys.executable, str(code / 'bin/fm-herdr.py'), 'watch-child',
-                                      str(root), decision, token], stdin=subprocess.DEVNULL,
-                                     stdout=log, stderr=log, start_new_session=True)
-        _children.append(child)
-        record = dict(pid=child.pid, token=token, directory=token, root=str(root), decision=decision)
-        save(registry, record)
-        return record
+# --- The wake (T-151) ----------------------------------------------------------
+# Nothing watches for a decision. Whoever writes one - the board, on the
+# captain's click, and again when the merge it started settles - delivers
+# the wake at write time: it appends the item to the wake queue, durable and
+# read again at every session start and status, then rings every waiter's
+# own doorbell under state/session/wake.d (bin/lib/fm_lifeline.py's ring;
+# with no waiter the queue alone carries it). A waiter - `fm-session.sh
+# wait`, `fm-decide.sh --await` - registers its doorbell before it reads the
+# queue, so a wake written in between is found, never a miss; and each
+# waiter has a bell of its own, so no waiter takes another's wake.
+WAKE_QUEUE = 'state/session/wake.jsonl'
 
 
-def watch_stop(root, decision='all'):
-    if not re.fullmatch(r'[A-Za-z0-9_-]+', decision): raise ValueError('invalid decision ID')
-    registry = Path(root) / 'state/session' / ('watch-' + decision + '.json')
-    if not registry.exists(): return
-    with locked(registry.parent / '.watch.lock'):
-        record = read(registry)
-        if process_matches(record):
-            os.killpg(record['pid'], signal.SIGTERM)
-            for _ in range(50):
-                if not process_matches(record): break
-                time.sleep(.02)
-        result = Path(record['directory']) / 'result.json'
-        if not result.exists(): save(result, dict(status='stopped'))
-        for child in _children:
-            if child.pid == record['pid']:
-                try: child.wait(timeout=2)
-                except subprocess.TimeoutExpired: pass
-
-
-def watch_child(root, decision, directory):
-    root = Path(root); directory = Path(directory)
-    result = directory / 'result.json'
-    def stop(_signum, _frame):
-        save(result, dict(status='stopped')); raise SystemExit(0)
-    signal.signal(signal.SIGTERM, stop)
-    save(directory / 'status.json', dict(status='live', pid=os.getpid(), decision=decision))
-    observed = root / 'state/session/observed' if decision == 'all' else directory / 'observed'
-    observed.mkdir(parents=True, exist_ok=True)
-    # Observation reads decision files directly. Invoking fm-decide --await
-    # would reject non-numeric ids, remove pending cards, and (on older
-    # decide builds) re-emit decision_made — none of which belong on a watch.
-    try:
-        while True:
-            ids = [decision] if decision != 'all' else sorted({p.stem for name in ('pending', 'decisions')
-                    for p in (root / 'state' / name).glob('*.json')})
-            for ident in ids:
-                if (observed / (ident + '.json')).exists(): continue
-                answer_path = root / 'state/decisions' / (ident + '.json')
-                if not answer_path.exists(): continue
-                answer = json.loads(answer_path.read_text())
-                receipt = dict(status='observed', decision=answer, id=ident, observed=time.time())
-                save(observed / (ident + '.json'), receipt)
-                if decision != 'all': save(result, receipt); return 0
-            time.sleep(.2)
-    except Exception as error:
-        save(result, dict(status='failed', error=str(error))); return 1
+def wakes(root):
+    """The wake queue, oldest first; a line that does not parse is skipped."""
+    path = Path(root) / WAKE_QUEUE
+    found = []
+    if path.is_file():
+        for line in path.read_text().splitlines():
+            try: item = json.loads(line)
+            except ValueError: continue
+            if isinstance(item, dict) and isinstance(item.get('id'), str) and re.fullmatch(r'[A-Za-z0-9_-]+', item['id']):
+                found.append(item)
+    return found
 
 
 def unacknowledged(root):
-    """Observed captain decisions firstmate has not acknowledged; reads, never consumes."""
+    """Captain decisions pushed to the wake queue that firstmate has not
+    acknowledged since; reads, never consumes. An id acknowledged and then
+    woken again (its merge settled) is listed again."""
     base = Path(root) / 'state/session'
-    found = []
+    latest = {}
+    for item in wakes(root):
+        latest[item['id']] = item
+    # observations the retired watcher wrote before T-151 stay readable
     for path in sorted((base / 'observed').glob('*.json')):
-        if (base / 'acknowledged' / path.name).exists(): continue
-        receipt = read(path); answer = receipt.get('decision') or {}
-        found.append(dict(id=receipt.get('id', path.stem), task=answer.get('task'), kind=answer.get('kind'),
+        if path.stem in latest: continue
+        receipt = read(path)
+        latest[path.stem] = dict(id=receipt.get('id', path.stem), decision=receipt.get('decision') or {},
+                                 woken=receipt.get('observed'), reason='observed')
+    found = []
+    for ident, item in latest.items():
+        ack = base / 'acknowledged' / (ident + '.json')
+        if ack.exists() and (read(ack).get('acknowledged') or 0) >= (item.get('woken') or 0): continue
+        answer = item.get('decision') or {}
+        found.append(dict(id=ident, task=answer.get('task'), kind=answer.get('kind'),
                           chosen=answer.get('chosen'), text=answer.get('text'), ts=answer.get('ts'),
-                          observed=receipt.get('observed')))
-    return found
+                          merge=answer.get('merge'), reason=item.get('reason'), woken=item.get('woken')))
+    return sorted(found, key=lambda item: (item['woken'] or 0, item['id']))
+
+
+def wake_wait(root, decision='all', timeout=0):
+    """Block on a doorbell of this wait's own until an unacknowledged
+    decision (that one, or any) is in the queue; [] when the timeout
+    (seconds, 0 for none) ends first. A foreground wait of the caller's
+    own: it starts nothing, and its doorbell goes when it does."""
+    if decision != 'all' and not re.fullmatch(r'[A-Za-z0-9_-]+', decision): raise ValueError('invalid decision ID')
+    deadline = time.monotonic() + timeout if timeout else None
+    # registered first, then the queue read: a wake in between is found
+    with lifeline().Doorbell(root) as bell:
+        while True:
+            items = [item for item in unacknowledged(root) if decision in ('all', item['id'])]
+            if items: return items
+            left = None if deadline is None else deadline - time.monotonic()
+            if left is not None and left <= 0: return []
+            if not bell.wait(left):
+                return [item for item in unacknowledged(root) if decision in ('all', item['id'])]
 
 
 def pending_summary(items):
     if not items: return 'fm-session: no unacknowledged captain decisions'
     lines = [f'fm-session: {len(items)} captain decision{"" if len(items) == 1 else "s"} '
-             'observed but not acknowledged; act on each, then run fm-session.sh ack --decision <id>']
+             'woken but not acknowledged; act on each, then run fm-session.sh ack --decision <id>']
     for item in items:
         chosen = item['chosen'] if item['text'] is None else f'{item["chosen"]} "{item["text"]}"'
-        lines.append(f'  {item["id"]} {item["task"]} {item["kind"]} chose {chosen} at {item["ts"]}')
+        merge = f', merge {item["merge"]}' if item.get('merge') else ''
+        lines.append(f'  {item["id"]} {item["task"]} {item["kind"]} chose {chosen} at {item["ts"]}{merge}')
     return '\n'.join(lines)
 
 
 def acknowledge(root, decision):
-    """Durably record that firstmate acted on an observation; idempotent, deletes nothing."""
+    """Durably record that firstmate acted on a wake; idempotent, deletes nothing."""
     if decision == 'all' or not re.fullmatch(r'[A-Za-z0-9_-]+', decision):
         raise ValueError('ack requires --decision <id>')
     base = Path(root) / 'state/session'
+    items = [item for item in wakes(root) if item['id'] == decision]
     observation = base / 'observed' / (decision + '.json')
-    if not observation.exists():
-        raise LookupError(f'no observation for {decision}; nothing to acknowledge')
+    if not items and not observation.exists():
+        raise LookupError(f'no wake for {decision}; nothing to acknowledge')
+    woken = max([item.get('woken') or 0 for item in items] or [0])
     receipt = base / 'acknowledged' / (decision + '.json')
     with locked(base / '.ack.lock'):
-        if receipt.exists(): return read(receipt)
-        record = dict(id=decision, acknowledged=time.time(),
-                      observation=hashlib.sha256(observation.read_bytes()).hexdigest())
+        if receipt.exists() and (read(receipt).get('acknowledged') or 0) >= woken: return read(receipt)
+        record = dict(id=decision, acknowledged=max(time.time(), woken), wakes=len(items))
         save(receipt, record)
         return record
 
@@ -1665,10 +1682,15 @@ def board_start(root):
             if occupied: raise RuntimeError('board port belongs to an unverified root: ' + url)
             bun = shutil.which('bun')
             if not bun: raise RuntimeError('board requires Bun')
+            # The board outlives this command on purpose, so it names the
+            # longer-lived owner it belongs to - the session - and ends with
+            # it (T-151). The keeper exports that owner as FM_SESSION_PID,
+            # and the merges the board starts belong to the same session.
+            owner = lifeline().session_owner()
             with (base / 'board.log').open('ab') as log:
-                child = subprocess.Popen([bun, 'run', str(root / 'board/server.ts')], cwd=root,
-                        env=dict(os.environ, FM_ROOT=str(root), FM_PORT=str(port)),
-                        stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+                child = lifeline().start([bun, 'run', str(root / 'board/server.ts')], owner=owner,
+                        name='board', cwd=root, env=dict(os.environ, FM_ROOT=str(root), FM_PORT=str(port)),
+                        stdin=subprocess.DEVNULL, stdout=log, stderr=log)
             for _ in range(50):
                 if child.poll() is not None: break
                 if board_matches(root, url): break
@@ -1691,6 +1713,7 @@ def board_start(root):
                 refused = 'the board secret could not be read; restart the board'
         record = dict(root=str(root), url=url, reused=reused, page_http_verified=page,
                       opener_invoked=opened, browser_navigation_verified=False)
+        if not reused: record['owner'] = owner
         if refused: record['sign_in_error'] = refused
         save(base / 'board.json', record)
         return record
@@ -1707,11 +1730,9 @@ def inspect(root):
         runs.append(dict(record, orchestration_live=launcher_live, executions=active,
                          live=launcher_live or any(item['live'] for item in active),
                          uncertain=any(item['state'] == 'uncertain' for item in active)))
-    watches = []
-    for file in (root / 'state/session').glob('watch-*.json'):
-        record = read(file); result = Path(record['directory']) / 'result.json'
-        watches.append(dict(record, live=process_matches(record), result=read(result) if result.exists() else None))
-    report = dict(root=str(root), runs=runs, watches=watches,
+    # the waiters holding a doorbell now (one killed outright counts until the next ring)
+    wake = dict(queue=str(root / WAKE_QUEUE), doorbells=len(list((root / 'state/session/wake.d').glob('*.fifo'))))
+    report = dict(root=str(root), runs=runs, wake=wake,
                   pending=[p.name for p in (root / 'state/pending').glob('*.json')],
                   unacknowledged=unacknowledged(root),
                   worktrees=[p.name for p in (root / 'state/worktrees').glob('*') if p.is_dir()])
@@ -2027,7 +2048,6 @@ def main(args):
         return follow(*args)
     if mode == 'stop':
         out = stop_command(args); print(json.dumps(out)); return 1 if out['failed'] else 0
-    if mode == 'watch-child': return watch_child(*args)
     if mode == 'context':
         root, role, task, actor, prompt, target = args
         Path(target).write_text(role_context(root, role, task, actor, Path(prompt).read_text())); return 0
@@ -2043,8 +2063,14 @@ def main(args):
             try: print(json.dumps(acknowledge(root, decision)))
             except LookupError as error:
                 print('fm-session: ' + str(error.args[0]), file=sys.stderr); return 1
-        elif action == 'watch': print(json.dumps(watch_start(root, decision)))
-        elif action == 'stop': watch_stop(root, decision)
+        elif action == 'wait':
+            timeout = float(rest[1]) if len(rest) > 1 and rest[1] else 0
+            # a TERM, INT or HUP unwinds the wait, so its doorbell goes with it
+            lifeline()._leave_on_signals()
+            items = wake_wait(root, decision, timeout)
+            print(json.dumps(items, indent=2))
+            print(pending_summary(items), file=sys.stderr)
+            return 0 if items else 1
         elif action == 'start':
             # Close ghost actors before the board is shown or work is planned.
             reconcile = retire_dead_crew(root)
@@ -2058,8 +2084,9 @@ def main(args):
             # Before the board: a fresh checkout is prepared once, as the
             # project declares. A failure is reported, never fatal.
             report['project'] = project_report(root, run_setup=True)
+            # nothing is started to wait for a wake (T-151): the board rings
+            # whoever is waiting, and the queue read above carries the rest
             report['board'] = board_start(root)
-            if os.environ.get('FM_WATCH', '1') != '0': report['watch'] = watch_start(root)
             print(json.dumps(report, indent=2))
             print(pending_summary(report['unacknowledged']), file=sys.stderr)
         else: raise ValueError('unknown session action')

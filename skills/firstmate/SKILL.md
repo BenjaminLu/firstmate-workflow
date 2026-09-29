@@ -48,22 +48,38 @@ The captain's own rules, restated here where they are easy to find:
 
 Run `bin/fm-session.sh start --repo <root>` at top-level startup. It inspects
 recorded processes and panes, verifies the board's root using a fresh relative
-file challenge, opens its HTTP-verified page when an opener is available, and
-starts or reuses a real decision watcher. It does not authorize or dispatch work.
-`status` reports live run/watch identities and durable observations; `stop`
-cancels the owned watch (`--decision <id>` targets a specific watch). A browser
-opener returning zero does not establish that the user saw the page.
+file challenge, and opens its HTTP-verified page when an opener is available.
+The board it starts is owned by this session and ends with it; it starts no
+watcher (T-151). It does not authorize or dispatch work. `status` reports live
+run identities and the wake queue. A browser opener returning zero does not
+establish that the user saw the page.
 
-A session watcher or an observation file never wakes a conversational agent: it
-only writes to disk. `start` and `status` list every observed decision firstmate
-has not acknowledged (`unacknowledged` in the JSON, plus a short summary on
-standard error) and stay read-only toward decisions; they never consume, merge
-or answer one. At the start of every turn and again before ending one, run
-`bin/fm-session.sh status --repo <root>`, act on every unacknowledged observed
+Every background process has an owner and ends with it; a wake is pushed by
+the writer, never found by polling; a process that outlives its owner is a
+bug. The board pushes a wake when it writes a decision - onto the queue
+`state/session/wake.jsonl`, then a ring of every waiter's own doorbell under
+`state/session/wake.d/` - and again when a merge it started settles. To be
+told, keep **one** `bin/fm-session.sh wait --repo <root> [--timeout <s>]`
+running as the harness's own background task: it exits with every
+unacknowledged wake, for any card, as soon as there is one. Act on each,
+`ack` it, and start the next `wait`. Do not keep one `fm-decide.sh --await`
+per pending card; `--await` is for scripts that wait on one answer. Any
+number of waiters each hear every ring, so none takes another's wake. Start every background process
+through `bin/lib/fm-lifeline.sh` (see [dispatch-crew](dispatch-crew/SKILL.md)),
+never `setsid`, `nohup`, `disown` or a bare `&`. The ops-side sweep for
+orphaned processes is a fuse that should reap zero; anything it reaps is a
+bug to report, not routine cleanup.
+
+A wake file never wakes a conversational agent by itself: it only writes to
+disk. `start` and `status` list every wake firstmate has not acknowledged
+(`unacknowledged` in the JSON, plus a short summary on standard error) and
+stay read-only toward decisions; they never consume, merge or answer one. At
+the start of every turn and again before ending one, run
+`bin/fm-session.sh status --repo <root>`, act on every unacknowledged
 decision, then record that with
 `bin/fm-session.sh ack --decision <id> --repo <root>`. Acknowledgement is
-idempotent, deletes no observation, decision file or event, and is refused for
-an id with no observation. Acknowledging is bookkeeping, not approval.
+idempotent, deletes no wake, decision file or event, and is refused for an id
+with no wake. Acknowledging is bookkeeping, not approval.
 
 The project contract is `config.yaml`'s `project:` block: `setup`, `check`,
 `check_env`, `tests`, `test` and `docs` (see the README). `start` runs the declared
@@ -237,10 +253,13 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   removes the pending file and emits no duplicate decision event. Exit zero is
   observation, not approval. Inspect chosen response and task/PR context; keep
   independent work moving while waiting.
-- After every decision request, start a notifying wait whose completion reaches
-  the conversation: run `bin/fm-decide.sh --await <id> --repo <root>` as a
-  background task that the host reports on when it finishes. Do not end a turn
-  while any card is pending without such a live wait for it.
+- While any card is pending, keep one notifying wait whose completion reaches
+  the conversation: a single `bin/fm-session.sh wait --repo <root>` running as
+  a background task that the host reports on when it finishes. It returns
+  every unacknowledged wake, whichever card it is for, so one wait covers all
+  pending cards; after acting on and acknowledging them, start it again. Do
+  not start one `--await` per card for this. Do not end a turn while any card
+  is pending without such a live wait.
 - Firstmate must establish current-head gates, CI and reviewer provenance before
   presenting a merge card, and coordinate renewed verification if the head changes.
   The board calls `bin/fm-merge.sh` directly for choice A on a pending merge card;
@@ -335,7 +354,7 @@ after every merge, run `bin/fm-ready.sh list --repo <root>`. Each line is
    and `zh-TW` details, a bespoke diagram of what the task would still change,
    an id from `bin/fm-decide.sh --allocate --task <id>` (see
    [Author and verify captain decisions](#author-and-verify-captain-decisions)),
-   and a background `--await`. Options: **A** proceed (dispatch as written), **B**
+   and the one background `fm-session.sh wait`. Options: **A** proceed (dispatch as written), **B**
    rescope (the card states the narrower spec you propose), **C** park,
    **D** drop. Author D under `options.D` in both locales; the board shows a D
    button and accepts D only on a card that offers it. Name the effects in the
@@ -463,16 +482,13 @@ another concurrent worker or reviewer. Herdr
 has no atomic conditional close: another client can change the pane between the
 last check and close. Never describe that policy as atomic or race-free.
 
-`FM_AUTOCLOSE=0` retains even completed owned panes. `FM_WATCH=0` disables automatic
-watch startup; explicitly stop a previously running watch when opting out.
-The watcher is a cancellable operating-system process with durable decision
-observations under `state/session/`, not a mechanism that wakes a completed API
-conversation; only a notifying `--await` wait or the next turn's `status` check
-brings an observed decision back to firstmate. Continuous mode scans pending IDs between bounded waits; it does
-not guarantee sub-200ms observation across multiple decisions. While
-authorized work or decisions remain pending, keep the active turn monitoring
-observable progress or explicitly hand off with run/watch identities and the
-next action. Never end a turn promising that the conversational agent is still
+`FM_AUTOCLOSE=0` retains even completed owned panes. There is no decision
+watcher (T-151): the wake queue is durable under `state/session/`, but nothing
+wakes a completed API conversation; only the `fm-session.sh wait` the harness is
+running, or the next turn's `status` check, brings a decision back to
+firstmate. While authorized work or decisions remain pending, keep the active
+turn monitoring observable progress or explicitly hand off with run identities
+and the next action. Never end a turn promising that the conversational agent is still
 watching. Reconnect to live runs and preserve stopped attempts before restarting.
 
 Managed launches create a dedicated tab with one owned root pane and the same
