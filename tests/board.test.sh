@@ -1951,7 +1951,7 @@ assert_eq '0' \
 assert_eq '0' \
   "$(jq -c '[.crew[]|select(.id=="worker-vic-tv1-r1")|tostring|select(test("claude-opus-5-5|2\\.1\\.0"))]|length' <<<"$sv")" \
   "(a) the codex card carries claude's model and CLI version nowhere"
-assert_eq '[{"vendor":"codex","count":1},{"vendor":"cursor-agent","count":2}]' "$(jq -c '.engineLive' <<<"$sv")" \
+assert_eq '[{"vendor":"cursor-agent","count":2},{"vendor":"codex","count":1}]' "$(jq -c '.engineLive' <<<"$sv")" \
   "(d) the engine badge counts each round on the vendor it is on now, and none on \"unknown\""
 kill "$pidv" 2>/dev/null; wait "$pidv" 2>/dev/null || true
 rm -rf "$qv"
