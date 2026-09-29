@@ -164,11 +164,12 @@ record() {   # record <vendor> <version> <outcome> <why> [started] [authenticate
 # config.yaml's model, applied exactly as a worker round would (T-127): this
 # is what surfaced the bug in the first place - T-126 re-dispatched by hand
 # with codex, then cursor-agent, then claude, and the board showed none of
-# it, because no adapter passed a model flag at all.
-model_requested="$(fm_model worker config.yaml)"
+# it, because no adapter passed a model flag at all. Per vendor since T-146:
+# each probe is handed its own vendor's model, never the worker vendor's.
 ran=0; failed=0
 run_section vendors || wanted=()
 for name in ${wanted[@]+"${wanted[@]}"}; do
+  model_requested="$(fm_model_for worker "$name" config.yaml)"
   adapter="$ROOT/bin/adapters/$name.sh"
   [ -x "$adapter" ] || { echo "fm-canary: no adapter for $name" >&2; continue; }
   if ! command -v "$name" >/dev/null 2>&1; then

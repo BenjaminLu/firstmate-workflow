@@ -208,9 +208,9 @@ assert_eq "0" "$(jq -c 'select(.actor==$a and .type=="crew_status" and (.data.id
   "no crew_status of the round goes without the vendor"
 assert_eq '["mock","model-mock","model-mock"]' \
   "$(jq -c 'select(.type=="commit_pushed")|.data.identity|[.vendor,.model_requested,.model]' "$logv5" | sort -u)" \
-  "and once the round has run, its events carry the vendor that ran and what it reported"
+  "and once the round has run, every commit_pushed carries the vendor that ran and what it reported (one line each, all the same)"
 assert_eq '["mock","model-mock"]' \
-  "$(jq -c --arg a "$mv5actor" '[select(.actor==$a and .type=="crew_status")]|last|.data.identity|[.vendor,.model]' "$logv5")" \
+  "$(jq -sc --arg a "$mv5actor" '[.[]|select(.actor==$a and .type=="crew_status")]|last|.data.identity|[.vendor,.model]' "$logv5")" \
   "including its last crew_status, which the board reads the crewman from"
 
 # --vendor sends the round to a vendor config.yaml does not start on; it
