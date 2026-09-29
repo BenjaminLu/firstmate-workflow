@@ -1642,13 +1642,18 @@ test("nothing here can reach a model", async () => {
   // the board calls nothing from fm-config.sh but the registry readers
   // (fm_projects since T-054, to know every project's repository and tasks)
   // and fm_tasks, which only reads task directories (T-090).
+  //
+  // fm_lifeline is not an fm-config.sh function: it is server.ts's path to
+  // bin/lib/fm_lifeline.py, the lifeline module the merge helper runs under
+  // (T-151). It starts and rings only what fm names and reaches no model; the
+  // line below pins bin/lib to exactly the two lifeline files.
   const { readdirSync, readFileSync } = await import("node:fs");
   expect(existsSync(join(board.root, "bin/adapters"))).toBe(false);
   expect(readdirSync(join(board.root, "bin")).sort()).toEqual(["fm-config.sh", "fm-decide.sh", "fm-diagram.sh", "fm-emit.sh", "fm-herdr.py", "fm-merge.sh", "lib", "watch-decisions.ts"]);
   // lib/ is the lifeline (T-151): the keeper a merge runs under, nothing that calls a model
   expect(readdirSync(join(board.root, "bin/lib")).sort()).toEqual(["fm-lifeline.sh", "fm_lifeline.py"]);
   const called = new Set(readFileSync(join(board.root, "board/server.ts"), "utf8").match(/\bfm_[a-z_]+/g) ?? []);
-  expect([...called].sort()).toEqual(["fm_project_get", "fm_project_resolve", "fm_projects", "fm_tasks"]);
+  expect([...called].sort()).toEqual(["fm_lifeline", "fm_project_get", "fm_project_resolve", "fm_projects", "fm_tasks"]);
 });
 
 test("no cards retains one idle captain aboard", async ({ page }) => {
