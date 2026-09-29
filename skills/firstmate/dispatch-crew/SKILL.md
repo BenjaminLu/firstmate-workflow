@@ -7,9 +7,9 @@ description: Stock-only launch of workers and reviewers through fm-worker.sh / f
 
 *Stock launch* is the only allowed way to start a worker or reviewer. Claude,
 Codex and Cursor follow this recipe the same way. Session wrappers,
-`run-*.sh` sidecars, `herdr pane run` of raw adapters, `FM_TRANSPORT=direct`
-inside `HERDR_ENV=1`, and inventing a parallel launcher are protocol
-violations — the scripts refuse the direct bypass mechanically.
+`run-*.sh` sidecars, `herdr pane run` of raw adapters, and inventing a
+parallel launcher are protocol violations. Rounds run headless under fm's own
+supervision; a Herdr, cmux or tmux window is only a view of the run's log.
 
 ## Recipe (worker)
 
@@ -51,16 +51,16 @@ show `review_opened` / completion for that exact actor — or a truthful
 
 ## Outside Herdr
 
-When `HERDR_ENV` is unset or not `1`, the same stock commands run adapters
-in-process. That is the non-Herdr default, not an invented bypass.
+Rounds are headless and owned by fm; a terminal host is only a window onto
+them (`host:` in `config.yaml`). When `HERDR_ENV` is unset or not `1`, the same
+stock commands run the same round with no Herdr pane. That is the default, not
+an invented bypass; a window that cannot open never stops a round.
 
 ## Failure table (stop — do not invent)
 
 | Observation | Action |
 | --- | --- |
-| `FM_TRANSPORT=direct is refused when HERDR_ENV=1` | Unset `FM_TRANSPORT` and retry stock; never set `FM_ALLOW_DIRECT` in a live session |
-| `pane identity changed before ownership` / retained pane | Report the limitation; fix or escalate `fm-herdr` — do not switch to direct or write `run-*.sh` |
-| `herdr is unavailable` | Report and stop; do not invent a launcher |
+| `no herdr window (...)` / retained pane | The round ran without its window (`window.json` in the attempt says why); report it, do not write `run-*.sh` |
 | `already has a live worker` / uncertain launch | Follow [clear-zombie-workers](../clear-zombie-workers/SKILL.md); resume the live actor if real |
 | Adapter/vendor failure from stock script | Use configured fallback via the same stock script; do not open a manual agent pane |
 | Task branch conflicts with its base (gate 2 red, base moved) | Relaunch the worker recipe above with `--pr <N>`; the script rebuilds the branch on the base and hands the conflicts to the worker. Never rebase, merge or push the branch by hand |
@@ -74,7 +74,6 @@ in-process. That is the non-Herdr default, not an invented bypass.
 
 ## Do not
 
-- Set `FM_TRANSPORT=direct` while `HERDR_ENV=1`.
 - Create `state/runtime/run-*.sh` or monitor wrappers to host the worker.
 - Run `cursor-agent` / `claude` / `codex` directly in a pane for crew work.
 - Claim dispatch succeeded without the completion checks above.

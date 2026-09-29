@@ -1107,18 +1107,12 @@ fm_git_commit() {  # fm_git_commit <worktree> <message>
   git -C "$dir" -c user.name="$n" -c user.email="$e" commit -q -m "$msg"
 }
 
-# Inside a user Herdr session, direct transport is a protocol violation —
-# firstmate must use stock managed panes, not invent FM_TRANSPORT=direct
-# or session wrappers. Tests that intentionally exercise in-process
-# adapters under a fake HERDR_ENV set FM_ALLOW_DIRECT=1.
-fm_refuse_herdr_bypass() {
-  local who="${1:-fm}"
-  if [ "${HERDR_ENV:-}" = 1 ] && [ "${FM_TRANSPORT:-herdr}" = direct ] && [ "${FM_ALLOW_DIRECT:-}" != 1 ]; then
-    echo "$who: FM_TRANSPORT=direct is refused when HERDR_ENV=1; use stock managed Herdr (unset FM_TRANSPORT)" >&2
-    return 70
-  fi
-  return 0
-}
+# A round needs no terminal host (T-144): it runs headless, as a process group
+# fm supervises, and a host (Herdr, cmux, tmux) is only a window onto it. So no
+# transport is a bypass of anything and nothing is refused here; the function
+# stays because the entrypoints call it. FM_TRANSPORT=direct now only asks for
+# a round with no window.
+fm_refuse_herdr_bypass() { return 0; }
 
 # --- what counts as a script, and what counts as a comment ---------------
 #
