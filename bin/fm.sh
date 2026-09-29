@@ -104,8 +104,12 @@ usage: fm.sh <command> [options]
   board [--repo DIR]
         Open or reopen the captain's board: start it or reuse it, then
         send the browser to a one-time sign-in address (good once, for
-        60 seconds). Only a tab opened this way can answer cards, move
-        tasks or open files; any other tab is read-only.
+        60 seconds). A tab already on the board (Chrome, Safari, Arc or
+        Brave, on macOS) is sent there and brought to the front; with
+        none, or elsewhere, a new tab is opened, and the output says
+        which (`tab`). Only a tab signed in this way can answer cards,
+        move tasks or open files; any other tab is read-only, and its
+        banner's sign-in button runs this same opener.
 
   stop <actor> | stop --task <id> [--project NAME] [--repo DIR]
         Stop a live round, or every crewman on a task: the task's
@@ -822,8 +826,8 @@ cmd_roster() {
 # Open, or reopen, the captain's board (T-122): start or reuse the board for
 # this root, then send the browser to a one-time sign-in address, the only
 # way a tab comes to hold the credential that lets it write. The address is
-# never printed; bin/fm-herdr.py hands it to the browser and records only the
-# board's plain URL.
+# never printed; bin/fm-herdr.py hands it to the browser - into the board's
+# own tab when one is open (T-145) - and records only the board's plain URL.
 cmd_board() {
   local repo="$REPO"
   while [ $# -gt 0 ]; do

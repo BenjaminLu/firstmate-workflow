@@ -1698,6 +1698,115 @@ def open_address(address):
     return subprocess.call([opener, address], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
 
 
+# The browsers whose tabs fm can find on macOS (T-145), by bundle id, so a
+# renamed application is still found, and the family of AppleScript words each
+# one speaks. Chrome and Brave share Chromium's; Arc's tab has no index to set.
+BOARD_BROWSERS = (('Google Chrome', 'com.google.Chrome', 'chromium'),
+                  ('Brave Browser', 'com.brave.Browser', 'chromium'),
+                  ('Arc', 'company.thebrowser.Browser', 'arc'),
+                  ('Safari', 'com.apple.Safari', 'safari'))
+
+
+def applescript_string(text):
+    return '"' + text.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def board_tab_script(bundle, family, url, address):
+    """An AppleScript that finds a tab on the board's address - the address
+    itself or any page under it, as 127.0.0.1 or as localhost - in one running
+    browser, sends that tab to `address`, brings it to the front and prints
+    `reused`; finding none, it prints nothing and changes nothing."""
+    port = url.rsplit(':', 1)[1]
+    bases = [f'http://127.0.0.1:{port}', f'http://localhost:{port}']
+    test = ' or '.join(f'u is {applescript_string(b)} or u starts with {applescript_string(b + "/")}' for b in bases)
+    front = {'chromium': 'set active tab index of w to i',
+             'safari': 'set current tab of w to t',
+             'arc': 'tell t to select'}[family]
+    return '\n'.join([
+        f'tell application id {applescript_string(bundle)}',
+        '  repeat with w in windows',
+        '    set i to 0',
+        '    repeat with t in tabs of w',
+        '      set i to i + 1',
+        '      set u to ""',
+        '      try',
+        '        set u to URL of t as text',
+        '      end try',
+        f'      if {test} then',
+        f'        set URL of t to {applescript_string(address)}',
+        '        try',
+        f'          {front}',
+        '          set index of w to 1',
+        '        end try',
+        '        activate',
+        '        return "reused"',
+        '      end if',
+        '    end repeat',
+        '  end repeat',
+        'end tell',
+        'return ""', ''])
+
+
+def reuse_board_tab(url, address):
+    """Send a tab already on the board to the one-time address, and name the
+    browser it was in; None when there is none, off macOS, or when no browser
+    could be scripted. Every script goes to osascript on stdin, like
+    open_address's, so the code is never in an argument list. Only running
+    browsers are asked, so none is started, and each is asked in a script of
+    its own, so one that cannot be scripted leaves the others to be asked."""
+    osascript = shutil.which('osascript') if sys.platform == 'darwin' else None
+    if not osascript: return None
+    ask = lambda script: subprocess.run([osascript], input=script.encode(), capture_output=True, timeout=15)
+    # The ids are looked up at run time, through a variable: a literal
+    # `application id "..."` is resolved when the script compiles, and one
+    # browser that is not installed would fail the whole question.
+    running = '\n'.join([
+        'set found to ""',
+        'repeat with b in {' + ', '.join(applescript_string(bundle) for _, bundle, _ in BOARD_BROWSERS) + '}',
+        '  try',
+        '    if application id (b as text) is running then set found to found & (b as text) & linefeed',
+        '  end try',
+        'end repeat',
+        'return found', ''])
+    try: answer = ask(running)
+    except (OSError, subprocess.SubprocessError): return None
+    live = set(answer.stdout.decode(errors='replace').split()) if answer.returncode == 0 else set()
+    for name, bundle, family in BOARD_BROWSERS:
+        if bundle not in live: continue
+        try: done = ask(board_tab_script(bundle, family, url, address))
+        except (OSError, subprocess.SubprocessError): continue
+        if done.returncode == 0 and done.stdout.decode(errors='replace').strip() == 'reused': return name
+    return None
+
+
+def board_open(url, port):
+    """Send the captain's browser to a fresh one-time sign-in address (T-122):
+    into a tab already on the board when one is found (T-145), else a new one.
+    What it says names neither the address nor the code; `tab` says which it
+    did: `reused` (with the `browser`) or `new`."""
+    opener = shutil.which('osascript') if sys.platform == 'darwin' else None
+    opener = opener or shutil.which('xdg-open') or shutil.which('open')
+    said = dict(opener_invoked=False, tab=None)
+    if not opener:
+        said['sign_in_error'] = 'no program to open a browser with was found; nothing was opened'
+        return said
+    try: address = board_login_url(url, port)
+    except (OSError, RuntimeError):
+        # said without the path: state/ never names where the secret is
+        said['sign_in_error'] = 'the board secret could not be read; restart the board'
+        return said
+    browser = reuse_board_tab(url, address)
+    if browser:
+        said.update(opener_invoked=True, tab='reused', browser=browser,
+                    said=f"sent the board's open tab in {browser} to a new sign-in and brought it to the front")
+    else:
+        opened = open_address(address)
+        said.update(opener_invoked=opened, tab='new' if opened else None,
+                    said='no open board tab was found; opened a new one' if opened
+                    else 'the browser could not be asked to open the sign-in address')
+    return said
+
+
 def board_start(root):
     root = Path(root).resolve(); port = int(os.environ.get('FM_PORT', '4173'))
     url = f'http://127.0.0.1:{port}'
@@ -1732,19 +1841,11 @@ def board_start(root):
         # below is the board's own, without a code.
         # A board with no secret file is one started before T-122, open to
         # every local caller: it is reported, and nothing is opened on it.
-        opener = shutil.which('osascript') if sys.platform == 'darwin' else None
-        opener = opener or shutil.which('xdg-open') or shutil.which('open')
-        opened, refused = False, None
-        if not opener: refused = 'no program to open a browser with was found; nothing was opened'
-        else:
-            try: opened = open_address(board_login_url(url, port))
-            except (OSError, RuntimeError):
-                # said without the path: state/ never names where the secret is
-                refused = 'the board secret could not be read; restart the board'
+        # The tab the board is already open in is reused when one is found
+        # (T-145), so the captain keeps one tab and it is the one that writes.
         record = dict(root=str(root), url=url, reused=reused, page_http_verified=page,
-                      opener_invoked=opened, browser_navigation_verified=False)
+                      browser_navigation_verified=False, **board_open(url, port))
         if not reused: record['owner'] = owner
-        if refused: record['sign_in_error'] = refused
         save(base / 'board.json', record)
         return record
 
@@ -2074,6 +2175,15 @@ def main(args):
         if record.get('sign_in_error'):
             print('fm board: ' + record['sign_in_error'], file=sys.stderr); return 69
         return 0
+    if mode == 'board-login':
+        # `board-login <port>`: what the board runs for its re-login button
+        # (T-145), on its own port. The same opener as `board`, on a board
+        # that is already up; what it prints names neither address nor code.
+        if len(args) != 1 or not re.fullmatch(r'[1-9][0-9]{0,4}', args[0]) or int(args[0]) > 65535:
+            print('fm board-login: usage: board-login <port>', file=sys.stderr); return 64
+        said = board_open(f'http://127.0.0.1:{args[0]}', int(args[0]))
+        print(json.dumps(said))
+        return 69 if said.get('sign_in_error') or not said['opener_invoked'] else 0
     if mode == 'launch': launch(args[0], args[1], args[2:])
     if mode == 'transport': return transport(*args)
     if mode == 'pane-child': return run_supervised(*args)

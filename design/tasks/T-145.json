@@ -1,0 +1,29 @@
+{
+  "id": "T-145",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-144"
+  ],
+  "title": "the captain's board opens in one reused tab, says plainly when a tab cannot write, and a re-login button there brings the write credential back without the terminal, and a hand-off whose crewman already left the deck is shown quietly, not as a warning",
+  "scope": [
+    "bin/fm-herdr.py",
+    "bin/fm.sh",
+    "board/server.ts",
+    "board/public/**",
+    "i18n/**",
+    "tests/**",
+    "design/**",
+    "README.md",
+    "design/tasks/T-145.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-09-29 the captain could not merge from the board twice in a morning: the tab in use had no write credential (a fresh tab, a bookmark, or localhost instead of 127.0.0.1), while the one-time /login tab fm.sh board had opened was elsewhere. The captain asked for the board to reuse one tab, and for a visible re-login button. Its own spec file, design/tasks/T-145.json, is committed on this branch.",
+    "Moved here from T-153 by firstmate on 2026-09-29: the board's review card shows the last review round's wall-clock (T-153 records it in the round's result and exposes it as last_review in /api/state).",
+    "One tab. `fm.sh board` (bin/fm-herdr.py's opener) looks for an open tab already on the board's address and navigates that tab to the fresh /login address and brings it to the front, instead of opening a new one: on macOS through AppleScript for Chrome, Safari, Arc and Brave where present; elsewhere, or when no such tab exists or the browser cannot be scripted, it opens one as today and says which it did. The login page, once the code is traded, replaces its own address with the board's so a reload never re-sends a used code.",
+    "Visible read-only state. A tab without the credential shows a banner on load (en and zh-TW) naming why (no credential in this tab; or opened as localhost, with a link to the 127.0.0.1 address), and every write control is visibly disabled with that reason as its tooltip, instead of failing when pressed.",
+    "Re-login button. The banner's button asks the board to open a new login for this browser: a POST to a new route that needs the board's own Origin and a JSON body (T-122's rules, no credential), is rate-limited (one per 10 seconds, a stated cap per hour), and makes the board run the same opener, so the one-time code goes only into the captain's browser tab, never into the response. A crew round cannot reach it (the sandbox closes loopback) and no other page can call it (Origin). Tests: the reuse path and the fallback, the banner and disabled controls, the button's route refusing a foreign Origin and a burst, and the code never appearing in any response or log.",
+    "Quiet hand-offs. The ship's hand-off cue (board/public/ship.js handoffs(), about lines 646-676) shows a warning-coloured text line ending 'participant not on deck or cannot be confirmed' (handoffUnavailable) whenever either end of an order, work, reject or approve is not on deck. That is the normal case at a round's end: a reviewer posts its verdict and leaves the deck in the same moment, so the captain saw the notice constantly on 2026-09-29. A hand-off with an end off deck animates from or to that role's station (or the firstmate) and does not show the notice; the notice remains only when an actor is unknown to the board altogether, and then once per actor, not per event. Test: a verdict from a reviewer who has just left shows no notice.",
+    "Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves."
+  ]
+}

@@ -32,6 +32,11 @@ each wake as it writes one, ringing every waiter's own doorbell (T-151), and
 the harness's hooks hand it to firstmate (T-137; see below): firstmate keeps
 no waiter of its own running. `fm-session.sh wait` is a tool for scripts
 that block on a wake.
+`bin/fm.sh board` signs the captain's browser in to the board with a
+one-time address, sending the tab already on the board there (Chrome, Safari,
+Arc or Brave on macOS) rather than opening another, and says which it did
+(T-145). A tab that cannot write says why in a banner, and its "Sign in
+again" button has the board run the same opener, so the terminal is not needed.
 Every background process fm starts goes through `bin/lib/fm-lifeline.sh`,
 has an owner and ends with it. It does not authorize work or invent success when
 Herdr/transport is missing. Declared adapters only: do not claim arbitrary

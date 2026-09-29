@@ -1591,17 +1591,71 @@ const writeRefusal = (req: Request): Response | null => {
 // The page that takes the one-time code out of the address, trades it for the
 // tab's token, keeps that in this tab's sessionStorage (one origin, port
 // included, one tab) and replaces itself, so the code stays in neither the
-// address bar nor the history. It holds nothing of its own.
+// address bar nor the history. Its address becomes the board's own before the
+// code is sent (T-145): a reload, or a reused tab's history, lands on the
+// board and never sends a used code again. It holds nothing of its own.
 const LOGIN_PAGE = `<!doctype html><meta charset="utf-8"><title>firstmate</title><script>
 (async () => {
   const code = location.hash.slice(1) || new URLSearchParams(location.search).get("code") || "";
-  history.replaceState(null, "", "/login");
+  history.replaceState(null, "", "/");
   const r = await fetch("/login", { method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ code }) }).then(x => x.ok ? x.json() : null).catch(() => null);
   if (r && typeof r.token === "string") sessionStorage.setItem("board.token", r.token);
   location.replace("/");
 })();
 </script>`;
+
+// --- Sign in again from the page (T-145) ---
+// A read-only tab's banner asks the board to open a new sign-in for the
+// captain's browser. The board runs the opener `fm.sh board` runs (bin/
+// fm-herdr.py board-login, on this board's own port), so the one-time code
+// goes from that script to the browser and nowhere else: not into this
+// route's answer, which carries only the fields named below, nor into the
+// log, since the script's output is read here and never printed. The route
+// takes no credential - asking for one is its whole point - so it keeps
+// T-122's other rules (the board's own Origin, a JSON body), and at worst a
+// caller makes the captain's browser show the board: never more than one
+// sign-in in any 10 seconds, nor 12 in any hour. FM_BOARD_RELOGIN_GAP_MS can
+// shorten the 10 seconds, never lengthen them, so a test can reach the
+// hourly cap; nothing shortens the cap.
+const RELOGIN_GAP_MS = Math.min(10_000, Number(process.env.FM_BOARD_RELOGIN_GAP_MS) || 10_000);
+const RELOGIN_PER_HOUR = 12, RELOGIN_TIMEOUT_MS = 60_000;
+const relogins: number[] = [];
+let reloginRunning = false;
+const reloginBrowsers = new Set(["Google Chrome", "Brave Browser", "Arc", "Safari"]);
+type Relogin = { ok: boolean; opened: boolean; tab: "reused" | "new" | null; browser: string | null; reason?: string };
+const runRelogin = async (port: number): Promise<Relogin> => {
+  const child = Bun.spawn(["python3", join(ROOT, "bin/fm-herdr.py"), "board-login", String(port)],
+    { cwd: ROOT, stdin: "ignore", stdout: "pipe", stderr: "ignore", env: childEnv() });
+  const timer = setTimeout(() => child.kill(), RELOGIN_TIMEOUT_MS);
+  let said: Record<string, unknown> = {};
+  try {
+    const out = await new Response(child.stdout).text();
+    await child.exited;
+    try { said = JSON.parse(out) ?? {}; } catch { said = {}; }
+  } finally { clearTimeout(timer); }
+  const opened = said.opener_invoked === true;
+  const reason = typeof said.sign_in_error === "string" ? said.sign_in_error : "";
+  return {
+    ok: opened, opened,
+    tab: said.tab === "reused" ? "reused" : said.tab === "new" ? "new" : null,
+    browser: typeof said.browser === "string" && reloginBrowsers.has(said.browser) ? said.browser : null,
+    ...(opened ? {} : { reason: reason && /^[ -~]{1,200}$/.test(reason) ? reason : "the browser could not be opened" }),
+  };
+};
+// Whether a sign-in may start now: a 429 with the code the page translates,
+// or null, after which the attempt is counted.
+const reloginRefusal = (now: number): Response | null => {
+  while (relogins.length && now - relogins[0] >= 3_600_000) relogins.shift();
+  const last = relogins[relogins.length - 1];
+  if (reloginRunning || (last !== undefined && now - last < RELOGIN_GAP_MS))
+    return json({ error: "a sign-in was opened a moment ago; wait 10 seconds", code: "reloginTooSoon" }, 429,
+      { "retry-after": String(Math.max(1, Math.ceil((RELOGIN_GAP_MS - (now - (last ?? now))) / 1000))) });
+  if (relogins.length >= RELOGIN_PER_HOUR)
+    return json({ error: `no more than ${RELOGIN_PER_HOUR} sign-ins an hour`, code: "reloginHourly" }, 429,
+      { "retry-after": String(Math.max(1, Math.ceil((3_600_000 - (now - relogins[0])) / 1000))) });
+  return null;
+};
 
 const serveFile = (name: string) => {
   const p = join(PUBLIC, name);
@@ -1644,6 +1698,24 @@ const server = Bun.serve({
     if (url.pathname === "/login") {
       return new Response(LOGIN_PAGE, { headers: { "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store", "referrer-policy": "no-referrer" } });
+    }
+    if (url.pathname === "/relogin") {
+      if (req.method !== "POST") return json({ error: "POST only" }, 405, { allow: "POST" });
+      if (!ORIGINS.includes(req.headers.get("origin") ?? "")) return refuse("writeOrigin", "not from the board's own page");
+      if (!isJson(req)) return refuse("writeJson", "json only");
+      return req.json().then(async (body: unknown) => {
+        if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "bad request" }, 400);
+        const now = Date.now();
+        const refused = reloginRefusal(now);
+        if (refused) return refused;
+        relogins.push(now); reloginRunning = true;
+        try {
+          const r = await runRelogin(server.port);
+          return json(r.ok ? r : { ...r, code: "reloginFailed" }, r.ok ? 200 : 502, { "cache-control": "no-store" });
+        } catch {
+          return json({ ok: false, opened: false, tab: null, browser: null, error: "the opener did not run", code: "reloginFailed" }, 502);
+        } finally { reloginRunning = false; }
+      }, () => json({ error: "bad request" }, 400));
     }
 
     // the dictionaries, plus the table that derives zh-CN from zh-TW

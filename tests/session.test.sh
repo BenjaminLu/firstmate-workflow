@@ -262,6 +262,122 @@ class Session(unittest.TestCase):
         self.assertEqual([],opened); self.assertFalse(record['opener_invoked'])
         self.assertIn('no program to open a browser',record['sign_in_error'])
         self.assertNotIn('login',(self.repo/'state/session/board.json').read_text())
+    # --- T-145: one tab ---------------------------------------------------
+    ADDRESS='http://127.0.0.1:4173/login#1790000000000.'+'a'*32+'.'+'b'*64
+    def macos_board_open(self, running, tabs, opens=True):
+        """board_open on macOS with osascript answering as a Mac would: the
+        running-browser question with `running`, each browser's tab script
+        with tabs[bundle] as (exit, stdout) or an exception. Every osascript
+        call is recorded as (argv, script)."""
+        calls=[]
+        def run(argv, **kwargs):
+            script=kwargs.get('input',b'').decode()
+            calls.append((argv,script))
+            if 'is running' in script: return subprocess.CompletedProcess(argv,0,stdout=running.encode(),stderr=b'')
+            bundle=next(b for _, b, _ in m.BOARD_BROWSERS if f'application id "{b}"' in script)
+            answer=tabs.get(bundle,(0,''))
+            if isinstance(answer,Exception): raise answer
+            return subprocess.CompletedProcess(argv,answer[0],stdout=answer[1].encode(),stderr=b'')
+        with patch.object(m.sys,'platform','darwin'), \
+             patch.object(m.shutil,'which',side_effect=lambda name: '/usr/bin/'+name), \
+             patch.object(m.subprocess,'run',side_effect=run), \
+             patch.object(m,'board_login_url',return_value=self.ADDRESS), \
+             patch.object(m,'open_address',return_value=opens) as opened:
+            said=m.board_open('http://127.0.0.1:4173',4173)
+        return said, calls, opened
+    def test_a_tab_already_on_the_board_is_reused_and_brought_to_the_front(self):
+        said, calls, opened = self.macos_board_open('com.apple.Safari\n',{'com.apple.Safari':(0,'reused\n')})
+        self.assertFalse(opened.called,'a reused tab opens no new one')
+        self.assertEqual(('reused','Safari',True),(said['tab'],said['browser'],said['opener_invoked']))
+        self.assertIn('Safari',said['said']); self.assertNotIn('sign_in_error',said)
+        self.assertEqual(2,len(calls),'one question for the running browsers, then Safari alone')
+        for argv, _ in calls: self.assertEqual(['/usr/bin/osascript'],argv,'the address is never in an argument list')
+        asked, tab = calls[0][1], calls[1][1]
+        self.assertIn('if application id (b as text) is running',asked)
+        for _, bundle, _ in m.BOARD_BROWSERS: self.assertIn(f'"{bundle}"',asked)
+        # a literal id is resolved when the script compiles, and one browser
+        # that is not installed failed the whole question
+        self.assertNotIn('application id "',asked)
+        self.assertNotIn('b'*64,asked,'the question for running browsers carries no code')
+        self.assertIn('tell application id "com.apple.Safari"',tab)
+        self.assertIn('set URL of t to "'+self.ADDRESS+'"',tab)
+        self.assertIn('set current tab of w to t',tab); self.assertIn('set index of w to 1',tab); self.assertIn('activate',tab)
+        # the board's address as either host, and nothing on a longer port
+        for base in ('http://127.0.0.1:4173','http://localhost:4173'):
+            self.assertIn(f'u is "{base}" or u starts with "{base}/"',tab)
+        self.assertNotIn('starts with "http://127.0.0.1:4173"',tab,'a bare prefix would match port 41730 too')
+        self.assertNotIn('b'*64,json.dumps(said),'what it says holds no code')
+    def test_each_browser_speaks_its_own_words_and_one_that_cannot_be_scripted_is_passed_over(self):
+        said, calls, opened = self.macos_board_open('com.google.Chrome\ncompany.thebrowser.Browser\ncom.apple.Safari\n',
+            {'com.google.Chrome':(1,''),'company.thebrowser.Browser':(0,'reused')})
+        self.assertFalse(opened.called)
+        self.assertEqual(('reused','Arc'),(said['tab'],said['browser']))
+        self.assertEqual(['is running','com.google.Chrome','company.thebrowser.Browser'],
+            ['is running' if 'is running' in s else next(b for _, b, _ in m.BOARD_BROWSERS if f'application id "{b}"' in s) for _, s in calls],
+            'Chrome refused, so Arc was asked, and Safari never was')
+        self.assertIn('set active tab index of w to i',calls[1][1],'Chromium sets the active tab index')
+        self.assertIn('tell t to select',calls[2][1],'Arc selects the tab')
+        said, calls, _ = self.macos_board_open('com.brave.Browser\n',{'com.brave.Browser':(0,'reused')})
+        self.assertEqual('Brave Browser',said['browser'])
+        self.assertIn('set active tab index of w to i',calls[1][1])
+    def test_with_no_board_tab_or_no_scriptable_browser_a_new_tab_is_opened_and_said(self):
+        for running, tabs, asked in [('',{},1),                                          # no browser running
+                                     ('com.apple.Safari\n',{'com.apple.Safari':(0,'')},2),  # no tab on the board
+                                     ('com.apple.Safari\n',{'com.apple.Safari':(1,'')},2),  # not scriptable (refused)
+                                     ('com.apple.Safari\n',{'com.apple.Safari':subprocess.TimeoutExpired('osascript',15)},2)]:
+            said, calls, opened = self.macos_board_open(running,tabs)
+            self.assertEqual([call(self.ADDRESS)],opened.call_args_list,(running,tabs))
+            self.assertEqual(asked,len(calls))
+            self.assertEqual(('new',True),(said['tab'],said['opener_invoked']))
+            self.assertNotIn('browser',said); self.assertIn('opened a new one',said['said'])
+        said, _, _ = self.macos_board_open('',{},opens=False)
+        self.assertEqual((None,False),(said['tab'],said['opener_invoked']),'a browser that did not open is not a new tab')
+        # off macOS nothing is scripted: the desktop opener opens a new tab
+        with patch.object(m.sys,'platform','linux'), \
+             patch.object(m.shutil,'which',side_effect=lambda name: '/usr/bin/xdg-open' if name=='xdg-open' else None), \
+             patch.object(m.subprocess,'run') as run, \
+             patch.object(m,'board_login_url',return_value=self.ADDRESS), \
+             patch.object(m,'open_address',return_value=True) as opened:
+            said=m.board_open('http://127.0.0.1:4173',4173)
+        self.assertFalse(run.called); self.assertEqual([call(self.ADDRESS)],opened.call_args_list)
+        self.assertEqual('new',said['tab'])
+    def test_board_start_says_which_tab_it_used(self):
+        record, opened, _ = self.reused_board(lambda name: '/usr/bin/xdg-open' if name=='xdg-open' else None)
+        self.assertEqual('new',record['tab'])
+        self.assertEqual('new',json.loads((self.repo/'state/session/board.json').read_text())['tab'])
+    def test_board_login_is_the_same_opener_and_prints_no_code(self):
+        """What the board's re-login button runs: `board-login <port>`."""
+        import contextlib, io
+        for said, rc in [(dict(opener_invoked=True,tab='reused',browser='Safari'),0),
+                         (dict(opener_invoked=False,tab=None,sign_in_error='the board secret could not be read; restart the board'),69),
+                         (dict(opener_invoked=False,tab=None),69)]:
+            out=io.StringIO()
+            with patch.object(m,'board_open',return_value=said) as run, contextlib.redirect_stdout(out):
+                self.assertEqual(rc,m.main(['board-login','4173']))
+            self.assertEqual([call('http://127.0.0.1:4173',4173)],run.call_args_list)
+            self.assertEqual(said,json.loads(out.getvalue()))
+        for bad in ([],['0'],['70000'],['41x'],['4173','4174']):
+            err=io.StringIO()
+            with patch.object(m,'board_open') as run, contextlib.redirect_stderr(err):
+                self.assertEqual(64,m.main(['board-login',*bad]),bad)
+            self.assertFalse(run.called)
+        # and as a program: the code goes to the browser, and not to stdout or stderr
+        fake=self.repo/'fake-browser'; fake.mkdir(); seen=self.repo/'browser'
+        for name in ('osascript','xdg-open','open'):
+            (fake/name).write_text('#!/usr/bin/env bash\n{ printf "%s\\n" "$*"; cat; } >> '+str(seen)+'\n'); (fake/name).chmod(0o755)
+        config=Path(self.tmp.name)/'config'; secret=config/'firstmate/board-4173.secret'
+        secret.parent.mkdir(parents=True); secret.write_text('e'*64+'\n'); secret.chmod(0o600)
+        env={k:v for k,v in os.environ.items() if not k.startswith(('FM_','HERDR_'))}
+        env.update(PATH=str(fake)+os.pathsep+env.get('PATH',''),XDG_CONFIG_HOME=str(config),PYTHONDONTWRITEBYTECODE='1')
+        run=subprocess.run([sys.executable,str(self.repo/'bin/fm-herdr.py'),'board-login','4173'],env=env,
+                           stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=60)
+        self.assertEqual(0,run.returncode,run.stderr)
+        import re
+        codes=re.findall(r'/login#([0-9]{13}\.[0-9a-f]{32}\.[0-9a-f]{64})',seen.read_text())
+        self.assertEqual(1,len(set(codes)),'the browser was handed one sign-in address')
+        self.assertNotIn(codes[0],run.stdout); self.assertNotIn(codes[0],run.stderr)
+        self.assertNotIn('/login',run.stdout)
+        self.assertEqual('new',json.loads(run.stdout)['tab'])
     def main_board(self, outcome):
         import contextlib, io
         out, err = io.StringIO(), io.StringIO()
