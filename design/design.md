@@ -1942,6 +1942,58 @@ smoke job.
 `ci` is a required status check on `main`, and a branch must be up to date
 before it can merge.
 
+**GitHub Actions runs the same stages as separate, parallel jobs (T-134).**
+On 2026-09-28 the one serial job on `main` took about 8 minutes of its
+10-minute limit, and two pull requests were cancelled at the limit for
+adding tests. `bin/ci.sh` gained two flags so a workflow job can ask for its
+own slice of one gate run instead of all of it:
+
+- `--stage fast|bash|bun|e2e` — run only that group of stages. `fast` is
+  shellcheck, lint, hygiene, stdin, assertions and dag; the other three name
+  themselves. With neither flag, every stage runs in one process, exactly
+  as a plain `bin/ci.sh` always has — nothing above this paragraph describes
+  a changed default.
+- `--shard i/n` — inside `--stage bash` only, run the *i*-th of *n* shards of
+  `tests/*.test.sh`. Assignment is longest-processing-time bin packing:
+  suites are taken slowest-first and each goes to whichever shard is
+  lightest so far, so the shards come out balanced rather than merely
+  evenly counted, and every suite lands in exactly one shard (`i`, `n`
+  themselves are validated the way `FM_CI_JOBS` is — a decimal `i/n` with
+  `i` from 1 to `n`, or exit 64). A suite's duration comes from
+  `FM_CI_TIMINGS_IN` (a "`path seconds`" line per suite, from a previous
+  green run's artifact) when that file names it; a suite the file does not
+  name — new, or the file absent entirely — falls back to its byte size,
+  the same proxy `pool_order` has always used for the one-process ordering.
+  So a newly added suite still gets a duration and so a deterministic
+  shard, with no file to update by hand.
+
+The bash stage records what each suite actually took, one "`path seconds`"
+line per suite, to `FM_CI_TIMINGS_OUT` when that variable is set — never
+under `FM_ROOT`, so the gate still leaves nothing behind in the tree it
+judges — and only then: the plain, flag-less run pays for none of the timing
+calls. `.github/workflows/ci.yml` runs four kinds of job: `fast`; `bash`, a
+matrix of shards, each downloading the previous successful run's timings
+artifacts (best effort — a first run, a fork with no read access, or a
+`gh` failure all just leave the shards balanced by size instead) and
+uploading its own as `suite-timings-<shard>`, so a slow suite is visible by
+name; `bun`; and `e2e`. A final job named `ci` — the required check's own
+name — `needs` all four and fails if any of them failed or was skipped, so
+branch protection and gate 6 read exactly what they read before. Every job
+keeps its own 10-minute `timeout-minutes`. Sharding turned the one
+`bun install` main had into six — the four `bash` shards, `bun` and `e2e` —
+so every one of those jobs, not just one, caches bun's install cache
+(`~/.bun/install/cache`, keyed on `hashFiles('bun.lock')` and the runner
+OS) ahead of its `bun install` step; `e2e` also keeps the pre-existing
+Playwright-browser cache the one job had. `tests/ci.test.sh` proves the
+flags' validation, that `--stage` runs only its own group of stages, that
+`--shard`'s shards union to exactly `tests/*.test.sh` with no suite in two
+(including a suite added after the fixture was first split), that
+`FM_CI_TIMINGS_OUT` is written only when asked, and that
+`FM_CI_TIMINGS_IN`'s recorded duration — not a suite's real size — decides
+the split; and reads the workflow file for the job names, the shard flag,
+the final `ci` job's `needs`, the per-job timeout, and, for every job that
+runs `bun install`, a `bun.lock`-keyed cache step positioned before it.
+
 ---
 
 ## 11. Self-update
