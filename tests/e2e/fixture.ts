@@ -225,7 +225,12 @@ export const test = base.extend({
       const origin = new URL(address).origin, secret = sessions.get(origin);
       if (secret && !signed.has(origin)) {
         await goto(signInAddress({ url: origin, secret }));
-        await page.waitForURL(`${origin}/`);
+        // T-145: the login page takes the board's address before it trades
+        // the code, so the address says nothing about whether the trade is
+        // done. Once the token is kept, the login page loads the board's
+        // own page, so wait for that page (#live is the board's, never the
+        // login page's), and read the token there, with no navigation left.
+        await page.locator("#live").waitFor({ state: "attached" });
         if (!await page.evaluate(() => sessionStorage.getItem("board.token")))
           throw new Error(`the one-time sign-in to ${origin} left no token`);
         signed.add(origin);

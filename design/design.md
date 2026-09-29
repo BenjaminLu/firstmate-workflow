@@ -594,7 +594,11 @@ the verdict, and how many of them it spent waiting for the head's CI.
 `/api/state` gives each task `last_review {actor, seconds, outcome}` for its
 latest ended round: the verdict's own `wall_clock.seconds` where it carries
 one, else the log's time from that reviewer's `review_opened` to its verdict;
-`null` before any round has ended. Showing it on the review card is T-145's.
+`null` before any round has ended. The task's card on the board shows it
+(T-145) as one line, "last review 17:05 · changes requested" - minutes and
+seconds, with hours in front past the hour, and the outcome as approved,
+changes requested, or no verdict for any other end - in `en` and `zh-TW`; a
+task with `last_review` null shows none.
 
 The judgement about outages can never be right on wording alone, because
 there is no phrase a model cannot write — this repository contains
@@ -1849,8 +1853,28 @@ The renderer patches existing figures, preserving pointer capture and rotation.
 Full event replay supplies directed `handoffs` with event identities: dispatch
 or recorded order from firstmate to a worker, PR/review handoff to a reviewer,
 approval to firstmate and rejection to the worker. Peer resolution requires
-one known active participant on the same task; ambiguous or missing recipients
-produce static unavailable feedback. Initial history is silent and duplicate
+one known active participant on the same task, and names none otherwise.
+**An end off the deck is quiet (T-145).** A reviewer posts its verdict and
+leaves the deck in the same moment, and a worker has often left before the
+reviewer rejects, so an end that is not on deck is the normal end of a round,
+not a fault. The kind fixes each end's role (order: firstmate to worker; work:
+worker to reviewer; reject: reviewer to worker; approve: reviewer to
+firstmate), so such an end - a crewman who left, or one the server left
+unnamed - is drawn at its station, which is where firstmate stands (its
+figure, else the helm): the deck has no post of its own per role, and
+firstmate sends every order and takes every verdict. The cue travels as
+usual, names the role where it has no name, and no one reacts at a station.
+The notice (`handoffUnavailable`, "participant unknown to the board") is left
+only for an actor the board cannot place at all. Each hand-off carries
+`from_role` and `to_role`, the role the server knows each named end by:
+`firstmate`, the role the crewman said (`data.role`) or was dispatched as,
+or, for a run recorded before T-116, the one its canonical actor
+(`<role>-<name>-<task>-r<n>`) names. The page never reads a role from an
+actor's name. A named end with no role that is not on deck is the one case
+said, whatever its name, so `secondmate` dispatched as a worker is quiet
+and a `reviewer-x` that never said what it is is not. It is shown once per
+actor for the life of the page, not once per event; its cue carries
+`data-unknown`. Initial history is silent and duplicate
 snapshots do not replay cues. Travel uses current rendered anchors for 1.4
 seconds, then a receiving reaction and bubble pulse, with cleanup at 2.3 seconds.
 Reduced motion retains localized directed text. Handoffs emit no events, POSTs
@@ -1926,9 +1950,11 @@ web page open in the captain's browser; neither can write.
   exists so a test sees expiry apart from the start-time rule. The page at
   `/login` posts the code (with its Origin, as JSON) and gets back, in the
   JSON body, the tab's token `HMAC-SHA256(secret, "session:<origin>")`. It
-  keeps the token in `sessionStorage` (`board.token`) and replaces its
-  address with `/`, so the code stays in neither the address bar nor the
-  history. A used, expired or wrong code is 403 and gives nothing. No
+  replaces its address with the board's own, `/`, before it sends the code
+  (T-145), so a reload while the code is on its way, or the reused tab's
+  history, lands on the board and never sends a used code again; it keeps
+  the token in `sessionStorage` (`board.token`), so the code stays in neither
+  the address bar nor the history. A used, expired or wrong code is 403 and gives nothing. No
   response ever carries `Set-Cookie`. The token belongs to the tab: a
   reload, a navigation within the board and a board restart keep it, but a
   new tab or window is read-only until the board is opened through a new
@@ -1943,6 +1969,56 @@ web page open in the captain's browser; neither can write.
   it does when the board cannot start. On
   Linux `xdg-open` takes it as an argument, which `ps` can show for the moment
   it runs.
+- *One tab (T-145).* On 2026-09-29 the captain twice could not merge from
+  the board: the tab in use held no token (a fresh tab, a bookmark, or
+  `localhost` instead of `127.0.0.1`) while the signed-in tab was elsewhere.
+  So the opener (`board_open`, which `board_start` and the re-login route
+  both run) first looks for a tab already on the board - its address, or any
+  page under it, as `127.0.0.1` or `localhost`, on the board's port exactly -
+  and sends that tab to the fresh `/login#<code>` and brings it and its window
+  to the front, rather than opening another. On macOS it asks Chrome, Brave,
+  Arc and Safari, by bundle id and only those already running (so none is
+  started), each in an AppleScript of its own on `osascript`'s stdin; the
+  running ones are found with the ids read at run time, since a literal id is
+  resolved when the script compiles and one browser not installed would fail
+  the whole question. A browser that cannot be scripted (not permitted, an
+  error, or no answer within its timeout) is passed over. With no such tab,
+  off macOS, or when nothing could be scripted, it opens a new tab as before.
+  The record and `bin/fm.sh board`'s output say which: `tab` is `reused`
+  (with `browser`) or `new`, and `said` puts it in words; neither holds the
+  address. The opener is bounded by the limits around it. A code lives 60
+  seconds, and the re-login route stops the opener after 60. So no code is
+  minted before the search: each is made just before the one question that
+  carries it, whether a browser's tab script or the new tab. Every question
+  has its own timeout: 5 seconds for which browsers run, 8 for each
+  browser's tabs, and 10 for the new tab. The search ends 35 seconds in
+  (`OPENER_BUDGET` 45 less the new tab's 10), so the whole run ends within
+  45 seconds. A code is at most one question's timeout old when a browser
+  gets it. A first run held up on macOS's Automation prompt therefore falls
+  back to a new tab with a fresh code, not an expired one.
+- *Signing in again from the page (T-145).* `POST /relogin` makes the board
+  run the same opener, `bin/fm-herdr.py board-login <port>` on its own port,
+  so the one-time code goes from that script to the browser and nowhere else:
+  the route answers only `ok`, `opened`, `tab`, `browser` (one of the four
+  names) and a fixed `reason`, reads the script's output and prints none of
+  it, and drops its stderr. It takes no credential - asking for one is its
+  point - and keeps T-122's other rules: the board's own `Origin` (403
+  `writeOrigin`) and a body declared JSON (403 `writeJson`) that parses to an
+  object (400). It is rate-limited in the board's memory: one sign-in in any
+  10 seconds, and while one is running (429 `reloginTooSoon`, with
+  `Retry-After`), and no more than 12 in any hour (429 `reloginHourly`); a
+  refused request is not counted, and the credential lifts neither limit.
+  `FM_BOARD_RELOGIN_GAP_MS` can shorten the 10 seconds, never lengthen them, so
+  a test reaches the hourly cap; nothing changes the cap. The opener runs
+  under T-151's keeper (`bin/lib/fm_lifeline.py keep`), with the board as its
+  owner and in a process group of its own. The route stops it after 60
+  seconds, which `FM_BOARD_RELOGIN_TIMEOUT_MS` can shorten, never lengthen.
+  That stop, or the board's own end, takes every `osascript` or desktop
+  opener it started with it. An opener that did not open, or was stopped,
+  is 502 `reloginFailed`. At worst a caller that forges the Origin
+  (curl on the operator's machine; a crew round cannot reach loopback) makes
+  the captain's browser show the board's sign-in: the code never reaches the
+  caller.
 - *Scripts.* A script on the operator's machine reads the secret file and
   sends it as `Authorization: Bearer`, with the board's Origin and a JSON
   body, keeping the secret out of every argument list: for curl,
@@ -1956,10 +2032,17 @@ web page open in the captain's browser; neither can write.
   secret is refused.
 - *A tab without the credential.* The page asks `/api/session` when it loads
   and after the stream reconnects, sending its token if it holds one. Without
-  one, or after a write is refused for want of it, it shows one translated line - the tab is
-  read-only, and `bin/fm.sh board` reopens it - disables every option,
-  confirm button and custom answer, and offers no park, drop or drag. Opening
-  a file falls back to the read-only viewer.
+  one, or after a write is refused for want of it, it shows a banner, in
+  `en` and `zh-TW`, naming why (T-145): this tab holds no sign-in; or it was
+  opened as `localhost`, whose storage is not `127.0.0.1`'s, with a link to
+  the same page at `http://127.0.0.1:<port>`. The banner's button, "Sign in
+  again", posts `/relogin` and says what the board did (the board's tab
+  reused, a new one opened, too soon, the hourly cap, or failed), then waits
+  out the 10 seconds before it can be pressed again. Every write control is
+  visibly disabled with the reason as its tooltip: each option, the custom
+  answer and its text, the confirm button, and each card's action menu,
+  shown greyed rather than removed; no card can be dragged to park or drop.
+  Opening a file falls back to the read-only viewer.
 - *Crew rounds cannot read the secret* only while the OS sandbox denies reads
   of the home directory outside named toolchain and auth paths. On `main` that
   sandbox (T-105) was reverted and T-117 has not merged, so today a crew

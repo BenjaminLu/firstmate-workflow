@@ -167,8 +167,73 @@ test('real directed handoffs travel, react once and retain pointer ownership thr
     emitFixture(root,'worker-real','T-034','agent_finished');
     emitFixture(root,'reviewer-real','T-034','review_failed','Reject again','再次拒絕',{review_outcome:'rejected'});
     await page.evaluate("fetch('/api/state').then(r=>r.json()).then(render)");await page.clock.runFor(32);
-    await expect(page.locator('.handoff.static')).toContainText(TW.handoffUnavailable);
+    // T-145: a worker that has left the deck is the normal end of a round,
+    // not a participant the board cannot confirm: the cue names its role
+    // and says nothing more
+    await expect(page.locator('.handoff.static[data-kind="reject"]')).toContainText(TW.roleWorker);
+    await expect(page.locator('.handoffs')).not.toContainText(TW.handoffUnavailable);
     await expect(page.locator('[data-crew="worker-real"]')).toHaveCount(0);
+  }finally{stopBoard(b);}
+});
+
+test('T-145: a verdict from a reviewer who has just left the deck is shown quietly, and an actor the board cannot place is said once', async ({page})=>{
+  const root=makeRoot([],false);
+  emitFixture(root,'worker-q','T-034','dispatched','Build decision cards','實作決策卡片',{role:'worker'});
+  emitFixture(root,'reviewer-q','T-034','dispatched','Review decision cards','審查決策卡片',{role:'reviewer'});
+  const b=await startBoard(root);
+  try {
+    await page.goto(b.url+'/?lang=en');
+    await expect(page.locator('[data-crew="reviewer-q"]')).toBeVisible();
+    await page.clock.install();await page.clock.pauseAt(Date.now()+60_000);
+    const redraw=async()=>{await page.evaluate("fetch('/api/state').then(r=>r.json()).then(render)");await page.clock.runFor(32);};
+    // the verdict and the leaving land together, as they do at a round's end
+    emitFixture(root,'reviewer-q','T-034','approved','Review approved','審查通過');
+    emitFixture(root,'reviewer-q','T-034','agent_finished');
+    await redraw();
+    await expect(page.locator('[data-crew="reviewer-q"]')).toHaveCount(0);
+    const approve=page.locator('.handoff[data-kind="approve"]');
+    await expect(approve).toHaveAttribute('data-from','reviewer-q');
+    // it travels, from the station of a crewman no longer aboard, and is not
+    // turned into a line of text with a notice on it
+    await expect(approve).not.toHaveClass(/static/);
+    await expect(approve).toHaveText('✓');
+    await expect(page.locator('.handoffs')).not.toContainText(EN.handoffUnavailable);
+    await page.clock.runFor(2400);
+    await expect(approve).toHaveCount(0);
+    // the reviewer rejects and leaves, and the worker has left before it
+    emitFixture(root,'worker-q','T-034','agent_finished');
+    emitFixture(root,'reviewer-q','T-034','dispatched','Review again','再審',{role:'reviewer'});
+    emitFixture(root,'reviewer-q','T-034','review_failed','Changes requested','要求修改',{review_outcome:'rejected'});
+    emitFixture(root,'reviewer-q','T-034','agent_finished');
+    await redraw();
+    const reject=page.locator('.handoff[data-kind="reject"]');
+    await expect(reject).toHaveCount(1);
+    await expect(reject).not.toHaveClass(/static/);
+    await expect(page.locator('.handoffs')).not.toContainText(EN.handoffUnavailable);
+    await page.clock.runFor(2400);
+    // a crewman with a name that says no role is placed by what it was
+    // dispatched as, which the server knows, and leaves as quietly
+    emitFixture(root,'secondmate','T-034','dispatched','Odd job','怪差事');
+    emitFixture(root,'secondmate','T-034','agent_finished');
+    await redraw();
+    const second=page.locator('.handoff[data-kind="order"][data-to="secondmate"]');
+    await expect(second).toHaveCount(1);
+    await expect(second).not.toHaveAttribute('data-unknown',/./);
+    await expect(page.locator('.handoffs')).not.toContainText(EN.handoffUnavailable);
+    await page.clock.runFor(2400);
+    // an actor the board cannot place - never dispatched, never said what it
+    // is, and not aboard - is the one case said, and said once, not once per
+    // event
+    emitFixture(root,'mystery','T-034','approved','Approved','通過');
+    emitFixture(root,'mystery','T-034','approved','Approved again','再次通過');
+    emitFixture(root,'mystery','T-034','agent_finished');
+    await redraw();
+    const odd=page.locator('.handoff[data-kind="approve"][data-from="mystery"]');
+    await expect(odd).toHaveCount(2);
+    await expect(odd.first()).toHaveAttribute('data-unknown','mystery');
+    await expect(odd.nth(1)).not.toHaveAttribute('data-unknown',/./);
+    await expect(page.locator('.handoff[data-unknown]')).toHaveCount(1);
+    await expect(page.locator('.handoff[data-unknown]')).toContainText(EN.handoffUnavailable);
   }finally{stopBoard(b);}
 });
 
@@ -1861,7 +1926,8 @@ test('the one-time address signs one tab in once, keeps no code and sets no cook
     const address = signInAddress(b);
     const code = address.split('#')[1];
     await page.goto(address);
-    await page.waitForURL(`${b.url}/`);
+    await page.locator("#live").waitFor({ state: "attached" });   // the board page, loaded after the trade (T-145)
+    expect(page.url()).toBe(`${b.url}/`);
     // the code stays neither in the address nor in the entry the tab kept
     expect(page.url()).not.toContain(code);
     await page.goBack().catch(() => null);
@@ -1881,10 +1947,10 @@ test('the one-time address signs one tab in once, keeps no code and sets no cook
     const second = await context.newPage();
     await second.goto(`${b.url}/?lang=en`);
     await expect(second.locator('#readOnly')).toBeVisible();
-    await expect(second.locator('#readOnly')).toHaveText(EN.readOnly);
+    await expect(second.locator('#readOnlyWhy')).toHaveText(EN.readOnly);
     // the same address a second time signs nothing in
     await other.goto(address);
-    await other.waitForURL(`${b.url}/`);
+    await other.locator("#live").waitFor({ state: "attached" });
     expect(await other.evaluate(() => sessionStorage.getItem('board.token'))).toBeNull();
     await expect(other.locator('#readOnly')).toBeVisible();
   } finally { await context.close(); await other.context().close(); stopBoard(b); }
@@ -1898,14 +1964,26 @@ test('a tab without the credential says it is read-only, in both languages, and 
   try {
     await page.goto(`${b.url}/?lang=en`);
     await expect(page.locator('#readOnly')).toBeVisible();
-    await expect(page.locator('#readOnly')).toHaveText(EN.readOnly);
-    // every control that writes is disabled, and no card offers park or drop
-    await expect(page.locator('#card-D-1 [data-c="A"]')).toBeDisabled();
-    await expect(page.locator('#card-D-1 [data-c="custom"]')).toBeDisabled();
-    await expect(page.locator('#card-D-1 .confirm')).toBeDisabled();
+    await expect(page.locator('#readOnlyWhy')).toHaveText(EN.readOnly);
+    // every control that writes is visibly disabled, and says why (T-145):
+    // the answer buttons, the confirm and each card's menu, which is there,
+    // greyed, rather than gone; and no card can be dragged to park or drop
+    for (const control of ['#card-D-1 [data-c="A"]', '#card-D-1 [data-c="custom"]', '#card-D-1 .confirm']) {
+      await expect(page.locator(control)).toBeDisabled();
+      await expect(page.locator(control)).toHaveAttribute('title', EN.readOnlyTip);
+    }
     await expect(page.locator('.lanes .card')).not.toHaveCount(0);
-    await expect(page.locator('.cmenu')).toHaveCount(0);
+    await expect(page.locator('.lanes .cmenu')).not.toHaveCount(0);
+    for (const menu of await page.locator('.cmenu').all()) {
+      await expect(menu).toBeDisabled();
+      await expect(menu).toHaveAttribute('title', EN.readOnlyTip);
+    }
+    await expect(page.locator('.cacts')).toHaveCount(0);
     await expect(page.locator('.card[draggable="true"]')).toHaveCount(0);
+    // the banner offers the sign-in again, and names no localhost address here
+    await expect(page.locator('#relogin')).toBeVisible();
+    await expect(page.locator('#relogin')).toHaveText(EN.reloginButton);
+    await expect(page.locator('#readOnlyHere')).toBeHidden();
     // and a write sent anyway is refused by the board, whatever the page does
     const status = await page.evaluate(async () => (await fetch('/decisions', {method:'POST',
       headers:{'content-type':'application/json'}, body:JSON.stringify({id:'D-1',chosen:'A'})})).status);
@@ -1919,8 +1997,112 @@ test('a tab without the credential says it is read-only, in both languages, and 
     expect(existsSync(join(root, 'state/decisions/D-1.json'))).toBe(false);
     expect(existsSync(b.recorder)).toBe(false);
     await page.goto(`${b.url}/?lang=zh-TW`);
-    await expect(page.locator('#readOnly')).toHaveText(TW.readOnly);
+    await expect(page.locator('#readOnlyWhy')).toHaveText(TW.readOnly);
+    await expect(page.locator('#card-D-1 .confirm')).toHaveAttribute('title', TW.readOnlyTip);
+    await expect(page.locator('#relogin')).toHaveText(TW.reloginButton);
   } finally { await context.close(); stopBoard(b); }
+});
+
+test('T-145: the sign-in page takes the board\'s own address before it trades the code, so a reload never sends it again', async ({browser}) => {
+  const root = makeRoot(['working']);
+  const b = await startBoard(root);
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  try {
+    // the trade is held until the address has been read
+    let release = () => {};
+    const held = new Promise<void>(r => { release = r; });
+    const posts: string[] = [];
+    await page.route('**/login', async route => {
+      if (route.request().method() === 'POST') { posts.push(route.request().postData() || ''); await held; }
+      await route.continue();
+    });
+    const address = signInAddress(b);
+    const code = address.split('#')[1];
+    await page.goto(address, { waitUntil: 'commit' });
+    await expect.poll(() => posts.length).toBe(1);
+    expect(posts[0]).toContain(code);
+    // while the code is on its way the tab's address is already the board's
+    await expect.poll(() => page.url()).toBe(`${b.url}/`);
+    release();
+    // the board's own page, which the login page loads once the token is kept
+    await page.locator('#live').waitFor({ state: 'attached' });
+    expect(await page.evaluate(() => sessionStorage.getItem('board.token'))).toBe(tabToken(b));
+    // a reload lands on the board and sends no code
+    await page.reload();
+    await expect(page.locator('#readOnly')).toBeHidden();
+    expect(posts).toHaveLength(1);
+  } finally { await context.close(); stopBoard(b); }
+});
+
+test('T-145: a tab opened as localhost says so, and links to the board at 127.0.0.1', async ({browser}) => {
+  const root = makeRoot(['working']);
+  const b = await startBoard(root);
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const port = new URL(b.url).port;
+  try {
+    await page.goto(`http://localhost:${port}/?lang=en`);
+    await expect(page.locator('#readOnly')).toBeVisible();
+    await expect(page.locator('#readOnlyWhy')).toHaveText(EN.readOnlyLocalhost);
+    await expect(page.locator('#readOnlyHere')).toBeVisible();
+    await expect(page.locator('#readOnlyHere')).toHaveAttribute('href', `http://127.0.0.1:${port}/?lang=en`);
+    await expect(page.locator('#card-D-1 [data-c="A"]')).toBeDisabled();
+    await expect(page.locator('#card-D-1 [data-c="A"]')).toHaveAttribute('title', EN.readOnlyTipLocalhost);
+    await page.goto(`http://localhost:${port}/?lang=zh-TW`);
+    await expect(page.locator('#readOnlyWhy')).toHaveText(TW.readOnlyLocalhost);
+    await expect(page.locator('#readOnlyHere')).toHaveText(TW.readOnlyOpenHere);
+  } finally { await context.close(); stopBoard(b); }
+});
+
+test('T-145: the banner\'s button asks the board for a sign-in, sends no credential, and says what the board did', async ({browser}) => {
+  const root = makeRoot(['working']);
+  // the opener, recorded instead of run: the board runs bin/fm-herdr.py in its
+  // root, as it runs bin/fm-merge.sh, so nothing opens a real browser here
+  const calls = join(root, 'opener-calls');
+  writeFileSync(join(root, 'bin/fm-herdr.py'), 'import json, sys\n' +
+    `open(${JSON.stringify(calls)}, "a").write(json.dumps(sys.argv[1:]) + "\\n")\n` +
+    'print(json.dumps({"opener_invoked": True, "tab": "reused", "browser": "Safari"}))\n');
+  const b = await startBoard(root);
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const sent: Array<Record<string, string>> = [];
+  page.on('request', r => { if (new URL(r.url()).pathname === '/relogin') sent.push(r.headers()); });
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    await expect(page.locator('#relogin')).toBeVisible();
+    await page.locator('#relogin').click();
+    await expect(page.locator('#reloginSaid')).toHaveText(EN.reloginReused);
+    expect(readFileSync(calls, 'utf8').trim().split('\n').map(l => JSON.parse(l)))
+      .toEqual([['board-login', new URL(b.url).port]]);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].authorization).toBeUndefined();
+    expect(sent[0]['content-type']).toContain('application/json');
+    // the button waits out the board's 10 seconds, and the board refuses a burst anyway
+    await expect(page.locator('#relogin')).toBeDisabled();
+    const again = await page.evaluate(async () => { const r = await fetch('/relogin', { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: '{}' }); return [r.status, (await r.json()).code]; });
+    expect(again).toEqual([429, 'reloginTooSoon']);
+    expect(readFileSync(calls, 'utf8').trim().split('\n')).toHaveLength(1);
+  } finally { await context.close(); stopBoard(b); }
+});
+
+test('T-145: a task\'s card shows how long its last review round took and how it ended', async ({page}) => {
+  const root = makeRoot([], false);
+  emitFixture(root, 'reviewer-lr', 'T-034', 'review_opened', 'Review ready', '開始審查', {role:'reviewer'});
+  emitFixture(root, 'reviewer-lr', 'T-034', 'approved', 'Review approved', '審查通過',
+    {wall_clock:{started:1790686805, ended:1790687825, seconds:1020}});
+  const b = await startBoard(root);
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    const line = page.locator('#lanes .card[data-task="T-034"] .lastrev');
+    await expect(line).toHaveText(EN.lastReview.replace('{time}', '17:00').replace('{outcome}', EN.lastReviewApproved));
+    await expect(line).toHaveAttribute('data-last-review', '1020');
+    await page.locator('[data-l="zh-TW"]').click();
+    await expect(line).toHaveText(TW.lastReview.replace('{time}', '17:00').replace('{outcome}', TW.lastReviewApproved));
+    // a task no review round has finished on shows none
+    await expect(page.locator('#lanes .card:not([data-task="T-034"]) .lastrev')).toHaveCount(0);
+  } finally { stopBoard(b); }
 });
 
 test('a server on another loopback port receives nothing from the captain\'s signed-in tab, and its page cannot answer a card', async ({page}) => {

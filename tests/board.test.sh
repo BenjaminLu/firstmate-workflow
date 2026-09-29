@@ -502,6 +502,27 @@ assert_eq "1" "$(jq -r '[.handoffs[]|select(.kind=="reject")]|length' <<<"$syes"
   "review_outcome rejected yields one directed rejection"
 assert_eq "worker-real" "$(jq -r '.handoffs[]|select(.kind=="reject")|.to' <<<"$syes")" \
   "and targets the real worker on the same task"
+# T-145: each named end carries the role the board knows it by - what it said
+# it is, or was dispatched as - never one read from its name. An actor that
+# said nothing and was never dispatched is one the board cannot place.
+assert_eq "reviewer>worker" "$(jq -r '.handoffs[]|select(.kind=="reject")|"\(.from_role)>\(.to_role)"' <<<"$syes")" \
+  "a hand-off names the role of each end"
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor secondmate --task T-E --type dispatched \
+  --en "Odd job" --tw "怪差事" >/dev/null
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor mystery --task T-E --type approved \
+  --en "Approved" --tw "通過" >/dev/null
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor reviewer-odd --task T-E --type approved \
+  --en "Approved" --tw "通過" >/dev/null
+sodd="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "firstmate>worker" "$(jq -r '.handoffs[]|select(.kind=="order" and .to=="secondmate")|"\(.from_role)>\(.to_role)"' <<<"$sodd")" \
+  "a crewman dispatched under any name is placed by what it was dispatched as"
+assert_eq "null>firstmate" "$(jq -r '.handoffs[]|select(.kind=="approve" and .from=="mystery")|"\(.from_role)>\(.to_role)"' <<<"$sodd")" \
+  "an actor that never said what it is has no role"
+assert_eq "null" "$(jq -r '.handoffs[]|select(.kind=="approve" and .from=="reviewer-odd")|.from_role' <<<"$sodd")" \
+  "nor does one whose name merely starts like a role"
+for a in secondmate mystery reviewer-odd; do   # off the deck again, for what reads the crew below
+  FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor "$a" --task T-E --type agent_finished >/dev/null
+done
 
 # a card for a pull request that has already been merged is the board
 # lying: the captain is offered a choice that cannot be made
@@ -1043,10 +1064,13 @@ const at = src.indexOf("const options = [");
 const end = src.indexOf(".join(\x27\x27);", at);
 if (at < 0 || end < 0) { console.log("FAIL no options markup"); process.exit(1); }
 const expr = src.slice(at + "const options = ".length, end + ".join(\x27\x27)".length);
-const render = new Function("d", "content", "pick", "locked", "esc", "words", "t", "said", "return " + expr);
+// tipAttr is the read-only tooltip (T-145): nothing in a tab that can write,
+// the reason as a title in one that cannot
+const render = new Function("d", "content", "pick", "locked", "esc", "words", "t", "said", "tipAttr", "return " + expr);
 const opts = (keys) => Object.fromEntries(keys.map(k => [k, { description: "do " + k, pros: "p", cons: "c" }]));
 const card = (keys) => ({ id: "D-1", kind: "choice", details: { en: { options: opts(keys) } } });
-const out = (keys, locked = false) => render(card(keys), { options: opts(keys) }, undefined, locked, String, String, String, String);
+const out = (keys, locked = false) => render(card(keys), { options: opts(keys) }, undefined, locked, String, String, String, String,
+  locked ? () => " title=\"readOnlyTip\"" : () => "");
 const four = out(["A", "B", "C", "D"]), three = out(["A", "B", "C"]);
 if (!/data-c="D"[^>]*>D · do D</.test(four)) { console.log("FAIL no D button: " + four); process.exit(1); }
 if (/data-c="D"/.test(three)) { console.log("FAIL invented D"); process.exit(1); }
@@ -1054,7 +1078,7 @@ if (/data-c="D"/.test(three)) { console.log("FAIL invented D"); process.exit(1);
 // with every option disabled; one that can still be answered with none
 if (/disabled/.test(four)) { console.log("FAIL an open card is disabled: " + four); process.exit(1); }
 const shut = out(["A", "B", "C", "D"], true);
-if ((shut.match(/<button[^>]*\sdisabled>/g) || []).length !== 4) { console.log("FAIL a locked card still takes a choice: " + shut); process.exit(1); }
+if ((shut.match(/<button[^>]*\sdisabled title="readOnlyTip">/g) || []).length !== 4) { console.log("FAIL a locked card still takes a choice: " + shut); process.exit(1); }
 console.log("ok");
 ')"
 assert_eq "ok" "$dbtn" "the page shows a D button on a card that offers D, and only there, and disables every option on a card that is locked"
@@ -2820,6 +2844,130 @@ assert_eq "writeCredential" "$(jq -r .code "$k/resp")" "the tab is told it holds
 assert_eq "403" "$(postk /tasks "$tsk" -H "Origin: $uk" -H 'content-type: application/json' \
   -H "Authorization: Bearer $secret")" "nor does the old secret as a bearer"
 kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
+
+# --- T-145: a read-only tab signs in again from the page ---------------------
+# POST /relogin makes the board run the opener fm.sh board runs (bin/
+# fm-herdr.py board-login), so the one-time code goes to the browser and
+# nowhere else. The browser here is a recorder standing in for osascript (macOS)
+# and xdg-open / open (elsewhere), first on the board's PATH: what it is handed
+# is what the captain's browser would be, and nothing is opened for real.
+fb="$k/fake-browser"; mkdir -p "$fb"
+cat > "$fb/osascript" <<S
+#!/usr/bin/env bash
+{ printf '%s\n' "\$*"; cat; } >> "$k/browser"
+S
+cat > "$fb/xdg-open" <<S
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$k/browser"
+S
+cp "$fb/xdg-open" "$fb/open"; chmod +x "$fb/osascript" "$fb/xdg-open" "$fb/open"
+: > "$k/browser"; : > "$k/relogin-all"
+relogin() {   # relogin [curl args...]: the status; the body in $k/rl-body; every answer kept in $k/relogin-all
+  local status
+  status="$(curl -s -o "$k/rl-body" -D "$k/rl-headers" -w '%{http_code}' -X POST "$@" "$uk/relogin")"
+  cat "$k/rl-headers" "$k/rl-body" >> "$k/relogin-all"
+  printf '%s' "$status"
+}
+addresses() { grep -oE '/login#[0-9]{13}\.[0-9a-f]{32}\.[0-9a-f]{64}' "$k/browser" | sed 's|^/login#||' | sort -u; }
+PATH="$fb:$PATH" start_k 0
+uk="http://127.0.0.1:$PORTK"
+assert_eq "405" "$(curl -s -o /dev/null -w '%{http_code}' "$uk/relogin")" "GET /relogin opens nothing"
+assert_eq "403" "$(relogin -H 'content-type: application/json' -d '{}')" "a re-login with no Origin is refused"
+assert_eq "writeOrigin" "$(jq -r .code "$k/rl-body")" "and says the request is not the board's own"
+assert_eq "403" "$(relogin -H 'Origin: http://evil.example' -H 'content-type: application/json' -d '{}')" \
+  "a re-login from another site is refused"
+assert_eq "403" "$(relogin -H 'Origin: http://127.0.0.1:1' -H 'content-type: application/json' -d '{}')" \
+  "and one from another loopback port"
+assert_eq "403" "$(relogin -H "Origin: $uk" -H 'content-type: text/plain' -d '{}')" \
+  "a re-login that is not JSON is refused, as a cross-site form's would be"
+assert_eq "writeJson" "$(jq -r .code "$k/rl-body")" "and says it takes JSON only"
+assert_eq "400" "$(relogin -H "Origin: $uk" -H 'content-type: application/json' -d 'not json')" \
+  "a body that does not parse is refused"
+sleep 1
+assert_eq "" "$(cat "$k/browser")" "no refusal sent the browser anywhere"
+# the one the page makes: its own Origin, a JSON body, and no credential
+assert_eq "200" "$(relogin -H "Origin: $uk" -H 'content-type: application/json' -d '{}')" \
+  "the board's own page asks for a sign-in, with no credential, and is answered"
+assert_eq "true new" "$(jq -r '"\(.ok) \(.tab)"' "$k/rl-body")" "and told a new tab was opened (no board tab was found)"
+code="$(addresses)"
+assert_eq "1" "$(grep -c . <<<"$code")" "the browser was handed one sign-in address"
+assert_contains "$(cat "$k/browser")" "$uk/login#$code" "on this board's own address"
+# a burst is refused, and opens nothing more
+assert_eq "429" "$(relogin -H "Origin: $uk" -H 'content-type: application/json' -d '{}')" \
+  "a second re-login within 10 seconds is refused"
+assert_eq "reloginTooSoon" "$(jq -r .code "$k/rl-body")" "with a code the page translates"
+assert_ok "grep -qi '^retry-after: [0-9]' '$k/rl-headers'" "and says when to try again"
+assert_eq "429" "$(relogin -H "Origin: $uk" -H 'content-type: application/json' \
+  -H "Authorization: Bearer $(secret_of "$PORTK")" -d '{}')" "the credential does not lift the limit"
+assert_eq "1" "$(grep -c . <<<"$(addresses)")" "the burst sent the browser nowhere"
+# the code went to the browser and to no answer, header, log or state file
+assert_ok "grep -q '\"ok\":true' '$k/relogin-all'" "the answers were kept (the control)"
+assert_fail "grep -qF '$code' '$k/relogin-all'" "no answer of the route carries the code"
+assert_fail "grep -qF '/login#' '$k/relogin-all'" "nor any sign-in address"
+assert_eq "" "$(grep -rlF "$code" "$k/state" "$k/out" 2>/dev/null || true)" "no state file or board log holds the code"
+# and it was a real code: the browser's tab trades it for the token
+assert_eq "200" "$(login "$code" -H "Origin: $uk")" "the address the browser got signs its tab in"
+kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
+# the hourly cap, on a board whose gap is shortened to reach it: 12, then no more
+: > "$k/browser"
+PATH="$fb:$PATH" FM_BOARD_RELOGIN_GAP_MS=1 start_k 0
+uk="http://127.0.0.1:$PORTK"
+took=0
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  [ "$(relogin -H "Origin: $uk" -H 'content-type: application/json' -d '{}')" = 200 ] && took=$((took + 1))
+  sleep 0.05
+done
+assert_eq "12" "$took" "twelve re-logins an hour are taken"
+assert_eq "429" "$(relogin -H "Origin: $uk" -H 'content-type: application/json' -d '{}')" "the thirteenth is refused"
+assert_eq "reloginHourly" "$(jq -r .code "$k/rl-body")" "and says the hourly cap was reached"
+assert_eq "12" "$(grep -c . <<<"$(addresses)")" "the browser was sent to twelve sign-ins, not thirteen"
+assert_fail "grep -qF '/login#' '$k/relogin-all'" "and no answer carried an address"
+kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
+# a browser that never answers: the route stops the opener at its bound, and
+# every process the opener started ends with it - none outlives the route
+sb="$k/slow-browser"; mkdir -p "$sb"; : > "$k/slow-pids"
+for b in osascript xdg-open open; do
+  printf '#!/usr/bin/env bash\necho $$ >> %q\nexec sleep 30\n' "$k/slow-pids" > "$sb/$b"; chmod +x "$sb/$b"
+done
+PATH="$sb:$PATH" FM_BOARD_RELOGIN_TIMEOUT_MS=1500 start_k 0
+uk="http://127.0.0.1:$PORTK"
+assert_eq "502" "$(relogin -H "Origin: $uk" -H 'content-type: application/json' -d '{}')" \
+  "a browser that never answers is given up on at the route's bound"
+assert_eq "reloginFailed" "$(jq -r .code "$k/rl-body")" "and the page is told the sign-in did not open"
+slow_left() { local p; for p in $(cat "$k/slow-pids"); do kill -0 "$p" 2>/dev/null && return 0; done; return 1; }
+assert_ok "[ -s '$k/slow-pids' ]" "the opener had reached the browser (the control)"
+assert_ok "wait_for 10 eval '! slow_left'" "and no process the opener started outlives the route"
+kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
+
+# --- T-145: a hand-off whose crewman already left the deck is quiet ----------
+# ship.js decides which ends of a hand-off it says it cannot place; the
+# browser suite watches the cue itself. Each line: the case, and the ends said.
+t145="$(SHIP_JS="$ROOT/board/public/ship.js" bun -e '
+const SHIP = require(process.env.SHIP_JS);
+const deck = [{ id: "firstmate" }, { id: "worker-ana-t9-r1" }];
+const noticed = new Set();
+const said = (e) => SHIP.handoffNotice(e, deck, noticed).join(",") || "-";
+console.log("verdict-left " + said({ kind: "approve", from: "reviewer-bo-t9-r1", from_role: "reviewer", to: "firstmate", to_role: "firstmate" }));
+console.log("reject-left " + said({ kind: "reject", from: "reviewer-bo-t9-r1", from_role: "reviewer", to: null, to_role: null }));
+console.log("work-unnamed " + said({ kind: "work", from: "worker-ana-t9-r1", from_role: "worker", to: null, to_role: null }));
+console.log("order-aboard " + said({ kind: "order", from: "firstmate", from_role: "firstmate", to: "worker-ana-t9-r1", to_role: "worker" }));
+// the role is the one the server gives, never one read from the name
+console.log("odd-name-placed " + said({ kind: "order", from: "firstmate", from_role: "firstmate", to: "secondmate", to_role: "worker" }));
+console.log("role-name-unplaced " + said({ kind: "approve", from: "reviewer-odd", from_role: null, to: "firstmate", to_role: "firstmate" }));
+console.log("unknown " + said({ kind: "approve", from: "mystery", from_role: null, to: "firstmate", to_role: "firstmate" }));
+console.log("unknown-again " + said({ kind: "approve", from: "mystery", from_role: null, to: "firstmate", to_role: "firstmate" }));
+console.log("ends " + ["order", "work", "reject", "approve"].map((k) => SHIP.HANDOFF_ENDS[k].join(">")).join(" "));
+' 2>&1)"
+assert_contains "$t145" "verdict-left -" "a verdict from a reviewer who has just left the deck says nothing"
+assert_contains "$t145" "reject-left -" "nor a rejection whose worker has left before it"
+assert_contains "$t145" "work-unnamed -" "nor a hand-off whose other end the server left unnamed"
+assert_contains "$t145" "order-aboard -" "nor one between two on deck (the control)"
+assert_contains "$t145" "odd-name-placed -" "nor a crewman the server placed, whatever its name"
+assert_contains "$t145" "role-name-unplaced reviewer-odd" "an end the server could not place is said, whatever its name"
+assert_contains "$t145" "unknown mystery" "an actor the board cannot place is said"
+assert_contains "$t145" "unknown-again -" "once, not once per event"
+assert_contains "$t145" "ends firstmate>worker worker>reviewer reviewer>worker reviewer>firstmate" \
+  "each kind fixes the role at each end, which an end off the deck is drawn by"
 # --- T-151: the board pushes the wake, and owns what it starts ---------------
 # Whoever writes a decision delivers the wake: the item on the wake queue,
 # and a ring of every waiter's own doorbell under state/session/wake.d. And

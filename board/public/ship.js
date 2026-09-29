@@ -645,32 +645,66 @@ const SHIP = (() => {
 
   const handoffSeen = new Set();
   let handoffStarted = false;
+  // T-145: the role at each end of a hand-off, which its kind fixes: firstmate
+  // orders a worker, a worker hands its work to a reviewer, and a reviewer's
+  // verdict goes back to the worker or on to firstmate
+  const HANDOFF_ENDS = { order: ['firstmate', 'worker'], work: ['worker', 'reviewer'],
+    reject: ['reviewer', 'worker'], approve: ['reviewer', 'firstmate'] };
+  // The ends of hand-off `e` the board cannot place: named, not on deck
+  // (`crew`), and given no role by the server (`from_role`/`to_role`, which
+  // it takes from what each crewman said it is, never from its name), and
+  // not already said. An end the server left unnamed is drawn by the role
+  // its kind gives, and is never said. Each one returned is added to
+  // `noticed`, so an actor is said once, not once per event.
+  function handoffNotice(e, crew, noticed) {
+    const ends = [[e.from, e.from_role], [e.to, e.to_role]];
+    const unknown = [...new Set(ends.filter(([id, role]) => id && !role && !crew.some(c => c.id === id)).map(([id]) => id))]
+      .filter(id => !noticed.has(id));
+    unknown.forEach(id => noticed.add(id));
+    return unknown;
+  }
+  const handoffUnknown = new Set();
   function handoffs(host, events, T, crew) {
     let layer = host.querySelector('.handoffs');
     if (!layer) {layer=document.createElement('div');layer.className='handoffs';host.append(layer);}
     host._handoffT = T;
-    const person = id => crew.find(c=>c.id===id)?.name || id || T('handoffUnavailable');
+    const roleName = role => T(role === 'firstmate' ? 'roleFirstmate' : role === 'reviewer' ? 'roleReviewer' : 'roleWorker');
+    const person = (id, role) => id === 'firstmate' ? roleName('firstmate') : crew.find(c=>c.id===id)?.name || id || roleName(role);
     for(const e of events) {
       if(handoffSeen.has(e.identity))continue;
       handoffSeen.add(e.identity);
       if(!handoffStarted)continue;
+      const [fromRole, toRole] = HANDOFF_ENDS[e.kind] || ['worker', 'worker'];
+      // A crewman off the deck is the normal end of a round - a reviewer
+      // posts its verdict and leaves in the same moment - so it is drawn at
+      // its station, quietly. Only an actor the board cannot place is said,
+      // and only the first time it is seen.
+      const unknown = handoffNotice(e, crew, handoffUnknown);
       const cue=document.createElement('div');cue.className='handoff';cue.dataset.identity=e.identity;cue.dataset.from=e.from || '';cue.dataset.to=e.to || '';cue.dataset.kind=e.kind;
+      if(unknown.length)cue.dataset.unknown=unknown.join(' ');
       cue.setAttribute('role','status');layer.append(cue);
       const start=performance.now(), duration=1400;
-      const find=id=>[...host.querySelectorAll('.pivot')].find(p=>p.dataset.crew===id);
+      const find=id=>id?[...host.querySelectorAll('.pivot')].find(p=>p.dataset.crew===id):undefined;
+      // The deck has no post of its own for each role: a crewman who is not
+      // on it stands where firstmate does, who sends every order and takes
+      // every verdict - its figure, or the helm when it is not aboard.
+      const station=()=>find('firstmate') || host.querySelector('.helm');
+      const at=id=>find(id) || station();
       let arrived=false;
       function frame(now) {
-        const from=find(e.from), to=find(e.to), elapsed=now-start;
+        const from=at(e.from), to=at(e.to), elapsed=now-start;
         const label=host._handoffT('handoff'+e.kind[0].toUpperCase()+e.kind.slice(1));
-        cue.setAttribute('aria-label',`${label}: ${person(e.from)} → ${person(e.to)} · ${e.task || ''}`);
-        if(!from || !to || matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        cue.setAttribute('aria-label',`${label}: ${person(e.from, fromRole)} → ${person(e.to, toRole)} · ${e.task || ''}`);
+        if(unknown.length || !from || !to || matchMedia('(prefers-reduced-motion: reduce)').matches) {
           cue.style.removeProperty('left');cue.style.removeProperty('top');
-          cue.classList.add('static');cue.textContent=cue.getAttribute('aria-label')+(!from||!to?' · '+host._handoffT('handoffUnavailable'):'');
+          cue.classList.add('static');cue.textContent=cue.getAttribute('aria-label')+(unknown.length?' · '+host._handoffT('handoffUnavailable'):'');
         } else {
           cue.textContent={order:'ORD',work:'PR',reject:'✕',approve:'✓'}[e.kind];
           const a=from.getBoundingClientRect(),b=to.getBoundingClientRect(),h=host.getBoundingClientRect(),p=Math.min(1,elapsed/duration);
           cue.style.left=(a.x+a.width/2+(b.x+b.width/2-a.x-a.width/2)*p-h.x)+'px';
           cue.style.top=(a.y+a.height/2+(b.y+b.height/2-a.y-a.height/2)*p-h.y)+'px';
+          // only the crewman it was for reacts; a station stands in silently
+          if(p===1&&!arrived&&!find(e.to))arrived=true;
           if(p===1&&!arrived){arrived=true;to.classList.add('react');const bubble=[...host.querySelectorAll('[data-bubble]')].find(b=>b.dataset.bubble===e.to);bubble?.classList.add('ping');setTimeout(()=>{to.classList.remove('react');bubble?.classList.remove('ping');},700);}
         }
         if(elapsed<2300)requestAnimationFrame(frame);else cue.remove();
@@ -778,6 +812,8 @@ const SHIP = (() => {
 
   return { render, roster, captain, portrait, patch, enqueue, unlock, active:() => current,
            rateFor, actionFor, crewOf, layout, RATES, ACTIONS, ROLE, prRef, linkPrs, projectColor,
+           // T-145: which ends of a hand-off are said, and the role at each end
+           handoffNotice, HANDOFF_ENDS,
            // T-116: the one open detail card, and the roster's order and grouping
            openCard: null,
            rosterSort: (() => { try { return localStorage.getItem("board.rosterSort") || null; } catch (_) { return null; } })(),

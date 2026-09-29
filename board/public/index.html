@@ -173,7 +173,13 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
 @media(max-width:420px){.top,.counts,.lanes-wrap,.logwrap{padding-left:12px;padding-right:12px}.log li{grid-template-columns:1fr 2fr}.log li>span:last-child{grid-column:1/-1}}
 .top small,.counts span,section>h2,#deckwrap>h2,#gl{font-size:13px!important}
 #readOnly{margin:0 20px 10px;padding:8px 12px;border:1px solid var(--warn);border-radius:8px;color:var(--warn);font-size:14px}
-#readOnly[hidden]{display:none}
+#readOnly[hidden],#readOnly [hidden]{display:none}
+#readOnly a{color:var(--accent)}
+#readOnly button{margin-left:8px;font:inherit;padding:2px 10px;border-radius:6px;border:1px solid var(--warn);background:transparent;color:var(--warn);cursor:pointer}
+#readOnly button:disabled{opacity:.55;cursor:default}
+#reloginSaid{margin-left:8px;color:var(--fg2)}
+.cmenu:disabled{opacity:.45;cursor:not-allowed}
+.card .lastrev{margin-top:4px;font:12px var(--mono);color:var(--fg3)}
 #watch{margin:0;padding:6px 20px;font:13px var(--mono);color:var(--fg3)}
 #watch.off,#watch .gap{color:var(--bad)}
 #watch[hidden]{display:none}
@@ -188,8 +194,12 @@ a[data-pr]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;bord
   <span id="gl" style="font:600 13px var(--mono);color:var(--brass)"></span>
   <span class="langs" id="langs"></span>
 </div>
-<!-- T-122: a tab without the captain's credential says so, once, and writes nothing -->
-<p id="readOnly" role="status" hidden></p>
+<!-- T-122: a tab without the captain's credential says so, once, and writes nothing.
+     T-145: it says why, and offers the sign-in again from here. -->
+<div id="readOnly" role="status" hidden><span id="readOnlyWhy"></span>
+  <a id="readOnlyHere" hidden></a>
+  <button id="relogin" type="button"></button>
+  <span id="reloginSaid" aria-live="polite"></span></div>
 <div class="counts" id="counts"></div>
 <p id="watch" role="status" data-watch=""></p>
 <!-- Decisions lead the page; the vessel and readable crew remain directly below. -->
@@ -298,11 +308,45 @@ const NO_CREDENTIAL = 'writeCredential';
 // the board's origin's alone, port included, and this tab's alone.
 const token = () => { try { return sessionStorage.getItem('board.token') || ''; } catch (_) { return ''; } };
 const credential = headers => token() ? { ...headers, authorization: 'Bearer ' + token() } : headers;
+// T-145: why this tab cannot write. The token lives in one origin's storage,
+// port included, so a tab opened as localhost holds none even when the
+// captain's 127.0.0.1 tab does; the banner says so and links to that address.
+const asLocalhost = () => location.hostname === 'localhost';
+const boardHere = () => `http://127.0.0.1:${location.port}${location.pathname}${location.search}`;
+// the reason every disabled write control carries as its tooltip
+const readOnlyTip = () => readOnly() ? t(asLocalhost() ? "readOnlyTipLocalhost" : "readOnlyTip") : '';
+const tipAttr = () => readOnly() ? ` title="${esc(readOnlyTip())}"` : '';
+// what the re-login button last came back with, by dictionary key
+let reloginSaid = '';
 function showWritable() {
   const line = document.getElementById('readOnly');
   line.hidden = !readOnly();
-  line.textContent = readOnly() ? t("readOnly") : '';
+  document.getElementById('readOnlyWhy').textContent = readOnly() ? t(asLocalhost() ? "readOnlyLocalhost" : "readOnly") : '';
+  const here = document.getElementById('readOnlyHere');
+  here.hidden = !readOnly() || !asLocalhost();
+  here.href = boardHere(); here.textContent = t("readOnlyOpenHere");
+  const button = document.getElementById('relogin');
+  button.textContent = t("reloginButton"); button.title = t("reloginHint");
+  document.getElementById('reloginSaid').textContent = reloginSaid ? t(reloginSaid) : '';
 }
+// The banner's button: the board opens a new sign-in for this browser, into
+// the tab already on the board when it finds one. The code goes from the
+// board's opener to the browser; nothing about it comes back here.
+let reloginAgain = null;
+async function relogin() {
+  const button = document.getElementById('relogin');
+  if (button.disabled) return;
+  button.disabled = true; reloginSaid = 'reloginSending'; showWritable();
+  const r = await fetch('/relogin', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+    .then(x => x.json().catch(() => ({}))).catch(() => ({ code: 'unreachable' }));
+  reloginSaid = r.ok ? (r.tab === 'reused' ? 'reloginReused' : 'reloginOpened')
+    : r.code && Object.hasOwn(DICT.en, r.code) ? r.code : 'reloginFailed';
+  showWritable();
+  // the board takes one in any 10 seconds; the button waits as long
+  clearTimeout(reloginAgain);
+  reloginAgain = setTimeout(() => { button.disabled = false; }, 10_000);
+}
+document.getElementById('relogin').onclick = relogin;
 function checkSession() {
   return fetch('/api/session', { headers: credential({}) }).then(r => r.json()).then(s => { writable = s.writable === true; })
     .catch(() => {}).finally(() => { showWritable(); if (latest) render(latest); });
@@ -436,12 +480,27 @@ function render(s) {
   // share a menu, a drag or a drop
   const menu = task => {
     const acts = task.actions || [];
-    if (!acts.length || readOnly()) return '';
+    if (!acts.length) return '';
+    // T-145: a tab that cannot write shows the menu disabled, saying why
+    if (readOnly()) return `<button class="cmenu" data-key="${esc(keyOf(task))}" disabled${tipAttr()}` +
+      ` aria-label="${esc(t('cardActions').replace('{id}', task.id))}">&#8943;</button>`;
     const open = menuOpen === keyOf(task);
     return `<button class="cmenu" data-menu="${esc(task.id)}" data-key="${esc(keyOf(task))}" aria-haspopup="menu" aria-expanded="${open}"` +
       ` aria-label="${esc(t('cardActions').replace('{id}', task.id))}">&#8943;</button>` +
       (open ? `<div class="cacts" role="menu">` + acts.map(a =>
         `<button role="menuitem" data-act="${esc(a)}" data-for="${esc(task.id)}" data-key="${esc(keyOf(task))}">${esc(t(a))}</button>`).join('') + `</div>` : '');
+  };
+  // T-145: how long the task's latest review round took, wall-clock, as
+  // /api/state's last_review says (T-153), and how it ended
+  const clock = n => { const h = Math.floor(n / 3600), m = Math.floor(n / 60) % 60, sec = n % 60;
+    const two = x => String(x).padStart(2, '0');
+    return h ? `${h}:${two(m)}:${two(sec)}` : `${m}:${two(sec)}`; };
+  const lastReview = task => {
+    const r = task.last_review;
+    if (!r || !Number.isInteger(r.seconds) || r.seconds < 0) return '';
+    const how = r.outcome === 'approved' ? t('lastReviewApproved') : r.outcome === 'rejected' ? t('lastReviewRejected') : t('lastReviewOther');
+    return `<div class="lastrev" data-last-review="${esc(r.seconds)}">` +
+      `${esc(t('lastReview').replace('{time}', clock(r.seconds)).replace('{outcome}', how))}</div>`;
   };
   const card = (task, k) => `<div class="card s-${k}" data-task="${esc(task.id)}" data-key="${esc(keyOf(task))}"` +
     `${task.project ? ` data-project="${esc(task.project)}"` : ''}${(task.actions || []).some(a => a !== 'reopen') && !readOnly() ? ' draggable="true"' : ''}>` +
@@ -449,6 +508,7 @@ function render(s) {
     `${task.pr ? prRef(task.pr, task.pr_url) : ''}${menu(task)}</div>` +
     title(task) +
     ((task.crew || []).length ? `<div class="crew">${task.crew.map(crewChip).join('')}</div>` : '') +
+    lastReview(task) +
     ((task.blocked_on || []).length ? `<div class="dep">${esc(t("blockedOn"))} ${esc((task.blocked_by || task.blocked_on.map(id => ({id}))).map(blocker).join(', '))}</div>` : '') +
     (task.badges || []).map(b => `<span class="badge b-${esc(b.kind)}">${esc(badge(b))}</span>`).join('') + `</div>`;
   SHIP.patch(document.getElementById("lanes"), (s.lanes || []).map(k => {
@@ -587,7 +647,7 @@ function render(s) {
       const o = content?.options?.[k];
       // T-118: what the option does when chosen, as the server will carry it out
       const eff = d.details?.effect?.[k] ?? (d.kind === 'merge' ? (k === 'A' ? 'merge' : 'hold') : null);
-      return `<button class="opt" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" ${locked?'disabled':''}>${k}${o || k !== 'D' ? ' · ' : ''}${esc(o ? words(o.description) : k === 'D' ? '' : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'))}` +
+      return `<button class="opt" data-id="${esc(d.id)}" data-c="${k}" aria-pressed="${pick === k}" ${locked?'disabled':''}${tipAttr()}>${k}${o || k !== 'D' ? ' · ' : ''}${esc(o ? words(o.description) : k === 'D' ? '' : t(k === 'A' ? (d.kind === 'merge' ? 'mergeInto' : 'chooseA') : k === 'B' ? 'sendBack' : 'hold'))}` +
         `${eff ? ` <i class="eff">→ ${esc(effectLabel(eff))}</i>` : ''}</button>` +
         (o ? `<p class="tradeoffs"><b>${esc(t('pros'))}</b> ${said(words(o.pros), d)}<br><b>${esc(t('cons'))}</b> ${said(words(o.cons), d)}</p>` : '');
     }).join('');
@@ -603,11 +663,11 @@ function render(s) {
         ? `<ul class="gates">${GATES().map((g,i)=>{const n=GATE_NUMBERS[i], ok=gates[n-1];return `<li class="${ok?"y":"n"}"><i>${ok?"&#10003;":"&#8211;"}</i>${n}. ${g}</li>`;}).join("")}</ul>`
         : "") +
       `<div class="acts">${options}
-         <button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${locked?'disabled':''}>${esc(t('customChoice'))}</button>
-         <label ${pick === 'custom'?'':'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${locked?'disabled':''}>${esc(drafts.get(d.id) || '')}</textarea></label>
+         <button class="opt" data-id="${esc(d.id)}" data-c="custom" aria-pressed="${pick === 'custom'}" ${locked?'disabled':''}${tipAttr()}>${esc(t('customChoice'))}</button>
+         <label ${pick === 'custom'?'':'hidden'}>${esc(t('customHint'))}<textarea data-id="${esc(d.id)}" ${locked?'disabled':''}${tipAttr()}>${esc(drafts.get(d.id) || '')}</textarea></label>
          <span class="validation" id="validation-${esc(d.id)}"></span>
          ${refused.has(d.id) ? `<p class="refused"${refused.get(d.id).announced ? '' : ' role="alert"'}>${esc(t('orderFailed'))} · ${esc(refused.get(d.id).error)}</p>` : ''}
-         <button class="go confirm" data-id="${esc(d.id)}" disabled>${esc(t('confirmOrder'))}</button>
+         <button class="go confirm" data-id="${esc(d.id)}" disabled${tipAttr()}>${esc(t('confirmOrder'))}</button>
        </div></div>`;
   };
   // The first pending decision is open in full beside the captain's portrait;
