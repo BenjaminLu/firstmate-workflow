@@ -116,6 +116,23 @@ if reviewer.is_file():
     ):
         if sentence not in rprose:
             errors.append(f'reviewer skill lacks SK-005 fix: {sentence}')
+    # SK-007: the closed list comes with the first REJECT, the reviewer runs no
+    # full check, and an APPROVE carries forward on an unchanged patch-id.
+    for sentence in (
+        'Every `REJECT`, from round one, ends with the numbered, complete set of changes that would make this head pass, closed by `CRITERIA-COMPLETE:<task-id>` on a line of its own, before the verdict line.',
+        '`ASK-PASS-CRITERIA:<task-id>` stays for a worker who finds no list, or an unclear one; answer it with the complete standing list.',
+        'Number nothing else in a rejecting answer: `bin/fm-protocol.sh` reads every line that starts with a number before the marker as an item.',
+        'Do not run the full declared `check`: that is the required GitHub check on the same head, which firstmate verifies at the merge gate (captain, 2026-09-29).',
+        'An APPROVE carries forward across any update of the branch from its base that leaves the change\'s patch-id, merge-base to head, as approved (SK-008);',
+    ):
+        if sentence not in rprose:
+            errors.append(f'reviewer skill lacks SK-007 rule: {sentence}')
+    for gone in (
+        'touches none of its files',
+        'Run `setup`, then `check`.',
+    ):
+        if gone in rprose:
+            errors.append(f'reviewer skill still carries retired text (SK-007): {gone}')
 # SK-004: the worker skill matches the sandboxed round (T-117/T-128): it
 # cannot commit or push, does not run the suites, its rebuild-frozen rule
 # names only the current task file, and it starts from firstmate's brief.
@@ -148,6 +165,32 @@ for role in roles:
     path = root / 'skills' / role / 'SKILL.md'
     if path.is_file() and rule not in ' '.join(path.read_text().split()):
         errors.append(f'{role} skill lacks the T-151 process rule: {rule}')
+# SK-007: the standing list, stated in the same words to the reviewer who
+# issues it and the worker who fixes it; the "original list" rule is retired.
+standing = (
+    'The first REJECT creates the standing list. Each later REJECT re-issues it: the same numbering, each earlier item marked **done** or **open**, and any new item appended with the next number and a label.',
+    '`REGRESSION:<task-id>`: newly introduced by the latest change;',
+    '`NEW-GROUND:<task-id>`: the latest change touched code the list never covered.',
+    'The latest list is the standing one: it never drops an open item, and an item leaves only by being marked done.',
+    '`ASK-PASS-CRITERIA:<task-id>` stays for a worker who finds no list, or an unclear one;',
+)
+for role in ('reviewer', 'worker'):
+    path = root / 'skills' / role / 'SKILL.md'
+    if not path.is_file():
+        continue
+    text = ' '.join(path.read_text().split())
+    for sentence in standing:
+        if sentence not in text:
+            errors.append(f'{role} skill lacks the SK-007 standing list: {sentence}')
+    for gone in (
+        'Retain the original',
+        'Do not issue a fresh list',
+        'the first is the original',
+        'original closed list',
+        'Preserve that original list',
+    ):
+        if gone in text:
+            errors.append(f'{role} skill still carries the retired original-list rule (SK-007): {gone}')
 if errors:
     sys.exit('\n'.join(errors))
 print('role metadata and entrypoint links: passed')

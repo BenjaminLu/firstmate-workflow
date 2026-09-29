@@ -8,7 +8,7 @@ description: Assess a dispatched task artifact against its specification and clo
 You see a diff, the task spec, and the acceptance criteria; in diff mode, when
 the launcher knows the pull request, also the head's SHA, its required check
 and its gate summary as information (see "CI and the gates are not yours");
-in run mode a checkout to run; and from round three the closed list. You do
+in run mode a checkout to run; and from round two the closed list. You do
 not see how
 the worker got there, and that is deliberate: reasoning is persuasive, and you
 are here to judge the artefact.
@@ -47,9 +47,13 @@ It is your working directory; `fm/head` is the head under review and `fm/base`
 the base. The prompt names the project's declared `setup`, `check`,
 `check_env`, `tests` and `test`. Then:
 
-1. Run `setup`, then `check`. A stage the check says it skipped is unverified.
+1. Run `setup`. Do not run the full declared `check`: that is the required
+   GitHub check on the same head, which firstmate verifies at the merge gate
+   (captain, 2026-09-29). It took 1100-1800 seconds of every review, inside a
+   sandbox where a dozen suites fail for environmental reasons.
 2. Run every test the diff adds or changes, and the suites that exercise the
-   changed code.
+   changed code - through `test` when it is declared. A stage a suite says it
+   skipped is unverified, not passed.
 3. Prove fail-first: restore the base version of every changed non-test file
    (`git checkout fm/base -- <file>`), rerun the changed tests, require red and
    name the assertion that went red. Put the head back afterwards. A test that
@@ -64,7 +68,7 @@ Run every one of those commands to completion in the foreground. This round
 is one turn: it ends the moment your answer does, so a command you background
 and mean to check on later is never checked on, and your turn ends with
 nothing signed - which is what backgrounding a long check has cost three
-review rounds already. A round that ends without a verdict is retried once. A check too slow for one command is not a reason to
+review rounds already. A round that ends without a verdict is retried once. A suite too slow for one command is not a reason to
 background it; split it into the suites `test` names and run each to its own
 end before starting the next.
 
@@ -114,7 +118,7 @@ When you would not defend it, say so the same way:
 REJECT:<task-id>
 ```
 
-Exactly one unquoted marker ends the final assistant answer of every review round.
+Exactly one unquoted verdict marker ends the final assistant answer of every review round.
 Do not emit a verdict in intermediate commentary, prompt echoes or quoted
 examples. Only that final answer is the verdict, never the full CLI transcript.
 Bind it to the task and reviewed head; publication must retain reviewer identity.
@@ -134,40 +138,54 @@ with `main`, the patch-id of the change and the files it touches. Its verdict
 is your last marker on a line of its own; a marker you mention in passing
 does not count, and with no standalone marker the round is recorded as a
 rejection. Your
-approval binds to that change (T-113, captain, 2026-09-26): it carries forward
-across an update onto a newer `main` that leaves the change identical and
-touches none of its files, and any other change to the head - a conflict
-resolution, a worker edit - needs a new review. CI and the gates always rerun
-on the head being merged; they are firstmate's, not yours.
+approval binds to that change (T-113, captain, 2026-09-26). An APPROVE carries
+forward across any update of the branch from its base that leaves the change's
+patch-id, merge-base to head, as approved (SK-008); a conflict that had to be
+resolved, or a worker edit, changes the patch and needs a new review. Base
+commits touching files the change reviewed no longer void it. CI and the gates
+always rerun on the head being merged; they are firstmate's, not yours.
 
-## From round three
+## Every REJECT closes its list
 
-If no original closed list exists, the worker will post `ASK-PASS-CRITERIA:<task-id>`. Answer with a **numbered
-list of everything** standing between this diff and your signature, then post:
+Every `REJECT`, from round one, ends with the numbered, complete set of
+changes that would make this head pass, closed by `CRITERIA-COMPLETE:<task-id>`
+on a line of its own, before the verdict line. That numbered list is the
+task's **standing list** (captain, 2026-09-29).
+
+The first REJECT creates the standing list. Each later REJECT re-issues it: the same numbering, each earlier item marked **done** or **open**, and any new item appended with the next number and a label.
+A rejecting answer after the first ends like this:
 
 ```
+1. done: <an item the latest change settled>
+2. open: <an item this head still needs, with its evidence and class>
+3. REGRESSION:<task-id> <what the latest change newly broke>
+
 CRITERIA-COMPLETE:<task-id>
+REJECT:<task-id>
 ```
 
-After that you may raise only items on that list, or a regression the worker
-newly introduced — mark those `REGRESSION:<task-id>`. Raising an old complaint
-you left off the list is a protocol violation; report it to firstmate for the
-captain. The script does not detect every such violation. Write the list as if
-it is your one chance to be exhaustive, because it is.
+A new item is admissible only with one of two labels, on the item's own line:
 
+- `REGRESSION:<task-id>`: newly introduced by the latest change;
+- `NEW-GROUND:<task-id>`: the latest change touched code the list never covered.
 
-Retain the original numbered list after `CRITERIA-COMPLETE:<task-id>` across all
-later rounds. Do not issue a fresh list or add old off-list objections. Cite the
-original item numbers in findings; only a newly introduced regression explicitly
-marked `REGRESSION:<task-id>` can extend them. Report protocol violations to
-[firstmate](../firstmate/SKILL.md) for the board.
+Nothing else can be added: an unlabelled new objection, or an old complaint
+you left off the list, is a protocol violation. The latest list is the standing one: it never drops an open item, and an item leaves only by being marked done.
+Findings in a later round cite its item numbers. Number nothing else in a
+rejecting answer: `bin/fm-protocol.sh` reads every line that starts with a
+number before the marker as an item. The script does not detect every
+violation; report them to [firstmate](../firstmate/SKILL.md) for the board.
+Write the first list as if it is your one chance to be exhaustive, because it
+is: T-126 took ten rounds, one new finding per round from round seven on.
 
-Where to find them: from round three, when the launcher knows the pull request,
+`ASK-PASS-CRITERIA:<task-id>` stays for a worker who finds no list, or an unclear one; answer it with the complete standing list.
+
+Where to find them: from round two, when the launcher knows the pull request,
 your prompt has a **The closed list** section after the round number and before
 the head section (diff mode) and the diff. It quotes verbatim the worker's latest `ASK-PASS-CRITERIA:<task-id>`
 first, then every comment whose numbered list ends in
 `CRITERIA-COMPLETE:<task-id>`, in the order posted, whether posted before or
-after the ask; when several lists appear, the first is the original. A marker
+after the ask; when several lists appear, the latest is the standing one. A marker
 counts only on a line of its own, and a comment that asks is never a list, so
 close yours with `CRITERIA-COMPLETE:<task-id>` alone on its line. A comment
 "containing" a marker means one containing such a line, which is the form the
@@ -209,12 +227,12 @@ stop before you answer.
 
 ## Evidence
 
-Require the diff, task spec, acceptance, relevant design contract and original
-closed criteria; ask for missing context instead of inventing it, and do not
+Require the diff, task spec, acceptance, relevant design contract and the
+standing list; ask for missing context instead of inventing it, and do not
 request worker reasoning or logs. Say which tests you executed in a checkout
 and which claims you only read; in diff mode you ran none. Judge current
 verdict evidence, not stale approvals. Gate 7 does not check final-answer
-provenance, and the protocol checker proves neither original-list membership
-nor a new regression; report those limits to [firstmate](../firstmate/SKILL.md),
+provenance, and the protocol checker proves neither that a finding matches
+the item it cites nor that a regression or new ground is real; report those limits to [firstmate](../firstmate/SKILL.md),
 which keeps the evidence, board-progress and Herdr pane rules once.
 

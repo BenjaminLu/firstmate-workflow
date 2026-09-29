@@ -334,7 +334,7 @@ for (const lang of ["en", "zh-TW", "zh-CN"]) {
     const agents = listed.filter((n) => /^(worker|reviewer)-\d+$/.test(n));
     expect(agents.length).toBe(CREW.length);
     const jobs = await page.locator(".roster .jb").allInnerTexts();
-    expect(jobs.some((j) => /^T-\d+/.test(j))).toBe(true);
+    expect(jobs.some((j) => /^(T|SK)-[0-9]{3,}/.test(j))).toBe(true);
     await expect(page.locator(".scene .port").first()).toBeVisible();
     await expect(page.locator(".scene .mast .sail").first()).toBeVisible();
 
@@ -1731,10 +1731,12 @@ test("a crewman below the top deck still names the task he is on", async ({ page
     // the task, not merely non-empty: each chip's own card names it
     const tasks = await minis.locator(".crewcard .ctask").allTextContents();
     expect(tasks.length).toBe(count);
-    for (const t of tasks) expect(t.trim()).toMatch(/^T-\d+ /);
+    // any task id the board accepts (board/server.ts TASK_ID): the crew is
+    // on whatever design/tasks holds, a skill update (SK-*) included
+    for (const t of tasks) expect(t.trim()).toMatch(/^(T|SK)-[0-9]{3,} /);
     // and the roster still carries what each of them is on
     const jobs = await page.locator(".roster .jb").allInnerTexts();
-    expect(jobs.filter((j) => /^T-\d+/.test(j)).length).toBe(9);
+    expect(jobs.filter((j) => /^(T|SK)-[0-9]{3,}/.test(j)).length).toBe(9);
   } finally { stopBoard(many); }
 });
 
