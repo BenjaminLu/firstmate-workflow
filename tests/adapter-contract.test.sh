@@ -812,12 +812,13 @@ assert_eq "0" "$(confined darwin "$pk/sandbox-exec" "$pk/net.json" codex)" "on m
 cprof="$(cat "$pk/profile.sb" 2>/dev/null)"
 assert_ne "" "$cprof" "and a profile was made for it"
 assert_eq "" "$(grep 'allow network' <<< "$cprof" | grep -v '"localhost:' || true)" \
-  "and its round reaches the network only through that proxy, and no unix socket at all"
+  "and its round reaches the network only through that proxy"
 assert_matches "$(grep 'allow network-outbound' <<< "$cprof" | tail -1)" '"localhost:[0-9]+"' \
   "whose port is the last allowed, after every deny"
-assert_contains "$cprof" '(deny network-bind network-inbound (local ip "localhost:5555"))' \
+assert_contains "$cprof" '(deny network-outbound (remote ip "localhost:5555"))' \
   "while a listener older than the round stays out of reach"
-assert_lacks "$cprof" '(allow network-outbound (remote ip "localhost:5555"))' "which it cannot connect to either"
+assert_contains "$cprof" '(deny network-bind network-inbound (local ip "localhost:5555"))' \
+  "and cannot be bound or accepted on either (T-153)"
 
 # The sandbox failing before the CLI is not the model giving up: the
 # launcher's exit code is not the CLI's, and the vendor counts unavailable

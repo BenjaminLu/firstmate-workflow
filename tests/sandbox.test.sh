@@ -282,76 +282,38 @@ assert_eq "64" "$?" "and covers without a policy is a usage error"
 # --- the macOS profile ----------------------------------------------------------
 root="$t/tree"; mkdir -p "$root/.claude" "$t/round-a" "$t/round-b"
 prof="$(mac profile --policy="$P" --root="$root" --tmp="$t/round-a" --vendor=codex --proxy-port=4242 \
-  --listening=4242,5000,50003 --ephemeral=50000-50010 --write="$t/attempt")"
+  --listening=4242,5000 --write="$t/attempt")"
 assert_contains "$prof" "(deny network*)" "the profile denies the network"
-# loopback (T-153): the round binds and accepts where it likes but on the
-# board's port and those already listening, and connects only to the ports
-# the kernel hands a server bound to port 0, less those. A port-specific
-# deny never carves a port out of an outbound localhost:* (design 8), so
-# connecting is a positive list and never localhost:*.
-assert_contains "$prof" '(allow network-bind (local ip "localhost:*"))' \
-  "a round may open loopback servers of its own, on port 0 too"
-assert_contains "$prof" '(allow network-inbound (local ip "localhost:*"))' "and accept on them"
+# loopback: the round's own ports, and neither the board nor what was already listening
+assert_contains "$prof" '(allow network-bind (local ip "localhost:*"))' "a round may open loopback ports of its own"
+assert_contains "$prof" '(allow network-outbound (remote ip "localhost:*"))' "and connect to them"
+assert_contains "$prof" '(deny network-outbound (remote ip "localhost:4173"))' "but never to the board's port"
+assert_contains "$prof" '(deny network-outbound (remote ip "localhost:5000"))' "nor to a listener older than the round"
+# T-153: nor bound or accepted on, which the outbound deny alone left open -
+# a suite's fixture board took the captain's 127.0.0.1:4173 while it was down
 assert_contains "$prof" '(deny network-bind network-inbound (local ip "localhost:4173"))' \
-  "but never bind or accept on the board's port"
+  "and the board's port can be neither bound nor accepted on"
 assert_contains "$prof" '(deny network-bind network-inbound (local ip "localhost:5000"))' \
-  "nor on a port a listener older than the round holds"
-assert_contains "$prof" '(deny network-bind network-inbound (local ip "localhost:50003"))' "whichever range it is in"
-assert_lacks "$prof" '(remote ip "localhost:*")' "connecting is never loopback's every port"
-for n in 50000 50002 50004 50010; do
-  assert_contains "$prof" "(allow network-outbound (remote ip \"localhost:$n\"))" \
-    "a round connects to a server of its own on $n, in the kernel's ephemeral range"
-done
-for n in 4173 5000 50003 49999 50011; do
-  assert_lacks "$prof" "(allow network-outbound (remote ip \"localhost:$n\"))" \
-    "and to nothing else on loopback: not $n"
-done
-assert_lacks "$prof" '(deny network-bind network-inbound (local ip "localhost:4242"))' \
-  "the round's own proxy is never among the ports closed to it"
-# no unix socket at all: a round a round starts serves its proxy on loopback
-# TCP, never on a socket (T-153)
+  "nor a listener's older than the round"
+n_bind="$(grep -n 'allow network-bind (local ip "localhost:\*")' <<< "$prof" | cut -d: -f1)"
+n_bdeny="$(grep -n 'deny network-bind network-inbound (local ip "localhost:4173")' <<< "$prof" | cut -d: -f1)"
+assert_eq "1" "$([ -n "$n_bind" ] && [ -n "$n_bdeny" ] && [ "$n_bdeny" -gt "$n_bind" ] && echo 1)" \
+  "the deny follows the loopback allow it carves the port out of"
 assert_eq "" "$(grep 'allow network' <<< "$prof" | grep -v '"localhost:' || true)" \
-  "and nothing but loopback is allowed directly: no unix socket, not even in the round's own roots"
-n_deny="$(grep -n 'deny network-bind network-inbound (local ip "localhost:5000")' <<< "$prof" | cut -d: -f1)"
+  "and nothing but loopback is allowed directly"
+n_deny="$(grep -n 'deny network-outbound (remote ip "localhost:5000")' <<< "$prof" | cut -d: -f1)"
 n_proxy="$(grep -n 'allow network-outbound (remote ip "localhost:4242")' <<< "$prof" | tail -1 | cut -d: -f1)"
 assert_eq "1" "$([ -n "$n_deny" ] && [ -n "$n_proxy" ] && [ "$n_proxy" -gt "$n_deny" ] && echo 1)" \
   "the round's own proxy stays reachable though it was listening first"
-FM_PORT=4999 mac profile --policy="$P" --root="$root" --proxy-port=4242 --listening= --ephemeral=50000-50010 > "$t/p2"
+FM_PORT=4999 mac profile --policy="$P" --root="$root" --proxy-port=4242 --listening= > "$t/p2"
+assert_contains "$(cat "$t/p2")" '(remote ip "localhost:4999")' "the board's port is FM_PORT when that is set"
 assert_contains "$(cat "$t/p2")" '(deny network-bind network-inbound (local ip "localhost:4999"))' \
-  "the board's port is FM_PORT when that is set"
-FM_PORT=50005 mac profile --policy="$P" --root="$root" --proxy-port=4242 --listening= --ephemeral=50000-50010 > "$t/p3"
-assert_lacks "$(cat "$t/p3")" '(allow network-outbound (remote ip "localhost:50005"))' \
-  "and one inside the ephemeral range is not connected to either"
-mac profile --policy="$P" --root="$root" --proxy-port=4242 --listening= --ephemeral=80-90 >/dev/null 2>&1
-assert_ne "0" "$?" "a range below 1024 is not one a round's servers are handed, and makes no profile"
+  "for binding as for connecting"
 unknown="$(mac profile --policy="$P" --root="$root" --proxy-port=4242 --listening=unknown)"
-assert_eq '(allow network-outbound (remote ip "localhost:4242"))' "$(grep 'allow network.*localhost' <<< "$unknown")" \
+assert_eq '(allow network-outbound (remote ip "localhost:4242"))' "$(grep 'allow network' <<< "$unknown")" \
   "with the listeners unknown, the proxy is the only port reachable"
-assert_lacks "$unknown" 'network-bind (local ip' "and no loopback port can be bound"
 assert_contains "$unknown" '(deny network-bind network-inbound (local ip "localhost:4173"))' \
-  "and the board's port is denied by name there too, the listeners unknown"
-# the directories above each root (T-153): bun opens every one above its
-# working directory and will not start when one cannot be read. Each is
-# listed by itself, a literal, never its subtree.
-aline="$(grep '^(allow file-read\* (literal "/[^"]' <<< "$prof")"
-assert_contains "$aline" "(literal \"$t\")" "the directory above the root is listable"
-assert_contains "$aline" "(literal \"$(dirname "$t")\")" "and every one above that"
-assert_lacks "$aline" "subpath" "each by itself, never its subtree"
-assert_lacks "$aline" "(literal \"$root\")" "and not the roots themselves, which are read whole anyway"
-# but never fm's never-readable state/ or anything under it, nor the
-# operator's home or anything under it: from a worktree there, neither the
-# home's names (.ssh, .aws) nor state/'s nor the other worktrees' are listed
-mkdir -p "$t/state/worktrees/x" "$t/opr/code/wt"
-sline="$(mac profile --policy="$P" --root="$t/state/worktrees/x" --ephemeral=50000-50001 \
-  | grep '^(allow file-read\* (literal "/[^"]')"
-assert_lacks "$sline" "(literal \"$t/state\")" "a root under fm's never-readable state/ does not list state/"
-assert_lacks "$sline" "(literal \"$t/state/worktrees\")" "nor the worktrees beside it"
-assert_contains "$sline" "(literal \"$t\")" "while the directory above state/ is listed"
-hline="$(HOME="$t/opr" mac profile --policy="$P" --root="$t/opr/code/wt" --ephemeral=50000-50001 \
-  | grep '^(allow file-read\* (literal "/[^"]')"
-assert_lacks "$hline" "(literal \"$t/opr\")" "a root under the operator's home does not list the home"
-assert_lacks "$hline" "(literal \"$t/opr/code\")" "nor any directory between it and the root"
-assert_contains "$hline" "(literal \"$t\")" "while the directory above the home is listed"
+  "and the board's port is denied by name there too, the listeners unknown (T-153)"
 assert_contains "$prof" "(deny file-write*)" "writes are denied"
 wline="$(grep '^(allow file-write\*' <<< "$prof")"
 assert_contains "$wline" "(subpath \"$root\")" "but for the round's root"
@@ -433,7 +395,7 @@ policy:
   network: registry.npmjs.org
 '
 assert_eq "" "$(mac profile --policy="$P" --root="$root" | grep 'allow network' | grep -v '"localhost:' || true)" \
-  "without a proxy nothing but loopback is reachable at all, and no unix socket"
+  "without a proxy nothing but loopback is reachable at all"
 
 # --- the Linux arguments --------------------------------------------------------
 mkdir -p "$t/data/secret"
@@ -573,9 +535,8 @@ for target in ('undeclared.example.org:443', 'github.com:443', 'undeclared.examp
 PY
 cat > "$t/cmd.sh" <<S
 #!/usr/bin/env bash
-printf 'TMPDIR=%s\nNO_PROXY=%s\nHOME=%s\nXDG_CACHE_HOME=%s\nXDG_CONFIG_HOME=%s\nXDG_DATA_HOME=%s\nTMPPREFIX=%s\n' \
-  "\$TMPDIR" "\${NO_PROXY:-}" "\$HOME" "\${XDG_CACHE_HOME:-}" "\${XDG_CONFIG_HOME:-}" "\${XDG_DATA_HOME:-}" \
-  "\${TMPPREFIX:-}" > "$t/tmpdir"
+printf 'TMPDIR=%s\nNO_PROXY=%s\nHOME=%s\nXDG_CACHE_HOME=%s\nXDG_CONFIG_HOME=%s\nXDG_DATA_HOME=%s\n' \
+  "\$TMPDIR" "\${NO_PROXY:-}" "\$HOME" "\${XDG_CACHE_HOME:-}" "\${XDG_CONFIG_HOME:-}" "\${XDG_DATA_HOME:-}" > "$t/tmpdir"
 python3 "$t/probe.py" "$t/ran"
 exit 7
 S
@@ -644,16 +605,10 @@ assert_fail "test -e '$rtmp'" "and it is removed when the round ends"
 assert_fail "test -e '$rhome'" "HOME with it, being under the same TMPDIR"
 assert_contains "$(cat "$t/tmpdir" 2>/dev/null)" "NO_PROXY=localhost,127.0.0.1,::1" \
   "loopback goes straight to the port, where the profile decides"
-assert_contains "$(cat "$t/profile.sb" 2>/dev/null)" '(deny network-bind network-inbound (local ip "localhost:4173"))' \
-  "and the board's port can be neither bound nor accepted on"
-assert_lacks "$(cat "$t/profile.sb" 2>/dev/null)" '(allow network-outbound (remote ip "localhost:4173"))' \
-  "nor connected to"
-assert_contains "$(cat "$t/profile.sb" 2>/dev/null)" '(deny network-bind network-inbound (local ip "localhost:5555"))' \
+assert_contains "$(cat "$t/profile.sb" 2>/dev/null)" '(deny network-outbound (remote ip "localhost:4173"))' \
+  "and the board's port is out of reach"
+assert_contains "$(cat "$t/profile.sb" 2>/dev/null)" '(deny network-outbound (remote ip "localhost:5555"))' \
   "as is every port that was listening when the round started"
-assert_lacks "$(cat "$t/profile.sb" 2>/dev/null)" '(allow network-outbound (remote ip "localhost:5555"))' \
-  "which it cannot connect to either"
-assert_eq "$rtmp/zsh" "$(sed -n 's/^TMPPREFIX=//p' "$t/tmpdir" 2>/dev/null)" \
-  "zsh's here-documents go under the round's own TMPDIR too (TMPPREFIX), not /tmp/zsh"
 assert_ok "test -s '$t/profile.sb'" "the command ran behind the generated profile"
 ran="$(cat "$t/ran" 2>/dev/null)"
 assert_contains "$ran" "stdin=the prompt" "and was handed the prompt on stdin"
@@ -716,45 +671,6 @@ assert_matches "$mktmpl" "^$t/ctl/fm-sb\.[A-Za-z0-9]+/tmp/fm-tmpl\." \
 # of its own directory while it was still alive to look.
 assert_eq "ok" "$(cat "$t/mkbare.exists" 2>/dev/null)" "and the directory the bare call named is real"
 assert_eq "ok" "$(cat "$t/mktflag.exists" 2>/dev/null)" "so is the one -t named"
-
-# --- ps on the round's own PATH (T-153) --------------------------------------
-# /bin/ps is setuid root on macOS, and a sandboxed process may not run a
-# setuid binary: every ps in a review round failed "operation not
-# permitted". fm-sandbox.sh puts one of its own first on the round's PATH,
-# which asks the kernel as the round's user (libproc on macOS, /proc here
-# on Linux) and lists that user's processes, and no one else's.
-cat > "$t/pscmd.sh" <<S
-#!/usr/bin/env bash
-command -v ps > "$t/ps.which"
-echo \$\$ > "$t/ps.self"
-ps -U "\$(id -u)" -o pid= > "$t/ps.own"; echo \$? > "$t/ps.own.rc"
-ps -o lstart= -p \$\$ > "$t/ps.lstart"
-ps -ax -o pid=,ppid=,command= > "$t/ps.ax"
-ps -U 0 -o pid= > "$t/ps.root" 2> "$t/ps.root.err"; echo \$? > "$t/ps.root.rc"
-ps -p 1 -o pid= > "$t/ps.one"; echo \$? > "$t/ps.one.rc"
-S
-chmod +x "$t/pscmd.sh"
-rm -f "$t"/ps.*
-echo | FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" PATH="$t/psbin:$PATH" \
-  "$SB" run --policy="$P" --root="$root" --ctl="$t/ctl" -- "$t/pscmd.sh"
-assert_eq "0" "$?" "a round runs ps"
-assert_matches "$(cat "$t/ps.which" 2>/dev/null)" '/tmp/\.fm-mktemp/ps$' \
-  "and the ps it finds first is the round's own, not the setuid one"
-self="$(cat "$t/ps.self" 2>/dev/null)"
-assert_eq "0" "$(cat "$t/ps.own.rc" 2>/dev/null)" "which lists the round's own user's processes"
-assert_eq "1" "$(grep -cx " *$self" "$t/ps.own" 2>/dev/null)" "the round's own shell among them"
-assert_matches "$(cat "$t/ps.lstart" 2>/dev/null)" '^[A-Z][a-z]{2} [A-Z][a-z]{2} +[0-9]+ [0-9:]{8} [0-9]{4}$' \
-  "and says when one started, the way ps -o lstart does"
-assert_matches "$(cat "$t/ps.ax" 2>/dev/null)" "^$self [0-9]+ .*pscmd\\.sh" "and its command line, with -ax"
-if [ "$(id -u)" != 0 ]; then
-  assert_eq "1 " "$(cat "$t/ps.root.rc" 2>/dev/null) $(cat "$t/ps.root" 2>/dev/null)" \
-    "another user's processes are refused: ps -U 0 lists nothing and exits 1"
-  assert_contains "$(cat "$t/ps.root.err" 2>/dev/null)" "only its own user's processes" "and says why"
-  assert_eq "1 " "$(cat "$t/ps.one.rc" 2>/dev/null) $(cat "$t/ps.one" 2>/dev/null)" \
-    "and pid 1, which is not the round's user's, is not listed"
-else
-  echo "    (skipped: this suite runs as root, so no other user's process list can be refused here)"
-fi
 
 # Linux gets none of this: GNU's own mktemp already honours $TMPDIR, so
 # bin/fm-sandbox.sh installs no stand-in on that side. This plays GNU's own
@@ -834,8 +750,7 @@ assert_eq "ok" "$(cat "$t/mktflag-lin.exists" 2>/dev/null)" "and so is the -t on
 # the round's would: it drops to a profile with no loopback but the proxy,
 # and refuses the round if even that one lets it through. The stand-in
 # plays the kernel: LO_MODE=holds honours the per-port denials, tight only
-# the profile without loopback, broken never runs the check, open none, and
-# bindleak (T-153) lets the loopback profile bind the board's port.
+# the profile without loopback, broken never runs the check, open none.
 lsn="$t/listener.port"; rm -f "$lsn"
 python3 - "$lsn" >/dev/null 2>&1 <<'PY' &
 import os, socket, sys
@@ -865,7 +780,7 @@ while IFS= read -r l; do printf '%s\n' "\$l"; done < "\$prof" > "$t/lo.profile.s
 case " \$* " in
   *" fm-loopback-check "*)
     printf '%s\n' "\$*" >> "$t/lo.checks"
-    wild=0; grep -qF '(allow network-bind (local ip "localhost:*"))' "\$prof" && wild=1
+    wild=0; grep -qF '(allow network-outbound (remote ip "localhost:*"))' "\$prof" && wild=1
     case "\${LO_MODE:-open}:\$wild" in
       holds:*|tight:0|bindleak:0) echo checked; exit 0 ;;
       bindleak:1) echo checked; echo "bind:\$FM_PORT"; exit 0 ;;
@@ -881,8 +796,8 @@ policy:
   procs: 1000000
 '
 # The board's port for these rounds is one of the suite's own that nothing
-# holds, never the operator's 4173: the check really binds it behind a
-# stand-in that plays no kernel (T-153).
+# holds, never the operator's 4173: behind a stand-in that plays no kernel
+# the check really binds it (T-153).
 fport="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
 lo_round() {   # lo_round <mode> [board port] -> exit code; stderr in $t/lo.err
   rm -f "$t/lo.profile.sb" "$t/lo.checks"
@@ -890,7 +805,7 @@ lo_round() {   # lo_round <mode> [board port] -> exit code; stderr in $t/lo.err
     "$SB" run --policy="$t/worker.json" --root="$root" --ctl="$t/ctl" -- "$t/seven.sh" </dev/null 2>"$t/lo.err"
   echo $?
 }
-wild='(allow network-bind (local ip "localhost:*"))'
+wild='(allow network-outbound (remote ip "localhost:*"))'
 assert_eq "7" "$(lo_round holds)" "denials that hold: the round runs"
 assert_contains "$(cat "$t/lo.checks" 2>/dev/null)" "fm-loopback-check $lport" \
   "after the profile was tried on the port that was listening"
@@ -935,6 +850,13 @@ assert_lacks "$(cat "$t/lo.profile.sb" 2>/dev/null)" "$wild" "which binds nothin
 assert_eq "7" "$(lo_round holds "$lport")" "the board listening: the round runs"
 assert_lacks "$(cat "$t/lo.checks" 2>/dev/null)" "bind:" "and no bind is tried on a port something already holds"
 assert_contains "$(cat "$t/lo.checks" 2>/dev/null)" "fm-loopback-check $lport" "while connecting to it is"
+# Linux: the round's loopback is its network namespace's own, so a bind
+# there is never the board's and nothing is tried before the round
+rm -f "$t/lo.checks"
+FM_PORT="$fport" FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$t/bin/bwrap" PATH="$t/lobin:$PATH" \
+  "$SB" run --policy="$t/worker.json" --root="$root" --ctl="$t/ctl" -- "$t/seven.sh" </dev/null 2>"$t/lo.err"
+assert_eq "7" "$?" "on Linux the round runs"
+assert_lacks "$(cat "$t/lo.err")" "the board's port" "and no bind of the board's port was tried: the namespace is the round's"
 kill "$lsn_pid" 2>/dev/null; wait "$lsn_pid" 2>/dev/null
 # the policy the cases below were written against
 pol worker 'policy:
@@ -1691,165 +1613,6 @@ else
   printf '    %-52s%s\n' "a limit above the hard one is clamped to it" "skipped: this host's hard limit is below 2000"
 fi
 
-# --- a round started inside a round (T-153) ------------------------------------
-# A second OS sandbox cannot be applied inside one, so fm-sandbox.sh runs a
-# round a round starts under the outer one's confinement - but only when
-# the round's mark and the kernel both say it is inside one. The mark alone,
-# which any shell can set, never lets a round off its own sandbox. The
-# platform's tool here is a stand-in named bwrap on PATH, as the real one
-# would be found; with the kernel's word, in the real block below.
-if [ "$(cat /proc/1/comm 2>/dev/null)" = bwrap ]; then
-  echo "    (skipped: this suite itself runs inside bwrap, where a mark and the kernel do both say so)"
-else
-  mkdir -p "$t/nestbin"; cp "$t/bin/bwrap" "$t/nestbin/bwrap"
-  rm -f "$t/bwrap.args"
-  out="$(FM_IN_ROUND=1 FM_SANDBOX_OS=linux PATH="$t/nestbin:$t/psbin:$PATH" \
-    "$SB" run --policy="$t/worker.json" --root="$root" --ctl="$t/ctl" -- "$t/seven.sh" </dev/null 2>&1)"
-  assert_eq "7" "$?" "a round marked FM_IN_ROUND outside any sandbox runs"
-  assert_ok "test -s '$t/bwrap.args'" "behind its own sandbox, the mark alone letting it off nothing"
-  assert_lacks "$out" "already inside a round's OS sandbox" "and it never says it is nested"
-fi
-
-# The mark (T-153 round 2): being in some sandbox is not being in fm's, so a
-# round is nested only on a nonce, and the tool it names, in a file of the
-# outer round's own that it can read and not write. A stand-in applies no
-# sandbox and no kernel can be asked about it, so these make the outer
-# round's part by hand: the mark's directory read-only, as the outer profile
-# makes it. Root writes a read-only directory anyway, so they skip there.
-nd="$t/nest"; mkdir -p "$nd/ctl"
-nonce=0123456789abcdef0123456789abcdef
-mark_dir() {   # mark_dir <name> <content> [writable] -> the mark file, in a directory of its own
-  mkdir -p "$nd/$1"; printf '%s' "$2" > "$nd/$1/nonce"
-  [ -n "${3:-}" ] || chmod 555 "$nd/$1"
-  printf '%s' "$nd/$1/nonce"
-}
-cat > "$nd/probe.py" <<'PY'
-import os, socket, sys
-host, port = os.environ['HTTPS_PROXY'].rsplit('/', 1)[-1].split(':')
-with open(sys.argv[1], 'w') as out:
-    for target in ('allowed.example.org:443', 'refused.example.org:443', 'github.com:443'):
-        s = socket.create_connection((host, int(port)), timeout=10)
-        s.sendall(('CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n' % (target, target)).encode())
-        out.write('%s %s\n' % (target, s.recv(64).split(b'\r\n')[0].decode()))
-        s.close()
-PY
-cat > "$t/nest-cmd.sh" <<S
-#!/usr/bin/env bash
-printf 'HTTPS_PROXY=%s\nTMPDIR=%s\nFM_IN_ROUND=%s\nMARK=%s\n' "\${HTTPS_PROXY:-}" "\$TMPDIR" "\${FM_IN_ROUND:-}" \
-  "\${FM_ROUND_MARK:-}" > "$nd/env"
-[ -z "\${NEST_PROBE:-}" ] || python3 "$nd/probe.py" "$nd/got"
-exit 7
-S
-chmod +x "$t/nest-cmd.sh"
-pol worker 'policy:
-  procs: 1000000
-  network: allowed.example.org refused.example.org
-'
-cp "$t/worker.json" "$nd/policy.json"
-nest_run() {   # nest_run <os> <tool> <mark file> <nonce> [VAR=value...] -> exit code; stderr in $nd/err
-  local os_="$1" tool_="$2" m="$3" n="$4"; shift 4
-  rm -f "$t/profile.sb" "$t/bwrap.args" "$nd/env" "$nd/got"; : > "$nd/blocked"
-  env FM_IN_ROUND=1 FM_ROUND_MARK="$m" FM_ROUND_NONCE="$n" FM_SANDBOX_OS="$os_" FM_SANDBOX_TOOL="$tool_" \
-    PATH="$t/psbin:$PATH" "$@" \
-    "$SB" run --policy="$nd/policy.json" --root="$root" --blocked="$nd/blocked" --ctl="$nd/ctl" \
-    -- "$t/nest-cmd.sh" </dev/null 2>"$nd/err"
-  echo $?
-}
-if [ "$(id -u)" = 0 ]; then
-  echo "    (skipped: root writes a read-only directory, so the outer round's mark cannot be made by hand)"
-else
-  good="$(mark_dir good "$nonce $t/bin/sandbox-exec")"
-  # a foreign sandbox: FM_IN_ROUND=1 and no mark of fm's
-  assert_eq "7" "$(nest_run darwin "$t/bin/sandbox-exec" "" "")" "a round under a foreign sandbox, FM_IN_ROUND=1, runs"
-  assert_ok "test -s '$t/profile.sb'" "behind its own profile: FM_IN_ROUND with no mark is no outer round of fm's"
-  assert_lacks "$(cat "$nd/err")" "already inside a round's OS sandbox" "and it does not say it is nested"
-  assert_eq "7" "$(nest_run darwin "$t/bin/sandbox-exec" "$good" ffffffffffffffffffffffffffffffff)" \
-    "a mark whose file holds another nonce"
-  assert_ok "test -s '$t/profile.sb'" "applies its own profile too"
-  open_mark="$(mark_dir open "$nonce $t/bin/sandbox-exec" writable)"
-  assert_eq "7" "$(nest_run darwin "$t/bin/sandbox-exec" "$open_mark" "$nonce")" \
-    "a mark in a directory the round can write, which no outer profile of fm's leaves writable"
-  assert_ok "test -s '$t/profile.sb'" "applies its own profile too"
-  assert_eq "" "$(ls -A "$nd/open" | grep -v '^nonce$' || true)" "and its try at writing there leaves nothing behind"
-  other="$(mark_dir other "$nonce /usr/bin/sandbox-exec")"
-  assert_eq "7" "$(nest_run darwin "$t/bin/sandbox-exec" "$other" "$nonce")" \
-    "a mark another tool's round made: a stand-in round inside a real one"
-  assert_ok "test -s '$t/profile.sb'" "runs its own stand-in as it always has"
-  # the mark and the directory it cannot write: nested
-  assert_eq "7" "$(nest_run darwin "$t/bin/sandbox-exec" "$good" "$nonce")" "a round inside fm's round runs"
-  assert_fail "test -e '$t/profile.sb'" "under the outer round's confinement, with no profile of its own applied"
-  assert_contains "$(cat "$nd/err")" "already inside a round's OS sandbox" "and says so on stderr"
-  assert_matches "$(sed -n 's/^HTTPS_PROXY=//p' "$nd/env" 2>/dev/null)" '^http://127\.0\.0\.1:[0-9]+$' \
-    "with a proxy of its own on the loopback the outer round gives it"
-  ntmp="$(sed -n 's/^TMPDIR=//p' "$nd/env" 2>/dev/null)"
-  assert_ne "" "$ntmp" "and a temp directory of its own"
-  assert_ne "$(cd "${TMPDIR:-/tmp}" && pwd -P)" "$(cd "$ntmp" 2>/dev/null && pwd -P || echo "$ntmp")" \
-    "which is not the caller's"
-  assert_eq "FM_IN_ROUND=1" "$(grep '^FM_IN_ROUND=' "$nd/env" 2>/dev/null)" "still marked as a round"
-  assert_eq "MARK=$good" "$(grep '^MARK=' "$nd/env" 2>/dev/null)" "keeping its outer round's mark, not making one"
-  assert_eq "" "$(ls -A "$nd/good" | grep -v '^nonce$' || true)" "and nothing is left in the mark's directory"
-
-  # its proxy leaves through the outer round's: a host the outer proxy
-  # refuses is refused and named in this round's --blocked, and one this
-  # policy refuses never reaches the outer proxy at all
-  cat > "$nd/upstream.py" <<'PY'
-import os, socket, sys
-s = socket.socket(); s.bind(('127.0.0.1', 0)); s.listen(16)
-with open(sys.argv[1] + '.tmp', 'w') as f:
-    f.write(str(s.getsockname()[1]))
-os.rename(sys.argv[1] + '.tmp', sys.argv[1])
-while True:
-    c, _ = s.accept()
-    data = b''
-    while b'\r\n\r\n' not in data:
-        chunk = c.recv(4096)
-        if not chunk:
-            break
-        data += chunk
-    target = (data.split(b' ') + [b'', b''])[1].decode(errors='replace')
-    with open(sys.argv[2], 'a') as f:
-        f.write(target + '\n')
-    c.sendall(b'HTTP/1.1 403 Forbidden\r\n\r\n' if target.startswith('refused.example.org:')
-              else b'HTTP/1.1 200 Connection established\r\n\r\n')
-    c.close()
-PY
-  rm -f "$nd/uport" "$nd/ulog"
-  python3 "$nd/upstream.py" "$nd/uport" "$nd/ulog" </dev/null >/dev/null 2>&1 &
-  up_pid=$!
-  i=0; while [ ! -s "$nd/uport" ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
-  uport="$(cat "$nd/uport" 2>/dev/null)"
-  assert_matches "$uport" '^[0-9]+$' "a stand-in for the outer round's proxy is up"
-  lgood="$(mark_dir lgood "$nonce $t/bin/bwrap")"
-  assert_eq "7" "$(nest_run linux "$t/bin/bwrap" "$lgood" "$nonce" HTTPS_PROXY="http://127.0.0.1:$uport" NEST_PROBE=1)" \
-    "a round nested on Linux runs"
-  assert_fail "test -e '$t/bwrap.args'" "with no bwrap of its own"
-  ngot="$(cat "$nd/got" 2>/dev/null)"
-  assert_contains "$ngot" "allowed.example.org:443 HTTP/1.1 200" "a host both policies allow is reached through the outer proxy"
-  assert_contains "$ngot" "refused.example.org:443 HTTP/1.1 403" "a host the outer proxy refuses is refused"
-  assert_contains "$ngot" "github.com:443 HTTP/1.1 403" "and one this round's policy refuses"
-  assert_eq "refused.example.org
-github.com" "$(cat "$nd/blocked" 2>/dev/null)" "each named in this round's --blocked, the outer refusal too"
-  assert_eq "allowed.example.org:443
-refused.example.org:443" "$(cat "$nd/ulog" 2>/dev/null)" "and only the hosts this policy allows were asked of the outer proxy"
-  kill "$up_pid" 2>/dev/null; wait "$up_pid" 2>/dev/null
-
-  # an outer round with no loopback gives its proxy nowhere to listen: the
-  # stand-in python3 fails the proxy as a bind refused there would
-  mkdir -p "$nd/nolo"
-  printf '#!/bin/sh\n[ "$3" = proxy ] && exit 1\nexec %s "$@"\n' "$(command -v python3)" > "$nd/nolo/python3"
-  chmod +x "$nd/nolo/python3"
-  assert_eq "70" "$(nest_run darwin "$t/bin/sandbox-exec" "$good" "$nonce" PATH="$nd/nolo:$t/psbin:$PATH")" \
-    "a nested round with no loopback to serve its proxy on exits 70"
-  assert_contains "$(cat "$nd/err")" "no loopback to serve its proxy on" "and says why"
-  assert_fail "test -e '$nd/env'" "before its command ever starts"
-  chmod 755 "$nd/good" "$nd/other" "$nd/lgood"
-fi
-# the policy the cases below were written against
-pol worker 'policy:
-  procs: 1000000
-  cpu: 90
-'
-
 # no sandbox: the round does not run unconfined
 rm -f "$t/ran"
 FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/no-such-tool" \
@@ -2031,90 +1794,6 @@ if real_sandbox_ok; then
     ' 2>&1)"
   assert_contains "$ckout" "ALL_OK" "real sandbox: git add and git checkout -- <path> succeed in a clone checkout"
   assert_contains "$ckout" "committed" "and the checkout actually restored the committed content"
-  # T-153: what a review round is asked to run. A server of the round's own
-  # on 127.0.0.1, bound to port 0 and connected to; its own user's process
-  # list; and still no connection to a listener older than the round, nor
-  # another user's process list. The listener is the suite's own, stopped
-  # below.
-  lsnr="$rt/older.port"
-  python3 - "$lsnr" >/dev/null 2>&1 <<'PY' &
-import os, socket, sys
-s = socket.socket(); s.bind(('127.0.0.1', 0)); s.listen(8)
-with open(sys.argv[1] + '.tmp', 'w') as f:
-    f.write(str(s.getsockname()[1]))
-os.rename(sys.argv[1] + '.tmp', sys.argv[1])
-while True:
-    c, _ = s.accept(); c.close()
-PY
-  older_pid=$!
-  i=0; while [ ! -s "$lsnr" ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
-  cat > "$rt/tree/probe.py" <<'PY'
-import os, socket, subprocess, sys
-out = []
-try:
-    s = socket.socket(); s.bind(('127.0.0.1', 0)); s.listen(1)
-    socket.create_connection(('127.0.0.1', s.getsockname()[1]), timeout=5).close()
-    out.append('SELF_OK')
-except OSError as e:
-    out.append('SELF_REFUSED(%s)' % e)
-try:
-    socket.create_connection(('127.0.0.1', int(sys.argv[1])), timeout=5).close()
-    out.append('OUTSIDE_REACHED')
-except OSError:
-    out.append('OUTSIDE_REFUSED')
-own = subprocess.run(['ps', '-U', str(os.getuid()), '-o', 'pid='], capture_output=True, text=True)
-out.append('PS_OK' if str(os.getpid()) in own.stdout.split() else 'PS_FAILED(%s)' % own.stderr.strip())
-other = subprocess.run(['ps', '-U', '0', '-o', 'pid='], capture_output=True, text=True)
-out.append('ROOT_UNLISTED' if not other.stdout.strip() else 'ROOT_LISTED')
-print(' '.join(out))
-PY
-  lout="$("$SB" run --policy="$rt/policy.json" --root="$rt/tree" --tmp="$rt/tmp" \
-    -- python3 "$rt/tree/probe.py" "$(cat "$lsnr" 2>/dev/null)" 2>&1)"
-  assert_contains "$lout" "OUTSIDE_REFUSED" "real sandbox: a listener older than the round is out of its reach"
-  if grep -q "allows it no port but its proxy" <<< "$lout"; then
-    echo "    (skipped: this host's kernel let a closed port through, so the round got no loopback of its own: $(grep -m1 'do not hold\|cannot try' <<< "$lout"))"
-  else
-    assert_contains "$lout" "SELF_OK" "real sandbox: a round binds 127.0.0.1 and connects to its own server"
-  fi
-  assert_contains "$lout" "PS_OK" "real sandbox: a round lists its own processes with ps"
-  if [ "$(id -u)" != 0 ]; then
-    assert_contains "$lout" "ROOT_UNLISTED" "real sandbox: and not another user's"
-  fi
-  kill "$older_pid" 2>/dev/null; wait "$older_pid" 2>/dev/null
-  # T-153: a round started inside a round. The outer round's copy of
-  # fm-sandbox.sh, and its policy, are in its own tree, the one place it may
-  # read them; the inner round tries to write outside every root.
-  mkdir -p "$rt/tree/.fm-nest"
-  cp "$SB" "$ROOT/bin/fm-config.sh" "$rt/policy.json" "$rt/tree/.fm-nest/"
-  cat > "$rt/tree/.fm-nest/nest.sh" <<'S'
-#!/usr/bin/env bash
-d="$(cd "$(dirname "$0")" && pwd)"
-"$d/fm-sandbox.sh" run --policy="$d/policy.json" --root="$d/.." \
-  -- bash -c 'echo NESTED_RAN; (echo x > "$1") 2>/dev/null && echo WROTE_OUTSIDE; echo "IN=$FM_IN_ROUND"' _ "$1"
-echo "inner-rc=$?"
-S
-  nout="$("$SB" run --policy="$rt/policy.json" --root="$rt/tree" --tmp="$rt/tmp" \
-    -- bash "$rt/tree/.fm-nest/nest.sh" "$rt/outside-nested" 2>&1)"
-  assert_contains "$nout" "already inside a round's OS sandbox" "real sandbox: a round started inside a round says it is nested"
-  if grep -q "gives this one no loopback" <<< "$nout"; then
-    echo "    (skipped: the outer round got no loopback on this host, so the inner one cannot serve its proxy)"
-  else
-    assert_contains "$nout" "NESTED_RAN" "and runs, under the outer round's confinement, rather than failing to apply a second"
-    assert_contains "$nout" "inner-rc=0" "to its own end"
-    assert_contains "$nout" "IN=1" "still marked a round"
-  fi
-  assert_lacks "$nout" "WROTE_OUTSIDE" "and the outer round's write roots still hold for it"
-  assert_fail "test -e '$rt/outside-nested'" "so nothing was written outside them"
-  # macOS: the directories above a root are listable, the operator's home
-  # never (T-153). bwrap mounts none of them, so Linux has nothing to list.
-  if [ "$(uname -s)" = Darwin ]; then
-    mkdir -p "$rt/opr/wt"
-    lsout="$(HOME="$rt/opr" "$SB" run --policy="$rt/policy.json" --root="$rt/opr/wt" --tmp="$rt/tmp" \
-      -- bash -c 'ls "$1" >/dev/null 2>&1 && echo HOME_LISTED; ls "$2" >/dev/null 2>&1 && echo ABOVE_LISTED' \
-      _ "$rt/opr" "$rt" 2>&1)"
-    assert_lacks "$lsout" "HOME_LISTED" "real sandbox: a root under the operator's home cannot list the home"
-    assert_contains "$lsout" "ABOVE_LISTED" "while the directory above it can be listed"
-  fi
   safe_rm_rf "$rt"
 else
   echo "    (skipped: no real sandbox nestable on this host - real-sandbox behaviour untested here)"

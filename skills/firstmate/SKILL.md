@@ -227,9 +227,12 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   and `zh-TW`; a second empty ending is reported as today.
 - Round order and the merge double check (captain, 2026-09-25; design §6).
   Start the review round through `bin/fm-review.sh` as soon as the worker hands
-  back; never hold it for CI. CI and the gates are not a review criterion
-  in either mode: a run-mode reviewer is shown none, and a diff-mode reviewer
-  sees the head section as information only. A merge card needs two
+  back; do not hold it for CI yourself. Given `--pr`, `fm-review.sh` waits,
+  bounded, for the head's required checks and hands the reviewer what they
+  found - every job's result, the failing assertions and the fail-first
+  report - in either mode (T-153): the machine runs the tests, fail-first
+  included, and the reviewer judges. Green CI and the gates are still not a
+  review criterion. A merge card needs two
   independent checks on the same current head: the reviewer's
   `APPROVE:<task-id>` for that head, and your own reading of that head's
   required GitHub check (green) and the six gates (`bin/fm-gate.sh`).

@@ -88,6 +88,14 @@ if firstmate.is_file():
         errors.append('firstmate skill should carry that sentence exactly once (SK-003: duplicate removed)')
     # SK-008: an APPROVE survives any update from the base that leaves the
     # change's patch-id as approved; update-branch is allowed at any time.
+    # T-153: the review round is handed what CI found, in either mode
+    t153 = ('Given `--pr`, `fm-review.sh` waits, bounded, for the head\'s required checks and hands the '
+            'reviewer what they found - every job\'s result, the failing assertions and the fail-first report - '
+            'in either mode (T-153): the machine runs the tests, fail-first included, and the reviewer judges.')
+    if t153 not in prose:
+        errors.append(f'firstmate skill lacks T-153 rule: {t153}')
+    if 'a run-mode reviewer is shown none' in prose:
+        errors.append('firstmate skill still says a run-mode reviewer is shown no CI (T-153)')
     for sentence in (
         'An APPROVE carries forward across any update of the branch from its base as long as the change itself is unchanged: the patch-id of merge-base..head equals the approved one.',
         'A conflict that had to be resolved changes the patch and needs a review; base commits touching files the change reviewed no longer void the approval.',
@@ -133,6 +141,25 @@ if reviewer.is_file():
     ):
         if gone in rprose:
             errors.append(f'reviewer skill still carries retired text (SK-007): {gone}')
+    # T-153: the machine runs the tests, fail-first included; the reviewer
+    # judges with what CI found and proves nothing by hand.
+    for sentence in (
+        '**The machine runs the tests; you judge (captain, 2026-09-29; T-153).**',
+        'Do not run a suite that starts rounds, a board or a browser either: CI ran them where they can run.',
+        'Fail-first is no longer a step of yours: the `fail-first` job reverted the change\'s behaviour and ran its changed suites on both trees. Read its report, and challenge a test it lists only as a guard.',
+        'Where reading is not enough to check a claim, run a small command that needs no second sandbox: reading, grepping, git, a single script invocation. Say so under **Executed**.',
+        'That is your evidence for the tests: judge with it, and do not re-run it.',
+    ):
+        if sentence not in rprose:
+            errors.append(f'reviewer skill lacks T-153 rule: {sentence}')
+    for gone in (
+        '3. Prove fail-first',
+        'You are shown no CI and no gate results',
+        'A run-mode prompt has no such section and nothing from GitHub about CI.',
+        'split it into the suites `test` names',
+    ):
+        if gone in rprose:
+            errors.append(f'reviewer skill still carries retired text (T-153): {gone}')
 # SK-004: the worker skill matches the sandboxed round (T-117/T-128): it
 # cannot commit or push, does not run the suites, its rebuild-frozen rule
 # names only the current task file, and it starts from firstmate's brief.

@@ -9,7 +9,7 @@
 #       -> the policy dimensions the sandbox enforces here, one line; nothing
 #          when there is no sandbox to run
 #   fm-sandbox.sh profile --policy=<file> --root=<dir> [--tmp=<dir>] [--write=<dir>]... [--vendor=<name>]
-#                         [--proxy-port=<n>] [--listening=<port,...>|unknown] [--ephemeral=<first>-<last>]
+#                         [--proxy-port=<n>] [--listening=<port,...>|unknown]
 #       -> macOS: the sandbox-exec profile; Linux: the bwrap arguments, one per line
 #   fm-sandbox.sh decide  --policy=<file> [--vendor=<name>] <host>
 #       -> allow or deny, and why: the rule the round's proxy applies
@@ -62,17 +62,12 @@
 # directory; no network but the round's own proxy, which is how a named
 # registry can be allowed at all (a profile names addresses, not hosts), and
 # which records every host it refuses to --blocked so the round can report
-# it; loopback only on ports the round opens itself - it binds and accepts
-# on any but the board's (FM_PORT, 4173) and those listening when it
-# started, and connects only to the kernel's ephemeral ports, where a server
-# bound to port 0 lands, less those - which `run` tries behind the profile
-# before the round and tightens to the proxy alone when the kernel lets one
-# through (design 13.1, T-153); no unix socket; the names in each directory
-# above its roots, so bun's resolver can start there - but never in the
-# operator's home or a never-readable directory, or anything under either;
-# a ps(1) of its own ahead of the setuid one it may not run, which lists
-# its own user's processes only; LaunchServices refused, so no browser
-# opens; and no mach service that
+# it; loopback only on ports the round opens itself - never the board's
+# (FM_PORT, 4173) nor one that was listening when the round started, which
+# it may neither connect to nor bind nor accept on, and which `run` tries
+# behind the profile before the round and tightens to the proxy alone when
+# the kernel lets one through (design 13.1, T-153);
+# LaunchServices refused, so no browser opens; and no mach service that
 # hands out a secret (the keychain, the pasteboard, the account stores),
 # which no file rule can cover. Linux runs bwrap, which mounts only what the
 # policy lets the round read and gives it a /tmp and a network namespace of
@@ -80,16 +75,6 @@
 # same proxy, over a unix socket bound into the namespace. So both
 # platforms cover every dimension, and on both the proxy is what names a
 # refused host.
-#
-# A round started inside a round (T-153) - a suite, or fm itself, run by a
-# crew round - cannot have a second OS sandbox: macOS refuses to apply one
-# inside another. `run` knows it is there only by a mark fm's own outer
-# round alone can make - a nonce in a file the round can read and not write
-# (nested_round) - and then runs the command under the outer round's
-# confinement, with this policy's scrub, limits, login, temp directory and a
-# proxy of its own that leaves through the outer round's, and says so on
-# stderr. A round started outside one, or under any other sandbox, applies
-# its own.
 #
 # The vendor's login (T-117). Where the operator's login is kept out of the
 # round's reach - claude's lives in the macOS keychain, with gh's token and
@@ -334,77 +319,31 @@ def own_git_sbpl(path):
     return '(literal %s)' % sbpl(path)
 
 
-def homes():
-    """The operator's home directories: $HOME as fm-sandbox was started
-    with it, and the account's own."""
-    import pwd
-    try:
-        account = pwd.getpwuid(os.getuid()).pw_dir
-    except KeyError:
-        account = ''
-    out = []
-    for h in (os.environ.get('HOME', ''), account):
-        if h and h != '/':
-            h = os.path.realpath(h)
-            if h not in out:
-                out.append(h)
-    return out
-
-
-def ancestors(paths, closed):
-    """Every directory above each path, up to but not including /: listed
-    one by one, never as a subtree, so their names are readable and nothing
-    in them is. Never one in `closed` or under it - the operator's home and
-    every never-readable directory: not even the names in those."""
-    inside = lambda x, c: x == c or x.startswith(c.rstrip('/') + '/')
-    out = []
-    for path in paths:
-        up = os.path.dirname(path.rstrip('/'))
-        while up and up != '/':
-            if up not in out and up not in paths and not any(inside(up, c) for c in closed):
-                out.append(up)
-            up = os.path.dirname(up)
-    return out
-
-
-def darwin(p, roots, reads, own, port, listening, ephemeral):
+def darwin(p, roots, reads, own, port, listening):
     sub = lambda paths: ' '.join('(subpath %s)' % sbpl(x) for x in paths)
     auth, state, vtmp = own.get('auth', []), own.get('state', []), own.get('tmp', [])
     board = int(os.environ.get('FM_PORT') or 4173)
     lines = ['(version 1)', '(allow default)',
              ';; network: this round\'s own proxy, and loopback ports the round opens itself',
              '(deny network*)']
-    proxy_port = int(port) if port and int(port) else None
-    closed = sorted(set([board] + (listening or [])) - {proxy_port})
     # None: the listeners could not be read, so no loopback port is known to
     # be free of someone else's, and only the proxy is reachable
     if listening is not None:
-        first, last = ephemeral
-        # A server the round opens binds port 0, and the kernel hands it a
-        # port from its ephemeral range: bind and accept take localhost:*,
-        # which is the only way to allow a port-0 bind (localhost:0 is not a
-        # port a profile may name), less the board's and every port that
-        # was listening. Connecting is a positive list: every port of that
-        # range but those. A port-specific deny never carves a port out of
-        # an outbound localhost:* allow (measured on macOS 15.7.9, design
-        # 8), while a port-specific allow does hold (the proxy's own).
         lines += ['(allow network-bind (local ip "localhost:*"))',
-                  '(allow network-inbound (local ip "localhost:*"))']
+                  '(allow network-inbound (local ip "localhost:*"))',
+                  '(allow network-outbound (remote ip "localhost:*"))',
+                  ';; never the board, nor anything that was listening before the round started']
+        for n in sorted(set([board] + listening)):
+            lines.append('(deny network-outbound (remote ip "localhost:%d"))' % n)
     # The board's port, and every port listening when the round started, is
-    # never bound or accepted on: after the allow above, which it carves out
-    # of, and written whether or not the listeners could be read, so a
-    # profile never lacks the board's deny (T-153). With no allow above it
-    # repeats what (deny network*) already says.
-    lines += [';; never the board, nor anything that was listening before the round started:',
-              ';; not bound, not accepted on']
-    for n in closed:
+    # never bound or accepted on (T-153: a suite's fixture board took
+    # 127.0.0.1:4173 while the captain's board was down). It follows the
+    # allow above, which it carves out of, and is written whether or not the
+    # listeners could be read, so no profile lacks the board's; with no
+    # allow above it repeats what (deny network*) already says.
+    lines.append(';; never bound or accepted on: the board, nor anything listening before the round started')
+    for n in sorted(set([board] + (listening or []))):
         lines.append('(deny network-bind network-inbound (local ip "localhost:%d"))' % n)
-    if listening is not None:
-        lines.append(';; connected to: the ports the kernel hands a server of the round\'s own, %d-%d, '
-                     'less those' % (first, last))
-        for n in range(first, last + 1):
-            if n not in closed:
-                lines.append('(allow network-outbound (remote ip "localhost:%d"))' % n)
     if port and int(port):
         lines.append('(allow network-outbound (remote ip "localhost:%d"))' % int(port))
     lines += [';; writes: the write roots only',
@@ -431,27 +370,6 @@ def darwin(p, roots, reads, own, port, listening, ephemeral):
                   '(allow file-read* file-write* %s)' % sub(vtmp)]
     lines += [';; the round\'s own roots, even under a never-readable directory',
               '(allow file-read* file-write* %s)' % sub(roots)]
-    # `bunx <package>` resolves through bun's module resolver, which lists
-    # every directory from / down to its working directory and refuses to
-    # start at the first it may not (CouldntReadCurrentDirectory; measured
-    # 2026-09-29 in a worker round: `bunx --version` needs none of them,
-    # `bunx playwright --version` fails from any directory with one it cannot
-    # list and runs from /usr/share). Each directory above a root is listed by
-    # itself - a literal, never its subtree - so the names in it are readable
-    # and no file or directory in it is. Never the operator's home or
-    # anything under it, nor a never-readable directory (fm's state/): a
-    # worktree there keeps bun's resolver refused, and a round runs bunx from
-    # its own temp directory, which is not under either.
-    above = ancestors(roots, homes() + list(p['never_read']))
-    if above:
-        lines += [';; the directories above the roots, but the operator\'s home and the never-readable:',
-                  ';; their names, nothing in them',
-                  '(allow file-read* %s)' % ' '.join('(literal %s)' % sbpl(a) for a in above)]
-    # the mark a round started inside this one reads to know it is (nested_round)
-    mark = os.environ.get('FM_SB_MARK', '')
-    if mark:
-        lines += [';; the round\'s mark, readable and nothing else beside it',
-                  '(allow file-read* (literal %s))' % sbpl(mark)]
     git_own = own_git(roots[0]) if roots else None
     if git_own:
         lines += [';; the tree\'s own link to git (T-128) may not be deleted or rewritten from',
@@ -506,10 +424,6 @@ def linux(p, roots, reads, own, sock):
             a += ['--ro-bind', '/dev/null', n]
     if sock:
         a += ['--bind', sock, sock]
-    # the round's mark (nested_round), in a directory of its own, read-only
-    mark = os.environ.get('FM_SB_MARK', '')
-    if mark:
-        a += ['--ro-bind', os.path.dirname(mark), os.path.dirname(mark)]
     a += ['--chdir', roots[0], '--']
     return '\n'.join(a) + '\n'
 
@@ -866,30 +780,6 @@ def proxy(p, vendor, portfile, blocked, sock):
         finally:
             a.close(); b.close()
 
-    # A round started inside a round (nested, below) has no way off the
-    # machine but the outer round's proxy: its own proxy applies this
-    # policy, then asks the outer one, which applies the outer's. A host
-    # either refuses is refused, and one the outer refuses is named too.
-    upstream_proxy = re.match(r'https?://([^/:]+):(\d+)/?$', os.environ.get('FM_SANDBOX_UPSTREAM', ''))
-
-    def upstream(host, port):
-        if not upstream_proxy:
-            return socket.create_connection((host, port), timeout=30)
-        s = socket.create_connection((upstream_proxy.group(1), int(upstream_proxy.group(2))), timeout=30)
-        target = '%s:%d' % (host, port)
-        s.sendall(('CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n' % (target, target)).encode('latin-1'))
-        got = b''
-        while b'\r\n\r\n' not in got:
-            chunk = s.recv(4096)
-            if not chunk or len(got) > 65536:
-                s.close()
-                raise OSError('the outer proxy closed')
-            got += chunk
-        if got.split(b' ', 2)[1:2] != [b'200']:
-            s.close()
-            raise PermissionError(host)
-        return s
-
     def handle(client):
         try:
             data = b''
@@ -913,19 +803,16 @@ def proxy(p, vendor, portfile, blocked, sock):
             allowed, _ = decide(p, vendor, host)
             if not allowed:
                 return refuse(client, host)
-            try:
-                far = upstream(host, int(port))
-            except PermissionError:
-                return refuse(client, host)
-            far.settimeout(None)
+            upstream = socket.create_connection((host, int(port)), timeout=30)
+            upstream.settimeout(None)
             if path is None:
                 client.sendall(b'HTTP/1.1 200 Connection established\r\n\r\n')
             else:
-                far.sendall(('%s %s %s\r\n' % (method, path, version)).encode('latin-1')
-                            + headers + b'\r\n\r\n')
+                upstream.sendall(('%s %s %s\r\n' % (method, path, version)).encode('latin-1')
+                                 + headers + b'\r\n\r\n')
             if rest:
-                far.sendall(rest)
-            relay(client, far)
+                upstream.sendall(rest)
+            relay(client, upstream)
         except Exception:
             client.close()
 
@@ -977,18 +864,14 @@ def main():
         # login <vendor> <os> <dir> <round tmp>
         login(p, sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6])
         return
-    # profile <os> <root> <tmp> <vendor> <port> <listening> <socket> <first-last> [write...]
-    os_, root, tmp, vendor, port, listening, sock, span = sys.argv[3:11]
-    roots = roots_of(p, real(root), real(tmp) if tmp else '', sys.argv[11:])
+    # profile <os> <root> <tmp> <vendor> <port> <listening> <socket> [write...]
+    os_, root, tmp, vendor, port, listening, sock = sys.argv[3:10]
+    roots = roots_of(p, real(root), real(tmp) if tmp else '', sys.argv[10:])
     reads = [r for r in p['read'] if r] + gitdirs(real(root))
     own = p['vendors'].get(vendor, {})
     if os_ == 'darwin':
         ports = None if listening == 'unknown' else [int(x) for x in listening.split(',') if x]
-        got = re.match(r'([0-9]+)-([0-9]+)$', span)
-        first, last = (int(got.group(1)), int(got.group(2))) if got else (0, -1)
-        if not (1024 <= first <= last <= 65535):
-            sys.exit('fm-sandbox: %s is not a range of ports a round\'s servers are handed' % span)
-        sys.stdout.write(darwin(p, roots, reads, own, port, ports, (first, last)))
+        sys.stdout.write(darwin(p, roots, reads, own, port, ports))
     else:
         sys.stdout.write(linux(p, roots, reads, own, sock))
 
@@ -1065,7 +948,7 @@ SHIM='printf "started\n" >&4; exec 4>&-; exec "$@"'
 # Run behind the round's own profile before the round (macOS): it says
 # `checked` once it is running there, then each of the ports it is given
 # that it could connect to on loopback, and each `bind:<port>` it could
-# bind there itself (T-153: the board's port, while nothing holds it).
+# bind there.
 #   python3 -c "$LOOP_PY" fm-loopback-check <port>|bind:<port>...
 IFS= read -r -d '' LOOP_PY <<'PY'
 import socket, sys
@@ -1092,179 +975,6 @@ for arg in sys.argv[2:]:
         break
 PY
 
-# The ps(1) a macOS round finds first on its PATH (T-153). /bin/ps is setuid
-# root there, and no sandboxed process may run a setuid binary, so every ps
-# in a round - fm-sandbox's own process count when a round starts a round,
-# the board's, fm-herdr's, a suite's - failed with "operation not
-# permitted". This one asks the kernel as the round's own user - libproc on
-# macOS, /proc elsewhere - and lists that user's processes only: a pid or
-# user that is not the round's own lists nothing and exits 1, as ps does for
-# a pid that is not there. The options fm and its suites use: -A -e -a -x
-# (every process of the user's), -p pids, -U/-u users, -o fields (name= for
-# no header), -L -w -E (accepted, no effect).
-IFS= read -r -d '' PS_PY <<'PY'
-import ctypes, os, pwd, signal, sys, time
-
-signal.signal(signal.SIGPIPE, signal.SIG_DFL)
-ME = os.getuid()
-
-
-def darwin_procs():
-    lib = ctypes.CDLL('/usr/lib/libproc.dylib')
-
-    class BsdInfo(ctypes.Structure):
-        _fields_ = [('flags', ctypes.c_uint32), ('status', ctypes.c_uint32), ('xstatus', ctypes.c_uint32),
-                    ('pid', ctypes.c_uint32), ('ppid', ctypes.c_uint32), ('uid', ctypes.c_uint32),
-                    ('gid', ctypes.c_uint32), ('ruid', ctypes.c_uint32), ('rgid', ctypes.c_uint32),
-                    ('svuid', ctypes.c_uint32), ('svgid', ctypes.c_uint32), ('rfu', ctypes.c_uint32),
-                    ('comm', ctypes.c_char * 16), ('name', ctypes.c_char * 32), ('nfiles', ctypes.c_uint32),
-                    ('pgid', ctypes.c_uint32), ('pjobc', ctypes.c_uint32), ('tdev', ctypes.c_uint32),
-                    ('tpgid', ctypes.c_uint32), ('nice', ctypes.c_int32), ('start', ctypes.c_uint64),
-                    ('start_usec', ctypes.c_uint64)]
-    pids = (ctypes.c_int * 16384)()
-    n = lib.proc_listpids(4, ME, pids, ctypes.sizeof(pids)) // ctypes.sizeof(ctypes.c_int)   # PROC_UID_ONLY
-    libc = ctypes.CDLL(None)
-    out = []
-    for pid in pids[:max(n, 0)]:
-        if pid <= 0:
-            continue
-        info = BsdInfo()
-        if lib.proc_pidinfo(pid, 3, ctypes.c_uint64(0), ctypes.byref(info), ctypes.sizeof(info)) != ctypes.sizeof(info):
-            continue
-        if info.uid != ME:
-            continue
-        comm = (info.name or info.comm).decode(errors='replace')
-        args = comm
-        # KERN_PROCARGS2: argc, the executable's path, then argv
-        mib = (ctypes.c_int * 3)(1, 49, pid)
-        size = ctypes.c_size_t(262144)
-        buf = ctypes.create_string_buffer(size.value)
-        if libc.sysctl(mib, 3, buf, ctypes.byref(size), None, ctypes.c_size_t(0)) == 0 and size.value > 4:
-            raw = buf.raw[:size.value]
-            argc = int.from_bytes(raw[:4], sys.byteorder)
-            rest = raw[4:]
-            rest = rest[rest.find(b'\0'):].lstrip(b'\0')
-            argv = rest.split(b'\0')[:argc]
-            if argv and argv[0]:
-                args = ' '.join(a.decode(errors='replace') for a in argv)
-        state = {1: 'I', 2: 'R', 3: 'S', 4: 'T', 5: 'Z'}.get(info.status, '?')
-        out.append(dict(pid=pid, ppid=int(info.ppid), pgid=int(info.pgid), uid=int(info.uid),
-                        stat=state, comm=comm, args=args, start=float(info.start)))
-    return out
-
-
-def linux_procs():
-    boot = 0.0
-    try:
-        for line in open('/proc/stat'):
-            if line.startswith('btime '):
-                boot = float(line.split()[1])
-    except OSError:
-        pass
-    tick = os.sysconf('SC_CLK_TCK')
-    out = []
-    for name in os.listdir('/proc'):
-        if not name.isdigit():
-            continue
-        try:
-            uid = os.stat('/proc/' + name).st_uid
-            if uid != ME:
-                continue
-            stat = open('/proc/%s/stat' % name, 'rb').read().decode(errors='replace')
-            comm = stat[stat.index('(') + 1:stat.rindex(')')]
-            f = stat[stat.rindex(')') + 2:].split()
-            argv = open('/proc/%s/cmdline' % name, 'rb').read().split(b'\0')
-            args = ' '.join(a.decode(errors='replace') for a in argv if a) or '[%s]' % comm
-        except (OSError, ValueError):
-            continue
-        out.append(dict(pid=int(name), ppid=int(f[1]), pgid=int(f[2]), uid=uid, stat=f[0], comm=comm,
-                        args=args, start=boot + int(f[19]) / tick))
-    return out
-
-
-def user_of(uid):
-    try:
-        return pwd.getpwuid(uid).pw_name
-    except KeyError:
-        return str(uid)
-
-
-def uid_of(name):
-    if name.isdigit():
-        return int(name)
-    try:
-        return pwd.getpwnam(name).pw_uid
-    except KeyError:
-        return -1
-
-
-FIELDS = {'pid': 'PID', 'ppid': 'PPID', 'pgid': 'PGID', 'uid': 'UID', 'user': 'USER', 'stat': 'STAT',
-          'state': 'S', 'comm': 'COMM', 'ucomm': 'UCOMM', 'command': 'COMMAND', 'args': 'ARGS',
-          'lstart': 'STARTED', 'lwp': 'LWP'}
-
-
-def value(p, field):
-    if field in ('pid', 'lwp'):
-        return str(p['pid'])
-    if field in ('ppid', 'pgid', 'uid'):
-        return str(p[field])
-    if field == 'user':
-        return user_of(p['uid'])
-    if field in ('stat', 'state'):
-        return p['stat']
-    if field in ('comm', 'ucomm'):
-        return os.path.basename(p['comm'])
-    if field in ('command', 'args'):
-        return p['args']
-    if field == 'lstart':
-        return time.strftime('%a %b %e %H:%M:%S %Y', time.localtime(p['start']))
-    return '-'
-
-
-def main(argv):
-    pids, uids, fields, i = None, None, [], 0
-    while i < len(argv):
-        a = argv[i]
-        take = lambda: argv[i + 1] if i + 1 < len(argv) else ''
-        if a in ('-p', '-U', '-u', '-o', '-O'):
-            v, i = take(), i + 2
-        elif a[:2] in ('-p', '-U', '-u', '-o') and len(a) > 2:
-            a, v, i = a[:2], a[2:], i + 1
-        elif a.startswith('-') and set(a[1:]) <= set('AaexLwEjfl') and a != '-':
-            i += 1
-            continue
-        else:
-            sys.stderr.write('ps (a round\'s own): %s is not an option it takes\n' % a)
-            return 2
-        if a == '-p':
-            pids = (pids or set()) | {int(x) for x in v.replace(',', ' ').split() if x.isdigit()}
-        elif a in ('-U', '-u'):
-            uids = (uids or set()) | {uid_of(x) for x in v.replace(',', ' ').split()}
-        else:
-            for spec in v.split(','):
-                name, eq, head = spec.partition('=')
-                if name not in FIELDS:
-                    sys.stderr.write('ps (a round\'s own): %s: keyword not found\n' % name)
-                    return 1
-                fields.append((name, head if eq else FIELDS[name]))
-    fields = fields or [('pid', 'PID'), ('command', 'CMD')]
-    if uids is not None and ME not in uids:
-        sys.stderr.write('ps (a round\'s own): a round lists only its own user\'s processes\n')
-        return 1
-    procs = darwin_procs() if sys.platform == 'darwin' else linux_procs()
-    if pids is not None:
-        procs = [p for p in procs if p['pid'] in pids]
-    procs.sort(key=lambda p: p['pid'])
-    if any(h for _, h in fields):
-        print(' '.join(h for _, h in fields))
-    for p in procs:
-        print(' '.join(value(p, f) for f, _ in fields))
-    return 0 if procs else 1
-
-
-sys.exit(main(sys.argv[1:]))
-PY
-
 # loopback_said <reached>: what loopback_reached found, in words
 loopback_said() {
   local conn bound
@@ -1287,7 +997,7 @@ loopback_reached() {
 
 # --- the option loop: every flag is --name=value --------------------------
 cmd="${1-}"; [ $# -gt 0 ] && shift
-policy=''; root=''; vendor=''; blocked=''; port=''; tmp=''; listening=''; started=''; ctl=''; span=''
+policy=''; root=''; vendor=''; blocked=''; port=''; tmp=''; listening=''; started=''; ctl=''
 writes=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -1297,7 +1007,6 @@ while [ $# -gt 0 ]; do
     --root=*) root="${1#*=}"; shift ;;
     --tmp=*) tmp="${1#*=}"; shift ;;
     --listening=*) listening="${1#*=}"; shift ;;
-    --ephemeral=*) span="${1#*=}"; shift ;;
     --write=*) writes+=("${1#*=}"); shift ;;
     --vendor=*) vendor="${1#*=}"; shift ;;
     --blocked=*) blocked="${1#*=}"; shift ;;
@@ -1314,69 +1023,6 @@ if [ -n "$started" ]; then
   : > "$started" || { say "cannot write $started"; exit 70; }
 fi
 required() { [ -n "$2" ] || { say "$cmd needs --$1=<value>"; exit 64; }; }
-
-# The ports the kernel hands a server bound to port 0, <first>-<last>: the
-# only loopback ports a macOS round may connect to, less the board's and every
-# one listening when it started (T-153). The kernel's own range, where it
-# says; the IANA one where it does not.
-ephemeral_range() {
-  local first last
-  first="$(sysctl -n net.inet.ip.portrange.first 2>/dev/null)"
-  last="$(sysctl -n net.inet.ip.portrange.last 2>/dev/null)"
-  if ! [[ "$first" =~ ^[0-9]+$ && "$last" =~ ^[0-9]+$ ]] && [ -r /proc/sys/net/ipv4/ip_local_port_range ]; then
-    read -r first last < /proc/sys/net/ipv4/ip_local_port_range
-  fi
-  if [[ "$first" =~ ^[0-9]+$ && "$last" =~ ^[0-9]+$ ]] && [ "$first" -ge 1024 ] && [ "$first" -le "$last" ]; then
-    printf '%s-%s\n' "$first" "$last"
-  else
-    echo 49152-65535
-  fi
-}
-
-# Already inside a round's own OS sandbox (T-153)? A second sandbox cannot be
-# applied inside one - macOS refuses sandbox_apply (71) - so a round a round
-# starts (a suite, a reviewer running fm) would fail or wait out its timeout.
-#
-# Being in some sandbox is not being in fm's: sandbox_check(2) says yes under
-# any (Claude Code's, codex's seatbelt, an App Sandbox), and FM_IN_ROUND is
-# an environment variable anyone can set. So the proof is a mark only fm's
-# own outer `run` makes (make_mark): a random nonce in a file of its own
-# work directory, outside every write root, which its profile lets the round
-# read and nothing beside it; the round is told the file's path and the
-# nonce (FM_ROUND_MARK, FM_ROUND_NONCE). A round is nested only when all of
-# these hold:
-#   - FM_IN_ROUND is set;
-#   - the file it was told of holds exactly the nonce it was told - a mark
-#     outlives neither its outer round (its work directory goes with it) nor
-#     a copy of the variables pointed at another file;
-#   - it cannot write the file's directory. Nothing outside a round stops
-#     the user writing a directory of the user's own; fm's outer profile
-#     does (bwrap binds it read-only). A foreign sandbox with FM_IN_ROUND=1
-#     has no such file, so it applies its own profile as a top-level round;
-#   - and, with the platform's own tool, the kernel's word too: sandbox_check
-#     on macOS, a pid namespace whose pid 1 is bwrap on Linux. A stand-in
-#     (FM_SANDBOX_TOOL, the suites') applies no sandbox at all and no kernel
-#     can be asked about it; there the mark and the directory are the check.
-#   - the mark was made by the sandbox tool this round would apply: a
-#     suite's stand-in round inside a real one is not nested, and runs its
-#     stand-in as it always has;
-nested_round() {
-  local mark="${FM_ROUND_MARK:-}" nonce="${FM_ROUND_NONCE:-}" probe
-  [ -n "${FM_IN_ROUND:-}" ] && [ -n "$mark" ] && [[ "$nonce" =~ ^[0-9a-f]{32}$ ]] || return 1
-  [ -f "$mark" ] && [ "$(cat "$mark" 2>/dev/null)" = "$nonce $tool" ] || return 1
-  probe="$(dirname "$mark")/.fm-nest-probe.$$"
-  if ( : > "$probe" ) 2>/dev/null; then rm -f "$probe"; return 1; fi
-  [ -z "${FM_SANDBOX_TOOL:-}" ] || return 0
-  case "$os" in
-    darwin)
-      python3 -c 'import ctypes, os, sys
-f = ctypes.CDLL("/usr/lib/libSystem.dylib").sandbox_check
-f.restype, f.argtypes = ctypes.c_int, [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
-sys.exit(0 if f(os.getpid(), None, 0) == 1 else 1)' 2>/dev/null ;;
-    linux) [ "$(cat /proc/1/comm 2>/dev/null)" = bwrap ] ;;
-    *) return 1 ;;
-  esac
-}
 
 # the dimensions the sandbox covers on this host for this policy
 covers() {
@@ -1406,7 +1052,7 @@ case "$cmd" in
     required policy "$policy"; required root "$root"
     os="$(host_os)"; [ -n "$os" ] || { say "no sandbox profile for this platform"; exit 69; }
     python3 -c "$SB_PY" profile "$policy" "$os" "$root" "$tmp" "$vendor" "${port:-0}" "$listening" '' \
-      "${span:-$(ephemeral_range)}" ${writes[@]+"${writes[@]}"}
+      ${writes[@]+"${writes[@]}"}
     exit $? ;;
   run|plain) ;;
   *) echo "usage: fm-sandbox.sh os|covers|profile|decide|login-source|run|plain --policy=<file> ..." >&2; exit 64 ;;
@@ -1420,11 +1066,6 @@ if [ "$cmd" = run ]; then
   tool="$(host_tool)"
   [ -n "$tool" ] || { say "no OS sandbox on this host; refusing to run the round unconfined"; exit 69; }
   root="$(cd "$root" 2>/dev/null && pwd -P)" || { say "no directory at $root"; exit 64; }
-fi
-nested=''
-if [ "$cmd" = run ] && nested_round; then
-  nested=1
-  say "already inside a round's OS sandbox ($os), where a second cannot be applied: this round runs under the outer round's confinement - its write roots, reads and network - with this policy's scrub, limits, login, temp directory and proxy, whose traffic leaves through the outer round's proxy"
 fi
 
 # the environment scrub: named credentials and whole families of them. And
@@ -1470,17 +1111,6 @@ make_work() {
 
 launcher=(); inner=(); secret_env=()
 if [ "$cmd" = run ] || [ -n "$vendor" ]; then make_work; fi
-# The round's mark (nested_round): a nonce in a file of fm-sandbox's own
-# directory, which the profile lets the round read and not write. Made by a
-# round that applies its own sandbox; a nested one keeps its outer round's.
-mark=''
-if [ "$cmd" = run ] && [ -z "$nested" ]; then
-  nonce="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
-  { [[ "$nonce" =~ ^[0-9a-f]{32}$ ]] && mkdir "$work/mark" && printf '%s %s' "$nonce" "$tool" > "$work/mark/nonce"; } || {
-    say "cannot make the round's mark under $work"; exit 70; }
-  mark="$work/mark/nonce"
-  scrub+=(FM_ROUND_MARK="$mark" FM_ROUND_NONCE="$nonce")
-fi
 # The vendor's login, read here, outside the round, from exactly what the
 # policy names for it. Not logged in refuses the round (77) before the
 # sandbox starts, so the adapter counts the vendor unavailable.
@@ -1508,34 +1138,25 @@ if [ "$cmd" = run ]; then
   # host it refuses is written to --blocked, which is how a round names the
   # host it was stopped at. On macOS it listens on loopback, the one port
   # the profile lets the round reach; on Linux on a unix socket bound into
-  # the round's own network namespace. Nested (above), there is no namespace
-  # of its own to bind a socket into: it listens on the loopback the outer
-  # round gives it, on either platform, and reaches the internet only
-  # through the outer round's proxy.
-  sock=''; [ "$os" = darwin ] || [ -n "$nested" ] || sock="$work/proxy.sock"
-  upstream=''
-  [ -z "$nested" ] || upstream="${HTTPS_PROXY:-${https_proxy:-${HTTP_PROXY:-${http_proxy:-}}}}"
+  # the round's own network namespace.
+  sock=''; [ "$os" = darwin ] || sock="$work/proxy.sock"
   # AF_UNIX paths stop at 108 bytes on Linux
   [ "${#sock}" -le 100 ] || {
     say "the proxy's socket path $sock is too long for AF_UNIX; pass a shorter --ctl"; exit 70; }
   # nothing of the caller's is held open by it: a proxy left behind by a
   # killed round must not keep the adapter's transcript pipe from closing
-  FM_SANDBOX_UPSTREAM="$upstream" \
-    python3 -c "$SB_PY" proxy "$policy" "$vendor" "$work/port" "${blocked:-}" "$sock" >/dev/null 2>&1 3<&- &
+  python3 -c "$SB_PY" proxy "$policy" "$vendor" "$work/port" "${blocked:-}" "$sock" >/dev/null 2>&1 3<&- &
   proxy_pid=$!
   i=0
   while [ ! -s "$work/port" ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
   port="$(cat "$work/port" 2>/dev/null)"
-  case "$port" in ''|*[!0-9]*)
-    [ -z "$nested" ] || say "the outer round gives this one no loopback to serve its proxy on; a round started inside it cannot run with a proxy of its own"
-    say "the round's proxy did not start"; exit 70 ;;
-  esac
+  case "$port" in ''|*[!0-9]*) say "the round's proxy did not start"; exit 70 ;; esac
   # loopback goes straight to the port, where the profile (macOS) or the
   # namespace (Linux) decides: the round's own servers yes, the board and
   # older listeners no
   loop='localhost,127.0.0.1,::1'
   scrub+=(NO_PROXY="$loop" no_proxy="$loop" NODE_USE_ENV_PROXY=1)
-  if [ "$os" = darwin ] || [ -n "$nested" ]; then
+  if [ "$os" = darwin ]; then
     url="http://127.0.0.1:$port"
     scrub+=(HTTP_PROXY="$url" HTTPS_PROXY="$url" http_proxy="$url" https_proxy="$url"
             ALL_PROXY="$url" all_proxy="$url")
@@ -1552,7 +1173,7 @@ if [ "$cmd" = run ]; then
   # What was listening on loopback before the round: those ports stay out of
   # its reach, and anything it opens itself is its own. Unreadable, only the
   # proxy is reachable.
-  if [ "$os" = darwin ] && [ -z "$nested" ]; then
+  if [ "$os" = darwin ]; then
     # macOS keeps netstat in /usr/sbin, which a caller's PATH may not hold
     ns="$(command -v netstat 2>/dev/null || echo /usr/sbin/netstat)"
     if listing="$("$ns" -an -p tcp 2>/dev/null)"; then
@@ -1564,11 +1185,10 @@ if [ "$cmd" = run ]; then
     fi
   fi
   make_profile() {
-    FM_SB_MARK="$mark" python3 -c "$SB_PY" profile "$policy" "$os" "$root" "$tmp" "$vendor" "$port" "$listening" "$sock" \
-      "${span:-$(ephemeral_range)}" ${writes[@]+"${writes[@]}"} > "$work/profile" || exit 65
+    python3 -c "$SB_PY" profile "$policy" "$os" "$root" "$tmp" "$vendor" "$port" "$listening" "$sock" \
+      ${writes[@]+"${writes[@]}"} > "$work/profile" || exit 65
   }
-  # Nested, no profile is applied: the outer round's already is.
-  [ -n "$nested" ] || make_profile
+  make_profile
   # A profile's loopback rules are ones the kernel applies, not ones fm can
   # read back: the canary on 2026-09-26 found a round reaching the board
   # through a per-port denial. So the profile is tried before the round,
@@ -1579,10 +1199,12 @@ if [ "$cmd" = run ]; then
   # would: it is given no loopback but its proxy instead - its own servers
   # go with it, which it says - and a profile that still lets one through
   # refuses the round. A check that could not run inside the profile
-  # tightens it too.
+  # tightens it too. macOS only: its loopback is the host's. On Linux the
+  # round has a network namespace of its own, so a bind there is the
+  # round's and never the board's, and nothing is tried.
   check=(); probe=()
   board="${FM_PORT:-4173}"
-  if [ "$os" = darwin ] && [ -z "$nested" ] && [ "$listening" != unknown ]; then
+  if [ "$os" = darwin ] && [ "$listening" != unknown ]; then
     IFS=, read -r -a listed_ports <<< "$listening"
     for n in ${listed_ports[@]+"${listed_ports[@]}"}; do [ "$n" = "$port" ] || check+=("$n"); done
     case ",$listening," in *",$board,"*) ;; *) probe=("bind:$board") ;; esac
@@ -1604,16 +1226,14 @@ if [ "$cmd" = run ]; then
   # Which loopback profile the round got, always, in one line: the canary
   # prints it per vendor, so what a round could reach is never inferred
   # from what it did not say (2026-09-26).
-  if [ "$os" = darwin ] && [ -z "$nested" ]; then
+  if [ "$os" = darwin ]; then
     if [ "$listening" = unknown ]; then
       say "loopback: the round's profile allows it no port but its proxy's ($port), its own servers' included"
     else
       say "loopback: the round's profile allows its proxy's port ($port) and ports it opens itself; tried behind it and closed to it: ${check[*]:-nothing else was listening}${probe[*]:+; and the port of the board, $board, not listening, cannot be bound}"
     fi
   fi
-  if [ -n "$nested" ]; then
-    :
-  elif [ "$os" = darwin ]; then
+  if [ "$os" = darwin ]; then
     launcher=("$tool" -f "$work/profile")
   else
     launcher=("$tool")
@@ -1681,11 +1301,6 @@ done
 exec "$real" $dir $extra "${TMPDIR:-/tmp}/$prefix.XXXXXXXXXX"
 MKTEMP
   chmod +x "$fmbin/mktemp" || { say "cannot make $fmbin/mktemp executable"; exit 70; }
-  # and ps (T-153): /bin/ps is setuid there, which no sandboxed process may
-  # run; this one lists the round's own user's processes, and only those
-  # (PS_PY, above)
-  { printf '#!%s\n' "$(command -v python3)"; printf '%s' "$PS_PY"; } > "$fmbin/ps" \
-    && chmod +x "$fmbin/ps" || { say "cannot write $fmbin/ps"; exit 70; }
   scrub+=(PATH="$fmbin:$PATH")
 fi
 
@@ -1713,10 +1328,7 @@ fi
 if [ -n "$tmp" ]; then
   home="$tmp/home"
   mkdir -p "$home" "$tmp/cache/xdg" "$home/.config" "$home/.local/share" || exit 70
-  # zsh writes a here-document's temp file under TMPPREFIX, /tmp/zsh unless
-  # set, whatever TMPDIR says: every heredoc a round's zsh ran was refused
-  # (T-153), so it takes the round's own directory too
-  scrub+=(TMPDIR="$tmp" TMP="$tmp" TEMP="$tmp" TMPPREFIX="$tmp/zsh" HOME="$home"
+  scrub+=(TMPDIR="$tmp" TMP="$tmp" TEMP="$tmp" HOME="$home"
           XDG_CACHE_HOME="$tmp/cache/xdg" XDG_DATA_HOME="$home/.local/share")
 fi
 if [ "$(uname -s)" = Linux ]; then listed="$(ps -L -U "$(id -u)" -o lwp= 2>/dev/null)"

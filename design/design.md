@@ -524,13 +524,13 @@ from the EXIT trap on every exit the shell handles; a SIGKILL runs no trap,
 so the next run-mode round sweeps any `fm-review.*` checkout its owning round
 no longer holds a kernel `flock` on (T-123; §13.1 says why not a pid), not
 one whose recorded pid merely fails `kill -0`. The prompt adds the branch's own
-project contract and asks for `setup`, `check`, the touched suites, fail-first
-against the base versions of the changed non-test files, run every one of
-them to completion in the foreground - splitting a check too slow for one
-command into suites run one after another rather than backgrounding it,
-since the round's one turn ends when its answer does and a backgrounded job
-is never checked on (T-123) - and an **Executed**
-/ **Read, not run** account. The adapter, not the prompt, confines the engine:
+project contract and asks the reviewer to read what CI found on the head,
+judge the diff with it, and check a claim with a small command where reading
+is not enough - never the full `check`, never a suite that starts rounds, a
+board or a browser, and never fail-first by hand, which the `fail-first` CI
+job does (T-153) - every command run to completion in the foreground, since
+the round's one turn ends when its answer does and a backgrounded job is
+never checked on (T-123) - and an **Executed** / **Read, not run** account. The adapter, not the prompt, confines the engine:
 `FM_RUN_REVIEW=1` and `FM_REVIEW_CHECKOUT` tell it the round is a run-mode one,
 and only an adapter carrying a `# fm:review-run` line may take it -
 `fm_review_run_chain` drops the others from the chain, refuses a head that
@@ -555,15 +555,13 @@ adapter was reached. The declared commands write their caches under
 `npm_config_cache` into its own temp directory; `setup` downloads afresh each
 round. The engine starts without the launcher's `FM_*`, `HERDR_*`, `GIT_*`
 and GitHub-token variables: `fm_identity` exports `FM_ROOT` at the task's
-repository, and the clone's scripts choose their tree from it, so a `check`
-the reviewer ran would otherwise gate another tree than the head under review.
-The reviewer has no GitHub access at all, and needs none: it judges the head
-by running it, so a run-mode round fetches no CI, no gate results and no pull
-request state for it, and its prompt carries neither T-088's head section nor
-any other CI listing (captain, 2026-09-25). CI and the gates are firstmate's
-merge gate in both modes (§6, the merge double check). The only thing it
-still reads from GitHub is the closed-list protocol's comments (§7), which
-are not evidence about the head. What stops a push is the
+repository, and the clone's scripts choose their tree from it, so a script
+the reviewer ran would otherwise act on another tree than the head under review.
+The reviewer has no GitHub access at all, and needs none: `fm-review.sh`,
+outside the round, reads what CI found on the head and puts it in the prompt,
+in either mode (§7; T-153). Green CI and the gates are still firstmate's
+merge gate in both modes (§6, the merge double check), not a review
+criterion. What stops a push is the
 missing remote and the unreachable GitHub; the deny list for push, gh writes
 and raw HTTP matches a literal command prefix and is only a second guard.
 Both modes emit `review_opened` and
@@ -588,6 +586,15 @@ the additive `data.review_outcome: "rejected"` contract. T-035 owns emitting
 that datum after it has authoritative final-answer evidence; old logs remain
 truthful without it. Crew phase follows each actor's dispatched role, so a
 reviewer is reviewing even while a worker on the same task has another phase.
+
+A round's result records its wall-clock (T-153): every `approved` and
+`review_failed` a round emits carries `data.wall_clock {started, ended,
+seconds, ci_wait}` - epoch seconds from just before its `review_opened` to
+the verdict, and how many of them it spent waiting for the head's CI.
+`/api/state` gives each task `last_review {actor, seconds, outcome}` for its
+latest ended round: the verdict's own `wall_clock.seconds` where it carries
+one, else the log's time from that reviewer's `review_opened` to its verdict;
+`null` before any round has ended. Showing it on the review card is T-145's.
 
 The judgement about outages can never be right on wording alone, because
 there is no phrase a model cannot write — this repository contains
@@ -970,9 +977,10 @@ grilling  ->  /prototype  ->  [captain green-lights]  ->  design.md + design/tas
                                        |
                           *  fm-gate.sh, the six gates  *
                                        |
-            fm-review.sh: reviewer sees the diff, the spec, the criteria
-         (diff mode: and, given the PR, the head's check and gate results,
-          as information; run mode: runs the tests in a fresh clone instead)
+    fm-review.sh: given the PR, waits (bounded) for the head's required checks;
+       the reviewer sees the diff, the spec, the criteria and what CI found -
+          every job, the failing assertions, the fail-first report - and
+         judges; run mode adds a fresh clone to check claims in (T-153)
                                        |
      not passed -> worker revives and fixes the closed list -> back to the gates
                                        |
@@ -1098,9 +1106,11 @@ verify provenance and current readiness explicitly. Any red gate
 requires remediation regardless of praise or an `approved` event.
 
 **Round order and the merge double check (captain, 2026-09-25).** A review
-round starts as soon as the worker hands back, through `fm-review.sh`, and
-never waits on CI: CI and the gates are not a review criterion in
-either mode. A merge card needs two independent checks on the same current
+round starts as soon as the worker hands back, through `fm-review.sh`. Given
+`--pr`, the round itself waits for the head's required checks, bounded, before
+it starts the reviewer, so the reviewer is handed their results (T-153; §7);
+nobody else holds a round for CI. Green CI and the gates are not a review
+criterion in either mode. A merge card needs two independent checks on the same current
 head: the reviewer's `APPROVE:<task-id>` for that head, and firstmate's own
 reading of that head's required GitHub check (green) and the six gates
 (`fm-gate.sh`). Neither substitutes for the other - an approval is not green
@@ -1230,10 +1240,9 @@ either, and the prompt is unchanged.
 A diff cannot show CI or gates, so a closed-list item asking for them could
 never be closed (T-067, round nine). Current-head CI and gates are firstmate's
 merge gate, not a review criterion (§6, the merge double check), so no
-closed-list item may ask for them. In diff mode the launcher shows the
-reviewer what exists for the head, as information only (T-088); a run-mode
-round judges the head by running it and gets no head section and no CI from
-GitHub (T-066). Given `--pr`, every diff-mode round's prompt gets a **The head under
+closed-list item may ask for them. The launcher shows the reviewer what
+exists for the head, in either mode (T-088; T-153). Given `--pr`, every
+round's prompt gets a **The head under
 review** section before the diff, verbatim and labelled: the head SHA, from
 the local branch the diff is taken from; for each name `gh pr checks <pr>
 --required --json name` lists, that check's name, conclusion and run URL from
@@ -1245,8 +1254,78 @@ per-run nonce, when that file exists. Its lines are `fm-gate.sh`'s own
 stdout: `  + gate N: …` or `  x gate N: …`. A required check that cannot be
 read, a check with no run for this head, a missing gate summary, and each
 gate the summary has no result line for (it stops at the first red gate, and
-an empty one has none) are stated plainly. Nothing else is added, and a round
-without `--pr` is unchanged.
+an empty one has none) are stated plainly. A round without `--pr` is
+unchanged.
+
+**The machine runs the tests; the reviewer judges (captain, 2026-09-29;
+T-153).** On 2026-09-29 review rounds took 17 minutes to over two hours
+(T-121 r9's ran past 1h50m), most of it re-running suites inside the round's
+sandbox that start rounds of their own. macOS will not apply a sandbox inside
+a sandbox (`sandbox_apply: Operation not permitted`), so those suites failed
+or waited out timeouts there, while GitHub's runner, which has no outer
+sandbox, runs them correctly in minutes. Rounds 1 and 2 of T-153 let a round
+nest inside a round, and review found that it widened trust and loosened the
+sandbox; that work was reverted. Instead:
+
+1. **fm-review.sh waits for the head's CI.** Given `--pr`, in either mode,
+   before the prompt is built it asks GitHub for every required check's runs
+   for the head, and waits until the latest run of each is `completed`, for
+   at most `FM_REVIEW_CI_WAIT` seconds (default 1200), asking every
+   `FM_REVIEW_CI_POLL` (default 30). A check whose runs cannot be read is not
+   waited on; it is stated unknown. While it waits the board is told, in `en`
+   and `zh-TW`. Past the bound the round starts anyway, and the head section
+   names every required check still running, or not yet started. The verdict
+   event's `data.wall_clock` carries `ci_wait`, the seconds of the round
+   spent waiting.
+2. **The head section carries what CI found**, after the required check:
+   every CI job of the head (`gh api .../commits/<sha>/check-runs?per_page=100`,
+   the latest run of each name whose `head_sha` is the head) with its result
+   and run; for each job that failed or timed out, the failing lines of its
+   log (`gh run view --job <id> --log-failed`: each assertion line ending
+   `FAIL` with the detail line under it, each red suite or stage `  x …`,
+   and the runner's `##[error]` lines, timestamps and colour codes removed,
+   at most 80 lines), fenced with a per-run nonce; and the fail-first report,
+   the `fail-first-report` artifact of the run the `fail-first` job's URL
+   names (`gh run download`), fenced the same way. A job list, a log or a
+   report that cannot be read is stated.
+3. **The reviewer judges with that evidence** (skills/reviewer/SKILL.md). It
+   never runs the full check, nor a suite that starts rounds, a board or a
+   browser; it may run small commands that need no second sandbox - reading,
+   grepping, git, a single script invocation - and lists them under
+   **Executed**. Fail-first by hand is no longer its step: it reads the
+   report and challenges a test the report lists only as a guard.
+
+**Fail-first in CI (T-153).** `bin/fm-failfirst.sh <base-ref>` asks gate 5's
+question on GitHub's runner, as the `fail-first` job of every pull request,
+which the required `ci` job needs. From the merge-base of the base ref and
+the head it splits the change into test files (the declared `tests` globs;
+`tests/*`, `*.test.*`, `*.spec.*` when none) and the rest. Behaviour is a
+non-test file under `bin/`, `board/` or `adapters/`. It makes two worktrees of
+the head; in the base one every changed non-test file is restored from the
+merge-base and every file the change adds is removed, while the head's tests
+stay. The declared `setup` - or `--setup`, which CI sets to the dependency
+install alone - runs in each, then every changed test file runs in both,
+through the declared `test` template, at most six at a time, each run with a
+session of its own (T-151). The head is re-run there, beside the base, rather
+than read from CI's shards, so both runs see the same runner. Assertion lines
+(`    <name>    ok|FAIL`, tests/lib.sh's shape) are compared by name and
+occurrence: one that passes on the head and fails on the base, or is never
+reached there because the base run failed, **went red on base**; one that
+passes on both is a **guard**; one failing on the head is listed apart and
+counts neither way. A suite that prints no assertion line counts as red only
+when its base run fails and its head run passes.
+
+The verdict is **not applicable** (exit 0) when the change touches no
+behaviour - docs, skills, tests or CI only - and says why; **fail** (exit 1)
+when it touches behaviour and adds or changes no suite, when no `test` is
+declared, or when no assertion of a changed suite went red on base, naming
+the guards; **pass** (exit 0) when at least one went red. The one reading
+T-153's spec leaves open is taken this way: a behaviour change with no test
+change fails, as gate 5 fails it, rather than being not applicable. The
+report - per suite, the exit of each tree, the assertions red on base by
+name and the guards - goes to stdout, to `--report` (the artifact) and to
+`$GITHUB_STEP_SUMMARY`. It exits 70 when it cannot run (no merge-base, a
+worktree it cannot make, a setup that fails) and 64 on bad usage.
 
 The gate half is not closed yet. Nothing writes that gate summary:
 `fm-run.sh` sends `fm-gate.sh`'s stdout to `/dev/null`, and it is outside
@@ -1351,20 +1430,6 @@ card whose dependency is parked or dropped says so beside the blocker's id
 (`blocked on T-xxx (parked)`), from the `blocked_by` list the server sends.
 Labels are the dictionaries' `park` / `unpark` / `drop` / `parked`
 (擱置 / 恢復 / 不做 / 已擱置); zh-CN derives through `tw2cn.tsv`.
-
-**A review round's wall-clock (T-153).** A round's result records its own
-wall-clock. `fm-review.sh` takes the time just before it emits `review_opened`,
-and every verdict event it emits carries `data.wall_clock`: `started`,
-`ended` (epoch seconds) and `seconds`, the difference. That covers `approved`
-and every `review_failed`, a round that could not start included. Each task in
-`/api/state` carries `last_review`: its latest ended review round's reviewer,
-`seconds` and outcome (`approved`, or the `review_outcome` the failure names),
-or `null` before any round has ended. `seconds` is the round's own
-`wall_clock` where its verdict event carries one. For an older event it is the
-time from that reviewer's `review_opened` to its verdict, both stamped by
-`fm-emit.sh`. A verdict with neither, meaning no clock of its own and no
-`review_opened` from its reviewer, is not timed. Showing it on the review card
-is T-145's.
 
 **Pull request links (T-069).** Every `#n` the board shows — the top right of
 a lane card, a history row, the decision card's link, a roster row, and any
@@ -1798,23 +1863,7 @@ web page open in the captain's browser; neither can write.
   "localhost:4173"))` never takes effect, placed before it or after it, and
   neither does a `require-not` carve-out. Only a positive list of ports
   narrows loopback, and a round's own test servers need arbitrary loopback
-  ports. So the board refuses the round itself. Since T-153 a round's
-  profile does connect only to such a list - the kernel's ephemeral range,
-  less the board's port and every one listening at round start (13.1) - so
-  on a host where it holds, a round does not reach the board either; the
-  board's own refusal stays the boundary wherever it does not.
-- *The board's port is never a test's (T-153).* On 2026-09-29, with the
-  captain's board down, a review round ran `tests/board.test.sh` and a
-  fixture board bound 127.0.0.1:4173: the suite restarted it with
-  `FM_PORT="$PORTK"`, `PORTK` had come out empty, and Bun leaves a variable
-  that is set but empty out of `process.env` altogether, so the board read
-  it as unset and took 4173. firstmate's answers to merge cards then went
-  to the fixture. So `board/server.ts` reads `FM_PORT` as the process was
-  given it (libc's `getenv`, through `bun:ffi`), and a value that is set
-  but is not a port - empty included - refuses to start (64) rather than
-  meaning 4173. The suite's `start_k` refuses an empty port before it
-  starts anything, and a round's profile may not bind the board's port
-  (13.1).
+  ports. So the board refuses the round itself.
 - *Who may write.* Every route that changes state or starts a process -
   `POST /decisions`, `POST /tasks`, `POST /open`, and any writing route added
   later - requires, all three: an `Authorization: Bearer` holding either the
@@ -1973,6 +2022,13 @@ CPUs instead (at least 1, at most 4), printed as `ci: end-to-end: N workers`,
 because four browsers beside four suites on a 4-vCPU runner starved the
 browsers. Every background job and the gate itself trap INT, TERM and HUP,
 so an interrupted gate takes its suites, browsers and logs with it.
+
+One job of the workflow is not a stage of `bin/ci.sh`: `fail-first` runs
+`bin/fm-failfirst.sh` on a pull request's head against its base (§7, T-153),
+with the history (`fetch-depth: 0`) to find the merge-base, and uploads its
+report as the `fail-first-report` artifact. The `ci` job needs it with the
+others; it alone may be `skipped`, and only on an event other than a pull
+request, where there is no base to revert to.
 
 Running in parallel changes no threshold: the budget, every stage, every
 suite, every assertion and the per-suite noise check are what they were.
@@ -3069,129 +3125,45 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
 - loopback: a round may open ports of its own and connect to them, which
   every suite that starts a server needs, but never the board's port
   (`FM_PORT`, 4173) nor any port that was listening when the round started.
-  If the listeners cannot be read, no loopback port but the proxy is
-  reachable. On macOS the profile is built from the one kind of rule the
-  kernel was measured to hold (T-153). On the captain's Mac (macOS 15.7.9)
-  firstmate measured that a port-specific deny never carves a port out of
-  a `localhost:*` allow, in either order, while a port-specific allow does
-  hold: the proxy's. So a round's profile:
-  - binds and accepts on `localhost:*` - the only way to allow a bind to
-    port 0, since `localhost:0` is not a port a profile may name, and
-    every fixture server in the suites binds port 0 - with a
-    `network-bind`/`network-inbound` deny on the board's port and on each
-    one listening at round start. The board's deny is in every profile,
-    whether or not the listeners could be read, although with them
-    unknown `(deny network*)` already covers it;
-  - connects only to a positive list: every port of the kernel's own
-    ephemeral range (`net.inet.ip.portrange.first`-`last`, 49152-65535 by
-    default), which is where a server bound to port 0 lands, less the
-    board's and every one that was listening. A profile of 16,384 such
-    allows compiles; one rule naming 8,000 filters did not, so each port
-    is a rule of its own. A server a round opens on a fixed port outside
-    that range can be bound but not connected to; the suites' servers
-    all bind port 0.
-
-  A loopback rule is one the kernel applies, not one fm can read back, and
-  the canary on 2026-09-26 found a claude round reaching the live board
-  through a profile that denied its port. So before every macOS round
-  `fm-sandbox.sh` tries the profile, behind it: it connects to each port
-  that was listening but the proxy's, and, while nothing holds the board's
-  port, binds that port (T-153: on 2026-09-29 a suite's fixture board took
-  127.0.0.1:4173 while the captain's board was down). Either getting
-  through means the round's would. The round is then given a profile with
-  no loopback but the proxy instead - its own servers go with it, and it
-  says so on stderr and in the round's log - and a profile that lets one
-  through even then refuses the round (70). A check that could not run
-  behind the profile tightens it the same way. While the board is up its
-  port is held, so no round can bind it whatever the profile says, and only
-  a connection is tried. Every macOS round says in one `fm-sandbox:
-  loopback:` line which profile it got - its proxy and ports of its own,
-  with the ports tried and closed to it and whether the board's port was
-  tried for a bind, or its proxy alone - and the canary prints that line
-  per vendor, so what a round could reach is never inferred from a note
-  that is not there. The canary's own listeners count only requests
-  carrying the round's nonce, so `fm-sandbox.sh`'s check, which connects
-  before the round starts, is never read as the round reaching them. On
-  Linux the round's loopback is its own network namespace's, where no host
-  listener is and a bind of the board's port is the round's own, so nothing
-  is tried there. The suites' stand-in `sandbox-exec`s apply no profile, so
-  they answer the check the way a profile that holds does. Otherwise the
-  check, run behind a stand-in, would bind the real board port of the
-  machine running the suite whenever nothing held it. That is how every
-  macOS-mode round on the Linux runner was refused. Only the loopback
-  cases' own stand-in lets the check through, and there the board's port is
-  a free one of the suite's own;
-- what a review round is asked to run (T-153). Until SK-007 a review round
-  ran the whole declared `check` in its sandbox, and 12-13 suites failed
-  there every time for the sandbox's reasons, not the code's: loopback
-  refused, `ps` not permitted, `bunx` unable to read its working
-  directory, here-document temp files refused. Each is now the round's own
-  to have, and none opens egress, the operator's home or a credential:
-  - loopback, above: ports of the round's own, never the board's nor one
-    that was listening, and the proxy still the only way off the machine;
-  - `ps`: `/bin/ps` is setuid root on macOS, and no sandboxed process may
-    run a setuid binary. `fm-sandbox.sh` puts a `ps` of its own first on a
-    macOS round's `PATH`, beside its `mktemp`. It asks the kernel as the
-    round's own user - libproc, and `/proc` where it runs on Linux - and
-    lists that user's processes only: a pid or user that is not the
-    round's lists nothing and exits 1. Without setuid, the kernel itself
-    refuses another user's arguments to a process that is not root. It
-    takes the options fm and its suites use (`-A -e -a -x -p -U -u -o`,
-    `name=` for no header). On Linux bwrap's pid namespace already holds
-    the round's processes alone;
-  - a readable working directory for bun's resolver. Measured in a worker
-    round on 2026-09-29: `bunx --version` needs no directory above its
-    working directory. `bunx <package>` needs every one of them: it fails
-    with `CouldntReadCurrentDirectory` from any directory with one it may
-    not list, even with the package in `./node_modules`, and runs from
-    `/usr/share`. Each directory above a write root is listable as itself,
-    a `literal`, never its subtree: the names in it, nothing in it. This
-    stops short of `/` itself. The exceptions are the operator's home
-    (`$HOME` and the account's own), fm's `state/` and every other
-    never-readable directory, and anything under them. From a worktree
-    under them, the names in `$HOME` (`.ssh`, `.aws`), in `state/` and in
-    the other worktrees stay unlistable, and bun's resolver stays refused
-    there. A round runs `bunx` from a directory outside them instead: its
-    own temp directory, where a run-mode review's checkout also lives;
-  - its own temp files: zsh writes a here-document's temp file under
-    `TMPPREFIX`, `/tmp/zsh` unless set, whatever `TMPDIR` says. A round's
-    `TMPPREFIX` is under its own temp directory, as `TMPDIR` is.
-- a round started inside a round (T-153): a round's suites start rounds,
-  and `sandbox-exec` cannot apply a profile inside a sandbox
-  (`sandbox_apply: Operation not permitted`, 71), so every such round
-  failed or waited out its timeout (T-137 r4's review spent over 20
-  minutes in `tests/herdr.test.sh`). `fm-sandbox.sh run` runs one under the
-  outer round's confinement only on a mark fm's own outer round alone can
-  make. Being in *a* sandbox proves nothing: `sandbox_check(2)` answers yes
-  under any of them (Claude Code's, codex's seatbelt, an App Sandbox), and
-  `FM_IN_ROUND` is an environment variable anyone can set. So every round
-  that applies its own sandbox writes a random nonce to a file in
-  fm-sandbox's own work directory. That directory is outside every write
-  root; the macOS profile lets the round read that one file, and bwrap
-  binds its directory read-only. The round is told the file's path and the
-  nonce (`FM_ROUND_MARK`, `FM_ROUND_NONCE`). A round started inside it is
-  nested only when all of these hold:
-  - `FM_IN_ROUND` is set;
-  - the file holds exactly that nonce and the sandbox tool this round
-    would apply. A suite's stand-in round inside a real round is not
-    nested, and runs its stand-in as before;
-  - it cannot write the file's directory, a directory of the user's own
-    that only fm's outer profile keeps it from writing;
-  - with the platform's own tool, the kernel says it is sandboxed.
-
-  The mark goes with its outer round, since the work directory is removed
-  when the round ends. A foreign sandbox with `FM_IN_ROUND=1` has no mark,
-  so the round started there applies its own profile, as does any round
-  started outside one. A stand-in tool (`FM_SANDBOX_TOOL`, the suites')
-  applies no sandbox at all, so no kernel can be asked about it: there the
-  mark and the unwritable directory are the whole check, which is what lets
-  the suites test the nested path without a real sandbox. The nested
-  round keeps this policy's scrub, limits, login and temp directory, and a
-  proxy of its own that applies this policy and leaves through the outer
-  round's proxy, which applies the outer one's: a host either refuses is
-  refused. It says on stderr that it is nested. An outer round with no
-  loopback gives the inner proxy nowhere to listen, and the inner round
-  exits 70 at once, saying so, rather than running without it;
+  On macOS the profile says so port by port, and if the listeners cannot be
+  read no loopback port but the proxy is reachable. A per-port denial is a
+  rule the kernel applies, not one fm can read back, and the canary on
+  2026-09-26 found a claude round reaching the live board through a profile
+  that denied its port. So before every macOS round `fm-sandbox.sh` tries
+  the profile: behind it, it connects to each port that was listening but
+  the proxy's. A connection that gets through means the round's would, and
+  the round is given a profile with no loopback but the proxy instead - its
+  own servers go with it, and it says so on stderr and in the round's log; a
+  profile that lets one through even then refuses the round (70). A check
+  that could not run behind the profile tightens it the same way. On the
+  captain's Mac (macOS 15.7.9) firstmate measured that a port-specific deny
+  never carves a port out of a `localhost:*` allow, in either order, so
+  there every round gets the profile with no loopback but the proxy.
+  Binding is the other half (T-153). On 2026-09-29, with the captain's board
+  down, a review round ran `tests/board.test.sh`, and a fixture board bound
+  127.0.0.1:4173 - the board's own address - because the suite's `start_k`
+  passed `FM_PORT="$PORTK"` with `PORTK` empty and Bun reads a variable set
+  but empty as unset; the captain's answers went to the fixture. So the
+  profile also denies `network-bind` and `network-inbound` on the board's
+  port and on every port listening when the round started, after the
+  loopback allow, and writes the board's deny even when the listeners could
+  not be read. While nothing holds the board's port, `run` also binds it
+  behind the profile before the round: a bind that gets through is treated
+  like a connection that does, the round getting no loopback but its proxy,
+  or being refused. That is macOS only, where loopback is the host's; on
+  Linux the round's network namespace makes any bind the round's own. At the
+  other end `board/server.ts` refuses `FM_PORT` set but not a port, empty
+  included, with exit 64 - it reads the variable through libc's `getenv`,
+  since Bun drops an empty one from `process.env` - and the board suite's
+  helpers refuse an empty port. Every
+  macOS round says in one `fm-sandbox: loopback:` line which profile it got
+  - its proxy and ports of its own, with the ports tried and closed to it,
+  or its proxy alone - and the canary prints that line per vendor, so what
+  a round could reach is never inferred from a note that is not there. The
+  canary's own listeners count only requests carrying the round's nonce,
+  so `fm-sandbox.sh`'s check, which connects before the round starts, is
+  never read as the round reaching them. On Linux the round's loopback is
+  its own network namespace's, where no host listener is;
 - secrets a system service hands out: on macOS the keychain (gh's token,
   git's osxkeychain helper, every saved password, and the vendors' logins),
   the pasteboard, the Internet Accounts and Apple ID stores, Kerberos
@@ -3209,9 +3181,7 @@ Everything else is a floor no key loosens, the OS sandbox itself included:
   taken refuses the round rather than guessing. The limits as set reach the
   round as `SANDBOX_ROUND_LIMITS`: macOS may enforce a lower process limit
   than it was given, and reports that one back to `ulimit -u`;
-- no unix sockets: a round started inside a round serves its proxy on
-  loopback TCP, never on a socket;
-  `GH_TOKEN`, `GITHUB_TOKEN`, `SSH_AUTH_SOCK`, cloud
+- no unix sockets; `GH_TOKEN`, `GITHUB_TOKEN`, `SSH_AUTH_SOCK`, cloud
   credentials and the escape hatch's own variables scrubbed; the
   repository's `.claude/`, `.mcp.json`, `.cursor/` and `GEMINI.md` not
   loaded.
