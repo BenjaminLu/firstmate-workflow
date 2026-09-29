@@ -1,0 +1,41 @@
+{
+  "id": "T-137",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "firstmate never ends a turn blind: one harness-neutral watcher wakes the primary on every event that needs it, re-armed by each harness's own hooks (Claude Code, Codex, Cursor), with the board showing whether it is watched",
+  "scope": [
+    "bin/fm-watch.sh",
+    "bin/fm-watch-arm.sh",
+    "bin/fm-turnend-guard.sh",
+    "bin/hooks/**",
+    "bin/lib/**",
+    ".claude/settings.json",
+    ".codex/hooks.json",
+    ".cursor/hooks.json",
+    "board/**",
+    "i18n/**",
+    "tests/**",
+    "design/**",
+    "skills/firstmate/SKILL.md",
+    "docs/**",
+    "README.md",
+    "bin/fm-emit.sh",
+    "bin/fm-diagram.sh",
+    "bin/fm-herdr.py",
+    "bin/fm.sh",
+    "bin/fm-config.sh",
+    ".gitignore",
+    "config.yaml",
+    "design/tasks/T-137.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-09-28/29 finished crew rounds sat unhandled for up to six hours because firstmate's waits were hand-made per round and lapsed whenever a turn ended without one (the captain: 'you have no watcher, it happens often'). kunchenguid/firstmate solves this by taking re-arming away from the model: a one-shot watcher, re-armed by the harness's own Stop hook, wakes the session on an actionable event. The captain approved this direction on 2026-09-29 and asked that it work for every primary harness (Claude Code, Codex, Cursor and others). Here the crew side is already uniform - every worker and reviewer round is run by fm-worker.sh/fm-review.sh, whatever the vendor, and emits the same events - so only the primary's wake path is per harness. Its own spec file, design/tasks/T-137.json, is committed on this branch.",
+    "The watcher, harness-neutral (bin/fm-watch.sh). One-shot: it blocks until one actionable reason and prints it, else keeps waiting. Sources: state/events.jsonl (a round finished or was lost, a review verdict, a gate result, a decision answered, a merge done or failed), and, for open pull requests with work in flight, the required check finishing (gh, polled with backoff, outside any round). Absorbed without waking: progress events of a round still running. A cursor file makes each event wake at most once; a beacon file the watcher touches proves it is alive. Reason lines are short and machine-readable (`review: T-134 APPROVE 4ea1ec2`, `ci: #106 failure`, `card: D-... answered A`).",
+    "Arming (bin/fm-watch-arm.sh). Single-flight: one watcher per repository, by a lock plus a generation number, so repeated hook firings attach to the live cycle instead of starting another; a dead or stale owner is superseded. After an actionable close it starts the successor watcher before the wake is delivered, so coverage has no gap while firstmate handles the wake.",
+    "Per-harness re-arm, each verified against the real harness and recorded with its version in docs/verification/supervision.md: Claude Code - a Stop hook with asyncRewake and a long timeout parks on fm-watch-arm.sh and wakes an idle session through exit 2 with the reason on stderr, plus a synchronous Stop guard that refuses to end a turn while work is in flight and no watcher is alive; Codex - its Stop hook (.codex/hooks.json) with the protocol Codex supports (if it cannot wake an idle session, the guard makes the turn park on fm-watch-arm.sh as a foreground call); Cursor - its stop hook (.cursor/hooks.json) parks on the arm and returns the reason as its follow-up, bounded by loop_limit. A harness with no hook support is named as unsupported, and firstmate there falls back to a Herdr pane running the watcher plus a desktop notification; nothing is claimed that was not verified.",
+    "Only the primary arms: crew rounds and their worktrees never arm or wake (they are identified by FM_IN_ROUND and their paths). While the captain has set an away mode (a later task), the hooks stand down.",
+    "Visible accountability. The board shows whether firstmate is watched (beacon age), the last wake and its reason, and any gap - time with work in flight and no live watcher - in en and zh-TW. skills/firstmate/SKILL.md states the rule: a turn never ends blind while work is in flight.",
+    "Tests (fail first; stubs answer as each harness does, taken from its docs or recorded payloads): each event kind wakes exactly once; progress is absorbed; two arms attach to one watcher; a dead owner is superseded; the successor starts before the wake; each harness hook's stop and wake contract; crew rounds never arm. Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate, plus the recorded live verification per harness. Workers do not run the suites themselves."
+  ]
+}

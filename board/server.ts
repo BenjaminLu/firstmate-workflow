@@ -433,6 +433,40 @@ const taskLists = (): Array<{ project: string; defs: Array<Record<string, unknow
 
 // `only` is ?project=: that project's work, cards and log, and the counts of
 // those. Without it, every project on one page (design section 15.10 point 4).
+// Whether firstmate is watched (T-137). bin/fm-watch.sh touches state/watch/beacon
+// every pass and bin/fm-watch-arm.sh names its live owner in state/watch/owner,
+// so the watcher is alive when that process exists and the beacon is fresh. The
+// last wake and the recorded gaps are files the arm writes. A gap is time with
+// work in flight and no live watcher; one still open has no end yet.
+const WATCH_DIR = join(ROOT, "state/watch");
+const WATCH_STALE = Number(process.env.FM_WATCH_STALE) > 0 ? Number(process.env.FM_WATCH_STALE) : 60;
+const watchJson = (name: string): Record<string, unknown> | null => {
+  try { return JSON.parse(readFileSync(join(WATCH_DIR, name), "utf8")); } catch { return null; }
+};
+const watchState = (inflight: number) => {
+  let beaconAge: number | null = null;
+  try { beaconAge = Math.max(0, Math.floor((Date.now() - statSync(join(WATCH_DIR, "beacon")).mtimeMs) / 1000)); } catch { /* never armed */ }
+  let alive = false;
+  try {
+    const pid = Number(readFileSync(join(WATCH_DIR, "owner"), "utf8").trim().split(/\s+/)[1]);
+    if (Number.isInteger(pid) && pid > 0 && beaconAge !== null && beaconAge < WATCH_STALE) { process.kill(pid, 0); alive = true; }
+  } catch { /* no owner, or not a live process */ }
+  const wake = watchJson("last-wake.json");
+  let lastGap: Record<string, unknown> | null = null;
+  try {
+    const rows = readFileSync(join(WATCH_DIR, "gaps.jsonl"), "utf8").trim().split("\n").filter(Boolean);
+    if (rows.length) lastGap = JSON.parse(rows[rows.length - 1]);
+  } catch { /* none recorded */ }
+  const open = inflight > 0 && !alive;
+  return {
+    alive,
+    beaconAge,
+    lastWake: wake ? { ts: String(wake.ts ?? ""), reason: String(wake.reason ?? "") } : null,
+    gap: open ? { since: beaconAge === null ? null : new Date(Date.now() - beaconAge * 1000).toISOString(), inflight } : null,
+    lastGap: lastGap ? { from: String(lastGap.from ?? ""), to: String(lastGap.to ?? ""), secs: Number(lastGap.secs ?? 0) } : null,
+  };
+};
+
 const state = (only: string | null = null) => {
   const events = readEvents();
   const def = defaultProject();
@@ -931,7 +965,7 @@ const state = (only: string | null = null) => {
       const p = projectOf(x);
       byProject[p] = mentioned(repoOf(p), x, byProject[p] ?? {});
     }
-  return { ...out, pr_urls: byProject[def] ?? {}, pr_urls_by_project: byProject };
+  return { ...out, watch: watchState(out.counts.inflight), pr_urls: byProject[def] ?? {}, pr_urls_by_project: byProject };
 };
 
 // whether `a` happened at or after `b`. Event stamps are whole seconds, so

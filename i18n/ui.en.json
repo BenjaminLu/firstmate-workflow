@@ -150,5 +150,11 @@
   "parkConfirmCaptain": "Park {id}? Its card is still waiting for you, so it stays in your lane until the card is answered or withdrawn; after that it leaves the lanes until you unpark it.",
   "parkedPending": "parked; waits on its card",
   "confirmRequired": "not done: this task has crew aboard or an open pull request; choose it again and confirm",
-  "reopenNeedsReason": "not reopened: say why it is wrong, in one line of plain text"
+  "reopenNeedsReason": "not reopened: say why it is wrong, in one line of plain text",
+  "watchOn": "Firstmate is watched (beacon {n}s old)",
+  "watchOff": "Firstmate is NOT watched",
+  "watchLast": "last wake: {reason} ({ts})",
+  "watchNever": "no wake yet",
+  "watchGap": "gap: work in flight and no watcher since {since}",
+  "watchGapPast": "last gap: {secs}s with work in flight and no watcher (ended {to})"
 }

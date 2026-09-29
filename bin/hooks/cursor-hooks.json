@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      {
+        "command": "./bin/hooks/cursor-stop.sh",
+        "timeout": 3600,
+        "loop_limit": 20
+      }
+    ]
+  }
+}

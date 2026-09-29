@@ -251,6 +251,38 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   round was refused before its commit, and nothing was published. Send one
   such round at a time per task.
 
+## Never end a turn blind (T-137)
+
+A turn never ends blind while work is in flight: a finished crew round, a
+review verdict, a gate result, an answered card or a finished required check
+must always be able to wake you. On 2026-09-28/29 finished rounds sat
+unhandled for up to six hours because waits were hand-made per round and
+lapsed whenever a turn ended without one.
+
+- The watcher is `bin/fm-watch.sh`, one shot and the same for every harness;
+  `bin/fm-watch-arm.sh` keeps exactly one alive and hands it on before a wake
+  is delivered. You do not start, re-arm or babysit it by hand: the hooks of
+  your harness do (Claude Code: `.claude/settings.json`; Codex:
+  `.codex/hooks.json`; Cursor: `.cursor/hooks.json`; templates and the
+  verified contracts in `bin/hooks/` and `docs/verification/supervision.md`).
+- A wake is one line on stderr, in the hook's follow-up, or from
+  `bin/fm-watch-arm.sh` itself: `review: T-134 APPROVE 4ea1ec2`,
+  `ci: #106 failure`, `card: D-... answered A`, `finished: T-134 worker`.
+  Handle it, then end the turn; the successor is already watching.
+- `bin/fm-turnend-guard.sh` refuses to let a turn end while work is in flight
+  and no watcher is alive. If it refuses, run `bin/fm-watch-arm.sh` in the
+  foreground and handle what it prints. Where a harness cannot be woken idle
+  (Codex, Cursor), the hook parks the turn end on the arm for you, and if a
+  park runs out with work still in flight, park again the same way.
+- A harness with no hook support is named unsupported in
+  `docs/verification/supervision.md`; there, run `bin/fm-watch.sh` in a Herdr
+  pane and take a desktop notification, and say so to the captain.
+- Only the primary arms. Crew rounds and their worktrees never do, and while
+  the captain is away (`state/away`) the hooks stand down.
+- The board shows whether you are watched (beacon age), the last wake and its
+  reason, and any gap; a gap on the board means a turn ended blind, so say so
+  in your next report.
+
 ## Process rules (2026-09-25)
 
 Learned on 2026-09-25, from a round or a hidden bug each one cost, or

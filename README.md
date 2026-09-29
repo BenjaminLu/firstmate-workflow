@@ -193,6 +193,18 @@ the reviewer's approval and firstmate's own check of CI and the gates, both
 on the same head. `fm-review.sh` posts the verdict and emits the review's
 events in both modes. This repository declares `run`.
 
+## Firstmate is never blind
+
+A turn never ends while work is in flight and nobody is watching. One
+harness-neutral watcher (`bin/fm-watch.sh`) wakes the primary session on every
+event that needs it: a round finished or lost, a review verdict, a gate
+result, an answered card, a merge, a required check finishing. Each harness's
+own Stop hook keeps it armed (`bin/fm-watch-arm.sh`): Claude Code, Codex and
+Cursor, as recorded in
+[docs/verification/supervision.md](docs/verification/supervision.md), which
+also names what has not yet been verified live. The board shows whether
+firstmate is watched, the last wake and any gap.
+
 ## State
 
 Spec is settled and the bootstrap is under way. `design/proposals/` holds the

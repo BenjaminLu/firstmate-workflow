@@ -117,6 +117,23 @@ assert_eq "backlog" "$(jq -r '.tasks[]|select(.id=="T-B")|.stage' <<<"$s")" "an 
 assert_eq "ready"   "$(jq -r '.tasks[]|select(.id=="T-C")|.stage' <<<"$s")" "an untouched task with nothing to wait on reads as ready"
 assert_eq "1" "$(jq -r .counts.inflight <<<"$s")" "the counts follow the log"
 
+# T-137: whether firstmate is watched. With work in flight and no watcher the
+# board says so and shows an open gap; a live owner with a fresh beacon reads
+# as watched, with the last wake and its reason.
+assert_eq "false" "$(jq -r .watch.alive <<<"$s")" "with no watcher the board says firstmate is not watched"
+assert_eq "1" "$(jq -r .watch.gap.inflight <<<"$s")" "work in flight with no watcher is an open gap"
+mkdir -p "$d/state/watch"
+sleep 300 & watcher_pid=$!
+printf '7 %s\n' "$watcher_pid" > "$d/state/watch/owner"; : > "$d/state/watch/beacon"
+printf '{"ts":"2026-09-29T00:00:00Z","reason":"review: T-A APPROVE 4ea1ec2","gen":6}\n' > "$d/state/watch/last-wake.json"
+sw="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "true" "$(jq -r .watch.alive <<<"$sw")" "a live owner with a fresh beacon reads as watched"
+assert_eq "null" "$(jq -c .watch.gap <<<"$sw")" "a watched board has no open gap"
+assert_eq "review: T-A APPROVE 4ea1ec2" "$(jq -r .watch.lastWake.reason <<<"$sw")" "the last wake and its reason are shown"
+kill "$watcher_pid" 2>/dev/null
+assert_eq "1" "$(grep -c 'data-watch' "$d/board/public/index.html")" "the page carries the watch line"
+rm -rf "$d/state/watch"
+
 
 # a task whose review never happened, or whose worker died, must not keep
 # reading as work in progress
