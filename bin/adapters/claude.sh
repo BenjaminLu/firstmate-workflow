@@ -102,10 +102,16 @@ tmp="$(fm_adapter_rule_path "${TMPDIR:-/tmp}")" || exit 64
 # and ~/.claude.json are never opened; and its temp files go to the
 # round's temp directory where claude honours CLAUDE_CODE_TMPDIR. What it
 # keeps under /tmp/claude-<uid> whatever that says is the policy's `tmp`
-# for claude. Its login is the operator's own access token, which
-# fm-sandbox.sh reads outside the round - the keychain item on macOS, the
-# credentials file elsewhere - and hands in as CLAUDE_CODE_OAUTH_TOKEN; a
-# CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY already set is used as is.
+# for claude. Its login (T-126) is, in order: a CLAUDE_CODE_OAUTH_TOKEN or
+# ANTHROPIC_API_KEY already set, used as is; else the crew's own long-lived
+# token (`claude setup-token`), which fm-sandbox.sh reads outside the round
+# from a keychain item of fm's own on macOS, else, when secret-tool
+# (libsecret) is present, the same item through it (T-126 round 2), else a
+# file only the operator may read, and hands in as CLAUDE_CODE_OAUTH_TOKEN;
+# only with none of those does it fall back to the access token of the
+# operator's own interactive login as before T-126 - keychain on macOS, the
+# credentials file elsewhere - which warns, because that can die whenever
+# the operator's own login refreshes it.
 CLAUDE_CONFIG_DIR="$FM_ROUND_TMP/claude-config"
 mkdir -p "$CLAUDE_CONFIG_DIR" || exit 70
 CLAUDE_CODE_TMPDIR="$FM_ROUND_TMP"
@@ -200,11 +206,24 @@ if [ -n "${FM_ATTEMPT_DIR:-}" ]; then
   ( cd "$work" && "${FM_LAUNCH[@]}" ${launch[@]+"${launch[@]}"} claude -p "${mode[@]}" \
     ${model_args[@]+"${model_args[@]}"} ${FM_ADAPTER_ARGS:-} < "$prompt" ) 2>&1 | tee -a "$log"
   fm_adapter_pipeline_status "${PIPESTATUS[@]}"
+  rc=$?
 else
+  # stderr goes to the log, as it always has; the launcher's own lines
+  # (`fm-sandbox: ...`, which carry the login-fallback warning) are also
+  # said on the adapter's stderr, so a caller sees them on every OS. The
+  # file sits in the round's control directory, out of the round's reach,
+  # which fm_adapter_policy already made or refused the round over; a file
+  # that still cannot be made there refuses the round too, rather than
+  # dropping its stderr (T-126 round 7).
+  errs="$FM_ROUND_CTL/claude-stderr"
+  : > "$errs" || { echo "claude: cannot keep the round's stderr at $errs; refusing the round" >&2; exit 70; }
   ( cd "$work" && "${FM_LAUNCH[@]}" ${launch[@]+"${launch[@]}"} claude -p "${mode[@]}" \
-    ${model_args[@]+"${model_args[@]}"} ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2>&1
+    ${model_args[@]+"${model_args[@]}"} ${FM_ADAPTER_ARGS:-} < "$prompt" ) >> "$log" 2> "$errs"
+  rc=$?
+  cat "$errs" >> "$log"
+  grep '^fm-sandbox: ' "$errs" >&2 || true
+  rm -f "$errs"
 fi
-rc=$?
 # A model claude does not recognise refuses the round loudly (T-127), rather
 # than running silently on whatever it defaulted to: not vendor-unavailable
 # (which would fall back to the next one) and not a normal failed attempt.
