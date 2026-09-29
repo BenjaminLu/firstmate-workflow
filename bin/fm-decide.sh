@@ -32,10 +32,11 @@
 # before this (D-<digits>, D-SK-<n>) stay valid wherever they are read, and
 # are never renamed or moved.
 #
-# Waiting uses bun's fs.watch when bun is there and a one-second poll when it
-# is not. It deliberately depends on neither fswatch, entr nor watchexec:
-# a board that only works on a machine with the right brew packages is not a
-# board, it is a demo.
+# Waiting blocks on a doorbell of the wait's own, which the board rings
+# when it writes an answer (T-151); nothing polls for the file. It
+# deliberately depends on neither fswatch, entr nor watchexec: a board that
+# only works on a machine with the right brew packages is not a board, it
+# is a demo.
 set -uo pipefail
 # Nothing below may read standard input. A dispatched child inherits it, and
 # a child that reads it blocks the caller waiting for a human who is not
@@ -426,20 +427,24 @@ if [ "$MODE" = request ]; then
 fi
 
 # --- await ---------------------------------------------------------------
+# Nothing polls state/decisions (T-151). This wait registers a doorbell of
+# its own under state/session/wake.d, looks for the answer once it has (so
+# an answer written in between is found), and looks again each time a
+# writer rings - the board rings every registered bell whenever it writes a
+# decision. A bell is only a hint to look again; the answer file is what is
+# read, so a ring for another decision wakes nothing that matters, and any
+# number of waiters each hear every ring. bin/lib/fm_lifeline.py holds the
+# one implementation the board and fm-session.sh wait share.
 f="$DIR/$ID.json"
-if [ -f "$f" ]; then answer="$f"; else
-  if command -v bun >/dev/null 2>&1 && [ -f "$REPO/bin/watch-decisions.ts" ]; then
-    answer="$(bun run "$REPO/bin/watch-decisions.ts" "$DIR" "$ID" "$(( TIMEOUT * 1000 ))" 2>/dev/null </dev/null)"
-  else
-    waited=0
-    while [ ! -f "$f" ]; do
-      [ "$TIMEOUT" -gt 0 ] && [ "$waited" -ge "$TIMEOUT" ] && break
-      sleep 1; waited=$(( waited + 1 ))
-    done
-    [ -f "$f" ] && answer="$f" || answer=''
-  fi
-fi
-[ -n "$answer" ] && [ -f "$answer" ] || { echo "fm-decide: timed out waiting for $ID" >&2; exit 1; }
+[ -r "$HERE/lib/fm_lifeline.py" ] || { echo "fm-decide: missing $HERE/lib/fm_lifeline.py" >&2; exit 70; }
+python3 "$HERE/lib/fm_lifeline.py" await "$REPO" "$f" "$TIMEOUT"; rc=$?
+case "$rc" in
+  0) : ;;
+  1) echo "fm-decide: timed out waiting for $ID" >&2; exit 1 ;;
+  *) echo "fm-decide: could not wait for $ID (exit $rc)" >&2; exit 70 ;;
+esac
+[ -f "$f" ] || { echo "fm-decide: timed out waiting for $ID" >&2; exit 1; }
+answer="$f"
 
 # Recording belongs to the board; observing a response never emits it again.
 rm -f "$PEND/$ID.json"

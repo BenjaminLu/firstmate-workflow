@@ -20,6 +20,7 @@ command -v bun >/dev/null 2>&1 || { echo "    bun not installed - board suite sk
 # fixture carries the library
 d="$(mktemp -d)"; mkdir -p "$d/bin" "$d/state" "$d/design" "$d/board/public"
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$d/bin/"
+cp -R "$ROOT/bin/lib" "$d/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$d/board/"
 cp "$ROOT/board/public/index.html" "$d/board/public/"
 fm_tasks_write /dev/stdin "$d/design/tasks" <<'J'
@@ -97,6 +98,20 @@ wait_for() {   # wait_for <seconds> <command...>: 0 once the command succeeds, 1
     [ "$(date +%s)" -le "$end" ] || return 1
     sleep 0.1
   done
+}
+# stop_pids <file>: TERM every pid listed in <file>, wait (bounded) until
+# each is gone, then KILL what is not. A suite ends with nothing it
+# started still running: bin/ci.sh turns a survivor red (T-151).
+stop_pids() {
+  local p n
+  [ -f "$1" ] || return 0
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    kill -TERM "$p" 2>/dev/null || continue
+    n=0
+    while kill -0 "$p" 2>/dev/null && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+    kill -KILL "$p" 2>/dev/null || true
+  done < "$1"
 }
 
 # detach every descriptor: ci.sh runs suites inside $(...), and a child that
@@ -590,6 +605,7 @@ assert_eq "" "$unknown" "every stage the board maps is a type fm-emit will write
 # Separate fixture: the crowd above floods the deck and would drown these.
 p="$(mktemp -d)"; mkdir -p "$p/bin" "$p/state" "$p/design" "$p/board/public"
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$p/bin/"
+cp -R "$ROOT/bin/lib" "$p/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$p/board/"
 cp "$ROOT/board/public/index.html" "$p/board/public/"
 fm_tasks_write /dev/stdin "$p/design/tasks" <<'J'
@@ -762,6 +778,7 @@ rm -rf "$p"
 # two fixtures do not have, and the merge refusal needs a helper that says no.
 e="$(mktemp -d)"; mkdir -p "$e/bin" "$e/state/pending" "$e/design" "$e/board/public"
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-ready.sh" "$e/bin/"
+cp -R "$ROOT/bin/lib" "$e/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$e/board/"
 cp "$ROOT/board/public/index.html" "$e/board/public/"
 printf '#!/usr/bin/env bash\necho refused\nexit 1\n' > "$e/bin/fm-merge.sh"
@@ -1028,7 +1045,9 @@ rm -rf "$e"
 # Its own fixture: every action here writes to the log, and the counts below
 # are lines in that log, so nothing else may be writing to it.
 f="$(mktemp -d)"; mkdir -p "$f/bin" "$f/state" "$f/design" "$f/board/public"
-cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$f/bin/"
+# fm-herdr.py: the stop path park and drop run (T-144)
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$f/bin/"
+cp -R "$ROOT/bin/lib" "$f/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$f/board/"
 cp "$ROOT/board/public/index.html" "$f/board/public/"
 fm_tasks_write /dev/stdin "$f/design/tasks" <<'J'
@@ -1071,7 +1090,10 @@ assert_eq "reopen" "$(field T-P6 '.actions|join(",")')" "a merged one offers onl
 assert_eq "false" "$(field T-P1 .confirm)" "untouched work with nobody aboard sets aside without asking"
 assert_eq "true" "$(field T-P3 .confirm)" "a task with crew aboard asks first"
 
-# park: a parked event from the captain, and the card leaves the lanes
+# park: a parked event from the captain, and the card leaves the lanes.
+# With nobody aboard, the stop park runs stops nothing, and that is success.
+assert_eq '{"stopped":[],"failed":[]}' "$(python3 "$f/bin/fm-herdr.py" stop "$f" --task T-P1 | jq -c .)" \
+  "with no crew on the task, the stop park and drop run stops nothing and fails nothing"
 n0="$(lines)"
 assert_eq "200" "$(act T-P1 park)" "park answers 200 for a ready task"
 assert_eq "$((n0 + 1))" "$(lines)" "park writes exactly one event"
@@ -1169,6 +1191,7 @@ rm -rf "$f"
 # started the board exported (T-054 covers events that name one, below).
 g="$(mktemp -d)"; mkdir -p "$g/bin" "$g/state/pending" "$g/state/decisions" "$g/design" "$g/board/public"
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$g/bin/"
+cp -R "$ROOT/bin/lib" "$g/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$g/board/"
 cp "$ROOT/board/public/index.html" "$g/board/public/"
 fm_tasks_write /dev/stdin "$g/design/tasks" <<'J'
@@ -1294,6 +1317,7 @@ rm -rf "$g"
 # in one project neither waits for nor frees the other's.
 h="$(mktemp -d)"; mkdir -p "$h/bin" "$h/state/pending" "$h/state/decisions" "$h/design" "$h/projects/beta" "$h/board/public"
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$h/bin/"
+cp -R "$ROOT/bin/lib" "$h/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$h/board/"
 cp "$ROOT/board/public/index.html" "$h/board/public/"
 two_projects() {   # the registry: alpha hosts itself and is the default, beta is a target
@@ -1663,6 +1687,7 @@ rm -rf "$h"
 # round unknown, since that actor's r<n> was the global run counter.
 q="$(mktemp -d)"; mkdir -p "$q/bin" "$q/state" "$q/design" "$q/board/public"
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$q/bin/"
+cp -R "$ROOT/bin/lib" "$q/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$q/board/"
 cp "$ROOT/board/public/index.html" "$ROOT/board/public/ship.js" "$q/board/public/"
 fm_tasks_write /dev/stdin "$q/design/tasks" <<'J'
@@ -1673,10 +1698,14 @@ emq() { FM_ROOT="$q" "$q/bin/fm-emit.sh" "$@" >/dev/null; }
 emq --actor captain --type greenlit --en "go" --tw "開工"
 emq --actor worker-shira-tq1-r3b --task T-Q1 --type dispatched \
   --data "$(jq -cn '{role:"worker",crew_name:"worker-shira-tq1-r3b",
-    identity:{name:"shira",role:"worker",project:null,task:"T-Q1",round:3,attempt:2}}')" --en "on it" --tw "接下"
+    identity:{name:"shira",role:"worker",project:null,task:"T-Q1",round:3,attempt:2,
+      vendor:"claude",model_requested:"claude-opus-5-5",model:"claude-sonnet-5",
+      cli_version:"2.1.0",model_mismatch:true}}')" --en "on it" --tw "接下"
 emq --actor reviewer-quinn-tq1-r3 --task T-Q1 --type review_opened \
   --data "$(jq -cn '{role:"reviewer",crew_name:"reviewer-quinn-tq1-r3",
-    identity:{name:"quinn",role:"reviewer",project:null,task:"T-Q1",round:3,attempt:1}}')" --en "round 3" --tw "第 3 輪"
+    identity:{name:"quinn",role:"reviewer",project:null,task:"T-Q1",round:3,attempt:1,
+      vendor:"claude",model_requested:"claude-opus-5-5",model:"claude-opus-5-5",
+      cli_version:"2.1.0",model_mismatch:false}}')" --en "round 3" --tw "第 3 輪"
 # recorded before T-116: the actor's r465 is the global counter, not a round
 emq --actor worker-mira-tq2-r465 --task T-Q2 --type dispatched \
   --data '{"role":"worker","crew_name":"worker-mira-tq2-r465"}' --en "on it" --tw "接下"
@@ -1689,6 +1718,18 @@ assert_eq "shira 3 2" "$(jq -r '.crew[]|select(.id=="worker-shira-tq1-r3b")|"\(.
   "a run's name, round and attempt reach the board as separate fields"
 assert_eq "mira null null" "$(jq -r '.crew[]|select(.id=="worker-mira-tq2-r465")|"\(.name) \(.round) \(.attempt)"' <<<"$sq")" \
   "an old run without the fields still loads: its name from the old actor, its round unknown, never 465"
+# T-127: vendor, model, model_requested, cli_version and model_mismatch reach
+# the board as separate fields too, read from the run's own identity
+assert_eq 'claude claude-opus-5-5 claude-sonnet-5 2.1.0 true' \
+  "$(jq -r '.crew[]|select(.id=="worker-shira-tq1-r3b")|"\(.vendor) \(.model_requested) \(.model) \(.cli_version) \(.model_mismatch)"' <<<"$sq")" \
+  "a run's vendor, requested model, actual model, CLI version and mismatch flag are separate fields"
+assert_eq 'null null null null false' \
+  "$(jq -r '.crew[]|select(.id=="worker-mira-tq2-r465")|"\(.vendor) \(.model_requested) \(.model) \(.cli_version) \(.model_mismatch)"' <<<"$sq")" \
+  "a run recorded before T-127 shows them as unknown, never guessed"
+# the header's engine badge shows the vendors actually aboard: two claude
+# crewmen (shira and quinn), grouped into one count
+assert_eq '[{"vendor":"claude","count":2}]' "$(jq -c '.engineLive' <<<"$sq")" \
+  "the engine badge counts the vendors actually running now"
 assert_eq '[{"name":"quinn","role":"reviewer","round":3},{"name":"shira","role":"worker","round":3}]' \
   "$(jq -c '[.tasks[]|select(.id=="T-Q1")|.crew[]|{name,role,round}]|sort_by(.name)' <<<"$sq")" \
   "a task card's crew are separate chips of name, role and round, not a joined string"
@@ -1710,6 +1751,8 @@ const state = (projects) => ({ greenlit: true, deckLimit: 24, projects, default_
   crew: [{ id: "firstmate", role: "firstmate", state: "working", task: null },
     { id: "worker-shira-tq1-r3b", role: "worker", state: "working", task: "T-Q1", title: "structured crew",
       project: projects[0], name: "shira", round: 3, attempt: 2, crew_name: "worker-shira-tq1-r3b",
+      vendor: "claude", model: "claude-sonnet-5", model_requested: "claude-opus-5-5",
+      cli_version: "2.1.0", model_mismatch: true,
       activity: { en: "Writing the roster" } },
     { id: "worker-mira-tq2-r465", role: "worker", state: "review", task: "T-Q2", title: "an old run",
       project: projects[projects.length - 1], name: "mira", round: null, attempt: null,
@@ -1747,12 +1790,16 @@ if (!/ hidden[ >]/.test(card.slice(0, card.indexOf(">") + 1))) fail("a card is o
 const dd = (cls) => ((card.match(new RegExp(`<dt>([^<]*)</dt><dd class="${cls}">([\\s\\S]*?)</dd>`)) || []).slice(1));
 const want = { cname: ["crewName", "shira"], crole: ["crewRole", "roleWorker"], cproject: ["projectChip", "alpha"],
   ctask: ["crewTask", "T-Q1 structured crew"], cround: ["crewRound", "3 crewAttempt 2"], cpr: ["crewPr", "#41"],
-  cstate: ["crewState", "laneWorking"], job: ["crewActivity", "Writing the roster"] };
+  cstate: ["crewState", "laneWorking"], job: ["crewActivity", "Writing the roster"],
+  cvendor: ["crewVendor", "claude"], ccli: ["crewCli", "2.1.0"] };
 for (const [cls, [label, value]] of Object.entries(want)) {
   const [dt, body] = dd(cls);
   if (dt !== label) fail(`card line ${cls} is labelled ${dt}`);
   if ((body || "").replace(/<[^>]*>/g, "").trim() !== value) fail(`card line ${cls} says [${body}]`);
 }
+// T-127: a model other than the one requested is the warning class, naming both
+const modelLine = (card.match(/<dt>crewModel<\/dt><dd class="cmodel warn">([\s\S]*?)<\/dd>/) || [])[1];
+if ((modelLine || "").trim() !== "modelMismatch") fail(`card model line is [${modelLine}]`);
 if (!card.includes(`href="${url}"`)) fail("the card does not link the pull request");
 const old = (h.innerHTML.match(/<div class="crewcard" id="crewcard-worker-mira-tq2-r465"[\s\S]*?<\/dl><\/div>/) || [])[0];
 if (!old || !/<dd class="cround">crewUnknown<\/dd>/.test(old)) fail("the round of an old run is not shown as unknown");
@@ -1769,10 +1816,20 @@ for (const projects of [["alpha"], ["alpha", "beta"]]) {
   if (!/<div class="rhead"[\s\S]*data-sort="project"/.test(r.innerHTML)) fail("no project column header with " + projects.length);
   const rows = [...r.innerHTML.matchAll(/<li class="rrow [^"]*"[\s\S]*?<\/li>/g)].map((m) => m[0]);
   if (rows.length !== 3) fail("roster rows " + rows.length);
-  for (const row of rows.slice(1)) for (const cls of ["nm", "rl", "pj", "rd", "st", "rpr", "jb"])
+  for (const row of rows.slice(1)) for (const cls of ["nm", "rl", "pj", "rv", "rd", "st", "rpr", "jb"])
     if (!row.includes(`class="${cls}"`)) fail(`roster row lacks its ${cls} cell`);
+  // rm is checked apart: a mismatched model carries an extra "warn" class
+  for (const row of rows.slice(1)) if (!/class="rm( warn)?"/.test(row)) fail("roster row lacks its rm cell");
   const pj = rows.slice(1).map((row) => (row.match(/<span class="pj"[^>]*>([\s\S]*?)<\/span>/) || [])[1].replace(/<[^>]*>/g, ""));
   if (pj.join() !== [projects[0], projects[projects.length - 1]].join()) fail("project column says " + pj.join());
+  // T-127: the roster own vendor and model columns, sortable and groupable
+  // like the others; the model of shira is the warning class since it mismatches
+  if (!/<div class="rhead"[\s\S]*data-sort="vendor"/.test(r.innerHTML)) fail("no vendor column header");
+  if (!/<div class="rhead"[\s\S]*data-sort="model"/.test(r.innerHTML)) fail("no model column header");
+  if (!(rows[1].match(/<span class="rv"[^>]*>([\s\S]*?)<\/span>/) || [])[1]?.includes("claude"))
+    fail("roster vendor cell for shira: " + rows[1]);
+  const rmCell = rows[1].match(/<span class="rm warn"[^>]*>([\s\S]*?)<\/span>/);
+  if (!rmCell) fail("roster model cell for shira is not the warning class: " + rows[1]);
   const rd = (rows[1].match(/<span class="rd"[^>]*>([\s\S]*?)<\/span><span class="st"/) || [])[1].replace(/<[^>]*>/g, "");
   if (rd !== "3 crewAttempt 2") fail("round column says " + rd);
   if (!rows[1].includes(`style="--pc:${SHIP.projectColor(projects[0])}"`)) fail("the roster project colour differs");
@@ -1817,6 +1874,128 @@ console.log(JSON.stringify(out.map(text)));
 assert_eq '[["shira","roleWorker","crewRound 3 · crewAttempt 2"],["quinn","roleReviewer","crewRound crewUnknown"]]' "$chips" \
   "each crew member on a card is a chip of its own, with name, role and round apart"
 rm -rf "$q"
+
+# --- T-146: the board keeps the last known value of each identity field ----
+# On 2026-09-29 every crewman's vendor, model and CLI were blank: the board
+# read a crewman from its latest event, a crew_status whose data.identity had
+# T-116's six fields only. An event without a field, or with the "unknown" a
+# silent vendor is recorded as, keeps what an earlier event said; a live
+# round shows the model it asked for until the vendor reports one.
+qk="$(mktemp -d)"; mkdir -p "$qk/bin" "$qk/state" "$qk/design" "$qk/board/public"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$qk/bin/"
+cp "$ROOT/board/server.ts" "$qk/board/"
+cp "$ROOT/board/public/index.html" "$ROOT/board/public/ship.js" "$qk/board/public/"
+fm_tasks_write /dev/stdin "$qk/design/tasks" <<'J'
+{"tasks":[{"id":"T-K1","title":"a reported model","milestone":"M2","depends_on":[]},
+          {"id":"T-K2","title":"a model asked for","milestone":"M2","depends_on":[]}]}
+J
+emk() { FM_ROOT="$qk" "$qk/bin/fm-emit.sh" "$@" >/dev/null; }
+six() { jq -cn --arg n "$1" --arg t "$2" '{name:$n,role:"worker",project:null,task:$t,round:1,attempt:1}'; }
+emk --actor captain --type greenlit --en "go" --tw "開工"
+emk --actor worker-kai-tk1-r1 --task T-K1 --type dispatched \
+  --data "$(jq -cn --argjson i "$(six kai T-K1)" '{role:"worker",identity:($i + {vendor:"claude",
+    model_requested:"claude-opus-5-5",model:"claude-opus-5-5",cli_version:"2.1.0",model_mismatch:false})}')" \
+  --en "on it" --tw "接下"
+# the crew_status that blanked the board: T-116's six fields and nothing else
+emk --actor worker-kai-tk1-r1 --task T-K1 --type crew_status \
+  --data "$(jq -cn --argjson i "$(six kai T-K1)" '{role:"worker",identity:$i,activity:{en:"still",
+    "zh-TW":"仍在"}}')" --en "still" --tw "仍在"
+# and one that says unknown where it knew nothing
+emk --actor worker-kai-tk1-r1 --task T-K1 --type crew_status \
+  --data "$(jq -cn --argjson i "$(six kai T-K1)" '{role:"worker",identity:($i + {vendor:"claude",
+    model:"unknown",cli_version:"unknown",model_mismatch:null}),activity:{en:"still",
+    "zh-TW":"仍在"}}')" --en "still" --tw "仍在"
+# a live round from its start: the vendor it is on and the model it asked for
+emk --actor worker-lin-tk2-r1 --task T-K2 --type dispatched \
+  --data "$(jq -cn --argjson i "$(six lin T-K2)" '{role:"worker",identity:($i + {vendor:"codex",
+    model_requested:"gpt-6-astra",model:null,cli_version:null,model_mismatch:null})}')" \
+  --en "on it" --tw "接下"
+FM_ROOT="$qk" FM_PORT=0 bun run "$qk/board/server.ts" > "$qk/out" 2>&1 < /dev/null &
+pidk=$!
+PORTK="$(board_port "$qk/out" "$pidk")"
+for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORTK/api/state" >/dev/null 2>&1 && break; sleep 0.25; done
+sk="$(curl -sf "http://127.0.0.1:$PORTK/api/state")"
+assert_eq 'claude claude-opus-5-5 claude-opus-5-5 2.1.0 false reported' \
+  "$(jq -r '.crew[]|select(.id=="worker-kai-tk1-r1")|"\(.vendor) \(.model_requested) \(.model) \(.cli_version) \(.model_mismatch) \(.model_source)"' <<<"$sk")" \
+  "a crew_status without the fields, or saying unknown, never blanks what an earlier event said"
+assert_eq 'codex gpt-6-astra gpt-6-astra requested' \
+  "$(jq -r '.crew[]|select(.id=="worker-lin-tk2-r1")|"\(.vendor) \(.model_requested) \(.model) \(.model_source)"' <<<"$sk")" \
+  "a live round shows its vendor, and the model it asked for until the vendor reports one"
+assert_eq '[{"vendor":"claude","count":1},{"vendor":"codex","count":1}]' "$(jq -c '.engineLive' <<<"$sk")" \
+  "so the engine badge counts a round's vendor from its start"
+kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
+rm -rf "$qk"
+
+# --- T-146: a change of vendor resets what belongs to the vendor ------------
+# The last known value holds within one vendor only. When a fallback starts,
+# record_requested clears model, cli_version and model_mismatch and names the
+# new vendor's model_requested ("" for a vendor config names none for), and
+# fm_crew_identity sends them as null: the board must take them as cleared,
+# never keep the vendor before's. record-model's "unknown" vendor (every
+# vendor unavailable) is such a change too. One actor per step of one round,
+# each carrying the events up to that step, as fm_crew_identity sends them.
+qv="$(mktemp -d)"; mkdir -p "$qv/bin" "$qv/state" "$qv/design" "$qv/board/public"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$qv/bin/"
+cp "$ROOT/board/server.ts" "$qv/board/"
+cp "$ROOT/board/public/index.html" "$ROOT/board/public/ship.js" "$qv/board/public/"
+fm_tasks_write /dev/stdin "$qv/design/tasks" <<'J'
+{"tasks":[{"id":"T-V1","title":"claude then codex","milestone":"M2","depends_on":[]},
+          {"id":"T-V2","title":"then an unmodelled vendor","milestone":"M2","depends_on":[]},
+          {"id":"T-V3","title":"then a bare status","milestone":"M2","depends_on":[]},
+          {"id":"T-V4","title":"then no vendor at all","milestone":"M2","depends_on":[]}]}
+J
+emv() { FM_ROOT="$qv" "$qv/bin/fm-emit.sh" "$@" >/dev/null; }
+# <actor> <task> <type> <identity beyond the six, as jq>
+# The program is single-quoted and the extra identity passed as --argjson:
+# bash 3.2 brace-expands a {a,b} inside "$(...)" that only escaped quotes protect.
+said() {
+  local six prog data
+  six="$(jq -cn --arg t "$2" '{name:"vic",role:"worker",project:null,task:$t,round:1,attempt:1}')"
+  prog='{role:"worker",identity:($i + $x),activity:{en:"on","zh-TW":"進行"}}'
+  data="$(jq -cn --argjson i "$six" --argjson x "$(jq -cn "$4")" "$prog")"
+  emv --actor "$1" --task "$2" --type "$3" --data "$data" --en "on" --tw "進行"
+}
+claude_ran='{vendor:"claude",model_requested:"claude-opus-5-5",model:"claude-opus-5-5",cli_version:"2.1.0",model_mismatch:false}'
+codex_starts='{vendor:"codex",model_requested:"gpt-6-astra",model:null,cli_version:null,model_mismatch:null}'
+cursor_starts='{vendor:"cursor-agent",model_requested:"",model:null,cli_version:null,model_mismatch:null}'
+none_ran='{vendor:"unknown",model_requested:"",model:"unknown",cli_version:"unknown",model_mismatch:false}'
+emv --actor captain --type greenlit --en "go" --tw "開工"
+for n in 1 2 3 4; do
+  a="worker-vic-tv$n-r1"
+  said "$a" "T-V$n" dispatched "$claude_ran"
+  said "$a" "T-V$n" crew_status "$codex_starts"
+  [ "$n" -ge 2 ] && said "$a" "T-V$n" crew_status "$cursor_starts"
+  [ "$n" -ge 3 ] && said "$a" "T-V$n" crew_status '{}'
+  [ "$n" -ge 4 ] && said "$a" "T-V$n" crew_status "$none_ran"
+done
+FM_ROOT="$qv" FM_PORT=0 bun run "$qv/board/server.ts" > "$qv/out" 2>&1 < /dev/null &
+pidv=$!
+PORTV="$(board_port "$qv/out" "$pidv")"
+for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORTV/api/state" >/dev/null 2>&1 && break; sleep 0.25; done
+sv="$(curl -sf "http://127.0.0.1:$PORTV/api/state")"
+card() { jq -c --arg a "$1" '.crew[]|select(.id==$a)|{vendor,model_requested,model,model_source,cli_version,model_mismatch}' <<<"$sv"; }
+assert_eq '{"vendor":"codex","model_requested":"gpt-6-astra","model":"gpt-6-astra","model_source":"requested","cli_version":null,"model_mismatch":false}' \
+  "$(card worker-vic-tv1-r1)" \
+  "(a) claude reported, then a codex start: codex asking for gpt-6-astra, never claude's model or CLI version"
+assert_eq '{"vendor":"cursor-agent","model_requested":null,"model":null,"model_source":null,"cli_version":null,"model_mismatch":false}' \
+  "$(card worker-vic-tv2-r1)" \
+  "(b) then a start on a vendor config names no model for: that vendor, with no model and no model_source"
+assert_eq '{"vendor":"cursor-agent","model_requested":null,"model":null,"model_source":null,"cli_version":null,"model_mismatch":false}' \
+  "$(card worker-vic-tv3-r1)" \
+  "(c) a later crew_status with only T-116's six fields keeps (b): the vendor it is on, still with no model"
+assert_eq '{"vendor":null,"model_requested":null,"model":null,"model_source":null,"cli_version":null,"model_mismatch":false}' \
+  "$(card worker-vic-tv4-r1)" \
+  "(d) a final vendor \"unknown\" shows the vendor as unknown (null), with no model, never the last vendor tried"
+assert_eq '0' \
+  "$(jq -c '[.crew[]|select(.id|startswith("worker-vic-tv"))|select(.id!="worker-vic-tv1-r1")|tostring|select(test("gpt-6-astra|claude-opus-5-5|2\\.1\\.0"))]|length' <<<"$sv")" \
+  "(b)-(d) no card after the vendor changed carries an earlier vendor's model or CLI version anywhere"
+assert_eq '0' \
+  "$(jq -c '[.crew[]|select(.id=="worker-vic-tv1-r1")|tostring|select(test("claude-opus-5-5|2\\.1\\.0"))]|length' <<<"$sv")" \
+  "(a) the codex card carries claude's model and CLI version nowhere"
+assert_eq '[{"vendor":"cursor-agent","count":2},{"vendor":"codex","count":1}]' "$(jq -c '.engineLive' <<<"$sv")" \
+  "(d) the engine badge counts each round on the vendor it is on now, and none on \"unknown\""
+kill "$pidv" 2>/dev/null; wait "$pidv" 2>/dev/null || true
+rm -rf "$qv"
 
 # --- T-119: one task-id grammar, in the scripts and in the board ------------
 # bin/fm-emit.sh holds the grammar every script sources; board/server.ts
@@ -1952,7 +2131,9 @@ rm -rf "$gdir"
 # started, or says on stderr what held it and exits 0; fm-worker.sh exits 70
 # naming the lock when another round holds the task.
 x="$(mktemp -d)"; mkdir -p "$x/bin" "$x/state/pending" "$x/state/runs" "$x/state/worktrees" "$x/design" "$x/board/public" "$x/stub"
-cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-decide.sh" "$x/bin/"
+# fm-herdr.py: the stop path park and drop run (T-144)
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-decide.sh" "$ROOT/bin/fm-herdr.py" "$x/bin/"
+cp -R "$ROOT/bin/lib" "$x/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$x/board/"
 cp "$ROOT/board/public/index.html" "$x/board/public/"
 fm_tasks_write /dev/stdin "$x/design/tasks" <<'J'
@@ -2008,6 +2189,7 @@ if [ -e "$FM_ROOT/locked-$task" ]; then
 fi
 printf '%s\n' "$args" >> "$FM_ROOT/worker-calls"
 printf '%s\n' "$$" > "$FM_ROOT/worker-pid"
+printf '%s\n' "$$" >> "$FM_ROOT/worker-pids"
 exec sleep 30
 SH
 # A merge card's pull request is read from GitHub before the card exists
@@ -2145,7 +2327,10 @@ assert_eq "200" "$(answer D-1035 B)" "the captain answers B, send back"
 assert_eq "send_back done" "$(jq -r '"\(.effect) \(.outcome)"' "$x/post")" "the round was started"
 assert_contains "$(cat "$x/worker-calls" 2>/dev/null)" "--task T-035" "by fm-worker.sh, for the task"
 assert_contains "$(cat "$x/worker-calls" 2>/dev/null)" "--pr 35" "on its pull request"
-kill "$(cat "$x/worker-pid" 2>/dev/null)" 2>/dev/null || true
+# the round it started is stopped, and gone, before the block moves on:
+# a stub left sleeping outlives the suite, which bin/ci.sh turns red (T-151)
+wait_for 10 test -s "$x/worker-pid"
+stop_pids "$x/worker-pids"
 # and a round that refuses, because another holds the task, is a failure
 emx --actor worker-36 --task T-036 --type dispatched --data '{"role":"worker"}' --en "on it" --tw "接下"
 : > "$x/locked-T-036"
@@ -2166,12 +2351,25 @@ assert_eq "merged" "$(lane T-039)" "the task is merged"
 # --- set aside in flight: confirmed, crew stopped, the pull request left open
 emx --actor worker-50 --task T-050 --type dispatched --data '{"role":"worker"}' --en "on it" --tw "接下"
 emx --actor worker-50 --task T-050 --type pr_opened --pr 50 --en "opened #50" --tw "開了 #50"
-printf '#!/usr/bin/env bash\nsleep 30 &\nwait\n' > "$x/stub/fm-worker.sh"
-# every descriptor detached: its sleep outlives it, and must not hold the
+# on TERM it ends its sleep too, so stopping the worker leaves nothing (T-151)
+printf '#!/usr/bin/env bash\ntrap '"'"'kill $! 2>/dev/null; exit 143'"'"' TERM\nsleep 30 &\nwait\n' > "$x/stub/fm-worker.sh"
+# every descriptor detached: while it runs, its sleep must not hold the
 # suite's output open
 bash "$x/stub/fm-worker.sh" >/dev/null 2>&1 </dev/null &
 fake=$!
 printf '%s\n' "$fake" > "$x/state/worktrees/T-050.pid"
+# and a headless round of it (T-144): a process group of its own, led by a
+# runner ps shows as fm-herdr.py, with the vendor CLI inside the group. Only
+# the group's leader is on file; the stop must reach the rest through it.
+mkdir -p "$x/state/runs/worker-ada-t050-r1/codex-a"
+printf '{"actor":"worker-ada-t050-r1","task":"T-050","role":"worker"}\n' > "$x/state/runs/worker-ada-t050-r1/identity.json"
+printf 'import subprocess,sys\nc=subprocess.Popen(["sleep","60"])\nopen(sys.argv[1],"w").write(str(c.pid))\nc.wait()\n' > "$x/stub/fm-herdr.py"
+python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
+  python3 "$x/stub/fm-herdr.py" "$x/stub/cli.pid" >/dev/null 2>&1 </dev/null &
+runner=$!
+printf '%s\n' "$runner" > "$x/state/runs/worker-ada-t050-r1/codex-a/runner.pid"
+wait_for 10 test -s "$x/stub/cli.pid"
+cli="$(cat "$x/stub/cli.pid")"
 assert_eq "park,drop true" "$(jq -r '.tasks[]|select(.id=="T-050")|"\(.actions|join(",")) \(.confirm)"' <<<"$(sx)")" \
   "a task in review offers park and drop, and asks first"
 n50="$(wc -l < "$x/state/events.jsonl")"
@@ -2184,6 +2382,10 @@ assert_contains "$(jq -r '.stopped|join(" ")' "$x/resp")" "worker $fake" "its wo
 assert_eq "50" "$(jq -r .pr_left_open "$x/resp")" "and its pull request is left open, and said so"
 wait "$fake" 2>/dev/null; rc=$?
 assert_eq "143" "$rc" "the worker got SIGTERM"
+assert_contains "$(jq -r '.stopped|join(" ")' "$x/resp")" "worker-ada-t050-r1 $runner" "its round is stopped by the same path"
+wait "$runner" 2>/dev/null
+wait_for 10 bash -c "! kill -0 $cli 2>/dev/null"
+assert_fail "kill -0 $cli" "and the vendor CLI inside the round's process group is gone with it"
 assert_eq "200" "$(setaside T-050 unpark)" "unparked"
 assert_eq "review" "$(lane T-050)" "it returns to the lane its events give it"
 assert_eq "200" "$(setaside T-050 drop '{"confirm":true}')" "and a confirmed drop closes it"
@@ -2309,6 +2511,8 @@ assert_eq "merged 97" "$(jq -r '.tasks[]|select(.id=="T-117")|"\(.stage) \(.pr)"
 
 kill "$pidx" 2>/dev/null
 wait "$pidx" 2>/dev/null || true
+# every round a send back started here, stopped and gone (T-151)
+stop_pids "$x/worker-pids"
 rm -rf "$x"
 
 # the repository is data in the registry, never a literal in the board: no
@@ -2328,6 +2532,7 @@ done
 # can read hands them what it would take.
 k="$(mktemp -d)"; mkdir -p "$k/bin" "$k/state/pending" "$k/design" "$k/board/public" "$k/src"
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$k/bin/"
+cp -R "$ROOT/bin/lib" "$k/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$k/board/"
 cp "$ROOT/board/public/index.html" "$ROOT/board/public/ship.js" "$ROOT/board/public/diagram.js" "$k/board/public/"
 fm_tasks_write /dev/stdin "$k/design/tasks" <<'J'
@@ -2565,6 +2770,118 @@ assert_eq "writeCredential" "$(jq -r .code "$k/resp")" "the tab is told it holds
 assert_eq "403" "$(postk /tasks "$tsk" -H "Origin: $uk" -H 'content-type: application/json' \
   -H "Authorization: Bearer $secret")" "nor does the old secret as a bearer"
 kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
+# --- T-151: the board pushes the wake, and owns what it starts ---------------
+# Whoever writes a decision delivers the wake: the item on the wake queue,
+# and a ring of every waiter's own doorbell under state/session/wake.d. And
+# nothing the board starts outlives its owner: a merge belongs to the
+# session the board names (FM_SESSION_PID), and to the board itself when it
+# names none, and ends when that owner does - even a SIGKILLed one.
+make_w() {   # make_w: a fixture with three merge cards, D-51..D-53, its path on stdout
+  local w; w="$(mktemp -d)"; mkdir -p "$w/bin" "$w/state/pending" "$w/design" "$w/board/public"
+  cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$w/bin/"
+  cp -R "$ROOT/bin/lib" "$w/bin/"
+  cp "$ROOT/board/server.ts" "$w/board/"; cp "$ROOT/board/public/index.html" "$w/board/public/"
+  mkdir -p "$w/design/tasks"
+  printf '{"id":"T-A","title":"first","milestone":"M0","depends_on":[]}\n' > "$w/design/tasks/T-A.json"
+  # the merge helper says who it is and holds while told to
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'root="$(cd "$(dirname "$0")/.." && pwd)"' \
+    'pr=""; while [ $# -gt 0 ]; do case "$1" in --pr) pr="$2"; shift 2 ;; *) shift ;; esac; done' \
+    'echo $$ > "$root/merge-$pr.pid"' \
+    'while [ -e "$root/hold-$pr" ]; do sleep 0.1; done' \
+    'echo "fm-merge: merged #$pr"' > "$w/bin/fm-merge.sh"
+  chmod +x "$w/bin/fm-merge.sh"
+  for n in 1 2 3; do
+    printf '{"id":"D-5%s","task":"T-A","kind":"merge","pr":%s,"title":"merge #%s"}\n' "$n" "$n" "$n" > "$w/state/pending/D-5$n.json"
+  done
+  printf '%s' "$w"
+}
+start_w() {   # start_w <root> <session pid or empty>: the board, its pid in pidw and port in PORTW
+  FM_SESSION_PID="$2" FM_ROOT="$1" FM_PORT=0 bun run "$1/board/server.ts" > "$1/out" 2>&1 < /dev/null &
+  pidw=$!
+  PORTW="$(board_port "$1/out" "$pidw")"
+  wait_for 60 curl -sf "http://127.0.0.1:$PORTW/api/state"
+}
+postw() {   # postw <id> <choice>: the HTTP status
+  wcurl "$PORTW" -s -m 5 -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' \
+    -d "$(jq -cn --arg i "$1" --arg c "$2" '{id:$i,chosen:$c}')" "http://127.0.0.1:$PORTW/decisions"
+}
+alive() { kill -0 "$1" 2>/dev/null; }
+dead() { ! kill -0 "$1" 2>/dev/null; }
+
+# the wake, pushed by the writer
+w="$(make_w)"
+sleep 300 & sess=$!
+start_w "$w" "$sess"
+# two waiters, each with a doorbell of its own (what fm-decide.sh --await and
+# fm-session.sh wait register), and one left by a waiter killed outright
+bells="$w/state/session/wake.d"; mkdir -p "$bells"
+mkfifo "$bells/1-a.fifo" "$bells/2-b.fifo" "$bells/3-stale.fifo"
+exec 7<> "$bells/1-a.fifo" 8<> "$bells/2-b.fifo"
+assert_eq "200" "$(postw D-51 A)" "the captain answers a merge card"
+line=''; IFS= read -r -t 10 -u 7 line || true
+assert_eq "D-51" "$line" "the board rings the first waiter's bell at once"
+line=''; IFS= read -r -t 10 -u 8 line || true
+assert_eq "D-51" "$line" "and the second's: every waiter hears every wake"
+assert_fail "test -e '$bells/3-stale.fifo'" "a bell nobody holds any more is removed by the ring"
+assert_eq "D-51 answered A" "$(jq -r 'select(.reason=="answered")|"\(.id) \(.reason) \(.decision.chosen)"' "$w/state/session/wake.jsonl" 2>/dev/null)" \
+  "and the item onto the durable wake queue"
+wait_for 20 jq -e '.merge=="merged"' "$w/state/decisions/D-51.json"
+line=''; IFS= read -r -t 10 -u 7 line || true
+assert_eq "D-51" "$line" "the merge settling wakes firstmate again"
+assert_eq "merged" "$(jq -r 'select(.reason=="merge_settled")|.decision.merge' "$w/state/session/wake.jsonl" 2>/dev/null)" \
+  "with the outcome on the queue"
+exec 7<&- 8<&-
+rm -f "$bells/1-a.fifo" "$bells/2-b.fifo"
+# no waiter: ringing never blocks the answer, and the queue carries it
+assert_eq "200" "$(postw D-52 B)" "an answer with nobody waiting is not held up"
+assert_eq "1" "$(grep -c '"id":"D-52"' "$w/state/session/wake.jsonl")" "and still reaches the queue"
+
+# a merge the captain clicked belongs to the session, not to the board
+touch "$w/hold-3"
+assert_eq "200" "$(postw D-53 A)" "a merge starts and holds"
+wait_for 20 test -s "$w/merge-3.pid"
+m3="$(cat "$w/merge-3.pid" 2>/dev/null)"
+assert_ok "alive '$m3'" "the merge helper runs"
+kill -9 "$pidw" 2>/dev/null; wait "$pidw" 2>/dev/null
+sleep 1
+assert_ok "alive '$m3'" "a board that dies does not take the session's merge with it"
+kill "$sess" 2>/dev/null; wait "$sess" 2>/dev/null
+wait_for 10 dead "$m3"
+assert_ok "dead '$m3'" "the session ends, and the merge ends with it"
+rm -f "$w/hold-3"
+rm -rf "$w"
+
+# a board with no session owns what it starts, and a SIGKILL to it is enough
+w="$(make_w)"
+# a round sent back: the worker says who it is and holds while told to
+printf '%s\n' '#!/usr/bin/env bash' 'root="$(cd "$(dirname "$0")/.." && pwd)"' \
+  'echo $$ > "$root/worker.pid"' 'while [ -e "$root/hold-worker" ]; do sleep 0.1; done' > "$w/bin/fm-worker.sh"
+chmod +x "$w/bin/fm-worker.sh"
+jq -cn '({A:{description:"send back",pros:"p",cons:"c"},B:{description:"hold",pros:"p",cons:"c"},C:{description:"wait",pros:"p",cons:"c"}}) as $o
+  | {title:"send it back",explanation:"e",before:"b",after:"a",outcome:"o",options:$o} as $l
+  | {id:"D-54",task:"T-A",kind:"choice",pr:4,title:"send it back",details:{en:$l,"zh-TW":$l,effect:{A:"send_back"}}}' \
+  > "$w/state/pending/D-54.json"
+start_w "$w" ""
+touch "$w/hold-1" "$w/hold-worker"
+assert_eq "200" "$(postw D-51 A)" "a merge starts under a board that names no session"
+wait_for 20 test -s "$w/merge-1.pid"
+m1="$(cat "$w/merge-1.pid" 2>/dev/null)"
+assert_ok "alive '$m1'" "the merge helper runs"
+assert_eq "200" "$(postw D-54 A)" "and a round is sent back"
+wait_for 20 test -s "$w/worker.pid"
+wk="$(cat "$w/worker.pid" 2>/dev/null)"
+assert_ok "alive '$wk'" "the round runs"
+kill -9 "$pidw" 2>/dev/null; wait "$pidw" 2>/dev/null
+wait_for 10 dead "$m1"
+assert_ok "dead '$m1'" "the board killed outright, the merge it owned ends with it"
+wait_for 10 dead "$wk"
+assert_ok "dead '$wk'" "and so does the round it sent back"
+rm -f "$w/hold-worker"
+assert_eq "" "$(grep -n 'detached' "$w/board/server.ts" | grep -v '//' || true)" "and the board detaches nothing itself"
+rm -f "$w/hold-1"
+rm -rf "$w"
+
 rm -rf "$k" "$XDG_CONFIG_HOME"
 
 finish

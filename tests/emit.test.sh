@@ -29,6 +29,17 @@ assert_eq "merged" "$(jq -r 'select(.task=="T-001") | .summary.en' "$log" | head
 assert_eq "已合併" "$(jq -r 'select(.task=="T-001") | .summary["zh-TW"]' "$log" | head -1)" "keeps the zh-TW summary"
 assert_eq "1" "$(jq -r 'select(.task=="T-001") | .pr' "$log" | head -1)" "keeps the pr number"
 
+# T-127: a requested model and the model the vendor actually ran on
+# disagreeing is a real event type, not a workaround riding crew_status.
+assert_ok "'$EMIT' --actor worker-1 --type model_mismatch --task T-001 \
+  --en 'requested claude-opus-5-5 but ran on claude-sonnet-5' \
+  --tw '要求的是 claude-opus-5-5，實際跑在 claude-sonnet-5' \
+  --data '{\"vendor\":\"claude\",\"model_requested\":\"claude-opus-5-5\",\"model\":\"claude-sonnet-5\"}'" \
+  "accepts model_mismatch"
+assert_eq "claude-sonnet-5" \
+  "$(jq -r 'select(.type=="model_mismatch" and .task=="T-001") | .data.model' "$log" | head -1)" \
+  "keeps the reported model in data"
+
 # the reason the lock exists
 before=$(wc -l < "$log" | tr -d ' ')
 for i in $(seq 1 20); do

@@ -370,7 +370,13 @@ NEVER_READ = ['~/.ssh', '~/.gnupg', '~/.netrc', '~/.git-credentials', '~/.config
 #            keychain  generic-password items, by service and account,
 #                      read on macOS with security(1); the keychain itself
 #                      stays out of every round's reach
-#            file      files read when no keychain item is there
+#            secret    libsecret items, by service and account, read with
+#                      secret-tool(1) when it is on the operator's PATH -
+#                      the keychain's rough equivalent off macOS (T-126);
+#                      tried only when no keychain item answered, and
+#                      skipped, not refused, when secret-tool is absent
+#            file      files read when neither a keychain nor a secret
+#                      item is there
 #            private   the file must be the operator's alone (no group or
 #                      other bits), or it is no login
 #            field     the JSON field of the value that is the token; none,
@@ -388,6 +394,20 @@ NEVER_READ = ['~/.ssh', '~/.gnupg', '~/.netrc', '~/.git-credentials', '~/.config
 #                      the CLI at (T-117 round 2)
 #            drop      the JSON fields of that file that are its refresh
 #                      token, emptied in the copy
+#            fallback  a second tier, tried only when this one names
+#                      nothing at all - no keychain item, no file - never
+#                      when it is refused for a reason (a locked-down
+#                      file, an expired or malformed token, which stop the
+#                      round rather than quietly trying something weaker).
+#                      Its own keychain/file/field/expires/private, same
+#                      meaning; it shares this tier's `to`. Used, it warns
+#                      (T-126): claude's round has no crew token of its
+#                      own and so signs in with the operator's own
+#                      interactive login instead, which that operator's
+#                      own Claude sessions can revoke out from under a
+#                      round still holding it by refreshing their login -
+#                      exactly what killed T-125's worker and T-123's
+#                      reviewer on 2026-09-27.
 #          Only an access token is handed in, never a refresh token: a
 #          round that refreshed a login would rotate the operator's out
 #          from under them, and one that could not write the refreshed
@@ -400,15 +420,35 @@ NEVER_READ = ['~/.ssh', '~/.gnupg', '~/.netrc', '~/.git-credentials', '~/.config
 VENDORS = {
     # A round's claude has a config directory of its own (CLAUDE_CONFIG_DIR,
     # in the round's temp directory), so ~/.claude and ~/.claude.json are
-    # not opened at all; its login is the access token of the one the
-    # operator uses - the keychain item on macOS, the credentials file
-    # elsewhere - handed in as CLAUDE_CODE_OAUTH_TOKEN
+    # not opened at all. Its login (T-126) is, in order: a
+    # CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY already in the
+    # operator's environment, used as is; else the crew's own long-lived
+    # token, made once with `claude setup-token`
+    # (https://code.claude.com/docs/en/authentication) and kept the way
+    # T-117 keeps cursor-agent's Cursor key - a keychain item of fm's own
+    # on macOS, a libsecret item of fm's own where secret-tool is present
+    # (Linux, T-126 round 2), else a file only the operator can read; only
+    # when none of those exists does it fall back to the access token of
+    # the operator's own interactive login, with a warning (see `fallback`
+    # above) that this can die when that login refreshes.
     'claude': dict(auth=[], state=[], tmp=['/tmp/claude-{uid}'],
-                   login=dict(keychain=[dict(service='Claude Code-credentials', account='{user}')],
-                              file=['~/.claude/.credentials.json'],
-                              field='claudeAiOauth.accessToken', expires='claudeAiOauth.expiresAt',
+                   login=dict(keychain=[dict(service='firstmate-claude-token', account='{user}')],
+                              secret=[dict(service='firstmate-claude-token', account='{user}')],
+                              file=['~/.config/firstmate/claude-token'], private=True,
                               given=['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'],
-                              to='env:CLAUDE_CODE_OAUTH_TOKEN'),
+                              to='env:CLAUDE_CODE_OAUTH_TOKEN',
+                              hint='make a long-lived crew token (claude setup-token; one year, model '
+                                   'requests only, https://code.claude.com/docs/en/authentication) and keep '
+                                   'it for the crew once, outside any round: security add-generic-password '
+                                   '-s firstmate-claude-token -a "$USER" -w on macOS (it asks for the token), '
+                                   'secret-tool store --label=firstmate-claude-token service '
+                                   'firstmate-claude-token account "$USER" on Linux with libsecret, or write '
+                                   'it to ~/.config/firstmate/claude-token with mode 600; revoke it at '
+                                   'claude.ai, Settings, Claude Code',
+                              fallback=dict(keychain=[dict(service='Claude Code-credentials', account='{user}')],
+                                            file=['~/.claude/.credentials.json'],
+                                            field='claudeAiOauth.accessToken',
+                                            expires='claudeAiOauth.expiresAt')),
                    hosts=['anthropic.com', 'claude.ai']),
     # codex's login file holds its refresh token beside the access token.
     # The round's CODEX_HOME is its own, and holds a copy without it.
@@ -550,7 +590,17 @@ def vendor_of(d, engine):
     if login:
         login['keychain'] = [dict(service=k['service'], account=operator(k['account']))
                              for k in login.get('keychain', [])]
+        login['secret'] = [dict(service=k['service'], account=operator(k['account']))
+                           for k in login.get('secret', [])]
         login['file'] = [expand(p, engine) for p in login.get('file', [])]
+        if login.get('fallback'):
+            fallback = dict(login['fallback'])
+            fallback['keychain'] = [dict(service=k['service'], account=operator(k['account']))
+                                    for k in fallback.get('keychain', [])]
+            fallback['secret'] = [dict(service=k['service'], account=operator(k['account']))
+                                  for k in fallback.get('secret', [])]
+            fallback['file'] = [expand(p, engine) for p in fallback.get('file', [])]
+            login['fallback'] = fallback
     return dict(auth=[expand(p, engine) for p in d['auth']],
                 state=[expand(p, engine) for p in d['state']],
                 tmp=[expand(p, engine) for p in d['tmp']],
@@ -865,12 +915,166 @@ PY
 fm_vendor_chain() {
   local role="${1:-}" explicit="${2:-}" head=''
   if [ -n "$explicit" ]; then printf '%s\n' "$explicit"; return 0; fi
-  [ -n "$role" ] && head="$(fm_cfg_in "$role" vendor)"
-  [ -n "$head" ] || head="$(fm_cfg vendor)"
-  [ -n "$head" ] || head=mock
+  head="$(fm_role_vendor "$role")"
   # one run per vendor: a fallback list may name the head, or itself twice
   printf '%s\n' "$head"
   fm_cfg_list fallback | grep -vxF "$head" | awk '!seen[$0]++' || true
+}
+
+#   fm_role_vendor [role] [file] -> the vendor a role starts on: its own
+#   `vendor:`, else the top-level one, else mock - the head of its chain
+fm_role_vendor() {
+  local role="${1:-}" f="${2:-config.yaml}" v=''
+  [ -n "$role" ] && v="$(fm_cfg_in "$role" vendor "$f")"
+  [ -n "$v" ] || v="$(fm_cfg vendor "$f")"
+  [ -n "$v" ] || v=mock
+  printf '%s\n' "$v"
+}
+
+# The model config.yaml names, per vendor (T-146; T-127 named one per role).
+# A model name belongs to one vendor: handing claude's name to codex, which
+# a fallback or `--vendor` used to do, is a round the vendor refuses. So a
+# round on <vendor> takes, in order:
+#
+#   1. the role's own `model:` (worker.model / reviewer.model), only when
+#      <vendor> is the role's own vendor - the override the role names is
+#      for the engine the role names;
+#   2. `models.<vendor>`, the vendor's own model;
+#   3. the top-level `model:`, only when <vendor> is the top-level vendor
+#      (a config written before `models:` existed);
+#
+# and nothing otherwise: a vendor with no model named runs on its CLI's own
+# default, which the round then records from the transcript. Never a value
+# fm invents.
+#
+#   fm_model_for <role> <vendor> [file] -> that vendor's model, or empty
+#   fm_model <role> [file]              -> the model of the role's own vendor
+fm_model_for() {
+  local role="${1:-}" vendor="${2:-}" f="${3:-config.yaml}" m=''
+  [ -n "$vendor" ] || vendor="$(fm_role_vendor "$role" "$f")"
+  if [ -n "$role" ] && [ "$vendor" = "$(fm_role_vendor "$role" "$f")" ]; then
+    m="$(fm_cfg_in "$role" model "$f")"
+  fi
+  [ -n "$m" ] || m="$(fm_cfg_in models "$vendor" "$f")"
+  if [ -z "$m" ] && [ "$vendor" = "$(fm_role_vendor '' "$f")" ]; then
+    m="$(fm_cfg model "$f")"
+  fi
+  printf '%s\n' "$m"
+}
+fm_model() { fm_model_for "${1:-}" '' "${2:-config.yaml}"; }
+
+# identity.json from a round's start (T-146): the vendor it starts on and
+# the model config.yaml names for that vendor, beside the six T-116 fields,
+# so the board shows them from the first event and not only once the round
+# has ended. fm_run_chain records each fallback vendor the same way.
+#
+#   fm_record_requested <vendor> <model> [run-dir]
+fm_record_requested() {
+  local run="${3:-${FM_RUN_DIR:-}}"
+  [ -n "$run" ] && [ -f "$run/identity.json" ] || return 0
+  python3 "$_fm_code_dir/fm-herdr.py" record-requested "$run" "$1" "$2" >/dev/null 2>&1 || true
+}
+
+# Every field a crew payload's data.identity carries (T-116, T-127, T-146),
+# read fresh from identity.json each time, so every event a round emits -
+# crew_status included - says the same thing about who it is and what it
+# runs on. `null` for a run with no identity.json.
+fm_crew_identity() {
+  local run="${1:-${FM_RUN_DIR:-}}" out=''
+  [ -n "$run" ] && out="$(jq -c '{name,role,project,task,round,attempt,
+    vendor,model_requested,model,cli_version,model_mismatch}' "$run/identity.json" 2>/dev/null)"
+  printf '%s\n' "${out:-null}"
+}
+
+# What a vendor's own transcript says it ran on (T-127, T-146), from the
+# slice of the log this attempt wrote, read in the shape each vendor records:
+#
+#   - claude's result message names no "model"; it names the models the run
+#     used as the keys of `modelUsage` (T-146: the T-127 reading found no
+#     "model" field in it and recorded "unknown"). Of those keys the one the
+#     round asked for wins when it is there; otherwise the one that wrote the
+#     most output tokens, since claude also runs a small model on the side.
+#   - claude's stream init event, `{"type":"system","subtype":"init",
+#     "model":...}`, names it before any result - read when no result came.
+#   - the other vendors' JSON (bin/adapters/_contract.md names each shape)
+#     carries a literal `"model":"..."`; the last one wins, so a later
+#     report - a fallback model the CLI itself chose - wins over an earlier
+#     one. An escaped `\"model\"` inside an answer's text is not one.
+#
+# Empty when the transcript says nothing; the caller records "unknown",
+# never a guess.
+#
+#   fm_vendor_model <log> [offset] [requested]
+fm_vendor_model() {
+  local log="$1" off="${2:-0}" requested="${3:-}"
+  [ -f "$log" ] || return 0
+  tail -c "+$((off + 1))" "$log" 2>/dev/null | python3 -c '
+import json, re, sys
+requested = sys.argv[1]
+usage, said = None, None
+decoder = json.JSONDecoder()
+for line in sys.stdin.read().splitlines():
+    for f in re.finditer(r"\"model\"\s*:\s*\"([^\"]*)\"", line): said = f.group(1)
+    start = line.find("{")
+    while start != -1:
+        try: obj, end = decoder.raw_decode(line, start)
+        except ValueError: start = line.find("{", start + 1); continue
+        if isinstance(obj, dict) and isinstance(obj.get("modelUsage"), dict) and obj["modelUsage"]:
+            usage = obj["modelUsage"]
+        start = line.find("{", end)
+def out_tokens(v):
+    n = v.get("outputTokens") if isinstance(v, dict) else None
+    return n if isinstance(n, (int, float)) else 0
+if usage:
+    keys = list(usage)
+    print(requested if requested in keys else max(keys, key=lambda k: out_tokens(usage[k])))
+elif said: print(said)
+' "$requested" 2>/dev/null
+}
+
+# A name claude accepts, offline (T-127): the CLI itself is the final word
+# (fm_adapter_model_refusal reads its own `unrecognized_model` answer at
+# round time), but `fm-session.sh`'s config check runs before any round, with
+# no CLI to ask, so it checks against this list - the names anthropic
+# documents and their short aliases - and says so of anything else, the way
+# it already says so of a model left unset. Not exhaustive by design: a name
+# added upstream and not yet here is still caught by the CLI at round time.
+_FM_CLAUDE_MODELS="claude-opus-5-5 opus claude-sonnet-5 sonnet claude-haiku-4-5-20251001 haiku claude-fable-5-1 fable"
+# cursor-agent has no offline list of its own - it can only name its models
+# by asking `cursor-agent --list-models`, which needs the operator's own
+# login (design/design.md, "the configured model" section) and so cannot run
+# from this config check, which runs with no CLI session at all. Its own
+# round-time preflight (bin/adapters/cursor-agent.sh,
+# fm_adapter_model_listcheck) asks the CLI directly, once it is authenticated;
+# this offline check stays uncatalogued (2) for it, the same as codex and
+# gemini, which document no listing command at all.
+fm_model_known() {   # fm_model_known <vendor> <model> -> 0 known, 1 not, 2 no catalogue for this vendor
+  local vendor="$1" model="$2" m
+  [ -n "$model" ] || return 1
+  case "$vendor" in
+    claude)
+      for m in $_FM_CLAUDE_MODELS; do [ "$m" = "$model" ] && return 0; done
+      return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+# The CLI's own version string (T-127), read directly from the vendor's
+# binary - never out of the transcript, which may say nothing of it. Missing
+# or silent is "unknown", never a guess; the canary and the crew's records
+# both read it this same way.
+fm_vendor_cli_version() {
+  local cmd="$1" v=''
+  command -v "$cmd" >/dev/null 2>&1 || { printf 'unknown\n'; return 0; }
+  # A bare version probe, never the round: the caller's shell still carries
+  # the round's own FM_ACTOR/FM_ROLE/FM_TASK/FM_RUN_DIR (fm_identity exports
+  # them for the whole process, for emit() and its kin), and hands the CLI a
+  # closed stdin rather than let it read whatever the caller's happens to be
+  # - both would otherwise let a CLI, or a test fixture standing in for one,
+  # mistake this probe for another attempt of the round that just ran.
+  v="$(env -u FM_ACTOR -u FM_ROLE -u FM_TASK -u FM_RUN_DIR "$cmd" --version \
+       < /dev/null 2>/dev/null | head -1 | tr -d '\r')"
+  printf '%s\n' "${v:-unknown}"
 }
 
 # fm_review_run_chain <adapters-dir> <chain>
@@ -899,7 +1103,8 @@ fm_review_run_chain() {
 
 # fm_run_chain <adapters-dir> <chain> <prompt> <tree> <log> [evidence]
 #   Returns the adapter's own exit code, or 2 if every vendor was unavailable.
-#   Sets FM_VENDOR_USED and FM_VENDOR_SKIPPED so the caller can say what it did.
+#   Sets FM_VENDOR_USED and FM_VENDOR_SKIPPED so the caller can say what it did,
+#   and FM_VENDOR_MODEL, the model the last attempt was handed (T-146).
 #
 #   <evidence> is a command that answers "did that run produce work?". An
 #   adapter decides "unavailable" by reading text, and text can lie in both
@@ -938,7 +1143,7 @@ fm_run_chain() {
   # configuration-error path reads the PREVIOUS call's attempt, which is the
   # exact confusion the offsets exist to prevent
   FM_VENDOR_USED=''; FM_VENDOR_SKIPPED=''; FM_VENDOR_MISREAD=''; FM_VENDOR_UNKNOWN=''
-  FM_RUN_OUTDIR=''; FM_RUN_LOG_OFF=0; FM_VENDOR_SPOKE=0
+  FM_RUN_OUTDIR=''; FM_RUN_LOG_OFF=0; FM_VENDOR_SPOKE=0; FM_VENDOR_MODEL=''
   export FM_CHAIN_ATTEMPT=''
   # before anything runs. A typo at the head of the chain used to be found
   # after a real vendor had already worked, and the caller's exit 65 then
@@ -965,6 +1170,17 @@ fm_run_chain() {
       out="$tree"
     fi
     FM_RUN_OUTDIR="$out"
+    # This vendor's own model (T-146), never the head vendor's: a caller
+    # that names its role in FM_MODEL_ROLE has each attempt handed the model
+    # config.yaml names for the vendor it runs, and the run's identity.json
+    # says which vendor and model it is on now. Without FM_MODEL_ROLE,
+    # FM_MODEL is left as the caller set it.
+    if [ -n "${FM_MODEL_ROLE:-}" ]; then
+      FM_MODEL="$(fm_model_for "$FM_MODEL_ROLE" "$v" "${FM_MODEL_CONFIG:-config.yaml}")"
+      export FM_MODEL
+      fm_record_requested "$v" "$FM_MODEL"
+    fi
+    FM_VENDOR_MODEL="${FM_MODEL:-}"
     # Bind every receipt reader to this invocation, including custom fallbacks
     # that never create managed receipts. Keep previous receipts as evidence.
     FM_CHAIN_ATTEMPT="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')" || return 70
@@ -1033,18 +1249,12 @@ fm_git_commit() {  # fm_git_commit <worktree> <message>
   git -C "$dir" -c user.name="$n" -c user.email="$e" commit -q -m "$msg"
 }
 
-# Inside a user Herdr session, direct transport is a protocol violation —
-# firstmate must use stock managed panes, not invent FM_TRANSPORT=direct
-# or session wrappers. Tests that intentionally exercise in-process
-# adapters under a fake HERDR_ENV set FM_ALLOW_DIRECT=1.
-fm_refuse_herdr_bypass() {
-  local who="${1:-fm}"
-  if [ "${HERDR_ENV:-}" = 1 ] && [ "${FM_TRANSPORT:-herdr}" = direct ] && [ "${FM_ALLOW_DIRECT:-}" != 1 ]; then
-    echo "$who: FM_TRANSPORT=direct is refused when HERDR_ENV=1; use stock managed Herdr (unset FM_TRANSPORT)" >&2
-    return 70
-  fi
-  return 0
-}
+# A round needs no terminal host (T-144): it runs headless, as a process group
+# fm supervises, and a host (Herdr, cmux, tmux) is only a window onto it. So no
+# transport is a bypass of anything and nothing is refused here; the function
+# stays because the entrypoints call it. FM_TRANSPORT=direct now only asks for
+# a round with no window.
+fm_refuse_herdr_bypass() { return 0; }
 
 # --- what counts as a script, and what counts as a comment ---------------
 #

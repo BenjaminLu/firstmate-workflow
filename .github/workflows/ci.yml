@@ -1,24 +1,119 @@
 name: ci
-# Runs the very same bin/ci.sh the local gate runs. Do not add steps here that
-# are not in that script, or the two will disagree about what green means.
-# Everything above the run step is installing what the script needs; the
-# browser is cached because downloading it is most of the wall clock.
+# Runs the very same bin/ci.sh the local gate runs, split by --stage and
+# --shard into jobs that run in parallel: the fast checks, the bash suites
+# sharded across N jobs, the bun tests, and the browser tests. Do not add a
+# step here that is not in that script, or the two will disagree about what
+# green means. The final `ci` job is the one required status check; it
+# needs every other job and fails if any of them failed or was skipped, so
+# branch protection and gate 6 read the same thing they always did (T-134).
 on:
   push:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+  actions: read
+
+env:
+  FM_CI_MAX_SECONDS: "600"
+
 jobs:
-  ci:
+  fast:
+    name: fast checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: install shellcheck
         run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+      - name: bin/ci.sh --stage fast
+        run: bash bin/ci.sh --stage fast
+
+  bash:
+    name: bash suites (shard ${{ matrix.shard }}/${{ strategy.job-total }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - name: cache bun's install cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+      - name: install dependencies
+        run: bun install --frozen-lockfile
+      # Best effort: the durations the previous green run on main recorded,
+      # so the shards are balanced by how long each suite actually took, not
+      # only by its size. A first run, a fresh fork, or no permission to read
+      # actions here all leave this file empty or absent, and bin/ci.sh reads
+      # that exactly like any other suite it has no duration for - estimated
+      # in seconds from its size, or by size alone when nothing was recorded
+      # (T-148). Nothing here fails the job.
+      - name: previous suite timings
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/timings
+          run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main \
+            --status success --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
+          if [ -n "$run_id" ]; then
+            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" -p 'suite-timings-*' -D /tmp/timings 2>/dev/null || true
+          fi
+          find /tmp/timings -name 'suite-timings-*.txt' -exec cat {} + > /tmp/timings.txt 2>/dev/null || true
+      - name: "bin/ci.sh --stage bash --shard ${{ matrix.shard }}/4"
+        env:
+          FM_CI_TIMINGS_IN: /tmp/timings.txt
+          FM_CI_TIMINGS_OUT: /tmp/suite-timings-${{ matrix.shard }}.txt
+        run: bash bin/ci.sh --stage bash --shard "${{ matrix.shard }}/4"
+      - name: upload suite timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: suite-timings-${{ matrix.shard }}
+          path: /tmp/suite-timings-${{ matrix.shard }}.txt
+          if-no-files-found: ignore
+
+  bun:
+    name: bun tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: cache bun's install cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+      - name: install dependencies
+        run: bun install --frozen-lockfile
+      - name: bin/ci.sh --stage bun
+        run: bash bin/ci.sh --stage bun
+
+  e2e:
+    name: end-to-end
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: cache bun's install cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
       - name: install dependencies
         run: bun install --frozen-lockfile
       - name: cache the browser
@@ -35,7 +130,25 @@ jobs:
       - name: install the browser
         if: steps.browser.outputs.cache-hit != 'true'
         run: bunx playwright install chromium
-      - name: bin/ci.sh
-        env:
-          FM_CI_MAX_SECONDS: "600"
-        run: bash bin/ci.sh
+      - name: bin/ci.sh --stage e2e
+        run: bash bin/ci.sh --stage e2e
+
+  # The one required status check (gate 6, branch protection): it needs
+  # every job above and fails if any of them failed or was skipped, so a
+  # required check that stays named `ci` still means every stage passed.
+  ci:
+    name: ci
+    needs: [fast, bash, bun, e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: every stage passed
+        run: |
+          echo "fast=${{ needs.fast.result }} bash=${{ needs.bash.result }} bun=${{ needs.bun.result }} e2e=${{ needs.e2e.result }}"
+          results="${{ needs.fast.result }} ${{ needs.bash.result }} ${{ needs.bun.result }} ${{ needs.e2e.result }}"
+          for r in $results; do
+            if [ "$r" != "success" ]; then
+              echo "ci: a required job did not succeed" >&2
+              exit 1
+            fi
+          done

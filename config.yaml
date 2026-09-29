@@ -1,14 +1,20 @@
 # firstmate-workflow
 
-vendor: claude          # every role uses this agent unless overridden below
-model:  opus-5
+vendor: codex           # every role uses this agent unless overridden below;
+                        # the captain's choice on 2026-09-29: codex workers
+models:                 # each vendor's own model name (T-146), applied with
+  claude: claude-opus-5-5   # the adapter's own flag, never guessed from a run;
+  codex:  gpt-6-astra   # a round on any vendor, a fallback's included, gets
+                        # that vendor's. A vendor named here with no model
+                        # runs on its CLI's default, which the run records.
 reviewer:               # the reviewer's engine is the captain's choice
-  vendor: claude        # chosen 2026-09-24: the worker's vendor and model,
-  model:  opus-5        # so review adds no second vendor dependency
+  vendor: claude        # chosen 2026-09-24, kept 2026-09-29: claude, on
+                        # models.claude above
   mode:   run           # diff: the reviewer reads the diff; run: it also runs
                         # the tests in a fresh checkout of the pull request
 # worker:               # the same override exists for the worker; without it
-#   vendor: codex       # the worker uses the top-level vendor above
+#   vendor: codex       # the worker uses the top-level vendor above. A role's
+#   model:  o1          # model: overrides models.<vendor> for its own vendor only
 
 policy:                 # what every crew round may do, whichever vendor runs it
   worker:               # (T-105, T-117; design section 13.1). Each adapter
@@ -25,6 +31,9 @@ policy:                 # what every crew round may do, whichever vendor runs it
                         # never a key here.
 
 concurrency: 3          # workers in flight at once
+# host: herdr           # none|herdr|cmux|tmux: a terminal host opens a labelled
+#                       # window that follows each round's log. Rounds run
+#                       # headless either way; unset, the host is detected.
 # rosters:              # the crew is drawn at random once per installation,
 #   workers:            # 24 workers and 24 reviewers, into state/crew/; see
 #     - mira            # bin/fm.sh roster. A list here pins that role's names

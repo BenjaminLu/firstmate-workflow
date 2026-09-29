@@ -44,6 +44,7 @@ fixture() {                     # a repo with a remote, a task, and the real scr
   cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-worker.sh" \
      "$ROOT/bin/fm-checkpoint.sh" "$ROOT/bin/fm-guard.sh" "$ROOT/bin/fm-herdr.py" bin/
   cp -r "$ROOT/bin/adapters" bin/
+  cp -R "$ROOT/bin/lib" bin/   # the lifeline a round's runner holds (T-151)
   cp "$ROOT/skills/worker/SKILL.md" skills/worker/
   printf 'vendor: mock\nfallback:\n  - mock\n' > config.yaml
   jq -n --arg task "$task" '{id:$task,title:"a mock task",scope:["src/**"],acceptance:["it exists"]}' \
@@ -116,6 +117,124 @@ assert_eq "0" "$(jq -c 'select(.type=="crew_status" and (.data.progress!=null))'
 
 # the prompt carries the task and the skill, and is not left lying around
 assert_fail "test -f '$r/state/worktrees/T-Z/.fm-prompt.md'" "the prompt is cleaned up"
+
+# T-127: the crew runs on the model config.yaml names, and the round
+# records vendor, model and cli_version as separate fields, read from the
+# run itself. FM_MOCK_MODEL stands in for a real vendor's transcript
+# reporting the model it actually ran on (bin/adapters/mock.sh).
+d3="$(fixture)"; r3="$d3/repo"; GH3="$(ghstub "$d3")"
+printf 'model: mock-model-a\n' >> "$r3/config.yaml"
+( cd "$r3" && FM_ROOT="$r3" FM_GH="$GH3" FM_MOCK_MODEL="mock-model-b" bin/fm-worker.sh --task T-Z --name worker-m >/dev/null 2>&1 )
+assert_eq "0" "$?" "a round with a configured model still exits 0"
+log3="$r3/state/events.jsonl"
+m3actor="$(jq -r 'select(.type=="dispatched")|.actor' "$log3")"
+# the model is only known once the round's own CLI has run, so only the
+# payloads from that point on (commit_pushed onward) carry it; dispatched,
+# emitted before any adapter runs, correctly cannot yet
+assert_eq '["mock","mock-model-a","mock-model-b","unknown"]' \
+  "$(jq -c 'select(.type=="commit_pushed")|.data.identity|[.vendor,.model_requested,.model,.cli_version]' "$log3" | sort -u)" \
+  "the round's crew payloads carry vendor, model_requested, model and cli_version as separate fields"
+assert_eq '["mock","mock-model-a","mock-model-b","unknown"]' \
+  "$(jq -c '[.vendor,.model_requested,.model,.cli_version]' "$r3/state/runs/$m3actor/identity.json")" \
+  "and identity.json records the same four fields"
+assert_eq "true" "$(jq -r '.model_mismatch' "$r3/state/runs/$m3actor/identity.json")" \
+  "flagged as a mismatch since the run reported a different model than config.yaml asked for"
+assert_contains "$(jq -r .type < "$log3" | tr '\n' ' ')" "model_mismatch" \
+  "the run emits model_mismatch when they differ"
+mrow3="$(jq -c 'select(.type=="model_mismatch")' "$log3")"
+assert_eq "mock-model-a" "$(jq -r '.data.model_requested' <<<"$mrow3")" "naming what was requested"
+assert_eq "mock-model-b" "$(jq -r '.data.model' <<<"$mrow3")" "and what it actually ran on"
+assert_ne "" "$(jq -r '.summary.en' <<<"$mrow3")" "with an English summary"
+assert_ne "" "$(jq -r '.summary."zh-TW"' <<<"$mrow3")" "and a zh-TW one"
+
+# no mismatch when the run reports the model it was asked for
+d4="$(fixture)"; r4="$d4/repo"; GH4="$(ghstub "$d4")"
+printf 'model: mock-model-a\n' >> "$r4/config.yaml"
+( cd "$r4" && FM_ROOT="$r4" FM_GH="$GH4" FM_MOCK_MODEL="mock-model-a" bin/fm-worker.sh --task T-Z --name worker-n >/dev/null 2>&1 )
+log4="$r4/state/events.jsonl"
+m4actor="$(jq -r 'select(.type=="dispatched")|.actor' "$log4")"
+assert_eq "false" "$(jq -r '.model_mismatch' "$r4/state/runs/$m4actor/identity.json")" \
+  "and no mismatch when the run reports the model it was asked for"
+assert_eq "0" "$(jq -c 'select(.type=="model_mismatch")' "$log4" | wc -l | tr -d ' ')" \
+  "so no model_mismatch event either"
+
+# no model configured at all: the round runs on whatever the CLI defaults
+# to, reported as unknown, never guessed - and the fields still ride the
+# run, an old-run's-worth of them, so a run with none configured still
+# renders the same shape the board reads
+d4b="$(fixture)"; r4b="$d4b/repo"; GH4b="$(ghstub "$d4b")"
+( cd "$r4b" && FM_ROOT="$r4b" FM_GH="$GH4b" bin/fm-worker.sh --task T-Z --name worker-o >/dev/null 2>&1 )
+log4b="$r4b/state/events.jsonl"
+m4bactor="$(jq -r 'select(.type=="dispatched")|.actor' "$log4b")"
+assert_eq '["mock","","unknown","unknown"]' \
+  "$(jq -c '[.vendor,.model_requested,.model,.cli_version]' "$r4b/state/runs/$m4bactor/identity.json")" \
+  "with no model configured, the round still records vendor and cli_version; model is unknown, never guessed"
+assert_eq "false" "$(jq -r '.model_mismatch' "$r4b/state/runs/$m4bactor/identity.json")" \
+  "asking for nothing and getting nothing is never a mismatch"
+
+# T-146: a model is named per vendor. A round that falls back to another
+# vendor is handed that vendor's own model, never the first one's, and every
+# crew event it emits - crew_status included - carries the vendor and model
+# from the start. `down` stands in for a vendor that is unavailable; mock
+# then takes the round.
+dv5="$(fixture)"; rv5="$dv5/repo"; GHv5="$(ghstub "$dv5")"
+cat > "$rv5/config.yaml" <<'Y'
+vendor: down
+models:
+  down: model-down
+  mock: model-mock
+fallback:
+  - mock
+Y
+cat > "$rv5/bin/adapters/down.sh" <<D
+#!/usr/bin/env bash
+printf 'down=%s\n' "\${FM_MODEL-unset}" >> "$dv5/handed"
+exit 2
+D
+chmod +x "$rv5/bin/adapters/down.sh"
+( cd "$rv5" && FM_ROOT="$rv5" FM_GH="$GHv5" FM_MOCK_MODEL="model-mock" bin/fm-worker.sh --task T-Z --name worker-p >/dev/null 2>&1 )
+logv5="$rv5/state/events.jsonl"
+mv5actor="$(jq -r 'select(.type=="dispatched")|.actor' "$logv5")"
+assert_eq "down=model-down" "$(cat "$dv5/handed" 2>/dev/null)" "the vendor the round starts on is handed its own model"
+assert_eq '["mock","model-mock","model-mock",false]' \
+  "$(jq -c '[.vendor,.model_requested,.model,.model_mismatch]' "$rv5/state/runs/$mv5actor/identity.json")" \
+  "the fallback vendor is handed its own model, not the first vendor's, and runs on it: no mismatch"
+assert_eq "0" "$(jq -c 'select(.type=="model_mismatch")' "$logv5" | wc -l | tr -d ' ')" \
+  "so no model_mismatch event"
+assert_eq '["down","model-down"]' \
+  "$(jq -c 'select(.type=="dispatched")|.data.identity|[.vendor,.model_requested]' "$logv5")" \
+  "the round's first event names the vendor it starts on and that vendor's model"
+assert_eq "0" "$(jq -c 'select(.actor==$a and .type=="crew_status" and (.data.identity.vendor==null))' \
+  --arg a "$mv5actor" "$logv5" | wc -l | tr -d ' ')" \
+  "no crew_status of the round goes without the vendor"
+assert_eq '["mock","model-mock","model-mock"]' \
+  "$(jq -c 'select(.type=="commit_pushed")|.data.identity|[.vendor,.model_requested,.model]' "$logv5" | sort -u)" \
+  "and once the round has run, every commit_pushed carries the vendor that ran and what it reported (one line each, all the same)"
+# A regression guard, not fail-first: the round's last crew_status already
+# carried the vendor and model without T-146. "no crew_status of the round
+# goes without the vendor" above is the fail-first one for this property.
+assert_eq '["mock","model-mock"]' \
+  "$(jq -sc --arg a "$mv5actor" '[.[]|select(.actor==$a and .type=="crew_status")]|last|.data.identity|[.vendor,.model]' "$logv5")" \
+  "including its last crew_status, which the board reads the crewman from"
+
+# --vendor sends the round to a vendor config.yaml does not start on; it
+# gets that vendor's model
+dv6="$(fixture)"; rv6="$dv6/repo"; GHv6="$(ghstub "$dv6")"
+cp "$rv5/config.yaml" "$rv6/config.yaml"
+( cd "$rv6" && FM_ROOT="$rv6" FM_GH="$GHv6" FM_MOCK_MODEL="model-mock" bin/fm-worker.sh --task T-Z --vendor mock --name worker-q >/dev/null 2>&1 )
+mv6actor="$(jq -r 'select(.type=="dispatched")|.actor' "$rv6/state/events.jsonl")"
+assert_eq '["mock","model-mock"]' \
+  "$(jq -c '[.vendor,.model_requested]' "$rv6/state/runs/$mv6actor/identity.json")" \
+  "--vendor's round is handed that vendor's own model"
+# a vendor with no model named runs on its CLI's default, and records it
+dv7="$(fixture)"; rv7="$dv7/repo"; GHv7="$(ghstub "$dv7")"
+printf 'vendor: mock\nmodels:\n  down: model-down\n' > "$rv7/config.yaml"
+( cd "$rv7" && FM_ROOT="$rv7" FM_GH="$GHv7" FM_MOCK_MODEL="mock-cli-default" bin/fm-worker.sh --task T-Z --name worker-r >/dev/null 2>&1 )
+mv7actor="$(jq -r 'select(.type=="dispatched")|.actor' "$rv7/state/events.jsonl")"
+assert_eq '["mock","","mock-cli-default",false]' \
+  "$(jq -c '[.vendor,.model_requested,.model,.model_mismatch]' "$rv7/state/runs/$mv7actor/identity.json")" \
+  "a vendor with no model named asks for none, and records the model its CLI defaulted to"
+rm -rf "$dv5" "$dv6" "$dv7"
 
 # an adapter that cannot reach its vendor falls through to the next one
 d2="$(fixture)"; r2="$d2/repo"; GH2="$(ghstub "$d2")"
@@ -3078,7 +3197,9 @@ cat > "$rKill/bin/adapters/mock.sh" <<'M'
 [ "$1" = "run" ] || exit 64
 : > "${FM_STARTED:?}"
 echo $$ > "${FM_ADAPTER_PID:?}"
-sleep 60
+# one process, so the kill below ends all of it: a bash that ran sleep as
+# its child would leave the sleep behind (T-151)
+exec sleep 60
 M
 chmod +x "$rKill/bin/adapters/mock.sh"
 startedKill="$dKill/started"; adapterpidKill="$dKill/adapter.pid"; mirdirKill="$rKill/state/mirrors/self/T-KILL"
@@ -3097,7 +3218,13 @@ g2="$(mirror_gen_latest "$mirdirKill")"
 g1plus1=$(( g1 + 1 ))
 assert_ok "[ \"$g2\" -le \"$g1plus1\" ]" \
   "T-KILL: the watcher stops within its own poll tick once its parent is gone (killed alone, no trap runs), not left running as an orphan"
-kill -KILL "$(cat "$adapterpidKill" 2>/dev/null)" 2>/dev/null
+# the adapter outlived the round on purpose here; the block ends it and
+# waits until it is gone, so nothing it started runs past the suite (T-151)
+apKill="$(cat "$adapterpidKill" 2>/dev/null)"
+if [ -n "$apKill" ]; then
+  kill -KILL "$apKill" 2>/dev/null
+  for _ in $(seq 1 50); do kill -0 "$apKill" 2>/dev/null || break; sleep 0.1; done
+fi
 rm -rf "$dKill"
 
 finish

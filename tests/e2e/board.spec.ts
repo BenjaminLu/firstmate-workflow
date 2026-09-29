@@ -1632,8 +1632,9 @@ test("a crewman turns under the pointer, and the ahoy fires", async ({ page }) =
 test("nothing here can reach a model", async () => {
   // structural, not a promise: the fixture root has no adapters in it, so
   // there is nothing for the board to shell out to even if it tried. The
-  // only scripts it may spawn are the merge recorder and the registry
-  // reader, and they are the whole contents of its bin/.
+  // only scripts it may spawn are the merge recorder, the registry reader
+  // and the lifeline keeper the merge runs under, and they are the whole
+  // contents of its bin/.
   //
   // fm-config.sh and the fm-herdr.py it imports (T-069) are there so the
   // board can read the project registry's `github`. The only path from them
@@ -1641,11 +1642,18 @@ test("nothing here can reach a model", async () => {
   // the board calls nothing from fm-config.sh but the registry readers
   // (fm_projects since T-054, to know every project's repository and tasks)
   // and fm_tasks, which only reads task directories (T-090).
+  //
+  // fm_lifeline is not an fm-config.sh function: it is server.ts's path to
+  // bin/lib/fm_lifeline.py, the lifeline module the merge helper runs under
+  // (T-151). It starts and rings only what fm names and reaches no model; the
+  // line below pins bin/lib to exactly the two lifeline files.
   const { readdirSync, readFileSync } = await import("node:fs");
   expect(existsSync(join(board.root, "bin/adapters"))).toBe(false);
-  expect(readdirSync(join(board.root, "bin")).sort()).toEqual(["fm-config.sh", "fm-decide.sh", "fm-diagram.sh", "fm-emit.sh", "fm-herdr.py", "fm-merge.sh", "watch-decisions.ts"]);
+  expect(readdirSync(join(board.root, "bin")).sort()).toEqual(["fm-config.sh", "fm-decide.sh", "fm-diagram.sh", "fm-emit.sh", "fm-herdr.py", "fm-merge.sh", "lib", "watch-decisions.ts"]);
+  // lib/ is the lifeline (T-151): the keeper a merge runs under, nothing that calls a model
+  expect(readdirSync(join(board.root, "bin/lib")).sort()).toEqual(["fm-lifeline.sh", "fm_lifeline.py"]);
   const called = new Set(readFileSync(join(board.root, "board/server.ts"), "utf8").match(/\bfm_[a-z_]+/g) ?? []);
-  expect([...called].sort()).toEqual(["fm_project_get", "fm_project_resolve", "fm_projects", "fm_tasks"]);
+  expect([...called].sort()).toEqual(["fm_lifeline", "fm_project_get", "fm_project_resolve", "fm_projects", "fm_tasks"]);
 });
 
 test("no cards retains one idle captain aboard", async ({ page }) => {
@@ -1728,6 +1736,71 @@ test("a crewman below the top deck still names the task he is on", async ({ page
     const jobs = await page.locator(".roster .jb").allInnerTexts();
     expect(jobs.filter((j) => /^T-\d+/.test(j)).length).toBe(9);
   } finally { stopBoard(many); }
+});
+
+test("T-127: vendor, model and CLI version are separate fields, read from the run itself", async ({ page }) => {
+  test.setTimeout(60_000);
+  const root = makeRoot(["working", "review"], false);
+  const spec = { tasks: readTasks(root) };
+  // a mismatch: the round ran on a different model than config.yaml asked for
+  emitFixture(root, "worker-1", spec.tasks[0].id, "dispatched", "on it", "接下", {
+    role: "worker", identity: { name: "worker-1", vendor: "claude",
+      model_requested: "claude-opus-5-5", model: "claude-sonnet-5",
+      cli_version: "2.1.0", model_mismatch: true } });
+  // no mismatch, and a different vendor: the engine badge counts both
+  emitFixture(root, "reviewer-1", spec.tasks[1].id, "review_opened", "round 1", "第 1 輪", {
+    role: "reviewer", identity: { name: "reviewer-1", vendor: "codex",
+      model_requested: "o1", model: "o1", cli_version: "0.9.0", model_mismatch: false } });
+  const b = await startBoard(root);
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    await expect(page.locator(".scene .pivot").first()).toBeVisible();
+
+    // the header's engine badge shows the vendors actually running now
+    await expect(page.locator("#engine")).toContainText("claude");
+    await expect(page.locator("#engine")).toContainText("codex");
+
+    // the roster's Vendor and Model columns, sortable like the others
+    await expect(page.locator('.roster [data-sort="vendor"]')).toHaveCount(1);
+    await expect(page.locator('.roster [data-sort="model"]')).toHaveCount(1);
+    const w1 = page.locator('.roster [data-roster="worker-1"]');
+    await expect(w1.locator(".rv")).toHaveText("claude");
+    await expect(w1.locator(".rm")).toHaveClass(/\bwarn\b/);
+    await expect(w1.locator(".rm")).toContainText("claude-opus-5-5");
+    await expect(w1.locator(".rm")).toContainText("claude-sonnet-5");
+    const r1 = page.locator('.roster [data-roster="reviewer-1"]');
+    await expect(r1.locator(".rv")).toHaveText("codex");
+    await expect(r1.locator(".rm")).not.toHaveClass(/\bwarn\b/);
+    await expect(r1.locator(".rm")).toHaveText("o1");
+
+    // the detail card gains Vendor, Model and CLI rows
+    const card = page.locator('[data-bubble="worker-1"] .crewcard');
+    await expect(card.locator(".cvendor")).toHaveText("claude");
+    await expect(card.locator(".cmodel")).toHaveClass(/\bwarn\b/);
+    await expect(card.locator(".ccli")).toHaveText("2.1.0");
+
+    // the name tag stays quiet: no model string anywhere on it
+    const tag = page.locator('[data-bubble="worker-1"] .who');
+    await expect(tag).not.toContainText("claude-sonnet-5");
+    await expect(tag).not.toContainText("claude-opus-5-5");
+  } finally { stopBoard(b); }
+});
+
+test("T-127: an old run without vendor or model still renders", async ({ page }) => {
+  test.setTimeout(60_000);
+  const root = makeRoot(["working"], false);
+  const spec = { tasks: readTasks(root) };
+  emitFixture(root, "worker-1", spec.tasks[0].id, "dispatched", "on it", "接下", { role: "worker" });
+  const b = await startBoard(root);
+  try {
+    await page.goto(`${b.url}/?lang=en`);
+    await expect(page.locator(".scene .pivot").first()).toBeVisible();
+    const card = page.locator('[data-bubble="worker-1"] .crewcard');
+    await expect(card.locator(".cvendor")).toHaveText(EN.crewUnknown);
+    await expect(card.locator(".cmodel")).toHaveText(EN.crewUnknown);
+    await expect(card.locator(".cmodel")).not.toHaveClass(/\bwarn\b/);
+    await expect(card.locator(".ccli")).toHaveText(EN.crewUnknown);
+  } finally { stopBoard(b); }
 });
 
 test("the ship follows the crew, not the backlog", async ({ page }) => {
@@ -1944,6 +2017,24 @@ test('T-118: an answered card leaves the captain lane, and a park chosen on a ca
   } finally {stopBoard(b);}
 });
 
+// A stand-in for a round's own script: a bash that waits on a sleep. On
+// SIGTERM it ends its sleep and then dies of the same signal, so the stop
+// path is seen as a SIGTERM; and the test's finally ends both, so no sleep
+// outlives the test, which bin/ci.sh would turn red (T-151).
+function stubWorker(root: string) {
+  const child = join(root, "stub/child.pid");
+  writeFileSync(join(root, "stub/fm-worker.sh"), "#!/usr/bin/env bash\n" +
+    "trap 'kill $! 2>/dev/null; trap - TERM; kill -TERM $$' TERM\n" +
+    `sleep 60 &\necho $! > '${child}'\nwait\n`);
+  const fake = spawn("bash", [join(root, "stub/fm-worker.sh")], {stdio: "ignore"});
+  const ended = new Promise<string|null>(r => fake.on("exit", (_code, signal) => r(signal)));
+  const stop = () => {
+    fake.kill("SIGKILL");
+    try { process.kill(Number(readFileSync(child, "utf8")), "SIGKILL"); } catch { /* gone, or never started */ }
+  };
+  return {fake, ended, stop};
+}
+
 test('T-118: park and drop a working card only after confirming, which stops its crew and leaves its pull request open', async ({page}) => {
   const root = makeRoot([], false);
   writeTasks(root, [{id:'T-051',title:'At work, with a pull request',depends_on:[]}]);
@@ -1952,9 +2043,7 @@ test('T-118: park and drop a working card only after confirming, which stops its
   // a stand-in for the round's own script, published where fm-worker.sh
   // publishes its pid: the board's stop path signals it
   mkdirSync(join(root,'stub'),{recursive:true}); mkdirSync(join(root,'state/worktrees'),{recursive:true});
-  writeFileSync(join(root,'stub/fm-worker.sh'),'#!/usr/bin/env bash\nsleep 60 &\nwait\n');
-  const fake = spawn('bash',[join(root,'stub/fm-worker.sh')],{stdio:'ignore'});
-  const ended = new Promise<string|null>(r => fake.on('exit',(_code,signal) => r(signal)));
+  const {fake, ended, stop: stopFake} = stubWorker(root);
   writeFileSync(join(root,'state/worktrees/T-051.pid'), `${fake.pid}\n`);
   const b = await startBoard(root);
   const card = page.locator('#lanes [data-task="T-051"]');
@@ -1997,7 +2086,7 @@ test('T-118: park and drop a working card only after confirming, which stops its
     await expect(card).toHaveCount(0);
     expect(t118Events(root).pop()).toMatchObject({type:'closed',actor:'captain',task:'T-051'});
     expect(t118Events(root).some(e => e.type === 'merged')).toBe(false);
-  } finally { fake.kill('SIGKILL'); stopBoard(b); }
+  } finally { stopFake(); stopBoard(b); }
 });
 
 test('T-118: a card in the working lane is parked and dropped only after confirming, and its crew is stopped', async ({page}) => {
@@ -2005,9 +2094,7 @@ test('T-118: a card in the working lane is parked and dropped only after confirm
   writeTasks(root, [{id:'T-052',title:'At work, no pull request yet',depends_on:[]}]);
   emitFixture(root,'worker-52','T-052','dispatched','On it','接下',{role:'worker'});
   mkdirSync(join(root,'stub'),{recursive:true}); mkdirSync(join(root,'state/worktrees'),{recursive:true});
-  writeFileSync(join(root,'stub/fm-worker.sh'),'#!/usr/bin/env bash\nsleep 60 &\nwait\n');
-  const fake = spawn('bash',[join(root,'stub/fm-worker.sh')],{stdio:'ignore'});
-  const ended = new Promise<string|null>(r => fake.on('exit',(_code,signal) => r(signal)));
+  const {fake, ended, stop: stopFake} = stubWorker(root);
   writeFileSync(join(root,'state/worktrees/T-052.pid'), `${fake.pid}\n`);
   const b = await startBoard(root);
   const working = page.locator('[data-lane="working"] [data-task="T-052"]');
@@ -2039,7 +2126,7 @@ test('T-118: a card in the working lane is parked and dropped only after confirm
     await page.locator('[data-confirm-drop="T-052"]').click();
     await expect(working).toHaveCount(0);
     expect(t118Events(root).pop()).toMatchObject({type:'closed',actor:'captain',task:'T-052'});
-  } finally { fake.kill('SIGKILL'); stopBoard(b); }
+  } finally { stopFake(); stopBoard(b); }
 });
 
 test('T-118: a task parked while its card is pending stays in the captain lane, says so, and offers unpark', async ({page}) => {

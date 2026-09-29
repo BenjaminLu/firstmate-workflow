@@ -6,7 +6,7 @@
 // No build step and no framework: the page is a file, the stream is SSE, and
 // the state endpoint is derived from events.jsonl and design/tasks/ so the
 // board has no opinion the log does not already hold.
-import { closeSync, constants, existsSync, fchmodSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, constants, existsSync, fchmodSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { homedir } from "node:os";
@@ -66,6 +66,19 @@ type Crew = {
   name?: string | null;
   round?: number | null;
   attempt?: number | null;
+  // T-127: what the round actually ran on, read from the run itself - never
+  // config.yaml's guess. vendor is the adapter; model is what the vendor's
+  // own CLI reported (null until the round has run); model_requested is
+  // config's; cli_version is the CLI's own version string. A run recorded
+  // before T-127 carries none of them, which is unknown, not a guess.
+  // T-146: until the vendor reports, model is model_requested, and
+  // model_source says which it is - null when neither is known.
+  vendor?: string | null;
+  model?: string | null;
+  model_source?: "reported" | "requested" | null;
+  model_requested?: string | null;
+  cli_version?: string | null;
+  model_mismatch?: boolean;
   // Bounded only: done/total with a real denominator. Never a bare percent.
   progress?: { done: number; total: number } | null;
 };
@@ -73,13 +86,48 @@ type Crew = {
 type CrewChip = { id: string; name: string; role: Crew["role"]; round: number | null; attempt: number | null };
 // What a run said about itself: the fields fm-worker.sh and fm-review.sh
 // send as data.identity. Anything else is not an identity.
-type Identity = { name: string | null; project: string | null; round: number | null; attempt: number | null };
+type Identity = {
+  name: string | null; project: string | null; round: number | null; attempt: number | null;
+  // T-127: vendor and model_requested from the round's start (T-146), model,
+  // cli_version and model_mismatch once it has run; a run recorded before
+  // T-127 has none. model_mismatch is null when the event does not say.
+  vendor: string | null; model: string | null; model_requested: string | null;
+  cli_version: string | null; model_mismatch: boolean | null;
+};
 const identityOf = (v: unknown): Identity | null => {
   if (!v || typeof v !== "object" || Array.isArray(v)) return null;
   const o = v as Record<string, unknown>;
   const text = (x: unknown) => typeof x === "string" && x.trim() ? x : null;
+  // what the run wrote when the vendor said nothing: not a value to show
+  const known = (x: unknown) => text(x) === "unknown" ? null : text(x);
   const count = (x: unknown) => typeof x === "number" && Number.isInteger(x) && x > 0 ? x : null;
-  return { name: text(o.name), project: text(o.project), round: count(o.round), attempt: count(o.attempt) };
+  return {
+    name: text(o.name), project: text(o.project), round: count(o.round), attempt: count(o.attempt),
+    // vendor as written: record-model's "unknown" (every vendor in the
+    // chain unavailable) is a vendor of its own, so mergeIdentity sees the
+    // change and the card never keeps showing the last vendor tried
+    vendor: text(o.vendor), model: known(o.model), model_requested: text(o.model_requested),
+    cli_version: known(o.cli_version),
+    model_mismatch: typeof o.model_mismatch === "boolean" ? o.model_mismatch : null,
+  };
+};
+// T-146: a crewman's identity is every event's, field by field, under two
+// rules. Within one vendor, an event that lacks a field - a crew_status sent
+// with T-116's six only, on 2026-09-29 every crewman's vendor, model and CLI
+// - keeps the value an earlier event gave, never overwrites it with nothing.
+// An event that names another vendor - a fallback starting, or "unknown"
+// when every vendor was unavailable - resets every field that belongs to a
+// vendor to what that event says, null included: one vendor is never shown
+// with another's model, requested model, CLI version or mismatch.
+const VENDOR_BOUND: readonly (keyof Identity)[] = ["model", "model_requested", "cli_version", "model_mismatch"];
+const mergeIdentity = (was: Identity | undefined, said: Identity): Identity => {
+  if (!was) return said;
+  const out = { ...was };
+  const moved = said.vendor !== null && said.vendor !== was.vendor;
+  for (const k of Object.keys(said) as (keyof Identity)[]) {
+    if (said[k] !== null || (moved && VENDOR_BOUND.includes(k))) (out as Record<string, unknown>)[k] = said[k];
+  }
+  return out;
 };
 // The one reading of an actor, for runs recorded before T-116 only:
 // <role>-<name>-<task slug>-r<n>[<attempt mark>], as bin/fm-herdr.py's ACTOR
@@ -740,7 +788,7 @@ const state = (only: string | null = null) => {
     }
     if (typeof data.crew_name === 'string') names.set(actor, data.crew_name);
     const said = identityOf(data.identity);
-    if (said) identities.set(actor, said);
+    if (said) identities.set(actor, mergeIdentity(identities.get(actor), said));
     const nextProgress = bounded(data.progress);
     if (nextProgress) progress.set(actor, nextProgress);
     if (e.type === 'dispatched' || data.role) roles.set(actor, roleOf(actor,e));
@@ -839,6 +887,17 @@ const state = (only: string | null = null) => {
       name: who?.name ?? (named && named !== actor ? named : null) ?? legacyName(actor),
       round: who?.round ?? null,
       attempt: who?.attempt ?? null,
+      // T-127: read from the run itself, never guessed; always unknown for
+      // a run recorded before this. A live round shows the model it asked
+      // for until the vendor reports the one it runs on (T-146).
+      // "unknown" is kept above only so a change to it is seen; it is sent
+      // as null, which the card, the roster and the tag show as unknown
+      vendor: who?.vendor && who.vendor !== "unknown" ? who.vendor : null,
+      model: who?.model ?? who?.model_requested ?? null,
+      model_source: who?.model ? "reported" : who?.model_requested ? "requested" : null,
+      model_requested: who?.model_requested ?? null,
+      cli_version: who?.cli_version ?? null,
+      model_mismatch: who?.model_mismatch ?? false,
       progress: progress.get(actor) ?? null,
       // Replay/event activity wins over static task.activity; never scalar title.
       activity: activity.get(actor) || planned(e) || null,
@@ -916,8 +975,22 @@ const state = (only: string | null = null) => {
     // the default project's merges keep the identity they always had
     : projectOf(e) === def ? `merge:${e.pr ?? e.task ?? JSON.stringify(e)}`
     : `merge:${projectOf(e)}:${e.pr ?? e.task ?? JSON.stringify(e)}`;
+  // T-127: the header's engine badge shows the vendors actually running now
+  // (every project's, the way the config default it falls back to is), null
+  // with no crew aboard whose vendor is known - the badge then falls back
+  // to config.yaml's default, which is what engine() above already reads.
+  const vendorCounts = new Map<string, number>();
+  for (const c of crew) {
+    if (c.role === "firstmate" || !c.vendor) continue;
+    vendorCounts.set(c.vendor, (vendorCounts.get(c.vendor) ?? 0) + 1);
+  }
+  const engineLive = vendorCounts.size
+    ? [...vendorCounts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .map(([vendor, count]) => ({ vendor, count }))
+    : null;
   const out = {
     engine: engine(),
+    engineLive,
     lanes: LANES,
     projects,
     // what a record naming no project belongs to, and the filter in force
@@ -1038,11 +1111,46 @@ const pending = () => {
     .map((x) => x.card);
 };
 
+// --- Owners and wakes (T-151) ----------------------------------------------
+// Nothing the board starts outlives its owner. A merge the captain clicked
+// and a round sent back must outlive a board restart, so they belong to the
+// session the board belongs to: FM_SESSION_PID, which the keeper that
+// started the board exports. A board started by hand has no session, and
+// owns them itself. Either way they run under bin/lib/fm_lifeline.py's
+// keeper, which the kernel tells when the owner exits; the board never
+// detaches anything itself, and never starts one without an owner.
+const LIFELINE = join(ROOT, "bin/lib/fm_lifeline.py");
+const OWNER = /^[1-9][0-9]{0,9}$/.test(process.env.FM_SESSION_PID ?? "") ? String(process.env.FM_SESSION_PID) : String(process.pid);
+const startOwned = (name: string, argv: string[], fd: number, env: Record<string, string | undefined>) => {
+  if (!existsSync(LIFELINE)) throw new Error("no bin/lib/fm_lifeline.py: nothing is started without an owner");
+  return spawn("python3", [LIFELINE, "keep", "--pid", OWNER, "--name", name, "--", ...argv],
+    { stdio: ["ignore", fd, fd], env });
+};
+// Whoever writes a decision delivers the wake: the item goes on the wake
+// queue, which every session start and status reads again, and then every
+// waiter's own doorbell under state/session/wake.d is rung, by the one
+// implementation fm-decide.sh --await and fm-session.sh wait register
+// with (bin/lib/fm_lifeline.py ring). Each waiter has a bell of its own,
+// so none takes another's wake; a bell nobody holds is removed, and with no
+// waiter the queue alone carries it. Nothing ever polls state/decisions.
+const WAKE_QUEUE = join(ROOT, "state/session/wake.jsonl");
+const pushWake = (id: string, reason: "answered" | "merge_settled", decision: unknown) => {
+  try {
+    mkdirSync(join(ROOT, "state/session"), { recursive: true });
+    appendFileSync(WAKE_QUEUE, JSON.stringify({ id, reason, decision, woken: Date.now() / 1000 }) + "\n");
+  } catch (e) { console.error(`wake queue not written for ${id}: ${(e as Error).message}`); }
+  try {
+    // ringing never blocks: every bell is opened O_NONBLOCK
+    const r = Bun.spawnSync(["python3", LIFELINE, "ring", ROOT, id], { stdin: "ignore", env: childEnv() });
+    if (r.exitCode !== 0) console.error(`wake not rung for ${id}: ${new TextDecoder().decode(r.stderr).trim()}`);
+  } catch (e) { console.error(`wake not rung for ${id}: ${(e as Error).message}; the queue carries it`); }
+};
+
 // --- Merges run after the answer, not inside it (design sections 5.2, 15.10) ---
 // One merge at a time within a project, any number across projects. The
 // board is the only writer of a decision record's `merge`: it publishes
-// "running", starts bin/fm-merge.sh detached under the project's merge
-// marker, and rewrites the record to "merged" or "failed" when the helper
+// "running", starts bin/fm-merge.sh, owned by the session, under the
+// project's merge marker, and rewrites the record to "merged" or "failed" when the helper
 // exits. A helper that dies without a word - or a board that restarts while
 // one runs - is recovered from the marker, the log and GitHub, never guessed.
 const MERGING = join(ROOT, "state/merging");
@@ -1084,6 +1192,7 @@ const settle = (id: string, merge: "merged" | "failed", reason = "") => {
     rewrite(file, { ...d, merge, ...(merge === "failed" ? { merge_reason: reason } : {}), merge_settled: new Date().toISOString(),
       // the answer's effect was the merge, and this is how it ended
       ...(d.effect === "merge" ? { effect_outcome: merge === "merged" ? "done" : "failed", effect_reason: reason } : {}) });
+    pushWake(id, "merge_settled", readJson(file));
   }
   const marker = markerOf(projectOf(d));
   if (readJson<Marker>(marker)?.decision === id) { try { unlinkSync(marker); } catch { /* already gone */ } }
@@ -1093,9 +1202,9 @@ const settle = (id: string, merge: "merged" | "failed", reason = "") => {
 const mergeRunningIn = (project: string) =>
   readResponses().some((d) => mergeOf(d) === "running" && projectOf(d) === project);
 const HELPER_STOPPED = "the merge helper stopped before recording an outcome";
-// Start the helper for an answered merge card. Detached, with its output in
-// a file: a board restarting under bun --watch neither kills it nor leaves
-// it writing into a closed pipe.
+// Start the helper for an answered merge card. Owned by the session (T-151),
+// with its output in a file: a board restarting under bun --watch neither
+// kills it nor leaves it writing into a closed pipe.
 const startMerge = (id: string, project: string, pr: number, task: string | null, onProject: string[], untracked = false) => {
   mkdirSync(MERGING, { recursive: true });
   const log = join(MERGING, `${project || "_default"}.out`);
@@ -1103,9 +1212,9 @@ const startMerge = (id: string, project: string, pr: number, task: string | null
   try {
     const fd = openSync(log, "w");
     try {
-      child = spawn(join(ROOT, "bin/fm-merge.sh"),
-        ["--pr", String(pr), ...(untracked ? ["--untracked"] : task ? ["--task", task] : []), ...onProject, "--repo", ROOT],
-        { detached: true, stdio: ["ignore", fd, fd], env: childEnv() });
+      child = startOwned("fm-merge.sh", [join(ROOT, "bin/fm-merge.sh"),
+        "--pr", String(pr), ...(untracked ? ["--untracked"] : task ? ["--task", task] : []), ...onProject, "--repo", ROOT],
+        fd, childEnv());
     } finally { closeSync(fd); }
   } catch { settle(id, "failed", "Merge helper unavailable"); return; }
   ours.add(id);
@@ -1136,56 +1245,29 @@ const emitCaptain = (args: string[]): { ok: boolean; error: string } => {
   } catch { return { ok: false, error: "fm-emit.sh could not be started" }; }
 };
 const onProjectOf = (project: string) => project && project !== defaultProject() ? ["--project", project] : [];
-// what ps says a process is running, or "" once it is gone
-const commandOf = (pid: number): string => {
-  try {
-    const r = Bun.spawnSync(["ps", "-o", "command=", "-p", String(pid)], { stdin: "ignore", env: childEnv() });
-    return r.exitCode === 0 ? decode(r.stdout) : "";
-  } catch { return ""; }
-};
-// Stop every crewman on a task, by the stop path main has (T-107's `fm.sh
-// stop` has not merged): SIGTERM to the round's own script - bin/fm-worker.sh
-// publishes its pid at state/worktrees/<task>.pid, and its TERM trap saves and
-// pushes the worktree before it exits - to every run's script named in its
-// process.json, and to each vendor CLI its attempts' execution.json name. A pid
-// is signalled only while ps still shows the program it was recorded for, so
-// a pid the system has since handed to someone else is left alone. The pull
-// request is never touched.
+// Stop every crewman on a task by the one stop path fm has (T-144):
+// `bin/fm-herdr.py stop --task`, which `fm.sh stop --task` runs too. It sends
+// the task's bin/fm-worker.sh (state/worktrees/<task>.pid) SIGTERM, whose trap
+// saves and pushes the worktree, ends each round's own process group - TERM,
+// then KILL after its grace - and TERMs the script that launched each run. A
+// pid is signalled only while ps still shows the program it was recorded for,
+// so a pid the system has since handed to someone else is left alone. A run
+// is this project's by this board's rule: its own project, else the default.
+// The pull request is never touched.
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const stopCrew = (project: string, task: string): { stopped: string[]; failed: string[] } => {
-  const out = { stopped: [] as string[], failed: [] as string[] }, done = new Set<number>();
-  const signal = (label: string, pid: unknown, token: unknown) => {
-    if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 1 || done.has(pid)) return;
-    if (typeof token !== "string" || !token) return;
-    const cmd = commandOf(pid);
-    if (!cmd || !cmd.includes(token)) return;   // gone, or no longer ours
-    done.add(pid);
-    try { process.kill(pid, "SIGTERM"); out.stopped.push(label); }
-    catch (e) { out.failed.push(`${label}: ${(e as { code?: string }).code ?? "not stopped"}`); }
-  };
+  const out = { stopped: [] as string[], failed: [] as string[] };
   if (!SAFE_NAME.test(task)) return out;
-  const pidfile = join(ROOT, "state/worktrees", `${task}.pid`);
+  let r;
   try {
-    const pid = Number(readFileSync(pidfile, "utf8").trim());
-    signal(`worker ${pid}`, pid, "fm-worker.sh");
-  } catch { /* no worker published */ }
-  const runs = join(ROOT, "state/runs");
-  let names: string[] = [];
-  try { names = readdirSync(runs).filter((n) => SAFE_NAME.test(n)); } catch { /* no runs */ }
-  for (const actor of names) {
-    const who = readJson<Record<string, unknown>>(join(runs, actor, "identity.json"));
-    if (!who || who.task !== task) continue;
-    if ((typeof who.project === "string" && who.project ? who.project : defaultProject()) !== project) continue;
-    // each attempt's vendor CLI, as bin/fm-herdr.py recorded it on launch
-    let attempts: string[] = [];
-    try { attempts = readdirSync(join(runs, actor)).filter((n) => SAFE_NAME.test(n)); } catch { /* none */ }
-    for (const a of attempts) {
-      const cli = readJson<Record<string, unknown>>(join(runs, actor, a, "execution.json"));
-      if (cli?.started === true) signal(`${actor} ${cli.pid}`, cli.pid, cli.token);
-    }
-    const proc = readJson<Record<string, unknown>>(join(runs, actor, "process.json"));
-    if (proc) signal(`${actor} ${proc.pid}`, proc.pid, proc.token);
-  }
+    r = Bun.spawnSync(["python3", join(ROOT, "bin/fm-herdr.py"), "stop", ROOT, "--task", task,
+      "--project", project, "--default", defaultProject()], { env: childEnv(), stdin: "ignore", timeout: 30_000 });
+  } catch { out.failed.push("fm-herdr.py stop could not be started"); return out; }
+  let said: { stopped?: unknown; failed?: unknown } | null = null;
+  try { said = JSON.parse(decode(r.stdout)); } catch { /* nothing readable was said */ }
+  if (said && Array.isArray(said.stopped) && Array.isArray(said.failed)) {
+    out.stopped = said.stopped.map(String); out.failed = said.failed.map(String);
+  } else out.failed.push(lastLine(decode(r.stderr)) || `fm-herdr.py stop exited ${r.exitCode}`);
   return out;
 };
 type Carried = { outcome: "done" | "failed" | "recorded" | "running"; reason: string; stopped?: string[] };
@@ -1220,8 +1302,9 @@ const dispatchTask = async (project: string, task: string): Promise<Carried> => 
 };
 // send back: another worker round on the same branch and pull request, by
 // bin/fm-worker.sh, which holds the task's own lock, so a second round on top
-// of a running one refuses rather than doubling up. It runs detached; a round
-// that refuses within the first seconds is reported with what it said.
+// of a running one refuses rather than doubling up. It runs owned by the
+// session, like a merge (T-151); a round that refuses within the first
+// seconds is reported with what it said.
 const sendBack = async (project: string, task: string, pr: number | null): Promise<Carried> => {
   if (!SAFE_NAME.test(task)) return { outcome: "failed", reason: "no task to send back" };
   const dir = join(ROOT, "state/dispatch");
@@ -1231,8 +1314,8 @@ const sendBack = async (project: string, task: string, pr: number | null): Promi
   try {
     const fd = openSync(log, "a");
     try {
-      child = spawn(join(ROOT, "bin/fm-worker.sh"), ["--task", task, "--repo", ROOT, ...(pr ? ["--pr", String(pr)] : [])],
-        { detached: true, stdio: ["ignore", fd, fd], env: { ...childEnv(), ...(project && project !== defaultProject() ? { FM_PROJECT: project } : {}) } });
+      child = startOwned("fm-worker.sh", [join(ROOT, "bin/fm-worker.sh"), "--task", task, "--repo", ROOT, ...(pr ? ["--pr", String(pr)] : [])],
+        fd, { ...childEnv(), ...(project && project !== defaultProject() ? { FM_PROJECT: project } : {}) });
     } finally { closeSync(fd); }
   } catch { return { outcome: "failed", reason: "fm-worker.sh could not be started" }; }
   const exited = await new Promise<number | null | "running">((settled) => {
@@ -1571,6 +1654,8 @@ const server = Bun.serve({
         const temporary = join(dir, `.${id}.${crypto.randomUUID()}.tmp`);
         writeFileSync(temporary, JSON.stringify(decision) + "\n", { flag: "wx" });
         try { linkSync(temporary, file); } finally { unlinkSync(temporary); }
+        // the wake, at write time: firstmate is told by the writer, never by a watcher
+        pushWake(id, "answered", decision);
         // Carried out now, by the one script that owns each effect, and never
         // silently: the outcome is done, failed with its reason, or recorded
         // for an option with no effect. A merge runs in the background and

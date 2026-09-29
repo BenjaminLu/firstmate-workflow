@@ -187,7 +187,7 @@ mkdir -p bin design skills/worker skills/reviewer state src tests
 cp "$ROOT"/bin/fm-*.sh bin/
 cp "$ROOT/bin/fm-herdr.py" bin/
 cp -r "$ROOT/bin/adapters" bin/
-cp "$ROOT/bin/watch-decisions.ts" bin/ 2>/dev/null || true
+cp -r "$ROOT/bin/lib" bin/
 cp "$ROOT/skills/worker/SKILL.md" skills/worker/
 cp "$ROOT/skills/reviewer/SKILL.md" skills/reviewer/
 # exactly the config.yaml this loop had before projects existed: no registry.

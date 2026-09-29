@@ -67,7 +67,7 @@ These bind every actor, including firstmate itself.
 | Q1 | Execution substrate | Shell starts an independent agent process, one git worktree per task |
 | Q2 | Shape of firstmate | A long-running session, with the board as a second input channel |
 | Q3 | Source of truth | Local append-only `state/events.jsonl`; GitHub is the outward face |
-| Q4 | Board to firstmate | Decision lands as a file; firstmate blocks on it (bun `fs.watch`, polling fallback) |
+| Q4 | Board to firstmate | Decision lands as a file; the board pushes the wake as it writes it, and every waiter's own doorbell is rung (T-151; nothing polls) |
 | Q5 | Board stack | Bun + SSE + vanilla HTML, no build step |
 | Q6 | Where determinism ends | Scripts decide whether it ran; models only judge whether it is right |
 | Q7 | Round three | `ASK-PASS-CRITERIA` plus a numbered, closed checklist |
@@ -387,7 +387,8 @@ whatever `merge` it holds by then.
 **A `running` merge whose outcome was never written is recovered by the
 board.** The board is the only writer of `merge`, so it is the one that
 repairs it; `fm-reconcile.sh` does not touch decision records. The helper is
-started detached, and the project's merge marker records the decision id,
+started under the lifeline, owned by the session (T-151, "Owners and
+wakes"), and the project's merge marker records the decision id,
 the helper's pid and its start time. On start, and again on every poll while
 any record says `running`, the board reads each such record's marker:
 
@@ -409,9 +410,14 @@ any record says `running`, the board reads each such record's marker:
 A board that is down starts no merges, so a turn held while it is down holds
 back nothing that could have run.
 
-Await mode uses `bun run bin/watch-decisions.ts` (`fs.watch`) when bun and the
-watcher script are present, and a one-second poll otherwise. Wake latency must
-be measured, not inferred from the watcher mechanism. **No `fswatch` dependency.**
+Await mode blocks on a doorbell of its own (T-151, "Owners and wakes"):
+`fm-decide.sh --await` registers one under `state/session/wake.d/`, looks
+for the answer file once it has, and looks again each time the board rings,
+which it does whenever it writes an answer. Any number of waiters each hear
+every ring. Nothing polls `state/decisions/`; an answer that arrives with
+no ring is not found until the next one. Wake latency must be measured, not inferred from the
+mechanism. **No `fswatch` dependency.** `bin/watch-decisions.ts` is no longer
+called by anything; deleting it is outside T-151's scope.
 
 These are orchestration requirements, not enforcement inside `fm-merge.sh`.
 The board calls that helper for choice A on a pending merge card. The helper
@@ -472,9 +478,42 @@ role may name its own engine — `reviewer:` and `worker:` blocks in
 therefore not a reviewer who never ran.
 
 The reviewer's `vendor` and `model` are the captain's choice (T-066); this
-repository names `claude` and `opus-5`, the worker's own. A project naming
-neither is reported by `fm-session.sh start` and firstmate asks the captain
-through a choice card; the answer lands as a `config.yaml` pull request.
+repository names `claude` and `claude-opus-5-5`, and, since 2026-09-29, codex
+and `gpt-6-astra` for the worker (T-146). A project
+naming neither is reported by `fm-session.sh start` and firstmate asks the
+captain through a choice card; the answer lands as a `config.yaml` pull
+request. **`model` is applied, not only recorded (T-127)**: since T-146 it
+is resolved per vendor, not per role - `fm_run_chain` in `bin/fm-config.sh`
+hands each attempt the model for the vendor that attempt runs as `FM_MODEL`
+(below), and each adapter passes it with its CLI's own flag; section 11 above and `bin/adapters/_contract.md` have the
+whole of it, including what refuses a round whose model the vendor does not
+recognise, and what the run records once it has actually run on one.
+
+**A model is named per vendor (T-146).** A model name belongs to one
+vendor, and T-127 resolved one per role: a round moved to another vendor -
+`fm-worker.sh --vendor`, a fallback in the chain - was handed the first
+vendor's name and refused (found 2026-09-29, when the captain asked for codex
+workers). So `config.yaml` names each vendor's own model:
+
+```yaml
+vendor: codex
+models:
+  claude: claude-opus-5-5
+  codex:  gpt-6-astra
+reviewer:
+  vendor: claude
+```
+
+and `fm_run_chain` hands every attempt the model for the vendor it runs
+(`fm_model_for <role> <vendor>` in `bin/fm-config.sh`), when the caller names
+its role in `FM_MODEL_ROLE`, as `fm-worker.sh` and `fm-review.sh` do. The
+order is: the role's own `model:`, only when the vendor is the role's own
+vendor (`worker.vendor`/`reviewer.vendor`, else the top-level one); then
+`models.<vendor>`; then the top-level `model:`, only when the vendor is the
+top-level vendor, so a config written before `models:` reads as it did. A
+vendor with none of these gets no model flag and runs on its CLI's default,
+which the round records from its transcript; `model_requested` is then
+empty. `fm_model <role>` is `fm_model_for` for the role's own vendor.
 
 `reviewer: mode:` sets how a review runs. `diff`, the default for a project
 that declares nothing, is the prompt above and nothing else. `run` makes a
@@ -999,7 +1038,7 @@ concurrency limit still hold, and it says which one held the task.
 | 4 | the diff stays in scope | `git diff --name-only` within the task's `scope` globs |
 | 5 | **the new tests are not vacuous** | classify by `project.tests`, revert the implementation, run `setup`, then only the suites the diff touches through `project.test`; the whole `check` only when none can be determined, said so; it must go red |
 | 6 | the required GitHub check is green | `gh pr checks <pr> --required` |
-| 7 | the latest verdict is an `APPROVE:<task-id>` for this change | its `REVIEWED:` line names the current head, or the same patch-id with no `main` commit touching its files since (below); author filtered only if `FM_REVIEWER_LOGIN` is set |
+| 7 | the latest verdict is an `APPROVE:<task-id>` for this change | its `REVIEWED:` line names the current head, or the same patch-id, merge-base to head, with no later `REJECT` (below); author filtered only if `FM_REVIEWER_LOGIN` is set |
 
 **Gate 3 is retired, and its number with it (captain, 2026-09-26; T-114).**
 It ran the whole project check in a fresh worktree: the same run the required
@@ -1091,19 +1130,22 @@ and the line gate 7 trusts cannot disagree.
 --stable` of the diff between them, taken with `git diff-tree -p
 --no-renames`, which reads no user configuration; `files` lists every path
 that diff touches. Gate 7 accepts the latest `APPROVE` when its `head` is the
-current head, or when all of these hold:
+current head, or when both of these hold:
 
 1. the current change's patch-id, merge-base to head, equals the approved one;
-2. no commit on `main` between the approved merge-base and the current one
-   touches any file in the approved list;
-3. no later `REJECT` supersedes the approval.
+2. no later `REJECT` supersedes the approval.
 
 Otherwise it fails and names the condition, so firstmate knows a real
 re-review is needed. A conflict resolution or any worker edit changes the
-patch-id, and so always needs a new review. The reviewer's approval carries
-forward across an update that leaves the change identical and touches none of
-its files; CI and the six gates always rerun on the head being merged,
-since they test the change combined with the current `main`.
+patch-id, and so always needs a new review. An APPROVE carries forward across
+any update of the branch from its base as long as the change itself is
+unchanged - the patch-id of merge-base..head equals the approved one; a
+conflict that had to be resolved changes the patch and needs a review
+(captain, 2026-09-29; SK-008). Base commits touching files the change
+reviewed no longer void the approval, so `gh pr update-branch` is allowed
+before or after an APPROVE and during a running review round. CI and the six
+gates always rerun on the head being merged, since they test the change
+combined with the current `main`.
 
 Gate 5 names no toolchain. The target repository declares its own in
 `config.yaml`'s `project:` block (`setup`, `check`, `check_env`, `tests`,
@@ -1264,13 +1306,15 @@ with no usable reason is 400, `code: reopenNeedsReason`. Every refusal code
 the server sends has its own text in both dictionaries, and the page shows a
 refused action by that text, falling back to the generic line only for a
 code it does not know. Setting it
-aside writes the event and then stops its crew through the stop path main
-has: SIGTERM to the round's own script, whose pid `bin/fm-worker.sh`
+aside writes the event and then stops its crew through fm's one stop path,
+`bin/fm-herdr.py stop --task` (T-144; `bin/fm.sh stop --task <id>` runs the
+same): SIGTERM to the round's own script, whose pid `bin/fm-worker.sh`
 publishes at `state/worktrees/<task>.pid` and whose TERM trap saves and
-pushes the worktree, to the script each run of the task names in its
-`process.json`, and to each vendor CLI its attempts' `execution.json` name - each
-only while `ps` still shows the program it was recorded for. T-107's
-`fm.sh stop <task>` replaces this path once it merges. The pull request is
+pushes the worktree; each round's own process group, by its `runner.pid`,
+TERM then KILL after a grace; SIGTERM to the script each run of the task
+names in its `process.json`; and, for a round from before T-144 with no
+runner, to the vendor CLI its `execution.json` names - each only while `ps`
+still shows the program it was recorded for. The pull request is
 never closed: nothing closes it without the captain. An action the card does
 not offer is refused with 409 and nothing is emitted; an unknown task is 404,
 an unknown action 400, and a request without the captain's credential, the
@@ -1396,7 +1440,7 @@ of these:
 | `park` | `bin/fm-emit.sh` `parked`, then the crew stopped | the parked group |
 | `drop` | `bin/fm-emit.sh` `closed`, then the crew stopped | closed |
 | `dispatch` | `bin/fm-dispatch.sh --task <id>`, the captain's order | working once the worker starts; failed with the dispatcher's reason when it holds the task |
-| `send_back` | `bin/fm-worker.sh --task <id> --pr <n>`, detached | another round on the same pull request; failed with the worker's words when its lock refuses |
+| `send_back` | `bin/fm-worker.sh --task <id> --pr <n>`, owned by the session (T-151) | another round on the same pull request; failed with the worker's words when its lock refuses |
 
 The card kinds and their effects: a **merge card** (`--kind merge`) that
 names none merges on A and holds on B and C, as it always has; sending work
@@ -1540,30 +1584,72 @@ firstmate, standing off the deck's spacing at the helm, has its tag one line
 up; on a narrow screen the far decks of a crowded ship keep only the pennant.
 The tag carries no progress and no percentage. A landing handoff pulses the
 recipient's tag. Deck spacing must exceed body height plus tag height or a tag
-covers the crew on the deck above.
+covers the crew on the deck above. **A small vendor mark joins the tag
+(T-127)**: a dot in the vendor's own colour, named for a screen reader, and
+nothing more - never the model string, which stays in the card and the
+roster; the tag stays as quiet as T-116 made it.
 
 **The details are in a card on demand.** Hovering or focusing a figure, or
 tapping it on a phone (a touch that did not turn him), opens a small card in
 that figure's tag, with one labelled line per field: name, role, project, task
-id and title, round (and attempt, for a retry), pull request (linked), state
-and current activity. An unknown field says unknown. Esc (focus returns to the
+id and title, round (and attempt, for a retry), pull request (linked), state,
+**vendor, model and CLI version (T-127, below)**, and current activity. An
+unknown field says unknown. Esc (focus returns to the
 figure), a second tap, a tap elsewhere or moving away closes it; one card is
 open at a time and stays open across re-renders. The figure is focusable,
 names the crew member and state in its label, and is described by and
 controls its card (`aria-describedby`, `aria-controls`, `aria-expanded`).
 
 **The roster shows the same fields in separate columns**: name, role, project,
-task (id and title, with the authored activity and any bounded progress bar),
-round, pull request and state, under one header. The project column is shown
-with one project as with several. A header click sorts by that column, and a
-toggle groups the rows by project; both choices survive a reload. On a phone
-each row folds into two lines of the same cells, each labelled. A task card
-lists its crew as separate chips of name, role and round, never a string
-joined from actors.
+**vendor, model**, task (id and title, with the authored activity and any
+bounded progress bar), round, pull request and state, under one header. The
+project column is shown with one project as with several. A header click
+sorts by that column, and a toggle groups the rows by project; both choices
+survive a reload. On a phone each row folds into two lines of the same
+cells, each labelled. A task card lists its crew as separate chips of name,
+role and round, never a string joined from actors.
+
+**What the round actually ran on, read from the run itself, never guessed
+(T-127).** `vendor` is the adapter; `model` is what the vendor's own CLI
+reported it used, read from its transcript, section 5.3 below; `model_requested`
+is what `config.yaml` asked for; `cli_version` is the CLI's own version
+string. All four ride the crew payload's `identity` (section 11) beside
+`name`, `project`, `round` and `attempt`, and always unknown for a run
+recorded before T-127. `vendor` and `model_requested` are known from the
+round's start (T-146); `model` and `cli_version` once the round has run, and
+until then the crewman's `model` is its `model_requested`, with
+`model_source` saying which it is (`reported` or `requested`).
+
+**The board keeps the last known value of each field (T-146).** It reads a
+crewman's identity from its events, and on 2026-09-29 every crewman's
+vendor, model and CLI were blank: the latest event, a `crew_status`, carried
+only the six T-116 fields, and replaced the identity that had them. Now every
+crew event a round emits carries all eleven, read fresh from `identity.json`
+(`fm_crew_identity`, and `IDENTITY_FIELDS` in `bin/fm-herdr.py` for a Herdr
+round's `crew_status`), and the board merges field by field under two rules.
+Within one vendor, an event that lacks a field, or says `unknown`, keeps the
+value an earlier event gave. An event that names another vendor - a fallback
+starting, whose `record_requested` clears what the vendor before reported, or
+`record-model`'s `unknown` when every vendor was unavailable - resets
+`model`, `model_requested`, `cli_version` and `model_mismatch` to what that
+event says, null or empty meaning cleared, so one vendor is never shown with
+another vendor's model, requested model, CLI version or mismatch. A vendor
+of `unknown` is sent to the page as null, shown as unknown, and not counted
+by the engine badge. A new `dispatched` still starts a crewman afresh.
+When `model` differs from `model_requested`, `model_mismatch` is `true` and
+the card's and the roster's Model field carry the warning colour, with both
+names in the text (`modelMismatch`, en and zh-TW).
+
+**The header's engine badge shows the vendors actually running now**, such as
+"claude ×2 · cursor-agent ×1" - counted from the crew aboard, whichever
+project, read at request time from the crew list the way the fields above are
+- and falls back to `config.yaml`'s configured default (as it did before
+T-127) only when no crew is aboard whose vendor is known.
 
 The new labels (`roleWorker`, `roleReviewer`, `crewName`, `crewRole`,
 `crewTask`, `crewRound`, `crewAttempt`, `crewPr`, `crewState`,
-`crewActivity`, `crewUnknown`, `crewCard`, `rosterSort`, `rosterGroup`) come
+`crewActivity`, `crewUnknown`, `crewCard`, `rosterSort`, `rosterGroup`,
+`crewVendor`, `crewModel`, `crewCli`, `modelMismatch`, `engineLive`) come
 from the board's dictionaries in English and 繁體中文, like every other label.
 
 ### The captain
@@ -1942,6 +2028,72 @@ smoke job.
 `ci` is a required status check on `main`, and a branch must be up to date
 before it can merge.
 
+**GitHub Actions runs the same stages as separate, parallel jobs (T-134).**
+On 2026-09-28 the one serial job on `main` took about 8 minutes of its
+10-minute limit, and two pull requests were cancelled at the limit for
+adding tests. `bin/ci.sh` gained two flags so a workflow job can ask for its
+own slice of one gate run instead of all of it:
+
+- `--stage fast|bash|bun|e2e` — run only that group of stages. `fast` is
+  shellcheck, lint, hygiene, stdin, assertions and dag; the other three name
+  themselves. With neither flag, every stage runs in one process, exactly
+  as a plain `bin/ci.sh` always has — nothing above this paragraph describes
+  a changed default.
+- `--shard i/n` — inside `--stage bash` only, run the *i*-th of *n* shards of
+  `tests/*.test.sh`. Assignment is longest-processing-time bin packing:
+  suites are taken slowest-first and each goes to whichever shard is
+  lightest so far, so the shards come out balanced rather than merely
+  evenly counted, and every suite lands in exactly one shard (`i`, `n`
+  themselves are validated the way `FM_CI_JOBS` is — a decimal `i/n` with
+  `i` from 1 to `n`, or exit 64). Every suite's weight is in one unit,
+  seconds (T-148). A suite `FM_CI_TIMINGS_IN` names (a "`path seconds`"
+  line per suite, from a previous green run's artifact) takes that value,
+  zero included: a suite recorded at 0 is fast, not unknown. A suite the
+  file does not name — new, or the file absent — is estimated in seconds
+  as its byte size times the median seconds-per-byte of the recorded
+  suites; only when no suite is recorded at all is every weight its byte
+  size, and then no two units meet in one sort. So a newly added suite
+  still gets a duration and a deterministic shard, with no file to update
+  by hand. On `main` 9e4194d the two units were mixed: timings were whole
+  seconds, three ten-second suites were recorded as 0, read as unknown and
+  weighed as their thousands of bytes, and took three shards alone while
+  the other 31 suites ran on the fourth for 9m13s. Each shard prints one
+  line, `ci: shard i/n: K suites, predicted Xs; mean Ys; longest suite
+  <path> Zs`, so a shard's predicted load and a suite too long for any
+  split (T-130's input) are readable from the job log. Longest-first
+  packing keeps every shard within the longest single suite of the mean.
+
+The bash stage records what each suite actually took, one "`path seconds`"
+line per suite with millisecond resolution (`12.345`; bash 5's
+`EPOCHREALTIME`, else perl's `Time::HiRes`), to `FM_CI_TIMINGS_OUT` when
+that variable is set — never
+under `FM_ROOT`, so the gate still leaves nothing behind in the tree it
+judges — and only then: the plain, flag-less run pays for none of the timing
+calls. `.github/workflows/ci.yml` runs four kinds of job: `fast`; `bash`, a
+matrix of shards, each downloading the previous successful run's timings
+artifacts (best effort — a first run, a fork with no read access, or a
+`gh` failure all just leave the shards balanced by size instead) and
+uploading its own as `suite-timings-<shard>`, so a slow suite is visible by
+name; `bun`; and `e2e`. A final job named `ci` — the required check's own
+name — `needs` all four and fails if any of them failed or was skipped, so
+branch protection and gate 6 read exactly what they read before. Every job
+keeps its own 10-minute `timeout-minutes`. Sharding turned the one
+`bun install` main had into six — the four `bash` shards, `bun` and `e2e` —
+so every one of those jobs, not just one, caches bun's install cache
+(`~/.bun/install/cache`, keyed on `hashFiles('bun.lock')` and the runner
+OS) ahead of its `bun install` step; `e2e` also keeps the pre-existing
+Playwright-browser cache the one job had. `tests/ci.test.sh` proves the
+flags' validation, that `--stage` runs only its own group of stages, that
+`--shard`'s shards union to exactly `tests/*.test.sh` with no suite in two
+(including a suite added after the fixture was first split), that
+`FM_CI_TIMINGS_OUT` is written only when asked and in milliseconds, that
+`FM_CI_TIMINGS_IN`'s recorded duration — not a suite's real size — decides
+the split, and, from timings with zeros and a missing suite, that no shard
+is left holding only zero-timed suites and no shard's recorded load exceeds
+the mean by more than the longest suite; and reads the workflow file for the job names, the shard flag,
+the final `ci` job's `needs`, the per-job timeout, and, for every job that
+runs `bun install`, a `bun.lock`-keyed cache step positioned before it.
+
 ---
 
 ## 11. Self-update
@@ -1990,7 +2142,7 @@ checkpoint (13.1, "Saving the branch").
 `bin/fm-session.sh start --repo <root>` is the portable service bootstrap.
 It reports actual recorded process liveness, worktrees, pending decisions and
 (inside `HERDR_ENV=1`) observed Herdr panes. It starts or reuses the correct-root
-board and a cancellable decision watch. It does not dispatch work or invent a
+board, owned by the session; it starts no watcher (T-151). It does not dispatch work or invent a
 captain choice. Firstmate reconciles legacy/unrecorded processes and existing
 authorization before dispatch; stopped work is preserved for explicit resumption.
 Before the board is shown, and again on `status`, session bootstrap runs deck
@@ -2001,22 +2153,142 @@ one `agent_lost` (T-118, crew liveness above) and then `agent_finished`, both
 under that exact actor with `data.status: process_gone`, so the
 event-sourced crew list matches process reality. Task-level reconcile alone
 cannot clear these ghosts. `status` and `start` report the reconcile result as
-`deck_reconcile`. `status` reads the live process receipts and durable watch
-results. `watch` and `stop`, optionally with `--decision D-id`, manage the
-watcher independently.
+`deck_reconcile`. `status` reads the live process receipts and the wake
+queue. `wait`, optionally with `--decision D-id` and `--timeout <seconds>`,
+is the caller's own foreground wait on a doorbell of its own: it returns (exit 0,
+the items as JSON) as soon as an unacknowledged wake is on the queue, and
+exits 1 when the timeout ends first. `watch` and `stop` are gone and say so.
 
 Board reuse is verified with a fresh random file under the requested root and
 the board's existing `/file?path=<relative-path>` endpoint. An HTTP response on
 the configured port is insufficient; a different or unverifiable root is refused.
 The bootstrap verifies HTTP page retrieval and reports whether `open` or
 `xdg-open` was invoked. It cannot verify browser navigation. Bun is required for
-the board. The watch polls `state/decisions/*.json` directly into durable
-observation receipts; it does not invoke `fm-decide.sh --await`, so it neither
-rejects non-numeric ids nor rewrites `events.jsonl`. It has a real PID and
-process identity. Its continuous mode scans pending IDs between bounded waits;
-it is not a sub-200ms guarantee across multiple IDs. It never wakes a completed
-API conversation. Firstmate keeps pending authorized work actively monitored or
-explicitly hands it off before ending the turn.
+the board. Nothing watches `state/decisions/`: the board pushes each wake as
+it writes the decision (below), and neither rewrites `events.jsonl`. A wake
+never reaches a completed API conversation by itself; firstmate keeps
+pending authorized work actively monitored - a `wait` running as the
+harness's own background task is how a turn is told - or explicitly hands it
+off before ending the turn.
+
+### Owners and wakes (T-151)
+
+**The rule: every background process has an owner and ends with it; a wake
+is pushed by the writer, never found by polling; a process that outlives its
+owner is a bug.** On 2026-09-29 the captain's machine held 207 orphaned
+processes, 192 of them `watch-child` watchers from suite runs inside crew
+rounds, some over a day old, polling a fixture directory that had been
+deleted. A watcher whose only exit is SIGTERM, started in a session of its
+own so that nothing dying takes it along, cannot be fixed by stopping it
+more carefully; it has to be unable to outlive what needs it.
+
+*The lifeline.* `bin/lib/fm_lifeline.py` (and `bin/lib/fm-lifeline.sh`, its
+command line) is the one way fm starts a background process. The owner
+keeps the write end of a pipe and the child the read end, and the child's
+loop blocks on that descriptor together with its own work; it reads EOF
+when every holder of the write end has died, which the kernel delivers for
+SIGKILL as for anything else, and across setsid. An owner fm did not start
+- the harness's session - is watched by its pid instead: kqueue
+`EVFILT_PROC NOTE_EXIT` on macOS, a pidfd on Linux, both blocking until the
+kernel reports the exit. No liveness is ever decided by polling a pid or a
+directory. A program that cannot watch a descriptor runs under the keeper,
+`fm_lifeline.py keep`: in a session of its own, with the program in a
+process group of its own below it; when the owner goes it sends the group
+SIGTERM, then SIGKILL after `FM_LIFELINE_GRACE` seconds (5), and when the
+program ends first, whatever it left in its group goes too. The keeper's
+pid stands for the program and exits with its status. An owner already gone
+starts nothing, and says so.
+
+*Owners.* Each start names its owner:
+
+| Start | Owner |
+|---|---|
+| `bin/fm-herdr.py` board start (`fm-session.sh start`, `fm.sh board`) | the session: it outlives the command on purpose |
+| the pane-child's closer (`close_from_child`) | the pane-child, by a forked lifeline; it closes once that exits |
+| `board/server.ts`'s `fm-merge.sh` (a merge the captain clicked) and `fm-worker.sh` (send back) | the session the board belongs to; the board itself when it was started by hand |
+| firstmate's stock crew launch (`dispatch-crew`) | the session, through `bin/lib/fm-lifeline.sh --session` |
+| T-144's round runner (`spawn_runner`, the `pane-child`) | the session: a round outlives the fm-worker.sh that launched it on purpose (retained, to be stopped or resumed) |
+
+The runner is fm's own Python, so it holds its lifeline itself rather than
+under a keeper: `start(..., direct=True)` starts it in a session of its own
+and hands the line over, and the runner's `hold()` blocks on it in a thread
+and, when the owner is gone, ends the round's process group - SIGTERM, then
+SIGKILL after the grace, from a helper outside the group. Its pid and group
+stay the round's, which `fm.sh stop` and the board's park and drop signal.
+
+The session is `FM_SESSION_PID` when set, else `FIRSTMATE_CI_SESSION`
+(below), else the nearest ancestor that is not a shell or an interpreter -
+the harness, not the short-lived tool shell. The walk reads each parent
+from the kernel: `/proc` on Linux, libproc `PROC_PIDTBSDINFO` on macOS,
+`ps` only where there is neither, since a sandbox may refuse it. It never
+guesses: when a parent cannot be read, the walk reaches pid 1, or it runs
+64 hops, it refuses (`session-owner` exits 70) and nothing is started, so
+a long-lived process never ends up owned by the shell that launched it. A keeper watching a pid exports it as `FM_SESSION_PID`, so the board
+hands its own owner on to what it starts. A process that must outlive its
+starter names the longer-lived owner it belongs to, never none.
+`tests/lifeline.test.sh` fails on any `start_new_session`, `setsid`,
+`nohup`, `disown` or `detached: true` in the code of `bin/`, `board/` or the
+skills outside the primitive. `bin/fm-worker.sh`'s mirror watcher (13.1) still
+checks its parent with `kill -0` once a second; it is a plain `&` child that
+ends with its round, and moving it onto the lifeline is `fm-worker.sh`'s
+work, outside T-151's scope.
+
+*The wake.* The watcher is deleted: `watch-child`, the decision watch and
+`fm-session.sh watch`/`stop` are gone. Whoever writes a decision delivers
+the wake at write time - the board, on the captain's click and again when a
+merge it started settles. It appends the item to the wake queue,
+`state/session/wake.jsonl` (`{id, reason, decision, woken}`), which is read
+again at every session start and status, and then rings every waiter's
+doorbell. A FIFO hands each line to exactly one reader, so one shared FIFO
+loses a wake as soon as two waiters hold it - and firstmate routinely has
+several (review round 1 of T-151 lost one to a second `--await`). So each
+waiter has a bell of its own, and all three steps live in
+`bin/lib/fm_lifeline.py` (`Doorbell`, `ring`, `await`), which the board, `fm-decide.sh`
+and `fm-herdr.py` share:
+
+1. *Register.* A waiter makes its own FIFO under a temporary name, opens it
+   `O_RDWR` (so no closing writer is ever an end-of-file), and only then
+   renames it to `state/session/wake.d/<pid>-<random>.fifo`, so a ringer
+   never finds a registered bell nobody holds. It removes the bell when it
+   exits, on TERM, INT and HUP too.
+2. *Check after registering, before blocking.* The waiter reads the durable
+   state for its own condition once: the answer file for `--await <id>`,
+   unacknowledged queue items for `session wait`. A wake written between
+   that read and the registration is therefore found, never missed.
+3. *Ring every bell.* A writer appends to the queue first, then opens every
+   `wake.d/*.fifo` `O_WRONLY|O_NONBLOCK` and writes one line: `ENXIO` is a
+   bell nobody holds any more (a waiter killed outright), and is unlinked;
+   `EAGAIN` is a bell already full, so already rung. Ringing never blocks.
+
+On any ring each waiter reads the durable state again and returns or blocks
+again; the line's content is a hint, never the answer. The waiters are
+`fm-session.sh wait` and `fm-decide.sh --await`. `fm-decide.sh` writes no
+decision - it requests cards and awaits answers - so it is a waiter, not a
+writer. `status` and `start` list every
+wake not acknowledged since it was pushed; `ack` records one, and a later
+wake for the same id (its merge settled) lists it again. Observations the
+retired watcher wrote under `state/session/observed/` are still read.
+
+*Tests are contained.* `bin/ci.sh` runs every suite - each bash suite, the
+bun tests and the browser suite - with a scope marker,
+`FIRSTMATE_CI_SCOPE`, in its environment, inherited across setsid, and with
+the suite's own runner named as its session twice: `FM_SESSION_PID`, and
+`FIRSTMATE_CI_SESSION`, which the suites that scrub `FM_*` keep. So nothing
+a suite starts under "the session" belongs to the operator's. Each suite also gets a temp
+root of its own (`TMPDIR`), under which every fixture it makes lives. When
+the suite ends it lists the processes still carrying the marker, or naming
+that root in their command line - `/proc` on Linux, libproc on macOS -
+kills them, and the suite is red, naming each one. macOS withholds the
+environment of its own platform binaries (`/bin/bash`, `/bin/sleep`), so
+there the marker cannot see a leaked bash `fm-worker.sh` or mock adapter;
+their argv is visible, and the root finds them. What that still misses on a
+Mac - a platform binary with no fixture path in its argv - the gate says
+once per run, never passing as having looked: `leak check: macOS hides the
+environment of /bin binaries; matched by fixture root as well - the
+required check (Linux) is authoritative`. A test that starts a
+background process on purpose stops it or ends its owner. The ops-side sweep
+firstmate runs is a fuse that should reap zero; anything it reaps is a bug
+to be found by this rule.
 
 The normal `fm-run`, `fm-dispatch`, `fm-worker` and `fm-review` entrypoints freeze
 `bin/` and `skills/` from the entrypoint's own code tree into a private per-launch
@@ -2086,6 +2358,127 @@ in metadata. The exact canonical actor appears in invocation context, Herdr tab,
 pane and agent names, board events, log paths and result receipts. Existing live actors
 are not renamed. A foreign Herdr name collision is a reported transport failure,
 not a silently different sidebar identity.
+
+**What the round actually ran on (T-127)**, added to `identity.json` once the
+adapter has run - `bin/fm-herdr.py record-model`, called by `fm-worker.sh` and
+`fm-review.sh` after `fm_run_chain` returns. Since T-146 `vendor` and
+`model_requested` are there from the round's start too (`record-requested`,
+`fm_record_requested`): the vendor the chain starts on and its model, just
+after allocation, and again for each fallback vendor as its attempt starts,
+which clears any `model`, `cli_version` and `model_mismatch` until
+`record-model` writes them. The fields: `vendor` (the adapter that ran, e.g.
+`claude`), `model_requested` (`config.yaml`'s for that vendor, via
+`fm_model_for` in `bin/fm-config.sh`), `model` (what the vendor's own CLI
+reported using, read from the slice of its log this attempt wrote,
+`fm_vendor_model`; `"unknown"` when the transcript says nothing, never a
+guess), `cli_version` (`<vendor> --version`, `fm_vendor_cli_version`;
+`"unknown"` when the command is missing or silent), and `model_mismatch`
+(`true` only when both `model_requested` and `model` are known and differ).
+For example, continuing the record above:
+
+```json
+{"vendor": "claude", "model_requested": "claude-opus-5-5",
+ "model": "claude-sonnet-5", "cli_version": "2.1.0", "model_mismatch": true}
+```
+
+These five ride `data.identity` on every crew payload, read fresh from
+`identity.json` for each one (T-146), the same way the six above always
+have; a payload emitted before the round has run carries `model`,
+`cli_version` and `model_mismatch` as `null`, and a run recorded before
+T-127 never gains them. `model_mismatch` costs the round nothing extra to
+raise on the board: the board reads it straight off `data.identity` the way it
+already reads `round` and `attempt`, on whichever payload happens to carry it.
+It is also its own `model_mismatch` event type, in `bin/fm-diagram.sh`'s
+`ROUTINE` list (the acceptance names it explicitly) and `bin/fm-emit.sh`'s
+`TYPES`, which that list must equal exactly (`tests/diagram.test.sh`); the
+worker and the reviewer emit it, `--data` carrying `vendor`, `model_requested`
+and `model`, alongside the `crew_status` line that already carries
+`data.identity` and already refreshes the board's activity line with the
+same news.
+
+**Where `model` comes from, per vendor**, is what `bin/adapters/_contract.md`
+documents: every adapter is asked for JSON output unconditionally now (not
+only when a managed attempt reads its final answer from it), and
+`fm_vendor_model` reads it in each vendor's recorded shape. claude's
+`--output-format json` result carries no `"model"` field - T-127 assumed it
+did, and recorded `unknown` for every claude round (T-146) - but names the
+models the run used as the keys of `modelUsage`: the key the round asked for
+when it is among them, otherwise the one with the most output tokens, since
+claude runs a small model on the side. Before any result, claude's stream
+`init` event (`{"type":"system","subtype":"init","model":...}`) names it.
+Otherwise the *last* literal `"model":"..."` field wins - cursor-agent's and
+gemini's own `--output-format json` result, codex's `--json` event stream -
+so a later report in the same run, such as a fallback model the CLI itself
+chose, wins over an earlier one. `fm_adapter_model_refusal` reads a
+non-empty `modelUsage` as a turn that happened, as it reads a `"model"`.
+
+**A wrong model name refuses the round before it does anything, loudly
+(T-127)**, the same way a missing login or a policy that will not read does.
+Two checks, one before the round starts and one after:
+
+`cursor-agent` is the one vendor of the four whose CLI can list its own
+models offline (`cursor-agent --list-models`, once it holds a real login);
+`fm_adapter_model_listcheck` in `bin/adapters/_lib.sh` runs it before the
+round, and `bin/adapters/cursor-agent.sh` calls it right after the
+`FM_ADAPTER_ARGS` model-flag check, before `fm_adapter_policy`: a lightweight
+call that touches no worktree and needs no confinement of its own, the same
+way `command -v cursor-agent` above it is unconfined. When the list command
+itself cannot be run, exits non-zero, or says nothing - no login yet - the
+check is silent and the round starts anyway; the CLI's own answer at round
+time, below, stays the final word. codex and gemini document no listing
+command of their own, so they get no preflight, and this is stated here
+rather than left for a reader to wonder whether one was missed.
+
+After the round, `fm_adapter_model_refusal` in `bin/adapters/_lib.sh` reads
+the CLI's own words in the slice of the log this attempt wrote. Unlike
+`_FM_SIG`'s outage check, which the caller's evidence predicate can still
+rescue (work beats a signature), a model refusal must never discard a
+completed round: review round 5 found a broad, exit-code-blind phrase list
+would misread a transcript that merely discussed "an invalid model" or "no
+such model found" - ordinary English, including in this very codebase's own
+prose - as a configuration failure. So the check fires only when the
+attempt's own exit code is non-zero (a completed round, exit 0, is never
+read as a refusal) and the log slice reports no `"model":"..."` field at all
+(a report of the model that ran means a turn happened, whatever text follows
+it). claude names its refusal exactly - `[claude-code:unrecognized_model]` -
+read literally; codex, cursor-agent and gemini have no such fixed token
+documented, so they are read against one generic, vendor-agnostic phrase
+list instead, the way `_FM_SIG` is for an outage, but anchored to the start
+of a line (`Error: …`) - the shape a CLI's own one-line usage error has,
+which ordinary prose discussing models in passing does not. Either way the
+adapter exits 64 rather than reaching `fm_adapter_verdict`: never read as the
+vendor being unavailable (which would quietly fall back to another vendor,
+on another model) and never as a normal failed attempt that would still
+reach the gates. The message, naming the vendor and the model, is written to
+`FM_MODEL_REFUSED` when the caller set one - the same pattern
+`FM_POLICY_BLOCKED` uses for a refused host - and `fm-worker.sh`/
+`fm-review.sh` raise it on the board (bilingual, both languages naming the
+vendor and the model) via the existing `worker_crashed` / `review_failed`
+types.
+
+`fm-session.sh`'s startup report, which already said when a project names no
+reviewer vendor or model, now also says when the configured model is not one
+the vendor is known to accept (`fm_model_known` in `bin/fm-config.sh`, a
+small offline catalogue for claude - the CLI itself, at round time, is
+always the final word for a name not yet in it). cursor-agent's own list
+needs a live login this config check has no session to ask for, so it stays
+uncatalogued (rc 2) here, the same as codex and gemini; its check is the
+round-time preflight above.
+
+**Applied, not only recorded.** `config.yaml`'s `model` (top level,
+`worker.model`, `reviewer.model` - `fm_model` resolves a role's own over the
+top-level one, exactly as `vendor` does) is the vendor's own model name;
+since T-146 it is named per vendor, `models.<vendor>`, and resolved per
+attempt for the vendor that attempt runs (section 5.3, "A model is named
+per vendor"). `fm_run_chain` hands it to whichever adapter runs as
+`FM_MODEL`; each adapter passes it with its own
+CLI's flag - claude and cursor-agent `--model`, codex and gemini `-m` - and
+refuses a round whose `FM_ADAPTER_ARGS` also names one (`--model`, `-m`,
+claude's `--fallback-model`), so `config.yaml` is the one place a model is
+ever chosen. `config.yaml`'s own values were `claude-opus-5-5`, top level and
+reviewer, per the captain (2026-09-28); since 2026-09-29 (T-146) the workers
+run codex on `gpt-6-astra` and the reviewers claude on `claude-opus-5-5`,
+under `models:`.
 
 The name in the label is a crew member, and a name always means one role
 (T-104). A crew member's name, rank and service record belong to one role:
@@ -2157,27 +2550,87 @@ characters and no label can stand for two crew members. An empty `roster:`,
 `rosters.workers:` or `rosters.reviewers:` is refused like any other invalid
 list, not replaced by the drawn crew.
 
-In `HERDR_ENV=1`, Codex, Claude, Cursor Agent and Gemini adapters use shipped
-`bin/fm-herdr.py` to execute the real CLI in a dedicated new tab containing one
-owned root pane. `herdr tab create --workspace <caller-workspace> --cwd <tree>
+**A round is headless and fm's own; a terminal host is a window onto it
+(T-144, captain, 2026-09-29).** Codex, Claude, Cursor Agent and Gemini adapters
+run through shipped `bin/fm-herdr.py` `transport`, which starts the real CLI as a
+supervised process group of fm's own: a session of its own, started through
+the lifeline and owned by the fm session (T-151), its stdout and stderr in the
+attempt's `run.log`, its pid in `runner.pid` and its exit code in `runner.exit`,
+with the same sandbox, `FM_HERDR_TIMEOUT` and lifetime lock as before. It is
+never a child of a pane, so a pane that closes or crashes cannot end a round, and a
+machine with no Herdr, cmux or tmux runs the same round with no window at all.
+`bin/fm-herdr.py stop` is the one way fm stops crew. `stop <root> <actor>`
+ends that actor's live rounds by their process groups (TERM, then KILL after
+`FM_STOP_GRACE` seconds, default 5); a group whose every member has exited,
+zombies included, is gone. A round is live while its runner still runs
+`fm-herdr.py`, or while its lifetime lock (`execution.lock`) is held, or, until
+it has a `runner.exit` or `result.json`, while any member of its group lives: a
+killed runner can leave its adapter running, and that round is stopped by its
+group all the same, reported as `<actor> <pid> (runner gone)`, and then its
+CLI by the pid `execution.json` names. `follow` judges the end of a round by
+the same rule, never by the runner's pid alone. `stop <root> --task <id> [--project P] [--default D]` stops a whole task:
+TERM to its `fm-worker.sh` (`state/worktrees/<id>.pid`, whose trap saves and
+pushes the worktree), then each of the project's runs on it, by group, and the
+script that launched it (`process.json`), by TERM. A round from before T-144,
+with no runner, has its vendor CLI sent TERM by the pid `execution.json` names.
+Every pid is signalled only while `ps` shows the program it was recorded for.
+It prints `{"stopped": [...], "failed": [...]}` and exits 1 when anything could
+not be stopped. The board's park and drop run it with the board's own rule for
+a run's project, and `bin/fm.sh stop <actor>` / `stop --task <id>` is the
+operator's way to it. A runner that is gone with no live descendant and no
+`result.json` was lost: transport writes that result with `status: lost` and
+exit 70. Nothing refuses a round for lacking Herdr, and `FM_TRANSPORT=direct`
+merely asks for no window (`fm_refuse_herdr_bypass` is retained as a no-op).
+
+`host:` in `config.yaml` (`none|herdr|cmux|tmux`; `FM_HOST` overrides; detected
+when unset from `HERDR_ENV=1`, then cmux's `CMUX_WORKSPACE_ID`, then `TMUX`) picks
+the host that opens a window. The window is opened before the round starts, is
+labelled with the canonical actor, and runs `fm-herdr.py follow <attempt>`: the
+run's log from its start, followed until the round ends. It is the same stream a
+pane showed before, now read from the log; `bin/fm.sh follow <actor>` runs the
+same follower on the actor's latest round for anyone without a window. Opening a
+window is best effort. Every attempt's `window.json` records the window it got:
+`{"host": "none", "status": "none"}` when there is no host, so no window is
+recorded, never inferred from a missing file. Any failure or uncertainty is
+written there with its reason, the pane is left alone, and the round runs
+without one. A Herdr window that fails after the round was handed its pane
+gives the pane back: the round's `HERDR_PANE_ID`, `HERDR_TAB_ID` and
+`HERDR_WORKSPACE_ID` (and `environment.json`) are the caller's again, and the
+disowned pane is reported `idle`, best effort, so it is not left `working`. The round's own transport closes the window when the round ends,
+and closing a window stops nothing.
+
+tmux gets `new-window -d -P -F '#{window_id}' -n <actor> -c <tree> <follower>`,
+the form tmux(1) documents: `-d` leaves the caller's window current, `-P -F`
+prints the new window's `@N` id, and the window closes itself when the follower
+ends. cmux's `new-workspace` takes no name: its help (the installed cmux,
+2026-09-29) is `new-workspace [--cwd <path>] [--command <text>]`, where
+`--command` types the text and Enter into the new workspace's shell. So the
+workspace is opened with `--cwd <tree> --command <follower>`, its ref read
+from the reply (output "defaults to refs", `workspace:N`; a UUID is accepted
+too), labelled with `rename-workspace --workspace <ref> <actor>`, and closed at
+the round's end with `close-workspace --workspace <ref>`. A reply naming no
+workspace is a failed window; a workspace that opened but could not be labelled
+is still closed at the end. Those command lines are checked against the tools'
+own help. Not verified: the exact text of cmux's `new-workspace` reply, since a
+real cmux socket could not be reached where this was written, and tmux on a
+real server. The stand-ins in `tests/herdr.test.sh` take only the flags that
+help lists and refuse any other.
+
+With Herdr, `herdr tab create --workspace <caller-workspace> --cwd <tree>
 --label <canonical-actor> --no-focus` uses the installed supported interface;
 creation IDs come from `result.tab` and `result.root_pane`. Never split the caller's
 view. Record caller tab/pane and observed UI focus before and after creation;
-changed or unknown focus refuses launch without taking focus back from the user.
-The process receives its owned tab/pane/workspace context, not the caller's IDs.
-It uses installed Herdr pane/agent commands, not an ignored wrapper or a tail-only
-pane. A known caller pane is required. Missing or unsupported transport fails
-clearly; it never silently falls back to invisible execution. Inside
-`HERDR_ENV=1`, `FM_TRANSPORT=direct` is refused (exit 70) unless
-`FM_ALLOW_DIRECT=1` for isolated tests — live Claude, Codex and Cursor sessions
-must not set it. Outside Herdr, in-process adapter execution remains the default.
+changed or unknown focus opens no window and takes no focus back from the user.
+The round receives its owned tab/pane/workspace context, not the caller's IDs.
+A known caller pane is required to open a tab; without one, or without a
+`herdr` command, there is no window.
 Firstmate *stock launch* is only `bin/fm-worker.sh` / `bin/fm-review.sh`; session
 wrappers and hand-started vendor CLIs are protocol violations.
-Adapters still tee vendor transcripts into `cli.log` while leaving stdout on the
-owned pane. Vendors that buffer until completion (for example cursor-agent `-p`
-JSON) do not stream progress; `pane-child` therefore prints a start line, periodic
+Adapters still tee vendor transcripts into `cli.log`; their stdout is `run.log`.
+Vendors that buffer until completion (for example cursor-agent `-p`
+JSON) do not stream progress; the runner therefore prints a start line, periodic
 `[fm] … still running` heartbeats (interval `FM_HEARTBEAT_SECS`, default 15, `0`
-disables), and a finish line so a captain watching the Herdr tab can see liveness
+disables), and a finish line so a captain watching a window can see liveness
 without opening log files.
 The scripted mock adapter remains a non-model test adapter. Dependencies are
 Python 3.9+ (standard library), existing shell/jq tools and the chosen vendor CLI;
@@ -2208,7 +2661,8 @@ workspace identity and no splits. Caller tabs, added panes, moved/reused/shared
 resources and unknown topology refuse reuse. Attempts have separate immutable prompts, invocation metadata,
 private environment, CLI log, final answer and result JSON under
 `state/runs/<actor>/`. A blocked or unavailable attempt is kept there even if a
-later vendor completes. Any ownership uncertainty stops reuse. Worker and reviewer
+later vendor completes. Any ownership uncertainty stops reuse of the pane, and
+the attempt then runs with no window. Worker and reviewer
 `agent_finished` events retire exactly their run actor; neither event means the
 task was accepted. Orchestration exit receipts also remain under the actor. Each chain invocation has
 an attempt token; both reviewer output selection and orchestration recording accept
@@ -2236,9 +2690,9 @@ policy, not an atomicity or race-free guarantee. `FM_AUTOCLOSE=0` retains all pa
 `FM_HERDR_TIMEOUT` (seconds, default 21600) bounds waiting; a timeout preserves the
 process and evidence for inspection, never kills an uncertain pane.
 
-`FM_WATCH=0` opts out of automatic watch startup; stop an already-running watch
-explicitly. Watch identity and results live under `state/session/`; a stopped
-watch can be restarted, and continuous observation receipts survive restarts.
+There is no watch to opt out of (T-151): the wake queue and the waiters'
+doorbells live under `state/session/`, the queue survives restarts, and
+nothing runs to keep it.
 No global hooks, lavish or no-mistakes installation is needed. Existing user
 authorization persists, while scope/product choices and merge approval remain
 captain board decisions. The self-update request is not a fabricated board choice.
@@ -2665,7 +3119,7 @@ in `bin/fm-config.sh`:
 
 | vendor | its login, read by fm outside the round | handed in as | what of its own the round opens | temp | mach services |
 |---|---|---|---|---|---|
-| claude | macOS: keychain item `Claude Code-credentials`, account the operator's user; elsewhere `~/.claude/.credentials.json`. The field `claudeAiOauth.accessToken`, refused past `claudeAiOauth.expiresAt`. A `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` already in the operator's environment is used as is, and nothing is read | `CLAUDE_CODE_OAUTH_TOKEN`, exported, not on a command line | nothing of `~/.claude` or `~/.claude.json`: its config directory is one of the round's own (`CLAUDE_CONFIG_DIR`, in the round's temp directory), holding its sessions, todos, caches and `.claude.json` | the round's own (`CLAUDE_CODE_TMPDIR`); and `/tmp/claude-<uid>`, read and written, on macOS only, because claude opens it whatever `TMPDIR` says (T-105's EPERM). On Linux the round's `/tmp` is its own, so the directory is made afresh there | none |
+| claude | a `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` already in the operator's environment is used as is; else the crew's own long-lived token (T-126), made once with `claude setup-token`: macOS keychain item `firstmate-claude-token`, account the operator's user; else, when `secret-tool` is on the operator's PATH, the libsecret item `firstmate-claude-token`/account the operator's user (T-126 round 2, Linux's rough equivalent of the keychain; its absence is skipped, not refused); else `~/.config/firstmate/claude-token`, refused unless its mode is the operator's alone (600). Only with none of those does it fall back to the operator's own interactive login as before T-126 - macOS keychain item `Claude Code-credentials`, account the operator's user; elsewhere `~/.claude/.credentials.json` - field `claudeAiOauth.accessToken`, refused past `claudeAiOauth.expiresAt`; that fallback warns, in the round's log and on the board, that the round can die when that login refreshes | `CLAUDE_CODE_OAUTH_TOKEN`, exported, not on a command line | nothing of `~/.claude` or `~/.claude.json`: its config directory is one of the round's own (`CLAUDE_CONFIG_DIR`, in the round's temp directory), holding its sessions, todos, caches and `.claude.json` | the round's own (`CLAUDE_CODE_TMPDIR`); and `/tmp/claude-<uid>`, read and written, on macOS only, because claude opens it whatever `TMPDIR` says (T-105's EPERM). On Linux the round's `/tmp` is its own, so the directory is made afresh there | none |
 | cursor-agent | the crew's Cursor API key, which the operator makes once in Cursor's dashboard and keeps for fm outside every round: macOS keychain item `firstmate-cursor-api-key`, account the operator's user; else `~/.config/firstmate/cursor-api-key`, refused unless its mode is the operator's alone (600). A `CURSOR_API_KEY` already set is used as is. Never `agent login`'s own items (`cursor-access-token`, `cursor-refresh-token`) or `~/.config/cursor/auth.json`, which hold its refresh token. With none, the refusal says the one-time step | `CURSOR_API_KEY`, exported, not on a command line; the variable cursor-agent documents in its own `Authentication required` message | nothing of `~/.config/cursor` or `~/.config/firstmate`; `~/.cursor/chats`, `~/.cursor/projects`, `~/.cursor/cli-config.json`, `~/.cursor/statsig-cache.json` read and written | the round's own | none |
 | codex | `~/.codex/auth.json`, field `tokens.access_token` or `OPENAI_API_KEY`; the file holds `tokens.refresh_token` too. A `CODEX_API_KEY` already set is used as is | a copy of the file with `tokens.refresh_token` emptied, as `auth.json` in the round's own `CODEX_HOME`, so no `config.toml` or profile of the operator's is read either | nothing of `~/.codex/auth.json`; `~/.codex/sessions`, `log`, `history.jsonl`, `version.json`, `models_cache.json` read and written | the round's own | none |
 | gemini | `~/.gemini/oauth_creds.json`, field `access_token`, refused past `expiry_date`; the file holds `refresh_token` too. A `GEMINI_API_KEY` or `GOOGLE_API_KEY` already set is used as is | a copy of the file with `refresh_token` emptied, at `.gemini/oauth_creds.json` under a `HOME` (and `GEMINI_CLI_HOME`) of the round's own, with `GOOGLE_GENAI_USE_GCA=true` when no API key is set. The commands gemini runs inherit that `HOME` | nothing of `~/.gemini/oauth_creds.json`; `~/.gemini/tmp`, `history`, `google_accounts.json`, `installation_id`, `user_id` read and written | the round's own | none |
@@ -2711,6 +3165,58 @@ security add-generic-password -s firstmate-cursor-api-key -a "$USER" -w
 (`-w` last, so `security` asks for the key rather than taking it on the
 command line), or the key alone in `~/.config/firstmate/cursor-api-key` at
 mode 600. `~/.config/firstmate` is never readable in a round.
+
+**Claude signs in with a crew token of its own, not the operator's
+interactive login (T-126).** On 2026-09-27 two crew rounds died mid-run with
+`API Error: 401 OAuth access token has been revoked` - T-125 round 1's
+worker and T-123 round 2's reviewer: `fm-config.sh` handed the round the
+access token of the operator's own interactive login, and when the
+operator's own Claude sessions refreshed that login, the old access token
+was revoked out from under every round still holding it. The fix Anthropic
+documents for unattended use is a long-lived token from `claude setup-token`
+(https://code.claude.com/docs/en/authentication: one year, bills to the
+subscription, model requests only), kept the way T-117 keeps cursor-agent's
+Cursor key: macOS keychain item `firstmate-claude-token`, account the
+operator's user, made once with
+`security add-generic-password -s firstmate-claude-token -a "$USER" -w`; off
+macOS, when `secret-tool` (libsecret) is installed, the same-named item made
+once with `secret-tool store --label=firstmate-claude-token service
+firstmate-claude-token account "$USER"` (T-126 round 2: the captain raised
+Linux's own keychain-equivalent case on 2026-09-28, since a file was the
+only crew-token option there before); else the token alone in
+`~/.config/firstmate/claude-token` at mode 600. The captain approved the
+crew-token design on 2026-09-27. `fm-config.sh`'s login lookup for claude
+now tries, in order: an explicit `CLAUDE_CODE_OAUTH_TOKEN` or
+`ANTHROPIC_API_KEY`, used as is; then the crew's keychain item (macOS); then
+its secret-tool item, when the tool is present; then its file; only with
+none of those does it fall back to the operator's own interactive login as
+before T-126 - never silently: it says so, in the round's log and on the
+board (`en` and `zh-TW`), as a warning that the round can die when that
+login refreshes. Every read has three outcomes, found, missing or failed
+(T-126 round 7), and only missing lets the lookup go on: `security` exiting
+44 (no such item), `secret-tool` exiting 1 with nothing on stderr (no such
+item) or not installed at all, and a file that is not there. A crew entry
+that exists but fails - `security` exiting anything else (36, "User
+interaction is not allowed"), a keychain read that times out (30 seconds),
+`secret-tool` saying why on stderr (a locked collection), a `claude-token`
+file others can read, one that cannot be opened (mode 000, a directory) or is
+empty - refuses the round outright, naming the source and its error, the way
+an expired or malformed login always has, and nothing after it is read:
+`Claude Code-credentials` is never asked for. A secret store that cannot be
+reached at all - `secret-tool` saying on stderr it has no D-Bus session or
+no secret service, or timing out on a hung bus, as on a headless or SSH Linux
+host - says nothing about whether the crew token is in it, so it is a fourth
+outcome, unreachable (T-126 round 10): the lookup goes on to the next crew
+source, the file, and says in the round's log that it did; if no crew source
+answers, the round is refused, naming the unreachable store, and never falls
+back to the interactive login. `bin/fm-sandbox.sh login-source` prints one line on stdout,
+`tier=<primary|fallback> source=<source>`, never the login, and
+`bin/fm-canary.sh` reads that line alone, never stderr, and turns the tier
+into `crew-token` or `interactive-fallback` for claude specifically, on its
+status line and as `login_source` in its results; firstmate
+reruns the canary at the merge gate for a change here, and workers do not run
+it themselves. The operator revokes the crew token at claude.ai, Settings,
+Claude Code.
 
 What stays unreachable, whatever the vendor: gh's token (keychain denied,
 `~/.config/gh` never readable, `GH_TOKEN` and `GITHUB_TOKEN` scrubbed),
@@ -2865,6 +3371,15 @@ the result per vendor and version in `state/canary/results.jsonl`. It exits
 had every probe blocked. Firstmate runs it on the captain's Mac before the
 merge card of any change to the sandbox and puts its output in the pull
 request; the merge gate reads it with the required check and the gates.
+**It runs each vendor exactly as a worker round would (T-127)**, model
+included: it resolves `config.yaml`'s worker model once and hands it in as
+`FM_MODEL` for every vendor's probe, the same way a real worker round would -
+which is deliberate, since the captain's finding that started T-127 was
+exactly this gap surfacing nowhere, on a hand re-dispatch across three
+vendors. It reads the model each CLI actually reported back beside its
+version, and prints both next to the verdict; a model that vendor refuses is
+reported `refused` with the message named, the same as any other
+before-the-round refusal.
 
 ### 13.2 A round cannot destroy its own work (T-128)
 

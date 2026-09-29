@@ -1,0 +1,773 @@
+#!/usr/bin/env python3
+"""The one way fm starts a background process (T-151).
+
+A process fm starts exists only while an owner that needs it lives. Every
+background start names that owner and holds a lifeline to it, and the
+kernel, not a poll, says when the owner is gone:
+
+  * an owner fm starts itself keeps the write end of a pipe; the child
+    holds the read end and reads EOF when every holder of the write end
+    has died - SIGKILL included, and across setsid, because the kernel
+    closes a dead process's descriptors whatever killed it;
+  * an owner fm did not start (the harness's session, which the board and
+    a merge the captain clicked belong to) is watched by its pid: kqueue
+    EVFILT_PROC NOTE_EXIT on macOS, a pidfd on Linux. Both block until
+    the kernel reports the exit; neither is a loop over kill(pid, 0).
+
+No liveness is ever decided by polling a pid or a directory.
+
+A process that is not fm's own Python cannot watch a descriptor, so the
+started program runs under a keeper: this file, `keep`, in a session of
+its own (so a closing terminal or pane does not take it), with the
+program in a process group of its own below it. The keeper blocks on the
+lifeline and on the program's exit together. When the owner goes, it
+sends the group SIGTERM, then SIGKILL after FM_LIFELINE_GRACE seconds
+(default 5), and exits; when the program exits first, whatever it left
+in its group is ended the same way and the keeper exits with the
+program's status. The keeper's pid stands for the program: it lives
+exactly as long.
+
+  from bin/lib/fm_lifeline import start, fork, session_owner
+  start(argv, owner=None)        this process owns it, by a pipe
+  start(argv, owner=<pid>)       that pid owns it, by kqueue/pidfd
+  start(argv, owner, direct=True)
+                                 fm's own Python, which calls hold() as it
+                                 starts and holds its lifeline itself
+  fork()                         a forked Python child in its own session
+                                 that reads EOF on its lifeline when the
+                                 forking process dies
+
+  fm_lifeline.py keep --fd N -- argv...     keeper, owner at the other end of fd N
+  fm_lifeline.py keep --pid P -- argv...    keeper, owner is pid P
+  fm_lifeline.py spawn [--owner-pid P|--session] [--log F] -- argv...
+                                 start a keeper under P (default: the
+                                 session) and print its pid
+  fm_lifeline.py session-owner   print the pid `--session` resolves to
+  fm_lifeline.py ring <root> <line>
+                                 ring every waiter's doorbell under
+                                 <root>/state/session/wake.d; print how many
+  fm_lifeline.py await <root> <file> [seconds]
+                                 register a doorbell, then wait until <file>
+                                 exists (0) or the seconds run out (1)
+  fm_lifeline.py scope-survivors [--kill] [--root DIR]... <marker>
+                                 every process still carrying
+                                 FIRSTMATE_CI_SCOPE=<marker>, or naming a DIR
+                                 in its command line, as "pid command"
+
+The session is FM_SESSION_PID when it is set; else FIRSTMATE_CI_SESSION,
+which bin/ci.sh sets to each suite's own runner under a name the suites
+do not scrub; otherwise the nearest ancestor that is not a shell or an
+interpreter running one of fm's scripts, read from the kernel (/proc,
+libproc). When no ancestor can be read, it refuses (exit 70) rather than
+guessing. A keeper watching a pid exports it as FM_SESSION_PID, so what it
+starts (the board) hands the same owner to what it starts in turn (a
+merge). A test names its own owner through FM_SESSION_PID or the gate's
+FIRSTMATE_CI_SESSION and never depends on the operator's real session.
+"""
+import errno
+import os
+import re
+import select
+import signal
+import stat
+import subprocess
+import sys
+import time
+
+HERE = os.path.abspath(__file__)
+SCOPE = 'FIRSTMATE_CI_SCOPE'
+# the write ends this process holds for the children it owns; never closed
+# on purpose - the kernel closes them when this process dies, which is the
+# whole signal
+_held = []
+
+
+class OwnerGone(RuntimeError):
+    """The owner had already exited when its watch was set up."""
+    def __init__(self, pid):
+        super().__init__(f'owner {pid} is already gone; nothing started for it')
+
+
+def _grace():
+    try:
+        value = float(os.environ.get('FM_LIFELINE_GRACE', '5'))
+    except ValueError:
+        value = 5.0
+    return value if value >= 0 else 5.0
+
+
+class ProcessExit:
+    """A descriptor that turns readable when pid exits, set up by the kernel.
+
+    macOS: a kqueue holding EVFILT_PROC NOTE_EXIT on the pid; Linux: a
+    pidfd. Either works for a process that is not our child. Raises
+    OwnerGone when the pid is already gone, RuntimeError when neither
+    mechanism exists (then nothing is started: there is no fallback to a
+    poll)."""
+
+    def __init__(self, pid):
+        self.pid = int(pid)
+        self._kq = None
+        self._fd = None
+        if hasattr(select, 'kqueue'):
+            self._kq = select.kqueue()
+            event = select.kevent(self.pid, filter=select.KQ_FILTER_PROC,
+                                  flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                                  fflags=select.KQ_NOTE_EXIT)
+            try:
+                self._kq.control([event], 0, 0)
+            except ProcessLookupError:
+                self._kq.close()
+                raise OwnerGone(self.pid)
+        elif hasattr(os, 'pidfd_open'):
+            try:
+                self._fd = os.pidfd_open(self.pid)
+            except ProcessLookupError:
+                raise OwnerGone(self.pid)
+        else:
+            raise RuntimeError('no kqueue and no pidfd: an owner pid cannot be watched here')
+
+    def close(self):
+        if self._kq is not None: self._kq.close()
+        elif self._fd is not None: os.close(self._fd)
+
+    def fileno(self):
+        return self._kq.fileno() if self._kq is not None else self._fd
+
+    def gone(self):
+        """True once the kernel has reported the exit; never blocks."""
+        if self._kq is not None:
+            return bool(self._kq.control(None, 1, 0))
+        ready, _, _ = select.select([self._fd], [], [], 0)
+        return bool(ready)
+
+
+def _is_launcher(command):
+    """A shell, or an interpreter/wrapper standing between the owner and fm.
+    Any case: macOS names a framework Python `Python`."""
+    name = os.path.basename(command.strip().split(' ')[0] if command.strip() else '').lstrip('-')
+    return bool(re.fullmatch(r'(ba|z|da|k|c|tc|fi)?sh|env|timeout|nice|sudo|sandbox-exec|bwrap|'
+                             r'perl[0-9.]*|python[0-9.]*', name, re.IGNORECASE))
+
+
+def _darwin_parent_of(pid):
+    """(parent pid, command) of pid from the kernel: libproc's
+    proc_pidinfo(PROC_PIDTBSDINFO), struct proc_bsdinfo. Not ps, which is
+    setuid on macOS and which a sandboxed round may not run."""
+    import ctypes
+    class BsdInfo(ctypes.Structure):
+        _fields_ = [('pbi_flags', ctypes.c_uint32), ('pbi_status', ctypes.c_uint32),
+                    ('pbi_xstatus', ctypes.c_uint32), ('pbi_pid', ctypes.c_uint32),
+                    ('pbi_ppid', ctypes.c_uint32), ('pbi_uid', ctypes.c_uint32),
+                    ('pbi_gid', ctypes.c_uint32), ('pbi_ruid', ctypes.c_uint32),
+                    ('pbi_rgid', ctypes.c_uint32), ('pbi_svuid', ctypes.c_uint32),
+                    ('pbi_svgid', ctypes.c_uint32), ('rfu_1', ctypes.c_uint32),
+                    ('pbi_comm', ctypes.c_char * 16), ('pbi_name', ctypes.c_char * 32),
+                    ('pbi_nfiles', ctypes.c_uint32), ('pbi_pgid', ctypes.c_uint32),
+                    ('pbi_pjobc', ctypes.c_uint32), ('e_tdev', ctypes.c_uint32),
+                    ('e_tpgid', ctypes.c_uint32), ('pbi_nice', ctypes.c_int32),
+                    ('pbi_start_tvsec', ctypes.c_uint64), ('pbi_start_tvusec', ctypes.c_uint64)]
+    try:
+        libproc = ctypes.CDLL('/usr/lib/libproc.dylib')
+    except OSError:
+        return None, ''
+    info = BsdInfo()
+    PROC_PIDTBSDINFO = 3
+    got = libproc.proc_pidinfo(int(pid), PROC_PIDTBSDINFO, ctypes.c_uint64(0),
+                               ctypes.byref(info), ctypes.sizeof(info))
+    if got != ctypes.sizeof(info):
+        return None, ''
+    name = (info.pbi_name or info.pbi_comm).decode(errors='replace')
+    return int(info.pbi_ppid), name
+
+
+def _parent_of(pid):
+    """(parent pid, command) of pid, or (None, '') when it cannot be read.
+    From the kernel: /proc on Linux, libproc on macOS; ps only where there
+    is neither."""
+    try:
+        with open(f'/proc/{pid}/stat', 'rb') as f:
+            stat_line = f.read().decode(errors='replace')
+        with open(f'/proc/{pid}/cmdline', 'rb') as f:
+            command = f.read().split(b'\0')[0].decode(errors='replace')
+        return int(stat_line[stat_line.rindex(')') + 2:].split()[1]), command
+    except (OSError, ValueError, IndexError):
+        pass
+    if sys.platform == 'darwin':
+        return _darwin_parent_of(pid)
+    try:
+        out = subprocess.run(['ps', '-o', 'ppid=', '-o', 'comm=', '-p', str(pid)],
+                             stdin=subprocess.DEVNULL, capture_output=True, text=True)
+    except OSError:
+        return None, ''
+    fields = out.stdout.strip().split(None, 1)
+    if out.returncode != 0 or len(fields) != 2:
+        return None, ''
+    return int(fields[0]), fields[1]
+
+
+# the session a suite of bin/ci.sh belongs to: not an FM_* name, because
+# suites scrub FM_* before they start, and a suite that lost FM_SESSION_PID
+# would otherwise walk up to the operator's own harness
+CI_SESSION = 'FIRSTMATE_CI_SESSION'
+
+
+def session_owner():
+    """The pid of the session fm's long-lived processes belong to:
+    FM_SESSION_PID, else FIRSTMATE_CI_SESSION, else the nearest ancestor
+    that is not a launcher. Never a guess: when the walk cannot read a
+    parent, reaches pid 1 or runs out of hops, it raises RuntimeError and
+    nothing is started for an owner nobody named."""
+    for key in ('FM_SESSION_PID', CI_SESSION):
+        given = os.environ.get(key, '')
+        if given:
+            if not re.fullmatch(r'[1-9][0-9]*', given):
+                raise ValueError(f'{key} must be a pid')
+            return int(given)
+    pid = os.getppid()
+    for _ in range(64):
+        if pid <= 1:
+            raise RuntimeError('no session found: every ancestor up to pid 1 is a launcher; '
+                               'name one with FM_SESSION_PID')
+        parent, command = _parent_of(pid)
+        if parent is None:
+            raise RuntimeError(f'no session found: the parent of {pid} cannot be read; '
+                               'name one with FM_SESSION_PID')
+        if not _is_launcher(command):
+            return pid
+        pid = parent
+    raise RuntimeError('no session found within 64 ancestors; name one with FM_SESSION_PID')
+
+
+def _keeper_argv(argv, fd=None, pid=None, name=None):
+    how = ['--fd', str(fd)] if fd is not None else ['--pid', str(pid)]
+    return [sys.executable, HERE, 'keep', *how, *(['--name', name] if name else []), '--', *argv]
+
+
+def start(argv, owner=None, name=None, direct=False, **popen):
+    """Start argv under a keeper; return the keeper's Popen.
+
+    owner=None: this process owns it through a pipe it keeps open for its
+    whole life. owner=<pid>: that process owns it, watched by the kernel.
+    The keeper puts itself in a session of its own; the caller never asks
+    for one.
+
+    direct=True: argv is fm's own Python, which calls hold() itself as it
+    starts, so no keeper stands between: it is started in a session of its
+    own, and its pid and process group are the program's. The lifeline is
+    handed over in FM_LIFELINE_FD (a pipe) or FM_LIFELINE_PID (an owner
+    pid), and hold() refuses to run without one."""
+    for refused in ('start_new_session', 'preexec_fn', 'process_group', 'pass_fds'):
+        if refused in popen:
+            raise ValueError(refused + ' belongs to the lifeline, not to the caller')
+    if direct:
+        env = dict(popen.pop('env', None) or os.environ)
+        env.pop('FM_LIFELINE_FD', None); env.pop('FM_LIFELINE_PID', None)
+        if owner is not None:
+            ProcessExit(owner).close()
+            env['FM_LIFELINE_PID'] = str(int(owner))
+            return subprocess.Popen(argv, env=env, start_new_session=True, **popen)
+        read_end, write_end = os.pipe()
+        env['FM_LIFELINE_FD'] = str(read_end)
+        try:
+            child = subprocess.Popen(argv, env=env, pass_fds=(read_end,), start_new_session=True, **popen)
+        except BaseException:
+            os.close(write_end)
+            raise
+        finally:
+            os.close(read_end)
+        _held.append(write_end)
+        return child
+    if owner is None:
+        read_end, write_end = os.pipe()
+        try:
+            child = subprocess.Popen(_keeper_argv(argv, fd=read_end, name=name), pass_fds=(read_end,), **popen)
+        except BaseException:
+            os.close(write_end)
+            raise
+        finally:
+            os.close(read_end)
+        _held.append(write_end)
+        return child
+    # said now, to the caller, rather than by a keeper that exits at once
+    ProcessExit(owner).close()
+    return subprocess.Popen(_keeper_argv(argv, pid=int(owner), name=name), **popen)
+
+
+def fork():
+    """Fork a Python child in a session of its own, owned by this process.
+
+    Returns (pid, None) in the parent and (0, lifeline_fd) in the child. The
+    child reads EOF on lifeline_fd when the parent - and every process the
+    parent handed the write end to - has died. The child closes every
+    write end the parent held for other children, so it keeps none of them
+    alive."""
+    read_end, write_end = os.pipe()
+    pid = os.fork()
+    if pid:
+        os.close(read_end)
+        _held.append(write_end)
+        return pid, None
+    os.close(write_end)
+    for fd in _held:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    _held.clear()
+    try:
+        os.setsid()
+    except OSError:
+        pass
+    return 0, read_end
+
+
+def wait_owner(fd, timeout=None):
+    """Block until the owner at the other end of fd is gone; False on timeout."""
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while True:
+        left = None if deadline is None else max(0.0, deadline - time.monotonic())
+        ready, _, _ = select.select([fd], [], [], left)
+        if not ready:
+            return False
+        if os.read(fd, 4096) == b'':
+            return True
+
+
+def hold():
+    """The other end of start(direct=True), called by the started program
+    as it begins: a thread blocks on the lifeline it was handed and, when
+    the owner is gone, ends this process's group - SIGTERM, then SIGKILL
+    after FM_LIFELINE_GRACE - from a helper outside the group, so the
+    SIGTERM that ends this process does not also end the one that must
+    follow it with SIGKILL. Returns the owner it holds to; raises
+    RuntimeError when nothing was handed over (started some other way) and
+    OwnerGone when the owner has already exited."""
+    import threading
+    fd = os.environ.pop('FM_LIFELINE_FD', '')
+    pid = os.environ.pop('FM_LIFELINE_PID', '')
+    if fd:
+        watch = int(fd)
+        os.set_inheritable(watch, False)
+        def gone():
+            wait_owner(watch)
+        owner = 'pipe'
+    elif pid:
+        exit_of = ProcessExit(int(pid))
+        def gone():
+            while True:
+                select.select([exit_of.fileno()], [], [])
+                if exit_of.gone():
+                    return
+        owner = int(pid)
+    else:
+        raise RuntimeError('started without a lifeline; start it through bin/lib/fm_lifeline.py')
+    def watch_owner():
+        gone()
+        _end_group_from_outside(os.getpgrp())
+    threading.Thread(target=watch_owner, name='fm-lifeline', daemon=True).start()
+    return owner
+
+
+def _end_group_from_outside(pgid):
+    """SIGTERM a group, and SIGKILL what is left of it after the grace, from
+    a forked helper in a session of its own, which the signals miss. The
+    helper is bounded by the grace and holds nothing."""
+    try:
+        helper = os.fork()
+    except OSError:
+        _signal_group(pgid, signal.SIGKILL)
+        return
+    if helper:
+        # this process is in the group; the helper's TERM is what ends it
+        return
+    try:
+        os.setsid()
+        _signal_group(pgid, signal.SIGTERM)
+        deadline = time.monotonic() + _grace()
+        while _group_alive(pgid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        _signal_group(pgid, signal.SIGKILL)
+    finally:
+        os._exit(0)
+
+
+# --- The wake: one doorbell per waiter (T-151) -------------------------------
+# A FIFO hands each line to exactly one reader, so one shared FIFO loses a
+# wake as soon as two waiters hold it. Each waiter registers a doorbell of
+# its own under state/session/wake.d/, and a writer rings every one. The
+# bell is only a hint to look again: the durable state - the answer file,
+# the wake queue - is the truth, and a waiter checks it once after it has
+# registered (so a write in between is found) and again on every ring.
+WAKE_DIR = 'state/session/wake.d'
+
+
+class Doorbell:
+    """A waiter's own FIFO, registered for as long as it is open.
+
+    Made under a name no ringer reads, opened O_RDWR (so no closing writer
+    is ever an end-of-file), and only then renamed into place, so a ringer
+    never finds a registered bell with nobody holding it. Removed on close;
+    a bell whose waiter was SIGKILLed is removed by the next ring."""
+
+    def __init__(self, root):
+        base = os.path.join(str(root), WAKE_DIR)
+        os.makedirs(base, exist_ok=True)
+        name = f'{os.getpid()}-{os.urandom(6).hex()}'
+        temp = os.path.join(base, '.' + name + '.new')
+        self.path = os.path.join(base, name + '.fifo')
+        os.mkfifo(temp, 0o600)
+        try:
+            self.fd = os.open(temp, os.O_RDWR | os.O_NONBLOCK)
+            os.rename(temp, self.path)
+        except BaseException:
+            try: os.unlink(temp)
+            except OSError: pass
+            raise
+
+    def wait(self, timeout=None):
+        """Block until rung (True) or until timeout seconds pass (False)."""
+        ready, _, _ = select.select([self.fd], [], [], timeout)
+        if not ready:
+            return False
+        try:
+            while os.read(self.fd, 4096):
+                pass
+        except BlockingIOError:
+            pass
+        return True
+
+    def close(self):
+        if self.fd is None:
+            return
+        try: os.unlink(self.path)
+        except OSError: pass
+        os.close(self.fd)
+        self.fd = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+
+def ring(root, line):
+    """Ring every registered doorbell with one line; returns how many rang.
+
+    Each is opened O_WRONLY|O_NONBLOCK, so ringing never blocks: ENXIO is a
+    bell nobody holds any more (a waiter that was killed), unlinked; EAGAIN
+    is a pipe already full, a bell already rung. The caller appends to the
+    wake queue first: a bell is a hint, the queue is the record."""
+    import glob
+    rang = 0
+    data = (str(line).replace('\n', ' ') + '\n').encode()
+    for path in sorted(glob.glob(os.path.join(glob.escape(os.path.join(str(root), WAKE_DIR)), '*.fifo'))):
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK | getattr(os, 'O_NOFOLLOW', 0))
+        except OSError as error:
+            if error.errno == errno.ENXIO:
+                try: os.unlink(path)
+                except OSError: pass
+            continue
+        try:
+            if not stat.S_ISFIFO(os.fstat(fd).st_mode):
+                continue
+            os.write(fd, data)
+            rang += 1
+        except BlockingIOError:
+            rang += 1
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
+    return rang
+
+
+def doorbells(root):
+    """How many waiters hold a doorbell now (a stale one counts until rung)."""
+    import glob
+    return len(glob.glob(os.path.join(glob.escape(os.path.join(str(root), WAKE_DIR)), '*.fifo')))
+
+
+def _leave_on_signals():
+    """A waiter's SIGTERM, SIGINT or SIGHUP unwinds it, so its doorbell is removed."""
+    def leave(signum, _frame):
+        raise SystemExit(128 + signum)
+    for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(signum, leave)
+
+
+def await_file(root, path, timeout=0):
+    """Wait for path to exist, woken by rings: True when it does, False when
+    the timeout (seconds, 0 for none) ends first."""
+    deadline = time.monotonic() + timeout if timeout else None
+    with Doorbell(root) as bell:
+        while True:
+            if os.path.exists(path):
+                return True
+            left = None if deadline is None else deadline - time.monotonic()
+            if left is not None and left <= 0:
+                return False
+            if not bell.wait(left):
+                return os.path.exists(path)
+
+
+def _signal_group(pgid, signum):
+    try:
+        os.killpg(pgid, signum)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+def _group_alive(pgid):
+    # a zero signal to the group asks the kernel whether any member is left;
+    # used only for the bounded end of a stop, never to decide the owner
+    return _signal_group(pgid, 0)
+
+
+def keep(fd, pid, name, argv):
+    """The keeper: run argv for exactly as long as the owner lives."""
+    try:
+        os.setsid()
+    except OSError:
+        pass
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    if fd is not None:
+        os.set_blocking(fd, False)
+        watch = fd
+        owner = None
+    else:
+        try:
+            owner = ProcessExit(pid)
+        except OwnerGone:
+            print(f'fm-lifeline: owner {pid} is already gone; {name or argv[0]} not started', file=sys.stderr)
+            return 75
+        watch = owner.fileno()
+    wake_r, wake_w = os.pipe()
+    os.set_blocking(wake_r, False); os.set_blocking(wake_w, False)
+    stop = []
+    signal.set_wakeup_fd(wake_w)
+    signal.signal(signal.SIGCHLD, lambda *_: None)
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(signum, lambda signum, _frame: stop.append(signum))
+    env = dict(os.environ)
+    if pid is not None:
+        env['FM_SESSION_PID'] = str(pid)
+    kwargs = dict(process_group=0) if sys.version_info >= (3, 11) else dict(preexec_fn=os.setpgrp)
+    try:
+        child = subprocess.Popen(argv, env=env, close_fds=True, **kwargs)
+    except OSError as error:
+        print(f'fm-lifeline: cannot start {argv[0]}: {error}', file=sys.stderr)
+        return 127
+    why = None
+    while why is None:
+        try:
+            ready, _, _ = select.select([watch, wake_r], [], [])
+        except InterruptedError:
+            ready = []
+        if wake_r in ready:
+            try:
+                while os.read(wake_r, 512):
+                    pass
+            except BlockingIOError:
+                pass
+        if child.poll() is not None:
+            why = 'exited'
+        elif stop:
+            why = 'stopped'
+        elif watch in ready:
+            if owner is not None:
+                why = 'owner' if owner.gone() else None
+            else:
+                try:
+                    data = os.read(fd, 4096)
+                except BlockingIOError:
+                    data = None
+                if data == b'':
+                    why = 'owner'
+    # The owner gone or the keeper stopped: the program and its group are
+    # asked to end, and made to after the grace. The program done: whatever
+    # it left in its group is a process nobody owns any more, and goes too.
+    _signal_group(child.pid, signal.SIGTERM)
+    deadline = time.monotonic() + _grace()
+    while child.poll() is None and time.monotonic() < deadline:
+        try:
+            select.select([wake_r], [], [], max(0.0, deadline - time.monotonic()))
+            while os.read(wake_r, 512):
+                pass
+        except (BlockingIOError, InterruptedError):
+            pass
+    if child.poll() is None or _group_alive(child.pid):
+        _signal_group(child.pid, signal.SIGKILL)
+    code = child.wait()
+    if why == 'owner':
+        print(f'fm-lifeline: the owner of {name or argv[0]} is gone; stopped it', file=sys.stderr)
+    return code if code >= 0 else 128 - code
+
+
+def _darwin_processes():
+    """(pid, argv, env) of every process of this user, from the kernel
+    (libproc and KERN_PROCARGS2, what ps itself reads). Not ps: ps is
+    setuid on macOS, and a sandboxed round may not run it."""
+    import ctypes, ctypes.util, struct
+    libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True)
+    libproc = ctypes.CDLL('/usr/lib/libproc.dylib')
+    count = libproc.proc_listallpids(None, 0)
+    pids = (ctypes.c_int * (count * 2 + 64))()
+    count = libproc.proc_listallpids(pids, ctypes.sizeof(pids))
+    if count <= 0:
+        raise RuntimeError('the process list could not be read')
+    argmax = ctypes.c_int(); size = ctypes.c_size_t(ctypes.sizeof(argmax))
+    if libc.sysctl((ctypes.c_int * 2)(1, 8), 2, ctypes.byref(argmax), ctypes.byref(size), None, 0) != 0:
+        raise RuntimeError('KERN_ARGMAX could not be read')
+    for pid in pids[:count]:
+        size = ctypes.c_size_t(argmax.value); raw = ctypes.create_string_buffer(argmax.value)
+        if libc.sysctl((ctypes.c_int * 3)(1, 49, pid), 3, raw, ctypes.byref(size), None, 0) != 0:
+            continue   # another user's, or gone
+        data = raw.raw[:size.value]
+        if len(data) < 4:
+            continue
+        argc = struct.unpack('i', data[:4])[0]
+        rest = data[4:]
+        at = rest.find(b'\0')          # the executable's path, then padding
+        while 0 <= at < len(rest) and rest[at] == 0:
+            at += 1
+        words = rest[at:].split(b'\0')
+        argv = words[:argc]
+        env = []
+        for word in words[argc:]:
+            if not word:
+                break
+            env.append(word)
+        yield pid, b' '.join(argv).decode(errors='replace'), env
+
+
+def scope_survivors(marker, roots=()):
+    """Every process still carrying FIRSTMATE_CI_SCOPE=<marker>, or naming
+    one of `roots` (the suite's own temp root) in its command line:
+    [(pid, command)]. Read from the kernel: /proc on Linux, libproc on
+    macOS. macOS withholds the environment of its platform binaries
+    (/bin/bash, /bin/sleep) but not their argv, and every fixture a suite
+    starts a process in lives under its root, so the root finds what the
+    marker cannot see there; on Linux the marker alone sees everything."""
+    want = f'{SCOPE}={marker}'.encode()
+    named = [re.compile(re.escape(root.rstrip('/')) + r'(/|\s|$)') for root in roots if root.strip('/')]
+    def matches(env, command):
+        return want in env or any(pattern.search(command) for pattern in named)
+    found = []
+    me = os.getpid()
+    if os.path.isdir('/proc/self'):
+        for entry in os.listdir('/proc'):
+            if not entry.isdigit() or int(entry) == me:
+                continue
+            try:
+                with open(f'/proc/{entry}/cmdline', 'rb') as f:
+                    command = f.read().replace(b'\0', b' ').decode(errors='replace').strip()
+                try:
+                    with open(f'/proc/{entry}/environ', 'rb') as f:
+                        env = f.read().split(b'\0')
+                except PermissionError:
+                    env = []
+            except OSError:
+                continue
+            # a zombie has no command line and nothing left to end
+            if command and matches(env, command):
+                found.append((int(entry), command))
+        return found
+    if sys.platform == 'darwin':
+        return [(pid, command) for pid, command, env in _darwin_processes()
+                if pid != me and command and matches(env, command)]
+    raise RuntimeError('no /proc and not macOS: processes cannot be listed here')
+
+
+def _usage():
+    print(__doc__.split('\n\n')[-2], file=sys.stderr)
+    return 64
+
+
+def main(args):
+    if not args:
+        return _usage()
+    mode, *args = args
+    if mode == 'keep':
+        fd = pid = name = None
+        while args and args[0] != '--':
+            flag, *rest = args
+            if not rest:
+                return _usage()
+            if flag == '--fd': fd = int(rest[0])
+            elif flag == '--pid': pid = int(rest[0])
+            elif flag == '--name': name = rest[0]
+            else: return _usage()
+            args = rest[1:]
+        argv = args[1:]
+        if not argv or (fd is None) == (pid is None):
+            return _usage()
+        return keep(fd, pid, name, argv)
+    if mode == 'spawn':
+        owner = log = None
+        while args and args[0] != '--':
+            flag, *rest = args
+            if flag == '--session':
+                owner = None; args = rest; continue
+            if not rest:
+                return _usage()
+            if flag == '--owner-pid': owner = int(rest[0])
+            elif flag == '--log': log = rest[0]
+            else: return _usage()
+            args = rest[1:]
+        argv = args[1:]
+        if not argv:
+            return _usage()
+        owner = session_owner() if owner is None else owner
+        out = open(log, 'ab') if log else subprocess.DEVNULL
+        try:
+            child = start(argv, owner=owner, stdin=subprocess.DEVNULL, stdout=out, stderr=out)
+        finally:
+            if log: out.close()
+        print(child.pid)
+        return 0
+    if mode == 'session-owner':
+        print(session_owner())
+        return 0
+    if mode == 'ring':
+        if len(args) != 2 or not args[0]:
+            return _usage()
+        print(ring(args[0], args[1]))
+        return 0
+    if mode == 'await':
+        if len(args) not in (2, 3) or not args[0]:
+            return _usage()
+        timeout = float(args[2]) if len(args) == 3 and args[2] else 0
+        _leave_on_signals()
+        return 0 if await_file(args[0], args[1], timeout) else 1
+    if mode == 'scope-survivors':
+        kill = False; roots = []
+        while args[:1] in (['--kill'], ['--root']):
+            if args[0] == '--kill':
+                kill = True; args = args[1:]
+            elif len(args) < 2:
+                return _usage()
+            else:
+                roots.append(args[1]); args = args[2:]
+        if len(args) != 1 or not args[0]:
+            return _usage()
+        found = scope_survivors(args[0], roots)
+        for pid, command in found:
+            print(pid, command)
+        if kill and found:
+            for pid, _ in found:
+                try: os.kill(pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError): pass
+        return 1 if found else 0
+    return _usage()
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except (OSError, ValueError, RuntimeError) as error:
+        print('fm-lifeline: ' + str(error), file=sys.stderr)
+        sys.exit(70)

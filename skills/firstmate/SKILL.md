@@ -48,22 +48,38 @@ The captain's own rules, restated here where they are easy to find:
 
 Run `bin/fm-session.sh start --repo <root>` at top-level startup. It inspects
 recorded processes and panes, verifies the board's root using a fresh relative
-file challenge, opens its HTTP-verified page when an opener is available, and
-starts or reuses a real decision watcher. It does not authorize or dispatch work.
-`status` reports live run/watch identities and durable observations; `stop`
-cancels the owned watch (`--decision <id>` targets a specific watch). A browser
-opener returning zero does not establish that the user saw the page.
+file challenge, and opens its HTTP-verified page when an opener is available.
+The board it starts is owned by this session and ends with it; it starts no
+watcher (T-151). It does not authorize or dispatch work. `status` reports live
+run identities and the wake queue. A browser opener returning zero does not
+establish that the user saw the page.
 
-A session watcher or an observation file never wakes a conversational agent: it
-only writes to disk. `start` and `status` list every observed decision firstmate
-has not acknowledged (`unacknowledged` in the JSON, plus a short summary on
-standard error) and stay read-only toward decisions; they never consume, merge
-or answer one. At the start of every turn and again before ending one, run
-`bin/fm-session.sh status --repo <root>`, act on every unacknowledged observed
+Every background process has an owner and ends with it; a wake is pushed by
+the writer, never found by polling; a process that outlives its owner is a
+bug. The board pushes a wake when it writes a decision - onto the queue
+`state/session/wake.jsonl`, then a ring of every waiter's own doorbell under
+`state/session/wake.d/` - and again when a merge it started settles. To be
+told, keep **one** `bin/fm-session.sh wait --repo <root> [--timeout <s>]`
+running as the harness's own background task: it exits with every
+unacknowledged wake, for any card, as soon as there is one. Act on each,
+`ack` it, and start the next `wait`. Do not keep one `fm-decide.sh --await`
+per pending card; `--await` is for scripts that wait on one answer. Any
+number of waiters each hear every ring, so none takes another's wake. Start every background process
+through `bin/lib/fm-lifeline.sh` (see [dispatch-crew](dispatch-crew/SKILL.md)),
+never `setsid`, `nohup`, `disown` or a bare `&`. The ops-side sweep for
+orphaned processes is a fuse that should reap zero; anything it reaps is a
+bug to report, not routine cleanup.
+
+A wake file never wakes a conversational agent by itself: it only writes to
+disk. `start` and `status` list every wake firstmate has not acknowledged
+(`unacknowledged` in the JSON, plus a short summary on standard error) and
+stay read-only toward decisions; they never consume, merge or answer one. At
+the start of every turn and again before ending one, run
+`bin/fm-session.sh status --repo <root>`, act on every unacknowledged
 decision, then record that with
 `bin/fm-session.sh ack --decision <id> --repo <root>`. Acknowledgement is
-idempotent, deletes no observation, decision file or event, and is refused for
-an id with no observation. Acknowledging is bookkeeping, not approval.
+idempotent, deletes no wake, decision file or event, and is refused for an id
+with no wake. Acknowledging is bookkeeping, not approval.
 
 The project contract is `config.yaml`'s `project:` block: `setup`, `check`,
 `check_env`, `tests`, `test` and `docs` (see the README). `start` runs the declared
@@ -98,17 +114,26 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
    No adapter applies `config.yaml`'s `model:` key until T-127 merges, so
    report the CLI's own default model as the model actually in use, for every
    role, until then.
-3. In a user-managed Herdr session (`HERDR_ENV=1`), check `herdr` availability
-   there, read installed `herdr --skill` and help, and inspect the caller pane and
-   live panes. *Stock launch* every worker and reviewer only through
+3. *Stock launch* every worker and reviewer only through
    [dispatch-crew](dispatch-crew/SKILL.md) (`bin/fm-worker.sh` /
-   `bin/fm-review.sh`). Managed transport creates the owned tab; do not invent
-   wrappers, set `FM_TRANSPORT=direct`, or run vendor CLIs in hand-made panes.
-   Reuse existing live agents. An internal conversation subagent, a background
-   CLI or a tail-only log pane is not evidence of a separate Herdr agent. Never
-   fabricate lifecycle events for log panes. Outside that session do not control
-   someone else's Herdr. If stock launch fails, follow the failure table in
-   dispatch-crew — report the limitation; do not invent a bypass.
+   `bin/fm-review.sh`); do not invent wrappers or run vendor CLIs in hand-made
+   panes. Since T-144 every round runs headless, whatever the terminal: a
+   process group fm starts and supervises, with `runner.pid`, `runner.exit`
+   and `run.log` in its attempt directory under `state/runs/<actor>/`. A
+   terminal host (`host:` in `config.yaml`, or Herdr, cmux or tmux detected)
+   only adds a window that follows `run.log`: a Herdr tab, a cmux workspace or
+   a tmux window, labelled with the actor. Every window is a log follower, so a
+   window is never evidence that a round is alive, and closing one stops
+   nothing; the round's own `runner.pid` and lifetime lock are. Its
+   `window.json` records the window, `none` included. `FM_TRANSPORT=direct`
+   only asks for no window. Stop a round with `bin/fm.sh stop <actor>` or
+   `bin/fm.sh stop --task <id>` (the same `bin/fm-herdr.py stop` the board's
+   park and drop run), and watch one with `bin/fm.sh follow <actor>`. Reuse
+   existing live agents. An internal conversation subagent is not a crew
+   round. Never fabricate lifecycle events. In a user-managed Herdr session
+   (`HERDR_ENV=1`), read the installed `herdr --skill` and help, and do not
+   control someone else's Herdr. If stock launch fails, follow the failure
+   table in dispatch-crew — report the limitation; do not invent a bypass.
 4. Start or reuse the captain board. The shipped server command is
    `FM_ROOT=<root> bun --watch board/server.ts` from the repository, with
    `FM_PORT` defaulting to 4173 and a loopback URL. Check the existing server's
@@ -146,9 +171,10 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   [Judge a task when it turns ready](#judge-a-task-when-it-turns-ready)). Actual dispatch
   checks for any recorded green light, merged dependency events and capacity
   derived from task events, not live process counts. Firstmate must verify the
-  green light applies to the proposed work and reconcile actual capacity. When
-  `HERDR_ENV=1`, crew launch is *stock launch* only (see
-  [dispatch-crew](dispatch-crew/SKILL.md)); `FM_TRANSPORT=direct` is refused.
+  green light applies to the proposed work and reconcile actual capacity. Crew
+  launch is *stock launch* only (see [dispatch-crew](dispatch-crew/SKILL.md)),
+  with or without a terminal host; `FM_TRANSPORT=direct` runs the same
+  supervised round with no window.
 - `bin/fm-worker.sh --task <id> --repo <root>` owns worktree setup, adapter calls,
   commits, push, PR creation and publishing `.fm-say.md`. Inspect preserved work
   before restarting: the script can recreate a worktree. Resume a live process
@@ -210,27 +236,34 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   Neither substitutes for the other, and a head that changes after either one
   restarts both, with one exception. `fm-run.sh` still reviews only after
   every gate before 7 is green, so do not wait for its loop to start a round.
-- The approval binds to the change; CI and the gates bind to the head (T-113,
-  captain, 2026-09-26; design §6). The reviewer's approval carries forward
-  across an update that leaves the change identical and touches none of its
-  files; CI and the gates always rerun on the head being merged. After
-  `gh pr update-branch`, do not start a second review by reflex: run
-  `bin/fm-gate.sh` on the new head. Gate 7 accepts the latest APPROVE when its
-  `REVIEWED:` line names that head, or when the change's patch-id is the one
-  approved, no `main` commit since the approved merge-base touches a file it
-  reviewed, and no later REJECT supersedes it. When it fails it names the
-  condition, and that is a real re-review. A conflict resolution or any worker
-  edit changes the patch-id and always needs a new review.
+- The approval binds to the change; CI and the gates bind to the head
+  (captain, 2026-09-29; SK-008; design §6). An APPROVE carries forward across
+  any update of the branch from its base as long as the change itself is
+  unchanged: the patch-id of merge-base..head equals the approved one. A
+  conflict that had to be resolved changes the patch and needs a review; base
+  commits touching files the change reviewed no longer void the approval. So
+  `gh pr update-branch` is allowed before or after an APPROVE and during a
+  running review round. The required GitHub check and the other gates still
+  rerun on the head being merged: after an update, do not start a second
+  review by reflex; run `bin/fm-gate.sh` on the new head. Gate 7 accepts the
+  latest APPROVE when its `REVIEWED:` line names that head, or when the
+  change's patch-id is the one approved and no later REJECT supersedes it.
+  When it fails it names the condition, and that is a real re-review. A
+  conflict resolution or any worker edit changes the patch-id and always
+  needs a new review.
 - Decision requests use the approved T-034 `--details` contract below. Request
   mode returns after publication; it does not wait for approval.
   `bin/fm-decide.sh --await <id> --repo <root>` returns recorded response JSON,
   removes the pending file and emits no duplicate decision event. Exit zero is
   observation, not approval. Inspect chosen response and task/PR context; keep
   independent work moving while waiting.
-- After every decision request, start a notifying wait whose completion reaches
-  the conversation: run `bin/fm-decide.sh --await <id> --repo <root>` as a
-  background task that the host reports on when it finishes. Do not end a turn
-  while any card is pending without such a live wait for it.
+- While any card is pending, keep one notifying wait whose completion reaches
+  the conversation: a single `bin/fm-session.sh wait --repo <root>` running as
+  a background task that the host reports on when it finishes. It returns
+  every unacknowledged wake, whichever card it is for, so one wait covers all
+  pending cards; after acting on and acknowledging them, start it again. Do
+  not start one `--await` per card for this. Do not end a turn while any card
+  is pending without such a live wait.
 - Firstmate must establish current-head gates, CI and reviewer provenance before
   presenting a merge card, and coordinate renewed verification if the head changes.
   The board calls `bin/fm-merge.sh` directly for choice A on a pending merge card;
@@ -250,6 +283,27 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   files to the worker, and pushes with a lease. Exit `75` means the rebuilt
   round was refused before its commit, and nothing was published. Send one
   such round at a time per task.
+- `bin/fm-canary.sh` runs one real round per vendor against the crew's
+  permission policy; run it on the captain's Mac before a merge card for any
+  change to the sandbox or an adapter, and put its output on the pull
+  request. It spends real model calls, so it never runs in CI and workers
+  never run it themselves. It reports which login source each round's
+  claude used, `crew-token` or `interactive-fallback` (`bin/fm-sandbox.sh
+  login-source`'s `tier=` line), never the login itself. A crew token that
+  exists but fails to read (a locked keychain item, a timeout, an unreadable
+  file) refuses the round rather than falling back. The operator makes
+  claude's own crew token once, outside any round, with `claude setup-token`
+  (https://code.claude.com/docs/en/authentication - one year, bills to the
+  subscription, model requests only), then keeps it the way T-117 keeps
+  cursor-agent's Cursor key: `security add-generic-password -s
+  firstmate-claude-token -a "$USER" -w` on macOS; off macOS, when
+  `secret-tool` (libsecret) is installed, `secret-tool store
+  --label=firstmate-claude-token service firstmate-claude-token account
+  "$USER"` (T-126 round 2); or, either way, the token alone in
+  `~/.config/firstmate/claude-token` at mode 600. Revoke it at claude.ai,
+  Settings, Claude Code. Without a crew token, claude's round falls back to
+  the operator's own interactive login as before T-126, which the round's
+  log and the board then warn can die whenever that login refreshes.
 
 ## Never end a turn blind (T-137)
 
@@ -293,8 +347,10 @@ set by the captain.
    head its card verified. Raise that project's next card only after the
    previous merge has settled and its head is verified again. Cards of other
    projects are not held by it (design §15.10, point 3).
-2. Run `gh pr update-branch` before a review round, never after an `APPROVE`:
-   a moved head restarts both checks, and T-104 lost two rounds that way. It
+2. `gh pr update-branch` exists to bring a branch up to date with its base;
+   run it before or after an `APPROVE` or during a review round, since an
+   update that brings no new conflict needs no re-review (the approval rule
+   above; captain, 2026-09-29). It
    is the only `gh` command firstmate runs itself, and only on a pull request
    GitHub reports as both BEHIND and MERGEABLE; on any other state, leave it
    alone and coordinate instead.
@@ -336,7 +392,7 @@ after every merge, run `bin/fm-ready.sh list --repo <root>`. Each line is
    and `zh-TW` details, a bespoke diagram of what the task would still change,
    an id from `bin/fm-decide.sh --allocate --task <id>` (see
    [Author and verify captain decisions](#author-and-verify-captain-decisions)),
-   and a background `--await`. Options: **A** proceed (dispatch as written), **B**
+   and the one background `fm-session.sh wait`. Options: **A** proceed (dispatch as written), **B**
    rescope (the card states the narrower spec you propose), **C** park,
    **D** drop. Author D under `options.D` in both locales; the board shows a D
    button and accepts D only on a card that offers it. Name the effects in the
@@ -464,16 +520,13 @@ another concurrent worker or reviewer. Herdr
 has no atomic conditional close: another client can change the pane between the
 last check and close. Never describe that policy as atomic or race-free.
 
-`FM_AUTOCLOSE=0` retains even completed owned panes. `FM_WATCH=0` disables automatic
-watch startup; explicitly stop a previously running watch when opting out.
-The watcher is a cancellable operating-system process with durable decision
-observations under `state/session/`, not a mechanism that wakes a completed API
-conversation; only a notifying `--await` wait or the next turn's `status` check
-brings an observed decision back to firstmate. Continuous mode scans pending IDs between bounded waits; it does
-not guarantee sub-200ms observation across multiple decisions. While
-authorized work or decisions remain pending, keep the active turn monitoring
-observable progress or explicitly hand off with run/watch identities and the
-next action. Never end a turn promising that the conversational agent is still
+`FM_AUTOCLOSE=0` retains even completed owned panes. There is no decision
+watcher (T-151): the wake queue is durable under `state/session/`, but nothing
+wakes a completed API conversation; only the `fm-session.sh wait` the harness is
+running, or the next turn's `status` check, brings a decision back to
+firstmate. While authorized work or decisions remain pending, keep the active
+turn monitoring observable progress or explicitly hand off with run identities
+and the next action. Never end a turn promising that the conversational agent is still
 watching. Reconnect to live runs and preserve stopped attempts before restarting.
 
 Managed launches create a dedicated tab with one owned root pane and the same
@@ -485,6 +538,10 @@ and shell identities and shell-only state. Added panes, moved/shared/reused tabs
 unknown observations and incomplete results retain resources. Close only the
 verified pane; its single-pane tab may disappear as a consequence, never through
 unconditional whole-tab deletion. Preserve explicit transport/auto-close opt-outs.
+Those rules guard the window, not the round (T-144): the round's process is
+fm's, in its own process group, so a pane that closes, crashes or is retained
+never ends or keeps a round. A cmux workspace is closed by its ref and a tmux
+window closes itself when its follower exits.
 
 ## Author and verify captain decisions
 

@@ -384,6 +384,50 @@ class Roster(unittest.TestCase):
         first = m.allocate(self.root, 'worker', 'T-400', '')
         self.finish(first)
         self.assertEqual(self.name(first), self.name(m.allocate(self.root, 'worker', 'T-401', '')))
+    def test_record_model_merges_what_the_round_ran_on(self):
+        """T-127: vendor, model, model_requested, cli_version and
+        model_mismatch join identity.json once the round has run - never at
+        allocation, since none of it is known before then - beside the six
+        fields T-116 already put there, and nothing already there is lost."""
+        run = m.allocate(self.root, 'worker', 'T-600', '')
+        before = json.loads((run / 'identity.json').read_text())
+        identity = m.record_model(run, 'claude', 'claude-opus-5-5', 'claude-sonnet-5', '2.1.0')
+        self.assertEqual('claude', identity['vendor'])
+        self.assertEqual('claude-opus-5-5', identity['model_requested'])
+        self.assertEqual('claude-sonnet-5', identity['model'])
+        self.assertEqual('2.1.0', identity['cli_version'])
+        self.assertTrue(identity['model_mismatch'])
+        for k, v in before.items(): self.assertEqual(v, identity[k], k)
+        on_disk = json.loads((run / 'identity.json').read_text())
+        self.assertEqual(identity, on_disk)
+        # requested and actual agree: no mismatch
+        agree = m.record_model(run, 'claude', 'claude-opus-5-5', 'claude-opus-5-5', '2.1.0')
+        self.assertFalse(agree['model_mismatch'])
+        # the vendor said nothing: unknown, never guessed, and never a mismatch
+        silent = m.record_model(run, 'claude', 'claude-opus-5-5', '', '2.1.0')
+        self.assertEqual('unknown', silent['model'])
+        self.assertFalse(silent['model_mismatch'])
+        # no model configured at all: nothing to compare against, so no mismatch
+        unset = m.record_model(run, 'claude', '', 'claude-sonnet-5', '2.1.0')
+        self.assertFalse(unset['model_mismatch'])
+    def test_record_requested_names_the_vendor_and_model_from_the_start(self):
+        """T-146: the vendor a round is on and the model config.yaml names
+        for it join identity.json as the attempt starts; a fallback vendor
+        replaces them and clears what the previous vendor reported, so a
+        model is never shown against a vendor that did not run it."""
+        run = m.allocate(self.root, 'worker', 'T-601', '')
+        before = json.loads((run / 'identity.json').read_text())
+        identity = m.record_requested(run, 'codex', 'gpt-6-astra')
+        self.assertEqual(('codex', 'gpt-6-astra'), (identity['vendor'], identity['model_requested']))
+        self.assertNotIn('model', identity)
+        for k, v in before.items(): self.assertEqual(v, identity[k], k)
+        self.assertEqual(identity, json.loads((run / 'identity.json').read_text()))
+        m.record_model(run, 'codex', 'gpt-6-astra', 'gpt-6-astra', '1.0')
+        moved = m.record_requested(run, 'claude', 'claude-opus-5-5')
+        self.assertEqual(('claude', 'claude-opus-5-5'), (moved['vendor'], moved['model_requested']))
+        for k in ('model', 'cli_version', 'model_mismatch'): self.assertNotIn(k, moved)
+        # a vendor with no model named: its CLI's default, requested as nothing
+        self.assertEqual('', m.record_requested(run, 'gemini', '')['model_requested'])
     def test_an_unfinished_run_is_live_until_proven_over(self):
         # Every path through run_is_live, one run at a time. No clock: a run
         # allocated long ago with nothing recorded yet is still starting.
@@ -666,12 +710,16 @@ class Entrypoints(unittest.TestCase):
         (self.repo / 'design/design.md').write_text('## 6. Gates\nEvidence\n## 8. Board\n')
         (self.repo / 'config.yaml').write_text('vendor: codex\nconcurrency: 2\n')
         self.fake = self.repo / 'fakebin'; self.fake.mkdir()
-        self.env = {k:v for k,v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
+        # no ambient terminal host: a developer's own tmux or cmux is not the fixture's
+        self.env = {k:v for k,v in os.environ.items() if not k.startswith(('FM_', 'HERDR_', 'TMUX', 'CMUX_'))}
         # The fake git below answers `config` with nothing, so the identity a
         # commit needs is the fixture's own: a worker whose commit fails stops.
         self.env.update(PATH=str(self.fake)+os.pathsep+os.environ['PATH'], HERDR_ENV='1', HERDR_PANE_ID='caller',
                         FM_ROOT=str(self.repo), FM_TEST_ROOT=str(self.repo), FM_HERDR_TIMEOUT=str(WAIT),
-                        FM_GIT_NAME='t', FM_GIT_EMAIL='a@b.c')
+                        FM_GIT_NAME='t', FM_GIT_EMAIL='a@b.c',
+                        # the session a round belongs to is this test, never the
+                        # operator's own (T-151): a round ends when it does
+                        FM_SESSION_PID=str(os.getpid()))
         # Every vendor round runs behind bin/fm-sandbox.sh (T-105), and a host
         # with no OS sandbox refuses every vendor. A runner cannot be relied on
         # to have one, so the sandbox binary is a stand-in, as in
@@ -703,6 +751,12 @@ def pane(p):
  if p=='caller': return dict(pane_id=p, terminal_id='caller-terminal',tab_id='caller-tab',workspace_id='workspace')
  return json.loads((r/p).read_text())
 result={}
+# A Herdr command that fails exits non-zero, as the real one does: the pane
+# run, or only the report that the pane is working, so the idle one still lands.
+fail=os.environ.get('FM_TEST_HERDR_FAIL')
+if (fail=='pane-run' and a[:2]==['pane','run']) or (
+        fail=='report-working' and a[:2]==['pane','report-agent'] and a[a.index('--state')+1]=='working'):
+ print('error: '+' '.join(a[:2])+' failed',file=sys.stderr); raise SystemExit(1)
 if a[:2]==['tab','create']:
  assert '--no-focus' in a and '--focus' not in a
  assert a[a.index('--workspace')+1]=='workspace'
@@ -732,7 +786,9 @@ elif a[:2]==['pane','process-info']:
  # Derive foreground from the command this fake was asked to run, not only from
  # an injected busy flag — otherwise shell_only assertions are vacuous.
  fg=shell
- runner=r/'mock-runner.pid'
+ # what runs in the pane is the follower `pane run` was given, and the pane is
+ # idle again the moment it ends; one file per pane, as runs share a fixture
+ runner=r/('follower-'+a[3]+'.pid')
  if runner.exists():
   try:
    rpid=int(runner.read_text().strip())
@@ -773,12 +829,14 @@ elif a[:2]==['pane','run']:
  if change=='added':
   save(r/('pane-user-'+a[2]),dict(pane_id='user',tab_id=v['tab_id'],workspace_id='workspace'))
  save(r/a[2],v)
- if os.environ.get('FM_TEST_ASYNC')=='1':
-  import shlex
-  child=subprocess.Popen(shlex.split(a[3]),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
-  (r/'mock-runner.pid').write_text(str(child.pid))
- else:
-  subprocess.run(a[3],shell=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=False)
+ # Real `pane run` types the command into the pane's shell and returns at
+ # once; the round is not in that pane, so nothing here may wait for it.
+ # The pane's output is what the follower prints, kept where a test can read it.
+ import shlex
+ shown=open(r/('shown-'+a[2]),'ab')
+ child=subprocess.Popen(shlex.split(a[3]),stdin=subprocess.DEVNULL,stdout=shown,stderr=subprocess.STDOUT,start_new_session=True)
+ (r/('follower-'+a[2]+'.pid')).write_text(str(child.pid))
+ (r/'mock-runner.pid').write_text(str(child.pid))
 elif a[:2]==['pane','close']:
  v=pane(a[2]); token=v['tokens']['fm_run']; run=pathlib.Path(token)
  if not run.is_absolute():
@@ -844,7 +902,7 @@ elif a[0]=='branch': print('t-035-test')
         self.fail('asynchronous process did not reach expected state')
     def no_live_runs(self):
         # In-process inspection must never inherit a developer's real Herdr.
-        with patch.dict(os.environ, {'FM_TRANSPORT':'direct', 'FM_ALLOW_DIRECT':'1'}):
+        with patch.dict(os.environ, {'FM_TRANSPORT':'direct'}):
             return not any(r['live'] for r in m.inspect(self.repo)['runs'])
     def test_retained_worker_survives_timeout_interrupt_and_launcher_death(self):
         for ending in ('timeout', 'term', 'kill', 'runner-kill', 'direct-runner-kill'):
@@ -854,7 +912,6 @@ elif a[0]=='branch': print('t-035-test')
                 env=dict(self.env,FM_TEST_ASYNC='1',FM_HERDR_TIMEOUT='.3' if ending=='timeout' else str(WAIT))
                 if ending=='direct-runner-kill':
                     env['FM_TRANSPORT']='direct'
-                    env['FM_ALLOW_DIRECT']='1'
                 with tempfile.TemporaryFile(mode='w+') as output:
                     launcher=subprocess.Popen(['bash',str(self.repo/'bin/fm-worker.sh'),'--task','T-035'],
                         env=env,stdout=output,stderr=output,start_new_session=True)
@@ -880,6 +937,30 @@ elif a[0]=='branch': print('t-035-test')
                         self.assertEqual(70,retry.returncode,retry.stderr)
                         self.assertEqual(actor,(tree/'surviving-work').read_text())
                         self.assertEqual('retained evidence',(tree/'.fm-say.md').read_text())
+                        if ending in ('runner-kill','direct-runner-kill'):
+                            # the runner is gone but its adapter runs on: the
+                            # round is still live, so a window keeps following
+                            # it and the one stop path still stops it
+                            cli=json.loads(execution.read_text())
+                            follower=subprocess.Popen([sys.executable,str(self.repo/'bin/fm-herdr.py'),'follow',str(execution.parent)],
+                                                      env=self.env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                            try:
+                                time.sleep(1)
+                                self.assertIsNone(follower.poll(),'follow ended while the adapter still ran')
+                                if ending=='runner-kill':
+                                    argv=['bash',str(self.repo/'bin/fm.sh'),'stop',actor,'--repo',str(self.repo)]
+                                else:
+                                    argv=['bash',str(self.repo/'bin/fm.sh'),'stop','--task','T-035','--repo',str(self.repo)]
+                                stopped=subprocess.run(argv,env=self.env,capture_output=True,text=True,timeout=WAIT)
+                                self.assertEqual(0,stopped.returncode,stopped.stderr)
+                                said=json.loads(stopped.stdout)
+                                self.assertIn(f'{actor} {runner} (runner gone)',said['stopped'])
+                                self.assertEqual([],said['failed'])
+                                self.wait_for(lambda:not m.process_matches(dict(pid=cli['pid'],token=cli['token'])))
+                                self.wait_for(lambda:not m.process_matches(dict(pid=model,token=str(self.fake/'codex'))))
+                                self.assertEqual(0,follower.wait(timeout=WAIT))
+                            finally:
+                                if follower.poll() is None: follower.kill(); follower.wait(timeout=5)
                     finally:
                         (self.repo/'release-model').touch()
                         if launcher.poll() is None:
@@ -904,7 +985,7 @@ elif a[0]=='branch': print('t-035-test')
         for script,args in entries:
             for source in ('repo-argument','environment','relative-script-argument','relative-script-environment'):
                 with self.subTest(script=script,source=source):
-                    env=dict(self.env,FM_TRANSPORT='direct',FM_ALLOW_DIRECT='1',FM_ROOT=self.repo.name)
+                    env=dict(self.env,FM_TRANSPORT='direct',FM_ROOT=self.repo.name)
                     entry=self.repo/'bin'/script
                     if source.startswith('relative-script'): entry=entry.relative_to(self.repo.parent)
                     argv=['bash',str(entry),*args]
@@ -923,7 +1004,6 @@ elif a[0]=='branch': print('t-035-test')
                 with self.subTest(vendor=vendor,transport=transport):
                     (self.repo/'config.yaml').write_text('vendor: claude\nfallback:\n  - '+vendor+'\n')
                     extra=dict(FM_TRANSPORT=transport,FM_MOCK_BODY='REJECT:T-035 current mock verdict')
-                    if transport=='direct': extra['FM_ALLOW_DIRECT']='1'
                     answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'], **extra)
                     self.assertEqual(0,answer.returncode,answer.stderr)
                     self.assertIn('REJECT:T-035 current '+vendor+' verdict',answer.stdout)
@@ -1056,11 +1136,17 @@ elif a[0]=='branch': print('t-035-test')
             self.assertEqual(1,tab['pane_count'])
             create=next(c for c in creates if result['actor'] in c)
             self.assertIn('--no-focus',create)
-    def test_changed_focus_refuses_launch(self):
+    def test_changed_focus_opens_no_window_and_the_round_still_runs(self):
+        # A tab that moved the caller's focus is not one fm will run anything
+        # in or close. It was only ever a window: the round runs without it.
         answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],FM_TEST_FOCUS='changed')
-        self.assertNotEqual(0,answer.returncode)
+        self.assertEqual(0,answer.returncode,answer.stderr)
         calls=[json.loads(s) for s in (self.repo/'controls').read_text().splitlines()]
         self.assertFalse(any(c[:2] in (['pane','run'],['pane','close'],['tab','close']) for c in calls))
+        self.assertEqual('completed',json.loads(self.results()[0].read_text())['status'])
+        window=json.loads(next((self.repo/'state/runs').glob('*/*/window.json')).read_text())
+        self.assertEqual('none',window['status'])
+        self.assertIn('focus changed',window['reason'])
     def test_changed_resources_retained_through_real_entrypoint(self):
         for change in ('added','moved','shared','reused','busy','identity','unknown','malformed'):
             with self.subTest(change=change):
@@ -1072,27 +1158,309 @@ elif a[0]=='branch': print('t-035-test')
         calls=[json.loads(s) for s in (self.repo/'controls').read_text().splitlines()]
         self.assertFalse(any(c[:2] in (['pane','close'],['tab','close']) for c in calls))
     def test_real_worker_and_default_nonmanaged_optout(self):
-        # Outside Herdr, in-process adapters are the default. Inside Herdr,
-        # FM_TRANSPORT=direct is refused unless FM_ALLOW_DIRECT=1 (tests only).
+        # Without Herdr a round runs headless, and so does one that asks for
+        # no window inside Herdr: neither is refused, and neither touches it.
         answer=self.invoke('fm-worker.sh',['--task','T-035'],HERDR_ENV='0')
         self.assertEqual(0,answer.returncode,answer.stderr)
-        refused=self.invoke('fm-worker.sh',['--task','T-035'],FM_TRANSPORT='direct')
-        self.assertEqual(70,refused.returncode,refused.stderr)
-        self.assertIn('FM_TRANSPORT=direct is refused',refused.stderr)
-        allowed=self.invoke('fm-worker.sh',['--task','T-035'],FM_TRANSPORT='direct',FM_ALLOW_DIRECT='1')
-        self.assertEqual(0,allowed.returncode,allowed.stderr)
+        direct=self.invoke('fm-worker.sh',['--task','T-035'],FM_TRANSPORT='direct')
+        self.assertEqual(0,direct.returncode,direct.stderr)
+        self.assertNotIn('refused',direct.stderr)
         self.assertFalse((self.repo/'controls').exists())
         self.assertEqual(2,len(self.results()))
         self.assertEqual(2,len({json.loads(p.read_text())['actor'] for p in self.results()}))
-    def test_herdr_session_refuses_direct_for_worker_and_reviewer(self):
-        worker=self.invoke('fm-worker.sh',['--task','T-035'],FM_TRANSPORT='direct')
-        self.assertEqual(70,worker.returncode,worker.stderr)
-        self.assertIn('FM_TRANSPORT=direct is refused',worker.stderr)
-        review=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],FM_TRANSPORT='direct')
-        self.assertEqual(70,review.returncode,review.stderr)
-        self.assertIn('FM_TRANSPORT=direct is refused',review.stderr)
+    def test_a_round_with_no_terminal_host_at_all_is_headless_and_supervised(self):
+        answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],HERDR_ENV='0')
+        self.assertEqual(0,answer.returncode,answer.stderr)
         self.assertFalse((self.repo/'controls').exists())
-        self.assertEqual([],self.results())
+        result=json.loads(self.results()[0].read_text()); attempt=Path(result['attempt'])
+        self.assertEqual('completed',result['status'])
+        # the supervision receipts: pid and exit files, and the stream in the run's log
+        self.assertRegex((attempt/'runner.pid').read_text(),r'^[0-9]+$')
+        self.assertEqual('0',(attempt/'runner.exit').read_text().strip())
+        self.assertIn('finished exit=0',(attempt/'run.log').read_text())
+        # no window is recorded as none, never inferred from a missing file
+        window=json.loads((attempt/'window.json').read_text())
+        self.assertEqual(('none','none'),(window['host'],window['status']))
+        events=[json.loads(s) for s in (self.repo/'state/events.jsonl').read_text().splitlines()]
+        self.assertTrue([e for e in events if e['type']=='agent_finished' and e['actor']==result['actor']])
+    def test_the_board_sees_a_headless_round_as_it_sees_a_pane_round(self):
+        # the events a round leaves are the same whatever hosted it
+        shapes=[]
+        for env in (dict(HERDR_ENV='0'),dict()):
+            answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],**env)
+            self.assertEqual(0,answer.returncode,answer.stderr)
+            actor=json.loads(max(self.results(),key=lambda p:p.stat().st_mtime_ns).read_text())['actor']
+            log=[json.loads(s) for s in (self.repo/'state/events.jsonl').read_text().splitlines()]
+            mine=[e for e in log if e['actor']==actor]
+            self.assertTrue(mine)
+            shapes.append([(e['type'],(e.get('data') or {}).get('role')) for e in mine])
+        self.assertEqual(shapes[0],shapes[1])
+    def test_a_closed_pane_never_kills_the_round_and_the_pane_follows_the_stream(self):
+        for name in ('release-model','model.pid','mock-runner.pid','closed'):
+            (self.repo/name).unlink(missing_ok=True)
+        env=dict(self.env,FM_TEST_ASYNC='1',FM_HERDR_TIMEOUT=str(WAIT),FM_TEST_DELAY='0')
+        with tempfile.TemporaryFile(mode='w+') as output:
+            launcher=subprocess.Popen(['bash',str(self.repo/'bin/fm-worker.sh'),'--task','T-035'],
+                env=env,stdout=output,stderr=output,start_new_session=True)
+            try:
+                self.wait_for(lambda:(self.repo/'model.pid').exists())
+                model=int((self.repo/'model.pid').read_text())
+                actor=(self.repo/'state/worktrees/T-035/surviving-work').read_text()
+                calls=[json.loads(s) for s in (self.repo/'controls').read_text().splitlines()]
+                # its own labelled tab, opened as the round started
+                create=next(c for c in calls if c[:2]==['tab','create'])
+                self.assertEqual(actor,create[create.index('--label')+1])
+                run=next(c for c in calls if c[:2]==['pane','run'])
+                self.assertIn(' follow ',run[3])
+                pane=run[2]
+                # the pane shows the round's live stream, followed from the run's log
+                shown=self.repo/('shown-'+pane)
+                self.wait_for(lambda:shown.exists() and 'started on T-035' in shown.read_text())
+                attempt=next((self.repo/'state/runs'/actor).glob('*/runner.pid')).parent
+                self.assertIn('started on T-035',(attempt/'run.log').read_text())
+                runner=int((attempt/'runner.pid').read_text())
+                self.assertEqual(runner,os.getpgid(runner),'the round is a process group of its own')
+                # the user closes the pane: its foreground process dies with it
+                follower=int((self.repo/('follower-'+pane+'.pid')).read_text())
+                os.kill(follower,signal.SIGKILL)
+                self.wait_for(lambda:not m.process_matches(dict(pid=follower,token='follow')))
+                time.sleep(.5)
+                os.kill(runner,0); os.kill(model,0)  # both still there
+                self.assertIsNone(launcher.poll())
+                (self.repo/'release-model').touch()
+                rc=launcher.wait(timeout=WAIT)
+                self.assertIn(rc,(0,73),rc)
+                self.assertEqual('completed',json.loads(self.results()[0].read_text())['status'])
+                self.assertEqual('0',(attempt/'runner.exit').read_text().strip())
+            finally:
+                (self.repo/'release-model').touch()
+                if launcher.poll() is None:
+                    os.killpg(launcher.pid,signal.SIGKILL); launcher.wait(timeout=5)
+    def test_a_round_that_ends_closes_its_pane_and_a_pane_that_fails_costs_nothing(self):
+        answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'])
+        self.assertEqual(0,answer.returncode,answer.stderr)
+        self.assertTrue((self.repo/'closed').exists())
+        (self.repo/'closed').unlink()
+        # a Herdr that cannot open a tab: the round still runs, with no window
+        (self.repo/'fakebin/herdr').write_text('#!/bin/sh\necho "herdr: no server" >&2\nexit 1\n')
+        answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'])
+        self.assertEqual(0,answer.returncode,answer.stderr)
+        self.assertFalse((self.repo/'closed').exists())
+        self.assertEqual(2,len(self.results()))
+        self.assertEqual({'completed'},{json.loads(p.read_text())['status'] for p in self.results()})
+    def test_stop_ends_the_process_group_and_the_lost_round_says_so(self):
+        # one stop path, reached by an actor (fm-herdr.py stop), by a task
+        # (fm.sh stop --task, which the board's park and drop also run)
+        for way in ('actor','task'):
+            with self.subTest(way=way):
+                for name in ('release-model','model.pid'):
+                    (self.repo/name).unlink(missing_ok=True)
+                env=dict(self.env,FM_TEST_ASYNC='1',FM_HERDR_TIMEOUT=str(WAIT),HERDR_ENV='0')
+                with tempfile.TemporaryFile(mode='w+') as output:
+                    launcher=subprocess.Popen(['bash',str(self.repo/'bin/fm-worker.sh'),'--task','T-035'],
+                        env=env,stdout=output,stderr=output,start_new_session=True)
+                    try:
+                        self.wait_for(lambda:(self.repo/'model.pid').exists())
+                        model=int((self.repo/'model.pid').read_text())
+                        actor=(self.repo/'state/worktrees/T-035/surviving-work').read_text()
+                        runner=int(next((self.repo/'state/runs'/actor).glob('*/runner.pid')).read_text())
+                        if way=='actor':
+                            argv=[sys.executable,str(self.repo/'bin/fm-herdr.py'),'stop',str(self.repo),actor]
+                        else:
+                            argv=['bash',str(self.repo/'bin/fm.sh'),'stop','--task','T-035','--repo',str(self.repo)]
+                        stopped=subprocess.run(argv,env=self.env,capture_output=True,text=True,timeout=WAIT)
+                        self.assertEqual(0,stopped.returncode,stopped.stderr)
+                        said=json.loads(stopped.stdout)
+                        self.assertIn(f'{actor} {runner}',said['stopped'])
+                        self.assertEqual([],said['failed'])
+                        self.wait_for(lambda:not m.process_matches(dict(pid=model,token=str(self.fake/'codex'))))
+                        launcher.wait(timeout=WAIT)
+                        # stopped by task, the worker script is TERMed too, and
+                        # may end before the supervisor has recorded the loss
+                        path=self.repo/'state/runs'/actor/'last-result.json'
+                        last=self.wait_for(lambda:path.is_file() and json.loads(path.read_text()))
+                        self.assertEqual('lost',last['status'])
+                        self.assertNotEqual(0,last['exit_code'])
+                    finally:
+                        (self.repo/'release-model').touch()
+                        if launcher.poll() is None:
+                            os.killpg(launcher.pid,signal.SIGKILL); launcher.wait(timeout=5)
+                        self.wait_for(self.no_live_runs)
+    def test_a_round_belongs_to_its_session_and_ends_with_it(self):
+        # T-151: a round outlives the fm-worker.sh that launched it on purpose,
+        # so it names the longer-lived owner it belongs to - the session - and
+        # holds a lifeline to it. The launcher killed outright leaves the round
+        # running; the session ending ends it, adapter and model included.
+        for name in ('release-model','model.pid'):
+            (self.repo/name).unlink(missing_ok=True)
+        session=subprocess.Popen(['sleep','300'])
+        self.addCleanup(lambda: session.poll() is None and (session.kill(), session.wait()))
+        env=dict(self.env,FM_TEST_ASYNC='1',FM_HERDR_TIMEOUT=str(WAIT),HERDR_ENV='0',FM_SESSION_PID=str(session.pid))
+        with tempfile.TemporaryFile(mode='w+') as output:
+            launcher=subprocess.Popen(['bash',str(self.repo/'bin/fm-worker.sh'),'--task','T-035'],
+                env=env,stdout=output,stderr=output,start_new_session=True)
+            try:
+                self.wait_for(lambda:(self.repo/'model.pid').exists())
+                model=int((self.repo/'model.pid').read_text())
+                actor=(self.repo/'state/worktrees/T-035/surviving-work').read_text()
+                runner=int(next((self.repo/'state/runs'/actor).glob('*/runner.pid')).read_text())
+                self.assertEqual(runner,os.getpgid(runner),'the round is still a process group of its own')
+                os.killpg(launcher.pid,signal.SIGKILL); launcher.wait(timeout=WAIT)
+                time.sleep(.5)
+                os.kill(runner,0); os.kill(model,0)  # the launcher's death takes nothing
+                session.kill(); session.wait()
+                self.wait_for(lambda:not m.process_matches(dict(pid=runner,token='fm-herdr.py')))
+                self.wait_for(lambda:not m.process_matches(dict(pid=model,token=str(self.fake/'codex'))))
+            finally:
+                (self.repo/'release-model').touch()
+                if launcher.poll() is None:
+                    os.killpg(launcher.pid,signal.SIGKILL); launcher.wait(timeout=5)
+                self.wait_for(self.no_live_runs)
+    def test_fm_follow_shows_an_actors_latest_round(self):
+        answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],HERDR_ENV='0')
+        self.assertEqual(0,answer.returncode,answer.stderr)
+        actor=json.loads(self.results()[0].read_text())['actor']
+        shown=subprocess.run(['bash',str(self.repo/'bin/fm.sh'),'follow',actor,'--repo',str(self.repo)],
+                             env=self.env,capture_output=True,text=True,timeout=WAIT)
+        self.assertEqual(0,shown.returncode,shown.stderr)
+        self.assertIn('started on T-035',shown.stdout)
+        self.assertIn('finished exit=0',shown.stdout)
+        nobody=subprocess.run(['bash',str(self.repo/'bin/fm.sh'),'follow','worker-nobody-t1-r1','--repo',str(self.repo)],
+                              env=self.env,capture_output=True,text=True,timeout=WAIT)
+        self.assertNotEqual(0,nobody.returncode)
+        self.assertIn('no round of worker-nobody-t1-r1',nobody.stderr)
+    # The tmux and cmux stand-ins take exactly the flags the real tools take
+    # and refuse any other, as the real tools do, so a call the real tool
+    # would reject is rejected here too.
+    TMUX_STUB = r'''
+import json,os,pathlib,shlex,subprocess,sys
+r=pathlib.Path(os.environ['FM_TEST_ROOT']); a=sys.argv[1:]
+with (r/'tmux-calls').open('a') as f: f.write(json.dumps(a)+'\n')
+# tmux(1): new-window [-abdkPS] [-c start-directory] [-e environment]
+#   [-F format] [-n window-name] [-t target-window] [shell-command [argument ...]]
+#   "-P prints information about the new window after it has been created. By
+#   default, it uses the format '#{session_name}:#{window_index}' but a
+#   different format may be specified with -F." #{window_id} is "@N".
+#   "-d: the session does not make the new window the current window."
+if a[:1]!=['new-window']: sys.exit('unknown command: '+(a[0] if a else ''))
+flags,valued,i={},set('ceFnt'),1
+while i<len(a) and a[i].startswith('-') and len(a[i])>1:
+ for j,c in enumerate(a[i][1:]):
+  if c in valued:
+   v=a[i][j+2:] or a[i+1]; i+=0 if a[i][j+2:] else 1; flags[c]=v; break
+  if c not in 'abdkPS': sys.exit('new-window: unknown option -- '+c)
+  flags[c]=True
+ i+=1
+command=a[i:]
+n=7+len((r/'tmux-calls').read_text().splitlines())
+if command:
+ subprocess.Popen(shlex.split(command[0]) if len(command)==1 else command,stdin=subprocess.DEVNULL,
+  stdout=open(r/'tmux-shown','ab'),stderr=subprocess.STDOUT,start_new_session=True)
+if flags.get('P'):
+ print(flags.get('F','#{session_name}:#{window_index}').replace('#{window_id}','@%d'%n)
+       .replace('#{session_name}','0').replace('#{window_index}',str(n)))
+'''
+    CMUX_STUB = r'''
+import json,os,pathlib,shlex,subprocess,sys
+r=pathlib.Path(os.environ['FM_TEST_ROOT']); a=sys.argv[1:]
+with (r/'cmux-calls').open('a') as f: f.write(json.dumps(a)+'\n')
+# cmux <command> --help, from the installed cmux (checked 2026-09-29):
+#   new-workspace [--cwd <path>] [--command <text>]
+#     --command <text>  Send text+Enter to the new workspace after creation
+#   rename-workspace [--workspace <id|ref|index>] [--] <title>
+#   close-workspace --workspace <id|ref|index>   (required)
+#   "Output defaults to refs (window:1/workspace:2/pane:3/surface:4)"
+def options(rest,known):
+ got,pos,i={},[],0
+ while i<len(rest):
+  if rest[i]=='--': pos+=rest[i+1:]; break
+  if rest[i].startswith('--'):
+   if rest[i] not in known: sys.exit('Error: Unknown flag '+rest[i])
+   got[rest[i]]=rest[i+1]; i+=2; continue
+  pos.append(rest[i]); i+=1
+ return got,pos
+count=r/'cmux-workspaces'
+if a[:1]==['new-workspace']:
+ got,pos=options(a[1:],{'--cwd','--command'})
+ if pos: sys.exit('Error: unexpected argument '+pos[0])
+ n=int(count.read_text())+1 if count.exists() else 7; count.write_text(str(n))
+ if '--command' in got:
+  subprocess.Popen(shlex.split(got['--command']),stdin=subprocess.DEVNULL,stdout=open(r/'cmux-shown','ab'),
+   stderr=subprocess.STDOUT,start_new_session=True)
+ print('OK workspace:%d'%n)
+elif a[:1]==['rename-workspace']:
+ got,pos=options(a[1:],{'--workspace'})
+ if len(pos)!=1: sys.exit('Error: rename-workspace requires a title')
+ (r/('cmux-title-'+got.get('--workspace','current').replace(':','-'))).write_text(pos[0]); print('OK')
+elif a[:1]==['close-workspace']:
+ got,pos=options(a[1:],{'--workspace'})
+ if '--workspace' not in got or pos: sys.exit('Error: close-workspace requires --workspace')
+ print('OK')
+else: sys.exit('Error: Unknown command '+(a[0] if a else ''))
+'''
+    def test_tmux_and_cmux_get_the_same_window_where_they_are_the_host(self):
+        self.executable('tmux', self.TMUX_STUB)
+        self.executable('cmux', self.CMUX_STUB)
+        for host,marker in (('tmux',dict(TMUX='/tmp/tmux-0/default,1,0')),('cmux',dict(CMUX_WORKSPACE_ID='workspace:1'))):
+            with self.subTest(host=host):
+                answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],HERDR_ENV='0',**marker)
+                self.assertEqual(0,answer.returncode,answer.stderr)
+                calls=[json.loads(s) for s in (self.repo/(host+'-calls')).read_text().splitlines()]
+                result=json.loads(max(self.results(),key=lambda p:p.stat().st_mtime_ns).read_text())
+                actor=result['actor']
+                window=json.loads((Path(result['attempt'])/'window.json').read_text())
+                self.wait_for(lambda:'started on T-035' in (self.repo/(host+'-shown')).read_text())
+                if host=='tmux':
+                    self.assertEqual(actor,calls[0][calls[0].index('-n')+1])
+                    self.assertIn(' follow ',calls[0][-1])
+                    self.assertEqual('@8',window['ref'])
+                else:
+                    # opened, then labelled by the ref cmux answered with, then closed by it
+                    self.assertEqual(['new-workspace','--cwd'],calls[0][:2])
+                    self.assertIn(' follow ',calls[0][calls[0].index('--command')+1])
+                    self.assertEqual(['rename-workspace','--workspace','workspace:7',actor],calls[1])
+                    self.assertEqual(actor,(self.repo/'cmux-title-workspace-7').read_text())
+                    self.assertEqual(['close-workspace','--workspace','workspace:7'],calls[-1])
+                    self.assertEqual('closed',window['status'])
+                self.assertFalse((self.repo/'controls').exists())
+    def test_a_cmux_workspace_that_cannot_be_labelled_is_still_closed(self):
+        self.executable('cmux', self.CMUX_STUB.replace("elif a[:1]==['rename-workspace']:",
+                                                       "elif a[:1]==['rename-workspace']:\n sys.exit('Error: denied')\nelif False:"))
+        answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],HERDR_ENV='0',CMUX_WORKSPACE_ID='workspace:1')
+        self.assertEqual(0,answer.returncode,answer.stderr)
+        calls=[json.loads(s) for s in (self.repo/'cmux-calls').read_text().splitlines()]
+        self.assertEqual(['close-workspace','--workspace','workspace:7'],calls[-1])
+        result=json.loads(self.results()[0].read_text())
+        self.assertEqual('completed',result['status'])
+        window=json.loads((Path(result['attempt'])/'window.json').read_text())
+        self.assertIn('rename-workspace',window['reason'])
+    def test_the_stand_ins_refuse_what_the_real_tools_refuse(self):
+        # A fixture test: it guards "stand-ins answer as the real tools do" and is not fail-first evidence for T-144.
+        # the round-1 call, cmux new-workspace --name, is one real cmux does not have
+        self.executable('tmux', self.TMUX_STUB); self.executable('cmux', self.CMUX_STUB)
+        env=dict(self.env)
+        run=lambda *a:subprocess.run([str(self.fake/a[0]),*a[1:]],env=env,capture_output=True,text=True)
+        self.assertNotEqual(0,run('cmux','new-workspace','--name','x','--command','true').returncode)
+        self.assertNotEqual(0,run('cmux','close-workspace').returncode)
+        self.assertNotEqual(0,run('tmux','new-window','-Z').returncode)
+        self.assertEqual('OK workspace:7',run('cmux','new-workspace','--cwd','.').stdout.strip())
+        self.assertRegex(run('tmux','new-window','-d','-P','-F','#{window_id}','-n','x').stdout.strip(),r'^@[0-9]+$')
+    def test_host_choice_is_config_then_environment_and_never_carries_the_round(self):
+        config=self.repo/'config.yaml'
+        def host(text='',**env):
+            config.write_text('vendor: codex\n'+text)
+            with patch.dict(os.environ,dict({k:v for k,v in os.environ.items() if not k.startswith(('FM_','HERDR_','TMUX','CMUX'))},**env),clear=True):
+                return m.window_host(self.repo)
+        self.assertEqual('none',host())
+        self.assertEqual('herdr',host(HERDR_ENV='1'))
+        self.assertEqual('tmux',host(TMUX='/tmp/x,1,0'))
+        self.assertEqual('cmux',host(CMUX_WORKSPACE_ID='w'))
+        self.assertEqual('none',host('host: none\n',HERDR_ENV='1'))
+        self.assertEqual('tmux',host('host: tmux  # a window\n'))
+        self.assertEqual('herdr',host('host: herdr\n'))
+        self.assertEqual('none',host('host: screen\n',HERDR_ENV='1'))
+        self.assertEqual('none',host('',HERDR_ENV='1',FM_TRANSPORT='direct'))
+        self.assertEqual('none',host('host: herdr\n',FM_HOST='none'))
     def test_blocked_empty_failed_and_autoclose_optout(self):
         for extra in ({'FM_TEST_STATUS':'BLOCKED'}, {'FM_TEST_STATUS':'INCOMPLETE'},
                       {'FM_TEST_EMPTY':'1'}, {'FM_TEST_EXIT':'1'}, {'FM_AUTOCLOSE':'0'}):
@@ -1132,11 +1500,44 @@ elif a[0]=='branch': print('t-035-test')
         ended=[e['actor'] for e in events if e['type']=='agent_finished']
         self.assertEqual(3,len(started)); self.assertEqual(started,set(ended)); self.assertEqual(3,len(ended))
         self.assertEqual({'sam','samx','samxy'},{a.split('-')[1] for a in started})
-    def test_transport_failure_stops_worker_before_success(self):
+    def test_a_herdr_that_fails_costs_the_worker_its_window_and_nothing_else(self):
+        # Herdr only ever gave the round a window (T-144): a Herdr that fails
+        # every command leaves the worker running headless to its end, and
+        # the failure is said and recorded, not raised.
         self.executable('herdr','raise SystemExit(7)')
         answer=self.invoke('fm-worker.sh',['--task','T-035'])
-        self.assertEqual(70,answer.returncode,answer.stderr)
-        self.assertNotIn('pr_opened',(self.repo/'state/events.jsonl').read_text())
+        self.assertEqual(0,answer.returncode,answer.stderr)
+        self.assertIn('no herdr window (Herdr command failed: pane get caller); the round runs without one',answer.stderr)
+        result=json.loads(self.results()[0].read_text()); attempt=Path(result['attempt'])
+        self.assertEqual('completed',result['status'])
+        window=json.loads((attempt/'window.json').read_text())
+        self.assertEqual(('herdr','none'),(window['host'],window['status']))
+        self.assertIn('Herdr command failed',window['reason'])
+        self.assertEqual('0',(attempt/'runner.exit').read_text().strip())
+    def test_a_herdr_window_that_fails_late_gives_its_pane_back(self):
+        # A window that fails after the round was handed its pane: the round
+        # runs headless with the caller's Herdr context again, and the pane
+        # fm disowned is reported idle, not left working for ever.
+        for fail in ('pane-run','report-working'):
+            with self.subTest(fail=fail):
+                (self.repo/'controls').unlink(missing_ok=True)
+                answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],FM_TEST_HERDR_FAIL=fail)
+                self.assertEqual(0,answer.returncode,answer.stderr)
+                latest=max(self.results(),key=lambda p:p.stat().st_mtime_ns)
+                result=json.loads(latest.read_text()); attempt=Path(result['attempt'])
+                self.assertEqual('completed',result['status'])
+                window=json.loads((attempt/'window.json').read_text())
+                self.assertEqual(('herdr','none'),(window['host'],window['status']))
+                self.assertTrue((attempt/'runner.exit').is_file())
+                environment=json.loads((attempt/'environment.json').read_text())
+                self.assertEqual('caller',environment['HERDR_PANE_ID'])
+                self.assertNotIn('HERDR_TAB_ID',environment)
+                self.assertNotIn('HERDR_WORKSPACE_ID',environment)
+                pane=json.loads((attempt/'owner.failed.json').read_text())['pane_id']
+                calls=[json.loads(s) for s in (self.repo/'controls').read_text().splitlines()]
+                states=[c[c.index('--state')+1] for c in calls if c[:3]==['pane','report-agent',pane]]
+                self.assertEqual(['working','idle'],states)
+                self.assertFalse(any(c[:2] in (['pane','close'],['tab','close']) for c in calls))
     def test_new_role_resets_inherited_adapter_guard(self):
         answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],
                            FM_CONTEXT_READY='1',FM_ATTEMPT_DIR='/unused-parent',FM_FINAL_PATH='/unused-parent/final')
@@ -1171,17 +1572,18 @@ elif a[0]=='branch': print('t-035-test')
         result=json.loads(self.results()[0].read_text())
         self.assertEqual(names,{result['actor']})
         self.assertEqual(2,len(list(self.results()[0].parent.glob('*/result.json'))))
-    def test_fallback_refuses_changed_owned_resources(self):
+    def test_fallback_never_reuses_changed_owned_resources_but_still_runs(self):
         self.executable('claude', "print('Authentication required.')\nraise SystemExit(2)\n")
         (self.repo/'config.yaml').write_text('vendor: claude\nfallback:\n  - codex\n')
         for change in ('added','moved','shared','reused','busy','identity','unknown','late-shell'):
             with self.subTest(change=change):
                 answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],FM_TEST_CHANGE=change)
-                self.assertNotEqual(0,answer.returncode,answer.stderr)
+                self.assertEqual(0,answer.returncode,answer.stderr)
         calls=[json.loads(s) for s in (self.repo/'controls').read_text().splitlines()]
         self.assertEqual(8,len([c for c in calls if c[:2]==['tab','create']]))
+        # the fallback attempt found the pane no longer its own and ran with no window
         self.assertEqual(8,len([c for c in calls if c[:2]==['pane','run']]))
-        self.assertFalse(list(self.repo.glob('reviewer-*.prompt')), 'fallback model must not start')
+        self.assertEqual(8,len(list(self.repo.glob('reviewer-*.prompt'))), 'the fallback model still starts')
         self.assertFalse(any(c[:2] in (['pane','close'],['tab','close']) for c in calls))
     def test_all_supported_cli_formats_inject_roles_and_keep_final(self):
         for vendor in ('claude','cursor-agent','gemini'):
@@ -1383,7 +1785,10 @@ class EmitStatus(unittest.TestCase):
                                          task='T-116', round=3, attempt=2, one_role=True))
         self.assertEqual(0, m.main(['emit-status','--root',str(self.root),'--actor',run.name,
                                     '--task','T-116','--role','worker','--en','x','--tw','y']))
-        self.assertEqual(dict(name='shira', role='worker', project='alpha', task='T-116', round=3, attempt=2),
+        # (T-146: with vendor and model beside them, null while unrecorded)
+        self.assertEqual(dict(name='shira', role='worker', project='alpha', task='T-116', round=3, attempt=2,
+                              vendor=None, model_requested=None, model=None, cli_version=None,
+                              model_mismatch=None),
                          self.events()[-1]['data']['identity'])
         # a run from before T-116 has no such fields, and none are invented
         old = self.root/'state/runs/worker-mira-t035-r465'; old.mkdir(parents=True)
@@ -1391,6 +1796,27 @@ class EmitStatus(unittest.TestCase):
         m.main(['emit-status','--root',str(self.root),'--actor',old.name,
                 '--task','T-035','--role','worker','--en','x','--tw','y'])
         self.assertNotIn('identity', self.events()[-1]['data'])
+
+    def test_a_status_carries_the_vendor_and_model_too(self):
+        # T-146: on 2026-09-29 every crewman's vendor, model and CLI were
+        # blank on the board, because a Herdr round's crew_status - its
+        # latest event - carried T-116's six fields only. It carries every
+        # field fm-worker.sh and fm-review.sh send, as identity.json has them.
+        run = self.root/'state/runs/worker-imani-t146-r1'; run.mkdir(parents=True)
+        m.save(run/'identity.json', dict(actor=run.name, name='imani', role='worker', project='alpha',
+                                         task='T-146', round=1, attempt=1))
+        m.record_requested(run, 'codex', 'gpt-6-astra')
+        m.main(['emit-status','--root',str(self.root),'--actor',run.name,
+                '--task','T-146','--role','worker','--en','x','--tw','y'])
+        said = self.events()[-1]['data']['identity']
+        self.assertEqual(('codex', 'gpt-6-astra', None), (said['vendor'], said['model_requested'], said['model']))
+        m.record_model(run, 'codex', 'gpt-6-astra', 'gpt-6-astra', 'codex 1.2.3')
+        m.main(['emit-status','--root',str(self.root),'--actor',run.name,
+                '--task','T-146','--role','worker','--en','x','--tw','y'])
+        said = self.events()[-1]['data']['identity']
+        self.assertEqual(dict(name='imani', role='worker', project='alpha', task='T-146', round=1, attempt=1,
+                              vendor='codex', model_requested='gpt-6-astra', model='gpt-6-astra',
+                              cli_version='codex 1.2.3', model_mismatch=False), said)
 
     def test_bounded_progress_and_refusals(self):
         self.assertEqual(0, m.main(['emit-status','--root',str(self.root),'--actor','worker-h',

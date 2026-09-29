@@ -133,6 +133,14 @@ const SHIP = (() => {
         : ` role="img" aria-label="${esc(T("projectChip"))}: ${esc(c.project)}"></i>`);
   // the card writes the project out beside it, so there it is only colour
   const swatch = (c) => `<i class="pennant" style="--pc:${projectColor(c.project)}" aria-hidden="true"></i>`;
+  // T-127: a small vendor mark on the name tag - a dot in the vendor's own
+  // colour, named for a screen reader - and nothing more: never the model,
+  // which stays in the detail card. The tag is quiet by design (T-116); this
+  // keeps it that way while still saying which engine is running.
+  const vendorColor = (v) => `hsl(${(hash(v) + 180) % 360} 55% 55%)`;
+  const vendorMark = (c, T) => !c.vendor ? ""
+    : `<i class="vmark" style="--vc:${vendorColor(c.vendor)}" role="img"` +
+      ` aria-label="${esc(T("crewVendor"))}: ${esc(c.vendor)}" title="${esc(T("crewVendor"))}: ${esc(c.vendor)}"></i>`;
   // A quiet name tag over each head (T-116): the crew member's name and the
   // pennant of the project, and nothing else - no task, round, pull request
   // or activity, which crowded 24 tags into one another. Those are in the
@@ -142,7 +150,7 @@ const SHIP = (() => {
     const open = SHIP.openCard === c.id;
     return `<div class="bub${c.row !== topRow ? " mini" : ""} st-${c.state}${c.alt ? " alt" : ""}${c.far ? " far" : ""}${open ? " open" : ""}"` +
       ` data-bubble="${esc(c.id)}" style="--px:${c.x}%;--r:${c.row};--tagW:${c.tagW}%">` +
-      `<div class="who">${esc(c.name)}${pennant(c, T)}</div>${detail(c, T, open)}</div>`;
+      `<div class="who">${esc(c.name)}${vendorMark(c, T)}${pennant(c, T)}</div>${detail(c, T, open)}</div>`;
   }
   // One labelled line per field, each on its own: never a joined string.
   function detail(c, T, open) {
@@ -160,6 +168,16 @@ const SHIP = (() => {
       line("cround", T("crewRound"), round) +
       line("cpr", T("crewPr"), c.pr ? prRef(c.pr, c.pr_url) : unknown) +
       line("cstate", T("crewState"), esc(T("lane" + c.state[0].toUpperCase() + c.state.slice(1)))) +
+      // T-127: what the round actually ran on, read from the run itself -
+      // never config.yaml's guess, and unknown until the round has run.
+      // The Model field carries the warning colour, with both names, only
+      // when the run reported a model other than the one config.yaml asked for.
+      line("cvendor", T("crewVendor"), c.vendor ? esc(c.vendor) : unknown) +
+      `<dt>${esc(T("crewModel"))}</dt><dd class="cmodel${c.model_mismatch ? " warn" : ""}">` +
+      (c.model_mismatch
+        ? esc(T("modelMismatch").replace("{requested}", c.model_requested || unknown).replace("{model}", c.model || unknown))
+        : c.model ? esc(c.model) : unknown) + `</dd>` +
+      line("ccli", T("crewCli"), c.cli_version ? esc(c.cli_version) : unknown) +
       // .job: the current activity, the one line the tag used to carry
       line("job", T("crewActivity"), linkPrs(esc(c.activity), c.pr_urls)) +
       `</dl></div>`;
@@ -211,6 +229,13 @@ const SHIP = (() => {
         // the task's review round and the retry within it; null is unknown
         round: Number.isInteger(a.round) ? a.round : null,
         attempt: Number.isInteger(a.attempt) ? a.attempt : null,
+        // T-127: what the round actually ran on, read from the run itself;
+        // null/false for a run recorded before this, never guessed
+        vendor: a.vendor || null,
+        model: a.model || null,
+        model_requested: a.model_requested || null,
+        cli_version: a.cli_version || null,
+        model_mismatch: !!a.model_mismatch,
         // only firstmate can be aboard without a task: the server skips a
         // taskless worker or reviewer, so there is no third case to write
         job: a.task ? `${a.task} · ${activity}` : activity,
@@ -446,6 +471,7 @@ const SHIP = (() => {
   const SORTS = {
     name: (c) => c.name, role: (c) => c.roleLabel, project: (c) => c.project || "",
     task: (c) => c.task || "", round: (c) => c.round ?? -1, state: (c) => c.state,
+    vendor: (c) => c.vendor || "", model: (c) => c.model || "",
   };
   function roster(host, crew, T) {
     if (host.ownerDocument) host.hidden = !SHIP.rosterOn;
@@ -466,6 +492,10 @@ const SHIP = (() => {
       cell("rl", T("crewRole"), esc(c.roleLabel)) +
       cell("pj", T("projectChip"), c.project
         ? `<i class="pdot" style="--pc:${projectColor(c.project)}" aria-hidden="true"></i>${esc(c.project)}` : unknown) +
+      cell("rv", T("crewVendor"), c.vendor ? esc(c.vendor) : unknown) +
+      cell("rm" + (c.model_mismatch ? " warn" : ""), T("crewModel"), c.model_mismatch
+        ? esc(T("modelMismatch").replace("{requested}", c.model_requested || unknown).replace("{model}", c.model || unknown))
+        : c.model ? esc(c.model) : unknown) +
       cell("rd", T("crewRound"), c.round == null ? unknown
         : esc(c.round) + (c.attempt > 1 ? ` <span class="att">${esc(T("crewAttempt"))} ${esc(c.attempt)}</span>` : "")) +
       `<span class="st" data-label="${esc(T("crewState"))}">${esc(T("lane" + c.state[0].toUpperCase() + c.state.slice(1)))}</span>` +
@@ -481,6 +511,7 @@ const SHIP = (() => {
       `</div></li>`;
     const head = `<div class="rhead" role="group" aria-label="${esc(T("rosterSort"))}">` +
       [["name", T("crewName")], ["role", T("crewRole")], ["project", T("projectChip")],
+      ["vendor", T("crewVendor")], ["model", T("crewModel")],
       ["round", T("crewRound")], ["state", T("crewState")], [null, T("crewPr")], ["task", T("crewTask")]]
       .map(([k, label]) => k
         ? `<button class="rsort" data-sort="${k}" aria-pressed="${key === k}">${esc(label)}</button>`

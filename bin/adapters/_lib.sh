@@ -64,10 +64,6 @@ fm_adapter_context() {
       exit 64; }
   fi
   code="$(cd "$(dirname "$adapter")/../.." && pwd)"
-  if [ "${HERDR_ENV:-}" = 1 ] && [ "${FM_TRANSPORT:-herdr}" = direct ] && [ "${FM_ALLOW_DIRECT:-}" != 1 ]; then
-    echo "${adapter##*/}: FM_TRANSPORT=direct is refused when HERDR_ENV=1; use stock managed Herdr via fm-worker/fm-review" >&2
-    exit 70
-  fi
   if [ "${FM_CONTEXT_READY:-}" != 1 ] && { [ -n "${FM_RUN_DIR:-}" ] || { [ "${HERDR_ENV:-}" = 1 ] && [ "${FM_TRANSPORT:-herdr}" != direct ]; }; }; then
     # shellcheck disable=SC2154  # validated positional arguments in each adapter
     exec python3 "$code/bin/fm-herdr.py" transport "$adapter" "$prompt" "$tree" "$log"
@@ -316,6 +312,105 @@ fm_adapter_pipeline_status() {
 
 # fm_adapter_mark <log> -> byte offset to read from after the run
 fm_adapter_mark() { if [ -f "$1" ]; then wc -c < "$1" | tr -d ' '; else echo 0; fi; }
+
+# --- the configured model (T-127) -----------------------------------------
+# config.yaml's model is applied, not only recorded: fm-worker.sh and
+# fm-review.sh resolve it and hand it in as FM_MODEL, and each adapter passes
+# it with its own CLI's flag. A model the vendor does not recognise refuses
+# the round with a usage error, loudly, rather than running on whatever the
+# CLI happened to default to.
+#
+# Unlike _FM_SIG (an outage, which the caller's evidence predicate can still
+# rescue - work beats a signature), a model refusal must never fire on a
+# completed round: review round 5 found that a broad, generic phrase list run
+# over the whole transcript regardless of exit code would misread a round
+# that legitimately discussed "an invalid model" or "no such model found" -
+# ordinary English in ORM/data-model/ML work, and, after this very task,
+# in this codebase's own prose - as a hard configuration failure, discarding
+# real work. So this checks three things _FM_SIG does not: the CLI's own
+# exit code must be non-zero (a completed round, rc 0, is never read as a
+# refusal), the slice must carry no `"model":"..."` field and no non-empty
+# claude `"modelUsage"` at all (a report of the model actually used means a
+# turn happened, whatever text comes after it), and, for the three vendors with no fixed token (below), the
+# phrase must open the line it is found on - the shape a CLI's own one-line
+# usage error has, and prose discussing models in passing does not ("Error:
+# unrecognized model" opens a line; "...reviewed the invalid model names
+# and..." does not). claude names its refusal exactly
+# (`[claude-code:unrecognized_model]`), read literally, needing no such
+# anchor; codex, cursor-agent and gemini have no such fixed token
+# documented, so they are read against one generic, vendor-agnostic phrase
+# list instead, the way _FM_SIG is for an outage - but anchored, since
+# _FM_SIG's alternatives are each shaped like nothing else, and these
+# ordinary phrases are not.
+_FM_CLAUDE_MODEL_SIG='[claude-code:unrecognized_model]'
+_FM_MODEL_SIG='unrecognized model|unrecognised model|unknown model|invalid model|not a valid model|no such model|model not found'
+
+# fm_adapter_model_refusal <vendor> <model> <log> <off> <rc> -> a one-line
+# message naming the vendor and the model when the CLI's own words, in the
+# slice of the log this attempt wrote, say it did not recognise the model;
+# nothing when it is silent on the question, an empty model asked for
+# nothing, the attempt's exit code was 0 (a completed round), or the slice
+# already reports a model that ran (real work, whatever came after it).
+fm_adapter_model_refusal() {
+  local vendor="$1" model="$2" log="$3" off="$4" rc="${5:-0}" said=''
+  [ -n "$model" ] || return 1
+  [ "$rc" != 0 ] || return 1
+  [ -f "$log" ] && said="$(tail -c "+$((off + 1))" "$log" 2>/dev/null)"
+  grep -q '"model"[[:space:]]*:[[:space:]]*"[^"]*"' <<< "$said" && return 1
+  # claude's result names no "model": the models a turn ran on are the keys
+  # of its modelUsage (T-146), and an empty one reports nothing that ran
+  grep -q '"modelUsage"[[:space:]]*:[[:space:]]*{[[:space:]]*"' <<< "$said" && return 1
+  case "$vendor" in
+    claude) grep -qF "$_FM_CLAUDE_MODEL_SIG" <<< "$said" || return 1 ;;
+    *)      grep -qiE "^[[:space:]]*error[:.]?[[:space:]].*($_FM_MODEL_SIG)" <<< "$said" || return 1 ;;
+  esac
+  printf "%s: model '%s' is not recognised by %s\n" "$vendor" "$model" "$vendor"
+}
+
+# fm_adapter_model_listcheck <vendor> <model> <list-cmd...> -> a one-line
+# message naming the vendor and the model when the vendor's own "list the
+# models" command runs, says something, and names none of them <model>
+# (checked against the first column of each line, "id - Name", the shape
+# cursor-agent's own `--list-models` prints); nothing when the list command
+# itself could not be run, exited non-zero, or printed nothing - no login,
+# no catalogue reachable offline - so a round is never refused by a check
+# that could not actually ask the vendor. This runs before the round, on a
+# lightweight call that touches no worktree - unlike
+# fm_adapter_model_refusal, which reads the real round's own transcript
+# after the fact. The call is given no stdin (nothing is waiting to answer a
+# prompt it never asked) and a deadline (an unauthenticated CLI that waits on
+# the network or a login prompt must never hang a round that has not even
+# started): perl's alarm, since `timeout` is not on every platform this
+# runs on; a run past the deadline is exactly "could not be run", silent.
+#
+# Consumes its own two positional arguments as two single shifts, not one
+# `shift 2`: this is a library helper, never an option loop reading a
+# round's command line, and a literal `shift 2` pulls this file into the
+# option-loop lint's own pinned corpus (tests/option-loop.test.sh, out of
+# this task's scope) for a shape that lint was never written to check.
+fm_adapter_model_listcheck() {
+  local vendor="$1" model="$2" out rc line id
+  [ "$#" -ge 2 ] || return 1
+  shift; shift
+  [ -n "$model" ] || return 1
+  out="$(FM_MODEL_LISTCHECK_SECS="${FM_MODEL_LISTCHECK_SECS:-10}" \
+    perl -e 'alarm $ENV{FM_MODEL_LISTCHECK_SECS}; exec @ARGV or exit 127' "$@" 2>/dev/null </dev/null)"
+  rc=$?
+  [ "$rc" -eq 0 ] && [ -n "$out" ] || return 1
+  while IFS= read -r line; do
+    id="${line%% - *}"
+    id="$(printf '%s' "$id" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    [ -n "$id" ] && [ "$id" = "$model" ] && return 1
+  done <<< "$out"
+  printf "%s: model '%s' is not one %s's own model list names\n" "$vendor" "$model" "$vendor"
+}
+
+# fm_adapter_model_args <flag> -> "$flag" "$FM_MODEL" when a model is
+# configured, nothing otherwise; the words to splice into a CLI's own argv.
+fm_adapter_model_args() {
+  [ -n "${FM_MODEL:-}" ] || return 0
+  printf '%s\n%s\n' "$1" "$FM_MODEL"
+}
 
 # fm_adapter_verdict <rc> <log> <offset> -> 0 done / 1 unfit / 2 unavailable
 fm_adapter_verdict() {

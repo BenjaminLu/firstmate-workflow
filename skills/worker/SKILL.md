@@ -124,6 +124,18 @@ SWEPT:<task-id> assertions that read the ambient machine
   found 3, fixed 3
 ```
 
+## Processes you start
+
+Every background process has an owner and ends with it; a wake is pushed by
+the writer, never found by polling; a process that outlives its owner is a
+bug. Code you write starts a background process only through
+`bin/lib/fm_lifeline.py` or `bin/lib/fm-lifeline.sh`, naming its owner -
+never `start_new_session`, `setsid`, `nohup`, `disown` or `detached: true`,
+and never a loop that asks whether a pid or a directory still exists. A test
+that starts a background process on purpose stops it or ends its owner:
+`bin/ci.sh` turns a suite red for any process still running when it ends
+(T-151).
+
 ## Rounds
 
 Start from firstmate's brief on the pull request and the evidence it names —

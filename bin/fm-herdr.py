@@ -28,7 +28,25 @@ import urllib.parse
 import urllib.request
 import uuid
 
-_children = []  # Keep Popen objects until a status/stop operation can reap them.
+_lifeline = None
+
+
+def lifeline():
+    """bin/lib/fm_lifeline.py, beside this file: the one way fm starts a
+    background process (T-151). Loaded when first needed, so a fixture that
+    copies this file alone to read the registry does not need bin/lib."""
+    global _lifeline
+    if _lifeline is None:
+        import importlib.util
+        path = Path(__file__).resolve().parent / 'lib/fm_lifeline.py'
+        spec = importlib.util.spec_from_file_location('fm_lifeline', path)
+        module = importlib.util.module_from_spec(spec)
+        # no __pycache__ in bin/lib: the tree stays exactly what was committed
+        written, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+        try: spec.loader.exec_module(module)
+        finally: sys.dont_write_bytecode = written
+        _lifeline = module
+    return _lifeline
 
 
 def save(path, value):
@@ -485,6 +503,41 @@ def allocate(root, role, task, alias):
     return run
 
 
+def record_model(run, vendor, model_requested, model, cli_version):
+    """T-127: what the round actually ran on, read from the round itself and
+    merged into identity.json beside name/role/project/task/round/attempt -
+    never guessed, and never read back out of the actor. `model` is what the
+    vendor's own CLI reported (empty/'unknown' when it said nothing);
+    `model_requested` is config.yaml's, resolved before the round ran.
+    model_mismatch is true only when both are known and they differ, so a
+    config with no model set, or a vendor that said nothing, is never
+    reported as a mismatch of nothing against nothing."""
+    run = Path(run)
+    identity = read(run / 'identity.json')
+    model = model or 'unknown'
+    cli_version = cli_version or 'unknown'
+    mismatch = bool(model_requested) and model != 'unknown' and model != model_requested
+    identity.update(vendor=vendor or 'unknown', model_requested=model_requested or '',
+                     model=model, cli_version=cli_version, model_mismatch=mismatch)
+    save(run / 'identity.json', identity)
+    return identity
+
+
+def record_requested(run, vendor, model_requested):
+    """T-146: the vendor a round is on and the model config.yaml names for
+    that vendor, recorded when the attempt starts rather than only once the
+    round has run, so the board shows them from the round's first event.
+    What the vendor reports is not known yet: model, cli_version and
+    model_mismatch are cleared, never carried over from another vendor's
+    attempt, until record_model writes them."""
+    run = Path(run)
+    identity = read(run / 'identity.json')
+    for key in ('model', 'cli_version', 'model_mismatch'): identity.pop(key, None)
+    identity.update(vendor=vendor or 'unknown', model_requested=model_requested or '')
+    save(run / 'identity.json', identity)
+    return identity
+
+
 def snapshot(root):
     root = Path(root).resolve()
     base = root / 'state/snapshots'; base.mkdir(parents=True, exist_ok=True)
@@ -598,7 +651,7 @@ class Herdr:
         self.run = Path(run)
         self.binary = shutil.which('herdr')
         if not self.binary:
-            raise RuntimeError('HERDR_ENV=1 but herdr is unavailable; stop and report — do not set FM_TRANSPORT=direct')
+            raise RuntimeError('herdr is not installed')
 
     def __call__(self, *args):
         result = subprocess.run([self.binary, *args], capture_output=True, timeout=15)
@@ -612,60 +665,342 @@ class Herdr:
         return json.loads(result.stdout)['result']
 
 
-def managed():
-    """True when adapters must use owned Herdr panes.
+HOSTS = ('none', 'herdr', 'cmux', 'tmux')
 
-    Inside HERDR_ENV=1, FM_TRANSPORT=direct is refused (protocol violation)
-    unless FM_ALLOW_DIRECT=1 for isolated tests. Outside Herdr, adapters run
-    in-process without inventing session wrappers.
+
+def window_host(root):
+    """The terminal host that gets a window onto a round, or 'none'.
+
+    A window is only somewhere for people to watch: it follows the run's log
+    and never carries the round. `host:` in config.yaml (FM_HOST overrides it)
+    names one; unset, the host fm was started from is detected. A round with
+    FM_TRANSPORT=direct asks for no window at all.
     """
-    if os.environ.get('HERDR_ENV') != '1':
-        return False
-    if os.environ.get('FM_TRANSPORT', 'herdr') == 'direct':
-        if os.environ.get('FM_ALLOW_DIRECT') == '1':
-            return False
-        raise RuntimeError(
-            'FM_TRANSPORT=direct is refused when HERDR_ENV=1; '
-            'use stock fm-worker.sh / fm-review.sh managed Herdr transport')
-    return True
+    if os.environ.get('FM_TRANSPORT') == 'direct':
+        return 'none'
+    asked = os.environ.get('FM_HOST', '')
+    if not asked:
+        entry = _config_key(_config_lines(root), 'host')
+        asked = entry[0].strip('\'" ') if entry else ''
+    if asked:
+        if asked in HOSTS:
+            return asked
+        print('fm: host: %r is not one of %s; running with no window' % (asked, '|'.join(HOSTS)),
+              file=sys.stderr)
+        return 'none'
+    if os.environ.get('HERDR_ENV') == '1':
+        return 'herdr'
+    if os.environ.get('CMUX_WORKSPACE_ID') or os.environ.get('CMUX_SOCKET_PATH'):
+        return 'cmux'
+    if os.environ.get('TMUX'):
+        return 'tmux'
+    return 'none'
 
 
-def transport(adapter, prompt, tree, log):
-    """A whole adapter executes in the pane, preserving normal verdict/fallback."""
-    # Caller-side wait must survive the launching shell exiting (SIGHUP). The
-    # pane-child also ignores SIGHUP and publishes last-result / close itself.
-    signal.signal(signal.SIGHUP, signal.SIG_IGN)
-    root = Path(os.environ.get('FM_ROOT', Path(adapter).resolve().parents[2])).resolve()
-    code = Path(os.environ['FM_CODE_ROOT']) if os.environ.get('FM_CODE_ROOT') else snapshot(root)
-    adapter = str(code / 'bin/adapters' / Path(adapter).name)
-    role = os.environ.get('FM_ROLE', 'worker'); task = os.environ.get('FM_TASK', 'T-adapter')
-    logical = Path(os.environ['FM_RUN_DIR']) if os.environ.get('FM_RUN_DIR') else allocate(root, role, task, '')
-    # Vendor fallback keeps the logical actor and verified tab/pane; artifacts differ.
-    attempt = Path(tempfile.mkdtemp(prefix=Path(adapter).stem + '-', dir=logical))
-    actor = logical.name
-    (attempt / 'prompt.md').write_text(role_context(code, role, task, actor, Path(prompt).read_text()))
-    env = dict(os.environ, FM_ROLE=role, FM_TASK=task,
-               FM_ACTOR=actor, FM_FINAL_PATH=str(attempt / 'final.txt'),
-               FM_ATTEMPT_DIR=str(attempt), FM_CONTEXT_READY='1')
-    # A spawned pane does not necessarily inherit the launcher's environment.
-    # Keep its explicit environment private and do not print credentials.
-    save(attempt / 'environment.json', env); (attempt / 'environment.json').chmod(0o600)
-    payload = dict(adapter=str(Path(adapter).resolve()), prompt=str(attempt / 'prompt.md'),
-                   tree=str(Path(tree).resolve()), actor=actor, role=role, task=task,
-                   lifetime_tracking=True)
-    save(attempt / 'invocation.json', payload)
-    if not managed():
-        reserve_execution(attempt)
+class AlreadyStarted(RuntimeError):
+    pass
+
+
+def spawn_runner(attempt):
+    """Start the round as a process group of its own, owned by fm and not by
+    any terminal: a session of its own, stdout and stderr to the run's log,
+    its pid on file. A pane that closes or crashes cannot take it down.
+
+    A round outlives the script that launched it on purpose (a killed
+    fm-worker.sh leaves its round retained, to be stopped or resumed), so it
+    names the longer-lived owner it belongs to - the session - and holds a
+    lifeline to it (T-151): when the session is gone, so is the round. It
+    is started through bin/lib/fm_lifeline.py, and holds the line itself
+    (run_supervised), so its pid and its group are the round's."""
+    attempt = Path(attempt)
+    owner = lifeline().session_owner()
+    reserve_execution(attempt)
+    with (attempt / 'run.log').open('ab') as out:
+        proc = lifeline().start([sys.executable, str(Path(__file__).resolve()), 'pane-child', str(attempt)],
+                                owner=owner, direct=True,
+                                stdin=subprocess.DEVNULL, stdout=out, stderr=out, close_fds=True)
+    (attempt / 'runner.pid').write_text(f'{proc.pid}\n')
+    return proc
+
+
+def write_exit(attempt, rc):
+    path = Path(attempt) / 'runner.exit'
+    temp = path.with_name(path.name + '.' + uuid.uuid4().hex)
+    temp.write_text(f'{rc}\n'); os.replace(temp, path)
+
+
+def run_supervised(attempt):
+    """The runner's own entry: the round, then its exit code on file. It
+    holds the lifeline spawn_runner handed it first, and runs nothing
+    without one, or for an owner already gone (T-151)."""
+    try:
+        lifeline().hold()
+    except RuntimeError as error:  # OwnerGone included
+        print('fm runner: ' + str(error), file=sys.stderr)
+        write_exit(attempt, 70); return 70
+    try:
         rc = pane_child(attempt)
-        with Path(log).open('ab') as out: out.write((attempt / 'cli.log').read_bytes())
-        save(logical / 'last-result.json', dict(read(attempt / 'result.json'), attempt=str(attempt)))
-        return rc
+    except (AlreadyStarted, BlockingIOError):
+        raise  # someone else's round owns the exit file
+    except BaseException:
+        write_exit(attempt, 70); raise
+    write_exit(attempt, rc)
+    return rc
+
+
+def follow(attempt, poll=0.2):
+    """What a window shows: the run's log from its start, followed until the
+    round ends (result or exit file, or nothing of the round left running:
+    round_live, never the runner's pid alone). Stopping this
+    - a closed pane - stops nothing else."""
+    attempt = Path(attempt); log = attempt / 'run.log'; at = 0; unseen = time.monotonic()
+    out = sys.stdout.buffer
+    while True:
+        over = (attempt / 'result.json').exists() or (attempt / 'runner.exit').exists()
+        pid = attempt / 'runner.pid'
+        if not over and pid.is_file():
+            try: runner = int(pid.read_text())
+            except (ValueError, OSError): over = True
+            else:
+                try: os.kill(runner, 0)
+                except OSError: over = not round_live(attempt, runner)
+        elif not over and time.monotonic() - unseen > float(os.environ.get('FM_FOLLOW_GRACE', '120')):
+            over = True  # no round ever started under this window
+        if log.is_file():
+            with log.open('rb') as source:
+                source.seek(at); data = source.read()
+            if data:
+                out.write(data); out.flush(); at += len(data)
+                continue
+        if over: return 0
+        time.sleep(poll)
+
+
+SAFE_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
+
+
+def latest_attempt(root, actor):
+    """The attempt a round of `actor` last started, or None."""
+    if not SAFE_NAME.fullmatch(actor): raise ValueError('not an actor: ' + repr(actor))
+    attempts = [path.parent for path in (Path(root) / 'state/runs' / actor).glob('*/invocation.json')]
+    return max(attempts, key=lambda path: path.stat().st_mtime_ns) if attempts else None
+
+
+def group_live(pgid):
+    """Whether any member of a process group is still running. A member that
+    has exited and waits only for its parent to reap it (a zombie) is not."""
+    try: os.killpg(pgid, 0)
+    except ProcessLookupError: return False
+    try:
+        listing = subprocess.run(['ps', '-A', '-o', 'pgid=,stat='], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError): return True
+    if listing.returncode: return True
+    return any(fields[0] == str(pgid) and not fields[1].startswith('Z')
+               for fields in (line.split() for line in listing.stdout.splitlines()) if len(fields) >= 2)
+
+
+def round_live(attempt, pid):
+    """Whether a round still runs, judged by the round and not by its runner
+    alone: the runner itself, or the lifetime lock still held (a killed runner
+    can leave its adapter running, holding the lock), or, while the round has
+    no exit or result file, any member of its process group. A group id is
+    not reused while a member lives, and a finished round's is never read."""
+    attempt = Path(attempt)
+    if process_matches(dict(pid=pid, token='fm-herdr.py')): return True
+    try: state = execution_state(attempt)
+    except (OSError, ValueError): state = None
+    if state and state.get('live'): return True
+    if (attempt / 'runner.exit').exists() or (attempt / 'result.json').exists(): return False
+    try: return group_live(pid)
+    except PermissionError: return True  # a group is there, if not one fm may signal
+
+
+def stop_group(pid, grace):
+    """TERM a round's process group, and KILL whatever of it is left after the
+    grace. True once the group is gone. A group id is not reused while any
+    member of the group lives, so the KILL cannot reach someone else's."""
+    try: os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError: return True
+    for wait, then in ((grace, signal.SIGKILL), (2.0, None)):
+        end = time.monotonic() + wait
+        while time.monotonic() < end:
+            if not group_live(pid): return True
+            time.sleep(.05)
+        if then is None: return False
+        try: os.killpg(pid, then)
+        except ProcessLookupError: return True
+    return False
+
+
+def stop_run(root, actor, grace=5.0, out=None):
+    """Stop every live round of one actor by its process group. A round is
+    live while round_live says so, so a round whose runner was killed but
+    whose adapter still runs is stopped by its group, then by the CLI pid it
+    recorded. A round from before
+    T-144 has no runner: its vendor CLI is sent TERM by the pid it recorded,
+    as the board did, and only while ps still shows that CLI."""
+    out = out if out is not None else dict(stopped=[], failed=[])
+    if not SAFE_NAME.fullmatch(actor): raise ValueError('not an actor: ' + repr(actor))
+    run = Path(root) / 'state/runs' / actor
+    for attempt in sorted(path for path in run.glob('*') if path.is_dir()):
+        pidfile = attempt / 'runner.pid'
+        if pidfile.is_file():
+            try: pid = int(pidfile.read_text())
+            except (ValueError, OSError): continue
+            runner = process_matches(dict(pid=pid, token='fm-herdr.py'))
+            if not (runner or round_live(attempt, pid)): continue
+            label = f'{actor} {pid}' if runner else f'{actor} {pid} (runner gone)'
+            try: gone = stop_group(pid, grace)
+            except OSError as error: gone, why = False, error.strerror or str(error)
+            else: why = 'still running after KILL'
+            (out['stopped'] if gone else out['failed']).append(label if gone else f'{label}: {why}')
+            if runner: continue
+            # a runner that is gone recorded its CLI: TERM it as for a round
+            # from before T-144, a no-op once the group stop took it
+        try: cli = read(attempt / 'execution.json')
+        except (OSError, ValueError): continue
+        if cli.get('started') is True: signal_recorded(out, f'{actor} {cli.get("pid")}', cli)
+    return out
+
+
+def signal_recorded(out, label, record):
+    """TERM a pid a record names, only while ps shows the program it names."""
+    pid = record.get('pid')
+    if not isinstance(pid, int) or pid <= 1 or not isinstance(record.get('token'), str):
+        return
+    if not process_matches(record): return
+    try: os.kill(pid, signal.SIGTERM); out['stopped'].append(label)
+    except OSError as error: out['failed'].append(f'{label}: {error.strerror or error}')
+
+
+def stop_task(root, task, project, default, grace=5.0):
+    """Every crewman on one task of one project, stopped by the one stop path
+    the board and fm's stop command share. First the task's bin/fm-worker.sh, with
+    TERM, whose trap saves and pushes the worktree; then each of the task's
+    runs: its rounds by process group (stop_run) and the script that launched
+    it (process.json), by TERM. A run names its project, or is the default's.
+    The pull request is never touched."""
+    root = Path(root)
+    out = dict(stopped=[], failed=[])
+    if not SAFE_NAME.fullmatch(task): return out
+    try: pid = int((root / 'state/worktrees' / (task + '.pid')).read_text().strip())
+    except (OSError, ValueError): pid = None
+    if pid: signal_recorded(out, f'worker {pid}', dict(pid=pid, token='fm-worker.sh'))
+    for file in sorted((root / 'state/runs').glob('*/identity.json')):
+        try: identity = read(file)
+        except (OSError, ValueError): continue
+        if identity.get('task') != task or (identity.get('project') or default) != project: continue
+        actor = file.parent.name
+        if not SAFE_NAME.fullmatch(actor): continue
+        stop_run(root, actor, grace, out)
+        try: launcher = read(file.parent / 'process.json')
+        except (OSError, ValueError): continue
+        signal_recorded(out, f'{actor} {launcher.get("pid")}', launcher)
+    return out
+
+
+def stop_command(args):
+    """`stop <root> <actor>` or `stop <root> --task <id> [--project P] [--default D]`."""
+    root, *rest = args
+    grace = float(os.environ.get('FM_STOP_GRACE', '5'))
+    if rest[:1] != ['--task']:
+        if len(rest) != 1: raise ValueError('usage: stop <root> <actor> | stop <root> --task <id>')
+        return stop_run(root, rest[0], grace)
+    options = dict(zip(rest[::2], rest[1::2]))
+    if len(rest) % 2 or set(options) - {'--task', '--project', '--default'}:
+        raise ValueError('usage: stop <root> --task <id> [--project <name>] [--default <name>]')
+    default = options.get('--default', default_project(root) or '')
+    return stop_task(root, options['--task'], options.get('--project') or default, default, grace)
+
+
+def supervise(attempt, proc, timeout, identity, chain_attempt):
+    """Wait for the round's result; a runner that is gone with nothing live
+    left of it and no result was lost, and says so as a result."""
+    attempt = Path(attempt)
+    deadline = time.monotonic() + timeout
+    while not (attempt / 'result.json').exists():
+        if proc.poll() is not None and not (attempt / 'result.json').exists():
+            state = execution_state(attempt)
+            if not (state and state.get('live')):
+                if (attempt / 'result.json').exists(): break
+                lost = dict(identity, exit_code=70, status='lost', pid=proc.pid,
+                            runner_exit=proc.returncode, chain_attempt=chain_attempt,
+                            cli_exit_code=None)
+                save(attempt / 'result.json', lost); publish_last_result(attempt, lost)
+                break
+        if time.monotonic() >= deadline:
+            save(attempt / 'transport.json', dict(status='timed-out', actor=identity['actor']))
+            raise RuntimeError('run timed out; process and artifacts retained at ' + str(attempt))
+        time.sleep(.1)
+    return read(attempt / 'result.json')
+
+
+class Host:
+    """A terminal host other than Herdr (tmux, cmux): one command, logged."""
+    def __init__(self, name, run):
+        self.name = name; self.run = Path(run)
+        self.binary = shutil.which(name)
+        if not self.binary:
+            raise RuntimeError(name + ' is not installed')
+
+    def __call__(self, *args):
+        result = subprocess.run([self.binary, *args], capture_output=True, text=True, timeout=15)
+        with (self.run / 'window.log').open('a') as out:
+            out.write(shlex.join(args) + '\n' + result.stdout + result.stderr)
+        if result.returncode: raise RuntimeError(self.name + ' command failed: ' + shlex.join(args))
+        return result.stdout.strip()
+
+
+def open_generic_window(host, attempt, tree, actor, command):
+    """A labelled tmux window or cmux workspace showing the run's log.
+
+    Only documented interfaces. tmux(1): `new-window [-d] [-P] [-F format]
+    [-n window-name] [-c start-directory] [shell-command]`; -P prints the new
+    window's information in -F's format, and `#{window_id}` is its `@N` id.
+    The window runs the follower and closes itself when the follower exits.
+    cmux's own help: `new-workspace [--cwd <path>] [--command <text>]` (no
+    name; --command sends the text and Enter to the new workspace's shell),
+    `rename-workspace [--workspace <id|ref>] <title>`, and
+    `close-workspace --workspace <id|ref>`; its output "defaults to refs"
+    (workspace:N), or UUIDs with --id-format. The workspace is opened, then
+    labelled by the ref it came back with; one that names no ref cannot be
+    labelled or closed, and is said to have failed."""
+    control = Host(host, attempt)
+    if host == 'tmux':
+        if not os.environ.get('TMUX'): raise RuntimeError('not inside a tmux session')
+        ref = control('new-window', '-d', '-P', '-F', '#{window_id}', '-n', actor,
+                      '-c', str(Path(tree).resolve()), command)
+        if not re.fullmatch(r'@\d+', ref): raise RuntimeError('tmux gave no window id: ' + repr(ref))
+    else:
+        shown = control('new-workspace', '--cwd', str(Path(tree).resolve()), '--command', command)
+        found = re.search(r'workspace:\d+|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}', shown)
+        if not found: raise RuntimeError('cmux named no new workspace: ' + repr(shown))
+        ref = found.group(0)
+        # the workspace is open from here on: if labelling fails, it is closed
+        # at the round's end all the same
+        save(Path(attempt) / 'window.json', dict(host=host, status='open', ref=ref, actor=actor))
+        control('rename-workspace', '--workspace', ref, actor)
+    record = dict(host=host, status='open', ref=ref, actor=actor)
+    save(Path(attempt) / 'window.json', record)
+    return record
+
+
+def close_generic_window(record, attempt):
+    """tmux closes a window when its command exits; cmux is asked to."""
+    if record['host'] == 'cmux' and record.get('ref'):
+        try: Host('cmux', attempt)('close-workspace', '--workspace', record['ref'])
+        except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+            return 'retained: ' + str(error)
+    return 'closed'
+
+
+def open_herdr_window(attempt, logical, tree, actor, task, env, command):
+    """The round's labelled Herdr tab, opened before the round starts, running
+    `command` (the follower). Anything uncertain raises and leaves the pane
+    alone; the round then runs with no window."""
     control = Herdr(attempt)
-    timeout = float(os.environ.get('FM_HERDR_TIMEOUT', '21600'))
-    if not math.isfinite(timeout) or timeout <= 0:
-        raise ValueError('FM_HERDR_TIMEOUT must be positive finite seconds')
     caller = os.environ.get('HERDR_PANE_ID')
-    if not caller: raise RuntimeError('managed transport requires a known caller HERDR_PANE_ID')
+    if not caller: raise RuntimeError('no caller HERDR_PANE_ID to open a tab beside')
     # Read caller membership and UI focus separately: dispatch may itself be unfocused.
     current = control('pane', 'get', caller)['pane']
     if (current.get('pane_id') != caller or not current.get('tab_id')
@@ -761,20 +1096,101 @@ def transport(adapter, prompt, tree, log):
         if time.monotonic() >= shell_deadline:
             raise RuntimeError('pane changed before launch; retained')
         time.sleep(0.2)
-    command = shlex.join([sys.executable, str(Path(__file__).resolve()), 'pane-child', str(attempt)])
-    # Persist before sending input: a lost reply may still have launched work.
-    reserve_execution(attempt)
+    # The follower only prints the run's log; a lost reply here launches nothing.
     control('pane', 'run', pane, command)
-    deadline = time.monotonic() + timeout
-    while not (attempt / 'result.json').exists():
-        if time.monotonic() >= deadline:
-            save(attempt / 'transport.json', dict(status='timed-out', actor=actor, pane=pane))
-            raise RuntimeError('pane run timed out; process and artifacts retained at ' + str(attempt))
-        time.sleep(.1)
-    result = read(attempt / 'result.json')
+    return owner, control
+
+
+def transport(adapter, prompt, tree, log):
+    """A whole adapter executes as a round fm owns, preserving normal verdict/fallback."""
+    # Caller-side wait must survive the launching shell exiting (SIGHUP). The
+    # runner is a session of its own and ignores it too.
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    root = Path(os.environ.get('FM_ROOT', Path(adapter).resolve().parents[2])).resolve()
+    code = Path(os.environ['FM_CODE_ROOT']) if os.environ.get('FM_CODE_ROOT') else snapshot(root)
+    adapter = str(code / 'bin/adapters' / Path(adapter).name)
+    role = os.environ.get('FM_ROLE', 'worker'); task = os.environ.get('FM_TASK', 'T-adapter')
+    logical = Path(os.environ['FM_RUN_DIR']) if os.environ.get('FM_RUN_DIR') else allocate(root, role, task, '')
+    # Vendor fallback keeps the logical actor and verified tab/pane; artifacts differ.
+    attempt = Path(tempfile.mkdtemp(prefix=Path(adapter).stem + '-', dir=logical))
+    actor = logical.name
+    (attempt / 'prompt.md').write_text(role_context(code, role, task, actor, Path(prompt).read_text()))
+    env = dict(os.environ, FM_ROLE=role, FM_TASK=task,
+               FM_ACTOR=actor, FM_FINAL_PATH=str(attempt / 'final.txt'),
+               FM_ATTEMPT_DIR=str(attempt), FM_CONTEXT_READY='1')
+    # The round does not necessarily inherit the launcher's environment.
+    # Keep its explicit environment private and do not print credentials.
+    save(attempt / 'environment.json', env); (attempt / 'environment.json').chmod(0o600)
+    payload = dict(adapter=str(Path(adapter).resolve()), prompt=str(attempt / 'prompt.md'),
+                   tree=str(Path(tree).resolve()), actor=actor, role=role, task=task,
+                   lifetime_tracking=True)
+    save(attempt / 'invocation.json', payload)
+    timeout = float(os.environ.get('FM_HERDR_TIMEOUT', '21600'))
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError('FM_HERDR_TIMEOUT must be positive finite seconds')
+    # The window first, so it is there when the round starts; it only follows
+    # the run's log, so failing to open one costs the round nothing.
+    host = window_host(root)
+    command = shlex.join([sys.executable, str(Path(__file__).resolve()), 'follow', str(attempt)])
+    # window.json always says what window the round has, `none` included, so
+    # a round with no window is recorded as one, never inferred from absence.
+    owner = control = window = None
+    # the caller's own Herdr context, put back if a window fails after
+    # open_herdr_window has already handed the round its pane
+    caller = {key: env.get(key) for key in ('HERDR_PANE_ID', 'HERDR_TAB_ID', 'HERDR_WORKSPACE_ID')}
+    try:
+        if host == 'herdr':
+            owner, control = open_herdr_window(attempt, logical, tree, actor, task, env, command)
+            window = dict(host=host, status='open', pane=owner['pane_id'], actor=actor)
+            save(attempt / 'window.json', window)
+        elif host != 'none':
+            window = open_generic_window(host, attempt, tree, actor, command)
+        else:
+            window = dict(host='none', status='none', reason='no terminal host', actor=actor)
+            save(attempt / 'window.json', window)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError,
+            subprocess.SubprocessError) as error:
+        # never let a pane the round is not running in be closed by the round
+        if (attempt / 'owner.json').exists(): (attempt / 'owner.json').rename(attempt / 'owner.failed.json')
+        owner = control = None
+        # nor run with, or leave reported as working, a pane fm has disowned
+        if any(env.get(key) != value for key, value in caller.items()):
+            for key, value in caller.items():
+                if value is None: env.pop(key, None)
+                else: env[key] = value
+            save(attempt / 'environment.json', env); (attempt / 'environment.json').chmod(0o600)
+        disowned = attempt / 'owner.failed.json'
+        if host == 'herdr' and disowned.is_file():
+            try:
+                pane = read(disowned)['pane_id']
+                Herdr(attempt)('pane', 'report-agent', pane, '--source', 'firstmate', '--agent', actor,
+                               '--state', 'idle', '--agent-session-id', actor,
+                               '--message', task + ': no window')
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError,
+                    subprocess.SubprocessError) as report:
+                print(f'{actor}: could not report the disowned pane idle ({report})', file=sys.stderr)
+        # a cmux workspace opened but not labelled is still closed at the end
+        opened = read(attempt / 'window.json') if (attempt / 'window.json').is_file() else {}
+        window = dict(host=host, status='open' if opened.get('status') == 'open' else 'none',
+                      ref=opened.get('ref'), reason=str(error), actor=actor)
+        save(attempt / 'window.json', window)
+        print(f'{actor}: no {host} window ({error}); the round runs without one', file=sys.stderr)
+    proc = spawn_runner(attempt)
+    result = supervise(attempt, proc, timeout, dict(actor=actor, task=task, role=role),
+                       env.get('FM_CHAIN_ATTEMPT', ''))
     with Path(log).open('ab') as out:
-        out.write((attempt / 'cli.log').read_bytes()); out.flush(); os.fsync(out.fileno())
+        cli = attempt / 'cli.log'
+        if cli.exists(): out.write(cli.read_bytes())
+        out.flush(); os.fsync(out.fileno())
     save(logical / 'last-result.json', dict(result, attempt=str(attempt)))
+    if owner is None:
+        close = 'no window'
+        if window and window.get('status') == 'open':
+            close = close_generic_window(window, attempt)
+            save(attempt / 'window.json', dict(window, status=close))
+        print(f'{actor}: {close}; artifacts {attempt}', file=sys.stderr)
+        return result['exit_code']
+    pane = owner['pane_id']
     close = 'retained: auto-close disabled'
     if os.environ.get('FM_AUTOCLOSE', '1') != '0':
         prior = attempt / 'close.json'
@@ -782,7 +1198,7 @@ def transport(adapter, prompt, tree, log):
             close = 'closed'
         else:
             try:
-                # Let the runner leave the foreground; never report idle on a busy pane.
+                # Let the follower leave the foreground; never report idle on a busy pane.
                 for _ in range(20):
                     info = control('pane', 'process-info', '--pane', pane)['process_info']
                     if shell_only(info, pane, owner['shell_pid']): break
@@ -837,7 +1253,7 @@ def pane_child(attempt):
     with locked(attempt / 'execution.lock', blocking=False) as lifetime:
         receipt = attempt / 'execution.json'
         if receipt.exists() and read(receipt).get('started'):
-            raise RuntimeError('attempt already started; refusing duplicate execution')
+            raise AlreadyStarted('attempt already started; refusing duplicate execution')
         save(receipt, dict(started=True, runner_pid=os.getpid()))
         return execute_child(attempt, lifetime.fileno())
 
@@ -857,10 +1273,11 @@ def close_from_child(attempt, owner, result, control=None, wait_pid=None):
     """Ownership-safe autoclose after this pane-child leaves the foreground.
 
     Evaluating shell_only while we are still the pane's foreground process can
-    never succeed on a real Herdr. By default, fork a setsid closer that waits
-    for our PID to exit, then rechecks ownership and closes. Pass wait_pid=0 to
-    close inline (unit tests with an injected control). The transport waiter may
-    race; record_close keeps the first durable closed receipt.
+    never succeed on a real Herdr. By default, fork a closer through the
+    lifeline (bin/lib/fm_lifeline.py) that waits for this process to exit,
+    then rechecks ownership and closes. Pass wait_pid=0 to close inline (unit
+    tests with an injected control). The transport waiter may race;
+    record_close keeps the first durable closed receipt.
     """
     if os.environ.get('FM_AUTOCLOSE', '1') == '0':
         return 'retained: auto-close disabled'
@@ -886,26 +1303,20 @@ def close_from_child(attempt, owner, result, control=None, wait_pid=None):
                                    status=close, source='pane-child'))
         return close
 
-    parent = os.getpid() if wait_pid is None else wait_pid
+    # The closer is owned by this pane-child through a lifeline (T-151): it
+    # sits in a session of its own, so closing the pane does not take it,
+    # and reads EOF the moment this process exits, however it exits. It
+    # never asks whether a pid is alive: a zombie answers yes, and a reused
+    # pid answers yes for somebody else.
     try:
-        child = os.fork()
+        child, lifeline_fd = lifeline().fork()
     except OSError as error:
         return 'retained: cleanup observation failed: ' + str(error)
     if child != 0:
         return 'scheduled'
     try:
-        try:
-            os.setsid()
-        except OSError:
-            pass
-        deadline = time.monotonic() + float(os.environ.get('FM_HERDR_SHELL_WAIT', '60'))
-        while time.monotonic() < deadline:
-            try:
-                os.kill(parent, 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.05)
-        else:
+        wait = float(os.environ.get('FM_HERDR_SHELL_WAIT', '60'))
+        if not lifeline().wait_owner(lifeline_fd, wait):
             record_close(attempt, dict(actor=owner.get('actor'), pane=owner.get('pane_id'),
                                        status='retained: closer timed out waiting for child exit',
                                        source='pane-child'))
@@ -1117,110 +1528,100 @@ def retire_dead_crew(root):
     return dict(retired=retired, kept=kept, lost=lost)
 
 
-def watch_start(root, decision='all'):
-    root = Path(root).resolve()
-    if not re.fullmatch(r'[A-Za-z0-9_-]+', decision): raise ValueError('invalid decision ID')
-    base = root / 'state/session'; base.mkdir(parents=True, exist_ok=True)
-    registry = base / ('watch-' + decision + '.json')
-    with locked(base / '.watch.lock'):
-        if registry.exists() and process_matches(read(registry)): return read(registry)
-        directory = Path(tempfile.mkdtemp(prefix='watch-', dir=base))
-        code = snapshot(root)
-        token = str(directory)
-        with (directory / 'log').open('ab') as log:
-            child = subprocess.Popen([sys.executable, str(code / 'bin/fm-herdr.py'), 'watch-child',
-                                      str(root), decision, token], stdin=subprocess.DEVNULL,
-                                     stdout=log, stderr=log, start_new_session=True)
-        _children.append(child)
-        record = dict(pid=child.pid, token=token, directory=token, root=str(root), decision=decision)
-        save(registry, record)
-        return record
+# --- The wake (T-151) ----------------------------------------------------------
+# Nothing watches for a decision. Whoever writes one - the board, on the
+# captain's click, and again when the merge it started settles - delivers
+# the wake at write time: it appends the item to the wake queue, durable and
+# read again at every session start and status, then rings every waiter's
+# own doorbell under state/session/wake.d (bin/lib/fm_lifeline.py's ring;
+# with no waiter the queue alone carries it). A waiter - `fm-session.sh
+# wait`, `fm-decide.sh --await` - registers its doorbell before it reads the
+# queue, so a wake written in between is found, never a miss; and each
+# waiter has a bell of its own, so no waiter takes another's wake.
+WAKE_QUEUE = 'state/session/wake.jsonl'
 
 
-def watch_stop(root, decision='all'):
-    if not re.fullmatch(r'[A-Za-z0-9_-]+', decision): raise ValueError('invalid decision ID')
-    registry = Path(root) / 'state/session' / ('watch-' + decision + '.json')
-    if not registry.exists(): return
-    with locked(registry.parent / '.watch.lock'):
-        record = read(registry)
-        if process_matches(record):
-            os.killpg(record['pid'], signal.SIGTERM)
-            for _ in range(50):
-                if not process_matches(record): break
-                time.sleep(.02)
-        result = Path(record['directory']) / 'result.json'
-        if not result.exists(): save(result, dict(status='stopped'))
-        for child in _children:
-            if child.pid == record['pid']:
-                try: child.wait(timeout=2)
-                except subprocess.TimeoutExpired: pass
-
-
-def watch_child(root, decision, directory):
-    root = Path(root); directory = Path(directory)
-    result = directory / 'result.json'
-    def stop(_signum, _frame):
-        save(result, dict(status='stopped')); raise SystemExit(0)
-    signal.signal(signal.SIGTERM, stop)
-    save(directory / 'status.json', dict(status='live', pid=os.getpid(), decision=decision))
-    observed = root / 'state/session/observed' if decision == 'all' else directory / 'observed'
-    observed.mkdir(parents=True, exist_ok=True)
-    # Observation reads decision files directly. Invoking fm-decide --await
-    # would reject non-numeric ids, remove pending cards, and (on older
-    # decide builds) re-emit decision_made — none of which belong on a watch.
-    try:
-        while True:
-            ids = [decision] if decision != 'all' else sorted({p.stem for name in ('pending', 'decisions')
-                    for p in (root / 'state' / name).glob('*.json')})
-            for ident in ids:
-                if (observed / (ident + '.json')).exists(): continue
-                answer_path = root / 'state/decisions' / (ident + '.json')
-                if not answer_path.exists(): continue
-                answer = json.loads(answer_path.read_text())
-                receipt = dict(status='observed', decision=answer, id=ident, observed=time.time())
-                save(observed / (ident + '.json'), receipt)
-                if decision != 'all': save(result, receipt); return 0
-            time.sleep(.2)
-    except Exception as error:
-        save(result, dict(status='failed', error=str(error))); return 1
+def wakes(root):
+    """The wake queue, oldest first; a line that does not parse is skipped."""
+    path = Path(root) / WAKE_QUEUE
+    found = []
+    if path.is_file():
+        for line in path.read_text().splitlines():
+            try: item = json.loads(line)
+            except ValueError: continue
+            if isinstance(item, dict) and isinstance(item.get('id'), str) and re.fullmatch(r'[A-Za-z0-9_-]+', item['id']):
+                found.append(item)
+    return found
 
 
 def unacknowledged(root):
-    """Observed captain decisions firstmate has not acknowledged; reads, never consumes."""
+    """Captain decisions pushed to the wake queue that firstmate has not
+    acknowledged since; reads, never consumes. An id acknowledged and then
+    woken again (its merge settled) is listed again."""
     base = Path(root) / 'state/session'
-    found = []
+    latest = {}
+    for item in wakes(root):
+        latest[item['id']] = item
+    # observations the retired watcher wrote before T-151 stay readable
     for path in sorted((base / 'observed').glob('*.json')):
-        if (base / 'acknowledged' / path.name).exists(): continue
-        receipt = read(path); answer = receipt.get('decision') or {}
-        found.append(dict(id=receipt.get('id', path.stem), task=answer.get('task'), kind=answer.get('kind'),
+        if path.stem in latest: continue
+        receipt = read(path)
+        latest[path.stem] = dict(id=receipt.get('id', path.stem), decision=receipt.get('decision') or {},
+                                 woken=receipt.get('observed'), reason='observed')
+    found = []
+    for ident, item in latest.items():
+        ack = base / 'acknowledged' / (ident + '.json')
+        if ack.exists() and (read(ack).get('acknowledged') or 0) >= (item.get('woken') or 0): continue
+        answer = item.get('decision') or {}
+        found.append(dict(id=ident, task=answer.get('task'), kind=answer.get('kind'),
                           chosen=answer.get('chosen'), text=answer.get('text'), ts=answer.get('ts'),
-                          observed=receipt.get('observed')))
-    return found
+                          merge=answer.get('merge'), reason=item.get('reason'), woken=item.get('woken')))
+    return sorted(found, key=lambda item: (item['woken'] or 0, item['id']))
+
+
+def wake_wait(root, decision='all', timeout=0):
+    """Block on a doorbell of this wait's own until an unacknowledged
+    decision (that one, or any) is in the queue; [] when the timeout
+    (seconds, 0 for none) ends first. A foreground wait of the caller's
+    own: it starts nothing, and its doorbell goes when it does."""
+    if decision != 'all' and not re.fullmatch(r'[A-Za-z0-9_-]+', decision): raise ValueError('invalid decision ID')
+    deadline = time.monotonic() + timeout if timeout else None
+    # registered first, then the queue read: a wake in between is found
+    with lifeline().Doorbell(root) as bell:
+        while True:
+            items = [item for item in unacknowledged(root) if decision in ('all', item['id'])]
+            if items: return items
+            left = None if deadline is None else deadline - time.monotonic()
+            if left is not None and left <= 0: return []
+            if not bell.wait(left):
+                return [item for item in unacknowledged(root) if decision in ('all', item['id'])]
 
 
 def pending_summary(items):
     if not items: return 'fm-session: no unacknowledged captain decisions'
     lines = [f'fm-session: {len(items)} captain decision{"" if len(items) == 1 else "s"} '
-             'observed but not acknowledged; act on each, then run fm-session.sh ack --decision <id>']
+             'woken but not acknowledged; act on each, then run fm-session.sh ack --decision <id>']
     for item in items:
         chosen = item['chosen'] if item['text'] is None else f'{item["chosen"]} "{item["text"]}"'
-        lines.append(f'  {item["id"]} {item["task"]} {item["kind"]} chose {chosen} at {item["ts"]}')
+        merge = f', merge {item["merge"]}' if item.get('merge') else ''
+        lines.append(f'  {item["id"]} {item["task"]} {item["kind"]} chose {chosen} at {item["ts"]}{merge}')
     return '\n'.join(lines)
 
 
 def acknowledge(root, decision):
-    """Durably record that firstmate acted on an observation; idempotent, deletes nothing."""
+    """Durably record that firstmate acted on a wake; idempotent, deletes nothing."""
     if decision == 'all' or not re.fullmatch(r'[A-Za-z0-9_-]+', decision):
         raise ValueError('ack requires --decision <id>')
     base = Path(root) / 'state/session'
+    items = [item for item in wakes(root) if item['id'] == decision]
     observation = base / 'observed' / (decision + '.json')
-    if not observation.exists():
-        raise LookupError(f'no observation for {decision}; nothing to acknowledge')
+    if not items and not observation.exists():
+        raise LookupError(f'no wake for {decision}; nothing to acknowledge')
+    woken = max([item.get('woken') or 0 for item in items] or [0])
     receipt = base / 'acknowledged' / (decision + '.json')
     with locked(base / '.ack.lock'):
-        if receipt.exists(): return read(receipt)
-        record = dict(id=decision, acknowledged=time.time(),
-                      observation=hashlib.sha256(observation.read_bytes()).hexdigest())
+        if receipt.exists() and (read(receipt).get('acknowledged') or 0) >= woken: return read(receipt)
+        record = dict(id=decision, acknowledged=max(time.time(), woken), wakes=len(items))
         save(receipt, record)
         return record
 
@@ -1296,10 +1697,15 @@ def board_start(root):
             if occupied: raise RuntimeError('board port belongs to an unverified root: ' + url)
             bun = shutil.which('bun')
             if not bun: raise RuntimeError('board requires Bun')
+            # The board outlives this command on purpose, so it names the
+            # longer-lived owner it belongs to - the session - and ends with
+            # it (T-151). The keeper exports that owner as FM_SESSION_PID,
+            # and the merges the board starts belong to the same session.
+            owner = lifeline().session_owner()
             with (base / 'board.log').open('ab') as log:
-                child = subprocess.Popen([bun, 'run', str(root / 'board/server.ts')], cwd=root,
-                        env=dict(os.environ, FM_ROOT=str(root), FM_PORT=str(port)),
-                        stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+                child = lifeline().start([bun, 'run', str(root / 'board/server.ts')], owner=owner,
+                        name='board', cwd=root, env=dict(os.environ, FM_ROOT=str(root), FM_PORT=str(port)),
+                        stdin=subprocess.DEVNULL, stdout=log, stderr=log)
             for _ in range(50):
                 if child.poll() is not None: break
                 if board_matches(root, url): break
@@ -1322,6 +1728,7 @@ def board_start(root):
                 refused = 'the board secret could not be read; restart the board'
         record = dict(root=str(root), url=url, reused=reused, page_http_verified=page,
                       opener_invoked=opened, browser_navigation_verified=False)
+        if not reused: record['owner'] = owner
         if refused: record['sign_in_error'] = refused
         save(base / 'board.json', record)
         return record
@@ -1338,11 +1745,9 @@ def inspect(root):
         runs.append(dict(record, orchestration_live=launcher_live, executions=active,
                          live=launcher_live or any(item['live'] for item in active),
                          uncertain=any(item['state'] == 'uncertain' for item in active)))
-    watches = []
-    for file in (root / 'state/session').glob('watch-*.json'):
-        record = read(file); result = Path(record['directory']) / 'result.json'
-        watches.append(dict(record, live=process_matches(record), result=read(result) if result.exists() else None))
-    report = dict(root=str(root), runs=runs, watches=watches,
+    # the waiters holding a doorbell now (one killed outright counts until the next ring)
+    wake = dict(queue=str(root / WAKE_QUEUE), doorbells=len(list((root / 'state/session/wake.d').glob('*.fifo'))))
+    report = dict(root=str(root), runs=runs, wake=wake,
                   pending=[p.name for p in (root / 'state/pending').glob('*.json')],
                   unacknowledged=unacknowledged(root),
                   worktrees=[p.name for p in (root / 'state/worktrees').glob('*') if p.is_dir()])
@@ -1350,9 +1755,11 @@ def inspect(root):
     report['events'] = [json.loads(line) for line in events.read_text().splitlines() if line.strip()] if events.exists() else []
     config = root / 'config.yaml'
     report['configuration'] = config.read_text() if config.exists() else None
-    if managed():
+    if window_host(root) == 'herdr':
+        # a window listing, for people; a Herdr that does not answer is not an error
         base = root / 'state/session'; base.mkdir(parents=True, exist_ok=True)
-        report['panes'] = Herdr(base)('pane', 'list')
+        try: report['panes'] = Herdr(base)('pane', 'list')
+        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError): pass
     return report
 
 
@@ -1406,12 +1813,18 @@ def launch(script, root, args):
     os.execve('/bin/bash', ['bash', str(code / 'bin' / script.name), *args], env)
 
 
-IDENTITY_FIELDS = ('name', 'role', 'project', 'task', 'round', 'attempt')
+# T-146: the same eleven fields fm-worker.sh and fm-review.sh send
+# (fm_crew_identity in bin/fm-config.sh). With only T-116's six here, every
+# crew_status a Herdr round emitted carried no vendor or model, and the board,
+# reading a crewman from its latest event, showed them as unknown.
+IDENTITY_FIELDS = ('name', 'role', 'project', 'task', 'round', 'attempt',
+                   'vendor', 'model_requested', 'model', 'cli_version', 'model_mismatch')
 
 
 def crew_identity(run):
     """A run's identity as the board reads it: the separate fields of its
-    identity.json (T-116), or None for a run that recorded none of them."""
+    identity.json (T-116; vendor and model since T-127, T-146), or None for
+    a run that recorded none of them."""
     try: record = read(Path(run) / 'identity.json')
     except (OSError, ValueError): return None
     if not isinstance(record, dict) or 'round' not in record: return None
@@ -1626,6 +2039,12 @@ def main(args):
         except ValueError as error:
             print('fm-config: ' + str(error), file=sys.stderr); return 65
     if mode == 'allocate': print(allocate(Path(args[0]), *args[1:])); return 0
+    if mode == 'record-model':
+        run, vendor, model_requested, model, cli_version = args
+        print(json.dumps(record_model(run, vendor, model_requested, model, cli_version))); return 0
+    if mode == 'record-requested':
+        run, vendor, model_requested = args
+        print(json.dumps(record_requested(run, vendor, model_requested))); return 0
     if mode == 'roster':
         try: return roster_command(*args)
         except (OSError, ValueError) as error:
@@ -1642,8 +2061,17 @@ def main(args):
         return 0
     if mode == 'launch': launch(args[0], args[1], args[2:])
     if mode == 'transport': return transport(*args)
-    if mode == 'pane-child': return pane_child(*args)
-    if mode == 'watch-child': return watch_child(*args)
+    if mode == 'pane-child': return run_supervised(*args)
+    if mode == 'follow':
+        # `follow <attempt>`, what a window runs, or `follow <root> <actor>`,
+        # what `fm.sh follow` runs: the actor's latest round
+        if len(args) == 2:
+            attempt = latest_attempt(*args)
+            if attempt is None: raise ValueError('no round of ' + args[1] + ' to follow')
+            args = [attempt]
+        return follow(*args)
+    if mode == 'stop':
+        out = stop_command(args); print(json.dumps(out)); return 1 if out['failed'] else 0
     if mode == 'context':
         root, role, task, actor, prompt, target = args
         Path(target).write_text(role_context(root, role, task, actor, Path(prompt).read_text())); return 0
@@ -1659,8 +2087,14 @@ def main(args):
             try: print(json.dumps(acknowledge(root, decision)))
             except LookupError as error:
                 print('fm-session: ' + str(error.args[0]), file=sys.stderr); return 1
-        elif action == 'watch': print(json.dumps(watch_start(root, decision)))
-        elif action == 'stop': watch_stop(root, decision)
+        elif action == 'wait':
+            timeout = float(rest[1]) if len(rest) > 1 and rest[1] else 0
+            # a TERM, INT or HUP unwinds the wait, so its doorbell goes with it
+            lifeline()._leave_on_signals()
+            items = wake_wait(root, decision, timeout)
+            print(json.dumps(items, indent=2))
+            print(pending_summary(items), file=sys.stderr)
+            return 0 if items else 1
         elif action == 'start':
             # Close ghost actors before the board is shown or work is planned.
             reconcile = retire_dead_crew(root)
@@ -1674,8 +2108,9 @@ def main(args):
             # Before the board: a fresh checkout is prepared once, as the
             # project declares. A failure is reported, never fatal.
             report['project'] = project_report(root, run_setup=True)
+            # nothing is started to wait for a wake (T-151): the board rings
+            # whoever is waiting, and the queue read above carries the rest
             report['board'] = board_start(root)
-            if os.environ.get('FM_WATCH', '1') != '0': report['watch'] = watch_start(root)
             print(json.dumps(report, indent=2))
             print(pending_summary(report['unacknowledged']), file=sys.stderr)
         else: raise ValueError('unknown session action')

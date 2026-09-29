@@ -53,24 +53,118 @@ class Session(unittest.TestCase):
         with patch.object(m, 'http_get', return_value=b'wrong root'):
             self.assertFalse(m.board_matches(self.repo, 'http://127.0.0.1:4173'))
         self.assertEqual(1, len(seen))
-    def test_watch_is_live_reused_observable_durable_and_cancellable(self):
-        first = m.watch_start(self.repo, 'D-test')
-        try:
-            self.assertTrue(m.process_matches(first))
-            self.assertEqual(first['pid'], m.watch_start(self.repo, 'D-test')['pid'])
-            decisions = self.repo / 'state/decisions'; decisions.mkdir(parents=True, exist_ok=True)
-            (decisions / 'D-test.json').write_text('{"id":"D-test","chosen":"B"}')
-            result = Path(first['directory']) / 'result.json'
-            for _ in range(80):
-                if result.exists(): break
-                time.sleep(.05)
-            self.assertEqual('B', json.loads(result.read_text())['decision']['chosen'])
-            self.assertEqual('observed', json.loads(result.read_text())['status'])
-        finally: m.watch_stop(self.repo, 'D-test')
-        second = m.watch_start(self.repo, 'D-cancel')
-        m.watch_stop(self.repo, 'D-cancel')
-        self.assertFalse(m.process_matches(second))
-        self.assertEqual('stopped', json.loads((Path(second['directory']) / 'result.json').read_text())['status'])
+    def push(self, ident, reason='answered', **answer):
+        """What the board does when it writes a decision (T-151): one line on
+        the wake queue, then a ring of every waiter's doorbell, through the
+        same bin/lib/fm_lifeline.py ring the board calls. True when a waiter
+        heard it."""
+        queue = self.repo / 'state/session/wake.jsonl'; queue.parent.mkdir(parents=True, exist_ok=True)
+        with queue.open('a') as out:
+            out.write(json.dumps(dict(id=ident, reason=reason, decision=dict(id=ident, **answer), woken=time.time())) + '\n')
+        return m.lifeline().ring(self.repo, ident) > 0
+    def bells(self):
+        return sorted(p.name for p in (self.repo / 'state/session/wake.d').glob('*.fifo'))
+    def test_no_watcher_exists_and_the_session_starts_none(self):
+        """T-151: the decision watch is deleted; nothing polls state/decisions."""
+        for name in ('watch_start', 'watch_stop', 'watch_child'):
+            self.assertFalse(hasattr(m, name), name)
+        self.assertNotIn('watch-child', (root / 'bin/fm-herdr.py').read_text())
+        for action in ('watch', 'stop'):
+            gone = self.session_cli(action)
+            self.assertEqual(64, gone.returncode, gone.stderr)
+            self.assertIn('is gone (T-151)', gone.stderr)
+        spawned = []
+        with patch.object(m, 'board_start', return_value=dict(stub=True)), \
+             patch.object(m.subprocess, 'Popen', side_effect=lambda *a, **k: spawned.append(a)), \
+             patch.object(m.os, 'fork', side_effect=AssertionError('forked')):
+            import io, contextlib
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(0, m.main(['session', 'start', str(self.repo)]))
+        self.assertEqual([], spawned, 'session start starts nothing but the board')
+        self.assertFalse((self.repo / 'state/session/wake.fifo').exists(),
+                         'no single shared wake FIFO: a FIFO hands each line to one reader')
+    def test_wait_blocks_on_the_fifo_until_the_writer_pushes(self):
+        """T-151: the wait rings on a doorbell of its own, which the writer
+        rings; a timeout gives up."""
+        import threading
+        started = time.monotonic()
+        self.assertEqual([], m.wake_wait(self.repo, 'all', 1))
+        self.assertGreaterEqual(time.monotonic() - started, 0.9, 'nothing in the queue: it waits the timeout out')
+        pushed = []
+        def board():
+            time.sleep(.5)
+            pushed.append(self.push('D-9', chosen='B', task='T-9', kind='choice', ts='2026-09-29T00:00:00Z'))
+        writer = threading.Thread(target=board); writer.start()
+        started = time.monotonic()
+        items = m.wake_wait(self.repo, 'all', 20)
+        writer.join()
+        self.assertEqual([True], pushed, 'the writer rang the waiting doorbell')
+        self.assertEqual([], self.bells(), 'and the wait took its doorbell with it')
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual(['D-9'], [item['id'] for item in items])
+        self.assertEqual('B', items[0]['chosen'])
+        # a wake already queued is found at once, and a wait for another id ignores it
+        self.assertEqual(['D-9'], [item['id'] for item in m.wake_wait(self.repo, 'D-9', 1)])
+        self.assertEqual([], m.wake_wait(self.repo, 'D-other', 1))
+        # the command: exit 0 with the items, 1 on a timeout
+        waited = self.session_cli('wait', '--timeout', '1')
+        self.assertEqual(0, waited.returncode, waited.stderr)
+        self.assertEqual(['D-9'], [item['id'] for item in json.loads(waited.stdout)])
+        self.assertEqual(0, self.session_cli('ack', '--decision', 'D-9').returncode)
+        waited = self.session_cli('wait', '--timeout', '1')
+        self.assertEqual(1, waited.returncode, waited.stderr)
+        self.assertEqual([], json.loads(waited.stdout))
+        # a merge that settles after the ack wakes firstmate again
+        self.push('D-9', reason='merge_settled', chosen='A', task='T-9', kind='merge', merge='merged')
+        again = json.loads(self.session_cli('status').stdout)['unacknowledged']
+        self.assertEqual([('D-9', 'merged', 'merge_settled')], [(i['id'], i['merge'], i['reason']) for i in again])
+    def waiter(self, *args):
+        """A real `fm-session.sh wait` in the background, and the doorbell it registered."""
+        env = {k: v for k, v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
+        before = set(self.bells())
+        proc = subprocess.Popen(['bash', str(self.repo / 'bin/fm-session.sh'), 'wait', *args, '--repo', str(self.repo)],
+                                cwd=self.repo, env=env, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and (proc.kill(), proc.wait()))
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline and not set(self.bells()) - before:
+            time.sleep(.05)
+        mine = set(self.bells()) - before
+        self.assertEqual(1, len(mine), 'the wait registered a doorbell of its own')
+        return proc, mine.pop()
+    def test_every_waiter_hears_every_wake(self):
+        """T-151 review round 1: one shared FIFO hands a line to one reader,
+        so a second waiter took the first's wake. Each has its own bell."""
+        first, bell1 = self.waiter('--timeout', '30')
+        second, bell2 = self.waiter('--decision', 'D-21', '--timeout', '30')
+        self.assertNotEqual(bell1, bell2)
+        started = time.monotonic()
+        self.assertTrue(self.push('D-21', chosen='A', task='T-21', kind='choice', ts='2026-09-29T00:00:00Z'))
+        out1, _ = first.communicate(timeout=10)
+        out2, _ = second.communicate(timeout=10)
+        self.assertLess(time.monotonic() - started, 3, 'both woke on the one ring, neither at its timeout')
+        self.assertEqual((0, 0), (first.returncode, second.returncode))
+        self.assertEqual(['D-21'], [i['id'] for i in json.loads(out1)])
+        self.assertEqual(['D-21'], [i['id'] for i in json.loads(out2)])
+        self.assertEqual([], self.bells(), 'each wait took its doorbell with it')
+    def test_a_waiter_that_goes_takes_its_doorbell_and_one_killed_outright_is_cleared_by_the_next_ring(self):
+        termed, bell = self.waiter('--timeout', '30')
+        termed.terminate(); termed.wait(timeout=10)
+        self.assertNotIn(bell, self.bells(), 'a TERMed wait removes its doorbell')
+        killed, bell = self.waiter('--timeout', '30')
+        killed.kill(); killed.wait(timeout=10)
+        self.assertIn(bell, self.bells(), 'a SIGKILLed wait cannot remove its own')
+        started = time.monotonic()
+        self.assertFalse(self.push('D-22', chosen='B'), 'nobody is left to hear it')
+        self.assertLess(time.monotonic() - started, 2, 'and the ring does not block on the dead bell')
+        self.assertNotIn(bell, self.bells(), 'the ring removes a doorbell nobody holds')
+    def test_a_wake_before_the_wait_registers_is_found_with_no_ring(self):
+        # queued with nobody waiting: the wait reads the queue once it has
+        # registered, so it returns at once, rung or not
+        self.push('D-23', chosen='C')
+        started = time.monotonic()
+        self.assertEqual(['D-23'], [i['id'] for i in m.wake_wait(self.repo, 'D-23', 10)])
+        self.assertLess(time.monotonic() - started, 2)
     def test_board_reuse_does_not_spawn_and_wrong_root_is_refused(self):
         with patch.object(m,'board_matches',return_value=True), patch.object(m,'http_get',return_value=b'page'), \
              patch.object(m.shutil,'which',return_value=None), patch.object(m.subprocess,'Popen') as spawn:
@@ -220,30 +314,28 @@ class Session(unittest.TestCase):
         self.assertNotEqual(0,run.returncode); self.assertIn('no repo at',run.stderr); self.assertEqual([],seen)
         run, seen = self.board_cli('--repo')
         self.assertNotEqual(0,run.returncode); self.assertEqual([],seen)
-    def test_continuous_watch_restart_preserves_observation(self):
-        pending=self.repo/'state/pending'; pending.mkdir(parents=True)
-        decisions=self.repo/'state/decisions'; decisions.mkdir(parents=True)
-        events=self.repo/'state/events.jsonl'; events.write_text('')
-        (pending/'D-saved.json').write_text('{"id":"D-saved"}')
-        (decisions/'D-saved.json').write_text('{"id":"D-saved","chosen":"B"}')
-        first=m.watch_start(self.repo)
-        receipt=self.repo/'state/session/observed/D-saved.json'
-        try:
-            for _ in range(80):
-                if receipt.exists(): break
-                time.sleep(.05)
-            saved=receipt.read_bytes()
-            self.assertTrue(receipt.exists(), 'watch must observe existing decisions without fm-decide --await')
-            self.assertTrue(m.process_matches(first))
-            self.assertEqual(b'', events.read_bytes(), 'watch observation must not rewrite events.jsonl')
-        finally: m.watch_stop(self.repo)
-        second=m.watch_start(self.repo)
-        try:
-            time.sleep(.3)
-            self.assertTrue(m.process_matches(second))
-            self.assertEqual(saved,receipt.read_bytes())
-            self.assertEqual(b'', events.read_bytes())
-        finally: m.watch_stop(self.repo)
+    def test_board_start_goes_through_the_lifeline_owned_by_the_session(self):
+        """T-151: the board outlives the command that starts it, so it names the
+        session as its owner, and is started by the primitive, never detached."""
+        started = []
+        class Keeper:
+            pid = 4242
+            def poll(self): return None
+        def start(argv, owner=None, **kwargs):
+            started.append((argv, owner, kwargs)); return Keeper()
+        with patch.dict(os.environ, {'FM_SESSION_PID': '31337', 'FM_PORT': '4173'}), \
+             patch.object(m, 'board_matches', side_effect=[False, False, True, True]), \
+             patch.object(m, 'http_get', side_effect=[OSError('nothing there'), b'page']), \
+             patch.object(m.shutil, 'which', side_effect=lambda name: '/usr/bin/bun' if name == 'bun' else None), \
+             patch.object(m.lifeline(), 'start', side_effect=start), \
+             patch.object(m.subprocess, 'Popen', side_effect=AssertionError('started without a lifeline')):
+            record = m.board_start(self.repo)
+        self.assertEqual(1, len(started))
+        argv, owner, kwargs = started[0]
+        self.assertEqual(['/usr/bin/bun', 'run', str(self.repo.resolve() / 'board/server.ts')], argv)
+        self.assertEqual(31337, owner, 'owned by the session, not by the command that started it')
+        self.assertNotIn('start_new_session', kwargs)
+        self.assertEqual(31337, record['owner'])
     def test_actual_board_start_and_correct_root_reuse(self):
         bun=shutil.which('bun')
         if not bun: self.skipTest('Bun unavailable: actual HTTP board startup not verified')
@@ -262,8 +354,11 @@ class Session(unittest.TestCase):
         opened=[]
         def browser(address):
             opened.append(address); return True
+        # T-151: the session the board belongs to, a process of this test's own
+        session=original(['sleep','300'],stdin=subprocess.DEVNULL)
+        self.addCleanup(lambda: (session.poll() is None and session.kill(), session.wait()))
         try:
-            with patch.dict(os.environ,{'FM_PORT':str(port),'XDG_CONFIG_HOME':config.name}), \
+            with patch.dict(os.environ,{'FM_PORT':str(port),'XDG_CONFIG_HOME':config.name,'FM_SESSION_PID':str(session.pid)}), \
                  patch.object(m.shutil,'which',side_effect=lambda name: bun if name=='bun' else '/usr/bin/'+name if name=='xdg-open' else None), \
                  patch.object(m.sys,'platform','linux'), \
                  patch.object(m,'open_address',side_effect=browser), \
@@ -307,6 +402,12 @@ class Session(unittest.TestCase):
                         text=path.read_bytes()
                         self.assertNotIn(secret.read_bytes().strip(),text,path)
                         self.assertNotIn(str(secret).encode(),text,path)
+                # the session ends, and the board with it: the kernel tells the
+                # keeper, which stops the board - no one has to remember to
+                self.assertEqual(session.pid,first['owner'])
+                session.kill(); session.wait()
+                self.assertIsNotNone(children[0].wait(timeout=15),'the board ended with its owner')
+                with self.assertRaises(OSError): m.http_get(url)
         finally:
             for child in children:
                 if child.poll() is None: os.killpg(child.pid,signal.SIGTERM)
@@ -399,19 +500,21 @@ class Session(unittest.TestCase):
         state = self.repo / 'state'
         return {str(p.relative_to(state)): p.read_bytes()
                 for folder in ('pending', 'decisions', 'session/observed')
-                for p in sorted((state / folder).glob('*.json'))} | {'events.jsonl': (state / 'events.jsonl').read_bytes()}
-    def test_unacknowledged_observed_decision_is_reported_until_ack(self):
-        """T-041: a watcher only writes to disk; status must surface what firstmate has not acted on."""
+                for p in sorted((state / folder).glob('*.json'))} | {
+                name: (state / name).read_bytes() for name in ('events.jsonl', 'session/wake.jsonl')
+                if (state / name).exists()}
+    def test_unacknowledged_wake_is_reported_until_ack(self):
+        """T-041, T-151: the board pushes a wake onto the queue; status surfaces what firstmate has not acted on."""
         state = self.repo / 'state'
-        for folder in ('pending', 'decisions', 'session/observed'): (state / folder).mkdir(parents=True, exist_ok=True)
+        for folder in ('pending', 'decisions', 'session'): (state / folder).mkdir(parents=True, exist_ok=True)
         (state / 'events.jsonl').write_text('{"type":"decision_made","data":{"decision":"D-047"}}\n')
         (state / 'pending/D-047.json').write_text('{"id":"D-047","task":"T-041","kind":"choice"}')
         answer = dict(id='D-047', chosen='custom', text='hold until Friday', task='T-041', kind='choice',
                       ts='2026-09-23T08:00:00.000Z', identity='decision:D-047')
         (state / 'decisions/D-047.json').write_text(json.dumps(answer))
-        m.save(state / 'session/observed/D-047.json',
-               dict(status='observed', decision=answer, id='D-047', observed=1790000000.0))
-        # Answered but never observed: not firstmate's acknowledgement backlog.
+        (state / 'session/wake.jsonl').write_text(json.dumps(
+            dict(id='D-047', reason='answered', decision=answer, woken=1790000000.0)) + '\n')
+        # Answered but never pushed: not firstmate's acknowledgement backlog.
         (state / 'decisions/D-048.json').write_text('{"id":"D-048","chosen":"A","task":"T-040","kind":"merge"}')
         before = self.decision_files()
 
@@ -420,25 +523,25 @@ class Session(unittest.TestCase):
         report = json.loads(status.stdout)
         self.assertEqual([dict(id='D-047', task='T-041', kind='choice', chosen='custom',
                                text='hold until Friday', ts='2026-09-23T08:00:00.000Z',
-                               observed=1790000000.0)], report['unacknowledged'])
+                               merge=None, reason='answered', woken=1790000000.0)], report['unacknowledged'])
         self.assertRegex(status.stderr, r'(?s)1 captain decision.*D-047.*T-041.*custom.*hold until Friday')
         self.assertEqual(before, self.decision_files(), 'status must not consume or rewrite decisions')
 
         refused = self.session_cli('ack', '--decision', 'D-999')
         self.assertNotEqual(0, refused.returncode)
-        self.assertIn('no observation for D-999', refused.stderr)
+        self.assertIn('no wake for D-999', refused.stderr)
         self.assertFalse((state / 'session/acknowledged/D-999.json').exists())
         self.assertNotEqual(0, self.session_cli('ack').returncode, 'ack requires an explicit decision id')
-        unobserved = self.session_cli('ack', '--decision', 'D-048')
-        self.assertNotEqual(0, unobserved.returncode)
-        self.assertIn('no observation for D-048', unobserved.stderr)
+        unpushed = self.session_cli('ack', '--decision', 'D-048')
+        self.assertNotEqual(0, unpushed.returncode)
+        self.assertIn('no wake for D-048', unpushed.stderr)
 
         acked = self.session_cli('ack', '--decision', 'D-047')
         self.assertEqual(0, acked.returncode, acked.stderr)
         receipt = state / 'session/acknowledged/D-047.json'
         self.assertEqual('D-047', json.loads(receipt.read_text())['id'])
         saved = receipt.read_bytes()
-        self.assertEqual(before, self.decision_files(), 'ack must not delete observation, decision or event')
+        self.assertEqual(before, self.decision_files(), 'ack must not delete the wake, decision or event')
         again = self.session_cli('ack', '--decision', 'D-047')
         self.assertEqual(0, again.returncode, again.stderr)
         self.assertEqual(saved, receipt.read_bytes(), 'ack is idempotent')
@@ -448,7 +551,12 @@ class Session(unittest.TestCase):
         self.assertEqual([], json.loads(after.stdout)['unacknowledged'])
         self.assertIn('no unacknowledged captain decisions', after.stderr)
         self.assertEqual(before, self.decision_files())
-    def test_an_owned_decision_id_is_observed_listed_and_acknowledged(self):
+        # an observation the retired watcher wrote before T-151 is still read
+        m.save(state / 'session/observed/D-046.json',
+               dict(status='observed', decision=dict(answer, id='D-046'), id='D-046', observed=1780000000.0))
+        self.assertEqual(['D-046'], [i['id'] for i in json.loads(self.session_cli('status').stdout)['unacknowledged']])
+        self.assertEqual(0, self.session_cli('ack', '--decision', 'D-046').returncode)
+    def test_an_owned_decision_id_is_woken_listed_and_acknowledged(self):
         """T-047: an id naming its owner, D-<project>-<task>-<n>, wakes firstmate like D-<digits> does."""
         owned = 'D-firstmate-workflow-T047-1'
         state = self.repo / 'state'
@@ -456,30 +564,18 @@ class Session(unittest.TestCase):
         (state / 'events.jsonl').write_text('')
         (state / ('pending/%s.json' % owned)).write_text(json.dumps(
             dict(id=owned, task='T-047', kind='merge', pr=77, project='firstmate-workflow')))
-        answer = dict(id=owned, chosen='A', task='T-047', kind='merge', pr=77, project='firstmate-workflow',
+        answer = dict(chosen='A', task='T-047', kind='merge', pr=77, project='firstmate-workflow',
                       ts='2026-09-24T08:00:00.000Z', identity='decision:' + owned)
-        (state / ('decisions/%s.json' % owned)).write_text(json.dumps(answer))
-        # the continuous watcher firstmate starts: it finds the answer under the owned id
-        first = m.watch_start(self.repo)
-        receipt = state / ('session/observed/%s.json' % owned)
-        try:
-            for _ in range(80):
-                if receipt.exists(): break
-                time.sleep(.05)
-            self.assertTrue(receipt.exists(), 'the watcher must observe an answer under an owned id')
-            self.assertEqual(owned, json.loads(receipt.read_text())['id'])
-            self.assertEqual('A', json.loads(receipt.read_text())['decision']['chosen'])
-        finally: m.watch_stop(self.repo)
-        # the per-decision watcher fm-decide.sh --await starts, keyed by the owned id
-        one = m.watch_start(self.repo, owned)
-        try:
-            result = Path(one['directory']) / 'result.json'
-            for _ in range(80):
-                if result.exists(): break
-                time.sleep(.05)
-            self.assertEqual('observed', json.loads(result.read_text())['status'])
-            self.assertEqual(owned, json.loads(result.read_text())['decision']['id'])
-        finally: m.watch_stop(self.repo, owned)
+        (state / ('decisions/%s.json' % owned)).write_text(json.dumps(dict(answer, id=owned)))
+        # the wait fm-session.sh runs, keyed by the owned id, is woken by the push
+        import threading
+        def board():
+            time.sleep(.3); self.push(owned, **answer)
+        writer = threading.Thread(target=board); writer.start()
+        items = m.wake_wait(self.repo, owned, 20)
+        writer.join()
+        self.assertEqual([owned], [item['id'] for item in items])
+        self.assertEqual('A', items[0]['chosen'])
 
         status = self.session_cli('status')
         self.assertEqual(0, status.returncode, status.stderr)
@@ -503,7 +599,7 @@ class Session(unittest.TestCase):
         (self.repo / 'config.yaml').write_text(config)
         out = io.StringIO()
         with patch.object(m, 'board_start', return_value=dict(stub=True)) as board, \
-             patch.dict(os.environ, {'FM_WATCH': '0'}), \
+             patch.dict(os.environ, {'FM_SESSION_PID': str(os.getpid())}), \
              contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
             rc = m.main(['session', 'start', str(self.repo)])
         return rc, json.loads(out.getvalue()), board
@@ -640,6 +736,42 @@ class Session(unittest.TestCase):
         # and this repository names its own: claude and opus-5, the captain's choice
         result = self.reviewer_report((root / 'config.yaml').read_text())
         self.assertNotIn('names no reviewer', result.stderr)
+    def test_start_reports_a_model_the_vendor_does_not_accept(self):
+        """T-127: a missing model was already reported; an unrecognised one
+        is too - opus-5 is not a name claude accepts, only a name it fell
+        back to before the model was applied at all."""
+        result = self.reviewer_report('reviewer:\n  vendor: claude\n  model: opus-5\n')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("reviewer model 'opus-5' is not one claude is known to accept", result.stderr)
+        self.assertNotIn('names no reviewer', result.stderr)
+    def test_start_is_quiet_about_a_model_the_vendor_does_accept(self):
+        for model in ['claude-opus-5-5', 'opus', 'claude-sonnet-5']:
+            result = self.reviewer_report('reviewer:\n  vendor: claude\n  model: ' + model + '\n')
+            self.assertNotIn('is not one claude is known to accept', result.stderr, model)
+        # this repository's own config names one claude accepts
+        result = self.reviewer_report((root / 'config.yaml').read_text())
+        self.assertNotIn('is not one claude is known to accept', result.stderr)
+    def test_start_reports_the_worker_model_too(self):
+        result = self.reviewer_report('vendor: claude\nmodel: opus-5\nreviewer:\n  vendor: claude\n  model: claude-opus-5-5\n')
+        self.assertIn("worker model 'opus-5' is not one claude is known to accept", result.stderr)
+    def test_start_checks_the_worker_vendor_and_model_that_actually_run(self):
+        """T-146: the worker's own vendor, not the top-level one, paired with
+        that vendor's model - here claude and models.claude, under a codex
+        top level, so the check that used to ask codex (no catalogue, quiet)
+        now asks claude about the name claude would be handed."""
+        result = self.reviewer_report('vendor: codex\nmodels:\n  claude: opus-5\n  codex: gpt-6-astra\n'
+                                      'worker:\n  vendor: claude\n'
+                                      'reviewer:\n  vendor: claude\n  model: claude-opus-5-5\n')
+        self.assertIn("worker model 'opus-5' is not one claude is known to accept", result.stderr)
+    def test_start_is_quiet_about_a_vendor_with_no_offline_catalogue(self):
+        """T-127: fm_model_known returns 2 (no catalogue) for a vendor other
+        than claude - not 1 (not known) - and a config check that reads that
+        as any nonzero code would wrongly warn about every codex/cursor-agent
+        /gemini model, however real, that it simply cannot check."""
+        for config in ('vendor: codex\nmodel: o1\nreviewer:\n  vendor: claude\n  model: claude-opus-5-5\n',
+                       'vendor: claude\nmodel: claude-opus-5-5\nreviewer:\n  vendor: cursor-agent\n  model: gpt-5\n'):
+            result = self.reviewer_report(config)
+            self.assertNotIn('is not one', result.stderr, config)
     def test_status_does_not_repeat_the_reviewer_report(self):
         result = self.reviewer_report('vendor: claude\n', mode='status')
         self.assertIn('stub session status', result.stdout)

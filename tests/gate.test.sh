@@ -372,7 +372,8 @@ assert_contains "$out" "condition 1" "and names the condition that failed"
 assert_contains "$out" "patch-id" "which is the patch-id"
 
 # main touches a file the pull request changes, far enough away to merge
-# cleanly and leave the patch-id as it was: the approval saw another file
+# cleanly and leave the patch-id as it was: the change is the one approved,
+# so the approval still stands (SK-008), whatever file main touched
 sed -i.bak '30s/.*/main changed the end/' "$d7/src/thing.sh"; rm -f "$d7/src/thing.sh.bak"
 git -C "$d7" commit -qam "main: thing"
 git -C "$d7" checkout -q -b touched updated; git -C "$d7" merge -q --no-edit main
@@ -381,15 +382,31 @@ assert_eq "$(git -C "$d7" diff main...pr | git -C "$d7" patch-id --stable | cut 
   "$(git -C "$d7" diff main...touched | git -C "$d7" patch-id --stable | cut -d' ' -f1)" \
   "(the change itself is identical)"
 out="$(g7 touched)"; rc=$?
-assert_eq "7" "$rc" "7 blocks a carry-forward when main touched a file the pull request changes"
-assert_contains "$out" "condition 2" "and names the condition that failed"
-assert_contains "$out" "src/thing.sh" "and the file main touched"
+assert_eq "0" "$rc" "7 carries the APPROVE forward when main touched a file the approval reviewed and the patch-id is unchanged"
+assert_lacks "$out" "re-review" "and asks for no re-review"
+
+# main changes the very line the pull request changes: the update conflicts,
+# and the resolution changes the patch-id, so it needs a new review
+sed -i.bak '1s/.*/main changed the start/' "$d7/src/thing.sh"; rm -f "$d7/src/thing.sh.bak"
+git -C "$d7" commit -qam "main: the start"
+git -C "$d7" checkout -q -b resolved touched
+git -C "$d7" merge -q --no-edit main >/dev/null 2>&1 || true
+assert_contains "$(sed -n 1p "$d7/src/thing.sh")" "<<<<<<<" "(fixture) merging main into the PR branch conflicts on the line both changed"
+{ echo "changed by the pull request, after main changed the start"; sed -n '/^>>>>>>>/,$p' "$d7/src/thing.sh" | sed 1d; } > "$d7/src/thing.sh.new"
+mv "$d7/src/thing.sh.new" "$d7/src/thing.sh"
+git -C "$d7" commit -qam "resolve the conflict"; git -C "$d7" checkout -q main
+assert_ne "$(git -C "$d7" diff main...pr | git -C "$d7" patch-id --stable | cut -d' ' -f1)" \
+  "$(git -C "$d7" diff main...resolved | git -C "$d7" patch-id --stable | cut -d' ' -f1)" \
+  "(the resolution changed the change)"
+out="$(g7 resolved)"; rc=$?
+assert_eq "7" "$rc" "7 blocks a carry-forward across a resolved conflict, whose patch-id changed"
+assert_contains "$out" "condition 1" "and names the patch-id condition"
 
 # a later REJECT supersedes the APPROVE, carried forward or not
 post "$d7" reviewer-1 "REJECT:T-X\\n\\n$(reviewed "$d7" pr REJECT)"
 out="$(g7 updated)"; rc=$?
 assert_eq "7" "$rc" "7 blocks an APPROVE superseded by a later REJECT"
-assert_contains "$out" "condition 3" "and names the condition that failed"
+assert_contains "$out" "condition 2" "and names the condition that failed"
 assert_contains "$out" "REJECT" "which is the later REJECT"
 : > "$d7/comments.tsv"
 post "$d7" reviewer-1 "APPROVE:T-X\\n\\n$(reviewed "$d7" pr APPROVE)"

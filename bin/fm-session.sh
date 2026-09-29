@@ -7,12 +7,17 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
 fm_args=("$@")
-REPO="${FM_ROOT:-$(pwd)}"; MODE=start; DECISION=all
+REPO="${FM_ROOT:-$(pwd)}"; MODE=start; DECISION=all; TIMEOUT=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    start|status|watch|stop|ack) MODE="$1"; shift ;;
+    start|status|wait|ack) MODE="$1"; shift ;;
+    # T-151: nothing watches for a decision any more; the writer pushes the
+    # wake, and `wait` is the caller's own foreground read of it
+    watch|stop) echo "fm-session: $1 is gone (T-151): the board pushes every wake; run fm-session.sh wait to block on it" >&2; exit 64 ;;
     --repo) fm_need "fm-session" "$@"; REPO="$2"; shift 2 ;;
     --decision) fm_need "fm-session" "$@"; DECISION="$2"; shift 2 ;;
+    --timeout) fm_need "fm-session" "$@"; TIMEOUT="$2"; shift 2
+               [[ "$TIMEOUT" =~ ^[0-9]{1,6}$ ]] || { echo "fm-session: --timeout takes whole seconds" >&2; exit 64; } ;;
     *) echo "fm-session: unknown argument $1" >&2; exit 64 ;;
   esac
 done
@@ -24,7 +29,7 @@ fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
 # top-level vendor happens to be: firstmate asks on the board and the answer
 # lands in config.yaml through a pull request.
 if [ "$MODE" = start ]; then
-  rv="$(fm_cfg_in reviewer vendor)"; rmodel="$(fm_cfg_in reviewer model)"
+  rv="$(fm_cfg_in reviewer vendor)"; rmodel="$(fm_model reviewer config.yaml)"
   if [ -z "$rv" ] || [ -z "$rmodel" ]; then
     installed=''
     for a in "${FM_CODE_ROOT:-$REPO}"/bin/adapters/*.sh; do
@@ -36,6 +41,14 @@ if [ "$MODE" = start ]; then
     [ -n "$rv" ] || missing=vendor
     [ -n "$rmodel" ] || missing="${missing:+$missing and }model"
     echo "fm-session: config.yaml names no reviewer $missing; the reviewer is the captain's choice - ask on the board (installed adapters: ${installed:-none})" >&2
+  else
+    fm_model_known "$rv" "$rmodel"
+    [ $? -eq 1 ] && echo "fm-session: config.yaml's reviewer model '$rmodel' is not one $rv is known to accept; check it before dispatching (T-127)" >&2
+  fi
+  wv="$(fm_role_vendor worker config.yaml)"; wmodel="$(fm_model_for worker "$wv" config.yaml)"
+  if [ -n "$wv" ] && [ -n "$wmodel" ]; then
+    fm_model_known "$wv" "$wmodel"
+    [ $? -eq 1 ] && echo "fm-session: config.yaml's worker model '$wmodel' is not one $wv is known to accept; check it before dispatching (T-127)" >&2
   fi
 fi
-exec python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" session "$MODE" "$REPO" "$DECISION"
+exec python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" session "$MODE" "$REPO" "$DECISION" "$TIMEOUT"
