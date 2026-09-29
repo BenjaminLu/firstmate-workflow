@@ -410,6 +410,24 @@ class Roster(unittest.TestCase):
         # no model configured at all: nothing to compare against, so no mismatch
         unset = m.record_model(run, 'claude', '', 'claude-sonnet-5', '2.1.0')
         self.assertFalse(unset['model_mismatch'])
+    def test_record_requested_names_the_vendor_and_model_from_the_start(self):
+        """T-146: the vendor a round is on and the model config.yaml names
+        for it join identity.json as the attempt starts; a fallback vendor
+        replaces them and clears what the previous vendor reported, so a
+        model is never shown against a vendor that did not run it."""
+        run = m.allocate(self.root, 'worker', 'T-601', '')
+        before = json.loads((run / 'identity.json').read_text())
+        identity = m.record_requested(run, 'codex', 'gpt-6-astra')
+        self.assertEqual(('codex', 'gpt-6-astra'), (identity['vendor'], identity['model_requested']))
+        self.assertNotIn('model', identity)
+        for k, v in before.items(): self.assertEqual(v, identity[k], k)
+        self.assertEqual(identity, json.loads((run / 'identity.json').read_text()))
+        m.record_model(run, 'codex', 'gpt-6-astra', 'gpt-6-astra', '1.0')
+        moved = m.record_requested(run, 'claude', 'claude-opus-5-5')
+        self.assertEqual(('claude', 'claude-opus-5-5'), (moved['vendor'], moved['model_requested']))
+        for k in ('model', 'cli_version', 'model_mismatch'): self.assertNotIn(k, moved)
+        # a vendor with no model named: its CLI's default, requested as nothing
+        self.assertEqual('', m.record_requested(run, 'gemini', '')['model_requested'])
     def test_an_unfinished_run_is_live_until_proven_over(self):
         # Every path through run_is_live, one run at a time. No clock: a run
         # allocated long ago with nothing recorded yet is still starting.
@@ -1767,7 +1785,10 @@ class EmitStatus(unittest.TestCase):
                                          task='T-116', round=3, attempt=2, one_role=True))
         self.assertEqual(0, m.main(['emit-status','--root',str(self.root),'--actor',run.name,
                                     '--task','T-116','--role','worker','--en','x','--tw','y']))
-        self.assertEqual(dict(name='shira', role='worker', project='alpha', task='T-116', round=3, attempt=2),
+        # (T-146: with vendor and model beside them, null while unrecorded)
+        self.assertEqual(dict(name='shira', role='worker', project='alpha', task='T-116', round=3, attempt=2,
+                              vendor=None, model_requested=None, model=None, cli_version=None,
+                              model_mismatch=None),
                          self.events()[-1]['data']['identity'])
         # a run from before T-116 has no such fields, and none are invented
         old = self.root/'state/runs/worker-mira-t035-r465'; old.mkdir(parents=True)
@@ -1775,6 +1796,27 @@ class EmitStatus(unittest.TestCase):
         m.main(['emit-status','--root',str(self.root),'--actor',old.name,
                 '--task','T-035','--role','worker','--en','x','--tw','y'])
         self.assertNotIn('identity', self.events()[-1]['data'])
+
+    def test_a_status_carries_the_vendor_and_model_too(self):
+        # T-146: on 2026-09-29 every crewman's vendor, model and CLI were
+        # blank on the board, because a Herdr round's crew_status - its
+        # latest event - carried T-116's six fields only. It carries every
+        # field fm-worker.sh and fm-review.sh send, as identity.json has them.
+        run = self.root/'state/runs/worker-imani-t146-r1'; run.mkdir(parents=True)
+        m.save(run/'identity.json', dict(actor=run.name, name='imani', role='worker', project='alpha',
+                                         task='T-146', round=1, attempt=1))
+        m.record_requested(run, 'codex', 'gpt-6-astra')
+        m.main(['emit-status','--root',str(self.root),'--actor',run.name,
+                '--task','T-146','--role','worker','--en','x','--tw','y'])
+        said = self.events()[-1]['data']['identity']
+        self.assertEqual(('codex', 'gpt-6-astra', None), (said['vendor'], said['model_requested'], said['model']))
+        m.record_model(run, 'codex', 'gpt-6-astra', 'gpt-6-astra', 'codex 1.2.3')
+        m.main(['emit-status','--root',str(self.root),'--actor',run.name,
+                '--task','T-146','--role','worker','--en','x','--tw','y'])
+        said = self.events()[-1]['data']['identity']
+        self.assertEqual(dict(name='imani', role='worker', project='alpha', task='T-146', round=1, attempt=1,
+                              vendor='codex', model_requested='gpt-6-astra', model='gpt-6-astra',
+                              cli_version='codex 1.2.3', model_mismatch=False), said)
 
     def test_bounded_progress_and_refusals(self):
         self.assertEqual(0, m.main(['emit-status','--root',str(self.root),'--actor','worker-h',

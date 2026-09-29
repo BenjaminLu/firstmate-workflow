@@ -310,6 +310,19 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     FM_MODEL="bad-model-9000" PATH="$d/fakebin:/usr/bin:/bin" \
       "$adapter" run "$d/prompt" "$d/tree" "$d/model-worked.log" >/dev/null 2>"$d/model-worked.err"
     assert_ne "64" "$?" "$name does not refuse a transcript that already reports a model ran"
+    # claude's result names no "model": what ran is modelUsage's keys (T-146)
+    vendor_says "{\"type\":\"result\",\"modelUsage\":{\"claude-opus-5-5\":{\"outputTokens\":9}}} then: $refusal_line" 1
+    : > "$d/model-usage.log"
+    FM_MODEL="bad-model-9000" PATH="$d/fakebin:/usr/bin:/bin" \
+      "$adapter" run "$d/prompt" "$d/tree" "$d/model-usage.log" >/dev/null 2>"$d/model-usage.err"
+    assert_ne "64" "$?" "$name does not refuse a transcript whose modelUsage reports a model ran"
+    # and an empty modelUsage reports nothing that ran
+    vendor_says "{\"type\":\"result\",\"is_error\":true,\"modelUsage\":{}}
+$refusal_line" 1
+    : > "$d/model-nousage.log"
+    FM_MODEL="bad-model-9000" PATH="$d/fakebin:/usr/bin:/bin" \
+      "$adapter" run "$d/prompt" "$d/tree" "$d/model-nousage.log" >/dev/null 2>"$d/model-nousage.err"
+    assert_eq "64" "$?" "$name still refuses when modelUsage is empty"
 
     # --- cursor-agent can list its own models, before the round (T-127) ---
     if [ "$name" = "cursor-agent" ]; then

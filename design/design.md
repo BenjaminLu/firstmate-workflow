@@ -478,15 +478,42 @@ role may name its own engine — `reviewer:` and `worker:` blocks in
 therefore not a reviewer who never ran.
 
 The reviewer's `vendor` and `model` are the captain's choice (T-066); this
-repository names `claude` and `claude-opus-5-5`, the worker's own. A project
+repository names `claude` and `claude-opus-5-5`, and, since 2026-09-29, codex
+and `gpt-6-astra` for the worker (T-146). A project
 naming neither is reported by `fm-session.sh start` and firstmate asks the
 captain through a choice card; the answer lands as a `config.yaml` pull
-request. **`model` is applied, not only recorded (T-127)**: `fm_model` in
-`bin/fm-config.sh` resolves it per role, `fm-worker.sh` and `fm-review.sh`
-hand it to the adapter as `FM_MODEL`, and each adapter passes it with its
-CLI's own flag; section 11 above and `bin/adapters/_contract.md` have the
+request. **`model` is applied, not only recorded (T-127)**: since T-146 it
+is resolved per vendor, not per role - `fm_run_chain` in `bin/fm-config.sh`
+hands each attempt the model for the vendor that attempt runs as `FM_MODEL`
+(below), and each adapter passes it with its CLI's own flag; section 11 above and `bin/adapters/_contract.md` have the
 whole of it, including what refuses a round whose model the vendor does not
 recognise, and what the run records once it has actually run on one.
+
+**A model is named per vendor (T-146).** A model name belongs to one
+vendor, and T-127 resolved one per role: a round moved to another vendor -
+`fm-worker.sh --vendor`, a fallback in the chain - was handed the first
+vendor's name and refused (found 2026-09-29, when the captain asked for codex
+workers). So `config.yaml` names each vendor's own model:
+
+```yaml
+vendor: codex
+models:
+  claude: claude-opus-5-5
+  codex:  gpt-6-astra
+reviewer:
+  vendor: claude
+```
+
+and `fm_run_chain` hands every attempt the model for the vendor it runs
+(`fm_model_for <role> <vendor>` in `bin/fm-config.sh`), when the caller names
+its role in `FM_MODEL_ROLE`, as `fm-worker.sh` and `fm-review.sh` do. The
+order is: the role's own `model:`, only when the vendor is the role's own
+vendor (`worker.vendor`/`reviewer.vendor`, else the top-level one); then
+`models.<vendor>`; then the top-level `model:`, only when the vendor is the
+top-level vendor, so a config written before `models:` reads as it did. A
+vendor with none of these gets no model flag and runs on its CLI's default,
+which the round records from its transcript; `model_requested` is then
+empty. `fm_model <role>` is `fm_model_for` for the role's own vendor.
 
 `reviewer: mode:` sets how a review runs. `diff`, the default for a project
 that declares nothing, is the prompt above and nothing else. `run` makes a
@@ -1011,7 +1038,7 @@ concurrency limit still hold, and it says which one held the task.
 | 4 | the diff stays in scope | `git diff --name-only` within the task's `scope` globs |
 | 5 | **the new tests are not vacuous** | classify by `project.tests`, revert the implementation, run `setup`, then only the suites the diff touches through `project.test`; the whole `check` only when none can be determined, said so; it must go red |
 | 6 | the required GitHub check is green | `gh pr checks <pr> --required` |
-| 7 | the latest verdict is an `APPROVE:<task-id>` for this change | its `REVIEWED:` line names the current head, or the same patch-id with no `main` commit touching its files since (below); author filtered only if `FM_REVIEWER_LOGIN` is set |
+| 7 | the latest verdict is an `APPROVE:<task-id>` for this change | its `REVIEWED:` line names the current head, or the same patch-id, merge-base to head, with no later `REJECT` (below); author filtered only if `FM_REVIEWER_LOGIN` is set |
 
 **Gate 3 is retired, and its number with it (captain, 2026-09-26; T-114).**
 It ran the whole project check in a fresh worktree: the same run the required
@@ -1103,19 +1130,22 @@ and the line gate 7 trusts cannot disagree.
 --stable` of the diff between them, taken with `git diff-tree -p
 --no-renames`, which reads no user configuration; `files` lists every path
 that diff touches. Gate 7 accepts the latest `APPROVE` when its `head` is the
-current head, or when all of these hold:
+current head, or when both of these hold:
 
 1. the current change's patch-id, merge-base to head, equals the approved one;
-2. no commit on `main` between the approved merge-base and the current one
-   touches any file in the approved list;
-3. no later `REJECT` supersedes the approval.
+2. no later `REJECT` supersedes the approval.
 
 Otherwise it fails and names the condition, so firstmate knows a real
 re-review is needed. A conflict resolution or any worker edit changes the
-patch-id, and so always needs a new review. The reviewer's approval carries
-forward across an update that leaves the change identical and touches none of
-its files; CI and the six gates always rerun on the head being merged,
-since they test the change combined with the current `main`.
+patch-id, and so always needs a new review. An APPROVE carries forward across
+any update of the branch from its base as long as the change itself is
+unchanged - the patch-id of merge-base..head equals the approved one; a
+conflict that had to be resolved changes the patch and needs a review
+(captain, 2026-09-29; SK-008). Base commits touching files the change
+reviewed no longer void the approval, so `gh pr update-branch` is allowed
+before or after an APPROVE and during a running review round. CI and the six
+gates always rerun on the head being merged, since they test the change
+combined with the current `main`.
 
 Gate 5 names no toolchain. The target repository declares its own in
 `config.yaml`'s `project:` block (`setup`, `check`, `check_env`, `tests`,
@@ -1584,8 +1614,28 @@ role and round, never a string joined from actors.
 reported it used, read from its transcript, section 5.3 below; `model_requested`
 is what `config.yaml` asked for; `cli_version` is the CLI's own version
 string. All four ride the crew payload's `identity` (section 11) beside
-`name`, `project`, `round` and `attempt`, unknown (`null`/empty) until the
-round has actually run and always unknown for a run recorded before T-127.
+`name`, `project`, `round` and `attempt`, and always unknown for a run
+recorded before T-127. `vendor` and `model_requested` are known from the
+round's start (T-146); `model` and `cli_version` once the round has run, and
+until then the crewman's `model` is its `model_requested`, with
+`model_source` saying which it is (`reported` or `requested`).
+
+**The board keeps the last known value of each field (T-146).** It reads a
+crewman's identity from its events, and on 2026-09-29 every crewman's
+vendor, model and CLI were blank: the latest event, a `crew_status`, carried
+only the six T-116 fields, and replaced the identity that had them. Now every
+crew event a round emits carries all eleven, read fresh from `identity.json`
+(`fm_crew_identity`, and `IDENTITY_FIELDS` in `bin/fm-herdr.py` for a Herdr
+round's `crew_status`), and the board merges field by field under two rules.
+Within one vendor, an event that lacks a field, or says `unknown`, keeps the
+value an earlier event gave. An event that names another vendor - a fallback
+starting, whose `record_requested` clears what the vendor before reported, or
+`record-model`'s `unknown` when every vendor was unavailable - resets
+`model`, `model_requested`, `cli_version` and `model_mismatch` to what that
+event says, null or empty meaning cleared, so one vendor is never shown with
+another vendor's model, requested model, CLI version or mismatch. A vendor
+of `unknown` is sent to the page as null, shown as unknown, and not counted
+by the engine badge. A new `dispatched` still starts a crewman afresh.
 When `model` differs from `model_requested`, `model_mismatch` is `true` and
 the card's and the roster's Model field carry the warning colour, with both
 names in the text (`modelMismatch`, en and zh-TW).
@@ -2311,10 +2361,14 @@ not a silently different sidebar identity.
 
 **What the round actually ran on (T-127)**, added to `identity.json` once the
 adapter has run - `bin/fm-herdr.py record-model`, called by `fm-worker.sh` and
-`fm-review.sh` after `fm_run_chain` returns - never at allocation, since none
-of it is known before the round runs: `vendor` (the adapter that ran, e.g.
-`claude`), `model_requested` (`config.yaml`'s, resolved before the round ran,
-via `fm_model` in `bin/fm-config.sh`), `model` (what the vendor's own CLI
+`fm-review.sh` after `fm_run_chain` returns. Since T-146 `vendor` and
+`model_requested` are there from the round's start too (`record-requested`,
+`fm_record_requested`): the vendor the chain starts on and its model, just
+after allocation, and again for each fallback vendor as its attempt starts,
+which clears any `model`, `cli_version` and `model_mismatch` until
+`record-model` writes them. The fields: `vendor` (the adapter that ran, e.g.
+`claude`), `model_requested` (`config.yaml`'s for that vendor, via
+`fm_model_for` in `bin/fm-config.sh`), `model` (what the vendor's own CLI
 reported using, read from the slice of its log this attempt wrote,
 `fm_vendor_model`; `"unknown"` when the transcript says nothing, never a
 guess), `cli_version` (`<vendor> --version`, `fm_vendor_cli_version`;
@@ -2327,9 +2381,10 @@ For example, continuing the record above:
  "model": "claude-sonnet-5", "cli_version": "2.1.0", "model_mismatch": true}
 ```
 
-These five ride `data.identity` on every crew payload from the point they are
-known onward, the same way the six above always have; a payload emitted
-before the round has run carries them as absent, and a run recorded before
+These five ride `data.identity` on every crew payload, read fresh from
+`identity.json` for each one (T-146), the same way the six above always
+have; a payload emitted before the round has run carries `model`,
+`cli_version` and `model_mismatch` as `null`, and a run recorded before
 T-127 never gains them. `model_mismatch` costs the round nothing extra to
 raise on the board: the board reads it straight off `data.identity` the way it
 already reads `round` and `attempt`, on whichever payload happens to carry it.
@@ -2344,11 +2399,18 @@ same news.
 **Where `model` comes from, per vendor**, is what `bin/adapters/_contract.md`
 documents: every adapter is asked for JSON output unconditionally now (not
 only when a managed attempt reads its final answer from it), and
-`fm_vendor_model` reads the *last* literal `"model":"..."` field in that JSON
-across every vendor generically - claude's `--output-format json` result (and
-its `init` message), cursor-agent's and gemini's own `--output-format json`
-result, codex's `--json` event stream - so a later report in the same run,
-such as a fallback model the CLI itself chose, wins over an earlier one.
+`fm_vendor_model` reads it in each vendor's recorded shape. claude's
+`--output-format json` result carries no `"model"` field - T-127 assumed it
+did, and recorded `unknown` for every claude round (T-146) - but names the
+models the run used as the keys of `modelUsage`: the key the round asked for
+when it is among them, otherwise the one with the most output tokens, since
+claude runs a small model on the side. Before any result, claude's stream
+`init` event (`{"type":"system","subtype":"init","model":...}`) names it.
+Otherwise the *last* literal `"model":"..."` field wins - cursor-agent's and
+gemini's own `--output-format json` result, codex's `--json` event stream -
+so a later report in the same run, such as a fallback model the CLI itself
+chose, wins over an earlier one. `fm_adapter_model_refusal` reads a
+non-empty `modelUsage` as a turn that happened, as it reads a `"model"`.
 
 **A wrong model name refuses the round before it does anything, loudly
 (T-127)**, the same way a missing login or a policy that will not read does.
@@ -2405,14 +2467,18 @@ round-time preflight above.
 
 **Applied, not only recorded.** `config.yaml`'s `model` (top level,
 `worker.model`, `reviewer.model` - `fm_model` resolves a role's own over the
-top-level one, exactly as `vendor` does) is the vendor's own model name.
-`fm-worker.sh` and `fm-review.sh` resolve it once per round and hand it to
-whichever adapter runs as `FM_MODEL`; each adapter passes it with its own
+top-level one, exactly as `vendor` does) is the vendor's own model name;
+since T-146 it is named per vendor, `models.<vendor>`, and resolved per
+attempt for the vendor that attempt runs (section 5.3, "A model is named
+per vendor"). `fm_run_chain` hands it to whichever adapter runs as
+`FM_MODEL`; each adapter passes it with its own
 CLI's flag - claude and cursor-agent `--model`, codex and gemini `-m` - and
 refuses a round whose `FM_ADAPTER_ARGS` also names one (`--model`, `-m`,
 claude's `--fallback-model`), so `config.yaml` is the one place a model is
-ever chosen. `config.yaml`'s own values are `claude-opus-5-5`, top level and
-reviewer, per the captain (2026-09-28).
+ever chosen. `config.yaml`'s own values were `claude-opus-5-5`, top level and
+reviewer, per the captain (2026-09-28); since 2026-09-29 (T-146) the workers
+run codex on `gpt-6-astra` and the reviewers claude on `claude-opus-5-5`,
+under `models:`.
 
 The name in the label is a crew member, and a name always means one role
 (T-104). A crew member's name, rank and service record belong to one role:

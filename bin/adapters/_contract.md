@@ -144,10 +144,13 @@ Every adapter passes `tests/adapter-contract.test.sh`. Add a vendor by adding a
 file here and a line to `config.yaml`; nothing else in the system changes.
 
 **The configured model is applied, not only recorded (T-127).** `config.yaml`'s
-`model` (top level, `worker.model`, `reviewer.model`) is the vendor's own
-model name; `fm_model` in `bin/fm-config.sh` resolves it per role, and
-`fm-worker.sh` / `fm-review.sh` hand it over as `FM_MODEL`, the way `FM_POLICY`
-is handed over. Each adapter passes it with its CLI's own flag - claude and
+model names (`models.<vendor>`, and the top-level, `worker.model` and
+`reviewer.model`) are each one vendor's own model name. A model is named per
+vendor (T-146): `fm_run_chain` in `bin/fm-config.sh` resolves, for each
+attempt, the model for the vendor that attempt runs (`fm_model_for <role>
+<vendor>`), so `fm-worker.sh --vendor` and a fallback get their own vendor's
+model, never the head vendor's, and hands it over as `FM_MODEL`, the way
+`FM_POLICY` is handed over. Each adapter passes it with its CLI's own flag - claude and
 cursor-agent `--model`, codex and gemini `-m` - through `fm_adapter_model_args`
 in `_lib.sh`, and refuses a round whose `FM_ADAPTER_ARGS` also names one
 (`--model`, `-m`, or claude's `--fallback-model`): config.yaml is the one
@@ -197,15 +200,21 @@ asked for JSON output (`--output-format json` for claude, cursor-agent and
 gemini; `--json` for codex, alongside its own `--output-format` for the final
 answer), unconditionally, whether or not a managed attempt reads the final
 answer from it: it is also how the model the CLI actually used comes back.
-`fm_vendor_model` in `bin/fm-config.sh` reads the *last* literal
-`"model":"..."` field in that JSON, generic across vendors, so a later report
-in the same run - a fallback model the CLI itself chose - wins over an
-earlier one; empty when the transcript says nothing, which the caller
-records as `unknown`, never a guess. Per vendor, where that field comes from:
+`fm_vendor_model` in `bin/fm-config.sh` reads it in each vendor's recorded
+shape. claude's `--output-format json` result carries no `"model"` field -
+T-127 assumed it did, and recorded `unknown` for every claude round (T-146) -
+but names the models the run used as the keys of `modelUsage`: the key the
+round asked for when it is among them, otherwise the one with the most output
+tokens, since claude runs a small model on the side. Before any result,
+claude's stream `init` event names it. For the other vendors the *last*
+literal `"model":"..."` field wins, so a later report in the same run - a
+fallback model the CLI itself chose - wins over an earlier one. Empty when
+the transcript says nothing, which the caller records as `unknown`, never a
+guess. Per vendor, where the model comes from:
 
-| vendor | where `"model"` appears |
+| vendor | where the model appears |
 |---|---|
-| claude | `--output-format json`'s result message: `{"type":"result",...,"model":"claude-opus-5-5",...}` (and its `init` message, before any result) |
+| claude | `--output-format json`'s result message: the keys of `modelUsage`, `{"type":"result",...,"modelUsage":{"claude-opus-5-5":{...}}}`; before any result, the stream's `init` event, `{"type":"system","subtype":"init","model":"claude-opus-5-5",...}` |
 | codex | `--json`'s event stream: a `token_count` or `turn_completed` event carrying `"model":"..."` |
 | cursor-agent | `--output-format json`'s result object: `{"type":"result",...,"model":"...",...}` |
 | gemini | `--output-format json`'s result object: `{"response":"...","stats":{...},"model":"..."}` |

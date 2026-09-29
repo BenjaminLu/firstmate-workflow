@@ -523,6 +523,21 @@ def record_model(run, vendor, model_requested, model, cli_version):
     return identity
 
 
+def record_requested(run, vendor, model_requested):
+    """T-146: the vendor a round is on and the model config.yaml names for
+    that vendor, recorded when the attempt starts rather than only once the
+    round has run, so the board shows them from the round's first event.
+    What the vendor reports is not known yet: model, cli_version and
+    model_mismatch are cleared, never carried over from another vendor's
+    attempt, until record_model writes them."""
+    run = Path(run)
+    identity = read(run / 'identity.json')
+    for key in ('model', 'cli_version', 'model_mismatch'): identity.pop(key, None)
+    identity.update(vendor=vendor or 'unknown', model_requested=model_requested or '')
+    save(run / 'identity.json', identity)
+    return identity
+
+
 def snapshot(root):
     root = Path(root).resolve()
     base = root / 'state/snapshots'; base.mkdir(parents=True, exist_ok=True)
@@ -1798,12 +1813,18 @@ def launch(script, root, args):
     os.execve('/bin/bash', ['bash', str(code / 'bin' / script.name), *args], env)
 
 
-IDENTITY_FIELDS = ('name', 'role', 'project', 'task', 'round', 'attempt')
+# T-146: the same eleven fields fm-worker.sh and fm-review.sh send
+# (fm_crew_identity in bin/fm-config.sh). With only T-116's six here, every
+# crew_status a Herdr round emitted carried no vendor or model, and the board,
+# reading a crewman from its latest event, showed them as unknown.
+IDENTITY_FIELDS = ('name', 'role', 'project', 'task', 'round', 'attempt',
+                   'vendor', 'model_requested', 'model', 'cli_version', 'model_mismatch')
 
 
 def crew_identity(run):
     """A run's identity as the board reads it: the separate fields of its
-    identity.json (T-116), or None for a run that recorded none of them."""
+    identity.json (T-116; vendor and model since T-127, T-146), or None for
+    a run that recorded none of them."""
     try: record = read(Path(run) / 'identity.json')
     except (OSError, ValueError): return None
     if not isinstance(record, dict) or 'round' not in record: return None
@@ -2021,6 +2042,9 @@ def main(args):
     if mode == 'record-model':
         run, vendor, model_requested, model, cli_version = args
         print(json.dumps(record_model(run, vendor, model_requested, model, cli_version))); return 0
+    if mode == 'record-requested':
+        run, vendor, model_requested = args
+        print(json.dumps(record_requested(run, vendor, model_requested))); return 0
     if mode == 'roster':
         try: return roster_command(*args)
         except (OSError, ValueError) as error:

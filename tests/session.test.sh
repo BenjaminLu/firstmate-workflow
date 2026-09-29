@@ -754,6 +754,15 @@ class Session(unittest.TestCase):
     def test_start_reports_the_worker_model_too(self):
         result = self.reviewer_report('vendor: claude\nmodel: opus-5\nreviewer:\n  vendor: claude\n  model: claude-opus-5-5\n')
         self.assertIn("worker model 'opus-5' is not one claude is known to accept", result.stderr)
+    def test_start_checks_the_worker_vendor_and_model_that_actually_run(self):
+        """T-146: the worker's own vendor, not the top-level one, paired with
+        that vendor's model - here claude and models.claude, under a codex
+        top level, so the check that used to ask codex (no catalogue, quiet)
+        now asks claude about the name claude would be handed."""
+        result = self.reviewer_report('vendor: codex\nmodels:\n  claude: opus-5\n  codex: gpt-6-astra\n'
+                                      'worker:\n  vendor: claude\n'
+                                      'reviewer:\n  vendor: claude\n  model: claude-opus-5-5\n')
+        self.assertIn("worker model 'opus-5' is not one claude is known to accept", result.stderr)
     def test_start_is_quiet_about_a_vendor_with_no_offline_catalogue(self):
         """T-127: fm_model_known returns 2 (no catalogue) for a vendor other
         than claude - not 1 (not known) - and a config check that reads that
