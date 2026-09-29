@@ -103,20 +103,29 @@ const identityOf = (v: unknown): Identity | null => {
   const count = (x: unknown) => typeof x === "number" && Number.isInteger(x) && x > 0 ? x : null;
   return {
     name: text(o.name), project: text(o.project), round: count(o.round), attempt: count(o.attempt),
-    vendor: known(o.vendor), model: known(o.model), model_requested: text(o.model_requested),
+    // vendor as written: record-model's "unknown" (every vendor in the
+    // chain unavailable) is a vendor of its own, so mergeIdentity sees the
+    // change and the card never keeps showing the last vendor tried
+    vendor: text(o.vendor), model: known(o.model), model_requested: text(o.model_requested),
     cli_version: known(o.cli_version),
     model_mismatch: typeof o.model_mismatch === "boolean" ? o.model_mismatch : null,
   };
 };
-// T-146: a crewman's identity is every event's, field by field. An event
-// that lacks a field - a crew_status sent with T-116's six only, on
-// 2026-09-29 every crewman's vendor, model and CLI - keeps the value an
-// earlier event gave, never overwrites it with nothing.
+// T-146: a crewman's identity is every event's, field by field, under two
+// rules. Within one vendor, an event that lacks a field - a crew_status sent
+// with T-116's six only, on 2026-09-29 every crewman's vendor, model and CLI
+// - keeps the value an earlier event gave, never overwrites it with nothing.
+// An event that names another vendor - a fallback starting, or "unknown"
+// when every vendor was unavailable - resets every field that belongs to a
+// vendor to what that event says, null included: one vendor is never shown
+// with another's model, requested model, CLI version or mismatch.
+const VENDOR_BOUND: readonly (keyof Identity)[] = ["model", "model_requested", "cli_version", "model_mismatch"];
 const mergeIdentity = (was: Identity | undefined, said: Identity): Identity => {
   if (!was) return said;
   const out = { ...was };
+  const moved = said.vendor !== null && said.vendor !== was.vendor;
   for (const k of Object.keys(said) as (keyof Identity)[]) {
-    if (said[k] !== null) (out as Record<string, unknown>)[k] = said[k];
+    if (said[k] !== null || (moved && VENDOR_BOUND.includes(k))) (out as Record<string, unknown>)[k] = said[k];
   }
   return out;
 };
@@ -847,7 +856,9 @@ const state = (only: string | null = null) => {
       // T-127: read from the run itself, never guessed; always unknown for
       // a run recorded before this. A live round shows the model it asked
       // for until the vendor reports the one it runs on (T-146).
-      vendor: who?.vendor ?? null,
+      // "unknown" is kept above only so a change to it is seen; it is sent
+      // as null, which the card, the roster and the tag show as unknown
+      vendor: who?.vendor && who.vendor !== "unknown" ? who.vendor : null,
       model: who?.model ?? who?.model_requested ?? null,
       model_source: who?.model ? "reported" : who?.model_requested ? "requested" : null,
       model_requested: who?.model_requested ?? null,

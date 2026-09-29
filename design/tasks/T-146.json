@@ -19,7 +19,8 @@
     "design/tasks/T-146.json",
     "bin/fm-canary.sh",
     "bin/fm-session.sh",
-    "tests/canary.test.sh"
+    "tests/canary.test.sh",
+    "bin/adapters/_contract.md"
   ],
   "acceptance": [
     "Why. After T-127 merged (9e4194d), the captain restarted the board on 2026-09-29 to see which model the crew runs, and saw nothing: every crewman's vendor, model and CLI fields were null. firstmate traced two defects on the T-126 round 7 run: (1) identity.json and the agent_finished event record model \"unknown\" although the run's own result reports modelUsage {claude-opus-5-5} (claude was launched with --model claude-opus-5-5, confirmed in the process list); (2) the board reads a crewman from its latest crew_status event, whose data.identity carries only name, role, project, task, round and attempt - the vendor, model_requested, model, cli_version and model_mismatch fields appear only on other events. Its own spec file, design/tasks/T-146.json, is committed on this branch.",

@@ -1884,6 +1884,74 @@ assert_eq '[{"vendor":"claude","count":1},{"vendor":"codex","count":1}]' "$(jq -
 kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
 rm -rf "$qk"
 
+# --- T-146: a change of vendor resets what belongs to the vendor ------------
+# The last known value holds within one vendor only. When a fallback starts,
+# record_requested clears model, cli_version and model_mismatch and names the
+# new vendor's model_requested ("" for a vendor config names none for), and
+# fm_crew_identity sends them as null: the board must take them as cleared,
+# never keep the vendor before's. record-model's "unknown" vendor (every
+# vendor unavailable) is such a change too. One actor per step of one round,
+# each carrying the events up to that step, as fm_crew_identity sends them.
+qv="$(mktemp -d)"; mkdir -p "$qv/bin" "$qv/state" "$qv/design" "$qv/board/public"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$qv/bin/"
+cp "$ROOT/board/server.ts" "$qv/board/"
+cp "$ROOT/board/public/index.html" "$ROOT/board/public/ship.js" "$qv/board/public/"
+fm_tasks_write /dev/stdin "$qv/design/tasks" <<'J'
+{"tasks":[{"id":"T-V1","title":"claude then codex","milestone":"M2","depends_on":[]},
+          {"id":"T-V2","title":"then an unmodelled vendor","milestone":"M2","depends_on":[]},
+          {"id":"T-V3","title":"then a bare status","milestone":"M2","depends_on":[]},
+          {"id":"T-V4","title":"then no vendor at all","milestone":"M2","depends_on":[]}]}
+J
+emv() { FM_ROOT="$qv" "$qv/bin/fm-emit.sh" "$@" >/dev/null; }
+# <actor> <task> <type> <identity beyond the six, as jq>
+said() {
+  local six; six="$(jq -cn --arg t "$2" '{name:"vic",role:"worker",project:null,task:$t,round:1,attempt:1}')"
+  emv --actor "$1" --task "$2" --type "$3" \
+    --data "$(jq -cn --argjson i "$six" "{role:\"worker\",identity:(\$i + $4),activity:{en:\"on\",\"zh-TW\":\"進行\"}}")" \
+    --en "on" --tw "進行"
+}
+claude_ran='{vendor:"claude",model_requested:"claude-opus-5-5",model:"claude-opus-5-5",cli_version:"2.1.0",model_mismatch:false}'
+codex_starts='{vendor:"codex",model_requested:"gpt-6-astra",model:null,cli_version:null,model_mismatch:null}'
+cursor_starts='{vendor:"cursor-agent",model_requested:"",model:null,cli_version:null,model_mismatch:null}'
+none_ran='{vendor:"unknown",model_requested:"",model:"unknown",cli_version:"unknown",model_mismatch:false}'
+emv --actor captain --type greenlit --en "go" --tw "開工"
+for n in 1 2 3 4; do
+  a="worker-vic-tv$n-r1"
+  said "$a" "T-V$n" dispatched "$claude_ran"
+  said "$a" "T-V$n" crew_status "$codex_starts"
+  [ "$n" -ge 2 ] && said "$a" "T-V$n" crew_status "$cursor_starts"
+  [ "$n" -ge 3 ] && said "$a" "T-V$n" crew_status '{}'
+  [ "$n" -ge 4 ] && said "$a" "T-V$n" crew_status "$none_ran"
+done
+FM_ROOT="$qv" FM_PORT=0 bun run "$qv/board/server.ts" > "$qv/out" 2>&1 < /dev/null &
+pidv=$!
+PORTV="$(board_port "$qv/out" "$pidv")"
+for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORTV/api/state" >/dev/null 2>&1 && break; sleep 0.25; done
+sv="$(curl -sf "http://127.0.0.1:$PORTV/api/state")"
+card() { jq -c --arg a "$1" '.crew[]|select(.id==$a)|{vendor,model_requested,model,model_source,cli_version,model_mismatch}' <<<"$sv"; }
+assert_eq '{"vendor":"codex","model_requested":"gpt-6-astra","model":"gpt-6-astra","model_source":"requested","cli_version":null,"model_mismatch":false}' \
+  "$(card worker-vic-tv1-r1)" \
+  "(a) claude reported, then a codex start: codex asking for gpt-6-astra, never claude's model or CLI version"
+assert_eq '{"vendor":"cursor-agent","model_requested":null,"model":null,"model_source":null,"cli_version":null,"model_mismatch":false}' \
+  "$(card worker-vic-tv2-r1)" \
+  "(b) then a start on a vendor config names no model for: that vendor, with no model and no model_source"
+assert_eq '{"vendor":"cursor-agent","model_requested":null,"model":null,"model_source":null,"cli_version":null,"model_mismatch":false}' \
+  "$(card worker-vic-tv3-r1)" \
+  "(c) a later crew_status with only T-116's six fields keeps (b): the vendor it is on, still with no model"
+assert_eq '{"vendor":null,"model_requested":null,"model":null,"model_source":null,"cli_version":null,"model_mismatch":false}' \
+  "$(card worker-vic-tv4-r1)" \
+  "(d) a final vendor \"unknown\" shows the vendor as unknown (null), with no model, never the last vendor tried"
+assert_eq '0' \
+  "$(jq -c '[.crew[]|select(.id|startswith("worker-vic-tv"))|select(.id!="worker-vic-tv1-r1")|tostring|select(test("gpt-6-astra|claude-opus-5-5|2\\.1\\.0"))]|length' <<<"$sv")" \
+  "(b)-(d) no card after the vendor changed carries an earlier vendor's model or CLI version anywhere"
+assert_eq '0' \
+  "$(jq -c '[.crew[]|select(.id=="worker-vic-tv1-r1")|tostring|select(test("claude-opus-5-5|2\\.1\\.0"))]|length' <<<"$sv")" \
+  "(a) the codex card carries claude's model and CLI version nowhere"
+assert_eq '[{"vendor":"codex","count":1},{"vendor":"cursor-agent","count":2}]' "$(jq -c '.engineLive' <<<"$sv")" \
+  "(d) the engine badge counts each round on the vendor it is on now, and none on \"unknown\""
+kill "$pidv" 2>/dev/null; wait "$pidv" 2>/dev/null || true
+rm -rf "$qv"
+
 # --- T-119: one task-id grammar, in the scripts and in the board ------------
 # bin/fm-emit.sh holds the grammar every script sources; board/server.ts
 # carries its twin, taskGrammar(), between the task-grammar markers, and

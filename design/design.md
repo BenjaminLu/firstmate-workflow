@@ -476,10 +476,10 @@ repository names `claude` and `claude-opus-5-5`, and, since 2026-09-29, codex
 and `gpt-6-astra` for the worker (T-146). A project
 naming neither is reported by `fm-session.sh start` and firstmate asks the
 captain through a choice card; the answer lands as a `config.yaml` pull
-request. **`model` is applied, not only recorded (T-127)**: `fm_model` in
-`bin/fm-config.sh` resolves it per role, `fm-worker.sh` and `fm-review.sh`
-hand it to the adapter as `FM_MODEL`, and each adapter passes it with its
-CLI's own flag; section 11 above and `bin/adapters/_contract.md` have the
+request. **`model` is applied, not only recorded (T-127)**: since T-146 it
+is resolved per vendor, not per role - `fm_run_chain` in `bin/fm-config.sh`
+hands each attempt the model for the vendor that attempt runs as `FM_MODEL`
+(below), and each adapter passes it with its CLI's own flag; section 11 above and `bin/adapters/_contract.md` have the
 whole of it, including what refuses a round whose model the vendor does not
 recognise, and what the run records once it has actually run on one.
 
@@ -1615,9 +1615,16 @@ vendor, model and CLI were blank: the latest event, a `crew_status`, carried
 only the six T-116 fields, and replaced the identity that had them. Now every
 crew event a round emits carries all eleven, read fresh from `identity.json`
 (`fm_crew_identity`, and `IDENTITY_FIELDS` in `bin/fm-herdr.py` for a Herdr
-round's `crew_status`), and the board merges field by field: an event that
-lacks one, or says `unknown`, keeps the value an earlier event gave. A new
-`dispatched` still starts a crewman afresh.
+round's `crew_status`), and the board merges field by field under two rules.
+Within one vendor, an event that lacks a field, or says `unknown`, keeps the
+value an earlier event gave. An event that names another vendor - a fallback
+starting, whose `record_requested` clears what the vendor before reported, or
+`record-model`'s `unknown` when every vendor was unavailable - resets
+`model`, `model_requested`, `cli_version` and `model_mismatch` to what that
+event says, null or empty meaning cleared, so one vendor is never shown with
+another vendor's model, requested model, CLI version or mismatch. A vendor
+of `unknown` is sent to the page as null, shown as unknown, and not counted
+by the engine badge. A new `dispatched` still starts a crewman afresh.
 When `model` differs from `model_requested`, `model_mismatch` is `true` and
 the card's and the roster's Model field carry the warning colour, with both
 names in the text (`modelMismatch`, en and zh-TW).

@@ -692,7 +692,11 @@ assert_eq "claude-opus-5-5" "$(fm_vendor_model "$cm/log" 0)" \
   "asked for nothing, the key that wrote the most output - not the side model, not the answer's text"
 assert_eq "claude-opus-5-5" "$(fm_vendor_model "$cm/log" 0 claude-sonnet-5)" \
   "a model asked for and not run is not reported as run"
-# claude's stream: the system init event names the model before any result
+# claude's stream: the system init event names the model before any result.
+# A regression guard, not fail-first: T-127's generic "model" reader already
+# read the init event, so this stays green without T-146. The modelUsage
+# assertions above and "and the result at the end ... wins over it" below
+# are the fail-first ones for the new reading.
 printf '%s\n' '{"type":"system","subtype":"init","cwd":"/w","session_id":"5d1c","tools":["Bash"],"model":"claude-opus-5-5","permissionMode":"dontAsk"}' \
   '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}' > "$cm/stream"
 assert_eq "claude-opus-5-5" "$(fm_vendor_model "$cm/stream" 0)" "claude's init event gives the model"
