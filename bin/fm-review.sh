@@ -191,14 +191,28 @@ emit_status() {
 # definition of the command: two spellings of the same emit is how the
 # ending and the progress lines drift apart.
 finished() {
-  fm_record_end "$?"
+  local rc=$?
+  fm_record_end "$rc"
   drop_checkout
   local try=3
   while [ "$try" -gt 0 ]; do
     try=$(( try - 1 ))
-    emit_once --type agent_finished --en "run finished" --tw "這次執行結束" && return 0
+    emit_once --type agent_finished --en "run finished" --tw "這次執行結束" && { wake_verdict "$rc"; return 0; }
   done
   echo "${0##*/}: could not record the end of this run; ${NAME} stays on the deck until ${TASK} is finished" >&2
+  wake_verdict "$rc"
+}
+# The verdict wakes firstmate (T-137), pushed by this round after its
+# agent_finished: `review: T-134 APPROVE 4ea1ec2`, `review: T-134 REJECT
+# 4ea1ec2`, or `review: T-134 no verdict exit 3` for a round that signed none.
+wake_verdict() {
+  [ -n "${NAME:-}" ] && [ -n "${TASK:-}" ] || return 0
+  local line="review: $TASK ${decided:-no verdict}"
+  [ -n "${decided:-}" ] || [ "$1" -eq 0 ] || line="$line exit $1"
+  [ -z "${R_HEAD:-}" ] || line="$line ${R_HEAD:0:7}"
+  fm_wake_push "$REPO" "$NAME" verdict "$line${PR:+ #$PR}" \
+    "$(jq -cn --arg task "$TASK" --arg actor "$NAME" --arg verdict "${decided:-}" --arg head "${R_HEAD:-}" --argjson rc "$1" \
+      '{task:$task, actor:$actor, verdict:$verdict, head:$head, rc:$rc}')"
 }
 trap finished EXIT
 trap 'exit 130' INT

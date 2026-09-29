@@ -28,8 +28,10 @@ Portable bootstrap is `bin/fm-session.sh start --repo <root>`. It inspects live
 tasks/processes/panes, retires dead crew actors whose events still show them
 aboard, and starts or reuses the correct-root captain board, owned by the
 session and ending with it. Nothing watches for decisions: the board pushes
-each wake as it writes one, ringing every waiter's own doorbell, and
-`fm-session.sh wait` blocks on one (T-151).
+each wake as it writes one, ringing every waiter's own doorbell (T-151), and
+the harness's hooks hand it to firstmate (T-137; see below): firstmate keeps
+no waiter of its own running. `fm-session.sh wait` is a tool for scripts
+that block on a wake.
 Every background process fm starts goes through `bin/lib/fm-lifeline.sh`,
 has an owner and ends with it. It does not authorize work or invent success when
 Herdr/transport is missing. Declared adapters only: do not claim arbitrary
@@ -53,7 +55,7 @@ Transport or empty/partial output is never reported as fabricated success.
 Options: `FM_TRANSPORT=direct` (no window), `FM_HOST`, `FM_AUTOCLOSE=0`, and
 `FM_STOP_GRACE` (seconds between a stop's TERM and KILL, default 5). A round
 belongs to the session and ends with it (T-151). Nothing watches for
-decisions: the board rings whoever waits (`fm-session.sh wait`). Scope and
+decisions: the board pushes the wake, and the hooks hand it to firstmate. Scope and
 merge approval still go through the captain board.
 
 Firstmate inspects existing work and live agents, then coordinates repository
@@ -214,6 +216,27 @@ merge gate, not a review criterion: a merge card needs the reviewer's
 approval and firstmate's own check of CI and the gates, both on the same
 head. `fm-review.sh` posts the verdict and emits the review's
 events in both modes. This repository declares `run`.
+
+## Firstmate is never blind
+
+A turn never ends while work is in flight and nothing can wake firstmate
+(T-137). The wake is pushed, never watched: whoever writes an event that
+needs firstmate puts it on the wake queue, `state/session/wake.jsonl`, and
+rings every doorbell (`bin/lib/fm_lifeline.py push`). The writers are a
+round's end (`fm-worker.sh`; `fm-review.sh` with its verdict), a run found
+lost (the session's deck reconcile), a gate result from outside a round
+(`fm-emit.sh`), and the board, for a card answered and a merge settled or
+failed. `bin/fm-watch-arm.sh` keeps one watcher (`bin/fm-watch.sh`) per
+repository and hands it on before each wake goes out; nothing polls.
+
+`bin/fm-session.sh start` installs the hooks for the harness it runs in,
+into that harness's local, uncommitted config (`bin/fm.sh hooks
+install|uninstall`). What has been verified, per harness and version, is in
+[docs/verification/supervision.md](docs/verification/supervision.md): the
+Claude Code mechanism these hooks use was measured live on 2.1.284; the
+hooks themselves, and the Codex and Cursor paths, are not yet verified live,
+and nothing claims they work until they are. The board shows whether firstmate is watched, the last wake,
+what waits, and any gap.
 
 ## State
 

@@ -7,3 +7,7 @@ state/rescued/
 .fm-prompt.md
 .fm-say.md
 __pycache__/
+# the hooks that wake firstmate (T-137): local, written by bin/fm.sh hooks install, never committed
+.claude/settings.local.json
+.codex/hooks.json
+.cursor/hooks.json
