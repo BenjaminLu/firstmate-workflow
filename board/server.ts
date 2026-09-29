@@ -1175,56 +1175,29 @@ const emitCaptain = (args: string[]): { ok: boolean; error: string } => {
   } catch { return { ok: false, error: "fm-emit.sh could not be started" }; }
 };
 const onProjectOf = (project: string) => project && project !== defaultProject() ? ["--project", project] : [];
-// what ps says a process is running, or "" once it is gone
-const commandOf = (pid: number): string => {
-  try {
-    const r = Bun.spawnSync(["ps", "-o", "command=", "-p", String(pid)], { stdin: "ignore", env: childEnv() });
-    return r.exitCode === 0 ? decode(r.stdout) : "";
-  } catch { return ""; }
-};
-// Stop every crewman on a task, by the stop path main has (T-107's `fm.sh
-// stop` has not merged): SIGTERM to the round's own script - bin/fm-worker.sh
-// publishes its pid at state/worktrees/<task>.pid, and its TERM trap saves and
-// pushes the worktree before it exits - to every run's script named in its
-// process.json, and to each vendor CLI its attempts' execution.json name. A pid
-// is signalled only while ps still shows the program it was recorded for, so
-// a pid the system has since handed to someone else is left alone. The pull
-// request is never touched.
+// Stop every crewman on a task by the one stop path fm has (T-144):
+// `bin/fm-herdr.py stop --task`, which `fm.sh stop --task` runs too. It sends
+// the task's bin/fm-worker.sh (state/worktrees/<task>.pid) SIGTERM, whose trap
+// saves and pushes the worktree, ends each round's own process group - TERM,
+// then KILL after its grace - and TERMs the script that launched each run. A
+// pid is signalled only while ps still shows the program it was recorded for,
+// so a pid the system has since handed to someone else is left alone. A run
+// is this project's by this board's rule: its own project, else the default.
+// The pull request is never touched.
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const stopCrew = (project: string, task: string): { stopped: string[]; failed: string[] } => {
-  const out = { stopped: [] as string[], failed: [] as string[] }, done = new Set<number>();
-  const signal = (label: string, pid: unknown, token: unknown) => {
-    if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 1 || done.has(pid)) return;
-    if (typeof token !== "string" || !token) return;
-    const cmd = commandOf(pid);
-    if (!cmd || !cmd.includes(token)) return;   // gone, or no longer ours
-    done.add(pid);
-    try { process.kill(pid, "SIGTERM"); out.stopped.push(label); }
-    catch (e) { out.failed.push(`${label}: ${(e as { code?: string }).code ?? "not stopped"}`); }
-  };
+  const out = { stopped: [] as string[], failed: [] as string[] };
   if (!SAFE_NAME.test(task)) return out;
-  const pidfile = join(ROOT, "state/worktrees", `${task}.pid`);
+  let r;
   try {
-    const pid = Number(readFileSync(pidfile, "utf8").trim());
-    signal(`worker ${pid}`, pid, "fm-worker.sh");
-  } catch { /* no worker published */ }
-  const runs = join(ROOT, "state/runs");
-  let names: string[] = [];
-  try { names = readdirSync(runs).filter((n) => SAFE_NAME.test(n)); } catch { /* no runs */ }
-  for (const actor of names) {
-    const who = readJson<Record<string, unknown>>(join(runs, actor, "identity.json"));
-    if (!who || who.task !== task) continue;
-    if ((typeof who.project === "string" && who.project ? who.project : defaultProject()) !== project) continue;
-    // each attempt's vendor CLI, as bin/fm-herdr.py recorded it on launch
-    let attempts: string[] = [];
-    try { attempts = readdirSync(join(runs, actor)).filter((n) => SAFE_NAME.test(n)); } catch { /* none */ }
-    for (const a of attempts) {
-      const cli = readJson<Record<string, unknown>>(join(runs, actor, a, "execution.json"));
-      if (cli?.started === true) signal(`${actor} ${cli.pid}`, cli.pid, cli.token);
-    }
-    const proc = readJson<Record<string, unknown>>(join(runs, actor, "process.json"));
-    if (proc) signal(`${actor} ${proc.pid}`, proc.pid, proc.token);
-  }
+    r = Bun.spawnSync(["python3", join(ROOT, "bin/fm-herdr.py"), "stop", ROOT, "--task", task,
+      "--project", project, "--default", defaultProject()], { env: childEnv(), stdin: "ignore", timeout: 30_000 });
+  } catch { out.failed.push("fm-herdr.py stop could not be started"); return out; }
+  let said: { stopped?: unknown; failed?: unknown } | null = null;
+  try { said = JSON.parse(decode(r.stdout)); } catch { /* nothing readable was said */ }
+  if (said && Array.isArray(said.stopped) && Array.isArray(said.failed)) {
+    out.stopped = said.stopped.map(String); out.failed = said.failed.map(String);
+  } else out.failed.push(lastLine(decode(r.stderr)) || `fm-herdr.py stop exited ${r.exitCode}`);
   return out;
 };
 type Carried = { outcome: "done" | "failed" | "recorded" | "running"; reason: string; stopped?: string[] };

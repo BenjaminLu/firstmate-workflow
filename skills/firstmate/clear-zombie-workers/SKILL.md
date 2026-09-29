@@ -31,16 +31,29 @@ live worker.
    read the PID and test `kill -0`.
 2. **Task lock** — `state/runs/.worker-<TASK>.lock`. Use `lsof` (or equivalent)
    to see which PID still holds it.
-3. **Processes** — any adapter CLI (Cursor Agent included) or `fm-worker.sh`
+3. **Rounds** — every round runs headless since T-144, as a process group fm
+   started: each attempt directory `state/runs/<actor>/<attempt>/` holds
+   `runner.pid` (the group's leader, whose pid is the group id), `runner.exit`
+   once the round has ended (its exit code), `run.log` (what the round printed)
+   and `window.json` (the window it had, `none` included). A round is live
+   while its runner is running `fm-herdr.py` (`ps -p <pid> -o command=`) or its
+   `execution.lock` is held; a `runner.pid` whose process is gone with no
+   `runner.exit` and no `result.json` is a lost round, and the supervisor
+   records it as `status: lost`.
+4. **Processes** — any adapter CLI (Cursor Agent included) or `fm-worker.sh`
    whose cwd or open files are under `state/worktrees/<TASK>` or `state/runs/` /
-   `state/runtime/archived-runs/` for that task.
-4. **Herdr** — when `HERDR_ENV=1`, `herdr agent list` for panes still titled
-   for the task. An internal chat subagent is not a Herdr worker.
-5. **Events** — recent `state/events.jsonl` lines for the task (`dispatched`,
+   `state/runtime/archived-runs/` for that task, and any member of a live
+   round's process group (`ps -A -o pid,pgid,stat,command` filtered by its
+   `runner.pid`).
+5. **Windows** — a Herdr tab, cmux workspace or tmux window only follows a
+   round's `run.log`. It is not evidence that the round is alive, and a window
+   left open after its round ended is not a zombie round; close it by hand if
+   it is in the way. An internal chat subagent is not a crew round.
+6. **Events** — recent `state/events.jsonl` lines for the task (`dispatched`,
    `agent_finished`, `worker_crashed`, `superseded`).
-6. **Worktree** — `git status` in `state/worktrees/<TASK>` and the published
+7. **Worktree** — `git status` in `state/worktrees/<TASK>` and the published
    PR head OID when a PR is open.
-7. **Run artifacts** — `result.json`, empty `cli.log`, and ownership receipts
+8. **Run artifacts** — `result.json`, empty `cli.log`, and ownership receipts
    under `state/runs/` or `state/runtime/archived-runs/`.
 
 ## Live versus zombie
@@ -66,9 +79,15 @@ so cleanup shells do not lose `git`/`rm`.
 1. **Rescue first** — if the worktree has uncommitted work, copy it to
    `state/rescued/<TASK>-cleanup-<UTC stamp>` with `cp -a` before any kill or
    reset. Say where the rescue landed.
-2. **Stop zombies only** — `kill` the PIDs that hold the task lock or are
-   confirmed zombies; escalate to `kill -9` only if they survive a short wait.
-   Do not kill unrelated Herdr/board processes.
+2. **Stop zombies only** — stop a confirmed zombie round with
+   `bin/fm.sh stop <actor> --repo <root>`, or every crewman on the task with
+   `bin/fm.sh stop --task <TASK> --repo <root>`: the one stop path the
+   board's park and drop use. It sends the task's `fm-worker.sh` TERM (its
+   trap saves and pushes the worktree) and ends each round's process group,
+   TERM then KILL after `FM_STOP_GRACE` seconds, and prints what it stopped
+   and what it could not. `kill` by hand only a PID it does not know, such as
+   one holding the task lock from before T-144; escalate to `kill -9` only if
+   it survives a short wait. Do not kill unrelated Herdr/board processes.
 3. **Dead pidfiles** — delete a pidfile only when its PID is gone. Never delete
    a pidfile whose process is still alive.
 4. **Confirm lock release** — re-check `lsof` on `.worker-<TASK>.lock`. Absence
@@ -96,7 +115,7 @@ so cleanup shells do not lose `git`/`rm`.
 - Use `fm-cleanup.sh` on a task whose branch still has an open PR.
 - Edit live scripts a running worker is executing; use the normal snapshot path
   for new runs.
-- Fabricate Herdr lifecycle events for log-only panes.
+- Fabricate lifecycle events for a window: every window only follows a log.
 
 ## After clearance
 
