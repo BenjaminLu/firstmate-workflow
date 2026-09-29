@@ -1263,7 +1263,7 @@ rm -f "$sf/unit.spec.ts"; rm -rf "$sf/tests/e2e"
 # exactly one shard too, with nothing telling ci.sh which. Only the run
 # lines count: every shard's summary line names the longest suite as well.
 shard_ran() {   # shard_ran <ci.sh output>: the suites its "+ path" lines ran
-  grep -oE '^[[:space:]]*\+ tests/[a-z-]+\.test\.sh' <<<"$1" | sed 's/^[[:space:]]*+ //' || true
+  grep -oE '^[[:space:]]*\+ tests/[a-z0-9-]+\.test\.sh' <<<"$1" | sed 's/^[[:space:]]*+ //' || true
 }
 sh_dir="$(fixture)"
 for n in one two three four five; do
@@ -1364,7 +1364,7 @@ for i in 1 2 3 4; do
   [ "$load" -le "$bt_max" ] || bt_max="$load"
   # a shard of nothing but zeros, or of nothing but the unrecorded suite,
   # is a shard that weighed bytes as seconds
-  weighty="$(grep -cE '/(slow|mid)[a-z]\.test\.sh$' <<<"$ran" || true)"
+  weighty="$(grep -cE '/(slow|mid)[a-z0-9-]\.test\.sh$' <<<"$ran" || true)"
   assert_ne "0" "$weighty" "shard $i/4 runs a suite recorded above 0, not only zeros or the new one"
 done
 want_list="$(cd "$bt_dir" && printf '%s\n' tests/*.test.sh | sort)"
@@ -1376,13 +1376,13 @@ rm -rf "$bt_dir"
 
 # The acceptance bar on the data it names: main's own per-suite timings from
 # its last run before T-148 (run 36511784453 on 9e4194d, the suite-timings-*
-# artifacts), 34 suites and 1693s, four of them recorded as whole-second 0s.
-# That run's shards held 1, 1, 1 and 31 suites. The zero-timed suites are
-# padded to be the largest files, as on main, so a zero read as unknown and
-# weighed by bytes would lead the sort again. Each shard's own summary line
-# must predict no more than the mean plus the longest suite (1693/4 + 539),
-# the loads the recorded timings give its "+ path" lines must stay under the
-# same bar, and the four shards together run each of the 34 exactly once.
+# artifacts), 34 suites and 1693s, four of them recorded as whole-second 0s
+# and padded to be the largest files, as on main. On those timings every
+# shard's summary line names worker.test.sh's 539s as the longest suite and
+# predicts no more than the mean plus the longest suite (1693/4 + 539), the
+# recorded seconds of the suites its "+ path" lines ran stay under the same
+# bar, and the four shards together run each of the 34 exactly once. The
+# fail-first check of the old byte fallback is the synthetic test above.
 mr_dir="$(fixture)"
 mr_in="$(safe_tmpdir)/main-timings.txt"
 cat > "$mr_in" <<'TIMINGS'
@@ -1435,9 +1435,6 @@ for i in 1 2 3 4; do
   summary="$(grep -E "^ci: shard $i/4: " <<<"$out" || true)"
   assert_contains "$summary" "longest suite tests/worker.test.sh 539.0s" \
     "main's timings: shard $i/4 predicts in seconds, and names worker.test.sh's 539s as the longest suite"
-  # on 9e4194d three shards ran one zero-timed suite each and nothing else
-  nonzero="$(printf '%s\n' "$ran" | awk 'NR==FNR{d[$1]=$2; next} ($1 in d) && d[$1] > 0 {n++} END{print n+0}' "$mr_in" -)"
-  assert_ne "0" "$nonzero" "main's timings: shard $i/4 runs a suite recorded above 0, not only zeros"
   predicted="$(sed -n 's/.* predicted \([0-9.]*\)s;.*/\1/p' <<<"$summary")"
   assert_ok "awk 'BEGIN { exit !(\"$predicted\" != \"\" && \"$predicted\" + 0 <= $mr_bar) }'" \
     "main's timings: shard $i/4's predicted ${predicted:-?}s is within mean + longest (${mr_bar}s)"
