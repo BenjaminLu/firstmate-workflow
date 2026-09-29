@@ -48,7 +48,6 @@ if firstmate.is_file():
     for sentence in (
         'Within one project, raise one merge card at a time: merging one pull request makes every other open one in that project BEHIND and voids the head its card verified.',
         'Cards of other projects are not held by it (design §15.10, point 3).',
-        'Run `gh pr update-branch` before a review round, never after an `APPROVE`: a moved head restarts both checks, and T-104 lost two rounds that way.',
         'A test stub answers exactly as the vendor does, in output shape, exit code and a literal `null`, never as our own code expects.',
         'Before dispatching, sweep the spec for paths that no longer exist, such as `design/tasks.json` after T-090.',
         'Workers do not run the test suite: GitHub CI and the gates verify, and no worker acceptance says to run `ci.sh` (captain\'s rule).',
@@ -87,6 +86,22 @@ if firstmate.is_file():
             errors.append(f'firstmate skill lacks SK-003 fix: {sentence}')
     if prose.count('Do not edit a shell script or runtime wrapper while a live process executes it.') != 1:
         errors.append('firstmate skill should carry that sentence exactly once (SK-003: duplicate removed)')
+    # SK-008: an APPROVE survives any update from the base that leaves the
+    # change's patch-id as approved; update-branch is allowed at any time.
+    for sentence in (
+        'An APPROVE carries forward across any update of the branch from its base as long as the change itself is unchanged: the patch-id of merge-base..head equals the approved one.',
+        'A conflict that had to be resolved changes the patch and needs a review; base commits touching files the change reviewed no longer void the approval.',
+        'So `gh pr update-branch` is allowed before or after an APPROVE and during a running review round.',
+    ):
+        if sentence not in prose:
+            errors.append(f'firstmate skill lacks SK-008 rule: {sentence}')
+    for gone in (
+        'never after an `APPROVE`',
+        'touches none of its files',
+        'no `main` commit since the approved merge-base touches a file it reviewed',
+    ):
+        if gone in prose:
+            errors.append(f'firstmate skill still carries retired text (SK-008): {gone}')
 # SK-005: fixes to stale reviewer text found in the 2026-09-29 audit against bb8a5aa.
 reviewer = root / 'skills' / 'reviewer' / 'SKILL.md'
 if reviewer.is_file():

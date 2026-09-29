@@ -1005,7 +1005,7 @@ concurrency limit still hold, and it says which one held the task.
 | 4 | the diff stays in scope | `git diff --name-only` within the task's `scope` globs |
 | 5 | **the new tests are not vacuous** | classify by `project.tests`, revert the implementation, run `setup`, then only the suites the diff touches through `project.test`; the whole `check` only when none can be determined, said so; it must go red |
 | 6 | the required GitHub check is green | `gh pr checks <pr> --required` |
-| 7 | the latest verdict is an `APPROVE:<task-id>` for this change | its `REVIEWED:` line names the current head, or the same patch-id with no `main` commit touching its files since (below); author filtered only if `FM_REVIEWER_LOGIN` is set |
+| 7 | the latest verdict is an `APPROVE:<task-id>` for this change | its `REVIEWED:` line names the current head, or the same patch-id, merge-base to head, with no later `REJECT` (below); author filtered only if `FM_REVIEWER_LOGIN` is set |
 
 **Gate 3 is retired, and its number with it (captain, 2026-09-26; T-114).**
 It ran the whole project check in a fresh worktree: the same run the required
@@ -1097,19 +1097,22 @@ and the line gate 7 trusts cannot disagree.
 --stable` of the diff between them, taken with `git diff-tree -p
 --no-renames`, which reads no user configuration; `files` lists every path
 that diff touches. Gate 7 accepts the latest `APPROVE` when its `head` is the
-current head, or when all of these hold:
+current head, or when both of these hold:
 
 1. the current change's patch-id, merge-base to head, equals the approved one;
-2. no commit on `main` between the approved merge-base and the current one
-   touches any file in the approved list;
-3. no later `REJECT` supersedes the approval.
+2. no later `REJECT` supersedes the approval.
 
 Otherwise it fails and names the condition, so firstmate knows a real
 re-review is needed. A conflict resolution or any worker edit changes the
-patch-id, and so always needs a new review. The reviewer's approval carries
-forward across an update that leaves the change identical and touches none of
-its files; CI and the six gates always rerun on the head being merged,
-since they test the change combined with the current `main`.
+patch-id, and so always needs a new review. An APPROVE carries forward across
+any update of the branch from its base as long as the change itself is
+unchanged - the patch-id of merge-base..head equals the approved one; a
+conflict that had to be resolved changes the patch and needs a review
+(captain, 2026-09-29; SK-008). Base commits touching files the change
+reviewed no longer void the approval, so `gh pr update-branch` is allowed
+before or after an APPROVE and during a running review round. CI and the six
+gates always rerun on the head being merged, since they test the change
+combined with the current `main`.
 
 Gate 5 names no toolchain. The target repository declares its own in
 `config.yaml`'s `project:` block (`setup`, `check`, `check_env`, `tests`,
