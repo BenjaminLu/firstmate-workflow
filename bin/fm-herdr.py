@@ -725,23 +725,120 @@ def follow(attempt, poll=0.2):
         time.sleep(poll)
 
 
-def stop_run(root, actor, grace=5.0):
-    """Stop a live round by its process group, then reap: TERM, and KILL after
-    the grace. Only a pid still running fm-herdr.py is signalled."""
-    stopped = []
-    for pidfile in sorted((Path(root) / 'state/runs' / actor).glob('*/runner.pid')):
-        try: pid = int(pidfile.read_text())
-        except (ValueError, OSError): continue
-        if not process_matches(dict(pid=pid, token='fm-herdr.py')): continue
-        for sig in (signal.SIGTERM, signal.SIGKILL):
-            try: os.killpg(pid, sig)
-            except OSError: break
-            end = time.monotonic() + (grace if sig == signal.SIGTERM else 2)
-            while time.monotonic() < end and process_matches(dict(pid=pid, token='fm-herdr.py')):
-                time.sleep(.05)
-            if not process_matches(dict(pid=pid, token='fm-herdr.py')): break
-        stopped.append(str(pidfile.parent))
-    return stopped
+SAFE_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
+
+
+def latest_attempt(root, actor):
+    """The attempt a round of `actor` last started, or None."""
+    if not SAFE_NAME.fullmatch(actor): raise ValueError('not an actor: ' + repr(actor))
+    attempts = [path.parent for path in (Path(root) / 'state/runs' / actor).glob('*/invocation.json')]
+    return max(attempts, key=lambda path: path.stat().st_mtime_ns) if attempts else None
+
+
+def group_live(pgid):
+    """Whether any member of a process group is still running. A member that
+    has exited and waits only for its parent to reap it (a zombie) is not."""
+    try: os.killpg(pgid, 0)
+    except ProcessLookupError: return False
+    try:
+        listing = subprocess.run(['ps', '-A', '-o', 'pgid=,stat='], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError): return True
+    if listing.returncode: return True
+    return any(fields[0] == str(pgid) and not fields[1].startswith('Z')
+               for fields in (line.split() for line in listing.stdout.splitlines()) if len(fields) >= 2)
+
+
+def stop_group(pid, grace):
+    """TERM a round's process group, and KILL whatever of it is left after the
+    grace. True once the group is gone. A group id is not reused while any
+    member of the group lives, so the KILL cannot reach someone else's."""
+    try: os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError: return True
+    for wait, then in ((grace, signal.SIGKILL), (2.0, None)):
+        end = time.monotonic() + wait
+        while time.monotonic() < end:
+            if not group_live(pid): return True
+            time.sleep(.05)
+        if then is None: return False
+        try: os.killpg(pid, then)
+        except ProcessLookupError: return True
+    return False
+
+
+def stop_run(root, actor, grace=5.0, out=None):
+    """Stop every live round of one actor by its process group. Only a runner
+    ps still shows running fm-herdr.py is signalled. A round from before
+    T-144 has no runner: its vendor CLI is sent TERM by the pid it recorded,
+    as the board did, and only while ps still shows that CLI."""
+    out = out if out is not None else dict(stopped=[], failed=[])
+    if not SAFE_NAME.fullmatch(actor): raise ValueError('not an actor: ' + repr(actor))
+    run = Path(root) / 'state/runs' / actor
+    for attempt in sorted(path for path in run.glob('*') if path.is_dir()):
+        pidfile = attempt / 'runner.pid'
+        if pidfile.is_file():
+            try: pid = int(pidfile.read_text())
+            except (ValueError, OSError): continue
+            if not process_matches(dict(pid=pid, token='fm-herdr.py')): continue
+            try: gone = stop_group(pid, grace)
+            except OSError as error: gone, why = False, error.strerror or str(error)
+            else: why = 'still running after KILL'
+            (out['stopped'] if gone else out['failed']).append(
+                f'{actor} {pid}' if gone else f'{actor} {pid}: {why}')
+            continue
+        try: cli = read(attempt / 'execution.json')
+        except (OSError, ValueError): continue
+        if cli.get('started') is True: signal_recorded(out, f'{actor} {cli.get("pid")}', cli)
+    return out
+
+
+def signal_recorded(out, label, record):
+    """TERM a pid a record names, only while ps shows the program it names."""
+    pid = record.get('pid')
+    if not isinstance(pid, int) or pid <= 1 or not isinstance(record.get('token'), str):
+        return
+    if not process_matches(record): return
+    try: os.kill(pid, signal.SIGTERM); out['stopped'].append(label)
+    except OSError as error: out['failed'].append(f'{label}: {error.strerror or error}')
+
+
+def stop_task(root, task, project, default, grace=5.0):
+    """Every crewman on one task of one project, stopped by the one stop path
+    the board and `fm.sh stop` share. First the task's bin/fm-worker.sh, with
+    TERM, whose trap saves and pushes the worktree; then each of the task's
+    runs: its rounds by process group (stop_run) and the script that launched
+    it (process.json), by TERM. A run names its project, or is the default's.
+    The pull request is never touched."""
+    root = Path(root)
+    out = dict(stopped=[], failed=[])
+    if not SAFE_NAME.fullmatch(task): return out
+    try: pid = int((root / 'state/worktrees' / (task + '.pid')).read_text().strip())
+    except (OSError, ValueError): pid = None
+    if pid: signal_recorded(out, f'worker {pid}', dict(pid=pid, token='fm-worker.sh'))
+    for file in sorted((root / 'state/runs').glob('*/identity.json')):
+        try: identity = read(file)
+        except (OSError, ValueError): continue
+        if identity.get('task') != task or (identity.get('project') or default) != project: continue
+        actor = file.parent.name
+        if not SAFE_NAME.fullmatch(actor): continue
+        stop_run(root, actor, grace, out)
+        try: launcher = read(file.parent / 'process.json')
+        except (OSError, ValueError): continue
+        signal_recorded(out, f'{actor} {launcher.get("pid")}', launcher)
+    return out
+
+
+def stop_command(args):
+    """`stop <root> <actor>` or `stop <root> --task <id> [--project P] [--default D]`."""
+    root, *rest = args
+    grace = float(os.environ.get('FM_STOP_GRACE', '5'))
+    if rest[:1] != ['--task']:
+        if len(rest) != 1: raise ValueError('usage: stop <root> <actor> | stop <root> --task <id>')
+        return stop_run(root, rest[0], grace)
+    options = dict(zip(rest[::2], rest[1::2]))
+    if len(rest) % 2 or set(options) - {'--task', '--project', '--default'}:
+        raise ValueError('usage: stop <root> --task <id> [--project <name>] [--default <name>]')
+    default = options.get('--default', default_project(root) or '')
+    return stop_task(root, options['--task'], options.get('--project') or default, default, grace)
 
 
 def supervise(attempt, proc, timeout, identity, chain_attempt):
@@ -783,17 +880,34 @@ class Host:
 
 
 def open_generic_window(host, attempt, tree, actor, command):
-    """A labelled tmux window or cmux workspace showing the run's log."""
+    """A labelled tmux window or cmux workspace showing the run's log.
+
+    Only documented interfaces. tmux(1): `new-window [-d] [-P] [-F format]
+    [-n window-name] [-c start-directory] [shell-command]`; -P prints the new
+    window's information in -F's format, and `#{window_id}` is its `@N` id.
+    The window runs the follower and closes itself when the follower exits.
+    cmux's own help: `new-workspace [--cwd <path>] [--command <text>]` (no
+    name; --command sends the text and Enter to the new workspace's shell),
+    `rename-workspace [--workspace <id|ref>] <title>`, and
+    `close-workspace --workspace <id|ref>`; its output "defaults to refs"
+    (workspace:N), or UUIDs with --id-format. The workspace is opened, then
+    labelled by the ref it came back with; one that names no ref cannot be
+    labelled or closed, and is said to have failed."""
     control = Host(host, attempt)
     if host == 'tmux':
         if not os.environ.get('TMUX'): raise RuntimeError('not inside a tmux session')
         ref = control('new-window', '-d', '-P', '-F', '#{window_id}', '-n', actor,
                       '-c', str(Path(tree).resolve()), command)
+        if not re.fullmatch(r'@\d+', ref): raise RuntimeError('tmux gave no window id: ' + repr(ref))
     else:
-        shown = control('new-workspace', '--name', actor, '--cwd', str(Path(tree).resolve()),
-                        '--command', command)
-        found = re.search(r'workspace:\d+|[0-9A-Fa-f]{8}-[0-9A-Fa-f-]{27}', shown)
-        ref = found.group(0) if found else ''
+        shown = control('new-workspace', '--cwd', str(Path(tree).resolve()), '--command', command)
+        found = re.search(r'workspace:\d+|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}', shown)
+        if not found: raise RuntimeError('cmux named no new workspace: ' + repr(shown))
+        ref = found.group(0)
+        # the workspace is open from here on: if labelling fails, it is closed
+        # at the round's end all the same
+        save(Path(attempt) / 'window.json', dict(host=host, status='open', ref=ref, actor=actor))
+        control('rename-workspace', '--workspace', ref, actor)
     record = dict(host=host, status='open', ref=ref, actor=actor)
     save(Path(attempt) / 'window.json', record)
     return record
@@ -946,6 +1060,8 @@ def transport(adapter, prompt, tree, log):
     # the run's log, so failing to open one costs the round nothing.
     host = window_host(root)
     command = shlex.join([sys.executable, str(Path(__file__).resolve()), 'follow', str(attempt)])
+    # window.json always says what window the round has, `none` included, so
+    # a round with no window is recorded as one, never inferred from absence.
     owner = control = window = None
     try:
         if host == 'herdr':
@@ -954,12 +1070,18 @@ def transport(adapter, prompt, tree, log):
             save(attempt / 'window.json', window)
         elif host != 'none':
             window = open_generic_window(host, attempt, tree, actor, command)
+        else:
+            window = dict(host='none', status='none', reason='no terminal host', actor=actor)
+            save(attempt / 'window.json', window)
     except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError,
             subprocess.SubprocessError) as error:
         # never let a pane the round is not running in be closed by the round
         if (attempt / 'owner.json').exists(): (attempt / 'owner.json').rename(attempt / 'owner.failed.json')
         owner = control = None
-        window = dict(host=host, status='none', reason=str(error))
+        # a cmux workspace opened but not labelled is still closed at the end
+        opened = read(attempt / 'window.json') if (attempt / 'window.json').is_file() else {}
+        window = dict(host=host, status='open' if opened.get('status') == 'open' else 'none',
+                      ref=opened.get('ref'), reason=str(error), actor=actor)
         save(attempt / 'window.json', window)
         print(f'{actor}: no {host} window ({error}); the round runs without one', file=sys.stderr)
     proc = spawn_runner(attempt)
@@ -1851,8 +1973,16 @@ def main(args):
     if mode == 'launch': launch(args[0], args[1], args[2:])
     if mode == 'transport': return transport(*args)
     if mode == 'pane-child': return run_supervised(*args)
-    if mode == 'follow': return follow(*args)
-    if mode == 'stop': print(json.dumps(stop_run(*args))); return 0
+    if mode == 'follow':
+        # `follow <attempt>`, what a window runs, or `follow <root> <actor>`,
+        # what `fm.sh follow` runs: the actor's latest round
+        if len(args) == 2:
+            attempt = latest_attempt(*args)
+            if attempt is None: raise ValueError('no round of ' + args[1] + ' to follow')
+            args = [attempt]
+        return follow(*args)
+    if mode == 'stop':
+        out = stop_command(args); print(json.dumps(out)); return 1 if out['failed'] else 0
     if mode == 'watch-child': return watch_child(*args)
     if mode == 'context':
         root, role, task, actor, prompt, target = args

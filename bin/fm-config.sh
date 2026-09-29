@@ -1111,7 +1111,7 @@ fm_git_commit() {  # fm_git_commit <worktree> <message>
 # fm supervises, and a host (Herdr, cmux, tmux) is only a window onto it. So no
 # transport is a bypass of anything and nothing is refused here; the function
 # stays because the entrypoints call it. FM_TRANSPORT=direct now only asks for
-# a round with no window, and FM_ALLOW_DIRECT is read by nothing.
+# a round with no window.
 fm_refuse_herdr_bypass() { return 0; }
 
 # --- what counts as a script, and what counts as a comment ---------------

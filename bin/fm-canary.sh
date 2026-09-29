@@ -276,7 +276,7 @@ PROMPT
   model_refused_file="$d/model-refused"; : > "$model_refused_file"
   ( unset FM_RUN_DIR FM_CONTEXT_READY FM_ATTEMPT_DIR FM_FINAL_PATH FM_RUN_REVIEW
     FM_POLICY="$policy_all" FM_POLICY_BLOCKED="$d/blocked" FM_ROLE=worker FM_TASK=canary \
-      FM_TRANSPORT=direct FM_ALLOW_DIRECT=1 FM_MODEL="$model_requested" FM_MODEL_REFUSED="$model_refused_file" \
+      FM_TRANSPORT=direct FM_MODEL="$model_requested" FM_MODEL_REFUSED="$model_refused_file" \
       "$adapter" run "$d/prompt" "$tree" "$d/log" </dev/null >/dev/null 2>"$d/stderr" )
   code=$?
   model_reported="$(fm_vendor_model "$d/log" 0)"
@@ -482,16 +482,16 @@ destroy_case() {   # destroy_case <fixture-label> <repo> <mode>
   id="$(destroy_task_id "$mode")"
   gh="$(destroy_ghstub "$repo")"
   tree="$repo/repo/state/worktrees/$id"
-  # FM_TRANSPORT=direct: run in this process, not fm-herdr.py's managed
-  # relaunch, which the per-vendor probes above take the same way - this is
-  # a scripted proof, not a session to attach a pane to. Every other FM_*
+  # FM_TRANSPORT=direct: the round opens no window (T-144); it is still the
+  # supervised process group every round is. This is a scripted proof, with
+  # nobody to watch a window. Every other FM_*
   # this shell might carry (it can be running inside a managed round of its
   # own) is unset first, so a hostile round's fixture is never read as an
   # extension of the round driving the canary.
   local scrub=(env) v
   while IFS= read -r v; do scrub+=(-u "$v"); done < <(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p')
   out="$(cd "$repo/repo" \
-    && "${scrub[@]}" HERDR_ENV=0 FM_TRANSPORT=direct FM_ALLOW_DIRECT=1 \
+    && "${scrub[@]}" HERDR_ENV=0 FM_TRANSPORT=direct \
        FM_GH="$gh" FM_HOSTILE_MODE="$mode" FM_MIRROR_INTERVAL=1 \
        FM_HOSTILE_SLEEP_BEFORE=2 FM_HOSTILE_SLEEP_AFTER=2 \
        bin/fm-worker.sh --task "$id" --name "$(destroy_name "$mode")" 2>&1)"; rc=$?

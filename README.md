@@ -39,10 +39,14 @@ unset) only opens a window for people to watch: with Herdr, one dedicated
 unfocused tab per run with the canonical crew label, showing the run's live log
 and closed, ownership-safe, after a positively completed final status; cmux and
 tmux get the same window. A closed or crashed window never affects the round,
-and a window that cannot be opened is skipped. Transport or empty/partial output
-is never reported as fabricated success.
+and a window that cannot be opened is skipped; each round's `window.json` says
+which window it had, `none` included. `bin/fm.sh follow <actor>` shows a round's
+log without a window, and `bin/fm.sh stop <actor>` or `stop --task <id>` stops
+rounds by their process groups, the same stop the board's park and drop use.
+Transport or empty/partial output is never reported as fabricated success.
 
-Options: `FM_TRANSPORT=direct` (no window), `FM_HOST`, `FM_AUTOCLOSE=0`, and
+Options: `FM_TRANSPORT=direct` (no window), `FM_HOST`, `FM_AUTOCLOSE=0`,
+`FM_STOP_GRACE` (seconds between a stop's TERM and KILL, default 5), and
 `fm-session.sh stop` for decision watching. Scope and merge approval still go through the captain
 board.
 

@@ -875,7 +875,7 @@ elif a[0]=='branch': print('t-035-test')
         self.fail('asynchronous process did not reach expected state')
     def no_live_runs(self):
         # In-process inspection must never inherit a developer's real Herdr.
-        with patch.dict(os.environ, {'FM_TRANSPORT':'direct', 'FM_ALLOW_DIRECT':'1'}):
+        with patch.dict(os.environ, {'FM_TRANSPORT':'direct'}):
             return not any(r['live'] for r in m.inspect(self.repo)['runs'])
     def test_retained_worker_survives_timeout_interrupt_and_launcher_death(self):
         for ending in ('timeout', 'term', 'kill', 'runner-kill', 'direct-runner-kill'):
@@ -885,7 +885,6 @@ elif a[0]=='branch': print('t-035-test')
                 env=dict(self.env,FM_TEST_ASYNC='1',FM_HERDR_TIMEOUT='.3' if ending=='timeout' else str(WAIT))
                 if ending=='direct-runner-kill':
                     env['FM_TRANSPORT']='direct'
-                    env['FM_ALLOW_DIRECT']='1'
                 with tempfile.TemporaryFile(mode='w+') as output:
                     launcher=subprocess.Popen(['bash',str(self.repo/'bin/fm-worker.sh'),'--task','T-035'],
                         env=env,stdout=output,stderr=output,start_new_session=True)
@@ -935,7 +934,7 @@ elif a[0]=='branch': print('t-035-test')
         for script,args in entries:
             for source in ('repo-argument','environment','relative-script-argument','relative-script-environment'):
                 with self.subTest(script=script,source=source):
-                    env=dict(self.env,FM_TRANSPORT='direct',FM_ALLOW_DIRECT='1',FM_ROOT=self.repo.name)
+                    env=dict(self.env,FM_TRANSPORT='direct',FM_ROOT=self.repo.name)
                     entry=self.repo/'bin'/script
                     if source.startswith('relative-script'): entry=entry.relative_to(self.repo.parent)
                     argv=['bash',str(entry),*args]
@@ -954,7 +953,6 @@ elif a[0]=='branch': print('t-035-test')
                 with self.subTest(vendor=vendor,transport=transport):
                     (self.repo/'config.yaml').write_text('vendor: claude\nfallback:\n  - '+vendor+'\n')
                     extra=dict(FM_TRANSPORT=transport,FM_MOCK_BODY='REJECT:T-035 current mock verdict')
-                    if transport=='direct': extra['FM_ALLOW_DIRECT']='1'
                     answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'], **extra)
                     self.assertEqual(0,answer.returncode,answer.stderr)
                     self.assertIn('REJECT:T-035 current '+vendor+' verdict',answer.stdout)
@@ -1129,7 +1127,9 @@ elif a[0]=='branch': print('t-035-test')
         self.assertRegex((attempt/'runner.pid').read_text(),r'^[0-9]+$')
         self.assertEqual('0',(attempt/'runner.exit').read_text().strip())
         self.assertIn('finished exit=0',(attempt/'run.log').read_text())
-        self.assertEqual('none',json.loads((attempt/'window.json').read_text())['status'])
+        # no window is recorded as none, never inferred from a missing file
+        window=json.loads((attempt/'window.json').read_text())
+        self.assertEqual(('none','none'),(window['host'],window['status']))
         events=[json.loads(s) for s in (self.repo/'state/events.jsonl').read_text().splitlines()]
         self.assertTrue([e for e in events if e['type']=='agent_finished' and e['actor']==result['actor']])
     def test_the_board_sees_a_headless_round_as_it_sees_a_pane_round(self):
@@ -1198,58 +1198,171 @@ elif a[0]=='branch': print('t-035-test')
         self.assertEqual(2,len(self.results()))
         self.assertEqual({'completed'},{json.loads(p.read_text())['status'] for p in self.results()})
     def test_stop_ends_the_process_group_and_the_lost_round_says_so(self):
-        for name in ('release-model','model.pid'):
-            (self.repo/name).unlink(missing_ok=True)
-        env=dict(self.env,FM_TEST_ASYNC='1',FM_HERDR_TIMEOUT=str(WAIT),HERDR_ENV='0')
-        with tempfile.TemporaryFile(mode='w+') as output:
-            launcher=subprocess.Popen(['bash',str(self.repo/'bin/fm-worker.sh'),'--task','T-035'],
-                env=env,stdout=output,stderr=output,start_new_session=True)
-            try:
-                self.wait_for(lambda:(self.repo/'model.pid').exists())
-                model=int((self.repo/'model.pid').read_text())
-                actor=(self.repo/'state/worktrees/T-035/surviving-work').read_text()
-                stopped=subprocess.run([sys.executable,str(root/'bin/fm-herdr.py'),'stop',str(self.repo),actor],
-                                       capture_output=True,text=True,timeout=WAIT)
-                self.assertEqual(0,stopped.returncode,stopped.stderr)
-                self.assertEqual(1,len(json.loads(stopped.stdout)))
-                self.wait_for(lambda:not m.process_matches(dict(pid=model,token=str(self.fake/'codex'))))
-                launcher.wait(timeout=WAIT)
-                last=json.loads(self.results()[0].read_text())
-                self.assertEqual('lost',last['status'])
-                self.assertNotEqual(0,last['exit_code'])
-            finally:
-                (self.repo/'release-model').touch()
-                if launcher.poll() is None:
-                    os.killpg(launcher.pid,signal.SIGKILL); launcher.wait(timeout=5)
-    def test_tmux_and_cmux_get_the_same_window_where_they_are_the_host(self):
-        self.executable('tmux', r'''
+        # one stop path, reached by an actor (fm-herdr.py stop), by a task
+        # (fm.sh stop --task, which the board's park and drop also run)
+        for way in ('actor','task'):
+            with self.subTest(way=way):
+                for name in ('release-model','model.pid'):
+                    (self.repo/name).unlink(missing_ok=True)
+                env=dict(self.env,FM_TEST_ASYNC='1',FM_HERDR_TIMEOUT=str(WAIT),HERDR_ENV='0')
+                with tempfile.TemporaryFile(mode='w+') as output:
+                    launcher=subprocess.Popen(['bash',str(self.repo/'bin/fm-worker.sh'),'--task','T-035'],
+                        env=env,stdout=output,stderr=output,start_new_session=True)
+                    try:
+                        self.wait_for(lambda:(self.repo/'model.pid').exists())
+                        model=int((self.repo/'model.pid').read_text())
+                        actor=(self.repo/'state/worktrees/T-035/surviving-work').read_text()
+                        runner=int(next((self.repo/'state/runs'/actor).glob('*/runner.pid')).read_text())
+                        if way=='actor':
+                            argv=[sys.executable,str(self.repo/'bin/fm-herdr.py'),'stop',str(self.repo),actor]
+                        else:
+                            argv=['bash',str(self.repo/'bin/fm.sh'),'stop','--task','T-035','--repo',str(self.repo)]
+                        stopped=subprocess.run(argv,env=self.env,capture_output=True,text=True,timeout=WAIT)
+                        self.assertEqual(0,stopped.returncode,stopped.stderr)
+                        said=json.loads(stopped.stdout)
+                        self.assertIn(f'{actor} {runner}',said['stopped'])
+                        self.assertEqual([],said['failed'])
+                        self.wait_for(lambda:not m.process_matches(dict(pid=model,token=str(self.fake/'codex'))))
+                        launcher.wait(timeout=WAIT)
+                        # stopped by task, the worker script is TERMed too, and
+                        # may end before the supervisor has recorded the loss
+                        path=self.repo/'state/runs'/actor/'last-result.json'
+                        last=self.wait_for(lambda:path.is_file() and json.loads(path.read_text()))
+                        self.assertEqual('lost',last['status'])
+                        self.assertNotEqual(0,last['exit_code'])
+                    finally:
+                        (self.repo/'release-model').touch()
+                        if launcher.poll() is None:
+                            os.killpg(launcher.pid,signal.SIGKILL); launcher.wait(timeout=5)
+                        self.wait_for(self.no_live_runs)
+    def test_fm_follow_shows_an_actors_latest_round(self):
+        answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],HERDR_ENV='0')
+        self.assertEqual(0,answer.returncode,answer.stderr)
+        actor=json.loads(self.results()[0].read_text())['actor']
+        shown=subprocess.run(['bash',str(self.repo/'bin/fm.sh'),'follow',actor,'--repo',str(self.repo)],
+                             env=self.env,capture_output=True,text=True,timeout=WAIT)
+        self.assertEqual(0,shown.returncode,shown.stderr)
+        self.assertIn('started on T-035',shown.stdout)
+        self.assertIn('finished exit=0',shown.stdout)
+        nobody=subprocess.run(['bash',str(self.repo/'bin/fm.sh'),'follow','worker-nobody-t1-r1','--repo',str(self.repo)],
+                              env=self.env,capture_output=True,text=True,timeout=WAIT)
+        self.assertNotEqual(0,nobody.returncode)
+        self.assertIn('no round of worker-nobody-t1-r1',nobody.stderr)
+    # The tmux and cmux stand-ins take exactly the flags the real tools take
+    # and refuse any other, as the real tools do, so a call the real tool
+    # would reject is rejected here too.
+    TMUX_STUB = r'''
 import json,os,pathlib,shlex,subprocess,sys
 r=pathlib.Path(os.environ['FM_TEST_ROOT']); a=sys.argv[1:]
 with (r/'tmux-calls').open('a') as f: f.write(json.dumps(a)+'\n')
-assert a[0]=='new-window' and '-d' in a and '-P' in a
-subprocess.Popen(shlex.split(a[-1]),stdin=subprocess.DEVNULL,stdout=open(r/'tmux-shown','ab'),stderr=subprocess.STDOUT,start_new_session=True)
-print('@7')
-''')
-        self.executable('cmux', r'''
+# tmux(1): new-window [-abdkPS] [-c start-directory] [-e environment]
+#   [-F format] [-n window-name] [-t target-window] [shell-command [argument ...]]
+#   "-P prints information about the new window after it has been created. By
+#   default, it uses the format '#{session_name}:#{window_index}' but a
+#   different format may be specified with -F." #{window_id} is "@N".
+#   "-d: the session does not make the new window the current window."
+if a[:1]!=['new-window']: sys.exit('unknown command: '+(a[0] if a else ''))
+flags,valued,i={},set('ceFnt'),1
+while i<len(a) and a[i].startswith('-') and len(a[i])>1:
+ for j,c in enumerate(a[i][1:]):
+  if c in valued:
+   v=a[i][j+2:] or a[i+1]; i+=0 if a[i][j+2:] else 1; flags[c]=v; break
+  if c not in 'abdkPS': sys.exit('new-window: unknown option -- '+c)
+  flags[c]=True
+ i+=1
+command=a[i:]
+n=7+len((r/'tmux-calls').read_text().splitlines())
+if command:
+ subprocess.Popen(shlex.split(command[0]) if len(command)==1 else command,stdin=subprocess.DEVNULL,
+  stdout=open(r/'tmux-shown','ab'),stderr=subprocess.STDOUT,start_new_session=True)
+if flags.get('P'):
+ print(flags.get('F','#{session_name}:#{window_index}').replace('#{window_id}','@%d'%n)
+       .replace('#{session_name}','0').replace('#{window_index}',str(n)))
+'''
+    CMUX_STUB = r'''
 import json,os,pathlib,shlex,subprocess,sys
 r=pathlib.Path(os.environ['FM_TEST_ROOT']); a=sys.argv[1:]
 with (r/'cmux-calls').open('a') as f: f.write(json.dumps(a)+'\n')
-if a[0]=='new-workspace':
- subprocess.Popen(shlex.split(a[a.index('--command')+1]),stdin=subprocess.DEVNULL,stdout=open(r/'cmux-shown','ab'),stderr=subprocess.STDOUT,start_new_session=True)
- print('OK workspace:7')
-elif a[0]!='close-workspace': raise SystemExit('unsupported cmux command '+str(a))
-''')
+# cmux <command> --help, from the installed cmux (checked 2026-09-29):
+#   new-workspace [--cwd <path>] [--command <text>]
+#     --command <text>  Send text+Enter to the new workspace after creation
+#   rename-workspace [--workspace <id|ref|index>] [--] <title>
+#   close-workspace --workspace <id|ref|index>   (required)
+#   "Output defaults to refs (window:1/workspace:2/pane:3/surface:4)"
+def options(rest,known):
+ got,pos,i={},[],0
+ while i<len(rest):
+  if rest[i]=='--': pos+=rest[i+1:]; break
+  if rest[i].startswith('--'):
+   if rest[i] not in known: sys.exit('Error: Unknown flag '+rest[i])
+   got[rest[i]]=rest[i+1]; i+=2; continue
+  pos.append(rest[i]); i+=1
+ return got,pos
+count=r/'cmux-workspaces'
+if a[:1]==['new-workspace']:
+ got,pos=options(a[1:],{'--cwd','--command'})
+ if pos: sys.exit('Error: unexpected argument '+pos[0])
+ n=int(count.read_text())+1 if count.exists() else 7; count.write_text(str(n))
+ if '--command' in got:
+  subprocess.Popen(shlex.split(got['--command']),stdin=subprocess.DEVNULL,stdout=open(r/'cmux-shown','ab'),
+   stderr=subprocess.STDOUT,start_new_session=True)
+ print('OK workspace:%d'%n)
+elif a[:1]==['rename-workspace']:
+ got,pos=options(a[1:],{'--workspace'})
+ if len(pos)!=1: sys.exit('Error: rename-workspace requires a title')
+ (r/('cmux-title-'+got.get('--workspace','current').replace(':','-'))).write_text(pos[0]); print('OK')
+elif a[:1]==['close-workspace']:
+ got,pos=options(a[1:],{'--workspace'})
+ if '--workspace' not in got or pos: sys.exit('Error: close-workspace requires --workspace')
+ print('OK')
+else: sys.exit('Error: Unknown command '+(a[0] if a else ''))
+'''
+    def test_tmux_and_cmux_get_the_same_window_where_they_are_the_host(self):
+        self.executable('tmux', self.TMUX_STUB)
+        self.executable('cmux', self.CMUX_STUB)
         for host,marker in (('tmux',dict(TMUX='/tmp/tmux-0/default,1,0')),('cmux',dict(CMUX_WORKSPACE_ID='workspace:1'))):
             with self.subTest(host=host):
                 answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],HERDR_ENV='0',**marker)
                 self.assertEqual(0,answer.returncode,answer.stderr)
                 calls=[json.loads(s) for s in (self.repo/(host+'-calls')).read_text().splitlines()]
-                actor=json.loads(max(self.results(),key=lambda p:p.stat().st_mtime_ns).read_text())['actor']
-                self.assertIn(actor,calls[0])
-                self.assertIn(' follow ',calls[0][-1] if host=='tmux' else calls[0][calls[0].index('--command')+1])
+                result=json.loads(max(self.results(),key=lambda p:p.stat().st_mtime_ns).read_text())
+                actor=result['actor']
+                window=json.loads((Path(result['attempt'])/'window.json').read_text())
                 self.wait_for(lambda:'started on T-035' in (self.repo/(host+'-shown')).read_text())
-                if host=='cmux': self.assertEqual(['close-workspace','--workspace','workspace:7'],calls[-1])
+                if host=='tmux':
+                    self.assertEqual(actor,calls[0][calls[0].index('-n')+1])
+                    self.assertIn(' follow ',calls[0][-1])
+                    self.assertEqual('@8',window['ref'])
+                else:
+                    # opened, then labelled by the ref cmux answered with, then closed by it
+                    self.assertEqual(['new-workspace','--cwd'],calls[0][:2])
+                    self.assertIn(' follow ',calls[0][calls[0].index('--command')+1])
+                    self.assertEqual(['rename-workspace','--workspace','workspace:7',actor],calls[1])
+                    self.assertEqual(actor,(self.repo/'cmux-title-workspace-7').read_text())
+                    self.assertEqual(['close-workspace','--workspace','workspace:7'],calls[-1])
+                    self.assertEqual('closed',window['status'])
                 self.assertFalse((self.repo/'controls').exists())
+    def test_a_cmux_workspace_that_cannot_be_labelled_is_still_closed(self):
+        self.executable('cmux', self.CMUX_STUB.replace("elif a[:1]==['rename-workspace']:",
+                                                       "elif a[:1]==['rename-workspace']:\n sys.exit('Error: denied')\nelif False:"))
+        answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],HERDR_ENV='0',CMUX_WORKSPACE_ID='workspace:1')
+        self.assertEqual(0,answer.returncode,answer.stderr)
+        calls=[json.loads(s) for s in (self.repo/'cmux-calls').read_text().splitlines()]
+        self.assertEqual(['close-workspace','--workspace','workspace:7'],calls[-1])
+        result=json.loads(self.results()[0].read_text())
+        self.assertEqual('completed',result['status'])
+        window=json.loads((Path(result['attempt'])/'window.json').read_text())
+        self.assertIn('rename-workspace',window['reason'])
+    def test_the_stand_ins_refuse_what_the_real_tools_refuse(self):
+        # the round-1 call, cmux new-workspace --name, is one real cmux does not have
+        self.executable('tmux', self.TMUX_STUB); self.executable('cmux', self.CMUX_STUB)
+        env=dict(self.env)
+        run=lambda *a:subprocess.run([str(self.fake/a[0]),*a[1:]],env=env,capture_output=True,text=True)
+        self.assertNotEqual(0,run('cmux','new-workspace','--name','x','--command','true').returncode)
+        self.assertNotEqual(0,run('cmux','close-workspace').returncode)
+        self.assertNotEqual(0,run('tmux','new-window','-Z').returncode)
+        self.assertEqual('OK workspace:7',run('cmux','new-workspace','--cwd','.').stdout.strip())
+        self.assertRegex(run('tmux','new-window','-d','-P','-F','#{window_id}','-n','x').stdout.strip(),r'^@[0-9]+$')
     def test_host_choice_is_config_then_environment_and_never_carries_the_round(self):
         config=self.repo/'config.yaml'
         def host(text='',**env):
@@ -1305,11 +1418,20 @@ elif a[0]!='close-workspace': raise SystemExit('unsupported cmux command '+str(a
         ended=[e['actor'] for e in events if e['type']=='agent_finished']
         self.assertEqual(3,len(started)); self.assertEqual(started,set(ended)); self.assertEqual(3,len(ended))
         self.assertEqual({'sam','samx','samxy'},{a.split('-')[1] for a in started})
-    def test_transport_failure_stops_worker_before_success(self):
+    def test_a_herdr_that_fails_costs_the_worker_its_window_and_nothing_else(self):
+        # Herdr only ever gave the round a window (T-144): a Herdr that fails
+        # every command leaves the worker running headless to its end, and
+        # the failure is said and recorded, not raised.
         self.executable('herdr','raise SystemExit(7)')
         answer=self.invoke('fm-worker.sh',['--task','T-035'])
-        self.assertEqual(70,answer.returncode,answer.stderr)
-        self.assertNotIn('pr_opened',(self.repo/'state/events.jsonl').read_text())
+        self.assertEqual(0,answer.returncode,answer.stderr)
+        self.assertIn('no herdr window (Herdr command failed: pane get caller); the round runs without one',answer.stderr)
+        result=json.loads(self.results()[0].read_text()); attempt=Path(result['attempt'])
+        self.assertEqual('completed',result['status'])
+        window=json.loads((attempt/'window.json').read_text())
+        self.assertEqual(('herdr','none'),(window['host'],window['status']))
+        self.assertIn('Herdr command failed',window['reason'])
+        self.assertEqual('0',(attempt/'runner.exit').read_text().strip())
     def test_new_role_resets_inherited_adapter_guard(self):
         answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],
                            FM_CONTEXT_READY='1',FM_ATTEMPT_DIR='/unused-parent',FM_FINAL_PATH='/unused-parent/final')

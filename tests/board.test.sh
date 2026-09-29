@@ -1967,7 +1967,8 @@ rm -rf "$gdir"
 # started, or says on stderr what held it and exits 0; fm-worker.sh exits 70
 # naming the lock when another round holds the task.
 x="$(mktemp -d)"; mkdir -p "$x/bin" "$x/state/pending" "$x/state/runs" "$x/state/worktrees" "$x/design" "$x/board/public" "$x/stub"
-cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-decide.sh" "$x/bin/"
+# fm-herdr.py: the stop path park and drop run (T-144)
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-decide.sh" "$ROOT/bin/fm-herdr.py" "$x/bin/"
 cp "$ROOT/board/server.ts" "$x/board/"
 cp "$ROOT/board/public/index.html" "$x/board/public/"
 fm_tasks_write /dev/stdin "$x/design/tasks" <<'J'
@@ -2187,6 +2188,18 @@ printf '#!/usr/bin/env bash\nsleep 30 &\nwait\n' > "$x/stub/fm-worker.sh"
 bash "$x/stub/fm-worker.sh" >/dev/null 2>&1 </dev/null &
 fake=$!
 printf '%s\n' "$fake" > "$x/state/worktrees/T-050.pid"
+# and a headless round of it (T-144): a process group of its own, led by a
+# runner ps shows as fm-herdr.py, with the vendor CLI inside the group. Only
+# the group's leader is on file; the stop must reach the rest through it.
+mkdir -p "$x/state/runs/worker-ada-t050-r1/codex-a"
+printf '{"actor":"worker-ada-t050-r1","task":"T-050","role":"worker"}\n' > "$x/state/runs/worker-ada-t050-r1/identity.json"
+printf 'import subprocess,sys\nc=subprocess.Popen(["sleep","60"])\nopen(sys.argv[1],"w").write(str(c.pid))\nc.wait()\n' > "$x/stub/fm-herdr.py"
+python3 -c 'import os,sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
+  python3 "$x/stub/fm-herdr.py" "$x/stub/cli.pid" >/dev/null 2>&1 </dev/null &
+runner=$!
+printf '%s\n' "$runner" > "$x/state/runs/worker-ada-t050-r1/codex-a/runner.pid"
+wait_for 10 test -s "$x/stub/cli.pid"
+cli="$(cat "$x/stub/cli.pid")"
 assert_eq "park,drop true" "$(jq -r '.tasks[]|select(.id=="T-050")|"\(.actions|join(",")) \(.confirm)"' <<<"$(sx)")" \
   "a task in review offers park and drop, and asks first"
 n50="$(wc -l < "$x/state/events.jsonl")"
@@ -2199,6 +2212,10 @@ assert_contains "$(jq -r '.stopped|join(" ")' "$x/resp")" "worker $fake" "its wo
 assert_eq "50" "$(jq -r .pr_left_open "$x/resp")" "and its pull request is left open, and said so"
 wait "$fake" 2>/dev/null; rc=$?
 assert_eq "143" "$rc" "the worker got SIGTERM"
+assert_contains "$(jq -r '.stopped|join(" ")' "$x/resp")" "worker-ada-t050-r1 $runner" "its round is stopped by the same path"
+wait "$runner" 2>/dev/null
+wait_for 10 bash -c "! kill -0 $cli 2>/dev/null"
+assert_fail "kill -0 $cli" "and the vendor CLI inside the round's process group is gone with it"
 assert_eq "200" "$(setaside T-050 unpark)" "unparked"
 assert_eq "review" "$(lane T-050)" "it returns to the lane its events give it"
 assert_eq "200" "$(setaside T-050 drop '{"confirm":true}')" "and a confirmed drop closes it"
