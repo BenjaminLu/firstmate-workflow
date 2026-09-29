@@ -171,6 +171,67 @@ assert_eq '["mock","","unknown","unknown"]' \
 assert_eq "false" "$(jq -r '.model_mismatch' "$r4b/state/runs/$m4bactor/identity.json")" \
   "asking for nothing and getting nothing is never a mismatch"
 
+# T-146: a model is named per vendor. A round that falls back to another
+# vendor is handed that vendor's own model, never the first one's, and every
+# crew event it emits - crew_status included - carries the vendor and model
+# from the start. `down` stands in for a vendor that is unavailable; mock
+# then takes the round.
+dv5="$(fixture)"; rv5="$dv5/repo"; GHv5="$(ghstub "$dv5")"
+cat > "$rv5/config.yaml" <<'Y'
+vendor: down
+models:
+  down: model-down
+  mock: model-mock
+fallback:
+  - mock
+Y
+cat > "$rv5/bin/adapters/down.sh" <<D
+#!/usr/bin/env bash
+printf 'down=%s\n' "\${FM_MODEL-unset}" >> "$dv5/handed"
+exit 2
+D
+chmod +x "$rv5/bin/adapters/down.sh"
+( cd "$rv5" && FM_ROOT="$rv5" FM_GH="$GHv5" FM_MOCK_MODEL="model-mock" bin/fm-worker.sh --task T-Z --name worker-p >/dev/null 2>&1 )
+logv5="$rv5/state/events.jsonl"
+mv5actor="$(jq -r 'select(.type=="dispatched")|.actor' "$logv5")"
+assert_eq "down=model-down" "$(cat "$dv5/handed" 2>/dev/null)" "the vendor the round starts on is handed its own model"
+assert_eq '["mock","model-mock","model-mock",false]' \
+  "$(jq -c '[.vendor,.model_requested,.model,.model_mismatch]' "$rv5/state/runs/$mv5actor/identity.json")" \
+  "the fallback vendor is handed its own model, not the first vendor's, and runs on it: no mismatch"
+assert_eq "0" "$(jq -c 'select(.type=="model_mismatch")' "$logv5" | wc -l | tr -d ' ')" \
+  "so no model_mismatch event"
+assert_eq '["down","model-down"]' \
+  "$(jq -c 'select(.type=="dispatched")|.data.identity|[.vendor,.model_requested]' "$logv5")" \
+  "the round's first event names the vendor it starts on and that vendor's model"
+assert_eq "0" "$(jq -c 'select(.actor==$a and .type=="crew_status" and (.data.identity.vendor==null))' \
+  --arg a "$mv5actor" "$logv5" | wc -l | tr -d ' ')" \
+  "no crew_status of the round goes without the vendor"
+assert_eq '["mock","model-mock","model-mock"]' \
+  "$(jq -c 'select(.type=="commit_pushed")|.data.identity|[.vendor,.model_requested,.model]' "$logv5" | sort -u)" \
+  "and once the round has run, its events carry the vendor that ran and what it reported"
+assert_eq '["mock","model-mock"]' \
+  "$(jq -c --arg a "$mv5actor" '[select(.actor==$a and .type=="crew_status")]|last|.data.identity|[.vendor,.model]' "$logv5")" \
+  "including its last crew_status, which the board reads the crewman from"
+
+# --vendor sends the round to a vendor config.yaml does not start on; it
+# gets that vendor's model
+dv6="$(fixture)"; rv6="$dv6/repo"; GHv6="$(ghstub "$dv6")"
+cp "$rv5/config.yaml" "$rv6/config.yaml"
+( cd "$rv6" && FM_ROOT="$rv6" FM_GH="$GHv6" FM_MOCK_MODEL="model-mock" bin/fm-worker.sh --task T-Z --vendor mock --name worker-q >/dev/null 2>&1 )
+mv6actor="$(jq -r 'select(.type=="dispatched")|.actor' "$rv6/state/events.jsonl")"
+assert_eq '["mock","model-mock"]' \
+  "$(jq -c '[.vendor,.model_requested]' "$rv6/state/runs/$mv6actor/identity.json")" \
+  "--vendor's round is handed that vendor's own model"
+# a vendor with no model named runs on its CLI's default, and records it
+dv7="$(fixture)"; rv7="$dv7/repo"; GHv7="$(ghstub "$dv7")"
+printf 'vendor: mock\nmodels:\n  down: model-down\n' > "$rv7/config.yaml"
+( cd "$rv7" && FM_ROOT="$rv7" FM_GH="$GHv7" FM_MOCK_MODEL="mock-cli-default" bin/fm-worker.sh --task T-Z --name worker-r >/dev/null 2>&1 )
+mv7actor="$(jq -r 'select(.type=="dispatched")|.actor' "$rv7/state/events.jsonl")"
+assert_eq '["mock","","mock-cli-default",false]' \
+  "$(jq -c '[.vendor,.model_requested,.model,.model_mismatch]' "$rv7/state/runs/$mv7actor/identity.json")" \
+  "a vendor with no model named asks for none, and records the model its CLI defaulted to"
+rm -rf "$dv5" "$dv6" "$dv7"
+
 # an adapter that cannot reach its vendor falls through to the next one
 d2="$(fixture)"; r2="$d2/repo"; GH2="$(ghstub "$d2")"
 ( cd "$r2" && FM_ROOT="$r2" FM_GH="$GH2" FM_MOCK_EXIT=2 bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )

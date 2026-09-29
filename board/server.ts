@@ -71,8 +71,11 @@ type Crew = {
   // own CLI reported (null until the round has run); model_requested is
   // config's; cli_version is the CLI's own version string. A run recorded
   // before T-127 carries none of them, which is unknown, not a guess.
+  // T-146: until the vendor reports, model is model_requested, and
+  // model_source says which it is - null when neither is known.
   vendor?: string | null;
   model?: string | null;
+  model_source?: "reported" | "requested" | null;
   model_requested?: string | null;
   cli_version?: string | null;
   model_mismatch?: boolean;
@@ -85,21 +88,37 @@ type CrewChip = { id: string; name: string; role: Crew["role"]; round: number | 
 // send as data.identity. Anything else is not an identity.
 type Identity = {
   name: string | null; project: string | null; round: number | null; attempt: number | null;
-  // T-127: absent until the round has actually run (fm-worker.sh/fm-review.sh
-  // add them once the adapter has); a run recorded before T-127 has none.
+  // T-127: vendor and model_requested from the round's start (T-146), model,
+  // cli_version and model_mismatch once it has run; a run recorded before
+  // T-127 has none. model_mismatch is null when the event does not say.
   vendor: string | null; model: string | null; model_requested: string | null;
-  cli_version: string | null; model_mismatch: boolean;
+  cli_version: string | null; model_mismatch: boolean | null;
 };
 const identityOf = (v: unknown): Identity | null => {
   if (!v || typeof v !== "object" || Array.isArray(v)) return null;
   const o = v as Record<string, unknown>;
   const text = (x: unknown) => typeof x === "string" && x.trim() ? x : null;
+  // what the run wrote when the vendor said nothing: not a value to show
+  const known = (x: unknown) => text(x) === "unknown" ? null : text(x);
   const count = (x: unknown) => typeof x === "number" && Number.isInteger(x) && x > 0 ? x : null;
   return {
     name: text(o.name), project: text(o.project), round: count(o.round), attempt: count(o.attempt),
-    vendor: text(o.vendor), model: text(o.model), model_requested: text(o.model_requested),
-    cli_version: text(o.cli_version), model_mismatch: o.model_mismatch === true,
+    vendor: known(o.vendor), model: known(o.model), model_requested: text(o.model_requested),
+    cli_version: known(o.cli_version),
+    model_mismatch: typeof o.model_mismatch === "boolean" ? o.model_mismatch : null,
   };
+};
+// T-146: a crewman's identity is every event's, field by field. An event
+// that lacks a field - a crew_status sent with T-116's six only, on
+// 2026-09-29 every crewman's vendor, model and CLI - keeps the value an
+// earlier event gave, never overwrites it with nothing.
+const mergeIdentity = (was: Identity | undefined, said: Identity): Identity => {
+  if (!was) return said;
+  const out = { ...was };
+  for (const k of Object.keys(said) as (keyof Identity)[]) {
+    if (said[k] !== null) (out as Record<string, unknown>)[k] = said[k];
+  }
+  return out;
 };
 // The one reading of an actor, for runs recorded before T-116 only:
 // <role>-<name>-<task slug>-r<n>[<attempt mark>], as bin/fm-herdr.py's ACTOR
@@ -726,7 +745,7 @@ const state = (only: string | null = null) => {
     }
     if (typeof data.crew_name === 'string') names.set(actor, data.crew_name);
     const said = identityOf(data.identity);
-    if (said) identities.set(actor, said);
+    if (said) identities.set(actor, mergeIdentity(identities.get(actor), said));
     const nextProgress = bounded(data.progress);
     if (nextProgress) progress.set(actor, nextProgress);
     if (e.type === 'dispatched' || data.role) roles.set(actor, roleOf(actor,e));
@@ -825,10 +844,12 @@ const state = (only: string | null = null) => {
       name: who?.name ?? (named && named !== actor ? named : null) ?? legacyName(actor),
       round: who?.round ?? null,
       attempt: who?.attempt ?? null,
-      // T-127: read from the run itself, never guessed; unknown until the
-      // round has run, and always unknown for a run recorded before this
+      // T-127: read from the run itself, never guessed; always unknown for
+      // a run recorded before this. A live round shows the model it asked
+      // for until the vendor reports the one it runs on (T-146).
       vendor: who?.vendor ?? null,
-      model: who?.model ?? null,
+      model: who?.model ?? who?.model_requested ?? null,
+      model_source: who?.model ? "reported" : who?.model_requested ? "requested" : null,
       model_requested: who?.model_requested ?? null,
       cli_version: who?.cli_version ?? null,
       model_mismatch: who?.model_mismatch ?? false,

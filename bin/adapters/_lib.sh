@@ -333,9 +333,9 @@ fm_adapter_mark() { if [ -f "$1" ]; then wc -c < "$1" | tr -d ' '; else echo 0; 
 # in this codebase's own prose - as a hard configuration failure, discarding
 # real work. So this checks three things _FM_SIG does not: the CLI's own
 # exit code must be non-zero (a completed round, rc 0, is never read as a
-# refusal), the slice must carry no `"model":"..."` field at all (a report
-# of the model actually used means a turn happened, whatever text comes
-# after it), and, for the three vendors with no fixed token (below), the
+# refusal), the slice must carry no `"model":"..."` field and no non-empty
+# claude `"modelUsage"` at all (a report of the model actually used means a
+# turn happened, whatever text comes after it), and, for the three vendors with no fixed token (below), the
 # phrase must open the line it is found on - the shape a CLI's own one-line
 # usage error has, and prose discussing models in passing does not ("Error:
 # unrecognized model" opens a line; "...reviewed the invalid model names
@@ -361,6 +361,9 @@ fm_adapter_model_refusal() {
   [ "$rc" != 0 ] || return 1
   [ -f "$log" ] && said="$(tail -c "+$((off + 1))" "$log" 2>/dev/null)"
   grep -q '"model"[[:space:]]*:[[:space:]]*"[^"]*"' <<< "$said" && return 1
+  # claude's result names no "model": the models a turn ran on are the keys
+  # of its modelUsage (T-146), and an empty one reports nothing that ran
+  grep -q '"modelUsage"[[:space:]]*:[[:space:]]*{[[:space:]]*"' <<< "$said" && return 1
   case "$vendor" in
     claude) grep -qF "$_FM_CLAUDE_MODEL_SIG" <<< "$said" || return 1 ;;
     *)      grep -qiE "^[[:space:]]*error[:.]?[[:space:]].*($_FM_MODEL_SIG)" <<< "$said" || return 1 ;;

@@ -1833,6 +1833,57 @@ assert_eq '[["shira","roleWorker","crewRound 3 · crewAttempt 2"],["quinn","role
   "each crew member on a card is a chip of its own, with name, role and round apart"
 rm -rf "$q"
 
+# --- T-146: the board keeps the last known value of each identity field ----
+# On 2026-09-29 every crewman's vendor, model and CLI were blank: the board
+# read a crewman from its latest event, a crew_status whose data.identity had
+# T-116's six fields only. An event without a field, or with the "unknown" a
+# silent vendor is recorded as, keeps what an earlier event said; a live
+# round shows the model it asked for until the vendor reports one.
+qk="$(mktemp -d)"; mkdir -p "$qk/bin" "$qk/state" "$qk/design" "$qk/board/public"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$qk/bin/"
+cp "$ROOT/board/server.ts" "$qk/board/"
+cp "$ROOT/board/public/index.html" "$ROOT/board/public/ship.js" "$qk/board/public/"
+fm_tasks_write /dev/stdin "$qk/design/tasks" <<'J'
+{"tasks":[{"id":"T-K1","title":"a reported model","milestone":"M2","depends_on":[]},
+          {"id":"T-K2","title":"a model asked for","milestone":"M2","depends_on":[]}]}
+J
+emk() { FM_ROOT="$qk" "$qk/bin/fm-emit.sh" "$@" >/dev/null; }
+six() { jq -cn --arg n "$1" --arg t "$2" '{name:$n,role:"worker",project:null,task:$t,round:1,attempt:1}'; }
+emk --actor captain --type greenlit --en "go" --tw "開工"
+emk --actor worker-kai-tk1-r1 --task T-K1 --type dispatched \
+  --data "$(jq -cn --argjson i "$(six kai T-K1)" '{role:"worker",identity:($i + {vendor:"claude",
+    model_requested:"claude-opus-5-5",model:"claude-opus-5-5",cli_version:"2.1.0",model_mismatch:false})}')" \
+  --en "on it" --tw "接下"
+# the crew_status that blanked the board: T-116's six fields and nothing else
+emk --actor worker-kai-tk1-r1 --task T-K1 --type crew_status \
+  --data "$(jq -cn --argjson i "$(six kai T-K1)" '{role:"worker",identity:$i,activity:{en:"still",
+    "zh-TW":"仍在"}}')" --en "still" --tw "仍在"
+# and one that says unknown where it knew nothing
+emk --actor worker-kai-tk1-r1 --task T-K1 --type crew_status \
+  --data "$(jq -cn --argjson i "$(six kai T-K1)" '{role:"worker",identity:($i + {vendor:"claude",
+    model:"unknown",cli_version:"unknown",model_mismatch:null}),activity:{en:"still",
+    "zh-TW":"仍在"}}')" --en "still" --tw "仍在"
+# a live round from its start: the vendor it is on and the model it asked for
+emk --actor worker-lin-tk2-r1 --task T-K2 --type dispatched \
+  --data "$(jq -cn --argjson i "$(six lin T-K2)" '{role:"worker",identity:($i + {vendor:"codex",
+    model_requested:"gpt-6-astra",model:null,cli_version:null,model_mismatch:null})}')" \
+  --en "on it" --tw "接下"
+FM_ROOT="$qk" FM_PORT=0 bun run "$qk/board/server.ts" > "$qk/out" 2>&1 < /dev/null &
+pidk=$!
+PORTK="$(board_port "$qk/out" "$pidk")"
+for _ in $(seq 1 40); do curl -sf "http://127.0.0.1:$PORTK/api/state" >/dev/null 2>&1 && break; sleep 0.25; done
+sk="$(curl -sf "http://127.0.0.1:$PORTK/api/state")"
+assert_eq 'claude claude-opus-5-5 claude-opus-5-5 2.1.0 false reported' \
+  "$(jq -r '.crew[]|select(.id=="worker-kai-tk1-r1")|"\(.vendor) \(.model_requested) \(.model) \(.cli_version) \(.model_mismatch) \(.model_source)"' <<<"$sk")" \
+  "a crew_status without the fields, or saying unknown, never blanks what an earlier event said"
+assert_eq 'codex gpt-6-astra gpt-6-astra requested' \
+  "$(jq -r '.crew[]|select(.id=="worker-lin-tk2-r1")|"\(.vendor) \(.model_requested) \(.model) \(.model_source)"' <<<"$sk")" \
+  "a live round shows its vendor, and the model it asked for until the vendor reports one"
+assert_eq '[{"vendor":"claude","count":1},{"vendor":"codex","count":1}]' "$(jq -c '.engineLive' <<<"$sk")" \
+  "so the engine badge counts a round's vendor from its start"
+kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
+rm -rf "$qk"
+
 # --- T-119: one task-id grammar, in the scripts and in the board ------------
 # bin/fm-emit.sh holds the grammar every script sources; board/server.ts
 # carries its twin, taskGrammar(), between the task-grammar markers, and

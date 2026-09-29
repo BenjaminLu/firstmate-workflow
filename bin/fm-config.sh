@@ -865,41 +865,121 @@ PY
 fm_vendor_chain() {
   local role="${1:-}" explicit="${2:-}" head=''
   if [ -n "$explicit" ]; then printf '%s\n' "$explicit"; return 0; fi
-  [ -n "$role" ] && head="$(fm_cfg_in "$role" vendor)"
-  [ -n "$head" ] || head="$(fm_cfg vendor)"
-  [ -n "$head" ] || head=mock
+  head="$(fm_role_vendor "$role")"
   # one run per vendor: a fallback list may name the head, or itself twice
   printf '%s\n' "$head"
   fm_cfg_list fallback | grep -vxF "$head" | awk '!seen[$0]++' || true
 }
 
-# The model config.yaml names for a role (T-127): the vendor's own model
-# name, never guessed from a run. `worker.model` / `reviewer.model` override
-# the top-level `model:`, exactly as `vendor` does above - a role with no
-# override runs the top-level one, and a config with neither runs whatever
-# the adapter's CLI defaults to (never a value fm invents).
-#
-#   fm_model worker|reviewer [file] -> the configured model, or empty
-fm_model() {
-  local role="${1:-}" f="${2:-config.yaml}" m=''
-  [ -n "$role" ] && m="$(fm_cfg_in "$role" model "$f")"
-  [ -n "$m" ] || m="$(fm_cfg model "$f")"
-  printf '%s\n' "$m"
+#   fm_role_vendor [role] [file] -> the vendor a role starts on: its own
+#   `vendor:`, else the top-level one, else mock - the head of its chain
+fm_role_vendor() {
+  local role="${1:-}" f="${2:-config.yaml}" v=''
+  [ -n "$role" ] && v="$(fm_cfg_in "$role" vendor "$f")"
+  [ -n "$v" ] || v="$(fm_cfg vendor "$f")"
+  [ -n "$v" ] || v=mock
+  printf '%s\n' "$v"
 }
 
-# What a vendor's own transcript says it ran on (T-127): the last literal
-# `"model":"..."` field in the slice of the log this attempt wrote, so a
-# later report - a fallback model the CLI itself chose - wins over an
-# earlier one. One generic reading for every vendor: each adapter is asked
-# to produce JSON carrying this field (documented per vendor in
-# bin/adapters/_contract.md), so no vendor-specific parser is needed here.
-# Empty when the transcript carries no such field; the caller records that
-# as "unknown", never a guess.
+# The model config.yaml names, per vendor (T-146; T-127 named one per role).
+# A model name belongs to one vendor: handing claude's name to codex, which
+# a fallback or `--vendor` used to do, is a round the vendor refuses. So a
+# round on <vendor> takes, in order:
+#
+#   1. the role's own `model:` (worker.model / reviewer.model), only when
+#      <vendor> is the role's own vendor - the override the role names is
+#      for the engine the role names;
+#   2. `models.<vendor>`, the vendor's own model;
+#   3. the top-level `model:`, only when <vendor> is the top-level vendor
+#      (a config written before `models:` existed);
+#
+# and nothing otherwise: a vendor with no model named runs on its CLI's own
+# default, which the round then records from the transcript. Never a value
+# fm invents.
+#
+#   fm_model_for <role> <vendor> [file] -> that vendor's model, or empty
+#   fm_model <role> [file]              -> the model of the role's own vendor
+fm_model_for() {
+  local role="${1:-}" vendor="${2:-}" f="${3:-config.yaml}" m=''
+  [ -n "$vendor" ] || vendor="$(fm_role_vendor "$role" "$f")"
+  if [ -n "$role" ] && [ "$vendor" = "$(fm_role_vendor "$role" "$f")" ]; then
+    m="$(fm_cfg_in "$role" model "$f")"
+  fi
+  [ -n "$m" ] || m="$(fm_cfg_in models "$vendor" "$f")"
+  if [ -z "$m" ] && [ "$vendor" = "$(fm_role_vendor '' "$f")" ]; then
+    m="$(fm_cfg model "$f")"
+  fi
+  printf '%s\n' "$m"
+}
+fm_model() { fm_model_for "${1:-}" '' "${2:-config.yaml}"; }
+
+# identity.json from a round's start (T-146): the vendor it starts on and
+# the model config.yaml names for that vendor, beside the six T-116 fields,
+# so the board shows them from the first event and not only once the round
+# has ended. fm_run_chain records each fallback vendor the same way.
+#
+#   fm_record_requested <vendor> <model> [run-dir]
+fm_record_requested() {
+  local run="${3:-${FM_RUN_DIR:-}}"
+  [ -n "$run" ] && [ -f "$run/identity.json" ] || return 0
+  python3 "$_fm_code_dir/fm-herdr.py" record-requested "$run" "$1" "$2" >/dev/null 2>&1 || true
+}
+
+# Every field a crew payload's data.identity carries (T-116, T-127, T-146),
+# read fresh from identity.json each time, so every event a round emits -
+# crew_status included - says the same thing about who it is and what it
+# runs on. `null` for a run with no identity.json.
+fm_crew_identity() {
+  local run="${1:-${FM_RUN_DIR:-}}" out=''
+  [ -n "$run" ] && out="$(jq -c '{name,role,project,task,round,attempt,
+    vendor,model_requested,model,cli_version,model_mismatch}' "$run/identity.json" 2>/dev/null)"
+  printf '%s\n' "${out:-null}"
+}
+
+# What a vendor's own transcript says it ran on (T-127, T-146), from the
+# slice of the log this attempt wrote, read in the shape each vendor records:
+#
+#   - claude's result message names no "model"; it names the models the run
+#     used as the keys of `modelUsage` (T-146: the T-127 reading found no
+#     "model" field in it and recorded "unknown"). Of those keys the one the
+#     round asked for wins when it is there; otherwise the one that wrote the
+#     most output tokens, since claude also runs a small model on the side.
+#   - claude's stream init event, `{"type":"system","subtype":"init",
+#     "model":...}`, names it before any result - read when no result came.
+#   - the other vendors' JSON (bin/adapters/_contract.md names each shape)
+#     carries a literal `"model":"..."`; the last one wins, so a later
+#     report - a fallback model the CLI itself chose - wins over an earlier
+#     one. An escaped `\"model\"` inside an answer's text is not one.
+#
+# Empty when the transcript says nothing; the caller records "unknown",
+# never a guess.
+#
+#   fm_vendor_model <log> [offset] [requested]
 fm_vendor_model() {
-  local log="$1" off="${2:-0}" said=''
-  [ -f "$log" ] && said="$(tail -c "+$((off + 1))" "$log" 2>/dev/null)"
-  grep -o '"model"[[:space:]]*:[[:space:]]*"[^"]*"' <<< "$said" 2>/dev/null | tail -1 \
-    | sed -E 's/^.*"([^"]*)"$/\1/'
+  local log="$1" off="${2:-0}" requested="${3:-}"
+  [ -f "$log" ] || return 0
+  tail -c "+$((off + 1))" "$log" 2>/dev/null | python3 -c '
+import json, re, sys
+requested = sys.argv[1]
+usage, said = None, None
+decoder = json.JSONDecoder()
+for line in sys.stdin.read().splitlines():
+    for f in re.finditer(r"\"model\"\s*:\s*\"([^\"]*)\"", line): said = f.group(1)
+    start = line.find("{")
+    while start != -1:
+        try: obj, end = decoder.raw_decode(line, start)
+        except ValueError: start = line.find("{", start + 1); continue
+        if isinstance(obj, dict) and isinstance(obj.get("modelUsage"), dict) and obj["modelUsage"]:
+            usage = obj["modelUsage"]
+        start = line.find("{", end)
+def out_tokens(v):
+    n = v.get("outputTokens") if isinstance(v, dict) else None
+    return n if isinstance(n, (int, float)) else 0
+if usage:
+    keys = list(usage)
+    print(requested if requested in keys else max(keys, key=lambda k: out_tokens(usage[k])))
+elif said: print(said)
+' "$requested" 2>/dev/null
 }
 
 # A name claude accepts, offline (T-127): the CLI itself is the final word
@@ -973,7 +1053,8 @@ fm_review_run_chain() {
 
 # fm_run_chain <adapters-dir> <chain> <prompt> <tree> <log> [evidence]
 #   Returns the adapter's own exit code, or 2 if every vendor was unavailable.
-#   Sets FM_VENDOR_USED and FM_VENDOR_SKIPPED so the caller can say what it did.
+#   Sets FM_VENDOR_USED and FM_VENDOR_SKIPPED so the caller can say what it did,
+#   and FM_VENDOR_MODEL, the model the last attempt was handed (T-146).
 #
 #   <evidence> is a command that answers "did that run produce work?". An
 #   adapter decides "unavailable" by reading text, and text can lie in both
@@ -1012,7 +1093,7 @@ fm_run_chain() {
   # configuration-error path reads the PREVIOUS call's attempt, which is the
   # exact confusion the offsets exist to prevent
   FM_VENDOR_USED=''; FM_VENDOR_SKIPPED=''; FM_VENDOR_MISREAD=''; FM_VENDOR_UNKNOWN=''
-  FM_RUN_OUTDIR=''; FM_RUN_LOG_OFF=0; FM_VENDOR_SPOKE=0
+  FM_RUN_OUTDIR=''; FM_RUN_LOG_OFF=0; FM_VENDOR_SPOKE=0; FM_VENDOR_MODEL=''
   export FM_CHAIN_ATTEMPT=''
   # before anything runs. A typo at the head of the chain used to be found
   # after a real vendor had already worked, and the caller's exit 65 then
@@ -1039,6 +1120,17 @@ fm_run_chain() {
       out="$tree"
     fi
     FM_RUN_OUTDIR="$out"
+    # This vendor's own model (T-146), never the head vendor's: a caller
+    # that names its role in FM_MODEL_ROLE has each attempt handed the model
+    # config.yaml names for the vendor it runs, and the run's identity.json
+    # says which vendor and model it is on now. Without FM_MODEL_ROLE,
+    # FM_MODEL is left as the caller set it.
+    if [ -n "${FM_MODEL_ROLE:-}" ]; then
+      FM_MODEL="$(fm_model_for "$FM_MODEL_ROLE" "$v" "${FM_MODEL_CONFIG:-config.yaml}")"
+      export FM_MODEL
+      fm_record_requested "$v" "$FM_MODEL"
+    fi
+    FM_VENDOR_MODEL="${FM_MODEL:-}"
     # Bind every receipt reader to this invocation, including custom fallbacks
     # that never create managed receipts. Keep previous receipts as evidence.
     FM_CHAIN_ATTEMPT="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')" || return 70

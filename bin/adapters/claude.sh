@@ -185,7 +185,8 @@ fi
 settings="{\"permissions\":{\"defaultMode\":\"dontAsk\",\"allow\":[$(rules "${allow[@]}")],\"deny\":[$(rules "${deny[@]}")]},\"sandbox\":$sandbox}"
 # --output-format json always, not only when a managed attempt reads the
 # final answer from it (T-127): it is also how the round's own model comes
-# back, in the result message's "model" field, for the run's record.
+# back, for the run's record - as the keys of the result message's
+# "modelUsage", which names no "model" field (T-146; fm_vendor_model).
 mode=(--restricted --strict-mcp-config --disable-slash-commands
       --tools "Bash,Read,Edit,Write,Grep,Glob" --add-dir "$tmp"
       --permission-mode dontAsk --settings "$settings" --output-format json

@@ -1,0 +1,28 @@
+{
+  "id": "T-146",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "a model is named per vendor, so a round on any vendor gets that vendor's own model, and the board shows the model a crewman actually runs: the transcript's model is read after the round, and every crew event carries the identity fields",
+  "scope": [
+    "bin/fm-worker.sh",
+    "bin/fm-review.sh",
+    "bin/fm-herdr.py",
+    "bin/adapters/_lib.sh",
+    "bin/adapters/claude.sh",
+    "board/server.ts",
+    "tests/**",
+    "design/**",
+    "config.yaml",
+    "bin/fm-config.sh",
+    "tests/config.test.sh",
+    "design/tasks/T-146.json"
+  ],
+  "acceptance": [
+    "Why. After T-127 merged (9e4194d), the captain restarted the board on 2026-09-29 to see which model the crew runs, and saw nothing: every crewman's vendor, model and CLI fields were null. firstmate traced two defects on the T-126 round 7 run: (1) identity.json and the agent_finished event record model \"unknown\" although the run's own result reports modelUsage {claude-opus-5-5} (claude was launched with --model claude-opus-5-5, confirmed in the process list); (2) the board reads a crewman from its latest crew_status event, whose data.identity carries only name, role, project, task, round and attempt - the vendor, model_requested, model, cli_version and model_mismatch fields appear only on other events. Its own spec file, design/tasks/T-146.json, is committed on this branch.",
+    "Models per vendor. config.yaml names a model for each vendor (`models: {claude: claude-opus-5-5, codex: gpt-6-astra, cursor-agent: ...}`), and a role's vendor choice (worker, reviewer, a fallback vendor, a later quota router) takes that vendor's model; a role may still override. Today a round moved to another vendor (fm-worker --vendor, the reviewer fallback chain) is handed the first vendor's model name and refused (found 2026-09-29 when the captain asked for codex workers). The captain's choice on 2026-09-29: workers codex gpt-6-astra, reviewers claude claude-opus-5-5; config.yaml says so. Tests: each vendor gets its own model through --vendor and through the fallback; an unknown vendor without a model uses its CLI default and records it.",
+    "The model is read from where each vendor reports it: for claude, the stream's system init event's model and, at the end, the result's modelUsage keys (from the recorded transcript, not guessed); the other adapters from their own recorded shapes. A run with a known model never records \"unknown\"; a mismatch against model_requested is emitted as T-127 specified.",
+    "Every crew event fm emits for a round (crew_status included) carries the same full identity, or the board keeps the last known value of each field rather than overwriting it with a missing one; the card, the roster and the tag show vendor and model for a live round from its start (model_requested until the vendor reports).",
+    "Tests from a recorded claude stream: init and result give the model; a crew_status without the fields never blanks them on the board. Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves."
+  ]
+}

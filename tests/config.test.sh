@@ -607,4 +607,101 @@ python3 "$ROOT/bin/fm-herdr.py" record-model "$rm" claude claude-opus-5-5 "" "2.
 assert_eq "unknown" "$(jq -r .model "$rm/identity.json")" "a vendor that reported nothing is unknown, never guessed"
 assert_eq "false" "$(jq -r .model_mismatch "$rm/identity.json")" "and unknown is never reported as a mismatch"
 rm -rf "$rm"
+
+# --- a model is named per vendor (T-146) ----------------------------------
+# A model name belongs to one vendor; a round moved to another vendor used to
+# be handed the first vendor's name, and refused.
+pv="$(mktemp -d)"
+cat > "$pv/config.yaml" <<'Y'
+vendor: codex           # workers
+models:                 # each vendor's own
+  claude: claude-opus-5-5   # a comment is not part of it
+  codex:  gpt-6-astra
+reviewer:
+  vendor: claude
+fallback:
+  - claude
+  - codex
+  - gemini
+Y
+assert_eq "gpt-6-astra"     "$(fm_model_for worker codex "$pv/config.yaml")"    "a worker on codex runs codex's model"
+assert_eq "claude-opus-5-5" "$(fm_model_for worker claude "$pv/config.yaml")"   "and on claude, claude's - never codex's"
+assert_eq "claude-opus-5-5" "$(fm_model_for reviewer claude "$pv/config.yaml")" "a reviewer on claude runs claude's"
+assert_eq "gpt-6-astra"     "$(fm_model_for reviewer codex "$pv/config.yaml")"  "and on a codex fallback, codex's"
+assert_eq ""                "$(fm_model_for worker gemini "$pv/config.yaml")"   "a vendor with no model named: its CLI's default, never another's"
+assert_eq "gpt-6-astra"     "$(fm_model worker "$pv/config.yaml")"   "fm_model is the model of the role's own vendor"
+assert_eq "claude-opus-5-5" "$(fm_model reviewer "$pv/config.yaml")" "for the reviewer too"
+# a role's own model: overrides for its own vendor, and only for it
+printf 'worker:\n  vendor: claude\n  model: claude-fable-5-1\n' >> "$pv/config.yaml"
+assert_eq "claude-fable-5-1" "$(fm_model_for worker claude "$pv/config.yaml")" "a role may still override for its own vendor"
+assert_eq "gpt-6-astra"      "$(fm_model_for worker codex "$pv/config.yaml")"  "but not for a vendor it falls back to"
+# a config written before models: - the top-level model: is the top-level vendor's
+printf 'vendor: claude\nmodel: claude-opus-5-5\n' > "$pv/old.yaml"
+assert_eq "claude-opus-5-5" "$(fm_model_for worker claude "$pv/old.yaml")" "an old config's model: still reads for its vendor"
+assert_eq ""                "$(fm_model_for worker codex "$pv/old.yaml")"  "and is never handed to another vendor"
+
+# fm_run_chain hands each attempt its own vendor's model: through --vendor
+# (a chain of one) and through the fallback, and records which it is on
+mkdir -p "$pv/ad" "$pv/tree" "$pv/run"; : > "$pv/prompt"; : > "$pv/log"
+for v in claude codex gemini; do
+  printf '#!/usr/bin/env bash\nprintf "%%s=%%s\\n" %s "${FM_MODEL-unset}" >> "%s/handed"\njq -c "{vendor,model_requested}" "$FM_RUN_DIR/identity.json" >> "%s/recorded"\nexit "${FM_EXIT_%s:-0}"\n' \
+    "$v" "$pv" "$pv" "$v" > "$pv/ad/$v.sh"
+  chmod +x "$pv/ad/$v.sh"
+done
+printf '{"actor":"worker-x","name":"x","round":1,"attempt":1}\n' > "$pv/run/identity.json"
+( cd "$pv" && . "$ROOT/bin/fm-config.sh"
+  export FM_RUN_DIR="$pv/run" FM_MODEL_ROLE=reviewer FM_MODEL_CONFIG="$pv/config.yaml" FM_MODEL=stale
+  FM_EXIT_codex=2 FM_EXIT_claude=2 fm_run_chain "$pv/ad" "codex claude gemini" "$pv/prompt" "$pv/tree" "$pv/log"
+  printf '%s %s\n' "$FM_VENDOR_USED" "${FM_VENDOR_MODEL-unset}" > "$pv/used" )
+assert_eq "codex=gpt-6-astra
+claude=claude-opus-5-5
+gemini=" "$(cat "$pv/handed")" "every vendor in the fallback is handed its own model, and one with none is handed none"
+assert_eq '{"vendor":"codex","model_requested":"gpt-6-astra"}
+{"vendor":"claude","model_requested":"claude-opus-5-5"}
+{"vendor":"gemini","model_requested":""}' "$(cat "$pv/recorded")" \
+  "identity.json names the vendor and model each attempt is on as it starts"
+assert_eq "gemini " "$(cat "$pv/used")" "FM_VENDOR_MODEL is what the vendor that ran was handed"
+# the captain's case: a worker configured on claude, sent to codex by --vendor
+: > "$pv/handed"
+( cd "$pv" && . "$ROOT/bin/fm-config.sh"
+  export FM_RUN_DIR="$pv/run" FM_MODEL_ROLE=worker FM_MODEL_CONFIG="$pv/config.yaml"
+  fm_run_chain "$pv/ad" "$(fm_vendor_chain worker codex)" "$pv/prompt" "$pv/tree" "$pv/log" )
+assert_eq "codex=gpt-6-astra" "$(cat "$pv/handed")" "--vendor's chain of one gets that vendor's model, not the role's"
+: > "$pv/handed"
+( cd "$pv" && . "$ROOT/bin/fm-config.sh"
+  export FM_RUN_DIR="$pv/run" FM_MODEL_ROLE=worker FM_MODEL_CONFIG="$pv/config.yaml"
+  fm_run_chain "$pv/ad" "$(fm_vendor_chain worker)" "$pv/prompt" "$pv/tree" "$pv/log" )
+assert_eq "claude=claude-fable-5-1" "$(head -1 "$pv/handed")" "and the role's own vendor gets the role's override"
+# a caller that names no role keeps its own FM_MODEL, as before T-146
+: > "$pv/handed"
+( cd "$pv" && . "$ROOT/bin/fm-config.sh"; unset FM_MODEL_ROLE; export FM_MODEL=kept
+  fm_run_chain "$pv/ad" "gemini" "$pv/prompt" "$pv/tree" "$pv/log" )
+assert_eq "gemini=kept" "$(cat "$pv/handed")" "without FM_MODEL_ROLE the caller's FM_MODEL is left alone"
+rm -rf "$pv"
+
+# --- the model, read in the shape each vendor records it (T-146) ----------
+# A claude result from --output-format json, as recorded: no "model" field,
+# the models the run used as modelUsage's keys. T-127 read it as "unknown".
+cm="$(mktemp -d)"
+cat > "$cm/log" <<'L'
+{"type":"result","subtype":"success","is_error":false,"duration_ms":81234,"num_turns":12,"result":"Done. The config says \"model\":\"not-this-one\".","session_id":"5d1c","total_cost_usd":1.25,"usage":{"input_tokens":40,"output_tokens":3100},"modelUsage":{"claude-haiku-4-5-20251001":{"inputTokens":900,"outputTokens":40,"costUSD":0.01},"claude-opus-5-5":{"inputTokens":40,"outputTokens":3100,"costUSD":1.24}}}
+L
+assert_eq "claude-opus-5-5" "$(fm_vendor_model "$cm/log" 0 claude-opus-5-5)" \
+  "claude's result gives the model: the modelUsage key the round asked for"
+assert_eq "claude-opus-5-5" "$(fm_vendor_model "$cm/log" 0)" \
+  "asked for nothing, the key that wrote the most output - not the side model, not the answer's text"
+assert_eq "claude-opus-5-5" "$(fm_vendor_model "$cm/log" 0 claude-sonnet-5)" \
+  "a model asked for and not run is not reported as run"
+# claude's stream: the system init event names the model before any result
+printf '%s\n' '{"type":"system","subtype":"init","cwd":"/w","session_id":"5d1c","tools":["Bash"],"model":"claude-opus-5-5","permissionMode":"dontAsk"}' \
+  '{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}' > "$cm/stream"
+assert_eq "claude-opus-5-5" "$(fm_vendor_model "$cm/stream" 0)" "claude's init event gives the model"
+printf '%s\n' '{"type":"result","subtype":"success","modelUsage":{"claude-sonnet-5":{"outputTokens":7}}}' >> "$cm/stream"
+assert_eq "claude-sonnet-5" "$(fm_vendor_model "$cm/stream" 0 claude-opus-5-5)" \
+  "and the result at the end, what the run actually used, wins over it"
+off="$(wc -c < "$cm/log" | tr -d ' ')"
+printf '%s\n' '{"type":"result","model":"gpt-6-astra"}' >> "$cm/log"
+assert_eq "gpt-6-astra" "$(fm_vendor_model "$cm/log" "$off")" \
+  "another vendor's own \"model\" field, in its own slice of a shared log"
+rm -rf "$cm"
 finish

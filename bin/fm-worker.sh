@@ -40,13 +40,23 @@ fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
 unset FM_ROUND
 fm_identity worker "$TASK" "$NAME" || exit 70
 EMIT="${FM_CODE_ROOT:-$REPO}/bin/fm-emit.sh"
+# T-146: the vendor this round starts on and the model config.yaml names for
+# that vendor are in identity.json from the start, so the board shows them
+# from the round's first event (the model the vendor reports joins them
+# once the round has run; a fallback vendor replaces them as it starts)
+head_vendor="$(fm_vendor_chain worker "$VENDOR" | head -1)"
+fm_record_requested "$head_vendor" "$(fm_model_for worker "$head_vendor" config.yaml)"
 # T-116: name, role, project, task, round and attempt ride every crew
-# payload as separate fields, so the board never parses them out of the actor
-CREW_IDENTITY="$(jq -c '{name,role,project,task,round,attempt}' "$FM_RUN_DIR/identity.json" 2>/dev/null)"
-[ -n "$CREW_IDENTITY" ] || CREW_IDENTITY=null
-CREW_DATA="$(jq -cn --arg role worker --arg name "$NAME" --argjson identity "$CREW_IDENTITY" \
+# payload as separate fields, so the board never parses them out of the actor;
+# vendor and model beside them (T-127, T-146), read fresh for every payload
+CREW_DATA="$(jq -cn --arg role worker --arg name "$NAME" --argjson identity "$(fm_crew_identity)" \
   --arg en 'Work description unavailable' --arg tw '尚無工作說明' \
   '{role:$role,crew_name:$name,identity:$identity,activity:{en:$en,"zh-TW":$tw}}')"
+# identity.json is the one record of who this run is and what it runs on;
+# every payload, crew_status included, carries it as it stands now
+crew_refresh_identity() {
+  CREW_DATA="$(jq -c --argjson identity "$(fm_crew_identity)" '.identity=$identity' <<<"$CREW_DATA")"
+}
 set_crew_activity() {
   local authored
   authored="$(jq -c '
@@ -61,6 +71,7 @@ set_crew_activity() {
 # fm-emit keeps the last --data only. Merge any call-site --data into the
 # crew payload so role/recovery extras cannot wipe crew_name or activity.
 emit_once() {
+  crew_refresh_identity
   local data="$CREW_DATA" args=()
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -85,6 +96,8 @@ emit_status() {
     fm_herdr_emit_status "$REPO" "$NAME" "$TASK" "$en" "$tw" worker "$done_n" "$total_n" \
       >/dev/null 2>&1 && return 0
   fi
+  # fresh before it is copied: emit_once merges this payload over its own
+  crew_refresh_identity
   data="$(jq -cn --argjson base "$CREW_DATA" --arg en "$en" --arg tw "$tw" \
     --arg done_n "$done_n" --arg total_n "$total_n" '
     $base * {activity:{en:$en,"zh-TW":$tw}}
@@ -1409,11 +1422,11 @@ policy_file="$FM_RUN_DIR/policy.json"; blocked_file="$FM_RUN_DIR/blocked-hosts"
 fm_policy worker "" config.yaml > "$policy_file" || {
   echo "fm-worker: config.yaml's crew policy does not read; no round runs without one" >&2; exit 65; }
 export FM_POLICY="$policy_file" FM_POLICY_BLOCKED="$blocked_file"
-# config.yaml's model, applied (T-127): resolved once, handed to whichever
-# adapter runs as FM_MODEL, and a refusal it writes recorded here rather than
-# read as the vendor being unavailable.
-model_requested="$(fm_model worker config.yaml)"
-export FM_MODEL="$model_requested"
+# config.yaml's model, applied (T-127): each vendor's own (T-146), which
+# fm_run_chain resolves for whichever vendor an attempt runs - --vendor's,
+# or a fallback's - and hands it as FM_MODEL; a refusal it writes is
+# recorded here rather than read as the vendor being unavailable.
+export FM_MODEL_ROLE=worker FM_MODEL_CONFIG="$REPO/config.yaml"
 model_refused_file="$FM_RUN_DIR/model-refused"; : > "$model_refused_file"
 export FM_MODEL_REFUSED="$model_refused_file"
 # A host the round's proxy refused is reported, not allowed: the crew
@@ -1448,7 +1461,8 @@ mirror_watch_start
   fm_run_chain "${FM_CODE_ROOT:-$REPO}/bin/adapters" "$(fm_vendor_chain worker "$VENDOR")" \
     "$prompt" "$tree" "$log" worker_did_work
   chain_rc=$?
-  declare -p FM_VENDOR_USED FM_VENDOR_SKIPPED FM_VENDOR_MISREAD FM_VENDOR_UNKNOWN FM_RUN_LOG_OFF > "$chain_result"
+  declare -p FM_VENDOR_USED FM_VENDOR_SKIPPED FM_VENDOR_MISREAD FM_VENDOR_UNKNOWN FM_RUN_LOG_OFF \
+    FM_VENDOR_MODEL > "$chain_result"
   exit "$chain_rc"
 ); rc=$?
 mirror_watch_stop
@@ -1497,17 +1511,17 @@ report_blocked_hosts worker "$blocked_file"
 
 # What the round actually ran on, read from the run itself (T-127): recorded
 # in identity.json beside name/role/project/task/round/attempt, and carried
-# on every crew payload from here on the way those already are.
+# on every crew payload from here on the way those already are. The model
+# requested is the one the vendor that ran was handed (T-146), and what it
+# reports is read in its own transcript's shape (fm_vendor_model).
+model_requested="${FM_VENDOR_MODEL:-}"
 model_reported=''
-[ -z "$FM_VENDOR_USED" ] || model_reported="$(fm_vendor_model "$log" "${FM_RUN_LOG_OFF:-0}")"
+[ -z "$FM_VENDOR_USED" ] || model_reported="$(fm_vendor_model "$log" "${FM_RUN_LOG_OFF:-0}" "$model_requested")"
 cli_version='unknown'
 [ -z "$FM_VENDOR_USED" ] || cli_version="$(fm_vendor_cli_version "$FM_VENDOR_USED")"
 python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" record-model "$FM_RUN_DIR" "$FM_VENDOR_USED" \
   "$model_requested" "$model_reported" "$cli_version" >/dev/null 2>&1 || true
-CREW_IDENTITY="$(jq -c '{name,role,project,task,round,attempt,vendor,model_requested,model,cli_version,model_mismatch}' \
-  "$FM_RUN_DIR/identity.json" 2>/dev/null)"
-[ -n "$CREW_IDENTITY" ] || CREW_IDENTITY=null
-CREW_DATA="$(jq -c --argjson identity "$CREW_IDENTITY" '.identity=$identity' <<<"$CREW_DATA")"
+crew_refresh_identity
 if [ -n "$model_requested" ] && [ -n "$model_reported" ] && [ "$model_reported" != "$model_requested" ]; then
   echo "fm-worker: requested model $model_requested but $FM_VENDOR_USED ran on $model_reported" >&2
   emit --type model_mismatch --en "requested $model_requested but ran on $model_reported" \
