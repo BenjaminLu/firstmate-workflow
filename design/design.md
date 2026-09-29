@@ -1248,8 +1248,9 @@ closed-list item may ask for them. The launcher shows the reviewer what
 exists for the head, in either mode (T-088; T-153). Given `--pr`, every
 round's prompt gets a **The head under
 review** section before the diff, verbatim and labelled: the head SHA, from
-the local branch the diff is taken from; for each name `gh pr checks <pr>
---required --json name` lists, that check's name, conclusion and run URL from
+the local branch the diff is taken from; the required checks' names and
+where they came from (T-155, below); for each of them, its name, conclusion
+and run URL from
 GitHub's check runs for that exact commit (`gh api
 repos/{owner}/{repo}/commits/<sha>/check-runs?check_name=<name>`), keeping
 only a run whose `head_sha` is the head and the latest of those; and the
@@ -1281,6 +1282,21 @@ sandbox; that work was reverted. Instead:
    names every required check still running, or not yet started. The verdict
    event's `data.wall_clock` carries `ci_wait`, the seconds of the round
    spent waiting.
+
+   **The names are what is required, not what exists (T-155).** On
+   2026-09-30 T-145's first review started while its CI still ran and told
+   the reviewer the required check could not be read: the names came from
+   `gh pr checks --required`, which lists only checks that already exist on
+   the pull request, and right after the worker's push GitHub has created
+   none. So the names are read once per round, from the first source that
+   names any: the base branch's protection (`gh api
+   repos/{owner}/{repo}/branches/<base>/protection/required_status_checks`,
+   its `.contexts` and `.checks[].context`), then `gh pr checks --required`,
+   then config.yaml's `required_check` for the project. A required check
+   with no run for the head yet is waited on as missing, within the same
+   bound. Only when no source names any required check is the wait skipped,
+   and the head section then says so plainly; otherwise it names the checks
+   and the source they came from.
 2. **The head section carries what CI found**, after the required check:
    every CI job of the head (`gh api .../commits/<sha>/check-runs?per_page=100`,
    the latest run of each name whose `head_sha` is the head) with its result

@@ -1319,6 +1319,129 @@ assert_ok "[ \"\$(cat '$dm/polls' 2>/dev/null || echo 0)\" -le 8 ]" "and it did 
   bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
 assert_eq "64" "$?" "a wait that is not whole seconds is refused"
 
+# T-155: right after the worker's push GitHub has created no check on the
+# pull request, and `gh pr checks --required` lists only checks that exist,
+# so a round that took its names from it alone waited on nothing (T-145's
+# first review, 2026-09-30). The names come from what the base requires. This
+# gh answers the way GitHub does: the base's protection names `ci` (in
+# .contexts and .checks[].context); `pr checks --required` with no check yet
+# prints nothing and exits 1; the head's `ci` runs are none for
+# GH_MISSING_POLLS asks, then queued for GH_QUEUED_POLLS, then completed.
+# Each answer and the reviewer's start go to one log, in the order they
+# happened, so "started only after completion" is read, not inferred.
+ghreq() {   # ghreq <dir>
+  mkdir -p "$1/stub"
+  cat > "$1/stub/gh" <<'M'
+#!/usr/bin/env bash
+S="$FM_T155"
+echo "gh $*" >> "$S/ghcalls"
+case "$1 $2" in
+  "pr view") printf '{"comments":[]}\n' ;;
+  "pr checks")
+    if [ -n "${GH_PR_CHECKS:-}" ]; then printf '%s\n' "$GH_PR_CHECKS"; exit 1; fi
+    echo "no required checks reported on the 'work' branch" >&2; exit 1 ;;
+  "api "*)
+    case "$2" in
+      */branches/main/protection/required_status_checks)
+        if [ -n "${GH_PROTECTION_DOWN:-}" ]; then
+          printf '{"message":"Not Found","documentation_url":"https://docs.github.com/rest","status":"404"}\n'
+          echo 'gh: Not Found (HTTP 404)' >&2; exit 1
+        fi
+        p='{"url":"https://api.github.com/repos/o/r/branches/main/protection/required_status_checks","strict":true,"contexts":["ci"],"checks":[{"context":"ci","app_id":15368}]}'
+        printf '%s\n' "${GH_PROTECTION:-$p}" ;;
+      */check-runs\?check_name=ci)
+        n="$(cat "$S/polls" 2>/dev/null || echo 0)"; echo $((n + 1)) > "$S/polls"
+        m="${GH_MISSING_POLLS:-0}"; q=$((m + ${GH_QUEUED_POLLS:-0}))
+        if [ "$n" -lt "$m" ]; then echo "SERVED missing" >> "$S/order"; printf '{"total_count":0,"check_runs":[]}\n'; exit 0; fi
+        if [ "$n" -lt "$q" ]; then st=queued; c=null; else st=completed; c='"success"'; fi
+        echo "SERVED $st" >> "$S/order"
+        printf '{"total_count":1,"check_runs":[{"id":20,"name":"ci","head_sha":"%s","status":"%s","conclusion":%s,"details_url":"https://github.com/o/r/actions/runs/600/job/20"}]}\n' \
+          "$(cat "$S/head")" "$st" "$c" ;;
+      */check-runs\?per_page=100) printf '{"total_count":0,"check_runs":[]}\n' ;;
+      *) exit 1 ;;
+    esac ;;
+esac
+exit 0
+M
+  chmod +x "$1/stub/gh"; printf '%s' "$1/stub/gh"
+}
+dq="$(fixture)"; rq5="$dq/repo"; GHq5="$(ghreq "$dq")"
+git -C "$rq5" rev-parse work > "$dq/head"; headQ="$(cat "$dq/head")"
+cat > "$rq5/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = "run" ] || exit 64
+echo "REVIEWER_STARTED" >> "$FM_T155/order"
+cp "$2" "$FM_T155/prompt.md"
+printf 'APPROVE:T-Z\n' > "$3/verdict.txt"
+M
+chmod +x "$rq5/bin/adapters/mock.sh"
+req_round() {   # req_round [env...]: a diff round given --pr against this gh
+  rm -f "$dq/polls" "$dq/order" "$dq/prompt.md"; : > "$dq/ghcalls"
+  ( cd "$rq5" && env FM_ROOT="$rq5" FM_GH="$GHq5" FM_T155="$dq" "$@" \
+    bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
+}
+# the first line of the order log that is the reviewer starting, and the
+# first that is a completed run: the reviewer must come after it
+started_after_completed() {
+  local s c
+  s="$(grep -n -m1 '^REVIEWER_STARTED$' "$dq/order" 2>/dev/null | cut -d: -f1)"
+  c="$(grep -n -m1 '^SERVED completed$' "$dq/order" 2>/dev/null | cut -d: -f1)"
+  [ -n "$s" ] && [ -n "$c" ] && [ "$c" -lt "$s" ]
+}
+
+# protection names ci; no run exists yet, then it is queued, then completed
+req_round GH_MISSING_POLLS=2 GH_QUEUED_POLLS=2 FM_REVIEW_CI_WAIT=60 FM_REVIEW_CI_POLL=1
+sentQ="$(cat "$dq/prompt.md" 2>/dev/null)"
+assert_contains "$(cat "$dq/ghcalls")" "gh api repos/{owner}/{repo}/branches/main/protection/required_status_checks" \
+  "a round reads the required checks from the base branch's protection"
+assert_ok "grep -qx 'SERVED missing' '$dq/order'" "the required check had no run for the head when the round began"
+assert_ok "grep -qx 'SERVED queued' '$dq/order'" "and was then queued"
+assert_ok "started_after_completed" "the reviewer starts only after the required check completed, not while it was missing or queued"
+assert_ok "[ \"\$(cat '$dq/polls' 2>/dev/null || echo 0)\" -ge 5 ]" "having asked through every missing and queued answer"
+assert_contains "$sentQ" "Required checks, from the protection of the base branch main: ci." "the prompt names the checks and where they came from"
+assert_contains "$sentQ" "Conclusion: success" "and hands over the completed check's result"
+assert_contains "$sentQ" "This round waited" "and says it waited"
+assert_lacks "$sentQ" "could not be read" "and never says the required check could not be read"
+
+# protection that names its check only in .checks[] is read too
+req_round 'GH_PROTECTION={"strict":true,"contexts":[],"checks":[{"context":"ci","app_id":null}]}' \
+  GH_MISSING_POLLS=1 FM_REVIEW_CI_WAIT=60 FM_REVIEW_CI_POLL=1
+assert_ok "started_after_completed" "a check named only in the protection's .checks[] is waited on"
+assert_contains "$(cat "$dq/prompt.md" 2>/dev/null)" "Required checks, from the protection of the base branch main: ci." \
+  "and named from the protection"
+
+# protection that cannot be read falls back to the pull request's required checks
+req_round GH_PROTECTION_DOWN=1 GH_PR_CHECKS=ci GH_MISSING_POLLS=1 FM_REVIEW_CI_WAIT=60 FM_REVIEW_CI_POLL=1
+assert_ok "started_after_completed" "unreadable protection falls back to gh pr checks --required, and waits on what it names"
+assert_contains "$(cat "$dq/prompt.md" 2>/dev/null)" "Required checks, from the pull request's required checks: ci." \
+  "and says where the names came from"
+
+# and, when neither names one, to config.yaml's declared required check
+cp "$rq5/config.yaml" "$dq/config.plain"
+printf 'vendor: mock\ndefault_project: fx\nprojects:\n  fx:\n    repo: .\n    github: o/r\n    base: main\n    required_check: ci\n' > "$rq5/config.yaml"
+req_round GH_PROTECTION_DOWN=1 GH_MISSING_POLLS=1 FM_REVIEW_CI_WAIT=60 FM_REVIEW_CI_POLL=1
+assert_ok "started_after_completed" "with neither readable, config.yaml's required_check is waited on"
+assert_contains "$(cat "$dq/prompt.md" 2>/dev/null)" "Required checks, from config.yaml's required_check: ci." \
+  "and named as config.yaml's"
+
+# the bound still holds for a check that never appears, and names it
+req_round GH_MISSING_POLLS=1000 FM_REVIEW_CI_WAIT=2 FM_REVIEW_CI_POLL=1
+sentQB="$(cat "$dq/prompt.md" 2>/dev/null)"
+assert_contains "$sentQB" "started with these required checks still running for this head, or not yet started: ci" \
+  "past the bound a required check with no run yet is named as not yet started"
+assert_contains "$sentQB" "No run of the required check ci was found for head $headQ" "and its missing run is stated"
+assert_ok "[ \"\$(cat '$dq/polls' 2>/dev/null || echo 0)\" -le 8 ]" "and the round did not wait past its bound"
+cp "$dq/config.plain" "$rq5/config.yaml"
+
+# only when no source names any required check is the wait skipped, said plainly
+req_round GH_PROTECTION_DOWN=1 GH_MISSING_POLLS=1000 FM_REVIEW_CI_WAIT=60 FM_REVIEW_CI_POLL=1
+assert_ok "[ ! -e '$dq/polls' ]" "with no source naming a required check, no check's runs are waited on"
+assert_contains "$(cat "$dq/prompt.md" 2>/dev/null)" "No source named any required check" \
+  "and the prompt says plainly that no required check was named"
+assert_contains "$(cat "$dq/prompt.md" 2>/dev/null)" "so this round did not wait for CI before it started" \
+  "and that the round did not wait for CI"
+rm -rf "$dq"
+
 # A round that was SIGKILLed ran no trap; the next run-mode round removes its
 # checkout, and leaves alone one still in use or one not yet claimed. Never
 # `kill -0` on the pid an owner file names to decide it (T-123): inside a
@@ -1673,6 +1796,10 @@ M
       printf '\nHead SHA: %s\n' "$hd"
       printf '\n## The required check for this head, from GitHub\n'
       printf '\nThe required check for head %s could not be read from GitHub, so its CI result is unknown.\n' "$hd"
+      # T-155 changed the CI-wait lines: the names come from the base's
+      # protection, the pull request, then config.yaml; this gh and config
+      # name none, so the prompt says the round did not wait for CI
+      printf '\nNo source named any required check - not the protection of the base branch %s, not the pull request'"'"'s required checks, not config.yaml'"'"'s required_check - so this round did not wait for CI before it started.\n' main
       # T-153 added these three sections: every CI job, the failing
       # assertions and the fail-first report, each saying it is unknown here
       printf '\n## Every CI job for this head\n'
