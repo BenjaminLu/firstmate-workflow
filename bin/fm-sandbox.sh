@@ -1177,7 +1177,10 @@ if [ "$cmd" = run ]; then
     # macOS keeps netstat in /usr/sbin, which a caller's PATH may not hold
     ns="$(command -v netstat 2>/dev/null || echo /usr/sbin/netstat)"
     if listing="$("$ns" -an -p tcp 2>/dev/null)"; then
-      listening="$(awk '$NF == "LISTEN" { n = split($4, a, "."); print a[n] }' <<< "$listing" \
+      # the separator is the regex /[.]/, never the string ".": mawk (Linux's
+      # default awk) reads a one-character string as a regex, and "." then
+      # splits on every character and no port is read (T-153)
+      listening="$(awk '$NF == "LISTEN" { n = split($4, a, /[.]/); print a[n] }' <<< "$listing" \
         | grep -E '^[0-9]+$' | sort -un | paste -sd, -)"
     else
       listening=unknown
