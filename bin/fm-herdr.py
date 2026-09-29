@@ -1685,17 +1685,30 @@ def board_login_url(url, port):
     return f'{url}/login#{issued}.{nonce}.{tag}'
 
 
-def open_address(address):
-    """Hand an address to the browser. On macOS it goes to osascript on stdin,
-    never in an argument list: `ps` shows every process's arguments to every
-    other, and a one-time code read there could be redeemed before the
-    captain's browser gets to it."""
-    if sys.platform == 'darwin' and shutil.which('osascript'):
-        return subprocess.run([shutil.which('osascript')], input=f'open location "{address}"\n'.encode(),
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-    opener = shutil.which('xdg-open') or shutil.which('open')
-    if not opener: return False
-    return subprocess.call([opener, address], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
+# How long the opener may take (T-145). The code it hands a browser lives 60
+# seconds (T-122), and the board's re-login route stops the opener after 60
+# (RELOGIN_TIMEOUT_MS in board/server.ts). Every question to a browser has a
+# timeout of its own, and the search for a board tab ends by OPENER_BUDGET -
+# ASK_OPEN, leaving the new tab its own ASK_OPEN, so the whole run ends inside
+# both. A code is minted just before the one question that carries it, so no
+# code is older than that question's timeout when a browser gets it.
+OPENER_BUDGET, ASK_RUNNING, ASK_TAB, ASK_OPEN = 45, 5, 8, 10
+
+
+def open_address(address, timeout=ASK_OPEN):
+    """Hand an address to the browser, within `timeout` seconds. On macOS it
+    goes to osascript on stdin, never in an argument list: `ps` shows every
+    process's arguments to every other, and a one-time code read there could
+    be redeemed before the captain's browser gets to it."""
+    try:
+        if sys.platform == 'darwin' and shutil.which('osascript'):
+            return subprocess.run([shutil.which('osascript')], input=f'open location "{address}"\n'.encode(),
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout).returncode == 0
+        opener = shutil.which('xdg-open') or shutil.which('open')
+        if not opener: return False
+        return subprocess.call([opener, address], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout) == 0
+    except subprocess.TimeoutExpired:
+        return False
 
 
 # The browsers whose tabs fm can find on macOS (T-145), by bundle id, so a
@@ -1747,16 +1760,21 @@ def board_tab_script(bundle, family, url, address):
         'return ""', ''])
 
 
-def reuse_board_tab(url, address):
-    """Send a tab already on the board to the one-time address, and name the
-    browser it was in; None when there is none, off macOS, or when no browser
-    could be scripted. Every script goes to osascript on stdin, like
-    open_address's, so the code is never in an argument list. Only running
-    browsers are asked, so none is started, and each is asked in a script of
-    its own, so one that cannot be scripted leaves the others to be asked."""
+def reuse_board_tab(url, mint, deadline):
+    """Send a tab already on the board to a one-time address, and name the
+    browser it was in; None when there is none, off macOS, when no browser
+    could be scripted, or at `deadline` (time.monotonic()). `mint()` makes
+    each address just before the question that carries it. Every script goes
+    to osascript on stdin, like open_address's, so the code is never in an
+    argument list. Only running browsers are asked, so none is started, and
+    each is asked in a script of its own, so one that cannot be scripted, or
+    is slow to answer, leaves the others to be asked."""
     osascript = shutil.which('osascript') if sys.platform == 'darwin' else None
     if not osascript: return None
-    ask = lambda script: subprocess.run([osascript], input=script.encode(), capture_output=True, timeout=15)
+    def ask(script, most):
+        left = deadline - time.monotonic()
+        if left <= 0: raise subprocess.TimeoutExpired('osascript', 0)
+        return subprocess.run([osascript], input=script.encode(), capture_output=True, timeout=min(most, left))
     # The ids are looked up at run time, through a variable: a literal
     # `application id "..."` is resolved when the script compiles, and one
     # browser that is not installed would fail the whole question.
@@ -1768,12 +1786,13 @@ def reuse_board_tab(url, address):
         '  end try',
         'end repeat',
         'return found', ''])
-    try: answer = ask(running)
+    try: answer = ask(running, ASK_RUNNING)
     except (OSError, subprocess.SubprocessError): return None
     live = set(answer.stdout.decode(errors='replace').split()) if answer.returncode == 0 else set()
     for name, bundle, family in BOARD_BROWSERS:
         if bundle not in live: continue
-        try: done = ask(board_tab_script(bundle, family, url, address))
+        if deadline <= time.monotonic(): break
+        try: done = ask(board_tab_script(bundle, family, url, mint()), ASK_TAB)
         except (OSError, subprocess.SubprocessError): continue
         if done.returncode == 0 and done.stdout.decode(errors='replace').strip() == 'reused': return name
     return None
@@ -1790,12 +1809,18 @@ def board_open(url, port):
     if not opener:
         said['sign_in_error'] = 'no program to open a browser with was found; nothing was opened'
         return said
-    try: address = board_login_url(url, port)
+    # No code is minted before the search: each is made just before the one
+    # question that carries it, and the whole run is bounded (OPENER_BUDGET).
+    deadline = time.monotonic() + OPENER_BUDGET - ASK_OPEN
+    mint = lambda: board_login_url(url, port)
+    try:
+        board_secret(port)   # the secret is read first, so a missing one is said before any browser is asked
+        browser = reuse_board_tab(url, mint, deadline)
+        address = None if browser else mint()
     except (OSError, RuntimeError):
         # said without the path: state/ never names where the secret is
         said['sign_in_error'] = 'the board secret could not be read; restart the board'
         return said
-    browser = reuse_board_tab(url, address)
     if browser:
         said.update(opener_invoked=True, tab='reused', browser=browser,
                     said=f"sent the board's open tab in {browser} to a new sign-in and brought it to the front")

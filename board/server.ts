@@ -915,7 +915,15 @@ const state = (only: string | null = null) => {
     if (e.type === 'approved') {kind='approve';from=actor;to='firstmate';}
     if (e.type === 'review_failed' && data.review_outcome === 'rejected') {kind='reject';from=actor;to=peer('worker');}
     if (e.type === 'decision_made') {kind='order';from='firstmate';to=peer('worker');}
-    if (kind) handoffs.push({identity:`handoff:${index}:${JSON.stringify(e)}`,kind,from:from || null,to:to || null,task:e.task || null,
+    // T-145: the role the board knows each named end by - firstmate, the one a
+    // crewman said (`data.role`) or was dispatched as, or for a run recorded
+    // before T-116 the one its canonical actor names - never guessed from any
+    // other name. An end with none is one the board cannot place.
+    const placed = (id: string | undefined): string | null =>
+      !id ? null : id === 'firstmate' ? 'firstmate'
+        : roles.get(id) || (legacyName(id) ? roleOf(id, {}) : null);
+    if (kind) handoffs.push({identity:`handoff:${index}:${JSON.stringify(e)}`,kind,from:from || null,to:to || null,
+      from_role:placed(from),to_role:placed(to),task:e.task || null,
       ...(e.task ? { project: projectOf(e) || null } : {})});
     if (!e.actor || e.actor === "github" || e.actor === "captain") continue;
     lastByActor.delete(e.actor);
@@ -1619,15 +1627,24 @@ const LOGIN_PAGE = `<!doctype html><meta charset="utf-8"><title>firstmate</title
 // shorten the 10 seconds, never lengthen them, so a test can reach the
 // hourly cap; nothing shortens the cap.
 const RELOGIN_GAP_MS = Math.min(10_000, Number(process.env.FM_BOARD_RELOGIN_GAP_MS) || 10_000);
+// The opener bounds its own run inside this (OPENER_BUDGET in bin/
+// fm-herdr.py); past it the route stops the opener. It runs under T-151's
+// keeper with this board as its owner, in a process group of its own, so the
+// stop - or the board's own end - takes every osascript it started with it.
+// FM_BOARD_RELOGIN_TIMEOUT_MS can shorten the bound, never lengthen it.
 const RELOGIN_PER_HOUR = 12, RELOGIN_TIMEOUT_MS = 60_000;
+const reloginTimeout = Math.min(RELOGIN_TIMEOUT_MS, Number(process.env.FM_BOARD_RELOGIN_TIMEOUT_MS) || RELOGIN_TIMEOUT_MS);
 const relogins: number[] = [];
 let reloginRunning = false;
 const reloginBrowsers = new Set(["Google Chrome", "Brave Browser", "Arc", "Safari"]);
 type Relogin = { ok: boolean; opened: boolean; tab: "reused" | "new" | null; browser: string | null; reason?: string };
 const runRelogin = async (port: number): Promise<Relogin> => {
-  const child = Bun.spawn(["python3", join(ROOT, "bin/fm-herdr.py"), "board-login", String(port)],
+  if (!existsSync(LIFELINE)) throw new Error("no bin/lib/fm_lifeline.py: nothing is started without an owner");
+  const child = Bun.spawn(["python3", LIFELINE, "keep", "--pid", String(process.pid), "--name", "relogin", "--",
+    "python3", join(ROOT, "bin/fm-herdr.py"), "board-login", String(port)],
     { cwd: ROOT, stdin: "ignore", stdout: "pipe", stderr: "ignore", env: childEnv() });
-  const timer = setTimeout(() => child.kill(), RELOGIN_TIMEOUT_MS);
+  // SIGTERM to the keeper ends the opener's whole group, then the keeper
+  const timer = setTimeout(() => child.kill("SIGTERM"), reloginTimeout);
   let said: Record<string, unknown> = {};
   try {
     const out = await new Response(child.stdout).text();

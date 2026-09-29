@@ -1849,10 +1849,16 @@ figure, else the helm): the deck has no post of its own per role, and
 firstmate sends every order and takes every verdict. The cue travels as
 usual, names the role where it has no name, and no one reacts at a station.
 The notice (`handoffUnavailable`, "participant unknown to the board") is left
-only for an actor the board cannot place at all - not on deck, not
-`firstmate`, and no `worker-`/`reviewer-` prefix, the prefix the server's
-`roleOf` reads - and is shown once per actor for the life of the page, not
-once per event; its cue carries `data-unknown`. Initial history is silent and duplicate
+only for an actor the board cannot place at all. Each hand-off carries
+`from_role` and `to_role`, the role the server knows each named end by:
+`firstmate`, the role the crewman said (`data.role`) or was dispatched as,
+or, for a run recorded before T-116, the one its canonical actor
+(`<role>-<name>-<task>-r<n>`) names. The page never reads a role from an
+actor's name. A named end with no role that is not on deck is the one case
+said, whatever its name, so `secondmate` dispatched as a worker is quiet
+and a `reviewer-x` that never said what it is is not. It is shown once per
+actor for the life of the page, not once per event; its cue carries
+`data-unknown`. Initial history is silent and duplicate
 snapshots do not replay cues. Travel uses current rendered anchors for 1.4
 seconds, then a receiving reaction and bubble pulse, with cleanup at 2.3 seconds.
 Reduced motion retains localized directed text. Handoffs emit no events, POSTs
@@ -1960,10 +1966,20 @@ web page open in the captain's browser; neither can write.
   running ones are found with the ids read at run time, since a literal id is
   resolved when the script compiles and one browser not installed would fail
   the whole question. A browser that cannot be scripted (not permitted, an
-  error, 15 seconds without an answer) is passed over. With no such tab, off
-  macOS, or when nothing could be scripted, it opens a new tab as before. The
-  record and `bin/fm.sh board`'s output say which: `tab` is `reused` (with
-  `browser`) or `new`, and `said` puts it in words; neither holds the address.
+  error, or no answer within its timeout) is passed over. With no such tab,
+  off macOS, or when nothing could be scripted, it opens a new tab as before.
+  The record and `bin/fm.sh board`'s output say which: `tab` is `reused`
+  (with `browser`) or `new`, and `said` puts it in words; neither holds the
+  address. The opener is bounded by the limits around it. A code lives 60
+  seconds, and the re-login route stops the opener after 60. So no code is
+  minted before the search: each is made just before the one question that
+  carries it, whether a browser's tab script or the new tab. Every question
+  has its own timeout: 5 seconds for which browsers run, 8 for each
+  browser's tabs, and 10 for the new tab. The search ends 35 seconds in
+  (`OPENER_BUDGET` 45 less the new tab's 10), so the whole run ends within
+  45 seconds. A code is at most one question's timeout old when a browser
+  gets it. A first run held up on macOS's Automation prompt therefore falls
+  back to a new tab with a fresh code, not an expired one.
 - *Signing in again from the page (T-145).* `POST /relogin` makes the board
   run the same opener, `bin/fm-herdr.py board-login <port>` on its own port,
   so the one-time code goes from that script to the browser and nowhere else:
@@ -1977,8 +1993,13 @@ web page open in the captain's browser; neither can write.
   `Retry-After`), and no more than 12 in any hour (429 `reloginHourly`); a
   refused request is not counted, and the credential lifts neither limit.
   `FM_BOARD_RELOGIN_GAP_MS` can shorten the 10 seconds, never lengthen them, so
-  a test reaches the hourly cap; nothing changes the cap. An opener that did
-  not open is 502 `reloginFailed`. At worst a caller that forges the Origin
+  a test reaches the hourly cap; nothing changes the cap. The opener runs
+  under T-151's keeper (`bin/lib/fm_lifeline.py keep`), with the board as its
+  owner and in a process group of its own. The route stops it after 60
+  seconds, which `FM_BOARD_RELOGIN_TIMEOUT_MS` can shorten, never lengthen.
+  That stop, or the board's own end, takes every `osascript` or desktop
+  opener it started with it. An opener that did not open, or was stopped,
+  is 502 `reloginFailed`. At worst a caller that forges the Origin
   (curl on the operator's machine; a crew round cannot reach loopback) makes
   the captain's browser show the board's sign-in: the code never reaches the
   caller.

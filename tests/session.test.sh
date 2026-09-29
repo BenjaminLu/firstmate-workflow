@@ -282,6 +282,7 @@ class Session(unittest.TestCase):
              patch.object(m.shutil,'which',side_effect=lambda name: '/usr/bin/'+name), \
              patch.object(m.subprocess,'run',side_effect=run), \
              patch.object(m,'board_login_url',return_value=self.ADDRESS), \
+             patch.object(m,'board_secret',return_value='f'*64), \
              patch.object(m,'open_address',return_value=opens) as opened:
             said=m.board_open('http://127.0.0.1:4173',4173)
         return said, calls, opened
@@ -337,10 +338,57 @@ class Session(unittest.TestCase):
              patch.object(m.shutil,'which',side_effect=lambda name: '/usr/bin/xdg-open' if name=='xdg-open' else None), \
              patch.object(m.subprocess,'run') as run, \
              patch.object(m,'board_login_url',return_value=self.ADDRESS), \
+             patch.object(m,'board_secret',return_value='f'*64), \
              patch.object(m,'open_address',return_value=True) as opened:
             said=m.board_open('http://127.0.0.1:4173',4173)
         self.assertFalse(run.called); self.assertEqual([call(self.ADDRESS)],opened.call_args_list)
         self.assertEqual('new',said['tab'])
+    def test_a_slow_browser_still_gets_a_fresh_code_and_the_opener_ends_inside_its_bounds(self):
+        """Every browser running and each one slow, as on a first run waiting
+        on macOS's Automation prompt: each question uses its whole timeout.
+        On a clock the stub advances, every code a browser is handed is minted
+        just before the question that carries it, and is younger than the 60
+        seconds a code lives when that question ends; the opener's whole run
+        ends inside the re-login route's 60."""
+        import re
+        clock=[1000.0]; minted=[]; asked=[]
+        def mint(url, port):
+            minted.append(clock[0]); return self.ADDRESS.replace('1790000000000',str(len(minted)).rjust(13,'0'))
+        def run(argv, **kwargs):
+            script=kwargs['input'].decode(); timeout=kwargs['timeout']
+            codes=re.findall(r'/login#([0-9]{13})\.',script)
+            asked.append((clock[0],timeout,codes))
+            if 'is running' in script:
+                clock[0]+=0.1
+                return subprocess.CompletedProcess(argv,0,stdout=''.join(b+'\n' for _, b, _ in m.BOARD_BROWSERS).encode(),stderr=b'')
+            clock[0]+=timeout
+            raise subprocess.TimeoutExpired(argv,timeout)
+        opened=[]
+        with patch.object(m.sys,'platform','darwin'), \
+             patch.object(m.shutil,'which',side_effect=lambda name: '/usr/bin/'+name), \
+             patch.object(m.subprocess,'run',side_effect=run), \
+             patch.object(m.time,'monotonic',side_effect=lambda: clock[0]), \
+             patch.object(m,'board_login_url',side_effect=mint), \
+             patch.object(m,'board_secret',return_value='f'*64), \
+             patch.object(m,'open_address',side_effect=lambda a, *rest: opened.append((clock[0],a)) or True):
+            said=m.board_open('http://127.0.0.1:4173',4173)
+        self.assertEqual('new',said['tab'],'every browser timed out, so a new tab is opened')
+        self.assertEqual([],asked[0][2],'no code is minted before the search')
+        tabs=[a for a in asked if a[2]]
+        self.assertTrue(tabs,'the browsers were asked')
+        self.assertEqual(len(minted),len(tabs)+1,'one code per question that carries one, and one for the new tab')
+        for (at, timeout, codes), made in zip(tabs, minted):
+            self.assertEqual(at,made,'a code is minted just before the question that carries it')
+            self.assertLess(at+timeout-made,60,'and a browser gets it before it expires')
+        self.assertEqual(len(set(c for a in tabs for c in a[2])),len(tabs),'no code is handed to two browsers')
+        at, address = opened[0]
+        self.assertEqual(minted[-1],at,'the new tab gets a code minted as it is opened, after the search')
+        self.assertIn(str(len(minted)).rjust(13,'0'),address)
+        self.assertLessEqual(at-1000.0,m.OPENER_BUDGET-m.ASK_OPEN,'the search ends by its deadline')
+        self.assertLess(m.OPENER_BUDGET,60,'the whole run, the new tab included, ends inside a code life')
+        route=(root/'board/server.ts').read_text()
+        self.assertLess(m.OPENER_BUDGET*1000,int(re.search(r'RELOGIN_TIMEOUT_MS = ([0-9_]+)',route).group(1).replace('_','')),
+                        'and inside the re-login route timeout')
     def test_board_start_says_which_tab_it_used(self):
         record, opened, _ = self.reused_board(lambda name: '/usr/bin/xdg-open' if name=='xdg-open' else None)
         self.assertEqual('new',record['tab'])

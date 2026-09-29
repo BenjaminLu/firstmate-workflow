@@ -502,6 +502,27 @@ assert_eq "1" "$(jq -r '[.handoffs[]|select(.kind=="reject")]|length' <<<"$syes"
   "review_outcome rejected yields one directed rejection"
 assert_eq "worker-real" "$(jq -r '.handoffs[]|select(.kind=="reject")|.to' <<<"$syes")" \
   "and targets the real worker on the same task"
+# T-145: each named end carries the role the board knows it by - what it said
+# it is, or was dispatched as - never one read from its name. An actor that
+# said nothing and was never dispatched is one the board cannot place.
+assert_eq "reviewer>worker" "$(jq -r '.handoffs[]|select(.kind=="reject")|"\(.from_role)>\(.to_role)"' <<<"$syes")" \
+  "a hand-off names the role of each end"
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor secondmate --task T-E --type dispatched \
+  --en "Odd job" --tw "怪差事" >/dev/null
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor mystery --task T-E --type approved \
+  --en "Approved" --tw "通過" >/dev/null
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor reviewer-odd --task T-E --type approved \
+  --en "Approved" --tw "通過" >/dev/null
+sodd="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "firstmate>worker" "$(jq -r '.handoffs[]|select(.kind=="order" and .to=="secondmate")|"\(.from_role)>\(.to_role)"' <<<"$sodd")" \
+  "a crewman dispatched under any name is placed by what it was dispatched as"
+assert_eq "null>firstmate" "$(jq -r '.handoffs[]|select(.kind=="approve" and .from=="mystery")|"\(.from_role)>\(.to_role)"' <<<"$sodd")" \
+  "an actor that never said what it is has no role"
+assert_eq "null" "$(jq -r '.handoffs[]|select(.kind=="approve" and .from=="reviewer-odd")|.from_role' <<<"$sodd")" \
+  "nor does one whose name merely starts like a role"
+for a in secondmate mystery reviewer-odd; do   # off the deck again, for what reads the crew below
+  FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor "$a" --task T-E --type agent_finished >/dev/null
+done
 
 # a card for a pull request that has already been merged is the board
 # lying: the captain is offered a choice that cannot be made
@@ -2866,7 +2887,7 @@ assert_eq "200" "$(relogin -H "Origin: $uk" -H 'content-type: application/json' 
   "the board's own page asks for a sign-in, with no credential, and is answered"
 assert_eq "true new" "$(jq -r '"\(.ok) \(.tab)"' "$k/rl-body")" "and told a new tab was opened (no board tab was found)"
 code="$(addresses)"
-assert_eq "1" "$(printf '%s\n' "$code" | grep -c .)" "the browser was handed one sign-in address"
+assert_eq "1" "$(grep -c . <<<"$code")" "the browser was handed one sign-in address"
 assert_contains "$(cat "$k/browser")" "$uk/login#$code" "on this board's own address"
 # a burst is refused, and opens nothing more
 assert_eq "429" "$(relogin -H "Origin: $uk" -H 'content-type: application/json' -d '{}')" \
@@ -2875,7 +2896,7 @@ assert_eq "reloginTooSoon" "$(jq -r .code "$k/rl-body")" "with a code the page t
 assert_ok "grep -qi '^retry-after: [0-9]' '$k/rl-headers'" "and says when to try again"
 assert_eq "429" "$(relogin -H "Origin: $uk" -H 'content-type: application/json' \
   -H "Authorization: Bearer $(secret_of "$PORTK")" -d '{}')" "the credential does not lift the limit"
-assert_eq "1" "$(addresses | grep -c .)" "the burst sent the browser nowhere"
+assert_eq "1" "$(grep -c . <<<"$(addresses)")" "the burst sent the browser nowhere"
 # the code went to the browser and to no answer, header, log or state file
 assert_ok "grep -q '\"ok\":true' '$k/relogin-all'" "the answers were kept (the control)"
 assert_fail "grep -qF '$code' '$k/relogin-all'" "no answer of the route carries the code"
@@ -2896,8 +2917,23 @@ done
 assert_eq "12" "$took" "twelve re-logins an hour are taken"
 assert_eq "429" "$(relogin -H "Origin: $uk" -H 'content-type: application/json' -d '{}')" "the thirteenth is refused"
 assert_eq "reloginHourly" "$(jq -r .code "$k/rl-body")" "and says the hourly cap was reached"
-assert_eq "12" "$(addresses | grep -c .)" "the browser was sent to twelve sign-ins, not thirteen"
+assert_eq "12" "$(grep -c . <<<"$(addresses)")" "the browser was sent to twelve sign-ins, not thirteen"
 assert_fail "grep -qF '/login#' '$k/relogin-all'" "and no answer carried an address"
+kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
+# a browser that never answers: the route stops the opener at its bound, and
+# every process the opener started ends with it - none outlives the route
+sb="$k/slow-browser"; mkdir -p "$sb"; : > "$k/slow-pids"
+for b in osascript xdg-open open; do
+  printf '#!/usr/bin/env bash\necho $$ >> %q\nexec sleep 30\n' "$k/slow-pids" > "$sb/$b"; chmod +x "$sb/$b"
+done
+PATH="$sb:$PATH" FM_BOARD_RELOGIN_TIMEOUT_MS=1500 start_k 0
+uk="http://127.0.0.1:$PORTK"
+assert_eq "502" "$(relogin -H "Origin: $uk" -H 'content-type: application/json' -d '{}')" \
+  "a browser that never answers is given up on at the route's bound"
+assert_eq "reloginFailed" "$(jq -r .code "$k/rl-body")" "and the page is told the sign-in did not open"
+slow_left() { local p; for p in $(cat "$k/slow-pids"); do kill -0 "$p" 2>/dev/null && return 0; done; return 1; }
+assert_ok "[ -s '$k/slow-pids' ]" "the opener had reached the browser (the control)"
+assert_ok "wait_for 10 eval '! slow_left'" "and no process the opener started outlives the route"
 kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
 
 # --- T-145: a hand-off whose crewman already left the deck is quiet ----------
@@ -2908,18 +2944,23 @@ const SHIP = require(process.env.SHIP_JS);
 const deck = [{ id: "firstmate" }, { id: "worker-ana-t9-r1" }];
 const noticed = new Set();
 const said = (e) => SHIP.handoffNotice(e, deck, noticed).join(",") || "-";
-console.log("verdict-left " + said({ kind: "approve", from: "reviewer-bo-t9-r1", to: "firstmate" }));
-console.log("reject-left " + said({ kind: "reject", from: "reviewer-bo-t9-r1", to: null }));
-console.log("work-unnamed " + said({ kind: "work", from: "worker-ana-t9-r1", to: null }));
-console.log("order-aboard " + said({ kind: "order", from: "firstmate", to: "worker-ana-t9-r1" }));
-console.log("unknown " + said({ kind: "order", from: "firstmate", to: "mystery" }));
-console.log("unknown-again " + said({ kind: "order", from: "firstmate", to: "mystery" }));
+console.log("verdict-left " + said({ kind: "approve", from: "reviewer-bo-t9-r1", from_role: "reviewer", to: "firstmate", to_role: "firstmate" }));
+console.log("reject-left " + said({ kind: "reject", from: "reviewer-bo-t9-r1", from_role: "reviewer", to: null, to_role: null }));
+console.log("work-unnamed " + said({ kind: "work", from: "worker-ana-t9-r1", from_role: "worker", to: null, to_role: null }));
+console.log("order-aboard " + said({ kind: "order", from: "firstmate", from_role: "firstmate", to: "worker-ana-t9-r1", to_role: "worker" }));
+// the role is the one the server gives, never one read from the name
+console.log("odd-name-placed " + said({ kind: "order", from: "firstmate", from_role: "firstmate", to: "secondmate", to_role: "worker" }));
+console.log("role-name-unplaced " + said({ kind: "approve", from: "reviewer-odd", from_role: null, to: "firstmate", to_role: "firstmate" }));
+console.log("unknown " + said({ kind: "approve", from: "mystery", from_role: null, to: "firstmate", to_role: "firstmate" }));
+console.log("unknown-again " + said({ kind: "approve", from: "mystery", from_role: null, to: "firstmate", to_role: "firstmate" }));
 console.log("ends " + ["order", "work", "reject", "approve"].map((k) => SHIP.HANDOFF_ENDS[k].join(">")).join(" "));
 ' 2>&1)"
 assert_contains "$t145" "verdict-left -" "a verdict from a reviewer who has just left the deck says nothing"
 assert_contains "$t145" "reject-left -" "nor a rejection whose worker has left before it"
 assert_contains "$t145" "work-unnamed -" "nor a hand-off whose other end the server left unnamed"
 assert_contains "$t145" "order-aboard -" "nor one between two on deck (the control)"
+assert_contains "$t145" "odd-name-placed -" "nor a crewman the server placed, whatever its name"
+assert_contains "$t145" "role-name-unplaced reviewer-odd" "an end the server could not place is said, whatever its name"
 assert_contains "$t145" "unknown mystery" "an actor the board cannot place is said"
 assert_contains "$t145" "unknown-again -" "once, not once per event"
 assert_contains "$t145" "ends firstmate>worker worker>reviewer reviewer>worker reviewer>firstmate" \

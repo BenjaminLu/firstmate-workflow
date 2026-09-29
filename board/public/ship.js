@@ -650,16 +650,16 @@ const SHIP = (() => {
   // verdict goes back to the worker or on to firstmate
   const HANDOFF_ENDS = { order: ['firstmate', 'worker'], work: ['worker', 'reviewer'],
     reject: ['reviewer', 'worker'], approve: ['reviewer', 'firstmate'] };
-  // An end the board can place, on deck or not: firstmate, a crewman its id
-  // names by role (the server's roleOf reads the same prefix), or an end the
-  // server left unnamed, whose role the kind gives. One it cannot place is
-  // unknown to the board altogether, and is the only one that is said.
-  const placeable = id => !id || id === 'firstmate' || /^(worker|reviewer)(-|$)/.test(id);
-  // The ends of hand-off `e` the board says it cannot place: those neither on
-  // deck (`crew`) nor placeable, and not already said. Each one returned is
-  // added to `noticed`, so an actor is said once, not once per event.
+  // The ends of hand-off `e` the board cannot place: named, not on deck
+  // (`crew`), and given no role by the server (`from_role`/`to_role`, which
+  // it takes from what each crewman said it is, never from its name), and
+  // not already said. An end the server left unnamed is drawn by the role
+  // its kind gives, and is never said. Each one returned is added to
+  // `noticed`, so an actor is said once, not once per event.
   function handoffNotice(e, crew, noticed) {
-    const unknown = [...new Set([e.from, e.to])].filter(id => id && !crew.some(c => c.id === id) && !placeable(id) && !noticed.has(id));
+    const ends = [[e.from, e.from_role], [e.to, e.to_role]];
+    const unknown = [...new Set(ends.filter(([id, role]) => id && !role && !crew.some(c => c.id === id)).map(([id]) => id))]
+      .filter(id => !noticed.has(id));
     unknown.forEach(id => noticed.add(id));
     return unknown;
   }

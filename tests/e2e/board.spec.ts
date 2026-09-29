@@ -211,23 +211,29 @@ test('T-145: a verdict from a reviewer who has just left the deck is shown quiet
     await expect(reject).not.toHaveClass(/static/);
     await expect(page.locator('.handoffs')).not.toContainText(EN.handoffUnavailable);
     await page.clock.runFor(2400);
-    // an actor the board cannot place - no role in its name, and not aboard -
-    // is the one case said, and said once, not once per event
-    emitFixture(root,'mystery','T-034','dispatched','Odd job','怪差事');
-    emitFixture(root,'mystery','T-034','agent_finished');
+    // a crewman with a name that says no role is placed by what it was
+    // dispatched as, which the server knows, and leaves as quietly
+    emitFixture(root,'secondmate','T-034','dispatched','Odd job','怪差事');
+    emitFixture(root,'secondmate','T-034','agent_finished');
     await redraw();
-    const odd=page.locator('.handoff[data-kind="order"][data-to="mystery"]');
-    await expect(odd).toHaveCount(1);
-    await expect(odd).toHaveAttribute('data-unknown','mystery');
-    await expect(odd).toContainText(EN.handoffUnavailable);
-    await page.clock.runFor(2400);
-    await expect(odd).toHaveCount(0);
-    emitFixture(root,'mystery','T-034','dispatched','Odd job again','又一件怪差事');
-    emitFixture(root,'mystery','T-034','agent_finished');
-    await redraw();
-    await expect(odd).toHaveCount(1);
-    await expect(odd).not.toHaveAttribute('data-unknown',/./);
+    const second=page.locator('.handoff[data-kind="order"][data-to="secondmate"]');
+    await expect(second).toHaveCount(1);
+    await expect(second).not.toHaveAttribute('data-unknown',/./);
     await expect(page.locator('.handoffs')).not.toContainText(EN.handoffUnavailable);
+    await page.clock.runFor(2400);
+    // an actor the board cannot place - never dispatched, never said what it
+    // is, and not aboard - is the one case said, and said once, not once per
+    // event
+    emitFixture(root,'mystery','T-034','approved','Approved','通過');
+    emitFixture(root,'mystery','T-034','approved','Approved again','再次通過');
+    emitFixture(root,'mystery','T-034','agent_finished');
+    await redraw();
+    const odd=page.locator('.handoff[data-kind="approve"][data-from="mystery"]');
+    await expect(odd).toHaveCount(2);
+    await expect(odd.first()).toHaveAttribute('data-unknown','mystery');
+    await expect(odd.nth(1)).not.toHaveAttribute('data-unknown',/./);
+    await expect(page.locator('.handoff[data-unknown]')).toHaveCount(1);
+    await expect(page.locator('.handoff[data-unknown]')).toContainText(EN.handoffUnavailable);
   }finally{stopBoard(b);}
 });
 
@@ -1920,7 +1926,8 @@ test('the one-time address signs one tab in once, keeps no code and sets no cook
     const address = signInAddress(b);
     const code = address.split('#')[1];
     await page.goto(address);
-    await page.waitForURL(`${b.url}/`);
+    await page.locator("#live").waitFor({ state: "attached" });   // the board page, loaded after the trade (T-145)
+    expect(page.url()).toBe(`${b.url}/`);
     // the code stays neither in the address nor in the entry the tab kept
     expect(page.url()).not.toContain(code);
     await page.goBack().catch(() => null);
@@ -1943,7 +1950,7 @@ test('the one-time address signs one tab in once, keeps no code and sets no cook
     await expect(second.locator('#readOnlyWhy')).toHaveText(EN.readOnly);
     // the same address a second time signs nothing in
     await other.goto(address);
-    await other.waitForURL(`${b.url}/`);
+    await other.locator("#live").waitFor({ state: "attached" });
     expect(await other.evaluate(() => sessionStorage.getItem('board.token'))).toBeNull();
     await expect(other.locator('#readOnly')).toBeVisible();
   } finally { await context.close(); await other.context().close(); stopBoard(b); }
@@ -2018,7 +2025,9 @@ test('T-145: the sign-in page takes the board\'s own address before it trades th
     // while the code is on its way the tab's address is already the board's
     await expect.poll(() => page.url()).toBe(`${b.url}/`);
     release();
-    await expect.poll(() => page.evaluate(() => sessionStorage.getItem('board.token'))).toBe(tabToken(b));
+    // the board's own page, which the login page loads once the token is kept
+    await page.locator('#live').waitFor({ state: 'attached' });
+    expect(await page.evaluate(() => sessionStorage.getItem('board.token'))).toBe(tabToken(b));
     // a reload lands on the board and sends no code
     await page.reload();
     await expect(page.locator('#readOnly')).toBeHidden();
