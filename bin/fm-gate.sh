@@ -378,12 +378,12 @@ gate6() {
 # every verdict it posts with
 #   REVIEWED:<task> verdict=<APPROVE|REJECT> head=<sha> base=<sha> patch=<id> files=<json>
 # and the latest verdict must be an APPROVE. It stands for the current head
-# when it was given for that head, or when all of these hold:
+# when it was given for that head, or when both of these hold:
 #   1. the change is the same: the patch-id of merge-base..head is the one approved
-#   2. no commit on the base between the approved merge-base and the current
-#      one touches a file the approval reviewed
-#   3. no later REJECT supersedes it
-# That is an update onto a newer base and nothing else. An APPROVE with no
+#   2. no later REJECT supersedes it
+# That is an update onto a newer base and nothing else, whatever the base
+# changed meanwhile, files the approval reviewed included (SK-008): a conflict
+# that had to be resolved changes the patch-id, and so fails 1. An APPROVE with no
 # REVIEWED line is read as before, and said to bind to nothing. CI and the other
 # gates still run on the head being merged; only the review carries.
 #
@@ -395,7 +395,7 @@ patch_of() {  # patch_of <base> <head>
 refused() { echo "      $1; a real re-review is needed" >&2; return 1; }
 gate7() {
   is_num "$PR" || return 1
-  local json last head mb patch at f hit
+  local json last head mb patch
   json="$($GH pr view "$PR" --json comments 2>/dev/null)" || return 1
   # Each verdict comment, oldest first, from the reviewer when one is named:
   # the script's own REVIEWED line (the last one) says what it was; a comment
@@ -418,7 +418,7 @@ gate7() {
   if [ "$(jq -r .verdict <<<"$last")" = REJECT ]; then
     [ "$(jq -r .approved_before <<<"$last")" = true ] ||
       refused "the latest verdict is REJECT:$TASK" || return 1
-    refused "condition 3 failed: the latest APPROVE is superseded by a later REJECT:$TASK" || return 1
+    refused "condition 2 failed: the latest APPROVE is superseded by a later REJECT:$TASK" || return 1
   fi
   # An APPROVE posted by hand, or before fm-review.sh recorded what it
   # reviewed, names no head and no change, so there is nothing to compare:
@@ -430,23 +430,11 @@ gate7() {
   head="$(git rev-parse --verify -q "$BRANCH^{commit}")" || return 1
   [ "$(jq -r .head <<<"$last")" != "$head" ] || return 0
 
-  at="$(jq -r .base <<<"$last")"
   mb="$(git merge-base "$BASE" "$BRANCH" 2>/dev/null)" || refused "no merge-base between $BRANCH and $BASE" || return 1
   patch="$(patch_of "$mb" "$head")"
   [ -n "$patch" ] && [ "$patch" = "$(jq -r .patch <<<"$last")" ] ||
     refused "condition 1 failed: the change's patch-id is ${patch:-empty}, the approved one was $(jq -r '.patch|if .=="" then "empty" else . end' <<<"$last") (approved head $(jq -r .head <<<"$last"))" ||
     return 1
-  git merge-base --is-ancestor "$at" "$mb" 2>/dev/null ||
-    refused "condition 2 failed: the approved merge-base $at is not an ancestor of the current one $mb, so what $BASE changed since cannot be read" ||
-    return 1
-  jq -e '.files | type == "array"' <<<"$last" >/dev/null ||
-    refused "condition 2 failed: the approval's file list cannot be read" || return 1
-  while IFS= read -r -d '' f; do
-    hit="$(git rev-list -1 "$at..$mb" -- ":(literal)$f" 2>/dev/null)"
-    [ -z "$hit" ] ||
-      refused "condition 2 failed: $BASE changed $f, a file the approval reviewed, in ${hit:0:12} after the approved merge-base" ||
-      return 1
-  done < <(jq -j '.files[] | . + "\u0000"' <<<"$last")
   return 0
 }
 

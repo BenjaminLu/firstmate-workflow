@@ -220,17 +220,21 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   Neither substitutes for the other, and a head that changes after either one
   restarts both, with one exception. `fm-run.sh` still reviews only after
   every gate before 7 is green, so do not wait for its loop to start a round.
-- The approval binds to the change; CI and the gates bind to the head (T-113,
-  captain, 2026-09-26; design §6). The reviewer's approval carries forward
-  across an update that leaves the change identical and touches none of its
-  files; CI and the gates always rerun on the head being merged. After
-  `gh pr update-branch`, do not start a second review by reflex: run
-  `bin/fm-gate.sh` on the new head. Gate 7 accepts the latest APPROVE when its
-  `REVIEWED:` line names that head, or when the change's patch-id is the one
-  approved, no `main` commit since the approved merge-base touches a file it
-  reviewed, and no later REJECT supersedes it. When it fails it names the
-  condition, and that is a real re-review. A conflict resolution or any worker
-  edit changes the patch-id and always needs a new review.
+- The approval binds to the change; CI and the gates bind to the head
+  (captain, 2026-09-29; SK-008; design §6). An APPROVE carries forward across
+  any update of the branch from its base as long as the change itself is
+  unchanged: the patch-id of merge-base..head equals the approved one. A
+  conflict that had to be resolved changes the patch and needs a review; base
+  commits touching files the change reviewed no longer void the approval. So
+  `gh pr update-branch` is allowed before or after an APPROVE and during a
+  running review round. The required GitHub check and the other gates still
+  rerun on the head being merged: after an update, do not start a second
+  review by reflex; run `bin/fm-gate.sh` on the new head. Gate 7 accepts the
+  latest APPROVE when its `REVIEWED:` line names that head, or when the
+  change's patch-id is the one approved and no later REJECT supersedes it.
+  When it fails it names the condition, and that is a real re-review. A
+  conflict resolution or any worker edit changes the patch-id and always
+  needs a new review.
 - Decision requests use the approved T-034 `--details` contract below. Request
   mode returns after publication; it does not wait for approval.
   `bin/fm-decide.sh --await <id> --repo <root>` returns recorded response JSON,
@@ -292,8 +296,10 @@ set by the captain.
    head its card verified. Raise that project's next card only after the
    previous merge has settled and its head is verified again. Cards of other
    projects are not held by it (design §15.10, point 3).
-2. Run `gh pr update-branch` before a review round, never after an `APPROVE`:
-   a moved head restarts both checks, and T-104 lost two rounds that way. It
+2. `gh pr update-branch` exists to bring a branch up to date with its base;
+   run it before or after an `APPROVE` or during a review round, since an
+   update that brings no new conflict needs no re-review (the approval rule
+   above; captain, 2026-09-29). It
    is the only `gh` command firstmate runs itself, and only on a pull request
    GitHub reports as both BEHIND and MERGEABLE; on any other state, leave it
    alone and coordinate instead.
