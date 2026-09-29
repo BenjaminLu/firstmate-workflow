@@ -12,6 +12,7 @@
 #   fm.sh tasks                                    the task table, on demand
 #   fm.sh tasks split [ID]                         design/tasks.json -> one file each
 #   fm.sh roster [init] [--redraw]                 the installation's crew
+#   fm.sh hooks install|uninstall [--harness H]    the hooks that wake firstmate
 #
 # The system defines its own behaviour in skills/, which makes editing a
 # skill the one thing it must not be able to do quietly. So self-update
@@ -127,6 +128,14 @@ usage: fm.sh <command> [options]
   lint [--repo DIR]
         Two checks. Detect supported literal skill writes in programs, and
         nothing under skills/ is written in one vendor's syntax.
+
+  hooks install|uninstall [--harness claude|codex|cursor] [--repo DIR]
+        Write, or remove, the hooks that wake firstmate (T-137) in each
+        harness's local, uncommitted config for this repository: Claude
+        Code's .claude/settings.local.json, .codex/hooks.json and
+        .cursor/hooks.json. Merges into what is there, changes nothing
+        twice, and prints what it changed. Without --harness, all three.
+        bin/fm-session.sh start installs them for the harness it detects.
 EOF
 }
 
@@ -850,6 +859,13 @@ cmd_stop() {
   fi
 }
 
+# The hooks that wake firstmate (T-137): bin/lib/fm_watch.py reads its own
+# options, --repo included (else this script's repository), and says what
+# it changed.
+cmd_hooks() {
+  FM_ROOT="$REPO" python3 "$HERE/lib/fm_watch.py" hooks "$@"
+}
+
 cmd_follow() {
   local repo="$REPO" actor=''
   while [ $# -gt 0 ]; do
@@ -876,6 +892,7 @@ case "$cmd" in
   board)       cmd_board "$@" ;;
   stop)        cmd_stop "$@" ;;
   follow)      cmd_follow "$@" ;;
+  hooks)       cmd_hooks "$@" ;;
   help|-h|--help) usage ;;
   *) usage >&2; die "unknown command: $cmd" ;;
 esac

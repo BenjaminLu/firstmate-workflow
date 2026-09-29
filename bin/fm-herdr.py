@@ -1516,6 +1516,11 @@ def retire_dead_crew(root):
             if result.returncode != 0:
                 raise RuntimeError('deck reconcile emit failed for ' + actor + ': ' + (result.stderr or result.stdout))
             lost.append(actor)
+            # the loss wakes firstmate (T-137), pushed by whoever wrote it
+            try:
+                lifeline().push(root, actor, 'lost', f'lost: {task} {actor}', dict(task=task, actor=actor))
+            except (OSError, ValueError) as error:
+                print(f'fm-herdr: the wake for {actor} was not pushed: {error}', file=sys.stderr)
         data = json.dumps({'role': role, 'status': 'process_gone'})
         cmd = ['bash', str(emit), '--actor', str(actor), '--type', 'agent_finished',
                '--task', str(task), '--data', data, *pr,
@@ -1573,9 +1578,11 @@ def unacknowledged(root):
         ack = base / 'acknowledged' / (ident + '.json')
         if ack.exists() and (read(ack).get('acknowledged') or 0) >= (item.get('woken') or 0): continue
         answer = item.get('decision') or {}
-        found.append(dict(id=ident, task=answer.get('task'), kind=answer.get('kind'),
+        found.append(dict(id=ident, task=answer.get('task') if answer else item.get('task'), kind=answer.get('kind'),
                           chosen=answer.get('chosen'), text=answer.get('text'), ts=answer.get('ts'),
-                          merge=answer.get('merge'), reason=item.get('reason'), woken=item.get('woken')))
+                          merge=answer.get('merge'), reason=item.get('reason'), woken=item.get('woken'),
+                          # a crew wake (T-137) carries its own reason line
+                          **({'line': item['line']} if isinstance(item.get('line'), str) else {})))
     return sorted(found, key=lambda item: (item['woken'] or 0, item['id']))
 
 
@@ -1599,12 +1606,22 @@ def wake_wait(root, decision='all', timeout=0):
 
 def pending_summary(items):
     if not items: return 'fm-session: no unacknowledged captain decisions'
-    lines = [f'fm-session: {len(items)} captain decision{"" if len(items) == 1 else "s"} '
-             'woken but not acknowledged; act on each, then run fm-session.sh ack --decision <id>']
-    for item in items:
+    decisions = [item for item in items if 'line' not in item]
+    crew = [item for item in items if 'line' in item]
+    lines = []
+    if decisions:
+        lines.append(f'fm-session: {len(decisions)} captain decision{"" if len(decisions) == 1 else "s"} '
+                     'woken but not acknowledged; act on each, then run fm-session.sh ack --decision <id>')
+    for item in decisions:
         chosen = item['chosen'] if item['text'] is None else f'{item["chosen"]} "{item["text"]}"'
         merge = f', merge {item["merge"]}' if item.get('merge') else ''
         lines.append(f'  {item["id"]} {item["task"]} {item["kind"]} chose {chosen} at {item["ts"]}{merge}')
+    # T-137: a round's end, a verdict, a loss, a gate
+    if crew:
+        lines.append(f'fm-session: {len(crew)} crew wake{"" if len(crew) == 1 else "s"} '
+                     'not acknowledged; act on each, then run fm-session.sh ack --decision <id>')
+    for item in crew:
+        lines.append(f'  {item["id"]} {item["line"]}')
     return '\n'.join(lines)
 
 

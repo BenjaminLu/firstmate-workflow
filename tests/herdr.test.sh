@@ -1875,10 +1875,16 @@ class AgentLost(unittest.TestCase):
         self.assertIn('失聯', lost[0]['summary']['zh-TW'])
         # the close that has always followed a ghost still follows it
         self.assertEqual(['agent_lost', 'agent_finished'], [e['type'] for e in after if e['actor'] == ghost][1:])
+        # T-137: the loss wakes firstmate, pushed once by the reconcile that
+        # wrote it, with the line firstmate is woken with
+        queue = self.root/'state/session/wake.jsonl'
+        woken = [(i['id'], i['reason'], i['line']) for i in map(json.loads, queue.read_text().splitlines())]
+        self.assertEqual([(ghost, 'lost', f'lost: T-118 {ghost}')], woken)
         # read again, nothing more is written: the run is already off the deck
         second = m.retire_dead_crew(self.root)
         self.assertEqual([], second['lost'])
         self.assertEqual(after, self.events())
+        self.assertEqual(1, len(queue.read_text().splitlines()), 'and it wakes firstmate once')
 
     def test_a_loss_already_written_is_not_written_again(self):
         ghost = 'worker-half-t118-r1'

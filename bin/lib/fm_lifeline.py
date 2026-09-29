@@ -46,6 +46,8 @@ exactly as long.
   fm_lifeline.py ring <root> <line>
                                  ring every waiter's doorbell under
                                  <root>/state/session/wake.d; print how many
+  fm_lifeline.py push <root> <id> <reason> <line> [json]
+                                 append a wake to the queue, then ring (T-137)
   fm_lifeline.py await <root> <file> [seconds]
                                  register a doorbell, then wait until <file>
                                  exists (0) or the seconds run out (1)
@@ -484,6 +486,35 @@ def ring(root, line):
     return rang
 
 
+WAKE_QUEUE = 'state/session/wake.jsonl'
+
+
+def push(root, ident, reason, line, extra=None):
+    """Push one wake (T-137): append it to the wake queue, then ring every
+    doorbell. The writer of the event is the one that calls this - a round
+    ending (fm-worker.sh, fm-review.sh), a run found lost (fm-herdr.py), a
+    gate result (fm-emit.sh) - so nothing ever has to look for it. `line`
+    is the short machine-readable reason firstmate is woken with
+    (`review: T-134 APPROVE 4ea1ec2`); `extra` is kept on the item.
+    Returns how many doorbells rang."""
+    import fcntl
+    import json
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', str(ident)):
+        raise ValueError('a wake id is letters, digits, - and _')
+    line = ' '.join(str(line).split())
+    item = dict(extra or {})
+    item.update(id=str(ident), reason=str(reason), line=line, woken=time.time())
+    path = os.path.join(str(root), WAKE_QUEUE)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        os.write(fd, (json.dumps(item) + '\n').encode())
+    finally:
+        os.close(fd)
+    return ring(root, line)
+
+
 def doorbells(root):
     """How many waiters hold a doorbell now (a stale one counts until rung)."""
     import glob
@@ -736,6 +767,15 @@ def main(args):
         if len(args) != 2 or not args[0]:
             return _usage()
         print(ring(args[0], args[1]))
+        return 0
+    if mode == 'push':
+        if len(args) not in (4, 5) or not args[0]:
+            return _usage()
+        import json
+        extra = json.loads(args[4]) if len(args) == 5 and args[4] else {}
+        if not isinstance(extra, dict):
+            raise ValueError('the extra fields of a wake are a JSON object')
+        print(push(args[0], args[1], args[2], args[3], extra))
         return 0
     if mode == 'await':
         if len(args) not in (2, 3) or not args[0]:

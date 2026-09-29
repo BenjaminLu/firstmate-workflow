@@ -156,10 +156,11 @@
   "parkedPending": "已擱置；等候卡片答覆",
   "confirmRequired": "未執行：此任務有船員在船上或有開啟中的拉取請求；請再選一次並確認",
   "reopenNeedsReason": "未重新開啟：請用一行純文字說明為什麼它是錯的",
-  "watchOn": "大副正被看守（信標 {n} 秒前）",
+  "watchOn": "大副正被看守（看守者已運作 {n} 秒）",
   "watchOff": "大副目前沒有人看守",
   "watchLast": "上次喚醒：{reason}（{ts}）",
   "watchNever": "尚未喚醒過",
-  "watchGap": "缺口：有工作進行中卻沒有看守者，自 {since} 起",
-  "watchGapPast": "上次缺口：有工作進行中卻沒有看守者，共 {secs} 秒（結束於 {to}）"
+  "watchGap": "缺口：{n} 項進行中卻沒有看守者，自 {since} 起",
+  "watchWaiting": "{n} 則喚醒等候下一回合",
+  "watchGapOpen": "缺口：{n} 項進行中卻沒有看守者"
 }

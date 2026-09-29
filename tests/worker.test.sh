@@ -1333,6 +1333,22 @@ M
     "and it is the last thing it says"
   assert_eq "1" "$(grep -c . <<<"$(jq -r 'select(.type=="agent_finished")|.type' "$ra/state/events.jsonl")" || true)" \
     "exactly once, not once per exit path"
+  # T-137: and the end wakes firstmate, pushed by the round itself - one
+  # item on the wake queue, under the round's own name, with the line
+  # firstmate is woken with. The round's progress and its own gate_failed
+  # push nothing: the queue holds that one item and no other.
+  actor_a="$(jq -r 'select(.type=="agent_finished")|.actor' "$ra/state/events.jsonl")"
+  assert_eq "1" "$(grep -c . "$ra/state/session/wake.jsonl" 2>/dev/null || echo 0)" \
+    "a $scenario round's end is one wake on the queue, and nothing else is"
+  assert_eq "$actor_a round_end" "$(jq -r '"\(.id) \(.reason)"' "$ra/state/session/wake.jsonl" 2>/dev/null)" \
+    "under the round's own name"
+  if [ "$scenario" = failed ]; then
+    assert_matches "$(jq -r .line "$ra/state/session/wake.jsonl" 2>/dev/null)" "^failed: T-Z $actor_a exit [1-9][0-9]*" \
+      "a failed round wakes firstmate saying it failed"
+  else
+    assert_matches "$(jq -r .line "$ra/state/session/wake.jsonl" 2>/dev/null)" "^(finished: T-Z $actor_a ok|failed: T-Z $actor_a exit [0-9]+)" \
+      "a round's wake names its task and itself"
+  fi
   rm -rf "$da"
 done
 

@@ -208,15 +208,24 @@ events in both modes. This repository declares `run`.
 
 ## Firstmate is never blind
 
-A turn never ends while work is in flight and nobody is watching. One
-harness-neutral watcher (`bin/fm-watch.sh`) wakes the primary session on every
-event that needs it: a round finished or lost, a review verdict, a gate
-result, an answered card, a merge, a required check finishing. Each harness's
-own Stop hook keeps it armed (`bin/fm-watch-arm.sh`): Claude Code, Codex and
-Cursor, as recorded in
-[docs/verification/supervision.md](docs/verification/supervision.md), which
-also names what has not yet been verified live. The board shows whether
-firstmate is watched, the last wake and any gap.
+A turn never ends while work is in flight and nothing can wake firstmate
+(T-137). The wake is pushed, never watched: whoever writes an event that
+needs firstmate puts it on the wake queue, `state/session/wake.jsonl`, and
+rings every doorbell (`bin/lib/fm_lifeline.py push`). The writers are a
+round's end (`fm-worker.sh`; `fm-review.sh` with its verdict), a run found
+lost (the session's deck reconcile), a gate result from outside a round
+(`fm-emit.sh`), and the board, for a card answered and a merge settled or
+failed. `bin/fm-watch-arm.sh` keeps one watcher (`bin/fm-watch.sh`) per
+repository and hands it on before each wake goes out; nothing polls.
+
+`bin/fm-session.sh start` installs the hooks for the harness it runs in,
+into that harness's local, uncommitted config (`bin/fm.sh hooks
+install|uninstall`). What has been verified, per harness and version, is in
+[docs/verification/supervision.md](docs/verification/supervision.md): the
+Claude Code mechanism these hooks use was measured live on 2.1.284; the
+hooks themselves, and the Codex and Cursor paths, are not yet verified live,
+and nothing claims they work until they are. The board shows whether firstmate is watched, the last wake,
+what waits, and any gap.
 
 ## State
 

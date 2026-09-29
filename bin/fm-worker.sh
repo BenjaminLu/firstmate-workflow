@@ -267,6 +267,7 @@ finished() {
   while [ "$try" -gt 0 ]; do
     try=$(( try - 1 ))
     if emit_once --type agent_finished --en "run finished" --tw "這次執行結束"; then
+      wake_round_end "$rc"
       # Failed or interrupted attempts retain evidence for reconcile. Only
       # this owner can retire a successfully completed run's PID record.
       if [ "$rc" -eq 0 ] && [ "${pid_owned:-0}" = 1 ]; then
@@ -276,6 +277,18 @@ finished() {
     fi
   done
   echo "${0##*/}: could not record the end of this run; ${NAME} stays on the deck until ${TASK} is finished" >&2
+  wake_round_end "$rc"
+}
+# The round's end wakes firstmate (T-137), pushed by this round after its
+# agent_finished, so whatever harness firstmate runs in is told by the
+# writer and never by a watcher: `finished: T-134 worker-mira-t134-r1 ok #9`,
+# or `failed: ... exit 1`.
+wake_round_end() {
+  [ -n "${NAME:-}" ] && [ -n "${TASK:-}" ] || return 0
+  local line="finished: $TASK $NAME ok"
+  [ "$1" -eq 0 ] || line="failed: $TASK $NAME exit $1"
+  fm_wake_push "$REPO" "$NAME" round_end "$line${PR:+ #$PR}" \
+    "$(jq -cn --arg task "$TASK" --arg actor "$NAME" --argjson rc "$1" '{task:$task, actor:$actor, rc:$rc}')"
 }
 trap finished EXIT
 trap 'exit 130' INT

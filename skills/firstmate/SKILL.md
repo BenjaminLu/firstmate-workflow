@@ -61,7 +61,7 @@ bug. The board pushes a wake when it writes a decision - onto the queue
 `state/session/wake.d/` - and again when a merge it started settles. To be
 told, keep **one** `bin/fm-session.sh wait --repo <root> [--timeout <s>]`
 running as the harness's own background task: it exits with every
-unacknowledged wake, for any card, as soon as there is one. Act on each,
+unacknowledged wake, for any card or crew round (T-137), as soon as there is one. Act on each,
 `ack` it, and start the next `wait`. Do not keep one `fm-decide.sh --await`
 per pending card; `--await` is for scripts that wait on one answer. Any
 number of waiters each hear every ring, so none takes another's wake. Start every background process
@@ -308,34 +308,47 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
 ## Never end a turn blind (T-137)
 
 A turn never ends blind while work is in flight: a finished crew round, a
-review verdict, a gate result, an answered card or a finished required check
-must always be able to wake you. On 2026-09-28/29 finished rounds sat
+review verdict, a lost run, a gate result, an answered card or a settled
+merge must always be able to wake you. On 2026-09-28/29 finished rounds sat
 unhandled for up to six hours because waits were hand-made per round and
-lapsed whenever a turn ended without one.
+lapsed whenever a turn ended without one. Make no hand-made waiter of any
+kind for them: no `until grep` loop, no ScheduleWakeup, `/loop` or timed
+self-wake.
 
-- The watcher is `bin/fm-watch.sh`, one shot and the same for every harness;
-  `bin/fm-watch-arm.sh` keeps exactly one alive and hands it on before a wake
-  is delivered. You do not start, re-arm or babysit it by hand: the hooks of
-  your harness do (Claude Code: `.claude/settings.json`; Codex:
-  `.codex/hooks.json`; Cursor: `.cursor/hooks.json`; templates and the
-  verified contracts in `bin/hooks/` and `docs/verification/supervision.md`).
-- A wake is one line on stderr, in the hook's follow-up, or from
-  `bin/fm-watch-arm.sh` itself: `review: T-134 APPROVE 4ea1ec2`,
-  `ci: #106 failure`, `card: D-... answered A`, `finished: T-134 worker`.
-  Handle it, then end the turn; the successor is already watching.
-- `bin/fm-turnend-guard.sh` refuses to let a turn end while work is in flight
-  and no watcher is alive. If it refuses, run `bin/fm-watch-arm.sh` in the
-  foreground and handle what it prints. Where a harness cannot be woken idle
-  (Codex, Cursor), the hook parks the turn end on the arm for you, and if a
-  park runs out with work still in flight, park again the same way.
-- A harness with no hook support is named unsupported in
-  `docs/verification/supervision.md`; there, run `bin/fm-watch.sh` in a Herdr
-  pane and take a desktop notification, and say so to the captain.
+- The wake is pushed by its writer onto `state/session/wake.jsonl`, with a
+  ring of every doorbell: `fm-worker.sh` and `fm-review.sh` at a round's
+  end, the deck reconcile for a lost run, `fm-emit.sh` for a gate result
+  from outside a round, the board for a card answered and a merge settled.
+  `bin/fm-watch-arm.sh` keeps one watcher (`bin/fm-watch.sh`) per
+  repository and hands it on before a wake goes out. You do not start,
+  re-arm or babysit it: your harness's hooks do, and
+  `bin/fm-session.sh start` installs them into that harness's local config
+  (`bin/fm.sh hooks install|uninstall`).
+- A wake is its lines, on stderr (Claude Code), in the Stop hook's answer
+  (Codex, Cursor), in a turn's added context, or from
+  `bin/fm-watch-arm.sh` itself: `review: T-134 APPROVE 4ea1ec2 #9`,
+  `finished: T-134 worker-mira-t134-r1 ok`, `lost: T-134 ...`,
+  `gate: T-134 failed gate 6 #9`, `card: D-51 answered A`,
+  `merge: D-51 failed`. Handle each, then end the turn; the next watcher
+  already holds the watch.
+- `bin/fm-turnend-guard.sh` refuses a turn end with work in flight and no
+  watcher. If it refuses, or a Codex or Cursor Stop hook orders you to
+  park, run `bin/fm-watch-arm.sh --max-wait 3000` in the foreground and
+  handle what it prints; if it runs out with work still in flight, park
+  again the same way.
+- What is verified, per harness and version, is in
+  `docs/verification/supervision.md`: the Claude Code wake mechanism was
+  measured on 2.1.284; the Codex and Cursor paths are unverified until you
+  record a live check there, so claim nothing for them. Where a harness is
+  not woken idle, what waits is read at the next turn start, and
+  `bin/fm-session.sh status` lists it. A harness with no hook support is
+  named unsupported there; run `bin/fm-watch-arm.sh --follow` in a Herdr
+  pane, which also raises a desktop notification, and say so to the captain.
 - Only the primary arms. Crew rounds and their worktrees never do, and while
   the captain is away (`state/away`) the hooks stand down.
-- The board shows whether you are watched (beacon age), the last wake and its
-  reason, and any gap; a gap on the board means a turn ended blind, so say so
-  in your next report.
+- The board shows whether you are watched (how long the watcher has held the
+  watch), the last wake and its reason, what waits, and any gap; a gap on
+  the board means a turn ended blind, so say so in your next report.
 
 ## Process rules (2026-09-25)
 

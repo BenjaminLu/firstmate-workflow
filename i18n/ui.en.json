@@ -156,10 +156,11 @@
   "parkedPending": "parked; waits on its card",
   "confirmRequired": "not done: this task has crew aboard or an open pull request; choose it again and confirm",
   "reopenNeedsReason": "not reopened: say why it is wrong, in one line of plain text",
-  "watchOn": "Firstmate is watched (beacon {n}s old)",
+  "watchOn": "Firstmate is watched (watcher up {n}s)",
   "watchOff": "Firstmate is NOT watched",
   "watchLast": "last wake: {reason} ({ts})",
   "watchNever": "no wake yet",
-  "watchGap": "gap: work in flight and no watcher since {since}",
-  "watchGapPast": "last gap: {secs}s with work in flight and no watcher (ended {to})"
+  "watchGap": "gap: {n} in flight and no watcher since {since}",
+  "watchWaiting": "{n} wake(s) waiting for the next turn",
+  "watchGapOpen": "gap: {n} in flight and no watcher"
 }

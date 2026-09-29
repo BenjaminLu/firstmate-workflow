@@ -2269,6 +2269,35 @@ wake not acknowledged since it was pushed; `ack` records one, and a later
 wake for the same id (its merge settled) lists it again. Observations the
 retired watcher wrote under `state/session/observed/` are still read.
 
+*Waking the harness (T-137).* Every event that needs firstmate is pushed by
+its writer through `fm_lifeline.py push` (append, then ring): `fm-worker.sh`
+and `fm-review.sh` at a round's end, after its `agent_finished`
+(`finished: T-134 <actor> ok`, `failed: ... exit 1`, `review: T-134 APPROVE
+<head> #9`); the deck reconcile for a lost run (`lost: T-134 <actor>`);
+`fm-emit.sh` for a gate result written from outside a round
+(`gate: T-134 failed gate 6 #9`); and the board, as above (`card: D-51
+answered A`, `merge: D-51 failed`). A crew wake carries its `line`, and
+`status` lists it beside the decisions. A round's progress is never pushed.
+The harness side is `bin/lib/fm_watch.py`. One watcher cycle per repository
+(`bin/fm-watch.sh`, started by `bin/fm-watch-arm.sh` through the lifeline,
+owned by the harness session) holds `state/watch/cycle.lock`, so whether
+one lives is the kernel's answer; `arm.lock` lets one arm at a time start
+one, and a generation number counts them. The cycle blocks on its doorbell
+until a wake is past `state/watch/cursor`, takes it, starts its successor,
+and only then writes it for an arm to claim - a rename, so exactly one arm
+does. An arm parks on its doorbell, its owner's exit and the live cycle's
+exit together; it exits when its owner does and takes nothing, which is
+what a plain FIFO-reading hook orphaned by a SIGKILLed claude failed to do
+(measured on Claude Code 2.1.284). Each harness's hook speaks that
+harness's protocol - Claude Code's asyncRewake exit 2, Codex's `decision:
+block`, Cursor's `followup_message` - and a synchronous guard refuses a
+turn end that would be blind. Crew rounds, crew worktrees, linked git
+worktrees and an away captain (`state/away`) never arm. `fm.sh hooks
+install` writes the hooks into each harness's local, uncommitted config,
+and `fm-session.sh start` runs it for the harness it detects. What is
+verified per harness is in `docs/verification/supervision.md`; the board
+shows the watch, the last wake, what waits and any gap.
+
 *Tests are contained.* `bin/ci.sh` runs every suite - each bash suite, the
 bun tests and the browser suite - with a scope marker,
 `FIRSTMATE_CI_SCOPE`, in its environment, inherited across setsid, and with

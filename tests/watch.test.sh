@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
-# T-137: firstmate never ends a turn blind. The watcher (bin/fm-watch.sh), the
-# arm (bin/fm-watch-arm.sh), the turn-end guard and the hooks of each harness.
+# T-137: firstmate is woken for every event that needs it, whatever harness
+# it runs in. The writer pushes the wake (bin/lib/fm_lifeline.py push); a
+# single-flight watch (bin/fm-watch-arm.sh, bin/fm-watch.sh,
+# bin/lib/fm_watch.py) takes it once and hands it to the harness's hook.
 #
-# Every fixture is a root of its own with an event log written by the real
-# bin/fm-emit.sh, and its own state/watch. The harness stubs answer as each
-# harness's documents say - the Stop payload a hook reads, the exit code or
-# JSON it must answer with - and the live verification of each is recorded in
-# docs/verification/supervision.md.
+# Each harness is a stub here, answering as that harness's hook
+# documentation says it does: its payload on standard input, its answer
+# on stdout or stderr and in the exit code (docs/verification/supervision.md
+# names the source of each shape).
+#
+# Every process this suite starts ends with it: each watch is owned by a
+# stand-in session the test starts and ends, and the lifeline ends what that
+# session owned (bin/ci.sh turns a survivor red, T-151).
 set -uo pipefail
-# A live managed worker exports FM_RUN_DIR / FM_IN_ROUND / HERDR ids into this
-# shell. The fixture must not inherit them: FM_IN_ROUND alone would make every
-# arm below stand down, which is a green suite that tested nothing.
+exec < /dev/null
 for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
   unset "$_fm_k" || true
 done
@@ -18,322 +21,441 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 
-WATCH="$ROOT/bin/fm-watch.sh"
-ARM="$ROOT/bin/fm-watch-arm.sh"
-GUARD="$ROOT/bin/fm-turnend-guard.sh"
-EMITTER="$ROOT/bin/fm-emit.sh"
-H="$ROOT/bin/hooks"
-export FM_WATCH_POLL=0.1 FM_WATCH_ARM_POLL=0.1
+python3 - "$ROOT" <<'PY'
+import importlib.util
+import json
+import os
+from pathlib import Path
+import re
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
 
-roots=''
-new_root() {   # a fresh root, exported as FM_ROOT, with the cursor at the start of the log
-  r="$(safe_tmpdir)"; mkdir -p "$r/state/watch"; printf '0\n' > "$r/state/watch/cursor"
-  export FM_ROOT="$r"; roots="$roots $r"
-}
-# a live watcher's process is a cycle plus the fm-watch.sh it runs; the
-# watcher leaves by itself once its cycle is gone
-stop_watch() {   # stop_watch <root>
-  local pid=''
-  [ -r "$1/state/watch/owner" ] && read -r _ pid < "$1/state/watch/owner"
-  [ -z "$pid" ] || kill "$pid" 2>/dev/null
-  return 0
-}
-cleanup() { local r; for r in $roots; do stop_watch "$r"; safe_rm_rf "$r"; done; roots=''; }
-trap cleanup EXIT
+sys.dont_write_bytecode = True
+root = Path(sys.argv[1])
+ARM, GUARD, FM = root / 'bin/fm-watch-arm.sh', root / 'bin/fm-turnend-guard.sh', root / 'bin/fm.sh'
+LIFELINE, EMIT = root / 'bin/lib/fm_lifeline.py', root / 'bin/fm-emit.sh'
+spec = importlib.util.spec_from_file_location('fm_watch', root / 'bin/lib/fm_watch.py')
+W = importlib.util.module_from_spec(spec); spec.loader.exec_module(W)
 
-emit() {   # emit <actor> <type> [task] [pr] [data]
-  local a=(--actor "$1" --type "$2")
-  [ -z "${3-}" ] || a+=(--task "$3")
-  [ -z "${4-}" ] || a+=(--pr "$4")
-  [ -z "${5-}" ] || a+=(--data "$5")
-  "$EMITTER" "${a[@]}"
-}
-# one watcher run, given up on after <secs>: what it printed, if anything
-watch_once() { perl -e 'alarm shift; exec @ARGV' "$1" "$WATCH" 2>/dev/null; }
-lines_of() { wc -l < "$1" | tr -d ' '; }
-# poll <secs> <command...>: until the command succeeds
-poll() { local end=$(( $(date +%s) + $1 )); shift; until "$@" >/dev/null 2>&1; do [ "$(date +%s)" -le "$end" ] || return 1; sleep 0.1; done; }
-nonempty() { [ -s "$1" ]; }
-alive_now() { "$ARM" --status >/dev/null 2>&1; }
-owner_pid() { local p; read -r _ p < "$FM_ROOT/state/watch/owner"; printf '%s' "$p"; }
 
-# --- each event kind wakes exactly once ------------------------------------
-# type | task | pr | data | the line it prints
-kinds='agent_finished|T-1|||finished: T-1
-agent_lost|T-1|||lost: T-1
-worker_crashed|T-1|||crashed: T-1
-vendor_unavailable|T-1|||vendor: T-1
-approved|T-1||{"head":"4ea1ec2abc"}|review: T-1 APPROVE 4ea1ec2
-review_failed|T-1|||review: T-1 REJECT
-gate_passed|T-1||{"gate":5}|gate: T-1 pass 5
-gate_failed|T-1||{"gate":5}|gate: T-1 fail 5
-decision_made|||{"decision":"D-x-T1-1","chosen":"A"}|card: D-x-T1-1 answered A
-merged|T-1|106||merged: #106
-protocol_violation|T-1|||protocol: T-1'
-while IFS='|' read -r ty task pr data want; do
-  new_root
-  emit worker-1 "$ty" "$task" "$pr" "$data"
-  assert_eq "$want" "$(watch_once 5)" "$ty wakes with [$want]"
-  assert_eq "" "$(watch_once 1)" "$ty does not wake a second time"
-done <<< "$kinds"
+def until(check, within=15):
+    """Test-side only: wait, bounded, for what the code under test does."""
+    deadline = time.monotonic() + within
+    while time.monotonic() < deadline:
+        if check():
+            return True
+        time.sleep(.05)
+    return bool(check())
 
-# progress of a round still running is absorbed: read, judged, and silent
-new_root
-for ty in greenlit dispatched commit_pushed pr_opened review_opened crew_status ask_pass_criteria criteria_returned decision_requested reopened; do
-  emit worker-1 "$ty" T-1
-done
-assert_eq "" "$(watch_once 1)" "progress events wake nobody"
-assert_eq "$(lines_of "$FM_ROOT/state/events.jsonl")" "$(cat "$FM_ROOT/state/watch/cursor")" "and are absorbed: the cursor moved past all of them"
 
-# an event that wakes is the only one taken: the ones after it wait
-new_root
-emit worker-1 crew_status T-1; emit worker-1 agent_finished T-1; emit reviewer-1 approved T-1
-assert_eq "finished: T-1" "$(watch_once 5)" "the first event that needs firstmate wakes it, past absorbed ones"
-assert_eq "2" "$(cat "$FM_ROOT/state/watch/cursor")" "the cursor stops at the event that woke, not past its successors"
-assert_eq "review: T-1 APPROVE" "$(watch_once 5)" "the next watcher takes the next event"
-assert_eq "" "$(watch_once 1)" "and then there is nothing"
+def stop(p):
+    if p.poll() is None:
+        p.kill()
+    p.wait()
 
-# history is not news: the first watcher ever starts at the end of the log
-r="$(safe_tmpdir)"; mkdir -p "$r/state"; export FM_ROOT="$r"; roots="$roots $r"
-emit worker-1 agent_finished T-1
-assert_eq "" "$(watch_once 1)" "a watcher with no cursor does not replay the log"
-assert_eq "1" "$(cat "$r/state/watch/cursor")" "it starts at the end of it"
 
-# firstmate's own events never wake firstmate
-new_root
-emit firstmate merged T-1 5
-assert_eq "" "$(watch_once 1)" "an event firstmate wrote itself does not wake it"
+def gone(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    return False
 
-# the beacon proves the watcher is alive
-new_root
-watch_once 1 >/dev/null
-assert_ok "[ \"\$(perl -e 'print time - (stat shift)[9]' '$FM_ROOT/state/watch/beacon')\" -le 2 ]" "the watcher touches its beacon"
 
-# --- the required check finishing -----------------------------------------
-new_root
-S="$FM_ROOT/stub"; mkdir -p "$S"
-printf '#!/bin/sh\necho "$*" >> "%s/calls"\ncase "$1 $2" in\n  "pr list") cat "%s/prs" 2>/dev/null ;;\n  "pr checks") cat "%s/checks.$3" 2>/dev/null ;;\nesac\n' "$S" "$S" "$S" > "$S/gh"
-chmod +x "$S/gh"
-export GH="$S/gh" FM_WATCH_CI_MIN=0 FM_WATCH_CI_MAX=0
-emit worker-1 dispatched T-1
-printf '7 abc123\n' > "$S/prs"; printf 'pending\n' > "$S/checks.7"
-perl -e 'alarm 12; exec @ARGV' "$WATCH" > "$S/out" 2>/dev/null &
-cipid=$!
-sleep 1
-assert_eq "" "$(cat "$S/out")" "a check still pending wakes nobody"
-printf 'pass,pass\n' > "$S/checks.7"
-poll 8 nonempty "$S/out"
-assert_eq "ci: #7 success" "$(cat "$S/out")" "a check that finished green wakes with its result"
-wait "$cipid" 2>/dev/null
-assert_eq "" "$(watch_once 1)" "and only once: the finish is not reported again"
+class Watch(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve() / 'repo'
+        (self.root / 'state').mkdir(parents=True)
+        # after every owner below is ended, its cycles end with it
+        self.addCleanup(self.settle)
+        self.owner = self.stand_in()
 
-new_root
-S="$FM_ROOT/stub"; mkdir -p "$S"
-printf '#!/bin/sh\ncase "$1 $2" in\n  "pr list") cat "%s/prs" ;;\n  "pr checks") cat "%s/checks.$3" ;;\nesac\n' "$S" "$S" > "$S/gh"
-chmod +x "$S/gh"
-export GH="$S/gh"
-emit worker-1 dispatched T-1
-printf '8 def456\n9 999999\n' > "$S/prs"; printf 'pending,pass\n' > "$S/checks.8"; printf 'pass\n' > "$S/checks.9"
-perl -e 'alarm 12; exec @ARGV' "$WATCH" > "$S/out" 2>/dev/null &
-cipid=$!
-sleep 1
-assert_eq "" "$(cat "$S/out")" "a check that was already done when watching began is not a finish"
-printf 'fail,pass\n' > "$S/checks.8"
-poll 8 nonempty "$S/out"
-assert_eq "ci: #8 failure" "$(cat "$S/out")" "a check that finished red wakes as a failure"
-wait "$cipid" 2>/dev/null
+    def settle(self):
+        for place in [self.root, *getattr(self, 'others', [])]:
+            if (place / 'state/watch').is_dir():
+                until(lambda: not W.cycle_live(place))
+                # the lifeline's own helper that saw the cycle out ends a
+                # moment after the cycle's lock is released
+                time.sleep(.3)
 
-# the pull requests are polled only while work is in flight, and with backoff
-new_root
-S="$FM_ROOT/stub"; mkdir -p "$S"
-printf '#!/bin/sh\necho "$*" >> "%s/calls"\ncase "$1 $2" in\n  "pr list") echo "7 abc" ;;\n  "pr checks") echo pending ;;\nesac\n' "$S" > "$S/gh"
-chmod +x "$S/gh"
-export GH="$S/gh" FM_WATCH_CI_MIN=0 FM_WATCH_CI_MAX=0
-watch_once 1 >/dev/null
-assert_eq "" "$(cat "$S/calls" 2>/dev/null)" "with nothing in flight, GitHub is not asked"
-emit worker-1 dispatched T-1
-export FM_WATCH_CI_MIN=100 FM_WATCH_CI_MAX=300
-watch_once 2 >/dev/null
-assert_eq "1" "$(grep -c '^pr list' "$S/calls")" "with work in flight the poll backs off: one ask in two seconds, not one a pass"
-unset GH FM_WATCH_CI_MIN FM_WATCH_CI_MAX
+    def stand_in(self):
+        """A stand-in harness session: what owns the watch and the hooks."""
+        p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'], stdin=subprocess.DEVNULL)
+        self.addCleanup(stop, p)
+        return p
 
-# --- arming: one watcher per repository ------------------------------------
-new_root
-emit worker-1 dispatched T-1
-"$ARM" --max-wait 20 > "$FM_ROOT/a.out" 2>/dev/null & pa=$!
-"$ARM" --max-wait 20 > "$FM_ROOT/b.out" 2>/dev/null & pb=$!
-poll 8 alive_now
-assert_contains "$("$ARM" --status)" 'gen=1' "arming starts a watcher, generation 1"
-sleep 1
-assert_eq "1" "$(grep -c '^successor 1$' "$FM_ROOT/state/watch/journal")" "two arms attach to one watcher: only one cycle was started"
-emit worker-1 agent_finished T-1
-wait "$pa" "$pb"
-assert_eq "finished: T-1" "$(cat "$FM_ROOT/a.out" "$FM_ROOT/b.out")" "the wake is delivered once, by whichever arm claimed it"
-assert_eq "1" "$(grep -c '^delivered 1$' "$FM_ROOT/state/watch/journal")" "and recorded as delivered once"
-sn="$(grep -n '^successor 2$' "$FM_ROOT/state/watch/journal" | cut -d: -f1)"
-dn="$(grep -n '^delivered 1$' "$FM_ROOT/state/watch/journal" | cut -d: -f1)"
-assert_ok "[ -n '$sn' ] && [ '$sn' -lt '$dn' ]" "the successor was started before the wake was delivered"
-assert_contains "$("$ARM" --status)" 'alive gen=2' "so a watcher is alive, the next generation, once the wake is in hand"
-assert_eq "finished: T-1" "$(jq -r .reason "$FM_ROOT/state/watch/last-wake.json")" "the last wake and its reason are recorded for the board"
-# a later arm parks again: the old wake is not delivered twice
-assert_eq "" "$("$ARM" --max-wait 1 2>/dev/null)" "an arm after the delivery finds nothing to deliver"
-stop_watch "$FM_ROOT"
+    def env(self, owner=None, **extra):
+        env = {k: v for k, v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
+        env.update(FM_SESSION_PID=str(owner if isinstance(owner, int) else (owner or self.owner).pid),
+                   FM_LIFELINE_GRACE='1')
+        env.update(extra)
+        return env
 
-# a dead owner is superseded
-new_root
-"$ARM" --ensure
-first="$(owner_pid)"
-kill -9 "$first" 2>/dev/null
-poll 3 bash -c "! kill -0 $first"
-"$ARM" --ensure
-assert_contains "$("$ARM" --status)" 'alive gen=2' "a dead owner is superseded by the next generation"
-assert_ne "$first" "$(owner_pid)" "by a new process"
-stop_watch "$FM_ROOT"
+    def run_(self, script, *args, stdin='', owner=None, where=None, **extra):
+        where = where or self.root
+        return subprocess.run(['bash', str(script), '--repo', str(where), *args], input=stdin,
+                              capture_output=True, text=True, env=self.env(owner, **extra), cwd=where, timeout=60)
 
-# an owner that is alive but whose beacon has gone stale is superseded too
-new_root
-sleep 300 & hung=$!
-printf '4 %s\n' "$hung" > "$FM_ROOT/state/watch/owner"; : > "$FM_ROOT/state/watch/beacon"
-touch -t 200001010000 "$FM_ROOT/state/watch/beacon"
-"$ARM" --ensure
-assert_contains "$("$ARM" --status)" 'alive gen=5' "a hung owner is superseded: the generation moves on"
-poll 3 bash -c "! kill -0 $hung"
-assert_fail "kill -0 $hung" "and the stale process is stopped"
-stop_watch "$FM_ROOT"
+    def park(self, *args, payload=None, owner=None, where=None, **extra):
+        """An arm left running, as a harness leaves its hook."""
+        where = where or self.root
+        p = subprocess.Popen(['bash', str(ARM), '--repo', str(where), *args],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, env=self.env(owner, **extra), cwd=where)
+        self.addCleanup(stop, p)
+        p.stdin.write(json.dumps(payload) if payload is not None else '')
+        p.stdin.close()
+        return p
 
-# the gap - work in flight and no live watcher - is recorded for the board
-new_root
-emit worker-1 dispatched T-1
-sleep 0.1 & gone=$!; wait "$gone"
-printf '1 %s\n' "$gone" > "$FM_ROOT/state/watch/owner"; : > "$FM_ROOT/state/watch/beacon"
-touch -t "$(perl -e 'use POSIX; print strftime("%Y%m%d%H%M.%S", localtime(time - 30))')" "$FM_ROOT/state/watch/beacon"
-"$ARM" --ensure
-assert_eq "1" "$(lines_of "$FM_ROOT/state/watch/gaps.jsonl")" "arming after a lapse records the gap"
-assert_ok "[ \"\$(jq -r .secs '$FM_ROOT/state/watch/gaps.jsonl')\" -ge 29 ]" "with how long it lasted"
-assert_eq "1" "$(jq -r .inflight "$FM_ROOT/state/watch/gaps.jsonl")" "and how much work was in flight"
-stop_watch "$FM_ROOT"
+    def push(self, ident, reason, line, where=None):
+        subprocess.run([sys.executable, str(LIFELINE), 'push', str(where or self.root), ident, reason, line],
+                       check=True, capture_output=True, stdin=subprocess.DEVNULL)
 
-# --- only the primary arms --------------------------------------------------
-new_root
-emit worker-1 dispatched T-1
-FM_IN_ROUND=1 "$ARM" --ensure
-assert_fail "test -e '$FM_ROOT/state/watch/owner'" "a crew round (FM_IN_ROUND) never arms"
-assert_eq "" "$(FM_IN_ROUND=1 "$ARM" --max-wait 1)" "and is never woken"
-w="$(safe_tmpdir)"; mkdir -p "$w/state/worktrees/T-9/state"
-FM_ROOT="$w/state/worktrees/T-9" "$ARM" --ensure
-assert_fail "test -e '$w/state/worktrees/T-9/state/watch/owner'" "a worktree under state/worktrees never arms"
-roots="$roots $w"
-touch "$FM_ROOT/state/away"
-"$ARM" --ensure
-assert_fail "test -e '$FM_ROOT/state/watch/owner'" "while the captain is away, arming stands down"
-rm -f "$FM_ROOT/state/away"
-g="$(safe_tmpdir)"; roots="$roots $g"
-git -C "$g" init -q . && git -C "$g" -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q --allow-empty -m init \
-  && git -C "$g" worktree add -q "$g/wt" -b wt-branch
-mkdir -p "$g/state" "$g/wt/state"
-FM_ROOT="$g/wt" "$ARM" --ensure
-assert_fail "test -e '$g/wt/state/watch/owner'" "a git worktree of the repository never arms"
-FM_ROOT="$g" "$ARM" --ensure
-assert_ok "test -e '$g/state/watch/owner'" "the repository's own checkout does"
-stop_watch "$g"
+    def board_push(self, ident, reason, decision):
+        """What board/server.ts writes for a card answered or a merge settled."""
+        queue = self.root / 'state/session/wake.jsonl'
+        queue.parent.mkdir(parents=True, exist_ok=True)
+        with queue.open('a') as f:
+            f.write(json.dumps(dict(id=ident, reason=reason, decision=decision, woken=time.time())) + '\n')
+        subprocess.run([sys.executable, str(LIFELINE), 'ring', str(self.root), ident],
+                       check=True, capture_output=True, stdin=subprocess.DEVNULL)
 
-# --- the turn-end guard ------------------------------------------------------
-new_root
-assert_ok "'$GUARD' --check" "nothing in flight: the turn may end"
-emit worker-1 dispatched T-1
-msg="$("$GUARD" --check 2>&1 >/dev/null)"; rc=$?
-assert_eq "2" "$rc" "work in flight and no watcher: the turn may not end"
-assert_contains "$msg" "no watcher is alive" "and it says why"
-assert_contains "$msg" "bin/fm-watch-arm.sh" "and what to run"
-assert_eq "2" "$(FM_WATCH_ARM=/usr/bin/false "$GUARD" >/dev/null 2>&1; echo $?)" "a watcher that cannot be started leaves the refusal standing"
-assert_eq "0" "$("$GUARD" >/dev/null 2>&1; echo $?)" "otherwise the guard starts the watcher its hook raced ahead of, and allows the stop"
-assert_ok "'$ARM' --status" "and that watcher is alive"
-assert_ok "'$GUARD' --check" "with a watcher alive, --check allows it too"
-stop_watch "$FM_ROOT"
-new_root
-emit worker-1 dispatched T-1
-assert_eq "0" "$(FM_IN_ROUND=1 "$GUARD" --check >/dev/null 2>&1; echo $?)" "a crew round is never held by the guard"
-touch "$FM_ROOT/state/away"
-assert_ok "'$GUARD' --check" "nor is a captain who is away"
-rm -f "$FM_ROOT/state/away"
-emit worker-1 agent_finished T-1
-assert_ok "'$GUARD' --check" "a finished round is no longer work in flight"
+    def journal(self):
+        path = self.root / 'state/watch/journal'
+        return [l.split(' ', 1)[1] for l in path.read_text().splitlines()] if path.exists() else []
 
-# --- Claude Code: the Stop hooks ---------------------------------------------
-new_root
-emit worker-1 dispatched T-1
-payload_fresh='{"hook_event_name":"Stop","stop_hook_active":false}'
-payload_active='{"hook_event_name":"Stop","stop_hook_active":true}'
-msg="$(FM_WATCH_ARM=/usr/bin/false "$H/claude-stop-guard.sh" <<<"$payload_fresh" 2>&1 >/dev/null)"; rc=$?
-assert_eq "2" "$rc" "Claude guard: exit 2 blocks the stop while work is in flight and no watcher lives"
-assert_contains "$msg" "no watcher is alive" "and stderr carries the reason back to the model"
-assert_eq "0" "$(FM_WATCH_ARM=/usr/bin/false "$H/claude-stop-guard.sh" <<<"$payload_active" >/dev/null 2>&1; echo $?)" "Claude guard: a stop already forced by a hook is not refused again"
-assert_eq "0" "$("$H/claude-stop-guard.sh" <<<"$payload_fresh" >/dev/null 2>&1; echo $?)" "Claude guard: with the watcher started, the stop is allowed"
-stop_watch "$FM_ROOT"
+    def generation(self):
+        return int((self.root / 'state/watch/generation').read_text())
 
-new_root
-emit worker-1 dispatched T-1
-FM_HOOK_MAX_WAIT=1 "$H/claude-stop-arm.sh" <<<'{}' >/dev/null 2>"$FM_ROOT/e0"; rc=$?
-assert_eq "0" "$rc" "Claude arm hook: nothing to say by the time its wait ends is a quiet exit 0"
-assert_eq "" "$(cat "$FM_ROOT/e0")" "with nothing on stderr"
-FM_HOOK_MAX_WAIT=20 "$H/claude-stop-arm.sh" <<<'{}' >/dev/null 2>"$FM_ROOT/e1" & hp=$!
-poll 8 alive_now
-emit worker-1 agent_finished T-1
-wait "$hp"; rc=$?
-assert_eq "2" "$rc" "Claude arm hook: an event wakes the idle session with exit 2"
-assert_eq "finished: T-1" "$(cat "$FM_ROOT/e1")" "the reason is on stderr, alone"
-stop_watch "$FM_ROOT"
-new_root
-emit worker-1 dispatched T-1
-FM_IN_ROUND=1 FM_HOOK_MAX_WAIT=1 "$H/claude-stop-arm.sh" <<<'{}' >/dev/null 2>&1
-assert_fail "test -e '$FM_ROOT/state/watch/owner'" "Claude hooks: in a crew round they stand down"
+    def aboard(self, actor='worker-a-t1-r1', type_='dispatched'):
+        with (self.root / 'state/events.jsonl').open('a') as f:
+            f.write(json.dumps(dict(ts='2026-09-29T10:00:00Z', actor=actor, type=type_, task='T-1',
+                                    data={'role': 'worker'})) + '\n')
 
-# --- Codex: the Stop hook ----------------------------------------------------
-new_root
-emit worker-1 dispatched T-1
-FM_HOOK_PARK_SECS=20 "$H/codex-stop.sh" <<<"$payload_fresh" > "$FM_ROOT/o1" 2>/dev/null & hp=$!
-poll 8 alive_now
-emit worker-1 agent_finished T-1
-wait "$hp"; rc=$?
-assert_eq "0" "$rc" "Codex hook: answers on stdout, exit 0"
-assert_eq "block" "$(jq -r .decision "$FM_ROOT/o1")" "Codex hook: a wake continues the turn with decision block"
-assert_contains "$(jq -r .reason "$FM_ROOT/o1")" "finished: T-1" "carrying the reason as what the model reads next"
-emit worker-1 dispatched T-1   # the round that just finished is followed by another
-out="$(FM_HOOK_PARK_SECS=1 "$H/codex-stop.sh" <<<"$payload_fresh" 2>/dev/null)"
-assert_eq "block" "$(jq -r .decision <<<"$out")" "Codex hook: a park that ran out with work in flight blocks the stop"
-assert_contains "$(jq -r .reason <<<"$out")" "bin/fm-watch-arm.sh" "and tells the model to park on the arm itself"
-assert_eq "" "$(FM_HOOK_PARK_SECS=1 "$H/codex-stop.sh" <<<"$payload_active" 2>/dev/null)" "Codex hook: a stop that is already a hook's continuation is let end"
-stop_watch "$FM_ROOT"
-new_root
-assert_eq "" "$("$H/codex-stop.sh" <<<"$payload_fresh" 2>/dev/null)" "Codex hook: nothing in flight, the turn ends without parking"
-assert_ok "'$ARM' --status" "though the watcher has been made sure of"
-stop_watch "$FM_ROOT"
-new_root
-emit worker-1 dispatched T-1
-assert_eq "" "$(FM_IN_ROUND=1 FM_HOOK_PARK_SECS=1 "$H/codex-stop.sh" <<<"$payload_fresh" 2>/dev/null)" "Codex hook: a crew round is never parked"
-assert_fail "test -e '$FM_ROOT/state/watch/owner'" "and never arms"
 
-# --- Cursor: the stop hook ---------------------------------------------------
-new_root
-emit worker-1 dispatched T-1
-FM_HOOK_PARK_SECS=20 "$H/cursor-stop.sh" <<<'{"status":"completed","loop_count":0}' > "$FM_ROOT/o1" 2>/dev/null & hp=$!
-poll 8 alive_now
-emit worker-1 approved T-1
-wait "$hp"
-assert_contains "$(jq -r .followup_message "$FM_ROOT/o1")" "review: T-1 APPROVE" "Cursor hook: a wake is returned as the follow-up message"
-out="$(FM_HOOK_PARK_SECS=1 "$H/cursor-stop.sh" <<<'{"status":"completed","loop_count":1}' 2>/dev/null)"
-assert_contains "$(jq -r .followup_message <<<"$out")" "bin/fm-watch-arm.sh" "Cursor hook: a park that ran out with work in flight still returns a follow-up"
-assert_eq "" "$(FM_HOOK_PARK_SECS=1 "$H/cursor-stop.sh" <<<'{"status":"aborted","loop_count":0}' 2>/dev/null)" "Cursor hook: an aborted turn is never parked on"
-assert_eq "" "$(FM_IN_ROUND=1 FM_HOOK_PARK_SECS=1 "$H/cursor-stop.sh" <<<'{"status":"completed","loop_count":0}' 2>/dev/null)" "Cursor hook: a crew round is never parked"
-stop_watch "$FM_ROOT"
+class Wakes(Watch):
+    def test_each_kind_wakes_exactly_once_with_its_line(self):
+        self.assertEqual(0, self.run_(ARM, '--ensure').returncode)
+        self.assertTrue(W.cycle_live(self.root), 'a cycle holds the watch')
+        pushed = [('worker-a-t1-r1', 'round_end', 'finished: T-1 worker-a-t1-r1 ok #9'),
+                  ('worker-b-t1-r2', 'round_end', 'failed: T-1 worker-b-t1-r2 exit 1'),
+                  ('reviewer-c-t1-r1', 'verdict', 'review: T-1 APPROVE 4ea1ec2 #9'),
+                  ('reviewer-d-t1-r2', 'verdict', 'review: T-1 REJECT 4ea1ec2 #9'),
+                  ('worker-e-t1-r3', 'lost', 'lost: T-1 worker-e-t1-r3'),
+                  ('gate-T1-1', 'gate', 'gate: T-1 failed gate 6 #9')]
+        for item in pushed:
+            self.push(*item)
+        # the board's own items carry their decision, and the line is read from it
+        self.board_push('D-51', 'answered', {'chosen': 'A'})
+        self.board_push('D-52', 'merge_settled', {'merge': 'merged'})
+        self.board_push('D-53', 'merge_settled', {'merge': 'failed'})
+        want = [line for _, _, line in pushed] + ['card: D-51 answered A', 'merge: D-52 merged', 'merge: D-53 failed']
+        seen = []
+        for _ in want:
+            woke = self.run_(ARM, '--max-wait', '10')
+            self.assertEqual(0, woke.returncode, woke.stderr)
+            seen += woke.stdout.splitlines()
+            if len(seen) >= len(want):
+                break
+        self.assertEqual(sorted(want), sorted(seen), 'every kind wakes, each exactly once')
+        again = self.run_(ARM, '--max-wait', '1')
+        self.assertEqual((1, ''), (again.returncode, again.stdout), 'and none of them a second time')
 
-# --- the harness configs -------------------------------------------------------
-assert_ok "jq -e '.hooks.Stop[0].hooks[0] | (.command | contains(\"codex-stop.sh\")) and .timeout > 3300' '$ROOT/.codex/hooks.json'" ".codex/hooks.json runs the Codex hook with a timeout longer than its park"
-assert_ok "jq -e '.hooks.Stop[0].hooks | map(select(.command | contains(\"claude-stop-arm.sh\"))) | .[0] | .asyncRewake == true and .timeout > 85000' '$H/claude-settings.json'" "the Claude arm hook is asyncRewake with a timeout longer than its wait"
-assert_ok "jq -e '.hooks.Stop[0].hooks | map(select(.command | contains(\"claude-stop-guard.sh\"))) | .[0] | (.asyncRewake // false) == false and .timeout <= 60' '$H/claude-settings.json'" "the Claude guard is synchronous and short"
-assert_ok "jq -e '.hooks.stop[0] | (.command | contains(\"cursor-stop.sh\")) and (.loop_limit | type == \"number\" and . >= 1) and .timeout > 3300' '$H/cursor-hooks.json'" "the Cursor stop hook is bounded by a loop_limit and outlasts its park"
-for f in claude-stop-arm claude-stop-guard codex-stop cursor-stop; do
-  assert_ok "test -x '$H/$f.sh'" "$f.sh is executable"
-done
-assert_contains "$(cat "$ROOT/skills/firstmate/SKILL.md")" "never ends blind" "the firstmate skill states the rule"
+    def test_progress_is_absorbed(self):
+        self.run_(ARM, '--ensure')
+        for n in (1, 2):
+            subprocess.run(['bash', str(EMIT), '--actor', 'worker-a-t1-r1', '--type', 'crew_status', '--task', 'T-1',
+                            '--data', json.dumps({'progress': {'done': n, 'total': 3}}), '--en', 'working', '--tw', '工作中'],
+                           env=dict(self.env(), FM_ROOT=str(self.root)), check=True, capture_output=True)
+        self.push('worker-a-t1-r1', 'round_end', 'finished: T-1 worker-a-t1-r1 ok')
+        woke = self.run_(ARM, '--max-wait', '10')
+        self.assertEqual('finished: T-1 worker-a-t1-r1 ok', woke.stdout.strip(),
+                         "a round's progress never wakes firstmate; its end does")
+
+
+class SingleFlight(Watch):
+    def test_two_arms_attach_to_one_watcher(self):
+        a, b = self.park('--max-wait', '30'), self.park('--max-wait', '30')
+        self.assertTrue(until(lambda: 'cycle 1 live' in self.journal()
+                              and any(l.startswith('attach 1 by ') for l in self.journal())))
+        self.assertEqual(1, self.generation(), 'two arms, one watcher')
+        self.assertEqual([None, None], [a.poll(), b.poll()], 'both parked')
+        self.push('worker-a-t1-r1', 'round_end', 'finished: T-1 worker-a-t1-r1 ok')
+        self.assertTrue(until(lambda: a.poll() is not None or b.poll() is not None))
+        time.sleep(.5)
+        done = [p for p in (a, b) if p.poll() is not None]
+        self.assertEqual(1, len(done), 'the wake goes to exactly one arm')
+        self.assertEqual('finished: T-1 worker-a-t1-r1 ok', done[0].stdout.read().strip())
+
+    def test_the_successor_holds_the_watch_before_the_wake_is_out(self):
+        arm = self.park('--max-wait', '30')
+        self.assertTrue(until(lambda: 'cycle 1 live' in self.journal()))
+        self.push('reviewer-c-t1-r1', 'verdict', 'review: T-1 APPROVE 4ea1ec2')
+        out, _ = arm.communicate(timeout=20)
+        self.assertEqual('review: T-1 APPROVE 4ea1ec2', out.strip())
+        steps = self.journal()
+        self.assertLess(steps.index('cycle 2 live'), steps.index('wake 1 written: review: T-1 APPROVE 4ea1ec2'),
+                        'the successor holds the watch before the wake is written')
+        self.assertTrue(any(s.startswith('claimed 1 by ') for s in steps))
+        self.assertTrue(W.cycle_live(self.root), 'and it still holds it while firstmate handles the wake')
+        self.assertEqual(2, json.loads((self.root / 'state/watch/owner.json').read_text())['gen'])
+
+    def test_a_dead_watcher_is_superseded(self):
+        self.run_(ARM, '--ensure')
+        self.run_(ARM, '--ensure')
+        self.assertEqual(1, self.generation(), 'a live watcher is attached to, not replaced')
+        self.assertIn('attach 1 by', ' '.join(self.journal()))
+        pid = json.loads((self.root / 'state/watch/owner.json').read_text())['pid']
+        os.kill(pid, signal.SIGKILL)
+        self.assertTrue(until(lambda: not W.cycle_live(self.root)), 'the kernel releases a dead watcher\'s lock')
+        self.run_(ARM, '--ensure')
+        self.assertEqual(2, self.generation())
+        self.assertIn('supersede 1: its watcher is gone', self.journal())
+        self.assertTrue(W.cycle_live(self.root))
+
+    def test_an_owner_that_dies_takes_its_park_with_it_and_steals_nothing(self):
+        """Measured on Claude Code 2.1.284: a plain blocking hook, orphaned when
+        claude was SIGKILLed, went on reading and stole the next wake."""
+        hook = self.park('--hook', 'claude', payload={'hook_event_name': 'Stop', 'stop_hook_active': False})
+        self.assertTrue(until(lambda: W.cycle_live(self.root)))
+        self.owner.send_signal(signal.SIGKILL); self.owner.wait()
+        self.assertEqual(0, hook.wait(timeout=15), 'the hook exits 0 when its owner dies')
+        self.assertEqual('', hook.stderr.read(), 'and wakes nothing')
+        self.assertTrue(until(lambda: not W.cycle_live(self.root)), 'the watcher goes with its owner')
+        self.push('worker-a-t1-r1', 'round_end', 'finished: T-1 worker-a-t1-r1 ok')
+        # the next session's arm is the one that is told
+        after = self.run_(ARM, '--max-wait', '10', owner=self.stand_in())
+        self.assertEqual('finished: T-1 worker-a-t1-r1 ok', after.stdout.strip(), 'nothing took the wake meanwhile')
+
+
+class Harnesses(Watch):
+    STOP = {'session_id': 's-1', 'transcript_path': '/dev/null', 'hook_event_name': 'Stop', 'stop_hook_active': False}
+
+    def test_claude_async_hook_wakes_with_exit_2_and_the_reason_on_stderr(self):
+        hook = self.park('--hook', 'claude', payload=dict(self.STOP, cwd=str(self.root)))
+        self.assertTrue(until(lambda: W.cycle_live(self.root)))
+        self.assertIsNone(hook.poll(), 'it parks while nothing needs firstmate')
+        self.push('reviewer-c-t1-r1', 'verdict', 'review: T-1 APPROVE 4ea1ec2')
+        out, err = hook.communicate(timeout=20)
+        self.assertEqual(2, hook.returncode)
+        self.assertEqual(W.wake_text(['review: T-1 APPROVE 4ea1ec2']) + '\n', err)
+        self.assertEqual('', out)
+
+    def test_claude_guard_refuses_a_blind_turn_end(self):
+        self.aboard()
+        dead = subprocess.Popen(['true']); dead.wait()
+        # no owner to hand a watcher to: the turn would end blind
+        blind = self.run_(GUARD, '--hook', 'claude', stdin=json.dumps(self.STOP), owner=dead.pid)
+        self.assertEqual(2, blind.returncode)
+        self.assertIn('bin/fm-watch-arm.sh --max-wait', blind.stderr)
+        # a stop that is already a hook's continuation is never refused
+        again = self.run_(GUARD, '--hook', 'claude', stdin=json.dumps(dict(self.STOP, stop_hook_active=True)), owner=dead.pid)
+        self.assertEqual((0, ''), (again.returncode, again.stderr))
+        # with an owner, the guard makes sure of a watcher and lets the turn end
+        watched = self.run_(GUARD, '--hook', 'claude', stdin=json.dumps(self.STOP))
+        self.assertEqual(0, watched.returncode, watched.stderr)
+        self.assertTrue(W.cycle_live(self.root))
+        # and with nothing in flight, nothing is refused
+        self.aboard(type_='agent_finished')
+        idle = self.run_(GUARD, '--hook', 'claude', stdin=json.dumps(self.STOP), owner=dead.pid)
+        self.assertEqual(0, idle.returncode)
+
+    def test_codex_stop_hook_blocks_with_the_wake_or_the_order_to_park(self):
+        self.aboard()
+        self.run_(ARM, '--pending')          # the watch starts from here
+        self.push('worker-a-t1-r1', 'round_end', 'finished: T-1 worker-a-t1-r1 ok')
+        woke = self.run_(GUARD, '--hook', 'codex', stdin=json.dumps(dict(self.STOP, cwd=str(self.root))))
+        self.assertEqual({'decision': 'block', 'reason': W.wake_text(['finished: T-1 worker-a-t1-r1 ok'])},
+                         json.loads(woke.stdout))
+        park = self.run_(GUARD, '--hook', 'codex', stdin=json.dumps(self.STOP))
+        self.assertEqual({'decision': 'block', 'reason': W.park_text()}, json.loads(park.stdout),
+                         'nothing waits and work is in flight: park on the arm in the foreground')
+        loop = self.run_(GUARD, '--hook', 'codex', stdin=json.dumps(dict(self.STOP, stop_hook_active=True)))
+        self.assertEqual((0, ''), (loop.returncode, loop.stdout), "a hook's own continuation may end")
+        self.aboard(type_='agent_finished')
+        idle = self.run_(GUARD, '--hook', 'codex', stdin=json.dumps(self.STOP))
+        self.assertEqual((0, ''), (idle.returncode, idle.stdout), 'nothing in flight, nothing said')
+
+    def test_turn_start_adds_what_waits_to_the_context(self):
+        self.run_(ARM, '--pending')
+        self.push('reviewer-c-t1-r1', 'verdict', 'review: T-1 REJECT 4ea1ec2')
+        for harness in ('codex', 'claude'):
+            said = self.run_(ARM, '--turn-start', harness,
+                             stdin=json.dumps({'hook_event_name': 'UserPromptSubmit', 'prompt': 'go'}))
+            if harness == 'codex':
+                self.assertEqual({'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit',
+                                                         'additionalContext': W.wake_text(['review: T-1 REJECT 4ea1ec2'])}},
+                                 json.loads(said.stdout))
+            else:
+                self.assertEqual('', said.stdout, 'and it is delivered once')
+
+    def test_cursor_stop_hook_returns_a_followup(self):
+        self.aboard()
+        self.run_(ARM, '--pending')
+        self.push('worker-a-t1-r1', 'round_end', 'failed: T-1 worker-a-t1-r1 exit 1')
+        payload = {'conversation_id': 'c-1', 'generation_id': 'g-1', 'hook_event_name': 'stop',
+                   'workspace_roots': [str(self.root)], 'loop_count': 0}
+        aborted = self.run_(GUARD, '--hook', 'cursor', stdin=json.dumps(dict(payload, status='aborted')))
+        self.assertEqual('', aborted.stdout, 'an aborted stop is left alone')
+        woke = self.run_(GUARD, '--hook', 'cursor', stdin=json.dumps(dict(payload, status='completed')))
+        self.assertEqual({'followup_message': W.wake_text(['failed: T-1 worker-a-t1-r1 exit 1'])}, json.loads(woke.stdout),
+                         'and the wake it left waiting goes out on the completed one')
+
+
+class OnlyThePrimary(Watch):
+    def test_a_crew_round_never_arms(self):
+        refused = self.run_(ARM, '--ensure', FM_IN_ROUND='1')
+        self.assertIn('standing down: a crew round', refused.stderr)
+        self.assertFalse(W.cycle_live(self.root))
+        self.run_(ARM, '--ensure')
+        self.assertTrue(W.cycle_live(self.root), 'the same arm, outside a round, arms')
+
+    def test_a_crew_worktree_never_arms_or_wakes(self):
+        tree = Path(self.tmp.name).resolve() / 'fleet/state/worktrees/T-1'
+        (tree / 'state').mkdir(parents=True)
+        self.others = [tree]
+        for where in (self.root, tree):
+            self.run_(ARM, '--pending', where=where)
+            self.push('worker-a-t1-r1', 'round_end', 'finished: T-1 worker-a-t1-r1 ok', where=where)
+        primary = self.run_(GUARD, '--hook', 'codex', stdin=json.dumps({'stop_hook_active': False}))
+        self.assertIn('finished: T-1', primary.stdout, 'the primary is woken')
+        crew = self.run_(GUARD, '--hook', 'codex', stdin=json.dumps({'stop_hook_active': False}), where=tree)
+        self.assertEqual('', crew.stdout, 'a crew worktree is not')
+        hook = subprocess.run(['bash', str(ARM), '--repo', str(tree), '--hook', 'claude'], input='{}',
+                              capture_output=True, text=True, env=self.env(), cwd=tree, timeout=30)
+        self.assertEqual((0, ''), (hook.returncode, hook.stderr), 'and its hook stands down at once')
+        self.assertFalse(W.cycle_live(tree))
+
+    def test_a_linked_git_worktree_never_arms(self):
+        self.run_(ARM, '--ensure')
+        self.assertTrue(W.cycle_live(self.root))
+        linked = Path(self.tmp.name).resolve() / 'linked'
+        (linked / 'state').mkdir(parents=True)
+        (linked / '.git').write_text('gitdir: /elsewhere/.git/worktrees/linked\n')
+        self.others = [linked]
+        said = self.run_(ARM, '--ensure', where=linked)
+        self.assertIn('standing down: a git worktree', said.stderr)
+        self.assertFalse(W.cycle_live(linked))
+
+    def test_an_away_captain_stands_the_hooks_down(self):
+        (self.root / 'state/away').write_text('')
+        hook = self.run_(ARM, '--hook', 'claude', stdin='{}')
+        self.assertEqual((0, ''), (hook.returncode, hook.stderr))
+        self.assertFalse(W.cycle_live(self.root))
+        (self.root / 'state/away').unlink()
+        parked = self.park('--hook', 'claude', payload={})
+        self.assertTrue(until(lambda: W.cycle_live(self.root)), 'back from away, the hook parks again')
+        self.assertIsNone(parked.poll())
+
+
+class Install(Watch):
+    def setUp(self):
+        super().setUp()
+        (self.root / 'bin').mkdir()
+        (self.root / 'bin/fm-watch-arm.sh').write_text('')
+
+    def hooks(self, *args, **extra):
+        return subprocess.run(['bash', str(FM), 'hooks', *args, '--repo', str(self.root)], capture_output=True,
+                              text=True, env=self.env(**extra), cwd=self.root, timeout=30)
+
+    def test_install_merges_changes_nothing_twice_and_uninstall_restores(self):
+        mine = {'permissions': {'allow': ['Bash(ls)']},
+                'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': 'echo mine'}]}]}}
+        settings = self.root / '.claude/settings.local.json'
+        settings.parent.mkdir()
+        settings.write_text(json.dumps(mine))
+        first = self.hooks('install', '--harness', 'claude')
+        self.assertIn('.claude/settings.local.json: installed Stop, UserPromptSubmit', first.stdout)
+        got = json.loads(settings.read_text())
+        self.assertEqual(mine['permissions'], got['permissions'])
+        self.assertEqual({'type': 'command', 'command': 'echo mine'}, got['hooks']['Stop'][0]['hooks'][0])
+        ours = got['hooks']['Stop'][1]['hooks']
+        arm = f"{self.root}/bin/fm-watch-arm.sh --hook claude"
+        self.assertEqual([{'type': 'command', 'command': f'{self.root}/bin/fm-turnend-guard.sh --hook claude', 'timeout': 30},
+                          {'type': 'command', 'command': arm, 'asyncRewake': True, 'timeout': W.CLAUDE_TIMEOUT}], ours)
+        # the arm's wait ends before Claude Code's timeout would kill it
+        self.assertLess(W.CLAUDE_TIMEOUT - 60, ours[1]['timeout'])
+        self.assertEqual(f'{self.root}/bin/fm-watch-arm.sh --turn-start claude',
+                         got['hooks']['UserPromptSubmit'][0]['hooks'][0]['command'])
+        before = settings.read_bytes()
+        second = self.hooks('install', '--harness', 'claude')
+        self.assertIn('nothing to change (already installed)', second.stdout)
+        self.assertEqual(before, settings.read_bytes())
+        self.hooks('uninstall', '--harness', 'claude')
+        self.assertEqual(mine, json.loads(settings.read_text()), 'uninstall removes exactly ours')
+
+    def test_codex_and_cursor_get_their_own_local_files(self):
+        said = self.hooks('install')
+        codex = json.loads((self.root / '.codex/hooks.json').read_text())
+        self.assertEqual(f'{self.root}/bin/fm-turnend-guard.sh --hook codex', codex['hooks']['Stop'][0]['hooks'][0]['command'])
+        self.assertEqual(f'{self.root}/bin/fm-watch-arm.sh --turn-start codex',
+                         codex['hooks']['UserPromptSubmit'][0]['hooks'][0]['command'])
+        cursor = json.loads((self.root / '.cursor/hooks.json').read_text())
+        self.assertEqual({'version': 1, 'hooks': {'stop': [{'command': f'{self.root}/bin/fm-turnend-guard.sh --hook cursor',
+                                                            'timeout': 60, 'loop_limit': 5}]}}, cursor)
+        self.assertIn('.cursor/hooks.json: installed stop', said.stdout)
+        self.hooks('uninstall')
+        for rel in ('.claude', '.codex', '.cursor'):
+            self.assertFalse((self.root / rel).exists(), f'{rel}: what install made, uninstall takes away')
+
+    def test_session_start_installs_for_the_harness_it_detects_and_never_in_a_round(self):
+        detect = [sys.executable, str(root / 'bin/lib/fm_watch.py'), 'hooks', 'install', '--detect', '--repo', str(self.root)]
+        subprocess.run(detect, env=self.env(FM_HARNESS='cursor', FM_IN_ROUND='1'), cwd=self.root, capture_output=True)
+        self.assertFalse((self.root / '.cursor').exists(), 'a crew round installs nothing')
+        subprocess.run(detect, env=self.env(FM_HARNESS='cursor'), cwd=self.root, capture_output=True)
+        self.assertTrue((self.root / '.cursor/hooks.json').exists(), 'the primary installs its harness')
+        self.assertFalse((self.root / '.claude').exists(), 'and only that one')
+        session = (root / 'bin/fm-session.sh').read_text()
+        self.assertIn('fm_watch.py" hooks install --detect --repo "$REPO"', session,
+                      'bin/fm-session.sh start runs that install')
+
+
+class Fallback(Watch):
+    def test_a_pane_follows_through_the_lifeline_and_notifies(self):
+        told = self.root / 'told'
+        stub = self.root / 'notify.sh'
+        stub.write_text(f'#!/usr/bin/env bash\nprintf "%s\\n" "${{@: -1}}" >> "{told}"\n'); stub.chmod(0o755)
+        pane = self.stand_in()
+        keeper = int(self.run_(ARM, '--follow', '--background', owner=pane, FM_NOTIFY=str(stub)).stdout.strip())
+        self.assertTrue(until(lambda: W.cycle_live(self.root)))
+        self.push('worker-a-t1-r1', 'round_end', 'finished: T-1 worker-a-t1-r1 ok')
+        self.assertTrue(until(lambda: told.exists() and 'finished: T-1' in told.read_text()),
+                        'the wake is printed and notified')
+        self.assertFalse(gone(keeper), 'and it follows on')
+        stop(pane)
+        self.assertTrue(until(lambda: gone(keeper)), 'it ends with its owner')
+
+
+class NoPolling(unittest.TestCase):
+    PATTERN = re.compile(r'time\.sleep|os\.kill\(|st_mtime|getmtime|\bgh\b|setsid|start_new_session|nohup|disown'
+                         r'|kill -0|sleep [0-9]|&\s*$', re.M)
+
+    def code(self, path):
+        text = path.read_text()
+        # comments and docstrings are prose
+        text = re.sub(r'(?s)""".*?"""', '', text)
+        return '\n'.join(re.sub(r'(^|\s)#.*$', '', line) for line in text.splitlines())
+
+    def test_nothing_in_the_watch_polls_or_detaches(self):
+        for rel in ('bin/lib/fm_watch.py', 'bin/fm-watch.sh', 'bin/fm-watch-arm.sh', 'bin/fm-turnend-guard.sh'):
+            self.assertEqual([], self.PATTERN.findall(self.code(root / rel)), rel)
+
+    def test_the_sweep_sees_what_it_looks_for(self):
+        with tempfile.TemporaryDirectory() as d:
+            plant = Path(d) / 'plant.py'
+            for bad in ('time.sleep(1)', 'os.kill(pid, 0)', 'p.stat().st_mtime', "run(['gh', 'pr'])", 'sleep 5', 'job &'):
+                plant.write_text(bad + '\n')
+                self.assertNotEqual([], self.PATTERN.findall(self.code(plant)), bad)
+            plant.write_text('# time.sleep(1) in a comment is prose\n')
+            self.assertEqual([], self.PATTERN.findall(self.code(plant)))
+
+
+unittest.main(argv=['watch'], verbosity=2)
+PY
+[ $? -eq 0 ] || _fails=$((_fails + 1))
 finish

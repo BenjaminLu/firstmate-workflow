@@ -254,6 +254,27 @@ crew_status_stamp_write() {
   printf '%s\t%s\t%s\n' "$_crew_wstart" "$_crew_count" "$crew_fp" > "$stamp"
 }
 
+# A gate result - the six gates, gate 6 being the pull request's required
+# check - wakes firstmate when whoever follows the check writes it (T-137):
+# the writer pushes the wake, so nothing watches GitHub for it. A crew
+# round's own gate_failed does not: its round's end already wakes
+# firstmate. This is the one event type this file pushes; it needs python3
+# and bin/lib only for it, and a push that fails costs the wake, never the
+# event.
+wake_on_gate() {
+  case "$type" in gate_passed|gate_failed) ;; *) return 0 ;; esac
+  case "$actor" in worker-*|reviewer-*) return 0 ;; esac
+  local lib gate result
+  lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/fm_lifeline.py"
+  [ -r "$lib" ] || return 0
+  gate="$(jq -r '.gate? // empty' <<<"$data" 2>/dev/null)"
+  result="${type#gate_}"
+  python3 "$lib" push "$ROOT" "gate-$(printf '%s' "${task:-none}" | tr -cd 'A-Za-z0-9')-$(date +%s)" gate \
+    "gate: ${task:-?} $result${gate:+ gate $gate}${pr:+ #$pr}" \
+    "$(jq -cn --arg task "$task" --arg result "$result" '{task:$task, result:$result}')" >/dev/null 2>&1 \
+    || printf 'fm-emit: the wake for this gate result was not pushed\n' >&2
+}
+
 # mkdir is the portable atomic lock; macOS ships no flock(1)
 for _ in $(seq 1 600); do
   if mkdir "$LOCK" 2>/dev/null; then
@@ -273,6 +294,14 @@ for _ in $(seq 1 600); do
     if [ "$type" = crew_status ] && [ -n "$stamp" ]; then
       crew_status_stamp_write
     fi
+    case "$type" in
+      gate_passed|gate_failed)
+        # released before the wake, and the trap with it: once released,
+        # the lock may be the next writer's
+        rmdir "$LOCK" 2>/dev/null
+        trap - EXIT
+        wake_on_gate ;;
+    esac
     exit 0
   fi
   perl -e 'select(undef,undef,undef,0.01)' 2>/dev/null || sleep 0.05

@@ -479,42 +479,77 @@ const taskLists = (): Array<{ project: string; defs: Array<Record<string, unknow
   return dirs.map(([project, rel]) => ({ project, defs: taskDefs(rel) }));
 };
 
-// `only` is ?project=: that project's work, cards and log, and the counts of
-// those. Without it, every project on one page (design section 15.10 point 4).
-// Whether firstmate is watched (T-137). bin/fm-watch.sh touches state/watch/beacon
-// every pass and bin/fm-watch-arm.sh names its live owner in state/watch/owner,
-// so the watcher is alive when that process exists and the beacon is fresh. The
-// last wake and the recorded gaps are files the arm writes. A gap is time with
-// work in flight and no live watcher; one still open has no end yet.
+// Whether firstmate is watched (T-137), read from bin/lib/fm_watch.py's files
+// under state/watch. The live cycle names its doorbell in owner.json, and a
+// doorbell is a FIFO its waiter holds open: opening it to write without
+// blocking succeeds only while a reader holds it, and fails (ENXIO) the moment
+// that waiter has died - the kernel's answer, never a pid or a file's age.
+// Nothing is written to it, so nobody is rung. The beacon is that doorbell,
+// and its age is how long the cycle has held the watch. A gap is work in
+// flight - crew aboard, or a card the captain has not answered - with no
+// live cycle; it opens when the last cycle ended, or when the work began if
+// that was later or nothing has ever watched. `waiting` counts the wakes
+// nothing has delivered yet: what a harness that cannot be woken idle reads
+// at its next turn start.
 const WATCH_DIR = join(ROOT, "state/watch");
-const WATCH_STALE = Number(process.env.FM_WATCH_STALE) > 0 ? Number(process.env.FM_WATCH_STALE) : 60;
 const watchJson = (name: string): Record<string, unknown> | null => {
   try { return JSON.parse(readFileSync(join(WATCH_DIR, name), "utf8")); } catch { return null; }
 };
-const watchState = (inflight: number) => {
-  let beaconAge: number | null = null;
-  try { beaconAge = Math.max(0, Math.floor((Date.now() - statSync(join(WATCH_DIR, "beacon")).mtimeMs) / 1000)); } catch { /* never armed */ }
+const watchWaiting = () => {
+  let n = 0;
+  try {
+    for (const f of readdirSync(join(WATCH_DIR, "wake")).filter((f) => f.endsWith(".json"))) {
+      try { n += (JSON.parse(readFileSync(join(WATCH_DIR, "wake", f), "utf8")).lines ?? []).length; } catch { /* being claimed */ }
+    }
+  } catch { /* none written */ }
+  try {
+    const at = Number(readFileSync(join(WATCH_DIR, "cursor"), "utf8").trim());
+    const queue = readFileSync(join(ROOT, "state/session/wake.jsonl"));
+    if (Number.isInteger(at) && at >= 0) n += queue.subarray(at <= queue.length ? at : 0).toString("utf8").split("\n").slice(0, -1).filter((l) => l.trim()).length;
+  } catch { /* never watched: the queue so far is fm-session.sh status's to report */ }
+  return n;
+};
+const watchState = (events: Event[], aboard: string[], cards: Array<{ ts?: unknown }>) => {
+  const owner = watchJson("owner.json");
   let alive = false;
+  const bell = typeof owner?.bell === "string" ? owner.bell : "";
   try {
-    const pid = Number(readFileSync(join(WATCH_DIR, "owner"), "utf8").trim().split(/\s+/)[1]);
-    if (Number.isInteger(pid) && pid > 0 && beaconAge !== null && beaconAge < WATCH_STALE) { process.kill(pid, 0); alive = true; }
-  } catch { /* no owner, or not a live process */ }
+    // only a doorbell of this tree's own
+    if (bell && realpathSync(join(bell, "..")) === realpathSync(join(ROOT, "state/session/wake.d"))) {
+      const fd = openSync(bell, constants.O_WRONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+      try { alive = fstatSync(fd).isFIFO(); } finally { closeSync(fd); }
+    }
+  } catch { /* ENXIO: nobody holds it; ENOENT: it is gone */ }
+  const started = alive && typeof owner?.started === "string" ? owner.started : null;
   const wake = watchJson("last-wake.json");
-  let lastGap: Record<string, unknown> | null = null;
-  try {
-    const rows = readFileSync(join(WATCH_DIR, "gaps.jsonl"), "utf8").trim().split("\n").filter(Boolean);
-    if (rows.length) lastGap = JSON.parse(rows[rows.length - 1]);
-  } catch { /* none recorded */ }
-  const open = inflight > 0 && !alive;
+  // when each aboard crewman first appears, and when each card was raised
+  const first = new Map<string, number>();
+  for (const e of events) {
+    const a = String(e.actor ?? ""), t = Date.parse(String(e.ts ?? ""));
+    if (aboard.includes(a) && !first.has(a) && !Number.isNaN(t)) first.set(a, t);
+  }
+  const begun = [...first.values(), ...cards.map((c) => Date.parse(String(c.ts ?? ""))).filter((t) => !Number.isNaN(t))];
+  const inflight = aboard.length + cards.length;
+  let gap: { since: string | null; inflight: number } | null = null;
+  if (inflight > 0 && !alive) {
+    const ended = Date.parse(String(owner?.ended ?? ""));
+    const from = Math.max(begun.length ? Math.min(...begun) : NaN, Number.isNaN(ended) ? -Infinity : ended);
+    // to the second, as the log and the watch write their times
+    gap = { since: Number.isFinite(from) ? new Date(from).toISOString().replace(/\.\d{3}Z$/, "Z") : null, inflight };
+  }
   return {
     alive,
-    beaconAge,
+    since: started,
+    beaconAge: started ? Math.max(0, Math.floor((Date.now() - Date.parse(started)) / 1000)) : null,
+    gen: typeof owner?.gen === "number" ? owner.gen : null,
     lastWake: wake ? { ts: String(wake.ts ?? ""), reason: String(wake.reason ?? "") } : null,
-    gap: open ? { since: beaconAge === null ? null : new Date(Date.now() - beaconAge * 1000).toISOString(), inflight } : null,
-    lastGap: lastGap ? { from: String(lastGap.from ?? ""), to: String(lastGap.to ?? ""), secs: Number(lastGap.secs ?? 0) } : null,
+    waiting: watchWaiting(),
+    gap,
   };
 };
 
+// `only` is ?project=: that project's work, cards and log, and the counts of
+// those. Without it, every project on one page (design section 15.10 point 4).
 const state = (only: string | null = null) => {
   const events = readEvents();
   const def = defaultProject();
@@ -1038,7 +1073,8 @@ const state = (only: string | null = null) => {
       const p = projectOf(x);
       byProject[p] = mentioned(repoOf(p), x, byProject[p] ?? {});
     }
-  return { ...out, watch: watchState(out.counts.inflight), pr_urls: byProject[def] ?? {}, pr_urls_by_project: byProject };
+  const watched = watchState(events, shownCrew.filter((c) => c.role !== "firstmate").map((c) => c.id), shownPending);
+  return { ...out, watch: watched, pr_urls: byProject[def] ?? {}, pr_urls_by_project: byProject };
 };
 
 // whether `a` happened at or after `b`. Event stamps are whole seconds, so

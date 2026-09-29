@@ -15,15 +15,18 @@
 # `setsid ... &` to reach for instead.
 #
 #   bin/lib/fm-lifeline.sh ring <root> <line>
+#   bin/lib/fm-lifeline.sh push <root> <id> <reason> <line> [json]
 #   bin/lib/fm-lifeline.sh await <root> <file> [seconds]
 #
 # The wake: `ring` rings every waiter's own doorbell under
 # <root>/state/session/wake.d; `await` registers one, looks for <file>, and
 # looks again on every ring until it exists (exit 0) or the seconds run out
-# (exit 1). The bell is a hint; the file is the answer.
+# (exit 1). The bell is a hint; the file is the answer. `push` is the
+# writer's half (T-137): the wake goes onto state/session/wake.jsonl, then
+# every bell rings.
 set -uo pipefail
 exec < /dev/null
 case "${1-}" in
-  ring|await) exec python3 "$(dirname "${BASH_SOURCE[0]}")/fm_lifeline.py" "$@" ;;
+  ring|push|await) exec python3 "$(dirname "${BASH_SOURCE[0]}")/fm_lifeline.py" "$@" ;;
 esac
 exec python3 "$(dirname "${BASH_SOURCE[0]}")/fm_lifeline.py" spawn "$@"
