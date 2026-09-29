@@ -1,0 +1,23 @@
+{
+  "id": "T-126",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "claude crew rounds sign in with a long-lived crew token of their own, so the operator's own Claude refreshing its login never kills a round",
+  "scope": [
+    "bin/fm-config.sh",
+    "bin/fm-sandbox.sh",
+    "bin/adapters/claude.sh",
+    "bin/fm-canary.sh",
+    "tests/sandbox.test.sh",
+    "tests/adapter-contract.test.sh",
+    "design/design.md",
+    "skills/firstmate/SKILL.md",
+    "design/tasks/T-126.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-09-27, claude crew rounds died mid-run with `API Error: 401 OAuth access token has been revoked`: T-125 round 1's worker and T-123 round 2's reviewer. fm-config.sh hands a claude round the access token of the operator's own interactive login (keychain `Claude Code-credentials`, `claudeAiOauth.accessToken`) as `CLAUDE_CODE_OAUTH_TOKEN`. When the operator's own Claude sessions refresh that login, the old access token is revoked, and every round still holding it dies. The fix Anthropic documents for unattended use is a long-lived token from `claude setup-token` (https://code.claude.com/docs/en/authentication, 'Generate a long-lived token': one year, bills to the subscription, model requests only). The operator has created one and stored it in the keychain item `firstmate-claude-token`, account = the operator's user, following the same pattern as cursor-agent's `firstmate-cursor-api-key` (T-117). The captain approved this on 2026-09-27. Its own spec file, design/tasks/T-126.json, is committed on this branch.",
+    "The crew token first. For claude, fm-config.sh's login lookup reads, in order: an explicitly set `CLAUDE_CODE_OAUTH_TOKEN`, used as is; the keychain item `firstmate-claude-token` (service), account = the operator's user; else `~/.config/firstmate/claude-token`, refused unless its mode is the operator's alone (0600). Only when none exists does it fall back to the interactive login's access token as today, and it says so in the round's log and on the board (en and zh-TW) as a warning that the round can die when the operator's own login refreshes. The crew token is read outside the round by fm-sandbox.sh and handed in as `CLAUDE_CODE_OAUTH_TOKEN`, exported, never on a command line, in a log, in an event or in state/. Nothing else from `Claude Code-credentials` is read when the crew token exists. Under option A the model can read the token it is handed; no other credential is added.",
+    "Tests: with a stub keychain answering as `security find-generic-password -s <svc> -a <acct> -w` does (exit 44 and its message when the item is missing), the crew token is chosen over the interactive login; the 0600 file is chosen when the keychain has none, and a 0644 file is refused; the fallback warns; and the round's environment holds exactly the crew token. `bin/fm-canary.sh` reports which claude login source a round used (`crew-token` / `interactive-fallback`), without the value. Stubs answer as the real tools do. Evidence: the required GitHub check and the gates; firstmate reruns the canary at the merge gate; workers do not run the suite themselves. design.md 13.1's login table and SKILL.md's setup notes name the one-time step, `claude setup-token`, then store it in the keychain item, and say where the operator revokes the token (claude.ai → Settings → Claude Code)."
+  ]
+}

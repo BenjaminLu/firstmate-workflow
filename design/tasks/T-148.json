@@ -1,0 +1,20 @@
+{
+  "id": "T-148",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "the CI shards are balanced by time in one unit: a suite measured at zero seconds is fast, not unknown, and an unknown suite's estimate is in seconds",
+  "scope": [
+    "bin/ci.sh",
+    "tests/ci.test.sh",
+    ".github/workflows/ci.yml",
+    "design/**",
+    "design/tasks/T-148.json"
+  ],
+  "acceptance": [
+    "Why. T-134 made CI parallel, but main's runs still take 7.5-9.5 minutes against a 10-minute job limit. On main 9e4194d the four bash shards held 1, 1, 1 and 31 suites: shards 1-3 ran tests/skills.test.sh, tests/protocol.test.sh and tests/lib.test.sh alone (about 10 s each) and shard 4 ran everything else (9m13s). Root cause, found by firstmate in bin/ci.sh ci_suite_duration: timings are recorded in whole seconds, the three fast suites were recorded as 0, `[ \"$n\" -gt 0 ]` then treats them as unknown and falls back to their byte size (thousands), so longest-first packing sees them as the three longest suites and gives each its own shard. Two units, seconds and bytes, are mixed in one sort. Its own spec file, design/tasks/T-148.json, is committed on this branch.",
+    "One unit. Timings are recorded with sub-second resolution (milliseconds); a suite present in the timings with any value, zero included, uses that value; a suite absent from them is estimated in the same unit (for example the median recorded duration per byte times its size), never raw bytes next to seconds.",
+    "Balanced. With the timings of the last main run, no shard's predicted load exceeds the mean by more than the longest single suite; a test feeds recorded timings with zeros and missing entries and checks the assignment. Wall-clock time of main's required check after this merges is reported from real runs; the target is under 4 minutes, and if the longest single suite alone exceeds that, the report names it (for T-130 to split).",
+    "Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves."
+  ]
+}

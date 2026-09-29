@@ -106,6 +106,19 @@ usage: fm.sh <command> [options]
         60 seconds). Only a tab opened this way can answer cards, move
         tasks or open files; any other tab is read-only.
 
+  stop <actor> | stop --task <id> [--project NAME] [--repo DIR]
+        Stop a live round, or every crewman on a task: the task's
+        fm-worker.sh gets TERM, so it saves and pushes its worktree, and
+        each round's process group gets TERM, then KILL after
+        FM_STOP_GRACE seconds (5). The board's park and drop use this same
+        stop. Prints what it stopped and what it could not, as JSON, and
+        exits 1 when something could not be stopped.
+
+  follow <actor> [--repo DIR]
+        Print the actor's latest round's log (state/runs/<actor>/<attempt>/
+        run.log) and follow it until the round ends. This is what a
+        window runs; closing it stops nothing.
+
   sync-skills <source-dir> [--name NAME] [--repo DIR]
         Import external skills into skills/vendor/, read-only. One way:
         the source is never written to, and a local edit to an imported
@@ -814,6 +827,43 @@ cmd_board() {
   python3 "$HERE/fm-herdr.py" board "$repo"
 }
 
+# A round belongs to fm, not to a window (T-144): stopping one, and watching
+# one, go through bin/fm-herdr.py, the same stop the board's park and drop run.
+cmd_stop() {
+  local repo="$REPO" actor='' task='' project=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --task) need "$@"; task="${2-}"; shift 2 ;;
+      --project) need "$@"; project="${2-}"; shift 2 ;;
+      --repo) need "$@"; repo="${2-}"; shift 2 ;;
+      -*) die "stop: unknown argument $1" ;;
+      *) [ -z "$actor" ] || die "stop: one actor at a time"; actor="$1"; shift ;;
+    esac
+  done
+  { [ -n "$actor" ] && [ -z "$task" ]; } || { [ -z "$actor" ] && [ -n "$task" ]; } \
+    || die "stop: name an actor or --task <id>"
+  repo="$(abs "$repo")" || die "no repo at $repo"
+  if [ -n "$task" ]; then
+    python3 "$HERE/fm-herdr.py" stop "$repo" --task "$task" ${project:+--project "$project"}
+  else
+    python3 "$HERE/fm-herdr.py" stop "$repo" "$actor"
+  fi
+}
+
+cmd_follow() {
+  local repo="$REPO" actor=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo) need "$@"; repo="${2-}"; shift 2 ;;
+      -*) die "follow: unknown argument $1" ;;
+      *) [ -z "$actor" ] || die "follow: one actor at a time"; actor="$1"; shift ;;
+    esac
+  done
+  [ -n "$actor" ] || die "follow: name an actor"
+  repo="$(abs "$repo")" || die "no repo at $repo"
+  python3 "$HERE/fm-herdr.py" follow "$repo" "$actor"
+}
+
 # =========================================================================
 cmd="${1:-help}"
 [ $# -eq 0 ] || shift
@@ -824,6 +874,8 @@ case "$cmd" in
   tasks)       cmd_tasks "$@" ;;
   roster)      cmd_roster "$@" ;;
   board)       cmd_board "$@" ;;
+  stop)        cmd_stop "$@" ;;
+  follow)      cmd_follow "$@" ;;
   help|-h|--help) usage ;;
   *) usage >&2; die "unknown command: $cmd" ;;
 esac

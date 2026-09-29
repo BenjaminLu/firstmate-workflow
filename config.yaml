@@ -27,6 +27,9 @@ policy:                 # what every crew round may do, whichever vendor runs it
                         # never a key here.
 
 concurrency: 3          # workers in flight at once
+# host: herdr           # none|herdr|cmux|tmux: a terminal host opens a labelled
+#                       # window that follows each round's log. Rounds run
+#                       # headless either way; unset, the host is detected.
 # rosters:              # the crew is drawn at random once per installation,
 #   workers:            # 24 workers and 24 reviewers, into state/crew/; see
 #     - mira            # bin/fm.sh roster. A list here pins that role's names

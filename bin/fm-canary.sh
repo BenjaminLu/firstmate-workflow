@@ -34,7 +34,10 @@
 #                  the CLI - started=no
 #   ran            started=yes; authenticated=yes when the CLI got past its
 #                  login and answered, no when it said it was not logged in,
-#                  out of quota or off the network; then every probe
+#                  out of quota or off the network; then which login source
+#                  answered (fm-sandbox.sh login-source's tier: claude prints
+#                  crew-token or interactive-fallback, T-126, never the
+#                  login itself), then every probe
 #
 # What counts is what happened, not what the model says happened: the file
 # outside is looked for, the loopback and socket listeners count the
@@ -146,11 +149,11 @@ PY
   printf '%s\n' "$!"
 }
 
-record() {   # record <vendor> <version> <outcome> <why> [started] [authenticated] [exit] [probes json] [own] [blocked] [model_requested] [model]
+record() {   # record <vendor> <version> <outcome> <why> [started] [authenticated] [exit] [probes json] [own] [blocked] [model_requested] [model] [login]
   jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg vendor "$1" --arg version "$2" \
     --arg os "${os:-none}" --arg outcome "$3" --arg why "$4" --arg started "${5:-no}" \
     --arg auth "${6:-no}" --arg exit "${7:-}" --argjson probes "${8:-null}" --arg own "${9:-}" \
-    --arg blocked "${10:-}" --arg model_requested "${11:-}" --arg model "${12:-}" \
+    --arg blocked "${10:-}" --arg model_requested "${11:-}" --arg model "${12:-}" --arg login "${13:-}" \
     '{at:$at, vendor:$vendor, version:$version, sandbox:$os, outcome:$outcome, why:$why,
       started:($started == "yes"), authenticated:($auth == "yes"),
       adapter_exit:(if $exit == "" then null else ($exit | tonumber) end),
@@ -158,7 +161,8 @@ record() {   # record <vendor> <version> <outcome> <why> [started] [authenticate
       refused_hosts:($blocked | split(" ") | map(select(. != ""))),
       model_requested:$model_requested,
       model:(if $model == "" then "unknown" else $model end),
-      model_mismatch:($model_requested != "" and $model != "" and $model != "unknown" and $model != $model_requested)}' >> "$results"
+      model_mismatch:($model_requested != "" and $model != "" and $model != "unknown" and $model != $model_requested)}
+      + (if $login == "" then {} else {login_source:$login} end)' >> "$results"
 }
 
 # config.yaml's model, applied exactly as a worker round would (T-127): this
@@ -177,11 +181,27 @@ for name in ${wanted[@]+"${wanted[@]}"}; do
     continue
   fi
   version="$("$name" --version </dev/null 2>&1 | head -1)"
-  # logged in: where the operator's login is, never the login itself
-  if ! src="$("$ROOT/bin/fm-sandbox.sh" login-source --policy="$policy_all" --vendor="$name" 2>&1)"; then
+  # logged in: where the operator's login is, never the login itself. One
+  # line on stdout, `tier=<primary|fallback> source=<source>`, read from
+  # stdout alone (T-126 round 7): stderr, a warning or a timed-out read,
+  # is only ever the reason a refusal gives. `fallback` only when a
+  # vendor's own crew login was missing and the round fell back to the
+  # operator's interactive one (T-126). For claude that tier is worth a
+  # plainer name than "primary"/"fallback": crew-token or interactive-fallback.
+  if ! src="$("$ROOT/bin/fm-sandbox.sh" login-source --policy="$policy_all" --vendor="$name" 2>"$out/login-source.err")"; then
+    src="$(grep -m1 '^fm-sandbox: ' "$out/login-source.err")"; rm -f "$out/login-source.err"
     printf '%-13s skipped: not logged in (%s)\n' "$name" "${src#fm-sandbox: }"
     record "$name" "$version" skipped "not logged in: ${src#fm-sandbox: }"
     continue
+  fi
+  rm -f "$out/login-source.err"
+  login_tier_name="$(sed -n 's/^tier=\([a-z]*\) source=.*$/\1/p' <<< "$src" | head -1)"
+  login_label="${login_tier_name:-unknown}"
+  if [ "$name" = claude ]; then
+    case "$login_tier_name" in
+      fallback) login_label=interactive-fallback ;;
+      primary)  login_label=crew-token ;;
+    esac
   fi
   d="$(mktemp -d "${TMPDIR:-/tmp}/fm-canary.XXXXXX")" || exit 70
   tree="$d/tree"; mkdir -p "$tree"
@@ -276,7 +296,7 @@ PROMPT
   model_refused_file="$d/model-refused"; : > "$model_refused_file"
   ( unset FM_RUN_DIR FM_CONTEXT_READY FM_ATTEMPT_DIR FM_FINAL_PATH FM_RUN_REVIEW
     FM_POLICY="$policy_all" FM_POLICY_BLOCKED="$d/blocked" FM_ROLE=worker FM_TASK=canary \
-      FM_TRANSPORT=direct FM_ALLOW_DIRECT=1 FM_MODEL="$model_requested" FM_MODEL_REFUSED="$model_refused_file" \
+      FM_TRANSPORT=direct FM_MODEL="$model_requested" FM_MODEL_REFUSED="$model_refused_file" \
       "$adapter" run "$d/prompt" "$tree" "$d/log" </dev/null >/dev/null 2>"$d/stderr" )
   code=$?
   model_reported="$(fm_vendor_model "$d/log" 0)"
@@ -330,7 +350,7 @@ PROMPT
     '{write_outside:$write, read_ssh:$ssh, github:$github, loopback:$loopback, herdr_socket:$socket,
       other_round_tmp:$other, gh_token:$ght, git_credential:$gc, keychain:$keychain, pasteboard:$pasteboard}')"
   record "$name" "$version" "$outcome" "$why" "$started" "$auth" "$code" "$probes" "$own_v" "$blocked" \
-    "$model_requested" "$model_reported"
+    "$model_requested" "$model_reported" "$login_label"
   # T-127: the model beside the verdict - what was asked for and what the
   # CLI itself reported running on, so a captain re-reading a canary run can
   # see a mismatch the way the board does, without opening the record
@@ -338,12 +358,12 @@ PROMPT
   [ "$model_reported" != "$model_requested" ] && [ -n "$model_reported" ] && model_shown="$model_shown (ran on $model_reported)"
   [ -s "$model_refused_file" ] && model_shown="$model_shown, refused: $(cat "$model_refused_file" | tr -d '\n' | cut -c1-120)"
   if [ "$outcome" = refused ]; then
-    printf '%-13s %-28s %-40s refused: started=no  %s\n' "$name" "$(printf '%.28s' "$version")" "$model_shown" "$why"
+    printf '%-13s %-28s %-40s refused: started=no  login=%s  %s\n' "$name" "$(printf '%.28s' "$version")" "$model_shown" "$login_label" "$why"
     sed 's/^/    /' "$d/stderr" | head -3
     failed=1
   else
-    printf '%-13s %-28s %-40s started=%s authenticated=%s exit %-3s write-outside=%s read-ssh=%s github=%s loopback=%s herdr-socket=%s other-round-tmp=%s gh-token=%s git-credential=%s keychain=%s pasteboard=%s own-loopback=%s\n' \
-      "$name" "$(printf '%.28s' "$version")" "$model_shown" "$started" "$auth" "$code" "$write_v" "$ssh_v" "$gh_v" "$lo_v" "$so_v" \
+    printf '%-13s %-28s %-40s started=%s authenticated=%s exit %-3s login=%s write-outside=%s read-ssh=%s github=%s loopback=%s herdr-socket=%s other-round-tmp=%s gh-token=%s git-credential=%s keychain=%s pasteboard=%s own-loopback=%s\n' \
+      "$name" "$(printf '%.28s' "$version")" "$model_shown" "$started" "$auth" "$code" "$login_label" "$write_v" "$ssh_v" "$gh_v" "$lo_v" "$so_v" \
       "$ot_v" "$ght_v" "$gc_v" "$kc_v" "$pb_v" "$own_v"
     [ "$auth" = yes ] || { printf '    not authenticated: %s\n' "$why"; failed=1; }
     # what fm-sandbox said of the round's loopback: the profile it got, and
@@ -482,16 +502,16 @@ destroy_case() {   # destroy_case <fixture-label> <repo> <mode>
   id="$(destroy_task_id "$mode")"
   gh="$(destroy_ghstub "$repo")"
   tree="$repo/repo/state/worktrees/$id"
-  # FM_TRANSPORT=direct: run in this process, not fm-herdr.py's managed
-  # relaunch, which the per-vendor probes above take the same way - this is
-  # a scripted proof, not a session to attach a pane to. Every other FM_*
+  # FM_TRANSPORT=direct: the round opens no window (T-144); it is still the
+  # supervised process group every round is. This is a scripted proof, with
+  # nobody to watch a window. Every other FM_*
   # this shell might carry (it can be running inside a managed round of its
   # own) is unset first, so a hostile round's fixture is never read as an
   # extension of the round driving the canary.
   local scrub=(env) v
   while IFS= read -r v; do scrub+=(-u "$v"); done < <(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p')
   out="$(cd "$repo/repo" \
-    && "${scrub[@]}" HERDR_ENV=0 FM_TRANSPORT=direct FM_ALLOW_DIRECT=1 \
+    && "${scrub[@]}" HERDR_ENV=0 FM_TRANSPORT=direct \
        FM_GH="$gh" FM_HOSTILE_MODE="$mode" FM_MIRROR_INTERVAL=1 \
        FM_HOSTILE_SLEEP_BEFORE=2 FM_HOSTILE_SLEEP_AFTER=2 \
        bin/fm-worker.sh --task "$id" --name "$(destroy_name "$mode")" 2>&1)"; rc=$?

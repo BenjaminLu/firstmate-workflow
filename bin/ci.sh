@@ -13,13 +13,13 @@
 #                        plain `bin/ci.sh` always has); "fast" is shellcheck,
 #                        lint, hygiene, stdin, assertions and dag
 #   --shard i/n          within --stage bash, run only the i-th of n shards
-#                        of tests/*.test.sh, balanced by recorded duration
-#                        (FM_CI_TIMINGS_IN, else each suite's byte size)
+#                        of tests/*.test.sh, balanced by duration in seconds
 #   FM_CI_TIMINGS_IN=path  previous per-suite durations ("path seconds" per
-#                        line) used to balance --shard; a suite missing from
-#                        it, new or old, falls back to its byte size
+#                        line) used to balance --shard; 0 is a real, fast
+#                        duration, and a suite missing from it is estimated
+#                        in seconds from its byte size and the recorded rate
 #   FM_CI_TIMINGS_OUT=path the bash stage writes the durations it observed
-#                        here, in the same format, for a caller to archive
+#                        here, in the same format, to the millisecond
 set -uo pipefail
 
 # Loaded before the option loop touches a flag, so a tree missing the
@@ -194,46 +194,84 @@ fi
 
 # The bash suites, glob order being the order they are reported in.
 suites=(tests/*.test.sh)
-# How long a suite took last time, for --shard to balance by: a line
-# "path seconds" in FM_CI_TIMINGS_IN. A suite that line does not name -
-# new, or the file is absent - falls back to its byte size, the same
-# proxy pool_order below has always used, so a newly added suite still
-# gets a duration and so a deterministic shard.
-ci_suite_duration() {   # ci_suite_duration <suite-path>
-  local p="$1" n=0
-  if [ -n "${FM_CI_TIMINGS_IN:-}" ] && [ -r "$FM_CI_TIMINGS_IN" ]; then
-    n="$(awk -v p="$p" '$1==p{v=$2} END{print v+0}' "$FM_CI_TIMINGS_IN")"
-  fi
-  if [ "$n" -gt 0 ] 2>/dev/null; then
-    printf '%s\n' "$n"
-  else
-    wc -c < "$p" | tr -d ' '
-  fi
+# How long each suite is expected to take, for --shard to balance by, in
+# one unit - seconds - for every suite (T-148). A suite FM_CI_TIMINGS_IN
+# names ("path seconds" per line) takes that value, zero included: a suite
+# recorded at 0 is fast, not unknown. A suite it does not name - new, or
+# the file absent - is estimated in seconds too: its byte size times the
+# median seconds-per-byte of the suites that were recorded. Only when no
+# suite was recorded at all is every estimate its byte size, and then no
+# two units meet in one sort. Mixing them is what put three 10-second
+# suites alone on three shards and the other 31 on the fourth: recorded
+# as 0, read as unknown, and weighed as thousands of "seconds" of bytes.
+# Prints "<estimate> <index> <path> <unit>" per suite, the unit "s", or
+# "B" for that all-bytes case.
+ci_suite_estimates() {
+  local i tin=''
+  if [ -n "${FM_CI_TIMINGS_IN:-}" ] && [ -r "$FM_CI_TIMINGS_IN" ]; then tin="$FM_CI_TIMINGS_IN"; fi
+  for i in "${!suites[@]}"; do
+    printf '%s %s %s\n' "$i" "$(wc -c < "${suites[$i]}" | tr -d ' ')" "${suites[$i]}"
+  done | FM_CI_TIN="$tin" awk '
+    BEGIN {
+      tin = ENVIRON["FM_CI_TIN"]
+      # the last line naming a suite wins; a value that is not a plain
+      # non-negative number is no recording at all
+      if (tin != "") while ((getline line < tin) > 0) {
+        if (split(line, f, " ") >= 2 && f[2] ~ /^[0-9]+(\.[0-9]+)?$/) rec[f[1]] = f[2] + 0
+      }
+    }
+    { idx[NR] = $1; size[NR] = $2 + 0; path[NR] = $3; n = NR }
+    END {
+      k = 0
+      for (r = 1; r <= n; r++) if ((path[r] in rec) && size[r] > 0) rate[++k] = rec[path[r]] / size[r]
+      for (a = 2; a <= k; a++) {
+        v = rate[a]
+        for (b = a - 1; b >= 1 && rate[b] > v; b--) rate[b + 1] = rate[b]
+        rate[b + 1] = v
+      }
+      if (k == 0) med = 1
+      else if (k % 2) med = rate[(k + 1) / 2]
+      else med = (rate[k / 2] + rate[k / 2 + 1]) / 2
+      unit = k ? "s" : "B"
+      for (r = 1; r <= n; r++) {
+        est = (path[r] in rec) ? rec[path[r]] : size[r] * med
+        printf "%.3f %s %s %s\n", est, idx[r], path[r], unit
+      }
+    }'
 }
 # --shard i/n: which of the suites this process runs. Longest-processing-time
 # bin packing - suites taken slowest first, each to whichever of the n
 # buckets is lightest so far - so every suite lands in exactly one bucket
-# and the buckets come out balanced, not just evenly counted. Ties (equal
-# duration, most often every suite falling back to byte size together)
-# break on the suite's own index, so the assignment is the same on every
-# run and every shard agrees on where each suite went.
+# and the buckets come out balanced, not just evenly counted: no bucket
+# ends more than the longest single suite above the mean. Ties (equal
+# estimates) break on the suite's own index, so the assignment is the same
+# on every run and every shard agrees on where each suite went. Prints
+# "i <index>" for each suite of shard <want>, then one "s <summary>" line
+# of what it predicts, so a slow shard, or a suite too long for any split,
+# is visible by name in the job's log.
 shard_suites() {   # shard_suites <want 1..n> <n>
-  local want="$1" total="$2" i t
-  for i in "${!suites[@]}"; do
-    t="${suites[$i]}"
-    printf '%s %s\n' "$(ci_suite_duration "$t")" "$i"
-  done | sort -k1,1nr -k2,2n | awk -v want="$want" -v total="$total" '
+  local want="$1" total="$2"
+  ci_suite_estimates | sort -k1,1nr -k2,2n | awk -v want="$want" -v total="$total" '
     {
-      idx = $2
+      if (NR == 1) { longest = $1; longp = $3; unit = $4 == "s" ? "s" : " bytes" }
       minb = 1
       for (b = 2; b <= total; b++) if (load[b] < load[minb]) minb = b
-      load[minb] += $1
-      if (minb == want) print idx
+      load[minb] += $1; sum += $1
+      if (minb == want) { print "i " $2; count++ }
+    }
+    END {
+      printf "s shard %d/%d: %d suites, predicted %.1f%s; mean %.1f%s; longest suite %s %.1f%s\n", \
+        want, total, count, load[want], unit, sum / total, unit, longp, longest, unit
     }'
 }
 shard_indices=()
 if [ -n "$ci_shard_n" ]; then
-  while IFS= read -r i; do shard_indices+=("$i"); done < <(shard_suites "$ci_shard_i" "$ci_shard_n")
+  while IFS= read -r i; do
+    case "$i" in
+      'i '*) shard_indices+=("${i#i }") ;;
+      's '*) printf 'ci: %s\n' "${i#s }" ;;
+    esac
+  done < <(shard_suites "$ci_shard_i" "$ci_shard_n")
 else
   for i in "${!suites[@]}"; do shard_indices+=("$i"); done
 fi
@@ -257,6 +295,21 @@ pool_order() {
     esac
   done | sort -k1,1nr -k2,2n | cut -d' ' -f2
 }
+# The wall clock in milliseconds, for the suite timings (T-148): whole
+# seconds recorded every 10-second suite as 0 and every 1-second one the
+# same as it. bash 5's EPOCHREALTIME where there is one - its separator
+# follows the locale, so only its digits are kept, always six after the
+# point - else perl's Time::HiRes, which both the runners and macOS carry;
+# whole seconds only when neither is there.
+ci_now_ms() {
+  local us="${EPOCHREALTIME:-}"
+  us="${us//[!0-9]/}"
+  if [ ${#us} -gt 6 ]; then
+    printf '%s\n' "$(( 10#$us / 1000 ))"
+  elif ! perl -MTime::HiRes=time -e 'printf "%d\n", time() * 1000' 2>/dev/null; then
+    printf '%s\n' "$(( $(date +%s) * 1000 ))"
+  fi
+}
 # One suite: the environment the noise check below depends on, standard
 # input closed, and its own log - to a file, never $(...): a suite that
 # starts a server leaves a child holding its output, and a command
@@ -264,12 +317,12 @@ pool_order() {
 # and writes its exit status beside the log, renamed into place so a status
 # file that exists is a whole one.
 run_suite() {   # run_suite <index>
-  local i="$1" c='' t0=''
+  local i="$1" c='' t0='' t1
   trap '[ -z "$c" ] || kill "$c" 2>/dev/null; exit 143' TERM INT HUP
   # Timed only when someone asked for the timings (FM_CI_TIMINGS_OUT): the
   # plain, flag-less run pays for none of this, and is exactly the run it
   # always was.
-  [ -z "${FM_CI_TIMINGS_OUT:-}" ] || t0="$(date +%s)"
+  [ -z "${FM_CI_TIMINGS_OUT:-}" ] || t0="$(ci_now_ms)"
   # The check below reads the shell's OWN messages, and bash localises
   # them: on a zh-TW shell it says 命令未找到 and an English grep
   # matches nothing, which is green for a suite that never ran half
@@ -284,7 +337,11 @@ run_suite() {   # run_suite <index>
   c=$!
   wait "$c"
   printf '%s\n' "$?" > "$ci_tmp/suite.$i.part" && mv "$ci_tmp/suite.$i.part" "$ci_tmp/suite.$i.rc"
-  [ -z "$t0" ] || printf '%s\n' "$(( $(date +%s) - t0 ))" > "$ci_tmp/suite.$i.dur"
+  if [ -n "$t0" ]; then
+    t1="$(ci_now_ms)"
+    [ "$t1" -ge "$t0" ] || t1="$t0"
+    printf '%d.%03d\n' "$(( (t1 - t0) / 1000 ))" "$(( (t1 - t0) % 1000 ))" > "$ci_tmp/suite.$i.dur"
+  fi
 }
 # The pool is a background shell of its own, so the stages that print
 # before the bash suites can do so while they run. bash 3.2 has no
@@ -897,9 +954,11 @@ else
   for i in "${shard_indices[@]}"; do
     t="${suites[$i]}"
     tmp="$ci_tmp/suite.$i.log"
-    if [ -n "${FM_CI_TIMINGS_OUT:-}" ]; then
-      dur="$(cat "$ci_tmp/suite.$i.dur" 2>/dev/null || echo 0)"
-      ci_timings="$ci_timings$t $dur
+    # a suite that never finished has no duration, and is left out rather
+    # than recorded as 0: a recorded 0 now means fast (T-148), and the next
+    # run estimates an absent suite instead
+    if [ -n "${FM_CI_TIMINGS_OUT:-}" ] && [ -s "$ci_tmp/suite.$i.dur" ]; then
+      ci_timings="$ci_timings$t $(cat "$ci_tmp/suite.$i.dur")
 "
     fi
     # no status file is a suite that never finished, which is not a pass
