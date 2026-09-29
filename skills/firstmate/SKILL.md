@@ -250,6 +250,25 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   files to the worker, and pushes with a lease. Exit `75` means the rebuilt
   round was refused before its commit, and nothing was published. Send one
   such round at a time per task.
+- `bin/fm-canary.sh` runs one real round per vendor against the crew's
+  permission policy; run it on the captain's Mac before a merge card for any
+  change to the sandbox or an adapter, and put its output on the pull
+  request. It spends real model calls, so it never runs in CI and workers
+  never run it themselves. It reports which login source each round's
+  claude used, `crew-token` or `interactive-fallback` (`bin/fm-sandbox.sh
+  login-source`'s tier), never the login itself. The operator makes
+  claude's own crew token once, outside any round, with `claude setup-token`
+  (https://code.claude.com/docs/en/authentication - one year, bills to the
+  subscription, model requests only), then keeps it the way T-117 keeps
+  cursor-agent's Cursor key: `security add-generic-password -s
+  firstmate-claude-token -a "$USER" -w` on macOS; off macOS, when
+  `secret-tool` (libsecret) is installed, `secret-tool store
+  --label=firstmate-claude-token service firstmate-claude-token account
+  "$USER"` (T-126 round 2); or, either way, the token alone in
+  `~/.config/firstmate/claude-token` at mode 600. Revoke it at claude.ai,
+  Settings, Claude Code. Without a crew token, claude's round falls back to
+  the operator's own interactive login as before T-126, which the round's
+  log and the board then warn can die whenever that login refreshes.
 
 ## Process rules (2026-09-25)
 

@@ -94,10 +94,22 @@ assert_eq "[\"$(cd /tmp && pwd -P)/claude-$(id -u)\"]" "$(jq -c .vendors.claude.
   "claude's temp directory under /tmp is its one there, for this user"
 assert_eq "[]" "$(jq -c '[.vendors | to_entries[] | select(.key != "claude") | .value.tmp[]]' "$w")" \
   "and no other vendor has one"
-assert_eq "Claude Code-credentials $me env:CLAUDE_CODE_OAUTH_TOKEN claudeAiOauth.accessToken" \
-  "$(jq -r '.vendors.claude.login | "\(.keychain[0].service) \(.keychain[0].account) \(.to) \(.field)"' "$w")" \
-  "claude's login is its own keychain item, handed in as an access token"
-assert_eq "$home/.claude/.credentials.json" "$(jq -r '.vendors.claude.login.file[0]' "$w")" \
+# claude (T-126): the crew's own long-lived token first - a keychain item
+# of fm's own, or a file only the operator may read - handed in the same
+# way cursor-agent's Cursor key is; only its `fallback` names the operator's
+# own interactive login, the way claude's login worked before T-126
+assert_eq "firstmate-claude-token $me env:CLAUDE_CODE_OAUTH_TOKEN true" \
+  "$(jq -r '.vendors.claude.login | "\(.keychain[0].service) \(.keychain[0].account) \(.to) \(.private)"' "$w")" \
+  "claude's login is the crew's own token, handed in as an access token"
+assert_eq "firstmate-claude-token $me" \
+  "$(jq -r '.vendors.claude.login | "\(.secret[0].service) \(.secret[0].account)"' "$w")" \
+  "or, off macOS, the same item through libsecret (T-126 round 2)"
+assert_eq "$home/.config/firstmate/claude-token" "$(jq -r '.vendors.claude.login.file[0]' "$w")" \
+  "or a file only the operator may read where there is neither"
+assert_eq "Claude Code-credentials $me claudeAiOauth.accessToken" \
+  "$(jq -r '.vendors.claude.login.fallback | "\(.keychain[0].service) \(.keychain[0].account) \(.field)"' "$w")" \
+  "and only with none of those, its fallback is the operator's own interactive login"
+assert_eq "$home/.claude/.credentials.json" "$(jq -r '.vendors.claude.login.fallback.file[0]' "$w")" \
   "or its credentials file where there is no keychain"
 # cursor-agent reads `agent login`'s token through the keychain API, which
 # no round reaches (the canary, 2026-09-26), so its round signs in with a
@@ -113,8 +125,9 @@ assert_eq "[]" "$(jq -c '[.vendors."cursor-agent".login | (.keychain // [])[].se
 assert_eq '[]' "$(jq -c '[.vendors[].login | select(.to) | .to | select(startswith("env:") | not)]' "$w")" \
   "every login read outside the round goes in as a variable or a copy, nothing served from inside it"
 # no vendor's login is anyone else's: gh's token, git's credential helper
-assert_eq "[]" "$(jq -c '[.vendors[].login.keychain // [] | .[].service | select(test("^gh:|github|git|refresh"; "i"))]' "$w")" \
-  "no login names gh's, git's or a refresh token's keychain item"
+assert_eq "[]" "$(jq -c '[.vendors[].login | (.keychain // []) + (.fallback.keychain // []) | .[].service
+    | select(test("^gh:|github|git|refresh"; "i"))]' "$w")" \
+  "no login, or fallback login, names gh's, git's or a refresh token's keychain item"
 
 # the layers: top-level, then the project, flat keys then the role's own
 cfg='vendor: mock
@@ -880,6 +893,7 @@ cat > "$t/kc/security" <<S
 printf '%s\n' "\$*" >> "$t/kc/calls"
 s=''; while [ \$# -gt 0 ]; do [ "\$1" = -s ] && s="\${2-}"; shift; done
 case "\$s" in
+  firstmate-claude-token) printf 'crew-claude-token\n' ;;
   'Claude Code-credentials') cat "$t/kc/claude" ;;
   firstmate-cursor-api-key) printf 'key-cursor-crew\n' ;;
   cursor-access-token) printf 'at-cursor\n' ;;
@@ -889,6 +903,49 @@ case "\$s" in
 esac
 S
 chmod +x "$t/kc/security"
+# A second stand-in exactly like the operator's, but as if the crew had
+# never made its own claude token (T-126): every other item answers the
+# same way, so a test using this one exercises claude's fallback tier.
+sed "/firstmate-claude-token)/d" "$t/kc/security" > "$t/kc/security-nocrew"
+chmod +x "$t/kc/security-nocrew"
+# A stand-in for secret-tool(1), libsecret's CLI - the keychain's rough
+# equivalent off macOS (T-126 round 2). Real secret-tool prints the secret
+# with no trailing newline on success and exits 0; nothing on stdout and a
+# non-zero exit when no item matches.
+cat > "$t/kc/secret-tool" <<S
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$t/kc/secret-calls"
+shift  # drop 'lookup'
+svc=''; acct=''
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    service) svc="\${2-}"; shift 2 ;;
+    account) acct="\${2-}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+case "\$svc:\$acct" in
+  firstmate-claude-token:*) printf '%s' 'crew-claude-secret' ;;
+  *) exit 1 ;;
+esac
+S
+chmod +x "$t/kc/secret-tool"
+# The default FM_SECRET_TOOL for every claude test below that does not name
+# its own (T-126 round 4): a stub of fm's own, never the host's real
+# secret-tool(1). CI's runner has one on PATH, and secret_read()'s own
+# default is the absolute path '/usr/bin/secret-tool' - naming no
+# FM_SECRET_TOOL at all here would reach it for real, outside any sandbox,
+# with no D-Bus session to answer it, which read exactly as "no crew token"
+# to a run on one machine and something else (an error line, a long
+# timeout) on another. This stub answers like secret-tool always does -
+# nothing on stdout, exit 1 - and records every call, so a test can assert
+# fm's own stub, not the host's, was asked.
+cat > "$t/kc/secret-tool-guard" <<S
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$t/kc/secret-tool-guard-calls"
+exit 1
+S
+chmod +x "$t/kc/secret-tool-guard"
 # What the round sees of its login. It asks no keychain itself: the
 # stand-in sandbox enforces nothing, and on a Mac the security(1) it would
 # find is the real one, holding the real tokens. That the round cannot
@@ -908,6 +965,18 @@ chmod +x "$t/login.sh"
 # a PATH holding only what the command needs
 lpath="$t/psbin:/usr/bin:/bin"
 command -v python3 >/dev/null && lpath="$t/psbin:$(dirname "$(command -v python3)"):/usr/bin:/bin"
+# The board warning (T-126 round 2): a fallback tier is worth a line on the
+# board, not only in the round's log. fm-sandbox.sh posts it through
+# fm_herdr_emit_status (bin/fm-config.sh) and bin/fm-herdr.py under FM_ROOT
+# - the same path fm-worker.sh's and fm-review.sh's own mid-run activity
+# takes, and the reason a direct `fm-emit.sh --actor` call is never made
+# here (tests/traps.test.sh) - when the caller carries FM_ROOT/FM_TASK/
+# FM_ACTOR - fm_identity's own exports, present for a real worker or
+# reviewer round; fm-canary.sh's own probe rounds set none of those and so
+# get no board write at all (asserted below too).
+board="$t/board"
+mkdir -p "$board/bin"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-herdr.py" "$board/bin/"
 kc() {   # kc <mode> <os> <vendor> [env...] -> exit code; the round's view in $t/login.out
   local mode="$1" os_="$2" v="$3" tool="$t/bin/sandbox-exec"
   shift 3
@@ -919,21 +988,130 @@ kc() {   # kc <mode> <os> <vendor> [env...] -> exit code; the round's view in $t
   # directory on the round's PATH, not the round's own business. $kctmp
   # is the caller's own (T-123 round 13); kc() only clears and recreates it.
   rm -rf "$kctmp"; mkdir -p "$kctmp"
-  env FM_SANDBOX_OS="$os_" FM_SANDBOX_TOOL="$tool" FM_KEYCHAIN_TOOL="$t/kc/security" PATH="$lpath" "$@" \
+  # FM_SECRET_TOOL defaults to fm's own stub, never the host's real
+  # secret-tool(1) (T-126 round 4); a caller naming its own in "$@" comes
+  # after and wins, the way every later env(1) assignment of the same name
+  # does.
+  env FM_SANDBOX_OS="$os_" FM_SANDBOX_TOOL="$tool" FM_KEYCHAIN_TOOL="$t/kc/security" \
+    FM_SECRET_TOOL="$t/kc/secret-tool-guard" PATH="$lpath" "$@" \
     "$SB" "$mode" --policy="$t/worker.json" --root="$root" --vendor="$v" --ctl="$t/ctl" --tmp="$kctmp" --started="$t/started" \
     -- "$t/login.sh" "$t/login.out" </dev/null >/dev/null 2>"$t/login.err"
   echo $?
 }
 pol worker 'vendor: mock
 '
-# claude: its own item's access token, as a variable, and never the refresh token
-assert_eq "0" "$(kc run darwin claude)" "claude's round starts on macOS with the operator's own login"
+# claude (T-126): the crew's own long-lived token is tried first, never
+# the operator's interactive login while one exists
+rm -rf "$board/state"
+assert_eq "0" "$(kc run darwin claude FM_ROOT="$board" FM_TASK=T-board FM_ACTOR=worker-board)" \
+  "claude's round starts on macOS with the crew's own token"
 lo="$(cat "$t/login.out" 2>/dev/null)"
-assert_contains "$lo" "token=at-claude" "handed in as CLAUDE_CODE_OAUTH_TOKEN, the access token only"
+assert_contains "$lo" "token=crew-claude-token" "handed in as CLAUDE_CODE_OAUTH_TOKEN"
+assert_lacks "$lo" "at-claude" "never the operator's interactive login while a crew token exists"
 assert_lacks "$lo" "rt-claude-secret" "the refresh token never enters the round"
-assert_eq "find-generic-password -s Claude Code-credentials -a $me -w" "$(cat "$t/kc/calls" 2>/dev/null)" \
-  "and fm read one item of the keychain: claude's"
+assert_eq "1" "$(grep -c '^CLAUDE_CODE_OAUTH_TOKEN=' <<< "$lo")" \
+  "exactly one CLAUDE_CODE_OAUTH_TOKEN in the round's environment"
+assert_contains "$lo" "CLAUDE_CODE_OAUTH_TOKEN=crew-claude-token" "holding exactly the crew token"
+assert_eq "find-generic-password -s firstmate-claude-token -a $me -w" "$(cat "$t/kc/calls" 2>/dev/null)" \
+  "and fm read one item of the keychain: the crew's own"
 assert_eq "" "$(ls -A "$t/ctl" 2>/dev/null)" "nothing of the login is left behind"
+assert_lacks "$(cat "$t/login.err" 2>/dev/null)" "has no crew token" \
+  "and no fallback warning when the crew token answers"
+assert_eq "" "$(cat "$board/state/events.jsonl" 2>/dev/null)" \
+  "and no board event either, even with FM_ROOT/FM_TASK/FM_ACTOR set, when the crew token answers"
+
+# claude with no crew token anywhere (T-126): falls back to the operator's
+# own interactive login, on macOS the way it always has, but warns - in the
+# round's log AND on the board (en and zh-TW), when the caller carries
+# FM_ROOT/FM_TASK/FM_ACTOR (fm_identity's own exports)
+mkdir -p "$t/chome/.config/firstmate"
+( export HOME="$t/chome"; pol worker 'vendor: mock
+' )
+rm -rf "$board/state"
+rm -f "$t/kc/secret-tool-guard-calls"
+assert_eq "0" "$(kc run darwin claude FM_KEYCHAIN_TOOL="$t/kc/security-nocrew" \
+    FM_ROOT="$board" FM_TASK=T-board FM_ACTOR=worker-board)" \
+  "with no crew token, claude's round still starts on the interactive login"
+lo="$(cat "$t/login.out" 2>/dev/null)"
+assert_contains "$lo" "token=at-claude" "handed in the same way as before T-126"
+assert_contains "$(cat "$t/login.err")" "has no crew token" "and the fallback warns, in the round's log"
+assert_contains "$(cat "$t/login.err")" "can be revoked when that login refreshes" "naming the risk"
+assert_contains "$(cat "$t/login.err")" "claude setup-token" "and how to make one, so the fallback warning is actionable"
+assert_contains "$(cat "$t/kc/secret-tool-guard-calls" 2>/dev/null)" "firstmate-claude-token" \
+  "asked fm's own secret-tool stand-in, this test's default, never the host's real one"
+warn_ev="$(jq -c 'select(.type=="crew_status" and .task=="T-board" and .actor=="worker-board")' \
+  "$board/state/events.jsonl" 2>/dev/null | tail -1)"
+assert_eq "true" "$(jq -r '. != null' <<< "${warn_ev:-null}")" "and it also posts a crew_status event to the board"
+assert_eq "true" "$(jq -r '.data.activity.en // "" | test("no crew token")' <<< "${warn_ev:-null}")" \
+  "carrying the en warning"
+assert_eq "true" "$(jq -r '(.data.activity."zh-TW" // "") | test("\\S")' <<< "${warn_ev:-null}")" \
+  "and a non-empty zh-TW translation of it"
+assert_eq "true" "$(jq -r '(.summary.en // "") | test("no crew token")' <<< "${warn_ev:-null}")" \
+  "in the event's own summary too (en)"
+assert_eq "true" "$(jq -r '(.summary."zh-TW" // "") | test("\\S")' <<< "${warn_ev:-null}")" \
+  "and (zh-TW)"
+
+# fm-canary.sh's own probe rounds set no FM_ROOT/FM_TASK/FM_ACTOR (T-126
+# round 2): the warning still reaches the round's log, but posting to a
+# board that names no run is a no-op, not a failure
+rm -rf "$board/state"
+assert_eq "0" "$(kc run darwin claude FM_KEYCHAIN_TOOL="$t/kc/security-nocrew")" \
+  "and the round still starts with none of those set"
+assert_contains "$(cat "$t/login.err")" "has no crew token" "still warning in the log"
+assert_fail "test -e '$board/state/events.jsonl'" "but posting nothing to any board"
+
+# the crew token kept as a file, chosen when the keychain has none of it (T-126)
+printf 'crew-file-token\n' > "$t/chome/.config/firstmate/claude-token"
+chmod 600 "$t/chome/.config/firstmate/claude-token"
+assert_eq "0" "$(kc run darwin claude FM_KEYCHAIN_TOOL="$t/kc/security-nocrew")" \
+  "the 0600 crew token file is chosen when the keychain has none"
+lo="$(cat "$t/login.out" 2>/dev/null)"
+assert_contains "$lo" "token=crew-file-token" "handed in as CLAUDE_CODE_OAUTH_TOKEN"
+assert_lacks "$lo" "at-claude" "never the interactive login while the crew file answers"
+assert_lacks "$(cat "$t/login.err" 2>/dev/null)" "has no crew token" \
+  "and no fallback warning when the crew file answers"
+
+# a crew token file others can read is refused outright - never silently
+# downgraded to the weaker interactive login (T-126)
+chmod 644 "$t/chome/.config/firstmate/claude-token"
+assert_eq "77" "$(kc run darwin claude FM_KEYCHAIN_TOOL="$t/kc/security-nocrew")" \
+  "a 0644 crew token file refuses the round"
+assert_contains "$(cat "$t/login.err")" "chmod 600" "and says what to do"
+assert_fail "test -e '$t/login.out'" "and the command never starts"
+
+# claude on Linux (T-126 round 2): there is no keychain there, so the
+# crew's own libsecret item - secret-tool(1) - is tried next, before the
+# file; even a file the operator left readable by others (still 0644 from
+# just above) is never reached while libsecret answers
+assert_eq "0" "$(kc run linux claude FM_SECRET_TOOL="$t/kc/secret-tool")" \
+  "claude's round starts on Linux with the crew's libsecret item"
+lo="$(cat "$t/login.out" 2>/dev/null)"
+assert_contains "$lo" "token=crew-claude-secret" "handed in as CLAUDE_CODE_OAUTH_TOKEN"
+assert_eq "lookup service firstmate-claude-token account $me" "$(cat "$t/kc/secret-calls" 2>/dev/null)" \
+  "and fm read one item of libsecret: the crew's own"
+assert_lacks "$(cat "$t/login.err" 2>/dev/null)" "has no crew token" \
+  "and no fallback warning when secret-tool answers"
+rm -f "$t/kc/secret-calls"
+
+# secret-tool's own absence is skipped, not refused: the file tier is
+# reached next, and refused on its own terms (still 0644)
+assert_eq "77" "$(kc run linux claude FM_SECRET_TOOL="$t/no-such-secret-tool")" \
+  "with no secret-tool on the round's PATH, the 0644 crew file is reached next and refuses the round"
+assert_contains "$(cat "$t/login.err")" "chmod 600" "and says what to do"
+assert_fail "test -e '$t/login.out'" "and the command never starts"
+
+# a working file behind a working secret-tool: libsecret still wins
+chmod 600 "$t/chome/.config/firstmate/claude-token"
+assert_eq "0" "$(kc run linux claude FM_SECRET_TOOL="$t/kc/secret-tool")" \
+  "libsecret is chosen over a working crew file too"
+lo="$(cat "$t/login.out" 2>/dev/null)"
+assert_contains "$lo" "token=crew-claude-secret" "so the secret-tool item answers"
+assert_lacks "$lo" "crew-file-token" "and never the file while libsecret answers"
+rm -f "$t/kc/secret-calls"
+
+rm -rf "$t/chome"
+pol worker 'vendor: mock
+'
 # cursor-agent (round 6): the canary on 2026-09-26 showed cursor-agent never
 # asking a security(1) on its PATH for `agent login`'s token - it reads the
 # keychain through the API, which no round reaches - so its round signs in
@@ -973,8 +1151,11 @@ assert_eq "" "$(cat "$t/kc/calls" 2>/dev/null)" "and the keychain is not read"
 past=$(( ($(date +%s) - 60) * 1000 ))
 cp "$t/kc/claude" "$t/kc/claude.good"
 printf '{"claudeAiOauth":{"accessToken":"at-old","refreshToken":"rt","expiresAt":%s}}' "$past" > "$t/kc/claude"
-assert_eq "77" "$(kc run darwin claude)" "an expired claude login refuses the round"
+assert_eq "77" "$(kc run darwin claude FM_KEYCHAIN_TOOL="$t/kc/security-nocrew")" \
+  "an expired claude login refuses the round, with no crew token to fall back to first"
 assert_contains "$(cat "$t/login.err")" "has expired" "and says so"
+assert_contains "$(cat "$t/login.err")" "claude setup-token" \
+  "and, since the crew's own tier has a hint, how to avoid this next time"
 assert_fail "test -e '$t/login.out'" "and the command never starts"
 assert_eq "" "$(cat "$t/started" 2>/dev/null)" "and --started says it did not"
 cp "$t/kc/claude.good" "$t/kc/claude"
@@ -1013,6 +1194,8 @@ assert_eq "0" "$(kc run linux claude)" "on Linux claude's round starts with its 
 assert_contains "$(cat "$t/login.out" 2>/dev/null)" "token=at-claude" "its access token handed in the same way"
 assert_eq "" "$(cat "$t/kc/calls" 2>/dev/null)" "and no keychain asked"
 assert_lacks "$(cat "$t/bwrap.args" 2>/dev/null)" "$t/lhome/.claude" "and the file itself not mounted in the round"
+# with no crew token file either (T-126), this is the fallback tier, so it warns
+assert_contains "$(cat "$t/login.err")" "has no crew token" "and the fallback warns, in the round's log (Linux)"
 # cursor-agent off macOS: the crew's key from fm's file, which must be the
 # operator's alone; agent login's own file is never read
 assert_eq "77" "$(kc run linux cursor-agent)" "a crew Cursor key file others can read refuses the round"
@@ -1069,14 +1252,35 @@ pol worker 'vendor: mock
 '
 src="$(FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" FM_KEYCHAIN_TOOL="$t/kc/security" \
   "$SB" login-source --policy="$t/worker.json" --vendor=claude 2>&1)"
-assert_eq "keychain:Claude Code-credentials" "$src" "login-source names where claude's login is"
-assert_lacks "$src" "at-claude" "and never prints it"
+assert_eq "keychain:firstmate-claude-token
+primary" "$src" "login-source names where claude's login is, and that it is the crew's own (T-126)"
+assert_lacks "$src" "crew-claude-token" "and never prints it"
+# off macOS, with no keychain, login-source names the libsecret item instead
+# (T-126 round 2)
+src="$(FM_SANDBOX_OS=linux FM_SECRET_TOOL="$t/kc/secret-tool" \
+  "$SB" login-source --policy="$t/worker.json" --vendor=claude 2>&1)"
+assert_eq "secret:firstmate-claude-token
+primary" "$src" "and, on Linux, that it is the crew's libsecret item"
+assert_lacks "$src" "crew-claude-secret" "and never prints it either"
+# with no crew token, login-source says the fallback tier answered instead.
+# FM_SECRET_TOOL is fm's own stub, never left to the host's real
+# secret-tool(1) (T-126 round 4): the crew keychain item is absent here, so
+# login_tier tries the secret tier next.
+rm -f "$t/kc/secret-tool-guard-calls"
+src="$(FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" FM_KEYCHAIN_TOOL="$t/kc/security-nocrew" \
+  FM_SECRET_TOOL="$t/kc/secret-tool-guard" \
+  "$SB" login-source --policy="$t/worker.json" --vendor=claude 2>&1)"
+assert_eq "keychain:Claude Code-credentials
+fallback" "$src" "and that a fallback tier answered when there is no crew token"
+assert_lacks "$src" "at-claude" "and never prints it either"
+assert_contains "$(cat "$t/kc/secret-tool-guard-calls" 2>/dev/null)" "firstmate-claude-token" \
+  "and fm's own secret-tool stand-in answered here too, never the host's"
 FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" FM_KEYCHAIN_TOOL="$t/no-such-security" \
   "$SB" login-source --policy="$t/nohome.json" --vendor=cursor-agent >/dev/null 2>&1
 assert_eq "77" "$?" "and says 77 when the operator is not logged in"
 # plain, the operator's hatch: every vendor still gets its login
-assert_eq "0" "$(kc plain darwin claude)" "under the hatch claude's round starts"
-assert_contains "$(cat "$t/login.out" 2>/dev/null)" "token=at-claude" "with its login handed in"
+assert_eq "0" "$(kc plain darwin claude)" "under the hatch claude's round starts, with the crew's own token"
+assert_contains "$(cat "$t/login.out" 2>/dev/null)" "token=crew-claude-token" "with its login handed in"
 assert_contains "$(cat "$t/login.out" 2>/dev/null)" "FM_IN_ROUND=1" "and marked a round"
 assert_eq "0" "$(kc plain darwin cursor-agent)" "and cursor-agent's"
 assert_contains "$(cat "$t/login.out" 2>/dev/null)" "cursorkey=key-cursor-crew" "with the crew's Cursor key"

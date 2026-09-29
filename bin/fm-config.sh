@@ -370,7 +370,13 @@ NEVER_READ = ['~/.ssh', '~/.gnupg', '~/.netrc', '~/.git-credentials', '~/.config
 #            keychain  generic-password items, by service and account,
 #                      read on macOS with security(1); the keychain itself
 #                      stays out of every round's reach
-#            file      files read when no keychain item is there
+#            secret    libsecret items, by service and account, read with
+#                      secret-tool(1) when it is on the operator's PATH -
+#                      the keychain's rough equivalent off macOS (T-126);
+#                      tried only when no keychain item answered, and
+#                      skipped, not refused, when secret-tool is absent
+#            file      files read when neither a keychain nor a secret
+#                      item is there
 #            private   the file must be the operator's alone (no group or
 #                      other bits), or it is no login
 #            field     the JSON field of the value that is the token; none,
@@ -388,6 +394,20 @@ NEVER_READ = ['~/.ssh', '~/.gnupg', '~/.netrc', '~/.git-credentials', '~/.config
 #                      the CLI at (T-117 round 2)
 #            drop      the JSON fields of that file that are its refresh
 #                      token, emptied in the copy
+#            fallback  a second tier, tried only when this one names
+#                      nothing at all - no keychain item, no file - never
+#                      when it is refused for a reason (a locked-down
+#                      file, an expired or malformed token, which stop the
+#                      round rather than quietly trying something weaker).
+#                      Its own keychain/file/field/expires/private, same
+#                      meaning; it shares this tier's `to`. Used, it warns
+#                      (T-126): claude's round has no crew token of its
+#                      own and so signs in with the operator's own
+#                      interactive login instead, which that operator's
+#                      own Claude sessions can revoke out from under a
+#                      round still holding it by refreshing their login -
+#                      exactly what killed T-125's worker and T-123's
+#                      reviewer on 2026-09-27.
 #          Only an access token is handed in, never a refresh token: a
 #          round that refreshed a login would rotate the operator's out
 #          from under them, and one that could not write the refreshed
@@ -400,15 +420,35 @@ NEVER_READ = ['~/.ssh', '~/.gnupg', '~/.netrc', '~/.git-credentials', '~/.config
 VENDORS = {
     # A round's claude has a config directory of its own (CLAUDE_CONFIG_DIR,
     # in the round's temp directory), so ~/.claude and ~/.claude.json are
-    # not opened at all; its login is the access token of the one the
-    # operator uses - the keychain item on macOS, the credentials file
-    # elsewhere - handed in as CLAUDE_CODE_OAUTH_TOKEN
+    # not opened at all. Its login (T-126) is, in order: a
+    # CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY already in the
+    # operator's environment, used as is; else the crew's own long-lived
+    # token, made once with `claude setup-token`
+    # (https://code.claude.com/docs/en/authentication) and kept the way
+    # T-117 keeps cursor-agent's Cursor key - a keychain item of fm's own
+    # on macOS, a libsecret item of fm's own where secret-tool is present
+    # (Linux, T-126 round 2), else a file only the operator can read; only
+    # when none of those exists does it fall back to the access token of
+    # the operator's own interactive login, with a warning (see `fallback`
+    # above) that this can die when that login refreshes.
     'claude': dict(auth=[], state=[], tmp=['/tmp/claude-{uid}'],
-                   login=dict(keychain=[dict(service='Claude Code-credentials', account='{user}')],
-                              file=['~/.claude/.credentials.json'],
-                              field='claudeAiOauth.accessToken', expires='claudeAiOauth.expiresAt',
+                   login=dict(keychain=[dict(service='firstmate-claude-token', account='{user}')],
+                              secret=[dict(service='firstmate-claude-token', account='{user}')],
+                              file=['~/.config/firstmate/claude-token'], private=True,
                               given=['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'],
-                              to='env:CLAUDE_CODE_OAUTH_TOKEN'),
+                              to='env:CLAUDE_CODE_OAUTH_TOKEN',
+                              hint='make a long-lived crew token (claude setup-token; one year, model '
+                                   'requests only, https://code.claude.com/docs/en/authentication) and keep '
+                                   'it for the crew once, outside any round: security add-generic-password '
+                                   '-s firstmate-claude-token -a "$USER" -w on macOS (it asks for the token), '
+                                   'secret-tool store --label=firstmate-claude-token service '
+                                   'firstmate-claude-token account "$USER" on Linux with libsecret, or write '
+                                   'it to ~/.config/firstmate/claude-token with mode 600; revoke it at '
+                                   'claude.ai, Settings, Claude Code',
+                              fallback=dict(keychain=[dict(service='Claude Code-credentials', account='{user}')],
+                                            file=['~/.claude/.credentials.json'],
+                                            field='claudeAiOauth.accessToken',
+                                            expires='claudeAiOauth.expiresAt')),
                    hosts=['anthropic.com', 'claude.ai']),
     # codex's login file holds its refresh token beside the access token.
     # The round's CODEX_HOME is its own, and holds a copy without it.
@@ -550,7 +590,17 @@ def vendor_of(d, engine):
     if login:
         login['keychain'] = [dict(service=k['service'], account=operator(k['account']))
                              for k in login.get('keychain', [])]
+        login['secret'] = [dict(service=k['service'], account=operator(k['account']))
+                           for k in login.get('secret', [])]
         login['file'] = [expand(p, engine) for p in login.get('file', [])]
+        if login.get('fallback'):
+            fallback = dict(login['fallback'])
+            fallback['keychain'] = [dict(service=k['service'], account=operator(k['account']))
+                                    for k in fallback.get('keychain', [])]
+            fallback['secret'] = [dict(service=k['service'], account=operator(k['account']))
+                                  for k in fallback.get('secret', [])]
+            fallback['file'] = [expand(p, engine) for p in fallback.get('file', [])]
+            login['fallback'] = fallback
     return dict(auth=[expand(p, engine) for p in d['auth']],
                 state=[expand(p, engine) for p in d['state']],
                 tmp=[expand(p, engine) for p in d['tmp']],

@@ -14,9 +14,12 @@
 #   fm-sandbox.sh decide  --policy=<file> [--vendor=<name>] <host>
 #       -> allow or deny, and why: the rule the round's proxy applies
 #   fm-sandbox.sh login-source --policy=<file> --vendor=<name>
-#       -> where the vendor's login would come from (keychain:<service>,
-#          file:<path>, env:<name>, auth:<path>), never the login itself;
-#          exit 77 when the operator is not logged in to it
+#       -> two lines: where the vendor's login would come from (keychain:<service>,
+#          file:<path>, env:<name>, auth:<path>), never the login itself; then
+#          `primary` or `fallback` - `fallback` only when a vendor's `fallback`
+#          login tier answered because its primary one named nothing at all
+#          (T-126: claude's own crew token vs. the operator's interactive
+#          login). exit 77 when the operator is not logged in to it
 #   fm-sandbox.sh run     --policy=<file> --root=<dir> [--tmp=<dir>] [--write=<dir>]... [--vendor=<name>]
 #                         [--blocked=<file>] [--started=<file>] [--ctl=<dir>] -- <command> [args...]
 #   fm-sandbox.sh plain   --policy=<file> [--tmp=<dir>] [--vendor=<name>] [--started=<file>] [--ctl=<dir>]
@@ -85,12 +88,20 @@
 # token. A vendor whose login is not there refuses the round with 77 before
 # the sandbox starts, which the adapter counts as unavailable.
 #
+# Off macOS a crew token names no keychain, so a `secret` item is tried
+# instead (T-126 round 2): libsecret through secret-tool(1), the same shape
+# as the keychain - service and account, never a search - read only when
+# the tool is on the operator's PATH; absent, it is skipped, not refused,
+# and the file tier is tried next.
+#
 # What neither can name: a connection that ignores the proxy variables is
 # refused by the OS, which sees an address or nothing at all, not a host.
 #
 # FM_SANDBOX_OS and FM_SANDBOX_TOOL name the platform and the sandbox binary,
-# FM_KEYCHAIN_TOOL the security(1) that reads the operator's keychain, for
-# the suite, which cannot run a real one on every runner.
+# FM_KEYCHAIN_TOOL the security(1) that reads the operator's keychain,
+# FM_SECRET_TOOL the secret-tool(1) that reads a libsecret item (T-126,
+# Linux's rough equivalent of the keychain) for the suite, which cannot run
+# a real one on every runner.
 #
 # Flags are --name=value: this script takes no `shift 2`.
 set -uo pipefail
@@ -100,6 +111,41 @@ exec 3<&0
 exec < /dev/null
 
 say() { printf 'fm-sandbox: %s\n' "$*" >&2; }
+
+# fm_herdr_emit_status, best-effort only: fm-sandbox.sh runs standalone in
+# every other mode, so a missing or unreadable fm-config.sh degrades the
+# board warning below, not the round.
+_fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
+# shellcheck source=bin/fm-config.sh
+[ -r "$_fm_lib" ] && . "$_fm_lib"
+
+# A login fallback (T-126) is worth a line on the board, not only in the
+# round's log: `login`'s stderr already lands there through whichever
+# adapter piped it in, but the crew is not meant to have to read a
+# transcript to learn its round is one login refresh away from dying.
+# fm-sandbox.sh runs outside the round, on the caller's own identity
+# (fm_identity exports FM_ROOT, FM_TASK, FM_ACTOR before any adapter
+# starts), so it can say so itself; best effort only, since fm-canary.sh's
+# own probe rounds set none of these and are meant to stay off the board.
+#
+# Posted through fm_herdr_emit_status (bin/fm-config.sh), never a direct
+# `fm-emit.sh --actor "$FM_ACTOR" --task ...` call here: tests/traps.test.sh
+# boards a crewman for every script that emits under an actor of its own
+# and has no `trap finished EXIT` to say when that actor leaves. This
+# script is a helper an adapter's round calls many times over, never the
+# one thing that owns a round's whole lifecycle - that is fm-worker.sh's
+# and fm-review.sh's own `trap finished EXIT` - so it must not look like a
+# lifecycle emitter to that sweep, the same reason fm_herdr_emit_status
+# itself uses equals-form opts against fm-herdr.py rather than a bare
+# `fm-emit.sh --actor` (see the comment there).
+fm_sandbox_board_warn() {   # fm_sandbox_board_warn <vendor> <en>
+  local vendor="$1" en="$2" root tw
+  root="${FM_ROOT:-}"
+  [ -n "$root" ] && [ -n "${FM_TASK:-}" ] && [ -n "${FM_ACTOR:-}" ] || return 0
+  declare -F fm_herdr_emit_status >/dev/null 2>&1 || return 0
+  tw="${vendor} 沒有自己的 crew token，改用操作者本人的互動式登入；該登入刷新時，本回合可能因此中斷"
+  fm_herdr_emit_status "$root" "$FM_ACTOR" "$FM_TASK" "$en" "$tw" >/dev/null 2>&1 </dev/null || true
+}
 
 host_os() {
   local os="${FM_SANDBOX_OS:-}"
@@ -409,19 +455,32 @@ def keychain_read(service, account):
     return got.stdout.rstrip('\n') or None
 
 
-def login_of(p, vendor, os_):
-    """-> (source, token, item) or (None, why, None). The operator's login
-    for <vendor>, read here, outside the round."""
-    own = p['vendors'].get(vendor, {})
-    spec = own.get('login') or {}
-    if not spec:
-        for a in own.get('auth', []):
-            if os.path.isfile(a):
-                return 'auth:' + a, None, None
-        return None, 'no login file (%s)' % (', '.join(own.get('auth', [])) or 'none named'), None
-    for name in spec.get('given', []):
-        if os.environ.get(name):
-            return 'env:' + name, None, None
+def secret_read(service, account):
+    """One libsecret item, by service and account, through secret-tool(1) -
+    the keychain's rough equivalent off macOS (T-126). Never a search, never
+    another item. secret-tool absent or erroring reads as no item, not a
+    refusal: a tier this names is tried, not required."""
+    tool = os.environ.get('FM_SECRET_TOOL') or '/usr/bin/secret-tool'
+    try:
+        got = subprocess.run([tool, 'lookup', 'service', service, 'account', account],
+                             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        print("fm-sandbox: reading the secret-tool item '%s' timed out" % service, file=sys.stderr)
+        return None
+    except OSError:
+        return None
+    if got.returncode != 0:
+        return None
+    return got.stdout.rstrip('\n') or None
+
+
+def login_tier(vendor, spec, os_):
+    """One tier of a vendor's login (a primary or `fallback` block) ->
+    (source, token, item, absent). absent is True only when this tier
+    names nothing at all - no keychain item, no secret-tool item, no file -
+    which is the one case a caller may try another tier for; anything else
+    (a locked-down file, an expired or malformed token) is a specific
+    refusal and is never silently downgraded to a weaker login."""
     tried = []
     found = []
     if os_ == 'darwin':
@@ -432,11 +491,20 @@ def login_of(p, vendor, os_):
                 found.append(('keychain:' + item['service'], value, item))
                 break
     if not found:
+        # libsecret, off macOS's own keychain (T-126 round 2): tried only
+        # when the tool is there at all - its absence is not a refusal
+        for item in spec.get('secret', []):
+            tried.append("secret-tool item '%s'" % item['service'])
+            value = secret_read(item['service'], item['account'])
+            if value:
+                found.append(('secret:' + item['service'], value, item))
+                break
+    if not found:
         for path in spec.get('file', []):
             tried.append(path)
             try:
                 if spec.get('private') and os.stat(path).st_mode & 0o077:
-                    return None, '%s can be read by others than the operator; chmod 600 it' % path, None
+                    return None, '%s can be read by others than the operator; chmod 600 it' % path, None, False
                 value = open(path).read().strip()
             except OSError:
                 continue
@@ -445,7 +513,7 @@ def login_of(p, vendor, os_):
                 break
     if not found:
         why = 'no %s' % ' and no '.join(tried or ['login named'])
-        return None, why + ('; ' + spec['hint'] if spec.get('hint') else ''), None
+        return None, why + ('; ' + spec['hint'] if spec.get('hint') else ''), None, True
     source, value, item = found[0]
     # `field` may name alternatives: codex's file holds an access token or
     # an API key
@@ -457,16 +525,52 @@ def login_of(p, vendor, os_):
         if isinstance(token, str) and token:
             break
     if not isinstance(token, str) or not token:
-        return None, '%s holds no %s' % (source, ' or '.join(f for f in fields if f) or 'token'), None
+        return None, '%s holds no %s' % (source, ' or '.join(f for f in fields if f) or 'token'), None, False
     ends = expiry(doc, spec.get('expires'))
     if ends is not None and ends < (time.time() + 60) * 1000:
-        return None, '%s has expired; start %s once outside a round to refresh it' % (source, vendor), None
+        return None, '%s has expired; start %s once outside a round to refresh it' % (source, vendor), None, False
     if '\n' in token:
-        return None, '%s is not one line' % source, None
+        return None, '%s is not one line' % source, None, False
     if source.startswith('file:') and spec.get('copy'):
         # the whole login file goes in, as a copy, less its refresh token
-        return source, doc if doc is not None else value, item
-    return source, token, item
+        return source, doc if doc is not None else value, item, False
+    return source, token, item, False
+
+
+def login_of(p, vendor, os_):
+    """-> (source, token, item, warn) or (None, why, None, None). The
+    operator's login for <vendor>, read here, outside the round. <warn> is
+    a line to say, in the round's log and on the board, when a `fallback`
+    tier answered because the primary one named nothing at all (T-126);
+    never set when the primary tier was refused for a specific reason."""
+    own = p['vendors'].get(vendor, {})
+    spec = own.get('login') or {}
+    if not spec:
+        for a in own.get('auth', []):
+            if os.path.isfile(a):
+                return 'auth:' + a, None, None, None
+        return None, 'no login file (%s)' % (', '.join(own.get('auth', [])) or 'none named'), None, None
+    for name in spec.get('given', []):
+        if os.environ.get(name):
+            return 'env:' + name, None, None, None
+    source, token, item, absent = login_tier(vendor, spec, os_)
+    fallback = spec.get('fallback')
+    if source is None and absent and fallback:
+        hint = spec.get('hint')
+        suffix = ('; ' + hint) if hint else ''
+        fsource, ftoken, fitem, _ = login_tier(vendor, fallback, os_)
+        if fsource is not None:
+            warn = ("%s has no crew token of its own; falling back to the operator's own interactive "
+                    "login, which can be revoked when that login refreshes%s" % (vendor, suffix))
+            return fsource, ftoken, fitem, warn
+        # the fallback tier named something but refused it for its own,
+        # specific reason (expired, malformed, locked-down) - that reason,
+        # not the primary tier's generic "absent", is what the operator
+        # needs to hear and act on. The primary tier's own hint (how to
+        # make it a crew token in the first place) still belongs here: it
+        # is the fix for every reason this branch is reached at all.
+        return None, ftoken + suffix, None, None
+    return source, token, item, None
 
 
 REFRESH = re.compile(r'refresh_?token', re.I)
@@ -509,12 +613,13 @@ def without_refresh(doc, drop):
 def login(p, vendor, os_, where, home):
     """Hand the vendor's login in: <where>/env holds NAME=VALUE for the
     launcher to export; a login file's copy, less its refresh token, goes to <home>/<copy>, in
-    the round's own temp directory. Exit 77 when the operator is not
-    logged in to <vendor>."""
+    the round's own temp directory. <where>/warn holds a line to say, in
+    the round's log and on the board, when a `fallback` tier answered
+    (T-126). Exit 77 when the operator is not logged in to <vendor>."""
     spec = p['vendors'].get(vendor, {}).get('login') or {}
     if not spec:
         return
-    source, token, _ = login_of(p, vendor, os_)
+    source, token, _, warn = login_of(p, vendor, os_)
     if source is None:
         print('fm-sandbox: %s is not logged in: %s' % (vendor, token), file=sys.stderr)
         sys.exit(77)
@@ -522,6 +627,10 @@ def login(p, vendor, os_, where, home):
         return
     to = spec.get('to', '')
     os.makedirs(where, mode=0o700, exist_ok=True)
+    if warn:
+        fd = os.open(os.path.join(where, 'warn'), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w') as f:
+            f.write(warn)
     if source.startswith('file:') and spec.get('copy'):
         rel = spec['copy']
         if not home or rel.startswith('/') or '..' in rel.split('/'):
@@ -646,11 +755,15 @@ def main():
         proxy(p, sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6])
         return
     if mode == 'login-source':
-        source, why, _ = login_of(p, sys.argv[3], sys.argv[4])
+        source, why, _, warn = login_of(p, sys.argv[3], sys.argv[4])
         if source is None:
             print('fm-sandbox: %s is not logged in: %s' % (sys.argv[3], why), file=sys.stderr)
             sys.exit(77)
         print(source)
+        # the tier that answered - 'fallback' only when a `fallback` block
+        # answered because the primary one named nothing at all (T-126),
+        # so a caller such as fm-canary.sh can say which without the login
+        print('fallback' if warn else 'primary')
         return
     if mode == 'login':
         # login <vendor> <os> <dir> <round tmp>
@@ -894,6 +1007,11 @@ if [ -n "$vendor" ]; then
   # round has one before the login is read
   if [ -z "$tmp" ]; then tmp="$work/tmp"; mkdir -p "$tmp" || exit 70; fi
   python3 -c "$SB_PY" login "$policy" "$vendor" "${os:-none}" "$work/login" "$tmp" || exit $?
+  if [ -s "$work/login/warn" ]; then
+    warn_text="$(cat "$work/login/warn")"; rm -f "$work/login/warn"
+    say "$warn_text"
+    fm_sandbox_board_warn "$vendor" "$warn_text"
+  fi
   if [ -s "$work/login/env" ]; then
     # exported, not put on a command line, where ps would show it
     while IFS='=' read -r n v; do

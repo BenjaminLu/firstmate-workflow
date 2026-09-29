@@ -2850,7 +2850,7 @@ in `bin/fm-config.sh`:
 
 | vendor | its login, read by fm outside the round | handed in as | what of its own the round opens | temp | mach services |
 |---|---|---|---|---|---|
-| claude | macOS: keychain item `Claude Code-credentials`, account the operator's user; elsewhere `~/.claude/.credentials.json`. The field `claudeAiOauth.accessToken`, refused past `claudeAiOauth.expiresAt`. A `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` already in the operator's environment is used as is, and nothing is read | `CLAUDE_CODE_OAUTH_TOKEN`, exported, not on a command line | nothing of `~/.claude` or `~/.claude.json`: its config directory is one of the round's own (`CLAUDE_CONFIG_DIR`, in the round's temp directory), holding its sessions, todos, caches and `.claude.json` | the round's own (`CLAUDE_CODE_TMPDIR`); and `/tmp/claude-<uid>`, read and written, on macOS only, because claude opens it whatever `TMPDIR` says (T-105's EPERM). On Linux the round's `/tmp` is its own, so the directory is made afresh there | none |
+| claude | a `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` already in the operator's environment is used as is; else the crew's own long-lived token (T-126), made once with `claude setup-token`: macOS keychain item `firstmate-claude-token`, account the operator's user; else, when `secret-tool` is on the operator's PATH, the libsecret item `firstmate-claude-token`/account the operator's user (T-126 round 2, Linux's rough equivalent of the keychain; its absence is skipped, not refused); else `~/.config/firstmate/claude-token`, refused unless its mode is the operator's alone (600). Only with none of those does it fall back to the operator's own interactive login as before T-126 - macOS keychain item `Claude Code-credentials`, account the operator's user; elsewhere `~/.claude/.credentials.json` - field `claudeAiOauth.accessToken`, refused past `claudeAiOauth.expiresAt`; that fallback warns, in the round's log and on the board, that the round can die when that login refreshes | `CLAUDE_CODE_OAUTH_TOKEN`, exported, not on a command line | nothing of `~/.claude` or `~/.claude.json`: its config directory is one of the round's own (`CLAUDE_CONFIG_DIR`, in the round's temp directory), holding its sessions, todos, caches and `.claude.json` | the round's own (`CLAUDE_CODE_TMPDIR`); and `/tmp/claude-<uid>`, read and written, on macOS only, because claude opens it whatever `TMPDIR` says (T-105's EPERM). On Linux the round's `/tmp` is its own, so the directory is made afresh there | none |
 | cursor-agent | the crew's Cursor API key, which the operator makes once in Cursor's dashboard and keeps for fm outside every round: macOS keychain item `firstmate-cursor-api-key`, account the operator's user; else `~/.config/firstmate/cursor-api-key`, refused unless its mode is the operator's alone (600). A `CURSOR_API_KEY` already set is used as is. Never `agent login`'s own items (`cursor-access-token`, `cursor-refresh-token`) or `~/.config/cursor/auth.json`, which hold its refresh token. With none, the refusal says the one-time step | `CURSOR_API_KEY`, exported, not on a command line; the variable cursor-agent documents in its own `Authentication required` message | nothing of `~/.config/cursor` or `~/.config/firstmate`; `~/.cursor/chats`, `~/.cursor/projects`, `~/.cursor/cli-config.json`, `~/.cursor/statsig-cache.json` read and written | the round's own | none |
 | codex | `~/.codex/auth.json`, field `tokens.access_token` or `OPENAI_API_KEY`; the file holds `tokens.refresh_token` too. A `CODEX_API_KEY` already set is used as is | a copy of the file with `tokens.refresh_token` emptied, as `auth.json` in the round's own `CODEX_HOME`, so no `config.toml` or profile of the operator's is read either | nothing of `~/.codex/auth.json`; `~/.codex/sessions`, `log`, `history.jsonl`, `version.json`, `models_cache.json` read and written | the round's own | none |
 | gemini | `~/.gemini/oauth_creds.json`, field `access_token`, refused past `expiry_date`; the file holds `refresh_token` too. A `GEMINI_API_KEY` or `GOOGLE_API_KEY` already set is used as is | a copy of the file with `refresh_token` emptied, at `.gemini/oauth_creds.json` under a `HOME` (and `GEMINI_CLI_HOME`) of the round's own, with `GOOGLE_GENAI_USE_GCA=true` when no API key is set. The commands gemini runs inherit that `HOME` | nothing of `~/.gemini/oauth_creds.json`; `~/.gemini/tmp`, `history`, `google_accounts.json`, `installation_id`, `user_id` read and written | the round's own | none |
@@ -2896,6 +2896,44 @@ security add-generic-password -s firstmate-cursor-api-key -a "$USER" -w
 (`-w` last, so `security` asks for the key rather than taking it on the
 command line), or the key alone in `~/.config/firstmate/cursor-api-key` at
 mode 600. `~/.config/firstmate` is never readable in a round.
+
+**Claude signs in with a crew token of its own, not the operator's
+interactive login (T-126).** On 2026-09-27 two crew rounds died mid-run with
+`API Error: 401 OAuth access token has been revoked` - T-125 round 1's
+worker and T-123 round 2's reviewer: `fm-config.sh` handed the round the
+access token of the operator's own interactive login, and when the
+operator's own Claude sessions refreshed that login, the old access token
+was revoked out from under every round still holding it. The fix Anthropic
+documents for unattended use is a long-lived token from `claude setup-token`
+(https://code.claude.com/docs/en/authentication: one year, bills to the
+subscription, model requests only), kept the way T-117 keeps cursor-agent's
+Cursor key: macOS keychain item `firstmate-claude-token`, account the
+operator's user, made once with
+`security add-generic-password -s firstmate-claude-token -a "$USER" -w`; off
+macOS, when `secret-tool` (libsecret) is installed, the same-named item made
+once with `secret-tool store --label=firstmate-claude-token service
+firstmate-claude-token account "$USER"` (T-126 round 2: the captain raised
+Linux's own keychain-equivalent case on 2026-09-28, since a file was the
+only crew-token option there before); else the token alone in
+`~/.config/firstmate/claude-token` at mode 600. The captain approved the
+crew-token design on 2026-09-27. `fm-config.sh`'s login lookup for claude
+now tries, in order: an explicit `CLAUDE_CODE_OAUTH_TOKEN` or
+`ANTHROPIC_API_KEY`, used as is; then the crew's keychain item (macOS); then
+its secret-tool item, when the tool is present; then its file; only with
+none of those does it fall back to the operator's own interactive login as
+before T-126 - never silently: it says so, in the round's log and on the
+board (`en` and `zh-TW`), as a warning that the round can die when that
+login refreshes. A crew keychain, secret-tool or file entry that exists but
+fails - a `claude-token` file others can read, say - refuses the round
+outright, the way an expired or malformed login always has, rather than
+quietly falling back to a weaker login; secret-tool's own absence, unlike
+that, is skipped rather than refused, since it names no entry at all to
+fail. `bin/fm-sandbox.sh login-source` reports which tier answered
+(`primary` or `fallback`, never the login), and `bin/fm-canary.sh` turns that
+into `crew-token` or `interactive-fallback` for claude specifically; firstmate
+reruns the canary at the merge gate for a change here, and workers do not run
+it themselves. The operator revokes the crew token at claude.ai, Settings,
+Claude Code.
 
 What stays unreachable, whatever the vendor: gh's token (keychain denied,
 `~/.config/gh` never readable, `GH_TOKEN` and `GITHUB_TOKEN` scrubbed),

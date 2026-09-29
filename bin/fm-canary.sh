@@ -34,7 +34,10 @@
 #                  the CLI - started=no
 #   ran            started=yes; authenticated=yes when the CLI got past its
 #                  login and answered, no when it said it was not logged in,
-#                  out of quota or off the network; then every probe
+#                  out of quota or off the network; then which login source
+#                  answered (fm-sandbox.sh login-source's tier: claude prints
+#                  crew-token or interactive-fallback, T-126, never the
+#                  login itself), then every probe
 #
 # What counts is what happened, not what the model says happened: the file
 # outside is looked for, the loopback and socket listeners count the
@@ -146,11 +149,11 @@ PY
   printf '%s\n' "$!"
 }
 
-record() {   # record <vendor> <version> <outcome> <why> [started] [authenticated] [exit] [probes json] [own] [blocked] [model_requested] [model]
+record() {   # record <vendor> <version> <outcome> <why> [started] [authenticated] [exit] [probes json] [own] [blocked] [model_requested] [model] [login]
   jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg vendor "$1" --arg version "$2" \
     --arg os "${os:-none}" --arg outcome "$3" --arg why "$4" --arg started "${5:-no}" \
     --arg auth "${6:-no}" --arg exit "${7:-}" --argjson probes "${8:-null}" --arg own "${9:-}" \
-    --arg blocked "${10:-}" --arg model_requested "${11:-}" --arg model "${12:-}" \
+    --arg blocked "${10:-}" --arg model_requested "${11:-}" --arg model "${12:-}" --arg login "${13:-}" \
     '{at:$at, vendor:$vendor, version:$version, sandbox:$os, outcome:$outcome, why:$why,
       started:($started == "yes"), authenticated:($auth == "yes"),
       adapter_exit:(if $exit == "" then null else ($exit | tonumber) end),
@@ -158,7 +161,8 @@ record() {   # record <vendor> <version> <outcome> <why> [started] [authenticate
       refused_hosts:($blocked | split(" ") | map(select(. != ""))),
       model_requested:$model_requested,
       model:(if $model == "" then "unknown" else $model end),
-      model_mismatch:($model_requested != "" and $model != "" and $model != "unknown" and $model != $model_requested)}' >> "$results"
+      model_mismatch:($model_requested != "" and $model != "" and $model != "unknown" and $model != $model_requested)}
+      + (if $login == "" then {} else {login_source:$login} end)' >> "$results"
 }
 
 # config.yaml's model, applied exactly as a worker round would (T-127): this
@@ -177,11 +181,23 @@ for name in ${wanted[@]+"${wanted[@]}"}; do
     continue
   fi
   version="$("$name" --version </dev/null 2>&1 | head -1)"
-  # logged in: where the operator's login is, never the login itself
+  # logged in: where the operator's login is, never the login itself. Two
+  # lines: the source, then which tier answered - `fallback` only when a
+  # vendor's own crew login named nothing at all and the round fell back to
+  # the operator's interactive one (T-126). For claude that tier is worth a
+  # plainer name than "primary"/"fallback": crew-token or interactive-fallback.
   if ! src="$("$ROOT/bin/fm-sandbox.sh" login-source --policy="$policy_all" --vendor="$name" 2>&1)"; then
     printf '%-13s skipped: not logged in (%s)\n' "$name" "${src#fm-sandbox: }"
     record "$name" "$version" skipped "not logged in: ${src#fm-sandbox: }"
     continue
+  fi
+  login_tier_name="$(sed -n '2p' <<< "$src")"
+  login_label="$login_tier_name"
+  if [ "$name" = claude ]; then
+    case "$login_tier_name" in
+      fallback) login_label=interactive-fallback ;;
+      primary)  login_label=crew-token ;;
+    esac
   fi
   d="$(mktemp -d "${TMPDIR:-/tmp}/fm-canary.XXXXXX")" || exit 70
   tree="$d/tree"; mkdir -p "$tree"
@@ -330,7 +346,7 @@ PROMPT
     '{write_outside:$write, read_ssh:$ssh, github:$github, loopback:$loopback, herdr_socket:$socket,
       other_round_tmp:$other, gh_token:$ght, git_credential:$gc, keychain:$keychain, pasteboard:$pasteboard}')"
   record "$name" "$version" "$outcome" "$why" "$started" "$auth" "$code" "$probes" "$own_v" "$blocked" \
-    "$model_requested" "$model_reported"
+    "$model_requested" "$model_reported" "$login_label"
   # T-127: the model beside the verdict - what was asked for and what the
   # CLI itself reported running on, so a captain re-reading a canary run can
   # see a mismatch the way the board does, without opening the record
@@ -342,8 +358,8 @@ PROMPT
     sed 's/^/    /' "$d/stderr" | head -3
     failed=1
   else
-    printf '%-13s %-28s %-40s started=%s authenticated=%s exit %-3s write-outside=%s read-ssh=%s github=%s loopback=%s herdr-socket=%s other-round-tmp=%s gh-token=%s git-credential=%s keychain=%s pasteboard=%s own-loopback=%s\n' \
-      "$name" "$(printf '%.28s' "$version")" "$model_shown" "$started" "$auth" "$code" "$write_v" "$ssh_v" "$gh_v" "$lo_v" "$so_v" \
+    printf '%-13s %-28s %-40s started=%s authenticated=%s exit %-3s login=%s write-outside=%s read-ssh=%s github=%s loopback=%s herdr-socket=%s other-round-tmp=%s gh-token=%s git-credential=%s keychain=%s pasteboard=%s own-loopback=%s\n' \
+      "$name" "$(printf '%.28s' "$version")" "$model_shown" "$started" "$auth" "$code" "$login_label" "$write_v" "$ssh_v" "$gh_v" "$lo_v" "$so_v" \
       "$ot_v" "$ght_v" "$gc_v" "$kc_v" "$pb_v" "$own_v"
     [ "$auth" = yes ] || { printf '    not authenticated: %s\n' "$why"; failed=1; }
     # what fm-sandbox said of the round's loopback: the profile it got, and

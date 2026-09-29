@@ -872,11 +872,16 @@ mkdir -p "$pv/nohome"
   . "$ROOT/bin/fm-config.sh"
   printf 'vendor: mock\n' > "$pv/nl.yaml"; fm_policy worker "" "$pv/nl.yaml" > "$pv/nl.json"
 )
+# FM_SECRET_TOOL is pinned here too (T-126 round 4): claude is the one
+# vendor with a libsecret tier, tried unconditionally, and naming none
+# below would reach the host's own secret-tool, not this fixture's empty
+# HOME (a comment naming it inside the "$( )" below breaks bash 3.2's
+# parser on an apostrophe, so it is named here instead)
 for nl_v in claude codex cursor-agent gemini; do
   rm -f "$pv/log"
   rc_nl="$(
     unset CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY ANTHROPIC_API_KEY CODEX_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
-    export HOME="$pv/nohome" FM_KEYCHAIN_TOOL="$pv/no-such-security"
+    export HOME="$pv/nohome" FM_KEYCHAIN_TOOL="$pv/no-such-security" FM_SECRET_TOOL="$pv/no-such-secret-tool"
     confined darwin "$pk/sandbox-exec" "$pv/nl.json" "$nl_v"
   )"
   assert_eq "2" "$rc_nl" "$nl_v with no login to hand in is unavailable"
@@ -978,6 +983,113 @@ for cur in "darwin key-crew-kc" "linux key-crew-file"; do
   assert_lacks "$cur_seen" "at-cursor" "never agent login's own token ($cur_os)"
   assert_lacks "$cur_seen" "rt-cursor-secret" "nor its refresh token ($cur_os)"
 done
+# claude (T-126): a crew token of fm's own - a keychain item of fm's own on
+# macOS, else a file only the operator may read - is tried before the
+# operator's own interactive login, through the real adapter
+printf 'crew-claude-file\n' > "$lh/.config/firstmate/claude-token"
+chmod 600 "$lh/.config/firstmate/claude-token"
+cat > "$pv/claude-security" <<'S'
+#!/usr/bin/env bash
+s=''; while [ $# -gt 0 ]; do [ "$1" = -s ] && s="${2-}"; shift; done
+case "$s" in
+  firstmate-claude-token) printf 'crew-claude-kc\n' ;;
+  'Claude Code-credentials') printf '{"claudeAiOauth":{"accessToken":"at-claude-interactive","refreshToken":"rt","expiresAt":9999999999999}}\n' ;;
+  *) echo "security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain." >&2; exit 44 ;;
+esac
+S
+chmod +x "$pv/claude-security"
+cp "$pv/copyfake" "$pv/fakebin/claude"; chmod +x "$pv/fakebin/claude"
+# The default FM_SECRET_TOOL for every claude block below that does not name
+# its own (T-126 round 4): never the host's real secret-tool(1). On Linux
+# login_tier reads no keychain at all, so a claude case here that leaves
+# FM_SECRET_TOOL unset would, on a runner that happens to have secret-tool
+# on PATH and no D-Bus session to answer it, get whatever that produces
+# instead of the fixture's own answer. This stub answers like the real tool
+# - nothing on stdout, exit 1 - and records every call.
+cat > "$pv/claude-secret-tool-guard" <<'S'
+#!/usr/bin/env bash
+echo "$*" >> "$FM_SECRET_TOOL_GUARD_LOG"
+exit 1
+S
+chmod +x "$pv/claude-secret-tool-guard"
+for cl in "darwin crew-claude-kc" "linux crew-claude-file"; do
+  read -r cl_os cl_key <<< "$cl"
+  rm -f "$pv/copy" "$pv/secret-guard-calls"
+  cl_tool="$pk/sandbox-exec"; [ "$cl_os" = linux ] && cl_tool="$pk/bwrap"
+  cl_rc="$(
+    unset CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY ANTHROPIC_API_KEY CODEX_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
+    export FM_KEYCHAIN_TOOL="$pv/claude-security" FM_SECRET_TOOL="$pv/claude-secret-tool-guard" \
+      FM_SECRET_TOOL_GUARD_LOG="$pv/secret-guard-calls"
+    FM_SANDBOX_OS="$cl_os" FM_SANDBOX_TOOL="$cl_tool" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:/usr/bin:/bin" \
+      "$ROOT/bin/adapters/claude.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"
+    echo $?
+  )"
+  cl_seen="$(cat "$pv/copy" 2>/dev/null)"
+  assert_eq "0" "$cl_rc" "claude's round starts on $cl_os with the crew's own token (T-126)"
+  assert_contains "$cl_seen" "CLAUDE_CODE_OAUTH_TOKEN=$cl_key" "handed in as CLAUDE_CODE_OAUTH_TOKEN ($cl_os)"
+  assert_lacks "$cl_seen" "at-claude-interactive" "never the operator's interactive login while a crew token exists ($cl_os)"
+  if [ "$cl_os" = linux ]; then
+    assert_contains "$(cat "$pv/secret-guard-calls" 2>/dev/null)" "firstmate-claude-token" \
+      "and, with no keychain on Linux, fm's own secret-tool stand-in was asked, never the host's real one"
+  fi
+done
+# and, off macOS, the crew's own libsecret item - secret-tool(1) - answers
+# before that same file, through the real adapter too (T-126 round 2)
+cat > "$pv/claude-secret-tool" <<'S'
+#!/usr/bin/env bash
+shift  # drop 'lookup'
+svc=''; acct=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    service) svc="${2-}"; shift 2 ;;
+    account) acct="${2-}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+case "$svc" in
+  firstmate-claude-token) printf '%s' 'crew-claude-secret' ;;
+  *) exit 1 ;;
+esac
+S
+chmod +x "$pv/claude-secret-tool"
+rm -f "$pv/copy"
+cl_rc="$(
+  unset CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY ANTHROPIC_API_KEY CODEX_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
+  export FM_KEYCHAIN_TOOL="$pv/claude-security" FM_SECRET_TOOL="$pv/claude-secret-tool"
+  FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$pk/bwrap" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:/usr/bin:/bin" \
+    "$ROOT/bin/adapters/claude.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"
+  echo $?
+)"
+cl_seen="$(cat "$pv/copy" 2>/dev/null)"
+assert_eq "0" "$cl_rc" "claude's round starts on Linux with the crew's libsecret item too (T-126 round 2)"
+assert_contains "$cl_seen" "CLAUDE_CODE_OAUTH_TOKEN=crew-claude-secret" "handed in as CLAUDE_CODE_OAUTH_TOKEN"
+assert_lacks "$cl_seen" "crew-claude-file" "and never the file while libsecret answers"
+# with no crew token anywhere, claude's round falls back to the operator's
+# own interactive login - as it always has - through the real adapter too.
+# On Linux there is no keychain (login_tier reads one only on darwin), so
+# the fallback's own file tier is what a real Claude Code CLI's interactive
+# login lives in there: ~/.claude/.credentials.json, the same shape the
+# keychain stand-in above answers with on macOS.
+rm -f "$lh/.config/firstmate/claude-token" "$pv/copy" "$pv/err" "$pv/secret-guard-calls"
+mkdir -p "$lh/.claude"
+printf '{"claudeAiOauth":{"accessToken":"at-claude-interactive","refreshToken":"rt","expiresAt":9999999999999}}' \
+  > "$lh/.claude/.credentials.json"
+cl_rc="$(
+  unset CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY ANTHROPIC_API_KEY CODEX_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
+  export FM_KEYCHAIN_TOOL="$pv/claude-security" FM_SECRET_TOOL="$pv/claude-secret-tool-guard" \
+    FM_SECRET_TOOL_GUARD_LOG="$pv/secret-guard-calls"
+  FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$pk/bwrap" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:/usr/bin:/bin" \
+    "$ROOT/bin/adapters/claude.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"
+  echo $?
+)"
+assert_eq "0" "$cl_rc" "with no crew token, claude's round still starts on the interactive login"
+assert_contains "$(cat "$pv/copy" 2>/dev/null)" "CLAUDE_CODE_OAUTH_TOKEN=at-claude-interactive" \
+  "handed in the same way as before T-126"
+assert_contains "$(cat "$pv/err" 2>/dev/null)" "has no crew token" "and the fallback warns"
+assert_contains "$(cat "$pv/err" 2>/dev/null)" "claude setup-token" "naming the fix, the crew tier's own hint"
+assert_contains "$(cat "$pv/secret-guard-calls" 2>/dev/null)" "firstmate-claude-token" \
+  "and fm's own secret-tool stand-in was asked while reaching that fallback, never the host's real one"
+rm -f "$lh/.claude/.credentials.json"
 # gemini is told its login is Google's, and runs with a HOME of the round's own
 cp "$pv/copyfake" "$pv/fakebin/gemini"; chmod +x "$pv/fakebin/gemini"
 ( unset GEMINI_API_KEY GOOGLE_API_KEY CODEX_API_KEY
