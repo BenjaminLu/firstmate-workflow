@@ -693,7 +693,13 @@ sent="$(cat "$dc/sent-r2.md")"
 assert_contains "$sent" "# The closed list" "a round-two prompt given --pr has the closed-list section"
 assert_contains "$sent" "1. Name the helper FIRST_LIST_ITEM." "and carries the list the first REJECT closed"
 assert_contains "$sent" "is the closed list" "and says it binds the round"
-assert_contains "$sent" "label either of those off-list" "and admits an objection to new ground, labelled off-list"
+assert_contains "$sent" "If more than one appears, the latest is the standing list" "and that the latest list is the standing one"
+assert_lacks "$sent" "the first is the original" "and no longer that the first is the original"
+assert_contains "$sent" "re-issue the standing list: the same numbering, each earlier item marked done or open" \
+  "and that a REJECT re-issues it with each earlier item marked done or open"
+assert_contains "$sent" "NEW-GROUND:T-Z (the latest change touched code the list never covered)" \
+  "and admits a new item labelled NEW-GROUND"
+assert_contains "$sent" "It never drops an open item." "and that it never drops an open item"
 review_c "$dc/sent-r1.md" --round 1 --pr "$pr" >/dev/null
 assert_lacks "$(cat "$dc/sent-r1.md")" "FIRST_LIST_ITEM" "round one is shown no list"
 
@@ -717,7 +723,7 @@ say reviewer-1 "$pr5" "$(printf 'Answering ASK-PASS-CRITERIA:T-Z from the worker
 review_c "$dc/sent-b.md" --round 4 --pr "$pr5" >/dev/null
 sent="$(cat "$dc/sent-b.md")"
 assert_lacks "$sent" "WORKER_STATUS_ITEM" "an earlier worker comment with numbered lines and the marker in prose is not a list"
-assert_contains "$sent" "## Closed list 1 of 1" "so the reviewer's list is the only one, and the original"
+assert_contains "$sent" "## Closed list 1 of 1" "so the reviewer's list is the only one, and the standing one"
 assert_contains "$sent" "REVIEWER_LIST_ITEM" "and it is quoted"
 assert_lacks "$sent" "The worker's ask, verbatim" "a list that mentions ASK-PASS-CRITERIA in prose is not the worker's ask"
 
@@ -768,6 +774,8 @@ say worker-1 "$pr2" "Just my notes, REASONING_WITHOUT_MARKER."
 review_c "$dc/sent-none.md" --round 3 --pr "$pr2" >/dev/null
 sent="$(cat "$dc/sent-none.md")"
 assert_contains "$sent" "has neither an ASK-PASS-CRITERIA:T-Z" "a pull request with neither says so"
+assert_contains "$sent" "if you reject, end with the complete numbered list of what would make this head pass, closed by CRITERIA-COMPLETE:T-Z" \
+  "and tells the reviewer a REJECT still ends with its complete list (SK-007)"
 assert_lacks "$sent" "REASONING_WITHOUT_MARKER" "and carries none of its comments"
 
 # A diff-only reviewer cannot close an item that asks for green CI and gates:
@@ -891,6 +899,9 @@ assert_lacks "$sent" "The required check for head $head3 could not be read" "whi
 outd="$(review_c "$dc/sent-down.md" --round 3 --pr "$pr")"
 assert_eq "0" "$?" "a round whose comments could not be read still runs"
 assert_contains "$(cat "$dc/sent-down.md")" "could not be read" "and its prompt says the context could not be read"
+assert_contains "$(cat "$dc/sent-down.md")" \
+  "is unknown. Review this round as usual; if you reject, end with the complete numbered list of what would make this head pass, closed by CRITERIA-COMPLETE:T-Z." \
+  "and that a REJECT still ends with its complete list (SK-007)"
 assert_contains "$(cat "$dc/sent-down.md")" "The required check for head $head3 could not be read from GitHub" \
   "and that the required check could not be read either"
 assert_contains "$outd" "REJECT:T-Z" "and the verdict still comes back"

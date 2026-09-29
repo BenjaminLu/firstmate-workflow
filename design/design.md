@@ -822,7 +822,7 @@ the detached worktree.
 A rebuild that applied — nothing unresolved handed to the worker — is
 always committed and pushed, whatever the worker did with the round:
 changed files, changed nothing, left a note, or only asked, as the
-round-three protocol requires (T-098). With no change of the worker's,
+standing-list protocol (§7) requires of a worker who finds no list (T-098). With no change of the worker's,
 the commit is the rebuild alone; otherwise the worker's changes are in it
 on top. An asking round is still reported as asked, and its question
 still goes on the pull request: the one there is, or the one the push
@@ -952,9 +952,10 @@ did not happen.
 | String | Posted by | Meaning |
 |---|---|---|
 | `APPROVE:<task-id>` | reviewer | the only valid pass signal |
-| `ASK-PASS-CRITERIA:<task-id>` | worker | the round-three question |
-| `CRITERIA-COMPLETE:<task-id>` | reviewer | closes every `REJECT`, from round one: the numbered list before it is the complete set |
-| `REGRESSION:<task-id>` | reviewer | off-list but newly introduced, so admissible (labelled off-list) |
+| `ASK-PASS-CRITERIA:<task-id>` | worker | finds no standing list, or an unclear one, and asks for it |
+| `CRITERIA-COMPLETE:<task-id>` | reviewer | closes every `REJECT`, from round one: the numbered list before it is the task's standing list |
+| `REGRESSION:<task-id>` | reviewer | labels a new item on the standing list: newly introduced by the latest change |
+| `NEW-GROUND:<task-id>` | reviewer | labels a new item on the standing list: the latest change touched code the list never covered |
 
 ---
 
@@ -1160,36 +1161,44 @@ check skipped is not a stage that passed. `bin/fm-session.sh start` runs
 
 ---
 
-## 7. The closed list and the round-three protocol
+## 7. The standing list
 
-**The closed list comes with the first REJECT (captain, 2026-09-29; SK-007).**
-Every `REJECT`, from round one, ends with the numbered, complete set of
-changes that would make this head pass, closed by `CRITERIA-COMPLETE:<task-id>`
-on a line of its own, before the verdict line - what the round-three answer
-used to be. Later rounds judge against that list: a new objection is
-admissible only as `REGRESSION:<task-id>`, or where the latest change touched
-new ground, and is labelled off-list either way. T-126 took ten rounds, one
-new finding per round from round seven on. `ASK-PASS-CRITERIA` stays for a
-worker who finds the list missing or unclear:
+**The list comes with the first REJECT (captain, 2026-09-29; SK-007).**
+Every `REJECT`, from round one, ends with the task's standing list: the
+numbered, complete set of changes that would make this head pass, closed by
+`CRITERIA-COMPLETE:<task-id>` on a line of its own, before the verdict line -
+what the round-three answer used to be. T-126 took ten rounds, one new finding
+per round from round seven on.
 
-**From round three:**
-
-1. Before touching a line, if no original closed list exists, the worker posts
-   `ASK-PASS-CRITERIA:<task-id>` in `.fm-say.md` for script publication and waits.
-   That asking round changes no implementation files.
-2. The reviewer answers with a **numbered list** and posts
-   `CRITERIA-COMPLETE:<task-id>`.
-3. Preserve that original list across subsequent rounds; do not ask again or
-   replace it. Fix the whole list in one pass. After that the reviewer may raise
-   only numbered items from that list, or a
-   newly introduced regression marked `REGRESSION:`.
-4. Report old off-list complaints to firstmate for board coordination.
-   `bin/fm-protocol.sh` attempts a `protocol_violation` event for the violations
-   its marker checks detect; it cannot determine every semantic violation.
-   It accepts numeric-reference shapes without checking original item membership,
-   does not authenticate ask/completion markers, can replace its list count on a
-   later completion marker, and does not prove a marked regression is new.
-   Firstmate must preserve and verify the original list; a passing protocol
+1. The first REJECT creates the standing list. Each later REJECT re-issues it:
+   the same numbering, each earlier item marked **done** or **open**, and any
+   new item appended with the next number and a label.
+2. A new item is admissible only as `REGRESSION:<task-id>`, newly introduced
+   by the latest change, or `NEW-GROUND:<task-id>`, the latest change touched
+   code the list never covered. Nothing else can be added; an unlabelled new
+   objection is a protocol violation.
+3. The latest list is the standing one. It never drops an open item; an item
+   leaves only by being marked done. The worker fixes every open item in one
+   pass.
+4. `ASK-PASS-CRITERIA:<task-id>` stays for a worker who finds no list, or an
+   unclear one. From round three, finding none, the worker posts it in
+   `.fm-say.md` for script publication before touching a line and waits; that
+   asking round changes no implementation files. The reviewer answers with the
+   complete numbered list and `CRITERIA-COMPLETE:<task-id>`.
+5. Report protocol violations to firstmate for board coordination.
+   From round three `bin/fm-protocol.sh` gates the round on a standing list:
+   any comment with a numbered list before a standalone
+   `CRITERIA-COMPLETE:<task-id>`. It exits 3 only when there is no list and no
+   ask, 4 when the worker asked and no list followed, 6 when a re-issued list
+   drops an earlier item number, and 5 when a re-issued list appends an item
+   without `REGRESSION:<task-id>` or `NEW-GROUND:<task-id>` on its line, or a
+   later reviewer comment cites no item and carries none of `APPROVE:`,
+   `REGRESSION:` or `NEW-GROUND:` with the task id. It emits a
+   `protocol_violation` event for each. It reads every numbered line before
+   the marker as an item, so a rejecting answer numbers nothing else. It
+   cannot determine every semantic violation: it does not check that a
+   finding matches the item it cites, does not authenticate the markers, and
+   does not prove that a regression or new ground is real. A passing protocol
    check does not establish compliance with this role contract.
 
 The reviewer cannot see the pull request, so the launcher carries the protocol
@@ -1202,15 +1211,15 @@ marker counts only as a line of its own and a comment that asks is never a
 list, so a worker's numbered change log that mentions a marker in passing is
 not taken for the closed list. Each quote is fenced with a per-run nonce, so a
 comment cannot close its own quote, and printed straight from `jq`, so its
-trailing newlines survive. It then says which case holds: a list (it is the
-closed list; findings cite its items, are marked `REGRESSION:`, or object to new
-ground the latest change touched, labelled off-list), only an ask
+trailing newlines survive. It then says which case holds: a list (the latest
+is the standing list; findings cite its items, and a `REJECT` re-issues it
+with new items labelled `REGRESSION:` or `NEW-GROUND:`), only an ask
 (answer with the complete list), neither, or comments `gh` could not read, in
 which case the round still runs; in the last two a `REJECT` still ends with
 its complete list.
 No other comment enters the prompt, so the worker's reasoning stays out.
 Round one gets no closed-list section. Given `--pr`, it, like every
-diff-mode round, do get the head section below; without `--pr` no round gets
+diff-mode round, does get the head section below; without `--pr` no round gets
 either, and the prompt is unchanged.
 
 A diff cannot show CI or gates, so a closed-list item asking for them could

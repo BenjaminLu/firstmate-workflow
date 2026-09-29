@@ -90,5 +90,43 @@ J
 assert_eq "0" "$(FM_REVIEWER_LOGIN=reviewer-1 code "$d6" "$BYSTANDER")" \
   "a comment from anyone but the reviewer does not count"
 
-rm -rf "$d" "$d2" "$d3" "$d4" "$d5" "$d6"
+# SK-007: every REJECT from round one ends with the standing list, so the
+# gate from round three is that a list exists, not that the worker asked.
+# These records spell their line breaks as \r, one argument per comment.
+recl() { local dir="$1/gh-$2"; shift 2; mkdir -p "$dir"
+  { printf '#!/usr/bin/env bash\ncat <<%s\n' "'JSONX'"; printf '%s\n' "$@"; printf 'JSONX\n'; } > "$dir/gh"
+  chmod +x "$dir/gh"; printf '%s' "$dir/gh"; }
+
+assert_contains "$(run "$d" "$NONE" 3 2>&1)" "no standing list" \
+  "with no list and no ask, round three says a standing list is missing"
+
+d7="$(fixture)"
+STANDING="$(recl "$d7" standing \
+  $'reviewer-1\tTwo things:\r1. name the helper\r2. cover the empty case\rCRITERIA-COMPLETE:T-Z\rREJECT:T-Z' \
+  $'worker-1\tround two: renamed it')"
+assert_eq "0" "$(code "$d7" "$STANDING" 3)" \
+  "a round-three run with a list from round one and no ask proceeds"
+
+d8="$(fixture)"
+SHRUNK="$(recl "$d8" shrunk \
+  $'reviewer-1\t1. name the helper\r2. cover the empty case\r3. drop the dead branch\rCRITERIA-COMPLETE:T-Z\rREJECT:T-Z' \
+  $'worker-1\tASK-PASS-CRITERIA:T-Z' \
+  $'reviewer-1\t1. done\r3. open: the dead branch is still there\rCRITERIA-COMPLETE:T-Z\rREJECT:T-Z')"
+assert_eq "6" "$(code "$d8" "$SHRUNK" 3)" "a re-issued list missing an earlier number is flagged"
+assert_contains "$(run "$d8" "$SHRUNK" 3 2>&1)" "dropped item 2" "and it names the item it dropped"
+
+d9="$(fixture)"
+GROUND="$(recl "$d9" ground \
+  $'reviewer-1\t1. name the helper\r2. cover the empty case\rCRITERIA-COMPLETE:T-Z\rREJECT:T-Z' \
+  $'reviewer-1\t1. done\r2. open: still uncovered\r3. NEW-GROUND:T-Z the new cache has no test\rCRITERIA-COMPLETE:T-Z\rREJECT:T-Z' \
+  $'reviewer-1\tNEW-GROUND:T-Z the cache the latest change added leaks its lock')"
+assert_eq "0" "$(code "$d9" "$GROUND" 3)" "a NEW-GROUND item is admitted, in the list or on its own"
+
+d10="$(fixture)"
+UNLABELLED="$(recl "$d10" unlabelled \
+  $'reviewer-1\t1. name the helper\r2. cover the empty case\rCRITERIA-COMPLETE:T-Z\rREJECT:T-Z' \
+  $'reviewer-1\t1. done\r2. done\r3. the logging is also wrong\rCRITERIA-COMPLETE:T-Z\rREJECT:T-Z')"
+assert_eq "5" "$(code "$d10" "$UNLABELLED" 3)" "an unlabelled new objection appended to the list is flagged"
+
+rm -rf "$d" "$d2" "$d3" "$d4" "$d5" "$d6" "$d7" "$d8" "$d9" "$d10"
 finish

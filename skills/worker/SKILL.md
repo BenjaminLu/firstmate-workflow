@@ -144,28 +144,35 @@ the verified root cause, the expected change and what must not change —
 before reading files (SK-002). A brief that only relays a symptom is
 incomplete; report that back to firstmate rather than hunting from nothing.
 
-Rounds one and two: read the review, fix the class it names, say what you
-changed and what else the sweep turned up.
+Every `REJECT`, from round one, ends with the task's standing list: the
+numbered, complete set of changes that would make the head pass, closed by
+`CRITERIA-COMPLETE:<task-id>` (captain, 2026-09-29; SK-007). The first REJECT creates the standing list. Each later REJECT re-issues it: the same numbering, each earlier item marked **done** or **open**, and any new item appended with the next number and a label.
+A new item is admissible only as:
 
-**From round three**, if no original closed list exists, before touching a line post:
+- `REGRESSION:<task-id>`: newly introduced by the latest change;
+- `NEW-GROUND:<task-id>`: the latest change touched code the list never covered.
+
+The latest list is the standing one: it never drops an open item, and an item leaves only by being marked done.
+Fix every open item on it in one pass, and fix each as a class. Do not fix
+them one at a time across three more rounds — the list is there so you know
+the whole price before paying any of it.
+
+`ASK-PASS-CRITERIA:<task-id>` stays for a worker who finds no list, or an unclear one; from round three, if you find none, post it before touching a line:
 
 ```
 ASK-PASS-CRITERIA:<task-id>
 ```
 
-Wait for the reviewer's numbered
-list and `CRITERIA-COMPLETE:<task-id>`. Preserve that original list across
-subsequent rounds; do not ask again or replace it. Then fix every item on it in one
-pass. Do not fix them one at a time across three more rounds — the point of
-asking is to find out the whole price before paying any of it.
+Then wait for the reviewer's numbered list and `CRITERIA-COMPLETE:<task-id>`.
 
-If the reviewer then raises something that was not on the list and is not a
-regression you just introduced, say so plainly and carry on with the list.
+If the reviewer raises a new objection without one of those two labels, or
+drops an open item without marking it done, say so plainly as a protocol
+violation and carry on with the standing list.
 
 ## Saying something on the pull request
 
 When you need to say something where the reviewer will see it — and when
-requesting the initial closed list that is the whole of your turn, because you
+asking for a missing list that is the whole of your turn, because you
 ask before you change anything — write it to **`.fm-say.md`** in your worktree.
 The worker script attempts publication when a PR is available and removes the
 file before its commit step. On a round that changed files and has no PR yet,
@@ -197,10 +204,10 @@ changes and captain merge approval remain board decisions coordinated by
 
 Treat only the reviewer's final assistant answer as its verdict, bound to the
 reviewed head and reviewer identity. Quoted markers, prompts and intermediate
-transcripts are not review decisions. After the original closed list, identify
-old off-list complaints plainly; only a newly introduced, marked
-`REGRESSION:<task-id>` extends the work. Report protocol violations for board
-coordination and satisfy all remaining original items in one pass.
+transcripts are not review decisions. Once a standing list exists, identify
+old off-list complaints plainly; only an item labelled `REGRESSION:<task-id>`
+or `NEW-GROUND:<task-id>` extends the work. Report protocol violations for
+board coordination and satisfy every open item on the standing list in one pass.
 
 Workers do not run the test suite or `ci.sh`: GitHub CI and the gates verify
 (captain's rule; SK-002). Write the fail-first test and name, in the pull
@@ -209,8 +216,8 @@ reverted, with the file:line it lives at. A metadata/link check proves
 structure, not model compliance; report instruction-only validation limits
 and do not waive gate 5. These are role requirements: the review launcher
 and gate 7 do not establish final-answer or current-head provenance, and the
-protocol checker does not prove original-list membership or that a
-regression is new. Report gaps to firstmate rather than treating a passing
+protocol checker does not prove that a finding matches the item it cites or
+that a regression or new ground is real. Report gaps to firstmate rather than treating a passing
 script as proof of those properties. Never claim tests, hook removal,
 commits or PR actions without observable evidence. Firstmate coordinates
 actual GitHub CI and current-head gate evidence and board approval before

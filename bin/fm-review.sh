@@ -422,8 +422,8 @@ closed_list() {
   fence="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
   n="$(jq '.lists | length' <<<"$picked")"
   if [ "$n" -gt 0 ]; then
-    printf '\nThe numbered list below, posted with CRITERIA-COMPLETE:%s, is the closed list for this task. If more than one appears, the first is the original. Every finding this round must cite a numbered item from it, or be a regression this round newly introduced, marked REGRESSION:%s, or an objection to new ground the latest change touched; label either of those off-list. Raise nothing else.\n' \
-      "$TASK" "$TASK"
+    printf '\nThe numbered list below, posted with CRITERIA-COMPLETE:%s, is the closed list for this task. If more than one appears, the latest is the standing list; the earlier ones are its history. Every finding this round must cite a numbered item from it. If you reject, re-issue the standing list: the same numbering, each earlier item marked done or open, and any new item appended with the next number and labelled on its own line REGRESSION:%s (newly introduced by the latest change) or NEW-GROUND:%s (the latest change touched code the list never covered), then CRITERIA-COMPLETE:%s. It never drops an open item. Raise nothing else.\n' \
+      "$TASK" "$TASK" "$TASK" "$TASK"
   elif [ "$(jq '.ask != null' <<<"$picked")" = true ]; then
     printf '\nThe worker has asked for the pass criteria with ASK-PASS-CRITERIA:%s, quoted below. There is no closed list yet: answer with the complete numbered list of everything that must change for this task to pass, and then post CRITERIA-COMPLETE:%s.\n' \
       "$TASK" "$TASK"

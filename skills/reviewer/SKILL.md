@@ -149,42 +149,43 @@ always rerun on the head being merged; they are firstmate's, not yours.
 
 Every `REJECT`, from round one, ends with the numbered, complete set of
 changes that would make this head pass, closed by `CRITERIA-COMPLETE:<task-id>`
-on a line of its own, before the verdict line. That is the captain's rule
-(2026-09-29): the final answer of a rejecting round ends:
+on a line of its own, before the verdict line. That numbered list is the
+task's **standing list** (captain, 2026-09-29).
+
+The first REJECT creates the standing list. Each later REJECT re-issues it: the same numbering, each earlier item marked **done** or **open**, and any new item appended with the next number and a label.
+A rejecting answer after the first ends like this:
 
 ```
-1. <the first change this head needs, with its evidence and class>
-2. <the next>
+1. done: <an item the latest change settled>
+2. open: <an item this head still needs, with its evidence and class>
+3. REGRESSION:<task-id> <what the latest change newly broke>
 
 CRITERIA-COMPLETE:<task-id>
 REJECT:<task-id>
 ```
 
-Later rounds judge against that list: a new objection is admissible only as
-`REGRESSION:<task-id>`, or where the latest change touched new ground, and is
-labelled off-list either way. Raising an old complaint you left off the list
-is a protocol violation; report it to firstmate for the captain. The script
-does not detect every such violation. Write the list as if it is your one
-chance to be exhaustive, because it is: T-126 took ten rounds, one new
-finding per round from round seven on.
+A new item is admissible only with one of two labels, on the item's own line:
 
-`ASK-PASS-CRITERIA:<task-id>` stays for a worker who finds the list missing or
-unclear; answer it with the complete list. From round three, if no original
-closed list exists, the worker posts it before touching a line.
+- `REGRESSION:<task-id>`: newly introduced by the latest change;
+- `NEW-GROUND:<task-id>`: the latest change touched code the list never covered.
 
-Retain the original numbered list after `CRITERIA-COMPLETE:<task-id>` across all
-later rounds. Do not issue a fresh list or add old off-list objections. Cite the
-original item numbers in findings; only a newly introduced regression explicitly
-marked `REGRESSION:<task-id>`, or an objection to new ground the latest change
-touched, labelled off-list, can extend them. Report protocol violations to
-[firstmate](../firstmate/SKILL.md) for the board.
+Nothing else can be added: an unlabelled new objection, or an old complaint
+you left off the list, is a protocol violation. The latest list is the standing one: it never drops an open item, and an item leaves only by being marked done.
+Findings in a later round cite its item numbers. Number nothing else in a
+rejecting answer: `bin/fm-protocol.sh` reads every line that starts with a
+number before the marker as an item. The script does not detect every
+violation; report them to [firstmate](../firstmate/SKILL.md) for the board.
+Write the first list as if it is your one chance to be exhaustive, because it
+is: T-126 took ten rounds, one new finding per round from round seven on.
+
+`ASK-PASS-CRITERIA:<task-id>` stays for a worker who finds no list, or an unclear one; answer it with the complete standing list.
 
 Where to find them: from round two, when the launcher knows the pull request,
 your prompt has a **The closed list** section after the round number and before
 the head section (diff mode) and the diff. It quotes verbatim the worker's latest `ASK-PASS-CRITERIA:<task-id>`
 first, then every comment whose numbered list ends in
 `CRITERIA-COMPLETE:<task-id>`, in the order posted, whether posted before or
-after the ask; when several lists appear, the first is the original. A marker
+after the ask; when several lists appear, the latest is the standing one. A marker
 counts only on a line of its own, and a comment that asks is never a list, so
 close yours with `CRITERIA-COMPLETE:<task-id>` alone on its line. A comment
 "containing" a marker means one containing such a line, which is the form the
@@ -226,12 +227,12 @@ stop before you answer.
 
 ## Evidence
 
-Require the diff, task spec, acceptance, relevant design contract and original
-closed criteria; ask for missing context instead of inventing it, and do not
+Require the diff, task spec, acceptance, relevant design contract and the
+standing list; ask for missing context instead of inventing it, and do not
 request worker reasoning or logs. Say which tests you executed in a checkout
 and which claims you only read; in diff mode you ran none. Judge current
 verdict evidence, not stale approvals. Gate 7 does not check final-answer
-provenance, and the protocol checker proves neither original-list membership
-nor a new regression; report those limits to [firstmate](../firstmate/SKILL.md),
+provenance, and the protocol checker proves neither that a finding matches
+the item it cites nor that a regression or new ground is real; report those limits to [firstmate](../firstmate/SKILL.md),
 which keeps the evidence, board-progress and Herdr pane rules once.
 

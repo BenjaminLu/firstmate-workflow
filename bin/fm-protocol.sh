@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# Round three. The worker asks once, the reviewer answers once and completely,
-# and after that the list is closed. This decides mechanically whether that
-# happened, so "the reviewer is drip-feeding" becomes a finding rather than a
-# feeling.
+# The standing list. Every REJECT, from round one, ends with the task's
+# numbered list closed by CRITERIA-COMPLETE; each later REJECT re-issues it
+# with the same numbering, earlier items marked done or open, and appends a
+# new item only as REGRESSION:<task> or NEW-GROUND:<task> (captain,
+# 2026-09-29; SK-007). This decides mechanically whether that happened, so
+# "the reviewer is drip-feeding" becomes a finding rather than a feeling.
 #
 #   fm-protocol.sh check --task T-004 --pr 9 --round 3 [--repo .]
 #
-# Exit 0 clean, 3 the worker skipped the question, 4 the list was never
-# closed, 5 the reviewer raised something off the closed list.
+# Exit 0 clean, 3 round three began with no standing list and no
+# ASK-PASS-CRITERIA, 4 the worker asked and no list was ever closed, 5 the
+# reviewer raised something off the list without a label, 6 a re-issued
+# list dropped an earlier item.
 set -uo pipefail
 # Nothing below may read standard input. A dispatched child inherits it, and
 # a child that reads it blocks the caller waiting for a human who is not
@@ -45,22 +49,51 @@ comments="$($GH pr view "$PR" --json comments \
 
 [ "$ROUND" -ge 3 ] 2>/dev/null || { echo "fm-protocol: round $ROUND, nothing to enforce"; exit 0; }
 
-asked=0; closed=0; list_len=0; off=''
+# A marker counts only as a line of its own, as fm-review.sh reads it: a
+# comment that mentions one in passing neither asks nor closes a list.
+has_marker() {
+  printf '%s\n' "$2" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -qxF "$1:$TASK"
+}
+item_no() { sed -nE 's/^[[:space:]]*([0-9]+)[.)].*/\1/p'; }
+
+asked=0; closed=0; list_len=0; items=''; off=''; dropped=''
 while IFS=$'\t' read -r who folded; do
   [ -n "$who" ] || continue
   text="$(printf '%s' "$folded" | tr '\r' '\n')"
-  case "$text" in *"ASK-PASS-CRITERIA:$TASK"*) asked=1; continue ;; esac
-  case "$text" in
-    *"CRITERIA-COMPLETE:$TASK"*)
-      closed=1
-      # the numbered items in the closing comment are the whole of the list
-      list_len="$(grep -cE '^[[:space:]]*[0-9]+[.)]' <<< "$text")"
-      continue ;;
-  esac
+  if has_marker ASK-PASS-CRITERIA "$text"; then asked=1; continue; fi
+  if has_marker CRITERIA-COMPLETE "$text"; then
+    # the list is the numbered lines before the last closing marker
+    numbered="$(printf '%s\n' "$text" | awk -v m="CRITERIA-COMPLETE:$TASK" '
+      { l = $0; gsub(/^[ \t]+|[ \t]+$/, "", l); line[NR] = $0; if (l == m) last = NR }
+      END { for (i = 1; i < last; i++) print line[i] }' |
+      grep -E '^[[:space:]]*[0-9]+[.)][[:space:]]')"
+    nums="$(printf '%s\n' "$numbered" | item_no | sort -un)"
+    if [ "$closed" = 1 ]; then
+      # the latest list is the standing one, so it may not shrink: an item
+      # leaves only by being marked done
+      for n in $items; do
+        grep -qx "$n" <<< "$nums" || dropped="${dropped}the list dropped item $n
+"
+      done
+      # and an item it appends carries its label on its own line
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        grep -qx "$(item_no <<< "$line")" <<< "$items" && continue
+        case "$line" in
+          *"REGRESSION:$TASK"*|*"NEW-GROUND:$TASK"*) ;;
+          *) off="$off$(printf '%s' "$line" | head -c 90)
+" ;;
+        esac
+      done <<< "$numbered"
+    fi
+    closed=1; items="$nums"
+    list_len="$(printf '%s\n' "$nums" | grep -c .)"
+    continue
+  fi
   [ "$closed" = 1 ] || continue
   [ -z "$REVIEWER" ] || [ "$who" = "$REVIEWER" ] || continue
   case "$text" in
-    *"APPROVE:$TASK"*|*"REGRESSION:$TASK"*) continue ;;
+    *"APPROVE:$TASK"*|*"REGRESSION:$TASK"*|*"NEW-GROUND:$TASK"*) continue ;;
   esac
   # after the list closes, a comment has to cite an item on it
   if ! grep -qE '(^|[^0-9])[0-9]+[.)]|item[[:space:]]+[0-9]+|#[0-9]+' <<< "$text"; then
@@ -70,10 +103,12 @@ while IFS=$'\t' read -r who folded; do
   fi
 done <<< "$comments"
 
-if [ "$asked" = 0 ]; then
-  echo "fm-protocol: round $ROUND with no ASK-PASS-CRITERIA:$TASK from the worker" >&2
-  emit --type protocol_violation --en "round $ROUND began without asking for the criteria" \
-       --tw "第 $ROUND 輪未先發 ASK-PASS-CRITERIA"
+# the gate is a standing list, not the ask: the worker asks only when it
+# finds no list, or an unclear one
+if [ "$closed" = 0 ] && [ "$asked" = 0 ]; then
+  echo "fm-protocol: round $ROUND with no standing list (CRITERIA-COMPLETE:$TASK) and no ASK-PASS-CRITERIA:$TASK" >&2
+  emit --type protocol_violation --en "round $ROUND began without a standing list and without asking for the criteria" \
+       --tw "第 $ROUND 輪既無現行清單也未先發 ASK-PASS-CRITERIA"
   exit 3
 fi
 if [ "$closed" = 0 ]; then
@@ -82,8 +117,15 @@ if [ "$closed" = 0 ]; then
        --tw "reviewer 未宣告封閉清單完整"
   exit 4
 fi
+if [ -n "$dropped" ]; then
+  echo "fm-protocol: a re-issued list is not the standing one:" >&2
+  printf '%s' "$dropped" | sed 's/^/  /' >&2
+  emit --type protocol_violation --en "a re-issued list dropped an item without marking it done" \
+       --tw "重發的清單漏掉了未標記完成的項目"
+  exit 6
+fi
 if [ -n "$(printf '%s' "$off" | tr -d '[:space:]')" ]; then
-  echo "fm-protocol: the reviewer raised something off the closed list of $list_len:" >&2
+  echo "fm-protocol: the reviewer raised something off the closed list of $list_len, unlabelled:" >&2
   printf '%s' "$off" | sed 's/^/  /' >&2
   emit --type protocol_violation --en "reviewer raised an off-list item after closing a list of $list_len" \
        --tw "reviewer 在封閉 $list_len 項清單後提出清單外問題"
