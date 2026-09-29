@@ -1064,10 +1064,13 @@ const at = src.indexOf("const options = [");
 const end = src.indexOf(".join(\x27\x27);", at);
 if (at < 0 || end < 0) { console.log("FAIL no options markup"); process.exit(1); }
 const expr = src.slice(at + "const options = ".length, end + ".join(\x27\x27)".length);
-const render = new Function("d", "content", "pick", "locked", "esc", "words", "t", "said", "return " + expr);
+// tipAttr is the read-only tooltip (T-145): nothing in a tab that can write,
+// the reason as a title in one that cannot
+const render = new Function("d", "content", "pick", "locked", "esc", "words", "t", "said", "tipAttr", "return " + expr);
 const opts = (keys) => Object.fromEntries(keys.map(k => [k, { description: "do " + k, pros: "p", cons: "c" }]));
 const card = (keys) => ({ id: "D-1", kind: "choice", details: { en: { options: opts(keys) } } });
-const out = (keys, locked = false) => render(card(keys), { options: opts(keys) }, undefined, locked, String, String, String, String);
+const out = (keys, locked = false) => render(card(keys), { options: opts(keys) }, undefined, locked, String, String, String, String,
+  locked ? () => " title=\"readOnlyTip\"" : () => "");
 const four = out(["A", "B", "C", "D"]), three = out(["A", "B", "C"]);
 if (!/data-c="D"[^>]*>D · do D</.test(four)) { console.log("FAIL no D button: " + four); process.exit(1); }
 if (/data-c="D"/.test(three)) { console.log("FAIL invented D"); process.exit(1); }
@@ -1075,7 +1078,7 @@ if (/data-c="D"/.test(three)) { console.log("FAIL invented D"); process.exit(1);
 // with every option disabled; one that can still be answered with none
 if (/disabled/.test(four)) { console.log("FAIL an open card is disabled: " + four); process.exit(1); }
 const shut = out(["A", "B", "C", "D"], true);
-if ((shut.match(/<button[^>]*\sdisabled>/g) || []).length !== 4) { console.log("FAIL a locked card still takes a choice: " + shut); process.exit(1); }
+if ((shut.match(/<button[^>]*\sdisabled title="readOnlyTip">/g) || []).length !== 4) { console.log("FAIL a locked card still takes a choice: " + shut); process.exit(1); }
 console.log("ok");
 ')"
 assert_eq "ok" "$dbtn" "the page shows a D button on a card that offers D, and only there, and disables every option on a card that is locked"
