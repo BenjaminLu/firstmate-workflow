@@ -1260,7 +1260,11 @@ rm -f "$sf/unit.spec.ts"; rm -rf "$sf/tests/e2e"
 # collects the "+ path" line every shard printed and compares the combined
 # set (sorted) against the fixture's own suite list (sorted), then checks
 # no name repeats. A suite added after the split - "new" here - lands in
-# exactly one shard too, with nothing telling ci.sh which.
+# exactly one shard too, with nothing telling ci.sh which. Only the run
+# lines count: every shard's summary line names the longest suite as well.
+shard_ran() {   # shard_ran <ci.sh output>: the suites its "+ path" lines ran
+  grep -oE '^[[:space:]]*\+ tests/[a-z0-9-]+\.test\.sh' <<<"$1" | sed 's/^[[:space:]]*+ //' || true
+}
 sh_dir="$(fixture)"
 for n in one two three four five; do
   printf '#!/usr/bin/env bash\nexit 0\n' > "$sh_dir/tests/$n.test.sh"
@@ -1268,7 +1272,7 @@ done
 shard_seen=''
 for i in 1 2 3; do
   out="$(FM_ROOT="$sh_dir" bash "$ROOT/bin/ci.sh" --stage bash --shard "$i/3" 2>&1)"
-  shard_seen="$shard_seen$(printf '%s\n' "$out" | grep -oE 'tests/[a-z]+\.test\.sh')
+  shard_seen="$shard_seen$(shard_ran "$out")
 "
 done
 want_list="$(cd "$sh_dir" && printf '%s\n' tests/*.test.sh | sort)"
@@ -1283,7 +1287,7 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$sh_dir/tests/sixnew.test.sh"
 shard_seen=''
 for i in 1 2 3; do
   out="$(FM_ROOT="$sh_dir" bash "$ROOT/bin/ci.sh" --stage bash --shard "$i/3" 2>&1)"
-  shard_seen="$shard_seen$(printf '%s\n' "$out" | grep -oE 'tests/[a-z]+\.test\.sh')
+  shard_seen="$shard_seen$(shard_ran "$out")
 "
 done
 want_list="$(cd "$sh_dir" && printf '%s\n' tests/*.test.sh | sort)"
@@ -1300,10 +1304,13 @@ timings_out="$(safe_tmpdir)/timings.txt"
 FM_ROOT="$tm_dir" FM_CI_TIMINGS_OUT="$timings_out" bash "$ROOT/bin/ci.sh" --stage bash >/dev/null 2>&1
 assert_ok "test -s '$timings_out'" "FM_CI_TIMINGS_OUT is written when asked for"
 assert_contains "$(cat "$timings_out")" "tests/quick.test.sh " "and names the suite"
+# in milliseconds, not whole seconds (T-148): whole seconds recorded every
+# suite under a second - and main's three 10-second ones - as 0
+assert_matches "$(cat "$timings_out")" '^tests/quick\.test\.sh [0-9]+\.[0-9]{3}$' \
+  "the duration is seconds with millisecond resolution"
 
 # FM_CI_TIMINGS_IN feeds --shard's balance; a suite it names goes by that
-# duration, one it does not name (new, or the file absent) falls back to
-# its byte size - proved by forcing a tiny suite to outweigh a huge one and
+# duration - proved by forcing a tiny suite to outweigh a huge one and
 # watching the split follow the forced number, not the files' real sizes
 bal_dir="$(fixture)"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$bal_dir/tests/tiny.test.sh"
@@ -1313,11 +1320,133 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$bal_dir/tests/tiny.test.sh"
 } > "$bal_dir/tests/huge.test.sh"
 forced="$(safe_tmpdir)/forced.txt"
 printf 'tests/tiny.test.sh 100\ntests/huge.test.sh 1\n' > "$forced"
-one="$(FM_ROOT="$bal_dir" FM_CI_TIMINGS_IN="$forced" bash "$ROOT/bin/ci.sh" --stage bash --shard 1/2 2>&1 | grep -oE 'tests/[a-z]+\.test\.sh')"
-two="$(FM_ROOT="$bal_dir" FM_CI_TIMINGS_IN="$forced" bash "$ROOT/bin/ci.sh" --stage bash --shard 2/2 2>&1 | grep -oE 'tests/[a-z]+\.test\.sh')"
+one="$(shard_ran "$(FM_ROOT="$bal_dir" FM_CI_TIMINGS_IN="$forced" bash "$ROOT/bin/ci.sh" --stage bash --shard 1/2 2>&1)")"
+two="$(shard_ran "$(FM_ROOT="$bal_dir" FM_CI_TIMINGS_IN="$forced" bash "$ROOT/bin/ci.sh" --stage bash --shard 2/2 2>&1)")"
 assert_eq "tests/tiny.test.sh" "$one" "FM_CI_TIMINGS_IN's forced duration, not the file's real size, decides the split"
 assert_eq "tests/huge.test.sh" "$two" "so the two land in different shards by the numbers given, not by size"
 rm -rf "$sf" "$tm_dir" "$bal_dir"
+
+# Balanced by time in one unit (T-148). The shape main had on 9e4194d: three
+# fast suites recorded at 0 but large on disk, and one suite the timings do
+# not name. Read as unknown and weighed by their byte size, the three zeros
+# each took a shard of their own and everything else went to the fourth.
+# A zero is fast; the unnamed suite is estimated in seconds (its size times
+# the recorded seconds per byte), never raw bytes beside seconds. The bar:
+# no shard's recorded load exceeds the mean by more than the longest suite.
+bt_dir="$(fixture)"
+bt_pad() {   # bt_pad <file> <comment lines>
+  { printf '#!/usr/bin/env bash\n'
+    for _ in $(seq 1 "$2"); do printf '# %s\n' "0123456789012345678901234567890123456789"; done
+    printf 'exit 0\n'
+  } > "$1"
+}
+bt_in="$(safe_tmpdir)/timings.txt"
+: > "$bt_in"
+for row in slowa:60 slowb:50 slowc:40 slowd:30 mida:20 midb:20 midc:10 midd:10 \
+           fasta:0 fastb:0 fastc:0; do
+  name="${row%%:*}"; secs="${row#*:}"
+  # the zeros are the largest files, so bytes-for-seconds puts them first
+  if [ "$secs" = 0 ]; then bt_pad "$bt_dir/tests/$name.test.sh" 200
+  else bt_pad "$bt_dir/tests/$name.test.sh" 48; fi
+  printf 'tests/%s.test.sh %s\n' "$name" "$secs" >> "$bt_in"
+done
+bt_pad "$bt_dir/tests/newx.test.sh" 48   # absent from the timings: a new suite
+bt_all=''; bt_max=0
+for i in 1 2 3 4; do
+  out="$(FM_ROOT="$bt_dir" FM_CI_TIMINGS_IN="$bt_in" bash "$ROOT/bin/ci.sh" --stage bash --shard "$i/4" 2>&1)"
+  ran="$(shard_ran "$out")"
+  bt_all="$bt_all$ran
+"
+  assert_contains "$out" "ci: shard $i/4: " "shard $i/4 prints what it predicts"
+  assert_contains "$out" "longest suite tests/slowa.test.sh 60.0s" "and names the longest single suite"
+  # the recorded seconds of the suites this shard ran
+  load="$(printf '%s\n' "$ran" | awk 'NR==FNR{d[$1]=$2; next} $1 in d{s+=d[$1]} END{print s+0}' "$bt_in" -)"
+  [ "$load" -le "$bt_max" ] || bt_max="$load"
+  # a shard of nothing but zeros, or of nothing but the unrecorded suite,
+  # is a shard that weighed bytes as seconds
+  weighty="$(grep -cE '/(slow|mid)[a-z0-9-]\.test\.sh$' <<<"$ran" || true)"
+  assert_ne "0" "$weighty" "shard $i/4 runs a suite recorded above 0, not only zeros or the new one"
+done
+want_list="$(cd "$bt_dir" && printf '%s\n' tests/*.test.sh | sort)"
+got_list="$(printf '%s\n' "$bt_all" | sed '/^$/d' | sort)"
+assert_eq "$want_list" "$got_list" "every suite still runs exactly once"
+# 240s recorded over 4 shards: mean 60, longest suite 60, so no shard over 120
+assert_ok "[ '$bt_max' -le 120 ]" "no shard's recorded load exceeds the mean by more than the longest suite (heaviest: ${bt_max}s)"
+rm -rf "$bt_dir"
+
+# The acceptance bar on the data it names: main's own per-suite timings from
+# its last run before T-148 (run 36511784453 on 9e4194d, the suite-timings-*
+# artifacts), 34 suites and 1693s, four of them recorded as whole-second 0s
+# and padded to be the largest files, as on main. On those timings every
+# shard's summary line names worker.test.sh's 539s as the longest suite and
+# predicts no more than the mean plus the longest suite (1693/4 + 539), the
+# recorded seconds of the suites its "+ path" lines ran stay under the same
+# bar, and the four shards together run each of the 34 exactly once. The
+# fail-first check of the old byte fallback is the synthetic test above.
+mr_dir="$(fixture)"
+mr_in="$(safe_tmpdir)/main-timings.txt"
+cat > "$mr_in" <<'TIMINGS'
+tests/cleanup.test.sh 0
+tests/lib.test.sh 0
+tests/protocol.test.sh 0
+tests/skills.test.sh 0
+tests/guard.test.sh 1
+tests/i18n.test.sh 1
+tests/traps.test.sh 1
+tests/emit.test.sh 2
+tests/open.test.sh 2
+tests/decisions.test.sh 3
+tests/pipefail-grep.test.sh 3
+tests/sync-prs.test.sh 3
+tests/option-loop.test.sh 4
+tests/ready.test.sh 5
+tests/diagram.test.sh 8
+tests/merge.test.sh 8
+tests/session.test.sh 8
+tests/crew-end-to-end.test.sh 11
+tests/config.test.sh 14
+tests/project.test.sh 16
+tests/dispatch.test.sh 20
+tests/selfupdate.test.sh 23
+tests/e2e-loop.test.sh 25
+tests/sandbox.test.sh 27
+tests/board.test.sh 36
+tests/gate.test.sh 37
+tests/decide.test.sh 38
+tests/canary.test.sh 56
+tests/adapter-contract.test.sh 89
+tests/reconcile.test.sh 110
+tests/review.test.sh 128
+tests/ci.test.sh 197
+tests/herdr.test.sh 278
+tests/worker.test.sh 539
+TIMINGS
+while read -r path secs; do
+  if [ "$secs" = 0 ]; then bt_pad "$mr_dir/$path" 200
+  else printf '#!/usr/bin/env bash\nexit 0\n' > "$mr_dir/$path"; fi
+done < "$mr_in"
+mr_bar="$(awk '{s += $2; if ($2 > m) m = $2} END {printf "%.1f", s / 4 + m}' "$mr_in")"
+mr_all=''
+for i in 1 2 3 4; do
+  out="$(FM_ROOT="$mr_dir" FM_CI_TIMINGS_IN="$mr_in" bash "$ROOT/bin/ci.sh" --stage bash --shard "$i/4" 2>&1)"
+  ran="$(shard_ran "$out")"
+  mr_all="$mr_all$ran
+"
+  summary="$(grep -E "^ci: shard $i/4: " <<<"$out" || true)"
+  assert_contains "$summary" "longest suite tests/worker.test.sh 539.0s" \
+    "main's timings: shard $i/4 predicts in seconds, and names worker.test.sh's 539s as the longest suite"
+  predicted="$(sed -n 's/.* predicted \([0-9.]*\)s;.*/\1/p' <<<"$summary")"
+  assert_ok "awk 'BEGIN { exit !(\"$predicted\" != \"\" && \"$predicted\" + 0 <= $mr_bar) }'" \
+    "main's timings: shard $i/4's predicted ${predicted:-?}s is within mean + longest (${mr_bar}s)"
+  load="$(printf '%s\n' "$ran" | awk 'NR==FNR{d[$1]=$2; next} $1 in d{s+=d[$1]} END{print s+0}' "$mr_in" -)"
+  assert_ok "[ '$load' -le '${mr_bar%.*}' ]" \
+    "main's timings: the suites shard $i/4 ran add up to ${load}s, within mean + longest"
+done
+want_list="$(sed 's/ .*//' "$mr_in" | sort)"
+got_list="$(printf '%s\n' "$mr_all" | sed '/^$/d' | sort)"
+assert_eq "$want_list" "$got_list" "main's timings: the four shards run each of the 34 suites exactly once"
+assert_eq "34" "$(grep -c . <<<"$got_list" || true)" "all 34 of them"
+rm -rf "$mr_dir"
 
 # --- the workflow: separate jobs behind one required `ci` check -----------
 wf="$(cat "$gha")"
