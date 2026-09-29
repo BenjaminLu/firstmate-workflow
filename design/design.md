@@ -1989,16 +1989,28 @@ own slice of one gate run instead of all of it:
   lightest so far, so the shards come out balanced rather than merely
   evenly counted, and every suite lands in exactly one shard (`i`, `n`
   themselves are validated the way `FM_CI_JOBS` is — a decimal `i/n` with
-  `i` from 1 to `n`, or exit 64). A suite's duration comes from
-  `FM_CI_TIMINGS_IN` (a "`path seconds`" line per suite, from a previous
-  green run's artifact) when that file names it; a suite the file does not
-  name — new, or the file absent entirely — falls back to its byte size,
-  the same proxy `pool_order` has always used for the one-process ordering.
-  So a newly added suite still gets a duration and so a deterministic
-  shard, with no file to update by hand.
+  `i` from 1 to `n`, or exit 64). Every suite's weight is in one unit,
+  seconds (T-148). A suite `FM_CI_TIMINGS_IN` names (a "`path seconds`"
+  line per suite, from a previous green run's artifact) takes that value,
+  zero included: a suite recorded at 0 is fast, not unknown. A suite the
+  file does not name — new, or the file absent — is estimated in seconds
+  as its byte size times the median seconds-per-byte of the recorded
+  suites; only when no suite is recorded at all is every weight its byte
+  size, and then no two units meet in one sort. So a newly added suite
+  still gets a duration and a deterministic shard, with no file to update
+  by hand. On `main` 9e4194d the two units were mixed: timings were whole
+  seconds, three ten-second suites were recorded as 0, read as unknown and
+  weighed as their thousands of bytes, and took three shards alone while
+  the other 31 suites ran on the fourth for 9m13s. Each shard prints one
+  line, `ci: shard i/n: K suites, predicted Xs; mean Ys; longest suite
+  <path> Zs`, so a shard's predicted load and a suite too long for any
+  split (T-130's input) are readable from the job log. Longest-first
+  packing keeps every shard within the longest single suite of the mean.
 
 The bash stage records what each suite actually took, one "`path seconds`"
-line per suite, to `FM_CI_TIMINGS_OUT` when that variable is set — never
+line per suite with millisecond resolution (`12.345`; bash 5's
+`EPOCHREALTIME`, else perl's `Time::HiRes`), to `FM_CI_TIMINGS_OUT` when
+that variable is set — never
 under `FM_ROOT`, so the gate still leaves nothing behind in the tree it
 judges — and only then: the plain, flag-less run pays for none of the timing
 calls. `.github/workflows/ci.yml` runs four kinds of job: `fast`; `bash`, a
@@ -2018,9 +2030,11 @@ Playwright-browser cache the one job had. `tests/ci.test.sh` proves the
 flags' validation, that `--stage` runs only its own group of stages, that
 `--shard`'s shards union to exactly `tests/*.test.sh` with no suite in two
 (including a suite added after the fixture was first split), that
-`FM_CI_TIMINGS_OUT` is written only when asked, and that
+`FM_CI_TIMINGS_OUT` is written only when asked and in milliseconds, that
 `FM_CI_TIMINGS_IN`'s recorded duration — not a suite's real size — decides
-the split; and reads the workflow file for the job names, the shard flag,
+the split, and, from timings with zeros and a missing suite, that no shard
+is left holding only zero-timed suites and no shard's recorded load exceeds
+the mean by more than the longest suite; and reads the workflow file for the job names, the shard flag,
 the final `ci` job's `needs`, the per-job timeout, and, for every job that
 runs `bun install`, a `bun.lock`-keyed cache step positioned before it.
 
