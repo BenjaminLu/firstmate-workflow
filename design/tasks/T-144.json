@@ -1,0 +1,31 @@
+{
+  "id": "T-144",
+  "milestone": "M3",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "crew rounds run headless, needing no Herdr: fm launches, supervises and reaps them itself, and a terminal host (Herdr, cmux, tmux) is only an optional window onto them",
+  "scope": [
+    "bin/fm-herdr.py",
+    "bin/fm-worker.sh",
+    "bin/fm-review.sh",
+    "bin/fm-run.sh",
+    "bin/fm-dispatch.sh",
+    "bin/fm.sh",
+    "bin/lib/**",
+    "board/**",
+    "i18n/**",
+    "tests/**",
+    "design/**",
+    "skills/**",
+    "README.md",
+    "config.yaml",
+    "design/tasks/T-144.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-09-29 the captain approved the redesign for working on other repositories (reviewed and grilled against consenlabs/tokenlon-mm-agent PR #164): external data outside the engine tree under FM_HOME, private repositories allowed, watching done by scripts at zero model cost, and no dependence on Herdr. Its own spec file, design/tasks/T-144.json, is committed on this branch.",
+    "Headless by default. A worker or reviewer round runs as a supervised process group started by fm (setsid, pid and exit files, stdout and stderr to the run's log), with the same sandbox, timeouts, lost-crew detection, stop and reaping Herdr gives today. fm_refuse_herdr_bypass no longer refuses a round without Herdr.",
+    "The Herdr experience is kept, by the captain's requirement (2026-09-29): with Herdr present (detected or `host: herdr`), every worker and reviewer round still gets its own labelled tab or pane, opened when the round starts, showing the round's live output as today (the same stream, followed from the run's log), focusable from the board as today, and closed when the round ends (the zombie sweep's job, now fm's). What changes is only ownership: the round's process belongs to fm, not to the pane, so a closed or crashed pane never kills a round, and a machine without Herdr runs the same round with no pane. The same window is offered for cmux and tmux where they are the host. A test proves, with Herdr stubbed, that a round opens its labelled pane, the pane shows the live stream, and closing the pane leaves the round running.",
+    "A terminal host is optional: `host:` in config.yaml (none|herdr|cmux|tmux, detected when unset) only opens a pane that follows the run's log for people to watch; losing the pane never affects the round. Herdr keeps its current extras where present.",
+    "The board shows headless rounds exactly as pane rounds (crew, state, activity). Tests run a round with no terminal host at all, and one with each host stubbed. Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves. Stubs answer as the real tools do."
+  ]
+}

@@ -31,16 +31,19 @@ cancellable decision watcher. It does not authorize work or invent success when
 Herdr/transport is missing. Declared adapters only: do not claim arbitrary
 engines load AGENTS.md.
 
-When `HERDR_ENV=1`, managed Herdr transport is the default for real
-`fm-worker` / `fm-review` / `fm-dispatch` / `fm-run` entrypoints: one dedicated
-unfocused tab per run, canonical crew labels, ownership-safe close after a
-positively completed final status. Outside that session, supported adapters and
-vendor fallback still run; transport or empty/partial output is never reported
-as fabricated success.
+Crew rounds run headless: `fm-worker` / `fm-review` / `fm-dispatch` / `fm-run`
+start each round as a process group fm supervises itself (`setsid`, output in
+the run's `run.log`, `runner.pid` and `runner.exit` beside it), so no terminal
+host is needed. `host:` in `config.yaml` (`none|herdr|cmux|tmux`, detected when
+unset) only opens a window for people to watch: with Herdr, one dedicated
+unfocused tab per run with the canonical crew label, showing the run's live log
+and closed, ownership-safe, after a positively completed final status; cmux and
+tmux get the same window. A closed or crashed window never affects the round,
+and a window that cannot be opened is skipped. Transport or empty/partial output
+is never reported as fabricated success.
 
-Explicit opt-outs (when applicable): `FM_TRANSPORT=direct` (with
-`FM_ALLOW_DIRECT=1` if inside Herdr), `FM_AUTOCLOSE=0`, and `fm-session.sh stop`
-for decision watching. Scope and merge approval still go through the captain
+Options: `FM_TRANSPORT=direct` (no window), `FM_HOST`, `FM_AUTOCLOSE=0`, and
+`fm-session.sh stop` for decision watching. Scope and merge approval still go through the captain
 board.
 
 Firstmate inspects existing work and live agents, then coordinates repository

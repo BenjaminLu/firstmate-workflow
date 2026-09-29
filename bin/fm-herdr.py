@@ -598,7 +598,7 @@ class Herdr:
         self.run = Path(run)
         self.binary = shutil.which('herdr')
         if not self.binary:
-            raise RuntimeError('HERDR_ENV=1 but herdr is unavailable; stop and report — do not set FM_TRANSPORT=direct')
+            raise RuntimeError('herdr is not installed')
 
     def __call__(self, *args):
         result = subprocess.run([self.binary, *args], capture_output=True, timeout=15)
@@ -612,60 +612,189 @@ class Herdr:
         return json.loads(result.stdout)['result']
 
 
-def managed():
-    """True when adapters must use owned Herdr panes.
+HOSTS = ('none', 'herdr', 'cmux', 'tmux')
 
-    Inside HERDR_ENV=1, FM_TRANSPORT=direct is refused (protocol violation)
-    unless FM_ALLOW_DIRECT=1 for isolated tests. Outside Herdr, adapters run
-    in-process without inventing session wrappers.
+
+def window_host(root):
+    """The terminal host that gets a window onto a round, or 'none'.
+
+    A window is only somewhere for people to watch: it follows the run's log
+    and never carries the round. `host:` in config.yaml (FM_HOST overrides it)
+    names one; unset, the host fm was started from is detected. A round with
+    FM_TRANSPORT=direct asks for no window at all.
     """
-    if os.environ.get('HERDR_ENV') != '1':
-        return False
-    if os.environ.get('FM_TRANSPORT', 'herdr') == 'direct':
-        if os.environ.get('FM_ALLOW_DIRECT') == '1':
-            return False
-        raise RuntimeError(
-            'FM_TRANSPORT=direct is refused when HERDR_ENV=1; '
-            'use stock fm-worker.sh / fm-review.sh managed Herdr transport')
-    return True
+    if os.environ.get('FM_TRANSPORT') == 'direct':
+        return 'none'
+    asked = os.environ.get('FM_HOST', '')
+    if not asked:
+        entry = _config_key(_config_lines(root), 'host')
+        asked = entry[0].strip('\'" ') if entry else ''
+    if asked:
+        if asked in HOSTS:
+            return asked
+        print('fm: host: %r is not one of %s; running with no window' % (asked, '|'.join(HOSTS)),
+              file=sys.stderr)
+        return 'none'
+    if os.environ.get('HERDR_ENV') == '1':
+        return 'herdr'
+    if os.environ.get('CMUX_WORKSPACE_ID') or os.environ.get('CMUX_SOCKET_PATH'):
+        return 'cmux'
+    if os.environ.get('TMUX'):
+        return 'tmux'
+    return 'none'
 
 
-def transport(adapter, prompt, tree, log):
-    """A whole adapter executes in the pane, preserving normal verdict/fallback."""
-    # Caller-side wait must survive the launching shell exiting (SIGHUP). The
-    # pane-child also ignores SIGHUP and publishes last-result / close itself.
-    signal.signal(signal.SIGHUP, signal.SIG_IGN)
-    root = Path(os.environ.get('FM_ROOT', Path(adapter).resolve().parents[2])).resolve()
-    code = Path(os.environ['FM_CODE_ROOT']) if os.environ.get('FM_CODE_ROOT') else snapshot(root)
-    adapter = str(code / 'bin/adapters' / Path(adapter).name)
-    role = os.environ.get('FM_ROLE', 'worker'); task = os.environ.get('FM_TASK', 'T-adapter')
-    logical = Path(os.environ['FM_RUN_DIR']) if os.environ.get('FM_RUN_DIR') else allocate(root, role, task, '')
-    # Vendor fallback keeps the logical actor and verified tab/pane; artifacts differ.
-    attempt = Path(tempfile.mkdtemp(prefix=Path(adapter).stem + '-', dir=logical))
-    actor = logical.name
-    (attempt / 'prompt.md').write_text(role_context(code, role, task, actor, Path(prompt).read_text()))
-    env = dict(os.environ, FM_ROLE=role, FM_TASK=task,
-               FM_ACTOR=actor, FM_FINAL_PATH=str(attempt / 'final.txt'),
-               FM_ATTEMPT_DIR=str(attempt), FM_CONTEXT_READY='1')
-    # A spawned pane does not necessarily inherit the launcher's environment.
-    # Keep its explicit environment private and do not print credentials.
-    save(attempt / 'environment.json', env); (attempt / 'environment.json').chmod(0o600)
-    payload = dict(adapter=str(Path(adapter).resolve()), prompt=str(attempt / 'prompt.md'),
-                   tree=str(Path(tree).resolve()), actor=actor, role=role, task=task,
-                   lifetime_tracking=True)
-    save(attempt / 'invocation.json', payload)
-    if not managed():
-        reserve_execution(attempt)
+class AlreadyStarted(RuntimeError):
+    pass
+
+
+def spawn_runner(attempt):
+    """Start the round as a process group of its own, owned by fm and not by
+    any terminal: setsid, stdout and stderr to the run's log, its pid on file.
+    A pane that closes or crashes cannot take it down."""
+    attempt = Path(attempt)
+    reserve_execution(attempt)
+    with (attempt / 'run.log').open('ab') as out:
+        proc = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), 'pane-child', str(attempt)],
+                                stdin=subprocess.DEVNULL, stdout=out, stderr=out,
+                                start_new_session=True, close_fds=True)
+    _children.append(proc)
+    (attempt / 'runner.pid').write_text(f'{proc.pid}\n')
+    return proc
+
+
+def write_exit(attempt, rc):
+    path = Path(attempt) / 'runner.exit'
+    temp = path.with_name(path.name + '.' + uuid.uuid4().hex)
+    temp.write_text(f'{rc}\n'); os.replace(temp, path)
+
+
+def run_supervised(attempt):
+    """The runner's own entry: the round, then its exit code on file."""
+    try:
         rc = pane_child(attempt)
-        with Path(log).open('ab') as out: out.write((attempt / 'cli.log').read_bytes())
-        save(logical / 'last-result.json', dict(read(attempt / 'result.json'), attempt=str(attempt)))
-        return rc
+    except (AlreadyStarted, BlockingIOError):
+        raise  # someone else's round owns the exit file
+    except BaseException:
+        write_exit(attempt, 70); raise
+    write_exit(attempt, rc)
+    return rc
+
+
+def follow(attempt, poll=0.2):
+    """What a window shows: the run's log from its start, followed until the
+    round ends (result or exit file, or a runner that is gone). Stopping this
+    - a closed pane - stops nothing else."""
+    attempt = Path(attempt); log = attempt / 'run.log'; at = 0; unseen = time.monotonic()
+    out = sys.stdout.buffer
+    while True:
+        over = (attempt / 'result.json').exists() or (attempt / 'runner.exit').exists()
+        pid = attempt / 'runner.pid'
+        if not over and pid.is_file():
+            try: os.kill(int(pid.read_text()), 0)
+            except (ValueError, OSError): over = True
+        elif not over and time.monotonic() - unseen > float(os.environ.get('FM_FOLLOW_GRACE', '120')):
+            over = True  # no round ever started under this window
+        if log.is_file():
+            with log.open('rb') as source:
+                source.seek(at); data = source.read()
+            if data:
+                out.write(data); out.flush(); at += len(data)
+                continue
+        if over: return 0
+        time.sleep(poll)
+
+
+def stop_run(root, actor, grace=5.0):
+    """Stop a live round by its process group, then reap: TERM, and KILL after
+    the grace. Only a pid still running fm-herdr.py is signalled."""
+    stopped = []
+    for pidfile in sorted((Path(root) / 'state/runs' / actor).glob('*/runner.pid')):
+        try: pid = int(pidfile.read_text())
+        except (ValueError, OSError): continue
+        if not process_matches(dict(pid=pid, token='fm-herdr.py')): continue
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try: os.killpg(pid, sig)
+            except OSError: break
+            end = time.monotonic() + (grace if sig == signal.SIGTERM else 2)
+            while time.monotonic() < end and process_matches(dict(pid=pid, token='fm-herdr.py')):
+                time.sleep(.05)
+            if not process_matches(dict(pid=pid, token='fm-herdr.py')): break
+        stopped.append(str(pidfile.parent))
+    return stopped
+
+
+def supervise(attempt, proc, timeout, identity, chain_attempt):
+    """Wait for the round's result; a runner that is gone with nothing live
+    left of it and no result was lost, and says so as a result."""
+    attempt = Path(attempt)
+    deadline = time.monotonic() + timeout
+    while not (attempt / 'result.json').exists():
+        if proc.poll() is not None and not (attempt / 'result.json').exists():
+            state = execution_state(attempt)
+            if not (state and state.get('live')):
+                if (attempt / 'result.json').exists(): break
+                lost = dict(identity, exit_code=70, status='lost', pid=proc.pid,
+                            runner_exit=proc.returncode, chain_attempt=chain_attempt,
+                            cli_exit_code=None)
+                save(attempt / 'result.json', lost); publish_last_result(attempt, lost)
+                break
+        if time.monotonic() >= deadline:
+            save(attempt / 'transport.json', dict(status='timed-out', actor=identity['actor']))
+            raise RuntimeError('run timed out; process and artifacts retained at ' + str(attempt))
+        time.sleep(.1)
+    return read(attempt / 'result.json')
+
+
+class Host:
+    """A terminal host other than Herdr (tmux, cmux): one command, logged."""
+    def __init__(self, name, run):
+        self.name = name; self.run = Path(run)
+        self.binary = shutil.which(name)
+        if not self.binary:
+            raise RuntimeError(name + ' is not installed')
+
+    def __call__(self, *args):
+        result = subprocess.run([self.binary, *args], capture_output=True, text=True, timeout=15)
+        with (self.run / 'window.log').open('a') as out:
+            out.write(shlex.join(args) + '\n' + result.stdout + result.stderr)
+        if result.returncode: raise RuntimeError(self.name + ' command failed: ' + shlex.join(args))
+        return result.stdout.strip()
+
+
+def open_generic_window(host, attempt, tree, actor, command):
+    """A labelled tmux window or cmux workspace showing the run's log."""
+    control = Host(host, attempt)
+    if host == 'tmux':
+        if not os.environ.get('TMUX'): raise RuntimeError('not inside a tmux session')
+        ref = control('new-window', '-d', '-P', '-F', '#{window_id}', '-n', actor,
+                      '-c', str(Path(tree).resolve()), command)
+    else:
+        shown = control('new-workspace', '--name', actor, '--cwd', str(Path(tree).resolve()),
+                        '--command', command)
+        found = re.search(r'workspace:\d+|[0-9A-Fa-f]{8}-[0-9A-Fa-f-]{27}', shown)
+        ref = found.group(0) if found else ''
+    record = dict(host=host, status='open', ref=ref, actor=actor)
+    save(Path(attempt) / 'window.json', record)
+    return record
+
+
+def close_generic_window(record, attempt):
+    """tmux closes a window when its command exits; cmux is asked to."""
+    if record['host'] == 'cmux' and record.get('ref'):
+        try: Host('cmux', attempt)('close-workspace', '--workspace', record['ref'])
+        except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+            return 'retained: ' + str(error)
+    return 'closed'
+
+
+def open_herdr_window(attempt, logical, tree, actor, task, env, command):
+    """The round's labelled Herdr tab, opened before the round starts, running
+    `command` (the follower). Anything uncertain raises and leaves the pane
+    alone; the round then runs with no window."""
     control = Herdr(attempt)
-    timeout = float(os.environ.get('FM_HERDR_TIMEOUT', '21600'))
-    if not math.isfinite(timeout) or timeout <= 0:
-        raise ValueError('FM_HERDR_TIMEOUT must be positive finite seconds')
     caller = os.environ.get('HERDR_PANE_ID')
-    if not caller: raise RuntimeError('managed transport requires a known caller HERDR_PANE_ID')
+    if not caller: raise RuntimeError('no caller HERDR_PANE_ID to open a tab beside')
     # Read caller membership and UI focus separately: dispatch may itself be unfocused.
     current = control('pane', 'get', caller)['pane']
     if (current.get('pane_id') != caller or not current.get('tab_id')
@@ -761,20 +890,74 @@ def transport(adapter, prompt, tree, log):
         if time.monotonic() >= shell_deadline:
             raise RuntimeError('pane changed before launch; retained')
         time.sleep(0.2)
-    command = shlex.join([sys.executable, str(Path(__file__).resolve()), 'pane-child', str(attempt)])
-    # Persist before sending input: a lost reply may still have launched work.
-    reserve_execution(attempt)
+    # The follower only prints the run's log; a lost reply here launches nothing.
     control('pane', 'run', pane, command)
-    deadline = time.monotonic() + timeout
-    while not (attempt / 'result.json').exists():
-        if time.monotonic() >= deadline:
-            save(attempt / 'transport.json', dict(status='timed-out', actor=actor, pane=pane))
-            raise RuntimeError('pane run timed out; process and artifacts retained at ' + str(attempt))
-        time.sleep(.1)
-    result = read(attempt / 'result.json')
+    return owner, control
+
+
+def transport(adapter, prompt, tree, log):
+    """A whole adapter executes as a round fm owns, preserving normal verdict/fallback."""
+    # Caller-side wait must survive the launching shell exiting (SIGHUP). The
+    # runner is a session of its own and ignores it too.
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    root = Path(os.environ.get('FM_ROOT', Path(adapter).resolve().parents[2])).resolve()
+    code = Path(os.environ['FM_CODE_ROOT']) if os.environ.get('FM_CODE_ROOT') else snapshot(root)
+    adapter = str(code / 'bin/adapters' / Path(adapter).name)
+    role = os.environ.get('FM_ROLE', 'worker'); task = os.environ.get('FM_TASK', 'T-adapter')
+    logical = Path(os.environ['FM_RUN_DIR']) if os.environ.get('FM_RUN_DIR') else allocate(root, role, task, '')
+    # Vendor fallback keeps the logical actor and verified tab/pane; artifacts differ.
+    attempt = Path(tempfile.mkdtemp(prefix=Path(adapter).stem + '-', dir=logical))
+    actor = logical.name
+    (attempt / 'prompt.md').write_text(role_context(code, role, task, actor, Path(prompt).read_text()))
+    env = dict(os.environ, FM_ROLE=role, FM_TASK=task,
+               FM_ACTOR=actor, FM_FINAL_PATH=str(attempt / 'final.txt'),
+               FM_ATTEMPT_DIR=str(attempt), FM_CONTEXT_READY='1')
+    # The round does not necessarily inherit the launcher's environment.
+    # Keep its explicit environment private and do not print credentials.
+    save(attempt / 'environment.json', env); (attempt / 'environment.json').chmod(0o600)
+    payload = dict(adapter=str(Path(adapter).resolve()), prompt=str(attempt / 'prompt.md'),
+                   tree=str(Path(tree).resolve()), actor=actor, role=role, task=task,
+                   lifetime_tracking=True)
+    save(attempt / 'invocation.json', payload)
+    timeout = float(os.environ.get('FM_HERDR_TIMEOUT', '21600'))
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError('FM_HERDR_TIMEOUT must be positive finite seconds')
+    # The window first, so it is there when the round starts; it only follows
+    # the run's log, so failing to open one costs the round nothing.
+    host = window_host(root)
+    command = shlex.join([sys.executable, str(Path(__file__).resolve()), 'follow', str(attempt)])
+    owner = control = window = None
+    try:
+        if host == 'herdr':
+            owner, control = open_herdr_window(attempt, logical, tree, actor, task, env, command)
+            window = dict(host=host, status='open', pane=owner['pane_id'], actor=actor)
+            save(attempt / 'window.json', window)
+        elif host != 'none':
+            window = open_generic_window(host, attempt, tree, actor, command)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError,
+            subprocess.SubprocessError) as error:
+        # never let a pane the round is not running in be closed by the round
+        if (attempt / 'owner.json').exists(): (attempt / 'owner.json').rename(attempt / 'owner.failed.json')
+        owner = control = None
+        window = dict(host=host, status='none', reason=str(error))
+        save(attempt / 'window.json', window)
+        print(f'{actor}: no {host} window ({error}); the round runs without one', file=sys.stderr)
+    proc = spawn_runner(attempt)
+    result = supervise(attempt, proc, timeout, dict(actor=actor, task=task, role=role),
+                       env.get('FM_CHAIN_ATTEMPT', ''))
     with Path(log).open('ab') as out:
-        out.write((attempt / 'cli.log').read_bytes()); out.flush(); os.fsync(out.fileno())
+        cli = attempt / 'cli.log'
+        if cli.exists(): out.write(cli.read_bytes())
+        out.flush(); os.fsync(out.fileno())
     save(logical / 'last-result.json', dict(result, attempt=str(attempt)))
+    if owner is None:
+        close = 'no window'
+        if window and window.get('status') == 'open':
+            close = close_generic_window(window, attempt)
+            save(attempt / 'window.json', dict(window, status=close))
+        print(f'{actor}: {close}; artifacts {attempt}', file=sys.stderr)
+        return result['exit_code']
+    pane = owner['pane_id']
     close = 'retained: auto-close disabled'
     if os.environ.get('FM_AUTOCLOSE', '1') != '0':
         prior = attempt / 'close.json'
@@ -782,7 +965,7 @@ def transport(adapter, prompt, tree, log):
             close = 'closed'
         else:
             try:
-                # Let the runner leave the foreground; never report idle on a busy pane.
+                # Let the follower leave the foreground; never report idle on a busy pane.
                 for _ in range(20):
                     info = control('pane', 'process-info', '--pane', pane)['process_info']
                     if shell_only(info, pane, owner['shell_pid']): break
@@ -837,7 +1020,7 @@ def pane_child(attempt):
     with locked(attempt / 'execution.lock', blocking=False) as lifetime:
         receipt = attempt / 'execution.json'
         if receipt.exists() and read(receipt).get('started'):
-            raise RuntimeError('attempt already started; refusing duplicate execution')
+            raise AlreadyStarted('attempt already started; refusing duplicate execution')
         save(receipt, dict(started=True, runner_pid=os.getpid()))
         return execute_child(attempt, lifetime.fileno())
 
@@ -1350,9 +1533,11 @@ def inspect(root):
     report['events'] = [json.loads(line) for line in events.read_text().splitlines() if line.strip()] if events.exists() else []
     config = root / 'config.yaml'
     report['configuration'] = config.read_text() if config.exists() else None
-    if managed():
+    if window_host(root) == 'herdr':
+        # a window listing, for people; a Herdr that does not answer is not an error
         base = root / 'state/session'; base.mkdir(parents=True, exist_ok=True)
-        report['panes'] = Herdr(base)('pane', 'list')
+        try: report['panes'] = Herdr(base)('pane', 'list')
+        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError): pass
     return report
 
 
@@ -1642,7 +1827,9 @@ def main(args):
         return 0
     if mode == 'launch': launch(args[0], args[1], args[2:])
     if mode == 'transport': return transport(*args)
-    if mode == 'pane-child': return pane_child(*args)
+    if mode == 'pane-child': return run_supervised(*args)
+    if mode == 'follow': return follow(*args)
+    if mode == 'stop': print(json.dumps(stop_run(*args))); return 0
     if mode == 'watch-child': return watch_child(*args)
     if mode == 'context':
         root, role, task, actor, prompt, target = args

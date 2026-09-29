@@ -2209,27 +2209,48 @@ characters and no label can stand for two crew members. An empty `roster:`,
 `rosters.workers:` or `rosters.reviewers:` is refused like any other invalid
 list, not replaced by the drawn crew.
 
-In `HERDR_ENV=1`, Codex, Claude, Cursor Agent and Gemini adapters use shipped
-`bin/fm-herdr.py` to execute the real CLI in a dedicated new tab containing one
-owned root pane. `herdr tab create --workspace <caller-workspace> --cwd <tree>
+**A round is headless and fm's own; a terminal host is a window onto it
+(T-144, captain, 2026-09-29).** Codex, Claude, Cursor Agent and Gemini adapters
+run through shipped `bin/fm-herdr.py` `transport`, which starts the real CLI as a
+supervised process group of fm's own: `setsid`, its stdout and stderr in the
+attempt's `run.log`, its pid in `runner.pid` and its exit code in `runner.exit`,
+with the same sandbox, `FM_HERDR_TIMEOUT` and lifetime lock as before. It is
+never a child of a pane, so a pane that closes or crashes cannot end a round, and a
+machine with no Herdr, cmux or tmux runs the same round with no window at all.
+`bin/fm-herdr.py stop <root> <actor>` ends a live round by its process group
+(TERM, then KILL after a grace, only for a pid still running `fm-herdr.py`).
+A runner that is gone with no live descendant and no `result.json` was lost:
+transport writes that result with `status: lost` and exit 70. Nothing refuses a
+round for lacking Herdr, and `FM_TRANSPORT=direct` merely asks for no window
+(`fm_refuse_herdr_bypass` is retained as a no-op).
+
+`host:` in `config.yaml` (`none|herdr|cmux|tmux`; `FM_HOST` overrides; detected
+when unset from `HERDR_ENV=1`, then cmux's `CMUX_WORKSPACE_ID`, then `TMUX`) picks
+the host that opens a window. The window is opened before the round starts, is
+labelled with the canonical actor, and runs `fm-herdr.py follow <attempt>`: the
+run's log from its start, followed until the round ends. It is the same stream a
+pane showed before, now read from the log. Opening a window is best effort: any
+failure or uncertainty is written to the attempt's `window.json`, the pane is left
+alone, and the round runs without one. tmux gets `new-window -d -n <actor>` (it
+closes itself when the follower ends), cmux a workspace it is asked to close, and
+Herdr its own tab as below. cmux's and tmux's command lines here are unverified
+against a real installation; only stubs of them have been run.
+
+With Herdr, `herdr tab create --workspace <caller-workspace> --cwd <tree>
 --label <canonical-actor> --no-focus` uses the installed supported interface;
 creation IDs come from `result.tab` and `result.root_pane`. Never split the caller's
 view. Record caller tab/pane and observed UI focus before and after creation;
-changed or unknown focus refuses launch without taking focus back from the user.
-The process receives its owned tab/pane/workspace context, not the caller's IDs.
-It uses installed Herdr pane/agent commands, not an ignored wrapper or a tail-only
-pane. A known caller pane is required. Missing or unsupported transport fails
-clearly; it never silently falls back to invisible execution. Inside
-`HERDR_ENV=1`, `FM_TRANSPORT=direct` is refused (exit 70) unless
-`FM_ALLOW_DIRECT=1` for isolated tests — live Claude, Codex and Cursor sessions
-must not set it. Outside Herdr, in-process adapter execution remains the default.
+changed or unknown focus opens no window and takes no focus back from the user.
+The round receives its owned tab/pane/workspace context, not the caller's IDs.
+A known caller pane is required to open a tab; without one, or without a
+`herdr` command, there is no window.
 Firstmate *stock launch* is only `bin/fm-worker.sh` / `bin/fm-review.sh`; session
 wrappers and hand-started vendor CLIs are protocol violations.
-Adapters still tee vendor transcripts into `cli.log` while leaving stdout on the
-owned pane. Vendors that buffer until completion (for example cursor-agent `-p`
-JSON) do not stream progress; `pane-child` therefore prints a start line, periodic
+Adapters still tee vendor transcripts into `cli.log`; their stdout is `run.log`.
+Vendors that buffer until completion (for example cursor-agent `-p`
+JSON) do not stream progress; the runner therefore prints a start line, periodic
 `[fm] … still running` heartbeats (interval `FM_HEARTBEAT_SECS`, default 15, `0`
-disables), and a finish line so a captain watching the Herdr tab can see liveness
+disables), and a finish line so a captain watching a window can see liveness
 without opening log files.
 The scripted mock adapter remains a non-model test adapter. Dependencies are
 Python 3.9+ (standard library), existing shell/jq tools and the chosen vendor CLI;
@@ -2260,7 +2281,8 @@ workspace identity and no splits. Caller tabs, added panes, moved/reused/shared
 resources and unknown topology refuse reuse. Attempts have separate immutable prompts, invocation metadata,
 private environment, CLI log, final answer and result JSON under
 `state/runs/<actor>/`. A blocked or unavailable attempt is kept there even if a
-later vendor completes. Any ownership uncertainty stops reuse. Worker and reviewer
+later vendor completes. Any ownership uncertainty stops reuse of the pane, and
+the attempt then runs with no window. Worker and reviewer
 `agent_finished` events retire exactly their run actor; neither event means the
 task was accepted. Orchestration exit receipts also remain under the actor. Each chain invocation has
 an attempt token; both reviewer output selection and orchestration recording accept
