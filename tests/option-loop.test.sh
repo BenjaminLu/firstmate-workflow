@@ -39,7 +39,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/bin/fm-config.sh" || { echo "option-loop: no bin/fm-config.sh" >&2; exit 70; }
 
 # Scripts and distinct value-taking flag names. fm repeats --repo in three
-# subcommands; its seven parser branches are exercised separately below.
+# subcommands; its nine option cases are exercised separately below.
 PINNED="fm 7
 fm-checkpoint 5
 fm-cleanup 2
@@ -138,7 +138,7 @@ while read -r name want; do
     fi
   done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "77" "$total" "every pinned flag and all seven fm option branches were exercised"
+assert_eq "79" "$total" "every pinned flag and all nine fm option cases were exercised"
 
 # A script that grows an option loop has to be pinned here too, and the
 # corpus is the one bin/ci.sh judges - literally, out of

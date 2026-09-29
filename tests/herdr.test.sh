@@ -1384,6 +1384,7 @@ else: sys.exit('Error: Unknown command '+(a[0] if a else ''))
         window=json.loads((Path(result['attempt'])/'window.json').read_text())
         self.assertIn('rename-workspace',window['reason'])
     def test_the_stand_ins_refuse_what_the_real_tools_refuse(self):
+        # A fixture test: it guards "stand-ins answer as the real tools do" and is not fail-first evidence for T-144.
         # the round-1 call, cmux new-workspace --name, is one real cmux does not have
         self.executable('tmux', self.TMUX_STUB); self.executable('cmux', self.CMUX_STUB)
         env=dict(self.env)
