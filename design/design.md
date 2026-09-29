@@ -1192,8 +1192,13 @@ per round from round seven on.
    ask, 4 when the worker asked and no list followed, 6 when a re-issued list
    drops an earlier item number, and 5 when a re-issued list appends an item
    without `REGRESSION:<task-id>` or `NEW-GROUND:<task-id>` on its line, or a
-   later reviewer comment cites no item and carries none of `APPROVE:`,
-   `REGRESSION:` or `NEW-GROUND:` with the task id. It emits a
+   later reviewer verdict - a comment with a standalone `REJECT:<task-id>` or
+   `REVIEWER_COMPLETE:<task-id>` - cites no item and carries none of
+   `APPROVE:`, `REGRESSION:` or `NEW-GROUND:` with the task id. Only a verdict
+   is policed: every other comment after the list - the worker's notes, its
+   `.fm-say.md`, firstmate's briefs - is skipped, whoever posted it, because
+   `fm-run.sh` runs the check with no `FM_REVIEWER_LOGIN`; when that login is
+   set it narrows the verdicts read to that author's. It emits a
    `protocol_violation` event for each. It reads every numbered line before
    the marker as an item, so a rejecting answer numbers nothing else. It
    cannot determine every semantic violation: it does not check that a

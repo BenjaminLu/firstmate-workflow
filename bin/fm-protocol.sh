@@ -9,8 +9,8 @@
 #   fm-protocol.sh check --task T-004 --pr 9 --round 3 [--repo .]
 #
 # Exit 0 clean, 3 round three began with no standing list and no
-# ASK-PASS-CRITERIA, 4 the worker asked and no list was ever closed, 5 the
-# reviewer raised something off the list without a label, 6 a re-issued
+# ASK-PASS-CRITERIA, 4 the worker asked and no list was ever closed, 5 a
+# reviewer verdict raised something off the list without a label, 6 a re-issued
 # list dropped an earlier item.
 set -uo pipefail
 # Nothing below may read standard input. A dispatched child inherits it, and
@@ -52,7 +52,7 @@ comments="$($GH pr view "$PR" --json comments \
 # A marker counts only as a line of its own, as fm-review.sh reads it: a
 # comment that mentions one in passing neither asks nor closes a list.
 has_marker() {
-  printf '%s\n' "$2" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -qxF "$1:$TASK"
+  grep -qxF "$1:$TASK" <<< "$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' <<< "$2")"
 }
 item_no() { sed -nE 's/^[[:space:]]*([0-9]+)[.)].*/\1/p'; }
 
@@ -87,10 +87,14 @@ while IFS=$'\t' read -r who folded; do
       done <<< "$numbered"
     fi
     closed=1; items="$nums"
-    list_len="$(printf '%s\n' "$nums" | grep -c .)"
+    list_len="$(grep -c . <<< "$nums")"
     continue
   fi
   [ "$closed" = 1 ] || continue
+  # only a reviewer verdict is policed: the list now closes at the first
+  # REJECT, so the worker's notes, .fm-say.md and firstmate's briefs follow it,
+  # and none of them is a finding, whoever posted it
+  has_marker REJECT "$text" || has_marker REVIEWER_COMPLETE "$text" || continue
   [ -z "$REVIEWER" ] || [ "$who" = "$REVIEWER" ] || continue
   case "$text" in
     *"APPROVE:$TASK"*|*"REGRESSION:$TASK"*|*"NEW-GROUND:$TASK"*) continue ;;
