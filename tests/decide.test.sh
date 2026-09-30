@@ -473,12 +473,16 @@ assert_eq "$before_sum" "$(cksum < "$o/state/decisions/D-056.json")" "and D-056 
 # task's allocations. They time out rather than hang, name the lock and say
 # what to do; nothing clears it on a guess. Other tasks are not blocked.
 mkdir -p "$o/state/decision-ids/firstmate-workflow/T070.lock"
-lk="$(FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --allocate --task T-070 2>&1)"
+lk="$(FM_DECIDE_LOCK_ATTEMPTS=2 FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --allocate --task T-070 2>&1)"
 assert_eq "1" "$?" "an allocation behind a stale lock times out"
 assert_contains "$lk" "decision-ids/firstmate-workflow/T070.lock" "naming the lock"
 assert_contains "$lk" "remove it (rmdir) and allocate again" "and saying what a human does about it"
 assert_fail "test -e '$o/state/decision-ids/firstmate-workflow/T070/1.json'" "and reserving nothing"
 assert_eq "D-firstmate-workflow-T071-1" "$(alloc --task T-071)" "another task's allocation is not blocked by it"
+for bound in 0 -1 nope; do
+  FM_DECIDE_LOCK_ATTEMPTS="$bound" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --allocate --task T-070 >/dev/null 2>&1
+  assert_eq "64" "$?" "an invalid allocation-lock bound is refused ($bound)"
+done
 rmdir "$o/state/decision-ids/firstmate-workflow/T070.lock"
 assert_eq "D-firstmate-workflow-T070-1" "$(alloc --task T-070)" "once it is removed, the task allocates again"
 rm -rf "$o"

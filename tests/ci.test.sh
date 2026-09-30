@@ -428,6 +428,8 @@ if command -v bunx >/dev/null 2>&1; then
 else
   assert_contains "$out" "bunx not installed" "and the browser stage says why it was skipped"
 fi
+rm -f "$q/tests/unit.spec.ts"
+
 # bin/*.sh does not recurse, so the adapters went unlinted for as long as
 # they have existed. A fixture with a broken one has to turn the gate red.
 mkdir -p "$q/bin/adapters"
@@ -481,11 +483,11 @@ planted=''; planted_sig=''; planted_runs=0
 # A plant that creates or deletes a file was safe; one that edits in place
 # was not, and those are the ones this suite added.
 fixture_sig() { find "$q" -type f -exec shasum {} + 2>/dev/null | sort | shasum | cut -c1-40; }
-plant() {   # plant <label> <expected fragment>
-  local label="$1" want="$2" sig
-  sig="$(fixture_sig)"
+plant() {   # plant <label> <expected fragment> [stage, default fast]
+  local label="$1" want="$2" stage="${3:-fast}" sig
+  sig="$stage:$(fixture_sig)"
   if [ "$sig" != "$planted_sig" ]; then
-    planted="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+    planted="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage "$stage" 2>&1)"
     planted_sig="$sig"
     planted_runs=$((planted_runs + 1))
   fi
@@ -516,9 +518,8 @@ assert_eq "$((before_runs + 2))" "$planted_runs" "a changed fixture is not serve
 # later was invisible and the next assertion read the previous run.
 sigdir="$(safe_tmpdir)"; q_save="$q"; q="$sigdir"
 printf 'AAAA' > "$q/f"; sig_a="$(fixture_sig)"
-sleep 1
 printf 'BBBB' > "$q/f"; sig_b="$(fixture_sig)"
-assert_ne "$sig_a" "$sig_b" "the plant cache notices a same-size edit a second later"
+assert_ne "$sig_a" "$sig_b" "the plant cache notices an immediate same-size edit"
 printf 'AAAA' > "$q/f"
 assert_eq "$sig_a" "$(fixture_sig)" "and is the same signature for the same content"
 q="$q_save"; rm -rf "$sigdir"
@@ -531,8 +532,8 @@ q="$q_save"; rm -rf "$sigdir"
   printf 'nosuch%s "x"\n' helper
   printf 'exit 0\n'
 } > "$q/tests/silent.test.sh"
-plant "a suite that passes while something in it did not run is a failure" "did not run"
-plant "and the stage prints the line" "nosuchhelper"
+plant "a suite that passes while something in it did not run is a failure" "did not run" bash
+plant "and the stage prints the line" "nosuchhelper" bash
 rm -f "$q/tests/silent.test.sh"
 
 # and the negative half: a suite that prints one of those phrases as
@@ -560,13 +561,13 @@ L
   printf '. "%s/brokenlib.sh"\n' "$q"
   printf 'exit 0\n'
 } > "$q/tests/broken.test.sh"
-plant "a suite that goes on after a syntax error in a sourced file is a failure" "did not run"
-plant "and the stage prints that line too" "syntax error"
+plant "a suite that goes on after a syntax error in a sourced file is a failure" "did not run" bash
+plant "and the stage prints that line too" "syntax error" bash
 { printf '#!/usr/bin/env bash\n'
   printf '/nonexistent/not-a-program\n'
   printf 'exit 0\n'
 } > "$q/tests/broken.test.sh"
-plant "a suite that goes on after a command it could not exec is a failure" "did not run"
+plant "a suite that goes on after a command it could not exec is a failure" "did not run" bash
 # `unbound variable` was in the rule with no plant, and it is the one
 # phrase whose place in the set is arguable: under `set -u` a
 # non-interactive bash EXITS, which is the other arm's job. In a
@@ -578,8 +579,8 @@ plant "a suite that goes on after a command it could not exec is a failure" "did
   printf '( echo "$NO_SUCH_VARIABLE" )\n'
   printf 'exit 0\n'
 } > "$q/tests/broken.test.sh"
-plant "a suite that goes on after an unbound variable in a subshell is a failure" "did not run"
-plant "and the stage prints that line as well" "NO_SUCH_VARIABLE"
+plant "a suite that goes on after an unbound variable in a subshell is a failure" "did not run" bash
+plant "and the stage prints that line as well" "NO_SUCH_VARIABLE" bash
 rm -f "$q/tests/broken.test.sh" "$q/brokenlib.sh"
 
 # The locale the gate runs a suite under is production, and nothing here
@@ -1246,7 +1247,7 @@ rm -rf "$q/design" "$q/config.yaml" "$q/bin/fm-herdr.py"
 
 # a suite that fails
 printf '#!/usr/bin/env bash\nexit 1\n' > "$q/tests/doomed.test.sh"
-plant "a failing suite turns the bash stage red" "doomed.test.sh"
+plant "a failing suite turns the bash stage red" "doomed.test.sh" bash
 rm -f "$q/tests/doomed.test.sh"
 
 # The two left: the bun and playwright stages report the runner's own

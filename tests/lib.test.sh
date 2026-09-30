@@ -60,4 +60,13 @@ assert_eq "1" "$(counted assert_matches "" '^$' x)" "assert_matches fails an emp
 assert_eq "1" "$(counted assert_matches "" '^[0-9]*$' x)" "and against a pattern that allows nothing"
 assert_eq "0" "$(counted assert_matches "42" '^[0-9]*$' x)" "and still passes what does match"
 assert_eq "0" "$(counted assert_matches "$(printf 'a\n\nb')" '^$' x)" "and an empty line inside the text"
+# The closed PATH is independent of ambient vendor installations.
+# shellcheck source=tests/lib/path.sh
+. "$ROOT/tests/lib/path.sh"
+path_case="$(safe_tmpdir)"
+fixture_path "$path_case/bin" 'cat' bash cat python3 || exit 1
+assert_eq "" "$(PATH="$path_case/bin" command -v cat)" "an omitted host tool is unreachable"
+assert_eq "$path_case/bin/bash" "$(PATH="$path_case/bin" command -v bash)" "a requested tool is on the closed PATH"
+assert_eq "working" "$(PATH="$path_case/bin" python3 -c 'print("working")')" "the closed PATH uses the caller's working Python"
+safe_rm_rf "$path_case"
 finish

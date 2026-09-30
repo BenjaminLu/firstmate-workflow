@@ -2777,7 +2777,7 @@ assert_fail "test -e '$k/opened'" "no refusal started the editor"
 unused="$(mint "$uk" "$PORTK")"
 : > "$k/reads"
 for path in / /index.html /ship.js /diagram.js /api/state /api/i18n /api/session /login \
-            "/file?path=src/visible" "/diff?branch=main" /open "/open?path=src/visible" /no-such-file; do
+            "/file?path=src/visible" /open "/open?path=src/visible" /no-such-file; do
   curl -s -i -H "Authorization: Bearer $token" "$uk$path" >> "$k/reads"
 done
 curl -s -i -m 2 -H "Authorization: Bearer $token" "$uk/events" >> "$k/reads" || true
@@ -2968,35 +2968,6 @@ assert_ok "[ -s '$k/slow-pids' ]" "the opener had reached the browser (the contr
 assert_ok "wait_for 10 eval '! slow_left'" "and no process the opener started outlives the route"
 kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
 
-# --- T-145: a hand-off whose crewman already left the deck is quiet ----------
-# ship.js decides which ends of a hand-off it says it cannot place; the
-# browser suite watches the cue itself. Each line: the case, and the ends said.
-t145="$(SHIP_JS="$ROOT/board/public/ship.js" bun -e '
-const SHIP = require(process.env.SHIP_JS);
-const deck = [{ id: "firstmate" }, { id: "worker-ana-t9-r1" }];
-const noticed = new Set();
-const said = (e) => SHIP.handoffNotice(e, deck, noticed).join(",") || "-";
-console.log("verdict-left " + said({ kind: "approve", from: "reviewer-bo-t9-r1", from_role: "reviewer", to: "firstmate", to_role: "firstmate" }));
-console.log("reject-left " + said({ kind: "reject", from: "reviewer-bo-t9-r1", from_role: "reviewer", to: null, to_role: null }));
-console.log("work-unnamed " + said({ kind: "work", from: "worker-ana-t9-r1", from_role: "worker", to: null, to_role: null }));
-console.log("order-aboard " + said({ kind: "order", from: "firstmate", from_role: "firstmate", to: "worker-ana-t9-r1", to_role: "worker" }));
-// the role is the one the server gives, never one read from the name
-console.log("odd-name-placed " + said({ kind: "order", from: "firstmate", from_role: "firstmate", to: "secondmate", to_role: "worker" }));
-console.log("role-name-unplaced " + said({ kind: "approve", from: "reviewer-odd", from_role: null, to: "firstmate", to_role: "firstmate" }));
-console.log("unknown " + said({ kind: "approve", from: "mystery", from_role: null, to: "firstmate", to_role: "firstmate" }));
-console.log("unknown-again " + said({ kind: "approve", from: "mystery", from_role: null, to: "firstmate", to_role: "firstmate" }));
-console.log("ends " + ["order", "work", "reject", "approve"].map((k) => SHIP.HANDOFF_ENDS[k].join(">")).join(" "));
-' 2>&1)"
-assert_contains "$t145" "verdict-left -" "a verdict from a reviewer who has just left the deck says nothing"
-assert_contains "$t145" "reject-left -" "nor a rejection whose worker has left before it"
-assert_contains "$t145" "work-unnamed -" "nor a hand-off whose other end the server left unnamed"
-assert_contains "$t145" "order-aboard -" "nor one between two on deck (the control)"
-assert_contains "$t145" "odd-name-placed -" "nor a crewman the server placed, whatever its name"
-assert_contains "$t145" "role-name-unplaced reviewer-odd" "an end the server could not place is said, whatever its name"
-assert_contains "$t145" "unknown mystery" "an actor the board cannot place is said"
-assert_contains "$t145" "unknown-again -" "once, not once per event"
-assert_contains "$t145" "ends firstmate>worker worker>reviewer reviewer>worker reviewer>firstmate" \
-  "each kind fixes the role at each end, which an end off the deck is drawn by"
 # --- T-151: the board pushes the wake, and owns what it starts ---------------
 # Whoever writes a decision delivers the wake: the item on the wake queue,
 # and a ring of every waiter's own doorbell under state/session/wake.d. And

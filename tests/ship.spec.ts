@@ -368,3 +368,23 @@ test("the board says nothing the reader cannot switch language on", () => {
   const han = src.split("\n").filter((l) => /\p{Script=Han}/u.test(l));
   expect(han).toEqual([]);
 });
+
+// T-145: role placement and notice deduplication live here; e2e watches cues.
+test("handoff notices name only unknown actors, once per page", () => {
+  const deck = [{ id: "firstmate" }, { id: "worker-ana-t9-r1" }];
+  const noticed = new Set();
+  for (const event of [
+    { kind: "approve", from: "reviewer-bo-t9-r1", from_role: "reviewer", to: "firstmate", to_role: "firstmate" },
+    { kind: "reject", from: "reviewer-bo-t9-r1", from_role: "reviewer", to: null, to_role: null },
+    { kind: "work", from: "worker-ana-t9-r1", from_role: "worker", to: null, to_role: null },
+    { kind: "order", from: "firstmate", from_role: "firstmate", to: "worker-ana-t9-r1", to_role: "worker" },
+    { kind: "order", from: "firstmate", from_role: "firstmate", to: "secondmate", to_role: "worker" },
+  ]) expect(SHIP.handoffNotice(event, deck, noticed)).toEqual([]);
+  for (const actor of ["reviewer-odd", "mystery"]) {
+    const event = { kind: "approve", from: actor, from_role: null, to: "firstmate", to_role: "firstmate" };
+    expect(SHIP.handoffNotice(event, deck, noticed)).toEqual([actor]);
+    expect(SHIP.handoffNotice(event, deck, noticed)).toEqual([]);
+  }
+  expect(["order", "work", "reject", "approve"].map(k => SHIP.HANDOFF_ENDS[k].join(">")))
+    .toEqual(["firstmate>worker", "worker>reviewer", "reviewer>worker", "reviewer>firstmate"]);
+});

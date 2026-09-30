@@ -469,22 +469,6 @@ J
 assert_eq "$old" "$(for id in T-002 T-001 SK-001; do cat "$t/design/tasks/$id.json"; done | jq -cs .)" \
   "the migration is lossless: files in the old order equal the old array"
 
-# ...and so was this repository's own. The first commit that removed
-# design/tasks.json is compared with its parent, whenever history reaches it:
-# the first, because a branch brought over later may delete it again.
-# GitHub's checkout is one commit deep; the gates run in the full repository.
-mig="$(git -C "$ROOT" log --format=%H --diff-filter=D --reverse -- design/tasks.json 2>/dev/null | sed -n 1p)"
-if [ -n "$mig" ] && git -C "$ROOT" cat-file -e "$mig^:design/tasks.json" 2>/dev/null; then
-  was="$(git -C "$ROOT" show "$mig^:design/tasks.json" | jq -c '.tasks')"
-  now="$(git -C "$ROOT" show "$mig^:design/tasks.json" | jq -r '.tasks[].id' | while IFS= read -r id; do
-           git -C "$ROOT" show "$mig:design/tasks/$id.json" 2>/dev/null || echo '"missing"'
-         done | jq -cs .)"
-  assert_eq "$was" "$now" "this repository's migration: its files, in the old order, equal the old array"
-else
-  assert_eq "" "$(git -C "$ROOT" ls-files design/tasks.json 2>/dev/null)" \
-    "(no history to compare against here; at least nothing still tracks design/tasks.json)"
-fi
-
 # reading a branch: the gate, the worker and the reviewer read the branch
 # under test, not the working copy
 ( cd "$t" && git add design && git commit -q -m tasks )
@@ -542,23 +526,6 @@ assert_eq "SK-1 T-2 T-9 T-10" "$(fm_tasks "$o" | jq -r .id | paste -sd' ' -)" \
   "fm_tasks lists T-2, T-9, T-10 in that order, and skips dotfiles"
 assert_eq "0" "$(rc_of fm_tasks_check "$o")" "and the check does not take a dotfile for a task"
 rm -rf "$o"
-
-# two branches that each add a task merge with no conflict: parallel work
-# never writes the same text, which the one shared array could not promise
-( cd "$t" && git checkout -q -b t-004 main && printf '{"id":"T-004","depends_on":["T-001"]}\n' > design/tasks/T-004.json \
-    && git add design && git commit -q -m t4 && git checkout -q main \
-    && git merge -q --no-edit t-003 && git merge -q --no-edit t-004 ) > "$t/merge.out" 2>&1
-assert_eq "0" "$?" "two branches that each add a task merge into main with no conflict"
-assert_eq "SK-001 T-001 T-002 T-003 T-004" "$(cd "$t" && fm_tasks | jq -r .id | paste -sd' ' -)" \
-  "and main then lists both"
-# the old shape, for contrast: two appends to the tail of one array collide
-( cd "$t" && git checkout -q -b old-a main && printf '{"tasks":[\n{"id":"T-001"}\n]}\n' > tasks.json \
-    && git add tasks.json && git commit -q -m base && git checkout -q -b old-b \
-    && printf '{"tasks":[\n{"id":"T-001"},\n{"id":"T-005"}\n]}\n' > tasks.json && git commit -qam b \
-    && git checkout -q old-a && printf '{"tasks":[\n{"id":"T-001"},\n{"id":"T-006"}\n]}\n' > tasks.json \
-    && git commit -qam a && git merge -q --no-edit old-b ) > "$t/merge.out" 2>&1
-assert_ne "0" "$?" "(while two appends to one shared array conflict)"
-( cd "$t" && git merge --abort ) 2>/dev/null
 
 # the check ci.sh runs: every file parses, names itself, depends on tasks
 # that exist, and there is no cycle

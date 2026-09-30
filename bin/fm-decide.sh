@@ -146,7 +146,11 @@ if [ "$MODE" = allocate ]; then
   mkdir -p "$own" || { echo "fm-decide: cannot create $own" >&2; exit 1; }
   got=''
   # mkdir is the portable atomic lock; macOS ships no flock(1)
-  for _ in $(seq 1 600); do
+  attempts="${FM_DECIDE_LOCK_ATTEMPTS:-600}"
+  [[ "$attempts" =~ ^[1-9][0-9]*$ ]] || {
+    echo 'fm-decide: FM_DECIDE_LOCK_ATTEMPTS must be a positive integer' >&2; exit 64;
+  }
+  for ((attempt = 0; attempt < 10#$attempts; attempt++)); do
     if mkdir "$lock" 2>/dev/null; then got=1; break; fi
     perl -e 'select(undef,undef,undef,0.01)' 2>/dev/null || sleep 0.05
   done

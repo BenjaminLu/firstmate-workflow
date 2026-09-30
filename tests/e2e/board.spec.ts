@@ -221,7 +221,22 @@ test('T-145: a verdict from a reviewer who has just left the deck is shown quiet
     await page.goto(b.url+'/?lang=en');
     await expect(page.locator('[data-crew="reviewer-q"]')).toBeVisible();
     await page.clock.install();await page.clock.pauseAt(Date.now()+60_000);
-    const redraw=async()=>{await page.evaluate("fetch('/api/state').then(r=>r.json()).then(render)");await page.clock.runFor(32);};
+    const redraw=async(expectedCount=1)=>{
+      await page.evaluate("fetch('/api/state').then(r=>r.json()).then(render)");
+      await expect(page.locator('.handoff')).toHaveCount(expectedCount);
+      // SSE may render between the fetch and this callback. Drive animation
+      // frames until every current cue has actually rendered its label.
+      await expect.poll(async()=>{
+        await page.clock.runFor(16);
+        return page.locator('.handoff').evaluateAll(cues=>cues.every(cue=>!!cue.textContent));
+      }, { intervals: [50] }).toBe(true);
+    };
+    const finishCues=async()=>{
+      await expect.poll(async()=>{
+        await page.clock.runFor(100);
+        return page.locator('.handoff').count();
+      }, { timeout: 15_000, intervals: [50] }).toBe(0);
+    };
     // the verdict and the leaving land together, as they do at a round's end
     emitFixture(root,'reviewer-q','T-034','approved','Review approved','審查通過');
     emitFixture(root,'reviewer-q','T-034','agent_finished');
@@ -234,7 +249,7 @@ test('T-145: a verdict from a reviewer who has just left the deck is shown quiet
     await expect(approve).not.toHaveClass(/static/);
     await expect(approve).toHaveText('✓');
     await expect(page.locator('.handoffs')).not.toContainText(EN.handoffUnavailable);
-    await page.clock.runFor(2400);
+    await finishCues();
     await expect(approve).toHaveCount(0);
     // the reviewer rejects and leaves, and the worker has left before it
     emitFixture(root,'worker-q','T-034','agent_finished');
@@ -246,7 +261,7 @@ test('T-145: a verdict from a reviewer who has just left the deck is shown quiet
     await expect(reject).toHaveCount(1);
     await expect(reject).not.toHaveClass(/static/);
     await expect(page.locator('.handoffs')).not.toContainText(EN.handoffUnavailable);
-    await page.clock.runFor(2400);
+    await finishCues();
     // a crewman with a name that says no role is placed by what it was
     // dispatched as, which the server knows, and leaves as quietly
     emitFixture(root,'secondmate','T-034','dispatched','Odd job','怪差事');
@@ -256,14 +271,14 @@ test('T-145: a verdict from a reviewer who has just left the deck is shown quiet
     await expect(second).toHaveCount(1);
     await expect(second).not.toHaveAttribute('data-unknown',/./);
     await expect(page.locator('.handoffs')).not.toContainText(EN.handoffUnavailable);
-    await page.clock.runFor(2400);
+    await finishCues();
     // an actor the board cannot place - never dispatched, never said what it
     // is, and not aboard - is the one case said, and said once, not once per
     // event
     emitFixture(root,'mystery','T-034','approved','Approved','通過');
     emitFixture(root,'mystery','T-034','approved','Approved again','再次通過');
     emitFixture(root,'mystery','T-034','agent_finished');
-    await redraw();
+    await redraw(2);
     const odd=page.locator('.handoff[data-kind="approve"][data-from="mystery"]');
     await expect(odd).toHaveCount(2);
     await expect(odd.first()).toHaveAttribute('data-unknown','mystery');
@@ -1750,7 +1765,7 @@ test("nothing here can reach a model", async () => {
   // line below pins bin/lib to exactly the two lifeline files.
   const { readdirSync, readFileSync } = await import("node:fs");
   expect(existsSync(join(board.root, "bin/adapters"))).toBe(false);
-  expect(readdirSync(join(board.root, "bin")).sort()).toEqual(["fm-config.sh", "fm-decide.sh", "fm-diagram.sh", "fm-emit.sh", "fm-herdr.py", "fm-merge.sh", "lib", "watch-decisions.ts"]);
+  expect(readdirSync(join(board.root, "bin")).sort()).toEqual(["fm-config.sh", "fm-decide.sh", "fm-diagram.sh", "fm-emit.sh", "fm-herdr.py", "fm-merge.sh", "lib"]);
   // lib/ is the lifeline (T-151): the keeper a merge runs under, nothing that calls a model
   expect(readdirSync(join(board.root, "bin/lib")).sort()).toEqual(["fm-lifeline.sh", "fm_lifeline.py"]);
   const called = new Set(readFileSync(join(board.root, "board/server.ts"), "utf8").match(/\bfm_[a-z_]+/g) ?? []);

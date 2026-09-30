@@ -2007,15 +2007,6 @@ const server = Bun.serve({
       return new Response(readFileSync(abs), { headers: { "content-type": "text/plain; charset=utf-8" } });
     }
 
-    if (url.pathname === "/diff") {
-      if (!localOnly(req)) return json({ error: "localhost only" }, 403);
-      const branch = url.searchParams.get("branch") ?? "";
-      if (!/^[A-Za-z0-9._\/-]{1,120}$/.test(branch)) return json({ error: "bad branch" }, 400);
-      const r = Bun.spawnSync(["git", "-C", ROOT, "diff", `main...${branch}`], { env: childEnv() });
-      if (r.exitCode !== 0) return json({ error: "no such branch" }, 404);
-      return new Response(r.stdout, { headers: { "content-type": "text/plain; charset=utf-8" } });
-    }
-
     if (url.pathname === "/" || url.pathname === "") return serveFile("index.html");
     // diagram.js reads owned decision ids through the task grammar, which it
     // gets here, in front of the file, and holds no copy of (T-119)

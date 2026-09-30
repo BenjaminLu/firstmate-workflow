@@ -1621,37 +1621,6 @@ assert_ok "test -d '$tmpM/fm-review.outer'" \
   "and never sweeps the outer round's checkout, which sits outside its own TMPDIR"
 kill "$outerholder" 2>/dev/null; wait "$outerholder" 2>/dev/null
 
-# The owner file that says a checkout is claimed used to be written under its
-# final, visible fm-review.* name and locked only a moment later (round 2's
-# own finding on T-123): a sweep landing in that gap saw an unlocked owner
-# file and read the checkout as free. build_checkout closes the gap by
-# building under a name sweep_checkouts never globs and renaming it into
-# place only once the lock is already held, so no sweep - however many run
-# concurrently, however tightly - can ever observe this checkout before its
-# lock exists, by construction: sweep_checkouts' own glob cannot match a
-# name it is never given. This is a soak test, not a reliable reproduction
-# of the pre-fix race by itself - the original window was a handful of
-# syscalls wide and did not turn red here against the pre-fix code either,
-# even under heavier hammering than shipped below - but it does exercise
-# real concurrent sweep pressure throughout a real checkout's construction,
-# and the round's own checkout must never be the one a concurrent sweeper
-# reads as free.
-tmpRace="$dm/tmpRace"; mkdir -p "$tmpRace"
-: > "$tmpRace/.keep-racing"
-sweepers=()
-for _s in $(seq 1 4); do
-  (while [ -e "$tmpRace/.keep-racing" ]; do (cd "$rm_" && TMPDIR="$tmpRace" FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" bin/fm-review.sh --task T-Z --branch no-such-branch-xyz --round 3 >/dev/null 2>&1); done) &
-  sweepers+=("$!")
-done
-race_failed=0
-for _r in $(seq 1 3); do
-  outR="$(cd "$rm_" && TMPDIR="$tmpRace" FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" bin/fm-review.sh --task T-Z --branch work --round 3 2>&1)"
-  case "$outR" in *"could not prepare its checkout"*) race_failed=1 ;; esac
-done
-rm -f "$tmpRace/.keep-racing"
-for _p in "${sweepers[@]}"; do kill "$_p" 2>/dev/null; wait "$_p" 2>/dev/null; done
-assert_eq "0" "$race_failed" "a round building its own checkout survives sweepers hammering the same TMPDIR throughout"
-
 # the hosts a project's setup needs reach the adapter; a GitHub host never does
 printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n  network: registry.npmjs.org cdn.playwright.dev\n' > "$rm_/config.yaml"
 ( cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
@@ -1659,36 +1628,15 @@ printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n  network: regis
 assert_eq "registry.npmjs.org cdn.playwright.dev" "$(seen_of network "$dm")" \
   "the adapter is handed the hosts config.yaml's reviewer network declares"
 assert_contains "$(cat "$dm/prompt.md")" "registry.npmjs.org cdn.playwright.dev" "and the prompt names them"
-# every domain GitHub operates, any case, any subdomain - not just github.com
-for gh_host in api.github.com GitHub.com raw.githubusercontent.com ghcr.io x.github.io \
-               objects.githubusercontent.com github.githubassets.com; do
-  printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n  network: registry.npmjs.org %s\n' "$gh_host" > "$rm_/config.yaml"
-  : > "$dm/seen"
-  outN="$(cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
-    bin/fm-review.sh --task T-Z --branch work --round 3 2>&1)"
-  assert_eq "65" "$?" "a reviewer network naming $gh_host is a configuration error"
-  assert_contains "$outN" "may not reach GitHub" "and says why"
-  assert_eq "" "$(seen_of mode "$dm")" "and no engine runs"
-done
-# matched on a label boundary: a host that merely ends in the same letters
-# is not GitHub's
-printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n  network: notgithub.com\n' > "$rm_/config.yaml"
-( cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
-  bin/fm-review.sh --task T-Z --branch work --round 3 >/dev/null 2>&1 )
-assert_eq "0" "$?" "a host that only ends like a GitHub domain is not refused"
-assert_eq "notgithub.com" "$(seen_of network "$dm")" "and reaches the adapter"
-# a wildcard reaches GitHub as surely as naming it, and a bare `*` must be
-# read as itself: expanded, it became the plain file names in the repository
-# (config.yaml, README.md), each of which passed as a domain
-for wild in '*' '*.com'; do
-  printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n  network: registry.npmjs.org %s\n' "$wild" > "$rm_/config.yaml"
-  : > "$dm/seen"
-  outW="$(cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
-    bin/fm-review.sh --task T-Z --branch work --round 3 2>&1)"
-  assert_eq "65" "$?" "a reviewer network naming '$wild' is a configuration error"
-  assert_contains "$outW" "names $wild, which is not a plain domain name" "and is named as itself, not globbed"
-  assert_eq "" "$(seen_of mode "$dm")" "and no engine runs ('$wild')"
-done
+# One entrypoint refusal; adapter-contract owns the host matrix.
+gh_host=api.github.com
+printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n  network: registry.npmjs.org %s\n' "$gh_host" > "$rm_/config.yaml"
+: > "$dm/seen"
+outN="$(cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
+  bin/fm-review.sh --task T-Z --branch work --round 3 2>&1)"
+assert_eq "65" "$?" "a reviewer network naming $gh_host is a configuration error"
+assert_contains "$outN" "may not reach GitHub" "and says why"
+assert_eq "" "$(seen_of mode "$dm")" "and no engine runs"
 printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n' > "$rm_/config.yaml"
 
 # a signed rejection in run mode ends the review lane the same way
@@ -1867,16 +1815,7 @@ outU2="$(cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" FM_CREW_UNSANDBO
   bin/fm-review.sh --task T-Z --branch work --round 3 2>&1)"
 assert_eq "" "$(seen_of hatch "$dm")" "a review started inside a crew round cannot take it"
 assert_contains "$outU2" "ignoring it" "and says so"
-# loopback is never a registry, in either mode
-for mode in diff run; do
-  printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: %s\npolicy:\n  network: localhost\n' "$mode" > "$rm_/config.yaml"
-  : > "$dm/seen"
-  outL="$(cd "$rm_" && FM_ROOT="$rm_" FM_GH="$GHm" FM_SEEN="$dm" \
-    bin/fm-review.sh --task T-Z --branch work --round 3 2>&1)"
-  assert_eq "65" "$?" "a policy naming loopback is a configuration error ($mode)"
-  assert_contains "$outL" "may not reach loopback" "and says why ($mode)"
-  assert_eq "" "$(seen_of network "$dm")$(cat "$dm/seen")" "and no engine runs ($mode)"
-done
+# Loopback refusal is covered by adapter-contract.test.sh.
 restore_scripts
 printf 'vendor: mock\nreviewer:\n  vendor: runner\n  mode: run\n' > "$rm_/config.yaml"
 

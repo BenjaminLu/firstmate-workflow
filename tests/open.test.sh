@@ -83,8 +83,6 @@ assert_eq "403" "$(code "$u/file?path=src/key")" "a symlink to the board's secre
 assert_fail "grep -qF \"\$(cat '$key')\" <<<\"\$(curl -s '$u/file?path=src/key')\"" "and does not leak it"
 assert_eq "403" "$(openit src/key -H "Origin: $u" -H "$(cred)")" "nor handed to the editor"
 
-assert_eq "400" "$(code "$u/diff?branch=main;rm%20-rf%20/")" "a branch name with a shell metacharacter is refused"
-assert_eq "404" "$(code "$u/diff?branch=no-such-branch")" "an unknown branch is a 404, not a 500"
 
 kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null || true
 rm -rf "$d"

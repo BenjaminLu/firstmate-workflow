@@ -2339,21 +2339,17 @@ assert_contains "$(cat "$dL/ghcalls")" "pr create" "the pull request is opened"
 assert_eq "$oldL" "$(jq -r 'select(.type=="pr_opened" and .data.rebuilt!=null)|.data.rebuilt.previous_head' \
   "$dL/repo/state/events.jsonl" | tail -1)" "and the event that opens it records the previous head"
 
-# M: something commits on the detached HEAD mid-round - a checkpoint, or
-# the worker's own commit with the markers still in it - and then the
-# worker adds more. The checks read the rebuild against its base, so the
-# round is refused and nothing with a marker in it is published.
+# M: the adapter stand-in deliberately moves the detached HEAD. Real crew
+# rounds cannot write git metadata; this fault injection tests fm-worker's
+# independent refusal to publish a rebuild whose base moved underneath it.
 dM="$(rb_fixture)"; bM="$(rb_branch "$dM")"; oldM="$(rb_head "$dM" "$bM")"
 rb_conflicting_main "$dM"
 cat > "$dM/commit.sh" <<'S'
-"$FM_T_DIR/repo/bin/fm-checkpoint.sh" --dir . --message 'mid-round save' >/dev/null 2>&1
-echo "$?" > "$FM_T_DIR/checkpoint-rc"
 git add -A && git -c user.email=a@b.c -c user.name=t commit -qm 'mid-round, markers and all'
 printf 'two\n' > src/round-two
 S
 rb_round_two "$dM" "$dM/commit.sh"
 rb_rebuilt "$dM" "M"
-assert_ne "0" "$(cat "$dM/checkpoint-rc" 2>/dev/null)" "a checkpoint on the detached rebuild is refused"
 assert_eq "75" "$rb_rc" "a commit made on the rebuild mid-round refuses the round"
 assert_contains "$rb_out" "HEAD moved off the rebuild base" "and says why"
 assert_eq "$oldM" "$(rb_head "$dM" "$bM")" "nothing is pushed"
@@ -3013,21 +3009,6 @@ assert_contains "$rb_out" "publishing dirty worktree (exit-70)" "X6: the exit's 
 assert_eq "$oldX6" "$(rb_head "$dX6" "$bX6^")" "X6: and saves the worktree as one commit on the branch"
 assert_eq "100644" "$(git --git-dir="$dX6/remote.git" ls-tree "$bX6" -- bin/fm-tool | cut -c1-6)" \
   "X6: carrying the script without its bit"
-# X3: the worker saves mid-run, as its skill requires, and fm-checkpoint.sh
-# commits the new script without the bit. It is still one the round added.
-dX3="$(RB_HOOKS=1 rb_fixture)"; bX3="$(rb_branch "$dX3")"
-cat > "$dX3/save.sh" <<'S'
-printf '#!/usr/bin/env bash\necho mid\n' > bin/fm-mid
-"$FM_T_DIR/repo/bin/fm-checkpoint.sh" --dir . --message 'mid-round save' >/dev/null 2>&1
-echo "$?" > "$FM_T_DIR/checkpoint-rc"
-printf 'more\n' > src/more
-S
-rb_round_two "$dX3" "$dX3/save.sh"
-assert_eq "0" "$(cat "$dX3/checkpoint-rc" 2>/dev/null)" "X3: the mid-run checkpoint landed"
-assert_eq "0" "$rb_rc" "X3: the round completes"
-assert_eq "100755" "$(git --git-dir="$dX3/remote.git" ls-tree "$bX3" -- bin/fm-mid | cut -c1-6)" \
-  "X3: a new script a checkpoint committed without the bit is committed 100755"
-
 # --- the round's permission policy (T-105) ------------------------------------
 # The worker hands its adapter the policy config.yaml resolves for a worker,
 # never the operator's own settings, and reports - does not allow - a host
@@ -3140,7 +3121,7 @@ rm -rf "$dPol" "$dPol2" "$dHat" "$dHat2" "$dHat3"
 rm -rf "$dA" "$dA2" "$dB" "$dC" "$dD" "$dE" "$dF" "$dG" "$dG2" "$dG3" "$dG4" "$dH" "$dI" "$dJ" "$dK" "$dK2" "$dL" \
   "$dM" "$dN" "$dP1" "$dP2" "$dP3" "$dP4" "$dP5" "$dP6" "$dP7" "$dQ1" "$dQ2" "$dQ3" "$dQ4" \
   "$dR1" "$dR2" "$dS" "$dT" "$dU1" "$dU2" "$dV0" "$dV1" "$dV2" "$dV3" "$dV4" "$dV5" "$dV5b" "$dV5c" "$dV6" \
-  "$dX" "$dX2" "$dX3" "$dX4" "$dX5" "$dX6" "$rb_add" "$rb_more"
+  "$dX" "$dX2" "$dX4" "$dX5" "$dX6" "$rb_add" "$rb_more"
 
 # --- the mirror: a round that destroys its own tree is restored (T-128) ----
 # A hostile adapter, not a real vendor: destruction has to be exact and

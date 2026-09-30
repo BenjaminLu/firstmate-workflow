@@ -416,8 +416,8 @@ for the answer file once it has, and looks again each time the board rings,
 which it does whenever it writes an answer. Any number of waiters each hear
 every ring. Nothing polls `state/decisions/`; an answer that arrives with
 no ring is not found until the next one. Wake latency must be measured, not inferred from the
-mechanism. **No `fswatch` dependency.** `bin/watch-decisions.ts` is no longer
-called by anything; deleting it is outside T-151's scope.
+mechanism. **No `fswatch` dependency.** T-157 removes the obsolete decision
+watcher; the doorbell is the only wait mechanism.
 
 These are orchestration requirements, not enforcement inside `fm-merge.sh`.
 The board calls that helper for choice A on a pending merge card. The helper
@@ -1965,9 +1965,8 @@ reconnects. Decisions are already on disk, so a restart loses none.
 program is a write, so it takes the credential, the Origin and the JSON body
 every write takes (below); a `GET /open`, which any link or image could make,
 is 405 and starts nothing (T-122). Localhost only, and `realpath` must resolve
-inside the repository or it is a 403. A read-only viewer (`/file`) and diff
-viewer (`/diff`) cover the case where you would rather not leave the board,
-and are all a tab without the credential gets.
+inside the repository or it is a 403. A read-only viewer (`/file`) covers the case where you would rather not
+leave the board, and is available to a tab without the credential.
 
 **The board's trust boundary (T-122).** Only the captain's browser, and
 firstmate's own scripts on the operator's machine, change the board or start a
@@ -2100,9 +2099,9 @@ web page open in the captain's browser; neither can write.
   body, keeping the secret out of every argument list: for curl,
   `-H @<(printf 'Authorization: Bearer %s\n' "$(cat <file>)")`.
 - *What stays readable.* `/`, the page's files, `/api/state`, `/api/i18n`,
-  `/events`, `/file`, `/diff` and `/api/session` (whether this request may
+  `/events`, `/file` and `/api/session` (whether this request may
   write: a yes or a no) answer anyone on the machine, as before. None carries
-  the secret, a token or a code. `/file` and `/diff` read only
+  the secret, a token or a code. `/file` reads only
   paths that resolve inside the repository, and the page's files are served
   only when their real path is inside `board/public/`, so a symlink to the
   secret is refused.
@@ -4644,7 +4643,7 @@ recovery path in section 12.
   | `board/server.ts` `ownerOf` | `taskGrammar()`'s `ownerOf`: `OWNED`, its task read back from the key by `taskOfKey` | no owner, by design |
   | `board/public/diagram.js` `isDecision` | `^D-[0-9]{1,6}$`, `TASK_GRAMMAR.OWNED`, `^D-SK-[0-9]{3,}$`. `TASK_GRAMMAR` is `taskGrammar()`, which the server puts in front of the file when it serves `/diagram.js`; loaded without it, the file takes no owned id | yes. An SK task's owned card embeds its diagram like a T task's |
   | `board/public/diagram.js` `owner` | `TASK_GRAMMAR.ownerOf` | no owner, by design |
-  | `bin/watch-decisions.ts`, `tests/` | none; fixtures only | n/a |
+  | `tests/` | none; fixtures only | n/a |
 
   Merge cards name the project and link the pull request
   on the project's GitHub repository. A tree with no `projects:` map (every
@@ -4936,7 +4935,6 @@ from the repository root:
   | Where | What is keyed by the decision id |
   |---|---|
   | `bin/fm-decide.sh` | `state/pending/<id>.json` written, `state/decisions/<id>.json` awaited |
-  | `bin/watch-decisions.ts` | `state/decisions/<id>.json` awaited (not a hit itself: `fm-decide.sh` hands it the directory and the id) |
   | `bin/fm-run.sh` | `state/pending/`, `state/decisions/`, `state/decision-details/<id>.json` |
   | `bin/fm-diagram.sh` | reads `state/pending/` or `state/decisions/<id>.json`; authored `design/diagrams/<id>.*` beats the task stem; writes `board/public/diagrams/<id>.*` |
   | `bin/fm-herdr.py` | `state/session/observed/<id>.json` (`watch_child`), `state/session/acknowledged/<id>.json` (`acknowledge`, `unacknowledged`), `state/session/watch-<id>.json` and its directory (`watch_start`, `watch_stop`, `status`) |
