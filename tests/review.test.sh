@@ -50,7 +50,7 @@ fixture() {
   git config user.email a@b.c; git config user.name t
   mkdir -p bin design/tasks "$d/repo/skills/reviewer" src state
   cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" bin/
-  cp "$ROOT/bin/fm-herdr.py" bin/
+  cp "$ROOT/bin/fm-herdr.py" "$ROOT/bin/fm-auth-probe.sh" "$ROOT/bin/fm-sandbox.sh" bin/
   cp -r "$ROOT/bin/adapters" bin/
   cp -R "$ROOT/bin/lib" bin/   # the lifeline a round's runner holds (T-151)
   cp "$ROOT/skills/reviewer/SKILL.md" "$d/repo/skills/reviewer/"
@@ -277,6 +277,86 @@ chmod +x "$r/bin/adapters/mock.sh"
 out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
 assert_eq "0" "$?" "an unavailable reviewer vendor falls through to the next"
 assert_contains "$out" "the fallback reviewed it" "and the fallback's verdict is the verdict"
+
+# --- a crew round never runs on a login it did not check (T-121) -----------
+# a reviewer whose own status check says it is not signed in never starts
+# its CLI at all; the reviewer moves straight to the fallback, and reports
+# why on the board, the same as fm-worker.sh does.
+mkdir -p "$d/fakebin"
+cat > "$d/fakebin/claude" <<C
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$d/claude-calls"
+case "\$1 \$2" in
+  "--version "*) exec "$ROOT/tests/fixtures/auth-status/replay.sh" "$ROOT/tests/fixtures/auth-status/claude-signed-out.txt" --version ;;
+  "auth status") exec "$ROOT/tests/fixtures/auth-status/replay.sh" "$ROOT/tests/fixtures/auth-status/claude-signed-out.txt" ;;
+esac
+exit 1
+C
+chmod +x "$d/fakebin/claude"
+# the operator's home and keychain are the suite's: the probe resolves the
+# round's login - here a crew token - from them, never the machine's own
+auth_home="$d/auth-home"; mkdir -p "$auth_home/.config/firstmate"
+printf 'crew-token\n' > "$auth_home/.config/firstmate/claude-token"; chmod 600 "$auth_home/.config/firstmate/claude-token"
+auth_env=(HOME="$auth_home" FM_KEYCHAIN_TOOL="$d/no-security" FM_SECRET_TOOL="$d/no-secret-tool")
+printf 'vendor: mock\nreviewer:\n  vendor: claude\nfallback:\n  - mock\n' > "$r/config.yaml"
+out="$(cd "$r" && env "${auth_env[@]}" PATH="$d/fakebin:$PATH" FM_ROOT="$r" FM_GH="$GH" \
+  bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_eq "0" "$?" "a login the probe finds unauthenticated still falls through to the next vendor"
+assert_contains "$(cat "$d/claude-calls" 2>/dev/null)" "auth status" "claude's status is asked about the round's crew token"
+assert_eq "" "$(grep -vxF -e '--version' -e 'auth status' "$d/claude-calls" 2>/dev/null)" \
+  "claude's own CLI is invoked only for its version and its status check, never started for the review itself"
+assert_contains "$out" "the fallback reviewed it" "and the fallback's verdict is the verdict"
+assert_contains "$(jq -r 'select(.type=="vendor_unavailable")|.summary.en' "$r/state/events.jsonl" | tr '\n' ' ')" \
+  "claude" "vendor_unavailable names claude"
+rm -f "$d/claude-calls"
+
+# Only `authenticated` is usable (T-121): gemini has no status command, so
+# with a round's login present its probe is indeterminate - refused, named
+# on the board as vendor_unavailable with its status in both languages, and
+# the fallback reviews instead. Its adapter here is a stand-in that records
+# whether it ran.
+cp "$r/bin/adapters/gemini.sh" "$d/gemini.sh.orig"
+printf '#!/usr/bin/env bash\n[ "$1" = run ] || exit 64\ntouch %q\nprintf "reviewed by gemini\\nREJECT:T-Z\\n" > "$3/verdict.txt"\n' \
+  "$d/gemini-ran" > "$r/bin/adapters/gemini.sh"
+chmod +x "$r/bin/adapters/gemini.sh"
+printf '#!/usr/bin/env bash\n[ "$1" = --version ] && { echo 0.60.0; exit 0; }\ntouch %q\nexit 1\n' "$d/gemini-asked" \
+  > "$d/fakebin/gemini"
+chmod +x "$d/fakebin/gemini"
+mkdir -p "$auth_home/.gemini"
+printf '{"access_token":"g","refresh_token":"r","expiry_date":%s}' "$(( ($(date +%s) + 86400) * 1000 ))" \
+  > "$auth_home/.gemini/oauth_creds.json"
+printf 'vendor: mock\nreviewer:\n  vendor: gemini\nfallback:\n  - mock\n' > "$r/config.yaml"
+seen="$(wc -l < "$r/state/events.jsonl" | tr -d ' ')"
+out="$(cd "$r" && env "${auth_env[@]}" PATH="$d/fakebin:$PATH" FM_ROOT="$r" FM_GH="$GH" \
+  bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_eq "0" "$?" "a gemini review whose login the probe cannot verify falls through to the next vendor"
+assert_ok "[ ! -e '$d/gemini-ran' ]" "gemini's adapter never runs: an indeterminate login is refused"
+assert_ok "[ ! -e '$d/gemini-asked' ]" "and gemini's CLI was asked nothing but its version"
+assert_contains "$out" "the fallback reviewed it" "the fallback's verdict is the verdict"
+new_events="$(tail -n +"$((seen + 1))" "$r/state/events.jsonl")"
+refused="$(jq -r 'select(.type=="vendor_unavailable")|.summary.en, .summary["zh-TW"]' <<<"$new_events" | tr '\n' ' ')"
+assert_contains "$refused" "gemini: indeterminate:" "vendor_unavailable names gemini and the status, in English"
+assert_contains "$refused" "gemini：indeterminate：" "and in Traditional Chinese"
+assert_lacks "$(jq -r 'select(.type=="crew_status")|.summary.en' <<<"$new_events" | tr '\n' ' ')" \
+  "unverified" "and it is never admitted as unverified"
+cp "$d/gemini.sh.orig" "$r/bin/adapters/gemini.sh"; rm -f "$d/fakebin/gemini" "$d/gemini-ran"
+
+# A status check that does not answer in time is a timeout, refused the
+# same way, and the fallback reviews.
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> %q\n[ "$1" = --version ] && { echo "claude 2.1.0"; exit 0; }\nexec sleep 30\n' \
+  "$d/claude-calls" > "$d/fakebin/claude"
+chmod +x "$d/fakebin/claude"
+printf 'vendor: mock\nreviewer:\n  vendor: claude\nfallback:\n  - mock\n' > "$r/config.yaml"
+seen="$(wc -l < "$r/state/events.jsonl" | tr -d ' ')"
+out="$(cd "$r" && env "${auth_env[@]}" FM_AUTH_PROBE_TIMEOUT=1 PATH="$d/fakebin:$PATH" FM_ROOT="$r" FM_GH="$GH" \
+  bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
+assert_eq "0" "$?" "a claude review whose status check times out falls through to the next vendor"
+assert_eq "" "$(grep -vxF -e '--version' -e 'auth status' "$d/claude-calls" 2>/dev/null)" \
+  "claude's own CLI is never started for the review itself"
+assert_contains "$out" "the fallback reviewed it" "and the fallback's verdict is the verdict"
+assert_contains "$(jq -r 'select(.type=="vendor_unavailable")|.summary.en' <<<"$(tail -n +"$((seen + 1))" "$r/state/events.jsonl")" | tr '\n' ' ')" \
+  "claude: timeout:" "vendor_unavailable names claude and the timeout"
+rm -f "$d/claude-calls" "$d/fakebin/claude"
 
 # and when the reviewer's own vendor is there, it is the one that reviews -
 # a different engine from the worker's is the whole point of the block

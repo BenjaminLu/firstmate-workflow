@@ -1,0 +1,11 @@
+# recorded: yes
+# command: codex login status
+# cli: codex-cli 0.155.1
+# date: 2026-09-29
+# host: macOS, Darwin 24.6.0, inside a T-121 worker round's sandbox
+# setup: the round's own HOME, no ~/.codex/auth.json
+# redacted: one stderr line codex printed first about this sandbox's temp-directory HOME
+#        ("WARNING: proceeding, even though we could not create PATH aliases: ..."), which is
+#        the recording host's, not the status answer
+# exit: 1
+Not logged in

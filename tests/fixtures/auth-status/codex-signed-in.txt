@@ -1,0 +1,13 @@
+# recorded: yes
+# command: codex login status
+# cli: codex-cli 0.155.1
+# date: 2026-09-29
+# host: macOS, Darwin 24.6.0, inside a T-121 worker round's sandbox
+# setup: env -i HOME=<scratch> PATH=... CODEX_HOME=<scratch>/ch, whose auth.json has the shape of the
+#        copy a round gets (fm-sandbox.sh login): tokens.refresh_token present but emptied. The
+#        tokens were placeholders; `login status` reads the file and does not ask the service.
+#        With the refresh_token field removed altogether instead, codex answered
+#        "Error checking login status: missing field `refresh_token`" and exit 1.
+# redacted: nothing (the id token's email was user@example.com already)
+# exit: 0
+Logged in using ChatGPT

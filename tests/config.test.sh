@@ -83,6 +83,43 @@ strays="$(grep -ln "config.yaml" "$ROOT"/bin/*.sh | while read -r s; do
 assert_eq "" "$strays" "no script parses config.yaml on its own"
 rm -f "$f"
 
+# --- the one writer (T-121): fm_cfg_set patches, it never rewrites -------
+w="$(safe_tmpdir)"
+printf '# kept\nvendor: claude\npolicy:\n  worker:\n    procs: 999\n\nreviewer:\n  mode: diff\nconcurrency: 7\n' > "$w/c.yaml"
+fm_cfg_set vendor codex "$w/c.yaml"
+fm_cfg_set reviewer.vendor gemini "$w/c.yaml"
+fm_cfg_set billing.gemini api-key "$w/c.yaml"
+fm_cfg_set projects.x.base trunk "$w/c.yaml"
+assert_eq "codex" "$(fm_cfg vendor "$w/c.yaml")" "fm_cfg_set replaces a top-level key"
+assert_eq "gemini" "$(fm_cfg_in reviewer vendor "$w/c.yaml")" "adds a key inside an existing block"
+assert_eq "diff" "$(fm_cfg_in reviewer mode "$w/c.yaml")" "leaving that block's other keys alone"
+assert_eq "api-key" "$(fm_cfg_in billing gemini "$w/c.yaml")" "creates a block that is missing"
+assert_contains "$(cat "$w/c.yaml")" "projects:
+  x:
+    base: trunk" "and every block along a longer dotted path"
+assert_contains "$(cat "$w/c.yaml")" "# kept" "a comment survives"
+assert_contains "$(cat "$w/c.yaml")" "    procs: 999" "so does a block it was never asked about"
+assert_eq "7" "$(fm_cfg concurrency "$w/c.yaml")" "and an unrelated key"
+fm_cfg_set vendor codex "$w/new.yaml"
+assert_eq "codex" "$(fm_cfg vendor "$w/new.yaml")" "a file that is not there yet is created"
+# the key's own line keeps its spacing and its comment; only the value changes
+printf 'vendor: claude          # every role uses this\nreviewer:\n  mode:   run   # diff or run\n' > "$w/cm.yaml"
+cp "$w/cm.yaml" "$w/cm.before"
+fm_cfg_set vendor claude "$w/cm.yaml"
+fm_cfg_set reviewer.mode run "$w/cm.yaml"
+assert_eq "$(cat "$w/cm.before")" "$(cat "$w/cm.yaml")" "writing a value a key already has changes nothing"
+fm_cfg_set reviewer.mode diff "$w/cm.yaml"
+assert_contains "$(cat "$w/cm.yaml")" "  mode:   diff   # diff or run" "a changed value keeps the line's spacing and comment"
+assert_contains "$(cat "$w/cm.yaml")" "vendor: claude          # every role uses this" "and every other line"
+rm -rf "$w"
+
+# --- the one list of vendors (T-121) ---------------------------------------
+assert_eq "claude codex cursor-agent gemini" "$(fm_vendors | tr '\n' ' ' | sed 's/ $//')" \
+  "fm_vendors names every vendor CLI firstmate can crew, once each"
+for v in $(fm_vendors); do
+  assert_ok "test -f '$ROOT/bin/adapters/$v.sh'" "and $v has an adapter"
+done
+
 # --- the project contract: opaque command strings, never evaluated ------
 p="$(mktemp -d)"
 cat > "$p/config.yaml" <<'Y'

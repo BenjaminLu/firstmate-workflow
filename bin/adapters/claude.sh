@@ -66,6 +66,12 @@ fm_adapter_policy
 # A worker edits its worktree; a reviewer works in its output directory, or
 # in run mode in fm-review.sh's checkout.
 work="$(fm_adapter_rule_path "$tree")" || exit 64; launch=()
+# The credentials that outrank the subscription login (T-121): unset unless
+# the operator named claude in config.yaml's billing: block, so
+# CLAUDE_CODE_OAUTH_TOKEN - the one token this design hands a round - is the
+# only claude credential a round ever sees.
+CLAUDE_OUTRANKING=(); while IFS= read -r w; do CLAUDE_OUTRANKING+=("$w"); done < <(fm_adapter_outranking claude)
+while IFS= read -r w; do launch+=("$w"); done < <(fm_adapter_env_words claude "${CLAUDE_OUTRANKING[@]}")
 # fm:review-run
 # Every round's confinement is claude's own, not the prompt's, and it is the
 # settings T-066 built for a run-mode review, now given every round:
@@ -91,9 +97,6 @@ work="$(fm_adapter_rule_path "$tree")" || exit 64; launch=()
 # push`); the confinement does not rest on it.
 if [ "${FM_RUN_REVIEW:-}" = 1 ]; then
   work="$(fm_adapter_review_checkout)" || exit 64
-  # the commands the reviewer runs inherit claude's environment, so the
-  # launcher's FM_ROOT and friends are dropped here (see _lib.sh)
-  while IFS= read -r w; do launch+=("$w"); done < <(fm_adapter_review_env)
 fi
 tmp="$(fm_adapter_rule_path "${TMPDIR:-/tmp}")" || exit 64
 # claude's own state and temp directories are the round's (T-117). Its
@@ -102,8 +105,11 @@ tmp="$(fm_adapter_rule_path "${TMPDIR:-/tmp}")" || exit 64
 # and ~/.claude.json are never opened; and its temp files go to the
 # round's temp directory where claude honours CLAUDE_CODE_TMPDIR. What it
 # keeps under /tmp/claude-<uid> whatever that says is the policy's `tmp`
-# for claude. Its login (T-126) is, in order: a CLAUDE_CODE_OAUTH_TOKEN or
-# ANTHROPIC_API_KEY already set, used as is; else the crew's own long-lived
+# for claude. Its login (T-126) is, in order: a CLAUDE_CODE_OAUTH_TOKEN
+# already set, used as is - or an ANTHROPIC_API_KEY, but only when the
+# operator chose api-key billing in config.yaml (T-121): otherwise it is shed
+# above, and fm-sandbox.sh does not count it as the round's login either,
+# since the round would never see it; else the crew's own long-lived
 # token (`claude setup-token`), which fm-sandbox.sh reads outside the round
 # from a keychain item of fm's own on macOS, else, when secret-tool
 # (libsecret) is present, the same item through it (T-126 round 2), else a

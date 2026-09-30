@@ -84,6 +84,16 @@ policy_args+=(-c 'approval_policy="never"' -c 'mcp_servers={}'
 # the file itself, which the round cannot read
 codex_home="$FM_ROUND_TMP/codex-home"; mkdir -p "$codex_home" || exit 70
 export CODEX_HOME="$codex_home"
+# The credentials that outrank the ChatGPT-plan login CODEX_HOME's copy
+# carries (T-121): codex documents OPENAI_API_KEY as switching it to
+# API-key billing, and CODEX_API_KEY is the same alternative for fm's own
+# login lookup (bin/fm-config.sh's VENDORS). Either, ambient in the
+# operator's own shell, would silently bill a round to it instead of the
+# subscription; shed unless the operator named codex in config.yaml's
+# billing: block.
+CODEX_OUTRANKING=(); while IFS= read -r w; do CODEX_OUTRANKING+=("$w"); done < <(fm_adapter_outranking codex)
+launch=()
+while IFS= read -r w; do launch+=("$w"); done < <(fm_adapter_env_words codex "${CODEX_OUTRANKING[@]}")
 # the trailing "-" is codex's read-the-prompt-from-stdin marker and has to
 # be the last argument, so FM_ADAPTER_ARGS goes before it
 final_args=()
@@ -96,11 +106,11 @@ model_args=(); while IFS= read -r _fm_ma; do model_args+=("$_fm_ma"); done \
 read -r -a native <<<"$(codex_native)"
 fm_adapter_confine codex "$tree" "${native[@]}"
 if [ -n "${FM_ATTEMPT_DIR:-}" ]; then
-  ( cd "$tree" && "${FM_LAUNCH[@]}" codex exec --skip-git-repo-check "${policy_args[@]}" \
+  ( cd "$tree" && "${FM_LAUNCH[@]}" ${launch[@]+"${launch[@]}"} codex exec --skip-git-repo-check "${policy_args[@]}" \
     ${final_args[@]+"${final_args[@]}"} ${model_args[@]+"${model_args[@]}"} ${FM_ADAPTER_ARGS:-} - < "$prompt" ) 2>&1 | tee -a "$log"
   fm_adapter_pipeline_status "${PIPESTATUS[@]}"
 else
-  ( cd "$tree" && "${FM_LAUNCH[@]}" codex exec --skip-git-repo-check "${policy_args[@]}" \
+  ( cd "$tree" && "${FM_LAUNCH[@]}" ${launch[@]+"${launch[@]}"} codex exec --skip-git-repo-check "${policy_args[@]}" \
     ${final_args[@]+"${final_args[@]}"} ${model_args[@]+"${model_args[@]}"} ${FM_ADAPTER_ARGS:-} - < "$prompt" ) >> "$log" 2>&1
 fi
 rc=$?

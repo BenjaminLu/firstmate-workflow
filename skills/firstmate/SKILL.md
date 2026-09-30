@@ -46,6 +46,18 @@ The captain's own rules, restated here where they are easy to find:
 
 ## Start with evidence
 
+Run `bin/fm-doctor.sh --repo <root>` at top-level startup (T-121). It says, for
+every dependency firstmate itself needs and every vendor login, whether it
+works here and the one command that fixes it, so a captain finds out up front
+rather than mid-round; with no `config.yaml` yet it hands off to
+`bin/fm-setup.sh` itself. Before dispatching a task to a vendor this session
+has not already probed, run `bin/fm-auth-probe.sh <vendor>`. It checks the
+login a round would get, not your own session. Only `authenticated` is
+usable. Treat every other answer, `indeterminate` and `timeout` included, as
+unavailable for that vendor, on the board with the probe's status and reason.
+gemini has no documented status command, so it is unavailable until its login
+can be verified.
+
 Run `bin/fm-session.sh start --repo <root>` at top-level startup. It inspects
 recorded processes and panes, verifies the board's root using a fresh relative
 file challenge, and opens its HTTP-verified page when an opener is available.
@@ -285,10 +297,12 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   files to the worker, and pushes with a lease. Exit `75` means the rebuilt
   round was refused before its commit, and nothing was published. Send one
   such round at a time per task.
-- `bin/fm-canary.sh` runs one real round per vendor against the crew's
-  permission policy; run it on the captain's Mac before a merge card for any
-  change to the sandbox or an adapter, and put its output on the pull
-  request. It spends real model calls, so it never runs in CI and workers
+- `fm doctor --sandbox` is the merge gate for any change to the sandbox or an
+  adapter: run it on the captain's Mac before that merge card, and put its
+  output on the pull request. Underneath, it runs `bin/fm-canary.sh`, one
+  real round per vendor against the crew's permission policy, and summarises
+  each vendor from the canary's own record: started, authenticated, every
+  probe blocked, and whether a round's own loopback works on this host. It spends real model calls, so it never runs in CI and workers
   never run it themselves. It reports which login source each round's
   claude used, `crew-token` or `interactive-fallback` (`bin/fm-sandbox.sh
   login-source`'s `tier=` line), never the login itself. A crew token that

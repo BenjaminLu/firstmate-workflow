@@ -1408,6 +1408,47 @@ assert_eq "" "$(cat "$t/kc/calls" 2>/dev/null)" "and the keychain is not read fo
 assert_eq "0" "$(kc run darwin claude CLAUDE_CODE_OAUTH_TOKEN=from-env)" "a CLAUDE_CODE_OAUTH_TOKEN already set is used"
 assert_contains "$(cat "$t/login.out" 2>/dev/null)" "token=from-env" "as it is"
 assert_eq "" "$(cat "$t/kc/calls" 2>/dev/null)" "and the keychain is not read"
+# ...but not a variable the round sheds (T-121): with --shed, which
+# the adapter passes unless config.yaml's billing: chose api-key, an ambient
+# ANTHROPIC_API_KEY is no `given` login. The crew token is read and handed
+# in, and the key never reaches the round - never a round with neither.
+shed_run() {   # shed_run [--shed=NAME]... -> exit code; the round's view in $t/login.out
+  rm -f "$t/login.out" "$t/kc/calls"; rm -rf "$kctmp"; mkdir -p "$kctmp"
+  env FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$t/bin/sandbox-exec" FM_KEYCHAIN_TOOL="$t/kc/security" \
+    FM_SECRET_TOOL="$t/kc/secret-tool-guard" PATH="$lpath" ANTHROPIC_API_KEY=personal-key \
+    "$SB" run --policy="$t/worker.json" --root="$root" --vendor=claude --ctl="$t/ctl" --tmp="$kctmp" "$@" \
+    -- "$t/login.sh" "$t/login.out" </dev/null >/dev/null 2>"$t/login.err"
+  echo $?
+}
+assert_eq "0" "$(shed_run --shed=ANTHROPIC_API_KEY --shed=ANTHROPIC_AUTH_TOKEN)" \
+  "claude's round starts with an ambient ANTHROPIC_API_KEY it sheds"
+lo="$(cat "$t/login.out" 2>/dev/null)"
+assert_contains "$lo" "token=crew-claude-token" "and is handed the crew token as CLAUDE_CODE_OAUTH_TOKEN"
+assert_lacks "$lo" "ANTHROPIC_API_KEY" "and never the shed key"
+assert_contains "$(cat "$t/kc/calls" 2>/dev/null)" "firstmate-claude-token" "which fm read, since the key was not the login"
+# without --shed (billing: api-key chose it) the key is the given login, as before
+assert_eq "0" "$(shed_run)" "with the key chosen for billing, claude's round starts"
+lo="$(cat "$t/login.out" 2>/dev/null)"
+assert_contains "$lo" "ANTHROPIC_API_KEY=personal-key" "on that key"
+assert_eq "" "$(cat "$t/kc/calls" 2>/dev/null)" "and the keychain is not read"
+# login-source reads the same way, so fm-canary.sh and the probe agree
+src="$(env FM_SANDBOX_OS=darwin FM_KEYCHAIN_TOOL="$t/kc/security" FM_SECRET_TOOL="$t/kc/secret-tool-guard" \
+  ANTHROPIC_API_KEY=personal-key "$SB" login-source --policy="$t/worker.json" --vendor=claude \
+  --shed=ANTHROPIC_API_KEY 2>/dev/null)"
+assert_eq "tier=primary source=keychain:firstmate-claude-token" "$src" "login-source with --shed names the crew token too"
+# login-env (the probe's): every credential the round would get, in one file
+rm -rf "$t/le"; mkdir -p "$t/le/ctl" "$t/le/tmp"
+env FM_SANDBOX_OS=darwin FM_KEYCHAIN_TOOL="$t/kc/security" FM_SECRET_TOOL="$t/kc/secret-tool-guard" \
+  ANTHROPIC_API_KEY=personal-key "$SB" login-env --policy="$t/worker.json" --vendor=claude \
+  --tmp="$t/le/tmp" --ctl="$t/le/ctl" --shed=ANTHROPIC_API_KEY >/dev/null 2>&1
+assert_eq "CLAUDE_CODE_OAUTH_TOKEN=crew-claude-token" "$(cat "$t/le/ctl/env" 2>/dev/null)" \
+  "login-env writes exactly the credential the round would get"
+env FM_SANDBOX_OS=darwin FM_KEYCHAIN_TOOL="$t/kc/security" FM_SECRET_TOOL="$t/kc/secret-tool-guard" \
+  CURSOR_API_KEY=key-from-env "$SB" login-env --policy="$t/worker.json" --vendor=cursor-agent \
+  --tmp="$t/le/tmp" --ctl="$t/le/ctl" >/dev/null 2>&1
+assert_contains "$(cat "$t/le/ctl/env" 2>/dev/null)" "CURSOR_API_KEY=key-from-env" \
+  "and a given variable the round would inherit, too"
+rm -rf "$t/le"
 # expired, or no login at all: refused before the sandbox starts, which the
 # adapter counts as the vendor unavailable
 past=$(( ($(date +%s) - 60) * 1000 ))

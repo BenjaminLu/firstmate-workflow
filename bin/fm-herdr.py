@@ -1124,9 +1124,10 @@ ROUND_ENV_NAMES = frozenset((
     'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR',
 ))
 # Each vendor's login variables, in fm-config.sh's order (VENDORS, `given`):
-# the round is handed the first one set, the one fm-sandbox.sh's login_of
-# takes as the login, and no other vendor's. tests/herdr.test.sh holds the
-# two lists equal.
+# These are candidates, not permission to use ambient API billing. The first
+# set candidate allowed by the adapters' billing/overriding-credential policy
+# is handed on. Subscription codex/gemini logins travel as sandbox file copies.
+# tests/herdr.test.sh holds the candidate lists equal to the policy's `given`.
 ROUND_LOGIN = {
     'claude': ('CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'),
     'codex': ('CODEX_API_KEY',),
@@ -1140,8 +1141,27 @@ def round_environment(source, vendor):
     and the vendor's own login variable. Anything else is dropped."""
     env = {key: value for key, value in source.items()
            if key in ROUND_ENV_NAMES or key.startswith(ROUND_ENV_PREFIXES)}
-    for name in ROUND_LOGIN.get(vendor, ()):
+    candidates = ROUND_LOGIN.get(vendor, ())
+    if not any(source.get(name) for name in candidates):
+        return env
+    # Ask the same functions the adapters use, from the round's immutable
+    # code snapshot. Only variable names leave this helper, never credentials.
+    code = Path(source.get('FM_CODE_ROOT') or Path(__file__).resolve().parents[1])
+    # The library resolves settings from FM_ROOT, with FM_ADAPTER_CONFIG as
+    # an explicit override. A code snapshot intentionally has no config.yaml.
+    policy_env = {'PATH': os.environ.get('PATH', os.defpath)}
+    for name in ('FM_ROOT', 'FM_ADAPTER_CONFIG'):
         if source.get(name):
+            policy_env[name] = source[name]
+    policy = subprocess.run(
+        ['bash', '-c', '. "$1/bin/adapters/_lib.sh" || exit; '
+         'if [ "$(fm_adapter_billing "$2")" != api-key ]; then '
+         'fm_adapter_outranking "$2"; fi', 'round-login', str(code), vendor],
+        env=policy_env,
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20, check=True)
+    shed = set(policy.stdout.splitlines())
+    for name in candidates:
+        if source.get(name) and name not in shed:
             env[name] = source[name]
             break
     return env

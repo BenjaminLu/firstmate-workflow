@@ -2510,6 +2510,20 @@ sa="$(sx)"
 assert_lacks "$(crew_ids "$sa")" "worker-gone" "agent_finished after lost does not bring it back"
 assert_eq "gate" "$(jq -r '.tasks[]|select(.id=="T-044")|.stage' <<<"$sa")" "and its task stays blocked"
 assert_eq "1" "$(jq -r '[.recent[]|select(.type=="agent_lost" and .actor=="worker-gone")]|length' <<<"$sa")" "the loss is still shown once"
+
+# --- a vendor that is not authenticated shows as unavailable (T-121): the
+# probe's own reason reaches the board the same generic way any other event's
+# authored en/tw summary does, in both languages. One line and no crewman
+# put aboard, so the fixture's deck is left as the tests below expect it
+emx --actor worker-auth --task T-047 --type vendor_unavailable \
+  --en "claude: expired: claude's login has expired; run \`claude\` once outside a round and sign in" \
+  --tw "claude：expired：claude 的登入已過期；請在裝置外執行一次 \`claude\` 並登入"
+sv="$(sx)"
+assert_contains "$(jq -r '.recent[]|select(.type=="vendor_unavailable")|.summary.en' <<<"$sv")" \
+  "claude's login has expired" "the board shows the probe's own reason for an unauthenticated vendor, in English"
+assert_contains "$(jq -r '.recent[]|select(.type=="vendor_unavailable")|.summary["zh-TW"]' <<<"$sv")" \
+  "登入已過期" "and in Traditional Chinese"
+
 # a task redispatched before its old crewman was found lost is not blocked
 emx --actor worker-old --task T-046 --type dispatched --data '{"role":"worker"}' --en "on it" --tw "接下"
 emx --actor worker-new --task T-046 --type dispatched --data '{"role":"worker","recovery":true}' --en "again" --tw "再來"

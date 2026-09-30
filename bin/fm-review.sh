@@ -866,6 +866,22 @@ review_is_signed() {
 }
 adapters="${FM_CODE_ROOT:-$REPO}/bin/adapters"
 chain="$(fm_vendor_chain reviewer "$VENDOR")"
+# A crew round never runs on a login it did not check (T-121): every vendor
+# in the chain that this probe recognises has the login its round would get
+# checked right now, before any of them sees a prompt. Anything but
+# `authenticated` - unauthenticated, expired, out of quota, or a login the
+# probe could not confirm (gemini, a timeout) - is refused here, with the
+# probe's status and reason on the board, rather than by starting a review
+# inside the sandbox and failing there; the chain moves on to the next
+# vendor.
+auth_notes_file="$FM_RUN_DIR/auth-notes"
+chain="$(fm_auth_filter_chain "${FM_CODE_ROOT:-$REPO}" "$chain" "$auth_notes_file")"
+while IFS='|' read -r auth_v auth_status auth_en auth_tw; do
+  [ -n "$auth_v" ] || continue
+  echo "fm-review: $auth_v: $auth_status: $auth_en" >&2
+  emit --type vendor_unavailable --en "$auth_v: $auth_status: $auth_en" \
+    --tw "${auth_v}：${auth_status}：$auth_tw" </dev/null
+done < "$auth_notes_file"
 # A run-mode round goes only to an engine whose adapter can confine it. The
 # reviewer's own vendor lacking that is a configuration error, said once;
 # a fallback lacking it is simply not in this round's chain.

@@ -74,6 +74,13 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
+# fm_adapter_shed (T-121): the login-source line below reads the login the
+# way the vendor's adapter hands it to a round, never counting a variable
+# that round sheds as its login
+_fm_alib="$(dirname "${BASH_SOURCE[0]}")/adapters/_lib.sh"
+[ -f "$_fm_alib" ] || { echo "${0##*/}: missing $_fm_alib" >&2; exit 70; }
+# shellcheck source=bin/adapters/_lib.sh
+. "$_fm_alib"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 wanted=(); sock=''; sections='vendors,destroy'
@@ -149,12 +156,17 @@ PY
   printf '%s\n' "$!"
 }
 
+# Every record names the run that wrote it (T-121): results.jsonl keeps
+# every run's lines, so a reader - `fm doctor --sandbox` - picks out one
+# run's records by this id, never by "the last N lines". FM_CANARY_RUN is
+# the caller's id for it; with none, the canary makes its own.
+canary_run="${FM_CANARY_RUN:-canary-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 record() {   # record <vendor> <version> <outcome> <why> [started] [authenticated] [exit] [probes json] [own] [blocked] [model_requested] [model] [login]
-  jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg vendor "$1" --arg version "$2" \
+  jq -cn --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg run "$canary_run" --arg vendor "$1" --arg version "$2" \
     --arg os "${os:-none}" --arg outcome "$3" --arg why "$4" --arg started "${5:-no}" \
     --arg auth "${6:-no}" --arg exit "${7:-}" --argjson probes "${8:-null}" --arg own "${9:-}" \
     --arg blocked "${10:-}" --arg model_requested "${11:-}" --arg model "${12:-}" --arg login "${13:-}" \
-    '{at:$at, vendor:$vendor, version:$version, sandbox:$os, outcome:$outcome, why:$why,
+    '{at:$at, run:$run, vendor:$vendor, version:$version, sandbox:$os, outcome:$outcome, why:$why,
       started:($started == "yes"), authenticated:($auth == "yes"),
       adapter_exit:(if $exit == "" then null else ($exit | tonumber) end),
       probes:$probes, own_loopback:$own,
@@ -189,7 +201,9 @@ for name in ${wanted[@]+"${wanted[@]}"}; do
   # vendor's own crew login was missing and the round fell back to the
   # operator's interactive one (T-126). For claude that tier is worth a
   # plainer name than "primary"/"fallback": crew-token or interactive-fallback.
-  if ! src="$("$ROOT/bin/fm-sandbox.sh" login-source --policy="$policy_all" --vendor="$name" 2>"$out/login-source.err")"; then
+  shed=(); while IFS= read -r s; do [ -n "$s" ] && shed+=(--shed="$s"); done < <(fm_adapter_shed "$name")
+  if ! src="$("$ROOT/bin/fm-sandbox.sh" login-source --policy="$policy_all" --vendor="$name" \
+      ${shed[@]+"${shed[@]}"} 2>"$out/login-source.err")"; then
     src="$(grep -m1 '^fm-sandbox: ' "$out/login-source.err")"; rm -f "$out/login-source.err"
     printf '%-13s skipped: not logged in (%s)\n' "$name" "${src#fm-sandbox: }"
     record "$name" "$version" skipped "not logged in: ${src#fm-sandbox: }"

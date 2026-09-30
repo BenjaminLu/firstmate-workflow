@@ -40,6 +40,12 @@ _fm_alib="$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 # round and hands in as CURSOR_API_KEY. A CURSOR_API_KEY already set is
 # used as is.
 #
+# Nothing of cursor-agent's is shed the way the other vendors' billing
+# variables are (T-121): CURSOR_API_KEY is not a second credential that can
+# outrank a subscription login here, it is the only login this design ever
+# hands a cursor-agent round, so there is no ambient variable to strip
+# before it runs.
+#
 # No `fm:review-run` line: a run-mode review needs the reviewer's writes
 # confined to a checkout by the CLI itself, which T-066 asked of claude
 # alone. So cursor-agent reviews in diff mode only, and fm_adapter_context
