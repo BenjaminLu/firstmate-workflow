@@ -1278,7 +1278,15 @@ sandbox; that work was reverted. Instead:
    at most `FM_REVIEW_CI_WAIT` seconds (default 1200), asking every
    `FM_REVIEW_CI_POLL` (default 30). A check whose runs cannot be read is not
    waited on; it is stated unknown. While it waits the board is told, in `en`
-   and `zh-TW`. Past the bound the round starts anyway, and the head section
+   and `zh-TW`. The launcher's `crew_status` explicitly carries
+   `phase: waiting_ci`, `window_expected: false` and `ci_pending` naming the
+   pending checks (T-159). It refreshes when that list changes, not on each
+   poll. The card, roster and ship distinguish this from reviewing; the card
+   says that no window is expected until review starts. Reaching the bound
+   emits a bilingual explanation with `ci_wait_bound: true`. After the wait,
+   `phase: review` restores the usual reviewer state before launch. These
+   transitions bypass heartbeat coalescing; ordinary heartbeats retain phase.
+   Past the bound the round starts anyway, and the head section
    names every required check still running, or not yet started. The verdict
    event's `data.wall_clock` carries `ci_wait`, the seconds of the round
    spent waiting.
