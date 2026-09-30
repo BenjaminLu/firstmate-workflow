@@ -49,36 +49,45 @@ REAL_PYTHON3="$(command -v python3)"
 # results.jsonl: fakebin's own jq (below) only ever answers --version, so
 # using it there would read every field as empty rather than testing anything
 REAL_JQ="$(command -v jq)"
-fake_tool() {  # fake_tool <name> <version-line>
-  if [ "$1" = python3 ]; then
+
+# The fixture's own pins. Every stand-in below answers --version with exactly
+# the version this file pins, read from it, so whether doctor's toolchain
+# check is met depends on the fixture alone, never on the host's tools.
+toolchain='[tools]\nbun = "1.3.11"\npython = "3.14.6"\n"ubi:jqlang/jq" = "1.7.1"\n"ubi:cli/cli" = "2.63.0"\nnode = "20"\nshellcheck = "0.10.0"\n'
+# shellcheck disable=SC2059  # the format is the file's own text, escapes included
+printf "$toolchain" > "$repo/mise.toml"
+pin_of() {  # pin_of <mise.toml key> -> the version the fixture pins for it
+  awk -F' = ' -v k="$1" '{ g = $1; gsub(/"/, "", g); if (g == k) { v = $2; gsub(/"/, "", v); print v } }' \
+    "$repo/mise.toml"
+}
+fake_tool() {  # fake_tool <name> <version-line> [<real binary every other call runs>]
+  if [ -n "${3:-}" ]; then
     printf '#!/usr/bin/env bash\ncase "$1" in --version) printf %%s\\\\n %s;; *) exec %s "$@";; esac\n' \
-      "$(printf '%q' "$2")" "$(printf '%q' "$REAL_PYTHON3")" > "$fakebin/$1"
+      "$(printf '%q' "$2")" "$(printf '%q' "$3")" > "$fakebin/$1"
   else
     printf '#!/usr/bin/env bash\ncase "$1" in --version) printf %%s\\\\n %s;; esac\nexit 0\n' \
       "$(printf '%q' "$2")" > "$fakebin/$1"
   fi
   chmod +x "$fakebin/$1"
 }
-fake_tool bun "1.3.11"
-fake_tool python3 "Python 3.14.6"
-fake_tool jq "jq-1.7.1"
-fake_tool gh "gh version 2.63.0"
+fake_tool bun "$(pin_of bun)"
+fake_tool python3 "Python $(pin_of python)" "$REAL_PYTHON3"
+fake_tool jq "jq-$(pin_of ubi:jqlang/jq)"
+fake_tool gh "gh version $(pin_of ubi:cli/cli)"
 fake_tool git "git version 2.43.0"
 fake_tool herdr "herdr 1.0.0"
-fake_tool node "v20.19.6"
+fake_tool node "v$(pin_of node)"
 # the fake shellcheck names itself on its first line and its version on the second,
 # exactly as the real one answers --version
-printf '#!/usr/bin/env bash\nprintf "ShellCheck - shell script analysis tool\\nversion: 0.10.0\\nlicense: GNU General Public License, version 3\\n"\n' \
-  > "$fakebin/shellcheck"; chmod +x "$fakebin/shellcheck"
+printf '#!/usr/bin/env bash\nprintf "ShellCheck - shell script analysis tool\\nversion: %s\\nlicense: GNU General Public License, version 3\\n"\n' \
+  "$(pin_of shellcheck)" > "$fakebin/shellcheck"; chmod +x "$fakebin/shellcheck"
+assert_eq "1.7.1" "$(pin_of ubi:jqlang/jq)" "the stand-ins' versions are read from the fixture's own mise.toml"
 # perl is only checked for presence, and anything that runs it gets the real one
 ln -s "$(command -v perl)" "$fakebin/perl"
 # the sandbox tool the suite names with FM_SANDBOX_TOOL: it only has to be
 # there, since nothing in doctor starts a round with it
 printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/fm-test-sandbox"; chmod +x "$fakebin/fm-test-sandbox"
 
-toolchain='[tools]\nbun = "1.3.11"\npython = "3.14.6"\n"ubi:jqlang/jq" = "1.7.1"\n"ubi:cli/cli" = "2.63.0"\nnode = "20"\nshellcheck = "0.10.0"\n'
-# shellcheck disable=SC2059  # the format is the file's own text, escapes included
-printf "$toolchain" > "$repo/mise.toml"
 printf 'vendor: claude\n' > "$repo/config.yaml"
 mkdir -p "$repo/state/worktrees"
 
@@ -158,14 +167,14 @@ assert_contains "$out" "x gh" "a missing pinned tool is reported x, not ok"
 assert_contains "$out" "x gh               missing (pinned 2.63.0)" "and says missing, the word the acceptance names"
 assert_contains "$out" "mise install" "with the one command that fixes it"
 assert_eq "1" "$rc" "and doctor's own exit reflects it"
-fake_tool gh "gh version 2.63.0"
+fake_tool gh "gh version $(pin_of ubi:cli/cli)"
 
 # --- a tool older than its pin ------------------------------------------------
 fake_tool jq "jq-1.5"
 out="$(run_doctor)"
 assert_contains "$out" "x jq" "an older-than-pinned tool is reported x too"
 assert_contains "$out" "wrong version: 1.5, older than the pin 1.7.1" "and says wrong version, and why"
-fake_tool jq "jq-1.7.1"
+fake_tool jq "jq-$(pin_of ubi:jqlang/jq)"
 
 # --- vendor logins: only 'authenticated' counts as usable --------------------
 # each vendor CLI answers --version and its status check exactly as the
@@ -321,7 +330,7 @@ assert_eq "" "$(cat "$d/mise-calls")" "and a 'n' answer installs nothing"
 printf 'y\n' | run_doctor --fix >/dev/null 2>&1
 assert_contains "$(cat "$d/mise-calls")" "install ubi:cli/cli@2.63.0" "a 'y' answer runs exactly the pinned install"
 rm -f "$fakebin/mise"
-fake_tool gh "gh version 2.63.0"
+fake_tool gh "gh version $(pin_of ubi:cli/cli)"
 
 # --- --sandbox: every summary line is read from the record it describes ----
 # A scratch bin/ whose fm-canary.sh stands in for a real run: it appends the
@@ -339,10 +348,15 @@ cp "$ROOT/bin/adapters/_lib.sh" "$d3/adapters/"
   printf 'exit "$(cat %s)"\n' "$(printf '%q' "$d3/rc")"
 } > "$d3/fm-canary.sh"
 chmod +x "$d3/fm-canary.sh" "$d3/fm-doctor.sh"
-realbin="$d/realbin"; mkdir -p "$realbin"; ln -s "$REAL_JQ" "$realbin/jq"
+# The canary stand-in and doctor's record reader need a jq that reads JSON,
+# but doctor's toolchain check reads that same jq's version: so it is a
+# stand-in that answers --version with the fixture's pin and runs the real
+# jq for everything else, never a bare link to the host's, whose version
+# (ubuntu 24.04's apt jq is 1.7) would decide this section's exit.
+fake_tool jq "jq-$(pin_of ubi:jqlang/jq)" "$REAL_JQ"
 mkdir -p "$repo/state/canary"
 sandbox_doctor() { HOME="$home" FM_KEYCHAIN_TOOL="$d/no-security" FM_SECRET_TOOL="$d/no-secret-tool" \
-  PATH="$realbin:$fakebin:$sysbin" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$fakebin/fm-test-sandbox" \
+  PATH="$fakebin:$sysbin" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$fakebin/fm-test-sandbox" \
   "$d3/fm-doctor.sh" --repo "$repo" --sandbox; }
 blocked_probes='{"write_outside":"blocked","read_ssh":"blocked","github":"blocked","loopback":"blocked","herdr_socket":"blocked","other_round_tmp":"blocked","gh_token":"blocked","git_credential":"blocked","keychain":"n/a","pasteboard":"n/a"}'
 ran_record() {  # ran_record <vendor> <probes json> <own_loopback> -> a started, authenticated record
@@ -358,6 +372,8 @@ assert_contains "$out" "started, authenticated, every probe blocked" \
   "a round with every probe blocked is ok"
 assert_contains "$out" "a round's own loopback works on this host" \
   "and its own loopback is reported on a line of its own"
+assert_contains "$out" "+ jq" "the toolchain line doctor reads here is the fixture's jq, not the host's"
+assert_lacks "$out" "wrong version" "so no host version decides this section's exit"
 assert_eq "0" "$rc" "and doctor's exit is good"
 
 # a probe that reached is never summarised as blocked, whatever the canary's exit
