@@ -3978,10 +3978,13 @@ developer directory or the licence not accepted, the stand-in prints what
 xcrun said, that nothing inside the round can fix it, and how the operator
 does (`fm_xcrun_fix`), and exits 69 at once: the round is told plainly
 instead of failing on a cache write and a licence prompt it cannot answer.
-`fm doctor` is to report a machine whose `git` or `python3` would be a
-shim, from the same `fm_xcrun_shim` and `fm_path_tool`; `bin/fm-doctor.sh`
-is outside T-147's scope, so that line is left to the task that may change
-it. `tests/adapter-contract.test.sh` runs the codex adapter with a codex
+`fm doctor` reports a machine whose first `git` or `python3` on PATH is a
+shim, from the same `fm_xcrun_shim` and `fm_path_tool`: an `x` line saying
+`wrong version`, naming the file as Apple's xcrun shim, with
+`fm_xcrun_fix`'s line as the fix, and never `ok`. It checks those two and
+no other tool, so the stand-in's message says "fm doctor reports it" only
+for them. `tests/doctor.test.sh` covers a shim first on PATH, and a real
+tool ahead of one. `tests/adapter-contract.test.sh` runs the codex adapter with a codex
 that answers as the real CLI does, through `$SHELL -lc`, and a shell that
 plays zsh in exactly those two ways: a here-document and `git status`
 succeed in the round, and a machine whose only git is a shim is reported,

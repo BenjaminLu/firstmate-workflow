@@ -15,7 +15,9 @@
     "tests/**",
     "design/**",
     "design/tasks/T-147.json",
-    "bin/fm-worker.sh"
+    "bin/fm-worker.sh",
+    "bin/fm-doctor.sh",
+    "tests/doctor.test.sh"
   ],
   "acceptance": [
     "Why. The first codex worker round (T-146 round 1, gpt-6-astra, 2026-09-29) stopped at once and changed nothing: codex runs its commands through the operator's login shell (zsh), whose here-documents write under TMPPREFIX (/tmp/zsh by default), which the sandbox denies (`can't create temp file for here document: operation not permitted`); and `git status` reached Apple's /usr/bin xcrun shim, which tried to write its cache under /var/folders (denied) and then failed on the Xcode licence. Claude rounds on the same machine do not meet either. The round was also refused two hosts, sdmntprsouthcentralus.oaiusercontent.com and sdmntprnortheu.oaiusercontent.com. Its own spec file, design/tasks/T-147.json, is committed on this branch.",

@@ -226,7 +226,7 @@ fm_crew_hatch() {
 # the Xcode licence not accepted it then stops on that (the codex rounds of
 # T-146 and T-157, 2026-09-29/30). fm-sandbox.sh asks these, outside the
 # round, for each tool a round would reach first on its PATH; `fm doctor`
-# reports a machine where one is a shim.
+# reports a machine whose first git or python3 on PATH is a shim.
 # shellcheck disable=SC2034  # read by the scripts that source this file
 FM_XCRUN_TOOLS="git python3 pip3 make cc clang"
 

@@ -1396,7 +1396,9 @@ if [ "$cmd" = run ] && [ "$os" = darwin ] && [ -n "$tmp" ] && declare -F fm_xcru
       say "$xt on the round's PATH is Apple's xcrun shim ($xfound); the round runs the $xt it names, $xwhat, directly"
       printf '#!/bin/sh\nexec %s "$@"\n' "$(sq "$xwhat")" > "$xbin/$xt"
     else
-      xmsg="fm: $xt here is only Apple's Xcode shim ($xfound), which cannot run inside a crew round: $xwhat. Nothing inside the round can fix it; say so in your account of the round. The operator fixes it outside the round: $(fm_xcrun_fix "$xt"); fm doctor reports it."
+      xmsg="fm: $xt here is only Apple's Xcode shim ($xfound), which cannot run inside a crew round: $xwhat. Nothing inside the round can fix it; say so in your account of the round. The operator fixes it outside the round: $(fm_xcrun_fix "$xt")."
+      # fm-doctor.sh checks git and python3 for a shim, and no other tool
+      case "$xt" in git|python3) xmsg="${xmsg%.}; fm doctor reports it." ;; esac
       say "${xmsg#fm: }"
       printf '#!/bin/sh\necho %s >&2\nexit 69\n' "$(sq "$xmsg")" > "$xbin/$xt"
     fi

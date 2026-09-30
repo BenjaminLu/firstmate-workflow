@@ -192,6 +192,42 @@ assert_contains "$out" "x jq" "an older-than-pinned tool is reported x too"
 assert_contains "$out" "wrong version: 1.5, older than the pin 1.7.1" "and says wrong version, and why"
 fake_tool jq "jq-$(pin_of ubi:jqlang/jq)"
 
+# --- an Apple xcrun shim first on PATH (T-147) -------------------------------
+# A stand-in for /usr/bin/git and /usr/bin/python3 on macOS: linked against
+# libxcselect, which is how fm-config.sh's fm_xcrun_shim tells one, and
+# answering the way an unlicensed one does. The suite's own, never the
+# host's /usr/bin.
+fake_shim() {  # fake_shim <file>
+  printf '#!/usr/bin/env bash\n# /usr/lib/libxcselect.dylib\necho "You have not agreed to the Xcode license agreements." >&2\nexit 69\n' > "$1"
+  chmod +x "$1"
+}
+# a shim later on PATH than a real git changes nothing: the real one is found
+fake_shim "$sysbin/git"
+out="$(run_doctor)"
+assert_contains "$out" "+ git              ok, found on PATH" "a real git first on PATH is ok, with a shim behind it"
+assert_lacks "$out" "xcrun shim" "and no shim is reported"
+# with only the shim, git is reported as the wrong tool, with the fix
+rm -f "$fakebin/git"
+out="$(run_doctor)"; rc=$?
+assert_contains "$out" "x git              wrong version: $sysbin/git is Apple's xcrun shim" \
+  "a shim git first on PATH is reported x, as the wrong tool, naming the file"
+assert_contains "$out" "fix: install git ahead of /usr/bin on PATH (brew install git), or accept the Xcode licence" \
+  "with fm_xcrun_fix's line"
+assert_lacks "$out" "+ git" "and never as ok"
+assert_eq "1" "$rc" "and doctor's own exit reflects it"
+rm -f "$sysbin/git"; fake_tool git "git version 2.43.0"
+# python3, a pinned tool, the same way
+fake_shim "$fakebin/python3"
+out="$(run_doctor)"; rc=$?
+assert_contains "$out" "x python3          wrong version: $fakebin/python3 is Apple's xcrun shim" \
+  "a shim python3 first on PATH is reported x, as the wrong tool"
+assert_contains "$out" "fix: install python3 ahead of /usr/bin on PATH (brew install python)" "with its fix"
+assert_eq "1" "$rc" "and doctor's own exit reflects it"
+fake_tool python3 "Python $(pin_of python)" "$REAL_PYTHON3"
+out="$(run_doctor)"
+assert_contains "$out" "+ python3" "a real python3 first on PATH is ok"
+assert_lacks "$out" "xcrun shim" "and not called a shim"
+
 # --- vendor logins: only 'authenticated' counts as usable --------------------
 # each vendor CLI answers --version and its status check exactly as the
 # real one did in its recorded transcript (tests/fixtures/auth-status)
