@@ -64,9 +64,14 @@ assert_eq "0" "$(counted assert_matches "$(printf 'a\n\nb')" '^$' x)" "and an em
 # shellcheck source=tests/lib/path.sh
 . "$ROOT/tests/lib/path.sh"
 path_case="$(safe_tmpdir)"
-fixture_path "$path_case/bin" 'cat' bash cat python3 || exit 1
+mkdir -p "$path_case/host"
+printf '#!/bin/sh\nprintf retained\n' > "$path_case/host/fixture-extra-tool"
+printf '#!/bin/sh\nexit 89\n' > "$path_case/host/python3"
+chmod +x "$path_case/host/fixture-extra-tool" "$path_case/host/python3"
+PATH="$path_case/host:$PATH" fixture_path "$path_case/bin" 'cat' || exit 1
+assert_eq "retained" "$(PATH="$path_case/bin" fixture-extra-tool)" "an unlisted host executable survives PATH construction"
 assert_eq "" "$(PATH="$path_case/bin" command -v cat)" "an omitted host tool is unreachable"
-assert_eq "$path_case/bin/bash" "$(PATH="$path_case/bin" command -v bash)" "a requested tool is on the closed PATH"
-assert_eq "working" "$(PATH="$path_case/bin" python3 -c 'print("working")')" "the closed PATH uses the caller's working Python"
+assert_eq "$path_case/bin/bash" "$(PATH="$path_case/bin" command -v bash)" "a host shell is on the closed PATH"
+assert_eq "working" "$(PATH="$path_case/bin" python3 -c 'print("working")')" "the closed PATH skips a broken first Python candidate"
 safe_rm_rf "$path_case"
 finish

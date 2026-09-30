@@ -187,7 +187,7 @@ registry() {   # registry <example-app entry lines> ; the self entry is fixed
     printf 'projects:               # every repository\n'
     printf '  self-host:            # this one\n    repo: .\n'
     printf '    github: owner-a/engine\n    base: main\n    required_check: ci\n'
-    printf '    design: design/design.md\n    tasks: design/tasks.json\n'
+    printf '    design: design/design.md\n    tasks: design/tasks\n'
     printf '  example-app:\n%s\n' "$1"
     printf 'project:\n  setup: make deps && echo "$(not evaluated)"\n  check: make check\n'
     printf '  check_env:\n    BUDGET: "600"\n  tests:\n    - tests/**\n'
@@ -319,7 +319,7 @@ refused "and its own contract lookup" example-app project fm_project_contract ex
 registry "$app"
 while IFS= read -r line; do
   printf '%s\n' "$line"
-  if [ "$line" = "    tasks: design/tasks.json" ]; then printf '    project:\n      check: make other\n'; fi
+  if [ "$line" = "    tasks: design/tasks" ]; then printf '    project:\n      check: make other\n'; fi
 done < "$c" > "$r/both"; mv "$r/both" "$c"
 assert_contains "$(cat "$c")" "      check: make other" "(the fixture now holds both blocks)"
 refused "the top-level block and a self entry project:" self-host project fm_project_contract self-host check "$c"
@@ -480,23 +480,6 @@ assert_eq "1" "$(cd "$t" && rc_of fm_task T-003 design/tasks main)" "and not fro
 assert_eq "SK-001 T-001 T-002 T-003" "$(cd "$t" && fm_tasks design/tasks t-003 | jq -r .id | paste -sd' ' -)" \
   "fm_tasks lists a branch's tasks"
 
-# A branch opened before T-090 has no design/tasks/, only its own old
-# design/tasks.json. Its entry there is the task as that branch says it: a
-# task defined only on the branch is found, and one the branch revised is
-# read as revised, not as main's file has it.
-( cd "$t" && git checkout -q -b old-branch main && git rm -q -r design/tasks && mkdir -p design \
-    && printf '{"tasks":[{"id":"T-001","title":"first, revised on the branch","scope":["z/**"]},{"id":"T-OLD","title":"only here","scope":["o/**"]}]}\n' \
-       > design/tasks.json && git add design && git commit -q -m old && git checkout -q main )
-assert_eq '["o/**"]' "$(cd "$t" && fm_task T-OLD design/tasks old-branch 2>/dev/null | jq -c .scope)" \
-  "fm_task finds a task defined only in a branch's old design/tasks.json"
-assert_eq '"first, revised on the branch"' "$(cd "$t" && fm_task T-001 design/tasks old-branch 2>/dev/null | jq -c .title)" \
-  "and reads a task the branch revised there as revised, not as main's file has it"
-assert_eq "0" "$(cd "$t" && rc_of fm_task T-OLD design/tasks old-branch)" "(it is found)"
-assert_contains "$(cat "$r/err")" "bin/fm.sh tasks split T-OLD" "and says it read the old array, and how to bring the branch over"
-assert_eq "1" "$(cd "$t" && rc_of fm_task T-404 design/tasks old-branch)" "an id in neither is still not there"
-assert_eq '"first"' "$(cd "$t" && fm_task T-001 design/tasks t-003 2>/dev/null | jq -c .title)" \
-  "(a branch with the task's own file is read from that file)"
-
 # All or nothing: a file that does not read is no task list, never the
 # files that did. So is a directory that is not there.
 assert_eq "1" "$(rc_of fm_tasks "$t/no-such-dir")" "a missing directory is no task list"
@@ -549,11 +532,10 @@ assert_contains "$(cat "$r/out")" "tasks.json" "and the check says why"
 rm -f "$t/design/tasks.json"
 assert_eq "0" "$(rc_of fm_tasks_check "$t/design/tasks")" "(and the directory is sound again)"
 
-# the registry names a project's task directory; a declared path in the old
-# shape, design/tasks.json, names the directory beside it
+# The registry names the project's task directory, or supplies its default.
 c2="$t/config.yaml"
-printf 'default_project: a\nprojects:\n  a:\n    repo: .\n    github: o/a\n    base: main\n    required_check: ci\n    tasks: design/tasks.json\n  b:\n    github: o/b\n    base: main\n    required_check: ci\n' > "$c2"
-assert_eq "design/tasks" "$(fm_project_get a tasks "$c2")" "a declared task list in the old shape names its directory"
+printf 'default_project: a\nprojects:\n  a:\n    repo: .\n    github: o/a\n    base: main\n    required_check: ci\n    tasks: design/tasks\n  b:\n    github: o/b\n    base: main\n    required_check: ci\n' > "$c2"
+assert_eq "design/tasks" "$(fm_project_get a tasks "$c2")" "the registry returns the declared task directory"
 assert_eq "projects/b/tasks" "$(fm_project_get b tasks "$c2")" "and the default is projects/<name>/tasks"
 rm -rf "$t"
 

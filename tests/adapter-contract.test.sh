@@ -17,10 +17,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib/path.sh
 . "$ROOT/tests/lib/path.sh"
 closed_path="$(safe_tmpdir)"
-fixture_path "$closed_path" 'claude codex gemini cursor-agent agent gh security secret-tool' \
-  bash sh env git python3 perl jq awk sed grep head tail tr cut sort uniq wc cat cp mv rm \
-  mkdir rmdir mktemp chmod dirname basename date sleep touch find readlink tee \
-  xargs id uname seq cksum shasum || exit 1
+fixture_path "$closed_path" 'claude codex gemini cursor-agent agent gh security secret-tool' || exit 1
 
 # a PATH where git and gh record every call instead of doing anything
 make_sandbox() {

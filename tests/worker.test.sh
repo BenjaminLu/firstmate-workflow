@@ -1842,26 +1842,14 @@ rm -rf "$dc"
 # repository with a bare remote: round one runs, main moves in a separate
 # clone - so the worker has to FETCH the base, its own local main is stale -
 # and round two continues the pull request.
-rb_fixture() {   # rb_fixture [two-tasks]; prints the fixture dir with round one done
+rb_fixture() {   # rb_fixture; prints the fixture dir with round one done
   local d r
   d="$(fixture)" || return 1; r="$d/repo"
   (
     cd "$r" || exit 1
     mkdir -p src
     printf 'line %s\n' 1 2 3 4 5 6 7 8 9 10 > src/app.txt
-    # The cases below were written for a base that keeps the one array,
-    # design/tasks.json, and a task table, and that path is still a real
-    # one - any project not yet split. So that is the layout, in jq's
-    # layout, unless RB_SPLIT=1 asks for one file per task (T-090).
-    if [ "${RB_SPLIT:-0}" != 1 ]; then
-      git rm -q -r design/tasks && mkdir -p design
-      jq -n '{tasks: [{id: "T-Z", title: "a mock task", scope: ["src/**"], acceptance: ["it exists"]}]}' \
-        > design/tasks.json
-    fi
-    # a second entry both sides can change, on one line
-    [ "${1:-}" != two-tasks ] || printf '%s\n' \
-      '{"tasks":[{"id":"T-Z","title":"a mock task","scope":["src/**"],"acceptance":["it exists"]},{"id":"T-1","title":"one","scope":[],"acceptance":[]}]}' \
-      > design/tasks.json
+    printf '%s\n' '{"id":"T-1","title":"one","scope":[],"acceptance":[]}' > design/tasks/T-1.json
     # a line with words in it between the table and the prose: git joins
     # two conflicts separated only by a blank line into one hunk
     printf '%s\n' '# design' '## 6. gates' 'seven of them' '' \
@@ -1888,17 +1876,13 @@ cd "$3" || exit 1
 M
   chmod +x "$r/bin/adapters/mock.sh"
   # round one: the task changes line 5, edits the prose, adds its own
-  # table row and gives its own tasks.json entry a dependency
+  # table row and gives its own task file a dependency
   cat > "$d/round-one.sh" <<'S'
 sed 's/^line 5$/line 5 by the task/' src/app.txt > src/app.next && mv src/app.next src/app.txt
 awk '{ if ($0 == "prose the two sides may both edit") print "prose as the task says"; else print }
      /^\| T-1 \|/ { print "| T-Z | a mock task | T-1 |" }' design/design.md > design/d.next
 mv design/d.next design/design.md
-if [ -f design/tasks.json ]; then
-  jq '.tasks[0].depends_on=["T-1"]' design/tasks.json > design/t.next && mv design/t.next design/tasks.json
-else
-  jq '.depends_on=["T-1"]' design/tasks/T-Z.json > design/t.next && mv design/t.next design/tasks/T-Z.json
-fi
+jq '.depends_on=["T-1"]' design/tasks/T-Z.json > design/t.next && mv design/t.next design/tasks/T-Z.json
 S
   ghstub "$d" >/dev/null
   ( cd "$r" && FM_ROOT="$r" FM_GH="$d/stub/gh" FM_T_STEP="$d/round-one.sh" \
@@ -2109,34 +2093,6 @@ assert_eq "1" "$(git --git-dir="$dE/remote.git" rev-list --count "main..$bE")" "
 assert_eq "$raceE" "$(jq -r 'select(.type=="commit_pushed" and .data.rebuilt!=null)|.data.rebuilt.previous_head' \
   "$dE/repo/state/events.jsonl" | tail -1)" "rebuilt from the racer's head, not over it"
 
-# F: both sides appended to the task table and to tasks.json. The rows are
-# unioned without the worker, and the task's own entry and row come through
-# exactly. A rebuild the worker adds nothing to is still pushed.
-dF="$(rb_fixture)"; bF="$(rb_branch "$dF")"; oldF="$(rb_head "$dF" "$bF")"
-cat > "$dF/main.sh" <<'S'
-jq '.tasks += [{id:"T-W",title:"main work",scope:[],acceptance:[]}]' design/tasks.json > n && mv n design/tasks.json
-awk '{ print } /^\| T-1 \|/ { print "| T-W | main work | — |" }' design/design.md > n && mv n design/design.md
-S
-rb_move_main "$dF" "$dF/main.sh"
-mainF="$(rb_head "$dF" main)"
-printf ':\n' > "$dF/nothing.sh"
-rb_round_two "$dF" "$dF/nothing.sh"
-assert_eq "0" "$rb_rc" "appended rows on both sides: the round completes"
-rb_rebuilt "$dF" "F"
-assert_eq "$mainF" "$(rb_head "$dF" "$bF^")" "on the new base"
-pF="$(cat "$dF/prompt.md")"
-assert_lacks "$pF" '- `design/design.md`' "the table-row union is not handed to the worker"
-assert_lacks "$pF" '- `design/tasks.json`' "nor are the appended task entries"
-dmF="$(git --git-dir="$dF/remote.git" show "$bF:design/design.md")"
-assert_contains "$dmF" "| T-Z | a mock task | T-1 |" "the task's table row survives exactly"
-assert_contains "$dmF" "| T-W | main work | — |" "and main's row is kept beside it"
-assert_lacks "$dmF" "=======" "with no marker left in design.md"
-assert_eq "$(git --git-dir="$dF/remote.git" show "$oldF:design/tasks.json" | jq -cS '.tasks[]|select(.id=="T-Z")')" \
-  "$(git --git-dir="$dF/remote.git" show "$bF:design/tasks.json" | jq -cS '.tasks[]|select(.id=="T-Z")')" \
-  "the task's tasks.json entry survives exactly"
-assert_eq "T-W" "$(git --git-dir="$dF/remote.git" show "$bF:design/tasks.json" | jq -r '.tasks[]|select(.id=="T-W")|.id')" \
-  "and main's new entry is kept"
-
 # G: a commit that fails stops the round, rebuilt or not. The script does
 # not run under set -e, so an unchecked commit was stepped over and the
 # round pushed and reported work it never committed. A pre-commit hook
@@ -2225,72 +2181,23 @@ assert_eq "$mainG4" "$(rb_head "$dG4" "$bG4^")" "G4: as one commit on the base"
 assert_contains "$(git --git-dir="$dG4/remote.git" cat-file commit "$bG4")" "gpgsig -----BEGIN PGP SIGNATURE-----" \
   "G4: signed, as git commit would have signed it"
 
-# H: design.md has a row-append conflict AND a prose conflict. The rows
-# are unioned hunk by hunk; only the prose reaches the worker, as a
-# standard conflict with no diff3 base section.
-dH="$(rb_fixture)"; bH="$(rb_branch "$dH")"
-cat > "$dH/main.sh" <<'S'
-awk '{ if ($0 == "prose the two sides may both edit") print "prose as main says"; else print }
-     /^\| T-1 \|/ { print "| T-W | main work | — |" }' design/design.md > n && mv n design/design.md
-S
-rb_move_main "$dH" "$dH/main.sh"; mainH="$(rb_head "$dH" main)"
-cat > "$dH/resolve.sh" <<'S'
-[ "$(grep -c '^<<<<<<< ' design/design.md)" = 1 ] && : > src/one-hunk
-grep '^|||||||' design/design.md > /dev/null && : > src/saw-diff3
-awk '/^<<<<<<< / { skip = 1; print "prose as main and the task say"; next }
-     /^>>>>>>> / { skip = 0; next } !skip' design/design.md > design/d.next
-mv design/d.next design/design.md
-S
-rb_round_two "$dH" "$dH/resolve.sh"
-rb_rebuilt "$dH" "H"
-assert_eq "0" "$rb_rc" "rows and prose both conflicting: the round completes"
-assert_contains "$(cat "$dH/prompt.md")" '- `design/design.md`' "the prose goes to the worker"
-assert_ok "git --git-dir='$dH/remote.git' cat-file -e '$bH:src/one-hunk'" \
-  "as the only hunk left: the row union was not handed back with it"
-assert_fail "git --git-dir='$dH/remote.git' cat-file -e '$bH:src/saw-diff3'" \
-  "and as a standard conflict, with no diff3 base section"
-assert_eq "$mainH" "$(rb_head "$dH" "$bH^")" "one commit on the new base"
-dmH="$(git --git-dir="$dH/remote.git" show "$bH:design/design.md")"
-assert_contains "$dmH" "| T-W | main work | — |" "main's row is kept"
-assert_contains "$dmH" "| T-Z | a mock task | T-1 |" "and the task's"
-assert_contains "$dmH" "prose as main and the task say" "and the worker's resolution"
-
-# I: the task's entry and row are checked before the commit, on every
-# path. A worker that rewrites its own row while resolving is refused.
+# I: the frozen task file is checked before the commit. A worker that
+# rewrites it while resolving is refused.
 dI="$(rb_fixture)"; bI="$(rb_branch "$dI")"; oldI="$(rb_head "$dI" "$bI")"
 rb_conflicting_main "$dI"
 cat > "$dI/resolve.sh" <<'S'
 { printf 'line %s\n' 1 2 3 4; printf 'line 5 by main and the task\n'; printf 'line %s\n' 6 7 8 9 10; } > src/app.txt
 awk '/^<<<<<<< / { skip = 1; print "prose as main and the task say"; next }
      /^>>>>>>> / { skip = 0; next } !skip' design/design.md \
-  | sed 's/^| T-Z | a mock task |/| T-Z | renamed by the worker |/' > design/d.next
+  > design/d.next
 mv design/d.next design/design.md
+jq '.title="renamed by the worker"' design/tasks/T-Z.json > design/t.next && mv design/t.next design/tasks/T-Z.json
 S
 rb_round_two "$dI" "$dI/resolve.sh"
 rb_rebuilt "$dI" "I"
-assert_eq "75" "$rb_rc" "a rebuilt round that changes the task's own row is refused"
-assert_contains "$rb_out" "table row is not as $oldI had it in: design/design.md" "and names the file"
+assert_eq "75" "$rb_rc" "a rebuilt round that changes the task's own file is refused"
+assert_contains "$rb_out" "not as $oldI had it in: design/tasks/T-Z.json" "and names the file"
 assert_eq "$oldI" "$(rb_head "$dI" "$bI")" "and pushes nothing"
-
-# J: main edited the task's own tasks.json entry, and the file merged
-# cleanly. The branch's entry is put back, and main's other change stays.
-# Main's edits alone still rebase, so the branch is first made one that
-# fails gate 2's replay; otherwise nothing is rebuilt and nothing restored.
-dJ="$(rb_fixture)"; bJ="$(rb_branch "$dJ")"
-rb_replay_conflict "$dJ"; oldJ="$(rb_head "$dJ" "$bJ")"
-cat > "$dJ/main.sh" <<'S'
-sed 's/^line 3$/line 3 by main/' src/app.txt > n && mv n src/app.txt
-jq '{version: 2} + (.tasks[0].title = "retitled on main")' design/tasks.json > n && mv n design/tasks.json
-S
-rb_move_main "$dJ" "$dJ/main.sh"; mainJ="$(rb_head "$dJ" main)"
-rb_round_two "$dJ" "$rb_add"
-rb_rebuilt "$dJ" "J"
-assert_eq "0" "$rb_rc" "main edited the task's entry: the round completes"
-assert_eq "$mainJ" "$(rb_head "$dJ" "$bJ^")" "on the new base"
-tjJ="$(git --git-dir="$dJ/remote.git" show "$bJ:design/tasks.json")"
-assert_eq "$(git --git-dir="$dJ/remote.git" show "$oldJ:design/tasks.json" | jq -cS '.tasks[]|select(.id=="T-Z")')" \
-  "$(jq -cS '.tasks[]|select(.id=="T-Z")' <<<"$tjJ")" "the task's entry comes through as the branch had it"
-assert_eq "2" "$(jq -r .version <<<"$tjJ")" "and main's other change to the file is kept"
 
 # K: the round after one that did not commit its rebuild - a marker left
 # (75), or a round that only asked - rescues the worktree, rebuilds from
@@ -2451,25 +2358,6 @@ rb_not_rebuilt "$dP6" "P6"
 assert_contains "$rb_out" "is not clean; $bP6 is not rebuilt this round" "a dirty worktree: says so"
 assert_eq "0" "$rb_rc" "and the round goes on without a rebuild"
 assert_eq "$oldP6" "$(rb_head "$dP6" "$bP6^")" "on the branch as it was"
-# P7: both sides changed the same entry in tasks.json, and it is not the
-# task's. Merging by id cannot choose, so the file goes to the worker with
-# its markers rather than one side's entry being taken.
-dP7="$(rb_fixture two-tasks)"; bP7="$(rb_branch "$dP7")"
-( cd "$dP7/repo/state/worktrees/T-Z" \
-    && jq '(.tasks[]|select(.id=="T-1")|.title)="one, as the task says"' design/tasks.json > n \
-    && mv n design/tasks.json && rb_commit -am 'the task retitles T-1' && git push -q origin HEAD )
-oldP7="$(rb_head "$dP7" "$bP7")"
-printf '%s\n' "jq '(.tasks[]|select(.id==\"T-1\")|.title)=\"one, as main says\"' design/tasks.json > n && mv n design/tasks.json" \
-  > "$dP7/main.sh"
-rb_move_main "$dP7" "$dP7/main.sh"
-printf '%s\n' 'grep -q "^<<<<<<< " design/tasks.json && : > "$FM_T_DIR/saw-tasks-markers"' > "$dP7/look.sh"
-rb_round_two "$dP7" "$dP7/look.sh"
-rb_rebuilt "$dP7" "P7"
-assert_contains "$(cat "$dP7/prompt.md")" '- `design/tasks.json`' "an entry both sides changed goes to the worker"
-assert_ok "test -f '$dP7/saw-tasks-markers'" "with its markers"
-assert_eq "75" "$rb_rc" "and a round that leaves them is refused"
-assert_eq "$oldP7" "$(rb_head "$dP7" "$bP7")" "nothing is pushed"
-
 # Q: the run dies during the rebuilt push. The local branch must end on
 # whatever origin has, or every later round is refused at the plain push
 # (71) with nothing in the system allowed to repair it. TERM goes through
@@ -2664,49 +2552,16 @@ assert_contains "$(git --git-dir="$dU2/remote.git" show "$bU2:src/app.txt")" "li
   "U2, next round: carrying the resolution"
 assert_eq "$(rb_head "$dU2" "$bU2")" "$(git -C "$dU2/repo" rev-parse "$bU2")" "U2, next round: the local branch moved onto it"
 
-# W: one file per task (T-090). main splits design/tasks.json into
-# design/tasks/<id>.json under a branch that still carries the array.
-rb_split_main() {   # rb_split_main <dir> [extra lines for main to run after the split]
-  { printf '%s\n' 'mkdir -p design/tasks' \
-      'jq -c ".tasks[]" design/tasks.json | while IFS= read -r t; do jq . <<<"$t" > "design/tasks/$(jq -r .id <<<"$t").json"; done' \
-      'git rm -q design/tasks.json'
-    [ -z "${2:-}" ] || printf '%s\n' "$2"; } > "$1/main.sh"
-  rb_move_main "$1" "$1/main.sh"
-}
-# W1: the branch changed its own entry in round one and adds a second
-# task's entry, as a design task does. The rebuild moves both into files of
-# their own and removes the array, with no worker involved.
-dW1="$(rb_fixture)"; bW1="$(rb_branch "$dW1")"
-( cd "$dW1/repo/state/worktrees/T-Z" \
-    && jq '.tasks += [{id: "T-EXTRA", title: "written by the design task", scope: [], acceptance: []}]' design/tasks.json > n \
-    && mv n design/tasks.json && rb_commit -am 'a second entry' && git push -q origin HEAD )
-oldW1="$(rb_head "$dW1" "$bW1")"
-rb_split_main "$dW1"; mainW1="$(rb_head "$dW1" main)"
-assert_fail "git --git-dir='$dW1/remote.git' cat-file -e 'main:design/tasks.json'" "W1: main no longer has design/tasks.json"
-rb_round_two "$dW1" "$rb_add"
-rb_rebuilt "$dW1" "W1"
-assert_eq "0" "$rb_rc" "W1: a branch that still carries the array is rebuilt onto the split main"
-assert_eq "$mainW1" "$(rb_head "$dW1" "$bW1^")" "W1: one commit on the new base"
-assert_fail "git --git-dir='$dW1/remote.git' cat-file -e '$bW1:design/tasks.json'" "W1: the array is gone from the branch"
-assert_eq "$(git --git-dir="$dW1/remote.git" show "$oldW1:design/tasks.json" | jq -cS '.tasks[]|select(.id=="T-Z")')" \
-  "$(git --git-dir="$dW1/remote.git" show "$bW1:design/tasks/T-Z.json" | jq -cS .)" \
-  "W1: the task's own entry, as the branch had it, is now its own file"
-assert_eq '["T-1"]' "$(git --git-dir="$dW1/remote.git" show "$bW1:design/tasks/T-Z.json" | jq -c .depends_on)" \
-  "W1: (the branch's revision, not main's text)"
-assert_eq "written by the design task" \
-  "$(git --git-dir="$dW1/remote.git" show "$bW1:design/tasks/T-EXTRA.json" 2>/dev/null | jq -r .title)" \
-  "W1: and another task's entry the branch added is moved too, not dropped"
-assert_contains "$(cat "$dW1/prompt.md")" "keeps one file per task" "W1: the worker is told the layout"
-assert_lacks "$(cat "$dW1/prompt.md")" '- `design/tasks.json`' "W1: and is not handed the array to resolve"
 # W1b: the branch and main both changed one other entry; that file is handed
 # over with markers, the round is refused until it is resolved, and neither
 # side's text is lost on the way
-dW1b="$(rb_fixture two-tasks)"; bW1b="$(rb_branch "$dW1b")"
+dW1b="$(rb_fixture)"; bW1b="$(rb_branch "$dW1b")"
 ( cd "$dW1b/repo/state/worktrees/T-Z" \
-    && jq '(.tasks[]|select(.id=="T-1")|.title)="one, as the task says"' design/tasks.json > n \
-    && mv n design/tasks.json && rb_commit -am 'the task retitles T-1' && git push -q origin HEAD )
+    && jq '.title="one, as the task says"' design/tasks/T-1.json > n \
+    && mv n design/tasks/T-1.json && rb_commit -am 'the task retitles T-1' && git push -q origin HEAD )
 oldW1b="$(rb_head "$dW1b" "$bW1b")"
-rb_split_main "$dW1b" "jq '.title=\"one, as main says\"' design/tasks/T-1.json > n && mv n design/tasks/T-1.json"
+printf '%s\n' "jq '.title=\"one, as main says\"' design/tasks/T-1.json > n && mv n design/tasks/T-1.json" > "$dW1b/main.sh"
+rb_move_main "$dW1b" "$dW1b/main.sh"
 printf '%s\n' 'cp design/tasks/T-1.json "$FM_T_DIR/t1-seen"' "$(cat "$rb_add")" > "$dW1b/look.sh"
 rb_round_two "$dW1b" "$dW1b/look.sh"
 rb_rebuilt "$dW1b" "W1b"
@@ -2718,7 +2573,7 @@ assert_contains "$rb_out" "design/tasks/T-1.json" "W1b: naming the file"
 assert_eq "$oldW1b" "$(rb_head "$dW1b" "$bW1b")" "W1b: and nothing is pushed"
 # W2: a branch already in the one-file layout; main edits the task's own
 # file. The rebuild puts the branch's file back, byte for byte.
-dW2="$(RB_SPLIT=1 rb_fixture)"; bW2="$(rb_branch "$dW2")"
+dW2="$(rb_fixture)"; bW2="$(rb_branch "$dW2")"
 assert_fail "git --git-dir='$dW2/remote.git' cat-file -e 'main:design/tasks.json'" "W2: (main keeps one file per task)"
 ( cd "$dW2/repo/state/worktrees/T-Z" \
     && sed 's/^line 10$/line 10 for a while/' src/app.txt > n && mv n src/app.txt && rb_commit -am 'touch line 10' \
@@ -2736,23 +2591,8 @@ assert_eq "$(git --git-dir="$dW2/remote.git" rev-parse "$oldW2:design/tasks/T-Z.
   "W2: the task's own file comes through byte for byte as the branch had it"
 assert_contains "$(git --git-dir="$dW2/remote.git" show "$bW2:src/app.txt")" "line 10 by main" "W2: and main's other change is kept"
 assert_contains "$(cat "$dW2/prompt.md")" 'design/tasks/T-Z.json' "W2: the worker is told its own file is frozen"
-# W3: the worker starts on a task that exists only in its branch's old
-# design/tasks.json - a new task, opened before main split the list
-dW3="$(RB_SPLIT=1 rb_fixture)"
-( cd "$dW3/repo" && git checkout -q -b t-q-old-list main && git rm -q -r design/tasks && mkdir -p design \
-    && printf '%s\n' '{"tasks":[{"id":"T-Q","title":"a task only its old branch has","scope":["src/**"],"acceptance":["it exists"]}]}' \
-       > design/tasks.json \
-    && git add design/tasks.json && rb_commit -m 'T-Q on its own branch' && git push -q origin HEAD && git checkout -q main )
-: > "$dW3/ghcalls"; rm -f "$dW3/prompt.md"
-outW3="$(cd "$dW3/repo" && FM_ROOT="$dW3/repo" FM_GH="$dW3/stub/gh" FM_T_STEP="$rb_add" FM_T_DIR="$dW3" \
-  FM_CAPTURE="$dW3/prompt.md" bin/fm-worker.sh --task T-Q 2>&1)"; rcW3=$?
-assert_ne "65" "$rcW3" "W3: a task only in its branch's old design/tasks.json is found"
-assert_lacks "$outW3" "no task T-Q" "W3: and not reported as missing"
-assert_eq "0" "$rcW3" "W3: the round completes"
-[ "$rcW3" = 0 ] || printf '%s\n' "$outW3" | sed 's/^/      W3 run: /'
-assert_contains "$(cat "$dW3/prompt.md" 2>/dev/null)" "a task only its old branch has" "W3: the worker is handed its spec"
 
-rm -rf "$dW1" "$dW1b" "$dW2" "$dW3"
+rm -rf "$dW1b" "$dW2"
 
 # --- a clean rebuild is always published (T-098) ------------------------
 # A rebuild with nothing handed to the worker is the round's work whether
@@ -2778,7 +2618,7 @@ rb_published_alone() {   # rb_published_alone <dir> <branch> <old head> <main he
     "$1/repo/state/events.jsonl" | tail -1)" "$5: the pushed round records the previous head"
 }
 # V0: the worker changes nothing and says nothing. Already published before
-# T-098 (case F is the same with appended rows); a guard, not fail-first.
+# T-098; retained as the no-change publication control.
 dV0="$(RB_HOOKS=1 rb_fixture)"; bV0="$(rb_branch "$dV0")"
 rb_replay_conflict "$dV0"; oldV0="$(rb_head "$dV0" "$bV0")"; mainV0="$(rb_head "$dV0" main)"
 printf ':\n' > "$dV0/nothing.sh"
@@ -2888,23 +2728,32 @@ assert_contains "$rb_out" "the rebuild of $bV4 was not committed" "V4: and says 
 assert_eq "$oldV4" "$(rb_head "$dV4" "$bV4")" "V4: the remote branch is not touched"
 assert_eq "$oldV4" "$(git -C "$dV4/repo" rev-parse "$bV4")" "V4: nor the local one"
 assert_eq "$pushedV4" "$(rb_pushed "$dV4")" "V4: and no commit is reported"
-# V6: every file merges, but main's own row for the task leaves the task's
-# row not as the branch had it, and the rebuild cannot put it back. That is
+# V6: every file merges, but restoring the frozen task file fails. That is
 # unresolved like a marker - the check before the commit refuses it as it
 # stands - so an asking round on it publishes nothing, as in V4.
 dV6="$(RB_HOOKS=1 rb_fixture)"; bV6="$(rb_branch "$dV6")"
 rb_replay_conflict "$dV6"
 cat > "$dV6/main.sh" <<'S'
-awk '{ print } NR == 1 { print "| T-Z | a row main wrote for it | — |" }' design/design.md > n && mv n design/design.md
+jq '.title="main retitled the task"' design/tasks/T-Z.json > n && mv n design/tasks/T-Z.json
 S
 rb_move_main "$dV6" "$dV6/main.sh"
 oldV6="$(rb_head "$dV6" "$bV6")"; pushedV6="$(rb_pushed "$dV6")"
-rb_round_two "$dV6" "$dV2/ask.sh"
+# Refuse only the restore's file-writing show, not fm_task's pipe read.
+mkdir -p "$dV6/gitwrap"
+cat > "$dV6/gitwrap/git" <<W
+#!/usr/bin/env bash
+if [ "\${1:-}" = show ] && [ "\${2:-}" = "$oldV6:design/tasks/T-Z.json" ] && [ -f /dev/stdout ]; then
+  exit 128
+fi
+exec "$rb_git_real" "\$@"
+W
+chmod +x "$dV6/gitwrap/git"
+PATH="$dV6/gitwrap:$PATH" rb_round_two "$dV6" "$dV2/ask.sh"
 rb_rebuilt "$dV6" "V6"
 pV6="$(cat "$dV6/prompt.md")"
 assert_contains "$pV6" "Every file applied cleanly" "V6: nothing conflicts"
-assert_contains "$pV6" "The rebuild could not keep your task's own entry or table row in" \
-  "V6: but the task's row is handed to the worker to put back"
+assert_contains "$pV6" "The rebuild could not keep your task's own entry in" \
+  "V6: but the task's file is handed to the worker to put back"
 assert_eq "0" "$rb_rc" "V6: an asking round on it completes"
 assert_contains "$rb_out" "the worker asked rather than changed anything; its question is on #42" "V6: as asked"
 assert_contains "$rb_out" "the rebuild of $bV6 was not committed" "V6: and says the rebuild is not published"
@@ -3118,8 +2967,8 @@ assert_lacks "$(jq -r 'select(.type=="crew_status") | .data.activity.en' "$dHat3
   "WITHOUT the OS sandbox" "and the board is not told a round ran unconfined"
 rm -rf "$dPol" "$dPol2" "$dHat" "$dHat2" "$dHat3"
 
-rm -rf "$dA" "$dA2" "$dB" "$dC" "$dD" "$dE" "$dF" "$dG" "$dG2" "$dG3" "$dG4" "$dH" "$dI" "$dJ" "$dK" "$dK2" "$dL" \
-  "$dM" "$dN" "$dP1" "$dP2" "$dP3" "$dP4" "$dP5" "$dP6" "$dP7" "$dQ1" "$dQ2" "$dQ3" "$dQ4" \
+rm -rf "$dA" "$dA2" "$dB" "$dC" "$dD" "$dE" "$dG" "$dG2" "$dG3" "$dG4" "$dI" "$dK" "$dK2" "$dL" \
+  "$dM" "$dN" "$dP1" "$dP2" "$dP3" "$dP4" "$dP5" "$dP6" "$dQ1" "$dQ2" "$dQ3" "$dQ4" \
   "$dR1" "$dR2" "$dS" "$dT" "$dU1" "$dU2" "$dV0" "$dV1" "$dV2" "$dV3" "$dV4" "$dV5" "$dV5b" "$dV5c" "$dV6" \
   "$dX" "$dX2" "$dX4" "$dX5" "$dX6" "$rb_add" "$rb_more"
 

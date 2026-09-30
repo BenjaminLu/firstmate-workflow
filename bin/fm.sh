@@ -10,7 +10,6 @@
 #   fm.sh sync-skills <dir> [--name NAME]          import external skills
 #   fm.sh lint                                     the two skill lints
 #   fm.sh tasks                                    the task table, on demand
-#   fm.sh tasks split [ID]                         design/tasks.json -> one file each
 #   fm.sh roster [init] [--redraw]                 the installation's crew
 #   fm.sh hooks install|uninstall [--harness H]    the hooks that wake firstmate
 #
@@ -88,12 +87,6 @@ usage: fm.sh <command> [options]
   tasks [--repo DIR]
         Print the task table from design/tasks/, grouped by milestone:
         id, title and dependencies. Nothing generated is committed.
-
-  tasks split [ID] [--repo DIR]
-        Move entries of the old one-array task list, design/tasks.json,
-        into design/tasks/<id>.json. Given an ID, move that entry alone
-        and overwrite its file: a branch bringing its own task over.
-        Without one, an existing file that differs is refused.
 
   roster [init] [--redraw] [--repo DIR]
         Print this installation's worker and reviewer rosters. `init`
@@ -744,9 +737,7 @@ next_id() {
 # (T-090). The table is now printed on demand from design/tasks/ and never
 # committed, so there is nothing to conflict.
 cmd_tasks() {
-  local repo="$REPO" sub=''
-  case "${1:-}" in split) sub='split'; shift ;; esac
-  if [ "$sub" = split ]; then cmd_tasks_split "$@"; return; fi
+  local repo="$REPO"
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo) need "$@"; repo="${2-}"; shift 2 ;;
@@ -766,56 +757,6 @@ cmd_tasks() {
       (.[] | "| \(.id | cell) | \(.title // "" | cell) | \(if ((.depends_on // []) | length) == 0
              then "—" else (.depends_on | map(cell) | join(", ")) end) |"),
       ""'
-}
-
-# The migration, and how a branch opened before it comes over: entries of
-# design/tasks.json move out of the one array into files of their own. Named
-# by id, a single entry moves and overwrites its file - the branch's own
-# task, which is the branch's to say. Without one every entry moves, and a
-# file that already says something different is refused, not overwritten.
-# The id is positional: tests/option-loop.test.sh pins fm.sh's flags.
-cmd_tasks_split() {
-  local repo="$REPO" from only='' tmp id
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --repo) need "$@"; repo="${2-}"; shift 2 ;;
-      -*) die "tasks split: unknown argument $1" ;;
-      *) [ -z "$only" ] || die "tasks split: one id at most, got $only and $1"
-         only="$1"; shift ;;
-    esac
-  done
-  repo="$(abs "$repo")" || die "no repo at $repo"
-  from="$repo/design/tasks.json"
-  [ -f "$from" ] || die "tasks split: no $from to split" 65
-  jq -e '.tasks | type == "array"' "$from" >/dev/null 2>&1 \
-    || die "tasks split: $from holds no {\"tasks\": [...]}" 65
-  tmp="$(mktemp -d)" || die "tasks split: no scratch directory" 70
-  if [ -n "$only" ]; then
-    jq -e --arg id "$only" '[.tasks[] | select(.id == $id)] | length == 1' "$from" >/dev/null 2>&1 \
-      || { rm -rf "$tmp"; die "tasks split: $from holds no single entry $only" 65; }
-    jq --arg id "$only" '.tasks | map(select(.id == $id))' "$from" > "$tmp/in.json"
-  else
-    jq '.tasks' "$from" > "$tmp/in.json"
-  fi
-  fm_tasks_write "$tmp/in.json" "$tmp/out" || { rm -rf "$tmp"; die "tasks split: could not split $from" 65; }
-  if [ -z "$only" ]; then
-    for id in "$tmp"/out/*.json; do
-      [ -f "$id" ] || continue
-      id="${id##*/}"
-      if [ -f "$repo/design/tasks/$id" ] \
-         && [ "$(jq -cS . "$repo/design/tasks/$id")" != "$(jq -cS . "$tmp/out/$id")" ]; then
-        rm -rf "$tmp"; die "tasks split: design/tasks/$id already says something else; move your own entry by its id" 1
-      fi
-    done
-  fi
-  mkdir -p "$repo/design/tasks" || { rm -rf "$tmp"; die "tasks split: cannot create design/tasks/" 70; }
-  for id in "$tmp"/out/*.json; do
-    [ -f "$id" ] || continue
-    mv "$id" "$repo/design/tasks/${id##*/}" || { rm -rf "$tmp"; die "tasks split: could not write ${id##*/}" 70; }
-    printf 'fm tasks split: design/tasks/%s\n' "${id##*/}"
-  done
-  rm -rf "$tmp"
-  printf 'fm tasks split: done; git rm design/tasks.json once nothing else in it is yours\n'
 }
 
 # The installation's crew (T-104): 24 worker and 24 reviewer names, drawn once

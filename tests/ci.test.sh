@@ -1227,7 +1227,7 @@ printf '{"id":"T-001"}\n' > "$q/design/tasks/T-001.json"
 printf '{"id":"T-777","depends_on":["T-776"]}\n' > "$q/projects/other-app/tasks/T-777.json"
 { printf 'default_project: self-host\nprojects:\n'
   printf '  self-host:\n    repo: .\n    github: o/engine\n    base: main\n    required_check: ci\n'
-  printf '    design: design/design.md\n    tasks: design/tasks.json\n'
+  printf '    design: design/design.md\n    tasks: design/tasks\n'
   printf '  other-app:\n    github: o/other-app\n    base: main\n    required_check: check\n'
 } > "$q/config.yaml"
 plant "a registered project's broken list turns the dag stage red" "the task list is not a sound DAG"

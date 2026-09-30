@@ -786,7 +786,7 @@ something to say and there was nowhere to put it, `74` GitHub could not
 say which pull request the branch has, `75` a rebuilt round was refused
 before its commit — a conflict marker left, a conflict with no markers left
 exactly as the merge left it, a HEAD no longer on the rebuild base, or the
-task's own entry or table row not as the previous head had it — and nothing
+task's own entry not as the previous head had it — and nothing
 was published, and `130`, `143` — a signal, 128
 plus its number, from the INT/TERM traps that make a killed run stop
 rather than carry on. `SIGHUP` is ignored (same as `fm-config.sh`) so a
@@ -859,7 +859,7 @@ to publish nothing, and the branch stayed on its old head, `DIRTY` on
 GitHub, until the captain pushed it by hand (T-089, T-086).
 
 Unresolved is a conflict, with or without markers, and also the task's
-own `design/tasks.json` entry or table row when the rebuild could not
+own `design/tasks/<id>.json` file when the rebuild could not
 keep it as the previous head had it — the prompt lists that file for the
 worker to put back, and the check before the commit refuses the rebuild
 as it stands, as it refuses a marker. An unresolved rebuild is never
@@ -869,46 +869,21 @@ either. The next round finds the
 worktree dirty, copies it to `state/rescued/` as it does any interrupted
 run, recreates the worktree from the unmoved branch and rebuilds again.
 
-On a base that keeps one file per task (section 14) the task's own
-business is one file, `design/tasks/<id>.json`, and it comes through
-exactly as the branch had it — byte for byte from the branch's own file,
-or from its entry in the branch's old array — wherever the merge changed
-it. There is no table row to keep. A branch opened before that layout
-still carries `design/tasks.json`; the rebuild brings it over without the
-worker: every entry the branch added or changed since it left the base,
-the task's own and any other (a design task writes other tasks' entries),
-is written to its own file, an entry the branch removed is removed, and
-the array goes. Where the base changed the same entry too, that file is
-written with standard conflict markers, the base's text against the
-branch's, and handed to the worker like any conflict; the task's own entry
-is the branch's. Nothing the branch said is dropped without a word.
-
-On a base that still keeps the one array, two design files are the task's
-own business. Its `design/tasks.json`
-entry comes through exactly: when that file conflicts, it is merged by
-task id — the task's entry from the branch, entries only one side
-touched from that side — and written back in `jq`'s layout, which is
-only attempted when the base's copy already is in it; where both sides
-changed the same other entry, the file goes to the worker. When it
-merged cleanly but the task's entry changed, only that entry is put
-back. In `design/design.md`, hunk by hunk: where both sides only
-appended task-table rows at the same place, the union is taken — the
-base's rows, then the task's — without the worker; every other hunk goes
-to the worker like code, as a standard conflict, so one prose conflict
-does not hand back the rows as well. The task's own table row is put back
-exactly wherever the merge changed it. Each of these repairs is best
-effort; what holds the round is the check below.
+The task's own file, `design/tasks/<id>.json` (section 14), comes through
+as the branch had it. Restoration is best effort; the pre-commit check
+holds the round if it fails or the worker changes the frozen file.
+Other files are merged normally, with unresolved conflicts handed to the
+worker. Legacy array and task-table migration is retired (T-157).
 
 After the adapter returns, a rebuilt round is not committed while HEAD is
 anything but the rebuild base, detached — a commit made on it mid-round
 would sit under the round, outside every check — nor while any file it
 carries, read against that base, has a line starting `<<<<<<<` or
 `>>>>>>>`, nor while a conflict with no markers is byte for byte what the
-merge left, nor while the task's entry (its own file, or its `tasks.json`
-entry and table row on a base that still has them) differs
+merge left, nor while the task's own file differs
 from the previous head's — however it got that way, including a worker
 that rewrote it while resolving. In a rebuilt round the task's own entry
-and row are therefore frozen: a change to either waits for a round that
+is therefore frozen: a change to it waits for a round that
 is not a rebuild. The run names the files, publishes nothing and exits
 `75`. Otherwise the rebuild and the round's work are one commit on the
 base, so gate 2 holds by construction. The commit is made with `git
@@ -4388,42 +4363,12 @@ takes no id, `bin/fm.sh tasks` prints no table and the board shows no task.
 A name that starts with a dot (`.DS_Store`, an interrupted `--adopt`'s
 scratch) is not a task file and is not read or checked.
 
-**Bringing over a branch opened before this.** A branch cut before this
-landed still carries `design/tasks.json`, and nobody has to run anything
-for it:
-
-- *Reading it.* With a branch to read, `fm_task` takes the task's own file
-  there and, when the branch has none, its entry in that branch's
-  `design/tasks.json`, saying so on stderr. So the worker, the reviewer and
-  gate 4 read a task defined only on its branch, or revised there, as that
-  branch says it, never as `main` has it or not at all.
-- *Moving it.* The first round that finds such a branch no longer rebasing
-  onto `main` rebuilds it (section 5.3.3), and the rebuild moves every
-  entry the branch added or changed since it left `main` into its own file,
-  removes any it removed, and deletes the array. An entry `main` changed
-  too is handed to the worker with conflict markers, never dropped. Rows
-  the branch added to the old table go with the table.
-- *Scope.* A branch whose scope names `design/tasks.json` keeps its right
-  to carry its own entry: gate 4 reads that glob as `design/tasks/<id>.json`,
-  that task's file and no other. A design task that also wrote other tasks'
-  entries now touches their files, which gate 4 names; widening its scope
-  to `design/tasks/**` is the captain's call, as any scope change is.
-
-By hand, the same move is `bin/fm.sh tasks split <id>` for each entry the
-branch added or changed. T-090's own branch was the first to come over.
-
-**The migration.** It was mechanical: each entry of the array written,
-unchanged, to its own file, which is what `bin/fm.sh tasks split` does. The
-array's two top-level keys went with it: `$schema` named a
-`tasks.schema.json` that never existed, and `concurrency` had no reader —
-the dispatcher's limit is `config.yaml`'s. A test compares the first commit
-that removed `design/tasks.json` with its parent: the files, in the old
-array's order, are the old array. That comparison needs history, so it runs
-locally (and ran under gate 3 until T-114 retired it), not on the required
-GitHub check, whose checkout
-is one commit deep; there the test asserts only that nothing still tracks
-`design/tasks.json`. The test that the split itself loses nothing — a
-fixture array, unicode and key order included — runs everywhere.
+**The migration is retired (T-157).** Firstmate verified on 2026-09-30
+that no open pull request and no registered project still carries the
+one-array task list. Readers now require `design/tasks/<id>.json`; the
+legacy reader, scope alias, migration command and rebuild conversion are
+removed. A rebuild preserves the branch's own task file and leaves other
+conflicts for the worker, under the usual no-lost-work checks.
 
 ---
 

@@ -492,24 +492,6 @@ assert_eq "Work description unavailable|尚無工作說明" \
 assert_eq "65" "$?" "a task that exists nowhere is still refused"
 rm -rf "$d9"
 
-# A branch opened before T-090 has no task file, only its own old
-# design/tasks.json. The reviewer reads the task from that array: one
-# defined only there is found, and one the branch revised is reviewed as
-# revised, not as main's file has it (the activity shows which was read).
-d10="$(fixture)"; r10="$d10/repo"; GH10="$(ghstub "$d10")"
-( cd "$r10" && git checkout -q -b oldbranch main && git rm -q -r design/tasks && mkdir -p design \
-  && printf '%s\n' '{"tasks":[{"id":"T-Z","title":"a task","activity":{"en":"Revised on the branch","zh-TW":"分支上修訂"},"scope":["src/**"],"acceptance":["it exists"]},{"id":"T-OLD","title":"only in the old array","scope":["src/**"],"acceptance":["it exists"]}]}' \
-       > design/tasks.json \
-  && git add design/tasks.json && git -c user.email=a@b.c -c user.name=t commit -qm "old array" \
-  && git checkout -q main )
-out10="$(cd "$r10" && FM_ROOT="$r10" FM_GH="$GH10" bin/fm-review.sh --task T-OLD --branch oldbranch 2>&1)"
-assert_ne "65" "$?" "a task defined only in the branch's old design/tasks.json is found"
-assert_lacks "$out10" "no task T-OLD" "and not reported as missing"
-( cd "$r10" && FM_ROOT="$r10" FM_GH="$GH10" bin/fm-review.sh --task T-Z --branch oldbranch >/dev/null 2>&1 )
-assert_eq "Revised on the branch" \
-  "$(jq -r 'select(.type=="review_opened" and .task=="T-Z")|.data.activity.en' "$r10/state/events.jsonl" | tail -1)" \
-  "a task the branch revised in its old array is reviewed as the branch says it"
-rm -rf "$d10"
 
 
 # Criterion 9 says every exit path, including the ones that give up -

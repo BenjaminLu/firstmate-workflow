@@ -968,17 +968,15 @@ raisers="$(git -C "$ROOT" ls-files -- . ':!tests/' ':!design/' ':!*.md' ':!bin/f
   | while read -r f; do [ -f "$ROOT/$f" ] && both "$f" && printf '%s ' "$f"; done)"
 assert_eq "bin/fm-run.sh bin/fm.sh " "$raisers" "fm-run.sh and fm.sh are the only files that raise a card"
 # A line that is one quoted message and nothing else only prints the name: it
-# tells a reader what to run (fm-config.sh's "bin/fm.sh tasks split"), it
-# does not run it. Any other non-comment line naming them counts as a call.
+# tells a reader what to run; it does not run it. Any other non-comment line naming them counts as a call.
 said='^[[:space:]]*(echo|printf)[[:space:]]+"[^"]*"[[:space:]]*(>&2)?[[:space:]]*$'
 runs() { code "$1" | grep -E -- "$names" | grep -vE -- "$said" | grep . >/dev/null; }
-assert_fail "grep -qE -- '$said' <<<'bin/fm.sh tasks split x'" "a bare call is still a call"
-assert_ok "grep -qE -- '$said' <<<'    echo \"bring it over: bin/fm.sh tasks split \$id\" >&2'" \
+assert_fail "grep -qE -- '$said' <<<'bin/fm.sh tasks'" "a bare call is still a call"
+assert_ok "grep -qE -- '$said' <<<'    echo \"bring it over: bin/fm.sh tasks\" >&2'" \
   "a printed message is not a call"
 named="$(git -C "$ROOT" grep -lE "$names" -- . ':!tests/' ':!design/' ':!*.md' \
   ':!bin/fm-run.sh' ':!bin/fm.sh' ':!bin/fm-decide.sh' \
   | while read -r f; do has "$f" "$names" && printf '%s ' "$f"; done)"
-assert_contains " $named" " bin/fm-config.sh " "the sweep sees fm-config.sh name fm.sh in its messages"
 via="$(for f in $named; do runs "$f" && printf '%s ' "$f"; done)"
 assert_eq "" "$via" "nothing else in the repository calls them outside a comment or a message"
 direct="$(for f in $suites; do [ -f "$ROOT/$f" ] && both "$f" && printf '%s ' "$f"; done)"

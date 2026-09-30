@@ -250,12 +250,6 @@ gate4() {
   scopes="$(fm_task "$TASK" design/tasks "$BRANCH" | jq -r '.scope[]' 2>/dev/null)"
   [ -n "$scopes" ] || scopes="$(fm_task "$TASK" | jq -r '.scope[]' 2>/dev/null)"
   [ -n "$scopes" ] || return 1          # a task with no declared scope cannot be gated
-  # design/tasks.json was the shared list a task named so it could carry its
-  # own entry (T-090); it now means that entry's file, and no other
-  if grep -qxF design/tasks.json <<< "$scopes"; then
-    scopes="$scopes
-design/tasks/$TASK.json"
-  fi
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     ok=1

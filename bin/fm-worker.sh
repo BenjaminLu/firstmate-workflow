@@ -765,11 +765,8 @@ fi
 # leaves the branch as it was, and fm-checkpoint.sh refuses a detached
 # HEAD. A commit made on it anyway is refused before the round's own.
 rebuilt=0; rebuild_prev=''; rebuild_lease=''; rebuild_base=''; rebuild_mark=''
-rebuild_entry=''; rebuild_rows=''; rebuild_probe=''
-# 1 when the base keeps one file per task (T-090): no design/tasks.json and
-# no task table, so the task's own entry is design/tasks/<id>.json
-rebuild_split=0
-rebuild_conflicts=(); rebuild_restore=(); rebuild_split_conflicts=()
+rebuild_entry=''; rebuild_probe=''
+rebuild_conflicts=(); rebuild_restore=()
 # Conflicts git could not write markers into - a binary file, or one side
 # deleted what the other changed - and what the merge left in their place:
 # the blob in the worktree, or `absent`. The worker is told which side that
@@ -816,222 +813,26 @@ rebuild_fingerprint() {
     && GIT_INDEX_FILE="$idx" git -C "$tree" write-tree 2>/dev/null
   rm -f "$idx"
 }
-# The task's own tasks.json entry survives exactly, and entries the two
-# sides added or changed independently are merged by id. Written back in
-# jq's own layout, which is only safe when the base side already is in it.
-# Fails (and leaves the file alone) when both sides changed one entry that
-# is not the task's, or changed anything outside .tasks differently.
-rebuild_tasks_json() {   # rebuild_tasks_json <merge-base> <old head>
-  local f="design/tasks.json" b o t merged
-  t="$(git show "$2:$f" 2>/dev/null)" || return 0
-  jq -e --arg id "$TASK" '.tasks[]|select(.id==$id)' <<<"$t" >/dev/null 2>&1 || return 0
-  b="$(git show "$1:$f" 2>/dev/null || printf '{}')"
-  o="$(git show "$rebuild_base:$f" 2>/dev/null)" || return 1
-  [ "$(jq . <<<"$o" 2>/dev/null)" = "$o" ] || return 1
-  # files, not --argjson: the whole task list does not belong on argv
-  merged="$(jq -n --arg id "$TASK" --slurpfile b <(printf '%s' "$b") \
-      --slurpfile o <(printf '%s' "$o") --slurpfile t <(printf '%s' "$t") '
-    def byid: map({key:.id, value:.}) | from_entries;
-    $b[0] as $b | $o[0] as $o | $t[0] as $t
-    | ($b.tasks // [] | byid) as $B | ($o.tasks // [] | byid) as $O | ($t.tasks | byid) as $T
-    | ($b|del(.tasks)) as $bt | ($o|del(.tasks)) as $ot | ($t|del(.tasks)) as $tt
-    | if $tt != $bt and $ot != $bt and $tt != $ot then error("both changed the top level") else . end
-    | [ $T | keys[] | select($B[.] != $T[.]) ] as $changed
-    | [ $B | keys[] | select($T[.] == null) ] as $removed
-    | ($changed + $removed | map(select(. != $id and $O[.] != $B[.] and $O[.] != $T[.])))
-      as $both
-    | if ($both | length) > 0 then error("both changed " + ($both | join(", "))) else . end
-    | (if $tt != $bt then $t else $o end)
-    | .tasks = ([ $o.tasks[] | .id as $k
-                  | if ($removed | any(. == $k)) then empty
-                    elif ($changed | any(. == $k)) or $k == $id then $T[$k]
-                    else . end ]
-                + [ $t.tasks[] | .id as $k
-                    | select($O[$k] == null and (($changed | any(. == $k)) or $k == $id)) ])
-  ' 2>/dev/null)" || return 1
-  printf '%s\n' "$merged" > "$tree/$f" && git -C "$tree" add -- "$f"
-}
-# A file the merge left unmerged. Read into a string, not piped into
-# grep -q: under pipefail an early grep exit is a failed pipeline.
+# A file the merge left unmerged.
 rebuild_unmerged() { [ -n "$(git -C "$tree" ls-files -u -- "$1" 2>/dev/null)" ]; }
-# What the previous head had for the task: its tasks.json entry (sorted
-# keys, one line) and its design.md table row. Both are what a rebuilt
-# round must still carry exactly.
-rebuild_entry_of() {   # rebuild_entry_of <tasks.json text>
-  jq -cS --arg id "$TASK" '.tasks[]|select(.id==$id)' <<<"$1" 2>/dev/null
-}
-rebuild_rows_of() {   # rebuild_rows_of <design.md text>
-  grep -E "^\| $TASK \|" <<<"$1" 2>/dev/null
-}
-# Which of the two files no longer carries what the previous head had for
-# the task, read from the worktree or from the index (what a commit would
-# take). One line per file; nothing when both survive.
+# The frozen task file must survive in both the worktree and the index.
 rebuild_lost() {   # rebuild_lost worktree|index
-  local tj dm own="design/tasks/$TASK.json"
-  if [ "$rebuild_split" = 1 ]; then
-    # one file per task: the entry is the task's own file, and there is no
-    # table row to keep
-    if [ "$1" = index ]; then tj="$(git -C "$tree" show ":$own" 2>/dev/null)"
-    else tj="$(cat "$tree/$own" 2>/dev/null)"; fi
-    [ -z "$rebuild_entry" ] || [ "$rebuild_entry" = "$(jq -cS . <<<"$tj" 2>/dev/null)" ] || echo "$own"
-    return 0
-  fi
-  if [ "$1" = index ]; then
-    tj="$(git -C "$tree" show :design/tasks.json 2>/dev/null)"
-    dm="$(git -C "$tree" show :design/design.md 2>/dev/null)"
-  else
-    tj="$(cat "$tree/design/tasks.json" 2>/dev/null)"
-    dm="$(cat "$tree/design/design.md" 2>/dev/null)"
-  fi
-  [ -z "$rebuild_entry" ] || [ "$rebuild_entry" = "$(rebuild_entry_of "$tj")" ] || echo design/tasks.json
-  [ -z "$rebuild_rows" ] || [ "$rebuild_rows" = "$(rebuild_rows_of "$dm")" ] || echo design/design.md
-}
-# A tasks.json that merged cleanly can still carry main's edit of the
-# task's own entry. Only that entry is put back, as the branch had it, and
-# only in a file already in jq's layout; anything else is left for the
-# worker, and the check before the commit holds the round until it is.
-rebuild_task_entry_restore() {   # <old head>
-  local f="design/tasks.json" mine cur next
-  mine="$(git show "$1:$f" 2>/dev/null | jq -c --arg id "$TASK" '.tasks[]|select(.id==$id)' 2>/dev/null)"
-  [ -n "$mine" ] || return 0
-  cur="$(cat "$tree/$f" 2>/dev/null)" || return 1
-  [ "$(jq . <<<"$cur" 2>/dev/null)" = "$cur" ] || return 1
-  next="$(jq --arg id "$TASK" --argjson mine "$mine" '
-    if any(.tasks[]; .id == $id) then .tasks |= map(if .id == $id then $mine else . end)
-    else .tasks += [$mine] end' <<<"$cur" 2>/dev/null)" || return 1
-  [ -n "$next" ] || return 1
-  printf '%s\n' "$next" > "$tree/$f" && git -C "$tree" add -- "$f"
-}
-# A branch opened before T-090, rebuilt onto a base that keeps one file per
-# task. Its design/tasks.json is a modify/delete conflict, or a clean
-# deletion the merge made without asking, and either way the branch's
-# entries would go with it. So every entry the branch added or changed
-# since it left the base - the task's own and any other, since a design
-# task writes other tasks' entries - is moved into its own file, and one the
-# branch removed is removed. Nothing the branch said is dropped: where the
-# base changed that same entry too, the file is written with standard
-# conflict markers, the base's text against the branch's, and handed to the
-# worker by name. The task's own entry is the branch's, always. The array
-# then goes: nothing reads it on this base.
-rebuild_tasks_split() {   # rebuild_tasks_split <merge-base> <old head>
-  local f="design/tasks.json" t b line id file cur was
-  t="$(git show "$2:$f" 2>/dev/null)" || return 0
-  jq -e '.tasks | type == "array"' <<<"$t" >/dev/null 2>&1 || return 1
-  b="$(git show "$1:$f" 2>/dev/null)" || b='{"tasks":[]}'
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    id="$(jq -r '.id // empty' <<<"$line")"
-    if ! _fm_task_id "$id"; then
-      echo "fm-worker: an entry in $f has no usable id and cannot become a file: $line" >&2
-      return 1
-    fi
-    file="design/tasks/$id.json"
-    was="$(jq -cS --arg id "$id" '[.tasks[]? | select(.id == $id)][0] // empty' <<<"$b" 2>/dev/null)"
-    cur="$(cat "$tree/$file" 2>/dev/null)" || cur=''
-    mkdir -p "$tree/design/tasks" || return 1
-    if [ "$id" = "$TASK" ] || [ -z "$cur" ] \
-       || [ "$(jq -cS . <<<"$cur" 2>/dev/null)" = "$was" ] \
-       || [ "$(jq -cS . <<<"$cur" 2>/dev/null)" = "$(jq -cS . <<<"$line")" ]; then
-      jq . <<<"$line" > "$tree/$file" && git -C "$tree" add -- "$file" || return 1
-    else
-      { printf '<<<<<<< %s\n%s\n=======\n' "$BASE" "$cur"; jq . <<<"$line"; printf '>>>>>>> %s\n' "$TASK"; } \
-        > "$tree/$file" || return 1
-      rebuild_split_conflicts+=("$file")
-    fi
-  done < <(jq -c --arg id "$TASK" --slurpfile b <(printf '%s' "$b") '
-      ($b[0].tasks // [] | map({key: .id, value: .}) | from_entries) as $B
-      | .tasks[] | select(.id == $id or $B[.id] != .)' <<<"$t" 2>/dev/null)
-  # entries the branch removed from the array
-  while IFS= read -r id; do
-    _fm_task_id "$id" || continue
-    file="design/tasks/$id.json"
-    [ -f "$tree/$file" ] || continue
-    was="$(jq -cS --arg id "$id" '.tasks[] | select(.id == $id)' <<<"$b" 2>/dev/null)"
-    cur="$(cat "$tree/$file")"
-    if [ "$(jq -cS . <<<"$cur" 2>/dev/null)" = "$was" ]; then
-      git -C "$tree" rm -q -- "$file" >/dev/null 2>&1 || return 1
-    else
-      { printf '<<<<<<< %s\n%s\n=======\n>>>>>>> %s (removed %s)\n' "$BASE" "$cur" "$TASK" "$id"; } \
-        > "$tree/$file" || return 1
-      rebuild_split_conflicts+=("$file")
-    fi
-  done < <(jq -r --slurpfile t <(printf '%s' "$t") '
-      [$t[0].tasks[].id] as $T | .tasks[]? | .id | select(. as $k | $T | any(. == $k) | not)' <<<"$b" 2>/dev/null)
-  git -C "$tree" rm -q -f --ignore-unmatch -- "$f" >/dev/null 2>&1 || return 1
-  rm -f "$tree/$f"
+  local tj own="design/tasks/$TASK.json"
+  if [ "$1" = index ]; then tj="$(git -C "$tree" show ":$own" 2>/dev/null)"
+  else tj="$(cat "$tree/$own" 2>/dev/null)"; fi
+  [ -z "$rebuild_entry" ] || [ "$rebuild_entry" = "$(jq -cS . <<<"$tj" 2>/dev/null)" ] || echo "$own"
+  return 0
 }
 # The task's own file on a base that keeps one file per task, exactly as the
 # branch had it: main may have edited it, cleanly or in a conflict. Byte for
-# byte when the branch had the file; from its old array entry otherwise.
+# byte as the branch had the file.
 rebuild_own_file_restore() {   # <old head>
   local own="design/tasks/$TASK.json"
   [ -n "$rebuild_entry" ] || return 0
   [ "$(jq -cS . < "$tree/$own" 2>/dev/null)" != "$rebuild_entry" ] || return 0
   mkdir -p "$tree/design/tasks" || return 1
-  if git cat-file -e "$1:$own" 2>/dev/null; then
-    git show "$1:$own" > "$tree/$own" || return 1
-  else
-    fm_task "$TASK" design/tasks "$1" 2>/dev/null > "$tree/$own" || return 1
-  fi
+  git show "$1:$own" > "$tree/$own" || return 1
   git -C "$tree" add -- "$own"
-}
-# Where both sides only appended task-table rows at the same place, the
-# union is taken - main's rows, then the task's - and the worker never
-# sees it. Hunk by hunk: every other hunk is written back as a standard
-# conflict (no diff3 base section) for the worker, so one prose conflict
-# does not hand the row union back as well. The file is staged only when
-# nothing is left; otherwise it stays unmerged, and so on the list.
-rebuild_design_rows() {
-  local f="design/design.md" out rc
-  git -C "$tree" checkout -q --conflict=diff3 -- "$f" 2>/dev/null || return 1
-  out="$(awk '
-    function row(s) { return s ~ /^\| T-[A-Za-z0-9]+ \|/ }
-    function flush(   i, j, dup, ok) {
-      ok = (nb == 0 && no > 0 && nt > 0)
-      for (i = 1; i <= no && ok; i++) if (!row(o[i])) ok = 0
-      for (i = 1; i <= nt && ok; i++) if (!row(t[i])) ok = 0
-      if (!ok) {
-        unresolved++
-        print opener; for (i = 1; i <= no; i++) print o[i]
-        print "======="; for (j = 1; j <= nt; j++) print t[j]
-        print closer
-        return
-      }
-      for (i = 1; i <= no; i++) print o[i]
-      for (j = 1; j <= nt; j++) {
-        dup = 0; for (i = 1; i <= no; i++) if (o[i] == t[j]) dup = 1
-        if (!dup) print t[j]
-      }
-    }
-    state == 0 && /^<<<<<<<( |$)/ { state = 1; no = nb = nt = 0; opener = $0; next }
-    state == 0 { print; next }
-    state == 1 && /^\|\|\|\|\|\|\|( |$)/ { state = 2; next }
-    (state == 1 || state == 2) && /^=======$/ { state = 3; next }
-    state == 3 && /^>>>>>>>( |$)/ { closer = $0; state = 0; flush(); next }
-    state == 1 { o[++no] = $0; next }
-    state == 2 { nb++; next }
-    state == 3 { t[++nt] = $0; next }
-    END { if (state != 0) exit 2; exit (unresolved > 0) }
-  ' "$tree/$f")"; rc=$?
-  case "$rc" in
-    0) printf '%s\n' "$out" > "$tree/$f" && git -C "$tree" add -- "$f" ;;
-    1) printf '%s\n' "$out" > "$tree/$f"; return 1 ;;
-    *) git -C "$tree" checkout -q --conflict=merge -- "$f" 2>/dev/null; return 1 ;;
-  esac
-}
-# The task's table row, exactly as the branch had it. A merge can still
-# carry main's edit of it, cleanly or inside a hunk the worker is handed;
-# the task's is put back either way. Staged only when the file has no
-# conflict left, or `add` would mark the markers resolved.
-rebuild_design_row_survives() {   # <old head>
-  local f="design/design.md" mine
-  mine="$(rebuild_rows_of "$(git show "$1:$f" 2>/dev/null)" | head -1)"
-  [ -n "$mine" ] || return 0
-  grep -qE "^\| $TASK \|" "$tree/$f" 2>/dev/null || return 1
-  MINE="$mine" awk -v id="| $TASK |" 'index($0, id) == 1 { print ENVIRON["MINE"]; next } { print }' \
-    "$tree/$f" > "$tree/$f.fm-next" || { rm -f "$tree/$f.fm-next"; return 1; }
-  mv "$tree/$f.fm-next" "$tree/$f" || return 1
-  rebuild_unmerged "$f" || git -C "$tree" add -- "$f"
 }
 # Whether the branch still rebases onto the base: gate 2's own question,
 # asked the way gate 2 asks it - `git rebase`, commit by commit, in a
@@ -1119,46 +920,15 @@ bring_up_to_date() {
     git -C "$tree" checkout -q "$branch" 2>/dev/null
     exit 70
   fi
-  # A base with no design/tasks.json but a design/tasks/ keeps one file per
-  # task (T-090): the task's entry is its own file, read from the branch as
-  # fm_task reads it - its own file, or its entry in the branch's old array.
-  if ! git cat-file -e "$rebuild_base:design/tasks.json" 2>/dev/null \
-     && [ -n "$(git ls-tree --name-only "$rebuild_base" -- design/tasks/ 2>/dev/null)" ]; then
-    rebuild_split=1
-  fi
-  if [ "$rebuild_split" = 1 ]; then
-    rebuild_entry="$(fm_task "$TASK" design/tasks "$head" 2>/dev/null | jq -cS . 2>/dev/null)"
-    rebuild_rows=''
-  else
-    rebuild_entry="$(rebuild_entry_of "$(git show "$head:design/tasks.json" 2>/dev/null)")"
-    rebuild_rows="$(rebuild_rows_of "$(git show "$head:design/design.md" 2>/dev/null)")"
-  fi
-  # Each repair below is best-effort, and says nothing when it cannot:
-  # the check before the commit is what holds the round, on every path,
-  # whether the repair failed or the worker undid it.
-  if [ "$rebuild_split" = 1 ]; then
-    rebuild_tasks_split "$mb" "$head" || true
-    rebuild_own_file_restore "$head" || true
-  elif rebuild_unmerged design/tasks.json; then
-    rebuild_tasks_json "$mb" "$head" || true
-  elif [ "$rebuild_entry" != "$(rebuild_entry_of "$(cat "$tree/design/tasks.json" 2>/dev/null)")" ]; then
-    rebuild_task_entry_restore "$head" || true
-  fi
-  if rebuild_unmerged design/design.md; then
-    rebuild_design_rows || true
-  fi
-  # a base with no table has no row to put back
-  [ "$rebuild_split" = 1 ] || rebuild_design_row_survives "$head" || true
+  rebuild_entry="$(fm_task "$TASK" design/tasks "$head" 2>/dev/null | jq -cS . 2>/dev/null)"
+  # Repair is best-effort; the pre-commit check holds the round if it failed
+  # or the worker subsequently changes the frozen task file.
+  rebuild_own_file_restore "$head" || true
   # NUL-separated: without -z, git quotes a name outside ASCII
   # ("\346\226\207.txt"), and that string names no file in the worktree
   while IFS= read -r -d '' f; do
     [ -n "$f" ] && rebuild_conflicts+=("$f")
   done < <(git -C "$tree" diff --name-only -z --diff-filter=U)
-  # the entries both sides changed, written with markers by the move above;
-  # git does not know them as conflicts, so they are added by name
-  for f in ${rebuild_split_conflicts[@]+"${rebuild_split_conflicts[@]}"}; do
-    rebuild_unmerged "$f" || rebuild_conflicts+=("$f")
-  done
   # A conflict with no marker in it - binary, or deleted on one side - has
   # one side sitting in the worktree looking resolved. `add -A` would
   # commit that side whole, so each is described as what it is and held
@@ -1168,7 +938,7 @@ bring_up_to_date() {
     side="$(rebuild_side_left "$f")"
     rebuild_bare+=("$f"); rebuild_bare_left+=("$(rebuild_state_of "$f")"); rebuild_bare_side+=("$side")
   done
-  # a file that merged but still lost the task's entry or row goes to the
+  # a file that merged but still lost the task's entry goes to the
   # worker too, by name; a conflicted one is already on the list above
   while IFS= read -r f; do
     [ -n "$f" ] && ! rebuild_unmerged "$f" && rebuild_restore+=("$f")
@@ -1374,24 +1144,13 @@ say="$tree/.fm-say.md"
       printf '\nEvery file applied cleanly; there is nothing to resolve.\n'
     fi
     if [ "${#rebuild_restore[@]}" -gt 0 ]; then
-      printf '\nThe rebuild could not keep your task'"'"'s own entry or table row in:\n\n'
+      printf '\nThe rebuild could not keep your task'"'"'s own entry in:\n\n'
       printf -- '- `%s`\n' "${rebuild_restore[@]}"
       printf '\nPut it back exactly as it is at %s, keeping %s'"'"'s other changes.\n' "$rebuild_prev" "$BASE"
     fi
-    if [ "$rebuild_split" = 1 ]; then
-      # T-090: the base keeps one file per task and no task table
-      printf '\n%s keeps one file per task, design/tasks/<id>.json, and no task\n' "$BASE"
-      printf 'table in design/design.md. Your task'"'"'s entry is design/tasks/%s.json and\n' "$TASK"
-      printf 'must come through exactly as it is at %s; a rebuilt round that\n' "$rebuild_prev"
-      printf 'changes it is refused, like one that leaves a conflict marker. If your\n'
-      printf 'branch still had design/tasks.json, the rebuild has already moved every\n'
-      printf 'entry your branch added or changed into its own file and removed the\n'
-      printf 'array; a row your branch added to the old table goes with the table.\n'
-    else
-      printf '\nYour task'"'"'s design/tasks.json entry and design/design.md table row must\n'
-      printf 'come through exactly as they are at %s; a rebuilt round that changes\n' "$rebuild_prev"
-      printf 'either is refused, like one that leaves a conflict marker.\n'
-    fi
+    printf '\nYour task file design/tasks/%s.json must come through exactly as it\n' "$TASK"
+    printf 'is at %s; a rebuilt round that changes it is refused, like one\n' "$rebuild_prev"
+    printf 'that leaves a conflict marker.\n'
     printf '\nThe worktree is detached until fm-worker.sh commits; fm-worker.sh pushes the\n'
     printf 'rebuild. Do not commit in it yourself: a round whose HEAD is no longer %s\n' "$rebuild_base"
     printf 'is refused.\n'
@@ -1866,8 +1625,8 @@ if [ "$rebuilt" = 1 ]; then
   while IFS= read -r f; do [ -n "$f" ] && lost+=("$f"); done < <(rebuild_lost index)
   if [ ${#lost[@]} -gt 0 ]; then
     listed="$(printf '%s, ' "${lost[@]}")"; listed="${listed%, }"
-    rebuild_refuse "the task's own entry or table row is not as ${rebuild_prev} had it in: ${listed}" \
-      "任務自己的條目或表格列跟 ${rebuild_prev} 不一樣：${listed}"
+    rebuild_refuse "the task's own entry is not as ${rebuild_prev} had it in: ${listed}" \
+      "任務自己的條目跟 ${rebuild_prev} 不一樣：${listed}"
   fi
 fi
 # A script the round adds keeps its executable bit. The claude worker's

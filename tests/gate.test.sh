@@ -87,31 +87,6 @@ git -C "$d" checkout -q main
 assert_ok "gate '$d' ownfile 4" "4 reads the scope from the task's own file on the branch under test"
 # a task in flight names the old shared file in its scope so that it may
 # carry its own entry; that now means its own file, and nobody else's
-git -C "$d" checkout -q -b legacy main
-printf '{"id":"T-X","scope":["src/**","design/tasks.json"]}\n' > "$d/design/tasks/T-X.json"
-git -C "$d" commit -qam legacy; git -C "$d" checkout -q main
-assert_ok "gate '$d' legacy 4" "4 reads a scope naming design/tasks.json as naming the task's own file"
-git -C "$d" checkout -q -b legacy-other legacy
-printf '{"id":"T-Y","scope":[]}\n' > "$d/design/tasks/T-Y.json"
-git -C "$d" add -A; git -C "$d" commit -qm other; git -C "$d" checkout -q main
-assert_fail "gate '$d' legacy-other 4" "and not as naming another task's file"
-# A branch opened before T-090 still carries its own design/tasks.json and
-# no design/tasks/<id>.json. Its entry there is its scope, not main's file:
-# here main's file for T-X does not allow elsewhere/**, and the branch's
-# old array does. And a task defined only in that array is gated at all.
-git -C "$d" checkout -q -b oldlist main
-git -C "$d" rm -q -r design/tasks && mkdir -p "$d/design"
-printf '{"tasks":[{"id":"T-X","scope":["src/**","design/**","elsewhere/**"]},{"id":"T-OLD","scope":["src/**","design/**"]}]}\n' \
-  > "$d/design/tasks.json"
-mkdir -p "$d/elsewhere"; echo x > "$d/elsewhere/f"; git -C "$d" add -A; git -C "$d" commit -qm oldlist
-git -C "$d" checkout -q main
-assert_ok "gate '$d' oldlist 4" "4 reads the scope from a branch's old design/tasks.json when it has no task file"
-git -C "$d" checkout -q -b oldonly oldlist
-git -C "$d" rm -q -r elsewhere; git -C "$d" commit -qm "no elsewhere"; git -C "$d" checkout -q main
-assert_fail "test -e '$d/design/tasks/T-OLD.json'" "(the task below has no file on main)"
-out="$("$GATE" --task T-OLD --repo "$d" --branch oldonly --only 4 2>&1)"; rc=$?
-assert_eq "0" "$rc" "and a task defined only in the branch's old array has a scope to be gated by"
-assert_contains "$out" "tasks split T-OLD" "and the gate says it read the old array"
 
 # --- gate 5: the one that matters ---------------------------------------
 d="$(fixture)"
