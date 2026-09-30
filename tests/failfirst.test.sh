@@ -371,44 +371,114 @@ assert_eq "64" "$?" "and so is a pool of none"
 ( cd "$d" && bash "$FF" no-such-ref ) >/dev/null 2>&1
 assert_eq "70" "$?" "a base ref that does not exist cannot be run against"
 
-# --- the workflow runs it on every pull request, as part of the required ci --
-gha="$(cat "$ROOT/.github/workflows/ci.yml")"
-job="$(awk '$0 == "  fail-first:" { f = 1; next } f && /^  [a-zA-Z_-]+:[[:space:]]*$/ { exit } f { print }' \
-  "$ROOT/.github/workflows/ci.yml")"
-assert_ne "" "$job" "the workflow has a fail-first job"
-assert_contains "$job" "bin/fm-failfirst.sh" "which runs bin/fm-failfirst.sh"
-assert_contains "$job" "github.event_name == 'pull_request'" "on every pull request"
-assert_contains "$job" "fetch-depth: 0" "with the history to find the merge-base"
-assert_contains "$job" "github.base_ref" "against the pull request's base"
-assert_contains "$job" "upload-artifact" "and uploads its report"
-assert_contains "$job" "name: fail-first-report" "under the name the review reads it by"
-ci_job="$(awk '$0 == "  ci:" { f = 1; next } f && /^  [a-zA-Z_-]+:[[:space:]]*$/ { exit } f { print }' \
-  "$ROOT/.github/workflows/ci.yml")"
-assert_matches "$(grep 'needs:' <<< "$ci_job")" 'fail-first' "the required ci job needs it"
-assert_contains "$ci_job" "needs.fail-first.result" "and fails when it did"
-assert_contains "$gha" 'fail-first' "the workflow names the job fail-first"
+# --- workflow wiring: select the intended key, never a token in a job ----
+# Read this workflow's block mappings and step lists at their exact indent,
+# without requiring PyYAML. Each descent stays inside its parent's block.
+# Optional input supports mutation fixtures using the very same selector.
+wvalue() {
+  python3 - "${workflow_file:-$ROOT/.github/workflows/ci.yml}" "$@" <<'PYWORKFLOW'
+import sys
 
-# sharded (T-158): 4 shards, the bash shards' count, and the merge is the
-# `fail-first` job the review reads and the required ci needs
-wjob() { awk -v want="  $1:" '$0 == want { f = 1; next } f && /^  [a-zA-Z_-]+:[[:space:]]*$/ { exit } f { print }' \
-  "$ROOT/.github/workflows/ci.yml"; }
-shards="$(wjob fail-first-shard)"
-assert_ne "" "$shards" "the workflow has a fail-first-shard job"
-assert_contains "$shards" "shard: [1, 2, 3, 4]" "a matrix of 4 shards"
-assert_contains "$(wjob bash)" "shard: [1, 2, 3, 4]" "the same count as the bash shards"
-assert_contains "$shards" '--shard="${{ matrix.shard }}/4"' "each runs its own share"
-assert_contains "$shards" "--part=" "and writes its part"
-assert_contains "$shards" "name: fail-first-part-" "which it uploads"
-assert_contains "$shards" "if: always()" "whatever the shard's result"
-assert_contains "$shards" "FM_CI_TIMINGS_IN" "split by the recorded suite timings"
-assert_contains "$shards" "needs.fail-first-timings.outputs.timings" "read once for every shard, so they agree on the split"
-assert_contains "$shards" "github.event_name == 'pull_request'" "on every pull request"
-assert_contains "$(wjob fail-first-timings)" "suite-timings-*" "from the bash shards' own timings artifacts"
-assert_matches "$(grep 'needs:' <<< "$job")" 'fail-first-shard' "the fail-first job needs the shards"
-assert_contains "$job" "always()" "and runs whatever they did, so a failed shard is reported, not skipped"
-assert_contains "$job" "--merge=" "and merges their parts"
-assert_contains "$job" "pattern: fail-first-part-*" "every shard's"
-assert_lacks "$job" "--setup" "running no suite itself"
+lines = open(sys.argv[1]).read().splitlines()
+indent = 0
+value = ""
+for key in ("jobs", *sys.argv[2:]):
+    found = None
+    for i, line in enumerate(lines):
+        if len(line) - len(line.lstrip()) != indent:
+            continue
+        text = line.strip()
+        if key.startswith("step="):
+            if not text.startswith("- "):
+                continue
+            field, _, scalar = text[2:].partition(":")
+            if field not in ("name", "uses") or scalar.strip().strip("\"'") != key[5:]:
+                continue
+            value = ""
+        else:
+            field, sep, scalar = text.partition(":")
+            if not sep or field != key:
+                continue
+            value = scalar.strip()
+        found = i
+        break
+    if found is None:
+        print("")
+        sys.exit(0)
+    end = found + 1
+    while end < len(lines):
+        line = lines[end]
+        if line.strip() and not line.lstrip().startswith("#"):
+            if len(line) - len(line.lstrip()) <= indent:
+                break
+        end += 1
+    lines = lines[found + 1:end]
+    indent += 2
+if value in ("|", ">"):
+    print("\n".join(line[indent:] for line in lines))
+else:
+    print(value)
+PYWORKFLOW
+}
+merge_step='step=bin/fm-failfirst.sh --merge'
+shard_step='step=bin/fm-failfirst.sh --shard=${{ matrix.shard }}/4'
+report_step='step=upload the fail-first report'
+part_step="step=upload the shard's part"
+assert_eq "fail-first" "$(wvalue fail-first name)" "the workflow has the fail-first job the review reads"
+assert_contains "$(wvalue fail-first steps "$merge_step" run)" "bin/fm-failfirst.sh" "which runs bin/fm-failfirst.sh"
+assert_contains "$(wvalue fail-first if)" "github.event_name == 'pull_request'" "on every pull request"
+assert_eq "0" "$(wvalue fail-first steps step=actions/checkout@v4 with fetch-depth)" "with the history to find the merge-base"
+assert_contains "$(wvalue fail-first steps "$merge_step" run)" "github.base_ref" "against the pull request's base"
+assert_contains "$(wvalue fail-first steps "$report_step" uses)" "actions/upload-artifact@" "and uploads its report"
+assert_eq "fail-first-report" "$(wvalue fail-first steps "$report_step" with name)" "under the name the review reads it by"
+assert_contains "$(wvalue ci needs)" 'fail-first' "the required ci job needs it"
+assert_contains "$(wvalue ci steps 'step=every stage passed' run)" 'ff="${{ needs.fail-first.result }}"' "and checks its result, beyond merely echoing it"
+
+# sharded (T-158): pin the matrix, command, environment and artifact keys.
+assert_ne "" "$(wvalue fail-first-shard name)" "the workflow has a fail-first-shard job"
+assert_eq "[1, 2, 3, 4]" "$(wvalue fail-first-shard strategy matrix shard)" "a matrix of 4 shards"
+assert_eq "[1, 2, 3, 4]" "$(wvalue bash strategy matrix shard)" "the same count as the bash shards"
+assert_contains "$(wvalue fail-first-shard steps "$shard_step" run)" '--shard="${{ matrix.shard }}/4"' "each runs its own share"
+assert_contains "$(wvalue fail-first-shard steps "$shard_step" run)" "--part=" "and writes its part"
+assert_eq 'fail-first-part-${{ matrix.shard }}' "$(wvalue fail-first-shard steps "$part_step" with name)" "which it uploads"
+assert_eq "always()" "$(wvalue fail-first-shard steps "$part_step" if)" "whatever the shard's result"
+assert_contains "$(wvalue fail-first-shard steps "$shard_step" run)" "FM_CI_TIMINGS_IN" "split by the recorded suite timings"
+assert_contains "$(wvalue fail-first-shard steps "$shard_step" env FM_FF_TIMINGS)" "needs.fail-first-timings.outputs.timings" "read once for every shard, so they agree on the split"
+assert_eq "github.event_name == 'pull_request'" "$(wvalue fail-first-shard if)" "on every pull request"
+assert_contains "$(wvalue fail-first-timings steps 'step=previous suite timings' run)" "suite-timings-*" "from the bash shards' own timings artifacts"
+assert_eq "[fail-first-shard]" "$(wvalue fail-first needs)" "the fail-first job needs the shards"
+assert_eq "always() && github.event_name == 'pull_request'" "$(wvalue fail-first if)" "and runs whatever they did, so a failed shard is reported, not skipped"
+assert_contains "$(wvalue fail-first steps "$merge_step" run)" "--merge=" "and merges their parts"
+assert_eq "fail-first-part-*" "$(wvalue fail-first steps "step=download the shards' parts" with pattern)" "every shard's"
+assert_lacks "$(wvalue fail-first steps "$merge_step" run)" "--setup" "running no suite itself"
+
+# Keep the misleading alternative location while removing each condition.
+# CI executes these fixtures; workers do not run the suite.
+workflow_file="$d.workflow.yml"
+python3 - "$ROOT/.github/workflows/ci.yml" "$workflow_file" <<'PYMUTATE'
+import sys
+text = open(sys.argv[1]).read()
+text = text.replace("    if: always() && github.event_name == 'pull_request'\n", "")
+open(sys.argv[2], "w").write(text)
+PYMUTATE
+assert_eq "" "$(wvalue fail-first if)" "removing only the merge job condition cannot match the upload condition"
+assert_eq "always()" "$(wvalue fail-first steps "$report_step" if)" "the upload condition remains as a decoy"
+python3 - "$ROOT/.github/workflows/ci.yml" "$workflow_file" <<'PYMUTATE'
+import sys
+text = open(sys.argv[1]).read()
+text = text.replace("      - name: upload the shard's part\n        if: always()\n",
+                    "      - name: upload the shard's part\n")
+start = text.index("  fail-first-shard:")
+end = text.index("  fail-first:", start)
+text = text[:start] + text[start:end].replace(
+    "    if: github.event_name == 'pull_request'",
+    "    if: always() && github.event_name == 'pull_request'") + text[end:]
+open(sys.argv[2], "w").write(text)
+PYMUTATE
+assert_eq "" "$(wvalue fail-first-shard steps "$part_step" if)" "removing the part upload condition cannot match a job condition"
+assert_contains "$(wvalue fail-first-shard if)" "always()" "the job condition remains as a decoy"
+rm -f "$workflow_file"
+unset workflow_file
 
 safe_rm_rf "$d"
 finish
