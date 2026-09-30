@@ -411,30 +411,7 @@ mock" "$(cat "$d/w2.chain")" "a worker block names the worker's engine"
 assert_eq "claude
 mock" "$(cat "$d/r2.chain")" "and leaves the reviewer on the top-level one"
 
-# a chain of stub adapters: the first two are unavailable, the third works
-mkdir -p "$d/ad" "$d/tree"; : > "$d/log"; echo p > "$d/prompt"
-for v in a b; do
-  printf '#!/usr/bin/env bash\necho "%s down" >> "$4"\nexit 2\n' "$v" > "$d/ad/$v.sh"
-done
-printf '#!/usr/bin/env bash\necho "c ran" >> "$4"\nexit 1\n' > "$d/ad/c.sh"
-chmod +x "$d/ad"/*.sh
-( . "$ROOT/bin/fm-config.sh"
-  fm_run_chain "$d/ad" "a b c" "$d/prompt" "$d/tree" "$d/log"; rc=$?
-  printf '%s %s %s\n' "$rc" "$FM_VENDOR_USED" "$FM_VENDOR_SKIPPED" ) > "$d/ran"
-assert_eq "1 c a b" "$(cat "$d/ran")" "unavailable vendors are skipped, the next verdict stands"
-
-( . "$ROOT/bin/fm-config.sh"
-  fm_run_chain "$d/ad" "a b" "$d/prompt" "$d/tree" "$d/log"; printf '%s' "$?" ) > "$d/allout"
-assert_eq "2" "$(cat "$d/allout")" "every vendor unavailable is itself unavailable"
-
-# a head with no adapter is a typo in config.yaml and comes straight back
-( . "$ROOT/bin/fm-config.sh"
-  fm_run_chain "$d/ad" "nosuch c" "$d/prompt" "$d/tree" "$d/log"; printf '%s' "$?" ) > "$d/miss"
-assert_eq "65" "$(cat "$d/miss")" "a head with no adapter is a configuration error"
-# a fallback entry with no adapter is just skipped
-( . "$ROOT/bin/fm-config.sh"
-  fm_run_chain "$d/ad" "c nosuch" "$d/prompt" "$d/tree" "$d/log"; printf '%s' "$?" ) > "$d/miss2"
-assert_eq "1" "$(cat "$d/miss2")" "a fallback entry with no adapter is passed over"
+# Adapter-chain execution belongs to adapter-contract.test.sh.
 rm -rf "$d"
 
 # --- the task list: one file per task (T-090) ----------------------------

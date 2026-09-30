@@ -864,6 +864,48 @@ for v in claude codex cursor-agent gemini; do
   assert_eq "1" "$?" "while $v's own exit 70, inside a sandbox that started, is a failed attempt"
   assert_ok "test -e '$pv/argv'" "($v's CLI did run)"
 done
+# Policy parsing and adapter enforcement share this suite as their home.
+refusal_root="$(safe_tmpdir)"
+refusal_policy() {
+  printf '%s' "$2" > "$refusal_root/config.yaml"
+  ( . "$ROOT/bin/fm-config.sh"
+    fm_policy "$1" "" "$refusal_root/config.yaml" )
+}
+# what may never be declared: GitHub, loopback, anything not a plain name
+for bad in github.com api.github.com raw.githubusercontent.com ghcr.io localhost dev.localhost \
+           127.0.0.1 10.0.0.1 '*' '*.com'; do
+  out="$(refusal_policy worker "policy:
+  network: registry.npmjs.org $bad
+" 2>&1)"
+  assert_eq "65" "$?" "a network naming '$bad' is refused"
+  assert_contains "$out" "names $bad, which" "and names it"
+done
+out="$(refusal_policy worker 'policy:
+  network: localhost
+' 2>&1)"
+assert_contains "$out" "may not reach loopback" "loopback is said to be loopback"
+out="$(refusal_policy worker 'policy:
+  network: api.github.com
+' 2>&1)"
+assert_contains "$out" "may not reach GitHub" "and GitHub GitHub"
+out="$(refusal_policy worker 'projects:
+  app:
+    repo: .
+    github: o/app
+    base: main
+    required_check: ci
+    policy:
+      worker:
+        network: 127.0.0.1
+' 2>&1)"
+assert_eq "65" "$?" "a project cannot declare loopback either"
+out="$(refusal_policy worker 'policy:
+  network: notgithub.com
+' 2>&1)"
+assert_eq "0" "$?" "a label ending in github is not GitHub policy"
+assert_eq '["notgithub.com"]' "$(jq -c .network <<<"$out")" "the allowed label survives policy parsing"
+rm -rf "$refusal_root"
+
 # loopback and GitHub are never allowed, not even by a policy file that says so
 # The hosts every adapter builds its flags from are the policy's
 # (FM_POLICY_HOSTS), so a malformed entry is refused there too - not only in
@@ -1561,6 +1603,17 @@ assert_fail "grep -q 'second vendor' '$e/log'" "and stops rather than running th
 nothing() { false; }
 fm_run_chain "$e/ad" "one two" "$e/prompt" "$e/out" "$e/log" nothing
 assert_ok "grep -q 'second vendor' '$e/log'" "with nothing to show, the chain moves on"
+
+# Unavailable attempts are skipped, but a real failing verdict stands.
+cat > "$e/ad/failed.sh" <<'A'
+#!/usr/bin/env bash
+exit 1
+A
+chmod +x "$e/ad/failed.sh"
+fm_run_chain "$e/ad" "one failed" "$e/prompt" "$e/out" "$e/log" nothing
+assert_eq "1 failed one" "$? $FM_VENDOR_USED $FM_VENDOR_SKIPPED" "unavailable vendors are skipped, the next verdict stands"
+fm_run_chain "$e/ad" "one" "$e/prompt" "$e/out" "$e/log" nothing
+assert_eq "2" "$?" "every vendor unavailable is itself unavailable"
 
 # A typo at the head of the chain is a configuration error, and it has to be
 # found BEFORE anything runs: the caller's exit 65 would otherwise throw away

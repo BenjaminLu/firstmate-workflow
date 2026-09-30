@@ -280,29 +280,8 @@ wait
 assert_eq "B" "$(jq -r .chosen <<<"$got4")" "past another decision's ring, its own returns the answer"
 assert_ok "[ '$t4' -le 5 ]" "within seconds (${t4}s)"
 
-# Two waiters at once (T-151 review round 1): a FIFO hands each line to one
-# reader, so one shared FIFO gave D-1's wake to D-2's wait and D-1 sat out its
-# timeout. Each waiter has a bell of its own, and every ring reaches both.
-d5="$(fixture)"; mkdir -p "$d5/state/decisions"
-FM_ROOT="$d5" bash "$d5/bin/fm-decide.sh" --await D-1 --timeout 20 > "$d5/got1" 2>/dev/null & w1=$!
-FM_ROOT="$d5" bash "$d5/bin/fm-decide.sh" --await D-2 --timeout 20 > "$d5/got2" 2>/dev/null & w2=$!
-until_bells "$d5" 2
-assert_eq "2" "$(bells "$d5")" "two waiters hold two doorbells"
-s5="$(now_ms)"
-printf '{"id":"D-1","chosen":"A"}\n' > "$d5/state/decisions/D-1.json"
-ring "$d5" D-1
-wait "$w1"; rc5=$?
-t5=$(( $(now_ms) - s5 ))
-assert_eq "0" "$rc5" "with two waiters, the first's answer and one ring return the first"
-assert_eq "A" "$(jq -r .chosen "$d5/got1" 2>/dev/null)" "with its answer"
-assert_ok "[ '$t5' -lt 2000 ]" "within a moment, not at its timeout (${t5}ms)"
-assert_ok "kill -0 '$w2'" "while the second still waits for its own"
-printf '{"id":"D-2","chosen":"C"}\n' > "$d5/state/decisions/D-2.json"
-ring "$d5" D-2
-wait "$w2"
-assert_eq "C" "$(jq -r .chosen "$d5/got2" 2>/dev/null)" "then its answer and a ring return the second"
-rm -rf "$d5"
-
+# Fan-out itself lives in lifeline.test.sh; the mixed CLI case below
+# verifies the two consumers together once.
 # an --await beside a session wait (fm-session.sh wait): one answer, one
 # ring - the board's queue line and its ring - and both return
 d6="$(fixture)"; mkdir -p "$d6/state/decisions" "$d6/state/session"

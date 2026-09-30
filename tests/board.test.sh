@@ -524,7 +524,17 @@ assert_eq "null" "$(jq -r '.handoffs[]|select(.kind=="approve" and .from=="revie
   "nor does one whose name merely starts like a role"
 assert_eq "0" "$(jq -r '[.crew[]|select(.id=="mystery" or .id=="reviewer-odd" or .id=="invalid-role")]|length' <<<"$sodd")" \
   "an unplaced verdict actor never boards, even before its finish event"
-for a in secondmate mystery reviewer-odd invalid-role; do   # off the deck again, for what reads the crew below
+# Roleless activity is still crew evidence, including when followed by a verdict.
+for kind in criteria_returned approved; do
+  expected_state=unknown
+  [ "$kind" != approved ] || expected_state=captain
+  FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-unknown --task T-E --type "$kind" \
+    --en "Unclassified activity" --tw "未分類活動" >/dev/null
+  sroleless="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+  assert_eq "$expected_state" "$(jq -r '.crew[]|select(.id=="worker-unknown")|.state' <<<"$sroleless")" \
+    "roleless activity stays aboard with its event state after $kind"
+done
+for a in secondmate mystery reviewer-odd invalid-role worker-unknown; do   # off the deck again, for what reads the crew below
   FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor "$a" --task T-E --type agent_finished >/dev/null
 done
 
@@ -547,7 +557,8 @@ assert_contains "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$POR
   "it will not serve a path climbing out of board/public"
 
 # the stream carries the state, and a new event reaches an open stream
-( sleep 1; FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-A --type merged \
+( wait_for 10 grep -q "event: state" "$d/stream" || exit 1
+  FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor worker-1 --task T-A --type merged \
     --en "merged T-A" --tw "T-A 已合併" >/dev/null ) &
 writer=$!
 # --max-time bounds the read; a bare wait here would also wait on the server,
@@ -2721,7 +2732,7 @@ assert_eq "true" "$(curl -sf -H "Authorization: Bearer $token" "$uk/api/session"
   "with the token the tab is writable"
 assert_eq "403" "$(login "$code1" -H "Origin: $uk")" "the same code a second time is refused"
 assert_eq "" "$(jq -r '.token // empty' "$k/login-body")" "and gives no token"
-# (expiry is tested on its own below, on a board whose codes last 2 seconds:
+# (expiry is tested on its own below, on a board whose codes last half a second:
 # a code 61 seconds old here was also issued before this board started)
 # a fresh code with the last digit of its signature changed
 good="$(mint "$uk" "$PORTK")"
@@ -2769,7 +2780,7 @@ for route in /decisions /tasks /open; do
     -d "$body" "$uk$route")" "$route with the bearer and a text/plain body is refused"
   assert_eq "writeJson" "$(jq -r .code "$k/resp")" "$route says so to the bearer too"
 done
-sleep 1   # an editor or a merge a refusal started would have run by now
+# Refusals return synchronously before any helper can be launched.
 assert_eq "$n0" "$(lines_k)" "no refusal emitted an event"
 assert_fail "test -e '$k/state/decisions/D-900.json'" "no refusal recorded an answer"
 assert_ok "test -e '$k/state/pending/D-900.json'" "and the card is still pending"
@@ -2808,7 +2819,6 @@ rm -f "$k/src/key" "$k/board/public/key.txt"
 # (6) GET /open starts nothing, credential or not
 assert_eq "405" "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" "$uk/open?path=src/visible")" \
   "GET /open is not a way to start the editor"
-sleep 1
 assert_fail "test -e '$k/opened'" "and it started nothing"
 
 # with the credential, the board works as before
@@ -2850,12 +2860,12 @@ assert_eq "unparked captain T-K1" "$(tail -1 "$k/state/events.jsonl" | jq -r '"\
 assert_eq "403" "$(login "$unused" -H "Origin: $uk")" "a code minted before the restart is not taken by the new board"
 kill "$pidk" 2>/dev/null; wait "$pidk" 2>/dev/null || true
 
-# expiry on its own: codes last 2 seconds on this board, and each code here is
+# expiry on its own: codes last half a second on this board, and each code here is
 # issued after it started, correctly signed, from its own origin and unused,
 # so the clock is the only rule that can refuse the first
-FM_BOARD_CODE_TTL_MS=2000 start_k "$PORTK"
+FM_BOARD_CODE_TTL_MS=500 start_k "$PORTK"
 late="$(mint "$uk" "$PORTK")"
-sleep 3
+sleep 0.6
 assert_eq "403" "$(login "$late" -H "Origin: $uk")" "a code older than its lifetime is refused"
 assert_eq "loginRefused" "$(jq -r .code "$k/login-body")" "with the code the page translates"
 assert_eq "" "$(jq -r '.token // empty' "$k/login-body")" "and gives no token"
@@ -2916,7 +2926,6 @@ assert_eq "403" "$(relogin -H "Origin: $uk" -H 'content-type: text/plain' -d '{}
 assert_eq "writeJson" "$(jq -r .code "$k/rl-body")" "and says it takes JSON only"
 assert_eq "400" "$(relogin -H "Origin: $uk" -H 'content-type: application/json' -d 'not json')" \
   "a body that does not parse is refused"
-sleep 1
 assert_eq "" "$(cat "$k/browser")" "no refusal sent the browser anywhere"
 # the one the page makes: its own Origin, a JSON body, and no credential
 assert_eq "200" "$(relogin -H "Origin: $uk" -H 'content-type: application/json' -d '{}')" \
@@ -3015,17 +3024,13 @@ dead() { ! kill -0 "$1" 2>/dev/null; }
 w="$(make_w)"
 sleep 300 & sess=$!
 start_w "$w" "$sess"
-# two waiters, each with a doorbell of its own (what fm-decide.sh --await and
-# fm-session.sh wait register), and one left by a waiter killed outright
+# One writer integration check; lifeline owns fan-out and dead-bell cleanup.
 bells="$w/state/session/wake.d"; mkdir -p "$bells"
-mkfifo "$bells/1-a.fifo" "$bells/2-b.fifo" "$bells/3-stale.fifo"
-exec 7<> "$bells/1-a.fifo" 8<> "$bells/2-b.fifo"
+mkfifo "$bells/1-a.fifo"
+exec 7<> "$bells/1-a.fifo"
 assert_eq "200" "$(postw D-51 A)" "the captain answers a merge card"
 line=''; IFS= read -r -t 10 -u 7 line || true
-assert_eq "D-51" "$line" "the board rings the first waiter's bell at once"
-line=''; IFS= read -r -t 10 -u 8 line || true
-assert_eq "D-51" "$line" "and the second's: every waiter hears every wake"
-assert_fail "test -e '$bells/3-stale.fifo'" "a bell nobody holds any more is removed by the ring"
+assert_eq "D-51" "$line" "the board rings the waiter's bell at once"
 assert_eq "D-51 answered A" "$(jq -r 'select(.reason=="answered")|"\(.id) \(.reason) \(.decision.chosen)"' "$w/state/session/wake.jsonl" 2>/dev/null)" \
   "and the item onto the durable wake queue"
 wait_for 20 jq -e '.merge=="merged"' "$w/state/decisions/D-51.json"
@@ -3033,8 +3038,8 @@ line=''; IFS= read -r -t 10 -u 7 line || true
 assert_eq "D-51" "$line" "the merge settling wakes firstmate again"
 assert_eq "merged" "$(jq -r 'select(.reason=="merge_settled")|.decision.merge' "$w/state/session/wake.jsonl" 2>/dev/null)" \
   "with the outcome on the queue"
-exec 7<&- 8<&-
-rm -f "$bells/1-a.fifo" "$bells/2-b.fifo"
+exec 7<&-
+rm -f "$bells/1-a.fifo"
 # no waiter: ringing never blocks the answer, and the queue carries it
 assert_eq "200" "$(postw D-52 B)" "an answer with nobody waiting is not held up"
 assert_eq "1" "$(grep -c '"id":"D-52"' "$w/state/session/wake.jsonl")" "and still reaches the queue"

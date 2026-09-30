@@ -486,7 +486,7 @@ safe_rm_rf "$d"
 # execution, restoration and reporting are the same fail-first engine.
 contract_ff() { (cd "$1" && bash "$FF" --gate --head="$2" main) 2>&1; }
 contract_fixture() {
-  local d; d="$(mktemp -d)"
+  local d; d="$(safe_tmpdir)"
   git -C "$d" init -q -b main
   git -C "$d" config user.email a@b.c; git -C "$d" config user.name t
   mkdir -p "$d/bin" "$d/tests" "$d/design/tasks" "$d/src"
@@ -505,7 +505,7 @@ JSON
 # declares. The check can never go red, so only the test template can. The
 # template needs what setup installs, so an engine that skipped setup would read
 # the vacuous test below as red and wave it through.
-py="$(mktemp -d)"
+py="$(safe_tmpdir)"
 git -C "$py" init -q -b main
 git -C "$py" config user.email a@b.c; git -C "$py" config user.name t
 mkdir -p "$py/calc" "$py/design/tasks"
@@ -572,7 +572,7 @@ assert_fail "contract_ff '$undoc' prose 5" "5 exempts nothing when no docs are d
 # anything runs it, and so does a suite the diff does not touch.
 # touched <repo> ; a repo whose check and whose untouched suite each leave a mark
 touched() {
-  local r; r="$(mktemp -d)"
+  local r; r="$(safe_tmpdir)"
   git -C "$r" init -q -b main
   git -C "$r" config user.email a@b.c; git -C "$r" config user.name t
   mkdir -p "$r/src" "$r/tests" "$r/design/tasks" "$r/marks"

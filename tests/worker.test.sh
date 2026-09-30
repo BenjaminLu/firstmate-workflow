@@ -1848,7 +1848,7 @@ rm -rf "$dc"
 # repository with a bare remote: round one runs, main moves in a separate
 # clone - so the worker has to FETCH the base, its own local main is stale -
 # and round two continues the pull request.
-rb_fixture() {   # rb_fixture; prints the fixture dir with round one done
+rb_build_fixture() {   # build each immutable seed with round one done
   local d r
   d="$(fixture)" || return 1; r="$d/repo"
   (
@@ -1893,6 +1893,45 @@ S
   ghstub "$d" >/dev/null
   ( cd "$r" && FM_ROOT="$r" FM_GH="$d/stub/gh" FM_T_STEP="$d/round-one.sh" \
       bin/fm-worker.sh --task T-Z >/dev/null 2>&1 ) || return 1
+  printf '%s' "$d"
+}
+# Round one is identical across the rebuild cases. Keep one seed for each
+# hook configuration, then relocate copies; never share mutable Git state.
+rb_seed="$(rb_build_fixture)" || exit 1
+rb_hook_seed="$(RB_HOOKS=1 rb_build_fixture)" || exit 1
+rb_fixture() {
+  local d seed="$rb_seed"
+  [ "${RB_HOOKS:-0}" != 1 ] || seed="$rb_hook_seed"
+  d="$(safe_tmpdir)" || return 1
+  cp -R "$seed/." "$d/" || return 1
+  # Git linked-worktree pointers, the local remote, run receipts, mirrors
+  # and generated stubs all name the seed. Relocate textual metadata only;
+  # Git object databases and index checksums must stay byte-for-byte intact.
+  python3 - "$seed" "$d" <<'PYRELOCATE'
+import os
+from pathlib import Path
+import sys
+old, new = sys.argv[1:]
+for directory, dirs, files in os.walk(new):
+    if Path(directory).name == 'objects':
+        dirs[:] = []
+        continue
+    for name in files:
+        path = Path(directory) / name
+        if path.is_symlink():
+            target = os.readlink(path)
+            if old in target:
+                path.unlink()
+                path.symlink_to(target.replace(old, new))
+            continue
+        if name == 'index' or name.startswith('sharedindex.'):
+            continue
+        data = path.read_bytes()
+        if b'\0' in data or old.encode() not in data:
+            continue
+        path.write_bytes(data.replace(old.encode(), new.encode()))
+PYRELOCATE
+  [ "$?" = 0 ] || return 1
   printf '%s' "$d"
 }
 rb_branch() { git --git-dir="$1/remote.git" for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1; }
@@ -2922,18 +2961,7 @@ n_skill="$(grep -n 'Mid-run checkpoint (required)' "$dPol/prompt.md" 2>/dev/null
 n_save="$(grep -n '# Saving your branch in this round' "$dPol/prompt.md" 2>/dev/null | head -1 | cut -d: -f1)"
 assert_eq "1" "$([ -n "$n_save" ] && { [ -z "$n_skill" ] || [ "$n_save" -gt "$n_skill" ]; } && echo 1)" \
   "after the skill's checkpoint instruction, which it overrides"
-# a policy that does not read stops the round before any engine runs
-dPol2="$(fixture)"; rPol2="$dPol2/repo"; GHPol2="$(ghstub "$dPol2")"
-printf 'vendor: mock\nfallback:\n  - mock\npolicy:\n  network: github.com\n' > "$rPol2/config.yaml"
-cat > "$rPol2/bin/adapters/mock.sh" <<'M'
-#!/usr/bin/env bash
-: > "$FM_T_POL/engine-ran"
-M
-chmod +x "$rPol2/bin/adapters/mock.sh"
-outPol2="$(cd "$rPol2" && FM_ROOT="$rPol2" FM_GH="$GHPol2" FM_T_POL="$dPol2" bin/fm-worker.sh --task T-Z 2>&1)"
-assert_eq "65" "$?" "a policy whose network names GitHub is a configuration error"
-assert_contains "$outPol2" "may not reach GitHub" "and says why"
-assert_fail "test -e '$dPol2/engine-ran'" "and no engine runs without its policy"
+# Invalid host policy and no-CLI refusal are owned by adapter-contract.test.sh.
 
 # --- the operator's escape hatch (T-117) --------------------------------------
 # A broken sandbox must never again stop every worker with no way to ship
@@ -2971,12 +2999,12 @@ assert_eq "" "$(cat "$dHat3/hatch" 2>/dev/null)" "a worker started inside a crew
 assert_contains "$outHat3" "ignoring it" "and says it ignored it"
 assert_lacks "$(jq -r 'select(.type=="crew_status") | .data.activity.en' "$dHat3/repo/state/events.jsonl" 2>/dev/null)" \
   "WITHOUT the OS sandbox" "and the board is not told a round ran unconfined"
-rm -rf "$dPol" "$dPol2" "$dHat" "$dHat2" "$dHat3"
+rm -rf "$dPol" "$dHat" "$dHat2" "$dHat3"
 
 rm -rf "$dA" "$dA2" "$dB" "$dC" "$dD" "$dE" "$dG" "$dG2" "$dG3" "$dG4" "$dI" "$dK" "$dK2" "$dL" \
   "$dM" "$dN" "$dP1" "$dP2" "$dP3" "$dP4" "$dP5" "$dP6" "$dQ1" "$dQ2" "$dQ3" "$dQ4" \
   "$dR1" "$dR2" "$dS" "$dT" "$dU1" "$dU2" "$dV0" "$dV1" "$dV2" "$dV3" "$dV4" "$dV5" "$dV5b" "$dV5c" "$dV6" \
-  "$dX" "$dX2" "$dX4" "$dX5" "$dX6" "$rb_add" "$rb_more"
+  "$rb_seed" "$rb_hook_seed" "$dX" "$dX2" "$dX4" "$dX5" "$dX6" "$rb_add" "$rb_more"
 
 # --- the mirror: a round that destroys its own tree is restored (T-128) ----
 # A hostile adapter, not a real vendor: destruction has to be exact and
@@ -2986,17 +3014,26 @@ rm -rf "$dA" "$dA2" "$dB" "$dC" "$dD" "$dE" "$dG" "$dG2" "$dG3" "$dG4" "$dI" "$d
 # and do not depend on the OS sandbox being the thing that stops the
 # deletion; tests/sandbox.test.sh's real-sandbox check covers that half.
 dMir="$(fixture T-MIR)"
-# a short pause after writing before-the-wreck.txt, so the watcher (polling
-# every second) has a real chance to mirror it before the tree is destroyed -
-# without one, an adapter this fast can write and destroy a file inside one
-# poll's gap, and nothing here could tell that apart from the file never
-# having existed. fm-canary.sh's own hostile workload does the same.
+# Destroy only after the written file is present in a committed mirror
+# generation. A fixed delay could expire before the watcher copied it.
 cat > "$dMir/repo/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
 tree="$3"
 : > "$tree/before-the-wreck.txt"
-sleep 2
+python3 - "$FM_ROOT" "${tree##*/}" <<'PYMIRROR'
+from pathlib import Path
+import sys, time
+mirror = Path(sys.argv[1]) / 'state/mirrors/self' / sys.argv[2]
+deadline = time.monotonic() + 30
+while time.monotonic() < deadline:
+    if any(p.parent.name.isdigit() for p in mirror.glob('*/before-the-wreck.txt')):
+        break
+    time.sleep(.05)
+else:
+    raise SystemExit('the written file never reached a mirror generation')
+PYMIRROR
+[ "$?" = 0 ] || exit 70
 rm -rf "$tree"
 exit 0
 M
@@ -3135,7 +3172,19 @@ cat > "$dRP/repo/bin/adapters/mock.sh" <<'M'
 [ "$1" = "run" ] || exit 64
 tree="$3"
 : > "$tree/before-the-wreck.txt"
-sleep 2
+python3 - "$FM_ROOT" "${tree##*/}" <<'PYMIRROR'
+from pathlib import Path
+import sys, time
+mirror = Path(sys.argv[1]) / 'state/mirrors/self' / sys.argv[2]
+deadline = time.monotonic() + 30
+while time.monotonic() < deadline:
+    if any(p.parent.name.isdigit() for p in mirror.glob('*/before-the-wreck.txt')):
+        break
+    time.sleep(.05)
+else:
+    raise SystemExit('the written file never reached a mirror generation')
+PYMIRROR
+[ "$?" = 0 ] || exit 70
 rm -rf "$tree"
 exit 0
 M
@@ -3198,21 +3247,47 @@ echo $$ > "${FM_ADAPTER_PID:?}"
 exec sleep 60
 M
 chmod +x "$rKill/bin/adapters/mock.sh"
+# The first incremental mirror calls rsync from the watcher. Record that
+# caller so the test can wait on its kernel exit notification after SIGKILL.
+mkdir -p "$dKill/mirror-tools"
+real_rsync="$(command -v rsync)"
+printf '#!/usr/bin/env bash\nprintf "%%s\n" "$PPID" > %q\nexec %q "$@"\n' \
+  "$dKill/mirror.pid" "$real_rsync" > "$dKill/mirror-tools/rsync"
+chmod +x "$dKill/mirror-tools/rsync"
 startedKill="$dKill/started"; adapterpidKill="$dKill/adapter.pid"; mirdirKill="$rKill/state/mirrors/self/T-KILL"
-( cd "$rKill" && FM_ROOT="$rKill" FM_GH="$GHKill" FM_MIRROR_INTERVAL=1 FM_STARTED="$startedKill" \
+( cd "$rKill" && PATH="$dKill/mirror-tools:$PATH" FM_ROOT="$rKill" FM_GH="$GHKill" FM_MIRROR_INTERVAL=1 FM_STARTED="$startedKill" \
     FM_ADAPTER_PID="$adapterpidKill" exec bin/fm-worker.sh --task T-KILL --name worker-kill >/dev/null 2>&1 ) &
 kpKill=$!
 for _ in $(seq 1 60); do [ -e "$startedKill" ] && break; sleep 0.2; done
 assert_ok "test -e '$startedKill'" "T-KILL: the adapter started, so the round and its watcher are both up"
-sleep 2.5
-g1="$(mirror_gen_latest "$mirdirKill")"
-assert_ok "[ \"$g1\" -ge 1 ]" "T-KILL: the watcher ticked at least once while the round ran"
-kill -KILL "$kpKill" 2>/dev/null
+for _ in $(seq 1 150); do
+  g1="$(mirror_gen_latest "$mirdirKill")"
+  [ "$g1" -ge 2 ] && break
+  sleep 0.1
+done
+assert_ok "[ \"$g1\" -ge 2 ]" "T-KILL: the watcher published a generation after the initial baseline"
+python3 - "$ROOT/bin/lib" "$dKill/mirror.pid" "$kpKill" <<'PYEXIT'
+import os, select, signal, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from fm_lifeline import ProcessExit
+watcher = int(Path(sys.argv[2]).read_text())
+notice = ProcessExit(watcher)
+try:
+    os.kill(int(sys.argv[3]), signal.SIGKILL)
+    ready, _, _ = select.select([notice.fileno()], [], [], 10)
+    if not ready or not notice.gone():
+        os.kill(watcher, signal.SIGKILL)
+        raise SystemExit('mirror watcher did not end with its owner')
+finally:
+    notice.close()
+PYEXIT
+watcher_exit=$?
+kill -KILL "$kpKill" 2>/dev/null || true  # also clean up if instrumentation failed
 wait "$kpKill" 2>/dev/null
-sleep 3
 g2="$(mirror_gen_latest "$mirdirKill")"
 g1plus1=$(( g1 + 1 ))
-assert_ok "[ \"$g2\" -le \"$g1plus1\" ]" \
+assert_ok "[ \"$watcher_exit\" = 0 ] && [ \"$g2\" -le \"$g1plus1\" ]" \
   "T-KILL: the watcher stops within its own poll tick once its parent is gone (killed alone, no trap runs), not left running as an orphan"
 # the adapter outlived the round on purpose here; the block ends it and
 # waits until it is gone, so nothing it started runs past the suite (T-151)

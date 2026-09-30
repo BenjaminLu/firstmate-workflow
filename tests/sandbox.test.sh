@@ -184,34 +184,7 @@ reviewer:
 '
 assert_eq "[]" "$(jq -c .network "$t/worker.json")" "and never a worker's"
 
-# what may never be declared: GitHub, loopback, anything not a plain name
-for bad in github.com api.github.com raw.githubusercontent.com ghcr.io localhost dev.localhost \
-           127.0.0.1 10.0.0.1 '*' '*.com'; do
-  out="$(pol worker "policy:
-  network: registry.npmjs.org $bad
-" 2>&1)"
-  assert_eq "65" "$?" "a network naming '$bad' is refused"
-  assert_contains "$out" "names $bad, which" "and names it"
-done
-out="$(pol worker 'policy:
-  network: localhost
-' 2>&1)"
-assert_contains "$out" "may not reach loopback" "loopback is said to be loopback"
-out="$(pol worker 'policy:
-  network: api.github.com
-' 2>&1)"
-assert_contains "$out" "may not reach GitHub" "and GitHub GitHub"
-out="$(pol worker 'projects:
-  app:
-    repo: .
-    github: o/app
-    base: main
-    required_check: ci
-    policy:
-      worker:
-        network: 127.0.0.1
-' 2>&1)"
-assert_eq "65" "$?" "a project cannot declare loopback either"
+# Host-policy refusal cases live in adapter-contract.test.sh.
 # nor OpenAI's user file store (T-147): the captain refused it to every
 # vendor, as an upload channel no round's conversation needs
 out="$(pol worker 'policy:

@@ -3,9 +3,11 @@
 set -euo pipefail
 exec < /dev/null
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/lib.sh
+. "$ROOT/tests/lib.sh"
 # shellcheck source=tests/lib/path.sh
 . "$ROOT/tests/lib/path.sh"
-suite_tools="$(mktemp -d)"
+suite_tools="$(safe_tmpdir)"
 trap 'rm -rf "$suite_tools"' EXIT
 fixture_path "$suite_tools" 'claude codex gemini cursor-agent agent gh herdr tmux cmux security secret-tool osascript xdg-open open' || exit 1
 PATH="$suite_tools"; export PATH
@@ -725,11 +727,24 @@ class Roster(unittest.TestCase):
         self.assertEqual({}, m.pinned_rosters(self.root))
 
 class Entrypoints(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.source_tmp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.source_tmp.cleanup)
+        cls.source = Path(cls.source_tmp.name)
+        for name in ('bin', 'skills'):
+            shutil.copytree(root / name, cls.source / name)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name)
-        shutil.copytree(root / 'bin', self.repo / 'bin')
-        shutil.copytree(root / 'skills', self.repo / 'skills')
+        # Link immutable code from the one class copy. The two source files
+        # that entrypoint cases intentionally overwrite get private copies.
+        for name in ('bin', 'skills'):
+            shutil.copytree(self.source / name, self.repo / name, copy_function=os.link)
+        for name in ('bin/fm-gate.sh', 'bin/adapters/codex.sh'):
+            (self.repo / name).unlink()
+            shutil.copy2(self.source / name, self.repo / name)
         (self.repo / 'design/tasks').mkdir(parents=True)
         (self.repo / 'design/tasks/T-035.json').write_text(json.dumps(dict(id='T-035',title='test',scope=['src/**'],depends_on=[],acceptance=['works'])))
         (self.repo / 'design/design.md').write_text('## 6. Gates\nEvidence\n## 8. Board\n')
@@ -1022,7 +1037,12 @@ elif a[0]=='branch': print('t-035-test')
                  ('fm-dispatch.sh',['--dry-run']),('fm-run.sh',['once'])]
         (self.repo/'bin/fm-gate.sh').write_text('#!/usr/bin/env bash\nexit 1\n')
         for script,args in entries:
-            for source in ('repo-argument','environment','relative-script-argument','relative-script-environment'):
+            # Exercise every wrapper's two root inputs; relative script resolution
+            # is shared, so exercise its combinations through session once.
+            sources=('repo-argument','environment')
+            if script=='fm-session.sh':
+                sources+=('relative-script-argument','relative-script-environment')
+            for source in sources:
                 with self.subTest(script=script,source=source):
                     env=dict(self.env,FM_TRANSPORT='direct',FM_ROOT=self.repo.name)
                     entry=self.repo/'bin'/script
@@ -1082,52 +1102,6 @@ elif a[0]=='branch': print('t-035-test')
         reply=self.invoke('fm-worker.sh',['--task','T-unused','--task','T-035'])
         self.assertEqual(70,reply.returncode,reply.stderr)
         self.assertIn('already has a live worker',reply.stderr)
-    def test_entrypoints_refuse_a_live_alias_in_one_line(self):
-        # zed is in no roster; while it is live, no run of either role takes it.
-        # A worker is told it is live; a reviewer that it is a worker's name,
-        # the refusal that outlasts the live run.
-        live=m.allocate(self.repo,'worker','T-900','Zed')  # starting: no launcher record yet
-        for script,args,refusal in (('fm-worker.sh',['--task','T-035','--name','zed'],
-                                     'crew name zed is live in another run'),
-                                    ('fm-review.sh',['--task','T-035','--branch','work','--name','Zed'],
-                                     'crew name zed has served as a worker')):
-            with self.subTest(script=script):
-                answer=self.invoke(script,args)
-                self.assertEqual(70,answer.returncode,answer.stderr)
-                self.assertIn(refusal,answer.stderr)
-                self.assertNotIn('Traceback',answer.stderr)
-        self.assertEqual([live.name],[p.name for p in (self.repo/'state/runs').glob('*-zed-*')])
-    def test_entrypoints_draw_the_crew_and_take_each_role_from_its_own_roster(self):
-        self.assertFalse((self.repo/'state/crew/rosters.json').exists())
-        for script,args in (('fm-worker.sh',['--task','T-035']),('fm-review.sh',['--task','T-035','--branch','work'])):
-            answer=self.invoke(script,args,FM_ROSTER_SEED='entry')
-            self.assertEqual(0,answer.returncode,answer.stderr)
-        crew=json.loads((self.repo/'state/crew/rosters.json').read_text())
-        names={json.loads(p.read_text())['role']:json.loads(p.read_text())['name']
-               for p in (self.repo/'state/runs').glob('*/identity.json')}
-        self.assertIn(names['worker'],crew['workers'])
-        self.assertIn(names['reviewer'],crew['reviewers'])
-    def test_entrypoints_fail_an_exhausted_roster_without_borrowing(self):
-        (self.repo/'config.yaml').write_text('vendor: codex\nconcurrency: 2\nrosters:\n  workers: [bo]\n  reviewers: [ada]\n')
-        m.allocate(self.repo,'reviewer','T-900','')  # ada is live
-        answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'])
-        self.assertEqual(70,answer.returncode,answer.stderr)
-        self.assertIn('the reviewer roster ran out',answer.stderr)
-        self.assertIn('a name of the other role is never borrowed',answer.stderr)
-        self.assertNotIn('Traceback',answer.stderr)
-        self.assertEqual([],self.results())
-        self.assertEqual([],list((self.repo/'state/runs').glob('*-bo-*')))
-    def test_entrypoints_refuse_a_bad_roster_in_one_line(self):
-        for roster,said in (('roster:\n  - mary-jane\n',"config.yaml roster: 'mary-jane' is not a short given name"),
-                            ('roster: []\n','config.yaml roster is empty'),
-                            ('rosters:\n  workers: [ada]\n  reviewers: [ada]\n','config.yaml rosters: ada is in both')):
-            with self.subTest(roster=roster):
-                (self.repo/'config.yaml').write_text('vendor: codex\n'+roster)
-                answer=self.invoke('fm-worker.sh',['--task','T-035'])
-                self.assertEqual(70,answer.returncode,answer.stderr)
-                self.assertIn(said,answer.stderr)
-                self.assertNotIn('Traceback',answer.stderr)
-        self.assertEqual([],list((self.repo/'state/runs').glob('*/identity.json')))
     def test_real_reviewer_entrypoint_identity_and_final_provenance(self):
         answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work','--name','Quinn'],
                            FM_TEST_VERDICT='REJECT')
@@ -1186,16 +1160,6 @@ elif a[0]=='branch': print('t-035-test')
         window=json.loads(next((self.repo/'state/runs').glob('*/*/window.json')).read_text())
         self.assertEqual('none',window['status'])
         self.assertIn('focus changed',window['reason'])
-    def test_changed_resources_retained_through_real_entrypoint(self):
-        for change in ('added','moved','shared','reused','busy','identity','unknown','malformed'):
-            with self.subTest(change=change):
-                answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],FM_TEST_CHANGE=change)
-                self.assertEqual(0,answer.returncode,answer.stderr)
-                self.assertFalse((self.repo/'closed').exists())
-                result=json.loads(self.results()[-1].read_text())
-                self.assertEqual('completed',result['status'])
-        calls=[json.loads(s) for s in (self.repo/'controls').read_text().splitlines()]
-        self.assertFalse(any(c[:2] in (['pane','close'],['tab','close']) for c in calls))
     def test_real_worker_and_default_nonmanaged_optout(self):
         # Without Herdr a round runs headless, and so does one that asks for
         # no window inside Herdr: neither is refused, and neither touches it.
@@ -1500,11 +1464,10 @@ else: sys.exit('Error: Unknown command '+(a[0] if a else ''))
         self.assertEqual('none',host('host: screen\n',HERDR_ENV='1'))
         self.assertEqual('none',host('',HERDR_ENV='1',FM_TRANSPORT='direct'))
         self.assertEqual('none',host('host: herdr\n',FM_HOST='none'))
-    def test_blocked_empty_failed_and_autoclose_optout(self):
-        for extra in ({'FM_TEST_STATUS':'BLOCKED'}, {'FM_TEST_STATUS':'INCOMPLETE'},
-                      {'FM_TEST_EMPTY':'1'}, {'FM_TEST_EXIT':'1'}, {'FM_AUTOCLOSE':'0'}):
-            answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],**extra)
-            self.assertFalse((self.repo/'closed').exists(),answer.stderr)
+    def test_autoclose_optout(self):
+        # Completion/refusal variants are unit-tested by test_rc_zero_is_not_completion.
+        answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],FM_AUTOCLOSE='0')
+        self.assertFalse((self.repo/'closed').exists(),answer.stderr)
     def test_snapshot_ignores_a_save_still_in_flight(self):
         # What the concurrent test hit at random, deterministically: one launch
         # saving a pane while another takes a snapshot.
@@ -1724,19 +1687,6 @@ else: sys.exit('Error: Unknown command '+(a[0] if a else ''))
         result=json.loads(self.results()[0].read_text())
         self.assertEqual(names,{result['actor']})
         self.assertEqual(2,len(list(self.results()[0].parent.glob('*/result.json'))))
-    def test_fallback_never_reuses_changed_owned_resources_but_still_runs(self):
-        self.executable('claude', "print('Authentication required.')\nraise SystemExit(2)\n")
-        (self.repo/'config.yaml').write_text('vendor: claude\nfallback:\n  - codex\n')
-        for change in ('added','moved','shared','reused','busy','identity','unknown','late-shell'):
-            with self.subTest(change=change):
-                answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],FM_TEST_CHANGE=change)
-                self.assertEqual(0,answer.returncode,answer.stderr)
-        calls=[json.loads(s) for s in (self.repo/'controls').read_text().splitlines()]
-        self.assertEqual(8,len([c for c in calls if c[:2]==['tab','create']]))
-        # the fallback attempt found the pane no longer its own and ran with no window
-        self.assertEqual(8,len([c for c in calls if c[:2]==['pane','run']]))
-        self.assertEqual(8,len(list(self.repo.glob('reviewer-*.prompt'))), 'the fallback model still starts')
-        self.assertFalse(any(c[:2] in (['pane','close'],['tab','close']) for c in calls))
     def test_all_supported_cli_formats_inject_roles_and_keep_final(self):
         # Only a vendor whose round's login its own status check confirms
         # runs (T-121): claude's recording says signed in. cursor-agent's

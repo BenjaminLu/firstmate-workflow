@@ -5,7 +5,7 @@ import { expect, type Page } from "@playwright/test";
 // `test` is the fixture's: every board a test starts is signed in to (T-122)
 import { test, makeRoot, startBoard, stopBoard, writeRegistry, writeProjects, readTasks, writeTasks, ROOT, details, scriptHeaders, signInAddress, tabToken } from "./fixture";
 import { appendFileSync, readFileSync, existsSync, writeFileSync, rmSync, utimesSync, mkdirSync, chmodSync, unlinkSync } from "node:fs";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
 const EN = JSON.parse(readFileSync(join(ROOT, "i18n/ui.en.json"), "utf8"));
@@ -2261,113 +2261,32 @@ test('T-118: an answered card leaves the captain lane, and a park chosen on a ca
 // SIGTERM it ends its sleep and then dies of the same signal, so the stop
 // path is seen as a SIGTERM; and the test's finally ends both, so no sleep
 // outlives the test, which bin/ci.sh would turn red (T-151).
-function stubWorker(root: string) {
-  const child = join(root, "stub/child.pid");
-  writeFileSync(join(root, "stub/fm-worker.sh"), "#!/usr/bin/env bash\n" +
-    "trap 'kill $! 2>/dev/null; trap - TERM; kill -TERM $$' TERM\n" +
-    `sleep 60 &\necho $! > '${child}'\nwait\n`);
-  const fake = spawn("bash", [join(root, "stub/fm-worker.sh")], {stdio: "ignore"});
-  const ended = new Promise<string|null>(r => fake.on("exit", (_code, signal) => r(signal)));
-  const stop = () => {
-    fake.kill("SIGKILL");
-    try { process.kill(Number(readFileSync(child, "utf8")), "SIGKILL"); } catch { /* gone, or never started */ }
-  };
-  return {fake, ended, stop};
-}
-
-test('T-118: park and drop a working card only after confirming, which stops its crew and leaves its pull request open', async ({page}) => {
-  const root = makeRoot([], false);
-  writeTasks(root, [{id:'T-051',title:'At work, with a pull request',depends_on:[]}]);
-  emitFixture(root,'worker-51','T-051','dispatched','On it','接下',{role:'worker'});
-  emitPr(root,'worker-51','T-051','pr_opened',51);
-  // a stand-in for the round's own script, published where fm-worker.sh
-  // publishes its pid: the board's stop path signals it
-  mkdirSync(join(root,'stub'),{recursive:true}); mkdirSync(join(root,'state/worktrees'),{recursive:true});
-  const {fake, ended, stop: stopFake} = stubWorker(root);
-  writeFileSync(join(root,'state/worktrees/T-051.pid'), `${fake.pid}\n`);
-  const b = await startBoard(root);
-  const card = page.locator('#lanes [data-task="T-051"]');
-  try {
-    await page.goto(`${b.url}/?lang=en`);
-    await expect(page.locator('[data-lane="review"] [data-task="T-051"]')).toHaveCount(1);
-    // park asks first, and says what it stops and what it leaves
-    await page.locator('[data-menu="T-051"]').click();
-    await expect(page.locator('[data-task="T-051"] .cacts button')).toHaveText([EN.park, EN.drop]);
-    await page.locator('[data-task="T-051"] [data-act="park"]').click();
+// The API suite owns confirmation enforcement, event writes, crew SIGTERM
+// and keeping the PR open. Browser cases own the words the captain sees.
+for (const hasPr of [false, true]) {
+  test(`T-118: park/drop confirmation explains the crew${hasPr ? ' and open PR' : ''}`, async ({page}) => {
+    const root = makeRoot([], false);
+    writeTasks(root, [{id:'T-051',title:'Work to set aside',depends_on:[]}]);
+    emitFixture(root,'worker-51','T-051','dispatched','On it','接下',{role:'worker'});
+    if (hasPr) emitPr(root,'worker-51','T-051','pr_opened',51);
+    const b = await startBoard(root);
     const box = page.locator('#dropConfirm');
-    await expect(box).toBeVisible();
-    await expect(box).toContainText(EN.parkConfirm.replace('{id}','T-051'));
-    await expect(box).toContainText(EN.crewStopNote.replace('{crew}','worker-51'));
-    await expect(box).toContainText(EN.prStaysOpen.replace('{pr}','#51'));
-    const before = t118Events(root).length;
-    await page.locator('#dropConfirm [data-cancel="park"]').click();
-    await expect(box).toBeHidden();
-    expect(t118Events(root).length).toBe(before);
-    await expect(card).toHaveCount(1);
-    // confirmed: parked, and the crew stopped
-    await page.locator('[data-menu="T-051"]').click();
-    await page.locator('[data-task="T-051"] [data-act="park"]').click();
-    await page.locator('#dropConfirm [data-confirm="park"]').click();
-    await expect(page.locator('#parked [data-task="T-051"]')).toHaveCount(1);
-    await expect(card).toHaveCount(0);
-    expect(t118Events(root).pop()).toMatchObject({type:'parked',actor:'captain',task:'T-051'});
-    expect(await ended).toBe('SIGTERM');
-    // unparked, it returns to the lane its events give it
-    await page.locator('#parked > summary').click();
-    await page.locator('#parked [data-menu="T-051"]').click();
-    await page.locator('#parked [data-act="unpark"]').click();
-    await expect(page.locator('[data-lane="review"] [data-task="T-051"]')).toHaveCount(1);
-    // drop asks first too, with the same notes, and the pull request stays open
-    await page.locator('[data-menu="T-051"]').click();
-    await page.locator('[data-task="T-051"] [data-act="drop"]').click();
-    await expect(box).toContainText(EN.dropConfirm.replace('{id}','T-051'));
-    await expect(box).toContainText(EN.prStaysOpen.replace('{pr}','#51'));
-    await page.locator('[data-confirm-drop="T-051"]').click();
-    await expect(card).toHaveCount(0);
-    expect(t118Events(root).pop()).toMatchObject({type:'closed',actor:'captain',task:'T-051'});
-    expect(t118Events(root).some(e => e.type === 'merged')).toBe(false);
-  } finally { stopFake(); stopBoard(b); }
-});
-
-test('T-118: a card in the working lane is parked and dropped only after confirming, and its crew is stopped', async ({page}) => {
-  const root = makeRoot([], false);
-  writeTasks(root, [{id:'T-052',title:'At work, no pull request yet',depends_on:[]}]);
-  emitFixture(root,'worker-52','T-052','dispatched','On it','接下',{role:'worker'});
-  mkdirSync(join(root,'stub'),{recursive:true}); mkdirSync(join(root,'state/worktrees'),{recursive:true});
-  const {fake, ended, stop: stopFake} = stubWorker(root);
-  writeFileSync(join(root,'state/worktrees/T-052.pid'), `${fake.pid}\n`);
-  const b = await startBoard(root);
-  const working = page.locator('[data-lane="working"] [data-task="T-052"]');
-  const box = page.locator('#dropConfirm');
-  try {
-    await page.goto(`${b.url}/?lang=en`);
-    await expect(working).toHaveCount(1);
-    // park from the working lane: asked first, then carried out
-    await page.locator('[data-menu="T-052"]').click();
-    await expect(page.locator('[data-task="T-052"] .cacts button')).toHaveText([EN.park, EN.drop]);
-    await page.locator('[data-task="T-052"] [data-act="park"]').click();
-    await expect(box).toBeVisible();
-    await expect(box).toContainText(EN.parkConfirm.replace('{id}','T-052'));
-    await expect(box).toContainText(EN.crewStopNote.replace('{crew}','worker-52'));
-    await page.locator('#dropConfirm [data-confirm="park"]').click();
-    await expect(page.locator('#parked [data-task="T-052"]')).toHaveCount(1);
-    await expect(working).toHaveCount(0);
-    expect(t118Events(root).pop()).toMatchObject({type:'parked',actor:'captain',task:'T-052'});
-    expect(await ended).toBe('SIGTERM');
-    // unparked, it is back in the working lane, and a drop from there asks first too
-    await page.locator('#parked > summary').click();
-    await page.locator('#parked [data-menu="T-052"]').click();
-    await page.locator('#parked [data-act="unpark"]').click();
-    await expect(working).toHaveCount(1);
-    await page.locator('[data-menu="T-052"]').click();
-    await page.locator('[data-task="T-052"] [data-act="drop"]').click();
-    await expect(box).toContainText(EN.dropConfirm.replace('{id}','T-052'));
-    await expect(box).toContainText(EN.crewStopNote.replace('{crew}','worker-52'));
-    await page.locator('[data-confirm-drop="T-052"]').click();
-    await expect(working).toHaveCount(0);
-    expect(t118Events(root).pop()).toMatchObject({type:'closed',actor:'captain',task:'T-052'});
-  } finally { stopFake(); stopBoard(b); }
-});
+    try {
+      await page.goto(`${b.url}/?lang=en`);
+      for (const action of ['park', 'drop'] as const) {
+        await page.locator('[data-menu="T-051"]').click();
+        await expect(page.locator('[data-task="T-051"] .cacts button')).toHaveText([EN.park, EN.drop]);
+        await page.locator(`[data-task="T-051"] [data-act="${action}"]`).click();
+        await expect(box).toBeVisible();
+        await expect(box).toContainText((action === 'park' ? EN.parkConfirm : EN.dropConfirm).replace('{id}','T-051'));
+        await expect(box).toContainText(EN.crewStopNote.replace('{crew}','worker-51'));
+        if (hasPr) await expect(box).toContainText(EN.prStaysOpen.replace('{pr}','#51'));
+        await box.locator(action === 'park' ? '[data-cancel="park"]' : '[data-cancel-drop="T-051"]').click();
+        await expect(box).toBeHidden();
+      }
+    } finally { stopBoard(b); }
+  });
+}
 
 test('T-118: a task parked while its card is pending stays in the captain lane, says so, and offers unpark', async ({page}) => {
   const root = makeRoot([], false);

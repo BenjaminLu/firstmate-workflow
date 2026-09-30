@@ -46,7 +46,7 @@ fm-cleanup 2
 fm-decide 10
 fm-diagram 4
 fm-dispatch 3
-fm-doctor 1
+fm-doctor 2
 fm-emit 8
 fm-failfirst 3
 fm-gate 5
@@ -58,7 +58,7 @@ fm-reconcile 3
 fm-review 7
 fm-run 2
 fm-session 3
-fm-setup 2
+fm-setup 3
 fm-sync-prs 2
 fm-worker 5"
 
@@ -141,7 +141,16 @@ while read -r name want; do
     fi
   done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "86" "$total" "every pinned flag and all nine fm option cases were exercised"
+assert_eq "88" "$total" "every pinned flag and all nine fm option cases were exercised"
+
+# These flags consume one word, so they are deliberately outside the shift-2
+# count. Probe them without a base ref: parsing must finish at usage, not hang.
+for flag in --gate --head=HEAD; do
+  run_capped 6 bash "$ROOT/bin/fm-failfirst.sh" "$flag"
+  assert_eq "64" "$code" "failfirst $flag reaches the missing-base usage check"
+  assert_contains "$said" "usage: fm-failfirst.sh" "failfirst accepts $flag before checking its base"
+  assert_lacks "$said" "unknown argument" "failfirst recognizes $flag"
+done
 
 # A script that grows an option loop has to be pinned here too, and the
 # corpus is the one bin/ci.sh judges - literally, out of
@@ -209,7 +218,7 @@ while IFS= read -r f; do
   grep -q 'fm_need ' <<< "$(fm_strip_comments "$f")" || continue
   sourced=$((sourced + 1))
   name="$(basename "$f")"
-  tmp="$(mktemp -d)"; mkdir -p "$tmp/bin"
+  tmp="$(safe_tmpdir)"; mkdir -p "$tmp/bin"
   cp "$f" "$tmp/bin/"                       # and NOT fm-config.sh
   run_capped 6 bash "$tmp/bin/$name" --task
   assert_eq "70" "$code" "$name refuses to start without the library it needs"
