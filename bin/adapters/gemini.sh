@@ -70,7 +70,20 @@ model_args=(); while IFS= read -r _fm_ma; do model_args+=("$_fm_ma"); done \
 # key the copy is the login, so say which.
 gemini_home="$FM_ROUND_TMP/gemini-home"; mkdir -p "$gemini_home/.gemini" || exit 70
 gemini_env=(HOME="$gemini_home" GEMINI_CLI_HOME="$gemini_home")
-[ -n "${GEMINI_API_KEY:-}${GOOGLE_API_KEY:-}" ] || gemini_env+=(GOOGLE_GENAI_USE_GCA=true)
+# The credentials that outrank the Google-account login the copied
+# oauth_creds.json carries (T-121): gemini documents GEMINI_API_KEY and
+# GOOGLE_API_KEY as switching it to API-key billing. Ambient in the
+# operator's own shell, either would silently bill a round to it instead
+# of the account gemini signed in with; shed unless the operator named
+# gemini in config.yaml's billing: block, in which case they are left for
+# gemini to use as its login, same as before. env(1) reads options only
+# before its first NAME=VALUE, so the -u words lead: after an assignment
+# `-u` is taken for the command, and the CLI never starts.
+if [ "$(fm_adapter_billing gemini)" = api-key ]; then
+  [ -n "${GEMINI_API_KEY:-}${GOOGLE_API_KEY:-}" ] || gemini_env+=(GOOGLE_GENAI_USE_GCA=true)
+else
+  gemini_env=(-u GEMINI_API_KEY -u GOOGLE_API_KEY "${gemini_env[@]}" GOOGLE_GENAI_USE_GCA=true)
+fi
 # no -p here: gemini's -p takes the prompt as its value, so an empty
 # FM_ADAPTER_ARGS left the flag dangling and the prompt was never delivered.
 # A piped stdin is what puts it in headless mode.

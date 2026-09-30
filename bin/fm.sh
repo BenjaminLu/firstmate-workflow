@@ -140,6 +140,17 @@ usage: fm.sh <command> [options]
         .cursor/hooks.json. Merges into what is there, changes nothing
         twice, and prints what it changed. Without --harness, all three.
         bin/fm-session.sh start installs them for the harness it detects.
+
+  doctor [--fix] [--sandbox] [--repo DIR]
+        Say, for every dependency firstmate needs and every vendor login,
+        whether it works here and the one command that fixes it. Installs
+        nothing unless --fix, which asks before each install. With no
+        config.yaml yet, runs setup instead.
+
+  setup [--answers FILE] [--repo DIR]
+        The first-run wizard: asks only what firstmate cannot find out for
+        itself, each with a default Enter accepts, writes config.yaml, then
+        runs doctor --sandbox. Never asks for or stores a secret itself.
 EOF
 }
 
@@ -884,6 +895,19 @@ cmd_follow() {
   python3 "$HERE/fm-herdr.py" follow "$repo" "$actor"
 }
 
+# `fm doctor` / `fm setup` (T-121): thin passthroughs, so the operator's one
+# command matches this CLI's shape for self-update, tasks, roster and board.
+# The scripts themselves do the work and default --repo on their own; this
+# hands every argument straight through, unexamined.
+cmd_doctor() {
+  [ -x "$HERE/fm-doctor.sh" ] || die "fm-doctor.sh is missing" 70
+  "$HERE/fm-doctor.sh" "$@"
+}
+cmd_setup() {
+  [ -x "$HERE/fm-setup.sh" ] || die "fm-setup.sh is missing" 70
+  "$HERE/fm-setup.sh" "$@"
+}
+
 # =========================================================================
 cmd="${1:-help}"
 [ $# -eq 0 ] || shift
@@ -897,6 +921,8 @@ case "$cmd" in
   stop)        cmd_stop "$@" ;;
   follow)      cmd_follow "$@" ;;
   hooks)       cmd_hooks "$@" ;;
+  doctor)      cmd_doctor "$@" ;;
+  setup)       cmd_setup "$@" ;;
   help|-h|--help) usage ;;
   *) usage >&2; die "unknown command: $cmd" ;;
 esac

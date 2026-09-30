@@ -91,9 +91,47 @@ How to propose and land a change is in [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Getting set up
 
 ```sh
-bin/fm-install-hooks.sh   # git hooks are not cloned; opt in once per checkout
-bin/ci.sh                 # the one gate - CI runs this same file
+mise install               # the toolchain pinned in mise.toml: bun, node, python, jq, gh, shellcheck
+bin/fm-setup.sh             # first run: asks only what it cannot find out, writes config.yaml
+bin/fm-doctor.sh --sandbox  # every dependency and every vendor login, and how to fix each
+bin/fm-install-hooks.sh     # git hooks are not cloned; opt in once per checkout
+bin/ci.sh                   # the one gate - CI runs this same file
 ```
+
+`fm setup` asks which installed vendor crews as worker and as reviewer, whether
+each bills to its subscription or per API use inside the sandbox, and the main
+repository and base branch - each with a recommended default that Enter
+accepts - then writes only those answers to `config.yaml` (a model, the
+reviewer's mode and everything else there are left as they were) and runs
+`fm doctor --sandbox`. It never asks for or stores a
+secret itself: for a key (cursor-agent's, say) it prints the exact keychain
+command to run. `fm doctor` alone checks the same toolchain and vendor logins
+on demand, and `--fix` installs a missing pinned tool through `mise`, asking
+before each one. Each tool, herdr and vendor CLI is `ok`, `missing` or `wrong
+version` (a vendor CLI older than the oldest release known to have the status
+check below, herdr older than 0.9.1), with the one line that fixes it; each
+worktree under `state/worktrees` whose `git status` shows an untracked build
+cache is flagged. `fm doctor --sandbox` is also the merge gate for any change
+to the sandbox or an adapter.
+
+A round never runs on a login nobody checked: `bin/fm-auth-probe.sh <vendor>`
+resolves the login a round of that vendor would get - the crew's own token or
+key, exactly as `fm-sandbox.sh` hands it in, never your own interactive
+session - and asks the vendor's own status check about that login alone: a
+fixed command, closed stdin, a scrubbed environment, a time limit. It answers
+`authenticated`, `unauthenticated`, `expired`, `quota-exhausted`,
+`indeterminate`, `timeout` or `unavailable`. `fm-worker.sh` and `fm-review.sh`
+run it for every vendor in their chain before any of them sees a prompt.
+Only `authenticated` is usable: anything else - `indeterminate` and `timeout`
+included - is moved past the same way an outage is, with the probe's status
+and reason on the board, and the chain tries its next vendor. gemini has no
+documented status command, so its login cannot be verified and rounds on it
+are refused until it can be.
+The claude, codex and
+gemini adapters also shed the environment variables each vendor documents as
+outranking its stored login (`ANTHROPIC_API_KEY` among them) before every
+round, unless `config.yaml`'s `billing:` block names that vendor for api-key
+billing on purpose.
 
 ## Declaring a project
 

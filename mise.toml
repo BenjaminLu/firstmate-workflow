@@ -1,0 +1,27 @@
+# Toolchain pins for firstmate itself (T-121). `fm doctor` reads this file
+# and compares what is on PATH against these pins, tool by tool, printing
+# `ok`, `missing` or `wrong version` and the one command that closes the
+# gap. It installs nothing on its own; `fm doctor --fix` asks before each
+# install, and `mise install` reads this file directly for the tools mise
+# manages itself.
+#
+# jq and gh have no core mise plugin, so they are pinned through mise's
+# `ubi:` backend, which installs a plain binary release straight from its
+# GitHub repository; that backend is still experimental in mise, hence the
+# settings block below.
+#
+# node: bin/ci.sh runs `bunx playwright test`, and playwright's CLI starts
+# with `#!/usr/bin/env node`, so the end-to-end stage needs a node on PATH.
+# shellcheck: bin/ci.sh's shellcheck stage skips itself when shellcheck is
+# missing, so a host without it would pass a stage it never ran.
+# git and perl are the system's own; `fm doctor` checks them, unpinned.
+[tools]
+bun = "1.3.11"
+python = "3.14.6"
+"ubi:jqlang/jq" = "1.7.1"
+"ubi:cli/cli" = "2.63.0"
+node = "20"
+shellcheck = "0.10.0"
+
+[settings]
+experimental = true

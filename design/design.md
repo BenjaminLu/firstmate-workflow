@@ -3444,8 +3444,8 @@ in `bin/fm-config.sh`:
 |---|---|---|---|---|---|
 | claude | a `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` already in the operator's environment is used as is; else the crew's own long-lived token (T-126), made once with `claude setup-token`: macOS keychain item `firstmate-claude-token`, account the operator's user; else, when `secret-tool` is on the operator's PATH, the libsecret item `firstmate-claude-token`/account the operator's user (T-126 round 2, Linux's rough equivalent of the keychain; its absence is skipped, not refused); else `~/.config/firstmate/claude-token`, refused unless its mode is the operator's alone (600). Only with none of those does it fall back to the operator's own interactive login as before T-126 - macOS keychain item `Claude Code-credentials`, account the operator's user; elsewhere `~/.claude/.credentials.json` - field `claudeAiOauth.accessToken`, refused past `claudeAiOauth.expiresAt`; that fallback warns, in the round's log and on the board, that the round can die when that login refreshes | `CLAUDE_CODE_OAUTH_TOKEN`, exported, not on a command line | nothing of `~/.claude` or `~/.claude.json`: its config directory is one of the round's own (`CLAUDE_CONFIG_DIR`, in the round's temp directory), holding its sessions, todos, caches and `.claude.json` | the round's own (`CLAUDE_CODE_TMPDIR`); and `/tmp/claude-<uid>`, read and written, on macOS only, because claude opens it whatever `TMPDIR` says (T-105's EPERM). On Linux the round's `/tmp` is its own, so the directory is made afresh there | none |
 | cursor-agent | the crew's Cursor API key, which the operator makes once in Cursor's dashboard and keeps for fm outside every round: macOS keychain item `firstmate-cursor-api-key`, account the operator's user; else `~/.config/firstmate/cursor-api-key`, refused unless its mode is the operator's alone (600). A `CURSOR_API_KEY` already set is used as is. Never `agent login`'s own items (`cursor-access-token`, `cursor-refresh-token`) or `~/.config/cursor/auth.json`, which hold its refresh token. With none, the refusal says the one-time step | `CURSOR_API_KEY`, exported, not on a command line; the variable cursor-agent documents in its own `Authentication required` message | nothing of `~/.config/cursor` or `~/.config/firstmate`; `~/.cursor/chats`, `~/.cursor/projects`, `~/.cursor/cli-config.json`, `~/.cursor/statsig-cache.json` read and written | the round's own | none |
-| codex | `~/.codex/auth.json`, field `tokens.access_token` or `OPENAI_API_KEY`; the file holds `tokens.refresh_token` too. A `CODEX_API_KEY` already set is used as is | a copy of the file with `tokens.refresh_token` emptied, as `auth.json` in the round's own `CODEX_HOME`, so no `config.toml` or profile of the operator's is read either | nothing of `~/.codex/auth.json`; `~/.codex/sessions`, `log`, `history.jsonl`, `version.json`, `models_cache.json` read and written | the round's own | none |
-| gemini | `~/.gemini/oauth_creds.json`, field `access_token`, refused past `expiry_date`; the file holds `refresh_token` too. A `GEMINI_API_KEY` or `GOOGLE_API_KEY` already set is used as is | a copy of the file with `refresh_token` emptied, at `.gemini/oauth_creds.json` under a `HOME` (and `GEMINI_CLI_HOME`) of the round's own, with `GOOGLE_GENAI_USE_GCA=true` when no API key is set. The commands gemini runs inherit that `HOME` | nothing of `~/.gemini/oauth_creds.json`; `~/.gemini/tmp`, `history`, `google_accounts.json`, `installation_id`, `user_id` read and written | the round's own | none |
+| codex | `~/.codex/auth.json`, field `tokens.access_token` or `OPENAI_API_KEY`; the file holds `tokens.refresh_token` too. A `CODEX_API_KEY` already set is used as is only when `config.yaml`'s `billing:` chose api-key for codex; otherwise the round sheds it (T-121) | a copy of the file with `tokens.refresh_token` emptied, as `auth.json` in the round's own `CODEX_HOME`, so no `config.toml` or profile of the operator's is read either | nothing of `~/.codex/auth.json`; `~/.codex/sessions`, `log`, `history.jsonl`, `version.json`, `models_cache.json` read and written | the round's own | none |
+| gemini | `~/.gemini/oauth_creds.json`, field `access_token`, refused past `expiry_date`; the file holds `refresh_token` too. A `GEMINI_API_KEY` or `GOOGLE_API_KEY` already set is used as is only when `config.yaml`'s `billing:` chose api-key for gemini; otherwise the round sheds it (T-121) | a copy of the file with `refresh_token` emptied, at `.gemini/oauth_creds.json` under a `HOME` (and `GEMINI_CLI_HOME`) of the round's own, with `GOOGLE_GENAI_USE_GCA=true` when no API key is set. The commands gemini runs inherit that `HOME` | nothing of `~/.gemini/oauth_creds.json`; `~/.gemini/tmp`, `history`, `google_accounts.json`, `installation_id`, `user_id` read and written | the round's own | none |
 
 claude's round also carries `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`,
 the variable claude documents for turning off its own non-essential network
@@ -3537,8 +3537,8 @@ back to the interactive login. `bin/fm-sandbox.sh login-source` prints one line 
 `bin/fm-canary.sh` reads that line alone, never stderr, and turns the tier
 into `crew-token` or `interactive-fallback` for claude specifically, on its
 status line and as `login_source` in its results; firstmate
-reruns the canary at the merge gate for a change here, and workers do not run
-it themselves. The operator revokes the crew token at claude.ai, Settings,
+runs `fm doctor --sandbox`, which runs the canary, at the merge gate for a
+change here, and workers do not run it themselves. The operator revokes the crew token at claude.ai, Settings,
 Claude Code.
 
 What stays unreachable, whatever the vendor: gh's token (keychain denied,
@@ -3711,9 +3711,10 @@ macOS read a keychain item and the pasteboard fm filled with a nonce; it
 checks that the round can use a loopback port it opened itself, and records
 the result per vendor and version in `state/canary/results.jsonl`. It exits
 0 only when a vendor ran and every vendor that ran started, signed in and
-had every probe blocked. Firstmate runs it on the captain's Mac before the
-merge card of any change to the sandbox and puts its output in the pull
-request; the merge gate reads it with the required check and the gates.
+had every probe blocked. Firstmate runs it on the captain's Mac through
+`fm doctor --sandbox` (13.3) before the merge card of any change to the
+sandbox or an adapter, and puts that output in the pull request; the merge
+gate reads it with the required check and the gates.
 **It runs each vendor exactly as a worker round would (T-127)**, model
 included: it resolves `config.yaml`'s worker model once and hands it in as
 `FM_MODEL` for every vendor's probe, the same way a real worker round would -
@@ -3937,9 +3938,310 @@ uncommitted work is restored from the mirror within the lag; `truncate` and
 `fill-tmp` do not touch enough of a small fixture's files to cross the
 file-or-byte-loss threshold live, which is exactly why generations are kept
 - a slow corruption is rolled back past, not necessarily caught by this
-round's own live restore. Firstmate reruns the canary at the merge gate for
-any change here, the same as the per-vendor probes; workers do not run the
-suite themselves.
+round's own live restore. Firstmate runs `fm doctor --sandbox` at the
+merge gate for any change here: it runs the canary's default sections, this
+one and the per-vendor probes, and fails when the canary does; workers do not
+run the suite themselves.
+
+### 13.3 Setup, doctor and the vendor probe (T-121)
+
+**Why.** On 2026-09-26/27 the captain lost hours to things a doctor would
+have said up front: codex out of quota, found only when a canary round
+failed; gemini's OAuth expired; cursor unable to `agent login` inside the
+sandbox; a stray `bin/__pycache__` making a worktree look dirty. This
+absorbs the doctor part of T-078 without its plugin layout; T-079 now
+depends on this task instead.
+
+**The toolchain.** `mise.toml` pins every tool `bin/ci.sh` or the
+board calls - bun, node, python, jq, gh and shellcheck; jq and gh through
+mise's `ubi:` backend, which has no core plugin for either. node because
+`bin/ci.sh` runs `bunx playwright test`, and playwright's CLI is
+`#!/usr/bin/env node`; shellcheck because `bin/ci.sh` skips its shellcheck
+stage on a host without it, so that host would pass a stage it never ran
+(T-121 round 6's review). `fm-doctor.sh` holds the same list
+(`REQUIRED_PINS`) and reports a `mise.toml` that pins none of one of them,
+not only a tool missing from `PATH`. git and perl (`bin/ci.sh` times its
+suites with perl) are the system's own: doctor checks them, unpinned. `bin/fm-doctor.sh` reads the pins, compares them against
+what is on `PATH` (a dotted, numeric "at least this version" comparison,
+never exact-match), and prints the acceptance's own words beside its symbol -
+`+ ok`, `x missing`, `x wrong version` (older than the pin), or `!
+version unreadable` - with the one command that closes the gap. It installs nothing on its own: `--fix` asks, per tool, before running
+`mise install <tool>@<pin>`. Like every script that starts a child, it
+closes its standard input (`exec < /dev/null`), so no child reads the
+operator's typing; the operator's answers are read from a copy of the
+original stdin kept on fd 9, and only `fm setup`, which asks, is handed it.
+Folded in from T-078: git, herdr and the OS sandbox tool
+(`sandbox-exec`/`bwrap`) are checked the same way, with an OS-specific
+install line for each, since mise does not manage them. Which sandbox tool
+is checked is decided the way `bin/fm-sandbox.sh`'s `host_os` and
+`host_tool` decide it - `FM_SANDBOX_OS`, else `uname`; then
+`FM_SANDBOX_TOOL`, else that platform's own tool - so doctor and the sandbox
+never disagree about the tool a host uses (T-121 round 15). Doctor's and
+setup's suites run on a `PATH` of their own fakes plus links to the host's
+`/usr/bin` and `/bin` with every name doctor or setup asks about taken out,
+so a tool a test leaves out is missing on every host. A vendor CLI that
+is not installed gets the same treatment in the vendor logins section
+below: its own published install line, not only that it is missing - each
+line is the vendor's own documented installer at the time this was
+written, not re-verified live the way the toolchain versions above are.
+
+**Too old.** Where a version matters, doctor has a floor, and a tool older
+than it is `x wrong version` with its install line:
+
+- herdr: 0.9.1, the floor firstmate's round-8 brief for this task gave (it
+  names design.md's host section as its source, but no section here states
+  a herdr version; this is where it is written down now).
+- claude 2.1.284, codex 0.155.1, cursor-agent 2026.09.23: the status check
+  the probe runs has to exist, and these are the versions its recorded
+  transcripts (`tests/fixtures/auth-status`, 2026-09-29) came from. The
+  vendors' changelogs and `--help` histories could not be read where these
+  were recorded (the worker round had no network), so the first version that
+  had each command is not known and each floor may be later than it has to
+  be; a transcript recorded from an older version lowers it.
+  `tests/doctor.test.sh` keeps each floor equal to its transcript's version.
+- gemini: none. The probe runs nothing of gemini's but `--version`, so no
+  version of it is too old for anything firstmate asks of it.
+- git, perl and the OS sandbox tool: none. firstmate uses nothing of git's
+  newer than what every supported OS ships, perl only times suites, and
+  `sandbox-exec` and `bwrap` have no version firstmate depends on.
+
+**The vendor probe asks about the round's login, not the operator's.**
+`bin/fm-auth-probe.sh <vendor>` answers one question: would the login a
+crew round of this vendor gets work right now. So it does not look for a
+login of its own. It resolves the credential exactly as the round will get
+it, through `fm-sandbox.sh`'s own lookup - `fm-sandbox.sh login-env`, which
+runs the same `login` step `run` hands a round its login with: claude's
+crew token, or the interactive fallback (T-126); cursor-agent's
+`firstmate-cursor-api-key` item or `~/.config/firstmate/cursor-api-key` as
+`CURSOR_API_KEY`; codex's `auth.json`, copied less its refresh token into
+a `CODEX_HOME` of the probe's own; gemini's `oauth_creds.json` the same
+way. With no login a round could use, the answer is `unauthenticated` (or
+`expired`, when the lookup says so) with `fm-sandbox.sh`'s own reason, and
+the vendor's CLI is never asked: an operator whose own `agent login` works
+but who never kept a crew key has no working cursor-agent round, and the
+probe says so. Round 4's probe, which asked each CLI about whatever session
+the operator's shell had, answered the wrong question both ways - it
+refused a keychain-only cursor setup that works and admitted an `agent
+login` that no round can use.
+
+With a login, the vendor's own status check runs - `claude auth status`,
+`codex login status`, `cursor-agent status` - with a fixed argv (never
+`FM_ADAPTER_ARGS` or anything else configurable), stdin closed, and an
+environment emptied but for `HOME`, `PATH`, `TMPDIR`, `USER` and `LOGNAME`
+- `HOME` and `TMPDIR` the probe's own, as a round's are (T-128) - plus
+exactly the credentials `login-env` wrote and the vendor's own config
+directory where the adapter points it (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`).
+Credentials are exported, never put on a command line. A variable the
+round sheds (below) is neither counted as a login nor handed to the probe.
+The check has a time limit (`FM_AUTH_PROBE_TIMEOUT`, default 20s; no
+`timeout(1)` is assumed, since macOS has none). It runs in the foreground
+under a small Python runner, never in the background with its pid polled
+(T-151). The runner blocks until the kernel reports the first of three
+events (`fm_lifeline.py`'s `ProcessExit`: kqueue on macOS, a pidfd on
+Linux): the check exits, the limit passes, or the probe dies. When the
+limit passes or the probe dies, the runner ends the check's whole process
+group, SIGTERM and then SIGKILL a second later. So nothing the check started
+outlives the probe, even a probe killed with SIGKILL, where no trap runs. A
+probe sent SIGTERM runs its trap once the runner returns, which is at most
+the limit later. It prints exactly one of `authenticated`,
+`unauthenticated`, `expired`, `quota-exhausted`, `indeterminate`, `timeout`
+or `unavailable` (not installed), the vendor version it probed, and a
+one-line reason in English and Traditional Chinese - never the vendor CLI's
+own output or a secret. claude's status check, verified live, answers with
+one JSON object holding a boolean `loggedIn` (recorded, signed in and
+signed out, in `tests/fixtures/auth-status`), parsed rather than
+pattern-matched; it says whether a credential is there (a
+`CLAUDE_CODE_OAUTH_TOKEN` reads `loggedIn: true` without being checked
+against the service), not whether the service takes it, which is left to
+the round's own outage signatures. codex's and cursor-agent's plain-text
+answers are read with the same kind of phrase list the adapters use
+(`_FM_SIG`), narrowed to what a status check itself says.
+
+gemini is the one vendor whose status is never asked: its docs and every
+transcript this repository carries name no non-interactive status command,
+only the interactive `/auth` command. Round 2 shipped `gemini auth status`,
+guessed by symmetry with codex's `login status`; round 3's review rejected
+it - a guessed argv answers a question nobody asked gemini. So gemini's
+login is resolved like any other vendor's (none is `unauthenticated`, an
+expired one `expired`), and with one present the answer is `indeterminate`
+("gemini's login cannot be verified, so rounds on it are refused"); nothing
+of gemini's runs but `--version`. A later task that finds gemini's real
+status command replaces this, and gemini becomes usable then.
+
+**Only `authenticated` is usable.** `indeterminate` is never read as
+authenticated. `bin/fm-worker.sh` and `bin/fm-review.sh` call the probe for
+every vendor in their chain that it knows (`fm_vendors`,
+`bin/fm-config.sh`: claude, codex, cursor-agent, gemini) before any of them
+sees a prompt (`fm_auth_filter_chain`, `bin/adapters/_lib.sh`). Every
+answer but `authenticated` (`fm_auth_refuses`) - `unauthenticated`,
+`expired`, `quota-exhausted`, `indeterminate`, `timeout`, `unavailable`, or
+no answer at all - refuses the vendor for this round, exactly as
+`fm_run_chain` treats an outage: moved past, never started, and put on the
+board as `vendor_unavailable` naming the status and the probe's reason
+("<vendor>: <status>: <reason>", and "<vendor>：<status>：<reason>"), whose
+authored `en`/`zh-TW` summary the board's log renders like any other
+event's. The chain then moves on to its next vendor. So gemini is
+unavailable until its status can be verified. A vendor the probe does not
+know - `mock`, or a name `fm_run_chain` reports as a configuration error -
+passes through unprobed. A chain with nothing left reaches `fm_run_chain`
+empty, which already returns "every vendor was unavailable" (rc 2).
+`fm doctor` applies the same rule: `+` for `authenticated`, `x` for
+anything else, with the probe's status and reason in English and in
+Traditional Chinese - for gemini, that its login cannot be verified, so
+rounds on it are refused.
+
+**Credentials that outrank the subscription are shed.** claude documents
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK` and
+`CLAUDE_CODE_USE_VERTEX` as switching which account or billing it uses
+ahead of a stored login; codex `OPENAI_API_KEY` and `CODEX_API_KEY`; gemini
+`GEMINI_API_KEY` and `GOOGLE_API_KEY`. Left in the operator's shell for
+their own use, any of them would bill a crew round to it without anyone
+choosing that. One list (`fm_adapter_outranking`, `bin/adapters/_lib.sh`)
+is shed from every round of that vendor unless `config.yaml`'s `billing:`
+block names the vendor for api-key billing (`fm_adapter_shed`,
+`fm_adapter_billing`). cursor-agent has no such list: `CURSOR_API_KEY` is the
+only login this design hands a cursor-agent round.
+
+Every other vendor's credentials are shed too, whatever `billing:` says
+(`fm_adapter_credentials`: a vendor's outranking list plus the variable fm
+hands its login in, `CLAUDE_CODE_OAUTH_TOKEN` or `CURSOR_API_KEY`). A claude
+round has no use for a `CURSOR_API_KEY` or an `OPENAI_API_KEY` left in the
+operator's shell, and until round 8 it inherited both: the policy scrub names
+cloud and GitHub credentials, not the vendors'. So a round's environment
+holds exactly the credential its policy names - claude only
+`CLAUDE_CODE_OAUTH_TOKEN`, cursor-agent only `CURSOR_API_KEY`, codex no
+variable but the copy of `auth.json` in its `CODEX_HOME`, gemini the copy of
+its login file and `GOOGLE_GENAI_USE_GCA=true` - which
+`tests/adapter-contract.test.sh` checks per vendor with every vendor's
+variables ambient at once.
+
+Shedding is done in two places that agree, so a round is never left with
+neither credential. The adapter wraps the vendor's CLI in `env -u` for each
+name (`fm_adapter_env_words`), and passes each to `fm-sandbox.sh` as
+`--shed=<NAME>` (`fm_adapter_confine`). `fm-sandbox.sh` then does not count
+a shed variable as a `given` login - `login_of` skips it - so it reads the
+crew token (or the fallback) and hands it in as `CLAUDE_CODE_OAUTH_TOKEN`,
+and it scrubs the variable from the round itself. Before this, `given` saw
+the ambient `ANTHROPIC_API_KEY`, wrote no token, and the adapter's `env -u`
+then started the round with no credential at all (T-121 round 4's review,
+finding 3). `login-source` and `login-env` take the same `--shed`, so
+`fm-canary.sh`'s login line and the probe read the login exactly as the
+round gets it. `fm doctor` still warns when such a variable is set in the
+operator's shell, because it changes billing for their own interactive use
+too.
+
+For codex and gemini every `given` variable is one of these, so with no
+`billing:` entry their round signs in only with the copy of the login file
+(`~/.codex/auth.json`, `~/.gemini/oauth_creds.json`); an API key alone in
+the shell is no login of the round's, and the round is refused as not
+logged in rather than billed per use. `tests/adapter-contract.test.sh`
+therefore gives codex and gemini a login file in a home of its own, not an
+ambient key: its earlier `CODEX_API_KEY`/`GEMINI_API_KEY` stand-ins were
+shed like any other and left every codex round in the suite unavailable
+(T-121 round 7, CI shard 3).
+
+**First run.** `bin/fm-setup.sh` asks only what firstmate cannot find out
+for itself, each with a recommended default that Enter accepts: which
+installed vendor crews as worker and as reviewer (a different installed one
+recommended for review when two are usable); whether each bills to its
+subscription or per API use; the main repository and base branch (checking
+`gh auth status` and, where `gh` can say, push rights). The board's port and
+the language for cards and reports are not asked: nothing reads either as a
+setting yet, so the captain moved both to T-154 (2026-09-29). `--answers FILE` (`key: value`,
+one per line, read with `fm_cfg`, the same reader as `config.yaml`) answers
+a question without a prompt; a key that file does not name is still asked,
+so a file naming nothing is "every default", which is also what a closed
+stdin gets with no answers file at all. The installed vendors come from
+`fm_vendors`, the one list. It writes `config.yaml` and runs
+`fm doctor --sandbox`. It is never asked to
+overwrite what it does not own: an existing `config.yaml`'s `policy:`,
+`project:`, `projects:`, `notifications:`, `fallback:` blocks and any other
+top-level key survive a re-run untouched, and only what was answered - the
+worker and reviewer vendor, an api-key billing choice, the project's
+repository and base - is added or replaced, through `fm_cfg_set` (`bin/fm-config.sh`, the
+one writer beside the one reader), which creates every block and key along
+a dotted path that is missing and touches nothing else, and changes only a
+value, keeping the line's own spacing and comment (a value already set is
+not touched at all). No model is written - there is no model question, and
+a model name is the vendor's own - and one chosen for another vendor is
+said, not changed. The reviewer's mode is never asked and is kept (diff when
+unset, `fm-review.sh`'s default), with one thing found out rather than
+asked: `fm-review.sh` refuses every round (exit 65) when the mode is `run`
+and the reviewer's adapter has no `# fm:review-run` line, so a kept `run`
+with such a reviewer (codex, cursor-agent, gemini) becomes `diff`, and the
+wizard says so. Round 7's wizard wrote `mode: run` and `model: opus-5`
+whatever was chosen, which is what round 7's review found. It never asks for or stores
+a secret itself: for a key (cursor-agent's crew API key) it prints the exact
+keychain command the operator runs themselves - `fm-config.sh`'s own `hint`
+for that vendor.
+
+`fm doctor` itself hands off to `fm setup` when `config.yaml` does not
+exist yet, rather than asking anything itself.
+
+**Sandbox reality check.** `fm doctor --sandbox` runs `bin/fm-canary.sh`
+(changed to pass the round's `--shed` list to its `login-source` line, and
+to tag every record with a `run` id, `FM_CANARY_RUN` when the caller hands
+one in) and summarises this run's records in `state/canary/results.jsonl`,
+picked by that id, never by "the last N lines". Every line is read from the
+field it describes: `started, authenticated, every probe blocked` only when
+no entry of `probes` is `reached` and every one is `blocked` (or `n/a`); a
+reached probe is `x`, named; an untested one is `x` too, since untested is
+not blocked; `own_loopback` gets a line of its own per vendor - works,
+blocked, or untested. A run that wrote no record is `x`. A failure gets the
+one-time `security add-generic-password` step for cursor, "start gemini
+once outside a round" for an expired login, and the quota reset time when
+the vendor's own message names one (`fm_auth_quota_reset`).
+
+**Repository hygiene.** `.gitignore` ignores `__pycache__/`. What makes
+firstmate's sync skip a worktree is what `git status` shows in it, so `fm
+doctor` asks git, per worktree under `state/worktrees` (`git status
+--porcelain --untracked-files=all`), and flags each untracked build cache
+directory it lists - `__pycache__`, `.pytest_cache`, `.mypy_cache`,
+`.ruff_cache`, `.tox`, `.nox`, `.eslintcache`, `.parcel-cache`, `.turbo`,
+`node_modules/.cache` - once per directory, naming the worktree. One the
+worktree's own `.gitignore` ignores is never shown by git, so it is not
+flagged; ordinary untracked work is never named.
+
+**Evidence.** `tests/auth-probe.test.sh` runs the probe against fake vendor
+CLIs that replay the recorded transcripts in `tests/fixtures/auth-status`
+(`replay.sh` prints a recording's answer and exits with its recorded
+code): `claude auth status` signed in and signed out, `codex login status`
+signed in and signed out, and `cursor-agent status` signed in and signed
+out, each with the CLI version, date and setup in its header. The worker
+round that recorded the others had no network, and there `cursor-agent
+status` answered `Not logged in` even with `CURSOR_API_KEY` set; firstmate
+recorded the signed-in answer (`✓ Logged in as …`, exit 0) on the host,
+outside any round, with the crew key handed in as `CURSOR_API_KEY`, as a
+round gets it. So `cursor-agent status` does read `CURSOR_API_KEY`, but
+only a host that reaches cursor.com can tell. The suite checks the fixed
+argv, the closed stdin, the scrubbed environment, the timeout, and that
+nothing of the vendor's own output or a secret reaches this script's own
+stdout. The operator's home and keychain are stand-ins, and each fake
+answers "signed in" only when handed the credential a round gets: a
+keychain-only crew Cursor key is `authenticated`; an `agent login` with no
+crew key is refused without cursor-agent being asked; claude probes the
+crew token (or the interactive fallback) and never an ambient
+`ANTHROPIC_API_KEY` it sheds, unless `billing:` chose it; codex probes the
+round's copy of `auth.json`, less its refresh token. gemini's fake would
+answer if asked, and never is: with a login present gemini is
+`indeterminate`. `tests/worker.test.sh` and `tests/review.test.sh` check
+that an unauthenticated, an `indeterminate` (gemini) and a `timeout`
+vendor are each refused, with `vendor_unavailable` naming the status, and
+that the chain's next vendor runs instead.
+`tests/sandbox.test.sh` checks the real `given` path: with `--shed`, an
+ambient `ANTHROPIC_API_KEY` is not the login, the crew token is handed in,
+and the key never reaches the round; `tests/adapter-contract.test.sh`
+checks the same through the claude adapter, with no token handed in by the
+caller. `tests/doctor.test.sh` and `tests/setup.test.sh` run against a
+`PATH` missing a tool and one with a wrong version, an answers file and
+"every default", and a re-run against an existing `config.yaml`.
+Every suite that starts a real vendor's round through `fm-worker.sh`,
+`fm-review.sh` or `fm-herdr.py` meets the probe before that round:
+`tests/herdr.test.sh` gives codex and gemini a login file in a home of its
+own (a key in the shell is shed, so it is no login), and its fake CLIs
+answer `--version` and their status check by replaying the same
+recordings - claude and codex signed in, cursor-agent as recorded, not
+logged in, so its rounds there are refused like gemini's.
 
 ---
 

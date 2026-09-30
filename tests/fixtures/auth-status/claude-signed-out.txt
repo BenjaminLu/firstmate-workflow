@@ -1,0 +1,16 @@
+# recorded: yes
+# command: claude auth status
+# cli: 2.1.284 (Claude Code)
+# date: 2026-09-29
+# host: macOS, Darwin 24.6.0, inside a T-121 worker round's sandbox
+# setup: env -i HOME=<scratch> PATH=... CLAUDE_CONFIG_DIR=<scratch>/cc, no token and no stored login
+# redacted: the two scratch directory paths, to /tmp/fm-probe
+# exit: 1
+{
+  "loggedIn": false,
+  "authMethod": "none",
+  "apiProvider": "firstParty",
+  "analyticsDisabled": false,
+  "projectsDirectory": "/tmp/fm-probe/cc/projects",
+  "configDirectory": "/tmp/fm-probe/cc"
+}
