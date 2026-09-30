@@ -552,6 +552,17 @@ check_runs_of() {
 # required check, which the prompt then says. What is still running when the
 # bound is reached is said in the prompt, by name.
 CI_WAITED=0; CI_PENDING=''
+# These are phase transitions, not heartbeats. Emit directly even under
+# Herdr (its activity helper has no phase field), without coalescing away
+# a changed check list or the transition back to the review.
+emit_ci_phase() {
+  local phase="$1" en="$2" tw="$3" bound="${4:-false}" data
+  data="$(jq -cn --arg phase "$phase" --arg en "$en" --arg tw "$tw" \
+    --arg pending "$CI_PENDING" --argjson bound "$bound" \
+    '{phase:$phase,window_expected:($phase != "waiting_ci"),ci_pending:$pending,
+      ci_wait_bound:$bound,activity:{en:$en,"zh-TW":$tw}}')"
+  FM_CREW_STATUS_SECS=0 emit_once --type crew_status --data "$data" --en "$en" --tw "$tw" || true
+}
 ci_wait() {
   local sha names name runs status start now told=''
   sha="$R_HEAD"; [ -n "$sha" ] || return 0
@@ -567,11 +578,16 @@ ci_wait() {
       [ "$status" = completed ] || CI_PENDING="${CI_PENDING:+$CI_PENDING, }$name"
     done <<<"$names"
     now="$(date +%s)"; CI_WAITED=$((now - start))
-    [ -n "$CI_PENDING" ] && [ "$CI_WAITED" -lt "$CI_WAIT" ] || break
-    if [ -z "$told" ]; then
-      told=1
-      emit_status "Waiting for CI on $TASK's head before the review: $CI_PENDING" \
+    [ -n "$CI_PENDING" ] || break
+    if [ "$CI_PENDING" != "$told" ]; then
+      told="$CI_PENDING"
+      emit_ci_phase waiting_ci "Waiting for CI on $TASK's head before the review: $CI_PENDING" \
         "審核前等待 $TASK 的 CI 完成：$CI_PENDING"
+    fi
+    if [ "$CI_WAITED" -ge "$CI_WAIT" ]; then
+      emit_ci_phase waiting_ci "CI wait bound reached on $TASK after ${CI_WAITED}s; still pending: $CI_PENDING. Starting review." \
+        "$TASK 的 CI 等待已達上限（${CI_WAITED} 秒）；仍待完成：$CI_PENDING。即將開始審核。" true
+      break
     fi
     sleep "$(( CI_WAIT - CI_WAITED < CI_POLL ? CI_WAIT - CI_WAITED : CI_POLL ))"
   done
@@ -860,6 +876,11 @@ if [ "$REVIEW_MODE" = run ]; then
     emit --review-outcome infrastructure_error --type review_failed \
          --en "review round $ROUND could not start" --tw "第 $ROUND 輪審核無法開始"
     rm -rf "$work"; exit 65; }
+fi
+# Preparation is complete: the adapter (and its window) starts now. Also
+# leave the waiting phase here when the CI wait reached its bound.
+if [ -n "$PR" ] && { [ "$CI_WAITED" -gt 0 ] || [ -n "$CI_PENDING" ]; }; then
+  emit_ci_phase review "Review adapter starting on $TASK" "開始審核 $TASK"
 fi
 if [ "$unsandboxed" = 1 ]; then
   # ahead of every attempt's offset, so no verdict is read from it

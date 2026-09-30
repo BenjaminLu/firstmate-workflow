@@ -76,11 +76,12 @@ const readEvents = (): Event[] => {
 // an actor on a blocked task reached the page as `st-blocked`, which no
 // stylesheet rule and no dictionary key covers.
 const DECK_LIMIT = 24;   // what the ship holds; the page reads it back
-type CrewState = "queued" | "working" | "gate" | "review" | "captain" | "unknown";
+type CrewState = "queued" | "working" | "gate" | "review" | "waiting_ci" | "captain" | "unknown";
 type Crew = {
   id: string;
   role: "firstmate" | "worker" | "reviewer";
   state: CrewState;
+  window_expected?: boolean;
   task: string | null;
   title: string | null;
   // the project of the task it is on; none for a taskless firstmate
@@ -898,8 +899,11 @@ const state = (only: string | null = null) => {
     const description = authored(data.activity)
       || (e.type === 'dispatched' || e.type === 'review_opened' ? authored(e.summary) : null);
     if (description) activity.set(actor,description);
-    // crew_status refreshes activity/progress only; it must not invent a phase.
-    const phase = phaseOf(e.type);
+    // Ordinary heartbeats retain the phase. The review launcher explicitly
+    // marks its CI wait and the return to review; no actor-name inference.
+    const phase = e.type === 'crew_status' && roleOf(actor,e) === 'reviewer'
+      && (data.phase === 'waiting_ci' || data.phase === 'review')
+      ? data.phase : phaseOf(e.type);
     if (phase) phases.set(actor,e.type === 'dispatched'
       ? (roleOf(actor,e) === 'reviewer' ? 'review' : 'working')
       : phase);
@@ -988,6 +992,7 @@ const state = (only: string | null = null) => {
       // an actor cannot silently turn every reviewer into a worker
       role: roles.get(actor) || roleOf(actor, e),
       state: phases.get(actor) || 'unknown',
+      window_expected: phases.get(actor) !== 'waiting_ci',
       task, title: t?.title ?? null,
       project: project || null,
       crew_name: named,
