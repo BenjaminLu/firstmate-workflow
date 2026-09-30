@@ -46,6 +46,7 @@ fm-cleanup 2
 fm-decide 10
 fm-diagram 4
 fm-dispatch 3
+fm-doctor 1
 fm-emit 8
 fm-failfirst 3
 fm-gate 5
@@ -57,6 +58,7 @@ fm-reconcile 3
 fm-review 7
 fm-run 2
 fm-session 3
+fm-setup 2
 fm-sync-prs 2
 fm-worker 5"
 
@@ -139,7 +141,7 @@ while read -r name want; do
     fi
   done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "83" "$total" "every pinned flag and all nine fm option cases were exercised"
+assert_eq "86" "$total" "every pinned flag and all nine fm option cases were exercised"
 
 # A script that grows an option loop has to be pinned here too, and the
 # corpus is the one bin/ci.sh judges - literally, out of
@@ -191,7 +193,7 @@ assert_eq "" "$(printf '%s\n' "$allsh" | xargs grep -l 'getopts\|OPTARG' || true
 run_capped 6 bash "$ROOT/bin/fm-emit.sh" --no-such-flag
 assert_eq "64" "$code" "an unknown flag is refused too"
 assert_contains "$said" "unknown argument" "and says so"
-# Seven scripts get their guard from a sourced function, and a
+# Twelve scripts get their guard from a sourced function, and a
 # command-not-found under `set -uo pipefail` carries on - the exact hazard
 # the assertions stage exists to catch. So the load has to be hard: if the
 # library will not load, the script must not reach its option loop.
@@ -214,7 +216,7 @@ while IFS= read -r f; do
   assert_contains "$said" "fm-config.sh" "and says which library"
   rm -rf "$tmp"
 done < <(fm_shell_corpus "$ROOT/bin")
-assert_eq "10" "$sourced" "ten scripts take their guard from the library"
+assert_eq "12" "$sourced" "twelve scripts take their guard from the library"
 
 # And the other half of the same number, because two comments say it is
 # pinned here and until now it was not: the scripts that deliberately

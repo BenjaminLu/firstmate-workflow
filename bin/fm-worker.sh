@@ -16,6 +16,12 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
+# fm_auth_filter_chain/fm_auth_probe (T-121): a round never runs on a login
+# it did not check.
+_fm_alib="$(dirname "${BASH_SOURCE[0]}")/adapters/_lib.sh"
+[ -r "$_fm_alib" ] || { echo "${0##*/}: missing $_fm_alib" >&2; exit 70; }
+# shellcheck source=bin/adapters/_lib.sh
+. "$_fm_alib"
 fm_args=("$@")
 
 REPO="$(fm_default_repo)"; TASK=''; VENDOR=''; NAME=''; PR=''
@@ -1463,6 +1469,22 @@ if fm_crew_hatch fm-worker; then
 else
   emit_status "Adapter running on $TASK" "adapter 正在執行 $TASK"
 fi
+# A crew round never runs on a login it did not check (T-121): every vendor
+# in the chain that this probe recognises has the login its round would get
+# checked right now, before any of them sees a prompt. Anything but
+# `authenticated` - unauthenticated, expired, out of quota, or a login the
+# probe could not confirm (gemini, a timeout) - is refused here, with the
+# probe's status and reason on the board, rather than by starting inside
+# the sandbox and failing there; the chain moves on to the next vendor.
+auth_notes_file="$(scratch_new)" || exit 70
+scratch_add "$auth_notes_file"
+worker_chain="$(fm_auth_filter_chain "${FM_CODE_ROOT:-$REPO}" "$(fm_vendor_chain worker "$VENDOR")" "$auth_notes_file")"
+while IFS='|' read -r auth_v auth_status auth_en auth_tw; do
+  [ -n "$auth_v" ] || continue
+  echo "fm-worker: $auth_v: $auth_status: $auth_en" >&2
+  emit --type vendor_unavailable --en "$auth_v: $auth_status: $auth_en" \
+    --tw "${auth_v}：${auth_status}：$auth_tw" </dev/null
+done < "$auth_notes_file"
 # Kept outside the sandbox for as long as the adapter runs (T-128): caught
 # while the round is still going, not only once it ends.
 mirror_watch_start
@@ -1471,7 +1493,7 @@ mirror_watch_start
   if [[ "${FM_WORKER_TASK_LOCK_FD:-}" =~ ^[0-9]+$ ]]; then
     eval "exec ${FM_WORKER_TASK_LOCK_FD}>&-"
   fi
-  fm_run_chain "${FM_CODE_ROOT:-$REPO}/bin/adapters" "$(fm_vendor_chain worker "$VENDOR")" \
+  fm_run_chain "${FM_CODE_ROOT:-$REPO}/bin/adapters" "$worker_chain" \
     "$prompt" "$tree" "$log" worker_did_work
   chain_rc=$?
   declare -p FM_VENDOR_USED FM_VENDOR_SKIPPED FM_VENDOR_MISREAD FM_VENDOR_UNKNOWN FM_RUN_LOG_OFF \

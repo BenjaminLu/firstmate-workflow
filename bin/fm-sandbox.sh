@@ -22,6 +22,17 @@
 #          (keychain:<service>, secret:<service>, file:<path>, env:<name>,
 #          auth:<path>), never the login itself. exit 77 when the operator
 #          is not logged in to it, or a login that exists fails to read
+#   fm-sandbox.sh login-env --policy=<file> --vendor=<name> --tmp=<dir> --ctl=<dir>
+#       -> the login a round would be handed, resolved exactly as `run`
+#          resolves it: <ctl>/env (mode 600) holds every NAME=VALUE the round
+#          gets, a `given` variable it would inherit included, and a login
+#          file's copy goes under <tmp> where `run` puts it. Prints the
+#          login-source line; exit 77 as `run` refuses. For fm-auth-probe.sh
+#          (T-121), which asks the vendor about this login and no other.
+#   --shed=<NAME> (repeatable; login-source, login-env, run, plain): a
+#          variable the round goes without (T-121: one that would outrank
+#          its login, unless config.yaml's billing: chose it). It never
+#          counts as a `given` login and never reaches the round.
 #   fm-sandbox.sh run     --policy=<file> --root=<dir> [--tmp=<dir>] [--write=<dir>]... [--vendor=<name>]
 #                         [--blocked=<file>] [--started=<file>] [--ctl=<dir>] -- <command> [args...]
 #   fm-sandbox.sh plain   --policy=<file> [--tmp=<dir>] [--vendor=<name>] [--started=<file>] [--ctl=<dir>]
@@ -643,8 +654,12 @@ def login_of(p, vendor, os_):
             if os.path.isfile(a):
                 return 'auth:' + a, None, None, None
         return None, 'no login file (%s)' % (', '.join(own.get('auth', [])) or 'none named'), None, None
+    # A variable the round sheds (--shed, T-121) is no login of the round's:
+    # counted as `given`, nothing would be read or handed in, and the
+    # adapter's own `env -u` would then start the round with no credential.
+    shed = set((os.environ.get('FM_SANDBOX_SHED') or '').split())
     for name in spec.get('given', []):
-        if os.environ.get(name):
+        if name not in shed and os.environ.get(name):
             return 'env:' + name, None, None, None
     source, token, item, absent = login_tier(vendor, spec, os_)
     fallback = spec.get('fallback')
@@ -708,16 +723,17 @@ def login(p, vendor, os_, where, home):
     launcher to export; a login file's copy, less its refresh token, goes to <home>/<copy>, in
     the round's own temp directory. <where>/warn holds a line to say, in
     the round's log and on the board, when a `fallback` tier answered
-    (T-126). Exit 77 when the operator is not logged in to <vendor>."""
+    (T-126). Exit 77 when the operator is not logged in to <vendor>.
+    -> (source, warn): where the login came from, and the fallback line."""
     spec = p['vendors'].get(vendor, {}).get('login') or {}
     if not spec:
-        return
+        return None, None
     source, token, _, warn = login_of(p, vendor, os_)
     if source is None:
         print('fm-sandbox: %s is not logged in: %s' % (vendor, token), file=sys.stderr)
         sys.exit(77)
     if token is None:
-        return
+        return source, warn
     to = spec.get('to', '')
     os.makedirs(where, mode=0o700, exist_ok=True)
     if warn:
@@ -740,6 +756,7 @@ def login(p, vendor, os_, where, home):
         fd = os.open(os.path.join(where, 'env'), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, 'w') as f:
             f.write('%s=%s\n' % (to[len('env:'):], token))
+    return source, warn
 
 
 def proxy(p, vendor, portfile, blocked, sock):
@@ -863,6 +880,25 @@ def main():
     if mode == 'login':
         # login <vendor> <os> <dir> <round tmp>
         login(p, sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6])
+        return
+    if mode == 'login-env':
+        # login-env <vendor> <os> <dir> <round tmp>: the round's own `login`,
+        # and a `given` variable the round would inherit written beside
+        # what `login` hands in, so <dir>/env is every credential the round
+        # gets and nothing else (T-121's probe). The tier line as
+        # login-source prints it; never the login itself.
+        try:
+            os.remove(os.path.join(sys.argv[5], 'env'))
+        except FileNotFoundError:
+            pass
+        source, warn = login(p, sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6])
+        if source and source.startswith('env:'):
+            name = source[len('env:'):]
+            os.makedirs(sys.argv[5], mode=0o700, exist_ok=True)
+            fd = os.open(os.path.join(sys.argv[5], 'env'), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            with os.fdopen(fd, 'w') as f:
+                f.write('%s=%s\n' % (name, os.environ[name]))
+        print('tier=%s source=%s' % ('fallback' if warn else 'primary', source or 'none'))
         return
     # profile <os> <root> <tmp> <vendor> <port> <listening> <socket> [write...]
     os_, root, tmp, vendor, port, listening, sock = sys.argv[3:10]
@@ -998,10 +1034,11 @@ loopback_reached() {
 # --- the option loop: every flag is --name=value --------------------------
 cmd="${1-}"; [ $# -gt 0 ] && shift
 policy=''; root=''; vendor=''; blocked=''; port=''; tmp=''; listening=''; started=''; ctl=''
-writes=()
+writes=(); shed=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --policy=*) policy="${1#*=}"; shift ;;
+    --shed=*) shed+=("${1#*=}"); shift ;;
     --ctl=*) ctl="${1#*=}"; shift ;;
     --started=*) started="${1#*=}"; shift ;;
     --root=*) root="${1#*=}"; shift ;;
@@ -1047,7 +1084,14 @@ case "$cmd" in
     python3 -c "$SB_PY" decide "$policy" "$vendor" "$1"; exit $? ;;
   login-source)
     required policy "$policy"; required vendor "$vendor"
-    python3 -c "$SB_PY" login-source "$policy" "$vendor" "$(host_os)"; exit $? ;;
+    FM_SANDBOX_SHED="${shed[*]-}" python3 -c "$SB_PY" login-source "$policy" "$vendor" "$(host_os)"; exit $? ;;
+  login-env)
+    required policy "$policy"; required vendor "$vendor"; required tmp "$tmp"; required ctl "$ctl"
+    os="$(host_os)"
+    FM_SANDBOX_SHED="${shed[*]-}" python3 -c "$SB_PY" login-env "$policy" "$vendor" "${os:-none}" \
+      "$ctl" "$tmp" || exit $?
+    if [ -s "$ctl/warn" ]; then say "$(cat "$ctl/warn")"; rm -f "$ctl/warn"; fi
+    exit 0 ;;
   profile)
     required policy "$policy"; required root "$root"
     os="$(host_os)"; [ -n "$os" ] || { say "no sandbox profile for this platform"; exit 69; }
@@ -1055,7 +1099,7 @@ case "$cmd" in
       ${writes[@]+"${writes[@]}"}
     exit $? ;;
   run|plain) ;;
-  *) echo "usage: fm-sandbox.sh os|covers|profile|decide|login-source|run|plain --policy=<file> ..." >&2; exit 64 ;;
+  *) echo "usage: fm-sandbox.sh os|covers|profile|decide|login-source|login-env|run|plain --policy=<file> ..." >&2; exit 64 ;;
 esac
 
 required policy "$policy"
@@ -1075,6 +1119,9 @@ scrub=(env)
 while IFS= read -r v; do
   [ -n "$v" ] && scrub+=(-u "$v")
 done < <(python3 -c "$SB_PY" scrub "$policy") || exit 65
+# what the round sheds (--shed, T-121) never reaches it, whatever the
+# adapter's own `env -u` does: login_of did not count it as a login either
+for v in ${shed[@]+"${shed[@]}"}; do scrub+=(-u "$v"); done
 read -r procs cpu < <(python3 -c "$SB_PY" limits "$policy") || exit 65
 scrub+=(FM_IN_ROUND=1)
 
@@ -1118,7 +1165,7 @@ if [ -n "$vendor" ]; then
   # a login file's copy goes in the round's own temp directory, so the
   # round has one before the login is read
   if [ -z "$tmp" ]; then tmp="$work/tmp"; mkdir -p "$tmp" || exit 70; fi
-  python3 -c "$SB_PY" login "$policy" "$vendor" "${os:-none}" "$work/login" "$tmp" || exit $?
+  FM_SANDBOX_SHED="${shed[*]-}" python3 -c "$SB_PY" login "$policy" "$vendor" "${os:-none}" "$work/login" "$tmp" || exit $?
   if [ -s "$work/login/warn" ]; then
     warn_text="$(cat "$work/login/warn")"; rm -f "$work/login/warn"
     say "$warn_text"

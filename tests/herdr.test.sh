@@ -31,6 +31,25 @@ spec.loader.exec_module(m)
 # loop returns the moment the condition holds, so the width costs nothing on
 # a quiet machine. Negative windows (nothing happens within N) are not this.
 WAIT = 120
+
+# fm-worker.sh and fm-review.sh ask a vendor's own status check about the
+# round's login before a round (T-121), and a fake vendor CLI answers it,
+# and --version, exactly as the real one did in its recorded transcript
+# (tests/fixtures/auth-status) before the fake's own round behaviour runs.
+# claude and codex answer signed in; cursor-agent has no recorded signed-in
+# answer, so it answers as recorded - not logged in - and its rounds are
+# refused, as gemini's are (no documented status command at all).
+_fixtures = root / 'tests/fixtures/auth-status'
+def _status_prelude(argv, fixture):
+    return ('import subprocess as _fm_s, sys as _fm_y\n'
+            '_fm_r, _fm_f = %r, %r\n'
+            'if _fm_y.argv[1:] == ["--version"]: raise SystemExit(_fm_s.call([_fm_r, _fm_f, "--version"]))\n'
+            'if _fm_y.argv[1:] == %r: raise SystemExit(_fm_s.call([_fm_r, _fm_f]))\n'
+            % (str(_fixtures / 'replay.sh'), str(_fixtures / (fixture + '.txt')), argv))
+STATUS_PRELUDE = {'claude': _status_prelude(['auth', 'status'], 'claude-signed-in'),
+                  'codex': _status_prelude(['login', 'status'], 'codex-signed-in'),
+                  'cursor-agent': _status_prelude(['status'], 'cursor-agent-signed-out')}
+
 def eventually(predicate, seconds=WAIT):
     end = time.monotonic() + seconds
     while True:
@@ -733,10 +752,23 @@ class Entrypoints(unittest.TestCase):
         (tool/'bwrap').chmod(0o755)
         self.env.update(FM_SANDBOX_OS='linux', FM_SANDBOX_TOOL=str(tool/'bwrap'))
         # Every vendor's round is handed the operator's login (T-117) and
-        # refused without one. These say one is already in the environment,
-        # so the runner's own keychain and home are never read.
-        self.env.update(CLAUDE_CODE_OAUTH_TOKEN='fm-suite-token', CURSOR_API_KEY='fm-suite-key',
-                        CODEX_API_KEY='fm-suite-key', GEMINI_API_KEY='fm-suite-key')
+        # refused without one, and fm-worker.sh and fm-review.sh ask the
+        # vendor's own status check about that login before a round (T-121).
+        # claude's crew token and cursor-agent's key are the variables fm
+        # hands in, so these say one is already in the environment. codex's
+        # and gemini's round login is a copy of their login file - a key in
+        # the shell is one the round sheds - so the fixture's own HOME holds
+        # those files, and the runner's keychain and home are never read.
+        home=self.repo/'home'
+        (home/'.codex').mkdir(parents=True); (home/'.gemini').mkdir()
+        (home/'.codex/auth.json').write_text(json.dumps(dict(OPENAI_API_KEY=None,tokens=dict(
+            id_token='id-suite',access_token='at-suite',refresh_token='rt-suite',account_id='acct'))))
+        (home/'.gemini/oauth_creds.json').write_text(json.dumps(dict(access_token='at-suite',refresh_token='rt-suite',
+            expiry_date=int((time.time()+86400)*1000))))
+        for f in (home/'.codex/auth.json',home/'.gemini/oauth_creds.json'): f.chmod(0o600)
+        for k in ('CODEX_API_KEY','OPENAI_API_KEY','GEMINI_API_KEY','GOOGLE_API_KEY','ANTHROPIC_API_KEY'):
+            self.env.pop(k,None)
+        self.env.update(HOME=str(home),CLAUDE_CODE_OAUTH_TOKEN='fm-suite-token',CURSOR_API_KEY='fm-suite-key')
         self.executable('herdr', r'''
 import json, os, pathlib, subprocess, sys, uuid
 r=pathlib.Path(os.environ['FM_TEST_ROOT']); a=sys.argv[1:]
@@ -891,7 +923,7 @@ elif a[0]=='branch': print('t-035-test')
 ''')
         self.executable('gh', "import sys\nprint('https://example.invalid/pull/35' if 'create' in sys.argv else '[]')\n")
     def executable(self, name, content):
-        p=self.fake/name; p.write_text('#!'+sys.executable+'\n'+content); p.chmod(0o755)
+        p=self.fake/name; p.write_text('#!'+sys.executable+'\n'+STATUS_PRELUDE.get(name,'')+content); p.chmod(0o755)
     def invoke(self, script, args=(), **env):
         return subprocess.run(['bash',str(self.repo/'bin'/script),*args,'--repo',str(self.repo)],
                               env=dict(self.env,**env),capture_output=True,text=True,timeout=WAIT)
@@ -1586,20 +1618,37 @@ else: sys.exit('Error: Unknown command '+(a[0] if a else ''))
         self.assertEqual(8,len(list(self.repo.glob('reviewer-*.prompt'))), 'the fallback model still starts')
         self.assertFalse(any(c[:2] in (['pane','close'],['tab','close']) for c in calls))
     def test_all_supported_cli_formats_inject_roles_and_keep_final(self):
+        # Only a vendor whose round's login its own status check confirms
+        # runs (T-121): claude's recording says signed in. cursor-agent's
+        # recorded answer is "Not logged in" and gemini has no status check,
+        # so each is refused before its CLI sees a prompt, with the reason
+        # on the board; their JSON formats are adapter-contract's to check.
         for vendor in ('claude','cursor-agent','gemini'):
             self.executable(vendor, r'''
-import json,os,sys
+import json,os,pathlib,sys
 prompt=sys.stdin.read(); assert os.environ['FM_ACTOR'] in prompt
+pathlib.Path(os.environ['FM_TEST_ROOT'],'prompted-'+pathlib.Path(sys.argv[0]).name).touch()
 assert 'explicitly dispatched reviewer' in prompt
 assert '--output-format' in sys.argv and 'json' in sys.argv
 final='REJECT:T-035\nREVIEWER_COMPLETE:T-035'
 print(json.dumps({'type':'result','result':final,'response':final}))
 ''')
             answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work','--vendor',vendor])
-            self.assertEqual(0,answer.returncode,answer.stderr)
-            self.assertIn('REJECT:T-035',answer.stdout)
-        self.assertEqual(3,len(self.results()))
-        self.assertEqual({'completed'},{json.loads(p.read_text())['status'] for p in self.results()})
+            if vendor=='claude':
+                self.assertEqual(0,answer.returncode,answer.stderr)
+                self.assertIn('REJECT:T-035',answer.stdout)
+                self.assertTrue((self.repo/'prompted-claude').exists())
+            else:
+                self.assertNotEqual(0,answer.returncode,answer.stderr)
+                self.assertFalse((self.repo/('prompted-'+vendor)).exists(),vendor+' never sees a prompt')
+                log=self.repo/'state/events.jsonl'
+                events=[json.loads(l) for l in (log.read_text().splitlines() if log.exists() else []) if l.strip()]
+                refused=[e['summary'] for e in events if e.get('type')=='vendor_unavailable']
+                status='indeterminate' if vendor=='gemini' else 'unauthenticated'
+                self.assertTrue(any(s['en'].startswith(vendor+': '+status+': ') for s in refused),refused)
+                self.assertTrue(any(s['zh-TW'].startswith(vendor+'：') for s in refused),refused)
+        statuses=[json.loads(p.read_text())['status'] for p in self.results()]
+        self.assertEqual(1,statuses.count('completed'),statuses)
     def test_real_dispatch_and_run_paths_use_managed_adapters(self):
         # Production dispatch launches the production worker; only git/gh/model
         # boundaries are fake. No external account is used; the only captain

@@ -42,6 +42,14 @@
 # little grammar. Each one is a way a CLI reports that it could not run.
 _FM_SIG='authentication failed|authentication required|authentication error|error authenticating|authenticate failed|not authenticated|unauthori[sz]ed|401 unauthorized|403 forbidden|429 too many requests|status 401|status 403|status 429|too many requests,|not logged in|please run [a-z0-9 ._-]{0,30}login|please use [a-z0-9 ._-]{0,30}login|login required|invalid api key|missing api key|no api key|expired api key|api key not set|api key not found|api key not configured|api key not valid|invalid credentials|missing credentials|expired credentials|credentials could not|quota exceeded|quota exhausted|out of quota|rate limit exceeded|rate limit reached|rate-limited|rate limited|network error:|network error while|network unreachable|network failure|fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN'
 
+# fm_cfg_in (T-121's billing: block) is read straight from bin/fm-config.sh,
+# not reimplemented here: one reader for config.yaml, as fm-config.sh's own
+# header says.
+_fm_alib_config="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)/fm-config.sh"
+[ -r "$_fm_alib_config" ] || { echo "adapters/_lib.sh: missing $_fm_alib_config" >&2; exit 70; }
+# shellcheck source=bin/fm-config.sh
+. "$_fm_alib_config"
+
 # Called after argument validation and before touching a model. The Python
 # runner invokes this same adapter inside a real pane with context-ready=1.
 fm_adapter_context() {
@@ -138,6 +146,168 @@ fm_adapter_review_env() {
   while IFS= read -r v; do
     case "$v" in FM_*|HERDR_*|GIT_*|GH_*|GITHUB_TOKEN) printf -- '-u\n%s\n' "$v" ;; esac
   done < <(compgen -e)
+}
+
+# --- credentials that would outrank the round's own login (T-121) ----------
+# claude documents ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN,
+# CLAUDE_CODE_USE_BEDROCK and CLAUDE_CODE_USE_VERTEX as switching which
+# account or billing claude uses, ahead of a stored login; codex's
+# OPENAI_API_KEY and CODEX_API_KEY do the same ahead of a ChatGPT plan
+# login; gemini's GEMINI_API_KEY and GOOGLE_API_KEY do it ahead of the
+# Google account flow. Set in the operator's own shell for their own
+# interactive use - not chosen for the crew - any of them would silently
+# outbid the one login fm hands a round in, which is how a captain's own
+# ANTHROPIC_API_KEY could bill their crew's rounds to a personal key without
+# anyone asking for that (2026-09-26/27). cursor-agent has no such variable
+# here: CURSOR_API_KEY is not a credential that outranks another login, it
+# is the only login this design hands a cursor-agent round at all, so
+# nothing of cursor-agent's is ever shed.
+#
+# config.yaml's billing: block is the one place the operator opts a vendor
+# into api-key billing; fm_cfg_in reads it without a heredoc, so an adapter
+# reached with a plain policy file and no engine root still reads it.
+# FM_ADAPTER_CONFIG names a config.yaml to read instead of the engine's own,
+# the same way FM_POLICY stands in for a resolved policy: nothing sets it
+# but a test, which otherwise has no way to hand an adapter a billing choice
+# without editing the real installation's config.yaml out from under it.
+fm_adapter_billing() {  # fm_adapter_billing <vendor> -> "api-key" or ""
+  local vendor="$1" mode='' cfg="${FM_ADAPTER_CONFIG:-$_fm_engine/config.yaml}"
+  if [ -f "$cfg" ]; then
+    mode="$(fm_cfg_in billing "$vendor" "$cfg" 2>/dev/null)"
+  fi
+  case "$mode" in api-key) printf 'api-key\n' ;; *) printf '\n' ;; esac
+}
+
+# fm_adapter_env_words <vendor> <var>... -> "env" then "-u NAME" lines that
+# must run the vendor's CLI: a run-mode review's launcher scrub
+# (fm_adapter_review_env) plus <var>... unless config.yaml's billing: block
+# named <vendor> (fm_adapter_billing). Nothing at all when neither applies,
+# so an ordinary round with nothing to shed adds no wrapper.
+fm_adapter_env_words() {
+  local vendor="$1"; shift
+  local words=() v
+  if [ "${FM_RUN_REVIEW:-}" = 1 ]; then
+    while IFS= read -r v; do [ "$v" = env ] || words+=("$v"); done < <(fm_adapter_review_env)
+  fi
+  if [ "$(fm_adapter_billing "$vendor")" != api-key ]; then
+    for v in "$@"; do words+=(-u "$v"); done
+  fi
+  [ "${#words[@]}" -eq 0 ] || { printf 'env\n'; printf '%s\n' "${words[@]}"; }
+}
+
+# fm_adapter_outranking <vendor> -> the variables above, one per line: the
+# one list the adapters shed, fm-sandbox.sh does not count as a login
+# (--shed) and fm-auth-probe.sh probes without.
+fm_adapter_outranking() {
+  case "$1" in
+    claude) printf '%s\n' ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX ;;
+    codex)  printf '%s\n' OPENAI_API_KEY CODEX_API_KEY ;;
+    gemini) printf '%s\n' GEMINI_API_KEY GOOGLE_API_KEY ;;
+  esac
+}
+
+# fm_adapter_credentials <vendor> -> every variable that carries a login of
+# <vendor>'s, one per line: its outranking list above, and the variable fm
+# hands its round the login in (bin/fm-config.sh's VENDORS `to`/`given`).
+fm_adapter_credentials() {
+  fm_adapter_outranking "$1"
+  case "$1" in
+    claude)       printf '%s\n' CLAUDE_CODE_OAUTH_TOKEN ;;
+    cursor-agent) printf '%s\n' CURSOR_API_KEY ;;
+  esac
+}
+
+# fm_adapter_shed <vendor> -> the variables a round of <vendor> goes
+# without, one per line: its own outranking list, unless config.yaml's
+# billing: block chose api-key billing for it, and every other vendor's
+# credentials whatever billing says - a claude round has no use for a
+# CURSOR_API_KEY or an OPENAI_API_KEY left in the operator's shell, so the
+# round's environment holds exactly the credential its own policy names.
+fm_adapter_shed() {
+  local v
+  [ "$(fm_adapter_billing "$1")" = api-key ] || fm_adapter_outranking "$1"
+  while IFS= read -r v; do
+    [ "$v" = "$1" ] || fm_adapter_credentials "$v"
+  done < <(fm_vendors)
+}
+
+# --- a crew round never runs on a login it did not check (T-121) -----------
+# fm-auth-probe.sh resolves the login exactly as a round will get it, through
+# fm-sandbox.sh's own lookup, and asks the vendor's CLI about that login
+# alone - not about the operator's own session. fm-worker.sh and
+# fm-review.sh call these before a round ever reaches a vendor's CLI, so a
+# login that is not confirmed is found here, not inside the sandbox.
+#
+# fm_auth_probe <code-root> <vendor> -> sets FM_AUTH_STATUS, FM_AUTH_EN,
+# FM_AUTH_TW from bin/fm-auth-probe.sh's own output. The probe's version
+# line is fm-doctor.sh's own concern, read there directly; nothing here
+# needs it.
+fm_auth_probe() {
+  local root="$1" vendor="$2" out
+  FM_AUTH_STATUS=''; FM_AUTH_EN=''; FM_AUTH_TW=''
+  out="$("$root/bin/fm-auth-probe.sh" "$vendor" </dev/null 2>/dev/null)"
+  FM_AUTH_STATUS="$(sed -n 's/^status: //p' <<<"$out" | head -1)"
+  FM_AUTH_EN="$(sed -n 's/^en: //p' <<<"$out" | head -1)"
+  FM_AUTH_TW="$(sed -n 's/^tw: //p' <<<"$out" | head -1)"
+}
+
+# fm_auth_quota_reset <text> -> the reset-time phrase a vendor's own quota
+# message names ("resets at 3pm", "try again in 45 minutes"), or nothing.
+# fm-auth-probe.sh never calls this: its own contract is to never echo the
+# vendor's output, so its quota-exhausted reason stays generic. This is for
+# `fm doctor --sandbox`'s summary of a real canary round instead, which
+# already carries a bounded tail of the vendor's own log in its "why"
+# field (bin/fm-canary.sh) - never the whole message, just whatever short
+# phrase after "reset"/"try again"/"available again" looks like a time, so
+# the fix line says when, not everything the vendor printed.
+fm_auth_quota_reset() {
+  # No \n in the bracket expression: BSD grep (macOS) does not treat it as
+  # a newline there, it excludes the literal character 'n' instead, which
+  # cut "minutes" short at "mi" the first time this ran. grep already reads
+  # one line at a time, so excluding '.', ',' and ';' is enough.
+  grep -oiE '(quota |rate.?limit )?resets?[^.,;]{0,50}|try again in[^.,;]{0,50}|available again[^.,;]{0,50}' \
+    <<<"${1-}" | head -1
+}
+
+# fm_auth_refuses <status> -> 0 for every answer but `authenticated`: only
+# a login the vendor's own status check confirmed is usable (T-121's
+# acceptance). `indeterminate` and `timeout` mean the probe could not tell,
+# and are never read as authenticated - so gemini, which has no documented
+# status command, is refused until its login can be verified.
+# `unavailable` (not installed), an unknown word and no answer at all are
+# refused the same way.
+fm_auth_refuses() {
+  [ "${1:-}" != authenticated ]
+}
+
+# fm_auth_filter_chain <code-root> <chain> <notes-file> -> prints, on
+# stdout, the chain with every vendor the probe knows (fm_vendors) removed
+# unless its probe answers `authenticated`. A vendor it does not know -
+# mock, or a config typo fm_run_chain already reports as FM_VENDOR_UNKNOWN -
+# passes through unprobed. Writes one "vendor|status|en|tw" line per
+# refused vendor to <notes-file>, truncating it first, so the caller can
+# put each on the board as vendor_unavailable; called through a command
+# substitution, so anything this function hands back leaves through stdout
+# or a file, never a variable. A chain with nothing left in it reaches
+# fm_run_chain empty, which already returns "every vendor was unavailable"
+# on its own.
+fm_auth_filter_chain() {
+  local root="$1" chain="$2" notes_file="$3" v auth_kept=()
+  : > "$notes_file"
+  for v in $chain; do
+    if ! grep -qxF -- "$v" <<<"$(fm_vendors)"; then
+      auth_kept+=("$v"); continue
+    fi
+    fm_auth_probe "$root" "$v"
+    if fm_auth_refuses "$FM_AUTH_STATUS"; then
+      printf '%s|%s|%s|%s\n' "$v" "${FM_AUTH_STATUS:-no answer}" \
+        "${FM_AUTH_EN:-the login probe did not answer, so rounds on it are refused}" \
+        "${FM_AUTH_TW:-登入探測沒有回應，因此拒絕在其上執行回合}" >> "$notes_file"
+      continue
+    fi
+    auth_kept+=("$v")
+  done
+  [ "${#auth_kept[@]}" -eq 0 ] || printf '%s\n' "${auth_kept[@]}"
 }
 
 # fm_adapter_rule_path <dir> -> the directory resolved, or exit 64. The path
@@ -279,9 +449,13 @@ fm_adapter_confine() {
   work="$(cd "$work" 2>/dev/null && pwd -P)" || { echo "$vendor: no directory at $2" >&2; exit 64; }
   FM_LAUNCH=("$_fm_engine/bin/fm-sandbox.sh")
   FM_ROUND_STARTED="$FM_ROUND_CTL/started"
+  # what the round sheds is no login of its own (T-121): fm-sandbox.sh
+  # neither counts it as `given` nor lets it into the round
+  local shed=() s
+  while IFS= read -r s; do [ -n "$s" ] && shed+=(--shed="$s"); done < <(fm_adapter_shed "$vendor")
   if [ -n "$FM_OUTER_OS" ]; then
     FM_LAUNCH+=(run --policy="$FM_POLICY" --root="$work" --tmp="$FM_ROUND_TMP" --vendor="$vendor"
-                --started="$FM_ROUND_STARTED" --ctl="$FM_ROUND_CTL")
+                --started="$FM_ROUND_STARTED" --ctl="$FM_ROUND_CTL" ${shed[@]+"${shed[@]}"})
     # the CLI's own final answer is written where the launcher reads it
     [ -z "${FM_ATTEMPT_DIR:-}" ] || FM_LAUNCH+=(--write="$FM_ATTEMPT_DIR")
     [ -z "${FM_FINAL_PATH:-}" ] || FM_LAUNCH+=(--write="$(dirname "$FM_FINAL_PATH")")
@@ -289,7 +463,7 @@ fm_adapter_confine() {
   else
     echo "$vendor: !!! FM_CREW_UNSANDBOXED: this round runs WITHOUT the OS sandbox - reads, writes, the network and sockets are not confined by fm !!!" >&2
     FM_LAUNCH+=(plain --policy="$FM_POLICY" --tmp="$FM_ROUND_TMP" --vendor="$vendor"
-                --started="$FM_ROUND_STARTED" --ctl="$FM_ROUND_CTL")
+                --started="$FM_ROUND_STARTED" --ctl="$FM_ROUND_CTL" ${shed[@]+"${shed[@]}"})
   fi
   FM_LAUNCH+=(--)
 }

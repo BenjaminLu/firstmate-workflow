@@ -33,7 +33,21 @@ make_sandbox() {
 # and runs the command, on the platform FM_SANDBOX_OS says. The sandbox
 # itself is tests/sandbox.test.sh's.
 pk="$(safe_tmpdir)"
+# codex's and gemini's round sign in with a copy of their subscription login
+# file, and every variable they read as a login instead is one the round
+# sheds unless config.yaml's billing: chose it (T-121). So the suite's
+# policies are resolved against a home of its own holding those two files,
+# never the runner's, and never an ambient key the round would drop.
+mkdir -p "$pk/home/.codex" "$pk/home/.gemini"
+printf '{"OPENAI_API_KEY":null,"tokens":{"id_token":"id-suite","access_token":"at-suite","refresh_token":"rt-suite","account_id":"acct"}}' \
+  > "$pk/home/.codex/auth.json"
+printf '{"access_token":"at-suite","refresh_token":"rt-suite","expiry_date":%s}' \
+  "$(( ($(date +%s) + 86400) * 1000 ))" > "$pk/home/.gemini/oauth_creds.json"
+# the home every policy below resolves "~" against, so what a profile or a
+# settings file must keep out of reach is under it, not the runner's
+phome="$(cd "$pk/home" && pwd -P)"
 (
+  export HOME="$pk/home"
   # shellcheck source=bin/fm-config.sh
   . "$ROOT/bin/fm-config.sh"
   printf 'vendor: mock\n' > "$pk/none.yaml"
@@ -67,12 +81,14 @@ S
 chmod +x "$pk/sandbox-exec" "$pk/bwrap"
 export FM_POLICY="$pk/none.json"
 # Every vendor's round needs a login fm can hand in (T-117), and this
-# runner has none: these say one is already in the environment, so nothing
-# of the runner's keychain or home is read. What fm reads when none is set
+# runner has none: claude's crew token and cursor-agent's key are the
+# variables fm hands in, so these say one is already in the environment,
+# and codex and gemini read the suite home's login files above; nothing of
+# the runner's keychain or home is read. What fm reads when none is set
 # is tests/sandbox.test.sh's and the login-file cases below, and the case
 # with no login at all is below too.
-export CLAUDE_CODE_OAUTH_TOKEN=fm-suite-token CURSOR_API_KEY=fm-suite-key \
-  CODEX_API_KEY=fm-suite-key GEMINI_API_KEY=fm-suite-key
+unset CODEX_API_KEY OPENAI_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
+export CLAUDE_CODE_OAUTH_TOKEN=fm-suite-token CURSOR_API_KEY=fm-suite-key
 
 for adapter in "$ROOT"/bin/adapters/*.sh; do
   name="$(basename "$adapter" .sh)"
@@ -476,7 +492,7 @@ $runargv
             "$name's round has no network of the host's, nor its unix sockets"
           assert_eq "null" "$(jq -c '.sandbox.excludedCommands' <<< "$settings" 2>/dev/null)" \
             "$name exempts no command from anything"
-          never="$(jq -r --arg h "$(cd "$HOME" && pwd -P)" '.permissions.deny | map(select(. == "Read(/\($h)/.ssh/**)")) | length' <<< "$settings" 2>/dev/null)"
+          never="$(jq -r --arg h "$phome" '.permissions.deny | map(select(. == "Read(/\($h)/.ssh/**)")) | length' <<< "$settings" 2>/dev/null)"
           assert_eq "1" "$never" "$name's settings deny reading ~/.ssh as well"
           # A never_read path that CONTAINS the round's own tree must not
           # become a blanket deny of everything under it: on the self
@@ -496,6 +512,7 @@ $runargv
           : > "$nr/state/events.jsonl"
           printf 'vendor: mock\n' > "$nr/carve.yaml"
           (
+            export HOME="$pk/home"   # the suite's login home, as above
             # shellcheck source=bin/fm-config.sh
             . "$ROOT/bin/fm-config.sh"
             fm_policy worker "" "$nr/carve.yaml" \
@@ -668,7 +685,7 @@ cprof="$(cat "$pk/profile.sb" 2>/dev/null)"
 ctmp="$(cd /tmp && pwd -P)/claude-$(id -u)"
 assert_contains "$cprof" "(allow file-read* file-write* (subpath \"$ctmp\"))" \
   "claude's round may write the temp directory claude keeps under /tmp"
-assert_lacks "$cprof" "(regex #\"^$(cd "$HOME" && pwd -P | sed 's/[.^$|?*+()]/\\&/g')/\\.claude" \
+assert_lacks "$cprof" "(regex #\"^$(printf '%s' "$phome" | sed 's/[.^$|?*+()]/\\&/g')/\\.claude" \
   "and none of the operator's ~/.claude"
 rtmp_c="$(sed -n 's/^TMPDIR=//p' "$pv/env" 2>/dev/null)"
 assert_eq "$rtmp_c/claude-config" "$(sed -n 's/^CLAUDE_CONFIG_DIR=//p' "$pv/env" 2>/dev/null)" \
@@ -1218,10 +1235,13 @@ for v in claude codex cursor-agent gemini; do
   printf '#!/usr/bin/env bash\ncat > /dev/null\nprintf "%%s\\n" "$@" > "%s/argv"\nprintf "ran\\n"\nexit 0\n' \
     "$pv" > "$pv/fakebin/$v"; chmod +x "$pv/fakebin/$v"
   rm -f "$pv/argv" "$pk/profile.sb"
-  FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" PATH="$pv/fakebin:/usr/bin:/bin" \
+  # the engine's own policy resolves "~" when the adapter starts, so the
+  # suite's login home is the home it starts in: codex's and gemini's round
+  # login is the file there, never a key the round sheds (T-121)
+  HOME="$pk/home" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" PATH="$pv/fakebin:/usr/bin:/bin" \
     "$ROOT/bin/adapters/$v.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"
   assert_eq "0" "$?" "$v with no FM_POLICY still runs, under the engine's own policy"
-  assert_contains "$(cat "$pk/profile.sb" 2>/dev/null)" "(subpath \"$(cd "$HOME" && pwd -P)/.ssh\")" \
+  assert_contains "$(cat "$pk/profile.sb" 2>/dev/null)" "(subpath \"$phome/.ssh\")" \
     "and that policy's profile keeps ~/.ssh out of reach"
 done
 # and a policy file that is named but missing refuses the round
@@ -1230,6 +1250,128 @@ FM_POLICY="$pv/no-such-policy.json" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sa
   >/dev/null 2>"$pv/err"
 assert_eq "65" "$?" "a named policy that is not there refuses the round"
 assert_contains "$(cat "$pv/err")" "no policy at" "and says so"
+
+# --- credentials that would outrank the round's own login (T-121) ----------
+# Ambient in the operator's own shell, each of these would silently switch a
+# round to billing per key or per use instead of the login fm hands in
+# (2026-09-26/27). Shed unless config.yaml names the vendor in billing:.
+# FM_ADAPTER_CONFIG stands in for config.yaml the same way FM_POLICY stands
+# in for a resolved policy, so this suite never has to edit the real one.
+#
+# fm_adapter_policy reads the policy's network list with a real python3, not
+# a heredoc; on a host where /usr/bin/python3 is the unlicensed Xcode stub
+# rather than a working interpreter, $pv/fakebin's own entry below stands in
+# for it, ahead of /usr/bin in $PATH, for exactly this block.
+command -v python3 >/dev/null 2>&1 && printf '#!/usr/bin/env bash\nexec %s "$@"\n' \
+  "$(printf '%q' "$(command -v python3)")" > "$pv/fakebin/python3" && chmod +x "$pv/fakebin/python3"
+outrank_env() { sed -n "s/^$1=.*/$1/p" "$pv/env" 2>/dev/null; }
+for pair in "claude ANTHROPIC_API_KEY leaked-personal-key" "claude ANTHROPIC_AUTH_TOKEN leaked-token" \
+            "claude CLAUDE_CODE_USE_BEDROCK 1" "claude CLAUDE_CODE_USE_VERTEX 1" \
+            "codex OPENAI_API_KEY leaked-openai-key" "codex CODEX_API_KEY leaked-codex-key" \
+            "gemini GEMINI_API_KEY leaked-gemini-key" "gemini GOOGLE_API_KEY leaked-google-key"; do
+  # shellcheck disable=SC2034  # val is read through the eval below, not here
+  read -r v var val <<< "$pair"
+  or_rc="$(eval "$var=\"\$val\" CLAUDE_CODE_OAUTH_TOKEN=fm-suite-token CURSOR_API_KEY=fm-suite-key \
+    confined darwin \"\$pk/sandbox-exec\" \"\$pk/none.json\" \"\$v\"")"
+  # the round has to have actually reached the CLI, or "no $var" is true of
+  # a round that never ran at all, which is not what this asserts
+  assert_eq "0" "$or_rc" "$v's round still starts with $var ambient"
+  assert_eq "" "$(outrank_env "$var")" "$v's round never sees an ambient $var"
+done
+# a vendor config.yaml names in billing: keeps it, exactly as before T-121
+cat > "$pv/billing.yaml" <<'CFG'
+billing:
+  claude: api-key
+CFG
+bi_rc="$(FM_ADAPTER_CONFIG="$pv/billing.yaml" ANTHROPIC_API_KEY=chosen-on-purpose CLAUDE_CODE_OAUTH_TOKEN=fm-suite-token \
+  confined darwin "$pk/sandbox-exec" "$pk/none.json" claude)"
+assert_eq "0" "$bi_rc" "claude still starts with billing: api-key chosen"
+assert_contains "$(cat "$pv/env" 2>/dev/null)" "ANTHROPIC_API_KEY=chosen-on-purpose" \
+  "billing: claude: api-key in config.yaml keeps ANTHROPIC_API_KEY, rather than shedding it"
+unset FM_ADAPTER_CONFIG
+# The real `given` path (T-121): an ambient ANTHROPIC_API_KEY that
+# the round sheds, with no billing: entry and no token handed in by the
+# caller, is no login of the round's. fm-sandbox.sh must not count it as
+# `given` - it reads the crew token instead and hands it in - or the
+# adapter's shedding would start the round with no credential at all.
+printf '#!/usr/bin/env bash\ns=""; while [ $# -gt 0 ]; do [ "$1" = -s ] && s="${2-}"; shift; done\n[ "$s" = firstmate-claude-token ] || exit 44\necho crew-claude-token\n' \
+  > "$pv/security"
+chmod +x "$pv/security"
+gv_rc="$(unset CLAUDE_CODE_OAUTH_TOKEN; FM_KEYCHAIN_TOOL="$pv/security" FM_SECRET_TOOL="$pv/no-secret-tool" \
+  ANTHROPIC_API_KEY=leaked-personal-key confined darwin "$pk/sandbox-exec" "$pk/none.json" claude)"
+assert_eq "0" "$gv_rc" "claude's round starts with only an ambient ANTHROPIC_API_KEY it sheds"
+assert_contains "$(cat "$pv/env" 2>/dev/null)" "CLAUDE_CODE_OAUTH_TOKEN=crew-claude-token" \
+  "and gets the crew token fm resolved, not no credential at all"
+assert_eq "" "$(outrank_env ANTHROPIC_API_KEY)" "and never the shed key"
+# gemini signs in with the Google-account flow once its API-key variables
+# are shed, exactly as it does with none set at all
+ge_rc="$(GEMINI_API_KEY=leaked-gemini-key confined darwin "$pk/sandbox-exec" "$pk/none.json" gemini)"
+assert_eq "0" "$ge_rc" "gemini still starts once its API key is shed"
+assert_contains "$(cat "$pv/env" 2>/dev/null)" "GOOGLE_GENAI_USE_GCA=true" \
+  "gemini still signs in with the account flow once its API key is shed"
+# cursor-agent has no such variable to shed: CURSOR_API_KEY is the only
+# login this design ever hands it, never a credential that outranks another
+cu_rc="$(CURSOR_API_KEY=fm-suite-key confined darwin "$pk/sandbox-exec" "$pk/none.json" cursor-agent)"
+assert_eq "0" "$cu_rc" "cursor-agent still starts with its own login variable set"
+assert_contains "$(cat "$pv/env" 2>/dev/null)" "CURSOR_API_KEY=fm-suite-key" \
+  "cursor-agent's own login variable is never shed"
+
+# --- the round holds exactly the credential its policy names (T-121) -------
+# Not only "the shed ones are absent": with every login-bearing variable of
+# every vendor ambient in the operator's shell, each vendor's round holds
+# its own login and nothing else - claude only CLAUDE_CODE_OAUTH_TOKEN,
+# cursor-agent only CURSOR_API_KEY, codex no variable at all but the copy
+# of auth.json in its CODEX_HOME, less its refresh token, gemini its login
+# file's copy and GOOGLE_GENAI_USE_GCA=true. The fake (copyfake, above)
+# records the login file the CLI would read and its whole environment.
+# the list itself, read with no sandbox in the way: every other vendor's
+# credentials, and never the round's own login
+shed_of() { bash -c '. "$1/bin/adapters/_lib.sh"; fm_adapter_shed "$2"' _ "$ROOT" "$1" | tr '\n' ' '; }
+for fs in "claude CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY OPENAI_API_KEY GEMINI_API_KEY" \
+          "cursor-agent CURSOR_API_KEY CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY CODEX_API_KEY" \
+          "codex CODEX_HOME CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY GOOGLE_API_KEY" \
+          "gemini GOOGLE_GENAI_USE_GCA ANTHROPIC_AUTH_TOKEN CURSOR_API_KEY OPENAI_API_KEY"; do
+  read -r fs_v fs_own fs_others <<< "$fs"
+  fs_list=" $(shed_of "$fs_v")"
+  assert_lacks "$fs_list" " $fs_own " "$fs_v's round never sheds its own login ($fs_own)"
+  for n in $fs_others; do
+    assert_contains "$fs_list" " $n " "$fs_v's round sheds another vendor's $n"
+  done
+done
+cred_names='CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX
+  CURSOR_API_KEY OPENAI_API_KEY CODEX_API_KEY GEMINI_API_KEY GOOGLE_API_KEY GOOGLE_GENAI_USE_GCA GOOGLE_APPLICATION_CREDENTIALS'
+for fs in "claude CLAUDE_CODE_OAUTH_TOKEN=fm-suite-token" "cursor-agent CURSOR_API_KEY=fm-suite-key" \
+          "codex -" "gemini GOOGLE_GENAI_USE_GCA=true"; do
+  read -r fs_v fs_want <<< "$fs"
+  [ "$fs_want" != - ] || fs_want=''
+  cp "$pv/copyfake" "$pv/fakebin/$fs_v"; chmod +x "$pv/fakebin/$fs_v"
+  rm -f "$pv/copy"
+  fs_rc="$(
+    export CLAUDE_CODE_OAUTH_TOKEN=fm-suite-token CURSOR_API_KEY=fm-suite-key \
+      ANTHROPIC_API_KEY=ambient ANTHROPIC_AUTH_TOKEN=ambient CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_CODE_USE_VERTEX=1 \
+      OPENAI_API_KEY=ambient CODEX_API_KEY=ambient GEMINI_API_KEY=ambient GOOGLE_API_KEY=ambient \
+      GOOGLE_APPLICATION_CREDENTIALS=/nowhere
+    FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" FM_POLICY="$pk/none.json" PATH="$pv/fakebin:/usr/bin:/bin" \
+      "$ROOT/bin/adapters/$fs_v.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"
+    echo $?
+  )"
+  fs_seen="$(cat "$pv/copy" 2>/dev/null)"
+  fs_have=''
+  for n in $cred_names; do
+    fs_val="$(sed -n "s/^$n=//p" <<< "$fs_seen" | head -1)"
+    [ -z "$fs_val" ] || fs_have="$fs_have $n=$fs_val"
+  done
+  assert_eq "0" "$fs_rc" "$fs_v's round starts with every vendor's credentials ambient"
+  assert_eq "$fs_want" "${fs_have# }" "a $fs_v round holds exactly the credential its policy names, and no other"
+  case "$fs_v" in
+    codex|gemini)
+      fs_file="$(sed -n 's/^file=//p' <<< "$fs_seen")"
+      assert_contains "$fs_seen" "at-suite" "$fs_v reads its login from the copy of its login file"
+      assert_lacks "$fs_seen" "rt-suite" "a copy that holds no refresh token ($fs_v)"
+      assert_lacks "$fs_file" "$phome" "and is never the operator's own file ($fs_v)" ;;
+  esac
+done
+
 safe_rm_rf "$pv" "$pk"
 unset FM_POLICY FM_SANDBOX_OS FM_SANDBOX_TOOL CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY CODEX_API_KEY GEMINI_API_KEY
 
