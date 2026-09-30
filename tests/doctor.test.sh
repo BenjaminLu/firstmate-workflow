@@ -50,15 +50,31 @@ REAL_PYTHON3="$(command -v python3)"
 # using it there would read every field as empty rather than testing anything
 REAL_JQ="$(command -v jq)"
 
-# The fixture's own pins. Every stand-in below answers --version with exactly
-# the version this file pins, read from it, so whether doctor's toolchain
+# The fixture's own pins. Every stand-in below answers --version with a full
+# dotted version satisfying its pin, so whether doctor's toolchain
 # check is met depends on the fixture alone, never on the host's tools.
 toolchain='[tools]\nbun = "1.3.11"\npython = "3.14.6"\n"ubi:jqlang/jq" = "1.7.1"\n"ubi:cli/cli" = "2.63.0"\nnode = "20"\nshellcheck = "0.10.0"\n'
 # shellcheck disable=SC2059  # the format is the file's own text, escapes included
 printf "$toolchain" > "$repo/mise.toml"
-pin_of() {  # pin_of <mise.toml key> -> the version the fixture pins for it
+version_for_pin() {  # a numeric mise prefix becomes a full CLI version
+  local version="$1"
+  case "$version" in
+    *.*.*) ;;
+    *.*) version="$version.0" ;;
+    *) version="$version.0.0" ;;
+  esac
+  printf '%s\n' "$version"
+}
+assert_eq "20.0.0" "$(version_for_pin 20)" "a major-only pin yields a full CLI version"
+assert_eq "1.7.0" "$(version_for_pin 1.7)" "a two-part pin yields a full CLI version"
+assert_eq "1.7.1" "$(version_for_pin 1.7.1)" "a full pin keeps its CLI version"
+pin_of() {  # pin_of <mise.toml key> -> a full version satisfying the fixture's pin
+  local pin
+  pin="$(
   awk -F' = ' -v k="$1" '{ g = $1; gsub(/"/, "", g); if (g == k) { v = $2; gsub(/"/, "", v); print v } }' \
     "$repo/mise.toml"
+  )"
+  version_for_pin "$pin"
 }
 fake_tool() {  # fake_tool <name> <version-line> [<real binary every other call runs>]
   if [ -n "${3:-}" ]; then
