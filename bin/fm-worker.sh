@@ -421,6 +421,26 @@ else
   git worktree add -q -b "$branch" "$tree" "$BASE"
 fi || { echo "fm-worker: could not create the worktree" >&2; exit 70; }
 
+# A new task's spec (T-147). Firstmate writes design/tasks/<id>.json in its
+# own working tree, and a new task's branch, made from the base, does not
+# carry it: T-157's codex round was told the file "is committed on this
+# branch", found it was not, and stopped. So the spec this run read is
+# copied into a new branch's worktree before the round, as the file the
+# round commits with its work, and the prompt says so; no vendor has to
+# infer that it should write it. Only on a new branch: a later round's
+# branch carries the file already, and a rebuilt round's entry is frozen.
+own_spec="design/tasks/$TASK.json"; spec_copied=0; spec_copy=''
+if [ "$round_two" = 0 ] && [ ! -e "$tree/$own_spec" ] && [ -f "$own_spec" ]; then
+  mkdir -p "$tree/design/tasks" && cp "$own_spec" "$tree/$own_spec" || {
+    echo "fm-worker: could not copy $own_spec into $tree" >&2; exit 70; }
+  spec_copied=1
+  # what was copied, to tell the round's own work from the copy
+  spec_copy="$(scratch_new)" || exit 70
+  scratch_add "$spec_copy"
+  cp "$own_spec" "$spec_copy" || exit 70
+  echo "fm-worker: $own_spec is not on the base; copied into the worktree for this round to commit" >&2
+fi
+
 # --- the mirror: work kept where the round cannot write (T-128) -----------
 # state/mirrors/<project>/<task>/N holds copies of the worktree - never
 # .git, which is protected at the sandbox layer instead (gitdirs() in
@@ -1181,6 +1201,12 @@ say="$tree/.fm-say.md"
   printf '\nYour worktree is the current directory. Your branch is `%s`.\n' "$branch"
   printf 'Stay inside these paths:\n'
   jq -r '.scope[]|"  - " + .' <<<"$spec"
+  if [ "$spec_copied" = 1 ]; then
+    printf '\nThis task'"'"'s own spec, `%s`, is not on %s yet: firstmate wrote it\n' "$own_spec" "$BASE"
+    printf 'in its own working tree. fm-worker.sh has copied it into your worktree,\n'
+    printf 'uncommitted, and commits it with your work when the round ends. It is\n'
+    printf 'there already; do not write it again, and leave it as it is.\n'
+  fi
   # a later round is answering a review, and the review is on the pull
   # request. Handing over the task alone would have the worker rewrite what
   # it already wrote instead of fixing what was named.
@@ -1398,6 +1424,14 @@ say="$tree/.fm-say.md"
 worker_changed_files() {
   if [ "$rebuilt" = 1 ]; then
     [ "$(rebuild_fingerprint)" != "$rebuild_mark" ]
+    return
+  fi
+  # the spec this script copied in (T-147) is not the round's work; a
+  # change the round made to it is
+  if [ "$spec_copied" = 1 ]; then
+    [ -n "$(git -C "$tree" status --porcelain -- . \
+        ":(exclude).fm-prompt.md" ":(exclude).fm-say.md" ":(exclude)$own_spec")" ] \
+      || ! cmp -s "$spec_copy" "$tree/$own_spec"
     return
   fi
   [ -n "$(git -C "$tree" status --porcelain -- . \

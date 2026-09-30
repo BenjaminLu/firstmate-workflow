@@ -121,6 +121,20 @@ mise_tools() {  # one "key<TAB>pin" per [tools] entry of <file>
   ' "$f"
 }
 
+# An Apple xcrun shim first on PATH (T-147): /usr/bin/git, /usr/bin/python3
+# and the rest of FM_XCRUN_TOOLS on macOS are launchers that ask xcrun for
+# the real tool, which fails inside a round (its cache is denied, and an
+# unaccepted Xcode licence stops it). Reported as the wrong tool, with the
+# fix, instead of ok; the detector is fm-config.sh's, the one fm-sandbox.sh
+# uses.
+xcrun_shim_bad() {  # xcrun_shim_bad <bin> -> 0, having said so, when it is a shim
+  local found
+  case " $FM_XCRUN_TOOLS " in *" $1 "*) ;; *) return 1 ;; esac
+  found="$(fm_path_tool "$1" "$PATH")" || return 1
+  fm_xcrun_shim "$found" || return 1
+  say_bad "$1" "wrong version: $found is Apple's xcrun shim, not $1 itself, and a crew round cannot run it; fix: $(fm_xcrun_fix "$1")"
+}
+
 echo "== Toolchain =="
 pinned=' '
 while IFS=$'\t' read -r key pin; do
@@ -131,6 +145,7 @@ while IFS=$'\t' read -r key pin; do
     say_bad "$bin" "missing (pinned $pin); fix: mise install $key@$pin"
     continue
   fi
+  xcrun_shim_bad "$bin" && continue
   have="$(extract_tool_version "$bin")"
   if [ -z "$have" ]; then
     say_warn "$bin" "version unreadable: installed, but no version in: $("$bin" --version </dev/null 2>&1 | head -1)"
@@ -182,6 +197,7 @@ for dep in git perl herdr; do
     say_bad "$dep" "missing; fix: $(dep_fix "$dep")"
     continue
   fi
+  xcrun_shim_bad "$dep" && continue
   min="$(dep_min "$dep")"
   if [ -z "$min" ]; then
     say_ok "$dep" "ok, found on PATH"

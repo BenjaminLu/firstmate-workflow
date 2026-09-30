@@ -217,6 +217,64 @@ fm_crew_hatch() {
   echo "$1: !!! FM_CREW_UNSANDBOXED=1: this round runs WITHOUT the OS sandbox; unset it once the sandbox is fixed !!!" >&2
 }
 
+# --- Apple's xcrun shims (T-147) ---------------------------------------------
+# On macOS /usr/bin/git, /usr/bin/python3 and the other developer tools are
+# not the tools: each is a small launcher, linked against libxcselect, that
+# asks xcrun for the real one in the active developer directory. Inside a
+# round it cannot work. xcrun writes its cache (xcrun_db-*) under the
+# per-user temp directory confstr names, which no round may write, and with
+# the Xcode licence not accepted it then stops on that (the codex rounds of
+# T-146 and T-157, 2026-09-29/30). fm-sandbox.sh asks these, outside the
+# round, for each tool a round would reach first on its PATH; `fm doctor`
+# reports a machine whose first git or python3 on PATH is a shim.
+# shellcheck disable=SC2034  # read by the scripts that source this file
+FM_XCRUN_TOOLS="git python3 pip3 make cc clang"
+
+# fm_xcrun_shim <file> -> 0 when <file> is one of Apple's xcrun shims
+fm_xcrun_shim() { [ -f "${1:-}" ] && LC_ALL=C grep -q libxcselect "$1" 2>/dev/null; }
+
+# fm_path_tool <tool> <PATH> -> the first executable <tool> on that PATH, as
+# a shell would find it; 1 when there is none
+fm_path_tool() {
+  local rest="${2-}:" d
+  while [ -n "$rest" ]; do
+    d="${rest%%:*}"; rest="${rest#*:}"
+    [ -n "$d" ] && [ -f "$d/$1" ] && [ -x "$d/$1" ] && { printf '%s\n' "$d/$1"; return 0; }
+  done
+  return 1
+}
+
+# fm_xcrun_resolve <tool> -> `real<TAB><path>`: the tool the shim would run,
+#   found by xcrun itself, outside any round, so it can be run directly; or
+#   `none<TAB><why>` (exit 1) when there is none to run - no developer
+#   directory at all (asked of xcode-select first, which never opens the
+#   installer dialog a shim would), or what xcrun said, the licence
+#   refusal included. FM_XCODE_SELECT and FM_XCRUN name stand-ins for the
+#   suites.
+fm_xcrun_resolve() {
+  local xs="${FM_XCODE_SELECT:-/usr/bin/xcode-select}" xc="${FM_XCRUN:-/usr/bin/xcrun}" out real why
+  if ! "$xs" -p </dev/null >/dev/null 2>&1; then
+    printf 'none\tno Xcode or Command Line Tools is installed, so the shim has no %s to run\n' "$1"
+    return 1
+  fi
+  out="$("$xc" --find "$1" </dev/null 2>&1)"
+  real="$(printf '%s\n' "$out" | grep '^/' | tail -1)"
+  if [ -n "$real" ] && [ -f "$real" ] && [ -x "$real" ] && ! fm_xcrun_shim "$real"; then
+    printf 'real\t%s\n' "$real"; return 0
+  fi
+  why="$(printf '%s\n' "$out" | grep -v '^/' | grep -v '^[[:space:]]*$' | tail -1 | tr '\t' ' ')"
+  why="${why%.}"
+  printf 'none\txcrun cannot find it: %s\n' "${why:-it named no $1}"
+  return 1
+}
+
+# fm_xcrun_fix <tool> -> how the operator gives a round a real <tool>
+fm_xcrun_fix() {
+  local pkg="$1"
+  case "$1" in python3|pip3) pkg=python ;; cc|clang) pkg=llvm ;; esac
+  printf 'install %s ahead of /usr/bin on PATH (brew install %s), or accept the Xcode licence outside the round (sudo xcodebuild -license)\n' "$1" "$pkg"
+}
+
 # fm_policy_blocked <file> -> each host a round's proxy refused, once
 fm_policy_blocked() { [ -s "${1:-}" ] || return 0; awk 'NF && !seen[$0]++' "$1"; }
 
@@ -235,22 +293,48 @@ fm_policy_blocked() { [ -s "${1:-}" ] || return 0; awk 'NF && !seen[$0]++' "$1";
 #               projects.<name>.policy.network, or policy.network
 #     source    proxy: fm's own proxy refused them (design 13.1 names what
 #               it cannot see)
+#     expected  the refused hosts the policy's known_refused list names
+#               (T-147): refused to every round by the captain's decision,
+#               so never a card; kept apart from hosts
+# A host on the policy's known_refused list is not an unexplained refusal:
+# it is said once, on stderr, as a known and expected one, and is left out
+# of the hosts printed and of the record's hosts, so no card offers it.
 fm_policy_report() {
-  local hosts project='' declared='[]'
-  hosts="$(fm_policy_blocked "$5" | tr '\n' ' ' | sed 's/ $//')"
-  [ -n "$hosts" ] || return 0
+  local all hosts='' expected='' project='' declared='[]' known='[]' kind h what
+  all="$(fm_policy_blocked "$5" | tr '\n' ' ' | sed 's/ $//')"
+  [ -n "$all" ] || return 0
   if [ -n "${6:-}" ] && [ -r "$6" ]; then
     project="$(jq -r '.project // ""' "$6" 2>/dev/null)"
     declared="$(jq -c '.network // []' "$6" 2>/dev/null)" || declared='[]'
+    known="$(jq -c '.known_refused // []' "$6" 2>/dev/null)" || known='[]'
   fi
+  # one line per round for each kind of known refusal, however many of its
+  # hosts the round was refused. A policy that does not classify leaves
+  # every host undeclared, as before.
+  while IFS='|' read -r kind h what; do
+    case "$kind" in
+      undeclared) hosts="${hosts:+$hosts }$h" ;;
+      known)
+        expected="${expected:+$expected }${h//,/}"
+        printf 'fm: known refusal, expected: %s - %s; refused for every vendor, nothing to add\n' \
+          "$h" "$what" >&2 ;;
+    esac
+  done < <(jq -rn --arg all "$all" --argjson k "${known:-[]}" '
+    [$all | split(" ")[] | . as $h
+     | {h: $h, what: (first($k[] | select(.pattern as $p | $h | ascii_downcase | test("^(" + $p + ")$")) | .what) // "")}]
+    | (.[] | select(.what == "") | "undeclared|" + .h),
+      (map(select(.what != "")) | group_by(.what)[] | "known|" + (map(.h) | join(", ")) + "|" + .[0].what)' \
+    2>/dev/null || printf '%s\n' "$all" | tr ' ' '\n' | sed 's/^/undeclared|/')
+  [ -n "$hosts" ] || return 0
   mkdir -p "$1/state/policy" &&
     jq -cn --arg role "$2" --arg task "$3" --arg actor "$4" --arg hosts "$hosts" \
+      --arg expected "$expected" \
       --arg project "$project" --argjson declared "${declared:-[]}" \
       --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       '{at:$at, task:$task, role:$role, actor:$actor, project:$project,
         hosts:($hosts | split(" ")), declared:$declared,
         add_to:(if $project == "" then "policy.network" else "projects.\($project).policy.network" end),
-        source:"proxy"}' \
+        source:"proxy", expected:($expected | split(" ") | map(select(. != "")))}' \
       >> "$1/state/policy/blocked-hosts.jsonl"
   printf '%s\n' "$hosts"
 }
@@ -570,6 +654,30 @@ SCRUB = dict(names=['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_E
 REPO_CONFIG = ['.claude', '.mcp.json', '.cursor', 'GEMINI.md']
 GITHUB_DOMAINS = ('github.com', 'github.io', 'github.dev', 'githubusercontent.com', 'githubassets.com',
                   'githubapp.com', 'githubcopilot.com', 'ghcr.io', 'ghe.com')
+# Hosts refused to every round, for every vendor, whatever a policy
+# declares, because the captain decided what they are (T-147, 2026-09-29).
+# Each is a full-match regex and what the host is. The list rides in the
+# policy as `known_refused`, so the round's proxy (bin/fm-sandbox.sh) and
+# the report of what it refused (fm_policy_report) read this one list.
+#   sdmntpr<region>.oaiusercontent.com is OpenAI's user file store: paths
+#   under files/, which the Codex SDK and ChatGPT's file features use. A
+#   round's model conversation does not need it - the codex round it was
+#   refused to on 2026-09-29 exited 0 and talked to the model - and it
+#   would be an upload channel out of the round.
+KNOWN_REFUSED = [
+    dict(pattern=r'sdmntpr[a-z0-9-]*\.oaiusercontent\.com',
+         what="OpenAI's user file store, which no round needs and which would be an upload channel "
+              "out of it (design 13.1, T-147)"),
+]
+
+
+def known_refusal(host):
+    """What <host> is, when it is one every round is refused, or None."""
+    h = host.lower().rstrip('.')
+    for k in KNOWN_REFUSED:
+        if re.fullmatch(k['pattern'], h):
+            return k['what']
+    return None
 
 
 def host_refusal(host):
@@ -586,6 +694,9 @@ def host_refusal(host):
         return 'is loopback; a crew round may not reach loopback'
     if re.match(r'[0-9.]+$', h):
         return 'is an address; a registry is named, and loopback is never one'
+    what = known_refusal(h)
+    if what:
+        return 'is %s; it is refused for every vendor' % what
     return None
 
 
@@ -704,6 +815,7 @@ def resolve_policy(lines, projects, default, config, role, explicit):
         read=[expand(p, engine) for p in got['read']],
         never_read=[expand(p, engine) for p in got['never_read']],
         network=got.get('network', '').split(),
+        known_refused=KNOWN_REFUSED,
         refuse=REFUSE, sockets='none', env_scrub=SCRUB, repo_config=REPO_CONFIG,
         procs=int(got['procs']), cpu=int(got['cpu']),
         vendors={v: vendor_of(d, engine) for v, d in VENDORS.items()})

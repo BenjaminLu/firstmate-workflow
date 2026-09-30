@@ -1,0 +1,30 @@
+{
+  "id": "T-147",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-146"
+  ],
+  "title": "a codex round has the same working environment as a claude round: its shell writes temp files in the round's own TMPDIR, git and python are the operator's toolchain rather than Xcode's shims, and the hosts codex needs are decided",
+  "scope": [
+    "bin/fm-sandbox.sh",
+    "bin/adapters/codex.sh",
+    "bin/adapters/_lib.sh",
+    "bin/fm-config.sh",
+    "config.yaml",
+    "tests/**",
+    "design/**",
+    "design/tasks/T-147.json",
+    "bin/fm-worker.sh",
+    "bin/fm-doctor.sh",
+    "tests/doctor.test.sh"
+  ],
+  "acceptance": [
+    "Why. The first codex worker round (T-146 round 1, gpt-6-astra, 2026-09-29) stopped at once and changed nothing: codex runs its commands through the operator's login shell (zsh), whose here-documents write under TMPPREFIX (/tmp/zsh by default), which the sandbox denies (`can't create temp file for here document: operation not permitted`); and `git status` reached Apple's /usr/bin xcrun shim, which tried to write its cache under /var/folders (denied) and then failed on the Xcode licence. Claude rounds on the same machine do not meet either. The round was also refused two hosts, sdmntprsouthcentralus.oaiusercontent.com and sdmntprnortheu.oaiusercontent.com. Its own spec file, design/tasks/T-147.json, is committed on this branch.",
+    "Seen again 2026-09-30 (T-157 round 1, codex): the round's first `git status --short` failed - /usr/bin/git is Apple's xcrun shim, which tried to write an xcrun_db-* cache the sandbox denies and reported an unaccepted Xcode license - so the worker stopped. The same round also stopped because the brief said design/tasks/T-157.json 'is committed on this branch' while a new task's spec exists only in firstmate's working tree: fm-worker.sh now copies the task's spec file from the dispatching repository into a new task's worktree before the round (as the file the round must commit), so no vendor has to infer that it should write it; a test covers a new task whose spec is untracked in the repository.",
+    "Temp files. Every round's environment sets TMPPREFIX (zsh), and any other shell temp variable a vendor's shell uses, inside the round's own TMPDIR, the way T-128 set TMPDIR, HOME and XDG; a here-document works in a codex round.",
+    "Toolchain. A round resolves git, python3 and the other tools the operator uses first on its PATH, as the operator's own shell does, after the login shell's profile has run (the adapter makes codex use a non-login shell or re-applies PATH after it); where only an Xcode shim exists, the round is told plainly instead of failing on a licence prompt. `fm doctor` (T-121) reports a machine whose git or python3 would be an xcrun shim.",
+    "Hosts, decided by the captain on 2026-09-29 after firstmate's investigation: sdmntpr<region>.oaiusercontent.com is OpenAI's user file store (paths under files/, OpenAI's own domain; the Codex SDK and ChatGPT's file features use it). A round's model conversation does not need it (the blocked round's CLI exited 0 and talked to the model), and allowing it would open an upload channel out of the sandbox. It stays refused for every vendor. design.md records what these hosts are and why they are refused, and a refusal of them is reported once per round as a known, expected refusal rather than as an unexplained one. Revisit only if a codex feature firstmate needs is shown to fail without them.",
+    "Tests with codex stubbed to answer as the real CLI does: a here-document and git status succeed inside the round; an xcrun-only machine is reported, not hung. Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate, plus one real codex round re-run by firstmate afterwards. Workers do not run the suites themselves."
+  ]
+}

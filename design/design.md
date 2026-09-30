@@ -448,6 +448,19 @@ handed.
 It also refuses while the pull request is still open. An unmerged branch is
 someone's unfinished work.
 
+**A new task's spec comes with its worktree (T-147).** Firstmate writes a new
+task's `design/tasks/<id>.json` in its own working tree, and the task's new
+branch, made from the base, does not carry it: T-157's codex round was told
+the file "is committed on this branch", found it was not, and stopped. So
+when `fm-worker.sh` makes a new branch's worktree and the file is not in it,
+it copies the spec it read from the dispatching repository in, uncommitted,
+and the prompt says it is there and goes out with the round's commit. The
+copy is not the round's work: a round that leaves it as it was and changes
+nothing else changed nothing. A later round's branch carries the file
+already, and a rebuilt round's entry stays frozen (5.3.3), so only a new
+branch gets the copy. `tests/worker.test.sh` covers a new task whose spec is
+untracked in the repository.
+
 ### 5.3 The adapter contract, `bin/adapters/<vendor>.sh`
 
 ```
@@ -3648,11 +3661,34 @@ raise its choice card:
 ```
 {"at":"<UTC>","task":"T-…","role":"worker|reviewer","actor":"…","project":"<name or ''>",
  "hosts":["<refused>",…],"declared":["<registries the round had>",…],
- "add_to":"projects.<name>.policy.network | policy.network","source":"proxy"}
+ "add_to":"projects.<name>.policy.network | policy.network","source":"proxy",
+ "expected":["<a known refusal, below>",…]}
 ```
 
 The crew never widens its own policy; only the captain's answer changes it.
-The card itself is firstmate's (SK-001, T-107), not T-105's. What the
+The card itself is firstmate's (SK-001, T-107), not T-105's.
+
+**Known refusals (T-147).** Some hosts are refused to every round, for
+every vendor, by the captain's decision, and are not a card's to offer.
+`KNOWN_REFUSED` in `bin/fm-config.sh` names each with what it is; every
+policy carries the list as `known_refused`, a policy whose `network` names
+one is refused (65), and the proxy refuses one whatever a hand-edited
+`network` or a vendor's own domains say (`deny known: …`). When a round is
+refused one, `fm_policy_report` says so once per round on stderr, as a
+known, expected refusal (`fm: known refusal, expected: <hosts> - <what>`),
+keeps it out of the hosts it reports as undeclared and out of the record's
+`hosts`, and lists it in the record's `expected` instead, so no card
+offers it. One is on the list:
+
+- `sdmntpr<region>.oaiusercontent.com` (captain, 2026-09-29, after
+  firstmate's investigation). OpenAI's user file store: paths under
+  `files/`, on OpenAI's own domain, which the Codex SDK and ChatGPT's file
+  features use. The first codex worker round was refused
+  `sdmntprsouthcentralus.oaiusercontent.com` and
+  `sdmntprnortheu.oaiusercontent.com`. A round's model conversation does
+  not need it - that round's CLI exited 0 and talked to the model - and
+  allowing it would open an upload channel out of the sandbox. Revisit only
+  if a codex feature firstmate needs is shown to fail without it. What the
 record cannot name: a command that ignores the proxy variables and connects
 directly is refused by the OS, which sees an address, or on Linux no route
 at all - never a host name - and a refusal made by a vendor's own sandbox
@@ -3906,6 +3942,61 @@ default when `XDG_CONFIG_HOME` is unset) already moves with it for anything
 that falls back to that default; `tests/sandbox.test.sh` asserts the round is
 handed the caller's own `XDG_CONFIG_HOME` unchanged, next to the `HOME`/
 `XDG_CACHE_HOME`/`XDG_DATA_HOME` assertions above it.
+
+**The shell a vendor runs commands through (T-147).** The first codex
+worker round (T-146, 2026-09-29) stopped at once and changed nothing, and
+T-157's first codex round (2026-09-30) stopped the same way; claude rounds
+on the same machine met neither. codex runs every command as `$SHELL -lc
+<command>`, the operator's own login shell, and two things of that shell
+fell outside what T-128 gave a round:
+
+- zsh writes a here-document's temp file under `TMPPREFIX`, `/tmp/zsh` by
+  default, not `TMPDIR`, and the sandbox refused it (`can't create temp
+  file for here document: operation not permitted`). Every round's
+  environment now sets `TMPPREFIX` to `<round tmp>/zsh`. bash, ksh and dash
+  already follow `TMPDIR` or use a pipe, so no other shell needs one.
+- A login shell runs the system's profile first. On macOS `/etc/zprofile`
+  and `/etc/profile` run `path_helper`, which rebuilds `PATH` with
+  `/usr/bin` ahead of every directory the operator added (Homebrew's,
+  mise's), and Debian's `/etc/profile` resets it. So `git` in the round was
+  `/usr/bin/git`, Apple's xcrun shim, where the operator's own shell finds
+  their git. The round's `HOME` is its own, so its profile is fm's:
+  `fm-sandbox.sh` writes `.zprofile`, `.bash_profile` and `.profile` there,
+  each putting back `SANDBOX_ROUND_PATH` - the `PATH` the round was given -
+  after the system's profile has run, and sets `ZDOTDIR` to that `HOME`
+  so zsh reads it rather than an operator's `ZDOTDIR` the round cannot
+  read. This holds for every vendor, whether its shell is a login shell or
+  not, so the codex adapter needs no flag of codex's for it.
+
+**Apple's xcrun shims.** `/usr/bin/git`, `/usr/bin/python3` and the other
+developer tools on macOS are launchers linked against `libxcselect` that
+ask xcrun for the real tool in the active developer directory. Inside a
+round a shim cannot work: xcrun writes its cache (`xcrun_db-*`) under the
+per-user temp directory `confstr` names, outside every write root, and with
+the Xcode licence not accepted it then stops on that. So before a macOS
+round, for each of `FM_XCRUN_TOOLS` (git, python3, pip3, make, cc, clang)
+whose first match on the round's `PATH` is a shim (`fm_xcrun_shim`: the
+file names `libxcselect`), `fm-sandbox.sh` asks xcrun, outside the round,
+for the tool it would run (`fm_xcrun_resolve`: `xcode-select -p` first,
+which never opens the installer dialog a shim would, then `xcrun --find`).
+A stand-in ahead of the shim on the round's `PATH` then runs that tool
+directly - the one the shim would have run, under a licence already
+accepted - and the round's log says which. Where xcrun has none to give, no
+developer directory or the licence not accepted, the stand-in prints what
+xcrun said, that nothing inside the round can fix it, and how the operator
+does (`fm_xcrun_fix`), and exits 69 at once: the round is told plainly
+instead of failing on a cache write and a licence prompt it cannot answer.
+`fm doctor` reports a machine whose first `git` or `python3` on PATH is a
+shim, from the same `fm_xcrun_shim` and `fm_path_tool`: an `x` line saying
+`wrong version`, naming the file as Apple's xcrun shim, with
+`fm_xcrun_fix`'s line as the fix, and never `ok`. It checks those two and
+no other tool, so the stand-in's message says "fm doctor reports it" only
+for them. `tests/doctor.test.sh` covers a shim first on PATH, and a real
+tool ahead of one. `tests/adapter-contract.test.sh` runs the codex adapter with a codex
+that answers as the real CLI does, through `$SHELL -lc`, and a shell that
+plays zsh in exactly those two ways: a here-document and `git status`
+succeed in the round, and a machine whose only git is a shim is reported,
+not hung.
 
 **Review checkouts are disposable.** Unlike a worker's branch, there is
 nothing in a run-mode checkout worth mirroring - only worth noticing and
