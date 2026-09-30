@@ -151,7 +151,12 @@ done
 # command that installs each on this OS. git and perl are the system's own
 # (bin/ci.sh times its suites with perl; the board and every script call
 # git), so they are checked here rather than pinned.
-os="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+# The platform and the sandbox binary are read exactly as bin/fm-sandbox.sh's
+# host_os and host_tool read them - FM_SANDBOX_OS, else uname; then
+# FM_SANDBOX_TOOL, else the platform's own tool - so doctor never checks a
+# tool the sandbox would not use.
+os="${FM_SANDBOX_OS:-}"
+[ -n "$os" ] || os="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')"
 dep_fix() {  # dep_fix <name> -> the install line for this OS
   case "$1:$os" in
     git:darwin) echo "xcode-select --install, or: brew install git" ;;
@@ -159,6 +164,7 @@ dep_fix() {  # dep_fix <name> -> the install line for this OS
     perl:darwin) echo "perl ships with macOS; reinstall the command line tools: xcode-select --install" ;;
     perl:*) echo "apt install perl  (or your distribution's package manager)" ;;
     herdr:*) echo "install herdr 0.9.1 or later for your platform, then re-run fm doctor" ;;
+    sandbox-exec:darwin) echo "sandbox-exec ships with macOS as /usr/bin/sandbox-exec; put /usr/bin back on PATH" ;;
     sandbox-exec:*) echo "sandbox-exec ships with macOS; this host is not macOS" ;;
     bwrap:*) echo "apt install bubblewrap  (or your distribution's package manager)" ;;
   esac
@@ -195,11 +201,15 @@ case "$os" in
   linux) sandbox_tool=bwrap ;;
   *) sandbox_tool='' ;;
 esac
+[ -z "$sandbox_tool" ] || sandbox_tool="${FM_SANDBOX_TOOL:-$sandbox_tool}"
 if [ -n "$sandbox_tool" ]; then
+  sandbox_name="${sandbox_tool##*/}"
+  sandbox_fix="$(dep_fix "$sandbox_name")"
+  [ -n "$sandbox_fix" ] || sandbox_fix="FM_SANDBOX_TOOL names $sandbox_tool, which is not there; unset it or point it at the $os sandbox tool"
   if command -v "$sandbox_tool" >/dev/null 2>&1; then
-    say_ok "$sandbox_tool" "ok, the OS sandbox tool for $os is on PATH"
+    say_ok "$sandbox_name" "ok, the OS sandbox tool for $os is there: $sandbox_tool"
   else
-    say_bad "$sandbox_tool" "missing; fix: $(dep_fix "$sandbox_tool")"
+    say_bad "$sandbox_name" "missing; fix: $sandbox_fix"
   fi
 else
   say_warn "sandbox" "$os has no OS sandbox tool this doctor knows; every crew round on it is refused"

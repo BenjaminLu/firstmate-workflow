@@ -3897,7 +3897,14 @@ operator's typing; the operator's answers are read from a copy of the
 original stdin kept on fd 9, and only `fm setup`, which asks, is handed it.
 Folded in from T-078: git, herdr and the OS sandbox tool
 (`sandbox-exec`/`bwrap`) are checked the same way, with an OS-specific
-install line for each, since mise does not manage them. A vendor CLI that
+install line for each, since mise does not manage them. Which sandbox tool
+is checked is decided the way `bin/fm-sandbox.sh`'s `host_os` and
+`host_tool` decide it - `FM_SANDBOX_OS`, else `uname`; then
+`FM_SANDBOX_TOOL`, else that platform's own tool - so doctor and the sandbox
+never disagree about the tool a host uses (T-121 round 15). Doctor's and
+setup's suites run on a `PATH` of their own fakes plus links to the host's
+`/usr/bin` and `/bin` with every name doctor or setup asks about taken out,
+so a tool a test leaves out is missing on every host. A vendor CLI that
 is not installed gets the same treatment in the vendor logins section
 below: its own published install line, not only that it is missing - each
 line is the vendor's own documented installer at the time this was

@@ -18,10 +18,32 @@ d="$(safe_tmpdir)"
 repo="$d/repo"; mkdir -p "$repo"
 fakebin="$d/fakebin"; mkdir -p "$fakebin"
 
+# The suite's PATH is $fakebin then $sysbin, never /usr/bin or /bin
+# themselves. $sysbin links every command the host has there except each
+# name doctor asks about: the pins it requires, git, perl, herdr, both
+# sandbox tools, mise and every vendor CLI (and the aliases they go by).
+# The only copy of any of those the suite can see is the one it puts in
+# $fakebin, so "missing" means missing on every host. GitHub's ubuntu image
+# ships /usr/bin/gh, jq and shellcheck; macOS ships /usr/bin/git and a
+# python3 stub. The list is read from doctor's own REQUIRED_PINS and
+# fm_vendors, not kept by hand.
+asked_about="$(sed -n 's/^REQUIRED_PINS=(\(.*\))$/\1/p' "$DOCTOR") git perl herdr sandbox-exec bwrap mise
+  python bunx nodejs npm npx agent security secret-tool
+  $(bash -c '. "$1"; fm_vendors' _ "$ROOT/bin/fm-config.sh" | tr '\n' ' ')"
+sysbin="$d/sysbin"; mkdir -p "$sysbin"
+# one ln per directory; a name both hold keeps /usr/bin's, and ln's
+# complaint about it is expected
+ln -s /usr/bin/* "$sysbin/" 2>/dev/null
+ln -s /bin/* "$sysbin/" 2>/dev/null
+for n in $asked_about; do rm -f "$sysbin/$n"; done
+assert_contains "$asked_about" "gh" "the names kept off the suite's PATH include doctor's pins"
+assert_contains "$asked_about" "cursor-agent" "and every vendor CLI"
+assert_eq "" "$(for n in $asked_about; do PATH="$sysbin" command -v "$n"; done)" \
+  "the suite's system PATH holds none of the tools doctor asks about, on any host"
+
 # the real python3, resolved before $PATH is ever restricted: fm-auth-probe.sh
-# parses claude's JSON with it, and a fixed PATH of just /usr/bin:/bin (kept
-# narrow so a "missing" test cannot see a real gh or bun elsewhere) may have
-# none that runs, e.g. an unlicensed Xcode stub
+# parses claude's JSON with it, and the host's own may not run, e.g. an
+# unlicensed Xcode stub
 REAL_PYTHON3="$(command -v python3)"
 # the real jq, for the --sandbox section below, which reads real JSON out of
 # results.jsonl: fakebin's own jq (below) only ever answers --version, so
@@ -48,6 +70,11 @@ fake_tool node "v20.19.6"
 # exactly as the real one answers --version
 printf '#!/usr/bin/env bash\nprintf "ShellCheck - shell script analysis tool\\nversion: 0.10.0\\nlicense: GNU General Public License, version 3\\n"\n' \
   > "$fakebin/shellcheck"; chmod +x "$fakebin/shellcheck"
+# perl is only checked for presence, and anything that runs it gets the real one
+ln -s "$(command -v perl)" "$fakebin/perl"
+# the sandbox tool the suite names with FM_SANDBOX_TOOL: it only has to be
+# there, since nothing in doctor starts a round with it
+printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/fm-test-sandbox"; chmod +x "$fakebin/fm-test-sandbox"
 
 toolchain='[tools]\nbun = "1.3.11"\npython = "3.14.6"\n"ubi:jqlang/jq" = "1.7.1"\n"ubi:cli/cli" = "2.63.0"\nnode = "20"\nshellcheck = "0.10.0"\n'
 # shellcheck disable=SC2059  # the format is the file's own text, escapes included
@@ -55,20 +82,24 @@ printf "$toolchain" > "$repo/mise.toml"
 printf 'vendor: claude\n' > "$repo/config.yaml"
 mkdir -p "$repo/state/worktrees"
 
-# /usr/bin and /bin, never the rest of $PATH: this suite must not pick up
+# $fakebin and $sysbin, never the rest of $PATH: this suite must not pick up
 # whatever vendor CLIs happen to be installed on the machine running it.
-# The operator's home and keychain are the suite's (T-121): the probe
+# The platform and sandbox tool are the suite's too, the way fm-sandbox.sh
+# reads them (T_OS, T_TOOL override them for one run). The operator's home and keychain are the suite's (T-121): the probe
 # resolves a round's login from them, and must never read the real ones.
 home="$d/home"; mkdir -p "$home/.config/firstmate" "$home/.codex"
 printf 'crew-claude-token\n' > "$home/.config/firstmate/claude-token"; chmod 600 "$home/.config/firstmate/claude-token"
 printf '{"tokens":{"access_token":"a","refresh_token":"r"}}' > "$home/.codex/auth.json"
 unset CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY CURSOR_API_KEY CODEX_API_KEY OPENAI_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
 run_doctor() { HOME="$home" FM_KEYCHAIN_TOOL="$d/no-security" FM_SECRET_TOOL="$d/no-secret-tool" \
-  PATH="$fakebin:/usr/bin:/bin" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$fakebin/no-such-sandbox" \
+  PATH="$fakebin:$sysbin" FM_SANDBOX_OS="${T_OS-darwin}" FM_SANDBOX_TOOL="${T_TOOL-$fakebin/fm-test-sandbox}" \
   "$DOCTOR" --repo "$repo" "$@"; }
 
 out="$(run_doctor)"; rc=$?
 assert_contains "$out" "Toolchain" "doctor prints a toolchain section"
+assert_contains "$out" "+ fm-test-sandbox" "the sandbox tool checked is the one FM_SANDBOX_TOOL names, as fm-sandbox.sh uses"
+assert_lacks "$out" "bwrap" "never the host's own by uname"
+assert_lacks "$out" "sandbox-exec" "nor the platform's default, when a tool is named"
 assert_contains "$out" "bun" "and names bun"
 assert_contains "$out" "+ bun" "which is ok at the pinned version"
 assert_contains "$out" "ok 1.3.11 (pinned 1.3.11)" "saying ok, the word the acceptance names"
@@ -84,6 +115,21 @@ assert_contains "$out" "+ shellcheck" "shellcheck is checked against its pin"
 assert_contains "$out" "0.10.0 (pinned 0.10.0)" "its version read from the line it says it on, not its first"
 assert_contains "$out" "+ perl" "perl, the system's own, is checked rather than pinned"
 assert_lacks "$out" "pins no" "a mise.toml pinning every tool ci.sh and the board call has no gap"
+
+# --- the sandbox tool is the one fm-sandbox.sh would use, never uname's ------
+# linux named, no tool named: bwrap, which the suite's PATH never holds
+out="$(T_OS=linux T_TOOL='' run_doctor)"; rc=$?
+assert_contains "$out" "x bwrap            missing; fix: apt install bubblewrap" \
+  "FM_SANDBOX_OS=linux checks bwrap, whatever the host runs"
+assert_eq "1" "$rc" "and a missing one makes doctor bad"
+out="$(T_OS=darwin T_TOOL='' run_doctor)"
+assert_contains "$out" "x sandbox-exec     missing; fix: sandbox-exec ships with macOS as /usr/bin/sandbox-exec" \
+  "FM_SANDBOX_OS=darwin checks sandbox-exec, whatever the host runs, with macOS's own fix"
+assert_lacks "$out" "bwrap" "and never bwrap"
+out="$(T_TOOL="$d/no-such-sandbox" run_doctor)"; rc=$?
+assert_contains "$out" "x no-such-sandbox" "a FM_SANDBOX_TOOL that is not there is reported x"
+assert_contains "$out" "FM_SANDBOX_TOOL names $d/no-such-sandbox, which is not there" "saying which setting names it"
+assert_eq "1" "$rc" "and doctor's exit is bad"
 
 # --- mise.toml itself must pin every tool bin/ci.sh and the board call -------
 # the repository's own file, checked by the same doctor: a pin dropped from
@@ -104,9 +150,8 @@ assert_contains "$out" "missing from mise.toml: it pins no node" "and so is one 
 printf "$toolchain" > "$repo/mise.toml"
 
 # --- a missing tool ----------------------------------------------------------
-# gh, not jq: /usr/bin/jq ships with macOS, so removing the fake would let
-# the real one leak through /usr/bin in $PATH and this test would not be
-# testing "missing" at all. Neither gh nor bun ship with the OS.
+# the suite's PATH has no gh but fakebin's (see $sysbin above), so with it
+# gone gh is missing on every host, ubuntu's /usr/bin/gh included
 rm -f "$fakebin/gh"
 out="$(run_doctor)"; rc=$?
 assert_contains "$out" "x gh" "a missing pinned tool is reported x, not ok"
@@ -199,7 +244,7 @@ cp "$ROOT/bin/adapters/_lib.sh" "$d2/bin/adapters/"
 } > "$d2/bin/fm-setup.sh"
 chmod +x "$d2/bin/fm-setup.sh"
 noconfig="$d2/repo"; mkdir -p "$noconfig"
-out="$(PATH="$fakebin:/usr/bin:/bin" "$d2/bin/fm-doctor.sh" --repo "$noconfig" 2>&1)"; rc=$?
+out="$(PATH="$fakebin:$sysbin" "$d2/bin/fm-doctor.sh" --repo "$noconfig" 2>&1)"; rc=$?
 assert_contains "$out" "fm setup" "with no config.yaml, doctor says it is handing off to fm setup"
 assert_ok "test -f '$d2/setup-ran'" "and actually hands off to it"
 assert_eq "3" "$rc" "carrying its exit code back"
@@ -233,7 +278,7 @@ printf 'vendor: claude\n' > "$repo/config.yaml"
 REAL_GIT="$(command -v git)"
 gitbin="$d/gitbin"; mkdir -p "$gitbin"; ln -sf "$REAL_GIT" "$gitbin/git"
 hygiene_doctor() { HOME="$home" FM_KEYCHAIN_TOOL="$d/no-security" FM_SECRET_TOOL="$d/no-secret-tool" \
-  PATH="$gitbin:$fakebin:/usr/bin:/bin" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$fakebin/no-such-sandbox" \
+  PATH="$gitbin:$fakebin:$sysbin" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$fakebin/fm-test-sandbox" \
   "$DOCTOR" --repo "$repo"; }
 out="$(hygiene_doctor)"
 assert_contains "$out" "no untracked build cache in any worktree" "a clean state/worktrees is reported clean"
@@ -297,7 +342,7 @@ chmod +x "$d3/fm-canary.sh" "$d3/fm-doctor.sh"
 realbin="$d/realbin"; mkdir -p "$realbin"; ln -s "$REAL_JQ" "$realbin/jq"
 mkdir -p "$repo/state/canary"
 sandbox_doctor() { HOME="$home" FM_KEYCHAIN_TOOL="$d/no-security" FM_SECRET_TOOL="$d/no-secret-tool" \
-  PATH="$realbin:$fakebin:/usr/bin:/bin" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$fakebin/no-such-sandbox" \
+  PATH="$realbin:$fakebin:$sysbin" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$fakebin/fm-test-sandbox" \
   "$d3/fm-doctor.sh" --repo "$repo" --sandbox; }
 blocked_probes='{"write_outside":"blocked","read_ssh":"blocked","github":"blocked","loopback":"blocked","herdr_socket":"blocked","other_round_tmp":"blocked","gh_token":"blocked","git_credential":"blocked","keychain":"n/a","pasteboard":"n/a"}'
 ran_record() {  # ran_record <vendor> <probes json> <own_loopback> -> a started, authenticated record

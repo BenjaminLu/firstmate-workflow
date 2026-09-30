@@ -14,9 +14,24 @@ assert_ok "test -x '$SETUP'" "fm-setup.sh is executable"
 
 d="$(safe_tmpdir)"
 fakebin="$d/fakebin"; mkdir -p "$fakebin"
+# The suite's PATH is $fakebin then $sysbin, never /usr/bin or /bin
+# themselves: $sysbin links every command the host has there except each
+# name the wizard asks about - every vendor CLI (from fm_vendors, and
+# cursor's `agent`), gh, git and python3 - so the only copy of those it can
+# see is the suite's own, on every host (GitHub's ubuntu image ships
+# /usr/bin/gh; macOS ships /usr/bin/git and a python3 stub).
+asked_about="gh git python3 python agent $(bash -c '. "$1"; fm_vendors' _ "$ROOT/bin/fm-config.sh" | tr '\n' ' ')"
+sysbin="$d/sysbin"; mkdir -p "$sysbin"
+# one ln per directory; a name both hold keeps /usr/bin's, and ln's
+# complaint about it is expected
+ln -s /usr/bin/* "$sysbin/" 2>/dev/null
+ln -s /bin/* "$sysbin/" 2>/dev/null
+for n in $asked_about; do rm -f "$sysbin/$n"; done
+assert_eq "" "$(for n in $asked_about; do PATH="$sysbin" command -v "$n"; done)" \
+  "the suite's system PATH holds none of the tools the wizard asks about, on any host"
 # the real python3, resolved before $PATH is ever restricted: fm_cfg_set,
-# the one config.yaml writer, runs on it, and a fixed PATH of just /usr/bin:/bin may have none
-# that runs, e.g. an unlicensed Xcode stub
+# the one config.yaml writer, runs on it, and the host's own may not run,
+# e.g. an unlicensed Xcode stub
 REAL_PYTHON3="$(command -v python3)"
 printf '#!/usr/bin/env bash\nexec %s "$@"\n' "$(printf '%q' "$REAL_PYTHON3")" > "$fakebin/python3"
 chmod +x "$fakebin/python3"
@@ -44,7 +59,7 @@ git_stub() {  # a git that answers just enough for the wizard's defaults
 }
 git_stub "https://github.com/example-org/example-repo.git" "origin/main"
 
-run_setup() { PATH="$fakebin:/usr/bin:/bin" "$SETUP" --repo "$repo" "$@"; }
+run_setup() { PATH="$fakebin:$sysbin" "$SETUP" --repo "$repo" "$@"; }
 
 field_in() { sed -n "s/^[[:space:]]*$2:[[:space:]]*//p" "$1" | head -1 | sed 's/[[:space:]]*#.*$//'; }
 
