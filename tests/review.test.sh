@@ -1320,9 +1320,10 @@ assert_eq 'ci' "$(jq -r '.data.ci_pending' <<<"$waitK")" "CI waiting state names
 assert_eq 'false' "$(jq -r '.data.window_expected' <<<"$waitK")" "CI wait expects no reviewer window"
 assert_eq '1' "$(jq -s '[.[]|select(.type=="crew_status" and .data.phase=="waiting_ci")]|length' <<<"$wait_eventsK")" \
   "unchanged pending checks do not emit on every poll"
-assert_eq 'review' "$(jq -s '[.[]|select(.type=="crew_status" and .data.phase)]|last|.data.phase' <<<"$wait_eventsK")" \
+assert_eq 'review' "$(jq -sr '[.[]|select(.type=="crew_status" and .data.phase)]|last|.data.phase' <<<"$wait_eventsK")" \
   "after CI the reviewer returns to reviewing"
 # a bounded wait: past it the round starts anyway, naming what still runs
+before_bound_events="$(wc -l < "$evK" | tr -d ' ')"
 jobs_round GH_PENDING_POLLS=1000 FM_REVIEW_CI_WAIT=2 FM_REVIEW_CI_POLL=1
 sentB="$(cat "$dm/prompt.md" 2>/dev/null)"
 assert_contains "$sentB" "started with these required checks still running for this head, or not yet started: ci" \
@@ -1333,6 +1334,15 @@ assert_contains "$(jq -r 'select(.type=="crew_status" and .data.ci_wait_bound==t
   'CI wait bound reached' "the board is told when the wait reaches its bound"
 assert_contains "$(jq -r 'select(.type=="crew_status" and .data.ci_wait_bound==true)|.data.activity["zh-TW"]' "$evK")" \
   'CI 等待已達上限' "the wait bound is reported in Chinese too"
+bound_eventsK="$(tail -n +$((before_bound_events + 1)) "$evK")"
+assert_eq 'review' "$(jq -sr '[.[]|select(.type=="crew_status" and .data.phase)]|last|.data.phase' <<<"$bound_eventsK")" \
+  "after the CI wait bound the reviewer returns to reviewing"
+assert_eq 'true' "$(jq -s '
+  to_entries
+  | ([.[]|select(.value.type=="crew_status" and .value.data.ci_wait_bound==true)]|last|.key) as $bound
+  | ([.[]|select(.value.type=="crew_status" and .value.data.phase)]|last) as $phase
+  | $bound != null and $phase != null and $phase.value.data.phase == "review" and $phase.key > $bound
+' <<<"$bound_eventsK")" "the final reviewing phase follows the CI wait bound event"
 # Two checks: ci completes first, then lint. Only the changed list emits.
 before_ci_events="$(wc -l < "$evK" | tr -d ' ')"
 jobs_round GH_PENDING_POLLS=2 GH_EXTRA_CHECK=1 FM_REVIEW_CI_WAIT=60 FM_REVIEW_CI_POLL=1
@@ -1458,12 +1468,22 @@ assert_ok "[ \"\$(cat '$dq/polls' 2>/dev/null || echo 0)\" -le 8 ]" "and the rou
 cp "$dq/config.plain" "$rq5/config.yaml"
 
 # only when no source names any required check is the wait skipped, said plainly
+before_no_checks_events="$(wc -l < "$rq5/state/events.jsonl" | tr -d ' ')"
 req_round GH_PROTECTION_DOWN=1 GH_MISSING_POLLS=1000 FM_REVIEW_CI_WAIT=60 FM_REVIEW_CI_POLL=1
 assert_ok "[ ! -e '$dq/polls' ]" "with no source naming a required check, no check's runs are waited on"
 assert_contains "$(cat "$dq/prompt.md" 2>/dev/null)" "No source named any required check" \
   "and the prompt says plainly that no required check was named"
 assert_contains "$(cat "$dq/prompt.md" 2>/dev/null)" "so this round did not wait for CI before it started" \
   "and that the round did not wait for CI"
+# With no wait, review_opened establishes review; no CI phase overrides it.
+no_checks_events="$(tail -n +$((before_no_checks_events + 1)) "$rq5/state/events.jsonl")"
+assert_eq 'review' "$(jq -sr '[.[] |
+  if .type=="review_opened" then "review"
+  elif .type=="crew_status" and .data.phase then .data.phase
+  else empty end]|last' <<<"$no_checks_events")" \
+  "with no required checks the reviewer enters reviewing"
+assert_eq '0' "$(jq -s '[.[]|select(.type=="crew_status" and .data.phase=="waiting_ci")]|length' <<<"$no_checks_events")" \
+  "with no required checks the reviewer never enters CI waiting"
 rm -rf "$dq"
 
 # A round that was SIGKILLed ran no trap; the next run-mode round removes its
