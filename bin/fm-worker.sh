@@ -16,12 +16,12 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
-# fm_auth_filter_chain/fm_auth_probe (T-121): a round never runs on a login
-# it did not check.
-_fm_alib="$(dirname "${BASH_SOURCE[0]}")/adapters/_lib.sh"
-[ -r "$_fm_alib" ] || { echo "${0##*/}: missing $_fm_alib" >&2; exit 70; }
-# shellcheck source=bin/adapters/_lib.sh
-. "$_fm_alib"
+# fm_auth_filter_chain (T-121): a round never runs on a login it did not
+# check. The adapters' library is loaded only where the chain is about to
+# run, not here: a worker that ends before its round (a failed worktree, a
+# held lock) needs no adapter, as it did not before T-121. The path is fixed
+# now, before the cd into the repository.
+_fm_alib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/adapters/_lib.sh"
 fm_args=("$@")
 
 REPO="$(fm_default_repo)"; TASK=''; VENDOR=''; NAME=''; PR=''
@@ -1476,6 +1476,9 @@ fi
 # probe could not confirm (gemini, a timeout) - is refused here, with the
 # probe's status and reason on the board, rather than by starting inside
 # the sandbox and failing there; the chain moves on to the next vendor.
+[ -r "$_fm_alib" ] || { echo "fm-worker: missing $_fm_alib" >&2; exit 70; }
+# shellcheck source=bin/adapters/_lib.sh
+. "$_fm_alib"
 auth_notes_file="$(scratch_new)" || exit 70
 scratch_add "$auth_notes_file"
 worker_chain="$(fm_auth_filter_chain "${FM_CODE_ROOT:-$REPO}" "$(fm_vendor_chain worker "$VENDOR")" "$auth_notes_file")"

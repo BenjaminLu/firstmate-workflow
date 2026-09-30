@@ -143,15 +143,93 @@ case "$vendor" in
           vendor_env=(CODEX_HOME="$work/tmp/codex-home") ;;
 esac
 
-# A portable time limit: no `timeout(1)` is assumed to exist (it does not
-# ship with macOS). Polled so the probe never waits past the limit even
-# when the CLI hangs rather than exits.
+# The time limit. No `timeout(1)` is assumed to exist (it does not ship
+# with macOS), and the status check is never put in the background and
+# watched by polling its pid (T-151): it runs in the foreground under a
+# small runner of its own, which blocks until the first of three things the
+# kernel reports - the check exits, the limit passes, or this probe dies
+# (bin/lib/fm_lifeline.py's ProcessExit: kqueue on macOS, a pidfd on
+# Linux). On the last two it ends the check's whole process group, SIGTERM
+# then SIGKILL a second later, before it exits itself; a check that exits
+# first has whatever it left in its group ended too. So nothing the check
+# started outlives the probe, even a probe killed outright (SIGKILL, where
+# no trap runs). A probe sent SIGTERM alone runs its trap once the runner
+# returns, which is at most the limit later, and the check is gone by then.
 timeout_secs="${FM_AUTH_PROBE_TIMEOUT:-20}"
 probe_out=''
 probe_rc=0
 probe_timedout=''
+# shellcheck disable=SC2016  # Python, not shell
+_fm_probe_runner='
+import os, select, signal, subprocess, sys, time
+sys.path.insert(0, sys.argv[1])
+from fm_lifeline import ProcessExit, OwnerGone
+limit, out, mark, argv = float(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5:]
+try:
+    owner = ProcessExit(os.getppid())
+except (OwnerGone, RuntimeError):
+    sys.exit(70)
+wake_r, wake_w = os.pipe()
+os.set_blocking(wake_r, False); os.set_blocking(wake_w, False)
+signal.set_wakeup_fd(wake_w)
+signal.signal(signal.SIGCHLD, lambda *_: None)
+stop = []
+for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+    signal.signal(signum, lambda signum, _frame: stop.append(signum))
+group = dict(process_group=0) if sys.version_info >= (3, 11) else dict(preexec_fn=os.setpgrp)
+with open(out, "wb") as f:
+    try:
+        child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=f,
+                                 stderr=subprocess.STDOUT, **group)
+    except OSError:
+        sys.exit(127)
+def signal_group(signum):
+    try:
+        os.killpg(child.pid, signum)
+    except (ProcessLookupError, PermissionError):
+        pass
+def end_group():
+    signal_group(signal.SIGTERM)
+    try:
+        child.wait(1)
+    except subprocess.TimeoutExpired:
+        pass
+    signal_group(signal.SIGKILL)
+    child.wait()
+deadline = time.monotonic() + limit
+why = None
+while why is None:
+    left = deadline - time.monotonic()
+    try:
+        ready, _, _ = select.select([owner, wake_r], [], [], max(0.0, left))
+    except InterruptedError:
+        ready = []
+    try:
+        while os.read(wake_r, 512):
+            pass
+    except BlockingIOError:
+        pass
+    if child.poll() is not None:
+        why = "exited"
+    elif stop:
+        why = "stopped"
+    elif owner in ready and owner.gone():
+        why = "owner"
+    elif time.monotonic() >= deadline:
+        why = "timeout"
+if why == "exited":
+    code = child.returncode
+    signal_group(signal.SIGKILL)   # whatever the check left in its group
+    sys.exit(code if code >= 0 else 128 - code)
+end_group()
+if why == "timeout":
+    open(mark, "w").close()
+    sys.exit(124)
+sys.exit(128 + stop[0] if stop else 129)
+'
 run_probe() {
   local out="$work/out" keep="HOME PATH TMPDIR USER LOGNAME" n kv
+  rm -f "$work/timedout"
   (
     # the environment is emptied but for these, and the round's credentials
     # are exported, never put on a command line, where ps would show them
@@ -165,20 +243,11 @@ run_probe() {
       rm -f "$work/ctl/env"
     fi
     for kv in ${vendor_env[@]+"${vendor_env[@]}"}; do export "${kv?}"; done
-    exec "${argv[@]}"
-  ) </dev/null >"$out" 2>&1 &
-  local pid=$! waited=0
-  # tenths of a second: a status check that answers at once costs no more
-  while kill -0 "$pid" 2>/dev/null; do
-    sleep 0.1; waited=$((waited + 1))
-    if [ "$waited" -ge "$((timeout_secs * 10))" ]; then
-      kill -TERM "$pid" 2>/dev/null; sleep 1; kill -KILL "$pid" 2>/dev/null
-      probe_timedout=1
-      break
-    fi
-  done
-  wait "$pid" 2>/dev/null
+    # exec: the runner's parent is this probe itself, the owner it watches
+    exec python3 -c "$_fm_probe_runner" "$HERE/lib" "$timeout_secs" "$out" "$work/timedout" "${argv[@]}"
+  ) </dev/null >/dev/null 2>&1
   probe_rc=$?
+  [ ! -e "$work/timedout" ] || probe_timedout=1
   probe_out="$(cat "$out" 2>/dev/null)"
 }
 run_probe 2>/dev/null

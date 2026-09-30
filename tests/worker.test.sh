@@ -245,6 +245,17 @@ assert_contains "$(jq -r .type < "$r2/state/events.jsonl" | tr '\n' ' ')" "vendo
   "it emitted vendor_unavailable"
 assert_eq "" "$(cat "$d2/ghcalls" 2>/dev/null)" "an unavailable vendor opens no pull request"
 
+# The adapters' library (the login check, T-121) is loaded where the chain
+# runs, not at start: a worker that ends before its round - here on its own
+# usage error - needs no adapter, which a fixture copying only fm-worker.sh
+# and fm-config.sh (tests/reconcile.test.sh) relies on
+dn="$(safe_tmpdir)"; mkdir -p "$dn/bin"
+cp "$ROOT/bin/fm-worker.sh" "$ROOT/bin/fm-config.sh" "$dn/bin/"
+out="$("$dn/bin/fm-worker.sh" 2>&1)"; rc=$?
+assert_eq "64" "$rc" "a worker with no adapters' library still reaches its own usage check"
+assert_lacks "$out" "adapters/_lib.sh" "and never ends at start for an adapter it has not reached"
+rm -rf "$dn"
+
 # --- a crew round never runs on a login it did not check (T-121) -----------
 # claude's own status check, asked about the crew token a round would get,
 # says it is not signed in; the worker never starts claude's CLI at all - it

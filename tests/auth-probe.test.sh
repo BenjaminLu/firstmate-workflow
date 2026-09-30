@@ -265,6 +265,71 @@ out="$(FM_AUTH_PROBE_TIMEOUT=1 run claude)"
 assert_eq "timeout" "$(field "$out" status)" "a status check that does not answer in time is a timeout"
 assert_contains "$(field "$out" en)" "rounds on it are refused" "and says a round on it is refused"
 
+# --- nothing the status check starts outlives the probe (T-151) -------------
+# A hanging status check with a child of its own, both holding the write
+# end of $d/held. The kernel gives the suite's reader EOF only once every
+# holder has exited, so "no process of the check is left" is read from the
+# kernel, not by polling a pid; a survivor shows as the bounded read timing
+# out. $d/started says the check is running before anything is killed.
+hang_check() {
+  rm -f "$d/started" "$d/held" "$d/hang-pids"; mkfifo "$d/started" "$d/held"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'if [ "$1" = --version ]; then echo "claude 2.1.3"; exit 0; fi\n'
+    printf 'exec 3<>%q\n' "$d/held"
+    printf 'sleep 30 &\n'
+    printf 'echo "$$ $!" > %q\n' "$d/hang-pids"
+    printf 'echo started > %q\n' "$d/started"
+    printf 'exec sleep 30\n'
+  } > "$bin/claude"
+  chmod +x "$bin/claude"
+}
+check_started=''
+await_check() {  # opens $d/held for reading once the check says it runs
+  check_started=''
+  read -r -t 10 -u 4 _ || return 0
+  exec 5<"$d/held"; check_started=1
+}
+gone=''
+check_gone() {  # gone=1 when every holder of $d/held has exited within 8s
+  local start="$SECONDS"
+  if [ -z "$check_started" ]; then gone='the status check never started'; return; fi
+  # read by the clock, not the exit status: macOS's bash 3.2 returns 1 for
+  # a timed-out read as for EOF
+  read -r -t 8 -u 5 _
+  if [ "$((SECONDS - start))" -lt 6 ]; then gone=1; else gone='a process of the check was still running 8s later'; fi
+  exec 5<&-
+}
+end_leftovers() {  # a red run's survivors are ended here, not left to ci.sh
+  local p
+  for p in $(cat "$d/hang-pids" 2>/dev/null); do kill -KILL "$p" 2>/dev/null; done
+}
+mkdir -p "$d/probe-tmp"
+
+hang_check
+exec 4<>"$d/started"
+( exec 4>&-; PATH="$bin:$PATH" TMPDIR="$d/probe-tmp" FM_AUTH_PROBE_TIMEOUT=1 exec "$PROBE" claude ) \
+  > "$d/probe-out" 2>/dev/null &
+probe_pid=$!
+await_check
+wait "$probe_pid"
+assert_eq "timeout" "$(field "$(cat "$d/probe-out")" status)" "a hanging check with a child of its own is a timeout"
+check_gone
+assert_eq "1" "$gone" "and neither the check nor anything it started outlives the probe"
+end_leftovers
+
+hang_check
+exec 4<>"$d/started"
+( exec 4>&-; PATH="$bin:$PATH" TMPDIR="$d/probe-tmp" FM_AUTH_PROBE_TIMEOUT=60 exec "$PROBE" claude ) \
+  >/dev/null 2>&1 &
+probe_pid=$!
+await_check
+kill -KILL "$probe_pid"; wait "$probe_pid" 2>/dev/null
+check_gone
+assert_eq "1" "$gone" "a probe killed outright mid-check leaves no process of the check behind"
+end_leftovers
+exec 4>&-
+
 # --- fixed argv: an operator argument never reaches the probe --------------
 {
   printf '#!/usr/bin/env bash\n'

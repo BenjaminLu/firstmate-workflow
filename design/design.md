@@ -3951,9 +3951,17 @@ exactly the credentials `login-env` wrote and the vendor's own config
 directory where the adapter points it (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`).
 Credentials are exported, never put on a command line. A variable the
 round sheds (below) is neither counted as a login nor handed to the probe.
-The check has a time limit (`FM_AUTH_PROBE_TIMEOUT`, default 20s, polled
-every tenth of a second rather than relying on a `timeout(1)` this task
-does not assume exists). It prints exactly one of `authenticated`,
+The check has a time limit (`FM_AUTH_PROBE_TIMEOUT`, default 20s; no
+`timeout(1)` is assumed, since macOS has none). It runs in the foreground
+under a small Python runner, never in the background with its pid polled
+(T-151). The runner blocks until the kernel reports the first of three
+events (`fm_lifeline.py`'s `ProcessExit`: kqueue on macOS, a pidfd on
+Linux): the check exits, the limit passes, or the probe dies. When the
+limit passes or the probe dies, the runner ends the check's whole process
+group, SIGTERM and then SIGKILL a second later. So nothing the check started
+outlives the probe, even a probe killed with SIGKILL, where no trap runs. A
+probe sent SIGTERM runs its trap once the runner returns, which is at most
+the limit later. It prints exactly one of `authenticated`,
 `unauthenticated`, `expired`, `quota-exhausted`, `indeterminate`, `timeout`
 or `unavailable` (not installed), the vendor version it probed, and a
 one-line reason in English and Traditional Chinese - never the vendor CLI's
