@@ -1519,6 +1519,52 @@ want_list="$(sed 's/ .*//' "$mr_in" | sort)"
 got_list="$(printf '%s\n' "$mr_all" | sed '/^$/d' | sort)"
 assert_eq "$want_list" "$got_list" "main's timings: the four shards run each of the 34 suites exactly once"
 assert_eq "34" "$(grep -c . <<<"$got_list" || true)" "all 34 of them"
+
+# --plan i/n -- <suite>... (T-158): the fail-first shards' share of the
+# changed suites, by the split above, and nothing run. On main's timings,
+# T-121's eight changed suites among them: every one lands in exactly one of
+# 4 shards, worker.test.sh alone in the heaviest, and each shard's line for
+# the bash shards is the split --shard makes of all 34.
+pl_given=(tests/adapter-contract.test.sh tests/board.test.sh tests/config.test.sh tests/herdr.test.sh
+          tests/option-loop.test.sh tests/review.test.sh tests/sandbox.test.sh tests/worker.test.sh)
+pl_seen=''
+for i in 1 2 3 4; do
+  rc=0; out="$(FM_ROOT="$mr_dir" FM_CI_TIMINGS_IN="$mr_in" bash "$ROOT/bin/ci.sh" --plan "$i/4" -- "${pl_given[@]}" 2>/dev/null)" || rc=$?
+  assert_eq "0" "$rc" "--plan $i/4 answers"
+  assert_lacks "$out" "effective budget" "and runs nothing: no budget, no stage"
+  for k in $(sed -n 's/^i //p' <<<"$out"); do pl_seen="$pl_seen${pl_given[$k]}
+"; done
+  assert_eq "4" "$(grep -c '^l ' <<<"$out" || true)" "--plan $i/4 gives each of the 4 bash shards' load"
+  assert_contains "$out" "l 539.000 539.000 s" "the heaviest of which is worker.test.sh's shard, 539s"
+  [ "$i" != 1 ] || assert_eq "p 539.000 539.000 s" "$(grep '^p ' <<<"$out" || true)" \
+    "shard 1/4's own share is worker.test.sh alone"
+done
+assert_eq "$(printf '%s\n' "${pl_given[@]}" | sort)" "$(printf '%s' "$pl_seen" | sed '/^$/d' | sort)" \
+  "--plan: the 4 shards take every given suite exactly once"
+# a file below tests/ that is not a suite, and a suite that is not on disk,
+# still land somewhere: the fail-first shards give it every changed test file
+pl_seen=''
+for i in 1 2 3; do
+  out="$(FM_ROOT="$mr_dir" FM_CI_TIMINGS_IN="$mr_in" bash "$ROOT/bin/ci.sh" --plan "$i/3" -- tests/lib.sh tests/gone.test.sh tests/worker.test.sh 2>/dev/null)"
+  pl_seen="$pl_seen$(sed -n 's/^i //p' <<<"$out")
+"
+done
+assert_eq "0 1 2" "$(printf '%s' "$pl_seen" | sed '/^$/d' | sort -n | tr '\n' ' ' | sed 's/ $//')" \
+  "--plan places a non-suite and a missing file too, each once"
+# it follows FM_CI_TIMINGS_IN, as --shard does
+pl_forced="$(safe_tmpdir)/forced.txt"
+printf 'tests/cleanup.test.sh 900\ntests/worker.test.sh 1\n' > "$pl_forced"
+out="$(FM_ROOT="$mr_dir" FM_CI_TIMINGS_IN="$pl_forced" bash "$ROOT/bin/ci.sh" --plan 1/2 -- tests/worker.test.sh tests/cleanup.test.sh 2>/dev/null)"
+assert_eq "i 1" "$(grep '^i ' <<<"$out" || true)" "--plan follows the recorded timings: the 900s suite first, alone"
+for bad in 0/2 3/2 x 2 /2; do
+  rc=0; out="$(FM_ROOT="$mr_dir" bash "$ROOT/bin/ci.sh" --plan "$bad" -- tests/worker.test.sh 2>&1)" || rc=$?
+  assert_eq "64" "$rc" "--plan $bad is refused"
+  assert_contains "$out" "--plan must look like i/n" "with guidance"
+done
+rc=0; out="$(FM_ROOT="$mr_dir" bash "$ROOT/bin/ci.sh" --stage bash --plan 1/2 -- tests/worker.test.sh 2>&1)" || rc=$?
+assert_eq "64" "$rc" "--plan with --stage is refused: it runs nothing"
+rc=0; out="$(FM_ROOT='' bash "$ROOT/bin/ci.sh" --plan 1/2 -- tests/worker.test.sh 2>&1)" || rc=$?
+assert_eq "64" "$rc" "--plan with FM_ROOT set but empty is refused, as the gate is"
 rm -rf "$mr_dir"
 
 # --- the workflow: separate jobs behind one required `ci` check -----------
