@@ -1350,6 +1350,61 @@ name and the guards - goes to stdout, to `--report` (the artifact) and to
 `$GITHUB_STEP_SUMMARY`. It exits 70 when it cannot run (no merge-base, a
 worktree it cannot make, a setup that fails) and 64 on bad usage.
 
+**Fail-first is sharded like the bash suites (T-158).** On 2026-09-30
+T-121 changed 18 test files; the one `fail-first` job ran every one of them
+on the head and again on the base, and was cancelled at its 10-minute limit
+twice (616 s). That left the required `ci` check red on a change whose
+shards were green, and any large change would hit the same limit. So CI
+runs it in three steps, all on pull requests only:
+
+1. **`fail-first timings`** reads the suite timings once, the way each bash
+   shard does (the last green run on `main`, best effort), and hands the
+   same text to every shard. If a green run on `main` finished between two
+   shards' own downloads, they would get two different splits, and a suite
+   could land in no shard at all.
+2. **`fail-first shard i/4`**, a matrix of 4, the bash shards' count. It
+   runs `fm-failfirst.sh --shard=i/4 --part=<file>`. Its share of the
+   changed test files is what `bin/ci.sh --plan i/4 -- <files>` gives: the
+   same estimates from the same `FM_CI_TIMINGS_IN`, and the same
+   longest-first packing that `--shard` applies to the bash suites (T-148).
+   Every given file is packed, suite or not, and each lands in exactly one
+   shard. The shard runs its share on the head and the base as above. It
+   writes a JSON part (its shard, head, merge-base, the files it was given,
+   and for each one the exits, the assertions red on base, the guards and
+   those failing on the head) and uploads it as `fail-first-part-<i>`. A
+   shard decides no verdict. It exits 0 once its share has run. A shard with
+   no changed suite of its own is not applicable: it makes no worktree, runs
+   no setup and succeeds at once. A shard exits 70 when it cannot run, and
+   its part then names the files it was given and why. Values for `--shard`,
+   `--part` and `--merge` go after `=` in one word, as `bin/ci.sh`'s
+   `--shard=` does.
+3. **`fail-first`**, the job the `ci` job needs and whose
+   `fail-first-report` artifact `fm-review.sh` reads, unchanged in name,
+   file (`fail-first.md`) and format. It runs whatever the shards did
+   (`always()`) and runs `fm-failfirst.sh --merge=<dir>`, which runs no
+   suite. It classifies the change again from the checkout and renders the
+   one report from every part under the directory. A single, unsharded run
+   renders its own part through the same code, so the merged report is the
+   single job's report for the same change. A part for another head or
+   merge-base is ignored. A changed test file that no part reports turns
+   the verdict to **fail** and is named with its reason: the shard that had
+   it could not run it (and why), or no report came from shard k. A merge
+   with no parts at all fails the same way. It never falls back to an empty
+   pass.
+
+**Predicted, not promised.** Every shard says, in its log and job summary,
+what it is predicted to take beside the heaviest bash shard, using one rule
+for both. A pool of `--jobs` runs (the runner's CPUs, at most 6) takes the
+longer of two figures: its longest run, or its whole load spread over the
+pool. A fail-first shard's load counts each suite twice, once for the head
+and once for the base. On `main`'s recorded timings (run 36511784453),
+T-121's 18 files come out as `worker.test.sh` alone in one shard, predicted
+539 s beside the bash shards' longest of 539 s, and the other three at 278,
+128 and 89 s. `tests/failfirst.test.sh` pins this. The rule is not a bound.
+A change heavy enough that one shard's doubled load, spread over the pool,
+outweighs the heaviest bash shard is predicted over it. The shard then says
+`predicted OVER it` in its log rather than hiding it.
+
 The gate half is not closed yet. Nothing writes that gate summary:
 `fm-run.sh` sends `fm-gate.sh`'s stdout to `/dev/null`, and it is outside
 T-088's scope. Until a writer tees that stdout to

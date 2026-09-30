@@ -5,6 +5,8 @@
 # runs this on every pull request and the review reads its report.
 #
 #   fm-failfirst.sh [--report <file>] [--setup <command>] [--jobs <n>] <base-ref>
+#   fm-failfirst.sh --shard=<i/n> --part=<file> [--setup <command>] [--jobs <n>] <base-ref>
+#   fm-failfirst.sh --merge=<dir> [--report <file>] <base-ref>
 #
 # Run from the checkout of the head. From the merge-base of <base-ref> and
 # HEAD it lists the test files the change adds or modifies (the project's
@@ -23,11 +25,23 @@
 #   not applicable - the change touches no behaviour: no non-test file under
 #                    bin/, board/ or adapters/ (docs, skills, tests, CI only)
 #   fail           - it does, and no assertion of a changed suite went red on
-#                    base, or it changes no suite the `test` template runs
+#                    base, or it changes no suite the `test` template runs,
+#                    or a changed suite was not run at all (a shard failed)
 #   pass           - it does, and at least one did
 # The report says which and why, and per suite lists the assertions that went
 # red on base by name and the guards. It goes to stdout, to --report, and to
 # $GITHUB_STEP_SUMMARY when that is set.
+#
+# Sharded (T-158): a large change ran past the job's limit in one job, so CI
+# runs it as n shards and one merge. --shard=i/n runs only the i-th share of
+# the changed suites - split by `bin/ci.sh --plan`, the very split the bash
+# shards get, from the same FM_CI_TIMINGS_IN - on head and base, and writes
+# what it found to --part, a JSON file; it decides no verdict, and exits 0
+# once its share ran (at once when it has none), 70 when it could not run,
+# its part then saying why. --merge=<dir> runs nothing: it classifies the
+# change again, reads every part under <dir>, and writes the one report, the
+# same report a single run writes for the same change. A changed suite no
+# part reports fails it, naming the suite and its shard.
 #
 # --setup replaces the declared `setup`, run in each tree before its suites
 # (CI passes the dependency install alone: the suites need no browser).
@@ -44,26 +58,52 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
+FF_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-REPORT=''; SETUP=''; SETUP_GIVEN=''; JOBS=''; BASE_REF=''
+# --shard, --part and --merge take their value after `=`, in one word, as
+# bin/ci.sh's --shard=i/n does.
+REPORT=''; SETUP=''; SETUP_GIVEN=''; JOBS=''; BASE_REF=''; SHARD=''; PART=''; MERGE=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --report) fm_need "fm-failfirst" "$@"; REPORT="${2-}"; shift 2 ;;
     --setup) fm_need "fm-failfirst" "$@"; SETUP="${2-}"; SETUP_GIVEN=1; shift 2 ;;
     --jobs) fm_need "fm-failfirst" "$@"; JOBS="${2-}"; shift 2 ;;
+    --shard=*) SHARD="${1#--shard=}"; shift ;;
+    --part=*) PART="${1#--part=}"; shift ;;
+    --merge=*) MERGE="${1#--merge=}"; shift ;;
+    --shard|--part|--merge)
+      echo "fm-failfirst: $1 takes its value in the same word: $1=<value>" >&2; exit 64 ;;
     -*) echo "fm-failfirst: unknown argument $1" >&2; exit 64 ;;
     *) [ -z "$BASE_REF" ] || { echo "fm-failfirst: one base ref, not $1 as well" >&2; exit 64; }
        BASE_REF="$1"; shift ;;
   esac
 done
 [ -n "$BASE_REF" ] || {
-  echo "usage: fm-failfirst.sh [--report <file>] [--setup <command>] [--jobs <n>] <base-ref>" >&2; exit 64; }
+  echo "usage: fm-failfirst.sh [--report <file>] [--setup <command>] [--jobs <n>] <base-ref>" >&2
+  echo "       fm-failfirst.sh --shard=<i/n> --part=<file> [--setup <command>] [--jobs <n>] <base-ref>" >&2
+  echo "       fm-failfirst.sh --merge=<dir> [--report <file>] <base-ref>" >&2; exit 64; }
 case "$JOBS" in
   '') JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
       case "$JOBS" in ''|*[!0-9]*|0) JOBS=2 ;; esac
       [ "$JOBS" -le 6 ] || JOBS=6 ;;
   *[!0-9]*|0) echo "fm-failfirst: --jobs must be a positive integer" >&2; exit 64 ;;
 esac
+SHARD_I=1; SHARD_N=1
+if [ -n "$SHARD" ]; then
+  [[ "$SHARD" =~ ^([1-9][0-9]*)/([1-9][0-9]*)$ ]] && [ "${BASH_REMATCH[1]}" -le "${BASH_REMATCH[2]}" ] || {
+    echo "fm-failfirst: --shard must look like i/n with i at most n, e.g. 2/4" >&2; exit 64; }
+  SHARD_I="${BASH_REMATCH[1]}"; SHARD_N="${BASH_REMATCH[2]}"
+  [ -n "$PART" ] || { echo "fm-failfirst: --shard needs --part=<file> to write its share to" >&2; exit 64; }
+  [ -z "$REPORT" ] || {
+    echo "fm-failfirst: a shard writes --part; the report is --merge's" >&2; exit 64; }
+fi
+[ -z "$PART" ] || [ -n "$SHARD" ] || { echo "fm-failfirst: --part is a shard's; give --shard=i/n too" >&2; exit 64; }
+[ -z "$MERGE" ] || [ -z "$SHARD" ] || { echo "fm-failfirst: --merge runs nothing, so it takes no --shard" >&2; exit 64; }
+if [ -n "$MERGE" ]; then
+  [ -d "$MERGE" ] || { echo "fm-failfirst: no such directory of parts: $MERGE" >&2; exit 64; }
+  MERGE="$(cd "$MERGE" && pwd)"
+fi
+case "$PART" in ''|/*) : ;; *) PART="$PWD/$PART" ;; esac
 
 say() { echo "fm-failfirst: $*" >&2; }
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || { say "not inside a git checkout"; exit 70; }
@@ -154,62 +194,15 @@ elif [ -z "$P_TEST" ]; then
   verdict='fail'; reason="config.yaml declares no project.test to run a changed suite with"
 fi
 
-# --- the two trees, and every changed suite run in both ---------------------
-# One run, as xargs hands it over: <tree> <suite index> <command> <output
-# prefix>. The shell running it is the session of whatever the suite starts,
-# as bin/ci.sh makes a suite's runner, so nothing outlives it (T-151); the
-# shell's own messages are pinned to C, as there.
-IFS= read -r -d '' ONE_SH <<'SH'
-#!/usr/bin/env bash
-cd "$1" || exit 70
-me="$(exec sh -c 'echo "$PPID"')"
-FIRSTMATE_CI_SESSION="$me" FM_SESSION_PID="$me" FM_ROOT="$1" LC_ALL='' LC_MESSAGES=C \
-  bash -c "$3" > "$4.log" 2>&1 < /dev/null
-printf '%s\n' "$?" > "$4.rc"
-SH
-if [ -z "$verdict" ]; then
-  for t in head base; do
-    git worktree add -q --detach "$work/$t" "$HEAD_SHA" >/dev/null 2>&1 || {
-      say "could not make the $t worktree"; exit 70; }
-  done
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    git -C "$work/base" checkout -q "$MB" -- "$f" 2>/dev/null || { say "could not restore $f from $MB"; exit 70; }
-  done < "$work/restored"
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    rm -f "$work/base/$f"
-  done < "$work/removed"
-  if [ -n "$SETUP" ]; then
-    for t in head base; do
-      ( cd "$work/$t" && env FM_ROOT="$work/$t" bash -c "$SETUP" ) > "$work/setup.$t.log" 2>&1 || {
-        say "setup failed in the $t tree: $SETUP"; tail -n 20 "$work/setup.$t.log" >&2; exit 70; }
-    done
-  fi
-  # one run: its tree, the suite's index, and what it runs. Each has its own
-  # session - the shell running it, which ends with it - as bin/ci.sh gives
-  # a suite, so nothing it starts outlives it (T-151).
-  mkdir -p "$work/runs"
-  printf '%s' "$ONE_SH" > "$work/one.sh"
-  : > "$work/list"
-  i=0
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    cmd="$(fill "$P_TEST" "$f")"
-    for t in head base; do
-      printf '%s\0%s\0%s\0%s\0' "$work/$t" "$i" "$cmd" "$work/runs/$t.$i" >> "$work/list"
-    done
-    i=$((i + 1))
-  done < "$work/suites"
-  say "running $i changed suite(s) on the head and on the base, $JOBS at a time"
-  env ${P_ENV[@]+"${P_ENV[@]}"} xargs -0 -n 4 -P "$JOBS" bash "$work/one.sh" < "$work/list"
-fi
+# --- the part and the report --------------------------------------------------
+# One program, two steps. `part` reads the runs of the suites this process
+# ran ($work/planned, their indices in $work/suites) into a JSON part.
+# `render` reads parts - this run's own, or every shard's under --merge -
+# into the report and its verdict. A single run renders its own part the
+# way the merge renders the shards', so the two cannot disagree.
+IFS= read -r -d '' FF_PY <<'PY'
+import glob, json, os, re, sys
 
-# --- the report -------------------------------------------------------------
-IFS= read -r -d '' REPORT_PY <<'PY'
-import os, re, sys
-
-work, verdict, reason, base_ref, mb, head = sys.argv[1:7]
 line = re.compile(r'^    (.+?) *(ok|FAIL)$')
 
 
@@ -241,63 +234,292 @@ def code(s):
     return '`%s`' % s.replace('`', "'")
 
 
-suites = lines(os.path.join(work, 'suites'))
-sections, red_total = [], 0
-if not verdict:
-    for i, suite in enumerate(suites):
-        runs = os.path.join(work, 'runs')
-        h_log, b_log = read(os.path.join(runs, 'head.%d.log' % i)), read(os.path.join(runs, 'base.%d.log' % i))
-        h_rc = (read(os.path.join(runs, 'head.%d.rc' % i)) or '?').strip()
-        b_rc = (read(os.path.join(runs, 'base.%d.rc' % i)) or '?').strip()
-        head_o, base_o = outcomes(h_log), dict(outcomes(b_log))
-        red, guard, head_red = [], [], []
-        for key, st in head_o:
-            name = key[0] + (' (#%d)' % key[1] if key[1] > 1 else '')
-            if st == 'FAIL':
-                head_red.append(name)
-            elif base_o.get(key) == 'FAIL':
-                red.append((name, 'FAIL on base'))
-            elif key not in base_o and b_rc != '0':
-                red.append((name, 'not reached on base, whose run exited %s' % b_rc))
-            elif base_o.get(key) == 'ok':
-                guard.append(name)
-        s = ['### %s' % suite, '', 'head exit %s, base exit %s' % (h_rc, b_rc), '']
-        if not head_o:
-            if h_rc == '0' and b_rc not in ('0', '?'):
-                red.append(('the suite as a whole', 'exited %s on base and 0 on head; it prints no assertion lines' % b_rc))
-            elif h_rc == '0':
-                s += ['The project\'s `test` template ran no assertion of it (it printed none), so it shows nothing either way.', '']
-        red_total += len(red)
-        s.append('Red on base (%d):' % len(red))
-        s += ['- %s: %s' % (code(n), why) for n, why in red] or ['- none']
-        s += ['', 'Guard, green on base too (%d):' % len(guard)]
-        s += ['- %s' % code(n) for n in guard] or ['- none']
-        if head_red:
-            s += ['', 'Failing on the head itself (%d), counted neither way:' % len(head_red)]
-            s += ['- %s' % code(n) for n in head_red]
-        sections.append('\n'.join(s))
-    if red_total:
-        verdict, reason = 'pass', '%d assertion(s) of the changed suites went red on base' % red_total
-    else:
-        verdict, reason = 'fail', 'the change modifies behaviour and no assertion of a changed suite went red on base'
+def collect(runs, i, suite):
+    h_log, b_log = read(os.path.join(runs, 'head.%d.log' % i)), read(os.path.join(runs, 'base.%d.log' % i))
+    h_rc = (read(os.path.join(runs, 'head.%d.rc' % i)) or '?').strip()
+    b_rc = (read(os.path.join(runs, 'base.%d.rc' % i)) or '?').strip()
+    head_o, base_o = outcomes(h_log), dict(outcomes(b_log))
+    red, guard, head_red = [], [], []
+    for key, st in head_o:
+        name = key[0] + (' (#%d)' % key[1] if key[1] > 1 else '')
+        if st == 'FAIL':
+            head_red.append(name)
+        elif base_o.get(key) == 'FAIL':
+            red.append([name, 'FAIL on base'])
+        elif key not in base_o and b_rc != '0':
+            red.append([name, 'not reached on base, whose run exited %s' % b_rc])
+        elif base_o.get(key) == 'ok':
+            guard.append(name)
+    silent = False
+    if not head_o:
+        if h_rc == '0' and b_rc not in ('0', '?'):
+            red.append(['the suite as a whole', 'exited %s on base and 0 on head; it prints no assertion lines' % b_rc])
+        elif h_rc == '0':
+            silent = True
+    return {'suite': suite, 'head_exit': h_rc, 'base_exit': b_rc, 'red': red, 'guard': guard,
+            'head_red': head_red, 'silent': silent}
 
-out = ['## Fail-first: %s' % verdict, '', reason[0].upper() + reason[1:] + '.', '',
-       '- base: `%s`, the merge-base of HEAD with %s' % (mb, base_ref),
-       '- head: `%s`' % head]
-behaviour = lines(os.path.join(work, 'behaviour'))
-restored, removed = lines(os.path.join(work, 'restored')), lines(os.path.join(work, 'removed'))
-out.append('- behaviour changed: ' + (', '.join(code(x) for x in behaviour) or 'none'))
-out.append('- changed suites: ' + (', '.join(code(x) for x in suites) or 'none'))
-if sections:
-    out.append('- in the base tree: %d changed non-test file(s) restored to the merge-base, %d the change adds removed'
-               % (len(restored), len(removed)))
-    out.append('- the head was re-run in this job beside the base, not read from CI\'s shards')
-out.append('')
-out += [x + '\n' for x in sections]
-print('\n'.join(out).rstrip('\n'))
-sys.exit(3 if verdict == 'fail' else 0)
+
+def part(argv):
+    work, shard, of, head, mb, status, error, predicted = argv
+    suites = lines(os.path.join(work, 'suites'))
+    planned = [int(x) for x in lines(os.path.join(work, 'planned'))]
+    results = []
+    if status == 'ran':
+        results = [collect(os.path.join(work, 'runs'), i, suites[i]) for i in planned]
+    json.dump({'fail_first_part': 1, 'shard': int(shard), 'of': int(of), 'head': head, 'base': mb,
+               'status': status, 'error': error, 'planned': [suites[i] for i in planned],
+               'predicted': predicted, 'results': results}, sys.stdout, indent=1)
+    print()
+    return 0
+
+
+def section(r):
+    s = ['### %s' % r['suite'], '', 'head exit %s, base exit %s' % (r['head_exit'], r['base_exit']), '']
+    if r['silent']:
+        s += ['The project\'s `test` template ran no assertion of it (it printed none), so it shows nothing either way.', '']
+    s.append('Red on base (%d):' % len(r['red']))
+    s += ['- %s: %s' % (code(n), why) for n, why in r['red']] or ['- none']
+    s += ['', 'Guard, green on base too (%d):' % len(r['guard'])]
+    s += ['- %s' % code(n) for n in r['guard']] or ['- none']
+    if r['head_red']:
+        s += ['', 'Failing on the head itself (%d), counted neither way:' % len(r['head_red'])]
+        s += ['- %s' % code(n) for n in r['head_red']]
+    return '\n'.join(s)
+
+
+def load_parts(paths, head, mb):
+    parts, ignored = [], []
+    for p in sorted(paths):
+        try:
+            with open(p) as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            ignored.append('%s does not read as a part' % os.path.basename(p))
+            continue
+        if not isinstance(d, dict) or d.get('fail_first_part') != 1:
+            ignored.append('%s is not a fail-first part' % os.path.basename(p))
+        elif d.get('head') != head or d.get('base') != mb:
+            ignored.append('shard %s/%s reported another head or base' % (d.get('shard'), d.get('of')))
+        else:
+            parts.append(d)
+    parts.sort(key=lambda d: d.get('shard', 0))
+    return parts, ignored
+
+
+def not_run(suite, parts):
+    tag = lambda d: 'shard %s/%s' % (d.get('shard'), d.get('of'))
+    for d in parts:
+        if suite in (d.get('planned') or []):
+            if d.get('status') == 'error':
+                return '%s could not run it: %s' % (tag(d), d.get('error') or 'no reason given')
+            return '%s did not report its result' % tag(d)
+    if not parts:
+        return 'no fail-first shard sent a report'
+    of = max(int(d.get('of') or 0) for d in parts)
+    got = set(int(d.get('shard') or 0) for d in parts)
+    missing = ['%d/%d' % (k, of) for k in range(1, of + 1) if k not in got]
+    return 'no shard reported it' + ('; no report came from shard %s' % ', '.join(missing) if missing else '')
+
+
+def render(argv):
+    work, verdict, reason, base_ref, mb, head = argv[:6]
+    suites = lines(os.path.join(work, 'suites'))
+    sections, red_total, unrun = [], 0, []
+    if not verdict:
+        parts, ignored = load_parts(argv[6:], head, mb)
+        results = {}
+        for d in parts:
+            for r in d.get('results') or []:
+                if isinstance(r, dict) and r.get('suite') in suites:
+                    results.setdefault(r['suite'], r)
+        for suite in suites:
+            r = results.get(suite)
+            if r is None:
+                why = not_run(suite, parts)
+                unrun.append(suite)
+                s = ['### %s' % suite, '', 'Not run: %s.' % why]
+                if ignored:
+                    s += ['', 'Ignored: %s.' % '; '.join(ignored)]
+                sections.append('\n'.join(s))
+                continue
+            red_total += len(r['red'])
+            sections.append(section(r))
+        if unrun:
+            verdict = 'fail'
+            reason = '%d changed suite(s) did not run, so fail-first cannot say what they do on base: %s' % (
+                len(unrun), ', '.join(code(x) for x in unrun))
+        elif red_total:
+            verdict, reason = 'pass', '%d assertion(s) of the changed suites went red on base' % red_total
+        else:
+            verdict, reason = 'fail', 'the change modifies behaviour and no assertion of a changed suite went red on base'
+
+    out = ['## Fail-first: %s' % verdict, '', reason[0].upper() + reason[1:] + '.', '',
+           '- base: `%s`, the merge-base of HEAD with %s' % (mb, base_ref),
+           '- head: `%s`' % head]
+    behaviour = lines(os.path.join(work, 'behaviour'))
+    restored, removed = lines(os.path.join(work, 'restored')), lines(os.path.join(work, 'removed'))
+    out.append('- behaviour changed: ' + (', '.join(code(x) for x in behaviour) or 'none'))
+    out.append('- changed suites: ' + (', '.join(code(x) for x in suites) or 'none'))
+    if sections:
+        out.append('- in the base tree: %d changed non-test file(s) restored to the merge-base, %d the change adds removed'
+                   % (len(restored), len(removed)))
+        out.append('- the head was re-run beside the base, on the same runner, not read from CI\'s bash shards')
+    out.append('')
+    out += [x + '\n' for x in sections]
+    print('\n'.join(out).rstrip('\n'))
+    return 3 if verdict == 'fail' else 0
+
+
+if __name__ == '__main__':
+    mode, rest = sys.argv[1], sys.argv[2:]
+    if mode == 'parts':
+        print('\n'.join(sorted(glob.glob(os.path.join(rest[0], '**', '*.json'), recursive=True))))
+        sys.exit(0)
+    sys.exit(part(rest) if mode == 'part' else render(rest))
 PY
-python3 -c "$REPORT_PY" "$work" "$verdict" "$reason" "$BASE_REF" "$MB" "$HEAD_SHA" > "$work/report.md"
+
+# --- which of the changed suites this process runs ---------------------------
+# All of them, unless it is a shard: then the share bin/ci.sh --plan gives
+# the i-th of n, the bash shards' own split. Indices into $work/suites.
+: > "$work/planned"
+PREDICTED=''
+all=()   # the changed suites, by index (bash 3.2 has no mapfile)
+while IFS= read -r f; do all+=("$f"); done < "$work/suites"
+if [ -z "$verdict" ] && [ -z "$MERGE" ]; then
+  if [ -z "$SHARD" ]; then
+    awk '{ print NR - 1 }' "$work/suites" > "$work/planned"
+  else
+    plan="$(FM_ROOT="$REPO" bash "$FF_BIN/ci.sh" --plan "$SHARD" -- ${all[@]+"${all[@]}"})" || {
+      say "bin/ci.sh --plan $SHARD could not split the changed suites"; exit 70; }
+    load=''; top=''; unit=''; : > "$work/bash-shards"
+    while IFS=' ' read -r k a b c; do
+      case "$k" in
+        i) printf '%s\n' "$a" >> "$work/planned" ;;
+        p) load="$a"; top="$b"; unit="$c" ;;
+        l) printf '%s %s\n' "$a" "$b" >> "$work/bash-shards" ;;
+      esac
+    done <<< "$plan"
+    # What the shard is predicted to take, beside what the heaviest bash
+    # shard is, by one rule for both: a pool of $JOBS runs at once takes the
+    # longer of its longest run and its whole load spread over the pool.
+    # Here every suite runs twice, on the head and on the base, side by side.
+    if [ -n "$load" ] && [ -s "$work/bash-shards" ]; then
+      PREDICTED="$(awk -v p="$load" -v t="$top" -v u="$unit" -v j="$JOBS" '
+        function wall(s, m) { return (m > s / j) ? m : s / j }
+        { w = wall($1, $2); if (w > b) b = w }
+        END {
+          u = (u == "s") ? "s" : " bytes"; f = wall(2 * p, t)
+          printf "%.1f%s (head and base of each suite, %d at a time: the longer of its longest suite, %.1f%s, and 2 x %.1f%s over %d); the bash shards'"'"' longest is predicted %.1f%s by the same rule: %s",
+            f, u, j, t, u, p, u, j, b, u, (f > b + 0.0005) ? "this shard is predicted OVER it" : "within it"
+        }' "$work/bash-shards")"
+    fi
+  fi
+fi
+
+# write_part <status> [error]: this shard's part, to --part
+write_part() {
+  [ -n "$PART" ] || return 0
+  python3 -c "$FF_PY" part "$work" "$SHARD_I" "$SHARD_N" "$HEAD_SHA" "$MB" "$1" "${2-}" "$PREDICTED" > "$work/part.json" &&
+    cp "$work/part.json" "$PART" || { say "could not write the part $PART"; return 1; }
+}
+# die <message>: it could not run; a shard's part says why first, so the
+# merge can name the suites it was given
+die() { say "$1"; write_part error "$1"; exit 70; }
+
+if [ -n "$SHARD" ]; then
+  if [ -n "$verdict" ]; then
+    say "shard $SHARD: nothing to run: $reason; the merge reports it"
+    write_part decided || exit 70
+    exit 0
+  fi
+  n_all="$(awk 'END { print NR }' "$work/suites")"
+  if [ ! -s "$work/planned" ]; then
+    say "shard $SHARD: none of the $n_all changed suite(s) is this shard's: not applicable"
+    write_part none || exit 70
+    exit 0
+  fi
+  say "shard $SHARD: $(awk 'END { print NR }' "$work/planned") of $n_all changed suite(s)${PREDICTED:+, predicted $PREDICTED}"
+fi
+
+# --- the two trees, and every planned suite run in both ---------------------
+# One run, as xargs hands it over: <tree> <suite index> <command> <output
+# prefix>. The shell running it is the session of whatever the suite starts,
+# as bin/ci.sh makes a suite's runner, so nothing outlives it (T-151); the
+# shell's own messages are pinned to C, as there.
+IFS= read -r -d '' ONE_SH <<'SH'
+#!/usr/bin/env bash
+cd "$1" || exit 70
+me="$(exec sh -c 'echo "$PPID"')"
+FIRSTMATE_CI_SESSION="$me" FM_SESSION_PID="$me" FM_ROOT="$1" LC_ALL='' LC_MESSAGES=C \
+  bash -c "$3" > "$4.log" 2>&1 < /dev/null
+printf '%s\n' "$?" > "$4.rc"
+SH
+if [ -z "$verdict" ] && [ -z "$MERGE" ]; then
+  for t in head base; do
+    git worktree add -q --detach "$work/$t" "$HEAD_SHA" >/dev/null 2>&1 || die "could not make the $t worktree"
+  done
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    git -C "$work/base" checkout -q "$MB" -- "$f" 2>/dev/null || die "could not restore $f from $MB"
+  done < "$work/restored"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    rm -f "$work/base/$f"
+  done < "$work/removed"
+  if [ -n "$SETUP" ]; then
+    for t in head base; do
+      ( cd "$work/$t" && env FM_ROOT="$work/$t" bash -c "$SETUP" ) > "$work/setup.$t.log" 2>&1 || {
+        tail -n 20 "$work/setup.$t.log" >&2; die "setup failed in the $t tree: $SETUP"; }
+    done
+  fi
+  # one run: its tree, the suite's index, and what it runs. Each has its own
+  # session - the shell running it, which ends with it - as bin/ci.sh gives
+  # a suite, so nothing it starts outlives it (T-151).
+  mkdir -p "$work/runs"
+  printf '%s' "$ONE_SH" > "$work/one.sh"
+  : > "$work/list"
+  n=0
+  while IFS= read -r i; do
+    [ -n "$i" ] || continue
+    cmd="$(fill "$P_TEST" "${all[$i]}")"
+    for t in head base; do
+      printf '%s\0%s\0%s\0%s\0' "$work/$t" "$i" "$cmd" "$work/runs/$t.$i" >> "$work/list"
+    done
+    n=$((n + 1))
+  done < "$work/planned"
+  say "running $n changed suite(s) on the head and on the base, $JOBS at a time"
+  env ${P_ENV[@]+"${P_ENV[@]}"} xargs -0 -n 4 -P "$JOBS" bash "$work/one.sh" < "$work/list"
+fi
+
+# --- a shard: its part, and the merge writes the report ----------------------
+if [ -n "$SHARD" ]; then
+  write_part ran || exit 70
+  {
+    printf '## Fail-first shard %s\n\n' "$SHARD"
+    printf 'Ran %s changed suite(s) on the head and on the base:\n\n' "$n"
+    while IFS= read -r i; do printf -- '- `%s`\n' "${all[$i]}"; done < "$work/planned"
+    [ -z "$PREDICTED" ] || printf '\nPredicted %s.\n' "$PREDICTED"
+    printf '\nThe verdict and the report are the `fail-first` job'"'"'s, which merges every shard'"'"'s part.\n'
+  } > "$work/shard.md"
+  cat "$work/shard.md"
+  [ -z "${GITHUB_STEP_SUMMARY:-}" ] || cat "$work/shard.md" >> "$GITHUB_STEP_SUMMARY"
+  exit 0
+fi
+
+# --- the report -------------------------------------------------------------
+parts=()
+if [ -z "$verdict" ]; then
+  if [ -n "$MERGE" ]; then
+    while IFS= read -r p; do [ -z "$p" ] || parts+=("$p"); done < <(python3 -c "$FF_PY" parts "$MERGE")
+    say "merging ${#parts[@]} part(s) from $MERGE"
+  else
+    PART="$work/own.json"; write_part ran || exit 70
+    parts=("$work/own.json")
+  fi
+fi
+python3 -c "$FF_PY" render "$work" "$verdict" "$reason" "$BASE_REF" "$MB" "$HEAD_SHA" \
+  ${parts[@]+"${parts[@]}"} > "$work/report.md"
 case "$?" in
   0) rc=0 ;;
   3) rc=1 ;;
