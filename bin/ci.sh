@@ -20,6 +20,10 @@
 #                        in seconds from its byte size and the recorded rate
 #   FM_CI_TIMINGS_OUT=path the bash stage writes the durations it observed
 #                        here, in the same format, to the millisecond
+#   --plan i/n -- <suite>...  run nothing: print which of the given suites
+#                        the i-th of n shards takes, by the same split
+#                        --shard makes of the bash suites (T-158: the
+#                        fail-first shards take their share with it)
 set -uo pipefail
 
 # Loaded before the option loop touches a flag, so a tree missing the
@@ -42,6 +46,8 @@ _fm_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-config.sh"
 # one more script needing a guard, which this file already is not.
 ci_stage=''
 ci_shard=''
+ci_plan=''
+ci_plan_suites=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --stage) [ $# -ge 2 ] || { printf 'ci: %s needs a value\n' "$1" >&2; exit 64; }
@@ -50,6 +56,13 @@ while [ $# -gt 0 ]; do
     --shard) [ $# -ge 2 ] || { printf 'ci: %s needs a value\n' "$1" >&2; exit 64; }
              ci_shard="$2"; shift 2 ;;
     --shard=*) ci_shard="${1#--shard=}"; shift ;;
+    --plan) [ $# -ge 2 ] || { printf 'ci: %s needs a value\n' "$1" >&2; exit 64; }
+            ci_plan="$2"; shift 2
+            if [ "${1-}" = -- ]; then
+              shift
+              ci_plan_suites=("$@")
+              set --
+            fi ;;
     *) printf 'ci: unknown argument: %s\n' "$1" >&2; exit 64 ;;
   esac
 done
@@ -74,6 +87,130 @@ if [ -n "$ci_shard" ]; then
   fi
 fi
 want_stage() { [ -z "$ci_stage" ] || [ "$ci_stage" = "$1" ]; }
+
+# How long each suite is expected to take, for --shard to balance by, in
+# one unit - seconds - for every suite (T-148). A suite FM_CI_TIMINGS_IN
+# names ("path seconds" per line) takes that value, zero included: a suite
+# recorded at 0 is fast, not unknown. A suite it does not name - new, or
+# the file absent - is estimated in seconds too: its byte size times the
+# median seconds-per-byte of the suites that were recorded. Only when no
+# suite was recorded at all is every estimate its byte size, and then no
+# two units meet in one sort. Mixing them is what put three 10-second
+# suites alone on three shards and the other 31 on the fourth: recorded
+# as 0, read as unknown, and weighed as thousands of "seconds" of bytes.
+# Prints "<estimate> <index> <path> <unit>" per suite, the unit "s", or
+# "B" for that all-bytes case.
+ci_suite_estimates() {
+  local i sz tin=''
+  if [ -n "${FM_CI_TIMINGS_IN:-}" ] && [ -r "$FM_CI_TIMINGS_IN" ]; then tin="$FM_CI_TIMINGS_IN"; fi
+  for i in "${!suites[@]}"; do
+    sz="$(wc -c < "${suites[$i]}" 2>/dev/null | tr -d ' ')"
+    printf '%s %s %s\n' "$i" "${sz:-0}" "${suites[$i]}"
+  done | FM_CI_TIN="$tin" awk '
+    BEGIN {
+      tin = ENVIRON["FM_CI_TIN"]
+      # the last line naming a suite wins; a value that is not a plain
+      # non-negative number is no recording at all
+      if (tin != "") while ((getline line < tin) > 0) {
+        if (split(line, f, " ") >= 2 && f[2] ~ /^[0-9]+(\.[0-9]+)?$/) rec[f[1]] = f[2] + 0
+      }
+    }
+    { idx[NR] = $1; size[NR] = $2 + 0; path[NR] = $3; n = NR }
+    END {
+      k = 0
+      for (r = 1; r <= n; r++) if ((path[r] in rec) && size[r] > 0) rate[++k] = rec[path[r]] / size[r]
+      for (a = 2; a <= k; a++) {
+        v = rate[a]
+        for (b = a - 1; b >= 1 && rate[b] > v; b--) rate[b + 1] = rate[b]
+        rate[b + 1] = v
+      }
+      if (k == 0) med = 1
+      else if (k % 2) med = rate[(k + 1) / 2]
+      else med = (rate[k / 2] + rate[k / 2 + 1]) / 2
+      unit = k ? "s" : "B"
+      for (r = 1; r <= n; r++) {
+        est = (path[r] in rec) ? rec[path[r]] : size[r] * med
+        printf "%.3f %s %s %s\n", est, idx[r], path[r], unit
+      }
+    }'
+}
+# --shard i/n: which of the suites this process runs. Longest-processing-time
+# bin packing - suites taken slowest first, each to whichever of the n
+# buckets is lightest so far - so every suite lands in exactly one bucket
+# and the buckets come out balanced, not just evenly counted: no bucket
+# ends more than the longest single suite above the mean. Ties (equal
+# estimates) break on the suite's own index, so the assignment is the same
+# on every run and every shard agrees on where each suite went. Prints
+# "i <index>" for each suite of shard <want>, then one "s <summary>" line
+# of what it predicts, so a slow shard, or a suite too long for any split,
+# is visible by name in the job's log; then "p <load> <longest> <unit>",
+# shard <want>'s predicted load and the longest suite in it, and the same
+# as "b <load> <longest> <unit>" for each of the n shards, in shard order.
+# With <only>, only the suites whose index is below it are packed: --plan
+# puts the suites it was given first, and every other suite is there only
+# so the seconds-per-byte rate is the one the bash shards are estimated by.
+shard_suites() {   # shard_suites <want 1..n> <n> [only]
+  local want="$1" total="$2" only="${3-}"
+  ci_suite_estimates | sort -k1,1nr -k2,2n | awk -v want="$want" -v total="$total" -v only="$only" '
+    only != "" && $2 + 0 >= only + 0 { next }
+    {
+      if (!seen++) { longest = $1; longp = $3; unit = $4 == "s" ? "s" : " bytes"; u = $4 }
+      minb = 1
+      for (b = 2; b <= total; b++) if (load[b] < load[minb]) minb = b
+      load[minb] += $1; sum += $1
+      if ($1 + 0 > mx[minb] + 0) mx[minb] = $1
+      if (minb == want) { print "i " $2; count++ }
+    }
+    END {
+      if (!seen) { unit = "s"; u = "s"; longp = "(none)" }
+      printf "s shard %d/%d: %d suites, predicted %.1f%s; mean %.1f%s; longest suite %s %.1f%s\n", \
+        want, total, count, load[want], unit, sum / total, unit, longp, longest, unit
+      printf "p %.3f %.3f %s\n", load[want], mx[want], u
+      for (b = 1; b <= total; b++) printf "b %.3f %.3f %s\n", load[b], mx[b], u
+    }'
+}
+# --plan i/n -- <suite>... (T-158): the fail-first shards split the changed
+# suites the way --shard splits the bash suites - the same estimates, from
+# the same FM_CI_TIMINGS_IN, and the same packing - and nothing else runs:
+# no budget, no stage, no temp directory. Prints "i <k>" for each given
+# suite (0-based, in the order given) the i-th shard takes, "p <load>
+# <longest> <unit>" for that shard's predicted load and its longest suite,
+# and one "l <load> <longest> <unit>" for each of the n bash shards over
+# every tests/*.test.sh, so the caller can say whether its shard is
+# predicted over the bash shards' longest.
+if [ -n "$ci_plan" ]; then
+  if [ -n "$ci_stage" ] || [ -n "$ci_shard" ]; then
+    printf 'ci: --plan runs nothing, so it takes no --stage or --shard\n' >&2
+    exit 64
+  fi
+  if [[ ! "$ci_plan" =~ ^([1-9][0-9]*)/([1-9][0-9]*)$ ]] || [ "${BASH_REMATCH[1]}" -gt "${BASH_REMATCH[2]}" ]; then
+    printf 'ci: --plan must look like i/n with i at most n, e.g. 2/4\n' >&2
+    exit 64
+  fi
+  ci_plan_i="${BASH_REMATCH[1]}"; ci_plan_n="${BASH_REMATCH[2]}"
+  if [ "${FM_ROOT+set}" = set ] && [ -z "$FM_ROOT" ]; then
+    echo "ci: FM_ROOT is set but empty; unset it to run against this tree" >&2
+    exit 64
+  fi
+  cd "${FM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}" || exit 2
+  exec < /dev/null
+  shopt -s nullglob
+  suites=(${ci_plan_suites[@]+"${ci_plan_suites[@]}"})
+  for t in tests/*.test.sh; do
+    case " ${ci_plan_suites[*]-} " in *" $t "*) : ;; *) suites+=("$t") ;; esac
+  done
+  while IFS= read -r l; do
+    case "$l" in
+      'i '*|'p '*) printf '%s\n' "$l" ;;
+      's '*) printf 'ci: plan: %s\n' "${l#s }" >&2 ;;
+    esac
+  done < <(shard_suites "$ci_plan_i" "$ci_plan_n" "${#ci_plan_suites[@]}")
+  suites=(tests/*.test.sh)
+  while IFS= read -r l; do
+    case "$l" in 'b '*) printf 'l %s\n' "${l#b }" ;; esac
+  done < <(shard_suites 1 "$ci_plan_n")
+  exit 0
+fi
 
 # Bound the string before arithmetic, avoiding overflow, octal interpretation,
 # and accidental unlimited runs. An explicitly empty value is invalid.
@@ -255,76 +392,6 @@ fi
 
 # The bash suites, glob order being the order they are reported in.
 suites=(tests/*.test.sh)
-# How long each suite is expected to take, for --shard to balance by, in
-# one unit - seconds - for every suite (T-148). A suite FM_CI_TIMINGS_IN
-# names ("path seconds" per line) takes that value, zero included: a suite
-# recorded at 0 is fast, not unknown. A suite it does not name - new, or
-# the file absent - is estimated in seconds too: its byte size times the
-# median seconds-per-byte of the suites that were recorded. Only when no
-# suite was recorded at all is every estimate its byte size, and then no
-# two units meet in one sort. Mixing them is what put three 10-second
-# suites alone on three shards and the other 31 on the fourth: recorded
-# as 0, read as unknown, and weighed as thousands of "seconds" of bytes.
-# Prints "<estimate> <index> <path> <unit>" per suite, the unit "s", or
-# "B" for that all-bytes case.
-ci_suite_estimates() {
-  local i tin=''
-  if [ -n "${FM_CI_TIMINGS_IN:-}" ] && [ -r "$FM_CI_TIMINGS_IN" ]; then tin="$FM_CI_TIMINGS_IN"; fi
-  for i in "${!suites[@]}"; do
-    printf '%s %s %s\n' "$i" "$(wc -c < "${suites[$i]}" | tr -d ' ')" "${suites[$i]}"
-  done | FM_CI_TIN="$tin" awk '
-    BEGIN {
-      tin = ENVIRON["FM_CI_TIN"]
-      # the last line naming a suite wins; a value that is not a plain
-      # non-negative number is no recording at all
-      if (tin != "") while ((getline line < tin) > 0) {
-        if (split(line, f, " ") >= 2 && f[2] ~ /^[0-9]+(\.[0-9]+)?$/) rec[f[1]] = f[2] + 0
-      }
-    }
-    { idx[NR] = $1; size[NR] = $2 + 0; path[NR] = $3; n = NR }
-    END {
-      k = 0
-      for (r = 1; r <= n; r++) if ((path[r] in rec) && size[r] > 0) rate[++k] = rec[path[r]] / size[r]
-      for (a = 2; a <= k; a++) {
-        v = rate[a]
-        for (b = a - 1; b >= 1 && rate[b] > v; b--) rate[b + 1] = rate[b]
-        rate[b + 1] = v
-      }
-      if (k == 0) med = 1
-      else if (k % 2) med = rate[(k + 1) / 2]
-      else med = (rate[k / 2] + rate[k / 2 + 1]) / 2
-      unit = k ? "s" : "B"
-      for (r = 1; r <= n; r++) {
-        est = (path[r] in rec) ? rec[path[r]] : size[r] * med
-        printf "%.3f %s %s %s\n", est, idx[r], path[r], unit
-      }
-    }'
-}
-# --shard i/n: which of the suites this process runs. Longest-processing-time
-# bin packing - suites taken slowest first, each to whichever of the n
-# buckets is lightest so far - so every suite lands in exactly one bucket
-# and the buckets come out balanced, not just evenly counted: no bucket
-# ends more than the longest single suite above the mean. Ties (equal
-# estimates) break on the suite's own index, so the assignment is the same
-# on every run and every shard agrees on where each suite went. Prints
-# "i <index>" for each suite of shard <want>, then one "s <summary>" line
-# of what it predicts, so a slow shard, or a suite too long for any split,
-# is visible by name in the job's log.
-shard_suites() {   # shard_suites <want 1..n> <n>
-  local want="$1" total="$2"
-  ci_suite_estimates | sort -k1,1nr -k2,2n | awk -v want="$want" -v total="$total" '
-    {
-      if (NR == 1) { longest = $1; longp = $3; unit = $4 == "s" ? "s" : " bytes" }
-      minb = 1
-      for (b = 2; b <= total; b++) if (load[b] < load[minb]) minb = b
-      load[minb] += $1; sum += $1
-      if (minb == want) { print "i " $2; count++ }
-    }
-    END {
-      printf "s shard %d/%d: %d suites, predicted %.1f%s; mean %.1f%s; longest suite %s %.1f%s\n", \
-        want, total, count, load[want], unit, sum / total, unit, longp, longest, unit
-    }'
-}
 shard_indices=()
 if [ -n "$ci_shard_n" ]; then
   while IFS= read -r i; do

@@ -3,9 +3,10 @@ name: ci
 # --shard into jobs that run in parallel: the fast checks, the bash suites
 # sharded across N jobs, the bun tests, and the browser tests. Do not add a
 # step here that is not in that script, or the two will disagree about what
-# green means. One job is not a piece of that script: `fail-first` runs
-# bin/fm-failfirst.sh on a pull request (T-153), which is gate 5's question
-# asked by the machine, not a stage of the check. The final `ci` job is the one required status check; it
+# green means. One group of jobs is not a piece of that script: fail-first
+# runs bin/fm-failfirst.sh on a pull request (T-153), which is gate 5's
+# question asked by the machine, not a stage of the check - sharded like the
+# bash suites, and merged by the `fail-first` job (T-158). The final `ci` job is the one required status check; it
 # needs every other job and fails if any of them failed or was skipped, so
 # branch protection and gate 6 read the same thing they always did (T-134).
 on:
@@ -140,11 +141,47 @@ jobs:
   # assertion that went red on base named. A pull request only: on a push to
   # main there is no base to revert to. Its report is the job summary and
   # the fail-first-report artifact, which fm-review.sh puts in the prompt.
-  fail-first:
-    name: fail-first
+  #
+  # Sharded (T-158): one job ran every changed suite twice and T-121's 18
+  # ran past the 10-minute limit. So 4 shards each run their share, on head
+  # and base, split by bin/ci.sh's own split of the bash suites, and the
+  # `fail-first` job merges their parts into the one report. The timings the
+  # split is balanced by are read once, here, and handed to every shard: a
+  # green run on main finishing between two shards' downloads would give
+  # them two different splits, and a suite to none of them.
+  fail-first-timings:
+    name: fail-first timings
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      timings: ${{ steps.timings.outputs.timings }}
+    steps:
+      # best effort, as the bash shards' own: none read is a split by size
+      - name: previous suite timings
+        id: timings
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/timings
+          run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main \
+            --status success --json databaseId --jq '.[0].databaseId' 2>/dev/null || true)"
+          if [ -n "$run_id" ]; then
+            gh run download "$run_id" --repo "$GITHUB_REPOSITORY" -p 'suite-timings-*' -D /tmp/timings 2>/dev/null || true
+          fi
+          find /tmp/timings -name 'suite-timings-*.txt' -exec cat {} + > /tmp/timings.txt 2>/dev/null || true
+          { echo 'timings<<FM_TIMINGS_END'; grep -v '^FM_TIMINGS_END$' /tmp/timings.txt || true; echo 'FM_TIMINGS_END'; } >> "$GITHUB_OUTPUT"
+
+  fail-first-shard:
+    name: fail-first shard ${{ matrix.shard }}/${{ strategy.job-total }}
+    needs: [fail-first-timings]
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -159,10 +196,49 @@ jobs:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
       # the dependencies alone, in each tree: the suites it runs are bash
-      # suites, which need no browser
-      - name: bin/fm-failfirst.sh
+      # suites, which need no browser. A shard with no changed suite of its
+      # own sets up nothing and succeeds at once.
+      - name: "bin/fm-failfirst.sh --shard=${{ matrix.shard }}/4"
+        env:
+          FM_FF_TIMINGS: ${{ needs.fail-first-timings.outputs.timings }}
         run: |
-          bash bin/fm-failfirst.sh --setup 'bun install --frozen-lockfile' \
+          printf '%s\n' "$FM_FF_TIMINGS" > /tmp/timings.txt
+          FM_CI_TIMINGS_IN=/tmp/timings.txt bash bin/fm-failfirst.sh \
+            --shard="${{ matrix.shard }}/4" --part="/tmp/fail-first-part-${{ matrix.shard }}.json" \
+            --setup 'bun install --frozen-lockfile' "origin/${{ github.base_ref }}"
+      - name: upload the shard's part
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fail-first-part-${{ matrix.shard }}
+          path: /tmp/fail-first-part-${{ matrix.shard }}.json
+          if-no-files-found: ignore
+
+  # The merge: it runs whatever the shards did, so a shard that failed, was
+  # cancelled or never started still ends in one report - a fail naming the
+  # suites no part reported.
+  fail-first:
+    name: fail-first
+    needs: [fail-first-shard]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: download the shards' parts
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: fail-first-part-*
+          path: /tmp/fail-first-parts
+          merge-multiple: true
+      - name: bin/fm-failfirst.sh --merge
+        run: |
+          mkdir -p /tmp/fail-first-parts
+          bash bin/fm-failfirst.sh --merge=/tmp/fail-first-parts \
             --report /tmp/fail-first.md "origin/${{ github.base_ref }}"
       - name: upload the fail-first report
         if: always()

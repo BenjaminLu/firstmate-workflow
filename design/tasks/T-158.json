@@ -1,0 +1,22 @@
+{
+  "id": "T-158",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "fail-first finishes on a large change: the job is sharded like the bash suites, each shard runs its share of the changed suites on head and base, and the report is merged",
+  "scope": [
+    ".github/workflows/ci.yml",
+    "bin/fm-failfirst.sh",
+    "bin/ci.sh",
+    "bin/fm-review.sh",
+    "tests/failfirst.test.sh",
+    "tests/ci.test.sh",
+    "design/**",
+    "design/tasks/T-158.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-09-30 T-121 (#107) changes 18 suites; the single `fail-first` job (T-153) runs every changed suite on the head and again on the base, 4 at a time, and was cancelled at its 10-minute limit twice (616 s), which leaves the required `ci` check red on a change whose shards are green. Any large change hits the same limit. Its own spec file, design/tasks/T-158.json, is committed on this branch.",
+    "The fail-first job runs as a matrix of 4 shards, the same count and the same time-balanced split bin/ci.sh uses for the bash suites (T-148, from the recorded suite timings): each shard takes its share of the changed suites and runs them on head and base. A final `fail-first` aggregate job merges the shards' reports into the one report and job summary fm-review.sh reads (same artifact name and format as today), and is what the `ci` aggregator needs. A shard with no changed suite is not applicable and succeeds at once. No single fail-first shard is predicted over the bash shards' longest.",
+    "Tests with fixture repositories: 4 shards cover every changed suite exactly once; the merged report equals the single-job report for the same change; a shard's failure fails the aggregate naming its suite. The PR body reports T-121's fail-first time once this lands (firstmate re-runs it). Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves."
+  ]
+}
