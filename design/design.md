@@ -3502,6 +3502,26 @@ refresh token, and that the operator's file is neither readable nor bound;
 `tests/adapter-contract.test.sh` checks the same through each adapter,
 where its CLI looks.
 
+**A round's recorded environment is an allowlist (T-156).** On 2026-09-30
+a worker round's `environment.json` on the captain's Mac held the whole
+of the launcher's environment, the operator's own
+`CLAUDE_CODE_MESSAGING_TOKEN` included; a `GH_TOKEN` would have landed there
+too. So `fm-herdr.py transport` writes that file from one list,
+`ROUND_ENV_NAMES` and `ROUND_ENV_PREFIXES` beside `round_environment()`,
+never from `os.environ`: `FM_*` (the round's identity, paths and fm's own
+settings), `PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_*`, `TERM`, `TZ`, `USER`,
+`LOGNAME`, `SHELL`, the Herdr window's `HERDR_ENV`, `HERDR_PANE_ID`,
+`HERDR_TAB_ID` and `HERDR_WORKSPACE_ID`, the CA-bundle variables, and the
+session bus `fm-sandbox.sh` reads a libsecret login over, each with its reason
+in a comment. Of the vendors' login variables the round gets only its own
+vendor's, and of those only the first one set, which is the one
+`fm-sandbox.sh` takes as the login; `ROUND_LOGIN` carries the policy's
+`given` lists, and `tests/herdr.test.sh` holds the two equal. The runner
+reads the file back through the same allowlist before it starts the
+adapter, so a file an older launcher wrote hands the adapter no more.
+A name the runner needs is added to the list, with its reason; the
+sandbox's scrub stays the second line.
+
 **The trade-off accepted (captain, 2026-09-26, option A).** The vendor's
 own token is readable by the model in the round; no other credential is.
 A round's `CLAUDE_CODE_OAUTH_TOKEN`, `CURSOR_API_KEY`, or codex's or
