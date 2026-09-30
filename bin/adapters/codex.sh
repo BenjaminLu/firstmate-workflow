@@ -29,6 +29,13 @@ _fm_alib="$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 # round's own holding only a copy of the login less its refresh token, so
 # the operator's config.toml and profiles are not read. None of the repository files the
 # policy keeps unloaded is one codex reads. Reading is not among them.
+#
+# codex runs every command as `$SHELL -lc <command>`, the operator's login
+# shell (T-147). What that shell needs is fm-sandbox.sh's, for every vendor:
+# TMPPREFIX inside the round's own TMPDIR for zsh's here-documents, and a
+# login profile in the round's own HOME that puts the round's PATH back
+# after the system's (macOS's path_helper puts Apple's xcrun shims first),
+# so no codex flag is needed for either.
 codex_native() {
   if [ "${FM_OUTER_OS:-}" = darwin ]; then
     echo "repo-config env ulimit"

@@ -128,6 +128,8 @@ exec 3<&0
 exec < /dev/null
 
 say() { printf 'fm-sandbox: %s\n' "$*" >&2; }
+# sq <text> -> it, single-quoted for a /bin/sh script this writes
+sq() { local s=${1//\'/\'\\\'\'}; printf "'%s'" "$s"; }
 
 # fm_herdr_emit_status, best-effort only: fm-sandbox.sh runs standalone in
 # every other mode, so a missing or unreadable fm-config.sh degrades the
@@ -238,6 +240,11 @@ def decide(p, vendor, host):
     why = never(h)
     if why:
         return False, 'never: ' + why
+    # the captain's known refusals (T-147), whatever a hand-edited network
+    # or a vendor's own domains say
+    for k in p.get('known_refused', []):
+        if re.fullmatch(k['pattern'], h):
+            return False, 'known: ' + k['what']
     if h in [x.lower() for x in p['network']]:
         return True, 'a declared registry'
     for d in p['vendors'].get(vendor, {}).get('hosts', []):
@@ -1364,8 +1371,40 @@ done
 exec "$real" $dir $extra "${TMPDIR:-/tmp}/$prefix.XXXXXXXXXX"
 MKTEMP
   chmod +x "$fmbin/mktemp" || { say "cannot make $fmbin/mktemp executable"; exit 70; }
-  scrub+=(PATH="$fmbin:$PATH")
 fi
+round_path="$PATH"
+[ -z "${fmbin:-}" ] || round_path="$fmbin:$PATH"
+
+# Apple's xcrun shims (T-147). Where the first git, python3 or other
+# developer tool on the round's PATH is one of them (fm_xcrun_shim), it
+# cannot run inside the round: xcrun's cache is outside every write root,
+# and an unaccepted Xcode licence stops it after that. So xcrun is asked
+# here, outside the round, for the tool it would run, and a stand-in ahead
+# of the shim runs that one directly - the same tool the shim would have
+# run, with the same licence already accepted. Where xcrun has none to
+# give, the stand-in says so plainly and exits 69 at once, instead of the
+# round failing on a cache write and a licence prompt it cannot answer.
+# macOS only: no shim exists anywhere else.
+if [ "$cmd" = run ] && [ "$os" = darwin ] && [ -n "$tmp" ] && declare -F fm_xcrun_shim >/dev/null; then
+  xbin="$tmp/.fm-xcrun"
+  for xt in $FM_XCRUN_TOOLS; do
+    xfound="$(fm_path_tool "$xt" "$round_path")" || continue
+    fm_xcrun_shim "$xfound" || continue
+    mkdir -p "$xbin" || { say "cannot make $xbin"; exit 70; }
+    IFS=$'\t' read -r xhow xwhat < <(fm_xcrun_resolve "$xt")
+    if [ "$xhow" = real ]; then
+      say "$xt on the round's PATH is Apple's xcrun shim ($xfound); the round runs the $xt it names, $xwhat, directly"
+      printf '#!/bin/sh\nexec %s "$@"\n' "$(sq "$xwhat")" > "$xbin/$xt"
+    else
+      xmsg="fm: $xt here is only Apple's Xcode shim ($xfound), which cannot run inside a crew round: $xwhat. Nothing inside the round can fix it; say so in your account of the round. The operator fixes it outside the round: $(fm_xcrun_fix "$xt"); fm doctor reports it."
+      say "${xmsg#fm: }"
+      printf '#!/bin/sh\necho %s >&2\nexit 69\n' "$(sq "$xmsg")" > "$xbin/$xt"
+    fi
+    chmod +x "$xbin/$xt" || { say "cannot make $xbin/$xt executable"; exit 70; }
+  done
+  [ ! -d "$xbin" ] || round_path="$xbin:$round_path"
+fi
+scrub+=(PATH="$round_path")
 
 # A normal environment (T-128). Bare `mktemp -d` and `mktemp -t` resolve
 # under TMPDIR - via the stand-in above on macOS, directly on Linux; `~/.cache`,
@@ -1393,6 +1432,30 @@ if [ -n "$tmp" ]; then
   mkdir -p "$home" "$tmp/cache/xdg" "$home/.config" "$home/.local/share" || exit 70
   scrub+=(TMPDIR="$tmp" TMP="$tmp" TEMP="$tmp" HOME="$home"
           XDG_CACHE_HOME="$tmp/cache/xdg" XDG_DATA_HOME="$home/.local/share")
+  # A shell's own temp files (T-147). codex runs every command through the
+  # operator's login shell, and zsh writes a here-document's temp file
+  # under TMPPREFIX, /tmp/zsh by default, not TMPDIR: the first codex round
+  # stopped on `can't create temp file for here document`. bash, ksh and
+  # dash already follow TMPDIR or use a pipe.
+  #
+  # And the operator's toolchain first on PATH, after the login profile. A
+  # login shell runs the system's profile - on macOS /etc/zprofile and
+  # /etc/profile, whose path_helper puts /usr/bin, Apple's xcrun shims,
+  # ahead of every directory the operator added (Homebrew's, mise's) - so
+  # `git` in a codex round was /usr/bin/git where the operator's own shell
+  # finds their git. The round's HOME is its own, so its profile is fm's:
+  # it puts back the PATH this script gives the round, SANDBOX_ROUND_PATH,
+  # after the system's has run. ZDOTDIR is set so zsh reads it rather than
+  # an operator's ZDOTDIR the round cannot read. Every vendor's shell gets
+  # the same, whether it starts a login shell or not.
+  scrub+=(TMPPREFIX="$tmp/zsh" ZDOTDIR="$home" SANDBOX_ROUND_PATH="$round_path")
+  for rc in .zprofile .bash_profile .profile; do
+    [ -e "$home/$rc" ] && continue
+    printf '%s\n' \
+      '# fm-sandbox.sh (T-147): the round'"'"'s PATH, back ahead of what the system'"'"'s login profile put first' \
+      '[ -z "${SANDBOX_ROUND_PATH-}" ] || PATH="$SANDBOX_ROUND_PATH"' 'export PATH' > "$home/$rc" \
+      || { say "cannot write $home/$rc"; exit 70; }
+  done
 fi
 if [ "$(uname -s)" = Linux ]; then listed="$(ps -L -U "$(id -u)" -o lwp= 2>/dev/null)"
 else listed="$(ps -U "$(id -u)" -o pid= 2>/dev/null)"; fi || listed=''

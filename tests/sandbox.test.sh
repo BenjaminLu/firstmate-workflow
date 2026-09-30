@@ -206,6 +206,17 @@ out="$(pol worker 'projects:
         network: 127.0.0.1
 ' 2>&1)"
 assert_eq "65" "$?" "a project cannot declare loopback either"
+# nor OpenAI's user file store (T-147): the captain refused it to every
+# vendor, as an upload channel no round's conversation needs
+out="$(pol worker 'policy:
+  network: registry.npmjs.org sdmntprsouthcentralus.oaiusercontent.com
+' 2>&1)"
+assert_eq "65" "$?" "a policy cannot declare OpenAI's user file store"
+assert_contains "$out" "OpenAI's user file store" "and is told what it is"
+pol worker 'vendor: codex
+' >/dev/null 2>&1
+assert_contains "$(jq -r '.known_refused[].pattern' "$t/worker.json" 2>/dev/null)" "oaiusercontent" \
+  "and every policy carries the known refusals, for the proxy and the report to read"
 # nor turn the sandbox off: the escape hatch is the operator's shell's, and
 # a branch can change config.yaml
 for bad in 'policy:
@@ -515,6 +526,20 @@ for never in github.com api.github.com objects.githubusercontent.com localhost 1
 done
 jq '.vendors.claude.hosts = ["github.com"]' "$P" > "$t/edited2.json"
 assert_eq "1" "$(decide "$t/edited2.json" claude api.github.com)" "not even as a vendor's service"
+# OpenAI's user file store (T-147): refused to every vendor's round by the
+# captain's decision, codex's included, and said to be a known refusal
+for sd in sdmntprsouthcentralus.oaiusercontent.com sdmntprnortheu.oaiusercontent.com; do
+  for v in codex claude ''; do
+    assert_eq "1" "$(decide "$P" "$v" "$sd")" "$sd is refused to ${v:-a} round"
+  done
+done
+assert_contains "$("$SB" decide --policy="$P" --vendor=codex sdmntprnortheu.oaiusercontent.com 2>&1)" \
+  "OpenAI's user file store" "and the proxy says what it is"
+jq '.network += ["sdmntprnortheu.oaiusercontent.com"] | .vendors.codex.hosts += ["oaiusercontent.com"]' "$P" > "$t/edited3.json"
+assert_eq "1" "$(decide "$t/edited3.json" codex sdmntprnortheu.oaiusercontent.com)" \
+  "whatever a hand-edited policy declares"
+assert_eq "0" "$(decide "$t/edited3.json" codex files.oaiusercontent.com)" \
+  "while the rest of that domain is as the policy says"
 
 # --- run: the command inside the sandbox ------------------------------------------
 cat > "$t/probe.py" <<'PY'
@@ -537,6 +562,12 @@ cat > "$t/cmd.sh" <<S
 #!/usr/bin/env bash
 printf 'TMPDIR=%s\nNO_PROXY=%s\nHOME=%s\nXDG_CACHE_HOME=%s\nXDG_CONFIG_HOME=%s\nXDG_DATA_HOME=%s\n' \
   "\$TMPDIR" "\${NO_PROXY:-}" "\$HOME" "\${XDG_CACHE_HOME:-}" "\${XDG_CONFIG_HOME:-}" "\${XDG_DATA_HOME:-}" > "$t/tmpdir"
+# T-147: a shell's own temp files, and the PATH a login shell ends with
+# once the system's profile has put its own directories first
+printf 'TMPPREFIX=%s\nZDOTDIR=%s\nPATH=%s\n' "\${TMPPREFIX:-}" "\${ZDOTDIR:-}" "\$PATH" >> "$t/tmpdir"
+for rc in .zprofile .bash_profile .profile; do
+  printf 'LOGIN %s=%s\n' "\$rc" "\$(PATH=/usr/bin:/bin; [ -r "\${ZDOTDIR:-\$HOME}/\$rc" ] && . "\${ZDOTDIR:-\$HOME}/\$rc"; printf '%s' "\$PATH")" >> "$t/tmpdir"
+done
 python3 "$t/probe.py" "$t/ran"
 exit 7
 S
@@ -601,6 +632,22 @@ assert_eq "$rhome/.local/share" "$(sed -n 's/^XDG_DATA_HOME=//p' "$t/tmpdir" 2>/
 # of fm's" checks directly. So it passes through the caller's own value.
 assert_eq "$callerconfig" "$(sed -n 's/^XDG_CONFIG_HOME=//p' "$t/tmpdir" 2>/dev/null)" \
   "the round is handed the caller's own XDG_CONFIG_HOME, not one of fm's"
+# T-147: zsh writes a here-document under TMPPREFIX (/tmp/zsh by default),
+# not TMPDIR; the round's is inside its own temp directory
+assert_eq "$rtmp/zsh" "$(sed -n 's/^TMPPREFIX=//p' "$t/tmpdir" 2>/dev/null)" \
+  "the round's zsh writes its here-documents under the round's own TMPDIR"
+# and a login shell - codex runs every command through one - ends with the
+# round's PATH, not the one the system's profile (macOS's path_helper)
+# rebuilt with /usr/bin, Apple's xcrun shims, first: the round's HOME is its
+# own, and its profile, read after the system's, puts the round's back
+rpath="$(sed -n 's/^PATH=//p' "$t/tmpdir" 2>/dev/null)"
+assert_ne "" "$rpath" "the round is given a PATH"
+assert_eq "$rhome" "$(sed -n 's/^ZDOTDIR=//p' "$t/tmpdir" 2>/dev/null)" \
+  "zsh reads its profile from the round's own HOME, never an operator's ZDOTDIR"
+for rc in .zprofile .bash_profile .profile; do
+  assert_eq "$rpath" "$(sed -n "s/^LOGIN $rc=//p" "$t/tmpdir" 2>/dev/null)" \
+    "the round's $rc puts the round's PATH back after the system's login profile"
+done
 assert_fail "test -e '$rtmp'" "and it is removed when the round ends"
 assert_fail "test -e '$rhome'" "HOME with it, being under the same TMPDIR"
 assert_contains "$(cat "$t/tmpdir" 2>/dev/null)" "NO_PROXY=localhost,127.0.0.1,::1" \
@@ -1857,6 +1904,21 @@ if real_sandbox_ok; then
     ' 2>&1)"
   assert_contains "$ckout" "ALL_OK" "real sandbox: git add and git checkout -- <path> succeed in a clone checkout"
   assert_contains "$ckout" "committed" "and the checkout actually restored the committed content"
+  # T-147: a login shell's here-document and PATH, the kernel enforcing the
+  # write roots: zsh's here-document temp file is refused outside them, and
+  # macOS's path_helper runs for real in /etc/zprofile and /etc/profile
+  lpath="$("$SB" run --policy="$rt/policy.json" --root="$rt/tree" --tmp="$rt/tmp" \
+    -- bash -c 'printf "%s|" "$PATH"; bash -lc "printf %s \"\$PATH\""' 2>/dev/null)"
+  assert_eq "${lpath%%|*}" "${lpath#*|}" "real sandbox: a login bash ends with the round's own PATH"
+  if command -v zsh >/dev/null 2>&1; then
+    zout="$("$SB" run --policy="$rt/policy.json" --root="$rt/tree" --tmp="$rt/tmp" \
+      -- zsh -lc 'cat <<EOF
+heredoc ok
+EOF
+printf "%s|" "$PATH"' 2>&1)"
+    assert_contains "$zout" "heredoc ok" "real sandbox: a here-document works in a login zsh"
+    assert_contains "$zout" "$(printf '%s' "${lpath%%|*}")|" "and a login zsh ends with the round's own PATH"
+  fi
   safe_rm_rf "$rt"
 else
   echo "    (skipped: no real sandbox nestable on this host - real-sandbox behaviour untested here)"

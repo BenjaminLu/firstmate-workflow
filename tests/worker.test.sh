@@ -119,6 +119,33 @@ assert_eq "0" "$(jq -c 'select(.type=="crew_status" and (.data.progress!=null))'
 # the prompt carries the task and the skill, and is not left lying around
 assert_fail "test -f '$r/state/worktrees/T-Z/.fm-prompt.md'" "the prompt is cleaned up"
 
+# T-147: a new task's spec exists only in firstmate's working tree, never
+# committed on the base. T-157's codex round was told the file "is committed
+# on this branch", found it was not, and stopped. The worker copies it into
+# the new task's worktree before the round, and it goes out in the round's
+# commit.
+dn="$(fixture)"; rn="$dn/repo"; GHn="$(ghstub "$dn")"
+jq -n '{id:"T-N",title:"a new task",scope:["src/**","design/tasks/T-N.json"],acceptance:["it exists"]}' \
+  > "$rn/design/tasks/T-N.json"
+assert_eq "?? design/tasks/T-N.json" "$(git -C "$rn" status --porcelain -- design/tasks)" \
+  "the new task's spec is untracked in the dispatching repository"
+outn="$(cd "$rn" && FM_ROOT="$rn" FM_GH="$GHn" bin/fm-worker.sh --task T-N --name worker-n 2>&1)"
+assert_eq "0" "$?" "a new task whose spec is untracked runs"
+bn="$(printf '%s' "$outn" | tail -1)"
+assert_eq "$(cat "$rn/design/tasks/T-N.json")" "$(git -C "$rn" show "$bn:design/tasks/T-N.json" 2>/dev/null)" \
+  "its spec file is copied into the worktree and committed with the round's work"
+assert_contains "$(git -C "$rn" show --stat --format= "$bn")" "mock.txt" "beside what the round wrote"
+assert_contains "$outn" "design/tasks/T-N.json is not on the base; copied into the worktree" "and the worker says so"
+# the copy is the script's, not the round's: a round that leaves it as it
+# was and changes nothing else changed nothing
+dn2="$(fixture)"; rn2="$dn2/repo"; GHn2="$(ghstub "$dn2")"
+jq -n '{id:"T-N",title:"a new task",scope:["src/**"],acceptance:["it exists"]}' > "$rn2/design/tasks/T-N.json"
+outn2="$(cd "$rn2" && FM_ROOT="$rn2" FM_GH="$GHn2" FM_MOCK_FILE=design/tasks/T-N.json \
+  FM_MOCK_BODY="$(cat "$rn2/design/tasks/T-N.json")" bin/fm-worker.sh --task T-N --name worker-n2 2>&1)"
+assert_eq "1" "$?" "a round that only has the copied spec changed nothing"
+assert_contains "$outn2" "the adapter changed nothing" "and is reported as such"
+safe_rm_rf "$dn" "$dn2"
+
 # T-127: the crew runs on the model config.yaml names, and the round
 # records vendor, model and cli_version as separate fields, read from the
 # run itself. FM_MOCK_MODEL stands in for a real vendor's transcript
@@ -3016,6 +3043,8 @@ cp "$FM_POLICY" "$FM_T_POL/seen-policy.json"
 cp "$2" "$FM_T_POL/prompt.md"
 printf '%s\n' "${FM_ROUND_UNSANDBOXED:-}" > "$FM_T_POL/hatch"
 printf 'npm.evil.example\nnpm.evil.example\n' >> "$FM_POLICY_BLOCKED"
+# T-147: OpenAI's user file store, twice over, as the first codex round met it
+printf 'sdmntprsouthcentralus.oaiusercontent.com\nsdmntprnortheu.oaiusercontent.com\nsdmntprnortheu.oaiusercontent.com\n' >> "$FM_POLICY_BLOCKED"
 mkdir -p "$3/src"; printf 'work\n' > "$3/src/work"
 M
 chmod +x "$rPol/bin/adapters/mock.sh"
@@ -3035,6 +3064,17 @@ assert_eq 'policy.network ["registry.npmjs.org"] proxy' \
   "which names the key a card would add the host to and what the round already had"
 assert_contains "$(jq -r 'select(.type=="crew_status") | .data.activity.en' "$rPol/state/events.jsonl")" \
   "Refused undeclared hosts: npm.evil.example" "and the board is told"
+# T-147: OpenAI's user file store is a known refusal, the captain's
+# decision: reported once in the round as expected, never as undeclared,
+# and never a host a card would offer to add
+assert_eq "1" "$(grep -c 'known refusal, expected: sdmntprsouthcentralus.oaiusercontent.com, sdmntprnortheu.oaiusercontent.com - OpenAI' <<< "$outPol")" \
+  "OpenAI's user file store is reported once, as a known, expected refusal"
+assert_lacks "$outPol" "refused undeclared hosts: npm.evil.example sdmntpr" "and not as an undeclared one"
+assert_lacks "$(jq -r 'select(.type=="crew_status") | .data.activity.en' "$rPol/state/events.jsonl")" \
+  "oaiusercontent" "nor on the board as one"
+assert_eq '["sdmntprsouthcentralus.oaiusercontent.com","sdmntprnortheu.oaiusercontent.com"]' \
+  "$(jq -c '.expected' "$rPol/state/policy/blocked-hosts.jsonl" 2>/dev/null)" \
+  "the record keeps them apart from the hosts a card would add"
 # T-117: the round cannot write the worktree's git directory or reach
 # GitHub, so the prompt gives it no save to make: the skill's mid-run
 # checkpoint is overridden, after the skill, and saving is fm-worker.sh's
