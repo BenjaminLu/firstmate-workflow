@@ -1,0 +1,20 @@
+{
+  "id": "T-156",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "a round's recorded environment holds only what the round is meant to have: environment.json is written from an allowlist, and no GitHub or harness credential is ever saved to disk",
+  "scope": [
+    "bin/fm-herdr.py",
+    "bin/lib/**",
+    "tests/herdr.test.sh",
+    "tests/sandbox.test.sh",
+    "design/**",
+    "design/tasks/T-156.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-09-30 firstmate's test audit found that transport() in bin/fm-herdr.py (≈:1118-1123) saves the launcher's whole os.environ to the attempt's environment.json (mode 0600, under state/runs/, which rounds may not read). A worker round's file on the captain's Mac held the operator's own harness credential CLAUDE_CODE_MESSAGING_TOKEN alongside the crew's CLAUDE_CODE_OAUTH_TOKEN; any GH_TOKEN or GITHUB_TOKEN in the launcher's environment would land there too. Credential option A (captain, 2026-09-26) keeps GitHub credentials out of rounds; they should not be written to disk on a round's behalf either. Its own spec file, design/tasks/T-156.json, is committed on this branch.",
+    "environment.json is written from the variables the runner and the round actually need - an explicit allowlist in one place (the FM_* round identity and paths, PATH, HOME, TMPDIR, LANG/LC_*, TERM, the HERDR_* window ids, and the one vendor login variable the round is handed, e.g. CLAUDE_CODE_OAUTH_TOKEN) - never a copy of os.environ. Anything the runner needs that is not on the list is added to it with a comment saying why. The same allowlist governs what the runner passes to the adapter; fm-sandbox.sh's scrub stays as the second line.",
+    "Tests: with GH_TOKEN, GITHUB_TOKEN, GH_ENTERPRISE_TOKEN, CLAUDE_CODE_MESSAGING_TOKEN, AWS_SECRET_ACCESS_KEY and an arbitrary FOO set in the launcher's environment, a round's environment.json contains none of them, and the round still starts and finishes (its own login variable present); fail-first against the current transport(). Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves."
+  ]
+}

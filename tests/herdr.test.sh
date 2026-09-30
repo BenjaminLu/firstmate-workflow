@@ -1570,6 +1570,66 @@ else: sys.exit('Error: Unknown command '+(a[0] if a else ''))
                 states=[c[c.index('--state')+1] for c in calls if c[:3]==['pane','report-agent',pane]]
                 self.assertEqual(['working','idle'],states)
                 self.assertFalse(any(c[:2] in (['pane','close'],['tab','close']) for c in calls))
+    # T-156: what the launcher holds that no round is meant to have - GitHub's
+    # tokens, the operator's own harness credential, a cloud key, and a
+    # variable nobody listed - and a vendor login that is not this round's
+    LEAKED=dict(GH_TOKEN='leak-gh', GITHUB_TOKEN='leak-github', GH_ENTERPRISE_TOKEN='leak-ghe',
+                CLAUDE_CODE_MESSAGING_TOKEN='leak-messaging', AWS_SECRET_ACCESS_KEY='leak-aws', FOO='leak-foo')
+    def test_a_rounds_recorded_environment_is_its_allowlist_never_the_launchers(self):
+        # a round in a Herdr window, a reviewer's, and a headless one
+        for script,args,extra in (('fm-worker.sh',['--task','T-035'],{}),
+                                  ('fm-review.sh',['--task','T-035','--branch','work'],{}),
+                                  ('fm-worker.sh',['--task','T-035'],dict(HERDR_ENV='0'))):
+            with self.subTest(script=script,**extra):
+                answer=self.invoke(script,args,**self.LEAKED,**extra)
+                self.assertEqual(0,answer.returncode,answer.stderr)
+                latest=max(self.results(),key=lambda p:p.stat().st_mtime_ns)
+                result=json.loads(latest.read_text()); attempt=Path(result['attempt'])
+                # the round still starts and finishes
+                self.assertEqual('completed',result['status'])
+                self.assertEqual('0',(attempt/'runner.exit').read_text().strip())
+                text=(attempt/'environment.json').read_text(); environment=json.loads(text)
+                for name,value in self.LEAKED.items():
+                    self.assertNotIn(name,environment)
+                    self.assertNotIn(value,text)
+                # its own login, and no other vendor's (the fixture sets all four)
+                self.assertEqual('fm-suite-key',environment['CODEX_API_KEY'])
+                for other in ('CLAUDE_CODE_OAUTH_TOKEN','CURSOR_API_KEY','GEMINI_API_KEY'):
+                    self.assertNotIn(other,environment)
+                self.assertEqual(result['actor'],environment['FM_ACTOR'])
+                self.assertIn(str(self.fake),environment['PATH'])
+    def test_the_runner_hands_the_adapter_only_the_allowlist(self):
+        # an environment.json an older launcher wrote from all of os.environ
+        # still reaches the adapter through the same allowlist
+        attempt=self.repo/'state/runs/worker-env-t035-r1/codex-env'; attempt.mkdir(parents=True)
+        adapter=self.repo/'handed/codex.sh'; adapter.parent.mkdir()
+        adapter.write_text('#!/usr/bin/env bash\nenv > "$FM_TEST_ROOT/handed-env"\n'); adapter.chmod(0o755)
+        (attempt/'prompt.md').write_text('go\n')
+        m.save(attempt/'invocation.json',dict(adapter=str(adapter),prompt=str(attempt/'prompt.md'),
+                                              tree=str(self.repo),actor='worker-env-t035-r1',role='worker',task='T-035'))
+        m.save(attempt/'environment.json',dict(self.env,**self.LEAKED,ANTHROPIC_API_KEY='leak-other'))
+        fd=os.open(attempt/'execution.lock',os.O_RDWR|os.O_CREAT); self.addCleanup(os.close,fd)
+        with patch.dict(os.environ,{'FM_HEARTBEAT_SECS':'0'}):
+            self.assertEqual(0,m.execute_child(attempt,fd))
+        handed=dict(line.split('=',1) for line in (self.repo/'handed-env').read_text().splitlines() if '=' in line)
+        for name in (*self.LEAKED,'CLAUDE_CODE_OAUTH_TOKEN','ANTHROPIC_API_KEY','CURSOR_API_KEY','GEMINI_API_KEY'):
+            self.assertNotIn(name,handed)
+        self.assertEqual('fm-suite-key',handed['CODEX_API_KEY'])
+        self.assertEqual(str(self.repo),handed['FM_TEST_ROOT'])
+    def test_each_vendor_is_handed_the_login_variables_its_policy_names(self):
+        # the allowlist's logins are the policy's `given` (bin/fm-config.sh), in order
+        policy=subprocess.run(['bash','-c','. "$1/bin/fm-config.sh" && fm_policy worker "" "$1/config.yaml"',
+                               'policy',str(self.repo)],env=self.env,capture_output=True,text=True,timeout=WAIT)
+        self.assertEqual(0,policy.returncode,policy.stderr)
+        vendors=json.loads(policy.stdout)['vendors']
+        self.assertEqual({v:list(d['login'].get('given',[])) for v,d in vendors.items() if d['login'].get('given')},
+                         {v:list(names) for v,names in m.ROUND_LOGIN.items()})
+        # the first one set is the login, as fm-sandbox.sh's login_of takes it
+        both=dict(CLAUDE_CODE_OAUTH_TOKEN='a',ANTHROPIC_API_KEY='b',PATH='/bin',FOO='x')
+        self.assertEqual(dict(CLAUDE_CODE_OAUTH_TOKEN='a',PATH='/bin'),m.round_environment(both,'claude'))
+        self.assertEqual(dict(ANTHROPIC_API_KEY='b',PATH='/bin'),
+                         m.round_environment(dict(both,CLAUDE_CODE_OAUTH_TOKEN=''),'claude'))
+        self.assertEqual(dict(PATH='/bin'),m.round_environment(both,'mock'))
     def test_new_role_resets_inherited_adapter_guard(self):
         answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],
                            FM_CONTEXT_READY='1',FM_ATTEMPT_DIR='/unused-parent',FM_FINAL_PATH='/unused-parent/final')
