@@ -1,0 +1,13 @@
+{
+  "id": "T-159",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": ["T-158"],
+  "title": "the board tells a reviewer waiting for CI from one reviewing: while fm-review.sh waits on the head's checks the crewman shows as waiting for CI, naming the checks, with no window expected until the round starts",
+  "scope": ["bin/fm-review.sh", "board/**", "i18n/**", "tests/review.test.sh", "tests/board.test.sh", "tests/e2e/**", "design/**", "design/tasks/T-159.json"],
+  "acceptance": [
+    "Why. On 2026-09-30 the captain saw two crewmen on the board and one Herdr pane: T-158's reviewer was in fm-review.sh's CI wait (T-155), before any round had started, so it had no window, yet the board drew it as reviewing. Its own spec file, design/tasks/T-159.json, is committed on this branch.",
+    "While ci_wait runs, fm-review.sh emits crew_status for the reviewer with a state that says it is waiting for CI and the names of the required checks still running (updated when that list changes, not every poll), in en and zh-TW. The board shows that crewman as waiting for CI - distinct from reviewing in its card, roster and ship figure - and does not expect a window for it; when the round starts, the usual reviewing state and window take over. A wait that hits its bound says so.",
+    "Tests: a stubbed gh that keeps a check running makes the reviewer's crew_status say waiting for CI with that check's name; the board renders it as waiting, with no window link, and switches to reviewing when the round starts; en and zh-TW strings exist. Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves."
+  ]
+}

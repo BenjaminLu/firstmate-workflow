@@ -735,6 +735,21 @@ assert_eq '{"done":3,"total":7}' \
 FM_ROOT="$p" "$p/bin/fm-emit.sh" --actor reviewer-ph --task T-Q --type review_opened \
   --data '{"role":"reviewer","crew_name":"reviewer-ph","activity":{"en":"Reading the diff","zh-TW":"閱讀 diff"}}' \
   --en "opened" --tw "開審" >/dev/null
+# T-159: the launcher explicitly marks a pre-window CI wait. Ordinary
+# heartbeats retain it; an explicit return to review restores the window.
+FM_ROOT="$p" FM_CREW_STATUS_SECS=0 "$p/bin/fm-emit.sh" --actor reviewer-ph --task T-Q --type crew_status \
+  --data '{"role":"reviewer","phase":"waiting_ci","window_expected":false,"activity":{"en":"Waiting for CI: ci","zh-TW":"等待 CI：ci"}}' >/dev/null
+FM_ROOT="$p" FM_CREW_STATUS_SECS=0 "$p/bin/fm-emit.sh" --actor reviewer-ph --task T-Q --type crew_status \
+  --data '{"role":"reviewer"}' >/dev/null
+waiting_state="$(curl -sf "http://127.0.0.1:$PORTP/api/state")"
+assert_eq 'waiting_ci' "$(jq -r '.crew[]|select(.id=="reviewer-ph")|.state' <<<"$waiting_state")" \
+  "CI waiting survives a technical heartbeat"
+assert_eq 'false' "$(jq -r '.crew[]|select(.id=="reviewer-ph")|.window_expected' <<<"$waiting_state")" \
+  "a reviewer waiting for CI needs no window"
+FM_ROOT="$p" FM_CREW_STATUS_SECS=0 "$p/bin/fm-emit.sh" --actor reviewer-ph --task T-Q --type crew_status \
+  --data '{"role":"reviewer","phase":"review","window_expected":true}' >/dev/null
+assert_eq 'true' "$(curl -sf "http://127.0.0.1:$PORTP/api/state" | jq -r '.crew[]|select(.id=="reviewer-ph")|.window_expected')" \
+  "starting the review restores the window expectation"
 # Flood past the recent-40 window with unrelated events, then a heartbeat.
 i=0
 while [ "$i" -lt 45 ]; do

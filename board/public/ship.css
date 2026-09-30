@@ -130,6 +130,9 @@
 .fig.s-working{--baseAnim:bobk;--baseDur:2.5s}
 .fig.s-gate{--baseAnim:slumpk;--baseDur:2.2s;filter:saturate(.5) brightness(.86)}
 .fig.s-review{--baseAnim:scank;--baseDur:3.6s}
+.fig.s-waiting_ci{--baseAnim:bobk;--baseDur:6.5s;filter:saturate(.5)}
+.bub.st-waiting_ci{--bubEdge:#806839}
+.roster li.st-waiting_ci{--av:#806839}
 .fig.s-captain{--baseAnim:bobk;--baseDur:3.1s}
 .fig.s-queued{--baseAnim:bobk;--baseDur:6.5s;filter:grayscale(.75) brightness(.6)}
 .fig.a-hammer .armR{animation:hammer var(--sp,.62s) ease-in-out infinite}

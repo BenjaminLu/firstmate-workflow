@@ -32,6 +32,7 @@ const SHIP = (() => {
     working: ["hammer", "saw", "paint", "haul", "coil", "sound"],
     gate:    ["swab", "lean", "lantern"],
     review:  ["lookout", "chart", "lantern"],
+    waiting_ci: ["lean"],
     queued:  ["lean", "coil"],
     captain: ["helm", "chart"],
   };
@@ -168,6 +169,7 @@ const SHIP = (() => {
       line("cround", T("crewRound"), round) +
       line("cpr", T("crewPr"), c.pr ? prRef(c.pr, c.pr_url) : unknown) +
       line("cstate", T("crewState"), esc(T("lane" + c.state[0].toUpperCase() + c.state.slice(1)))) +
+      (c.state === "waiting_ci" ? line("cwindow", T("crewWindow"), esc(T("ciNoWindow"))) : "") +
       // T-127: what the round actually ran on, read from the run itself -
       // never config.yaml's guess, and unknown until the round has run.
       // The Model field carries the warning colour, with both names, only

@@ -10,6 +10,42 @@ import { join } from "node:path";
 
 const EN = JSON.parse(readFileSync(join(ROOT, "i18n/ui.en.json"), "utf8"));
 const TW = JSON.parse(readFileSync(join(ROOT, "i18n/ui.zh-TW.json"), "utf8"));
+
+test('T-159: CI waiting is distinct on the card, roster and ship until review starts', async ({page}) => {
+  const root = makeRoot(['review'], false);
+  const task = readTasks(root)[0].id;
+  const actor = 'reviewer-ci';
+  emitFixture(root, actor, task, 'review_opened', '', '', {role:'reviewer'});
+  emitFixture(root, actor, task, 'crew_status', '', '', {
+    role:'reviewer', phase:'waiting_ci', window_expected:false,
+    activity:{en:'Waiting for CI: ci, lint', 'zh-TW':'等待 CI：ci, lint'}
+  });
+  const b = await startBoard(root);
+  try {
+    for (const [lang, label] of [['en','Waiting for CI'], ['zh-TW','等待 CI']]) {
+      await page.goto(`${b.url}/?lang=${lang}`);
+      await expect(page.locator(`[data-roster="${actor}"] .st`)).toHaveText(label);
+      await expect(page.locator(`[data-bubble="${actor}"] .cstate`)).toHaveText(label);
+      await expect(page.locator(`[data-bubble="${actor}"] .cwindow`)).toContainText(lang === 'en' ? 'No window' : '尚無視窗');
+      await expect(page.locator(`[data-bubble="${actor}"] .cwindow a`)).toHaveCount(0);
+      await expect(page.locator('.fig.s-waiting_ci')).toHaveCount(1);
+      await expect(page.locator(`[data-bubble="${actor}"]`)).toContainText('ci, lint');
+      const crew = (await (await page.request.get(`${b.url}/api/state`)).json()).crew.find(c => c.id === actor);
+      expect(crew.window_expected).toBe(false);
+    }
+    emitFixture(root, actor, task, 'crew_status', '', '', {
+      role:'reviewer', phase:'review', window_expected:true,
+      activity:{en:'Review adapter starting', 'zh-TW':'開始審核'}
+    });
+    await expect(page.locator(`[data-roster="${actor}"] .st`)).toHaveText(TW.laneReview);
+    await expect(page.locator(`[data-bubble="${actor}"] .cstate`)).toHaveText(TW.laneReview);
+    await expect(page.locator(`[data-bubble="${actor}"] .cwindow`)).toHaveCount(0);
+    await expect(page.locator('.fig.s-waiting_ci')).toHaveCount(0);
+    await expect(page.locator(`[data-crew="${actor}"] .fig`)).toHaveClass(/s-review/);
+    const resumed = (await (await page.request.get(`${b.url}/api/state`)).json()).crew.find(c => c.id === actor);
+    expect(resumed.window_expected).toBe(true);
+  } finally { stopBoard(b); }
+});
 // Independently authored oracles: using the production conversion table here
 // made an incorrect or incomplete table prove itself correct.
 const CN = {merged:'已合并',inflight:'进行中',blocked:'受阻',aboard:'在船上',
