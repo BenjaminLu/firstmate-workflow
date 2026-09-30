@@ -1101,6 +1101,52 @@ def open_herdr_window(attempt, logical, tree, actor, task, env, command):
     return owner, control
 
 
+# What a round's environment may hold (T-156): the one list both what is saved
+# to its environment.json and what the runner hands the adapter are read
+# from. Never a copy of the launcher's os.environ, which holds the operator's
+# own GitHub and harness credentials (GH_TOKEN, CLAUDE_CODE_MESSAGING_TOKEN);
+# credential option A keeps those out of rounds, and so off their disk too.
+# fm-sandbox.sh's scrub stays the second line. A name the runner needs that
+# is not here is added here, with the reason.
+ROUND_ENV_PREFIXES = ('FM_',   # the round's identity, paths and fm's own settings
+                      'LC_')   # the locale
+ROUND_ENV_NAMES = frozenset((
+    'PATH', 'HOME', 'TMPDIR', 'LANG', 'TERM', 'TZ',
+    # who the operator is: fm-config.sh's {user} (getpass) and the CLIs'
+    'USER', 'LOGNAME', 'SHELL',
+    # the Herdr window the round is shown in; the adapter reads HERDR_ENV
+    'HERDR_ENV', 'HERDR_PANE_ID', 'HERDR_TAB_ID', 'HERDR_WORKSPACE_ID',
+    # a CA bundle the operator's TLS needs to reach a vendor or a registry
+    # through the round's proxy; fm-sandbox.sh reads SSL_CERT_FILE. No secret.
+    'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS',
+    # fm-sandbox.sh reads the crew's login with secret-tool, outside the
+    # round, over the session bus (T-126); its scrub keeps the bus out of it
+    'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR',
+))
+# Each vendor's login variables, in fm-config.sh's order (VENDORS, `given`):
+# the round is handed the first one set, the one fm-sandbox.sh's login_of
+# takes as the login, and no other vendor's. tests/herdr.test.sh holds the
+# two lists equal.
+ROUND_LOGIN = {
+    'claude': ('CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY'),
+    'codex': ('CODEX_API_KEY',),
+    'cursor-agent': ('CURSOR_API_KEY',),
+    'gemini': ('GEMINI_API_KEY', 'GOOGLE_API_KEY'),
+}
+
+
+def round_environment(source, vendor):
+    """The part of <source> a round of <vendor> may have: the allowlist above,
+    and the vendor's own login variable. Anything else is dropped."""
+    env = {key: value for key, value in source.items()
+           if key in ROUND_ENV_NAMES or key.startswith(ROUND_ENV_PREFIXES)}
+    for name in ROUND_LOGIN.get(vendor, ()):
+        if source.get(name):
+            env[name] = source[name]
+            break
+    return env
+
+
 def transport(adapter, prompt, tree, log):
     """A whole adapter executes as a round fm owns, preserving normal verdict/fallback."""
     # Caller-side wait must survive the launching shell exiting (SIGHUP). The
@@ -1115,11 +1161,11 @@ def transport(adapter, prompt, tree, log):
     attempt = Path(tempfile.mkdtemp(prefix=Path(adapter).stem + '-', dir=logical))
     actor = logical.name
     (attempt / 'prompt.md').write_text(role_context(code, role, task, actor, Path(prompt).read_text()))
-    env = dict(os.environ, FM_ROLE=role, FM_TASK=task,
+    env = dict(round_environment(os.environ, Path(adapter).stem), FM_ROLE=role, FM_TASK=task,
                FM_ACTOR=actor, FM_FINAL_PATH=str(attempt / 'final.txt'),
                FM_ATTEMPT_DIR=str(attempt), FM_CONTEXT_READY='1')
-    # The round does not necessarily inherit the launcher's environment.
-    # Keep its explicit environment private and do not print credentials.
+    # The round does not inherit the launcher's environment, only the
+    # allowlist's part of it (T-156). Keep that private and never print it.
     save(attempt / 'environment.json', env); (attempt / 'environment.json').chmod(0o600)
     payload = dict(adapter=str(Path(adapter).resolve()), prompt=str(attempt / 'prompt.md'),
                    tree=str(Path(tree).resolve()), actor=actor, role=role, task=task,
@@ -1363,7 +1409,9 @@ def cli_final(vendor, log):
 
 def execute_child(attempt, lifetime_fd):
     attempt = Path(attempt); invocation = read(attempt / 'invocation.json')
-    env = read(attempt / 'environment.json')
+    # the same allowlist again, so a file written by an older launcher hands
+    # the adapter nothing more than a new one would (T-156)
+    env = round_environment(read(attempt / 'environment.json'), Path(invocation.get('adapter', '')).stem)
     rc = 1
     actor = invocation.get('actor', 'crew')
     role = invocation.get('role', 'worker')
