@@ -1576,6 +1576,16 @@ else: sys.exit('Error: Unknown command '+(a[0] if a else ''))
     LEAKED=dict(GH_TOKEN='leak-gh', GITHUB_TOKEN='leak-github', GH_ENTERPRISE_TOKEN='leak-ghe',
                 CLAUDE_CODE_MESSAGING_TOKEN='leak-messaging', AWS_SECRET_ACCESS_KEY='leak-aws', FOO='leak-foo')
     def test_a_rounds_recorded_environment_is_its_allowlist_never_the_launchers(self):
+        self.recorded_environment_case(False)
+
+    def test_api_billing_records_the_chosen_codex_key(self):
+        self.recorded_environment_case(True)
+
+    def recorded_environment_case(self, api_key):
+        self.env['CODEX_API_KEY']='fm-suite-key'
+        if api_key:
+            with (self.repo/'config.yaml').open('a') as config:
+                config.write('billing:\n  codex: api-key\n')
         # a round in a Herdr window, a reviewer's, and a headless one
         for script,args,extra in (('fm-worker.sh',['--task','T-035'],{}),
                                   ('fm-review.sh',['--task','T-035','--branch','work'],{}),
@@ -1593,12 +1603,25 @@ else: sys.exit('Error: Unknown command '+(a[0] if a else ''))
                     self.assertNotIn(name,environment)
                     self.assertNotIn(value,text)
                 # its own login, and no other vendor's (the fixture sets all four)
-                self.assertEqual('fm-suite-key',environment['CODEX_API_KEY'])
+                if api_key:
+                    self.assertEqual('fm-suite-key',environment['CODEX_API_KEY'])
+                else:
+                    self.assertNotIn('CODEX_API_KEY',environment)
                 for other in ('CLAUDE_CODE_OAUTH_TOKEN','CURSOR_API_KEY','GEMINI_API_KEY'):
                     self.assertNotIn(other,environment)
                 self.assertEqual(result['actor'],environment['FM_ACTOR'])
                 self.assertIn(str(self.fake),environment['PATH'])
     def test_the_runner_hands_the_adapter_only_the_allowlist(self):
+        self.handed_environment_case(False)
+
+    def test_api_billing_hands_the_adapter_the_chosen_codex_key(self):
+        self.handed_environment_case(True)
+
+    def handed_environment_case(self, api_key):
+        self.env.update(CODEX_API_KEY='fm-suite-key', FM_ADAPTER_CONFIG=str(self.repo/'config.yaml'))
+        if api_key:
+            with (self.repo/'config.yaml').open('a') as config:
+                config.write('billing:\n  codex: api-key\n')
         # an environment.json an older launcher wrote from all of os.environ
         # still reaches the adapter through the same allowlist
         attempt=self.repo/'state/runs/worker-env-t035-r1/codex-env'; attempt.mkdir(parents=True)
@@ -1614,7 +1637,10 @@ else: sys.exit('Error: Unknown command '+(a[0] if a else ''))
         handed=dict(line.split('=',1) for line in (self.repo/'handed-env').read_text().splitlines() if '=' in line)
         for name in (*self.LEAKED,'CLAUDE_CODE_OAUTH_TOKEN','ANTHROPIC_API_KEY','CURSOR_API_KEY','GEMINI_API_KEY'):
             self.assertNotIn(name,handed)
-        self.assertEqual('fm-suite-key',handed['CODEX_API_KEY'])
+        if api_key:
+            self.assertEqual('fm-suite-key',handed['CODEX_API_KEY'])
+        else:
+            self.assertNotIn('CODEX_API_KEY',handed)
         self.assertEqual(str(self.repo),handed['FM_TEST_ROOT'])
     def test_each_vendor_is_handed_the_login_variables_its_policy_names(self):
         # the allowlist's logins are the policy's `given` (bin/fm-config.sh), in order
@@ -1624,12 +1650,27 @@ else: sys.exit('Error: Unknown command '+(a[0] if a else ''))
         vendors=json.loads(policy.stdout)['vendors']
         self.assertEqual({v:list(d['login'].get('given',[])) for v,d in vendors.items() if d['login'].get('given')},
                          {v:list(names) for v,names in m.ROUND_LOGIN.items()})
-        # the first one set is the login, as fm-sandbox.sh's login_of takes it
-        both=dict(CLAUDE_CODE_OAUTH_TOKEN='a',ANTHROPIC_API_KEY='b',PATH='/bin',FOO='x')
-        self.assertEqual(dict(CLAUDE_CODE_OAUTH_TOKEN='a',PATH='/bin'),m.round_environment(both,'claude'))
-        self.assertEqual(dict(ANTHROPIC_API_KEY='b',PATH='/bin'),
+        # The first eligible login wins; billing comes from the fixture.
+        base=dict(PATH='/bin',FM_ADAPTER_CONFIG=str(self.repo/'config.yaml'),FM_CODE_ROOT=str(self.repo))
+        both=dict(base,CLAUDE_CODE_OAUTH_TOKEN='a',ANTHROPIC_API_KEY='b',FOO='x')
+        self.assertEqual(dict(base,CLAUDE_CODE_OAUTH_TOKEN='a'),m.round_environment(both,'claude'))
+        self.assertEqual(base,
                          m.round_environment(dict(both,CLAUDE_CODE_OAUTH_TOKEN=''),'claude'))
-        self.assertEqual(dict(PATH='/bin'),m.round_environment(both,'mock'))
+        self.assertEqual(base,m.round_environment(both,'mock'))
+        for vendor,names in m.ROUND_LOGIN.items():
+            for api_key in (False,True):
+                with self.subTest(vendor=vendor,api_key=api_key):
+                    config=self.repo/'config.yaml'
+                    config.write_text('billing:\n  '+vendor+': '+('api-key' if api_key else 'subscription')+'\n')
+                    source=dict(FM_ADAPTER_CONFIG=str(config),FM_CODE_ROOT=str(self.repo),
+                                **{name:'login' for name in names})
+                    expected={k:v for k,v in source.items() if k.startswith('FM_')}
+                    if api_key or vendor in ('claude','cursor-agent'):
+                        expected[names[0]]='login'
+                    self.assertEqual(expected,m.round_environment(source,vendor))
+        config.write_text('billing:\n  claude: api-key\n')
+        source=dict(FM_ADAPTER_CONFIG=str(config),FM_CODE_ROOT=str(self.repo),ANTHROPIC_API_KEY='b')
+        self.assertEqual(source,m.round_environment(source,'claude'))
     def test_new_role_resets_inherited_adapter_guard(self):
         answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],
                            FM_CONTEXT_READY='1',FM_ATTEMPT_DIR='/unused-parent',FM_FINAL_PATH='/unused-parent/final')

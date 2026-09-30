@@ -20,6 +20,7 @@
     "bin/fm-canary.sh",
     "bin/fm-sandbox.sh",
     "bin/fm-config.sh",
+    "bin/fm-herdr.py",
     "config.yaml",
     "tests/doctor.test.sh",
     "tests/setup.test.sh",
