@@ -893,7 +893,9 @@ const state = (only: string | null = null) => {
     if (said) identities.set(actor, mergeIdentity(identities.get(actor), said));
     const nextProgress = bounded(data.progress);
     if (nextProgress) progress.set(actor, nextProgress);
-    if (e.type === 'dispatched' || data.role) roles.set(actor, roleOf(actor,e));
+    if (e.type === 'dispatched' || data.role === 'worker' || data.role === 'reviewer') roles.set(actor, roleOf(actor,e));
+    // Older review_opened records establish a reviewer even without data.role.
+    else if (e.type === 'review_opened') roles.set(actor, 'reviewer');
     // Mid-run authored data.activity from events describes the run.
     // Scalar titles are never treated as activity.
     const description = authored(data.activity)
@@ -908,7 +910,7 @@ const state = (only: string | null = null) => {
       ? (roleOf(actor,e) === 'reviewer' ? 'review' : 'working')
       : phase);
     const peer = (role: string) => {
-      const candidates = [...lastByActor].filter(([id,event]) => id !== actor && id !== 'firstmate' && ek(event) === ek(e) && event.type !== 'agent_finished' && !finished.has(id) && (roles.get(id) || roleOf(id,event)) === role);
+      const candidates = [...lastByActor].filter(([id,event]) => id !== actor && id !== 'firstmate' && ek(event) === ek(e) && event.type !== 'agent_finished' && !finished.has(id) && (roles.get(id) || (legacyName(id) ? roleOf(id,event) : null)) === role);
       // Several runs on one task are ambiguous; never pick an arbitrary actor.
       return candidates.length === 1 ? candidates[0][0] : undefined;
     };
@@ -974,6 +976,10 @@ const state = (only: string | null = null) => {
   // one that just boarded
   for (const [actor, e] of [...lastByActor].reverse()) {
     if (actor === "firstmate") continue;   // already aboard, above
+    // A verdict alone does not establish crew membership. Otherwise SSE can
+    // briefly put an unplaced actor aboard before its finish event, making
+    // the browser permanently suppress the unknown-end notice for that cue.
+    if (!roles.has(actor) && !legacyName(actor)) continue;
     const task = e.task ?? null;
     if (!task) continue;
     // agent_finished is the answer; this is the backstop for a run that

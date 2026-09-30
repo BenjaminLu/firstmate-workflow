@@ -3,6 +3,12 @@
 set -euo pipefail
 exec < /dev/null
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/lib/path.sh
+. "$ROOT/tests/lib/path.sh"
+suite_tools="$(mktemp -d)"
+trap 'rm -rf "$suite_tools"' EXIT
+fixture_path "$suite_tools" 'claude codex gemini cursor-agent agent gh herdr tmux cmux security secret-tool osascript xdg-open open' || exit 1
+PATH="$suite_tools"; export PATH
 python3 - "$ROOT" <<'PY'
 import concurrent.futures
 import importlib.util

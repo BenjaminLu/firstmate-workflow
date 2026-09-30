@@ -1055,7 +1055,14 @@ A merge card's `gates` list keeps seven slots and the board reads it by gate
 number (`gates[n-1]`), so slot 3 is carried but never shown, and a producer
 that still sends one value per number 1-7 lines up with the checklist.
 
-**Gate 5 runs only the touched suites (T-114).** On the reverted tree it runs,
+**Gate 5 delegates to `fm-failfirst.sh --gate --head=<branch>` (T-157).**
+The shared engine prepares and runs both the head and the reverted tree, and
+requires evidence that passes on the head and goes red on the base. The gate
+keeps its declared-docs classification and its explicit `project.check`
+fallback; CI keeps the behavior-path classification described in §7. Worktree
+restoration, suite execution and assertion comparison have one implementation.
+
+**Gate 5 runs only the touched suites (T-114).** On each tree it runs,
 through `project.test`, every test file the diff changes, then every other
 test file that names one of them by path or file name - the suites that
 source a changed helper. A name counts only standing alone, with no other
@@ -1345,6 +1352,10 @@ report - per suite, the exit of each tree, the assertions red on base by
 name and the guards - goes to stdout, to `--report` (the artifact) and to
 `$GITHUB_STEP_SUMMARY`. It exits 70 when it cannot run (no merge-base, a
 worktree it cannot make, a setup that fails) and 64 on bad usage.
+
+T-157 shares changed-test selection with gate 5: an unchanged suite that
+names a changed test helper by a whole filename is selected too. A reference
+to changed implementation alone does not select a suite.
 
 **Fail-first is sharded like the bash suites (T-158).** On 2026-09-30
 T-121 changed 18 test files; the one `fail-first` job ran every one of them
@@ -5021,3 +5032,23 @@ the slot lock, the merge-turn lock, the merge marker and the decision-id
 reservations live under `state/`, rendered pages under
 `board/public/diagrams/`, all runtime output, not scoped files. Nothing is
 renamed, so T-047 needs no `design/diagrams/` scope.
+
+
+### T-157: diagnosing collected facts
+
+`fm-doctor.sh --collect --repo <dir>` prints tool observations without
+judging the host. `--facts <file>` judges supplied observations against that
+repository's pins. The file is tab-separated data: tool rows carry name,
+path (empty means missing), numeric version, raw version line and optional
+xcrun-shim path; host rows carry `os` and `sandbox`; probe rows carry vendor,
+status, English explanation and Traditional Chinese explanation. The collector
+does not run login probes in `--collect` mode. Normal doctor runs collect
+tools and obtain login probes before judging each usable vendor. Environment,
+repository hygiene, approved installs and an explicitly requested canary keep
+their existing behavior.
+
+Setup also accepts `--facts` for its detection layer: vendor rows carry name
+and login status, repo rows carry `origin` and `ref`, and gh rows carry
+`present`, `authed` and `permission`. Its recommendation and config writer
+consume those observations. Tests supply facts; the normal commands collect
+them from the host.

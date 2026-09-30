@@ -71,7 +71,7 @@ projects:               # every repository firstmate drives; design section 15.2
     base: main
     required_check: ci
     design: design/design.md
-    tasks: design/tasks.json
+    tasks: design/tasks
     # its contract is the top-level project: block below until T-050 moves it
     policy:             # this project's override of the crew policy above
       network: registry.npmjs.org cdn.playwright.dev playwright.download.prss.microsoft.com playwright.azureedge.net storage.googleapis.com

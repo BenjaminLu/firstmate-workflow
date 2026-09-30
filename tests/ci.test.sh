@@ -4,6 +4,18 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/path.sh
+. "$ROOT/tests/lib/path.sh"
+suite_original_path="$PATH"
+suite_tools="$(safe_tmpdir)"
+fixture_path "$suite_tools" 'claude codex gemini cursor-agent agent gh herdr tmux cmux security secret-tool osascript xdg-open open' || exit 1
+PATH="$suite_tools"; export PATH
+for required in bun bunx shellcheck; do
+  command -v "$required" >/dev/null 2>&1 || {
+    echo "ci.test: install the declared toolchain before running this suite (missing $required)" >&2
+    exit 1
+  }
+done
 
 fixture() {                      # a throwaway repo root for ci.sh to operate on
   # safe_tmpdir, not a bare mktemp -d: this result feeds FM_ROOT, and a
@@ -158,13 +170,23 @@ hp="$(cat "$leaked/pid" 2>/dev/null)"
 assert_contains "$out" "$hp " "naming the process it left"
 assert_fail "kill -0 '${hp:-0}'" "which is no longer running"
 assert_lacks "$out" "tests/quiet.test.sh left" "a suite that leaves nothing is not named"
-if [ "$(uname -s)" = Darwin ]; then
-  assert_eq "1" "$(grep -c 'leak check: macOS hides the environment of /bin binaries; matched by fixture root as well - the required check (Linux) is authoritative' <<<"$out")" \
-    "on macOS (uname Darwin; asserted only there) the blind spot is said exactly once per run, not per suite"
-else
-  assert_lacks "$out" "leak check: macOS hides" \
-    "off macOS (uname $(uname -s); the Darwin-only note is asserted on a Mac) the note is not printed"
-fi
+# The leak above is enforced by the host kernel. The platform-specific
+# explanation can be checked on both platforms without another leak.
+osbin="$(safe_tmpdir)"
+real_uname="$(command -v uname)"
+printf '#!/usr/bin/env bash\nif [ "$1" = -s ]; then echo "$FM_TEST_OS"; else exec %q "$@"; fi\n' "$real_uname" > "$osbin/uname"
+chmod +x "$osbin/uname"
+rm -f "$t/tests/hidden.test.sh"
+for platform in Darwin Linux; do
+  platform_out="$(FM_TEST_OS="$platform" PATH="$osbin:$PATH" FM_ROOT="$t" bash "$ROOT/bin/ci.sh" --stage bash 2>&1)"
+  if [ "$platform" = Darwin ]; then
+    assert_eq "1" "$(grep -c 'leak check: macOS hides the environment of /bin binaries; matched by fixture root as well - the required check (Linux) is authoritative' <<<"$platform_out")" \
+      "the Darwin explanation appears once, not once per suite"
+  else
+    assert_lacks "$platform_out" "leak check: macOS hides" "the Linux diagnostic has no Darwin warning"
+  fi
+done
+safe_rm_rf "$osbin"
 rm -rf "$t" "$leaked"
 
 assert_ok "test -x '$ROOT/bin/ci.sh'" "ci.sh is executable"
@@ -416,18 +438,16 @@ printf 'import { test, expect } from "bun:test";\ntest("a", () => expect(1).toBe
 printf 'import { test } from "@playwright/test";\ntest("b", async ({ page }) => { await page.goto("about:blank"); });\n' \
   > "$q/tests/e2e/browser.spec.ts"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
-# the gate supports a machine without these, so the suite has to as well
-if command -v bun >/dev/null 2>&1; then
-  assert_contains "$out" "bun test (1 files)" "the bun stage runs the unit spec and not the browser one"
-  assert_lacks "$out" "x bun test" "a browser spec does not turn the bun stage red"
-else
-  printf '    %s\n' "(bun not installed, the bun stage is unchecked)"
-fi
-if command -v bunx >/dev/null 2>&1; then
-  assert_contains "$out" "playwright not installed" "and the browser stage says it was skipped"
-else
-  assert_contains "$out" "bunx not installed" "and the browser stage says why it was skipped"
-fi
+# The declared toolchain supplies Bun; missing-tool behavior uses explicit
+# exclusions below rather than changing expectations with the runner's PATH.
+assert_contains "$out" "bun test (1 files)" "the bun stage runs the unit spec and not the browser one"
+assert_lacks "$out" "x bun test" "a browser spec does not turn the bun stage red"
+assert_contains "$out" "playwright not installed" "the installed bunx reports the missing browser dependency"
+no_bunx="$(safe_tmpdir)"
+fixture_path "$no_bunx" 'bunx' || exit 1
+out="$(PATH="$no_bunx" FM_ROOT="$q" bash "$q/bin/ci.sh" --stage e2e 2>&1)"
+assert_contains "$out" "bunx not installed" "an explicitly absent bunx is reported missing"
+safe_rm_rf "$no_bunx"
 rm -f "$q/tests/unit.spec.ts"
 
 # bin/*.sh does not recurse, so the adapters went unlinted for as long as
@@ -438,17 +458,13 @@ mkdir -p "$q/bin/adapters"
 # is the question the adapters raised - their deliberate SC2086 is info and
 # must NOT turn the gate red.
 printf '#!/usr/bin/env bash\ncd /tmp\necho done\n' > "$q/bin/adapters/sloppy.sh"
-out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
-if command -v shellcheck >/dev/null 2>&1; then
-  assert_contains "$out" "x shellcheck" "a warning in an adapter turns the shellcheck stage red"
-  assert_contains "$out" "SC2164" "and the stage says which warning"
-  # and an info-level finding does not: the adapters rely on that
-  printf '#!/usr/bin/env bash\nargs=""\necho $args\n' > "$q/bin/adapters/sloppy.sh"
-  out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
-  assert_lacks "$out" "x shellcheck" "an info-level finding does not, which is what the adapters depend on"
-else
-  printf '    %s\n' "(shellcheck not installed, adapter lint unchecked)"
-fi
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)"
+assert_contains "$out" "x shellcheck" "a warning in an adapter turns the shellcheck stage red"
+assert_contains "$out" "SC2164" "and the stage says which warning"
+# An info-level finding does not: the adapters rely on that.
+printf '#!/usr/bin/env bash\nargs=""\necho $args\n' > "$q/bin/adapters/sloppy.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)"
+assert_lacks "$out" "x shellcheck" "an info-level finding does not, which is what the adapters depend on"
 
 # The real clock path reports elapsed time and the caller's effective budget;
 # deterministic boundary enforcement is covered above.
@@ -1625,4 +1641,6 @@ while IFS= read -r f; do
 done < <(find "$ROOT/bin" "$ROOT/tests" -type f -name '*.sh')
 assert_eq "" "$unparsed" "every script below bin/ and tests/ parses (bash -n)"
 
+PATH="$suite_original_path"; export PATH
+safe_rm_rf "$suite_tools"
 finish

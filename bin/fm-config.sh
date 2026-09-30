@@ -837,10 +837,7 @@ def field(projects, name, key, config):
     if key == 'design':
         return entry.get(key) or 'projects/%s/design.md' % name
     if key == 'tasks':
-        # a directory, one file per task (T-090); a path in the old shape,
-        # design/tasks.json, names the directory beside it
-        value = entry.get(key) or 'projects/%s/tasks' % name
-        return value[:-len('.json')] if value.endswith('.json') else value
+        return entry.get(key) or 'projects/%s/tasks' % name
     if key in ('repo', 'github', 'base', 'required_check'):
         return entry.get(key, '')
     refuse(name, key, 'is not a registry field')

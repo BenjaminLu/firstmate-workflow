@@ -19,7 +19,8 @@
     "bin/fm-decide.sh",
     "bin/fm-worker.sh",
     "bin/fm.sh",
-    "bin/fm-config.sh"
+    "bin/fm-config.sh",
+    "config.yaml"
   ],
   "acceptance": [
     "Why. On 2026-09-30 the captain asked which tests still have value; firstmate's audit (read-only, against main 1ac6ddd) found few dead tests but much repetition and fixed waiting: worker 515 s (~200 full fm-worker.sh launches), herdr 283 s, review 179 s, ci 178 s, reconcile 111 s. The captain approved fixing all of it, before T-130 splits the files. Its own spec file, design/tasks/T-157.json, is committed on this branch. Line numbers below are main 1ac6ddd's; re-find them after T-121 merged.",

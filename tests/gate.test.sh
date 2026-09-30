@@ -85,8 +85,6 @@ printf '{"id":"T-X","scope":["src/**","tests/**","bin/**","config.yaml","design/
 mkdir -p "$d/elsewhere"; echo x > "$d/elsewhere/f"; git -C "$d" add -A; git -C "$d" commit -qm ownfile
 git -C "$d" checkout -q main
 assert_ok "gate '$d' ownfile 4" "4 reads the scope from the task's own file on the branch under test"
-# a task in flight names the old shared file in its scope so that it may
-# carry its own entry; that now means its own file, and nobody else's
 
 # --- gate 5: the one that matters ---------------------------------------
 d="$(fixture)"
@@ -109,77 +107,6 @@ git -C "$d" checkout -q -b untested main
 printf 'more\n' >> "$d/src/thing.sh"; git -C "$d" commit -qam untested; git -C "$d" checkout -q main
 assert_fail "gate '$d' untested 5" "5 blocks implementation that ships no test at all"
 
-# A project that is not a bash project. Its tests match none of the default
-# globs and are run by nothing the gate knows - only by what config.yaml
-# declares. The check can never go red, so only the test template can. The
-# template needs what setup installs, so a gate that skipped setup would read
-# the vacuous test below as red and wave it through.
-py="$(mktemp -d)"
-git -C "$py" init -q -b main
-git -C "$py" config user.email a@b.c; git -C "$py" config user.name t
-mkdir -p "$py/calc" "$py/design/tasks"
-printf 'def add(a, b):\n    return 0\n' > "$py/calc/calc.py"
-cat > "$py/config.yaml" <<'Y'
-project:
-  setup: mkdir -p .deps && touch .deps/ready
-  check: "true"
-  tests:
-    - "**/*_check.py"
-  test: test -f .deps/ready && python3 {file}
-Y
-printf '{"id":"T-X","scope":["calc/**","config.yaml"]}\n' > "$py/design/tasks/T-X.json"
-git -C "$py" add -A; git -C "$py" commit -qm base
-
-git -C "$py" checkout -q -b honest
-printf 'def add(a, b):\n    return a + b\n' > "$py/calc/calc.py"
-printf 'from calc import add\nassert add(2, 3) == 5\n' > "$py/calc/add_check.py"
-git -C "$py" add -A; git -C "$py" commit -qm honest; git -C "$py" checkout -q main
-assert_ok "gate '$py' honest 5" "5 classifies by the declared globs and runs the declared template"
-
-git -C "$py" checkout -q -b vacuous
-printf 'def add(a, b):\n    return a + b\n' > "$py/calc/calc.py"
-printf 'import sys\nsys.exit(0)\n' > "$py/calc/noop_check.py"
-git -C "$py" add -A; git -C "$py" commit -qm vacuous; git -C "$py" checkout -q main
-assert_fail "gate '$py' vacuous 5" "5 blocks a template-run test that stays green, after running setup"
-
-git -C "$py" checkout -q -b badsetup honest
-printf 'project:\n  setup: exit 9\n  check: "true"\n  tests:\n    - "**/*_check.py"\n  test: python3 {file}\n' \
-  > "$py/config.yaml"
-git -C "$py" commit -qam badsetup; git -C "$py" checkout -q main
-assert_fail "gate '$py' badsetup 5" "5 blocks when setup fails, however red the tests would be"
-assert_contains "$(said "$py" badsetup 5)" "setup failed (exit 9)" "and names the failure"
-
-# docs: the project declares which paths need no test of their own. Only
-# those: undeclared exempts nothing, and code beside docs still needs a test.
-doc="$(fixture)"
-printf '# thing\n' > "$doc/README.md"; mkdir -p "$doc/design"; printf 'v1\n' > "$doc/design/design.md"
-printf '{"id":"T-X","scope":["src/**","tests/**","design/**","README.md","config.yaml"]}\n' \
-  > "$doc/design/tasks/T-X.json"
-# declared on main, so the branch under test changes nothing but prose
-printf 'project:\n  check: bin/suite\n  docs:\n    - design/**\n    - README.md\n' > "$doc/config.yaml"
-git -C "$doc" add -A; git -C "$doc" commit -qm docs-base
-git -C "$doc" checkout -q -b docs-only main
-printf 'v2\n' > "$doc/design/design.md"; printf '# thing, better\n' > "$doc/README.md"
-git -C "$doc" commit -qam prose; git -C "$doc" checkout -q main
-assert_ok "gate '$doc' docs-only 5" "5 needs no test when every changed path is declared docs"
-
-git -C "$doc" checkout -q -b docs-and-code main
-printf 'v3\n' > "$doc/design/design.md"; echo more >> "$doc/src/thing.sh"
-git -C "$doc" commit -qam mixed; git -C "$doc" checkout -q main
-assert_fail "gate '$doc' docs-and-code 5" "5 still blocks code beside docs that ships no test"
-assert_contains "$(said "$doc" docs-and-code 5)" "adds no test" "and says why"
-
-undoc="$(fixture)"
-mkdir -p "$undoc/design"; printf 'v1\n' > "$undoc/design/design.md"
-git -C "$undoc" add -A; git -C "$undoc" commit -qm base-design
-git -C "$undoc" checkout -q -b prose main
-printf 'v2\n' > "$undoc/design/design.md"; git -C "$undoc" commit -qam prose; git -C "$undoc" checkout -q main
-assert_fail "gate '$undoc' prose 5" "5 exempts nothing when no docs are declared"
-
-# --- gate 5 runs only the suites the diff touches (T-114) ----------------
-# The whole check is the required GitHub check's job. Here it leaves a mark if
-# anything runs it, and so does a suite the diff does not touch.
-# touched <repo> ; a repo whose check and whose untouched suite each leave a mark
 touched() {
   local r; r="$(mktemp -d)"
   git -C "$r" init -q -b main
@@ -203,53 +130,6 @@ git -C "$t5" checkout -q -b honest
 printf 'real\n' > "$t5/src/thing.sh"
 printf 'grep -q real "${FM_ROOT:-.}/src/thing.sh"\n' > "$t5/tests/h.test.sh"
 git -C "$t5" add -A; git -C "$t5" commit -qm honest; git -C "$t5" checkout -q main
-out="$(said "$t5" honest 5)"; rc=$?
-assert_eq "0" "$rc" "5 passes a touched suite that goes red with the implementation reverted"
-assert_fail "test -e '$t5/marks/check'" "and never runs the whole project.check to find out"
-assert_fail "test -e '$t5/marks/other'" "nor a suite the diff does not touch"
-assert_contains "$out" "running the suites the diff touches: tests/h.test.sh" "and says which suites it ran"
-
-git -C "$t5" checkout -q -b vacuous main
-printf 'real\n' > "$t5/src/thing.sh"
-printf 'true\n' > "$t5/tests/v.test.sh"
-git -C "$t5" add -A; git -C "$t5" commit -qm vacuous; git -C "$t5" checkout -q main
-assert_fail "gate '$t5' vacuous 5" "5 still blocks a touched suite that stays green"
-assert_fail "test -e '$t5/marks/check'" "without falling back to the whole check"
-
-# The diff changes a helper and no suite: the helper, run on its own, asserts
-# nothing, and the suite that sources it is the one the diff touches.
-git -C "$t5" checkout -q -b helper main
-printf 'real\n' > "$t5/src/thing.sh"
-printf 'verify() { grep -q real "${FM_ROOT:-.}/src/thing.sh"; }\n' > "$t5/tests/helper.sh"
-git -C "$t5" commit -qam helper; git -C "$t5" checkout -q main
-out="$(said "$t5" helper 5)"; rc=$?
-assert_eq "0" "$rc" "5 runs the suites that exercise a changed test file, and they go red"
-assert_contains "$out" "tests/uses.test.sh" "and names the suite it found that way"
-assert_fail "test -e '$t5/marks/other'" "and still not the suite that names no changed file"
-assert_fail "test -e '$t5/marks/near'" "nor one that names fm-helper.sh, which only has helper.sh inside it"
-assert_fail "test -e '$t5/marks/check'" "nor the whole check"
-
-# check_env reaches the suites, and is the only way a budget or a flag does:
-# the gate carries no variable of its own for any one project's suite.
-git -C "$t5" checkout -q -b budget honest
-printf 'project:\n  check: "true"\n  test: bash {file}\n  check_env:\n    SUITE_BUDGET: 600\n    SUITE_MODE: "full run"\n' > "$t5/config.yaml"
-printf '[ "${SUITE_BUDGET:-180}" -ge 300 ] && [ "$SUITE_MODE" = "full run" ] || exit 0\ngrep -q real "${FM_ROOT:-.}/src/thing.sh"\n' \
-  > "$t5/tests/h.test.sh"
-git -C "$t5" commit -qam budget; git -C "$t5" checkout -q main
-assert_ok "env -u SUITE_BUDGET -u SUITE_MODE '$GATE' --task T-X --repo '$t5' --branch budget --only 5" \
-  "5 hands check_env to the suites it runs"
-
-# no `test` to run one suite with: the whole check is the only way to ask, and
-# the gate says that is what it did
-rm -f "$t5/marks/check"
-git -C "$t5" checkout -q -b nosuite honest
-printf 'project:\n  check: touch %q/marks/check && grep -q real src/thing.sh\n' "$t5" > "$t5/config.yaml"
-git -C "$t5" commit -qam nosuite; git -C "$t5" checkout -q main
-out="$(said "$t5" nosuite 5)"; rc=$?
-assert_eq "0" "$rc" "5 with no declared test falls back to the whole check, which goes red"
-assert_ok "test -e '$t5/marks/check'" "and the whole check is what ran"
-assert_contains "$out" "declares no project.test to run one suite with, so the whole project.check runs" \
-  "and it says so"
 
 # --- gates 6 and 7: gh is injectable so the suite makes no network call ---
 stub() {  # stub <dir> <checks-exit> <approver-login> ; gate 6 only: gate 7 reads JSON, see ghc
@@ -439,7 +319,7 @@ finishes() {
 sl="$(touched)"; trail="$sl/marks/trail"
 git -C "$sl" checkout -q -b slow
 printf 'real\n' > "$sl/src/thing.sh"
-printf 'echo start >> %q\nsleep 2\necho end >> %q\ngrep -q real "${FM_ROOT:-.}/src/thing.sh"\n' "$trail" "$trail" \
+printf 'grep -q real "${FM_ROOT:-.}/src/thing.sh" && exit 0\necho start >> %q\nsleep 2\necho end >> %q\ngrep -q real "${FM_ROOT:-.}/src/thing.sh"\n' "$trail" "$trail" \
   > "$sl/tests/s.test.sh"
 git -C "$sl" add -A; git -C "$sl" commit -qm slow; git -C "$sl" checkout -q main
 lock="$(mktemp -d)/gate.lock"

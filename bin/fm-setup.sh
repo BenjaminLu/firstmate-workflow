@@ -5,7 +5,7 @@
 # never asks for or stores a secret itself: for a key it prints the exact
 # keychain command for the operator to run.
 #
-#   bin/fm-setup.sh [--answers FILE] [--repo DIR]
+#   bin/fm-setup.sh [--answers FILE] [--repo DIR] [--facts FILE]
 #
 # --answers FILE holds "key: value" lines, one per question, read with
 # fm_cfg - the same reader config.yaml has - instead of prompting for that
@@ -23,16 +23,21 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-config.sh
 . "$HERE/fm-config.sh"
 
-answers=''; repo="${FM_ROOT:-$(pwd -P)}"
+facts_file=''; answers=''; repo="${FM_ROOT:-$(pwd -P)}"
 while [ $# -gt 0 ]; do
   case "$1" in
+    --facts) fm_need "fm-setup" "$@"; facts_file="${2-}"; shift 2 ;;
     --answers) fm_need "fm-setup" "$@"; answers="${2-}"; shift 2 ;;
     --repo) fm_need "fm-setup" "$@"; repo="${2-}"; shift 2 ;;
-    *) echo "usage: fm-setup.sh [--answers FILE] [--repo DIR]" >&2; exit 64 ;;
+    *) echo "usage: fm-setup.sh [--answers FILE] [--repo DIR] [--facts FILE]" >&2; exit 64 ;;
   esac
 done
 repo="$(cd "$repo" 2>/dev/null && pwd -P)" || { echo "fm-setup: no repo at $repo" >&2; exit 64; }
 [ -z "$answers" ] || [ -f "$answers" ] || { echo "fm-setup: no answers file at $answers" >&2; exit 64; }
+if [ -n "$facts_file" ]; then
+  [ -f "$facts_file" ] || { echo "fm-setup: no facts file: $facts_file" >&2; exit 64; }
+  facts_file="$(cd "$(dirname "$facts_file")" && pwd)/${facts_file##*/}"
+fi
 cd "$repo" || exit 70
 
 # --- asking: an answers file first, the operator (empty = the default) otherwise
@@ -47,20 +52,28 @@ ask() {  # ask <key> <prompt> <default> -> REPLY
 }
 
 # --- which vendors are here to choose from: the one list, fm_vendors --------
-installed="$(fm_vendors | while IFS= read -r name; do
-  command -v "$name" >/dev/null 2>&1 && printf '%s\n' "$name"
-done)"
+# Collection and ranking are separate: recorded facts exercise defaults
+# without inventing a machine or invoking any vendor.
+collect_setup() {
+  local name status origin ref
+  while IFS= read -r name; do
+    command -v "$name" >/dev/null 2>&1 || continue
+    status=''
+    [ ! -x "$HERE/fm-auth-probe.sh" ] || status="$("$HERE/fm-auth-probe.sh" "$name" </dev/null 2>/dev/null | sed -n 's/^status: //p')"
+    printf 'vendor\t%s\t%s\n' "$name" "$status"
+  done < <(fm_vendors)
+  origin="$(git -C "$repo" remote get-url origin 2>/dev/null)" || origin=''
+  ref="$(git -C "$repo" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)" || ref=''
+  printf 'repo\torigin\t%s\nrepo\tref\t%s\n' "$origin" "$ref"
+}
+if [ -n "$facts_file" ]; then setup_facts="$(cat "$facts_file")"
+else setup_facts="$(collect_setup)"
+fi
+setup_fact() { awk -F '\t' -v k="$1" -v n="$2" '$1==k && $2==n {print $3; exit}' <<<"$setup_facts"; }
+installed="$(awk -F '\t' '$1=="vendor" {print $2}' <<<"$setup_facts")"
+usable="$(awk -F '\t' '$1=="vendor" && $3=="authenticated" {print $2}' <<<"$setup_facts")"
 if [ -z "$installed" ]; then
   echo "fm setup: no vendor CLI found ($(fm_vendors | paste -sd ' ' -)); install at least one and run fm setup again" >&2
-fi
-# usable: installed, and its round's login answers `authenticated` to the
-# same probe fm-worker.sh and fm-review.sh ask before a round
-usable=''
-if [ -x "$HERE/fm-auth-probe.sh" ] && [ -n "$installed" ]; then
-  usable="$(while IFS= read -r name; do
-    [ "$("$HERE/fm-auth-probe.sh" "$name" </dev/null 2>/dev/null | sed -n 's/^status: //p')" = authenticated ] \
-      && printf '%s\n' "$name"
-  done <<<"$installed")"
 fi
 # recommended: a usable vendor before one that is only installed
 ranked="$(printf '%s\n%s\n' "$usable" "$installed" | awk 'NF && !seen[$0]++')"
@@ -101,12 +114,13 @@ ask_billing "$reviewer_vendor"
 
 # --- the main repository and base branch ------------------------------------
 default_github=''
-if origin_url="$(git -C "$repo" remote get-url origin 2>/dev/null)"; then
+origin_url="$(setup_fact repo origin)"
+if [ -n "$origin_url" ]; then
   default_github="$(printf '%s\n' "$origin_url" \
     | sed -E 's#^(git@|https://)([^:/]+)[:/](.+/[^/]+?)(\.git)?$#\3#')"
 fi
 default_base=main
-ref="$(git -C "$repo" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)"
+ref="$(setup_fact repo ref)"
 [ -z "$ref" ] || default_base="${ref##*/}"
 
 ask repo_github "Main repository (owner/repo)" "$default_github"
@@ -114,11 +128,24 @@ repo_github="$REPLY"
 ask repo_base "Base branch" "$default_base"
 repo_base="$REPLY"
 
-if command -v gh >/dev/null 2>&1; then
-  if gh auth status >/dev/null 2>&1; then
+# GitHub observations depend on the repository the operator chose.
+if [ -n "$facts_file" ]; then
+  gh_present="$(setup_fact gh present)"; gh_authed="$(setup_fact gh authed)"
+  perm="$(setup_fact gh permission)"
+else
+  gh_present=''; gh_authed=''; perm=''
+  if command -v gh >/dev/null 2>&1; then
+    gh_present=1
+    if gh auth status >/dev/null 2>&1; then
+      gh_authed=1
+      [ -z "$repo_github" ] || perm="$(gh repo view "$repo_github" --json viewerPermission -q .viewerPermission 2>/dev/null)"
+    fi
+  fi
+fi
+if [ "$gh_present" = 1 ]; then
+  if [ "$gh_authed" = 1 ]; then
     echo "fm setup: gh is signed in" >&2
     if [ -n "$repo_github" ]; then
-      perm="$(gh repo view "$repo_github" --json viewerPermission -q .viewerPermission 2>/dev/null)"
       case "$perm" in
         ADMIN|WRITE|MAINTAIN) echo "fm setup: push rights on $repo_github confirmed ($perm)" >&2 ;;
         '') echo "fm setup: could not read push rights on $repo_github from gh" >&2 ;;

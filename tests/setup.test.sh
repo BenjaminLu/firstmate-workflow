@@ -13,32 +13,8 @@ SETUP="$ROOT/bin/fm-setup.sh"
 assert_ok "test -x '$SETUP'" "fm-setup.sh is executable"
 
 d="$(safe_tmpdir)"
-fakebin="$d/fakebin"; mkdir -p "$fakebin"
-# The suite's PATH is $fakebin then $sysbin, never /usr/bin or /bin
-# themselves: $sysbin links every command the host has there except each
-# name the wizard asks about - every vendor CLI (from fm_vendors, and
-# cursor's `agent`), gh, git and python3 - so the only copy of those it can
-# see is the suite's own, on every host (GitHub's ubuntu image ships
-# /usr/bin/gh; macOS ships /usr/bin/git and a python3 stub).
-asked_about="gh git python3 python agent $(bash -c '. "$1"; fm_vendors' _ "$ROOT/bin/fm-config.sh" | tr '\n' ' ')"
-sysbin="$d/sysbin"; mkdir -p "$sysbin"
-# one ln per directory; a name both hold keeps /usr/bin's, and ln's
-# complaint about it is expected
-ln -s /usr/bin/* "$sysbin/" 2>/dev/null
-ln -s /bin/* "$sysbin/" 2>/dev/null
-for n in $asked_about; do rm -f "$sysbin/$n"; done
-assert_eq "" "$(for n in $asked_about; do PATH="$sysbin" command -v "$n"; done)" \
-  "the suite's system PATH holds none of the tools the wizard asks about, on any host"
-# the real python3, resolved before $PATH is ever restricted: fm_cfg_set,
-# the one config.yaml writer, runs on it, and the host's own may not run,
-# e.g. an unlicensed Xcode stub
-REAL_PYTHON3="$(command -v python3)"
-printf '#!/usr/bin/env bash\nexec %s "$@"\n' "$(printf '%q' "$REAL_PYTHON3")" > "$fakebin/python3"
-chmod +x "$fakebin/python3"
-# gh: signed in, and reports write access on any repo asked about
-printf '#!/usr/bin/env bash\ncase "$1 $2" in\n  "auth status") exit 0 ;;\n  "repo view") echo WRITE ;;\nesac\n' \
-  > "$fakebin/gh"
-chmod +x "$fakebin/gh"
+facts="$d/facts"
+printf 'gh\tpresent\t1\ngh\tauthed\t1\ngh\tpermission\tWRITE\n' > "$facts"
 # a doctor stand-in, so this suite is testing the wizard's own writes, not
 # the real fm-doctor.sh --sandbox it calls last (that is doctor.test.sh's)
 mkdir -p "$d/bin"
@@ -50,16 +26,13 @@ chmod +x "$d/bin/fm-doctor.sh"
 SETUP="$d/bin/fm-setup.sh"
 
 repo="$d/repo"; mkdir -p "$repo"
-git_stub() {  # a git that answers just enough for the wizard's defaults
-  printf '#!/usr/bin/env bash\ncase "$*" in\n' > "$fakebin/git"
-  printf '  *"remote get-url origin"*) echo "%s" ;;\n' "${1:-}" >> "$fakebin/git"
-  printf '  *"symbolic-ref --short refs/remotes/origin/HEAD"*) echo "%s" ;;\n' "${2:-}" >> "$fakebin/git"
-  printf '  *) exit 1 ;;\nesac\n' >> "$fakebin/git"
-  chmod +x "$fakebin/git"
+repo_facts() {
+  awk -F '\t' '$1!="repo"' "$facts" > "$facts.next"
+  printf 'repo\torigin\t%s\nrepo\tref\t%s\n' "$1" "$2" >> "$facts.next"
+  mv "$facts.next" "$facts"
 }
-git_stub "https://github.com/example-org/example-repo.git" "origin/main"
-
-run_setup() { PATH="$fakebin:$sysbin" "$SETUP" --repo "$repo" "$@"; }
+repo_facts "https://github.com/example-org/example-repo.git" "origin/main"
+run_setup() { "$SETUP" --facts "$facts" --repo "$repo" "$@"; }
 
 field_in() { sed -n "s/^[[:space:]]*$2:[[:space:]]*//p" "$1" | head -1 | sed 's/[[:space:]]*#.*$//'; }
 
@@ -81,27 +54,21 @@ rm -f "$d/doctor-ran"
 
 # --- recommends a different vendor for review when two are usable ----------
 rm -f "$repo/config.yaml"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$fakebin/claude"; chmod +x "$fakebin/claude"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$fakebin/gemini"; chmod +x "$fakebin/gemini"
+printf 'vendor\tclaude\tindeterminate\nvendor\tgemini\tindeterminate\n' >> "$facts"
 run_setup </dev/null >/dev/null 2>&1
 worker="$(field_in "$repo/config.yaml" vendor)"
 reviewer="$(sed -n '/^reviewer:/,/^[^ ]/p' "$repo/config.yaml" | sed -n 's/^[[:space:]]*vendor:[[:space:]]*//p' | head -1)"
 assert_eq "claude" "$worker" "the first installed vendor is the worker default"
 assert_ne "$worker" "$reviewer" "and a different installed vendor is recommended to review"
 
-# usable means the round's login probes authenticated: a probe stand-in
-# that confirms only codex puts codex first, ahead of claude
-printf 'codex\n' > "$d/authenticated"
-printf '#!/usr/bin/env bash\nif grep -qxF -- "$1" %q; then echo "status: authenticated"; else echo "status: indeterminate"; fi\n' \
-  "$d/authenticated" > "$d/bin/fm-auth-probe.sh"
-chmod +x "$d/bin/fm-auth-probe.sh"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$fakebin/codex"; chmod +x "$fakebin/codex"
+# Authenticated observations rank before merely installed ones.
+printf 'vendor\tcodex\tauthenticated\n' >> "$facts"
 rm -f "$repo/config.yaml"
 run_setup </dev/null >/dev/null 2>&1
 assert_eq "codex" "$(field_in "$repo/config.yaml" vendor)" "a vendor whose login probes authenticated is recommended first"
 reviewer="$(sed -n '/^reviewer:/,/^[^ ]/p' "$repo/config.yaml" | sed -n 's/^[[:space:]]*vendor:[[:space:]]*//p' | head -1)"
 assert_eq "claude" "$reviewer" "and a different vendor reviews"
-rm -f "$fakebin/claude" "$fakebin/gemini" "$fakebin/codex" "$d/bin/fm-auth-probe.sh"
+awk -F '\t' '$1!="vendor"' "$facts" > "$facts.next"; mv "$facts.next" "$facts"
 
 # --- an answers file drives it non-interactively, with specific choices ----
 rm -f "$repo/config.yaml"
@@ -158,7 +125,7 @@ assert_contains "$(cat "$repo/config.yaml")" "concurrency: 7" "so does an unrela
 # --- a re-run keeps the reviewer's mode and every model as they were -------
 # no origin to take a repository from, so nothing about projects is written
 # and the file can be compared whole
-git_stub "" ""
+repo_facts "" ""
 reviewer_field() { sed -n '/^reviewer:/,/^[^ ]/p' "$repo/config.yaml" | sed -n "s/^[[:space:]]*$1:[[:space:]]*//p" | head -1 | sed 's/[[:space:]]*#.*$//'; }
 {
   echo "vendor: claude"

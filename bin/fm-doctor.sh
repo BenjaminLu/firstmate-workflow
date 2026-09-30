@@ -10,7 +10,7 @@
 # `fm setup`, which does the asking, then calls this back. It installs
 # nothing unless told to (`--fix`, which asks before each install).
 #
-#   bin/fm-doctor.sh [--fix] [--sandbox] [--repo DIR]
+#   bin/fm-doctor.sh [--fix] [--sandbox] [--repo DIR] [--facts FILE | --collect]
 set -uo pipefail
 # The operator's answers to --fix are read from fd 9; every child this
 # script starts gets /dev/null, never the operator's input.
@@ -28,16 +28,22 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/adapters/_lib.sh
 . "$HERE/adapters/_lib.sh"
 
-fix=''; sandbox=''; assume_yes=''; repo="${FM_ROOT:-$(pwd -P)}"
+facts_file=''; collect_only=''; fix=''; sandbox=''; assume_yes=''; repo="${FM_ROOT:-$(pwd -P)}"
 while [ $# -gt 0 ]; do
   case "$1" in
+    --facts) fm_need "fm-doctor" "$@"; facts_file="${2-}"; shift 2 ;;
+    --collect) collect_only=1; shift ;;
     --fix) fix=1; shift ;;
     --sandbox) sandbox=1; shift ;;
     --yes) assume_yes=1; shift ;;
     --repo) fm_need "fm-doctor" "$@"; repo="${2-}"; shift 2 ;;
-    *) echo "usage: fm-doctor.sh [--fix] [--sandbox] [--yes] [--repo DIR]" >&2; exit 64 ;;
+    *) echo "usage: fm-doctor.sh [--fix] [--sandbox] [--yes] [--repo DIR] [--facts FILE | --collect]" >&2; exit 64 ;;
   esac
 done
+if [ -n "$facts_file" ]; then
+  [ -f "$facts_file" ] || { echo "fm-doctor: no facts file: $facts_file" >&2; exit 64; }
+  facts_file="$(cd "$(dirname "$facts_file")" && pwd)/${facts_file##*/}"
+fi
 repo="$(cd "$repo" 2>/dev/null && pwd -P)" || { echo "fm-doctor: no repo at $repo" >&2; exit 64; }
 cd "$repo" || exit 70
 
@@ -76,11 +82,16 @@ extract_version() {  # extract_version <text> -> the first dotted number in it
   grep -oE '[0-9]+(\.[0-9]+){1,3}' <<<"$1" | head -1
 }
 
-extract_tool_version() {  # extract_tool_version <bin> -> its version, from `<bin> --version`
-  # the first three lines, not the first: shellcheck says its name on line
-  # one and "version: 0.11.0" on line two
-  extract_version "$("$1" --version </dev/null 2>&1 | head -3)"
+# The judging layer reads observations, never command -v or --version.
+# TSV is deliberately readable with awk, even when Python or jq is missing.
+# tool<TAB>name<TAB>path<TAB>version<TAB>raw<TAB>shim
+# host<TAB>os|sandbox<TAB>value; probe<TAB>vendor<TAB>status<TAB>en<TAB>tw
+fact_value() {
+  awk -F '\t' -v k="$1" -v n="$2" -v c="$3" '$1==k && ($2==n || (k=="tool" && $3==n)) {print $c; exit}' <<<"$tool_facts"
 }
+tool_path() { fact_value tool "$1" 3; }
+tool_present() { [ -n "$(tool_path "$1")" ]; }
+extract_tool_version() { fact_value tool "$1" 4; }
 
 # Every tool bin/ci.sh or the board calls that mise pins, by the binary on
 # PATH: bun (the board, bun test), node (bunx playwright test: playwright's
@@ -129,11 +140,49 @@ mise_tools() {  # one "key<TAB>pin" per [tools] entry of <file>
 # uses.
 xcrun_shim_bad() {  # xcrun_shim_bad <bin> -> 0, having said so, when it is a shim
   local found
-  case " $FM_XCRUN_TOOLS " in *" $1 "*) ;; *) return 1 ;; esac
-  found="$(fm_path_tool "$1" "$PATH")" || return 1
-  fm_xcrun_shim "$found" || return 1
+  found="$(fact_value tool "$1" 6)"
+  [ -n "$found" ] || return 1
   say_bad "$1" "wrong version: $found is Apple's xcrun shim, not $1 itself, and a crew round cannot run it; fix: $(fm_xcrun_fix "$1")"
 }
+
+# The collecting layer only observes the host. It prints data and makes no
+# pass/fail decision; --collect is also useful for a reproducible diagnosis.
+collect_tools() {
+  local os sandbox_tool key pin bin path raw version shim
+  os="${FM_SANDBOX_OS:-}"
+  [ -n "$os" ] || os="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+  case "$os" in darwin) sandbox_tool="sandbox-exec" ;; linux) sandbox_tool=bwrap ;; *) sandbox_tool='' ;; esac
+  [ -z "$sandbox_tool" ] || sandbox_tool="${FM_SANDBOX_TOOL:-$sandbox_tool}"
+  printf 'host\tos\t%s\nhost\tsandbox\t%s\n' "$os" "$sandbox_tool"
+  {
+    while IFS=$'\t' read -r key pin; do [ -z "$key" ] || mise_key_bin "$key"; done < <(mise_tools "$repo/mise.toml")
+    printf '%s\n' git perl herdr mise "$sandbox_tool"
+    fm_vendors
+  } | sort -u | while IFS= read -r bin; do
+    [ -n "$bin" ] || continue
+    path="$(command -v "$bin" 2>/dev/null)" || path=''
+    raw=''; version=''; shim=''
+    if [ -n "$path" ]; then
+      case " $FM_XCRUN_TOOLS " in
+        *" $bin "*) fm_xcrun_shim "$path" && shim="$path" ;;
+      esac
+      # Presence-only dependencies need no invocation.
+      case "$bin" in
+        git|perl|mise|"$sandbox_tool") ;;
+        *) if [ -z "$shim" ]; then
+             raw="$("$path" --version </dev/null 2>&1 | head -3)"
+             version="$(extract_version "$raw")"
+           fi ;;
+      esac
+    fi
+    raw="$(head -1 <<<"$raw" | tr '\t\r\n' '   ')"
+    printf 'tool\t%s\t%s\t%s\t%s\t%s\n' "$bin" "$path" "$version" "$raw" "$shim"
+  done
+}
+if [ -n "$facts_file" ]; then tool_facts="$(cat "$facts_file")"
+else tool_facts="$(collect_tools)"
+fi
+if [ -n "$collect_only" ]; then printf '%s\n' "$tool_facts"; exit 0; fi
 
 echo "== Toolchain =="
 pinned=' '
@@ -141,14 +190,14 @@ while IFS=$'\t' read -r key pin; do
   [ -n "$key" ] || continue
   bin="$(mise_key_bin "$key")"
   pinned="$pinned$bin "
-  if ! command -v "$bin" >/dev/null 2>&1; then
+  if ! tool_present "$bin"; then
     say_bad "$bin" "missing (pinned $pin); fix: mise install $key@$pin"
     continue
   fi
   xcrun_shim_bad "$bin" && continue
   have="$(extract_tool_version "$bin")"
   if [ -z "$have" ]; then
-    say_warn "$bin" "version unreadable: installed, but no version in: $("$bin" --version </dev/null 2>&1 | head -1)"
+    say_warn "$bin" "version unreadable: installed, but no version in: $(fact_value tool "$bin" 5)"
   elif ver_ge "$have" "$pin"; then
     say_ok "$bin" "ok $have (pinned $pin)"
   else
@@ -170,8 +219,7 @@ done
 # host_os and host_tool read them - FM_SANDBOX_OS, else uname; then
 # FM_SANDBOX_TOOL, else the platform's own tool - so doctor never checks a
 # tool the sandbox would not use.
-os="${FM_SANDBOX_OS:-}"
-[ -n "$os" ] || os="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+os="$(fact_value host os 3)"
 dep_fix() {  # dep_fix <name> -> the install line for this OS
   case "$1:$os" in
     git:darwin) echo "xcode-select --install, or: brew install git" ;;
@@ -193,7 +241,7 @@ dep_min() {
   esac
 }
 for dep in git perl herdr; do
-  if ! command -v "$dep" >/dev/null 2>&1; then
+  if ! tool_present "$dep"; then
     say_bad "$dep" "missing; fix: $(dep_fix "$dep")"
     continue
   fi
@@ -212,17 +260,12 @@ for dep in git perl herdr; do
     say_bad "$dep" "wrong version: $have, older than $min; fix: $(dep_fix "$dep")"
   fi
 done
-case "$os" in
-  darwin) sandbox_tool="sandbox-exec" ;;
-  linux) sandbox_tool=bwrap ;;
-  *) sandbox_tool='' ;;
-esac
-[ -z "$sandbox_tool" ] || sandbox_tool="${FM_SANDBOX_TOOL:-$sandbox_tool}"
+sandbox_tool="$(fact_value host sandbox 3)"
 if [ -n "$sandbox_tool" ]; then
   sandbox_name="${sandbox_tool##*/}"
   sandbox_fix="$(dep_fix "$sandbox_name")"
   [ -n "$sandbox_fix" ] || sandbox_fix="FM_SANDBOX_TOOL names $sandbox_tool, which is not there; unset it or point it at the $os sandbox tool"
-  if command -v "$sandbox_tool" >/dev/null 2>&1; then
+  if tool_present "$sandbox_tool"; then
     say_ok "$sandbox_name" "ok, the OS sandbox tool for $os is there: $sandbox_tool"
   else
     say_bad "$sandbox_name" "missing; fix: $sandbox_fix"
@@ -262,7 +305,7 @@ vendor_min() {
 
 echo "== Vendor logins =="
 while IFS= read -r v; do
-  if ! command -v "$v" >/dev/null 2>&1; then
+  if ! tool_present "$v"; then
     say_warn "$v" "missing: not installed; fallback never tries it; install: $(vendor_install "$v")"
     continue
   fi
@@ -277,11 +320,17 @@ while IFS= read -r v; do
       continue
     fi
   fi
-  [ -x "$HERE/fm-auth-probe.sh" ] || { echo "fm-doctor: missing $HERE/fm-auth-probe.sh" >&2; exit 70; }
-  probe="$("$HERE/fm-auth-probe.sh" "$v" </dev/null 2>/dev/null)"
-  pstatus="$(sed -n 's/^status: //p' <<<"$probe" | head -1)"
-  pen="$(sed -n 's/^en: //p' <<<"$probe" | head -1)"
-  ptw="$(sed -n 's/^tw: //p' <<<"$probe" | head -1)"
+  if [ -n "$facts_file" ]; then
+    pstatus="$(fact_value probe "$v" 3)"
+    pen="$(fact_value probe "$v" 4)"
+    ptw="$(fact_value probe "$v" 5)"
+  else
+    [ -x "$HERE/fm-auth-probe.sh" ] || { echo "fm-doctor: missing $HERE/fm-auth-probe.sh" >&2; exit 70; }
+    probe="$("$HERE/fm-auth-probe.sh" "$v" </dev/null 2>/dev/null)"
+    pstatus="$(sed -n 's/^status: //p' <<<"$probe" | head -1)"
+    pen="$(sed -n 's/^en: //p' <<<"$probe" | head -1)"
+    ptw="$(sed -n 's/^tw: //p' <<<"$probe" | head -1)"
+  fi
   # The same rule fm-worker.sh and fm-review.sh apply (fm_auth_refuses in
   # adapters/_lib.sh): anything but `authenticated` refuses a round, said in
   # both languages.
@@ -355,9 +404,9 @@ if [ -n "$fix" ]; then
     [ -n "$key" ] || continue
     bin="$(mise_key_bin "$key")"
     have=''
-    command -v "$bin" >/dev/null 2>&1 && have="$(extract_tool_version "$bin")"
+    tool_present "$bin" && have="$(extract_tool_version "$bin")"
     if [ -n "$have" ] && ver_ge "$have" "$pin"; then continue; fi
-    if ! command -v mise >/dev/null 2>&1; then
+    if ! tool_present mise; then
       say_warn "$bin" "mise is not installed; run: mise install $key@$pin yourself once mise is set up"
       continue
     fi
@@ -367,7 +416,7 @@ if [ -n "$fix" ]; then
       IFS= read -r ans <&9 || ans=n
     fi
     case "$ans" in
-      y|Y|yes|YES) mise install "$key@$pin" </dev/null && say_ok "$bin" "installed $pin" || say_bad "$bin" "mise install failed" ;;
+      y|Y|yes|YES) "$(tool_path mise)" install "$key@$pin" </dev/null && say_ok "$bin" "installed $pin" || say_bad "$bin" "mise install failed" ;;
       *) say_warn "$bin" "left as is" ;;
     esac
   done 3< <(mise_tools "$repo/mise.toml")

@@ -513,6 +513,8 @@ FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor mystery --task T-E --type approved \
   --en "Approved" --tw "通過" >/dev/null
 FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor reviewer-odd --task T-E --type approved \
   --en "Approved" --tw "通過" >/dev/null
+FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor invalid-role --task T-E --type approved \
+  --data '{"role":"mystery"}' --en "Unknown role" --tw "未知角色" >/dev/null
 sodd="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
 assert_eq "firstmate>worker" "$(jq -r '.handoffs[]|select(.kind=="order" and .to=="secondmate")|"\(.from_role)>\(.to_role)"' <<<"$sodd")" \
   "a crewman dispatched under any name is placed by what it was dispatched as"
@@ -520,7 +522,9 @@ assert_eq "null>firstmate" "$(jq -r '.handoffs[]|select(.kind=="approve" and .fr
   "an actor that never said what it is has no role"
 assert_eq "null" "$(jq -r '.handoffs[]|select(.kind=="approve" and .from=="reviewer-odd")|.from_role' <<<"$sodd")" \
   "nor does one whose name merely starts like a role"
-for a in secondmate mystery reviewer-odd; do   # off the deck again, for what reads the crew below
+assert_eq "0" "$(jq -r '[.crew[]|select(.id=="mystery" or .id=="reviewer-odd" or .id=="invalid-role")]|length' <<<"$sodd")" \
+  "an unplaced verdict actor never boards, even before its finish event"
+for a in secondmate mystery reviewer-odd invalid-role; do   # off the deck again, for what reads the crew below
   FM_ROOT="$d" "$d/bin/fm-emit.sh" --actor "$a" --task T-E --type agent_finished >/dev/null
 done
 

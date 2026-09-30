@@ -1266,8 +1266,8 @@ assert_contains "$(cat "$pv/err")" "no policy at" "and says so"
 # a heredoc; on a host where /usr/bin/python3 is the unlicensed Xcode stub
 # rather than a working interpreter, $pv/fakebin's own entry below stands in
 # for it, ahead of /usr/bin in $PATH, for exactly this block.
-command -v python3 >/dev/null 2>&1 && printf '#!/usr/bin/env bash\nexec %s "$@"\n' \
-  "$(printf '%q' "$(command -v python3)")" > "$pv/fakebin/python3" && chmod +x "$pv/fakebin/python3"
+printf '#!/usr/bin/env bash\nexec %s "$@"\n' \
+  "$(printf '%q' "$closed_path/python3")" > "$pv/fakebin/python3" && chmod +x "$pv/fakebin/python3"
 outrank_env() { sed -n "s/^$1=.*/$1/p" "$pv/env" 2>/dev/null; }
 for pair in "claude ANTHROPIC_API_KEY leaked-personal-key" "claude ANTHROPIC_AUTH_TOKEN leaked-token" \
             "claude CLAUDE_CODE_USE_BEDROCK 1" "claude CLAUDE_CODE_USE_VERTEX 1" \
@@ -1394,7 +1394,7 @@ realgit="$(command -v git)"
 # python3 and jq for the adapter itself, whichever the runner has, in a
 # directory of their own so no other tool of that directory comes with them
 mkdir -p "$cx/toolbin"
-ln -s "$(command -v python3)" "$cx/toolbin/python3"
+ln -s "$closed_path/python3" "$cx/toolbin/python3"
 ln -s "$(command -v jq)" "$cx/toolbin/jq"
 git init -q "$cx/tree"
 echo "do it" > "$cx/prompt"
@@ -1447,6 +1447,8 @@ echo "You have not agreed to the Xcode license agreements. Please run 'sudo xcod
 exit 69
 S
 chmod +x "$cx/shimbin/git" "$cx/fakezsh" "$cx/fakebin/codex" "$cx/xcode-select" "$cx/xcrun-finds" "$cx/xcrun-licence"
+cx_path="$cx/closed"
+fixture_path "$cx_path" 'git claude codex gemini cursor-agent agent gh security secret-tool' || exit 1
 codex_round() {   # codex_round <PATH> <xcrun> -> its exit code; what its shell said in $cx/codex.out
   rm -f "$cx/codex.out" "$cx/git.err" "$cx/log"
   SHELL="$cx/fakezsh" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" FM_POLICY="$pk/none.json" \
@@ -1454,7 +1456,7 @@ codex_round() {   # codex_round <PATH> <xcrun> -> its exit code; what its shell 
     "$ROOT/bin/adapters/codex.sh" run "$cx/prompt" "$cx/tree" "$cx/log" >/dev/null 2>"$cx/err"
   echo $?
 }
-assert_eq "0" "$(codex_round "$cx/opbin:$cx/fakebin:/usr/bin:/bin" "$cx/xcrun-finds")" "a codex round runs"
+assert_eq "0" "$(codex_round "$cx/opbin:$cx/fakebin:$cx_path" "$cx/xcrun-finds")" "a codex round runs"
 cxo="$(cat "$cx/codex.out" 2>/dev/null)"
 assert_contains "$cxo" "heredoc ok" "a here-document works in a codex round's login shell"
 assert_lacks "$cxo" "can't create temp file" "its temp file is not refused"
@@ -1463,14 +1465,14 @@ assert_contains "$cxo" "git status ok: $cx/opbin/git" \
 assert_contains "$cxo" "git exit 0" "which works"
 # a machine whose only git is the shim: xcrun, asked outside the round,
 # names the tool it would run, and the round runs that one directly
-assert_eq "0" "$(codex_round "$cx/fakebin:$cx/shimbin:/usr/bin:/bin" "$cx/xcrun-finds")" "a round on an xcrun-only machine runs"
+assert_eq "0" "$(codex_round "$cx/fakebin:$cx/shimbin:$cx_path" "$cx/xcrun-finds")" "a round on an xcrun-only machine runs"
 cxo="$(cat "$cx/codex.out" 2>/dev/null)"
 assert_contains "$cxo" "git exit 0" "where xcrun can name the real git, git works inside it"
 assert_contains "$(cat "$cx/log")" "is Apple's xcrun shim ($cx/shimbin/git); the round runs the git it names, $cx/devbin/git" \
   "and the sandbox says which one it runs"
 # and where xcrun has none to give - the Xcode licence not accepted - the
 # round is told plainly, at once, rather than failing on a licence prompt
-assert_eq "0" "$(codex_round "$cx/fakebin:$cx/shimbin:/usr/bin:/bin" "$cx/xcrun-licence")" "a round on an unusable xcrun-only machine still runs"
+assert_eq "0" "$(codex_round "$cx/fakebin:$cx/shimbin:$cx_path" "$cx/xcrun-licence")" "a round on an unusable xcrun-only machine still runs"
 cxo="$(cat "$cx/codex.out" 2>/dev/null)"
 assert_contains "$cxo" "git exit 69" "its git exits 69 at once"
 cxe="$(cat "$cx/git.err" 2>/dev/null)"

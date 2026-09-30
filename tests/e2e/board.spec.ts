@@ -276,10 +276,15 @@ test('T-145: a verdict from a reviewer who has just left the deck is shown quiet
     // is, and not aboard - is the one case said, and said once, not once per
     // event
     emitFixture(root,'mystery','T-034','approved','Approved','通過');
+    // Render the verdict before the finish event: SSE can observe this
+    // intermediate state in production. An unknown actor must not board.
+    await redraw();
+    const odd=page.locator('.handoff[data-kind="approve"][data-from="mystery"]');
+    await expect(page.locator('[data-crew="mystery"]')).toHaveCount(0);
+    await expect(odd).toHaveAttribute('data-unknown','mystery');
     emitFixture(root,'mystery','T-034','approved','Approved again','再次通過');
     emitFixture(root,'mystery','T-034','agent_finished');
     await redraw(2);
-    const odd=page.locator('.handoff[data-kind="approve"][data-from="mystery"]');
     await expect(odd).toHaveCount(2);
     await expect(odd.first()).toHaveAttribute('data-unknown','mystery');
     await expect(odd.nth(1)).not.toHaveAttribute('data-unknown',/./);

@@ -20,6 +20,12 @@ unset CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY CURSOR_API_KEY CODEX_API_KEY GEM
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/path.sh
+. "$ROOT/tests/lib/path.sh"
+suite_original_path="$PATH"
+suite_tools="$(safe_tmpdir)"
+fixture_path "$suite_tools" 'claude codex gemini cursor-agent agent gh herdr tmux cmux security secret-tool osascript xdg-open open' || exit 1
+PATH="$suite_tools"; export PATH
 # shellcheck source=bin/fm-config.sh
 . "$ROOT/bin/fm-config.sh"
 SB="$ROOT/bin/fm-sandbox.sh"
@@ -566,7 +572,7 @@ printf 'TMPDIR=%s\nNO_PROXY=%s\nHOME=%s\nXDG_CACHE_HOME=%s\nXDG_CONFIG_HOME=%s\n
 # once the system's profile has put its own directories first
 printf 'TMPPREFIX=%s\nZDOTDIR=%s\nPATH=%s\n' "\${TMPPREFIX:-}" "\${ZDOTDIR:-}" "\$PATH" >> "$t/tmpdir"
 for rc in .zprofile .bash_profile .profile; do
-  printf 'LOGIN %s=%s\n' "\$rc" "\$(PATH=/usr/bin:/bin; [ -r "\${ZDOTDIR:-\$HOME}/\$rc" ] && . "\${ZDOTDIR:-\$HOME}/\$rc"; printf '%s' "\$PATH")" >> "$t/tmpdir"
+  printf 'LOGIN %s=%s\n' "\$rc" "\$(PATH="$suite_tools"; [ -r "\${ZDOTDIR:-\$HOME}/\$rc" ] && . "\${ZDOTDIR:-\$HOME}/\$rc"; printf '%s' "\$PATH")" >> "$t/tmpdir"
 done
 python3 "$t/probe.py" "$t/ran"
 exit 7
@@ -1080,8 +1086,7 @@ out="$1"
 S
 chmod +x "$t/login.sh"
 # a PATH holding only what the command needs
-lpath="$t/psbin:/usr/bin:/bin"
-command -v python3 >/dev/null && lpath="$t/psbin:$(dirname "$(command -v python3)"):/usr/bin:/bin"
+lpath="$t/psbin:$suite_tools"
 # The board warning (T-126 round 2): a fallback tier is worth a line on the
 # board, not only in the round's log. fm-sandbox.sh posts it through
 # fm_herdr_emit_status (bin/fm-config.sh) and bin/fm-herdr.py under FM_ROOT
@@ -1265,15 +1270,7 @@ rm -f "$t/kc/secret-calls"
 # 0644 crew file is reached next. The PATH is lpath's own tools, linked
 # into one directory with any secret-tool left out, so a runner that has
 # one installed (CI's does) cannot answer here.
-mkdir -p "$t/nosecret-path"
-IFS=: read -ra nsp_dirs <<< "$lpath"
-for nsp_d in "${nsp_dirs[@]}"; do
-  for nsp_f in "$nsp_d"/*; do
-    nsp_n="${nsp_f##*/}"
-    [ "$nsp_n" = secret-tool ] && continue
-    [ -x "$nsp_f" ] && [ ! -e "$t/nosecret-path/$nsp_n" ] && ln -s "$nsp_f" "$t/nosecret-path/$nsp_n"
-  done
-done
+PATH="$lpath" fixture_path "$t/nosecret-path" 'secret-tool' || exit 1
 assert_fail "PATH='$t/nosecret-path' command -v secret-tool" "(no secret-tool on that PATH)"
 assert_eq "77" "$(kc run linux claude FM_SECRET_TOOL= PATH="$t/nosecret-path")" \
   "with FM_SECRET_TOOL unset and no secret-tool on PATH, the 0644 crew file is reached next and refuses the round"
@@ -1925,4 +1922,6 @@ else
 fi
 
 safe_rm_rf "$t"
+PATH="$suite_original_path"; export PATH
+safe_rm_rf "$suite_tools"
 finish

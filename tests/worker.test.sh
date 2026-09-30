@@ -12,6 +12,12 @@ export HERDR_ENV=0 FM_TRANSPORT=direct
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/path.sh
+. "$ROOT/tests/lib/path.sh"
+suite_original_path="$PATH"
+suite_tools="$(safe_tmpdir)"
+fixture_path "$suite_tools" 'claude codex gemini cursor-agent agent gh herdr tmux cmux security secret-tool osascript xdg-open open' || exit 1
+PATH="$suite_tools"; export PATH
 
 # A simulated fetch failure must reject malformed arguments too: its normal
 # nonzero status alone cannot distinguish the fixture response from rejection.
@@ -3217,4 +3223,6 @@ if [ -n "$apKill" ]; then
 fi
 rm -rf "$dKill"
 
+PATH="$suite_original_path"; export PATH
+safe_rm_rf "$suite_tools"
 finish
