@@ -1147,12 +1147,17 @@ def round_environment(source, vendor):
     # Ask the same functions the adapters use, from the round's immutable
     # code snapshot. Only variable names leave this helper, never credentials.
     code = Path(source.get('FM_CODE_ROOT') or Path(__file__).resolve().parents[1])
+    # The library resolves settings from FM_ROOT, with FM_ADAPTER_CONFIG as
+    # an explicit override. A code snapshot intentionally has no config.yaml.
+    policy_env = {'PATH': os.environ.get('PATH', os.defpath)}
+    for name in ('FM_ROOT', 'FM_ADAPTER_CONFIG'):
+        if source.get(name):
+            policy_env[name] = source[name]
     policy = subprocess.run(
         ['bash', '-c', '. "$1/bin/adapters/_lib.sh" || exit; '
          'if [ "$(fm_adapter_billing "$2")" != api-key ]; then '
          'fm_adapter_outranking "$2"; fi', 'round-login', str(code), vendor],
-        env={'PATH': os.environ.get('PATH', os.defpath),
-             'FM_ADAPTER_CONFIG': source.get('FM_ADAPTER_CONFIG') or str(code / 'config.yaml')},
+        env=policy_env,
         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20, check=True)
     shed = set(policy.stdout.splitlines())
     for name in candidates:

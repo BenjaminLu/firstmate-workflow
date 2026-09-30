@@ -76,7 +76,7 @@ chmod 700 "$work/ctl"
 policy="${FM_POLICY:-}"
 if [ -z "$policy" ] || [ ! -r "$policy" ]; then
   policy="$work/policy.json"
-  if ! fm_policy "${FM_ROLE:-worker}" "" "$_fm_engine/config.yaml" > "$policy" 2>/dev/null; then
+  if ! fm_policy "${FM_ROLE:-worker}" "" "$(fm_adapter_config)" > "$policy" 2>/dev/null; then
     print_result indeterminate "$version" \
       "the crew policy does not read, so the round's login could not be resolved" \
       "crew 政策無法讀取，無法解析本回合的登入"

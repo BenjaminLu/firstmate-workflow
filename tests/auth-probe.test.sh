@@ -181,6 +181,18 @@ printf 'billing:\n  claude: api-key\n' > "$d/billing.yaml"
 out="$(FM_ADAPTER_CONFIG="$d/billing.yaml" ANTHROPIC_API_KEY=personal-key run claude)"
 assert_eq "authenticated" "$(field "$out" status)" "with claude: api-key billing, the ambient key is the round's login"
 
+# Frozen code contains no settings: the probe reads the operator's repository.
+mkdir -p "$d/snapshot" "$d/operator"
+cp -R "$ROOT/bin" "$d/snapshot/bin"
+cp "$d/billing.yaml" "$d/operator/config.yaml"
+out="$(unset FM_ADAPTER_CONFIG FM_POLICY; FM_ROOT="$d/operator" FM_CODE_ROOT="$d/snapshot" \
+  ANTHROPIC_API_KEY=personal-key PROBE="$d/snapshot/bin/fm-auth-probe.sh" run claude)"
+assert_eq "authenticated" "$(field "$out" status)" "a frozen probe reads api-key billing from FM_ROOT without an override"
+printf 'vendor: claude\n' > "$d/operator/config.yaml"
+out="$(unset FM_ADAPTER_CONFIG FM_POLICY; FM_ROOT="$d/operator" FM_CODE_ROOT="$d/snapshot" \
+  ANTHROPIC_API_KEY=personal-key PROBE="$d/snapshot/bin/fm-auth-probe.sh" run claude)"
+assert_eq "unauthenticated" "$(field "$out" status)" "the same frozen probe sheds an unchosen API key"
+
 # claude: the interactive fallback tier is what a round without a crew token
 # uses (with a warning), so the probe uses it too
 no_logins

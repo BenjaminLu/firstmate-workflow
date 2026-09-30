@@ -166,12 +166,16 @@ fm_adapter_review_env() {
 # config.yaml's billing: block is the one place the operator opts a vendor
 # into api-key billing; fm_cfg_in reads it without a heredoc, so an adapter
 # reached with a plain policy file and no engine root still reads it.
-# FM_ADAPTER_CONFIG names a config.yaml to read instead of the engine's own,
-# the same way FM_POLICY stands in for a resolved policy: nothing sets it
-# but a test, which otherwise has no way to hand an adapter a billing choice
-# without editing the real installation's config.yaml out from under it.
+# Settings belong to the operator's repository, not the frozen code snapshot
+# (which contains only bin/ and skills/). Keep the explicit override, and
+# use the engine's config only for a direct invocation without FM_ROOT.
+fm_adapter_config() {
+  printf '%s\n' "${FM_ADAPTER_CONFIG:-${FM_ROOT:-$_fm_engine}/config.yaml}"
+}
+
 fm_adapter_billing() {  # fm_adapter_billing <vendor> -> "api-key" or ""
-  local vendor="$1" mode='' cfg="${FM_ADAPTER_CONFIG:-$_fm_engine/config.yaml}"
+  local vendor="$1" mode='' cfg
+  cfg="$(fm_adapter_config)"
   if [ -f "$cfg" ]; then
     mode="$(fm_cfg_in billing "$vendor" "$cfg" 2>/dev/null)"
   fi
@@ -346,7 +350,7 @@ _fm_engine="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 # fm_adapter_policy -> FM_POLICY, FM_POLICY_HOSTS, FM_OUTER_OS, FM_OUTER_DIMS,
 # FM_UNSANDBOXED.
 # An adapter reached without a policy - by hand, or by a caller that does
-# not know about one - takes the engine's own for its role rather than none.
+# not know about one - resolves the repository's settings for its role.
 # shellcheck disable=SC2034  # read by the adapter that sourced this
 fm_adapter_policy() {
   local f
@@ -355,8 +359,8 @@ fm_adapter_policy() {
   else
     f="$(mktemp "${TMPDIR:-/tmp}/fm-policy.XXXXXX")" || exit 70
     # shellcheck disable=SC2016  # expanded by the inner shell
-    bash -c '. "$1/bin/fm-config.sh" && fm_policy "$2" "" "$1/config.yaml"' fm-policy \
-      "$_fm_engine" "${FM_ROLE:-worker}" > "$f" || {
+    bash -c '. "$1/bin/fm-config.sh" && fm_policy "$2" "" "$3"' fm-policy \
+      "$_fm_engine" "${FM_ROLE:-worker}" "$(fm_adapter_config)" > "$f" || {
       rm -f "$f"; echo "adapter: the crew policy does not read; refusing an unconfined round" >&2; exit 65; }
     FM_POLICY="$f"; export FM_POLICY
   fi

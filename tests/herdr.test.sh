@@ -881,9 +881,10 @@ else: raise SystemExit('unsupported fake Herdr command '+str(a))
 print(json.dumps({'result':result}))
 ''')
         self.executable('codex', r'''
-import os,pathlib,sys,time
+import json,os,pathlib,sys,time
 r=pathlib.Path(os.environ['FM_TEST_ROOT']); prompt=sys.stdin.read()
 actor=os.environ['FM_ACTOR']; role=os.environ['FM_ROLE']; task=os.environ['FM_TASK']
+(r/(actor+'.login')).write_text(json.dumps({name:os.environ[name] for name in ('CODEX_API_KEY','CODEX_HOME') if name in os.environ}))
 (r/(actor+'.prompt')).write_text(prompt)
 assert actor in prompt and ('explicitly dispatched '+role) in prompt
 if os.environ.get('FM_TEST_ASYNC')=='1':
@@ -1599,14 +1600,22 @@ else: sys.exit('Error: Unknown command '+(a[0] if a else ''))
                 self.assertEqual('completed',result['status'])
                 self.assertEqual('0',(attempt/'runner.exit').read_text().strip())
                 text=(attempt/'environment.json').read_text(); environment=json.loads(text)
+                self.assertNotIn('FM_ADAPTER_CONFIG',environment)
+                code=Path(environment['FM_CODE_ROOT'])
+                self.assertNotEqual(self.repo,code)
+                self.assertFalse((code/'config.yaml').exists())
+                launched=json.loads((self.repo/(result['actor']+'.login')).read_text())
                 for name,value in self.LEAKED.items():
                     self.assertNotIn(name,environment)
                     self.assertNotIn(value,text)
                 # its own login, and no other vendor's (the fixture sets all four)
                 if api_key:
                     self.assertEqual('fm-suite-key',environment['CODEX_API_KEY'])
+                    self.assertEqual('fm-suite-key',launched['CODEX_API_KEY'])
                 else:
                     self.assertNotIn('CODEX_API_KEY',environment)
+                    self.assertNotIn('CODEX_API_KEY',launched)
+                    self.assertNotEqual(str(self.env['HOME'])+'/.codex',launched['CODEX_HOME'])
                 for other in ('CLAUDE_CODE_OAUTH_TOKEN','CURSOR_API_KEY','GEMINI_API_KEY'):
                     self.assertNotIn(other,environment)
                 self.assertEqual(result['actor'],environment['FM_ACTOR'])
@@ -1618,7 +1627,9 @@ else: sys.exit('Error: Unknown command '+(a[0] if a else ''))
         self.handed_environment_case(True)
 
     def handed_environment_case(self, api_key):
-        self.env.update(CODEX_API_KEY='fm-suite-key', FM_ADAPTER_CONFIG=str(self.repo/'config.yaml'))
+        self.env.update(CODEX_API_KEY='fm-suite-key', FM_CODE_ROOT=str(m.snapshot(self.repo)))
+        self.assertNotIn('FM_ADAPTER_CONFIG',self.env)
+        self.assertFalse((Path(self.env['FM_CODE_ROOT'])/'config.yaml').exists())
         if api_key:
             with (self.repo/'config.yaml').open('a') as config:
                 config.write('billing:\n  codex: api-key\n')
@@ -1650,8 +1661,10 @@ else: sys.exit('Error: Unknown command '+(a[0] if a else ''))
         vendors=json.loads(policy.stdout)['vendors']
         self.assertEqual({v:list(d['login'].get('given',[])) for v,d in vendors.items() if d['login'].get('given')},
                          {v:list(names) for v,names in m.ROUND_LOGIN.items()})
-        # The first eligible login wins; billing comes from the fixture.
-        base=dict(PATH='/bin',FM_ADAPTER_CONFIG=str(self.repo/'config.yaml'),FM_CODE_ROOT=str(self.repo))
+        # The first eligible login wins; settings never live in the snapshot.
+        code=m.snapshot(self.repo)
+        self.assertFalse((code/'config.yaml').exists())
+        base=dict(PATH='/bin',FM_ROOT=str(self.repo),FM_CODE_ROOT=str(code))
         both=dict(base,CLAUDE_CODE_OAUTH_TOKEN='a',ANTHROPIC_API_KEY='b',FOO='x')
         self.assertEqual(dict(base,CLAUDE_CODE_OAUTH_TOKEN='a'),m.round_environment(both,'claude'))
         self.assertEqual(base,
@@ -1662,7 +1675,7 @@ else: sys.exit('Error: Unknown command '+(a[0] if a else ''))
                 with self.subTest(vendor=vendor,api_key=api_key):
                     config=self.repo/'config.yaml'
                     config.write_text('billing:\n  '+vendor+': '+('api-key' if api_key else 'subscription')+'\n')
-                    source=dict(FM_ADAPTER_CONFIG=str(config),FM_CODE_ROOT=str(self.repo),
+                    source=dict(FM_ROOT=str(self.repo),FM_CODE_ROOT=str(code),
                                 **{name:'login' for name in names})
                     expected={k:v for k,v in source.items() if k.startswith('FM_')}
                     if api_key or vendor in ('claude','cursor-agent'):
