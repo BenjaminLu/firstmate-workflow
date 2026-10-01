@@ -502,8 +502,9 @@ class Session(unittest.TestCase):
         children=[]; original=m.subprocess.Popen
         def spawn(*args,**kwargs):
             child=original(*args,**kwargs)
-            # The shared settings reader is a foreground bash subprocess.
-            if args[0][0] != 'bash': children.append(child)
+            # Count board launches by their script, independent of the
+            # interpreter used by foreground settings readers.
+            if str(self.repo.resolve() / 'board/server.ts') in args[0]: children.append(child)
             return child
         # T-122: the board's secret goes under XDG_CONFIG_HOME, here a directory
         # of this test's own outside the fixture root, never the operator's home

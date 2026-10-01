@@ -1753,7 +1753,7 @@ test("a crewman turns under the pointer, and the ahoy fires", async ({ page }) =
 test("nothing here can reach a model", async () => {
   // structural, not a promise: the fixture root has no adapters in it, so
   // there is nothing for the board to shell out to even if it tried. The
-  // only scripts it may spawn are the merge recorder, the registry reader
+  // only scripts it may spawn are the merge recorder, the registry/settings reader
   // and the lifeline keeper the merge runs under, and they are the whole
   // contents of its bin/.
   //
@@ -1762,7 +1762,8 @@ test("nothing here can reach a model", async () => {
   // to a model is fm_run_chain, which runs bin/adapters - absent above - and
   // the board calls nothing from fm-config.sh but the registry readers
   // (fm_projects since T-054, to know every project's repository and tasks)
-  // and fm_tasks, which only reads task directories (T-090).
+  // and fm_tasks, which only reads task directories (T-090), plus
+  // fm_board_port and fm_language, which read config.yaml settings (T-154).
   //
   // fm_lifeline is not an fm-config.sh function: it is server.ts's path to
   // bin/lib/fm_lifeline.py, the lifeline module the merge helper runs under
@@ -1774,7 +1775,7 @@ test("nothing here can reach a model", async () => {
   // lib/ is the lifeline (T-151): the keeper a merge runs under, nothing that calls a model
   expect(readdirSync(join(board.root, "bin/lib")).sort()).toEqual(["fm-lifeline.sh", "fm_lifeline.py"]);
   const called = new Set(readFileSync(join(board.root, "board/server.ts"), "utf8").match(/\bfm_[a-z_]+/g) ?? []);
-  expect([...called].sort()).toEqual(["fm_lifeline", "fm_project_get", "fm_project_resolve", "fm_projects", "fm_tasks"]);
+  expect([...called].sort()).toEqual(["fm_board_port", "fm_language", "fm_lifeline", "fm_project_get", "fm_project_resolve", "fm_projects", "fm_tasks"]);
 });
 
 test("no cards retains one idle captain aboard", async ({ page }) => {
