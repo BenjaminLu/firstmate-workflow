@@ -209,6 +209,11 @@ for event in [{'type':'turn.started'}, {'type':'item.completed','item':{'id':'0'
         command = check + '\n' + drop + '\ndrop_checkout\n'
         subprocess.run(['bash', '-c', command], env=env, check=True)
         self.assertTrue(directory.exists(), 'live adapter checkout retained')
+        rebuild = script[script.index('rebuild_checkout() {'):script.index('sweep_checkouts() {')]
+        refresh = subprocess.run(['bash', '-c', check + '\n' + rebuild + '\nrebuild_checkout'],
+            env=dict(env, R_HEAD=self.head, R_BASE=self.head), capture_output=True)
+        self.assertNotEqual(0, refresh.returncode, 'retry refuses a live execution owner')
+        self.assertTrue(directory.exists(), 'refused retry preserves the live checkout')
         fcntl.flock(lock, fcntl.LOCK_UN)
         subprocess.run(['bash', '-c', command], env=env, check=True)
         self.assertFalse(directory.exists(), 'failed/dead adapter checkout cleaned')

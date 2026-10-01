@@ -233,7 +233,8 @@ task_spec() {   # task_spec <task> [branch]; its own file, design/tasks/<id>.jso
   [ -n "$j" ] || j="$(fm_task "$t")"
   printf '%s' "$j"
 }
-spec="$(task_spec "$TASK" "$BRANCH")"
+R_HEAD="$(git rev-parse --verify -q "$BRANCH^{commit}")" || R_HEAD=''
+spec="$(task_spec "$TASK" "${R_HEAD:-$BRANCH}")"
 [ -n "$spec" ] || { echo "fm-review: no task $TASK" >&2; exit 65; }
 set_crew_activity "$spec"
 
@@ -298,7 +299,6 @@ if fm_crew_hatch fm-review; then unsandboxed=1; fi
 # APPROVE across an update onto a newer base only when the change is the
 # same one (T-113). The patch-id comes from plumbing, which reads no user
 # configuration, with renames off, exactly as fm-gate.sh takes it.
-R_HEAD="$(git rev-parse --verify -q "$BRANCH^{commit}")" || R_HEAD=''
 R_BASE=''; R_PATCH=''; R_FILES=''
 if [ -n "$R_HEAD" ] && R_BASE="$(git merge-base "$BASE" "$R_HEAD" 2>/dev/null)"; then
   R_PATCH="$(git diff-tree -r -p --no-renames "$R_BASE" "$R_HEAD" 2>/dev/null | git patch-id --stable | cut -d' ' -f1)"
@@ -651,7 +651,8 @@ failed_lines() {
 head_evidence() {
   local sha names name runs shown fence all lines rid dir
   printf '\n# The head under review\n'
-  if ! sha="$(git rev-parse --verify -q "$BRANCH^{commit}")"; then
+  sha="$R_HEAD"
+  if [ -z "$sha" ]; then
     printf '\nThe head of %s could not be resolved, so no CI or gate result can be tied to it.\n' "$BRANCH"
     return 0
   fi
@@ -791,7 +792,7 @@ prompt="$work/prompt.md"
   [ -z "$PR" ] || head_evidence
   printf '\n---\n\n# The diff under review\n\n```diff\n'
   # the change the REVIEWED line names, not whatever the branch is by now
-  if [ -n "$R_BASE" ]; then git diff "$R_BASE" "$R_HEAD"; else git diff "$BASE...$BRANCH"; fi
+  if [ -n "$R_BASE" ]; then git diff "$R_BASE" "$R_HEAD"; else printf "The pinned head or merge-base could not be resolved; diff unavailable.\n"; fi
   printf '```\n'
 } > "$prompt"
 
@@ -947,10 +948,25 @@ fi
 # round gets no later turn to check back on it. A second empty ending is
 # reported exactly as the first always was; a genuinely broken engine fails
 # the same way both times, so nothing changes for it but one more attempt.
+# Codex admission requires a fresh tree. A previous engine may legitimately
+# write scratch files, change tracked files, or fail after doing either.
+# Refresh at the chain boundary, not only the unsigned retry, so fallback
+# also gets the pinned checkout. rebuild_checkout refuses a live owner.
+checkout_attempted=''
+prepare_review_attempt() {
+  local vendor="$1"
+  if [ "$REVIEW_MODE" = run ] && [ "$vendor" = codex ] && [ -n "$checkout_attempted" ]; then
+    if ! rebuild_checkout; then
+      echo "fm-review: cannot refresh checkout for Codex; retaining live or uncertain ownership" >&2
+      return 70
+    fi
+  fi
+  checkout_attempted=1
+}
 attempt_n=1
 while :; do
 fm_run_chain "$adapters" "$chain" \
-  "$prompt" "$work/out" "$work/log" review_is_signed per-vendor; rc=$?
+  "$prompt" "$work/out" "$work/log" review_is_signed per-vendor prepare_review_attempt; rc=$?
 # Review checkouts are disposable (T-128): when one is destroyed mid-round -
 # by the round's own commands, deliberately or not - there is no mirror to
 # restore from and none needed, only a fresh checkout at the same path the
@@ -965,7 +981,7 @@ if ! checkout_ok; then
        --tw "checkout 被摧毀；用新的重試一次" --data '{"event_kind":"review_checkout_destroyed"}'
   if rebuild_checkout >/dev/null 2>&1; then
     fm_run_chain "$adapters" "$chain" \
-      "$prompt" "$work/out" "$work/log" review_is_signed per-vendor; rc=$?
+      "$prompt" "$work/out" "$work/log" review_is_signed per-vendor prepare_review_attempt; rc=$?
     checkout_ok || echo "fm-review: the fresh checkout was destroyed too; not retrying again" >&2
   else
     echo "fm-review: could not rebuild the checkout to retry $BRANCH after it was destroyed" >&2

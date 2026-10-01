@@ -165,16 +165,21 @@ assert_eq "$(cat "$d/before.yaml")" "$(cat "$repo/config.yaml")" \
   "a re-run with the same answers leaves reviewer.mode, model and models: exactly as they were"
 
 # a reviewer whose adapter cannot confine a run-mode review would make every
-# review exit 65 (bin/fm-review.sh), so a kept `run` becomes diff for it -
-# and the models are still untouched
+# review exit 65 (bin/fm-review.sh), so unsupported vendors become diff.
+# Codex now retains run, and models remain untouched for every vendor.
 for rv in codex gemini cursor-agent; do
   cp "$d/before.yaml" "$repo/config.yaml"
   printf 'worker_vendor: claude\nreviewer_vendor: %s\nbilling_claude: subscription\nbilling_%s: subscription\nrepo_github:\n' \
     "$rv" "$rv" > "$answers"
   said="$(run_setup --answers "$answers" </dev/null 2>&1 >/dev/null)"
   assert_eq "$rv" "$(reviewer_field vendor)" "$rv is written as the reviewer"
-  assert_eq "diff" "$(reviewer_field mode)" "and a kept run mode becomes diff, which fm-review.sh accepts for $rv"
-  assert_contains "$said" "reviewer.mode is now diff" "and the wizard says why ($rv)"
+  if [ "$rv" = codex ]; then
+    assert_eq "run" "$(reviewer_field mode)" "Codex retains supported run mode"
+    assert_lacks "$said" "reviewer.mode is now diff" "Codex is not silently downgraded"
+  else
+    assert_eq "diff" "$(reviewer_field mode)" "unsupported $rv becomes diff"
+    assert_contains "$said" "reviewer.mode is now diff" "and the wizard says why ($rv)"
+  fi
   assert_contains "$(cat "$repo/config.yaml")" "codex:  gpt-5-codex" "models: is untouched ($rv)"
   assert_contains "$said" "reviewer model 'claude-opus-5-5' was chosen for claude" \
     "a reviewer model chosen for another vendor is said, not changed ($rv)"

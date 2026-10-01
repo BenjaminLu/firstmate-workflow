@@ -1287,7 +1287,7 @@ fm_review_run_chain() {
   printf '%s\n' "$kept"
 }
 
-# fm_run_chain <adapters-dir> <chain> <prompt> <tree> <log> [evidence]
+# fm_run_chain <adapters-dir> <chain> <prompt> <tree> <log> [evidence] [outmode] [prepare]
 #   Returns the adapter's own exit code, or 2 if every vendor was unavailable.
 #   Sets FM_VENDOR_USED and FM_VENDOR_SKIPPED so the caller can say what it did,
 #   and FM_VENDOR_MODEL, the model the last attempt was handed (T-146).
@@ -1320,10 +1320,12 @@ fm_review_run_chain() {
 #   a worker wants because the worktree IS the artefact. FM_RUN_LOG_OFF is
 #   where this attempt's bytes start in the shared log, so an evidence
 #   predicate can read its own output and no one else's.
+#   Optional prepare is a caller-owned function taking the next vendor. A
+#   refusal stops the chain before launch (70), without accepting an old result.
 # shellcheck disable=SC2034  # these are read by the callers, not here
 fm_run_chain() {
   local dir="$1" chain="$2" prompt="$3" tree="$4" log="$5" evidence="${6:-}" \
-        outmode="${7:-shared}" v rc=2 head='' out='' after=0
+        outmode="${7:-shared}" prepare="${8:-}" v rc=2 head='' out='' after=0
   # every output of this function, including the two that say where an
   # attempt's bytes are: leaving those set means a caller on the
   # configuration-error path reads the PREVIOUS call's attempt, which is the
@@ -1371,6 +1373,11 @@ fm_run_chain() {
     # that never create managed receipts. Keep previous receipts as evidence.
     FM_CHAIN_ATTEMPT="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')" || return 70
     export FM_CHAIN_ATTEMPT FM_CHAIN_VENDOR="$v"
+    # A launcher-owned preparation callback runs before every vendor attempt,
+    # including fallback. Failure is terminal and cannot reuse old evidence.
+    if [ -n "$prepare" ]; then
+      "$prepare" "$v" || return 70
+    fi
     "$dir/$v.sh" run "$prompt" "$out" "$log"; rc=$?
     # did this vendor say anything of its own? The callers need to tell an
     # engine that ran badly from one that was not there, and this is the
