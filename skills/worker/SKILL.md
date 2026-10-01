@@ -23,6 +23,14 @@ Implement the task so that all six gates pass. Read them in
   green light wired to nothing. Write the test first, watch it fail, then make
   it pass.
 
+A new feature's tests go in a new file named for that feature, or in the
+file that already owns the feature; never append them to an unrelated suite.
+Keep every file under `tests/` at 1200 lines or fewer. Shared shell and Python
+fixtures belong in `tests/lib/`; shared browser fixtures in `tests/e2e/lib/`.
+Name helper dependencies literally so gate 5 can select their consuming
+suites. Split files must run independently and preserve existing assertions
+and test names.
+
 Board mid-run status (phase / authored `data.activity` / optional bounded
 `{done,total}` progress) is emitted by the worker script through `fm-emit.sh`
 at script-known nodes. Do not invent percentages from lifecycle labels or

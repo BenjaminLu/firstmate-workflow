@@ -1086,6 +1086,14 @@ keeps its declared-docs classification and its explicit `project.check`
 fallback; CI keeps the behavior-path classification described in §7. Worktree
 restoration, suite execution and assertion comparison have one implementation.
 
+A new feature's tests go in a new file named for that feature, or in the
+file that already owns the feature; never append them to an unrelated suite.
+Keep every file under `tests/` at 1200 lines or fewer. Shared shell and Python
+fixtures belong in `tests/lib/`; shared browser fixtures in `tests/e2e/lib/`.
+Name helper dependencies literally so gate 5 can select their consuming
+suites. Split files must run independently and preserve existing assertions
+and test names.
+
 **Gate 5 runs only the touched suites (T-114).** On each tree it runs,
 through `project.test`, every test file the diff changes, then every other
 test file that names one of them by path or file name - the suites that
@@ -1393,9 +1401,9 @@ runs it in three steps, all on pull requests only:
    same text to every shard. If a green run on `main` finished between two
    shards' own downloads, they would get two different splits, and a suite
    could land in no shard at all.
-2. **`fail-first shard i/4`**, a matrix of 4, the bash shards' count. It
-   runs `fm-failfirst.sh --shard=i/4 --part=<file>`. Its share of the
-   changed test files is what `bin/ci.sh --plan i/4 -- <files>` gives: the
+2. **`fail-first shard i/6`**, a matrix of 6, the bash shards' count. It
+   runs `fm-failfirst.sh --shard=i/6 --part=<file>`. Its share of the
+   changed test files is what `bin/ci.sh --plan i/6 -- <files>` gives: the
    same estimates from the same `FM_CI_TIMINGS_IN`, and the same
    longest-first packing that `--shard` applies to the bash suites (T-148).
    Every given file is packed, suite or not, and each lands in exactly one

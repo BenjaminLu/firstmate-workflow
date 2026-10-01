@@ -494,7 +494,7 @@ piped_greps() {
   hits="$(grep -HnE '\|[[:space:]]*grep[[:space:]]+-[a-zA-Z]*[qc]' "$@" || true)"
   grep -vE "^[^:]*:[0-9]+:[[:space:]]*(#|printf '.*\\\\n')" <<<"$hits" || true
 }
-assert_eq "" "$(piped_greps "$ROOT/tests/reconcile.test.sh" "$ROOT/tests/ci.test.sh")" \
+assert_eq "" "$(piped_greps "$ROOT/tests/reconcile.test.sh" "$ROOT"/tests/ci-*.test.sh)" \
   "no pipeline in reconcile.test.sh or ci.test.sh feeds grep -q or -c"
 m="$(mktemp -d)"
 p='|'   # built, so these lines do not trip the sweep above

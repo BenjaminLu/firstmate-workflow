@@ -486,7 +486,7 @@ done
 # this task cannot change. Task specs and dated proposals record what was true
 # when they were written; this suite has to spell the pattern out.
 allowed='^design/design\.md:[0-9]+:.*keeps seven slots'      # the card's gate list: one slot per number 1-7
-allowed="$allowed"'|^tests/worker\.test\.sh:[0-9]+:.*seven of them'  # a fixture design.md; outside T-114's scope, reported
+allowed="$allowed"'|^tests/lib/worker(-rebuild)?\.sh:[0-9]+:.*seven of them'  # shared fixture design.md, moved with its tests
 sweep="$(cd "$ROOT" && git grep -niE "$count" -- . ':!design/tasks/' ':!design/proposals/' ':!tests/gate.test.sh' 2>&1 \
   | grep -vE "$allowed")"
 assert_eq "" "$sweep" "no file in the repository still counts seven gates, or runs gate 3"
