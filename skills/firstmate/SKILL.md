@@ -589,8 +589,35 @@ verified pane; its single-pane tab may disappear as a consequence, never through
 unconditional whole-tab deletion. Preserve explicit transport/auto-close opt-outs.
 Those rules guard the window, not the round (T-144): the round's process is
 fm's, in its own process group, so a pane that closes, crashes or is retained
-never ends or keeps a round. A cmux workspace is closed by its ref and a tmux
-window closes itself when its follower exits.
+never ends or keeps a round. A tmux window closes itself when its follower
+exits. cmux requires explicit FM_HOST=cmux and FM_CMUX_CALLER_WORKSPACE after
+verifying the conversation's real caller; inherited CMUX_* values or UI focus
+alone are not caller evidence. Explicit Herdr selection with verified HERDR_*
+context takes precedence in nested sessions. cmux cleanup checks its receipt,
+identity, label and tree, retaining on uncertainty. This is not an exclusive
+ownership lease or proof of foreground-process ownership.
+
+The T-162 reproduction establishes that foreground ping is insufficient:
+cmuxOnly rejects the session-owned launch after the invoking shell exits.
+Captain's 2026-10-01 direction is to retain cmuxOnly and use the actual nested
+Herdr host. Verify the conversation's pane, tab and workspace, then explicitly
+set FM_HOST=herdr and HERDR_PANE_ID/HERDR_TAB_ID/HERDR_WORKSPACE_ID. Do not
+substitute UI focus or inherited outer cmux context for caller evidence.
+No password-mode configuration is required for this deployment. Do not enable
+allowAll, change socket permissions, infer credentials or weaken crew policy.
+Explicit cmux calls preflight at their point of use; authorized cmuxOnly calls
+remain allowed and socket/auth failures retain their real diagnostic. Password
+mode is an optional, separately operator-configured capability, not a repair
+prerequisite. Do not obtain secrets or apply settings from a crew round.
+
+Validate the stock Herdr worker path through a fresh immutable snapshot: record
+verified caller and owner identity, visible labelled log content, unchanged
+captain focus, truthful window receipts and ownership-safe completion cleanup.
+Check that window failure leaves worker computation truthfully reported.
+Follow [the host integration handoff](../../design/cmux-lifecycle.md) for the
+captain-deferred cmux control-service, safe owner-exit closure and full cmux
+smoke acceptance. Do not claim these are complete. CI, gates and independent
+current-change review remain required; mocks do not prove real window visibility.
 
 ## Author and verify captain decisions
 

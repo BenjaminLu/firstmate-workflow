@@ -1,0 +1,29 @@
+{
+  "id": "T-162",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "Verified nested Herdr worker windows: exclude stale cmux context, preserve owned receipts and actionable host failures",
+  "scope": [
+    "bin/fm-herdr.py",
+    "bin/lib/fm-lifeline.sh",
+    "bin/lib/fm_lifeline.py",
+    "bin/fm-config.sh",
+    "bin/fm-doctor.sh",
+    "bin/fm-session.sh",
+    "bin/fm-dispatch.sh",
+    "tests/**",
+    "skills/firstmate/**",
+    "design/**",
+    "README.md"
+  ],
+  "acceptance": [
+    "Why and captain rescope, 2026-10-01. Two stock worker windows failed because cmux 0.62.2 (77) cmuxOnly accepts foreground ping but rejects the session-owned caller after its invoking shell exits with Failed to write to socket. The actual conversation is nested in Herdr w4S:p1, tab w4S:t1, workspace w4S; inherited CMUX_WORKSPACE_ID points to unrelated workspace:9. Captain directs retaining cmuxOnly and dispatching visibly into verified Herdr, not requiring Password mode or outer cmux workspaces. Original evidence: state/diagnostics/cmux-window-2026-10-01.json and dispatch excerpts, summarized in design/cmux-lifecycle.md.",
+    "Explicit FM_HOST/config host selection takes precedence over detection. Never choose cmux solely from inherited CMUX_* variables or use focused resources as caller evidence. Use independently verified HERDR_PANE_ID, HERDR_TAB_ID and HERDR_WORKSPACE_ID for the nested deployment, validate caller membership through Herdr, and record effective host/caller selection in host.json.",
+    "The stock Herdr worker path opens a dedicated labelled owned log tab without taking captain focus, records the actual owned pane and caller in its receipts, and closes only resources passing existing ownership checks after positive completion. Preserve conservative failure retention, auto-close opt-outs and separation of worker computation from window success. A failed window never claims visible success.",
+    "Explicit cmux errors retain actual stderr, secret redaction and concrete remediation using verified Herdr or no window plus fm follow. Preserve explicit caller verification and conservative creation, label, focus and cleanup checks. Remove mandatory password-mode preconditions rejecting otherwise authorized foreground cmuxOnly calls. Password mode may remain optional documented capability; do not change operator settings, access restrictions, credentials or permissions and never use allowAll.",
+    "Feature-owned tests cover nested stale cmux context with explicit Herdr selection, stock owned labelled Herdr receipts and focus, foreground cmuxOnly success versus modeled supervised ancestry rejection, creation/label failures, conservative completion cleanup and termination retention. Keep unrelated coverage. Workers author tests before implementation but do not run suites; CI and gate 5 supply observed red/green evidence.",
+    "Firstmate validates the current repair through the real stock Herdr deployment using a fresh immutable snapshot: verified caller/owner identity, visible labelled log content, preserved captain focus, truthful receipts and ownership-safe completion cleanup, plus CI/gates and independent current-change review. Preserve kernel lifelines, bounded shutdown and crew confinement. Do not edit executing runtimes or introduce a controller.",
+    "Captain-deferred acceptance is tracked under T-162-CMUX-FOLLOWUP in design/cmux-lifecycle.md: full detached cmuxOnly control-service/window lifecycle, exclusive process/resource ownership, safe cmux owner-exit closure and full real macOS cmux supervised smoke. These are not completed by this repair or its mocks and require separately authorized follow-up work."
+  ]
+}

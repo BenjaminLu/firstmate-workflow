@@ -692,7 +692,8 @@ def window_host(root):
     if os.environ.get('HERDR_ENV') == '1':
         return 'herdr'
     if os.environ.get('CMUX_WORKSPACE_ID') or os.environ.get('CMUX_SOCKET_PATH'):
-        return 'cmux'
+        print('fm: inherited cmux context is unverified; set FM_HOST and a verified '
+              'FM_CMUX_CALLER_WORKSPACE (or HERDR_PANE_ID for Herdr)', file=sys.stderr)
     if os.environ.get('TMUX'):
         return 'tmux'
     return 'none'
@@ -945,10 +946,31 @@ class Host:
             raise RuntimeError(name + ' is not installed')
 
     def __call__(self, *args):
-        result = subprocess.run([self.binary, *args], capture_output=True, text=True, timeout=15)
+        env = dict(os.environ)
+        if self.name == 'cmux':
+            # Targeted calls carry explicit refs; focus observations must not
+            # resolve against a stale inherited caller. Preserve socket/auth.
+            env.pop('CMUX_WORKSPACE_ID', None)
+            env.pop('CMUX_SURFACE_ID', None)
+        result = subprocess.run([self.binary, *args], capture_output=True, text=True, timeout=15, env=env)
+        # The CLI receives credentials through its supported environment, never
+        # argv. Redact a configured password if a host error echoes it.
+        secret = os.environ.get('CMUX_SOCKET_PASSWORD') if self.name == 'cmux' else None
+        if secret:
+            result.stdout = result.stdout.replace(secret, '[redacted]')
+            result.stderr = result.stderr.replace(secret, '[redacted]')
         with (self.run / 'window.log').open('a') as out:
             out.write(shlex.join(args) + '\n' + result.stdout + result.stderr)
-        if result.returncode: raise RuntimeError(self.name + ' command failed: ' + shlex.join(args))
+        if result.returncode:
+            detail = result.stderr.strip() or result.stdout.strip() or 'no diagnostic output'
+            remedy = ('; verify the intended host/caller and cmux access from the session-owned '
+                      'launch path. Foreground ping does not prove detached cmuxOnly access. '
+                      'In nested Herdr use FM_HOST=herdr with verified HERDR_PANE_ID, '
+                      'HERDR_TAB_ID and HERDR_WORKSPACE_ID, retaining cmuxOnly. '
+                      'Otherwise use FM_HOST=none and fm follow; detached cmuxOnly control is deferred. '
+                      'do not change socket permissions or enable allowAll'
+                      if self.name == 'cmux' else '')
+            raise RuntimeError(self.name + ' command failed: ' + shlex.join(args) + ': ' + detail + remedy)
         return result.stdout.strip()
 
 
@@ -973,24 +995,136 @@ def open_generic_window(host, attempt, tree, actor, command):
                       '-c', str(Path(tree).resolve()), command)
         if not re.fullmatch(r'@\d+', ref): raise RuntimeError('tmux gave no window id: ' + repr(ref))
     else:
-        shown = control('new-workspace', '--cwd', str(Path(tree).resolve()), '--command', command)
-        found = re.search(r'workspace:\d+|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}', shown)
-        if not found: raise RuntimeError('cmux named no new workspace: ' + repr(shown))
-        ref = found.group(0)
-        # the workspace is open from here on: if labelling fails, it is closed
-        # at the round's end all the same
-        save(Path(attempt) / 'window.json', dict(host=host, status='open', ref=ref, actor=actor))
-        control('rename-workspace', '--workspace', ref, actor)
+        return open_cmux_window(control, attempt, tree, actor, command)
     record = dict(host=host, status='open', ref=ref, actor=actor)
     save(Path(attempt) / 'window.json', record)
     return record
 
 
+def cmux_workspaces(control):
+    """Require structured identity; never treat a display index as ownership."""
+    value = json.loads(control('list-workspaces', '--json', '--id-format', 'both'))
+    rows = value.get('workspaces') if isinstance(value, dict) else value
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        raise RuntimeError('cmux workspace identity unavailable; retain resources')
+    return rows
+
+
+def cmux_workspace(control, reference):
+    rows = [row for row in cmux_workspaces(control)
+            if reference in (row.get('id'), row.get('ref'))]
+    if len(rows) != 1 or not rows[0].get('id') or not rows[0].get('ref'):
+        raise RuntimeError('cmux cannot verify workspace identity: ' + reference)
+    return rows[0]
+
+
+def cmux_ref(text):
+    found = re.fullmatch(r'(?:OK\s+)?(workspace:\d+|[0-9A-Fa-f-]{36})', text.strip())
+    if not found: raise RuntimeError('cmux named no unique workspace: ' + repr(text))
+    return found.group(1)
+
+
+def open_cmux_window(control, attempt, tree, actor, command):
+    caller = os.environ.get('FM_CMUX_CALLER_WORKSPACE', '')
+    if not caller:
+        raise RuntimeError('cmux requires explicit verified FM_CMUX_CALLER_WORKSPACE; '
+                           'inherited CMUX_WORKSPACE_ID and focused workspace are not caller evidence')
+    # This runs at the point of use, not in the foreground shell which may
+    # have different socket authorization after the supervised launch.
+    capabilities = json.loads(control('capabilities', '--json'))
+    # Accept cmuxOnly when this actual caller is authorized by the host.
+    # A successful foreground call never promises detached authorization.
+    if not isinstance(capabilities, dict) or capabilities.get('access_mode') not in ('cmuxOnly', 'password'):
+        raise RuntimeError('cmux access mode must be cmuxOnly or explicitly operator-configured password; '
+                           'do not enable allowAll or change settings for this launch. '
+                           'Use FM_HOST=herdr with verified caller context or FM_HOST=none')
+    try:
+        current = cmux_workspace(control, caller)
+    except (RuntimeError, ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError) as error:
+        raise RuntimeError('cmux caller verification failed for FM_CMUX_CALLER_WORKSPACE='
+                           + caller + ': ' + str(error) + '; verify the intended conversation '
+                           'workspace explicitly; focused workspace is not a caller fallback') from error
+    window_before = control('current-window')
+    if not window_before: raise RuntimeError('cmux cannot verify focused window')
+    before = cmux_ref(control('current-workspace'))
+    focus_identity = cmux_workspace(control, before)
+    record = dict(host='cmux', status='none', actor=actor, caller=current['id'],
+                  caller_source='FM_CMUX_CALLER_WORKSPACE',
+                  access_mode=capabilities.get('access_mode'), focus_before=focus_identity['id'],
+                  window_before=window_before)
+    save(Path(attempt) / 'window.json', record)
+    existing = {row['id'] for row in cmux_workspaces(control) if row.get('id')}
+    try:
+        ref = cmux_ref(control('new-workspace', '--cwd', str(Path(tree).resolve()), '--command', command))
+        record['ref'] = ref
+        save(Path(attempt) / 'window.json', record)
+        created = cmux_workspace(control, ref)
+        if created['id'] in existing:
+            raise RuntimeError('cmux creation returned an existing workspace; retained')
+        record['workspace_id'] = created['id']
+        control('rename-workspace', '--workspace', ref, actor)
+        observed = cmux_workspace(control, ref)
+        if observed['id'] != created['id'] or observed.get('title') != actor:
+            raise RuntimeError('cmux label or workspace identity verification failed; retained')
+        # Keep the entire observed structure. Any later difference is grounds
+        # to retain, including an additional surface or a changed label.
+        record['tree'] = json.loads(control('tree', '--workspace', ref, '--json'))
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.SubprocessError) as error:
+        record['reason'] = str(error)
+        record['cleanup'] = 'retained: creation or label not verified'
+        raise
+    finally:
+        if isinstance(sys.exc_info()[1], (SystemExit, KeyboardInterrupt)):
+            save(Path(attempt) / 'window.json', record)
+        else:
+            try:
+                if control('current-window') != window_before:
+                    raise RuntimeError('cmux focused window changed; retained without stealing focus')
+                after = cmux_ref(control('current-workspace'))
+                if after != before:
+                    # Restore only focus taken by this creation. Never take focus
+                    # from a third workspace selected meanwhile by the captain.
+                    if after != record.get('ref'):
+                        raise RuntimeError('cmux focus changed concurrently; retained')
+                    if cmux_workspace(control, before)['id'] != focus_identity['id']:
+                        raise RuntimeError('cmux previous focus identity changed; retained')
+                    control('select-workspace', '--workspace', before)
+                    if cmux_ref(control('current-workspace')) != before:
+                        raise RuntimeError('cmux focus restoration failed; retained')
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.SubprocessError) as focus_error:
+                record['reason'] = '; '.join(filter(None, (record.get('reason'), str(focus_error))))
+                raise RuntimeError(record['reason']) from focus_error
+            finally:
+                save(Path(attempt) / 'window.json', record)
+    record['status'] = 'open'
+    save(Path(attempt) / 'window.json', record)
+    return record
+
+
 def close_generic_window(record, attempt):
-    """tmux closes a window when its command exits; cmux is asked to."""
+    """Close only a cmux resource whose observed identity and structure agree.
+
+    This is a conservative observation, not an atomic host ownership lease.
+    Without one, concurrent host changes remain a real integration limitation.
+    """
     if record['host'] == 'cmux' and record.get('ref'):
-        try: Host('cmux', attempt)('close-workspace', '--workspace', record['ref'])
-        except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+        if os.environ.get('FM_AUTOCLOSE', '1') == '0': return 'retained: auto-close disabled'
+        try:
+            result = read(Path(attempt) / 'result.json')
+            if (not isinstance(result, dict) or result.get('exit_code') != 0
+                    or result.get('status') != 'completed'):
+                return 'retained: incomplete result'
+            path = Path(attempt) / 'window.json'
+            if path.is_symlink() or read(path) != record:
+                return 'retained: ownership receipt changed'
+            control = Host('cmux', attempt)
+            observed = cmux_workspace(control, record['ref'])
+            if (not record.get('workspace_id') or observed['id'] != record['workspace_id']
+                    or observed.get('title') != record['actor'] or 'tree' not in record
+                    or json.loads(control('tree', '--workspace', record['ref'], '--json')) != record['tree']):
+                return 'retained: workspace identity, label or structure changed'
+            control('close-workspace', '--workspace', record['ref'])
+        except (RuntimeError, OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
             return 'retained: ' + str(error)
     return 'closed'
 
@@ -1006,6 +1140,11 @@ def open_herdr_window(attempt, logical, tree, actor, task, env, command):
     current = control('pane', 'get', caller)['pane']
     if (current.get('pane_id') != caller or not current.get('tab_id')
             or not current.get('workspace_id')): raise RuntimeError('cannot verify caller pane')
+    # Pane-only detection remains supported. Every supplied membership claim
+    # must agree with the host before creating or reusing an owned resource.
+    for name, field in (('HERDR_TAB_ID', 'tab_id'), ('HERDR_WORKSPACE_ID', 'workspace_id')):
+        if name in os.environ and os.environ[name] != current[field]:
+            raise RuntimeError('cannot verify caller context: ' + name + ' does not match caller pane')
     focus_before = focus(control('api', 'snapshot')['snapshot'])
     previous = logical / 'pane.json'
     if previous.exists():
@@ -1230,6 +1369,39 @@ def review_final(run, chain_attempt, env):
         return ''
 
 
+@contextlib.contextmanager
+def cmux_shutdown(attempt):
+    """Record bounded termination without closing resources of uncertain ownership.
+
+    The existing lifeline sends TERM and enforces its KILL deadline. No new
+    process or host RPC is started during shutdown. A hard kill can still
+    prevent this best-effort receipt; it is not proof of owner-exit cleanup.
+    """
+    stopped = False
+    def stop(signum, _frame):
+        nonlocal stopped
+        stopped = True
+        raise SystemExit(128 + signum)
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    for sig in previous: signal.signal(sig, stop)
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items(): signal.signal(sig, handler)
+        if stopped:
+            path = Path(attempt) / 'window.json'
+            try:
+                if path.is_file() and not path.is_symlink():
+                    record = read(path)
+                    if record.get('host') == 'cmux':
+                        record['shutdown'] = 'termination'
+                        record['cleanup'] = 'retained: termination; foreground ownership unverified'
+                        if record.get('status') == 'open': record['status'] = record['cleanup']
+                        save(path, record)
+            except (OSError, ValueError, TypeError):
+                pass  # Preserve the original termination; never delay the lifeline.
+
+
 def transport(adapter, prompt, tree, log):
     """A whole adapter executes as a round fm owns, preserving normal verdict/fallback."""
     # Caller-side wait must survive the launching shell exiting (SIGHUP). The
@@ -1262,85 +1434,90 @@ def transport(adapter, prompt, tree, log):
     # The window first, so it is there when the round starts; it only follows
     # the run's log, so failing to open one costs the round nothing.
     host = window_host(root)
+    save(attempt / 'host.json', dict(host=host, source=('FM_TRANSPORT' if os.environ.get('FM_TRANSPORT') == 'direct'
+         else 'FM_HOST' if os.environ.get('FM_HOST') else 'config-or-detection'),
+         inherited_cmux_context_ignored=bool(os.environ.get('CMUX_WORKSPACE_ID')),
+         caller=os.environ.get('FM_CMUX_CALLER_WORKSPACE') if host == 'cmux'
+         else os.environ.get('HERDR_PANE_ID') if host == 'herdr' else None))
     command = shlex.join([sys.executable, str(Path(__file__).resolve()), 'follow', str(attempt)])
     # window.json always says what window the round has, `none` included, so
     # a round with no window is recorded as one, never inferred from absence.
-    owner = control = window = None
-    # the caller's own Herdr context, put back if a window fails after
-    # open_herdr_window has already handed the round its pane
-    caller = {key: env.get(key) for key in ('HERDR_PANE_ID', 'HERDR_TAB_ID', 'HERDR_WORKSPACE_ID')}
-    try:
-        if host == 'herdr':
-            owner, control = open_herdr_window(attempt, logical, tree, actor, task, env, command)
-            window = dict(host=host, status='open', pane=owner['pane_id'], actor=actor)
+    with cmux_shutdown(attempt) if host == 'cmux' else contextlib.nullcontext():
+        owner = control = window = None
+        # the caller's own Herdr context, put back if a window fails after
+        # open_herdr_window has already handed the round its pane
+        caller = {key: env.get(key) for key in ('HERDR_PANE_ID', 'HERDR_TAB_ID', 'HERDR_WORKSPACE_ID')}
+        try:
+            if host == 'herdr':
+                owner, control = open_herdr_window(attempt, logical, tree, actor, task, env, command)
+                window = dict(host=host, status='open', pane=owner['pane_id'], actor=actor)
+                save(attempt / 'window.json', window)
+            elif host != 'none':
+                window = open_generic_window(host, attempt, tree, actor, command)
+            else:
+                window = dict(host='none', status='none', reason='no terminal host', actor=actor)
+                save(attempt / 'window.json', window)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError,
+                subprocess.SubprocessError) as error:
+            # never let a pane the round is not running in be closed by the round
+            if (attempt / 'owner.json').exists(): (attempt / 'owner.json').rename(attempt / 'owner.failed.json')
+            owner = control = None
+            # nor run with, or leave reported as working, a pane fm has disowned
+            if any(env.get(key) != value for key, value in caller.items()):
+                for key, value in caller.items():
+                    if value is None: env.pop(key, None)
+                    else: env[key] = value
+                save(attempt / 'environment.json', env); (attempt / 'environment.json').chmod(0o600)
+            disowned = attempt / 'owner.failed.json'
+            if host == 'herdr' and disowned.is_file():
+                try:
+                    pane = read(disowned)['pane_id']
+                    Herdr(attempt)('pane', 'report-agent', pane, '--source', 'firstmate', '--agent', actor,
+                                   '--state', 'idle', '--agent-session-id', actor,
+                                   '--message', task + ': no window')
+                except (OSError, ValueError, KeyError, TypeError, RuntimeError,
+                        subprocess.SubprocessError) as report:
+                    print(f'{actor}: could not report the disowned pane idle ({report})', file=sys.stderr)
+            # A partial creation is not a visible, verified worker window.
+            opened = read(attempt / 'window.json') if (attempt / 'window.json').is_file() else {}
+            window = dict(opened, host=host, status='none', reason=str(error), actor=actor)
             save(attempt / 'window.json', window)
-        elif host != 'none':
-            window = open_generic_window(host, attempt, tree, actor, command)
-        else:
-            window = dict(host='none', status='none', reason='no terminal host', actor=actor)
-            save(attempt / 'window.json', window)
-    except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError,
-            subprocess.SubprocessError) as error:
-        # never let a pane the round is not running in be closed by the round
-        if (attempt / 'owner.json').exists(): (attempt / 'owner.json').rename(attempt / 'owner.failed.json')
-        owner = control = None
-        # nor run with, or leave reported as working, a pane fm has disowned
-        if any(env.get(key) != value for key, value in caller.items()):
-            for key, value in caller.items():
-                if value is None: env.pop(key, None)
-                else: env[key] = value
-            save(attempt / 'environment.json', env); (attempt / 'environment.json').chmod(0o600)
-        disowned = attempt / 'owner.failed.json'
-        if host == 'herdr' and disowned.is_file():
-            try:
-                pane = read(disowned)['pane_id']
-                Herdr(attempt)('pane', 'report-agent', pane, '--source', 'firstmate', '--agent', actor,
-                               '--state', 'idle', '--agent-session-id', actor,
-                               '--message', task + ': no window')
-            except (OSError, ValueError, KeyError, TypeError, RuntimeError,
-                    subprocess.SubprocessError) as report:
-                print(f'{actor}: could not report the disowned pane idle ({report})', file=sys.stderr)
-        # a cmux workspace opened but not labelled is still closed at the end
-        opened = read(attempt / 'window.json') if (attempt / 'window.json').is_file() else {}
-        window = dict(host=host, status='open' if opened.get('status') == 'open' else 'none',
-                      ref=opened.get('ref'), reason=str(error), actor=actor)
-        save(attempt / 'window.json', window)
-        print(f'{actor}: no {host} window ({error}); the round runs without one', file=sys.stderr)
-    proc = spawn_runner(attempt)
-    result = supervise(attempt, proc, timeout, dict(actor=actor, task=task, role=role),
-                       env.get('FM_CHAIN_ATTEMPT', ''))
-    with Path(log).open('ab') as out:
-        cli = attempt / 'cli.log'
-        if cli.exists(): out.write(cli.read_bytes())
-        out.flush(); os.fsync(out.fileno())
-    save(logical / 'last-result.json', dict(result, attempt=str(attempt)))
-    if owner is None:
-        close = 'no window'
-        if window and window.get('status') == 'open':
-            close = close_generic_window(window, attempt)
-            save(attempt / 'window.json', dict(window, status=close))
+            print(f'{actor}: no {host} window ({error}); the round runs without one', file=sys.stderr)
+        proc = spawn_runner(attempt)
+        result = supervise(attempt, proc, timeout, dict(actor=actor, task=task, role=role),
+                           env.get('FM_CHAIN_ATTEMPT', ''))
+        with Path(log).open('ab') as out:
+            cli = attempt / 'cli.log'
+            if cli.exists(): out.write(cli.read_bytes())
+            out.flush(); os.fsync(out.fileno())
+        save(logical / 'last-result.json', dict(result, attempt=str(attempt)))
+        if owner is None:
+            close = 'no window'
+            if window and window.get('status') == 'open':
+                close = close_generic_window(window, attempt)
+                save(attempt / 'window.json', dict(window, status=close))
+            print(f'{actor}: {close}; artifacts {attempt}', file=sys.stderr)
+            return result['exit_code']
+        pane = owner['pane_id']
+        close = 'retained: auto-close disabled'
+        if os.environ.get('FM_AUTOCLOSE', '1') != '0':
+            prior = attempt / 'close.json'
+            if prior.exists() and read(prior).get('status') == 'closed':
+                close = 'closed'
+            else:
+                try:
+                    # Let the follower leave the foreground; never report idle on a busy pane.
+                    for _ in range(20):
+                        info = control('pane', 'process-info', '--pane', pane)['process_info']
+                        if shell_only(info, pane, owner['shell_pid']): break
+                        time.sleep(.1)
+                    close = close_owned(attempt, owner, control)
+                except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError, subprocess.SubprocessError) as error:
+                    close = 'retained: cleanup observation failed: ' + str(error)
+        recorded = record_close(attempt, dict(actor=actor, pane=pane, status=close, source='transport'))
+        close = recorded.get('status', close)
         print(f'{actor}: {close}; artifacts {attempt}', file=sys.stderr)
         return result['exit_code']
-    pane = owner['pane_id']
-    close = 'retained: auto-close disabled'
-    if os.environ.get('FM_AUTOCLOSE', '1') != '0':
-        prior = attempt / 'close.json'
-        if prior.exists() and read(prior).get('status') == 'closed':
-            close = 'closed'
-        else:
-            try:
-                # Let the follower leave the foreground; never report idle on a busy pane.
-                for _ in range(20):
-                    info = control('pane', 'process-info', '--pane', pane)['process_info']
-                    if shell_only(info, pane, owner['shell_pid']): break
-                    time.sleep(.1)
-                close = close_owned(attempt, owner, control)
-            except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError, subprocess.SubprocessError) as error:
-                close = 'retained: cleanup observation failed: ' + str(error)
-    recorded = record_close(attempt, dict(actor=actor, pane=pane, status=close, source='transport'))
-    close = recorded.get('status', close)
-    print(f'{actor}: {close}; artifacts {attempt}', file=sys.stderr)
-    return result['exit_code']
 
 
 def execution_state(attempt):
