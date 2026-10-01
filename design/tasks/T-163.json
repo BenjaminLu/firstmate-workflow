@@ -1,0 +1,30 @@
+{
+  "id": "T-163",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "Codex supports isolated run-mode reviews with verified confinement and final-answer provenance",
+  "scope": [
+    "bin/adapters/codex.sh",
+    "bin/adapters/_lib.sh",
+    "bin/adapters/_contract.md",
+    "bin/fm-review.sh",
+    "bin/fm-config.sh",
+    "bin/fm-canary.sh",
+    "bin/fm-sandbox.sh",
+    "bin/lib/fm_sandbox.py",
+    "tests/**",
+    "design/**",
+    "skills/reviewer/**",
+    "skills/firstmate/**",
+    "README.md"
+  ],
+  "acceptance": [
+    "Why. On 2026-10-01 the captain explicitly selected Codex reviews, then authorized a Codex run-mode support task. Stock fm-review.sh --vendor codex --pr 130/131 waits for CI then refuses: codex has no adapter that confines a run-mode review; choose another reviewer vendor or mode. config.yaml declares reviewer.mode run. Codex CLI here is 0.159.3; workers already run through the fm OS sandbox. Its own task spec is committed on this branch.",
+    "Implement genuine run-mode support through fm-review.sh and the Codex adapter. Inspect the existing admission marker/chain in fm-config.sh, fm_adapter_context in adapters/_lib.sh, Claude run-mode checkout handling and Codex policy setup. Admission is permitted only after enforcing a fresh isolated PR-head checkout and validating that checkout through the same trusted launcher context. Do not merely add the fm:review-run marker or fall back to diff mode silently.",
+    "Preserve the reviewer role policy on macOS and Linux: writable isolated review checkout and round temp only; no engine/worktree/state/credential writes or forbidden reads; no GitHub, board or unrelated loopback access; no git/gh mutations, MCP, inherited user configuration, unsafe permission arguments or approval prompts. Existing fm outer sandbox remains required; reject unsupported hosts or malformed/missing review context before model execution. Do not weaken policy to make Codex start.",
+    "Use the configured Codex model and existing login handling, without exposing credentials. The exact reviewed head/patch and reviewer identity must remain bound to the verdict. Only final assistant output may supply APPROVE/REJECT and REVIEWER_COMPLETE; prompt echoes/transcript text are not verdicts. Preserve stock event publication, failure reporting, owner lifetime, bounded retry and fresh checkout cleanup, including retaining live-owner checkouts.",
+    "Add feature-owned regression tests exercising a successful Codex run-mode launch, malformed/missing checkout refusal, policy argument tampering, unavailable vendor, final-only verdict extraction and head binding, failure cleanup and a live-owner checkout. Keep existing Claude/diff behavior. Stub behavior must match the real Codex invocation and output. Workers author but do not run suites.",
+    "Before acceptance firstmate runs repository CI/gates and a real macOS sandbox canary plus a small stock Codex run-mode review using the candidate through an explicitly verified immutable execution path. Record started/authenticated/confinement results, actual checkout, final-answer provenance and cleanup; mock-only green tests are insufficient. Any bootstrap dependency (the adapter support needs review before it can review other PRs) must be reported explicitly, never bypassed with a fake approval or unsandboxed reviewer. Claude is presently quota-blocked; do not use it by silent fallback."
+  ]
+}
