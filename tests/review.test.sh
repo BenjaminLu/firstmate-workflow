@@ -2025,4 +2025,45 @@ assert_ok "test -d '$decoy_root'" \
 kill "$decoy_holder" 2>/dev/null; wait "$decoy_holder" 2>/dev/null
 rm -rf "$decoy_root" "$decoy_lockmark"
 
+# T-165: stock assembly must refuse an unrepresentable diff before calling
+# an adapter, even when that adapter would have returned APPROVE.
+bounded="$(fixture)"; bounded_repo="$bounded/repo"
+cat > "$bounded_repo/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+# fm:review-run
+[ "$1" = "run" ] || exit 64
+cp "$2" "$FM_CAPTURE"
+printf '%s\n' "${FM_RUN_REVIEW:-}" > "$FM_CAPTURE.mode"
+git -C "${FM_REVIEW_CHECKOUT:-.}" rev-parse HEAD > "$FM_CAPTURE.head"
+printf 'APPROVE:T-Z\n' > "$3/verdict.txt"
+M
+chmod +x "$bounded_repo/bin/adapters/mock.sh"
+python3 - "$bounded_repo/src/oversized" <<'PYBOUND'
+import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text('oversized diff line\n' * 145000)
+PYBOUND
+(cd "$bounded_repo" && git checkout -q work && git add src/oversized && git commit -qm oversized && git checkout -q main)
+bounded_out="$(cd "$bounded_repo" && FM_ROOT="$bounded_repo" FM_CAPTURE="$bounded/called" \
+  bin/fm-review.sh --task T-Z --branch work 2>&1)"; bounded_rc=$?
+assert_eq "65" "$bounded_rc" "oversized stock diff context fails before vendor launch"
+assert_fail "test -e '$bounded/called'" "an unrepresentable context spends no model call"
+assert_contains "$bounded_out" "cannot represent" "context refusal names its actual cause"
+printf 'reviewer:\n  mode: run\n' >> "$bounded_repo/config.yaml"
+bounded_out="$(cd "$bounded_repo" && FM_ROOT="$bounded_repo" FM_CAPTURE="$bounded/called" \
+  bin/fm-review.sh --task T-Z --branch work 2>&1)"; bounded_rc=$?
+assert_eq "0" "$bounded_rc" "oversized stock run context reaches the adapter with pinned references"
+assert_eq "1" "$(cat "$bounded/called.mode" 2>/dev/null)" "bounded context adapter receives run mode"
+assert_eq "$(git -C "$bounded_repo" rev-parse work)" "$(cat "$bounded/called.head" 2>/dev/null)" \
+  "bounded context adapter receives the actual pinned checkout"
+bounded_bytes=9999999
+if [ -f "$bounded/called" ]; then bounded_bytes="$(wc -c < "$bounded/called")"; fi
+assert_ok "test -f '$bounded/called' && test $bounded_bytes -le 524288" \
+  "stock composed run prompt stays within the byte cap"
+assert_contains "$(cat "$bounded/called" 2>/dev/null)" "OMITTED entire inline patch" "stock run mode discloses missing inline coverage"
+assert_contains "$(cat "$bounded/called" 2>/dev/null)" "$(git -C "$bounded_repo" rev-parse work)" "stock reference pins the reviewed head"
+assert_contains "$(cat "$bounded/called" 2>/dev/null)" "$(git -C "$bounded_repo" merge-base main work)" "stock reference pins the merge base"
+bounded_patch="$(git -C "$bounded_repo" diff-tree -r -p --no-renames main work | git patch-id --stable | cut -d' ' -f1)"
+assert_contains "$(cat "$bounded/called" 2>/dev/null)" "$bounded_patch" "stock reference pins the stable patch identity"
+
 finish

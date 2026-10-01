@@ -1,0 +1,21 @@
+{
+  "id": "T-165",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "Bound stock review context without losing pinned evidence or the original closed acceptance list",
+  "scope": [
+    "bin/fm-review.sh",
+    "bin/lib/**",
+    "tests/**",
+    "design/tasks/T-165.json",
+    "design/T-165-validation.md"
+  ],
+  "acceptance": [
+    "Why: Captain authorized completing all existing PR repairs and standard acceptance before external-repository work, until 2026-10-02 08:00 Asia/Taipei. T-130 stock Codex review failed twice on 2026-10-01 because actual input was 2719034 characters versus maximum 1048576. This narrowly scoped repair removes that acceptance blocker; it does not claim the broader T-135 worker evidence-pack feature complete. Commit this task spec.",
+    "Bound assembled review context below a documented conservative vendor input limit, with explicit truncation/provenance and paths for omitted detail. Preserve exact pinned head/base/patch, original first complete numbered closed list, subsequent item dispositions and newly introduced regression context. Never silently discard acceptance items or reinterpret REJECT as APPROVE.",
+    "Run mode may replace an oversized inline diff with pinned-checkout file/path/range references and clear instructions to inspect the actual diff locally. Diff-only mode must fail truthfully or use a supported bounded representation with coverage disclosure; do not pass a truncated patch as complete. Bound repeated historical review comments and large CI logs while retaining the original complete standing criteria. Firstmate briefs remain evidence, not worker reasoning.",
+    "Fail-first meaningful regression using the real oversized T-130 shape and stale/repeated lists: stock composed prompt remains within cap, original numbered acceptance is preserved, trimming is visible, pin binding remains consistent, and a truly unrepresentable context fails before wasting model calls. Reviewers do not run suites; standard CI and gates provide evidence.",
+    "Do not change sandbox/trust policy, vendor/model selection, verdict provenance, or production code unrelated to context assembly. Record bootstrap dependency on the candidate T-163 launcher if used for real acceptance; no fake CI verdicts or direct vendor launches."
+  ]
+}

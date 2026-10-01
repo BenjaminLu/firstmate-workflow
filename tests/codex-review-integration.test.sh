@@ -88,11 +88,13 @@ elif args and args[0] == 'api' and 'protection' in ' '.join(args):
     print('{"contexts":["ci"]}')
 elif args and args[0] == 'api' and 'check-runs' in ' '.join(args):
     print('{"check_runs":[]}')
+elif args[:2] == ['pr', 'view'] and 'comments' in args:
+    print((home / 'comments.json').read_text() if (home / 'comments.json').exists() else '{"comments":[]}')
 elif '--json' in args:
     print('[]')
 '''.replace('HOME_LITERAL', repr(str(self.home))).replace('LATER_LITERAL', repr(self.later)))
         self.write(self.tools / 'codex', '''#!/usr/bin/env python3
-import json, pathlib, subprocess, sys
+import json, pathlib, subprocess, sys, re, hashlib
 home = pathlib.Path(HOME_LITERAL)
 if sys.argv[1:] == ['--version']:
     print('codex-cli fixture'); raise SystemExit
@@ -107,6 +109,14 @@ checkout = pathlib.Path.cwd()
 record = dict(prompt=prompt, checkout=str(checkout),
               head=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
               clean=not subprocess.check_output(['git', 'status', '--porcelain'], text=True).strip())
+if '# Bounded review context' in prompt:
+    archive = pathlib.Path(re.search(r'are retained in (.+?)\\. Those paths', prompt)[1])
+    assert checkout in archive.parents
+    record['archive'] = str(archive)
+    record['sources'] = {p.name: p.read_text() for p in archive.iterdir()}
+    for name in ('history.md', 'diff.md'):
+        digest = hashlib.sha256((archive / name).read_bytes()).hexdigest()
+        assert digest in prompt, (name, 'missing source digest')
 (home / ('capture-%s.json' % number)).write_text(json.dumps(record))
 assert record['clean'], 'every invocation starts fresh'
 (checkout / 'review-scratch').write_text('legitimate reviewer write')
@@ -135,10 +145,10 @@ else:
         return subprocess.check_output(['git', '-C', str(self.repo), *args],
             env=self.env, stderr=subprocess.DEVNULL, text=True).strip()
 
-    def run_review(self, mode='success', **extra):
+    def run_review(self, mode='success', round_number='1', **extra):
         (self.home / 'mode').write_text(mode)
         result = subprocess.run([str(self.repo / 'bin/fm-review.sh'), '--task', 'T-Z',
-            '--branch', 'work', '--pr', '9'], cwd=self.repo, env=dict(self.env, **extra),
+            '--branch', 'work', '--pr', '9', '--round', round_number], cwd=self.repo, env=dict(self.env, **extra),
             capture_output=True, text=True, timeout=90)
         self.assertFalse(list(self.roundtmp.glob('fm-review.*')), result.stderr)
         self.assertFalse(list(self.roundtmp.glob('fm-round.*')), result.stderr)
@@ -172,6 +182,47 @@ else:
         self.assertFalse(Path(capture['checkout']).exists())
         events = [json.loads(line) for line in (self.repo / 'state/events.jsonl').read_text().splitlines()]
         self.assertIn('approved', [e['type'] for e in events])
+
+    def test_oversized_managed_context_survives_fresh_retry(self):
+        # Fail first against T-165's worktree-root archive: real managed
+        # admission refuses before the fake CLI can record any invocation.
+        original = '1. ORIGINAL complete acceptance\n2. Preserve pinned evidence\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z'
+        later = '1. **done** ORIGINAL complete acceptance\n2. **open** Preserve pinned evidence\n3. REGRESSION:T-Z retain new evidence\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z'
+        bodies = [original] + [later, original] * 40
+        (self.home / 'comments.json').write_text(json.dumps(
+            dict(comments=[dict(body=body) for body in bodies])))
+        self.git('checkout', '-q', 'work')
+        (self.repo / 'src/oversized').write_text('oversized pinned line\n' * 145000)
+        self.git('add', 'src/oversized')
+        self.git('commit', '-qm', 'oversized context')
+        self.head = self.git('rev-parse', 'HEAD')
+        self.git('checkout', '-q', 'main')
+        result = self.run_review('retry', round_number='2')
+        self.assertEqual(0, result.returncode, result.stderr)
+        captures = [json.loads(p.read_text()) for p in sorted(self.home.glob('capture-*.json'))]
+        self.assertEqual(2, len(captures), result.stderr)
+        for capture in captures:
+            self.assertTrue(capture['clean'])
+            self.assertEqual(self.head, capture['head'])
+            self.assertLessEqual(len(capture['prompt'].encode()), 524288)
+            self.assertIn(original, capture['prompt'])
+            self.assertIn(later, capture['prompt'])
+            self.assertIn('OMITTED entire inline patch', capture['prompt'])
+            self.assertIn('exact repeat', capture['prompt'])
+            self.assertGreater(len(capture['sources']['diff.md']), 2719034)
+            self.assertIn(original, capture['sources']['history.md'])
+            pins = json.loads(capture['sources']['pins.json'])
+            self.assertEqual(self.head, pins['head'])
+            self.assertEqual(self.base, pins['base'])
+            for key in ('head', 'base', 'patch'):
+                self.assertIn(pins[key], capture['prompt'])
+        self.assertEqual(captures[0]['archive'], captures[1]['archive'])
+        self.assertEqual(captures[0]['sources'], captures[1]['sources'])
+        published = (self.home / 'published').read_text()
+        self.assertIn('REVIEWED:T-Z verdict=APPROVE head=' + self.head, published)
+        receipt = json.loads(next((self.repo / 'state').rglob('last-result.json')).read_text())
+        self.assertEqual('codex-json-completed-turn', receipt['final_source'])
+        self.assertEqual(self.head, receipt['review']['head'])
 
     def test_dirty_unsigned_retry(self):
         result = self.run_review('retry')
