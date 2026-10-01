@@ -9,6 +9,7 @@
     "bin/adapters/_lib.sh",
     "bin/adapters/_contract.md",
     "bin/fm-review.sh",
+    "bin/fm-herdr.py",
     "bin/fm-config.sh",
     "bin/fm-canary.sh",
     "bin/fm-sandbox.sh",
