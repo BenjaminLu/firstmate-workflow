@@ -361,12 +361,21 @@ self-wake.
   `gate: T-134 failed gate 6 #9`, `card: D-51 answered A`,
   `merge: D-51 failed`. Handle each, then end the turn; the next watcher
   already holds the watch.
-- One record of delivery: a wake the watch hands to your hook is
-  acknowledged as it is taken, the same record `fm-session.sh ack` writes,
-  so `fm-session.sh status` and `start` do not list it again, and a wake you
-  acknowledged there is not handed to the hook. `status` lists only what
-  no hook has delivered - what a harness that is not woken idle reads at its
-  next turn start.
+- Watcher staging is not delivery. Codex acknowledges emitted queue items
+  only after flushing hook output; its last-wake record still says model
+  delivery is unverified. A failed output is recoverable, and a crash after
+  flush but before acknowledgement can replay. Legacy arm consumers use the
+  same acknowledgement store; `fm-session.sh status` lists unacknowledged work.
+- For Codex, run `bin/fm.sh hooks status --harness codex` and use the supplied
+  `hooks/list` evidence option documented in `docs/verification/supervision.md`.
+  Installation, source loading, feature policy, exact-definition trust and
+  model receipt are separate. Firstmate's 2026-10-02 diagnosis found project
+  hooks loaded/enabled but untrusted. Have the operator inspect this checkout
+  in `/hooks` and review the current SessionStart, UserPromptSubmit and Stop
+  definitions, then restart/resume if needed. Never fabricate trust, bypass
+  it, or force configuration over a disabled feature or managed policy.
+  Complete the disposable real-event smoke before declaring repair; a queue
+  or acknowledgement file alone is not evidence of conversational delivery.
 - `bin/fm-turnend-guard.sh` refuses a turn end with work in flight and no
   watcher. If it refuses, or a Codex or Cursor Stop hook orders you to
   park, run `bin/fm-watch-arm.sh --max-wait 3000` in the foreground and

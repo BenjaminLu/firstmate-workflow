@@ -11,7 +11,7 @@
 #   fm.sh lint                                     the two skill lints
 #   fm.sh tasks                                    the task table, on demand
 #   fm.sh roster [init] [--redraw]                 the installation's crew
-#   fm.sh hooks install|uninstall [--harness H]    the hooks that wake firstmate
+#   fm.sh hooks install|uninstall|status [--harness H]    the hooks that wake firstmate
 #
 # The system defines its own behaviour in skills/, which makes editing a
 # skill the one thing it must not be able to do quietly. So self-update
@@ -127,7 +127,9 @@ usage: fm.sh <command> [options]
         Two checks. Detect supported literal skill writes in programs, and
         nothing under skills/ is written in one vendor's syntax.
 
-  hooks install|uninstall [--harness claude|codex|cursor] [--repo DIR]
+  hooks install|uninstall|status [--harness claude|codex|cursor] [--repo DIR]
+        status --harness codex [--client cli|app-server] [--evidence FILE]
+        reports capability and supplied hooks/list loading/trust evidence.
         Write, or remove, the hooks that wake firstmate (T-137) in each
         harness's local, uncommitted config for this repository: Claude
         Code's .claude/settings.local.json, .codex/hooks.json and

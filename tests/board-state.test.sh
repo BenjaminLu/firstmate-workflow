@@ -72,7 +72,13 @@ sleep 300 & watch_owner=$!
 # run from the fixture: a checkout under state/worktrees is a crew round's,
 # and never arms
 watchcli() { (cd "$d" && FM_SESSION_PID="$watch_owner" FM_LIFELINE_GRACE=1 "$ROOT/bin/fm-watch-arm.sh" --repo "$d" "$@"); }
-wake_written() { [ -n "$(ls "$d/state/watch/wake/" 2>/dev/null)" ]; }
+wake_written() {
+  local wake
+  for wake in "$d/state/watch/wake/"*.json; do
+    [ -f "$wake" ] && return 0
+  done
+  return 1
+}
 unwatched() { [ "$(watchcli --status 2>/dev/null | jq -r .watched)" = false ]; }
 watchcli --ensure >/dev/null 2>&1
 sw="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
@@ -85,6 +91,18 @@ wait_for 10 wake_written
 sw="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
 assert_eq "review: T-A APPROVE 4ea1ec2" "$(jq -r .watch.lastWake.reason <<<"$sw")" "the last wake and its reason are shown"
 assert_eq "1" "$(jq -r .watch.waiting <<<"$sw")" "and a wake no arm has taken yet is waiting"
+assert_eq "$(watchcli --status | jq -r .waiting)" "$(jq -r .watch.waiting <<<"$sw")" \
+  "the board and watch count the same unacknowledged wake once"
+assert_eq "false" "$(python3 - "$ROOT" "$d" <<'PY'
+import sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1] + '/bin/lib')
+import fm_watch as W
+items = W._queue_from(sys.argv[2], 0)[0]
+item = next(i for i in reversed(items) if i['id'] == 'worker-1')
+print(str(W.delivered(sys.argv[2], item)).lower())
+PY
+)" "writing a wake for an arm does not acknowledge delivery"
 kill "$watch_owner" 2>/dev/null; wait "$watch_owner" 2>/dev/null
 wait_for 15 unwatched
 sw="$(curl -sf "http://127.0.0.1:$PORT/api/state")"

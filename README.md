@@ -291,7 +291,12 @@ install|uninstall`). What has been verified, per harness and version, is in
 [docs/verification/supervision.md](docs/verification/supervision.md): the
 Claude Code mechanism these hooks use was measured live on 2.1.284; the
 hooks themselves, and the Codex and Cursor paths, are not yet verified live,
-and nothing claims they work until they are. The board shows whether firstmate is watched, the last wake,
+and nothing claims they work until they are. Codex installation now includes
+SessionStart/resume and separate loading/trust diagnostics via `fm.sh hooks
+status --harness codex`. Firstmate has verified loaded but untrusted project
+hooks on 0.159.3; the operator must review current definitions in `/hooks`.
+Real model delivery and reload behavior remain to be measured in the disposable
+smoke documented above. The board shows whether firstmate is watched, the last wake,
 what waits, and any gap.
 
 ## State

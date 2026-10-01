@@ -523,51 +523,115 @@ def push(root, ident, reason, line, extra=None):
 ACK_DIR = 'state/session/acknowledged'
 
 
-def acknowledged(root, ident):
-    """When the wake `ident` was last acknowledged; None for never."""
+def _ack_record(root, ident):
     import json
+    base = os.path.join(str(root), 'state/session')
+    try:
+        with open(os.path.join(base, '.ack-transaction.json')) as f:
+            before = json.load(f)
+        if ident in before:
+            return before[ident]
+    except FileNotFoundError:
+        pass
     try:
         with open(os.path.join(str(root), ACK_DIR, str(ident) + '.json')) as f:
-            record = json.load(f)
-        return float(record.get('acknowledged') or 0)
-    except (OSError, ValueError, TypeError, AttributeError):
+            return json.load(f)
+    except (OSError, ValueError, TypeError):
         return None
 
 
+def acknowledged(root, ident):
+    """Read the committed watermark, hiding an interrupted batch's writes."""
+    import fcntl
+    base = os.path.join(str(root), 'state/session')
+    os.makedirs(base, exist_ok=True)
+    lock = os.open(os.path.join(base, '.ack.lock'), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_SH)
+        record = _ack_record(root, ident)
+        try:
+            return float(record.get('acknowledged') or 0) if record else None
+        except (ValueError, TypeError, AttributeError):
+            return None
+    finally:
+        os.close(lock)
+
+
 def is_acknowledged(root, ident, woken):
-    """Whether the wake `ident`, woken at `woken`, was delivered."""
     seen = acknowledged(root, ident)
     return seen is not None and seen >= (woken or 0)
 
 
-def acknowledge(root, ident, woken, wakes=1):
-    """Record that the wake `ident`, woken at `woken`, was delivered; a later
-    wake with the same id (its merge settled) is listed again. Idempotent,
-    under state/session/.ack.lock, written whole. Returns the record."""
+def _write_ack(path, record):
+    import json
+    temp = f'{path}.{os.getpid()}.new'
+    with open(temp, 'w') as out:
+        json.dump(record, out, indent=2)
+        out.write('\n')
+        out.flush()
+        os.fsync(out.fileno())
+    os.replace(temp, path)
+
+
+def acknowledge_batch(root, items):
+    """Commit watermarks together, with a durable undo journal.
+
+    All writers use .ack.lock. Readers see pre-batch values while the journal
+    exists; the next writer rolls an interrupted batch back before proceeding.
+    Removing the journal is the commit point. Per-ID files stay compatible
+    with the board. As with any claim API, death after commit but before the
+    caller receives the return value requires a harness delivery receipt to
+    resolve; this transaction protects interruption during acknowledgement.
+    """
     import fcntl
     import json
-    if not re.fullmatch(r'[A-Za-z0-9_-]+', str(ident)):
-        raise ValueError('a wake id is letters, digits, - and _')
     base = os.path.join(str(root), 'state/session')
-    os.makedirs(os.path.join(base, 'acknowledged'), exist_ok=True)
-    path = os.path.join(str(root), ACK_DIR, str(ident) + '.json')
+    directory = os.path.join(str(root), ACK_DIR)
+    os.makedirs(directory, exist_ok=True)
+    transaction = os.path.join(base, '.ack-transaction.json')
     lock = os.open(os.path.join(base, '.ack.lock'), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
     try:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if is_acknowledged(root, ident, woken):
-            with open(path) as f:
-                return json.load(f)
-        record = dict(id=str(ident), acknowledged=max(time.time(), woken or 0), wakes=wakes)
-        temp = f'{path}.{os.getpid()}.new'
-        with open(temp, 'w') as out:
-            json.dump(record, out, indent=2)
-            out.write('\n')
-            out.flush()
-            os.fsync(out.fileno())
-        os.replace(temp, path)
-        return record
+        try:
+            with open(transaction) as f:
+                before = json.load(f)
+        except FileNotFoundError:
+            before = None
+        if before is not None:
+            for ident, record in before.items():
+                path = os.path.join(directory, ident + '.json')
+                if record is None:
+                    try:
+                        os.unlink(path)
+                    except FileNotFoundError:
+                        pass
+                else:
+                    _write_ack(path, record)
+            os.unlink(transaction)
+        before, after = {}, {}
+        for item in items:
+            ident = str(item['id'])
+            if not re.fullmatch(r'[A-Za-z0-9_-]+', ident):
+                raise ValueError('a wake id is letters, digits, - and _')
+            if ident not in before:
+                before[ident] = _ack_record(root, ident)
+            old = after.get(ident) or before[ident]
+            stamp = item.get('woken') or 0
+            if old is None or old['acknowledged'] < stamp:
+                after[ident] = dict(id=ident, acknowledged=stamp, wakes=item.get('wakes', 1))
+        if after:
+            _write_ack(transaction, before)
+            for ident, record in after.items():
+                _write_ack(os.path.join(directory, ident + '.json'), record)
+            os.unlink(transaction)
+        return {ident: after.get(ident) or record for ident, record in before.items()}
     finally:
         os.close(lock)
+
+
+def acknowledge(root, ident, woken, wakes=1, *, exact_wake=True):
+    """Explicit acknowledgement shares batch serialization and recovery."""
+    return acknowledge_batch(root, [dict(id=ident, woken=woken, wakes=wakes)])[str(ident)]
 
 
 def doorbells(root):

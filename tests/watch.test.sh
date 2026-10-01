@@ -176,6 +176,90 @@ class Wakes(Watch):
         again = self.run_(ARM, '--max-wait', '1')
         self.assertEqual((1, ''), (again.returncode, again.stdout), 'and none of them a second time')
 
+    def interrupted_handoff(self, hook_args):
+        # A real kernel lock is released by an interrupted producer. No hook
+        # output helper is involved in recovery; these are the public arms.
+        W.save(W.wdir(self.root) / 'cursor', '0')
+        producer_code = """
+import os, sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+import fm_watch as W
+W.life.hold()
+root = sys.argv[2]
+with W.Locked(W.wdir(root) / 'handoff-900.lock'):
+    W.take(root, stage=900)
+    print('staged', flush=True)
+    sys.stdin.read()
+"""
+        ident = 'D-interrupted-' + ('claude' if hook_args else 'foreground')
+        self.board_push(ident, 'answered', {'chosen': 'A'})
+        producer = W.life.start([sys.executable, '-c', producer_code, str(root / 'bin/lib'), str(self.root)],
+                                owner=self.owner.pid, direct=True, stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(stop, producer)
+        self.assertEqual('staged', producer.stdout.readline().strip())
+        self.assertEqual([], W.claim(self.root), 'an active publisher is not abandoned')
+        parked = self.park(*hook_args, '--max-wait', '10', payload={})
+        self.assertTrue(until(lambda: any('arm watches handoff 900' in line for line in self.journal())),
+                        'the arm watches the predecessor even after its successor starts')
+        self.assertIsNone(parked.poll(), 'the live stage must stay unpublished')
+        producer.kill(); producer.wait()
+        stdout, stderr = parked.communicate(timeout=15)
+        self.assertEqual(2 if hook_args else 0, parked.returncode, stderr)
+        output = stderr if hook_args else stdout
+        self.assertEqual(1, output.count('card: ' + ident + ' answered A'))
+        self.assertTrue(W.cycle_live(self.root), 'recovery arms the successor before returning')
+        self.assertEqual([], W.pending(self.root), 'a legacy consumer cannot replay the recovered wake')
+        self.assertEqual(0, W.waiting(self.root))
+
+    def test_interrupted_handoff_recovers_through_foreground_arm(self):
+        self.interrupted_handoff(())
+
+    def test_interrupted_handoff_recovers_through_claude_arm(self):
+        self.interrupted_handoff(('--hook', 'claude'))
+
+    def partial_ack_recovery(self, hook_args):
+        W.save(W.wdir(self.root) / 'cursor', '0')
+        for gen in (1, 2):
+            for suffix in ('a', 'b'):
+                self.board_push(f'D-partial-{gen}-{suffix}', 'answered', {'chosen': 'A'})
+            W.take(self.root, stage=gen)
+        code = """
+import os, sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+import fm_watch as W
+real = W.life._write_ack
+writes = []
+def interrupt(path, record):
+    writes.append(path)
+    if len(writes) == 4:
+        os._exit(73)  # no Python finalizers: kernel releases both locks
+    return real(path, record)
+W.life._write_ack = interrupt
+W.claim(sys.argv[2])
+"""
+        failed = subprocess.run([sys.executable, '-c', code, str(root / 'bin/lib'), str(self.root)],
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(73, failed.returncode, failed.stderr)
+        self.assertEqual(4, W.waiting(self.root), 'the unreturned batch remains pending')
+        result = self.run_(ARM, *hook_args, '--max-wait', '10', stdin='{}')
+        self.assertEqual(2 if hook_args else 0, result.returncode, result.stderr)
+        output = result.stderr if hook_args else result.stdout
+        for gen in (1, 2):
+            for suffix in ('a', 'b'):
+                self.assertEqual(1, output.count(f'card: D-partial-{gen}-{suffix} answered A'))
+        self.assertEqual([], W.pending(self.root))
+        self.assertEqual(0, W.waiting(self.root))
+        self.assertTrue(W.cycle_live(self.root))
+
+    def test_partial_ack_recovers_through_public_foreground_arm(self):
+        self.partial_ack_recovery(())
+
+    def test_partial_ack_recovers_through_public_claude_arm(self):
+        self.partial_ack_recovery(('--hook', 'claude'))
+
     def test_progress_is_absorbed(self):
         self.run_(ARM, '--ensure')
         for n in (1, 2):
@@ -338,6 +422,27 @@ class Harnesses(Watch):
                                  json.loads(said.stdout))
             else:
                 self.assertEqual('', said.stdout, 'and it is delivered once')
+
+    def test_codex_session_start_and_duplicate_user_hooks_share_one_watcher(self):
+        self.board_push('D-startup', 'answered', {'chosen': 'A'})
+        started = self.run_(ARM, '--session-start', 'codex',
+                            stdin=json.dumps({'hook_event_name': 'SessionStart', 'source': 'resume', 'cwd': str(self.root)}))
+        self.assertEqual(0, started.returncode, started.stderr)
+        self.assertIn('card: D-startup answered A', started.stdout)
+        self.assertTrue(W.cycle_live(self.root))
+        generation = self.generation()
+        for _ in range(2):
+            fired = self.run_(ARM, '--turn-start', 'codex', stdin=json.dumps({'cwd': str(self.root)}))
+            self.assertEqual((0, ''), (fired.returncode, fired.stdout))
+        self.assertEqual(generation, self.generation(), 'repeated hooks attach to the one watcher')
+        self.board_push('D-after-start', 'answered', {'chosen': 'B'})
+        self.assertTrue(until(lambda: any('wake ' in line and 'written' in line for line in self.journal())))
+        self.assertFalse(W.life.is_acknowledged(self.root, 'D-after-start', 0),
+                         'a watcher write is not a hook delivery')
+        stopped = self.run_(GUARD, '--hook', 'codex', stdin=json.dumps({'cwd': str(self.root)}))
+        self.assertIn('card: D-after-start answered B', json.loads(stopped.stdout)['reason'])
+        again = self.run_(GUARD, '--hook', 'codex', stdin=json.dumps({'cwd': str(self.root)}))
+        self.assertEqual('', again.stdout, 'the decision is output once')
 
     def test_cursor_stop_hook_returns_a_followup(self):
         self.aboard()
