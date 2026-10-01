@@ -66,12 +66,16 @@ def save(path, value):
 def record_close(attempt, payload):
     """First successful close wins; never let a racer flip a durable closed record."""
     path = Path(attempt) / 'close.json'
-    if path.exists():
-        prior = read(path)
-        if prior.get('status') == 'closed':
-            return prior
-    save(path, payload)
-    return payload
+    # Atomic replacement alone cannot protect the read/check/write decision.
+    # Lock a stable sibling, not the receipt inode that save() replaces. Never
+    # unlink this lock: transport and pane-child must serialize on the same inode.
+    with locked(path.with_name('close.lock')):
+        if path.exists():
+            prior = read(path)
+            if prior.get('status') == 'closed':
+                return prior
+        save(path, payload)
+        return payload
 
 
 def read(path):
