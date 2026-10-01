@@ -421,7 +421,7 @@ else:
 PYWORKFLOW
 }
 merge_step='step=bin/fm-failfirst.sh --merge'
-shard_step='step=bin/fm-failfirst.sh --shard=${{ matrix.shard }}/4'
+shard_step='step=bin/fm-failfirst.sh --shard=${{ matrix.shard }}/6'
 report_step='step=upload the fail-first report'
 part_step="step=upload the shard's part"
 assert_eq "fail-first" "$(wvalue fail-first name)" "the workflow has the fail-first job the review reads"
@@ -436,9 +436,9 @@ assert_contains "$(wvalue ci steps 'step=every stage passed' run)" 'ff="${{ need
 
 # sharded (T-158): pin the matrix, command, environment and artifact keys.
 assert_ne "" "$(wvalue fail-first-shard name)" "the workflow has a fail-first-shard job"
-assert_eq "[1, 2, 3, 4]" "$(wvalue fail-first-shard strategy matrix shard)" "a matrix of 4 shards"
-assert_eq "[1, 2, 3, 4]" "$(wvalue bash strategy matrix shard)" "the same count as the bash shards"
-assert_contains "$(wvalue fail-first-shard steps "$shard_step" run)" '--shard="${{ matrix.shard }}/4"' "each runs its own share"
+assert_eq "[1, 2, 3, 4, 5, 6]" "$(wvalue fail-first-shard strategy matrix shard)" "a matrix of 6 shards"
+assert_eq "[1, 2, 3, 4, 5, 6]" "$(wvalue bash strategy matrix shard)" "the same count as the bash shards"
+assert_contains "$(wvalue fail-first-shard steps "$shard_step" run)" '--shard="${{ matrix.shard }}/6"' "each runs its own share"
 assert_contains "$(wvalue fail-first-shard steps "$shard_step" run)" "--part=" "and writes its part"
 assert_eq 'fail-first-part-${{ matrix.shard }}' "$(wvalue fail-first-shard steps "$part_step" with name)" "which it uploads"
 assert_eq "always()" "$(wvalue fail-first-shard steps "$part_step" if)" "whatever the shard's result"

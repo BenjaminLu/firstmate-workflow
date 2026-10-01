@@ -114,6 +114,16 @@ ci_suite_estimates() {
       if (tin != "") while ((getline line < tin) > 0) {
         if (split(line, f, " ") >= 2 && f[2] ~ /^[0-9]+(\.[0-9]+)?$/) rec[f[1]] = f[2] + 0
       }
+      # A feature split retains its share of the old measured suite until
+      # main records that new path. Shares are authored from source lines;
+      # they conserve the parent time and do not claim unmeasured savings.
+      splitfile = "tests/lib/suite-splits.tsv"
+      while ((getline line < splitfile) > 0) {
+        if (split(line, f, " ") == 3 && f[3] ~ /^(0(\.[0-9]+)?|1(\.0+)?)$/ &&
+            f[3] + 0 > 0 && !(f[1] in rec) && (f[2] in rec))
+          rec[f[1]] = rec[f[2]] * f[3]
+      }
+      close(splitfile)
     }
     { idx[NR] = $1; size[NR] = $2 + 0; path[NR] = $3; n = NR }
     END {
@@ -403,7 +413,7 @@ if [ -n "$ci_shard_n" ]; then
 else
   for i in "${!suites[@]}"; do shard_indices+=("$i"); done
 fi
-# Slowest first, so the long ones are not the last to start. The three the
+# Slowest first, so the long ones are not the last to start. The families the
 # gate has always spent longest on lead by name; the rest follow by size,
 # which is the proxy for the rest. FM_CI_JOBS=1 keeps glob order, which is
 # the one-at-a-time run exactly as it was. Only this process's shard is
@@ -417,7 +427,7 @@ pool_order() {
   for i in "${shard_indices[@]}"; do
     t="${suites[$i]}"
     case "$t" in
-      tests/herdr.test.sh|tests/reconcile.test.sh|tests/worker.test.sh)
+      tests/herdr*.test.sh|tests/reconcile.test.sh|tests/worker*.test.sh)
         printf '%s %s\n' 999999999 "$i" ;;
       *) printf '%s %s\n' "$(wc -c < "$t" | tr -d ' ')" "$i" ;;
     esac
@@ -508,7 +518,7 @@ if [ ${#shard_indices[@]} -gt 0 ] && want_stage bash; then
 fi
 
 if want_stage fast; then
-scripts=(bin/*.sh bin/adapters/*.sh bin/lib/*.sh tests/*.sh)  # adapters and lib too: bin/*.sh does not recurse
+scripts=(bin/*.sh bin/adapters/*.sh bin/lib/*.sh tests/*.sh tests/lib/*.sh)  # adapters and lib too: bin/*.sh does not recurse
 if [ ${#scripts[@]} -gt 0 ] && command -v shellcheck >/dev/null 2>&1; then
   run_stage shellcheck shellcheck -x -S warning "${scripts[@]}" &
   shellcheck_pid=$!; bg_pids="$bg_pids $shellcheck_pid"
@@ -581,7 +591,7 @@ stage "test hygiene"
 # asserted on, for instance. Those are on the author. Widen this when one of
 # them bites, not before, because a lint that flags every grep is a lint
 # people learn to ignore.
-suitefiles=(tests/*.test.sh)
+suitefiles=(tests/*.test.sh tests/lib/*.sh)
 bad=''
 if [ ${#suitefiles[@]} -gt 0 ]; then
   bad=$(grep -HnE 'assert_(ok|fail) "grep [^|]*\$(ROOT|[A-Za-z_]*ROOT)[^|]*"' "${suitefiles[@]}" 2>/dev/null \
@@ -924,10 +934,10 @@ binfiles=(bin/*.sh bin/adapters/*.sh bin/lib/*.sh)
 # file for naming bin/fm.sh outside a comment.
 fm_main=fm
 mktemp_pending=(
-  tests/selfupdate.test.sh tests/gate.test.sh tests/board.test.sh
+  tests/selfupdate.test.sh tests/gate.test.sh
   tests/diagram.test.sh tests/emit.test.sh tests/config.test.sh
   tests/guard.test.sh tests/reconcile.test.sh tests/e2e-loop.test.sh
-  tests/dispatch.test.sh tests/decide.test.sh tests/worker.test.sh
+  tests/dispatch.test.sh tests/decide.test.sh
   tests/traps.test.sh tests/decisions.test.sh tests/sync-prs.test.sh
   tests/ready.test.sh tests/protocol.test.sh tests/pipefail-grep.test.sh
   tests/option-loop.test.sh tests/open.test.sh tests/merge.test.sh

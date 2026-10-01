@@ -7,7 +7,7 @@ fixture_path() {
   [ "$#" = 2 ] || { echo 'fixture_path: expected destination and exclusions' >&2; return 1; }
   local dest="$1" omitted="$2" name tool dir rest more
   mkdir -p "$dest" || return 1
-  dest="$(cd "$dest" && pwd)" || return 1
+  dest="$(cd "$1" && pwd)" || return 1
   rest="$PATH"
   while :; do
     more=0

@@ -1,0 +1,28 @@
+{
+  "id": "T-130",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-157"
+  ],
+  "title": "tests are split by feature, share their fixtures from tests/lib/, and a new feature adds a test file instead of appending to a large one",
+  "scope": [
+    "tests/**",
+    "bin/ci.sh",
+    "design/**",
+    "skills/firstmate/SKILL.md",
+    "skills/worker/SKILL.md",
+    "design/tasks/T-130.json",
+    ".github/workflows/ci.yml"
+  ],
+  "acceptance": [
+    "Why. On 2026-09-28 the captain asked why every merge blocks the other pull requests. Of the last 96 merged PRs, design/design.md was touched by 59 (61 percent), bin/fm-worker.sh by 29, tests/worker.test.sh by 27, board/server.ts by 26, tests/board.test.sh by 25, tests/review.test.sh by 24. Three causes, from first principles: (1) every feature appends to the same shared lists (the event types, the gate table, the settled-decisions table, exit codes, routes), so two PRs append at the same place and conflict; (2) change history lives inside living files (205 T-nnn citations in design.md; tests end in one `# --- T-nnn` block per task); (3) files mix unrelated concerns. T-090 already proved the fix for one of them: design/tasks.json became one file per task and stopped conflicting. The captain approved this refactoring series (T-129..T-133) on 2026-09-28, to run in dependency order. Its own spec file, design/tasks/T-130.json, is committed on this branch.",
+    "Carried from T-157 (2026-10-01): T-157 cut the bash suites' CI total only 7% (1806 s -> 1672 s; worker 515->398, reconcile 111->57, herdr 283->246, review 179->153; adapter-contract 90->120 and ci 178->197 grew), short of its one-third target; the longest shard is still worker.test.sh at 415 s. This task owns the wall-clock: after the split and the move to 6 shards, demonstrate measurable CI optimization against the documented baseline, with no hard predicted or actual shard duration limit (captain-approved revision, 2026-10-01), and the PR body reports each shard's predicted and actual seconds.",
+    "Moved forward 2026-09-29 by the captain ('shard 1優化 規劃進去'), no longer behind T-129 (it splits design.md, a different file); after T-146, which also edits tests/worker.test.sh. Measured on T-144's merge run (c18b1af), the first with T-148's time-balanced shards: shard 1 held tests/worker.test.sh alone, predicted 404 s, job 467 s, while shards 2-4 ran 268, 169 and 125 s - the whole required check waits on one suite, which runs bin/fm-worker.sh end to end 86 times in sequence (about 4.7 s each). worker.test.sh is split first and along its existing `# ---` feature sections (T-036 checkpoint, T-067 base update, T-098 rebuild and exec bit, T-105 policy, T-117 hatch, T-128 mirror, ...) so that no resulting file is predicted over 150 s by main's recorded timings; then board.test.sh and review.test.sh as below.",
+    "Six shards. With the split merged, .github/workflows/ci.yml runs the bash suites on 6 shards instead of 4 (the matrix and the `ci` aggregator's needs), so that by main's recorded timings every shard's predicted load is within mean + longest and measured CI evidence demonstrates optimization against the documented baseline, with no hard predicted or actual shard duration limit; the PR body reports each shard's predicted and actual seconds from its own CI run, and the wall-clock of the required check. Distinguish summed-load estimates from observed stage or job elapsed times, and state differences in baseline and run conditions.",
+    "tests/worker.test.sh (3103 lines), tests/board.test.sh (2553), tests/review.test.sh (1580) and tests/e2e/board.spec.ts (2212) are split by feature: the per-task blocks at their ends and the feature sections become files named for the feature (for example tests/worker-mirror.test.sh, tests/board-auth.test.sh), and the shared fixture helpers move to tests/lib/ and tests/e2e/lib/. No file under tests/ is over 1200 lines.",
+    "No test is lost: a script counts the assertions (assert_* calls and Playwright tests) before and after, and the report shows equal counts per old suite; every test name that existed still exists.",
+    "bin/ci.sh finds suites by glob as today; its two places that name suites by path (the slow-suite ordering and `mktemp_pending`) use patterns or the new names, and the bare-mktemp lint still covers every suite. Gate 5 still runs only the suites a change touches, which are now smaller.",
+    "The rule going forward, in skills/worker/SKILL.md and the design: a new feature's tests go in a new file or the file of their feature, never appended to an unrelated suite. Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves. Stubs answer as the real tools do."
+  ]
+}

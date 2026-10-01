@@ -1,0 +1,245 @@
+{
+  "base": "df2cf03f4bf39a40b0fa00fcc8f02adec4fb197c",
+  "suites": {
+    "tests/worker.test.sh": {
+      "files": [
+        "tests/lib/worker.sh",
+        "tests/worker-lifecycle.test.sh",
+        "tests/worker-auth.test.sh",
+        "tests/worker-retry.test.sh",
+        "tests/worker-notes.test.sh",
+        "tests/worker-ci-evidence.test.sh",
+        "tests/worker-scratch.test.sh",
+        "tests/worker-branch-recovery.test.sh",
+        "tests/worker-exits.test.sh",
+        "tests/worker-liveness.test.sh",
+        "tests/worker-checkpoint.test.sh",
+        "tests/lib/worker-rebuild.sh",
+        "tests/worker-rebuild.test.sh",
+        "tests/worker-rebuild-publication.test.sh",
+        "tests/worker-executable.test.sh",
+        "tests/worker-policy.test.sh",
+        "tests/worker-mirror.test.sh"
+      ],
+      "scaffolding": [
+        {
+          "line": "if [ \"${FM_WORKER_LIVENESS_ONLY:-0}\" != 1 ]; then",
+          "count": 1,
+          "reason": "Replaced by per-feature fixture/runner setup and cleanup; original assertions retained."
+        },
+        {
+          "line": "fi",
+          "count": 1,
+          "reason": "Replaced by per-feature fixture/runner setup and cleanup; original assertions retained."
+        },
+        {
+          "line": "rm -rf \"$d\" \"$d2\" \"$d3\"",
+          "count": 1,
+          "reason": "Replaced by per-feature fixture/runner setup and cleanup; original assertions retained."
+        },
+        {
+          "line": "rm -rf \"$dA\" \"$dA2\" \"$dB\" \"$dC\" \"$dD\" \"$dE\" \"$dG\" \"$dG2\" \"$dG3\" \"$dG4\" \"$dI\" \"$dK\" \"$dK2\" \"$dL\" \\",
+          "count": 1,
+          "reason": "Replaced by per-feature fixture/runner setup and cleanup; original assertions retained."
+        },
+        {
+          "line": "\"$dM\" \"$dN\" \"$dP1\" \"$dP2\" \"$dP3\" \"$dP4\" \"$dP5\" \"$dP6\" \"$dQ1\" \"$dQ2\" \"$dQ3\" \"$dQ4\" \\",
+          "count": 1,
+          "reason": "Replaced by per-feature fixture/runner setup and cleanup; original assertions retained."
+        },
+        {
+          "line": "\"$dR1\" \"$dR2\" \"$dS\" \"$dT\" \"$dU1\" \"$dU2\" \"$dV0\" \"$dV1\" \"$dV2\" \"$dV3\" \"$dV4\" \"$dV5\" \"$dV5b\" \"$dV5c\" \"$dV6\" \\",
+          "count": 1,
+          "reason": "Replaced by per-feature fixture/runner setup and cleanup; original assertions retained."
+        },
+        {
+          "line": "\"$rb_seed\" \"$rb_hook_seed\" \"$dX\" \"$dX2\" \"$dX4\" \"$dX5\" \"$dX6\" \"$rb_add\" \"$rb_more\"",
+          "count": 1,
+          "reason": "Replaced by per-feature fixture/runner setup and cleanup; original assertions retained."
+        },
+        {
+          "line": "mkdir -p bin design/tasks skills/worker state",
+          "count": 1,
+          "reason": "Fixture skill destination is now explicitly rooted in $d/repo for the bounded writer analyzer; same fixture destination and no assertion change."
+        },
+        {
+          "line": "cp \"$ROOT/skills/worker/SKILL.md\" skills/worker/",
+          "count": 1,
+          "reason": "Fixture skill destination is now explicitly rooted in $d/repo for the bounded writer analyzer; same fixture destination and no assertion change."
+        }
+      ]
+    },
+    "tests/board.test.sh": {
+      "files": [
+        "tests/lib/board.sh",
+        "tests/board-state.test.sh",
+        "tests/board-progress.test.sh",
+        "tests/board-readiness.test.sh",
+        "tests/board-task-actions.test.sh",
+        "tests/board-pr-links.test.sh",
+        "tests/board-projects.test.sh",
+        "tests/board-identity.test.sh",
+        "tests/board-task-grammar.test.sh",
+        "tests/board-card-effects.test.sh",
+        "tests/board-auth.test.sh",
+        "tests/board-wake.test.sh"
+      ],
+      "scaffolding": [
+        {
+          "line": "rm -rf \"$k\" \"$XDG_CONFIG_HOME\"",
+          "count": 1,
+          "reason": "Replaced by per-feature fixture/runner setup and cleanup; original assertions retained."
+        }
+      ]
+    },
+    "tests/review.test.sh": {
+      "files": [
+        "tests/lib/review.sh",
+        "tests/lib/review-run.sh",
+        "tests/review-verdict.test.sh",
+        "tests/review-evidence.test.sh",
+        "tests/review-retry.test.sh",
+        "tests/review-checkout.test.sh",
+        "tests/review-diff.test.sh",
+        "tests/review-temp-safety.test.sh"
+      ],
+      "scaffolding": []
+    },
+    "tests/ci.test.sh": {
+      "files": [
+        "tests/lib/ci.sh",
+        "tests/ci-budget.test.sh",
+        "tests/ci-pool.test.sh",
+        "tests/ci-lints.test.sh",
+        "tests/ci-sharding.test.sh",
+        "tests/ci-workflow.test.sh"
+      ],
+      "scaffolding": []
+    },
+    "tests/adapter-contract.test.sh": {
+      "files": [
+        "tests/lib/adapter.sh",
+        "tests/lib/adapter-policy.sh",
+        "tests/adapter-protocol.test.sh",
+        "tests/adapter-policy.test.sh",
+        "tests/adapter-login.test.sh",
+        "tests/adapter-shell.test.sh",
+        "tests/adapter-verdict.test.sh"
+      ],
+      "scaffolding": [
+        {
+          "line": "safe_rm_rf \"$pv\" \"$pk\"",
+          "count": 1,
+          "reason": "Replaced by per-feature fixture/runner setup and cleanup; original assertions retained."
+        },
+        {
+          "line": "safe_rm_rf \"$closed_path\"",
+          "count": 1,
+          "reason": "Replaced by per-feature fixture/runner setup and cleanup; original assertions retained."
+        }
+      ]
+    },
+    "tests/sandbox.test.sh": {
+      "files": [
+        "tests/lib/sandbox.sh",
+        "tests/lib/sandbox-os.sh",
+        "tests/sandbox-policy.test.sh",
+        "tests/sandbox-os.test.sh",
+        "tests/sandbox-login.test.sh",
+        "tests/sandbox-kernel.test.sh"
+      ],
+      "scaffolding": []
+    },
+    "tests/herdr.test.sh": {
+      "files": [
+        "tests/lib/herdr.sh",
+        "tests/lib/herdr.py",
+        "tests/herdr/lifecycle.py",
+        "tests/herdr-lifecycle.test.sh",
+        "tests/herdr/roster.py",
+        "tests/herdr-roster.test.sh",
+        "tests/herdr/handoff.py",
+        "tests/herdr-handoff.test.sh",
+        "tests/herdr/windows.py",
+        "tests/herdr-windows.test.sh",
+        "tests/herdr/credentials.py",
+        "tests/herdr-credentials.test.sh",
+        "tests/herdr/transport.py",
+        "tests/herdr-transport.test.sh",
+        "tests/herdr/emitstatus.py",
+        "tests/herdr-emitstatus.test.sh",
+        "tests/herdr/agentlost.py",
+        "tests/herdr-agentlost.test.sh"
+      ],
+      "scaffolding": [
+        {
+          "line": "python3 - \"$ROOT\" <<'PY'",
+          "count": 1,
+          "reason": "Replaced by per-feature fixture/runner setup and cleanup; original assertions retained."
+        },
+        {
+          "line": "class Lifecycle(unittest.TestCase):",
+          "count": 1,
+          "reason": "Replaced by per-feature fixture/runner setup and cleanup; original assertions retained."
+        },
+        {
+          "line": "class Roster(unittest.TestCase):",
+          "count": 1,
+          "reason": "Replaced by per-feature fixture/runner setup and cleanup; original assertions retained."
+        },
+        {
+          "line": "class Entrypoints(unittest.TestCase):",
+          "count": 1,
+          "reason": "Replaced by per-feature fixture/runner setup and cleanup; original assertions retained."
+        },
+        {
+          "line": "class EmitStatus(unittest.TestCase):",
+          "count": 1,
+          "reason": "Replaced by per-feature fixture/runner setup and cleanup; original assertions retained."
+        },
+        {
+          "line": "class AgentLost(unittest.TestCase):",
+          "count": 1,
+          "reason": "Replaced by per-feature fixture/runner setup and cleanup; original assertions retained."
+        },
+        {
+          "line": "PY",
+          "count": 1,
+          "reason": "Replaced by per-feature fixture/runner setup and cleanup; original assertions retained."
+        }
+      ]
+    },
+    "tests/e2e/board.spec.ts": {
+      "files": [
+        "tests/e2e/lib/board.ts",
+        "tests/e2e/board-waiting.spec.ts",
+        "tests/e2e/board-activity.spec.ts",
+        "tests/e2e/board-continuation.spec.ts",
+        "tests/e2e/board-locales.spec.ts",
+        "tests/e2e/board-decisions.spec.ts",
+        "tests/e2e/board-merges.spec.ts",
+        "tests/e2e/board-layout.spec.ts",
+        "tests/e2e/board-task-actions.spec.ts",
+        "tests/e2e/board-pr-links.spec.ts",
+        "tests/e2e/board-projects.spec.ts",
+        "tests/e2e/board-audio.spec.ts",
+        "tests/e2e/board-crew.spec.ts",
+        "tests/e2e/board-auth.spec.ts",
+        "tests/e2e/board-review-duration.spec.ts",
+        "tests/e2e/board-card-effects.spec.ts"
+      ],
+      "scaffolding": [
+        {
+          "line": "let board: Awaited<ReturnType<typeof startBoard>>;",
+          "count": 1,
+          "reason": "Replaced by per-feature fixture/runner setup and cleanup; original assertions retained."
+        },
+        {
+          "line": "test.beforeAll(async () => { board = await startBoard(makeRoot([...CREW])); });",
+          "count": 1,
+          "reason": "Replaced by per-feature fixture/runner setup and cleanup; original assertions retained."
+        }
+      ]
+    }
+  }
+}

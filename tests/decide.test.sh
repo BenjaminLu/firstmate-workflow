@@ -924,7 +924,16 @@ assert_eq "bin/fm-decide.sh" "$callers" \
 # argv array, a variable holding the path.
 # Without -q: under pipefail a grep that stops at its first match can SIGPIPE
 # the reader and turn a hit into a miss, and the empty-list check would pass.
-code() { grep -vE '^[[:space:]]*(#|//)' "$ROOT/$1"; }
+code() {
+  local helper
+  grep -vE '^[[:space:]]*(#|//)' "$ROOT/$1"
+  while IFS= read -r helper; do code "$helper"; done < <(
+    sed -n 's|^\. "\$ROOT/\(tests/lib/[^" ]*\.sh\)"$|\1|p' "$ROOT/$1"
+  )
+  if grep -q '^from herdr import ' "$ROOT/$1"; then
+    code tests/lib/herdr.py
+  fi
+}
 has() { code "$1" | grep -E -- "$2" >/dev/null; }
 both() { grep -E -- 'fm-decide' "$ROOT/$1" >/dev/null && grep -E -- '--request' "$ROOT/$1" >/dev/null; }
 names='fm-run|(^|[^A-Za-z0-9_-])fm\.sh'
@@ -937,7 +946,7 @@ assert_contains "$cisrc" "-name '*.test.ts' -o -name '*.spec.ts'" "ci.sh runs bu
 assert_contains "$cisrc" 'bunx playwright test' "ci.sh runs playwright"
 assert_contains "$(code playwright.config.ts)" 'testDir: "tests/e2e"' "playwright runs tests/e2e"
 suites="$(git -C "$ROOT" ls-files -- tests '*.test.ts' '*.spec.ts' 'playwright.config.*' bin/ci.sh | sort -u)"
-for f in tests/decide.test.sh tests/lib.sh tests/ship.spec.ts tests/e2e/board.spec.ts tests/e2e/fixture.ts bin/ci.sh; do
+for f in tests/decide.test.sh tests/lib.sh tests/ship.spec.ts tests/e2e/board-*.spec.ts tests/e2e/lib/*.ts bin/ci.sh; do
   assert_contains " $(printf '%s ' $suites) " " $f " "the suites hold $f"
 done
 # What raises a card: every tracked file outside the suites and the prose that
@@ -960,7 +969,7 @@ via="$(for f in $named; do runs "$f" && printf '%s ' "$f"; done)"
 assert_eq "" "$via" "nothing else in the repository calls them outside a comment or a message"
 direct="$(for f in $suites; do [ -f "$ROOT/$f" ] && both "$f" && printf '%s ' "$f"; done)"
 assert_contains " $direct" " tests/decide.test.sh " "the sweep sees decide.test.sh raise cards itself"
-assert_contains " $direct" " tests/board.test.sh " "and board.test.sh, which raises readiness cards"
+assert_contains " $direct" " tests/board-readiness.test.sh " "and board.test.sh, which raises readiness cards"
 # A suite that raises a card itself is held to the same guard as one that
 # reaches fm-run.sh or fm.sh. decide.test.sh carries its own unset.
 # A function, not a loop inside $(...): bash 3.2 reads a case pattern's ")"
