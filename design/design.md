@@ -980,6 +980,29 @@ grilling  ->  /prototype  ->  [captain green-lights]  ->  design.md + design/tas
               APPROVE -> firstmate summarises -> [captain merges on the board]
 ```
 
+**A first round has a way forward (T-160).** Before reusing a branch,
+`fm-worker.sh` resolves its open PR. With no PR, an attached clean leftover
+whose head is an ancestor of the current base starts fresh on that base and
+receives the new task spec. Branch existence alone does not make the prompt
+a retry. Commits beyond the base are preserved; unpublished dirty work stays
+in its attached worktree with a recovery copy. Existing PR and detached
+rebuild recovery keep their rescue-and-recreate behavior.
+
+While a new task's commits touch only its own spec, the dispatching
+repository's revised spec is copied into the branch and prompt, including
+when the spec already has a draft PR. An uncommitted change is never replaced
+this way, and implementation commits keep the branch spec authoritative.
+
+A no-PR round that only asks with a standalone `SCOPE-BLOCKED:<task>` or
+`ASK-<reason>:<task>` marker in `.fm-say.md` opens a draft PR and posts that
+note after creation. The spec supplies the diff when available; a task already
+on the base gets `design/questions/<task>.md` carrying the question so GitHub
+has a real diff to open. Firstmate must resolve that draft's scope (including
+removing or authorizing the question record) before the gates and merge.
+The transient `.fm-say.md` is never committed. Publication failures retain
+the note through the existing `state/unsent/` recovery path. Ordinary notes
+without a request marker and without work retain the premature-note failure.
+
 **`fm-dispatch.sh` dispatches nothing until a `greenlit` event exists.**
 It checks for any such event, not a match to the proposed work. Firstmate must
 verify that authorization covers the work. Dependencies and capacity are read
