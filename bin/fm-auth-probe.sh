@@ -114,7 +114,7 @@ if [ "$login_rc" -eq 77 ]; then
 elif [ "$login_rc" -ne 0 ]; then
   print_result indeterminate "$version" \
     "the round's login for $vendor could not be resolved (fm-sandbox.sh exit $login_rc)" \
-    "無法解析 $vendor 回合的登入（fm-sandbox.sh 結束碼 $login_rc）"
+    "無法解析 $vendor 回合的登入（fm-sandbox.sh 結束碼 ${login_rc}）"
   exit 0
 fi
 
