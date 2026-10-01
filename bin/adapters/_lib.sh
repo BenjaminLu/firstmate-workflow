@@ -132,6 +132,30 @@ fm_adapter_review_checkout() {
   fm_adapter_rule_path "$dir"
 }
 
+# A marker admits the vendor to the chain, never the invocation. Codex must
+# match the context recorded by the trusted transport before executing a model.
+fm_adapter_codex_review_context() {
+  [ "${FM_CONTEXT_READY:-}" = 1 ] && [ -n "${FM_ATTEMPT_DIR:-}" ] || {
+    echo "codex: run review requires managed launcher context" >&2; return 64; }
+  python3 - "$_fm_engine" <<'PY'
+import importlib.util, json, os, pathlib, sys
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location('managed', pathlib.Path(sys.argv[1]) / 'bin/fm-herdr.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+try:
+    context = m.review_context(os.environ)
+    invocation = json.loads((pathlib.Path(os.environ['FM_ATTEMPT_DIR']) / 'invocation.json').read_text())
+    expected_adapter = str(pathlib.Path(sys.argv[1]) / 'bin/adapters/codex.sh')
+    if invocation.get('review') != context or invocation.get('adapter') != expected_adapter:
+        raise ValueError('review checkout does not match trusted invocation')
+    for key, name in [('actor', 'FM_ACTOR'), ('role', 'FM_ROLE'), ('task', 'FM_TASK')]:
+        if invocation.get(key) != os.environ.get(name): raise ValueError('review identity mismatch')
+    print(context['checkout'])
+except Exception as error:
+    sys.exit('codex: invalid review context: ' + str(error))
+PY
+}
+
 # fm_adapter_review_env -> `env -u NAME ...` words, one per line, that start
 # a run-mode engine without the launcher's state. fm_identity exports FM_ROOT
 # at the task's repository and the checkout's scripts choose their tree from
@@ -461,8 +485,10 @@ fm_adapter_confine() {
     FM_LAUNCH+=(run --policy="$FM_POLICY" --root="$work" --tmp="$FM_ROUND_TMP" --vendor="$vendor"
                 --started="$FM_ROUND_STARTED" --ctl="$FM_ROUND_CTL" ${shed[@]+"${shed[@]}"})
     # the CLI's own final answer is written where the launcher reads it
-    [ -z "${FM_ATTEMPT_DIR:-}" ] || FM_LAUNCH+=(--write="$FM_ATTEMPT_DIR")
-    [ -z "${FM_FINAL_PATH:-}" ] || FM_LAUNCH+=(--write="$(dirname "$FM_FINAL_PATH")")
+    if [ "$vendor" != codex ] || [ "${FM_ROLE:-}" != reviewer ]; then
+      [ -z "${FM_ATTEMPT_DIR:-}" ] || FM_LAUNCH+=(--write="$FM_ATTEMPT_DIR")
+      [ -z "${FM_FINAL_PATH:-}" ] || FM_LAUNCH+=(--write="$(dirname "$FM_FINAL_PATH")")
+    fi
     [ -z "${FM_POLICY_BLOCKED:-}" ] || FM_LAUNCH+=(--blocked="$FM_POLICY_BLOCKED")
   else
     echo "$vendor: !!! FM_CREW_UNSANDBOXED: this round runs WITHOUT the OS sandbox - reads, writes, the network and sockets are not confined by fm !!!" >&2

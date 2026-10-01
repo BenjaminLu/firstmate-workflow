@@ -1168,6 +1168,68 @@ def round_environment(source, vendor):
     return env
 
 
+def review_context(env):
+    """Validate the isolated launcher checkout before admitting a Codex review."""
+    if env.get('FM_ROLE') != 'reviewer' or env.get('FM_RUN_REVIEW') != '1':
+        raise ValueError('Codex run review requires reviewer launcher context')
+    directory = env.get('FM_REVIEW_CHECKOUT', '')
+    checkout = Path(directory)
+    if not directory or not checkout.is_absolute() or str(checkout.resolve()) != directory:
+        raise ValueError('review checkout must be an absolute canonical path')
+    if not (checkout / '.git').is_dir() or (checkout / '.git').is_symlink():
+        raise ValueError('review checkout must have its own git directory')
+    for key in ('FM_ROOT', 'FM_CODE_ROOT', 'FM_RUN_DIR'):
+        if env.get(key):
+            protected = Path(env[key]).resolve()
+            if checkout == protected or protected in checkout.parents:
+                raise ValueError('review checkout overlaps launcher state or source')
+    if (checkout / '.git/objects/info/alternates').exists():
+        raise ValueError('review checkout must not borrow another object database')
+    def git(*args):
+        clean = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+        clean.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null')
+        return subprocess.check_output(['git', '-C', directory, *args], env=clean,
+                                       stderr=subprocess.DEVNULL, text=True).strip()
+    head, base = env.get('FM_REVIEW_HEAD', ''), env.get('FM_REVIEW_BASE', '')
+    if not all(re.fullmatch(r'[0-9a-f]{40,64}', x) for x in (head, base)):
+        raise ValueError('review context has no pinned head/base')
+    if git('rev-parse', '--show-toplevel') != directory or git('rev-parse', '--absolute-git-dir') != str(checkout / '.git'):
+        raise ValueError('review checkout redirects git outside its own tree')
+    if git('rev-parse', 'HEAD') != head or git('rev-parse', 'refs/fm/head') != head:
+        raise ValueError('review checkout does not match pinned head')
+    if git('rev-parse', 'refs/fm/base') != base or git('remote'):
+        raise ValueError('review checkout has wrong base or a remote')
+    if git('status', '--porcelain'):
+        raise ValueError('review checkout is not fresh')
+    return dict(checkout=directory, head=head, base=base, patch=env.get('FM_REVIEW_PATCH', ''))
+
+
+def review_final(run, chain_attempt, env):
+    """Read only this invocation's transport-authored, digest-bound final answer."""
+    try:
+        run = Path(run).resolve()
+        result = read(run / 'last-result.json')
+        attempt = Path(result['attempt']).resolve()
+        if attempt.parent != run or not chain_attempt or result.get('chain_attempt') != chain_attempt:
+            return ''
+        invocation = read(attempt / 'invocation.json')
+        for key, name in [('actor', 'FM_ACTOR'), ('task', 'FM_TASK'), ('role', 'FM_ROLE')]:
+            if result.get(key) != env.get(name) or invocation.get(key) != env.get(name): return ''
+        if env.get('FM_RUN_REVIEW') == '1':
+            expected = dict(checkout=env.get('FM_REVIEW_CHECKOUT'), head=env.get('FM_REVIEW_HEAD'),
+                            base=env.get('FM_REVIEW_BASE'), patch=env.get('FM_REVIEW_PATCH', ''))
+            if result.get('review') != expected or invocation.get('review') != expected: return ''
+        if result.get('final_source') != 'codex-json-completed-turn': return ''
+        answer = (attempt / 'final.txt').read_bytes().decode('utf-8')
+        if hashlib.sha256(answer.encode()).hexdigest() != result.get('final_sha256'): return ''
+        if completion('reviewer', env.get('FM_TASK', ''), answer) != 'completed': return ''
+        if not any(line in ('APPROVE:' + env.get('FM_TASK', ''), 'REJECT:' + env.get('FM_TASK', ''))
+                   for line in answer.splitlines()): return ''
+        return answer
+    except (OSError, ValueError, KeyError, TypeError):
+        return ''
+
+
 def transport(adapter, prompt, tree, log):
     """A whole adapter executes as a round fm owns, preserving normal verdict/fallback."""
     # Caller-side wait must survive the launching shell exiting (SIGHUP). The
@@ -1191,6 +1253,8 @@ def transport(adapter, prompt, tree, log):
     payload = dict(adapter=str(Path(adapter).resolve()), prompt=str(attempt / 'prompt.md'),
                    tree=str(Path(tree).resolve()), actor=actor, role=role, task=task,
                    lifetime_tracking=True)
+    if Path(adapter).stem == 'codex' and env.get('FM_RUN_REVIEW') == '1':
+        payload['review'] = review_context(env)
     save(attempt / 'invocation.json', payload)
     timeout = float(os.environ.get('FM_HERDR_TIMEOUT', '21600'))
     if not math.isfinite(timeout) or timeout <= 0:
@@ -1413,9 +1477,35 @@ def cli_final(vendor, log):
     and an earlier success must not speak for a later failure. A truncated
     object parses as nothing, so partial output is still worth nothing.
     """
-    if vendor not in ('claude', 'cursor-agent', 'gemini'): return None
+    if vendor not in ('codex', 'claude', 'cursor-agent', 'gemini'): return None
     try: text = Path(log).read_text()
     except OSError: return None
+    if vendor == 'codex':
+        # exec --json emits completed items, then turn.completed. Tool output,
+        # reasoning, prompt echoes and abandoned turns cannot provide a final.
+        answer = None
+        active = complete = False
+        kind = None
+        for line in text.splitlines():
+            try: event = json.loads(line)
+            except ValueError: continue
+            if not isinstance(event, dict): continue
+            kind = event.get('type')
+            if kind == 'thread.started':
+                active, complete, answer = False, False, None
+            elif kind == 'turn.started':
+                active, complete, answer = True, False, None
+            elif kind in ('turn.failed', 'error'):
+                active, complete, answer = False, False, None
+            elif kind == 'item.completed' and active:
+                item = event.get('item', {})
+                if isinstance(item, dict) and item.get('type') == 'agent_message' and isinstance(item.get('text'), str):
+                    answer = item['text']
+                else:
+                    answer = None
+            elif kind == 'turn.completed':
+                complete, active = active and answer is not None, False
+        return answer if complete and kind == 'turn.completed' else None
     for candidate in (text, *reversed(text.splitlines())):
         try: response = json.loads(candidate)
         except ValueError: continue
@@ -1465,7 +1555,10 @@ def execute_child(attempt, lifetime_fd):
         finally:
             log.flush(); os.fsync(log.fileno())
     final = attempt / 'final.txt'
-    answer = cli_final(Path(invocation['adapter']).stem, attempt / 'cli.log')
+    vendor = Path(invocation['adapter']).stem
+    answer = cli_final(vendor, attempt / 'cli.log')
+    if vendor == 'codex' and role == 'reviewer' and final.exists():
+        final.unlink()  # CLI output files never establish provenance
     if answer is not None:
         final.write_text(answer)
     status = completion(invocation['role'], invocation['task'], final.read_text()) if final.exists() else 'unknown'
@@ -1474,6 +1567,11 @@ def execute_child(attempt, lifetime_fd):
     result = dict(actor=invocation['actor'], task=invocation['task'], role=invocation['role'],
                   exit_code=rc, status=status, pid=os.getpid(),
                   chain_attempt=env.get('FM_CHAIN_ATTEMPT', ''))
+    if vendor == 'codex' and answer is not None:
+        result.update(final_source='codex-json-completed-turn',
+                      final_sha256=hashlib.sha256(answer.encode()).hexdigest())
+    if 'review' in invocation:
+        result['review'] = invocation['review']
     raw = attempt / 'cli-exit-code'
     result['cli_exit_code'] = int(raw.read_text()) if raw.exists() else None
     # Retain evidence before lifecycle reporting or any close operation.

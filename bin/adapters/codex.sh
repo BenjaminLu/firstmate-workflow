@@ -10,6 +10,7 @@
 #
 #   codex.sh run <prompt> <worktree> <log>
 #   codex.sh dimensions     -> which policy dimensions codex's own flags enforce here
+# fm:review-run
 set -uo pipefail
 _fm_alib="$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 [ -r "$_fm_alib" ] || { echo "codex: missing $_fm_alib" >&2; exit 70; }
@@ -53,6 +54,9 @@ prompt="${2-}"; tree="${3-}"; log="${4-}"
 [ -f "$prompt" ] || { echo "codex: no prompt at $prompt" >&2; exit 64; }
 [ -d "$tree" ]   || { echo "codex: no worktree at $tree" >&2; exit 64; }
 fm_adapter_context "$0"
+if [ "${FM_RUN_REVIEW:-}" = 1 ]; then
+  tree="$(fm_adapter_codex_review_context)" || exit 64
+fi
 
 command -v codex >/dev/null 2>&1 || {
   # stderr, not the log: the log is what the VENDOR said, and a caller that
@@ -63,6 +67,12 @@ command -v codex >/dev/null 2>&1 || {
 # FM_ADAPTER_ARGS is deliberately unquoted: it carries whatever extra
 # arguments the operator configured, and they have to split into words.
 off="$(fm_adapter_mark "$log")"
+# Review invocation policy is closed: the model comes from config.yaml and
+# there are no additional operator flags needed to review. This also refuses
+# attached short options, profiles, cwd changes and output redirection.
+if [ "${FM_RUN_REVIEW:-}" = 1 ] && [ -n "${FM_ADAPTER_ARGS:-}" ]; then
+  echo "codex: run-mode review does not accept FM_ADAPTER_ARGS" >&2; exit 64
+fi
 # an operator argument after these would win, and undo the policy
 case " ${FM_ADAPTER_ARGS:-} " in
   *--sandbox*|*" -s "*|*--dangerously*|*--full-auto*|*--yolo*|*" -c "*|*--config*|*--add-dir*)
@@ -72,6 +82,20 @@ case " ${FM_ADAPTER_ARGS:-} " in
     echo "codex: FM_ADAPTER_ARGS names a model; config.yaml is the one place a model is chosen; refusing the round" >&2; exit 64 ;;
 esac
 fm_adapter_policy
+if [ "${FM_RUN_REVIEW:-}" = 1 ]; then
+  case "$FM_OUTER_OS" in darwin|linux) ;; *) echo "codex: review requires the outer OS sandbox" >&2; exit 64 ;; esac
+  [ -z "$FM_UNSANDBOXED" ] || { echo "codex: review requires the outer OS sandbox" >&2; exit 64; }
+  python3 - "$FM_POLICY" "$FM_ROUND_CTL/review-policy.json" <<'PY' || exit 64
+import json, sys
+p = json.load(open(sys.argv[1]))
+if p.get('role') != 'reviewer' or p.get('write') != ['{root}', '{tmp}']:
+    sys.exit('codex: malformed reviewer policy')
+p['review_git_readonly'] = True
+p['repo_config'] = list(dict.fromkeys(p.get('repo_config', []) + ['.codex']))
+with open(sys.argv[2], 'w') as f: json.dump(p, f)
+PY
+  FM_POLICY="$FM_ROUND_CTL/review-policy.json"
+fi
 if [ "${FM_OUTER_OS:-}" = darwin ]; then
   # sandbox-exec around codex confines every command it runs
   policy_args=(--sandbox danger-full-access)
@@ -85,6 +109,9 @@ print(json.dumps(s["names"] + [p + "*" for p in s["prefixes"]], separators=(",",
   echo "codex: the policy at $FM_POLICY does not read" >&2; exit 65; }
 policy_args+=(-c 'approval_policy="never"' -c 'mcp_servers={}'
               -c "shell_environment_policy.exclude=$excl")
+if [ "${FM_ROLE:-}" = reviewer ]; then
+  policy_args+=(-c 'project_doc_max_bytes=0')
+fi
 # no user profile: a CODEX_HOME of the round's own, in its temp directory.
 # fm-sandbox.sh writes the login into it as it starts the round: a copy of
 # the operator's auth.json with the refresh token emptied (T-117), never
@@ -104,7 +131,11 @@ while IFS= read -r w; do launch+=("$w"); done < <(fm_adapter_env_words codex "${
 # the trailing "-" is codex's read-the-prompt-from-stdin marker and has to
 # be the last argument, so FM_ADAPTER_ARGS goes before it
 final_args=()
-[ -z "${FM_FINAL_PATH:-}" ] || final_args=(--output-last-message "$FM_FINAL_PATH")
+# Managed reviews derive their final answer outside the sandbox from the CLI
+# event stream. They never grant the model write access to transport records.
+if [ "${FM_ROLE:-}" != reviewer ]; then
+  [ -z "${FM_FINAL_PATH:-}" ] || final_args=(--output-last-message "$FM_FINAL_PATH")
+fi
 # --json for a transcript the round's model comes back in (T-127), and
 # config.yaml's model applied with codex's own flag
 final_args+=(--json)

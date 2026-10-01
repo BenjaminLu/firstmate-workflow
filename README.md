@@ -246,7 +246,12 @@ operator, no writes outside the clone and the temp directory, and no network
 beyond the hosts `network:` lists for `setup` (plain domain names only: never
 a domain GitHub operates and never a wildcard, so no push and no comments;
 `fm-review.sh` and the adapter apply the same rule) - so only an adapter
-carrying `# fm:review-run` takes a run-mode round; today that is `claude`.
+carrying `# fm:review-run` takes a run-mode round; today those are `claude` and `codex`. Codex requires the outer OS sandbox
+and a managed invocation bound to the isolated checkout and pinned head. Its
+verdict comes only from the completed final assistant output, with transport
+identity and digest checks. An unsigned retry or vendor fallback into Codex
+recreates the pinned checkout; cleanup retains checkouts with live or uncertain
+execution owners.
 Because the sandbox writes only in the clone and the temp directory, the
 round points `XDG_CACHE_HOME`, bun's install cache, Playwright's browsers and
 npm's cache into its own temp directory, so `setup` downloads them each round.
