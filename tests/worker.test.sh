@@ -152,6 +152,22 @@ assert_eq "1" "$?" "a round that only has the copied spec changed nothing"
 assert_contains "$outn2" "the adapter changed nothing" "and is reported as such"
 safe_rm_rf "$dn" "$dn2"
 
+# A fresh branch needs no history probe to decide whether to refresh its spec.
+dfresh="$(fixture)"; rfresh="$dfresh/repo"; GHfresh="$(ghstub "$dfresh")"
+cat > "$dfresh/stub/git" <<'G'
+#!/usr/bin/env bash
+case "$1" in
+  merge-base|log) echo "unexpected fresh-branch history probe: $*" >&2; exit 70 ;;
+esac
+exec "$WORKER_TEST_GIT" "$@"
+G
+chmod +x "$dfresh/stub/git"
+outfresh="$(cd "$rfresh" && WORKER_TEST_GIT="$(command -v git)" PATH="$dfresh/stub:$PATH" \
+  FM_ROOT="$rfresh" FM_GH="$GHfresh" bin/fm-worker.sh --task T-Z 2>&1)"; rcfresh=$?
+assert_eq 0 "$rcfresh" "fresh branch completes without spec-refresh history probes"
+assert_lacks "$outfresh" 'unexpected fresh-branch history probe' "fresh branch never probes earlier spec commits"
+safe_rm_rf "$dfresh"
+
 # T-160: an abandoned branch is not evidence that a worker authored anything.
 for leftover in empty commit dirty spec spec_pr; do
   dl="$(fixture)"; rl="$dl/repo"; GHl="$(ghstub "$dl")"
@@ -180,11 +196,14 @@ cp "$2" "$3/seen-prompt.txt"
 printf 'done\n' > "$3/done.txt"
 M
   if [ "$leftover" = spec_pr ]; then
-    sed 's/echo null/echo 42/' "$GHl" > "$GHl.next"
+    sed -e 's/echo null/echo 42/' \
+      -e '/case " /a\
+  *" pr view "*" --json comments "*) echo FIRSTMATE_SCOPE_REPLY; exit 0 ;;' "$GHl" > "$GHl.next"
     mv "$GHl.next" "$GHl"; chmod +x "$GHl"
   fi
   outl="$(cd "$rl" && FM_ROOT="$rl" FM_GH="$GHl" bin/fm-worker.sh --task T-N 2>&1)"; rcl=$?
   assert_eq 0 "$rcl" "$leftover leftover dispatch completes"
+  assert_eq "$bl" "$(printf '%s' "$outl" | tail -1)" "$leftover leftover reports its preserved branch"
   promptl="$(cat "$tl/seen-prompt.txt" 2>/dev/null)"
   case "$leftover" in
     empty)
@@ -195,6 +214,7 @@ M
       assert_eq authored "$(cat "$tl/earlier.txt" 2>/dev/null)" "$leftover leftover preserves authored work in the active tree"
       assert_contains "$promptl" "Your branch already carries your earlier work" "$leftover leftover prompt acknowledges earlier work" ;;
     spec|spec_pr)
+      assert_lacks "$promptl" "Your branch already carries your earlier work" "$leftover spec-only branch gets a first-round prompt"
       assert_contains "$promptl" WIDENED_SPEC "spec-only branch receives firstmate's revised acceptance"
       assert_lacks "$promptl" OLD_SPEC "spec-only branch no longer prompts with obsolete acceptance"
       assert_eq "$(cat "$rl/design/tasks/T-N.json")" "$(cat "$tl/design/tasks/T-N.json" 2>/dev/null)" "spec-only branch receives the repository spec" ;;
@@ -202,6 +222,9 @@ M
   if [ "$leftover" = commit ]; then
     assert_contains "$promptl" AUTHORED_SPEC "implementation commits retain the branch spec"
     assert_lacks "$promptl" WIDENED_SPEC "firstmate's copy cannot override an implemented task"
+  fi
+  if [ "$leftover" = spec_pr ]; then
+    assert_contains "$promptl" FIRSTMATE_SCOPE_REPLY "spec-only draft still carries firstmate's reply"
   fi
   safe_rm_rf "$dl"
 done
@@ -677,11 +700,17 @@ for question_seed in seeded committed; do
   fi
   cat > "$rq/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
+if grep -q 'Your branch already carries your earlier work' "$2"; then
+  echo 'spec-only question was told it carries earlier work' >&2
+  exit 65
+fi
 printf 'SCOPE-BLOCKED:T-Q\nPlease widen the scope to include the required implementation.\n' > "$3/.fm-say.md"
 M
   outq="$(cd "$rq" && FM_ROOT="$rq" FM_GH="$GHq" bin/fm-worker.sh --task T-Q 2>&1)"; rcq=$?
   bq="$(printf '%s' "$outq" | tail -1)"
-  assert_eq 0 "$rcq" "$question_seed spec-only scope question completes"
+  # The adapter refuses the earlier-work sentence, so success checks the
+  # actual prompt without creating a file that would turn asking into work.
+  assert_eq 0 "$rcq" "$question_seed spec-only scope question completes with a first-round prompt"
   assert_contains "$(cat "$dq/ghcalls")" --draft "$question_seed scope question opens a draft"
   assert_contains "$(cat "$dq/ghcalls")" 'pr comment 42' "$question_seed scope question is published"
   assert_eq design/tasks/T-Q.json "$(git -C "$rq" diff --name-only "main...$bq")" \
@@ -2773,6 +2802,7 @@ rb_published_alone "$dV3" "$bV3" "$oldV3" "$mainV3" "V3"
 assert_contains "$rb_out" "the worker asked rather than changed anything; its question waits for the pull request this round opens" \
   "V3: the round is reported as asked"
 assert_contains "$(cat "$dV3/ghcalls")" "pr create" "V3: the pull request is opened"
+assert_lacks "$(cat "$dV3/ghcalls")" "--draft" "V3: a question beside a rebuild opens a ready pull request"
 assert_contains "$(cat "$dV3/ghcalls")" "pr comment 42 --body-file" "V3: and the question goes on it"
 assert_eq "" "$(ls "$dV3/repo/state/unsent" 2>/dev/null)" "V3: nothing is kept as unsent"
 # V5: the pull request refuses the worker's note. The round still fails as

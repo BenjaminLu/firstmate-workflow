@@ -448,6 +448,7 @@ fi
 # uncommitted, and this used to remove them before the next round could
 # see them. Tonight that nearly cost two finished tasks.
 leftover_dirty=0
+branch_existed=0
 if [ -d "$tree" ] && [ -n "$(git -C "$tree" status --porcelain 2>/dev/null \
      -- . ":(exclude).fm-prompt.md" ":(exclude).fm-say.md")" ]; then
   leftover_dirty=1
@@ -463,16 +464,20 @@ fi
 if [ "$leftover_dirty" = 1 ] && [ -z "$PR" ] \
    && [ "$(git -C "$tree" symbolic-ref -q --short HEAD)" = "$branch" ]; then
   round_two=1
+  branch_existed=1
 else
   rm -rf "$tree"; mkdir -p "$REPO/state/worktrees"
   git worktree prune >/dev/null 2>&1
   rebuild_settle || true
   if git show-ref --verify --quiet "refs/heads/$branch"; then
     round_two=1
+    branch_existed=1
     git fetch -q origin "refs/heads/$branch:refs/heads/$branch" >/dev/null 2>&1 || true
   elif git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
     round_two=1
-    git fetch -q origin "$branch:$branch" 2>/dev/null || exit 70
+    branch_existed=1
+    git fetch -q origin "$branch:$branch" 2>/dev/null || {
+      echo "fm-worker: could not fetch existing branch $branch" >&2; exit 70; }
   fi
   fresh_base="$BASE"
   if [ "$round_two" = 1 ] && [ -z "$PR" ] && [ "$leftover_dirty" = 0 ]; then
@@ -482,7 +487,8 @@ else
       fresh_base="refs/remotes/origin/$BASE"
     fi
     if git merge-base --is-ancestor "$branch" "$fresh_base"; then
-      git branch -f "$branch" "$fresh_base" >/dev/null || exit 70
+      git branch -f "$branch" "$fresh_base" >/dev/null || {
+        echo "fm-worker: could not refresh empty branch $branch from $fresh_base" >&2; exit 70; }
       round_two=0
     fi
   fi
@@ -502,14 +508,26 @@ rm -f "$tree/.fm-say.md" "$tree/.fm-prompt.md"
 # branch remains authoritative, including its frozen spec during rebuilds.
 own_spec="design/tasks/$TASK.json"; spec_copied=0; spec_copy=''
 refresh_spec=0
+spec_only=0
+# Branch existence is needed for PR lookup above, but only worker-authored
+# work makes this a later implementation round. Probe existing clean branches
+# only: a branch just created by this dispatch has no earlier commits.
+if [ "$branch_existed" = 1 ] && [ "$leftover_dirty" = 0 ]; then
+  spec_base="$(git merge-base "$BASE" "$branch")" || {
+    echo "fm-worker: could not find the base of $branch for spec classification" >&2; exit 70; }
+  branch_paths="$(git log --format= --name-only "$spec_base..$branch" | sed '/^$/d' | sort -u)" || {
+    echo "fm-worker: could not read earlier paths on $branch" >&2; exit 70; }
+  if [ "$branch_paths" = "$own_spec" ]; then
+    spec_only=1
+    round_two=0
+  fi
+fi
 if [ "$leftover_dirty" = 0 ] && [ -f "$own_spec" ]; then
-  spec_base="$(git merge-base "$BASE" "$branch")" || exit 70
-  branch_paths="$(git log --format= --name-only "$spec_base..$branch" | sed '/^$/d' | sort -u)"
   if { [ "$round_two" = 0 ] && [ ! -e "$tree/$own_spec" ]; } \
-     || { [ "$branch_paths" = "$own_spec" ] && ! git cat-file -e "$spec_base:$own_spec" 2>/dev/null; }; then
+     || { [ "$spec_only" = 1 ] && ! git cat-file -e "$spec_base:$own_spec" 2>/dev/null; }; then
     refresh_spec=1
     spec="$(fm_task "$TASK")"
-    [ -n "$spec" ] || exit 65
+    [ -n "$spec" ] || { echo "fm-worker: could not read repository task $TASK" >&2; exit 65; }
     set_crew_activity "$spec"
   fi
 fi
@@ -517,9 +535,9 @@ if [ "$refresh_spec" = 1 ] && ! cmp -s "$own_spec" "$tree/$own_spec"; then
   mkdir -p "$tree/design/tasks" && cp "$own_spec" "$tree/$own_spec" || {
     echo "fm-worker: could not copy $own_spec into $tree" >&2; exit 70; }
   spec_copied=1
-  spec_copy="$(scratch_new)" || exit 70
+  spec_copy="$(scratch_new)" || { echo "fm-worker: could not make a scratch file for $own_spec" >&2; exit 70; }
   scratch_add "$spec_copy"
-  cp "$own_spec" "$spec_copy" || exit 70
+  cp "$own_spec" "$spec_copy" || { echo "fm-worker: could not preserve the seeded $own_spec" >&2; exit 70; }
   echo "fm-worker: $own_spec is not on the base; copied into the worktree for this round to commit" >&2
 fi
 
@@ -1001,7 +1019,7 @@ say="$tree/.fm-say.md"
     printf 'uncommitted, and commits it with your work when the round ends. It is\n'
     printf 'there already; do not write it again, and leave it as it is.\n'
   fi
-  if [ -z "$PR" ]; then
+  if [ "$round_two" = 0 ] && [ -z "$PR" ]; then
     printf '\nIf this round needs firstmate before implementation, write a standalone\n'
     printf '`SCOPE-BLOCKED:%s` or `ASK-<reason>:%s` marker and the question to `.fm-say.md`.\n' "$TASK" "$TASK"
     printf 'The launcher opens a draft pull request and posts your question there, even\n'
@@ -1011,9 +1029,13 @@ say="$tree/.fm-say.md"
   # a later round is answering a review, and the review is on the pull
   # request. Handing over the task alone would have the worker rewrite what
   # it already wrote instead of fixing what was named.
-  if [ "$round_two" = 1 ]; then
-    printf '\n---\n\n# This is not the first round\n\n'
-    printf 'Your branch already carries your earlier work. Build on it.\n'
+  # A spec-only draft also carries firstmate's answer, without claiming
+  # that its spec commit is earlier implementation work.
+  if [ "$round_two" = 1 ] || [ -n "$PR" ]; then
+    if [ "$round_two" = 1 ]; then
+      printf '\n---\n\n# This is not the first round\n\n'
+      printf 'Your branch already carries your earlier work. Build on it.\n'
+    fi
     if [ -n "$PR" ]; then
       printf '\nWhat review has said so far, oldest first:\n\n'
       $GH pr view "$PR" --json comments \
@@ -1508,7 +1530,11 @@ note_refused() {   # note_refused <file>; keeps it and says why, and returns
 # go with the rest of the scratch files. held is set only once the copy
 # is whole, so a failed cp leaves the original in the worktree instead.
 question_draft=0
-if [ "$asked" = 1 ] && [ -z "$PR" ] && ! worker_changed_files \
+first_round_question() {
+  [ "$question_draft" = 1 ] && [ "$round_two" = 0 ] && ! rebuild_publishes
+}
+if [ "$round_two" = 0 ] && ! rebuild_publishes \
+   && [ "$asked" = 1 ] && [ -z "$PR" ] && ! worker_changed_files \
    && grep -Eq "^(SCOPE-BLOCKED|ASK-[A-Z-]+):$TASK([[:space:]]|$)" "$say"; then
   # Prefer the seeded spec as the draft's diff. A task already on base
   # needs a durable question file: GitHub cannot open a PR without a diff.
@@ -1516,12 +1542,14 @@ if [ "$asked" = 1 ] && [ -z "$PR" ] && ! worker_changed_files \
   if git -C "$tree" diff --quiet "$BASE...HEAD" \
      && [ "$spec_copied" = 0 ]; then
     question_path="design/questions/$TASK.md"
-    mkdir -p "$tree/design/questions" || exit 70
+    mkdir -p "$tree/design/questions" || {
+      echo "fm-worker: could not create the question directory in $tree" >&2; exit 70; }
     if [ -e "$tree/$question_path" ]; then
-      printf '\n' >> "$tree/$question_path" || exit 70
-      cat "$say" >> "$tree/$question_path" || exit 70
+      { printf '\n' && cat "$say"; } >> "$tree/$question_path" || {
+        echo "fm-worker: could not append the question to $question_path" >&2; exit 70; }
     else
-      cp "$say" "$tree/$question_path" || exit 70
+      cp "$say" "$tree/$question_path" || {
+        echo "fm-worker: could not copy the question to $question_path" >&2; exit 70; }
     fi
   fi
   question_draft=1
@@ -1536,7 +1564,7 @@ lost_held() {   # lost_held <rc>; from the EXIT trap, so it returns
        --en "the worker's note was not posted: the run ended (exit $1) before it reached a pull request" \
        --tw "工人的留言沒有貼出：執行在送到 PR 之前就結束了（exit ${1}）"
 }
-if [ "$asked" = 1 ] && [ -z "$PR" ] && { worker_changed_files || rebuild_publishes || [ "$question_draft" = 1 ]; }; then
+if [ "$asked" = 1 ] && [ -z "$PR" ] && { worker_changed_files || rebuild_publishes || first_round_question; }; then
   _held="$(scratch_new)" || _held=''
   [ -n "$_held" ] || { echo "fm-worker: could not make a scratch file" >&2; exit 70; }
   scratch_add "$_held"
@@ -1573,7 +1601,7 @@ rm -f "$say"
 # the next round rebuilds again from the branch as it stands.
 # Said here, where it is already true, so a round that fails on the way to
 # the push still reports that it asked.
-if [ "$asked" = 1 ] && [ "$question_draft" = 0 ] && ! worker_changed_files; then
+if [ "$asked" = 1 ] && ! first_round_question && ! worker_changed_files; then
   if ! rebuild_publishes; then
     echo "fm-worker: the worker asked rather than changed anything; its question is on #$PR" >&2
     printf '%s\n' "$branch"
@@ -1593,7 +1621,7 @@ fi
 # two agreed only because the prompt happened to be removed between them.
 # A rebuild is work in its own right: a branch brought up to date with
 # nothing else to add is still committed and pushed.
-if [ "$rebuilt" = 0 ] && [ "$question_draft" = 0 ] && ! worker_did_work; then
+if [ "$rebuilt" = 0 ] && ! first_round_question && ! worker_did_work; then
   # A round that destroyed its own tree did something, and the mirror
   # already said so (worktree_restored); it is not the same round as one
   # that truly left the tree untouched (T-128).
@@ -1755,7 +1783,7 @@ if [ "$rebuilt" = 1 ]; then
       commit_ok=1
     fi
   fi
-elif [ "$question_draft" = 1 ] && git -C "$tree" diff --cached --quiet; then
+elif first_round_question && git -C "$tree" diff --cached --quiet; then
   # A previous attempt already committed the spec; publish that commit.
   commit_ok=1
 elif fm_git_commit "$tree" "$commit_msg"; then
@@ -1832,7 +1860,7 @@ fi
 num="$PR"
 if [ -z "$num" ] || [ "$num" = "null" ]; then
   draft_args=()
-  [ "$question_draft" = 0 ] || draft_args=(--draft)
+  if first_round_question; then draft_args=(--draft); fi
   url="$($GH pr create ${draft_args[@]+"${draft_args[@]}"} --head "$branch" --base "$BASE" \
         --title "$TASK: $(jq -r .title <<<"$spec")" \
         --body "Dispatched by firstmate for $TASK. Acceptance is in design/tasks/$TASK.json." \
