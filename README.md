@@ -49,13 +49,35 @@ the run's `run.log`, `runner.pid` and `runner.exit` beside it), so no terminal
 host is needed. `host:` in `config.yaml` (`none|herdr|cmux|tmux`, detected when
 unset) only opens a window for people to watch: with Herdr, one dedicated
 unfocused tab per run with the canonical crew label, showing the run's live log
-and closed, ownership-safe, after a positively completed final status; cmux and
-tmux get the same window. A closed or crashed window never affects the round,
+and closed, ownership-safe, after a positively completed final status. tmux
+gets a log window; cmux requires explicit verified caller configuration and
+remains subject to the supervised-access limitations below. A closed or crashed window never affects the round,
 and a window that cannot be opened is skipped; each round's `window.json` says
 which window it had, `none` included. `bin/fm.sh follow <actor>` shows a round's
 log without a window, and `bin/fm.sh stop <actor>` or `stop --task <id>` stops
 rounds by their process groups, the same stop the board's park and drop use.
 Transport or empty/partial output is never reported as fabricated success.
+
+cmux is never selected solely from inherited socket/workspace variables.
+Set `FM_HOST=cmux` and `FM_CMUX_CALLER_WORKSPACE` only after verifying the
+conversation's actual caller; the focused workspace is not that evidence.
+In nested Herdr sessions use `FM_HOST=herdr` and verified `HERDR_*` context.
+`host.json` records effective selection; cmux `window.json` records observed
+identity, access mode and creation outcome. Label failures are not open windows.
+The supplied cmux 0.62.2 `cmuxOnly` reproduction rejects the session-owned
+launch after the tool shell exits even though foreground ping succeeds.
+For this nested deployment retain **cmuxOnly** and dispatch into Herdr with
+`FM_HOST=herdr`, `HERDR_PANE_ID`, `HERDR_TAB_ID` and `HERDR_WORKSPACE_ID`
+verified against the conversation. The outer cmux workspace is not a dispatch
+target. No password-mode configuration is required. Explicit cmux use probes
+access at the point of use and preserves actual socket/auth errors; authorized
+foreground cmuxOnly calls are allowed. Detached cmuxOnly control and safe cmux
+owner-exit closure are deferred, not claimed supported by foreground success.
+Password mode remains an optional operator-configured capability; fm does not
+change settings or retrieve secrets. Never enable allowAll or change socket
+permissions. Use `FM_HOST=none` and `fm follow` if no caller can be verified.
+See [the T-162 handoff](design/cmux-lifecycle.md) for the required real Herdr
+validation and traceable deferred cmux acceptance. A mock pass is insufficient.
 
 Options: `FM_TRANSPORT=direct` (no window), `FM_HOST`, `FM_AUTOCLOSE=0`, and
 `FM_STOP_GRACE` (seconds between a stop's TERM and KILL, default 5). A round

@@ -439,13 +439,36 @@ def options(rest,known):
   pos.append(rest[i]); i+=1
  return got,pos
 count=r/'cmux-workspaces'
+focus=r/'cmux-focus'
+def rows():
+ out=[dict(id='caller-uuid',ref='workspace:1',title='Captain')]
+ if count.exists():
+  for n in range(7,int(count.read_text())+1):
+   title=r/('cmux-title-workspace-'+str(n))
+   out.append(dict(id='uuid-'+str(n),ref='workspace:'+str(n),title=title.read_text() if title.exists() else 'Untitled'))
+ return out
+if a[:1]==['capabilities']:
+ print(json.dumps(dict(access_mode='password'))); sys.exit(0)
+if a[:1]==['list-workspaces']:
+ print(json.dumps(dict(workspaces=rows()))); sys.exit(0)
+if a[:1]==['current-window']:
+ print('window:1'); sys.exit(0)
+if a[:1]==['current-workspace']:
+ print(focus.read_text() if focus.exists() else 'workspace:1'); sys.exit(0)
+if a[:1]==['select-workspace']:
+ focus.write_text(a[2]); print('OK'); sys.exit(0)
+if a[:1]==['tree']:
+ print(json.dumps(next(row for row in rows() if row['ref']==a[2]))); sys.exit(0)
 if a[:1]==['new-workspace']:
  got,pos=options(a[1:],{'--cwd','--command'})
  if pos: sys.exit('Error: unexpected argument '+pos[0])
  n=int(count.read_text())+1 if count.exists() else 7; count.write_text(str(n))
+ focus.write_text('workspace:%d'%n)
  if '--command' in got:
-  subprocess.Popen(shlex.split(got['--command']),stdin=subprocess.DEVNULL,stdout=open(r/'cmux-shown','ab'),
-   stderr=subprocess.STDOUT,start_new_session=True)
+  sys.path.insert(0,str(r/'bin/lib'))
+  import fm_lifeline
+  fm_lifeline.start(shlex.split(got['--command']),owner=int(os.environ['FM_SESSION_PID']),
+   stdin=subprocess.DEVNULL,stdout=open(r/'cmux-shown','ab'),stderr=subprocess.STDOUT)
  print('OK workspace:%d'%n)
 elif a[:1]==['rename-workspace']:
  got,pos=options(a[1:],{'--workspace'})
