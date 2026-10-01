@@ -1,6 +1,68 @@
 from herdr import *
 
+class CallerContext(unittest.TestCase):
+    def test_complete_supplied_context_is_checked_before_creation_or_reuse(self):
+        expected = dict(pane_id='caller', tab_id='caller-tab', workspace_id='workspace')
+        context = dict(HERDR_PANE_ID='caller', HERDR_TAB_ID='caller-tab',
+                       HERDR_WORKSPACE_ID='workspace')
+        with tempfile.TemporaryDirectory() as tmp:
+            logical = Path(tmp); attempt = logical/'attempt'; attempt.mkdir()
+            for reuse in (False, True):
+                if reuse: m.save(logical/'pane.json', {'pane_id':'old-owned'})
+                for field in expected:
+                    for bad in ('other', '', None):
+                        with self.subTest(reuse=reuse, field=field, bad=bad):
+                            observed = dict(expected, **{field:bad}); calls = []
+                            def control(*args):
+                                calls.append(args)
+                                if args == ('pane', 'get', 'caller'): return dict(pane=observed)
+                                raise AssertionError('caller validation must precede ' + repr(args))
+                            with patch.dict(os.environ, context, clear=True), patch.object(m, 'Herdr', return_value=control):
+                                with self.assertRaisesRegex(RuntimeError, 'caller'):
+                                    m.open_herdr_window(attempt, logical, logical, 'worker-test', 'T-162', {}, 'follow')
+                            self.assertEqual([('pane', 'get', 'caller')], calls)
+    def test_matching_or_unspecified_membership_reaches_focus_read(self):
+        # Legacy pane-only detection remains valid; supplied membership is never ignored.
+        for extra in ({}, dict(HERDR_TAB_ID='caller-tab', HERDR_WORKSPACE_ID='workspace')):
+            calls = []
+            def control(*args):
+                calls.append(args)
+                if args == ('pane', 'get', 'caller'):
+                    return dict(pane=dict(pane_id='caller', tab_id='caller-tab', workspace_id='workspace'))
+                if args == ('api', 'snapshot'): raise RuntimeError('focus sentinel')
+                raise AssertionError(args)
+            with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, dict(HERDR_PANE_ID='caller', **extra), clear=True), patch.object(m, 'Herdr', return_value=control):
+                with self.assertRaisesRegex(RuntimeError, 'focus sentinel'):
+                    m.open_herdr_window(Path(tmp), Path(tmp), Path(tmp), 'worker-test', 'T-162', {}, 'follow')
+            self.assertEqual([('pane', 'get', 'caller'), ('api', 'snapshot')], calls)
+
 class Entrypoints(EntrypointsFixture):
+    def test_verified_nested_herdr_ignores_outer_cmux_and_requires_no_password(self):
+        # Explicit, independently verified context wins even without HERDR_ENV.
+        # cmux must never be invoked for this deployment.
+        (self.fake/'cmux').write_text('#!/bin/sh\necho unexpected-cmux >&2\nexit 99\n')
+        (self.fake/'cmux').chmod(0o755)
+        answer=self.invoke('fm-worker.sh',['--task','T-035'], FM_HOST='herdr',
+                           HERDR_ENV='0', HERDR_PANE_ID='caller',
+                           HERDR_TAB_ID='caller-tab', HERDR_WORKSPACE_ID='workspace',
+                           CMUX_WORKSPACE_ID='workspace:9', CMUX_SOCKET_PASSWORD='')
+        self.assertEqual(0,answer.returncode,answer.stderr)
+        result=json.loads(self.results()[0].read_text()); attempt=Path(result['attempt'])
+        host=json.loads((attempt/'host.json').read_text())
+        self.assertEqual('herdr',host['host'])
+        self.assertEqual('FM_HOST',host['source'])
+        self.assertTrue(host['inherited_cmux_context_ignored'])
+        self.assertEqual('caller',host['caller'])
+        owner=json.loads((attempt/'owner.json').read_text())
+        self.assertEqual(owner['focus_before'],owner['focus_after'])
+        pane=json.loads((self.repo/owner['pane_id']).read_text())
+        self.assertEqual(result['actor'],pane['label'])
+        window=json.loads((attempt/'window.json').read_text())
+        self.assertEqual('herdr',window['host'])
+        self.assertEqual(owner['pane_id'],window['pane'])
+        self.assertTrue((self.repo/'closed').exists())
+        self.assertEqual('completed',result['status'])
+
     def test_dedicated_tab_mapping_and_focus_for_each_role(self):
         for role in ('worker','review'):
             args=['--task','T-035'] + (['--branch','work'] if role=='review' else [])
@@ -224,7 +286,7 @@ class Entrypoints(EntrypointsFixture):
     def test_tmux_and_cmux_get_the_same_window_where_they_are_the_host(self):
         self.executable('tmux', self.TMUX_STUB)
         self.executable('cmux', self.CMUX_STUB)
-        for host,marker in (('tmux',dict(TMUX='/tmp/tmux-0/default,1,0')),('cmux',dict(CMUX_WORKSPACE_ID='workspace:1'))):
+        for host,marker in (('tmux',dict(TMUX='/tmp/tmux-0/default,1,0')),('cmux',dict(FM_HOST='cmux',FM_CMUX_CALLER_WORKSPACE='workspace:1'))):
             with self.subTest(host=host):
                 answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],HERDR_ENV='0',**marker)
                 self.assertEqual(0,answer.returncode,answer.stderr)
@@ -239,25 +301,31 @@ class Entrypoints(EntrypointsFixture):
                     self.assertEqual('@8',window['ref'])
                 else:
                     # opened, then labelled by the ref cmux answered with, then closed by it
-                    self.assertEqual(['new-workspace','--cwd'],calls[0][:2])
-                    self.assertIn(' follow ',calls[0][calls[0].index('--command')+1])
-                    self.assertEqual(['rename-workspace','--workspace','workspace:7',actor],calls[1])
+                    created=next(c for c in calls if c[0]=='new-workspace')
+                    self.assertEqual(['new-workspace','--cwd'],created[:2])
+                    self.assertIn(' follow ',created[created.index('--command')+1])
+                    self.assertIn(['rename-workspace','--workspace','workspace:7',actor],calls)
+                    self.assertEqual('workspace:1',(self.repo/'cmux-focus').read_text())
                     self.assertEqual(actor,(self.repo/'cmux-title-workspace-7').read_text())
                     self.assertEqual(['close-workspace','--workspace','workspace:7'],calls[-1])
                     self.assertEqual('closed',window['status'])
                 self.assertFalse((self.repo/'controls').exists())
 
-    def test_a_cmux_workspace_that_cannot_be_labelled_is_still_closed(self):
+    def test_a_cmux_workspace_that_cannot_be_labelled_is_retained_and_not_reported_open(self):
         self.executable('cmux', self.CMUX_STUB.replace("elif a[:1]==['rename-workspace']:",
                                                        "elif a[:1]==['rename-workspace']:\n sys.exit('Error: denied')\nelif False:"))
-        answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],HERDR_ENV='0',CMUX_WORKSPACE_ID='workspace:1')
+        answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'],HERDR_ENV='0',FM_HOST='cmux',FM_CMUX_CALLER_WORKSPACE='workspace:1')
         self.assertEqual(0,answer.returncode,answer.stderr)
         calls=[json.loads(s) for s in (self.repo/'cmux-calls').read_text().splitlines()]
-        self.assertEqual(['close-workspace','--workspace','workspace:7'],calls[-1])
+        self.assertFalse(any(c[0]=='close-workspace' for c in calls))
+        self.assertEqual('workspace:1',(self.repo/'cmux-focus').read_text())
         result=json.loads(self.results()[0].read_text())
         self.assertEqual('completed',result['status'])
         window=json.loads((Path(result['attempt'])/'window.json').read_text())
         self.assertIn('rename-workspace',window['reason'])
+        self.assertIn('Error: denied',window['reason'])
+        self.assertEqual('none',window['status'])
+        self.assertEqual('workspace:7',window['ref'])
 
     def test_the_stand_ins_refuse_what_the_real_tools_refuse(self):
         # A fixture test: it guards "stand-ins answer as the real tools do" and is not fail-first evidence for T-144.
@@ -280,7 +348,8 @@ class Entrypoints(EntrypointsFixture):
         self.assertEqual('none',host())
         self.assertEqual('herdr',host(HERDR_ENV='1'))
         self.assertEqual('tmux',host(TMUX='/tmp/x,1,0'))
-        self.assertEqual('cmux',host(CMUX_WORKSPACE_ID='w'))
+        self.assertEqual('none',host(CMUX_WORKSPACE_ID='w'))
+        self.assertEqual('cmux',host(FM_HOST='cmux',CMUX_WORKSPACE_ID='w'))
         self.assertEqual('none',host('host: none\n',HERDR_ENV='1'))
         self.assertEqual('tmux',host('host: tmux  # a window\n'))
         self.assertEqual('herdr',host('host: herdr\n'))
