@@ -241,3 +241,35 @@ provenance; arbitrary custom adapters and the scripted mock do not inherit that
 guarantee. Transport/configuration failures return 70 and are not vendor outages
 or successful work. Successful CLI/adapter exit is distinct from explicit task
 completion, a reviewer verdict, gates and captain acceptance.
+
+### Codex run reviews (T-163)
+
+Codex's run-review marker is admission to the vendor chain only. Execution
+requires the managed transport's invocation record, matching reviewer identity,
+an absolute fresh clone with its own `.git`, no remote, and the pinned head and
+base refs. The launcher pins head/base/patch before cloning and uses those same
+commits on recovery. Extra adapter arguments and the unsandboxed escape hatch
+are refused for Codex run reviews.
+
+The outer OS sandbox remains mandatory on macOS and Linux. The checkout and
+round temp are the only writable roots; the checkout's `.git` is read-only,
+repository `.codex` configuration is hidden, and Codex's project-document loading
+is disabled. Model selection and the isolated login copy use the existing paths.
+Transport records and final answers are outside model write roots.
+
+The trusted transport reads `codex exec --json`: only the last completed
+`agent_message` of a completed turn supplies the final answer. Tool output and
+failed or unfinished turns supply none. It records the answer digest, provenance,
+identity, chain attempt and review context. The review consumer requires that
+binding, a standalone verdict and the final completion marker, and never falls
+back to transcript or output-directory bytes for Codex. A CLI-written final file
+is not reviewer evidence. Cleanup consults managed execution locks as well as
+the launcher's owner lock; live or uncertain descendants retain their checkout.
+
+Mocks exercise this contract but do not prove confinement or real CLI output
+compatibility. Before acceptance, firstmate must run CI/gates, the real macOS
+sandbox canary and a stock Codex run review through a verified immutable candidate
+snapshot, recording authentication/start, checkout/head, denied access, final
+provenance and cleanup. This change needs independent bootstrap review before
+it can supply reviews for other changes; no fake approval, unsandboxed review or
+silent Claude fallback resolves that dependency.
