@@ -95,6 +95,7 @@ usage: fm.sh <command> [options]
         and service records keyed by the old names stay with those names.
 
   board [--repo DIR]
+        Uses config.yaml board.port (4173 by default); FM_PORT overrides it.
         Open or reopen the captain's board: start it or reuse it, then
         send the browser to a one-time sign-in address (good once, for
         60 seconds). A tab already on the board (Chrome, Safari, Arc or

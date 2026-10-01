@@ -100,10 +100,18 @@ bin/ci.sh                   # the one gate - CI runs this same file
 
 `fm setup` asks which installed vendor crews as worker and as reviewer, whether
 each bills to its subscription or per API use inside the sandbox, and the main
-repository and base branch - each with a recommended default that Enter
+repository and base branch, board port (4173), and language (`en` or `zh-TW`,
+default `en`) - each with a recommended default that Enter
 accepts - then writes only those answers to `config.yaml` (a model, the
 reviewer's mode and everything else there are left as they were) and runs
-`fm doctor --sandbox`. It never asks for or stores a
+`fm doctor --sandbox`. `board.port` sets the listening address and the address
+`fm board` signs into; `FM_PORT` overrides it for one-offs. Setup refuses an
+occupied port unless it verifies this repository's board. `language` sets the
+board's initial language, the first language of decision cards, and firstmate's
+reports; a viewer's saved toggle or `?lang=` overrides their own display.
+The answers file keys are `board_port` and `language`. Re-running setup keeps
+both saved values as the Enter defaults. Restart the board after changing its
+settings. It never asks for or stores a
 secret itself: for a key (cursor-agent's, say) it prints the exact keychain
 command to run. `fm doctor` alone checks the same toolchain and vendor logins
 on demand, and `--fix` installs a missing pinned tool through `mise`, asking

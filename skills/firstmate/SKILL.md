@@ -24,6 +24,19 @@ finish all PRs and elapsed time are neither captain merge approval nor
 permission to widen scope. Continue independent authorized tasks while a
 decision waits.
 
+## Captain language
+
+At startup, read `config.yaml` through `. bin/fm-config.sh; fm_language config.yaml`.
+The setting is `language: en` or `language: zh-TW`, default `en`. Report to the
+captain in that language unless the captain explicitly requests another one.
+Re-read it before authoring a decision or report if setup or config changed.
+Author a decision's configured language first and place that key first in its
+`--details` JSON, followed by the other translation. Both `en` and `zh-TW`
+remain required in every card and dynamic event summary. The board starts with
+the configured language and orders its language choices with that language
+first; a viewer's saved toggle or explicit `?lang=` still overrides the display.
+Repository prose, code reviews and worker notes remain English.
+
 ## Standing orders
 
 The captain's own rules, restated here where they are easy to find:
@@ -148,7 +161,8 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
    table in dispatch-crew — report the limitation; do not invent a bypass.
 4. Start or reuse the captain board. The shipped server command is
    `FM_ROOT=<root> bun --watch board/server.ts` from the repository, with
-   `FM_PORT` defaulting to 4173 and a loopback URL. Check the existing server's
+   `board.port` from `config.yaml` (default 4173), overridden by `FM_PORT`,
+   and a loopback URL. Check the existing server's
    root and HTTP response before reuse. Open it, at startup and whenever the
    captain asks, with `bin/fm.sh board --repo <root>` (`fm-session.sh start`
    does the same): it sends the browser to a one-time `/login#<code>` address,
@@ -505,7 +519,7 @@ or verification hooks; use repository checks and actual CI evidence.
 Report commands actually executed, their observable results and limitations.
 Never claim a board, worker, test, hook removal, commit or PR action succeeded
 without evidence. Static repository instructions and reviews are English; user
-conversation may be Chinese. Dynamic user-facing board/event summaries require
+reports follow `config.yaml`'s language unless the captain asks otherwise. Dynamic user-facing board/event summaries require
 both `en` and `zh-TW`; static UI dictionaries do not translate those summaries.
 Only `bin/fm-emit.sh` appends events.
 

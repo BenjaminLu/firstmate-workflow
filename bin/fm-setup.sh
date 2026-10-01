@@ -159,9 +159,19 @@ else
   echo "fm setup: gh is not installed; fm doctor says how to get it" >&2
 fi
 
-# The board's port and the language for cards and reports are not asked:
-# nothing reads either as a setting yet, so an answer would change nothing
-# (the captain moved both to T-154, 2026-09-29).
+# Saved answers are the defaults on a re-run, independent of FM_PORT overrides.
+port_default="$(fm_cfg_in board port config.yaml 2>/dev/null)"
+language_default="$(fm_cfg language config.yaml 2>/dev/null)"
+ask board_port "Board port" "${port_default:-4173}"
+board_port="$REPLY"
+if [[ ! "$board_port" =~ ^[0-9]{1,5}$ ]] || [ "$((10#$board_port))" -lt 1 ] || [ "$((10#$board_port))" -gt 65535 ]; then
+  echo "fm setup: board_port must be between 1 and 65535" >&2; exit 64
+fi
+board_port="$((10#$board_port))"
+ask language "Language for the board, decision cards and reports (en/zh-TW)" "${language_default:-en}"
+language="$REPLY"
+case "$language" in en|zh-TW) ;; *) echo "fm setup: language must be en or zh-TW" >&2; exit 64 ;; esac
+python3 "$HERE/fm-herdr.py" board-check-port "$repo" "$board_port" || exit $?
 
 project_name="$(fm_cfg default_project config.yaml 2>/dev/null)"
 [ -n "$project_name" ] || project_name="${repo_github##*/}"
@@ -188,6 +198,8 @@ fi
 # said, not changed.
 [ -f config.yaml ] || printf '# firstmate-workflow\n\nvendor: %s\n' "$worker_vendor" > config.yaml
 
+set_kv board.port "$board_port"
+set_kv language "$language"
 set_kv vendor "$worker_vendor"
 set_kv reviewer.vendor "$reviewer_vendor"
 if [ -n "$old_model" ] && [ -n "$old_vendor" ] && [ "$old_vendor" != "$worker_vendor" ]; then

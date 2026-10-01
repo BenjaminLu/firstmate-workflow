@@ -1753,7 +1753,7 @@ test("a crewman turns under the pointer, and the ahoy fires", async ({ page }) =
 test("nothing here can reach a model", async () => {
   // structural, not a promise: the fixture root has no adapters in it, so
   // there is nothing for the board to shell out to even if it tried. The
-  // only scripts it may spawn are the merge recorder, the registry reader
+  // only scripts it may spawn are the merge recorder, the registry/settings reader
   // and the lifeline keeper the merge runs under, and they are the whole
   // contents of its bin/.
   //
@@ -1762,7 +1762,8 @@ test("nothing here can reach a model", async () => {
   // to a model is fm_run_chain, which runs bin/adapters - absent above - and
   // the board calls nothing from fm-config.sh but the registry readers
   // (fm_projects since T-054, to know every project's repository and tasks)
-  // and fm_tasks, which only reads task directories (T-090).
+  // and fm_tasks, which only reads task directories (T-090), plus
+  // fm_board_port and fm_language, which read config.yaml settings (T-154).
   //
   // fm_lifeline is not an fm-config.sh function: it is server.ts's path to
   // bin/lib/fm_lifeline.py, the lifeline module the merge helper runs under
@@ -1774,7 +1775,7 @@ test("nothing here can reach a model", async () => {
   // lib/ is the lifeline (T-151): the keeper a merge runs under, nothing that calls a model
   expect(readdirSync(join(board.root, "bin/lib")).sort()).toEqual(["fm-lifeline.sh", "fm_lifeline.py"]);
   const called = new Set(readFileSync(join(board.root, "board/server.ts"), "utf8").match(/\bfm_[a-z_]+/g) ?? []);
-  expect([...called].sort()).toEqual(["fm_lifeline", "fm_project_get", "fm_project_resolve", "fm_projects", "fm_tasks"]);
+  expect([...called].sort()).toEqual(["fm_board_port", "fm_language", "fm_lifeline", "fm_project_get", "fm_project_resolve", "fm_projects", "fm_tasks"]);
 });
 
 test("no cards retains one idle captain aboard", async ({ page }) => {
@@ -2455,4 +2456,57 @@ test('T-118: reopening moves a merged card out of merged, and a card under a fin
     await page.locator('#card-D-1119 .confirm').click();
     await expect.poll(() => existsSync(b.recorder) ? readFileSync(b.recorder,'utf8') : '').toContain('--pr 97 --task T-117');
   } finally {stopBoard(b);}
+});
+
+// T-154: real HTTP listener, credential port and browser preference precedence.
+for (const language of ['en', 'zh-TW']) {
+  test(`configured port and ${language} default reach cards; viewer toggle persists`, async ({page}) => {
+    const root = makeRoot(['working']);
+    writeFileSync(join(root, 'config.yaml'), `language: ${language}\n`);
+    const other = language === 'en' ? 'zh-TW' : 'en';
+    const cardPath = join(root, 'state/pending/D-1.json');
+    const card = JSON.parse(readFileSync(cardPath, 'utf8'));
+    // Deliberately opposite to the setting, so both cases require reordering.
+    card.details = { [other]: details[other], [language]: details[language], effect: { C: 'park' } };
+    writeFileSync(cardPath, JSON.stringify(card));
+    const b = await startBoard(root, {}, true);
+    try {
+      await page.goto(b.url);
+      await expect(page.locator('html')).toHaveAttribute('lang', language);
+      await expect(page.locator('.dcard').first()).toContainText(details[language].title);
+      await expect(page.locator('#langs button').first()).toHaveAttribute('data-l', language);
+      const state = await (await page.request.get(`${b.url}/api/state`)).json();
+      expect(Object.keys(state.pending[0].details).filter(k => ['en', 'zh-TW'].includes(k)))
+        .toEqual([language, other]);
+      expect(state.pending[0].details[language]).toEqual(details[language]);
+      expect(state.pending[0].details[other]).toEqual(details[other]);
+      expect(state.pending[0].details.effect).toEqual({ C: 'park' });
+      expect(JSON.parse(readFileSync(cardPath, 'utf8'))).toEqual(card);
+      await page.locator(`#langs [data-l="${other}"]`).click();
+      await page.reload();
+      await expect(page.locator('html')).toHaveAttribute('lang', other);
+      await expect(page.locator('.dcard').first()).toContainText(details[other].title);
+    } finally { stopBoard(b); }
+  });
+}
+test('FM_PORT overrides a configured board port', async ({page}) => {
+  const root = makeRoot(['working']);
+  writeFileSync(join(root, 'config.yaml'), 'board:\n  port: 1\n');
+  const b = await startBoard(root);
+  try {
+    await page.goto(b.url);
+    await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+  } finally { stopBoard(b); }
+});
+
+test('a fixture without the config reader still honours FM_PORT and defaults to English', async ({page}) => {
+  const root = makeRoot(['working']);
+  unlinkSync(join(root, 'bin/fm-config.sh'));
+  writeFileSync(join(root, 'config.yaml'), 'board:\n  port: 1\nlanguage: zh-TW\n');
+  const b = await startBoard(root);
+  try {
+    await page.goto(b.url);
+    await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+    await expect(page.locator('.dcard').first()).toContainText(details.en.title);
+  } finally { stopBoard(b); }
 });

@@ -47,6 +47,32 @@ fm_cfg_list() { # fm_cfg_list <section> [file]
     | sed -n 's/^[[:space:]]*-[[:space:]]*//p' | _fm_clean
 }
 
+# Board settings share one reader across the CLI, wizard and server (T-154).
+# Configured ports are stable addresses; FM_PORT=0 is reserved for test servers.
+fm_board_port() {
+  local value source min=1
+  if [ "${FM_PORT+x}" = x ]; then
+    value="$FM_PORT"; source=FM_PORT; min=0
+  else
+    value="$(fm_cfg_in board port "${1:-config.yaml}" 2>/dev/null || true)"
+    value="${value:-4173}"; source=board.port
+  fi
+  if [[ ! "$value" =~ ^[0-9]{1,5}$ ]] || [ "$((10#$value))" -lt "$min" ] || [ "$((10#$value))" -gt 65535 ]; then
+    echo "fm-config: $source is not a port: '$value'" >&2; return 64
+  fi
+  printf '%s\n' "$((10#$value))"
+}
+
+fm_language() {
+  local value
+  value="$(fm_cfg language "${1:-config.yaml}" 2>/dev/null || true)"
+  value="${value:-en}"
+  case "$value" in
+    en|zh-TW) printf '%s\n' "$value" ;;
+    *) echo "fm-config: language must be en or zh-TW: '$value'" >&2; return 64 ;;
+  esac
+}
+
 # The one writer (T-121), for fm setup: fm_cfg_set <dotted.key> <value> [file].
 # It patches lines, it never rewrites the file: the key's own line is
 # replaced, every block along the dotted path is created when missing,

@@ -152,12 +152,14 @@ class Session(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 2)
     def test_board_reuse_does_not_spawn_and_wrong_root_is_refused(self):
         with patch.object(m,'board_matches',return_value=True), patch.object(m,'http_get',return_value=b'page'), \
-             patch.object(m.shutil,'which',return_value=None), patch.object(m.subprocess,'Popen') as spawn:
+             patch.object(m.shutil,'which',return_value=None), patch.object(m, 'configured_board_port', return_value=4173), \
+             patch.object(m.subprocess,'Popen') as spawn:
             reply=m.board_start(self.repo)
             self.assertTrue(reply['reused']); self.assertTrue(reply['page_http_verified'])
             self.assertFalse(reply['opener_invoked']); self.assertFalse(reply['browser_navigation_verified'])
             self.assertFalse(spawn.called)
         with patch.object(m,'board_matches',return_value=False), patch.object(m,'http_get',return_value=b'foreign'), \
+             patch.object(m, 'configured_board_port', return_value=4173), \
              patch.object(m.subprocess,'Popen') as spawn:
             with self.assertRaisesRegex(RuntimeError,'unverified root'): m.board_start(self.repo)
             self.assertFalse(spawn.called)
@@ -226,6 +228,7 @@ class Session(unittest.TestCase):
              patch.object(m,'board_matches',return_value=True), patch.object(m,'http_get',return_value=b'page'), \
              patch.object(m.sys,'platform','linux'), patch.object(m.shutil,'which',side_effect=which), \
              patch.object(m,'open_address',side_effect=lambda a: opened.append(a) or True), \
+             patch.object(m, 'configured_board_port', return_value=4173), \
              patch.object(m.subprocess,'Popen') as spawn:
             record=m.board_start(self.repo)
         self.assertFalse(spawn.called)
@@ -477,6 +480,7 @@ class Session(unittest.TestCase):
              patch.object(m, 'http_get', side_effect=[OSError('nothing there'), b'page']), \
              patch.object(m.shutil, 'which', side_effect=lambda name: '/usr/bin/bun' if name == 'bun' else None), \
              patch.object(m.lifeline(), 'start', side_effect=start), \
+             patch.object(m, 'configured_board_port', return_value=4173), \
              patch.object(m.subprocess, 'Popen', side_effect=AssertionError('started without a lifeline')):
             record = m.board_start(self.repo)
         self.assertEqual(1, len(started))
@@ -494,9 +498,14 @@ class Session(unittest.TestCase):
         except PermissionError as error:
             self.skipTest('loopback bind prohibited: '+str(error))
         shutil.copytree(root/'board',self.repo/'board')
+        (self.repo / 'config.yaml').write_text(f'board:\n  port: {port}\n')
         children=[]; original=m.subprocess.Popen
         def spawn(*args,**kwargs):
-            child=original(*args,**kwargs); children.append(child); return child
+            child=original(*args,**kwargs)
+            # Count board launches by their script, independent of the
+            # interpreter used by foreground settings readers.
+            if str(self.repo.resolve() / 'board/server.ts') in args[0]: children.append(child)
+            return child
         # T-122: the board's secret goes under XDG_CONFIG_HOME, here a directory
         # of this test's own outside the fixture root, never the operator's home
         config=tempfile.TemporaryDirectory(); self.addCleanup(config.cleanup)
@@ -507,7 +516,7 @@ class Session(unittest.TestCase):
         session=original(['sleep','300'],stdin=subprocess.DEVNULL)
         self.addCleanup(lambda: (session.poll() is None and session.kill(), session.wait()))
         try:
-            with patch.dict(os.environ,{'FM_PORT':str(port),'XDG_CONFIG_HOME':config.name,'FM_SESSION_PID':str(session.pid)}), \
+            with patch.dict(os.environ,{'XDG_CONFIG_HOME':config.name,'FM_SESSION_PID':str(session.pid)}), \
                  patch.object(m.shutil,'which',side_effect=lambda name: bun if name=='bun' else '/usr/bin/'+name if name=='xdg-open' else None), \
                  patch.object(m.sys,'platform','linux'), \
                  patch.object(m,'open_address',side_effect=browser), \
@@ -517,6 +526,7 @@ class Session(unittest.TestCase):
                 second=m.board_start(self.repo)
                 self.assertTrue(second['reused']); self.assertEqual(1,len(children))
                 other=self.repo/'other'; other.mkdir()
+                (other / 'config.yaml').write_text(f'board:\n  port: {port}\n')
                 with self.assertRaisesRegex(RuntimeError,'unverified root'): m.board_start(other)
                 # the browser was sent to a one-time sign-in address each time,
                 # and the real board takes each code once and only once

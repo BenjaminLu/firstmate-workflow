@@ -85,7 +85,7 @@ These bind every actor, including firstmate itself.
 | R9 | Hot reload | SSE pushes `reload` to the front end; `bun --watch` restarts the server |
 | I1 | Dynamic board content | Agents write the tri-lingual payload at emit time |
 | I2 | Where the three come from | Agents produce `en` and `zh-TW`; `zh-CN` is a table conversion |
-| I3 | Language preference | `localStorage`, overridable with `?lang=`, default `zh-TW` |
+| I3 | Language preference | `localStorage`, overridable with `?lang=`, default from config `language` (`en` when absent) |
 | I4 | Diagram languages | `.en.html` and `.zh-TW.html`; `zh-CN` post-processed |
 | I5 | e2e languages | Chrome snapshots in all three; interaction flows in `zh-TW` only |
 | I6 | Working language | **Superseded.** Everything in the repository is English; only the board is tri-lingual |
@@ -335,8 +335,9 @@ sit unseen while the captain is not looking at the board, so inside Herdr
 successful `fm-decide.sh --request`, of any kind, merge included, calls
 `herdr notification show` once: the title names the project, the task and
 the kind, the body is the card's one-line question in the captain's
-language, `zh-TW`, the board's default locale (I3; the board's own choice
-lives in `localStorage`, where no script can read it), and the sound is
+language as originally implemented, `zh-TW` (this notification still uses
+that fixed locale; T-154 changes the board and authored report defaults,
+not the notification script), and the sound is
 `request`. The project is the one the card is filed under: the project it
 records, else, as the board reads a card that records none, `default_project`,
 else the self project. `FM_PROJECT` matters only through the card it chose.
@@ -2158,8 +2159,18 @@ Only the board is tri-lingual. The repository is English (section 1).
   string that is not in the dictionary.
 - Diagrams render `.en.html` and `.zh-TW.html`; `zh-CN` post-processes the text
   nodes.
-- The preference lives in `localStorage`, `?lang=` overrides it, default
-  `zh-TW`.
+- The preference lives in `localStorage`, and `?lang=` overrides it. Without
+  either, `config.yaml`'s `language` (`en` or `zh-TW`, default `en`) applies.
+  The configured language comes first in the language choices and authored
+  decision details. The board also orders each pending card's translated
+  details with that language first in its state response, preserving the
+  other translations and metadata without rewriting the authored file.
+  Firstmate reports to the captain in that language unless
+  explicitly asked otherwise; both translations remain required on cards.
+- `board.port` (default 4173) selects the board listener and `fm board`'s
+  login address, credential file and tab reuse. `FM_PORT` overrides it;
+  only a directly started server accepts `FM_PORT=0` for an ephemeral test
+  port. Restart the server after changing settings.
 
 ---
 
@@ -4252,9 +4263,11 @@ for itself, each with a recommended default that Enter accepts: which
 installed vendor crews as worker and as reviewer (a different installed one
 recommended for review when two are usable); whether each bills to its
 subscription or per API use; the main repository and base branch (checking
-`gh auth status` and, where `gh` can say, push rights). The board's port and
-the language for cards and reports are not asked: nothing reads either as a
-setting yet, so the captain moved both to T-154 (2026-09-29). `--answers FILE` (`key: value`,
+`gh auth status` and, where `gh` can say, push rights); the board port
+(default 4173) and language (`en` or `zh-TW`, default `en`). Existing port
+and language settings become the defaults on re-run (T-154). Setup refuses
+an occupied port unless a nonce verifies this repository's board, including
+a listener that does not speak HTTP. No configuration is written on refusal. `--answers FILE` (`key: value`,
 one per line, read with `fm_cfg`, the same reader as `config.yaml`) answers
 a question without a prompt; a key that file does not name is still asked,
 so a file naming nothing is "every default", which is also what a closed
@@ -4265,7 +4278,7 @@ overwrite what it does not own: an existing `config.yaml`'s `policy:`,
 `project:`, `projects:`, `notifications:`, `fallback:` blocks and any other
 top-level key survive a re-run untouched, and only what was answered - the
 worker and reviewer vendor, an api-key billing choice, the project's
-repository and base - is added or replaced, through `fm_cfg_set` (`bin/fm-config.sh`, the
+repository and base, board port and language - is added or replaced, through `fm_cfg_set` (`bin/fm-config.sh`, the
 one writer beside the one reader), which creates every block and key along
 a dotted path that is missing and touches nothing else, and changes only a
 value, keeping the line's own spacing and comment (a value already set is

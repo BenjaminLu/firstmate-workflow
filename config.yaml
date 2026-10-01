@@ -1,5 +1,9 @@
 # firstmate-workflow
 
+board:
+  port: 4173            # FM_PORT overrides this for a one-off server
+language: en            # en or zh-TW; viewer preferences still win
+
 vendor: codex           # every role uses this agent unless overridden below;
                         # the captain's choice on 2026-09-29: codex workers
 models:                 # each vendor's own model name (T-146), applied with
