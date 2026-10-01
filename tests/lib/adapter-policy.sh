@@ -17,8 +17,18 @@ printf 'tcp4       0      0  127.0.0.1.5555         *.*                    LISTE
 S
 chmod +x "$pv/fakebin/netstat"
 confined() {   # confined <os> <tool> <policy> <vendor> -> its exit code; argv in $pv/argv, env in $pv/env
-  printf '#!/usr/bin/env bash\ncat > /dev/null\nprintf "%%s\\n" "$@" > "%s/argv"\nenv > "%s/env"\nprintf "ran\\n"\nexit 0\n' \
+  printf '#!/usr/bin/env bash\ncat > /dev/null\nprintf "%%s\\n" "$@" > "%s/argv"\nenv > "%s/env"\nprintf "ran\\n"\n' \
     "$pv" "$pv" > "$pv/fakebin/$4"
+  if [ "$4" = codex ]; then
+    # Managed Codex success requires its actual completed-turn JSONL shape.
+    cat >> "$pv/fakebin/$4" <<'S'
+cat <<'JSONL'
+{"type":"turn.started"}
+{"type":"item.completed","item":{"type":"agent_message","text":"Fixture completed"}}
+{"type":"turn.completed"}
+JSONL
+S
+  fi
   chmod +x "$pv/fakebin/$4"
   rm -f "$pv/argv" "$pv/env" "$pk/profile.sb" "$pk/bwrap.args"
   FM_SANDBOX_OS="$1" FM_SANDBOX_TOOL="$2" FM_POLICY="$3" PATH="$pv/fakebin:$closed_path" \

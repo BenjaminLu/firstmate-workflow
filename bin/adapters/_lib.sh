@@ -17,7 +17,7 @@
 # window, a list of phrases "only a CLI says") all failed the same way: each
 # described the outages I happened to have rather than what an outage is.
 #
-# So what is here is deliberately generous and deliberately not final: one
+# For legacy calls and other vendors this is deliberately generous: one
 # list of signatures, matched anywhere in the run's own output, on any exit
 # code. No window, no error-line requirement - both were constants chosen to
 # fit fixtures.
@@ -30,6 +30,7 @@
 #
 # The fallback chain appends to one log, so a verdict only ever reads the
 # bytes its own run added.
+# Managed Codex instead reads typed CLI errors and completed turns (T-167).
 
 # Every alternative here has to be shaped like a failure. Bare nouns are
 # what a healthy run prints on its way up: gemini says "Loaded cached
@@ -616,7 +617,56 @@ fm_adapter_model_args() {
   printf '%s\n%s\n' "$1" "$FM_MODEL"
 }
 
-# fm_adapter_verdict <rc> <log> <offset> -> 0 done / 1 unfit / 2 unavailable
+# Managed Codex: item payloads are model/tool content, never provider errors.
+# Read only this invocation's bytes; final.txt and prior receipts are not inputs.
+# Reuse the transport's completed-turn reader, without writing any receipt or
+# final answer. The temporary slice belongs to the adapter outside the model.
+fm_adapter_codex_verdict() {
+  python3 - "$_fm_engine" "$1" "$2" "$3" "$_FM_SIG" "$FM_ROUND_CTL" <<'PY'
+import importlib.util, json, pathlib, re, sys, tempfile
+sys.dont_write_bytecode = True
+root, rc, log, offset, signature, control = sys.argv[1:]
+rc = int(rc)
+try:
+    with open(log, 'rb') as source:
+        source.seek(int(offset))
+        text = source.read().decode('utf-8')
+except (OSError, ValueError, UnicodeError):
+    sys.exit(2 if rc in (2, 4, 41, 69, 75) else 1)
+failed = malformed = unavailable = False
+for line in text.splitlines():
+    if not line.strip(): continue
+    try:
+        event = json.loads(line)
+    except ValueError:
+        # Broken JSON is not a CLI diagnostic, and cannot rescue a truncated
+        # transcript even if an earlier turn completed successfully.
+        if line.lstrip().startswith(('{', '[')):
+            malformed = True
+        elif re.search(signature, line, re.I):
+            unavailable = True
+        continue
+    if not isinstance(event, dict) or not isinstance(event.get('type'), str):
+        malformed = True
+        continue
+    if event['type'] in ('error', 'turn.failed'):
+        failed = True
+        diagnostic = json.dumps({key: event[key] for key in ('message', 'error') if key in event})
+        if re.search(signature, diagnostic, re.I): unavailable = True
+if unavailable or rc in (2, 4, 41, 69, 75): sys.exit(2)
+if rc != 0 or failed or malformed: sys.exit(1)
+spec = importlib.util.spec_from_file_location('managed', pathlib.Path(root) / 'bin/fm-herdr.py')
+managed = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(managed)
+with tempfile.TemporaryDirectory(prefix='fm-codex-verdict-', dir=control) as directory:
+    current = pathlib.Path(directory) / 'current.jsonl'
+    current.write_text(text)
+    answer = managed.cli_final('codex', current)
+sys.exit(0 if answer is not None and answer.strip() else 1)
+PY
+}
+
+# fm_adapter_verdict <rc> <log> <offset> [vendor] -> 0 done / 1 unfit / 2 unavailable
 fm_adapter_verdict() {
   local rc="$1" log="$2" off="$3" said=''
   [ -z "${FM_ATTEMPT_DIR:-}" ] || printf '%s\n' "${FM_CLI_EXIT:-$rc}" > "$FM_ATTEMPT_DIR/cli-exit-code"
@@ -629,6 +679,11 @@ fm_adapter_verdict() {
   if [ -n "${FM_ROUND_STARTED:-}" ] && ! grep -qx started "$FM_ROUND_STARTED" 2>/dev/null; then
     echo "adapter: the OS sandbox did not start the CLI (exit $rc); counting the vendor unavailable" >&2
     return 2
+  fi
+
+  if [ "${4:-}" = codex ] && [ -n "${FM_ATTEMPT_DIR:-}" ]; then
+    fm_adapter_codex_verdict "$rc" "$log" "$off"
+    return $?
   fi
 
   # a here-string, not a pipeline: under `set -o pipefail` a grep -q that

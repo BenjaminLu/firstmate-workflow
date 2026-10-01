@@ -1,0 +1,24 @@
+{
+  "id": "T-167",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-163"
+  ],
+  "title": "Codex managed worker availability follows real CLI errors rather than quoted model/tool transcript text",
+  "scope": [
+    "bin/adapters/_lib.sh",
+    "bin/adapters/codex.sh",
+    "bin/adapters/_contract.md",
+    "tests/**",
+    "design/tasks/T-167.json",
+    "design/T-167-validation.md"
+  ],
+  "acceptance": [
+    "Why: Captain authorized overnight completion of existing PR repairs and external repository dispatch. Actual worker-shira-t164-r2 and worker-ayo-t162-r2 produced authenticated Codex completed-turn final WORKER_COMPLETE, CLI exit0 and verified final provenance, but adapter exit2. _FM_SIG matched six quoted eNotFound occurrences in T164 JSON command output and two quoted authentication required/not logged in terms in T162 model/tool transcript. This falsely announces unavailable, interferes with completion cleanup and is a prerequisite for trustworthy external worker dispatch. Commit this task spec.",
+    "For managed Codex JSONL runs, distinguish real CLI/provider errors and nonzero launch/CLI outcomes from strings inside model messages, quoted code, tool arguments/results and instructions. A completed current invocation with CLI0 and valid completed-turn final WORKER_COMPLETE must not become unavailable solely because those fields quote authentication/quota/network text. Preserve real launch/login refusal, actual auth/quota/network errors, nonzero CLI failures and their configured fallback behavior. Do not blindly remove provider error checks or treat all CLI0 logs as trustworthy completion.",
+    "Bind evidence to the current attempt and role. Preserve T163 reviewer final-answer provenance, sandbox boundaries and recovery logic. Do not grant model write access to transport receipts. Non-managed/legacy and other vendors keep their existing explicit contracts unless a required compatible helper change is proven and tested; no broad T149 stream telemetry implementation.",
+    "Fail-first regressions include the actual completed-worker JSONL shape with quoted ENOTFOUND and login text in command output/model text, real structured error/turn.failed provider auth/quota/network events, launch failures, nonzero CLI exits, absent final and stale attempt evidence. Verify completed final-only role status and CLI/adapter outcomes are consistent, without weakening malformed/truncated-stream handling. Standard CI/gates and firstmate real stock round validate; workers do not run suites or models.",
+    "Firstmate records one real Codex stock worker from the immutable candidate with quoted fixture/error text, actual CLI0, terminal WORKER_COMPLETE, correct adapter classification and truthful Herdr ownership/completion/retention evidence. Approval remains independent and current-head CI/six gates required."
+  ]
+}

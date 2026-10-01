@@ -126,6 +126,23 @@ The fallback chain appends to one log, so a verdict only ever reads the bytes
 its own run added - the previous vendor's auth error must not condemn the
 next one.
 
+**Managed Codex JSONL (T-167)** uses a narrower classifier. Only top-level
+`error` and `turn.failed` diagnostic fields, plus non-JSON CLI diagnostics,
+are searched for outage signatures. Model messages, instructions, tool
+arguments and tool results cannot announce a provider outage. Launch refusal
+and unavailable exit codes still return `2`; other nonzero exits and structured
+failures return `1`. A failed transcript writer still fails the adapter while
+the separate CLI exit receipt preserves the CLI's own outcome.
+
+Exit `0` additionally requires a nonempty final answer from the transport's
+completed-turn reader. Malformed JSON, absent finals and unfinished turns
+return `1`. Classification reads only the bytes appended by this invocation,
+never an existing final file or an earlier attempt's receipt. It neither
+creates completion evidence nor grants any new sandbox write roots. The
+transport still binds final provenance and role/task completion separately;
+a completed turn with a blocked or unmarked final is not completed role work.
+Legacy Codex invocations and other vendors retain the signature contract above.
+
 `mock.sh` is the exception, deliberately. It has no CLI to read a verdict
 from: its exit code *is* the scenario a test asked for, and putting it on
 `fm_adapter_verdict` would mean a suite could not ask for "exit 0 having
