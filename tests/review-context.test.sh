@@ -17,7 +17,7 @@ class Context(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        (self.root / "checkout").mkdir()
+        (self.root / "checkout/.git").mkdir(parents=True)
         self.parts = dict(intro='Reviewer instructions\nTask acceptance\n',
                           history='', evidence='Head SHA: ' + 'a'*40 + '\n',
                           diff='\n---\n\n# The diff under review\n\n```diff\nsmall\n```\n', outro='Run mode\n')
@@ -68,6 +68,18 @@ class Context(unittest.TestCase):
         self.assertTrue((self.root/'evidence.md').read_text().endswith('----- end log deadbeef -----\n'))
         self.assertEqual(self.compose('diff').returncode,65)
         self.assertFalse((self.root/'prompt.md').exists())
+
+    def test_archive_refuses_redirected_git_directory(self):
+        self.parts['diff'] = '+oversized\n' * 100000
+        git_dir = self.root / 'checkout/.git'
+        git_dir.rmdir()
+        outside = self.root / 'outside'
+        outside.mkdir()
+        git_dir.symlink_to(outside, target_is_directory=True)
+        result = self.compose()
+        self.assertEqual(result.returncode, 65, result.stderr)
+        self.assertFalse((self.root / 'prompt.md').exists())
+        self.assertEqual(list(outside.iterdir()), [])
 
     def test_distinct_criteria_are_never_trimmed_to_fit(self):
         self.parts['history'] = self.comment(1,'1. ' + 'criterion '*70000 + '\nCRITERIA-COMPLETE:T-130\nREJECT:T-130')

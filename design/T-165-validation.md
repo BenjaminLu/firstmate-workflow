@@ -23,8 +23,9 @@ Oversized fenced CI logs, gate summaries, and fail-first reports retain their
 first and last 8 KiB with explicit excerpt/omission disclosure. Job results, URLs,
 and unavailable-evidence prose remain intact. Full sources have paths, byte counts,
 and SHA-256 provenance. In run mode the selected evidence is copied into a unique
-`.fm-review-context-*` directory in the existing permitted checkout, without any
-sandbox policy change. A checkout rebuild restores those same paths. These files
+`.fm-review-context-*` directory under the clone’s own `.git` directory, inside
+the existing permitted checkout read root and managed read-only git boundary,
+without any sandbox policy change. This leaves worktree freshness checks intact. A checkout rebuild restores those same paths. These files
 live for the review round, not as permanent CI artifacts. The launcher retains its
 source components until its existing cleanup; they are not new durable evidence.
 
@@ -97,3 +98,28 @@ verdict provenance. During integration, preserve T-165's evidence restoration
 after **every** checkout rebuild, including T-163's per-attempt refresh. This
 retry does not copy only part of T-163 into the older launcher or claim that
 integration has been completed. No production launcher was edited here.
+
+
+## Retry r2b: oversized context through managed admission
+
+Firstmate's real T-130 round 7 on candidate `c689bf309d55065f4d7209a37178070cb1ccd288`
+failed before model execution: `fm-managed: review checkout is not fresh`, exit
+70. The assembler had placed its archive in the worktree as untracked content.
+The archive now lives under the isolated clone's own `.git` directory, already
+readable and protected from writes by managed review policy. No ignore rule,
+cleanliness exception, permission root, or admission policy is changed. Gitfiles
+and symlinked git directories are refused by the assembler. Both checkout rebuild
+call sites restore the same evidence paths and validate the pinned checkout.
+
+The new `test_oversized_managed_context_survives_fresh_retry` in
+`tests/codex-review-integration.test.sh` was written before the repair. It uses
+the stock launcher, adapter, managed admission, and final-answer transport with
+a synthetic diff larger than 2,719,034 bytes, repeated stale lists, and distinct
+later criteria. It requires successful launch and a retry after reviewer scratch
+writes, clean pinned checkouts, bounded prompts, verbatim original/later criteria,
+readable complete archived sources with hashes matching the prompt, identical
+archives after rebuild, and a managed final receipt. External services and the
+sandbox executable are fixtures: this proves composition when CI executes it,
+not OS confinement or real vendor acceptance. The existing policy tests and
+firstmate's real stock T-130 rerun remain required. No suite or model was run by
+the worker; no green or executed fail-first result is claimed.

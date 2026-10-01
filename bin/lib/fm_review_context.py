@@ -97,9 +97,14 @@ def compose(directory, mode, checkout):
     pins = json.loads(read(directory / 'pins.json'))
     sources = directory
     if mode == 'run':
-        # Keep omitted evidence inside the already-authorized checkout read
-        # root. Only launcher-selected evidence enters it, never worker logs.
-        sources = Path(tempfile.mkdtemp(prefix='.fm-review-context-', dir=checkout))
+        # The clone's own git directory is inside the authorized read root
+        # and read-only in managed review policy. Evidence is metadata, not
+        # an untracked worktree change: keep strict fresh-tree admission intact.
+        # Never follow a worktree gitfile or symlink outside that read root.
+        git_dir = Path(checkout) / '.git'
+        if not git_dir.is_dir() or git_dir.is_symlink():
+            raise ValueError('context evidence requires the checkout own git directory')
+        sources = Path(tempfile.mkdtemp(prefix='.fm-review-context-', dir=git_dir))
         for name in PARTS:
             shutil.copyfile(directory / (name + '.md'), sources / (name + '.md'))
         shutil.copyfile(directory / 'pins.json', sources / 'pins.json')

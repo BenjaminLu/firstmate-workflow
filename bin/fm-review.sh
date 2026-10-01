@@ -999,8 +999,8 @@ checkout_attempted=''
 prepare_review_attempt() {
   local vendor="$1"
   if [ "$REVIEW_MODE" = run ] && [ "$vendor" = codex ] && [ -n "$checkout_attempted" ]; then
-    if ! rebuild_checkout; then
-      echo "fm-review: cannot refresh checkout for Codex; retaining live or uncertain ownership" >&2
+    if ! rebuild_checkout || ! context_checkout_matches || ! restore_context_evidence; then
+      echo "fm-review: cannot refresh pinned checkout and context evidence for Codex" >&2
       return 70
     fi
   fi
