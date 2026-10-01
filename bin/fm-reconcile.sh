@@ -94,7 +94,7 @@ shopt -s nullglob
 
 # Every variable inside a zh-TW summary below is written ${braced}. Bash 3.2
 # reads the bytes of a full-width character as part of the name that precedes
-# it, so "pid $pid）" is an unbound variable named pid） and the whole script
+# it, so an unbraced pid followed by ） becomes the variable named pid） and the whole script
 # dies on line 1 of a repair. This cost one run to find.
 changes=0; failed=0
 say()  { printf 'fm-reconcile: %s\n' "$*"; }
