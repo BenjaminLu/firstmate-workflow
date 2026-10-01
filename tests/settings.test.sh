@@ -55,8 +55,19 @@ class Settings(unittest.TestCase):
                 record = m.board_start(self.repo)
                 url = f'http://127.0.0.1:{port}'
                 self.assertEqual(url, record['url'])
-                matches.assert_called_once_with(self.repo, url)
-                opened.assert_called_once_with(url, port)
+                self.assertEqual(1, matches.call_count)
+                self.assertEqual(((self.repo, url), {}), matches.call_args)
+                self.assertEqual(1, opened.call_count)
+                self.assertEqual(((url, port), {}), opened.call_args)
+    def test_port_override_does_not_need_bash_on_path(self):
+        with patch.dict(os.environ, {'PATH': '/nonexistent', 'FM_PORT': '49322'}):
+            self.assertEqual(49322, m.configured_board_port(self.repo))
+
+    def test_missing_config_interpreter_has_an_actionable_error(self):
+        with patch.object(m.subprocess, 'run', side_effect=FileNotFoundError('raw OS error')):
+            with self.assertRaisesRegex(RuntimeError, 'board configuration requires /bin/bash'):
+                m.configured_board_port(self.repo)
+
     def test_wizard_refuses_occupied_port_before_writing(self):
         shutil.copy(root / 'bin/fm-herdr.py', self.repo / 'bin')
         shutil.copy(root / 'bin/fm-setup.sh', self.repo / 'bin')

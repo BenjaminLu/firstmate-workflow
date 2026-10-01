@@ -1915,9 +1915,12 @@ def board_check_port(root, port):
 
 
 def configured_board_port(root):
-    result = subprocess.run(['bash', '-c', '. "$1"; fm_board_port "$2"',
-                             'fm-board', str(Path(__file__).resolve().parent / 'fm-config.sh'),
-                             str(Path(root) / 'config.yaml')], capture_output=True, text=True)
+    try:
+        result = subprocess.run(['/bin/bash', '-c', '. "$1"; fm_board_port "$2"',
+                                 'fm-board', str(Path(__file__).resolve().parent / 'fm-config.sh'),
+                                 str(Path(root) / 'config.yaml')], capture_output=True, text=True)
+    except OSError as error:
+        raise RuntimeError('board configuration requires /bin/bash') from error
     if result.returncode:
         raise RuntimeError(result.stderr.strip())
     port = int(result.stdout.strip())

@@ -2462,13 +2462,25 @@ for (const language of ['en', 'zh-TW']) {
   test(`configured port and ${language} default reach cards; viewer toggle persists`, async ({page}) => {
     const root = makeRoot(['working']);
     writeFileSync(join(root, 'config.yaml'), `language: ${language}\n`);
+    const other = language === 'en' ? 'zh-TW' : 'en';
+    const cardPath = join(root, 'state/pending/D-1.json');
+    const card = JSON.parse(readFileSync(cardPath, 'utf8'));
+    // Deliberately opposite to the setting, so both cases require reordering.
+    card.details = { [other]: details[other], [language]: details[language], effect: { C: 'park' } };
+    writeFileSync(cardPath, JSON.stringify(card));
     const b = await startBoard(root, {}, true);
     try {
       await page.goto(b.url);
       await expect(page.locator('html')).toHaveAttribute('lang', language);
       await expect(page.locator('.dcard').first()).toContainText(details[language].title);
       await expect(page.locator('#langs button').first()).toHaveAttribute('data-l', language);
-      const other = language === 'en' ? 'zh-TW' : 'en';
+      const state = await (await page.request.get(`${b.url}/api/state`)).json();
+      expect(Object.keys(state.pending[0].details).filter(k => ['en', 'zh-TW'].includes(k)))
+        .toEqual([language, other]);
+      expect(state.pending[0].details[language]).toEqual(details[language]);
+      expect(state.pending[0].details[other]).toEqual(details[other]);
+      expect(state.pending[0].details.effect).toEqual({ C: 'park' });
+      expect(JSON.parse(readFileSync(cardPath, 'utf8'))).toEqual(card);
       await page.locator(`#langs [data-l="${other}"]`).click();
       await page.reload();
       await expect(page.locator('html')).toHaveAttribute('lang', other);
@@ -2483,5 +2495,17 @@ test('FM_PORT overrides a configured board port', async ({page}) => {
   try {
     await page.goto(b.url);
     await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+  } finally { stopBoard(b); }
+});
+
+test('a fixture without the config reader still honours FM_PORT and defaults to English', async ({page}) => {
+  const root = makeRoot(['working']);
+  unlinkSync(join(root, 'bin/fm-config.sh'));
+  writeFileSync(join(root, 'config.yaml'), 'board:\n  port: 1\nlanguage: zh-TW\n');
+  const b = await startBoard(root);
+  try {
+    await page.goto(b.url);
+    await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+    await expect(page.locator('.dcard').first()).toContainText(details.en.title);
   } finally { stopBoard(b); }
 });

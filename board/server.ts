@@ -36,19 +36,29 @@ const givenEnv = (name: string): string | undefined => {
 // empty one is a caller whose port variable came out empty, and reading it as
 // unset put a suite's fixture board on the captain's own address while the
 // captain's board was down (T-153, 2026-09-29), so it is refused (64), never defaulted.
-const setting = (reader: string): string => {
-  const r = Bun.spawnSync(["bash", "-c", '. "$1"; "$2" "$3"', "fm-board",
-    join(ROOT, "bin/fm-config.sh"), reader, join(ROOT, "config.yaml")], { stdin: "ignore" });
+const setting = (reader: string, fallback: string): string => {
+  const lib = join(ROOT, "bin/fm-config.sh");
+  // Minimal fixture roots predate the settings reader. Their FM_PORT still
+  // selects the listener; an absent reader means the documented defaults.
+  if (!existsSync(lib)) return fallback;
+  let r;
+  try {
+    r = Bun.spawnSync(["/bin/bash", "-c", '. "$1"; "$2" "$3"', "fm-board",
+      lib, reader, join(ROOT, "config.yaml")], { stdin: "ignore" });
+  } catch {
+    console.error("board refused to start: board configuration requires /bin/bash");
+    process.exit(64);
+  }
   if (r.exitCode !== 0) {
-    console.error(`board refused to start: ${r.stderr.toString().trim()}`);
+    console.error(`board refused to start: ${r.stderr.toString().trim() || "board configuration could not be read"}`);
     process.exit(64);
   }
   return r.stdout.toString().trim();
 };
-const DEFAULT_LANGUAGE = setting("fm_language");
+const DEFAULT_LANGUAGE = setting("fm_language", "en");
 const PORT = (() => {
   const given = givenEnv("FM_PORT");
-  if (given === undefined) return Number(setting("fm_board_port"));
+  if (given === undefined) return Number(setting("fm_board_port", "4173"));
   if (!/^[0-9]{1,5}$/.test(given) || Number(given) > 65535) {
     console.error(`board refused to start: FM_PORT is set but is not a port: '${given}'`);
     process.exit(64);
@@ -1233,6 +1243,13 @@ const pending = () => {
   return files.flatMap((f) => {
     try {
       const d = JSON.parse(readFileSync(join(dir, f), "utf8"));
+      // Publish the configured translation first even when the producer wrote
+      // the other language first. Keep every translation and non-language
+      // detail (effects, diagrams, etc.); the viewer's own toggle still wins.
+      if (d.details && typeof d.details === "object" && !Array.isArray(d.details)
+          && Object.hasOwn(d.details, DEFAULT_LANGUAGE)) {
+        d.details = { [DEFAULT_LANGUAGE]: d.details[DEFAULT_LANGUAGE], ...d.details };
+      }
       if (d.pr != null && settled.has(within(d.project, d.pr))) return [];
       const final = d.task != null ? finalTasks.get(within(d.project, d.task)) ?? null : null;
       // answerable: POST /decisions takes this id; a card under any other

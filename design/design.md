@@ -2139,7 +2139,10 @@ Only the board is tri-lingual. The repository is English (section 1).
 - The preference lives in `localStorage`, and `?lang=` overrides it. Without
   either, `config.yaml`'s `language` (`en` or `zh-TW`, default `en`) applies.
   The configured language comes first in the language choices and authored
-  decision details. Firstmate reports to the captain in that language unless
+  decision details. The board also orders each pending card's translated
+  details with that language first in its state response, preserving the
+  other translations and metadata without rewriting the authored file.
+  Firstmate reports to the captain in that language unless
   explicitly asked otherwise; both translations remain required on cards.
 - `board.port` (default 4173) selects the board listener and `fm board`'s
   login address, credential file and tab reuse. `FM_PORT` overrides it;
