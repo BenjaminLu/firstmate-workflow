@@ -2000,7 +2000,11 @@ rm -rf "$decoy_root" "$decoy_lockmark"
 bounded="$(fixture)"; bounded_repo="$bounded/repo"
 cat > "$bounded_repo/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
+# fm:review-run
+[ "$1" = "run" ] || exit 64
 cp "$2" "$FM_CAPTURE"
+printf '%s\n' "${FM_RUN_REVIEW:-}" > "$FM_CAPTURE.mode"
+git -C "${FM_REVIEW_CHECKOUT:-.}" rev-parse HEAD > "$FM_CAPTURE.head"
 printf 'APPROVE:T-Z\n' > "$3/verdict.txt"
 M
 chmod +x "$bounded_repo/bin/adapters/mock.sh"
@@ -2019,7 +2023,12 @@ printf 'reviewer:\n  mode: run\n' >> "$bounded_repo/config.yaml"
 bounded_out="$(cd "$bounded_repo" && FM_ROOT="$bounded_repo" FM_CAPTURE="$bounded/called" \
   bin/fm-review.sh --task T-Z --branch work 2>&1)"; bounded_rc=$?
 assert_eq "0" "$bounded_rc" "oversized stock run context reaches the adapter with pinned references"
-assert_ok "test -f '$bounded/called' && test $(wc -c < "$bounded/called" 2>/dev/null || echo 9999999) -le 524288" \
+assert_eq "1" "$(cat "$bounded/called.mode" 2>/dev/null)" "bounded context adapter receives run mode"
+assert_eq "$(git -C "$bounded_repo" rev-parse work)" "$(cat "$bounded/called.head" 2>/dev/null)" \
+  "bounded context adapter receives the actual pinned checkout"
+bounded_bytes=9999999
+if [ -f "$bounded/called" ]; then bounded_bytes="$(wc -c < "$bounded/called")"; fi
+assert_ok "test -f '$bounded/called' && test $bounded_bytes -le 524288" \
   "stock composed run prompt stays within the byte cap"
 assert_contains "$(cat "$bounded/called" 2>/dev/null)" "OMITTED entire inline patch" "stock run mode discloses missing inline coverage"
 assert_contains "$(cat "$bounded/called" 2>/dev/null)" "$(git -C "$bounded_repo" rev-parse work)" "stock reference pins the reviewed head"

@@ -68,3 +68,32 @@ is claimed. No candidate T-163 launcher was used in this worker round. If firstm
 uses that candidate for real T-130 acceptance, record its exact bootstrap revision
 and the reviewed head alongside the resulting evidence; that remains outstanding.
 T-135's broader worker evidence-pack feature is not implemented by this change.
+
+## Retry r1b: CI fixture repair and required base rebuild
+
+The supplied run 36893359483 shard-4 log reports exit 65 for the oversized
+run-mode fixture, with no captured prompt. Source inspection identifies the
+fixture's missing `# fm:review-run` declaration: `fm_review_run_chain` refuses
+its lead adapter without that declaration, and `fm-review.sh` returns 65 before
+invocation. The fixture now declares the same capability as the suite's existing
+run-mode adapters. Production admission and sandbox policy are unchanged.
+The original size, omission-disclosure, and head/base/patch assertions remain;
+additional assertions require the adapter to receive run mode and an actual
+checkout at the expected head. Missing capture files no longer cause a shell
+redirection diagnostic while computing the prompt size.
+
+The run-mode fixture sweep found one accidentally undeclared adapter, this
+T-165 fixture. Deliberately incapable adapters in admission-refusal tests remain
+unchanged. No suite or CI script was run in this retry; the supplied CI failure
+is the observed red evidence, and current-head green evidence remains pending.
+The referenced `/tmp/fm-T165-ci-completed.log` was denied by the sandbox; no
+alternate access was attempted.
+
+The dispatched worktree still has HEAD `c935bb2` on base `0ca49e3`, rather than
+accepted T-163 base `926638e58f65d501497b09bbd1f46101e1385473`. The worker cannot
+rebase or write git history. Firstmate must rebuild on that accepted base before
+acceptance, retaining T-163's pinned acquisition, fresh-attempt checkouts, and
+verdict provenance. During integration, preserve T-165's evidence restoration
+after **every** checkout rebuild, including T-163's per-attempt refresh. This
+retry does not copy only part of T-163 into the older launcher or claim that
+integration has been completed. No production launcher was edited here.
