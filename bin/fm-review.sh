@@ -754,20 +754,27 @@ prompt="$work/prompt.md"
   cat "${FM_CODE_ROOT:-$REPO}/skills/reviewer/SKILL.md"
   printf '\n---\n\n# The task\n\n```json\n%s\n```\n' "$spec"
   printf '\n# Round %s\n' "$ROUND"
+} > "$work/intro.md"
+{
   if [ "$ROUND" -ge 2 ] && [ -n "$PR" ]; then
     printf '\n# The closed list\n'
     closed_list
   elif [ "$ROUND" -ge 3 ]; then
     printf '\nThis is round three or later. If the worker has posted ASK-PASS-CRITERIA, answer with the complete numbered list and then post CRITERIA-COMPLETE:%s.\n' "$TASK"
   fi
+} > "$work/history.md"
+{
   # Either mode: the reviewer judges with what CI found on this head, and
   # re-runs none of it (T-153, captain 2026-09-29)
   [ -z "$PR" ] || head_evidence
+} > "$work/evidence.md"
+{
   printf '\n---\n\n# The diff under review\n\n```diff\n'
   # the change the REVIEWED line names, not whatever the branch is by now
   if [ -n "$R_BASE" ]; then git diff "$R_BASE" "$R_HEAD"; else git diff "$BASE...$BRANCH"; fi
   printf '```\n'
-} > "$prompt"
+} > "$work/diff.md"
+: > "$work/outro.md"
 
 # The project's contract as the branch under review declares it - the one the
 # gates run - so the reviewer runs what the required check and gate 5 would.
@@ -825,7 +832,43 @@ if [ "$REVIEW_MODE" = run ]; then
     printf '4. End with two lists before the verdict: **Executed** - every command you\n'
     printf '   ran and its result; **Read, not run** - every claim you checked only by\n'
     printf '   reading. Evidence you did not execute is never reported as executed.\n'
-  } >> "$prompt"
+  } > "$work/outro.md"
+fi
+
+# References replacing an inline patch must resolve to the same commits the
+# prompt and REVIEWED record pin, including after a checkout rebuild.
+context_checkout_matches() {
+  [ "$REVIEW_MODE" = run ] || return 0
+  [ "$(git -C "$CHECKOUT" rev-parse HEAD 2>/dev/null)" = "$R_HEAD" ] &&
+    [ "$(git -C "$CHECKOUT" merge-base refs/fm/base refs/fm/head 2>/dev/null)" = "$R_BASE" ]
+}
+restore_context_evidence() {
+  [ -f "$work/evidence-path.txt" ] || return 0
+  local archive
+  archive="$(cat "$work/evidence-path.txt")"
+  mkdir -p "$archive" &&
+    cp "$work/intro.md" "$work/history.md" "$work/evidence.md" \
+       "$work/diff.md" "$work/outro.md" "$work/pins.json" "$archive/"
+}
+if ! context_checkout_matches; then
+  echo "fm-review: pinned context does not match the review checkout; no model called" >&2
+  emit --review-outcome infrastructure_error --type review_failed \
+       --en "Pinned review context does not match its checkout" \
+       --tw "固定版本的審核內容與 checkout 不符"
+  exit 65
+fi
+
+# T-165: bound the complete stock prompt before any model attempt. Preserve
+# the source components for disclosed omissions; never summarize criteria.
+jq -n --arg head "$R_HEAD" --arg base "$R_BASE" --arg patch "$R_PATCH" \
+  --argjson files "${R_FILES:-[]}" \
+  '{head:$head,base:$base,patch:$patch,files:$files}' > "$work/pins.json"
+if ! python3 "$(dirname "${BASH_SOURCE[0]}")/lib/fm_review_context.py" \
+    "$work" "$REVIEW_MODE" "${CHECKOUT:-}"; then
+  emit --review-outcome infrastructure_error --type review_failed \
+       --en "Review context exceeds its safe input budget or could not be assembled; no model called" \
+       --tw "審核內容超過安全輸入上限或無法組合；未呼叫模型"
+  exit 65
 fi
 
 # the reviewer runs on its own engine when config.yaml names one, and falls
@@ -927,7 +970,7 @@ if ! checkout_ok; then
   # by .data.event_kind, not by .type.
   emit --type worker_crashed --en "the checkout was destroyed; retrying once with a fresh one" \
        --tw "checkout 被摧毀；用新的重試一次" --data '{"event_kind":"review_checkout_destroyed"}'
-  if rebuild_checkout >/dev/null 2>&1; then
+  if rebuild_checkout >/dev/null 2>&1 && context_checkout_matches && restore_context_evidence; then
     fm_run_chain "$adapters" "$chain" \
       "$prompt" "$work/out" "$work/log" review_is_signed per-vendor; rc=$?
     checkout_ok || echo "fm-review: the fresh checkout was destroyed too; not retrying again" >&2
