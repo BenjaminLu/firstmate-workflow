@@ -148,7 +148,9 @@ drop_checkout() {
     { exec 9<&-; } 2>/dev/null || true
     OWNER_LOCK_HELD=''
   fi
-  [ -z "$CHECKOUT_ROOT" ] || rm -rf "$CHECKOUT_ROOT"
+  if [ -n "$CHECKOUT_ROOT" ] && checkout_is_free "$CHECKOUT_ROOT/owner"; then
+    rm -rf "$CHECKOUT_ROOT"
+  fi
   CHECKOUT_ROOT=''; CHECKOUT=''
 }
 
@@ -290,12 +292,29 @@ export FM_MODEL_REFUSED="$model_refused_file"
 unsandboxed=0
 if fm_crew_hatch fm-review; then unsandboxed=1; fi
 
+# What this round reviews, pinned once: the head, its merge-base with the
+# base, the patch-id of the change between them and the files it touches.
+# The verdict carries all four in its REVIEWED line, and gate 7 carries an
+# APPROVE across an update onto a newer base only when the change is the
+# same one (T-113). The patch-id comes from plumbing, which reads no user
+# configuration, with renames off, exactly as fm-gate.sh takes it.
+R_HEAD="$(git rev-parse --verify -q "$BRANCH^{commit}")" || R_HEAD=''
+R_BASE=''; R_PATCH=''; R_FILES=''
+if [ -n "$R_HEAD" ] && R_BASE="$(git merge-base "$BASE" "$R_HEAD" 2>/dev/null)"; then
+  R_PATCH="$(git diff-tree -r -p --no-renames "$R_BASE" "$R_HEAD" 2>/dev/null | git patch-id --stable | cut -d' ' -f1)"
+  R_FILES="$(git diff-tree -r -z --name-only --no-renames "$R_BASE" "$R_HEAD" 2>/dev/null |
+    jq -Rsc 'split("\u0000") | map(select(length > 0))')" || R_FILES=''
+else
+  R_BASE=''
+fi
+
 # A clone rather than a worktree: a worktree shares the task's .git, so git
 # run inside it writes outside it. The clone has its own objects, the base
 # and the head under fixed names, and no remote to push to.
 build_checkout() {
   local head staging staging_base
-  head="$(git rev-parse -q --verify "$BRANCH^{commit}")" || return 1
+  head="$R_HEAD"
+  [ -n "$head" ] && [ -n "$R_BASE" ] || return 1
   # Built under a name sweep_checkouts never globs (it matches only
   # fm-review.*, and this starts with a dot, which that pattern's literal
   # "fm-review." prefix cannot match) and renamed into that name only once
@@ -322,9 +341,10 @@ build_checkout() {
     { exec 9<&-; } 2>/dev/null; rm -rf "$staging"; CHECKOUT_ROOT=""; return 1
   fi
   OWNER_LOCK_HELD=1
+  printf '%s\n' "$FM_RUN_DIR" > "$CHECKOUT_ROOT/run"
   CHECKOUT="$CHECKOUT_ROOT/checkout"
   git clone -q --no-checkout --no-hardlinks "$REPO" "$CHECKOUT" &&
-    git -C "$CHECKOUT" fetch -q --no-tags origin "+$BRANCH:refs/fm/head" "+$BASE:refs/fm/base" &&
+    git -C "$CHECKOUT" fetch -q --no-tags origin "+$R_HEAD:refs/fm/head" "+$R_BASE:refs/fm/base" &&
     [ "$(git -C "$CHECKOUT" rev-parse refs/fm/head)" = "$head" ] &&
     git -C "$CHECKOUT" checkout -q --detach refs/fm/head &&
     git -C "$CHECKOUT" remote remove origin
@@ -338,6 +358,22 @@ build_checkout() {
 # recorded in the file (see build_checkout) - that misreads a live round the
 # sandbox denies a signal to as a dead one, and deletes a checkout in use.
 checkout_is_free() {   # checkout_is_free <owner-file>
+  # Managed descendants retain their checkout even after the launcher's lock
+  # closes. Uncertain reservations also retain it; no PID polling is involved.
+  local run_file="${1%/*}/run"
+  if [ -f "$run_file" ]; then
+    python3 - "${FM_CODE_ROOT:-$REPO}" "$(cat "$run_file")" <<'PYLIVE' || return 1
+import importlib.util, pathlib, sys
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location('managed', pathlib.Path(sys.argv[1]) / 'bin/fm-herdr.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+try:
+    states = m.executions(sys.argv[2])
+    sys.exit(1 if any(s['state'] != 'terminated' for s in states) else 0)
+except (OSError, ValueError, KeyError):
+    sys.exit(1)
+PYLIVE
+  fi
   perl -MFcntl=:flock -e 'open(my $l, "<", $ARGV[0]) or exit 2;
     exit(flock($l, LOCK_EX | LOCK_NB) ? 0 : 1)' "$1"
 }
@@ -359,11 +395,13 @@ checkout_ok() {
 # the directory is renamed into the visible name.
 rebuild_checkout() {
   local head staging
-  head="$(git rev-parse -q --verify "$BRANCH^{commit}")" || return 1
+  head="$R_HEAD"
+  [ -n "$head" ] && [ -n "$R_BASE" ] || return 1
   if [ -n "$OWNER_LOCK_HELD" ]; then
     { exec 9<&-; } 2>/dev/null || true
     OWNER_LOCK_HELD=''
   fi
+  checkout_is_free "$CHECKOUT_ROOT/owner" || return 1
   rm -rf "$CHECKOUT_ROOT"
   staging="$(mktemp -d "${TMPDIR:-/tmp}/.fm-review-staging.XXXXXX")" || return 1
   staging="$(cd "$staging" && pwd -P)" || return 1
@@ -376,9 +414,10 @@ rebuild_checkout() {
     { exec 9<&-; } 2>/dev/null; rm -rf "$staging"; return 1
   fi
   OWNER_LOCK_HELD=1
+  printf '%s\n' "$FM_RUN_DIR" > "$CHECKOUT_ROOT/run"
   CHECKOUT="$CHECKOUT_ROOT/checkout"
   git clone -q --no-checkout --no-hardlinks "$REPO" "$CHECKOUT" &&
-    git -C "$CHECKOUT" fetch -q --no-tags origin "+$BRANCH:refs/fm/head" "+$BASE:refs/fm/base" &&
+    git -C "$CHECKOUT" fetch -q --no-tags origin "+$R_HEAD:refs/fm/head" "+$R_BASE:refs/fm/base" &&
     [ "$(git -C "$CHECKOUT" rev-parse refs/fm/head)" = "$head" ] &&
     git -C "$CHECKOUT" checkout -q --detach refs/fm/head &&
     git -C "$CHECKOUT" remote remove origin
@@ -405,6 +444,8 @@ if [ "$REVIEW_MODE" = run ]; then
          --en "review round $ROUND could not prepare its checkout" --tw "第 $ROUND 輪審核無法準備 checkout"
     exit 70; }
   export FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$CHECKOUT"
+  export FM_REVIEW_HEAD="$R_HEAD" FM_REVIEW_BASE="$R_BASE" FM_REVIEW_PATCH="$R_PATCH"
+  printf '%s\n' "$FM_RUN_DIR" > "$CHECKOUT_ROOT/run"
   # The project's setup writes its caches under $HOME by default, where the
   # sandbox refuses it. The adapter points each one into the round's own
   # temp directory, a write root, for every round of either role (T-117,
@@ -722,21 +763,6 @@ head_evidence() {
   fi
 }
 
-# What this round reviews, pinned once: the head, its merge-base with the
-# base, the patch-id of the change between them and the files it touches.
-# The verdict carries all four in its REVIEWED line, and gate 7 carries an
-# APPROVE across an update onto a newer base only when the change is the
-# same one (T-113). The patch-id comes from plumbing, which reads no user
-# configuration, with renames off, exactly as fm-gate.sh takes it.
-R_HEAD="$(git rev-parse --verify -q "$BRANCH^{commit}")" || R_HEAD=''
-R_BASE=''; R_PATCH=''; R_FILES=''
-if [ -n "$R_HEAD" ] && R_BASE="$(git merge-base "$BASE" "$R_HEAD" 2>/dev/null)"; then
-  R_PATCH="$(git diff-tree -r -p --no-renames "$R_BASE" "$R_HEAD" 2>/dev/null | git patch-id --stable | cut -d' ' -f1)"
-  R_FILES="$(git diff-tree -r -z --name-only --no-renames "$R_BASE" "$R_HEAD" 2>/dev/null |
-    jq -Rsc 'split("\u0000") | map(select(length > 0))')" || R_FILES=''
-else
-  R_BASE=''
-fi
 reviewed_line() {  # reviewed_line <APPROVE|REJECT>
   [ -n "$R_HEAD" ] && [ -n "$R_BASE" ] && [ -n "$R_FILES" ] || return 0
   printf '\n\nREVIEWED:%s verdict=%s head=%s base=%s patch=%s files=%s' \
@@ -849,6 +875,16 @@ mkdir -p "$work/out"
 # No pipeline in it either: with `set -o pipefail` a cat that finds nothing
 # fails the whole pipeline even when the grep matched.
 attempt_output() {
+  if [ "${FM_CHAIN_VENDOR:-}" = codex ]; then
+    python3 - "${FM_CODE_ROOT:-$REPO}" "$FM_RUN_DIR" "${FM_CHAIN_ATTEMPT:-}" <<'PYFINAL'
+import importlib.util, os, pathlib, sys
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location('managed', pathlib.Path(sys.argv[1]) / 'bin/fm-herdr.py')
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+sys.stdout.write(m.review_final(sys.argv[2], sys.argv[3], os.environ))
+PYFINAL
+    return
+  fi
   if [ -n "${FM_CHAIN_ATTEMPT:-}" ] && [ -f "$FM_RUN_DIR/last-result.json" ] &&
      jq -e --arg attempt "$FM_CHAIN_ATTEMPT" '.chain_attempt == $attempt' "$FM_RUN_DIR/last-result.json" >/dev/null; then
     local final
@@ -1024,7 +1060,8 @@ case "$verdict" in *"APPROVE:$TASK"*|*"REJECT:$TASK"*) signed=1 ;; esac
 # When the managed transport waiter dies mid-chain, pane-child may still have
 # published last-result/final.txt. Recover that durable verdict rather than
 # claiming "no signed review".
-if [ "$signed" = "0" ] && [ -n "${FM_RUN_DIR:-}" ] && [ -f "$FM_RUN_DIR/last-result.json" ]; then
+if [ "$signed" = "0" ] && [ "${FM_CHAIN_VENDOR:-}" != codex ] && [ -n "${FM_RUN_DIR:-}" ] && [ -f "$FM_RUN_DIR/last-result.json" ] &&
+   jq -e --arg attempt "${FM_CHAIN_ATTEMPT:-}" '$attempt != "" and .chain_attempt == $attempt' "$FM_RUN_DIR/last-result.json" >/dev/null; then
   recovered_final="$(jq -r '.attempt // empty' "$FM_RUN_DIR/last-result.json" 2>/dev/null)/final.txt"
   [ -f "$recovered_final" ] || recovered_final="$FM_RUN_DIR/final.txt"
   if [ -f "$recovered_final" ]; then

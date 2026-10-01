@@ -1062,7 +1062,7 @@ fm_identity() {
   # Recursion guards belong to one adapter invocation, never a new role run.
   unset FM_CONTEXT_READY FM_ATTEMPT_DIR FM_FINAL_PATH FM_CLI_EXIT FM_CHAIN_ATTEMPT
   # and a run-mode review's checkout belongs to that one round
-  unset FM_RUN_REVIEW FM_REVIEW_CHECKOUT FM_REVIEW_NETWORK
+  unset FM_RUN_REVIEW FM_REVIEW_CHECKOUT FM_REVIEW_NETWORK FM_REVIEW_HEAD FM_REVIEW_BASE FM_REVIEW_PATCH FM_CHAIN_VENDOR
   FM_RUN_DIR="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" allocate "$REPO" "$role" "$task" "$alias")" || return 70
   NAME="${FM_RUN_DIR##*/}"
   export FM_RUN_DIR FM_ROLE="$role" FM_TASK="$task" FM_ACTOR="$NAME" FM_ROOT="$REPO"
@@ -1330,7 +1330,7 @@ fm_run_chain() {
   # exact confusion the offsets exist to prevent
   FM_VENDOR_USED=''; FM_VENDOR_SKIPPED=''; FM_VENDOR_MISREAD=''; FM_VENDOR_UNKNOWN=''
   FM_RUN_OUTDIR=''; FM_RUN_LOG_OFF=0; FM_VENDOR_SPOKE=0; FM_VENDOR_MODEL=''
-  export FM_CHAIN_ATTEMPT=''
+  export FM_CHAIN_ATTEMPT='' FM_CHAIN_VENDOR=''
   # before anything runs. A typo at the head of the chain used to be found
   # after a real vendor had already worked, and the caller's exit 65 then
   # threw that work away.
@@ -1370,7 +1370,7 @@ fm_run_chain() {
     # Bind every receipt reader to this invocation, including custom fallbacks
     # that never create managed receipts. Keep previous receipts as evidence.
     FM_CHAIN_ATTEMPT="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')" || return 70
-    export FM_CHAIN_ATTEMPT
+    export FM_CHAIN_ATTEMPT FM_CHAIN_VENDOR="$v"
     "$dir/$v.sh" run "$prompt" "$out" "$log"; rc=$?
     # did this vendor say anything of its own? The callers need to tell an
     # engine that ran badly from one that was not there, and this is the

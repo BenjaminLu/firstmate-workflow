@@ -397,7 +397,12 @@ $refusal_line" 1
       XDG_CACHE_HOME="$d/cache" \
       FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/checkout" PATH="$d/fakebin:$closed_path" \
       "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1; rrc=$?
-    if grep -q '^# fm:review-run' "$adapter"; then
+    if [ "$name" = codex ]; then
+      # T-163: a marker alone is insufficient. This fixture deliberately has
+      # no managed invocation or pinned head; the feature suite supplies both.
+      assert_eq "64" "$rrc" "codex refuses an unmanaged run-mode review"
+      assert_fail "test -e '$d/cwd.run'" "codex never starts without launcher context"
+    elif grep -q '^# fm:review-run' "$adapter"; then
       assert_eq "0" "$rrc" "$name runs a run-mode review"
       assert_eq "$ck" "$(cat "$d/cwd.run" 2>/dev/null)" "$name's engine works in the checkout, not its output directory"
       assert_ok "test -s '$d/env.run'" "$name's engine environment was recorded"
@@ -781,6 +786,12 @@ for loc_role in worker run-review; do
           confined "$loc_os" "$loc_tool" "$pk/none.json" "$v")"
       fi
       loc_at="$v, $loc_role, $loc_os"
+      if [ "$loc_role" = run-review ] && [ "$v" = codex ]; then
+        # This unmanaged fixture lacks the transport receipt and pinned refs.
+        # T-163's feature suite checks the managed launch and protected roots.
+        assert_eq "64" "$loc_rc" "codex refuses missing managed context ($loc_os)"
+        continue
+      fi
       assert_eq "0" "$loc_rc" "$v's round starts ($loc_role, $loc_os)"
       # the CLI's own view of its environment, as the fake sandbox ran it
       loc_env="$(cat "$pv/env" 2>/dev/null)"
