@@ -528,6 +528,33 @@ else
   skip "shellcheck not installed"
 fi
 
+# Read bytes, not locale-dependent character classes: bash 3.2 can absorb
+# non-ASCII punctuation into an unbraced variable name. Include every file
+# under both trees, including embedded snippets and lint-source files.
+stage "non-ASCII variable boundary"
+if python3 - <<'PY_BOUNDARY'
+from pathlib import Path
+import re
+import sys
+
+pattern = re.compile(rb'\$[A-Za-z_][A-Za-z0-9_]*[\x80-\xff]')
+failed = False
+for root in (Path('bin'), Path('tests')):
+    for path in sorted(root.rglob('*')):
+        if not path.is_file():
+            continue
+        for number, line in enumerate(path.read_bytes().split(b'\n'), 1):
+            if pattern.search(line):
+                print(f'{path}:{number}: brace the variable before non-ASCII text')
+                failed = True
+sys.exit(1 if failed else 0)
+PY_BOUNDARY
+then
+  pass "non-ASCII variable boundary"
+else
+  flunk "non-ASCII variable boundary"
+fi
+
 stage "lint"
 # the event log has exactly one writer; anything else appending to it is a bug
 strays=$(grep -rnE '>>[[:space:]]*[^|]*events\.jsonl' bin board 2>/dev/null | grep -v 'bin/fm-emit.sh' || true)

@@ -1316,7 +1316,7 @@ chmod +x "$dm/stub/date"
 jobs_round() {   # jobs_round [env...]: a run-mode round against this gh; its prompt in $dm/prompt.md
   rm -f "$dm/polls" "$dm/prompt.md"; : > "$dm/ghcalls"
   ( cd "$rm_" && env PATH="$dm/stub:$PATH" JOBS_REAL_DATE="$jobs_real_date" FM_ROOT="$rm_" FM_GH="$GHk" FM_SEEN="$dm" "$@" \
-    bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
+    /bin/bash bin/fm-review.sh --task T-Z --branch work --pr 9 >"$dm/review.log" 2>&1 )
 }
 jobs_round
 sentK="$(cat "$dm/prompt.md" 2>/dev/null)"
@@ -1392,6 +1392,8 @@ assert_eq '["ci, lint","lint"]' \
 # a bounded wait: past it the round starts anyway, naming what still runs
 before_bound_events="$(wc -l < "$evK" | tr -d ' ')"
 jobs_round GH_PENDING_POLLS=1000 GH_EXTRA_CHECK=1 GH_LINT_MISSING=1 FM_REVIEW_CI_WAIT=2 FM_REVIEW_CI_POLL=1
+assert_eq '0' "$?" "the bounded CI wait completes under /bin/bash"
+assert_lacks "$(cat "$dm/review.log")" 'unbound variable' "the bounded wait has no variable expansion failure"
 sentB="$(cat "$dm/prompt.md" 2>/dev/null)"
 assert_contains "$sentB" "started with these required checks still running for this head, or not yet started: ci" \
   "past the bound the round starts, naming the checks still running"
@@ -1401,7 +1403,7 @@ assert_eq '4' "$(cat "$dm/polls" 2>/dev/null)" "and it did not wait on past its 
 assert_contains "$(jq -r 'select(.type=="crew_status" and .data.ci_wait_bound==true)|.data.activity.en' "$evK")" \
   'CI wait bound reached' "the board is told when the wait reaches its bound"
 assert_contains "$(jq -r 'select(.type=="crew_status" and .data.ci_wait_bound==true)|.data.activity["zh-TW"]' "$evK")" \
-  'CI 等待已達上限' "the wait bound is reported in Chinese too"
+  '仍待完成：ci, lint。即將開始審核。' "the wait bound reports pending names in Chinese under /bin/bash"
 bound_eventsK="$(tail -n +$((before_bound_events + 1)) "$evK")"
 assert_eq 'review' "$(jq -sr '[.[]|select(.type=="crew_status" and .data.phase)]|last|.data.phase' <<<"$bound_eventsK")" \
   "after the CI wait bound the reviewer returns to reviewing"

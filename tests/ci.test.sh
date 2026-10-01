@@ -466,6 +466,24 @@ printf '#!/usr/bin/env bash\nargs=""\necho $args\n' > "$q/bin/adapters/sloppy.sh
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)"
 assert_lacks "$out" "x shellcheck" "an info-level finding does not, which is what the adapters depend on"
 
+# T-161: construct the unsafe bytes so this test is itself lint-clean.
+# Exercise nested shell snippets as well as test files, without exclusions.
+for unicode_file in bin/nested/snippet.py tests/nested/snippet.txt; do
+  mkdir -p "$q/$(dirname "$unicode_file")"
+  printf '# fixture\n%s%s\n' '$X' '。' > "$q/$unicode_file"
+  unicode_rc=0
+  out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)" || unicode_rc=$?
+  assert_eq '1' "$unicode_rc" "unbraced variable in $unicode_file fails fast checks"
+  assert_contains "$out" 'x non-ASCII variable boundary' "the boundary lint rejects $unicode_file"
+  assert_contains "$out" "$unicode_file:2:" "the boundary lint names file and line"
+  printf '# fixture\n%s\n' '${X}。' > "$q/$unicode_file"
+  unicode_rc=0
+  out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)" || unicode_rc=$?
+  assert_eq '0' "$unicode_rc" "braced variable in $unicode_file passes fast checks"
+  assert_contains "$out" '+ non-ASCII variable boundary' "the boundary lint accepts braces"
+  rm -f "$q/$unicode_file"
+done
+
 # The real clock path reports elapsed time and the caller's effective budget;
 # deterministic boundary enforcement is covered above.
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"

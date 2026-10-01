@@ -586,7 +586,7 @@ ci_wait() {
     fi
     if [ "$CI_WAITED" -ge "$CI_WAIT" ]; then
       emit_ci_phase waiting_ci "CI wait bound reached on $TASK after ${CI_WAITED}s; still pending: $CI_PENDING. Starting review." \
-        "$TASK 的 CI 等待已達上限（${CI_WAITED} 秒）；仍待完成：$CI_PENDING。即將開始審核。" true
+        "$TASK 的 CI 等待已達上限（${CI_WAITED} 秒）；仍待完成：${CI_PENDING}。即將開始審核。" true
       break
     fi
     sleep "$(( CI_WAIT - CI_WAITED < CI_POLL ? CI_WAIT - CI_WAITED : CI_POLL ))"

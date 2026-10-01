@@ -1,0 +1,13 @@
+{
+  "id": "T-161",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "no review dies on macOS bash 3.2 because a variable sits against a CJK character: every $VAR followed by a non-ASCII letter is braced, and a lint keeps it that way",
+  "scope": ["bin/**", "tests/**", "design/**", "design/tasks/T-161.json"],
+  "acceptance": [
+    "Why. On 2026-10-01 T-130's review died before starting: `bin/fm-review.sh: line 588: CI_PENDING。: unbound variable`. The zh-TW CI-wait-bound message (T-159) writes `$CI_PENDING。`; macOS's /bin/bash 3.2 reads the full-width full stop as part of the variable name, and under `set -u` the script exits. It only fires when the CI wait reaches its bound, which T-130's long CI did. Its own spec file, design/tasks/T-161.json, is committed on this branch.",
+    "Fix it and its class: every `$NAME` in bin/ (shell scripts and shell snippets in other files) that is directly followed by a non-ASCII character is written `${NAME}`. Add a lint stage in bin/ci.sh's fast checks that fails on `\\$[A-Za-z_][A-Za-z0-9_]*` followed by a byte >= 0x80, naming file:line, and covers tests/ as well.",
+    "Tests: the lint goes red on a planted `$X。` and green on `${X}。`; fm-review.sh's CI-wait-bound path runs under /bin/bash (3.2 on macOS, any bash on Linux) with FM_REVIEW_CI_WAIT small and emits the zh-TW line with the pending names. Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves."
+  ]
+}
