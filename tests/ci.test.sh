@@ -468,6 +468,7 @@ assert_lacks "$out" "x shellcheck" "an info-level finding does not, which is wha
 
 # T-161: construct the unsafe bytes so this test is itself lint-clean.
 # Exercise nested shell snippets as well as test files, without exclusions.
+unicode_tree_before="$(find "$q" -print | sort)"
 for unicode_file in bin/nested/snippet.py tests/nested/snippet.txt; do
   mkdir -p "$q/$(dirname "$unicode_file")"
   printf '# fixture\n%s%s\n' '$X' '。' > "$q/$unicode_file"
@@ -482,7 +483,10 @@ for unicode_file in bin/nested/snippet.py tests/nested/snippet.txt; do
   assert_eq '0' "$unicode_rc" "braced variable in $unicode_file passes fast checks"
   assert_contains "$out" '+ non-ASCII variable boundary' "the boundary lint accepts braces"
   rm -f "$q/$unicode_file"
+  rmdir "$q/$(dirname "$unicode_file")"
 done
+assert_eq "$unicode_tree_before" "$(find "$q" -print | sort)" \
+  "boundary fixtures restore the shared tree, including directories"
 
 # The real clock path reports elapsed time and the caller's effective budget;
 # deterministic boundary enforcement is covered above.
@@ -1288,7 +1292,13 @@ rm -f "$q/tests/doomed.test.sh"
 # output, which their own suites cover, and there is no way to plant a
 # failure in them that is not just a failing spec.
 rm -rf "$q/bin/adapters"   # the broken adapter planted further up
-out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+final_ci_rc=0
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)" || final_ci_rc=$?
+case "$final_ci_rc:$out" in
+  0:*'ci: green'*) : ;;
+  *) printf 'Final fixture CI failed (exit %s); captured output follows:\n%s\n' "$final_ci_rc" "$out" ;;
+esac
+assert_eq '0' "$final_ci_rc" "the cleaned fixture CI exits successfully"
 assert_contains "$out" "ci: green" "and the fixture is green again once every plant is pulled"
 rm -rf "$q"
 
