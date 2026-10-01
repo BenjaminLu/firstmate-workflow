@@ -1297,9 +1297,25 @@ M
   chmod +x "$1/stub/gh"; printf '%s' "$1/stub/gh"
 }
 GHk="$(ghjobs "$dm" "$headM")"
+# The CI fixture's clock advances only when gh serves another check state.
+# Command startup time on macOS must not consume the wait bound, or turn
+# an already-completed response into a claimed wait. All other date uses
+# retain the host command (event timestamps and identity allocation).
+jobs_real_date="$(command -v date)"
+cat > "$dm/stub/date" <<'CLOCK'
+#!/usr/bin/env bash
+if [ "$*" = '+%s' ]; then
+  n="$(cat "$FM_SEEN/polls" 2>/dev/null || echo 0)"
+  [ "$n" -eq 0 ] || n=$((n - 1))
+  echo "$((1800000000 + n))"
+else
+  exec "$JOBS_REAL_DATE" "$@"
+fi
+CLOCK
+chmod +x "$dm/stub/date"
 jobs_round() {   # jobs_round [env...]: a run-mode round against this gh; its prompt in $dm/prompt.md
   rm -f "$dm/polls" "$dm/prompt.md"; : > "$dm/ghcalls"
-  ( cd "$rm_" && env FM_ROOT="$rm_" FM_GH="$GHk" FM_SEEN="$dm" "$@" \
+  ( cd "$rm_" && env PATH="$dm/stub:$PATH" JOBS_REAL_DATE="$jobs_real_date" FM_ROOT="$rm_" FM_GH="$GHk" FM_SEEN="$dm" "$@" \
     bin/fm-review.sh --task T-Z --branch work --pr 9 >/dev/null 2>&1 )
 }
 jobs_round
@@ -1380,7 +1396,8 @@ sentB="$(cat "$dm/prompt.md" 2>/dev/null)"
 assert_contains "$sentB" "started with these required checks still running for this head, or not yet started: ci" \
   "past the bound the round starts, naming the checks still running"
 assert_contains "$sentB" "Conclusion: none yet, status in_progress" "and shows them as not concluded"
-assert_ok "[ \"\$(cat '$dm/polls' 2>/dev/null || echo 0)\" -le 8 ]" "and it did not wait on past its bound"
+# Three wait reads, then one fresh read while building the head evidence.
+assert_eq '4' "$(cat "$dm/polls" 2>/dev/null)" "and it did not wait on past its bound"
 assert_contains "$(jq -r 'select(.type=="crew_status" and .data.ci_wait_bound==true)|.data.activity.en' "$evK")" \
   'CI wait bound reached' "the board is told when the wait reaches its bound"
 assert_contains "$(jq -r 'select(.type=="crew_status" and .data.ci_wait_bound==true)|.data.activity["zh-TW"]' "$evK")" \
