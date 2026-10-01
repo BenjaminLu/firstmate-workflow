@@ -1,0 +1,21 @@
+{
+  "id": "T-160",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "a new task's first round never dead-ends: a leftover empty worktree starts fresh, and a first round that needs firstmate (a scope widening, a question) has a channel before any pull request exists",
+  "scope": [
+    "bin/fm-worker.sh",
+    "tests/worker.test.sh",
+    "design/**",
+    "design/tasks/T-160.json",
+    "tests/review.test.sh"
+  ],
+  "acceptance": [
+    "Why. On 2026-09-30 T-157's first round stopped before any commit (codex could not run git, fixed by T-147). Its worktree and local branch stayed at the old main. The next dispatch reused them as a retry (actor r1b): the prompt told the worker the branch already carried earlier work, the task's spec file was not seeded (T-147 seeds only a new worktree), and the worker stopped again, rightly. firstmate had to remove the empty worktree and branch by hand. Its own spec file, design/tasks/T-160.json, is committed on this branch.",
+    "When a task has no pull request and its worktree holds no commit beyond the base and no uncommitted change, fm-worker.sh treats the next dispatch as a first round: it recreates the worktree from the current base (or fast-forwards it), seeds the spec as T-147 does, and never says the branch carries earlier work. A worktree that holds commits or changes is kept exactly as today (never discard work). The prompt says 'retry of earlier work' only when there is earlier work.",
+    "No-PR channel: on 2026-09-30 T-157's first round needed a scope widening; its spec was already committed on the branch (so fm-worker read the branch copy), no pull request existed (fm-worker opens none for a round that only asked), so firstmate's answer had nowhere to go and the captain had to allow a one-off spec commit. Fix it in fm-worker.sh: a first round that asks (SCOPE-BLOCKED, ASK-*) opens a draft pull request carrying the question, so firstmate can answer and widen scope there as for any round; and a new task's spec in firstmate's repository, when it differs from the branch copy and the branch holds nothing but that spec, is taken from the repository. Test both.",
+    "Also (found 2026-10-01 verifying T-157 on the Mac): tests/review.test.sh's CI-wait cases fail on macOS on main (13) and on T-157 (14) while passing on Linux - 'a head whose checks had finished is not waited on', 'past the same bound a required check with no run yet is stated as missing', 'the bound names both the running and the not-yet-created check'. Make them wait on the stubbed gh's state, not on wall-clock polls, so they agree on both hosts; tests/review.test.sh joins this task's scope.",
+    "Tests: an empty leftover worktree on an old base is replaced by a fresh one on the current base with the spec seeded and a first-round prompt; a leftover with a commit or an uncommitted change is kept and the prompt says so. Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves."
+  ]
+}

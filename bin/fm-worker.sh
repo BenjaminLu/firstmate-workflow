@@ -382,13 +382,75 @@ pid_owned=1
 emit --type dispatched ${PR:+--pr "$PR"} --data "$dispatch_data" --en "picked up $TASK" --tw "接下 $TASK"
 emit_status "Adapter starting on $TASK" "開始在 $TASK 上跑 adapter"
 
+round_two=0
+[ -z "$branch_guess" ] || round_two=1
+# The pull request the branch already has, if the caller did not say.
+# This used to be looked up two hundred lines below, AFTER the engine had
+# run - so a second round dispatched without --pr was a first round
+# wearing its clothes: the prompt carried no review and no failing check,
+# the worker rewrote what it had already written, and the question it
+# wrote into .fm-say.md was dropped because $PR was still empty when the
+# time came to post it. The run then said "its question is on #", with
+# nothing after the hash, which is what finding this looked like.
+# Only on a later round: a branch that does not exist yet cannot have a
+# pull request, and a first round that called `gh` at all would break the
+# guarantee that an unavailable vendor touches nothing.
+#
+# The exit status is kept, and this is the whole point of the block.
+# `2>/dev/null` and an empty answer make "there is no pull request" and
+# "gh did not answer" the same string - and they are opposite
+# instructions. Empty-and-succeeded is a real state: a previous round
+# that pushed and then died at `pr create` leaves exactly that, and the
+# right thing is to carry on and open one. Empty-and-failed means the
+# prompt would be blind and the push would collide with a pull request
+# that is already there, so the run stops before it spends an engine
+# round finding that out.
+if [ "$round_two" = 1 ] && [ -z "$PR" ]; then
+  # no pipe: `$?` after one is the LAST element's, and `head` on empty
+  # input exits 0 - so a `head -1` here would turn could-not-answer into
+  # answered-none the moment pipefail was not in force, which is the one
+  # thing this block exists to prevent. `--jq '.[0].number'` yields a
+  # single line anyway, so the pipe bought nothing.
+  # a mktemp that failed would leave this empty, `2>""` would fail the
+  # redirection, gh would never run, and the round would exit 74
+  # saying GitHub could not answer - when GitHub was never asked
+  lookup_err="$(scratch_new)" || lookup_err=''
+  [ -n "$lookup_err" ] || { echo "fm-worker: could not make a scratch file" >&2; exit 70; }
+  scratch_add "$lookup_err"
+  PR="$($GH pr list --head "$branch" --state open --json number --jq '.[0].number' \
+        2>"$lookup_err" </dev/null)"; lookup_rc=$?
+  # what gh actually prints for a branch with no open pull request is
+  # the literal `null`, not silence - leak it through and the round
+  # says `already has #null` and then posts to `gh pr comment null`
+  PR="$(printf '%s' "$PR" | tr -d '[:space:]')"
+  case "$PR" in null) PR='' ;; esac
+  if [ "$lookup_rc" != 0 ]; then
+    echo "fm-worker: could not ask which pull request $branch has" >&2
+    sed 's/^/fm-worker: gh: /' "$lookup_err" >&2
+    echo "fm-worker: a later round cannot run without it - the prompt would carry no review" >&2
+    echo "fm-worker: and the push would collide with a pull request nobody looked for" >&2
+    emit --type worker_crashed --en "could not ask which pull request $branch has" \
+         --tw "問不到 ${branch} 的 PR"
+    exit 74
+  fi
+  if [ -n "$PR" ]; then
+    echo "fm-worker: $branch already has #$PR; this round answers it" >&2
+  else
+    # succeeded and said none: the branch was pushed by a round that did
+    # not get as far as opening one, and this round opens it
+    echo "fm-worker: $branch has no open pull request; this round will open one" >&2
+  fi
+fi
+
 # --- a worktree of its own -----------------------------------------------
 # Never delete work. A run that was interrupted - the machine slept, the
 # session ended, someone pressed ctrl-c - leaves its files here
 # uncommitted, and this used to remove them before the next round could
 # see them. Tonight that nearly cost two finished tasks.
+leftover_dirty=0
 if [ -d "$tree" ] && [ -n "$(git -C "$tree" status --porcelain 2>/dev/null \
      -- . ":(exclude).fm-prompt.md" ":(exclude).fm-say.md")" ]; then
+  leftover_dirty=1
   rescue="$REPO/state/rescued/$TASK-$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir -p "$(dirname "$rescue")"
   cp -R "$tree" "$rescue"
@@ -396,45 +458,65 @@ if [ -d "$tree" ] && [ -n "$(git -C "$tree" status --porcelain 2>/dev/null \
   emit --type worker_crashed --en "rescued uncommitted work to ${rescue#"$REPO"/}" \
        --tw "把未提交的工作救到 ${rescue#"$REPO"/}"
 fi
-rm -rf "$tree"; mkdir -p "$REPO/state/worktrees"
-git worktree prune >/dev/null 2>&1
-# a rebuilt push the last run could not confirm - it was killed during it
-rebuild_settle || true
-# A second round continues the first. Recreating the branch from main would
-# throw away everything the worker did before, which makes a review round
-# pointless and the round-three protocol impossible: the worker would be
-# answering a review of work that no longer exists.
-round_two=0
-if git show-ref --verify --quiet "refs/heads/$branch"; then
+# Keep an unpublished, attached dirty tree as well as its recovery copy.
+# Existing PR/rebuild recovery retains its usual rescue-and-recreate path.
+if [ "$leftover_dirty" = 1 ] && [ -z "$PR" ] \
+   && [ "$(git -C "$tree" symbolic-ref -q --short HEAD)" = "$branch" ]; then
   round_two=1
-  # Origin's head may be ahead of the local branch: a round whose rebuild
-  # the lease refused, or a save from elsewhere. Fast-forward only - no `+`,
-  # so a local branch that has diverged or is ahead is never rewound - and
-  # a failure here leaves the local branch as it was.
-  git fetch -q origin "refs/heads/$branch:refs/heads/$branch" >/dev/null 2>&1 || true
-  git worktree add -q "$tree" "$branch"
-elif git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
-  round_two=1
-  git fetch -q origin "$branch:$branch" 2>/dev/null
-  git worktree add -q "$tree" "$branch"
 else
-  git worktree add -q -b "$branch" "$tree" "$BASE"
-fi || { echo "fm-worker: could not create the worktree" >&2; exit 70; }
+  rm -rf "$tree"; mkdir -p "$REPO/state/worktrees"
+  git worktree prune >/dev/null 2>&1
+  rebuild_settle || true
+  if git show-ref --verify --quiet "refs/heads/$branch"; then
+    round_two=1
+    git fetch -q origin "refs/heads/$branch:refs/heads/$branch" >/dev/null 2>&1 || true
+  elif git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+    round_two=1
+    git fetch -q origin "$branch:$branch" 2>/dev/null || exit 70
+  fi
+  fresh_base="$BASE"
+  if [ "$round_two" = 1 ] && [ -z "$PR" ] && [ "$leftover_dirty" = 0 ]; then
+    # Only an ancestor can be empty. A divergent commit, even one whose
+    # final diff happens to be empty, remains earlier work.
+    if git fetch -q origin "refs/heads/$BASE:refs/remotes/origin/$BASE" 2>/dev/null; then
+      fresh_base="refs/remotes/origin/$BASE"
+    fi
+    if git merge-base --is-ancestor "$branch" "$fresh_base"; then
+      git branch -f "$branch" "$fresh_base" >/dev/null || exit 70
+      round_two=0
+    fi
+  fi
+  if git show-ref --verify --quiet "refs/heads/$branch"; then
+    git worktree add -q "$tree" "$branch"
+  else
+    git worktree add -q -b "$branch" "$tree" "$BASE"
+  fi || { echo "fm-worker: could not create the worktree" >&2; exit 70; }
+fi
+# A stale ephemeral question is not this round's answer, including when
+# preserving a dirty tree in place.
+rm -f "$tree/.fm-say.md" "$tree/.fm-prompt.md"
 
-# A new task's spec (T-147). Firstmate writes design/tasks/<id>.json in its
-# own working tree, and a new task's branch, made from the base, does not
-# carry it: T-157's codex round was told the file "is committed on this
-# branch", found it was not, and stopped. So the spec this run read is
-# copied into a new branch's worktree before the round, as the file the
-# round commits with its work, and the prompt says so; no vendor has to
-# infer that it should write it. Only on a new branch: a later round's
-# branch carries the file already, and a rebuilt round's entry is frozen.
+# Firstmate may revise a new task before any implementation exists.
+# Trust that copy only when every branch commit touches its own spec alone,
+# and never overwrite an uncommitted file. Once implementation exists the
+# branch remains authoritative, including its frozen spec during rebuilds.
 own_spec="design/tasks/$TASK.json"; spec_copied=0; spec_copy=''
-if [ "$round_two" = 0 ] && [ ! -e "$tree/$own_spec" ] && [ -f "$own_spec" ]; then
+refresh_spec=0
+if [ "$leftover_dirty" = 0 ] && [ -f "$own_spec" ]; then
+  spec_base="$(git merge-base "$BASE" "$branch")" || exit 70
+  branch_paths="$(git log --format= --name-only "$spec_base..$branch" | sed '/^$/d' | sort -u)"
+  if { [ "$round_two" = 0 ] && [ ! -e "$tree/$own_spec" ]; } \
+     || { [ "$branch_paths" = "$own_spec" ] && ! git cat-file -e "$spec_base:$own_spec" 2>/dev/null; }; then
+    refresh_spec=1
+    spec="$(fm_task "$TASK")"
+    [ -n "$spec" ] || exit 65
+    set_crew_activity "$spec"
+  fi
+fi
+if [ "$refresh_spec" = 1 ] && ! cmp -s "$own_spec" "$tree/$own_spec"; then
   mkdir -p "$tree/design/tasks" && cp "$own_spec" "$tree/$own_spec" || {
     echo "fm-worker: could not copy $own_spec into $tree" >&2; exit 70; }
   spec_copied=1
-  # what was copied, to tell the round's own work from the copy
   spec_copy="$(scratch_new)" || exit 70
   scratch_add "$spec_copy"
   cp "$own_spec" "$spec_copy" || exit 70
@@ -690,64 +772,6 @@ mirror_watch_stop() {
   mirror_watch_pid=''
 }
 
-# The pull request the branch already has, if the caller did not say.
-# This used to be looked up two hundred lines below, AFTER the engine had
-# run - so a second round dispatched without --pr was a first round
-# wearing its clothes: the prompt carried no review and no failing check,
-# the worker rewrote what it had already written, and the question it
-# wrote into .fm-say.md was dropped because $PR was still empty when the
-# time came to post it. The run then said "its question is on #", with
-# nothing after the hash, which is what finding this looked like.
-# Only on a later round: a branch that does not exist yet cannot have a
-# pull request, and a first round that called `gh` at all would break the
-# guarantee that an unavailable vendor touches nothing.
-#
-# The exit status is kept, and this is the whole point of the block.
-# `2>/dev/null` and an empty answer make "there is no pull request" and
-# "gh did not answer" the same string - and they are opposite
-# instructions. Empty-and-succeeded is a real state: a previous round
-# that pushed and then died at `pr create` leaves exactly that, and the
-# right thing is to carry on and open one. Empty-and-failed means the
-# prompt would be blind and the push would collide with a pull request
-# that is already there, so the run stops before it spends an engine
-# round finding that out.
-if [ "$round_two" = 1 ] && [ -z "$PR" ]; then
-  # no pipe: `$?` after one is the LAST element's, and `head` on empty
-  # input exits 0 - so a `head -1` here would turn could-not-answer into
-  # answered-none the moment pipefail was not in force, which is the one
-  # thing this block exists to prevent. `--jq '.[0].number'` yields a
-  # single line anyway, so the pipe bought nothing.
-  # a mktemp that failed would leave this empty, `2>""` would fail the
-  # redirection, gh would never run, and the round would exit 74
-  # saying GitHub could not answer - when GitHub was never asked
-  lookup_err="$(scratch_new)" || lookup_err=''
-  [ -n "$lookup_err" ] || { echo "fm-worker: could not make a scratch file" >&2; exit 70; }
-  scratch_add "$lookup_err"
-  PR="$($GH pr list --head "$branch" --state open --json number --jq '.[0].number' \
-        2>"$lookup_err" </dev/null)"; lookup_rc=$?
-  # what gh actually prints for a branch with no open pull request is
-  # the literal `null`, not silence - leak it through and the round
-  # says `already has #null` and then posts to `gh pr comment null`
-  PR="$(printf '%s' "$PR" | tr -d '[:space:]')"
-  case "$PR" in null) PR='' ;; esac
-  if [ "$lookup_rc" != 0 ]; then
-    echo "fm-worker: could not ask which pull request $branch has" >&2
-    sed 's/^/fm-worker: gh: /' "$lookup_err" >&2
-    echo "fm-worker: a later round cannot run without it - the prompt would carry no review" >&2
-    echo "fm-worker: and the push would collide with a pull request nobody looked for" >&2
-    emit --type worker_crashed --en "could not ask which pull request $branch has" \
-         --tw "問不到 ${branch} 的 PR"
-    exit 74
-  fi
-  if [ -n "$PR" ]; then
-    echo "fm-worker: $branch already has #$PR; this round answers it" >&2
-  else
-    # succeeded and said none: the branch was pushed by a round that did
-    # not get as far as opening one, and this round opens it
-    echo "fm-worker: $branch has no open pull request; this round will open one" >&2
-  fi
-fi
-
 # --- a later round starts from the current base (T-067) -------------------
 # Firstmate may not run git and the adapter cannot, so when the base moves
 # under an open task branch and the two conflict, this is the only place
@@ -976,6 +1000,13 @@ say="$tree/.fm-say.md"
     printf 'in its own working tree. fm-worker.sh has copied it into your worktree,\n'
     printf 'uncommitted, and commits it with your work when the round ends. It is\n'
     printf 'there already; do not write it again, and leave it as it is.\n'
+  fi
+  if [ -z "$PR" ]; then
+    printf '\nIf this round needs firstmate before implementation, write a standalone\n'
+    printf '`SCOPE-BLOCKED:%s` or `ASK-<reason>:%s` marker and the question to `.fm-say.md`.\n' "$TASK" "$TASK"
+    printf 'The launcher opens a draft pull request and posts your question there, even\n'
+    printf 'when you change no implementation. This replaces the premature-question rule\n'
+    printf 'in the worker instructions above for these first-round requests.\n'
   fi
   # a later round is answering a review, and the review is on the pull
   # request. Handing over the task alone would have the worker rewrite what
@@ -1476,6 +1507,25 @@ note_refused() {   # note_refused <file>; keeps it and says why, and returns
 # goes through the EXIT trap, which keeps it with lost_held. It used to
 # go with the rest of the scratch files. held is set only once the copy
 # is whole, so a failed cp leaves the original in the worktree instead.
+question_draft=0
+if [ "$asked" = 1 ] && [ -z "$PR" ] && ! worker_changed_files \
+   && grep -Eq "^(SCOPE-BLOCKED|ASK-[A-Z-]+):$TASK([[:space:]]|$)" "$say"; then
+  # Prefer the seeded spec as the draft's diff. A task already on base
+  # needs a durable question file: GitHub cannot open a PR without a diff.
+  # Firstmate resolves this draft's scope before it can enter the gates.
+  if git -C "$tree" diff --quiet "$BASE...HEAD" \
+     && [ "$spec_copied" = 0 ]; then
+    question_path="design/questions/$TASK.md"
+    mkdir -p "$tree/design/questions" || exit 70
+    if [ -e "$tree/$question_path" ]; then
+      printf '\n' >> "$tree/$question_path" || exit 70
+      cat "$say" >> "$tree/$question_path" || exit 70
+    else
+      cp "$say" "$tree/$question_path" || exit 70
+    fi
+  fi
+  question_draft=1
+fi
 held=''
 held_settled=0
 lost_held() {   # lost_held <rc>; from the EXIT trap, so it returns
@@ -1486,7 +1536,7 @@ lost_held() {   # lost_held <rc>; from the EXIT trap, so it returns
        --en "the worker's note was not posted: the run ended (exit $1) before it reached a pull request" \
        --tw "工人的留言沒有貼出：執行在送到 PR 之前就結束了（exit ${1}）"
 }
-if [ "$asked" = 1 ] && [ -z "$PR" ] && { worker_changed_files || rebuild_publishes; }; then
+if [ "$asked" = 1 ] && [ -z "$PR" ] && { worker_changed_files || rebuild_publishes || [ "$question_draft" = 1 ]; }; then
   _held="$(scratch_new)" || _held=''
   [ -n "$_held" ] || { echo "fm-worker: could not make a scratch file" >&2; exit 70; }
   scratch_add "$_held"
@@ -1523,7 +1573,7 @@ rm -f "$say"
 # the next round rebuilds again from the branch as it stands.
 # Said here, where it is already true, so a round that fails on the way to
 # the push still reports that it asked.
-if [ "$asked" = 1 ] && ! worker_changed_files; then
+if [ "$asked" = 1 ] && [ "$question_draft" = 0 ] && ! worker_changed_files; then
   if ! rebuild_publishes; then
     echo "fm-worker: the worker asked rather than changed anything; its question is on #$PR" >&2
     printf '%s\n' "$branch"
@@ -1543,7 +1593,7 @@ fi
 # two agreed only because the prompt happened to be removed between them.
 # A rebuild is work in its own right: a branch brought up to date with
 # nothing else to add is still committed and pushed.
-if [ "$rebuilt" = 0 ] && ! worker_did_work; then
+if [ "$rebuilt" = 0 ] && [ "$question_draft" = 0 ] && ! worker_did_work; then
   # A round that destroyed its own tree did something, and the mirror
   # already said so (worktree_restored); it is not the same round as one
   # that truly left the tree untouched (T-128).
@@ -1705,6 +1755,9 @@ if [ "$rebuilt" = 1 ]; then
       commit_ok=1
     fi
   fi
+elif [ "$question_draft" = 1 ] && git -C "$tree" diff --cached --quiet; then
+  # A previous attempt already committed the spec; publish that commit.
+  commit_ok=1
 elif fm_git_commit "$tree" "$commit_msg"; then
   commit_ok=1
 fi
@@ -1778,7 +1831,9 @@ fi
 # looked for.
 num="$PR"
 if [ -z "$num" ] || [ "$num" = "null" ]; then
-  url="$($GH pr create --head "$branch" --base "$BASE" \
+  draft_args=()
+  [ "$question_draft" = 0 ] || draft_args=(--draft)
+  url="$($GH pr create ${draft_args[@]+"${draft_args[@]}"} --head "$branch" --base "$BASE" \
         --title "$TASK: $(jq -r .title <<<"$spec")" \
         --body "Dispatched by firstmate for $TASK. Acceptance is in design/tasks/$TASK.json." \
         2>/dev/null </dev/null | tail -1)"

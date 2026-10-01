@@ -152,6 +152,60 @@ assert_eq "1" "$?" "a round that only has the copied spec changed nothing"
 assert_contains "$outn2" "the adapter changed nothing" "and is reported as such"
 safe_rm_rf "$dn" "$dn2"
 
+# T-160: an abandoned branch is not evidence that a worker authored anything.
+for leftover in empty commit dirty spec spec_pr; do
+  dl="$(fixture)"; rl="$dl/repo"; GHl="$(ghstub "$dl")"
+  bl=t-n-leftover; tl="$rl/state/worktrees/T-N"
+  mkdir -p "$rl/state/worktrees"
+  git -C "$rl" worktree add -q -b "$bl" "$tl" main
+  jq -n '{id:"T-N",title:"a new task",scope:["src/**"],acceptance:["WIDENED_SPEC"]}' > "$rl/design/tasks/T-N.json"
+  case "$leftover" in
+    commit)
+      echo authored > "$tl/earlier.txt"
+      mkdir -p "$tl/design/tasks"
+      jq '.acceptance=["AUTHORED_SPEC"]' "$rl/design/tasks/T-N.json" > "$tl/design/tasks/T-N.json"
+      git -C "$tl" add earlier.txt design/tasks/T-N.json; git -C "$tl" commit -qm earlier ;;
+    dirty) echo authored > "$tl/earlier.txt" ;;
+    spec|spec_pr)
+      mkdir -p "$tl/design/tasks"
+      jq '.acceptance=["OLD_SPEC"]' "$rl/design/tasks/T-N.json" > "$tl/design/tasks/T-N.json"
+      git -C "$tl" add design/tasks/T-N.json; git -C "$tl" commit -qm spec ;;
+  esac
+  echo current > "$rl/current-base.txt"
+  git -C "$rl" add current-base.txt; git -C "$rl" commit -qm advance
+  git -C "$rl" push -q origin main
+  cat > "$rl/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+cp "$2" "$3/seen-prompt.txt"
+printf 'done\n' > "$3/done.txt"
+M
+  if [ "$leftover" = spec_pr ]; then
+    sed 's/echo null/echo 42/' "$GHl" > "$GHl.next"
+    mv "$GHl.next" "$GHl"; chmod +x "$GHl"
+  fi
+  outl="$(cd "$rl" && FM_ROOT="$rl" FM_GH="$GHl" bin/fm-worker.sh --task T-N 2>&1)"; rcl=$?
+  assert_eq 0 "$rcl" "$leftover leftover dispatch completes"
+  promptl="$(cat "$tl/seen-prompt.txt" 2>/dev/null)"
+  case "$leftover" in
+    empty)
+      assert_ok "git -C '$rl' merge-base --is-ancestor main '$bl'" "empty leftover starts at the current base"
+      assert_lacks "$promptl" "Your branch already carries your earlier work" "empty leftover gets a first-round prompt"
+      assert_eq "$(cat "$rl/design/tasks/T-N.json")" "$(cat "$tl/design/tasks/T-N.json" 2>/dev/null)" "empty leftover receives the missing spec" ;;
+    commit|dirty)
+      assert_eq authored "$(cat "$tl/earlier.txt" 2>/dev/null)" "$leftover leftover preserves authored work in the active tree"
+      assert_contains "$promptl" "Your branch already carries your earlier work" "$leftover leftover prompt acknowledges earlier work" ;;
+    spec|spec_pr)
+      assert_contains "$promptl" WIDENED_SPEC "spec-only branch receives firstmate's revised acceptance"
+      assert_lacks "$promptl" OLD_SPEC "spec-only branch no longer prompts with obsolete acceptance"
+      assert_eq "$(cat "$rl/design/tasks/T-N.json")" "$(cat "$tl/design/tasks/T-N.json" 2>/dev/null)" "spec-only branch receives the repository spec" ;;
+  esac
+  if [ "$leftover" = commit ]; then
+    assert_contains "$promptl" AUTHORED_SPEC "implementation commits retain the branch spec"
+    assert_lacks "$promptl" WIDENED_SPEC "firstmate's copy cannot override an implemented task"
+  fi
+  safe_rm_rf "$dl"
+done
+
 # T-127: the crew runs on the model config.yaml names, and the round
 # records vendor, model and cli_version as separate fields, read from the
 # run itself. FM_MOCK_MODEL stands in for a real vendor's transcript
@@ -598,24 +652,42 @@ printf 'ASK-PASS-CRITERIA:T-Z\n' > "$3/.fm-say.md"
 M
 chmod +x "$r8/bin/adapters/mock.sh"
 out8="$(cd "$r8" && FM_ROOT="$r8" FM_GH="$GH8" bin/fm-worker.sh --task T-Z 2>&1)"; rc8=$?
-assert_eq "73" "$rc8" "so does a question with no pull request to put it on"
-assert_contains "$out8" "no pull request to say it on - asking is premature" \
-  "and it says what was actually checked - there is no pull request"
-# the payload survives, or the only copy of the question is gone and
-# nobody can post it by hand either
-# OUT of the worktree: the next round removes and recreates that, so
-# the file where it was written is gone as soon as anything runs again
-# - and the design says the text survives for a human to post
-unsent8=("$r8"/state/unsent/T-Z-*.md)
-assert_ok "test -s '${unsent8[0]}'" \
-  "what the worker wrote is kept where the next round will not delete it"
-assert_contains "$out8" "state/unsent/T-Z" "and the run says where"
-assert_contains "$(jq -r 'select(.type=="worker_crashed")|.summary.en // .en' \
-  < "$r8/state/events.jsonl" | tail -1)" "before there was a pull request" \
-  "and the log says which of the two it was"
-assert_lacks "$(cat "$d8/ghcalls" 2>/dev/null)" "pr create" \
-  "a note with no work behind it opens no pull request"
+assert_eq "0" "$rc8" "a question-only first round opens its communication channel"
+assert_contains "$(cat "$d8/ghcalls")" "--draft" "the question opens a draft pull request"
+assert_contains "$(cat "$d8/ghcalls")" "pr comment 42" "the question is posted on the new pull request"
+b8="$(printf '%s' "$out8" | tail -1)"
+assert_eq 'ASK-PASS-CRITERIA:T-Z' "$(git -C "$r8" show "$b8:design/questions/T-Z.md" 2>/dev/null)" \
+  "the draft has a real question diff even when the spec is already on main"
+assert_fail "git -C '$r8' cat-file -e '$b8:.fm-say.md'" "the transient note is never committed"
+assert_fail "ls '$r8'/state/unsent/T-Z-*.md" "the first-round question is not stranded unsent"
 rm -rf "$d8"
+
+# New tasks can use the spec alone as the draft's diff. Cover both the
+# uncommitted seed and an earlier attempt that committed only that spec.
+for question_seed in seeded committed; do
+  dq="$(fixture)"; rq="$dq/repo"; GHq="$(ghstub "$dq")"
+  jq -n '{id:"T-Q",title:"question",scope:["src/**","design/tasks/T-Q.json"],acceptance:["needs clarification"]}' \
+    > "$rq/design/tasks/T-Q.json"
+  if [ "$question_seed" = committed ]; then
+    mkdir -p "$rq/state/worktrees"
+    git -C "$rq" worktree add -q -b t-q-question "$rq/state/worktrees/T-Q" main
+    cp "$rq/design/tasks/T-Q.json" "$rq/state/worktrees/T-Q/design/tasks/T-Q.json"
+    git -C "$rq/state/worktrees/T-Q" add design/tasks/T-Q.json
+    git -C "$rq/state/worktrees/T-Q" commit -qm spec
+  fi
+  cat > "$rq/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+printf 'SCOPE-BLOCKED:T-Q\nPlease widen the scope to include the required implementation.\n' > "$3/.fm-say.md"
+M
+  outq="$(cd "$rq" && FM_ROOT="$rq" FM_GH="$GHq" bin/fm-worker.sh --task T-Q 2>&1)"; rcq=$?
+  bq="$(printf '%s' "$outq" | tail -1)"
+  assert_eq 0 "$rcq" "$question_seed spec-only scope question completes"
+  assert_contains "$(cat "$dq/ghcalls")" --draft "$question_seed scope question opens a draft"
+  assert_contains "$(cat "$dq/ghcalls")" 'pr comment 42' "$question_seed scope question is published"
+  assert_eq design/tasks/T-Q.json "$(git -C "$rq" diff --name-only "main...$bq")" \
+    "$question_seed question draft carries only its spec"
+  safe_rm_rf "$dq"
+done
 
 # A note is not only a question. An adapter that may edit but not execute
 # (claude under acceptEdits) finishes the work and says which checks it
