@@ -14,6 +14,26 @@ export FM_REVIEW_CI_WAIT=0
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# T-161: newer bash can run the old unbraced messages successfully. Check
+# the actual executable sources too, independently of ci.sh's lint, so
+# reverting either repair is detected on Linux as well as macOS bash 3.2.
+# Keep one assertion per script so fail-first identifies each repair.
+for boundary_script in fm-review.sh fm-auth-probe.sh; do
+  python3 - "$ROOT/bin/$boundary_script" <<'PY_BOUNDARY_SOURCE'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+pattern = re.compile(rb'\$[A-Za-z_][A-Za-z0-9_]*[\x80-\xff]')
+violations = [number for number, line in enumerate(path.read_bytes().split(b'\n'), 1)
+              if pattern.search(line)]
+for number in violations:
+    print(f'{path}:{number}: unbraced variable before non-ASCII text')
+sys.exit(1 if violations else 0)
+PY_BOUNDARY_SOURCE
+  assert_eq '0' "$?" "$boundary_script production variables are braced before non-ASCII text"
+done
 # This suite runs fm-review.sh in run mode, which sweeps ${TMPDIR:-/tmp} for
 # abandoned checkouts (T-123): give it a TMPDIR of its own before any of that,
 # so running this suite from inside a live review round's bin/ci.sh can never
