@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-default-language="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -239,10 +239,11 @@ const MERGED_SHOWN = 5;
 const laneKey = k => "lane" + k[0].toUpperCase() + k.slice(1);
 // every string the reader sees comes from the dictionary; zh-CN is derived
 // from zh-TW by the table, so there is no third file to keep in step
-const LANGS = ["en", "zh-TW", "zh-CN"], LANGNAME = { "en": "EN", "zh-TW": "\u7e41", "zh-CN": "\u7b80" };
+const DEFAULT_LANGUAGE = document.documentElement.dataset.defaultLanguage || "en";
+const LANGS = [DEFAULT_LANGUAGE, ...["en", "zh-TW", "zh-CN"].filter(l => l !== DEFAULT_LANGUAGE)], LANGNAME = { "en": "EN", "zh-TW": "\u7e41", "zh-CN": "\u7b80" };
 let lang = new URLSearchParams(location.search).get("lang") ||
-  localStorage.getItem("board.lang") || "zh-TW";
-if (!LANGS.includes(lang)) lang = "zh-TW";
+  localStorage.getItem("board.lang") || DEFAULT_LANGUAGE;
+if (!LANGS.includes(lang)) lang = DEFAULT_LANGUAGE;
 let DICT = { en: {}, "zh-TW": {}, tw2cn: [] };
 const cn = (x) => DICT.tw2cn.reduce((acc, pair) => acc.split(pair[0]).join(pair[1]), x);
 const t = (k) => lang === "zh-CN" ? cn(DICT["zh-TW"][k] ?? DICT.en[k] ?? k)

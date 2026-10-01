@@ -32,13 +32,23 @@ const givenEnv = (name: string): string | undefined => {
     } finally { libc.close(); }
   } catch { return undefined; }
 };
-// FM_PORT unset is the operator's board, 4173. Set, it must be a port: an
+// FM_PORT unset reads board.port through the shared config reader. Set, it must be a port: an
 // empty one is a caller whose port variable came out empty, and reading it as
 // unset put a suite's fixture board on the captain's own address while the
 // captain's board was down (T-153, 2026-09-29), so it is refused (64), never defaulted.
+const setting = (reader: string): string => {
+  const r = Bun.spawnSync(["bash", "-c", '. "$1"; "$2" "$3"', "fm-board",
+    join(ROOT, "bin/fm-config.sh"), reader, join(ROOT, "config.yaml")], { stdin: "ignore" });
+  if (r.exitCode !== 0) {
+    console.error(`board refused to start: ${r.stderr.toString().trim()}`);
+    process.exit(64);
+  }
+  return r.stdout.toString().trim();
+};
+const DEFAULT_LANGUAGE = setting("fm_language");
 const PORT = (() => {
   const given = givenEnv("FM_PORT");
-  if (given === undefined) return 4173;
+  if (given === undefined) return Number(setting("fm_board_port"));
   if (!/^[0-9]{1,5}$/.test(given) || Number(given) > 65535) {
     console.error(`board refused to start: FM_PORT is set but is not a port: '${given}'`);
     process.exit(64);
@@ -1695,7 +1705,10 @@ const serveFile = (name: string) => {
   if (!real.startsWith(pub + "/") || !statSync(real).isFile()) return new Response("not found", { status: 404 });
   const type = name.endsWith(".css") ? "text/css"
     : name.endsWith(".js") ? "text/javascript" : "text/html; charset=utf-8";
-  return new Response(readFileSync(real), { headers: { "content-type": type } });
+  const body = name === "index.html"
+    ? readFileSync(real, "utf8").replace('data-default-language="en"', `data-default-language="${DEFAULT_LANGUAGE}"`)
+    : readFileSync(real);
+  return new Response(body, { headers: { "content-type": type } });
 };
 
 const server = Bun.serve({

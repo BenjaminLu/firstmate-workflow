@@ -1,7 +1,7 @@
 // A board with a crew on it, built from an event log rather than from a mock
 // of the server: the page under test is the real one, reading real state
 // through the real endpoints. Nothing here calls a model or the network.
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, cpSync, rmSync, chmodSync } from "node:fs";
+import { appendFileSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, cpSync, rmSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -161,8 +161,9 @@ async function freePort(): Promise<number> {
 
 // `env` is added to the board's environment, for a test that stands a stub in
 // for gh (FM_GH) or starts the board from a shell that exports FM_PROJECT
-export async function startBoard(root: string, env: Record<string, string> = {}) {
+export async function startBoard(root: string, env: Record<string, string> = {}, configuredPort = false) {
   const port = await freePort();
+  if (configuredPort) appendFileSync(join(root, "config.yaml"), `\nboard:\n  port: ${port}\n`);
   // the board merges by shelling out to bin/fm-merge.sh in its root, so a
   // recorder there keeps the e2e off gh without teaching the server a test
   // mode it would then be trusted with in production. A merge runs in the
@@ -179,9 +180,9 @@ export async function startBoard(root: string, env: Record<string, string> = {})
   const config = mkdtempSync(join(tmpdir(), "fm-e2e-config-"));
   // T-151: no session is passed on, so the board owns what it starts and a
   // board stopped below takes its merges with it, never the operator's session
-  const { FM_SESSION_PID: _session, ...inherited } = process.env;
+  const { FM_SESSION_PID: _session, FM_PORT: _port, ...inherited } = process.env;
   const proc: ChildProcess = spawn("bun", ["run", join(root, "board/server.ts")], {
-    env: { ...inherited, ...env, FM_ROOT: root, FM_PORT: String(port), XDG_CONFIG_HOME: config },
+    env: { ...inherited, ...env, FM_ROOT: root, ...(configuredPort ? {} : { FM_PORT: String(port) }), XDG_CONFIG_HOME: config },
     stdio: "ignore",
   });
   const url = `http://127.0.0.1:${port}`;

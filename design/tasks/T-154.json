@@ -1,0 +1,27 @@
+{
+  "id": "T-154",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": ["T-121", "T-153"],
+  "title": "the board port and the language of cards and reports are settings that take effect: config.yaml names them, fm setup asks them, and the board, the decision cards and firstmate's reports follow them",
+  "scope": [
+    "bin/fm-setup.sh",
+    "bin/fm-config.sh",
+    "bin/fm-herdr.py",
+    "bin/fm.sh",
+    "board/**",
+    "i18n/**",
+    "config.yaml",
+    "skills/firstmate/**",
+    "tests/**",
+    "design/**",
+    "README.md",
+    "design/tasks/T-154.json"
+  ],
+  "acceptance": [
+    "Why. T-121's first-run wizard was specified to ask for the board port and the language for cards and reports, but nothing read either answer: the board takes its port from FM_PORT only (board/server.ts:19) and no code reads a language setting (T-121 review round 7, item 3). On 2026-09-29 the captain moved both questions out of T-121 into this task. Its own spec file, design/tasks/T-154.json, is committed on this branch.",
+    "Port. config.yaml `board.port` (default 4173) is read through fm-config.sh by fm-herdr.py's board_start, `fm board`, the login URL and the board server itself when FM_PORT is not set; FM_PORT still wins for tests and one-offs. The board secret file and the tab reuse follow the configured port. fm setup asks for it with 4173 as the Enter default and refuses a port already listening that is not this repository's board.",
+    "Language. config.yaml `language` (`en` or `zh-TW`, default `en`) sets the board's default UI language (a viewer's own toggle still wins for that viewer), the language decision cards are raised in first, and the language firstmate's skill reports to the captain in. fm setup asks for it. Nothing else in the UI changes.",
+    "Tests: a configured port is where the board listens and where `fm board` opens; FM_PORT overrides it; a configured language is the board's default and the order of a card's languages; the wizard's answers file sets both and a re-run keeps them. Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves."
+  ]
+}

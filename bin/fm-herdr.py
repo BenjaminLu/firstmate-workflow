@@ -20,6 +20,7 @@ import re
 import shlex
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -1900,8 +1901,33 @@ def board_open(url, port):
     return said
 
 
+def board_check_port(root, port):
+    """An occupied TCP port is usable only after this root's nonce verifies."""
+    if not 1 <= port <= 65535:
+        raise ValueError('board.port must be between 1 and 65535')
+    try:
+        with socket.create_connection(('127.0.0.1', port), timeout=2):
+            pass
+    except ConnectionRefusedError:
+        return
+    if not board_matches(Path(root).resolve(), f'http://127.0.0.1:{port}'):
+        raise RuntimeError(f'board port belongs to an unverified root: http://127.0.0.1:{port}')
+
+
+def configured_board_port(root):
+    result = subprocess.run(['bash', '-c', '. "$1"; fm_board_port "$2"',
+                             'fm-board', str(Path(__file__).resolve().parent / 'fm-config.sh'),
+                             str(Path(root) / 'config.yaml')], capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip())
+    port = int(result.stdout.strip())
+    if port == 0:
+        raise RuntimeError('fm board needs a stable port; FM_PORT=0 is only for a directly started test server')
+    return port
+
+
 def board_start(root):
-    root = Path(root).resolve(); port = int(os.environ.get('FM_PORT', '4173'))
+    root = Path(root).resolve(); port = configured_board_port(root)
     url = f'http://127.0.0.1:{port}'
     base = root / 'state/session'; base.mkdir(parents=True, exist_ok=True)
     with locked(base / '.board.lock'):
@@ -2258,6 +2284,11 @@ def main(args):
         try: return roster_command(*args)
         except (OSError, ValueError) as error:
             print('fm roster: ' + str(error), file=sys.stderr); return 65
+    if mode == 'board-check-port':
+        try: board_check_port(args[0], int(args[1]))
+        except (OSError, RuntimeError, ValueError) as error:
+            print('fm setup: ' + str(error), file=sys.stderr); return 64
+        return 0
     if mode == 'board':
         # a board that cannot start, or a tab that could not be signed in, is
         # said in one line and a non-zero exit, never a traceback

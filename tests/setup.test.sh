@@ -19,6 +19,9 @@ printf 'gh\tpresent\t1\ngh\tauthed\t1\ngh\tpermission\tWRITE\n' > "$facts"
 # the real fm-doctor.sh --sandbox it calls last (that is doctor.test.sh's)
 mkdir -p "$d/bin"
 cp "$ROOT/bin/fm-setup.sh" "$ROOT/bin/fm-config.sh" "$d/bin/"
+# Port ownership is covered with a real TCP listener in settings.test.sh.
+# Defaults here must not depend on a board on the runner's 4173.
+printf 'import sys\nassert sys.argv[1] == "board-check-port"\n' > "$d/bin/fm-herdr.py"
 # the adapters, whose `# fm:review-run` line says which reviewer can run a run-mode review
 cp -R "$ROOT/bin/adapters" "$d/bin/"
 printf '#!/usr/bin/env bash\necho "fm-doctor ran: $*" > "%s/doctor-ran"\nexit 0\n' "$d" > "$d/bin/fm-doctor.sh"
@@ -42,12 +45,11 @@ run_setup </dev/null >/dev/null 2>&1
 assert_ok "test -f '$repo/config.yaml'" "setup writes config.yaml"
 assert_eq "claude" "$(field_in "$repo/config.yaml" vendor)" "with no vendor CLI installed, claude is still the recommended default"
 # it writes only what it asked or found out (T-121): no model - there is no
-# model question - no reviewer mode, and no board port or language, which
-# moved to T-154 because nothing reads them yet
+# model question - and no reviewer mode. Board settings have consumers (T-154).
 assert_lacks "$(cat "$repo/config.yaml")" "model:" "a fresh config.yaml gets no model"
 assert_lacks "$(cat "$repo/config.yaml")" "mode:" "nor a reviewer mode"
-assert_lacks "$(cat "$repo/config.yaml")" "board_port" "nor a board port"
-assert_lacks "$(cat "$repo/config.yaml")" "language" "nor a language"
+assert_eq "4173" "$(field_in "$repo/config.yaml" port)" "the board port defaults to 4173"
+assert_eq "en" "$(field_in "$repo/config.yaml" language)" "the language defaults to English"
 assert_ok "test -f '$d/doctor-ran'" "and it hands off to fm doctor --sandbox at the end"
 assert_contains "$(cat "$d/doctor-ran")" "--sandbox" "asking for the sandbox check"
 rm -f "$d/doctor-ran"
@@ -80,6 +82,8 @@ answers="$d/answers.txt"
   echo "billing_gemini: api-key"
   echo "repo_github: captain/flagship"
   echo "repo_base: trunk"
+  echo "board_port: 49231"
+  echo "language: zh-TW"
 } > "$answers"
 run_setup --answers "$answers" </dev/null >/dev/null 2>&1
 assert_eq "codex" "$(field_in "$repo/config.yaml" vendor)" "the answers file names the worker vendor"
@@ -87,6 +91,19 @@ assert_contains "$(cat "$repo/config.yaml")" "gemini: api-key" "the chosen api-k
 assert_lacks "$(cat "$repo/config.yaml")" "codex: api-key" "a vendor left on subscription gets no billing entry"
 assert_contains "$(cat "$repo/config.yaml")" "captain/flagship" "the chosen repository is written"
 assert_contains "$(cat "$repo/config.yaml")" "base: trunk" "and the chosen base branch"
+
+assert_eq "49231" "$(field_in "$repo/config.yaml" port)" "answers set board.port"
+assert_eq "zh-TW" "$(field_in "$repo/config.yaml" language)" "answers set language"
+run_setup </dev/null >/dev/null 2>&1
+assert_eq "49231" "$(field_in "$repo/config.yaml" port)" "a rerun keeps the chosen port"
+assert_eq "zh-TW" "$(field_in "$repo/config.yaml" language)" "a rerun keeps the chosen language"
+for invalid in 'board_port: 0' 'board_port: 65536' 'board_port: nope' 'language: fr'; do
+  printf '%s\n' "$invalid" > "$answers"
+  cp "$repo/config.yaml" "$d/settings-before"
+  run_setup --answers "$answers" </dev/null >/dev/null 2>&1
+  assert_ne "0" "$?" "setup refuses invalid setting $invalid"
+  assert_ok "cmp '$repo/config.yaml' '$d/settings-before'" "invalid settings leave config intact"
+done
 
 # --- for a key, it prints the keychain command and asks for no key itself ----
 rm -f "$repo/config.yaml"
@@ -128,6 +145,9 @@ assert_contains "$(cat "$repo/config.yaml")" "concurrency: 7" "so does an unrela
 repo_facts "" ""
 reviewer_field() { sed -n '/^reviewer:/,/^[^ ]/p' "$repo/config.yaml" | sed -n "s/^[[:space:]]*$1:[[:space:]]*//p" | head -1 | sed 's/[[:space:]]*#.*$//'; }
 {
+  echo "board:"
+  echo "  port: 4173"
+  echo "language: en"
   echo "vendor: claude"
   echo "model:  claude-opus-5-5"
   echo "reviewer:"

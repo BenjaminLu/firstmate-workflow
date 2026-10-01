@@ -2456,3 +2456,32 @@ test('T-118: reopening moves a merged card out of merged, and a card under a fin
     await expect.poll(() => existsSync(b.recorder) ? readFileSync(b.recorder,'utf8') : '').toContain('--pr 97 --task T-117');
   } finally {stopBoard(b);}
 });
+
+// T-154: real HTTP listener, credential port and browser preference precedence.
+for (const language of ['en', 'zh-TW']) {
+  test(`configured port and ${language} default reach cards; viewer toggle persists`, async ({page}) => {
+    const root = makeRoot(['working']);
+    writeFileSync(join(root, 'config.yaml'), `language: ${language}\n`);
+    const b = await startBoard(root, {}, true);
+    try {
+      await page.goto(b.url);
+      await expect(page.locator('html')).toHaveAttribute('lang', language);
+      await expect(page.locator('.dcard').first()).toContainText(details[language].title);
+      await expect(page.locator('#langs button').first()).toHaveAttribute('data-l', language);
+      const other = language === 'en' ? 'zh-TW' : 'en';
+      await page.locator(`#langs [data-l="${other}"]`).click();
+      await page.reload();
+      await expect(page.locator('html')).toHaveAttribute('lang', other);
+      await expect(page.locator('.dcard').first()).toContainText(details[other].title);
+    } finally { stopBoard(b); }
+  });
+}
+test('FM_PORT overrides a configured board port', async ({page}) => {
+  const root = makeRoot(['working']);
+  writeFileSync(join(root, 'config.yaml'), 'board:\n  port: 1\n');
+  const b = await startBoard(root);
+  try {
+    await page.goto(b.url);
+    await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+  } finally { stopBoard(b); }
+});
