@@ -529,8 +529,10 @@ else
 fi
 
 # Read bytes, not locale-dependent character classes: bash 3.2 can absorb
-# non-ASCII punctuation into an unbraced variable name. Include every file
-# under both trees, including embedded snippets and lint-source files.
+# non-ASCII punctuation into an unbraced variable name. Scan text recursively
+# under both trees, including embedded snippets and lint-source files. A NUL
+# anywhere marks binary content (including generated Python bytecode); no
+# extension or cache-directory exclusions may hide real textual snippets.
 stage "non-ASCII variable boundary"
 if python3 - <<'PY_BOUNDARY'
 from pathlib import Path
@@ -543,7 +545,10 @@ for root in (Path('bin'), Path('tests')):
     for path in sorted(root.rglob('*')):
         if not path.is_file():
             continue
-        for number, line in enumerate(path.read_bytes().split(b'\n'), 1):
+        content = path.read_bytes()
+        if b'\0' in content:
+            continue
+        for number, line in enumerate(content.split(b'\n'), 1):
             if pattern.search(line):
                 print(f'{path}:{number}: brace the variable before non-ASCII text')
                 failed = True

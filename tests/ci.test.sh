@@ -467,9 +467,32 @@ out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)"
 assert_lacks "$out" "x shellcheck" "an info-level finding does not, which is what the adapters depend on"
 
 # T-161: construct the unsafe bytes so this test is itself lint-clean.
-# Exercise nested shell snippets as well as test files, without exclusions.
+# Exercise nested shell snippets as well as test files, without text exclusions.
 unicode_tree_before="$(find "$q" -print | sort)"
-for unicode_file in bin/nested/snippet.py tests/nested/snippet.txt; do
+# Real Python bytecode and an extensionless binary both contain the offending
+# bytes. Keep them present during the text probes: deleting caches is no fix.
+python3 - "$q" <<'PY_BOUNDARY_FIXTURE'
+from pathlib import Path
+import py_compile
+import sys
+
+root = Path(sys.argv[1])
+source = root / 'bin/boundary-cache/module.py'
+source.parent.mkdir()
+# Adjacent literals combine in bytecode, but the source has no unsafe boundary.
+source.write_text("value = '$' 'X。'\n", encoding='utf-8')
+compiled = Path(py_compile.compile(str(source), doraise=True))
+assert b'$X' + '。'.encode() in compiled.read_bytes()
+binary = root / 'tests/boundary-cache/blob'
+binary.parent.mkdir()
+# Place NUL beyond a typical sniffing prefix to cover whole-file classification.
+binary.write_bytes(b'# header\n' + b'$X' + '。'.encode() + b'a' * 8192 + b'\0')
+PY_BOUNDARY_FIXTURE
+unicode_rc=0
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)" || unicode_rc=$?
+assert_eq '0' "$unicode_rc" "compiled cache and extensionless binary do not fail fast checks"
+assert_contains "$out" '+ non-ASCII variable boundary' "boundary lint ignores binary artifacts"
+for unicode_file in bin/nested/snippet.py tests/nested/snippet.txt bin/boundary-cache/__pycache__/snippet.txt tests/nested/snippet.pyc; do
   mkdir -p "$q/$(dirname "$unicode_file")"
   printf '# fixture\n%s%s\n' '$X' '。' > "$q/$unicode_file"
   unicode_rc=0
@@ -483,8 +506,13 @@ for unicode_file in bin/nested/snippet.py tests/nested/snippet.txt; do
   assert_eq '0' "$unicode_rc" "braced variable in $unicode_file passes fast checks"
   assert_contains "$out" '+ non-ASCII variable boundary' "the boundary lint accepts braces"
   rm -f "$q/$unicode_file"
-  rmdir "$q/$(dirname "$unicode_file")"
+  # The real compiled module still owns its cache directory until final cleanup.
+  if [ "$unicode_file" != bin/boundary-cache/__pycache__/snippet.txt ]; then
+    rmdir "$q/$(dirname "$unicode_file")"
+  fi
 done
+safe_rm_rf "$q/bin/boundary-cache"
+safe_rm_rf "$q/tests/boundary-cache"
 assert_eq "$unicode_tree_before" "$(find "$q" -print | sort)" \
   "boundary fixtures restore the shared tree, including directories"
 
