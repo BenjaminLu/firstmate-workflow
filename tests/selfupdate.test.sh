@@ -350,21 +350,6 @@ rm -f "$tt/design/tasks/T-004.json"
 assert_contains "$("$FM" tasks --repo "$ROOT" 2>&1)" "| T-090 | one file per task, and no hand-kept copy of the task list | T-065 |" \
   "this repository's own table prints, this task included"
 
-# split: the migration, and how a branch opened before it brings its entry over
-printf '{"tasks":[{"id":"T-001","title":"first","milestone":"M0","depends_on":[]},{"id":"T-005","title":"mine","depends_on":["T-001"]},{"id":"T-003","title":"stale","milestone":"M0","depends_on":[]}]}\n' \
-  > "$tt/design/tasks.json"
-assert_fail "'$FM' tasks split --repo '$tt'" "splitting everything refuses to overwrite a task file that says something else"
-assert_ok "test ! -e '$tt/design/tasks/T-005.json'" "and writes nothing when it refuses"
-assert_ok "'$FM' tasks split T-005 --repo '$tt'" "a branch moves its own entry, named by its id"
-assert_eq '{"id":"T-005","title":"mine","depends_on":["T-001"]}' "$(jq -c . "$tt/design/tasks/T-005.json")" \
-  "into its own file, exactly as it was"
-assert_eq '"third"' "$(jq -c .title "$tt/design/tasks/T-003.json")" "and leaves every other task's file alone"
-jq '.tasks |= map(select(.id != "T-003"))' "$tt/design/tasks.json" > "$tt/x" && mv "$tt/x" "$tt/design/tasks.json"
-rm -rf "$tt/design/tasks"
-assert_ok "'$FM' tasks split --repo '$tt'" "a whole list splits into an empty directory"
-assert_eq "$(jq -c .tasks "$tt/design/tasks.json")" \
-  "$(for id in T-001 T-005; do cat "$tt/design/tasks/$id.json"; done | jq -cs .)" \
-  "losslessly: the files, in the old order, are the old array"
 rm -rf "$tt"
 
 # =========================================================================

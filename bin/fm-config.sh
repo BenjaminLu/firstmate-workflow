@@ -837,10 +837,7 @@ def field(projects, name, key, config):
     if key == 'design':
         return entry.get(key) or 'projects/%s/design.md' % name
     if key == 'tasks':
-        # a directory, one file per task (T-090); a path in the old shape,
-        # design/tasks.json, names the directory beside it
-        value = entry.get(key) or 'projects/%s/tasks' % name
-        return value[:-len('.json')] if value.endswith('.json') else value
+        return entry.get(key) or 'projects/%s/tasks' % name
     if key in ('repo', 'github', 'base', 'required_check'):
         return entry.get(key, '')
     refuse(name, key, 'is not a registry field')
@@ -935,28 +932,14 @@ fm_tasks() {
   printf '%s' "$out"
 }
 
-# A branch opened before T-090 has no design/tasks/ but its own
-# design/tasks.json: its entry there is the task as that branch says it,
-# whether the task is new on the branch or revised there. So when the
-# task has no file, its entry in <dir>.json - on the rev, or in a working
-# copy still in the old layout - is read (and said so on stderr) rather
-# than main's file, which would be another text, or nothing at all.
-_fm_task_old() { jq --arg id "$1" '[.tasks[]? | select(.id == $id)] | if length == 1 then .[0] else empty end' 2>/dev/null; }
+# Read only the task's own file, on the requested revision or working tree.
 fm_task() {
   local id="${1:-}" dir="${2:-design/tasks}" rev="${3:-}" j
   _fm_task_id "$id" || return 1
   if [ -n "$rev" ]; then
-    if ! j="$(git show "$rev:$dir/$id.json" 2>/dev/null)"; then
-      j="$(git show "$rev:$dir.json" 2>/dev/null | _fm_task_old "$id")"
-      [ -n "$j" ] || return 1
-      echo "fm-config: $id is read from $rev's $dir.json, the old one-array list; bring the branch over: bin/fm.sh tasks split $id" >&2
-    fi
-  elif [ -f "$dir/$id.json" ]; then
-    j="$(cat "$dir/$id.json" 2>/dev/null)" || return 1
+    j="$(git show "$rev:$dir/$id.json" 2>/dev/null)" || return 1
   else
-    j="$(_fm_task_old "$id" 2>/dev/null < "$dir.json")"
-    [ -n "$j" ] || return 1
-    echo "fm-config: $id is read from $dir.json, the old one-array list; bring it over: bin/fm.sh tasks split $id" >&2
+    j="$(cat "$dir/$id.json" 2>/dev/null)" || return 1
   fi
   # a file whose id is another task's is not this task
   j="$(printf '%s' "$j" | jq --arg id "$id" 'select(type=="object" and .id==$id)' 2>/dev/null)"

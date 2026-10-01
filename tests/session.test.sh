@@ -132,21 +132,6 @@ class Session(unittest.TestCase):
         mine = set(self.bells()) - before
         self.assertEqual(1, len(mine), 'the wait registered a doorbell of its own')
         return proc, mine.pop()
-    def test_every_waiter_hears_every_wake(self):
-        """T-151 review round 1: one shared FIFO hands a line to one reader,
-        so a second waiter took the first's wake. Each has its own bell."""
-        first, bell1 = self.waiter('--timeout', '30')
-        second, bell2 = self.waiter('--decision', 'D-21', '--timeout', '30')
-        self.assertNotEqual(bell1, bell2)
-        started = time.monotonic()
-        self.assertTrue(self.push('D-21', chosen='A', task='T-21', kind='choice', ts='2026-09-29T00:00:00Z'))
-        out1, _ = first.communicate(timeout=10)
-        out2, _ = second.communicate(timeout=10)
-        self.assertLess(time.monotonic() - started, 3, 'both woke on the one ring, neither at its timeout')
-        self.assertEqual((0, 0), (first.returncode, second.returncode))
-        self.assertEqual(['D-21'], [i['id'] for i in json.loads(out1)])
-        self.assertEqual(['D-21'], [i['id'] for i in json.loads(out2)])
-        self.assertEqual([], self.bells(), 'each wait took its doorbell with it')
     def test_a_waiter_that_goes_takes_its_doorbell_and_one_killed_outright_is_cleared_by_the_next_ring(self):
         termed, bell = self.waiter('--timeout', '30')
         termed.terminate(); termed.wait(timeout=10)

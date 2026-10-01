@@ -46,6 +46,9 @@
 # --setup replaces the declared `setup`, run in each tree before its suites
 # (CI passes the dependency install alone: the suites need no browser).
 # --jobs is how many suite runs go at once (default: online CPUs, at most 6).
+# --head=<ref> selects a branch without changing the caller's checkout.
+# --gate uses declared docs exemptions and falls back to project.check when
+# no suite can be determined; it shares restoration, execution and reporting.
 #
 # Exit: 0 pass or not applicable, 1 fail, 64 usage, 70 it could not run.
 set -uo pipefail
@@ -62,9 +65,12 @@ FF_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # --shard, --part and --merge take their value after `=`, in one word, as
 # bin/ci.sh's --shard=i/n does.
+GATE_MODE=''; HEAD_REF=HEAD
 REPORT=''; SETUP=''; SETUP_GIVEN=''; JOBS=''; BASE_REF=''; SHARD=''; PART=''; MERGE=''
 while [ $# -gt 0 ]; do
   case "$1" in
+    --gate) GATE_MODE=1; shift ;;
+    --head=*) HEAD_REF="${1#--head=}"; shift ;;
     --report) fm_need "fm-failfirst" "$@"; REPORT="${2-}"; shift 2 ;;
     --setup) fm_need "fm-failfirst" "$@"; SETUP="${2-}"; SETUP_GIVEN=1; shift 2 ;;
     --jobs) fm_need "fm-failfirst" "$@"; JOBS="${2-}"; shift 2 ;;
@@ -88,6 +94,9 @@ case "$JOBS" in
       [ "$JOBS" -le 6 ] || JOBS=6 ;;
   *[!0-9]*|0) echo "fm-failfirst: --jobs must be a positive integer" >&2; exit 64 ;;
 esac
+if [ -n "$GATE_MODE" ] && { [ -n "$SHARD" ] || [ -n "$MERGE" ]; }; then
+  echo "fm-failfirst: --gate cannot be sharded or merged" >&2; exit 64
+fi
 SHARD_I=1; SHARD_N=1
 if [ -n "$SHARD" ]; then
   [[ "$SHARD" =~ ^([1-9][0-9]*)/([1-9][0-9]*)$ ]] && [ "${BASH_REMATCH[1]}" -le "${BASH_REMATCH[2]}" ] || {
@@ -108,7 +117,7 @@ case "$PART" in ''|/*) : ;; *) PART="$PWD/$PART" ;; esac
 say() { echo "fm-failfirst: $*" >&2; }
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || { say "not inside a git checkout"; exit 70; }
 cd "$REPO" || exit 70
-HEAD_SHA="$(git rev-parse --verify -q 'HEAD^{commit}')" || { say "no HEAD commit"; exit 70; }
+HEAD_SHA="$(git rev-parse --verify -q "$HEAD_REF^{commit}")" || { say "no HEAD commit"; exit 70; }
 git rev-parse --verify -q "$BASE_REF^{commit}" >/dev/null || { say "no such base ref: $BASE_REF"; exit 70; }
 MB="$(git merge-base "$BASE_REF" "$HEAD_SHA")" || { say "no merge-base between $BASE_REF and HEAD"; exit 70; }
 
@@ -127,11 +136,13 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 
 # The head's own declaration, as gate 5 reads the branch's.
-P_SETUP=''; P_TEST=''; P_TESTS=''; P_ENV=()
+P_SETUP=''; P_TEST=''; P_TESTS=''; P_CHECK=''; P_DOCS=''; P_ENV=()
 if git show "$HEAD_SHA:config.yaml" > "$work/config.yaml" 2>/dev/null && [ -s "$work/config.yaml" ]; then
   P_SETUP="$(fm_project setup "$work/config.yaml")" || { say "config.yaml's project block does not read"; exit 70; }
   P_TEST="$(fm_project test "$work/config.yaml")" || exit 70
   P_TESTS="$(fm_project tests "$work/config.yaml")" || exit 70
+  P_CHECK="$(fm_project check "$work/config.yaml")" || exit 70
+  P_DOCS="$(fm_project docs "$work/config.yaml")" || exit 70
   while IFS= read -r -d '' kv; do P_ENV+=("$kv"); done < <(fm_project check_env "$work/config.yaml")
 fi
 [ -n "$SETUP_GIVEN" ] || SETUP="$P_SETUP"
@@ -156,7 +167,12 @@ is_test() {
   matches "$1" "$P_TESTS"
 }
 # what behaves: code a round, the board or an adapter runs
-is_behaviour() { case "$1" in bin/*|board/*|adapters/*|*/adapters/*) return 0 ;; *) return 1 ;; esac; }
+is_behaviour() {
+  if [ -n "$GATE_MODE" ]; then
+    ! matches "$1" "$P_DOCS"
+    return
+  fi
+  case "$1" in bin/*|board/*|adapters/*|*/adapters/*) return 0 ;; *) return 1 ;; esac; }
 # fill <template> <file>: every {file} becomes the shell-quoted path
 fill() {
   local rest="$1" q out=''
@@ -167,10 +183,11 @@ fill() {
   printf '%s' "$out$rest"
 }
 
-: > "$work/suites"; : > "$work/behaviour"; : > "$work/restored"; : > "$work/removed"; : > "$work/other"
+: > "$work/changed-tests"; : > "$work/suites"; : > "$work/behaviour"; : > "$work/restored"; : > "$work/removed"; : > "$work/other"
 while IFS=$'\t' read -r st path; do
   [ -n "$path" ] || continue
   if is_test "$path"; then
+    printf '%s\n' "$path" >> "$work/changed-tests"
     [ "$st" = D ] || printf '%s\n' "$path" >> "$work/suites"
     continue
   fi
@@ -180,6 +197,35 @@ while IFS=$'\t' read -r st path; do
   else printf '%s\n' "$path" >> "$work/other"; fi
 done < <(git diff --name-status --no-renames "$MB" "$HEAD_SHA")
 
+# A changed test helper also selects its consumers, with filename boundaries.
+# CI and the gate share this selection; an implementation reference alone
+# never selects an unchanged suite.
+if [ -s "$work/changed-tests" ]; then
+while IFS= read -r f; do
+  is_test "$f" || continue
+  grep -qxF "$f" "$work/suites" && continue
+  git show "$HEAD_SHA:$f" > "$work/candidate" 2>/dev/null || continue
+  while IFS= read -r helper; do
+    [ -n "$helper" ] || continue
+    name="$(printf '%s' "${helper##*/}" | sed 's#[][\\.*^$+?(){}|/]#\\&#g')"
+    if grep -qE "(^|[^A-Za-z0-9._-])$name([^A-Za-z0-9._-]|\$)" "$work/candidate"; then
+      printf '%s\n' "$f" >> "$work/suites"; break
+    fi
+  done < "$work/changed-tests"
+done < <(git ls-tree -r --name-only "$HEAD_SHA")
+fi
+
+if [ -n "$GATE_MODE" ] && [ -s "$work/changed-tests" ] && [ -n "$P_CHECK" ] &&
+    { [ -z "$P_TEST" ] || [ ! -s "$work/suites" ]; }; then
+  if [ -z "$P_TEST" ]; then
+    say "config.yaml declares no project.test to run one suite with, so the whole project.check runs"
+  else
+    say "no suite the diff touches is left in the tree, so the whole project.check runs"
+  fi
+  P_TEST="$P_CHECK"
+  printf 'project.check\n' > "$work/suites"
+fi
+
 verdict=''; reason=''
 if [ ! -s "$work/behaviour" ]; then
   verdict='not applicable'
@@ -187,6 +233,7 @@ if [ ! -s "$work/behaviour" ]; then
     reason='the change touches only tests: no behaviour to revert'
   else
     reason='the change touches no behaviour (nothing under bin/, board/ or adapters/): only docs, skills, CI or other non-code files'
+    [ -z "$GATE_MODE" ] || reason='every changed non-test path matches the declared docs globs'
   fi
 elif [ ! -s "$work/suites" ]; then
   verdict='fail'; reason='the change modifies behaviour and adds or changes no test suite'
@@ -470,7 +517,8 @@ if [ -z "$verdict" ] && [ -z "$MERGE" ]; then
   if [ -n "$SETUP" ]; then
     for t in head base; do
       ( cd "$work/$t" && env FM_ROOT="$work/$t" bash -c "$SETUP" ) > "$work/setup.$t.log" 2>&1 || {
-        tail -n 20 "$work/setup.$t.log" >&2; die "setup failed in the $t tree: $SETUP"; }
+        setup_rc=$?
+        tail -n 20 "$work/setup.$t.log" >&2; die "setup failed (exit $setup_rc) in the $t tree: $SETUP"; }
     done
   fi
   # one run: its tree, the suite's index, and what it runs. Each has its own
@@ -488,6 +536,7 @@ if [ -z "$verdict" ] && [ -z "$MERGE" ]; then
     done
     n=$((n + 1))
   done < "$work/planned"
+  say "running the suites the diff touches: $(tr '\n' ' ' < "$work/suites")"
   say "running $n changed suite(s) on the head and on the base, $JOBS at a time"
   env ${P_ENV[@]+"${P_ENV[@]}"} xargs -0 -n 4 -P "$JOBS" bash "$work/one.sh" < "$work/list"
 fi

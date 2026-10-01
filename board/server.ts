@@ -860,6 +860,7 @@ const state = (only: string | null = null) => {
   const progress = new Map<string, { done: number; total: number }>();
   const roles = new Map<string,'worker'|'reviewer'>();
   const finished = new Set<string>();
+  const crewActivity = new Set<string>();
   const handoffs: Array<Record<string,unknown>> = [];
   // Only an object with a true denominator is progress. Bare numbers, stage
   // maps and missing fields stay null — never a fake percent on the payload.
@@ -879,6 +880,7 @@ const state = (only: string | null = null) => {
     const previous = lastByActor.get(actor);
     if (e.type === 'dispatched') finished.delete(actor);
     else if (finished.has(actor)) continue;
+    if (!['approved', 'review_failed', 'agent_finished'].includes(e.type || '')) crewActivity.add(actor);
     // T-118: a run the launcher side found lost has left the deck as surely
     // as one that finished, and an agent_finished after it changes nothing
     if (e.type === 'agent_finished' || e.type === 'agent_lost') finished.add(actor);
@@ -893,7 +895,9 @@ const state = (only: string | null = null) => {
     if (said) identities.set(actor, mergeIdentity(identities.get(actor), said));
     const nextProgress = bounded(data.progress);
     if (nextProgress) progress.set(actor, nextProgress);
-    if (e.type === 'dispatched' || data.role) roles.set(actor, roleOf(actor,e));
+    if (e.type === 'dispatched' || data.role === 'worker' || data.role === 'reviewer') roles.set(actor, roleOf(actor,e));
+    // Older review_opened records establish a reviewer even without data.role.
+    else if (e.type === 'review_opened') roles.set(actor, 'reviewer');
     // Mid-run authored data.activity from events describes the run.
     // Scalar titles are never treated as activity.
     const description = authored(data.activity)
@@ -908,7 +912,7 @@ const state = (only: string | null = null) => {
       ? (roleOf(actor,e) === 'reviewer' ? 'review' : 'working')
       : phase);
     const peer = (role: string) => {
-      const candidates = [...lastByActor].filter(([id,event]) => id !== actor && id !== 'firstmate' && ek(event) === ek(e) && event.type !== 'agent_finished' && !finished.has(id) && (roles.get(id) || roleOf(id,event)) === role);
+      const candidates = [...lastByActor].filter(([id,event]) => id !== actor && id !== 'firstmate' && ek(event) === ek(e) && event.type !== 'agent_finished' && !finished.has(id) && (roles.get(id) || (legacyName(id) ? roleOf(id,event) : null)) === role);
       // Several runs on one task are ambiguous; never pick an arbitrary actor.
       return candidates.length === 1 ? candidates[0][0] : undefined;
     };
@@ -974,6 +978,10 @@ const state = (only: string | null = null) => {
   // one that just boarded
   for (const [actor, e] of [...lastByActor].reverse()) {
     if (actor === "firstmate") continue;   // already aboard, above
+    // A verdict alone does not establish crew membership. Otherwise SSE can
+    // briefly put an unplaced actor aboard before its finish event, making
+    // the browser permanently suppress the unknown-end notice for that cue.
+    if (!roles.has(actor) && !legacyName(actor) && !crewActivity.has(actor)) continue;
     const task = e.task ?? null;
     if (!task) continue;
     // agent_finished is the answer; this is the backstop for a run that
@@ -2005,15 +2013,6 @@ const server = Bun.serve({
       if (!abs) return json({ error: "outside the repository" }, 403);
       if (statSync(abs).size > 512 * 1024) return json({ error: "too large to show" }, 413);
       return new Response(readFileSync(abs), { headers: { "content-type": "text/plain; charset=utf-8" } });
-    }
-
-    if (url.pathname === "/diff") {
-      if (!localOnly(req)) return json({ error: "localhost only" }, 403);
-      const branch = url.searchParams.get("branch") ?? "";
-      if (!/^[A-Za-z0-9._\/-]{1,120}$/.test(branch)) return json({ error: "bad branch" }, 400);
-      const r = Bun.spawnSync(["git", "-C", ROOT, "diff", `main...${branch}`], { env: childEnv() });
-      if (r.exitCode !== 0) return json({ error: "no such branch" }, 404);
-      return new Response(r.stdout, { headers: { "content-type": "text/plain; charset=utf-8" } });
     }
 
     if (url.pathname === "/" || url.pathname === "") return serveFile("index.html");

@@ -69,7 +69,7 @@ export function makeRoot(stages: Stage[], withDecision = true, actors: "per-task
   // fm-config.sh is how the board reads the task list (T-090) and, with the
   // parser it loads, the project registry (T-069); without a config.yaml they
   // register nothing
-  for (const f of ['fm-emit.sh','fm-diagram.sh','fm-decide.sh','watch-decisions.ts','fm-config.sh','fm-herdr.py']) cpSync(join(ROOT,'bin',f), join(d,'bin',f));
+  for (const f of ['fm-emit.sh','fm-diagram.sh','fm-decide.sh','fm-config.sh','fm-herdr.py']) cpSync(join(ROOT,'bin',f), join(d,'bin',f));
   // the lifeline every merge the board starts runs under (T-151), and
   // nothing else from bin/lib: the board reads the watch's files under
   // state/watch itself (T-137) and runs none of bin/lib's watch or hook code

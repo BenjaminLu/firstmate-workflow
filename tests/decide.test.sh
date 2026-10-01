@@ -280,29 +280,8 @@ wait
 assert_eq "B" "$(jq -r .chosen <<<"$got4")" "past another decision's ring, its own returns the answer"
 assert_ok "[ '$t4' -le 5 ]" "within seconds (${t4}s)"
 
-# Two waiters at once (T-151 review round 1): a FIFO hands each line to one
-# reader, so one shared FIFO gave D-1's wake to D-2's wait and D-1 sat out its
-# timeout. Each waiter has a bell of its own, and every ring reaches both.
-d5="$(fixture)"; mkdir -p "$d5/state/decisions"
-FM_ROOT="$d5" bash "$d5/bin/fm-decide.sh" --await D-1 --timeout 20 > "$d5/got1" 2>/dev/null & w1=$!
-FM_ROOT="$d5" bash "$d5/bin/fm-decide.sh" --await D-2 --timeout 20 > "$d5/got2" 2>/dev/null & w2=$!
-until_bells "$d5" 2
-assert_eq "2" "$(bells "$d5")" "two waiters hold two doorbells"
-s5="$(now_ms)"
-printf '{"id":"D-1","chosen":"A"}\n' > "$d5/state/decisions/D-1.json"
-ring "$d5" D-1
-wait "$w1"; rc5=$?
-t5=$(( $(now_ms) - s5 ))
-assert_eq "0" "$rc5" "with two waiters, the first's answer and one ring return the first"
-assert_eq "A" "$(jq -r .chosen "$d5/got1" 2>/dev/null)" "with its answer"
-assert_ok "[ '$t5' -lt 2000 ]" "within a moment, not at its timeout (${t5}ms)"
-assert_ok "kill -0 '$w2'" "while the second still waits for its own"
-printf '{"id":"D-2","chosen":"C"}\n' > "$d5/state/decisions/D-2.json"
-ring "$d5" D-2
-wait "$w2"
-assert_eq "C" "$(jq -r .chosen "$d5/got2" 2>/dev/null)" "then its answer and a ring return the second"
-rm -rf "$d5"
-
+# Fan-out itself lives in lifeline.test.sh; the mixed CLI case below
+# verifies the two consumers together once.
 # an --await beside a session wait (fm-session.sh wait): one answer, one
 # ring - the board's queue line and its ring - and both return
 d6="$(fixture)"; mkdir -p "$d6/state/decisions" "$d6/state/session"
@@ -473,12 +452,16 @@ assert_eq "$before_sum" "$(cksum < "$o/state/decisions/D-056.json")" "and D-056 
 # task's allocations. They time out rather than hang, name the lock and say
 # what to do; nothing clears it on a guess. Other tasks are not blocked.
 mkdir -p "$o/state/decision-ids/firstmate-workflow/T070.lock"
-lk="$(FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --allocate --task T-070 2>&1)"
+lk="$(FM_DECIDE_LOCK_ATTEMPTS=2 FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --allocate --task T-070 2>&1)"
 assert_eq "1" "$?" "an allocation behind a stale lock times out"
 assert_contains "$lk" "decision-ids/firstmate-workflow/T070.lock" "naming the lock"
 assert_contains "$lk" "remove it (rmdir) and allocate again" "and saying what a human does about it"
 assert_fail "test -e '$o/state/decision-ids/firstmate-workflow/T070/1.json'" "and reserving nothing"
 assert_eq "D-firstmate-workflow-T071-1" "$(alloc --task T-071)" "another task's allocation is not blocked by it"
+for bound in 0 -1 nope; do
+  FM_DECIDE_LOCK_ATTEMPTS="$bound" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --allocate --task T-070 >/dev/null 2>&1
+  assert_eq "64" "$?" "an invalid allocation-lock bound is refused ($bound)"
+done
 rmdir "$o/state/decision-ids/firstmate-workflow/T070.lock"
 assert_eq "D-firstmate-workflow-T070-1" "$(alloc --task T-070)" "once it is removed, the task allocates again"
 rm -rf "$o"
@@ -964,17 +947,15 @@ raisers="$(git -C "$ROOT" ls-files -- . ':!tests/' ':!design/' ':!*.md' ':!bin/f
   | while read -r f; do [ -f "$ROOT/$f" ] && both "$f" && printf '%s ' "$f"; done)"
 assert_eq "bin/fm-run.sh bin/fm.sh " "$raisers" "fm-run.sh and fm.sh are the only files that raise a card"
 # A line that is one quoted message and nothing else only prints the name: it
-# tells a reader what to run (fm-config.sh's "bin/fm.sh tasks split"), it
-# does not run it. Any other non-comment line naming them counts as a call.
+# tells a reader what to run; it does not run it. Any other non-comment line naming them counts as a call.
 said='^[[:space:]]*(echo|printf)[[:space:]]+"[^"]*"[[:space:]]*(>&2)?[[:space:]]*$'
 runs() { code "$1" | grep -E -- "$names" | grep -vE -- "$said" | grep . >/dev/null; }
-assert_fail "grep -qE -- '$said' <<<'bin/fm.sh tasks split x'" "a bare call is still a call"
-assert_ok "grep -qE -- '$said' <<<'    echo \"bring it over: bin/fm.sh tasks split \$id\" >&2'" \
+assert_fail "grep -qE -- '$said' <<<'bin/fm.sh tasks'" "a bare call is still a call"
+assert_ok "grep -qE -- '$said' <<<'    echo \"bring it over: bin/fm.sh tasks\" >&2'" \
   "a printed message is not a call"
 named="$(git -C "$ROOT" grep -lE "$names" -- . ':!tests/' ':!design/' ':!*.md' \
   ':!bin/fm-run.sh' ':!bin/fm.sh' ':!bin/fm-decide.sh' \
   | while read -r f; do has "$f" "$names" && printf '%s ' "$f"; done)"
-assert_contains " $named" " bin/fm-config.sh " "the sweep sees fm-config.sh name fm.sh in its messages"
 via="$(for f in $named; do runs "$f" && printf '%s ' "$f"; done)"
 assert_eq "" "$via" "nothing else in the repository calls them outside a comment or a message"
 direct="$(for f in $suites; do [ -f "$ROOT/$f" ] && both "$f" && printf '%s ' "$f"; done)"

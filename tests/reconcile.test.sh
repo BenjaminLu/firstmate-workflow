@@ -97,6 +97,13 @@ appears() {
   local end=$(( $(date +%s) + WINDOW_SECS ))
   until [ -e "$1" ]; do [ "$(date +%s)" -le "$end" ] || return 1; sleep 0.1; done
 }
+# The writer records recovery before it launches the worker. Read only this
+# run's events, so earlier recoveries cannot masquerade as a new dispatch.
+# One timed child-side negative control remains below.
+no_recovery_since() {
+  local file="$1" offset="$2"
+  jq -se --argjson offset "$offset" 'all(.[$offset:][]; .type != "dispatched" or .data.recovery != true)' "$file"
+}
 kill_pidfile() { [ -f "$1" ] && kill "$(cat "$1")" 2>/dev/null; return 0; }
 
 lines() { wc -l < "$1" | tr -d ' '; }
@@ -324,13 +331,14 @@ mkdir -p "$d/state/worktrees/T-004"
 # a pid file whose name is not a task id. The basename becomes --task on an
 # event and an argv on a dispatch, so the shape is checked before either.
 printf '%s\n' "$DEAD" > "$d/state/worktrees/notatask.pid"
+recovery_before="$(wc -l < "$d/state/events.jsonl")"
 out="$(FM_ROOT="$d" FM_GH="$(none "$d")" "$d/bin/fm-reconcile.sh" --repo "$d" 2>&1)"
 log="$d/state/events.jsonl"
 assert_contains "$out" "stale pid file for T-004" "a finished task's dead pid is stale, not a crash"
 assert_fail "test -e '$d/state/worktrees/T-004.pid'" "and the evidence is consumed"
 assert_eq "" "$(jq -r 'select(.type=="worker_crashed")|.task' "$log")" \
   "a task that already merged is never marked crashed"
-assert_fail "appears '$d/worker-args'" "nor redispatched"
+assert_ok "no_recovery_since '$d/state/events.jsonl' '$recovery_before'" "nor redispatched"
 assert_contains "$out" "notatask.pid is not named after a task" "a pid file that is not a task id is refused"
 assert_lacks "$out" "notatask worker_crashed" "and never becomes the task on an event"
 assert_ok "test -e '$d/state/worktrees/notatask.pid'" "it is reported rather than deleted"
@@ -355,6 +363,7 @@ printf '{"ts":"2026-09-20T10:00:00Z","actor":"firstmate","type":"dispatched","ta
 printf '%s\n' "$DEAD" > "$d/state/worktrees/T-011.pid"
 printf '#!/usr/bin/env bash\necho "fm-emit: refused" >&2\nexit 1\n' > "$d/bin/fm-emit.sh"
 chmod +x "$d/bin/fm-emit.sh"
+recovery_before="$(wc -l < "$d/state/events.jsonl")"
 out="$(FM_ROOT="$d" FM_GH="$(none "$d")" "$d/bin/fm-reconcile.sh" --repo "$d" 2>&1)"
 rc=$?
 assert_eq "1" "$rc" "a repair that did not happen is not a clean run"
@@ -363,7 +372,7 @@ assert_contains "$out" "refused" "and what the writer said about it"
 assert_ok "test -f '$d/state/worktrees/T-011.pid'" "the evidence is left for a later run to judge"
 assert_contains "$out" "0 change(s) applied" "and the count is of repairs carried out, not of intentions"
 assert_contains "$out" "1 repair(s) could not be carried out" "with the failures said out loud"
-assert_fail "appears '$d/worker-args'" "nothing is redispatched on the strength of an unrecorded crash"
+assert_ok "no_recovery_since '$d/state/events.jsonl' '$recovery_before'" "nothing is redispatched on the strength of an unrecorded crash"
 rm -rf "$d"
 
 echo "  --dry-run"
@@ -386,6 +395,7 @@ G="$(rec "$d" dry <<'J'
 J
 )"
 cp "$d/state/events.jsonl" "$d/before.jsonl"
+recovery_before="$(wc -l < "$d/state/events.jsonl")"
 out="$(FM_ROOT="$d" FM_GH="$G" "$d/bin/fm-reconcile.sh" --repo "$d" --dry-run 2>&1)"
 assert_eq "0" "$?" "--dry-run exits 0"
 assert_contains "$out" "would" "it says everything in the conditional"
@@ -399,8 +409,8 @@ assert_ok "cmp -s '$d/before.jsonl' '$d/state/events.jsonl'" "the log is byte fo
 assert_ok "test -f '$d/state/worktrees/T-011.pid'" "the pid file is still there"
 assert_eq "$DEAD" "$(cat "$d/state/worktrees/T-011.pid")" "still holding the pid it held"
 assert_ok "test -d '$d/state/worktrees/T-004'" "the worktree is still there"
-assert_fail "appears '$d/worker-args'" "no worker was started"
-assert_fail "appears '$d/cleanup-args'" "no worktree was handed to cleanup"
+assert_ok "no_recovery_since '$d/state/events.jsonl' '$recovery_before'" "no worker was started"
+assert_fail "test -e '$d/cleanup-args'" "no worktree was handed to cleanup"
 rm -rf "$d"
 
 echo "  when GitHub cannot be reached"
@@ -625,12 +635,13 @@ for terminal in CLOSED MERGED; do
     assert_eq 1 "$?" "current PR survives failed recovery ($terminal/$association)"
     rmdir "$d/state/worktrees/T-011.pid.next"
     G="$(rec "$d" current <<< "$(jq -cn --arg state "$terminal" '[{number:10,state:$state,title:"current",headRefName:"t-011-current"}]')")"
+    recovery_before="$(wc -l < "$d/state/events.jsonl")"
     out="$(FM_ROOT="$d" FM_GH="$G" "$d/bin/fm-reconcile.sh" 2>&1)"
     assert_eq 0 "$?" "current PR terminal retry succeeds ($terminal/$association)"
     assert_ok "jq -se 'any(.[]; .task==\"T-011\" and .type==\"$type\" and .data.historical==false)' '$d/state/events.jsonl'" "current terminal repair is not historical ($terminal/$association)"
     assert_fail "test -d '$d/state/worktrees/T-011'" "current terminal cleans worktree ($terminal/$association)"
     assert_fail "test -f '$d/state/worktrees/T-011.pid'" "current terminal removes stale PID ($terminal/$association)"
-    assert_fail "appears '$d/worker-args'" "current terminal starts no replacement ($terminal/$association)"
+    assert_ok "no_recovery_since '$d/state/events.jsonl' '$recovery_before'" "current terminal starts no replacement ($terminal/$association)"
     kill_pidfile "$d/state/worktrees/T-011.pid"; rm -rf "$d"
   done
 done
@@ -705,12 +716,13 @@ SH
     assert_ok "cmp -s '$d/before' '$d/state/events.jsonl'" "real recovery dry run preserves log"
     # Prevent any later work while observing the online terminal decision.
     worker_stub "$d"
+    recovery_before="$(wc -l < "$d/state/events.jsonl")"
     out="$(FM_ROOT="$d" FM_GH="$G" "$d/bin/fm-reconcile.sh" 2>&1)"
     assert_eq 0 "$?" "online terminal decision succeeds"
     if [ "$timing" = current ]; then
       assert_fail "test -d '$d/state/worktrees/T-011'" "current taskless terminal still cleans after real recoveries"
       assert_fail "test -e '$d/state/worktrees/T-011.pid'" "current terminal retires PID"
-      assert_fail "appears '$d/worker-args'" "completed work is never rerun"
+      assert_ok "no_recovery_since '$d/state/events.jsonl' '$recovery_before'" "completed work is never rerun"
     else
       assert_ok "wait_for '$d/worker-args'" "historical terminal permits recovery"
       assert_ok "test -d '$d/state/worktrees/T-011'" "historical terminal protects worktree"

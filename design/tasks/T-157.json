@@ -1,0 +1,37 @@
+{
+  "id": "T-157",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-121"
+  ],
+  "title": "the suites test what the product does today, each thing once, without waiting on nothing: obsolete tests and dead code go, duplicates keep one home, and the slowest blocks stop paying for repetition",
+  "scope": [
+    "tests/**",
+    "bin/watch-decisions.ts",
+    "bin/fm-gate.sh",
+    "bin/fm-failfirst.sh",
+    "board/server.ts",
+    "design/**",
+    "design/tasks/T-157.json",
+    "bin/fm-doctor.sh",
+    "bin/fm-setup.sh",
+    "bin/fm-decide.sh",
+    "bin/fm-worker.sh",
+    "bin/fm.sh",
+    "bin/fm-config.sh",
+    "config.yaml"
+  ],
+  "acceptance": [
+    "Why. On 2026-09-30 the captain asked which tests still have value; firstmate's audit (read-only, against main 1ac6ddd) found few dead tests but much repetition and fixed waiting: worker 515 s (~200 full fm-worker.sh launches), herdr 283 s, review 179 s, ci 178 s, reconcile 111 s. The captain approved fixing all of it, before T-130 splits the files. Its own spec file, design/tasks/T-157.json, is committed on this branch. Line numbers below are main 1ac6ddd's; re-find them after T-121 merged.",
+    "Remove what is dead: bin/watch-decisions.ts and its references (tests/e2e/fixture.ts:72, board.spec.ts:1717 bin listing); the board's unused /diff route (board/server.ts:2005-2012) and its entry in board.test.sh:2751; config.test.sh:436-450 (the one-shot T-090 migration check) and :518-532 (it tests git, not us); worker cases X3 (≈2885-2898) and M (≈2211-2229), which make a round call fm-checkpoint.sh mid-run against skills/worker/SKILL.md:59,97 - rewrite them to what fm-worker.sh does, or drop them. Fix stale reasons on live tests (review 946-1016 and 1081, adapter-contract.test.sh:11). Leave the design/tasks.json compatibility code and its tests (fm tasks split, rb_fixture cases F/H/I/J/P7) in place unless no open pull request and no registered project still carries design/tasks.json - check with gh and say what you found.",
+    "firstmate, 2026-09-30 (after round 1c asked): scope widened to bin/fm-decide.sh, for the FM_* bound on the stale allocation-lock spin at fm-decide.sh:149-151 (keep 600 attempts as the default; the test sets a small bound; every decision-integrity assertion stays), and to bin/fm-worker.sh, bin/fm.sh and bin/fm-config.sh for the design/tasks.json compatibility code. firstmate checked: no pull request is open, and the only registered project is this repository, whose tasks live in design/tasks/ - so no open PR and no registered project carries design/tasks.json. Remove the compatibility code (fm-worker.sh ≈743-1360's tasks.json paths, fm.sh `tasks split`, fm-gate.sh:253, fm-config.sh:762) together with its tests (selfupdate.test.sh:353-368, config.test.sh:464-481, gate.test.sh:93-108, review.test.sh:415-432, worker rb_fixture cases F/H/I/J/P7), and say in the PR body what was removed.",
+    "One home per property: fail-first has one implementation, bin/fm-failfirst.sh; gate 5 in bin/fm-gate.sh calls it instead of its own copy, and gate.test.sh keeps only what is gate-5-specific while failfirst.test.sh owns the cases. GitHub/loopback host refusal lives in adapter-contract (review keeps one host, not 7-9 rounds; sandbox/worker/herdr copies go). Doorbell fan-out lives in lifeline.test.sh plus one CLI case. herdr 1150/1575, 1464 and 1046-1091 that repeat unit variants through the full entrypoint go. board.test.sh:2942-2970 (a pure ship.js unit test) moves to a bun/ship spec; board park/drop e2e keeps wording only. config.test.sh:393-401 goes (adapter-contract owns it). skills.test.sh keeps links and router (7-43) and drops pinned exact sentences and retired-text lists; review's absence checks that skills.test.sh covers go. lib.test.sh:17-40 (tests the harness) goes unless a helper it covers is otherwise untested.",
+    "Stop paying for repetition: worker's rebuild section builds its fixture once and copies it per case (cp -R), and fixed sleeps (≈3019, 3158, 3225-3232) wait on the condition instead; herdr's Entrypoints setUp copies bin/ and skills/ once per class, and the 978 and 907 matrices are trimmed to the cases that differ; review drops the 1515-1529 race soak its own comment says never reproduced, collapses the CI-wait blocks to 3 rounds and 1167-1190 into 838-918; ci.test.sh runs its planted-fixture checks with --stage fast and removes the unit.spec.ts it adds; reconcile's negative checks read events.jsonl at once instead of waiting 5 s each, keeping one timed control; decide.test.sh:476's stale-lock spin gets an FM_* bound; board's fixed sleeps use a short TTL.",
+    "Keep, untouched in meaning: sandbox confinement and credential scrubbing, adapter-contract 360-880, merge gating (merge.test.sh, gate 116-451, failfirst, review 815-944/1322-1443/1830-1907), lifeline/watch/traps/guard, decision integrity, the board's write credential, and worker's never-lose-work blocks. No assertion that guards one of these is removed; one that moves names its new home in the PR body.",
+    "Doctor tests without fake machines (captain, 2026-09-30): bin/fm-doctor.sh is split into a thin layer that collects facts (which tools exist, their versions, the sandbox tool, the vendor CLIs) and a layer that judges them against the pins and prints the lines and exit status. tests/doctor.test.sh feeds the judging layer data (e.g. {jq: '1.7'}, {gh: missing}) and asserts its output; only one smoke test runs the collecting layer on the real host. The fake-PATH fixtures T-121 needed for host-independence go, and no doctor assertion depends on what the host has installed. Same for fm-setup.sh's detection if it has the same shape.",
+    "No test depends on the host (captain, 2026-09-30). A shared helper in tests/lib builds a PATH that holds exactly the tools a case needs - links to the host's tools with the named ones left out, then asserts the left-out tools are really unreachable - the pattern tests/sandbox.test.sh:1217-1232 already uses for secret-tool. tests/adapter-contract.test.sh's 36 `PATH=\"$d/fakebin:/usr/bin:/bin\"` runs use it: 'exits 2 when its CLI is missing' no longer assumes /usr/bin lacks the vendor CLI, and rounds get a working python3 on the constructed PATH rather than whatever /usr/bin/python3 is (on macOS the Xcode shim, which cannot run in the sandbox). Every test of a script that decides by the host (uname, command -v / shutil.which, a tool's --version: bin/fm-sandbox.sh, bin/ci.sh, bin/fm-worker.sh, bin/fm-herdr.py, bin/fm-doctor.sh) sets the override the script honours or uses the helper. firstmate runs the changed suites once in an ubuntu:24.04 container and once on the captain's Mac before the merge; both must agree.",
+    "Flaky: tests/e2e/board.spec.ts T-145 'a verdict from a reviewer who has just left the deck is shown quietly, and an actor the board cannot place is said once' timed out (18.5 s) on T-159's head e659d91 and passed on ecc64ca with the same board code (run 36675417547). Make its page.clock steps wait on the state they need, not on elapsed fake time.",
+    "Measured and accounted: the PR body lists every removed or moved test with its reason, the assertion counts per suite before and after, and each of the five slow suites' CI time before and after (target: the bash suites' total down by at least a third). The fail-first CI job stays green. Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves."
+  ]
+}

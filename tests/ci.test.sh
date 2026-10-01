@@ -4,6 +4,18 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/path.sh
+. "$ROOT/tests/lib/path.sh"
+suite_original_path="$PATH"
+suite_tools="$(safe_tmpdir)"
+fixture_path "$suite_tools" 'claude codex gemini cursor-agent agent gh herdr tmux cmux security secret-tool osascript xdg-open open' || exit 1
+PATH="$suite_tools"; export PATH
+for required in bun bunx shellcheck; do
+  command -v "$required" >/dev/null 2>&1 || {
+    echo "ci.test: install the declared toolchain before running this suite (missing $required)" >&2
+    exit 1
+  }
+done
 
 fixture() {                      # a throwaway repo root for ci.sh to operate on
   # safe_tmpdir, not a bare mktemp -d: this result feeds FM_ROOT, and a
@@ -158,13 +170,23 @@ hp="$(cat "$leaked/pid" 2>/dev/null)"
 assert_contains "$out" "$hp " "naming the process it left"
 assert_fail "kill -0 '${hp:-0}'" "which is no longer running"
 assert_lacks "$out" "tests/quiet.test.sh left" "a suite that leaves nothing is not named"
-if [ "$(uname -s)" = Darwin ]; then
-  assert_eq "1" "$(grep -c 'leak check: macOS hides the environment of /bin binaries; matched by fixture root as well - the required check (Linux) is authoritative' <<<"$out")" \
-    "on macOS (uname Darwin; asserted only there) the blind spot is said exactly once per run, not per suite"
-else
-  assert_lacks "$out" "leak check: macOS hides" \
-    "off macOS (uname $(uname -s); the Darwin-only note is asserted on a Mac) the note is not printed"
-fi
+# The leak above is enforced by the host kernel. The platform-specific
+# explanation can be checked on both platforms without another leak.
+osbin="$(safe_tmpdir)"
+real_uname="$(command -v uname)"
+printf '#!/usr/bin/env bash\nif [ "$1" = -s ]; then echo "$FM_TEST_OS"; else exec %q "$@"; fi\n' "$real_uname" > "$osbin/uname"
+chmod +x "$osbin/uname"
+rm -f "$t/tests/hidden.test.sh"
+for platform in Darwin Linux; do
+  platform_out="$(FM_TEST_OS="$platform" PATH="$osbin:$PATH" FM_ROOT="$t" bash "$ROOT/bin/ci.sh" --stage bash 2>&1)"
+  if [ "$platform" = Darwin ]; then
+    assert_eq "1" "$(grep -c 'leak check: macOS hides the environment of /bin binaries; matched by fixture root as well - the required check (Linux) is authoritative' <<<"$platform_out")" \
+      "the Darwin explanation appears once, not once per suite"
+  else
+    assert_lacks "$platform_out" "leak check: macOS hides" "the Linux diagnostic has no Darwin warning"
+  fi
+done
+safe_rm_rf "$osbin"
 rm -rf "$t" "$leaked"
 
 assert_ok "test -x '$ROOT/bin/ci.sh'" "ci.sh is executable"
@@ -416,18 +438,18 @@ printf 'import { test, expect } from "bun:test";\ntest("a", () => expect(1).toBe
 printf 'import { test } from "@playwright/test";\ntest("b", async ({ page }) => { await page.goto("about:blank"); });\n' \
   > "$q/tests/e2e/browser.spec.ts"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
-# the gate supports a machine without these, so the suite has to as well
-if command -v bun >/dev/null 2>&1; then
-  assert_contains "$out" "bun test (1 files)" "the bun stage runs the unit spec and not the browser one"
-  assert_lacks "$out" "x bun test" "a browser spec does not turn the bun stage red"
-else
-  printf '    %s\n' "(bun not installed, the bun stage is unchecked)"
-fi
-if command -v bunx >/dev/null 2>&1; then
-  assert_contains "$out" "playwright not installed" "and the browser stage says it was skipped"
-else
-  assert_contains "$out" "bunx not installed" "and the browser stage says why it was skipped"
-fi
+# The declared toolchain supplies Bun; missing-tool behavior uses explicit
+# exclusions below rather than changing expectations with the runner's PATH.
+assert_contains "$out" "bun test (1 files)" "the bun stage runs the unit spec and not the browser one"
+assert_lacks "$out" "x bun test" "a browser spec does not turn the bun stage red"
+assert_contains "$out" "playwright not installed" "the installed bunx reports the missing browser dependency"
+no_bunx="$(safe_tmpdir)"
+fixture_path "$no_bunx" 'bunx' || exit 1
+out="$(PATH="$no_bunx" FM_ROOT="$q" bash "$q/bin/ci.sh" --stage e2e 2>&1)"
+assert_contains "$out" "bunx not installed" "an explicitly absent bunx is reported missing"
+safe_rm_rf "$no_bunx"
+rm -f "$q/tests/unit.spec.ts"
+
 # bin/*.sh does not recurse, so the adapters went unlinted for as long as
 # they have existed. A fixture with a broken one has to turn the gate red.
 mkdir -p "$q/bin/adapters"
@@ -436,17 +458,13 @@ mkdir -p "$q/bin/adapters"
 # is the question the adapters raised - their deliberate SC2086 is info and
 # must NOT turn the gate red.
 printf '#!/usr/bin/env bash\ncd /tmp\necho done\n' > "$q/bin/adapters/sloppy.sh"
-out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
-if command -v shellcheck >/dev/null 2>&1; then
-  assert_contains "$out" "x shellcheck" "a warning in an adapter turns the shellcheck stage red"
-  assert_contains "$out" "SC2164" "and the stage says which warning"
-  # and an info-level finding does not: the adapters rely on that
-  printf '#!/usr/bin/env bash\nargs=""\necho $args\n' > "$q/bin/adapters/sloppy.sh"
-  out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
-  assert_lacks "$out" "x shellcheck" "an info-level finding does not, which is what the adapters depend on"
-else
-  printf '    %s\n' "(shellcheck not installed, adapter lint unchecked)"
-fi
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)"
+assert_contains "$out" "x shellcheck" "a warning in an adapter turns the shellcheck stage red"
+assert_contains "$out" "SC2164" "and the stage says which warning"
+# An info-level finding does not: the adapters rely on that.
+printf '#!/usr/bin/env bash\nargs=""\necho $args\n' > "$q/bin/adapters/sloppy.sh"
+out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)"
+assert_lacks "$out" "x shellcheck" "an info-level finding does not, which is what the adapters depend on"
 
 # The real clock path reports elapsed time and the caller's effective budget;
 # deterministic boundary enforcement is covered above.
@@ -481,11 +499,11 @@ planted=''; planted_sig=''; planted_runs=0
 # A plant that creates or deletes a file was safe; one that edits in place
 # was not, and those are the ones this suite added.
 fixture_sig() { find "$q" -type f -exec shasum {} + 2>/dev/null | sort | shasum | cut -c1-40; }
-plant() {   # plant <label> <expected fragment>
-  local label="$1" want="$2" sig
-  sig="$(fixture_sig)"
+plant() {   # plant <label> <expected fragment> [stage, default fast]
+  local label="$1" want="$2" stage="${3:-fast}" sig
+  sig="$stage:$(fixture_sig)"
   if [ "$sig" != "$planted_sig" ]; then
-    planted="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
+    planted="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage "$stage" 2>&1)"
     planted_sig="$sig"
     planted_runs=$((planted_runs + 1))
   fi
@@ -516,9 +534,8 @@ assert_eq "$((before_runs + 2))" "$planted_runs" "a changed fixture is not serve
 # later was invisible and the next assertion read the previous run.
 sigdir="$(safe_tmpdir)"; q_save="$q"; q="$sigdir"
 printf 'AAAA' > "$q/f"; sig_a="$(fixture_sig)"
-sleep 1
 printf 'BBBB' > "$q/f"; sig_b="$(fixture_sig)"
-assert_ne "$sig_a" "$sig_b" "the plant cache notices a same-size edit a second later"
+assert_ne "$sig_a" "$sig_b" "the plant cache notices an immediate same-size edit"
 printf 'AAAA' > "$q/f"
 assert_eq "$sig_a" "$(fixture_sig)" "and is the same signature for the same content"
 q="$q_save"; rm -rf "$sigdir"
@@ -531,8 +548,8 @@ q="$q_save"; rm -rf "$sigdir"
   printf 'nosuch%s "x"\n' helper
   printf 'exit 0\n'
 } > "$q/tests/silent.test.sh"
-plant "a suite that passes while something in it did not run is a failure" "did not run"
-plant "and the stage prints the line" "nosuchhelper"
+plant "a suite that passes while something in it did not run is a failure" "did not run" bash
+plant "and the stage prints the line" "nosuchhelper" bash
 rm -f "$q/tests/silent.test.sh"
 
 # and the negative half: a suite that prints one of those phrases as
@@ -560,13 +577,13 @@ L
   printf '. "%s/brokenlib.sh"\n' "$q"
   printf 'exit 0\n'
 } > "$q/tests/broken.test.sh"
-plant "a suite that goes on after a syntax error in a sourced file is a failure" "did not run"
-plant "and the stage prints that line too" "syntax error"
+plant "a suite that goes on after a syntax error in a sourced file is a failure" "did not run" bash
+plant "and the stage prints that line too" "syntax error" bash
 { printf '#!/usr/bin/env bash\n'
   printf '/nonexistent/not-a-program\n'
   printf 'exit 0\n'
 } > "$q/tests/broken.test.sh"
-plant "a suite that goes on after a command it could not exec is a failure" "did not run"
+plant "a suite that goes on after a command it could not exec is a failure" "did not run" bash
 # `unbound variable` was in the rule with no plant, and it is the one
 # phrase whose place in the set is arguable: under `set -u` a
 # non-interactive bash EXITS, which is the other arm's job. In a
@@ -578,8 +595,8 @@ plant "a suite that goes on after a command it could not exec is a failure" "did
   printf '( echo "$NO_SUCH_VARIABLE" )\n'
   printf 'exit 0\n'
 } > "$q/tests/broken.test.sh"
-plant "a suite that goes on after an unbound variable in a subshell is a failure" "did not run"
-plant "and the stage prints that line as well" "NO_SUCH_VARIABLE"
+plant "a suite that goes on after an unbound variable in a subshell is a failure" "did not run" bash
+plant "and the stage prints that line as well" "NO_SUCH_VARIABLE" bash
 rm -f "$q/tests/broken.test.sh" "$q/brokenlib.sh"
 
 # The locale the gate runs a suite under is production, and nothing here
@@ -1226,7 +1243,7 @@ printf '{"id":"T-001"}\n' > "$q/design/tasks/T-001.json"
 printf '{"id":"T-777","depends_on":["T-776"]}\n' > "$q/projects/other-app/tasks/T-777.json"
 { printf 'default_project: self-host\nprojects:\n'
   printf '  self-host:\n    repo: .\n    github: o/engine\n    base: main\n    required_check: ci\n'
-  printf '    design: design/design.md\n    tasks: design/tasks.json\n'
+  printf '    design: design/design.md\n    tasks: design/tasks\n'
   printf '  other-app:\n    github: o/other-app\n    base: main\n    required_check: check\n'
 } > "$q/config.yaml"
 plant "a registered project's broken list turns the dag stage red" "the task list is not a sound DAG"
@@ -1246,7 +1263,7 @@ rm -rf "$q/design" "$q/config.yaml" "$q/bin/fm-herdr.py"
 
 # a suite that fails
 printf '#!/usr/bin/env bash\nexit 1\n' > "$q/tests/doomed.test.sh"
-plant "a failing suite turns the bash stage red" "doomed.test.sh"
+plant "a failing suite turns the bash stage red" "doomed.test.sh" bash
 rm -f "$q/tests/doomed.test.sh"
 
 # The two left: the bun and playwright stages report the runner's own
@@ -1624,4 +1641,6 @@ while IFS= read -r f; do
 done < <(find "$ROOT/bin" "$ROOT/tests" -type f -name '*.sh')
 assert_eq "" "$unparsed" "every script below bin/ and tests/ parses (bash -n)"
 
+PATH="$suite_original_path"; export PATH
+safe_rm_rf "$suite_tools"
 finish

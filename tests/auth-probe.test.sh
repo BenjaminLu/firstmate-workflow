@@ -13,6 +13,12 @@ unset CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/path.sh
+. "$ROOT/tests/lib/path.sh"
+suite_original_path="$PATH"
+suite_tools="$(safe_tmpdir)"
+fixture_path "$suite_tools" 'claude codex gemini cursor-agent agent gh herdr tmux cmux security secret-tool osascript xdg-open open' || exit 1
+PATH="$suite_tools"; export PATH
 
 PROBE="$ROOT/bin/fm-auth-probe.sh"
 assert_ok "test -x '$PROBE'" "fm-auth-probe.sh is executable"
@@ -86,7 +92,7 @@ no_logins()   { rm -rf "$home/.config/firstmate" "$home/.codex" "$home/.gemini" 
 crew_claude; crew_cursor; codex_auth
 
 # --- not installed ----------------------------------------------------------
-out="$(env PATH="$d/empty:/usr/bin:/bin" "$PROBE" claude 2>&1)"
+out="$(env PATH="$suite_tools" "$PROBE" claude 2>&1)"
 assert_eq "unavailable" "$(field "$out" status)" "a vendor not on PATH is unavailable"
 assert_ne "" "$(field "$out" en)" "and says so in English"
 assert_ne "" "$(field "$out" tw)" "and in Traditional Chinese"
@@ -396,4 +402,6 @@ assert_eq "" "$(cat "$d/refuses")" \
   "every answer but authenticated refuses a round - indeterminate and timeout included - and authenticated does not"
 
 rm -rf "$d"
+PATH="$suite_original_path"; export PATH
+safe_rm_rf "$suite_tools"
 finish

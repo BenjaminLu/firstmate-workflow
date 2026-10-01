@@ -9,6 +9,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 
+# Hygiene fixtures read only their own Git ignore rules.
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
 DOCTOR="$ROOT/bin/fm-doctor.sh"
 assert_ok "test -x '$DOCTOR'" "fm-doctor.sh is executable"
 assert_eq "__pycache__/" "$(grep -v '^[[:space:]]*#' "$ROOT/.gitignore" | grep -x '__pycache__/')" \
@@ -16,43 +18,20 @@ assert_eq "__pycache__/" "$(grep -v '^[[:space:]]*#' "$ROOT/.gitignore" | grep -
 
 d="$(safe_tmpdir)"
 repo="$d/repo"; mkdir -p "$repo"
-fakebin="$d/fakebin"; mkdir -p "$fakebin"
-
-# The suite's PATH is $fakebin then $sysbin, never /usr/bin or /bin
-# themselves. $sysbin links every command the host has there except each
-# name doctor asks about: the pins it requires, git, perl, herdr, both
-# sandbox tools, mise and every vendor CLI (and the aliases they go by).
-# The only copy of any of those the suite can see is the one it puts in
-# $fakebin, so "missing" means missing on every host. GitHub's ubuntu image
-# ships /usr/bin/gh, jq and shellcheck; macOS ships /usr/bin/git and a
-# python3 stub. The list is read from doctor's own REQUIRED_PINS and
-# fm_vendors, not kept by hand.
-asked_about="$(sed -n 's/^REQUIRED_PINS=(\(.*\))$/\1/p' "$DOCTOR") git perl herdr sandbox-exec bwrap mise
-  python bunx nodejs npm npx agent security secret-tool
-  $(bash -c '. "$1"; fm_vendors' _ "$ROOT/bin/fm-config.sh" | tr '\n' ' ')"
-sysbin="$d/sysbin"; mkdir -p "$sysbin"
-# one ln per directory; a name both hold keeps /usr/bin's, and ln's
-# complaint about it is expected
-ln -s /usr/bin/* "$sysbin/" 2>/dev/null
-ln -s /bin/* "$sysbin/" 2>/dev/null
-for n in $asked_about; do rm -f "$sysbin/$n"; done
-assert_contains "$asked_about" "gh" "the names kept off the suite's PATH include doctor's pins"
-assert_contains "$asked_about" "cursor-agent" "and every vendor CLI"
-assert_eq "" "$(for n in $asked_about; do PATH="$sysbin" command -v "$n"; done)" \
-  "the suite's system PATH holds none of the tools doctor asks about, on any host"
-
-# the real python3, resolved before $PATH is ever restricted: fm-auth-probe.sh
-# parses claude's JSON with it, and the host's own may not run, e.g. an
-# unlicensed Xcode stub
-REAL_PYTHON3="$(command -v python3)"
-# the real jq, for the --sandbox section below, which reads real JSON out of
-# results.jsonl: fakebin's own jq (below) only ever answers --version, so
-# using it there would read every field as empty rather than testing anything
-REAL_JQ="$(command -v jq)"
-
-# The fixture's own pins. Every stand-in below answers --version with a full
-# dotted version satisfying its pin, so whether doctor's toolchain
-# check is met depends on the fixture alone, never on the host's tools.
+facts="$d/facts"; : > "$facts"
+# Facts are tab-separated data, never executable stubs or a fake PATH.
+# tool: name, path, version, raw first version line, xcrun-shim path.
+# probe: vendor, status, English explanation, Traditional Chinese explanation.
+fact() {
+  local kind="$1" name="$2"; shift 2
+  awk -F '\t' -v k="$kind" -v n="$name" '!($1==k && $2==n)' "$facts" > "$facts.next"
+  printf '%s\t%s' "$kind" "$name" >> "$facts.next"
+  printf '\t%s' "$@" >> "$facts.next"; printf '\n' >> "$facts.next"
+  mv "$facts.next" "$facts"
+}
+tool() { fact tool "$1" "/tools/$1" "${2-}" "${2-}" "${3-}"; }
+missing() { fact tool "$1" ""; }
+# The fixture supplies both pins and observations; the host's versions never decide a judgment.
 toolchain='[tools]\nbun = "1.3.11"\npython = "3.14.6"\n"ubi:jqlang/jq" = "1.7.1"\n"ubi:cli/cli" = "2.63.0"\nnode = "20"\nshellcheck = "0.10.0"\n'
 # shellcheck disable=SC2059  # the format is the file's own text, escapes included
 printf "$toolchain" > "$repo/mise.toml"
@@ -65,9 +44,6 @@ version_for_pin() {  # a numeric mise prefix becomes a full CLI version
   esac
   printf '%s\n' "$version"
 }
-assert_eq "20.0.0" "$(version_for_pin 20)" "a major-only pin yields a full CLI version"
-assert_eq "1.7.0" "$(version_for_pin 1.7)" "a two-part pin yields a full CLI version"
-assert_eq "1.7.1" "$(version_for_pin 1.7.1)" "a full pin keeps its CLI version"
 pin_of() {  # pin_of <mise.toml key> -> a full version satisfying the fixture's pin
   local pin
   pin="$(
@@ -76,49 +52,24 @@ pin_of() {  # pin_of <mise.toml key> -> a full version satisfying the fixture's 
   )"
   version_for_pin "$pin"
 }
-fake_tool() {  # fake_tool <name> <version-line> [<real binary every other call runs>]
-  if [ -n "${3:-}" ]; then
-    printf '#!/usr/bin/env bash\ncase "$1" in --version) printf %%s\\\\n %s;; *) exec %s "$@";; esac\n' \
-      "$(printf '%q' "$2")" "$(printf '%q' "$3")" > "$fakebin/$1"
-  else
-    printf '#!/usr/bin/env bash\ncase "$1" in --version) printf %%s\\\\n %s;; esac\nexit 0\n' \
-      "$(printf '%q' "$2")" > "$fakebin/$1"
-  fi
-  chmod +x "$fakebin/$1"
-}
-fake_tool bun "$(pin_of bun)"
-fake_tool python3 "Python $(pin_of python)" "$REAL_PYTHON3"
-fake_tool jq "jq-$(pin_of ubi:jqlang/jq)"
-fake_tool gh "gh version $(pin_of ubi:cli/cli)"
-fake_tool git "git version 2.43.0"
-fake_tool herdr "herdr 1.0.0"
-fake_tool node "v$(pin_of node)"
-# the fake shellcheck names itself on its first line and its version on the second,
-# exactly as the real one answers --version
-printf '#!/usr/bin/env bash\nprintf "ShellCheck - shell script analysis tool\\nversion: %s\\nlicense: GNU General Public License, version 3\\n"\n' \
-  "$(pin_of shellcheck)" > "$fakebin/shellcheck"; chmod +x "$fakebin/shellcheck"
-assert_eq "1.7.1" "$(pin_of ubi:jqlang/jq)" "the stand-ins' versions are read from the fixture's own mise.toml"
-# perl is only checked for presence, and anything that runs it gets the real one
-ln -s "$(command -v perl)" "$fakebin/perl"
-# the sandbox tool the suite names with FM_SANDBOX_TOOL: it only has to be
-# there, since nothing in doctor starts a round with it
-printf '#!/usr/bin/env bash\nexit 1\n' > "$fakebin/fm-test-sandbox"; chmod +x "$fakebin/fm-test-sandbox"
-
+version_fact() { tool "$1" "$(grep -oE '[0-9]+(\.[0-9]+){1,3}' <<<"$2" | head -1)"; }
+for key in bun python ubi:jqlang/jq ubi:cli/cli node shellcheck; do
+  case "$key" in python) name=python3 ;; ubi:jqlang/jq) name=jq ;; ubi:cli/cli) name=gh ;; *) name="$key" ;; esac
+  tool "$name" "$(pin_of "$key")"
+done
+tool git 2.43.0; tool perl; tool herdr 1.0.0; tool fm-test-sandbox
+fact host os darwin
+fact host sandbox /tools/fm-test-sandbox
 printf 'vendor: claude\n' > "$repo/config.yaml"
 mkdir -p "$repo/state/worktrees"
 
-# $fakebin and $sysbin, never the rest of $PATH: this suite must not pick up
-# whatever vendor CLIs happen to be installed on the machine running it.
-# The platform and sandbox tool are the suite's too, the way fm-sandbox.sh
-# reads them (T_OS, T_TOOL override them for one run). The operator's home and keychain are the suite's (T-121): the probe
-# resolves a round's login from them, and must never read the real ones.
-home="$d/home"; mkdir -p "$home/.config/firstmate" "$home/.codex"
-printf 'crew-claude-token\n' > "$home/.config/firstmate/claude-token"; chmod 600 "$home/.config/firstmate/claude-token"
-printf '{"tokens":{"access_token":"a","refresh_token":"r"}}' > "$home/.codex/auth.json"
 unset CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY CURSOR_API_KEY CODEX_API_KEY OPENAI_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
-run_doctor() { HOME="$home" FM_KEYCHAIN_TOOL="$d/no-security" FM_SECRET_TOOL="$d/no-secret-tool" \
-  PATH="$fakebin:$sysbin" FM_SANDBOX_OS="${T_OS-darwin}" FM_SANDBOX_TOOL="${T_TOOL-$fakebin/fm-test-sandbox}" \
-  "$DOCTOR" --repo "$repo" "$@"; }
+run_doctor() { "$DOCTOR" --facts "$facts" --repo "$repo" "$@"; }
+
+# One collector smoke test. No assertion names tools the host must have.
+"$DOCTOR" --collect --repo "$repo" > "$d/collected"
+assert_eq "0" "$?" "the real collector emits facts without judging the host"
+assert_contains "$(cat "$d/collected")" $'host\tos\t' "the collector records the host platform"
 
 out="$(run_doctor)"; rc=$?
 assert_contains "$out" "Toolchain" "doctor prints a toolchain section"
@@ -137,24 +88,29 @@ assert_contains "$out" "install: curl https://cursor.com/install -fsS | bash" "c
 
 assert_contains "$out" "+ node" "node is checked against its pin: bunx playwright runs on it"
 assert_contains "$out" "+ shellcheck" "shellcheck is checked against its pin"
-assert_contains "$out" "0.10.0 (pinned 0.10.0)" "its version read from the line it says it on, not its first"
+assert_contains "$out" "0.10.0 (pinned 0.10.0)" "the supplied shellcheck version is compared with its pin"
 assert_contains "$out" "+ perl" "perl, the system's own, is checked rather than pinned"
 assert_lacks "$out" "pins no" "a mise.toml pinning every tool ci.sh and the board call has no gap"
 
 # --- the sandbox tool is the one fm-sandbox.sh would use, never uname's ------
-# linux named, no tool named: bwrap, which the suite's PATH never holds
-out="$(T_OS=linux T_TOOL='' run_doctor)"; rc=$?
+# A Linux observation with no bwrap, then macOS with no sandbox-exec.
+fact host os linux; fact host sandbox bwrap
+out="$(run_doctor)"; rc=$?
 assert_contains "$out" "x bwrap            missing; fix: apt install bubblewrap" \
   "FM_SANDBOX_OS=linux checks bwrap, whatever the host runs"
 assert_eq "1" "$rc" "and a missing one makes doctor bad"
-out="$(T_OS=darwin T_TOOL='' run_doctor)"
+fact host os darwin; fact host sandbox sandbox-exec
+out="$(run_doctor)"
 assert_contains "$out" "x sandbox-exec     missing; fix: sandbox-exec ships with macOS as /usr/bin/sandbox-exec" \
   "FM_SANDBOX_OS=darwin checks sandbox-exec, whatever the host runs, with macOS's own fix"
 assert_lacks "$out" "bwrap" "and never bwrap"
-out="$(T_TOOL="$d/no-such-sandbox" run_doctor)"; rc=$?
+fact host sandbox "$d/no-such-sandbox"
+out="$(run_doctor)"; rc=$?
 assert_contains "$out" "x no-such-sandbox" "a FM_SANDBOX_TOOL that is not there is reported x"
 assert_contains "$out" "FM_SANDBOX_TOOL names $d/no-such-sandbox, which is not there" "saying which setting names it"
 assert_eq "1" "$rc" "and doctor's exit is bad"
+
+fact host sandbox /tools/fm-test-sandbox
 
 # --- mise.toml itself must pin every tool bin/ci.sh and the board call -------
 # the repository's own file, checked by the same doctor: a pin dropped from
@@ -175,80 +131,57 @@ assert_contains "$out" "missing from mise.toml: it pins no node" "and so is one 
 printf "$toolchain" > "$repo/mise.toml"
 
 # --- a missing tool ----------------------------------------------------------
-# the suite's PATH has no gh but fakebin's (see $sysbin above), so with it
-# gone gh is missing on every host, ubuntu's /usr/bin/gh included
-rm -f "$fakebin/gh"
+# A missing observation stays missing even when the host has gh.
+missing gh
 out="$(run_doctor)"; rc=$?
 assert_contains "$out" "x gh" "a missing pinned tool is reported x, not ok"
 assert_contains "$out" "x gh               missing (pinned 2.63.0)" "and says missing, the word the acceptance names"
 assert_contains "$out" "mise install" "with the one command that fixes it"
 assert_eq "1" "$rc" "and doctor's own exit reflects it"
-fake_tool gh "gh version $(pin_of ubi:cli/cli)"
+version_fact gh "gh version $(pin_of ubi:cli/cli)"
 
 # --- a tool older than its pin ------------------------------------------------
-fake_tool jq "jq-1.5"
+version_fact jq "jq-1.5"
 out="$(run_doctor)"
 assert_contains "$out" "x jq" "an older-than-pinned tool is reported x too"
 assert_contains "$out" "wrong version: 1.5, older than the pin 1.7.1" "and says wrong version, and why"
-fake_tool jq "jq-$(pin_of ubi:jqlang/jq)"
+version_fact jq "jq-$(pin_of ubi:jqlang/jq)"
 
-# --- an Apple xcrun shim first on PATH (T-147) -------------------------------
-# A stand-in for /usr/bin/git and /usr/bin/python3 on macOS: linked against
-# libxcselect, which is how fm-config.sh's fm_xcrun_shim tells one, and
-# answering the way an unlicensed one does. The suite's own, never the
-# host's /usr/bin.
-fake_shim() {  # fake_shim <file>
-  printf '#!/usr/bin/env bash\n# /usr/lib/libxcselect.dylib\necho "You have not agreed to the Xcode license agreements." >&2\nexit 69\n' > "$1"
-  chmod +x "$1"
-}
-# a shim later on PATH than a real git changes nothing: the real one is found
-fake_shim "$sysbin/git"
-out="$(run_doctor)"
-assert_contains "$out" "+ git              ok, found on PATH" "a real git first on PATH is ok, with a shim behind it"
-assert_lacks "$out" "xcrun shim" "and no shim is reported"
-# with only the shim, git is reported as the wrong tool, with the fix
-rm -f "$fakebin/git"
+# --- xcrun tool observations are judged without constructing a fake Mac ---
+tool git "" /shims/git
 out="$(run_doctor)"; rc=$?
-assert_contains "$out" "x git              wrong version: $sysbin/git is Apple's xcrun shim" \
-  "a shim git first on PATH is reported x, as the wrong tool, naming the file"
-assert_contains "$out" "fix: install git ahead of /usr/bin on PATH (brew install git), or accept the Xcode licence" \
-  "with fm_xcrun_fix's line"
-assert_lacks "$out" "+ git" "and never as ok"
-assert_eq "1" "$rc" "and doctor's own exit reflects it"
-rm -f "$sysbin/git"; fake_tool git "git version 2.43.0"
-# python3, a pinned tool, the same way
-fake_shim "$fakebin/python3"
+assert_contains "$out" "x git              wrong version: /shims/git is Apple's xcrun shim" "a collected git shim is refused"
+assert_contains "$out" "fix: install git ahead of /usr/bin on PATH (brew install git), or accept the Xcode licence" "with the tool's repair"
+assert_lacks "$out" "+ git" "a shim is never also reported ok"
+assert_eq "1" "$rc" "a shim makes doctor bad"
+tool git 2.43.0
+tool python3 "" /shims/python3
 out="$(run_doctor)"; rc=$?
-assert_contains "$out" "x python3          wrong version: $fakebin/python3 is Apple's xcrun shim" \
-  "a shim python3 first on PATH is reported x, as the wrong tool"
-assert_contains "$out" "fix: install python3 ahead of /usr/bin on PATH (brew install python)" "with its fix"
-assert_eq "1" "$rc" "and doctor's own exit reflects it"
-fake_tool python3 "Python $(pin_of python)" "$REAL_PYTHON3"
+assert_contains "$out" "x python3          wrong version: /shims/python3 is Apple's xcrun shim" "a collected Python shim is refused"
+assert_contains "$out" "fix: install python3 ahead of /usr/bin on PATH (brew install python)" "with the Python repair"
+assert_eq "1" "$rc" "a pinned shim makes doctor bad"
+tool python3 "$(pin_of python)"
 out="$(run_doctor)"
-assert_contains "$out" "+ python3" "a real python3 first on PATH is ok"
-assert_lacks "$out" "xcrun shim" "and not called a shim"
+assert_contains "$out" "+ python3" "a real Python observation is accepted"
+assert_lacks "$out" "xcrun shim" "and is not called a shim"
 
 # --- vendor logins: only 'authenticated' counts as usable --------------------
-# each vendor CLI answers --version and its status check exactly as the
-# real one did in its recorded transcript (tests/fixtures/auth-status)
+# Auth probe decoding lives in auth-probe.test.sh. Doctor judges its observations.
 FIX="$ROOT/tests/fixtures/auth-status"
-recorded() {  # recorded <vendor> <fixture>
-  printf '#!/usr/bin/env bash\nif [ "$1" = --version ]; then exec %q %q --version; fi\nexec %q %q\n' \
-    "$FIX/replay.sh" "$FIX/$2.txt" "$FIX/replay.sh" "$FIX/$2.txt" > "$fakebin/$1"
-  chmod +x "$fakebin/$1"
-}
-recorded claude claude-signed-in
+tool claude 2.1.284
+fact probe claude authenticated "claude's own status check confirms the login" "登入已確認"
 out="$(run_doctor)"
 assert_contains "$out" "+ claude" "an authenticated vendor is reported ok"
 assert_contains "$out" "ok: claude's own status check confirms" "saying ok"
-rm -f "$fakebin/claude"
+missing claude
 
-recorded codex codex-signed-out
+tool codex 0.155.1
+fact probe codex unauthenticated "run codex login" "請執行 codex login"
 out="$(run_doctor)"; rc=$?
 assert_contains "$out" "x codex" "an unauthenticated vendor is reported x, not ok"
 assert_contains "$out" "codex login" "with codex's own fix"
 assert_eq "1" "$rc" "and it is what makes doctor's own exit code bad"
-rm -f "$fakebin/codex"
+missing codex
 
 # --- too old: a vendor CLI older than the oldest version known to have the
 # status check the probe runs, and herdr older than 0.9.1 (T-078, folded in)
@@ -261,35 +194,33 @@ for v in claude codex cursor-agent; do
   floor="$(bash -c '. "$1"; vendor_min "$2"' _ "$d/vendor_min.sh" "$v")"
   assert_eq "$rec" "$floor" "$v's floor is the version its status check was recorded from"
 done
-fake_tool claude "2.1.0 (Claude Code)"
+version_fact claude "2.1.0 (Claude Code)"
 out="$(run_doctor)"; rc=$?
 assert_contains "$out" "x claude           wrong version: 2.1.0, older than 2.1.284" "a vendor CLI too old for its status check is wrong version"
 assert_contains "$out" "install: npm install -g @anthropic-ai/claude-code" "with its install line"
 assert_eq "1" "$rc" "and doctor's exit is bad"
-rm -f "$fakebin/claude"
-fake_tool herdr "herdr 0.9.0"
+missing claude
+version_fact herdr "herdr 0.9.0"
 out="$(run_doctor)"; rc=$?
 assert_contains "$out" "x herdr            wrong version: 0.9.0, older than 0.9.1" "herdr older than 0.9.1 is wrong version"
 assert_contains "$out" "install herdr 0.9.1 or later" "with the line that installs it"
 assert_eq "1" "$rc" "and doctor's exit is bad"
-fake_tool herdr "herdr 1.0.0"
+version_fact herdr "herdr 1.0.0"
 out="$(run_doctor)"
 assert_contains "$out" "+ herdr            ok 1.0.0 (at least 0.9.1)" "a new enough herdr is ok"
 
 # gemini has no status command: with a round's login present its probe is
 # indeterminate, which is never read as authenticated - so doctor says
 # plainly, in both languages, that rounds on it are refused
-fake_tool gemini "0.60.0"
-mkdir -p "$home/.gemini"
-printf '{"access_token":"g","refresh_token":"r","expiry_date":%s}' "$(( ($(date +%s) + 86400) * 1000 ))" \
-  > "$home/.gemini/oauth_creds.json"
+version_fact gemini "0.60.0"
+fact probe gemini indeterminate "gemini's login cannot be verified, so rounds on it are refused" "登入無法驗證，因此拒絕在其上執行回合"
 out="$(run_doctor)"; rc=$?
 assert_contains "$out" "x gemini" "a vendor whose login cannot be verified is x, not ok"
 assert_contains "$out" "gemini's login cannot be verified, so rounds on it are refused" "said in English"
 assert_contains "$out" "拒絕在其上執行回合" "and in Traditional Chinese"
 assert_lacks "$out" "unverified" "and never offered as usable but unverified"
 assert_eq "1" "$rc" "and it makes doctor's exit code bad, like any vendor a round cannot use"
-rm -rf "$fakebin/gemini" "$home/.gemini"
+missing gemini
 
 # --- no config.yaml yet: doctor hands off to fm setup ------------------------
 # A scratch copy of bin/, so the real fm-setup.sh is never touched: fm-doctor.sh
@@ -305,7 +236,7 @@ cp "$ROOT/bin/adapters/_lib.sh" "$d2/bin/adapters/"
 } > "$d2/bin/fm-setup.sh"
 chmod +x "$d2/bin/fm-setup.sh"
 noconfig="$d2/repo"; mkdir -p "$noconfig"
-out="$(PATH="$fakebin:$sysbin" "$d2/bin/fm-doctor.sh" --repo "$noconfig" 2>&1)"; rc=$?
+out="$("$d2/bin/fm-doctor.sh" --repo "$noconfig" 2>&1)"; rc=$?
 assert_contains "$out" "fm setup" "with no config.yaml, doctor says it is handing off to fm setup"
 assert_ok "test -f '$d2/setup-ran'" "and actually hands off to it"
 assert_eq "3" "$rc" "carrying its exit code back"
@@ -334,13 +265,9 @@ assert_contains "$out" "api-key billing for claude" "chosen billing is reported 
 printf 'vendor: claude\n' > "$repo/config.yaml"
 
 # --- repository hygiene: what git status would show in each worktree ------
-# the real git, since the question is what git itself shows: fakebin's git
-# only answers --version
+# Real temporary repositories cover hygiene; tool judgments still consume facts.
 REAL_GIT="$(command -v git)"
-gitbin="$d/gitbin"; mkdir -p "$gitbin"; ln -sf "$REAL_GIT" "$gitbin/git"
-hygiene_doctor() { HOME="$home" FM_KEYCHAIN_TOOL="$d/no-security" FM_SECRET_TOOL="$d/no-secret-tool" \
-  PATH="$gitbin:$fakebin:$sysbin" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$fakebin/fm-test-sandbox" \
-  "$DOCTOR" --repo "$repo"; }
+hygiene_doctor() { run_doctor; }
 out="$(hygiene_doctor)"
 assert_contains "$out" "no untracked build cache in any worktree" "a clean state/worktrees is reported clean"
 wt="$repo/state/worktrees/T-1"
@@ -368,21 +295,19 @@ rm -rf "$wt"
 out="$(printf 'n\n' | run_doctor --fix)"
 assert_contains "$out" "Fixing" "--fix runs a fixing pass"
 
-# a fake mise that records every install it is asked to run, never doing
-# anything itself
+# An explicit installer path in the supplied facts records the approved action.
 : > "$d/mise-calls"
-printf '#!/usr/bin/env bash\necho "$*" >> "%s/mise-calls"\n' "$d" > "$fakebin/mise"
-chmod +x "$fakebin/mise"
-rm -f "$fakebin/gh"
-: > "$d/mise-calls"
+printf '#!/usr/bin/env bash\necho "$*" >> "%s/mise-calls"\n' "$d" > "$d/mise"
+chmod +x "$d/mise"
+fact tool mise "$d/mise"
+missing gh
 asked="$(printf 'n\n' | run_doctor --fix 2>&1)"
-assert_contains "$asked" "install ubi:cli/cli" "it asks, naming the tool, before installing anything"
-assert_eq "" "$(cat "$d/mise-calls")" "and a 'n' answer installs nothing"
-: > "$d/mise-calls"
+assert_contains "$asked" "install ubi:cli/cli" "it asks before installing"
+assert_eq "" "$(cat "$d/mise-calls")" "a no answer installs nothing"
 printf 'y\n' | run_doctor --fix >/dev/null 2>&1
-assert_contains "$(cat "$d/mise-calls")" "install ubi:cli/cli@2.63.0" "a 'y' answer runs exactly the pinned install"
-rm -f "$fakebin/mise"
-fake_tool gh "gh version $(pin_of ubi:cli/cli)"
+assert_contains "$(cat "$d/mise-calls")" "install ubi:cli/cli@2.63.0" "a yes answer runs the pinned install"
+missing mise
+tool gh "$(pin_of ubi:cli/cli)"
 
 # --- --sandbox: every summary line is read from the record it describes ----
 # A scratch bin/ whose fm-canary.sh stands in for a real run: it appends the
@@ -400,16 +325,8 @@ cp "$ROOT/bin/adapters/_lib.sh" "$d3/adapters/"
   printf 'exit "$(cat %s)"\n' "$(printf '%q' "$d3/rc")"
 } > "$d3/fm-canary.sh"
 chmod +x "$d3/fm-canary.sh" "$d3/fm-doctor.sh"
-# The canary stand-in and doctor's record reader need a jq that reads JSON,
-# but doctor's toolchain check reads that same jq's version: so it is a
-# stand-in that answers --version with the fixture's pin and runs the real
-# jq for everything else, never a bare link to the host's, whose version
-# (ubuntu 24.04's apt jq is 1.7) would decide this section's exit.
-fake_tool jq "jq-$(pin_of ubi:jqlang/jq)" "$REAL_JQ"
 mkdir -p "$repo/state/canary"
-sandbox_doctor() { HOME="$home" FM_KEYCHAIN_TOOL="$d/no-security" FM_SECRET_TOOL="$d/no-secret-tool" \
-  PATH="$fakebin:$sysbin" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$fakebin/fm-test-sandbox" \
-  "$d3/fm-doctor.sh" --repo "$repo" --sandbox; }
+sandbox_doctor() { "$d3/fm-doctor.sh" --facts "$facts" --repo "$repo" --sandbox; }
 blocked_probes='{"write_outside":"blocked","read_ssh":"blocked","github":"blocked","loopback":"blocked","herdr_socket":"blocked","other_round_tmp":"blocked","gh_token":"blocked","git_credential":"blocked","keychain":"n/a","pasteboard":"n/a"}'
 ran_record() {  # ran_record <vendor> <probes json> <own_loopback> -> a started, authenticated record
   printf '{"at":"2026-09-29T00:00:00Z","vendor":"%s","version":"1.0.0","sandbox":"darwin","outcome":"ran","why":"","started":true,"authenticated":true,"probes":%s,"own_loopback":"%s"}\n' \

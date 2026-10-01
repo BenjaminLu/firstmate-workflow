@@ -8,12 +8,16 @@ set -uo pipefail
 for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
   unset "$_fm_k" || true
 done
-# The legacy contract exercises direct CLIs; managed tests supply fake Herdr.
+# This suite exercises the direct CLI transport; managed cases supply fake Herdr.
 export HERDR_ENV=0 FM_TRANSPORT=direct
 unset FM_RUN_DIR FM_ROLE FM_TASK FM_ACTOR FM_CODE_ROOT FM_CONTEXT_READY FM_ATTEMPT_DIR FM_FINAL_PATH FM_CLI_EXIT
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/path.sh
+. "$ROOT/tests/lib/path.sh"
+closed_path="$(safe_tmpdir)"
+fixture_path "$closed_path" 'claude codex gemini cursor-agent agent gh security secret-tool' || exit 1
 
 # a PATH where git and gh record every call instead of doing anything
 make_sandbox() {
@@ -134,7 +138,7 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
   else
     # a PATH without the vendor CLI - but with a shell, or the script never
     # starts and 127 gets mistaken for a contract failure
-    PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+    PATH="$d/fakebin:$closed_path" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
     assert_eq "2" "$?" "$name exits 2 when its CLI is missing"
   fi
 
@@ -159,11 +163,11 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
                 "Authentication required." \
                 "401 Unauthorized"; do
       vendor_says "$line" 0
-      PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+      PATH="$d/fakebin:$closed_path" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
       assert_eq "2" "$?" "$name reports unavailable when the CLI says: ${line%% *}..."
     done
     vendor_says "" 0
-    PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+    PATH="$d/fakebin:$closed_path" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
     assert_eq "1" "$?" "$name does not call a silent run a success"
     # the prompt has to actually reach the CLI, AND the invocation has to be
     # one the real CLI would accept. A fake that unconditionally reads stdin
@@ -181,7 +185,7 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
       "$d" "$d" > "$d/fakebin/$name"
     chmod +x "$d/fakebin/$name"
     : > "$d/stdin"; : > "$d/argv"
-    PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+    PATH="$d/fakebin:$closed_path" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
     # every one of them hands the prompt over on stdin; that is the whole
     # reason an adapter may not touch git - the CLI never sees the repository
     assert_contains "$(cat "$d/stdin")" "do the thing" "$name delivers the prompt on stdin"
@@ -241,7 +245,7 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
 
     # --- config.yaml's model, applied (T-127) -----------------------------
     : > "$d/argv"
-    FM_MODEL="claude-opus-5-5" PATH="$d/fakebin:/usr/bin:/bin" \
+    FM_MODEL="claude-opus-5-5" PATH="$d/fakebin:$closed_path" \
       "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
     model_argv="$(cat "$d/argv")"
     case "$name" in
@@ -261,7 +265,7 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     esac
     # with no FM_MODEL at all, none of these flags appear
     : > "$d/argv"
-    PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+    PATH="$d/fakebin:$closed_path" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
     no_model_argv="$(cat "$d/argv")"
     assert_lacks " $no_model_argv " " --model " "$name passes no --model when none is configured"
     assert_lacks " $no_model_argv " " -m " "$name passes no -m when none is configured"
@@ -275,7 +279,7 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     saved_ifs2="$IFS"; IFS='|'
     for extra in $model_extras; do
       IFS="$saved_ifs2"
-      FM_ADAPTER_ARGS="$extra" PATH="$d/fakebin:/usr/bin:/bin" \
+      FM_ADAPTER_ARGS="$extra" PATH="$d/fakebin:$closed_path" \
         "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>"$d/model-err"
       assert_eq "64" "$?" "$name refuses FM_ADAPTER_ARGS naming a model ($extra)"
       assert_contains "$(cat "$d/model-err")" "config.yaml is the one place a model is chosen" \
@@ -294,7 +298,7 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     vendor_says "$refusal_line" 1
     refused_dir="$(safe_tmpdir)"; : > "$refused_dir/refused"
     FM_MODEL="bad-model-9000" FM_MODEL_REFUSED="$refused_dir/refused" \
-      PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/model-refusal.log" \
+      PATH="$d/fakebin:$closed_path" "$adapter" run "$d/prompt" "$d/tree" "$d/model-refusal.log" \
       >/dev/null 2>"$d/model-refusal.err"
     assert_eq "64" "$?" "$name refuses a round whose model it does not recognise"
     assert_contains "$(cat "$d/model-refusal.err")" "bad-model-9000" "and names the model on stderr"
@@ -307,7 +311,7 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     # is that a signature alone must never discard real work.
     vendor_says "$refusal_line" 0
     : > "$d/model-ok.log"
-    FM_MODEL="bad-model-9000" PATH="$d/fakebin:/usr/bin:/bin" \
+    FM_MODEL="bad-model-9000" PATH="$d/fakebin:$closed_path" \
       "$adapter" run "$d/prompt" "$d/tree" "$d/model-ok.log" >/dev/null 2>"$d/model-ok.err"
     assert_ne "64" "$?" "$name does not refuse a completed round even carrying the refusal's words"
     # Ordinary prose that merely discusses models - the kind this very
@@ -319,7 +323,7 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
                  "No such model found in the fixtures; added one."; do
       vendor_says "$prose" 1
       : > "$d/model-prose.log"
-      FM_MODEL="bad-model-9000" PATH="$d/fakebin:/usr/bin:/bin" \
+      FM_MODEL="bad-model-9000" PATH="$d/fakebin:$closed_path" \
         "$adapter" run "$d/prompt" "$d/tree" "$d/model-prose.log" >/dev/null 2>"$d/model-prose.err"
       assert_ne "64" "$?" "$name does not refuse on prose alone: \"${prose%% *}...\""
     done
@@ -328,20 +332,20 @@ for adapter in "$ROOT"/bin/adapters/*.sh; do
     # CLI never started", so it is never read as a model refusal either.
     vendor_says "{\"type\":\"result\",\"model\":\"claude-opus-5-5\"} then: $refusal_line" 1
     : > "$d/model-worked.log"
-    FM_MODEL="bad-model-9000" PATH="$d/fakebin:/usr/bin:/bin" \
+    FM_MODEL="bad-model-9000" PATH="$d/fakebin:$closed_path" \
       "$adapter" run "$d/prompt" "$d/tree" "$d/model-worked.log" >/dev/null 2>"$d/model-worked.err"
     assert_ne "64" "$?" "$name does not refuse a transcript that already reports a model ran"
     # claude's result names no "model": what ran is modelUsage's keys (T-146)
     vendor_says "{\"type\":\"result\",\"modelUsage\":{\"claude-opus-5-5\":{\"outputTokens\":9}}} then: $refusal_line" 1
     : > "$d/model-usage.log"
-    FM_MODEL="bad-model-9000" PATH="$d/fakebin:/usr/bin:/bin" \
+    FM_MODEL="bad-model-9000" PATH="$d/fakebin:$closed_path" \
       "$adapter" run "$d/prompt" "$d/tree" "$d/model-usage.log" >/dev/null 2>"$d/model-usage.err"
     assert_ne "64" "$?" "$name does not refuse a transcript whose modelUsage reports a model ran"
     # and an empty modelUsage reports nothing that ran
     vendor_says "{\"type\":\"result\",\"is_error\":true,\"modelUsage\":{}}
 $refusal_line" 1
     : > "$d/model-nousage.log"
-    FM_MODEL="bad-model-9000" PATH="$d/fakebin:/usr/bin:/bin" \
+    FM_MODEL="bad-model-9000" PATH="$d/fakebin:$closed_path" \
       "$adapter" run "$d/prompt" "$d/tree" "$d/model-nousage.log" >/dev/null 2>"$d/model-nousage.err"
     assert_eq "64" "$?" "$name still refuses when modelUsage is empty"
 
@@ -353,12 +357,12 @@ $refusal_line" 1
         > "$d/fakebin/cursor-agent"
       chmod +x "$d/fakebin/cursor-agent"
       : > "$d/list-unknown.log"
-      FM_MODEL="not-a-real-model" PATH="$d/fakebin:/usr/bin:/bin" \
+      FM_MODEL="not-a-real-model" PATH="$d/fakebin:$closed_path" \
         "$adapter" run "$d/prompt" "$d/tree" "$d/list-unknown.log" >/dev/null 2>"$d/list-unknown.err"
       assert_eq "64" "$?" "cursor-agent refuses before the round when --list-models names no such model"
       assert_contains "$(cat "$d/list-unknown.err")" "not-a-real-model" "and names the model on stderr"
       : > "$d/list-known.log"
-      FM_MODEL="claude-opus-5-5" PATH="$d/fakebin:/usr/bin:/bin" \
+      FM_MODEL="claude-opus-5-5" PATH="$d/fakebin:$closed_path" \
         "$adapter" run "$d/prompt" "$d/tree" "$d/list-known.log" >/dev/null 2>"$d/list-known.err"
       assert_ne "64" "$?" "and lets a name the list does carry through"
 
@@ -368,7 +372,7 @@ $refusal_line" 1
         > "$d/fakebin/cursor-agent"
       chmod +x "$d/fakebin/cursor-agent"
       : > "$d/list-noauth.log"
-      FM_MODEL="whatever-model" PATH="$d/fakebin:/usr/bin:/bin" \
+      FM_MODEL="whatever-model" PATH="$d/fakebin:$closed_path" \
         "$adapter" run "$d/prompt" "$d/tree" "$d/list-noauth.log" >/dev/null 2>"$d/list-noauth.err"
       assert_ne "64" "$?" "and a list command that cannot run refuses nothing"
     fi
@@ -391,7 +395,7 @@ $refusal_line" 1
     FM_ROOT="$d/tree" FM_CODE_ROOT="$d/tree" FM_TASK=T-Z FM_ACTOR=reviewer-x FM_GH=gh \
       FM_PROJECT_ROOT="$d/tree" HERDR_PANE_ID=p1 GIT_DIR="$d/tree/.git" GH_TOKEN=secret GITHUB_TOKEN=secret \
       XDG_CACHE_HOME="$d/cache" \
-      FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/checkout" PATH="$d/fakebin:/usr/bin:/bin" \
+      FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/checkout" PATH="$d/fakebin:$closed_path" \
       "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1; rrc=$?
     if grep -q '^# fm:review-run' "$adapter"; then
       assert_eq "0" "$rrc" "$name runs a run-mode review"
@@ -521,7 +525,7 @@ $runargv
           printf '#!/usr/bin/env bash\ncat > /dev/null\nprintf "%%s\\n" "$@" > "%s/carve.argv"\nprintf "ran\\n"\nexit 0\n' \
             "$nr" > "$d/fakebin/$name"
           chmod +x "$d/fakebin/$name"
-          FM_POLICY="$nr/carve.json" PATH="$d/fakebin:/usr/bin:/bin" \
+          FM_POLICY="$nr/carve.json" PATH="$d/fakebin:$closed_path" \
             "$adapter" run "$d/prompt" "$nr/state/worktrees/T-Z" "$d/log" >/dev/null 2>&1
           csettings="$(awk 'on{print;exit} $0=="--settings"{on=1}' "$nr/carve.argv" 2>/dev/null)"
           cwork="$(cd "$nr/state/worktrees/T-Z" && pwd -P)"
@@ -551,14 +555,14 @@ $runargv
           # the bug it was meant to catch, and is dropped as a duplicate.
           rm -f "$d/cwd.run"
           FM_REVIEW_NETWORK='x.org","*' FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/checkout" \
-            PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+            PATH="$d/fakebin:$closed_path" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
           assert_eq "64" "$?" "$name refuses a network entry that is not a domain name"
           assert_fail "test -e '$d/cwd.run'" "and its CLI never starts"
           # a `*` is read as itself: expanded, it became the file names in
           # the adapter's working directory, which pass as domains
           mkdir -p "$d/globdir"; : > "$d/globdir/x.org"; rm -f "$d/cwd.run"
           ( cd "$d/globdir" && FM_REVIEW_NETWORK='*' FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/checkout" \
-            PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1 )
+            PATH="$d/fakebin:$closed_path" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1 )
           assert_eq "64" "$?" "$name refuses a network entry of '*' rather than globbing it"
           assert_fail "test -e '$d/cwd.run'" "and its CLI never starts"
           # an operator argument that touches permissions or what is loaded
@@ -567,7 +571,7 @@ $runargv
                        "--mcp-config x.json" "--plugin-dir p" "--agents {}"; do
             rm -f "$d/cwd.run"
             FM_ADAPTER_ARGS="$extra" FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/checkout" \
-              PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+              PATH="$d/fakebin:$closed_path" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
             assert_eq "64" "$?" "$name refuses a run-mode review whose extra arguments say $extra"
             assert_fail "test -e '$d/cwd.run'" "and its CLI never starts"
           done
@@ -575,7 +579,7 @@ $runargv
       esac
       # a checkout that is not one is refused, not reviewed from wherever
       rm -f "$d/cwd.run"
-      FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/tree" PATH="$d/fakebin:/usr/bin:/bin" \
+      FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/tree" PATH="$d/fakebin:$closed_path" \
         "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
       assert_eq "64" "$?" "$name refuses a run-mode checkout with no .git"
       assert_fail "test -e '$d/cwd.run'" "and its CLI never starts"
@@ -585,7 +589,7 @@ $runargv
       for gh_host in github.com raw.githubusercontent.com ghcr.io x.github.io API.GitHub.com; do
         rm -f "$d/cwd.run"
         FM_REVIEW_NETWORK="registry.npmjs.org $gh_host" FM_RUN_REVIEW=1 FM_REVIEW_CHECKOUT="$d/checkout" \
-          PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+          PATH="$d/fakebin:$closed_path" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
         assert_eq "64" "$?" "$name refuses a run-mode network naming $gh_host"
         assert_fail "test -e '$d/cwd.run'" "and its CLI never starts ($gh_host)"
       done
@@ -595,7 +599,7 @@ $runargv
     fi
 
     vendor_says "wrote the thing" 0
-    PATH="$d/fakebin:/usr/bin:/bin" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
+    PATH="$d/fakebin:$closed_path" "$adapter" run "$d/prompt" "$d/tree" "$d/log" >/dev/null 2>&1
     assert_eq "0" "$?" "$name still reports success when the CLI does the work"
     rm -f "$d/fakebin/$name"
   fi
@@ -627,7 +631,7 @@ confined() {   # confined <os> <tool> <policy> <vendor> -> its exit code; argv i
     "$pv" "$pv" > "$pv/fakebin/$4"
   chmod +x "$pv/fakebin/$4"
   rm -f "$pv/argv" "$pv/env" "$pk/profile.sb" "$pk/bwrap.args"
-  FM_SANDBOX_OS="$1" FM_SANDBOX_TOOL="$2" FM_POLICY="$3" PATH="$pv/fakebin:/usr/bin:/bin" \
+  FM_SANDBOX_OS="$1" FM_SANDBOX_TOOL="$2" FM_POLICY="$3" PATH="$pv/fakebin:$closed_path" \
     "$ROOT/bin/adapters/$4.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"
   echo $?
 }
@@ -855,11 +859,53 @@ for v in claude codex cursor-agent gemini; do
   printf '#!/usr/bin/env bash\ncat > /dev/null\nprintf "%%s\\n" "$@" > "%s/argv"\necho "it went wrong"\nexit 70\n' \
     "$pv" > "$pv/fakebin/$v"
   rm -f "$pv/argv"
-  FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" FM_POLICY="$pk/none.json" PATH="$pv/fakebin:/usr/bin:/bin" \
+  FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" FM_POLICY="$pk/none.json" PATH="$pv/fakebin:$closed_path" \
     "$ROOT/bin/adapters/$v.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>&1
   assert_eq "1" "$?" "while $v's own exit 70, inside a sandbox that started, is a failed attempt"
   assert_ok "test -e '$pv/argv'" "($v's CLI did run)"
 done
+# Policy parsing and adapter enforcement share this suite as their home.
+refusal_root="$(safe_tmpdir)"
+refusal_policy() {
+  printf '%s' "$2" > "$refusal_root/config.yaml"
+  ( . "$ROOT/bin/fm-config.sh"
+    fm_policy "$1" "" "$refusal_root/config.yaml" )
+}
+# what may never be declared: GitHub, loopback, anything not a plain name
+for bad in github.com api.github.com raw.githubusercontent.com ghcr.io localhost dev.localhost \
+           127.0.0.1 10.0.0.1 '*' '*.com'; do
+  out="$(refusal_policy worker "policy:
+  network: registry.npmjs.org $bad
+" 2>&1)"
+  assert_eq "65" "$?" "a network naming '$bad' is refused"
+  assert_contains "$out" "names $bad, which" "and names it"
+done
+out="$(refusal_policy worker 'policy:
+  network: localhost
+' 2>&1)"
+assert_contains "$out" "may not reach loopback" "loopback is said to be loopback"
+out="$(refusal_policy worker 'policy:
+  network: api.github.com
+' 2>&1)"
+assert_contains "$out" "may not reach GitHub" "and GitHub GitHub"
+out="$(refusal_policy worker 'projects:
+  app:
+    repo: .
+    github: o/app
+    base: main
+    required_check: ci
+    policy:
+      worker:
+        network: 127.0.0.1
+' 2>&1)"
+assert_eq "65" "$?" "a project cannot declare loopback either"
+out="$(refusal_policy worker 'policy:
+  network: notgithub.com
+' 2>&1)"
+assert_eq "0" "$?" "a label ending in github is not GitHub policy"
+assert_eq '["notgithub.com"]' "$(jq -c .network <<<"$out")" "the allowed label survives policy parsing"
+rm -rf "$refusal_root"
+
 # loopback and GitHub are never allowed, not even by a policy file that says so
 # The hosts every adapter builds its flags from are the policy's
 # (FM_POLICY_HOSTS), so a malformed entry is refused there too - not only in
@@ -972,7 +1018,7 @@ for lf in "codex darwin at-codex rt-codex-secret .codex/auth.json" \
   lf_rc="$(
     unset CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY ANTHROPIC_API_KEY CODEX_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
     export FM_KEYCHAIN_TOOL="$pv/no-such-security"
-    FM_SANDBOX_OS="$lf_os" FM_SANDBOX_TOOL="$lf_tool" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:/usr/bin:/bin" \
+    FM_SANDBOX_OS="$lf_os" FM_SANDBOX_TOOL="$lf_tool" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:$closed_path" \
       "$ROOT/bin/adapters/$lf_v.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"
     echo $?
   )"
@@ -1010,7 +1056,7 @@ for cur in "darwin key-crew-kc" "linux key-crew-file"; do
   cur_rc="$(
     unset CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY ANTHROPIC_API_KEY CODEX_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
     export FM_KEYCHAIN_TOOL="$pv/cursor-security"
-    FM_SANDBOX_OS="$cur_os" FM_SANDBOX_TOOL="$cur_tool" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:/usr/bin:/bin" \
+    FM_SANDBOX_OS="$cur_os" FM_SANDBOX_TOOL="$cur_tool" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:$closed_path" \
       "$ROOT/bin/adapters/cursor-agent.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"
     echo $?
   )"
@@ -1062,7 +1108,7 @@ for cl in "darwin crew-claude-kc" "linux crew-claude-file"; do
     unset CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY ANTHROPIC_API_KEY CODEX_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
     export FM_KEYCHAIN_TOOL="$pv/claude-security" FM_SECRET_TOOL="$pv/claude-secret-tool-guard" \
       FM_SECRET_TOOL_GUARD_LOG="$pv/secret-guard-calls"
-    FM_SANDBOX_OS="$cl_os" FM_SANDBOX_TOOL="$cl_tool" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:/usr/bin:/bin" \
+    FM_SANDBOX_OS="$cl_os" FM_SANDBOX_TOOL="$cl_tool" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:$closed_path" \
       "$ROOT/bin/adapters/claude.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"
     echo $?
   )"
@@ -1102,7 +1148,7 @@ rm -f "$pv/copy"
 cl_rc="$(
   unset CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY ANTHROPIC_API_KEY CODEX_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
   export FM_KEYCHAIN_TOOL="$pv/claude-security" FM_SECRET_TOOL="$pv/claude-secret-tool"
-  FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$pk/bwrap" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:/usr/bin:/bin" \
+  FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$pk/bwrap" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:$closed_path" \
     "$ROOT/bin/adapters/claude.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"
   echo $?
 )"
@@ -1124,7 +1170,7 @@ cl_rc="$(
   unset CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY ANTHROPIC_API_KEY CODEX_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
   export FM_KEYCHAIN_TOOL="$pv/claude-security" FM_SECRET_TOOL="$pv/claude-secret-tool-guard" \
     FM_SECRET_TOOL_GUARD_LOG="$pv/secret-guard-calls"
-  FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$pk/bwrap" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:/usr/bin:/bin" \
+  FM_SANDBOX_OS=linux FM_SANDBOX_TOOL="$pk/bwrap" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:$closed_path" \
     "$ROOT/bin/adapters/claude.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"
   echo $?
 )"
@@ -1146,7 +1192,7 @@ rm -f "$pv/copy" "$pv/err"
 cl_rc="$(
   unset CLAUDE_CODE_OAUTH_TOKEN CURSOR_API_KEY ANTHROPIC_API_KEY CODEX_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
   export FM_KEYCHAIN_TOOL="$pv/claude-security-locked" FM_SECRET_TOOL="$pv/claude-secret-tool-guard"
-  FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:/usr/bin:/bin" \
+  FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:$closed_path" \
     "$ROOT/bin/adapters/claude.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"
   echo $?
 )"
@@ -1158,7 +1204,7 @@ rm -f "$lh/.claude/.credentials.json"
 # gemini is told its login is Google's, and runs with a HOME of the round's own
 cp "$pv/copyfake" "$pv/fakebin/gemini"; chmod +x "$pv/fakebin/gemini"
 ( unset GEMINI_API_KEY GOOGLE_API_KEY CODEX_API_KEY
-  FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:/usr/bin:/bin" \
+  FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:$closed_path" \
     "$ROOT/bin/adapters/gemini.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>&1 )
 assert_contains "$(cat "$pv/copy" 2>/dev/null)" "GOOGLE_GENAI_USE_GCA=true" "gemini with no API key signs in with the copy"
 assert_matches "$(sed -n 's/^HOME=//p' "$pv/copy" 2>/dev/null)" '/fm-round\.[A-Za-z0-9]+/gemini-home$' \
@@ -1168,7 +1214,7 @@ printf '{"access_token":"at-gemini","refresh_token":"","refreshToken":"rt-moved-
   "$future_ms" > "$lh/.gemini/oauth_creds.json"
 rm -f "$pv/copy" "$pv/log"
 lf_rc="$(unset GEMINI_API_KEY GOOGLE_API_KEY
-  FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:/usr/bin:/bin" \
+  FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" FM_POLICY="$pv/lh.json" PATH="$pv/fakebin:$closed_path" \
     "$ROOT/bin/adapters/gemini.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"; echo $?)"
 assert_eq "2" "$lf_rc" "a login file still holding a refresh token under another name refuses the round"
 assert_fail "test -e '$pv/copy'" "and the CLI never starts"
@@ -1238,7 +1284,7 @@ for v in claude codex cursor-agent gemini; do
   # the engine's own policy resolves "~" when the adapter starts, so the
   # suite's login home is the home it starts in: codex's and gemini's round
   # login is the file there, never a key the round sheds (T-121)
-  HOME="$pk/home" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" PATH="$pv/fakebin:/usr/bin:/bin" \
+  HOME="$pk/home" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" PATH="$pv/fakebin:$closed_path" \
     "$ROOT/bin/adapters/$v.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"
   assert_eq "0" "$?" "$v with no FM_POLICY still runs, under the engine's own policy"
   assert_contains "$(cat "$pk/profile.sb" 2>/dev/null)" "(subpath \"$phome/.ssh\")" \
@@ -1246,7 +1292,7 @@ for v in claude codex cursor-agent gemini; do
 done
 # and a policy file that is named but missing refuses the round
 FM_POLICY="$pv/no-such-policy.json" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" \
-  PATH="$pv/fakebin:/usr/bin:/bin" "$ROOT/bin/adapters/claude.sh" run "$pv/prompt" "$pv/tree" "$pv/log" \
+  PATH="$pv/fakebin:$closed_path" "$ROOT/bin/adapters/claude.sh" run "$pv/prompt" "$pv/tree" "$pv/log" \
   >/dev/null 2>"$pv/err"
 assert_eq "65" "$?" "a named policy that is not there refuses the round"
 assert_contains "$(cat "$pv/err")" "no policy at" "and says so"
@@ -1262,8 +1308,8 @@ assert_contains "$(cat "$pv/err")" "no policy at" "and says so"
 # a heredoc; on a host where /usr/bin/python3 is the unlicensed Xcode stub
 # rather than a working interpreter, $pv/fakebin's own entry below stands in
 # for it, ahead of /usr/bin in $PATH, for exactly this block.
-command -v python3 >/dev/null 2>&1 && printf '#!/usr/bin/env bash\nexec %s "$@"\n' \
-  "$(printf '%q' "$(command -v python3)")" > "$pv/fakebin/python3" && chmod +x "$pv/fakebin/python3"
+printf '#!/usr/bin/env bash\nexec %s "$@"\n' \
+  "$(printf '%q' "$closed_path/python3")" > "$pv/fakebin/python3" && chmod +x "$pv/fakebin/python3"
 outrank_env() { sed -n "s/^$1=.*/$1/p" "$pv/env" 2>/dev/null; }
 for pair in "claude ANTHROPIC_API_KEY leaked-personal-key" "claude ANTHROPIC_AUTH_TOKEN leaked-token" \
             "claude CLAUDE_CODE_USE_BEDROCK 1" "claude CLAUDE_CODE_USE_VERTEX 1" \
@@ -1351,7 +1397,7 @@ for fs in "claude CLAUDE_CODE_OAUTH_TOKEN=fm-suite-token" "cursor-agent CURSOR_A
       ANTHROPIC_API_KEY=ambient ANTHROPIC_AUTH_TOKEN=ambient CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_CODE_USE_VERTEX=1 \
       OPENAI_API_KEY=ambient CODEX_API_KEY=ambient GEMINI_API_KEY=ambient GOOGLE_API_KEY=ambient \
       GOOGLE_APPLICATION_CREDENTIALS=/nowhere
-    FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" FM_POLICY="$pk/none.json" PATH="$pv/fakebin:/usr/bin:/bin" \
+    FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" FM_POLICY="$pk/none.json" PATH="$pv/fakebin:$closed_path" \
       "$ROOT/bin/adapters/$fs_v.sh" run "$pv/prompt" "$pv/tree" "$pv/log" >/dev/null 2>"$pv/err"
     echo $?
   )"
@@ -1390,7 +1436,7 @@ realgit="$(command -v git)"
 # python3 and jq for the adapter itself, whichever the runner has, in a
 # directory of their own so no other tool of that directory comes with them
 mkdir -p "$cx/toolbin"
-ln -s "$(command -v python3)" "$cx/toolbin/python3"
+ln -s "$closed_path/python3" "$cx/toolbin/python3"
 ln -s "$(command -v jq)" "$cx/toolbin/jq"
 git init -q "$cx/tree"
 echo "do it" > "$cx/prompt"
@@ -1443,6 +1489,8 @@ echo "You have not agreed to the Xcode license agreements. Please run 'sudo xcod
 exit 69
 S
 chmod +x "$cx/shimbin/git" "$cx/fakezsh" "$cx/fakebin/codex" "$cx/xcode-select" "$cx/xcrun-finds" "$cx/xcrun-licence"
+cx_path="$cx/closed"
+fixture_path "$cx_path" 'git claude codex gemini cursor-agent agent gh security secret-tool' || exit 1
 codex_round() {   # codex_round <PATH> <xcrun> -> its exit code; what its shell said in $cx/codex.out
   rm -f "$cx/codex.out" "$cx/git.err" "$cx/log"
   SHELL="$cx/fakezsh" FM_SANDBOX_OS=darwin FM_SANDBOX_TOOL="$pk/sandbox-exec" FM_POLICY="$pk/none.json" \
@@ -1450,7 +1498,7 @@ codex_round() {   # codex_round <PATH> <xcrun> -> its exit code; what its shell 
     "$ROOT/bin/adapters/codex.sh" run "$cx/prompt" "$cx/tree" "$cx/log" >/dev/null 2>"$cx/err"
   echo $?
 }
-assert_eq "0" "$(codex_round "$cx/opbin:$cx/fakebin:/usr/bin:/bin" "$cx/xcrun-finds")" "a codex round runs"
+assert_eq "0" "$(codex_round "$cx/opbin:$cx/fakebin:$cx_path" "$cx/xcrun-finds")" "a codex round runs"
 cxo="$(cat "$cx/codex.out" 2>/dev/null)"
 assert_contains "$cxo" "heredoc ok" "a here-document works in a codex round's login shell"
 assert_lacks "$cxo" "can't create temp file" "its temp file is not refused"
@@ -1459,14 +1507,14 @@ assert_contains "$cxo" "git status ok: $cx/opbin/git" \
 assert_contains "$cxo" "git exit 0" "which works"
 # a machine whose only git is the shim: xcrun, asked outside the round,
 # names the tool it would run, and the round runs that one directly
-assert_eq "0" "$(codex_round "$cx/fakebin:$cx/shimbin:/usr/bin:/bin" "$cx/xcrun-finds")" "a round on an xcrun-only machine runs"
+assert_eq "0" "$(codex_round "$cx/fakebin:$cx/shimbin:$cx_path" "$cx/xcrun-finds")" "a round on an xcrun-only machine runs"
 cxo="$(cat "$cx/codex.out" 2>/dev/null)"
 assert_contains "$cxo" "git exit 0" "where xcrun can name the real git, git works inside it"
 assert_contains "$(cat "$cx/log")" "is Apple's xcrun shim ($cx/shimbin/git); the round runs the git it names, $cx/devbin/git" \
   "and the sandbox says which one it runs"
 # and where xcrun has none to give - the Xcode licence not accepted - the
 # round is told plainly, at once, rather than failing on a licence prompt
-assert_eq "0" "$(codex_round "$cx/fakebin:$cx/shimbin:/usr/bin:/bin" "$cx/xcrun-licence")" "a round on an unusable xcrun-only machine still runs"
+assert_eq "0" "$(codex_round "$cx/fakebin:$cx/shimbin:$cx_path" "$cx/xcrun-licence")" "a round on an unusable xcrun-only machine still runs"
 cxo="$(cat "$cx/codex.out" 2>/dev/null)"
 assert_contains "$cxo" "git exit 69" "its git exits 69 at once"
 cxe="$(cat "$cx/git.err" 2>/dev/null)"
@@ -1555,6 +1603,17 @@ assert_fail "grep -q 'second vendor' '$e/log'" "and stops rather than running th
 nothing() { false; }
 fm_run_chain "$e/ad" "one two" "$e/prompt" "$e/out" "$e/log" nothing
 assert_ok "grep -q 'second vendor' '$e/log'" "with nothing to show, the chain moves on"
+
+# Unavailable attempts are skipped, but a real failing verdict stands.
+cat > "$e/ad/failed.sh" <<'A'
+#!/usr/bin/env bash
+exit 1
+A
+chmod +x "$e/ad/failed.sh"
+fm_run_chain "$e/ad" "one failed" "$e/prompt" "$e/out" "$e/log" nothing
+assert_eq "1 failed one" "$? $FM_VENDOR_USED $FM_VENDOR_SKIPPED" "unavailable vendors are skipped, the next verdict stands"
+fm_run_chain "$e/ad" "one" "$e/prompt" "$e/out" "$e/log" nothing
+assert_eq "2" "$?" "every vendor unavailable is itself unavailable"
 
 # A typo at the head of the chain is a configuration error, and it has to be
 # found BEFORE anything runs: the caller's exit 65 would otherwise throw away
@@ -1760,4 +1819,5 @@ safe_rm_rf "$v"
 assert_ok "test -f '$ROOT/bin/adapters/_contract.md'" "the contract is written down"
 assert_contains "$(cat "$ROOT/bin/adapters/_contract.md")" "must not: run git or gh" \
   "the contract states the git prohibition"
+safe_rm_rf "$closed_path"
 finish

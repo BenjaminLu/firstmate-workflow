@@ -481,4 +481,179 @@ rm -f "$workflow_file"
 unset workflow_file
 
 safe_rm_rf "$d"
+# Shared project-contract coverage moved from gate.test.sh (T-157).
+# --gate selects declared-docs classification and the project.check fallback;
+# execution, restoration and reporting are the same fail-first engine.
+contract_ff() { (cd "$1" && bash "$FF" --gate --head="$2" main) 2>&1; }
+contract_fixture() {
+  local d; d="$(safe_tmpdir)"
+  git -C "$d" init -q -b main
+  git -C "$d" config user.email a@b.c; git -C "$d" config user.name t
+  mkdir -p "$d/bin" "$d/tests" "$d/design/tasks" "$d/src"
+  printf '#!/usr/bin/env bash\nfor t in "${FM_ROOT:-.}"/tests/*.test.sh; do [ -e "$t" ] || continue; bash "$t" || exit 1; done\nexit 0\n' > "$d/bin/suite"
+  chmod +x "$d/bin/suite"
+  printf 'vendor: mock\nproject:\n  check: bin/suite\n' > "$d/config.yaml"
+  cat > "$d/design/tasks/T-X.json" <<JSON
+{"id":"T-X","scope":["src/**","tests/**","bin/**","config.yaml"]}
+JSON
+  echo base > "$d/src/thing.sh"
+  git -C "$d" add -A; git -C "$d" commit -qm base
+  printf '%s' "$d"
+}
+# A project that is not a bash project. Its tests match none of the default
+# globs and are run by nothing the engine knows - only by what config.yaml
+# declares. The check can never go red, so only the test template can. The
+# template needs what setup installs, so an engine that skipped setup would read
+# the vacuous test below as red and wave it through.
+py="$(safe_tmpdir)"
+git -C "$py" init -q -b main
+git -C "$py" config user.email a@b.c; git -C "$py" config user.name t
+mkdir -p "$py/calc" "$py/design/tasks"
+printf 'def add(a, b):\n    return 0\n' > "$py/calc/calc.py"
+cat > "$py/config.yaml" <<'Y'
+project:
+  setup: mkdir -p .deps && touch .deps/ready
+  check: "true"
+  tests:
+    - "**/*_check.py"
+  test: test -f .deps/ready && python3 {file}
+Y
+printf '{"id":"T-X","scope":["calc/**","config.yaml"]}\n' > "$py/design/tasks/T-X.json"
+git -C "$py" add -A; git -C "$py" commit -qm base
+
+git -C "$py" checkout -q -b honest
+printf 'def add(a, b):\n    return a + b\n' > "$py/calc/calc.py"
+printf 'from calc import add\nassert add(2, 3) == 5\n' > "$py/calc/add_check.py"
+git -C "$py" add -A; git -C "$py" commit -qm honest; git -C "$py" checkout -q main
+assert_ok "contract_ff '$py' honest 5" "5 classifies by the declared globs and runs the declared template"
+
+git -C "$py" checkout -q -b vacuous
+printf 'def add(a, b):\n    return a + b\n' > "$py/calc/calc.py"
+printf 'import sys\nsys.exit(0)\n' > "$py/calc/noop_check.py"
+git -C "$py" add -A; git -C "$py" commit -qm vacuous; git -C "$py" checkout -q main
+assert_fail "contract_ff '$py' vacuous 5" "5 blocks a template-run test that stays green, after running setup"
+
+git -C "$py" checkout -q -b badsetup honest
+printf 'project:\n  setup: exit 9\n  check: "true"\n  tests:\n    - "**/*_check.py"\n  test: python3 {file}\n' \
+  > "$py/config.yaml"
+git -C "$py" commit -qam badsetup; git -C "$py" checkout -q main
+assert_fail "contract_ff '$py' badsetup 5" "5 blocks when setup fails, however red the tests would be"
+assert_contains "$(contract_ff "$py" badsetup 5)" "setup failed (exit 9)" "and names the failure"
+
+# docs: the project declares which paths need no test of their own. Only
+# those: undeclared exempts nothing, and code beside docs still needs a test.
+doc="$(contract_fixture)"
+printf '# thing\n' > "$doc/README.md"; mkdir -p "$doc/design"; printf 'v1\n' > "$doc/design/design.md"
+printf '{"id":"T-X","scope":["src/**","tests/**","design/**","README.md","config.yaml"]}\n' \
+  > "$doc/design/tasks/T-X.json"
+# declared on main, so the branch under test changes nothing but prose
+printf 'project:\n  check: bin/suite\n  docs:\n    - design/**\n    - README.md\n' > "$doc/config.yaml"
+git -C "$doc" add -A; git -C "$doc" commit -qm docs-base
+git -C "$doc" checkout -q -b docs-only main
+printf 'v2\n' > "$doc/design/design.md"; printf '# thing, better\n' > "$doc/README.md"
+git -C "$doc" commit -qam prose; git -C "$doc" checkout -q main
+assert_ok "contract_ff '$doc' docs-only 5" "5 needs no test when every changed path is declared docs"
+
+git -C "$doc" checkout -q -b docs-and-code main
+printf 'v3\n' > "$doc/design/design.md"; echo more >> "$doc/src/thing.sh"
+git -C "$doc" commit -qam mixed; git -C "$doc" checkout -q main
+assert_fail "contract_ff '$doc' docs-and-code 5" "5 still blocks code beside docs that ships no test"
+assert_contains "$(contract_ff "$doc" docs-and-code 5)" "adds or changes no test suite" "and says why"
+
+undoc="$(contract_fixture)"
+mkdir -p "$undoc/design"; printf 'v1\n' > "$undoc/design/design.md"
+git -C "$undoc" add -A; git -C "$undoc" commit -qm base-design
+git -C "$undoc" checkout -q -b prose main
+printf 'v2\n' > "$undoc/design/design.md"; git -C "$undoc" commit -qam prose; git -C "$undoc" checkout -q main
+assert_fail "contract_ff '$undoc' prose 5" "5 exempts nothing when no docs are declared"
+
+# --- fail-first runs only the suites the diff touches (T-114) ----------------
+# The whole check is the required GitHub check's job. Here it leaves a mark if
+# anything runs it, and so does a suite the diff does not touch.
+# touched <repo> ; a repo whose check and whose untouched suite each leave a mark
+touched() {
+  local r; r="$(safe_tmpdir)"
+  git -C "$r" init -q -b main
+  git -C "$r" config user.email a@b.c; git -C "$r" config user.name t
+  mkdir -p "$r/src" "$r/tests" "$r/design/tasks" "$r/marks"
+  printf 'project:\n  check: touch %q/marks/check\n  test: bash {file}\n' "$r" > "$r/config.yaml"
+  printf 'touch %q/marks/other\n' "$r" > "$r/tests/other.test.sh"
+  # a helper one untouched suite sources, and so exercises
+  printf 'verify() { true; }\n' > "$r/tests/helper.sh"
+  printf '. "${FM_ROOT:-.}/tests/helper.sh"\nverify\n' > "$r/tests/uses.test.sh"
+  # and one that names only a longer name with helper.sh inside it
+  printf 'touch %q/marks/near   # fm-helper.sh, not the helper above\n' "$r" > "$r/tests/near.test.sh"
+  printf 'base\n' > "$r/src/thing.sh"
+  printf '{"id":"T-X","scope":["src/**","tests/**","config.yaml"]}\n' > "$r/design/tasks/T-X.json"
+  printf 'marks/\n' > "$r/.gitignore"
+  git -C "$r" add -A; git -C "$r" commit -qm base
+  printf '%s' "$r"
+}
+t5="$(touched)"
+git -C "$t5" checkout -q -b honest
+printf 'real\n' > "$t5/src/thing.sh"
+printf 'grep -q real "${FM_ROOT:-.}/src/thing.sh"\n' > "$t5/tests/h.test.sh"
+git -C "$t5" add -A; git -C "$t5" commit -qm honest; git -C "$t5" checkout -q main
+out="$(contract_ff "$t5" honest 5)"; rc=$?
+assert_eq "0" "$rc" "5 passes a touched suite that goes red with the implementation reverted"
+assert_fail "test -e '$t5/marks/check'" "and never runs the whole project.check to find out"
+assert_fail "test -e '$t5/marks/other'" "nor a suite the diff does not touch"
+assert_contains "$out" "running the suites the diff touches: tests/h.test.sh" "and says which suites it ran"
+
+git -C "$t5" checkout -q -b vacuous main
+printf 'real\n' > "$t5/src/thing.sh"
+printf 'true\n' > "$t5/tests/v.test.sh"
+git -C "$t5" add -A; git -C "$t5" commit -qm vacuous; git -C "$t5" checkout -q main
+assert_fail "contract_ff '$t5' vacuous 5" "5 still blocks a touched suite that stays green"
+assert_fail "test -e '$t5/marks/check'" "without falling back to the whole check"
+
+# The diff changes a helper and no suite: the helper, run on its own, asserts
+# nothing, and the suite that sources it is the one the diff touches.
+git -C "$t5" checkout -q -b helper main
+printf 'real\n' > "$t5/src/thing.sh"
+printf 'verify() { grep -q real "${FM_ROOT:-.}/src/thing.sh"; }\n' > "$t5/tests/helper.sh"
+git -C "$t5" commit -qam helper; git -C "$t5" checkout -q main
+out="$(contract_ff "$t5" helper 5)"; rc=$?
+assert_eq "0" "$rc" "5 runs the suites that exercise a changed test file, and they go red"
+assert_contains "$out" "tests/uses.test.sh" "and names the suite it found that way"
+assert_fail "test -e '$t5/marks/other'" "and still not the suite that names no changed file"
+assert_fail "test -e '$t5/marks/near'" "nor one that names fm-helper.sh, which only has helper.sh inside it"
+assert_fail "test -e '$t5/marks/check'" "nor the whole check"
+
+# check_env reaches the suites, and is the only way a budget or a flag does:
+# the engine carries no variable of its own for any one project's suite.
+git -C "$t5" checkout -q -b budget honest
+printf 'project:\n  check: "true"\n  test: bash {file}\n  check_env:\n    SUITE_BUDGET: 600\n    SUITE_MODE: "full run"\n' > "$t5/config.yaml"
+printf '[ "${SUITE_BUDGET:-180}" -ge 300 ] && [ "$SUITE_MODE" = "full run" ] || exit 0\ngrep -q real "${FM_ROOT:-.}/src/thing.sh"\n' \
+  > "$t5/tests/h.test.sh"
+git -C "$t5" commit -qam budget; git -C "$t5" checkout -q main
+assert_ok "contract_ff '$t5' budget 5" \
+  "5 hands check_env to the suites it runs"
+
+# no `test` to run one suite with: the whole check is the only way to ask, and
+# the engine says that is what it did
+rm -f "$t5/marks/check"
+git -C "$t5" checkout -q -b nosuite honest
+printf 'project:\n  check: touch %q/marks/check && grep -q real src/thing.sh\n' "$t5" > "$t5/config.yaml"
+git -C "$t5" commit -qam nosuite; git -C "$t5" checkout -q main
+out="$(contract_ff "$t5" nosuite 5)"; rc=$?
+assert_eq "0" "$rc" "5 with no declared test falls back to the whole check, which goes red"
+assert_ok "test -e '$t5/marks/check'" "and the whole check is what ran"
+assert_contains "$out" "declares no project.test to run one suite with, so the whole project.check runs" \
+  "and it says so"
+
+
+# A deleted test is still a changed test, but there is no suite left to run.
+git -C "$t5" checkout -q -b deleted honest
+printf 'project:\n  check: grep -q newer src/thing.sh\n  test: bash {file}\n' > "$t5/config.yaml"
+printf 'newer\n' > "$t5/src/thing.sh"
+git -C "$t5" rm -q tests/h.test.sh
+git -C "$t5" add -A; git -C "$t5" commit -qm deleted
+# Compare with honest, where the deleted test exists and implementation is old.
+out="$(cd "$t5" && bash "$FF" --gate --head=deleted honest 2>&1)"; rc=$?
+assert_eq "0" "$rc" "a deleted test falls back to the check, which goes red on base"
+assert_contains "$out" "no suite the diff touches is left in the tree" "the deletion fallback is explicit"
+git -C "$t5" checkout -q main
+
+for tree in "$py" "$doc" "$undoc" "$t5"; do safe_rm_rf "$tree"; done
 finish

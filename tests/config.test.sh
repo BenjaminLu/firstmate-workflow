@@ -187,7 +187,7 @@ registry() {   # registry <example-app entry lines> ; the self entry is fixed
     printf 'projects:               # every repository\n'
     printf '  self-host:            # this one\n    repo: .\n'
     printf '    github: owner-a/engine\n    base: main\n    required_check: ci\n'
-    printf '    design: design/design.md\n    tasks: design/tasks.json\n'
+    printf '    design: design/design.md\n    tasks: design/tasks\n'
     printf '  example-app:\n%s\n' "$1"
     printf 'project:\n  setup: make deps && echo "$(not evaluated)"\n  check: make check\n'
     printf '  check_env:\n    BUDGET: "600"\n  tests:\n    - tests/**\n'
@@ -319,7 +319,7 @@ refused "and its own contract lookup" example-app project fm_project_contract ex
 registry "$app"
 while IFS= read -r line; do
   printf '%s\n' "$line"
-  if [ "$line" = "    tasks: design/tasks.json" ]; then printf '    project:\n      check: make other\n'; fi
+  if [ "$line" = "    tasks: design/tasks" ]; then printf '    project:\n      check: make other\n'; fi
 done < "$c" > "$r/both"; mv "$r/both" "$c"
 assert_contains "$(cat "$c")" "      check: make other" "(the fixture now holds both blocks)"
 refused "the top-level block and a self entry project:" self-host project fm_project_contract self-host check "$c"
@@ -411,30 +411,7 @@ mock" "$(cat "$d/w2.chain")" "a worker block names the worker's engine"
 assert_eq "claude
 mock" "$(cat "$d/r2.chain")" "and leaves the reviewer on the top-level one"
 
-# a chain of stub adapters: the first two are unavailable, the third works
-mkdir -p "$d/ad" "$d/tree"; : > "$d/log"; echo p > "$d/prompt"
-for v in a b; do
-  printf '#!/usr/bin/env bash\necho "%s down" >> "$4"\nexit 2\n' "$v" > "$d/ad/$v.sh"
-done
-printf '#!/usr/bin/env bash\necho "c ran" >> "$4"\nexit 1\n' > "$d/ad/c.sh"
-chmod +x "$d/ad"/*.sh
-( . "$ROOT/bin/fm-config.sh"
-  fm_run_chain "$d/ad" "a b c" "$d/prompt" "$d/tree" "$d/log"; rc=$?
-  printf '%s %s %s\n' "$rc" "$FM_VENDOR_USED" "$FM_VENDOR_SKIPPED" ) > "$d/ran"
-assert_eq "1 c a b" "$(cat "$d/ran")" "unavailable vendors are skipped, the next verdict stands"
-
-( . "$ROOT/bin/fm-config.sh"
-  fm_run_chain "$d/ad" "a b" "$d/prompt" "$d/tree" "$d/log"; printf '%s' "$?" ) > "$d/allout"
-assert_eq "2" "$(cat "$d/allout")" "every vendor unavailable is itself unavailable"
-
-# a head with no adapter is a typo in config.yaml and comes straight back
-( . "$ROOT/bin/fm-config.sh"
-  fm_run_chain "$d/ad" "nosuch c" "$d/prompt" "$d/tree" "$d/log"; printf '%s' "$?" ) > "$d/miss"
-assert_eq "65" "$(cat "$d/miss")" "a head with no adapter is a configuration error"
-# a fallback entry with no adapter is just skipped
-( . "$ROOT/bin/fm-config.sh"
-  fm_run_chain "$d/ad" "c nosuch" "$d/prompt" "$d/tree" "$d/log"; printf '%s' "$?" ) > "$d/miss2"
-assert_eq "1" "$(cat "$d/miss2")" "a fallback entry with no adapter is passed over"
+# Adapter-chain execution belongs to adapter-contract.test.sh.
 rm -rf "$d"
 
 # --- the task list: one file per task (T-090) ----------------------------
@@ -469,22 +446,6 @@ J
 assert_eq "$old" "$(for id in T-002 T-001 SK-001; do cat "$t/design/tasks/$id.json"; done | jq -cs .)" \
   "the migration is lossless: files in the old order equal the old array"
 
-# ...and so was this repository's own. The first commit that removed
-# design/tasks.json is compared with its parent, whenever history reaches it:
-# the first, because a branch brought over later may delete it again.
-# GitHub's checkout is one commit deep; the gates run in the full repository.
-mig="$(git -C "$ROOT" log --format=%H --diff-filter=D --reverse -- design/tasks.json 2>/dev/null | sed -n 1p)"
-if [ -n "$mig" ] && git -C "$ROOT" cat-file -e "$mig^:design/tasks.json" 2>/dev/null; then
-  was="$(git -C "$ROOT" show "$mig^:design/tasks.json" | jq -c '.tasks')"
-  now="$(git -C "$ROOT" show "$mig^:design/tasks.json" | jq -r '.tasks[].id' | while IFS= read -r id; do
-           git -C "$ROOT" show "$mig:design/tasks/$id.json" 2>/dev/null || echo '"missing"'
-         done | jq -cs .)"
-  assert_eq "$was" "$now" "this repository's migration: its files, in the old order, equal the old array"
-else
-  assert_eq "" "$(git -C "$ROOT" ls-files design/tasks.json 2>/dev/null)" \
-    "(no history to compare against here; at least nothing still tracks design/tasks.json)"
-fi
-
 # reading a branch: the gate, the worker and the reviewer read the branch
 # under test, not the working copy
 ( cd "$t" && git add design && git commit -q -m tasks )
@@ -495,23 +456,6 @@ assert_eq '["c/**"]' "$(cd "$t" && fm_task T-003 design/tasks t-003 | jq -c .sco
 assert_eq "1" "$(cd "$t" && rc_of fm_task T-003 design/tasks main)" "and not from a branch that lacks it"
 assert_eq "SK-001 T-001 T-002 T-003" "$(cd "$t" && fm_tasks design/tasks t-003 | jq -r .id | paste -sd' ' -)" \
   "fm_tasks lists a branch's tasks"
-
-# A branch opened before T-090 has no design/tasks/, only its own old
-# design/tasks.json. Its entry there is the task as that branch says it: a
-# task defined only on the branch is found, and one the branch revised is
-# read as revised, not as main's file has it.
-( cd "$t" && git checkout -q -b old-branch main && git rm -q -r design/tasks && mkdir -p design \
-    && printf '{"tasks":[{"id":"T-001","title":"first, revised on the branch","scope":["z/**"]},{"id":"T-OLD","title":"only here","scope":["o/**"]}]}\n' \
-       > design/tasks.json && git add design && git commit -q -m old && git checkout -q main )
-assert_eq '["o/**"]' "$(cd "$t" && fm_task T-OLD design/tasks old-branch 2>/dev/null | jq -c .scope)" \
-  "fm_task finds a task defined only in a branch's old design/tasks.json"
-assert_eq '"first, revised on the branch"' "$(cd "$t" && fm_task T-001 design/tasks old-branch 2>/dev/null | jq -c .title)" \
-  "and reads a task the branch revised there as revised, not as main's file has it"
-assert_eq "0" "$(cd "$t" && rc_of fm_task T-OLD design/tasks old-branch)" "(it is found)"
-assert_contains "$(cat "$r/err")" "bin/fm.sh tasks split T-OLD" "and says it read the old array, and how to bring the branch over"
-assert_eq "1" "$(cd "$t" && rc_of fm_task T-404 design/tasks old-branch)" "an id in neither is still not there"
-assert_eq '"first"' "$(cd "$t" && fm_task T-001 design/tasks t-003 2>/dev/null | jq -c .title)" \
-  "(a branch with the task's own file is read from that file)"
 
 # All or nothing: a file that does not read is no task list, never the
 # files that did. So is a directory that is not there.
@@ -543,23 +487,6 @@ assert_eq "SK-1 T-2 T-9 T-10" "$(fm_tasks "$o" | jq -r .id | paste -sd' ' -)" \
 assert_eq "0" "$(rc_of fm_tasks_check "$o")" "and the check does not take a dotfile for a task"
 rm -rf "$o"
 
-# two branches that each add a task merge with no conflict: parallel work
-# never writes the same text, which the one shared array could not promise
-( cd "$t" && git checkout -q -b t-004 main && printf '{"id":"T-004","depends_on":["T-001"]}\n' > design/tasks/T-004.json \
-    && git add design && git commit -q -m t4 && git checkout -q main \
-    && git merge -q --no-edit t-003 && git merge -q --no-edit t-004 ) > "$t/merge.out" 2>&1
-assert_eq "0" "$?" "two branches that each add a task merge into main with no conflict"
-assert_eq "SK-001 T-001 T-002 T-003 T-004" "$(cd "$t" && fm_tasks | jq -r .id | paste -sd' ' -)" \
-  "and main then lists both"
-# the old shape, for contrast: two appends to the tail of one array collide
-( cd "$t" && git checkout -q -b old-a main && printf '{"tasks":[\n{"id":"T-001"}\n]}\n' > tasks.json \
-    && git add tasks.json && git commit -q -m base && git checkout -q -b old-b \
-    && printf '{"tasks":[\n{"id":"T-001"},\n{"id":"T-005"}\n]}\n' > tasks.json && git commit -qam b \
-    && git checkout -q old-a && printf '{"tasks":[\n{"id":"T-001"},\n{"id":"T-006"}\n]}\n' > tasks.json \
-    && git commit -qam a && git merge -q --no-edit old-b ) > "$t/merge.out" 2>&1
-assert_ne "0" "$?" "(while two appends to one shared array conflict)"
-( cd "$t" && git merge --abort ) 2>/dev/null
-
 # the check ci.sh runs: every file parses, names itself, depends on tasks
 # that exist, and there is no cycle
 assert_eq "0" "$(rc_of fm_tasks_check "$t/design/tasks")" "a sound task directory passes the check"
@@ -582,11 +509,10 @@ assert_contains "$(cat "$r/out")" "tasks.json" "and the check says why"
 rm -f "$t/design/tasks.json"
 assert_eq "0" "$(rc_of fm_tasks_check "$t/design/tasks")" "(and the directory is sound again)"
 
-# the registry names a project's task directory; a declared path in the old
-# shape, design/tasks.json, names the directory beside it
+# The registry names the project's task directory, or supplies its default.
 c2="$t/config.yaml"
-printf 'default_project: a\nprojects:\n  a:\n    repo: .\n    github: o/a\n    base: main\n    required_check: ci\n    tasks: design/tasks.json\n  b:\n    github: o/b\n    base: main\n    required_check: ci\n' > "$c2"
-assert_eq "design/tasks" "$(fm_project_get a tasks "$c2")" "a declared task list in the old shape names its directory"
+printf 'default_project: a\nprojects:\n  a:\n    repo: .\n    github: o/a\n    base: main\n    required_check: ci\n    tasks: design/tasks\n  b:\n    github: o/b\n    base: main\n    required_check: ci\n' > "$c2"
+assert_eq "design/tasks" "$(fm_project_get a tasks "$c2")" "the registry returns the declared task directory"
 assert_eq "projects/b/tasks" "$(fm_project_get b tasks "$c2")" "and the default is projects/<name>/tasks"
 rm -rf "$t"
 
