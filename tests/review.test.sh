@@ -211,8 +211,7 @@ assert_eq "missing_review" \
   "and does not turn an unsigned zero-exit result into rejection"
 
 # Durable handoff: chain returns unsigned, but pane-child already published a
-# signed final under last-result with a non-matching chain token. Recovery
-# must still post that verdict (transport interrupted mid-chain).
+# signed final under last-result. Only this chain attempt may supply it.
 recover="$(safe_tmpdir)"
 mkdir -p "$recover/bin" "$recover/design/tasks" "$recover/skills/reviewer" "$recover/src" "$recover/state"
 cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" "$ROOT/bin/fm-herdr.py" "$recover/bin/"
@@ -226,26 +225,35 @@ mkdir -p "$recover/src"; printf 'x\n' > "$recover/src/a"
 cat > "$recover/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
-# Pane-child durable publish: last-result exists, but chain_attempt does not
-# match the current token so attempt_output skips it — recovery must not.
+# Simulate durable publication, including a deliberately stale token.
 attempt="$FM_RUN_DIR/handoff-attempt"
 mkdir -p "$attempt"
 printf 'Recovered from pane-child.\nREJECT:T-Z\nREVIEWER_COMPLETE:T-Z\n' > "$attempt/final.txt"
-printf '{"attempt":"%s","status":"completed","exit_code":0,"chain_attempt":"stale-token"}\n' "$attempt" \
+printf '{"attempt":"%s","status":"completed","exit_code":0,"chain_attempt":"%s"}\n' "$attempt" "${FM_RECOVERY_TOKEN:-$FM_CHAIN_ATTEMPT}" \
   > "$FM_RUN_DIR/last-result.json"
 printf 'interrupted chain noise\n' >> "$4"
 exit 0
 M
 chmod +x "$recover/bin/adapters/mock.sh"
-: > "$d/ghcalls"
-out="$(cd "$recover" && FM_ROOT="$recover" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
-assert_eq "0" "$?" "recovery from durable last-result exits success"
-assert_contains "$out" "REJECT:T-Z" "recovered last-result posts the durable rejection"
-assert_contains "$out" "recovered signed verdict" "and names the recovery path"
-assert_ok "grep -q 'pr comment' '$d/ghcalls'" "recovery posts the PR comment"
-assert_eq "rejected" \
-  "$(jq -r 'select(.type=="review_failed")|.data.review_outcome' "$recover/state/events.jsonl" | tail -1)" \
-  "and records authoritative rejection from recovered evidence"
+for token in stale-token current; do
+  : > "$d/ghcalls"
+  if [ "$token" = current ]; then unset FM_RECOVERY_TOKEN
+  else export FM_RECOVERY_TOKEN="$token"; fi
+  out="$(cd "$recover" && FM_ROOT="$recover" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"; rc=$?
+  if [ "$token" = current ]; then
+    assert_eq "0" "$rc" "same-attempt durable verdict exits success"
+    assert_contains "$out" "REJECT:T-Z" "same-attempt durable rejection is returned"
+    assert_ok "grep -q 'pr comment' '$d/ghcalls'" "same-attempt recovery posts the PR comment"
+    assert_eq "rejected" "$(jq -r 'select(.type=="review_failed")|.data.review_outcome' "$recover/state/events.jsonl" | tail -1)" \
+      "same-attempt recovery records rejection"
+  else
+    assert_eq "3" "$rc" "stale durable evidence cannot sign this round"
+    assert_fail "grep -q 'pr comment' '$d/ghcalls'" "stale durable verdict is not published"
+    assert_eq "missing_review" "$(jq -r 'select(.type=="review_failed")|.data.review_outcome' "$recover/state/events.jsonl" | tail -1)" \
+      "stale evidence records a missing review"
+  fi
+done
+unset FM_RECOVERY_TOKEN
 
 # a vendor named in config.yaml with no adapter behind it is a typo, not an
 # outage: reporting it as transient would have fm-run say "leaving it for

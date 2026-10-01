@@ -211,7 +211,7 @@ class Lifecycle(unittest.TestCase):
         log.write_text(json.dumps(dict(type='result',is_error=False,result='Done'))+'\n'
                        +json.dumps(dict(type='result',is_error=True,result='then failed'))+'\n')
         self.assertIsNone(m.cli_final('cursor-agent',log))
-        # Vendors that publish their own final answer are not parsed at all.
+        # Codex does not accept another vendor's result-object shape.
         log.write_text(json.dumps(dict(type='result',is_error=False,result='Done'))+'\n')
         self.assertIsNone(m.cli_final('codex',log))
         self.assertIsNone(m.cli_final('cursor-agent',self.run/'absent.log'))
@@ -923,8 +923,12 @@ marker=role.upper()+'_'+os.environ.get('FM_TEST_STATUS','COMPLETE')+':'+task
 verdict=os.environ.get('FM_TEST_VERDICT','APPROVE')
 final=(verdict+':'+task+'\n' if role=='reviewer' else 'Implemented\n')+marker+'\n'
 if os.environ.get('FM_TEST_EMPTY')!='1':
- pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(final)
- print(final)
+ if '--output-last-message' in sys.argv:
+  pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(final)
+ for event in [dict(type='turn.started'),
+               dict(type='item.completed',item=dict(id='0',type='agent_message',text=final)),
+               dict(type='turn.completed',usage={})]:
+  print(json.dumps(event))
 if role=='worker': pathlib.Path('work.txt').write_text('done')
 raise SystemExit(int(os.environ.get('FM_TEST_EXIT','0')))
 ''')
@@ -1743,11 +1747,13 @@ print(json.dumps({'type':'result','result':final,'response':final}))
         self.assertEqual({'worker','reviewer'},{json.loads(p.read_text())['role'] for p in self.results()})
     def test_running_adapter_uses_snapshot_after_source_edit(self):
         self.executable('codex',r'''
-import os,pathlib,sys
+import json,os,pathlib,sys
 r=pathlib.Path(os.environ['FM_TEST_ROOT'])
 (r/'bin/adapters/codex.sh').write_text('#!/usr/bin/env bash\nexit 99\n')
-pathlib.Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text('APPROVE:T-035\nREVIEWER_COMPLETE:T-035')
-print('One invocation completed')
+for event in [dict(type='turn.started'),
+              dict(type='item.completed',item=dict(id='0',type='agent_message',text='APPROVE:T-035\nREVIEWER_COMPLETE:T-035')),
+              dict(type='turn.completed',usage={})]:
+ print(json.dumps(event))
 ''')
         answer=self.invoke('fm-review.sh',['--task','T-035','--branch','work'])
         self.assertEqual(0,answer.returncode,answer.stderr)
