@@ -157,5 +157,5 @@ msg="$(fm_adapter_model_refusal codex "${FM_MODEL:-}" "$log" "$off" "$rc")" && {
   [ -z "${FM_MODEL_REFUSED:-}" ] || printf 'codex\t%s\t%s\n' "$FM_MODEL" "$msg" >> "$FM_MODEL_REFUSED"
   exit 64
 }
-fm_adapter_verdict "$rc" "$log" "$off"
+fm_adapter_verdict "$rc" "$log" "$off" codex
 exit $?
