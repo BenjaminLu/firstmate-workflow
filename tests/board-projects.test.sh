@@ -108,11 +108,23 @@ posth() {   # posth <id> <choice>: the HTTP status, the body in $h/post
 printf 'private project design\n' > "$(dirname "$(project_fixture_state "$h" beta)")/design.md"
 assert_eq 'private project design' "$(curl -sf "http://127.0.0.1:$PORTH/file?project=beta&path=design.md")" "board reads selected external design in place"
 assert_eq 403 "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORTH/file?project=beta&path=../../engine/config.yaml")" "external file reader refuses traversal"
+# Exercise arbitrary nested values as well as descriptions.
+private_state="$(project_fixture_state "$h" beta)"
+printf '%s\n' '{"ts":"2026-01-01T00:00:00Z","project":"beta","actor":"worker-b1","task":"T-001","type":"crew_status","summary":{"en":"PRIVATE-EVENT","zh-TW":"PRIVATE-EVENT"},"data":{"activity":{"en":"PRIVATE-ACTIVITY","zh-TW":"PRIVATE-ACTIVITY"},"progress":{"done":1,"total":2,"secret":"PRIVATE-PROGRESS"}}}' >> "$private_state/events.jsonl"
+printf '%s\n' '{"id":"D-beta-T099-1","project":"beta","task":"T-099","chosen":"B","details":{"secret":"PRIVATE-DETAIL"},"actions":[{"secret":"PRIVATE-ACTION"}],"badges":{"secret":"PRIVATE-BADGE"},"last_review":{"secret":"PRIVATE-REVIEW"},"progress":{"done":1,"total":2,"secret":"PRIVATE-NESTED"}}' > "$private_state/decisions/D-beta-T099-1.json"
 sh1="$(sh_)"
 assert_lacks "$sh1" 'beta one' "aggregate exposes metadata without external task descriptions"
 assert_contains "$(sh_ '?project=beta')" 'beta one' "selected project reads its private description locally"
 field_h() { jq -r --arg p "$1" --arg i "$2" ".tasks[]|select(.project==\$p and .id==\$i)|$3" <<<"$(sh_ "?project=$1")"; }
 
+for private in PRIVATE-EVENT PRIVATE-ACTIVITY PRIVATE-DETAIL PRIVATE-ACTION PRIVATE-BADGE PRIVATE-REVIEW PRIVATE-NESTED PRIVATE-PROGRESS; do
+  assert_lacks "$sh1" "$private" "aggregate excludes $private"
+done
+selected="$(sh_ '?project=beta')"
+for private in PRIVATE-EVENT PRIVATE-ACTIVITY PRIVATE-DETAIL PRIVATE-ACTION PRIVATE-BADGE PRIVATE-REVIEW PRIVATE-NESTED; do
+  assert_contains "$selected" "$private" "selected project retains $private"
+done
+rm "$private_state/decisions/D-beta-T099-1.json"
 # lane cards: two T-001s, each its own project's, title and pull request
 assert_eq "2" "$(jq '[.tasks[]|select(.id=="T-001")]|length' <<<"$sh1")" "two projects' T-001 are two lane cards, not one"
 assert_eq "alpha one|beta one" "$(field_h alpha T-001 .title)|$(field_h beta T-001 .title)" \
@@ -353,7 +365,7 @@ assert_lacks "$(cat "$h/gh-calls")" "eps-app" "and GitHub is not asked while its
 assert_eq "running|true" "$(rec omega)|$(sh_ | jq -r '.responses[]|select(.id=="D-omega-T009-1")|.merge_unknown')" \
   "a merge in a project the registry does not name stays running, its outcome unknown"
 assert_lacks "$(cat "$h/gh-calls")" "view 27" "and gh is never asked without the project's repository"
-assert_eq "theta one" "$(sh_ | jq -r '.tasks[]|select(.project=="theta" and .id=="T-001")|.title')" \
+assert_eq "theta one" "$(sh_ '?project=theta' | jq -r '.tasks[]|select(.project=="theta" and .id=="T-001")|.title')" \
   "a project with only lane cards has its own lane card"
 assert_eq "true" "$(sh_ | jq -r '.projects|index("theta") != null')" \
   "and is one of the projects on the board, so its cards carry a chip"
@@ -382,6 +394,12 @@ wait_for 20 jq -e '.merge=="merged"' "$(project_state eps)/decisions/D-eps-T009-
 assert_eq "merged" "$(rec eps)" "a helper that dies later is resolved on a later poll"
 assert_eq "200" "$(posth D-eps-T010-1 A)" "and its project's turn is freed"
 
+# A planted external routing link is unavailable, never an uncaught HTTP 000.
+beta_state="$(project_fixture_state "$h" beta)"
+ln -s "$h/state" "$beta_state/unsafe-link"
+assert_eq 503 "$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORTH/api/state?project=beta")" \
+  "unavailable selected storage returns a defined HTTP response"
+rm "$beta_state/unsafe-link"
 kill "$pidh" 2>/dev/null
 wait "$pidh" 2>/dev/null || true
 kill "$live" 2>/dev/null || true

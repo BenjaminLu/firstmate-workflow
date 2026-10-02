@@ -688,11 +688,13 @@ ask() {
 # what a request does - exit 0, print only its pending file, leave the card
 # pending and write its decision_requested event
 held() {
+  local store="$1/state"
+  case "$2" in D-example-app-*) store="$(project_fixture_state "$1" example-app)" ;; esac
   assert_eq "0" "$ask_rc" "$4: exits 0"
-  assert_eq "$1/state/pending/$2.json" "$ask_out" "$4: prints only the pending file"
-  assert_ok "test -f '$1/state/pending/$2.json'" "$4: the card is pending"
+  assert_eq "$store/pending/$2.json" "$ask_out" "$4: prints only the pending file"
+  assert_ok "test -f '$store/pending/$2.json'" "$4: the card is pending"
   assert_eq "1" "$(jq -s --arg t "$3" 'map(select(.type=="decision_requested" and .task==$t))|length' \
-    "$1/state/events.jsonl")" "$4: its event is written"
+    "$store/events.jsonl")" "$4: its event is written"
 }
 argv() {  # argv <title> <body> <sound>: the call notify makes, as the stub logs it
   jq -cn --arg t "$1" --arg b "$2" --arg s "$3" '["notification","show",$t,"--body",$b,"--sound",$s]'

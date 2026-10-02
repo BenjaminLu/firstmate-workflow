@@ -74,7 +74,7 @@ export function makeRoot(stages: Stage[], withDecision = true, actors: "per-task
   // nothing else from bin/lib: the board reads the watch's files under
   // state/watch itself (T-137) and runs none of bin/lib's watch or hook code
   mkdirSync(join(d, 'bin/lib'));
-  for (const f of ['fm_lifeline.py', 'fm-lifeline.sh']) cpSync(join(ROOT, 'bin/lib', f), join(d, 'bin/lib', f));
+  for (const f of ['fm_lifeline.py', 'fm-lifeline.sh', 'fm_project_paths.py']) cpSync(join(ROOT, 'bin/lib', f), join(d, 'bin/lib', f));
 
   const tasks = readTasks(ROOT);
   if (tasks.length < stages.length) {
@@ -131,17 +131,29 @@ export function writeRegistry(root: string, github: string) {
 // default place, projects/<name>/tasks/, one file per task (T-090), when the
 // test gives one.
 export function writeProjects(root: string, projects: Array<{ name: string; github: string; tasks?: Array<{ id: string }> }>) {
-  const lines = [`default_project: ${projects[0].name}`, "projects:"];
+  const home = mkdtempSync(join(tmpdir(), 'fm-e2e-home-'));
+  writeFileSync(join(root, '.fixture-fm-home'), home);
+  const lines = [`home: ${home}`, `default_project: ${projects[0].name}`, "projects:"];
   projects.forEach((p, i) => {
     lines.push(`  ${p.name}:`, ...(i === 0 ? ["    repo: ."] : []), `    github: ${p.github}`,
       "    base: main", "    required_check: ci");
     if (i > 0 && p.tasks) {
-      const dir = join(root, "projects", p.name, "tasks");
+      const dir = join(home, "projects", p.name, "tasks");
       mkdirSync(dir, { recursive: true });
       for (const t of p.tasks) writeFileSync(join(dir, `${t.id}.json`), JSON.stringify(t) + "\n");
     }
   });
   writeFileSync(join(root, "config.yaml"), lines.join("\n") + "\n");
+}
+
+export function projectState(root: string, project: string) {
+  const config = readFileSync(join(root, 'config.yaml'), 'utf8');
+  const def = /^default_project: (.+)$/m.exec(config)?.[1];
+  const dir = project === def ? join(root, 'state')
+    : join(readFileSync(join(root, '.fixture-fm-home'), 'utf8'), 'projects', project, 'state');
+  mkdirSync(join(dir, 'pending'), {recursive:true});
+  mkdirSync(join(dir, 'decisions'), {recursive:true});
+  return dir;
 }
 
 // the port comes from the kernel, not from a guess: a guessed port can
@@ -206,6 +218,8 @@ export async function startBoard(root: string, env: Record<string, string> = {},
 
 export function stopBoard(b: { proc: ChildProcess; root: string; url?: string; config?: string }) {
   b.proc.kill(9);
+  const homeFile = join(b.root, '.fixture-fm-home');
+  if (existsSync(homeFile)) rmSync(readFileSync(homeFile, 'utf8'), {recursive:true, force:true});
   rmSync(b.root, { recursive: true, force: true });
   if (b.config) rmSync(b.config, { recursive: true, force: true });
   if (b.url) sessions.delete(b.url);

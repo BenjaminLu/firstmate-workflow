@@ -41,26 +41,26 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Scripts and distinct value-taking flag names. fm repeats --repo in three
 # subcommands; its nine option cases are exercised separately below.
 PINNED="fm 7
-fm-checkpoint 5
-fm-cleanup 2
+fm-checkpoint 6
+fm-cleanup 3
 fm-decide 10
-fm-diagram 4
-fm-dispatch 3
-fm-doctor 2
+fm-diagram 5
+fm-dispatch 4
+fm-doctor 3
 fm-emit 8
 fm-failfirst 3
-fm-gate 5
+fm-gate 6
 fm-merge 4
 fm-project 1
 fm-protocol 4
-fm-ready 3
-fm-reconcile 3
-fm-review 7
-fm-run 2
-fm-session 3
+fm-ready 4
+fm-reconcile 4
+fm-review 8
+fm-run 3
+fm-session 4
 fm-setup 3
 fm-sync-prs 2
-fm-worker 5"
+fm-worker 6"
 
 # perl's alarm rather than timeout(1), which macOS does not ship. Both the
 # code and what was said are captured: half of criterion 2 is "says which
@@ -141,7 +141,7 @@ while read -r name want; do
     fi
   done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "88" "$total" "every pinned flag and all nine fm option cases were exercised"
+assert_eq "100" "$total" "every pinned flag and all nine fm option cases were exercised"
 
 # These flags consume one word, so they are deliberately outside the shift-2
 # count. Probe them without a base ref: parsing must finish at usage, not hang.

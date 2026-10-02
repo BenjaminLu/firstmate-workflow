@@ -123,11 +123,14 @@ if [ "$MODE" = await ]; then
 fi
 
 # The owned id selects the same project for reads and writes.
-# shellcheck source=bin/fm-config.sh
-. "$HERE/fm-config.sh"
-_storage_project="${PROJECT:-${FM_PROJECT:-}}"
-if [[ "${ID:-}" =~ $FM_OWNED_ID ]]; then _storage_project="${BASH_REMATCH[1]}"; fi
-fm_storage_init "$REPO" "$_storage_project" || exit 65
+FM_STATE_DIR="$REPO/state"
+if [ -r "$HERE/fm-config.sh" ]; then
+  # shellcheck source=bin/fm-config.sh
+  . "$HERE/fm-config.sh"
+  _storage_project="${PROJECT:-${FM_PROJECT:-}}"
+  if [[ "${ID:-}" =~ $FM_OWNED_ID ]]; then _storage_project="${BASH_REMATCH[1]}"; fi
+  fm_storage_init "$REPO" "$_storage_project" || exit 65
+fi
 DIR="$FM_STATE_DIR/decisions"; PEND="$FM_STATE_DIR/pending"
 IDS="$FM_STATE_DIR/decision-ids"
 mkdir -p "$DIR" "$PEND"

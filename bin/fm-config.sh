@@ -1555,9 +1555,29 @@ fm_storage_init() {
   FM_STATE_DIR="$engine/state"; FM_WORKTREES="$engine/state/worktrees"
   FM_TASKS_DIR="$engine/design/tasks"; FM_DESIGN="$engine/design/design.md"
   FM_TARGET_ROOT="$engine"; FM_EXTERNAL=0
-  names="$(fm_projects "$FM_CONFIG")" || return 65
+  # Pre-registry and degraded self callers do not need a usable registry.
+  if ! names="$(fm_projects "$FM_CONFIG")"; then
+    [ -z "$explicit" ] || [ "$explicit" = firstmate-workflow ] || return 65
+    names=''
+  fi
   if [ -n "$names" ]; then
-    name="$(fm_project_resolve "$explicit" "$FM_CONFIG")" || return 65
+    name="$explicit"
+    if [ -z "$name" ]; then
+      name="$(fm_cfg default_project "$FM_CONFIG" || true)"
+      if [ -z "$name" ]; then
+        for name in $names; do
+          [ "$(fm_project_get "$name" repo "$FM_CONFIG")" != . ] || break
+        done
+        [ "$(fm_project_get "$name" repo "$FM_CONFIG")" = . ] || name=''
+      fi
+    fi
+    # No default and no self entry: an unnamed legacy caller stays local.
+    if [ -z "$name" ]; then
+      export FM_ENGINE_ROOT FM_CONFIG FM_STATE_DIR FM_WORKTREES FM_TASKS_DIR FM_DESIGN
+      export FM_TARGET_ROOT FM_EXTERNAL
+      return 0
+    fi
+    name="$(fm_project_resolve "$name" "$FM_CONFIG")" || return 65
     FM_PROJECT="$name"
     FM_TARGET_ROOT="$(fm_project_get "$name" root "$FM_CONFIG")" || return 65
     if [ "$(fm_project_get "$name" repo "$FM_CONFIG")" != . ]; then
@@ -1574,8 +1594,6 @@ fm_storage_init() {
       FM_BASE="$(fm_project_get "$name" base "$FM_CONFIG")" || return 65
       export GH_REPO FM_BASE
     fi
-  elif [ -n "$explicit" ] && [ "$explicit" != firstmate-workflow ]; then
-    echo "fm-config: unregistered project $explicit" >&2; return 65
   fi
   export FM_ENGINE_ROOT FM_CONFIG FM_STATE_DIR FM_WORKTREES FM_TASKS_DIR FM_DESIGN
   export FM_TARGET_ROOT FM_EXTERNAL FM_PROJECT

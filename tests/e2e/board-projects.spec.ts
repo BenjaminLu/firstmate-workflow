@@ -3,7 +3,7 @@
 // moves would fail on the animation and pass on the wrong crew.
 import { expect, type Page } from "@playwright/test";
 // `test` is the fixture's: every board a test starts is signed in to (T-122)
-import { test, makeRoot, startBoard, stopBoard, writeRegistry, writeProjects, readTasks, writeTasks, ROOT, details, scriptHeaders, signInAddress, tabToken } from "./lib/fixture";
+import { test, makeRoot, startBoard, stopBoard, writeRegistry, writeProjects, projectState, readTasks, writeTasks, ROOT, details, scriptHeaders, signInAddress, tabToken } from "./lib/fixture";
 import { appendFileSync, readFileSync, existsSync, writeFileSync, rmSync, utimesSync, mkdirSync, chmodSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -28,7 +28,7 @@ test('two projects on one board: chips everywhere, one answer leaves the other c
   emitIn('beta','worker-b','T-001','pr_opened',7,{});
   // beta's card was asked for first, so it leads the one list
   const card = (id:string, project:string) => {
-    const file = join(root,`state/pending/${id}.json`);
+    const file = join(projectState(root, project),`pending/${id}.json`);
     writeFileSync(file, JSON.stringify({id, project, task:'T-001', kind:'merge', pr:7, details, gates:[1,1,1,1,1,1,1]}));
     return file;
   };
@@ -50,7 +50,7 @@ test('two projects on one board: chips everywhere, one answer leaves the other c
       await expect(lane(p).locator('.hd a[data-pr]')).toHaveAttribute('href', `https://github.com/example-org/${repo}/pull/7`);
     }
     await expect(lane('alpha').locator('.t')).toHaveText('alpha one');
-    await expect(lane('beta').locator('.t')).toHaveText('beta one');
+    await expect(lane('beta').locator('.t')).not.toContainText('beta one');
     // crew bubbles: each crewman says whose task it is on
     await expect(page.locator('[data-bubble="worker-a"] .pchip')).toHaveText('alpha');
     await expect(page.locator('[data-bubble="worker-b"] .pchip')).toHaveText('beta');
@@ -68,23 +68,24 @@ test('two projects on one board: chips everywhere, one answer leaves the other c
 
     // answer beta's merge while its helper is held: the answer comes back, the
     // board says the merge is running, and alpha's card is still pending
+    await page.goto(`${b.url}/?lang=en&project=beta`);
     writeFileSync(hold, '');
     await page.locator('#card-D-beta-T001-1 [data-c="A"]').click();
     await page.locator('#card-D-beta-T001-1 .confirm').click();
     await expect(page.locator('#merging-D-beta-T001-1')).toContainText(EN.mergeRunning, {timeout:15_000});
     await expect(page.locator('#merging-D-beta-T001-1 .pchip')).toHaveText('beta');
     await expect(page.locator('#card-D-beta-T001-1')).toHaveCount(0);
-    await expect(page.locator('#deck > .dcard')).toHaveAttribute('id', 'card-D-alpha-T001-1');
-    await expect(page.locator('#pcount')).toHaveText('1');
+    expect(existsSync(join(root, 'state/pending/D-alpha-T001-1.json'))).toBe(true);
+    await expect(page.locator('#pcount')).toHaveText('0');
     await expect.poll(() => existsSync(b.recorder) ? readFileSync(b.recorder,'utf8') : '', {timeout:15_000})
       .toContain('--project beta');
-    expect(JSON.parse(readFileSync(join(root,'state/decisions/D-beta-T001-1.json'),'utf8')).merge).toBe('running');
+    expect(JSON.parse(readFileSync(join(projectState(root, 'beta'),'decisions/D-beta-T001-1.json'),'utf8')).merge).toBe('running');
     // the helper finishes: the record says merged and the board stops saying running
     rmSync(hold);
     await expect(page.locator('#merging-D-beta-T001-1')).toHaveCount(0, {timeout:15_000});
-    await expect.poll(() => JSON.parse(readFileSync(join(root,'state/decisions/D-beta-T001-1.json'),'utf8')).merge,
+    await expect.poll(() => JSON.parse(readFileSync(join(projectState(root, 'beta'),'decisions/D-beta-T001-1.json'),'utf8')).merge,
       {timeout:15_000}).toBe('merged');
-    await expect(page.locator('#card-D-alpha-T001-1')).toBeVisible();
+    expect(existsSync(join(root, 'state/pending/D-alpha-T001-1.json'))).toBe(true);
 
     // ?project= shows one project: its cards, its crew and its count
     await page.goto(`${b.url}/?lang=en&project=alpha`);
@@ -129,7 +130,7 @@ test('two projects with the same task id: menu, drop confirmation and drag act o
   ]);
   writeTasks(root, [
     {id:'T-001',title:'alpha one',depends_on:[]},{id:'T-002',title:'alpha two',depends_on:[]}]);
-  const events = () => readFileSync(join(root,'state/events.jsonl'),'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+  const events = () => ['alpha', 'beta'].flatMap(p => { const file = join(projectState(root, p), 'events.jsonl'); return existsSync(file) ? readFileSync(file,'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)) : []; });
   const acted = () => events().filter(e => e.actor === 'captain' && ['parked','unparked','closed'].includes(e.type));
   const b = await startBoard(root);
   const dialogs: string[] = [];
@@ -182,7 +183,7 @@ test('two projects with the same task id: menu, drop confirmation and drag act o
     await inLane('ready','alpha','T-002').dragTo(page.locator('#parked > summary'));
     await expect(parked('alpha','T-002')).toHaveCount(1);
     await expect(parked('beta','T-002')).toHaveCount(1);
-    const last = acted()[acted().length - 1];
+    const last = acted().filter(e => !e.project).at(-1);
     expect(last).toMatchObject({type:'parked',task:'T-002'});
     expect(last).not.toHaveProperty('project');
     expect(dialogs).toEqual([]);

@@ -11,7 +11,7 @@ import { spawn } from "node:child_process";
 import { CString, dlopen, FFIType } from "bun:ffi";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 // canonical from the start: on macOS /var is a symlink to /private/var, and a
 // path check that compares a resolved path against an unresolved root refuses
@@ -492,11 +492,19 @@ const mentioned = (repo: string | null, value: unknown, out: Record<string, stri
   return out;
 };
 
+// One synchronous state response validates each store once. Mutations and
+// subsequent requests always validate afresh, including after a planted link.
+let storageReadCache: Map<string, string | Error> | null = null;
 const stateDir = (project: string) => {
+  const key = project || defaultProject();
+  const cached = storageReadCache?.get(key);
+  if (cached instanceof Error) throw cached;
+  if (cached) return cached;
   const reg = registry();
   if (!reg.projects.size) return join(ROOT, "state");
   const entry = reg.projects.get(project || defaultProject());
-  if (!entry?.state) throw new Error("project storage is unavailable");
+  if (!entry) return join(ROOT, "state");
+  if (!entry.state) throw new Error("project storage is unavailable");
   if (entry.state !== join(ROOT, "state")) {
     // Revalidate before using a cached registry path: records can change
     // without config.yaml changing (including planted symlinks).
@@ -504,14 +512,18 @@ const stateDir = (project: string) => {
       '. "$1"; fm_project_get "$3" state "$2"', "fm-board",
       join(ROOT, "bin/fm-config.sh"), join(ROOT, "config.yaml"), project || defaultProject()],
       { env: childEnv(), cwd: ROOT });
-    if (checked.exitCode !== 0 || new TextDecoder().decode(checked.stdout).trim() !== entry.state)
-      throw new Error("project storage validation failed");
+    if (checked.exitCode !== 0 || new TextDecoder().decode(checked.stdout).trim() !== entry.state) {
+      const error = new Error("project storage validation failed");
+      storageReadCache?.set(key, error);
+      throw error;
+    }
   }
+  storageReadCache?.set(key, entry.state);
   return entry.state;
 };
-const stores = () => registry().projects.size
-  ? [...new Set([...registry().projects.keys()].map(p => stateDir(p)))]
-  : [join(ROOT, "state")];
+const stores = () => [...new Set([join(ROOT, "state"), ...[...registry().projects.keys()].flatMap(p => {
+  try { return [stateDir(p)]; } catch { return []; }
+})])];
 const decisionDir = (id: string) => join(stateDir(ownerOf(id)?.project ?? defaultProject()), "decisions");
 const responseFile = (id: string) => {
   const old = join(ROOT, "state/decisions", `${id}.json`);
@@ -557,7 +569,10 @@ const taskLists = (): Array<{ project: string; defs: Array<Record<string, unknow
     : [[def, "design/tasks"]];
   // the default project first, so a board of one project reads as before
   dirs.sort((a, b) => Number(b[0] === def) - Number(a[0] === def));
-  return dirs.map(([project, rel]) => ({ project, defs: taskDefs(rel) }));
+  return dirs.map(([project, rel]) => {
+    try { stateDir(project); return { project, defs: taskDefs(rel) }; }
+    catch { return { project, defs: [] }; }
+  });
 };
 
 // Whether firstmate is watched (T-137), read from the watch's own files
@@ -656,6 +671,11 @@ const watchState = (events: Event[], aboard: string[], cards: Array<{ ts?: unkno
 // `only` is ?project=: that project's work, cards and log, and the counts of
 // those. Without it, every project on one page (design section 15.10 point 4).
 const state = (only: string | null = null) => {
+  storageReadCache = new Map();
+  try { return buildState(only); }
+  finally { storageReadCache = null; }
+};
+const buildState = (only: string | null) => {
   const events = readEvents();
   const def = defaultProject();
   // every record that carries a pr number carries its URL beside it, on its
@@ -1222,19 +1242,30 @@ const state = (only: string | null = null) => {
   // explicitly selected project's local view, never in aggregation.
   if (!only) {
     const keys = new Set(["id", "key", "project", "task", "pr", "pr_url", "type", "ts", "actor",
-      "role", "stage", "state", "kind", "chosen", "merge", "owner", "task_final", "identity",
-      "depends_on", "blocked_on", "blocked_by", "actions", "confirm", "badges", "crew", "merged_seq",
-      "last_review", "crew_name", "name", "round", "attempt", "vendor", "model", "model_source",
+      "role", "stage", "state", "kind", "chosen", "merge", "merge_unknown", "owner", "task_final", "identity",
+      "confirm", "merged_seq", "crew_name", "name", "round", "attempt", "vendor", "model", "model_source",
       "model_requested", "cli_version", "model_mismatch", "progress", "window_expected"]);
     const metadata = (value: Record<string, any>) => {
       const project = projectOf(value), entry = registry().projects.get(project);
       if (!entry || entry.state === join(ROOT, "state")) return value;
-      const safe = Object.fromEntries(Object.entries(value).filter(([key]) => keys.has(key)));
+      const safe = Object.fromEntries(Object.entries(value).filter(([key, item]) =>
+        keys.has(key) && (item === null || ["string", "number", "boolean"].includes(typeof item))));
+      // Nested values are constructed by schema, never copied from records.
+      for (const key of ["depends_on", "blocked_on", "blocked_by"]) {
+        if (Array.isArray(value[key])) safe[key] = value[key].filter((x: unknown) => typeof x === "string" && isTask(x));
+      }
+      safe.badges = [];
+      safe.crew = Array.isArray(value.crew) ? value.crew.filter((x: unknown) => typeof x === "string" && /^[a-zA-Z0-9_-]+$/.test(x)) : [];
+      safe.actions = Array.isArray(value.actions) ? value.actions.filter((x: unknown) =>
+        typeof x === "string" && ["park", "unpark", "drop", "dispatch", "send_back"].includes(x)) : [];
+      const progress = value.progress;
+      if (progress && Number.isFinite(progress.done) && Number.isFinite(progress.total)
+          && progress.total > 0 && progress.done >= 0 && progress.done <= progress.total)
+        safe.progress = { done: progress.done, total: progress.total };
       if (typeof safe.identity === "string")
         safe.identity = "external:" + createHash("sha256").update(safe.identity).digest("hex");
-      else if (safe.identity && typeof safe.identity === "object")
-        safe.identity = Object.fromEntries(Object.entries(safe.identity).filter(([key]) =>
-          ["name", "role", "project", "task", "round", "attempt", "vendor", "model"].includes(key)));
+      else if (value.identity && typeof value.identity === "object")
+        safe.identity = identityOf(value.identity);
       safe.title = null;
       if ("answerable" in value) safe.answerable = false;
       const pr = prNumber(value.pr);
@@ -1307,12 +1338,13 @@ const pendingIn = (dir: string) => {
   // keeps its place while the board runs. The id settles a tie, never
   // readdirSync, whose order differs between macOS and Linux.
   const files = readdirSync(dir).filter((f) => f.endsWith(".json"));
-  for (const f of [...firstSeen.keys()]) if (!files.includes(f)) firstSeen.delete(f);
+  for (const f of [...firstSeen.keys()]) if (dirname(f) === dir && !files.includes(basename(f))) firstSeen.delete(f);
   const asked = (d: Record<string, unknown>, f: string) => {
     const t = Date.parse(String(d.ts ?? ""));
     if (Number.isFinite(t)) return t;
-    if (!firstSeen.has(f)) firstSeen.set(f, statSync(join(dir, f)).mtimeMs);
-    return firstSeen.get(f)!;
+    const key = join(dir, f);
+    if (!firstSeen.has(key)) firstSeen.set(key, statSync(key).mtimeMs);
+    return firstSeen.get(key)!;
   };
   return files.flatMap((f) => {
     try {
@@ -1330,15 +1362,12 @@ const pendingIn = (dir: string) => {
       // name is listed, and the page shows the refusal when it is answered
       return [{ card: { ...d, owner: ownerOf(d.id), answerable: isDecisionId(String(d.id ?? "")), task_final: final }, at: asked(d, f) }];
     } catch { return []; }
-  }).sort((a, b) => a.at - b.at
-    || String(a.card.id ?? "").localeCompare(String(b.card.id ?? ""), "en", { numeric: true }))
-    .map((x) => x.card);
+  });
 };
 
-const pending = () => stores().flatMap(base => pendingIn(join(base, "pending"))).sort((a, b) => {
-  const time = (card: Record<string, any>) => Date.parse(String(card.ts ?? "")) || firstSeen.get(`${card.id}.json`) || 0;
-  return time(a) - time(b) || String(a.id).localeCompare(String(b.id), "en", { numeric: true });
-});
+const pending = () => stores().flatMap(base => pendingIn(join(base, "pending")))
+  .sort((a, b) => a.at - b.at || String(a.card.id).localeCompare(String(b.card.id), "en", { numeric: true }))
+  .map(x => x.card);
 
 // --- Owners and wakes (T-151) ----------------------------------------------
 // Nothing the board starts outlives its owner. A merge the captain clicked
@@ -1417,6 +1446,10 @@ const ours = new Set<string>();
 // A running record's outcome, written once. The marker goes with it, so the
 // project's turn is free the moment the record says how it ended.
 const settle = (id: string, merge: "merged" | "failed", reason = "") => {
+  try { settleAvailable(id, merge, reason); }
+  catch { unknownOutcome.add(id); }
+};
+const settleAvailable = (id: string, merge: "merged" | "failed", reason: string) => {
   const file = responseFile(id);
   const d = readJson<Record<string, any>>(file);
   unknownOutcome.delete(id);
@@ -1604,6 +1637,7 @@ const recover = async () => {
     for (const d of readResponses()) {
       const id = String(d.id ?? "");
       if (mergeOf(d) !== "running" || ours.has(id)) continue;
+      try {
       const project = projectOf(d);
       const marker = readJson<Marker>(markerOf(project));
       if (marker?.decision === id && alive(marker)) { unknownOutcome.delete(id); continue; }
@@ -1617,6 +1651,7 @@ const recover = async () => {
       if (gh === "MERGED") settle(id, "merged");
       else if (gh === "OPEN" || gh === "CLOSED") settle(id, "failed", HELPER_STOPPED);
       else unknownOutcome.add(id);
+      } catch { unknownOutcome.add(id); }
     }
   } finally { recovering = false; }
 };
@@ -1821,6 +1856,7 @@ const serveFile = (name: string) => {
 const server = Bun.serve({
   hostname: "127.0.0.1",          // never 0.0.0.0: this board is for one machine
   port: PORT,
+  error() { return json({ error: "project storage is unavailable" }, 503); },
   fetch(req) {
     const url = new URL(req.url);
     // ?project= shows one project; without it, or with no project's name,

@@ -51,8 +51,11 @@ set -uo pipefail
 # there. One guarantee, in one place; bin/ci.sh fails if a script that
 # dispatches is missing it.
 exec < /dev/null
-# shellcheck source=bin/fm-config.sh
-. "$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
+_storage_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
+if [ -r "$_storage_lib" ]; then
+  # shellcheck source=bin/fm-config.sh
+  . "$_storage_lib"
+fi
 
 REPO="${FM_ROOT:-$(pwd)}"; DRY=0; LIMIT=50; GH="${FM_GH:-gh}"; REPAIR=0; APPLY=0; EFFECTS='{}'
 # `shift 2` with one argument left consumes nothing and returns non-zero, so
@@ -65,7 +68,6 @@ need() { [ $# -ge 2 ] || { echo "fm-reconcile: $1 needs a value" >&2; exit 64; }
 # `shift 2` that the option-loop lint in bin/ci.sh can read.
 add_effect() {
   case "$1" in
-    --project) need "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
     *=park|*=drop) ;;
     *) echo "fm-reconcile: --effect takes D-id=park or D-id=drop, not $1" >&2; exit 64 ;;
   esac
@@ -74,6 +76,7 @@ add_effect() {
 }
 while [ $# -gt 0 ]; do
   case "$1" in
+    --project) need "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
     --repo)  need "$@"; REPO="$2";  shift 2 ;;
     --limit) need "$@"; LIMIT="$2"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
@@ -91,7 +94,12 @@ fi
 [ "$REPAIR" -eq 0 ] || { [ "$APPLY" -eq 1 ] && DRY=0 || DRY=1; }
 cd "$REPO" || { echo "fm-reconcile: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
-fm_storage_init "$REPO" || exit 65
+if declare -f fm_storage_init >/dev/null; then
+  fm_storage_init "$REPO" || exit 65
+else
+  [ -z "${FM_PROJECT:-}" ] || { echo "fm-reconcile: named project needs $_storage_lib" >&2; exit 65; }
+  FM_STATE_DIR="$REPO/state"; FM_WORKTREES="$REPO/state/worktrees"
+fi
 LOG="$FM_STATE_DIR/events.jsonl"
 WT="$FM_WORKTREES"
 shopt -s nullglob

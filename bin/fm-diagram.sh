@@ -36,8 +36,11 @@ set -uo pipefail
 # there. One guarantee, in one place; bin/ci.sh fails if a script that
 # dispatches is missing it.
 exec < /dev/null
-# shellcheck source=bin/fm-config.sh
-. "$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
+_storage_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
+if [ -r "$_storage_lib" ]; then
+  # shellcheck source=bin/fm-config.sh
+  . "$_storage_lib"
+fi
 
 ROOT="${FM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
@@ -171,7 +174,12 @@ fi
 [ -n "$ID" ] || die "--decision is required"
 
 if [[ "$ID" =~ $FM_OWNED_ID ]]; then export FM_PROJECT="${BASH_REMATCH[1]}"; fi
-fm_storage_init "$ROOT" || exit 65
+if declare -f fm_storage_init >/dev/null; then
+  fm_storage_init "$ROOT" || exit 65
+else
+  [ -z "${FM_PROJECT:-}" ] || { echo "fm-diagram: named project needs $_storage_lib" >&2; exit 65; }
+  FM_STATE_DIR="$ROOT/state"; FM_EXTERNAL=0
+fi
 if [ "$FM_EXTERNAL" = 1 ]; then
   OUT="$FM_STATE_DIR/diagrams"
   SRC="$FM_STATE_DIR/diagram-sources"

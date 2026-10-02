@@ -339,7 +339,7 @@ build_checkout() {
   # after the lock is already held, closes that window rather than
   # narrowing it: sweep_checkouts can never see this checkout before its
   # lock exists.
-  staging="$(mktemp -d "$REVIEW_TMP/.fm-review-staging.XXXXXX")" || return 1
+  staging="$(mktemp -d "${REVIEW_TMP:-${TMPDIR:-/tmp}}/.fm-review-staging.XXXXXX")" || return 1
   staging="$(cd "$staging" && pwd -P)" || return 1
   printf '%s\n' "$$" > "$staging/owner" || { rm -rf "$staging"; return 1; }
   exec 9<>"$staging/owner" || { rm -rf "$staging"; return 1; }
@@ -414,7 +414,7 @@ rebuild_checkout() {
   fi
   checkout_is_free "$CHECKOUT_ROOT/owner" || return 1
   rm -rf "$CHECKOUT_ROOT"
-  staging="$(mktemp -d "$REVIEW_TMP/.fm-review-staging.XXXXXX")" || return 1
+  staging="$(mktemp -d "${REVIEW_TMP:-${TMPDIR:-/tmp}}/.fm-review-staging.XXXXXX")" || return 1
   staging="$(cd "$staging" && pwd -P)" || return 1
   printf '%s\n' "$$" > "$staging/owner" || { rm -rf "$staging"; return 1; }
   exec 9<>"$staging/owner" || { rm -rf "$staging"; return 1; }

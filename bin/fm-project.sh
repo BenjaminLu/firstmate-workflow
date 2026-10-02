@@ -136,70 +136,13 @@ if [ -e "$legacy" ] || [ -L "$legacy" ]; then
     echo "fm-project: legacy records at $legacy; sync --migrate requires the operator's approval" >&2
     exit 65
   fi
-  python3 - "$legacy" "$project_home" "$origin" <<'PYM'
-import os, pathlib, subprocess, sys
-source, target = map(pathlib.Path, sys.argv[1:3])
+  python3 - "$legacy" "$project_home" "$origin" "$_fm_code_dir/lib" <<'PYM'
+import sys
+sys.path.insert(0, sys.argv[4])
+from fm_project_migrate import migrate
 try:
-    for path in (source, *source.parents):
-        if path.is_symlink(): raise ValueError('legacy parent is a symlink')
-    if target.exists(): raise ValueError('destination already exists; retain both stores for recovery')
-    for rel in ('repo', 'worktrees', 'tasks', 'design.md', 'CONVENTIONS.md', 'state',
-                'repo/.git', 'repo/.git/config', 'repo/.git/info', 'repo/.git/info/exclude'):
-        if (source / rel).is_symlink(): raise ValueError('legacy routing path is a symlink: ' + rel)
-    for directory in (source / 'state', source / 'tasks'):
-        if directory.exists() and any(path.is_symlink() for path in directory.rglob('*')):
-            raise ValueError('legacy records contain a symlink; reconcile before migration')
-    repo = source / 'repo'
-    if not (repo / '.git').is_dir() or (repo / '.git').is_symlink():
-        raise ValueError('legacy clone has no independent git directory')
-    def git(*args):
-        return subprocess.check_output(['git', '-C', str(repo), *args], text=True).strip()
-    if git('rev-parse', '--show-toplevel') != str(repo): raise ValueError('legacy clone root mismatch')
-    if git('remote', 'get-url', 'origin') != sys.argv[3]: raise ValueError('legacy origin mismatch')
-    # Registered worktrees contain absolute git links. Do not migrate a live or
-    # retained checkout behind its owner; the captain must retire it first.
-    if len([line for line in git('worktree', 'list', '--porcelain').splitlines()
-            if line.startswith('worktree ')]) != 1:
-        raise ValueError('legacy worktrees must be retired before migration')
-    if any(source.rglob('process.json')) or any(source.rglob('*.pid')):
-        raise ValueError('legacy ownership records require reconciliation before migration')
-    # Do not report a complete move when older shared stores still carry
-    # this project's private records. Their ambiguous ownership needs the
-    # operator to consolidate them into the retained project store first.
-    engine = source.parents[2]
-    separated = [engine / 'projects' / source.name]
-    separated += [engine / 'state' / kind / source.name
-                  for kind in ('mirrors', 'pins', 'evidence', 'decision-ids')]
-    separated += list((engine / 'state').glob('*/D-' + source.name + '-*'))
-    if any(path.exists() or path.is_symlink() for path in separated):
-        raise ValueError('separate legacy project records require consolidation before migration')
-    import json
-    events = engine / 'state/events.jsonl'
-    if events.exists():
-        for line in events.read_text().splitlines():
-            if line.strip() and json.loads(line).get('project') == source.name:
-                raise ValueError('legacy shared events require consolidation before migration')
-    for identity in (engine / 'state/runs').glob('*/identity.json'):
-        if json.loads(identity.read_text()).get('project') == source.name:
-            raise ValueError('legacy shared run records require consolidation before migration')
-    def inventory(directory):
-        result = {}
-        for path in directory.rglob('*'):
-            st = path.lstat()
-            result[str(path.relative_to(directory))] = (st.st_dev, st.st_ino, st.st_mode, st.st_size)
-        return result
-    retained = inventory(source)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    os.rename(source, target)
-    # Rename preserves every byte and record atomically, including untracked
-    # files. On verification failure rollback is another atomic rename.
-    try:
-        if not (target / 'repo/.git').is_dir(): raise ValueError('retained clone missing')
-        if inventory(target) != retained: raise ValueError('retained records changed during migration')
-    except Exception:
-        os.rename(target, source)
-        raise
-except (OSError, ValueError, subprocess.SubprocessError) as error:
+    migrate(*sys.argv[1:4])
+except Exception as error:
     print('fm-project: migration refused: ' + str(error), file=sys.stderr)
     sys.exit(65)
 PYM

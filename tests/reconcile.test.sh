@@ -1083,6 +1083,10 @@ assert_eq "64" "$(FM_ROOT="$d" "$d/bin/fm-reconcile.sh" --repair-cards --effect 
   "--effect names only park or drop"
 assert_eq "64" "$(FM_ROOT="$d" "$d/bin/fm-reconcile.sh" --cards >/dev/null 2>&1; printf '%s' "$?")" \
   "and there is no standing sweep"
+assert_eq "0" "$(FM_ROOT="$d" "$d/bin/fm-reconcile.sh" --project firstmate-workflow --repair-cards --dry-run >/dev/null 2>&1; printf '%s' "$?")" \
+  "project is parsed in the main reconcile option loop"
+assert_eq "64" "$(FM_ROOT="$d" "$d/bin/fm-reconcile.sh" --effect --project >/dev/null 2>&1; printf '%s' "$?")" \
+  "project cannot masquerade as an effect value"
 rm -rf "$d"
 
 finish

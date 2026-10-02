@@ -42,5 +42,14 @@ rm "$FM_HOME/projects/private-app/tasks/T-001.json"
 ln -s "$eng/config.yaml" "$FM_HOME/projects/private-app/worktrees/T-001.pid"
 assert_eq 65 "$(field private-app worktrees >/dev/null 2>&1; echo $?)" "worktree owner symlink escape is refused"
 assert_ok "test ! -e '$eng/state'" "resolution writes no engine records"
+# Storage compatibility is independent of external path validation.
+mkdir -p "$t/plain"
+printf 'vendor: mock\n' > "$t/plain/config.yaml"
+storage() { bash -c '. "$1/bin/fm-config.sh"; fm_storage_init "$2" || exit $?; printf "%s|%s" "$FM_EXTERNAL" "$FM_STATE_DIR"' _ "$ROOT" "$1"; }
+assert_eq "0|$t/plain/state" "$(FM_PROJECT=example-app storage "$t/plain")" "no registry keeps ambient project on self storage"
+sed '/default_project:/d' "$eng/config.yaml" > "$t/config"; mv "$t/config" "$eng/config.yaml"
+assert_eq "0|$eng/state" "$(storage "$eng")" "unnamed registry uses its self entry"
+printf 'projects: broken\n' > "$t/plain/config.yaml"
+assert_eq "0|$t/plain/state" "$(storage "$t/plain" 2>/dev/null)" "unnamed malformed registry preserves self storage"
 safe_rm_rf "$t"
 finish

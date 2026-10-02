@@ -213,7 +213,7 @@ assert_eq "self-host" "$(FM_PROJECT=example-app fm_project_resolve self-host "$c
 
 # never inferred: a shell standing inside another project's managed clone,
 # whose remote is that project's repository, still resolves the default
-export FM_HOME="$r/fm-home"
+export FM_HOME="$(safe_tmpdir)"
 clone="$r/state/projects/example-app/repo"
 mkdir -p "$clone"
 git -C "$clone" init -q && git -C "$clone" remote add origin https://github.com/example-org/example-app.git

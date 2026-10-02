@@ -42,8 +42,11 @@ set -uo pipefail
 # a child that reads it blocks the caller waiting for a human who is not
 # there.
 exec < /dev/null
-# shellcheck source=bin/fm-config.sh
-. "$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
+_storage_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
+if [ -r "$_storage_lib" ]; then
+  # shellcheck source=bin/fm-config.sh
+  . "$_storage_lib"
+fi
 
 ROOT="${FM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 usage() { printf 'fm-ready: %s\n' "$1" >&2
@@ -87,7 +90,12 @@ else
 fi
 
 command -v jq >/dev/null 2>&1 || die "jq is required"
-fm_storage_init "$ROOT" || exit 65
+if declare -f fm_storage_init >/dev/null; then
+  fm_storage_init "$ROOT" || exit 65
+else
+  [ -z "${FM_PROJECT:-}" ] || { echo "fm-ready: named project needs $_storage_lib" >&2; exit 65; }
+  FM_STATE_DIR="$ROOT/state"; FM_TASKS_DIR="$ROOT/design/tasks"
+fi
 TASKS="$FM_TASKS_DIR"; LOG="$FM_STATE_DIR/events.jsonl"; DIR="$FM_STATE_DIR/ready"
 [ -d "$TASKS" ] || die "no design/tasks/ under $ROOT"
 # The task list is one file per task (T-090), read all or nothing as

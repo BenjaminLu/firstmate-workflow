@@ -163,10 +163,14 @@ if [ -n "$project" ]; then
   project="$(fm_project_resolve "$project" "$ROOT/config.yaml")" || exit 65
 fi
 
-# shellcheck source=bin/fm-config.sh
-. "$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
-fm_storage_init "$ROOT" "$project" || exit 65
-[ "$FM_EXTERNAL" = 0 ] || project="$FM_PROJECT"
+_fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
+FM_STATE_DIR="$ROOT/state"
+if [ -r "$_fm_lib" ]; then
+  # shellcheck source=bin/fm-config.sh
+  . "$_fm_lib"
+  fm_storage_init "$ROOT" "$project" || exit 65
+  [ "$FM_EXTERNAL" = 0 ] || project="$FM_PROJECT"
+fi
 LOG="$FM_STATE_DIR/events.jsonl"
 LOCK="$FM_STATE_DIR/.events.lock"
 

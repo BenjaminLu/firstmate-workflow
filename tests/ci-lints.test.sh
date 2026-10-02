@@ -866,25 +866,32 @@ rm -rf "$q/design"
 # with a registry, the check runs once per registered task directory and
 # names the project. The library's parser lives beside it.
 cp "$ROOT/bin/fm-herdr.py" "$q/bin/"; project_storage_fixture "$q/bin/"
-mkdir -p "$q/design/tasks" "$q/projects/other-app/tasks"
+external_home="$(safe_tmpdir)"
+external_tasks="$external_home/projects/other-app/tasks"
+mkdir -p "$q/design/tasks" "$external_tasks"
 printf '{"id":"T-001"}\n' > "$q/design/tasks/T-001.json"
-printf '{"id":"T-777","depends_on":["T-776"]}\n' > "$q/projects/other-app/tasks/T-777.json"
-{ printf 'default_project: self-host\nprojects:\n'
+printf '{"id":"T-777","depends_on":["T-776"]}\n' > "$external_tasks/T-777.json"
+{ printf 'home: %s\n' "$external_home"; printf 'default_project: self-host\nprojects:\n'
   printf '  self-host:\n    repo: .\n    github: o/engine\n    base: main\n    required_check: ci\n'
   printf '    design: design/design.md\n    tasks: design/tasks\n'
   printf '  other-app:\n    github: o/other-app\n    base: main\n    required_check: check\n'
 } > "$q/config.yaml"
 plant "a registered project's broken list turns the dag stage red" "the task list is not a sound DAG"
-plant "and the stage names that project" "project other-app (projects/other-app/tasks)"
+plant "and the stage names that project" "project other-app ($external_tasks)"
 plant "and its problem" "T-777: depends on T-776"
 plant "the self directory is checked in the same run, from a path in the old shape" \
   "project self-host (design/tasks): every task file parses"
-printf '{"id":"T-777"}\n' > "$q/projects/other-app/tasks/T-777.json"
+printf '{"id":"T-777"}\n' > "$external_tasks/T-777.json"
 plant "every sound list is green per project" \
-  "project other-app (projects/other-app/tasks): every task file parses"
-rm -rf "$q/projects"
-plant "a registered task directory that does not exist is red, not skipped" \
-  "project other-app: projects/other-app/tasks does not exist"
+  "project other-app ($external_tasks): every task file parses"
+rm -rf "$external_tasks"
+plant "an absent machine-local external list is reported and skipped" \
+  "project other-app: $external_tasks not on this machine"
+# An external-only registry must not hide the engine's own task DAG.
+cp "$q/config.yaml" "$q/config.saved"
+printf 'home: %s\nprojects:\n  other-app:\n    github: o/other-app\n    base: main\n    required_check: check\n' "$external_home" > "$q/config.yaml"
+plant "external-only registry still checks the self task list" "self: every task file parses"
+mv "$q/config.saved" "$q/config.yaml"
 printf '  broken-app:\n    github: not-a-repo\n    base: main\n    required_check: ci\n' >> "$q/config.yaml"
 plant "a broken registry turns the stage red" "the project registry: fm-config: project broken-app: github"
 rm -rf "$q/design" "$q/config.yaml" "$q/bin/fm-herdr.py"

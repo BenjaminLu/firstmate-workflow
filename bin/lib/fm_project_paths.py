@@ -64,15 +64,10 @@ def record_root(root):
     """Resolve CLI callers too; never trust an arbitrary state-path override."""
     import subprocess
     engine = Path(root).resolve()
-    config = engine / 'config.yaml'
-    if not config.is_file():
-        if os.environ.get('FM_PROJECT'):
-            raise ValueError('project records require engine configuration')
-        return Path(root)
     lib = Path(__file__).resolve().parents[1] / 'fm-config.sh'
-    code = '. "$1"; n="$(fm_projects "$2")" || exit 65; [ -n "$n" ] || { printf "%s" "$3"; exit; }; p="$(fm_project_resolve "" "$2")" && fm_project_get "$p" home "$2"'
+    code = '. "$1"; fm_storage_init "$2" || exit 65; if [ "$FM_EXTERNAL" = 1 ]; then dirname "$FM_STATE_DIR"; else printf "%s" "$FM_ENGINE_ROOT"; fi'
     storage = Path(subprocess.check_output(['bash', '-c', code, 'fm-paths', str(lib),
-                                          str(config), str(root)], text=True).strip())
+                                          str(engine)], text=True).strip())
     if storage != engine:
         legacy = engine / 'state/projects' / storage.name
         if legacy.exists() or legacy.is_symlink():
