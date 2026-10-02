@@ -1667,7 +1667,8 @@ def cli_final(vendor, log):
         answer = None
         active = complete = False
         kind = None
-        for line in text.splitlines():
+        # JSONL is LF-delimited; legal string separators must stay in the item.
+        for line in text.split('\n'):
             try: event = json.loads(line)
             except ValueError: continue
             if not isinstance(event, dict): continue
