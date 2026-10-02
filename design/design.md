@@ -4439,8 +4439,12 @@ conflicts for the worker, under the usual no-lost-work checks.
 
 ## 15. Driving other repositories (approved plan; runtime not yet accepted)
 
-The captain approved this consolidation on 2026-10-01. T-166 changes only
-specifications and role rules, after T-130/T-161/T-162/T-163/T-164/T-165/T-167;
+The captain approved this consolidation on 2026-10-01. T-166 updates
+specifications, documentation and role rules and adds `tests/skills-contract.test.sh`.
+The suite checks the role rules' structure and text only, not model compliance;
+its assertions provide this change's fail-first evidence for the role-skill
+changes, which `config.yaml` classes as behaviour. T-166 changes no runtime or
+production scripts. It follows T-130/T-161/T-162/T-163/T-164/T-165/T-167;
 existing PR 130/131/132 repairs precede external implementation. It neither
 implements external execution nor waives acceptance. T-163 enables independent
 Codex reviews; T-167 preserves truthful availability and completion ownership.

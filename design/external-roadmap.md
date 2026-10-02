@@ -1,6 +1,6 @@
 # External roadmap adoption ledger
 
-T-166 consolidates captain-approved direction from 2026-10-01. It changes no runtime or tests. The supplied T-166 spec is preserved unchanged. Existing PR 130/131/132 repairs and the task prerequisites must finish before external implementation. Planning references in that spec are historical drafts; the rewritten task files and design section 15 define the adopted contracts.
+T-166 consolidates captain-approved direction from 2026-10-01. It changes no runtime or production scripts. It adds `tests/skills-contract.test.sh` to check role-skill rules' structure and text, not model compliance; its assertions provide this change's fail-first evidence for the role-skill changes, which `config.yaml` classes as behaviour. The task spec includes the authorized scope addition for that suite. Existing PR 130/131/132 repairs and the task prerequisites must finish before external implementation. Planning references in that spec are historical drafts; the rewritten task files and design section 15 define the adopted contracts.
 
 ## Replacements and deferrals
 
@@ -62,9 +62,9 @@ T-163 supported Codex run mode retains confinement, isolated checkout, transport
 
 ## Verification boundary
 
-This documentation-only consolidation adds no production scripts or tests. Workers do not run suites or ci.sh. Firstmate must obtain actual required CI and six-gate evidence on the authoritative head; declared docs classification is decided by the gate, not waived here. There is no new behavioral assertion to identify as fail-first for this prose-only diff. Runtime tasks retain feature-owned fail-first and real acceptance requirements.
+This consolidation changes no runtime or production scripts. It adds `tests/skills-contract.test.sh`, whose nine assertions check the structure and text of the role-skill rules: managed Codex admission and verdict provenance, approved local briefs with optional PR projection, reviewer provenance/private storage/read-only commands, and authoritative merge-head binding with restricted approval carry-forward. These assertions are this change's fail-first evidence for the role-skill changes because `config.yaml` classes skills as behaviour. They do not prove model compliance or runtime capabilities. Workers do not run suites or ci.sh. Firstmate must obtain actual required CI and six-gate evidence on the authoritative head, including the suite's head-pass/base-fail results for gate 5; CI's separate behaviour classification does not waive that gate. Runtime tasks retain feature-owned fail-first and real acceptance requirements.
 
-Review the task JSON dependency graph for missing nodes/cycles; compare the approved dependency map with the two explicit additions above. Verify each task owns its spec and required runtime integration paths. Search rewritten contracts for stale storage, gate-3, public-only, checkpoint, detached/beacon and local-head assumptions. Check that T-166 remains byte-for-byte supplied, T-030 stays parked, and retired tasks are not reintroduced as runnable specs. Structural checks establish these properties only, not delivery, runtime compliance or gate success.
+Review the task JSON dependency graph for missing nodes/cycles; compare the approved dependency map with the two explicit additions above. Verify each task owns its spec and required runtime integration paths. Search rewritten contracts for stale storage, gate-3, public-only, checkpoint, detached/beacon and local-head assumptions. Check that T-166 preserves the supplied spec apart from the authorized `tests/skills-contract.test.sh` scope addition, T-030 stays parked, and retired tasks are not reintroduced as runnable specs. Structural checks establish these properties only, not delivery, runtime compliance or gate success.
 
 ## Round-two contract reconciliation
 
