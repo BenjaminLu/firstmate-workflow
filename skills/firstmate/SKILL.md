@@ -979,3 +979,31 @@ CONVENTIONS.md; new bots or required approvals cannot grant permission.
 Every merge still needs the captain's intent card, authoritative head CI/check
 statuses, all six gates, and the project review. Handoff never calls engine
 merge. External stacking/rebuild remains held for T-143.
+
+### T-138 signed evidence and merge candidates
+
+External round records live at `FM_HOME/projects/<name>/state/evidence/<task>/`.
+Self keeps `state/evidence/<project>/<task>/`. Signing keys are private state,
+never prompt inputs or checkout artifacts. Managed Codex finals remain
+`authenticated`; other adapters and native GitHub review receipts remain
+explicitly `legacy`. Signing protects the stored receipt; it does not upgrade
+its final-answer provenance or prove standing-list semantics.
+
+Before accepting readiness, run all six gates against the authoritative PR
+head. The gate fetches and compares GitHub's head and base with the local task
+ref and base, verifies an isolated checkout, and records checks, commit statuses,
+review and gates for that SHA. A stale local ref is held for synchronization,
+not treated as current because local gates were green. Required review policy
+comes from the project's confirmed conventions; native external reviews require
+GitHub's approved review decision and a matching review commit/patch.
+
+`fm-run.sh` passes that SHA to `fm-decide.sh --expected-head <sha>`. A manually
+raised tracked merge card needs the same flag and a signed readiness record.
+The board forwards the recorded SHA; never replace it with a fresh PR read.
+`fm-merge.sh --expected-head <sha>` revalidates the receipt and calls GitHub
+with `--match-head-commit`. A moved or unverifiable head settles as failed,
+with a bilingual `decision_made` outcome. Refresh evidence and raise a new card;
+do not retry the failed answer automatically. Old unsigned evidence remains standing-list history, never
+merge authority: obtain a new signed source-bound review. A legacy external
+evidence directory requiring relocation stays held for firstmate to coordinate
+an approved migration. Never delete a rejection to recover readiness.

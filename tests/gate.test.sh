@@ -13,6 +13,7 @@ export HERDR_ENV=0
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+. "$ROOT/tests/lib/head-binding.sh"
 GATE="$ROOT/bin/fm-gate.sh"
 # this suite's own gate lock: it neither waits on a real gate run on this
 # machine nor holds one up, and a run that encloses it (gate 5 of this very
@@ -132,15 +133,11 @@ printf 'grep -q real "${FM_ROOT:-.}/src/thing.sh"\n' > "$t5/tests/h.test.sh"
 git -C "$t5" add -A; git -C "$t5" commit -qm honest; git -C "$t5" checkout -q main
 
 # --- gates 6 and 7: gh is injectable so the suite makes no network call ---
-stub() {  # stub <dir> <checks-exit> <approver-login> ; gate 6 only: gate 7 reads JSON, see ghc
-  mkdir -p "$1/stub"
-  cat > "$1/stub/gh" <<EOF
-#!/usr/bin/env bash
-if [ "\$2" = "checks" ]; then exit $2; fi
-if [ "\$2" = "view" ]; then printf '%s\n' "$3"; exit 0; fi
-exit 0
-EOF
-  chmod +x "$1/stub/gh"; printf '%s' "$1/stub/gh"
+stub() {
+  local conclusion=success
+  [ "$2" = 0 ] || conclusion=failure
+  head_binding_fixture "$1" b "$conclusion"
+  printf '%s' "$1/stub/head-gh"
 }
 d2="$(fixture)"; git -C "$d2" checkout -q -b b; echo y >> "$d2/src/thing.sh"
 git -C "$d2" commit -qam b; git -C "$d2" checkout -q main
@@ -303,7 +300,8 @@ assert_eq "7" "$rc" "and a later REJECT supersedes it too"
 rm -f "$t5/marks/check" "$t5/marks/other"
 ghc "$t5" >/dev/null
 post "$t5" reviewer-1 "APPROVE:T-X\\n\\n$(reviewed "$t5" honest APPROVE)"
-out="$(FM_GH="$t5/stub/gh" FM_REVIEWER_LOGIN=reviewer-1 \
+head_binding_fixture "$t5" honest
+out="$(FM_GH="$t5/stub/head-gh" FM_REVIEWER_LOGIN=reviewer-1 \
   "$GATE" --task T-X --repo "$t5" --branch honest --pr 9 2>&1)"; rc=$?
 assert_eq "0" "$rc" "a head with green CI and an approval passes every gate"
 assert_fail "test -e '$t5/marks/check'" "and no gate ran the project's check in full"

@@ -6,6 +6,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+. "$ROOT/tests/lib/binding-fixture.sh"
 # shellcheck source=tests/lib/project-storage.sh
 . "$ROOT/tests/lib/project-storage.sh"
 # a suite run inside Herdr must not ring the captain for every fixture card;
@@ -20,6 +21,7 @@ fixture() {
   cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-decide.sh" "$ROOT/bin/fm-diagram.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
   # the doorbell --await registers and the board rings (T-151)
   cp -R "$ROOT/bin/lib" "$d/bin/"
+  binding_service_fixture "$d"
   cp "$ROOT/i18n/ui.en.json" "$ROOT/i18n/ui.zh-TW.json" "$ROOT/i18n/tw2cn.tsv" "$d/i18n/"
   jq -n '{en:{title:"Cache index",explanation:"Read once",before:"Repeated reads",after:"One read",outcome:"Choice recorded",options:{A:{description:"Cache",pros:"Fast",cons:"Memory"},B:{description:"Read",pros:"Simple",cons:"Slow"},C:{description:"Wait",pros:"Measure",cons:"Delay"}}},"zh-TW":{title:"快取索引",explanation:"讀取一次",before:"重複讀取",after:"讀取一次",outcome:"已記錄選擇",options:{A:{description:"快取",pros:"快速",cons:"記憶體"},B:{description:"讀取",pros:"簡單",cons:"較慢"},C:{description:"等待",pros:"測量",cons:"延後"}}}}' > "$d/details.json"
   # A merge request reads its pull request from GitHub (T-119), so every
@@ -49,22 +51,22 @@ G
 }
 # pr_is <fixture> <number> <head branch> <title>: what GitHub holds for it now
 pr_is() { jq -cn --argjson n "$2" --arg b "$3" --arg t "$4" \
-  '{number:$n,state:"OPEN",headRefName:$b,title:$t}' >> "$1/prs.jsonl"; }
+  '{number:$n,state:"OPEN",headRefName:$b,title:$t,headRefOid:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' >> "$1/prs.jsonl"; }
 elapsed() { local s e; s=$(date +%s); "$@" >/dev/null 2>&1; e=$(date +%s); echo $(( e - s )); }
 
 d="$(fixture)"
-bad="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --request D-99 --task T-1 --title 'missing' 2>&1)"
+bad="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-99 --task T-1 --title 'missing' 2>&1)"
 assert_eq "64" "$?" "numeric title-only new requests fail"
 assert_contains "$bad" '--details requires complete authored' 'missing details have actionable feedback'
 assert_fail "test -f '$d/state/pending/D-99.json'" "missing authored input creates no card"
 jq 'del(."zh-TW".options.B.cons)' "$d/details.json" > "$d/invalid.json"
-assert_fail "FM_ROOT='$d' '$d/bin/fm-decide.sh' --request D-98 --task T-1 --details '$d/invalid.json'" "incomplete localized tradeoffs fail"
+assert_fail "FM_ROOT='$d' '$d/bin/fm-decide.sh' --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-98 --task T-1 --details '$d/invalid.json'" "incomplete localized tradeoffs fail"
 assert_fail "test -f '$d/state/pending/D-98.json'" "invalid payload creates no partial card"
 
 # Legacy skill-update path: D-SK-* + matching SK-* + --title, no invented details.
 dleg="$(fixture)"
 leg_title='skill-update: worker - say the round-three rule once (A adopt it, B leave it)'
-leg="$(FM_ROOT="$dleg" "$dleg/bin/fm-decide.sh" --request D-SK-001 --task SK-001 --kind choice --title "$leg_title")"
+leg="$(FM_ROOT="$dleg" "$dleg/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-SK-001 --task SK-001 --kind choice --title "$leg_title")"
 assert_ok "test -f '$leg'" "legacy skill-update request writes a pending file"
 assert_eq "$leg_title" "$(jq -r .title "$leg")" "legacy request persists the given --title"
 assert_eq "SK-001" "$(jq -r .task "$leg")" "legacy request records the matching skill task"
@@ -72,26 +74,26 @@ assert_eq "null" "$(jq -r .details "$leg")" "legacy request invents no details o
 assert_eq "choice" "$(jq -r .kind "$leg")" "legacy request records kind"
 assert_contains "$(jq -r .type < "$dleg/state/events.jsonl")" "decision_requested" \
   "legacy request still emits decision_requested"
-assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --request D-SK-001 --task SK-001 --title 'again'" \
+assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-SK-001 --task SK-001 --title 'again'" \
   "legacy replacement is refused"
-assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --request D-SK-002 --task SK-999 --title 'mismatch'" \
+assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-SK-002 --task SK-999 --title 'mismatch'" \
   "legacy rejects a task that does not match D-SK id"
-assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --request D-SK-002 --task SK-002" \
+assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-SK-002 --task SK-002" \
   "legacy without --title fails"
 assert_fail "test -f '$dleg/state/pending/D-SK-002.json'" "legacy without title creates no card"
-assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --request D-SK-002 --task SK-002 --details '$d/details.json'" \
+assert_fail "FM_ROOT='$dleg' '$dleg/bin/fm-decide.sh' --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-SK-002 --task SK-002 --details '$d/details.json'" \
   "skill-update ids cannot take the strict --details path"
 # a legacy D-SK merge card's pull request must be its task's too (T-119)
 pr_is "$dleg" 94 'sk-001-skill-update-firstmate' 'SK-001: skill-update: firstmate'
-FM_GH="$dleg/gh" FM_ROOT="$dleg" "$dleg/bin/fm-decide.sh" --request D-SK-003 --task SK-003 --kind merge --pr 94 \
+FM_GH="$dleg/gh" FM_ROOT="$dleg" "$dleg/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-SK-003 --task SK-003 --kind merge --pr 94 \
   --title "$leg_title" >/dev/null 2>&1
 assert_eq "65" "$?" "a legacy D-SK merge card is refused for another task's pull request"
 assert_fail "test -e '$dleg/state/pending/D-SK-003.json'" "raising nothing"
-leg="$(FM_GH="$dleg/gh" FM_ROOT="$dleg" "$dleg/bin/fm-decide.sh" --request D-SK-004 --task SK-001 --kind merge --pr 94 \
+leg="$(FM_GH="$dleg/gh" FM_ROOT="$dleg" "$dleg/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-SK-004 --task SK-001 --kind merge --pr 94 \
   --title "$leg_title" 2>/dev/null)"
 assert_eq "64" "$?" "and a D-SK id is still its own task's only"
 pr_is "$dleg" 95 'sk-004-skill-update-worker' 'SK-004: skill-update: worker'
-leg="$(FM_GH="$dleg/gh" FM_ROOT="$dleg" "$dleg/bin/fm-decide.sh" --request D-SK-004 --task SK-004 --kind merge --pr 95 \
+leg="$(FM_GH="$dleg/gh" FM_ROOT="$dleg" "$dleg/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-SK-004 --task SK-004 --kind merge --pr 95 \
   --title "$leg_title" 2>/dev/null)"
 assert_eq "SK-004 95 merge" "$(jq -r '"\(.task) \(.pr) \(.kind)"' "$leg" 2>/dev/null)" \
   "while one for its own pull request goes up"
@@ -102,7 +104,7 @@ assert_eq "SK-004 95 merge" "$(jq -r '"\(.task) \(.pr) \(.kind)"' "$leg" 2>/dev/
 deff="$(fixture)"
 with_effect() { jq --argjson e "$1" '. + {effect:$e}' "$d/details.json" > "$deff/effect-$2.json"; printf '%s' "$deff/effect-$2.json"; }
 req_effect() {   # req_effect <id> <kind> <details> [pr] [task]: the exit status, the output in $deff/out
-  FM_GH="$deff/gh" FM_ROOT="$deff" "$deff/bin/fm-decide.sh" --request "$1" --task "${5:-T-1}" --kind "$2" ${4:+--pr "$4"} \
+  FM_GH="$deff/gh" FM_ROOT="$deff" "$deff/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request "$1" --task "${5:-T-1}" --kind "$2" ${4:+--pr "$4"} \
     --details "$3" > "$deff/out" 2>&1
   printf '%s' "$?"
 }
@@ -126,7 +128,7 @@ assert_eq '{"A":"merge","B":"send_back","C":"hold"}' "$(jq -c .details.effect "$
   "and keeps its effects on the card"
 # an untracked merge card (T-119) merges too: it may name merge and hold
 pr_is "$deff" 8 'revert-96-cache' 'Revert "T-105: cache"'
-FM_GH="$deff/gh" FM_ROOT="$deff" "$deff/bin/fm-decide.sh" --request D-127 --kind merge-untracked --pr 8 \
+FM_GH="$deff/gh" FM_ROOT="$deff" "$deff/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-127 --kind merge-untracked --pr 8 \
   --details "$(with_effect '{"A":"merge","B":"hold"}' untracked)" > "$deff/out" 2>&1
 assert_eq "0" "$?" "an untracked merge card may name merge and hold"
 assert_eq '{"A":"merge","B":"hold"}' "$(jq -c .details.effect "$deff/state/pending/D-127.json" 2>/dev/null)" \
@@ -138,7 +140,7 @@ rm -rf "$deff"
 
 dstream="$(fixture)"
 { printf '%s\n' '{}'; cat "$d/details.json"; } > "$dstream/stream.json"
-assert_fail "FM_ROOT='$dstream' '$dstream/bin/fm-decide.sh' --request D-97 --task T-1 --details '$dstream/stream.json'" \
+assert_fail "FM_ROOT='$dstream' '$dstream/bin/fm-decide.sh' --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-97 --task T-1 --details '$dstream/stream.json'" \
   "details require exactly one JSON document"
 assert_fail "test -f '$dstream/state/pending/D-97.json'" "a JSON stream leaves no partial card"
 # Full prohibited control set, including U+007F, before any pending write.
@@ -147,17 +149,19 @@ for pair in '0 0000' '8 0008' '11 000B' '12 000C' '14 000E' '31 001F' '127 007F'
   set -- $pair
   jq --argjson cp "$1" '(.en.title) |= ("Cache" + ([$cp]|implode) + "index")' \
     "$dctrl/details.json" > "$dctrl/ctrl.json"
-  assert_fail "FM_ROOT='$dctrl' '$dctrl/bin/fm-decide.sh' --request D-9$1 --task T-1 --details '$dctrl/ctrl.json'" \
+  assert_fail "FM_ROOT='$dctrl' '$dctrl/bin/fm-decide.sh' --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-9$1 --task T-1 --details '$dctrl/ctrl.json'" \
     "details reject Unicode control U+$2 before persistence"
   assert_fail "test -f '$dctrl/state/pending/D-9$1.json'" "control U+$2 leaves no pending card"
 done
 pr_is "$d" 9 t-001-cache-index 'T-001: cache the index'
-out="$(FM_GH="$d/gh" FM_ROOT="$d" "$d/bin/fm-decide.sh" --request D-1 --task T-001 --kind merge --details "$d/details.json" --pr 9)"
+out="$(FM_GH="$d/gh" FM_ROOT="$d" "$d/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-1 --task T-001 --kind merge --details "$d/details.json" --pr 9)"
 assert_ok "test -f '$out'" "a request writes a pending file"
 assert_eq "merge" "$(jq -r .kind "$out")" "it records the kind"
 assert_eq "9" "$(jq -r .pr "$out")" "it records the pull request"
+assert_eq aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$(jq -r .expected_head "$out")" "merge card records the supplied verified SHA"
+assert_eq aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$(jq -r .binding.head "$out")" "merge card keeps evidence for that same SHA"
 original="$(cat "$out")"
-assert_fail "FM_ROOT='$d' '$d/bin/fm-decide.sh' --request D-1 --task T-1 --details '$d/invalid.json'" "invalid replacement is rejected"
+assert_fail "FM_ROOT='$d' '$d/bin/fm-decide.sh' --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-1 --task T-1 --details '$d/invalid.json'" "invalid replacement is rejected"
 assert_eq "$original" "$(cat "$out")" "rejection preserves the existing decision"
 assert_contains "$(jq -r .type < "$d/state/events.jsonl")" "decision_requested" "it emits decision_requested"
 
@@ -181,7 +185,7 @@ assert_contains "$(cat "$d/board/public/diagrams/D-1.zh-CN.html")" "读取" \
 # --request answers with one thing, the pending file. The generator prints
 # the three paths it wrote; passing its stdout through would put them on the
 # same stream the caller reads that answer from.
-out4="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --request D-4 --task T-1 --details "$d/details.json" 2>/dev/null)"
+out4="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-4 --task T-1 --details "$d/details.json" 2>/dev/null)"
 assert_eq "$d/state/pending/D-4.json" "$out4" "the request still prints the pending file and nothing else"
 
 # A drawing that cannot be made must not take the decision with it: the
@@ -195,7 +199,7 @@ echo "fm-diagram: the table is on fire" >&2
 exit 73
 X
 chmod +x "$d5/bin/fm-diagram.sh"
-err5="$(FM_ROOT="$d5" "$d5/bin/fm-decide.sh" --request D-5 --task T-5 --details "$d/details.json" 2>&1 >/dev/null)"
+err5="$(FM_ROOT="$d5" "$d5/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-5 --task T-5 --details "$d/details.json" 2>&1 >/dev/null)"
 rc5=$?
 assert_eq "0" "$rc5" "a generator that fails does not fail the decision request"
 assert_ok "test -f '$d5/state/pending/D-5.json'" "the decision is still pending"
@@ -214,7 +218,7 @@ assert_contains "$err5" "73"  "with the number the generator exited with"
 # own rather than a number the fixture chose.
 d8="$(fixture)"
 printf '%s' '{"laneQueued": ' > "$d8/i18n/ui.zh-TW.json"
-err8="$(FM_ROOT="$d8" "$d8/bin/fm-decide.sh" --request D-8 --task T-8 --details "$d/details.json" 2>&1 >/dev/null)"
+err8="$(FM_ROOT="$d8" "$d8/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-8 --task T-8 --details "$d/details.json" 2>&1 >/dev/null)"
 assert_ok "test -f '$d8/state/pending/D-8.json'" "a real generator failure still leaves the decision pending"
 assert_contains "$err8" "D-8" "and is reported against the decision it was drawing"
 assert_contains "$err8" "66"  "with the generator's own number"
@@ -223,14 +227,14 @@ assert_eq "" "$(find "$d8/board/public" -name 'D-8.*' 2>/dev/null)" \
 
 # a tree with no generator in it is the same shape: recorded, and said
 d6="$(fixture)"; rm -f "$d6/bin/fm-diagram.sh"
-err6="$(FM_ROOT="$d6" "$d6/bin/fm-decide.sh" --request D-7 --task T-7 --details "$d/details.json" 2>&1 >/dev/null)"
+err6="$(FM_ROOT="$d6" "$d6/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-7 --task T-7 --details "$d/details.json" 2>&1 >/dev/null)"
 assert_ok "test -f '$d6/state/pending/D-7.json'" "a tree with no generator still records the decision"
 assert_contains "$err6" "D-7" "and still says the diagram was not drawn"
 
 # an answer already on disk returns at once, and survives a restart
 mkdir -p "$d/state/decisions"
 printf '{"id":"D-1","task":"T-1","chosen":"A"}\n' > "$d/state/decisions/D-1.json"
-got="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --await D-1)"
+got="$(FM_ROOT="$d" "$d/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --await D-1)"
 assert_eq "A" "$(jq -r .chosen <<<"$got")" "an answer already on disk is not missed"
 assert_eq "0" "$(jq -s 'map(select(.type=="decision_made"))|length' "$d/state/events.jsonl")" "await never emits duplicate semantic events"
 assert_fail "test -f '$d/state/pending/D-1.json'" "answering clears the pending file"
@@ -248,7 +252,7 @@ now_ms() { python3 -c 'import time; print(int(time.time() * 1000))'; }
 
 # the interesting case: blocked, then answered from outside and rung
 d2="$(fixture)"; mkdir -p "$d2/state/decisions"
-FM_ROOT="$d2" "$d2/bin/fm-decide.sh" --await D-2 --timeout 20 > "$d2/got" 2>/dev/null & a2=$!
+FM_ROOT="$d2" "$d2/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --await D-2 --timeout 20 > "$d2/got" 2>/dev/null & a2=$!
 until_bells "$d2" 1
 assert_eq "1" "$(bells "$d2")" "the wait registers a doorbell of its own"
 s2="$(now_ms)"
@@ -267,7 +271,7 @@ assert_eq "0" "$(bells "$d2")" "and its doorbell goes with it"
 d3="$(fixture)"
 ( sleep 1; mkdir -p "$d3/state/decisions"
   printf '{"id":"D-3","chosen":"C"}\n' > "$d3/state/decisions/D-3.json" ) &
-t3=$(elapsed env FM_ROOT="$d3" bash "$d3/bin/fm-decide.sh" --await D-3 --timeout 4)
+t3=$(elapsed env FM_ROOT="$d3" bash "$d3/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --await D-3 --timeout 4)
 wait
 assert_ok "[ '$t3' -ge 4 ]" "an answer with no wake is not polled for (${t3}s)"
 assert_ok "test -f '$d3/state/decisions/D-3.json'" "although it is on disk"
@@ -276,7 +280,7 @@ assert_ok "test -f '$d3/state/decisions/D-3.json'" "although it is on disk"
   printf '{"id":"D-4","chosen":"B"}\n' > "$d3/state/decisions/D-4.json"
   ring "$d3" D-4 ) &
 s4=$(date +%s)
-got4="$(FM_ROOT="$d3" bash "$d3/bin/fm-decide.sh" --await D-4 --timeout 20)"
+got4="$(FM_ROOT="$d3" bash "$d3/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --await D-4 --timeout 20)"
 t4=$(( $(date +%s) - s4 ))
 wait
 assert_eq "B" "$(jq -r .chosen <<<"$got4")" "past another decision's ring, its own returns the answer"
@@ -288,7 +292,7 @@ assert_ok "[ '$t4' -le 5 ]" "within seconds (${t4}s)"
 # ring - the board's queue line and its ring - and both return
 d6="$(fixture)"; mkdir -p "$d6/state/decisions" "$d6/state/session"
 cp "$ROOT/bin/fm-herdr.py" "$d6/bin/"; project_storage_fixture "$d6/bin/"
-FM_ROOT="$d6" bash "$d6/bin/fm-decide.sh" --await D-6 --timeout 20 > "$d6/got" 2>/dev/null & w6=$!
+FM_ROOT="$d6" bash "$d6/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --await D-6 --timeout 20 > "$d6/got" 2>/dev/null & w6=$!
 python3 "$d6/bin/fm-herdr.py" session wait "$d6" all 20 > "$d6/woken" 2>/dev/null & s6w=$!
 until_bells "$d6" 2
 s6="$(now_ms)"
@@ -308,7 +312,7 @@ rm -rf "$d6"
 # a waiter killed outright leaves its doorbell; the next ring removes it and
 # does not block on it
 d7="$(fixture)"
-FM_ROOT="$d7" bash "$d7/bin/fm-decide.sh" --await D-7 --timeout 30 > /dev/null 2>&1 & w7=$!
+FM_ROOT="$d7" bash "$d7/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --await D-7 --timeout 30 > /dev/null 2>&1 & w7=$!
 until_bells "$d7" 1
 assert_eq "1" "$(bells "$d7")" "a waiter holds its doorbell"
 # a doorbell is named for the process that holds it; SIGKILL leaves that
@@ -326,7 +330,7 @@ rm -rf "$d7"
 
 # it waits for nobody's opinion, but it does give up
 d4="$(fixture)"
-assert_fail "FM_ROOT='$d4' '$d4/bin/fm-decide.sh' --await D-9 --timeout 2" "it times out rather than hanging forever"
+assert_fail "FM_ROOT='$d4' '$d4/bin/fm-decide.sh' --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --await D-9 --timeout 2" "it times out rather than hanging forever"
 
 # ------------------------------------ T-047: every new id names its owner
 #
@@ -353,7 +357,7 @@ Y
 project_fixture_config "$o"
   printf '%s' "$o"
 }
-alloc() { FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --allocate "$@" 2>/dev/null; }
+alloc() { FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --allocate "$@" 2>/dev/null; }
 o="$(owned)"
 assert_eq "D-firstmate-workflow-T047-1" "$(alloc --task T-047)" \
   "a first card for a task of the default project is n=1"
@@ -365,10 +369,10 @@ assert_eq "D-example-app-T047-2" "$(FM_PROJECT=example-app alloc --task T-047)" 
 assert_eq "D-firstmate-workflow-T047-3" "$(alloc --task T-047 --project firstmate-workflow)" \
   "naming the default project explicitly counts in the same place as naming none"
 assert_eq "D-firstmate-workflow-T048-1" "$(alloc --task T-048)" "two tasks never share an id"
-FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --allocate --task T-047 --project nosuch-app >/dev/null 2>&1
+FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --allocate --task T-047 --project nosuch-app >/dev/null 2>&1
 assert_eq "65" "$?" "a project the registry does not hold exits 65"
 for t in T-4.7 X-047 T- 'T-0/1'; do
-  FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --allocate --task "$t" >/dev/null 2>&1
+  FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --allocate --task "$t" >/dev/null 2>&1
   assert_eq "64" "$?" "a task that cannot be written into an id is refused: $t"
 done
 # a record already on disk is never handed out again, whoever wrote it
@@ -390,7 +394,7 @@ assert_eq "D-firstmate-workflow-T060-10" "$(cat "$o"/par.* | sort -t- -k5 -n | t
 # requesting an allocated id publishes it with its project
 id="$(alloc --task T-047 --project example-app)"
 pr_is "$o" 12 t-047-app 'T-047: the app side'
-out="$(FM_GH="$o/gh" FM_ROOT="$o" "$o/bin/fm-decide.sh" --request "$id" --task T-047 --project example-app \
+out="$(FM_GH="$o/gh" FM_ROOT="$o" "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request "$id" --task T-047 --project example-app \
   --kind merge --pr 12 --details "$d/details.json" 2>/dev/null)"
 assert_eq "$(project_fixture_state "$o" example-app)/pending/$id.json" "$out" "an allocated id is requested like any other"
 assert_contains "$(cat "$o/ghcalls" 2>/dev/null)" "pr view 12 --repo example-org/example-app" \
@@ -399,14 +403,14 @@ assert_eq "example-app" "$(jq -r .project "$out")" "and the card records its pro
 assert_eq "example-app" "$(jq -r 'select(.type=="decision_requested")|.project' "$(project_fixture_state "$o" example-app)/events.jsonl" | tail -1)" \
   "and so does its decision_requested event"
 assert_ok "test -s '$(project_fixture_state "$o" example-app)/diagrams/$id.en.html'" "and its diagram is drawn under the new id"
-FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request D-example-app-T047-9 --task T-047 --project example-app \
+FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-example-app-T047-9 --task T-047 --project example-app \
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "65" "$?" "an id nobody allocated is refused"
 assert_fail "test -f '$o/state/pending/D-example-app-T047-9.json'" "and publishes nothing"
 id2="$(alloc --task T-047)"
-FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$id2" --task T-048 --details "$d/details.json" >/dev/null 2>&1
+FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request "$id2" --task T-048 --details "$d/details.json" >/dev/null 2>&1
 assert_eq "64" "$?" "an id whose task is not the card's task is refused"
-FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$id2" --task T-047 --project example-app \
+FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request "$id2" --task T-047 --project example-app \
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "64" "$?" "an id whose project is not the card's project is refused"
 assert_fail "test -f '$o/state/pending/$id2.json'" "and neither publishes anything"
@@ -414,9 +418,9 @@ assert_fail "test -f '$o/state/pending/$id2.json'" "and neither publishes anythi
 # details or without, and writes nothing for it
 for badid in D-Bad_Name-T047-1 D-firstmate-workflow-1 D-firstmate-workflow-T047-0 \
   D-firstmate-workflow-T047-01 'D-../x-T047-1' 'D-a/b-T047-1' "$(printf 'D-a-T047-1\nx')"; do
-  FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$badid" --task T-047 --details "$d/details.json" >/dev/null 2>&1
+  FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request "$badid" --task T-047 --details "$d/details.json" >/dev/null 2>&1
   assert_eq "64" "$?" "request refuses a malformed id: $(printf '%s' "$badid" | tr '\n' '~')"
-  FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$badid" --task T-047 --title t >/dev/null 2>&1
+  FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request "$badid" --task T-047 --title t >/dev/null 2>&1
   assert_eq "64" "$?" "and refuses it without details too: $(printf '%s' "$badid" | tr '\n' '~')"
 done
 assert_eq "" "$(find "$o/state/pending" "$o/state/decisions" \( -name '*Bad_Name*' -o -name '*T047-0*' \) | tr '\n' ' ')" \
@@ -435,15 +439,15 @@ assert_eq "D-firstmate-workflow-T052-1" "$(alloc --task T-052)" \
 
 # await reads both forms and refuses anything else before touching a path
 printf '{"id":"%s","task":"T-047","chosen":"B"}\n' "$id" > "$(project_fixture_state "$o" example-app)/decisions/$id.json"
-assert_eq "B" "$(FM_ROOT="$o" "$o/bin/fm-decide.sh" --await "$id" --timeout 2 | jq -r .chosen)" \
+assert_eq "B" "$(FM_ROOT="$o" "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --await "$id" --timeout 2 | jq -r .chosen)" \
   "await returns a new-form answer"
 printf '{"id":"D-056","task":"T-043","chosen":"A"}\n' > "$o/state/decisions/D-056.json"
-assert_eq "A" "$(FM_ROOT="$o" "$o/bin/fm-decide.sh" --await D-056 --timeout 2 | jq -r .chosen)" \
+assert_eq "A" "$(FM_ROOT="$o" "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --await D-056 --timeout 2 | jq -r .chosen)" \
   "and still returns an old numeric one"
 for badid in D-Bad_Name-T047-1 D-abcdefghijklmnopqrstuvwxy-T047-1 D-firstmate-workflow-1 \
   D-firstmate-workflow-T047-0 D-firstmate-workflow-T047-01 D-firstmate-workflow-T047 \
   'D-../x-T047-1' 'D-a/b-T047-1' 'D-firstmate-workflow-T0.47-1' "$(printf 'D-a-T047-1\nx')"; do
-  FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --await "$badid" --timeout 1 >/dev/null 2>&1
+  FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --await "$badid" --timeout 1 >/dev/null 2>&1
   assert_eq "64" "$?" "await refuses a malformed id: $(printf '%s' "$badid" | tr '\n' '~')"
 done
 # an old record for another task at an old id is never read, moved or touched
@@ -455,14 +459,14 @@ assert_eq "$before_sum" "$(cksum < "$o/state/decisions/D-056.json")" "and D-056 
 # task's allocations. They time out rather than hang, name the lock and say
 # what to do; nothing clears it on a guess. Other tasks are not blocked.
 mkdir -p "$o/state/decision-ids/firstmate-workflow/T070.lock"
-lk="$(FM_DECIDE_LOCK_ATTEMPTS=2 FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --allocate --task T-070 2>&1)"
+lk="$(FM_DECIDE_LOCK_ATTEMPTS=2 FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --allocate --task T-070 2>&1)"
 assert_eq "1" "$?" "an allocation behind a stale lock times out"
 assert_contains "$lk" "decision-ids/firstmate-workflow/T070.lock" "naming the lock"
 assert_contains "$lk" "remove it (rmdir) and allocate again" "and saying what a human does about it"
 assert_fail "test -e '$o/state/decision-ids/firstmate-workflow/T070/1.json'" "and reserving nothing"
 assert_eq "D-firstmate-workflow-T071-1" "$(alloc --task T-071)" "another task's allocation is not blocked by it"
 for bound in 0 -1 nope; do
-  FM_DECIDE_LOCK_ATTEMPTS="$bound" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --allocate --task T-070 >/dev/null 2>&1
+  FM_DECIDE_LOCK_ATTEMPTS="$bound" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --allocate --task T-070 >/dev/null 2>&1
   assert_eq "64" "$?" "an invalid allocation-lock bound is refused ($bound)"
 done
 rmdir "$o/state/decision-ids/firstmate-workflow/T070.lock"
@@ -474,15 +478,15 @@ rm -rf "$o"
 # records a project, because there is no registry to validate one against.
 u="$(fixture)"; cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$u/bin/"; project_storage_fixture "$u/bin/"
 printf 'vendor: mock\n' > "$u/config.yaml"
-uid="$(FM_ROOT="$u" bash "$u/bin/fm-decide.sh" --allocate --task T-047 --kind merge 2>/dev/null)"
+uid="$(FM_ROOT="$u" bash "$u/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --allocate --task T-047 --kind merge 2>/dev/null)"
 assert_eq "D-firstmate-workflow-T047-1" "$uid" "an unregistered tree allocates under the self project"
 assert_eq "D-firstmate-workflow-T047-2" \
-  "$(FM_ROOT="$u" bash "$u/bin/fm-decide.sh" --allocate --task T-047 --project firstmate-workflow 2>/dev/null)" \
+  "$(FM_ROOT="$u" bash "$u/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --allocate --task T-047 --project firstmate-workflow 2>/dev/null)" \
   "naming the self project there is the same"
-FM_ROOT="$u" bash "$u/bin/fm-decide.sh" --allocate --task T-047 --project example-app >/dev/null 2>&1
+FM_ROOT="$u" bash "$u/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --allocate --task T-047 --project example-app >/dev/null 2>&1
 assert_eq "65" "$?" "naming any other project there is refused"
 pr_is "$u" 3 t-047-self 'T-047: the engine side'
-upend="$(FM_GH="$u/gh" FM_ROOT="$u" bash "$u/bin/fm-decide.sh" --request "$uid" --task T-047 --kind merge --pr 3 \
+upend="$(FM_GH="$u/gh" FM_ROOT="$u" bash "$u/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request "$uid" --task T-047 --kind merge --pr 3 \
   --details "$d/details.json" 2>/dev/null)"
 assert_eq "$u/state/pending/$uid.json" "$upend" "and the id is requested there"
 assert_eq "false" "$(jq -c 'has("project")' "$upend")" "with no project on the card"
@@ -523,7 +527,7 @@ nreq() {
 }
 pr_is "$o" 96 "$R96_BRANCH" "$R96_TITLE"
 id117="$(alloc --task T-117 --kind merge)"
-err="$(FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$id117" --task T-117 --kind merge --pr 96 \
+err="$(FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request "$id117" --task T-117 --kind merge --pr 96 \
   --details "$d/details.json" 2>&1 >/dev/null)"
 assert_ne "0" "$?" "#96 is refused as T-117's merge card at request time"
 assert_contains "$err" "T-105" "naming the task #96 belongs to"
@@ -534,7 +538,7 @@ assert_contains "$(cat "$o/ghcalls")" "pr view 96 --repo owner/engine" "#96 was 
 # while #96 looked like T-117's, the same card goes up (fm-merge refuses it
 # at the click once the branch has swapped: tests/merge.test.sh)
 pr_is "$o" 96 t-117-t-105-again-every-crew-round 'T-117: T-105 again'
-FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$id117" --task T-117 --kind merge --pr 96 \
+FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request "$id117" --task T-117 --kind merge --pr 96 \
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "0" "$?" "a pull request whose branch is the card's task's gets its card"
 assert_eq "T-117 96 merge" "$(jq -r '"\(.task) \(.pr) \(.kind)"' "$o/state/pending/$id117.json" 2>/dev/null)" \
@@ -542,11 +546,11 @@ assert_eq "T-117 96 merge" "$(jq -r '"\(.task) \(.pr) \(.kind)"' "$o/state/pendi
 # #96 as it really was is T-105's: it gets T-105's card, and no untracked one
 pr_is "$o" 96 "$R96_BRANCH" "$R96_TITLE"
 id105="$(alloc --task T-105 --kind merge)"
-FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$id105" --task T-105 --kind merge --pr 96 \
+FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request "$id105" --task T-105 --kind merge --pr 96 \
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "0" "$?" "#96 is raised as T-105's merge card"
 before="$(nreq "$o")"
-err="$(FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request D-1096 --kind merge-untracked --pr 96 \
+err="$(FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-1096 --kind merge-untracked --pr 96 \
   --details "$d/details.json" 2>&1 >/dev/null)"
 assert_eq "65" "$?" "#96, T-105's by its branch, is refused an untracked card at request time"
 assert_contains "$err" "--kind merge --task T-105" "pointing at T-105's card"
@@ -554,16 +558,16 @@ assert_fail "test -e '$o/state/pending/D-1096.json'" "before any card exists"
 assert_eq "$before" "$(nreq "$o")" "and with no decision_requested event"
 # the title alone makes it a task's
 pr_is "$o" 97 hotfix-board "$R96_TITLE"
-FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request D-1099 --kind merge-untracked --pr 97 \
+FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-1099 --kind merge-untracked --pr 97 \
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "65" "$?" "an untracked card is refused when only the title names a task"
-FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request D-1099 --kind merge-untracked --pr 404 \
+FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-1099 --kind merge-untracked --pr 404 \
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "1" "$?" "and an untracked card for a pull request gh cannot read is not raised on a guess"
 assert_fail "test -e '$o/state/pending/D-1099.json'" "raising nothing"
 # a revert that belongs to no task, on an untracked card: a hand-raised id
 pr_is "$o" 98 "$REV_BRANCH" "$REV_TITLE"
-FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request D-1098 --kind merge-untracked --pr 98 \
+FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-1098 --kind merge-untracked --pr 98 \
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "0" "$?" "a pull request of no task is raised as an untracked merge card"
 assert_eq "merge-untracked 98 false" \
@@ -571,27 +575,27 @@ assert_eq "merge-untracked 98 false" \
   "which names its pull request and no task"
 assert_eq "false" "$(jq -c 'select(.type=="decision_requested" and .pr==98)|has("task")' "$o/state/events.jsonl" | tail -1)" \
   "and its decision_requested event names no task"
-FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request D-1097 --task T-117 --kind merge-untracked --pr 96 \
+FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-1097 --task T-117 --kind merge-untracked --pr 96 \
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "64" "$?" "an untracked card that names a task is refused"
 assert_fail "test -e '$o/state/pending/D-1097.json'" "and not raised"
-FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request D-1095 --kind merge-untracked \
+FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-1095 --kind merge-untracked \
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "64" "$?" "an untracked merge card needs its pull request"
-FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$id117" --kind merge-untracked --pr 98 \
+FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request "$id117" --kind merge-untracked --pr 98 \
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "64" "$?" "and takes no task's owned id"
-FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --allocate --task T-117 --kind merge-untracked >/dev/null 2>&1
+FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --allocate --task T-117 --kind merge-untracked >/dev/null 2>&1
 assert_eq "64" "$?" "and no task allocates an id for one"
 # a pull request of no task gets no task's card
 id105="$(alloc --task T-105 --kind merge)"
-err="$(FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$id105" --task T-105 --kind merge --pr 98 \
+err="$(FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request "$id105" --task T-105 --kind merge --pr 98 \
   --details "$d/details.json" 2>&1 >/dev/null)"
 assert_ne "0" "$?" "a pull request whose branch and title name no task is refused a task's card"
 assert_contains "$err" "merge-untracked" "and pointed at the untracked card"
 assert_fail "test -e '$o/state/pending/$id105.json'" "raising nothing"
 # a pull request gh cannot find is not carded on a guess
-err="$(FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$id105" --task T-105 --kind merge --pr 404 \
+err="$(FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request "$id105" --task T-105 --kind merge --pr 404 \
   --details "$d/details.json" 2>&1 >/dev/null)"
 assert_ne "0" "$?" "a pull request gh cannot read gets no card"
 assert_contains "$err" "cannot read #404" "and says so"
@@ -599,7 +603,7 @@ assert_fail "test -e '$o/state/pending/$id105.json'" "raising nothing"
 # the branch names nothing, the title does
 pr_is "$o" 95 board-fields 'T-116: the board shows each crew member'
 id116="$(alloc --task T-116 --kind merge)"
-FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$id116" --task T-116 --kind merge --pr 95 \
+FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request "$id116" --task T-116 --kind merge --pr 95 \
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "0" "$?" "a branch naming no task defers to the title's T-xxx: prefix"
 # a skill update gets a merge card like any task. SK-001's #94 as GitHub
@@ -612,14 +616,14 @@ assert_eq "0" "$?" "a branch naming no task defers to the title's T-xxx: prefix"
 pr_is "$o" 94 sk-001-skill-update-firstmate 'SK-001: skill-update: firstmate'
 sid="$(alloc --task SK-001 --kind merge)"
 assert_eq "D-firstmate-workflow-SK001-1" "$sid" "an SK task allocates an owned merge card id"
-FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$sid" --task SK-001 --kind merge --pr 94 \
+FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request "$sid" --task SK-001 --kind merge --pr 94 \
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "0" "$?" "and raises it for its own pull request"
 assert_eq "SK-001 94 merge firstmate-workflow" \
   "$(jq -r '"\(.task) \(.pr) \(.kind) \(.project)"' "$o/state/pending/$sid.json" 2>/dev/null)" \
   "a card naming SK-001, #94 and its project"
 assert_ok "test -s '$o/board/public/diagrams/$sid.en.html'" "and drawn like a T task's card, under its own id"
-FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request "$sid" --task SK-002 --kind merge --pr 94 \
+FM_GH="$o/gh" FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request "$sid" --task SK-002 --kind merge --pr 94 \
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "64" "$?" "an SK id is still its own task's only"
 rm -rf "$o"
@@ -680,7 +684,7 @@ ask() {
   local k=0 f id t
   while [ $((k + 1)) -le $# ] && case "${@:k+1:1}" in [A-Z]*=*) true ;; *) false ;; esac; do k=$((k + 1)); done
   f="${*:k+1:1}"; id="${*:k+2:1}"; t="${*:k+3:1}"
-  ask_err="$(inherdr "${@:1:k}" FM_ROOT="$f" "$f/bin/fm-decide.sh" --request "$id" --task "$t" "${@:k+4}" \
+  ask_err="$(inherdr "${@:1:k}" FM_ROOT="$f" "$f/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request "$id" --task "$t" "${@:k+4}" \
     2>&1 >"$hstub/out")"
   ask_rc=$?; ask_out="$(cat "$hstub/out")"
 }
@@ -752,7 +756,7 @@ assert_eq "$(argv 'example-app · T-41 · choice' '快取索引' request)" "$(ta
 assert_eq "3" "$(calls)" "one notification per card"
 # an untracked merge card names no task, so its title names the pull request
 pr_is "$o" 98 "$REV_BRANCH" "$REV_TITLE"
-inherdr FM_GH="$o/gh" FM_ROOT="$o" "$o/bin/fm-decide.sh" --request D-1098 --kind merge-untracked --pr 98 \
+inherdr FM_GH="$o/gh" FM_ROOT="$o" "$o/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-1098 --kind merge-untracked --pr 98 \
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "0" "$?" "an untracked merge card is raised inside Herdr"
 assert_eq "$(argv 'example-app · #98 · merge-untracked' '快取索引' request)" "$(tail -1 "$hlog")" \
@@ -789,7 +793,7 @@ assert_eq "65" "$ask_rc" "a request for an answered id is refused"
 assert_fail "test -e '$n/state/pending/D-32.json'" "and puts no card up"
 assert_eq '{"id":"D-32","chosen":"A"}' "$(cat "$n/state/decisions/D-32.json")" "leaving the answer as it was"
 assert_eq "1" "$(calls)" "and notifies nothing"
-aw="$(inherdr FM_ROOT="$n" "$n/bin/fm-decide.sh" --await D-32 --timeout 1 2>/dev/null)"
+aw="$(inherdr FM_ROOT="$n" "$n/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --await D-32 --timeout 1 2>/dev/null)"
 assert_eq "0" "$?" "awaiting an answered id returns"
 assert_eq "A" "$(jq -r .chosen <<<"$aw")" "with the answer"
 assert_eq "1" "$(calls)" "and notifies nothing either"
@@ -857,7 +861,7 @@ assert_lacks "$ask_err" "exited 142" "not reported as an exit code"
 # inside Herdr with no herdr on PATH: the same
 nohd="$(printf '%s\n' "$PATH" | tr ':' '\n' | while IFS= read -r p; do
   [ -n "$p" ] && [ ! -x "$p/herdr" ] && printf '%s:' "$p"; done)"
-ask_err="$(env HERDR_ENV=1 PATH="${nohd%:}" FM_ROOT="$n" bash "$n/bin/fm-decide.sh" --request D-36 --task T-36 \
+ask_err="$(env HERDR_ENV=1 PATH="${nohd%:}" FM_ROOT="$n" bash "$n/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --request D-36 --task T-36 \
   --details "$d/details.json" 2>&1 >"$hstub/out")"; ask_rc=$?; ask_out="$(cat "$hstub/out")"
 held "$n" D-36 T-36 "HERDR_ENV with no herdr command"
 assert_contains "$ask_err" "no herdr command" "and says why no notification was raised"
@@ -869,10 +873,10 @@ sed -e '/^notify() {/,/^}/d' -e '/^[[:space:]]*notify "/d' "$ROOT/bin/fm-decide.
 chmod +x "$before"
 assert_eq "0" "$(grep -cE '(^|[^[:alnum:]_])(notify|herdr)([^[:alnum:]_]|$)' <<<"$(grep -vE '^[[:space:]]*#' "$before")")" \
   "the before-script is fm-decide.sh with notify cut out"
-assert_fail "cmp -s '$before' '$ROOT/bin/fm-decide.sh'" "and so differs from it"
-na="$(nfix)"; nb="$(nfix)"; cp "$before" "$na/bin/fm-decide.sh"; : > "$hlog"
+assert_fail "cmp -s '$before' '$ROOT/bin/fm-decide.sh' --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "and so differs from it"
+na="$(nfix)"; nb="$(nfix)"; cp "$before" "$na/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; : > "$hlog"
 for f in "$na" "$nb"; do
-  env -u HERDR_ENV HERDR_LOG="$hlog" PATH="$hstub:$PATH" FM_ROOT="$f" "$f/bin/fm-decide.sh" \
+  env -u HERDR_ENV HERDR_LOG="$hlog" PATH="$hstub:$PATH" FM_ROOT="$f" "$f/bin/fm-decide.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
     --request D-37 --task T-37 --details "$d/details.json" >"$f.out" 2>"$f.err"
   echo "$?" > "$f.rc"
 done
@@ -1016,7 +1020,7 @@ rm -rf "$o" "$n" "$na" "$nb" "$na".* "$nb".* "$hstub"
 
 # no dependency on a watcher that has to be installed
 # the words may appear in a comment explaining the absence; a call may not
-assert_fail "grep -qE '\\b(fswatch|watchexec|entr)\\b' <<<\"\$(grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-decide.sh')\"" \
+assert_fail "grep -qE '\\b(fswatch|watchexec|entr)\\b' <<<\"\$(grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-decide.sh' --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)\"" \
   "it calls neither fswatch, watchexec nor entr"
 rm -rf "$d" "$d2" "$d3" "$d4" "$d5" "$d6" "$d8" "$dstream" "$dctrl" "$dleg"
 finish

@@ -885,6 +885,10 @@ if ! python3 "$(dirname "${BASH_SOURCE[0]}")/lib/fm_review_context.py" \
   exit 65
 fi
 
+# Capture trusted source hashes before any reviewer can run.
+fm_evidence pin --head "$R_HEAD" --base "$R_BASE" --patch "$R_PATCH" \
+  --run "$FM_RUN_DIR" --code "${FM_CODE_ROOT:-$REPO}" || exit 65
+
 # the reviewer runs on its own engine when "$FM_CONFIG" names one, and falls
 # back exactly the way the worker does - one chain, one runner
 mkdir -p "$work/out"
@@ -1188,6 +1192,7 @@ decided="$(fm_evidence verdict --round "$ROUND" --head "$R_HEAD" --base "$R_BASE
        --tw '無法保留本機審查裁決'
   exit 3
 }
+evidence_ref="$(jq -r .signature "$FM_RUN_DIR/evidence-record.json")"
 provenance_level=legacy
 [ "${FM_CHAIN_VENDOR:-}" != codex ] || provenance_level=authenticated
 CREW_DATA="$(jq -c --arg level "$provenance_level" '.provenance_level=$level' <<<"$CREW_DATA")"
@@ -1200,10 +1205,12 @@ if [ "$FM_EXTERNAL" = 1 ]; then
 fi
 projection="$(fm_projection)" || exit 65
 if [ -n "$PR" ] && [ "$projection" = comments ]; then
-  comment_verdict="$verdict"
+  comment_verdict="EVIDENCE:$TASK $evidence_ref
+
+$verdict"
   if [ "$project_review" != fm ]; then
     # A local pre-check must not masquerade as gate 7's repository review.
-    comment_verdict="Firstmate local pre-check finished for $TASK at $R_HEAD ($decided). Required external project review remains outstanding; details retained privately."
+    comment_verdict="Firstmate local pre-check finished for $TASK at $R_HEAD ($decided). Required external project review remains outstanding; details retained privately. EVIDENCE:$TASK $evidence_ref"
   fi
   if ! fm_comment_projection "$PR" --body "$comment_verdict" >/dev/null 2>&1; then
     echo 'fm-review: optional comment projection failed; local verdict retained' >&2

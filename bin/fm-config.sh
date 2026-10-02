@@ -851,7 +851,9 @@ def resolve_policy(lines, projects, default, config, role, explicit):
         # makes; never the shared one, and never /tmp
         write=['{root}', '{tmp}'],
         read=[expand(p, engine) for p in got['read']],
-        never_read=[expand(p, engine) for p in got['never_read']],
+        never_read=[expand(p, engine) for p in got['never_read']] + (
+            [field(projects, name, 'state', config)]
+            if name and projects and registered(projects, name).get('repo') != '.' else []),
         network=got.get('network', '').split(),
         known_refused=KNOWN_REFUSED,
         refuse=REFUSE, sockets='none', env_scrub=SCRUB, repo_config=REPO_CONFIG,
@@ -1702,4 +1704,14 @@ fm_publication_policy() {  # worktree; fast-forward task pushes only
 
 fm_private_note() {  # kind task file; retain before any optional projection
   python3 "$_fm_code_dir/lib/fm_project_note.py" "$FM_STATE_DIR" "$1" "$2" "$3"
+}
+
+# Authoritative source/check/candidate bindings; called only outside rounds.
+fm_binding() {
+  local github="${GH_REPO:-}"
+  if [ -n "${FM_PROJECT:-}" ] && [ -n "$(fm_projects "$FM_CONFIG")" ]; then
+    github="$(fm_project_get "$FM_PROJECT" github "$FM_CONFIG")" || return 65
+  fi
+  FM_BINDING_REPOSITORY="$github" FM_EVIDENCE_PROJECT="$(fm_evidence_project)" \
+    python3 "$_fm_code_dir/lib/fm_binding.py" "$@"
 }

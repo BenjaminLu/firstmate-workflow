@@ -15,6 +15,7 @@ FM_GATE_LOCK="$(mktemp -d)/gate.lock"; export FM_GATE_LOCK
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+. "$ROOT/tests/lib/binding-fixture.sh"
 # shellcheck source=tests/lib/local-verdict.sh
 . "$ROOT/tests/lib/local-verdict.sh"
 # shellcheck source=tests/lib/project-storage.sh
@@ -36,6 +37,7 @@ caller_fixture() {   # caller_fixture <task branch> <event lines> [registry] -> 
   cp "$ROOT/bin/fm-run.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-decide.sh" \
      "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-herdr.py" "$c/bin/"
   project_storage_fixture "$c/bin/"
+  binding_service_fixture "$c"
   # each stub notes that it ran, so a test can say what a turn touched
   for script in fm-sync-prs fm-dispatch fm-gate; do
     printf '#!/usr/bin/env bash\necho "%s $*" >> "%s/calls"\nexit 0\n' "$script" "$c" > "$c/bin/$script.sh"
@@ -197,6 +199,7 @@ cp "$ROOT"/bin/fm-*.sh bin/
 cp "$ROOT/bin/fm-herdr.py" bin/; project_storage_fixture bin/
 cp -r "$ROOT/bin/adapters" bin/
 cp -r "$ROOT/bin/lib" bin/
+binding_service_fixture "$r"
 cp "$ROOT/skills/worker/SKILL.md" skills/worker/
 cp "$ROOT/skills/reviewer/SKILL.md" skills/reviewer/
 # exactly the config.yaml this loop had before projects existed: no registry.

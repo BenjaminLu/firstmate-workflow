@@ -55,6 +55,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # see fm_need in bin/fm-config.sh for why: `shift 2` with one argument
 # left does not shift, and the loop spins. This file deliberately depends
 # on nothing, so it carries the two lines rather than the explanation.
+EXPECTED_HEAD=''
 need() { [ "$#" -ge 2 ] || { echo "fm-decide: $1 needs a value" >&2; exit 64; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -66,6 +67,7 @@ while [ $# -gt 0 ]; do
     --kind)  need "$@"; KIND="${2-}";  shift 2 ;;
     --title) need "$@"; TITLE="${2-}"; shift 2 ;;
     --details) need "$@"; DETAILS="${2-}"; shift 2 ;;
+    --expected-head) need "$@"; EXPECTED_HEAD="${2-}"; shift 2 ;;
     --pr)    need "$@"; PR="${2-}";    shift 2 ;;
     --repo)  need "$@"; REPO="${2-}";  shift 2 ;;
     --timeout) need "$@"; TIMEOUT="${2-}"; shift 2 ;;
@@ -385,9 +387,17 @@ if [ "$MODE" = request ]; then
     }
     # the last check before anything is written: GitHub's word on the pair
     [ "$KIND" = choice ] || pr_agrees
-    payload="$(jq -cn --arg id "$ID" --arg task "$TASK" --arg kind "$KIND" --arg pr "$PR" \
+    binding='null'
+    if [ "$KIND" = merge ]; then
+      binding="$(fm_binding candidate --task "$TASK" --pr "$PR" --head "$EXPECTED_HEAD")" || exit 65
+    elif [ "$KIND" = merge-untracked ]; then
+      [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] || {
+        echo 'fm-decide: verified candidate SHA required' >&2; exit 65; }
+    fi
+    payload="$(jq -cn --arg expected_head "$EXPECTED_HEAD" --argjson binding "$binding" --arg id "$ID" --arg task "$TASK" --arg kind "$KIND" --arg pr "$PR" \
       --arg project "$RECORD" --slurpfile details "$DETAILS" \
-      '{id:$id} + (if $task=="" then {} else {task:$task} end)
+      '{id:$id,expected_head:$expected_head,binding:$binding}
+       + (if $kind=="merge" then {gates:[true,true,null,true,true,true,true]} else {} end) + (if $task=="" then {} else {task:$task} end)
        + {kind:$kind,details:$details[0],title:$details[0].en.title}
        + (if $project=="" then {} else {project:$project} end)
        + (if $pr=="" then {} else {pr:($pr|tonumber)} end)')" || exit 64
@@ -420,9 +430,12 @@ if [ "$MODE" = request ]; then
     if [ "$KIND" = merge ]; then
       [[ "$PR" =~ ^[1-9][0-9]*$ ]] || { echo 'fm-decide: merge requires a positive PR' >&2; exit 64; }
       pr_agrees
+      binding="$(fm_binding candidate --task "$TASK" --pr "$PR" --head "$EXPECTED_HEAD")" || exit 65
+    else
+      binding=null
     fi
-    payload="$(jq -cn --arg id "$ID" --arg task "$TASK" --arg kind "$KIND" --arg title "$TITLE" --arg pr "$PR" \
-      '{id:$id,task:$task,kind:$kind,title:$title}
+    payload="$(jq -cn --arg expected_head "$EXPECTED_HEAD" --argjson binding "$binding" --arg id "$ID" --arg task "$TASK" --arg kind "$KIND" --arg title "$TITLE" --arg pr "$PR" \
+      '{id:$id,task:$task,kind:$kind,title:$title,expected_head:$expected_head,binding:$binding}
        + (if $pr=="" then {} else {pr:($pr|tonumber)} end)')" || exit 64
     (set -o noclobber; printf '%s\n' "$payload" > "$PEND/$ID.json") || exit 65
     # No diagram for legacy skill ids: the generator only accepts numeric D-*.

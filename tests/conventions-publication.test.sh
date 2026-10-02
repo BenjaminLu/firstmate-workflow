@@ -5,6 +5,7 @@ for k in $(env | sed -nE 's/^(FM_[^=]*|HERDR_[^=]*|GH_REPO)=.*$/\1/p'); do unset
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+. "$ROOT/tests/lib/binding-fixture.sh"
 t="$(safe_tmpdir)"
 export FM_HOME="$t/private" FM_GITHUB_URL="$t/remotes"
 eng="$t/engine"; mkdir -p "$eng" "$t/remotes/org/app.git"
@@ -85,18 +86,22 @@ assert_eq 143 "$?" "confirmed external worker EXIT retains interruption status"
 assert_eq 'exit save' "$(git -C "$t/remotes/org/app.git" show t-001-work:exit-save 2>/dev/null)" "external worker EXIT publishes dirty work under confirmed conventions"
 assert_eq '' "$(git -C "$home/worktrees/T-001" status --porcelain)" "external worker EXIT checkpoint leaves a clean tree"
 assert_contains "$(cat "$EXIT_EVENTS" 2>/dev/null)" 'commit_pushed' "external worker EXIT verifies and records its checkpoint"
+mkdir -p "$eng/bin"
+cp "$ROOT/bin/fm-merge.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-herdr.py" "$eng/bin/"
+cp -R "$ROOT/bin/lib" "$eng/bin/"
+binding_service_fixture "$eng"
 cat > "$t/gh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_TEST_GH_LOG"
 case "$1 $2" in
- 'pr view') printf '%s\n' '{"state":"OPEN","headRefName":"t-001-work","title":"T-001: work"}' ;;
+ 'pr view') printf '%s\n' '{"state":"OPEN","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headRefName":"t-001-work","title":"T-001: work"}' ;;
  'pr merge') exit 0 ;;
  *) exit 1 ;;
 esac
 EOF
 chmod +x "$t/gh"
 export FM_GH="$t/gh" FM_TEST_GH_LOG="$t/gh.log"
-bash "$ROOT/bin/fm-merge.sh" --project app --repo "$eng" --pr 1 --task T-001 > "$t/out" 2>&1
+bash "$eng/bin/fm-merge.sh" --project app --repo "$eng" --pr 1 --task T-001 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa > "$t/out" 2>&1
 assert_eq 0 "$?" "external merge consumes confirmed project method"
 assert_contains "$(cat "$t/gh.log")" "--merge" "merge uses configured merge-commit method"
 assert_lacks "$(cat "$t/gh.log")" "--delete-branch" "retention policy keeps branch"
@@ -104,7 +109,7 @@ assert_contains "$(cat "$t/gh.log")" "--repo org/app" "merge names project repos
 sed 's/land: card/land: handoff/' "$home/CONVENTIONS.md" > "$t/policy"
 cp "$t/policy" "$home/CONVENTIONS.md"
 : > "$t/gh.log"
-bash "$ROOT/bin/fm-merge.sh" --project app --repo "$eng" --pr 1 --task T-001 > "$t/out" 2>&1
+bash "$eng/bin/fm-merge.sh" --project app --repo "$eng" --pr 1 --task T-001 --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa > "$t/out" 2>&1
 assert_eq 65 "$?" "handoff policy refuses engine merge"
 assert_eq "" "$(cat "$t/gh.log")" "handoff makes no GitHub mutation"
 safe_rm_rf "$t"
