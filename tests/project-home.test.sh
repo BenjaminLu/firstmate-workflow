@@ -97,5 +97,48 @@ else:
     raise AssertionError('explicit unknown project must be refused')
 PYTHON
 assert_eq 0 "$?" "Python record routing needs no shell and preserves self and external boundaries"
+# A reader may exist but be unusable, as in the hook-guidance fixture.
+python3 - "$ROOT" "$t" <<'PYTHON'
+import importlib.util, os, pathlib, sys
+source = pathlib.Path(sys.argv[1]) / 'bin/lib/fm_project_paths.py'
+helpers = ('_config_lines', '_config_key', '_indent', '_project_scalar')
+usable = {name: f'def {name}(*args): return None\n' for name in helpers}
+cases = {'stub': 'pass\n', 'import-error': 'raise ImportError("reader unavailable")\n',
+         'import-runtime': 'raise RuntimeError("reader unavailable")\n',
+         'syntax': 'def broken(\n'}
+for missing in helpers:
+    cases['missing-' + missing] = ''.join(code for name, code in usable.items() if name != missing)
+for failing in helpers:
+    # Each helper fails only when used, after the reader has loaded correctly.
+    good = {
+        '_config_lines': 'def _config_lines(*args): return []\n',
+        '_config_key': 'def _config_key(lines, key): return ("", ["  self:"]) if key == "projects" else (".", [])\n',
+        '_indent': 'def _indent(*args): return 2\n',
+        '_project_scalar': 'def _project_scalar(*args): return "."\n',
+    }
+    good[failing] = f'def {failing}(*args): raise RuntimeError("reader failed")\n'
+    cases['failing-' + failing] = ''.join(good.values())
+for case, reader in cases.items():
+    engine = pathlib.Path(sys.argv[2]) / case
+    (engine / 'bin/lib').mkdir(parents=True)
+    module_file = engine / 'bin/lib/fm_project_paths.py'
+    module_file.write_text(source.read_text())
+    (engine / 'bin/fm-herdr.py').write_text(reader)
+    spec = importlib.util.spec_from_file_location('paths_' + case, module_file)
+    paths = importlib.util.module_from_spec(spec); spec.loader.exec_module(paths)
+    for selected, external in (('', ''), ('firstmate-workflow', ''), ('custom-self', '0')):
+        os.environ['FM_PROJECT'], os.environ['FM_EXTERNAL'] = selected, external
+        assert paths.record_root(engine) == engine.resolve(), (case, selected, 'self must survive unusable reader')
+        assert paths.record_root(engine) == engine.resolve(), (case, 'failed import must not poison the cache')
+    for external in ('', '1'):
+        os.environ['FM_PROJECT'], os.environ['FM_EXTERNAL'] = 'private-app', external
+        try:
+            paths.record_root(engine)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError((case, external, 'explicit external selection must fail closed'))
+PYTHON
+assert_eq 0 "$?" "unusable registry readers preserve self routing and refuse explicit external routing"
 safe_rm_rf "$t"
 finish

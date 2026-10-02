@@ -98,12 +98,21 @@ _reader = None
 def registry_reader():
     global _reader
     if _reader is None:
-        reader = Path(__file__).resolve().parents[1] / 'fm-herdr.py'
-        if not reader.is_file():
+        try:
+            reader = Path(__file__).resolve().parents[1] / 'fm-herdr.py'
+            if not reader.is_file():
+                return None
+            spec = importlib.util.spec_from_file_location('fm_storage_reader', reader)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            helpers = ('_config_lines', '_config_key', '_indent', '_project_scalar')
+            if not all(callable(getattr(module, name, None)) for name in helpers):
+                return None
+        except Exception:
+            # A degraded self tree may have a stub or broken reader. Never
+            # cache a partially imported module; external callers fail below.
             return None
-        spec = importlib.util.spec_from_file_location('fm_storage_reader', reader)
-        _reader = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(_reader)
+        _reader = module
     return _reader
 
 
@@ -116,8 +125,13 @@ def record_root(root):
     engine = Path(root).resolve()
     herdr = registry_reader()
     selected = os.environ.get('FM_PROJECT', '')
+    external = os.environ.get('FM_EXTERNAL', '')
+    # Resolved self callers may have any project name. Without that marker,
+    # a noncanonical explicit name must not silently write into engine state.
+    needs_registry = bool(selected) and (external == '1' or (
+        external != '0' and selected != 'firstmate-workflow'))
     if herdr is None:
-        if selected and os.environ.get('FM_EXTERNAL') == '1':
+        if needs_registry:
             raise ValueError('external project registry reader is unavailable')
         return engine
     try:
@@ -156,8 +170,10 @@ def record_root(root):
         default = herdr._project_scalar(default[0], 'default_project') if default else ''
         home = herdr._config_key(lines, 'home')
         home = herdr._project_scalar(home[0], 'home') if home else ''
-    except (OSError, ValueError):
-        if selected and selected != 'firstmate-workflow':
+    except Exception:
+        # Config helpers can fail beyond parse/I/O errors in degraded trees.
+        # Path validation below deliberately remains outside this fallback.
+        if needs_registry:
             raise ValueError('named project registry is unavailable') from None
         return engine
     if not projects:

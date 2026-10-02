@@ -76,7 +76,8 @@ test('two projects on one board: chips everywhere, one answer leaves the other c
     await expect(page.locator('#merging-D-beta-T001-1 .pchip')).toHaveText('beta');
     await expect(page.locator('#card-D-beta-T001-1')).toHaveCount(0);
     expect(existsSync(join(root, 'state/pending/D-alpha-T001-1.json'))).toBe(true);
-    await expect(page.locator('#pcount')).toHaveText('0');
+    // The selected project has no pending cards; the badge renders zero as empty.
+    await expect(page.locator('#pcount')).toHaveText('');
     await expect.poll(() => existsSync(b.recorder) ? readFileSync(b.recorder,'utf8') : '', {timeout:15_000})
       .toContain('--project beta');
     expect(JSON.parse(readFileSync(join(projectState(root, 'beta'),'decisions/D-beta-T001-1.json'),'utf8')).merge).toBe('running');
