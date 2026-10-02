@@ -399,7 +399,13 @@ beta_state="$(project_fixture_state "$h" beta)"
 ln -s "$h/state" "$beta_state/unsafe-link"
 assert_eq 503 "$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORTH/api/state?project=beta")" \
   "unavailable selected storage returns a defined HTTP response"
+assert_eq 503 "$(wcurl "$PORTH" -s -m 5 -o "$h/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
+  -d '{"task":"T-004","project":"beta","action":"park"}' "http://127.0.0.1:$PORTH/tasks")" \
+  "unavailable task storage returns JSON instead of dropping the POST"
+assert_eq 'project storage is unavailable' "$(jq -r .error "$h/post")" "storage errors are distinct from malformed requests"
 rm "$beta_state/unsafe-link"
+assert_eq 200 "$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORTH/api/state?project=beta")" \
+  "the next request revalidates repaired storage"
 kill "$pidh" 2>/dev/null
 wait "$pidh" 2>/dev/null || true
 kill "$live" 2>/dev/null || true

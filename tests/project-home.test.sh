@@ -51,5 +51,51 @@ sed '/default_project:/d' "$eng/config.yaml" > "$t/config"; mv "$t/config" "$eng
 assert_eq "0|$eng/state" "$(storage "$eng")" "unnamed registry uses its self entry"
 printf 'projects: broken\n' > "$t/plain/config.yaml"
 assert_eq "0|$t/plain/state" "$(storage "$t/plain" 2>/dev/null)" "unnamed malformed registry preserves self storage"
+# Record readers must work with no shell in PATH and never launch a resolver.
+python3 - "$ROOT" "$t" <<'PYTHON'
+import importlib.util, os, pathlib, subprocess, sys
+spec = importlib.util.spec_from_file_location('paths', pathlib.Path(sys.argv[1]) / 'bin/lib/fm_project_paths.py')
+paths = importlib.util.module_from_spec(spec); spec.loader.exec_module(paths)
+root = pathlib.Path(sys.argv[2]) / 'plain'
+subprocess.check_output = lambda *a, **k: (_ for _ in ()).throw(AssertionError('record routing spawned a process'))
+subprocess.run = subprocess.check_output
+os.environ.pop('FM_PROJECT', None)
+assert paths.record_root(root) == root.resolve(), 'malformed self config must not throw'
+(root / 'config.yaml').unlink()
+assert paths.record_root(root) == root.resolve(), 'missing config must not throw'
+(root / 'config.yaml').write_text('vendor: mock\n')
+os.environ['FM_PROJECT'] = 'old-self-name'
+assert paths.record_root(root) == root.resolve(), 'no registry preserves ambient self name'
+engine = pathlib.Path(sys.argv[2]) / 'engine'
+(pathlib.Path(os.environ['FM_HOME']) / 'projects/private-app/worktrees/T-001.pid').unlink()
+os.environ['FM_PROJECT'] = 'private-app'
+assert paths.record_root(engine) == pathlib.Path(os.environ['FM_HOME']) / 'projects/private-app', 'external records resolve without a shell'
+store = pathlib.Path(os.environ['FM_HOME']) / 'projects/private-app'
+(store / 'state').mkdir()
+(store / 'state/runs').symlink_to(root, target_is_directory=True)
+try:
+    paths.record_root(engine)
+except ValueError:
+    pass
+else:
+    raise AssertionError('routing links must be refused without spawning a validator')
+(store / 'state/runs').unlink()
+(engine / 'state/projects/private-app').mkdir(parents=True)
+try:
+    paths.record_root(engine)
+except ValueError:
+    pass
+else:
+    raise AssertionError('legacy records still require approved migration')
+(engine / 'state/projects/private-app').rmdir()
+os.environ['FM_PROJECT'] = 'unknown'
+try:
+    paths.record_root(engine)
+except ValueError:
+    pass
+else:
+    raise AssertionError('explicit unknown project must be refused')
+PYTHON
+assert_eq 0 "$?" "Python record routing needs no shell and preserves self and external boundaries"
 safe_rm_rf "$t"
 finish

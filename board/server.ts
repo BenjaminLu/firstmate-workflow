@@ -6,7 +6,8 @@
 // No build step and no framework: the page is a file, the stream is SSE, and
 // the state endpoint is derived from events.jsonl and design/tasks/ so the
 // board has no opinion the log does not already hold.
-import { appendFileSync, closeSync, constants, existsSync, fchmodSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, constants, existsSync, fchmodSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import { CString, dlopen, FFIType } from "bun:ffi";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
@@ -492,34 +493,78 @@ const mentioned = (repo: string | null, value: unknown, out: Record<string, stri
   return out;
 };
 
-// One synchronous state response validates each store once. Mutations and
-// subsequent requests always validate afresh, including after a planted link.
-let storageReadCache: Map<string, string | Error> | null = null;
+// A request reuses its routing checks, including across asynchronous bodies.
+// Validation walks at most 4096 routing entries, never repository copies and
+// never a shell/Python subprocess. A larger/unreadable store is unavailable.
+class StorageError extends Error {}
+const storageRequests = new AsyncLocalStorage<{ active: boolean; paths: Map<string, string | Error> }>();
+const withStorage = <T,>(read: () => T): T => {
+  const scope = { active: true, paths: new Map<string, string | Error>() };
+  return storageRequests.run(scope, () => {
+    try {
+      const result = read();
+      if (result instanceof Promise) return result.finally(() => { scope.active = false; }) as T;
+      scope.active = false;
+      return result;
+    } catch (error) { scope.active = false; throw error; }
+  });
+};
+const validateStore = (base: string) => {
+  const project = dirname(base);
+  let parent = project;
+  while (parent !== dirname(parent)) {
+    if (existsSync(parent) && realpathSync(parent) !== parent)
+      throw new Error("project storage ancestor changed");
+    parent = dirname(parent);
+  }
+  for (const rel of ["repo", "CONVENTIONS.md", "design.md", ".git", ".git/config", ".git/info",
+    ".git/info/exclude", "repo/.git", "repo/.git/config", "repo/.git/info", "repo/.git/info/exclude"]) {
+    try {
+      if (lstatSync(join(project, rel)).isSymbolicLink()) throw new Error("project store is a routing link");
+    } catch (e) { if ((e as { code?: string }).code !== "ENOENT") throw e; }
+  }
+  const todo = [base, join(project, "tasks"), join(project, "worktrees")];
+  const copies = new Set(["mirrors", "rescued", "review-checkouts", "gate-worktrees", "tmp"]);
+  let remaining = 4096;
+  while (todo.length) {
+    if (--remaining < 0) throw new Error("project storage validation limit exceeded");
+    const path = todo.pop()!;
+    let st;
+    try { st = lstatSync(path); }
+    catch (e) { if ((e as { code?: string }).code === "ENOENT") continue; throw e; }
+    if (st.isSymbolicLink()) throw new Error("project storage contains a routing link");
+    if (!st.isDirectory()) continue;
+    if (dirname(path) === base && copies.has(basename(path))) continue;
+    // Worktree source content may legitimately contain links. Check entries,
+    // not their source trees; tasks and state contain routing records.
+    if (dirname(path) === join(project, "worktrees")) continue;
+    const dir = opendirSync(path);
+    try {
+      for (let child = dir.readSync(); child; child = dir.readSync()) {
+        if (todo.length >= remaining) throw new Error("project storage validation limit exceeded");
+        todo.push(join(path, child.name));
+      }
+    } finally { dir.closeSync(); }
+  }
+};
 const stateDir = (project: string) => {
-  const key = project || defaultProject();
-  const cached = storageReadCache?.get(key);
+  const key = project || defaultProject(), scope = storageRequests.getStore();
+  const cache = scope?.active ? scope.paths : undefined;
+  const cached = cache?.get(key);
   if (cached instanceof Error) throw cached;
   if (cached) return cached;
-  const reg = registry();
-  if (!reg.projects.size) return join(ROOT, "state");
-  const entry = reg.projects.get(project || defaultProject());
+  const entry = registry().projects.get(key);
   if (!entry) return join(ROOT, "state");
-  if (!entry.state) throw new Error("project storage is unavailable");
-  if (entry.state !== join(ROOT, "state")) {
-    // Revalidate before using a cached registry path: records can change
-    // without config.yaml changing (including planted symlinks).
-    const checked = Bun.spawnSync(["bash", "-c",
-      '. "$1"; fm_project_get "$3" state "$2"', "fm-board",
-      join(ROOT, "bin/fm-config.sh"), join(ROOT, "config.yaml"), project || defaultProject()],
-      { env: childEnv(), cwd: ROOT });
-    if (checked.exitCode !== 0 || new TextDecoder().decode(checked.stdout).trim() !== entry.state) {
-      const error = new Error("project storage validation failed");
-      storageReadCache?.set(key, error);
-      throw error;
-    }
+  try {
+    if (!entry.state) throw new Error("project storage is unavailable");
+    if (entry.state !== join(ROOT, "state")) validateStore(entry.state);
+    cache?.set(key, entry.state);
+    return entry.state;
+  } catch (e) {
+    const error = new StorageError("project storage is unavailable", { cause: e });
+    cache?.set(key, error);
+    throw error;
   }
-  storageReadCache?.set(key, entry.state);
-  return entry.state;
 };
 const stores = () => [...new Set([join(ROOT, "state"), ...[...registry().projects.keys()].flatMap(p => {
   try { return [stateDir(p)]; } catch { return []; }
@@ -671,9 +716,7 @@ const watchState = (events: Event[], aboard: string[], cards: Array<{ ts?: unkno
 // `only` is ?project=: that project's work, cards and log, and the counts of
 // those. Without it, every project on one page (design section 15.10 point 4).
 const state = (only: string | null = null) => {
-  storageReadCache = new Map();
-  try { return buildState(only); }
-  finally { storageReadCache = null; }
+  return withStorage(() => buildState(only));
 };
 const buildState = (only: string | null) => {
   const events = readEvents();
@@ -1858,6 +1901,7 @@ const server = Bun.serve({
   port: PORT,
   error() { return json({ error: "project storage is unavailable" }, 503); },
   fetch(req) {
+    return withStorage(() => {
     const url = new URL(req.url);
     // ?project= shows one project; without it, or with no project's name,
     // every project is on the board
@@ -1927,9 +1971,9 @@ const server = Bun.serve({
           send("state", state(only));
           // the log is not all the board shows: a merge's outcome lands in
           // its decision record, and an unknown one is known only here
-          const stamp = () => stores().flatMap(dir => [join(dir, "events.jsonl"), join(dir, "decisions"), join(dir, "pending")])
+          const stamp = () => withStorage(() => stores().flatMap(dir => [join(dir, "events.jsonl"), join(dir, "decisions"), join(dir, "pending")])
             .map((f) => { try { const s = statSync(f); return `${s.size}:${s.mtimeMs}`; } catch { return "-"; } })
-            .join("|") + `|${[...unknownOutcome].sort().join(",")}`;
+            .join("|") + `|${[...unknownOutcome].sort().join(",")}`);
           let size = stamp();
           const poll = setInterval(() => {
             const now = stamp();
@@ -2070,7 +2114,8 @@ const server = Bun.serve({
         const stored = readJson<Record<string, unknown>>(file) ?? decision;
         return json({ ok: true, decision: stored, merge: mergeOf(stored), eventRecorded,
           effect, outcome: carried.outcome, ...(carried.reason ? { reason: carried.reason } : {}) });
-      }).catch(() => json({ error: "bad request" }, 400));
+      }).catch((e) => json({ error: e instanceof StorageError ? "project storage is unavailable" : "bad request" },
+        e instanceof StorageError ? 503 : 400));
     }
 
     // The captain parks, unparks or drops a task (T-058). Written as a captain
@@ -2089,6 +2134,7 @@ const server = Bun.serve({
         if (!spec) return json({ error: "bad action" }, 400);
         // a task is its project and its id; naming none is the default's
         const project = typeof body?.project === "string" && body.project ? body.project : defaultProject();
+        stateDir(project);
         const task = state().tasks.find((x) => x.id === id && (x.project ?? "") === project);
         if (!task) return json({ error: "no such task" }, 404);
         if (!task.actions.includes(action))
@@ -2124,7 +2170,8 @@ const server = Bun.serve({
           "--en", spec.en.replace("{id}", id), "--tw", spec.tw.replace("{id}", id)]);
         if (!r.ok) return json({ error: "the event was not written", out: r.error }, 500);
         return json({ ok: true, task: id, action, event: spec.type });
-      }).catch(() => json({ error: "bad request" }, 400));
+      }).catch((e) => json({ error: e instanceof StorageError ? "project storage is unavailable" : "bad request" },
+        e instanceof StorageError ? 503 : 400));
     }
 
     // Hand a file to the editor, or show it. Both refuse anything that does
@@ -2162,7 +2209,8 @@ const server = Bun.serve({
           .match(/^editor:\s*([^\s#]+)/m)?.[1] ?? "code");
         Bun.spawn([editor, abs], { stdout: "ignore", stderr: "ignore", env: childEnv() });
         return json({ ok: true, opened: abs, editor });
-      }).catch(() => json({ error: "bad request" }, 400));
+      }).catch((e) => json({ error: e instanceof StorageError ? "project storage is unavailable" : "bad request" },
+        e instanceof StorageError ? 503 : 400));
     }
 
     if (url.pathname === "/file") {
@@ -2181,6 +2229,7 @@ const server = Bun.serve({
       return f.ok ? f.text().then((s) => new Response(GRAMMAR_JS + s, { headers: f.headers })) : f;
     }
     return serveFile(url.pathname.replace(/^\//, ""));
+    });
   },
 });
 // The credential is keyed by the port, which FM_PORT=0 learns only now. No

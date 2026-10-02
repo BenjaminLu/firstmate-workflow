@@ -293,7 +293,9 @@ rm -rf "$d"
 # on another project it has no task whose worktree to speak of either
 d="$(fixture OPEN "$REV_BRANCH" "$REV_TITLE" 96)"; registry "$d"; cleanup_stub "$d"
 out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 96 --untracked --project example-app 2>&1)"
-assert_eq "0" "$?" "an untracked merge on another project merges"
+assert_eq "65" "$?" "an external untracked merge awaits confirmed conventions policy"
+assert_contains "$out" "merge policy not yet set" "untracked merges retain the external policy hold"
+assert_ok "test ! -s '$d/ghcalls'" "policy hold precedes every external GitHub operation"
 assert_lacks "$out" "worktree" "and says nothing of a worktree it does not have"
 rm -rf "$d"
 # bash 3.2 reads a CJK character after a bare $name as part of the name, so

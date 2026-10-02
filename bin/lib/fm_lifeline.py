@@ -90,12 +90,17 @@ class OwnerGone(RuntimeError):
         super().__init__(f'owner {pid} is already gone; nothing started for it')
 
 
+_project_paths = None
+
 def record_root(root):
+    global _project_paths
     import importlib.util
     from pathlib import Path
-    spec = importlib.util.spec_from_file_location('fm_project_paths', Path(__file__).with_name('fm_project_paths.py'))
-    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-    return str(module.record_root(root))
+    if _project_paths is None:
+        spec = importlib.util.spec_from_file_location('fm_project_paths', Path(__file__).with_name('fm_project_paths.py'))
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        _project_paths = module
+    return str(_project_paths.record_root(root))
 
 
 def _grace():

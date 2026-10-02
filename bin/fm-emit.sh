@@ -168,6 +168,7 @@ FM_STATE_DIR="$ROOT/state"
 if [ -r "$_fm_lib" ]; then
   # shellcheck source=bin/fm-config.sh
   . "$_fm_lib"
+  [ -d "$ROOT" ] && [ -x "$ROOT" ] || die "cannot write event log under $ROOT"
   fm_storage_init "$ROOT" "$project" || exit 65
   [ "$FM_EXTERNAL" = 0 ] || project="$FM_PROJECT"
 fi

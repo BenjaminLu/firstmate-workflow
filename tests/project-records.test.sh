@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
-for key in $(env | sed -n 's/^\(FM_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$key"; done
+for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
+  unset "$_fm_k" || true
+done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"

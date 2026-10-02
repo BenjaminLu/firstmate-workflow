@@ -126,7 +126,7 @@ planted=''; planted_sig=''; planted_runs=0
 # and the assertion then read the PREVIOUS fixture's gate run and passed.
 # A plant that creates or deletes a file was safe; one that edits in place
 # was not, and those are the ones this suite added.
-fixture_sig() { find "$q" -type f -exec shasum {} + 2>/dev/null | sort | shasum | cut -c1-40; }
+fixture_sig() { find "$q" ${external_home:+"$external_home"} -type f -exec shasum {} + 2>/dev/null | sort | shasum | cut -c1-40; }
 plant() {   # plant <label> <expected fragment> [stage, default fast]
   local label="$1" want="$2" stage="${3:-fast}" sig
   sig="$stage:$(fixture_sig)"

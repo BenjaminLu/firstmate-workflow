@@ -398,7 +398,7 @@ assert_contains "$(cat "$o/ghcalls" 2>/dev/null)" "pr view 12 --repo example-org
 assert_eq "example-app" "$(jq -r .project "$out")" "and the card records its project"
 assert_eq "example-app" "$(jq -r 'select(.type=="decision_requested")|.project' "$(project_fixture_state "$o" example-app)/events.jsonl" | tail -1)" \
   "and so does its decision_requested event"
-assert_ok "test -s '$o/board/public/diagrams/$id.en.html'" "and its diagram is drawn under the new id"
+assert_ok "test -s '$(project_fixture_state "$o" example-app)/diagrams/$id.en.html'" "and its diagram is drawn under the new id"
 FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request D-example-app-T047-9 --task T-047 --project example-app \
   --details "$d/details.json" >/dev/null 2>&1
 assert_eq "65" "$?" "an id nobody allocated is refused"

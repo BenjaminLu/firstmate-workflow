@@ -165,12 +165,12 @@ nid=D-example-app-T004-1
 printf '{"id":"%s","task":"T-004","project":"example-app","kind":"merge","title":"merge app","pr":7}\n' "$nid" \
   > "$(project_fixture_state "$d" example-app)/pending/$nid.json"
 printf '%s\n' '{"id":"D-9","task":"T-A","kind":"choice"}' > "$d/state/pending/D-9.json"
-s="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+s="$(curl -sf "http://127.0.0.1:$PORT/api/state?project=example-app")"
 assert_eq "$nid" "$(jq -r --arg i "$nid" '.pending[]|select(.id==$i)|.id' <<<"$s")" "a new-form card is listed"
 assert_eq "example-app T-004 1" \
   "$(jq -r --arg i "$nid" '.pending[]|select(.id==$i)|.owner|"\(.project) \(.task) \(.n)"' <<<"$s")" \
   "with the project, task and n parsed out of its id"
-assert_eq "null" "$(jq -r '.pending[]|select(.id=="D-9")|.owner' <<<"$s")" "an old id names no owner"
+assert_eq "null" "$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r '.pending[]|select(.id=="D-9")|.owner')" "an old id names no owner"
 rm -f "$d/state/pending/D-9.json"
 # bodies are built by jq, never as "{\"a\":1,\"b\":2}" inside "$(...)": bash
 # 3.2 brace-expands that {a,b} and runs the substitution once per half

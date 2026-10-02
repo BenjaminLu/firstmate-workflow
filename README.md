@@ -406,8 +406,9 @@ Self projects (`repo: .`) keep their existing layout.
 `bin/fm.sh project sync <name>` refuses an existing legacy
 `state/projects/<name>` store. After the operator approves migration, pass
 `--migrate`. Migration uses a same-filesystem atomic rename and retains the
-source on refusal; registered worktrees and ownership records must first be
-reconciled. It does not silently copy and delete records across filesystems.
+source on refusal; registered worktrees and live or indeterminate ownership
+records must first be reconciled. It does not silently copy and delete records
+across filesystems.
 `bin/fm.sh project history on <name>` initializes local spec history with no
 remote and excludes clones, worktrees, and execution state.
 
@@ -427,10 +428,13 @@ posting stay local as well. This is a deliberate policy hold: a local commit or
 review log is not a published PR, a verified verdict, or an accepted external
 execution. No environment switch grants publication permission.
 
-Migration refuses separate legacy specs, shared events, or shared run records
-whose ownership cannot be moved atomically with the legacy project directory.
-Consolidate those records with firstmate before retrying; refusal retains both
-locations and does not claim that a partial migration completed.
+Approved migration consolidates separately stored project specs and records,
+including owned lines in shared event and wake logs, completed run directories,
+decisions, diagrams, mirrors, pins, evidence and recovery records. It checks the
+transfer plan before mutation, verifies retained bytes, and keeps a recovery
+journal outside the engine. A failure rolls back the clone and record transfers.
+Live IPC, active or indeterminate owners, registered worktrees and ambiguous
+destination collisions are refused; reconcile those with firstmate before retrying.
 
 The engine-wide board projects external task IDs, statuses, crew identity and PR
 links. Select a project to read its local descriptions and decision details;
