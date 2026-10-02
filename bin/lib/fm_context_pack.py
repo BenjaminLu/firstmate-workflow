@@ -4,6 +4,7 @@ import argparse
 import datetime
 import fnmatch
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -13,6 +14,19 @@ import tempfile
 from fm_evidence import Store, criteria
 
 CAP = 48000
+
+
+def github_argv(executable, args):
+    args = list(args)
+    if os.environ.get('FM_EXTERNAL') == '1':
+        repository = os.environ.get('GH_REPO', '')
+        if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
+            raise ValueError('external evidence needs an explicit repository')
+        if args and args[0] == 'api':
+            args = [value.replace('repos/{owner}/{repo}/', 'repos/' + repository + '/') for value in args]
+        else:
+            args += ['--repo', repository]
+    return [executable, *args]
 
 
 def bounded(items, cap=CAP):
@@ -125,7 +139,7 @@ class Collector:
 
     def github(self, *args):
         try:
-            result = subprocess.run([self.gh, *args], cwd=self.root, capture_output=True, text=True)
+            result = subprocess.run(github_argv(self.gh, args), cwd=self.root, capture_output=True, text=True)
             allowed = (0, 1, 8) if args[:2] == ('pr', 'checks') else (0,)
             if result.returncode not in allowed:
                 raise ValueError(f'gh evidence unavailable: {result.stderr.strip()[:500]}')
@@ -165,7 +179,7 @@ class Collector:
         with tempfile.TemporaryFile() as output, (
                 open(self.log_error_file, 'w+b') if self.log_error_file
                 else tempfile.TemporaryFile()) as errors:
-            result = subprocess.run([self.gh, 'run', 'view', '--job', str(job), '--log-failed'],
+            result = subprocess.run(github_argv(self.gh, ['run', 'view', '--job', str(job), '--log-failed']),
                                     cwd=self.root, stdout=output, stderr=errors)
             output.seek(0)
             offset, context_bytes = 0, 0

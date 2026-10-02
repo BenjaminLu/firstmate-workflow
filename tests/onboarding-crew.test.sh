@@ -93,7 +93,7 @@ else: sys.exit(2)
         self.assertFalse((self.home/'comments').exists())
         self.assertFalse((self.home/'tree/design/questions/T-Z.md').exists())
     def test_pr_body_redacts_private_contract(self):
-        body=section(worker,'  pr_body="Dispatched by firstmate', '  url="$($GH pr create')
+        body=section(worker,'  pr_body="Dispatched by firstmate', '  url="$(fm_github pr create')
         out=self.run_block(body+'printf "%s" "$pr_body"')
         self.assertEqual(out,'Task T-Z. Captain acceptance and evidence are retained privately.')
     def test_worker_verifies_external_repository_before_starting(self):
@@ -101,10 +101,10 @@ else: sys.exit(2)
         verify=directory/'fm-project.sh'
         verify.write_text('#!/bin/sh\nprintf "%s\\n" "$*" > "$(dirname "$0")/verified"\nexit 65\n')
         verify.chmod(0o755)
-        body=section(worker,'fm_target_validate || exit 65\n','BASE="${FM_BASE:-$BASE}"')
-        p=shell(root,self.home,body,'FM_CODE_ROOT="$work/code"; fm_target_validate() { return 0; }')
+        body=section(worker,'fm_external_prepare || exit 65\n','BASE="${FM_BASE:-$BASE}"')
+        p=shell(root,self.home,body,'FM_ENGINE_ROOT="$REPO"; FM_CODE_ROOT="$work/code"; fm_target_validate() { return 0; }')
         self.assertEqual(p.returncode,65,p.stderr)
-        self.assertEqual((directory/'verified').read_text().strip(),'verify app --repo '+str(root))
+        self.assertEqual((directory/'verified').read_text().strip(),'sync app --repo '+str(root))
     def test_rebuild_defence_does_not_read_engine_task_spec(self):
         # This inner guard protects private acceptance even if a future caller
         # lifts the outer stacking hold. Execute it with a visible spec reader.

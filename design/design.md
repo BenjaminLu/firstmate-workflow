@@ -779,12 +779,15 @@ request it happened on, with the text kept where the next round will
 not delete it. Something that picks it up is its own task.
 
 Nothing reads the worker's exit status either. `fm-dispatch` starts it
-with `&` and never waits, so `73` is read by a person, and the one
+through a session-owned lifeline keeper and does not wait for completion,
+so `73` is read by a person, and the one
 event the round writes is the one the worker writes — there is no
 second `worker_crashed` from a caller noticing the code. The codes a
 worker can exit with are `1` a failed attempt, `2` no vendor was
 available, `64` it was called wrong, `65` no such task in
-`design/tasks/` or an unknown configured adapter, `70` something the run
+`design/tasks/`, an unknown configured adapter, refused external routing or
+policy, an unverifiable external PR head, or staged private artifacts,
+`70` something the run
 needs and cannot have — no library, no worktree, nowhere to put a scratch file,
 identity/snapshot failure, a live task lock, failed managed transport, a
 round's commit that failed (nothing is pushed or reported after it), a new
@@ -4669,6 +4672,31 @@ publishes. T-163 Codex run mode requires genuine isolated checkout, trusted
 context, OS confinement and final-assistant-output provenance; no marker-only
 admission, silent diff/vendor fallback or unsafe flags. T-167 binds availability
 to current CLI/provider outcomes, not quoted errors in model/tool text.
+
+T-051's target execution path synchronizes and verifies the managed external
+clone before launch, using frozen engine scripts. A clean checked-out base may
+fast-forward to the fetched base; divergent or unpublished local work is retained
+and requires synchronization before launch. New task worktrees start at the
+fetched confirmed base. External task branch names, commit subjects and PR titles
+carry generic task labels rather than private spec titles, and PR/Actions requests
+name the selected repository. Both initial and rebuilt isolated review checkouts
+clone the target repository with their own objects and no remote. External review
+requires a PR and compares its authoritative head/base with local refs before
+preparation, after the CI wait and before publishing the final verdict. A moved
+or unreadable head retains the final answer as stale evidence instead of publishing
+current approval. Gate and merge candidate authority remains T-138's shared binding.
+
+Dispatch records its session owner and keeper in the selected project's
+`state/dispatch/<task>.json`; this is a launch receipt, not a completion verdict.
+Cleanup holds task exclusion and refuses live or uncertain external executions,
+even with `--force`. An unreadable PR outcome retains the external worktree unless
+force was explicitly requested. Local branch deletion follows confirmed retention
+policy and retains branches used as another open PR's base or whose downstream
+status cannot be read. Changed `.fm-*` path components are refused before external
+commits, including explicitly staged ignored files. The scripted stock-dispatch
+fixture checks owner lifetime, duplicate dispatch and private target publication;
+it does not establish real vendor, sandbox or Herdr-window acceptance. Firstmate
+must capture that live evidence separately before accepting T-051.
 
 Core T-051 stock dispatch must leave a genuinely live owned run and visible
 Herdr view after the invoking dispatcher exits, with truthful completion and

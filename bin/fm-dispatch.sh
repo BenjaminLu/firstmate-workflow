@@ -43,10 +43,8 @@ done
 cd "$REPO" || { echo "fm-dispatch: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
 fm_storage_init "$REPO" || exit 65
-if [ "$FM_EXTERNAL" = 1 ]; then
-  "${FM_CODE_ROOT:-$REPO}/bin/fm-project.sh" verify "$FM_PROJECT" --repo "$REPO" || exit 65
-fi
 fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
+fm_external_prepare || exit 65
 LOG="$FM_STATE_DIR/events.jsonl"
 emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate "$@" >/dev/null 2>&1 </dev/null || true; }
 if [ -n "$ORDERED" ] && ! fm_task "$ORDERED" "$FM_TASKS_DIR" >/dev/null 2>&1; then
@@ -154,11 +152,19 @@ while IFS= read -r id; do
     mkdir -p "$FM_STATE_DIR/dispatch"
     # Dispatch is short-lived. Workers belong to the enclosing session,
     # including when dispatch itself was started through the lifeline.
-    "${FM_CODE_ROOT:-$REPO}/bin/lib/fm-lifeline.sh" --session --log "$FM_STATE_DIR/dispatch/$id.log" -- \
-      "${FM_CODE_ROOT:-$REPO}/bin/fm-worker.sh" --task "$id" --repo "$REPO" </dev/null >/dev/null || {
+    owner="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_lifeline.py" session-owner)" || exit 70
+    keeper="$("${FM_CODE_ROOT:-$REPO}/bin/lib/fm-lifeline.sh" --owner-pid "$owner" --log "$FM_STATE_DIR/dispatch/$id.log" -- \
+      "${FM_CODE_ROOT:-$REPO}/bin/fm-worker.sh" --task "$id" --repo "$REPO" </dev/null)" || {
         echo "fm-dispatch: could not start an owned worker for $id" >&2
         exit 70
       }
+    # A receipt identifies ownership, not successful worker completion. The
+    # worker's exact actor and final outcome remain its own lifecycle records.
+    jq -n --arg project "${FM_PROJECT:-}" --arg task "$id" \
+      --argjson owner "$owner" --argjson keeper "$keeper" \
+      '{project:$project,task:$task,owner:$owner,keeper:$keeper}' \
+      > "$FM_STATE_DIR/dispatch/$id.$$.json" &&
+      mv "$FM_STATE_DIR/dispatch/$id.$$.json" "$FM_STATE_DIR/dispatch/$id.json" || exit 70
     echo "$id"
   fi
   slots=$(( slots - 1 )); started_any=1
