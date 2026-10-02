@@ -1,3 +1,5 @@
+# External clones and private records: FM_HOME overrides this optional setting.
+# home: ~/.firstmate  # must be outside every engine checkout
 # firstmate-workflow
 
 board:

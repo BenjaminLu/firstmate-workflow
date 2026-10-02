@@ -105,6 +105,11 @@ usage: fm.sh <command> [options]
         move tasks or open files; any other tab is read-only, and its
         banner's sign-in button runs this same opener.
 
+  project sync|verify <name> [--repo DIR]
+  project sync <name> --migrate [--repo DIR]
+  project history on <name> [--repo DIR]
+        Manage an external clone under FM_HOME; migration requires approval.
+
   stop <actor> | stop --task <id> [--project NAME] [--repo DIR]
         Stop a live round, or every crewman on a task: the task's
         fm-worker.sh gets TERM, so it saves and pushes its worktree, and
@@ -743,14 +748,16 @@ cmd_tasks() {
   local repo="$REPO"
   while [ $# -gt 0 ]; do
     case "$1" in
+      --project) need "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
       --repo) need "$@"; repo="${2-}"; shift 2 ;;
       *) die "tasks: unknown argument $1" ;;
     esac
   done
   repo="$(abs "$repo")" || die "no repo at $repo"
-  [ -d "$repo/design/tasks" ] || die "tasks: no design/tasks/ in $repo" 65
+  fm_storage_init "$repo" || exit 65
+  [ -d "$FM_TASKS_DIR" ] || die "tasks: no design/tasks/ in $repo" 65
   local all
-  all="$(fm_tasks "$repo/design/tasks")" || die "tasks: a task file in design/tasks/ does not parse" 65
+  all="$(fm_tasks "$FM_TASKS_DIR")" || die "tasks: a task file in design/tasks/ does not parse" 65
   # grouped by milestone in milestone order, file order within one; a title
   # that holds a | is escaped so the row stays a row
   printf '%s\n' "$all" | jq -rs '
@@ -768,6 +775,7 @@ cmd_roster() {
   local repo="$REPO" action=show redraw=''
   while [ $# -gt 0 ]; do
     case "$1" in
+      --project) need "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
       init) action=init; shift ;;
       --redraw) redraw=1; shift ;;
       --repo) need "$@"; repo="${2-}"; shift 2 ;;
@@ -787,6 +795,7 @@ cmd_board() {
   local repo="$REPO"
   while [ $# -gt 0 ]; do
     case "$1" in
+      --project) need "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
       --repo) need "$@"; repo="${2-}"; shift 2 ;;
       *) die "board: unknown argument $1" ;;
     esac
@@ -829,6 +838,7 @@ cmd_follow() {
   local repo="$REPO" actor=''
   while [ $# -gt 0 ]; do
     case "$1" in
+      --project) need "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
       --repo) need "$@"; repo="${2-}"; shift 2 ;;
       -*) die "follow: unknown argument $1" ;;
       *) [ -z "$actor" ] || die "follow: one actor at a time"; actor="$1"; shift ;;
@@ -856,6 +866,7 @@ cmd_setup() {
 cmd="${1:-help}"
 [ $# -eq 0 ] || shift
 case "$cmd" in
+  project)     "$HERE/fm-project.sh" "$@" ;;
   self-update) cmd_selfupdate "$@" ;;
   sync-skills) cmd_sync "$@" ;;
   lint)        cmd_lint "$@" ;;

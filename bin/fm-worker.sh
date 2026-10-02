@@ -28,6 +28,7 @@ REPO="$(fm_default_repo)"; TASK=''; VENDOR=''; NAME=''; PR=''
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
 while [ $# -gt 0 ]; do
   case "$1" in
+    --project) fm_need "fm-worker" "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
     --task) fm_need "fm-worker" "$@"; TASK="${2-}"; shift 2 ;;
     --repo) fm_need "fm-worker" "$@"; REPO="${2-}"; shift 2 ;;
     --vendor) fm_need "fm-worker" "$@"; VENDOR="${2-}"; shift 2 ;;
@@ -39,8 +40,15 @@ done
 [ -n "$TASK" ] || { echo "usage: fm-worker.sh --task <id> [--repo dir]" >&2; exit 64; }
 cd "$REPO" || { echo "fm-worker: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
+fm_storage_init "$REPO" || exit 65
+fm_target_validate || exit 65
+if [ "$FM_EXTERNAL" = 1 ]; then
+  "${FM_CODE_ROOT:-$REPO}/bin/fm-project.sh" verify "$FM_PROJECT" --repo "$REPO" || exit 65
+fi
+BASE="${FM_BASE:-$BASE}"
 fm_refuse_herdr_bypass fm-worker || exit $?
 fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
+cd "$FM_TARGET_ROOT" || exit 65
 # A worker's round is the task's, read from the log by the allocation
 # (T-116); one inherited from a reviewer's shell is not this run's.
 unset FM_ROUND
@@ -51,7 +59,7 @@ EMIT="${FM_CODE_ROOT:-$REPO}/bin/fm-emit.sh"
 # from the round's first event (the model the vendor reports joins them
 # once the round has run; a fallback vendor replaces them as it starts)
 head_vendor="$(fm_vendor_chain worker "$VENDOR" | head -1)"
-fm_record_requested "$head_vendor" "$(fm_model_for worker "$head_vendor" config.yaml)"
+fm_record_requested "$head_vendor" "$(fm_model_for worker "$head_vendor" "$FM_CONFIG")"
 # T-116: name, role, project, task, round and attempt ride every crew
 # payload as separate fields, so the board never parses them out of the actor;
 # vendor and model beside them (T-127, T-146), read fresh for every payload
@@ -158,7 +166,12 @@ emit_status() {
 # without one - so a caller that wants these somewhere it owns, which
 # is how the leak is tested, cannot have them - and a file called
 # tmp.XXXX says nothing about who left it if one ever does.
-scratch_new() { mktemp "${TMPDIR:-/tmp}/fm-worker-XXXXXX"; }
+worker_tmp="${TMPDIR:-/tmp}"
+if [ "$FM_EXTERNAL" = 1 ]; then
+  worker_tmp="$FM_STATE_DIR/tmp"
+  mkdir -p "$worker_tmp" || exit 70
+fi
+scratch_new() { mktemp "$worker_tmp/fm-worker-XXXXXX"; }
 # An ARRAY. A space-delimited string is word-split and glob-expanded by
 # `rm -f`, so one space in $TMPDIR and the removal silently removes
 # nothing - `-f` says so by saying nothing - and every leak test still
@@ -176,6 +189,10 @@ _fm_wip_done=0
 publish_wip_if_dirty() {
   local reason="${1:-exit}" dirty
   [ "${_fm_wip_done}" = 1 ] && return 0
+  if [ "${FM_EXTERNAL:-0}" = 1 ]; then
+    echo 'fm-worker: external work retained locally; publication requires the conventions policy reader (T-139)' >&2
+    return 0
+  fi
   [ -n "${tree:-}" ] && [ -d "$tree" ] && [ -n "${branch:-}" ] && [ -n "${TASK:-}" ] || return 0
   case "$branch" in main|master|HEAD|'') return 0 ;; esac
   dirty="$(git -C "$tree" status --porcelain -- . \
@@ -230,16 +247,16 @@ publish_wip_if_dirty() {
 rebuild_settle() {
   local pending ls lsrc origin_head
   [ -n "${branch:-}" ] && [ -n "${REPO:-}" ] || return 0
-  pending="$(git -C "$REPO" rev-parse -q --verify "refs/fm-rebuilt/$branch^{commit}" 2>/dev/null)" || return 0
-  ls="$(git -C "$REPO" ls-remote --exit-code --heads origin "refs/heads/$branch" 2>/dev/null)"; lsrc=$?
+  pending="$(git -C "$FM_TARGET_ROOT" rev-parse -q --verify "refs/fm-rebuilt/$branch^{commit}" 2>/dev/null)" || return 0
+  ls="$(git -C "$FM_TARGET_ROOT" ls-remote --exit-code --heads origin "refs/heads/$branch" 2>/dev/null)"; lsrc=$?
   if [ "$lsrc" != 0 ] && [ "$lsrc" != 2 ]; then
     echo "fm-worker: could not ask origin whether the rebuilt $branch (${pending}) reached it; the next round asks again" >&2
     return 1
   fi
   origin_head="$(printf '%s\n' "$ls" | awk 'NR == 1 { print $1 }')"
   if [ -n "$origin_head" ] && { [ "$origin_head" = "$pending" ] \
-       || git -C "$REPO" merge-base --is-ancestor "$pending" "$origin_head" 2>/dev/null; }; then
-    if ! git -C "$REPO" branch -f "$branch" "$pending" >/dev/null 2>&1; then
+       || git -C "$FM_TARGET_ROOT" merge-base --is-ancestor "$pending" "$origin_head" 2>/dev/null; }; then
+    if ! git -C "$FM_TARGET_ROOT" branch -f "$branch" "$pending" >/dev/null 2>&1; then
       echo "fm-worker: the rebuilt $branch (${pending}) is on origin, but $branch could not be moved onto it; the next round tries again" >&2
       return 1
     fi
@@ -247,7 +264,7 @@ rebuild_settle() {
   else
     echo "fm-worker: the rebuilt $branch (${pending}) never reached origin; $branch stays where it was" >&2
   fi
-  git -C "$REPO" update-ref -d "refs/fm-rebuilt/$branch" 2>/dev/null || {
+  git -C "$FM_TARGET_ROOT" update-ref -d "refs/fm-rebuilt/$branch" 2>/dev/null || {
     echo "fm-worker: could not clear refs/fm-rebuilt/$branch; the next round settles it again" >&2; return 1; }
 }
 
@@ -263,7 +280,7 @@ finished() {
   rebuild_settle || true
   # the scratch worktree the rebuild check replays in, if a signal cut it short
   if [ -n "${rebuild_probe:-}" ]; then
-    git -C "$REPO" worktree remove --force "$rebuild_probe" >/dev/null 2>&1; rm -rf "$rebuild_probe"
+    git -C "$FM_TARGET_ROOT" worktree remove --force "$rebuild_probe" >/dev/null 2>&1; rm -rf "$rebuild_probe"
   fi
   fm_record_end "$rc"
   # before clean_scratch, which would remove the only copy of it
@@ -310,6 +327,7 @@ trap '' HUP
 # T-027`, for a task sitting in the diff they were handed.
 task_spec() {   # task_spec <task> [branch]; its own file, design/tasks/<id>.json
   local t="$1" b="${2:-}" j=''
+  if [ "$FM_EXTERNAL" = 1 ]; then fm_task "$t" "$FM_TASKS_DIR"; return; fi
   [ -n "$b" ] && j="$(fm_task "$t" design/tasks "$b")"
   [ -n "$j" ] || j="$(fm_task "$t")"
   printf '%s' "$j"
@@ -348,13 +366,16 @@ if [ -n "$branch_guess" ]; then
 else
   branch="$slug-$(jq -r '.title' <<<"$spec" | tr 'A-Z' 'a-z' | tr -cs 'a-z0-9' '-' | cut -c1-28 | sed 's/-*$//')"
 fi
-tree="$REPO/state/worktrees/$TASK"
+[ "$branch" != "$BASE" ] || { echo 'fm-worker: refusing protected project base' >&2; exit 65; }
+[[ "$TASK" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || exit 65
+[ ! -L "$FM_WORKTREES/$TASK" ] || exit 65
+tree="$FM_WORKTREES/$TASK"
 
 # Ordinary dispatch and recovery share one kernel lock. Recovery passes the
 # locked descriptor as fd 9 across exec; ordinary workers acquire it before
 # touching the worktree. The PID is published atomically while holding it.
-pidfile="$REPO/state/worktrees/$TASK.pid"
-mkdir -p "$REPO/state/worktrees" || exit 70
+pidfile="$FM_WORKTREES/$TASK.pid"
+mkdir -p "$FM_WORKTREES" || exit 70
 dispatch_data='{"role":"worker"}'
 if [ "${FM_WORKER_LOCK_PID:-}" != "$$" ]; then
   exec 9>>"$pidfile.lock" || exit 70
@@ -452,7 +473,7 @@ branch_existed=0
 if [ -d "$tree" ] && [ -n "$(git -C "$tree" status --porcelain 2>/dev/null \
      -- . ":(exclude).fm-prompt.md" ":(exclude).fm-say.md")" ]; then
   leftover_dirty=1
-  rescue="$REPO/state/rescued/$TASK-$(date -u +%Y%m%dT%H%M%SZ)"
+  rescue="$FM_STATE_DIR/rescued/$TASK-$(date -u +%Y%m%dT%H%M%SZ)"
   mkdir -p "$(dirname "$rescue")"
   cp -R "$tree" "$rescue"
   echo "fm-worker: $tree had uncommitted work; a copy is at $rescue" >&2
@@ -466,7 +487,7 @@ if [ "$leftover_dirty" = 1 ] && [ -z "$PR" ] \
   round_two=1
   branch_existed=1
 else
-  rm -rf "$tree"; mkdir -p "$REPO/state/worktrees"
+  rm -rf "$tree"; mkdir -p "$FM_WORKTREES"
   git worktree prune >/dev/null 2>&1
   rebuild_settle || true
   if git show-ref --verify --quiet "refs/heads/$branch"; then
@@ -522,7 +543,7 @@ if [ "$branch_existed" = 1 ] && [ "$leftover_dirty" = 0 ]; then
     round_two=0
   fi
 fi
-if [ "$leftover_dirty" = 0 ] && [ -f "$own_spec" ]; then
+if [ "$FM_EXTERNAL" = 0 ] && [ "$leftover_dirty" = 0 ] && [ -f "$own_spec" ]; then
   if { [ "$round_two" = 0 ] && [ ! -e "$tree/$own_spec" ]; } \
      || { [ "$spec_only" = 1 ] && ! git cat-file -e "$spec_base:$own_spec" 2>/dev/null; }; then
     refresh_spec=1
@@ -560,7 +581,7 @@ case "$REPO" in
   */state/projects/*/*) _fm_mp="${REPO#*/state/projects/}"; MIRROR_PROJECT="${_fm_mp%%/*}" ;;
   *) MIRROR_PROJECT="${FM_PROJECT:-self}" ;;
 esac
-mirror_root="$REPO/state/mirrors/$MIRROR_PROJECT/$TASK"
+mirror_root="$FM_STATE_DIR/mirrors/$MIRROR_PROJECT/$TASK"
 mirror_gens=3       # generations kept, so a slow corruption can be rolled back past
 mirror_loss_pct=50  # the share of files lost, with no matching commit, that counts as a wreck
 mirror_restored=0
@@ -672,7 +693,7 @@ mirror_restore() {
     echo "fm-worker: $tree needs restoring ($why) but no mirror generation exists yet" >&2
     return 1
   fi
-  wreck="$REPO/state/rescued/$TASK-$(date -u +%Y%m%dT%H%M%SZ)-wrecked"
+  wreck="$FM_STATE_DIR/rescued/$TASK-$(date -u +%Y%m%dT%H%M%SZ)-wrecked"
   mkdir -p "$(dirname "$wreck")"
   [ ! -e "$tree" ] || cp -R "$tree" "$wreck" 2>/dev/null
   total="$(find "$mirror_root/$gen" -type f 2>/dev/null | wc -l | tr -d ' ')"
@@ -686,7 +707,7 @@ mirror_restore() {
   # round wrote is ever removed by a restore, only ever added to.
   rsync -au "$mirror_root/$gen/" "$tree/" >/dev/null 2>&1
   if ! tree_git_ok; then
-    git -C "$REPO" worktree repair "$tree" >/dev/null 2>&1 || true
+    git -C "$FM_TARGET_ROOT" worktree repair "$tree" >/dev/null 2>&1 || true
   fi
   echo "fm-worker: $tree was restored from mirror generation $gen ($why); it destroyed its own tree" >&2
   # Recorded here, ASCII only, and read back by mirror_report_restores in the
@@ -698,7 +719,7 @@ mirror_restore() {
   # when the text held multi-byte characters, under bash 3.2 (macOS's stock
   # /bin/bash). The same call from the foreground does not lose anything.
   printf 'at=%s gen=%s total=%s wreck=%s why=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$gen" "$total" \
-    "${wreck#"$REPO"/}" "$why" >> "$REPO/state/worktrees/$TASK.restored"
+    "${wreck#"$REPO"/}" "$why" >> "$FM_WORKTREES/$TASK.restored"
   mirror_restored=1
 }
 # bin/fm-emit.sh's TYPES enum is out of this task's scope (design/tasks/T-128.json
@@ -708,7 +729,7 @@ mirror_restore() {
 # behind that this one found and saved", named precisely by .data.event_kind.
 # Called once, from the foreground, after the round: see mirror_restore.
 mirror_report_restores() {
-  local marker="$REPO/state/worktrees/$TASK.restored" line why gen total wreck data en tw
+  local marker="$FM_WORKTREES/$TASK.restored" line why gen total wreck data en tw
   [ -s "$marker" ] || return 0
   while IFS= read -r line; do
     [ -n "$line" ] || continue
@@ -887,7 +908,7 @@ rebuild_own_file_restore() {   # <old head>
 rebuild_rebases() {   # rebuild_rebases <head> <base ref>; 0 clean, 1 not, 2 unknown
   local rc n e
   n="$(fm_git_name "$tree")"; e="$(fm_git_email "$tree")"
-  rebuild_probe="$(mktemp -d "${TMPDIR:-/tmp}/fm-worker-probe-XXXXXX")" || return 2
+  rebuild_probe="$(mktemp -d "$worker_tmp/fm-worker-probe-XXXXXX")" || return 2
   git -c core.hooksPath=/dev/null worktree add -q --detach "$rebuild_probe" "$1" >/dev/null 2>&1 || {
     rm -rf "$rebuild_probe"; rebuild_probe=''; return 2; }
   git -C "$rebuild_probe" -c core.hooksPath=/dev/null -c rerere.enabled=false \
@@ -908,6 +929,10 @@ rebuild_probe_drop() {
   git worktree prune >/dev/null 2>&1; rebuild_probe=''
 }
 bring_up_to_date() {
+  if [ "$FM_EXTERNAL" = 1 ]; then
+    echo 'fm-worker: external stacking/rebuild awaits conventions policy (T-139) / 外部堆疊與重建等待 T-139 慣例政策' >&2
+    return 0
+  fi
   local base_ref="refs/remotes/origin/$BASE" head mb ls rc f side
   # The worktree was just made from the branch, so it is clean. Were it
   # not, the rebuild's own failure path (reset --hard) would destroy what
@@ -962,7 +987,7 @@ bring_up_to_date() {
     git -C "$tree" checkout -q "$branch" 2>/dev/null
     exit 70
   fi
-  rebuild_entry="$(fm_task "$TASK" design/tasks "$head" 2>/dev/null | jq -cS . 2>/dev/null)"
+  [ "$FM_EXTERNAL" = 1 ] || rebuild_entry="$(fm_task "$TASK" design/tasks "$head" 2>/dev/null | jq -cS . 2>/dev/null)"
   # Repair is best-effort; the pre-commit check holds the round if it failed
   # or the worker subsequently changes the frozen task file.
   rebuild_own_file_restore "$head" || true
@@ -1153,15 +1178,15 @@ say="$tree/.fm-say.md"
   # next prompt (T-128), not only left to notice: mirror_restore() appends
   # here whenever it runs, in any earlier round, and this is read once and
   # cleared so it is said exactly once.
-  if [ -s "$REPO/state/worktrees/$TASK.restored" ]; then
+  if [ -s "$FM_WORKTREES/$TASK.restored" ]; then
     printf '\n---\n\n# Your tree was restored\n\n'
     printf 'A previous round on this task destroyed its own worktree - deleted it, lost\n'
     printf 'its link to git, or lost most of its files - and fm-worker.sh restored it from\n'
     printf 'its own mirror of your work, kept outside the round. Nothing was lost that had\n'
     printf 'reached the mirror; the wreck itself is kept aside under state/rescued/. This is\n'
     printf 'reported, not something to work around:\n\n'
-    sed -n 's/^at=\([^ ]*\).* why=\(.*\)$/- \1: \2/p' "$REPO/state/worktrees/$TASK.restored"
-    rm -f "$REPO/state/worktrees/$TASK.restored"
+    sed -n 's/^at=\([^ ]*\).* why=\(.*\)$/- \1: \2/p' "$FM_WORKTREES/$TASK.restored"
+    rm -f "$FM_WORKTREES/$TASK.restored"
   fi
   if [ "$rebuilt" = 1 ]; then
     printf '\n---\n\n# Your branch was rebuilt on the current %s\n\n' "$BASE"
@@ -1224,7 +1249,7 @@ say="$tree/.fm-say.md"
   printf 'and pushes what the worktree holds when the round ends, however it ends,\n'
   printf 'including when it is stopped. Leave your work in the worktree.\n'
   printf '\n---\n\n# The design\n\n'
-  sed -n '/^## 6\./,/^## 8\./p' design/design.md 2>/dev/null
+  sed -n '/^## 6\./,/^## 8\./p' "$FM_DESIGN" 2>/dev/null
 } > "$prompt"
 
 # --- the adapter, with fallback only on a vendor being unavailable -------
@@ -1284,14 +1309,14 @@ round_start="$(git -C "$tree" rev-parse -q --verify HEAD 2>/dev/null)"
 # not read is a configuration error, not an unconfined round.
 policy_file="$FM_RUN_DIR/policy.json"; blocked_file="$FM_RUN_DIR/blocked-hosts"
 : > "$blocked_file"
-fm_policy worker "" config.yaml > "$policy_file" || {
+fm_policy worker "" "$FM_CONFIG" > "$policy_file" || {
   echo "fm-worker: config.yaml's crew policy does not read; no round runs without one" >&2; exit 65; }
 export FM_POLICY="$policy_file" FM_POLICY_BLOCKED="$blocked_file"
 # config.yaml's model, applied (T-127): each vendor's own (T-146), which
 # fm_run_chain resolves for whichever vendor an attempt runs - --vendor's,
 # or a fallback's - and hands it as FM_MODEL; a refusal it writes is
 # recorded here rather than read as the vendor being unavailable.
-export FM_MODEL_ROLE=worker FM_MODEL_CONFIG="$REPO/config.yaml"
+export FM_MODEL_ROLE=worker FM_MODEL_CONFIG="$FM_CONFIG"
 model_refused_file="$FM_RUN_DIR/model-refused"; : > "$model_refused_file"
 export FM_MODEL_REFUSED="$model_refused_file"
 # A host the round's proxy refused is reported, not allowed: the crew
@@ -1362,7 +1387,7 @@ mirror_report_restores || true
 # shellcheck disable=SC1090
 . "$chain_result"
 [ -z "$FM_VENDOR_UNKNOWN" ] || {
-  echo "fm-worker: config.yaml names a vendor with no adapter: $FM_VENDOR_UNKNOWN" >&2; exit 65; }
+  echo "fm-worker: $FM_CONFIG names a vendor with no adapter: $FM_VENDOR_UNKNOWN" >&2; exit 65; }
 # A model the vendor did not recognise (T-127): refused loudly, named on the
 # board in both languages, never read as the vendor being unavailable or as
 # a normal failed attempt that would still reach the gates.
@@ -1441,6 +1466,10 @@ say_err=''
 post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
   say_err="$(scratch_new)" || say_err=''
   [ -z "$say_err" ] || scratch_add "$say_err"
+  if [ "$FM_EXTERNAL" = 1 ]; then
+    echo 'fm-worker: external note retained locally; posting policy is not yet available (T-139)' >&2
+    return 1
+  fi
   if $GH pr comment "$2" --body-file "$1" >/dev/null 2>"${say_err:-/dev/null}" </dev/null; then
     spoke=1
     emit --type ask_pass_criteria --pr "$2" --en "the worker spoke on #$2" \
@@ -1472,7 +1501,7 @@ save_unsent() {   # save_unsent <file>; copies it under state/unsent/ and says w
   # the pid too: two failures in the same second would otherwise
   # overwrite each other, and the earlier question is the one this
   # path exists to keep
-  kept="$REPO/state/unsent/$TASK-$(date -u +%Y%m%dT%H%M%SZ)-$$.md"
+  kept="$FM_STATE_DIR/unsent/$TASK-$(date -u +%Y%m%dT%H%M%SZ)-$$.md"
   # its own stderr prefixed like everything else here: an unprefixed
   # `mkdir: File exists` lands ahead of the lines that explain what
   # happened, in a run whose whole point is reporting in its own voice
@@ -1531,6 +1560,7 @@ note_refused() {   # note_refused <file>; keeps it and says why, and returns
 # is whole, so a failed cp leaves the original in the worktree instead.
 question_draft=0
 first_round_question() {
+  [ "$FM_EXTERNAL" = 0 ] || return 1
   [ "$question_draft" = 1 ] && [ "$round_two" = 0 ] && ! rebuild_publishes
 }
 if [ "$round_two" = 0 ] && ! rebuild_publishes \
@@ -1802,18 +1832,22 @@ if [ "$rebuilt" = 1 ]; then
   # Pushed by its id first; the local branch moves only once origin has
   # taken it. Until then refs/fm-rebuilt/ names the commit, so a run cut
   # short in between settles on origin's answer (rebuild_settle).
-  git -C "$REPO" update-ref "refs/fm-rebuilt/$branch" "$rebuilt_head" || {
+  git -C "$FM_TARGET_ROOT" update-ref "refs/fm-rebuilt/$branch" "$rebuilt_head" || {
     echo "fm-worker: could not record the rebuilt commit ${rebuilt_head}; nothing is pushed" >&2; exit 70; }
   # Leased on the head fetched before the rebuild, never a bare --force:
   # anything pushed to the branch since is refused rather than overwritten.
   # An empty lease means the branch must still not exist on origin.
+  if [ "$FM_EXTERNAL" = 1 ]; then
+    echo 'fm-worker: task force-push needs confirmed project policy; rebuild retained for recovery' >&2
+    exit 65
+  fi
   if ! git -C "$tree" push -q --force-with-lease="refs/heads/$branch:$rebuild_lease" \
        origin "$rebuilt_head:refs/heads/$branch" 2>/dev/null; then
     # refused: the local branch never moved; the rebuilt commit stays
     # reachable by the id printed here
     rebuild_settle || true
     echo "fm-worker: could not push the rebuilt $branch: origin no longer has ${rebuild_lease:-no such branch}, or refused" >&2
-    echo "fm-worker: the rebuilt commit is ${rebuilt_head}; $branch is back at $(git -C "$REPO" rev-parse -q --verify "refs/heads/$branch")" >&2
+    echo "fm-worker: the rebuilt commit is ${rebuilt_head}; $branch is back at $(git -C "$FM_TARGET_ROOT" rev-parse -q --verify "refs/heads/$branch")" >&2
     exit 71
   fi
   # origin has it: only now the local branch. HEAD, the index and the
@@ -1822,10 +1856,14 @@ if [ "$rebuilt" = 1 ]; then
     echo "fm-worker: the rebuilt $branch (${rebuilt_head}) is on origin, but $branch could not be moved onto it; the next round does" >&2
     exit 70; }
   git -C "$tree" branch -q -u "origin/$branch" >/dev/null 2>&1 || true
-  git -C "$REPO" update-ref -d "refs/fm-rebuilt/$branch" 2>/dev/null \
+  git -C "$FM_TARGET_ROOT" update-ref -d "refs/fm-rebuilt/$branch" 2>/dev/null \
     || echo "fm-worker: could not clear refs/fm-rebuilt/$branch; the next round settles it" >&2
   echo "fm-worker: $branch rebuilt on $BASE; the previous head was ${rebuild_prev}" >&2
 else
+  if [ "$FM_EXTERNAL" = 1 ]; then
+    echo 'fm-worker: external work retained locally; publication requires the conventions policy reader (T-139) / 外部工作已保留於本機；發布需要 T-139 慣例政策讀取器' >&2
+    exit 65
+  fi
   git -C "$tree" push -q -u origin "$branch" 2>/dev/null || {
     echo "fm-worker: could not push $branch" >&2; exit 71; }
 fi

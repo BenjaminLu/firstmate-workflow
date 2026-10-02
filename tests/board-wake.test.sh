@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 # shellcheck source=tests/lib/board.sh
 . "$ROOT/tests/lib/board.sh"
 XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
@@ -12,7 +14,7 @@ XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
 # names none, and ends when that owner does - even a SIGKILLed one.
 make_w() {   # make_w: a fixture with three merge cards, D-51..D-53, its path on stdout
   local w; w="$(safe_tmpdir)"; mkdir -p "$w/bin" "$w/state/pending" "$w/design" "$w/board/public"
-  cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$w/bin/"
+  cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$w/bin/"; project_storage_fixture "$w/bin/"
   cp -R "$ROOT/bin/lib" "$w/bin/"
   cp "$ROOT/board/server.ts" "$w/board/"; cp "$ROOT/board/public/index.html" "$w/board/public/"
   mkdir -p "$w/design/tasks"

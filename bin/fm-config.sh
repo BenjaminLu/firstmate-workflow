@@ -28,20 +28,20 @@ fm_default_repo() {
 }
 
 fm_cfg() {      # fm_cfg <key> [file]
-  local f="${2:-config.yaml}"
+  local f="${2:-${FM_CONFIG:-config.yaml}}"
   [ -f "$f" ] || return 1
   sed -n "s/^$1:[[:space:]]*//p" "$f" | head -1 | _fm_clean
 }
 
 fm_cfg_in() {   # fm_cfg_in <section> <key> [file]
-  local f="${3:-config.yaml}"
+  local f="${3:-${FM_CONFIG:-config.yaml}}"
   [ -f "$f" ] || return 1
   sed -n "/^$1:/,/^[^[:space:]#]/p" "$f" \
     | sed -n "s/^[[:space:]][[:space:]]*$2:[[:space:]]*//p" | head -1 | _fm_clean
 }
 
 fm_cfg_list() { # fm_cfg_list <section> [file]
-  local f="${2:-config.yaml}"
+  local f="${2:-${FM_CONFIG:-config.yaml}}"
   [ -f "$f" ] || return 1
   sed -n "/^$1:/,/^[^[:space:]#-]/p" "$f" \
     | sed -n 's/^[[:space:]]*-[[:space:]]*//p' | _fm_clean
@@ -54,7 +54,7 @@ fm_board_port() {
   if [ "${FM_PORT+x}" = x ]; then
     value="$FM_PORT"; source=FM_PORT; min=0
   else
-    value="$(fm_cfg_in board port "${1:-config.yaml}" 2>/dev/null || true)"
+    value="$(fm_cfg_in board port "${1:-${FM_CONFIG:-config.yaml}}" 2>/dev/null || true)"
     value="${value:-4173}"; source=board.port
   fi
   if [[ ! "$value" =~ ^[0-9]{1,5}$ ]] || [ "$((10#$value))" -lt "$min" ] || [ "$((10#$value))" -gt 65535 ]; then
@@ -65,7 +65,7 @@ fm_board_port() {
 
 fm_language() {
   local value
-  value="$(fm_cfg language "${1:-config.yaml}" 2>/dev/null || true)"
+  value="$(fm_cfg language "${1:-${FM_CONFIG:-config.yaml}}" 2>/dev/null || true)"
   value="${value:-en}"
   case "$value" in
     en|zh-TW) printf '%s\n' "$value" ;;
@@ -79,7 +79,7 @@ fm_language() {
 # and every other line - comments, policy:, project:, projects: - is left
 # exactly as it was. A file that does not exist yet is created.
 fm_cfg_set() {
-  local key="$1" value="$2" f="${3:-config.yaml}"
+  local key="$1" value="$2" f="${3:-${FM_CONFIG:-config.yaml}}"
   python3 -c '
 import re, sys
 path, value, f = sys.argv[1].split("."), sys.argv[2], sys.argv[3]
@@ -155,7 +155,7 @@ _fm_code_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # declared" would skip a stage and still look green. The parser is the one
 # `fm-session.sh start` uses, so the two cannot disagree about the block.
 fm_project() {  # fm_project <field> [file]
-  python3 "$_fm_code_dir/fm-herdr.py" project "${2:-config.yaml}" "$1"
+  python3 "$_fm_code_dir/fm-herdr.py" project "${2:-${FM_CONFIG:-config.yaml}}" "$1"
 }
 
 # The project registry (design section 15): config.yaml's `default_project`
@@ -173,7 +173,7 @@ fm_project() {  # fm_project <field> [file]
 # then FM_PROJECT, then default_project. Nothing here looks at the current
 # directory, a git remote or a worktree - a run must not change project
 # because a shell was somewhere else. `root` is the engine root for `repo: .`
-# and state/projects/<name>/repo otherwise.
+# and FM_HOME/projects/<name>/repo otherwise.
 #
 # Every lookup validates the whole registry first and exits 65 naming the
 # project and the field: an unregistered or malformed name, a `repo` other
@@ -184,7 +184,7 @@ fm_project() {  # fm_project <field> [file]
 # (`repo: .`) resolves to T-043's top-level `project:` block, whole, read by
 # the same parser fm_project uses. A self entry carrying its own `project:`
 # as well as the top-level block is refused, so the two cannot disagree.
-fm_projects()         { _fm_registry "${1:-config.yaml}" names; }
+fm_projects()         { _fm_registry "${1:-${FM_CONFIG:-config.yaml}}" names; }
 
 # The crew's permission policy (T-105, T-117): what every crew round may do,
 # per role, whichever vendor runs it. The operator's own CLI settings are
@@ -222,7 +222,7 @@ fm_projects()         { _fm_registry "${1:-config.yaml}" names; }
 # change config.yaml. The one escape hatch for a sandbox regression is
 # FM_CREW_UNSANDBOXED=1 in the operator's own shell (fm-worker.sh,
 # fm-review.sh; design 13.1).
-fm_policy() { _fm_registry "${3:-config.yaml}" policy "$1" "${2:-}"; }
+fm_policy() { _fm_registry "${3:-${FM_CONFIG:-config.yaml}}" policy "$1" "${2:-}"; }
 
 # fm_crew_hatch <script> -> 0, with FM_ROUND_UNSANDBOXED=1 exported, when the
 #   operator's own shell set FM_CREW_UNSANDBOXED=1 and this is not a crew
@@ -352,7 +352,7 @@ fm_policy_report() {
       (map(select(.what != "")) | group_by(.what)[] | "known|" + (map(.h) | join(", ")) + "|" + .[0].what)' \
     2>/dev/null || printf '%s\n' "$all" | tr ' ' '\n' | sed 's/^/undeclared|/')
   [ -n "$hosts" ] || return 0
-  mkdir -p "$1/state/policy" &&
+  mkdir -p "${FM_STATE_DIR:-$1/state}/policy" &&
     jq -cn --arg role "$2" --arg task "$3" --arg actor "$4" --arg hosts "$hosts" \
       --arg expected "$expected" \
       --arg project "$project" --argjson declared "${declared:-[]}" \
@@ -361,16 +361,16 @@ fm_policy_report() {
         hosts:($hosts | split(" ")), declared:$declared,
         add_to:(if $project == "" then "policy.network" else "projects.\($project).policy.network" end),
         source:"proxy", expected:($expected | split(" ") | map(select(. != "")))}' \
-      >> "$1/state/policy/blocked-hosts.jsonl"
+      >> "${FM_STATE_DIR:-$1/state}/policy/blocked-hosts.jsonl"
   printf '%s\n' "$hosts"
 }
-fm_project_resolve()  { _fm_registry "${2:-config.yaml}" resolve "${1:-}"; }
-fm_project_get()      { _fm_registry "${3:-config.yaml}" field "$1" "$2"; }
-fm_project_contract() { _fm_registry "${3:-config.yaml}" contract "$1" "$2"; }
+fm_project_resolve()  { _fm_registry "${2:-${FM_CONFIG:-config.yaml}}" resolve "${1:-}"; }
+fm_project_get()      { _fm_registry "${3:-${FM_CONFIG:-config.yaml}}" field "$1" "$2"; }
+fm_project_contract() { _fm_registry "${3:-${FM_CONFIG:-config.yaml}}" contract "$1" "$2"; }
 fm_project_use() {
   local name root
-  name="$(fm_project_resolve "${1:-}" "${2:-config.yaml}")" || return
-  root="$(fm_project_get "$name" root "${2:-config.yaml}")" || return
+  name="$(fm_project_resolve "${1:-}" "${2:-${FM_CONFIG:-config.yaml}}")" || return
+  root="$(fm_project_get "$name" root "${2:-${FM_CONFIG:-config.yaml}}")" || return
   FM_PROJECT="$name"; FM_PROJECT_ROOT="$root"
   export FM_PROJECT FM_PROJECT_ROOT
 }
@@ -858,12 +858,25 @@ def registered(projects, name):
 def field(projects, name, key, config):
     entry = registered(projects, name)
     engine = Path(config).resolve().parent
-    if key == 'root':
-        return str(engine if entry.get('repo') == '.' else engine / 'state/projects' / name / 'repo')
-    if key == 'design':
-        return entry.get(key) or 'projects/%s/design.md' % name
-    if key == 'tasks':
-        return entry.get(key) or 'projects/%s/tasks' % name
+    if key in ('home', 'root', 'state', 'worktrees', 'design', 'tasks', 'conventions'):
+        if entry.get('repo') == '.':
+            paths = dict(home=str(engine), root=str(engine), state=str(engine / 'state'),
+                         worktrees=str(engine / 'state/worktrees'),
+                         design=entry.get('design') or 'design/design.md',
+                         tasks=entry.get('tasks') or 'design/tasks',
+                         conventions=str(engine / 'CONVENTIONS.md'))
+            return paths[key]
+        path_module = Path(herdr_path).parent / 'lib/fm_project_paths.py'
+        spec = importlib.util.spec_from_file_location('fm_project_paths', path_module)
+        paths = importlib.util.module_from_spec(spec); spec.loader.exec_module(paths)
+        configured = ''
+        for raw in Path(config).read_text().splitlines():
+            match = re.match(r'home:(?:\s+(.*))?$', raw)
+            if match: configured = herdr._project_scalar(match.group(1) or '', 'home')
+        home = paths.external_home(engine, name, configured)
+        child = dict(home='', root='repo', state='state', worktrees='worktrees',
+                     design='design.md', tasks='tasks', conventions='CONVENTIONS.md')[key]
+        return str(home / child)
     if key in ('repo', 'github', 'base', 'required_check'):
         return entry.get(key, '')
     refuse(name, key, 'is not a registry field')
@@ -1110,7 +1123,7 @@ fm_vendor_chain() {
 #   fm_role_vendor [role] [file] -> the vendor a role starts on: its own
 #   `vendor:`, else the top-level one, else mock - the head of its chain
 fm_role_vendor() {
-  local role="${1:-}" f="${2:-config.yaml}" v=''
+  local role="${1:-}" f="${2:-${FM_CONFIG:-config.yaml}}" v=''
   [ -n "$role" ] && v="$(fm_cfg_in "$role" vendor "$f")"
   [ -n "$v" ] || v="$(fm_cfg vendor "$f")"
   [ -n "$v" ] || v=mock
@@ -1136,7 +1149,7 @@ fm_role_vendor() {
 #   fm_model_for <role> <vendor> [file] -> that vendor's model, or empty
 #   fm_model <role> [file]              -> the model of the role's own vendor
 fm_model_for() {
-  local role="${1:-}" vendor="${2:-}" f="${3:-config.yaml}" m=''
+  local role="${1:-}" vendor="${2:-}" f="${3:-${FM_CONFIG:-config.yaml}}" m=''
   [ -n "$vendor" ] || vendor="$(fm_role_vendor "$role" "$f")"
   if [ -n "$role" ] && [ "$vendor" = "$(fm_role_vendor "$role" "$f")" ]; then
     m="$(fm_cfg_in "$role" model "$f")"
@@ -1147,7 +1160,7 @@ fm_model_for() {
   fi
   printf '%s\n' "$m"
 }
-fm_model() { fm_model_for "${1:-}" '' "${2:-config.yaml}"; }
+fm_model() { fm_model_for "${1:-}" '' "${2:-${FM_CONFIG:-config.yaml}}"; }
 
 # identity.json from a round's start (T-146): the vendor it starts on and
 # the model config.yaml names for that vendor, beside the six T-116 fields,
@@ -1530,4 +1543,70 @@ fm_loop_flags() {   # fm_loop_flags <file>
     | sed 's/).*$//' \
     | grep -oE '\-\-[A-Za-z][A-Za-z0-9-]*' \
     | sort -u
+}
+
+# Resolve configuration, checkout, and private records independently. Call
+# before writing anything; a missing registry preserves pre-registry self use.
+fm_storage_init() {
+  local engine="$1" explicit="${2:-${FM_PROJECT:-}}" names name
+  engine="$(cd "$engine" && pwd -P)" || return 65
+  if [ "${FM_EXTERNAL:-0}" = 1 ]; then unset GH_REPO; fi
+  FM_ENGINE_ROOT="$engine"; FM_CONFIG="$engine/config.yaml"
+  FM_STATE_DIR="$engine/state"; FM_WORKTREES="$engine/state/worktrees"
+  FM_TASKS_DIR="$engine/design/tasks"; FM_DESIGN="$engine/design/design.md"
+  FM_TARGET_ROOT="$engine"; FM_EXTERNAL=0
+  # Pre-registry and degraded self callers do not need a usable registry.
+  if ! names="$(fm_projects "$FM_CONFIG")"; then
+    [ -z "$explicit" ] || [ "$explicit" = firstmate-workflow ] || return 65
+    names=''
+  fi
+  if [ -n "$names" ]; then
+    name="$explicit"
+    if [ -z "$name" ]; then
+      name="$(fm_cfg default_project "$FM_CONFIG" || true)"
+      if [ -z "$name" ]; then
+        for name in $names; do
+          [ "$(fm_project_get "$name" repo "$FM_CONFIG")" != . ] || break
+        done
+        [ "$(fm_project_get "$name" repo "$FM_CONFIG")" = . ] || name=''
+      fi
+    fi
+    # No default and no self entry: an unnamed legacy caller stays local.
+    if [ -z "$name" ]; then
+      export FM_ENGINE_ROOT FM_CONFIG FM_STATE_DIR FM_WORKTREES FM_TASKS_DIR FM_DESIGN
+      export FM_TARGET_ROOT FM_EXTERNAL
+      return 0
+    fi
+    name="$(fm_project_resolve "$name" "$FM_CONFIG")" || return 65
+    FM_PROJECT="$name"
+    FM_TARGET_ROOT="$(fm_project_get "$name" root "$FM_CONFIG")" || return 65
+    if [ "$(fm_project_get "$name" repo "$FM_CONFIG")" != . ]; then
+      if [ -e "$engine/state/projects/$name" ] || [ -L "$engine/state/projects/$name" ]; then
+        echo "fm-config: legacy project $name requires approved fm project sync --migrate" >&2
+        return 65
+      fi
+      FM_EXTERNAL=1
+      FM_STATE_DIR="$(fm_project_get "$name" state "$FM_CONFIG")" || return 65
+      FM_WORKTREES="$(fm_project_get "$name" worktrees "$FM_CONFIG")" || return 65
+      FM_TASKS_DIR="$(fm_project_get "$name" tasks "$FM_CONFIG")" || return 65
+      FM_DESIGN="$(fm_project_get "$name" design "$FM_CONFIG")" || return 65
+      GH_REPO="$(fm_project_get "$name" github "$FM_CONFIG")" || return 65
+      FM_BASE="$(fm_project_get "$name" base "$FM_CONFIG")" || return 65
+      export GH_REPO FM_BASE
+    fi
+  fi
+  export FM_ENGINE_ROOT FM_CONFIG FM_STATE_DIR FM_WORKTREES FM_TASKS_DIR FM_DESIGN
+  export FM_TARGET_ROOT FM_EXTERNAL FM_PROJECT
+}
+
+fm_target_validate() {
+  [ "$FM_EXTERNAL" = 1 ] || return 0
+  local actual expected
+  [ -d "$FM_TARGET_ROOT/.git" ] && [ ! -L "$FM_TARGET_ROOT/.git" ] || return 65
+  actual="$(git -C "$FM_TARGET_ROOT" rev-parse --show-toplevel 2>/dev/null)" || return 65
+  [ "$actual" = "$FM_TARGET_ROOT" ] || return 65
+  expected="${FM_GITHUB_URL:-https://github.com}/$GH_REPO.git"
+  actual="$(git -C "$FM_TARGET_ROOT" remote get-url origin 2>/dev/null)" || return 65
+  [ "$actual" = "$expected" ] && [ "$(git -C "$FM_TARGET_ROOT" remote get-url --push origin 2>/dev/null)" = "$expected" ] || {
+    echo "fm-config: managed clone origin does not match project $FM_PROJECT" >&2; return 65; }
 }

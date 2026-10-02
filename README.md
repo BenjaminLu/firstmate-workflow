@@ -393,3 +393,49 @@ the stock dispatcher to a visible owned Codex Herdr run. Capture isolated review
 checks/gates, outputs and cleanup/retention evidence. A mock fixture or manual
 relaunch after dead dispatch is insufficient. Advanced external reviewers,
 stacking and autopilot (T-140/T-143/T-141) remain planned after the basic pilot.
+
+### External project storage (T-142)
+
+`FM_HOME` selects an absolute directory outside the engine checkout; otherwise
+`home:` in engine `config.yaml` is used, then `~/.firstmate`. Each external
+project stores its managed clone at `projects/<name>/repo`, worktrees at
+`projects/<name>/worktrees`, and local specs at `tasks/`, `design.md`, and
+`CONVENTIONS.md`. Execution records live under that project's `state/`.
+Self projects (`repo: .`) keep their existing layout.
+
+`bin/fm.sh project sync <name>` refuses an existing legacy
+`state/projects/<name>` store. After the operator approves migration, pass
+`--migrate`. Migration uses a same-filesystem atomic rename and retains the
+source on refusal; registered worktrees and live or indeterminate ownership
+records must first be reconciled. It does not silently copy and delete records
+across filesystems.
+`bin/fm.sh project history on <name>` initializes local spec history with no
+remote and excludes clones, worktrees, and execution state.
+
+Private visibility is accepted. When GitHub protection cannot be read,
+verification remains unknown unless the captain has confirmed the repository,
+base, required checks and policy in local
+`state/protection-confirmation.json` (`repository`, `base`, `required_checks`,
+`captain_confirmed: true`, `policy_confirmed: true`). This record cannot turn an
+explicitly unprotected branch into a protected one.
+
+External merges remain refused pending T-139's conventions policy reader; they
+never fall back to self-project squash/delete behavior. External task-branch
+force pushes are also refused until a confirmed project policy can be read.
+
+Until that reader is installed, external worker publication and review-comment
+posting stay local as well. This is a deliberate policy hold: a local commit or
+review log is not a published PR, a verified verdict, or an accepted external
+execution. No environment switch grants publication permission.
+
+Approved migration consolidates separately stored project specs and records,
+including owned lines in shared event and wake logs, completed run directories,
+decisions, diagrams, mirrors, pins, evidence and recovery records. It checks the
+transfer plan before mutation, verifies retained bytes, and keeps a recovery
+journal outside the engine. A failure rolls back the clone and record transfers.
+Live IPC, active or indeterminate owners, registered worktrees and ambiguous
+destination collisions are refused; reconcile those with firstmate before retrying.
+
+The engine-wide board projects external task IDs, statuses, crew identity and PR
+links. Select a project to read its local descriptions and decision details;
+those records are read in place, not copied into the engine's public tree.

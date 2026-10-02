@@ -213,6 +213,8 @@ assert_eq "self-host" "$(FM_PROJECT=example-app fm_project_resolve self-host "$c
 
 # never inferred: a shell standing inside another project's managed clone,
 # whose remote is that project's repository, still resolves the default
+FM_HOME="$(safe_tmpdir)"
+export FM_HOME
 clone="$r/state/projects/example-app/repo"
 mkdir -p "$clone"
 git -C "$clone" init -q && git -C "$clone" remote add origin https://github.com/example-org/example-app.git
@@ -221,16 +223,16 @@ assert_eq "self-host" "$(cd "$clone" && fm_project_resolve '' "$c")" \
 
 assert_eq "design/design.md" "$(fm_project_get self-host design "$c")" "a declared design path is read"
 assert_eq "design/tasks" "$(fm_project_get self-host tasks "$c")" "a declared task list is read"
-assert_eq "projects/example-app/design.md" "$(fm_project_get example-app design "$c")" "design defaults under projects/<name>"
-assert_eq "projects/example-app/tasks" "$(fm_project_get example-app tasks "$c")" "and so does the task list"
+assert_eq "$FM_HOME/projects/example-app/design.md" "$(fm_project_get example-app design "$c")" "design defaults under projects/<name>"
+assert_eq "$FM_HOME/projects/example-app/tasks" "$(fm_project_get example-app tasks "$c")" "and so does the task list"
 assert_eq "example-org/example-app" "$(fm_project_get example-app github "$c")" "github is read"
 assert_eq "trunk" "$(fm_project_get example-app base "$c")" "base is read"
 assert_eq "check" "$(fm_project_get example-app required_check "$c")" "required_check is read"
 assert_eq "." "$(fm_project_get self-host repo "$c")" "repo is read"
 assert_eq "$engine" "$(fm_project_get self-host root "$c")" "repo . has the engine root as its project root"
-assert_eq "$engine/state/projects/example-app/repo" "$(fm_project_get example-app root "$c")" \
+assert_eq "$FM_HOME/projects/example-app/repo" "$(fm_project_get example-app root "$c")" \
   "any other project's root is its managed clone"
-assert_eq "example-app|$engine/state/projects/example-app/repo" \
+assert_eq "example-app|$FM_HOME/projects/example-app/repo" \
   "$( fm_project_use example-app "$c" && bash -c 'printf "%s|%s" "$FM_PROJECT" "$FM_PROJECT_ROOT"' )" \
   "fm_project_use exports the name and the root to children"
 
@@ -513,7 +515,7 @@ assert_eq "0" "$(rc_of fm_tasks_check "$t/design/tasks")" "(and the directory is
 c2="$t/config.yaml"
 printf 'default_project: a\nprojects:\n  a:\n    repo: .\n    github: o/a\n    base: main\n    required_check: ci\n    tasks: design/tasks\n  b:\n    github: o/b\n    base: main\n    required_check: ci\n' > "$c2"
 assert_eq "design/tasks" "$(fm_project_get a tasks "$c2")" "the registry returns the declared task directory"
-assert_eq "projects/b/tasks" "$(fm_project_get b tasks "$c2")" "and the default is projects/<name>/tasks"
+assert_eq "$FM_HOME/projects/b/tasks" "$(fm_project_get b tasks "$c2")" "and the default is projects/<name>/tasks"
 rm -rf "$t"
 
 # --- what the round ran on, read from its own transcript (T-127) ---------

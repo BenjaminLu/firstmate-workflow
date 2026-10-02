@@ -9,6 +9,8 @@ done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 EMIT="$ROOT/bin/fm-emit.sh"
 
 t="$(mktemp -d)"; export FM_ROOT="$t"
@@ -82,7 +84,7 @@ assert_fail "'$EMIT' --actor x" "requires a type"
 # config.yaml and written as a top-level field; a name the registry does not
 # hold exits 65 and writes nothing.
 p="$(mktemp -d)"; mkdir -p "$p/bin" "$p/state"
-cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$p/bin/"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$p/bin/"; project_storage_fixture "$p/bin/"
 cat > "$p/config.yaml" <<'Y'
 default_project: firstmate-workflow
 projects:
@@ -96,11 +98,12 @@ projects:
     base: main
     required_check: check
 Y
+project_fixture_config "$p"
 plog="$p/state/events.jsonl"
 pemit() { FM_ROOT="$p" bash "$p/bin/fm-emit.sh" "$@" >/dev/null 2>&1; printf '%s' "$?"; }
 assert_eq "0" "$(pemit --actor github --type pr_opened --task T-004 --pr 3 --project example-app)" \
   "an event names a registered project"
-assert_eq "example-app" "$(jq -r 'select(.pr==3)|.project' "$plog")" \
+assert_eq "example-app" "$(jq -r 'select(.pr==3)|.project' "$(project_fixture_state "$p" example-app)/events.jsonl")" \
   "and the project is a top-level field of the line"
 assert_eq "0" "$(pemit --actor github --type pr_opened --task T-004 --pr 4 --project firstmate-workflow)" \
   "the default project can be named explicitly"

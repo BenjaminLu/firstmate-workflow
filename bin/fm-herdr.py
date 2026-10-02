@@ -8,6 +8,7 @@ Also hosts emit-status (T-036): mid-run crew_status via fm-emit.sh so every
 vendor refreshes authored activity through one path.
 """
 import contextlib
+import importlib.util
 import fcntl
 import hashlib
 import hmac
@@ -30,6 +31,23 @@ import urllib.request
 import uuid
 
 _lifeline = None
+
+
+def worktree_root(root):
+    storage = record_root(root)
+    engine = Path(root).resolve()
+    return storage / ('state/worktrees' if storage == engine else 'worktrees')
+
+
+_project_paths = None
+
+def record_root(root):
+    global _project_paths
+    if _project_paths is None:
+        spec = importlib.util.spec_from_file_location('fm_project_paths', Path(__file__).parent / 'lib/fm_project_paths.py')
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        _project_paths = module
+    return _project_paths.record_root(root)
 
 
 def lifeline():
@@ -227,7 +245,7 @@ def pinned_rosters(root, warn=True):
 
 
 def rosters_path(root):
-    return Path(root) / 'state/crew/rosters.json'
+    return record_root(root) / 'state/crew/rosters.json'
 
 
 def drawn_rosters(root):
@@ -254,7 +272,7 @@ def served_roles(root):
     rule. Runs from before T-104 are not counted: T-089 let one name serve both
     roles, and that history is not judged by a rule it was not written under."""
     first = {}
-    for file in (Path(root) / 'state/runs').glob('*/identity.json'):
+    for file in (record_root(root) / 'state/runs').glob('*/identity.json'):
         try: identity = read(file)
         except (OSError, ValueError): continue
         if identity.get('one_role') is not True: continue
@@ -367,7 +385,7 @@ def review_round(root, task, project):
     given = os.environ.get('FM_ROUND', '')
     if re.fullmatch(r'[1-9][0-9]{0,5}', given): return int(given)
     opened, default = 0, default_project(root)
-    log = Path(root) / 'state/events.jsonl'
+    log = record_root(root) / 'state/events.jsonl'
     try: lines = log.read_text().splitlines() if log.is_file() else []
     except OSError: lines = []
     for line in lines:
@@ -455,7 +473,7 @@ def allocate(root, role, task, alias):
     if not re.fullmatch(r'[A-Za-z0-9_-]+', task):
         raise ValueError('invalid task identity')
     root = Path(root).resolve()
-    directory = root / 'state/runs'
+    directory = record_root(root) / 'state/runs'
     rosters = crew_rosters(root)
     project = run_project(root)
     with locked(directory / '.identity.lock'):
@@ -788,7 +806,7 @@ SAFE_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')
 def latest_attempt(root, actor):
     """The attempt a round of `actor` last started, or None."""
     if not SAFE_NAME.fullmatch(actor): raise ValueError('not an actor: ' + repr(actor))
-    attempts = [path.parent for path in (Path(root) / 'state/runs' / actor).glob('*/invocation.json')]
+    attempts = [path.parent for path in (record_root(root) / 'state/runs' / actor).glob('*/invocation.json')]
     return max(attempts, key=lambda path: path.stat().st_mtime_ns) if attempts else None
 
 
@@ -847,7 +865,7 @@ def stop_run(root, actor, grace=5.0, out=None):
     as the board did, and only while ps still shows that CLI."""
     out = out if out is not None else dict(stopped=[], failed=[])
     if not SAFE_NAME.fullmatch(actor): raise ValueError('not an actor: ' + repr(actor))
-    run = Path(root) / 'state/runs' / actor
+    run = record_root(root) / 'state/runs' / actor
     for attempt in sorted(path for path in run.glob('*') if path.is_dir()):
         pidfile = attempt / 'runner.pid'
         if pidfile.is_file():
@@ -889,10 +907,10 @@ def stop_task(root, task, project, default, grace=5.0):
     root = Path(root)
     out = dict(stopped=[], failed=[])
     if not SAFE_NAME.fullmatch(task): return out
-    try: pid = int((root / 'state/worktrees' / (task + '.pid')).read_text().strip())
+    try: pid = int((worktree_root(root) / (task + '.pid')).read_text().strip())
     except (OSError, ValueError): pid = None
     if pid: signal_recorded(out, f'worker {pid}', dict(pid=pid, token='fm-worker.sh'))
-    for file in sorted((root / 'state/runs').glob('*/identity.json')):
+    for file in sorted((record_root(root) / 'state/runs').glob('*/identity.json')):
         try: identity = read(file)
         except (OSError, ValueError): continue
         if identity.get('task') != task or (identity.get('project') or default) != project: continue
@@ -916,6 +934,7 @@ def stop_command(args):
     if len(rest) % 2 or set(options) - {'--task', '--project', '--default'}:
         raise ValueError('usage: stop <root> --task <id> [--project <name>] [--default <name>]')
     default = options.get('--default', default_project(root) or '')
+    if options.get('--project'): os.environ['FM_PROJECT'] = options['--project']
     return stop_task(root, options['--task'], options.get('--project') or default, default, grace)
 
 
@@ -1786,7 +1805,7 @@ def process_matches(record):
 
 def crew_last_events(root):
     """Last event per actor — the same fold the captain board uses for who is aboard."""
-    log = Path(root) / 'state/events.jsonl'
+    log = record_root(root) / 'state/events.jsonl'
     last = {}
     if not log.is_file():
         return last
@@ -1806,7 +1825,7 @@ def crew_last_events(root):
 
 def actor_is_live(root, actor):
     """Corroborate an aboard actor against run receipts, not task-level pid files."""
-    run = Path(root) / 'state/runs' / actor
+    run = record_root(root) / 'state/runs' / actor
     if not run.is_dir():
         return False
     process = run / 'process.json'
@@ -1897,7 +1916,7 @@ WAKE_QUEUE = 'state/session/wake.jsonl'
 
 def wakes(root):
     """The wake queue, oldest first; a line that does not parse is skipped."""
-    path = Path(root) / WAKE_QUEUE
+    path = record_root(root) / WAKE_QUEUE
     found = []
     if path.is_file():
         for line in path.read_text().splitlines():
@@ -1912,7 +1931,7 @@ def unacknowledged(root):
     """Captain decisions pushed to the wake queue that firstmate has not
     acknowledged since; reads, never consumes. An id acknowledged and then
     woken again (its merge settled) is listed again."""
-    base = Path(root) / 'state/session'
+    base = record_root(root) / 'state/session'
     latest = {}
     for item in wakes(root):
         latest[item['id']] = item
@@ -1981,7 +2000,7 @@ def acknowledge(root, decision):
     """Durably record that firstmate acted on a wake; idempotent, deletes nothing."""
     if decision == 'all' or not re.fullmatch(r'[A-Za-z0-9_-]+', decision):
         raise ValueError('ack requires --decision <id>')
-    base = Path(root) / 'state/session'
+    base = record_root(root) / 'state/session'
     items = [item for item in wakes(root) if item['id'] == decision]
     observation = base / 'observed' / (decision + '.json')
     if not items and not observation.exists():
@@ -2001,6 +2020,7 @@ def http_get(url):
 
 def board_matches(root, url):
     root = Path(root)
+    # This random nonce verifies the engine board, not a project record.
     directory = root / 'state/session'; directory.mkdir(parents=True, exist_ok=True)
     relative = Path('state/session') / ('probe-' + uuid.uuid4().hex)
     nonce = uuid.uuid4().hex.encode(); (root / relative).write_bytes(nonce)
@@ -2213,7 +2233,7 @@ def configured_board_port(root):
 def board_start(root):
     root = Path(root).resolve(); port = configured_board_port(root)
     url = f'http://127.0.0.1:{port}'
-    base = root / 'state/session'; base.mkdir(parents=True, exist_ok=True)
+    base = record_root(root) / 'state/session'; base.mkdir(parents=True, exist_ok=True)
     with locked(base / '.board.lock'):
         reused = board_matches(root, url)
         if not reused:
@@ -2256,7 +2276,7 @@ def board_start(root):
 def inspect(root):
     root = Path(root).resolve()
     runs = []
-    for file in (root / 'state/runs').glob('*/identity.json'):
+    for file in (record_root(root) / 'state/runs').glob('*/identity.json'):
         process = file.parent / 'process.json'
         record = read(process) if process.exists() else read(file)
         active = executions(file.parent)
@@ -2265,18 +2285,18 @@ def inspect(root):
                          live=launcher_live or any(item['live'] for item in active),
                          uncertain=any(item['state'] == 'uncertain' for item in active)))
     # the waiters holding a doorbell now (one killed outright counts until the next ring)
-    wake = dict(queue=str(root / WAKE_QUEUE), doorbells=len(list((root / 'state/session/wake.d').glob('*.fifo'))))
+    wake = dict(queue=str(record_root(root) / WAKE_QUEUE), doorbells=len(list((record_root(root) / 'state/session/wake.d').glob('*.fifo'))))
     report = dict(root=str(root), runs=runs, wake=wake,
-                  pending=[p.name for p in (root / 'state/pending').glob('*.json')],
+                  pending=[p.name for p in (record_root(root) / 'state/pending').glob('*.json')],
                   unacknowledged=unacknowledged(root),
-                  worktrees=[p.name for p in (root / 'state/worktrees').glob('*') if p.is_dir()])
-    events = root / 'state/events.jsonl'
+                  worktrees=[p.name for p in (worktree_root(root)).glob('*') if p.is_dir()])
+    events = record_root(root) / 'state/events.jsonl'
     report['events'] = [json.loads(line) for line in events.read_text().splitlines() if line.strip()] if events.exists() else []
     config = root / 'config.yaml'
     report['configuration'] = config.read_text() if config.exists() else None
     if window_host(root) == 'herdr':
         # a window listing, for people; a Herdr that does not answer is not an error
-        base = root / 'state/session'; base.mkdir(parents=True, exist_ok=True)
+        base = record_root(root) / 'state/session'; base.mkdir(parents=True, exist_ok=True)
         try: report['panes'] = Herdr(base)('pane', 'list')
         except (RuntimeError, OSError, ValueError, subprocess.SubprocessError): pass
     return report
@@ -2311,14 +2331,14 @@ def launch(script, root, args):
     # commits. Competing callers must not recreate a live worker's directory.
     if script.name == 'fm-worker.sh' and task is not None:
         if not re.fullmatch(r'[A-Za-z0-9_-]+', task): raise ValueError('invalid task')
-        lock_path = root / 'state/runs' / ('.worker-' + task + '.lock')
+        lock_path = record_root(root) / 'state/runs' / ('.worker-' + task + '.lock')
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
         try: fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError: raise RuntimeError('task already has a live worker; resume it: ' + task)
         # Inspect while holding task exclusion, before any worktree mutation.
         # Pending launches fail closed: absence of a PID is not proof of death.
-        for identity_file in (root / 'state/runs').glob('*/identity.json'):
+        for identity_file in (record_root(root) / 'state/runs').glob('*/identity.json'):
             identity = read(identity_file)
             if identity.get('role') == 'worker' and identity.get('task') == task:
                 if any(item['state'] != 'terminated' for item in executions(identity_file.parent)):
@@ -2363,7 +2383,7 @@ def emit_status(root, actor, task, en, tw, role='worker', crew_name=None,
         'crew_name': name,
         'activity': {'en': en, 'zh-TW': tw},
     }
-    fields = crew_identity(root / 'state/runs' / actor)
+    fields = crew_identity(record_root(root) / 'state/runs' / actor)
     if fields: data['identity'] = fields
     if done is not None and total is not None:
         done_n, total_n = int(done), int(total)
@@ -2485,15 +2505,17 @@ def project_report(root, run_setup=False):
     """What start and status say about the project. Only start runs setup."""
     root = Path(root).resolve()
     report = dict(declared=[], setup=None, ready=False)
-    try: contract = project_contract(root / 'config.yaml')
+    storage = record_root(root)
+    target = storage / 'repo' if storage != root else root
+    try: contract = project_contract(target / 'config.yaml')
     except ValueError as error:
         report['error'] = str(error); return report
     report['declared'] = [key for key in PROJECT_KEYS if key in contract]
     if run_setup and 'setup' in contract:
-        base = root / 'state/session'; base.mkdir(parents=True, exist_ok=True)
+        base = record_root(root) / 'state/session'; base.mkdir(parents=True, exist_ok=True)
         log = base / 'project-setup.log'
         with log.open('w') as out:
-            code = subprocess.call(['bash', '-c', contract['setup']], cwd=root,
+            code = subprocess.call(['bash', '-c', contract['setup']], cwd=target,
                                    stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
         report['setup'] = dict(exit=code, log=str(log))
         if code != 0:

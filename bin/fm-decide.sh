@@ -122,8 +122,17 @@ if [ "$MODE" = await ]; then
     || { echo 'fm-decide: bad decision id' >&2; exit 64; }
 fi
 
-DIR="$REPO/state/decisions"; PEND="$REPO/state/pending"
-IDS="$REPO/state/decision-ids"
+# The owned id selects the same project for reads and writes.
+FM_STATE_DIR="$REPO/state"
+if [ -r "$HERE/fm-config.sh" ]; then
+  # shellcheck source=bin/fm-config.sh
+  . "$HERE/fm-config.sh"
+  _storage_project="${PROJECT:-${FM_PROJECT:-}}"
+  if [[ "${ID:-}" =~ $FM_OWNED_ID ]]; then _storage_project="${BASH_REMATCH[1]}"; fi
+  fm_storage_init "$REPO" "$_storage_project" || exit 65
+fi
+DIR="$FM_STATE_DIR/decisions"; PEND="$FM_STATE_DIR/pending"
+IDS="$FM_STATE_DIR/decision-ids"
 mkdir -p "$DIR" "$PEND"
 emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate "$@" >/dev/null 2>&1 </dev/null || true; }
 
@@ -167,7 +176,7 @@ if [ "$MODE" = allocate ]; then
   trap 'exit 129' HUP
   max=0
   for f in "$own"/*.json "$PEND/D-$PROJECT-$key-"*.json "$DIR/D-$PROJECT-$key-"*.json \
-           "$REPO/state/runtime/archived-pending/D-$PROJECT-$key-"*.json; do
+           "$FM_STATE_DIR/runtime/archived-pending/D-$PROJECT-$key-"*.json; do
     [ -e "$f" ] || continue
     n="${f##*/}"; n="${n%.json}"; n="${n##*-}"
     case "$n" in ''|*[!0-9]*) continue ;; esac
@@ -255,7 +264,7 @@ notify() {   # notify <zh-TW question> <the project the card records, or nothing
   command -v herdr >/dev/null 2>&1 || {
     printf 'fm-decide: HERDR_ENV=1 but no herdr command: %s raised no notification\n' "$ID" >&2
     return 0; }
-  mark="$REPO/state/runtime/notified/$ID"
+  mark="$FM_STATE_DIR/runtime/notified/$ID"
   mkdir -p "${mark%/*}" 2>/dev/null
   (set -o noclobber; : > "$mark") 2>/dev/null || return 0
   body="$(printf '%s' "$1" | tr '\r\n\t' '   ')"

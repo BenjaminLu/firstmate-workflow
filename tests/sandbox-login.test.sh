@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 # shellcheck source=tests/lib/sandbox.sh
 . "$ROOT/tests/lib/sandbox.sh"
 # shellcheck source=tests/lib/sandbox-os.sh
@@ -112,7 +114,7 @@ lpath="$t/psbin:$suite_tools"
 # get no board write at all (asserted below too).
 board="$t/board"
 mkdir -p "$board/bin"
-cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-herdr.py" "$board/bin/"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-herdr.py" "$board/bin/"; project_storage_fixture "$board/bin/"
 kc() {   # kc <mode> <os> <vendor> [env...] -> exit code; the round's view in $t/login.out
   local mode="$1" os_="$2" v="$3" tool="$t/bin/sandbox-exec"
   shift 3

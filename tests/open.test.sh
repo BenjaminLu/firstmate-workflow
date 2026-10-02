@@ -5,11 +5,13 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 command -v bun >/dev/null 2>&1 || { echo "    bun not installed - open suite skipped"; exit 0; }
 
 d="$(mktemp -d)"; r="$d/repo"
 mkdir -p "$r/bin" "$r/state" "$r/design" "$r/board/public" "$r/src" "$d/outside"
-cp "$ROOT/bin/fm-emit.sh" "$r/bin/"; cp "$ROOT/board/server.ts" "$r/board/"
+cp "$ROOT/bin/fm-emit.sh" "$r/bin/"; project_storage_fixture "$r/bin/"; cp "$ROOT/board/server.ts" "$r/board/"
 cp "$ROOT/board/public/index.html" "$r/board/public/"
 mkdir -p "$r/design/tasks"   # no tasks: one file per task, and there are none
 # an editor that records rather than opens

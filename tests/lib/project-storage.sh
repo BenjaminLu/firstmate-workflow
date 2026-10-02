@@ -1,0 +1,22 @@
+# shellcheck shell=bash
+# fm:sourced
+project_storage_fixture() {
+  local dest="$1"
+  mkdir -p "$dest/lib"
+  cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$dest/"
+  cp "$ROOT/bin/lib/fm_project_paths.py" "$dest/lib/"
+}
+
+project_fixture_config() {
+  local engine="$1" fixture_home
+  if [ -f "$engine/.fixture-fm-home" ]; then fixture_home="$(cat "$engine/.fixture-fm-home")"
+  else fixture_home="$(safe_tmpdir)"; printf '%s\n' "$fixture_home" > "$engine/.fixture-fm-home"; fi
+  { printf 'home: %s\n' "$fixture_home"; cat "$engine/config.yaml"; } > "$engine/.fixture-config"
+  mv "$engine/.fixture-config" "$engine/config.yaml"
+}
+project_fixture_state() {
+  local engine="$1" name="$2" state
+  state="$(bash -c '. "$1/bin/fm-config.sh"; fm_project_get "$3" state "$2/config.yaml"' _ "$ROOT" "$engine" "$name")" || return
+  mkdir -p "$state/pending" "$state/decisions" "$state/merging" "$state/runtime/archived-pending"
+  printf '%s' "$state"
+}

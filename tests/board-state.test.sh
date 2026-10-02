@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 # shellcheck source=tests/lib/board.sh
 . "$ROOT/tests/lib/board.sh"
 # fixture carries the library
 d="$(safe_tmpdir)"; mkdir -p "$d/bin" "$d/state" "$d/design" "$d/board/public"
-cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$d/bin/"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
 cp -R "$ROOT/bin/lib" "$d/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$d/board/"
 cp "$ROOT/board/public/index.html" "$d/board/public/"

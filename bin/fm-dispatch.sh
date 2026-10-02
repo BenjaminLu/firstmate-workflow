@@ -32,6 +32,7 @@ fm_args=("$@")
 REPO="${FM_ROOT:-$(pwd)}"; DRY=0; LIMIT=''; ORDERED=''
 while [ $# -gt 0 ]; do
   case "$1" in
+    --project) fm_need "fm-dispatch" "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
     --repo) fm_need "fm-dispatch" "$@"; REPO="${2-}"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     --limit) fm_need "fm-dispatch" "$@"; LIMIT="${2-}"; shift 2 ;;
@@ -41,10 +42,14 @@ while [ $# -gt 0 ]; do
 done
 cd "$REPO" || { echo "fm-dispatch: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
+fm_storage_init "$REPO" || exit 65
+if [ "$FM_EXTERNAL" = 1 ]; then
+  "${FM_CODE_ROOT:-$REPO}/bin/fm-project.sh" verify "$FM_PROJECT" --repo "$REPO" || exit 65
+fi
 fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
-LOG="$REPO/state/events.jsonl"
+LOG="$FM_STATE_DIR/events.jsonl"
 emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate "$@" >/dev/null 2>&1 </dev/null || true; }
-if [ -n "$ORDERED" ] && ! fm_task "$ORDERED" design/tasks >/dev/null 2>&1; then
+if [ -n "$ORDERED" ] && ! fm_task "$ORDERED" "$FM_TASKS_DIR" >/dev/null 2>&1; then
   echo "fm-dispatch: --task $ORDERED has no file in design/tasks/" >&2
   exit 64
 fi
@@ -105,7 +110,7 @@ held() { [ -z "$ORDERED" ] || echo "fm-dispatch: $1" >&2; }
 # names it) stops the dispatch. Tasks are walked in fm_tasks' order - id
 # order, compared as versions, T-9 before T-10 - so that is the order in
 # which ready tasks take the free slots (design section 14).
-tasks="$(fm_tasks design/tasks)" \
+tasks="$(fm_tasks "$FM_TASKS_DIR")" \
   || { echo "fm-dispatch: the task list in design/tasks/ does not read; nothing is dispatched" >&2; exit 65; }
 
 # Ready is not cleared: firstmate puts each task that turns ready before the
@@ -146,8 +151,8 @@ while IFS= read -r id; do
   else
     # the worker emits dispatched itself; two writers of one fact is how
     # the log ends up disagreeing with itself
-    mkdir -p "$REPO/state/dispatch"
-    "${FM_CODE_ROOT:-$REPO}/bin/fm-worker.sh" --task "$id" --repo "$REPO" >>"$REPO/state/dispatch/$id.log" 2>&1 </dev/null &
+    mkdir -p "$FM_STATE_DIR/dispatch"
+    "${FM_CODE_ROOT:-$REPO}/bin/fm-worker.sh" --task "$id" --repo "$REPO" >>"$FM_STATE_DIR/dispatch/$id.log" 2>&1 </dev/null &
     echo "$id"
   fi
   slots=$(( slots - 1 )); started_any=1

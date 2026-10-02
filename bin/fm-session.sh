@@ -10,6 +10,7 @@ fm_args=("$@")
 REPO="${FM_ROOT:-$(pwd)}"; MODE=start; DECISION=all; TIMEOUT=0
 while [ $# -gt 0 ]; do
   case "$1" in
+    --project) fm_need "fm-session" "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
     start|status|wait|ack) MODE="$1"; shift ;;
     # T-151: nothing watches for a decision any more; the writer pushes the
     # wake, and `wait` is the caller's own foreground read of it
@@ -23,6 +24,7 @@ while [ $# -gt 0 ]; do
 done
 cd "$REPO" || exit 64
 REPO="$(pwd -P)"
+fm_storage_init "$REPO" || exit 65
 fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
 # The reviewer's engine is the captain's to choose. A project that names none
 # is said out loud here, once per start, rather than reviewed by whatever the

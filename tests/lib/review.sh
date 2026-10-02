@@ -16,6 +16,8 @@ export FM_REVIEW_CI_WAIT=0
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 # T-161: newer bash can run the old unbraced messages successfully. Check
 # the actual executable sources too, independently of ci.sh's lint, so
 # reverting either repair is detected on Linux as well as macOS bash 3.2.
@@ -53,8 +55,8 @@ fixture() {
   git init -q -b main "$d/repo"; cd "$d/repo" || return 1
   git config user.email a@b.c; git config user.name t
   mkdir -p bin design/tasks "$d/repo/skills/reviewer" src state
-  cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" bin/
-  cp "$ROOT/bin/fm-herdr.py" "$ROOT/bin/fm-auth-probe.sh" "$ROOT/bin/fm-sandbox.sh" bin/
+  cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" bin/; project_storage_fixture bin/
+  cp "$ROOT/bin/fm-herdr.py" "$ROOT/bin/fm-auth-probe.sh" "$ROOT/bin/fm-sandbox.sh" bin/; project_storage_fixture bin/
   cp -r "$ROOT/bin/adapters" bin/
   cp -R "$ROOT/bin/lib" bin/   # the lifeline a round's runner holds (T-151)
   cp "$ROOT/skills/reviewer/SKILL.md" "$d/repo/skills/reviewer/"

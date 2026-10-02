@@ -44,6 +44,7 @@ REVIEWER="${FM_REVIEWER_LOGIN:-}"
 need() { [ "$#" -ge 2 ] || { echo "fm-gate: $1 needs a value" >&2; exit 64; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
+    --project) need "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
     --task) need "$@"; TASK="${2-}"; shift 2 ;;
     --repo) need "$@"; REPO="${2-}"; shift 2 ;;
     --branch) need "$@"; BRANCH="${2-}"; shift 2 ;;
@@ -138,7 +139,10 @@ perl -e 'open(my $l, "+<&=", 8) or exit 0; truncate($l, 0) or exit 0;
   sysseek($l, 0, 0); syswrite($l, "$ARGV[0]\n")' "$$" 2>/dev/null || :
 export FM_GATE_LOCK_HELD="$LOCK"
 
-cd "$REPO" || { echo "fm-gate: no repo at $REPO" >&2; exit 64; }
+fm_storage_init "$REPO" || exit 65
+fm_target_validate || exit 65
+BASE="${FM_BASE:-$BASE}"
+cd "$FM_TARGET_ROOT" || { echo "fm-gate: no repo at $FM_TARGET_ROOT" >&2; exit 64; }
 
 # ---- 1. the branch exists and carries work -------------------------------
 gate1() {
@@ -149,7 +153,12 @@ gate1() {
 # ---- 2. it rebases onto the base cleanly ---------------------------------
 gate2() {
   local w rc
-  w="$(mktemp -d)"
+  if [ "$FM_EXTERNAL" = 1 ]; then
+    mkdir -p "$FM_STATE_DIR/gate-worktrees" || return 1
+    w="$(mktemp -d "$FM_STATE_DIR/gate-worktrees/check.XXXXXX")" || return 1
+  else
+    w="$(mktemp -d)"
+  fi
   git worktree add -q --detach "$w" "$BRANCH" 2>/dev/null || { rm -rf "$w"; return 1; }
   ( cd "$w" && git rebase "$BASE" >/dev/null 2>&1 ); rc=$?
   ( cd "$w" && git rebase --abort >/dev/null 2>&1 )
@@ -164,11 +173,11 @@ gate2() {
 changed() { git diff --name-only "$BASE...$BRANCH"; }
 # ---- 4. the diff stays inside the task's declared scope ------------------
 gate4() {
-  local scopes f ok
+  local scopes='' f ok
   # from the task's own file on the branch: a task that defines itself in
   # its own diff is otherwise unscoped, and gate 4 would pass anything
-  scopes="$(fm_task "$TASK" design/tasks "$BRANCH" | jq -r '.scope[]' 2>/dev/null)"
-  [ -n "$scopes" ] || scopes="$(fm_task "$TASK" | jq -r '.scope[]' 2>/dev/null)"
+  [ "$FM_EXTERNAL" = 1 ] || scopes="$(fm_task "$TASK" design/tasks "$BRANCH" | jq -r '.scope[]' 2>/dev/null)"
+  [ -n "$scopes" ] || scopes="$(fm_task "$TASK" "$FM_TASKS_DIR" | jq -r '.scope[]' 2>/dev/null)"
   [ -n "$scopes" ] || return 1          # a task with no declared scope cannot be gated
   while IFS= read -r f; do
     [ -n "$f" ] || continue
@@ -188,7 +197,12 @@ gate4() {
 # Keep gate policy (declared docs and check fallback) in the shared engine.
 # The lock descriptor belongs to this launcher, never to its test children.
 gate5() {
-  bash "$GATE_BIN/fm-failfirst.sh" --gate --head="$BRANCH" "$BASE" 8<&-
+  if [ "$FM_EXTERNAL" = 1 ]; then
+    mkdir -p "$FM_STATE_DIR/tmp" || return 1
+    TMPDIR="$FM_STATE_DIR/tmp" bash "$GATE_BIN/fm-failfirst.sh" --gate --head="$BRANCH" "$BASE" 8<&-
+  else
+    bash "$GATE_BIN/fm-failfirst.sh" --gate --head="$BRANCH" "$BASE" 8<&-
+  fi
 }
 
 # ---- 6. the required GitHub check is green -------------------------------

@@ -621,11 +621,13 @@ function render(s) {
   // request it names, and design.md when the repository has one.
   const links = d => {
     const out = [];
+    const project = d.project || s.project || '';
+    const query = project ? `&project=${encodeURIComponent(project)}` : '';
     if (typeof d.path === 'string' && d.path)
-      out.push(`<a href="/file?path=${encodeURIComponent(d.path)}" data-open="${esc(d.path)}" target="_blank" rel="noreferrer">&#8599; ${esc(t("openLocal"))}</a>`);
+      out.push(`<a href="/file?path=${encodeURIComponent(d.path)}${query}" data-project="${esc(project)}" data-open="${esc(d.path)}" target="_blank" rel="noreferrer">&#8599; ${esc(t("openLocal"))}</a>`);
     if (d.pr) out.push(prRef(d.pr, d.pr_url, 'prlink', `${esc(t("viewPr"))} #${esc(d.pr)}`));
-    if (s.designDoc)
-      out.push(`<a href="/file?path=design%2Fdesign.md" data-open="design/design.md" target="_blank" rel="noreferrer">&#9776; ${esc(t("viewDesign"))}</a>`);
+    if (s.designDoc && (!project || project === s.default_project || s.project))
+      out.push(`<a href="/file?path=${encodeURIComponent(s.designPath || 'design/design.md')}${s.project ? `&project=${encodeURIComponent(s.project)}` : ''}" data-project="${esc(s.project || '')}" data-open="${esc(s.designPath || 'design/design.md')}" target="_blank" rel="noreferrer">&#9776; ${esc(t("viewDesign"))}</a>`);
     return out.length ? `<div class="links">${out.join('')}</div>` : '';
   };
   // whose card it is: an id that names its owner (T-047) shows the project and
@@ -695,7 +697,7 @@ function render(s) {
     e.preventDefault();
     if (readOnly()) { open(a.href, '_blank'); return; }
     fetch('/open', { method: 'POST', headers: credential({ 'content-type': 'application/json' }),
-      body: JSON.stringify({ path: a.dataset.open }) })
+      body: JSON.stringify({ path: a.dataset.open, project: a.dataset.project }) })
       .then(r => { if (r.status === 403) refusedFor(r.clone()); if (!r.ok) open(a.href, '_blank'); })
       .catch(() => open(a.href, '_blank'));
   });

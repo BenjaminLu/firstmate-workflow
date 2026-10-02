@@ -51,6 +51,11 @@ set -uo pipefail
 # there. One guarantee, in one place; bin/ci.sh fails if a script that
 # dispatches is missing it.
 exec < /dev/null
+_storage_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
+if [ -r "$_storage_lib" ]; then
+  # shellcheck source=bin/fm-config.sh
+  . "$_storage_lib"
+fi
 
 REPO="${FM_ROOT:-$(pwd)}"; DRY=0; LIMIT=50; GH="${FM_GH:-gh}"; REPAIR=0; APPLY=0; EFFECTS='{}'
 # `shift 2` with one argument left consumes nothing and returns non-zero, so
@@ -71,6 +76,7 @@ add_effect() {
 }
 while [ $# -gt 0 ]; do
   case "$1" in
+    --project) need "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
     --repo)  need "$@"; REPO="$2";  shift 2 ;;
     --limit) need "$@"; LIMIT="$2"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
@@ -88,8 +94,14 @@ fi
 [ "$REPAIR" -eq 0 ] || { [ "$APPLY" -eq 1 ] && DRY=0 || DRY=1; }
 cd "$REPO" || { echo "fm-reconcile: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
-LOG="$REPO/state/events.jsonl"
-WT="$REPO/state/worktrees"
+if declare -f fm_storage_init >/dev/null; then
+  fm_storage_init "$REPO" || exit 65
+else
+  [ -z "${FM_PROJECT:-}" ] || { echo "fm-reconcile: named project needs $_storage_lib" >&2; exit 65; }
+  FM_STATE_DIR="$REPO/state"; FM_WORKTREES="$REPO/state/worktrees"
+fi
+LOG="$FM_STATE_DIR/events.jsonl"
+WT="$FM_WORKTREES"
 shopt -s nullglob
 
 # Every variable inside a zh-TW summary below is written ${braced}. Bash 3.2
@@ -221,10 +233,10 @@ if [ "$REPAIR" -eq 1 ]; then
   # What each answered card's options did, as far as anything beside the log
   # kept it: a decision record's effect, and the card a readiness record names.
   # A record that cannot be read is skipped, never fatal.
-  records="$(for f in "$REPO"/state/decisions/*.json; do
+  records="$(for f in "$FM_STATE_DIR"/decisions/*.json; do
       jq -c 'select(type == "object" and (.id | type) == "string") | {(.id): (.effect // null)}' "$f" 2>/dev/null
     done | jq -cs 'add // {}')"
-  ready="$(for f in "$REPO"/state/ready/*.json; do
+  ready="$(for f in "$FM_STATE_DIR"/ready/*.json; do
       jq -c '. as $r | select(type == "object" and (.task | type) == "string")
              | [.decision, .ended] | map(select(type == "string" and . != "") | {(.): $r.task}) | add // empty' "$f" 2>/dev/null
     done | jq -cs 'add // {}')"

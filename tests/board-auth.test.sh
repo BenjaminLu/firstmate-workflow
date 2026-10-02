@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 # shellcheck source=tests/lib/board.sh
 . "$ROOT/tests/lib/board.sh"
 XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
@@ -10,7 +12,7 @@ XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
 # route that writes or starts a program is refused to both, and nothing either
 # can read hands them what it would take.
 k="$(safe_tmpdir)"; mkdir -p "$k/bin" "$k/state/pending" "$k/design" "$k/board/public" "$k/src"
-cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$k/bin/"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$k/bin/"; project_storage_fixture "$k/bin/"
 cp -R "$ROOT/bin/lib" "$k/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$k/board/"
 cp "$ROOT/board/public/index.html" "$ROOT/board/public/ship.js" "$ROOT/board/public/diagram.js" "$k/board/public/"

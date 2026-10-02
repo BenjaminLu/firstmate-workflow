@@ -41,6 +41,7 @@ REPO="$(fm_default_repo)"; TASK=''; BRANCH=''; PR=''; ROUND=1; VENDOR=''; NAME='
 BASE="${FM_BASE:-main}"; GH="${FM_GH:-gh}"
 while [ $# -gt 0 ]; do
   case "$1" in
+    --project) fm_need "fm-review" "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
     --task) fm_need "fm-review" "$@"; TASK="${2-}"; shift 2 ;;
     --branch) fm_need "fm-review" "$@"; BRANCH="${2-}"; shift 2 ;;
     --repo) fm_need "fm-review" "$@"; REPO="${2-}"; shift 2 ;;
@@ -61,22 +62,31 @@ case "$CI_POLL" in ''|*[!0-9]*|0) echo "fm-review: FM_REVIEW_CI_POLL must be who
 CI_WAIT=$((10#$CI_WAIT)); CI_POLL=$((10#$CI_POLL))
 cd "$REPO" || { echo "fm-review: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
+fm_storage_init "$REPO" || exit 65
+fm_target_validate || exit 65
+BASE="${FM_BASE:-$BASE}"
 fm_refuse_herdr_bypass fm-review || exit $?
 
 # per run, like the worker's: a constant actor collapses two concurrent
 # rounds into one crewman carrying whichever task the second one touched
 fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
+cd "$FM_TARGET_ROOT" || exit 65
+REVIEW_TMP="${TMPDIR:-/tmp}"
+if [ "$FM_EXTERNAL" = 1 ]; then
+  REVIEW_TMP="$FM_STATE_DIR/review-checkouts"
+  mkdir -p "$REVIEW_TMP" || exit 70
+fi
 # The actor carries the review round (T-116): the one --round names, else
 # the allocation reads it from the log. Never one inherited from the shell.
 if [ -n "$ROUND_GIVEN" ]; then export FM_ROUND="$ROUND"; else unset FM_ROUND; fi
 fm_identity reviewer "$TASK" "$NAME" || exit 70
 unset FM_ROUND
-# T-146: the vendor this round starts on and the model config.yaml names for
+# T-146: the vendor this round starts on and the model "$FM_CONFIG" names for
 # that vendor are in identity.json from the start, so the board shows them
 # from the round's first event (the model the vendor reports joins them
 # once the round has run; a fallback vendor replaces them as it starts)
 head_vendor="$(fm_vendor_chain reviewer "$VENDOR" | head -1)"
-fm_record_requested "$head_vendor" "$(fm_model_for reviewer "$head_vendor" config.yaml)"
+fm_record_requested "$head_vendor" "$(fm_model_for reviewer "$head_vendor" "$FM_CONFIG")"
 # T-116: name, role, project, task, round and attempt ride every crew
 # payload as separate fields, so the board never parses them out of the actor;
 # vendor and model beside them (T-127, T-146), read fresh for every payload
@@ -229,6 +239,7 @@ trap '' HUP
 # T-027`, for a task sitting in the diff they were handed.
 task_spec() {   # task_spec <task> [branch]; its own file, design/tasks/<id>.json
   local t="$1" b="${2:-}" j=''
+  if [ "$FM_EXTERNAL" = 1 ]; then fm_task "$t" "$FM_TASKS_DIR"; return; fi
   [ -n "$b" ] && j="$(fm_task "$t" design/tasks "$b")"
   [ -n "$j" ] || j="$(fm_task "$t")"
   printf '%s' "$j"
@@ -274,7 +285,7 @@ bad_host="$(fm_review_network_refusal "$(fm_cfg_in reviewer network)")"
   exit 65; }
 policy_file="$FM_RUN_DIR/policy.json"; blocked_file="$FM_RUN_DIR/blocked-hosts"
 : > "$blocked_file"
-fm_policy reviewer "" config.yaml > "$policy_file" || {
+fm_policy reviewer "" "$FM_CONFIG" > "$policy_file" || {
   echo "fm-review: config.yaml's crew policy does not read; no round runs without one" >&2
   emit --review-outcome infrastructure_error --type review_failed \
        --en "review round $ROUND could not start" --tw "第 $ROUND 輪審核無法開始"
@@ -284,7 +295,7 @@ export FM_POLICY="$policy_file" FM_POLICY_BLOCKED="$blocked_file"
 # fm_run_chain resolves for whichever vendor an attempt runs - --vendor's,
 # or a fallback's - and hands it as FM_MODEL; a refusal it writes is
 # recorded here rather than read as the vendor being unavailable.
-export FM_MODEL_ROLE=reviewer FM_MODEL_CONFIG="$REPO/config.yaml"
+export FM_MODEL_ROLE=reviewer FM_MODEL_CONFIG="$FM_CONFIG"
 model_refused_file="$FM_RUN_DIR/model-refused"; : > "$model_refused_file"
 export FM_MODEL_REFUSED="$model_refused_file"
 # The operator's escape hatch for a sandbox regression (T-117): only their
@@ -328,7 +339,7 @@ build_checkout() {
   # after the lock is already held, closes that window rather than
   # narrowing it: sweep_checkouts can never see this checkout before its
   # lock exists.
-  staging="$(mktemp -d "${TMPDIR:-/tmp}/.fm-review-staging.XXXXXX")" || return 1
+  staging="$(mktemp -d "${REVIEW_TMP:-${TMPDIR:-/tmp}}/.fm-review-staging.XXXXXX")" || return 1
   staging="$(cd "$staging" && pwd -P)" || return 1
   printf '%s\n' "$$" > "$staging/owner" || { rm -rf "$staging"; return 1; }
   exec 9<>"$staging/owner" || { rm -rf "$staging"; return 1; }
@@ -403,7 +414,7 @@ rebuild_checkout() {
   fi
   checkout_is_free "$CHECKOUT_ROOT/owner" || return 1
   rm -rf "$CHECKOUT_ROOT"
-  staging="$(mktemp -d "${TMPDIR:-/tmp}/.fm-review-staging.XXXXXX")" || return 1
+  staging="$(mktemp -d "${REVIEW_TMP:-${TMPDIR:-/tmp}}/.fm-review-staging.XXXXXX")" || return 1
   staging="$(cd "$staging" && pwd -P)" || return 1
   printf '%s\n' "$$" > "$staging/owner" || { rm -rf "$staging"; return 1; }
   exec 9<>"$staging/owner" || { rm -rf "$staging"; return 1; }
@@ -424,7 +435,7 @@ rebuild_checkout() {
 }
 sweep_checkouts() {
   local d
-  for d in "${TMPDIR:-/tmp}"/fm-review.*; do
+  for d in "$REVIEW_TMP"/fm-review.*; do
     [ -d "$d" ] && [ -f "$d/owner" ] || continue
     checkout_is_free "$d/owner" && rm -rf "$d"
   done
@@ -459,7 +470,7 @@ fi
 # ever posted. And because a failed round therefore does not advance the
 # counter, its log must not overwrite the last one's.
 keep_log() {
-  local dir="$REPO/state/reviews" n=1 p
+  local dir="$FM_STATE_DIR/reviews" n=1 p
   mkdir -p "$dir"
   p="$dir/$TASK-r$ROUND.log"
   while [ -e "$p" ]; do n=$((n + 1)); p="$dir/$TASK-r$ROUND.$n.log"; done
@@ -568,8 +579,8 @@ required_names() {
   REQ_NAMES="$($GH pr checks "$PR" --required --json name --jq '.[].name' 2>/dev/null </dev/null | awk 'NF && !s[$0]++')"
   REQ_SOURCE="the pull request's required checks"
   [ -z "$REQ_NAMES" ] || return 0
-  p="$(fm_project_resolve "" config.yaml 2>/dev/null)" &&
-    REQ_NAMES="$(fm_project_get "$p" required_check config.yaml 2>/dev/null | awk 'NF && !s[$0]++')" || REQ_NAMES=''
+  p="$(fm_project_resolve "" "$FM_CONFIG" 2>/dev/null)" &&
+    REQ_NAMES="$(fm_project_get "$p" required_check "$FM_CONFIG" 2>/dev/null | awk 'NF && !s[$0]++')" || REQ_NAMES=''
   REQ_SOURCE="config.yaml's required_check"
   [ -n "$REQ_NAMES" ] || REQ_SOURCE=''
 }
@@ -747,7 +758,7 @@ head_evidence() {
   # What is not there is then said by gate - fm-gate.sh stops at the first
   # red one, so a summary can end early, and an empty one lacks all six. The
   # numbers are fm-gate.sh's own: 3 is retired (T-114).
-  local summary="$REPO/state/gates/$TASK-$sha.txt" n lacking=''
+  local summary="$FM_STATE_DIR/gates/$TASK-$sha.txt" n lacking=''
   if [ -f "$summary" ]; then
     fence="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
     printf '\nFrom state/gates/%s-%s.txt, verbatim:\n\n----- begin gate summary %s -----\n' "$TASK" "$sha" "$fence"
@@ -898,7 +909,7 @@ if ! python3 "$(dirname "${BASH_SOURCE[0]}")/lib/fm_review_context.py" \
   exit 65
 fi
 
-# the reviewer runs on its own engine when config.yaml names one, and falls
+# the reviewer runs on its own engine when "$FM_CONFIG" names one, and falls
 # back exactly the way the worker does - one chain, one runner
 mkdir -p "$work/out"
 # The reviewer's evidence: a verdict marker. A signed review IS the run's
@@ -1031,7 +1042,7 @@ if ! checkout_ok; then
   fi
 fi
 [ -z "$FM_VENDOR_UNKNOWN" ] || {
-  echo "fm-review: config.yaml names a vendor with no adapter: $FM_VENDOR_UNKNOWN" >&2
+  echo "fm-review: $FM_CONFIG names a vendor with no adapter: $FM_VENDOR_UNKNOWN" >&2
   emit --review-outcome infrastructure_error --type review_failed \
        --en "review round $ROUND could not start" --tw "第 $ROUND 輪審核無法開始"
   rm -rf "$work"; exit 65; }
@@ -1191,7 +1202,7 @@ fi
 # the script's record of what was reviewed goes last, after the reviewer's
 # words, so it is the one gate 7 reads whatever the reviewer quoted above it
 verdict="${verdict%"${verdict##*[![:space:]]}"}$(reviewed_line "$decided")"
-if [ -n "$PR" ]; then
+if [ -n "$PR" ] && [ "$FM_EXTERNAL" = 0 ]; then
   $GH pr comment "$PR" --body "$verdict" >/dev/null 2>&1 || true
 fi
 case "$decided" in

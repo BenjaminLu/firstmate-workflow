@@ -6,6 +6,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 
 DG="$ROOT/bin/fm-diagram.sh"
 
@@ -31,7 +33,7 @@ newroot() {  # newroot -> prints a fresh root with the dictionaries in it
   # errors are not swallowed here: a fixture that half-builds itself and says
   # nothing turns every assertion downstream of it into a report about the
   # fixture rather than about the generator
-  cp "$ROOT/bin/fm-emit.sh" "$d/bin/"
+  cp "$ROOT/bin/fm-emit.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
   cp "$ROOT/i18n/ui.en.json" "$ROOT/i18n/ui.zh-TW.json" "$ROOT/i18n/tw2cn.tsv" "$d/i18n/"
   printf '%s' "$d"
 }

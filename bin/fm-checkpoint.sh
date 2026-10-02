@@ -18,6 +18,7 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 REPO="$(fm_default_repo)"; TASK=''; MSG=''; DIR=''
 while [ $# -gt 0 ]; do
   case "$1" in
+    --project) fm_need "fm-checkpoint" "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
     --task) fm_need "fm-checkpoint" "$@"; TASK="${2-}"; shift 2 ;;
     --repo) fm_need "fm-checkpoint" "$@"; REPO="${2-}"; shift 2 ;;
     --dir)  fm_need "fm-checkpoint" "$@"; DIR="${2-}"; shift 2 ;;
@@ -38,6 +39,7 @@ if [ -z "$DIR" ] && [ -z "$TASK" ]; then
   exit 64
 fi
 
+if [ -n "${FM_PROJECT:-}" ]; then fm_storage_init "$REPO" || exit 65; fi
 if [ -n "$DIR" ]; then
   tree="$(cd "$DIR" && pwd -P)" || { echo "fm-checkpoint: no directory at $DIR" >&2; exit 70; }
   git -C "$tree" rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
@@ -55,21 +57,30 @@ if [ -n "$DIR" ]; then
 else
   cd "$REPO" || { echo "fm-checkpoint: no repo at $REPO" >&2; exit 64; }
   REPO="$(pwd -P)"
-  if [ -d "$REPO/state/worktrees/$TASK" ]; then
-    tree="$REPO/state/worktrees/$TASK"
+  fm_storage_init "$REPO" || exit 65
+  if [ -d "$FM_WORKTREES/$TASK" ]; then
+    tree="$FM_WORKTREES/$TASK"
   elif case "$REPO" in */state/worktrees/"$TASK") true ;; *) false ;; esac; then
     tree="$REPO"
     REPO="$(cd "$tree/../.." && pwd -P)" || REPO="$tree"
   elif git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-       && [ ! -d "$REPO/state/worktrees" ]; then
+       && [ ! -d "$FM_WORKTREES" ]; then
     # Caller passed the worktree as --repo (common when cwd is the worktree).
     tree="$REPO"
   else
-    echo "fm-checkpoint: no worktree at $REPO/state/worktrees/$TASK" >&2
+    echo "fm-checkpoint: no worktree at $FM_WORKTREES/$TASK" >&2
     exit 70
   fi
 fi
 
+common="$(git -C "$tree" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+case "$common" in */projects/*/repo/.git) FM_EXTERNAL=1 ;; esac
+if [ "${FM_EXTERNAL:-0}" = 1 ]; then
+  echo 'fm-checkpoint: external publication requires the conventions policy reader (T-139) / 外部發布需要 T-139 慣例政策讀取器' >&2
+  exit 65
+fi
+# --dir callers may not carry routing environment. The managed clone's
+# configured base still protects non-main project bases through fm-guard.
 branch="$(git -C "$tree" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 case "$branch" in
   ''|HEAD|main|master)

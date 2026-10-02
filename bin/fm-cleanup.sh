@@ -11,6 +11,11 @@ set -uo pipefail
 # there. One guarantee, in one place; bin/ci.sh fails if a script that
 # dispatches is missing it.
 exec < /dev/null
+_storage_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
+if [ -r "$_storage_lib" ]; then
+  # shellcheck source=bin/fm-config.sh
+  . "$_storage_lib"
+fi
 
 REPO="${FM_ROOT:-$(pwd)}"; TASK=''; FORCE=0; GH="${FM_GH:-gh}"
 # see fm_need in bin/fm-config.sh for why: `shift 2` with one argument
@@ -19,6 +24,7 @@ REPO="${FM_ROOT:-$(pwd)}"; TASK=''; FORCE=0; GH="${FM_GH:-gh}"
 need() { [ "$#" -ge 2 ] || { echo "fm-cleanup: $1 needs a value" >&2; exit 64; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
+    --project) need "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
     --task) need "$@"; TASK="${2-}"; shift 2 ;;
     --repo) need "$@"; REPO="${2-}"; shift 2 ;;
     --force) FORCE=1; shift ;;
@@ -31,8 +37,18 @@ abs() { ( cd "$1" 2>/dev/null && pwd -P ) || return 1; }
 REPO="$(abs "$REPO")" || { echo "fm-cleanup: no repo at $REPO" >&2; exit 64; }
 cd "$REPO" || exit 64
 
-ROOT="$REPO/state/worktrees"
+if declare -f fm_storage_init >/dev/null; then
+  fm_storage_init "$REPO" || exit 65
+else
+  [ -z "${FM_PROJECT:-}" ] || { echo "fm-cleanup: named project needs $_storage_lib" >&2; exit 65; }
+  FM_WORKTREES="$REPO/state/worktrees"; FM_TARGET_ROOT="$REPO"
+fi
+if declare -f fm_target_validate >/dev/null; then fm_target_validate || exit 65; fi
+ROOT="$FM_WORKTREES"
+[[ "$TASK" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || exit 65
+[ ! -L "$ROOT/$TASK" ] || exit 65
 target="$ROOT/$TASK"
+cd "$FM_TARGET_ROOT" || exit 65
 
 # --- nothing happens if there is nothing there ---------------------------
 [ -e "$target" ] || { echo "fm-cleanup: $TASK has no worktree"; exit 0; }

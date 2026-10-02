@@ -1111,15 +1111,22 @@ elif [ -z "$registry" ]; then
     skip "no DAG yet"
   fi
 else
+  self_checked=0
   for name in $registry; do
+    [ "$(fm_project_get "$name" repo config.yaml)" != . ] || self_checked=1
     tasks="$(fm_project_get "$name" tasks config.yaml)" \
       || { flunk "project ${name}: its registry entry does not resolve"; continue; }
     if [ -d "$tasks" ]; then
       dag_check "project ${name} ($tasks): " "$tasks"
+    elif [ "$(fm_project_get "$name" repo config.yaml)" != . ]; then
+      skip "project ${name}: $tasks not on this machine"
     else
       flunk "project ${name}: $tasks does not exist"
     fi
   done
+  if [ "$self_checked" = 0 ] && { [ -e design/tasks ] || [ -e design/tasks.json ]; }; then
+    dag_check 'self: ' design/tasks
+  fi
 fi
 fi # want_stage fast
 

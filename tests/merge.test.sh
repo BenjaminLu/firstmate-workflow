@@ -7,11 +7,13 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 
 fixture() {                       # <pr state> <head branch> [title] [number]
   local d; d="$(mktemp -d)"
   mkdir -p "$d/bin" "$d/state" "$d/stub"
-  cp "$ROOT/bin/fm-merge.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$d/bin/"
+  cp "$ROOT/bin/fm-merge.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$d/bin/"; project_storage_fixture "$d/bin/"
   printf 'vendor: mock\n' > "$d/config.yaml"
   pr_is "$d" "$1" "$2" "${3-}" "${4-}"
   # Answers as gh does. `gh pr view <n> --json a,b` prints an object of
@@ -97,17 +99,16 @@ projects:
     base: main
     required_check: check
 Y
+project_fixture_config "$1"
 }
 d="$(fixture OPEN t-004-app)"; registry "$d"
 out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --project example-app 2>&1)"
-assert_eq "0" "$?" "a named project's pull request merges"
-assert_contains "$(grep 'pr merge' "$d/ghcalls")" "--repo example-org/example-app" \
-  "on that project's repository"
-assert_contains "$(grep 'pr view' "$d/ghcalls" | head -1)" "--repo example-org/example-app" \
-  "and its state is read there too, not from the engine checkout"
-assert_eq "example-app" "$(jq -r 'select(.type=="merged")|.project' "$d/state/events.jsonl")" \
-  "the merged event carries the project"
-assert_eq "T-004" "$(jq -r 'select(.type=="merged")|.task' "$d/state/events.jsonl")" "and the task"
+assert_eq "65" "$?" "a named project's merge requires conventions policy"
+assert_eq "" "$(cat "$d/ghcalls" 2>/dev/null)" "no GitHub mutation precedes project policy"
+assert_contains "$out" "T-139" "refusal names the onboarding handoff"
+assert_contains "$out" "合併政策" "refusal carries both languages"
+assert_fail "test -e '$d/state/events.jsonl'" "no external merged event leaks into self state"
+
 rm -rf "$d"
 
 d="$(fixture OPEN t-009-board)"; registry "$d"
@@ -123,9 +124,9 @@ cleanup_stub() { printf '#!/usr/bin/env bash\necho "$*" >> "%s/cleanup-calls"\n'
   chmod +x "$1/bin/fm-cleanup.sh"; }
 d="$(fixture OPEN t-004-app)"; registry "$d"; cleanup_stub "$d"
 out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --project example-app 2>&1)"
-assert_eq "0" "$?" "another project's merge with a cleanup script present still merges"
+assert_eq "65" "$?" "another project without policy stays held with cleanup present"
 assert_fail "test -e '$d/cleanup-calls'" "and does not run the engine's cleanup for it"
-assert_contains "$out" "T-004's worktree in example-app is not cleaned up here" "and says so"
+assert_contains "$out" "merge policy not yet set" "and says so"
 rm -rf "$d"
 d="$(fixture OPEN t-009-board)"; registry "$d"; cleanup_stub "$d"
 out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --project firstmate-workflow 2>&1)"
@@ -152,8 +153,8 @@ for spelling in 'repo: .' 'repo: "."' "repo: '.'" 'repo: .   # the engine itself
 done
 d="$(fixture OPEN t-009-board)"; self_as "$d" ''; cleanup_stub "$d"
 out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --project firstmate-workflow 2>&1)"
-assert_eq "0" "$?" "an entry with no repo merges on its own repository"
-assert_contains "$(grep 'pr merge' "$d/ghcalls")" "--repo owner/engine" "named by its github"
+assert_eq "65" "$?" "an entry with no repo requires external merge policy"
+assert_eq "" "$(cat "$d/ghcalls")" "no merge is inferred from missing repo field"
 assert_fail "test -e '$d/cleanup-calls'" "but is a managed clone, so the engine's cleanup is not run for it"
 rm -rf "$d"
 for spelling in 'repo: ./' "repo: $ROOT" 'repo: ../engine'; do
@@ -179,6 +180,7 @@ projects:
     base: main
     required_check: ci
 Y
+project_fixture_config "$d"
 FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 9 --project firstmate-workflow >/dev/null 2>&1
 assert_eq "65" "$?" "a self project registered with no github is refused by name"
 assert_eq "" "$(cat "$d/ghcalls" 2>/dev/null)" "before gh is asked anything"
@@ -291,7 +293,9 @@ rm -rf "$d"
 # on another project it has no task whose worktree to speak of either
 d="$(fixture OPEN "$REV_BRANCH" "$REV_TITLE" 96)"; registry "$d"; cleanup_stub "$d"
 out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --pr 96 --untracked --project example-app 2>&1)"
-assert_eq "0" "$?" "an untracked merge on another project merges"
+assert_eq "65" "$?" "an external untracked merge awaits confirmed conventions policy"
+assert_contains "$out" "merge policy not yet set" "untracked merges retain the external policy hold"
+assert_ok "test ! -s '$d/ghcalls'" "policy hold precedes every external GitHub operation"
 assert_lacks "$out" "worktree" "and says nothing of a worktree it does not have"
 rm -rf "$d"
 # bash 3.2 reads a CJK character after a bare $name as part of the name, so

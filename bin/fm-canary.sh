@@ -456,8 +456,8 @@ destroy_fixture_build() {   # destroy_fixture_build <dir>
     wskill="skills/worker"
     mkdir -p bin design/tasks "$wskill" || exit 1
     cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-worker.sh" \
-       "$ROOT/bin/fm-checkpoint.sh" "$ROOT/bin/fm-guard.sh" "$ROOT/bin/fm-herdr.py" bin/ || exit 1
-    cp -r "$ROOT/bin/adapters" bin/ || exit 1
+       "$ROOT/bin/fm-checkpoint.sh" "$ROOT/bin/fm-guard.sh" "$ROOT/bin/fm-herdr.py" "$ROOT/bin/fm-project.sh" bin/ || exit 1
+    cp -r "$ROOT/bin/adapters" "$ROOT/bin/lib" bin/ || exit 1
     cp "$ROOT/tests/fixtures/hostile-adapter/bin/adapters/mock-hostile.sh" bin/adapters/ || exit 1
     chmod +x bin/adapters/mock-hostile.sh || exit 1
     cp "$ROOT/skills/worker/SKILL.md" "$wskill/" || exit 1
@@ -493,6 +493,7 @@ destroy_ghstub() {   # destroy_ghstub <dir> -> the stub's path
   mkdir -p "$1/stub"
   { printf '#!/usr/bin/env bash\n'
     printf 'case " $* " in\n'
+    printf '  *" api "*"/protection "*) echo '"'"'{"enforce_admins":{"enabled":true},"required_status_checks":{"strict":true,"contexts":["ci"]}}'"'"'; exit 0 ;;\n'
     printf '  *" pr list "*) echo null; exit 0 ;;\n'
     printf 'esac\n'
     printf 'echo "https://example.invalid/pull/1"\n'
@@ -512,11 +513,17 @@ destroy_name() {   # destroy_name <mode> -> a --name short enough to fit the act
   esac
 }
 destroy_case() {   # destroy_case <fixture-label> <repo> <mode>
-  local label="$1" repo="$2" mode="$3"
-  local id gh tree out rc ok=1 why='' restored_event='' tracked
+  local label="$1" repo="$2" mode="$3" engine="${4:-$2/repo}"
+  local id gh tree out rc log worker_args=() project_env=() ok=1 why='' restored_event='' tracked
   id="$(destroy_task_id "$mode")"
   gh="$(destroy_ghstub "$repo")"
   tree="$repo/repo/state/worktrees/$id"
+  log="$repo/repo/state/events.jsonl"
+  if [ "$label" = external ]; then
+    tree="$repo/worktrees/$id"; log="$repo/state/events.jsonl"
+    worker_args=(--repo "$engine" --project destroy-fixture)
+    project_env=(FM_HOME="$dwork/fm-home" FM_GITHUB_URL="$ext_dir/host")
+  fi
   # FM_TRANSPORT=direct: the round opens no window (T-144); it is still the
   # supervised process group every round is. This is a scripted proof, with
   # nobody to watch a window. Every other FM_*
@@ -525,12 +532,14 @@ destroy_case() {   # destroy_case <fixture-label> <repo> <mode>
   # extension of the round driving the canary.
   local scrub=(env) v
   while IFS= read -r v; do scrub+=(-u "$v"); done < <(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p')
-  out="$(cd "$repo/repo" \
+  out="$(cd "$engine" \
     && "${scrub[@]}" HERDR_ENV=0 FM_TRANSPORT=direct \
-       FM_GH="$gh" FM_HOSTILE_MODE="$mode" FM_MIRROR_INTERVAL=1 \
+       ${project_env[@]+"${project_env[@]}"} FM_GH="$gh" FM_HOSTILE_MODE="$mode" FM_MIRROR_INTERVAL=1 \
        FM_HOSTILE_SLEEP_BEFORE=2 FM_HOSTILE_SLEEP_AFTER=2 \
-       bin/fm-worker.sh --task "$id" --name "$(destroy_name "$mode")" 2>&1)"; rc=$?
-  if [ "$rc" != 0 ]; then ok=0; why="fm-worker.sh exited $rc"; fi
+       bin/fm-worker.sh --task "$id" --name "$(destroy_name "$mode")" ${worker_args[@]+"${worker_args[@]}"} 2>&1)"; rc=$?
+  if [ "$label" = external ] && [ "$rc" = 65 ] && [[ "$out" == *'publication requires the conventions policy reader (T-139)'* ]]; then
+    : # The local committed recovery is testable before onboarding enables publication.
+  elif [ "$rc" != 0 ]; then ok=0; why="fm-worker.sh exited $rc"; fi
   if [ ! -e "$tree/.git" ]; then ok=0; why="${why:+$why; }its .git link is gone"; fi
   if ! git -C "$tree" status >/dev/null 2>&1; then ok=0; why="${why:+$why; }git status fails in the tree"; fi
   tracked="$(git -C "$tree" ls-tree -r --name-only HEAD 2>/dev/null)"
@@ -552,7 +561,7 @@ destroy_case() {   # destroy_case <fixture-label> <repo> <mode>
       # rides worker_crashed, named by .data.event_kind instead.
       restored_event="$(jq -c --arg id "$id" \
            'select(.type=="worker_crashed" and .task==$id and .data.event_kind=="worktree_restored")' \
-           "$repo/repo/state/events.jsonl" 2>/dev/null | tail -1)"
+           "$log" 2>/dev/null | tail -1)"
       if [ -z "$restored_event" ]; then
         ok=0; why="${why:+$why; }no worktree_restored event for $id"
       else
@@ -607,16 +616,19 @@ if run_section destroy; then
   ext_dir="$dwork/ext"; mkdir -p "$ext_dir/.githooks"
   if destroy_fixture_build "$ext_dir"; then
     engine="$ext_dir/engine"; mkdir -p "$engine/.githooks"
+    cp -R "$ext_dir/repo/bin" "$ext_dir/repo/skills" "$engine/"
+    cp "$ext_dir/repo/config.yaml" "$engine/config.yaml"
     printf 'default_project: destroy-fixture\nprojects:\n  destroy-fixture:\n    github: fm-canary/destroy-fixture\n    base: main\n    required_check: ci\n' \
-      > "$engine/config.yaml"
+      >> "$engine/config.yaml"
     ghurl="$ext_dir/host/fm-canary"; mkdir -p "$ghurl"
     git clone -q --bare "$ext_dir/remote.git" "$ext_dir/host/fm-canary/destroy-fixture.git" >/dev/null 2>&1
-    if FM_GITHUB_URL="$ext_dir/host" "$ROOT/bin/fm-project.sh" sync destroy-fixture --repo "$engine" >/dev/null 2>&1; then
-      ext_repo_dir="$engine/state/projects/destroy-fixture"
+    if FM_HOME="$dwork/fm-home" FM_GITHUB_URL="$ext_dir/host" "$ROOT/bin/fm-project.sh" sync destroy-fixture --repo "$engine" >/dev/null 2>&1; then
+      ext_repo_dir="$dwork/fm-home/projects/destroy-fixture"
+      cp -R "$ext_dir/repo/design/tasks" "$ext_repo_dir/tasks"
       # a fresh clone carries no user.name/user.email of its own
       git -C "$ext_repo_dir/repo" config user.email a@b.c
       git -C "$ext_repo_dir/repo" config user.name t
-      for mode in "${DESTROY_MODES[@]}"; do destroy_case external "$ext_repo_dir" "$mode"; done
+      for mode in "${DESTROY_MODES[@]}"; do destroy_case external "$ext_repo_dir" "$mode" "$engine"; done
     else
       echo "fm-canary: fm-project.sh could not sync the external destroy fixture" >&2
       failed=1

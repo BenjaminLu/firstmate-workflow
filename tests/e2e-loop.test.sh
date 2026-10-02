@@ -15,6 +15,8 @@ FM_GATE_LOCK="$(mktemp -d)/gate.lock"; export FM_GATE_LOCK
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 
 # The production caller in a fixture with all orchestration stubbed. This
 # focused path never invokes git, gh, engines or a live board.
@@ -31,6 +33,7 @@ caller_fixture() {   # caller_fixture <task branch> <event lines> [registry] -> 
   mkdir -p "$c/bin" "$c/state/decision-details"
   cp "$ROOT/bin/fm-run.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-decide.sh" \
      "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-herdr.py" "$c/bin/"
+  project_storage_fixture "$c/bin/"
   # each stub notes that it ran, so a test can say what a turn touched
   for script in fm-sync-prs fm-dispatch fm-gate; do
     printf '#!/usr/bin/env bash\necho "%s $*" >> "%s/calls"\nexit 0\n' "$script" "$c" > "$c/bin/$script.sh"
@@ -57,6 +60,7 @@ if [ -n "\$q" ]; then jq -r "\$q" <<<"\$out"; else printf '%s\n' "\$out"; fi
 G
   chmod +x "$c/bin/gh"
   printf '%s' "${3-$REGISTRY}" > "$c/config.yaml"
+  project_fixture_config "$c"
   printf '%s\n' "$2" > "$c/state/events.jsonl"
   printf '%s' "$c"
 }
@@ -130,10 +134,13 @@ rm -rf "$both"
 app="$(caller_fixture t-004-app "$(printf '%s\n%s' \
   '{"type":"pr_opened","task":"T-004","pr":7}' \
   '{"type":"pr_opened","task":"T-004","pr":8,"project":"example-app"}')" "$REGISTRY2")"
-cp "$DETAILS" "$app/state/decision-details/D-example-app-T004-1.json"
+app_state="$(project_fixture_state "$app" example-app)"
+mkdir -p "$app_state/decision-details"
+cp "$DETAILS" "$app_state/decision-details/D-example-app-T004-1.json"
+jq -c 'select(.project=="example-app")' "$app/state/events.jsonl" > "$app_state/events.jsonl"
 oapp="$(FM_PROJECT=example-app PATH="$app/bin:$PATH" bash "$app/bin/fm-run.sh" once --repo "$app" 2>&1)"
 assert_contains "$oapp" "asking the captain (D-example-app-T004-1)" "a run for example-app cards its own pull request"
-assert_eq "8 example-app" "$(jq -r '"\(.pr) \(.project)"' "$app/state/pending/D-example-app-T004-1.json")" \
+assert_eq "8 example-app" "$(jq -r '"\(.pr) \(.project)"' "$app_state/pending/D-example-app-T004-1.json")" \
   "with that project's pull request number"
 assert_lacks "$(cat "$app/calls")" "--pr 7" "and never gates the engine's #7"
 rm -rf "$app"
@@ -185,7 +192,7 @@ cd "$r" || exit 1
 git config user.email a@b.c; git config user.name t
 mkdir -p bin design skills/worker skills/reviewer state src tests
 cp "$ROOT"/bin/fm-*.sh bin/
-cp "$ROOT/bin/fm-herdr.py" bin/
+cp "$ROOT/bin/fm-herdr.py" bin/; project_storage_fixture bin/
 cp -r "$ROOT/bin/adapters" bin/
 cp -r "$ROOT/bin/lib" bin/
 cp "$ROOT/skills/worker/SKILL.md" skills/worker/

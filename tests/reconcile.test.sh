@@ -17,12 +17,14 @@ done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 
 RC="$ROOT/bin/fm-reconcile.sh"
 
 fixture() {
   local d; d="$(mktemp -d)"; mkdir -p "$d/bin" "$d/state/worktrees"
-  cp "$ROOT/bin/fm-emit.sh" "$d/bin/"
+  cp "$ROOT/bin/fm-emit.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
   cp "$RC" "$d/bin/"
   printf '%s' "$d"
 }
@@ -653,7 +655,7 @@ echo "  real worker preserves no-PR boundaries across repeated offline recovery"
 for terminal in CLOSED MERGED; do
   for timing in historical current new-attempt; do
     d="$(fixture)"; cleanup_stub "$d"
-    cp "$ROOT/bin/fm-worker.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$d/bin/"
+    cp "$ROOT/bin/fm-worker.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$d/bin/"; project_storage_fixture "$d/bin/"
     cp -R "$ROOT/bin/lib" "$d/bin/"   # the lifeline a round's runner holds (T-151)
     # T-036 checkpoint + guard are launch-adjacent deps when present on the tip.
     [ -f "$ROOT/bin/fm-checkpoint.sh" ] && cp "$ROOT/bin/fm-checkpoint.sh" "$d/bin/"
@@ -1081,6 +1083,10 @@ assert_eq "64" "$(FM_ROOT="$d" "$d/bin/fm-reconcile.sh" --repair-cards --effect 
   "--effect names only park or drop"
 assert_eq "64" "$(FM_ROOT="$d" "$d/bin/fm-reconcile.sh" --cards >/dev/null 2>&1; printf '%s' "$?")" \
   "and there is no standing sweep"
+assert_eq "0" "$(FM_ROOT="$d" "$d/bin/fm-reconcile.sh" --project firstmate-workflow --repair-cards --dry-run >/dev/null 2>&1; printf '%s' "$?")" \
+  "project is parsed in the main reconcile option loop"
+assert_eq "64" "$(FM_ROOT="$d" "$d/bin/fm-reconcile.sh" --effect --project >/dev/null 2>&1; printf '%s' "$?")" \
+  "project cannot masquerade as an effect value"
 rm -rf "$d"
 
 finish

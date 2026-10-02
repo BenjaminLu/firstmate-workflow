@@ -34,7 +34,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 cd "$REPO" || { echo "fm-sync-prs: no repo at $REPO" >&2; exit 64; }
-LOG="$REPO/state/events.jsonl"; mkdir -p "$REPO/state"
+LOG="$REPO/state/events.jsonl"
 
 # The registry, when there is one, read only through the library: fm_projects
 # names nothing for a config.yaml with no `projects:` map. A tree that ships
@@ -65,6 +65,9 @@ seen() { [ -f "$LOG" ] && jq -r --arg t "$1" --argjson p "$2" --arg proj "$3" --
 new=0
 sync_one() {  # sync_one <project or empty> <owner/repo or empty>
   local project="$1" github="$2" raw num state branch title type task en tw
+  if [ -n "$project" ]; then
+    LOG="$(fm_project_get "$project" state "$REPO/config.yaml")/events.jsonl" || return 65
+  fi
   raw="$($GH pr list ${github:+--repo "$github"} --state all --limit "$LIMIT" \
           --json number,state,title,headRefName,mergedAt 2>/dev/null </dev/null)" || {
     echo "fm-sync-prs: could not reach GitHub${project:+ for $project ($github)}" >&2; return 1; }
