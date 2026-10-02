@@ -18,7 +18,8 @@
     "skills/worker/SKILL.md",
     "skills/reviewer/SKILL.md",
     "README.md",
-    "docs/**"
+    "docs/**",
+    "tests/skills-contract.test.sh"
   ],
   "acceptance": [
     "Why: The captain approved the external-repository roadmap, replacing stale rules and specs, using /Users/benjamin/Desktop/maker-founder as a fresh repository. Existing repairs must finish first. This task consolidates approved specifications, dependency DAG, design and role rules before external runtime implementation; it does not implement those features or waive any acceptance. Commit its own task spec.",
