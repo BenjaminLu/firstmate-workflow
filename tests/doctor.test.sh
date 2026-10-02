@@ -218,7 +218,12 @@ out="$(run_doctor)"; rc=$?
 assert_contains "$out" "x gemini" "a vendor whose login cannot be verified is x, not ok"
 assert_contains "$out" "gemini's login cannot be verified, so rounds on it are refused" "said in English"
 assert_contains "$out" "拒絕在其上執行回合" "and in Traditional Chinese"
-assert_lacks "$out" "unverified" "and never offered as usable but unverified"
+# Login refusal and hook verification are separate judgments: unknown hook
+# loading/delivery must remain visible even when a vendor login is refused.
+assert_lacks "$out" "+ gemini" "and never offered as usable but unverified"
+hook_status="$(sed -n '/^  ! claude: source=/p' <<<"$out")"
+assert_contains "$hook_status" "loading=unverified" "hook loading remains explicitly unverified alongside refused login"
+assert_contains "$hook_status" "delivery=unverified" "hook delivery remains explicitly unverified alongside refused login"
 assert_eq "1" "$rc" "and it makes doctor's exit code bad, like any vendor a round cannot use"
 missing gemini
 
