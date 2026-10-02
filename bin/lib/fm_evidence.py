@@ -184,7 +184,12 @@ def retain_verdict(store, args):
     identity = json.loads((run / 'identity.json').read_text())
     for key, value in (('project', store.project), ('task', store.task),
                        ('role', 'reviewer'), ('round', args.round)):
-        if identity.get(key) != value:
+        actual = identity.get(key)
+        # Pre-registry launchers record no project; only their private self
+        # namespace represents that absence. Never relabel the crew identity.
+        if key == 'project' and actual is None:
+            actual = 'self'
+        if actual != value:
             raise ValueError('review identity mismatch: ' + key)
     if args.vendor == 'codex':
         module_path = Path(args.code) / 'bin/fm-herdr.py'

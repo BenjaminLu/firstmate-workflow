@@ -43,7 +43,7 @@ args = sys.argv[1:]
 with (root / 'calls').open('a') as out: out.write(json.dumps(args) + '\\n')
 mode = (root / 'mode').read_text()
 if args[:2] == ['pr', 'view']:
-    print(json.dumps(dict(headRefOid=head, baseRefName='main', mergeStateStatus='DIRTY' if mode == 'dirty' else 'CLEAN')))
+    print(json.dumps(dict(headRefOid=head, baseRefName='main', mergeStateStatus='DIRTY' if mode == 'dirty' else 'BEHIND' if mode == 'behind' else 'CLEAN')))
 elif args[:2] == ['pr', 'checks']:
     print('[{"name":"ci"}]'); sys.exit(8 if mode == 'pending' else 1 if mode in ('failure', 'cancelled') else 0)
 elif args[0] == 'api' and 'protection' in args[1]:
@@ -51,7 +51,7 @@ elif args[0] == 'api' and 'protection' in args[1]:
 elif args[0] == 'api' and 'check-runs?' in args[1]:
     print(json.dumps(dict(check_runs=[dict(id=999, name='ci', head_sha=head,
         status='in_progress' if mode == 'pending' else 'completed',
-        conclusion=None if mode == 'pending' else mode,
+        conclusion=None if mode == 'pending' else 'success' if mode == 'behind' else mode,
         details_url='https://github.com/o/r/actions/runs/100/job/42',
         completed_at='2026-10-02T00:02:00Z')])))
 elif args[0] == 'api' and '/status?' in args[1]:
@@ -78,6 +78,16 @@ else:
               actor='worker-fixture', gh=str(self.gh), pr='9', base='main', required='',
               output=str(self.root / 'prompt.md'), coverage=str(self.root / 'coverage.json')))
         return (self.root / 'prompt.md').read_text(), json.loads((self.root / 'coverage.json').read_text())
+
+    def test_behind_only_build_records_reasoned_waiver(self):
+        # No prior rejection or brief: only an update of the base is needed.
+        for record in self.store.directory.glob('*.json'):
+            record.unlink()
+        prompt, reports = self.collect('behind')
+        self.assertIn('no brief needed: branch only needs updating with its base', prompt)
+        self.assertEqual([r['situation'] for r in reports], ['behind'])
+        self.assertEqual(reports[0]['gaps'], [])
+        self.assertEqual(reports[0]['waived'], ['branch only needs updating with its base'])
 
     def test_failure_logs_and_test_source_reach_prompt(self):
         prompt, reports = self.collect('failure')

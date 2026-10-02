@@ -171,7 +171,7 @@ else:
         receipt = json.loads(records[0].read_text())
         self.assertEqual('codex-json-completed-turn', receipt['final_source'])
         local = [json.loads(p.read_text()) for p in
-                 sorted((self.repo / 'state/evidence/firstmate-workflow/T-Z').glob('*.json'))]
+                 sorted((self.repo / 'state/evidence/self/T-Z').glob('*.json'))]
         verdicts = [r for r in local if r['kind'] == 'verdict']
         self.assertEqual('authenticated', verdicts[-1]['provenance']['level'])
         self.assertEqual(receipt['final_sha256'], verdicts[-1]['provenance']['final_sha256'])
@@ -233,7 +233,7 @@ else:
         receipt = json.loads(next((self.repo / 'state').rglob('last-result.json')).read_text())
         self.assertEqual('codex-json-completed-turn', receipt['final_source'])
         local = [json.loads(p.read_text()) for p in
-                 sorted((self.repo / 'state/evidence/firstmate-workflow/T-Z').glob('*.json'))]
+                 sorted((self.repo / 'state/evidence/self/T-Z').glob('*.json'))]
         verdicts = [r for r in local if r['kind'] == 'verdict']
         self.assertEqual('authenticated', verdicts[-1]['provenance']['level'])
         self.assertEqual(receipt['final_sha256'], verdicts[-1]['provenance']['final_sha256'])

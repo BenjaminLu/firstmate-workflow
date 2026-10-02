@@ -41,7 +41,12 @@ done
 cd "$REPO" || { echo "fm-worker: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
 fm_storage_init "$REPO" || exit 65
-export FM_PROJECT="${FM_PROJECT:-firstmate-workflow}"
+# A registered self project need not be the default project. Its review events
+# must name the same project that identity allocation uses for round counting.
+project_events=()
+if [ -n "${FM_PROJECT:-}" ] && [ -n "$(fm_projects "$FM_CONFIG" 2>/dev/null)" ]; then
+  project_events=(--project "$FM_PROJECT")
+fi
 fm_target_validate || exit 65
 if [ "$FM_EXTERNAL" = 1 ]; then
   "${FM_CODE_ROOT:-$REPO}/bin/fm-project.sh" verify "$FM_PROJECT" --repo "$REPO" || exit 65
@@ -99,7 +104,7 @@ emit_once() {
     esac
   done
   FM_ROOT="$REPO" "$EMIT" --data "$data" --actor "$NAME" --task "$TASK" \
-    ${args[@]+"${args[@]}"} >/dev/null 2>&1 </dev/null
+    ${project_events[@]+"${project_events[@]}"} ${args[@]+"${args[@]}"} >/dev/null 2>&1 </dev/null
 }
 emit() { emit_once "$@" || true; }
 
@@ -1042,7 +1047,10 @@ prompt="$tree/.fm-prompt.md"
 say="$tree/.fm-say.md"
 projection="$(fm_projection)" || exit 65
 round_number="$(jq -r .round "$FM_RUN_DIR/identity.json")"
-round_head="$(git -C "$tree" rev-parse HEAD)" || exit 70
+round_head="$(git -C "$tree" rev-parse HEAD)" || {
+  round_head=''
+  echo "fm-worker: round head unavailable; evidence coverage is unknown" >&2
+}
 round_context="$FM_RUN_DIR/context.md"
 round_coverage="$FM_RUN_DIR/coverage.json"
 printf '%s\n' "$spec" > "$FM_RUN_DIR/context-spec.json"
@@ -1054,7 +1062,7 @@ fi
 log_err="$(scratch_new)" || log_err=''
 [ -z "$log_err" ] || scratch_add "$log_err"
 if ! python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_context_pack.py" \
-    --state "$FM_STATE_DIR" --project "${FM_PROJECT:-firstmate-workflow}" --task "$TASK" \
+    --state "$FM_STATE_DIR" --project "$(fm_evidence_project)" --task "$TASK" \
     --round "$round_number" --actor "$NAME" --head "$round_head" --root "$tree" \
     --spec "$FM_RUN_DIR/context-spec.json" --output "$round_context" --coverage "$round_coverage" \
     --pr "$PR" --gh "$GH" --base "$BASE" --required "$required_check" \
@@ -1380,11 +1388,18 @@ asked=0
 [ -s "$say" ] && asked=1
 # Retain first, even when no PR exists or optional publication later fails.
 if [ "$asked" = 1 ]; then
-  fm_evidence report --round "$round_number" --actor "$NAME" --head "$round_head" --file "$say" || exit 70
+  fm_evidence report --round "$round_number" --actor "$NAME" --head "$round_head" --file "$say" || {
+    echo "fm-worker: local report retention failed; preserving the note for recovery" >&2
+    mkdir -p "$FM_STATE_DIR/unsent"
+    cp "$say" "$FM_STATE_DIR/unsent/${NAME}.md" || true
+    FM_CREW_STATUS_SECS=0 emit --type crew_status --data '{"evidence_event":"brief_gap"}' \
+      --en 'Local report retention failed; inspect unsent recovery' \
+      --tw '本機報告保存失敗；請檢查未送出的復原副本'
+  }
 fi
 
 spoke=0
-[ "$projection" != local ] || spoke=1  # local delivery is already durable
+[ "$projection" != local ] || spoke=1  # local delivery or its warned recovery is handled
 # gh's own words are kept, the way the lookup above keeps them: this is
 # the one path where a person is expected to pick the failure up by
 # hand, and "it was refused" without "why" sends them to the pull
@@ -1395,7 +1410,7 @@ post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
   say_err="$(scratch_new)" || say_err=''
   [ -z "$say_err" ] || scratch_add "$say_err"
   [ "$projection" = comments ] || return 0
-  if $GH pr comment "$2" --body-file "$1" >/dev/null 2>"${say_err:-/dev/null}" </dev/null; then
+  if fm_comment_projection "$2" --body-file "$1" >/dev/null 2>"${say_err:-/dev/null}" </dev/null; then
     spoke=1
     emit --type ask_pass_criteria --pr "$2" --en "the worker spoke on #$2" \
          --tw "工人在 #$2 上發言"

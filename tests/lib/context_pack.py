@@ -25,13 +25,28 @@ class Pack(unittest.TestCase):
             for situation, data in [('first', {}), ('red', {'failures': ['broken']}),
                                     ('cancelled', {'cancelled': [{'stage': None, 'duration': None}]}),
                                     ('reject', {'findings': [(1, 'open fix parser')]}),
-                                    ('behind', {}), ('captain-change', {})]:
+                                    ('captain-change', {})]:
                 result = coverage(situation, spec, '', data, Path(root), [])
                 self.assertFalse(result['blocks'])
-                if situation not in ('first', 'behind'):
+                if situation not in ('first',):
                     self.assertTrue(result['gaps'], situation)
                 self.assertIn('en', result['summary'])
                 self.assertIn('zh-TW', result['summary'])
+
+    def test_first_round_names_root_and_arbitrary_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'config.yaml').touch()
+            report = coverage('first', dict(acceptance=['Why. Change config.yaml and i18n/ui.en.json and `Makefile`'],
+                              scope=['src/**']), '', {}, root, [])
+            self.assertIn('named path outside scope (confirm whether changed): config.yaml', report['gaps'])
+            self.assertIn('named path does not exist: i18n/ui.en.json', report['gaps'])
+            self.assertIn('named path does not exist: Makefile', report['gaps'])
+
+    def test_captain_change_with_quote_and_matching_scope(self):
+        report = coverage('captain-change', {'scope': ['config.yaml']},
+                          'captain: "Change config.yaml"\nscope: ["config.yaml"]', {}, Path('.'), [])
+        self.assertEqual(report['gaps'], [])
 
     def test_nonzero_check_status_still_supplies_names(self):
         collector = Collector(Path('.'), 'gh', 'a' * 40)

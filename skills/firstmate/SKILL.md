@@ -921,7 +921,8 @@ The writer resolves project state through `fm_storage_init`; do not copy externa
 briefs into the target checkout. It appends a record under
 `state/evidence/<project>/<task>/`. The exact project, task, round and head must
 match the next worker; an old `state/briefs/` file alone is not consumed.
-`projects.<name>.projection` chooses `comments` (default) or `local`. Both retain
+`projects.<name>.projection` chooses `comments` or `local`. Self defaults to
+`comments`; external projects default to `local`. Both retain
 local records first; `local` posts no round records. Optional publication failure
 is reported and records survive. Comments never establish a verdict or list.
 

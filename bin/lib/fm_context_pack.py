@@ -40,11 +40,24 @@ def coverage(situation, spec, brief, data, root, events):
             acceptance = '\n'.join(spec.get('acceptance', []))
             if not re.search(r'\bwhy\b', acceptance, re.I):
                 gaps.append('spec has no Why')
-            paths = sorted(set(re.findall(r'\b(?:bin|tests|board|skills|design)/[A-Za-z0-9_./*-]+', acceptance)))
+            # Paths are not limited to the engine's directory layout.
+            tokens = re.findall(r'(?<![\w:/])[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.*-]+)+|(?<![\w/])[A-Za-z0-9_-]+\.[A-Za-z][A-Za-z0-9.*-]*', acceptance)
+            tokens += re.findall(r'`([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.*-]+)*)`', acceptance)
+            tracked = subprocess.run(['git', 'ls-files', '-z'], cwd=root,
+                                     capture_output=True, text=True).stdout.split('\0')
+            paths = sorted(set(tokens + [p for p in tracked if p and re.search(
+                r'(?<![\w/])' + re.escape(p) + r'(?![\w/])', acceptance)]))
+            expanded = []
             for path in paths:
-                if any(c in path for c in '*') or path.endswith('/'):
-                    continue
                 path = path.rstrip('.')
+                if '*' in path:
+                    matches = [str(p.relative_to(root)) for p in root.glob(path)]
+                    if not matches:
+                        gaps.append('named path does not exist: ' + path)
+                    expanded.extend(matches or [path])
+                else:
+                    expanded.append(path)
+            for path in sorted(set(expanded)):
                 if not (root / path).exists():
                     gaps.append('named path does not exist: ' + path)
                 if not any(fnmatch.fnmatchcase(path, glob) for glob in spec.get('scope', [])):

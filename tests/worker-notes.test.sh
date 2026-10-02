@@ -336,6 +336,22 @@ assert_lacks "$out14" "#null" "and never carries gh's four characters through as
 assert_contains "$(cat "$d13/ghcalls")" "pr create" "and it does open one"
 rm -rf "$d13"
 
+# A failed local store is visible and recoverable, but cannot discard completed work.
+dEvidence="$(fixture)"; rEvidence="$dEvidence/repo"; ghEvidence="$(ghstub "$dEvidence")"
+mkdir -p "$rEvidence/state/evidence/self/T-Z/.lock"
+cat > "$rEvidence/bin/adapters/mock.sh" <<'M'
+#!/usr/bin/env bash
+[ "$1" = run ] || exit 64
+mkdir -p "$3/src"
+printf 'implemented\n' > "$3/src/feature"
+printf 'recover this report\n' > "$3/.fm-say.md"
+M
+outEvidence="$(cd "$rEvidence" && FM_ROOT="$rEvidence" FM_GH="$ghEvidence" bin/fm-worker.sh --task T-Z 2>&1)"; rcEvidence=$?
+assert_eq 0 "$rcEvidence" 'local record failure does not abort completed worker work'
+assert_contains "$outEvidence" 'local report retention failed' 'record failure warns explicitly'
+assert_ok "grep -l 'recover this report' '$rEvidence/state/unsent/'*.md" 'failed local report has an unsent recovery copy'
+rm -rf "$dEvidence"
+
 
 cd "$ROOT" || exit 1
 PATH="$suite_original_path"; export PATH

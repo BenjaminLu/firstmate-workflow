@@ -63,7 +63,12 @@ CI_WAIT=$((10#$CI_WAIT)); CI_POLL=$((10#$CI_POLL))
 cd "$REPO" || { echo "fm-review: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
 fm_storage_init "$REPO" || exit 65
-export FM_PROJECT="${FM_PROJECT:-firstmate-workflow}"
+# A registered self project need not be the default project. Its review events
+# must name the same project that identity allocation uses for round counting.
+project_events=()
+if [ -n "${FM_PROJECT:-}" ] && [ -n "$(fm_projects "$FM_CONFIG" 2>/dev/null)" ]; then
+  project_events=(--project "$FM_PROJECT")
+fi
 fm_target_validate || exit 65
 BASE="${FM_BASE:-$BASE}"
 fm_refuse_herdr_bypass fm-review || exit $?
@@ -145,7 +150,7 @@ emit_once() {
     esac
   done
   FM_ROOT="$REPO" "${FM_CODE_ROOT:-$REPO}/bin/fm-emit.sh" --data "$data" --actor "$NAME" --task "$TASK" \
-    ${args[@]+"${args[@]}"} >/dev/null 2>&1 </dev/null
+    ${project_events[@]+"${project_events[@]}"} ${args[@]+"${args[@]}"} >/dev/null 2>&1 </dev/null
 }
 emit() { emit_once "$@" || true; }
 # when the round began, in epoch seconds: set just before review_opened
@@ -1178,7 +1183,7 @@ CREW_DATA="$(jq -c --arg level "$provenance_level" '.provenance_level=$level' <<
 verdict="${verdict%"${verdict##*[![:space:]]}"}$(reviewed_line "$decided")"
 projection="$(fm_projection)" || exit 65
 if [ -n "$PR" ] && [ "$projection" = comments ]; then
-  if ! $GH pr comment "$PR" --body "$verdict" >/dev/null 2>&1; then
+  if ! fm_comment_projection "$PR" --body "$verdict" >/dev/null 2>&1; then
     echo 'fm-review: optional comment projection failed; local verdict retained' >&2
     FM_CREW_STATUS_SECS=0 emit --type crew_status --data '{"evidence_event":"projection_failed"}' --en 'Optional verdict comment failed; local verdict retained' \
          --tw '選用的裁決留言發布失敗；本機裁決已保留'
@@ -1186,7 +1191,7 @@ if [ -n "$PR" ] && [ "$projection" = comments ]; then
 fi
 case "$decided" in
   APPROVE)
-    emit --type approved --en "reviewer signed $TASK ($provenance_level)" --tw "reviewer 已簽 $TASK（$provenance_level）"
+    emit --type approved --en "reviewer signed $TASK ($provenance_level)" --tw "reviewer 已簽 ${TASK}（${provenance_level}）"
     emit_status "Verdict signed: APPROVE:$TASK" "已簽署裁決：APPROVE:$TASK"
     ;;
   REJECT)

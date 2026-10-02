@@ -2,6 +2,7 @@
 # Operator entrypoint: resolve private project state before retaining a brief.
 set -euo pipefail
 config_lib="$(dirname "${BASH_SOURCE[0]}")/../fm-config.sh"
+[ -f "$config_lib" ] || { echo "${0##*/}: missing $config_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
 . "$config_lib"
 REPO="$(fm_default_repo)"; TASK=''

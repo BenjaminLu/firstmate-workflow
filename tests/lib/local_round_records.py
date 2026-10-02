@@ -60,6 +60,23 @@ class Records(unittest.TestCase):
         self.assertNotIn('final_source', record['provenance'])
         self.assertEqual(self.store.verdicts()[0]['verdict'], 'APPROVE')
 
+    def test_unnamed_legacy_project_uses_self_namespace_without_rewriting_identity(self):
+        run = Path(self.tmp.name) / 'run'
+        run.mkdir()
+        identity = dict(project=None, task='T-X', role='reviewer', round=1)
+        (run / 'identity.json').write_text(json.dumps(identity))
+        answer = run / 'selected.txt'
+        answer.write_text('APPROVE:T-X')
+        args = SimpleNamespace(run=str(run), round=1, vendor='custom', file=str(answer),
+                               head='a' * 40, base='b' * 40, patch='p', attempt='current')
+        with patch.dict(os.environ, FM_ACTOR='reviewer-fixture'):
+            record = retain_verdict(self.store, args)
+            with self.assertRaisesRegex(ValueError, 'project'):
+                retain_verdict(Store(self.tmp.name, 'other', 'T-X'), args)
+        self.assertEqual(record['project'], 'self')
+        self.assertIsNone(record['reviewer']['project'])
+        self.assertEqual(json.loads((run / 'identity.json').read_text()), identity)
+
     def test_history_excludes_worker_reasoning_and_names_level(self):
         self.record('worker-report', 'SECRET reasoning')
         self.record('verdict', 'APPROVE:T-X', verdict='APPROVE',

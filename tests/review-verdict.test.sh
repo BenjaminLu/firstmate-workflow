@@ -195,7 +195,7 @@ for token in stale-token current forged; do
     assert_ok "grep -q 'pr comment' '$d/ghcalls'" "same-attempt recovery posts the PR comment"
     assert_eq "rejected" "$(jq -r 'select(.type=="review_failed")|.data.review_outcome' "$recover/state/events.jsonl" | tail -1)" \
       "same-attempt recovery records rejection"
-    record_level="$(jq -r 'select(.kind=="verdict")|.provenance.level' "$recover/state/evidence/firstmate-workflow/T-Z/"*.json | tail -1)"
+    record_level="$(jq -r 'select(.kind=="verdict")|.provenance.level' "$recover/state/evidence/self/T-Z/"*.json | tail -1)"
     assert_eq legacy "$record_level" "$token custom recovery is retained as legacy, never authenticated"
   else
     assert_eq "3" "$rc" "stale durable evidence cannot sign this round"

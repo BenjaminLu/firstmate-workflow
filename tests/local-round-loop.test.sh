@@ -9,6 +9,7 @@ cp "$ROOT/bin/fm-review.sh" "$ROOT/bin/fm-gate.sh" "$ROOT/bin/fm-protocol.sh" "$
 mkdir -p "$repo/skills/reviewer"
 cp "$ROOT/skills/reviewer/SKILL.md" "$repo/skills/reviewer/"
 cat >> "$repo/config.yaml" <<'CONFIG'
+default_project: firstmate-workflow
 projects:
   firstmate-workflow:
     repo: .
@@ -37,6 +38,7 @@ else
 fi
 ADAPTER
 chmod +x "$repo/bin/adapters/mock.sh"
+export GIT_AUTHOR_DATE=2026-01-01T00:00:00Z GIT_COMMITTER_DATE=2026-01-01T00:00:00Z
 git -C "$repo" add .
 git -C "$repo" commit -qm 'local loop fixture'
 git -C "$repo" push -q origin main
@@ -49,12 +51,12 @@ case "$1 $2" in
   'pr list') echo null ;;
   'pr create') echo https://example.invalid/pull/42 ;;
   'pr checks') echo '[{"name":"ci","state":"SUCCESS","bucket":"pass"}]' ;;
-  'pr view') printf '{"headRefOid":"%s","baseRefName":"main","mergeStateStatus":"CLEAN","comments":[{"author":{"login":"stale"},"body":"REJECT:T-Z"}]}\n' "$(git rev-parse HEAD)" ;;
+  'pr view') printf '{"headRefOid":"%s","baseRefName":"main","mergeStateStatus":"CLEAN","comments":[{"author":{"login":"stale"},"body":"REJECT:T-Z"}]}\n' "$(git rev-parse "${FM_TEST_BRANCH:-HEAD}")" ;;
   'api '*)
     case "$2" in
       *protection*) echo '{"contexts":["ci"]}' ;;
       *check-runs*) echo '{"check_runs":[]}' ;;
-      */status*) printf '{"sha":"%s","statuses":[]}\n' "$(git rev-parse HEAD)" ;;
+      */status*) printf '{"sha":"%s","statuses":[]}\n' "$(git rev-parse "${FM_TEST_BRANCH:-HEAD}")" ;;
       *) echo '{}' ;;
     esac ;;
 esac
@@ -66,6 +68,7 @@ export FM_GATE_LOCK="$d/gate.lock"
 assert_eq 0 "$?" 'local worker completes with a comment-refusing gh'
 branch="$(git -C "$repo" for-each-ref --format='%(refname:short)' refs/heads | grep -v '^main$' | head -1)"
 head="$(git -C "$repo" rev-parse "$branch")"
+export FM_TEST_BRANCH="$branch"
 records="$repo/state/evidence/firstmate-workflow/T-Z"
 assert_eq 1 "$(jq -s '[.[]|select(.kind=="worker-report")]|length' "$records/"*.json)" 'worker report retained locally'
 assert_eq true "$(jq -s 'any(.[]; .data.evidence_event == "brief_coverage" and .summary.en != null and .summary["zh-TW"] != null)' "$repo/state/events.jsonl")" 'coverage reaches the real event writer with both summaries'
@@ -80,6 +83,7 @@ assert_contains "$(cat "$d/gate.out")" 'missing local verdict' 'gate 7 names the
 export FM_CAPTURE="$d/review-prompt.md" FM_TEST_VERDICT=reject
 (cd "$repo" && bin/fm-review.sh --task T-Z --branch "$branch" --round 1 --pr 42) > "$d/review.out" 2>&1
 assert_eq 0 "$?" 'round-one legacy rejection is retained'
+assert_eq firstmate-workflow "$(jq -r 'select(.type=="review_opened")|.project' "$repo/state/events.jsonl" | tail -1)" 'review event explicitly carries the resolved project for round counting'
 (cd "$repo" && bin/fm-protocol.sh check --task T-Z --round 1) > "$d/protocol.out" 2>&1
 assert_eq 0 "$?" 'round-one complete criteria satisfy the local protocol'
 export FM_CAPTURE="$d/worker-prompt.md"

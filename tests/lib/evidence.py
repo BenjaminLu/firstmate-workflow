@@ -12,7 +12,7 @@ root, state, task, actor, text = sys.argv[1:]
 sys.path.insert(0, str(Path(root) / 'bin/lib'))
 from fm_evidence import Store, verdict_marker
 
-store = Store(state, 'firstmate-workflow', task)
+store = Store(state, 'self', task)
 text = text.replace('\\n', '\n').replace('\r', '\n')
 marker = verdict_marker(text, task)
 if marker:
