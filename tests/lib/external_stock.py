@@ -111,11 +111,12 @@ else: sys.exit(1)
         env.update(FM_TEST_READY=str(ready), FM_TEST_RELEASE=str(release))
         ready_fd = os.open(ready, os.O_RDWR | os.O_NONBLOCK)
         release_fd = os.open(release, os.O_RDWR | os.O_NONBLOCK)
-        if stop_owner:
-            owner = start([sys.executable, '-c', 'import sys; sys.stdin.read()'],
-                          stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                          name='external-stock-owner')
-            env['FM_SESSION_PID'] = str(owner.pid)
+        # A dedicated owner also bounds failed assertions before a receipt is
+        # available: ending it cannot leave a worker using a removed fixture.
+        owner = start([sys.executable, '-c', 'import sys; sys.stdin.read()'], owner=os.getpid(),
+                      stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                      name='external-stock-owner')
+        env['FM_SESSION_PID'] = str(owner.pid)
         # Doorbell routing is resolved from this exact project context.
         previous = dict(os.environ)
         os.environ.clear(); os.environ.update(env)
@@ -124,11 +125,29 @@ else: sys.exit(1)
             with Doorbell(engine) as bell:
                 command = [str(engine / 'bin/fm-dispatch.sh'), '--repo', str(engine),
                            '--project', 'app', '--task', 'T-051']
-                out = run(command, env)
+                # The dispatcher itself runs under a keeper, as stock session
+                # dispatch does. Its exit must not end the session-owned worker.
+                def dispatch():
+                    log_path = scratch / 'dispatcher.log'
+                    with log_path.open('w') as log:
+                        process = start(command, owner=int(env['FM_SESSION_PID']),
+                                        env=env, stdout=log, stderr=log)
+                        try:
+                            status = process.wait(timeout=120)
+                        finally:
+                            if process.poll() is None:
+                                process.terminate(); process.wait(timeout=15)
+                    output = log_path.read_text()
+                    assert status == 0, output
+                    return output
+                out = dispatch()
                 assert 'T-051' in out, out
                 launch = json.loads((state / 'dispatch/T-051.json').read_text())
                 assert launch['project'] == 'app' and launch['task'] == 'T-051', launch
                 assert launch['owner'] == int(env['FM_SESSION_PID']), launch
+                assert set(launch) == {'project', 'task', 'owner', 'keeper'}, launch
+                assert isinstance(launch['keeper'], int) and launch['keeper'] > 0, launch
+                assert list((state / 'dispatch').glob('T-051.*.json')) == [], 'partial receipt left behind'
                 worker_exit = ProcessExit(launch['keeper'])
                 assert select.select([ready_fd], [], [], 90)[0], (state / 'dispatch/T-051.log').read_text()
                 receipt = json.loads(os.read(ready_fd, 65536))
@@ -137,9 +156,10 @@ else: sys.exit(1)
                 identity = json.loads((run_dir / 'identity.json').read_text())
                 assert (identity['project'], identity['task'], identity['role']) == ('app', 'T-051', 'worker')
                 assert not select.select([worker_exit], [], [], 0)[0], 'worker died with dispatcher'
-                duplicate = run(command, env)
+                duplicate = dispatch()
                 assert 'T-051' not in duplicate.splitlines(), duplicate
                 assert len(list((state / 'runs').glob('*/identity.json'))) == 1, 'duplicate worker allocated'
+                assert json.loads((state / 'dispatch/T-051.json').read_text()) == launch, 'duplicate replaced receipt'
                 cleanup = subprocess.run([str(engine / 'bin/fm-cleanup.sh'), '--repo', str(engine),
                     '--project', 'app', '--task', 'T-051', '--force'], env=env,
                     capture_output=True, text=True, timeout=30)
@@ -177,10 +197,12 @@ else: sys.exit(1)
             os.write(release_fd, b'complete\n')
             if worker_exit is not None:
                 select.select([worker_exit], [], [], 120)
-                worker_exit.close()
             if owner is not None and owner.poll() is None:
                 owner.stdin.close()
                 owner.wait(timeout=15)
+            if worker_exit is not None:
+                assert select.select([worker_exit], [], [], 30)[0], 'worker not reaped before fixture removal'
+                worker_exit.close()
             os.close(ready_fd); os.close(release_fd)
             os.environ.clear(); os.environ.update(previous)
 

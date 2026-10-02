@@ -386,7 +386,7 @@ build_checkout() {
   OWNER_LOCK_HELD=1
   printf '%s\n' "$FM_RUN_DIR" > "$CHECKOUT_ROOT/run"
   CHECKOUT="$CHECKOUT_ROOT/checkout"
-  git clone -q --no-checkout --no-hardlinks "$FM_TARGET_ROOT" "$CHECKOUT" &&
+  git clone -q --no-checkout --no-hardlinks "${FM_TARGET_ROOT:-$REPO}" "$CHECKOUT" &&
     git -C "$CHECKOUT" fetch -q --no-tags origin "+$R_HEAD:refs/fm/head" "+$R_BASE:refs/fm/base" &&
     [ "$(git -C "$CHECKOUT" rev-parse refs/fm/head)" = "$head" ] &&
     git -C "$CHECKOUT" checkout -q --detach refs/fm/head &&
@@ -459,7 +459,7 @@ rebuild_checkout() {
   OWNER_LOCK_HELD=1
   printf '%s\n' "$FM_RUN_DIR" > "$CHECKOUT_ROOT/run"
   CHECKOUT="$CHECKOUT_ROOT/checkout"
-  git clone -q --no-checkout --no-hardlinks "$FM_TARGET_ROOT" "$CHECKOUT" &&
+  git clone -q --no-checkout --no-hardlinks "${FM_TARGET_ROOT:-$REPO}" "$CHECKOUT" &&
     git -C "$CHECKOUT" fetch -q --no-tags origin "+$R_HEAD:refs/fm/head" "+$R_BASE:refs/fm/base" &&
     [ "$(git -C "$CHECKOUT" rev-parse refs/fm/head)" = "$head" ] &&
     git -C "$CHECKOUT" checkout -q --detach refs/fm/head &&
@@ -558,13 +558,14 @@ closed_list() {
 # REQ_SOURCE: where they came from, in words, for the prompt.
 REQ_NAMES=''; REQ_SOURCE=''
 required_names() {
-  local got p
+  local got p repository="${GH_REPO:-}"
+  [ -n "$repository" ] || repository='{owner}/{repo}'
   if [ "$FM_EXTERNAL" = 1 ]; then
     REQ_NAMES="$(fm_conventions required_checks | jq -r '.[]')" || return 65
     REQ_SOURCE="captain-confirmed CONVENTIONS.md checks/statuses"
     return 0
   fi
-  if got="$($GH api "repos/{owner}/{repo}/branches/$BASE/protection/required_status_checks" 2>/dev/null </dev/null)"; then
+  if got="$($GH api "repos/$repository/branches/$BASE/protection/required_status_checks" 2>/dev/null </dev/null)"; then
     REQ_NAMES="$(jq -r '(.contexts[]?, .checks[]?.context) | strings' <<<"$got" 2>/dev/null | awk 'NF && !s[$0]++')"
     REQ_SOURCE="the protection of the base branch $BASE"
     [ -z "$REQ_NAMES" ] || return 0
@@ -582,12 +583,13 @@ required_names() {
 # check_runs_of <sha> <query>: GitHub's check runs for that commit, as it
 # answers them; status 1 when gh could not, or answered something else
 check_runs_of() {
-  local got
+  local got repository="${GH_REPO:-}"
+  [ -n "$repository" ] || repository='{owner}/{repo}'
   if [ "$FM_EXTERNAL" = 1 ] && [[ "$2" == check_name=* ]]; then
     python3 "$_fm_code_dir/lib/fm_project_checks.py" "$GH_REPO" "$1" "$2"
     return $?
   fi
-  got="$($GH api "repos/{owner}/{repo}/commits/$1/check-runs?$2" 2>/dev/null </dev/null)" || return 1
+  got="$($GH api "repos/$repository/commits/$1/check-runs?$2" 2>/dev/null </dev/null)" || return 1
   jq -e '.check_runs | type == "array"' >/dev/null 2>&1 <<<"$got" || return 1
   printf '%s' "$got"
 }

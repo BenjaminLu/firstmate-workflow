@@ -101,6 +101,31 @@ touch "$2/launched"
             self.assertEqual(collector.github('api', 'repos/{owner}/{repo}/commits/head/status'),
                              ['api', 'repos/owner/app/commits/head/status'])
 
+    def test_review_rest_requests_bind_repository(self):
+        gh = self.path / 'gh'
+        gh.write_text('#!/usr/bin/env python3\nimport json,os,sys\n'
+                      'with open(os.environ["FM_TEST_CALLS"], "a") as f: f.write(json.dumps(sys.argv[1:])+"\\n")\n'
+                      'print(json.dumps({"contexts":["ci"], "check_runs":[]}))\n')
+        gh.chmod(0o755)
+        body = function(root / 'bin/fm-review.sh', 'required_names')
+        body += function(root / 'bin/fm-review.sh', 'check_runs_of')
+        p = self.shell('export FM_TEST_CALLS="$2/calls"; GH="$2/gh"; GH_REPO=owner/app; '
+                       'BASE=trunk; FM_EXTERNAL=0\n' + body +
+                       '\nrequired_names\nFM_EXTERNAL=1; check_runs_of abc per_page=100')
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = [json.loads(line) for line in (self.path / 'calls').read_text().splitlines()]
+        self.assertEqual(calls, [
+            ['api', 'repos/owner/app/branches/trunk/protection/required_status_checks'],
+            ['api', 'repos/owner/app/commits/abc/check-runs?per_page=100']])
+        # External review uses confirmed names, without guessing protection.
+        from fm_context_pack import Collector
+        with patch.dict(os.environ, FM_EXTERNAL='1', GH_REPO='owner/app',
+                        FM_TEST_CALLS=str(self.path / 'calls')):
+            Collector(self.path, str(gh), 'abc').github(
+                'api', 'repos/{owner}/{repo}/branches/trunk/protection/required_status_checks')
+        calls = [json.loads(line) for line in (self.path / 'calls').read_text().splitlines()]
+        self.assertEqual(calls[-1][1], 'repos/owner/app/branches/trunk/protection/required_status_checks')
+
     def test_review_clones_target_for_initial_and_rebuilt_checkout(self):
         def git(directory, *args):
             return subprocess.check_output(['git', '-C', str(directory), *args],

@@ -1660,7 +1660,8 @@ fm_external_base() {
 }
 
 # PR and Actions commands must never derive an external repository from cwd.
-# REST callers already name repos/<owner>/<repo> in their endpoint.
+# REST calls do not accept --repo: callers must interpolate GH_REPO into
+# their endpoint (only legacy self calls without it may use gh placeholders).
 fm_github() {
   if [ "${FM_EXTERNAL:-0}" = 1 ]; then
     "${GH:-${FM_GH:-gh}}" "$@" --repo "$GH_REPO"
