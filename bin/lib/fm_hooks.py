@@ -232,16 +232,95 @@ def codex_status(root, evidence=None, feature='unknown', client='unknown'):
                 delivery='unverified', idle_push='unsupported by documented background hook semantics', next_step=step)
 
 
+def guidance(root, vendors):
+    """Doctor's read-only operator policy. Local files are not runtime evidence."""
+    root = Path(root).resolve()
+    if watch.standing_down(root):
+        return
+    print('== Necessary agent hooks ==')
+    detected = detect()
+    names = list(dict.fromkeys(vendors + ([detected] if detected else [])))
+    for vendor in names:
+        harness = 'cursor' if vendor == 'cursor-agent' else vendor
+        if harness not in HARNESSES:
+            print(f'  ! {vendor}: hook integration unsupported/unverified by firstmate; '
+                  'use the stock foreground watch/manual-turn fallback below.')
+            continue
+        rel, expected = hook_config(root, harness)
+        path = root / rel
+        config, disabled = 'missing', False
+        if path.exists():
+            try:
+                data = json.loads(path.read_text())
+                if not isinstance(data, dict):
+                    raise ValueError('configuration must be an object')
+                entries = data['hooks']
+                if not isinstance(entries, dict):
+                    raise ValueError('hooks must be an object')
+                # Groups may also contain custom hooks; compare our complete handlers.
+                complete = True
+                for event, groups in expected.items():
+                    actual = entries.get(event, [])
+                    if not isinstance(actual, list):
+                        raise ValueError('event must be an array')
+                    for group in groups:
+                        if harness == 'cursor':
+                            complete &= group in actual
+                        else:
+                            complete &= any(isinstance(g, dict) and isinstance(g.get('hooks'), list) and
+                                all(h in g.get('hooks', []) for h in group['hooks']) and
+                                g.get('matcher') in (None, '', '*') for g in actual)
+                config = 'installed' if complete else 'missing-or-different'
+                disabled = data.get('disableAllHooks') is True
+            except (OSError, ValueError, KeyError, TypeError):
+                config = 'unreadable'
+        print(f'  ! {vendor}: source={path}; configuration={config}; '
+              f'loading=unverified; enablement={"locally-disabled" if disabled else "unverified"}; '
+              'authorization=unverified; capability=unverified-in-target; delivery=unverified')
+        command = shlex.join(['python3', str(root / 'bin/lib/fm_hooks.py'), 'install',
+                              '--harness', harness, '--repo', str(root)])
+        print(f'    Install/update firstmate-owned definitions: {command}')
+        if harness == 'codex':
+            print('    Codex CLI/app-server only: inspect this actual project source in native /hooks; '
+                  'review/trust the current SessionStart, UserPromptSubmit and Stop definitions; '
+                  'changed hashes require re-review. Restart/resume if the source is absent. '
+                  'Check effective features.hooks and allow_managed_hooks_only/requirements.toml; '
+                  'project trust alone is insufficient. Run fm hooks status --harness codex '
+                  'with target hooks/list evidence to distinguish loading, feature policy and exact-definition trust.')
+        elif harness == 'claude':
+            print('    Claude Code: review local settings and project trust in the native client; '
+                  'use /hooks to inspect Stop and UserPromptSubmit and their settings source. '
+                  'This is a hook browser, not Codex hash authorization. Check effective disableAllHooks '
+                  'and managed allowManagedHooksOnly; honor native project/security approval prompts. '
+                  'Settings normally reload automatically; restart if these definitions are absent. '
+                  'Verify asyncRewake support in the target version before relying on background delivery.')
+        else:
+            print('    Cursor: review this project in a trusted workspace; inspect stop in Customize > Hooks '
+                  'and the Hooks output channel. Config normally reloads on save; restart Cursor if absent. '
+                  'Check enterprise/team policy with the administrator. Cursor CLI or other surfaces remain '
+                  'unverified until their actual hook events and continuation are observed.')
+    print('    Preserve custom/global configuration and explicit disablement; managed-policy refusal needs '
+          'the administrator. Installation never grants authorization or proves readiness. No trust bypass.')
+    print('    Until verified, use stock foreground watch: bin/fm-watch-arm.sh --max-wait 3000; '
+          'if unavailable, on each manual turn run bin/fm-session.sh status. '
+          'Record real events, model-visible wake identity/continuation and owner cleanup per '
+          'docs/verification/supervision.md; queue/ack files are not delivery receipts. '
+          'No extra session, idle push, or automatic hot reload is promised.')
+
+
 USAGE = 'usage: fm_hooks.py install|uninstall|status [--harness claude|codex|cursor] [--repo DIR] [--detect] [--client cli|app-server] [--evidence FILE]'
 
 
 def main(argv):
-    if not argv or argv[0] not in ('install', 'uninstall', 'status'):
+    if not argv or argv[0] not in ('install', 'uninstall', 'status', 'guidance'):
         print(USAGE, file=sys.stderr)
         return 64
     try:
-        got = watch.options(argv[1:], {'--detect'}, {'--repo', '--harness', '--evidence', '--client'})
+        got = watch.options(argv[1:], {'--detect'}, {'--repo', '--harness', '--evidence', '--client', '--vendors'})
         root = watch.root_of(got)
+        if argv[0] == 'guidance':
+            guidance(root, got.get('--vendors', '').split())
+            return 0
         if argv[0] == 'status':
             if got.get('--harness', 'codex') != 'codex':
                 raise ValueError('status currently supports --harness codex only')

@@ -60,5 +60,7 @@ if [ "$MODE" = start ]; then
   if ! python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_hooks.py" install --detect --repo "$REPO" >&2; then
     echo "fm-session: the hooks that wake firstmate were not installed; run bin/lib/fm_hooks.py install --harness claude|codex|cursor" >&2
   fi
+  "${FM_CODE_ROOT:-$REPO}/bin/fm-doctor.sh" --hooks-only --repo "$REPO" >&2 ||
+    echo "fm-session: hook guidance unavailable; run fm doctor --hooks-only" >&2
 fi
 exec python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" session "$MODE" "$REPO" "$DECISION" "$TIMEOUT"

@@ -137,7 +137,7 @@ usage: fm.sh <command> [options]
         twice, and prints what it changed. Without --harness, all three.
         bin/fm-session.sh start installs them for the harness it detects.
 
-  doctor [--fix] [--sandbox] [--repo DIR]
+  doctor [--hooks-only] [--fix] [--sandbox] [--repo DIR]
         Say, for every dependency firstmate needs and every vendor login,
         whether it works here and the one command that fixes it. Installs
         nothing unless --fix, which asks before each install. With no

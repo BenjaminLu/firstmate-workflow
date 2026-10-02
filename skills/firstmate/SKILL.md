@@ -71,6 +71,23 @@ unavailable for that vendor, on the board with the probe's status and reason.
 gemini has no documented status command, so it is unavailable until its login
 can be verified.
 
+Necessary hooks are a standing rule for **every vendor**, not a remembered
+preference (captain, 2026-10-02; T-164). At primary startup and setup, use doctor's
+hook guidance (`bin/fm-doctor.sh --hooks-only --repo <root>`). It names the
+registry, configured role vendors and detected harness and prints scoped install
+commands. Guide the captain through the actual native approval/loading mechanism:
+Codex `/hooks` exact current SessionStart/UserPromptSubmit/Stop definitions and
+changed-hash re-review; Claude `/hooks` source inspection plus workspace trust,
+effective `disableAllHooks` and managed policy; Cursor workspace trust and
+Customize > Hooks/output diagnostics. Restart/resume only when needed for loading.
+Preserve custom/global settings and explicit disablement; policy refusals go to
+the administrator. Never fabricate trust or override it. Configuration is not
+loading, authorization or real delivery. Record each independently, and leave
+unobserved capability/delivery unverified. Unsupported/unverified vendors use the
+stock foreground arm or manual-turn session status. Do not start extra sessions,
+steal focus or add crew prompts. Recorded setup facts must not launch live probes.
+Firstmate still owns candidate-specific real smoke and owner-cleanup evidence.
+
 Run `bin/fm-session.sh start --repo <root>` at top-level startup. It inspects
 recorded processes and panes, verifies the board's root using a fresh relative
 file challenge, and opens its HTTP-verified page when an opener is available.
