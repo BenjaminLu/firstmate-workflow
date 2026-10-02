@@ -537,9 +537,7 @@ destroy_case() {   # destroy_case <fixture-label> <repo> <mode>
        ${project_env[@]+"${project_env[@]}"} FM_GH="$gh" FM_HOSTILE_MODE="$mode" FM_MIRROR_INTERVAL=1 \
        FM_HOSTILE_SLEEP_BEFORE=2 FM_HOSTILE_SLEEP_AFTER=2 \
        bin/fm-worker.sh --task "$id" --name "$(destroy_name "$mode")" ${worker_args[@]+"${worker_args[@]}"} 2>&1)"; rc=$?
-  if [ "$label" = external ] && [ "$rc" = 65 ] && [[ "$out" == *'publication requires the conventions policy reader (T-139)'* ]]; then
-    : # The local committed recovery is testable before onboarding enables publication.
-  elif [ "$rc" != 0 ]; then ok=0; why="fm-worker.sh exited $rc"; fi
+  if [ "$rc" != 0 ]; then ok=0; why="fm-worker.sh exited $rc"; fi
   if [ ! -e "$tree/.git" ]; then ok=0; why="${why:+$why; }its .git link is gone"; fi
   if ! git -C "$tree" status >/dev/null 2>&1; then ok=0; why="${why:+$why; }git status fails in the tree"; fi
   tracked="$(git -C "$tree" ls-tree -r --name-only HEAD 2>/dev/null)"
@@ -625,6 +623,20 @@ if run_section destroy; then
     if FM_HOME="$dwork/fm-home" FM_GITHUB_URL="$ext_dir/host" "$ROOT/bin/fm-project.sh" sync destroy-fixture --repo "$engine" >/dev/null 2>&1; then
       ext_repo_dir="$dwork/fm-home/projects/destroy-fixture"
       cp -R "$ext_dir/repo/design/tasks" "$ext_repo_dir/tasks"
+      # The fixture is an approved external project before any worker starts.
+      python3 - "$ROOT/bin/lib" "$ext_repo_dir" <<'PY_POLICY'
+import sys
+from pathlib import Path
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+from fm_onboard import infer, approve
+e = dict(repository='fm-canary/destroy-fixture', base='main', source='github',
+         pulls=[], commits=[], protection={'status':'unknown'}, repository_info={})
+approve(Path(sys.argv[2]), e, infer(e), dict(
+    confirmed=True, policy_confirmed=True, captain='fixture', intent='Exercise restoration',
+    product='Canary fixture', required_checks=['ci'], contract={'check':'true'},
+    available_merge_methods=['squash'], merge_method='squash', delete_branch=False))
+PY_POLICY
       # a fresh clone carries no user.name/user.email of its own
       git -C "$ext_repo_dir/repo" config user.email a@b.c
       git -C "$ext_repo_dir/repo" config user.name t

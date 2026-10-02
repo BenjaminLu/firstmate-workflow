@@ -64,6 +64,12 @@ assert_ok "test -f '$store/state/diagrams/$id.en.html'" "diagram is retained in 
 assert_ok "test ! -e '$eng/board/public/diagrams'" "private diagram is not copied into engine public tree"
 cat > "$store/repo/config.yaml" <<'YAML'
 project:
+  setup: printf wrong > repository-contract-ran.txt
+  docs:
+    - '*.md'
+YAML
+cat > "$store/state/config.yaml" <<'YAML'
+project:
   setup: printf prepared > prepared.txt
   check: test -f prepared.txt
 YAML
@@ -71,18 +77,46 @@ FM_PROJECT=private-app python3 - "$ROOT" "$eng" > "$t/setup-report" <<'PYTHON'
 import importlib.util, json, pathlib, sys
 spec = importlib.util.spec_from_file_location('herdr', pathlib.Path(sys.argv[1]) / 'bin/fm-herdr.py')
 module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+status = module.project_report(sys.argv[2])
+pathlib.Path(sys.argv[2], 'status-report.json').write_text(json.dumps(status))
 print(json.dumps(module.project_report(sys.argv[2], run_setup=True)))
 PYTHON
-assert_eq true "$(jq -r .ready "$t/setup-report")" "external session uses target setup contract"
+assert_eq true "$(jq -r .ready "$eng/status-report.json")" "external report reads private check despite conflicting repository config"
+assert_eq 'setup,check' "$(jq -r '.declared | join(",")' "$eng/status-report.json")" "external report declares only private contract keys"
+assert_eq null "$(jq -r .setup "$eng/status-report.json")" "status reports setup without executing it"
+assert_eq true "$(jq -r .ready "$t/setup-report")" "external startup uses private setup contract"
 assert_ok "test -f '$store/repo/prepared.txt'" "setup executes in target clone"
+assert_ok "test ! -e '$store/repo/repository-contract-ran.txt'" "startup never executes repository contract"
 assert_ok "test -f '$store/state/session/project-setup.log'" "setup evidence is private"
 assert_ok "test ! -e '$eng/prepared.txt'" "setup does not execute in engine"
+FM_PROJECT=private-app python3 - "$ROOT" "$eng" "$store" > "$t/contract-guards" <<'PYTHON'
+import importlib.util, json, os, pathlib, sys
+spec = importlib.util.spec_from_file_location('herdr', pathlib.Path(sys.argv[1]) / 'bin/fm-herdr.py')
+module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+engine, store = map(pathlib.Path, sys.argv[2:])
+private = store / 'state/config.yaml'
+saved = private.read_text()
+private.unlink()
+try:
+    missing = module.project_report(engine, run_setup=True)
+finally:
+    private.write_text(saved)
+with (engine / 'config.yaml').open('a') as config:
+    config.write('project:\n  setup: printf self > self-prepared.txt\n  check: test -f self-prepared.txt\n')
+os.environ['FM_PROJECT'] = 'self'
+self_report = module.project_report(engine, run_setup=True)
+print(json.dumps(dict(missing=missing, self=self_report)))
+PYTHON
+assert_eq false "$(jq -r .missing.ready "$t/contract-guards")" "missing private contract leaves external startup unready"
+assert_ok "test ! -e '$store/repo/repository-contract-ran.txt'" "missing private contract never falls back to repository setup"
+assert_eq true "$(jq -r .self.ready "$t/contract-guards")" "self startup retains engine contract"
+assert_ok "test -f '$eng/self-prepared.txt'" "self setup retains engine working directory"
 FM_ROOT="$eng" "$ROOT/bin/fm-emit.sh" --actor captain --type greenlit >/dev/null
 assert_ok "test -f '$eng/state/events.jsonl'" "self events retain original layout"
 assert_eq 1 "$(wc -l < "$eng/state/events.jsonl" | tr -d ' ')" "self log contains no private event"
 "$ROOT/bin/fm-merge.sh" --pr 1 --project private-app --repo "$eng" > "$t/out" 2> "$t/err"; rc=$?
 assert_eq 65 "$rc" "external merge waits for project policy"
-assert_contains "$(cat "$t/err")" 'T-139' "merge refusal explains policy handoff"
-assert_contains "$(cat "$t/err")" '合併政策' "merge refusal is bilingual"
+assert_contains "$(cat "$t/err")" 'CONVENTIONS.md' "merge refusal names missing contract"
+assert_contains "$(cat "$t/err")" 'readable' "merge refusal explains unreadable policy"
 safe_rm_rf "$t"
 finish

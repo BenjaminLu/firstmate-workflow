@@ -2507,7 +2507,10 @@ def project_report(root, run_setup=False):
     report = dict(declared=[], setup=None, ready=False)
     storage = record_root(root)
     target = storage / 'repo' if storage != root else root
-    try: contract = project_contract(target / 'config.yaml')
+    # External commands are approved privately; repository content is not the
+    # contract. Self projects retain their existing config and setup directory.
+    config = storage / 'state/config.yaml' if storage != root else root / 'config.yaml'
+    try: contract = project_contract(config)
     except ValueError as error:
         report['error'] = str(error); return report
     report['declared'] = [key for key in PROJECT_KEYS if key in contract]

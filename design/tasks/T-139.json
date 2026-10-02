@@ -8,6 +8,7 @@
   "title": "Onboard a repository into private FM_HOME conventions with at most three missing-contract questions",
   "scope": [
     "bin/fm-project.sh",
+    "bin/fm-herdr.py",
     "bin/fm-onboard.sh",
     "bin/fm-config.sh",
     "bin/lib/**",
@@ -20,7 +21,9 @@
     "design/tasks/T-139.json",
     "bin/fm-merge.sh",
     "bin/fm-worker.sh",
-    "bin/fm-review.sh"
+    "bin/fm-review.sh",
+    "bin/fm-checkpoint.sh",
+    "bin/fm-canary.sh"
   ],
   "acceptance": [
     "Why. On 2026-09-29 the captain approved a design for running firstmate-workflow on other repositories (reviewed as an artifact, then grilled on consenlabs/tokenlon-mm-agent PR #164): firstmate inspects a repository and asks at most three questions to write FM_HOME/projects/<name>/CONVENTIONS.md; every merge still goes through the captain's intent card, never auto-merge; external reviewers such as that repo's R2D2-im and BB8-im can be the review, with firstmate's own reviewer only a local pre-check; and nothing about watching may depend on firstmate remembering - scripts do it. This task is one of T-137..T-141, run in the order of their depends_on. Its own spec file, design/tasks/T-139.json, is committed on this branch.",

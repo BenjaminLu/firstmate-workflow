@@ -4725,3 +4725,49 @@ and login status, repo rows carry `origin` and `ref`, and gh rows carry
 `present`, `authed` and `permission`. Its recommendation and config writer
 consume those observations. Tests supply facts; the normal commands collect
 them from the host.
+
+### T-139 private onboarding contract
+
+The former §15.8 visibility/protection prerequisite is withdrawn. A private
+repository is accepted; HTTP 404 protection is unknown, never proof of absent
+protection. `fm project add` records a bounded inspection privately, offers at
+most three missing-contract question groups, then writes CONVENTIONS.md only
+with explicit captain-confirmed checks, policy, product intent and commands.
+The public engine registry carries routing only; command configuration is
+`FM_HOME/projects/<name>/state/config.yaml`. Existing explicit-name and self
+routing remain supported.
+
+The conventions front matter uses data-only fields (strings quoted as JSON;
+arrays and objects as JSON; named policy enums may be bare). Mandatory policy
+includes repository/base binding, land, review, post, merge_method,
+delete_branch, required_checks, stacking, force_with_lease, captain, intent,
+product, confirmed_at, confirmed, policy_confirmed and timer values.
+Publication reads the same contract as merge and prompt construction. Missing,
+invalid or unconfirmed policy refuses external publication; self defaults stay
+unchanged. Merge methods and retention follow the contract; land: handoff
+refuses engine merge. No path enables auto-merge or protected-base publication.
+External stacking/rebuild remains held for T-143, even if the captain records
+an allowed future policy. Summary/check/threads projections are retained locally
+pending T-140; they never fall back to exposing private acceptance as comments.
+
+Inspection covers the last 30 updated PRs and up to 100 reviews/comments/checks
+or statuses per PR. Counts are taken from PR detail; truncated text/review
+samples are evidence, not exhaustive history. Git log supplies commit examples
+from an existing managed clone or a temporary private history clone. Only
+`fm project sync` creates the managed `repo/`; it also repairs earlier shallow,
+unpopulated inspection clones without resetting an existing checkout. Missing
+merge/deletion/check facts remain unknown until explicitly confirmed. Empty
+local folders have no invented remote, commits,
+PRs or product brief; bootstrap initial-commit permission and remote identity
+are explicit answers, and onboarding creates neither commits nor remotes.
+
+The existing owner-bound watcher schedules daily re-inspection (configurable)
+for every registered external project with confirmed conventions, with a private
+deadline per project. Inspection failures cannot stop engine wake delivery. It
+retains and debounces drift proposals and pushes a bilingual wake to the queue
+served by its owning watcher. It never
+edits confirmed policy automatically. Chat edits report an exact diff and retain
+it privately. Workers and reviewers receive CONVENTIONS.md, and an fm review
+for review: external or both is only a pre-check. The captain's merge double
+check continues to own authenticated review, current-head checks/statuses and
+six-gate evidence.

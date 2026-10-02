@@ -86,7 +86,7 @@ assert_eq "" "$(git -C "$real" config --local --get firstmate.base)" "nor its gu
 assert_eq "70" "$(run verify example-app --repo "$eng")" "verify with no clone, no protection, no repository refuses with 70"
 err="$(cat "$t/err")"
 assert_contains "$err" "$FM_HOME/projects/example-app/repo" "it names the missing clone"
-assert_contains "$err" "branch protection unknown for example-org/example-app trunk" \
+assert_contains "$(cat "$t/out")" "branch protection unknown for example-org/example-app trunk" \
   "and the branch protection it could not read"
 assert_contains "$err" "captain-confirmed checks and policy" "unknown protection requires confirmation"
 
@@ -203,6 +203,19 @@ repository() {   # repository <private> <visibility>
 }
 JSON
 }
+# Private policy replaces the withdrawn engine-wide public/protection rules.
+# Literal helper dependency: tests/lib/onboarding/repository.json.
+python3 - "$ROOT" "$FM_HOME/projects/example-app" <<'PYCONVENTIONS'
+import sys
+from pathlib import Path
+sys.dont_write_bytecode=True
+sys.path.insert(0,sys.argv[1]+'/bin/lib')
+from fm_onboard import infer, approve
+e=dict(source='github',repository='example-org/example-app',base='trunk',pulls=[],commits=[],
+       protection={'status':'unknown'},repository_info={'allow_squash_merge':True,'allow_merge_commit':False,'allow_rebase_merge':False,'delete_branch_on_merge':False})
+approve(Path(sys.argv[2]),e,infer(e),dict(confirmed=True,policy_confirmed=True,captain='captain',
+    intent='Drive application',product='Application',required_checks=['check'],contract={'check':'true'}))
+PYCONVENTIONS
 repository false public
 protection true true check
 
@@ -210,16 +223,16 @@ assert_eq "0" "$(run verify example-app --repo "$eng")" "a protected, public, gu
 assert_eq "" "$(cat "$t/err")" "and complains about nothing"
 
 protection true false check
-assert_eq "70" "$(run verify example-app --repo "$eng")" "enforce_admins off refuses"
-assert_contains "$(cat "$t/err")" "enforce_admins" "and names it"
+assert_eq "0" "$(run verify example-app --repo "$eng")" "enforce_admins off follows confirmed project policy"
+assert_contains "$(cat "$t/out")" "enforce_admins" "and reports it"
 
 protection false true check
-assert_eq "70" "$(run verify example-app --repo "$eng")" "a base not required to be up to date refuses"
-assert_contains "$(cat "$t/err")" "up to date" "and names it"
+assert_eq "0" "$(run verify example-app --repo "$eng")" "strictness follows confirmed project policy"
+assert_contains "$(cat "$t/out")" "strict" "and reports strictness"
 
 protection true true lint
-assert_eq "70" "$(run verify example-app --repo "$eng")" "required_check missing from the required checks refuses"
-assert_contains "$(cat "$t/err")" "'check' is not a required status check" "and names the check"
+assert_eq "0" "$(run verify example-app --repo "$eng")" "confirmed check need not be visible in protection"
+assert_contains "$(cat "$t/out")" "lint" "and reports visible protection check"
 # GitHub lists a required check under contexts, under checks[].context, or
 # both; each alone must count, so dropping either reading goes red
 protection true true check checks
@@ -231,15 +244,13 @@ assert_eq "0" "$(run verify example-app --repo "$eng")" "a check required only i
 protection true true check
 jq 'del(.required_status_checks)' "$api/branches/trunk/protection.json" > "$t/p.json"
 mv "$t/p.json" "$api/branches/trunk/protection.json"
-assert_eq "70" "$(run verify example-app --repo "$eng")" "protection without status checks refuses"
-err="$(cat "$t/err")"
-assert_contains "$err" "up to date" "naming the up-to-date rule"
-assert_contains "$err" "'check' is not a required status check" "and the check"
+assert_eq "0" "$(run verify example-app --repo "$eng")" "confirmed checks remain authoritative when protection omits statuses"
+assert_contains "$(cat "$t/out")" "protection visible" "protection facts remain visible"
 
 protection true true check
 rm -f "$api/branches/trunk/protection.json"
-assert_eq "70" "$(run verify example-app --repo "$eng")" "an unprotected base refuses"
-assert_contains "$(cat "$t/err")" "base trunk is not protected" "and says so"
+assert_eq "0" "$(run verify example-app --repo "$eng")" "404 is unknown and accepts confirmed checks and policy"
+assert_contains "$(cat "$t/out")" "protection unknown" "404 never claims no protection"
 protection true true check
 
 repository true private
@@ -253,15 +264,15 @@ repository false public
 # An unreadable rule is unknown, and a confirmation is bound to this target.
 mv "$api/branches/trunk/protection.json" "$t/protection-held.json"
 mv "$api.json" "$t/repository-held.json"
+confirmation="$FM_HOME/projects/example-app/CONVENTIONS.md"
+mv "$confirmation" "$t/held-conventions.md"
 assert_eq "70" "$(run verify example-app --repo "$eng")" "unreadable protection without captain confirmation refuses"
-mkdir -p "$FM_HOME/projects/example-app/state"
-confirmation="$FM_HOME/projects/example-app/state/protection-confirmation.json"
-printf '%s\n' '{"repository":"example-org/example-app","base":"trunk","required_checks":["check"],"captain_confirmed":true,"policy_confirmed":true}' > "$confirmation"
+cp "$t/held-conventions.md" "$confirmation"
 assert_eq "0" "$(run verify example-app --repo "$eng")" "captain-confirmed checks and policy resolve unknown protection"
-jq '.base="other"' "$confirmation" > "$t/wrong-confirmation.json"
-mv "$t/wrong-confirmation.json" "$confirmation"
+sed 's/base: "trunk"/base: "other"/' "$confirmation" > "$t/wrong-conventions.md"
+cp "$t/wrong-conventions.md" "$confirmation"
 assert_eq "70" "$(run verify example-app --repo "$eng")" "confirmation for a different base grants no readiness"
-rm "$confirmation"
+cp "$t/held-conventions.md" "$confirmation"
 mv "$t/protection-held.json" "$api/branches/trunk/protection.json"
 mv "$t/repository-held.json" "$api.json"
 
@@ -294,15 +305,13 @@ assert_contains "$(cat "$t/err")" "origin" "and names the origin"
 git -C "$clone" remote set-url origin "$bare"
 assert_eq "0" "$(run verify example-app --repo "$eng")" "and the right origin verifies again"
 
-# everything wrong at once: every item named, not just the first
+# Visibility/protection variation does not hide a broken local guard
 protection false false lint
 repository true private
 git -C "$clone" config --unset core.hooksPath
 assert_eq "70" "$(run verify example-app --repo "$eng")" "several missing items refuse once"
 err="$(cat "$t/err")"
-for want in enforce_admins "up to date" "'check' is not a required status check" core.hooksPath; do
-  assert_contains "$err" "$want" "naming $want among them"
-done
+assert_contains "$err" core.hooksPath "naming the broken guard among reported facts"
 protection true true check; repository false public
 assert_eq "0" "$(run sync example-app --repo "$eng")" "a sync puts the hooks back"
 assert_eq "0" "$(run verify example-app --repo "$eng")" "and the target verifies again"

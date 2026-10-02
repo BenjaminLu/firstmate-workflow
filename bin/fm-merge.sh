@@ -60,9 +60,14 @@ esac
   echo "fm-merge: --task and --untracked are two different cards; give one" >&2; exit 64; }
 
 fm_storage_init "$REPO" "$PROJECT" || exit 65
+merge_args=(--squash --delete-branch)
 if [ "$FM_EXTERNAL" = 1 ]; then
-  echo "fm-merge: merge policy not yet set; T-139 onboarding writes it / 尚未設定合併政策；由 T-139 導入流程建立" >&2
-  exit 65
+  policy="$(fm_conventions "")" || exit 65
+  [ "$(jq -r .land <<<"$policy")" = card ] || {
+    echo 'fm-merge: captain handoff required / 需要船長交接合併' >&2; exit 65; }
+  merge_args=("--$(jq -r .merge_method <<<"$policy")")
+  if [ "$(jq -r .delete_branch <<<"$policy")" = true ]; then merge_args+=(--delete-branch); fi
+  PROJECT="$FM_PROJECT"
 fi
 
 # the project's repository, named on every gh call; none without --project
@@ -113,7 +118,7 @@ case "$state" in
   *) echo "fm-merge: #$PR is $state, not open" >&2; exit 1 ;;
 esac
 
-$GH pr merge "$PR" ${ON[@]+"${ON[@]}"} --squash --delete-branch >/dev/null 2>&1 </dev/null || {
+$GH pr merge "$PR" ${ON[@]+"${ON[@]}"} "${merge_args[@]}" >/dev/null 2>&1 </dev/null || {
   echo "fm-merge: GitHub refused the merge of #$PR${PROJECT:+ in $PROJECT}" >&2; exit 1; }
 
 if [ -n "$UNTRACKED" ]; then

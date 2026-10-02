@@ -356,9 +356,23 @@ def cycle(root):
         os.dup2(devnull, 1)
         os.close(devnull)
         items = take(root, stage=gen)
-        while not items:
-            bell.wait(None)
-            items = take(root, stage=gen)
+        while True:
+            # Inspection runs even during sustained queue traffic. Failures in
+            # this optional subsystem never stop the engine's wake delivery.
+            try:
+                from fm_conventions_watch import tick
+                delay = tick(root, wake=life.push, owner=owner)
+            except Exception as error:
+                delay = 60
+                try:
+                    journal(root, f'conventions inspection unavailable: {error}')
+                except OSError:
+                    pass
+            if not items:
+                items = take(root, stage=gen)
+            if items:
+                break
+            bell.wait(delay)
         lines = [wake_line(item) for item in items]
         # the successor holds the watch before this wake is let out, so a
         # wake pushed while firstmate handles this one is not missed

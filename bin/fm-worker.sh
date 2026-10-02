@@ -48,6 +48,7 @@ if [ -n "${FM_PROJECT:-}" ] && [ -n "$(fm_projects "$FM_CONFIG" 2>/dev/null)" ];
   project_events=(--project "$FM_PROJECT")
 fi
 fm_target_validate || exit 65
+fm_conventions "" >/dev/null || exit 65
 if [ "$FM_EXTERNAL" = 1 ]; then
   "${FM_CODE_ROOT:-$REPO}/bin/fm-project.sh" verify "$FM_PROJECT" --repo "$REPO" || exit 65
 fi
@@ -195,12 +196,9 @@ _fm_wip_done=0
 publish_wip_if_dirty() {
   local reason="${1:-exit}" dirty
   [ "${_fm_wip_done}" = 1 ] && return 0
-  if [ "${FM_EXTERNAL:-0}" = 1 ]; then
-    echo 'fm-worker: external work retained locally; publication requires the conventions policy reader (T-139)' >&2
-    return 0
-  fi
   [ -n "${tree:-}" ] && [ -d "$tree" ] && [ -n "${branch:-}" ] && [ -n "${TASK:-}" ] || return 0
   case "$branch" in main|master|HEAD|'') return 0 ;; esac
+  fm_publication_policy "$tree" || return 1
   dirty="$(git -C "$tree" status --porcelain -- . \
     ":(exclude).fm-prompt.md" ":(exclude).fm-say.md" 2>/dev/null || true)"
   [ -n "$dirty" ] || return 0
@@ -943,7 +941,7 @@ rebuild_probe_drop() {
 }
 bring_up_to_date() {
   if [ "$FM_EXTERNAL" = 1 ]; then
-    echo 'fm-worker: external stacking/rebuild awaits conventions policy (T-139) / 外部堆疊與重建等待 T-139 慣例政策' >&2
+    echo 'fm-worker: external stacking/rebuild remains held for T-143 / 外部堆疊與重建仍等待 T-143' >&2
     return 0
   fi
   local base_ref="refs/remotes/origin/$BASE" head mb ls rc f side
@@ -1082,6 +1080,7 @@ fi
 
 {
   cat "${FM_CODE_ROOT:-$REPO}/skills/worker/SKILL.md"
+  fm_conventions_prompt || exit 65
   printf '\n---\n\n# Your task\n\n```json\n%s\n```\n' "$spec"
   printf '\nYour worktree is the current directory. Your branch is `%s`.\n' "$branch"
   printf 'Stay inside these paths:\n'
@@ -1409,6 +1408,14 @@ say_err=''
 post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
   say_err="$(scratch_new)" || say_err=''
   [ -z "$say_err" ] || scratch_add "$say_err"
+  if [ "$FM_EXTERNAL" = 1 ]; then
+    fm_private_note worker-report "$TASK" "$1" || return 1
+    if [ "$projection" != comments ]; then
+      # Summary/check/threads projection belongs to T-140. Retain privately.
+      spoke=1
+      return 0
+    fi
+  fi
   [ "$projection" = comments ] || return 0
   if fm_comment_projection "$2" --body-file "$1" >/dev/null 2>"${say_err:-/dev/null}" </dev/null; then
     spoke=1
@@ -1507,7 +1514,7 @@ first_round_question() {
   [ "$FM_EXTERNAL" = 0 ] || return 1
   [ "$question_draft" = 1 ] && [ "$round_two" = 0 ] && ! rebuild_publishes
 }
-if [ "$projection" = comments ] && [ "$round_two" = 0 ] && ! rebuild_publishes \
+if [ "$FM_EXTERNAL" = 0 ] && [ "$projection" = comments ] && [ "$round_two" = 0 ] && ! rebuild_publishes \
    && [ "$asked" = 1 ] && [ -z "$PR" ] && ! worker_changed_files \
    && grep -Eq "^(SCOPE-BLOCKED|ASK-[A-Z-]+):$TASK([[:space:]]|$)" "$say"; then
   # Prefer the seeded spec as the draft's diff. A task already on base
@@ -1527,6 +1534,12 @@ if [ "$projection" = comments ] && [ "$round_two" = 0 ] && ! rebuild_publishes \
     fi
   fi
   question_draft=1
+fi
+# An external request without implementation has a complete private delivery
+# path. Never manufacture a target-tree design/questions file for a PR diff.
+if [ "$FM_EXTERNAL" = 1 ] && [ "$asked" = 1 ] && [ -z "$PR" ] && ! worker_changed_files; then
+  fm_private_note worker-report "$TASK" "$say" || exit 65
+  spoke=1
 fi
 held=''
 held_settled=0
@@ -1812,10 +1825,7 @@ if [ "$rebuilt" = 1 ]; then
     || echo "fm-worker: could not clear refs/fm-rebuilt/$branch; the next round settles it" >&2
   echo "fm-worker: $branch rebuilt on $BASE; the previous head was ${rebuild_prev}" >&2
 else
-  if [ "$FM_EXTERNAL" = 1 ]; then
-    echo 'fm-worker: external work retained locally; publication requires the conventions policy reader (T-139) / 外部工作已保留於本機；發布需要 T-139 慣例政策讀取器' >&2
-    exit 65
-  fi
+  fm_publication_policy "$tree" || exit 65
   git -C "$tree" push -q -u origin "$branch" 2>/dev/null || {
     echo "fm-worker: could not push $branch" >&2; exit 71; }
 fi
@@ -1851,9 +1861,11 @@ num="$PR"
 if [ -z "$num" ] || [ "$num" = "null" ]; then
   draft_args=()
   if first_round_question; then draft_args=(--draft); fi
+  pr_body="Dispatched by firstmate for $TASK. Acceptance is in design/tasks/$TASK.json."
+  if [ "$FM_EXTERNAL" = 1 ]; then pr_body="Task $TASK. Captain acceptance and evidence are retained privately."; fi
   url="$($GH pr create ${draft_args[@]+"${draft_args[@]}"} --head "$branch" --base "$BASE" \
         --title "$TASK: $(jq -r .title <<<"$spec")" \
-        --body "Dispatched by firstmate for $TASK. Acceptance is in design/tasks/$TASK.json." \
+        --body "$pr_body" \
         2>/dev/null </dev/null | tail -1)"
   # the number, not the url: every step after this addresses the pull
   # request by it, and an event without it leaves the gates checking nothing
