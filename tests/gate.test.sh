@@ -263,7 +263,7 @@ assert_eq "7" "$rc" "7 blocks a carry-forward across a resolved conflict, whose 
 assert_contains "$out" "condition 1" "and names the patch-id condition"
 
 # a later REJECT supersedes the APPROVE, carried forward or not
-post "$d7" reviewer-1 "REJECT:T-X\\n\\n$(reviewed "$d7" pr REJECT)"
+post "$d7" reviewer-1 "1. open fix the helper\\nCRITERIA-COMPLETE:T-X\\nREJECT:T-X\\n\\n$(reviewed "$d7" pr REJECT)"
 out="$(g7 updated)"; rc=$?
 assert_eq "7" "$rc" "7 blocks an APPROVE superseded by a later REJECT"
 assert_contains "$out" "condition 2" "and names the condition that failed"
@@ -271,14 +271,14 @@ assert_contains "$out" "REJECT" "which is the later REJECT"
 : > "$d7/comments.tsv"
 rm -rf "$d7/state/evidence"
 post "$d7" reviewer-1 "APPROVE:T-X\\n\\n$(reviewed "$d7" pr APPROVE)"
-post "$d7" reviewer-1 "REJECT:T-X"
+post "$d7" reviewer-1 "1. open fix the helper\\nCRITERIA-COMPLETE:T-X\\nREJECT:T-X"
 out="$(g7 pr)"; rc=$?
 assert_eq "7" "$rc" "7 blocks even the approved head once a REJECT follows"
 # a rejection that mentions the approve marker on the way, posted the way
 # fm-review.sh posts it: the reviewer's words, then the REVIEWED line
 : > "$d7/comments.tsv"
 rm -rf "$d7/state/evidence"
-post "$d7" reviewer-1 "I cannot sign APPROVE:T-X while item 1 stands\\nREJECT:T-X\\n\\n$(reviewed "$d7" pr REJECT)"
+post "$d7" reviewer-1 "I cannot sign APPROVE:T-X while item 1 stands\\n1. open fix the helper\\nCRITERIA-COMPLETE:T-X\\nREJECT:T-X\\n\\n$(reviewed "$d7" pr REJECT)"
 out="$(g7 pr)"; rc=$?
 assert_eq "7" "$rc" "7 blocks a REJECT whose text mentions the approve marker"
 assert_contains "$out" "the latest verdict is REJECT:T-X" "and says the latest verdict is REJECT"
@@ -291,7 +291,7 @@ post "$d7" reviewer-1 "APPROVE:T-X"
 out="$(g7 updated)"; rc=$?
 assert_eq "7" "$rc" "7 refuses an unbound legacy approval"
 assert_contains "$out" "no reviewed head" "and says it binds to no head"
-post "$d7" reviewer-1 "REJECT:T-X"
+post "$d7" reviewer-1 "1. open fix the helper\\nCRITERIA-COMPLETE:T-X\\nREJECT:T-X"
 out="$(g7 updated)"; rc=$?
 assert_eq "7" "$rc" "and a later REJECT supersedes it too"
 

@@ -22,6 +22,9 @@ assert_eq 3 "$(code "$d")" 'missing local verdict is reported without reading co
 record "$d" reviewer-1 'REJECT:T-Z'
 assert_eq 3 "$(code "$d")" 'round one rejection without a complete list is refused'
 assert_contains "$(run "$d" 2>&1)" 'no complete standing list' 'the missing list is named'
+record "$d" reviewer-1 'APPROVE:T-Z'
+assert_eq 3 "$(code "$d" 2)" 'approval cannot erase an unresolved listless rejection'
+assert_contains "$(run "$d" 2 2>&1)" 'no complete standing list' 'approval preserves the historical protocol error'
 rm -rf "$d"
 first=$'1. open name the helper\n2. open empty case\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z'
 d="$(fixture)"; record "$d" reviewer-1 "$first"
