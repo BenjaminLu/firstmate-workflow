@@ -123,6 +123,7 @@ if [ -n "$dirty" ]; then
     fi
     # Absent from disk: keep a staged deletion so a wrongly tracked tip is purged.
   done
+  fm_private_stage "$tree" || exit 65
   if ! git -C "$tree" diff --cached --quiet 2>/dev/null; then
     case "$MSG" in
       "$TASK:"*|"$TASK "*) commit_msg="$MSG" ;;

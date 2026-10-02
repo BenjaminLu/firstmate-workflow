@@ -1570,6 +1570,19 @@ def executions(run):
             if (state := execution_state(attempt)) is not None]
 
 
+def task_idle(root, task):
+    """Cleanup must retain live and uncertain attempts, even after launcher exit."""
+    for identity_file in (record_root(root) / 'state/runs').glob('*/identity.json'):
+        identity = read(identity_file)
+        if identity.get('task') != task:
+            continue
+        run = identity_file.parent
+        if run_is_live(run) or any(item['state'] != 'terminated' for item in executions(run)):
+            print('fm: task has live or uncertain execution; retained: ' + str(run), file=sys.stderr)
+            return 1
+    return 0
+
+
 def reserve_execution(attempt):
     save(Path(attempt) / 'execution.json', dict(started=False, reserved=time.time()))
 
@@ -2583,6 +2596,7 @@ def main(args):
         except ValueError as error:
             print('fm-config: ' + str(error), file=sys.stderr); return 65
     if mode == 'allocate': print(allocate(Path(args[0]), *args[1:])); return 0
+    if mode == 'task-idle': return task_idle(Path(args[0]), args[1])
     if mode == 'record-model':
         run, vendor, model_requested, model, cli_version = args
         print(json.dumps(record_model(run, vendor, model_requested, model, cli_version))); return 0

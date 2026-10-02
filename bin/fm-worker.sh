@@ -47,14 +47,13 @@ project_events=()
 if [ -n "${FM_PROJECT:-}" ] && [ -n "$(fm_projects "$FM_CONFIG" 2>/dev/null)" ]; then
   project_events=(--project "$FM_PROJECT")
 fi
-fm_target_validate || exit 65
 fm_conventions "" >/dev/null || exit 65
-if [ "$FM_EXTERNAL" = 1 ]; then
-  "${FM_CODE_ROOT:-$REPO}/bin/fm-project.sh" verify "$FM_PROJECT" --repo "$REPO" || exit 65
-fi
-BASE="${FM_BASE:-$BASE}"
 fm_refuse_herdr_bypass fm-worker || exit $?
 fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
+fm_external_prepare || exit 65
+fm_target_validate || exit 65
+fm_external_base || exit 65
+BASE="${FM_BASE:-$BASE}"
 cd "$FM_TARGET_ROOT" || exit 65
 # A worker's round is the task's, read from the log by the allocation
 # (T-116); one inherited from a reviewer's shell is not this run's.
@@ -371,7 +370,7 @@ set_crew_activity "$spec"
 # A task's title is mutable; its branch name, once created, is not re-derived
 # from it (T-037). Prefer an explicit --pr headRefName when valid (T-035).
 if [ -n "$PR" ]; then
-  pr_branch="$($GH pr view "$PR" --json headRefName --jq '.headRefName' 2>/dev/null || true)"
+  pr_branch="$(fm_github pr view "$PR" --json headRefName --jq '.headRefName' 2>/dev/null || true)"
   case "$pr_branch" in
     ''|null) ;;
     *[!A-Za-z0-9._/-]*|/*|*/) ;;
@@ -380,10 +379,12 @@ if [ -n "$PR" ]; then
 fi
 if [ -n "$branch_guess" ]; then
   branch="$branch_guess"
+elif [ "$FM_EXTERNAL" = 1 ]; then
+  branch="$slug-work"
 else
   branch="$slug-$(jq -r '.title' <<<"$spec" | tr 'A-Z' 'a-z' | tr -cs 'a-z0-9' '-' | cut -c1-28 | sed 's/-*$//')"
 fi
-[ "$branch" != "$BASE" ] || { echo 'fm-worker: refusing protected project base' >&2; exit 65; }
+case "$branch" in main|master|"$BASE") echo 'fm-worker: refusing protected project base' >&2; exit 65 ;; esac
 [[ "$TASK" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || exit 65
 [ ! -L "$FM_WORKTREES/$TASK" ] || exit 65
 tree="$FM_WORKTREES/$TASK"
@@ -455,7 +456,7 @@ if [ "$round_two" = 1 ] && [ -z "$PR" ]; then
   lookup_err="$(scratch_new)" || lookup_err=''
   [ -n "$lookup_err" ] || { echo "fm-worker: could not make a scratch file" >&2; exit 70; }
   scratch_add "$lookup_err"
-  PR="$($GH pr list --head "$branch" --state open --json number --jq '.[0].number' \
+  PR="$(fm_github pr list --head "$branch" --state open --json number --jq '.[0].number' \
         2>"$lookup_err" </dev/null)"; lookup_rc=$?
   # what gh actually prints for a branch with no open pull request is
   # the literal `null`, not silence - leak it through and the round
@@ -533,11 +534,18 @@ else
   if git show-ref --verify --quiet "refs/heads/$branch"; then
     git worktree add -q "$tree" "$branch"
   else
-    git worktree add -q -b "$branch" "$tree" "$BASE"
+    # sync fetched the confirmed project's base; the clone's checked-out
+    # branch may intentionally lag and must not choose a new task's base.
+    task_base="$BASE"
+    [ "$FM_EXTERNAL" = 0 ] || task_base="refs/remotes/origin/$BASE"
+    git worktree add -q -b "$branch" "$tree" "$task_base"
   fi || { echo "fm-worker: could not create the worktree" >&2; exit 70; }
 fi
 # A stale ephemeral question is not this round's answer, including when
 # preserving a dirty tree in place.
+if [ "$FM_EXTERNAL" = 1 ] && [ -n "$PR" ]; then
+  fm_binding head --task "$TASK" --pr "$PR" --branch "$branch" >/dev/null || exit 65
+fi
 rm -f "$tree/.fm-say.md" "$tree/.fm-prompt.md"
 
 # Firstmate may revise a new task before any implementation exists.
@@ -1794,6 +1802,8 @@ fi || { echo "fm-worker: could not set the executable bit on a new script on $br
 # staged, the next round would take a pushed or refused commit for an
 # uncommitted round and rescue it as crashed work.
 commit_msg="$TASK: $(jq -r .title <<<"$spec")"
+[ "$FM_EXTERNAL" = 0 ] || commit_msg="$TASK: project work"
+fm_private_stage "$tree" || exit 65
 rebuilt_head=''; commit_ok=0
 if [ "$rebuilt" = 1 ]; then
   # fm_git_commit (bin/fm-config.sh) is the identity rule, a refusal and
@@ -1900,9 +1910,13 @@ if [ -z "$num" ] || [ "$num" = "null" ]; then
   draft_args=()
   if first_round_question; then draft_args=(--draft); fi
   pr_body="Dispatched by firstmate for $TASK. Acceptance is in design/tasks/$TASK.json."
-  if [ "$FM_EXTERNAL" = 1 ]; then pr_body="Task $TASK. Captain acceptance and evidence are retained privately."; fi
-  url="$($GH pr create ${draft_args[@]+"${draft_args[@]}"} --head "$branch" --base "$BASE" \
-        --title "$TASK: $(jq -r .title <<<"$spec")" \
+  pr_title="$TASK: $(jq -r .title <<<"$spec")"
+  if [ "$FM_EXTERNAL" = 1 ]; then
+    pr_title="$TASK: project work"
+    pr_body="Task $TASK. Captain acceptance and evidence are retained privately."
+  fi
+  url="$(fm_github pr create ${draft_args[@]+"${draft_args[@]}"} --head "$branch" --base "$BASE" \
+        --title "$pr_title" \
         --body "$pr_body" \
         2>/dev/null </dev/null | tail -1)"
   # the number, not the url: every step after this addresses the pull
@@ -1926,7 +1940,7 @@ if [ "$rebuilt" = 1 ]; then
   else
     handed='none'
   fi
-  if ! $GH pr comment "$num" --body "$(printf '%s\n' \
+  if ! fm_github pr comment "$num" --body "$(printf '%s\n' \
        "fm-worker.sh rebuilt \`$branch\` as one commit on \`$BASE\` at \`$rebuild_base\`: it no longer rebased onto it cleanly." \
        "" "Previous head: \`$rebuild_prev\`" "New head: \`$(git -C "$tree" rev-parse HEAD)\`" \
        "Conflicts handed to the worker: $handed")" \

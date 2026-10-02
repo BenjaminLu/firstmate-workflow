@@ -100,6 +100,9 @@ else
   [ -z "${FM_PROJECT:-}" ] || { echo "fm-reconcile: named project needs $_storage_lib" >&2; exit 65; }
   FM_STATE_DIR="$REPO/state"; FM_WORKTREES="$REPO/state/worktrees"
 fi
+if declare -f fm_target_validate >/dev/null; then fm_target_validate || exit 65; fi
+github_args=()
+[ "${FM_EXTERNAL:-0}" != 1 ] || github_args=(--repo "$GH_REPO")
 LOG="$FM_STATE_DIR/events.jsonl"
 WT="$FM_WORKTREES"
 shopt -s nullglob
@@ -367,7 +370,7 @@ pr_before_attempt() {
   ' <<< "$events" >/dev/null
 }
 
-raw="$($GH pr list --state all --limit "$LIMIT" --json number,state,title,headRefName 2>/dev/null)"
+raw="$($GH pr list --state all --limit "$LIMIT" --json number,state,title,headRefName ${github_args[@]+"${github_args[@]}"} 2>/dev/null)"
 if ! jq -e 'type=="array"' >/dev/null 2>&1 <<< "$raw"; then
   # reconciling after a crash is exactly when the network may be the thing
   # that broke. The local half below still runs, and this is loud rather than

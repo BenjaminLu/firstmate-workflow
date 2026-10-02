@@ -1631,6 +1631,44 @@ fm_target_validate() {
     echo "fm-config: managed clone origin does not match project $FM_PROJECT" >&2; return 65; }
 }
 
+# External entrypoints synchronize through the existing project service before
+# touching a task tree. Sync validates origins and paths, configures local
+# exclusions, and fetches remote refs without resetting an existing checkout.
+fm_external_prepare() {
+  [ "${FM_EXTERNAL:-0}" = 1 ] || return 0
+  local service="${FM_CODE_ROOT:-$FM_ENGINE_ROOT}/bin/fm-project.sh"
+  "$service" sync "$FM_PROJECT" --repo "$FM_ENGINE_ROOT" || return 65
+  fm_target_validate || return 65
+  "$service" verify "$FM_PROJECT" --repo "$FM_ENGINE_ROOT" || return 65
+}
+
+# Bring only the managed clone's clean, checked-out base forward. The task
+# branch and any unpublished checkout are never reset by synchronization.
+fm_external_base() {
+  [ "${FM_EXTERNAL:-0}" = 1 ] || return 0
+  local local_head remote_head
+  local_head="$(git -C "$FM_TARGET_ROOT" rev-parse "refs/heads/$FM_BASE^{commit}")" || return 65
+  remote_head="$(git -C "$FM_TARGET_ROOT" rev-parse "refs/remotes/origin/$FM_BASE^{commit}")" || return 65
+  [ "$local_head" != "$remote_head" ] || return 0
+  if [ "$(git -C "$FM_TARGET_ROOT" symbolic-ref -q --short HEAD)" != "$FM_BASE" ] ||
+     [ -n "$(git -C "$FM_TARGET_ROOT" status --porcelain)" ] ||
+     ! git -C "$FM_TARGET_ROOT" merge-base --is-ancestor "$local_head" "$remote_head"; then
+    echo 'fm: managed base cannot be fast-forwarded without touching local work; synchronize it before dispatch' >&2
+    return 65
+  fi
+  git -C "$FM_TARGET_ROOT" merge -q --ff-only "$remote_head" || return 65
+}
+
+# PR and Actions commands must never derive an external repository from cwd.
+# REST callers already name repos/<owner>/<repo> in their endpoint.
+fm_github() {
+  if [ "${FM_EXTERNAL:-0}" = 1 ]; then
+    "${GH:-${FM_GH:-gh}}" "$@" --repo "$GH_REPO"
+  else
+    "${GH:-${FM_GH:-gh}}" "$@"
+  fi
+}
+
 # T-135: comments are a projection of durable local records, never authority.
 fm_projection() {
   local names posting
@@ -1657,7 +1695,7 @@ fm_comment_projection() {
   local selected
   selected="$(fm_projection)" || return 65
   [ "$selected" = comments ] || return 0
-  "${FM_GH:-gh}" pr comment "$@"
+  fm_github pr comment "$@"
 }
 fm_evidence_project() {
   # Keep legacy state separate without changing the launcher's project identity.
@@ -1695,11 +1733,30 @@ fm_publication_policy() {  # worktree; fast-forward task pushes only
   local branch common want
   fm_conventions "" >/dev/null || return 65
   fm_target_validate || return 65
+  [ "$(dirname "$(cd "$1" && pwd -P)")" = "$FM_WORKTREES" ] || {
+    echo 'fm: publication requires a direct child of the selected project worktree root' >&2; return 65; }
   common="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir)" || return 65
   want="$(git -C "$FM_TARGET_ROOT" rev-parse --path-format=absolute --git-common-dir)" || return 65
   [ "$common" = "$want" ] || { echo 'fm: task tree does not belong to the selected project' >&2; return 65; }
   branch="$(git -C "$1" symbolic-ref --short HEAD)" || return 65
   case "$branch" in main|master|HEAD|"$FM_BASE"|'') echo 'fm: protected-base publication refused' >&2; return 65 ;; esac
+}
+
+# Local excludes prevent ordinary staging, but a round can explicitly stage
+# an ignored file. Reject changed private paths before either commit path.
+fm_private_stage() {
+  [ "${FM_EXTERNAL:-0}" = 1 ] || return 0
+  (
+  set -o pipefail
+  git -C "$1" diff --cached --name-only -z --diff-filter=ACMRTUXB | python3 -c '
+import os, sys
+paths = sys.stdin.buffer.read().split(b"\0")
+bad = [os.fsdecode(p) for p in paths if any(part.startswith(b".fm-") for part in p.split(b"/"))]
+if bad:
+    print("fm: private artifacts cannot be committed: " + repr(bad), file=sys.stderr)
+    sys.exit(65)
+'
+  )
 }
 
 fm_private_note() {  # kind task file; retain before any optional projection

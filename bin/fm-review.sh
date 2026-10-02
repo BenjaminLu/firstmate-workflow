@@ -69,14 +69,16 @@ project_events=()
 if [ -n "${FM_PROJECT:-}" ] && [ -n "$(fm_projects "$FM_CONFIG" 2>/dev/null)" ]; then
   project_events=(--project "$FM_PROJECT")
 fi
-fm_target_validate || exit 65
 fm_conventions "" >/dev/null || exit 65
-BASE="${FM_BASE:-$BASE}"
 fm_refuse_herdr_bypass fm-review || exit $?
+fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
+fm_external_prepare || exit 65
+fm_target_validate || exit 65
+fm_external_base || exit 65
+BASE="${FM_BASE:-$BASE}"
 
 # per run, like the worker's: a constant actor collapses two concurrent
 # rounds into one crewman carrying whichever task the second one touched
-fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
 cd "$FM_TARGET_ROOT" || exit 65
 REVIEW_TMP="${TMPDIR:-/tmp}"
 if [ "$FM_EXTERNAL" = 1 ]; then
@@ -263,6 +265,18 @@ task_spec() {   # task_spec <task> [branch]; its own file, design/tasks/<id>.jso
   printf '%s' "$j"
 }
 R_HEAD="$(git rev-parse --verify -q "$BRANCH^{commit}")" || R_HEAD=''
+# Local refs alone never establish which external change GitHub will land.
+# The shared binding reader fetches and compares both authoritative refs, and
+# refuses a stale local task/base rather than overwriting unpublished work.
+verify_review_head() {
+  [ "$FM_EXTERNAL" = 1 ] || return 0
+  [ -n "$PR" ] || { echo 'fm-review: external review requires --pr' >&2; return 65; }
+  local verified
+  verified="$(fm_binding head --task "$TASK" --pr "$PR" --branch "$BRANCH")" || return 65
+  [ -n "$R_HEAD" ] && [ "$verified" = "$R_HEAD" ] || {
+    echo 'fm-review: authoritative PR head moved; refresh before review' >&2; return 65; }
+}
+verify_review_head || exit 65
 spec="$(task_spec "$TASK" "${R_HEAD:-$BRANCH}")"
 [ -n "$spec" ] || { echo "fm-review: no task $TASK" >&2; exit 65; }
 set_crew_activity "$spec"
@@ -372,7 +386,7 @@ build_checkout() {
   OWNER_LOCK_HELD=1
   printf '%s\n' "$FM_RUN_DIR" > "$CHECKOUT_ROOT/run"
   CHECKOUT="$CHECKOUT_ROOT/checkout"
-  git clone -q --no-checkout --no-hardlinks "$REPO" "$CHECKOUT" &&
+  git clone -q --no-checkout --no-hardlinks "$FM_TARGET_ROOT" "$CHECKOUT" &&
     git -C "$CHECKOUT" fetch -q --no-tags origin "+$R_HEAD:refs/fm/head" "+$R_BASE:refs/fm/base" &&
     [ "$(git -C "$CHECKOUT" rev-parse refs/fm/head)" = "$head" ] &&
     git -C "$CHECKOUT" checkout -q --detach refs/fm/head &&
@@ -445,7 +459,7 @@ rebuild_checkout() {
   OWNER_LOCK_HELD=1
   printf '%s\n' "$FM_RUN_DIR" > "$CHECKOUT_ROOT/run"
   CHECKOUT="$CHECKOUT_ROOT/checkout"
-  git clone -q --no-checkout --no-hardlinks "$REPO" "$CHECKOUT" &&
+  git clone -q --no-checkout --no-hardlinks "$FM_TARGET_ROOT" "$CHECKOUT" &&
     git -C "$CHECKOUT" fetch -q --no-tags origin "+$R_HEAD:refs/fm/head" "+$R_BASE:refs/fm/base" &&
     [ "$(git -C "$CHECKOUT" rev-parse refs/fm/head)" = "$head" ] &&
     git -C "$CHECKOUT" checkout -q --detach refs/fm/head &&
@@ -557,7 +571,7 @@ required_names() {
   fi
   # From the output, not the exit status: gh's exit code reports the checks'
   # state, and a red check is exactly what must be shown.
-  REQ_NAMES="$($GH pr checks "$PR" --required --json name --jq '.[].name' 2>/dev/null </dev/null | awk 'NF && !s[$0]++')"
+  REQ_NAMES="$(fm_github pr checks "$PR" --required --json name --jq '.[].name' 2>/dev/null </dev/null | awk 'NF && !s[$0]++')"
   REQ_SOURCE="the pull request's required checks"
   [ -z "$REQ_NAMES" ] || return 0
   p="$(fm_project_resolve "" "$FM_CONFIG" 2>/dev/null)" &&
@@ -636,7 +650,7 @@ ci_wait() {
 # errors - timestamps and colour codes off, at most 80 lines.
 failed_lines() {
   local log
-  log="$($GH run view --job "$1" --log-failed 2>/dev/null </dev/null)" || return 1
+  log="$(fm_github run view --job "$1" --log-failed 2>/dev/null </dev/null)" || return 1
   printf '%s\n' "$log" | sed -E $'s/\033\\[[0-9;]*m//g; s/^[^\t]*\t[^\t]*\t//; s/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z ?//' |
     awk '/FAIL[[:space:]]*$/ { print; d = 1; next }
          d && /^      / { print; d = 0; next }
@@ -726,7 +740,7 @@ head_evidence() {
     if [ -z "$(jq -r '.[] | select(.name == "fail-first") | .name' <<<"$all")" ]; then
       printf '\nNo fail-first job has run for head %s, so there is no fail-first report.\n' "$sha"
     elif [ -n "$rid" ] && rm -rf "$dir" && mkdir -p "$dir" &&
-         $GH run download "$rid" -n fail-first-report -D "$dir" >/dev/null 2>&1 </dev/null &&
+         fm_github run download "$rid" -n fail-first-report -D "$dir" >/dev/null 2>&1 </dev/null &&
          [ -s "$dir/fail-first.md" ]; then
       printf '\nFrom the fail-first job'"'"'s artifact, verbatim:\n\n----- begin fail-first report %s -----\n' "$fence"
       cat "$dir/fail-first.md"
@@ -773,6 +787,7 @@ prompt="$work/prompt.md"
 # results (T-153); nothing to wait on without a pull request. The names are
 # read once, from what the base requires (T-155)
 [ -z "$PR" ] || { required_names; ci_wait; }
+verify_review_head || exit 65
 {
   cat "${FM_CODE_ROOT:-$REPO}/skills/reviewer/SKILL.md"
   if [ -n "$FM_SPEC_PIN_JSON" ]; then fm_pin_prompt
@@ -1195,6 +1210,15 @@ fi
 # Retain before projection. Only the managed Codex selector grants authenticated
 # provenance; configured legacy reviewers still count, with their level visible.
 printf '%s\n' "$verdict" > "$work/selected-final.txt"
+# Keep the final answer as evidence even when the PR moved during the round.
+# A stale result is not published as current approval.
+if ! verify_review_head; then
+  cp "$work/selected-final.txt" "$FM_RUN_DIR/stale-final.txt"
+  emit --review-outcome infrastructure_error --type review_failed \
+    --en 'PR head changed or could not be verified; final answer retained as stale' \
+    --tw 'PR 版本已變更或無法驗證；最終回答已保留並標示過期'
+  exit 65
+fi
 decided="$(fm_evidence verdict --round "$ROUND" --head "$R_HEAD" --base "$R_BASE" \
   --patch "$R_PATCH" --run "$FM_RUN_DIR" --attempt "${FM_CHAIN_ATTEMPT:-}" \
   --code "${FM_CODE_ROOT:-$REPO}" --vendor "${FM_CHAIN_VENDOR:-legacy}" \

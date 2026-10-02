@@ -53,6 +53,17 @@ cd "$FM_TARGET_ROOT" || exit 65
 # --- nothing happens if there is nothing there ---------------------------
 [ -e "$target" ] || { echo "fm-cleanup: $TASK has no worktree"; exit 0; }
 
+if [ "${FM_EXTERNAL:-0}" = 1 ]; then
+  # Hold the same task exclusion as the launcher throughout deletion. A force
+  # flag may waive the PR-state check, never ownership of unfinished work.
+  mkdir -p "$FM_STATE_DIR/runs" || exit 65
+  exec 8>>"$FM_STATE_DIR/runs/.worker-$TASK.lock" || exit 65
+  perl -MFcntl=:flock -e 'open(my $lock, "+<&=8") or exit 1;
+    flock($lock, LOCK_EX | LOCK_NB) or exit 1' || {
+    echo 'fm-cleanup: task has a live worker; worktree retained' >&2; exit 65; }
+  python3 "${FM_CODE_ROOT:-$REPO}/bin/fm-herdr.py" task-idle "$REPO" "$TASK" || exit 65
+fi
+
 # --- the resolved path must be a direct child of our own root ------------
 root_real="$(abs "$ROOT")" || { echo "fm-cleanup: no worktree root" >&2; exit 1; }
 tgt_real="$(abs "$target")" || { echo "fm-cleanup: cannot resolve $target" >&2; exit 1; }
@@ -78,7 +89,13 @@ grep -qxF "$tgt_real" <<< "$known" || {
 # --- an open pull request is someone's unfinished work -------------------
 branch="$(git -C "$tgt_real" branch --show-current 2>/dev/null || true)"
 if [ "$FORCE" -eq 0 ] && [ -n "$branch" ]; then
-  state="$($GH pr view "$branch" --json state --jq .state 2>/dev/null || true)"
+  github_args=()
+  [ "${FM_EXTERNAL:-0}" != 1 ] || github_args=(--repo "$GH_REPO")
+  state="$($GH pr view "$branch" --json state --jq .state ${github_args[@]+"${github_args[@]}"} 2>/dev/null || true)"
+  if [ "${FM_EXTERNAL:-0}" = 1 ] && [ "$state" != MERGED ] && [ "$state" != CLOSED ]; then
+    echo "fm-cleanup: external PR is open or its outcome is unknown; worktree retained" >&2
+    exit 65
+  fi
   case "$state" in
     OPEN) echo "fm-cleanup: $branch still has an open pull request" >&2; exit 1 ;;
   esac
@@ -86,7 +103,17 @@ fi
 
 git worktree remove --force "$tgt_real" >/dev/null 2>&1 || rm -rf "$tgt_real"
 git worktree prune >/dev/null 2>&1
-[ -n "$branch" ] && git branch -D "$branch" >/dev/null 2>&1
+delete_branch=true
+if [ "${FM_EXTERNAL:-0}" = 1 ]; then
+  delete_branch="$(fm_conventions delete_branch 2>/dev/null)" || delete_branch=false
+  if [ "$delete_branch" = true ]; then
+    # A branch used as another PR's base is retained, even after its own PR
+    # merged. Unreadable downstream evidence is retention, never permission.
+    downstream="$(fm_github pr list --state open --base "$branch" --json number 2>/dev/null)" || downstream='unknown'
+    [ "$downstream" = '[]' ] || delete_branch=false
+  fi
+fi
+if [ -n "$branch" ] && [ "$delete_branch" = true ]; then git branch -D "$branch" >/dev/null 2>&1; fi
 rm -f "$ROOT/$TASK.log"
 FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate --task "$TASK" --type closed \
   --en "worktree for $TASK removed" --tw "已移除 $TASK 的 worktree" >/dev/null 2>&1 </dev/null || true
