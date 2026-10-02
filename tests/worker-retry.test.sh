@@ -3,6 +3,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib/worker.sh
 . "$ROOT/tests/lib/worker.sh"
+# shellcheck source=tests/lib/worker-ci-evidence.sh
+. "$ROOT/tests/lib/worker-ci-evidence.sh"
 # A second round continues the first. Starting over from main would throw
 # away the work the review is about, and the worker would answer a review
 # of something that no longer exists.
@@ -32,11 +34,10 @@ cat > "$d5/stub/gh" <<'G'
 echo "gh $*" >> "$(dirname "$0")/../ghcalls"
 case " $* " in
   *" pr list "*) echo 9; exit 0 ;;
-  *" pr checks "*) echo "https://example.invalid/actions/runs/777/job/1"; exit 0 ;;
   # gh refuses an id it does not recognise, and the link carries a job
   # path after the run - so a stub that answers any argument is a stub
   # that cannot see a run id read out of the link wrongly
-  " run view 777 --log-failed ") printf 'ci\tbin/ci.sh\tTHE RUNNER SAID: a title with markup is not escaped\n'; exit 0 ;;
+  " run view --job 1 --log-failed ") printf 'ci\tbin/ci.sh\tTHE RUNNER SAID: a title with markup is not escaped\n'; exit 0 ;;
   *" run view "*) echo "could not find any workflow run" >&2; exit 1 ;;
   *" pr view "*" comments "*)
     jq -cn '{author:{login:"reviewer-1"},body:"REVIEWER SAID: fix the helper"}' \
@@ -45,7 +46,8 @@ esac
 exit 0
 G
 chmod +x "$d5/stub/gh"
-check_strict_run_stub "$d5/stub/gh" 777
+check_strict_job_stub "$d5/stub/gh" 1
+install_ci_evidence "$d5" "https://example.invalid/actions/runs/777/job/1"
 python3 "$ROOT/tests/lib/evidence.py" "$ROOT" "$r5/state" T-Z reviewer-1 \
   $'REVIEWER SAID: fix the helper\n1. open helper\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z'
 : > "$d5/ghcalls"      # so "did it create one?" is about THIS round
@@ -105,15 +107,15 @@ cat > "$d9/stub/gh" <<'G'
 echo "gh $*" >> "$(dirname "$0")/../ghcalls"
 case " $* " in
   *" pr list "*) echo 31; exit 0 ;;
-  *" pr checks "*) echo "https://example.invalid/actions/runs/9/job/1"; exit 0 ;;
-  " run view 9 --log-failed ") printf 'ci\tbin/ci.sh\tTHE RUNNER SAID: the gate is red\n'; exit 0 ;;
+  " run view --job 1 --log-failed ") printf 'ci\tbin/ci.sh\tTHE RUNNER SAID: the gate is red\n'; exit 0 ;;
   *" run view "*) echo "could not find any workflow run" >&2; exit 1 ;;
   *" pr view "*" comments "*) printf '## reviewer-1\n\nREVIEWER SAID: answer this\n' ;;
 esac
 exit 0
 G
 chmod +x "$d9/stub/gh"
-check_strict_run_stub "$d9/stub/gh" 9
+check_strict_job_stub "$d9/stub/gh" 1
+install_ci_evidence "$d9" "https://example.invalid/actions/runs/9/job/1"
 python3 "$ROOT/tests/lib/evidence.py" "$ROOT" "$r9/state" T-Z reviewer-1 \
   $'REVIEWER SAID: answer this\n1. open helper\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z'
 : > "$d9/ghcalls"
@@ -134,8 +136,8 @@ assert_contains "$sent9" "REVIEWER SAID: answer this" "and what review said, in 
 assert_lacks "$sent9" "could not be fetched" "and it did not have to say it failed to fetch it"
 # and separately, the run id itself: the link carries a job path after
 # the run, and reading the whole tail of it is what emptied the block
-assert_contains "$(cat "$d9/ghcalls")" "run view 9 " \
-  "having asked for the RUN, not the run plus the job path out of the link"
+assert_contains "$(cat "$d9/ghcalls")" "run view --job 1 " \
+  "having asked for the Actions job identified by the link"
 # "there is no second lookup" - once per run, not once per site: the
 # post-push branch reuses what this found, and two answers to one
 # question can disagree when a pull request is opened while the engine

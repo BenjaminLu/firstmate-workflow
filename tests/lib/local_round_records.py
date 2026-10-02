@@ -68,6 +68,17 @@ class Records(unittest.TestCase):
         self.assertIn('legacy', history)
         self.assertNotIn('SECRET', history)
 
+    def test_history_filters_configured_reviewer_like_gate(self):
+        self.store.append('verdict', 1, 'other-reviewer', 'a' * 40,
+                          'UNAUTHORIZED_STANDING_LIST', verdict='REJECT',
+                          provenance={'level': 'legacy'})
+        self.store.append('verdict', 1, 'chosen-reviewer', 'a' * 40,
+                          'AUTHORIZED_STANDING_LIST', verdict='REJECT',
+                          provenance={'level': 'legacy'})
+        with patch.dict(os.environ, FM_REVIEWER_LOGIN='chosen-reviewer'):
+            self.assertNotIn('UNAUTHORIZED_STANDING_LIST', self.store.history(True))
+            self.assertIn('AUTHORIZED_STANDING_LIST', self.store.history(True))
+
     def test_round_one_reject_requires_complete_list(self):
         self.assertTrue(protocol([self.rejection('REJECT:T-X')], 'T-X'))
         self.assertEqual(protocol([self.rejection('1. open fix parser\nCRITERIA-COMPLETE:T-X\nREJECT:T-X')], 'T-X'), [])

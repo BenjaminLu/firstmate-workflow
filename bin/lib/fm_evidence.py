@@ -157,8 +157,11 @@ class Store:
 
     def history(self, reviewer=False):
         output = []
+        login = os.environ.get('FM_REVIEWER_LOGIN', '')
         for record in self.records():
             if record['kind'] == 'verdict':
+                if login and record.get('login', record['actor']) != login:
+                    continue
                 fence = uuid.uuid4().hex
                 output.append(f'Local review round {record["round"]}, head {record["head"]}, '
                               f'reviewer {record["actor"]}, provenance {record["provenance"]["level"]}\n----- begin {fence} -----\n'

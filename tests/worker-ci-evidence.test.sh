@@ -3,6 +3,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib/worker.sh
 . "$ROOT/tests/lib/worker.sh"
+# shellcheck source=tests/lib/worker-ci-evidence.sh
+. "$ROOT/tests/lib/worker-ci-evidence.sh"
 # A log that cannot be fetched must SAY so. An empty block reads to the
 # worker exactly like a green run - it cannot run gh, so that block is
 # its only view of the runner - and a round was spent asking why the
@@ -26,8 +28,7 @@ case " $* " in
   *" pr list "*) echo 21; exit 0 ;;
   # the run id is NOT in gh's message: `404` in both would make
   # "names the run" pass off the echoed gh line alone
-  *" pr checks "*) echo "https://example.invalid/actions/runs/51/job/1"; exit 0 ;;
-  " run view 51 --log-failed ") echo "HTTP 404: Not Found" >&2; exit 1 ;;
+  " run view --job 1 --log-failed ") echo "HTTP 404: Not Found" >&2; exit 1 ;;
   *" run view "*) echo "could not find any workflow run" >&2; exit 1 ;;
   *" pr view "*" comments "*) printf '## reviewer-1
 
@@ -37,16 +38,16 @@ esac
 exit 0
 G
 chmod +x "$d16/stub/gh"
-check_strict_run_stub "$d16/stub/gh" 51
+check_strict_job_stub "$d16/stub/gh" 1
+install_ci_evidence "$d16" "https://github.com/o/r/actions/runs/51/job/1"
 cap16="$d16/sent.md"
 ( cd "$r16" && FM_ROOT="$r16" FM_GH="$GH16" FM_CAPTURE="$cap16" \
     bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
 sent16="$(cat "$cap16" 2>/dev/null)"
 assert_contains "$sent16" "The required check is red" "the prompt still says the check is red"
-# the whole phrase, so a mis-parsed run id fails it: `run 51/job/1`
-# would satisfy a bare "51" and so would gh's own message
-assert_contains "$sent16" "The log for run 51 could not be fetched" \
-  "and says the log could not be fetched, naming the run it asked for"
+# The whole phrase identifies the Actions job, not the workflow run.
+assert_contains "$sent16" "The log for job 1 could not be fetched" \
+  "and says the log could not be fetched, naming the job it asked for"
 assert_contains "$sent16" "gh: HTTP 404" "and passing on what gh said about it"
 rm -rf "$d16"
 
@@ -71,12 +72,12 @@ cat > "$d17/stub/gh" <<'G'
 echo "gh $*" >> "$(dirname "$0")/../ghcalls"
 case " $* " in
   *" pr list "*) echo 22; exit 0 ;;
-  *" pr checks "*) echo "https://buildkite.com/acme/pipeline/builds/1234"; exit 0 ;;
   *" pr view "*" comments "*) printf '## reviewer-1\n\nsomething\n' ;;
 esac
 exit 0
 G
 chmod +x "$d17/stub/gh"; : > "$d17/ghcalls"
+install_ci_evidence "$d17" "https://buildkite.com/acme/pipeline/builds/1234"
 cap17="$d17/sent.md"
 ( cd "$r17" && FM_ROOT="$r17" FM_GH="$GH17" FM_CAPTURE="$cap17" \
     bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
@@ -117,14 +118,14 @@ M
     printf 'echo "gh $*" >> "$(dirname "$0")/../ghcalls"\n'
     printf 'case " $* " in\n'
     printf '  *" pr list "*) echo 23; exit 0 ;;\n'
-    printf '  *" pr checks "*) echo "%s"; exit 0 ;;\n' "$2"
     # Exact arguments keep job IDs and workflow run IDs in separate namespaces.
-    printf '  " run view %s%s --log-failed ") %s ;;\n' "${6:+--job }" "$3" "$4"
+    printf '  " run view %s%s --log-failed ") %s ;;\n' "--job " "$3" "$4"
     printf '  *" run view "*) echo "could not find any workflow run" >&2; exit 1 ;;\n'
     printf '  *" pr view "*" comments "*) printf %s ;;\n' "'## r\n\nsomething\n'"
     printf 'esac\nexit 0\n'
   } > "$d/stub/gh"
   chmod +x "$d/stub/gh"
+  install_ci_evidence "$d" "$2"
   cap="$d/sent.md"
   ( cd "$r" && FM_ROOT="$r" FM_GH="$g" FM_CAPTURE="$cap" \
       bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
@@ -153,8 +154,8 @@ redcheck "a legacy fragment also selects the job" \
   "https://github.com/o/r/runs/6789125#step:2:1" "6789125" \
   "printf 'ci\tx\tFRAGMENT LOG\n'; exit 0" \
   "FRAGMENT LOG" job
-redcheck "modern links keep the workflow run namespace" \
-  "https://github.com/o/r/actions/runs/72/job/6789125?check_suite_focus=true#step:2:1" "72" \
+redcheck "modern links select the Actions job namespace" \
+  "https://github.com/o/r/actions/runs/72/job/6789125?check_suite_focus=true#step:2:1" "6789125" \
   "printf 'ci\tx\tWORKFLOW RUN LOG\n'; exit 0" \
   "WORKFLOW RUN LOG"
 redcheck "a legacy job fetch failure names the job" \
@@ -178,27 +179,27 @@ redcheck "while digits with letters after them fail closed" \
 # the failure, which is the same lie as a blank block wearing a green
 # run's face.
 redcheck "a partial log says it is partial" \
-  "https://github.com/o/r/actions/runs/64/job/1" "64" \
+  "https://github.com/o/r/actions/runs/64/job/1" "1" \
   "printf 'ci\tx\tHALF THE LOG\n'; echo 'one job log is gone' >&2; exit 1" \
   "this log is incomplete"
 redcheck "and still shows what did come back" \
-  "https://github.com/o/r/actions/runs/64/job/1" "64" \
+  "https://github.com/o/r/actions/runs/64/job/1" "1" \
   "printf 'ci\tx\tHALF THE LOG\n'; echo 'one job log is gone' >&2; exit 1" \
   "HALF THE LOG"
 redcheck "and passes on why the rest did not" \
-  "https://github.com/o/r/actions/runs/64/job/1" "64" \
+  "https://github.com/o/r/actions/runs/64/job/1" "1" \
   "printf 'ci\tx\tHALF THE LOG\n'; echo 'one job log is gone' >&2; exit 1" \
   "gh: one job log is gone"
 redcheck "a fetch that failed says so" \
-  "https://github.com/o/r/actions/runs/61/job/1" "61" "exit 1" \
-  "The log for run 61 could not be fetched"
+  "https://github.com/o/r/actions/runs/61/job/1" "1" "exit 1" \
+  "The log for job 1 could not be fetched"
 redcheck "a fetch that succeeded with nothing says THAT, not that gh failed" \
-  "https://github.com/o/r/actions/runs/62/job/1" "62" "exit 0" \
-  "Run 62 reported no failing step log"
+  "https://github.com/o/r/actions/runs/62/job/1" "1" "exit 0" \
+  "Job 1 reported no failing step log"
 redcheck "and a log the column trim empties is the same case" \
-  "https://github.com/o/r/actions/runs/63/job/1" "63" \
+  "https://github.com/o/r/actions/runs/63/job/1" "1" \
   "printf 'ci\tbin/ci.sh\t\nci\tbin/ci.sh\t   \n'; exit 0" \
-  "Run 63 reported no failing step log"
+  "Job 1 reported no failing step log"
 
 # A blank line inside a real log is part of the log. The emptiness
 # filter is for DECIDING; printing it deleted every separator in a
@@ -218,15 +219,15 @@ cat > "$d18/stub/gh" <<'G'
 #!/usr/bin/env bash
 case " $* " in
   *" pr list "*) echo 24; exit 0 ;;
-  *" pr checks "*) echo "https://github.com/o/r/actions/runs/71/job/1"; exit 0 ;;
-  " run view 71 --log-failed ") printf 'ci\tx\tTraceback ABOVE\nci\tx\t\nci\tx\tAssertionError BELOW\n'; exit 0 ;;
+  " run view --job 1 --log-failed ") printf 'ci\tx\tTraceback ABOVE\nci\tx\t\nci\tx\tAssertionError BELOW\n'; exit 0 ;;
   *" run view "*) echo "could not find any workflow run" >&2; exit 1 ;;
   *" pr view "*" comments "*) printf '## r\n\nsomething\n' ;;
 esac
 exit 0
 G
 chmod +x "$d18/stub/gh"
-check_strict_run_stub "$d18/stub/gh" 71
+check_strict_job_stub "$d18/stub/gh" 1
+install_ci_evidence "$d18" "https://github.com/o/r/actions/runs/71/job/1"
 cap18="$d18/sent.md"
 ( cd "$r18" && FM_ROOT="$r18" FM_GH="$GH18" FM_CAPTURE="$cap18" \
     bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )
@@ -257,15 +258,15 @@ cat > "$d19/stub/gh" <<'G'
 #!/usr/bin/env bash
 case " $* " in
   *" pr list "*) echo 25; exit 0 ;;
-  *" pr checks "*) echo "https://github.com/o/r/actions/runs/81/job/1"; exit 0 ;;
-  " run view 81 --log-failed ") echo "boom" >&2; exit 1 ;;
+  " run view --job 1 --log-failed ") echo "boom" >&2; exit 1 ;;
   *" run view "*) echo "could not find any workflow run" >&2; exit 1 ;;
   *" pr view "*" comments "*) printf '## r\n\nsomething\n' ;;
 esac
 exit 0
 G
 chmod +x "$d19/stub/gh"
-check_strict_run_stub "$d19/stub/gh" 81
+check_strict_job_stub "$d19/stub/gh" 1
+install_ci_evidence "$d19" "https://github.com/o/r/actions/runs/81/job/1"
 # Fail only the optional log capture. `--pr 25` skips lookup_err, so
 # the first worker allocation is log_err; chain_result must still succeed
 # before the adapter can capture the prompt. Keep state outside the shim's
@@ -293,7 +294,7 @@ assert_eq "0" "$rc19" "optional log allocation failure still completes the worke
 assert_ok "test -f '$d19/mktemp-failed'" "the optional log allocation failure was exercised"
 assert_ok "test -s '$cap19'" "the adapter ran and captured the prompt after allocation failure"
 sent19="$(cat "$cap19" 2>/dev/null)"
-assert_contains "$sent19" "The log for run 81 could not be fetched" \
+assert_contains "$sent19" "The log for job 1 could not be fetched" \
   "with no scratch file, the failed fetch is still reported"
 assert_lacks "$sent19" "gh: " "and nothing is quoted that nothing captured"
 assert_lacks "$sent19" "No such file or directory" \
@@ -319,15 +320,15 @@ cat > "$d20/stub/gh" <<'G'
 #!/usr/bin/env bash
 case " $* " in
   *" pr list "*) echo 26; exit 0 ;;
-  *" pr checks "*) echo "https://github.com/o/r/actions/runs/91/job/1"; exit 0 ;;
-  " run view 91 --log-failed ") i=0; while [ "$i" -lt 200 ]; do echo "noise $i" >&2; i=$((i+1)); done; exit 1 ;;
+  " run view --job 1 --log-failed ") i=0; while [ "$i" -lt 200 ]; do echo "noise $i" >&2; i=$((i+1)); done; exit 1 ;;
   *" run view "*) echo "could not find any workflow run" >&2; exit 1 ;;
   *" pr view "*" comments "*) printf '## r\n\nsomething\n' ;;
 esac
 exit 0
 G
 chmod +x "$d20/stub/gh"
-check_strict_run_stub "$d20/stub/gh" 91
+check_strict_job_stub "$d20/stub/gh" 1
+install_ci_evidence "$d20" "https://github.com/o/r/actions/runs/91/job/1"
 cap20="$d20/sent.md"
 ( cd "$r20" && FM_ROOT="$r20" FM_GH="$GH20" FM_CAPTURE="$cap20" \
     bin/fm-worker.sh --task T-Z >/dev/null 2>&1 )

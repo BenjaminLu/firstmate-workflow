@@ -99,8 +99,9 @@ def summarize(report):
 
 
 class Collector:
-    def __init__(self, root, gh, head):
+    def __init__(self, root, gh, head, log_error_file=None):
         self.root, self.gh, self.head = root, gh, head
+        self.log_error_file = log_error_file
         self.gaps = []
 
     def command(self, args):
@@ -144,31 +145,56 @@ class Collector:
         return '\n'.join(output)
 
     def log(self, job):
-        # Stream to disk, retain assertion byte offsets instead of loading large logs.
-        failures, evidence = [], []
-        with tempfile.TemporaryFile() as output:
+        # Keep bounded introductory context (including traceback separators),
+        # and select assertion ranges throughout the log, even beyond that prefix.
+        failures, evidence, context = [], [], []
+        trimmed = False
+        with tempfile.TemporaryFile() as output, (
+                open(self.log_error_file, 'w+b') if self.log_error_file
+                else tempfile.TemporaryFile()) as errors:
             result = subprocess.run([self.gh, 'run', 'view', '--job', str(job), '--log-failed'],
-                                    cwd=self.root, stdout=output, stderr=subprocess.PIPE)
+                                    cwd=self.root, stdout=output, stderr=errors)
             output.seek(0)
-            offset = 0
+            offset, context_bytes = 0, 0
             detail = False
             for raw in output:
                 start = offset
                 offset += len(raw)
-                line = re.sub(r'\x1b\[[0-9;]*m', '', raw.decode(errors='replace')).rstrip()
-                line = re.sub(r'^.*?\t.*?\t', '', line)
+                line = re.sub(r'\x1b\[[0-9;]*m', '', raw.decode(errors='replace')).rstrip('\r\n')
+                line = re.sub(r'^.*?\t.*?\t', '', line).rstrip()
                 line = re.sub(r'^\d{4}-\d\d-\d\dT\S+\s*', '', line)
+                if len(context) < 120 and context_bytes + len(line.encode()) < 16000:
+                    context.append(line)
+                    context_bytes += len(line.encode())
+                else:
+                    trimmed = True
                 match = re.match(r'\s*(.*?)\s+FAIL\s*$', line)
                 if match:
                     failures.append(match[1])
                 if match or detail or '##[error]' in line or re.match(r'\s*x\s', line):
                     evidence.append(f'bytes {start}-{offset}: {line}')
                 detail = bool(match)
+            errors.seek(0)
+            diagnostic_bytes = errors.read(4001)
+            diagnostic_lines = diagnostic_bytes[:4000].decode(errors='replace').splitlines()
+            diagnostic = '\n'.join('gh: ' + line for line in diagnostic_lines[:20])
+            if len(diagnostic_bytes) > 4000 or len(diagnostic_lines) > 20:
+                diagnostic += '\n[TRIMMED: gh diagnostic exceeds 4000 bytes or 20 lines.]'
+            body = '\n'.join(context)
             if result.returncode:
-                self.gaps.append(f'job {job} log unavailable or partial: ' + result.stderr.decode(errors='replace')[:300])
-            if not evidence:
+                message = (f'this log is incomplete: gh exited {result.returncode} while fetching job {job}'
+                           if body.strip() else f'The log for job {job} could not be fetched')
+                self.gaps.append(message)
+                body += '\n' + message + ('\n' + diagnostic if diagnostic else '')
+            elif not body.strip():
+                message = f'Job {job} reported no failing step log'
+                self.gaps.append(message)
+                body = message
+            if trimmed:
+                body += '\n[TRIMMED: introductory log context; assertion byte ranges follow.]'
+            if not failures:
                 self.gaps.append(f'job {job} has no readable failing assertion lines')
-        return failures, '\n'.join(evidence)
+        return failures, body + ('\nAssertion byte ranges:\n' + '\n'.join(evidence) if evidence else '')
 
 
 def build(args):
@@ -177,7 +203,7 @@ def build(args):
     spec = json.loads(Path(args.spec).read_text())
     brief_record = store.brief(args.round, args.head)
     brief = brief_record['text'] if brief_record else ''
-    collector = Collector(root, args.gh, args.head)
+    collector = Collector(root, args.gh, args.head, getattr(args, 'log_error_file', None))
     items, situations, data = [], [], dict(failures=[], cancelled=[], findings=[])
     reviews = store.verdicts()
     if reviews:
@@ -245,14 +271,17 @@ def build(args):
                 situations.append('red')
         for job in latest_jobs.values():
             conclusion = job.get('conclusion')
-            action = re.search(r'/actions/runs/[0-9]+/job/([0-9]+)', job.get('details_url') or job.get('html_url') or '')
+            link = job.get('details_url') or job.get('html_url') or ''
+            action = re.search(r'/actions/runs/[0-9]+/job/([0-9]+)(?:[?#].*)?$', link)
+            if not action:
+                action = re.search(r'(?<!/actions)/runs/([0-9]+)(?:[?#].*)?$', link)
             action_job = action[1] if action else None
             if conclusion in ('failure', 'timed_out'):
                 situations.append('red')
                 if action_job:
                     failures, log = collector.log(action_job)
                 else:
-                    failures, log = [], 'No Actions job id is available for this check run.'
+                    failures, log = [], 'No run id could be read out of ' + link + '; no Actions job id is available.'
                     collector.gaps.append(f'job {job["name"]}: {log}')
                 data['failures'].extend(failures)
                 items.append((f'Job {job["name"]} failing log', log or 'Unavailable'))
@@ -278,6 +307,13 @@ def build(args):
             brief = brief or 'no brief needed: branch only needs updating with its base'
         if not brief:
             collector.gaps.append('missing authorized local brief for exact project/task/round/head')
+    if 'red' in situations:
+        items.insert(0, ('The required check is red' if any(
+            j.get('name') in names and j.get('conclusion') in ('failure', 'timed_out')
+            for j in latest_jobs.values()) or any(
+            s.get('context') in names and s.get('state') in ('failure', 'error')
+            for s in (statuses or {}).get('statuses', [])) else 'A CI job is red',
+            'See exact-head results and available failing logs below.'))
     if 'captain:' in brief.lower():
         situations.append('captain-change')
     # Include acceptance verbatim; associations are candidates, never invented semantic matches.
@@ -325,6 +361,7 @@ def main():
     parser.add_argument('--gh', default='gh')
     parser.add_argument('--base', default='main')
     parser.add_argument('--required', default='')
+    parser.add_argument('--log-error-file')
     build(parser.parse_args())
 
 

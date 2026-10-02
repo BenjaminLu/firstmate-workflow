@@ -1050,11 +1050,15 @@ required_check=''
 if [ -n "${FM_PROJECT:-}" ]; then
   required_check="$(fm_project_get "$FM_PROJECT" required_check 2>/dev/null)" || required_check=''
 fi
+# Optional diagnostic capture must not prevent a round when scratch space is unavailable.
+log_err="$(scratch_new)" || log_err=''
+[ -z "$log_err" ] || scratch_add "$log_err"
 if ! python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_context_pack.py" \
     --state "$FM_STATE_DIR" --project "${FM_PROJECT:-firstmate-workflow}" --task "$TASK" \
     --round "$round_number" --actor "$NAME" --head "$round_head" --root "$tree" \
     --spec "$FM_RUN_DIR/context-spec.json" --output "$round_context" --coverage "$round_coverage" \
-    --pr "$PR" --gh "$GH" --base "$BASE" --required "$required_check"; then
+    --pr "$PR" --gh "$GH" --base "$BASE" --required "$required_check" \
+    --log-error-file "${log_err:-/dev/null}"; then
   printf '%s\n' 'Local context pack unavailable. Evidence coverage is unknown; ask firstmate before guessing.' > "$round_context"
   FM_CREW_STATUS_SECS=0 emit --type crew_status --data '{"evidence_event":"brief_gap"}' --en 'Local context pack unavailable; coverage unknown' \
        --tw '本機背景資料包無法取得；涵蓋狀態不明'

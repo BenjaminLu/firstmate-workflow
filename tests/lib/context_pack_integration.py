@@ -45,7 +45,7 @@ mode = (root / 'mode').read_text()
 if args[:2] == ['pr', 'view']:
     print(json.dumps(dict(headRefOid=head, baseRefName='main', mergeStateStatus='DIRTY' if mode == 'dirty' else 'CLEAN')))
 elif args[:2] == ['pr', 'checks']:
-    print('[{"name":"ci"}]'); sys.exit(8)
+    print('[{"name":"ci"}]'); sys.exit(8 if mode == 'pending' else 1 if mode in ('failure', 'cancelled') else 0)
 elif args[0] == 'api' and 'protection' in args[1]:
     print('{}')
 elif args[0] == 'api' and 'check-runs?' in args[1]:
@@ -89,6 +89,28 @@ else:
         self.assertTrue(all(not r['blocks'] for r in reports))
         self.assertIn('"--job", "42"', (self.root / 'calls').read_text())
         self.assertNotIn('"--job", "999"', (self.root / 'calls').read_text())
+
+    def test_required_failure_heading_and_log_ranges(self):
+        prompt, _ = self.collect('failure')
+        self.assertIn('The required check is red', prompt)
+        self.assertIn('Assertion byte ranges:', prompt)
+        self.assertIn('bytes 0-', prompt)
+
+    def test_missing_stale_and_unauthorized_briefs_warn_without_blocking(self):
+        for round_number, head, authorized in [(1, self.head, True),
+                                               (2, 'b' * 40, True),
+                                               (2, self.head, False)]:
+            # Remove only fixture briefs to exercise each invalid binding separately.
+            for path in self.store.directory.glob('*.json'):
+                record = json.loads(path.read_text())
+                if record['kind'] == 'brief':
+                    path.unlink()
+            self.store.append('brief', round_number, 'firstmate', head,
+                              'MUST_NOT_REACH_PROMPT', authorized=authorized)
+            prompt, reports = self.collect('failure')
+            self.assertNotIn('MUST_NOT_REACH_PROMPT', prompt)
+            self.assertIn('missing authorized local brief', prompt)
+            self.assertTrue(all(not r['blocks'] for r in reports))
 
     def test_cancelled_stage_and_duration(self):
         prompt, reports = self.collect('cancelled')
