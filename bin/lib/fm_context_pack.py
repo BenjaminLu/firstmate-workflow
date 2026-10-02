@@ -4,13 +4,11 @@ import argparse
 import datetime
 import fnmatch
 import json
-import os
 from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
-import time
 
 from fm_evidence import Store, criteria
 
@@ -59,6 +57,8 @@ def coverage(situation, spec, brief, data, root, events):
             if not data.get('failures'):
                 gaps.append('red required check has no readable failing assertion evidence')
         elif situation == 'cancelled':
+            if not data.get('cancelled'):
+                gaps.append('cancelled check stage or duration unavailable')
             for item in data.get('cancelled', []):
                 if not item.get('stage') or item.get('duration') is None:
                     gaps.append('cancelled check stage or duration unavailable')
@@ -78,9 +78,24 @@ def coverage(situation, spec, brief, data, root, events):
                 matches = False
             if not matches:
                 gaps.append('captain change scope does not match task scope')
-    summary = {'en': f'Brief coverage ({situation}): ' + ('; '.join(gaps) if gaps else 'no uncovered items detected'),
-               'zh-TW': f'簡報涵蓋檢查（{situation}）：' + ('未涵蓋項目：' + '；'.join(gaps) if gaps else '未偵測到缺漏項目')}
-    return dict(situation=situation, gaps=gaps, waived=waived, deferred=deferred, blocks=False, summary=summary)
+    report = dict(situation=situation, gaps=gaps, waived=waived, deferred=deferred, blocks=False)
+    summarize(report)
+    return report
+
+
+def summarize(report):
+    # Called after collection too: missing API/log evidence must be visible on
+    # the board, not only buried in the event's data object.
+    details = '; '.join(report['gaps'])
+    en = f"Brief coverage ({report['situation']}): " + (details or 'no uncovered items detected')
+    tw = f"簡報涵蓋檢查（{report['situation']}）：" + (details or '未偵測到缺漏項目')
+    for key, english, chinese in [('deferred', 'Deferred', '延後'), ('waived', 'No brief needed', '免簡報')]:
+        if report[key]:
+            reasons = '; '.join(report[key])
+            en += f'; {english}: {reasons}'
+            tw += f'；{chinese}：{reasons}'
+    report['summary'] = {'en': en, 'zh-TW': tw}
+
 
 
 class Collector:
@@ -96,7 +111,11 @@ class Collector:
 
     def github(self, *args):
         try:
-            return json.loads(self.command([self.gh, *args]))
+            result = subprocess.run([self.gh, *args], cwd=self.root, capture_output=True, text=True)
+            allowed = (0, 1, 8) if args[:2] == ('pr', 'checks') else (0,)
+            if result.returncode not in allowed:
+                raise ValueError(f'gh evidence unavailable: {result.stderr.strip()[:500]}')
+            return json.loads(result.stdout)
         except (ValueError, OSError) as error:
             self.gaps.append(str(error))
             return None
@@ -163,7 +182,7 @@ def build(args):
     reviews = store.verdicts()
     if reviews:
         latest = reviews[-1]
-        items.append(('Authenticated latest review', latest['text']))
+        items.append(('Latest local review (' + latest['provenance']['level'] + ')', latest['text']))
         if latest['verdict'] == 'REJECT':
             situations.append('reject')
             data['findings'] = criteria(latest['text'], args.task)
@@ -173,8 +192,6 @@ def build(args):
         situations.append('first')
         brief = brief or 'First round: the approved task spec is the brief.\n' + json.dumps(spec, indent=2)
     else:
-        if not brief:
-            collector.gaps.append('missing authorized local brief for exact project/task/round/head')
         pr = collector.github('pr', 'view', args.pr, '--json', 'headRefOid,baseRefName,mergeStateStatus') or {}
         if pr.get('headRefOid') != args.head:
             collector.gaps.append('PR head differs from local head or could not be verified')
@@ -203,6 +220,11 @@ def build(args):
             collector.gaps.append('no source names required checks')
         jobs = collector.github('api', f'repos/{{owner}}/{{repo}}/commits/{args.head}/check-runs?per_page=100')
         statuses = collector.github('api', f'repos/{{owner}}/{{repo}}/commits/{args.head}/status?per_page=100')
+        if statuses is not None and statuses.get('sha') != args.head:
+            collector.gaps.append('commit statuses do not identify the requested head')
+            statuses = None
+        if (jobs or {}).get('total_count', 0) > 100:
+            collector.gaps.append('check-run listing exceeds 100 entries; remaining evidence unavailable')
         latest_jobs = {}
         for job in (jobs or {}).get('check_runs', []):
             if job.get('head_sha') == args.head:
@@ -223,16 +245,22 @@ def build(args):
                 situations.append('red')
         for job in latest_jobs.values():
             conclusion = job.get('conclusion')
+            action = re.search(r'/actions/runs/[0-9]+/job/([0-9]+)', job.get('details_url') or job.get('html_url') or '')
+            action_job = action[1] if action else None
             if conclusion in ('failure', 'timed_out'):
                 situations.append('red')
-                failures, log = collector.log(job['id'])
+                if action_job:
+                    failures, log = collector.log(action_job)
+                else:
+                    failures, log = [], 'No Actions job id is available for this check run.'
+                    collector.gaps.append(f'job {job["name"]}: {log}')
                 data['failures'].extend(failures)
                 items.append((f'Job {job["name"]} failing log', log or 'Unavailable'))
                 for failure in failures:
                     items.append(('Assertion ' + failure, collector.assertion_sources(failure)))
             if conclusion == 'cancelled':
                 situations.append('cancelled')
-                detail = collector.github('api', f'repos/{{owner}}/{{repo}}/actions/jobs/{job["id"]}') or {}
+                detail = (collector.github('api', f'repos/{{owner}}/{{repo}}/actions/jobs/{action_job}') if action_job else {}) or {}
                 steps = [s for s in detail.get('steps', []) if s.get('started_at')]
                 step = next((s for s in reversed(steps) if s.get('conclusion') == 'cancelled'), steps[-1] if steps else {})
                 duration = None
@@ -247,10 +275,26 @@ def build(args):
                 items.append(('Cancelled ' + job['name'], json.dumps(cancellation)))
         if merge == 'BEHIND' and not situations and not collector.gaps:
             situations.append('behind')
+            brief = brief or 'no brief needed: branch only needs updating with its base'
+        if not brief:
+            collector.gaps.append('missing authorized local brief for exact project/task/round/head')
     if 'captain:' in brief.lower():
         situations.append('captain-change')
     # Include acceptance verbatim; associations are candidates, never invented semantic matches.
     items.append(('Acceptance items (review relevance for each finding/failure)', '\n'.join(f'{n}. {text}' for n, text in enumerate(spec.get('acceptance', []), 1))))
+    associations = []
+    for title, body in items:
+        if not title.startswith(('Assertion ', 'Review source ')):
+            continue
+        paths = set(re.findall(r'(?:tests|bin|board|skills|design)/[A-Za-z0-9_./-]+', title + '\n' + body))
+        matched = [str(n) for n, item in enumerate(spec.get('acceptance', []), 1)
+                   if any(path.rstrip('.') in item for path in paths)]
+        associations.append(title + ': ' + ('acceptance ' + ', '.join(matched) + ' (shared path; semantic relevance requires review)'
+                                             if matched else 'unmapped; firstmate must identify the acceptance item'))
+        if not matched:
+            collector.gaps.append('acceptance association unavailable: ' + title)
+    if associations:
+        items.append(('Acceptance associations', '\n'.join(associations)))
     data['pack'] = '\n'.join(body for _, body in items)
     event_path = Path(args.state) / 'events.jsonl'
     events = []
@@ -263,6 +307,7 @@ def build(args):
     reports = [coverage(s, spec, brief, data, root, events) for s in dict.fromkeys(situations or ['existing'])]
     for report in reports:
         report['gaps'].extend(collector.gaps)
+        summarize(report)
     if collector.gaps:
         items.append(('Evidence gaps (warnings; round continues)', '\n'.join(collector.gaps)))
     pack = bounded(items)

@@ -557,7 +557,7 @@ Require final-answer provenance, the configured reviewer identity and evidence
 for the current PR head. Old CI or an old approval does not establish readiness;
 inspect actual required GitHub CI results as well as local checks. If the script
 cannot establish this, report the gap and coordinate remediation before a merge
-card is treated as ready. T-135 makes authenticated local verdict records the
+card is treated as ready. T-135 makes provenance-labelled local verdict records the
 gate-7 source, with missing records failing explicitly. Until T-135 ships, the
 legacy gate 7 takes the latest verdict comment, filtering
 the author only when `FM_REVIEWER_LOGIN` is set, and binds an APPROVE to the
@@ -906,3 +906,28 @@ Advance already authorized review, checks, concrete board merge within current
 time-boxed authorization, self-update and next dispatch before ending for a
 real dependency/event/operator action. Project handoff and captain board authority
 remain mandatory; no automatic merge.
+
+
+### T-135 local round evidence
+
+Record the approved brief outside a crew sandbox, before launching the worker:
+
+```sh
+bash bin/lib/fm-evidence.sh brief --repo /path/to/engine --project firstmate-workflow \
+  --task T-135 --round 1 --head FULL_HEAD_SHA --file /private/approved-brief.md
+```
+
+The writer resolves project state through `fm_storage_init`; do not copy external
+briefs into the target checkout. It appends a record under
+`state/evidence/<project>/<task>/`. The exact project, task, round and head must
+match the next worker; an old `state/briefs/` file alone is not consumed.
+`projects.<name>.projection` chooses `comments` (default) or `local`. Both retain
+local records first; `local` posts no round records. Optional publication failure
+is reported and records survive. Comments never establish a verdict or list.
+
+Verdict provenance is `authenticated` for the T-163 managed Codex final selector,
+or `legacy` for another adapter's selected final answer. Both count at gate 7
+when bound to the reviewed head or unchanged patch. Legacy adapter receipts
+cannot upgrade their provenance. Gate 7 reports the level; neither level proves
+remote-head freshness or the semantics of a finding. The current-head CI and
+six-gate merge checks remain firstmate's responsibility.

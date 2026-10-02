@@ -63,6 +63,7 @@ CI_WAIT=$((10#$CI_WAIT)); CI_POLL=$((10#$CI_POLL))
 cd "$REPO" || { echo "fm-review: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
 fm_storage_init "$REPO" || exit 65
+export FM_PROJECT="${FM_PROJECT:-firstmate-workflow}"
 fm_target_validate || exit 65
 BASE="${FM_BASE:-$BASE}"
 fm_refuse_herdr_bypass fm-review || exit $?
@@ -81,6 +82,7 @@ fi
 if [ -n "$ROUND_GIVEN" ]; then export FM_ROUND="$ROUND"; else unset FM_ROUND; fi
 fm_identity reviewer "$TASK" "$NAME" || exit 70
 unset FM_ROUND
+ROUND="$(jq -r .round "$FM_RUN_DIR/identity.json")"
 # T-146: the vendor this round starts on and the model "$FM_CONFIG" names for
 # that vendor are in identity.json from the start, so the board shows them
 # from the round's first event (the model the vendor reports joins them
@@ -1159,27 +1161,32 @@ if [ -z "$decided" ]; then
 fi
 # the script's record of what was reviewed goes last, after the reviewer's
 # words, so it is the one gate 7 reads whatever the reviewer quoted above it
-# Authenticate and retain the final answer before any projection or approval event.
-# Managed Codex is the T-163 authority; legacy/custom output cannot sign locally.
+# Retain before projection. Only the managed Codex selector grants authenticated
+# provenance; configured legacy reviewers still count, with their level visible.
+printf '%s\n' "$verdict" > "$work/selected-final.txt"
 decided="$(fm_evidence verdict --round "$ROUND" --head "$R_HEAD" --base "$R_BASE" \
   --patch "$R_PATCH" --run "$FM_RUN_DIR" --attempt "${FM_CHAIN_ATTEMPT:-}" \
-  --code "${FM_CODE_ROOT:-$REPO}")" || {
-  emit --type review_failed --en 'No authenticated local verdict could be retained' \
-       --tw '無法保留經驗證的本機審查裁決'
+  --code "${FM_CODE_ROOT:-$REPO}" --vendor "${FM_CHAIN_VENDOR:-legacy}" \
+  --file "$work/selected-final.txt")" || {
+  emit --type review_failed --en 'No local verdict could be retained' \
+       --tw '無法保留本機審查裁決'
   exit 3
 }
+provenance_level=legacy
+[ "${FM_CHAIN_VENDOR:-}" != codex ] || provenance_level=authenticated
+CREW_DATA="$(jq -c --arg level "$provenance_level" '.provenance_level=$level' <<<"$CREW_DATA")"
 verdict="${verdict%"${verdict##*[![:space:]]}"}$(reviewed_line "$decided")"
 projection="$(fm_projection)" || exit 65
 if [ -n "$PR" ] && [ "$projection" = comments ]; then
   if ! $GH pr comment "$PR" --body "$verdict" >/dev/null 2>&1; then
     echo 'fm-review: optional comment projection failed; local verdict retained' >&2
-    emit --type projection_failed --en 'Optional verdict comment failed; local verdict retained' \
+    FM_CREW_STATUS_SECS=0 emit --type crew_status --data '{"evidence_event":"projection_failed"}' --en 'Optional verdict comment failed; local verdict retained' \
          --tw '選用的裁決留言發布失敗；本機裁決已保留'
   fi
 fi
 case "$decided" in
   APPROVE)
-    emit --type approved --en "reviewer signed $TASK" --tw "reviewer 已簽 $TASK"
+    emit --type approved --en "reviewer signed $TASK ($provenance_level)" --tw "reviewer 已簽 $TASK（$provenance_level）"
     emit_status "Verdict signed: APPROVE:$TASK" "已簽署裁決：APPROVE:$TASK"
     ;;
   REJECT)

@@ -59,6 +59,8 @@ def protocol(records, task):
         if record['kind'] != 'verdict':
             continue
         items = criteria(record['text'], task)
+        if record['verdict'] == 'REJECT' or items:
+            errors = []  # judge the current correction against the standing list
         if record['verdict'] == 'REJECT' and not items:
             errors.append('REJECT has no complete standing list')
             continue
@@ -77,7 +79,7 @@ def protocol(records, task):
             if previous and not any(label + ':' + task in current[n]
                                     for label in ('REGRESSION', 'NEW-GROUND')):
                 errors.append(f'new item {n} has no REGRESSION or NEW-GROUND label')
-        previous = current
+        previous.update(current)  # a dropped item remains standing until restored
     return errors
 
 
@@ -97,7 +99,10 @@ class Store:
                 raise ValueError('record identity does not match its storage location')
             if record['kind'] == 'verdict':
                 provenance = record.get('provenance', {})
-                if (provenance.get('final_source') != 'codex-json-completed-turn'
+                level = provenance.get('level')
+                if level not in ('legacy', 'authenticated'):
+                    raise ValueError('local verdict has no supported provenance level')
+                if level == 'authenticated' and (provenance.get('final_source') != 'codex-json-completed-turn'
                         or provenance.get('final_sha256') != hashlib.sha256(record['text'].encode()).hexdigest()
                         or provenance.get('actor') != record['actor']
                         or provenance.get('task') != self.task
@@ -109,10 +114,11 @@ class Store:
     def append(self, kind, round_number, actor, head, text, **fields):
         if kind not in KINDS or int(round_number) < 1 or not actor:
             raise ValueError('invalid record kind, round or actor')
-        if not re.fullmatch(r'[0-9a-f]{40,64}', head):
+        if not re.fullmatch(r'[0-9a-f]{40,64}', head) and not (
+                kind == 'verdict' and head == '' and fields.get('provenance', {}).get('level') == 'legacy'):
             raise ValueError('record requires a full head SHA')
         if kind == 'verdict' and not fields.get('provenance'):
-            raise ValueError('verdict requires authenticated final-answer provenance')
+            raise ValueError('verdict requires final-answer provenance')
         record = dict(fields, project=self.project, task=self.task, round=int(round_number),
                       actor=actor, kind=kind, head=head,
                       time=datetime.datetime.now(datetime.timezone.utc).isoformat(), text=text)
@@ -145,7 +151,9 @@ class Store:
                      and r['round'] == round_number and r['head'] == head), None)
 
     def verdicts(self):
-        return [r for r in self.records() if r['kind'] == 'verdict']
+        reviewer = os.environ.get('FM_REVIEWER_LOGIN', '')
+        return [r for r in self.records() if r['kind'] == 'verdict'
+                and (not reviewer or r.get('login', r['actor']) == reviewer)]
 
     def history(self, reviewer=False):
         output = []
@@ -153,37 +161,47 @@ class Store:
             if record['kind'] == 'verdict':
                 fence = uuid.uuid4().hex
                 output.append(f'Local review round {record["round"]}, head {record["head"]}, '
-                              f'reviewer {record["actor"]}\n----- begin {fence} -----\n'
+                              f'reviewer {record["actor"]}, provenance {record["provenance"]["level"]}\n----- begin {fence} -----\n'
                               f'{record["text"]}\n----- end {fence} -----')
             elif record['kind'] == 'ask':
                 # Do not pass a worker's prose or reasoning to a reviewer.
                 if 'ASK-PASS-CRITERIA:' + self.task in record['text'].splitlines():
                     output.append('ASK-PASS-CRITERIA:' + self.task)
-        return '\n\n'.join(output) or 'No authenticated local review history exists.'
+        return '\n\n'.join(output) or 'No local review history exists.'
 
 
-def authenticated(store, args):
-    """Only the managed T-163 final selector may supply verdict text."""
-    module_path = Path(args.code) / 'bin/fm-herdr.py'
-    spec = importlib.util.spec_from_file_location('managed', module_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+def retain_verdict(store, args):
+    """Launcher selects the vendor; adapter-authored receipts cannot upgrade it.
+
+    The T-163 selector is authoritative only on the managed Codex path. Other
+    adapters keep the existing selected final/combined output as legacy evidence.
+    The run directory and this writer remain outside the round's write roots.
+    """
     run = Path(args.run)
     identity = json.loads((run / 'identity.json').read_text())
     for key, value in (('project', store.project), ('task', store.task),
                        ('role', 'reviewer'), ('round', args.round)):
         if identity.get(key) != value:
             raise ValueError('review identity mismatch: ' + key)
-    answer = module.review_final(str(run), args.attempt, os.environ)
-    if not answer:
-        raise ValueError('no T-163 authenticated final answer for this attempt; legacy/custom output is not authority')
-    result = json.loads((run / 'last-result.json').read_text())
-    decided = verdict_marker(answer, store.task)
-    if not decided:
-        raise ValueError('authenticated answer has no unquoted standalone verdict')
+    if args.vendor == 'codex':
+        module_path = Path(args.code) / 'bin/fm-herdr.py'
+        spec = importlib.util.spec_from_file_location('managed', module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        answer = module.review_final(str(run), args.attempt, os.environ)
+        if not answer:
+            raise ValueError('no T-163 authenticated final answer for this Codex attempt')
+        provenance = dict(json.loads((run / 'last-result.json').read_text()), level='authenticated')
+    else:
+        answer = Path(args.file).read_text()
+        provenance = dict(level='legacy', vendor=args.vendor, chain_attempt=args.attempt)
+    # Preserve the existing fail-closed decision for legacy prose mentioning a
+    # signature without signing one. Quoted markers never approve a head.
+    decided = verdict_marker(answer, store.task) or 'REJECT'
     return store.append('verdict', args.round, os.environ['FM_ACTOR'], args.head, answer,
                         verdict=decided, base=args.base, patch=args.patch,
-                        reviewer=identity, provenance=result)
+                        reviewer=identity, login=os.environ.get('FM_REVIEWER_LOGIN', os.environ['FM_ACTOR']),
+                        provenance=provenance)
 
 
 def main():
@@ -201,6 +219,7 @@ def main():
     parser.add_argument('--run')
     parser.add_argument('--attempt')
     parser.add_argument('--code')
+    parser.add_argument('--vendor', default='legacy')
     parser.add_argument('--reviewer', action='store_true')
     args = parser.parse_args()
     store = Store(args.state, args.project, args.task)
@@ -211,13 +230,13 @@ def main():
         kind = 'ask' if re.search(r'^(?:ASK-[A-Z-]+|SCOPE-BLOCKED):' + re.escape(args.task) + r'\s*$', text, re.M) else 'worker-report'
         store.append(kind, args.round, args.actor, args.head, text)
     elif args.command == 'verdict':
-        print(authenticated(store, args)['verdict'])
+        print(retain_verdict(store, args)['verdict'])
     elif args.command == 'history':
         print(store.history(args.reviewer))
     elif args.command == 'protocol':
         records = store.verdicts()
         if not records:
-            raise ValueError('missing authenticated local verdict; PR comments are not fallback evidence')
+            raise ValueError('missing local verdict; PR comments are not fallback evidence')
         errors = protocol(records, args.task)
         if errors:
             raise ValueError('; '.join(errors))
@@ -225,16 +244,18 @@ def main():
     elif args.command == 'gate':
         records = store.verdicts()
         if not records:
-            raise ValueError('missing authenticated local verdict; PR comments are not fallback evidence')
+            raise ValueError('missing local verdict; PR comments are not fallback evidence')
         record = records[-1]
         if record['verdict'] != 'APPROVE':
-            raise ValueError('latest local verdict is REJECT; a later rejection supersedes any earlier approval')
+            raise ValueError(f'condition 2 failed: the latest verdict is REJECT:{args.task}; a later rejection supersedes any earlier approval')
+        if not record['head']:
+            raise ValueError('legacy local verdict has no reviewed head; a bound review is required')
         if record['head'] != args.head and not (args.patch and record.get('patch') == args.patch):
-            raise ValueError('latest local approval covers neither this head nor this patch')
+            raise ValueError('condition 1 failed: latest local approval covers neither this head nor this patch-id')
         errors = protocol(records, args.task)
         if errors:
             raise ValueError('; '.join(errors))
-        print('Authenticated local approval covers this change.')
+        print(f"Local approval covers this change; provenance={record['provenance']['level']}.")
     return 0
 
 

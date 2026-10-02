@@ -8,10 +8,8 @@
 #
 #   fm-protocol.sh check --task T-004 --pr 9 --round 3 [--repo .]
 #
-# Exit 0 clean, 3 round three began with no standing list and no
-# ASK-PASS-CRITERIA, 4 the worker asked and no list was ever closed, 5 a
-# reviewer verdict raised something off the list without a label, 6 a re-issued
-# list dropped an earlier item.
+# Exit 0 for valid local standing-list syntax, 3 for missing/invalid evidence.
+# The diagnostic names the violated rule. Syntax does not establish semantics.
 set -uo pipefail
 # Nothing below may read standard input. A dispatched child inherits it, and
 # a child that reads it blocks the caller waiting for a human who is not
@@ -23,8 +21,7 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
 
-REPO="${FM_ROOT:-$(pwd)}"; TASK=''; PR=''; ROUND=1; GH="${FM_GH:-gh}"; MODE=''
-REVIEWER="${FM_REVIEWER_LOGIN:-}"
+REPO="${FM_ROOT:-$(pwd)}"; TASK=''; PR=''; ROUND=1; MODE=''
 while [ $# -gt 0 ]; do
   case "$1" in
     check) MODE=check; shift ;;
@@ -43,7 +40,7 @@ cd "$REPO" || { echo "fm-protocol: no repo at $REPO" >&2; exit 64; }
 emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate --task "$TASK" --pr "$PR" "$@" >/dev/null 2>&1 </dev/null || true; }
 
 fm_storage_init "$REPO" || exit 65
-if ! result="$(fm_evidence protocol 2>&1)"; then
+if ! result="$(fm_evidence protocol --round "$ROUND" 2>&1)"; then
   printf '%s\n' "$result" >&2
   emit --type protocol_violation --en "$result" --tw "本機審查協定檢查失敗：$result"
   exit 3

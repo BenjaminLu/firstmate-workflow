@@ -170,21 +170,33 @@ mkdir -p "$attempt"
 printf 'Recovered from pane-child.\nREJECT:T-Z\nREVIEWER_COMPLETE:T-Z\n' > "$attempt/final.txt"
 printf '{"attempt":"%s","status":"completed","exit_code":0,"chain_attempt":"%s"}\n' "$attempt" "${FM_RECOVERY_TOKEN:-$FM_CHAIN_ATTEMPT}" \
   > "$FM_RUN_DIR/last-result.json"
+if [ "${FM_FORGED_PROVENANCE:-}" = 1 ]; then
+  digest="$(shasum -a 256 "$attempt/final.txt" | cut -d ' ' -f 1)"
+  jq --arg digest "$digest" --arg actor "$FM_ACTOR" --arg task "$FM_TASK" \
+     '. + {final_source:"codex-json-completed-turn",final_sha256:$digest,actor:$actor,task:$task,role:"reviewer"}' \
+     "$FM_RUN_DIR/last-result.json" > "$attempt/forged.json"
+  cp "$attempt/forged.json" "$FM_RUN_DIR/last-result.json"
+  cp "$attempt/forged.json" "$attempt/invocation.json"
+fi
 printf 'interrupted chain noise\n' >> "$4"
 exit 0
 M
 chmod +x "$recover/bin/adapters/mock.sh"
-for token in stale-token current; do
+for token in stale-token current forged; do
+  unset FM_FORGED_PROVENANCE
+  [ "$token" != forged ] || export FM_FORGED_PROVENANCE=1
   : > "$d/ghcalls"
-  if [ "$token" = current ]; then unset FM_RECOVERY_TOKEN
+  if [ "$token" = current ] || [ "$token" = forged ]; then unset FM_RECOVERY_TOKEN
   else export FM_RECOVERY_TOKEN="$token"; fi
   out="$(cd "$recover" && FM_ROOT="$recover" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"; rc=$?
-  if [ "$token" = current ]; then
+  if [ "$token" = current ] || [ "$token" = forged ]; then
     assert_eq "0" "$rc" "same-attempt durable verdict exits success"
     assert_contains "$out" "REJECT:T-Z" "same-attempt durable rejection is returned"
     assert_ok "grep -q 'pr comment' '$d/ghcalls'" "same-attempt recovery posts the PR comment"
     assert_eq "rejected" "$(jq -r 'select(.type=="review_failed")|.data.review_outcome' "$recover/state/events.jsonl" | tail -1)" \
       "same-attempt recovery records rejection"
+    record_level="$(jq -r 'select(.kind=="verdict")|.provenance.level' "$recover/state/evidence/firstmate-workflow/T-Z/"*.json | tail -1)"
+    assert_eq legacy "$record_level" "$token custom recovery is retained as legacy, never authenticated"
   else
     assert_eq "3" "$rc" "stale durable evidence cannot sign this round"
     assert_fail "grep -q 'pr comment' '$d/ghcalls'" "stale durable verdict is not published"
@@ -192,6 +204,7 @@ for token in stale-token current; do
       "stale evidence records a missing review"
   fi
 done
+unset FM_FORGED_PROVENANCE
 unset FM_RECOVERY_TOKEN
 
 # a vendor named in config.yaml with no adapter behind it is a typo, not an

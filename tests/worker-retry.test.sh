@@ -46,6 +46,8 @@ exit 0
 G
 chmod +x "$d5/stub/gh"
 check_strict_run_stub "$d5/stub/gh" 777
+python3 "$ROOT/tests/lib/evidence.py" "$ROOT" "$r5/state" T-Z reviewer-1 \
+  $'REVIEWER SAID: fix the helper\n1. open helper\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z'
 : > "$d5/ghcalls"      # so "did it create one?" is about THIS round
 ( cd "$r5" && FM_ROOT="$r5" FM_GH="$GH5" bin/fm-worker.sh --task T-Z --pr 9 >/dev/null 2>&1 )
 assert_ok "git -C '$r5' cat-file -e '$branch:src/round-one'" "the second round keeps the first round's work"
@@ -112,6 +114,8 @@ exit 0
 G
 chmod +x "$d9/stub/gh"
 check_strict_run_stub "$d9/stub/gh" 9
+python3 "$ROOT/tests/lib/evidence.py" "$ROOT" "$r9/state" T-Z reviewer-1 \
+  $'REVIEWER SAID: answer this\n1. open helper\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z'
 : > "$d9/ghcalls"
 cap9="$d9/sent.md"
 out9="$(cd "$r9" && FM_ROOT="$r9" FM_GH="$GH9" FM_CAPTURE="$cap9" \

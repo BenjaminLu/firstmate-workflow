@@ -35,7 +35,6 @@ _fm_argv=("$@")
 REPO=''; TASK=''; BRANCH=''; PR=''; ONLY=''
 BASE="${FM_BASE:-main}"
 GH="${FM_GH:-gh}"
-REVIEWER="${FM_REVIEWER_LOGIN:-}"
 
 # see fm_need in bin/fm-config.sh for why: `shift 2` with one argument
 # left does not shift, and the loop spins. The arguments are read before
@@ -246,6 +245,6 @@ g 2 "rebases onto $BASE cleanly"                 gate2
 g 4 "diff stays inside the declared scope"       gate4
 g 5 "reverting the implementation turns tests red" gate5
 g 6 "the required GitHub check is green"         gate6
-g 7 "authenticated local reviewer approval:$TASK"          gate7
+g 7 "local reviewer approval:$TASK"          gate7
 echo "  all six gates green"
 exit 0

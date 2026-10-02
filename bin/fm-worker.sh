@@ -41,6 +41,7 @@ done
 cd "$REPO" || { echo "fm-worker: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
 fm_storage_init "$REPO" || exit 65
+export FM_PROJECT="${FM_PROJECT:-firstmate-workflow}"
 fm_target_validate || exit 65
 if [ "$FM_EXTERNAL" = 1 ]; then
   "${FM_CODE_ROOT:-$REPO}/bin/fm-project.sh" verify "$FM_PROJECT" --repo "$REPO" || exit 65
@@ -283,6 +284,13 @@ finished() {
     git -C "$FM_TARGET_ROOT" worktree remove --force "$rebuild_probe" >/dev/null 2>&1; rm -rf "$rebuild_probe"
   fi
   fm_record_end "$rc"
+  if [ -f "$FM_RUN_DIR/coverage.json" ]; then
+    local round_metrics
+    if round_metrics="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_round_metrics.py" "$FM_RUN_DIR")"; then
+      FM_CREW_STATUS_SECS=0 emit --type crew_status --en 'Brief coverage and observed round cost retained' \
+           --tw '已保留簡報涵蓋狀態與實際輪次成本' --data "$round_metrics"
+    fi
+  fi
   # before clean_scratch, which would remove the only copy of it
   [ -z "${held:-}" ] || [ "${held_settled:-0}" = 1 ] || lost_held "$rc"
   clean_scratch
@@ -1048,15 +1056,15 @@ if ! python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_context_pack.py" \
     --spec "$FM_RUN_DIR/context-spec.json" --output "$round_context" --coverage "$round_coverage" \
     --pr "$PR" --gh "$GH" --base "$BASE" --required "$required_check"; then
   printf '%s\n' 'Local context pack unavailable. Evidence coverage is unknown; ask firstmate before guessing.' > "$round_context"
-  emit --type brief_gap --en 'Local context pack unavailable; coverage unknown' \
+  FM_CREW_STATUS_SECS=0 emit --type crew_status --data '{"evidence_event":"brief_gap"}' --en 'Local context pack unavailable; coverage unknown' \
        --tw '本機背景資料包無法取得；涵蓋狀態不明'
 fi
 if [ -f "$round_coverage" ]; then
   while IFS= read -r coverage_item; do
     coverage_en="$(jq -r '.summary.en' <<<"$coverage_item")"
     coverage_tw="$(jq -r '.summary["zh-TW"]' <<<"$coverage_item")"
-    emit --type brief_coverage --en "$coverage_en" --tw "$coverage_tw" \
-         --data "$(jq -cn --argjson coverage "$coverage_item" '{coverage:$coverage}')"
+    FM_CREW_STATUS_SECS=0 emit --type crew_status --en "$coverage_en" --tw "$coverage_tw" \
+         --data "$(jq -cn --argjson coverage "$coverage_item" '{evidence_event:"brief_coverage",coverage:$coverage}')"
   done < <(jq -c '.[]' "$round_coverage")
 fi
 
@@ -1080,6 +1088,9 @@ fi
     printf 'in the worker instructions above for these first-round requests.\n'
   fi
   printf '\n---\n\n'
+  if [ "$round_two" = 1 ]; then
+    printf '\n# This is not the first round\n\nYour branch already carries your earlier work. Build on it.\n'
+  fi
   cat "$round_context"
   # A worker round that finds its tree restored mid-run is told so in its
   # next prompt (T-128), not only left to notice: mirror_restore() appends
@@ -1369,7 +1380,7 @@ if [ "$asked" = 1 ]; then
 fi
 
 spoke=0
-[ "$asked" != 1 ] || spoke=1  # local delivery is already durable
+[ "$projection" != local ] || spoke=1  # local delivery is already durable
 # gh's own words are kept, the way the lookup above keeps them: this is
 # the one path where a person is expected to pick the failure up by
 # hand, and "it was refused" without "why" sends them to the pull
@@ -1386,7 +1397,7 @@ post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
          --tw "工人在 #$2 上發言"
   else
     echo 'fm-worker: optional comment projection failed; local record retained' >&2
-    emit --type projection_failed --en 'Optional comment publication failed; local record retained' \
+    FM_CREW_STATUS_SECS=0 emit --type crew_status --data '{"evidence_event":"projection_failed"}' --en 'Optional comment publication failed; local record retained' \
          --tw '選用的留言發布失敗；本機紀錄已保留'
   fi
 }
@@ -1547,7 +1558,11 @@ rm -f "$say"
 # the push still reports that it asked.
 if [ "$asked" = 1 ] && ! first_round_question && ! worker_changed_files; then
   if ! rebuild_publishes; then
-    echo "fm-worker: the worker asked rather than changed anything; its question is retained in local evidence" >&2
+    if [ "$projection" = comments ] && [ -n "$PR" ]; then
+      echo "fm-worker: the worker asked rather than changed anything; its question is on #$PR" >&2
+    else
+      echo "fm-worker: the worker asked rather than changed anything; its question is retained in local evidence" >&2
+    fi
     printf '%s\n' "$branch"
     exit 0
   fi
@@ -1556,7 +1571,11 @@ if [ "$asked" = 1 ] && ! first_round_question && ! worker_changed_files; then
   elif [ "$refused" = 1 ]; then
     asked_where="#$PR would not take its question"
   else
-    asked_where="its question is retained in local evidence"
+    if [ "$projection" = comments ] && [ -n "$PR" ]; then
+      asked_where="its question is on #$PR"
+    else
+      asked_where="its question is retained in local evidence"
+    fi
   fi
   echo "fm-worker: the worker asked rather than changed anything; $asked_where; the rebuild applied, so it is published all the same" >&2
 fi

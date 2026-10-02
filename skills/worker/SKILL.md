@@ -264,3 +264,9 @@ fresh evidence. Only a current attempt's final assistant completion is role
 completion; T-167 transport classification must not mistake quoted error text
 for actual CLI/provider failure. Neither process success nor WORKER_COMPLETE
 is PR acceptance or captain merge permission.
+
+
+T-135 provenance contract (captain, 2026-10-02): local verdict records carry
+`authenticated` for managed Codex finals or `legacy` for other adapters. Gate 7
+and the protocol reader accept both; legacy remains explicitly labelled and
+cannot claim T-163 authentication. Optional comments never replace local records.

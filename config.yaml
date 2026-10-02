@@ -73,6 +73,7 @@ default_project: firstmate-workflow   # the project a script without --project r
 projects:               # every repository firstmate drives; design section 15.2
   firstmate-workflow:   # this repository, hosting itself
     repo: .
+    projection: comments # optional round-record publication; local posts nothing
     github: BenjaminLu/firstmate-workflow
     base: main
     required_check: ci
