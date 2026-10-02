@@ -1119,8 +1119,10 @@ fi
 
 {
   cat "${FM_CODE_ROOT:-$REPO}/skills/worker/SKILL.md"
-  fm_prompt_identity worker "$round_head" "$(git -C "$tree" merge-base "$BASE" HEAD 2>/dev/null || true)"
-  if [ -n "$FM_SPEC_PIN_JSON" ]; then fm_pin_prompt || exit 65
+  if [ "$FM_EXTERNAL" = 1 ]; then
+    fm_prompt_identity worker "$round_head" "$(git -C "$tree" merge-base "$BASE" HEAD 2>/dev/null || true)" || exit 65
+  fi
+  if [ -n "$FM_SPEC_PIN_JSON" ]; then fm_pin_prompt worker || exit 65
   else fm_conventions_prompt || exit 65; fi
   printf '\n---\n\n# Your task\n\n```json\n%s\n```\n' "$spec"
   printf '\nYour worktree is the current directory. Your branch is `%s`.\n' "$branch"
@@ -1218,7 +1220,8 @@ fi
   printf 'including when it is stopped. Leave your work in the worktree.\n'
   printf '\n---\n\n# The design\n\n'
   if [ -z "$FM_SPEC_PIN_JSON" ]; then
-    fm_prompt_design "$FM_DESIGN" || exit 65
+    if [ "$FM_EXTERNAL" = 1 ]; then fm_prompt_design "$FM_DESIGN" worker || exit 65
+    else sed -n '/^## 6\./,/^## 8\./p' "$FM_DESIGN"; fi
   fi
 } > "$prompt"
 

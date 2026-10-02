@@ -4,7 +4,10 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib/worker.sh
 . "$ROOT/tests/lib/worker.sh"
+# shellcheck source=tests/lib/binding-fixture.sh
+. "$ROOT/tests/lib/binding-fixture.sh"
 d="$(fixture)"; repo="$d/repo"
+binding_service_fixture "$repo"
 cp "$ROOT/bin/fm-review.sh" "$ROOT/bin/fm-gate.sh" "$ROOT/bin/fm-protocol.sh" "$repo/bin/"
 mkdir -p "$repo/skills/reviewer"
 cp "$ROOT/skills/reviewer/SKILL.md" "$repo/skills/reviewer/"

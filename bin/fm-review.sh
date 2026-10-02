@@ -265,13 +265,20 @@ task_spec() {   # task_spec <task> [branch]; its own file, design/tasks/<id>.jso
   printf '%s' "$j"
 }
 R_HEAD="$(git rev-parse --verify -q "$BRANCH^{commit}")" || R_HEAD=''
-# Local refs alone never establish which external change GitHub will land.
+# Local refs alone never establish which change GitHub will land.
 # The shared binding reader fetches and compares both authoritative refs, and
 # refuses a stale local task/base rather than overwriting unpublished work.
 verify_review_head() {
-  [ "$FM_EXTERNAL" = 1 ] || return 0
-  [ -n "$PR" ] || { echo 'fm-review: external review requires --pr' >&2; return 65; }
-  local verified
+  if [ -z "$PR" ]; then
+    [ "$FM_EXTERNAL" != 1 ] || { echo 'fm-review: external review requires --pr' >&2; return 65; }
+    return 0  # Legacy local-only self review establishes no remote readiness.
+  fi
+  local verified GH_REPO="${GH_REPO:-}"
+  # A pre-registry self review still needs a concrete repository for the
+  # shared verifier; this resolves a repository, never a project identity.
+  if [ -z "${FM_PROJECT:-}" ] && [ -z "$GH_REPO" ]; then
+    GH_REPO="$("${GH:-${FM_GH:-gh}}" repo view --json nameWithOwner --jq .nameWithOwner)" || return 65
+  fi
   verified="$(fm_binding head --task "$TASK" --pr "$PR" --branch "$BRANCH")" || return 65
   [ -n "$R_HEAD" ] && [ "$verified" = "$R_HEAD" ] || {
     echo 'fm-review: authoritative PR head moved; refresh before review' >&2; return 65; }
@@ -792,12 +799,14 @@ prompt="$work/prompt.md"
 verify_review_head || exit 65
 {
   cat "${FM_CODE_ROOT:-$REPO}/skills/reviewer/SKILL.md"
-  fm_prompt_identity reviewer "$R_HEAD" "$R_BASE"
-  if [ -n "$FM_SPEC_PIN_JSON" ]; then fm_pin_prompt || exit 65
+  if [ "$FM_EXTERNAL" = 1 ]; then fm_prompt_identity reviewer "$R_HEAD" "$R_BASE" || exit 65; fi
+  if [ -n "$FM_SPEC_PIN_JSON" ]; then fm_pin_prompt reviewer || exit 65
   else
     fm_conventions_prompt || exit 65
-    printf '\n# Project design (legacy unpinned context)\n\n'
-    fm_prompt_design "$FM_DESIGN" || exit 65
+    if [ "$FM_EXTERNAL" = 1 ]; then
+      printf '\n# Project design (legacy unpinned context)\n\n'
+      fm_prompt_design "$FM_DESIGN" reviewer || exit 65
+    fi
   fi
   printf '\n---\n\n# The task\n\n```json\n%s\n```\n' "$spec"
   printf '\n# Round %s\n' "$ROUND"

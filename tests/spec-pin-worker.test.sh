@@ -24,8 +24,7 @@ assert_contains "$(cat "$d/prompt.md")" '"approval_binding": "dispatch-time"' 'w
 assert_eq committed "$(jq -r '.snapshots.spec.source' "$repo/state/pins/T-Z/1.json")" 'worker records committed self spec provenance'
 assert_eq 1 "$(jq -s '[.[]|select(.type=="spec_pinned")]|length' "$repo/state/events.jsonl")" 'worker emits one initial pin event'
 assert_contains "$(cat "$d/prompt.md")" 'Design cap: 48000 UTF-8 bytes' 'stock worker prompt bounds approved design'
-assert_contains "$(cat "$d/prompt.md")" '# Launcher project context' 'stock worker prompt carries project and checkout identity'
-assert_contains "$(cat "$d/prompt.md")" 'Checkout/head SHA:' 'stock worker prompt names its exact head'
+assert_lacks "$(cat "$d/prompt.md")" '# Launcher project context' 'self worker retains its existing prompt sections'
 # A valid mutable branch spec must never rescue an existing corrupt pin.
 for corruption in hash unreadable; do
   rm -f "$d/prompt.md"

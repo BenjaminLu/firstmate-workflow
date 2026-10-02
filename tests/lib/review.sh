@@ -9,7 +9,7 @@ set -uo pipefail
 for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
   unset "$_fm_k" || true
 done
-export HERDR_ENV=0 FM_TRANSPORT=direct
+export HERDR_ENV=0 FM_TRANSPORT=direct GH_REPO=fixture/project
 # A round given --pr waits for the head's required checks (T-153); the
 # fixtures' checks never finish, so no case waits unless it says so
 export FM_REVIEW_CI_WAIT=0
@@ -18,6 +18,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 . "$ROOT/tests/lib.sh"
 # shellcheck source=tests/lib/project-storage.sh
 . "$ROOT/tests/lib/project-storage.sh"
+# shellcheck source=tests/lib/binding-fixture.sh
+. "$ROOT/tests/lib/binding-fixture.sh"
 # T-161: newer bash can run the old unbraced messages successfully. Check
 # the actual executable sources too, independently of ci.sh's lint, so
 # reverting either repair is detected on Linux as well as macOS bash 3.2.
@@ -59,6 +61,7 @@ fixture() {
   cp "$ROOT/bin/fm-herdr.py" "$ROOT/bin/fm-auth-probe.sh" "$ROOT/bin/fm-sandbox.sh" bin/; project_storage_fixture bin/
   cp -r "$ROOT/bin/adapters" bin/
   cp -R "$ROOT/bin/lib" bin/   # the lifeline a round's runner holds (T-151)
+  binding_service_fixture "$d/repo"  # unrelated orchestration cases; real head checks in role-prompts
   cp "$ROOT/skills/reviewer/SKILL.md" "$d/repo/skills/reviewer/"
   printf 'vendor: mock\n' > config.yaml
   printf '{"id":"T-Z","title":"a task","activity":{"en":"Review the authored task","zh-TW":"審查已撰寫的任務"},"scope":["src/**"],"acceptance":["it exists"]}\n' > design/tasks/T-Z.json

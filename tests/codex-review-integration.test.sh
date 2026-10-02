@@ -33,7 +33,7 @@ class StockReview(unittest.TestCase):
                         PATH=str(self.tools) + os.pathsep + os.environ['PATH'],
                         GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null',
                         FM_ROOT=str(self.repo), FM_TRANSPORT='direct', HERDR_ENV='0',
-                        FM_REVIEW_CI_WAIT='0', FM_GH=str(self.tools / 'gh'))
+                        GH_REPO='fixture/project', FM_REVIEW_CI_WAIT='0', FM_GH=str(self.tools / 'gh'))
         shutil.copytree(root / 'bin', self.repo / 'bin')
         shutil.copytree(root / 'skills', self.repo / 'skills')
         (self.repo / 'design/tasks').mkdir(parents=True)
@@ -75,6 +75,8 @@ esac
         self.later = self.git('rev-parse', 'HEAD')
         self.git('reset', '--hard', self.head)
         self.git('checkout', '-q', 'main')
+        self.git('config', 'url.' + str(self.repo) + '.insteadOf', 'https://github.com/fixture/project.git')
+        self.git('update-ref', 'refs/pull/9/head', self.head)
         self.write(self.tools / 'gh', '''#!/usr/bin/env python3
 import json, pathlib, subprocess, sys
 home = pathlib.Path(HOME_LITERAL)
@@ -90,9 +92,13 @@ elif args and args[0] == 'api' and 'check-runs' in ' '.join(args):
     print('{"check_runs":[]}')
 elif args[:2] == ['pr', 'view'] and 'comments' in args:
     print((home / 'comments.json').read_text() if (home / 'comments.json').exists() else '{"comments":[]}')
+elif args[:2] == ['pr', 'view'] and 'headRefOid,baseRefOid,baseRefName,headRefName,state' in args:
+    head = subprocess.check_output(['git', '-C', str(home / 'repo'), 'rev-parse', 'refs/pull/9/head'], text=True).strip()
+    print(json.dumps(dict(state='OPEN', headRefOid=head, baseRefOid=BASE_LITERAL,
+                         headRefName='work', baseRefName='main')))
 elif '--json' in args:
     print('[]')
-'''.replace('HOME_LITERAL', repr(str(self.home))).replace('LATER_LITERAL', repr(self.later)))
+'''.replace('HOME_LITERAL', repr(str(self.home))).replace('LATER_LITERAL', repr(self.later)).replace('HEAD_LITERAL', repr(self.head)).replace('BASE_LITERAL', repr(self.base)))
         self.write(self.tools / 'codex', '''#!/usr/bin/env python3
 import json, pathlib, subprocess, sys, re, hashlib
 home = pathlib.Path(HOME_LITERAL)
@@ -154,12 +160,29 @@ else:
         self.assertFalse(list(self.roundtmp.glob('fm-round.*')), result.stderr)
         return result
 
-    def test_pinned_prompt_receipt_and_managed_final(self):
+    def test_remote_update_branch_refused_before_prompt_or_checkout(self):
+        self.git('update-ref', 'refs/pull/9/head', self.later)
+        result = self.run_review()
+        self.assertEqual(65, result.returncode, result.stderr)
+        self.assertIn('authoritative PR head differs', result.stderr)
+        self.assertEqual(self.head, self.git('rev-parse', 'work'))
+        self.assertFalse(list(self.home.glob('capture-*.json')))
+        self.assertFalse(list((self.repo / 'state/runs').glob('*/review/prompt.md')))
+        self.assertFalse((self.home / 'published').exists())
+
+    def test_ref_moved_during_ci_wait_refused_before_model(self):
         (self.home / 'move').touch()
+        result = self.run_review()
+        self.assertEqual(65, result.returncode, result.stderr)
+        self.assertIn('authoritative PR head differs', result.stderr)
+        self.assertFalse(list(self.home.glob('capture-*.json')))
+        self.assertFalse((self.home / 'published').exists())
+
+    def test_pinned_prompt_receipt_and_managed_final(self):
         result = self.run_review()
         self.assertEqual(0, result.returncode, result.stderr)
         capture = json.loads((self.home / 'capture-1.json').read_text())
-        self.assertEqual(self.later, self.git('rev-parse', 'work'))
+        self.assertEqual(self.head, self.git('rev-parse', 'work'))
         self.assertEqual(self.head, capture['head'])
         self.assertIn('Head SHA: ' + self.head, capture['prompt'])
         self.assertNotIn('Head SHA: ' + self.later, capture['prompt'])

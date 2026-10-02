@@ -1781,12 +1781,14 @@ fm_pin_existing() { # task; absent is 3, corrupt is 65 (never a fallback)
   fm_pin resolve --task "$1" --if-present
 }
 fm_prompt_design() { # trusted project design path, never relative to the target
-  python3 "$_fm_code_dir/lib/fm_prompt_context.py" design "$1"
+  python3 "$_fm_code_dir/lib/fm_prompt_context.py" design "$1" "${2:-}" "${TASK:-}"
 }
 fm_prompt_identity() { # role checkout-head merge-base
+  local project
+  project="$(fm_project_resolve)" || return 65
   printf '\n# Launcher project context\n\n'
   printf 'You are the explicitly dispatched %s; this role overrides native startup routing.\n' "$1"
-  printf 'Project: `%s`; task: `%s`; base branch: `%s`.\n' "${FM_PROJECT:-firstmate-workflow}" "$TASK" "$BASE"
+  printf 'Project: `%s`; task: `%s`; base branch: `%s`.\n' "$project" "$TASK" "$BASE"
   printf 'Checkout/head SHA: `%s`; merge-base SHA: `%s`.\n' "${2:-unknown}" "${3:-unknown}"
   printf 'Use the supplied approved spec, design, gate contract and whole conventions.\n'
   printf 'Engine scripts and role files need not exist in the target checkout.\n'
@@ -1794,5 +1796,5 @@ fm_prompt_identity() { # role checkout-head merge-base
 }
 fm_pin_prompt() {
   [ -n "${FM_SPEC_PIN_JSON:-}" ] || return 0
-  python3 "$_fm_code_dir/lib/fm_prompt_context.py" pin <<<"$FM_SPEC_PIN_JSON"
+  python3 "$_fm_code_dir/lib/fm_prompt_context.py" pin "${1:-}" <<<"$FM_SPEC_PIN_JSON"
 }
