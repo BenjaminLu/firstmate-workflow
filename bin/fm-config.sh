@@ -390,7 +390,7 @@ if Path(config).is_file():
               file=sys.stderr); sys.exit(65)
     spec = importlib.util.spec_from_file_location('fm_herdr', herdr_path)
     herdr = importlib.util.module_from_spec(spec); spec.loader.exec_module(herdr)
-FIELDS = ('repo', 'github', 'base', 'required_check', 'design', 'tasks', 'project', 'policy')
+FIELDS = ('repo', 'github', 'base', 'required_check', 'design', 'tasks', 'project', 'policy', 'projection')
 NAME = re.compile(r'[a-z0-9-]{1,24}$')
 GITHUB = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9._-]+$')
 
@@ -484,6 +484,8 @@ def load(path):
             refuse(name, 'repo', "must be . or absent (a committed local path would publish it), not '%s'" % entry['repo'])
         if not GITHUB.match(entry.get('github', '')) or entry['github'].split('/')[1] in ('.', '..'):
             refuse(name, 'github', "must be shaped owner/repo, not '%s'" % entry.get('github', ''))
+        if entry.get('projection', 'comments') not in ('comments', 'local'):
+            refuse(name, 'projection', 'must be comments or local')
         for key in ('base', 'required_check'):
             if not entry.get(key): refuse(name, key, 'is required')
         for key in ('design', 'tasks'):
@@ -877,6 +879,8 @@ def field(projects, name, key, config):
         child = dict(home='', root='repo', state='state', worktrees='worktrees',
                      design='design.md', tasks='tasks', conventions='CONVENTIONS.md')[key]
         return str(home / child)
+    if key == 'projection':
+        return entry.get(key, 'comments')
     if key in ('repo', 'github', 'base', 'required_check'):
         return entry.get(key, '')
     refuse(name, key, 'is not a registry field')
@@ -1591,4 +1595,17 @@ fm_target_validate() {
   actual="$(git -C "$FM_TARGET_ROOT" remote get-url origin 2>/dev/null)" || return 65
   [ "$actual" = "$expected" ] && [ "$(git -C "$FM_TARGET_ROOT" remote get-url --push origin 2>/dev/null)" = "$expected" ] || {
     echo "fm-config: managed clone origin does not match project $FM_PROJECT" >&2; return 65; }
+}
+
+# T-135: comments are a projection of durable local records, never authority.
+fm_projection() {
+  local names
+  names="$(fm_projects "${FM_CONFIG:-config.yaml}")" || return 65
+  if [ -z "$names" ]; then printf '%s\n' comments
+  else fm_project_get "${FM_PROJECT}" projection
+  fi
+}
+fm_evidence() {
+  python3 "$_fm_code_dir/lib/fm_evidence.py" "$@" \
+    --state "$FM_STATE_DIR" --project "${FM_PROJECT:-firstmate-workflow}" --task "$TASK"
 }

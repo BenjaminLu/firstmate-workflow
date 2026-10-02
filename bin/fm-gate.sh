@@ -234,48 +234,11 @@ patch_of() {  # patch_of <base> <head>
 }
 refused() { echo "      $1; a real re-review is needed" >&2; return 1; }
 gate7() {
-  is_num "$PR" || return 1
-  local json last head mb patch
-  json="$($GH pr view "$PR" --json comments 2>/dev/null)" || return 1
-  # Each verdict comment, oldest first, from the reviewer when one is named:
-  # the script's own REVIEWED line (the last one) says what it was; a comment
-  # without one says only its marker, and a REJECT marker wins.
-  last="$(jq -c --arg t "$TASK" --arg who "$REVIEWER" '
-    ($t | gsub("(?<c>[.*+?^$(){}|\\[\\]\\\\/])"; "\\\(.c)")) as $e
-    | "^REVIEWED:\($e) verdict=(?<verdict>APPROVE|REJECT) head=(?<head>[0-9a-f]+) base=(?<base>[0-9a-f]+) patch=(?<patch>[0-9a-f]*) files=(?<files>\\[.*\\])[ \\t\\r]*$" as $re
-    | [ .comments[]
-        | select($who == "" or .author.login == $who)
-        | .body | strings | . as $b
-        | ([splits("\n")] | map(capture($re)?) | last) as $r
-        | if $r then $r + {bound:true, files:($r.files | fromjson? // null)}
-          elif ($b | contains("REJECT:\($t)")) then {verdict:"REJECT", bound:false}
-          elif ($b | contains("APPROVE:\($t)")) then {verdict:"APPROVE", bound:false}
-          else empty end ]
-    | (map(.verdict == "APPROVE") | any) as $approved
-    | if length == 0 then empty else last + {approved_before:$approved} end
-  ' <<<"$json" 2>/dev/null)"
-  [ -n "$last" ] || refused "no verdict comment carries APPROVE:$TASK" || return 1
-  if [ "$(jq -r .verdict <<<"$last")" = REJECT ]; then
-    [ "$(jq -r .approved_before <<<"$last")" = true ] ||
-      refused "the latest verdict is REJECT:$TASK" || return 1
-    refused "condition 2 failed: the latest APPROVE is superseded by a later REJECT:$TASK" || return 1
-  fi
-  # An APPROVE posted by hand, or before fm-review.sh recorded what it
-  # reviewed, names no head and no change, so there is nothing to compare:
-  # it is read as it always was, and firstmate is told it binds to nothing.
-  if [ "$(jq -r .bound <<<"$last")" != true ]; then
-    echo "      the latest APPROVE:$TASK has no REVIEWED:$TASK line, so it names no head or change it approved; firstmate confirms it covers this head" >&2
-    return 0
-  fi
+  local head mb patch
   head="$(git rev-parse --verify -q "$BRANCH^{commit}")" || return 1
-  [ "$(jq -r .head <<<"$last")" != "$head" ] || return 0
-
-  mb="$(git merge-base "$BASE" "$BRANCH" 2>/dev/null)" || refused "no merge-base between $BRANCH and $BASE" || return 1
+  mb="$(git merge-base "$BASE" "$BRANCH")" || return 1
   patch="$(patch_of "$mb" "$head")"
-  [ -n "$patch" ] && [ "$patch" = "$(jq -r .patch <<<"$last")" ] ||
-    refused "condition 1 failed: the change's patch-id is ${patch:-empty}, the approved one was $(jq -r '.patch|if .=="" then "empty" else . end' <<<"$last") (approved head $(jq -r .head <<<"$last"))" ||
-    return 1
-  return 0
+  fm_evidence gate --head "$head" --patch "$patch"
 }
 
 g 1 "branch exists and carries commits"          gate1
@@ -283,6 +246,6 @@ g 2 "rebases onto $BASE cleanly"                 gate2
 g 4 "diff stays inside the declared scope"       gate4
 g 5 "reverting the implementation turns tests red" gate5
 g 6 "the required GitHub check is green"         gate6
-g 7 "the reviewer posted APPROVE:$TASK"          gate7
+g 7 "authenticated local reviewer approval:$TASK"          gate7
 echo "  all six gates green"
 exit 0

@@ -495,50 +495,8 @@ keep_log() {
 # closed from inside the comment, and whatever follows it would read as the
 # launcher's own words.
 closed_list() {
-  local json picked fence
-  if ! json="$($GH pr view "$PR" --json comments 2>/dev/null)" ||
-     ! picked="$(jq -c --arg t "$TASK" '
-       ($t | gsub("(?<c>[.*+?^$(){}|\\[\\]\\\\/])"; "\\\(.c)")) as $e
-       | "(^|\\n)[ \\t]*ASK-PASS-CRITERIA:\($e)[ \\t\\r]*(\\n|$)" as $ask
-       | "(^|\\n)[ \\t]*CRITERIA-COMPLETE:\($e)[ \\t\\r]*(\\n|$)" as $done
-       | [.comments[] | .body | strings] as $b
-       | { ask: ([$b[] | select(test($ask))] | last),
-           lists: [$b[] | select(test($ask) | not) | . as $x
-                    | ([match($done; "g").offset] | last) as $at
-                    | select($at != null and ($x[0:$at] | test("(^|\\n)[ \\t]*[0-9]+[.)][ \\t]"))) ] }
-     ' <<<"$json" 2>/dev/null)" || [ -z "$picked" ]; then
-    printf '\nThe pull request'"'"'s comments could not be read, so whether the worker has asked with ASK-PASS-CRITERIA:%s or a closed list with CRITERIA-COMPLETE:%s already exists is unknown. Review this round as usual; if you reject, end with the complete numbered list of what would make this head pass, closed by CRITERIA-COMPLETE:%s.\n' \
-      "$TASK" "$TASK" "$TASK"
-    return 0
-  fi
-  local n i
-  fence="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
-  n="$(jq '.lists | length' <<<"$picked")"
-  if [ "$n" -gt 0 ]; then
-    printf '\nThe numbered list below, posted with CRITERIA-COMPLETE:%s, is the closed list for this task. If more than one appears, the latest is the standing list; the earlier ones are its history. Every finding this round must cite a numbered item from it. If you reject, re-issue the standing list: the same numbering, each earlier item marked done or open, and any new item appended with the next number and labelled on its own line REGRESSION:%s (newly introduced by the latest change) or NEW-GROUND:%s (the latest change touched code the list never covered), then CRITERIA-COMPLETE:%s. It never drops an open item. Raise nothing else.\n' \
-      "$TASK" "$TASK" "$TASK" "$TASK"
-  elif [ "$(jq '.ask != null' <<<"$picked")" = true ]; then
-    printf '\nThe worker has asked for the pass criteria with ASK-PASS-CRITERIA:%s, quoted below. There is no closed list yet: answer with the complete numbered list of everything that must change for this task to pass, and then post CRITERIA-COMPLETE:%s.\n' \
-      "$TASK" "$TASK"
-  else
-    printf '\nThe pull request has neither an ASK-PASS-CRITERIA:%s from the worker nor a numbered list closed by CRITERIA-COMPLETE:%s. There is no closed list yet: review this round as usual, and if you reject, end with the complete numbered list of what would make this head pass, closed by CRITERIA-COMPLETE:%s.\n' \
-      "$TASK" "$TASK" "$TASK"
-  fi
-  # jq prints each body itself: through $(...) a comment's trailing newlines
-  # were stripped, and the quote was no longer verbatim
-  if [ "$(jq '.ask != null' <<<"$picked")" = true ]; then
-    printf '\n## The worker'"'"'s ask, verbatim from the pull request\n\n----- begin comment %s -----\n' "$fence"
-    jq -r '.ask' <<<"$picked"
-    printf -- '----- end comment %s -----\n' "$fence"
-  fi
-  i=0
-  while [ "$i" -lt "$n" ]; do
-    printf '\n## Closed list %s of %s, verbatim from the pull request\n\n----- begin comment %s -----\n' \
-      "$((i + 1))" "$n" "$fence"
-    jq -r --argjson i "$i" '.lists[$i]' <<<"$picked"
-    printf -- '----- end comment %s -----\n' "$fence"
-    i=$((i + 1))
-  done
+  fm_evidence history --reviewer || return 1
+  printf '\nEvery REJECT supplies the complete numbered standing list and CRITERIA-COMPLETE:%s. Preserve numbering and done/open states; label new items REGRESSION:%s or NEW-GROUND:%s. Syntax checks do not prove finding semantics.\n' "$TASK" "$TASK" "$TASK"
 }
 
 # Given --pr, every round, in either mode, is shown what the machine found
@@ -794,7 +752,7 @@ prompt="$work/prompt.md"
   printf '\n# Round %s\n' "$ROUND"
 } > "$work/intro.md"
 {
-  if [ "$ROUND" -ge 2 ] && [ -n "$PR" ]; then
+  if [ "$ROUND" -ge 2 ]; then
     printf '\n# The closed list\n'
     closed_list
   elif [ "$ROUND" -ge 3 ]; then
@@ -1201,9 +1159,23 @@ if [ -z "$decided" ]; then
 fi
 # the script's record of what was reviewed goes last, after the reviewer's
 # words, so it is the one gate 7 reads whatever the reviewer quoted above it
+# Authenticate and retain the final answer before any projection or approval event.
+# Managed Codex is the T-163 authority; legacy/custom output cannot sign locally.
+decided="$(fm_evidence verdict --round "$ROUND" --head "$R_HEAD" --base "$R_BASE" \
+  --patch "$R_PATCH" --run "$FM_RUN_DIR" --attempt "${FM_CHAIN_ATTEMPT:-}" \
+  --code "${FM_CODE_ROOT:-$REPO}")" || {
+  emit --type review_failed --en 'No authenticated local verdict could be retained' \
+       --tw '無法保留經驗證的本機審查裁決'
+  exit 3
+}
 verdict="${verdict%"${verdict##*[![:space:]]}"}$(reviewed_line "$decided")"
-if [ -n "$PR" ] && [ "$FM_EXTERNAL" = 0 ]; then
-  $GH pr comment "$PR" --body "$verdict" >/dev/null 2>&1 || true
+projection="$(fm_projection)" || exit 65
+if [ -n "$PR" ] && [ "$projection" = comments ]; then
+  if ! $GH pr comment "$PR" --body "$verdict" >/dev/null 2>&1; then
+    echo 'fm-review: optional comment projection failed; local verdict retained' >&2
+    emit --type projection_failed --en 'Optional verdict comment failed; local verdict retained' \
+         --tw '選用的裁決留言發布失敗；本機裁決已保留'
+  fi
 fi
 case "$decided" in
   APPROVE)
