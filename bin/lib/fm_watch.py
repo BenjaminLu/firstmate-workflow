@@ -356,8 +356,25 @@ def cycle(root):
         os.dup2(devnull, 1)
         os.close(devnull)
         items = take(root, stage=gen)
-        while not items:
-            bell.wait(None)
+        while True:
+            # Deliver items already taken before consulting any registry.
+            # The successor discovers policy deadlines when the queue is idle.
+            if items:
+                break
+            try:
+                from fm_conventions_watch import tick
+                delay = tick(root, wake=life.push, owner=owner)
+            except Exception as error:
+                delay = None
+                try:
+                    journal(root, f'conventions inspection unavailable: {error}')
+                except OSError:
+                    pass
+            if not items:
+                items = take(root, stage=gen)
+            if items:
+                break
+            bell.wait(delay)
             items = take(root, stage=gen)
         lines = [wake_line(item) for item in items]
         # the successor holds the watch before this wake is let out, so a

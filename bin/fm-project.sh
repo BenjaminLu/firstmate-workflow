@@ -12,11 +12,9 @@
 # `.fm-*` in the clone's .git/info/exclude. It writes nothing into the
 # target's tree and never runs git in a directory that is not that clone.
 #
-# verify exits 70, naming every missing item, unless the base is protected
-# with enforce_admins on, up to date required and required_check a required
-# status check; and the clone's origin is
-# the project's repository and its hooks and guard are the engine's. For the
-# self project (`repo: .`) both are no-ops that succeed.
+# verify reports protection facts without treating unreadable rules as absent.
+# It requires bound captain-confirmed CONVENTIONS.md plus a guarded clone.
+# Self (`repo: .`) remains a no-op.
 #
 # FM_GITHUB_URL is where `owner/repo` is cloned from: https://github.com
 # unless a fixture stands a local directory in for GitHub.
@@ -31,8 +29,14 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
 
+# Onboarding has its own noninteractive arguments and never writes private
+# inspection or contract content into the engine registry.
+case "${1:-}" in
+  add|edit|drift) exec "$(dirname "$_fm_lib")/fm-onboard.sh" "$@" ;;
+esac
+
 REPO="${FM_ROOT:-$(pwd)}"; MIGRATE=0; GH="${FM_GH:-gh}"; URL="${FM_GITHUB_URL:-https://github.com}"
-usage() { echo "usage: fm-project.sh sync|verify <name> [--migrate] [--repo dir]; history on <name> [--repo dir]" >&2; exit 64; }
+usage() { echo "usage: fm-project.sh add <owner/repo|local-path> [--name name] [--answers file]; edit|drift <name>; sync|verify <name> [--migrate] [--repo dir]; history on <name> [--repo dir]" >&2; exit 64; }
 words=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -60,7 +64,6 @@ if [ "$repo_field" = . ]; then
 fi
 github="$(fm_project_get "$NAME" github "$CFG")" || exit
 base="$(fm_project_get "$NAME" base "$CFG")" || exit
-check="$(fm_project_get "$NAME" required_check "$CFG")" || exit
 hooks="$REPO/.githooks"
 project_home="$(fm_project_get "$NAME" home "$CFG")" || exit 65
 clone="$project_home/repo"
@@ -105,8 +108,17 @@ sync_clone() {
       echo "fm-project: refusing $clone - its origin is '$have', not $origin" >&2; exit 70; }
     [ "$(git -C "$clone" remote get-url --push origin 2>/dev/null)" = "$origin" ] || {
       echo 'fm-project: refusing mismatched push origin' >&2; exit 65; }
-    git -C "$clone" fetch -q --prune origin || {
+    local deepen=()
+    if [ "$(git -C "$clone" rev-parse --is-shallow-repository)" = true ]; then deepen=(--unshallow); fi
+    git -C "$clone" fetch -q --prune ${deepen[@]+"${deepen[@]}"} origin || {
       echo "fm-project: could not fetch $origin into $clone" >&2; exit 1; }
+    # Old onboarding created --no-checkout clones. Populate only an absent
+    # index with a committed HEAD: an empty remote has neither yet.
+    # Never reset an ordinary checkout or discard local edits.
+    if [ ! -e "$clone/.git/index" ] && git -C "$clone" rev-parse --verify 'HEAD^{commit}' >/dev/null 2>&1; then
+      git -C "$clone" read-tree -m -u HEAD || {
+        echo 'fm-project: could not populate legacy managed checkout' >&2; exit 1; }
+    fi
     echo "fm-project: fetched and pruned $NAME"
   else
     mkdir -p "$project_home" && place_ok || exit 65
@@ -167,35 +179,21 @@ fi
 
 missing=()
 miss() { missing+=("$1"); }
-gh_message() { jq -r '.message // empty' 2>/dev/null <<< "$1"; }
 
 verify_target() {
   local out msg
-  # --- base protection ---------------------------------------------------
-  if out="$($GH api "repos/$github/branches/$base/protection" 2>/dev/null </dev/null)"; then
-    [ "$(jq -r '.enforce_admins.enabled == true' <<< "$out" 2>/dev/null)" = true ] \
-      || miss "base $base: enforce_admins is not on"
-    [ "$(jq -r '.required_status_checks.strict == true' <<< "$out" 2>/dev/null)" = true ] \
-      || miss "base $base: branches are not required to be up to date before merging"
-    [ "$(jq -r --arg c "$check" \
-          '[(.required_status_checks.contexts // [])[], ((.required_status_checks.checks // [])[] | .context)]
-           | any(.[]; . == $c)' <<< "$out" 2>/dev/null)" = true ] \
-      || miss "base $base: required_check '$check' is not a required status check"
-  else
-    msg="$(gh_message "$out")"
-    case "$msg" in
-      'Branch not protected') miss "base $base is not protected" ;;
-      *)
-        if ! jq -e --arg repo "$github" --arg base "$base" --arg check "$check" '
-          .captain_confirmed == true and .repository == $repo and .base == $base
-          and (.required_checks | index($check) != null) and (.policy_confirmed == true)
-        ' "$project_home/state/protection-confirmation.json" >/dev/null 2>&1; then
-          miss "branch protection unknown for $github $base; require captain-confirmed checks and policy"
-        fi ;;
-    esac
+  # Protection visibility is evidence, never permission. In particular a 404
+  # cannot distinguish an unprotected branch from an unreadable private rule.
+  local policy
+  if ! policy="$(python3 "$_fm_code_dir/lib/fm_conventions.py" "$project_home/CONVENTIONS.md" \
+      --repository "$github" --base "$base" 2>&1)"; then
+    miss "require captain-confirmed checks and policy in CONVENTIONS.md: $policy"
   fi
-  # Visibility does not grant or deny permission. An unreadable protection
-  # remains unknown; onboarding must record captain-confirmed checks/policy.
+  if out="$($GH api "repos/$github/branches/$base/protection" 2>/dev/null </dev/null)"; then
+    echo "fm-project: protection visible for $github $base: $out"
+  else
+    echo "fm-project: branch protection unknown for $github $base (including 404); captain-confirmed checks and policy required"
+  fi
   # --- the guard in the managed clone ------------------------------------
   local why
   if ! why="$(place_ok 2>&1)"; then

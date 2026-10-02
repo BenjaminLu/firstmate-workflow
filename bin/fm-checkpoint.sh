@@ -76,8 +76,12 @@ fi
 common="$(git -C "$tree" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
 case "$common" in */projects/*/repo/.git) FM_EXTERNAL=1 ;; esac
 if [ "${FM_EXTERNAL:-0}" = 1 ]; then
-  echo 'fm-checkpoint: external publication requires the conventions policy reader (T-139) / 外部發布需要 T-139 慣例政策讀取器' >&2
-  exit 65
+  # A --dir invocation must carry the engine/project routing. Never guess a
+  # project's identity from a basename or trust an inherited FM_EXTERNAL.
+  [ -n "${FM_PROJECT:-}" ] && [ -n "${FM_ENGINE_ROOT:-}" ] || exit 65
+  fm_storage_init "$FM_ENGINE_ROOT" "$FM_PROJECT" || exit 65
+  [ "$FM_EXTERNAL" = 1 ] || exit 65
+  fm_publication_policy "$tree" || exit 65
 fi
 # --dir callers may not carry routing environment. The managed clone's
 # configured base still protects non-main project bases through fm-guard.

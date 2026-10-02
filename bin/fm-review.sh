@@ -70,6 +70,7 @@ if [ -n "${FM_PROJECT:-}" ] && [ -n "$(fm_projects "$FM_CONFIG" 2>/dev/null)" ];
   project_events=(--project "$FM_PROJECT")
 fi
 fm_target_validate || exit 65
+fm_conventions "" >/dev/null || exit 65
 BASE="${FM_BASE:-$BASE}"
 fm_refuse_herdr_bypass fm-review || exit $?
 
@@ -534,6 +535,11 @@ closed_list() {
 REQ_NAMES=''; REQ_SOURCE=''
 required_names() {
   local got p
+  if [ "$FM_EXTERNAL" = 1 ]; then
+    REQ_NAMES="$(fm_conventions required_checks | jq -r '.[]')" || return 65
+    REQ_SOURCE="captain-confirmed CONVENTIONS.md checks/statuses"
+    return 0
+  fi
   if got="$($GH api "repos/{owner}/{repo}/branches/$BASE/protection/required_status_checks" 2>/dev/null </dev/null)"; then
     REQ_NAMES="$(jq -r '(.contexts[]?, .checks[]?.context) | strings' <<<"$got" 2>/dev/null | awk 'NF && !s[$0]++')"
     REQ_SOURCE="the protection of the base branch $BASE"
@@ -553,6 +559,10 @@ required_names() {
 # answers them; status 1 when gh could not, or answered something else
 check_runs_of() {
   local got
+  if [ "$FM_EXTERNAL" = 1 ] && [[ "$2" == check_name=* ]]; then
+    python3 "$_fm_code_dir/lib/fm_project_checks.py" "$GH_REPO" "$1" "$2"
+    return $?
+  fi
   got="$($GH api "repos/{owner}/{repo}/commits/$1/check-runs?$2" 2>/dev/null </dev/null)" || return 1
   jq -e '.check_runs | type == "array"' >/dev/null 2>&1 <<<"$got" || return 1
   printf '%s' "$got"
@@ -755,6 +765,7 @@ prompt="$work/prompt.md"
 [ -z "$PR" ] || { required_names; ci_wait; }
 {
   cat "${FM_CODE_ROOT:-$REPO}/skills/reviewer/SKILL.md"
+  fm_conventions_prompt || exit 65
   printf '\n---\n\n# The task\n\n```json\n%s\n```\n' "$spec"
   printf '\n# Round %s\n' "$ROUND"
 } > "$work/intro.md"
@@ -1181,9 +1192,20 @@ provenance_level=legacy
 [ "${FM_CHAIN_VENDOR:-}" != codex ] || provenance_level=authenticated
 CREW_DATA="$(jq -c --arg level "$provenance_level" '.provenance_level=$level' <<<"$CREW_DATA")"
 verdict="${verdict%"${verdict##*[![:space:]]}"}$(reviewed_line "$decided")"
+project_review=fm
+if [ "$FM_EXTERNAL" = 1 ]; then
+  printf '%s\n' "$verdict" > "$work/private-verdict.md"
+  fm_private_note reviewer-report "$TASK" "$work/private-verdict.md" || exit 65
+  project_review="$(fm_conventions review)" || exit 65
+fi
 projection="$(fm_projection)" || exit 65
 if [ -n "$PR" ] && [ "$projection" = comments ]; then
-  if ! fm_comment_projection "$PR" --body "$verdict" >/dev/null 2>&1; then
+  comment_verdict="$verdict"
+  if [ "$project_review" != fm ]; then
+    # A local pre-check must not masquerade as gate 7's repository review.
+    comment_verdict="Firstmate local pre-check finished for $TASK at $R_HEAD ($decided). Required external project review remains outstanding; details retained privately."
+  fi
+  if ! fm_comment_projection "$PR" --body "$comment_verdict" >/dev/null 2>&1; then
     echo 'fm-review: optional comment projection failed; local verdict retained' >&2
     FM_CREW_STATUS_SECS=0 emit --type crew_status --data '{"evidence_event":"projection_failed"}' --en 'Optional verdict comment failed; local verdict retained' \
          --tw '選用的裁決留言發布失敗；本機裁決已保留'
@@ -1191,8 +1213,12 @@ if [ -n "$PR" ] && [ "$projection" = comments ]; then
 fi
 case "$decided" in
   APPROVE)
+    if [ "$project_review" != fm ]; then
+      emit_status "Local pre-check signed; project external review still required" "本機預檢已簽署；仍需專案外部審核"
+    else
     emit --type approved --en "reviewer signed $TASK ($provenance_level)" --tw "reviewer 已簽 ${TASK}（${provenance_level}）"
     emit_status "Verdict signed: APPROVE:$TASK" "已簽署裁決：APPROVE:$TASK"
+    fi
     ;;
   REJECT)
     emit --review-outcome rejected --type review_failed \
