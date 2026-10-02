@@ -183,7 +183,12 @@ else:
         self.assertEqual(invocation['review'], receipt['review'])
         final = (Path(receipt['attempt']) / 'final.txt').read_bytes()
         self.assertEqual(hashlib.sha256(final).hexdigest(), receipt['final_sha256'])
-        self.assertTrue(published.startswith(final.decode().rstrip()))
+        envelope, body = published.split('\n\n', 1)
+        self.assertEqual('EVIDENCE:T-Z ' + verdicts[-1]['signature'], envelope)
+        self.assertTrue(body.startswith(final.decode().rstrip()))
+        self.assertEqual(self.head, verdicts[-1]['binding']['head'])
+        self.assertEqual(self.base, verdicts[-1]['binding']['base'])
+        self.assertEqual(receipt['review']['patch'], verdicts[-1]['binding']['patch'])
         self.assertFalse(Path(capture['checkout']).exists())
         events = [json.loads(line) for line in (self.repo / 'state/events.jsonl').read_text().splitlines()]
         self.assertIn('approved', [e['type'] for e in events])

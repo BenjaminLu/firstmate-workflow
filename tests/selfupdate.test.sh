@@ -25,6 +25,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib.sh"
 # shellcheck source=tests/lib/local-verdict.sh
 . "$ROOT/tests/lib/local-verdict.sh"
+. "$ROOT/tests/lib/binding-fixture.sh"
 FM="$ROOT/bin/fm.sh"
 
 # a repository shaped like this one: the scripts that matter, two skills, a
@@ -407,10 +408,13 @@ git -C "$g" add -A; git -C "$g" commit -qm skill; git -C "$g" checkout -q main
 
 # the pull request the change travels on, in a gh that remembers
 pr="$("$GH" pr create --head sk-001-skill --title 'skill-update: worker' | sed 's|.*/||')"
+gate_code="$(mktemp -d)"
+cp -R "$ROOT/bin" "$gate_code/bin"
+binding_service_fixture "$gate_code"
 seed_local_approval "$g" SK-001 sk-001-skill reviewer-1
 
 # its own gate lock, so a gate run elsewhere on this machine does not hold it up
-gate="GHSTATE='$GHSTATE' FM_GH='$GH' FM_REVIEWER_LOGIN=reviewer-1 FM_GATE_LOCK='$g.gate.lock' '$ROOT/bin/fm-gate.sh' --task SK-001 --repo '$g'"
+gate="GHSTATE='$GHSTATE' FM_GH='$GH' FM_REVIEWER_LOGIN=reviewer-1 FM_GATE_LOCK='$g.gate.lock' '$gate_code/bin/fm-gate.sh' --task SK-001 --repo '$g'"
 assert_ok "$gate --branch sk-001-skill --pr $pr" \
   "a skill-update passes all six gates, markdown diff and all"
 said="$(eval "$gate --branch sk-001-skill --pr $pr" 2>&1)"
@@ -465,6 +469,7 @@ pr2="$("$GH" pr create --head sk-001-code --title 'another' | sed 's|.*/||')"
 assert_fail "$gate --branch sk-001-code --pr $pr2 --only 7" "7 blocks a pull request nobody approved"
 seed_local_approval "$g" SK-001 sk-001-code someone-else
 assert_fail "$gate --branch sk-001-code --pr $pr2 --only 7" "7 blocks an approval from the wrong account"
+rm -rf "$gate_code"
 
 fi
 

@@ -182,6 +182,16 @@ printf 'interrupted chain noise\n' >> "$4"
 exit 0
 M
 chmod +x "$recover/bin/adapters/mock.sh"
+# Pinning needs the same real head/base/spec contract as an ordinary review.
+git -C "$recover" init -q -b main
+git -C "$recover" config user.name Fixture
+git -C "$recover" config user.email fixture@example.invalid
+printf 'state/\n' > "$recover/.gitignore"
+git -C "$recover" add .; git -C "$recover" commit -qm base
+git -C "$recover" checkout -qb work
+printf 'reviewed change\n' >> "$recover/src/a"
+git -C "$recover" commit -qam change
+git -C "$recover" checkout -q main
 for token in stale-token current forged; do
   unset FM_FORGED_PROVENANCE
   [ "$token" != forged ] || export FM_FORGED_PROVENANCE=1

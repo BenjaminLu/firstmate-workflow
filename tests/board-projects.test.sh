@@ -356,6 +356,9 @@ assert_lacks "$(cat "$h/gh-calls")" "alpha-app" "and GitHub is not asked when th
 assert_eq "merged" "$(rec beta)" "merged when only GitHub says MERGED"
 assert_eq "failed|the merge helper stopped before recording an outcome" \
   "$(jq -r '"\(.merge)|\(.merge_reason)"' "$(project_state gamma)/decisions/D-gamma-T009-1.json")" "failed, with the reason, when GitHub says OPEN"
+assert_eq "D-gamma-T009-1：合併失敗：合併程式在記錄結果前已停止" \
+  "$(jq -rs 'map(select(.type=="decision_made" and .data.decision=="D-gamma-T009-1" and .data.merge=="failed"))|last|.summary["zh-TW"]' "$(project_state gamma)/events.jsonl")" \
+  "stopped helper failure has an authored Traditional Chinese reason"
 assert_eq "failed" "$(rec zeta)" "and when GitHub says CLOSED"
 assert_eq "running" "$(rec delta)" "a merge whose outcome GitHub cannot tell stays running"
 assert_eq "true" "$(sh_ | jq -r '.responses[]|select(.id=="D-delta-T009-1")|.merge_unknown')" "and the board marks its outcome unknown"

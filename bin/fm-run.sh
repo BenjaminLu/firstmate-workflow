@@ -77,7 +77,7 @@ OURS='((.project // $def) == $proj)'
 # D-<digits> record, whoever it belongs to, is never read, moved or replaced.
 # The project is the one this run resolves (FM_PROJECT, else the default).
 merge_card() {  # merge_card <task> <pr>
-  local task="$1" pr="$2" project="$OWNER" key f id='' details request_out n best=''
+  local task="$1" pr="$2" expected_head="$3" project="$OWNER" key f id='' details request_out n best=''
   if [ -z "$project" ]; then
     say "$task: no captain card created; no project to name it by ($RUN_ERR)"; return
   fi
@@ -110,7 +110,7 @@ merge_card() {  # merge_card <task> <pr>
   fi
   details="$FM_STATE_DIR/decision-details/$id.json"
   if request_out="$("$B/fm-decide.sh" --request "$id" --task "$task" --project "$project" --kind merge \
-    --pr "$pr" --details "$details" --repo "$REPO" 2>&1 </dev/null)"; then
+    --pr "$pr" --expected-head "$expected_head" --details "$details" --repo "$REPO" 2>&1 </dev/null)"; then
     say "$task: all six gates green, asking the captain ($id)"
   else
     say "$task: no captain card created; firstmate must supply valid authored details at $details ($request_out)"
@@ -134,7 +134,7 @@ turn() {
     jq -e --arg t "$task" --arg proj "$RUN_PROJECT" --arg def "$DEFAULT" \
       "select(.type==\"merged\" and .task==\$t and $OURS)" "$FM_STATE_DIR/events.jsonl" >/dev/null 2>&1 && continue
 
-    branch="$(git branch --list "$(printf '%s' "$task" | tr 'A-Z' 'a-z')-*" --format='%(refname:short)' | head -1)"
+    branch="$(git -C "$FM_TARGET_ROOT" branch --list "$(printf '%s' "$task" | tr 'A-Z' 'a-z')-*" --format='%(refname:short)' | head -1)"
     [ -n "$branch" ] || continue
     round="$(jq -r --arg t "$task" 'select(.type=="review_opened" and .task==$t)|.task' "$FM_STATE_DIR/events.jsonl" 2>/dev/null | wc -l | tr -d ' ')"
     round=$(( round + 1 ))
@@ -145,11 +145,13 @@ turn() {
         || { say "$task: protocol violation in round $round"; continue; }
     fi
 
+    verified_head="$(fm_binding head --task "$task" --pr "$pr" --branch "$branch")" || {
+      say "$task: authoritative head unknown or stale; refresh before accepting"; continue; }
     "$B/fm-gate.sh" --task "$task" --repo "$REPO" --branch "$branch" --pr "$pr" >/dev/null 2>&1 </dev/null
     g=$?
     if [ "$g" -eq 0 ]; then
       # all six green: the captain decides, nobody else
-      merge_card "$task" "$pr"
+      merge_card "$task" "$pr" "$verified_head"
     elif [ "$g" -eq 7 ]; then
       # every gate before 7 is green (3 is retired, T-114)
       say "$task: gates 1, 2, 4, 5 and 6 green, sending it to review (round $round)"
