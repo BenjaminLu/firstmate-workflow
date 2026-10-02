@@ -23,6 +23,7 @@ class CrewConventions(unittest.TestCase):
         self.home=Path(self.tmp.name)
         evidence=dict(repository='owner/app',base='main',source='github',pulls=[],commits=[],repository_info={'allow_squash_merge':True,'allow_merge_commit':False,'allow_rebase_merge':False,'delete_branch_on_merge':False},protection={'status':'unknown'})
         approve(self.home,evidence,infer(evidence),dict(confirmed=True,policy_confirmed=True,captain='captain',intent='Private intent',product='Private product brief',required_checks=['Drone'],contract={'check':'true'},review='external',post='comments'))
+        (self.home/'config.yaml').write_text('projects:\n  app:\n    github: owner/app\n    base: main\n    required_check: Drone\n')
         (self.home/'note').write_text('Private worker report\n')
         (self.home/'gh').write_text('''#!/usr/bin/env python3
 import json,sys

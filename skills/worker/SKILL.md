@@ -5,6 +5,15 @@ description: Implement one explicitly dispatched task within its worktree and sc
 
 # Worker
 
+The launcher supplies your role and exact project/task identity. An explicitly
+dispatched role overrides native startup routing. Use the prompt's approved
+spec and scope, bounded design/context, complete pinned gate contract and whole
+CONVENTIONS.md. Engine files need not exist in the target checkout; do not look
+for engine-relative roles or design there. A visible trimming notice means
+coverage is incomplete: request the relevant omitted context before relying on
+it. The frozen launcher owns publication outside the round, following the
+project's post policy; writing a report does not prove it was published.
+
 You are one crew member on one task. You get a worktree of your own, a task
 spec, and the part of the design that bears on it. You do not see the rest of
 the crew and you do not need to.
@@ -107,7 +116,7 @@ The rebuild leaves the worktree detached until the script commits, so
 commit in it yourself: a round whose HEAD moved off the rebuild base is
 refused.
 
-In a rebuilt round your own task entry is frozen: your file
+In a rebuilt self-project round your own task entry is frozen: your file
 `design/tasks/<id>.json` (T-090). The script carries it through exactly as
 your previous head had it; do not rewrite it while resolving. A rebuilt
 round that changes it is refused like one that leaves a marker. If the

@@ -1017,3 +1017,20 @@ it in the task branch before review. A proposal remaining only under
 Untracked merge cards verify `--expected-head` against GitHub when raised;
 they have no task-specific gate receipt, but still enforce that same SHA at
 merge time and through GitHub's atomic `--match-head-commit` check.
+
+
+### Portable project prompt handoff (T-052)
+
+Work from the engine root and pass `--project` to supported operations on a
+selected project. Use the frozen launcher's prompt to carry the approved pin,
+whole conventions, complete gate contract and exact project/task/base/head
+identity into the target; do not require engine roles or design files there.
+Design excerpts have a 48000 UTF-8 byte cap with source size, hash and visible
+trimming. Supply relevant omitted sections through private local context before
+a crew member must decide from them. Keep reviewer input limited to the spec,
+design, conventions, diff, machine evidence and authentic standing list; never
+include worker reasoning. A model provenance receipt is not head freshness.
+Self default and explicit self project use the same prompt shape. Routine fair
+no-project dispatch remains conditional on T-053; report unsupported paths
+until implemented. Allocate decision IDs through `fm-decide.sh --allocate`,
+never a handpicked range.

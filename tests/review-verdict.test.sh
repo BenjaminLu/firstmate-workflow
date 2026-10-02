@@ -156,6 +156,7 @@ mkdir -p "$recover/bin" "$recover/design/tasks" "$recover/skills/reviewer" "$rec
 cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" "$ROOT/bin/fm-herdr.py" "$recover/bin/"; project_storage_fixture "$recover/bin/"
 cp -r "$ROOT/bin/adapters" "$recover/bin/"
 cp -R "$ROOT/bin/lib" "$recover/bin/"   # the lifeline a round's runner holds (T-151)
+binding_service_fixture "$recover"
 cp "$ROOT/skills/reviewer/SKILL.md" "$recover/skills/reviewer/"
 printf '{"id":"T-Z","title":"z","scope":["src/**"],"depends_on":[],"acceptance":["a"]}\n' > "$recover/design/tasks/T-Z.json"
 printf '## 6. Gates\n\n## 8. Board\n' > "$recover/design/design.md"

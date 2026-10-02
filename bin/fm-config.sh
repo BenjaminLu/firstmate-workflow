@@ -1780,13 +1780,21 @@ fm_pin() { python3 "$_fm_code_dir/lib/fm_spec_pins.py" "$@"; }
 fm_pin_existing() { # task; absent is 3, corrupt is 65 (never a fallback)
   fm_pin resolve --task "$1" --if-present
 }
+fm_prompt_design() { # trusted project design path, never relative to the target
+  python3 "$_fm_code_dir/lib/fm_prompt_context.py" design "$1" "${2:-}" "${TASK:-}"
+}
+fm_prompt_identity() { # role checkout-head merge-base
+  local project
+  project="$(fm_project_resolve "${FM_PROJECT:-}")" || return 65
+  printf '\n# Launcher project context\n\n'
+  printf 'You are the explicitly dispatched %s; this role overrides native startup routing.\n' "$1"
+  printf 'Project: `%s`; task: `%s`; base branch: `%s`.\n' "$project" "$TASK" "$BASE"
+  printf 'Checkout/head SHA: `%s`; merge-base SHA: `%s`.\n' "${2:-unknown}" "${3:-unknown}"
+  printf 'Use the supplied approved spec, design, gate contract and whole conventions.\n'
+  printf 'Engine scripts and role files need not exist in the target checkout.\n'
+  printf 'The frozen launcher owns commits, pushes and policy-controlled publication outside this round.\n'
+}
 fm_pin_prompt() {
   [ -n "${FM_SPEC_PIN_JSON:-}" ] || return 0
-  printf '\n# Approved spec pin\n\n'
-  jq '{project,task,version,engine_commit,target_base_commit,source,approval_binding,
-       approval:(.approval|{decision,author,time,kind}),contract}' <<<"$FM_SPEC_PIN_JSON"
-  printf '\n# Approved design\n\n'
-  jq -r '.snapshots.design.text' <<<"$FM_SPEC_PIN_JSON"
-  printf '\n# Approved CONVENTIONS.md\n\n'
-  jq -r '.snapshots.conventions.text' <<<"$FM_SPEC_PIN_JSON"
+  python3 "$_fm_code_dir/lib/fm_prompt_context.py" pin "${1:-}" <<<"$FM_SPEC_PIN_JSON"
 }
