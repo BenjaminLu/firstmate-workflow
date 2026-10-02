@@ -47,7 +47,7 @@ chmod +x "$d/bin/fm-merge.sh"
 
 # Explicit legacy fixture: the route must keep old pending records readable.
 mkdir -p "$d/state/pending"
-printf '%s\n' '{"id":"D-1","task":"T-A","kind":"merge","title":"merge it?","pr":16}' > "$d/state/pending/D-1.json"
+printf '%s\n' '{"id":"D-1","task":"T-A","kind":"merge","title":"merge it?","pr":16,"expected_head":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' > "$d/state/pending/D-1.json"
 # The kernel picks the port and the server says which one it got. A RANDOM
 # range overlapped the other suites' ranges, and with the gate running suites
 # side by side a readiness loop could be answered by somebody else's board.
@@ -113,6 +113,8 @@ assert_ok "test -f '$d/state/decisions/D-1.json'" "the answer lands as a file, w
 assert_eq "A" "$(jq -r .chosen "$d/state/decisions/D-1.json")" "with the choice"
 assert_eq "T-A" "$(jq -r .task "$d/state/decisions/D-1.json")" "and the task it belongs to"
 assert_eq "merged" "$(settled D-1)" "the record says merged once the merge script exits"
+assert_contains "$(cat "$d/state/merge-calls")" "--expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "board forwards the card SHA unchanged"
+assert_eq aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "$(jq -r .expected_head "$d/state/decisions/D-1.json")" "decision retains exact candidate SHA"
 assert_contains "$(cat "$d/state/merge-calls")" "--pr 16" "merge called the merge script with the pull request"
 assert_contains "$(cat "$d/state/merge-calls")" "--task T-A" "and the task"
 assert_fail "test -f '$d/state/pending/D-1.json'" "the pending decision is cleared"

@@ -94,8 +94,9 @@ case "${1-}:${2-}" in
         fi
         IFS=$'\t' read -r _ head title state <<<"$line"
         jq -cnS --argjson n "$n" --arg h "$head" --arg t "$title" --arg s "$state" \
+          --arg oid "$(git rev-parse "$head^{commit}" 2>/dev/null || true)" \
           --arg f "$(arg --json "$@")" \
-          '{number:$n, headRefName:$h, title:$t, state:$s} as $d
+          '{number:$n, headRefName:$h, headRefOid:$oid, title:$t, state:$s} as $d
            | reduce ($f|split(","))[] as $k ({}; .[$k] = $d[$k])' | emit_json
         ;;
     esac

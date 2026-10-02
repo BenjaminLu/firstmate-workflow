@@ -1499,6 +1499,17 @@ const settle = (id: string, merge: "merged" | "failed", reason = "") => {
   try { settleAvailable(id, merge, reason); }
   catch { unknownOutcome.add(id); }
 };
+// Raw diagnostics stay in data.reason; each board summary has authored text.
+const mergeFailureTw = (reason: string): string => {
+  if (reason === "Merge helper unavailable") return "無法啟動合併程式";
+  if (reason === "the merge helper stopped before recording an outcome") return "合併程式在記錄結果前已停止";
+  if (reason.includes("missing verified candidate SHA")) return "缺少已驗證的候選版本 SHA";
+  if (reason.includes("PR head changed or is unverifiable")) return "PR 版本已變更或無法驗證；請更新審核與關卡";
+  if (reason.includes("GitHub refused")) return "GitHub 拒絕合併指定版本；請重新確認 PR 狀態";
+  if (reason.includes("candidate")) return "候選版本的審核或關卡證據無法驗證";
+  if (reason.startsWith("the merge helper exited")) return "合併程式未成功完成；請查看錯誤紀錄";
+  return "合併未完成；請查看錯誤紀錄以確認原因";
+};
 const settleAvailable = (id: string, merge: "merged" | "failed", reason: string) => {
   const file = responseFile(id);
   const d = readJson<Record<string, any>>(file);
@@ -1514,6 +1525,11 @@ const settleAvailable = (id: string, merge: "merged" | "failed", reason: string)
     // the marker goes with the record, before anything else is done:
     // a reader that sees the outcome never sees the turn still held
     release();
+    if (merge === "failed") emitCaptain(["--type", "decision_made", ...(d.task ? ["--task", d.task] : []),
+      ...onProjectOf(projectOf(d)), "--data", JSON.stringify({ decision: id, chosen: d.chosen,
+        merge, outcome: "failed", reason, expected_head: d.expected_head }),
+      "--en", `${id}: merge ${merge}${reason ? `: ${reason}` : ""}`,
+      "--tw", `${id}：合併失敗：${mergeFailureTw(reason)}`]);
     pushWake(id, "merge_settled", readJson(file));
   }
   release();
@@ -1526,7 +1542,7 @@ const HELPER_STOPPED = "the merge helper stopped before recording an outcome";
 // Start the helper for an answered merge card. Owned by the session (T-151),
 // with its output in a file: a board restarting under bun --watch neither
 // kills it nor leaves it writing into a closed pipe.
-const startMerge = (id: string, project: string, pr: number, task: string | null, onProject: string[], untracked = false) => {
+const startMerge = (id: string, project: string, pr: number, task: string | null, onProject: string[], untracked = false, expectedHead = "") => {
   const merging = join(stateDir(project), "merging");
   mkdirSync(merging, { recursive: true });
   const log = join(merging, `${project || "_default"}.out`);
@@ -1535,7 +1551,7 @@ const startMerge = (id: string, project: string, pr: number, task: string | null
     const fd = openSync(log, "w");
     try {
       child = startOwned("fm-merge.sh", [join(ROOT, "bin/fm-merge.sh"),
-        "--pr", String(pr), ...(untracked ? ["--untracked"] : task ? ["--task", task] : []), ...onProject, "--repo", ROOT],
+        "--pr", String(pr), ...(untracked ? ["--untracked"] : task ? ["--task", task] : []), ...onProject, "--repo", ROOT, ...(expectedHead ? ["--expected-head", expectedHead] : [])],
         fd, childEnv());
     } finally { closeSync(fd); }
   } catch { settle(id, "failed", "Merge helper unavailable"); return; }
@@ -2054,7 +2070,7 @@ const server = Bun.serve({
         if (merging && mergeRunningIn(projectOf(p)))
           return json({ error: "a merge is already running in this project", code: "mergeBusy", project: projectOf(p) || null }, 409);
         const decision: Record<string, unknown> = {
-          id, chosen, task: p?.task ?? null, pr: typeof p?.pr === "number" ? p.pr : null, kind: p?.kind ?? "choice",
+          id, chosen, expected_head: p.expected_head ?? null, binding: p.binding ?? null, task: p?.task ?? null, pr: typeof p?.pr === "number" ? p.pr : null, kind: p?.kind ?? "choice",
           ...(project ? { project } : {}),
           ...(chosen === "custom" ? { text } : {}),
           note: typeof body?.note === "string" ? body.note.slice(0, 500) : "",
@@ -2115,7 +2131,7 @@ const server = Bun.serve({
         } catch { /* the durable decision still exists; report the event failure */ }
 
         // the helper runs in the background; the answer does not wait for it
-        if (merging) startMerge(id, projectOf(p), p.pr, mergeTask, onProject, untracked);
+        if (merging) startMerge(id, projectOf(p), p.pr, mergeTask, onProject, untracked, typeof p.expected_head === "string" ? p.expected_head : "");
         const pf = join(stateDir(cardProject), "pending", `${id}.json`);
         if (existsSync(pf)) unlinkSync(pf);
         const stored = readJson<Record<string, unknown>>(file) ?? decision;

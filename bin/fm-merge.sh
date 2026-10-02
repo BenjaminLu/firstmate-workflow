@@ -38,9 +38,10 @@ _fm_grammar="$(dirname "${BASH_SOURCE[0]}")/fm-emit.sh"
 # shellcheck source=bin/fm-emit.sh
 . "$_fm_grammar"
 
-REPO="${FM_ROOT:-$(pwd)}"; PR=''; TASK=''; PROJECT=''; UNTRACKED=''; GH="${FM_GH:-gh}"
+REPO="${FM_ROOT:-$(pwd)}"; PR=''; TASK=''; PROJECT=''; UNTRACKED=''; EXPECTED_HEAD=''; GH="${FM_GH:-gh}"
 while [ $# -gt 0 ]; do
   case "$1" in
+    --expected-head) fm_need "fm-merge" "$@"; EXPECTED_HEAD="${2-}"; shift 2 ;;
     --pr) fm_need "fm-merge" "$@"; PR="${2-}"; shift 2 ;;
     --task) fm_need "fm-merge" "$@"; TASK="${2-}"; shift 2 ;;
     --untracked) UNTRACKED=1; shift ;;
@@ -78,10 +79,16 @@ if [ -n "$PROJECT" ]; then
   ON=(--repo "$github")
 fi
 
+[[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] || {
+  echo 'fm-merge: missing verified candidate SHA / 缺少已驗證的候選版本 SHA' >&2; exit 1; }
+
 # One read: its state, and what its branch and title say it belongs to.
-view="$($GH pr view "$PR" ${ON[@]+"${ON[@]}"} --json state,headRefName,title 2>/dev/null </dev/null || true)"
+view="$($GH pr view "$PR" ${ON[@]+"${ON[@]}"} --json state,headRefName,title,headRefOid 2>/dev/null </dev/null || true)"
 state="$(jq -r '.state // empty' 2>/dev/null <<<"$view" || true)"
 [ -n "$state" ] || { echo "fm-merge: cannot read #$PR" >&2; exit 1; }
+actual_head="$(jq -r '.headRefOid // empty' <<<"$view")"
+[ "$actual_head" = "$EXPECTED_HEAD" ] || {
+  echo 'fm-merge: PR head changed or is unverifiable; refresh review and gates / PR 版本已變更或無法驗證；請更新審核與關卡' >&2; exit 1; }
 branch="$(jq -r '.headRefName // empty' <<<"$view")"
 title="$(jq -r '.title // empty' <<<"$view")"
 owner="$(fm_task_of_pr "$branch" "$title" || true)"
@@ -118,8 +125,16 @@ case "$state" in
   *) echo "fm-merge: #$PR is $state, not open" >&2; exit 1 ;;
 esac
 
-$GH pr merge "$PR" ${ON[@]+"${ON[@]}"} "${merge_args[@]}" >/dev/null 2>&1 </dev/null || {
-  echo "fm-merge: GitHub refused the merge of #$PR${PROJECT:+ in $PROJECT}" >&2; exit 1; }
+if [ -z "$UNTRACKED" ]; then
+  fm_binding candidate --task "$TASK" --pr "$PR" --head "$EXPECTED_HEAD" >/dev/null || {
+    echo 'fm-merge: candidate lacks current signed readiness / 候選版本缺少有效的已簽署就緒證據' >&2; exit 1; }
+fi
+
+if ! merge_output="$($GH pr merge "$PR" ${ON[@]+"${ON[@]}"} "${merge_args[@]}" --match-head-commit "$EXPECTED_HEAD" 2>&1 </dev/null)"; then
+  merge_reason="$(printf '%s' "$merge_output" | tr '\r\n' '  ')"
+  echo "fm-merge: GitHub refused the bound merge of #${PR} / GitHub 拒絕合併指定版本 #${PR}: ${merge_reason:-no response / 無回應}" >&2
+  exit 1
+fi
 
 if [ -n "$UNTRACKED" ]; then
   FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor captain --type merged --pr "$PR" \

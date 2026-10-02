@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib/project-storage.sh"
 # shellcheck source=tests/lib/board.sh
 . "$ROOT/tests/lib/board.sh"
+. "$ROOT/tests/lib/binding-fixture.sh"
 XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
 # --- T-118: every card sits where its task really is -------------------------
 # An answered card leaves the captain's lane; the effect an answer names is
@@ -19,6 +20,7 @@ x="$(safe_tmpdir)"; mkdir -p "$x/bin" "$x/state/pending" "$x/state/runs" "$x/sta
 # fm-herdr.py: the stop path park and drop run (T-144)
 cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-decide.sh" "$ROOT/bin/fm-herdr.py" "$x/bin/"; project_storage_fixture "$x/bin/"
 cp -R "$ROOT/bin/lib" "$x/bin/"   # the lifeline the board starts merges and rounds under (T-151)
+binding_service_fixture "$x"
 cp "$ROOT/board/server.ts" "$x/board/"
 cp "$ROOT/board/public/index.html" "$x/board/public/"
 fm_tasks_write /dev/stdin "$x/design/tasks" <<'J'
@@ -119,7 +121,8 @@ card() {   # card <id> <task> <kind> <effect JSON or null> [pr]
     ({A:{description:"do A",pros:"p",cons:"c"},B:{description:"do B",pros:"p",cons:"c"},C:{description:"do C",pros:"p",cons:"c"}}) as $o
     | {title:"judge",explanation:"e",before:"b",after:"a",outcome:"o",options:$o} as $l
     | {en:$l,"zh-TW":$l} + (if $effect == null then {} else {effect:$effect} end)' > "$x/details-$1.json"
-  FM_GH="$x/bin/gh" FM_ROOT="$x" FM_PROJECT='' bash "$x/bin/fm-decide.sh" --request "$1" --task "$2" --kind "$3" ${5:+--pr "$5"} \
+  local head_args=(); [ "$3" = choice ] || head_args=(--expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+  FM_GH="$x/bin/gh" FM_ROOT="$x" FM_PROJECT='' bash "$x/bin/fm-decide.sh" ${head_args[@]+"${head_args[@]}"} --request "$1" --task "$2" --kind "$3" ${5:+--pr "$5"} \
     --details "$x/details-$1.json" --repo "$x" > "$x/decide-$1.out" 2>&1
 }
 answer() {   # answer <id> <choice>: the HTTP status, the body in $x/post

@@ -79,8 +79,8 @@ assert_contains "$sent" "No gate summary for head $head1" "a missing gate summar
 # this head's gate summary, verbatim and whole, when state/ has one. Its
 # lines are written by fm-gate.sh's own say(), not by hand from the reader:
 # a fixture copied from the code that parses it proves only that the two agree
-eval "$(sed -n 's/^say()/gate_say()/p' "$ROOT/bin/fm-gate.sh")"
-declare -F gate_say >/dev/null || { echo "fm-gate.sh has no one-line say()" >&2; exit 1; }
+eval "$(sed -n '/^say() {/,/^}/p' "$ROOT/bin/fm-gate.sh" | sed 's/^say()/gate_say()/')"
+declare -F gate_say >/dev/null || { echo "fm-gate.sh has no say()" >&2; exit 1; }
 gates="$rc/state/gates/T-Z-$head1.txt"
 mkdir -p "$rc/state/gates"
 { for g in 1 2 4 5 6 7; do gate_say '+' "$g" "GATE_LINE_$g"; done

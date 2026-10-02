@@ -34,7 +34,6 @@ _fm_argv=("$@")
 
 REPO=''; TASK=''; BRANCH=''; PR=''; ONLY=''
 BASE="${FM_BASE:-main}"
-GH="${FM_GH:-gh}"
 
 # see fm_need in bin/fm-config.sh for why: `shift 2` with one argument
 # left does not shift, and the loop spins. The arguments are read before
@@ -58,7 +57,12 @@ done
 [ "$ONLY" != 3 ] || {
   echo "fm-gate: gate 3 is retired; the required GitHub check it duplicated is gate 6" >&2; exit 64; }
 
-say()  { printf '  %s gate %s: %s\n' "$1" "$2" "$3"; }
+say() {
+  printf '  %s gate %s: %s\n' "$1" "$2" "$3"
+  if [ -n "${GATE_TRANSCRIPT:-}" ]; then
+    printf '  %s gate %s: %s\n' "$1" "$2" "$3" >> "$GATE_TRANSCRIPT"
+  fi
+}
 want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 
 g() {   # g <n> <description> ; body reads stdin-free, returns 0/1
@@ -143,6 +147,23 @@ fm_target_validate || exit 65
 BASE="${FM_BASE:-$BASE}"
 cd "$FM_TARGET_ROOT" || { echo "fm-gate: no repo at $FM_TARGET_ROOT" >&2; exit 64; }
 
+# Freeze every gate to the same authoritative SHA. A stale local task ref is
+# refused, never silently replaced by a newer, ungated candidate.
+VERIFIED_HEAD=''; TASK_REF="$BRANCH"
+if [ -n "$PR" ] && { [ -z "$ONLY" ] || [ "$ONLY" = 6 ]; }; then
+  VERIFIED_HEAD="$(fm_binding head --task "$TASK" --pr "$PR" --branch "$BRANCH")" || exit 6
+  BRANCH="$VERIFIED_HEAD"
+  if [ -z "$ONLY" ]; then
+    mkdir -p "$FM_STATE_DIR/gates" || exit 70
+    GATE_TRANSCRIPT="$FM_STATE_DIR/gates/.$TASK-$VERIFIED_HEAD-$$.txt"
+    printf 'HEAD:%s\n' "$VERIFIED_HEAD" > "$GATE_TRANSCRIPT"
+    trap 'mv "$GATE_TRANSCRIPT" "$FM_STATE_DIR/gates/$TASK-$VERIFIED_HEAD.txt"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
+  fi
+fi
+
 # ---- 1. the branch exists and carries work -------------------------------
 gate1() {
   git rev-parse --verify "$BRANCH" >/dev/null 2>&1 || return 1
@@ -159,7 +180,11 @@ gate2() {
     w="$(mktemp -d)"
   fi
   git worktree add -q --detach "$w" "$BRANCH" 2>/dev/null || { rm -rf "$w"; return 1; }
-  ( cd "$w" && git rebase "$BASE" >/dev/null 2>&1 ); rc=$?
+  if [ "$(git -C "$w" rev-parse HEAD)" = "$(git rev-parse "$BRANCH")" ]; then
+    ( cd "$w" && git rebase "$BASE" >/dev/null 2>&1 ); rc=$?
+  else
+    rc=1
+  fi
   ( cd "$w" && git rebase --abort >/dev/null 2>&1 )
   git worktree remove --force "$w" >/dev/null 2>&1; rm -rf "$w"
   return "$rc"
@@ -209,7 +234,7 @@ is_num() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
 gate6() {
   is_num "$PR" || return 1
-  $GH pr checks "$PR" --required >/dev/null 2>&1
+  fm_binding checks --task "$TASK" --pr "$PR" --head "$VERIFIED_HEAD" >/dev/null
 }
 
 # ---- 7. the reviewer signed, and it was the reviewer ---------------------
@@ -237,7 +262,15 @@ gate7() {
   head="$(git rev-parse --verify -q "$BRANCH^{commit}")" || return 1
   mb="$(git merge-base "$BASE" "$BRANCH")" || return 1
   patch="$(patch_of "$mb" "$head")"
-  fm_evidence gate --head "$head" --patch "$patch"
+  if [ "$FM_EXTERNAL" = 1 ]; then
+    local policy
+    policy="$(fm_conventions review)" || return 1
+    if [ "$policy" != fm ]; then
+      fm_binding external-review --task "$TASK" --pr "$PR" --head "$head" >/dev/null || return 1
+      [ "$policy" != external ] || return 0
+    fi
+  fi
+  fm_evidence gate --head "$head" --base "$mb" --patch "$patch" --code "${FM_CODE_ROOT:-$REPO}"
 }
 
 g 1 "branch exists and carries commits"          gate1
@@ -245,6 +278,10 @@ g 2 "rebases onto $BASE cleanly"                 gate2
 g 4 "diff stays inside the declared scope"       gate4
 g 5 "reverting the implementation turns tests red" gate5
 g 6 "the required GitHub check is green"         gate6
-g 7 "local reviewer approval:$TASK"          gate7
+g 7 "bound reviewer approval:$TASK"          gate7
+if [ -z "$ONLY" ] && [ -n "$PR" ]; then
+  [ "$(git rev-parse "$TASK_REF^{commit}")" = "$VERIFIED_HEAD" ] || exit 6
+  fm_binding ready --task "$TASK" --pr "$PR" --head "$VERIFIED_HEAD" --gate-report "$GATE_TRANSCRIPT" >/dev/null || exit 6
+fi
 echo "  all six gates green"
 exit 0
