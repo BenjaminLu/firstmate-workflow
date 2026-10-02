@@ -1,0 +1,38 @@
+{
+  "id": "T-125",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [
+    "T-135",
+    "T-139"
+  ],
+  "title": "the board carries the 2.5D voyage: v1 with the ship as a panel above the workflow, the same stage full screen with the workflow inside it, both from the board's own data, the game writing only through the board's authenticated routes, and Esc Esc leaving the plain board with no ship at all",
+  "scope": [
+    "games/voyage-2d/**",
+    "board/server.ts",
+    "board/public/index.html",
+    "board/public/game.js",
+    "board/public/voyage2d/**",
+    "i18n/ui.en.json",
+    "i18n/ui.zh-TW.json",
+    "tests/i18n.test.sh",
+    "tests/board.test.sh",
+    "tests/e2e/board.spec.ts",
+    "tests/e2e/game.spec.ts",
+    "tests/e2e/fixture.ts",
+    "bin/ci.sh",
+    "skills/firstmate/SKILL.md",
+    "README.md",
+    "design/design.md",
+    "design/tasks/T-125.json"
+  ],
+  "acceptance": [
+    "Why. Re-scoped on 2026-09-28 by the captain's decision: the board keeps v1 as the work tool and gains one game engine, the 2.5D voyage, in two sizes - a panel embedded in v1 (\"v2\") and the same stage full screen with the workflow inside it (\"v2.5\"). The 3D game is frozen and is out of scope here, and so is every 'later the 3D one' clause of the first version. The 2.5D game itself is being reworked outside this repository (a much larger ship with rooms, crew who never block the captain, data-only mods; tag v2d-15 in the games repo, the latest as of 2026-10-02); this task vendors that version, not the one first vendored on PR #103, which was closed for that reason. Its own spec file, design/tasks/T-125.json, is committed on this branch. Re-checked by firstmate on 2026-10-02 against main d9cf976 (T-166, T-142): depends on T-135 and T-139 because both change board/server.ts and board/public, and the game must land after them.",
+    "Modes. v1 gains the stage as a panel above the decisions and the lanes, using the game's `?embed=1` mode (the game shows no HUD, menus or decision card of its own; decisions stay on the board). A control and the key F open the same stage full screen, with a drawer holding the lane counts and the waiting decision cards, and Esc returns to the panel. The chosen mode persists per tab (sessionStorage) and never changes data.",
+    "The game in Live mode. `games/voyage-2d` gains the `BoardSource` its interface doc describes, plus a Live build (`tools/build.py --live` → `board/public/voyage2d/`) that the board serves. The Playground build keeps its no-network guarantee, and only the Live build contains fetch or EventSource. In Live mode the game only watches the real crew. The captain's actions go only through the board's existing writing routes, `POST /decisions` and `POST /tasks`. They use the tab's session token, sent as `Authorization: Bearer` with the board's Origin (T-122), and nothing else. There is no new writing route. The game offers only what the board offers: a card's own options and its named effects (T-118), and a task's `actions`. The Live kraken rule, the Playground-only mini-games and captain movement, and the no-writes-in-fights rule stay as the interface doc says. A refused write shows the board's own translated refusal. Test that every request the Live game makes is one of the board's routes, carries the token, and that no other request leaves the page.",
+    "The boss key. Esc pressed twice within about 400 ms, from the board or from inside the stage, removes the stage entirely: the iframe or canvas is unloaded, so no sound, no animation and no timers remain, and only v1's workflow and decision cards are left. The same keys bring the stage back. The state persists per browser (localStorage), so a reload does not bring the ship back unasked.",
+    "Projects. Since T-142 (merged 2026-10-02) the board serves several projects with ?project= and filters the engine-wide view for privacy (T-142 item 6). The stage follows the board's selected project: in the engine-wide view it shows only what /api/state already exposes there, never another project's event text, decision details or crew activity, and its writes name the card's own project exactly as the board's cards do.",
+    "Bundle and hygiene. The board serves the Live bundle as static files. bin/ci.sh runs games/voyage-2d's own test suite (`node --test`) and the build, and refuses a committed `board/public/voyage2d/` bundle that doesn't match a fresh build. The game's node_modules, proofs and build caches are not committed. Fonts are loaded as the board already loads them, with no new third-party origin. README and skills/firstmate/SKILL.md mention the modes and the boss key. design.md describes the seam (BoardSource, the allowed writes) and the 3D follow-up.",
+    "Evidence is the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suite themselves. Stubs answer as the real routes do."
+  ]
+}
