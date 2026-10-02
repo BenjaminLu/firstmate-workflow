@@ -26,18 +26,18 @@ Deferred, not dropped or completed: T-087, T-124, T-129, T-131, T-132, T-133, T-
 | T-142 | T-166 | Storage, validated paths, approved migration; depends on consolidation |
 | T-139 | T-142 | Inspection, private conventions, empty-repo contract |
 | T-049 | T-142, T-139 | Immutable approved private pins and hashes |
-| T-138 | T-142 | Local authentic evidence and authoritative-head binding |
-| T-135 | None | Bounded evidence packs and situation coverage |
+| T-138 | T-142, T-135 | External evidence extension, signing and authoritative-head/patch binding |
+| T-135 | None | Local brief/review loop, bounded packs and situation coverage; first wave |
 | T-050 | T-049, T-138, T-139 | Six project-aware gates, checks and commit statuses |
 | T-051 | T-049, T-142, T-163, T-167 | Stock live dispatch/lifeline integration, isolated execution, head synchronization |
 | T-052 | T-051, T-139, T-135 | Portable bounded prompts, authoritative checkout/evidence context |
 | T-053 | T-050, T-051, T-052 | Fair live-owned concurrency, exact identity and merge turns |
 | T-055 | T-052, T-053, T-054, T-137, T-144 | Actual maker-founder basic pilot and retained real outputs |
-| T-140 | T-138, T-139 | Advanced external reviewers and posting conventions |
+| T-140 | T-138, T-139, T-135 | Advanced external reviewers and posting conventions |
 | T-143 | T-051, T-139 | Advanced stacks and project-specific landing/retention |
 | T-141 | T-138, T-140, T-143, T-144, T-151 | Advanced zero-model pushed supervision |
 
-T-142 → T-166 and T-051 → T-167 are the deliberate additions to the approved draft dependency map, required by T-166 acceptance. T-138 and T-135 can proceed independently of conventions where their dependencies permit; shared worker/reviewer/library files require coordinated ownership and immutable execution snapshots. No dependency on the advanced stack is added to T-055. Existing T-054/T-137/T-144 remain pilot prerequisites. Their operative contracts now use T-151 owned lifelines and pushed completion, T-162 visible Herdr/cmuxOnly routing, and T-164 truthful hook trust/delivery. Optional headless hosts and full detached cmux lifecycle remain deferred; no beacon/PID-polling or advanced-autopilot prerequisite returns.
+T-142 → T-166 and T-051 → T-167 are the deliberate additions to the approved draft dependency map, required by T-166 acceptance. The 2026-10-02 captain revision additionally makes T-138 and T-140 depend on T-135. T-135 proceeds without conventions or external prerequisites; shared worker/reviewer/library files require coordinated ownership and immutable execution snapshots. No dependency on the advanced stack is added to T-055. Existing T-054/T-137/T-144 remain pilot prerequisites. Their operative contracts now use T-151 owned lifelines and pushed completion, T-162 visible Herdr/cmuxOnly routing, and T-164 truthful hook trust/delivery. Optional headless hosts and full detached cmux lifecycle remain deferred; no beacon/PID-polling or advanced-autopilot prerequisite returns.
 
 ## Rule reconciliation
 
@@ -64,15 +64,13 @@ T-163 supported Codex run mode retains confinement, isolated checkout, transport
 
 This consolidation changes no runtime or production scripts. It adds `tests/skills-contract.test.sh`, whose nine assertions check the structure and text of the role-skill rules: managed Codex admission and verdict provenance, approved local briefs with optional PR projection, reviewer provenance/private storage/read-only commands, and authoritative merge-head binding with restricted approval carry-forward. These assertions are this change's fail-first evidence for the role-skill changes because `config.yaml` classes skills as behaviour. They do not prove model compliance or runtime capabilities. Workers do not run suites or ci.sh. Firstmate must obtain actual required CI and six-gate evidence on the authoritative head, including the suite's head-pass/base-fail results for gate 5; CI's separate behaviour classification does not waive that gate. Runtime tasks retain feature-owned fail-first and real acceptance requirements.
 
-Review the task JSON dependency graph for missing nodes/cycles; compare the approved dependency map with the two explicit additions above. Verify each task owns its spec and required runtime integration paths. Search rewritten contracts for stale storage, gate-3, public-only, checkpoint, detached/beacon and local-head assumptions. Check that T-166 preserves the supplied spec apart from the authorized `tests/skills-contract.test.sh` scope addition, T-030 stays parked, and retired tasks are not reintroduced as runnable specs. Structural checks establish these properties only, not delivery, runtime compliance or gate success.
+Review the task JSON dependency graph for missing nodes/cycles; compare the approved dependency map with the two original additions and the two captain-authorized T-135 dependencies above. Verify each task owns its spec and required runtime integration paths. Search rewritten contracts for stale storage, gate-3, public-only, checkpoint, detached/beacon and local-head assumptions. Check that T-166 preserves the supplied spec apart from the authorized `tests/skills-contract.test.sh` scope addition, T-030 stays parked, and retired tasks are not reintroduced as runnable specs. Structural checks establish these properties only, not delivery, runtime compliance or gate success.
 
 ## Round-two contract reconciliation
 
-T-135 leads with the approved project-local brief and checks coverage without a
-GitHub projection in every post mode. T-073 remains a historical implementation
-record; T-138/T-052 own the authenticated local ask/standing-list replacement,
-including SK-007 round-two delivery. Legacy comments still require provenance
-checks; a quoted marker cannot create an authoritative standing list.
+Captain revision, 2026-10-02: “好 T135安排 解耦外部repo convention”, clarified by “不是這個意思 135做完後 review和brief機制要能不依賴外部repo允許我們張貼每一輪工作日誌”. The brief and review loop must work without permission to post round work logs. “現在是第一輪reviewer就要給過關條件” confirms complete pass criteria on every REJECT from round one.
+
+T-135 runs in the first wave beside T-142 with no dependencies. It owns append-only state/evidence/<project>/<task>/ records for brief, pack, worker-report, ask and verdict, carrying project/task/round/actor/kind/head/time and authenticated final-answer provenance for verdicts. The worker reads local briefs and packs; reviewers receive prior rounds and standing lists from round two; gate 7 and fm-protocol.sh read local verdicts with latest-REJECT precedence. Ask only for a missing or unclear list before edits. The project comments/local switch defaults to comments for self compatibility; local mode posts nothing and completes the entire loop. T-138 depends on T-142 and T-135, extends the same records to private FM_HOME storage, adds signing/spec/patch binding and retains atomic merge-head enforcement. T-140 also gains T-135 and adds summary/check/threads projections. No external conventions or advanced stack are prerequisites for T-135. These are adopted implementation requirements, not claims that the readers already ship.
 
 Captain-intent alignment preserves the existing T-034 interaction: selection
 and custom typing stay local; a separate confirmation submits exactly the

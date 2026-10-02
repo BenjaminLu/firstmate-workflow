@@ -70,7 +70,7 @@ These bind every actor, including firstmate itself.
 | Q4 | Board to firstmate | Decision lands as a file; the board pushes the wake as it writes it, and every waiter's own doorbell is rung (T-151; nothing polls) |
 | Q5 | Board stack | Bun + SSE + vanilla HTML, no build step |
 | Q6 | Where determinism ends | Scripts decide whether it ran; models only judge whether it is right |
-| Q7 | Round three | `ASK-PASS-CRITERIA` plus a numbered, closed checklist |
+| Q7 | First REJECT (SK-007) | Complete numbered standing list from round one; ask only if missing or unclear |
 | Q8 | Diagram scope | Only decisions the captain must rule on; reuse existing diagrams first |
 | Q9 | Where pull requests live | `BenjaminLu/firstmate-workflow`, public so branch protection is available; under Q10 a task's pull request lives on its project's repository |
 | Q10 | Which repositories firstmate drives | D-049 chose one engine installation; captain revision 2026-10-01 keeps external private designs, tasks and runtime state under FM_HOME outside the engine, with self compatibility (section 15) |
@@ -1135,7 +1135,7 @@ running unlocked, so every suite that runs the real gate sets its own
 Require all six gates and current-head review evidence before treating a merge
 card as ready. `fm-run.sh` requests a card after gate success, but `fm-review.sh`
 can emit `approved` on an approval substring before that subsequent gate run.
-Gate 7 reads the verdict comments (the reviewer's only, when
+Historical transport until T-135 lands: Gate 7 reads the verdict comments (the reviewer's only, when
 `FM_REVIEWER_LOGIN` is set) and takes the latest; a later rejection supersedes
 an earlier approval. It does not distinguish final from quoted markers, and an
 `APPROVE` with no `REVIEWED:` line (one posted by hand, or before T-113) is
@@ -1230,12 +1230,12 @@ per round from round seven on.
    leaves only by being marked done. The worker fixes every open item in one
    pass.
 4. `ASK-PASS-CRITERIA:<task-id>` stays for a worker who finds no list, or an
-   unclear one. From round three, finding none, the worker posts it in
+   unclear one after a REJECT. Before edits, without a delayed round threshold, the worker writes it in
    `.fm-say.md` for script publication before touching a line and waits; that
    asking round changes no implementation files. The reviewer answers with the
    complete numbered list and `CRITERIA-COMPLETE:<task-id>`.
 5. Report protocol violations to firstmate for board coordination.
-   From round three `bin/fm-protocol.sh` gates the round on a standing list:
+   Historical implementation until T-135: `bin/fm-protocol.sh` gates from round three on a standing list:
    any comment with a numbered list before a standalone
    `CRITERIA-COMPLETE:<task-id>`. It exits 3 only when there is no list and no
    ask, 4 when the worker asked and no list followed, 6 when a re-issued list
@@ -1255,8 +1255,13 @@ per round from round seven on.
    does not prove that a regression or new ground is real. A passing protocol
    check does not establish compliance with this role contract.
 
-The reviewer cannot see the pull request, so the launcher carries the protocol
-across (T-073). From round two (SK-007), given `--pr`, `fm-review.sh` reads the pull
+T-135 replaces the following historical T-073 comment transport with local
+records. Every REJECT supplies criteria from round one; every reviewer from
+round two receives the local standing list and relevant prior rounds, with
+worker reasoning excluded. Gate 7 and fm-protocol.sh consume authenticated
+local verdicts, retain latest rejection precedence and fail with a reason when
+the local verdict is missing; optional comments never replace local authority.
+Until T-135 lands, the legacy launcher carries the protocol as follows (T-073). From round two (SK-007), given `--pr`, `fm-review.sh` reads the pull
 request's comments with `gh` and quotes into the prompt, verbatim, first the
 latest comment holding `ASK-PASS-CRITERIA:<task-id>`, then every comment whose
 numbered list is followed by `CRITERIA-COMPLETE:<task-id>`, in the order
@@ -4559,7 +4564,8 @@ remote while local refs remain stale, green local gates prove no readiness.
 Refresh/refuse on mismatch, remote movement or unreadability. T-051/T-052/T-138
 own regressions for that boundary; check again before presenting/using a card.
 
-T-138's trusted outside-round writer stores append-only local evidence including
+T-135 owns trusted outside-round append-only local round records and their
+worker/reviewer/gate-7/protocol readers. T-138 extends those records with
 attempt, verified head/base, stable patch-id, files, spec/contract hashes,
 reviewer identity/vendor/model, final-answer provenance and text. Model-written
 transport receipts and transcript/quoted approval markers are not authority.
@@ -4567,9 +4573,11 @@ Gate 7 consumes authentic final verdicts and latest rejection precedence. The
 standing list remains numbered, complete and closed; a protocol syntax checker
 cannot authenticate it or prove a regression/new-ground claim semantically.
 T-135 reads the approved local firstmate brief before its bounded context pack,
-with coverage in every post mode. T-138/T-052 replace T-073's historical comment
-transport with authenticated local asks/lists from round two (SK-007); GitHub
-projections are optional. No worker reasoning enters reviewer context.
+with coverage in comments/local modes independent of PR publication. T-135
+replaces T-073 historical comment transport with authenticated local asks/lists;
+every REJECT supplies criteria from round one and later prompts receive them
+from round two (SK-007). T-052 extends external prompts and T-140 adds the
+other projection modes. No worker reasoning enters reviewer context.
 
 Approval may carry across a verified base-only update only if the authoritative
 current stable patch-id remains approved and no later rejection supersedes it.
@@ -4664,15 +4672,19 @@ wake firstmate through supported delivery. It never merges automatically.
 
 ### 15.9 Dependency order and shared-file coordination
 
+Captain revision, 2026-10-02: “好 T135安排 解耦外部repo convention”, clarified by “不是這個意思 135做完後 review和brief機制要能不依賴外部repo允許我們張貼每一輪工作日誌”. The brief and review loop must work without permission to post round work logs. “現在是第一輪reviewer就要給過關條件” confirms complete pass criteria on every REJECT from round one.
+
+T-135 runs in the first wave beside T-142 with no dependencies. It owns append-only state/evidence/<project>/<task>/ records for brief, pack, worker-report, ask and verdict, carrying project/task/round/actor/kind/head/time and authenticated final-answer provenance for verdicts. The worker reads local briefs and packs; reviewers receive prior rounds and standing lists from round two; gate 7 and fm-protocol.sh read local verdicts with latest-REJECT precedence. Ask only for a missing or unclear list before edits. The project comments/local switch defaults to comments for self compatibility; local mode posts nothing and completes the entire loop. T-138 depends on T-142 and T-135, extends the same records to private FM_HOME storage, adds signing/spec/patch binding and retains atomic merge-head enforcement. T-140 also gains T-135 and adds summary/check/threads projections. No external conventions or advanced stack are prerequisites for T-135. These are adopted implementation requirements, not claims that the readers already ship.
+
 Task JSON files are authoritative. T-142 depends on T-166 (the approved plan's
 original empty dependency is intentionally revised to require consolidation).
-Storage T-142 precedes conventions T-139; T-049 needs both. T-138 follows storage;
-T-135 is independent. Evidence and brief work may proceed in parallel with
+Storage T-142 precedes conventions T-139; T-049 needs both. T-138 follows storage and T-135;
+T-135 is independent and first-wave beside T-142. Shared work requires
 explicit shared-file ownership/immutable run snapshots, never live script edits.
 T-050 needs pins/evidence/conventions; T-051 needs pins/storage/T-163/T-167;
 T-052 needs execution/conventions/briefs; T-053 needs gates/execution/prompts.
 T-055 needs T-052/T-053/T-054/T-137/T-144, without advanced-stack prerequisites.
-T-140 needs evidence/conventions; T-143 execution/conventions; T-141 needs
+T-140 needs evidence/conventions/T-135; T-143 execution/conventions; T-141 needs
 T-138/T-140/T-143/T-144/T-151. See the adoption ledger for deferred work.
 
 ### 15.10 Concurrent projects

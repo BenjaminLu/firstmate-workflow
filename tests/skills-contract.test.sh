@@ -44,14 +44,14 @@ assert_lacks "$obsolete_admission" "claude-only run admission" \
 assert_ok 'contract firstmate "managed codex.*current-attempt.*completed-turn.*final output" "authenticated.*review_final" "legacy.*(marker|substring).*not establish final-answer provenance"' \
   "verdict reading distinguishes authenticated Codex finals from legacy markers"
 
-# Project-local evidence is the skills' name for the state/ brief store;
-# do not demand a literal state/ path where the portable prompt supplies it.
-assert_ok 'contract firstmate "approved brief.*project-local evidence.*worker" "(github|pr comment).*optional projection" "non-comment modes must not depend on a pr brief"' \
+# Local round records and optional projection must be stated together;
+# the captain's revision gives T-135 ownership without external prerequisites.
+assert_ok 'contract firstmate "approved brief.*project-local evidence.*worker" "(github|pr comment).*optional projection" "non-comment modes must not depend on a pr brief" "t-135.*records.*append-only.*state/evidence" "comments/local"' \
   "firstmate supplies the approved local brief with optional PR projection"
-assert_ok 'contract worker "approved.*project-local record is authoritative" "pr comment.*optional projection" "no non-comment mode requires a published brief"' \
+assert_ok 'contract worker "approved.*project-local record is authoritative" "pr comment.*optional projection" "no non-comment mode requires a published brief" "t-135.*records append-only.*state/evidence" "comments/local"' \
   "worker starts from the approved local brief with optional PR projection"
 
-assert_ok 'contract reviewer "^## project and run provenance$"' \
+assert_ok 'contract reviewer "^## project and run provenance$" && contract reviewer "t-135.*from round two.*local records" "every reject from round one" "comments/local" "missing local records.*never replaced"' \
   "reviewer has an explicit project and run provenance section"
 assert_ok 'contract reviewer "external private records.*under fm_home" "not the engine or target tree"' \
   "reviewer keeps private external records under FM_HOME"

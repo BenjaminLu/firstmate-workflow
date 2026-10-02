@@ -14,6 +14,7 @@
     "design/tasks.json"
   ],
   "acceptance": [
+    "Historical transport/threshold clarification (captain, 2026-10-02): any PR-comment source or delayed closed-list threshold below describes the earlier implementation, not the adopted contract. SK-007 requires the complete standing list with every REJECT from round one; an ask is only for a missing or unclear list before edits. T-135 owns authenticated local brief/ask/verdict/list records, gate-7/protocol readers and delivery to reviewers from round two. Posting is optional projection. Other historical acceptance remains unchanged; this note claims no runtime implementation.",
     "rounds one and two are not policed",
     "round three with no ASK-PASS-CRITERIA from the worker is a violation, exit 3",
     "a reviewer who never posts CRITERIA-COMPLETE leaves the list open, exit 4",

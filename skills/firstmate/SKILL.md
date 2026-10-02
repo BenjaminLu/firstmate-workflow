@@ -465,10 +465,14 @@ set by the captain.
    request BEHIND and MERGEABLE. A brief that only relays symptoms ("CI is
    red, find out why") is not a brief: rounds with such briefs converged in
    ~20 minutes, rounds without took 30-70 minutes and 150-290 turns, and
-   workers still do not run the suites. Under T-135/T-138, keep the approved
+   workers still do not run the suites. Under T-135, keep the approved
    brief in project-local evidence and supply it to the worker; GitHub is an
-   optional projection only under post: comments. Non-comment modes must not
-   depend on a PR brief or publish one implicitly.
+   optional projection controlled by the project comments/local setting (self defaults
+   to comments). Non-comment modes must not depend on a PR brief or publish one
+   implicitly. T-135 stores brief, pack, worker-report, ask and authenticated verdict
+   records append-only under state/evidence/<project>/<task>/; gate 7 and the
+   protocol reader consume local verdicts and standing lists. T-138 extends
+   external storage and bindings; T-140 adds summary/check/threads projections.
 
 ## Judge a task when it turns ready
 
@@ -536,9 +540,11 @@ go around them with `bin/fm-worker.sh --task` for a first round.
 ## Review and evidence
 
 Apply the [worker](../worker/SKILL.md) and [reviewer](../reviewer/SKILL.md)
-closed-list protocol: from round three ask once before edits, wait for the
-numbered list and completion marker, then satisfy the whole original list.
-Subsequent findings must cite it or identify a newly introduced regression.
+closed-list protocol: every REJECT from round one supplies the complete numbered
+list and completion marker. Ask before edits only if the list is missing or
+unclear, then wait and satisfy the whole standing list. From round two the
+launcher supplies prior lists locally under T-135. Subsequent new findings must
+be labelled REGRESSION or NEW-GROUND; neither can silently replace the list.
 Coordinate protocol violations through the board rather than restarting the list.
 `fm-protocol.sh` performs marker and numeric-reference checks, not semantic review:
 it does not authenticate the ask/completion markers, preserve the first list
@@ -551,7 +557,9 @@ Require final-answer provenance, the configured reviewer identity and evidence
 for the current PR head. Old CI or an old approval does not establish readiness;
 inspect actual required GitHub CI results as well as local checks. If the script
 cannot establish this, report the gap and coordinate remediation before a merge
-card is treated as ready. Gate 7 takes the latest verdict comment, filtering
+card is treated as ready. T-135 makes authenticated local verdict records the
+gate-7 source, with missing records failing explicitly. Until T-135 ships, the
+legacy gate 7 takes the latest verdict comment, filtering
 the author only when `FM_REVIEWER_LOGIN` is set, and binds an APPROVE to the
 change its `REVIEWED:` line records; a later rejection supersedes it. It does
 not reject quoted markers, and an APPROVE with no `REVIEWED:` line (posted by
