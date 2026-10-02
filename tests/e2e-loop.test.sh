@@ -15,6 +15,8 @@ FM_GATE_LOCK="$(mktemp -d)/gate.lock"; export FM_GATE_LOCK
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/local-verdict.sh
+. "$ROOT/tests/lib/local-verdict.sh"
 # shellcheck source=tests/lib/project-storage.sh
 . "$ROOT/tests/lib/project-storage.sh"
 
@@ -224,7 +226,7 @@ cat > bin/adapters/mock.sh <<'M'
 [ "$1" = "run" ] || exit 64
 echo "mock ran" >> "$4"
 if grep -q "Find the reason to reject" "$2"; then
-  printf '%s\nREJECT:T-101\n' "${FM_VERDICT:-round one: name the helper and cover the empty case}" > "$3/verdict.txt"
+  printf '%s\n1. open name the helper\n2. open cover the empty case\nCRITERIA-COMPLETE:T-101\nREJECT:T-101\n' "${FM_VERDICT:-round one: name the helper and cover the empty case}" > "$3/verdict.txt"
   exit 0
 fi
 printf 'implemented\n' > "$3/src/thing"
@@ -259,6 +261,9 @@ assert_ok "git --git-dir='$bare' rev-parse --verify '$branch'" "and it was pushe
 out2="$(run bin/fm-run.sh once --repo "$r" 2>&1)"
 assert_contains "$out2" "sending it to review" "every gate before 7 passes and it goes to review"
 assert_ok "test -s '$GHSTATE/comments.$pr'" "the reviewer commented"
+criteria="$(jq -r 'select(.kind=="verdict") | .text' "$r/state/evidence/self/T-101/"*.json)"
+assert_contains "$criteria" '1. open name the helper' 'the mock reviewer supplies numbered round-one criteria'
+assert_contains "$criteria" 'CRITERIA-COMPLETE:T-101' 'the mock reviewer closes its round-one standing list'
 
 # fm-run must not swallow a review round that produced no verdict. The
 # reviewer is stubbed rather than crashed for real, so the round counter is
@@ -318,7 +323,7 @@ restore_scripts
 # used to interpolate one into JSON by hand, which put a raw control
 # character in the document, and gate 7 then read an approval sitting right
 # there as nothing at all.
-body="$(printf 'Two findings:\n1. the "helper" is unnamed\n2. a path like C:\\tmp is unhandled\nREJECT:T-101')"
+body="$(printf 'Two findings:\n1. open the "helper" is unnamed\n2. open a path like C:\\tmp is unhandled\nCRITERIA-COMPLETE:T-101\nREJECT:T-101')"
 run "$GH" pr comment "$pr" --body "$body" >/dev/null 2>&1
 back="$(run "$GH" pr view "$pr" --json comments --jq '.comments[-1].body')"
 assert_eq "$body" "$back" "a review body with newlines and quotes comes back byte for byte"
@@ -326,7 +331,7 @@ assert_eq "reviewer-1" "$(run "$GH" pr view "$pr" --json comments --jq '.comment
   "and the author is not split off by one of its newlines"
 
 # the reviewer in this fixture signs off
-printf 'reviewer-1\tAPPROVE:T-101\n' >> "$GHSTATE/comments.$pr"
+seed_local_approval "$r" T-101 "$branch" reviewer-1
 
 # The fixture's reviewer signs REJECT before it signs APPROVE, and the round
 # counter is what decides whether the next turn runs the round-three

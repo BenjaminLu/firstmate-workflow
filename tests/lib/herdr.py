@@ -361,6 +361,10 @@ if a[0]=='show':
  p=r/a[-1].split(':',1)[-1]
  if not p.is_file(): sys.exit(128)
  print(p.read_text())
+elif 'rev-parse' in a and a[-1] in ('HEAD', 'work^{commit}'):
+ # A successful head query returns a full object id, never empty stdout.
+ print('a'*40)
+elif a[0]=='merge-base': print('b'*40)
 elif a[0] in ('show-ref','ls-remote'): sys.exit(1)
 elif a[:2]==['worktree','add']:
  pathlib.Path(a[-2]).mkdir(parents=True,exist_ok=True)

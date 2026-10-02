@@ -10,6 +10,11 @@ t="$(safe_tmpdir)"; eng="$t/engine"; export FM_HOME="$t/home"
 mkdir -p "$eng"
 cat > "$eng/config.yaml" <<'YAML'
 default_project: self
+# Allocation below requests imani explicitly. Without pins, the random draw
+# can put imani on the reviewer roster and correctly refuse that request.
+rosters:
+  workers: [imani]
+  reviewers: [ada]
 projects:
   self:
     repo: .
@@ -41,6 +46,8 @@ assert_eq 0 "$?" "Herdr allocates external identity"
 assert_ok "test -f '$run/identity.json'" "identity record exists"
 assert_eq "$store/state/runs" "$(dirname "$run")" "run and recovery records use project state"
 assert_eq private-app "$(jq -r .project "$run/identity.json")" "Herdr keeps project identity separate from actor"
+assert_eq imani "$(jq -r .name "$run/identity.json")" "external worker uses the fixture's pinned worker name"
+assert_ok "test -f '$store/state/crew/rosters.json'" "external roster draw is retained only in project state"
 FM_PROJECT=private-app python3 "$ROOT/bin/lib/fm_lifeline.py" push "$eng" D-private-app-T001-1 answered private >/dev/null
 assert_eq 0 "$?" "private wake can be pushed without a waiter"
 assert_ok "test -f '$store/state/session/wake.jsonl'" "private wake is outside engine"

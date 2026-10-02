@@ -145,7 +145,7 @@ M
     assert_lacks "$promptl" WIDENED_SPEC "firstmate's copy cannot override an implemented task"
   fi
   if [ "$leftover" = spec_pr ]; then
-    assert_contains "$promptl" FIRSTMATE_SCOPE_REPLY "spec-only draft still carries firstmate's reply"
+    assert_lacks "$promptl" FIRSTMATE_SCOPE_REPLY "spec-only draft does not treat a PR comment as an approved brief"
   fi
   safe_rm_rf "$dl"
 done

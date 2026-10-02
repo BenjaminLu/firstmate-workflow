@@ -54,12 +54,34 @@ def compact_history(text, path):
                 f'{first[body]}; body OMITTED, no item or verdict change.\n')
 
     result = pattern.sub(replace, text)
+    # T-135 local records have their own provenance header and nonce, rather
+    # than the historical comment envelope. Preserve every header, including
+    # round/head/reviewer/provenance, even when its body is an exact repeat.
+    local_pattern = re.compile(
+        r'(?m)^(Local review round [^\n]+\n)'
+        r'----- begin ([0-9a-f]+) -----\n(.*?)'
+        r'^----- end \2 -----(?=\n|$)', re.S | re.M)
+    local_matches = list(local_pattern.finditer(result))
+    positions = {}
+    for index, match in enumerate(local_matches):
+        positions.setdefault(match[3], []).append(index)
+    indexes = {match.start(): index for index, match in enumerate(local_matches)}
+
+    def replace_local(match):
+        index = indexes[match.start()]
+        repeats = positions[match[3]]
+        if index in (repeats[0], repeats[-1]):
+            return match[0]
+        return (match[1] + f'exact repeat of local review record {repeats[0] + 1}; '
+                'body OMITTED, no item or verdict change.')
+
+    result = local_pattern.sub(replace_local, result)
     if result != text:
         result += ('\nHistory compaction: only exact repeated bodies omitted; first and last '
                    'occurrences remain verbatim and chronological. A stale re-issued list is '
                    'not permission to drop an original acceptance item. Report conflicts to '
                    'firstmate; no REJECT has been converted into APPROVE.\n'
-                   f'Full selected comment history: {provenance(path, text)}\n')
+                   f'Full selected review history: {provenance(path, text)}\n')
     return result
 
 

@@ -40,6 +40,41 @@ class Context(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root/'prompt.md').read_text(), ''.join(self.parts.values()))
 
+    def local_history(self, bodies):
+        # Consume the writer's actual framing, including per-record nonces.
+        # Shared implementation: bin/lib/fm_evidence.py
+        sys.path.insert(0, str(HELPER.parent))
+        from fm_evidence import Store
+        store = Store(self.root / 'state', 'self', 'T-130')
+        for number, body in enumerate(bodies, 1):
+            store.append('verdict', number, 'reviewer-fixture', 'a' * 40,
+                         body, verdict='REJECT', provenance={'level': 'legacy'})
+        return store.history(reviewer=True)
+
+    def test_local_history_repeats_compact_without_losing_identity_or_criteria(self):
+        original = '1. open ORIGINAL acceptance\nCRITERIA-COMPLETE:T-130\nREJECT:T-130'
+        later = '1. done ORIGINAL acceptance\n2. open NEW-GROUND:T-130 new detail\nCRITERIA-COMPLETE:T-130\nREJECT:T-130'
+        self.parts['history'] = self.local_history([original, later, original, later, original])
+        self.parts['diff'] = '+oversized\n' * 100000
+        result = self.compose()
+        self.assertEqual(0, result.returncode, result.stderr)
+        prompt = (self.root / 'prompt.md').read_text()
+        self.assertIn('exact repeat', prompt)
+        self.assertEqual(2, prompt.count(original))
+        self.assertEqual(2, prompt.count(later))
+        for number in range(1, 6):
+            self.assertIn(f'Local review round {number}, head ' + 'a' * 40, prompt)
+        self.assertEqual(5, prompt.count('reviewer reviewer-fixture, provenance legacy'))
+        archive = Path((self.root / 'evidence-path.txt').read_text())
+        self.assertEqual(self.parts['history'], (archive / 'history.md').read_text())
+
+    def test_distinct_local_criteria_are_never_trimmed_to_fit(self):
+        self.parts['history'] = self.local_history([
+            '1. ' + 'criterion ' * 70000 + '\nCRITERIA-COMPLETE:T-130\nREJECT:T-130'])
+        result = self.compose()
+        self.assertEqual(65, result.returncode, result.stderr)
+        self.assertFalse((self.root / 'prompt.md').exists())
+
     def test_t130_oversize_repeats_stale_lists_and_ci(self):
         original = '1. ORIGINAL acceptance\n2. Preserve evidence\nCRITERIA-COMPLETE:T-130\nREJECT:T-130'
         later = '1. **done** ORIGINAL acceptance\n2. **open** Preserve evidence\n3. REGRESSION:T-130 new detail\n  continuation must survive\nCRITERIA-COMPLETE:T-130\nREJECT:T-130'
