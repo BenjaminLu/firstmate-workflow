@@ -147,10 +147,12 @@ that starts a background process on purpose stops it or ends its owner:
 
 ## Rounds
 
-Start from firstmate's brief on the pull request and the evidence it names —
+Start from firstmate's approved brief supplied in the prompt and the evidence it names —
 the failing assertion, its log lines, the file:line and source around it,
 the verified root cause, the expected change and what must not change —
-before reading files (SK-002). A brief that only relays a symptom is
+before reading files (SK-002). Under T-135/T-138, the approved project-local
+record is authoritative; a PR comment is only an optional projection under
+post: comments. No non-comment mode requires a published brief. A brief that only relays a symptom is
 incomplete; report that back to firstmate rather than hunting from nothing.
 
 Every `REJECT`, from round one, ends with the task's standing list: the

@@ -388,15 +388,15 @@ whatever `merge` it holds by then.
 **A `running` merge whose outcome was never written is recovered by the
 board.** The board is the only writer of `merge`, so it is the one that
 repairs it; `fm-reconcile.sh` does not touch decision records. The helper is
-started under the lifeline, owned by the session (T-151, "Owners and
-wakes"), and the project's merge marker records the decision id,
-the helper's pid and its start time. On start, and again on every poll while
-any record says `running`, the board reads each such record's marker:
+started through T-151's lifeline with the board service as named owner, and
+the project's merge marker records decision, project and owned run identity.
+T-054's adopted recovery contract replaces the older PID-polling proposal:
+completion is writer-pushed, with one reconciliation of durable completion and
+ownership evidence on restart, never a PID/directory polling loop.
 
-- if that pid is alive and is still the helper it started (same start time),
-  the merge is still going: the board leaves the record `running` and waits
-  for that pid to exit, then reads the outcome as below;
-- otherwise the helper is gone without a word, and the outcome is read, never
+- live or uncertain ownership leaves the record `running` and the project
+  turn held until confirmed completion or abandoned ownership;
+- after confirmed completion or abandoned ownership, the outcome is read, never
   guessed: a `merged` event in the log for the card's `(project, pr)` after
   the response makes it `merged`; failing that, `gh pr view --repo <the
   project's github> <pr> --json state` saying `MERGED` makes it `merged`
@@ -406,7 +406,8 @@ any record says `running`, the board reads each such record's marker:
 - if GitHub cannot be read, the record stays `running` and the board shows
   the card as "merge outcome unknown" by name; the project's turn stays held,
   because freeing it on a guess could card a branch against a `base` that has
-  already moved. The next poll tries again.
+  already moved. A later pushed reconciliation or bounded GitHub retry may
+  resolve it; no local liveness polling is introduced.
 
 A board that is down starts no merges, so a turn held while it is down holds
 back nothing that could have run.
@@ -3128,10 +3129,11 @@ global skills.
   directory, never in the repository or `state/`.
 - Adapters may not run git or gh; a worker never holds a GitHub token.
 - The board binds `127.0.0.1` and opens no external port.
-- The repository is public so that branch protection is available, which means
-  nothing secret may enter it — no local paths, no credentials, no customer
-  content. That includes the design and task list of every registered project;
-  section 15.8 names the captain decision private projects are waiting on.
+- The engine repository is public; credentials, customer content and private
+  external designs/task lists must not enter it. The former public-only project
+  restriction is retired: section 15 accepts private repositories and keeps
+  their records under FM_HOME. Unreadable protection is unknown and requires
+  confirmed project checks/policy before readiness.
 - Every crew round runs under one permission policy fm owns (13.1).
 
 ### 13.1 Crew permissions (T-105, T-117)
@@ -4526,6 +4528,12 @@ The board shows all projects by default and filters by `?project=`. Cards and
 crew retain project chips; pending cards sort by request time. Answering one
 card never answers, loses or reorders another project's card. No bulk approval.
 Project greenlights and readiness judgments authorize only their exact tasks.
+Preserve T-034: option selection and custom typing are local, with a separate
+explicit confirmation; custom text is literal bounded data for judgment, never
+an executable command or merge-equivalent A. T-059's direct-order exception
+bypasses only readiness judgment, leaving greenlight, dependencies, park/drop
+and capacity checks intact. T-139 conventions choose card versus handoff;
+T-141 never auto-merges. A recorded order is not proof of a successful merge.
 
 ### 15.5 Immutable pins and authoritative heads
 
@@ -4554,6 +4562,10 @@ transport receipts and transcript/quoted approval markers are not authority.
 Gate 7 consumes authentic final verdicts and latest rejection precedence. The
 standing list remains numbered, complete and closed; a protocol syntax checker
 cannot authenticate it or prove a regression/new-ground claim semantically.
+T-135 reads the approved local firstmate brief before its bounded context pack,
+with coverage in every post mode. T-138/T-052 replace T-073's historical comment
+transport with authenticated local asks/lists from round two (SK-007); GitHub
+projections are optional. No worker reasoning enters reviewer context.
 
 Approval may carry across a verified base-only update only if the authoritative
 current stable patch-id remains approved and no later rejection supersedes it.

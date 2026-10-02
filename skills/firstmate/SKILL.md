@@ -243,18 +243,23 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   protocol. Read their current usage before invocation. Supply the reviewer with
   diff, spec, acceptance, authoritative relevant design and any original closed
   criteria, never worker reasoning or logs. The current review launcher does not
-  supply all that context. Every adapter's verdict is read the same way:
-  `fm-review.sh` takes the attempt's own `final.txt` when Herdr recorded this
-  run as a chain attempt, and the round's combined output directory and log
-  tail otherwise (`attempt_output`, fm-review.sh:618-620), and either way that
-  is substring matching, which does not by itself establish current-head
-  approval. Coordinate these remaining limitations.
+  supply all that context. T-163 managed Codex reviews use the trusted
+  launcher's current-attempt completed-turn JSON final output, authenticated
+  by `review_final`, bound to the isolated checkout and reviewer identity.
+  Prompt echoes, intermediate transcript text and model-written final files
+  cannot supply that verdict. Legacy paths use a matching chain attempt's
+  `final.txt`, or combined output/log tail otherwise; their marker checks do
+  not establish final-answer provenance. Even managed Codex extraction does
+  not establish authoritative remote-head freshness or authenticate arbitrary
+  GitHub comments. Verify those boundaries before accepting a merge candidate.
 - Every review goes through `bin/fm-review.sh`, in the mode `config.yaml`
   declares (`reviewer: mode:`). In `run` mode, which this repository declares,
   the script gives the reviewer a fresh clone of the pull request head outside
-  every worktree, removes it afterwards, and the adapter confines the engine
-  there with the CLI's own permission flags; only adapters that can do that
-  (today `claude`) take a run-mode round. `diff` mode, the default, is the
+  every worktree and cleans it only after confirmed owner completion. Claude
+  and T-163 managed Codex support run mode through trusted checkout admission
+  and confinement, including the required fm OS sandbox. Codex rejects missing
+  or malformed context and unsupported hosts before execution; never silently
+  switch vendor or fall back to diff mode. `diff` mode, the default, is the
   diff-only review. Either way the script emits `review_opened` and then
   `approved` or `review_failed` as the reviewer, so the board shows the reviewer
   and the review lane with no step of yours. Do not launch a reviewer by hand
@@ -262,7 +267,7 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   events yourself; both were stopgaps for the diff-only reviewer and are
   retired. If a run-mode round cannot start (no confining adapter, no checkout),
   report the script's message and coordinate the fix. A run-mode checkout is
-  never swept while its owner round is alive (T-123): liveness is read from a
+  never swept while its owner round is live or ownership is uncertain (T-123): liveness is read from a
   kernel `flock` the round holds on its own checkout's owner file, not
   `kill -0`, whose EPERM under the sandbox used to read a live checkout as
   abandoned. A round whose transcript ends with no signed verdict is retried
@@ -451,7 +456,7 @@ set by the captain.
 6. A worker round needs a brief, not a symptom: firstmate coordinates and
    must hand every worker round the evidence to fix its problem, never make
    the worker hunt (captain, 2026-09-28). Before each round, read the failing
-   checks' logs and the review, open the code, and post a brief naming per
+   checks' logs and the review, open the code, and prepare an approved brief naming per
    item the failing assertion with its log lines, the file:line and source
    around it, the verified root cause, the expected change and what must not
    change; update a BEHIND branch first, and do not run rounds with
@@ -460,7 +465,10 @@ set by the captain.
    request BEHIND and MERGEABLE. A brief that only relays symptoms ("CI is
    red, find out why") is not a brief: rounds with such briefs converged in
    ~20 minutes, rounds without took 30-70 minutes and 150-290 turns, and
-   workers still do not run the suites.
+   workers still do not run the suites. Under T-135/T-138, keep the approved
+   brief in project-local evidence and supply it to the worker; GitHub is an
+   optional projection only under post: comments. Non-comment modes must not
+   depend on a PR brief or publish one implicitly.
 
 ## Judge a task when it turns ready
 
@@ -549,8 +557,8 @@ change its `REVIEWED:` line records; a later rejection supersedes it. It does
 not reject quoted markers, and an APPROVE with no `REVIEWED:` line (posted by
 hand, or before T-113) still passes and binds to no head: the gate says so,
 and it is insufficient until authentic current-change evidence is established. Inspect actual publication receipts and preserve failed projections; a launcher
-exit status alone does not prove publication. T-163 managed Codex final-output
-authentication does not authenticate arbitrary legacy comments.
+exit status alone does not prove publication. Apply the managed-versus-legacy
+provenance distinction in the review instructions above.
 Neither lavish nor no-mistakes is a prerequisite. Do not introduce their startup
 or verification hooks; use repository checks and actual CI evidence.
 
@@ -866,8 +874,8 @@ and commit statuses, six gates 1/2/4/5/6/7, review head/patch/identity/final ans
 and merge candidate must refer to that verified SHA. Recheck after update-branch
 and before landing; stale local green gates do not establish readiness. Preserve
 approval only for unchanged authoritative patch-id with no later rejection.
-Pending CI remains pending. T-163 final-only Codex provenance is supported; it
-does not by itself guarantee remote freshness or authenticate arbitrary comments.
+Pending CI remains pending; apply the review provenance and checkout retention
+rules above in addition to this remote-head verification.
 
 Stock external dispatch must retain a live owned run and visible Herdr view;
 manual relaunch after a dead dispatch is not proof. Keep cmuxOnly and defer full

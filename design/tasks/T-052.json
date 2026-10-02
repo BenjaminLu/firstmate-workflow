@@ -22,7 +22,8 @@
     "tests/**",
     "bin/fm-config.sh",
     "bin/lib/**",
-    "bin/fm-gate.sh"
+    "bin/fm-gate.sh",
+    "bin/fm-protocol.sh"
   ],
   "acceptance": [
     "Why: portable prompts carry launcher-supplied role, approved immutable spec, bounded design/context with explicit cap and visible trimming, complete pinned gate contract, conventions whole, project+task/base and isolated checkout SHA. Trusted frozen launcher owns commit/push/publication outside rounds; no checkpoint command for workers to execute. No target-relative engine-file assumptions.",

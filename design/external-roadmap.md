@@ -37,7 +37,7 @@ Deferred, not dropped or completed: T-087, T-124, T-129, T-131, T-132, T-133, T-
 | T-143 | T-051, T-139 | Advanced stacks and project-specific landing/retention |
 | T-141 | T-138, T-140, T-143, T-144, T-151 | Advanced zero-model pushed supervision |
 
-T-142 → T-166 and T-051 → T-167 are the deliberate additions to the approved draft dependency map, required by T-166 acceptance. T-138 and T-135 can proceed independently of conventions where their dependencies permit; shared worker/reviewer/library files require coordinated ownership and immutable execution snapshots. No dependency on the advanced stack is added to T-055. Existing T-054/T-137/T-144 remain pilot prerequisites.
+T-142 → T-166 and T-051 → T-167 are the deliberate additions to the approved draft dependency map, required by T-166 acceptance. T-138 and T-135 can proceed independently of conventions where their dependencies permit; shared worker/reviewer/library files require coordinated ownership and immutable execution snapshots. No dependency on the advanced stack is added to T-055. Existing T-054/T-137/T-144 remain pilot prerequisites. Their operative contracts now use T-151 owned lifelines and pushed completion, T-162 visible Herdr/cmuxOnly routing, and T-164 truthful hook trust/delivery. Optional headless hosts and full detached cmux lifecycle remain deferred; no beacon/PID-polling or advanced-autopilot prerequisite returns.
 
 ## Rule reconciliation
 
@@ -45,7 +45,7 @@ T-142 → T-166 and T-051 → T-167 are the deliberate additions to the approved
 |---|---|
 | External designs/state inside engine | All private records under FM_HOME/projects/<name>; self paths unchanged |
 | Private repos refused; unreadable protection treated as absent | Private accepted; unknown requires confirmed checks/policy |
-| Seven gates / local gate 3 | Six gates 1,2,4,5,6,7; 3 retired |
+| Old gate count including a separate local check | Six gates 1,2,4,5,6,7; 3 retired |
 | External spec must be committed on engine main | Approved local immutable snapshots with hashes and approval provenance |
 | Reviewer transcript marker proves approval | Authenticated final assistant output, reviewer identity, verified head/patch; preserve closed list |
 | Local task ref is current | Verify authoritative GitHub head, local ref and isolated checkout before evidence/card/merge |
@@ -65,3 +65,21 @@ T-163 supported Codex run mode retains confinement, isolated checkout, transport
 This documentation-only consolidation adds no production scripts or tests. Workers do not run suites or ci.sh. Firstmate must obtain actual required CI and six-gate evidence on the authoritative head; declared docs classification is decided by the gate, not waived here. There is no new behavioral assertion to identify as fail-first for this prose-only diff. Runtime tasks retain feature-owned fail-first and real acceptance requirements.
 
 Review the task JSON dependency graph for missing nodes/cycles; compare the approved dependency map with the two explicit additions above. Verify each task owns its spec and required runtime integration paths. Search rewritten contracts for stale storage, gate-3, public-only, checkpoint, detached/beacon and local-head assumptions. Check that T-166 remains byte-for-byte supplied, T-030 stays parked, and retired tasks are not reintroduced as runnable specs. Structural checks establish these properties only, not delivery, runtime compliance or gate success.
+
+## Round-two contract reconciliation
+
+T-135 leads with the approved project-local brief and checks coverage without a
+GitHub projection in every post mode. T-073 remains a historical implementation
+record; T-138/T-052 own the authenticated local ask/standing-list replacement,
+including SK-007 round-two delivery. Legacy comments still require provenance
+checks; a quoted marker cannot create an authoritative standing list.
+
+Captain-intent alignment preserves the existing T-034 interaction: selection
+and custom typing stay local; a separate confirmation submits exactly the
+selected choice. A custom order preserves literal bounded text for judgment,
+never shell execution or implicit merge approval. T-059 readiness judgment and
+its explicit direct-order exception remain: a direct order bypasses judgment
+only, not dependencies, park/drop, greenlight or capacity. T-139 land/review/post
+policy and T-141's no-auto-merge contract govern external cards; this task
+introduces no new card model or UI. Recorded order acceptance is not successful
+merge evidence.
