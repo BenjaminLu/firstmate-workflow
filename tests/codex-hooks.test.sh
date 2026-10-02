@@ -355,6 +355,36 @@ class CodexHooks(unittest.TestCase):
         out, _ = self.call('Stop')
         self.assertEqual('', out)
 
+    def test_event_context_advances_authorized_followups_before_parking(self):
+        for event in ('SessionStart', 'UserPromptSubmit', 'Stop'):
+            self.push('D-' + event)
+            out, _ = self.call(event)
+            data = json.loads(out)
+            text = data['reason'] if event == 'Stop' else data['hookSpecificOutput']['additionalContext']
+            self.assertIn('D-' + event, text)
+            self.assertIn('advance already authorized actionable follow-ups', text)
+            for action in ('verification', 'review/gates', 'board merge', 'self-update', 'next dispatch'):
+                self.assertIn(action, text)
+            self.assertIn('only when no runnable authorized step remains', text)
+            self.assertIn('exact operator action', text)
+            self.assertIn('does not start an idle conversation', text)
+            self.assertNotIn('then end the turn;', text)
+
+    def test_stop_wait_and_claude_timeout_reassess_actionable_work(self):
+        with patch.object(W, 'inflight', return_value=([], ['legacy-card'])):
+            out, _ = self.call('Stop')
+            self.assertIn('Before parking, advance', json.loads(out)['reason'])
+            self.assertIn('unrelated legacy cards', json.loads(out)['reason'])
+            err = io.StringIO()
+            with patch.object(W, 'payload', return_value={}), patch.object(W.life, 'session_owner', return_value=123), patch.object(W, 'arm', return_value=[]), contextlib.redirect_stderr(err):
+                self.assertEqual(2, W.hook(self.root, 'claude'))
+            self.assertIn('Before parking, advance', err.getvalue())
+            self.assertNotIn('end this turn and', err.getvalue())
+            err = io.StringIO()
+            with patch.object(W, 'payload', return_value={}), patch.object(W.life, 'session_owner', return_value=123), patch.object(W, 'arm', return_value=None), contextlib.redirect_stderr(err):
+                self.assertEqual(0, W.hook(self.root, 'claude'))
+            self.assertEqual('', err.getvalue(), 'owner exit must not request follow-up work')
+
     def test_failed_output_leaves_wake_recoverable(self):
         self.push()
         class Broken(io.StringIO):

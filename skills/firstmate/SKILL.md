@@ -376,8 +376,14 @@ self-wake.
   `bin/fm-watch-arm.sh` itself: `review: T-134 APPROVE 4ea1ec2 #9`,
   `finished: T-134 worker-mira-t134-r1 ok`, `lost: T-134 ...`,
   `gate: T-134 failed gate 6 #9`, `card: D-51 answered A`,
-  `merge: D-51 failed`. Handle each, then end the turn; the next watcher
-  already holds the watch.
+  `merge: D-51 failed`. Handle each event, then advance already authorized
+  actionable follow-ups: verification, review/gates, a concrete board merge
+  within current time-boxed authorization, self-update, and authorized next
+  dispatch. Approval is a trigger to complete acceptance, not a stopping point.
+  A held watcher does not start an idle conversation or prove continued work.
+  End or park only when no runnable authorized step remains; identify the real
+  dependency, event or exact operator action. Unrelated legacy cards do not
+  block actionable work. This is a handoff policy, not a durable task engine.
 - Watcher staging is not delivery. Codex acknowledges emitted queue items
   only after flushing hook output; its last-wake record still says model
   delivery is unverified. A failed output is recoverable, and a crash after
@@ -391,13 +397,18 @@ self-wake.
   in `/hooks` and review the current SessionStart, UserPromptSubmit and Stop
   definitions, then restart/resume if needed. Never fabricate trust, bypass
   it, or force configuration over a disabled feature or managed policy.
+  Finish reviewable work before surfacing the exact native trust action; do
+  not repeat status indefinitely while that action remains unnamed.
   Complete the disposable real-event smoke before declaring repair; a queue
   or acknowledgement file alone is not evidence of conversational delivery.
 - `bin/fm-turnend-guard.sh` refuses a turn end with work in flight and no
   watcher. If it refuses, or a Codex or Cursor Stop hook orders you to
-  park, run `bin/fm-watch-arm.sh --max-wait 3000` in the foreground and
-  handle what it prints; if it runs out with work still in flight, park
-  again the same way.
+  park, first reassess runnable authorized follow-ups. Only when none remain,
+  name the dependency/event/operator action and run
+  `bin/fm-watch-arm.sh --max-wait 3000` in the foreground when an event is
+  expected. Handle its output and reassess after a timeout; a count of crew
+  or cards alone does not establish that parking is the next action.
+  The guard tracks crew/cards, not all firstmate-owned acceptance steps.
 - What is verified, per harness and version, is in
   `docs/verification/supervision.md`: the Claude Code wake mechanism was
   measured on 2.1.284; the Codex and Cursor paths are unverified until you

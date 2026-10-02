@@ -5,6 +5,22 @@ whoever writes the event that needs firstmate; only the way a harness is
 woken differs, and that is what this file records. Nothing here is claimed
 beyond what each entry says was checked, and how.
 
+## Follow through before waiting (T-164)
+
+After handling a wake, firstmate advances already authorized actionable work:
+verification, review/gates, concrete board merge within current authorization,
+self-update and authorized next dispatch. End or park only when no runnable
+authorized step remains, identifying the real dependency, event or exact
+operator action. Unrelated legacy cards do not block independent work. Finish
+reviewable repairs before surfacing the exact native hook trust action.
+
+A held watcher cannot start an idle Codex conversation and does not prove that
+firstmate continues working. The guard's crew/card counts do not track all
+supervisor-owned acceptance steps. Wake and timeout context therefore require
+reassessment before the stock foreground wait; no polling or task engine is
+added. Tests can prove the emitted instructions and retained hook boundaries,
+not that a model follows them. Candidate-specific live acceptance remains required.
+
 ## What is common
 
 - **Writers.** Each appends one item to `state/session/wake.jsonl` and rings
@@ -62,7 +78,7 @@ beyond what each entry says was checked, and how.
     `bin/lib/fm_lifeline.py`), exits 2 with the wake on stderr, and exits 0
     when its owner is gone, taking nothing. Its wait ends 60 s before the
     timeout; if work is still in flight then, it wakes the session once to
-    say so, so that the next turn end parks again.
+    say so and require reassessing authorized follow-ups before parking again.
   - `UserPromptSubmit`: `bin/fm-watch-arm.sh --turn-start claude` adds what
     waits to the turn's context (`hookSpecificOutput.additionalContext`).
 - **Measured by firstmate, 2026-09-29, Claude Code 2.1.284, this Mac**

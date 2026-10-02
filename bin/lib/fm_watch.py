@@ -609,12 +609,23 @@ def wake_text(lines):
     # Codex bounds selection before acknowledgement. Legacy consumers already
     # claimed these lines, so none may be hidden by presentation truncation.
     return ('firstmate wake:\n' + '\n'.join(lines)
-            + '\nHandle each of these, then end the turn; the watch is already held for the next one.')
+            + '\nHandle each event, then advance already authorized actionable follow-ups: '
+            'verification, review/gates, concrete board merge within current authorization, '
+            'self-update and authorized next dispatch. ' + followup_text())
+
+
+def followup_text():
+    return ('End or park only when no runnable authorized step remains; name the real dependency, '
+            'event or exact operator action required. Do not wait on unrelated legacy cards '
+            'instead of actionable work. If native hook trust is required, finish reviewable work '
+            'and surface the exact operator action. A held watcher does not start an idle conversation '
+            'or prove that the supervisor continues working.')
 
 
 def park_text():
-    return ('Work is in flight and nothing is watching for it, so ending this turn now would leave you blind. '
-            f'Run `bin/fm-watch-arm.sh --max-wait {PARK_SECS}` in the foreground and handle what it prints.')
+    return ('Work is in flight. Before parking, advance already authorized actionable follow-ups. '
+            + followup_text() + ' When waiting is the remaining step, run '
+            f'`bin/fm-watch-arm.sh --max-wait {PARK_SECS}` in the foreground and handle what it prints.')
 
 
 def payload():
@@ -643,7 +654,7 @@ def hook(root, harness):
         if not (crew or cards):
             return 0
         print('firstmate: nothing needed you for a day, and work is still in flight; '
-              'end this turn and the hook parks again.', file=sys.stderr)
+              + park_text(), file=sys.stderr)
         return 2
     print(wake_text(lines), file=sys.stderr)
     return 2
