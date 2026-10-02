@@ -79,7 +79,7 @@ class ScheduledConventions(unittest.TestCase):
                 stack.enter_context(patch.object(target,name,value))
             tick=stack.enter_context(patch.object(C,'tick',side_effect=AssertionError('delivery consulted registry')))
             self.assertEqual(W.cycle(self.engine),0)
-            tick.assert_not_called()
+            self.assertFalse(tick.called)
 
     def test_every_project_has_its_own_deadline(self):
         inspect=Mock(return_value=self.e)
