@@ -357,12 +357,20 @@ raise SystemExit(int(os.environ.get('FM_TEST_EXIT','0')))
         self.executable('git', r'''
 import json,os,pathlib,sys
 r=pathlib.Path(os.environ['FM_TEST_ROOT']); a=sys.argv[1:]
-if a[0]=='-C' and a[2] in ('show','merge-base','diff-tree'): a=a[2:]
+if a[0]=='-C' and a[2] in ('show','merge-base','diff-tree','fetch','rev-parse','branch'): a=a[2:]
 if a[0]=='show':
  p=r/a[-1].split(':',1)[-1]
  if not p.is_file(): sys.exit(128)
  print(p.read_text())
-elif 'rev-parse' in a and a[-1] in ('HEAD', 'work^{commit}'):
+elif a[0]=='fetch':
+ refs={'refs/pull/35/head':'a'*40, 'refs/heads/main':'b'*40}
+ if a[-1] not in refs: sys.exit(128)
+ (r/'FETCH_HEAD').write_text(refs[a[-1]])
+ with (r/'binding-fetches').open('a') as f: f.write(a[-1]+'\n')
+elif a[0]=='rev-parse' and a[-1]=='FETCH_HEAD':
+ print((r/'FETCH_HEAD').read_text())
+elif a[0]=='rev-parse' and a[-1]=='main^{commit}': print('b'*40)
+elif 'rev-parse' in a and a[-1] in ('HEAD', 'work^{commit}', 't-035-test^{commit}'):
  # A successful head query returns a full object id, never empty stdout.
  print('a'*40)
 elif a[0]=='merge-base': print('b'*40)
@@ -374,7 +382,16 @@ elif 'status' in a:
 elif a[0]=='diff': print('diff --git a/test b/test\n+change')
 elif a[0]=='branch': print('t-035-test')
 ''')
-        self.executable('gh', "import sys\nprint('https://example.invalid/pull/35' if 'create' in sys.argv else '[]')\n")
+        self.executable('gh', r'''
+import json, sys
+a=sys.argv[1:]
+if a[:2]==['pr','view'] and '--json' in a and a[a.index('--json')+1]=='headRefOid,baseRefOid,baseRefName,headRefName,state':
+ if a[2]!='35': sys.exit(1)
+ print(json.dumps(dict(headRefOid='a'*40, baseRefOid='b'*40,
+                      baseRefName='main', headRefName='t-035-test', state='OPEN')))
+else:
+ print('https://example.invalid/pull/35' if 'create' in a else '[]')
+''')
 
     def executable(self, name, content):
         p=self.fake/name; p.write_text('#!'+sys.executable+'\n'+STATUS_PRELUDE.get(name,'')+content); p.chmod(0o755)

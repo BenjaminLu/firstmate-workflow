@@ -137,6 +137,9 @@ print(json.dumps({'type':'result','result':final,'response':final}))
         (self.repo/'bin/fm-gate.sh').write_text('#!/usr/bin/env bash\nexit 7\n')
         answer=self.invoke('fm-run.sh',['once'])
         self.assertEqual(0,answer.returncode,answer.stderr)
+        self.assertNotIn('authoritative head unknown or stale', answer.stdout + answer.stderr)
+        self.assertEqual(['refs/pull/35/head', 'refs/heads/main'],
+                         (self.repo/'binding-fetches').read_text().splitlines())
         self.assertEqual({'worker','reviewer'},{json.loads(p.read_text())['role'] for p in self.results()})
 
 unittest.main(argv=['herdr', *os.environ.get('FM_TEST_CASES','').split()], verbosity=2)

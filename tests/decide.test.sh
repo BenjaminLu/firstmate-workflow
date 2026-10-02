@@ -1006,7 +1006,15 @@ assert_contains " $(printf '%s ' $reach)" " tests/e2e-loop.test.sh " "the sweep 
 assert_contains " $(printf '%s ' $reach)" " tests/selfupdate.test.sh " "and one that runs fm.sh self-update"
 # Each suite that reaches one is held to a guard it carries, whatever its
 # name: the shared loop that unsets every HERDR_* (and FM_*) before anything
-# runs, HERDR_ENV=0 exported, or its own herdr first on PATH.
+# runs, HERDR_ENV=0 exported (or assigned at Python's top level), or its own
+# herdr first on PATH. Shell exports cannot guard a Python helper directly.
+python_card_guard() {
+  grep -qE "^os\.environ\['HERDR_ENV'\] = '0'[[:space:]]*$"
+}
+assert_ok "python_card_guard <<<\"os.environ['HERDR_ENV'] = '0'\"" "Python top-level disabled Herdr guard is recognised"
+assert_fail "python_card_guard <<<\"os.environ['HERDR_ENV'] = '1'\"" "Python enabled Herdr is not a guard"
+assert_fail "python_card_guard <<<\"    os.environ['HERDR_ENV'] = '0'\"" "conditional Python assignment is not a top-level guard"
+assert_fail "python_card_guard <<<\"# os.environ['HERDR_ENV'] = '0'\"" "commented Python assignment is not a guard"
 for f in $reach; do
   src="$(code "$f")"
   # shellcheck disable=SC2016
@@ -1014,6 +1022,8 @@ for f in $reach; do
     ok=0; how="unsets every HERDR_* before it runs anything"
   elif grep -qE '^export HERDR_ENV=0' <<<"$src"; then
     ok=0; how="exports HERDR_ENV=0"
+  elif [[ "$f" == *.py ]] && python_card_guard <<<"$src"; then
+    ok=0; how="sets HERDR_ENV=0 at Python's top level"
   elif grep -qE "executable\\('herdr'" <<<"$src" && grep -qF 'PATH=str(self.fake)' <<<"$src"; then
     ok=0; how="puts its own herdr first on PATH"
   else
