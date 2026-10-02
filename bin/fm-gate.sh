@@ -197,24 +197,7 @@ gate2() {
 changed() { git diff --name-only "$BASE...$BRANCH"; }
 # ---- 4. the diff stays inside the task's declared scope ------------------
 gate4() {
-  local scopes='' f ok
-  # from the task's own file on the branch: a task that defines itself in
-  # its own diff is otherwise unscoped, and gate 4 would pass anything
-  [ "$FM_EXTERNAL" = 1 ] || scopes="$(fm_task "$TASK" design/tasks "$BRANCH" | jq -r '.scope[]' 2>/dev/null)"
-  [ -n "$scopes" ] || scopes="$(fm_task "$TASK" "$FM_TASKS_DIR" | jq -r '.scope[]' 2>/dev/null)"
-  [ -n "$scopes" ] || return 1          # a task with no declared scope cannot be gated
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    ok=1
-    while IFS= read -r s; do
-      [ -n "$s" ] || continue
-      # shellcheck disable=SC2254
-      case "$f" in $s) ok=0; break ;; esac
-      case "$s" in */\*\*) case "$f" in "${s%/**}"/*) ok=0; break ;; esac ;; esac
-    done <<< "$scopes"
-    [ "$ok" -eq 0 ] || { echo "      out of scope: $f" >&2; return 1; }
-  done <<< "$(changed)"
-  return 0
+  fm_pin scope --task "$TASK" --head "$BRANCH" --base "$BASE" >/dev/null
 }
 
 # ---- 5. the new tests are not vacuous ------------------------------------

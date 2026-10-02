@@ -1715,3 +1715,20 @@ fm_binding() {
   FM_BINDING_REPOSITORY="$github" FM_EVIDENCE_PROJECT="$(fm_evidence_project)" \
     python3 "$_fm_code_dir/lib/fm_binding.py" "$@"
 }
+
+# Approved immutable task snapshots. Storage is resolved by the caller before
+# invoking this one reader; the pin store is never inside an external checkout.
+fm_pin() { python3 "$_fm_code_dir/lib/fm_spec_pins.py" "$@"; }
+fm_pin_existing() { # task; absent is 3, corrupt is 65 (never a fallback)
+  fm_pin resolve --task "$1" --if-present
+}
+fm_pin_prompt() {
+  [ -n "${FM_SPEC_PIN_JSON:-}" ] || return 0
+  printf '\n# Approved spec pin\n\n'
+  jq '{project,task,version,engine_commit,target_base_commit,source,approval_binding,
+       approval:(.approval|{decision,author,time,kind}),contract}' <<<"$FM_SPEC_PIN_JSON"
+  printf '\n# Approved design\n\n'
+  jq -r '.snapshots.design.text' <<<"$FM_SPEC_PIN_JSON"
+  printf '\n# Approved CONVENTIONS.md\n\n'
+  jq -r '.snapshots.conventions.text' <<<"$FM_SPEC_PIN_JSON"
+}

@@ -387,6 +387,8 @@ GH="$ROOT/tests/gh-stub.sh"
 git -C "$g" init -q -b main
 git -C "$g" config user.email a@b.c; git -C "$g" config user.name t
 mkdir -p "$g/design/tasks" "$g/skills/worker" "$g/bin" "$g/tests"
+. "$ROOT/tests/lib/spec-pins.sh"
+echo design > "$g/design/design.md"
 cp "$d/state/skill-updates/SK-001.json" "$g/design/tasks/SK-001.json"
 printf '# Worker\n' > "$g/skills/worker/SKILL.md"
 printf 'x\n' > "$g/bin/thing.sh"
@@ -400,6 +402,7 @@ printf 'project:\n  check: bin/ci.sh\n' > "$g/config.yaml"
 # Private local records must survive every branch checkout below.
 printf 'state/\n' > "$g/.gitignore"
 git -C "$g" add -A; git -C "$g" commit -qm base
+seed_spec_pin "$g" SK-001
 
 git -C "$g" checkout -q -b sk-001-skill
 printf '# Worker\n\nthe new rule.\n' > "$g/skills/worker/SKILL.md"

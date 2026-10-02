@@ -52,7 +52,7 @@ fm-evidence 3
 fm-failfirst 3
 fm-gate 6
 fm-merge 5
-fm-project 1
+fm-project 4
 fm-protocol 5
 fm-ready 4
 fm-reconcile 4
@@ -117,6 +117,11 @@ while read -r name want; do
 --project stop'
     assert_eq "$flags" "$(printf '%s\n' "$cases" | awk '{print $1}' | sort -u)" \
       "fm subcommand probes cover every discovered flag"
+  elif [ "$name" = fm-project ]; then
+    cases='--repo repin
+--project repin
+--task repin
+--decision repin'
   else
     cases="$flags"
   fi
@@ -143,7 +148,7 @@ while read -r name want; do
     fi
   done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "106" "$total" "every pinned flag and all nine fm option cases were exercised"
+assert_eq "109" "$total" "every pinned flag and all nine fm option cases were exercised"
 
 # These flags consume one word, so they are deliberately outside the shift-2
 # count. Probe them without a base ref: parsing must finish at usage, not hang.

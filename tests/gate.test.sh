@@ -14,6 +14,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 . "$ROOT/tests/lib/head-binding.sh"
+. "$ROOT/tests/lib/spec-pins.sh"
 GATE="$ROOT/bin/fm-gate.sh"
 # this suite's own gate lock: it neither waits on a real gate run on this
 # machine nor holds one up, and a run that encloses it (gate 5 of this very
@@ -35,7 +36,10 @@ fixture() {
 {"id":"T-X","scope":["src/**","tests/**","bin/**","config.yaml"]}
 JSON
   echo base > "$d/src/thing.sh"
+  echo design > "$d/design/design.md"
+  printf 'state/\n' > "$d/.gitignore"
   git -C "$d" add -A; git -C "$d" commit -qm base
+  seed_spec_pin "$d" T-X
   printf '%s' "$d"
 }
 # declare <repo> <branch-to-create> <from> ; the new config.yaml arrives on stdin
@@ -77,15 +81,14 @@ mkdir -p "$d/elsewhere"; echo x > "$d/elsewhere/f"; git -C "$d" add -A; git -C "
 git -C "$d" checkout -q main
 assert_fail "gate '$d' wide 4" "4 blocks a diff that reaches outside it"
 
-# The scope comes from the task's own file, design/tasks/<id>.json, on the
-# branch under test (T-090): a branch that widens its task in its own diff
-# is gated by what it declares there, exactly as the shared file was.
+# A branch cannot expand its own approved scope (T-049).
 git -C "$d" checkout -q -b ownfile green
 printf '{"id":"T-X","scope":["src/**","tests/**","bin/**","config.yaml","design/tasks/T-X.json","elsewhere/**"]}\n' \
   > "$d/design/tasks/T-X.json"
 mkdir -p "$d/elsewhere"; echo x > "$d/elsewhere/f"; git -C "$d" add -A; git -C "$d" commit -qm ownfile
 git -C "$d" checkout -q main
-assert_ok "gate '$d' ownfile 4" "4 reads the scope from the task's own file on the branch under test"
+assert_fail "gate '$d' ownfile 4" "4 rejects a branch that widens its own task scope"
+assert_contains "$(said "$d" ownfile 4)" "task entry differs" "4 names the task snapshot mismatch"
 
 # --- gate 5: the one that matters ---------------------------------------
 d="$(fixture)"
@@ -122,8 +125,10 @@ touched() {
   printf 'touch %q/marks/near   # fm-helper.sh, not the helper above\n' "$r" > "$r/tests/near.test.sh"
   printf 'base\n' > "$r/src/thing.sh"
   printf '{"id":"T-X","scope":["src/**","tests/**","config.yaml"]}\n' > "$r/design/tasks/T-X.json"
-  printf 'marks/\n' > "$r/.gitignore"
+  printf 'marks/\nstate/\n' > "$r/.gitignore"
+  echo design > "$r/design/design.md"
   git -C "$r" add -A; git -C "$r" commit -qm base
+  seed_spec_pin "$r" T-X
   printf '%s' "$r"
 }
 t5="$(touched)"
