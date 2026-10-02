@@ -196,6 +196,9 @@ class SpecPins(unittest.TestCase):
         (self.root / 'config.yaml').write_text("""projects:
   firstmate-workflow:
     repo: .
+    github: owner/engine
+    base: main
+    required_check: ci
     project:
       setup: install-tool
       check: run-check
@@ -261,7 +264,8 @@ class SpecPins(unittest.TestCase):
         git(target, 'remote', 'set-url', 'origin', 'https://github.com/owner/client.git')
         (self.root / 'config.yaml').write_text(
             'projects:\n  firstmate-workflow:\n    repo: .\n    github: owner/engine\n'
-            '  client:\n    github: owner/client\n    base: main\n')
+            '    base: main\n    required_check: ci\n'
+            '  client:\n    github: owner/client\n    base: main\n    required_check: ci\n')
         self.event(project='client')
         p = Pins(dict(self.env, FM_EXTERNAL='1', FM_PROJECT='client',
                       FM_TARGET_ROOT=str(target), FM_STATE_DIR=str(self.state),
