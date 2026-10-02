@@ -138,6 +138,28 @@ class Lifeline(unittest.TestCase):
             time.sleep(.05)
         self.fail('the program never started')
 
+    def test_keeper_has_its_session_before_start_returns(self):
+        # Hold the keeper before its Python entrypoint can call setsid. The
+        # caller must already be safe to exit and clean up its own group.
+        keeper_argv = life._keeper_argv
+        def held_entrypoint(*args, **kwargs):
+            return [sys.executable, '-c',
+                    'import os,sys; sys.stdin.buffer.read(1); os.execv(sys.argv[1], sys.argv[1:])',
+                    *keeper_argv(*args, **kwargs)]
+        for owner in (None, os.getpid()):
+            with self.subTest(owner=owner), mock.patch.object(life, '_keeper_argv', held_entrypoint):
+                keeper = life.start(['sleep', '300'], owner=owner, stdin=subprocess.PIPE)
+                try:
+                    self.assertEqual(keeper.pid, os.getsid(keeper.pid),
+                                     'keeper has its own session before start returns')
+                finally:
+                    keeper.terminate()
+                    try:
+                        keeper.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        keeper.kill(); keeper.wait()
+                    keeper.stdin.close()
+
     def test_a_pipe_owner_killed_takes_its_child_across_setsid(self):
         argv, pidfile = self.program('child')
         owner = subprocess.Popen([sys.executable, '-c', '''

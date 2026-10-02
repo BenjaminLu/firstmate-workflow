@@ -264,8 +264,8 @@ def start(argv, owner=None, name=None, direct=False, **popen):
 
     owner=None: this process owns it through a pipe it keeps open for its
     whole life. owner=<pid>: that process owns it, watched by the kernel.
-    The keeper puts itself in a session of its own; the caller never asks
-    for one.
+    The keeper starts in its own session before Popen returns, so a
+    short-lived caller can safely exit and clean up its own process group.
 
     direct=True: argv is fm's own Python, which calls hold() itself as it
     starts, so no keeper stands between: it is started in a session of its
@@ -296,7 +296,7 @@ def start(argv, owner=None, name=None, direct=False, **popen):
     if owner is None:
         read_end, write_end = os.pipe()
         try:
-            child = subprocess.Popen(_keeper_argv(argv, fd=read_end, name=name), pass_fds=(read_end,), **popen)
+            child = subprocess.Popen(_keeper_argv(argv, fd=read_end, name=name), pass_fds=(read_end,), start_new_session=True, **popen)
         except BaseException:
             os.close(write_end)
             raise
@@ -306,7 +306,7 @@ def start(argv, owner=None, name=None, direct=False, **popen):
         return child
     # said now, to the caller, rather than by a keeper that exits at once
     ProcessExit(owner).close()
-    return subprocess.Popen(_keeper_argv(argv, pid=int(owner), name=name), **popen)
+    return subprocess.Popen(_keeper_argv(argv, pid=int(owner), name=name), start_new_session=True, **popen)
 
 
 def fork():

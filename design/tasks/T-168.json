@@ -1,0 +1,21 @@
+{
+  "id": "T-168",
+  "title": "the board keeps its live stream open, never dies on a config.yaml it is reading, and every dispatched worker has an owner",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "board/server.ts",
+    "board/public/**",
+    "bin/fm-dispatch.sh",
+    "bin/lib/fm_lifeline.py",
+    "tests/**",
+    "design/tasks/T-168.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-10-02 the captain's board kept showing errors: the browser logged thousands of net::ERR_INCOMPLETE_CHUNKED_ENCODING and net::ERR_CONNECTION_REFUSED. Three defects, found by firstmate the same night: (1) /events is a server-sent stream whose heartbeat is every 15 s (board/server.ts, the `beat` interval) while Bun.serve's default idle timeout is 10 s, so an idle stream is cut every 10 s ('[Bun.serve]: request timed out after 10 seconds' in state/session/board.log) and the page reconnects; (2) registry() checks existsSync(config.yaml) and then statSync(config.yaml) (board/server.ts:336-337), so a `git pull` that briefly removes the file throws ENOENT inside a request and kills the server; (3) bin/fm-dispatch.sh:155 starts fm-worker.sh with a bare `&`, which the lifeline rule forbids: under bin/lib/fm-lifeline.sh the worker is killed when dispatch exits, and outside it the worker has no owner.",
+    "The stream stays open. /events never idles out: either its heartbeat is shorter than the server's idle timeout, or the server disables the idle timeout for that route (Bun's server.timeout(req, 0)), and the page does not log an error or show a banner for a stream that is merely quiet. A test holds /events open past the old 10 s limit with no state change and receives a heartbeat and no disconnect.",
+    "No request handler throws on a file it is reading. Reading config.yaml (and any other file read on a request path that another process may replace: events.jsonl, pending/, decisions/) tolerates the file vanishing between check and read: the request answers from the last good read or with a JSON error and a status, and the server keeps running. A test removes and restores config.yaml while requests are in flight and the server answers every one.",
+    "Every dispatched worker has an owner. bin/fm-dispatch.sh starts each fm-worker.sh through bin/lib/fm-lifeline.sh (the same way skills/firstmate/dispatch-crew/SKILL.md tells firstmate to), never with a bare `&`, `nohup`, `setsid` or `disown`, so a dispatch run under the lifeline leaves its workers running and a worker still ends with its owner. A test runs fm-dispatch.sh under the lifeline and sees the worker's run start; the existing ci lint for bare background starts covers bin/fm-dispatch.sh.",
+    "Evidence is the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suite themselves. Stubs answer as the real tools do."
+  ]
+}
