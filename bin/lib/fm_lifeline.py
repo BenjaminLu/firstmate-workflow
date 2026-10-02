@@ -529,10 +529,15 @@ def _ack_record(root, ident):
     try:
         with open(os.path.join(base, '.ack-transaction.json')) as f:
             before = json.load(f)
+        if not isinstance(before, dict):
+            return None
         if ident in before:
             return before[ident]
     except FileNotFoundError:
         pass
+    except (OSError, ValueError, TypeError):
+        # Unknown transaction state must never expose tentative watermarks.
+        return None
     try:
         with open(os.path.join(str(root), ACK_DIR, str(ident) + '.json')) as f:
             return json.load(f)
@@ -540,21 +545,37 @@ def _ack_record(root, ident):
         return None
 
 
-def acknowledged(root, ident):
-    """Read the committed watermark, hiding an interrupted batch's writes."""
+def acknowledged_many(root, identifiers, *, blocking=True):
+    """One committed snapshot. Busy nonblocking readers conservatively see pending."""
     import fcntl
+    import math
+    identifiers = list(identifiers)
+    if any(not isinstance(ident, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', ident)
+           for ident in identifiers):
+        raise ValueError('invalid wake id')
+    unknown = dict.fromkeys(identifiers)
     base = os.path.join(str(root), 'state/session')
     os.makedirs(base, exist_ok=True)
     lock = os.open(os.path.join(base, '.ack.lock'), os.O_RDWR | os.O_CREAT, 0o644)
     try:
-        fcntl.flock(lock, fcntl.LOCK_SH)
-        record = _ack_record(root, ident)
         try:
-            return float(record.get('acknowledged') or 0) if record else None
-        except (ValueError, TypeError, AttributeError):
-            return None
+            fcntl.flock(lock, fcntl.LOCK_SH | (0 if blocking else fcntl.LOCK_NB))
+        except BlockingIOError:
+            return unknown
+        result = {}
+        for ident in identifiers:
+            record = _ack_record(root, ident)
+            stamp = record.get('acknowledged') if isinstance(record, dict) else None
+            result[ident] = (stamp if type(stamp) in (int, float) and
+                             math.isfinite(stamp) and stamp >= 0 else None)
+        return result
     finally:
         os.close(lock)
+
+
+def acknowledged(root, ident):
+    """Read the committed watermark, hiding an interrupted batch's writes."""
+    return acknowledged_many(root, [ident])[ident]
 
 
 def is_acknowledged(root, ident, woken):
@@ -881,6 +902,15 @@ def main(args):
         return 0
     if mode == 'session-owner':
         print(session_owner())
+        return 0
+    if mode == 'acknowledged':
+        if len(args) != 1 or not args[0]:
+            return _usage()
+        import json
+        identifiers = json.load(sys.stdin)
+        if not isinstance(identifiers, list):
+            raise ValueError('wake ids must be an array')
+        print(json.dumps(acknowledged_many(args[0], identifiers, blocking=False)))
         return 0
     if mode == 'ring':
         if len(args) != 2 or not args[0]:

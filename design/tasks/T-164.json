@@ -20,7 +20,9 @@
     "docs/verification/supervision.md",
     "skills/firstmate/**",
     "design/**",
-    "README.md"
+    "README.md",
+    "bin/fm-herdr.py",
+    "board/server.ts"
   ],
   "acceptance": [
     "Why. Captain explicitly orders fixing Codex hooks on 2026-10-01; Claude works. Local codex-cli 0.159.3 features list shows hooks stable true; user config features.hooks true; project trust is trusted. Repo .codex/hooks.json exists with Stop/UserPromptSubmit commands, but no SessionStart registration. Existing installer bin/lib/fm_hooks.py only merges hook JSON. A real board answer D-firstmate-workflow-T162-1 at 15:40:49Z entered wake queue, but watcher only took it at 15:49:03Z; no automatic conversational delivery was verified. Its own spec must be committed.",

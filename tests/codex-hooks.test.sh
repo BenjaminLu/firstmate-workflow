@@ -202,6 +202,51 @@ class CodexHooks(unittest.TestCase):
                         self.assertTrue(any('D-third-' + consumer in line for line in lines))
                 self.assertEqual([], W.pending(self.root))
 
+    def test_interrupted_batch_is_pending_in_session_status_and_wait(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('herdr', Path(sys.argv[1]) / 'bin/fm-herdr.py')
+        session = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(session)
+        self.push('D-first', 1)
+        self.push('D-second', 2)
+        W.take(self.root, stage=1)
+        real = W.life._write_ack
+        def interrupt(path, record):
+            if str(path).endswith('/D-second.json'):
+                raise OSError('interrupted second acknowledgement')
+            real(path, record)
+        with patch.object(W.life, '_write_ack', side_effect=interrupt):
+            with self.assertRaises(OSError): W.claim(self.root)
+        output = io.StringIO()
+        with patch.object(session, 'window_host', return_value='none'), \
+             patch.object(session, 'retire_dead_crew', return_value={}), \
+             patch.object(session, 'project_report', return_value={}), \
+             contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+            session.main(['session', 'status', str(self.root)])
+        self.assertEqual(['D-first', 'D-second'],
+                         [x['id'] for x in json.loads(output.getvalue())['unacknowledged']])
+        self.assertEqual(['D-first'], [x['id'] for x in session.wake_wait(self.root, 'D-first', .01)])
+        self.assertEqual(2, W.waiting(self.root))
+        self.assertEqual(2, len(W.pending(self.root)))
+        self.assertEqual([], session.unacknowledged(self.root))
+        self.assertEqual([], session.wake_wait(self.root, 'D-first', .01))
+
+    def test_watermark_snapshot_is_conservative_for_unknown_state(self):
+        import fcntl
+        W.life.acknowledge(self.root, 'D-first', 1)
+        base = self.root / 'state/session'
+        for value in ('{', '[]', 'null'):
+            (base / '.ack-transaction.json').write_text(value)
+            self.assertIsNone(W.life.acknowledged(self.root, 'D-first'))
+        (base / '.ack-transaction.json').unlink()
+        for value in (True, '1', float('inf'), float('nan'), -1):
+            (base / 'acknowledged/D-first.json').write_text(json.dumps({'acknowledged': value}))
+            self.assertIsNone(W.life.acknowledged(self.root, 'D-first'))
+        with (base / '.ack.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            self.assertEqual({'D-first': None},
+                             W.life.acknowledged_many(self.root, ['D-first'], blocking=False))
+
     def test_batch_failure_preserves_previous_watermarks_and_explicit_ack(self):
         W.life.acknowledge(self.root, 'D-first', 1)
         self.push('D-first', 2)

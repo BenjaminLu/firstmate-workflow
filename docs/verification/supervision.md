@@ -166,10 +166,11 @@ Claims gather all eligible generations before committing, and legacy pending
 combines staged and directly queued items into that same batch. A failed later
 write therefore cannot hide an earlier, unreturned item. Direct queue takes and
 Codex output use the same transaction; explicit session acknowledgement also
-recovers any interrupted transaction. Per-ID files remain the board's existing
-format, but the board's raw-file projection does not read the undo journal and
-may temporarily show partial acknowledgement until recovery. This is not model
-delivery evidence. The transaction commit is still the legacy claim boundary:
+recovers any interrupted transaction. Session status/start/wait read committed
+watermarks through the shared reader. The board obtains one journal-aware
+snapshot through the foreground lifeline helper; a busy lock, malformed journal
+or unavailable helper conservatively leaves wakes pending. Per-ID files retain
+their existing format. These records are not model delivery evidence. The transaction commit is still the legacy claim boundary:
 process death after commit but before harness receipt cannot be resolved without
 a delivery receipt. No exactly-once harness delivery is claimed.
 
