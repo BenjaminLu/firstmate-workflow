@@ -596,8 +596,10 @@ assistant answer. Only that answer is the verdict; prompt echoes, intermediate
 text, quoted examples and full CLI transcripts are not authoritative. Retain
 reviewer identity and the reviewed head with the evidence. Built-in managed
 adapters extract and retain the final answer. T-163 managed Codex run mode binds completed final output to transport identity
-and digest in its isolated checkout. Legacy/custom paths without that evidence
-remain a provenance gap; firstmate must not accept a marker alone. This local
+and digest in its isolated checkout. Legacy/custom paths retain their selected final answer with explicit `legacy`
+provenance (captain, 2026-10-02). They cannot claim managed authentication;
+T-135 accepts their locally retained, head/patch-bound verdicts alongside
+`authenticated` managed Codex verdicts. This local
 binding does not establish authoritative remote-head freshness (§15.5).
 The board therefore treats a legacy `review_failed` as missing-review/error,
 not rejection. A directed rejection exists only when the event also carries
@@ -1258,7 +1260,7 @@ per round from round seven on.
 T-135 replaces the following historical T-073 comment transport with local
 records. Every REJECT supplies criteria from round one; every reviewer from
 round two receives the local standing list and relevant prior rounds, with
-worker reasoning excluded. Gate 7 and fm-protocol.sh consume authenticated
+worker reasoning excluded. Gate 7 and fm-protocol.sh consume provenance-labelled
 local verdicts, retain latest rejection precedence and fail with a reason when
 the local verdict is missing; optional comments never replace local authority.
 Until T-135 lands, the legacy launcher carries the protocol as follows (T-073). From round two (SK-007), given `--pr`, `fm-review.sh` reads the pull

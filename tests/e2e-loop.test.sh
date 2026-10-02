@@ -15,6 +15,8 @@ FM_GATE_LOCK="$(mktemp -d)/gate.lock"; export FM_GATE_LOCK
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/local-verdict.sh
+. "$ROOT/tests/lib/local-verdict.sh"
 # shellcheck source=tests/lib/project-storage.sh
 . "$ROOT/tests/lib/project-storage.sh"
 
@@ -326,7 +328,7 @@ assert_eq "reviewer-1" "$(run "$GH" pr view "$pr" --json comments --jq '.comment
   "and the author is not split off by one of its newlines"
 
 # the reviewer in this fixture signs off
-printf 'reviewer-1\tAPPROVE:T-101\n' >> "$GHSTATE/comments.$pr"
+seed_local_approval "$r" T-101 "$branch" reviewer-1
 
 # The fixture's reviewer signs REJECT before it signs APPROVE, and the round
 # counter is what decides whether the next turn runs the round-three

@@ -23,6 +23,8 @@ done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/local-verdict.sh
+. "$ROOT/tests/lib/local-verdict.sh"
 FM="$ROOT/bin/fm.sh"
 
 # a repository shaped like this one: the scripts that matter, two skills, a
@@ -403,7 +405,7 @@ git -C "$g" add -A; git -C "$g" commit -qm skill; git -C "$g" checkout -q main
 
 # the pull request the change travels on, in a gh that remembers
 pr="$("$GH" pr create --head sk-001-skill --title 'skill-update: worker' | sed 's|.*/||')"
-GH_AS=reviewer-1 "$GH" pr comment "$pr" --body "APPROVE:SK-001"
+seed_local_approval "$g" SK-001 sk-001-skill reviewer-1
 
 # its own gate lock, so a gate run elsewhere on this machine does not hold it up
 gate="GHSTATE='$GHSTATE' FM_GH='$GH' FM_REVIEWER_LOGIN=reviewer-1 FM_GATE_LOCK='$g.gate.lock' '$ROOT/bin/fm-gate.sh' --task SK-001 --repo '$g'"
@@ -449,16 +451,15 @@ assert_fail "$gate --branch sk-001-vacuous --pr $pr --only 5" "5 blocks one whos
 assert_fail "$gate --branch sk-001-skill --pr $pr --only 6" "6 blocks when the required check is red"
 rm -f "$GHSTATE/red"
 
-# the pull request is not decoration either: with no pull request there is no
-# required check and no approval, so a skill-update cannot reach the merge
-# card without one
+# The required check still needs a PR. Local review approval is independent
+# of comment transport and remains bound to the approved branch's change.
 assert_fail "$gate --branch sk-001-skill --only 6" "6 blocks a skill-update with no pull request at all"
-assert_fail "$gate --branch sk-001-skill --only 7" "7 blocks one with no pull request at all"
+assert_ok "$gate --branch sk-001-skill --only 7" "7 reads local approval without a pull request"
 
 pr2="$("$GH" pr create --head sk-001-code --title 'another' | sed 's|.*/||')"
-assert_fail "$gate --branch sk-001-skill --pr $pr2 --only 7" "7 blocks a pull request nobody approved"
-GH_AS=someone-else "$GH" pr comment "$pr2" --body "APPROVE:SK-001"
-assert_fail "$gate --branch sk-001-skill --pr $pr2 --only 7" "7 blocks an approval from the wrong account"
+assert_fail "$gate --branch sk-001-code --pr $pr2 --only 7" "7 blocks a pull request nobody approved"
+seed_local_approval "$g" SK-001 sk-001-code someone-else
+assert_fail "$gate --branch sk-001-code --pr $pr2 --only 7" "7 blocks an approval from the wrong account"
 
 fi
 

@@ -180,7 +180,10 @@ reviewed() {
   f="$(git -C "$1" diff --name-only "main...$2" | jq -Rnc '[inputs]')"
   printf 'REVIEWED:T-X verdict=%s head=%s base=%s patch=%s files=%s' "$3" "$h" "$b" "$p" "$f"
 }
-post() { printf '%s\t%s\n' "$2" "$3" >> "$1/comments.tsv"; }   # post <dir> <author> <body>
+post() {
+  printf '%s\t%s\n' "$2" "$3" >> "$1/comments.tsv"
+  python3 "$ROOT/tests/lib/evidence.py" "$ROOT" "$1/state" T-X "$2" "$3"
+}   # post <dir> <author> <body>
 g7() { FM_GH="$d7/stub/gh" FM_REVIEWER_LOGIN=reviewer-1 "$GATE" --task T-X --repo "$d7" --branch "$1" --only 7 --pr 9 2>&1; }
 
 d7="$(fixture)"; ghc "$d7" >/dev/null
@@ -200,12 +203,14 @@ post "$d7" reviewer-1 "looks right\\nAPPROVE:T-X\\n\\n$(reviewed "$d7" pr APPROV
 out="$(g7 pr)"; rc=$?
 assert_eq "0" "$rc" "(7 passes on an APPROVE for the current head, as it did before)"
 : > "$d7/comments.tsv"
+rm -rf "$d7/state/evidence"
 post "$d7" someone-else "APPROVE:T-X\\n\\n$(reviewed "$d7" pr APPROVE)"
 out="$(g7 pr)"; rc=$?
 assert_eq "7" "$rc" "(7 ignores APPROVE from anyone but the reviewer, as it did before)"
 
 # the reviewer approves the pull request as it stands ...
 : > "$d7/comments.tsv"
+rm -rf "$d7/state/evidence"
 post "$d7" reviewer-1 "APPROVE:T-X\\n\\n$(reviewed "$d7" pr APPROVE)"
 approved_head="$(git -C "$d7" rev-parse pr)"
 # ... then main moves on, touching none of its files, and the pull request is
@@ -264,6 +269,7 @@ assert_eq "7" "$rc" "7 blocks an APPROVE superseded by a later REJECT"
 assert_contains "$out" "condition 2" "and names the condition that failed"
 assert_contains "$out" "REJECT" "which is the later REJECT"
 : > "$d7/comments.tsv"
+rm -rf "$d7/state/evidence"
 post "$d7" reviewer-1 "APPROVE:T-X\\n\\n$(reviewed "$d7" pr APPROVE)"
 post "$d7" reviewer-1 "REJECT:T-X"
 out="$(g7 pr)"; rc=$?
@@ -271,6 +277,7 @@ assert_eq "7" "$rc" "7 blocks even the approved head once a REJECT follows"
 # a rejection that mentions the approve marker on the way, posted the way
 # fm-review.sh posts it: the reviewer's words, then the REVIEWED line
 : > "$d7/comments.tsv"
+rm -rf "$d7/state/evidence"
 post "$d7" reviewer-1 "I cannot sign APPROVE:T-X while item 1 stands\\nREJECT:T-X\\n\\n$(reviewed "$d7" pr REJECT)"
 out="$(g7 pr)"; rc=$?
 assert_eq "7" "$rc" "7 blocks a REJECT whose text mentions the approve marker"
@@ -279,10 +286,11 @@ assert_contains "$out" "the latest verdict is REJECT:T-X" "and says the latest v
 # an APPROVE posted by hand records nothing it reviewed: it is read as it
 # always was, and the gate says it binds to no head
 : > "$d7/comments.tsv"
+rm -rf "$d7/state/evidence"
 post "$d7" reviewer-1 "APPROVE:T-X"
 out="$(g7 updated)"; rc=$?
-assert_eq "0" "$rc" "(7 still reads an APPROVE with no REVIEWED line as before)"
-assert_contains "$out" "no REVIEWED:T-X line" "and says it binds to no head"
+assert_eq "7" "$rc" "7 refuses an unbound legacy approval"
+assert_contains "$out" "no reviewed head" "and says it binds to no head"
 post "$d7" reviewer-1 "REJECT:T-X"
 out="$(g7 updated)"; rc=$?
 assert_eq "7" "$rc" "and a later REJECT supersedes it too"

@@ -275,3 +275,9 @@ Test organization follows T-130: feature-owned suites, at most 1200 lines per
 test file, shared fixtures in tests/lib/ or tests/e2e/lib/ and literal helper
 references. Instruction-only metadata checks prove structure, not model
 compliance; identify that limit without waiving gate 5 or inventing a test run.
+
+
+T-135 provenance contract (captain, 2026-10-02): local verdict records carry
+`authenticated` for managed Codex finals or `legacy` for other adapters. Gate 7
+and the protocol reader accept both; legacy remains explicitly labelled and
+cannot claim T-163 authentication. Optional comments never replace local records.

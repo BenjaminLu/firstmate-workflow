@@ -63,6 +63,12 @@ CI_WAIT=$((10#$CI_WAIT)); CI_POLL=$((10#$CI_POLL))
 cd "$REPO" || { echo "fm-review: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
 fm_storage_init "$REPO" || exit 65
+# A registered self project need not be the default project. Its review events
+# must name the same project that identity allocation uses for round counting.
+project_events=()
+if [ -n "${FM_PROJECT:-}" ] && [ -n "$(fm_projects "$FM_CONFIG" 2>/dev/null)" ]; then
+  project_events=(--project "$FM_PROJECT")
+fi
 fm_target_validate || exit 65
 BASE="${FM_BASE:-$BASE}"
 fm_refuse_herdr_bypass fm-review || exit $?
@@ -81,6 +87,7 @@ fi
 if [ -n "$ROUND_GIVEN" ]; then export FM_ROUND="$ROUND"; else unset FM_ROUND; fi
 fm_identity reviewer "$TASK" "$NAME" || exit 70
 unset FM_ROUND
+ROUND="$(jq -r .round "$FM_RUN_DIR/identity.json")"
 # T-146: the vendor this round starts on and the model "$FM_CONFIG" names for
 # that vendor are in identity.json from the start, so the board shows them
 # from the round's first event (the model the vendor reports joins them
@@ -143,7 +150,7 @@ emit_once() {
     esac
   done
   FM_ROOT="$REPO" "${FM_CODE_ROOT:-$REPO}/bin/fm-emit.sh" --data "$data" --actor "$NAME" --task "$TASK" \
-    ${args[@]+"${args[@]}"} >/dev/null 2>&1 </dev/null
+    ${project_events[@]+"${project_events[@]}"} ${args[@]+"${args[@]}"} >/dev/null 2>&1 </dev/null
 }
 emit() { emit_once "$@" || true; }
 # when the round began, in epoch seconds: set just before review_opened
@@ -495,50 +502,8 @@ keep_log() {
 # closed from inside the comment, and whatever follows it would read as the
 # launcher's own words.
 closed_list() {
-  local json picked fence
-  if ! json="$($GH pr view "$PR" --json comments 2>/dev/null)" ||
-     ! picked="$(jq -c --arg t "$TASK" '
-       ($t | gsub("(?<c>[.*+?^$(){}|\\[\\]\\\\/])"; "\\\(.c)")) as $e
-       | "(^|\\n)[ \\t]*ASK-PASS-CRITERIA:\($e)[ \\t\\r]*(\\n|$)" as $ask
-       | "(^|\\n)[ \\t]*CRITERIA-COMPLETE:\($e)[ \\t\\r]*(\\n|$)" as $done
-       | [.comments[] | .body | strings] as $b
-       | { ask: ([$b[] | select(test($ask))] | last),
-           lists: [$b[] | select(test($ask) | not) | . as $x
-                    | ([match($done; "g").offset] | last) as $at
-                    | select($at != null and ($x[0:$at] | test("(^|\\n)[ \\t]*[0-9]+[.)][ \\t]"))) ] }
-     ' <<<"$json" 2>/dev/null)" || [ -z "$picked" ]; then
-    printf '\nThe pull request'"'"'s comments could not be read, so whether the worker has asked with ASK-PASS-CRITERIA:%s or a closed list with CRITERIA-COMPLETE:%s already exists is unknown. Review this round as usual; if you reject, end with the complete numbered list of what would make this head pass, closed by CRITERIA-COMPLETE:%s.\n' \
-      "$TASK" "$TASK" "$TASK"
-    return 0
-  fi
-  local n i
-  fence="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
-  n="$(jq '.lists | length' <<<"$picked")"
-  if [ "$n" -gt 0 ]; then
-    printf '\nThe numbered list below, posted with CRITERIA-COMPLETE:%s, is the closed list for this task. If more than one appears, the latest is the standing list; the earlier ones are its history. Every finding this round must cite a numbered item from it. If you reject, re-issue the standing list: the same numbering, each earlier item marked done or open, and any new item appended with the next number and labelled on its own line REGRESSION:%s (newly introduced by the latest change) or NEW-GROUND:%s (the latest change touched code the list never covered), then CRITERIA-COMPLETE:%s. It never drops an open item. Raise nothing else.\n' \
-      "$TASK" "$TASK" "$TASK" "$TASK"
-  elif [ "$(jq '.ask != null' <<<"$picked")" = true ]; then
-    printf '\nThe worker has asked for the pass criteria with ASK-PASS-CRITERIA:%s, quoted below. There is no closed list yet: answer with the complete numbered list of everything that must change for this task to pass, and then post CRITERIA-COMPLETE:%s.\n' \
-      "$TASK" "$TASK"
-  else
-    printf '\nThe pull request has neither an ASK-PASS-CRITERIA:%s from the worker nor a numbered list closed by CRITERIA-COMPLETE:%s. There is no closed list yet: review this round as usual, and if you reject, end with the complete numbered list of what would make this head pass, closed by CRITERIA-COMPLETE:%s.\n' \
-      "$TASK" "$TASK" "$TASK"
-  fi
-  # jq prints each body itself: through $(...) a comment's trailing newlines
-  # were stripped, and the quote was no longer verbatim
-  if [ "$(jq '.ask != null' <<<"$picked")" = true ]; then
-    printf '\n## The worker'"'"'s ask, verbatim from the pull request\n\n----- begin comment %s -----\n' "$fence"
-    jq -r '.ask' <<<"$picked"
-    printf -- '----- end comment %s -----\n' "$fence"
-  fi
-  i=0
-  while [ "$i" -lt "$n" ]; do
-    printf '\n## Closed list %s of %s, verbatim from the pull request\n\n----- begin comment %s -----\n' \
-      "$((i + 1))" "$n" "$fence"
-    jq -r --argjson i "$i" '.lists[$i]' <<<"$picked"
-    printf -- '----- end comment %s -----\n' "$fence"
-    i=$((i + 1))
-  done
+  fm_evidence history --reviewer || return 1
+  printf '\nEvery REJECT supplies the complete numbered standing list and CRITERIA-COMPLETE:%s. Preserve numbering and done/open states; label new items REGRESSION:%s or NEW-GROUND:%s. Syntax checks do not prove finding semantics.\n' "$TASK" "$TASK" "$TASK"
 }
 
 # Given --pr, every round, in either mode, is shown what the machine found
@@ -794,7 +759,7 @@ prompt="$work/prompt.md"
   printf '\n# Round %s\n' "$ROUND"
 } > "$work/intro.md"
 {
-  if [ "$ROUND" -ge 2 ] && [ -n "$PR" ]; then
+  if [ "$ROUND" -ge 2 ]; then
     printf '\n# The closed list\n'
     closed_list
   elif [ "$ROUND" -ge 3 ]; then
@@ -1201,13 +1166,32 @@ if [ -z "$decided" ]; then
 fi
 # the script's record of what was reviewed goes last, after the reviewer's
 # words, so it is the one gate 7 reads whatever the reviewer quoted above it
+# Retain before projection. Only the managed Codex selector grants authenticated
+# provenance; configured legacy reviewers still count, with their level visible.
+printf '%s\n' "$verdict" > "$work/selected-final.txt"
+decided="$(fm_evidence verdict --round "$ROUND" --head "$R_HEAD" --base "$R_BASE" \
+  --patch "$R_PATCH" --run "$FM_RUN_DIR" --attempt "${FM_CHAIN_ATTEMPT:-}" \
+  --code "${FM_CODE_ROOT:-$REPO}" --vendor "${FM_CHAIN_VENDOR:-legacy}" \
+  --file "$work/selected-final.txt")" || {
+  emit --type review_failed --en 'No local verdict could be retained' \
+       --tw '無法保留本機審查裁決'
+  exit 3
+}
+provenance_level=legacy
+[ "${FM_CHAIN_VENDOR:-}" != codex ] || provenance_level=authenticated
+CREW_DATA="$(jq -c --arg level "$provenance_level" '.provenance_level=$level' <<<"$CREW_DATA")"
 verdict="${verdict%"${verdict##*[![:space:]]}"}$(reviewed_line "$decided")"
-if [ -n "$PR" ] && [ "$FM_EXTERNAL" = 0 ]; then
-  $GH pr comment "$PR" --body "$verdict" >/dev/null 2>&1 || true
+projection="$(fm_projection)" || exit 65
+if [ -n "$PR" ] && [ "$projection" = comments ]; then
+  if ! fm_comment_projection "$PR" --body "$verdict" >/dev/null 2>&1; then
+    echo 'fm-review: optional comment projection failed; local verdict retained' >&2
+    FM_CREW_STATUS_SECS=0 emit --type crew_status --data '{"evidence_event":"projection_failed"}' --en 'Optional verdict comment failed; local verdict retained' \
+         --tw '選用的裁決留言發布失敗；本機裁決已保留'
+  fi
 fi
 case "$decided" in
   APPROVE)
-    emit --type approved --en "reviewer signed $TASK" --tw "reviewer 已簽 $TASK"
+    emit --type approved --en "reviewer signed $TASK ($provenance_level)" --tw "reviewer 已簽 ${TASK}（${provenance_level}）"
     emit_status "Verdict signed: APPROVE:$TASK" "已簽署裁決：APPROVE:$TASK"
     ;;
   REJECT)

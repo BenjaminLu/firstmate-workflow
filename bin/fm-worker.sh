@@ -41,6 +41,12 @@ done
 cd "$REPO" || { echo "fm-worker: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
 fm_storage_init "$REPO" || exit 65
+# A registered self project need not be the default project. Its review events
+# must name the same project that identity allocation uses for round counting.
+project_events=()
+if [ -n "${FM_PROJECT:-}" ] && [ -n "$(fm_projects "$FM_CONFIG" 2>/dev/null)" ]; then
+  project_events=(--project "$FM_PROJECT")
+fi
 fm_target_validate || exit 65
 if [ "$FM_EXTERNAL" = 1 ]; then
   "${FM_CODE_ROOT:-$REPO}/bin/fm-project.sh" verify "$FM_PROJECT" --repo "$REPO" || exit 65
@@ -98,7 +104,7 @@ emit_once() {
     esac
   done
   FM_ROOT="$REPO" "$EMIT" --data "$data" --actor "$NAME" --task "$TASK" \
-    ${args[@]+"${args[@]}"} >/dev/null 2>&1 </dev/null
+    ${project_events[@]+"${project_events[@]}"} ${args[@]+"${args[@]}"} >/dev/null 2>&1 </dev/null
 }
 emit() { emit_once "$@" || true; }
 
@@ -283,6 +289,13 @@ finished() {
     git -C "$FM_TARGET_ROOT" worktree remove --force "$rebuild_probe" >/dev/null 2>&1; rm -rf "$rebuild_probe"
   fi
   fm_record_end "$rc"
+  if [ -f "$FM_RUN_DIR/coverage.json" ]; then
+    local round_metrics
+    if round_metrics="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_round_metrics.py" "$FM_RUN_DIR")"; then
+      FM_CREW_STATUS_SECS=0 emit --type crew_status --en 'Brief coverage and observed round cost retained' \
+           --tw '已保留簡報涵蓋狀態與實際輪次成本' --data "$round_metrics"
+    fi
+  fi
   # before clean_scratch, which would remove the only copy of it
   [ -z "${held:-}" ] || [ "${held_settled:-0}" = 1 ] || lost_held "$rc"
   clean_scratch
@@ -1032,6 +1045,41 @@ prompt="$tree/.fm-prompt.md"
 # runs first excludes it by name for the same reason - a leftover
 # question is not uncommitted work worth saving.
 say="$tree/.fm-say.md"
+projection="$(fm_projection)" || exit 65
+round_number="$(jq -r .round "$FM_RUN_DIR/identity.json")"
+round_head="$(git -C "$tree" rev-parse HEAD)" || {
+  round_head=''
+  echo "fm-worker: round head unavailable; evidence coverage is unknown" >&2
+}
+round_context="$FM_RUN_DIR/context.md"
+round_coverage="$FM_RUN_DIR/coverage.json"
+printf '%s\n' "$spec" > "$FM_RUN_DIR/context-spec.json"
+required_check=''
+if [ -n "${FM_PROJECT:-}" ]; then
+  required_check="$(fm_project_get "$FM_PROJECT" required_check 2>/dev/null)" || required_check=''
+fi
+# Optional diagnostic capture must not prevent a round when scratch space is unavailable.
+log_err="$(scratch_new)" || log_err=''
+[ -z "$log_err" ] || scratch_add "$log_err"
+if ! python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_context_pack.py" \
+    --state "$FM_STATE_DIR" --project "$(fm_evidence_project)" --task "$TASK" \
+    --round "$round_number" --actor "$NAME" --head "$round_head" --root "$tree" \
+    --spec "$FM_RUN_DIR/context-spec.json" --output "$round_context" --coverage "$round_coverage" \
+    --pr "$PR" --gh "$GH" --base "$BASE" --required "$required_check" \
+    --log-error-file "${log_err:-/dev/null}"; then
+  printf '%s\n' 'Local context pack unavailable. Evidence coverage is unknown; ask firstmate before guessing.' > "$round_context"
+  FM_CREW_STATUS_SECS=0 emit --type crew_status --data '{"evidence_event":"brief_gap"}' --en 'Local context pack unavailable; coverage unknown' \
+       --tw '本機背景資料包無法取得；涵蓋狀態不明'
+fi
+if [ -f "$round_coverage" ]; then
+  while IFS= read -r coverage_item; do
+    coverage_en="$(jq -r '.summary.en' <<<"$coverage_item")"
+    coverage_tw="$(jq -r '.summary["zh-TW"]' <<<"$coverage_item")"
+    FM_CREW_STATUS_SECS=0 emit --type crew_status --en "$coverage_en" --tw "$coverage_tw" \
+         --data "$(jq -cn --argjson coverage "$coverage_item" '{evidence_event:"brief_coverage",coverage:$coverage}')"
+  done < <(jq -c '.[]' "$round_coverage")
+fi
+
 {
   cat "${FM_CODE_ROOT:-$REPO}/skills/worker/SKILL.md"
   printf '\n---\n\n# Your task\n\n```json\n%s\n```\n' "$spec"
@@ -1051,129 +1099,11 @@ say="$tree/.fm-say.md"
     printf 'when you change no implementation. This replaces the premature-question rule\n'
     printf 'in the worker instructions above for these first-round requests.\n'
   fi
-  # a later round is answering a review, and the review is on the pull
-  # request. Handing over the task alone would have the worker rewrite what
-  # it already wrote instead of fixing what was named.
-  # A spec-only draft also carries firstmate's answer, without claiming
-  # that its spec commit is earlier implementation work.
-  if [ "$round_two" = 1 ] || [ -n "$PR" ]; then
-    if [ "$round_two" = 1 ]; then
-      printf '\n---\n\n# This is not the first round\n\n'
-      printf 'Your branch already carries your earlier work. Build on it.\n'
-    fi
-    if [ -n "$PR" ]; then
-      printf '\nWhat review has said so far, oldest first:\n\n'
-      $GH pr view "$PR" --json comments \
-        --jq '.comments[]|"## " + .author.login + "\n\n" + .body + "\n"' 2>/dev/null </dev/null
-      # and why the gate is red, if it is. A worker answering a failing
-      # check without being shown the failure is guessing - and gate 6 does
-      # not open until that check is green, so it is the whole of the round.
-      failing="$($GH pr checks "$PR" --json state,link \
-        --jq '.[]|select(.state!="SUCCESS" and .state!="PENDING")|.link' 2>/dev/null </dev/null | head -1)"
-      if [ -n "$failing" ]; then
-        # A check's link is .../actions/runs/<run>/job/<job>. `${x##*/runs/}`
-        # leaves `<run>/job/<job>`, which is not a run id - `gh run view`
-        # refused it, its stderr went to /dev/null, and the worker was handed
-        # an empty block. An empty block is indistinguishable from a green
-        # run, so the round was spent asking why the check was red.
-        # The shape is CHECKED, not assumed, and BOTH shapes GitHub
-        # uses count: `/actions/runs/<id>/job/<id>` and the older
-        # check-run details_url `/runs/<job>`. Narrowing to the first
-        # would send the second down the "cannot read it" path, which
-        # is a worse answer than the one it replaced.
-        run_id=''; log_kind=run; log_title=Run
-        case "$failing" in
-          */runs/*)
-            # The id is delimited by NOT-A-DIGIT, not by a slash.
-            # `%%/*` assumed a slash or end of string, and the legacy
-            # details_url is served with a query on that segment -
-            # `/runs/6789123?check_suite_focus=true` - which trimmed to
-            # the whole thing, failed the digit guard, and told the
-            # worker no run id could be read out of an Actions run.
-            _rt="${failing##*/runs/}"
-            _rd="${_rt%%[!0-9]*}"          # the leading run of digits
-            _rr="${_rt#"$_rd"}"            # and whatever follows it
-            # empty digits is no id at all; `12ab` has to fail closed,
-            # so what follows has to be a delimiter rather than more id
-            case "$_rd" in '') ;; *)
-              case "$_rr" in ''|/*|'?'*|'#'*) run_id="$_rd" ;; esac ;;
-            esac ;;
-        esac
-        # Legacy IDs identify jobs, not workflow runs. Let gh resolve the
-        # owning run with --job; modern links already supply the run ID.
-        case "$failing" in
-          */actions/runs/*) ;;
-          */runs/*) log_kind=job; log_title=Job ;;
-        esac
-        printf '\n---\n\n# The required check is red\n\n'
-        printf 'It fails on the runner and may well pass on your machine.\n\n```\n'
-        if [ -z "$run_id" ]; then
-          # what the SCRIPT could not do, not what the check is. It knows
-          # it found no run id in the link; it does not know which CI
-          # produced the link, and saying "this is not an Actions run"
-          # about an old-style /runs/<id> url was simply false.
-          printf 'No run id could be read out of %s,\n' "$failing"
-          printf 'so this script could not fetch its log.\n'
-          printf 'Ask for it on the pull request rather than guessing.\n'
-        else
-          # fetched once: two calls can disagree, and the second would be
-          # the one the worker is shown while the first decided whether to
-          # show anything.
-          #
-          # scratch_new mints, scratch_add registers - the pair is one
-          # register, not two, and a mint that failed leaves the empty
-          # string that the `:-/dev/null` below is for
-          log_err="$(scratch_new)"
-          [ -z "$log_err" ] || scratch_add "$log_err"
-          log_args=("$run_id")
-          [ "$log_kind" != job ] || log_args=(--job "$run_id")
-          raw_log="$($GH run view "${log_args[@]}" --log-failed 2>"${log_err:-/dev/null}" </dev/null)"
-          gh_rc=$?
-          # Two values, on purpose. `trimmed` is what the worker is shown;
-          # `rendered` is the same thing with blank lines dropped, and is
-          # only ever used to DECIDE whether there is anything to show.
-          # Printing the filtered one deleted every blank line inside a
-          # real traceback - a filter that decides something must not also
-          # be the thing printed.
-          trimmed=''; rendered=''
-          if [ -n "$raw_log" ]; then
-            trimmed="$(printf '%s\n' "$raw_log" | tail -120 | sed 's/^[^\t]*\t[^\t]*\t//')"
-            rendered="$(printf '%s\n' "$trimmed" | grep -v '^[[:space:]]*$' || true)"
-          fi
-          if [ -n "$rendered" ] && [ "$gh_rc" != 0 ]; then
-            # Some of it came back and gh still failed - a multi-job run
-            # where one job's log is gone. Printing the partial log
-            # alone presents it as the whole of the failure, which is
-            # the same lie as an empty block wearing a green run's face.
-            printf '%s\n' "$trimmed"
-            printf '\n-- this log is incomplete: gh exited %s while fetching %s %s\n' \
-              "$gh_rc" "$log_kind" "$run_id"
-            [ -z "$log_err" ] || sed 's/^/gh: /' "$log_err" | head -20
-          elif [ -n "$rendered" ]; then
-            printf '%s\n' "$trimmed"
-          elif [ "$gh_rc" != 0 ]; then
-            # said, not left blank: the worker cannot run gh, so this block
-            # is its only view of the runner, and silence reads as "nothing
-            # was wrong" rather than "I could not fetch it"
-            printf 'The log for %s %s could not be fetched.\n' "$log_kind" "$run_id"
-            # bounded, like the log above it: gh's stderr is not, and
-            # everything that reaches this fence has to be
-            [ -z "$log_err" ] || sed 's/^/gh: /' "$log_err" | head -20
-            printf 'Ask for it on the pull request rather than guessing.\n'
-          else
-            # gh answered, and had nothing: a cancelled run, or a job that
-            # died before any step logged. Saying "could not be fetched"
-            # here would be a false statement about gh in the one block
-            # the worker has no way to check.
-            printf '%s %s reported no failing step log.\n' "$log_title" "$run_id"
-            printf 'It may have been cancelled, or failed before any step ran.\n'
-            printf 'Ask on the pull request rather than guessing.\n'
-          fi
-        fi
-        printf '```\n'
-      fi
-    fi
+  printf '\n---\n\n'
+  if [ "$round_two" = 1 ]; then
+    printf '\n# This is not the first round\n\nYour branch already carries your earlier work. Build on it.\n'
   fi
+  cat "$round_context"
   # A worker round that finds its tree restored mid-run is told so in its
   # next prompt (T-128), not only left to notice: mirror_restore() appends
   # here whenever it runs, in any earlier round, and this is read once and
@@ -1456,7 +1386,20 @@ rm -f "$prompt"
 # stopped working.
 asked=0
 [ -s "$say" ] && asked=1
+# Retain first, even when no PR exists or optional publication later fails.
+if [ "$asked" = 1 ]; then
+  fm_evidence report --round "$round_number" --actor "$NAME" --head "$round_head" --file "$say" || {
+    echo "fm-worker: local report retention failed; preserving the note for recovery" >&2
+    mkdir -p "$FM_STATE_DIR/unsent"
+    cp "$say" "$FM_STATE_DIR/unsent/${NAME}.md" || true
+    FM_CREW_STATUS_SECS=0 emit --type crew_status --data '{"evidence_event":"brief_gap"}' \
+      --en 'Local report retention failed; inspect unsent recovery' \
+      --tw '本機報告保存失敗；請檢查未送出的復原副本'
+  }
+fi
+
 spoke=0
+[ "$projection" != local ] || spoke=1  # local delivery or its warned recovery is handled
 # gh's own words are kept, the way the lookup above keeps them: this is
 # the one path where a person is expected to pick the failure up by
 # hand, and "it was refused" without "why" sends them to the pull
@@ -1466,14 +1409,15 @@ say_err=''
 post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
   say_err="$(scratch_new)" || say_err=''
   [ -z "$say_err" ] || scratch_add "$say_err"
-  if [ "$FM_EXTERNAL" = 1 ]; then
-    echo 'fm-worker: external note retained locally; posting policy is not yet available (T-139)' >&2
-    return 1
-  fi
-  if $GH pr comment "$2" --body-file "$1" >/dev/null 2>"${say_err:-/dev/null}" </dev/null; then
+  [ "$projection" = comments ] || return 0
+  if fm_comment_projection "$2" --body-file "$1" >/dev/null 2>"${say_err:-/dev/null}" </dev/null; then
     spoke=1
     emit --type ask_pass_criteria --pr "$2" --en "the worker spoke on #$2" \
          --tw "工人在 #$2 上發言"
+  else
+    echo 'fm-worker: optional comment projection failed; local record retained' >&2
+    FM_CREW_STATUS_SECS=0 emit --type crew_status --data '{"evidence_event":"projection_failed"}' --en 'Optional comment publication failed; local record retained' \
+         --tw '選用的留言發布失敗；本機紀錄已保留'
   fi
 }
 # A question that went nowhere used to be a line on standard error and
@@ -1563,7 +1507,7 @@ first_round_question() {
   [ "$FM_EXTERNAL" = 0 ] || return 1
   [ "$question_draft" = 1 ] && [ "$round_two" = 0 ] && ! rebuild_publishes
 }
-if [ "$round_two" = 0 ] && ! rebuild_publishes \
+if [ "$projection" = comments ] && [ "$round_two" = 0 ] && ! rebuild_publishes \
    && [ "$asked" = 1 ] && [ -z "$PR" ] && ! worker_changed_files \
    && grep -Eq "^(SCOPE-BLOCKED|ASK-[A-Z-]+):$TASK([[:space:]]|$)" "$say"; then
   # Prefer the seeded spec as the draft's diff. A task already on base
@@ -1594,7 +1538,7 @@ lost_held() {   # lost_held <rc>; from the EXIT trap, so it returns
        --en "the worker's note was not posted: the run ended (exit $1) before it reached a pull request" \
        --tw "工人的留言沒有貼出：執行在送到 PR 之前就結束了（exit ${1}）"
 }
-if [ "$asked" = 1 ] && [ -z "$PR" ] && { worker_changed_files || rebuild_publishes || first_round_question; }; then
+if [ "$projection" = comments ] && [ "$asked" = 1 ] && [ -z "$PR" ] && { worker_changed_files || rebuild_publishes || first_round_question; }; then
   _held="$(scratch_new)" || _held=''
   [ -n "$_held" ] || { echo "fm-worker: could not make a scratch file" >&2; exit 70; }
   scratch_add "$_held"
@@ -1633,7 +1577,11 @@ rm -f "$say"
 # the push still reports that it asked.
 if [ "$asked" = 1 ] && ! first_round_question && ! worker_changed_files; then
   if ! rebuild_publishes; then
-    echo "fm-worker: the worker asked rather than changed anything; its question is on #$PR" >&2
+    if [ "$projection" = comments ] && [ -n "$PR" ]; then
+      echo "fm-worker: the worker asked rather than changed anything; its question is on #$PR" >&2
+    else
+      echo "fm-worker: the worker asked rather than changed anything; its question is retained in local evidence" >&2
+    fi
     printf '%s\n' "$branch"
     exit 0
   fi
@@ -1642,7 +1590,11 @@ if [ "$asked" = 1 ] && ! first_round_question && ! worker_changed_files; then
   elif [ "$refused" = 1 ]; then
     asked_where="#$PR would not take its question"
   else
-    asked_where="its question is on #$PR"
+    if [ "$projection" = comments ] && [ -n "$PR" ]; then
+      asked_where="its question is on #$PR"
+    else
+      asked_where="its question is retained in local evidence"
+    fi
   fi
   echo "fm-worker: the worker asked rather than changed anything; $asked_where; the rebuild applied, so it is published all the same" >&2
 fi

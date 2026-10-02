@@ -48,11 +48,12 @@ fm-diagram 5
 fm-dispatch 4
 fm-doctor 3
 fm-emit 8
+fm-evidence 3
 fm-failfirst 3
 fm-gate 6
 fm-merge 4
 fm-project 1
-fm-protocol 4
+fm-protocol 5
 fm-ready 4
 fm-reconcile 4
 fm-review 8
@@ -97,6 +98,7 @@ total=0
 while read -r name want; do
   [ -n "$name" ] || continue
   f="$ROOT/bin/$name.sh"
+  [ "$name" != fm-evidence ] || f="$ROOT/bin/lib/fm-evidence.sh"
   assert_ok "test -f '$f'" "$name.sh is still there"
   # discovered from the file, then checked against the pinned count, so a
   # loop written differently tomorrow fails loudly instead of quietly
@@ -141,7 +143,7 @@ while read -r name want; do
     fi
   done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "100" "$total" "every pinned flag and all nine fm option cases were exercised"
+assert_eq "104" "$total" "every pinned flag and all nine fm option cases were exercised"
 
 # These flags consume one word, so they are deliberately outside the shift-2
 # count. Probe them without a base ref: parsing must finish at usage, not hang.
@@ -225,7 +227,7 @@ while IFS= read -r f; do
   assert_contains "$said" "fm-config.sh" "and says which library"
   rm -rf "$tmp"
 done < <(fm_shell_corpus "$ROOT/bin")
-assert_eq "12" "$sourced" "twelve scripts take their guard from the library"
+assert_eq "13" "$sourced" "thirteen scripts take their guard from the library"
 
 # And the other half of the same number, because two comments say it is
 # pinned here and until now it was not: the scripts that deliberately

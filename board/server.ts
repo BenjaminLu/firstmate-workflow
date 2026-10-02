@@ -725,6 +725,13 @@ const buildState = (only: string | null) => {
   // own project's repository
   const linked = <T extends Record<string, unknown>>(o: T): T & { pr_url?: string | null } =>
     o && typeof o === "object" && o.pr != null ? { ...o, pr_url: pullUrl(repoOf(projectOf(o)), o.pr) } : o;
+  const evidenceWarning = (event: Event) => {
+    const data = event.data as Record<string, any> | undefined;
+    const coverage = data?.coverage;
+    return data?.evidence_event === 'brief_gap' ||
+      (data?.evidence_event === 'brief_coverage' &&
+        ['gaps', 'deferred', 'waived'].some(key => Array.isArray(coverage?.[key]) && coverage[key].length > 0));
+  };
   const pend = pending();
   const responses = readResponses();
   // a task is its project and its id; `key` is how the rest of this reads one
@@ -1277,7 +1284,7 @@ const buildState = (only: string | null) => {
       ...responses.filter(d => d.identity && mine(d)).map(d => ({type:'decision_made',identity:d.identity,data:{decision:d.id,chosen:d.chosen}}))],
     // a lost run shows once: its agent_lost, not also the agent_finished the
     // deck reconcile closes it with
-    recent: events.filter((e) => mine(e) && !closesLoss.has(e)).slice(-40).reverse().map(linked),
+    recent: events.filter((e) => mine(e) && !closesLoss.has(e)).slice(-40).reverse().map(e => linked({ ...e, evidence_warning: evidenceWarning(e) })),
     pending: shownPending.map(linked),
   };
   // The engine-wide view is an allow-listed metadata projection. Private
