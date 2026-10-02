@@ -22,6 +22,7 @@ fixture() {
   mkdir -p "$d/bin" "$d/design" "$d/state"
   cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-dispatch.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
   cp "$ROOT/bin/fm-herdr.py" "$ROOT/bin/fm-ready.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
+  cp -R "$ROOT/bin/lib" "$d/bin/"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$d/bin/fm-worker.sh"; chmod +x "$d/bin/fm-worker.sh"
   printf 'concurrency: 2\n' > "$d/config.yaml"
   fm_tasks_write /dev/stdin "$d/design/tasks" <<'JSON'
@@ -243,6 +244,7 @@ pr_tree() {                     # pr_tree -> a greenlit repo with T-001 and T-00
   local d; d="$(mktemp -d)"; mkdir -p "$d/bin" "$d/design" "$d/state"
   cp "$ROOT/bin/fm-dispatch.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
   cp "$ROOT/bin/fm-herdr.py" "$ROOT/bin/fm-ready.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
+  cp -R "$ROOT/bin/lib" "$d/bin/"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$d/bin/fm-worker.sh"; chmod +x "$d/bin/fm-worker.sh"
   printf 'vendor: mock\nconcurrency: 3\n' > "$d/config.yaml"
   printf '{"tasks":[{"id":"T-001","title":"a","depends_on":[]},{"id":"T-002","title":"b","depends_on":[]}]}\n' \
