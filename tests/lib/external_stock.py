@@ -13,6 +13,7 @@ root = Path(sys.argv[1])
 sys.path.insert(0, str(root / 'bin/lib'))
 from fm_lifeline import Doorbell, ProcessExit, start
 from fm_onboard import approve, infer
+from external_registry import write_registry
 
 
 def run(argv, env, **kwargs):
@@ -56,13 +57,7 @@ with open(sys.argv[4], 'a') as log:
     log.write('WORKER_COMPLETE:T-051\\n')
 ''')
         adapter.chmod(0o755)
-        (engine / 'config.yaml').write_text('''vendor: mock
-concurrency: 3
-projects:
-  app:
-    github: owner/app
-    base: trunk
-''')
+        write_registry(engine)
         run(['git', 'init', '-q', '-b', 'main', str(engine)], env)
         run(['git', '-C', str(engine), 'add', 'bin', 'skills', '.githooks', 'config.yaml'], env)
         run(['git', '-C', str(engine), '-c', 'user.name=Fixture', '-c',
@@ -105,6 +100,31 @@ else: sys.exit(1)
 ''')
         gh.chmod(0o755)
         env.update(FM_GH=str(gh), FM_TEST_GH_LOG=str(scratch / 'gh.jsonl'))
+        # Observe the real receipt's publication boundary, then delegate to mv.
+        # A direct write to the public path leaves no observation and fails.
+        observer = scratch / 'observer'
+        observer.mkdir()
+        real_mv = shutil.which('mv', path=env['PATH'])
+        assert real_mv, 'fixture needs mv'
+        receipt_observed = scratch / 'receipt-observed.json'
+        env.update(FM_TEST_REAL_MV=real_mv,
+                   FM_TEST_RECEIPT=str(state / 'dispatch/T-051.json'),
+                   FM_TEST_RECEIPT_OBSERVED=str(receipt_observed))
+        (observer / 'mv').write_text("""#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+destination = Path(os.environ['FM_TEST_RECEIPT'])
+if len(sys.argv) == 3 and Path(sys.argv[2]) == destination:
+    source = Path(sys.argv[1])
+    assert source != destination and source.parent == destination.parent
+    assert not destination.exists(), 'receipt visible before rename'
+    payload = json.loads(source.read_text())
+    assert set(payload) == {'project', 'task', 'owner', 'keeper'}
+    Path(os.environ['FM_TEST_RECEIPT_OBSERVED']).write_text(json.dumps(payload))
+os.execv(os.environ['FM_TEST_REAL_MV'], [os.environ['FM_TEST_REAL_MV'], *sys.argv[1:]])
+""")
+        (observer / 'mv').chmod(0o755)
+        env['PATH'] = str(observer) + os.pathsep + env['PATH']
         ready = scratch / 'ready.fifo'
         release = scratch / 'release.fifo'
         for fifo in (ready, release): os.mkfifo(fifo)
@@ -143,6 +163,7 @@ else: sys.exit(1)
                 out = dispatch()
                 assert 'T-051' in out, out
                 launch = json.loads((state / 'dispatch/T-051.json').read_text())
+                assert json.loads(receipt_observed.read_text()) == launch, 'receipt was not renamed whole'
                 assert launch['project'] == 'app' and launch['task'] == 'T-051', launch
                 assert launch['owner'] == int(env['FM_SESSION_PID']), launch
                 assert set(launch) == {'project', 'task', 'owner', 'keeper'}, launch
@@ -163,7 +184,8 @@ else: sys.exit(1)
                 cleanup = subprocess.run([str(engine / 'bin/fm-cleanup.sh'), '--repo', str(engine),
                     '--project', 'app', '--task', 'T-051', '--force'], env=env,
                     capture_output=True, text=True, timeout=30)
-                assert cleanup.returncode != 0, 'cleanup destroyed a live external worker'
+                assert cleanup.returncode == 65, cleanup.stdout + cleanup.stderr
+                assert 'task has a live worker; worktree retained' in cleanup.stderr, cleanup.stderr
                 assert (home / 'worktrees/T-051/base-content').exists()
                 if stop_owner:
                     owner.stdin.close()

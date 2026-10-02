@@ -13,6 +13,7 @@ sys.dont_write_bytecode = True
 ROOT = Path(sys.argv.pop(1)).resolve()
 sys.path.insert(0, str(ROOT / 'bin/lib'))
 from fm_onboard import approve, infer
+from external_registry import write_registry
 
 
 class ExternalEntrypoints(unittest.TestCase):
@@ -30,7 +31,7 @@ class ExternalEntrypoints(unittest.TestCase):
                         FM_ROOT=str(self.engine), FM_GITHUB_URL=str(self.scratch / 'remotes'),
                         GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null',
                         PYTHONDONTWRITEBYTECODE='1', FM_HOST='none', HERDR_ENV='0')
-        (self.engine / 'config.yaml').write_text('projects:\n  app:\n    github: owner/app\n    base: trunk\n')
+        write_registry(self.engine)
         self.home = self.scratch / 'private/projects/app'
         self.home.mkdir(parents=True)
         self.evidence = dict(repository='owner/app', base='trunk', source='github', pulls=[], commits=[],
@@ -89,8 +90,9 @@ else: sys.exit(1)
     def cleanup(self, *args):
         return self.entry('fm-cleanup.sh', '--task', 'T-051', *args)
 
-    def assertRetained(self, result):
+    def assertRetained(self, result, reason):
         self.assertEqual(result.returncode, 65, result.stdout + result.stderr)
+        self.assertIn(reason, result.stderr)
         self.assertEqual((self.tree / 'content').read_text(), 'preserved\n')
         self.assertIn('t-051-work', self.git(self.repo, 'branch', '--list'))
 
@@ -99,8 +101,7 @@ else: sys.exit(1)
         with (runs / '.worker-T-051.lock').open('w') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             p = self.cleanup('--force')
-        self.assertRetained(p)
-        self.assertIn('live worker', p.stderr)
+        self.assertRetained(p, 'task has a live worker; worktree retained')
         self.assertFalse(self.calls.exists(), 'locked task must not query GitHub')
 
     def test_cleanup_task_idle_refuses_uncertain_attempt(self):
@@ -110,15 +111,15 @@ else: sys.exit(1)
         (run / 'orchestration-result.json').write_text('{}')
         (attempt / 'execution.json').write_text('{"started":false}')
         p = self.cleanup('--force')
-        self.assertRetained(p)
-        self.assertIn('live or uncertain execution', p.stderr)
+        self.assertRetained(p, 'live or uncertain execution')
         self.assertFalse(self.calls.exists())
 
     def test_cleanup_open_and_unreadable_pr_are_retained(self):
         for state in ('OPEN', 'unreadable'):
             with self.subTest(state=state):
                 self.env['FM_TEST_PR_STATE'] = state
-                self.assertRetained(self.cleanup())
+                self.assertRetained(self.cleanup(),
+                    'external PR is open or its outcome is unknown; worktree retained')
         calls = [json.loads(line) for line in self.calls.read_text().splitlines()]
         self.assertEqual(len(calls), 2)
         for call in calls:
