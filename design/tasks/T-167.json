@@ -10,6 +10,7 @@
     "bin/adapters/_lib.sh",
     "bin/adapters/codex.sh",
     "bin/adapters/_contract.md",
+    "bin/fm-herdr.py",
     "tests/**",
     "design/tasks/T-167.json",
     "design/T-167-validation.md"

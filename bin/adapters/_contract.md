@@ -129,7 +129,9 @@ next one.
 **Managed Codex JSONL (T-167)** uses a narrower classifier. Only top-level
 `error` and `turn.failed` diagnostic fields, plus non-JSON CLI diagnostics,
 are searched for outage signatures. Model messages, instructions, tool
-arguments and tool results cannot announce a provider outage. Launch refusal
+arguments and tool results cannot announce a provider outage. Both the classifier
+and the Codex completed-turn reader frame JSONL records on LF; literal Unicode
+separators within JSON strings remain payload. Launch refusal
 and unavailable exit codes still return `2`; other nonzero exits and structured
 failures return `1`. A failed transcript writer still fails the adapter while
 the separate CLI exit receipt preserves the CLI's own outcome.

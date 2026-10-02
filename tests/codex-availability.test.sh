@@ -71,7 +71,7 @@ sys.exit(int(os.environ['FIXTURE_EXIT']))
         self.command = [str(code / 'bin/adapters/codex.sh'), 'run', str(prompt), str(self.tree), str(self.log)]
 
     def stream(self, quote='ENOTFOUND authentication required not logged in', answer='WORKER_COMPLETE:T-167'):
-        return '\n'.join(json.dumps(e) for e in [
+        return '\n'.join(json.dumps(e, ensure_ascii=False) for e in [
             dict(type='thread.started', thread_id='current'), dict(type='turn.started'),
             dict(type='item.completed', item=dict(id='tool', type='command_execution',
                  command='rg "ENOTFOUND" tests', aggregated_output=quote, exit_code=0, status='completed')),
@@ -97,6 +97,40 @@ sys.exit(int(os.environ['FIXTURE_EXIT']))
                 self.assertEqual('completed', m.completion('worker', 'T-167', final))
                 self.assertEqual('unknown', m.completion('reviewer', 'T-167', final))
                 self.assertEqual('unknown', m.completion('worker', 'T-old', final))
+
+    def test_json_string_separators_preserve_composed_completion(self):
+        # Literal Unicode separators are legal JSON string bytes. ASCII controls
+        # must be JSON-escaped: exercise every control, including all splitlines
+        # boundaries, through the real adapter and the original-log final reader.
+        separators = [chr(value) for value in range(32)] + ['\x7f', '\x85', '\u2028', '\u2029']
+        for separator in separators:
+            quote = 'Quoted fixture:' + separator + 'authentication required ENOTFOUND' + separator + 'end quote'
+            for location in ('command', 'aggregated_output', 'model', 'final'):
+                with self.subTest(separator=repr(separator), location=location):
+                    events = [json.loads(line) for line in self.stream().split('\n') if line]
+                    answer = 'WORKER_COMPLETE:T-167'
+                    if location in ('command', 'aggregated_output'):
+                        events[2]['item'][location] = quote
+                    elif location == 'model':
+                        events[3]['item']['text'] = quote
+                    else:
+                        answer = quote + '\nWORKER_COMPLETE:T-167'
+                        events[4]['item']['text'] = answer
+                    text = '\n'.join(json.dumps(event, ensure_ascii=False) for event in events) + '\n'
+                    final = self.run_adapter(text, 0)
+                    self.assertEqual(answer, final)
+                    self.assertEqual('completed', m.completion('worker', 'T-167', final))
+                    self.assertEqual('unknown', m.completion('reviewer', 'T-167', final))
+                    self.assertEqual('unknown', m.completion('worker', 'T-old', final))
+                    # A completion marker in earlier payloads cannot complete
+                    # a final answer which says only that it quoted a fixture.
+                    events[2]['item']['aggregated_output'] = 'WORKER_COMPLETE:T-167'
+                    events[3]['item']['text'] = 'WORKER_COMPLETE:T-167'
+                    events[4]['item']['text'] = quote
+                    text = '\n'.join(json.dumps(event, ensure_ascii=False) for event in events) + '\n'
+                    final = self.run_adapter(text, 0)
+                    self.assertEqual(quote, final)
+                    self.assertEqual('unknown', m.completion('worker', 'T-167', final))
 
     def test_real_errors_and_cli_failures(self):
         for phrase in ['authentication required', 'quota exceeded', 'network error: ENOTFOUND']:

@@ -634,7 +634,8 @@ try:
 except (OSError, ValueError, UnicodeError):
     sys.exit(2 if rc in (2, 4, 41, 69, 75) else 1)
 failed = malformed = unavailable = False
-for line in text.splitlines():
+# JSONL records end at LF, not at Unicode separators inside JSON strings.
+for line in text.split('\n'):
     if not line.strip(): continue
     try:
         event = json.loads(line)
