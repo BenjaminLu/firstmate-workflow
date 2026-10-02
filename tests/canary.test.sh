@@ -49,7 +49,10 @@ for fixture in self external; do
   done
 done
 
-assert_eq 5 "$(jq -s '[.[] | select(.fixture=="external" and .ok==true)] | length' "$results")"   "confirmed external conventions let every hostile round reach restoration"
+for mode in tree git truncate fill-tmp empty-var; do
+  assert_eq 0 "$(jq -r --arg m "$mode" 'select(.fixture=="external" and .mode==$m) | .worker_exit' "$results")" \
+    "external/$mode: confirmed conventions let the worker exit zero"
+done
 
 # fm-canary.sh's own scratch fixtures are gone by the time it returns (it
 # builds them under its own directory and removes it when done), so what

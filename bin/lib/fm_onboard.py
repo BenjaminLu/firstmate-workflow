@@ -315,7 +315,7 @@ def drift(home, evidence):
 def registry_value(engine, name, field):
     code=Path(__file__).resolve().parents[1]/'fm-config.sh'
     p=subprocess.run(['bash','-c','. "$1"; fm_project_get "$2" "$3" "$4/config.yaml"',
-                      '_',str(code),name,field,str(engine)],capture_output=True,text=True)
+                      '_',str(code),name,field,str(engine)],capture_output=True,text=True,timeout=30)
     if p.returncode: raise ValueError(p.stderr.strip())
     return p.stdout.strip()
 
@@ -355,6 +355,8 @@ def main(argv=None):
             if args.command == 'edit':
                 if not args.changes or not args.captain or not args.intent: raise ValueError('edit needs changes, captain and intent')
                 print(edit(home,json.loads(args.changes.read_text()),args.captain,args.intent))
+                from fm_lifeline import ring
+                ring(engine, 'conventions edited')
             else:
                 p=read_policy(home/'CONVENTIONS.md')
                 print(drift(home,inspect_remote(p['repository'])) or 'No convention drift.')
@@ -401,6 +403,8 @@ def main(argv=None):
                 raise ValueError('external onboarding cannot replace the self project')
         p=approve(home,e,p,answers)
         register(engine,name,p)
+        from fm_lifeline import ring
+        ring(engine, 'conventions approved')
         print(str(home/'CONVENTIONS.md'))
         return 0
     except (OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:

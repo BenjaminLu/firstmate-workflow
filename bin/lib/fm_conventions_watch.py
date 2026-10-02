@@ -27,9 +27,9 @@ def tick(engine, *, clock=time.time, inspect=inspect_remote, wake=None, owner=No
     """Schedule every registered external policy with independent deadlines.
 
     Errors in one private project cannot suppress another project or engine
-    wakes. A bounded retry also notices policies added while the engine is idle.
+    wakes. Policy writers ring the doorbell after approval or an edit.
     """
-    delays=[60]
+    delays=[]
     for name in project_names(engine):
         try:
             delay=project_tick(engine,name,clock=clock,inspect=inspect,wake=wake,owner=owner)
@@ -37,7 +37,7 @@ def tick(engine, *, clock=time.time, inspect=inspect_remote, wake=None, owner=No
         except Exception as error:
             # The optional inspector is not on the wake delivery critical path.
             print(f'conventions inspection {name}: {error}',file=sys.stderr)
-    return max(1,min(delays))
+    return max(1,min(delays)) if delays else None
 
 
 def project_tick(engine, name, *, clock, inspect, wake, owner):

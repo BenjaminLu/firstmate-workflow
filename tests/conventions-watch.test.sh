@@ -36,9 +36,54 @@ class ScheduledConventions(unittest.TestCase):
         (self.engine/'config.yaml').write_text(config)
         self.env=patch.dict(os.environ,{**{k:v for k,v in os.environ.items() if not k.startswith(('FM_','HERDR_'))},'FM_HOME':str(self.private),'FM_PROJECT':'self'},clear=True)
         self.env.start(); self.addCleanup(self.env.stop)
+    def test_self_only_and_unconfirmed_registry_have_no_timer(self):
+        for names in (['self'], ['self', 'pending']):
+            with patch.object(C,'project_names',return_value=names), patch.object(C,'registry_value',side_effect=lambda engine,name,field: str(self.engine if name=='self' else self.private/'pending')):
+                self.assertIsNone(C.tick(self.engine))
+
+    def test_registry_reads_have_a_timeout(self):
+        import fm_onboard as O
+        with patch.object(O.subprocess,'run',return_value=Mock(returncode=0,stdout='home')) as run:
+            O.registry_value(self.engine,'one','home')
+            self.assertGreater(run.call_args.kwargs['timeout'],0)
+            self.assertLessEqual(run.call_args.kwargs['timeout'],30)
+
+    def test_onboarding_approval_and_edit_ring_after_persistence(self):
+        import fm_onboard as O
+        fresh=self.engine/'fresh'; fresh.mkdir()
+        answers=self.engine/'answers.json'
+        answers.write_text(json.dumps(dict(confirmed=True,policy_confirmed=True,captain='captain',intent='start',product='app',repository='owner/new',visibility='private',base='main',bootstrap_authorized=True,merge_method='squash',available_merge_methods=['squash'],delete_branch=False,required_checks=['ci'],contract={'check':'true'})))
+        home=self.private/'projects/new'
+        original_ring=W.life.ring
+        def rang(engine,line):
+            self.assertEqual(engine,self.engine)
+            self.assertTrue((home/'CONVENTIONS.md').exists())
+            self.assertIn('  new:',(self.engine/'config.yaml').read_text())
+            return original_ring(engine,line)
+        with W.life.Doorbell(self.engine) as bell, patch.object(W.life,'ring',side_effect=rang) as ring:
+            self.assertEqual(O.main(['add',str(fresh),'--name','new','--repo',str(self.engine),'--answers',str(answers)]),0)
+            self.assertEqual(ring.call_count,1)
+            self.assertTrue(bell.wait(0), 'approval must wake the existing idle watcher')
+            changes=self.engine/'changes.json'; changes.write_text('{"reinspect_seconds":120}')
+            self.assertEqual(O.main(['edit','new','--repo',str(self.engine),'--changes',str(changes),'--captain','captain','--intent','cadence']),0)
+            self.assertEqual(ring.call_count,2)
+            self.assertTrue(bell.wait(0), 'edit must wake the existing idle watcher')
+
+    def test_taken_items_skip_registry_entirely(self):
+        directory=self.engine/'state/watch'; (directory/'wake').mkdir(parents=True,exist_ok=True)
+        def take(engine,stage):
+            (directory/'wake'/f'{stage}.staged').write_text('[]')
+            return [{'id':'ready'}]
+        with ExitStack() as stack:
+            for target,name,value in [(W.life,'hold',Mock(return_value=os.getpid())),(W.life,'Doorbell',Mock(return_value=Mock(path='test-bell'))),(W,'start_cycle',Mock()),(W.os,'dup2',Mock()),(W.signal,'signal',Mock()),(W,'take',Mock(side_effect=take)),(W,'wake_line',Mock(return_value='ready'))]:
+                stack.enter_context(patch.object(target,name,value))
+            tick=stack.enter_context(patch.object(C,'tick',side_effect=AssertionError('delivery consulted registry')))
+            self.assertEqual(W.cycle(self.engine),0)
+            tick.assert_not_called()
+
     def test_every_project_has_its_own_deadline(self):
         inspect=Mock(return_value=self.e)
-        self.assertEqual(C.tick(self.engine,clock=lambda:1000,inspect=inspect),60)
+        self.assertEqual(C.tick(self.engine,clock=lambda:1000,inspect=inspect),100)
         self.assertEqual(inspect.call_count,2)
         self.assertEqual(C.tick(self.engine,clock=lambda:1050,inspect=inspect),50)
         self.assertEqual(inspect.call_count,2)
@@ -110,7 +155,7 @@ class ScheduledConventions(unittest.TestCase):
                 self.assertEqual(W.cycle(self.engine),0)
                 self.assertEqual(tick.call_args.kwargs['owner'],os.getpid())
                 self.assertEqual(bell.wait.call_count,1)
-                self.assertGreater(bell.wait.call_args.args[0],0)
+                self.assertIsNone(bell.wait.call_args.args[0])
                 generation=(directory/'generation').read_text().strip()
                 self.assertTrue((directory/'wake'/f'{generation}.json').exists())
 unittest.main(argv=['conventions-watch'],verbosity=2)
