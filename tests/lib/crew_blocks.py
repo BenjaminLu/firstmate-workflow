@@ -31,8 +31,10 @@ def shell(root, home, body, prefix=''):
                PYTHONDONTWRITEBYTECODE='1')
     setup = '''
 . "$1/bin/fm-config.sh"
-TASK=T-Z; PR=9; BASE=main; R_HEAD=abc; ROUND=1; REPO="$1"
+TASK=T-Z; PR=9; BASE=main; R_HEAD=abc; R_BASE=base; round_head=abc; ROUND=1; REPO="$1"
+FM_SPEC_PIN_JSON=
 work="$2"; tree="$2/tree"; branch=task; spec='{"title":"Private intent"}'
+FM_DESIGN="$work/design.md"
 GH="$2/gh"; export FM_GH="$GH"
 fm_project_get() { printf '%s\n' "$work/CONVENTIONS.md"; }
 fm_projection() { printf '%s\n' "${projection:-comments}"; }

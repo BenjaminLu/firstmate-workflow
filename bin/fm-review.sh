@@ -273,12 +273,10 @@ verify_review_head() {
     [ "$FM_EXTERNAL" != 1 ] || { echo 'fm-review: external review requires --pr' >&2; return 65; }
     return 0  # Legacy local-only self review establishes no remote readiness.
   fi
-  local verified GH_REPO="${GH_REPO:-}"
-  # A pre-registry self review still needs a concrete repository for the
-  # shared verifier; this resolves a repository, never a project identity.
-  if [ -z "${FM_PROJECT:-}" ] && [ -z "$GH_REPO" ]; then
-    GH_REPO="$("${GH:-${FM_GH:-gh}}" repo view --json nameWithOwner --jq .nameWithOwner)" || return 65
-  fi
+  local verified
+  # The binding service owns repository resolution: configured GH_REPO or
+  # registry first, then the self checkout's origin. Do not add a second
+  # GitHub lookup (or alter GH_REPO for the later check-evidence readers).
   verified="$(fm_binding head --task "$TASK" --pr "$PR" --branch "$BRANCH")" || return 65
   [ -n "$R_HEAD" ] && [ "$verified" = "$R_HEAD" ] || {
     echo 'fm-review: authoritative PR head moved; refresh before review' >&2; return 65; }
@@ -800,7 +798,7 @@ verify_review_head || exit 65
 {
   cat "${FM_CODE_ROOT:-$REPO}/skills/reviewer/SKILL.md"
   if [ "$FM_EXTERNAL" = 1 ]; then fm_prompt_identity reviewer "$R_HEAD" "$R_BASE" || exit 65; fi
-  if [ -n "$FM_SPEC_PIN_JSON" ]; then fm_pin_prompt reviewer || exit 65
+  if [ -n "${FM_SPEC_PIN_JSON:-}" ]; then fm_pin_prompt reviewer || exit 65
   else
     fm_conventions_prompt || exit 65
     if [ "$FM_EXTERNAL" = 1 ]; then

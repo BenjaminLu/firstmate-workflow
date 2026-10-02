@@ -145,7 +145,9 @@ print(json.dumps({'type':'result','result':final,'response':final}))
         answer=self.invoke('fm-run.sh',['once'])
         self.assertEqual(0,answer.returncode,answer.stderr)
         self.assertNotIn('authoritative head unknown or stale', answer.stdout + answer.stderr)
-        self.assertEqual(['refs/pull/35/head', 'refs/heads/main'],
+        # The run verifies once, then review verifies before preparation,
+        # after the CI wait and before publication.
+        self.assertEqual(['refs/pull/35/head', 'refs/heads/main'] * 4,
                          (self.repo/'binding-fetches').read_text().splitlines())
         self.assertEqual({'worker','reviewer'},{json.loads(p.read_text())['role'] for p in self.results()})
 

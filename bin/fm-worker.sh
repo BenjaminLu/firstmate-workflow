@@ -1122,7 +1122,7 @@ fi
   if [ "$FM_EXTERNAL" = 1 ]; then
     fm_prompt_identity worker "$round_head" "$(git -C "$tree" merge-base "$BASE" HEAD 2>/dev/null || true)" || exit 65
   fi
-  if [ -n "$FM_SPEC_PIN_JSON" ]; then fm_pin_prompt worker || exit 65
+  if [ -n "${FM_SPEC_PIN_JSON:-}" ]; then fm_pin_prompt worker || exit 65
   else fm_conventions_prompt || exit 65; fi
   printf '\n---\n\n# Your task\n\n```json\n%s\n```\n' "$spec"
   printf '\nYour worktree is the current directory. Your branch is `%s`.\n' "$branch"

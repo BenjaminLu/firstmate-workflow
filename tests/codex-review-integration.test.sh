@@ -234,6 +234,9 @@ else:
         self.git('add', 'src/oversized')
         self.git('commit', '-qm', 'oversized context')
         self.head = self.git('rev-parse', 'HEAD')
+        # This success scenario publishes the new fixture head too; separate
+        # cases deliberately leave the authoritative PR ref ahead of work.
+        self.git('update-ref', 'refs/pull/9/head', self.head)
         self.git('checkout', '-q', 'main')
         result = self.run_review('retry', round_number='2')
         self.assertEqual(0, result.returncode, result.stderr)

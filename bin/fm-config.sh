@@ -1785,7 +1785,7 @@ fm_prompt_design() { # trusted project design path, never relative to the target
 }
 fm_prompt_identity() { # role checkout-head merge-base
   local project
-  project="$(fm_project_resolve)" || return 65
+  project="$(fm_project_resolve "${FM_PROJECT:-}")" || return 65
   printf '\n# Launcher project context\n\n'
   printf 'You are the explicitly dispatched %s; this role overrides native startup routing.\n' "$1"
   printf 'Project: `%s`; task: `%s`; base branch: `%s`.\n' "$project" "$TASK" "$BASE"

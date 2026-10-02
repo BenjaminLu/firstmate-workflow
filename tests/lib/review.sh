@@ -9,7 +9,8 @@ set -uo pipefail
 for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
   unset "$_fm_k" || true
 done
-export HERDR_ENV=0 FM_TRANSPORT=direct GH_REPO=fixture/project
+unset GH_REPO  # self fixtures keep their working-directory GitHub API paths
+export HERDR_ENV=0 FM_TRANSPORT=direct
 # A round given --pr waits for the head's required checks (T-153); the
 # fixtures' checks never finish, so no case waits unless it says so
 export FM_REVIEW_CI_WAIT=0

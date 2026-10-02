@@ -8,7 +8,7 @@ import unittest
 sys.dont_write_bytecode = True
 root = Path(sys.argv[1])
 sys.path.insert(0, str(root / 'tests/lib'))
-from crew_blocks import function
+from crew_blocks import function, section
 
 class Prompts(unittest.TestCase):
     def setUp(self):
@@ -77,6 +77,33 @@ class Prompts(unittest.TestCase):
                 self.assertIn(value, result.stdout)
             self.assertIn('explicitly dispatched worker', result.stdout)
 
+    def test_binding_delegates_without_unneeded_repository_lookup(self):
+        body = function(root/'bin/fm-review.sh', 'verify_review_head')
+        for external in ('0', '1'):
+            result = self.shell('unset GH_REPO FM_PROJECT; FM_EXTERNAL=' + external + '; '
+                                'PR=9; TASK=T-052; BRANCH=task; R_HEAD=reviewed\n'
+                                'gh() { echo unexpected-repository-lookup >&2; return 99; }\n'
+                                'fm_binding() { printf reviewed; }\n' + body + '\nverify_review_head')
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertNotIn('unexpected-repository-lookup', result.stderr)
+
+    def test_unpinned_intro_does_not_require_pin_rendering(self):
+        for role in ('worker', 'reviewer'):
+            intro = section(root/('bin/fm-' + ('review' if role == 'reviewer' else role) + '.sh'),
+                            '  cat "${FM_CODE_ROOT:-$REPO}/skills/' + role + '/SKILL.md"',
+                            "  printf '\\n---\\n\\n#")
+            result = self.shell('unset FM_SPEC_PIN_JSON; FM_EXTERNAL=0; REPO="$1"\n'
+                                'fm_pin_prompt() { echo unexpected-pin-rendering >&2; return 65; }\n' + intro)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertNotIn('unexpected-pin-rendering', result.stderr)
+
+    def test_absent_pin_is_optional_but_invalid_pin_refuses(self):
+        result = self.shell('unset FM_SPEC_PIN_JSON; fm_pin_prompt worker')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('', result.stdout)
+        result = self.shell("FM_SPEC_PIN_JSON='{'; fm_pin_prompt worker")
+        self.assertEqual(65, result.returncode, result.stderr)
+
     def fetched_update(self, external, legacy=False):
         # Real object/ref transport; GitHub's JSON is the only stand-in.
         def git(*args):
@@ -98,6 +125,7 @@ class Prompts(unittest.TestCase):
         remote = git('rev-parse', 'HEAD')
         git('update-ref', 'refs/pull/9/head', remote)
         git('checkout', '-q', 'main')
+        git('config', 'remote.origin.url', 'https://github.com/fixture/project.git')
         git('config', 'url.' + str(self.path) + '.insteadOf',
             'https://github.com/fixture/project.git')
         payload = dict(state='OPEN', headRefOid=remote, baseRefOid=base,
