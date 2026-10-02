@@ -152,7 +152,13 @@ while IFS= read -r id; do
     # the worker emits dispatched itself; two writers of one fact is how
     # the log ends up disagreeing with itself
     mkdir -p "$FM_STATE_DIR/dispatch"
-    "${FM_CODE_ROOT:-$REPO}/bin/fm-worker.sh" --task "$id" --repo "$REPO" >>"$FM_STATE_DIR/dispatch/$id.log" 2>&1 </dev/null &
+    # Dispatch is short-lived. Workers belong to the enclosing session,
+    # including when dispatch itself was started through the lifeline.
+    "${FM_CODE_ROOT:-$REPO}/bin/lib/fm-lifeline.sh" --session --log "$FM_STATE_DIR/dispatch/$id.log" -- \
+      "${FM_CODE_ROOT:-$REPO}/bin/fm-worker.sh" --task "$id" --repo "$REPO" </dev/null >/dev/null || {
+        echo "fm-dispatch: could not start an owned worker for $id" >&2
+        exit 70
+      }
     echo "$id"
   fi
   slots=$(( slots - 1 )); started_any=1

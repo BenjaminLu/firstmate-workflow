@@ -1,0 +1,19 @@
+// Deterministic filesystem fault injection for board-live-stream.test.sh.
+// Delegates to the real fs, moving a file/directory only during one call.
+export * from "node:fs";
+import * as fs from "node:fs";
+import { join } from "node:path";
+const marker = join(process.env.FM_ROOT!, "race.json");
+function racing<T>(operation: string, path: unknown, read: () => T): T {
+  let race;
+  try { race = JSON.parse(fs.readFileSync(marker, "utf8")); } catch { return read(); }
+  if (race.operation !== operation || race.path !== String(path)) return read();
+  fs.unlinkSync(marker);
+  const saved = String(path) + ".race-saved";
+  fs.renameSync(String(path), saved);
+  try { return read(); }
+  finally { fs.renameSync(saved, String(path)); }
+}
+export const statSync = (...args: Parameters<typeof fs.statSync>) => racing("statSync", args[0], () => fs.statSync(...args));
+export const readFileSync = (...args: Parameters<typeof fs.readFileSync>) => racing("readFileSync", args[0], () => fs.readFileSync(...args));
+export const readdirSync = (...args: Parameters<typeof fs.readdirSync>) => racing("readdirSync", args[0], () => fs.readdirSync(...args));

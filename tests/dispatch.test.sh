@@ -22,6 +22,7 @@ fixture() {
   mkdir -p "$d/bin" "$d/design" "$d/state"
   cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-dispatch.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
   cp "$ROOT/bin/fm-herdr.py" "$ROOT/bin/fm-ready.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
+  cp -R "$ROOT/bin/lib" "$d/bin/"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$d/bin/fm-worker.sh"; chmod +x "$d/bin/fm-worker.sh"
   printf 'concurrency: 2\n' > "$d/config.yaml"
   fm_tasks_write /dev/stdin "$d/design/tasks" <<'JSON'
@@ -243,6 +244,7 @@ pr_tree() {                     # pr_tree -> a greenlit repo with T-001 and T-00
   local d; d="$(mktemp -d)"; mkdir -p "$d/bin" "$d/design" "$d/state"
   cp "$ROOT/bin/fm-dispatch.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
   cp "$ROOT/bin/fm-herdr.py" "$ROOT/bin/fm-ready.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
+  cp -R "$ROOT/bin/lib" "$d/bin/"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$d/bin/fm-worker.sh"; chmod +x "$d/bin/fm-worker.sh"
   printf 'vendor: mock\nconcurrency: 3\n' > "$d/config.yaml"
   printf '{"tasks":[{"id":"T-001","title":"a","depends_on":[]},{"id":"T-002","title":"b","depends_on":[]}]}\n' \
@@ -350,12 +352,14 @@ rm -rf "$a"
 e="$(pr_tree)"
 # a worker that records that it HAS exited, so the absence below is
 # read after the thing that could have caused it, not after a sleep
-printf '#!/usr/bin/env bash\necho x > "%s/worker-done"\nexit 9\n' "$e" > "$e/bin/fm-worker.sh"
+printf '#!/usr/bin/env bash\necho x > "%s/worker-done-$2"\nexit 9\n' "$e" > "$e/bin/fm-worker.sh"
 chmod +x "$e/bin/fm-worker.sh"
 FM_ROOT="$e" "$e/bin/fm-dispatch.sh" --repo "$e" >/dev/null 2>&1
 assert_eq "0" "$?" "a worker that fails does not fail the dispatcher"
-eventually test -e "$e/worker-done"
-assert_ok "test -e '$e/worker-done'" "the failing worker has run and exited"
+eventually test -e "$e/worker-done-T-001"
+assert_ok "test -e '$e/worker-done-T-001'" "the failing worker has run and exited"
+eventually test -e "$e/worker-done-T-002"
+assert_ok "test -e '$e/worker-done-T-002'" "a failing worker does not prevent the next ready task from starting"
 assert_eq "0" "$(grep -c . <<<"$(jq -r 'select(.type=="worker_crashed")|.type' \
   "$e/state/events.jsonl")" || true)" "and the dispatcher writes no event about it"
 rm -rf "$b" "$e"

@@ -80,10 +80,25 @@ const childEnv = (): Record<string, string | undefined> => {
 
 type Event = Record<string, unknown> & { type?: string; task?: string; pr?: number };
 
+// A replacement can leave a path absent between any two filesystem calls.
+// Keep the last successful text read across that gap; an empty file is still
+// a successful read and replaces the cache. Other failures reach the JSON
+// request error boundary (or the stream's retry boundary).
+const textReads = new Map<string, string>();
+const readText = (file: string): string => {
+  try {
+    const text = readFileSync(file, "utf8");
+    textReads.set(file, text);
+    return text;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return textReads.get(file) ?? "";
+  }
+};
+
 const readEvents = (): Event[] => stores().flatMap(dir => {
   const file = join(dir, "events.jsonl");
-  if (!existsSync(file)) return [];
-  return readFileSync(file, "utf8").split("\n").filter(Boolean)
+  return readText(file).split("\n").filter(Boolean)
     .flatMap(line => { try { return [JSON.parse(line) as Event]; } catch { return []; } });
 });
 
@@ -296,13 +311,12 @@ const effectOf = (p: Record<string, any>, chosen: string): Effect | null => {
 // config.yaml shows on the next refresh, and never hard-coded: the names are
 // whatever the file says. Only the two keys the badge needs are read - the
 // top-level vendor and the reviewer block's vendor - and a comment is never
-// a value. No file, or no top-level vendor, is no badge rather than a guess.
+// a value. Without a successful read or a top-level vendor there is no badge.
 const engine = (): { vendor: string; reviewer: string | null; cross: boolean } | null => {
   const file = join(ROOT, "config.yaml");
-  if (!existsSync(file)) return null;
   let vendor: string | null = null, reviewer: string | null = null, block = "";
   const value = (v: string) => v.trim().replace(/^(["'])(.*)\1$/, "$2") || null;
-  for (const raw of readFileSync(file, "utf8").split("\n")) {
+  for (const raw of readText(file).split("\n")) {
     const line = raw.replace(/(^|\s)#.*$/, "");
     const top = /^([A-Za-z_][\w-]*):(.*)$/.exec(line);
     if (top) {
@@ -333,8 +347,13 @@ const PROJECT_NAME = /^[a-z0-9-]{1,24}$/;
 let registryRead: (Registry & { stamp: string }) | null = null;
 const registry = (): Registry => {
   const file = join(ROOT, "config.yaml"), lib = join(ROOT, "bin/fm-config.sh");
-  if (!existsSync(file) || !existsSync(lib)) return { name: null, projects: new Map() };
-  const st = statSync(file);
+  if (!existsSync(lib)) return { name: null, projects: new Map() };
+  let st;
+  try { st = statSync(file); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return registryRead ?? { name: null, projects: new Map() };
+  }
   const stamp = `${st.ino}:${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
   if (registryRead?.stamp === stamp) return registryRead;
   let name: string | null = null;
@@ -348,6 +367,9 @@ const registry = (): Registry => {
       'for n in $names; do g="$(fm_project_get "$n" github "$2")" && t="$(fm_project_get "$n" tasks "$2")" && s="$(fm_project_get "$n" state "$2")" || exit 1\n' +
       '  printf "%s\\t%s\\t%s\\t%s\\n" "$n" "$g" "$t" "$s"; done',
       "fm-board", lib, file], { env: childEnv(), cwd: ROOT });
+    // The shell reader also races replacement. Do not cache a failed read
+    // as an empty registry if the file disappeared while it was running.
+    if (r.exitCode !== 0 && !existsSync(file)) return registryRead ?? { name: null, projects };
     const [n = "", ...rows] = r.exitCode === 0 ? new TextDecoder().decode(r.stdout).trim().split("\n") : [];
     name = PROJECT_NAME.test(n) ? n : null;
     for (const row of name ? rows : []) {
@@ -1923,7 +1945,7 @@ const server = Bun.serve({
   hostname: "127.0.0.1",          // never 0.0.0.0: this board is for one machine
   port: PORT,
   error() { return json({ error: "project storage is unavailable" }, 503); },
-  fetch(req) {
+  fetch(req, server) {
     return withStorage(() => {
     const url = new URL(req.url);
     // ?project= shows one project; without it, or with no project's name,
@@ -1985,26 +2007,42 @@ const server = Bun.serve({
     }
 
     if (url.pathname === "/events") {
+      // The heartbeat is 15 seconds apart; Bun's default idle limit is 10.
+      // Only this long-lived route disables the request idle timeout.
+      server.timeout(req, 0);
+      // Read before constructing the stream: a failed initial read must
+      // reach Bun's JSON error handler, not create an errored response body.
+      const initial = state(only);
+      // The log is not all the board shows: merge outcomes land in decision
+      // records, and an unknown outcome is known only here.
+      const stamp = () => withStorage(() => stores().flatMap(dir => [join(dir, "events.jsonl"), join(dir, "decisions"), join(dir, "pending")])
+        .map((f) => { try { const s = statSync(f); return `${s.size}:${s.mtimeMs}`; } catch { return "-"; } })
+        .join("|") + `|${[...unknownOutcome].sort().join(",")}`);
+      let size = stamp();
       let stop = () => {};
       const stream = new ReadableStream({
         start(c) {
           const enc = new TextEncoder();
           const send = (event: string, data: unknown) =>
             c.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-          send("state", state(only));
-          // the log is not all the board shows: a merge's outcome lands in
-          // its decision record, and an unknown one is known only here
-          const stamp = () => withStorage(() => stores().flatMap(dir => [join(dir, "events.jsonl"), join(dir, "decisions"), join(dir, "pending")])
-            .map((f) => { try { const s = statSync(f); return `${s.size}:${s.mtimeMs}`; } catch { return "-"; } })
-            .join("|") + `|${[...unknownOutcome].sort().join(",")}`);
-          let size = stamp();
+          send("state", initial);
           const poll = setInterval(() => {
-            const now = stamp();
-            if (now !== size) { size = now; send("state", state(only)); }
+            // Timers run outside Bun's request error handler. Retain the
+            // last frame during a replacement and retry on the next tick.
+            // Advance the stamp only after a complete successful read.
+            try {
+              const now = stamp();
+              if (now !== size) { send("state", state(only)); size = now; }
+            } catch { /* unavailable this tick; the stream stays open */ }
           }, 500);
           const beat = setInterval(() => c.enqueue(enc.encode(": beat\n\n")), 15000);
           // a change to the page itself reloads every open board
-          const w = existsSync(PUBLIC) ? watch(PUBLIC, () => send("reload", {})) : null;
+          let w: ReturnType<typeof watch> | null = null;
+          try {
+            w = watch(PUBLIC, () => send("reload", {}));
+            w.on("error", () => w?.close());
+          }
+          catch { /* the public directory may be replaced during startup */ }
           stop = () => { clearInterval(poll); clearInterval(beat); w?.close(); };
         },
         cancel() { stop(); },
