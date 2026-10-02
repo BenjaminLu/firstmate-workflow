@@ -207,9 +207,15 @@ class CodexHooks(unittest.TestCase):
         spec = importlib.util.spec_from_file_location('herdr', Path(sys.argv[1]) / 'bin/fm-herdr.py')
         session = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(session)
+        # A first take starts at queue end; arm the cursor before pushing wakes.
+        W.save(W.wdir(self.root) / 'cursor', '0')
         self.push('D-first', 1)
         self.push('D-second', 2)
-        W.take(self.root, stage=1)
+        self.assertEqual(['D-first', 'D-second'],
+                         [x['id'] for x in W.take(self.root, stage=1)])
+        staged = W.wdir(self.root) / 'wake/1.staged'
+        self.assertEqual(['D-first', 'D-second'],
+                         [x['id'] for x in json.loads(staged.read_text())['items']])
         real = W.life._write_ack
         def interrupt(path, record):
             if str(path).endswith('/D-second.json'):
@@ -217,6 +223,13 @@ class CodexHooks(unittest.TestCase):
             real(path, record)
         with patch.object(W.life, '_write_ack', side_effect=interrupt):
             with self.assertRaises(OSError): W.claim(self.root)
+        # Inspect raw files only to prove the fault happened after a durable
+        # first write; the session readers below must hide that tentative ack.
+        ack_dir = self.root / W.life.ACK_DIR
+        self.assertEqual(1, json.loads((ack_dir / 'D-first.json').read_text())['acknowledged'])
+        self.assertFalse((ack_dir / 'D-second.json').exists())
+        journal = self.root / 'state/session/.ack-transaction.json'
+        self.assertEqual({'D-first': None, 'D-second': None}, json.loads(journal.read_text()))
         output = io.StringIO()
         with patch.object(session, 'window_host', return_value='none'), \
              patch.object(session, 'retire_dead_crew', return_value={}), \
