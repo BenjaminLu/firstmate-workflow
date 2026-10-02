@@ -26,6 +26,13 @@ rm -rf "$d"
 first=$'1. open name the helper\n2. open empty case\nCRITERIA-COMPLETE:T-Z\nREJECT:T-Z'
 d="$(fixture)"; record "$d" reviewer-1 "$first"
 assert_eq 0 "$(code "$d")" 'a round-one complete standing list is valid without an ask'
+assert_eq "1" "$(jq -s '[.[]|select(.type=="criteria_returned" and .task=="T-Z" and .actor=="firstmate")]|length' "$d/state/events.jsonl")" \
+  'clean local criteria return the board lane signal without a PR'
+assert_eq "true" "$(jq -s 'any(.[]; .type=="criteria_returned" and (.summary.en|length)>0 and (.summary["zh-TW"]|length)>0)' "$d/state/events.jsonl")" \
+  'criteria returned has authored English and Traditional Chinese summaries'
+usage="$("$d/bin/fm-protocol.sh" 2>&1)"; usage_code=$?
+assert_eq 64 "$usage_code" 'protocol missing task reports usage'
+assert_contains "$usage" 'check --task <id> [--pr <n>]' 'protocol usage marks PR as optional'
 record "$d" worker-1 $'PRIVATE_REASONING\nASK-PASS-CRITERIA:T-Z'
 record "$d" firstmate 'Take both items in one pass'
 assert_eq 0 "$(code "$d" 2)" 'worker notes and firstmate briefs are not verdicts'

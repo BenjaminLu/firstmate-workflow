@@ -3,16 +3,21 @@
 These receipts exercise readers. Managed authentication is covered separately by
 codex-review-integration.test.sh through the real launcher and transport.
 """
-import json
 from pathlib import Path
 import re
 import sys
+import subprocess
 
 root, state, task, actor, text = sys.argv[1:]
 sys.path.insert(0, str(Path(root) / 'bin/lib'))
 from fm_evidence import Store, verdict_marker
 
-store = Store(state, 'self', task)
+# Resolve through the production functions with this fixture's configuration,
+# not the source checkout's config or the caller's working directory.
+project = subprocess.check_output(
+    ['bash', '-c', '. "$1/bin/fm-config.sh"; fm_storage_init "$2" || exit; fm_evidence_project',
+     'fixture-evidence', root, str(Path(state).resolve().parent)], text=True).strip()
+store = Store(state, project, task)
 text = text.replace('\\n', '\n').replace('\r', '\n')
 marker = verdict_marker(text, task)
 if marker:

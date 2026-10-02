@@ -1,5 +1,6 @@
 # shellcheck shell=bash
 # Seed a trusted legacy approval bound to a fixture's real branch.
+# tests/lib/evidence.py resolves the fixture project via fm_evidence_project.
 seed_local_approval() { # <repo> <task> <branch> <actor>
   local head base patch
   head="$(git -C "$1" rev-parse "$3")"

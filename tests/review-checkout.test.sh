@@ -68,7 +68,7 @@ assert_fail "test -e '$ck'" "the round removes the checkout when it ends"
 assert_fail "test -e '$(dirname "$ck")'" "and the directory made for it"
 assert_contains "$(cat "$dm/ghcalls")" "pr comment" "fm-review.sh itself posts the run-mode verdict"
 assert_contains "$outM" "APPROVE:T-Z" "and the verdict comes back"
-assert_eq legacy "$(jq -r 'select(.kind=="verdict")|.provenance.level' "$rm_/state/evidence/firstmate-workflow/T-Z/"*.json)" \
+assert_eq legacy "$(jq -r 'select(.kind=="verdict")|.provenance.level' "$rm_/state/evidence/self/T-Z/"*.json)" \
   "custom run-mode verdict is retained with legacy provenance"
 
 sentM="$(cat "$dm/prompt.md")"

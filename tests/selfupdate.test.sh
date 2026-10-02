@@ -396,6 +396,8 @@ printf '#!/usr/bin/env bash\nset -uo pipefail\nR="${FM_ROOT:-.}"\nrc=0\nfor t in
 chmod +x "$g/bin/ci.sh"
 # and gate 5 runs only what the project declares, so it declares that
 printf 'project:\n  check: bin/ci.sh\n' > "$g/config.yaml"
+# Private local records must survive every branch checkout below.
+printf 'state/\n' > "$g/.gitignore"
 git -C "$g" add -A; git -C "$g" commit -qm base
 
 git -C "$g" checkout -q -b sk-001-skill
@@ -445,6 +447,9 @@ mkdir -p "$g/tests"
 printf '# Worker\n\nthe new rule.\n' > "$g/skills/worker/SKILL.md"
 printf '#!/usr/bin/env bash\ntest -f "${FM_ROOT:-.}/skills/worker/SKILL.md"\n' > "$g/tests/skills.test.sh"
 git -C "$g" add -A; git -C "$g" commit -qm vacuous; git -C "$g" checkout -q main
+assert_eq "" "$(git -C "$g" ls-tree -r --name-only sk-001-vacuous -- state/)" \
+  "fixture commits never track local round records"
+assert_ok "test -d '$g/state/evidence'" "branch switching retains seeded local records"
 assert_fail "$gate --branch sk-001-vacuous --pr $pr --only 5" "5 blocks one whose test passes without the change"
 
 : > "$GHSTATE/red"

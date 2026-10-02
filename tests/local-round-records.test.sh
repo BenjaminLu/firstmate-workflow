@@ -41,5 +41,21 @@ FM_CONFIG="$d/legacy.yaml"
 printf 'vendor: mock\ndefault_project: legacy-owner\n' > "$FM_CONFIG"
 assert_eq legacy-owner "$(fm_evidence_project)" 'legacy evidence uses configured default project'
 assert_eq comments "$(fm_projection)" 'unnamed legacy launchers preserve comments projection'
+# Fixture receipts must resolve the same namespace as the launchers. The
+# helper uses tests/lib/evidence.py; exercise fallback, default and override.
+mkdir -p "$d/fixture"
+for expected in self configured explicit; do
+  printf 'vendor: mock\n' > "$d/fixture/config.yaml"
+  unset FM_PROJECT
+  if [ "$expected" != self ]; then
+    printf 'default_project: configured\n' >> "$d/fixture/config.yaml"
+  fi
+  if [ "$expected" = explicit ]; then export FM_PROJECT=explicit; fi
+  python3 "$ROOT/tests/lib/evidence.py" "$ROOT" "$d/fixture/state" T-X reviewer-1 'APPROVE:T-X'
+  assert_eq 0 "$?" "$expected fixture approval is retained"
+  assert_eq "$expected" "$(jq -r .project "$d/fixture/state/evidence/$expected/T-X/"*.json)" \
+    "$expected fixture namespace matches launcher resolution"
+done
+unset FM_PROJECT
 rm -rf "$d"
 finish

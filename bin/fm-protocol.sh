@@ -6,7 +6,7 @@
 # 2026-09-29; SK-007). This decides mechanically whether that happened, so
 # "the reviewer is drip-feeding" becomes a finding rather than a feeling.
 #
-#   fm-protocol.sh check --task T-004 --pr 9 --round 3 [--repo .]
+#   fm-protocol.sh check --task T-004 [--pr 9] [--round 3] [--repo .]
 #
 # Exit 0 for valid local standing-list syntax, 3 for missing/invalid evidence.
 # The diagnostic names the violated rule. Syntax does not establish semantics.
@@ -34,7 +34,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ "$MODE" = check ] && [ -n "$TASK" ] || {
-  echo "usage: fm-protocol.sh check --task <id> --pr <n> [--round n]" >&2; exit 64; }
+  echo "usage: fm-protocol.sh check --task <id> [--pr <n>] [--round n] [--repo path] [--project name]" >&2; exit 64; }
 cd "$REPO" || { echo "fm-protocol: no repo at $REPO" >&2; exit 64; }
 
 emit() { FM_ROOT="$REPO" "$REPO/bin/fm-emit.sh" --actor firstmate --task "$TASK" --pr "$PR" "$@" >/dev/null 2>&1 </dev/null || true; }
@@ -46,3 +46,5 @@ if ! result="$(fm_evidence protocol --round "$ROUND" 2>&1)"; then
   exit 3
 fi
 printf '%s\n' "$result"
+emit --type criteria_returned --en "round $ROUND local standing-list protocol is clean" \
+     --tw "第 $ROUND 輪本機現行清單協定檢查通過"

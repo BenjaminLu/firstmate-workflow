@@ -204,6 +204,10 @@ assert_eq "" "$(printf '%s\n' "$allsh" | xargs grep -l 'getopts\|OPTARG' || true
 run_capped 6 bash "$ROOT/bin/fm-emit.sh" --no-such-flag
 assert_eq "64" "$code" "an unknown flag is refused too"
 assert_contains "$said" "unknown argument" "and says so"
+# The evidence wrapper validates unknown options before delegating to Python.
+run_capped 6 bash "$ROOT/bin/lib/fm-evidence.sh" --task T-Z --no-such-flag
+assert_eq "64" "$code" "evidence refuses an unknown flag with the shared usage status"
+assert_contains "$said" "fm-evidence: unknown argument --no-such-flag" "evidence refusal names script and flag"
 # Twelve scripts get their guard from a sourced function, and a
 # command-not-found under `set -uo pipefail` carries on - the exact hazard
 # the assertions stage exists to catch. So the load has to be hard: if the
