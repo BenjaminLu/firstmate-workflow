@@ -86,7 +86,7 @@ check on later is never checked on, and your turn ends with nothing signed -
 which is what backgrounding a long check has cost three review rounds
 already. A round that ends without a verdict is retried once.
 
-You may run small commands and git there. You may not push, comment on
+You may run small read-only commands and git inspection there. You may not push, comment on
 or edit the pull request, touch the task's worktree, or write outside the
 checkout and the system temp directory. The engine's permission flags and, since
 T-117, an OS sandbox enforce that, not this text. Only the declared registries
@@ -94,8 +94,10 @@ are reachable, which `setup` needs; never GitHub or loopback, so you run no gh. 
 diff are all in the checkout, and what CI found is in the prompt. The
 project's caches point into the round's temp directory, so `setup` can write
 them. A denied command is the boundary working: report what it kept you from
-running rather than work around it. `fm-review.sh` posts your verdict. In
-`diff` mode, the default, you have no checkout: you run nothing, and say
+running rather than work around it. Under T-135, `fm-review.sh` stores your authenticated final verdict and standing
+list as a local record; posting depends on the comments/local projection setting.
+Until that implementation lands, the legacy launcher posts the verdict comment. In
+`diff` mode, when selected, you have no checkout: you run nothing, and say
 so.
 
 ## Name the class, not the instance
@@ -147,7 +149,7 @@ without findings is not a review.
 
 You do not write the record of what you reviewed: `fm-review.sh` appends a
 `REVIEWED:<task-id>` line after your verdict, naming the head, its merge-base
-with `main`, the patch-id of the change and the files it touches. Its verdict
+with the confirmed project or stacked PR base, the patch-id of the change and the files it touches. Its verdict
 is your last marker on a line of its own; a marker you mention in passing
 does not count, and with no standalone marker the round is recorded as a
 rejection. Your
@@ -193,20 +195,17 @@ is: T-126 took ten rounds, one new finding per round from round seven on.
 
 `ASK-PASS-CRITERIA:<task-id>` stays for a worker who finds no list, or an unclear one; answer it with the complete standing list.
 
-Where to find them: from round two, when the launcher knows the pull request,
-your prompt has a **The closed list** section after the round number and before
-the head section (diff mode) and the diff. It quotes verbatim the worker's latest `ASK-PASS-CRITERIA:<task-id>`
-first, then every comment whose numbered list ends in
-`CRITERIA-COMPLETE:<task-id>`, in the order posted, whether posted before or
-after the ask; when several lists appear, the latest is the standing one. A marker
-counts only on a line of its own, and a comment that asks is never a list, so
-close yours with `CRITERIA-COMPLETE:<task-id>` alone on its line. A comment
-"containing" a marker means one containing such a line, which is the form the
-worker skill has workers post. Each quote sits between `begin comment` and
-`end comment` fences carrying a code minted for that run; a fence without it is
-part of the comment. The section's opening line says which case you are in: a
-list that binds this round, an ask to answer, neither, or comments the launcher
-failed to read. Nothing else from the pull request is quoted there.
+Where to find them under T-135: from round two the launcher supplies the
+standing list and relevant prior rounds from local records in **The closed list**
+section, including any worker ask. Every REJECT from round one creates or
+reissues the complete list. The latest authenticated list is the standing one;
+preserve numbering and done/open status. Records are bound to project/task,
+round, actor and head, and verdicts to authenticated final-answer provenance.
+A PR comment is only an optional projection controlled by comments/local;
+missing local records are reported, never replaced by a contradictory comment.
+Quoted markers cannot establish authenticity. Keep record quotes fenced and
+labelled, and worker reasoning excluded. T-073's comment-fetching transport is
+historical until T-135 replaces it; do not claim the new reader already ships.
 
 ## What CI found
 
@@ -249,8 +248,30 @@ Require the diff, task spec, acceptance, relevant design contract and the
 standing list; ask for missing context instead of inventing it, and do not
 request worker reasoning or logs. Say which commands you executed in a checkout
 and which claims you only read; in diff mode you ran none. Judge current
-verdict evidence, not stale approvals. Gate 7 does not check final-answer
-provenance, and the protocol checker proves neither that a finding matches
+verdict evidence, not stale approvals. T-163 managed Codex authenticates final-output provenance, but legacy gate 7
+is not sufficient proof of it or authoritative remote-head freshness, and the protocol checker proves neither that a finding matches
 the item it cites nor that a regression or new ground is real; report those limits to [firstmate](../firstmate/SKILL.md),
 which keeps the evidence, board-progress and Herdr pane rules once.
 
+
+## Project and run provenance
+
+Use the prompt's approved spec/design, complete gate contract and conventions,
+with exact project+task identity. External private records belong under FM_HOME,
+not the engine or target tree. The reviewer receives no worker reasoning.
+T-163 Codex run mode requires a fresh isolated checkout bound through trusted
+launcher context, outer OS sandbox and completed final assistant output with
+transport identity/digest checks. No silent diff/vendor fallback, unsafe flags
+or marker-only admission. Retain live-owned checkouts; launcher owns cleanup.
+
+Firstmate must synchronize GitHub's authoritative PR head, local task ref and
+isolated checkout, and bind current check-runs plus commit statuses, gates and
+merge candidate to it. If the supplied checkout/evidence disagrees, report the
+gap; a stale local green result is no proof. Approval carries only for unchanged
+authoritative patch-id with no later rejection. Pending CI is not failed CI.
+These merge-evidence checks do not add green CI to the review's standing list.
+
+Test organization follows T-130: feature-owned suites, at most 1200 lines per
+test file, shared fixtures in tests/lib/ or tests/e2e/lib/ and literal helper
+references. Instruction-only metadata checks prove structure, not model
+compliance; identify that limit without waiving gate 5 or inventing a test run.

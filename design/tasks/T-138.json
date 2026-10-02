@@ -1,0 +1,40 @@
+{
+  "id": "T-138",
+  "milestone": "M3",
+  "bootstrap": false,
+  "depends_on": [
+    "T-142",
+    "T-135"
+  ],
+  "title": "Private local evidence binds authenticated verdicts to authoritative heads and patches",
+  "scope": [
+    "bin/fm-review.sh",
+    "bin/fm-gate.sh",
+    "bin/fm-worker.sh",
+    "bin/fm-emit.sh",
+    "bin/fm-diagram.sh",
+    "bin/lib/**",
+    "board/**",
+    "tests/**",
+    "design/**",
+    "skills/**",
+    "design/tasks/T-138.json",
+    "bin/fm-config.sh",
+    "bin/fm-project.sh",
+    "bin/fm-protocol.sh",
+    "bin/fm-merge.sh",
+    "bin/fm-run.sh",
+    "bin/fm-decide.sh"
+  ],
+  "acceptance": [
+    "Why. On 2026-09-29 the captain approved a design for running firstmate-workflow on other repositories (reviewed as an artifact, then grilled on consenlabs/tokenlon-mm-agent PR #164): firstmate inspects a repository and asks at most three questions to write FM_HOME/projects/<name>/CONVENTIONS.md; every merge still goes through the captain's intent card, never auto-merge; external reviewers such as that repo's R2D2-im and BB8-im can be the review, with firstmate's own reviewer only a local pre-check; and nothing about watching may depend on firstmate remembering - scripts do it. This task is one of T-137..T-141, run in the order of their depends_on. Its own spec file, design/tasks/T-138.json, is committed on this branch.",
+    "Extend T-135 append-only round records without migrating their self layout. Append-only external evidence lives under FM_HOME/projects/<name>/state/evidence/<task>/; self state/evidence/<project>/<task>/ stays compatible. Trusted fm outside rounds records project/task, attempt, verified head/base, stable patch-id, reviewed files, engine/spec/contract hashes, reviewer identity, vendor/model, final-output provenance and text. Model cannot forge transport receipts. Keep worker reports and firstmate briefs separate from reviewer input.",
+    "On top of T-135 local verdict readers and records, add trusted signing and head/spec/patch binding. Gate 7 verifies these bindings and refuses forged or mismatched records. T-135 owns authenticated final-answer selection, latest rejection precedence and closed-list consumption; T-140 owns additional projection modes. Bind any projection to local evidence, preserve records on publication failure, and never leak private specs/briefs by default.",
+    "Carry approval only when authoritative current patch-id equals approved patch after a base update, with verified ancestry and no later rejection. Changed patch needs review; CI and all six gates bind to actual current head. Before current-head acceptance, synchronize and verify the authoritative GitHub PR head against the local task ref and isolated checkout. Bind required check-runs AND commit statuses, gates, reviewed head/base/patch, reviewer identity/final-answer provenance and merge candidate to that verified SHA. If remote moves or cannot be verified, readiness is stale/unknown; refresh before accepting. Regression: GitHub update-branch moves remote while local ref remains stale; green local gates must not pass remote readiness. Approval carries only when authoritative current patch-id is unchanged and no later rejection supersedes it.",
+    "Tests: a review recorded with post=local gates green; a base-only update keeps the approval, a one-line change voids it; a forged or mismatched record is refused. Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves. Stubs answer as the real tools do (gh's JSON shapes, a GitHub review, a commit status).",
+    "External project data lives only under FM_HOME/projects/<name>/{repo,worktrees,CONVENTIONS.md,tasks,design.md,state}. No private specs, worktrees, prompts, pins, evidence, mirrors or recovery data in engine state or its public tree. Private repos are accepted. Unreadable protection is unknown: require captain-confirmed project checks and policy before readiness, never infer permission or reject solely for visibility. Every GitHub operation names the project repository. Preserve self-project default and explicit-name compatibility. Never push to protected base; task-branch force-with-lease requires confirmed project policy and expected old head. Merge method, deletion, land/review/post and stacking follow CONVENTIONS.md, never hardcoded squash/delete.",
+    "Evidence: required GitHub checks and commit statuses plus six gates 1,2,4,5,6,7 on the authoritative current PR head; gate 3 is retired. Workers author feature-owned fail-first tests but run no suites. Tests stay at most 1200 lines; shared fixtures in tests/lib/ or tests/e2e/lib/, with literal helper references. Firstmate verifies CI/gates and real acceptance; a structure check cannot prove model compliance. Commit this task spec with implementation.",
+    "T-135 owns local asks, verdicts, standing lists and their worker/reviewer/gate-7/protocol readers, including round-one REJECT lists and round-two delivery. Extend those records and readers to the external private location and additional provenance bindings without reimplementing the transport. Preserve numbering, done/open status and REGRESSION/NEW-GROUND rules in every projection mode; T-052 supplies external prompt context. Test forged/mismatched records and external local-mode operation with no PR comments.",
+    "T-138 owns merge-time head binding end to end: fm-run.sh supplies the authoritative verified head SHA to fm-decide.sh, and the merge card records that exact SHA with its project/task/PR identity and the required checks, six gates and authenticated reviewer verdict verified for it (including any valid unchanged-patch approval carry-forward). The board passes the recorded SHA unchanged to bin/fm-merge.sh; no caller may substitute a freshly read but ungated head. The helper reads GitHub headRefOid and refuses a missing/unverifiable expected SHA or any head other than the verified, gated and reviewed candidate. It merges only with gh pr merge --match-head-commit <sha>, preserving project merge/retention policy, so GitHub also enforces the match atomically if the head moves after the read. Record either local refusal or GitHub atomic refusal on decision_made as merge: failed with the reason in authored en and zh-TW, preserving the board's running/settled outcome contract and never emitting merged or retrying automatically on refusal. Require fail-first regressions in tests/merge.test.sh for a head moving after the card is raised and for a head moving between headRefOid read and merge: both refuse, leave the PR unmerged, and record the failed outcome; also cover missing binding and successful matching-head forwarding through card and board. The gh stub must return the real PR-view JSON shape including headRefOid and the real nonzero merge-refusal exit code, and assert the exact --match-head-commit argument. Card/board integration assertions belong in their feature-owned suites under tests/**. Coordinate these shared files with T-139's merge policy and T-054's board outcome work; neither replaces this SHA enforcement."
+  ]
+}

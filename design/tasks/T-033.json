@@ -18,6 +18,7 @@
     "tests/skills.test.sh"
   ],
   "acceptance": [
+    "Historical transport/threshold clarification (captain, 2026-10-02): any PR-comment source or delayed closed-list threshold below describes the earlier implementation, not the adopted contract. SK-007 requires the complete standing list with every REJECT from round one; an ask is only for a missing or unclear list before edits. T-135 owns authenticated local brief/ask/verdict/list records, gate-7/protocol readers and delivery to reviewers from round two. Posting is optional projection. Other historical acceptance remains unchanged; this note claims no runtime implementation.",
     "A concise canonical startup contract and thin Claude/Codex entrypoints route a top-level interactive session to firstmate immediately, while an explicitly dispatched worker or reviewer retains its assigned role; entrypoints link to the canonical contract rather than duplicating instructions.",
     "The default firstmate plans, dispatches, monitors, coordinates remediation and submits decisions through the repository scripts; it does not implement production code or run git/gh mutations itself. Document the actual scripts and their limitations, including gate failures that require explicit remediation coordination.",
     "Existing user authorization persists across turns and routine authorized work proceeds without repeated confirmation. Scope decisions and captain merge approval still go through the board, and firstmate does not infer captain merge approval from a request to finish all PRs.",

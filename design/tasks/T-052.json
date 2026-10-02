@@ -4,7 +4,8 @@
   "bootstrap": false,
   "depends_on": [
     "T-051",
-    "T-056"
+    "T-139",
+    "T-135"
   ],
   "title": "role prompts carry the project's design from the engine side",
   "scope": [
@@ -16,14 +17,25 @@
     "tests/worker.test.sh",
     "tests/review.test.sh",
     "tests/skills.test.sh",
-    "design/design.md"
+    "design/design.md",
+    "design/tasks/T-052.json",
+    "tests/**",
+    "bin/fm-config.sh",
+    "bin/lib/**",
+    "bin/fm-gate.sh",
+    "bin/fm-protocol.sh"
   ],
   "acceptance": [
-    "Implements design.md section 15.7. Worker and reviewer prompts carry, from the engine side: the role skill, the pinned spec, the project's design file at the pin's commit bounded in size with any truncation stated in the prompt, the project's base and its pinned T-043 contract (every field), and the absolute path of the checkpoint helper in the frozen code tree.",
-    "The worker and reviewer skills stop pointing at repository-relative files (design/design.md, design/tasks.json, bin/fm-checkpoint.sh) and refer to the design, scope and checkpoint command in the prompt; they stay portable English with no vendor-specific syntax. The firstmate skill says firstmate runs in the engine root and names --project on every script it calls, with one exception from design.md section 15.10 point 2: its routine dispatch step, after a green light and whenever a run ends, calls fm-dispatch.sh with no --project so free slots are filled fairly across every registered project, and it names --project for dispatch only when the captain asks for one project's work. The firstmate skill also says every card firstmate raises by hand takes the id fm-decide.sh --allocate gives it, D-<project>-<task>-<n> (design.md section 15.10 point 1), never a number picked by hand.",
+    "Why: portable prompts carry launcher-supplied role, approved immutable spec, bounded design/context with explicit cap and visible trimming, complete pinned gate contract, conventions whole, project+task/base and isolated checkout SHA. Trusted frozen launcher owns commit/push/publication outside rounds; no checkpoint command for workers to execute. No target-relative engine-file assumptions.",
+    "Roles use prompt-provided design/scope/conventions; dispatched role overrides startup routing. Firstmate works from engine root and supplies --project to supported project operations. After T-053, routine no-project dispatch fairly fills all projects; explicit --project only for captain-requested project work. Until implemented, report unsupported paths rather than claim external dispatch. Allocate all decision IDs through fm-decide.sh --allocate as D-<project>-<task>-<n>; no handpicked ranges.",
+    "Portable English roles refer to prompt-provided design, scope, conventions and launcher publication contract. No worker checkpoint execution and no obsolete D-999 decision range. Preserve self prompt shape and role separation.",
     "The self project's prompt has the same shape; the reviewer still receives the diff, the spec and the design and never the worker's reasoning (R2).",
     "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
-    "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
-    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+    "Evidence is this pull request's required GitHub check and the six gates 1,2,4,5,6,7. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason.",
+    "External project data lives only under FM_HOME/projects/<name>/{repo,worktrees,CONVENTIONS.md,tasks,design.md,state}. No private specs, worktrees, prompts, pins, evidence, mirrors or recovery data in engine state or its public tree. Private repos are accepted. Unreadable protection is unknown: require captain-confirmed project checks and policy before readiness, never infer permission or reject solely for visibility. Every GitHub operation names the project repository. Preserve self-project default and explicit-name compatibility. Never push to protected base; task-branch force-with-lease requires confirmed project policy and expected old head. Merge method, deletion, land/review/post and stacking follow CONVENTIONS.md, never hardcoded squash/delete.",
+    "Evidence: required GitHub checks and commit statuses plus six gates 1,2,4,5,6,7 on the authoritative current PR head; gate 3 is retired. Workers author feature-owned fail-first tests but run no suites. Tests stay at most 1200 lines; shared fixtures in tests/lib/ or tests/e2e/lib/, with literal helper references. Firstmate verifies CI/gates and real acceptance; a structure check cannot prove model compliance. Commit this task spec with implementation.",
+    "Before current-head acceptance, synchronize and verify the authoritative GitHub PR head against the local task ref and isolated checkout. Bind required check-runs AND commit statuses, gates, reviewed head/base/patch, reviewer identity/final-answer provenance and merge candidate to that verified SHA. If remote moves or cannot be verified, readiness is stale/unknown; refresh before accepting. Regression: GitHub update-branch moves remote while local ref remains stale; green local gates must not pass remote readiness. Approval carries only when authoritative current patch-id is unchanged and no later rejection supersedes it. Merge candidate binding is enforced at merge time by T-138 (`bin/fm-merge.sh`).",
+    "Regression must show prompt and isolated checkout refreshed after remote update-branch while local ref was stale, or explicit refusal before review. Reviewer receives machine evidence and authentic standing list, never worker reasoning. T-163 extraction alone does not establish remote-head freshness."
   ]
 }

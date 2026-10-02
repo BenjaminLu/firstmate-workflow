@@ -22,6 +22,7 @@
     "design/tasks.json"
   ],
   "acceptance": [
+    "Historical transport/threshold clarification (captain, 2026-10-02): any PR-comment source or delayed closed-list threshold below describes the earlier implementation, not the adopted contract. SK-007 requires the complete standing list with every REJECT from round one; an ask is only for a missing or unclear list before edits. T-135 owns authenticated local brief/ask/verdict/list records, gate-7/protocol readers and delivery to reviewers from round two. Posting is optional projection. Other historical acceptance remains unchanged; this note claims no runtime implementation.",
     "GitHub's community profile reports no license, no code of conduct, no contribution guidelines, no issue template and no pull request template. The captain asked for all five, designed well for this repository. Its own entry must be committed into design/tasks.json and its row added to design/design.md's task table on this task's branch.",
     "Captain decision D-1016 = A: LICENSE carries the full MIT License text with the line 'Copyright (c) 2026 Benjamin Lu'. README.md gains a short License section naming it (SPDX: MIT), and CONTRIBUTING.md states that contributions are accepted under MIT.",
     "Captain decision D-1017 = B: CODE_OF_CONDUCT.md adopts the Contributor Covenant 2.1, and its reporting contact is coopermilk123@gmail.com, the maintainer, Benjamin Lu. It invents nothing else: no second contact, and no enforcement committee that does not exist.",

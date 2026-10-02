@@ -243,18 +243,23 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   protocol. Read their current usage before invocation. Supply the reviewer with
   diff, spec, acceptance, authoritative relevant design and any original closed
   criteria, never worker reasoning or logs. The current review launcher does not
-  supply all that context. Every adapter's verdict is read the same way:
-  `fm-review.sh` takes the attempt's own `final.txt` when Herdr recorded this
-  run as a chain attempt, and the round's combined output directory and log
-  tail otherwise (`attempt_output`, fm-review.sh:618-620), and either way that
-  is substring matching, which does not by itself establish current-head
-  approval. Coordinate these remaining limitations.
+  supply all that context. T-163 managed Codex reviews use the trusted
+  launcher's current-attempt completed-turn JSON final output, authenticated
+  by `review_final`, bound to the isolated checkout and reviewer identity.
+  Prompt echoes, intermediate transcript text and model-written final files
+  cannot supply that verdict. Legacy paths use a matching chain attempt's
+  `final.txt`, or combined output/log tail otherwise; their marker checks do
+  not establish final-answer provenance. Even managed Codex extraction does
+  not establish authoritative remote-head freshness or authenticate arbitrary
+  GitHub comments. Verify those boundaries before accepting a merge candidate.
 - Every review goes through `bin/fm-review.sh`, in the mode `config.yaml`
   declares (`reviewer: mode:`). In `run` mode, which this repository declares,
   the script gives the reviewer a fresh clone of the pull request head outside
-  every worktree, removes it afterwards, and the adapter confines the engine
-  there with the CLI's own permission flags; only adapters that can do that
-  (today `claude`) take a run-mode round. `diff` mode, the default, is the
+  every worktree and cleans it only after confirmed owner completion. Claude
+  and T-163 managed Codex support run mode through trusted checkout admission
+  and confinement, including the required fm OS sandbox. Codex rejects missing
+  or malformed context and unsupported hosts before execution; never silently
+  switch vendor or fall back to diff mode. `diff` mode, the default, is the
   diff-only review. Either way the script emits `review_opened` and then
   `approved` or `review_failed` as the reviewer, so the board shows the reviewer
   and the review lane with no step of yours. Do not launch a reviewer by hand
@@ -262,7 +267,7 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   events yourself; both were stopgaps for the diff-only reviewer and are
   retired. If a run-mode round cannot start (no confining adapter, no checkout),
   report the script's message and coordinate the fix. A run-mode checkout is
-  never swept while its owner round is alive (T-123): liveness is read from a
+  never swept while its owner round is live or ownership is uncertain (T-123): liveness is read from a
   kernel `flock` the round holds on its own checkout's owner file, not
   `kill -0`, whose EPERM under the sandbox used to read a live checkout as
   abandoned. A round whose transcript ends with no signed verdict is retried
@@ -451,7 +456,7 @@ set by the captain.
 6. A worker round needs a brief, not a symptom: firstmate coordinates and
    must hand every worker round the evidence to fix its problem, never make
    the worker hunt (captain, 2026-09-28). Before each round, read the failing
-   checks' logs and the review, open the code, and post a brief naming per
+   checks' logs and the review, open the code, and prepare an approved brief naming per
    item the failing assertion with its log lines, the file:line and source
    around it, the verified root cause, the expected change and what must not
    change; update a BEHIND branch first, and do not run rounds with
@@ -460,7 +465,14 @@ set by the captain.
    request BEHIND and MERGEABLE. A brief that only relays symptoms ("CI is
    red, find out why") is not a brief: rounds with such briefs converged in
    ~20 minutes, rounds without took 30-70 minutes and 150-290 turns, and
-   workers still do not run the suites.
+   workers still do not run the suites. Under T-135, keep the approved
+   brief in project-local evidence and supply it to the worker; GitHub is an
+   optional projection controlled by the project comments/local setting (self defaults
+   to comments). Non-comment modes must not depend on a PR brief or publish one
+   implicitly. T-135 stores brief, pack, worker-report, ask and authenticated verdict
+   records append-only under state/evidence/<project>/<task>/; gate 7 and the
+   protocol reader consume local verdicts and standing lists. T-138 extends
+   external storage and bindings; T-140 adds summary/check/threads projections.
 
 ## Judge a task when it turns ready
 
@@ -528,9 +540,11 @@ go around them with `bin/fm-worker.sh --task` for a first round.
 ## Review and evidence
 
 Apply the [worker](../worker/SKILL.md) and [reviewer](../reviewer/SKILL.md)
-closed-list protocol: from round three ask once before edits, wait for the
-numbered list and completion marker, then satisfy the whole original list.
-Subsequent findings must cite it or identify a newly introduced regression.
+closed-list protocol: every REJECT from round one supplies the complete numbered
+list and completion marker. Ask before edits only if the list is missing or
+unclear, then wait and satisfy the whole standing list. From round two the
+launcher supplies prior lists locally under T-135. Subsequent new findings must
+be labelled REGRESSION or NEW-GROUND; neither can silently replace the list.
 Coordinate protocol violations through the board rather than restarting the list.
 `fm-protocol.sh` performs marker and numeric-reference checks, not semantic review:
 it does not authenticate the ask/completion markers, preserve the first list
@@ -543,13 +557,16 @@ Require final-answer provenance, the configured reviewer identity and evidence
 for the current PR head. Old CI or an old approval does not establish readiness;
 inspect actual required GitHub CI results as well as local checks. If the script
 cannot establish this, report the gap and coordinate remediation before a merge
-card is treated as ready. Gate 7 takes the latest verdict comment, filtering
+card is treated as ready. T-135 makes authenticated local verdict records the
+gate-7 source, with missing records failing explicitly. Until T-135 ships, the
+legacy gate 7 takes the latest verdict comment, filtering
 the author only when `FM_REVIEWER_LOGIN` is set, and binds an APPROVE to the
 change its `REVIEWED:` line records; a later rejection supersedes it. It does
 not reject quoted markers, and an APPROVE with no `REVIEWED:` line (posted by
 hand, or before T-113) still passes and binds to no head: the gate says so,
-and you confirm it covers the head. The review launcher also ignores comment publication
-failure, so inspect the published result rather than trusting its exit status.
+and it is insufficient until authentic current-change evidence is established. Inspect actual publication receipts and preserve failed projections; a launcher
+exit status alone does not prove publication. Apply the managed-versus-legacy
+provenance distinction in the review instructions above.
 Neither lavish nor no-mistakes is a prerequisite. Do not introduce their startup
 or verification hooks; use repository checks and actual CI evidence.
 
@@ -843,3 +860,49 @@ merge approval. Awaiting a response must preserve its distinct chosen/text data.
 
 Persist concise operational lessons in role skills through a scoped task, not
 global settings or a session transcript.
+
+## Approved external roadmap and current-head acceptance (T-166)
+
+Follow [design section 15](../../design/design.md#15-driving-other-repositories-approved-plan-runtime-not-yet-accepted)
+and the [adoption ledger](../../design/external-roadmap.md). This is an approved
+roadmap, not a claim of shipped external execution. Finish the accepted engine
+repairs first. T-142 waits for T-166; preserve each dependency and coordinate
+shared-file edits for parallel evidence/brief work. Never edit live runtimes.
+
+External private data belongs in FM_HOME/projects/<name>, including specs,
+conventions, pins, evidence and recovery; no copies in engine state. Private
+repos are accepted. Unknown protection requires confirmed checks/policy, not
+automatic rejection or implied permission. Use project+task identity everywhere
+and the supplied project land/review/post, merge, retention and stacking policy.
+No hardcoded squash/delete, protected-base force push or unapproved task lease.
+
+Before treating any candidate as ready, fetch/synchronize and verify authoritative
+GitHub PR head against local task ref and isolated checkout. Required check-runs
+and commit statuses, six gates 1/2/4/5/6/7, review head/patch/identity/final answer
+and merge candidate must refer to that verified SHA. Recheck after update-branch
+and before landing; stale local green gates do not establish readiness. Preserve
+approval only for unchanged authoritative patch-id with no later rejection.
+Pending CI remains pending; apply the review provenance and checkout retention
+rules above in addition to this remote-head verification.
+
+Stock external dispatch must retain a live owned run and visible Herdr view;
+manual relaunch after a dead dispatch is not proof. Keep cmuxOnly and defer full
+detached cmux lifecycle. Count live owned runs under dispatch/identity locks,
+not open PR counts. T-167 distinguishes actual CLI/provider errors from quoted
+model/tool text; record final output and owner cleanup/retention honestly.
+
+Once T-053 is implemented, routine dispatch without --project fairly fills all
+projects; captain-requested single-project work uses --project. Other project
+operations always carry explicit context. Core dispatch needs no T-141 autopilot.
+T-140/T-143/T-141 remain advanced roadmap work after the basic maker-founder
+pilot. Its empty git/no-commit/no-remote bootstrap needs an approved product and
+remote contract; ask at most three genuinely missing questions, infer no product
+brief or visibility from authorization to use a fresh repo.
+
+Apply T-164 hook diagnostics as separate source loading, enablement/policy,
+exact native trust, reload and delivery facts. No fabricated trust, bypass,
+queue/ack-as-delivery claim or idle Codex wake claim without actual evidence.
+Advance already authorized review, checks, concrete board merge within current
+time-boxed authorization, self-update and next dispatch before ending for a
+real dependency/event/operator action. Project handoff and captain board authority
+remain mandatory; no automatic merge.
