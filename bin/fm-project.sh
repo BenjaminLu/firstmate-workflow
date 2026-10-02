@@ -35,6 +35,38 @@ case "${1:-}" in
   add|edit|drift) exec "$(dirname "$_fm_lib")/fm-onboard.sh" "$@" ;;
 esac
 
+# Repin uses only existing captain decision records; it never changes producers.
+if [ "${1:-}" = repin ]; then
+  shift
+  REPO="${FM_ROOT:-$(pwd)}"; PIN_TASK=''; PIN_DECISION=''; PIN_PROJECT=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo) fm_need "fm-project" "$@"; REPO="${2-}"; shift 2 ;;
+      --project) fm_need "fm-project" "$@"; PIN_PROJECT="${2-}"; shift 2 ;;
+      --task) fm_need "fm-project" "$@"; PIN_TASK="${2-}"; shift 2 ;;
+      --decision) fm_need "fm-project" "$@"; PIN_DECISION="${2-}"; shift 2 ;;
+      *) echo "fm-project: unknown repin argument $1" >&2; exit 64 ;;
+    esac
+  done
+  [ -n "$PIN_TASK" ] && [ -n "$PIN_DECISION" ] || {
+    echo 'usage: fm-project.sh repin --project <p> --task <t> --decision <id> [--repo <engine>]' >&2
+    exit 64
+  }
+  fm_storage_init "$REPO" "$PIN_PROJECT" || exit 65
+  fm_target_validate || exit 65
+  pin="$(fm_pin create --task "$PIN_TASK" --decision "$PIN_DECISION")" || exit $?
+  pin_events=()
+  if [ -n "${FM_PROJECT:-}" ] && [ -n "$(fm_projects "$FM_CONFIG")" ]; then
+    pin_events=(--project "$FM_PROJECT")
+  fi
+  FM_ROOT="$FM_ENGINE_ROOT" "$_fm_code_dir/fm-emit.sh" ${pin_events[@]+"${pin_events[@]}"} \
+    --actor firstmate --type spec_repinned --task "$PIN_TASK" \
+    --data "$(jq -c '{version,decision:.approval.decision}' <<<"$pin")" \
+    --en 'Approved task snapshots repinned' --tw '已重新固定核准的任務快照' || exit 70
+  printf '%s\n' "$pin"
+  exit 0
+fi
+
 REPO="${FM_ROOT:-$(pwd)}"; MIGRATE=0; GH="${FM_GH:-gh}"; URL="${FM_GITHUB_URL:-https://github.com}"
 usage() { echo "usage: fm-project.sh add <owner/repo|local-path> [--name name] [--answers file]; edit|drift <name>; sync|verify <name> [--migrate] [--repo dir]; history on <name> [--repo dir]" >&2; exit 64; }
 words=()

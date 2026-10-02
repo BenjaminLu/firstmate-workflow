@@ -332,12 +332,18 @@ trap 'exit 143' TERM
 trap '' HUP
 
 
-# The task spec comes from the branch under review, not from whatever is
-# checked out. A task defined on its own branch - which is how a new one
-# arrives - was invisible to the reviewer and to the gate: `no task
-# T-027`, for a task sitting in the diff they were handed.
+# Resolve an existing pin before any branch-owned task lookup. An absent pin
+# keeps legacy unauthorised rounds readable; gate 4 will explicitly reject it.
+FM_SPEC_PIN_JSON=''
+FM_SPEC_PIN_JSON="$(fm_pin_existing "$TASK")"; pin_rc=$?
+case "$pin_rc" in 0|3) ;; *) exit "$pin_rc" ;; esac
+# Only an unpinned legacy round uses the branch lookup below. It supplies
+# context, never gate authority; a corrupt existing pin cannot take this path.
 task_spec() {   # task_spec <task> [branch]; its own file, design/tasks/<id>.json
   local t="$1" b="${2:-}" j=''
+  if [ -n "$FM_SPEC_PIN_JSON" ]; then
+    jq -c '.snapshots.spec.text|fromjson' <<<"$FM_SPEC_PIN_JSON"; return
+  fi
   if [ "$FM_EXTERNAL" = 1 ]; then fm_task "$t" "$FM_TASKS_DIR"; return; fi
   [ -n "$b" ] && j="$(fm_task "$t" design/tasks "$b")"
   [ -n "$j" ] || j="$(fm_task "$t")"
@@ -554,7 +560,7 @@ if [ "$branch_existed" = 1 ] && [ "$leftover_dirty" = 0 ]; then
     round_two=0
   fi
 fi
-if [ "$FM_EXTERNAL" = 0 ] && [ "$leftover_dirty" = 0 ] && [ -f "$own_spec" ]; then
+if [ -z "$FM_SPEC_PIN_JSON" ] && [ "$FM_EXTERNAL" = 0 ] && [ "$leftover_dirty" = 0 ] && [ -f "$own_spec" ]; then
   if { [ "$round_two" = 0 ] && [ ! -e "$tree/$own_spec" ]; } \
      || { [ "$spec_only" = 1 ] && ! git cat-file -e "$spec_base:$own_spec" 2>/dev/null; }; then
     refresh_spec=1
@@ -1033,6 +1039,21 @@ if [ "$round_two" = 1 ]; then bring_up_to_date; fi
 # destroy the tree.
 mirror_sync >/dev/null 2>&1 || echo "fm-worker: the first mirror of $tree did not take; the round still runs" >&2
 
+# First pin is written by the launcher, outside the sandbox, at dispatch.
+# Existing PRs use the same authority and current base, labelled as a resume.
+if [ -z "$FM_SPEC_PIN_JSON" ]; then
+  pin_args=()
+  [ -z "$PR" ] || pin_args+=(--resume)
+  FM_SPEC_PIN_JSON="$(fm_pin create --task "$TASK" ${pin_args[@]+"${pin_args[@]}"})"; pin_rc=$?
+  case "$pin_rc" in
+    0) spec="$(jq -c '.snapshots.spec.text|fromjson' <<<"$FM_SPEC_PIN_JSON")"
+       set_crew_activity "$spec"
+       emit --type spec_pinned --en "Approved task snapshot pinned" --tw "已固定核准的任務快照" ;;
+    3) echo 'fm-worker: no pin; gate 4 will refuse this round' >&2 ;;
+    *) exit "$pin_rc" ;;
+  esac
+fi
+
 # --- the prompt: the task, the design that bears on it, and the skill ----
 prompt="$tree/.fm-prompt.md"
 # This is the worker's one way to speak, and it is read back with
@@ -1080,7 +1101,8 @@ fi
 
 {
   cat "${FM_CODE_ROOT:-$REPO}/skills/worker/SKILL.md"
-  fm_conventions_prompt || exit 65
+  if [ -n "$FM_SPEC_PIN_JSON" ]; then fm_pin_prompt
+  else fm_conventions_prompt || exit 65; fi
   printf '\n---\n\n# Your task\n\n```json\n%s\n```\n' "$spec"
   printf '\nYour worktree is the current directory. Your branch is `%s`.\n' "$branch"
   printf 'Stay inside these paths:\n'
@@ -1178,7 +1200,9 @@ fi
   printf 'and pushes what the worktree holds when the round ends, however it ends,\n'
   printf 'including when it is stopped. Leave your work in the worktree.\n'
   printf '\n---\n\n# The design\n\n'
-  sed -n '/^## 6\./,/^## 8\./p' "$FM_DESIGN" 2>/dev/null
+  if [ -z "$FM_SPEC_PIN_JSON" ]; then
+    sed -n '/^## 6\./,/^## 8\./p' "$FM_DESIGN" 2>/dev/null
+  fi
 } > "$prompt"
 
 # --- the adapter, with fallback only on a vendor being unavailable -------

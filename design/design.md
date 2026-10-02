@@ -1069,7 +1069,7 @@ concurrency limit still hold, and it says which one held the task.
 | 1 | branch exists and has commits | `git rev-list --count main..<branch>` > 0 |
 | 2 | rebase onto main is clean | attempt it in a scratch worktree; non-zero fails |
 | 3 | *retired (T-114)* | ran the whole `project.check` locally; gate 6 reads the required GitHub check, which runs it on the same head |
-| 4 | the diff stays in scope | `git diff --name-only` within the task's `scope` globs |
+| 4 | the diff stays in approved scope | shared verified pin resolver; changed files within pinned `scope`, unchanged self task entry, no `.fm-*` paths |
 | 5 | **the new tests are not vacuous** | classify by `project.tests`, revert the implementation, run `setup`, then only the suites the diff touches through `project.test`; the whole `check` only when none can be determined, said so; it must go red |
 | 6 | the required GitHub check is green | `gh pr checks <pr> --required` |
 | 7 | the latest verdict is an `APPROVE:<task-id>` for this change | its `REVIEWED:` line names the current head, or the same patch-id, merge-base to head, with no later `REJECT` (below); author filtered only if `FM_REVIEWER_LOGIN` is set |
@@ -4557,6 +4557,42 @@ supplies the latest authorized pin; a mutable branch cannot widen its own scope.
 Gate 4 refuses missing pins, mismatches, out-of-scope files and `.fm-*` artifacts.
 Repin requires an exact project/task captain decision for changed snapshots,
 appends a version and emits `spec_repinned`; never rewrite old pins.
+
+The worker launcher writes pin 1 outside the sandbox before calling an adapter.
+A resumed task with an existing PR and no pin gets `source: first-pin-on-resume`
+from the current accepted base. Self sources record `<commit>:<path>` and
+SHA-256; a new spec absent from that base is explicitly `seeded`. Gate contracts
+always come from accepted engine base, including both the legacy top-level
+`project:` and a relocated self entry. External spec, design, conventions and
+contract bytes are private local snapshots; resolving them never requires those
+files to exist on public engine main. Every reader uses `fm_spec_pins.py`, which
+verifies the complete append-only chain, each snapshot hash, identity and
+approval provenance, and re-derives committed self sources. Workers and
+reviewers receive the pinned spec and context; gate 4 also rejects any change
+to the self task entry and any path component beginning `.fm-`.
+
+Initial authority comes from existing records only: the latest captain
+`decision_made` A with a matching project/task choice answer, or, when no
+readiness card exists, the latest project `greenlit` event as a direct order.
+No authorization means no pin is written; the worker may continue, but gate 4
+fails explicitly with `no pin`. Legacy unpinned reviewer context is labelled
+unapproved. A corrupt existing pin never falls back to mutable task data.
+
+This is **trust on first dispatch**, recorded as
+`approval_binding: dispatch-time`. In particular, an external local snapshot is
+captured at dispatch, not compared with an immutable proposal captured before
+the captain answered. Stronger pre-answer proposal binding is **deferred:
+needs board/decide producer changes outside T-049's scope; recorded as a
+follow-up for the captain**. The existing dispatch/readiness/decision producers
+are unchanged. A repin likewise uses an existing exact project/task captain
+choice A, reads all source bytes afresh, requires changed snapshot hashes,
+refuses reuse of a decision, and appends a new version without replacing one:
+`bin/fm-project.sh repin --project <p> --task <t> --decision <id>`.
+Self repins identify uncommitted local spec/design/conventions explicitly;
+their gate contract still comes from accepted base. Omitted project and explicit
+`firstmate-workflow` retain the same self storage and behavior. The pin contains
+all contract fields, including `docs`; T-050 owns the remaining execution
+transition from the shared fail-first engine's branch contract to that pin.
 
 Before accepting evidence, synchronize and verify GitHub's authoritative PR head
 against the local task ref and isolated checkout. CI/check statuses, gates,

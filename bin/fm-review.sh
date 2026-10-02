@@ -241,12 +241,22 @@ trap 'exit 143' TERM
 # transport wait / durable last-result recovery / PR publish.
 trap '' HUP
 
-# The task spec comes from the branch under review, not from whatever is
-# checked out. A task defined on its own branch - which is how a new one
-# arrives - was invisible to the reviewer and to the gate: `no task
-# T-027`, for a task sitting in the diff they were handed.
+# Resolve an existing pin before any branch-owned task lookup. An absent pin
+# keeps legacy unauthorised rounds readable; gate 4 will explicitly reject it.
+FM_SPEC_PIN_JSON=''
+FM_SPEC_PIN_JSON="$(fm_pin_existing "$TASK")"; pin_rc=$?
+case "$pin_rc" in
+  0) ;;
+  3) echo 'fm-review: no pin; legacy task context is unapproved and gate 4 will refuse it' >&2 ;;
+  *) exit "$pin_rc" ;;
+esac
+# Only an unpinned legacy round uses the branch lookup below. It supplies
+# context, never gate authority; a corrupt existing pin cannot take this path.
 task_spec() {   # task_spec <task> [branch]; its own file, design/tasks/<id>.json
   local t="$1" b="${2:-}" j=''
+  if [ -n "$FM_SPEC_PIN_JSON" ]; then
+    jq -c '.snapshots.spec.text|fromjson' <<<"$FM_SPEC_PIN_JSON"; return
+  fi
   if [ "$FM_EXTERNAL" = 1 ]; then fm_task "$t" "$FM_TASKS_DIR"; return; fi
   [ -n "$b" ] && j="$(fm_task "$t" design/tasks "$b")"
   [ -n "$j" ] || j="$(fm_task "$t")"
@@ -765,7 +775,8 @@ prompt="$work/prompt.md"
 [ -z "$PR" ] || { required_names; ci_wait; }
 {
   cat "${FM_CODE_ROOT:-$REPO}/skills/reviewer/SKILL.md"
-  fm_conventions_prompt || exit 65
+  if [ -n "$FM_SPEC_PIN_JSON" ]; then fm_pin_prompt
+  else fm_conventions_prompt || exit 65; fi
   printf '\n---\n\n# The task\n\n```json\n%s\n```\n' "$spec"
   printf '\n# Round %s\n' "$ROUND"
 } > "$work/intro.md"
