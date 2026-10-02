@@ -12,14 +12,16 @@ export HERDR_ENV=0 FM_TRANSPORT=direct
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 # shellcheck source=bin/fm-config.sh
 . "$ROOT/bin/fm-config.sh"   # fm_tasks_write: a fixture's tasks, one file each
 
 fixture() {
   local d; d="$(mktemp -d)"
   mkdir -p "$d/bin" "$d/design" "$d/state"
-  cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-dispatch.sh" "$d/bin/"
-  cp "$ROOT/bin/fm-herdr.py" "$ROOT/bin/fm-ready.sh" "$d/bin/"
+  cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-dispatch.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
+  cp "$ROOT/bin/fm-herdr.py" "$ROOT/bin/fm-ready.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$d/bin/fm-worker.sh"; chmod +x "$d/bin/fm-worker.sh"
   printf 'concurrency: 2\n' > "$d/config.yaml"
   fm_tasks_write /dev/stdin "$d/design/tasks" <<'JSON'
@@ -239,8 +241,8 @@ rm -rf "$d" "$d2" "$d3"
 # until one of them is edited.
 pr_tree() {                     # pr_tree -> a greenlit repo with T-001 and T-002
   local d; d="$(mktemp -d)"; mkdir -p "$d/bin" "$d/design" "$d/state"
-  cp "$ROOT/bin/fm-dispatch.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$d/bin/"
-  cp "$ROOT/bin/fm-herdr.py" "$ROOT/bin/fm-ready.sh" "$d/bin/"
+  cp "$ROOT/bin/fm-dispatch.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
+  cp "$ROOT/bin/fm-herdr.py" "$ROOT/bin/fm-ready.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$d/bin/fm-worker.sh"; chmod +x "$d/bin/fm-worker.sh"
   printf 'vendor: mock\nconcurrency: 3\n' > "$d/config.yaml"
   printf '{"tasks":[{"id":"T-001","title":"a","depends_on":[]},{"id":"T-002","title":"b","depends_on":[]}]}\n' \

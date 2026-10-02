@@ -23,6 +23,8 @@ export FM_GIT_NAME=t FM_GIT_EMAIL=a@b.c
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 
 command -v bun >/dev/null 2>&1 || { echo "    bun not installed - crew e2e skipped"; exit 0; }
 
@@ -40,7 +42,7 @@ d="$(safe_tmpdir)"; r="$d/repo"
 XDG_CONFIG_HOME="$d/config"; export XDG_CONFIG_HOME
 mkdir -p "$r"
 mkdir -p "$r/bin" "$r/design/tasks" "$r/state" "$r/skills/worker" "$r/skills/reviewer" "$r/board"
-cp "$ROOT/bin/fm-worker.sh" "$ROOT/bin/fm-review.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$r/bin/"
+cp "$ROOT/bin/fm-worker.sh" "$ROOT/bin/fm-review.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$r/bin/"; project_storage_fixture "$r/bin/"
 cp -r "$ROOT/bin/adapters" "$r/bin/"
 cp -R "$ROOT/bin/lib" "$r/bin/"   # the lifeline a round's runner holds (T-151)
 cp "$ROOT/board/server.ts" "$r/board/"

@@ -12,6 +12,8 @@ done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 # shellcheck source=bin/fm-config.sh
 . "$ROOT/bin/fm-config.sh"   # fm_tasks_write: a fixture's tasks, one file each
 
@@ -29,7 +31,7 @@ tj() {
 fixture() {
   local d; d="$(mktemp -d)"
   mkdir -p "$d/bin" "$d/design" "$d/state"
-  cp "$ROOT/bin/fm-ready.sh" "$d/bin/"; chmod +x "$d/bin/fm-ready.sh"
+  cp "$ROOT/bin/fm-ready.sh" "$d/bin/"; project_storage_fixture "$d/bin/"; chmod +x "$d/bin/fm-ready.sh"
   fm_tasks_write /dev/stdin "$d/design/tasks" <<'JSON'
 {"tasks":[
  {"id":"T-1","title":"one","depends_on":[]},

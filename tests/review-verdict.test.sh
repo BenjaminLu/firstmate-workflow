@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 # shellcheck source=tests/lib/review.sh
 . "$ROOT/tests/lib/review.sh"
 d="$(fixture)"; r="$d/repo"; GH="$(ghstub "$d")"
@@ -151,7 +153,7 @@ assert_eq "missing_review" \
 # signed final under last-result. Only this chain attempt may supply it.
 recover="$(safe_tmpdir)"
 mkdir -p "$recover/bin" "$recover/design/tasks" "$recover/skills/reviewer" "$recover/src" "$recover/state"
-cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" "$ROOT/bin/fm-herdr.py" "$recover/bin/"
+cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-review.sh" "$ROOT/bin/fm-herdr.py" "$recover/bin/"; project_storage_fixture "$recover/bin/"
 cp -r "$ROOT/bin/adapters" "$recover/bin/"
 cp -R "$ROOT/bin/lib" "$recover/bin/"   # the lifeline a round's runner holds (T-151)
 cp "$ROOT/skills/reviewer/SKILL.md" "$recover/skills/reviewer/"

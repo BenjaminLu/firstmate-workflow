@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 # shellcheck source=tests/lib/worker.sh
 . "$ROOT/tests/lib/worker.sh"
 # Real ordinary-worker evidence must be consumable by recovery. No emitter
 # protocol is invented here; only GitHub and the adapter are controlled.
 di="$(fixture T-999)"; ri="$di/repo"
-cp "$ROOT/bin/fm-reconcile.sh" "$ri/bin/"
+cp "$ROOT/bin/fm-reconcile.sh" "$ri/bin/"; project_storage_fixture "$ri/bin/"
 mkdir -p "$di/stub"
 cat > "$di/stub/gh" <<'SH'
 #!/usr/bin/env bash

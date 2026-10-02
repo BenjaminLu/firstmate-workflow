@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 # shellcheck source=tests/lib/board.sh
 . "$ROOT/tests/lib/board.sh"
 XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
@@ -10,7 +12,7 @@ XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
 # (project, id): two T-001s are two cards, two #7s are two links, and a merge
 # in one project neither waits for nor frees the other's.
 h="$(safe_tmpdir)"; mkdir -p "$h/bin" "$h/state/pending" "$h/state/decisions" "$h/design" "$h/projects/beta" "$h/board/public"
-cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$h/bin/"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$h/bin/"; project_storage_fixture "$h/bin/"
 cp -R "$ROOT/bin/lib" "$h/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$h/board/"
 cp "$ROOT/board/public/index.html" "$h/board/public/"
@@ -29,6 +31,7 @@ projects:
     base: main
     required_check: check
 Y
+project_fixture_config "$h"
 }
 two_projects
 # each project's task list is a directory of task files (T-090): the
@@ -39,7 +42,7 @@ fm_tasks_write /dev/stdin "$h/design/tasks" <<'J'
           {"id":"T-003","title":"alpha three","milestone":"M3","depends_on":["T-002"]},
           {"id":"T-004","title":"alpha four","milestone":"M3","depends_on":[]}]}
 J
-fm_tasks_write /dev/stdin "$h/projects/beta/tasks" <<'J'
+fm_tasks_write /dev/stdin "$(dirname "$(project_fixture_state "$h" beta)")/tasks" <<'J'
 {"tasks":[{"id":"T-001","title":"beta one","milestone":"M1","depends_on":[]},
           {"id":"T-002","title":"beta two","milestone":"M1","depends_on":[]},
           {"id":"T-004","title":"beta four","milestone":"M1","depends_on":[]}]}
@@ -75,7 +78,7 @@ emh --actor github --task T-002 --type merged --project beta --en "beta merged" 
 printf '{"id":"D-7","task":"T-002","kind":"choice","title":"old numeric"}\n' > "$h/state/pending/D-7.json"
 printf '{"id":"D-SK-003","task":"SK-003","kind":"choice","title":"skill update"}\n' > "$h/state/pending/D-SK-003.json"
 printf '{"id":"D-beta-T001-1","project":"beta","task":"T-001","kind":"merge","pr":7,"title":"merge beta #7"}\n' \
-  > "$h/state/pending/D-beta-T001-1.json"
+  > "$(project_fixture_state "$h" beta)/pending/D-beta-T001-1.json"
 printf '{"id":"D-alpha-T001-1","project":"alpha","task":"T-001","kind":"merge","pr":7,"title":"merge alpha #7"}\n' \
   > "$h/state/pending/D-alpha-T001-1.json"
 # this one records no project, so it is the default's, alpha's, whatever the
@@ -84,7 +87,7 @@ printf '{"id":"D-alpha-T002-1","task":"T-002","kind":"merge","pr":8,"title":"mer
   > "$h/state/pending/D-alpha-T002-1.json"
 touch -t 202609240900.00 "$h/state/pending/D-7.json"
 touch -t 202609240901.00 "$h/state/pending/D-SK-003.json"
-touch -t 202609240902.00 "$h/state/pending/D-beta-T001-1.json"
+touch -t 202609240902.00 "$(project_fixture_state "$h" beta)/pending/D-beta-T001-1.json"
 touch -t 202609240903.00 "$h/state/pending/D-alpha-T001-1.json"
 touch -t 202609240904.00 "$h/state/pending/D-alpha-T002-1.json"
 # started from a shell that exports FM_PROJECT naming beta: nothing the board
@@ -102,8 +105,13 @@ posth() {   # posth <id> <choice>: the HTTP status, the body in $h/post
   wcurl "$PORTH" -s -m 5 -o "$h/post" -w '%{http_code}' -X POST -H 'content-type: application/json' \
     -d "$body" "http://127.0.0.1:$PORTH/decisions"
 }
+printf 'private project design\n' > "$(dirname "$(project_fixture_state "$h" beta)")/design.md"
+assert_eq 'private project design' "$(curl -sf "http://127.0.0.1:$PORTH/file?project=beta&path=design.md")" "board reads selected external design in place"
+assert_eq 403 "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORTH/file?project=beta&path=../../engine/config.yaml")" "external file reader refuses traversal"
 sh1="$(sh_)"
-field_h() { jq -r --arg p "$1" --arg i "$2" ".tasks[]|select(.project==\$p and .id==\$i)|$3" <<<"$sh1"; }
+assert_lacks "$sh1" 'beta one' "aggregate exposes metadata without external task descriptions"
+assert_contains "$(sh_ '?project=beta')" 'beta one' "selected project reads its private description locally"
+field_h() { jq -r --arg p "$1" --arg i "$2" ".tasks[]|select(.project==\$p and .id==\$i)|$3" <<<"$(sh_ "?project=$1")"; }
 
 # lane cards: two T-001s, each its own project's, title and pull request
 assert_eq "2" "$(jq '[.tasks[]|select(.id=="T-001")]|length' <<<"$sh1")" "two projects' T-001 are two lane cards, not one"
@@ -178,11 +186,11 @@ assert_eq "D-beta-T001-1 D-alpha-T002-1" "$(jq -r '[.pending[].id]|join(" ")' <<
 
 # another project's merge runs alongside it and completes
 assert_eq "200" "$(posth D-beta-T001-1 A)" "another project's merge is not held behind it"
-wait_for 20 jq -e '.merge=="merged"' "$h/state/decisions/D-beta-T001-1.json"
-assert_eq "merged" "$(jq -r .merge "$h/state/decisions/D-beta-T001-1.json")" "and completes while the first still runs"
+wait_for 20 jq -e '.merge=="merged"' "$(project_fixture_state "$h" beta)/decisions/D-beta-T001-1.json"
+assert_eq "merged" "$(jq -r .merge "$(project_fixture_state "$h" beta)/decisions/D-beta-T001-1.json")" "and completes while the first still runs"
 assert_contains "$(cat "$h/merge-calls")" "--pr 7 --task T-001 --project beta" "on its own project"
 assert_eq "running" "$(jq -r .merge "$h/state/decisions/D-alpha-T001-1.json")" "the first is still running"
-assert_eq "beta" "$(jq -r 'select(.type=="decision_made" and .data.decision=="D-beta-T001-1")|.project' "$h/state/events.jsonl")" \
+assert_eq "beta" "$(jq -r 'select(.type=="decision_made" and .data.decision=="D-beta-T001-1")|.project' "$(project_fixture_state "$h" beta)/events.jsonl")" \
   "the answer's event names the card's project"
 
 # the helper exits: the record says how, and the project's turn is free
@@ -216,17 +224,17 @@ postt() {   # postt <task> <action> [project]: the HTTP status, the body in $h/p
     -d "$body" "http://127.0.0.1:$PORTH/tasks"
 }
 stage4() { sh_ | jq -r '[.tasks[]|select(.id=="T-004")|"\(.project) \(.stage)"]|sort|join("|")'; }
-last4() { jq -r 'select(.task=="T-004")|"\(.type) \(.project)"' "$h/state/events.jsonl" | tail -n 1; }
+last4() { jq -r 'select(.task=="T-004")|"\(.type) \(.project)"' "$(project_fixture_state "$h" "${1:-alpha}")/events.jsonl" | tail -n 1; }
 assert_eq "alpha ready|beta ready" "$(stage4)" "both projects' T-004 start ready"
 assert_eq "200" "$(postt T-004 park beta)" "beta's T-004 is parked by naming beta"
 assert_eq "alpha ready|beta parked" "$(stage4)" "only beta's T-004 is parked; alpha's stays ready"
-assert_eq "parked beta" "$(last4)" "and the parked event names beta"
+assert_eq "parked beta" "$(last4 beta)" "and the parked event names beta"
 assert_eq "200" "$(postt T-004 unpark beta)" "beta's T-004 is unparked"
 assert_eq "alpha ready|beta ready" "$(stage4)" "and only beta's comes back"
-assert_eq "unparked beta" "$(last4)" "and the unparked event names beta"
+assert_eq "unparked beta" "$(last4 beta)" "and the unparked event names beta"
 assert_eq "200" "$(postt T-004 drop beta)" "beta's T-004 is dropped"
 assert_eq "alpha ready|beta closed" "$(stage4)" "only beta's T-004 leaves; alpha's stays ready"
-assert_eq "closed beta" "$(last4)" "and the closed event names beta"
+assert_eq "closed beta" "$(last4 beta)" "and the closed event names beta"
 assert_eq "200" "$(postt T-004 park)" "naming no project parks the default's T-004"
 assert_eq "alpha parked|beta closed" "$(stage4)" "alpha's is parked and beta's does not move"
 assert_eq "parked null" "$(last4)" "and the event names no project: fm-emit.sh was given no --project"
@@ -270,7 +278,7 @@ Y
 # theta has a task list and nothing else: no crew, no card, no answer. Its
 # lane cards alone put it on the board, so they carry its chip.
 printf '{"tasks":[{"id":"T-001","title":"theta one","milestone":"M1","depends_on":[]}]}\n' \
-  | fm_tasks_write /dev/stdin "$h/projects/theta/tasks"
+  | fm_tasks_write /dev/stdin "$(dirname "$(project_fixture_state "$h" theta)")/tasks"
 # gh as gh answers `pr view <n> --repo <owner/repo> --json state`: a JSON
 # object on stdout, or a message on stderr and a non-zero exit
 cat > "$h/bin/gh" <<'S'
@@ -296,14 +304,19 @@ printf 'MERGED\n' > "$h/gh-state-"
 sleep 0 & dead=$!; wait "$dead" 2>/dev/null
 sleep 120 & live=$!
 live_start="$(ps -o lstart= -p "$live" | awk '{$1=$1; print}')"
+project_state() {
+  if [ "$1" = omega ]; then printf '%s/state' "$h"
+  else project_fixture_state "$h" "$1"; fi
+}
 running() {   # running <project> <task> <pr> <pid> <started>: a record and its marker
-  local id="D-$1-${2/-/}-1"
+  local id="D-$1-${2/-/}-1" state
+  state="$(project_state "$1")"
   jq -cn --arg id "$id" --arg p "$1" --arg t "$2" --argjson n "$3" \
     '{id:$id,chosen:"A",project:$p,task:$t,pr:$n,kind:"merge",ts:"2020-01-01T00:00:00.000Z",identity:"decision:\($id)",merge:"running"}' \
-    > "$h/state/decisions/$id.json"
-  mkdir -p "$h/state/merging"
+    > "$state/decisions/$id.json"
+  mkdir -p "$state/merging"
   jq -cn --arg id "$id" --arg p "$1" --arg t "$2" --argjson n "$3" --argjson pid "$4" --arg s "$5" \
-    '{decision:$id,project:$p,pr:$n,task:$t,pid:$pid,started:$s,ts:"2020-01-01T00:00:00.000Z"}' > "$h/state/merging/$1.json"
+    '{decision:$id,project:$p,pr:$n,task:$t,pid:$pid,started:$s,ts:"2020-01-01T00:00:00.000Z"}' > "$state/merging/$1.json"
 }
 running alpha T-009 21 "$dead" "Thu Jan 1 00:00:00 2026"
 running beta  T-009 22 "$dead" "Thu Jan 1 00:00:00 2026"
@@ -317,11 +330,11 @@ running omega T-009 27 "$dead" "Thu Jan 1 00:00:00 2026"
 emh --actor captain --type merged --task T-009 --pr 21 --en "merged #21" --tw "已合併 #21"
 : > "$h/gh-calls"
 start_h
-rec() { jq -r .merge "$h/state/decisions/D-$1-T009-1.json"; }
+rec() { jq -r .merge "$(project_state "$1")/decisions/D-$1-T009-1.json"; }
 wait_for 20 jq -e '.merge=="merged"' "$h/state/decisions/D-alpha-T009-1.json"
-wait_for 20 jq -e '.merge=="merged"' "$h/state/decisions/D-beta-T009-1.json"
-wait_for 20 jq -e '.merge=="failed"' "$h/state/decisions/D-gamma-T009-1.json"
-wait_for 20 jq -e '.merge=="failed"' "$h/state/decisions/D-zeta-T009-1.json"
+wait_for 20 jq -e '.merge=="merged"' "$(project_fixture_state "$h" beta)/decisions/D-beta-T009-1.json"
+wait_for 20 jq -e '.merge=="failed"' "$(project_state gamma)/decisions/D-gamma-T009-1.json"
+wait_for 20 jq -e '.merge=="failed"' "$(project_state zeta)/decisions/D-zeta-T009-1.json"
 delta_unknown() { [ "$(sh_ | jq -r '.responses[]|select(.id=="D-delta-T009-1")|.merge_unknown')" = true ]; }
 wait_for 20 delta_unknown
 omega_unknown() { [ "$(sh_ | jq -r '.responses[]|select(.id=="D-omega-T009-1")|.merge_unknown')" = true ]; }
@@ -330,7 +343,7 @@ assert_eq "merged" "$(rec alpha)" "a dead helper's merge is merged when the log 
 assert_lacks "$(cat "$h/gh-calls")" "alpha-app" "and GitHub is not asked when the log already says"
 assert_eq "merged" "$(rec beta)" "merged when only GitHub says MERGED"
 assert_eq "failed|the merge helper stopped before recording an outcome" \
-  "$(jq -r '"\(.merge)|\(.merge_reason)"' "$h/state/decisions/D-gamma-T009-1.json")" "failed, with the reason, when GitHub says OPEN"
+  "$(jq -r '"\(.merge)|\(.merge_reason)"' "$(project_state gamma)/decisions/D-gamma-T009-1.json")" "failed, with the reason, when GitHub says OPEN"
 assert_eq "failed" "$(rec zeta)" "and when GitHub says CLOSED"
 assert_eq "running" "$(rec delta)" "a merge whose outcome GitHub cannot tell stays running"
 assert_eq "true" "$(sh_ | jq -r '.responses[]|select(.id=="D-delta-T009-1")|.merge_unknown')" "and the board marks its outcome unknown"
@@ -345,12 +358,12 @@ assert_eq "theta one" "$(sh_ | jq -r '.tasks[]|select(.project=="theta" and .id=
 assert_eq "true" "$(sh_ | jq -r '.projects|index("theta") != null')" \
   "and is one of the projects on the board, so its cards carry a chip"
 for p in alpha beta gamma zeta; do
-  assert_eq "no" "$(test -e "$h/state/merging/$p.json" && echo yes || echo no)" "$p's resolved record takes its marker with it"
+  assert_eq "no" "$(test -e "$(project_state "$p")/merging/$p.json" && echo yes || echo no)" "$p's resolved record takes its marker with it"
 done
 # each resolved record frees its project; an unknown or live one holds it
 for p in alpha beta gamma zeta delta eps omega; do
   printf '{"id":"D-%s-T010-1","project":"%s","task":"T-010","kind":"merge","pr":31,"title":"next"}\n' "$p" "$p" \
-    > "$h/state/pending/D-$p-T010-1.json"
+    > "$(project_state "$p")/pending/D-$p-T010-1.json"
 done
 for p in alpha beta gamma zeta; do
   assert_eq "200" "$(posth "D-$p-T010-1" A)" "$p's next merge is no longer refused"
@@ -360,12 +373,12 @@ assert_eq "409" "$(posth D-eps-T010-1 A)" "and so does one whose helper is still
 assert_eq "409" "$(posth D-omega-T010-1 A)" "and so does one with no repository to read the outcome from"
 # the next poll tries again: GitHub answers, and the turn is free
 printf 'MERGED\n' > "$h/gh-state-delta-app"
-wait_for 20 jq -e '.merge=="merged"' "$h/state/decisions/D-delta-T009-1.json"
+wait_for 20 jq -e '.merge=="merged"' "$(project_state delta)/decisions/D-delta-T009-1.json"
 assert_eq "merged" "$(rec delta)" "once GitHub can be read, the unknown merge is resolved"
 assert_eq "200" "$(posth D-delta-T010-1 A)" "and its project's next merge goes ahead"
 # the live helper exits without a word: its outcome is read, not guessed
 kill "$live" 2>/dev/null; wait "$live" 2>/dev/null || true
-wait_for 20 jq -e '.merge=="merged"' "$h/state/decisions/D-eps-T009-1.json"
+wait_for 20 jq -e '.merge=="merged"' "$(project_state eps)/decisions/D-eps-T009-1.json"
 assert_eq "merged" "$(rec eps)" "a helper that dies later is resolved on a later poll"
 assert_eq "200" "$(posth D-eps-T010-1 A)" "and its project's turn is freed"
 

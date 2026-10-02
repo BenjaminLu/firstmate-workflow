@@ -163,6 +163,13 @@ if [ -n "$project" ]; then
   project="$(fm_project_resolve "$project" "$ROOT/config.yaml")" || exit 65
 fi
 
+# shellcheck source=bin/fm-config.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
+fm_storage_init "$ROOT" "$project" || exit 65
+[ "$FM_EXTERNAL" = 0 ] || project="$FM_PROJECT"
+LOG="$FM_STATE_DIR/events.jsonl"
+LOCK="$FM_STATE_DIR/.events.lock"
+
 # half a summary is worse than none: it renders blank in one locale
 if [ -n "$en" ] || [ -n "$tw" ]; then
   [ -n "$en" ] || die "--tw given without --en (a summary needs both languages)"
@@ -181,7 +188,7 @@ line=$(jq -cn \
   + (if $en   == "" then {} else {summary:{en:$en, "zh-TW":$tw}} end)
 ') || die "could not build the event"
 
-mkdir -p "$ROOT/state" || die "cannot create $ROOT/state"
+mkdir -p "$FM_STATE_DIR" || die "cannot create $FM_STATE_DIR"
 
 # High-frequency mid-run refreshes must not flood the log. crew_status is
 # coalesced per actor when the payload fingerprint is unchanged inside the
@@ -201,7 +208,7 @@ if [ "$type" = crew_status ]; then
     printf '%s\n' 'fm-emit: FM_CREW_STATUS_BURST must be a non-negative decimal integer; unset it for 5' >&2
     exit 64
   fi
-  stamp_dir="$ROOT/state/.crew-status-throttle"
+  stamp_dir="$FM_STATE_DIR/.crew-status-throttle"
   mkdir -p "$stamp_dir" || die "cannot create $stamp_dir"
   safe="$(printf '%s' "$actor" | tr -c 'A-Za-z0-9._-' '_')"
   stamp="$stamp_dir/$safe"

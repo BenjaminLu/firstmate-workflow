@@ -51,6 +51,8 @@ set -uo pipefail
 # there. One guarantee, in one place; bin/ci.sh fails if a script that
 # dispatches is missing it.
 exec < /dev/null
+# shellcheck source=bin/fm-config.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 
 REPO="${FM_ROOT:-$(pwd)}"; DRY=0; LIMIT=50; GH="${FM_GH:-gh}"; REPAIR=0; APPLY=0; EFFECTS='{}'
 # `shift 2` with one argument left consumes nothing and returns non-zero, so
@@ -63,6 +65,7 @@ need() { [ $# -ge 2 ] || { echo "fm-reconcile: $1 needs a value" >&2; exit 64; }
 # `shift 2` that the option-loop lint in bin/ci.sh can read.
 add_effect() {
   case "$1" in
+    --project) need "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
     *=park|*=drop) ;;
     *) echo "fm-reconcile: --effect takes D-id=park or D-id=drop, not $1" >&2; exit 64 ;;
   esac
@@ -88,8 +91,9 @@ fi
 [ "$REPAIR" -eq 0 ] || { [ "$APPLY" -eq 1 ] && DRY=0 || DRY=1; }
 cd "$REPO" || { echo "fm-reconcile: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
-LOG="$REPO/state/events.jsonl"
-WT="$REPO/state/worktrees"
+fm_storage_init "$REPO" || exit 65
+LOG="$FM_STATE_DIR/events.jsonl"
+WT="$FM_WORKTREES"
 shopt -s nullglob
 
 # Every variable inside a zh-TW summary below is written ${braced}. Bash 3.2
@@ -221,10 +225,10 @@ if [ "$REPAIR" -eq 1 ]; then
   # What each answered card's options did, as far as anything beside the log
   # kept it: a decision record's effect, and the card a readiness record names.
   # A record that cannot be read is skipped, never fatal.
-  records="$(for f in "$REPO"/state/decisions/*.json; do
+  records="$(for f in "$FM_STATE_DIR"/decisions/*.json; do
       jq -c 'select(type == "object" and (.id | type) == "string") | {(.id): (.effect // null)}' "$f" 2>/dev/null
     done | jq -cs 'add // {}')"
-  ready="$(for f in "$REPO"/state/ready/*.json; do
+  ready="$(for f in "$FM_STATE_DIR"/ready/*.json; do
       jq -c '. as $r | select(type == "object" and (.task | type) == "string")
              | [.decision, .ended] | map(select(type == "string" and . != "") | {(.): $r.task}) | add // empty' "$f" 2>/dev/null
     done | jq -cs 'add // {}')"

@@ -90,6 +90,14 @@ class OwnerGone(RuntimeError):
         super().__init__(f'owner {pid} is already gone; nothing started for it')
 
 
+def record_root(root):
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location('fm_project_paths', Path(__file__).with_name('fm_project_paths.py'))
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    return str(module.record_root(root))
+
+
 def _grace():
     try:
         value = float(os.environ.get('FM_LIFELINE_GRACE', '5'))
@@ -413,7 +421,7 @@ class Doorbell:
     a bell whose waiter was SIGKILLed is removed by the next ring."""
 
     def __init__(self, root):
-        base = os.path.join(str(root), WAKE_DIR)
+        base = os.path.join(record_root(root), WAKE_DIR)
         os.makedirs(base, exist_ok=True)
         name = f'{os.getpid()}-{os.urandom(6).hex()}'
         temp = os.path.join(base, '.' + name + '.new')
@@ -464,7 +472,7 @@ def ring(root, line):
     import glob
     rang = 0
     data = (str(line).replace('\n', ' ') + '\n').encode()
-    for path in sorted(glob.glob(os.path.join(glob.escape(os.path.join(str(root), WAKE_DIR)), '*.fifo'))):
+    for path in sorted(glob.glob(os.path.join(glob.escape(os.path.join(record_root(root), WAKE_DIR)), '*.fifo'))):
         try:
             fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK | getattr(os, 'O_NOFOLLOW', 0))
         except OSError as error:
@@ -504,7 +512,7 @@ def push(root, ident, reason, line, extra=None):
     line = ' '.join(str(line).split())
     item = dict(extra or {})
     item.update(id=str(ident), reason=str(reason), line=line, woken=time.time())
-    path = os.path.join(str(root), WAKE_QUEUE)
+    path = os.path.join(record_root(root), WAKE_QUEUE)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
     try:
@@ -525,7 +533,7 @@ ACK_DIR = 'state/session/acknowledged'
 
 def _ack_record(root, ident):
     import json
-    base = os.path.join(str(root), 'state/session')
+    base = os.path.join(record_root(root), 'state/session')
     try:
         with open(os.path.join(base, '.ack-transaction.json')) as f:
             before = json.load(f)
@@ -539,7 +547,7 @@ def _ack_record(root, ident):
         # Unknown transaction state must never expose tentative watermarks.
         return None
     try:
-        with open(os.path.join(str(root), ACK_DIR, str(ident) + '.json')) as f:
+        with open(os.path.join(record_root(root), ACK_DIR, str(ident) + '.json')) as f:
             return json.load(f)
     except (OSError, ValueError, TypeError):
         return None
@@ -554,7 +562,7 @@ def acknowledged_many(root, identifiers, *, blocking=True):
            for ident in identifiers):
         raise ValueError('invalid wake id')
     unknown = dict.fromkeys(identifiers)
-    base = os.path.join(str(root), 'state/session')
+    base = os.path.join(record_root(root), 'state/session')
     os.makedirs(base, exist_ok=True)
     lock = os.open(os.path.join(base, '.ack.lock'), os.O_RDWR | os.O_CREAT, 0o644)
     try:
@@ -606,8 +614,8 @@ def acknowledge_batch(root, items):
     """
     import fcntl
     import json
-    base = os.path.join(str(root), 'state/session')
-    directory = os.path.join(str(root), ACK_DIR)
+    base = os.path.join(record_root(root), 'state/session')
+    directory = os.path.join(record_root(root), ACK_DIR)
     os.makedirs(directory, exist_ok=True)
     transaction = os.path.join(base, '.ack-transaction.json')
     lock = os.open(os.path.join(base, '.ack.lock'), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
@@ -658,7 +666,7 @@ def acknowledge(root, ident, woken, wakes=1, *, exact_wake=True):
 def doorbells(root):
     """How many waiters hold a doorbell now (a stale one counts until rung)."""
     import glob
-    return len(glob.glob(os.path.join(glob.escape(os.path.join(str(root), WAKE_DIR)), '*.fifo')))
+    return len(glob.glob(os.path.join(glob.escape(os.path.join(record_root(root), WAKE_DIR)), '*.fifo')))
 
 
 def _leave_on_signals():

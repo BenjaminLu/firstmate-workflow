@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 # shellcheck source=tests/lib/board.sh
 . "$ROOT/tests/lib/board.sh"
 XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
 # --- T-036: truthful mid-run crew progress ---------------------------------
 # Separate fixture: the crowd above floods the deck and would drown these.
 p="$(safe_tmpdir)"; mkdir -p "$p/bin" "$p/state" "$p/design" "$p/board/public"
-cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$p/bin/"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$p/bin/"; project_storage_fixture "$p/bin/"
 cp -R "$ROOT/bin/lib" "$p/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$p/board/"
 cp "$ROOT/board/public/index.html" "$p/board/public/"

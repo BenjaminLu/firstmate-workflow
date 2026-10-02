@@ -5,10 +5,12 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 
 fixture() {
   local d; d="$(mktemp -d)"; mkdir -p "$d/bin" "$d/state"
-  cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-protocol.sh" "$d/bin/"
+  cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-protocol.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
   printf '%s' "$d"
 }
 # a gh that replays comments; one directory per recording so none overwrites another

@@ -59,6 +59,12 @@ esac
 [ -z "$TASK" ] || [ -z "$UNTRACKED" ] || {
   echo "fm-merge: --task and --untracked are two different cards; give one" >&2; exit 64; }
 
+fm_storage_init "$REPO" "$PROJECT" || exit 65
+if [ "$FM_EXTERNAL" = 1 ]; then
+  echo "fm-merge: merge policy not yet set; T-139 onboarding writes it / 尚未設定合併政策；由 T-139 導入流程建立" >&2
+  exit 65
+fi
+
 # the project's repository, named on every gh call; none without --project
 ON=()
 if [ -n "$PROJECT" ]; then
@@ -121,17 +127,10 @@ else
     --en "merged #${PR} from the board" --tw "從看板合併 #${PR}" \
     >/dev/null 2>&1 </dev/null || true
 fi
-# Cleanup knows one worktree root, the engine's own (section 15.3). A task of
-# another project lives under that project's root, and removing
-# state/worktrees/<task> for it could remove the engine's own task of the
-# same id - so another project's cleanup is left to the task that teaches
-# cleanup about project roots, and said. A project is this engine when the
-# registry puts its root at the engine root, however its entry spells that.
-if [ -n "$PROJECT" ] && [ "$(fm_project_get "$PROJECT" root "$REPO/config.yaml" 2>/dev/null)" != "$(pwd -P)" ]; then
-  [ -z "$TASK" ] || echo "fm-merge: $TASK's worktree in $PROJECT is not cleaned up here"
-elif [ -n "$TASK" ] && [ -x "$REPO/bin/fm-cleanup.sh" ]; then
+# Cleanup resolves the project independently and validates its direct child.
+if [ -n "$TASK" ] && [ -x "$REPO/bin/fm-cleanup.sh" ]; then
   FM_ROOT="$REPO" FM_GH="$GH" "$REPO/bin/fm-cleanup.sh" --task "$TASK" --repo "$REPO" \
-    </dev/null 2>&1 | sed "s/^/  /"
+    ${PROJECT:+--project "$PROJECT"} </dev/null 2>&1 | sed "s/^/  /"
 fi
 echo "fm-merge: merged #$PR${PROJECT:+ in $PROJECT}"
 exit 0

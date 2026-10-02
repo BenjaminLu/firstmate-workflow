@@ -4,12 +4,14 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 
 fixture() {
   local d; d="$(mktemp -d)"
   git init -q -b main "$d/repo"
   ( cd "$d/repo" && git config user.email a@b.c && git config user.name t
-    mkdir -p bin state/worktrees && cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-cleanup.sh" bin/
+    mkdir -p bin state/worktrees && cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-cleanup.sh" bin/; project_storage_fixture bin/
     echo x > f && git add -A && git commit -qm base
     git worktree add -q -b t-a state/worktrees/T-A >/dev/null 2>&1 )
   printf '%s' "$d"

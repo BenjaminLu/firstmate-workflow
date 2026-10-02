@@ -5,6 +5,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 
 en="$ROOT/i18n/ui.en.json"; tw="$ROOT/i18n/ui.zh-TW.json"; tbl="$ROOT/i18n/tw2cn.tsv"
 assert_ok "test -f '$en' && test -f '$tw' && test -f '$tbl'" "the dictionaries and the table exist"
@@ -119,7 +121,7 @@ d="$(mktemp -d)"
 mkdir -p "$d/bin" "$d/i18n" "$d/state/pending" "$d/design/diagrams" "$d/board/public"
 # no 2>/dev/null on the fixtures: a copy that silently did not happen makes
 # every assertion under it a report about the fixture
-cp "$ROOT/bin/fm-diagram.sh" "$ROOT/bin/fm-emit.sh" "$d/bin/"
+cp "$ROOT/bin/fm-diagram.sh" "$ROOT/bin/fm-emit.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
 cp "$en" "$tw" "$tbl" "$d/i18n/"
 # the directory, not a list of names. A list drifts: it was index.html and
 # ship.js, so diagram.js - added by the same change this block was written

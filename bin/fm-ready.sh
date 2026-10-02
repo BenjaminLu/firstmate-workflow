@@ -42,6 +42,8 @@ set -uo pipefail
 # a child that reads it blocks the caller waiting for a human who is not
 # there.
 exec < /dev/null
+# shellcheck source=bin/fm-config.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 
 ROOT="${FM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 usage() { printf 'fm-ready: %s\n' "$1" >&2
@@ -63,6 +65,7 @@ SKILL_CARD="^D-SK-[${DIG}]{3,}$"
 MODE=''; TASK=''; DECISION=''
 while [ $# -gt 0 ]; do
   case "$1" in
+    --project) need "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
     list|judged|cleared)
                 [ -z "$MODE" ] || usage "one subcommand only: $MODE, then $1"
                 MODE="$1"; shift ;;
@@ -84,7 +87,8 @@ else
 fi
 
 command -v jq >/dev/null 2>&1 || die "jq is required"
-TASKS="$ROOT/design/tasks"; LOG="$ROOT/state/events.jsonl"; DIR="$ROOT/state/ready"
+fm_storage_init "$ROOT" || exit 65
+TASKS="$FM_TASKS_DIR"; LOG="$FM_STATE_DIR/events.jsonl"; DIR="$FM_STATE_DIR/ready"
 [ -d "$TASKS" ] || die "no design/tasks/ under $ROOT"
 # The task list is one file per task (T-090), read all or nothing as
 # fm_tasks reads it: a file that is not one JSON object is no task list, and
@@ -148,9 +152,9 @@ rows="$(awk -F'\t' -v OFS='\t' '$2 == "ready" { print $1, $3, $4 }' <<< "$all_ro
 # state/decisions/<D-n>.json, and the card was a choice about this task. An A
 # on another task's card, or on a merge card, says nothing about this one.
 answered_a() {
-  { [[ "$1" =~ $CARD_ID ]] || [[ "$1" =~ $SKILL_CARD ]]; } && [ -f "$ROOT/state/decisions/$1.json" ] \
+  { [[ "$1" =~ $CARD_ID ]] || [[ "$1" =~ $SKILL_CARD ]]; } && [ -f "$FM_STATE_DIR/decisions/$1.json" ] \
     && jq -e --arg t "$2" '.chosen == "A" and .task == $t and ((.kind // "choice") == "choice")' \
-         "$ROOT/state/decisions/$1.json" >/dev/null 2>&1
+         "$FM_STATE_DIR/decisions/$1.json" >/dev/null 2>&1
 }
 
 # adopted <SK-id> <episode>: the adoption card judged the time the skill update
@@ -168,7 +172,7 @@ adopted() {
 # adopted_deps <SK-id> <episode>: the proposal it was adopted from exists and
 # names the dependencies the task has now
 adopted_deps() {
-  local spec="$ROOT/state/skill-updates/$1.json" deps
+  local spec="$FM_STATE_DIR/skill-updates/$1.json" deps
   [[ "$1" =~ ^SK-[0-9]{3,}$ ]] || return 1
   [ -f "$spec" ] || return 1
   deps="$(jq -r '[.depends_on[]? | tostring] | sort | join(",")' "$spec" 2>/dev/null)" || return 1
@@ -211,7 +215,7 @@ if [ "$MODE" != judged ]; then
       ep="$(jq -r '.episode // empty' <<< "$body" 2>/dev/null)"
       [ -n "$ep" ] || continue
       if [ "$state" = out ] || [ "$ep" != "$episode" ]; then retire "$id" "$body"; fi
-    elif [[ "$id" =~ ^SK- ]] && [ -f "$ROOT/state/skill-updates/$id.json" ] \
+    elif [[ "$id" =~ ^SK- ]] && [ -f "$FM_STATE_DIR/skill-updates/$id.json" ] \
          && ! adopted_deps "$id" "$episode"; then
       retire "$id" ''
     fi

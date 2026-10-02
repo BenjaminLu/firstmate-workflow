@@ -29,6 +29,7 @@ fm_args=("$@")
 REPO="${FM_ROOT:-$(pwd)}"; MODE=''; EVERY=30
 while [ $# -gt 0 ]; do
   case "$1" in
+    --project) fm_need "fm-run" "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
     once|watch) MODE="$1"; shift ;;
     --repo) fm_need "fm-run" "$@"; REPO="${2-}"; shift 2 ;;
     --every) fm_need "fm-run" "$@"; EVERY="${2-}"; shift 2 ;;
@@ -38,6 +39,7 @@ done
 [ -n "$MODE" ] || { echo "usage: fm-run.sh once|watch [--repo dir] [--every n]" >&2; exit 64; }
 cd "$REPO" || { echo "fm-run: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
+fm_storage_init "$REPO" || exit 65
 fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
 B="${FM_CODE_ROOT:-$REPO}/bin"
 say() { printf '  %s\n' "$*"; }
@@ -81,23 +83,23 @@ merge_card() {  # merge_card <task> <pr>
   fi
   key="T${task#T-}"
   # a card already up, or already answered, is this task's merge card
-  for f in "state/pending/D-$project-$key-"*.json; do
+  for f in "$FM_STATE_DIR/pending/D-$project-$key-"*.json; do
     [ -f "$f" ] && jq -e --arg t "$task" '.kind=="merge" and .task==$t' "$f" >/dev/null 2>&1 || continue
     id="${f##*/}"; say "$task: waiting on the captain (${id%.json})"; return
   done
-  for f in "state/decisions/D-$project-$key-"*.json; do
+  for f in "$FM_STATE_DIR/decisions/D-$project-$key-"*.json; do
     [ -f "$f" ] && jq -e --arg t "$task" '.kind=="merge" and .task==$t' "$f" >/dev/null 2>&1 && return
   done
   # an id reserved for this merge card and not yet published is reused, so a
   # turn that finds no details does not take a fresh id every time
-  for f in "state/decision-ids/$project/$key/"*.json; do
+  for f in "$FM_STATE_DIR/decision-ids/$project/$key/"*.json; do
     [ -f "$f" ] || continue
     n="${f##*/}"; n="${n%.json}"
     case "$n" in ''|*[!0-9]*) continue ;; esac
     jq -e '.kind=="merge"' "$f" >/dev/null 2>&1 || continue
     id="D-$project-$key-$n"
-    [ -e "state/pending/$id.json" ] || [ -e "state/decisions/$id.json" ] \
-      || [ -e "state/runtime/archived-pending/$id.json" ] && continue
+    [ -e "$FM_STATE_DIR/pending/$id.json" ] || [ -e "$FM_STATE_DIR/decisions/$id.json" ] \
+      || [ -e "$FM_STATE_DIR/runtime/archived-pending/$id.json" ] && continue
     { [ -z "$best" ] || [ "$n" -lt "${best##*-}" ]; } && best="$id"
   done
   id="$best"
@@ -106,7 +108,7 @@ merge_card() {  # merge_card <task> <pr>
       --repo "$REPO" 2>&1 </dev/null)" || {
       say "$task: no captain card created; no decision id could be allocated ($id)"; return; }
   fi
-  details="$REPO/state/decision-details/$id.json"
+  details="$FM_STATE_DIR/decision-details/$id.json"
   if request_out="$("$B/fm-decide.sh" --request "$id" --task "$task" --project "$project" --kind merge \
     --pr "$pr" --details "$details" --repo "$REPO" 2>&1 </dev/null)"; then
     say "$task: all six gates green, asking the captain ($id)"
@@ -126,15 +128,15 @@ turn() {
   # 3. advance every task that has a pull request open
   #    of this run's project: another project's #7 is not this project's #7
   open_prs="$(jq -r --arg proj "$RUN_PROJECT" --arg def "$DEFAULT" \
-    "select(.type==\"pr_opened\" and $OURS)|[.task,(.pr|tostring)]|@tsv" state/events.jsonl 2>/dev/null | sort -u)"
+    "select(.type==\"pr_opened\" and $OURS)|[.task,(.pr|tostring)]|@tsv" "$FM_STATE_DIR/events.jsonl" 2>/dev/null | sort -u)"
   while IFS=$'\t' read -r task pr; do
     [ -n "$task" ] && [ -n "$pr" ] || continue
     jq -e --arg t "$task" --arg proj "$RUN_PROJECT" --arg def "$DEFAULT" \
-      "select(.type==\"merged\" and .task==\$t and $OURS)" state/events.jsonl >/dev/null 2>&1 && continue
+      "select(.type==\"merged\" and .task==\$t and $OURS)" "$FM_STATE_DIR/events.jsonl" >/dev/null 2>&1 && continue
 
     branch="$(git branch --list "$(printf '%s' "$task" | tr 'A-Z' 'a-z')-*" --format='%(refname:short)' | head -1)"
     [ -n "$branch" ] || continue
-    round="$(jq -r --arg t "$task" 'select(.type=="review_opened" and .task==$t)|.task' state/events.jsonl 2>/dev/null | wc -l | tr -d ' ')"
+    round="$(jq -r --arg t "$task" 'select(.type=="review_opened" and .task==$t)|.task' "$FM_STATE_DIR/events.jsonl" 2>/dev/null | wc -l | tr -d ' ')"
     round=$(( round + 1 ))
 
     # the protocol first: from round three it can stop the round outright

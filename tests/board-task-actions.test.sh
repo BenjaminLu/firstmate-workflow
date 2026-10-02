@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 # shellcheck source=tests/lib/board.sh
 . "$ROOT/tests/lib/board.sh"
 XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
@@ -9,7 +11,7 @@ XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
 # are lines in that log, so nothing else may be writing to it.
 f="$(safe_tmpdir)"; mkdir -p "$f/bin" "$f/state" "$f/design" "$f/board/public"
 # fm-herdr.py: the stop path park and drop run (T-144)
-cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$f/bin/"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$f/bin/"; project_storage_fixture "$f/bin/"
 cp -R "$ROOT/bin/lib" "$f/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$f/board/"
 cp "$ROOT/board/public/index.html" "$f/board/public/"

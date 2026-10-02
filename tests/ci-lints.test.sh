@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 # shellcheck source=tests/lib/ci.sh
 . "$ROOT/tests/lib/ci.sh"
 # tests/e2e belongs to the browser runner. Bun picking those files up runs
@@ -863,7 +865,7 @@ rm -rf "$q/design"
 
 # with a registry, the check runs once per registered task directory and
 # names the project. The library's parser lives beside it.
-cp "$ROOT/bin/fm-herdr.py" "$q/bin/"
+cp "$ROOT/bin/fm-herdr.py" "$q/bin/"; project_storage_fixture "$q/bin/"
 mkdir -p "$q/design/tasks" "$q/projects/other-app/tasks"
 printf '{"id":"T-001"}\n' > "$q/design/tasks/T-001.json"
 printf '{"id":"T-777","depends_on":["T-776"]}\n' > "$q/projects/other-app/tasks/T-777.json"

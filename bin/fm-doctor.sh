@@ -31,6 +31,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 hooks_only=''; facts_file=''; collect_only=''; fix=''; sandbox=''; assume_yes=''; repo="${FM_ROOT:-$(pwd -P)}"
 while [ $# -gt 0 ]; do
   case "$1" in
+    --project) fm_need "fm-doctor" "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
     --facts) fm_need "fm-doctor" "$@"; facts_file="${2-}"; shift 2 ;;
     --collect) collect_only=1; shift ;;
     --hooks-only) hooks_only=1; shift ;;
@@ -395,8 +396,9 @@ cache_dirs() {  # untracked paths on stdin -> each build cache directory among t
     }
   }' | sort -u
 }
+fm_storage_init "$repo" || exit 65
 flagged=0
-for wt in "$repo"/state/worktrees/*/; do
+for wt in "$FM_WORKTREES"/*/; do
   [ -e "$wt.git" ] || continue
   wt="${wt%/}"; name="${wt##*/}"
   if ! st="$(git -C "$wt" status --porcelain --untracked-files=all </dev/null 2>/dev/null)"; then

@@ -9,9 +9,9 @@
 import { appendFileSync, closeSync, constants, existsSync, fchmodSync, fstatSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { CString, dlopen, FFIType } from "bun:ffi";
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
 // canonical from the start: on macOS /var is a symlink to /private/var, and a
 // path check that compares a resolved path against an unresolved root refuses
@@ -73,19 +73,18 @@ const PUBLIC = join(ROOT, "board/public");
 // default's - was merged by fm-merge.sh in the shell's project while the
 // board's marker said the default held the merge.
 const childEnv = (): Record<string, string | undefined> => {
-  const { FM_PROJECT: _, ...env } = process.env;
+  const { FM_PROJECT: _, FM_CONFIG: _cfg, FM_ENGINE_ROOT: _engine, FM_EXTERNAL: _external, FM_STATE_DIR: _state, FM_WORKTREES: _trees, FM_TARGET_ROOT: _target, FM_BASE: _base, FM_TASKS_DIR: _tasks, FM_DESIGN: _design, GH_REPO: _github, ...env } = process.env;
   return { ...env, FM_ROOT: ROOT };
 };
 
 type Event = Record<string, unknown> & { type?: string; task?: string; pr?: number };
 
-const readEvents = (): Event[] => {
-  if (!existsSync(LOG)) return [];
-  return readFileSync(LOG, "utf8")
-    .split("\n")
-    .filter((l) => l.trim() !== "")
-    .flatMap((l) => { try { return [JSON.parse(l) as Event]; } catch { return []; } });
-};
+const readEvents = (): Event[] => stores().flatMap(dir => {
+  const file = join(dir, "events.jsonl");
+  if (!existsSync(file)) return [];
+  return readFileSync(file, "utf8").split("\n").filter(Boolean)
+    .flatMap(line => { try { return [JSON.parse(line) as Event]; } catch { return []; } });
+});
 
 // A task's state is whatever the log last said about it. The board never
 // decides; it reports.
@@ -327,7 +326,7 @@ const engine = (): { vendor: string; reviewer: string | null; cross: boolean } |
 // guessed link - and the board is the one default project it always was.
 // Read at request time like the engine badge; the answer is kept only while
 // config.yaml is unchanged, so an edit shows on the next refresh.
-type Registered = { github: string | null; tasks: string | null };
+type Registered = { github: string | null; tasks: string | null; state: string };
 type Registry = { name: string | null; projects: Map<string, Registered> };
 const PROJECT_NAME = /^[a-z0-9-]{1,24}$/;
 let registryRead: (Registry & { stamp: string }) | null = null;
@@ -345,18 +344,18 @@ const registry = (): Registry => {
     // answers or none does, and a refusal leaves the board with no registry.
     const r = Bun.spawnSync(["bash", "-c",
       '. "$1" && name="$(fm_project_resolve "" "$2")" && printf "%s\\n" "$name" && names="$(fm_projects "$2")" || exit 1\n' +
-      'for n in $names; do g="$(fm_project_get "$n" github "$2")" && t="$(fm_project_get "$n" tasks "$2")" || exit 1\n' +
-      '  printf "%s\\t%s\\t%s\\n" "$n" "$g" "$t"; done',
+      'for n in $names; do g="$(fm_project_get "$n" github "$2")" && t="$(fm_project_get "$n" tasks "$2")" && s="$(fm_project_get "$n" state "$2")" || exit 1\n' +
+      '  printf "%s\\t%s\\t%s\\t%s\\n" "$n" "$g" "$t" "$s"; done',
       "fm-board", lib, file], { env: childEnv(), cwd: ROOT });
     const [n = "", ...rows] = r.exitCode === 0 ? new TextDecoder().decode(r.stdout).trim().split("\n") : [];
     name = PROJECT_NAME.test(n) ? n : null;
     for (const row of name ? rows : []) {
-      const [p = "", g = "", t = ""] = row.split("\t");
+      const [p = "", g = "", t = "", state = ""] = row.split("\t");
       if (!PROJECT_NAME.test(p)) continue;
       projects.set(p, {
         github: /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(g) ? g : null,
         // the registry refuses an absolute path or one that climbs out
-        tasks: t && !t.startsWith("/") && !t.split("/").includes("..") ? t : null,
+        tasks: t || null, state,
       });
     }
   } catch { name = null; projects.clear(); }
@@ -372,7 +371,7 @@ const registry = (): Registry => {
 // is no task list, never half of one.
 const tasksRead = new Map<string, { stamp: string; defs: Array<Record<string, unknown>> }>();
 const taskDefs = (rel: string): Array<Record<string, unknown>> => {
-  const dir = join(ROOT, rel), lib = join(ROOT, "bin/fm-config.sh");
+  const dir = isAbsolute(rel) ? rel : join(ROOT, rel), lib = join(ROOT, "bin/fm-config.sh");
   if (!existsSync(dir) || !existsSync(lib)) return [];
   let stamp = "";
   try {
@@ -493,12 +492,45 @@ const mentioned = (repo: string | null, value: unknown, out: Record<string, stri
   return out;
 };
 
+const stateDir = (project: string) => {
+  const reg = registry();
+  if (!reg.projects.size) return join(ROOT, "state");
+  const entry = reg.projects.get(project || defaultProject());
+  if (!entry?.state) throw new Error("project storage is unavailable");
+  if (entry.state !== join(ROOT, "state")) {
+    // Revalidate before using a cached registry path: records can change
+    // without config.yaml changing (including planted symlinks).
+    const checked = Bun.spawnSync(["bash", "-c",
+      '. "$1"; fm_project_get "$3" state "$2"', "fm-board",
+      join(ROOT, "bin/fm-config.sh"), join(ROOT, "config.yaml"), project || defaultProject()],
+      { env: childEnv(), cwd: ROOT });
+    if (checked.exitCode !== 0 || new TextDecoder().decode(checked.stdout).trim() !== entry.state)
+      throw new Error("project storage validation failed");
+  }
+  return entry.state;
+};
+const stores = () => registry().projects.size
+  ? [...new Set([...registry().projects.keys()].map(p => stateDir(p)))]
+  : [join(ROOT, "state")];
+const decisionDir = (id: string) => join(stateDir(ownerOf(id)?.project ?? defaultProject()), "decisions");
+const responseFile = (id: string) => {
+  const old = join(ROOT, "state/decisions", `${id}.json`);
+  const project = ownerOf(id)?.project;
+  if (project && registry().projects.has(project) && stateDir(project) !== join(ROOT, "state")) {
+    if (existsSync(old)) throw new Error("legacy external decision requires approved migration");
+    return join(decisionDir(id), `${id}.json`);
+  }
+  if (existsSync(old)) return old;
+  return join(decisionDir(id), `${id}.json`);
+};
+
 // The answered decisions on disk, whatever shape of id they carry.
 const RESPONSES = join(ROOT, "state/decisions");
-const readResponses = (): Array<Record<string, any>> => existsSync(RESPONSES)
-  ? readdirSync(RESPONSES).filter(f => f.endsWith(".json") && isDecisionId(f.slice(0, -5))).flatMap(f => {
-    try { return [JSON.parse(readFileSync(join(RESPONSES, f), "utf8"))]; } catch { return []; }
-  }) : [];
+const readResponses = (): Array<Record<string, any>> => stores().flatMap(base => {
+  const dir = join(base, "decisions");
+  return existsSync(dir) ? readdirSync(dir).filter(f => f.endsWith(".json") && isDecisionId(f.slice(0, -5)))
+    .flatMap(f => { try { return [JSON.parse(readFileSync(join(dir, f), "utf8"))]; } catch { return []; } }) : [];
+});
 // Where a merge answered on the board stands (design section 5.2): running
 // while the helper has not exited, then merged or failed. A record written
 // before merges ran in the background says the same with merged.ok.
@@ -520,7 +552,7 @@ const taskLists = (): Array<{ project: string; defs: Array<Record<string, unknow
   const dirs: Array<[string, string]> = reg.projects.size
     ? [...reg.projects].map(([name, p]) => {
       const rel = p.tasks ?? `projects/${name}/tasks`;
-      return [name, name === def && !existsSync(join(ROOT, rel)) ? "design/tasks" : rel];
+      return [name, rel];
     })
     : [[def, "design/tasks"]];
   // the default project first, so a board of one project reads as before
@@ -745,14 +777,14 @@ const state = (only: string | null = null) => {
   // state/ready/ is about that project's task of that id and no other's.
   const projectOfKey = (k: string) => k.slice(0, k.indexOf("\u0000"));
   const idOfKey = (k: string) => k.slice(k.indexOf("\u0000") + 1);
-  const readinessCard = (id: string): string | null => {
-    const f = join(ROOT, "state/ready", `${id}.json`);
+  const readinessCard = (id: string, project: string): string | null => {
+    const f = join(stateDir(project), "ready", `${id}.json`);
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) || !existsSync(f)) return null;
     try { return String(JSON.parse(readFileSync(f, "utf8")).decision ?? "") || null; } catch { return null; }
   };
   const judging = (id: string) => {
-    if (worked.has(id) || projectOfKey(id) !== def) return false;
-    const card = readinessCard(idOfKey(id));
+    if (worked.has(id)) return false;
+    const card = readinessCard(idOfKey(id), projectOfKey(id));
     return card !== null && pend.every((p: Record<string, unknown>) =>
       keyOf(projectOf(p), p.task) !== id || String(p.id ?? "") === card);
   };
@@ -965,7 +997,7 @@ const state = (only: string | null = null) => {
         : roles.get(id) || (legacyName(id) ? roleOf(id, {}) : null);
     if (kind) handoffs.push({identity:`handoff:${index}:${JSON.stringify(e)}`,kind,from:from || null,to:to || null,
       from_role:placed(from),to_role:placed(to),task:e.task || null,
-      ...(e.task ? { project: projectOf(e) || null } : {})});
+      project: projectOf(e) || null});
     if (!e.actor || e.actor === "github" || e.actor === "captain") continue;
     lastByActor.delete(e.actor);
     // an event naming no task keeps the task, and so the project, it was on
@@ -1171,7 +1203,9 @@ const state = (only: string | null = null) => {
     },
     tasks: shownTasks,
     // design.md is linked from a card only when there is one to open
-    designDoc: existsSync(join(ROOT, "design/design.md")),
+    designDoc: existsSync(only && registry().projects.has(only) && stateDir(only) !== join(ROOT, "state")
+      ? join(dirname(stateDir(only)), "design.md") : join(ROOT, "design/design.md")),
+    designPath: only && registry().projects.has(only) && stateDir(only) !== join(ROOT, "state") ? "design.md" : "design/design.md",
     // Full outcome stream: a busy refresh must not lose events outside recent.
     responses: reviewed.filter(mine).map(linked),
     handoffs: handoffs.filter((h) => !("project" in h) || mine(h)),
@@ -1183,6 +1217,34 @@ const state = (only: string | null = null) => {
     recent: events.filter((e) => mine(e) && !closesLoss.has(e)).slice(-40).reverse().map(linked),
     pending: shownPending.map(linked),
   };
+  // The engine-wide view is an allow-listed metadata projection. Private
+  // descriptions and arbitrary event payloads are available only in an
+  // explicitly selected project's local view, never in aggregation.
+  if (!only) {
+    const keys = new Set(["id", "key", "project", "task", "pr", "pr_url", "type", "ts", "actor",
+      "role", "stage", "state", "kind", "chosen", "merge", "owner", "task_final", "identity",
+      "depends_on", "blocked_on", "blocked_by", "actions", "confirm", "badges", "crew", "merged_seq",
+      "last_review", "crew_name", "name", "round", "attempt", "vendor", "model", "model_source",
+      "model_requested", "cli_version", "model_mismatch", "progress", "window_expected"]);
+    const metadata = (value: Record<string, any>) => {
+      const project = projectOf(value), entry = registry().projects.get(project);
+      if (!entry || entry.state === join(ROOT, "state")) return value;
+      const safe = Object.fromEntries(Object.entries(value).filter(([key]) => keys.has(key)));
+      if (typeof safe.identity === "string")
+        safe.identity = "external:" + createHash("sha256").update(safe.identity).digest("hex");
+      else if (safe.identity && typeof safe.identity === "object")
+        safe.identity = Object.fromEntries(Object.entries(safe.identity).filter(([key]) =>
+          ["name", "role", "project", "task", "round", "attempt", "vendor", "model"].includes(key)));
+      safe.title = null;
+      if ("answerable" in value) safe.answerable = false;
+      const pr = prNumber(value.pr);
+      safe.summary = { en: `External project update${pr ? ` #${pr}` : ""}`,
+        "zh-TW": `外部專案狀態更新${pr ? ` #${pr}` : ""}` };
+      return safe;
+    };
+    for (const key of ["tasks", "crew", "pending", "responses", "recent", "outcomes", "handoffs"] as const)
+      out[key] = out[key].map(item => metadata(item as Record<string, any>)) as never;
+  }
   // Every #n in text links to its own project's pull request: a log line,
   // a card and a crewman's activity each read the map of the project they
   // belong to. `pr_urls` is the default project's, which is every #n on a
@@ -1211,8 +1273,7 @@ const firstSeen = new Map<string, number>();
 // happens whenever a merge goes through some other way - a decision file
 // outlives the thing it was asking about - and the captain is then offered
 // a choice that cannot be made.
-const pending = () => {
-  const dir = join(ROOT, "state/pending");
+const pendingIn = (dir: string) => {
   if (!existsSync(dir)) return [];
   const logged = readEvents();
   const terminal = logged.filter((e) => e.type === "merged" || e.type === "closed");
@@ -1274,6 +1335,11 @@ const pending = () => {
     .map((x) => x.card);
 };
 
+const pending = () => stores().flatMap(base => pendingIn(join(base, "pending"))).sort((a, b) => {
+  const time = (card: Record<string, any>) => Date.parse(String(card.ts ?? "")) || firstSeen.get(`${card.id}.json`) || 0;
+  return time(a) - time(b) || String(a.id).localeCompare(String(b.id), "en", { numeric: true });
+});
+
 // --- Owners and wakes (T-151) ----------------------------------------------
 // Nothing the board starts outlives its owner. A merge the captain clicked
 // and a round sent back must outlive a board restart, so they belong to the
@@ -1299,12 +1365,13 @@ const startOwned = (name: string, argv: string[], fd: number, env: Record<string
 const WAKE_QUEUE = join(ROOT, "state/session/wake.jsonl");
 const pushWake = (id: string, reason: "answered" | "merge_settled", decision: unknown) => {
   try {
-    mkdirSync(join(ROOT, "state/session"), { recursive: true });
-    appendFileSync(WAKE_QUEUE, JSON.stringify({ id, reason, decision, woken: Date.now() / 1000 }) + "\n");
+    const dir = join(stateDir(ownerOf(id)?.project ?? defaultProject()), "session");
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(join(dir, "wake.jsonl"), JSON.stringify({ id, reason, decision, woken: Date.now() / 1000 }) + "\n");
   } catch (e) { console.error(`wake queue not written for ${id}: ${(e as Error).message}`); }
   try {
     // ringing never blocks: every bell is opened O_NONBLOCK
-    const r = Bun.spawnSync(["python3", LIFELINE, "ring", ROOT, id], { stdin: "ignore", env: childEnv() });
+    const r = Bun.spawnSync(["python3", LIFELINE, "ring", ROOT, id], { stdin: "ignore", env: { ...childEnv(), FM_PROJECT: ownerOf(id)?.project ?? defaultProject() } });
     if (r.exitCode !== 0) console.error(`wake not rung for ${id}: ${new TextDecoder().decode(r.stderr).trim()}`);
   } catch (e) { console.error(`wake not rung for ${id}: ${(e as Error).message}; the queue carries it`); }
 };
@@ -1319,7 +1386,9 @@ const pushWake = (id: string, reason: "answered" | "merge_settled", decision: un
 const MERGING = join(ROOT, "state/merging");
 // a tree with no registry has one project with no name; no name can begin
 // with an underscore, so its marker cannot be taken for a project's
-const markerOf = (project: string) => join(MERGING, `${project || "_default"}.json`);
+const markerOf = (project: string) => join(
+  registry().projects.has(project) ? stateDir(project) : join(ROOT, "state"),
+  "merging", `${project || "_default"}.json`);
 type Marker = { decision: string; project: string; pr: number; task: string | null; pid: number; started: string; ts: string };
 const readJson = <T,>(file: string): T | null => {
   try { return JSON.parse(readFileSync(file, "utf8")) as T; } catch { return null; }
@@ -1339,7 +1408,7 @@ const alive = (m: Marker | null): boolean => {
 };
 // write a record whole or not at all: a reader never sees half of one
 const rewrite = (file: string, record: unknown) => {
-  const temporary = join(RESPONSES, `.${crypto.randomUUID()}.tmp`);
+  const temporary = join(dirname(file), `.${crypto.randomUUID()}.tmp`);
   writeFileSync(temporary, JSON.stringify(record) + "\n", { flag: "wx" });
   renameSync(temporary, file);
 };
@@ -1348,7 +1417,7 @@ const ours = new Set<string>();
 // A running record's outcome, written once. The marker goes with it, so the
 // project's turn is free the moment the record says how it ended.
 const settle = (id: string, merge: "merged" | "failed", reason = "") => {
-  const file = join(RESPONSES, `${id}.json`);
+  const file = responseFile(id);
   const d = readJson<Record<string, any>>(file);
   unknownOutcome.delete(id);
   const marker = markerOf(projectOf(d));
@@ -1375,8 +1444,9 @@ const HELPER_STOPPED = "the merge helper stopped before recording an outcome";
 // with its output in a file: a board restarting under bun --watch neither
 // kills it nor leaves it writing into a closed pipe.
 const startMerge = (id: string, project: string, pr: number, task: string | null, onProject: string[], untracked = false) => {
-  mkdirSync(MERGING, { recursive: true });
-  const log = join(MERGING, `${project || "_default"}.out`);
+  const merging = join(stateDir(project), "merging");
+  mkdirSync(merging, { recursive: true });
+  const log = join(merging, `${project || "_default"}.out`);
   let child;
   try {
     const fd = openSync(log, "w");
@@ -1476,7 +1546,7 @@ const dispatchTask = async (project: string, task: string): Promise<Carried> => 
 // seconds is reported with what it said.
 const sendBack = async (project: string, task: string, pr: number | null): Promise<Carried> => {
   if (!SAFE_NAME.test(task)) return { outcome: "failed", reason: "no task to send back" };
-  const dir = join(ROOT, "state/dispatch");
+  const dir = join(stateDir(project), "dispatch");
   mkdirSync(dir, { recursive: true });
   const log = join(dir, `${task}.log`);
   let child;
@@ -1543,7 +1613,7 @@ const recover = async () => {
       if (logged) { settle(id, "merged"); continue; }
       const gh = pr === null ? null : await githubState(project, pr);
       // the record may have been settled while GitHub was being asked
-      if (mergeOf(readJson(join(RESPONSES, `${id}.json`))) !== "running") continue;
+      if (mergeOf(readJson(responseFile(id))) !== "running") continue;
       if (gh === "MERGED") settle(id, "merged");
       else if (gh === "OPEN" || gh === "CLOSED") settle(id, "failed", HELPER_STOPPED);
       else unknownOutcome.add(id);
@@ -1728,10 +1798,17 @@ const reloginRefusal = (now: number): Response | null => {
 };
 
 const serveFile = (name: string) => {
-  const p = join(PUBLIC, name);
-  if (!p.startsWith(PUBLIC + "/") || !existsSync(p)) return new Response("not found", { status: 404 });
+  let base = PUBLIC, relative = name;
+  const diagram = /^diagrams\/(D-[A-Za-z0-9-]+)\.(en|zh-TW|zh-CN)\.html$/.exec(name);
+  const project = diagram ? ownerOf(diagram[1])?.project : null;
+  if (project && registry().projects.has(project) && stateDir(project) !== join(ROOT, "state")) {
+    base = join(stateDir(project), "diagrams");
+    relative = name.slice("diagrams/".length);
+  }
+  const p = join(base, relative);
+  if (!p.startsWith(base + "/") || !existsSync(p)) return new Response("not found", { status: 404 });
   // the real file, not wherever a link in the tree points
-  const real = realpathSync(p), pub = realpathSync(PUBLIC);
+  const real = realpathSync(p), pub = realpathSync(base);
   if (!real.startsWith(pub + "/") || !statSync(real).isFile()) return new Response("not found", { status: 404 });
   const type = name.endsWith(".css") ? "text/css"
     : name.endsWith(".js") ? "text/javascript" : "text/html; charset=utf-8";
@@ -1814,7 +1891,7 @@ const server = Bun.serve({
           send("state", state(only));
           // the log is not all the board shows: a merge's outcome lands in
           // its decision record, and an unknown one is known only here
-          const stamp = () => [LOG, RESPONSES, join(ROOT, "state/pending")]
+          const stamp = () => stores().flatMap(dir => [join(dir, "events.jsonl"), join(dir, "decisions"), join(dir, "pending")])
             .map((f) => { try { const s = statSync(f); return `${s.size}:${s.mtimeMs}`; } catch { return "-"; } })
             .join("|") + `|${[...unknownOutcome].sort().join(",")}`;
           let size = stamp();
@@ -1852,7 +1929,7 @@ const server = Bun.serve({
         }
 
         const p = pending().find((d: any) => d.id === id);
-        const dir = RESPONSES;
+        const dir = decisionDir(id);
         mkdirSync(dir, { recursive: true });
         const file = join(dir, `${id}.json`);
         if (existsSync(file)) {
@@ -1952,7 +2029,7 @@ const server = Bun.serve({
 
         // the helper runs in the background; the answer does not wait for it
         if (merging) startMerge(id, projectOf(p), p.pr, mergeTask, onProject, untracked);
-        const pf = join(ROOT, "state/pending", `${id}.json`);
+        const pf = join(stateDir(cardProject), "pending", `${id}.json`);
         if (existsSync(pf)) unlinkSync(pf);
         const stored = readJson<Record<string, unknown>>(file) ?? decision;
         return json({ ok: true, decision: stored, merge: mergeOf(stored), eventRecorded,
@@ -2025,12 +2102,14 @@ const server = Bun.serve({
     // one check for every endpoint that takes a path: resolve it fully, then
     // insist the real thing sits inside the real root. Three copies of this
     // is three chances to write it differently.
-    const inside = (p: string) => {
+    const inside = (p: string, project: string | null = only) => {
       if (p === "") return null;
-      const abs = resolve(ROOT, p);
+      if (project && !registry().projects.has(project)) return null;
+      const base = project && stateDir(project) !== join(ROOT, "state") ? dirname(stateDir(project)) : ROOT;
+      const abs = resolve(base, p);
       if (!existsSync(abs)) return null;
       const real = realpathSync(abs);
-      return real === ROOT || real.startsWith(ROOT + "/") ? real : null;
+      return real === base || real.startsWith(base + "/") ? real : null;
     };
 
     // Starting a program is a write: POST with the credential, the path in a
@@ -2041,7 +2120,7 @@ const server = Bun.serve({
       if (refused) return refused;
       if (!localOnly(req)) return json({ error: "localhost only" }, 403);
       return req.json().then((body: any) => {
-        const abs = inside(typeof body?.path === "string" ? body.path : "");
+        const abs = inside(typeof body?.path === "string" ? body.path : "", typeof body?.project === "string" && body.project ? body.project : only);
         if (!abs) return json({ error: "outside the repository" }, 403);
         const editor = (readFileSync(join(ROOT, "config.yaml"), "utf8")
           .match(/^editor:\s*([^\s#]+)/m)?.[1] ?? "code");

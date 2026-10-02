@@ -15,6 +15,8 @@ FM_GATE_LOCK="$(mktemp -d)/gate.lock"; export FM_GATE_LOCK
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 
 # The production caller in a fixture with all orchestration stubbed. This
 # focused path never invokes git, gh, engines or a live board.
@@ -185,7 +187,7 @@ cd "$r" || exit 1
 git config user.email a@b.c; git config user.name t
 mkdir -p bin design skills/worker skills/reviewer state src tests
 cp "$ROOT"/bin/fm-*.sh bin/
-cp "$ROOT/bin/fm-herdr.py" bin/
+cp "$ROOT/bin/fm-herdr.py" bin/; project_storage_fixture bin/
 cp -r "$ROOT/bin/adapters" bin/
 cp -r "$ROOT/bin/lib" bin/
 cp "$ROOT/skills/worker/SKILL.md" skills/worker/

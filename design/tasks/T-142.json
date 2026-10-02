@@ -28,7 +28,14 @@
     "bin/fm-run.sh",
     "bin/fm-dispatch.sh",
     "bin/fm-gate.sh",
-    "board/**"
+    "board/**",
+    "bin/fm-herdr.py",
+    "bin/fm-ready.sh",
+    "bin/fm-merge.sh",
+    "bin/fm.sh",
+    "bin/fm-sync-prs.sh",
+    "bin/fm-checkpoint.sh",
+    "bin/fm-doctor.sh"
   ],
   "acceptance": [
     "Why. On 2026-09-29 the captain approved the redesign for working on other repositories (reviewed and grilled against consenlabs/tokenlon-mm-agent PR #164): external data outside the engine tree under FM_HOME, private repositories allowed, watching done by scripts at zero model cost, with visible owned Herdr dispatch retained; detached full cmux lifecycle remains deferred. Its own spec file, design/tasks/T-142.json, is committed on this branch.",

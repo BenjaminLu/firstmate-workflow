@@ -79,12 +79,19 @@ PARK_SECS = 3000
 MAX_LINES = 20
 
 
+def record_root(root):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('fm_project_paths', Path(__file__).with_name('fm_project_paths.py'))
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    return module.record_root(root)
+
+
 def now_iso():
     return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 def wdir(root):
-    path = Path(root) / WATCH
+    path = record_root(root) / WATCH
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -156,7 +163,7 @@ def wake_line(item):
 
 def _queue_from(root, offset):
     """The complete items after `offset` and where they end."""
-    queue = Path(root) / life.WAKE_QUEUE
+    queue = record_root(root) / life.WAKE_QUEUE
     try:
         with open(queue, 'rb') as f:
             size = os.fstat(f.fileno()).st_size
@@ -211,7 +218,7 @@ def take(root, stage=None):
                 return []
         offset = _cursor(root)
         if offset is None:
-            queue = Path(root) / life.WAKE_QUEUE
+            queue = record_root(root) / life.WAKE_QUEUE
             save(wdir(root) / 'cursor', str(queue.stat().st_size if queue.exists() else 0))
             return []
         items, end = _queue_from(root, offset)
@@ -447,7 +454,7 @@ def _claim(root, include_queue=False):
     if include_queue and blocked == float('inf'):
         offset = _cursor(root)
         if offset is None:
-            queue = Path(root) / life.WAKE_QUEUE
+            queue = record_root(root) / life.WAKE_QUEUE
             save(wdir(root) / 'cursor', str(queue.stat().st_size if queue.exists() else 0))
         else:
             queued, end = _queue_from(root, offset)
@@ -562,7 +569,7 @@ def standing_down(root, cwd=None):
                 return 'a crew worktree'
     if (root / '.git').is_file():
         return 'a git worktree, not the primary checkout'
-    if (root / 'state/away').exists():
+    if (record_root(root) / 'state/away').exists():
         return 'the captain is away'
     return None
 
@@ -573,7 +580,7 @@ def inflight(root):
     answered (state/pending)."""
     aboard = {}
     try:
-        with open(Path(root) / 'state/events.jsonl', 'rb') as f:
+        with open(record_root(root) / 'state/events.jsonl', 'rb') as f:
             for raw in f:
                 try:
                     event = json.loads(raw)
@@ -588,7 +595,7 @@ def inflight(root):
                 aboard[actor] = event.get('type') != 'agent_finished'
     except OSError:
         pass
-    cards = sorted(p.stem for p in (Path(root) / 'state/pending').glob('*.json'))
+    cards = sorted(p.stem for p in (record_root(root) / 'state/pending').glob('*.json'))
     return sorted(actor for actor, on in aboard.items() if on), cards
 
 

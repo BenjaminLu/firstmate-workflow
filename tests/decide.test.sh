@@ -6,6 +6,8 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 # a suite run inside Herdr must not ring the captain for every fixture card;
 # the T-096 cases below put HERDR_ENV back, with a stub, where they mean it
 unset HERDR_ENV HERDR_STUB FM_NOTIFY_SECONDS
@@ -15,7 +17,7 @@ fixture() {
   # the generator and the dictionaries it cannot render without: requesting a
   # decision draws it, so a fixture without them is not a fixture for
   # --request at all
-  cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-decide.sh" "$ROOT/bin/fm-diagram.sh" "$d/bin/"
+  cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-decide.sh" "$ROOT/bin/fm-diagram.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
   # the doorbell --await registers and the board rings (T-151)
   cp -R "$ROOT/bin/lib" "$d/bin/"
   cp "$ROOT/i18n/ui.en.json" "$ROOT/i18n/ui.zh-TW.json" "$ROOT/i18n/tw2cn.tsv" "$d/i18n/"
@@ -285,7 +287,7 @@ assert_ok "[ '$t4' -le 5 ]" "within seconds (${t4}s)"
 # an --await beside a session wait (fm-session.sh wait): one answer, one
 # ring - the board's queue line and its ring - and both return
 d6="$(fixture)"; mkdir -p "$d6/state/decisions" "$d6/state/session"
-cp "$ROOT/bin/fm-herdr.py" "$d6/bin/"
+cp "$ROOT/bin/fm-herdr.py" "$d6/bin/"; project_storage_fixture "$d6/bin/"
 FM_ROOT="$d6" bash "$d6/bin/fm-decide.sh" --await D-6 --timeout 20 > "$d6/got" 2>/dev/null & w6=$!
 python3 "$d6/bin/fm-herdr.py" session wait "$d6" all 20 > "$d6/woken" 2>/dev/null & s6w=$!
 until_bells "$d6" 2
@@ -334,7 +336,7 @@ assert_fail "FM_ROOT='$d4' '$d4/bin/fm-decide.sh' --await D-9 --timeout 2" "it t
 # allocated here, under that task's own lock. Nothing global is counted.
 owned() {   # a fixture with a registry of two projects
   local o; o="$(fixture)"
-  cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$o/bin/"
+  cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$o/bin/"; project_storage_fixture "$o/bin/"
   cat > "$o/config.yaml" <<'Y'
 default_project: firstmate-workflow
 projects:
@@ -348,6 +350,7 @@ projects:
     base: main
     required_check: check
 Y
+project_fixture_config "$o"
   printf '%s' "$o"
 }
 alloc() { FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --allocate "$@" 2>/dev/null; }
@@ -371,7 +374,7 @@ done
 # a record already on disk is never handed out again, whoever wrote it
 mkdir -p "$o/state/decisions"
 printf '{"id":"D-example-app-T050-4","task":"T-050","kind":"choice","chosen":"A"}\n' \
-  > "$o/state/decisions/D-example-app-T050-4.json"
+  > "$(project_fixture_state "$o" example-app)/decisions/D-example-app-T050-4.json"
 assert_eq "D-example-app-T050-5" "$(alloc --task T-050 --project example-app)" \
   "the next free n is past every record that task already has"
 # the lock is the task's own: ten allocations at once get ten ids
@@ -389,11 +392,11 @@ id="$(alloc --task T-047 --project example-app)"
 pr_is "$o" 12 t-047-app 'T-047: the app side'
 out="$(FM_GH="$o/gh" FM_ROOT="$o" "$o/bin/fm-decide.sh" --request "$id" --task T-047 --project example-app \
   --kind merge --pr 12 --details "$d/details.json" 2>/dev/null)"
-assert_eq "$o/state/pending/$id.json" "$out" "an allocated id is requested like any other"
+assert_eq "$(project_fixture_state "$o" example-app)/pending/$id.json" "$out" "an allocated id is requested like any other"
 assert_contains "$(cat "$o/ghcalls" 2>/dev/null)" "pr view 12 --repo example-org/example-app" \
   "its pull request is read on the card's project's repository"
 assert_eq "example-app" "$(jq -r .project "$out")" "and the card records its project"
-assert_eq "example-app" "$(jq -r 'select(.type=="decision_requested")|.project' "$o/state/events.jsonl" | tail -1)" \
+assert_eq "example-app" "$(jq -r 'select(.type=="decision_requested")|.project' "$(project_fixture_state "$o" example-app)/events.jsonl" | tail -1)" \
   "and so does its decision_requested event"
 assert_ok "test -s '$o/board/public/diagrams/$id.en.html'" "and its diagram is drawn under the new id"
 FM_ROOT="$o" bash "$o/bin/fm-decide.sh" --request D-example-app-T047-9 --task T-047 --project example-app \
@@ -421,17 +424,17 @@ assert_eq "" "$(find "$o/state/pending" "$o/state/decisions" \( -name '*Bad_Name
 # the allocator's scan reaches every store a card can be in: a pending card
 # and an archived one each push the next n past them
 mkdir -p "$o/state/runtime/archived-pending"
-printf '{"id":"D-example-app-T051-3","task":"T-051"}\n' > "$o/state/pending/D-example-app-T051-3.json"
+printf '{"id":"D-example-app-T051-3","task":"T-051"}\n' > "$(project_fixture_state "$o" example-app)/pending/D-example-app-T051-3.json"
 assert_eq "D-example-app-T051-4" "$(alloc --task T-051 --project example-app)" \
   "a pending card nobody reserved here is past the next n"
-printf '{"id":"D-example-app-T052-7","task":"T-052"}\n' > "$o/state/runtime/archived-pending/D-example-app-T052-7.json"
+printf '{"id":"D-example-app-T052-7","task":"T-052"}\n' > "$(project_fixture_state "$o" example-app)/runtime/archived-pending/D-example-app-T052-7.json"
 assert_eq "D-example-app-T052-8" "$(alloc --task T-052 --project example-app)" \
   "and so is an archived one"
 assert_eq "D-firstmate-workflow-T052-1" "$(alloc --task T-052)" \
   "while another project's cards for the same task count nothing"
 
 # await reads both forms and refuses anything else before touching a path
-printf '{"id":"%s","task":"T-047","chosen":"B"}\n' "$id" > "$o/state/decisions/$id.json"
+printf '{"id":"%s","task":"T-047","chosen":"B"}\n' "$id" > "$(project_fixture_state "$o" example-app)/decisions/$id.json"
 assert_eq "B" "$(FM_ROOT="$o" "$o/bin/fm-decide.sh" --await "$id" --timeout 2 | jq -r .chosen)" \
   "await returns a new-form answer"
 printf '{"id":"D-056","task":"T-043","chosen":"A"}\n' > "$o/state/decisions/D-056.json"
@@ -469,7 +472,7 @@ rm -rf "$o"
 # A tree with no `projects:` map - every fixture before projects existed - is
 # the engine hosting itself: its ids are the self project's, and nothing
 # records a project, because there is no registry to validate one against.
-u="$(fixture)"; cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$u/bin/"
+u="$(fixture)"; cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$u/bin/"; project_storage_fixture "$u/bin/"
 printf 'vendor: mock\n' > "$u/config.yaml"
 uid="$(FM_ROOT="$u" bash "$u/bin/fm-decide.sh" --allocate --task T-047 --kind merge 2>/dev/null)"
 assert_eq "D-firstmate-workflow-T047-1" "$uid" "an unregistered tree allocates under the self project"

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 # shellcheck source=tests/lib/board.sh
 . "$ROOT/tests/lib/board.sh"
 XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
@@ -8,7 +10,7 @@ XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
 # Its own fixture again: the engine badge reads config.yaml, which the other
 # two fixtures do not have, and the merge refusal needs a helper that says no.
 e="$(safe_tmpdir)"; mkdir -p "$e/bin" "$e/state/pending" "$e/design" "$e/board/public"
-cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-ready.sh" "$e/bin/"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-ready.sh" "$e/bin/"; project_storage_fixture "$e/bin/"
 cp -R "$ROOT/bin/lib" "$e/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$e/board/"
 cp "$ROOT/board/public/index.html" "$e/board/public/"
@@ -182,7 +184,7 @@ assert_eq "true" "$(jq -r '.responses[]|select(.id=="D-403")|.superseded' <<<"$(
 # fm-decide.sh, which writes the pending card and emits decision_requested,
 # and records the card with the real fm-ready.sh. No card or answer below is
 # written by hand, so what the board reads is what those scripts write.
-cp "$ROOT/bin/fm-decide.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$e/bin/"
+cp "$ROOT/bin/fm-decide.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$e/bin/"; project_storage_fixture "$e/bin/"
 card4() {   # card4 <id> <task> <option keys, e.g. ABCD>: raise a choice card through fm-decide.sh
   jq -n --arg keys "$3" '
     ($keys | split("") | map({key: ., value: {description: ("do " + .), pros: "p", cons: "c"}})

@@ -5,10 +5,12 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 
 fixture() {
   local d; d="$(mktemp -d)"; mkdir -p "$d/bin" "$d/state"
-  cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-sync-prs.sh" "$d/bin/"
+  cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-sync-prs.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
   printf '%s' "$d"
 }
 # a gh that replays a recorded payload; one directory per recording
@@ -64,7 +66,7 @@ assert_fail "test -s '$d3/state/events.jsonl'" "and writes nothing then either"
 # read from its own repository and written with its own project, and one
 # project's #7 never counts as the other's.
 d4="$(fixture)"
-cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$d4/bin/"
+cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$d4/bin/"; project_storage_fixture "$d4/bin/"
 cat > "$d4/config.yaml" <<'Y'
 default_project: firstmate-workflow
 projects:
@@ -78,6 +80,7 @@ projects:
     base: main
     required_check: check
 Y
+project_fixture_config "$d4"
 mkdir -p "$d4/ghp"
 # answers like gh: `pr list --repo <owner/repo>` lists that repository's pull
 # requests; a call without --repo would be the engine checkout's, and is
@@ -107,11 +110,11 @@ assert_contains "$out4" "merged #7 (T-004) in example-app" "and says which proje
 calls="$(cat "$d4/ghcalls")"
 assert_contains "$calls" "--repo owner/engine" "it polls the default project's repository by name"
 assert_contains "$calls" "--repo example-org/example-app" "and the other project's"
-log4="$d4/state/events.jsonl"
+log4="$(project_fixture_state "$d4" example-app)/events.jsonl"
 assert_eq "example-app" "$(jq -r 'select(.type=="merged" and .pr==7)|.project' "$log4")" \
   "the other project's merge is written with that project"
 assert_eq "T-004" "$(jq -r 'select(.type=="merged" and .pr==7)|.task' "$log4")" "and its task"
-assert_eq "1" "$(jq -s 'map(select(.type=="pr_opened" and .pr==7))|length' "$log4")" \
+assert_eq "1" "$(jq -s 'map(select(.type=="pr_opened" and .pr==7))|length' "$d4/state/events.jsonl")" \
   "the default project's #7, already in the log without a project, is not written again"
 # the app's #7 opens later in the other repository: its own event, not a
 # duplicate of the engine's pr_opened #7
@@ -151,7 +154,7 @@ rm -rf "$d5"
 # The same tree shipping the registry library, as a real checkout does: the
 # library finds no `projects:` map, so the sync is the same as before. The
 # script never reads config.yaml itself (tests/config.test.sh).
-d6="$(fixture)"; cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$d6/bin/"
+d6="$(fixture)"; cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$d6/bin/"; project_storage_fixture "$d6/bin/"
 printf 'vendor: mock\nconcurrency: 2\n' > "$d6/config.yaml"
 OLD6="$(rec "$d6" old <<'J'
 [{"number":3,"state":"OPEN","title":"T-003: old","headRefName":"t-003-old","mergedAt":null}]

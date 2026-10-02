@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 # shellcheck source=tests/lib/board.sh
 . "$ROOT/tests/lib/board.sh"
 XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
@@ -10,7 +12,7 @@ XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
 # before them still renders, its name read from its old actor once and its
 # round unknown, since that actor's r<n> was the global run counter.
 q="$(safe_tmpdir)"; mkdir -p "$q/bin" "$q/state" "$q/design" "$q/board/public"
-cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$q/bin/"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$q/bin/"; project_storage_fixture "$q/bin/"
 cp -R "$ROOT/bin/lib" "$q/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$q/board/"
 cp "$ROOT/board/public/index.html" "$ROOT/board/public/ship.js" "$q/board/public/"
@@ -206,7 +208,7 @@ rm -rf "$q"
 # silent vendor is recorded as, keeps what an earlier event said; a live
 # round shows the model it asked for until the vendor reports one.
 qk="$(safe_tmpdir)"; mkdir -p "$qk/bin" "$qk/state" "$qk/design" "$qk/board/public"
-cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$qk/bin/"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$qk/bin/"; project_storage_fixture "$qk/bin/"
 cp "$ROOT/board/server.ts" "$qk/board/"
 cp "$ROOT/board/public/index.html" "$ROOT/board/public/ship.js" "$qk/board/public/"
 fm_tasks_write /dev/stdin "$qk/design/tasks" <<'J'
@@ -259,7 +261,7 @@ rm -rf "$qk"
 # vendor unavailable) is such a change too. One actor per step of one round,
 # each carrying the events up to that step, as fm_crew_identity sends them.
 qv="$(safe_tmpdir)"; mkdir -p "$qv/bin" "$qv/state" "$qv/design" "$qv/board/public"
-cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$qv/bin/"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$qv/bin/"; project_storage_fixture "$qv/bin/"
 cp "$ROOT/board/server.ts" "$qv/board/"
 cp "$ROOT/board/public/index.html" "$ROOT/board/public/ship.js" "$qv/board/public/"
 fm_tasks_write /dev/stdin "$qv/design/tasks" <<'J'

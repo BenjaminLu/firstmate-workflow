@@ -11,10 +11,12 @@ done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 command -v bun >/dev/null 2>&1 || { echo "    bun not installed - decisions suite skipped"; exit 0; }
 
 d="$(mktemp -d)"; mkdir -p "$d/bin" "$d/state" "$d/design" "$d/board/public"
-cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-decide.sh" "$d/bin/"
+cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-decide.sh" "$d/bin/"; project_storage_fixture "$d/bin/"
 # two projects, so a card can name one that is not the default (T-047)
 cat > "$d/config.yaml" <<'Y'
 default_project: firstmate-workflow
@@ -29,6 +31,7 @@ projects:
     base: main
     required_check: check
 Y
+project_fixture_config "$d"
 cp -R "$ROOT/bin/lib" "$d/bin/"   # the lifeline the board starts its merges under (T-151)
 cp "$ROOT/board/server.ts" "$d/board/"; cp "$ROOT/board/public/index.html" "$d/board/public/"
 mkdir -p "$d/design/tasks"
@@ -95,6 +98,7 @@ assert_fail "test -f '$d/state/merge-calls'" "neither attempt reached the merge 
 # does merge-calls hold everything it ever will.
 settled() {   # settled <id>: the record's merge once it is no longer running
   local f="$d/state/decisions/$1.json" end=$(( $(date +%s) + 30 )) m=""
+  case "$1" in D-example-app-*) f="$(project_fixture_state "$d" example-app)/decisions/$1.json" ;; esac
   while [ "$(date +%s)" -le "$end" ]; do
     m="$(jq -r '.merge // empty' "$f" 2>/dev/null)"
     [ -n "$m" ] && [ "$m" != running ] && break
@@ -159,7 +163,7 @@ assert_contains "$(post '{"id":"D-404","chosen":"A"}')" 'no pending decision' 'u
 # merge handed to fm-merge.sh with the card's project
 nid=D-example-app-T004-1
 printf '{"id":"%s","task":"T-004","project":"example-app","kind":"merge","title":"merge app","pr":7}\n' "$nid" \
-  > "$d/state/pending/$nid.json"
+  > "$(project_fixture_state "$d" example-app)/pending/$nid.json"
 printf '%s\n' '{"id":"D-9","task":"T-A","kind":"choice"}' > "$d/state/pending/D-9.json"
 s="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
 assert_eq "$nid" "$(jq -r --arg i "$nid" '.pending[]|select(.id==$i)|.id' <<<"$s")" "a new-form card is listed"
@@ -173,12 +177,12 @@ rm -f "$d/state/pending/D-9.json"
 answer() { jq -cn --arg i "$1" --arg c "$2" '{id:$i,chosen:$c}'; }
 r="$(post "$(answer "$nid" A)")"
 assert_eq "true" "$(jq -r .ok <<<"$r")" "a new-form card is answered"
-assert_ok "test -f '$d/state/decisions/$nid.json'" "its answer lands under its own id"
+assert_ok "test -f '$(project_fixture_state "$d" example-app)/decisions/$nid.json'" "its answer lands under its own id"
 assert_eq "merged" "$(settled "$nid")" "its record says merged once the merge script exits"
 assert_contains "$(tail -1 "$d/state/merge-calls")" "--pr 7" "a merge answer calls the merge script"
 assert_contains "$(tail -1 "$d/state/merge-calls")" "--project example-app" "with the card's project"
 assert_eq "example-app" \
-  "$(jq -r --arg i "$nid" 'select(.type=="decision_made" and .data.decision==$i)|.project' "$d/state/events.jsonl")" \
+  "$(jq -r --arg i "$nid" 'select(.type=="decision_made" and .data.decision==$i)|.project' "$(project_fixture_state "$d" example-app)/events.jsonl")" \
   "and its decision_made event names the project"
 assert_eq "$nid" "$(curl -sf "http://127.0.0.1:$PORT/api/state" | jq -r --arg i "$nid" '.responses[]|select(.id==$i)|.id')" \
   "the answered new-form card is read back among the responses"
@@ -215,7 +219,7 @@ for badid in D-Bad_Name-T047-1 D-firstmate-workflow-1 D-firstmate-workflow-T047-
     "the route refuses a malformed id: $badid"
 done
 # the stored answer carries the card's project; a card naming none stores none
-assert_eq "example-app" "$(jq -r .project "$d/state/decisions/$nid.json")" "the stored answer names the card's project"
+assert_eq "example-app" "$(jq -r .project "$(project_fixture_state "$d" example-app)/decisions/$nid.json")" "the stored answer names the card's project"
 assert_eq "false" "$(jq 'has("project")' "$d/state/decisions/$sid.json")" "an answer to a card naming no project stores none"
 # The response listing reads only files named by a decision id, either form. A
 # file on disk under a malformed name is not an answer, whatever it holds.

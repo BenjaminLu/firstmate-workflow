@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=tests/lib/project-storage.sh
+. "$ROOT/tests/lib/project-storage.sh"
 # shellcheck source=tests/lib/board.sh
 . "$ROOT/tests/lib/board.sh"
 XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
@@ -11,7 +13,7 @@ XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
 # card naming no project is the default project's, whatever the shell that
 # started the board exported (T-054 covers events that name one, below).
 g="$(safe_tmpdir)"; mkdir -p "$g/bin" "$g/state/pending" "$g/state/decisions" "$g/design" "$g/board/public"
-cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$g/bin/"
+cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$g/bin/"; project_storage_fixture "$g/bin/"
 cp -R "$ROOT/bin/lib" "$g/bin/"   # the lifeline the board starts merges and rounds under (T-151)
 cp "$ROOT/board/server.ts" "$g/board/"
 cp "$ROOT/board/public/index.html" "$g/board/public/"
@@ -46,7 +48,11 @@ until curl -sf "http://127.0.0.1:$PORTG/api/state" >/dev/null 2>&1; do
   [ "$(date +%s)" -le "$endg" ] && kill -0 "$pidg" 2>/dev/null || break
   sleep 0.05
 done
-sg() { curl -sf "http://127.0.0.1:$PORTG/api/state"; }
+sg() {
+  local selected
+  selected="$(sed -n 's/^default_project: //p' "$g/config.yaml" 2>/dev/null)"
+  curl -sf "http://127.0.0.1:$PORTG/api/state${selected:+?project=$selected}"
+}
 # every place /api/state returns a pr number, as "pr=url" per line; a url
 # the server leaves out reads as null
 urls() {
@@ -62,15 +68,17 @@ vendor: claude
 default_project: $1
 projects:
   alpha:
-    repo: .
+$( [ "$1" != alpha ] || printf "    repo: ." )
 $2
     base: main
     required_check: ci
   beta:
+$( [ "$1" != beta ] || printf "    repo: ." )
 $3
     base: main
     required_check: check
 Y
+  project_fixture_config "$g"
 }
 
 # no registry at all: no URL anywhere, and never a guessed one

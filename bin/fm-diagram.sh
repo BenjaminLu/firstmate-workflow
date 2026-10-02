@@ -36,6 +36,8 @@ set -uo pipefail
 # there. One guarantee, in one place; bin/ci.sh fails if a script that
 # dispatches is missing it.
 exec < /dev/null
+# shellcheck source=bin/fm-config.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 
 ROOT="${FM_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
@@ -52,6 +54,7 @@ need() { [ "$#" -ge 2 ] || die "$1 needs a value"; }
 MODE=''; ID=''; EVENT=''
 while [ $# -gt 0 ]; do
   case "$1" in
+    --project) need "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
     --decision) need "$@"; ID="$2";                shift 2 ;;
     --event)    need "$@"; MODE=event; EVENT="$2"; shift 2 ;;
     --wants)    need "$@"; MODE=wants; EVENT="$2"; shift 2 ;;
@@ -167,8 +170,14 @@ fi
 # mode could act on it - the same shape the board's POST handler accepts
 [ -n "$ID" ] || die "--decision is required"
 
+if [[ "$ID" =~ $FM_OWNED_ID ]]; then export FM_PROJECT="${BASH_REMATCH[1]}"; fi
+fm_storage_init "$ROOT" || exit 65
+if [ "$FM_EXTERNAL" = 1 ]; then
+  OUT="$FM_STATE_DIR/diagrams"
+  SRC="$FM_STATE_DIR/diagram-sources"
+fi
 FILE=''
-for c in "$ROOT/state/pending/$ID.json" "$ROOT/state/decisions/$ID.json"; do
+for c in "$FM_STATE_DIR/pending/$ID.json" "$FM_STATE_DIR/decisions/$ID.json"; do
   [ -f "$c" ] && { FILE="$c"; break; }
 done
 [ -n "$FILE" ] || die "no decision $ID under state/pending or state/decisions" 66

@@ -15,6 +15,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 P="$ROOT/bin/fm-project.sh"
 
 t="$(safe_tmpdir)"
+export FM_HOME="$t/fm-home"
 eng="$t/engine"
 mkdir -p "$eng"
 git -C "$eng" init -q -b main
@@ -40,7 +41,7 @@ export GHSTATE="$gh" FM_GH="$ROOT/tests/gh-stub.sh" FM_GITHUB_URL="$remotes"
 # run the way a caller does: by path, not through bash, so a lost
 # executable bit fails here rather than in the first script that calls it
 run() { "$P" "$@" > "$t/out" 2> "$t/err"; printf '%s' "$?"; }
-clone="$eng/state/projects/example-app/repo"
+clone="$FM_HOME/projects/example-app/repo"
 
 # --- how it is called (5.3.1) --------------------------------------------
 assert_ok "test -x '$P'" "fm-project.sh is executable, as its header and its messages tell people to run it"
@@ -84,14 +85,14 @@ assert_eq "" "$(git -C "$real" config --local --get firstmate.base)" "nor its gu
 # --- verify before there is a clone --------------------------------------
 assert_eq "70" "$(run verify example-app --repo "$eng")" "verify with no clone, no protection, no repository refuses with 70"
 err="$(cat "$t/err")"
-assert_contains "$err" "state/projects/example-app/repo" "it names the missing clone"
-assert_contains "$err" "cannot read branch protection for example-org/example-app trunk" \
+assert_contains "$err" "$FM_HOME/projects/example-app/repo" "it names the missing clone"
+assert_contains "$err" "branch protection unknown for example-org/example-app trunk" \
   "and the branch protection it could not read"
-assert_contains "$err" "cannot read repository example-org/example-app" "and the repository it could not read"
+assert_contains "$err" "captain-confirmed checks and policy" "unknown protection requires confirmation"
 
 # --- sync: the first time it clones --------------------------------------
 assert_eq "0" "$(run sync example-app --repo "$eng")" "sync clones a registered target"
-assert_ok "test -d '$clone/.git'" "into state/projects/<name>/repo"
+assert_ok "test -d '$clone/.git'" "into FM_HOME/projects/<name>/repo"
 assert_eq "$remotes/example-org/example-app.git" "$(git -C "$clone" remote get-url origin)" \
   "from the project's github repository"
 assert_eq "app" "$(cat "$clone/app.txt" 2>/dev/null)" "with the target's tree checked out"
@@ -242,12 +243,27 @@ assert_contains "$(cat "$t/err")" "base trunk is not protected" "and says so"
 protection true true check
 
 repository true private
-assert_eq "70" "$(run verify example-app --repo "$eng")" "a private repository refuses"
-assert_contains "$(cat "$t/err")" "private" "and names it"
-assert_contains "$(cat "$t/err")" "15.8" "pointing at the open captain decision"
+assert_eq "0" "$(run verify example-app --repo "$eng")" "a private repository verifies"
+assert_eq "" "$(cat "$t/err")" "private visibility is not a refusal"
+assert_contains "$(cat "$t/out")" "verified" "private repository uses the same protection checks"
 repository false internal
-assert_eq "70" "$(run verify example-app --repo "$eng")" "an internal repository is not public either"
+assert_eq "0" "$(run verify example-app --repo "$eng")" "internal visibility is accepted"
 repository false public
+
+# An unreadable rule is unknown, and a confirmation is bound to this target.
+mv "$api/branches/trunk/protection.json" "$t/protection-held.json"
+mv "$api.json" "$t/repository-held.json"
+assert_eq "70" "$(run verify example-app --repo "$eng")" "unreadable protection without captain confirmation refuses"
+mkdir -p "$FM_HOME/projects/example-app/state"
+confirmation="$FM_HOME/projects/example-app/state/protection-confirmation.json"
+printf '%s\n' '{"repository":"example-org/example-app","base":"trunk","required_checks":["check"],"captain_confirmed":true,"policy_confirmed":true}' > "$confirmation"
+assert_eq "0" "$(run verify example-app --repo "$eng")" "captain-confirmed checks and policy resolve unknown protection"
+jq '.base="other"' "$confirmation" > "$t/wrong-confirmation.json"
+mv "$t/wrong-confirmation.json" "$confirmation"
+assert_eq "70" "$(run verify example-app --repo "$eng")" "confirmation for a different base grants no readiness"
+rm "$confirmation"
+mv "$t/protection-held.json" "$api/branches/trunk/protection.json"
+mv "$t/repository-held.json" "$api.json"
 
 git -C "$clone" config core.hooksPath "$ROOT/.githooks-elsewhere"
 assert_eq "70" "$(run verify example-app --repo "$eng")" "a clone not hooked to the engine's .githooks refuses"
@@ -284,7 +300,7 @@ repository true private
 git -C "$clone" config --unset core.hooksPath
 assert_eq "70" "$(run verify example-app --repo "$eng")" "several missing items refuse once"
 err="$(cat "$t/err")"
-for want in enforce_admins "up to date" "'check' is not a required status check" private core.hooksPath; do
+for want in enforce_admins "up to date" "'check' is not a required status check" core.hooksPath; do
   assert_contains "$err" "$want" "naming $want among them"
 done
 protection true true check; repository false public
@@ -294,23 +310,23 @@ assert_eq "0" "$(run verify example-app --repo "$eng")" "and the target verifies
 # --- sync never touches a checkout outside state/projects/ ---------------
 # a directory standing where the clone belongs is inside the ENGINE's
 # checkout, so git run there would fetch, hook and exclude the engine itself
-mkdir -p "$eng/state/projects/other-app/repo"
+mkdir -p "$FM_HOME/projects/other-app/repo"
 printf '  other-app:\n    github: example-org/other-app\n    base: main\n    required_check: ci\n' >> "$eng/config.yaml"
 assert_eq "70" "$(run sync other-app --repo "$eng")" "a directory that is not its own clone is refused"
 assert_contains "$(cat "$t/err")" "not a clone" "and says so"
 assert_eq "" "$(git -C "$eng" config --local --get core.hooksPath)" "the engine's hooks path is still untouched"
 assert_eq "" "$(git -C "$eng" config --local --get firstmate.base)" "and so is its guard"
 assert_eq "" "$(grep -xF '.fm-*' "$eng/.git/info/exclude" 2>/dev/null)" "and its exclude file"
-rm -rf "$eng/state/projects/other-app"
+rm -rf "$FM_HOME/projects/other-app"
 
 # a clone of some other repository standing in the place is not this project's
 git clone -q "$bare" "$t/foreign" 2>/dev/null
 git -C "$t/foreign" remote set-url origin "$remotes/example-org/not-this.git"
-mkdir -p "$eng/state/projects/other-app"; mv "$t/foreign" "$eng/state/projects/other-app/repo"
+mkdir -p "$FM_HOME/projects/other-app"; mv "$t/foreign" "$FM_HOME/projects/other-app/repo"
 assert_eq "70" "$(run sync other-app --repo "$eng")" "a clone with the wrong origin is refused"
 assert_contains "$(cat "$t/err")" "origin" "and the origin is named"
-assert_eq "" "$(git -C "$eng/state/projects/other-app/repo" config --local --get core.hooksPath)" "and that clone is not hooked"
-rm -rf "$eng/state/projects/other-app"
+assert_eq "" "$(git -C "$FM_HOME/projects/other-app/repo" config --local --get core.hooksPath)" "and that clone is not hooked"
+rm -rf "$FM_HOME/projects/other-app"
 
 # A symlink out of state/projects/ is refused, and what it points at untouched.
 # Each case below is one that only its own symlink check stops: nothing else
@@ -320,44 +336,46 @@ rm -rf "$eng/state/projects/other-app"
 # sync would clone into the captain's checkout
 outside="$t/captains-checkout"; git clone -q "$bare" "$outside" 2>/dev/null
 git -C "$outside" remote set-url origin "$remotes/example-org/other-app.git"
-ln -s "$outside" "$eng/state/projects/other-app"
-assert_eq "70" "$(run sync other-app --repo "$eng")" "a project directory that is a symlink out is refused"
+ln -s "$outside" "$FM_HOME/projects/other-app"
+assert_eq "65" "$(run sync other-app --repo "$eng")" "a project directory that is a symlink out is refused"
 assert_contains "$(cat "$t/err")" "symlink" "and says so"
 assert_ok "test ! -e '$outside/repo'" "nothing is cloned into the checkout it points at"
 assert_eq "" "$(git -C "$outside" config --local --get core.hooksPath)" "which is not hooked"
 assert_eq "" "$(grep -xF '.fm-*' "$outside/.git/info/exclude" 2>/dev/null)" "nor excluded"
-rm -f "$eng/state/projects/other-app"
+rm -f "$FM_HOME/projects/other-app"
 # the clone path, dangling: nothing exists there for the clone check to
 # inspect, so without the check git would clone through the link
 nowhere="$t/nowhere"
-mkdir -p "$eng/state/projects/other-app"; ln -s "$nowhere/repo" "$eng/state/projects/other-app/repo"
-assert_eq "70" "$(run sync other-app --repo "$eng")" "a clone path that is a symlink is refused"
+mkdir -p "$FM_HOME/projects/other-app"; ln -s "$nowhere/repo" "$FM_HOME/projects/other-app/repo"
+assert_eq "65" "$(run sync other-app --repo "$eng")" "a clone path that is a symlink is refused"
 assert_contains "$(cat "$t/err")" "symlink" "and says so"
 assert_ok "test ! -e '$nowhere'" "and nothing is written where it points"
 # verify names the same refusal: advising a sync that would refuse it is no help
-assert_eq "70" "$(run verify other-app --repo "$eng")" "verify of a symlinked clone path refuses"
+assert_eq "65" "$(run verify other-app --repo "$eng")" "verify of a symlinked clone path refuses"
 assert_contains "$(cat "$t/err")" "symlink" "naming the symlink"
 assert_lacks "$(cat "$t/err")" "no managed clone" "not a missing clone"
-rm -rf "$eng/state/projects/other-app"
+rm -rf "$FM_HOME/projects/other-app"
 
 # state/ and state/projects/ themselves: a first sync would make the project
 # directory through the link and clone there
-for link in state state/projects; do
+for link in projects projects/example-app; do
   e="$t/engine-${link//\//-}"; away="$t/away-${link//\//-}"
   mkdir -p "$e" "$away"; git -C "$e" init -q -b main
   cp "$eng/config.yaml" "$e/config.yaml"; cp -R "$ROOT/.githooks" "$e/.githooks"
-  mkdir -p "$(dirname "$e/$link")"; ln -s "$away" "$e/$link"
-  assert_eq "70" "$(run sync example-app --repo "$e")" "sync refuses when $link/ is a symlink out"
+  link_home="$t/home-${link//\//-}"
+  mkdir -p "$(dirname "$link_home/$link")"; ln -s "$away" "$link_home/$link"
+  assert_eq "65" "$(FM_HOME="$link_home" run sync example-app --repo "$e")" "sync refuses when $link/ is a symlink out"
   assert_contains "$(cat "$t/err")" "symlink" "and says so"
   assert_eq "" "$(ls -A "$away")" "leaving what $link/ points at empty"
-  assert_eq "70" "$(run verify example-app --repo "$e")" "verify refuses it too"
+  assert_eq "65" "$(FM_HOME="$link_home" run verify example-app --repo "$e")" "verify refuses it too"
   assert_contains "$(cat "$t/err")" "symlink" "naming the symlink"
 done
 
 # --- sync's own failures -------------------------------------------------
 fresh="$t/engine-fresh"; mkdir -p "$fresh"; git -C "$fresh" init -q -b main
 cp "$eng/config.yaml" "$fresh/config.yaml"; cp -R "$ROOT/.githooks" "$fresh/.githooks"
-fclone="$fresh/state/projects/example-app/repo"
+export FM_HOME="$t/fresh-home"
+fclone="$FM_HOME/projects/example-app/repo"
 assert_ne "0" "$(FM_GITHUB_URL="$t/no-github" run sync example-app --repo "$fresh")" \
   "sync fails when the repository cannot be cloned"
 assert_contains "$(cat "$t/err")" "could not clone" "and says so"
