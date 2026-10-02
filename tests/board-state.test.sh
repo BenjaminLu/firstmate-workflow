@@ -56,6 +56,50 @@ assert_eq "backlog" "$(jq -r '.tasks[]|select(.id=="T-B")|.stage' <<<"$s")" "an 
 assert_eq "ready"   "$(jq -r '.tasks[]|select(.id=="T-C")|.stage' <<<"$s")" "an untouched task with nothing to wait on reads as ready"
 assert_eq "1" "$(jq -r .counts.inflight <<<"$s")" "the counts follow the log"
 
+# T-164: the board must see the same committed batch as session/watch readers.
+python3 - "$d" <<'PYACK'
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]) / 'bin/lib'))
+import fm_lifeline as life
+root = Path(sys.argv[1])
+life.push(root, 'D-interrupted-first', 'test', 'first')
+life.push(root, 'D-interrupted-second', 'test', 'second')
+import json
+items = [json.loads(line) for line in (root / life.WAKE_QUEUE).read_text().splitlines()]
+real = life._write_ack
+def interrupt(path, record):
+    if str(path).endswith('/D-interrupted-second.json'):
+        raise OSError('second write interrupted')
+    real(path, record)
+life._write_ack = interrupt
+try:
+    life.acknowledge_batch(root, items)
+except OSError:
+    pass
+else:
+    raise AssertionError('fixture must interrupt after the first durable write')
+PYACK
+s="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "2" "$(jq -r .watch.waiting <<<"$s")" "board counts both unreturned wakes after partial acknowledgement"
+python3 - "$d" <<'PYACK'
+import json, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1]) / 'bin/lib'))
+import fm_lifeline as life
+root = Path(sys.argv[1])
+life.acknowledge_batch(root, [json.loads(line) for line in (root / life.WAKE_QUEUE).read_text().splitlines()])
+PYACK
+s="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "0" "$(jq -r .watch.waiting <<<"$s")" "board hides wakes only after the recovered batch commits"
+printf '{' > "$d/state/session/.ack-transaction.json"
+s="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+assert_eq "2" "$(jq -r .watch.waiting <<<"$s")" "board retains wakes when transaction visibility is unknown"
+rm "$d/state/session/.ack-transaction.json"
+s="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
+# Restore the empty queue expected by the existing watch lifecycle fixture.
+rm "$d/state/session/wake.jsonl"
+
 # T-137: whether firstmate is watched, read from the real watch
 # (bin/fm-watch-arm.sh, bin/lib/fm_watch.py). Nothing has ever watched this
 # fixture, and worker-1 is aboard T-A: the board says firstmate is not
@@ -72,7 +116,13 @@ sleep 300 & watch_owner=$!
 # run from the fixture: a checkout under state/worktrees is a crew round's,
 # and never arms
 watchcli() { (cd "$d" && FM_SESSION_PID="$watch_owner" FM_LIFELINE_GRACE=1 "$ROOT/bin/fm-watch-arm.sh" --repo "$d" "$@"); }
-wake_written() { [ -n "$(ls "$d/state/watch/wake/" 2>/dev/null)" ]; }
+wake_written() {
+  local wake
+  for wake in "$d/state/watch/wake/"*.json; do
+    [ -f "$wake" ] && return 0
+  done
+  return 1
+}
 unwatched() { [ "$(watchcli --status 2>/dev/null | jq -r .watched)" = false ]; }
 watchcli --ensure >/dev/null 2>&1
 sw="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
@@ -85,6 +135,18 @@ wait_for 10 wake_written
 sw="$(curl -sf "http://127.0.0.1:$PORT/api/state")"
 assert_eq "review: T-A APPROVE 4ea1ec2" "$(jq -r .watch.lastWake.reason <<<"$sw")" "the last wake and its reason are shown"
 assert_eq "1" "$(jq -r .watch.waiting <<<"$sw")" "and a wake no arm has taken yet is waiting"
+assert_eq "$(watchcli --status | jq -r .waiting)" "$(jq -r .watch.waiting <<<"$sw")" \
+  "the board and watch count the same unacknowledged wake once"
+assert_eq "false" "$(python3 - "$ROOT" "$d" <<'PY'
+import sys
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1] + '/bin/lib')
+import fm_watch as W
+items = W._queue_from(sys.argv[2], 0)[0]
+item = next(i for i in reversed(items) if i['id'] == 'worker-1')
+print(str(W.delivered(sys.argv[2], item)).lower())
+PY
+)" "writing a wake for an arm does not acknowledge delivery"
 kill "$watch_owner" 2>/dev/null; wait "$watch_owner" 2>/dev/null
 wait_for 15 unwatched
 sw="$(curl -sf "http://127.0.0.1:$PORT/api/state")"

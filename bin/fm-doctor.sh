@@ -10,7 +10,7 @@
 # `fm setup`, which does the asking, then calls this back. It installs
 # nothing unless told to (`--fix`, which asks before each install).
 #
-#   bin/fm-doctor.sh [--fix] [--sandbox] [--repo DIR] [--facts FILE | --collect]
+#   bin/fm-doctor.sh [--hooks-only] [--fix] [--sandbox] [--repo DIR] [--facts FILE | --collect]
 set -uo pipefail
 # The operator's answers to --fix are read from fd 9; every child this
 # script starts gets /dev/null, never the operator's input.
@@ -28,16 +28,17 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/adapters/_lib.sh
 . "$HERE/adapters/_lib.sh"
 
-facts_file=''; collect_only=''; fix=''; sandbox=''; assume_yes=''; repo="${FM_ROOT:-$(pwd -P)}"
+hooks_only=''; facts_file=''; collect_only=''; fix=''; sandbox=''; assume_yes=''; repo="${FM_ROOT:-$(pwd -P)}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --facts) fm_need "fm-doctor" "$@"; facts_file="${2-}"; shift 2 ;;
     --collect) collect_only=1; shift ;;
+    --hooks-only) hooks_only=1; shift ;;
     --fix) fix=1; shift ;;
     --sandbox) sandbox=1; shift ;;
     --yes) assume_yes=1; shift ;;
     --repo) fm_need "fm-doctor" "$@"; repo="${2-}"; shift 2 ;;
-    *) echo "usage: fm-doctor.sh [--fix] [--sandbox] [--yes] [--repo DIR] [--facts FILE | --collect]" >&2; exit 64 ;;
+    *) echo "usage: fm-doctor.sh [--hooks-only] [--fix] [--sandbox] [--yes] [--repo DIR] [--facts FILE | --collect]" >&2; exit 64 ;;
   esac
 done
 if [ -n "$facts_file" ]; then
@@ -46,6 +47,18 @@ if [ -n "$facts_file" ]; then
 fi
 repo="$(cd "$repo" 2>/dev/null && pwd -P)" || { echo "fm-doctor: no repo at $repo" >&2; exit 64; }
 cd "$repo" || exit 70
+
+# Read-only hook policy, shared by setup and primary startup. No vendor probe,
+# prompt, configuration mutation or model session is needed for this guidance.
+hook_guidance() {
+  local vendors
+  vendors="$(fm_vendors)
+$(fm_cfg vendor "$repo/config.yaml")
+$(fm_cfg_in worker vendor "$repo/config.yaml")
+$(fm_cfg_in reviewer vendor "$repo/config.yaml")"
+  python3 "$HERE/lib/fm_hooks.py" guidance --repo "$repo" --vendors "$vendors"
+}
+if [ -n "$hooks_only" ]; then hook_guidance; exit $?; fi
 
 # With no config.yaml, there is nothing to check against: send the operator
 # to the wizard that asks what it cannot find out, then this same doctor
@@ -183,6 +196,8 @@ if [ -n "$facts_file" ]; then tool_facts="$(cat "$facts_file")"
 else tool_facts="$(collect_tools)"
 fi
 if [ -n "$collect_only" ]; then printf '%s\n' "$tool_facts"; exit 0; fi
+
+hook_guidance || say_warn hooks "guidance unavailable; run fm doctor --hooks-only after installing Python"
 
 echo "== Toolchain =="
 pinned=' '

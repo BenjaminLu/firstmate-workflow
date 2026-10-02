@@ -228,5 +228,10 @@ fi
 
 echo "fm setup: wrote config.yaml" >&2
 [ -x "$HERE/fm-doctor.sh" ] || { echo "fm-setup: missing $HERE/fm-doctor.sh" >&2; exit 70; }
-"$HERE/fm-doctor.sh" --sandbox --repo "$repo" </dev/null
+# Recorded facts must not trigger live canaries or vendor probes.
+if [ -n "$facts_file" ]; then
+  "$HERE/fm-doctor.sh" --facts "$facts_file" --repo "$repo" </dev/null
+else
+  "$HERE/fm-doctor.sh" --sandbox --repo "$repo" </dev/null
+fi
 exit $?

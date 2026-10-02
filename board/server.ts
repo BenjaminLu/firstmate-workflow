@@ -562,10 +562,23 @@ const watchWaiting = () => {
       } catch { /* a line that does not parse is skipped */ }
     }
   } catch { /* nothing pushed */ }
+  // Use the same kernel-locked, journal-aware snapshot as session/watch.
+  // The bounded foreground helper refuses a busy lock; unknown means pending.
+  let committed: Record<string, unknown> = {};
+  if (latest.size) {
+    try {
+      const r = Bun.spawnSync(["python3", join(ROOT, "bin/lib/fm_lifeline.py"), "acknowledged", ROOT], {
+        stdin: Buffer.from(JSON.stringify([...latest.keys()])), env: childEnv(),
+      });
+      if (r.exitCode === 0) {
+        const value = JSON.parse(r.stdout.toString());
+        if (value && typeof value === "object" && !Array.isArray(value)) committed = value;
+      }
+    } catch { /* unreadable/unsupported helper: retain every pending wake */ }
+  }
   for (const [id, woken] of latest) {
-    let acked: number | null = null;
-    try { acked = Number(JSON.parse(readFileSync(join(ROOT, "state/session/acknowledged", `${id}.json`), "utf8")).acknowledged) || 0; } catch { /* never */ }
-    if (acked === null || acked < woken) n++;
+    const acked = committed[id];
+    if (typeof acked !== "number" || !Number.isFinite(acked) || acked < 0 || acked < woken) n++;
   }
   return n;
 };

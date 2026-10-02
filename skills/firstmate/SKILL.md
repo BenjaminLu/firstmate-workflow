@@ -71,6 +71,23 @@ unavailable for that vendor, on the board with the probe's status and reason.
 gemini has no documented status command, so it is unavailable until its login
 can be verified.
 
+Necessary hooks are a standing rule for **every vendor**, not a remembered
+preference (captain, 2026-10-02; T-164). At primary startup and setup, use doctor's
+hook guidance (`bin/fm-doctor.sh --hooks-only --repo <root>`). It names the
+registry, configured role vendors and detected harness and prints scoped install
+commands. Guide the captain through the actual native approval/loading mechanism:
+Codex `/hooks` exact current SessionStart/UserPromptSubmit/Stop definitions and
+changed-hash re-review; Claude `/hooks` source inspection plus workspace trust,
+effective `disableAllHooks` and managed policy; Cursor workspace trust and
+Customize > Hooks/output diagnostics. Restart/resume only when needed for loading.
+Preserve custom/global settings and explicit disablement; policy refusals go to
+the administrator. Never fabricate trust or override it. Configuration is not
+loading, authorization or real delivery. Record each independently, and leave
+unobserved capability/delivery unverified. Unsupported/unverified vendors use the
+stock foreground arm or manual-turn session status. Do not start extra sessions,
+steal focus or add crew prompts. Recorded setup facts must not launch live probes.
+Firstmate still owns candidate-specific real smoke and owner-cleanup evidence.
+
 Run `bin/fm-session.sh start --repo <root>` at top-level startup. It inspects
 recorded processes and panes, verifies the board's root using a fresh relative
 file challenge, and opens its HTTP-verified page when an opener is available.
@@ -359,19 +376,39 @@ self-wake.
   `bin/fm-watch-arm.sh` itself: `review: T-134 APPROVE 4ea1ec2 #9`,
   `finished: T-134 worker-mira-t134-r1 ok`, `lost: T-134 ...`,
   `gate: T-134 failed gate 6 #9`, `card: D-51 answered A`,
-  `merge: D-51 failed`. Handle each, then end the turn; the next watcher
-  already holds the watch.
-- One record of delivery: a wake the watch hands to your hook is
-  acknowledged as it is taken, the same record `fm-session.sh ack` writes,
-  so `fm-session.sh status` and `start` do not list it again, and a wake you
-  acknowledged there is not handed to the hook. `status` lists only what
-  no hook has delivered - what a harness that is not woken idle reads at its
-  next turn start.
+  `merge: D-51 failed`. Handle each event, then advance already authorized
+  actionable follow-ups: verification, review/gates, a concrete board merge
+  within current time-boxed authorization, self-update, and authorized next
+  dispatch. Approval is a trigger to complete acceptance, not a stopping point.
+  A held watcher does not start an idle conversation or prove continued work.
+  End or park only when no runnable authorized step remains; identify the real
+  dependency, event or exact operator action. Unrelated legacy cards do not
+  block actionable work. This is a handoff policy, not a durable task engine.
+- Watcher staging is not delivery. Codex acknowledges emitted queue items
+  only after flushing hook output; its last-wake record still says model
+  delivery is unverified. A failed output is recoverable, and a crash after
+  flush but before acknowledgement can replay. Legacy arm consumers use the
+  same acknowledgement store; `fm-session.sh status` lists unacknowledged work.
+- For Codex, run `bin/fm.sh hooks status --harness codex` and use the supplied
+  `hooks/list` evidence option documented in `docs/verification/supervision.md`.
+  Installation, source loading, feature policy, exact-definition trust and
+  model receipt are separate. Firstmate's 2026-10-02 diagnosis found project
+  hooks loaded/enabled but untrusted. Have the operator inspect this checkout
+  in `/hooks` and review the current SessionStart, UserPromptSubmit and Stop
+  definitions, then restart/resume if needed. Never fabricate trust, bypass
+  it, or force configuration over a disabled feature or managed policy.
+  Finish reviewable work before surfacing the exact native trust action; do
+  not repeat status indefinitely while that action remains unnamed.
+  Complete the disposable real-event smoke before declaring repair; a queue
+  or acknowledgement file alone is not evidence of conversational delivery.
 - `bin/fm-turnend-guard.sh` refuses a turn end with work in flight and no
   watcher. If it refuses, or a Codex or Cursor Stop hook orders you to
-  park, run `bin/fm-watch-arm.sh --max-wait 3000` in the foreground and
-  handle what it prints; if it runs out with work still in flight, park
-  again the same way.
+  park, first reassess runnable authorized follow-ups. Only when none remain,
+  name the dependency/event/operator action and run
+  `bin/fm-watch-arm.sh --max-wait 3000` in the foreground when an event is
+  expected. Handle its output and reassess after a timeout; a count of crew
+  or cards alone does not establish that parking is the next action.
+  The guard tracks crew/cards, not all firstmate-owned acceptance steps.
 - What is verified, per harness and version, is in
   `docs/verification/supervision.md`: the Claude Code wake mechanism was
   measured on 2.1.284; the Codex and Cursor paths are unverified until you

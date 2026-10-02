@@ -50,8 +50,9 @@ assert_lacks "$(cat "$repo/config.yaml")" "model:" "a fresh config.yaml gets no 
 assert_lacks "$(cat "$repo/config.yaml")" "mode:" "nor a reviewer mode"
 assert_eq "4173" "$(field_in "$repo/config.yaml" port)" "the board port defaults to 4173"
 assert_eq "en" "$(field_in "$repo/config.yaml" language)" "the language defaults to English"
-assert_ok "test -f '$d/doctor-ran'" "and it hands off to fm doctor --sandbox at the end"
-assert_contains "$(cat "$d/doctor-ran")" "--sandbox" "asking for the sandbox check"
+assert_ok "test -f '$d/doctor-ran'" "and it hands off to fm doctor at the end"
+assert_contains "$(cat "$d/doctor-ran")" "--facts" "recorded setup hands its facts to doctor"
+assert_lacks "$(cat "$d/doctor-ran")" "--sandbox" "recorded setup does not launch live canaries"
 rm -f "$d/doctor-ran"
 
 # --- recommends a different vendor for review when two are usable ----------

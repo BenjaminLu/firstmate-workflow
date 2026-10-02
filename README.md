@@ -120,6 +120,34 @@ bin/fm-install-hooks.sh     # git hooks are not cloned; opt in once per checkout
 bin/ci.sh                   # the one gate - CI runs this same file
 ```
 
+Necessary agent hooks are a standing startup/setup rule (T-164). Both paths
+reach doctor's read-only guidance; use `bin/fm-doctor.sh --hooks-only --repo <root>`
+to repeat it without login probes or model sessions. It lists the vendor registry,
+configured role vendors and detected harness, checks firstmate definitions in the
+actual local source, and prints a scoped installation command. Files configured
+is not readiness: loading, effective enablement/policy, native authorization and
+real delivery are separate observations, marked unverified without evidence.
+
+For Codex CLI/app-server, inspect this checkout's SessionStart, UserPromptSubmit
+and Stop definitions in native `/hooks`, review/trust them, and re-review changed
+hashes; restart/resume if the source is missing. For Claude Code, inspect the
+local settings source in `/hooks`, review project trust and effective
+`disableAllHooks`/managed policy; its hook browser is not Codex hash trust.
+For Cursor, use workspace trust, Customize > Hooks and the Hooks output channel;
+restart if automatic config reload did not load the source. Follow the target's
+native approval controls. Doctor does not override explicit disablement, custom
+or global settings, or managed policy; administrative refusals need the admin.
+Unsupported/unverified vendors get `bin/fm-watch-arm.sh --max-wait 3000` in the
+foreground, or `bin/fm-session.sh status` on each manual turn. Guidance adds no
+sessions or prompts to crew rounds. Recorded `--facts` setup passes facts to
+doctor without live probes/canaries; run `fm doctor --sandbox` separately when
+ready. Installation and authorization still need real event/model-visible wake
+and owner-cleanup evidence from [the smoke procedure](docs/verification/supervision.md).
+
+Native mechanisms: [Codex hooks](https://learn.chatgpt.com/docs/hooks),
+[Claude hooks](https://code.claude.com/docs/en/hooks),
+[Cursor hooks](https://cursor.com/docs/hooks).
+
 `fm setup` asks which installed vendor crews as worker and as reviewer, whether
 each bills to its subscription or per API use inside the sandbox, and the main
 repository and base branch, board port (4173), and language (`en` or `zh-TW`,
@@ -313,7 +341,12 @@ install|uninstall`). What has been verified, per harness and version, is in
 [docs/verification/supervision.md](docs/verification/supervision.md): the
 Claude Code mechanism these hooks use was measured live on 2.1.284; the
 hooks themselves, and the Codex and Cursor paths, are not yet verified live,
-and nothing claims they work until they are. The board shows whether firstmate is watched, the last wake,
+and nothing claims they work until they are. Codex installation now includes
+SessionStart/resume and separate loading/trust diagnostics via `fm.sh hooks
+status --harness codex`. Firstmate has verified loaded but untrusted project
+hooks on 0.159.3; the operator must review current definitions in `/hooks`.
+Real model delivery and reload behavior remain to be measured in the disposable
+smoke documented above. The board shows whether firstmate is watched, the last wake,
 what waits, and any gap.
 
 ## State

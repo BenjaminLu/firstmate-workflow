@@ -1923,11 +1923,12 @@ def unacknowledged(root):
         latest[path.stem] = dict(id=receipt.get('id', path.stem), decision=receipt.get('decision') or {},
                                  woken=receipt.get('observed'), reason='observed')
     found = []
+    committed = lifeline().acknowledged_many(root, latest) if latest else {}
     for ident, item in latest.items():
         # the one record of delivery (T-137): acknowledged here, or taken
         # by the watch that handed it to the harness's hook
-        ack = base / 'acknowledged' / (ident + '.json')
-        if ack.exists() and (read(ack).get('acknowledged') or 0) >= (item.get('woken') or 0): continue
+        seen = committed[ident]
+        if seen is not None and seen >= (item.get('woken') or 0): continue
         answer = item.get('decision') or {}
         found.append(dict(id=ident, task=answer.get('task') if answer else item.get('task'), kind=answer.get('kind'),
                           chosen=answer.get('chosen'), text=answer.get('text'), ts=answer.get('ts'),

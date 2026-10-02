@@ -5,6 +5,22 @@ whoever writes the event that needs firstmate; only the way a harness is
 woken differs, and that is what this file records. Nothing here is claimed
 beyond what each entry says was checked, and how.
 
+## Follow through before waiting (T-164)
+
+After handling a wake, firstmate advances already authorized actionable work:
+verification, review/gates, concrete board merge within current authorization,
+self-update and authorized next dispatch. End or park only when no runnable
+authorized step remains, identifying the real dependency, event or exact
+operator action. Unrelated legacy cards do not block independent work. Finish
+reviewable repairs before surfacing the exact native hook trust action.
+
+A held watcher cannot start an idle Codex conversation and does not prove that
+firstmate continues working. The guard's crew/card counts do not track all
+supervisor-owned acceptance steps. Wake and timeout context therefore require
+reassessment before the stock foreground wait; no polling or task engine is
+added. Tests can prove the emitted instructions and retained hook boundaries,
+not that a model follows them. Candidate-specific live acceptance remains required.
+
 ## What is common
 
 - **Writers.** Each appends one item to `state/session/wake.jsonl` and rings
@@ -62,7 +78,7 @@ beyond what each entry says was checked, and how.
     `bin/lib/fm_lifeline.py`), exits 2 with the wake on stderr, and exits 0
     when its owner is gone, taking nothing. Its wait ends 60 s before the
     timeout; if work is still in flight then, it wakes the session once to
-    say so, so that the next turn end parks again.
+    say so and require reassessing authorized follow-ups before parking again.
   - `UserPromptSubmit`: `bin/fm-watch-arm.sh --turn-start claude` adds what
     waits to the turn's context (`hookSpecificOutput.additionalContext`).
 - **Measured by firstmate, 2026-09-29, Claude Code 2.1.284, this Mac**
@@ -90,28 +106,126 @@ beyond what each entry says was checked, and how.
 
 ## Codex
 
-- **Config**: `.codex/hooks.json` in the repository (project-local hooks;
-  listed in `.gitignore`, never committed). Version installed here:
-  codex-cli 0.155.1.
-  - `Stop`: `bin/fm-turnend-guard.sh --hook codex`, timeout 60. It answers
-    `{"decision":"block","reason":...}` with whatever wake waits, or, with
-    work in flight and nothing waiting, with the order to park on
-    `bin/fm-watch-arm.sh --max-wait 3000` in the foreground. It says
-    nothing when `stop_hook_active` is set.
-  - `UserPromptSubmit`: `bin/fm-watch-arm.sh --turn-start codex`
-    (`hookSpecificOutput.additionalContext`).
-- **Checked here**: the codex 0.155.1 binary carries the strings
-  `stop_hook_active`, `UserPromptSubmit`, `SessionStart`,
-  `additionalContext` and `hookSpecificOutput`, and names `hooks.json`. That
-  is all.
-- **Unverified: firstmate verifies live after merge.** Whether Codex reads
-  the project's `.codex/hooks.json` (or needs a feature flag), whether the
-  `decision: block` answer continues the turn, and whether an outside client
-  can push `turn/start` through `codex app-server` into the thread of an
-  interactive TUI (so an idle Codex session can be woken at all). Until
-  that is recorded here, an idle Codex session is not woken: what waits is
-  read at its next turn start (and by `bin/fm-session.sh status`), and the
-  board shows it waiting.
+T-164 separates configuration, loading, feature policy, definition trust and
+model delivery. Installing files establishes only configuration.
+
+- **Configuration:** `bin/fm.sh hooks install --harness codex` merges our
+  three handlers into `.codex/hooks.json`. It creates a comment-only
+  `.codex/config.toml` discovery layer when absent. Both files are ignored;
+  existing configuration, custom hooks and explicit `hooks = false` survive.
+  Uninstall removes our handlers and only an untouched, firstmate-created
+  discovery layer. It never changes global configuration or trust records.
+- **Evidence supplied by firstmate, 2026-10-02:** codex-cli 0.159.3, fresh
+  app-server stdio `initialize` and `hooks/list`, without starting a model
+  or thread, reported this repository's UserPromptSubmit and Stop handlers
+  loaded and enabled, but **untrusted**. Two trusted global SessionStart
+  handlers did not establish project-definition trust. This is the verified
+  cause of skipped project hooks. It does not verify this candidate's added
+  SessionStart handler or any conversational delivery.
+- **Installed schema evidence from the earlier worker round:** generated
+  app-server schema exposed `sourcePath`, `currentHash`, `enabled` and
+  `trustStatus` (`managed`, `untrusted`, `trusted`, `modified`). Version and
+  feature probes reported 0.159.3 and `hooks stable true`. Binary strings
+  are not evidence of loading.
+- **Diagnostics:** `bin/fm.sh hooks status --harness codex --client cli
+  --evidence /path/to/hooks-list-result.json` consumes the JSON **result
+  object**, with `data` entries for this repository's absolute `cwd`.
+  Collect it using the target client's supported `hooks/list` request with
+  `cwds` naming this checkout. The report matches source, event, command,
+  timeout and enabled/trust status. Its `ready` field describes that supplied
+  snapshot plus the local CLI feature probe, not a running conversation or
+  model receipt. An app-server client may have different effective settings;
+  check those in that target too. Absent evidence remains unverified.
+
+The [official hook contract](https://learn.chatgpt.com/docs/hooks) requires
+an active project config layer and separate review of exact hook definitions.
+In the CLI, open `/hooks`, inspect this checkout's source, and trust the
+current SessionStart, UserPromptSubmit and Stop definitions. Changed hashes
+require review again. Restart/resume if the new source is absent; no current
+conversation hot reload is established. When disabled or refused by managed
+policy, inspect `features.hooks` and `allow_managed_hooks_only` in effective
+requirements; involve the administrator instead of overriding policy.
+Unsupported clients cannot be repaired by writing more configuration.
+
+SessionStart (including resume) and UserPromptSubmit reconnect the kernel-owned
+watcher and output `hookSpecificOutput.additionalContext`. Stop uses
+`decision: block` with a continuation reason; an already-active Stop hook,
+crew/away context or idle session with no pending work returns no output.
+These shapes follow the official contract. Background completion does not
+start an idle turn, so no idle push is promised.
+
+The watcher stages queue items without acknowledgement in `.staged` files,
+which arms cannot claim while their publisher holds its per-generation kernel
+lock. An arm recovers an abandoned stage after that lock is released; it
+reconnects a watcher before returning the recovered wake. A parked arm also
+subscribes to the staged publisher’s process exit, even when its successor is
+already running. No PID polling or file-age timeout decides abandonment.
+After the successor startup completes (or reports
+failure), it publishes the structured handoff as `.json` and rings the arms.
+Structured handoffs contain queue items, without the legacy display-only
+`lines` field: the board already counts their unacknowledged queue IDs.
+An ending generation records its end time before closing its doorbell, even
+if it released the watch lock but failed to start a successor; it preserves
+the successor's owner record when that successor did start. Published records
+remain reachable until acknowledgement succeeds. Legacy claim/take paths
+preserve generation order, and all shared acknowledgements are bounded by
+the supplied wake timestamp, including explicit session acknowledgements.
+Legacy hook text includes every claimed line; it does not hide acknowledged
+lines behind a presentation limit. Legacy claims still acknowledge before
+harness output, so they do not guarantee recovery from a later output failure
+or prove model receipt.
+
+Shared consumers now commit each returned batch through a durable undo journal
+under the acknowledgement lock. During an incomplete batch, shared readers see
+the pre-batch watermarks; the next writer restores those values before proceeding.
+Claims gather all eligible generations before committing, and legacy pending
+combines staged and directly queued items into that same batch. A failed later
+write therefore cannot hide an earlier, unreturned item. Direct queue takes and
+Codex output use the same transaction; explicit session acknowledgement also
+recovers any interrupted transaction. Session status/start/wait read committed
+watermarks through the shared reader. The board obtains one journal-aware
+snapshot through the foreground lifeline helper; a busy lock, malformed journal
+or unavailable helper conservatively leaves wakes pending. Per-ID files retain
+their existing format. These records are not model delivery evidence. The transaction commit is still the legacy claim boundary:
+process death after commit but before harness receipt cannot be resolved without
+a delivery receipt. No exactly-once harness delivery is claimed.
+
+Codex reads the durable queue, bounds each output batch, and acknowledges only emitted wake timestamps
+after stdout flush succeeds. Failed writes and watcher startup failures retain
+pending items. A crash between flush and acknowledgement can replay output;
+exactly-once model receipt is not guaranteed by a pipe write. The last-wake
+record explicitly labels model delivery unverified.
+
+### Required disposable smoke (firstmate, before declaring repair)
+
+Use an isolated disposable checkout with its own state and supported Codex
+client configuration. Keep the running supervisor on its immutable snapshot.
+Do not use a raw vendor launcher, captain-pane input, forged trust records or
+a trust bypass. Firstmate coordinates the normal supported launch and operator
+review through `/hooks`.
+
+1. Record the candidate head, client surface/version, effective feature and
+   policy, and actual loaded source path plus each current hash/trust status
+   from `hooks/list`. Review the fixture's exact definitions, then restart or
+   resume through the supported session path if needed.
+2. Answer a fixture decision with a unique ID through the normal board writer.
+   Capture the real SessionStart/resume or UserPromptSubmit event and the
+   model's visible receipt of that ID and answer. Fire another user turn and
+   record that the same wake is not repeated.
+3. During an active turn, queue another decision and capture the real Stop
+   event, its continuation reason, and the model handling that exact ID.
+   Record duplicate hook firing with one live watcher and owner termination
+   with no surviving watcher. Do not substitute a queue entry, cursor move,
+   acknowledged file or synthetic hook subprocess for model receipt.
+4. Record disconnected-output recovery, the current conversation's reload
+   limit, and a separate Claude regression check with version, event, wake ID,
+   visible receipt and cleanup. Existing Claude mechanism evidence below/above
+   is historical; it is not a regression run of this candidate.
+
+**Still missing:** firstmate's real trusted hook events and delivery evidence,
+owner cleanup, current-head CI/gates, and current-candidate Claude smoke. The
+worker authored regressions but did not run suites. The supplied shard 4 CI
+excerpt ends at the aggregate failure and does not identify its failing test.
 
 ## Cursor
 

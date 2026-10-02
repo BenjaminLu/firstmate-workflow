@@ -10,4 +10,5 @@ __pycache__/
 # the hooks that wake firstmate (T-137): local, written by bin/fm.sh hooks install, never committed
 .claude/settings.local.json
 .codex/hooks.json
+.codex/config.toml
 .cursor/hooks.json

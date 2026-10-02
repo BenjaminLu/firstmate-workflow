@@ -32,6 +32,7 @@ Each harness hook is one of these, spoken in that harness's protocol:
   codex   Stop: `fm-turnend-guard.sh --hook codex` answers
           {"decision":"block","reason":...} with any waiting wake, or
           with the order to park on the arm in the foreground.
+          SessionStart: `fm-watch-arm.sh --session-start codex`.
           UserPromptSubmit: `fm-watch-arm.sh --turn-start codex`.
   cursor  stop: `fm-turnend-guard.sh --hook cursor` answers
           {"followup_message":...} the same way, bounded by loop_limit.
@@ -42,8 +43,10 @@ harness's local, uncommitted config.
 Files, all under state/watch/: cycle.lock (held by the live cycle, so
 the kernel says whether one lives), arm.lock (who may start a cycle),
 generation, owner.json (the live cycle: gen, pid, owner, its doorbell),
-cursor (how far into the wake queue the watch has taken), wake/<gen>.json
-(a wake waiting to be claimed), last-wake.json, journal.
+cursor (how far into the wake queue the watch has taken), wake/<gen>.staged
+(durable; recoverable when handoff-<gen>.lock is free), wake/<gen>.json
+(published after handoff),
+last-wake.json, journal.
 """
 import errno
 import fcntl
@@ -191,15 +194,21 @@ def delivered(root, item):
     return life.is_acknowledged(root, ident, item.get('woken'))
 
 
-def take(root):
+def take(root, stage=None):
     """Every wake pushed since the cursor and not yet delivered, the cursor
-    moved past them under a lock: each is taken once, by whichever taker
-    comes first, and acknowledged as it is taken - the same record
+    moved past them under a lock. A cycle stages its items durably without
+    acknowledging; a direct legacy taker acknowledges using the same record
     `fm-session.sh ack` writes - so `fm-session.sh wait` and `status` never
     hand it to firstmate a second time. The first time the watch runs, the
     cursor starts at the end of the queue: what was pushed before is
     reported by `fm-session.sh status`, not replayed as a wake."""
     with Locked(wdir(root) / 'cursor.lock'):
+        if stage is None:
+            base = wdir(root) / 'wake'
+            if any(base.glob('*.staged')) or any(base.glob('*.json')):
+                # Older work is still owned by a publisher or claimant. A
+                # later queue version must not advance its acknowledgement.
+                return []
         offset = _cursor(root)
         if offset is None:
             queue = Path(root) / life.WAKE_QUEUE
@@ -207,11 +216,25 @@ def take(root):
             return []
         items, end = _queue_from(root, offset)
         items = [item for item in items if not delivered(root, item)]
-        for item in items:
-            if isinstance(item.get('id'), str) and re.fullmatch(r'[A-Za-z0-9_-]+', item['id']):
-                life.acknowledge(root, item['id'], item.get('woken') or 0)
+        if stage is not None and items:
+            # Persist the handoff before advancing the cursor. A writer is
+            # not a consumer: only a later claim/output acknowledges it.
+            (wdir(root) / 'wake').mkdir(exist_ok=True)
+            # Arms read only .json: the successor must be ready before
+            # this stage becomes claimable. The board counts these items
+            # from the unacknowledged queue, so do not also store legacy
+            # display-only lines (which the board counts separately).
+            save_json(wdir(root) / 'wake' / f'{stage}.staged',
+                      dict(gen=stage, items=items, publisher=os.getpid(), ts=now_iso()))
+        if stage is None:
+            life.acknowledge_batch(root, [item for item in items
+                if isinstance(item.get('id'), str) and re.fullmatch(r'[A-Za-z0-9_-]+', item['id'])])
         if end != offset:
-            save(wdir(root) / 'cursor', str(end))
+            try:
+                save(wdir(root) / 'cursor', str(end))
+            except OSError:
+                if stage is not None:
+                    raise
         return items
 
 
@@ -226,7 +249,10 @@ def waiting(root):
     queued = sum(1 for item in latest.values() if not delivered(root, item))
     written = 0
     for path in (wdir(root) / 'wake').glob('*.json') if (wdir(root) / 'wake').is_dir() else []:
-        written += len(read_json(path).get('lines') or [])
+        record = read_json(path)
+        # Structured handoffs are already counted from the durable queue.
+        if 'items' not in record:
+            written += len(record.get('lines') or [])
     return queued + written
 
 
@@ -303,6 +329,10 @@ def cycle(root):
         raise SystemExit(128 + signum)
     for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(signum, leave)
+    # This generation owns its stage even after releasing cycle.lock to
+    # its successor. Recovery must not confuse that live handoff with death.
+    handoff = os.open(wdir(root) / f'handoff-{gen}.lock', os.O_RDWR | os.O_CREAT, 0o644)
+    fcntl.flock(handoff, fcntl.LOCK_EX)
     bell = life.Doorbell(root)
     record = dict(gen=gen, pid=os.getpid(), owner=owner, bell=bell.path, started=now_iso())
     try:
@@ -313,10 +343,10 @@ def cycle(root):
         devnull = os.open(os.devnull, os.O_WRONLY)
         os.dup2(devnull, 1)
         os.close(devnull)
-        items = take(root)
+        items = take(root, stage=gen)
         while not items:
             bell.wait(None)
-            items = take(root)
+            items = take(root, stage=gen)
         lines = [wake_line(item) for item in items]
         # the successor holds the watch before this wake is let out, so a
         # wake pushed while firstmate handles this one is not missed
@@ -327,52 +357,126 @@ def cycle(root):
                 start_cycle(root, owner)
             except (life.OwnerGone, RuntimeError, OSError, ValueError) as error:
                 journal(root, f'cycle {gen} left no successor: {error}')
-        (wdir(root) / 'wake').mkdir(exist_ok=True)
-        save_json(wdir(root) / 'wake' / f'{gen}.json', dict(gen=gen, lines=lines, ts=now_iso()))
         journal(root, f'wake {gen} written: ' + '; '.join(lines))
+        os.replace(wdir(root) / 'wake' / f'{gen}.staged',
+                   wdir(root) / 'wake' / f'{gen}.json')
         life.ring(root, f'watch {gen}')
     finally:
-        bell.close()
-        if lock is not None:
-            # ended without handing on (its owner is gone, or it was
-            # stopped): said, so the board counts a gap from here
+        # A failed successor startup also ends this generation even though
+        # it already released cycle.lock. Serialize with ensure, and write
+        # the end before closing the beacon the board uses for liveness.
+        with Locked(wdir(root) / 'arm.lock'):
             if read_json(wdir(root) / 'owner.json').get('gen') == gen:
                 save_json(wdir(root) / 'owner.json', dict(record, ended=now_iso()))
-            journal(root, f'cycle {gen} ended')
+                journal(root, f'cycle {gen} ended')
+            bell.close()
+            if lock is not None:
+                os.close(lock)
+            os.close(handoff)
     return 0
 
 
 # --- The arm ------------------------------------------------------------------
 
 def claim(root):
-    """Every wake a cycle wrote and no arm has claimed yet, each to exactly
-    one claimant: a rename succeeds once."""
+    with Locked(wdir(root) / 'cursor.lock'):
+        return _claim(root)
+
+
+def _recover_stages(root, base):
+    """Called under cursor.lock. Only the kernel can declare a publisher
+    gone: its per-generation lock spans staging through publication, including
+    the interval when a successor holds cycle.lock. Never unlink lock files.
+    """
+    for path in base.glob('*.staged'):
+        fd = os.open(wdir(root) / f'handoff-{path.stem}.lock', os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as error:
+                if error.errno in (errno.EWOULDBLOCK, errno.EAGAIN):
+                    continue
+                raise
+            # A free lock means the producer cannot still publish. Recovery
+            # is the failed-handoff path, not permission to overtake a live
+            # predecessor. arm() ensures a watch before claiming this work.
+            os.replace(path, path.with_suffix('.json'))
+            journal(root, f'recovered abandoned handoff {path.stem}')
+        except FileNotFoundError:
+            pass
+        finally:
+            os.close(fd)
+
+
+def _claim(root, include_queue=False):
+    """Return published or abandoned wakes once under cursor.lock.
+
+    Keep each durable record until its acknowledgements succeed. A process
+    interrupted before acknowledgement leaves it reachable to the next arm.
+    """
     base = wdir(root) / 'wake'
-    if not base.is_dir():
+    if not base.is_dir() and not include_queue:
         return []
-    lines, gens = [], []
+    _recover_stages(root, base)
+    lines, gens, selected, paths = [], [], [], []
+    selected_keys = set()
     def gen_of(path):
         try:
             return int(path.stem)
         except ValueError:
             return 0
+    blocked = min((gen_of(p) for p in base.glob('*.staged')), default=float('inf'))
     for path in sorted(base.glob('*.json'), key=gen_of):
-        mine = path.with_name(f'{path.stem}.claimed-{os.getpid()}')
-        try:
-            os.rename(path, mine)
-        except FileNotFoundError:
-            continue
-        record = read_json(mine)
-        try:
-            mine.unlink()
-        except OSError:
-            pass
-        lines += [str(x) for x in record.get('lines') or []]
+        if gen_of(path) > blocked:
+            break  # publication may finish out of order; delivery may not
+        record = read_json(path)
+        if 'items' in record:
+            for item in record['items']:
+                key = (item.get('id'), item.get('woken'))
+                if key in selected_keys or delivered(root, item):
+                    continue
+                selected_keys.add(key)
+                lines.append(wake_line(item))
+                if re.fullmatch(r'[A-Za-z0-9_-]+', str(item.get('id', ''))):
+                    selected.append(item)
+        else:
+            lines += [str(x) for x in record.get('lines') or []]
+        paths.append(path)
         gens.append(record.get('gen'))
-    if lines:
-        save_json(wdir(root) / 'last-wake.json',
-                  dict(ts=now_iso(), reason='; '.join(lines), lines=lines, gen=gens[-1]))
-        journal(root, f'claimed {",".join(str(g) for g in gens)} by {os.getpid()}')
+    end = None
+    if include_queue and blocked == float('inf'):
+        offset = _cursor(root)
+        if offset is None:
+            queue = Path(root) / life.WAKE_QUEUE
+            save(wdir(root) / 'cursor', str(queue.stat().st_size if queue.exists() else 0))
+        else:
+            queued, end = _queue_from(root, offset)
+            keys = {(item.get('id'), item.get('woken')) for item in selected}
+            for item in queued:
+                key = (item.get('id'), item.get('woken'))
+                if key not in keys and not delivered(root, item):
+                    keys.add(key)
+                    lines.append(wake_line(item))
+                    if re.fullmatch(r'[A-Za-z0-9_-]+', str(item.get('id', ''))):
+                        selected.append(item)
+    life.acknowledge_batch(root, selected)
+    # Once committed, optional bookkeeping must not turn a returned batch
+    # into an exception. Old cursor/handoff records are safe to revisit.
+    try:
+        if end is not None:
+            save(wdir(root) / 'cursor', str(end))
+        if lines:
+            save_json(wdir(root) / 'last-wake.json',
+                      dict(ts=now_iso(), reason='; '.join(lines), lines=lines,
+                           gen=gens[-1] if gens else None))
+            journal(root, f'claimed {",".join(str(g) for g in gens)} by {os.getpid()}')
+    except OSError:
+        pass
+    for path in paths:
+        try:
+            path.unlink()
+        except OSError:
+            pass  # committed timestamps suppress replay; cleanup may retry
     return lines
 
 
@@ -380,9 +484,8 @@ def pending(root):
     """What waits for firstmate right now, delivered once: every unclaimed
     wake, and every item past the cursor. What a turn start and a harness
     that cannot be woken idle read."""
-    lines = claim(root)
-    lines += [wake_line(item) for item in take(root)]
-    return lines
+    with Locked(wdir(root) / 'cursor.lock'):
+        return _claim(root, include_queue=True)
 
 
 def arm(root, owner, max_wait=None):
@@ -398,28 +501,46 @@ def arm(root, owner, max_wait=None):
     try:
         with life.Doorbell(root) as bell:
             while True:
+                # Also reconnect before returning an abandoned predecessor's
+                # wake: recovery must not leave the foreground arm blind.
+                info = ensure(root, owner)
                 lines = claim(root)
                 if lines:
                     return lines
-                info = ensure(root, owner)
                 try:
                     cycle_exit = life.ProcessExit(int(info.get('pid') or 0))
                 except (life.OwnerGone, ValueError, OSError):
                     continue            # it ended since; its wake may be waiting
+                publishers = []
                 try:
-                    # a wake written between the look above and the watch
+                    # A predecessor may have released cycle.lock but still
+                    # own an unpublished stage. Watch its exit too, otherwise
+                    # its healthy successor could leave this arm asleep.
+                    for path in (wdir(root) / 'wake').glob('*.staged'):
+                        pid = read_json(path).get('publisher')
+                        if pid:
+                            try:
+                                publishers.append(life.ProcessExit(int(pid)))
+                                journal(root, f'arm watches handoff {path.stem}')
+                            except (life.OwnerGone, ValueError, OSError):
+                                pass   # claim below checks the generation lock
+                    # Subscribe before checking again so an exit cannot fall
+                    # between recovery inspection and the blocking wait.
                     lines = claim(root)
                     if lines:
                         return lines
                     left = None if deadline is None else deadline - time.monotonic()
                     if left is not None and left <= 0:
                         return []
-                    ready, _, _ = select.select([bell.fd, owner_exit.fileno(), cycle_exit.fileno()], [], [], left)
+                    ready, _, _ = select.select([bell.fd, owner_exit.fileno(), cycle_exit.fileno()] +
+                                              [p.fileno() for p in publishers], [], [], left)
                     if owner_exit.fileno() in ready and owner_exit.gone():
                         return None
                     if bell.fd in ready:
                         bell.wait(0)
                 finally:
+                    for publisher in publishers:
+                        publisher.close()
                     cycle_exit.close()
     finally:
         owner_exit.close()
@@ -485,15 +606,26 @@ def status(root):
 # --- What each harness is told ------------------------------------------------
 
 def wake_text(lines):
-    shown = lines[:MAX_LINES]
-    more = len(lines) - len(shown)
-    return ('firstmate wake:\n' + '\n'.join(shown) + (f'\n(and {more} more)' if more else '')
-            + '\nHandle each of these, then end the turn; the watch is already held for the next one.')
+    # Codex bounds selection before acknowledgement. Legacy consumers already
+    # claimed these lines, so none may be hidden by presentation truncation.
+    return ('firstmate wake:\n' + '\n'.join(lines)
+            + '\nHandle each event, then advance already authorized actionable follow-ups: '
+            'verification, review/gates, concrete board merge within current authorization, '
+            'self-update and authorized next dispatch. ' + followup_text())
+
+
+def followup_text():
+    return ('End or park only when no runnable authorized step remains; name the real dependency, '
+            'event or exact operator action required. Do not wait on unrelated legacy cards '
+            'instead of actionable work. If native hook trust is required, finish reviewable work '
+            'and surface the exact operator action. A held watcher does not start an idle conversation '
+            'or prove that the supervisor continues working.')
 
 
 def park_text():
-    return ('Work is in flight and nothing is watching for it, so ending this turn now would leave you blind. '
-            f'Run `bin/fm-watch-arm.sh --max-wait {PARK_SECS}` in the foreground and handle what it prints.')
+    return ('Work is in flight. Before parking, advance already authorized actionable follow-ups. '
+            + followup_text() + ' When waiting is the remaining step, run '
+            f'`bin/fm-watch-arm.sh --max-wait {PARK_SECS}` in the foreground and handle what it prints.')
 
 
 def payload():
@@ -522,20 +654,62 @@ def hook(root, harness):
         if not (crew or cards):
             return 0
         print('firstmate: nothing needed you for a day, and work is still in flight; '
-              'end this turn and the hook parks again.', file=sys.stderr)
+              + park_text(), file=sys.stderr)
         return 2
     print(wake_text(lines), file=sys.stderr)
     return 2
 
 
-def turn_start(root, harness):
-    """UserPromptSubmit: what waits is added to the turn's context."""
+def codex_output(root, event):
+    """Hand pending queue items to the hook pipe before acknowledging them.
+
+    Watcher cursor/staging is bookkeeping, not delivery. Read the durable
+    queue from the beginning so startup and a failed watcher handoff recover.
+    Serialize with legacy takers; failed write/flush leaves every item pending.
+    A successful pipe flush is still not evidence of model consumption. A
+    crash between flush and acknowledgement can replay, as documented.
+    """
+    with Locked(wdir(root) / 'cursor.lock'):
+        items, _ = _queue_from(root, 0)
+        seen, selected = set(), []
+        for item in items:
+            ident = item.get('id')
+            if not isinstance(ident, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', ident):
+                continue
+            key = (ident, item.get('woken'))
+            if key not in seen and not delivered(root, item):
+                seen.add(key)
+                selected.append(item)
+        # Do not acknowledge context hidden by wake_text's line limit.
+        selected = selected[:MAX_LINES]
+        lines = [wake_line(item) for item in selected]
+        text = wake_text(lines) if lines else None
+        if event == 'Stop' and not text:
+            crew, cards = inflight(root)
+            text = park_text() if crew or cards else None
+        if not text:
+            return
+        output = (dict(decision='block', reason=text) if event == 'Stop' else
+                  dict(hookSpecificOutput=dict(hookEventName=event, additionalContext=text)))
+        print(json.dumps(output), flush=True)
+        life.acknowledge_batch(root, selected)
+        if lines:
+            save_json(wdir(root) / 'last-wake.json', dict(ts=now_iso(), reason='; '.join(lines),
+                      lines=lines, transport='codex-hook-output', model_delivery='unverified'))
+
+
+def turn_start(root, harness, event='UserPromptSubmit'):
+    """Startup/resume and user turns reconnect the watch and inject context."""
     said = payload()
     if standing_down(root, said.get('cwd')):
         return 0
+    if harness == 'codex':
+        ensure(root, life.session_owner())
+        codex_output(root, event)
+        return 0
     lines = pending(root)
     if lines:
-        print(json.dumps(dict(hookSpecificOutput=dict(hookEventName='UserPromptSubmit',
+        print(json.dumps(dict(hookSpecificOutput=dict(hookEventName=event,
                                                       additionalContext=wake_text(lines)))))
     return 0
 
@@ -548,7 +722,12 @@ def guard(root, harness):
     said = payload() if harness else {}
     if standing_down(root, said.get('cwd')):
         return 0
-    if harness in ('codex', 'cursor'):
+    if harness == 'codex':
+        if said.get('stop_hook_active'):
+            return 0
+        codex_output(root, 'Stop')
+        return 0
+    if harness == 'cursor':
         if harness == 'cursor' and said.get('status', 'completed') != 'completed':
             return 0
         lines = pending(root)
@@ -617,7 +796,7 @@ USAGE = '''usage:
   fm-watch-arm.sh [--repo DIR] [--max-wait S]    park until a wake; print it
   fm-watch-arm.sh --ensure | --status | --pending
   fm-watch-arm.sh --follow [--background] [--count N]
-  fm-watch-arm.sh --hook claude | --turn-start claude|codex
+  fm-watch-arm.sh --hook claude | --turn-start claude|codex | --session-start codex
   fm-turnend-guard.sh [--hook claude|codex|cursor]'''
 
 
@@ -655,10 +834,14 @@ def main(argv):
             return cycle(args[0])
         if mode == 'arm':
             got = options(args, {'--ensure', '--status', '--pending', '--follow', '--background'},
-                          {'--repo', '--max-wait', '--count', '--hook', '--turn-start'})
+                          {'--repo', '--max-wait', '--count', '--hook', '--turn-start', '--session-start'})
             root = root_of(got)
             if '--hook' in got:
                 return hook(root, got['--hook'])
+            if '--session-start' in got:
+                if got['--session-start'] != 'codex':
+                    raise ValueError('--session-start supports codex only')
+                return turn_start(root, 'codex', 'SessionStart')
             if '--turn-start' in got:
                 return turn_start(root, got['--turn-start'])
             if '--status' in got:

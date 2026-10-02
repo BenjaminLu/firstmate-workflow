@@ -1,0 +1,38 @@
+{
+  "id": "T-164",
+  "milestone": "M2",
+  "bootstrap": false,
+  "depends_on": [],
+  "title": "Codex hooks install with verified loading, trust diagnostics and real wake delivery",
+  "scope": [
+    ".gitignore",
+    "bin/lib/fm_hooks.py",
+    "bin/lib/fm_watch.py",
+    "bin/lib/fm_lifeline.py",
+    "bin/fm-install-hooks.sh",
+    "bin/fm-watch-arm.sh",
+    "bin/fm-watch.sh",
+    "bin/fm-turnend-guard.sh",
+    "bin/fm-session.sh",
+    "bin/fm-doctor.sh",
+    "bin/fm.sh",
+    "tests/**",
+    "docs/verification/supervision.md",
+    "skills/firstmate/**",
+    "design/**",
+    "README.md",
+    "bin/fm-herdr.py",
+    "board/server.ts",
+    "bin/fm-setup.sh"
+  ],
+  "acceptance": [
+    "Why. Captain explicitly orders fixing Codex hooks on 2026-10-01; Claude works. Local codex-cli 0.159.3 features list shows hooks stable true; user config features.hooks true; project trust is trusted. Repo .codex/hooks.json exists with Stop/UserPromptSubmit commands, but no SessionStart registration. Existing installer bin/lib/fm_hooks.py only merges hook JSON. A real board answer D-firstmate-workflow-T162-1 at 15:40:49Z entered wake queue, but watcher only took it at 15:49:03Z; no automatic conversational delivery was verified. Its own spec must be committed.",
+    "Use official current https://learn.chatgpt.com/docs/hooks and installed Codex capability/schema evidence. Correct project-local installation for supported CLI/app-server clients: real hook source loading, current event names/output schema, feature enablement and exact-definition hook trust are distinct checks. Do not infer installation success from file existence, project trust or binary strings. Report managed-policy refusal and unsupported surface honestly. Preserve custom hooks/config, installation/uninstallation idempotence and paths with spaces; never commit local user configuration or credentials.",
+    "Implement diagnostics and actionable supported trust/reload instructions: official docs require reviewing/trusting exact non-managed hook definitions via /hooks; changed hashes require re-review. Do not use dangerously-bypass-hook-trust, fabricate trust records, impersonate operator trust or overwrite global settings to force success. If live operator trust or restart is needed, give firstmate a concrete minimal final step after implementation, not an unsupported workaround. Scope local install to this repo and firstmate-owned hooks; preserve Claude/Cursor behavior.",
+    "Ensure session-start/resume and user-turn hook integration actually arms/reconnects one kernel-owned watcher and injects pending context. Stop integration must use supported Codex stop protocol and distinguish already active stop hook, crew/away sessions, delivery versus writer/ack bookkeeping, timeout/error and no pending work. Never claim idle push wake unless live evidence proves that exact harness supports it. No raw vendor launcher, captain-pane input injection, handwritten monitor, polling loop or orphan watcher.",
+    "Add feature-owned realistic regression coverage for install/uninstall and custom-hook preservation, disabled features, untrusted/changed trust status, unsupported client and event/output wiring, startup/resume, Stop continuation/context, duplicate firing/single watcher and queued decision delivered once with recoverable failures. Workers author but do not run suites. Coordinate shared fm_watch/fm_lifeline changes without editing running snapshots; no unrelated production refactor.",
+    "Firstmate validates candidate via CI/gates and a real Codex hook smoke in an isolated disposable fixture using supported loading/trust, recording version, actual loaded hook source, fired event, decision wake identity, model-visible context or stop continuation and owner cleanup. A queue entry or acknowledged file alone is not delivery evidence. Record separately current conversation hot-reload/restart limits and Claude regression evidence. If trust UI/restart needs the captain, complete reviewable repair first and identify the exact missing action; do not claim fully repaired before real events run.",
+    "Standing captain rule (2026-10-02): doctor must guide installation and native authorization of necessary hooks for the actual vendor/harness registry, including Claude, Codex and Cursor where supported. Setup and primary startup reach this executable policy. Distinguish configured files, source loading/enablement, policy, native authorization and verified versus unverified delivery; name unsupported vendors and provide stock foreground-watch/manual-turn fallback. Preserve custom/global configuration, explicit disablement, managed policy, noninteractive --answers/--facts, primary-only behavior, process ownership and T-167 framing/availability. No trust bypass, extra sessions, focus theft or synthetic delivery claims. Document the captain flow and author focused doctor/startup/setup regressions including Claude; workers run no suites/models.",
+    "Standing captain rule (2026-10-02): wake context and firstmate instructions handle events then advance already authorized actionable verification, review/gates, concrete board merge within current time-boxed authorization, self-update and next dispatch. End or park only when no runnable authorized step remains and a real dependency, event or exact operator action is identified; unrelated legacy cards must not stall actionable work. Finish reviewable work before surfacing required native trust. A held watcher cannot start an idle Codex conversation or prove continued supervisor work. Sweep unconditional end/park instructions, author event follow-up and stop/ownership regressions, and preserve recursion protection, crew/away exclusion, one owned watcher, failure recovery and truthful delivery limits. No polling, broad autopilot, new durable task engine, unauthorized merge or live runtime edits; workers run no suites/models and firstmate owns fresh review, CI/gates and real hook acceptance."
+  ]
+}

@@ -10,6 +10,7 @@
 #                                                 the fallback for a harness with no
 #                                                 hooks: a pane that prints and notifies
 #   fm-watch-arm.sh --hook claude                 Claude Code's asyncRewake Stop hook
+#   fm-watch-arm.sh --session-start codex         startup/resume context and watch
 #   fm-watch-arm.sh --turn-start claude|codex     a UserPromptSubmit hook
 #
 # Repeated firings attach to the live cycle instead of starting another; a
