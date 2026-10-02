@@ -1,0 +1,30 @@
+{
+  "id": "T-143",
+  "milestone": "M3",
+  "bootstrap": false,
+  "depends_on": [
+    "T-051",
+    "T-139"
+  ],
+  "title": "a task may stack on another open pull request: its PR targets that branch, and when the base merges firstmate retargets and rebases it; a branch that is some open PR's base is never deleted",
+  "scope": [
+    "bin/fm-worker.sh",
+    "bin/fm-merge.sh",
+    "bin/fm-gate.sh",
+    "bin/fm-review.sh",
+    "bin/fm-dispatch.sh",
+    "bin/lib/**",
+    "tests/**",
+    "design/**",
+    "design/tasks/T-143.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-09-29 the captain approved the redesign for working on other repositories (reviewed and grilled against consenlabs/tokenlon-mm-agent PR #164): external data outside the engine tree under FM_HOME, private repositories allowed, watching done by scripts at zero model cost, with visible owned Herdr dispatch retained; detached full cmux lifecycle remains deferred. Its own spec file, design/tasks/T-143.json, is committed on this branch.",
+    "A task whose depends_on names a task with an open, unmerged PR may, when the project's conventions allow stacking, branch from that PR's head and open its PR against that branch (per-PR base, not the project's single base). Gates and the patch-id rule use the PR's own base.",
+    "When a base PR merges, firstmate retargets the stacked PR and rebases under project policy; later T-141 automates those mechanical steps. Review follows T-138 authoritative patch binding. Never delete a branch that remains any open PR base; retain it until last dependent retargets, then apply project deletion/retention policy.",
+    "Where stacking is off, a dependent task waits for its dependency to merge, as today. Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves. Stubs answer as the real tools do.",
+    "External project data lives only under FM_HOME/projects/<name>/{repo,worktrees,CONVENTIONS.md,tasks,design.md,state}. No private specs, worktrees, prompts, pins, evidence, mirrors or recovery data in engine state or its public tree. Private repos are accepted. Unreadable protection is unknown: require captain-confirmed project checks and policy before readiness, never infer permission or reject solely for visibility. Every GitHub operation names the project repository. Preserve self-project default and explicit-name compatibility. Never push to protected base; task-branch force-with-lease requires confirmed project policy and expected old head. Merge method, deletion, land/review/post and stacking follow CONVENTIONS.md, never hardcoded squash/delete.",
+    "Evidence: required GitHub checks and commit statuses plus six gates 1,2,4,5,6,7 on the authoritative current PR head; gate 3 is retired. Workers author feature-owned fail-first tests but run no suites. Tests stay at most 1200 lines; shared fixtures in tests/lib/ or tests/e2e/lib/, with literal helper references. Firstmate verifies CI/gates and real acceptance; a structure check cannot prove model compliance. Commit this task spec with implementation.",
+    "Use project merge/retention policy, never hardcoded squash/delete; retain any open PR base. Retarget/rebase only with authorized task-branch expected-head lease; never protected-base force push. Synchronize new authoritative head before patch comparison/gates/card. Firstmate can operate this task without T-141; autopilot integration follows."
+  ]
+}

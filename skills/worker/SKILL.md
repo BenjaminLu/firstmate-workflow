@@ -11,17 +11,18 @@ the crew and you do not need to.
 
 ## What you do
 
-Implement the task so that all six gates pass. Read them in
-[design/design.md](../../design/design.md); the two that catch most work are:
+Implement the task against the design and approved spec supplied in your prompt.
+The six gates are 1, 2, 4, 5, 6, 7; gate 3 is retired. The two that catch most work are:
 
 - **Gate 4** — your diff must stay inside the `scope` globs declared for your
-  task in its own file, [design/tasks/](../../design/tasks/)`<id>.json`. If the work genuinely needs a file outside that
-  list, say so in the pull request and stop; widening scope is the captain's
+  task in the supplied approved spec (the immutable project pin once enabled). If the work genuinely needs a file outside that
+  list, write `.fm-say.md` for launcher publication and stop; widening scope is the captain's
   call, not yours.
 - **Gate 5** — revert your implementation and your new tests must go red. A
   test that passes without the code it covers is worse than no test: it is a
-  green light wired to nothing. Write the test first, watch it fail, then make
-  it pass.
+  green light wired to nothing. Write the test first and identify its expected
+  failing assertion; CI and the gates observe red/base and green/head. Workers
+  do not run suites.
 
 A new feature's tests go in a new file named for that feature, or in the
 file that already owns the feature; never append them to an unrelated suite.
@@ -121,7 +122,7 @@ search the repository for every test that does it and fix them all in the same
 round. Fixing one instance per round is how a three-round review becomes a
 nine-round one.
 
-In the pull request, say what class you took the finding to be, how you
+In `.fm-say.md` for launcher publication, say what class you took the finding to be, how you
 searched for it, and how many instances you found. That last number is the
 interesting one: if it is one, say so, because "I looked and there was only
 one" and "I did not look" are indistinguishable otherwise.
@@ -184,8 +185,10 @@ asking for a missing list that is the whole of your turn, because you
 ask before you change anything — write it to **`.fm-say.md`** in your worktree.
 The worker script attempts publication when a PR is available and removes the
 file before its commit step. On a round that changed files and has no PR yet,
-it commits, pushes and opens the PR first, then posts the note there. A note
-with no changed files and no PR is a premature question: it is kept under
+it commits, pushes and opens the PR first, then posts the note there. T-160 permits a no-PR request-only round with a standalone
+`SCOPE-BLOCKED:<task>` or `ASK-<reason>:<task>` marker: the launcher opens a
+draft and posts the note, with a scoped question record when required.
+An ordinary note with no changed files and no PR is premature: it is kept under
 `state/unsent/` and the round fails. Inspect its reported publication result;
 writing the file alone does not establish that the reviewer received it.
 Preserve any reported recovery copy on failure.
@@ -222,8 +225,9 @@ Workers do not run the test suite or `ci.sh`: GitHub CI and the gates verify
 request, the assertion that should go red when your implementation is
 reverted, with the file:line it lives at. A metadata/link check proves
 structure, not model compliance; report instruction-only validation limits
-and do not waive gate 5. These are role requirements: the review launcher
-and gate 7 do not establish final-answer or current-head provenance, and the
+and do not waive gate 5. T-163 managed Codex run mode authenticates final-output provenance; that does
+not establish authoritative remote-head freshness or make legacy/custom paths
+trusted. Gate 7 alone is insufficient, and the
 protocol checker does not prove that a finding matches the item it cites or
 that a regression or new ground is real. Report gaps to firstmate rather than treating a passing
 script as proof of those properties. Never claim tests, hook removal,
@@ -239,3 +243,19 @@ through `fm-emit.sh`; bounded `{done,total}` only when a real denominator exists
 Do not edit scripts or runtime wrappers executing in a live process. Coordinate
 immutable run snapshots if needed and revalidate interrupted or duplicated runs.
 
+
+## Project contract and completion
+
+Use the exact project+task identity and supplied conventions; same task IDs in
+different projects share no authority. External specs/design/pins/evidence stay
+under FM_HOME/projects/<name>, never engine state or target commits. Do not
+copy private acceptance into public notes; launcher posting follows project
+policy. A missing contract or unsupported external path goes to firstmate.
+
+Firstmate verifies GitHub's authoritative PR head against local task ref and
+isolated checkout before accepting checks, statuses, gates and review; a stale
+local green result is insufficient. Report head mismatches, never manufacture
+fresh evidence. Only a current attempt's final assistant completion is role
+completion; T-167 transport classification must not mistake quoted error text
+for actual CLI/provider failure. Neither process success nor WORKER_COMPLETE
+is PR acceptance or captain merge permission.

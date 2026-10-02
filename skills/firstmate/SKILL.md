@@ -548,8 +548,9 @@ the author only when `FM_REVIEWER_LOGIN` is set, and binds an APPROVE to the
 change its `REVIEWED:` line records; a later rejection supersedes it. It does
 not reject quoted markers, and an APPROVE with no `REVIEWED:` line (posted by
 hand, or before T-113) still passes and binds to no head: the gate says so,
-and you confirm it covers the head. The review launcher also ignores comment publication
-failure, so inspect the published result rather than trusting its exit status.
+and it is insufficient until authentic current-change evidence is established. Inspect actual publication receipts and preserve failed projections; a launcher
+exit status alone does not prove publication. T-163 managed Codex final-output
+authentication does not authenticate arbitrary legacy comments.
 Neither lavish nor no-mistakes is a prerequisite. Do not introduce their startup
 or verification hooks; use repository checks and actual CI evidence.
 
@@ -843,3 +844,49 @@ merge approval. Awaiting a response must preserve its distinct chosen/text data.
 
 Persist concise operational lessons in role skills through a scoped task, not
 global settings or a session transcript.
+
+## Approved external roadmap and current-head acceptance (T-166)
+
+Follow [design section 15](../../design/design.md#15-driving-other-repositories-approved-plan-runtime-not-yet-accepted)
+and the [adoption ledger](../../design/external-roadmap.md). This is an approved
+roadmap, not a claim of shipped external execution. Finish the accepted engine
+repairs first. T-142 waits for T-166; preserve each dependency and coordinate
+shared-file edits for parallel evidence/brief work. Never edit live runtimes.
+
+External private data belongs in FM_HOME/projects/<name>, including specs,
+conventions, pins, evidence and recovery; no copies in engine state. Private
+repos are accepted. Unknown protection requires confirmed checks/policy, not
+automatic rejection or implied permission. Use project+task identity everywhere
+and the supplied project land/review/post, merge, retention and stacking policy.
+No hardcoded squash/delete, protected-base force push or unapproved task lease.
+
+Before treating any candidate as ready, fetch/synchronize and verify authoritative
+GitHub PR head against local task ref and isolated checkout. Required check-runs
+and commit statuses, six gates 1/2/4/5/6/7, review head/patch/identity/final answer
+and merge candidate must refer to that verified SHA. Recheck after update-branch
+and before landing; stale local green gates do not establish readiness. Preserve
+approval only for unchanged authoritative patch-id with no later rejection.
+Pending CI remains pending. T-163 final-only Codex provenance is supported; it
+does not by itself guarantee remote freshness or authenticate arbitrary comments.
+
+Stock external dispatch must retain a live owned run and visible Herdr view;
+manual relaunch after a dead dispatch is not proof. Keep cmuxOnly and defer full
+detached cmux lifecycle. Count live owned runs under dispatch/identity locks,
+not open PR counts. T-167 distinguishes actual CLI/provider errors from quoted
+model/tool text; record final output and owner cleanup/retention honestly.
+
+Once T-053 is implemented, routine dispatch without --project fairly fills all
+projects; captain-requested single-project work uses --project. Other project
+operations always carry explicit context. Core dispatch needs no T-141 autopilot.
+T-140/T-143/T-141 remain advanced roadmap work after the basic maker-founder
+pilot. Its empty git/no-commit/no-remote bootstrap needs an approved product and
+remote contract; ask at most three genuinely missing questions, infer no product
+brief or visibility from authorization to use a fresh repo.
+
+Apply T-164 hook diagnostics as separate source loading, enablement/policy,
+exact native trust, reload and delivery facts. No fabricated trust, bypass,
+queue/ack-as-delivery claim or idle Codex wake claim without actual evidence.
+Advance already authorized review, checks, concrete board merge within current
+time-boxed authorization, self-update and next dispatch before ending for a
+real dependency/event/operator action. Project handoff and captain board authority
+remain mandatory; no automatic merge.

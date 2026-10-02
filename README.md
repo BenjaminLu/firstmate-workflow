@@ -369,3 +369,27 @@ only this repository.
 ## License
 
 MIT (SPDX: `MIT`). See [LICENSE](LICENSE).
+
+## External repositories: approved roadmap
+
+[Design section 15](design/design.md#15-driving-other-repositories-approved-plan-runtime-not-yet-accepted)
+and the [adoption ledger](design/external-roadmap.md) describe the approved
+T-166 roadmap; this documentation does not declare external execution complete.
+External private repositories will keep clone, worktrees, CONVENTIONS.md, tasks,
+design and state under `FM_HOME/projects/<name>/` (default `~/.firstmate`), outside
+the engine. Self-project compatibility remains. Migration requires approval;
+unreadable protection is unknown and requires confirmed project checks/policy.
+
+Acceptance binds GitHub's authoritative PR head to the local task ref, isolated
+checkout, check-runs plus commit statuses, six gates (1,2,4,5,6,7), authenticated
+review and merge candidate. Private local evidence is authoritative; GitHub
+posting follows project conventions. Merge/handoff, retention and stacking obey
+the approved contract, with captain approval and no automatic merge.
+
+The basic pilot is the actual empty `/Users/benjamin/Desktop/maker-founder` repo,
+observed with HEAD master and no commits or remote. Its product/remote contract
+and bootstrap must be approved before a real scoped task is dispatched via
+the stock dispatcher to a visible owned Codex Herdr run. Capture isolated review,
+checks/gates, outputs and cleanup/retention evidence. A mock fixture or manual
+relaunch after dead dispatch is insufficient. Advanced external reviewers,
+stacking and autopilot (T-140/T-143/T-141) remain planned after the basic pilot.

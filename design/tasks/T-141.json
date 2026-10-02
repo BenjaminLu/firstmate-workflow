@@ -1,0 +1,39 @@
+{
+  "id": "T-141",
+  "milestone": "M3",
+  "bootstrap": false,
+  "depends_on": [
+    "T-138",
+    "T-140",
+    "T-143",
+    "T-144",
+    "T-151"
+  ],
+  "title": "fm autopilot: a resident service does the mechanical steps from events and the conventions, raises the captain's intent card when a task is ready, and queues a wake for firstmate only when judgment is needed",
+  "scope": [
+    "bin/fm-autopilot.sh",
+    "bin/lib/**",
+    "bin/fm.sh",
+    "bin/fm-herdr.py",
+    "board/**",
+    "i18n/**",
+    "tests/**",
+    "design/**",
+    "skills/**",
+    "README.md",
+    "docs/**",
+    "design/tasks/T-141.json",
+    "bin/fm-emit.sh"
+  ],
+  "acceptance": [
+    "Why. On 2026-09-29 the captain approved a design for running firstmate-workflow on other repositories (reviewed as an artifact, then grilled on consenlabs/tokenlon-mm-agent PR #164): firstmate inspects a repository and asks at most three questions to write FM_HOME/projects/<name>/CONVENTIONS.md; every merge still goes through the captain's intent card, never auto-merge; external reviewers such as that repo's R2D2-im and BB8-im can be the review, with firstmate's own reviewer only a local pre-check; and nothing about watching may depend on firstmate remembering - scripts do it. This task is one of T-137..T-141, run in the order of their depends_on. Its own spec file, design/tasks/T-141.json, is committed on this branch.",
+    "Local writers push event notifications through owned FIFO; only GitHub uses ETag polling. Start via T-151 lifeline owned by fm session. Optional launchd/systemd service requires captain choice and becomes owner. Owner exit stops descendants. Next fm command restarts after crash; no beacon or PID polling, no setsid. Visible Herdr dispatch remains required.",
+    "Zero model idle cost: no timer invokes model. Wake queue batches judgment with convention cadence/debounce. Push notification differs from model-visible delivery: respect T-164 source loading, exact native trust, reload and delivery limits. Queued/acknowledged files alone prove no wake.",
+    "Sources: each project state/events.jsonl (external under FM_HOME/projects/<name>/state) and, for open PRs of registered projects, GitHub (reviews, review comments, commit statuses, checks, merge state), polled with ETag conditional requests at the cadence the conventions set, and with the per-reviewer debounce they set (for example: a reviewer quiet for 3 minutes closes a batch).",
+    "Mechanical steps, done by the service: update a BEHIND branch (gh pr update-branch, only when MERGEABLE); retarget and rebase a stacked PR whose base merged; start the review round a base-only update needs (T-138's patch-id rule may make it unnecessary); ask a returning reviewer to re-check; raise the captain's intent card when a task is ready under its conventions. It never merges: merging stays with the card (land: card) or the team (land: handoff).",
+    "Judgment is queued, not guessed: CI failures, CHANGES_REQUESTED batches, findings, a round that failed or was lost, a card answered B or C, and conventions drift are written to the project state/wake-queue (external under FM_HOME/projects/<name>/state) with a reason line; firstmate is woken for them by T-137's bridge, and the board and a desktop notification show any item waiting too long.",
+    "Tests drive the state machine with recorded events and gh payloads: each mechanical step, each queued wake, no merge ever, restart after a crash, backoff on network loss. Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves. Stubs answer as the real tools do (gh's JSON shapes, a GitHub review, a commit status).",
+    "External project data lives only under FM_HOME/projects/<name>/{repo,worktrees,CONVENTIONS.md,tasks,design.md,state}. No private specs, worktrees, prompts, pins, evidence, mirrors or recovery data in engine state or its public tree. Private repos are accepted. Unreadable protection is unknown: require captain-confirmed project checks and policy before readiness, never infer permission or reject solely for visibility. Every GitHub operation names the project repository. Preserve self-project default and explicit-name compatibility. Never push to protected base; task-branch force-with-lease requires confirmed project policy and expected old head. Merge method, deletion, land/review/post and stacking follow CONVENTIONS.md, never hardcoded squash/delete.",
+    "Evidence: required GitHub checks and commit statuses plus six gates 1,2,4,5,6,7 on the authoritative current PR head; gate 3 is retired. Workers author feature-owned fail-first tests but run no suites. Tests stay at most 1200 lines; shared fixtures in tests/lib/ or tests/e2e/lib/, with literal helper references. Firstmate verifies CI/gates and real acceptance; a structure check cannot prove model compliance. Commit this task spec with implementation."
+  ]
+}

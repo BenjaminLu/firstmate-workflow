@@ -6,21 +6,28 @@
     "T-052",
     "T-053",
     "T-054",
-    "T-056"
+    "T-137",
+    "T-144"
   ],
   "title": "the first external project, proved end to end",
   "scope": [
     "tests/external-project.test.sh",
     "README.md",
-    "design/design.md"
+    "design/design.md",
+    "design/tasks/T-055.json",
+    "tests/**",
+    "docs/verification/**"
   ],
   "acceptance": [
-    "A fixture drives a second registered project end to end with the mock adapter and the gh stub: a local bare repository stands in for the target, sync and verify pass against stubbed GitHub answers in the shapes GitHub returns, one task is pinned, worked, gated, reviewed and carded, and the target's tree afterwards contains only the task's scoped files and none of firstmate's artifacts.",
-    "The same fixture runs one task of the self project in the same log and proves the two are kept apart on events, decisions and pins.",
+    "Why: prove actual /Users/benjamin/Desktop/maker-founder empty-repo pilot, not only mocks. Planning baseline: initialized git, HEAD master, no commits or remote; re-inspect. Captain authorized fresh repo, not product brief or visibility. Onboard via T-139 with at most three genuinely missing contract questions; approve initial content/base/checks and remote location/visibility before creation. Represent no-commit/no-remote bootstrap explicitly before ordinary execution.",
+    "Retain realistic fixture: private target, unreadable protection confirmed through conventions, Drone-like commit status, selected squash-only policy, two external bot states, threads posting and stacked PR. Advanced bot/stack acceptance belongs to T-140/T-143/T-141; stage those fixture cases for future integration, not prerequisites or completed basic-pilot proof.",
     "Proves design.md section 15.10 end to end: the self project's task is dispatched and still live, not merged, when the external project's task is dispatched, and both are in flight together within the one global limit; the external task is pinned, worked, gated, reviewed and carded while the self task is live; both projects' merge cards are pending at the same time; answering the external card leaves the self card pending, and nothing project-scoped (pins, worktrees, checkout, guard, decisions) of one project is read or written by the other's run.",
     "README.md explains registering a project: the registry entry, what the target needs (section 15.6), and that private projects wait for the section 15.8 decision. Section 15's status line says the external model is implemented.",
-    "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
-    "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
-    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+    "Create and approve actual scoped pilot task with private immutable spec/design/contract snapshots. Dispatch external Codex worker through standard stock dispatcher into visible owned Herdr window; capture live run/owner/window identity. Manual relaunch after dead dispatch fails acceptance. Complete isolated T-163 review, final-only verdict, authoritative-head checks/statuses and six gates, then captain-approved merge or project handoff. No approval inferred from CI. Private captures stay in FM_HOME. README describes only actually verified capability.",
+    "Evidence is this pull request's required GitHub check and the six gates 1,2,4,5,6,7. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason.",
+    "External project data lives only under FM_HOME/projects/<name>/{repo,worktrees,CONVENTIONS.md,tasks,design.md,state}. No private specs, worktrees, prompts, pins, evidence, mirrors or recovery data in engine state or its public tree. Private repos are accepted. Unreadable protection is unknown: require captain-confirmed project checks and policy before readiness, never infer permission or reject solely for visibility. Every GitHub operation names the project repository. Preserve self-project default and explicit-name compatibility. Never push to protected base; task-branch force-with-lease requires confirmed project policy and expected old head. Merge method, deletion, land/review/post and stacking follow CONVENTIONS.md, never hardcoded squash/delete.",
+    "Evidence: required GitHub checks and commit statuses plus six gates 1,2,4,5,6,7 on the authoritative current PR head; gate 3 is retired. Workers author feature-owned fail-first tests but run no suites. Tests stay at most 1200 lines; shared fixtures in tests/lib/ or tests/e2e/lib/, with literal helper references. Firstmate verifies CI/gates and real acceptance; a structure check cannot prove model compliance. Commit this task spec with implementation.",
+    "Capture commands/stdout/stderr, remote/local/isolated SHAs, spec hashes, reviewer identity/final answer, check/status and gate outputs. Verify owner exit, cleanup/retention, no private engine artifacts or target pollution, and another project with same task ID preserved. Contract choices or unavailable services are blockers, not reasons to substitute fixtures. Basic pilot does not depend on advanced T-140/T-143/T-141, which remain open. Publish only authorized redacted verification summary."
   ]
 }

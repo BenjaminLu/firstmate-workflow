@@ -3,8 +3,8 @@
   "milestone": "M3",
   "bootstrap": false,
   "depends_on": [
-    "T-047",
-    "T-048"
+    "T-142",
+    "T-139"
   ],
   "title": "spec pins: gate 4 reads a pinned scope, not the branch",
   "scope": [
@@ -18,15 +18,20 @@
     "tests/review.test.sh",
     "tests/project.test.sh",
     "tests/option-loop.test.sh",
-    "design/design.md"
+    "design/design.md",
+    "design/tasks/T-049.json",
+    "tests/**",
+    "bin/lib/**"
   ],
   "acceptance": [
-    "Implements design.md section 15.5 exactly. On a task's first round fm-worker.sh writes state/pins/<project>/<task>/1.json (project, task, engine commit, task-list path, verbatim spec, its SHA-256, design path, target base commit, and T-043's contract for the project verbatim — the whole block, `docs` included — with the engine main commit it was read from and its SHA-256) and emits spec_pinned. The contract always comes from the engine main head at pin time, including for a self-hosted task whose spec is pinned from its own branch. The engine commit is the engine main head containing the task; for the self project a task not on main is pinned from its own branch's commit, else from the engine working copy with engine_commit null.",
-    "fm-worker.sh, fm-review.sh and fm-gate.sh read the task spec from the highest-numbered pin through one library function in bin/fm-config.sh, never from the target branch or the engine working copy. With an engine commit the spec is re-derived and its hash compared; without one the branch's own entry must match the pin's hash. The contract is re-derived from its recorded commit and hash-checked in both cases; repin reads spec and contract afresh from the new commit.",
+    "Why: gate 4 must use approved immutable scope, not worker-editable files. First-round pins record project+task, engine code commit, approved local spec/design/CONVENTIONS.md and complete gate contract snapshots, SHA-256 hashes, approval decision/author/time, source/version and target base commit. External snapshots are private append-only FM_HOME/projects/<name>/state/pins/<task>/<n>.json records, not required on public engine main. Self specs retain committed provenance or explicit uncommitted source/hash; self gate contracts come from accepted engine main.",
+    "One resolver supplies the latest authorized pin to workers, reviewers and gates. Verify every snapshot hash and provenance; re-derive committed self sources from recorded commits, including legacy top-level or relocated contract. External accepted local snapshots verify independently of engine commits; never silently read mutable files or target branch. Include every contract field, including docs.",
     "Gate 4 fails with no pin, a hash mismatch, a changed file outside the pinned scope, a self-hosted branch whose own task entry differs from its pin, and any `.fm-*` path. Each failure names its reason.",
-    "`fm-project.sh repin --task <t> --decision D-<n>` writes the next pin and emits spec_repinned only when the decision is a decision_made for that project and task with its authorizing option and the new engine commit is on main with a differing spec; otherwise it refuses with a message and writes nothing. Pin files are append-only.",
+    "Repin --project <p> --task <t> --decision <id> appends a pin only after matching captain approval for exact project+task and changed snapshots. Read spec/design/conventions/contract afresh, record hashes/provenance and emit spec_repinned. Refuse mismatched, missing or unauthorized decisions without writing; never overwrite pins or require private specs on engine main.",
     "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
-    "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
-    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+    "Evidence is this pull request's required GitHub check and the six gates 1,2,4,5,6,7. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason.",
+    "External project data lives only under FM_HOME/projects/<name>/{repo,worktrees,CONVENTIONS.md,tasks,design.md,state}. No private specs, worktrees, prompts, pins, evidence, mirrors or recovery data in engine state or its public tree. Private repos are accepted. Unreadable protection is unknown: require captain-confirmed project checks and policy before readiness, never infer permission or reject solely for visibility. Every GitHub operation names the project repository. Preserve self-project default and explicit-name compatibility. Never push to protected base; task-branch force-with-lease requires confirmed project policy and expected old head. Merge method, deletion, land/review/post and stacking follow CONVENTIONS.md, never hardcoded squash/delete.",
+    "Evidence: required GitHub checks and commit statuses plus six gates 1,2,4,5,6,7 on the authoritative current PR head; gate 3 is retired. Workers author feature-owned fail-first tests but run no suites. Tests stay at most 1200 lines; shared fixtures in tests/lib/ or tests/e2e/lib/, with literal helper references. Firstmate verifies CI/gates and real acceptance; a structure check cannot prove model compliance. Commit this task spec with implementation."
   ]
 }

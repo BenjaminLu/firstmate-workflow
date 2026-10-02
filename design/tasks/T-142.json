@@ -1,0 +1,42 @@
+{
+  "id": "T-142",
+  "milestone": "M3",
+  "bootstrap": false,
+  "depends_on": [
+    "T-166"
+  ],
+  "title": "an external project's clone, worktrees and records live under FM_HOME (~/.firstmate/projects/<name>/), outside the engine's working tree",
+  "scope": [
+    "bin/fm-project.sh",
+    "bin/fm-config.sh",
+    "bin/fm-worker.sh",
+    "bin/fm-review.sh",
+    "bin/fm-canary.sh",
+    "bin/lib/**",
+    "config.yaml",
+    ".gitignore",
+    "tests/**",
+    "design/**",
+    "README.md",
+    "design/tasks/T-142.json",
+    "bin/fm-cleanup.sh",
+    "bin/fm-reconcile.sh",
+    "bin/fm-emit.sh",
+    "bin/fm-decide.sh",
+    "bin/fm-diagram.sh",
+    "bin/fm-session.sh",
+    "bin/fm-run.sh",
+    "bin/fm-dispatch.sh",
+    "bin/fm-gate.sh",
+    "board/**"
+  ],
+  "acceptance": [
+    "Why. On 2026-09-29 the captain approved the redesign for working on other repositories (reviewed and grilled against consenlabs/tokenlon-mm-agent PR #164): external data outside the engine tree under FM_HOME, private repositories allowed, watching done by scripts at zero model cost, with visible owned Herdr dispatch retained; detached full cmux lifecycle remains deferred. Its own spec file, design/tasks/T-142.json, is committed on this branch.",
+    "FM_HOME (default ~/.firstmate; env or config.yaml `home:`) holds projects/<name>/{repo,worktrees,CONVENTIONS.md,tasks,design.md,state}. fm-project.sh sync clones there instead of state/projects/<name>/repo; T-128's mirrors and every per-project record for an external project go there. The self project (repo: .) is unchanged.",
+    "No path under FM_HOME may be inside the engine's working tree (refused, exit 65), so git clean, lint and find sweeps, T-128's mirror and editors never meet a nested repository. An existing state/projects/<name>/repo is moved once with the operator's word, never silently.",
+    "Optional history: `fm project history on <name>` makes FM_HOME/projects/<name>/ a local git repository excluding repo/ and worktrees/, so the project's specs and conventions have history without reaching any remote. Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves. Stubs answer as the real tools do.",
+    "External project data lives only under FM_HOME/projects/<name>/{repo,worktrees,CONVENTIONS.md,tasks,design.md,state}. No private specs, worktrees, prompts, pins, evidence, mirrors or recovery data in engine state or its public tree. Private repos are accepted. Unreadable protection is unknown: require captain-confirmed project checks and policy before readiness, never infer permission or reject solely for visibility. Every GitHub operation names the project repository. Preserve self-project default and explicit-name compatibility. Never push to protected base; task-branch force-with-lease requires confirmed project policy and expected old head. Merge method, deletion, land/review/post and stacking follow CONVENTIONS.md, never hardcoded squash/delete.",
+    "Evidence: required GitHub checks and commit statuses plus six gates 1,2,4,5,6,7 on the authoritative current PR head; gate 3 is retired. Workers author feature-owned fail-first tests but run no suites. Tests stay at most 1200 lines; shared fixtures in tests/lib/ or tests/e2e/lib/, with literal helper references. Firstmate verifies CI/gates and real acceptance; a structure check cannot prove model compliance. Commit this task spec with implementation.",
+    "Validate names, canonical roots, symlink/traversal escapes, clone origin and direct-child cleanup before mutation. Cover every external store including events, decisions, diagrams, context packs, wake/recovery records and live-owned review checkouts; engine board aggregation contains only authorized metadata. Approved migration verifies retained records and rollback/recovery before removal. Test self compatibility, rejected paths and no private engine-state copies."
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "id": "T-138",
+  "milestone": "M3",
+  "bootstrap": false,
+  "depends_on": [
+    "T-142"
+  ],
+  "title": "Private local evidence binds authenticated verdicts to authoritative heads and patches",
+  "scope": [
+    "bin/fm-review.sh",
+    "bin/fm-gate.sh",
+    "bin/fm-worker.sh",
+    "bin/fm-emit.sh",
+    "bin/fm-diagram.sh",
+    "bin/lib/**",
+    "board/**",
+    "tests/**",
+    "design/**",
+    "skills/**",
+    "design/tasks/T-138.json",
+    "bin/fm-config.sh",
+    "bin/fm-project.sh"
+  ],
+  "acceptance": [
+    "Why. On 2026-09-29 the captain approved a design for running firstmate-workflow on other repositories (reviewed as an artifact, then grilled on consenlabs/tokenlon-mm-agent PR #164): firstmate inspects a repository and asks at most three questions to write FM_HOME/projects/<name>/CONVENTIONS.md; every merge still goes through the captain's intent card, never auto-merge; external reviewers such as that repo's R2D2-im and BB8-im can be the review, with firstmate's own reviewer only a local pre-check; and nothing about watching may depend on firstmate remembering - scripts do it. This task is one of T-137..T-141, run in the order of their depends_on. Its own spec file, design/tasks/T-138.json, is committed on this branch.",
+    "Append-only external evidence lives under FM_HOME/projects/<name>/state/evidence/<task>/; self state/evidence/<project>/<task>/ stays compatible. Trusted fm outside rounds records project/task, attempt, verified head/base, stable patch-id, reviewed files, engine/spec/contract hashes, reviewer identity, vendor/model, final-output provenance and text. Model cannot forge transport receipts. Keep worker reports and firstmate briefs separate from reviewer input.",
+    "Gate 7 reads authenticated final assistant verdict records, not quoted/transcript/comment markers. Preserve latest rejection precedence and complete numbered standing list. post local|summary|check|threads|comments projects authorized local records; it is not their source. No private specs/briefs leaked by default. Bind projections to local evidence; report publication failures without losing records.",
+    "Carry approval only when authoritative current patch-id equals approved patch after a base update, with verified ancestry and no later rejection. Changed patch needs review; CI and all six gates bind to actual current head. Before current-head acceptance, synchronize and verify the authoritative GitHub PR head against the local task ref and isolated checkout. Bind required check-runs AND commit statuses, gates, reviewed head/base/patch, reviewer identity/final-answer provenance and merge candidate to that verified SHA. If remote moves or cannot be verified, readiness is stale/unknown; refresh before accepting. Regression: GitHub update-branch moves remote while local ref remains stale; green local gates must not pass remote readiness. Approval carries only when authoritative current patch-id is unchanged and no later rejection supersedes it.",
+    "Tests: a review recorded with post=local gates green; a base-only update keeps the approval, a one-line change voids it; a forged or mismatched record is refused. Evidence: the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suites themselves. Stubs answer as the real tools do (gh's JSON shapes, a GitHub review, a commit status).",
+    "External project data lives only under FM_HOME/projects/<name>/{repo,worktrees,CONVENTIONS.md,tasks,design.md,state}. No private specs, worktrees, prompts, pins, evidence, mirrors or recovery data in engine state or its public tree. Private repos are accepted. Unreadable protection is unknown: require captain-confirmed project checks and policy before readiness, never infer permission or reject solely for visibility. Every GitHub operation names the project repository. Preserve self-project default and explicit-name compatibility. Never push to protected base; task-branch force-with-lease requires confirmed project policy and expected old head. Merge method, deletion, land/review/post and stacking follow CONVENTIONS.md, never hardcoded squash/delete.",
+    "Evidence: required GitHub checks and commit statuses plus six gates 1,2,4,5,6,7 on the authoritative current PR head; gate 3 is retired. Workers author feature-owned fail-first tests but run no suites. Tests stay at most 1200 lines; shared fixtures in tests/lib/ or tests/e2e/lib/, with literal helper references. Firstmate verifies CI/gates and real acceptance; a structure check cannot prove model compliance. Commit this task spec with implementation."
+  ]
+}

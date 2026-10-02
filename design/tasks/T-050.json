@@ -3,9 +3,11 @@
   "milestone": "M3",
   "bootstrap": false,
   "depends_on": [
-    "T-049"
+    "T-049",
+    "T-138",
+    "T-139"
   ],
-  "title": "project-aware gates 1–3 and 5–7",
+  "title": "Project-aware six gates and current-head check evidence",
   "scope": [
     "config.yaml",
     "bin/fm-config.sh",
@@ -13,15 +15,20 @@
     "tests/config.test.sh",
     "tests/gate.test.sh",
     "README.md",
-    "design/design.md"
+    "design/design.md",
+    "design/tasks/T-050.json",
+    "tests/**",
+    "bin/lib/**"
   ],
   "acceptance": [
-    "Implements the gate half of design.md sections 15.2 and 15.6. fm-gate.sh takes --project. Gates 1 and 2 use the project's base, not a literal main. Gates 3 and 5 read T-043's contract from the task's pin (section 15.2), never from the branch under test or the engine working copy, and apply every field of it exactly as T-043 defines them — including the `docs` exemption, so a design- or README-only self-hosted task still passes gate 5; a missing pin or a contract hash mismatch fails the gate by name. Gate 3 runs in a scratch worktree of the project's checkout. Gates 6 and 7 query the project's github repository with gh --repo, and gate 6 requires the registry's required_check.",
-    "In this same commit T-043's top-level `project:` block moves unchanged to projects.firstmate-workflow.project and the top-level block is deleted; bin/fm-config.sh resolves every project's contract from its registry entry, and README.md's description of the block names its new place. The contract exists in exactly one place before and after this commit. Re-deriving a pinned contract reads the block wherever the pin's recorded commit holds it (top-level `project:` if that commit has one, else the registry entry), so a pin recorded before this task still verifies after this task merges, without a repin.",
-    "This task rewrites T-043's section 6 paragraph that says the contract is read from the branch under test and that gate 4 decides whether a branch may change `config.yaml` at all, so that it states section 15.2's rule instead: gates 3 and 5 read the contract from the task's pin, and a branch may change `config.yaml` only when its pinned scope names it, without that change affecting its own gates.",
-    "For the self project the gates run the same commands with the same budget as today (section 10; FM_CI_MAX_SECONDS=600 for gate 3). The section 6 gate table states the per-project form.",
+    "Implement design section 15: --project selects clone, base and pinned scope/contract. Gates 1 and 2 use project or stacked PR base; gate 4 verifies pins; gate 5 uses pinned complete contract including docs and fail-first. Gate 3 stays retired with usage error. Gate 6 combines required check-runs and commit statuses on verified current SHA, resolving required names from readable protection and confirmed conventions. Missing/pending is pending, failed is failed, unreadable is unknown. Gate 7 consumes authenticated local final verdict evidence (T-138), honoring project review policy; comments alone are not authority.",
+    "Move self T-043 top-level project block unchanged to projects.firstmate-workflow.project and delete top-level block in the same commit. Exactly one self contract source remains; old pins read the location at their recorded commit without repinning. Resolve external contracts from approved private project snapshots, never publish them in the engine registry. Update README accordingly.",
+    "Update section 6 and README: gate 5 reads pinned contract, never tested branch or mutable engine copy. Scope may permit config changes without letting a branch alter its own gates. Preserve old self pins across top-level to registry transition.",
+    "Preserve self-project commands and gate budgets; no gate 3 execution or budget returns. Pin/contract hash failures name their reason. Before current-head acceptance, synchronize and verify the authoritative GitHub PR head against the local task ref and isolated checkout. Bind required check-runs AND commit statuses, gates, reviewed head/base/patch, reviewer identity/final-answer provenance and merge candidate to that verified SHA. If remote moves or cannot be verified, readiness is stale/unknown; refresh before accepting. Regression: GitHub update-branch moves remote while local ref remains stale; green local gates must not pass remote readiness. Approval carries only when authoritative current patch-id is unchanged and no later rejection supersedes it.",
     "Self-hosting keeps working after this task alone: with no --project, and with the firstmate-workflow project named explicitly, every existing caller, fixture and test behaves as before.",
-    "Evidence is this pull request's required GitHub check and the seven gates. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
-    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason."
+    "Evidence is this pull request's required GitHub check and the six gates 1,2,4,5,6,7. New behaviour gets tests written to fail first; the worker does not run the suite itself.",
+    "Stay inside this scope. If the work needs a file outside it, stop and name the file and the reason.",
+    "External project data lives only under FM_HOME/projects/<name>/{repo,worktrees,CONVENTIONS.md,tasks,design.md,state}. No private specs, worktrees, prompts, pins, evidence, mirrors or recovery data in engine state or its public tree. Private repos are accepted. Unreadable protection is unknown: require captain-confirmed project checks and policy before readiness, never infer permission or reject solely for visibility. Every GitHub operation names the project repository. Preserve self-project default and explicit-name compatibility. Never push to protected base; task-branch force-with-lease requires confirmed project policy and expected old head. Merge method, deletion, land/review/post and stacking follow CONVENTIONS.md, never hardcoded squash/delete.",
+    "Evidence: required GitHub checks and commit statuses plus six gates 1,2,4,5,6,7 on the authoritative current PR head; gate 3 is retired. Workers author feature-owned fail-first tests but run no suites. Tests stay at most 1200 lines; shared fixtures in tests/lib/ or tests/e2e/lib/, with literal helper references. Firstmate verifies CI/gates and real acceptance; a structure check cannot prove model compliance. Commit this task spec with implementation."
   ]
 }

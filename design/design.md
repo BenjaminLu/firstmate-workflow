@@ -73,7 +73,7 @@ These bind every actor, including firstmate itself.
 | Q7 | Round three | `ASK-PASS-CRITERIA` plus a numbered, closed checklist |
 | Q8 | Diagram scope | Only decisions the captain must rule on; reuse existing diagrams first |
 | Q9 | Where pull requests live | `BenjaminLu/firstmate-workflow`, public so branch protection is available; under Q10 a task's pull request lives on its project's repository |
-| Q10 | Which repositories firstmate drives | D-049, option B: one external installation — this repository holds the engine, every project's design and task list, and all runtime state, and drives registered target repositories that carry none of it (section 15) |
+| Q10 | Which repositories firstmate drives | D-049 chose one engine installation; captain revision 2026-10-01 keeps external private designs, tasks and runtime state under FM_HOME outside the engine, with self compatibility (section 15) |
 | R1 | Self-update | Skills define behaviour; writing them back travels a full pull request; external skills import read-only |
 | R2 | What the reviewer sees | The diff, the task spec and the acceptance criteria, plus, given the pull request, the head's SHA, required check and gate summary (section 7) — never the worker's reasoning |
 | R3 | Granularity | One task, one pull request, one worktree; `depends_on` forms a DAG; three in flight |
@@ -549,7 +549,11 @@ never checked on (T-123) - and an **Executed** / **Read, not run** account. The 
 and only an adapter carrying a `# fm:review-run` line may take it -
 `fm_review_run_chain` drops the others from the chain, refuses a head that
 lacks it with `65`, and `fm_adapter_context` refuses one before its CLI
-starts. `claude` carries it. `--restricted`, `--strict-mcp-config` and
+starts. `claude` and T-163 `codex` carry it. Codex additionally requires the
+outer OS sandbox and trusted managed context bound to the isolated checkout;
+final output has transport identity/digest verification, and live/uncertain
+execution owners retain their checkout. A marker alone cannot admit it.
+For Claude, `--restricted`, `--strict-mcp-config` and
 `--disable-slash-commands` load no user, project or local settings, MCP
 servers or skills - the clone is the branch under review, and its `.claude/`
 would otherwise add hooks and rules to the round - so only the adapter's
@@ -590,10 +594,10 @@ carry exactly one unquoted `APPROVE:<task>` or `REJECT:<task>` in the final
 assistant answer. Only that answer is the verdict; prompt echoes, intermediate
 text, quoted examples and full CLI transcripts are not authoritative. Retain
 reviewer identity and the reviewed head with the evidence. Built-in managed
-adapters extract and retain the final answer. Custom adapters and the current
-review launcher still scan combined output and do not establish final-answer
-provenance; firstmate must identify and coordinate that gap rather than accept
-a marker as proof.
+adapters extract and retain the final answer. T-163 managed Codex run mode binds completed final output to transport identity
+and digest in its isolated checkout. Legacy/custom paths without that evidence
+remain a provenance gap; firstmate must not accept a marker alone. This local
+binding does not establish authoritative remote-head freshness (§15.5).
 The board therefore treats a legacy `review_failed` as missing-review/error,
 not rejection. A directed rejection exists only when the event also carries
 the additive `data.review_outcome: "rejected"` contract. T-035 owns emitting
@@ -620,8 +624,10 @@ there is no phrase a model cannot write — this repository contains
 wording does not decide. The adapter is deliberately generous, and the caller
 settles it: `fm_run_chain` takes a predicate answering *did this run produce
 work?*, and work beats a signature. A worker asks whether the worktree
-changed; the current reviewer predicate asks whether combined output carries a
-verdict marker, a known gap from the final-answer contract above. Being
+changed; legacy reviewer predicates may scan combined output, which is not proof of a
+final verdict. T-163 managed Codex requires authenticated final-output evidence;
+T-167 classifies actual CLI/provider errors for the current attempt rather than
+quoted error strings in model/tool text. Being
 over-eager then costs one more vendor attempt and never the work — and a
 proven final signed review is never thrown away, which would otherwise repeat the same
 round forever with a reassuring message on it.
@@ -1192,8 +1198,9 @@ combined with the current `main`.
 Gate 5 names no toolchain. The target repository declares its own in
 `config.yaml`'s `project:` block (`setup`, `check`, `check_env`, `tests`,
 `test`, `docs`; see the README), and the gates run exactly that, read from the
-branch under test; gate 4 decides whether a branch may change `config.yaml` at
-all. Gate 5 asks for no new test only when every changed non-test path matches
+branch under test in the shipped self path. T-049/T-050 replace that source
+with the approved pin (§15.2); then a scoped config change cannot alter its own
+gates. This consolidation does not claim that transition is implemented. Gate 5 asks for no new test only when every changed non-test path matches
 the declared `docs` globs; with none declared, nothing is exempt.
 An undeclared `check` where gate 5 must fall back to it, or a failed `setup`,
 fails the gate by name; a stage the
@@ -2843,7 +2850,8 @@ reviewers. The draw is written once to `state/crew/rosters.json`
 (`{"workers": [...], "reviewers": [...], "drawn_at": ...}`); `state/` is
 gitignored, so each installation has its own crew. The installation is the
 first time firstmate runs in a checkout until the plugin installer
-(T-075..T-083) calls the same step: `fm-session.sh start` draws when the file
+(T-075/T-076 retired; T-077..T-083 deferred, see the adoption ledger)
+would call the same step: `fm-session.sh start` draws when the file
 is missing, and so does every allocation, so no run lacks a crew.
 `bin/fm.sh roster` prints both rosters, `roster init` draws them if missing
 and refuses to redraw an existing crew, and `--redraw` draws again only when
@@ -4427,656 +4435,247 @@ conflicts for the worker, under the usual no-lost-work checks.
 
 ---
 
-## 15. Driving other repositories (the external model)
+## 15. Driving other repositories (approved plan; runtime not yet accepted)
 
-Captain decision D-049 chose option B: **one external installation.** This
-repository holds the engine (`bin/`, `skills/`, `board/`), the design and task
-list of every project, and all runtime state under `state/`. It drives target
-repositories, which receive only the branches and pull requests of their own
-tasks and carry nothing of firstmate's.
+The captain approved this consolidation on 2026-10-01. T-166 changes only
+specifications and role rules, after T-130/T-161/T-162/T-163/T-164/T-165/T-167;
+existing PR 130/131/132 repairs precede external implementation. It neither
+implements external execution nor waives acceptance. T-163 enables independent
+Codex reviews; T-167 preserves truthful availability and completion ownership.
+See [the adoption ledger](external-roadmap.md) for replacements and deferrals.
+Sections 5–13 describe shipped self behavior; this section defines the intended
+external contracts. Until each task passes, report unsupported paths honestly.
 
-This section is the plan; the M3 tasks in `design/tasks/` implement it. Until each
-one merges, sections 5 to 12 describe the running system. Every M3 task keeps
-self-hosting working on its own: this repository is registered as a project,
-it is the default, and a script called without `--project` behaves exactly as
-it does today.
+### 15.1 Roots and project resolution
 
-### 15.1 Two roots, and how a script learns which is which
+The immutable code tree (`FM_CODE_ROOT`) supplies trusted scripts and roles.
+The engine root (`--repo` / `FM_ROOT`) supplies engine configuration and self
+state. External project data belongs under `FM_HOME` (environment or config
+`home:`, default `~/.firstmate`), outside the engine working tree:
 
-There are three trees, of which two are roots:
-
-| Tree | What it is | How a script finds it |
-|---|---|---|
-| code tree | the frozen snapshot of `bin/` and `skills/` a launch runs from (section 11) | `FM_CODE_ROOT`, unchanged |
-| **engine root** | this repository's checkout: `config.yaml`, every project's design and task list, `state/` | `--repo` / `FM_ROOT`, unchanged in meaning |
-| **project root** | the git repository a task's diff lands in | only from the registry, via `--project` / `FM_PROJECT` |
-
-`--repo` and `FM_ROOT` keep meaning *where the configuration, the task lists
-and the state are*. Every caller, fixture and hook that passes them today is
-already passing the engine root, so none of them changes meaning.
-
-The project is always named, never inferred. One library function in
-`bin/fm-config.sh` resolves it: `--project <name>` wins, then `FM_PROJECT`,
-then `default_project` from `config.yaml`. No script reads the project from the
-current directory, a git remote or the worktree it happens to be in — a run
-must not change project because a shell was somewhere else. A name the registry
-does not hold exits `65`, like an unknown task. Scripts export `FM_PROJECT` and
-the resolved `FM_PROJECT_ROOT` to their children so nested launches cannot
-disagree; adapters still receive only their worktree.
-
-A project's root is either the engine root itself (`repo: .`, which is how
-this repository hosts itself) or an **engine-managed clone** at
-`state/projects/<name>/repo`, cloned from the project's GitHub repository.
-Managed clones, rather than a path to the captain's own checkout, because:
-
-- the engine repository is public (section 13), so no local absolute path may
-  be committed into its registry;
-- the captain's own checkout of a target is never touched — no worktree
-  metadata, hooks or branches appear in it;
-- firstmate owns the clone's fetch and prune life cycle, as it owns
-  `state/worktrees/` today.
-
-### 15.2 The registry
-
-`config.yaml` gains `default_project` and a `projects:` map:
-
-```yaml
-default_project: firstmate-workflow
-projects:
-  firstmate-workflow:                     # this repository, hosting itself
-    repo: .
-    github: BenjaminLu/firstmate-workflow
-    base: main
-    required_check: ci
-    design: design/design.md
-    tasks: design/tasks                   # a directory, one file per task (T-090)
-    project:                              # T-043's contract, whole, from T-050 on
-      ...
-  example-app:                            # an external target
-    github: example-org/example-app
-    base: main
-    required_check: check
-    # design and tasks default to projects/example-app/design.md and .../tasks/
-    project:                              # T-043's contract, whole
-      ...
+```
+FM_HOME/projects/<name>/
+  repo/             # managed clone
+  worktrees/        # task worktrees, direct children only
+  CONVENTIONS.md    # approved project contract
+  tasks/            # private specs, one JSON object per task
+  design.md
+  state/            # pins, evidence, runs, reviews, events, decisions,
+                    # prompts, mirrors, recovery, unsent, wake records
 ```
 
-| Field | Meaning | Rule |
-|---|---|---|
-| name (the key) | the project's identity everywhere: events, decisions, pins, paths | `[a-z0-9-]`, at most 24 characters |
-| `repo` | `.` for the engine itself; absent means the managed clone | any other value is refused (exit `65`) — a committed local path would publish one |
-| `github` | `owner/repo` pull requests are opened on | required |
-| `base` | the branch tasks branch from and target | required; gates 1, 2 and the guard use it instead of a literal `main` |
-| `required_check` | the status check name branch protection requires | required; gate 6 and target verification read it |
-| `design`, `tasks` | paths **relative to the engine root**; `tasks` is a directory, one file per task (T-090) | default `projects/<name>/design.md` and `projects/<name>/tasks`; a `tasks` value in the old shape, `<path>.json`, names the directory `<path>` beside it |
-| `project` | T-043's `project:` block, every field of it | T-043's merged text and the README define the fields and their meaning; this section only moves the block under a project and never re-lists it, so a field T-043 has or later gains — `docs` included — moves with it |
+Resolve explicit `--project`, then `FM_PROJECT`, then configured default through
+one shared resolver. Never infer project from cwd or remote. Validate project
+names (`[a-z0-9-]`, at most 24 characters), duplicate names, unknown fields,
+origin identity, canonical paths, traversal and symlink escapes before writes.
+Reject FM_HOME inside the engine (exit 65); prevent cleanup crossing roots.
+Migration from engine `state/projects/` requires operator approval and verified
+recovery; never silently move it. Optional local history excludes repo/worktrees
+and never pushes private project records to a remote.
 
-**Where gate 5 reads the contract.** From the task's spec pin (15.5),
-which records the contract verbatim next to the spec. Nothing else: not the
-branch under test, which in a target has no `config.yaml`, and not the engine's
-working copy, which can change during a run. The pin takes the contract from
-the engine's `main` head at pin time — also for a self-hosted task whose spec
-is pinned from its own branch — because the contract a task is judged by must
-be one the captain has already merged. This replaces T-043's rule that the
-contract is read from the branch under test. T-043's gate-4 rule survives in
-its narrower form: a branch may change `config.yaml` only if its pinned scope
-names it, and such a change never alters its own gates; it applies to tasks
-pinned after T-049 merges.
+Self (`repo: .`) keeps its paths and no-flag compatibility. External managed
+clones do not alter the captain's original checkout. The fresh local pilot's
+no-remote bootstrap is explicit, not a pretend clone of a nonexistent remote.
 
-**One source of truth during the transition.** The contract is written in
-exactly one place at every commit. Until T-050, that is T-043's top-level
-`project:` block: the self entry carries no copy, `bin/fm-config.sh` resolves
-the default project's contract to the top-level block, and gate 5 keeps
-T-043's behaviour. T-049's pins record that resolved contract. T-050 moves the
-block, unchanged, to `projects.firstmate-workflow.project` and deletes the
-top-level one in the same commit, and switches gate 5 to the pin. A
-`config.yaml` holding both the top-level block and the self entry's is refused
-(exit `65`), so the two can never disagree. Re-deriving a pinned contract
-(15.5 step 3) reads the block wherever the recorded commit's `config.yaml`
-holds it: the top-level `project:` block if that commit has one, otherwise
-the project's registry entry. A pin recorded before T-050 therefore still
-verifies after T-050 merges, with no repin, and a task in flight across that
-merge keeps the contract it was pinned with.
+### 15.2 Registry and conventions
 
-`bin/ci.sh`'s DAG check (section 14) runs once for every registered task
-directory and names the project on failure; a registered directory that does
-not exist is red, not skipped. A tree with no `projects:` map (the test
-fixtures) keeps the one `design/tasks` directory.
+The engine registry carries only approved routing metadata, not private project
+contracts, designs or specs. Resolve external base, checks and gate contract
+from approved private project records. Self retains T-043's full contract:
+`setup`, `check`, `check_env`, `tests`, `test`, `docs`, and future fields. T-050
+moves the self top-level block unchanged to its registry entry in one commit;
+old pins re-derive from the location at their recorded commit. Never maintain
+two conflicting contract copies or let a branch change its own pinned gates.
 
-**The interface (T-046).** `bin/fm-config.sh` holds the resolver every later
-task calls; each function takes the engine's `config.yaml` as its last,
-optional argument, and the directory holding it is the engine root:
+T-139 inspects merge methods, delete-on-merge, readable protection/checks,
+CODEOWNERS, PR template, CONTRIBUTING, commit style and last 30 PRs (reviewers,
+bots, cadence, stacking, languages, volume and merge actors). Infer with cited
+evidence and ask at most three genuinely missing contract questions. No history
+is available in an empty repository: do not invent it. CONVENTIONS.md has three
+front-matter keys: `land: card|handoff`, `review: fm|external|both`,
+`post: local|summary|check|threads|comments`. Prose carries named reviewers,
+required checks/statuses and confirmation, merge/deletion/retention policy,
+stacking, task-branch leases, watch cadence/debounce and dated captain intent.
+Chat changes report changed lines; scheduled inspection proposes drift updates.
 
-| Function | Answers |
-|---|---|
-| `fm_project_resolve [explicit]` | the project: `explicit` (a script's `--project`), else `FM_PROJECT`, else `default_project` |
-| `fm_project_get <name> <field>` | `repo`, `github`, `base`, `required_check`, `design`, `tasks` (with the defaults above), or `root` |
-| `fm_project_contract <name> <field>` | the fields `fm_project` answers, for that project; the self entry reads the top-level block |
-| `fm_project_use [explicit]` | resolves and exports `FM_PROJECT` and `FM_PROJECT_ROOT` |
-| `fm_projects` | every registered name, in file order |
+### 15.3 Private project state and cleanup
 
-Every call validates the whole registry first, each entry's nested `project:`
-block included, so one malformed entry refuses every lookup (exit `65`, naming the project and field) rather than only the
-lookups that touch it. Besides the rules in the table, it refuses an unknown
-field in an entry, a name registered twice, a second entry with `repo: .`, and
-a `design` or `tasks` path that is absolute or climbs out with `..` — the same
-reasoning as `repo`: nothing outside the engine root may be named.
+All external records in the tree above remain private, including events,
+decisions, diagrams, mirrors, context packs and unsent recovery. Engine state
+must not receive their specs, worktrees or evidence. The global board may
+aggregate authorized metadata without copying private content into engine
+state/public diagrams. Posting is an explicit projection controlled by project
+policy, not a prerequisite to retaining or gating local evidence.
 
-### 15.3 Where each project's things live
+Cleanup, reconcile, worker, reviewer and gates take the same project context.
+Cleanup removes only a validated direct child of that project's worktree root,
+retains live-owned review checkouts and respects recovery/retention policy.
+Identity is the exact `(project, task)` pair; matching task IDs do not share pins,
+judgments, decisions, clearance, reviews, worktrees or cleanup authority.
 
-| What | Self project | Any other project |
-|---|---|---|
-| design | `design/design.md` | `projects/<name>/design.md` (engine root, committed) |
-| task list | `design/tasks/` | `projects/<name>/tasks/` (engine root, committed) |
-| checkout | the engine root | `state/projects/<name>/repo` |
-| worktrees | `state/worktrees/<task>` | `state/projects/<name>/worktrees/<task>` |
-| spec pins | `state/pins/<name>/<task>/` | `state/pins/<name>/<task>/` |
-| events | `state/events.jsonl` | the same log, carrying `project` |
-| decisions | `state/decisions/D-*.json` | the same directory, carrying `project` |
-| runs, reviews, unsent, rescued | `state/runs/<actor>/` and siblings | the same, with `project` in `identity.json` |
+### 15.4 Events, decisions and the board
 
-The self project keeps its current paths so no merged test, cleanup rule or
-recovery path moves. Each worktree root keeps section 5.2a's rule — cleanup
-removes only a direct child of **that project's** root.
+Keep explicit identity fields (name, role, project, task, round, attempt), never
+parse actor strings. Decision IDs come from `fm-decide.sh --allocate` as
+`D-<project>-<task>-<n>` under that task's reservation lock. Preserve legacy IDs
+without renumbering. Project content remains in project state; board aggregation
+and authorized projections retain project identity. Dynamic summaries carry both
+`en` and `zh-TW`; progress uses authored script nodes and real denominators.
 
-Task ids are unique within a project, not across projects: the key is
-`(project, task)`. One event log, not one per project, because it keeps one
-writer lock, one replay and one board; a per-project log would multiply every
-recovery path in section 12.
+The board shows all projects by default and filters by `?project=`. Cards and
+crew retain project chips; pending cards sort by request time. Answering one
+card never answers, loses or reorders another project's card. No bulk approval.
+Project greenlights and readiness judgments authorize only their exact tasks.
 
-### 15.4 How the log, the board and decisions name the project
+### 15.5 Immutable pins and authoritative heads
 
-- **Events** gain a top-level `project` field, written by `fm-emit.sh
-  --project` and validated against the registry (unknown exits `65`). An event
-  without it belongs to the default project, so every line already in the log
-  stays valid. Every event about a non-default project carries it. `pr` stays
-  a number; `(project, pr)` is the key.
-- **Decisions** carry `project` in the request and the response. Captain
-  decision D-1015 (option A) chose the id scheme: **every new decision id
-  names its owner**, `D-<project>-<task>-<n>`, for example
-  `D-firstmate-workflow-T047-1`. `<project>` is the resolved project's
-  registry name (`--project`, then `FM_PROJECT`, then the default); `<task>`
-  is the task id without its hyphen (`T047`); `<n>` starts at 1 and counts
-  only within that project's task. `fm-decide.sh --allocate` takes the next
-  free `n` — past every `n` that task already has, reserved, pending,
-  answered or archived — under that task's own lock and reserves it under
-  `state/decision-ids/<project>/<task>/<n>.json`, so the details and any
-  authored drawing can be written under the id before `--request` publishes
-  it; `--request` refuses an owned id nobody allocated. There is no global
-  counter and no lock across tasks or projects. Merge cards and hand-raised
-  cards use the same form: `fm-run.sh` allocates its merge card's id this way
-  and never derives `D-<task digits>` again. A project name is `[a-z0-9-]`
-  and the task part is a task's key (section 5.2's grammar: `T047`, a skill
-  update's `SK001`, a fixture's `TA`), starting with an upper-case `T` or
-  `S`, so the id splits one way only; the board shows the project and task
-  read out of it. The one card with no task, `merge-untracked`, takes a
-  hand-raised `D-<digits>` instead (T-119). Ids made before
-  this — `D-<digits>` and `D-SK-<n>` — stay valid wherever an id is read and
-  are never renamed or moved: no id a new card takes can equal one, so
-  nothing old has to leave. Every parser of ids and every store keyed by one
-  (`state/pending/`, `state/decisions/`, `state/decision-details/`,
-  `board/public/diagrams/`, `design/diagrams/`, the watcher's receipts)
-  accepts both forms. `D-SK-<n>` is one pattern everywhere, `fm-decide.sh`'s
-  `^D-SK-[0-9]{3,}$`: the board lists such a card as answerable and records
-  its answer like any other choice card's (T-112), and an answer the board
-  refuses is shown on its card with the server's error, never dropped. The
-  refusal is an alert only on the render that first shows it, so it is
-  announced once, and it leaves with its card, as the card's pick and draft
-  do. These are every place that validates or parses a decision id
-  (`bin/`, `board/`, `tests/`), and the pattern each one uses; `<low>`,
-  `<up>` and `<dig>` are the spelled-out character sets the bash copies use
-  in place of locale-dependent ranges. A new copy is added to this list.
+T-049 pins append-only snapshots of approved spec, design, conventions and full
+gate contract with SHA-256, project/task, approval author/time/decision, source
+version, engine code commit and base commit. External local approvals need no
+public engine commit. Self committed sources are re-derived; uncommitted self
+sources have explicit provenance and hash. One resolver verifies all hashes and
+supplies the latest authorized pin; a mutable branch cannot widen its own scope.
+Gate 4 refuses missing pins, mismatches, out-of-scope files and `.fm-*` artifacts.
+Repin requires an exact project/task captain decision for changed snapshots,
+appends a version and emits `spec_repinned`; never rewrite old pins.
 
-  | place | pattern | `D-SK-<n>` |
-  |---|---|---|
-  | `bin/fm-decide.sh` `SKILL_ID` | `^D-SK-[<dig>]{3,}$` | the reference |
-  | `bin/fm-decide.sh` `OLD_ID` | `^D-[<dig>]{1,6}$` | no; `--await` takes `OLD_ID` or `SKILL_ID` or owned |
-  | `bin/fm-emit.sh` `FM_OWNED_ID` (the task grammar, sourced) | `^D-([<low><dig>-]{1,24})-(T[<up><low><dig>]{1,32}\|SK[<dig>]{3,})-([123456789][<dig>]{0,5})$`, the key part `FM_TASK_KEY`, read back by `fm_task_of_key` | no; `SK[<dig>]{3,}` is an SK task's owned card (T-119), not this id |
-  | `bin/fm-decide.sh` `OWNED_ID` | `FM_OWNED_ID` | as above |
-  | `bin/fm-decide.sh` legacy `--request` | `^D-(SK-[0-9]{3,})$`, capturing the `SK-<n>` task | yes, the only request path for it; `--details` takes `OLD_ID` or owned only |
-  | `bin/fm-ready.sh` `SKILL_CARD` | `^D-SK-[<dig>]{3,}$` | yes; reads an adoption card's answer |
-  | `bin/fm-ready.sh` `CARD_ID` | `^D-(<owned>\|[<dig>]{1,6})$` | no; `judged --decision` takes only this, as a skill update gets no readiness card |
-  | `bin/fm-diagram.sh` `is_decision_id` | `D-` then 1-6 digits by `case` globs, or `FM_OWNED_ID` | no, on purpose: no drawing is generated for a skill id. An SK task's owned card `D-<project>-SK<n>-<m>` is drawn like a T task's, and its task's authored drawing is `design/diagrams/SK-<n>.*` (T-119) |
-  | `bin/fm.sh` self-update | builds `D-$id` from `^SK-[0-9]{3,}$` | the producer, same shape |
-  | `bin/fm-run.sh`, `bin/fm-decide.sh --allocate` | build `D-<project>-<key>-<n>` | not a validator |
-  | `board/server.ts` `isDecisionId` | `OLD_DECISION`, `OWNED_DECISION` (`taskGrammar()`'s `OWNED`, the twin of `FM_OWNED_ID`), `SKILL_DECISION` = `^D-SK-[0-9]{3,}$` | yes: responses listing, a pending card's `answerable`, `POST /decisions` |
-  | `board/server.ts` `ownerOf` | `taskGrammar()`'s `ownerOf`: `OWNED`, its task read back from the key by `taskOfKey` | no owner, by design |
-  | `board/public/diagram.js` `isDecision` | `^D-[0-9]{1,6}$`, `TASK_GRAMMAR.OWNED`, `^D-SK-[0-9]{3,}$`. `TASK_GRAMMAR` is `taskGrammar()`, which the server puts in front of the file when it serves `/diagram.js`; loaded without it, the file takes no owned id | yes. An SK task's owned card embeds its diagram like a T task's |
-  | `board/public/diagram.js` `owner` | `TASK_GRAMMAR.ownerOf` | no owner, by design |
-  | `tests/` | none; fixtures only | n/a |
+Before accepting evidence, synchronize and verify GitHub's authoritative PR head
+against the local task ref and isolated checkout. CI/check statuses, gates,
+reviewed head/base/patch, final-answer provenance, reviewer identity and merge
+candidate are bound to that verified SHA. If GitHub update-branch advances the
+remote while local refs remain stale, green local gates prove no readiness.
+Refresh/refuse on mismatch, remote movement or unreadability. T-051/T-052/T-138
+own regressions for that boundary; check again before presenting/using a card.
 
-  Merge cards name the project and link the pull request
-  on the project's GitHub repository. A tree with no `projects:` map (every
-  tree before the registry, and the test fixtures) is the engine hosting
-  itself. Its ids are owned by `firstmate-workflow`. Its cards and their
-  events record no project, because there is no registry to validate one
-  against, and naming any other project there exits `65`. The board passes a
-  card's recorded project to `fm-merge.sh`, never the owner read from its id.
-- **`fm-sync-prs.sh`** polls every registered project's repository
-  (`gh --repo`) and writes what it finds with that project; one project it
-  cannot read does not stop the others. **`fm-merge.sh --project`** merges on
-  that project's repository and writes its `merged` event with the project.
-  `(project, pr)` is the key: a pull request number in one project never
-  matches another project's event. `fm-run.sh` resolves its project once and
-  advances only that project's `pr_opened` and `merged` events. An event with
-  no project counts as the default project's. So another project's #7 is never
-  gated, carded or merged as this project's #7.
-- **The board** shows a project chip on lane cards, crew bubbles and decision
-  cards, and filters with `?project=`; without it, it shows all projects. Chip
-  labels come from the UI dictionaries; a project's name is data and is not
-  translated. Dynamic summaries still carry `en` and `zh-TW`.
-- **Crew identity**: allocation under one lock makes labels unique across
-  projects, and `identity.json` records the project as a field of its own
-  (T-116); the board shows it on every tag, roster row and card.
+T-138's trusted outside-round writer stores append-only local evidence including
+attempt, verified head/base, stable patch-id, files, spec/contract hashes,
+reviewer identity/vendor/model, final-answer provenance and text. Model-written
+transport receipts and transcript/quoted approval markers are not authority.
+Gate 7 consumes authentic final verdicts and latest rejection precedence. The
+standing list remains numbered, complete and closed; a protocol syntax checker
+cannot authenticate it or prove a regression/new-ground claim semantically.
 
-### 15.5 Gate 4 under the external model
+Approval may carry across a verified base-only update only if the authoritative
+current stable patch-id remains approved and no later rejection supersedes it.
+CI and six gates always run/read for the new head. Changed patch requires review.
+Projection failures preserve local evidence and report what was not published.
 
-Today gate 4 reads the task's scope from its own file, `design/tasks/<id>.json`,
-**on the task's own branch**, falling back to the working copy (T-090). Under option B a target's
-branch has no task list, and the engine's working copy can change during a
-run. Both sources go.
+### 15.6 Gates, protection and landing
 
-1. **Source.** The scope comes from the project's task list in the engine
-   repository, at a **pinned engine commit** — never from the target branch and
-   never from the engine's working copy.
-2. **Pinning.** On a task's first round `fm-worker.sh` writes
-   `state/pins/<project>/<task>/1.json` holding the project, task, engine
-   commit, task-list path, the spec verbatim, its SHA-256, the design path, the
-   target base commit, and the project's T-043 contract verbatim with the
-   engine `main` commit it was read from and its SHA-256 (15.2), and emits
-   `spec_pinned`. The engine commit is the
-   engine's `main` head, which must contain the task. The self project has
-   one exception, because that is how a self-hosted task arrives today, this
-   one included: a task not yet on `main` is pinned from its own branch's
-   commit if the entry is there, and otherwise from the engine's working copy
-   with `engine_commit: null`. Such a task must commit that same entry on its
-   own branch, which self-hosted acceptance already requires.
-3. **Reading.** Every later round, gate run and review reads the highest
-   numbered pin. With an engine commit, it re-derives the spec from
-   `git show <commit>:<tasks path>`; a hash mismatch fails the gate, so an
-   edited pin file is caught. Without one, the branch's own entry must match
-   the pin's hash; that is the only tamper check such a pin has — nothing ties
-   it to a commit, so an edit made to the pin file and the branch entry
-   together passes the gates, and the captain reading that entry in the pull
-   request's diff is the remaining check. The contract is
-   re-derived and hash-checked the same way from its own commit, which always
-   exists, reading the block from wherever that commit holds it (15.2). Later commits to the engine's `main` do not reach a pinned
-   run. Pin files are append-only and never rewritten.
-4. **Changing scope.** The worker still says so and stops. Firstmate raises a
-   `choice` card. If the captain authorizes it, the new spec is committed to
-   the engine repository through an ordinary engine pull request, merged on a
-   merge card. Then `fm-project.sh repin --task <t> --decision D-<n>` writes
-   the next pin citing both, with spec and contract read afresh from that
-   commit. It refuses unless the decision record is a
-   `decision_made` for that project and task with the authorizing option, and
-   the new commit is on the engine's `main` with a spec that differs. It emits
-   `spec_repinned`. The decision records who authorized the change; the commit
-   records what was authorized.
-5. **Failing.** Gate 4 fails with no pin, with a mismatched pin, with a changed
-   file outside the pinned scope, and — for a self-hosted task — when the
-   branch's own task-list entry differs from its pin. The last one is new: a
-   self-hosted pull request can no longer widen its scope by editing its own
-   entry. In a target it also fails on any firstmate artifact (15.6),
-   whatever the scope says.
-6. **What the reviewer and the gates see.** `fm-review.sh` builds its prompt
-   from the pinned spec and the project's design at the pin's commit (15.7).
-   The pull request body on the target carries the task id, title, acceptance,
-   scope and `spec pin: <project>/<task>#<n> <sha256 prefix>`, so a person on
-   the target sees what the reviewer saw. Gate 7 keeps its marker and reads
-   the target pull request's comments.
+Use six gates numbered **1, 2, 4, 5, 6, 7**; gate 3 is retired. Gates 1/2 use
+project or stacked PR base, gate 4 pinned scope, gate 5 pinned contract including
+docs and the fail-first engine, gate 6 current required check-runs **and commit
+statuses**, gate 7 authenticated review under project policy. Required names
+come from readable protection and confirmed conventions. Missing/pending checks
+are pending, failed checks are failed, unreadable evidence is unknown. Bounded
+CI wait does not turn pending into failure or approval.
 
-`spec_pinned` and `spec_repinned` join the event types in section 5.1.
+Private repositories are accepted. Unreadable protection (including 404) means
+unknown, never unprotected, rejected merely for privacy, or implicitly safe.
+Confirm project checks and policy before readiness. Sync validates clone origin
+and path, configures local guards/excludes without copying engine files to the
+target. Every GitHub operation names the repository. Credentials/settings are
+not changed as an incidental task side effect.
 
-### 15.6 Git and GitHub for a target
+No protected-base push or force push. A task-branch force-with-lease requires
+confirmed project policy and expected old head. Merge method and branch deletion
+follow conventions, never hardcoded squash/delete; retain branches used as open
+PR bases. Never auto-merge. Firstmate verifies actual current-head evidence and
+traceable captain approval before board merge (`land: card`) or team handoff.
+A helper exit status alone proves neither authorization nor gates.
 
-Pull requests open on the project's `github` repository against its `base`,
-from the managed clone, with `gh … --repo <owner/repo>`. Merge, sync and
-cleanup name the same repository.
+No engine designs, specs, pins, state, prompts, logs or `.fm-*` artifacts enter
+target commits. Changes to target coding instructions, CI or configuration need
+explicit pinned scope; settings, secrets, labels, webhooks/releases are not
+incidental writes. Bootstrap initial content/remote creation is separately
+approved before ordinary task branch rules, not an exception inferred by fm.
 
-**What a target needs**, checked by `fm-project.sh verify <name>` before any
-dispatch to it; a failure refuses dispatch with exit `70` and names the item:
+### 15.7 Portable roles and stock execution
 
-- `base` protected, `enforce_admins` on, the branch required to be up to date,
-  and `required_check` a required status check;
-- a workflow on the target that runs the declared `check` under the
-  `required_check` name. It arrives through the target's own review — added by
-  its owner, or by a firstmate task whose pinned scope names it — never as a
-  side effect of other work;
-- the fm-guard hooks active in the managed clone: `core.hooksPath` in the
-  clone's local git config points at the engine's `.githooks/`, and the guard
-  protects `main`, `master` and the project's `base`. The hooks are never
-  copied into the target's tree;
-- the captain's credentials able to push branches and open pull requests.
+Trusted launcher prompts carry role, immutable spec, whole conventions, bounded
+design/context with visible cap/trimming, full gate contract, project/task/base
+and isolated checkout SHA. The reviewer receives diff and machine evidence,
+never worker reasoning. First-round spec is the brief; later packs include
+assertions/logs/source, authentic standing-list findings, acceptance mapping and
+merge/conflict facts. T-135 warns visibly for missing coverage without inventing
+facts; cancelled and pending CI are distinct.
 
-`fm-project.sh sync <name>` makes the clone that way (T-048): it clones
-`<owner>/<repo>` from `FM_GITHUB_URL` (GitHub unless a fixture stands in),
-or fetches and prunes the clone already there; sets `core.hooksPath` to the
-engine root's `.githooks/` and `firstmate.base` to the project's `base` in
-the clone's local config; and adds `.fm-*` to its `.git/info/exclude`. It
-runs git only in a directory that is its own repository, reached without a
-symlink, under `state/projects/<name>/`, whose `origin` is the project's
-repository; anything else is refused with exit `70`. The guard and both
-hooks read `firstmate.base` and protect it on top of `FM_PROTECTED`
-(`main master`), so a checkout without the key — the self project's among
-them — keeps exactly that set, and a task worktree of the clone shares it.
-`verify` checks the protection, public-only (15.8) and guard items above,
-through `gh api` for the base's protection and the repository. It also
-checks the clone's `origin`, since a guarded clone of another repository
-guards nothing of the target's, and takes the hooks directory from git
-itself, which expands `~` and reads a relative path from the clone. It
-names every missing one before it exits `70`. The workflow and the
-credentials are not machine-checked yet. For the self project both
-subcommands are no-ops that succeed.
+Workers never commit/push/checkpoint or run suites. Frozen outside-round launcher
+publishes. T-163 Codex run mode requires genuine isolated checkout, trusted
+context, OS confinement and final-assistant-output provenance; no marker-only
+admission, silent diff/vendor fallback or unsafe flags. T-167 binds availability
+to current CLI/provider outcomes, not quoted errors in model/tool text.
 
-**What firstmate never writes into a target:**
+Core T-051 stock dispatch must leave a genuinely live owned run and visible
+Herdr view after the invoking dispatcher exits, with truthful completion and
+cleanup/retention evidence. A manual relaunch after dead dispatch does not pass.
+Use lifelines with explicit owner and pushed wakes, no setsid/beacon/PID polling.
+Retain cmuxOnly; full detached cmux lifecycle remains deferred under T-162.
+This core integration does not wait for advanced T-141 autopilot.
 
-- a commit to `base` or any protected branch, or a force-push to anything but
-  the task's own branch;
-- any of its own artifacts: designs, task lists, pins, state, events,
-  decisions, skills, `config.yaml`, prompts, logs, `.fm-say.md`,
-  `.fm-prompt.md`. The clone's `.git/info/exclude` keeps `.fm-*` local, and
-  gate 4 fails on any `.fm-*` path;
-- repository settings, branch protection, secrets, labels, webhooks, releases
-  or tags;
-- committed git configuration or hooks, or changes to the target's own
-  `AGENTS.md`, `CLAUDE.md` or CI workflows, unless the pinned scope names them;
-- anything outside the pinned scope.
+Firstmate runs from engine root, names project on supported operations, and
+uses routine fair no-project dispatch only once T-053 implements it; explicit
+project dispatch is for captain-requested project work. Native hook loading,
+enablement/policy, exact trust, reload and verified delivery are distinct T-164
+facts. Never fabricate trust, infer delivery from queue/ack, or claim a held
+watcher starts an idle Codex conversation. Complete authorized actionable work
+before ending for a real dependency/event/operator action.
 
-The self project follows the same rules, except that its design and task list
-legitimately live in its own tree.
+### 15.8 Pilot and advanced integration
 
-### 15.7 Roles when the checkout is not this repository
+T-055 requires the actual `/Users/benjamin/Desktop/maker-founder` pilot. Its
+planning observation is empty git, HEAD master, no commits or remote; re-inspect.
+Authorization is for a fresh repository, not a product brief or remote visibility.
+Resolve at most three missing contract choices, approve bootstrap, create/approve
+a scoped task, pin privately, dispatch real visible owned Codex worker, review
+in isolation and capture outputs plus current-head checks/statuses and all gates.
+Verify captain landing/handoff, cleanup/retention and no project data leakage.
+Mock fixtures support regressions but cannot replace live proof. Publish only
+an approved redacted summary; retain raw evidence privately.
 
-Routing does not depend on the checkout. Section 11 already delivers the role
-skill and canonical identity through each adapter's launcher prompt, so a
-target without firstmate's `AGENTS.md` routes the same. A target's own
-`AGENTS.md` or `CLAUDE.md` are that project's coding instructions; the
-explicitly dispatched role still wins, as it does here.
+T-140 external reviewers, T-143 stacking and T-141 autopilot remain planned
+advanced work, not basic-pilot dependencies or completed capabilities. Named
+external reviewers must all approve the current change with unresolved requests
+cleared; fixed-but-unreturned is not approval. Reply per post convention with
+fixing commit/thread language. Stacked work uses per-PR base, retargets after
+base merge, verifies new authoritative head/patch and retains shared base branches.
 
-The prompt carries from the engine side what the checkout cannot:
+Autopilot is zero-model scripted supervision: local event writers push FIFO
+notifications, GitHub alone uses conditional ETag polling. Lifeline owner is
+fm session, or an explicitly installed launchd/systemd service. No model timer,
+beacon or PID polling. Mechanical updates obey conventions; judgment queues
+wake firstmate through supported delivery. It never merges automatically.
 
-- the role skill and the pinned spec, as today;
-- the project's design context: the design file at the pin's commit, bounded
-  in size, with any truncation stated in the prompt rather than silent;
-- the project's gate facts: `base` and the pinned T-043 contract that gate 5
-  will apply;
-- the absolute path of the checkpoint helper in the frozen code tree, because
-  a target has no `bin/fm-checkpoint.sh`.
+### 15.9 Dependency order and shared-file coordination
 
-The worker and reviewer skills stop pointing at repository-relative files
-(`design/design.md`, `design/tasks/`, `bin/fm-checkpoint.sh`) and refer to
-"the design, scope and checkpoint command in your prompt". The self project
-gets the same prompt shape. The reviewer still sees the diff, the spec and the
-design, and given the pull request the head's CI and gate evidence (section
-7) — never the worker's reasoning (R2). Firstmate itself always runs in
-the engine root and names the project on every script it calls.
+Task JSON files are authoritative. T-142 depends on T-166 (the approved plan's
+original empty dependency is intentionally revised to require consolidation).
+Storage T-142 precedes conventions T-139; T-049 needs both. T-138 follows storage;
+T-135 is independent. Evidence and brief work may proceed in parallel with
+explicit shared-file ownership/immutable run snapshots, never live script edits.
+T-050 needs pins/evidence/conventions; T-051 needs pins/storage/T-163/T-167;
+T-052 needs execution/conventions/briefs; T-053 needs gates/execution/prompts.
+T-055 needs T-052/T-053/T-054/T-137/T-144, without advanced-stack prerequisites.
+T-140 needs evidence/conventions; T-143 execution/conventions; T-141 needs
+T-138/T-140/T-143/T-144/T-151. See the adoption ledger for deferred work.
 
-### 15.8 Open captain decision: private projects
+### 15.10 Concurrent projects
 
-Section 13 keeps the engine public so branch protection is available, and
-D-049 puts every project's design and task list in the engine. A private
-target's design would therefore be published. This design does not guess:
-until the captain decides, **only projects whose GitHub repository is public
-may be registered**, and `fm-project.sh verify` refuses a private one.
+A single global capacity counts actual live owned rounds, not open PRs or
+historical dispatch events. A short dispatch lock recounts/reserves slots;
+identity locks allocate actors; slow verification happens before locking.
+Recover reservations through owner completion. Same task ID in two projects
+counts twice. No-project dispatch fairly assigns each free slot to eligible
+ready/cleared, greenlit, verified project with fewest live runs, ties by name;
+explicit project dispatch shares the same limit. Do not preempt live work.
 
-The card to raise when a private project is wanted:
-
-- **A** — the engine stays public; a private project's design and task list
-  live in a separate private repository that the registry names;
-- **B** — the engine repository becomes private, which needs a plan that
-  offers branch protection on private repositories;
-- **C** — keep today's interim: public targets only.
-
-### 15.9 Order of work
-
-The M3 tasks in `design/tasks/` carry the exact scopes and acceptance. The order
-follows one rule: each merges on its own, and after each one this repository,
-as its own default project, still drives itself with no change to any caller.
-
-1. T-046 the registry and root resolution — nothing reads them yet.
-2. T-047 `project` on events and decisions — absent means default.
-3. T-048 `fm-project.sh` clone, verify and guard — nothing dispatches yet.
-4. T-049 pins and the new gate 4 — the self project is pinned too.
-5. T-050 the other gates read the project and the pinned contract; the
-   contract block moves under the self entry — its values are today's.
-6. T-051 the worker and the reviewer in a target checkout.
-7. T-052 prompts carry the engine-side design.
-8. T-053 dispatch, run and session across projects.
-9. T-054 the board shows which project.
-10. T-055 a fixture target driven end to end, and the README for registering one.
-
-T-047, T-052, T-053, T-054 and T-055 each carry their part of section 15.10
-in their acceptance and depend on T-056, which wrote that section and changed
-no code.
-
-### 15.10 Several projects at the same time
-
-The captain runs work in several projects at once from one board. This is a
-requirement, not a consequence of the rest of section 15, and T-053, T-054 and
-T-055 each prove their part of it with a test that has two registered projects
-live at the same time.
-
-**1. Runs in different projects are live together, up to the one global
-limit.** `config.yaml`'s `concurrency` stays one number for the whole
-installation, counted over every project: a run in `example-app` and a run in
-`firstmate-workflow` each take one slot of the same limit. Nothing
-project-scoped is shared or locked across projects:
-
-| Thing | Scoped to | Why it cannot collide |
-|---|---|---|
-| spec pins | `state/pins/<project>/<task>/` | the path carries the project |
-| worktrees | each project's own worktree root (15.3) | cleanup removes only a direct child of that project's root |
-| checkout | the engine root, or `state/projects/<name>/repo` | one clone per project; its fetch and prune never touch another |
-| guard | `core.hooksPath` in each checkout's local config, protecting that project's `base` | a hook runs in the repository it guards and nowhere else |
-| panes and runs | one tab and one owned pane per run actor (section 11) | allocation under one lock makes actors unique across projects; a retry takes an attempt mark |
-| decisions | one card per request, carrying `project` | every id names its project and task, `D-<project>-<task>-<n>`, with `n` allocated under that task's own lock (below) |
-| merges | the project's own `github` repository | see point 3 |
-
-The decisions row was checked because the old scheme did collide.
-`fm-run.sh` derived `D-<task digits>` with no lock, and cards firstmate raised
-by hand took numbers from the same `D-<n>` range, so by 2026-09-24 the
-derived ids of every task from T-046 to T-057 were held by records raised for
-other tasks (T-043's hand-raised `D-056` among them), and `fm-run.sh`, finding
-the file, took it for the task's own card and silently raised none.
-
-Captain decision D-1015 (option A) settled it with one rule instead of two
-spaces and a migration: **every new id names its owner**,
-`D-<project>-<task>-<n>` (section 15.4).
-
-- **nothing is shared.** `(project, task)` is unique, and `n` counts only
-  within it, so two projects' `T-004` get `D-a-T004-1` and `D-b-T004-1`, and
-  two tasks never share an id. `fm-decide.sh --allocate` takes the next free
-  `n` under that task's own lock (`state/decision-ids/<project>/<task>.lock`)
-  and reserves it; there is no global counter and no cross-project or
-  cross-task lock. Merge cards (`fm-run.sh`) and hand-raised cards take their
-  ids the same way.
-- **nothing old moves.** A project name is `[a-z0-9-]` and the task part
-  starts with an upper-case `T`, or `SK` for a skill update's merge card
-  (T-119), so an owned id can never equal a
-  `D-<digits>` or `D-SK-<n>` id. Old records therefore keep their ids and
-  every store keyed by them; nothing is renumbered, no map is kept, and no
-  reader has to resolve one id through another. `fm-run.sh` looks only at ids
-  naming the task's own project and task, so an old record at the id the task
-  used to derive — T-043's `D-056` beside T-056 — is never read, moved or
-  overwritten, and T-056 gets `D-firstmate-workflow-T056-1`.
-- **every reader takes both forms.** `fm-decide.sh`, `fm-diagram.sh`, the
-  board's response listing and decision route, `board/public/diagram.js` and
-  the page accept an owned id alongside the old ones and refuse anything else
-  (a bad project name, no task, `n` of 0, path characters) before an id is
-  joined to a path. The stores keyed by an id — `state/pending/`,
-  `state/decisions/`, `state/runtime/archived-pending/`,
-  `state/decision-details/`, `board/public/diagrams/`, `design/diagrams/` and
-  the watcher's `state/session/` receipts — take the new form as a file name
-  unchanged (`tests/session.test.sh` observes, lists and acknowledges an owned
-  id). The watcher's own check is only `[A-Za-z0-9_-]+`: it refuses path
-  characters, but it does not hold the id grammar, so it would also take a
-  malformed id such as `D-Bad_Name-T047-1`. No writer produces one, since
-  every card is requested through `fm-decide.sh`, which does hold it.
-  Tightening the watcher is `bin/fm-herdr.py`'s work, outside T-047.
-- **authored content is written under the allocated id.** `--allocate` comes
-  first, so firstmate writes `state/decision-details/<id>.json` and any
-  `design/diagrams/<id>.*` under the id the card will carry, then requests
-  it. `fm-run.sh` names the id it allocated when details are missing and
-  reuses it on a later turn.
-
-The stores keyed by a decision id were found by a search a reader can re-run
-from the repository root:
-
-  ```
-  grep -rnE 'state/(pending|decisions|decision-details|session)|(public|design)/diagrams|watch-|observed|acknowledged|decision:' bin board skills tests
-  grep -rhoE '(state|board/public|design)/[A-Za-z0-9_./-]*' bin board skills tests | sort | uniq -c
-  ```
-
-  The first finds every place that builds a path or identity from a
-  decision id. The second lists every runtime path the code names at all, so
-  a store under an unexpected directory would show up; each was read to see
-  what keys it. On 2026-09-24 the hits were:
-
-  | Where | What is keyed by the decision id |
-  |---|---|
-  | `bin/fm-decide.sh` | `state/pending/<id>.json` written, `state/decisions/<id>.json` awaited |
-  | `bin/fm-run.sh` | `state/pending/`, `state/decisions/`, `state/decision-details/<id>.json` |
-  | `bin/fm-diagram.sh` | reads `state/pending/` or `state/decisions/<id>.json`; authored `design/diagrams/<id>.*` beats the task stem; writes `board/public/diagrams/<id>.*` |
-  | `bin/fm-herdr.py` | `state/session/observed/<id>.json` (`watch_child`), `state/session/acknowledged/<id>.json` (`acknowledge`, `unacknowledged`), `state/session/watch-<id>.json` and its directory (`watch_start`, `watch_stop`, `status`) |
-  | `bin/fm.sh` | `state/decisions/D-SK-<n>.json` for self-update, a shape an owned id cannot take |
-  | `board/server.ts` | `state/pending/<id>.json`, `state/decisions/<id>.json` and its `.tmp`, `identity` `decision:<id>`, `decision_made` events by `data.decision` |
-  | `board/public/index.html` | `seen` set and the order animation, keyed by `identity` |
-  | `skills/firstmate/SKILL.md` | the same stores named for firstmate: `design/diagrams/<decision>.*`, `board/public/diagrams/`, `state/decision-details/<decision-id>.json`, `fm-session.sh ack --decision <id>` |
-  | `skills/firstmate/clear-zombie-workers/SKILL.md` | `state/runtime/archived-pending/<id>.json`: step 6 moves a stale pending card there by hand, under its own name (found by the second search, not the first) |
-  | `tests/` | fixtures of those same stores (`decide`, `decisions`, `diagram`, `board`, `session`, `selfupdate`, `i18n`, `e2e-loop`, `e2e/board.spec.ts`, `e2e/fixture.ts`); none names another |
-  | `tests/dispatch.test.sh`, `skills/worker/SKILL.md` | the word "observed" in prose; not a store |
-
-  The other runtime paths the second search listed on 2026-09-24, each read
-  where it is written, and what keys them: by task, `state/worktrees/<task>`
-  and its `.pid`, `state/dispatch/<task>.log` (`fm-dispatch.sh`),
-  `state/rescued/<task>-<stamp>` (`fm-worker.sh`, clear-zombie-workers) and
-  `state/unsent/<task>-…`; by run actor, `state/runs/<actor>/`,
-  `state/runtime/archived-runs/`, `state/runtime/run-*.sh` and
-  `state/runtime/*.pid` (dispatch-crew and clear-zombie-workers skills) and
-  `state/.crew-status-throttle/<actor>` (`fm-emit.sh`); by task and round,
-  `state/reviews/<task>-r<n>.log`; by a fresh temporary name,
-  `state/snapshots/code-*` (`fm-herdr.py` `snapshot`); by nothing, the
-  single files `state/events.jsonl`, `state/.events.lock`,
-  `state/session/board.log` and `state/session/project-setup.log`; and by
-  `SK-<n>`, `state/skill-updates/`. `state/merge-calls` and `state/e2` exist
-  only in tests (a stub's log and a temporary copy of the event log). That
-  is every path the search printed; nothing under `state/runtime/` other
-  than the four named was read, because the code names no other. Every
-  store keyed by a decision id takes an owned id as a file name as it is, so
-  none of them changed; `state/decision-ids/<project>/<task>/`, the
-  allocator's reservations, is the one store this adds, and it is keyed by
-  project and task, not by id. Nothing is renumbered, so nothing in this list
-  is moved, and the event log's `data.decision` and the board's
-  `decision:<id>` identity keep meaning the id they were written with.
-
-Three things are deliberately global, and each is a short critical section,
-not a lock held for the length of a run: the event log's writer lock
-(`fm-emit.sh`), the identity lock under which run actors are allocated (section 11), and a
-**dispatch slot lock** that `fm-dispatch.sh` holds only while it counts live
-runs and emits `dispatched`. The slot lock is new. Without it two dispatches
-started at once — one per project, which is now the ordinary case — can each
-count the same free slot and together exceed the limit. Everything slow
-happens before it is taken: `fm-project.sh verify` (a GitHub call), reading
-each project's task list and the `greenlit` check pick the candidates first,
-and under the lock `fm-dispatch.sh` only recounts live runs, takes the free
-slots and emits. Live runs are counted by `(project, task)`, not by task id,
-because two projects can both have a `T-004` live.
-
-**2. The limit has no per-project share; free slots are filled fairly.** A
-reserved share would idle slots: with the default limit of three and two
-projects, any split leaves a slot empty whenever one project has no ready
-work, and a share per project has to be re-cut every time a project is
-registered. Fair filling gives the same protection against starvation without
-idling anything.
-
-Fair fill is the normal path, not an option someone has to remember.
-`fm-dispatch.sh` with no `--project` dispatches across every registered
-project and fills free slots one at a time: each slot goes to the registered
-project, among those with a ready task whose `greenlit` matches it and whose
-`fm-project.sh verify` passes, that has the fewest live runs; a tie goes to
-the project whose name sorts first. With only the default project registered
-that is exactly today's dispatch, so no existing caller changes. The caller is
-firstmate, at every dispatch step of its loop — after a green light and
-whenever a run ends — and the firstmate skill says to dispatch with no
-`--project` (T-052). `--project <name>` dispatches only that project, within
-the same global limit and under the same slot lock; it is a deliberate
-override that bypasses fair fill, so firstmate uses it only when the captain
-asks for one project's work, never as its routine dispatch.
-
-So one project can hold every slot only while no other project has ready
-work, and it loses the next freed slot as soon as another does. There is no
-preemption: a live run is never stopped to make room. Starvation is therefore
-bounded by run length, not removed — a project whose task becomes ready while
-every slot is busy waits until the first live run anywhere ends, and then
-takes that slot, because it has fewer live runs than the project holding them.
-The default is therefore **no share, fair fill**. A per-project cap or a
-reserved share is a captain decision only if the captain later asks for one
-(for example to keep a slot free for one project); this design does not need
-it and does not add the knob.
-
-**3. Merge cards: parallel across projects, one at a time within one.** Two
-projects' merge cards may be pending at once: they target different
-repositories, a merge in one changes nothing another's branch is based on, and
-neither needs the other rebased. Within one project merges stay one at a time,
-because `base` is required to be up to date (15.6): each merge moves `base`,
-so every other open pull request in that project must be rebased onto it and
-gated again at its new head before it can be carded (section 6). A card raised
-before that would be stale the moment the first one merges. The rule:
-
-- **at most one merge in flight per project.** A project's merge turn is
-  taken when its merge card is requested and freed only when `base` has
-  settled: by a send back or a hold, which merge nothing, or, for a merge,
-  only once the stored record says `merge: "merged"` or `"failed"` (5.2). It
-  is not freed when the captain answers merge, because `base` moves when the
-  merge completes, not when it is chosen, and a branch gated in between would
-  be gated against the old `base`. A merge whose helper died before writing
-  its outcome does not hold the turn for ever: the board reads the real
-  outcome on start and on every poll (5.2) and only then frees it.
-- **`fm-run.sh` cards only against a settled `base`.** It notes the project's
-  `base` commit before it runs the gates. After they pass it takes a lock
-  under `state/` named for the project and requests a merge card only if the
-  project's turn is free and `base` is still the commit it gated against.
-  Otherwise it requests none, says whether the card waits for the project's
-  pending or running merge or for a regate on the new `base`, and leaves the
-  branch to be rebased and gated again on a later turn.
-- **the board never serializes one project's merge behind another's.** The
-  merge route follows 5.2's outcome contract: it runs `fm-merge.sh` with the
-  card's `--project` in the background, answers at once, and records the
-  outcome in the decision record. A second merge in the same project while one
-  is running is refused before anything is published, so that card stays
-  pending and nothing is emitted; the one-card rule means this only guards
-  against a stray or hand-raised card. A merge in another project runs
-  alongside it. Today's synchronous `Bun.spawnSync` call blocks the whole
-  board while one merge runs, which is exactly the cross-project coupling this
-  section rules out.
-
-**4. The captain sees and answers several projects' cards together.** Without
-`?project=` the board shows every project (15.4): lane cards, crew bubbles and
-decision cards of all projects on one page, each with its project chip. The
-deck holds every pending card of every project in one list, oldest request
-first, so a card never hides behind another project's; the pending count counts
-all projects, or only the filtered one under `?project=`. Each card is answered
-on its own — ids are global, so answering needs no project — and answering one
-never changes, reloads away or reorders another project's pending card. There
-is no bulk answer: every merge still goes through its own card (5.2).
-
-Who proves what:
-
-| Task | Its part of this section |
-|---|---|
-| T-047 | the decision ids of point 1 (D-1015 = A): every new id is `D-<project>-<task>-<n>`, allocated by `fm-decide.sh --allocate` under that task's own lock, merge cards included; old ids stay valid wherever they are read and are never moved; every parser accepts both forms |
-| T-052 | point 2's caller: the firstmate skill dispatches with no `--project`, and names `--project` for dispatch only when the captain asks for one project; hand-raised cards take ids from `fm-decide.sh --allocate` |
-| T-053 | points 1–3 in the scripts: the global count by `(project, task)`, the slot lock taken after verify, fair fill as the no-flag path, and the merge turn in `fm-run.sh` freed only when `base` has settled |
-| T-054 | points 3 and 4 on the board: 5.2's background merge and recorded outcome, recovery of a `running` record whose helper died, the same-project refusal before publishing, and several projects' live work and cards at once |
-| T-055 | the whole section end to end: the external project's task runs while a self-hosted task is live, and both merge cards are pending together |
-
-Each of these depends on T-056, so none is pinned on its acceptance from
-before this section. No task needs a file outside its existing scope for this:
-the slot lock, the merge-turn lock, the merge marker and the decision-id
-reservations live under `state/`, rendered pages under
-`board/public/diagrams/`, all runtime output, not scoped files. Nothing is
-renamed, so T-047 needs no `design/diagrams/` scope.
-
+Each project has one merge turn: take it when card is requested; release on
+hold/send-back or recorded merged/failed outcome, not just an answer. Verify
+base and authoritative PR head stayed as gated before card/merge. Another
+project's merge turn is independent. Outcome recovery uses actual repository
+facts; stale cards cannot authorize a changed candidate. Board merging must not
+block other projects' cards. T-053/T-054/T-055 prove concurrency, shared task IDs,
+simultaneous cards, isolated answers, cleanup and private state separation.
 
 ### T-157: diagnosing collected facts
 
