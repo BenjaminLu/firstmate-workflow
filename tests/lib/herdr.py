@@ -174,7 +174,8 @@ class EntrypointsFixture(unittest.TestCase):
         self.fake = self.repo / 'fakebin'; self.fake.mkdir()
         # no ambient terminal host: a developer's own tmux or cmux is not the fixture's
         self.env = {k:v for k,v in os.environ.items() if not k.startswith(('FM_', 'HERDR_', 'TMUX', 'CMUX_'))}
-        # The fake git below answers `config` with nothing, so the identity a
+        self.env.pop('GH_REPO', None)
+        # The fake git has an origin but no user config, so the identity a
         # commit needs is the fixture's own: a worker whose commit fails stops.
         self.env.update(PATH=str(self.fake)+os.pathsep+os.environ['PATH'], HERDR_ENV='1', HERDR_PANE_ID='caller',
                         FM_ROOT=str(self.repo), FM_TEST_ROOT=str(self.repo), FM_HERDR_TIMEOUT=str(WAIT),
@@ -357,8 +358,10 @@ raise SystemExit(int(os.environ.get('FM_TEST_EXIT','0')))
         self.executable('git', r'''
 import json,os,pathlib,sys
 r=pathlib.Path(os.environ['FM_TEST_ROOT']); a=sys.argv[1:]
-if a[0]=='-C' and a[2] in ('show','merge-base','diff-tree','fetch','rev-parse','branch'): a=a[2:]
-if a[0]=='show':
+if a[0]=='-C' and a[2] in ('config','show','merge-base','diff-tree','fetch','rev-parse','branch'): a=a[2:]
+if a==['config','--get','remote.origin.url']:
+ print('https://github.com/fixture/project.git')
+elif a[0]=='show':
  p=r/a[-1].split(':',1)[-1]
  if not p.is_file(): sys.exit(128)
  print(p.read_text())
@@ -615,4 +618,3 @@ class AgentLostFixture(unittest.TestCase):
     def recorded(self, actor, pid, token):
         run = self.root/'state/runs'/actor; run.mkdir()
         m.save(run/'process.json', dict(actor=actor, role='worker', task='T-118', pid=pid, token=token))
-
