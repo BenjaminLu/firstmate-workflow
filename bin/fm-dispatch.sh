@@ -154,11 +154,48 @@ while IFS= read -r id; do
     mkdir -p "$FM_STATE_DIR/dispatch"
     # Dispatch is short-lived. Workers belong to the enclosing session,
     # including when dispatch itself was started through the lifeline.
-    "${FM_CODE_ROOT:-$REPO}/bin/lib/fm-lifeline.sh" --session --log "$FM_STATE_DIR/dispatch/$id.log" -- \
-      "${FM_CODE_ROOT:-$REPO}/bin/fm-worker.sh" --task "$id" --repo "$REPO" </dev/null >/dev/null || {
+    keeper="$("${FM_CODE_ROOT:-$REPO}/bin/lib/fm-lifeline.sh" --session --log "$FM_STATE_DIR/dispatch/$id.log" -- \
+      "${FM_CODE_ROOT:-$REPO}/bin/fm-worker.sh" --task "$id" --repo "$REPO" </dev/null)" || {
         echo "fm-dispatch: could not start an owned worker for $id" >&2
         exit 70
       }
+    # The launcher returns before the keeper has necessarily called setsid.
+    # Our own keeper cleans up our process group when we exit, so wait for
+    # the worker's keeper to leave it. Only the observed pgid permits exit;
+    # a fixed startup delay would merely make the race less likely.
+    if ! python3 - "$$" "$keeper" <<'PY'
+import os
+import subprocess
+import sys
+import time
+
+try:
+    dispatch_group = os.getpgid(int(sys.argv[1]))
+    keeper = int(sys.argv[2])
+    if keeper <= 0:
+        raise ValueError('invalid keeper pid')
+    deadline = time.monotonic() + 5
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('keeper did not leave dispatch process group within 5 seconds')
+        result = subprocess.run(['ps', '-o', 'pgid=', '-p', str(keeper)],
+                                capture_output=True, text=True, timeout=remaining)
+        group = result.stdout.strip()
+        if result.returncode != 0 or not group.isdigit() or int(group) <= 0:
+            raise RuntimeError('could not read keeper process group')
+        if int(group) != dispatch_group:
+            break
+        # Throttle observation; elapsed time is never readiness evidence.
+        time.sleep(min(.01, max(0, deadline - time.monotonic())))
+except (OSError, ValueError, RuntimeError, TimeoutError, subprocess.TimeoutExpired) as error:
+    print(f'fm-dispatch: keeper handoff failed: {error}', file=sys.stderr)
+    sys.exit(70)
+PY
+    then
+      echo "fm-dispatch: worker keeper $keeper for $id was not established; see $FM_STATE_DIR/dispatch/$id.log" >&2
+      exit 70
+    fi
     echo "$id"
   fi
   slots=$(( slots - 1 )); started_any=1

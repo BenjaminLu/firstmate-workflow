@@ -20,12 +20,17 @@ PY
 printf 'vendor: codex\n' > "$d/config.yaml"
 printf '{"type":"greenlit"}\n' > "$d/state/events.jsonl"
 printf '{"id":"D-1","kind":"choice"}\n' > "$d/state/pending/D-1.json"
-XDG_CONFIG_HOME="$d/config"; export XDG_CONFIG_HOME
+XDG_CONFIG_HOME="$(safe_tmpdir)"; export XDG_CONFIG_HOME
 pid="$(FM_ROOT="$d" FM_PORT=0 "$ROOT/bin/lib/fm-lifeline.sh" --owner-pid "$$" --log "$d/out" -- bun run "$d/board/server.ts")"
 printf '%s\n' "$pid" > "$d/keepers"
-cleanup() { stop_pids "$d/keepers"; safe_rm_rf "$d"; }
+cleanup() { stop_pids "$d/keepers"; safe_rm_rf "$d"; safe_rm_rf "$XDG_CONFIG_HOME"; }
 trap cleanup EXIT
-PORT="$(board_port "$d/out" "$pid")"
+if ! PORT="$(board_port "$d/out" "$pid")" || [[ ! "$PORT" =~ ^[0-9]+$ ]]; then
+  assert_eq "listening port" "none" "board starts before live-stream and replacement assertions"
+  cat "$d/out" >&2
+  finish
+  exit 1
+fi
 # curl times out by our own deadline; an EOF or a server timeout is a failure.
 curl -sN --max-time 17 "http://127.0.0.1:$PORT/events" > "$d/stream" 2> "$d/curl-error"; rc=$?
 assert_eq 28 "$rc" "quiet SSE stays open beyond the old ten-second idle limit"
