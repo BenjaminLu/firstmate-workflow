@@ -1041,6 +1041,7 @@ mirror_sync >/dev/null 2>&1 || echo "fm-worker: the first mirror of $tree did no
 
 # First pin is written by the launcher, outside the sandbox, at dispatch.
 # Existing PRs use the same authority and current base, labelled as a resume.
+pin_warning=''
 if [ -z "$FM_SPEC_PIN_JSON" ]; then
   pin_args=()
   [ -z "$PR" ] || pin_args+=(--resume)
@@ -1050,7 +1051,16 @@ if [ -z "$FM_SPEC_PIN_JSON" ]; then
        set_crew_activity "$spec"
        emit --type spec_pinned --en "Approved task snapshot pinned" --tw "已固定核准的任務快照" ;;
     3) echo 'fm-worker: no pin; gate 4 will refuse this round' >&2 ;;
-    *) exit "$pin_rc" ;;
+    *) # A failed first creation is not a corrupt existing pin. Recheck in
+       # case a concurrent creator published a record while we collected.
+       FM_SPEC_PIN_JSON="$(fm_pin_existing "$TASK")"; pin_existing_rc=$?
+       case "$pin_existing_rc" in
+         0) spec="$(jq -c '.snapshots.spec.text|fromjson' <<<"$FM_SPEC_PIN_JSON")"
+            set_crew_activity "$spec" ;;
+         3) pin_warning='fm-worker: first pin could not be created; no pin; gate 4 will refuse this round'
+            echo "$pin_warning" >&2 ;;
+         *) exit "$pin_existing_rc" ;;
+       esac ;;
   esac
 fi
 
@@ -1407,6 +1417,10 @@ rm -f "$prompt"
 # ASK-PASS-CRITERIA would sit in a log nobody reads while fm-protocol
 # reported a violation every turn, which looks exactly like a worker that
 # stopped working.
+# Append after the adapter, which may replace its own report during the round.
+if [ -n "$pin_warning" ]; then
+  printf '\n%s\n' "$pin_warning" >> "$say"
+fi
 asked=0
 [ -s "$say" ] && asked=1
 # Retain first, even when no PR exists or optional publication later fails.

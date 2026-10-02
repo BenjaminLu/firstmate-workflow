@@ -25,5 +25,21 @@ intro="$(sed '/^# Round /q' "$d/prompt.md")"
 assert_contains "$intro" '# Approved spec pin' 'reviewer receives the same pin record as the worker'
 assert_contains "$intro" '"title":"a task"' 'reviewer task context keeps the approved spec'
 assert_lacks "$intro" BRANCH_SCOPE_INJECTION 'branch edits cannot replace reviewer acceptance or scope'
+# A valid mutable branch spec must never rescue an existing corrupt pin.
+for corruption in hash unreadable; do
+  rm -f "$d/prompt.md"
+  if [ "$corruption" = hash ]; then
+    jq '.snapshots.design.text += "tampered"' "$repo/state/pins/T-Z/1.json" > "$d/corrupt.json"
+    cp "$d/corrupt.json" "$repo/state/pins/T-Z/1.json"
+  else
+    printf '{broken' > "$repo/state/pins/T-Z/1.json"
+  fi
+  (cd "$repo" && FM_ROOT="$repo" FM_GH="$GH" FM_SEEN="$d" bin/fm-review.sh --task T-Z --branch work) > "$d/out" 2>&1
+  assert_eq 65 "$?" 'review refuses corrupt existing pin without branch fallback'
+  assert_ok "test ! -e '$d/prompt.md'" 'review never invokes adapter with corrupt pin'
+  if [ "$corruption" = hash ]; then
+    assert_contains "$(cat "$d/out")" 'hash mismatch' 'review names corrupt snapshot reason'
+  fi
+done
 rm -rf "$d"
 finish

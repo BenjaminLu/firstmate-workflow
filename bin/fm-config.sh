@@ -1720,8 +1720,7 @@ fm_binding() {
 # invoking this one reader; the pin store is never inside an external checkout.
 fm_pin() { python3 "$_fm_code_dir/lib/fm_spec_pins.py" "$@"; }
 fm_pin_existing() { # task; absent is 3, corrupt is 65 (never a fallback)
-  if [ ! -d "$FM_STATE_DIR/pins/$1" ]; then return 3; fi
-  fm_pin resolve --task "$1"
+  fm_pin resolve --task "$1" --if-present
 }
 fm_pin_prompt() {
   [ -n "${FM_SPEC_PIN_JSON:-}" ] || return 0

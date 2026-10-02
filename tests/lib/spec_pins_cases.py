@@ -39,17 +39,17 @@ class SpecPins(unittest.TestCase):
                         FM_TASKS_DIR=str(self.spec.parent), FM_DESIGN=str(self.root / 'design/design.md'))
         self.p = Pins(self.env, 'T-X')
 
-    def event(self, typ='greenlit', **kwargs):
-        event = dict(type=typ, ts='2026-10-03T00:00:00Z', actor='captain', **kwargs)
+    def event(self, typ='greenlit', ts='2026-10-03T00:00:00Z', **kwargs):
+        event = dict(type=typ, ts=ts, actor='captain', **kwargs)
         with (self.state / 'events.jsonl').open('a') as f:
             f.write(json.dumps(event) + '\n')
         return event
 
-    def decision(self, id='D-1', project='firstmate-workflow', task='T-X', chosen='A', kind='choice'):
+    def decision(self, id='D-1', project='firstmate-workflow', task='T-X', chosen='A', kind='choice', ts='2026-10-03T00:01:00Z'):
         (self.state / 'decisions').mkdir(exist_ok=True)
         (self.state / f'decisions/{id}.json').write_text(json.dumps(dict(
-            id=id, project=project, task=task, chosen=chosen, kind=kind, ts='2026-10-03T00:00:00Z')))
-        self.event('decision_made', project=project, task=task, data=dict(decision=id, chosen=chosen))
+            id=id, project=project, task=task, chosen=chosen, kind=kind, ts=ts)))
+        self.event('decision_made', ts=ts, project=project, task=task, data=dict(decision=id, chosen=chosen))
 
     def test_no_authorization_writes_nothing(self):
         self.assertIsNone(self.p.create())
@@ -105,6 +105,31 @@ class SpecPins(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'already used'):
             self.p.create(decision='D-1')
 
+    def test_repin_requires_strictly_newer_approval(self):
+        self.event()
+        first = self.p.create()
+        self.spec.write_text('{"id":"T-X","scope":["wider/**"]}')
+        for ts in ('2026-10-02T23:59:59Z', '2026-10-03T00:00:00Z',
+                   '2026-10-03T08:00:00+08:00'):
+            with self.subTest(ts=ts):
+                self.decision(ts=ts)
+                with self.assertRaisesRegex(ValueError, 'newer'):
+                    self.p.create(decision='D-1')
+                self.assertEqual(list(self.p.directory.glob('*.json')),
+                                 [self.p.directory / '1.json'])
+                self.assertEqual(self.p.resolve(), first)
+
+    def test_empty_interrupted_store_is_absent_to_shell_consumers(self):
+        self.p.directory.mkdir(parents=True)
+        (self.p.directory / '.lock').touch()
+        (self.p.directory / 'tmp-incomplete').write_text('partial')
+        result = subprocess.run(['bash', '-c',
+            '. "$1/bin/fm-config.sh"; fm_pin_existing T-X', '_', str(ROOT)],
+            env=dict(os.environ, **self.env), capture_output=True, text=True)
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.event()
+        self.assertEqual(self.p.create()['version'], 1)
+
     def test_corruption_and_fm_paths(self):
         self.event()
         pin = self.p.create()
@@ -138,7 +163,7 @@ class SpecPins(unittest.TestCase):
         (home / 'design.md').unlink()
         self.assertEqual(p.resolve(), pin)
         self.assertFalse((self.root / 'state/pins').exists())
-        self.decision('D-2', project='client')
+        self.decision('D-2', project='client', ts='2026-10-03T00:02:00Z')
         (home / 'design.md').write_text('revised private design')
         (home / 'CONVENTIONS.md').write_text('revised private conventions')
         (home / 'tasks/T-X.json').write_text('{"id":"T-X","scope":["changed/**"]}')
@@ -209,7 +234,7 @@ class SpecPins(unittest.TestCase):
         self.p.create()
         for number, args in enumerate(([], ['--project', 'firstmate-workflow']), 1):
             self.spec.write_text(json.dumps({'id': 'T-X', 'scope': [f'src/{number}/**']}))
-            self.decision(f'D-{number}')
+            self.decision(f'D-{number}', ts=f'2026-10-03T00:0{number}:00Z')
             env = {k: v for k, v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
             result = subprocess.run(['bash', str(ROOT / 'bin/fm-project.sh'), 'repin',
                         '--repo', str(self.root), '--task', 'T-X', '--decision', f'D-{number}', *args],
@@ -220,6 +245,46 @@ class SpecPins(unittest.TestCase):
         emitted = [e for e in events if e['type'] == 'spec_repinned']
         self.assertEqual(len(emitted), 2)
         self.assertTrue(all(e['summary']['en'] and e['summary']['zh-TW'] for e in emitted))
+
+    def test_repin_cli_external_emits_in_private_project(self):
+        fm_home = Path(self.tmp.name) / 'private'
+        home = fm_home / 'projects/client'
+        self.state = home / 'state'
+        self.state.mkdir(parents=True)
+        (home / 'tasks').mkdir()
+        (home / 'tasks/T-X.json').write_text('{"id":"T-X","scope":["src/**"]}')
+        (home / 'design.md').write_text('private design')
+        (home / 'CONVENTIONS.md').write_text('private conventions')
+        (self.state / 'config.yaml').write_text('project:\n  check: true\n')
+        target = home / 'repo'
+        git(self.root, 'clone', '-q', str(self.root), str(target))
+        git(target, 'remote', 'set-url', 'origin', 'https://github.com/owner/client.git')
+        (self.root / 'config.yaml').write_text(
+            'projects:\n  firstmate-workflow:\n    repo: .\n    github: owner/engine\n'
+            '  client:\n    github: owner/client\n    base: main\n')
+        self.event(project='client')
+        p = Pins(dict(self.env, FM_EXTERNAL='1', FM_PROJECT='client',
+                      FM_TARGET_ROOT=str(target), FM_STATE_DIR=str(self.state),
+                      FM_TASKS_DIR=str(home / 'tasks'), FM_DESIGN=str(home / 'design.md')), 'T-X')
+        first = p.create()
+        (home / 'design.md').write_text('changed private design')
+        self.decision(project='client')
+        env = {k: v for k, v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
+        env['FM_HOME'] = str(fm_home)
+        result = subprocess.run(['bash', str(ROOT / 'bin/fm-project.sh'), 'repin',
+            '--repo', str(self.root), '--project', 'client', '--task', 'T-X',
+            '--decision', 'D-1'], env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['version'], 2)
+        self.assertEqual(json.loads((p.directory / '1.json').read_text()), first)
+        emitted = [json.loads(line) for line in (self.state / 'events.jsonl').read_text().splitlines()
+                   if json.loads(line)['type'] == 'spec_repinned']
+        self.assertEqual(len(emitted), 1)
+        self.assertEqual(emitted[0]['project'], 'client')
+        self.assertEqual(emitted[0]['task'], 'T-X')
+        self.assertTrue(emitted[0]['summary']['en'] and emitted[0]['summary']['zh-TW'])
+        self.assertFalse((self.root / 'state/pins').exists())
+        self.assertFalse((self.root / 'state/events.jsonl').exists())
 
     def test_no_pin_gate_has_specific_reason(self):
         env = {k: v for k, v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}

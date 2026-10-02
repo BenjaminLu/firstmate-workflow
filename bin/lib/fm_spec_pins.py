@@ -5,6 +5,7 @@ committed self sources additionally verify against git. Dispatch-time external
 approval does not claim a pre-answer proposal binding.
 """
 import argparse
+from datetime import datetime
 import fcntl
 import hashlib
 import json
@@ -163,8 +164,13 @@ class Pins:
             raise ValueError('invalid approved scope glob')
         return engine_commit, target_commit, snapshots, parsed
 
-    def resolve(self):
-        paths = sorted(self.directory.glob('*.json'), key=lambda p: int(p.stem) if p.stem.isdigit() else -1)
+    def resolve(self, if_present=False):
+        # A leftover lock/temp file is not a pin. Enumerate explicitly so an
+        # unreadable store is an error, never silently treated as absent.
+        records = [p for p in self.directory.iterdir() if p.name.endswith('.json')] if self.directory.exists() else []
+        paths = sorted(records, key=lambda p: int(p.stem) if p.stem.isdigit() else -1)
+        if not paths and if_present:
+            return None
         if not paths:
             raise ValueError('no pin for ' + self.project + '/' + self.task)
         previous = None
@@ -211,6 +217,8 @@ class Pins:
                 raise ValueError('pin authorization mismatch')
             if approval['time'] != approval['event'].get('ts'):
                 raise ValueError('pin approval time mismatch')
+            if previous:
+                self.check_approval_order(previous['approval'], approval)
             if set(pin['snapshots']) != {'spec', 'design', 'conventions', 'contract'}:
                 raise ValueError('incomplete pin snapshots')
             expected = {
@@ -279,7 +287,7 @@ class Pins:
         engine, target, snapshots, parsed = self.collect(repin=bool(decision))
         if decision:
             old = self.resolve()
-            self.check_repin(old, decision, snapshots)
+            self.check_repin(old, decision, snapshots, approval)
         self.directory.mkdir(parents=True, exist_ok=True)
         lock = self.directory / '.lock'
         if lock.is_symlink():
@@ -290,7 +298,7 @@ class Pins:
             if old and not decision:
                 return old
             if decision:
-                self.check_repin(old, decision, snapshots)
+                self.check_repin(old, decision, snapshots, approval)
             pin = dict(schema=1, project=self.project, task=self.task, external=self.external,
                        version=old['version'] + 1 if old else 1, engine_commit=engine,
                        target_base_commit=target, snapshots=snapshots, contract=parsed,
@@ -308,14 +316,26 @@ class Pins:
                 temporary.unlink()
             return pin
 
-    def check_repin(self, old, decision, snapshots):
+    def check_repin(self, old, decision, snapshots, approval):
         if not old:
             raise ValueError('repin requires an existing pin')
         for path in self.directory.glob('*.json'):
             if json.loads(path.read_text())['approval']['decision'] == decision:
                 raise ValueError('repin decision already used')
+        self.check_approval_order(old['approval'], approval)
         if all(old['snapshots'][key]['sha256'] == snap['sha256'] for key, snap in snapshots.items()):
             raise ValueError('snapshots unchanged; no repin written')
+
+    @staticmethod
+    def check_approval_order(previous, current):
+        try:
+            before = datetime.fromisoformat(previous['time'].replace('Z', '+00:00'))
+            after = datetime.fromisoformat(current['time'].replace('Z', '+00:00'))
+            valid = before.tzinfo is not None and after.tzinfo is not None and after > before
+        except (ValueError, TypeError):
+            valid = False
+        if not valid:
+            raise ValueError('repin requires approval newer than the superseded pin approval')
 
     def scope(self, head, base):
         import fnmatch
@@ -343,6 +363,7 @@ def main():
     parser.add_argument('--task', required=True)
     parser.add_argument('--decision')
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--if-present', action='store_true')
     parser.add_argument('--head')
     parser.add_argument('--base', default='main')
     args = parser.parse_args()
@@ -356,7 +377,9 @@ def main():
         elif args.command == 'scope':
             pin = pins.scope(args.head, args.base)
         else:
-            pin = pins.resolve()
+            pin = pins.resolve(if_present=args.if_present)
+            if pin is None:
+                return 3
         print(json.dumps(pin))
         return 0
     except (ValueError, OSError, KeyError, TypeError) as error:

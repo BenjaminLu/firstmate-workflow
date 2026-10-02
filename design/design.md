@@ -4574,8 +4574,10 @@ to the self task entry and any path component beginning `.fm-`.
 Initial authority comes from existing records only: the latest captain
 `decision_made` A with a matching project/task choice answer, or, when no
 readiness card exists, the latest project `greenlit` event as a direct order.
-No authorization means no pin is written; the worker may continue, but gate 4
-fails explicitly with `no pin`. Legacy unpinned reviewer context is labelled
+No authorization or unavailable first-pin sources means no pin is written;
+the worker warns and continues, but gate 4 fails explicitly with `no pin`.
+A first-pin source failure is also retained in the round report. An empty pin
+directory containing only a lock or temporary file is still unpinned. Legacy unpinned reviewer context is labelled
 unapproved. A corrupt existing pin never falls back to mutable task data.
 
 This is **trust on first dispatch**, recorded as
@@ -4586,7 +4588,7 @@ needs board/decide producer changes outside T-049's scope; recorded as a
 follow-up for the captain**. The existing dispatch/readiness/decision producers
 are unchanged. A repin likewise uses an existing exact project/task captain
 choice A, reads all source bytes afresh, requires changed snapshot hashes,
-refuses reuse of a decision, and appends a new version without replacing one:
+refuses reuse or an approval no later than the superseded pin approval, and appends a new version without replacing one:
 `bin/fm-project.sh repin --project <p> --task <t> --decision <id>`.
 Self repins identify uncommitted local spec/design/conventions explicitly;
 their gate contract still comes from accepted base. Omitted project and explicit

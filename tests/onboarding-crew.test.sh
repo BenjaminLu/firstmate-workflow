@@ -127,9 +127,9 @@ else: sys.exit(2)
                 self.assertEqual(out,'T-Z:'+str(self.home/'tasks'))
     def test_external_spec_is_not_copied_into_target(self):
         (self.home/'spec.json').write_text('{"id":"T-Z"}')
-        body=section(worker,'if [ "$FM_EXTERNAL" = 0 ] && [ "$leftover_dirty" = 0 ]', '# --- the mirror:')
+        body=section(worker,'if [ -z "$FM_SPEC_PIN_JSON" ] && [ "$FM_EXTERNAL" = 0 ] && [ "$leftover_dirty" = 0 ]', '# --- the mirror:')
         out=self.run_block(body+'echo "$refresh_spec:$spec_copied"',
-            'leftover_dirty=0; own_spec="$work/spec.json"; round_two=0; refresh_spec=0; spec_copied=0')
+            'FM_SPEC_PIN_JSON=; leftover_dirty=0; own_spec="$work/spec.json"; round_two=0; refresh_spec=0; spec_copied=0')
         self.assertEqual(out.strip(),'0:0')
         self.assertFalse((self.home/'tree').exists())
     def test_external_rebuild_is_held_and_never_reads_public_spec(self):
