@@ -9,6 +9,8 @@ import argparse
 import datetime
 import fcntl
 import hashlib
+import hmac
+import secrets
 import importlib.util
 import json
 import os
@@ -18,7 +20,7 @@ import sys
 import tempfile
 import uuid
 
-KINDS = {'brief', 'pack', 'worker-report', 'ask', 'verdict'}
+KINDS = {'brief', 'pack', 'worker-report', 'ask', 'verdict', 'readiness', 'external-verdict'}
 
 
 def unquoted(text):
@@ -84,17 +86,63 @@ def protocol(records, task):
 
 
 class Store:
-    def __init__(self, state, project, task):
+    def __init__(self, state, project, task, external=None):
         for value in (project, task):
             if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*', value):
                 raise ValueError('invalid project/task identity')
         self.project, self.task = project, task
-        self.directory = Path(state) / 'evidence' / project / task
+        self.state = Path(state)
+        if external is None:
+            external = os.environ.get('FM_EXTERNAL') == '1'
+        if external and (self.state / 'evidence' / project / task).exists():
+            raise ValueError('legacy external evidence layout requires approved migration; refusing to lose history')
+        self.directory = self.state / 'evidence'
+        if not external:
+            self.directory /= project
+        self.directory /= task
+        self.key_path = self.state / 'evidence-signing.key'
+
+    def key(self, create=False):
+        self.state.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if create and not self.key_path.exists():
+            fd, pending = tempfile.mkstemp(prefix='.evidence-key-', dir=self.state)
+            try:
+                with os.fdopen(fd, 'wb') as output:
+                    output.write(secrets.token_bytes(32))
+                    output.flush()
+                    os.fsync(output.fileno())
+                try:
+                    os.link(pending, self.key_path)
+                except FileExistsError:
+                    pass
+            finally:
+                os.unlink(pending)
+        fd = os.open(self.key_path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, 'rb') as source:
+            if os.fstat(source.fileno()).st_mode & 0o077:
+                raise ValueError('evidence signing key is not private')
+            key = source.read()
+        if len(key) != 32:
+            raise ValueError('invalid evidence signing key')
+        return key
+
+    def signature(self, record, create=False):
+        payload = {k: v for k, v in record.items() if k != 'signature'}
+        return hmac.new(self.key(create), json.dumps(payload, sort_keys=True,
+                        separators=(',', ':'), ensure_ascii=False).encode(), hashlib.sha256).hexdigest()
 
     def records(self):
         records = []
         for path in sorted(self.directory.glob('[0-9]*.json')):
             record = json.loads(path.read_text())
+            if record.get('signature'):
+                if not hmac.compare_digest(record['signature'], self.signature(record)):
+                    raise ValueError('forged or modified local evidence record')
+            elif record.get('kind') not in ('brief', 'pack', 'worker-report', 'ask', 'verdict') or 'binding' in record:
+                raise ValueError('unsigned evidence cannot claim source-bound authority')
+            # Pre-T-138 records stay immutable and readable for the standing
+            # list. Only a new signed, source-bound verdict can authorize gate 7.
+
             if record['project'] != self.project or record['task'] != self.task:
                 raise ValueError('record identity does not match its storage location')
             if record['kind'] == 'verdict':
@@ -122,6 +170,7 @@ class Store:
         record = dict(fields, project=self.project, task=self.task, round=int(round_number),
                       actor=actor, kind=kind, head=head,
                       time=datetime.datetime.now(datetime.timezone.utc).isoformat(), text=text)
+        record['signature'] = self.signature(record, create=True)
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         with (self.directory / '.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
@@ -164,7 +213,8 @@ class Store:
                     continue
                 fence = uuid.uuid4().hex
                 output.append(f'Local review round {record["round"]}, head {record["head"]}, '
-                              f'reviewer {record["actor"]}, provenance {record["provenance"]["level"]}\n----- begin {fence} -----\n'
+                              f'reviewer {record["actor"]}, provenance {record["provenance"]["level"]}, '
+                              f'seal={"signed" if record.get("signature") else "unsealed legacy"}\n----- begin {fence} -----\n'
                               f'{record["text"]}\n----- end {fence} -----')
             elif record['kind'] == 'ask':
                 # Do not pass a worker's prose or reasoning to a reviewer.
@@ -181,6 +231,9 @@ def retain_verdict(store, args):
     The run directory and this writer remain outside the round's write roots.
     """
     run = Path(args.run)
+    binding = json.loads((run / 'evidence-binding.json').read_text())
+    if any(binding.get(k) != getattr(args, k) for k in ('head', 'base', 'patch')):
+        raise ValueError('review source binding changed during round')
     identity = json.loads((run / 'identity.json').read_text())
     for key, value in (('project', store.project), ('task', store.task),
                        ('role', 'reviewer'), ('round', args.round)):
@@ -209,12 +262,13 @@ def retain_verdict(store, args):
     return store.append('verdict', args.round, os.environ['FM_ACTOR'], args.head, answer,
                         verdict=decided, base=args.base, patch=args.patch,
                         reviewer=identity, login=os.environ.get('FM_REVIEWER_LOGIN', os.environ['FM_ACTOR']),
-                        provenance=provenance)
+                        provenance=provenance, binding=binding, attempt=args.attempt, vendor=args.vendor,
+                        model=identity.get('model', 'unknown'))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['brief', 'report', 'verdict', 'history', 'gate', 'protocol'])
+    parser.add_argument('command', choices=['brief', 'report', 'verdict', 'history', 'gate', 'protocol', 'pin'])
     parser.add_argument('--state', required=True)
     parser.add_argument('--project', required=True)
     parser.add_argument('--task', required=True)
@@ -231,14 +285,22 @@ def main():
     parser.add_argument('--reviewer', action='store_true')
     args = parser.parse_args()
     store = Store(args.state, args.project, args.task)
-    if args.command == 'brief':
+    if args.command == 'pin':
+        from fm_binding import source_binding
+        binding = source_binding(args.task, args.head, args.base, args.code)
+        if binding['patch'] != args.patch:
+            raise ValueError('review patch does not match source')
+        Path(args.run, 'evidence-binding.json').write_text(json.dumps(binding))
+    elif args.command == 'brief':
         store.append('brief', args.round, 'firstmate', args.head, Path(args.file).read_text(), authorized=True)
     elif args.command == 'report':
         text = Path(args.file).read_text()
         kind = 'ask' if re.search(r'^(?:ASK-[A-Z-]+|SCOPE-BLOCKED):' + re.escape(args.task) + r'\s*$', text, re.M) else 'worker-report'
         store.append(kind, args.round, args.actor, args.head, text)
     elif args.command == 'verdict':
-        print(retain_verdict(store, args)['verdict'])
+        record = retain_verdict(store, args)
+        Path(args.run, 'evidence-record.json').write_text(json.dumps(record))
+        print(record['verdict'])
     elif args.command == 'history':
         print(store.history(args.reviewer))
     elif args.command == 'protocol':
@@ -256,10 +318,29 @@ def main():
         record = records[-1]
         if record['verdict'] != 'APPROVE':
             raise ValueError(f'condition 2 failed: the latest verdict is REJECT:{args.task}; a later rejection supersedes any earlier approval')
+        if not record.get('signature'):
+            raise ValueError('unsigned legacy approval requires a new signed, source-bound review')
         if not record['head']:
             raise ValueError('legacy local verdict has no reviewed head; a bound review is required')
         if record['head'] != args.head and not (args.patch and record.get('patch') == args.patch):
             raise ValueError('condition 1 failed: latest local approval covers neither this head nor this patch-id')
+        from fm_binding import source_binding, git
+        current = source_binding(args.task, args.head, args.base, args.code)
+        bound = record.get('binding')
+        if not bound:
+            raise ValueError('local verdict needs signed source binding; review again')
+        for key in ('spec_sha256', 'contract_sha256', 'conventions_sha256'):
+            if current[key] != bound.get(key):
+                raise ValueError('review binding mismatch: ' + key)
+        root = os.environ['FM_TARGET_ROOT']
+        original = source_binding(args.task, record['head'], record['base'], args.code)
+        for key in ('head', 'base', 'patch', 'files'):
+            if original[key] != bound.get(key):
+                raise ValueError('review source no longer verifies: ' + key)
+        if record['head'] != args.head:
+            git(root, 'merge-base', '--is-ancestor', record['base'], args.base)
+            if bound['patch'] != current['patch']:
+                raise ValueError('changed patch requires review')
         errors = protocol(records, args.task)
         if errors:
             raise ValueError('; '.join(errors))

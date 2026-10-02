@@ -117,6 +117,13 @@ print(json.dumps({'type':'result','result':final,'response':final}))
         self.assertEqual(1,statuses.count('completed'),statuses)
 
     def test_real_dispatch_and_run_paths_use_managed_adapters(self):
+        # The binding service must resolve this checkout without an ambient
+        # GH_REPO before it can fetch and verify the authoritative PR head.
+        origin = subprocess.run(['git', '-C', str(self.repo), 'config', '--get',
+                                 'remote.origin.url'], env=self.env,
+                                capture_output=True, text=True, timeout=WAIT)
+        self.assertEqual(0, origin.returncode, origin.stderr)
+        self.assertEqual('https://github.com/fixture/project.git', origin.stdout.strip())
         # Production dispatch launches the production worker; only git/gh/model
         # boundaries are fake. No external account is used; the only captain
         # decision is the fixture's A on T-035's readiness card, without which
@@ -137,6 +144,9 @@ print(json.dumps({'type':'result','result':final,'response':final}))
         (self.repo/'bin/fm-gate.sh').write_text('#!/usr/bin/env bash\nexit 7\n')
         answer=self.invoke('fm-run.sh',['once'])
         self.assertEqual(0,answer.returncode,answer.stderr)
+        self.assertNotIn('authoritative head unknown or stale', answer.stdout + answer.stderr)
+        self.assertEqual(['refs/pull/35/head', 'refs/heads/main'],
+                         (self.repo/'binding-fetches').read_text().splitlines())
         self.assertEqual({'worker','reviewer'},{json.loads(p.read_text())['role'] for p in self.results()})
 
 unittest.main(argv=['herdr', *os.environ.get('FM_TEST_CASES','').split()], verbosity=2)

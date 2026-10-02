@@ -60,7 +60,16 @@ cat > "$d/stub/git" <<'G'
 #!/usr/bin/env python3
 import pathlib, sys
 args = sys.argv[1:]
-if args[0] in ('show-ref', 'ls-remote'):
+if args[0] == '-C' and args[2] in ('show', 'merge-base', 'diff-tree'):
+    import os
+    os.chdir(args[1]); args = args[2:]
+if args[0] == 'rev-parse' and (args[-1] == 'HEAD' or args[-1].endswith('^{commit}')):
+    print('a'*40)
+elif args[0] == 'merge-base':
+    if '--is-ancestor' not in args: print('b'*40)
+elif args[0] in ('diff-tree', 'patch-id'):
+    pass
+elif args[0] in ('show-ref', 'ls-remote'):
     sys.exit(1)
 elif args[:2] == ['worktree', 'add']:
     pathlib.Path(args[-2]).mkdir(parents=True, exist_ok=True)

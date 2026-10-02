@@ -5,6 +5,7 @@ codex-review-integration.test.sh through the real launcher and transport.
 """
 from pathlib import Path
 import re
+import os
 import sys
 import subprocess
 
@@ -22,9 +23,18 @@ text = text.replace('\\n', '\n').replace('\r', '\n')
 marker = verdict_marker(text, task)
 if marker:
     binding = re.search(r'^REVIEWED:' + re.escape(task) + r' verdict=\w+ head=(\w+) base=(\w+) patch=(\w*)', text, re.M)
+    fields = {}
+    if binding:
+        from fm_binding import source_binding
+        os.environ['FM_TARGET_ROOT'] = str(Path(state).resolve().parent)
+        os.environ['FM_EXTERNAL'] = '0'
+        try:
+            fields['binding'] = source_binding(task, binding[1], binding[2], root)
+        except (ValueError, OSError, subprocess.SubprocessError):
+            pass  # Deliberately invalid heads remain unbound negative fixtures.
     store.append('verdict', 1, actor, binding[1] if binding else '', text,
                  verdict=marker, base=binding[2] if binding else '', patch=binding[3] if binding else '',
-                 provenance={'level': 'legacy'})
+                 provenance={'level': 'legacy'}, **fields)
 elif ('ASK-PASS-CRITERIA:' + task) in text.splitlines():
     store.append('ask', 1, actor, 'a' * 40, text)
 else:

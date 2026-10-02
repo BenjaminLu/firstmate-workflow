@@ -45,6 +45,7 @@ class Records(unittest.TestCase):
     def test_legacy_result_cannot_claim_authenticated(self):
         run = Path(self.tmp.name) / 'run'
         run.mkdir()
+        (run / 'evidence-binding.json').write_text(json.dumps(dict(head='a'*40, base='b'*40, patch='p')))
         (run / 'identity.json').write_text(json.dumps(dict(
             project='self', task='T-X', role='reviewer', round=1)))
         (run / 'last-result.json').write_text(json.dumps(dict(
@@ -63,6 +64,7 @@ class Records(unittest.TestCase):
     def test_unnamed_legacy_project_uses_self_namespace_without_rewriting_identity(self):
         run = Path(self.tmp.name) / 'run'
         run.mkdir()
+        (run / 'evidence-binding.json').write_text(json.dumps(dict(head='a'*40, base='b'*40, patch='p')))
         identity = dict(project=None, task='T-X', role='reviewer', round=1)
         (run / 'identity.json').write_text(json.dumps(identity))
         answer = run / 'selected.txt'
