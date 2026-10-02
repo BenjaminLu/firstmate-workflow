@@ -792,8 +792,13 @@ prompt="$work/prompt.md"
 verify_review_head || exit 65
 {
   cat "${FM_CODE_ROOT:-$REPO}/skills/reviewer/SKILL.md"
-  if [ -n "$FM_SPEC_PIN_JSON" ]; then fm_pin_prompt
-  else fm_conventions_prompt || exit 65; fi
+  fm_prompt_identity reviewer "$R_HEAD" "$R_BASE"
+  if [ -n "$FM_SPEC_PIN_JSON" ]; then fm_pin_prompt || exit 65
+  else
+    fm_conventions_prompt || exit 65
+    printf '\n# Project design (legacy unpinned context)\n\n'
+    fm_prompt_design "$FM_DESIGN" || exit 65
+  fi
   printf '\n---\n\n# The task\n\n```json\n%s\n```\n' "$spec"
   printf '\n# Round %s\n' "$ROUND"
 } > "$work/intro.md"
@@ -818,11 +823,13 @@ verify_review_head || exit 65
 } > "$work/diff.md"
 : > "$work/outro.md"
 
-# The project's contract as the branch under review declares it - the one the
-# gates run - so the reviewer runs what the required check and gate 5 would.
+# Approved gate authority comes from the pin, including for external checkouts
+# with no engine config. Legacy unpinned summaries are explicitly non-authoritative.
 contract_line() {   # contract_line <field>
   local v
-  if ! v="$(fm_project "$1" "$CHECKOUT/config.yaml" 2>/dev/null | tr '\0\n' '  ')"; then
+  if [ -n "$FM_SPEC_PIN_JSON" ]; then
+    v="$(jq -c --arg field "$1" '.contract[$field]' <<<"$FM_SPEC_PIN_JSON")" || return 65
+  elif ! v="$(fm_project "$1" "$CHECKOUT/config.yaml" 2>/dev/null | tr '\0\n' '  ')"; then
     v='(config.yaml could not be read)'
   fi
   v="${v% }"
@@ -857,7 +864,11 @@ if [ "$REVIEW_MODE" = run ]; then
     printf 'the foreground: this round is one turn, which ends when your answer does, so a\n'
     printf 'job left running in the background is never checked on and never finishes\n'
     printf 'before the verdict is due.\n\n'
-    printf 'The project'"'"'s contract, from this checkout'"'"'s config.yaml:\n\n'
+    if [ -n "$FM_SPEC_PIN_JSON" ]; then
+      printf 'The approved pinned gate contract (complete record above):\n\n'
+    else
+      printf 'Legacy unpinned checkout contract; not approved gate authority:\n\n'
+    fi
     for f in setup check check_env tests test docs; do contract_line "$f"; done
     printf '\nDo this, in order:\n\n'
     printf '1. Read what CI found on this head, in the head section: each job'"'"'s\n'

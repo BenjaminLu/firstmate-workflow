@@ -4837,3 +4837,26 @@ it privately. Workers and reviewers receive CONVENTIONS.md, and an fm review
 for review: external or both is only a pre-check. The captain's merge double
 check continues to own authenticated review, current-head checks/statuses and
 six-gate evidence.
+
+
+### T-052 portable prompt context
+
+Worker and reviewer prompts use the same launcher-supplied project/task/base
+and checkout/head identity and the same approved immutable pin. Pinned designs
+are excerpted at 48000 UTF-8 bytes, on character boundaries, with the original
+byte count and SHA-256 and an explicit TRIMMED notice when needed. The notice
+requires relevant missing context from firstmate; an excerpt is not complete
+coverage. Whole conventions and the complete pinned gate contract are never
+trimmed by this renderer. Unpinned legacy designs use the same bound and are
+labelled as legacy context, not approval. Run-mode contract summaries use the
+pin rather than mutable target configuration whenever a pin exists. Existing
+review total-input bounds still refuse an unrepresentable prompt.
+
+The frozen engine supplies roles and context; a target need not contain engine
+files. External authoritative head/base verification refuses a remote
+update-branch that left the local ref stale before preparing review, after the
+CI wait and before publishing. The isolated checkout must match the named head
+and merge-base. Self gate/candidate binding remains the shared T-138 boundary.
+These structural guarantees do not prove a model followed its role or inspected
+omitted design. Workers leave publication and suites to the outside launcher
+and CI; reviewer context excludes worker reports and reasoning.

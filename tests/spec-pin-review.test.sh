@@ -25,6 +25,9 @@ intro="$(sed '/^# Round /q' "$d/prompt.md")"
 assert_contains "$intro" '# Approved spec pin' 'reviewer receives the same pin record as the worker'
 assert_contains "$intro" '"title":"a task"' 'reviewer task context keeps the approved spec'
 assert_lacks "$intro" BRANCH_SCOPE_INJECTION 'branch edits cannot replace reviewer acceptance or scope'
+assert_contains "$(cat "$d/prompt.md")" 'Design cap: 48000 UTF-8 bytes' 'stock reviewer prompt bounds approved design'
+assert_contains "$(cat "$d/prompt.md")" '# Launcher project context' 'stock reviewer prompt carries project and checkout identity'
+assert_contains "$(cat "$d/prompt.md")" 'Checkout/head SHA:' 'stock reviewer prompt names its exact head'
 # A valid mutable branch spec must never rescue an existing corrupt pin.
 for corruption in hash unreadable; do
   rm -f "$d/prompt.md"

@@ -1119,7 +1119,8 @@ fi
 
 {
   cat "${FM_CODE_ROOT:-$REPO}/skills/worker/SKILL.md"
-  if [ -n "$FM_SPEC_PIN_JSON" ]; then fm_pin_prompt
+  fm_prompt_identity worker "$round_head" "$(git -C "$tree" merge-base "$BASE" HEAD 2>/dev/null || true)"
+  if [ -n "$FM_SPEC_PIN_JSON" ]; then fm_pin_prompt || exit 65
   else fm_conventions_prompt || exit 65; fi
   printf '\n---\n\n# Your task\n\n```json\n%s\n```\n' "$spec"
   printf '\nYour worktree is the current directory. Your branch is `%s`.\n' "$branch"
@@ -1206,20 +1207,18 @@ fi
   # the worktree and the round's own temp directory. The worktree's git
   # directory lives in the repository's common .git, which is readable and
   # not writable, and GitHub is out of the round's reach. So a round can
-  # neither commit nor push, and the skill's mid-run checkpoint is one
-  # instruction it cannot follow: saving the branch is this script's alone
+  # neither commit nor push: saving the branch is this script's alone
   # (design 13.1, "Saving the branch").
   printf '\n---\n\n# Saving your branch in this round\n\n'
   printf 'This round runs inside the OS sandbox. It may read the worktree'"'"'s git\n'
   printf 'history but not write it, and it cannot reach GitHub, so `git commit`,\n'
-  printf '`git push` and `fm-checkpoint.sh` fail here. That overrides the mid-run\n'
-  printf 'checkpoint the worker skill asks for: do not run `fm-checkpoint.sh`, and do\n'
+  printf '`git push` and `fm-checkpoint.sh` fail here; do not run `fm-checkpoint.sh`, and do\n'
   printf 'not work around the refusal. fm-worker.sh alone saves this branch: it commits\n'
   printf 'and pushes what the worktree holds when the round ends, however it ends,\n'
   printf 'including when it is stopped. Leave your work in the worktree.\n'
   printf '\n---\n\n# The design\n\n'
   if [ -z "$FM_SPEC_PIN_JSON" ]; then
-    sed -n '/^## 6\./,/^## 8\./p' "$FM_DESIGN" 2>/dev/null
+    fm_prompt_design "$FM_DESIGN" || exit 65
   fi
 } > "$prompt"
 
