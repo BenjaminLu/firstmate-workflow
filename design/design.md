@@ -4579,8 +4579,11 @@ appends a version and emits `spec_repinned`; never rewrite old pins.
 Before each worker or reviewer round, the launcher materializes the verified
 snapshots byte for byte under that run's private `pinned/` directory as
 `spec.json`, `design.md`, optional `CONVENTIONS.md`, and `contract.yaml` (T-173).
-Files are 0444 and the directory is 0755 so launcher cleanup can remove it
-normally. The OS sandbox denies round writes and grants only that folder read access, with no access to its state siblings or signing key. Prompts carry
+Files are regular (no symlinks) and mode 0444. The directory belongs to the
+current user and is not writable by group or others. The launcher creates it
+as 0755 so cleanup can remove it normally; reuse and sandbox validation accept
+owner writes. The OS sandbox denies round writes and grants only that folder
+read access, with no access to its state siblings or signing key. Prompts carry
 absolute paths, version and hashes, plus heading and line-range anchors for
 spec references and mandatory sections 6–8. No design excerpt or 48 KB cap
 remains. Conventions and parsed gate contract also remain complete in the

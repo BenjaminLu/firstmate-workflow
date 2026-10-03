@@ -39,7 +39,8 @@ assert folder.stat().st_mode & 0o777 == 0o755
 for key, name in [('spec', 'spec.json'), ('design', 'design.md'), ('contract', 'contract.yaml')]:
     path = folder / name
     assert path.read_bytes() == pin['snapshots'][key]['text'].encode()
-    assert path.stat().st_mode & 0o222 == 0
+    assert path.is_file() and not path.is_symlink()
+    assert path.stat().st_mode & 0o7777 == 0o444
 PY_PINNED
 assert_eq 0 "$?" 'reviewer adapter receives exact read-only pin files'
 # A valid mutable branch spec must never rescue an existing corrupt pin.

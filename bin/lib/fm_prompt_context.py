@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import sys
 
 FILES = {'spec': 'spec.json', 'design': 'design.md',
@@ -37,14 +38,17 @@ def materialize(pin, folder):
     if any(p.is_symlink() for p in (folder, *folder.parents)):
         raise ValueError('pinned folder must not traverse symlinks')
     if folder.exists():
+        info = folder.stat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+            raise ValueError('pinned folder must have current-user ownership and no group/other writes')
         if {p.name for p in folder.iterdir()} != set(expected):
             raise ValueError('pinned folder contents mismatch')
         for name, data in expected.items():
             path = folder / name
-            if path.is_symlink() or path.read_bytes() != data or path.stat().st_mode & 0o222:
-                raise ValueError('pinned file mismatch or writable: ' + name)
-        if folder.stat().st_mode & 0o777 != 0o755:
-            raise ValueError('pinned folder mode must be 0755')
+            info = path.lstat()
+            if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o444
+                    or path.read_bytes() != data):
+                raise ValueError('pinned file must be regular, mode 0444 and match snapshot: ' + name)
         return
     folder.mkdir(parents=True, mode=0o700)
     for name, data in expected.items():

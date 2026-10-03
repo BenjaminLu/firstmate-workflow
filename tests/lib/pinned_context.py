@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 ROOT = Path(sys.argv.pop(1))
@@ -51,7 +52,7 @@ class PinnedContext(unittest.TestCase):
                               ('conventions', 'CONVENTIONS.md'), ('contract', 'contract.yaml')]:
             path = self.folder / filename
             self.assertEqual(path.read_bytes(), self.pin['snapshots'][key]['text'].encode())
-            self.assertEqual(path.stat().st_mode & 0o222, 0)
+            self.assertEqual(path.stat().st_mode & 0o7777, 0o444)
             self.assertIn(str(path), result.stdout)
             self.assertIn(self.pin['snapshots'][key]['sha256'], result.stdout)
         self.assertEqual(self.folder.stat().st_mode & 0o777, 0o755)
@@ -72,6 +73,88 @@ class PinnedContext(unittest.TestCase):
         self.assertEqual(self.render().returncode, 0)
         shutil.rmtree(self.folder.parent)
         self.assertFalse(self.folder.exists())
+
+    def profile(self, platform='darwin'):
+        tree = self.root / 'target'
+        tree.mkdir(exist_ok=True)
+        policy = self.root / 'policy.json'
+        policy.write_text(json.dumps(dict(write=['{root}'], read=['/usr', '/bin'],
+                                         never_read=[], repo_config=[], vendors={},
+                                         dimensions=[], network=[], env_scrub=[], procs=2048, cpu=600)))
+        return subprocess.run(['bash', str(ROOT / 'bin/fm-sandbox.sh'), 'profile',
+                               '--policy=' + str(policy), '--root=' + str(tree)],
+                              env=dict(self.env, FM_SANDBOX_OS=platform), text=True, capture_output=True)
+
+    def test_folder_permissions_agree_for_reuse_and_both_profiles(self):
+        self.assertEqual(self.render().returncode, 0)
+        for mode in (0o755, 0o700, 0o750):
+            with self.subTest(mode=oct(mode)):
+                self.folder.chmod(mode)
+                result = self.render()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                for platform in ('darwin', 'linux'):
+                    result = self.profile(platform)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+        for mode in (0o775, 0o757):
+            with self.subTest(mode=oct(mode)):
+                self.folder.chmod(mode)
+                self.assertNotEqual(self.render().returncode, 0)
+                for platform in ('darwin', 'linux'):
+                    self.assertNotEqual(self.profile(platform).returncode, 0)
+
+    def test_reuse_refuses_folder_owned_by_another_user(self):
+        self.assertEqual(self.render().returncode, 0)
+        with patch.object(context.os, 'getuid', return_value=os.getuid() + 1):
+            with self.assertRaisesRegex(ValueError, 'owner'):
+                context.materialize(self.pin, self.folder)
+
+    def test_profiles_accept_every_legacy_optional_file_combination(self):
+        self.pin['version'] = None
+        for mask in range(8):
+            with self.subTest(mask=mask):
+                if self.folder.exists():
+                    shutil.rmtree(self.folder)
+                for bit, key in enumerate(('design', 'contract', 'conventions')):
+                    snap = self.pin['snapshots'][key]
+                    text = key if mask & (1 << bit) else ''
+                    snap.update(text=text, sha256=hashlib.sha256(text.encode()).hexdigest(),
+                                absent=not bool(mask & (1 << bit)))
+                result = self.render()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                for platform in ('darwin', 'linux'):
+                    result = self.profile(platform)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_reuse_and_profiles_refuse_nonregular_or_non0444_files(self):
+        self.assertEqual(self.render().returncode, 0)
+        file = self.folder / 'spec.json'
+        for mode in (0o644, 0o400, 0o544):
+            with self.subTest(mode=oct(mode)):
+                file.chmod(mode)
+                self.assertNotEqual(self.render().returncode, 0)
+                self.assertNotEqual(self.profile().returncode, 0)
+        file.unlink()
+        target = self.root / 'spec-copy'
+        target.write_text(self.pin['snapshots']['spec']['text'])
+        target.chmod(0o444)
+        file.symlink_to(target)
+        self.assertNotEqual(self.render().returncode, 0)
+        self.assertNotEqual(self.profile().returncode, 0)
+        file.unlink()
+        file.mkdir()
+        self.assertNotEqual(self.render().returncode, 0)
+        self.assertNotEqual(self.profile().returncode, 0)
+        file.rmdir()
+
+    def test_profiles_refuse_missing_spec_and_unknown_files(self):
+        self.assertEqual(self.render().returncode, 0)
+        extra = self.folder / 'extra'
+        extra.write_text('unexpected')
+        extra.chmod(0o444)
+        self.assertNotEqual(self.profile().returncode, 0)
+        extra.unlink()
+        (self.folder / 'spec.json').unlink()
+        self.assertNotEqual(self.profile().returncode, 0)
 
     def test_legacy_missing_sources_are_omitted_and_named(self):
         for external in ('0', '1'):

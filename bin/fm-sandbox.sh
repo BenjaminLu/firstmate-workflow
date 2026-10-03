@@ -343,16 +343,20 @@ def pinned_of():
         return None
     if not os.path.isabs(path) or real(path) != path or os.path.basename(path) != 'pinned':
         raise ValueError('invalid pinned folder path')
-    if not os.path.isdir(path) or os.stat(path).st_mode & 0o222:
-        raise ValueError('missing or writable pinned folder')
+    if not os.path.isdir(path):
+        raise ValueError('missing pinned folder')
+    info = os.stat(path)
+    if info.st_uid != os.getuid() or info.st_mode & 0o022:
+        raise ValueError('pinned folder must have current-user ownership and no group/other writes')
     names = set(os.listdir(path))
-    if names not in ({'spec.json', 'design.md', 'contract.yaml'},
-                     {'spec.json', 'design.md', 'contract.yaml', 'CONVENTIONS.md'}):
+    # fm_prompt_context.materialize requires spec; legacy rounds may omit
+    # any of the other three snapshots. Nothing else belongs in this grant.
+    if 'spec.json' not in names or not names <= {'spec.json', 'design.md', 'contract.yaml', 'CONVENTIONS.md'}:
         raise ValueError('invalid pinned folder contents')
     for name in names:
         file = os.path.join(path, name)
-        if os.path.islink(file) or not os.path.isfile(file) or os.stat(file).st_mode & 0o222:
-            raise ValueError('invalid or writable pinned file')
+        if os.path.islink(file) or not os.path.isfile(file) or os.stat(file).st_mode & 0o7777 != 0o444:
+            raise ValueError('pinned file must be regular and mode 0444')
     run = os.environ.get('FM_RUN_DIR')
     if run and path != os.path.join(real(run), 'pinned'):
         raise ValueError('pinned folder does not belong to this round')

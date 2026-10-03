@@ -302,4 +302,10 @@ variable and must not grant the parent run or project directory. This applies
 through `fm-sandbox.sh` to Claude, Codex, Cursor and Gemini alike. The mock is a
 fixed file-writing fixture, with no model or arbitrary command execution.
 The prompt indexes the files, their hashes, pin version and design anchors.
-Missing, writable or malformed pinned folders refuse sandbox profile creation.
+Files must be regular (no symlinks) and mode 0444. The folder must belong to
+the current user and must not be writable by group or others; 0755 is valid
+and allows launcher cleanup. The sandbox denies round writes regardless of
+the owner's directory write bit. `spec.json` is required; `design.md`,
+`contract.yaml` and `CONVENTIONS.md` are each optional for legacy inputs.
+Missing folders, invalid ownership or permissions, and unexpected entries
+refuse sandbox profile creation.
