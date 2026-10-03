@@ -10,7 +10,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # to leave them alone - and the e2e stage has to say it skipped rather than
 # quietly passing when the browser is not installed.
 q="$(safe_tmpdir)"; mkdir -p "$q/bin" "$q/tests/e2e"
-cp "$ROOT/bin/ci.sh" "$ROOT/bin/fm-config.sh" "$q/bin/"
+# shellcheck source=tests/lib/config-modules.sh
+. "$ROOT/tests/lib/config-modules.sh"
+cp "$ROOT/bin/ci.sh" "$ROOT/bin/fm-config.sh" "$q/bin/"; config_modules_fixture "$q/bin/"
 printf 'import { test, expect } from "bun:test";\ntest("a", () => expect(1).toBe(1));\n' \
   > "$q/tests/unit.spec.ts"
 printf 'import { test } from "@playwright/test";\ntest("b", async ({ page }) => { await page.goto("about:blank"); });\n' \
@@ -43,6 +45,26 @@ assert_contains "$out" "SC2164" "and the stage says which warning"
 printf '#!/usr/bin/env bash\nargs=""\necho $args\n' > "$q/bin/adapters/sloppy.sh"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)"
 assert_lacks "$out" "x shellcheck" "an info-level finding does not, which is what the adapters depend on"
+
+# T-176: exercise compilation through the fast entry point, not just its
+# Python helper. Each broken module is the only syntax error in its run,
+# so a top-level failure cannot conceal a missing recursive scan.
+for python_file in bin/lib/compile_probe.py bin/lib/nested/compile_probe.py; do
+  mkdir -p "$q/$(dirname "$python_file")"
+  printf 'def broken(:\n' > "$q/$python_file"
+  python_rc=0
+  out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)" || python_rc=$?
+  assert_eq '1' "$python_rc" "invalid Python in $python_file fails fast checks"
+  assert_contains "$out" 'x bin/lib Python modules compile' "the compilation stage rejects $python_file"
+  assert_contains "$out" "$python_file" "the compilation diagnostic names $python_file"
+  printf 'answer = 42\n' > "$q/$python_file"
+  python_rc=0
+  out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)" || python_rc=$?
+  assert_eq '0' "$python_rc" "fixing $python_file restores green fast checks"
+  assert_contains "$out" '+ bin/lib Python modules compile' "the compilation stage accepts fixed $python_file"
+  rm -f "$q/$python_file"
+done
+rmdir "$q/bin/lib/nested"
 
 # T-161: construct the unsafe bytes so this test is itself lint-clean.
 # Exercise nested shell snippets as well as test files, without text exclusions.
@@ -264,7 +286,7 @@ printf '#!/usr/bin/env bash\nr=/tmp\ncp "$r/bin/x.sh" "$r/x.%s"\n' 'keep"' > "$q
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 n="$(find "$q/tests" -name '*.test.sh' | wc -l | tr -d ' ')"
 assert_contains "$out" "($n suites)" "the hygiene stage says how many suites it linted"
-bare="$(safe_tmpdir)"; mkdir -p "$bare/bin"; cp "$q/bin/ci.sh" "$q/bin/fm-config.sh" "$bare/bin/"
+bare="$(safe_tmpdir)"; mkdir -p "$bare/bin"; cp "$q/bin/ci.sh" "$q/bin/fm-config.sh" "$bare/bin/"; config_modules_fixture "$bare/bin/"
 assert_contains "$(FM_ROOT="$bare" bash "$bare/bin/ci.sh" 2>&1)" "(0 suites)" \
   "and says zero rather than passing silently when there are none"
 rm -rf "$bare"
@@ -653,7 +675,7 @@ rm -rf "$q/bin/inner"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 assert_matches "$out" 'spin on a flag with no value \([0-9]+ scripts\)' \
   "the option-loop stage says how many scripts it read"
-bare2="$(safe_tmpdir)"; mkdir -p "$bare2/bin"; cp "$q/bin/ci.sh" "$q/bin/fm-config.sh" "$bare2/bin/"
+bare2="$(safe_tmpdir)"; mkdir -p "$bare2/bin"; cp "$q/bin/ci.sh" "$q/bin/fm-config.sh" "$bare2/bin/"; config_modules_fixture "$bare2/bin/"
 assert_contains "$(FM_ROOT="$bare2" bash "$bare2/bin/ci.sh" 2>&1)" "value (0 scripts)" \
   "and says zero on a tree with none"
 rm -rf "$bare2"
