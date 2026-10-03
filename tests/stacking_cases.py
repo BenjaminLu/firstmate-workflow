@@ -60,15 +60,36 @@ class Stacking(unittest.TestCase):
         runs = {'check_runs': [dict(id=1, name='ci', head_sha=B,
                                    status='completed', conclusion='success')]}
         with patch.dict(os.environ, {'FM_EXTERNAL': '1', 'FM_STATE_DIR': '/project/state'}, clear=True), \
-             patch('fm_conventions.read_policy', return_value={'required_checks': ['ci']}) as policy, \
+             patch('fm_conventions.read_policy', return_value={
+                 'required_checks': ['ci'], 'base': 'main', 'stacking': 'allowed'}) as policy, \
              patch.object(binding, 'remote_head', return_value=view), \
              patch.object(binding, 'git', return_value=A), \
              patch.object(binding, 'command', return_value=b'') as fetch, \
-             patch.object(binding, 'github', side_effect=[runs, {'sha': B, 'statuses': []}]):
+             patch.object(binding, 'github', side_effect=[
+                 {'contexts': ['ci'], 'checks': []}, runs, {'sha': B, 'statuses': []}]) as github:
             self.assertEqual(len(binding.required_checks('/repo', 'owner/repo', 2, B)), 1)
             self.assertEqual(policy.call_args.args[2], 'main')
             fetch.assert_called_once_with(['git', '-C', '/repo', 'fetch', '--no-tags',
                                           'https://github.com/owner/repo.git', 'refs/heads/t-1-parent'])
+            self.assertEqual(github.call_args_list[0].args, ('owner/repo', 'api',
+                'repos/owner/repo/branches/t-1-parent/protection/required_status_checks'))
+
+    def test_external_stacked_checks_with_hold_are_unknown(self):
+        import os
+        view = dict(headRefOid=B, baseRefName='t-1-parent', baseRefOid=A)
+        with patch.dict(os.environ, {'FM_EXTERNAL': '1', 'FM_STATE_DIR': '/project/state'}, clear=True), \
+             patch('fm_conventions.read_policy', return_value={
+                 'required_checks': ['ci'], 'base': 'main', 'stacking': 'hold'}) as policy, \
+             patch.object(binding, 'remote_head', return_value=view), \
+             patch.object(binding, 'git', return_value=A), \
+             patch.object(binding, 'command', return_value=b'') as fetch, \
+             patch.object(binding, 'github') as github:
+            with self.assertRaisesRegex(ValueError, 'unknown: stacked PR base requires confirmed stacking policy'):
+                binding.required_checks('/repo', 'owner/repo', 2, B)
+            self.assertEqual(policy.call_args.args[2], 'main')
+            fetch.assert_called_once_with(['git', '-C', '/repo', 'fetch', '--no-tags',
+                                          'https://github.com/owner/repo.git', 'refs/heads/t-1-parent'])
+            github.assert_not_called()
 
     def test_open_base_retained(self):
         with patch.object(stack, 'github', return_value=[{'number': 9}]):

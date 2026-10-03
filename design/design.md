@@ -1201,13 +1201,16 @@ before or after an APPROVE and during a running review round. CI and the six
 gates always rerun on the head being merged, since they test the change
 combined with the current `main`.
 
-Gate 5 names no toolchain. The target repository declares its own in
-`config.yaml`'s `project:` block (`setup`, `check`, `check_env`, `tests`,
-`test`, `docs`; see the README), and the gates run exactly that, read from the
-branch under test in the shipped self path. T-049/T-050 replace that source
-with the approved pin (§15.2); then a scoped config change cannot alter its own
-gates. This consolidation does not claim that transition is implemented. Gate 5 asks for no new test only when every changed non-test path matches
-the declared `docs` globs; with none declared, nothing is exempt.
+Gate 5 names no toolchain. It reads the complete verified task pin's contract
+(`setup`, `check`, `check_env`, `tests`, `test`, `docs`) through the shared
+fail-first engine. Neither the tested branch nor a mutable engine copy can
+change that contract. A scoped config edit cannot alter its own gates.
+The self contract lives once at `projects.firstmate-workflow.project`;
+historical pins retain their recorded commit and top-level location without
+repinning. Both shell and session readers accept either location and refuse
+a duplicate. External contracts remain approved private snapshots.
+Gate 5 asks for no new test only when every changed non-test path matches
+the pinned `docs` globs; with none declared, nothing is exempt.
 An undeclared `check` where gate 5 must fall back to it, or a failed `setup`,
 fails the gate by name; a stage the
 check skipped is not a stage that passed. `bin/fm-session.sh start` runs
@@ -4596,8 +4599,8 @@ refuses reuse or an approval no later than the superseded pin approval, and appe
 Self repins identify uncommitted local spec/design/conventions explicitly;
 their gate contract still comes from accepted base. Omitted project and explicit
 `firstmate-workflow` retain the same self storage and behavior. The pin contains
-all contract fields, including `docs`; T-050 owns the remaining execution
-transition from the shared fail-first engine's branch contract to that pin.
+all contract fields, including `docs`; gate 5 passes the verified contract
+to the shared fail-first engine without consulting the target config.
 
 Before accepting evidence, synchronize and verify GitHub's authoritative PR head
 against the local task ref and isolated checkout. CI/check statuses, gates,

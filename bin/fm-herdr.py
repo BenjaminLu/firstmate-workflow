@@ -2463,14 +2463,30 @@ def project_contract(config):
     """The declared project block as {key: value}; absent keys are absent."""
     path = Path(config)
     if not path.is_file(): return {}
-    block, inside = [], False
-    for raw in path.read_text().splitlines():
-        if not inside:
-            inside = bool(re.match(r'project:\s*(#.*)?$', raw))
-            continue
-        if not raw.strip() or raw.lstrip().startswith('#'): continue
-        if not raw[:1].isspace(): break
-        block.append(raw.expandtabs(8))
+    # Historical self pins have a top-level block; new self configurations
+    # have one under the registry entry whose repo is '.'. Both are readable,
+    # but declaring both is an error, even if their values happen to agree.
+    lines = [line.expandtabs(8) for line in path.read_text().splitlines()
+             if line.strip() and not line.lstrip().startswith('#')]
+    top = _config_key(lines, 'project')
+    projects = _config_key(lines, 'projects')
+    nested = []
+    if projects:
+        entries = projects[1]
+        level = min((_indent(line) for line in entries), default=0)
+        for line in entries:
+            if _indent(line) != level: continue
+            match = re.match(r'\s*([a-z0-9-]+):', line)
+            if not match: continue
+            entry = _config_key(entries, match.group(1))
+            repo = _config_key(entry[1], 'repo')
+            if repo and _project_scalar(repo[0], 'repo') == '.':
+                block = _config_key(entry[1], 'project')
+                if block is not None: nested.append(block)
+    if len(nested) > 1 or (top is not None and nested):
+        raise ValueError('config.yaml project: duplicate contract also declared in self registry entry')
+    selected = top if top is not None else (nested[0] if nested else None)
+    block = selected[1] if selected else []
     indent = lambda line: len(line) - len(line.lstrip(' '))
     contract, i = {}, 0
     while i < len(block):

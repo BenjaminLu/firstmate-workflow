@@ -12,6 +12,8 @@
     "config.yaml",
     "bin/fm-config.sh",
     "bin/fm-gate.sh",
+    "bin/fm-failfirst.sh",
+    "bin/fm-herdr.py",
     "tests/config.test.sh",
     "tests/gate.test.sh",
     "README.md",

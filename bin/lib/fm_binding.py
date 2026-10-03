@@ -42,7 +42,20 @@ def source_binding(task, head, base, code):
     root = Path(os.environ['FM_TARGET_ROOT'])
     result = change(root, head, base)
     external = os.environ.get('FM_EXTERNAL') == '1'
-    if external:
+    from fm_spec_pins import Pins
+    env = dict(os.environ)
+    if not external:
+        env.update(FM_ENGINE_ROOT=str(root), FM_STATE_DIR=str(root / 'state'),
+                   FM_TASKS_DIR=str(root / 'design/tasks'), FM_DESIGN=str(root / 'design/design.md'))
+    env.setdefault('FM_ENGINE_ROOT', str(code))
+    env.setdefault('FM_DESIGN', str(Path(env['FM_STATE_DIR']).parent / 'design.md'))
+    pin = Pins(env, task).resolve(if_present=True)
+    if pin is not None:
+        # Gate policy and signed review evidence bind the same approved bytes.
+        # A corrupt pin never falls back to the branch or mutable private data.
+        spec, contract, conventions = (pin['snapshots'][key]['text'].encode('utf-8')
+                                       for key in ('spec', 'contract', 'conventions'))
+    elif external:
         spec = (Path(os.environ['FM_TASKS_DIR']) / (task + '.json')).read_bytes()
         contract = (Path(os.environ['FM_STATE_DIR']) / 'config.yaml').read_bytes()
         conventions = (Path(os.environ['FM_STATE_DIR']).parent / 'CONVENTIONS.md').read_bytes()
@@ -95,7 +108,7 @@ def authoritative(root, branch, repository, pr):
         raise ValueError('authoritative PR head differs from fetched head or local task ref; refresh before accepting')
     verified_base(view, repository, root)
     now = remote_head(repository, pr)
-    if now['headRefOid'] != head or now['baseRefName'] != view['baseRefName']:
+    if any(now.get(key) != view.get(key) for key in ('headRefOid', 'baseRefOid', 'baseRefName')):
         raise ValueError('PR head/base moved while verifying')
     return head
 
@@ -106,36 +119,59 @@ def required_checks(root, repository, pr, head):
     if view['headRefOid'] != head:
         raise ValueError('checks belong to stale head')
     verified_base(view, repository, root)
-    if os.environ.get('FM_EXTERNAL') == '1':
-        from fm_conventions import read_policy
-        policy = read_policy(Path(os.environ['FM_STATE_DIR']).parent / 'CONVENTIONS.md', repository, os.environ.get('FM_BASE') or 'main')
-        names = sorted(set(policy['required_checks'] + policy.get('analysers', [])))
-    else:
-        from urllib.parse import quote
+    from urllib.parse import quote
+    from fm_conventions import read_policy
+    external = os.environ.get('FM_EXTERNAL') == '1'
+    policy_path = (Path(os.environ['FM_STATE_DIR']).parent if external else Path(root)) / 'CONVENTIONS.md'
+    policy = None
+    try:
+        policy = read_policy(policy_path, repository, (os.environ.get('FM_BASE') or 'main') if external else None)
+    except (ValueError, OSError) as error:
+        if external:
+            raise ValueError('required checks unknown: captain-confirmed checks and policy required: ' + str(error)) from error
+    if policy and view['baseRefName'] != policy['base'] and policy['stacking'] != 'allowed':
+        raise ValueError('required checks unknown: stacked PR base requires confirmed stacking policy')
+    try:
         protection = github(repository, 'api', 'repos/' + repository + '/branches/' + quote(view['baseRefName'], safe='') + '/protection/required_status_checks')
-        names = sorted(set(protection.get('contexts', []) + [c['context'] for c in protection.get('checks', [])]))
+        names = set(protection.get('contexts', []) + [c['context'] for c in protection.get('checks', [])])
+    except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError) as error:
+        if policy is None:
+            raise ValueError('required checks unknown: unreadable protection; require captain-confirmed checks and policy') from error
+        names = set()
+    if policy:
+        names.update(policy['required_checks'])
+        names.update(policy.get('analysers', []))
     if not names:
-        raise ValueError('required checks are unknown')
-    runs = github(repository, 'api', 'repos/' + repository + '/commits/' + head + '/check-runs?per_page=100')['check_runs']
-    statuses = github(repository, 'api', 'repos/' + repository + '/commits/' + head + '/status?per_page=100')
+        raise ValueError('required checks unknown: no confirmed names')
+    try:
+        payload = github(repository, 'api', 'repos/' + repository + '/commits/' + head + '/check-runs?per_page=100')
+        runs = payload['check_runs']
+        statuses = github(repository, 'api', 'repos/' + repository + '/commits/' + head + '/status?per_page=100')
+        if payload.get('total_count', len(runs)) > len(runs) or len(runs) >= 100 or len(statuses.get('statuses', [])) >= 100:
+            raise ValueError('complete check/status history unavailable')
+    except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError) as error:
+        raise ValueError('required checks unknown: ' + str(error)) from error
     if statuses.get('sha') != head:
         raise ValueError('commit statuses belong to another head')
     runs += status_runs(statuses, head)
     results = []
-    for name in names:
+    for name in sorted(names):
         matches = [r for r in runs if r.get('name') == name and r.get('head_sha') == head]
         # A context present in both APIs must pass in both; neither hides red.
         for source in ('check run', 'commit status'):
             subset = [r for r in matches if r.get('source', 'check run') == source]
             if subset:
                 latest = max(subset, key=lambda r: r.get('id', 0))
-                if latest.get('status') != 'completed' or latest.get('conclusion') not in ('success', 'neutral', 'skipped'):
-                    raise ValueError('required check/status not green: ' + name)
+                if latest.get('status') != 'completed':
+                    raise ValueError('required check/status pending: ' + name)
+                if latest.get('conclusion') not in ('success', 'neutral', 'skipped'):
+                    raise ValueError('required check/status failed: ' + name)
                 results.append(latest)
         if not matches:
-            raise ValueError('required check/status missing: ' + name)
-    if remote_head(repository, pr)['headRefOid'] != head:
-        raise ValueError('PR head moved while reading checks')
+            raise ValueError('required check/status pending (missing): ' + name)
+    now = remote_head(repository, pr)
+    if any(now.get(key) != view.get(key) for key in ('headRefOid', 'baseRefOid', 'baseRefName')):
+        raise ValueError('PR head/base moved while reading checks')
     return results
 
 
@@ -220,6 +256,16 @@ def local_gate_base(root, pr, project_base):
     return verified_base(view, repo)
 
 
+def verify_current(root, repo, pr, head, base_tip):
+    """Last remote read before retaining or accepting readiness."""
+    view = remote_head(repo, pr)
+    if view['headRefOid'] != head:
+        raise ValueError('PR head/base moved; readiness is stale')
+    name = verified_base(view, repo, root)
+    if git(root, 'rev-parse', name + '^{commit}') != base_tip:
+        raise ValueError('local base moved; readiness is stale')
+
+
 def main():
     import argparse
     p = argparse.ArgumentParser()
@@ -258,6 +304,8 @@ def main():
         selected, external = selected_review(store, root, repo, args.pr, head)
         if review_identity(selected) != record['verdict_signature'] or (external and review_identity(external) != record.get('external_signature')):
             raise ValueError('candidate review superseded')
+        if record.get('gate_base') != git(root, 'rev-parse', view_base(repo, args.pr) + '^{commit}'):
+            raise ValueError('candidate gate base moved; refresh gates')
         reviewed = record['review']
         binding = reviewed.get('binding', {})
         current_base = git(root, 'merge-base', view_base(repo, args.pr), head)
@@ -265,6 +313,7 @@ def main():
         for key in ('spec_sha256', 'contract_sha256', 'conventions_sha256', 'patch', 'files'):
             if current[key] != binding.get(key):
                 raise ValueError('candidate source/contract changed: ' + key)
+        verify_current(root, repo, args.pr, head, record['gate_base'])
         print(json.dumps(record)); return
     checks = required_checks(root, repo, args.pr, head)
     if args.mode == 'checks':
@@ -278,6 +327,9 @@ def main():
     for number in (1,2,4,5,6,7):
         if not re.search(r'^  \+ gate ' + str(number) + ':', report, re.M):
             raise ValueError('gate transcript lacks gate ' + str(number))
+    base_tip = git(root, 'rev-parse', view_base(repo, args.pr) + '^{commit}')
+    if not re.search(r'^BASE:' + re.escape(base_tip) + r'$', report, re.M):
+        raise ValueError('gate transcript base moved or is unbound; refresh gates')
     reviewed, external = selected_review(store, root, repo, args.pr, head)
     bound = reviewed.get('binding', {})
     current_base = git(root, 'merge-base', view_base(repo, args.pr), head)
@@ -286,9 +338,10 @@ def main():
         raise ValueError('review changed after gate 7')
     if reviewed['head'] != head:
         git(root, 'merge-base', '--is-ancestor', reviewed['base'], current_base)
+    verify_current(root, repo, args.pr, head, base_tip)
     record = store.append('readiness', reviewed['round'], 'firstmate', head, '',
                          pr=int(args.pr), repository=repo, gates=[1,2,4,5,6,7], checks=checks,
-                         gate_report_sha256=digest(report.encode()),
+                         gate_report_sha256=digest(report.encode()), gate_base=base_tip,
                          verdict_signature=review_identity(reviewed), review=reviewed,
                          external_signature=review_identity(external) if external else None)
     print(json.dumps(record))
