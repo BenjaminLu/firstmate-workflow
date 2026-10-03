@@ -140,7 +140,7 @@ ROUTINE="greenlit dispatched commit_pushed pr_opened gate_passed gate_failed \
 review_opened review_failed ask_pass_criteria criteria_returned \
 protocol_violation approved merged closed decision_made worker_crashed \
 vendor_unavailable agent_finished crew_status parked unparked spec_pinned \
-spec_repinned agent_lost reopened model_mismatch"
+spec_repinned agent_lost reopened model_mismatch autopilot_waiting conventions_drift"
 # T-127: a requested model and the model the vendor actually ran on
 # disagreeing is routine, the same way vendor_unavailable is - it is
 # information for the board's crew card, not something the captain rules on.

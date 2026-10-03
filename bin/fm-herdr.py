@@ -2330,9 +2330,9 @@ def launch(script, root, args):
     index = 0
     while index < len(args):
         value = args[index]
-        # All validated long options in these five entrypoints take one value,
-        # except --dry-run. Skip values so an alias is never read as an option.
-        if value.startswith('--') and value != '--dry-run':
+        # Skip value options so an alias is never read as a flag. Dispatch and
+        # autopilot also have the listed boolean options.
+        if value.startswith('--') and value not in ('--dry-run', '--all', '--resume'):
             if value == '--repo': args[index + 1] = str(root)
             if value == '--task': task = args[index + 1]
             index += 2

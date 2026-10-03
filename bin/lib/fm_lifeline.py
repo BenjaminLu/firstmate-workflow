@@ -43,6 +43,8 @@ exactly as long.
                                  start a keeper under P (default: the
                                  session) and print its pid
   fm_lifeline.py session-owner   print the pid `--session` resolves to
+  fm_lifeline.py ring-events <root> <line>
+                                 Notify only session/autopilot.d.
   fm_lifeline.py ring <root> <line>
                                  ring every waiter's doorbell under
                                  <root>/state/session/wake.d; print how many
@@ -425,8 +427,10 @@ class Doorbell:
     never finds a registered bell with nobody holding it. Removed on close;
     a bell whose waiter was SIGKILLed is removed by the next ring."""
 
-    def __init__(self, root):
-        base = os.path.join(record_root(root), WAKE_DIR)
+    def __init__(self, root, channel='wake.d'):
+        if channel not in ('wake.d', 'autopilot.d'):
+            raise ValueError('unknown notification channel')
+        base = os.path.join(record_root(root), 'state/session', channel)
         os.makedirs(base, exist_ok=True)
         name = f'{os.getpid()}-{os.urandom(6).hex()}'
         temp = os.path.join(base, '.' + name + '.new')
@@ -474,10 +478,31 @@ def ring(root, line):
     bell nobody holds any more (a waiter that was killed), unlinked; EAGAIN
     is a pipe already full, a bell already rung. The caller appends to the
     wake queue first: a bell is a hint, the queue is the record."""
+    return ring_state(os.path.join(record_root(root), 'state'), line)
+
+
+def ring_state(state, line):
+    """Ring an already resolved project's state (for registry/policy writers).
+
+    Callers must obtain state through the canonical project resolver. This
+    avoids changing process-global FM_PROJECT while notifying two projects.
+    """
+    # A semantic wake also updates autopilot's durable local inputs. It is
+    # forwarded one way only: raw autopilot events never ring firstmate.
+    ring_events(state, line)
+    return _ring_directory(os.path.join(state, 'session/wake.d'), line)
+
+
+def ring_events(state, line):
+    """Notify only the scripted supervisor, using already resolved state."""
+    return _ring_directory(os.path.join(state, 'session/autopilot.d'), line)
+
+
+def _ring_directory(directory, line):
     import glob
     rang = 0
     data = (str(line).replace('\n', ' ') + '\n').encode()
-    for path in sorted(glob.glob(os.path.join(glob.escape(os.path.join(record_root(root), WAKE_DIR)), '*.fifo'))):
+    for path in sorted(glob.glob(os.path.join(glob.escape(directory), '*.fifo'))):
         try:
             fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK | getattr(os, 'O_NOFOLLOW', 0))
         except OSError as error:
@@ -924,6 +949,11 @@ def main(args):
         if not isinstance(identifiers, list):
             raise ValueError('wake ids must be an array')
         print(json.dumps(acknowledged_many(args[0], identifiers, blocking=False)))
+        return 0
+    if mode == 'ring-events':
+        if len(args) != 2 or not args[0]:
+            return _usage()
+        print(ring_events(os.path.join(record_root(args[0]), 'state'), args[1]))
         return 0
     if mode == 'ring':
         if len(args) != 2 or not args[0]:

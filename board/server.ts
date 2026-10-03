@@ -1341,8 +1341,10 @@ const buildState = (only: string | null) => {
       safe.title = null;
       if ("answerable" in value) safe.answerable = false;
       const pr = prNumber(value.pr);
-      safe.summary = { en: `External project update${pr ? ` #${pr}` : ""}`,
-        "zh-TW": `外部專案狀態更新${pr ? ` #${pr}` : ""}` };
+      safe.summary = value.type === "autopilot_waiting"
+        ? { en: "Project judgment is overdue; firstmate attention is needed.", "zh-TW": "專案判斷已逾時；需要 firstmate 處理。" }
+        : { en: `External project update${pr ? ` #${pr}` : ""}`,
+            "zh-TW": `外部專案狀態更新${pr ? ` #${pr}` : ""}` };
       return safe;
     };
     for (const key of ["tasks", "crew", "pending", "responses", "recent", "outcomes", "handoffs"] as const)

@@ -357,8 +357,9 @@ def main(argv=None):
             if args.command == 'edit':
                 if not args.changes or not args.captain or not args.intent: raise ValueError('edit needs changes, captain and intent')
                 print(edit(home,json.loads(args.changes.read_text()),args.captain,args.intent))
-                from fm_lifeline import ring
+                from fm_lifeline import ring, ring_state
                 ring(engine, 'conventions edited')
+                ring_state(home/'state', 'conventions edited')
             else:
                 p=read_policy(home/'CONVENTIONS.md')
                 print(drift(home,inspect_remote(p['repository'])) or 'No convention drift.')
@@ -405,8 +406,9 @@ def main(argv=None):
                 raise ValueError('external onboarding cannot replace the self project')
         p=approve(home,e,p,answers)
         register(engine,name,p)
-        from fm_lifeline import ring
+        from fm_lifeline import ring, ring_state
         ring(engine, 'conventions approved')
+        ring_state(home/'state', 'conventions approved')
         print(str(home/'CONVENTIONS.md'))
         return 0
     except (OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:

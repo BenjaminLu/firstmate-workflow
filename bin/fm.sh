@@ -72,6 +72,10 @@ usage() {
   cat <<'EOF'
 usage: fm.sh <command> [options]
 
+  autopilot ensure|status [--all] [--repo DIR] [--project NAME]
+        Start session-owned mechanical supervision, or inspect its kernel lock.
+        No automatic merge or idle model timer. Session start ensures all projects.
+
   self-update --skill <name> --why <text> [--repo DIR]
         Propose a change to skills/<name>. Writes a task spec under
         state/skill-updates/ and puts a decision card in front of the
@@ -865,7 +869,21 @@ cmd_setup() {
 # =========================================================================
 cmd="${1:-help}"
 [ $# -eq 0 ] || shift
+# Reconnect crashed session services on the next operator command. This is
+# a kernel-lock check, never a PID heartbeat, and crew rounds never start it.
+if [ -z "${FM_IN_ROUND:-}" ] &&
+   { [ -z "${FIRSTMATE_CI_SESSION:-}" ] || [ "${FM_AUTOPILOT_TEST_ENABLE:-0}" = 1 ]; } &&
+   [ -x "$HERE/fm-autopilot.sh" ]; then
+  _pilot_repo="$REPO"; _pilot_prev=''
+  for _pilot_arg in "$@"; do
+    if [ "$_pilot_prev" = --repo ]; then _pilot_repo="$_pilot_arg"; fi
+    _pilot_prev="$_pilot_arg"
+  done
+  "$HERE/fm-autopilot.sh" ensure --resume --all --repo "$_pilot_repo" >&2 ||
+    echo 'fm: autopilot unavailable; inspect project state/autopilot/service.log' >&2
+fi
 case "$cmd" in
+  autopilot)   "$HERE/fm-autopilot.sh" "$@" ;;
   project)     "$HERE/fm-project.sh" "$@" ;;
   self-update) cmd_selfupdate "$@" ;;
   sync-skills) cmd_sync "$@" ;;
