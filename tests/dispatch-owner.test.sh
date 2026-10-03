@@ -16,7 +16,7 @@ assert_eq "" "$(fm_strip_comments "$ROOT/bin/fm-dispatch.sh" | grep -nE '(^|[^&]
 d="$(safe_tmpdir)"
 trap 'safe_rm_rf "$d"' EXIT
 mkdir -p "$d/bin" "$d/design/tasks" "$d/state"
-cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-dispatch.sh" "$ROOT/bin/fm-herdr.py" "$d/bin/"
+cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-dispatch.sh" "$ROOT/bin/fm-herdr.py" "$ROOT/bin/fm-emit.sh" "$d/bin/"
 cp -R "$ROOT/bin/lib" "$d/bin/"
 printf 'concurrency: 1\n' > "$d/config.yaml"
 printf '{"id":"T-001","depends_on":[]}\n' > "$d/design/tasks/T-001.json"

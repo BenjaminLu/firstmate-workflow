@@ -39,14 +39,14 @@ done
 [ -n "$MODE" ] || { echo "usage: fm-run.sh once|watch [--repo dir] [--every n]" >&2; exit 64; }
 cd "$REPO" || { echo "fm-run: no repo at $REPO" >&2; exit 64; }
 REPO="$(pwd -P)"
+selected_project="${FM_PROJECT:-}"
 fm_storage_init "$REPO" || exit 65
 fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
 B="${FM_CODE_ROOT:-$REPO}/bin"
 say() { printf '  %s\n' "$*"; }
 
 # Which project this run is for, resolved once (design section 15.4). The log
-# is shared: fm-sync-prs.sh writes every registered project's pull requests
-# into it, and a pull request number is only a key together with its
+# is project-local; a pull request number is only a key together with its
 # project. So a turn advances only the events of its own project - an event
 # with no project is the default project's - and names its cards by it.
 #   RUN_PROJECT  the resolved registry name; empty in a tree registering none
@@ -76,11 +76,15 @@ OURS='((.project // $def) == $proj)'
 # own card. Only ids naming this project and task are looked at, so an old
 # D-<digits> record, whoever it belongs to, is never read, moved or replaced.
 # The project is the one this run resolves (FM_PROJECT, else the default).
-merge_card() {  # merge_card <task> <pr>
+request_merge_card() {  # merge_card <task> <pr>
   local task="$1" pr="$2" expected_head="$3" project="$OWNER" key f id='' details request_out n best=''
   if [ -z "$project" ]; then
     say "$task: no captain card created; no project to name it by ($RUN_ERR)"; return
   fi
+  current_head="$(fm_binding head --task "$task" --pr "$pr" --branch "$branch")" || {
+    say "$task: authoritative head unknown; regate before requesting a card"; return; }
+  [ "$current_head" = "$expected_head" ] || {
+    say "$task: authoritative head changed; regate before requesting a card"; return; }
   key="T${task#T-}"
   # a card already up, or already answered, is this task's merge card
   for f in "$FM_STATE_DIR/pending/D-$project-$key-"*.json; do
@@ -117,12 +121,30 @@ merge_card() {  # merge_card <task> <pr>
   fi
 }
 
+merge_card() {
+  export B REPO OWNER RUN_ERR branch
+  python3 "$B/lib/fm_concurrent.py" merge-turn --state "$FM_STATE_DIR" \
+    --project "$OWNER" --target "$FM_TARGET_ROOT" --base "$RUN_BASE" \
+    --expected-base "$gated_base" --task "$1" -- \
+    bash -c '. "$B/fm-config.sh"; eval "$1"; request_merge_card "$2" "$3" "$4"' \
+    _ "$(declare -f say request_merge_card)" "$1" "$2" "$3" </dev/null
+}
+
+dispatch_args=()
+[ -z "$selected_project" ] || dispatch_args=(--project "$selected_project")
+project_args=()
+[ -z "$RUN_PROJECT" ] || project_args=(--project "$RUN_PROJECT")
+RUN_BASE="${FM_BASE:-main}"
+if [ -n "$RUN_PROJECT" ]; then
+  RUN_BASE="$(fm_project_get "$RUN_PROJECT" base "$REPO/config.yaml")" || exit 65
+fi
+
 turn() {
   # 1. whatever GitHub knows that the log does not
-  "$B/fm-sync-prs.sh" --repo "$REPO" >/dev/null 2>&1 </dev/null || true
+  "$B/fm-sync-prs.sh" --repo "$REPO" ${project_args[@]+"${project_args[@]}"} >/dev/null 2>&1 </dev/null || true
 
   # 2. start what is ready. dispatch refuses on its own if nothing is green-lit
-  started="$("$B/fm-dispatch.sh" --repo "$REPO" 2>/dev/null </dev/null | grep -E '^T-' || true)"
+  started="$(FM_PROJECT="$selected_project" "$B/fm-dispatch.sh" --repo "$REPO" ${dispatch_args[@]+"${dispatch_args[@]}"} 2>/dev/null </dev/null | grep -E '^T-' || true)"
   [ -z "$started" ] || say "dispatched: $(printf '%s' "$started" | tr '\n' ' ')"
 
   # 3. advance every task that has a pull request open
@@ -136,18 +158,20 @@ turn() {
 
     branch="$(git -C "$FM_TARGET_ROOT" branch --list "$(printf '%s' "$task" | tr 'A-Z' 'a-z')-*" --format='%(refname:short)' | head -1)"
     [ -n "$branch" ] || continue
-    round="$(jq -r --arg t "$task" 'select(.type=="review_opened" and .task==$t)|.task' "$FM_STATE_DIR/events.jsonl" 2>/dev/null | wc -l | tr -d ' ')"
+    round="$(jq -r --arg t "$task" --arg proj "$RUN_PROJECT" --arg def "$DEFAULT" 'select(.type=="review_opened" and .task==$t and ((.project // $def) == $proj))|.task' "$FM_STATE_DIR/events.jsonl" 2>/dev/null | wc -l | tr -d ' ')"
     round=$(( round + 1 ))
 
     # the protocol first: from round three it can stop the round outright
     if [ "$round" -ge 3 ]; then
-      "$B/fm-protocol.sh" check --task "$task" --pr "$pr" --round "$round" --repo "$REPO" >/dev/null 2>&1 </dev/null \
+      "$B/fm-protocol.sh" check ${project_args[@]+"${project_args[@]}"} --task "$task" --pr "$pr" --round "$round" --repo "$REPO" >/dev/null 2>&1 </dev/null \
         || { say "$task: protocol violation in round $round"; continue; }
     fi
 
+    gated_base="$(git -C "$FM_TARGET_ROOT" rev-parse "$RUN_BASE^{commit}")" || {
+      say "$task: base unknown; cannot gate this candidate"; continue; }
     verified_head="$(fm_binding head --task "$task" --pr "$pr" --branch "$branch")" || {
       say "$task: authoritative head unknown or stale; refresh before accepting"; continue; }
-    "$B/fm-gate.sh" --task "$task" --repo "$REPO" --branch "$branch" --pr "$pr" >/dev/null 2>&1 </dev/null
+    "$B/fm-gate.sh" ${project_args[@]+"${project_args[@]}"} --task "$task" --repo "$REPO" --branch "$branch" --pr "$pr" >/dev/null 2>&1 </dev/null
     g=$?
     if [ "$g" -eq 0 ]; then
       # all six green: the captain decides, nobody else
@@ -161,7 +185,7 @@ turn() {
       # is wrong is on stderr - so it is kept rather than thrown away with
       # the rest. A configuration error repeats every turn until a human
       # reads it; a message that suggests nothing is worse than none.
-      rvout="$("$B/fm-review.sh" --task "$task" --branch "$branch" --pr "$pr" \
+      rvout="$("$B/fm-review.sh" ${project_args[@]+"${project_args[@]}"} --task "$task" --branch "$branch" --pr "$pr" \
         --round "$round" --repo "$REPO" 2>&1 </dev/null)"
       # the child already said where its log is and which vendor name is
       # wrong. Every branch here repeats what it said rather than

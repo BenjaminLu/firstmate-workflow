@@ -467,7 +467,23 @@ def choose_name(alias, role, rosters, live, last, other_role, room, served=None)
     return name
 
 
-def allocate(root, role, task, alias):
+def concurrent_service():
+    spec = importlib.util.spec_from_file_location('fm_concurrent', Path(__file__).parent / 'lib/fm_concurrent.py')
+    module = importlib.util.module_from_spec(spec)
+    written, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+    try: spec.loader.exec_module(module)
+    finally: sys.dont_write_bytecode = written
+    return module
+
+
+def allocate(root, role, task, alias, owner_record=None):
+    # Dispatch and identity publication share lock order: global, then project.
+    # A launch receipt holds the slot until this identity is visible.
+    with locked(Path(root).resolve() / 'state/dispatch.lock'):
+        return allocate_identity(root, role, task, alias, owner_record)
+
+
+def allocate_identity(root, role, task, alias, owner_record=None):
     if role not in ('worker', 'reviewer', 'firstmate'):
         raise ValueError('unsupported role')
     if not re.fullmatch(r'[A-Za-z0-9_-]+', task):
@@ -523,6 +539,10 @@ def allocate(root, role, task, alias):
                       round=number, attempt=attempt, one_role=True,
                       requested_alias=alias, run=str(run), created=time.time())
         save(run / 'identity.json', record)
+        # Only the CLI's actual keeper may bind a launcher at allocation.
+        # In-process callers reserve an identity, not their parent's lifetime.
+        if owner_record is not None:
+            save(run / 'process.json', dict(record, owner_record=str(owner_record)))
     return run
 
 
@@ -1809,6 +1829,8 @@ def execute_child(attempt, lifetime_fd):
 
 
 def process_matches(record):
+    if record.get('owner_record'):
+        return lifeline().owner_record_live(record['owner_record'])
     try:
         pid = int(record['pid'])
         result = subprocess.run(['ps', '-p', str(pid), '-o', 'command='], capture_output=True, text=True)
@@ -2611,7 +2633,9 @@ def main(args):
         try: return project_field(*args)
         except ValueError as error:
             print('fm-config: ' + str(error), file=sys.stderr); return 65
-    if mode == 'allocate': print(allocate(Path(args[0]), *args[1:])); return 0
+    if mode == 'allocate':
+        print(allocate(Path(args[0]), *args[1:], owner_record=os.environ.get('FM_LAUNCH_OWNER_RECORD')))
+        return 0
     if mode == 'task-idle': return task_idle(Path(args[0]), args[1])
     if mode == 'record-model':
         run, vendor, model_requested, model, cli_version = args
@@ -2669,6 +2693,15 @@ def main(args):
             reconcile = retire_dead_crew(root)
             report = inspect(root); report['deck_reconcile'] = reconcile
             report['project'] = project_report(root)
+            coordinator = concurrent_service()
+            projects = coordinator.routes(root)
+            grouped = {p['name'] or 'firstmate-workflow': [] for p in projects}
+            for item in coordinator.live_rounds(projects):
+                # Only authorized routing/identity metadata crosses into status.
+                name = item['project'] or 'firstmate-workflow'
+                grouped[name].append({k: item[k] for k in
+                                      ('project', 'task', 'role', 'actor', 'name', 'round', 'attempt') if k in item})
+            report['live_by_project'] = grouped
             print(json.dumps(report, indent=2))
             print(pending_summary(report['unacknowledged']), file=sys.stderr)
         elif action == 'ack':

@@ -35,7 +35,21 @@ fixture() {
 JSON
   printf '%s' "$d"
 }
-say() { FM_ROOT="$1" "$1/bin/fm-emit.sh" --actor firstmate --type "$2" ${3:+--task "$3"} >/dev/null; }
+say() {
+  FM_ROOT="$1" "$1/bin/fm-emit.sh" --actor firstmate --type "$2" ${3:+--task "$3"} >/dev/null
+  # Capacity fixtures have an actual live owner (this suite), independent of
+  # their lifecycle events. A historical event alone consumes no slot.
+  case "$2" in
+    dispatched)
+      mkdir -p "$1/state/runs/fixture-$3"
+      jq -n --arg task "$3" '{task:$task,role:"worker"}' > "$1/state/runs/fixture-$3/identity.json"
+      jq -n --argjson pid "$$" '{pid:$pid,token:"dispatch.test.sh"}' > "$1/state/runs/fixture-$3/process.json" ;;
+    merged|closed)
+      if [ -d "$1/state/runs/fixture-${3-}" ]; then
+        printf '{}\n' > "$1/state/runs/fixture-$3/orchestration-result.json"
+      fi ;;
+  esac
+}
 # A detached worker's file appears a moment after the dispatcher returns. The
 # wait is for that file, against a deadline wide enough for a loaded machine:
 # a count of short sleeps ran out under the gate's parallel pool. It returns

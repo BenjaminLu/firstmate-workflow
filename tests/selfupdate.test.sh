@@ -36,6 +36,7 @@ fixture() {
   cp "$ROOT/bin/fm.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-decide.sh" \
      "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-dispatch.sh" "$ROOT/bin/fm-ready.sh" \
      "$ROOT/bin/fm-herdr.py" "$d/bin/"
+  cp -R "$ROOT/bin/lib" "$d/bin/"
   printf '#!/usr/bin/env bash\nexit 0\n' > "$d/bin/fm-worker.sh"; chmod +x "$d/bin/fm-worker.sh"
   printf 'concurrency: 3\n' > "$d/config.yaml"
   printf '# Worker\n\nYou are one crew member on one task.\n' > "$d/skills/worker/SKILL.md"

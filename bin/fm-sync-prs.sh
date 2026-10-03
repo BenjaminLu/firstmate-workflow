@@ -3,7 +3,7 @@
 # merging a pull request in a browser has to reach the system by the system
 # looking, not by someone typing it into a conversation.
 #
-#   fm-sync-prs.sh [--repo .] [--limit 50]
+#   fm-sync-prs.sh [--repo .] [--limit 50] [--project name]
 #
 # Every registered project's repository is polled, by name (`gh --repo`), and
 # what is found is written with that project (design section 15.4). A pull
@@ -28,13 +28,14 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 need() { [ "$#" -ge 2 ] || { echo "fm-sync-prs: $1 needs a value" >&2; exit 64; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
+    --project) need "$@"; export FM_PROJECT="${2-}"; shift 2 ;;
     --repo) need "$@"; REPO="${2-}"; shift 2 ;;
     --limit) need "$@"; LIMIT="${2-}"; shift 2 ;;
     *) echo "fm-sync-prs: unknown argument $1" >&2; exit 64 ;;
   esac
 done
 cd "$REPO" || { echo "fm-sync-prs: no repo at $REPO" >&2; exit 64; }
-LOG="$REPO/state/events.jsonl"
+selected_project="${FM_PROJECT:-}"
 
 # The registry, when there is one, read only through the library: fm_projects
 # names nothing for a config.yaml with no `projects:` map. A tree that ships
@@ -48,6 +49,14 @@ if [ -f "$REPO/config.yaml" ] && [ -r "$HERE/fm-config.sh" ]; then
   # the default project owns every event that names none; FM_PROJECT is
   # this run's choice, not the registry's default, so it is kept out
   [ -z "$projects" ] || default="$(FM_PROJECT='' fm_project_resolve '' "$REPO/config.yaml" 2>/dev/null)" || default=''
+fi
+if [ -n "$selected_project" ]; then
+  if [ -n "$projects" ]; then
+    projects="$(fm_project_resolve "$selected_project" "$REPO/config.yaml")" || exit 65
+  elif [ "$selected_project" != firstmate-workflow ]; then
+    echo "fm-sync-prs: no registered project $selected_project" >&2
+    exit 65
+  fi
 fi
 
 # which (project, pull request) already has which event recorded
@@ -65,8 +74,12 @@ seen() { [ -f "$LOG" ] && jq -r --arg t "$1" --argjson p "$2" --arg proj "$3" --
 new=0
 sync_one() {  # sync_one <project or empty> <owner/repo or empty>
   local project="$1" github="$2" raw num state branch title type task en tw
-  if [ -n "$project" ]; then
-    LOG="$(fm_project_get "$project" state "$REPO/config.yaml")/events.jsonl" || return 65
+  if declare -F fm_storage_init >/dev/null; then
+    fm_storage_init "$REPO" "${project:-firstmate-workflow}" || return 65
+    LOG="$FM_STATE_DIR/events.jsonl"
+  else
+    # Compatibility with pre-registry fixtures shipping only sync and emit.
+    LOG="$REPO/state/events.jsonl"
   fi
   raw="$($GH pr list ${github:+--repo "$github"} --state all --limit "$LIMIT" \
           --json number,state,title,headRefName,mergedAt 2>/dev/null </dev/null)" || {

@@ -12,6 +12,8 @@
     "bin/fm-dispatch.sh",
     "bin/fm-run.sh",
     "bin/fm-session.sh",
+    "bin/fm-herdr.py",
+    "bin/fm-sync-prs.sh",
     "tests/dispatch.test.sh",
     "tests/session.test.sh",
     "tests/e2e-loop.test.sh",

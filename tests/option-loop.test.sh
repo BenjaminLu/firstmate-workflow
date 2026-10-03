@@ -63,7 +63,7 @@ fm-review 8
 fm-run 3
 fm-session 4
 fm-setup 3
-fm-sync-prs 2
+fm-sync-prs 3
 fm-worker 6"
 
 # perl's alarm rather than timeout(1), which macOS does not ship. Both the
@@ -151,7 +151,7 @@ while read -r name want; do
     fi
   done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "124" "$total" "every pinned flag and all nine fm option cases were exercised"
+assert_eq "125" "$total" "every pinned flag and all nine fm option cases were exercised"
 
 # These flags consume one word, so they are deliberately outside the shift-2
 # count. Probe them without a base ref: parsing must finish at usage, not hang.
