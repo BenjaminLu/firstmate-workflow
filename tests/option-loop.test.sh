@@ -41,6 +41,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Scripts and distinct value-taking flag names. fm repeats --repo in three
 # subcommands; its nine option cases are exercised separately below.
 PINNED="fm 7
+fm-autopilot 2
 fm-checkpoint 6
 fm-cleanup 3
 fm-decide 11
@@ -215,7 +216,7 @@ assert_contains "$said" "unknown argument" "and says so"
 run_capped 6 bash "$ROOT/bin/lib/fm-evidence.sh" --task T-Z --no-such-flag
 assert_eq "64" "$code" "evidence refuses an unknown flag with the shared usage status"
 assert_contains "$said" "fm-evidence: unknown argument --no-such-flag" "evidence refusal names script and flag"
-# Fifteen scripts get their guard from a sourced function, and a
+# Sixteen scripts get their guard from a sourced function, and a
 # command-not-found under `set -uo pipefail` carries on - the exact hazard
 # the assertions stage exists to catch. So the load has to be hard: if the
 # library will not load, the script must not reach its option loop.
@@ -238,7 +239,7 @@ while IFS= read -r f; do
   assert_contains "$said" "fm-config.sh" "and says which library"
   rm -rf "$tmp"
 done < <(fm_shell_corpus "$ROOT/bin")
-assert_eq "15" "$sourced" "fifteen scripts take their guard from the library"
+assert_eq "16" "$sourced" "sixteen scripts take their guard from the library"
 
 # And the other half of the same number, because two comments say it is
 # pinned here and until now it was not: the scripts that deliberately

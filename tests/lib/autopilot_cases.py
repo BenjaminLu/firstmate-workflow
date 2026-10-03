@@ -25,13 +25,13 @@ class PilotTests(unittest.TestCase):
         env.start(); self.addCleanup(env.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.state = self.root / 'state'
         self.state.mkdir()
         self.calls = []
         self.context = dict(engine=str(self.root), state=str(self.state),
                             target=str(self.root), project='self', repository='owner/repo',
-                            base='main', external=False, tasks=str(self.root / 'tasks'))
+                            base='main', evidence_project='self', external=False, tasks=str(self.root / 'tasks'))
         Path(self.context['tasks']).mkdir()
         (Path(self.context['tasks']) / 'T-001.json').write_text('{"id":"T-001"}')
         self.pilot = A.Pilot(self.context, clock=lambda: 1000)
@@ -39,7 +39,6 @@ class PilotTests(unittest.TestCase):
         self.pilot.emit = lambda *args: self.calls.append(('emit', args))
         self.pilot.notify = lambda text: self.calls.append(('notify', text))
         self.pilot.push = lambda *args: self.calls.append(('wake', args))
-        self.pilot.covered = lambda *args: True
         self.pilot.prepare_head = lambda *args: None
         self.pilot.launch_review = lambda *args: self.calls.append(('review', args))
 
@@ -62,15 +61,47 @@ class PilotTests(unittest.TestCase):
         self.assertEqual(len([x for x in self.calls if isinstance(x, list) and x[1:3] == ['pr', 'update-branch']]), 1)
         self.assertNotIn('merge', [word for x in writes for word in x])
 
-    def test_new_head_after_update_requests_review_only_without_patch_coverage(self):
+    def review_transition(self, verdict='APPROVE', signed=True, changed=False, drift=None):
+        import fm_binding
+        import fm_evidence
+        binding = dict(patch='patch', files=['code'], spec_sha256='spec',
+                       contract_sha256='contract', conventions_sha256='conventions')
+        record = dict(verdict=verdict, signature='signed' if signed else None,
+                      binding=dict(binding), patch='patch', head=HEAD)
+        if not signed: record.pop('binding')
+        current = dict(binding)
+        if changed: current['patch'] = 'worker-edit'
+        if drift: current[drift] = 'repinned'
         self.pilot.pull(PR, [], [], [], [])
-        pr = copy.deepcopy(PR); pr['head']['sha'] = 'c' * 40; pr['mergeable_state'] = 'clean'
-        self.pilot.pull(pr, [], [], [], [])
-        self.assertFalse(any(x[0] == 'review' for x in self.calls))
-        self.pilot.covered = lambda *args: False
-        pr['head']['sha'] = 'd' * 40
-        self.pilot.pull(pr, [], [], [], [])
-        self.assertTrue(any(x[0] == 'review' for x in self.calls))
+        pr = copy.deepcopy(PR); pr['head']['sha'] = 'c' * 40
+        pr['base']['sha'] = 'e' * 40; pr['mergeable_state'] = 'clean'
+        with patch.object(fm_evidence.Store, 'verdicts', return_value=[record]), \
+             patch.object(fm_binding, 'git', return_value='base'), \
+             patch.object(fm_binding, 'change', return_value=binding), \
+             patch.object(fm_binding, 'source_binding', return_value=current):
+            self.pilot.pull(pr, [], [], [], [])
+        return any(x[0] == 'review' for x in self.calls)
+
+    def test_base_only_unsigned_approval_needs_review(self):
+        self.assertTrue(self.review_transition(signed=False))
+
+    def test_base_only_repinned_spec_needs_review(self):
+        self.assertTrue(self.review_transition(drift='spec_sha256'))
+
+    def test_base_only_repinned_contract_needs_review(self):
+        self.assertTrue(self.review_transition(drift='contract_sha256'))
+
+    def test_base_only_repinned_conventions_needs_review(self):
+        self.assertTrue(self.review_transition(drift='conventions_sha256'))
+
+    def test_worker_edit_does_not_start_duplicate_review(self):
+        self.assertFalse(self.review_transition(changed=True, signed=False))
+
+    def test_standing_reject_does_not_start_review(self):
+        self.assertFalse(self.review_transition(verdict='REJECT', signed=False))
+
+    def test_carried_approval_does_not_start_review(self):
+        self.assertFalse(self.review_transition())
 
     def test_failure_and_findings_batch_per_reviewer(self):
         pr = copy.deepcopy(PR); pr['mergeable_state'] = 'clean'
@@ -179,19 +210,17 @@ class PilotTests(unittest.TestCase):
         self.pilot.local()
         self.assertEqual(len(self.pilot.data['wakes']), 1)
 
-    def test_intent_card_has_dispatch_park_drop_and_no_merge(self):
+    def test_ready_task_holds_and_queues_firstmate_judgment_once(self):
         def command(argv, **kwargs):
             self.calls.append(argv)
             if 'list' in argv: return 'T-001\tunjudged\t-\tWork\n'
-            if '--allocate' in argv: return 'D-self-T001-1\n'
             return ''
         self.pilot.command = command
-        self.pilot.ready()
-        details = json.loads((self.pilot.directory / 'D-self-T001-1.json').read_text())
-        self.assertEqual(details['effect'], dict(A='dispatch', B='hold', C='park', D='drop'))
-        self.assertEqual(set(details) - {'effect'}, {'en', 'zh-TW'})
-        self.assertTrue(any('judged' in x for x in self.calls))
-        self.assertFalse(any('--kind' in x and 'merge' in x for x in self.calls))
+        self.pilot.ready(); self.pilot.ready(); self.pilot.flush()
+        self.assertEqual(len(self.pilot.data['wakes']), 1)
+        self.assertIn('T-001 ready: readiness card needed', str(self.pilot.data['wakes']))
+        self.assertFalse(any('--request' in x or 'judged' in x for x in self.calls))
+        self.assertTrue(any(x[0] == 'wake' for x in self.calls))
 
     def test_recheck_respects_local_projection(self):
         reviews = [dict(id=1, user={'login':'alice'}, commit_id='b'*40, state='CHANGES_REQUESTED')]
@@ -250,9 +279,10 @@ class PilotTests(unittest.TestCase):
         home = self.root / 'private/projects/other'
         home.mkdir(parents=True)
         # No project registry is needed for the already-resolved writer API.
-        with A.life.Doorbell(home) as bell:
+        with A.life.Doorbell(home) as bell, A.life.Doorbell(home, channel='autopilot.d') as pilot:
             A.life.ring_state(home/'state', 'conventions edited')
             self.assertTrue(bell.wait(0))
+            self.assertTrue(pilot.wait(0), 'policy updates also notify autopilot')
         self.assertFalse((self.state/'session').exists())
 
 

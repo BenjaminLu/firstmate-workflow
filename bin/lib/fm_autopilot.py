@@ -213,24 +213,33 @@ class Pilot:
         task = match[1].upper() if match else ''
         return task if task and (Path(self.ctx['tasks']) / (task + '.json')).is_file() else ''
 
-    def covered(self, task, pr):
-        # Authenticate local verdict and compare source binding, including the
-        # stable patch-id rule. Missing/stale local refs never imply coverage.
-        from fm_binding import git, source_binding
+    def needs_base_review(self, task, pr, old):
+        # Only the narrowly authorized replacement of a non-carrying APPROVE.
+        # Store verifies signatures; unknown/corrupt evidence queues judgment
+        # through once(), never supplies permission to launch a model.
+        from fm_binding import git, source_binding, change
         from fm_evidence import Store
-        try:
-            store = Store(str(self.state), self.ctx['evidence_project'], task)
-            rows = store.verdicts()
-            if not rows or rows[-1]['verdict'] != 'APPROVE':
-                return False
-            binding = rows[-1].get('binding', {})
-            head = pr['head']['sha']
-            base = git(self.ctx['target'], 'merge-base', pr['base']['sha'], head)
-            current = source_binding(task, head, base, BIN.parent)
-            return all(current.get(k) == binding.get(k) for k in
-                       ('patch', 'files', 'spec_sha256', 'contract_sha256', 'conventions_sha256'))
-        except (ValueError, OSError, KeyError, subprocess.SubprocessError):
+        rows = Store(str(self.state), self.ctx['evidence_project'], task).verdicts()
+        if not rows or rows[-1]['verdict'] != 'APPROVE':
             return False
+        if not old.get('base_sha'):
+            return False  # pre-upgrade observations cannot prove base-only
+        root = self.ctx['target']
+        old_base = git(root, 'merge-base', old['base_sha'], old['head'])
+        previous = change(root, old['head'], old_base)
+        base = git(root, 'merge-base', pr['base']['sha'], pr['head']['sha'])
+        current = source_binding(task, pr['head']['sha'], base, BIN.parent)
+        if previous['patch'] != current['patch']:
+            return False  # worker edits belong to fm-run's review loop
+        record = rows[-1]
+        if not record.get('signature'):
+            return True  # gate 7 refuses pre-T-138 unsigned legacy approvals
+        binding = record.get('binding') or {}
+        # A different approved change is not this base-only carry case.
+        if record.get('patch') != current['patch'] or binding.get('patch') != current['patch']:
+            return False
+        return any(current[k] != binding.get(k) for k in
+                   ('spec_sha256', 'contract_sha256', 'conventions_sha256'))
 
     def launch_review(self, task, pr):
         # fm-review owns visibility, identity, sandbox and final provenance.
@@ -314,10 +323,10 @@ class Pilot:
             if self.policy['review'] in ('fm', 'both'):
                 def review():
                     self.prepare_head(pr)
-                    if not self.covered(task, pr): self.launch_review(task, pr)
+                    if self.needs_base_review(task, pr, old): self.launch_review(task, pr)
                 self.once(['review', number, head], task, review)
             self.recheck(task, pr, reviews)
-        self.data['pulls'][number] = dict(head=head, branch=pr['head']['ref'], base=pr['base']['ref'])
+        self.data['pulls'][number] = dict(head=head, branch=pr['head']['ref'], base=pr['base']['ref'], base_sha=pr['base']['sha'])
         latest = {}
         for row in runs:
             if row.get('head_sha') == head:
@@ -492,18 +501,12 @@ class Pilot:
         for row in rows.splitlines():
             task, state, _, title = row.split('\t', 3)
             if state != 'unjudged' or not re.fullmatch(r'T-[0-9]+', task): continue
-            # The ready script supplies episode identity. A captain judgment
-            # is still needed: this card makes no claim about six-gate landing.
+            # Readiness is a judgment, not a mechanical card template. The
+            # episode record deduplicates this request until readiness changes.
             record = read_json(self.state / 'ready' / (task + '.json'))
-            identity = ['intent', task, record]
-            def request(task=task, title=title):
-                ident = self.command(self.script('fm-decide.sh', '--allocate', '--task', task)).strip()
-                details = self.directory / (ident + '.json')
-                save_json(details, intent_details(task, title))
-                self.command(self.script('fm-decide.sh', '--request', ident, '--task', task,
-                                         '--kind', 'choice', '--details', str(details)))
-                self.command(self.script('fm-ready.sh', 'judged', '--task', task, '--decision', ident))
-            self.once(identity, task, request)
+            self.queue(key(['intent', task, record]), task,
+                       f'{task} ready: readiness card needed',
+                       f'{task} 已就緒：需要 firstmate 判斷並建立就緒決策卡')
 
     def delay(self):
         deadlines = [self.data['next_poll']]
@@ -511,20 +514,6 @@ class Pilot:
         deadlines += [w['created'] + max(300, self.policy['debounce_seconds'] * 2)
                       for w in self.data['wakes'].values() if not w['notified']]
         return max(0.1, min(deadlines) - self.clock())
-
-
-def intent_details(task, title):
-    en = dict(title=f'{task}: {title}'[:1000], explanation='Dependencies are ready. Captain judgment is required before dispatch.',
-              before='Task has not started.', after='Proceed starts a visible owned worker; other choices hold or end the task.',
-              outcome='No merge is authorized by this card.', options={})
-    tw = dict(title=f'{task}：請決定是否開始', explanation='相依工作已就緒；派工前需要船長判斷。',
-              before='任務尚未開始。', after='繼續會啟動可見且有擁有者的工作者；其他選項保留或結束任務。',
-              outcome='此卡不授權合併。', options={})
-    for code, english, chinese in [('A','Proceed','繼續'), ('B','Rescope','調整範圍'),
-                                    ('C','Park','暫停'), ('D','Drop','放棄')]:
-        en['options'][code] = dict(description=english, pros='Captain chooses the next step.', cons='Implementation still requires review and gates.')
-        tw['options'][code] = dict(description=chinese, pros='由船長決定下一步。', cons='實作仍需審查與關卡驗證。')
-    return dict(en=en, **{'zh-TW':tw}, effect=dict(A='dispatch', B='hold', C='park', D='drop'))
 
 
 def live(directory):
@@ -560,7 +549,7 @@ def serve(ctx):
     with (pilot.directory / 'service.lock').open('a') as lock:
         try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError: return 0
-        with life.Doorbell(pilot.root) as bell:
+        with life.Doorbell(pilot.root, channel='autopilot.d') as bell:
             save_json(pilot.directory / 'owner.json', dict(pid=os.getpid(), owner=owner, started=time.time()))
             print('ready', flush=True)
             os.dup2(os.open(os.devnull, os.O_WRONLY), 1)

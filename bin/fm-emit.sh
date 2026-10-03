@@ -307,7 +307,7 @@ for _ in $(seq 1 600); do
     # autopilot resumes from its durable complete-line offset.
     _pilot_lib="$(dirname "${BASH_SOURCE[0]}")/lib/fm_lifeline.py"
     if [ -r "$_pilot_lib" ]; then
-      python3 "$_pilot_lib" ring "$ROOT" event >/dev/null 2>&1 ||
+      python3 "$_pilot_lib" ring-events "$ROOT" event >/dev/null 2>&1 ||
         printf 'fm-emit: event persisted but its doorbell could not be rung\n' >&2
     fi
     if [ "$type" = crew_status ] && [ -n "$stamp" ]; then

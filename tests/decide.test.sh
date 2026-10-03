@@ -968,7 +968,9 @@ done
 # reaches a card only by naming fm-decide with --request, or one of them.
 raisers="$(git -C "$ROOT" ls-files -- . ':!tests/' ':!design/' ':!*.md' ':!bin/fm-decide.sh' \
   | while read -r f; do [ -f "$ROOT/$f" ] && both "$f" && printf '%s ' "$f"; done)"
-assert_eq "bin/fm-run.sh bin/fm.sh " "$raisers" "fm-run.sh and fm.sh are the only files that raise a card"
+# Autopilot holds ready tasks and queues firstmate to read the spec against
+# main and author recommendation/evidence; it must not become a card raiser.
+assert_eq "bin/fm-run.sh bin/fm.sh " "$raisers" "only fm-run.sh and fm.sh raise cards; autopilot queues readiness judgment"
 # A line that is one quoted message and nothing else only prints the name: it
 # tells a reader what to run; it does not run it. Any other non-comment line naming them counts as a call.
 said='^[[:space:]]*(echo|printf)[[:space:]]+"[^"]*"[[:space:]]*(>&2)?[[:space:]]*$'

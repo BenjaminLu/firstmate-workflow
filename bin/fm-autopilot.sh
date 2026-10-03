@@ -3,6 +3,7 @@
 set -euo pipefail
 exec < /dev/null
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -f "$HERE/fm-config.sh" ] || { echo "fm-autopilot: missing $HERE/fm-config.sh" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
 . "$HERE/fm-config.sh"
 # shellcheck source=bin/lib/fm-stack.sh

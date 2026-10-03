@@ -155,7 +155,7 @@ Types: `greenlit` `dispatched` `commit_pushed` `pr_opened` `gate_passed`
 `criteria_returned` `protocol_violation` `approved` `merged` `closed`
 `decision_requested` `decision_made` `worker_crashed` `vendor_unavailable`
 `agent_finished` `crew_status` `parked` `unparked` `spec_pinned`
-`spec_repinned`.
+`spec_repinned` `autopilot_waiting` `conventions_drift`.
 
 An event may carry a top-level `project`, written by `fm-emit.sh --project`
 and checked against the registry (an unknown name exits `65`). An event
@@ -1026,6 +1026,13 @@ again only after an `unparked`. A `closed` task — which is what a drop on the
 board writes — is never started, and an `unparked` does not bring it back.
 Neither counts as merged, so a task that depends on one waits, and its backlog
 card names the parked or dropped task as its blocker.
+
+**Autopilot holds readiness for firstmate (T-141).** The scripted service
+queues "T-xxx ready: readiness card needed", deduplicated by readiness episode,
+and leaves the task unjudged. Firstmate re-reads the spec against main, authors
+the recommendation and evidence, and raises the captain's choice card under
+the rule below. Autopilot supplies no boilerplate judgment and raises no card.
+Existing T-118 card effects may carry out the captain's answer mechanically.
 
 **A task that turns ready is judged before it is dispatched (T-059).** At startup
 and after every merge firstmate runs `bin/fm-ready.sh list`, which prints the
@@ -4757,8 +4764,8 @@ Verify captain landing/handoff, cleanup/retention and no project data leakage.
 Mock fixtures support regressions but cannot replace live proof. Publish only
 an approved redacted summary; retain raw evidence privately.
 
-T-140 external reviewers, T-143 stacking and T-141 autopilot remain planned
-advanced work, not basic-pilot dependencies or completed capabilities. Named
+T-140 external reviewers, T-143 stacking and T-141 autopilot are advanced
+integrations, not basic-pilot dependencies. Named
 external reviewers must all approve the current change with unresolved requests
 cleared; fixed-but-unreturned is not approval. Reply per post convention with
 fixing commit/thread language. Stacked work uses per-PR base, retargets after
@@ -4769,6 +4776,46 @@ notifications, GitHub alone uses conditional ETag polling. Lifeline owner is
 fm session, or an explicitly installed launchd/systemd service. No model timer,
 beacon or PID polling. Mechanical updates obey conventions; judgment queues
 wake firstmate through supported delivery. It never merges automatically.
+
+The T-141 resident service starts through `fm-session.sh start` and
+`fm-autopilot.sh ensure --all`, one instance per registered project. Each runs
+from a frozen engine snapshot through T-151, owned by the fm session. Owner
+exit ends the service and descendants. An optional launchd/systemd owner needs
+an explicit captain choice; nothing installs it implicitly. Kernel locks guard
+startup and singleton service ownership. Every operator `fm` command calls
+`ensure --resume --all`: a crashed service restarts on that command, while a
+project without an `autopilot/owner.json` receipt stays unstarted. Crew commands
+with `FM_IN_ROUND` start no service. Reviews still use visible Herdr dispatch.
+
+Local event writers persist complete lines before ringing the service's own
+`state/session/autopilot.d/` FIFOs. These are separate from firstmate's
+`session/wake.d/`. Semantic wake and conventions writers also notify autopilot;
+ordinary events never ring firstmate's doorbells. The service subscribes before
+reading durable offsets and reads local inputs only at startup and on pushed
+notifications. Only GitHub is polled, with endpoint ETags, confirmed convention
+cadence and bounded network backoff. Per-reviewer quiet periods batch findings;
+no idle timer invokes a model.
+
+Mechanical branch updates recheck MERGEABLE, BEHIND and the expected head;
+restacking follows confirmed policy and expected-head lease checks. A base-only
+head update starts a local review only when its patch is unchanged, the latest
+verdict is APPROVE, and gate 7 cannot carry it because it is unsigned legacy
+or its spec, contract or conventions binding changed. It never starts a round
+for worker edits, over a standing REJECT, or when approval carries. Returning
+reviewers can receive policy-permitted re-check requests. Readiness holds for
+firstmate's recommendation and evidence (§6); landing remains the captain's
+card or the team's handoff, never an autopilot merge.
+
+Before a mechanical side effect the service persists a write-ahead action
+record under `state/autopilot/`. Completion marks it done; interruption or an
+ambiguous result queues reconciliation rather than replaying the action. CI
+failures, findings, failed/lost rounds, B/C answers, readiness and conventions
+drift persist reason lines under `state/wake-queue/` and enter the T-137 bridge.
+`autopilot_waiting` reports overdue judgment bilingually to the board and desktop;
+`conventions_drift` denotes policy requiring judgment. External records and FIFOs
+live only under `FM_HOME/projects/<name>/state/`. Queues, acknowledgements and
+notifications establish no model delivery: T-164 native loading, exact trust,
+reload and actual receipt remain independently verified requirements.
 
 ### 15.9 Dependency order and shared-file coordination
 

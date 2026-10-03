@@ -34,7 +34,8 @@ no waiter of its own running. `fm-session.sh wait` is a tool for scripts
 that block on a wake.
 Session start also ensures [autopilot](docs/autopilot.md): an owned scripted
 service that batches GitHub findings, performs policy-approved branch upkeep,
-and raises intent cards. It queues judgment through the existing wake bridge;
+and queues ready tasks for firstmate to judge and raise intent cards.
+It queues judgment through the existing wake bridge;
 it never merges or runs an idle model timer. `fm autopilot status --all` reports
 the services, and the next `fm` command reconnects a crashed service.
 `bin/fm.sh board` signs the captain's browser in to the board with a
@@ -397,7 +398,7 @@ and bootstrap must be approved before a real scoped task is dispatched via
 the stock dispatcher to a visible owned Codex Herdr run. Capture isolated review,
 checks/gates, outputs and cleanup/retention evidence. A mock fixture or manual
 relaunch after dead dispatch is insufficient. Advanced external reviewers,
-stacking and autopilot (T-140/T-143/T-141) remain planned after the basic pilot.
+stacking and autopilot (T-140/T-143/T-141) are separate from the basic pilot.
 
 ### External project storage (T-142)
 

@@ -9,20 +9,23 @@ descendants. Kernel locks exclude duplicate services; there is no PID polling.
 No launchd/systemd installation is implicit. An operator choosing such an owner
 must explicitly arrange its lifetime and invoke `ensure` with that session owner.
 
-Local event writers append first and ring the owned FIFO. The service reads
+Local event writers append first and ring owned FIFOs under
+`state/session/autopilot.d/`. Firstmate retains `session/wake.d/`; semantic
+wake writers notify both channels, while raw events notify only autopilot. The service reads
 complete lines on startup and on notifications. GitHub alone is polled, using
 per-endpoint ETags, convention cadence and bounded exponential network backoff.
 Reviews and review comments close a separate quiet-period batch per PR/reviewer.
-Idle polling does not run a model. Observed head changes can start a needed
-review through the existing visible Herdr launcher; current authenticated patch
-coverage suppresses unnecessary local reviews. A failed launcher queues judgment.
+Idle polling does not run a model. A base-only head change starts a review through the visible Herdr launcher
+only when the latest verdict is APPROVE and gate 7 cannot carry it because it
+is unsigned legacy evidence or its spec, contract or conventions hash changed.
+Worker edits, standing rejections and carried approvals do not start rounds. A failed launcher queues judgment.
 
 Mechanical actions update only mergeable, behind task branches after rechecking
 the observed head and mergeability; restacking delegates to the existing policy and lease checks. Returning
 reviewers receive re-check requests when publication policy permits it; local
-mode retains a request for firstmate. Ready tasks receive bilingual choice cards
-with proceed, rescope, park and drop effects. These are intent cards, not merge
-approval. Landing remains the captain's card or the team's handoff under the
+mode retains a request for firstmate. Ready tasks hold and queue a bilingual request for firstmate to re-read the
+spec against main and author the recommendation, evidence and readiness card.
+The card retains proceed, rescope, park and drop effects; it authorizes no merge. Landing remains the captain's card or the team's handoff under the
 project conventions. Autopilot neither runs gates nor claims an approval, current
 CI, six-gate readiness or permission to merge.
 
@@ -49,5 +52,7 @@ reject the repository. No private acceptance text is projected to GitHub.
 
 `tests/autopilot.test.sh` drives recorded events and REST payloads.
 `tests/autopilot-lifecycle.test.sh` covers real owned startup, singleton reuse,
-crash recovery, owner exit and writer notification. Workers author these tests
+crash recovery through `fm.sh`, owner exit and isolated writer notification.
+`tests/autopilot-entrypoints.test.sh` covers session-start wiring, registry
+fan-out, resume holds, frozen launch arguments and round exclusion. Workers author these tests
 without running them; CI and the gates establish red/base and green/head evidence.
