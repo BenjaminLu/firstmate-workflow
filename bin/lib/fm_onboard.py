@@ -253,8 +253,9 @@ def approve(home, e, p, answers):
         raise ValueError('captain project contract with check required')
     contract_text = contract_yaml(contract)
     p = dict(p)
+    p.setdefault('analysers', [])
     allowed = {'repository','visibility','base','land','review','post','merge_method','delete_branch',
-               'available_merge_methods','required_checks','reviewers','stacking','force_with_lease','watch_seconds',
+               'available_merge_methods','required_checks','reviewers','analysers','stacking','force_with_lease','watch_seconds',
                'debounce_seconds','reinspect_seconds','posting_languages','confirmed',
                'policy_confirmed','bootstrap_authorized','product','captain','intent'}
     for key, value in answers.items():
@@ -286,6 +287,7 @@ def edit(home, changes, captain, intent):
     p=read_policy(path); old=path.read_text()
     if set(changes) & {'repository','base','confirmed','confirmed_at','captain','intent','policy_confirmed'}:
         raise ValueError('binding/confirmation changes require fresh onboarding')
+    p.setdefault('analysers', [])
     if not set(changes) <= set(p): raise ValueError('unknown conventions field')
     p.update(changes); p.update(captain=captain,intent=intent,confirmed_at=now())
     validate_merge_methods(p)

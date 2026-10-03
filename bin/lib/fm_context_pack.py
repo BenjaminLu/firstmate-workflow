@@ -230,8 +230,23 @@ def build(args):
     spec = json.loads(Path(args.spec).read_text())
     brief_record = store.brief(args.round, args.head)
     brief = brief_record['text'] if brief_record else ''
+    external_supplement = ''
     collector = Collector(root, args.gh, args.head, getattr(args, 'log_error_file', None))
     items, situations, data = [], [], dict(failures=[], cancelled=[], findings=[])
+    if os.environ.get('FM_EXTERNAL') == '1' and args.pr:
+        from fm_conventions import read_policy
+        from fm_external import collect, findings_text
+        try:
+            policy = read_policy(Path(args.state).parent / 'CONVENTIONS.md', os.environ['GH_REPO'])
+            if policy['review'] in ('external', 'both'):
+                external = collect(store, root, os.environ['GH_REPO'], args.pr, args.head, policy)
+                external_text = findings_text(external)
+                items.append(('External review findings', external_text))
+                # Supplement the approved brief without manufacturing firstmate
+                # authorization, root causes, or a local fm standing list.
+                external_supplement = '\n\nExternal evidence for this brief (firstmate must verify root causes):\n' + bounded([('External findings', external_text)], 12000)
+        except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError) as error:
+            collector.gaps.append('external review coverage unknown: ' + str(error))
     reviews = store.verdicts()
     if reviews:
         latest = reviews[-1]
@@ -375,7 +390,7 @@ def build(args):
         items.append(('Evidence gaps (warnings; round continues)', '\n'.join(collector.gaps)))
     pack = bounded(items)
     store.append('pack', args.round, args.actor, args.head, pack, items=items, coverage=reports)
-    Path(args.output).write_text('# Approved local brief\n\n' + (brief or 'Unavailable; see coverage warnings.') + '\n\n# Context pack\n\n' + pack + '\n\n# Local review history\n\n' + store.history())
+    Path(args.output).write_text('# Approved local brief\n\n' + (brief or 'Unavailable; see coverage warnings.') + external_supplement + '\n\n# Context pack\n\n' + pack + '\n\n# Local review history\n\n' + store.history())
     Path(args.coverage).write_text(json.dumps(reports))
 
 

@@ -1675,11 +1675,8 @@ fm_projection() {
   local names posting
   if [ "${FM_EXTERNAL:-0}" = 1 ]; then
     posting="$(fm_conventions post)" || return 65
-    # T-139 chooses publication; T-135 retains every round locally first.
-    # Summary/check/threads projection belongs to T-140.
-    if [ "$posting" = comments ]; then printf '%s\n' comments
-    else printf '%s\n' local
-    fi
+    # T-139 validates the mode; T-135 retains every round locally first.
+    printf '%s\n' "$posting"
     return 0
   fi
   # An unnamed legacy self caller has no registry projection to resolve.
@@ -1692,6 +1689,16 @@ fm_projection() {
   else fm_project_get "$FM_PROJECT" projection
   fi
 }
+# Outside-round external evidence and privacy-preserving projection transport.
+fm_external() {  # collect|project --pr N --head SHA [--stage worker|reviewer]
+  [ "${FM_EXTERNAL:-0}" = 1 ] || return 0
+  local conventions
+  conventions="$(fm_project_get "$FM_PROJECT" conventions "$FM_CONFIG")" || return 65
+  python3 "$_fm_code_dir/lib/fm_external.py" "$@" \
+    --state "$FM_STATE_DIR" --project "$(fm_evidence_project)" --task "$TASK" \
+    --root "$FM_TARGET_ROOT" --repository "$GH_REPO" --conventions "$conventions"
+}
+
 fm_comment_projection() {
   local selected
   selected="$(fm_projection)" || return 65

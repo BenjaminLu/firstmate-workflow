@@ -29,6 +29,9 @@ def validate(policy, repository=None, base=None):
     checks = policy.get('required_checks')
     if not isinstance(checks, list) or not checks or any(not isinstance(x, str) or not x.strip() for x in checks):
         raise ValueError('require captain-confirmed project checks/statuses')
+    analysers = policy.get('analysers', [])
+    if not isinstance(analysers, list) or any(not isinstance(x, str) or not x.strip() for x in analysers):
+        raise ValueError('conventions analysers must name check/status contexts')
     for key in ('captain', 'intent', 'confirmed_at', 'product'):
         if not isinstance(policy.get(key), str) or not policy[key].strip():
             raise ValueError('missing dated captain intent/product: ' + key)

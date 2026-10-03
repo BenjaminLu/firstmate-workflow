@@ -833,6 +833,11 @@ verify_review_head || exit 65
   # Either mode: the reviewer judges with what CI found on this head, and
   # re-runs none of it (T-153, captain 2026-09-29)
   [ -z "$PR" ] || head_evidence
+  if [ "$FM_EXTERNAL" = 1 ] && [ -n "$PR" ]; then
+    printf '\n# External reviewer evidence (separate from fm provenance)\n'
+    fm_external collect --pr "$PR" --head "$R_HEAD" --format prompt || \
+      printf 'External reviewer coverage is unknown; refresh before readiness.\n'
+  fi
 } > "$work/evidence.md"
 {
   printf '\n---\n\n# The diff under review\n\n```diff\n'
@@ -1283,6 +1288,13 @@ $verdict"
     echo 'fm-review: optional comment projection failed; local verdict retained' >&2
     FM_CREW_STATUS_SECS=0 emit --type crew_status --data '{"evidence_event":"projection_failed"}' --en 'Optional verdict comment failed; local verdict retained' \
          --tw '選用的裁決留言發布失敗；本機裁決已保留'
+  fi
+fi
+if [ "$FM_EXTERNAL" = 1 ] && [ -n "$PR" ] && [ "$projection" != comments ]; then
+  if ! fm_external project --pr "$PR" --head "$R_HEAD" --stage reviewer; then
+    FM_CREW_STATUS_SECS=0 emit --type crew_status --data '{"evidence_event":"projection_failed"}' \
+      --en 'Optional review projection failed; local verdict retained' \
+      --tw '選用的審核投影發布失敗；本機裁決已保留'
   fi
 fi
 case "$decided" in

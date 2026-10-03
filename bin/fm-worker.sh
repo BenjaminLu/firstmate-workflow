@@ -1470,7 +1470,7 @@ if [ "$asked" = 1 ]; then
 fi
 
 spoke=0
-[ "$projection" != local ] || spoke=1  # local delivery or its warned recovery is handled
+[ "$projection" = comments ] || spoke=1  # local delivery or its warned recovery is handled
 # gh's own words are kept, the way the lookup above keeps them: this is
 # the one path where a person is expected to pick the failure up by
 # hand, and "it was refused" without "why" sends them to the pull
@@ -1483,7 +1483,15 @@ post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
   if [ "$FM_EXTERNAL" = 1 ]; then
     fm_private_note worker-report "$TASK" "$1" || return 1
     if [ "$projection" != comments ]; then
-      # Summary/check/threads projection belongs to T-140. Retain privately.
+      # Changed work projects only after publication, at its fixing head.
+      if ! worker_changed_files; then
+        fm_external project --pr "$2" --head "$round_head" --stage worker || {
+          echo 'fm-worker: optional projection failed; local report retained' >&2
+          FM_CREW_STATUS_SECS=0 emit --type crew_status --data '{"evidence_event":"projection_failed"}' \
+            --en 'Optional worker projection failed; local report retained' \
+            --tw '選用的工作投影發布失敗；本機報告已保留'
+        }
+      fi
       spoke=1
       return 0
     fi
@@ -1497,6 +1505,9 @@ post_note() {   # post_note <file> <pr>; sets spoke=1 when it landed
     echo 'fm-worker: optional comment projection failed; local record retained' >&2
     FM_CREW_STATUS_SECS=0 emit --type crew_status --data '{"evidence_event":"projection_failed"}' --en 'Optional comment publication failed; local record retained' \
          --tw '選用的留言發布失敗；本機紀錄已保留'
+    # Only the external path retained this note through fm_private_note.
+    # Self-project refusals still need keep_unsent and exit 73.
+    if [ "$FM_EXTERNAL" = 1 ]; then spoke=1; fi
   fi
 }
 # A question that went nowhere used to be a line on standard error and
@@ -1982,6 +1993,14 @@ if [ -n "$held" ]; then
   post_note "$held" "$num"
   [ "$spoke" = 1 ] && held_settled=1
   [ "$spoke" = 1 ] || keep_unsent "$held"
+fi
+# Publication is complete: bind the optional progress projection to this head.
+if [ "$FM_EXTERNAL" = 1 ] && [ "$projection" != comments ]; then
+  if ! fm_external project --pr "$num" --head "$(git -C "$tree" rev-parse HEAD)" --stage worker; then
+    FM_CREW_STATUS_SECS=0 emit --type crew_status --data '{"evidence_event":"projection_failed"}' \
+      --en 'Optional worker projection failed; local report retained' \
+      --tw '選用的工作投影發布失敗；本機報告已保留'
+  fi
 fi
 # the note refused above was kept there; the rebuild is out, and the round
 # ends the way a refused note ends it
