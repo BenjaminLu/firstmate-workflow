@@ -1,19 +1,16 @@
 # shellcheck shell=bash
 # fm:sourced
-# Lifecycle suites own launch/report behavior; stacking.test.sh owns base lookup.
+# Lifecycle suites isolate base discovery; stacking-binding.test.sh uses real refs.
 stack_base_fixture() {
-  mv "$1/lib/fm_stack.py" "$1/lib/fm_stack_real.py"
-  cat > "$1/lib/fm_stack.py" <<'PYTHON'
-import sys
-from fm_stack_real import *
+  mv "$1/lib/fm_binding.py" "$1/lib/fm_binding_prior.py"
+  cat > "$1/lib/fm_binding.py" <<'PYTHON'
+from fm_binding_prior import *
 if __name__ == '__main__':
+    import sys, runpy
+    from pathlib import Path
     if sys.argv[1] == 'base':
         print('main')
     else:
-        main()
+        runpy.run_path(str(Path(__file__).with_name('fm_binding_prior.py')), run_name='__main__')
 PYTHON
-  # The service's repository is fixed alongside its base for these fixtures.
-  cat >> "$1/lib/fm-stack.sh" <<'SHELL'
-fm_stack_repository() { echo fixture/project; }
-SHELL
 }

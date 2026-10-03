@@ -40,15 +40,6 @@ def select_base(repository, base, dependencies, merged, allowed):
     return {'name': pr['headRefName'], 'head': sha(pr['headRefOid']), 'pr': pr['number']}
 
 
-def pr_base(root, repository, pr):
-    view = remote_head(repository, pr)
-    name = view['baseRefName']
-    git(root, 'check-ref-format', 'refs/heads/' + name)
-    if name.startswith('-') or git(root, 'rev-parse', 'refs/heads/' + name) != view['baseRefOid']:
-        raise ValueError('PR base is stale locally; synchronize before gates/review')
-    return name
-
-
 def release_parent(root, repository, branch, expected, policy):
     if not policy.get('delete_branch') or not deletable(repository, branch):
         return
@@ -157,7 +148,7 @@ def restack(root, repository, pr, parent, expected, policy, scratch):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['select', 'base', 'restack'])
+    parser.add_argument('action', choices=['select', 'restack'])
     parser.add_argument('--task')
     parser.add_argument('--pr', type=int)
     parser.add_argument('--parent', type=int)
@@ -165,13 +156,11 @@ def main():
     args = parser.parse_args()
     root = os.environ['FM_TARGET_ROOT']
     repo = os.environ['FM_STACK_REPOSITORY']
-    base = os.environ.get('FM_BASE', 'main')
+    base = os.environ.get('FM_BASE') or 'main'
     external = os.environ.get('FM_EXTERNAL') == '1'
     policy_path = Path(os.environ['FM_STATE_DIR']).parent / 'CONVENTIONS.md' if external else Path(root) / 'CONVENTIONS.md'
     policy = read_policy(policy_path, repo, base) if external or (policy_path.exists() and policy_path.stat().st_size) else {'stacking': 'hold', 'base': base}
-    if args.action == 'base':
-        print(pr_base(root, repo, args.pr))
-    elif args.action == 'select':
+    if args.action == 'select':
         if not args.task or not re.fullmatch(r'(T|SK)-[0-9]+', args.task):
             raise ValueError('valid task required')
         task = json.loads((Path(os.environ['FM_TASKS_DIR']) / (args.task + '.json')).read_text())
@@ -184,6 +173,8 @@ def main():
                     merged.add(row.get('task'))
         print(json.dumps(select_base(repo, base, task.get('depends_on', []), merged, policy['stacking'] == 'allowed')))
     else:
+        if policy.get('force_with_lease') is not True or policy.get('stacking') != 'allowed':
+            raise ValueError('restack requires confirmed stacking and force-with-lease policy')
         if not args.pr or not args.parent or not args.expected_head:
             raise ValueError('restack requires --pr --parent --expected-head')
         child = remote_head(repo, args.pr)

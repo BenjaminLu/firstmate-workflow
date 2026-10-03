@@ -10,6 +10,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fixture() {
   local d; d="$(mktemp -d)"
   git init -q -b main "$d/repo"
+  git -C "$d/repo" remote add origin https://github.com/owner/repo.git
   ( cd "$d/repo" && git config user.email a@b.c && git config user.name t
     mkdir -p bin state/worktrees && cp "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-cleanup.sh" bin/; project_storage_fixture bin/
     echo x > f && git add -A && git commit -qm base

@@ -149,15 +149,15 @@ fm_target_validate || exit 65
 BASE="${FM_BASE:-$BASE}"
 cd "$FM_TARGET_ROOT" || { echo "fm-gate: no repo at $FM_TARGET_ROOT" >&2; exit 64; }
 
-if [ -n "$PR" ]; then
-  BASE="$(fm_stack base --pr "$PR")" || exit 65
-fi
-
 # Freeze every gate to the same authoritative SHA. A stale local task ref is
 # refused, never silently replaced by a newer, ungated candidate.
 VERIFIED_HEAD=''; TASK_REF="$BRANCH"
+if [ -n "$PR" ] && [ -n "$ONLY" ] && [ "$ONLY" != 6 ]; then
+  BASE="$(fm_binding base --task "$TASK" --pr "$PR")" || exit 6
+fi
 if [ -n "$PR" ] && { [ -z "$ONLY" ] || [ "$ONLY" = 6 ]; }; then
   VERIFIED_HEAD="$(fm_binding head --task "$TASK" --pr "$PR" --branch "$BRANCH")" || exit 6
+  BASE="$(fm_binding base --task "$TASK" --pr "$PR")" || exit 6
   BRANCH="$VERIFIED_HEAD"
   if [ -z "$ONLY" ]; then
     mkdir -p "$FM_STATE_DIR/gates" || exit 70

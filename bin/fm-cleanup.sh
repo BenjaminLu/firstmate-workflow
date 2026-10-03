@@ -91,8 +91,12 @@ grep -qxF "$tgt_real" <<< "$known" || {
 # --- an open pull request is someone's unfinished work -------------------
 branch="$(git -C "$tgt_real" branch --show-current 2>/dev/null || true)"
 if [ "$FORCE" -eq 0 ] && [ -n "$branch" ]; then
-  github="$(fm_stack_repository)" || { echo 'fm-cleanup: repository unknown; retained' >&2; exit 65; }
-  github_args=(--repo "$github")
+  github_args=()
+  if github="$(fm_stack_repository 2>/dev/null)"; then
+    github_args=(--repo "$github")
+  elif [ "${FM_EXTERNAL:-0}" = 1 ]; then
+    echo 'fm-cleanup: repository unknown; retained' >&2; exit 65
+  fi
   state="$($GH pr view "$branch" --json state --jq .state ${github_args[@]+"${github_args[@]}"} 2>/dev/null || true)"
   if [ "${FM_EXTERNAL:-0}" = 1 ] && [ "$state" != MERGED ] && [ "$state" != CLOSED ]; then
     echo "fm-cleanup: external PR is open or its outcome is unknown; worktree retained" >&2

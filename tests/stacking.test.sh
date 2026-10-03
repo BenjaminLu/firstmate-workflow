@@ -3,4 +3,4 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PYTHONPATH="$ROOT/bin/lib"
-python3 "$ROOT/tests/lib/stacking_cases.py"
+python3 "$ROOT/tests/stacking_cases.py"

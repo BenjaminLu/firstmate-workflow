@@ -144,6 +144,7 @@ while IFS= read -r id; do
     is_done "$dep" || { ready=0; held "$id waits on $dep"; break; }
   done <<< "$(jq -r --arg t "$id" 'select(.id==$t)|.depends_on[]?' <<< "$tasks")"
   if [ "$ready" != 1 ]; then
+    [ "$(fm_stack_policy stacking)" = allowed ] || continue
     fm_stack select --task "$id" >/dev/null || continue
     ready=1
   fi

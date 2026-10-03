@@ -67,13 +67,19 @@ merge_method="$(fm_stack_policy merge_method)" || exit 65
 [ "$(fm_stack_policy land)" = card ] || {
   echo 'fm-merge: captain handoff required / 需要船長交接合併' >&2; exit 65; }
 merge_args=("--$merge_method")
-if [ "$(fm_stack_policy delete_branch)" = true ]; then merge_args+=(--delete-branch); fi
+delete_branch="$(fm_stack_policy delete_branch)" || exit 65
+if [ "$delete_branch" = true ]; then merge_args+=(--delete-branch); fi
 [ "$FM_EXTERNAL" != 1 ] || PROJECT="$FM_PROJECT"
 
-# Name the selected repository even for the legacy unnamed self route.
-github="$(fm_stack_repository)" || exit 65
-[[ "$github" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || exit 65
-ON=(--repo "$github")
+# Resolve and validate the selected project before any GitHub call.
+ON=()
+if [ -n "$PROJECT" ]; then
+  PROJECT="$(fm_project_resolve "$PROJECT" "$REPO/config.yaml")" || exit 65
+  github="$(fm_project_get "$PROJECT" github "$REPO/config.yaml")" || exit 65
+  ON=(--repo "$github")
+elif github="$(fm_stack_repository 2>/dev/null)"; then
+  ON=(--repo "$github")
+fi
 
 [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$|^[0-9a-f]{64}$ ]] || {
   echo 'fm-merge: missing verified candidate SHA / 缺少已驗證的候選版本 SHA' >&2; exit 1; }
@@ -127,7 +133,7 @@ if [ -z "$UNTRACKED" ]; then
 fi
 
 # Deletion is separate from the merge policy: every project retains PR bases.
-if ! fm_stack_deletable "$branch"; then
+if [ "$delete_branch" = true ] && ! fm_stack_deletable "$branch"; then
   retained_args=()
   for arg in "${merge_args[@]}"; do
     [ "$arg" = --delete-branch ] || retained_args+=("$arg")

@@ -6,7 +6,7 @@ binding_service_fixture() {
   mkdir -p "$1/bin/lib"
   cp "$ROOT/bin/lib/fm_binding.py" "$1/bin/lib/fm_binding_real.py"
   cat > "$1/bin/lib/fm_binding.py" <<'PY'
-from fm_binding_real import source_binding, git, command, github, remote_head, sha
+from fm_binding_real import source_binding, git, command, github, remote_head, sha, repository
 if __name__ == "__main__":
     import argparse, json, os, re, subprocess
     p=argparse.ArgumentParser()
@@ -18,6 +18,8 @@ if __name__ == "__main__":
         r=subprocess.run(['git','-C',os.environ['FM_TARGET_ROOT'],'rev-parse',a.branch],capture_output=True,text=True)
         head=r.stdout.strip()
         print(head if re.fullmatch('[0-9a-f]{40}',head) else 'a'*40)
+    elif a.mode == 'base':
+        print('main')
     elif a.mode in ('checks','ready'):
         from pathlib import Path
         if os.environ.get('GHSTATE') and (Path(os.environ['GHSTATE'])/'red').exists():raise SystemExit(1)

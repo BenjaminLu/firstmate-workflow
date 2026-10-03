@@ -3,6 +3,7 @@
 set -euo pipefail
 exec </dev/null
 stack_bin="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+[ -f "$stack_bin/fm-config.sh" ] || { echo "${0##*/}: missing $stack_bin/fm-config.sh" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
 . "$stack_bin/fm-config.sh"
 # shellcheck source=bin/lib/fm-stack.sh

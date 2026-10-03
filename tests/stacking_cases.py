@@ -2,12 +2,43 @@
 import unittest
 from unittest.mock import patch
 import fm_stack as stack
+import fm_binding as binding
 
 A = 'a' * 40
 B = 'b' * 40
 
 
 class Stacking(unittest.TestCase):
+    def test_storage_setup_preserves_installed_binding(self):
+        import os
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(['bash', '-c',
+                '. "$ROOT/tests/lib/project-storage.sh"; '
+                'project_storage_fixture "$1/bin"; '
+                'printf fixture-reader > "$1/bin/lib/fm_binding.py"; '
+                'project_storage_fixture "$1/bin"; '
+                'cat "$1/bin/lib/fm_binding.py"', '_', tmp],
+                env=dict(os.environ, ROOT=str(root)), capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, 'fixture-reader')
+
+    def test_external_checks_without_exported_base_use_project_default(self):
+        import os
+        view = dict(headRefOid=B, baseRefName='t-1-parent', baseRefOid=A)
+        runs = {'check_runs': [dict(id=1, name='ci', head_sha=B,
+                                   status='completed', conclusion='success')]}
+        with patch.dict(os.environ, {'FM_EXTERNAL': '1', 'FM_STATE_DIR': '/project/state'}, clear=True), \
+             patch('fm_conventions.read_policy', return_value={'required_checks': ['ci']}) as policy, \
+             patch.object(binding, 'remote_head', return_value=view), \
+             patch.object(binding, 'git', return_value=A), \
+             patch.object(binding, 'github', side_effect=[runs, {'sha': B, 'statuses': []}]):
+            self.assertEqual(len(binding.required_checks('/repo', 'owner/repo', 2, B)), 1)
+            self.assertEqual(policy.call_args.args[2], 'main')
+
     def test_open_base_retained(self):
         with patch.object(stack, 'github', return_value=[{'number': 9}]):
             self.assertFalse(stack.deletable('owner/repo', 't-parent'))
@@ -57,13 +88,15 @@ class Stacking(unittest.TestCase):
     def test_per_pr_base_is_verified(self):
         view = {'state': 'OPEN', 'baseRefName': 't-1-parent', 'baseRefOid': A,
                 'headRefOid': B, 'headRefName': 't-2-child'}
-        with patch.object(stack, 'remote_head', return_value=view), \
-             patch.object(stack, 'git', return_value=A):
-            self.assertEqual(stack.pr_base('/repo', 'owner/repo', 2), 't-1-parent')
-        with patch.object(stack, 'remote_head', return_value=view), \
-             patch.object(stack, 'git', return_value=B):
+        with patch.object(binding, 'remote_head', return_value=view), \
+             patch.object(binding, 'git', return_value=A), \
+             patch.dict('os.environ', {'FM_TARGET_ROOT': '/repo'}):
+            self.assertEqual(binding.view_base('owner/repo', 2), 't-1-parent')
+        with patch.object(binding, 'remote_head', return_value=view), \
+             patch.object(binding, 'git', return_value=B), \
+             patch.dict('os.environ', {'FM_TARGET_ROOT': '/repo'}):
             with self.assertRaises(ValueError):
-                stack.pr_base('/repo', 'owner/repo', 2)
+                binding.view_base('owner/repo', 2)
 
     def test_restack_requires_force_policy(self):
         with patch.object(stack, 'remote_head') as gh:
@@ -171,4 +204,17 @@ class Stacking(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main()
+    class AssertionResult(unittest.TextTestResult):
+        def addSuccess(self, test):
+            super().addSuccess(test)
+            print('    stacking: ' + test._testMethodName + '    ok', flush=True)
+
+        def addFailure(self, test, err):
+            super().addFailure(test, err)
+            print('    stacking: ' + test._testMethodName + '    FAIL', flush=True)
+
+        def addError(self, test, err):
+            super().addError(test, err)
+            print('    stacking: ' + test._testMethodName + '    FAIL', flush=True)
+
+    unittest.main(testRunner=unittest.TextTestRunner(resultclass=AssertionResult))

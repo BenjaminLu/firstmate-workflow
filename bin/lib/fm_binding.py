@@ -115,7 +115,7 @@ def required_checks(root, repository, pr, head):
         raise ValueError('checks refer to a stale local base')
     if os.environ.get('FM_EXTERNAL') == '1':
         from fm_conventions import read_policy
-        policy = read_policy(Path(os.environ['FM_STATE_DIR']).parent / 'CONVENTIONS.md', repository, os.environ.get('FM_BASE'))
+        policy = read_policy(Path(os.environ['FM_STATE_DIR']).parent / 'CONVENTIONS.md', repository, os.environ.get('FM_BASE') or 'main')
         names = policy['required_checks']
     else:
         from urllib.parse import quote
@@ -226,9 +226,8 @@ def view_base(repo, pr):
 
 def main():
     import argparse
-    from fm_evidence import Store
     p = argparse.ArgumentParser()
-    p.add_argument('mode', choices=['head', 'checks', 'ready', 'candidate', 'external-review'])
+    p.add_argument('mode', choices=['base', 'head', 'checks', 'ready', 'candidate', 'external-review'])
     p.add_argument('--task', required=True)
     p.add_argument('--pr', required=True)
     p.add_argument('--branch', default='')
@@ -237,11 +236,14 @@ def main():
     args = p.parse_args()
     root = Path(os.environ['FM_TARGET_ROOT'])
     repo = repository(root)
+    if args.mode == 'base':
+        print(view_base(repo, args.pr)); return
     if args.mode == 'head':
         print(authoritative(root, args.branch, repo, args.pr)); return
     head = sha(args.head)
     if remote_head(repo, args.pr)['headRefOid'] != head:
         raise ValueError('authoritative PR head moved; candidate is stale')
+    from fm_evidence import Store
     store = Store(os.environ['FM_STATE_DIR'], os.environ['FM_EVIDENCE_PROJECT'], args.task)
     if args.mode == 'external-review':
         print(json.dumps(external_review(store, root, repo, args.pr, head))); return

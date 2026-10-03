@@ -271,19 +271,10 @@ R_HEAD="$(git rev-parse --verify -q "$BRANCH^{commit}")" || R_HEAD=''
 # The shared binding reader fetches and compares both authoritative refs, and
 # refuses a stale local task/base rather than overwriting unpublished work.
 REVIEW_PR_BASE=''; REVIEW_PR_BASE_HEAD=''
-if [ -n "$PR" ]; then
-  BASE="$(fm_stack base --pr "$PR")" || exit 65
-  REVIEW_PR_BASE="$BASE"
-  REVIEW_PR_BASE_HEAD="$(git rev-parse "refs/heads/$BASE")" || exit 65
-fi
 verify_review_head() {
   if [ -z "$PR" ]; then
     [ "$FM_EXTERNAL" != 1 ] || { echo 'fm-review: external review requires --pr' >&2; return 65; }
     return 0  # Legacy local-only self review establishes no remote readiness.
-  fi
-  if [ -n "$PR" ]; then
-    [ "$(fm_stack base --pr "$PR")" = "$REVIEW_PR_BASE" ] &&
-      [ "$(git rev-parse "refs/heads/$REVIEW_PR_BASE")" = "$REVIEW_PR_BASE_HEAD" ] || return 65
   fi
   local verified
   # The binding service owns repository resolution: configured GH_REPO or
@@ -292,8 +283,17 @@ verify_review_head() {
   verified="$(fm_binding head --task "$TASK" --pr "$PR" --branch "$BRANCH")" || return 65
   [ -n "$R_HEAD" ] && [ "$verified" = "$R_HEAD" ] || {
     echo 'fm-review: authoritative PR head moved; refresh before review' >&2; return 65; }
+  if [ -n "${REVIEW_PR_BASE:-}" ]; then
+    [ "$(fm_binding base --task "$TASK" --pr "$PR")" = "$REVIEW_PR_BASE" ] &&
+      [ "$(git rev-parse "$REVIEW_PR_BASE^{commit}")" = "$REVIEW_PR_BASE_HEAD" ] || return 65
+  fi
 }
 verify_review_head || exit 65
+if [ -n "$PR" ]; then
+  BASE="$(fm_binding base --task "$TASK" --pr "$PR")" || exit 65
+  REVIEW_PR_BASE="$BASE"
+  REVIEW_PR_BASE_HEAD="$(git rev-parse "$BASE^{commit}")" || exit 65
+fi
 spec="$(task_spec "$TASK" "${R_HEAD:-$BRANCH}")"
 [ -n "$spec" ] || { echo "fm-review: no task $TASK" >&2; exit 65; }
 set_crew_activity "$spec"

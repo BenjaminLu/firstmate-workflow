@@ -14,6 +14,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fixture() {                       # <pr state> <head branch> [title] [number]
   local d; d="$(mktemp -d)"
   mkdir -p "$d/bin" "$d/state" "$d/stub"
+  git init -q -b main "$d"
+  git -C "$d" remote add origin https://github.com/fixture/project.git
   cp "$ROOT/bin/fm-merge.sh" "$ROOT/bin/fm-emit.sh" "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$d/bin/"; project_storage_fixture "$d/bin/"
   cp "$ROOT/bin/lib/fm_conventions.py" "$d/bin/lib/"
   binding_service_fixture "$d"
@@ -96,7 +98,7 @@ done
 d="$(fixture OPEN t-009-board-server)"
 out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --pr 9 2>&1)"
 assert_eq "0" "$?" "an open pull request merges"
-assert_contains "$(cat "$d/ghcalls")" "--squash" "through gh, squashed"
+assert_contains "$(grep 'pr merge 9 ' "$d/ghcalls")" "--squash" "PR #9 through gh, squashed"
 # the event has to carry the task: the board keys on it, and a merged event
 # without one leaves the task in whatever lane it was in - finished work
 # showing as work in progress
@@ -305,7 +307,7 @@ rm -rf "$d"
 d="$(fixture OPEN "$REV_BRANCH" "$REV_TITLE" 96)"; cleanup_stub "$d"
 out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --pr 96 --untracked 2>&1)"
 assert_eq "0" "$?" "a pull request of no task merges from an untracked card"
-assert_contains "$(cat "$d/ghcalls")" "--squash" "through gh, squashed"
+assert_contains "$(grep 'pr merge 96 ' "$d/ghcalls")" "--squash" "PR #96 through gh, squashed"
 assert_eq "merged -" "$(types "$d" | sed 's/ $//')" "its merged event names no task"
 assert_eq "true" "$(jq -r 'select(.type=="merged")|.data.untracked' "$d/state/events.jsonl")" \
   "and says it belongs to no task"
@@ -441,4 +443,16 @@ if command -v bun >/dev/null 2>&1; then
 else
   assert_eq available missing "bun is required for merge board binding coverage"
 fi
+# Policy that retains branches needs no downstream query at merge time.
+# shellcheck source=tests/lib/stacking.sh
+. "$ROOT/tests/lib/stacking.sh"
+d="$(fixture OPEN t-009-board)"
+stacking_policy "$d/CONVENTIONS.md" hold
+out="$(FM_ROOT="$d" FM_GH="$d/stub/gh" bash "$d/bin/fm-merge.sh" --expected-head aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --pr 9 2>&1)"
+assert_eq 0 "$?" "retention policy permits the bound merge"
+assert_contains "$(grep 'pr merge 9 ' "$d/ghcalls")" '--squash' 'retention policy still merges the intended PR'
+assert_lacks "$(cat "$d/ghcalls")" 'pr list' 'retention policy makes no unnecessary downstream lookup'
+assert_lacks "$(cat "$d/ghcalls")" '--delete-branch' 'retention policy never requests deletion'
+rm -rf "$d"
+
 finish

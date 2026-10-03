@@ -486,7 +486,7 @@ fi
 # Existing PRs own their base. New allowed stacks start at the verified parent.
 stack_base=''
 if [ -n "$PR" ]; then
-  BASE="$(fm_stack base --pr "$PR")" || exit 65
+  BASE="$(fm_binding base --task "$TASK" --pr "$PR")" || exit 65
 elif [ "$(fm_stack_policy stacking)" = allowed ]; then
   stack_base="$(fm_stack select --task "$TASK")" || exit 65
   BASE="$(jq -r .name <<<"$stack_base")"

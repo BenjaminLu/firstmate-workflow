@@ -3,11 +3,13 @@
 _fm_stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Call only after fm_storage_init. Empty self conventions keep stacking held.
 fm_stack_repository() {
-  if [ "${FM_EXTERNAL:-0}" = 1 ]; then printf '%s\n' "$GH_REPO"
-  elif [ -n "${FM_PROJECT:-}" ] && [ -n "$(fm_projects "$FM_CONFIG" 2>/dev/null)" ]; then
+  if [ -n "${FM_PROJECT:-}" ] && [ -n "$(fm_projects "$FM_CONFIG" 2>/dev/null)" ]; then
     fm_project_get "$FM_PROJECT" github "$FM_CONFIG"
+  elif [ -n "${GH_REPO:-}" ]; then printf '%s\n' "$GH_REPO"
   else
-    "${GH:-${FM_GH:-gh}}" repo view --json nameWithOwner --jq .nameWithOwner
+    # Self checkouts use the same local-origin reader as authoritative binding.
+    python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); from fm_binding import repository; print(repository(sys.argv[2]))' \
+      "$_fm_stack_dir" "$FM_TARGET_ROOT"
   fi
 }
 fm_stack_deletable() {
