@@ -10,6 +10,7 @@
   "scope": [
     "bin/fm-worker.sh",
     "bin/fm-merge.sh",
+    "bin/fm-cleanup.sh",
     "bin/fm-gate.sh",
     "bin/fm-review.sh",
     "bin/fm-dispatch.sh",

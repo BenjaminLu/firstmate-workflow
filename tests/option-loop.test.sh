@@ -56,6 +56,7 @@ fm-project 4
 fm-protocol 5
 fm-ready 4
 fm-reconcile 4
+fm-restack 5
 fm-review 8
 fm-run 3
 fm-session 4
@@ -98,7 +99,7 @@ total=0
 while read -r name want; do
   [ -n "$name" ] || continue
   f="$ROOT/bin/$name.sh"
-  [ "$name" != fm-evidence ] || f="$ROOT/bin/lib/fm-evidence.sh"
+  case "$name" in fm-evidence|fm-restack) f="$ROOT/bin/lib/$name.sh" ;; esac
   assert_ok "test -f '$f'" "$name.sh is still there"
   # discovered from the file, then checked against the pinned count, so a
   # loop written differently tomorrow fails loudly instead of quietly
@@ -148,7 +149,7 @@ while read -r name want; do
     fi
   done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "109" "$total" "every pinned flag and all nine fm option cases were exercised"
+assert_eq "114" "$total" "every pinned flag and all nine fm option cases were exercised"
 
 # These flags consume one word, so they are deliberately outside the shift-2
 # count. Probe them without a base ref: parsing must finish at usage, not hang.
@@ -213,7 +214,7 @@ assert_contains "$said" "unknown argument" "and says so"
 run_capped 6 bash "$ROOT/bin/lib/fm-evidence.sh" --task T-Z --no-such-flag
 assert_eq "64" "$code" "evidence refuses an unknown flag with the shared usage status"
 assert_contains "$said" "fm-evidence: unknown argument --no-such-flag" "evidence refusal names script and flag"
-# Twelve scripts get their guard from a sourced function, and a
+# Fourteen scripts get their guard from a sourced function, and a
 # command-not-found under `set -uo pipefail` carries on - the exact hazard
 # the assertions stage exists to catch. So the load has to be hard: if the
 # library will not load, the script must not reach its option loop.
@@ -236,7 +237,7 @@ while IFS= read -r f; do
   assert_contains "$said" "fm-config.sh" "and says which library"
   rm -rf "$tmp"
 done < <(fm_shell_corpus "$ROOT/bin")
-assert_eq "13" "$sourced" "thirteen scripts take their guard from the library"
+assert_eq "14" "$sourced" "fourteen scripts take their guard from the library"
 
 # And the other half of the same number, because two comments say it is
 # pinned here and until now it was not: the scripts that deliberately

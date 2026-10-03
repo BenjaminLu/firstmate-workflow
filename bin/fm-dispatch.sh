@@ -27,6 +27,8 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
+# shellcheck source=bin/lib/fm-stack.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/fm-stack.sh"
 fm_args=("$@")
 
 REPO="${FM_ROOT:-$(pwd)}"; DRY=0; LIMIT=''; ORDERED=''
@@ -141,7 +143,11 @@ while IFS= read -r id; do
     [ -n "$dep" ] || continue
     is_done "$dep" || { ready=0; held "$id waits on $dep"; break; }
   done <<< "$(jq -r --arg t "$id" 'select(.id==$t)|.depends_on[]?' <<< "$tasks")"
-  [ "$ready" -eq 1 ] || continue
+  if [ "$ready" != 1 ]; then
+    [ "$(fm_stack_policy stacking)" = allowed ] || continue
+    fm_stack select --task "$id" >/dev/null || continue
+    ready=1
+  fi
   is_cleared "$id" || { echo "fm-dispatch: $id is ready but the captain has not cleared it" >&2; continue; }
 
   if [ "$DRY" -eq 1 ]; then

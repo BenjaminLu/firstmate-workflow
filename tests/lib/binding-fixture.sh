@@ -6,9 +6,14 @@ binding_service_fixture() {
   mkdir -p "$1/bin/lib"
   cp "$ROOT/bin/lib/fm_binding.py" "$1/bin/lib/fm_binding_real.py"
   cat > "$1/bin/lib/fm_binding.py" <<'PY'
-from fm_binding_real import source_binding, git
+from fm_binding_real import source_binding, git, command, github, remote_head, sha, repository
 if __name__ == "__main__":
-    import argparse, json, os, re, subprocess
+    import argparse, json, os, re, subprocess, sys, runpy
+    from pathlib import Path
+    # Keep modes outside this fixture's overrides on the production parser.
+    if len(sys.argv) > 1 and sys.argv[1] not in ('head', 'base', 'checks', 'ready', 'candidate'):
+        runpy.run_path(str(Path(__file__).with_name('fm_binding_real.py')), run_name='__main__')
+        raise SystemExit(0)
     p=argparse.ArgumentParser()
     p.add_argument('mode'); p.add_argument('--task'); p.add_argument('--pr')
     p.add_argument('--gate-report',default='')
@@ -18,6 +23,8 @@ if __name__ == "__main__":
         r=subprocess.run(['git','-C',os.environ['FM_TARGET_ROOT'],'rev-parse',a.branch],capture_output=True,text=True)
         head=r.stdout.strip()
         print(head if re.fullmatch('[0-9a-f]{40}',head) else 'a'*40)
+    elif a.mode == 'base':
+        print('main')
     elif a.mode in ('checks','ready'):
         from pathlib import Path
         if os.environ.get('GHSTATE') and (Path(os.environ['GHSTATE'])/'red').exists():raise SystemExit(1)

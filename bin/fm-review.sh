@@ -29,6 +29,8 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
+# shellcheck source=bin/lib/fm-stack.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/fm-stack.sh"
 # the adapters' library, for the one rule on which hosts a run-mode sandbox
 # may reach: this script and the adapter apply the same one
 _fm_alib="$(dirname "${BASH_SOURCE[0]}")/adapters/_lib.sh"
@@ -268,6 +270,7 @@ R_HEAD="$(git rev-parse --verify -q "$BRANCH^{commit}")" || R_HEAD=''
 # Local refs alone never establish which change GitHub will land.
 # The shared binding reader fetches and compares both authoritative refs, and
 # refuses a stale local task/base rather than overwriting unpublished work.
+REVIEW_PR_BASE=''; REVIEW_PR_BASE_HEAD=''
 verify_review_head() {
   if [ -z "$PR" ]; then
     [ "$FM_EXTERNAL" != 1 ] || { echo 'fm-review: external review requires --pr' >&2; return 65; }
@@ -280,8 +283,17 @@ verify_review_head() {
   verified="$(fm_binding head --task "$TASK" --pr "$PR" --branch "$BRANCH")" || return 65
   [ -n "$R_HEAD" ] && [ "$verified" = "$R_HEAD" ] || {
     echo 'fm-review: authoritative PR head moved; refresh before review' >&2; return 65; }
+  if [ -n "${REVIEW_PR_BASE:-}" ]; then
+    [ "$(fm_binding base --task "$TASK" --pr "$PR")" = "$REVIEW_PR_BASE" ] &&
+      [ "$(git rev-parse "$REVIEW_PR_BASE^{commit}")" = "$REVIEW_PR_BASE_HEAD" ] || return 65
+  fi
 }
 verify_review_head || exit 65
+if [ -n "$PR" ]; then
+  BASE="$(fm_binding base --task "$TASK" --pr "$PR")" || exit 65
+  REVIEW_PR_BASE="$BASE"
+  REVIEW_PR_BASE_HEAD="$(git rev-parse "$BASE^{commit}")" || exit 65
+fi
 spec="$(task_spec "$TASK" "${R_HEAD:-$BRANCH}")"
 [ -n "$spec" ] || { echo "fm-review: no task $TASK" >&2; exit 65; }
 set_crew_activity "$spec"

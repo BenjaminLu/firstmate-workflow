@@ -115,7 +115,7 @@ def required_checks(root, repository, pr, head):
         raise ValueError('checks refer to a stale local base')
     if os.environ.get('FM_EXTERNAL') == '1':
         from fm_conventions import read_policy
-        policy = read_policy(Path(os.environ['FM_STATE_DIR']).parent / 'CONVENTIONS.md', repository, view['baseRefName'])
+        policy = read_policy(Path(os.environ['FM_STATE_DIR']).parent / 'CONVENTIONS.md', repository, os.environ.get('FM_BASE') or 'main')
         names = policy['required_checks']
     else:
         from urllib.parse import quote
@@ -215,7 +215,10 @@ def selected_review(store, root, repo, pr, head):
 
 
 def view_base(repo, pr):
-    view = remote_head(repo, pr)
+    return verified_base(remote_head(repo, pr))
+
+
+def verified_base(view):
     name = view['baseRefName']
     if not name or name.startswith('-'):
         raise ValueError('invalid authoritative base')
@@ -224,11 +227,24 @@ def view_base(repo, pr):
     return name
 
 
+def local_gate_base(root, pr, project_base):
+    # Individual local gates also work before a PR exists, or without an
+    # origin. Full runs and gate 6 keep the strict authoritative binding.
+    try:
+        view = remote_head(repository(root), pr)
+    except ValueError:
+        return project_base
+    if view['baseRefName'] == project_base:
+        return project_base
+    # Once a stacked PR is known, a stale parent must not fall back to main.
+    return verified_base(view)
+
+
 def main():
     import argparse
-    from fm_evidence import Store
     p = argparse.ArgumentParser()
-    p.add_argument('mode', choices=['head', 'checks', 'ready', 'candidate', 'external-review'])
+    p.add_argument('mode', choices=['base', 'local-gate-base', 'head', 'checks', 'ready', 'candidate', 'external-review'])
+    p.add_argument('--project-base', default='main')
     p.add_argument('--task', required=True)
     p.add_argument('--pr', required=True)
     p.add_argument('--branch', default='')
@@ -236,12 +252,17 @@ def main():
     p.add_argument('--gate-report', default='')
     args = p.parse_args()
     root = Path(os.environ['FM_TARGET_ROOT'])
+    if args.mode == 'local-gate-base':
+        print(local_gate_base(root, args.pr, args.project_base)); return
     repo = repository(root)
+    if args.mode == 'base':
+        print(view_base(repo, args.pr)); return
     if args.mode == 'head':
         print(authoritative(root, args.branch, repo, args.pr)); return
     head = sha(args.head)
     if remote_head(repo, args.pr)['headRefOid'] != head:
         raise ValueError('authoritative PR head moved; candidate is stale')
+    from fm_evidence import Store
     store = Store(os.environ['FM_STATE_DIR'], os.environ['FM_EVIDENCE_PROJECT'], args.task)
     if args.mode == 'external-review':
         print(json.dumps(external_review(store, root, repo, args.pr, head))); return

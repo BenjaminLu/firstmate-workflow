@@ -33,6 +33,8 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
+# shellcheck source=bin/lib/fm-stack.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/fm-stack.sh"
 _fm_grammar="$(dirname "${BASH_SOURCE[0]}")/fm-emit.sh"
 [ -f "$_fm_grammar" ] || { echo "${0##*/}: missing $_fm_grammar" >&2; exit 70; }
 # shellcheck source=bin/fm-emit.sh
@@ -61,21 +63,21 @@ esac
   echo "fm-merge: --task and --untracked are two different cards; give one" >&2; exit 64; }
 
 fm_storage_init "$REPO" "$PROJECT" || exit 65
-merge_args=(--squash --delete-branch)
-if [ "$FM_EXTERNAL" = 1 ]; then
-  policy="$(fm_conventions "")" || exit 65
-  [ "$(jq -r .land <<<"$policy")" = card ] || {
-    echo 'fm-merge: captain handoff required / 需要船長交接合併' >&2; exit 65; }
-  merge_args=("--$(jq -r .merge_method <<<"$policy")")
-  if [ "$(jq -r .delete_branch <<<"$policy")" = true ]; then merge_args+=(--delete-branch); fi
-  PROJECT="$FM_PROJECT"
-fi
+merge_method="$(fm_stack_policy merge_method)" || exit 65
+[ "$(fm_stack_policy land)" = card ] || {
+  echo 'fm-merge: captain handoff required / 需要船長交接合併' >&2; exit 65; }
+merge_args=("--$merge_method")
+delete_branch="$(fm_stack_policy delete_branch)" || exit 65
+if [ "$delete_branch" = true ]; then merge_args+=(--delete-branch); fi
+[ "$FM_EXTERNAL" != 1 ] || PROJECT="$FM_PROJECT"
 
-# the project's repository, named on every gh call; none without --project
+# Resolve and validate the selected project before any GitHub call.
 ON=()
 if [ -n "$PROJECT" ]; then
   PROJECT="$(fm_project_resolve "$PROJECT" "$REPO/config.yaml")" || exit 65
   github="$(fm_project_get "$PROJECT" github "$REPO/config.yaml")" || exit 65
+  ON=(--repo "$github")
+elif github="$(fm_stack_repository 2>/dev/null)"; then
   ON=(--repo "$github")
 fi
 
@@ -128,6 +130,15 @@ esac
 if [ -z "$UNTRACKED" ]; then
   fm_binding candidate --task "$TASK" --pr "$PR" --head "$EXPECTED_HEAD" >/dev/null || {
     echo 'fm-merge: candidate lacks current signed readiness / 候選版本缺少有效的已簽署就緒證據' >&2; exit 1; }
+fi
+
+# Deletion is separate from the merge policy: every project retains PR bases.
+if [ "$delete_branch" = true ] && ! fm_stack_deletable "$branch"; then
+  retained_args=()
+  for arg in "${merge_args[@]}"; do
+    [ "$arg" = --delete-branch ] || retained_args+=("$arg")
+  done
+  merge_args=("${retained_args[@]}")
 fi
 
 if ! merge_output="$($GH pr merge "$PR" ${ON[@]+"${ON[@]}"} "${merge_args[@]}" --match-head-commit "$EXPECTED_HEAD" 2>&1 </dev/null)"; then

@@ -4812,8 +4812,8 @@ Publication reads the same contract as merge and prompt construction. Missing,
 invalid or unconfirmed policy refuses external publication; self defaults stay
 unchanged. Merge methods and retention follow the contract; land: handoff
 refuses engine merge. No path enables auto-merge or protected-base publication.
-External stacking/rebuild remains held for T-143, even if the captain records
-an allowed future policy. Summary/check/threads projections are retained locally
+T-143 enables policy-authorized stacking and explicit expected-head restacking
+through the operator helper documented below. Summary/check/threads projections are retained locally
 pending T-140; they never fall back to exposing private acceptance as comments.
 
 Inspection covers the last 30 updated PRs and up to 100 reviews/comments/checks
@@ -4869,3 +4869,43 @@ the shared T-138 boundary. These structural guarantees do not prove a model
 followed its role or inspected omitted design. Workers leave publication and
 suites to the outside launcher and CI; reviewer context excludes worker reports
 and reasoning.
+
+### T-143: operating a stack
+
+A confirmed `stacking: allowed` convention permits one unmerged dependency
+with a unique open, same-repository PR; other dependencies must have merged.
+Ambiguous parents, forks and multiple unmerged parents remain held. Empty self
+conventions retain the existing hold policy. Firstmate explicitly dispatches
+an authorized stacked task with `fm-dispatch.sh --task <id> --project <name>`;
+ordinary readiness-card behavior remains unchanged. The worker resolves the
+parent again before creating the child from its head and opens against that
+parent branch. Existing PRs retain their own base. Local base refs must match
+GitHub before worker resumption, review or gates; unpublished local work is
+never overwritten to make a stale base look current.
+
+After the parent merges, firstmate can operate without T-141:
+
+```sh
+bash bin/lib/fm-restack.sh --repo <engine> --project <name> \
+  --pr <child-number> --parent <merged-parent-number> --expected-head <child-sha>
+```
+
+The helper holds the worker's task exclusion and preserves dirty worktrees. It
+requires confirmed stacking and force-with-lease policy, refuses protected or
+unknown-protection task branches, and rebuilds only the child commits beyond
+the parent boundary in a temporary project-local worktree. It pushes with an
+explicit expected old head, retargets to the parent's base, verifies GitHub's
+new head/base, and updates the local task ref with the same old-head check. A clean managed
+task worktree is reattached to that verified head.
+Remote push and retarget cannot be atomic: a retarget failure reports the
+published SHA and requires synchronization and completion of that retarget
+before any review. No result is approval or gate evidence.
+
+Synchronize the local base without overwriting unpublished work, then obtain
+fresh current-head CI, six gates and authoritative review/patch binding before
+requesting a merge card. The helper retains the parent while any open PR uses
+it, or downstream evidence is unknown. Once the last dependent retargets,
+confirmed deletion policy permits expected-head parent deletion; unknown
+protection defers cleanup. Merge and cleanup independently retain all open PR
+bases, including self-project and forced cleanup paths. T-141 may automate
+these mechanical operations later; it does not supply their authorization.

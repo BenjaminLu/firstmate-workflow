@@ -15,6 +15,8 @@ _storage_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 if [ -r "$_storage_lib" ]; then
   # shellcheck source=bin/fm-config.sh
   . "$_storage_lib"
+# shellcheck source=bin/lib/fm-stack.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/fm-stack.sh"
 fi
 
 REPO="${FM_ROOT:-$(pwd)}"; TASK=''; FORCE=0; GH="${FM_GH:-gh}"
@@ -90,7 +92,11 @@ grep -qxF "$tgt_real" <<< "$known" || {
 branch="$(git -C "$tgt_real" branch --show-current 2>/dev/null || true)"
 if [ "$FORCE" -eq 0 ] && [ -n "$branch" ]; then
   github_args=()
-  [ "${FM_EXTERNAL:-0}" != 1 ] || github_args=(--repo "$GH_REPO")
+  if github="$(fm_stack_repository 2>/dev/null)"; then
+    github_args=(--repo "$github")
+  elif [ "${FM_EXTERNAL:-0}" = 1 ]; then
+    echo 'fm-cleanup: repository unknown; retained' >&2; exit 65
+  fi
   state="$($GH pr view "$branch" --json state --jq .state ${github_args[@]+"${github_args[@]}"} 2>/dev/null || true)"
   if [ "${FM_EXTERNAL:-0}" = 1 ] && [ "$state" != MERGED ] && [ "$state" != CLOSED ]; then
     echo "fm-cleanup: external PR is open or its outcome is unknown; worktree retained" >&2
@@ -103,15 +109,10 @@ fi
 
 git worktree remove --force "$tgt_real" >/dev/null 2>&1 || rm -rf "$tgt_real"
 git worktree prune >/dev/null 2>&1
-delete_branch=true
-if [ "${FM_EXTERNAL:-0}" = 1 ]; then
-  delete_branch="$(fm_conventions delete_branch 2>/dev/null)" || delete_branch=false
-  if [ "$delete_branch" = true ]; then
-    # A branch used as another PR's base is retained, even after its own PR
-    # merged. Unreadable downstream evidence is retention, never permission.
-    downstream="$(fm_github pr list --state open --base "$branch" --json number 2>/dev/null)" || downstream='unknown'
-    [ "$downstream" = '[]' ] || delete_branch=false
-  fi
+delete_branch="$(fm_stack_policy delete_branch 2>/dev/null)" || delete_branch=false
+# Unknown downstream evidence retains the branch, including self and --force.
+if [ "$delete_branch" = true ]; then
+  fm_stack_deletable "$branch" || delete_branch=false
 fi
 if [ -n "$branch" ] && [ "$delete_branch" = true ]; then git branch -D "$branch" >/dev/null 2>&1; fi
 rm -f "$ROOT/$TASK.log"
