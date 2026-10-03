@@ -147,6 +147,9 @@ export FM_GATE_LOCK_HELD="$LOCK"
 fm_storage_init "$REPO" || exit 65
 fm_target_validate || exit 65
 BASE="${FM_BASE:-$BASE}"
+if [ -n "${FM_PROJECT:-}" ] && [ -n "$(fm_projects "$FM_CONFIG")" ]; then
+  BASE="$(fm_project_get "$FM_PROJECT" base "$FM_CONFIG")" || exit 65
+fi
 cd "$FM_TARGET_ROOT" || { echo "fm-gate: no repo at $FM_TARGET_ROOT" >&2; exit 64; }
 
 # Freeze every gate to the same authoritative SHA. A stale local task ref is
@@ -157,12 +160,13 @@ if [ -n "$PR" ] && [ -n "$ONLY" ] && [ "$ONLY" != 6 ]; then
 fi
 if [ -n "$PR" ] && { [ -z "$ONLY" ] || [ "$ONLY" = 6 ]; }; then
   VERIFIED_HEAD="$(fm_binding head --task "$TASK" --pr "$PR" --branch "$BRANCH")" || exit 6
-  BASE="$(fm_binding base --task "$TASK" --pr "$PR")" || exit 6
   BRANCH="$VERIFIED_HEAD"
+  BASE="$(fm_binding base --task "$TASK" --pr "$PR" --head "$VERIFIED_HEAD")" || exit 6
+  BASE="$(git rev-parse "$BASE^{commit}")" || exit 6
   if [ -z "$ONLY" ]; then
     mkdir -p "$FM_STATE_DIR/gates" || exit 70
     GATE_TRANSCRIPT="$FM_STATE_DIR/gates/.$TASK-$VERIFIED_HEAD-$$.txt"
-    printf 'HEAD:%s\n' "$VERIFIED_HEAD" > "$GATE_TRANSCRIPT"
+    printf 'HEAD:%s\nBASE:%s\n' "$VERIFIED_HEAD" "$BASE" > "$GATE_TRANSCRIPT"
     trap 'mv "$GATE_TRANSCRIPT" "$FM_STATE_DIR/gates/$TASK-$VERIFIED_HEAD.txt"' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
@@ -210,12 +214,21 @@ gate4() {
 # Keep gate policy (declared docs and check fallback) in the shared engine.
 # The lock descriptor belongs to this launcher, never to its test children.
 gate5() {
-  if [ "$FM_EXTERNAL" = 1 ]; then
-    mkdir -p "$FM_STATE_DIR/tmp" || return 1
-    TMPDIR="$FM_STATE_DIR/tmp" bash "$GATE_BIN/fm-failfirst.sh" --gate --head="$BRANCH" "$BASE" 8<&-
-  else
-    bash "$GATE_BIN/fm-failfirst.sh" --gate --head="$BRANCH" "$BASE" 8<&-
+  local contract pin rc
+  mkdir -p "$FM_STATE_DIR/tmp" || return 1
+  pin="$(fm_pin resolve --task "$TASK")" || return 1
+  contract="$(mktemp "$FM_STATE_DIR/tmp/gate-contract.XXXXXX")" || return 1
+  if ! jq -e '.contract' <<<"$pin" > "$contract"; then
+    rm -f "$contract"; return 1
   fi
+  if [ "$FM_EXTERNAL" = 1 ]; then
+    TMPDIR="$FM_STATE_DIR/tmp" bash "$GATE_BIN/fm-failfirst.sh" --gate --contract="$contract" --head="$BRANCH" "$BASE" 8<&-
+  else
+    bash "$GATE_BIN/fm-failfirst.sh" --gate --contract="$contract" --head="$BRANCH" "$BASE" 8<&-
+  fi
+  rc=$?
+  rm -f "$contract"
+  return "$rc"
 }
 
 # ---- 6. the required GitHub check is green -------------------------------
@@ -226,22 +239,11 @@ gate6() {
   fm_binding checks --task "$TASK" --pr "$PR" --head "$VERIFIED_HEAD" >/dev/null
 }
 
-# ---- 7. the reviewer signed, and it was the reviewer ---------------------
-# The approval binds to the change, not the head (T-113). fm-review.sh ends
-# every verdict it posts with
-#   REVIEWED:<task> verdict=<APPROVE|REJECT> head=<sha> base=<sha> patch=<id> files=<json>
-# and the latest verdict must be an APPROVE. It stands for the current head
-# when it was given for that head, or when both of these hold:
-#   1. the change is the same: the patch-id of merge-base..head is the one approved
-#   2. no later REJECT supersedes it
-# That is an update onto a newer base and nothing else, whatever the base
-# changed meanwhile, files the approval reviewed included (SK-008): a conflict
-# that had to be resolved changes the patch-id, and so fails 1. An APPROVE with no
-# REVIEWED line is read as before, and said to bind to nothing. CI and the other
-# gates still run on the head being merged; only the review carries.
-#
-# The patch-id is taken from plumbing, which reads no user configuration,
-# with renames off: fm-review.sh takes it the same way.
+# ---- 7. trusted local final verdict under the project's review policy ----
+# The signed local verdict must cover this head or its unchanged stable patch,
+# with no later rejection. Its source hashes, reviewer and final-answer
+# provenance are verified by the shared evidence reader. Comments are never
+# fallback authority. CI and the other gates bind the current verified head.
 patch_of() {  # patch_of <base> <head>
   git diff-tree -r -p --no-renames "$1" "$2" 2>/dev/null | git patch-id --stable | cut -d' ' -f1
 }

@@ -24,7 +24,7 @@ if __name__ == "__main__":
         head=r.stdout.strip()
         print(head if re.fullmatch('[0-9a-f]{40}',head) else 'a'*40)
     elif a.mode == 'base':
-        print('main')
+        print(os.environ.get('FM_BASE', 'main'))
     elif a.mode in ('checks','ready'):
         from pathlib import Path
         if os.environ.get('GHSTATE') and (Path(os.environ['GHSTATE'])/'red').exists():raise SystemExit(1)

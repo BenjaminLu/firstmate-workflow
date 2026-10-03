@@ -123,6 +123,8 @@ assert subprocess.run(binding_command + ['ready','--task','T-138','--pr','9','--
 gate_report=root/'state/gates'/('T-138-'+changed+'.txt')
 gate_report.parent.mkdir(parents=True)
 gate_report.write_text('HEAD:'+changed+'\n'+''.join('  + gate '+str(n)+': fixture gate passed\n' for n in (1,2,4,5,6,7)))
+assert subprocess.run(binding_command + ['ready', '--task', 'T-138', '--pr', '9', '--head', changed, '--gate-report', str(gate_report)], capture_output=True).returncode != 0, 'readiness must bind the base used by the gates'
+gate_report.write_text(gate_report.read_text().replace('HEAD:'+changed+'\n', 'HEAD:'+changed+'\nBASE:'+git('rev-parse','main')+'\n'))
 subprocess.run(binding_command + ['ready', '--task', 'T-138', '--pr', '9', '--head', changed, '--gate-report', str(gate_report)], check=True, capture_output=True)
 candidate = subprocess.run(binding_command + ['candidate', '--task', 'T-138', '--pr', '9', '--head', changed], check=True, capture_output=True)
 assert json.loads(candidate.stdout)['head'] == changed, 'candidate must keep exact checked head'

@@ -140,7 +140,7 @@ fm_vendors() { printf '%s\n' claude codex cursor-agent gemini; }
 
 _fm_code_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
-# The project contract: config.yaml's `project:` block, which the target
+# The project contract: the self registry or historical `project:` block, which the target
 # project fills in so that nothing here has to know its toolchain.
 #
 #   fm_project setup|check|test [file]  -> the command, exactly as declared
@@ -190,10 +190,9 @@ fm_project() {  # fm_project <field> [file]
 # than `.`, a `github` not shaped owner/repo, a missing base or
 # required_check. A config.yaml with no `projects:` map registers nothing.
 #
-# The contract has one source during the transition to T-050: the self entry
-# (`repo: .`) resolves to T-043's top-level `project:` block, whole, read by
-# the same parser fm_project uses. A self entry carrying its own `project:`
-# as well as the top-level block is refused, so the two cannot disagree.
+# The self contract lives under its registry entry. Historical top-level
+# contracts remain readable; declaring both locations is refused. Both shell
+# and session readers use the same parser.
 fm_projects()         { _fm_registry "${1:-${FM_CONFIG:-config.yaml}}" names; }
 
 # The crew's permission policy (T-105, T-117): what every crew round may do,
@@ -505,7 +504,7 @@ def load(path):
                 refuse(name, key, "must be a path relative to the engine root, not '%s'" % value)
         if has_top and entry.get('repo') == '.' and 'project' in entry:
             refuse(name, 'project', 'is also declared by the top-level project: block; '
-                   'until T-050 the contract lives only there')
+                   'declare exactly one self contract')
         if 'project' in entry: contract_of(name, entry['project'], None)
         if 'policy' in entry: policy_layer(entry['policy'], 'projects.%s.policy' % name)
     selves = [name for name in order if projects[name].get('repo') == '.']
@@ -913,7 +912,7 @@ try:
     elif mode == 'contract':
         name, key = args
         entry = registered(projects, name)
-        if entry.get('repo') == '.' and has_top:
+        if entry.get('repo') == '.':
             try: rc = herdr.project_field(config, key)
             except ValueError as error:
                 refuse(name, 'project', str(error).replace('config.yaml ', ''))
