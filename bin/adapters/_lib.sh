@@ -72,6 +72,9 @@ fm_adapter_context() {
       echo "${adapter##*/}: reviewer network names $bad; refusing a run-mode review" >&2
       exit 64; }
   fi
+  # The launcher exports FM_PINNED_DIR. fm-sandbox.sh grants that exact
+  # directory read-only for every vendor; never add the run or state parent
+  # to a vendor write root or additional-directory flag.
   code="$(cd "$(dirname "$adapter")/../.." && pwd)"
   if [ "${FM_CONTEXT_READY:-}" != 1 ] && { [ -n "${FM_RUN_DIR:-}" ] || { [ "${HERDR_ENV:-}" = 1 ] && [ "${FM_TRANSPORT:-herdr}" != direct ]; }; }; then
     # shellcheck disable=SC2154  # validated positional arguments in each adapter

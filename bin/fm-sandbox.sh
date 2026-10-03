@@ -337,6 +337,38 @@ def own_git_sbpl(path):
     return '(literal %s)' % sbpl(path)
 
 
+def pinned_of():
+    path = os.environ.get('FM_PINNED_DIR', '')
+    if not path:
+        return None
+    if not os.path.isabs(path) or real(path) != path or os.path.basename(path) != 'pinned':
+        raise ValueError('invalid pinned folder path')
+    if not os.path.isdir(path):
+        raise ValueError('missing pinned folder')
+    info = os.stat(path)
+    if info.st_uid != os.getuid() or info.st_mode & 0o022:
+        raise ValueError('pinned folder must have current-user ownership and no group/other writes')
+    names = set(os.listdir(path))
+    # fm_prompt_context.materialize requires spec; legacy rounds may omit
+    # any of the other three snapshots. Nothing else belongs in this grant.
+    if 'spec.json' not in names or not names <= {'spec.json', 'design.md', 'contract.yaml', 'CONVENTIONS.md'}:
+        raise ValueError('invalid pinned folder contents')
+    for name in names:
+        file = os.path.join(path, name)
+        if os.path.islink(file) or not os.path.isfile(file) or os.stat(file).st_mode & 0o7777 != 0o444:
+            raise ValueError('pinned file must be regular and mode 0444')
+    run = os.environ.get('FM_RUN_DIR')
+    if run and path != os.path.join(real(run), 'pinned'):
+        raise ValueError('pinned folder does not belong to this round')
+    return path
+
+
+def pinned_state(path):
+    # runs/<actor>/pinned; only the selected child is ever exposed.
+    state = os.path.dirname(os.path.dirname(os.path.dirname(path)))
+    return os.path.dirname(state) if os.environ.get('FM_EXTERNAL') == '1' else state
+
+
 def darwin(p, roots, reads, own, port, listening):
     sub = lambda paths: ' '.join('(subpath %s)' % sbpl(x) for x in paths)
     auth, state, vtmp = own.get('auth', []), own.get('state', []), own.get('tmp', [])
@@ -378,6 +410,9 @@ def darwin(p, roots, reads, own, port, listening):
     if p['never_read']:
         lines += [';; never readable, whatever else allows it',
                   '(deny file-read* file-write* %s)' % sub(p['never_read'])]
+    pinned = pinned_of()
+    if pinned:
+        lines.append('(deny file-read* file-write* %s)' % sub([pinned_state(pinned)]))
     if auth:
         lines.append('(allow file-read* %s)' % ' '.join('(literal %s)' % sbpl(a) for a in auth))
     if state:
@@ -388,6 +423,9 @@ def darwin(p, roots, reads, own, port, listening):
                   '(allow file-read* file-write* %s)' % sub(vtmp)]
     lines += [';; the round\'s own roots, even under a never-readable directory',
               '(allow file-read* file-write* %s)' % sub(roots)]
+    if pinned:
+        lines += ['(allow file-read* %s)' % sub([pinned]),
+                  '(deny file-write* %s)' % sub([pinned])]
     git_own = own_git(roots[0]) if roots else None
     if roots and p.get('review_git_readonly'):
         lines.append('(deny file-write* (subpath %s))' % sbpl(os.path.join(roots[0], '.git')))
@@ -426,6 +464,11 @@ def linux(p, roots, reads, own, sock):
         a += ['--ro-bind-try', r, r]
     for r in own.get('state', []):
         a += ['--bind-try', r, r]
+    pinned = pinned_of()
+    if pinned:
+        state = pinned_state(pinned)
+        if any(state == r or state.startswith(r.rstrip('/') + '/') for r in reads):
+            a += ['--tmpfs', state]
     for r in roots:
         a += ['--bind', r, r]
     # the tree's own link to git (T-128), read-only over the read-write bind
@@ -444,6 +487,8 @@ def linux(p, roots, reads, own, sock):
             a += ['--tmpfs', n]
         elif os.path.exists(n):
             a += ['--ro-bind', '/dev/null', n]
+    if pinned:
+        a += ['--ro-bind', pinned, pinned]
     if sock:
         a += ['--bind', sock, sock]
     a += ['--chdir', roots[0], '--']

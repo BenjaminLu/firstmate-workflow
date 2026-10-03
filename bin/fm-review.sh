@@ -807,17 +807,13 @@ prompt="$work/prompt.md"
 # read once, from what the base requires (T-155)
 [ -z "$PR" ] || { required_names; ci_wait; }
 verify_review_head || exit 65
+# shellcheck source=bin/lib/fm-pinned.sh
+. "${FM_CODE_ROOT:-$REPO}/bin/lib/fm-pinned.sh"
+fm_round_pinned reviewer "$spec" || exit 65
 {
   cat "${FM_CODE_ROOT:-$REPO}/skills/reviewer/SKILL.md"
   if [ "$FM_EXTERNAL" = 1 ]; then fm_prompt_identity reviewer "$R_HEAD" "$R_BASE" || exit 65; fi
-  if [ -n "${FM_SPEC_PIN_JSON:-}" ]; then fm_pin_prompt reviewer || exit 65
-  else
-    fm_conventions_prompt || exit 65
-    if [ "$FM_EXTERNAL" = 1 ]; then
-      printf '\n# Project design (legacy unpinned context)\n\n'
-      fm_prompt_design "$FM_DESIGN" reviewer || exit 65
-    fi
-  fi
+  cat "$FM_RUN_DIR/pinned-prompt.md"
   printf '\n---\n\n# The task\n\n```json\n%s\n```\n' "$spec"
   printf '\n# Round %s\n' "$ROUND"
 } > "$work/intro.md"

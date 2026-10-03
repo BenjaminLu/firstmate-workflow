@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,7 +15,8 @@ class Prompts(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.path = Path(self.tmp.name)
+        self.path = Path(self.tmp.name).resolve()
+        self.addCleanup(self.writable)
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(('FM_', 'HERDR_', 'GIT_'))}
         self.pin = {'project': 'private-app', 'task': 'T-052', 'version': 1,
@@ -22,10 +24,22 @@ class Prompts(unittest.TestCase):
                                  'check_env': {'LIMIT': '600'}, 'tests': ['tests/**'],
                                  'test': 'approved test', 'docs': ['docs/**'],
                                  'future_field': {'keep': True}},
-                    'snapshots': {'design': {'text': 'design'},
+                    'snapshots': {'spec': {'text': '{"id":"T-052"}'},
+                                  'contract': {'text': 'project:\n  check: approved check\n'},
+                                  'design': {'text': 'design'},
                                   'conventions': {'text': 'whole conventions\n'}}}
 
+    def writable(self):
+        folder = self.path / 'pinned'
+        if folder.exists():
+            folder.chmod(0o700)
+            for path in folder.iterdir():
+                path.chmod(0o600)
+
     def shell(self, body):
+        for snap in self.pin['snapshots'].values():
+            snap['sha256'] = hashlib.sha256(snap['text'].encode()).hexdigest()
+        self.env['FM_PINNED_DIR'] = str(self.path / 'pinned')
         (self.path/'pin.json').write_text(json.dumps(self.pin))
         return subprocess.run(['bash', '-uc', '. "$1/bin/fm-config.sh"\n'
                                'FM_SPEC_PIN_JSON="$(cat "$2/pin.json")"\n' + body,
@@ -38,25 +52,19 @@ class Prompts(unittest.TestCase):
         self.pin['snapshots']['conventions']['text'] = conventions
         result = self.shell('fm_pin_prompt')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('Design cap: 48000 UTF-8 bytes', result.stdout)
-        self.assertIn('TRIMMED', result.stdout)
+        self.assertNotIn('TRIMMED', result.stdout)
         self.assertNotIn('DESIGN_END', result.stdout)
+        self.assertTrue((self.path/'pinned/design.md').read_text().endswith('DESIGN_END'))
         self.assertIn(conventions, result.stdout)
         self.assertIn('future_field', result.stdout)
         self.assertIn('approved check', result.stdout)
-        design = result.stdout.split('# Approved design\n\n')[1].split('# Approved CONVENTIONS.md')[0]
-        self.assertLess(len(design.encode()), 49000)
-        self.assertNotIn('\ufffd', design)
 
     def test_small_design_and_legacy_design_use_same_cap(self):
+        # Historical test name retained: both now expose complete files, no cap.
         result = self.shell('fm_pin_prompt')
-        self.assertIn('design', result.stdout)
+        self.assertIn('design.md', result.stdout)
         self.assertNotIn('TRIMMED', result.stdout)
-        (self.path/'design.md').write_text('plain project design without engine headings')
-        result = self.shell('fm_prompt_design "$2/design.md"')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('plain project design without engine headings', result.stdout)
-        self.assertIn('48000 UTF-8 bytes', result.stdout)
+        self.assertEqual((self.path/'pinned/design.md').read_text(), 'design')
 
     def test_run_mode_contract_uses_pin_over_target_config(self):
         (self.path/'config.yaml').write_text('project:\n  check: MUTABLE_BRANCH_CHECK\n')
@@ -92,7 +100,8 @@ class Prompts(unittest.TestCase):
             intro = section(root/('bin/fm-' + ('review' if role == 'reviewer' else role) + '.sh'),
                             '  cat "${FM_CODE_ROOT:-$REPO}/skills/' + role + '/SKILL.md"',
                             "  printf '\\n---\\n\\n#")
-            result = self.shell('unset FM_SPEC_PIN_JSON; FM_EXTERNAL=0; REPO="$1"\n'
+            (self.path/'pinned-prompt.md').write_text('UNPINNED complete inputs')
+            result = self.shell('unset FM_SPEC_PIN_JSON; FM_EXTERNAL=0; REPO="$1"; FM_RUN_DIR="$2"\n'
                                 'fm_pin_prompt() { echo unexpected-pin-rendering >&2; return 65; }\n' + intro)
             self.assertEqual(0, result.returncode, result.stderr)
             self.assertNotIn('unexpected-pin-rendering', result.stderr)
@@ -175,11 +184,11 @@ class Prompts(unittest.TestCase):
         self.pin['snapshots']['design']['text'] = text
         (self.path/'design.md').write_text(text)
         for role in ('worker', 'reviewer'):
-            command = 'fm_pin_prompt ' + role if pinned else 'fm_prompt_design "$2/design.md" ' + role
+            command = 'fm_pin_prompt ' + role
             result = self.shell('TASK=T-052\n' + command)
             self.assertEqual(result.returncode, 0, result.stderr)
-            for required in ('MANDATORY_GATES', 'MANDATORY_LIST', '## 8. Board',
-                             'TASK_CONTEXT', role.upper() + '_CONTEXT', 'TRIMMED', 'sha256='):
+            for required in ('6. Gates', '7. Standing list', '8. Board',
+                             'T-052 task detail', role.title() + ' guidance', 'sha256='):
                 self.assertIn(required, result.stdout)
 
     def test_pinned_design_keeps_required_sections(self):
@@ -192,8 +201,9 @@ class Prompts(unittest.TestCase):
         text = '## 6. Gates\n' + 'mandatory ' * 5000 + '\n## 7. List\nKeep all rules\n'
         self.pin['snapshots']['design']['text'] = text
         result = self.shell('fm_pin_prompt worker')
-        self.assertEqual(65, result.returncode, result.stderr)
-        self.assertIn('required design sections exceed the cap', result.stderr)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual((self.path/'pinned/design.md').read_text(), text)
+        self.assertNotIn('TRIMMED', result.stdout)
 
 if __name__ == '__main__':
     unittest.main(argv=['role-prompts', sys.argv[2]], verbosity=2)

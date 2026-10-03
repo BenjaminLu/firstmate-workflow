@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/tests/lib/review-run.sh"
 # --- diff mode is today's round, byte for byte ------------------------------
 # The prompt is the skill, the task, the round, the head's evidence (T-088)
-# and the diff - no checkout, no
+# and the diff, plus T-173’s complete input index - no checkout, no
 # run-mode text - whether the project says `mode: diff` or nothing at all,
 # and a run-mode setting in the caller's environment does not leak into it.
 for declared in nothing diff; do
@@ -16,6 +16,7 @@ for declared in nothing diff; do
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
 cp "$2" "$FM_SEEN/prompt.md"
+printf '%s' "$FM_PINNED_DIR" > "$FM_SEEN/pinned-path"
 printf 'mode=%s\ncheckout=%s\n' "${FM_RUN_REVIEW:-}" "${FM_REVIEW_CHECKOUT:-}" > "$FM_SEEN/seen"
 printf 'APPROVE:T-Z\n' > "$3/v.txt"
 M
@@ -27,6 +28,12 @@ M
   assert_eq "0" "$?" "a diff round ($declared declared) exits 0"
   ( cd "$rd" && {
       cat skills/reviewer/SKILL.md
+      # T-173 deliberately inserts paths/hashes in place of inline design.
+      # Derive these expected bytes independently; retain every other byte of
+      # the old self diff prompt and the fixture's original missing design.
+      # tests/lib/review_pinned_golden.py is the literal helper dependency.
+      python3 "$ROOT/tests/lib/review_pinned_golden.py" "$(cat "$dd/pinned-path")" \
+        "$(git show work:design/tasks/T-Z.json | jq .)" "$rd/config.yaml"
       printf '\n---\n\n# The task\n\n```json\n%s\n```\n' \
         "$(git show work:design/tasks/T-Z.json | jq .)"
       printf '\n# Round %s\n' 1
