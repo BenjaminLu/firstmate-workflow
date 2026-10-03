@@ -423,7 +423,7 @@ checkout_is_free() {   # checkout_is_free <owner-file>
   # closes. Uncertain reservations also retain it; no PID polling is involved.
   local run_file="${1%/*}/run"
   if [ -f "$run_file" ]; then
-    python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_review_runtime.py" checkout_is_free "${FM_CODE_ROOT:-$REPO}" "$(cat "$run_file")" || return 1
+    python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_review_checkout_is_free.py" "${FM_CODE_ROOT:-$REPO}" "$(cat "$run_file")" || return 1
   fi
   perl -MFcntl=:flock -e 'open(my $l, "<", $ARGV[0]) or exit 2;
     exit(flock($l, LOCK_EX | LOCK_NB) ? 0 : 1)' "$1"
@@ -487,7 +487,7 @@ if [ "$REVIEW_MODE" = run ]; then
   # policy the checkout running the round resolves. No GitHub host belongs
   # here, since the network is what keeps a push or a gh write from leaving
   # the sandbox; fm_policy has refused one, and loopback, above.
-  FM_REVIEW_NETWORK="$(python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_review_runtime.py" network \
+  FM_REVIEW_NETWORK="$(python3 -- "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_review_network.py" \
     "$policy_file")"; export FM_REVIEW_NETWORK
   build_checkout >/dev/null 2>&1 || {
     echo "fm-review: could not make a fresh checkout of $BRANCH against $BASE for a run-mode review" >&2
@@ -961,7 +961,7 @@ mkdir -p "$work/out"
 # fails the whole pipeline even when the grep matched.
 attempt_output() {
   if [ "${FM_CHAIN_VENDOR:-}" = codex ]; then
-    python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_review_runtime.py" attempt_output "${FM_CODE_ROOT:-$REPO}" "$FM_RUN_DIR" "${FM_CHAIN_ATTEMPT:-}"
+    python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_review_attempt_output.py" "${FM_CODE_ROOT:-$REPO}" "$FM_RUN_DIR" "${FM_CHAIN_ATTEMPT:-}"
     return
   fi
   if [ -n "${FM_CHAIN_ATTEMPT:-}" ] && [ -f "$FM_RUN_DIR/last-result.json" ] &&

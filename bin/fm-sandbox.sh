@@ -190,21 +190,20 @@ host_tool() {
 # place, so the rule the proxy applies is the rule `decide` prints.
 SB_MODULE="$(dirname "${BASH_SOURCE[0]}")/lib/fm_sandbox_policy.py"
 
-# The two in-sandbox helpers cannot read the engine's lib directory: it
-# may be outside every read root. Carry the frozen module source as an
-# argument, as the old heredocs did, and compile with its filename for
-# useful tracebacks. No shell value is interpolated into Python source,
-# and no additional path becomes readable or writable in the profile.
-INLINE_PY='import sys; exec(compile(sys.argv.pop(1), sys.argv.pop(1), "exec"))'
+# The two in-sandbox helpers cannot read the engine's lib directory.
+# Encode their frozen source before confinement, retaining the original -c
+# argument positions and a real filename in tracebacks. Shell values reach
+# the encoder as arguments, never as interpolated Python source.
+INLINE_MODULE="$(dirname "${BASH_SOURCE[0]}")/lib/fm_sandbox_inline.py"
 
 # Inside bwrap's network namespace, the first thing that runs: it serves
 # the round's loopback as the proxy the round's commands are pointed at,
 # relays each connection to the real proxy's socket outside, then becomes
 # the round's command. The server is a child that leaves when the command
 # does, and holds none of the command's descriptors open.
-#   python3 -c "$INLINE_PY" "$FWD_PY" "$FWD_MODULE" <socket> <command> [args...]
+#   python3 -c "$FWD_PY" <socket> <command> [args...]
 FWD_MODULE="$(dirname "${BASH_SOURCE[0]}")/lib/fm_sandbox_forward.py"
-FWD_PY="$(cat "$FWD_MODULE")" || exit 70
+FWD_PY="$(python3 "$INLINE_MODULE" "$FWD_MODULE")" || exit 70
 
 # The last thing before the round's command, inside the sandbox: it says on
 # fd 4 that the sandbox started and got this far, so a failure before this
@@ -217,9 +216,9 @@ SHIM='printf "started\n" >&4; exec 4>&-; exec "$@"'
 # `checked` once it is running there, then each of the ports it is given
 # that it could connect to on loopback, and each `bind:<port>` it could
 # bind there.
-#   python3 -c "$INLINE_PY" "$LOOP_PY" "$LOOP_MODULE" fm-loopback-check <port>|bind:<port>...
+#   python3 -c "$LOOP_PY" fm-loopback-check <port>|bind:<port>...
 LOOP_MODULE="$(dirname "${BASH_SOURCE[0]}")/lib/fm_sandbox_loopback.py"
-LOOP_PY="$(cat "$LOOP_MODULE")" || exit 70
+LOOP_PY="$(python3 "$INLINE_MODULE" "$LOOP_MODULE")" || exit 70
 
 # loopback_said <reached>: what loopback_reached found, in words
 loopback_said() {
@@ -236,7 +235,7 @@ loopback_said() {
 # comma-separated; status 1 when the check never ran behind it
 loopback_reached() {
   local got
-  got="$("$tool" -f "$work/profile" "$(command -v python3)" -c "$INLINE_PY" "$LOOP_PY" "$LOOP_MODULE" fm-loopback-check "$@" 2>/dev/null)"
+  got="$("$tool" -f "$work/profile" "$(command -v python3)" -c "$LOOP_PY" fm-loopback-check "$@" 2>/dev/null)"
   [ "${got%%$'\n'*}" = checked ] || return 1
   printf '%s\n' "$got" | sed 1d | paste -sd, -
 }
@@ -286,26 +285,26 @@ case "$cmd" in
     exit 0 ;;
   covers)
     required policy "$policy"
-    python3 "$SB_MODULE" hosts "$policy" >/dev/null || exit 65
+    python3 -- "$SB_MODULE" hosts "$policy" >/dev/null || exit 65
     covers; exit 0 ;;
   decide)
     required policy "$policy"
     [ $# -eq 1 ] || { say "decide takes one host"; exit 64; }
-    python3 "$SB_MODULE" decide "$policy" "$vendor" "$1"; exit $? ;;
+    python3 -- "$SB_MODULE" decide "$policy" "$vendor" "$1"; exit $? ;;
   login-source)
     required policy "$policy"; required vendor "$vendor"
-    FM_SANDBOX_SHED="${shed[*]-}" python3 "$SB_MODULE" login-source "$policy" "$vendor" "$(host_os)"; exit $? ;;
+    FM_SANDBOX_SHED="${shed[*]-}" python3 -- "$SB_MODULE" login-source "$policy" "$vendor" "$(host_os)"; exit $? ;;
   login-env)
     required policy "$policy"; required vendor "$vendor"; required tmp "$tmp"; required ctl "$ctl"
     os="$(host_os)"
-    FM_SANDBOX_SHED="${shed[*]-}" python3 "$SB_MODULE" login-env "$policy" "$vendor" "${os:-none}" \
+    FM_SANDBOX_SHED="${shed[*]-}" python3 -- "$SB_MODULE" login-env "$policy" "$vendor" "${os:-none}" \
       "$ctl" "$tmp" || exit $?
     if [ -s "$ctl/warn" ]; then say "$(cat "$ctl/warn")"; rm -f "$ctl/warn"; fi
     exit 0 ;;
   profile)
     required policy "$policy"; required root "$root"
     os="$(host_os)"; [ -n "$os" ] || { say "no sandbox profile for this platform"; exit 69; }
-    python3 "$SB_MODULE" profile "$policy" "$os" "$root" "$tmp" "$vendor" "${port:-0}" "$listening" '' \
+    python3 -- "$SB_MODULE" profile "$policy" "$os" "$root" "$tmp" "$vendor" "${port:-0}" "$listening" '' \
       ${writes[@]+"${writes[@]}"}
     exit $? ;;
   run|plain) ;;
@@ -328,11 +327,11 @@ fi
 scrub=(env)
 while IFS= read -r v; do
   [ -n "$v" ] && scrub+=(-u "$v")
-done < <(python3 "$SB_MODULE" scrub "$policy") || exit 65
+done < <(python3 -- "$SB_MODULE" scrub "$policy") || exit 65
 # what the round sheds (--shed, T-121) never reaches it, whatever the
 # adapter's own `env -u` does: login_of did not count it as a login either
 for v in ${shed[@]+"${shed[@]}"}; do scrub+=(-u "$v"); done
-read -r procs cpu < <(python3 "$SB_MODULE" limits "$policy") || exit 65
+read -r procs cpu < <(python3 -- "$SB_MODULE" limits "$policy") || exit 65
 scrub+=(FM_IN_ROUND=1)
 
 work=''; proxy_pid=''
@@ -375,7 +374,7 @@ if [ -n "$vendor" ]; then
   # a login file's copy goes in the round's own temp directory, so the
   # round has one before the login is read
   if [ -z "$tmp" ]; then tmp="$work/tmp"; mkdir -p "$tmp" || exit 70; fi
-  FM_SANDBOX_SHED="${shed[*]-}" python3 "$SB_MODULE" login "$policy" "$vendor" "${os:-none}" "$work/login" "$tmp" || exit $?
+  FM_SANDBOX_SHED="${shed[*]-}" python3 -- "$SB_MODULE" login "$policy" "$vendor" "${os:-none}" "$work/login" "$tmp" || exit $?
   if [ -s "$work/login/warn" ]; then
     warn_text="$(cat "$work/login/warn")"; rm -f "$work/login/warn"
     say "$warn_text"
@@ -402,7 +401,7 @@ if [ "$cmd" = run ]; then
     say "the proxy's socket path $sock is too long for AF_UNIX; pass a shorter --ctl"; exit 70; }
   # nothing of the caller's is held open by it: a proxy left behind by a
   # killed round must not keep the adapter's transcript pipe from closing
-  python3 "$SB_MODULE" proxy "$policy" "$vendor" "$work/port" "${blocked:-}" "$sock" >/dev/null 2>&1 3<&- &
+  python3 -- "$SB_MODULE" proxy "$policy" "$vendor" "$work/port" "${blocked:-}" "$sock" >/dev/null 2>&1 3<&- &
   proxy_pid=$!
   i=0
   while [ ! -s "$work/port" ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i + 1)); done
@@ -422,7 +421,7 @@ if [ "$cmd" = run ]; then
     [ -n "${SSL_CERT_FILE:-}" ] || [ ! -f /etc/ssl/cert.pem ] || scrub+=(SSL_CERT_FILE=/etc/ssl/cert.pem)
   else
     # FWD_PY sets the proxy variables to the port it serves in the namespace
-    inner=("$(command -v python3)" -c "$INLINE_PY" "$FWD_PY" "$FWD_MODULE" "$sock")
+    inner=("$(command -v python3)" -c "$FWD_PY" "$sock")
   fi
   # the round's temp directory is its own, never the caller's: that is
   # shared with every other round and holds run-mode review checkouts
@@ -451,14 +450,14 @@ if [ "$cmd" = run ]; then
     if [ "$listening" != unknown ]; then
       case ",$listening," in
         *",$held_board,"*) ;;
-        *) if [ "$(python3 -c "$INLINE_PY" "$LOOP_PY" "$LOOP_MODULE" fm-loopback-check "$held_board" 2>/dev/null | sed 1d)" = "$held_board" ]; then
+        *) if [ "$(python3 -c "$LOOP_PY" fm-loopback-check "$held_board" 2>/dev/null | sed 1d)" = "$held_board" ]; then
              listening="${listening:+$listening,}$held_board"
            fi ;;
       esac
     fi
   fi
   make_profile() {
-    python3 "$SB_MODULE" profile "$policy" "$os" "$root" "$tmp" "$vendor" "$port" "$listening" "$sock" \
+    python3 -- "$SB_MODULE" profile "$policy" "$os" "$root" "$tmp" "$vendor" "$port" "$listening" "$sock" \
       ${writes[@]+"${writes[@]}"} > "$work/profile" || exit 65
   }
   make_profile

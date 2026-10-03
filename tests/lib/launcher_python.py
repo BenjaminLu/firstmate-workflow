@@ -9,6 +9,8 @@ import sys
 import tempfile
 import unittest
 
+from python_programs import embedded_programs
+
 ROOT = Path(sys.argv.pop(1)).resolve()
 BASE = ROOT / 'tests/lib/t177_sandbox_base.py'
 
@@ -17,28 +19,66 @@ class LauncherPython(unittest.TestCase):
     def test_no_embedded_program_longer_than_five_lines(self):
         for name in ('fm-review.sh', 'fm-sandbox.sh'):
             source = (ROOT / 'bin' / name).read_text()
-            # Both directly executed and variable-held Python heredocs.
-            blocks = re.finditer(r"<<['\"]?(PY\w*)['\"]?[^\n]*\n(.*?)\n\1\n",
-                                 source, re.S)
-            for block in blocks:
-                with self.subTest(script=name, delimiter=block[1]):
-                    self.assertLessEqual(len(block[2].splitlines()), 5,
+            for program in embedded_programs(source):
+                with self.subTest(script=name, program=program):
+                    self.assertLessEqual(len(program.splitlines()), 5,
                                          'embedded Python must move to bin/lib')
-            for block in re.finditer(r"python3[^\n]*? -c '([^']*)'", source, re.S):
-                self.assertLessEqual(len(block[1].splitlines()), 5)
-            for block in re.finditer(r"\b\w+_PY=(['\"])(.*?)\1", source, re.S):
-                self.assertLessEqual(len(block[2].splitlines()), 5)
+
+    def test_guard_recognizes_shell_forms_without_naming_conventions(self):
+        for length in (5, 6):
+            program = '\n'.join(['print(1)'] * length)
+            forms = [
+                f"python3 - <<PY\n{program}\nPY\n",
+                f"python3 - <<EOF\n{program}\nEOF\n",
+                f"python3 - <<'X'\n{program}\nX\n",
+                f'python3 - <<"END"\n{program}\nEND\n',
+                "python3 - <<-'TABS'\n\t" + program.replace('\n', '\n\t') + "\n\tTABS\n",
+                f"python3 -c '{program}'\n",
+                f'python3 -c "{program}"\n',
+                f"result=\"$(python3 -c '{program}')\"\n",
+                f"arbitrary='{program}'\npython3 -c \"$arbitrary\"\n",
+                f"IFS= read -r -d '' arbitrary <<'DATA'\n{program}\nDATA\npython3 -c \"$arbitrary\"\n",
+                f"arbitrary=$(cat <<'SOURCE'\n{program}\nSOURCE\n)\npython3 -c \"${{arbitrary}}\"\n",
+            ]
+            for source in forms:
+                with self.subTest(source=source):
+                    programs = list(embedded_programs(source))
+                    self.assertEqual([program], programs)
+                    self.assertEqual(int(length > 5),
+                                     sum(len(p.splitlines()) > 5 for p in programs))
+        self.assertEqual([], list(embedded_programs(
+            "cat <<'EOF'\nnot Python\nEOF\n# python3 -c 'comment'\n")))
+
+    def test_sandbox_python_payload_positions(self):
+        source = (ROOT / 'bin/fm-sandbox.sh').read_text()
+        # The existing sandbox-login stand-in observes OS argv[3], before
+        # Python can normalize sys.argv. Cover every policy call, not just run.
+        calls = re.findall(r'python3 -- "\$SB_MODULE" ([a-z-]+)', source)
+        self.assertEqual(['hosts', 'decide', 'login-source', 'login-env',
+                          'profile', 'scrub', 'limits', 'login', 'proxy', 'profile'], calls)
+        self.assertNotIn('"$INLINE_PY"', source)
+
+    def test_review_python_payload_positions(self):
+        source = (ROOT / 'bin/fm-review.sh').read_text()
+        self.assertIn('python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_review_checkout_is_free.py" "${FM_CODE_ROOT:-$REPO}" "$(cat "$run_file")"', source)
+        self.assertIn('python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_review_attempt_output.py" "${FM_CODE_ROOT:-$REPO}" "$FM_RUN_DIR" "${FM_CHAIN_ATTEMPT:-}"', source)
+        self.assertIn('python3 -- "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_review_network.py"', source)
+        with tempfile.TemporaryDirectory() as directory:
+            policy = Path(directory) / 'policy with spaces.json'
+            policy.write_text('{"network": ["registry.example", "cdn.example"]}')
+            result = subprocess.run([sys.executable, '--',
+                str(ROOT / 'bin/lib/fm_review_network.py'), str(policy)], capture_output=True)
+            self.assertEqual((0, b'registry.example cdn.example\n', b''),
+                             (result.returncode, result.stdout, result.stderr))
 
     def test_in_sandbox_loader_preserves_arguments_and_filename(self):
-        source = (ROOT / 'bin/fm-sandbox.sh').read_text()
-        loader = re.search(r"^INLINE_PY='([^']*)'$", source, re.M)
-        self.assertIsNotNone(loader, 'in-sandbox module loader is required')
         module = ROOT / 'bin/lib/fm_sandbox_loopback.py'
-        # This filename is deliberately unavailable: loading must not require
-        # any engine read grant or a writable copy inside the round.
+        # Encode source before entering the sandbox; the child cannot read it.
         filename = '/unmounted engine/lib/fm_sandbox_loopback.py'
-        argv = [sys.executable, '-c', loader[1], module.read_text(), filename,
-                'fm-loopback-check']
+        sys.path.insert(0, str(ROOT / 'bin/lib'))
+        from fm_sandbox_inline import inline_program
+        program = inline_program(module.read_text(), filename)
+        argv = [sys.executable, '-c', program, 'fm-loopback-check']
         result = subprocess.run(argv, capture_output=True)
         self.assertEqual((0, b'checked\n', b''),
                          (result.returncode, result.stdout, result.stderr))
