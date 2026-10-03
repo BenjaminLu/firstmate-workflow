@@ -9,6 +9,7 @@ import tempfile
 import unittest
 
 ROOT = Path(sys.argv.pop(1))
+os.environ['HERDR_ENV'] = '0'
 
 
 class RunProjectTurns(unittest.TestCase):
