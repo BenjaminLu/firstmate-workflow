@@ -35,7 +35,7 @@ import sys
 folder = Path(Path(sys.argv[1]).read_text())
 pin = json.loads(Path(sys.argv[2]).read_text())
 assert folder.name == 'pinned' and folder.is_absolute()
-assert folder.stat().st_mode & 0o222 == 0
+assert folder.stat().st_mode & 0o777 == 0o755
 for key, name in [('spec', 'spec.json'), ('design', 'design.md'), ('contract', 'contract.yaml')]:
     path = folder / name
     assert path.read_bytes() == pin['snapshots'][key]['text'].encode()

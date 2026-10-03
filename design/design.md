@@ -4579,14 +4579,15 @@ appends a version and emits `spec_repinned`; never rewrite old pins.
 Before each worker or reviewer round, the launcher materializes the verified
 snapshots byte for byte under that run's private `pinned/` directory as
 `spec.json`, `design.md`, optional `CONVENTIONS.md`, and `contract.yaml` (T-173).
-Files and directory have no write bits; the OS sandbox grants only that folder
-read access, with no access to its state siblings or signing key. Prompts carry
+Files are 0444 and the directory is 0755 so launcher cleanup can remove it
+normally. The OS sandbox denies round writes and grants only that folder read access, with no access to its state siblings or signing key. Prompts carry
 absolute paths, version and hashes, plus heading and line-range anchors for
 spec references and mandatory sections 6–8. No design excerpt or 48 KB cap
 remains. Conventions and parsed gate contract also remain complete in the
 prompt. Missing conventions are explicit. Legacy no-pin rounds snapshot their
 existing sources in the same folder and label them unpinned, without inventing
-approval. Invalid hashes refuse before an adapter starts. External snapshots
+approval. Missing legacy design, conventions or contract sources are omitted
+from the folder and named as absent in the prompt. Invalid hashes refuse before an adapter starts. External snapshots
 stay in the project's private run, never the target checkout or engine tree.
 
 The worker launcher writes pin 1 outside the sandbox before calling an adapter.
@@ -4947,22 +4948,18 @@ six-gate evidence.
 ### T-052 portable prompt context
 
 External worker and reviewer prompts carry launcher-supplied project/task/base
-and checkout/head identity. Self prompts retain their existing sections; an
-unpinned self worker keeps its original sections 6 and 7 through the section 8
-heading, and an unpinned self reviewer keeps its existing diff prompt shape.
+and checkout/head identity. Self prompts retain their existing sections apart
+from the T-173 complete-input index replacing inline design excerpts; an unpinned self reviewer keeps its
+existing diff prompt shape around that index.
 Both projects receive the approved immutable pin when present.
 
-Pinned designs and external legacy designs are excerpted at 48000 UTF-8 bytes,
-on character boundaries, with the original byte count and SHA-256. The prior
-self excerpt (sections 6 and 7 through the section 8 heading) is retained whole.
-Task-specific headings, including subsections, then role-specific headings have
-priority over other text. Required sections exceeding the cap refuse prompt
-construction rather than silently dropping rules. An explicit TRIMMED notice
-and omission markers describe incomplete coverage. Whole conventions and the
-complete pinned gate contract are never trimmed by this renderer. Run-mode
-contract summaries use the pin rather than mutable target configuration whenever
-a pin exists. Existing review total-input bounds still refuse an unrepresentable
-prompt.
+T-173 supersedes the bounded design excerpts: complete approved snapshots live
+in the round's sandbox-protected `pinned/` folder. Prompts index their absolute
+paths, hashes and design section anchors instead of embedding or trimming design
+text. Whole conventions and the complete parsed gate contract remain in the
+prompt. Run-mode contract summaries use the pin rather than mutable target
+configuration whenever a pin exists. Existing review total-input bounds still
+refuse an unrepresentable prompt.
 
 The frozen engine supplies roles and context; a target need not contain engine
 files. For self and external reviews with a PR, shared authoritative head/base

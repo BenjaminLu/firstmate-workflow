@@ -68,7 +68,6 @@ fixture() {
   stack_base_fixture bin
   cp "$ROOT/skills/reviewer/SKILL.md" "$d/repo/skills/reviewer/"
   printf 'vendor: mock\n' > config.yaml
-  printf '# Fixture design\n## 6. Gates\n## 7. Criteria\n## 8. Board\n' > design/design.md
   printf '{"id":"T-Z","title":"a task","activity":{"en":"Review the authored task","zh-TW":"審查已撰寫的任務"},"scope":["src/**"],"acceptance":["it exists"]}\n' > design/tasks/T-Z.json
   echo base > src/a; git add -A; git commit -qm base
   git checkout -q -b work
