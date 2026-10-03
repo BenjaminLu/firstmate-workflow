@@ -1,0 +1,28 @@
+{
+  "id": "T-173",
+  "title": "every round reads the pinned spec, design, conventions and contract in full from a read-only pinned/ folder; prompts carry paths and section anchors, not trimmed excerpts",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/lib/fm_prompt_context.py",
+    "bin/lib/fm_spec_pins.py",
+    "bin/lib/**",
+    "bin/fm-worker.sh",
+    "bin/fm-review.sh",
+    "bin/fm-sandbox.sh",
+    "bin/adapters/**",
+    "skills/worker/SKILL.md",
+    "skills/reviewer/SKILL.md",
+    "tests/**",
+    "design/design.md",
+    "design/tasks/T-173.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-10-03 nearly every new task's first round (T-139, T-140, T-141, T-050, T-053, T-055, T-169, T-172) stopped with ASK-CONTEXT and changed nothing. T-052's bounded design excerpt (bin/lib/fm_prompt_context.py, DESIGN_CAP = 48000) trims design/design.md (5003 lines, about 330 KB), the §15 sections the external-repository tasks need fall after the cut, and the worker skill tells a worker to ask for trimmed context. The captain asked why the round is not simply told where the complete, approved text is (2026-10-03). The full approved text already exists: each task's pin (T-049, state/pins/<task>/<n>.json, external under the project's private state) stores the spec, design, conventions and gate contract with hashes, and it is exactly what gate 4 enforces.",
+    "pinned/ folder. Before every worker and reviewer round, the launcher writes the latest authorized pin's snapshots, verified against their recorded hashes, as plain files in a read-only folder state/runs/<actor>/pinned/ (external: the run's private directory): spec.json, design.md, CONVENTIONS.md (only when the project has one; its absence is stated in the prompt), contract.yaml. The name is pinned/, not context/, so it is never confused with the context pack (context.md). A hash mismatch refuses the round with its reason. No round writes there. Without a pin (T-049's 'no pin'), the folder is built from the same sources the round already uses, marked unpinned in the prompt.",
+    "Sandbox. Every adapter's sandbox (bin/fm-sandbox.sh and bin/adapters/*) grants read-only access to that round's pinned/ folder and nothing more of state/ or the project's private directory. The evidence signing key, other runs, other tasks' worktrees and all decision and evidence records stay unreadable from a round. A test proves a round can read pinned/ and cannot read state/evidence-signing.key or another run's folder.",
+    "Prompt. The worker and reviewer prompts carry, instead of a design excerpt: the absolute pinned/ paths, the pin version and hashes, and section anchors (heading, file, line range) for every section the task spec names (for example '§15.10' resolves to its heading and lines in pinned/design.md), plus the role's mandatory sections (§6-§8 today). The 48 KB excerpt and its trimming notice are removed. Conventions and the gate contract stay complete. The self project's prompt shape otherwise stays as it is.",
+    "Skills. skills/worker/SKILL.md and skills/reviewer/SKILL.md say the complete approved spec, design, conventions and contract are in pinned/ and are read there when needed; a missing or refused pinned/ folder is reported, never guessed around. The rule that a trimming notice requires asking is removed (it supersedes skill update SK-009 if that has not merged).",
+    "Tests (fail first, stubs answering like the real tools): pinned/ matches the pin byte for byte and is read-only; a tampered snapshot refuses the round; the sandbox allows pinned/ and denies the signing key and another run; a spec naming §15.10 gets that anchor in the prompt; an external project's pinned/ comes from its private pin and never enters the target checkout or the engine tree. Evidence is the required GitHub check and the six gates. Workers do not run the suites."
+  ]
+}

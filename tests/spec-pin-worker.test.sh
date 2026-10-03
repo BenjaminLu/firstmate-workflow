@@ -12,6 +12,7 @@ cat > "$repo/bin/adapters/mock.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = run ] || exit 64
 cp "$2" "$FM_SEEN/prompt.md"
+printf '%s' "${FM_PINNED_DIR:-}" > "$FM_SEEN/pinned-path"
 mkdir -p "$3/src"
 printf 'implemented\n' > "$3/src/feature"
 M
@@ -23,8 +24,22 @@ assert_contains "$(cat "$d/prompt.md")" '# Approved spec pin' 'worker prompt use
 assert_contains "$(cat "$d/prompt.md")" '"approval_binding": "dispatch-time"' 'worker exposes the dispatch-time approval limit'
 assert_eq committed "$(jq -r '.snapshots.spec.source' "$repo/state/pins/T-Z/1.json")" 'worker records committed self spec provenance'
 assert_eq 1 "$(jq -s '[.[]|select(.type=="spec_pinned")]|length' "$repo/state/events.jsonl")" 'worker emits one initial pin event'
-assert_contains "$(cat "$d/prompt.md")" 'Design cap: 48000 UTF-8 bytes' 'stock worker prompt bounds approved design'
+assert_contains "$(cat "$d/prompt.md")" '# Complete round inputs in pinned/' 'stock worker prompt indexes complete approved design'
 assert_lacks "$(cat "$d/prompt.md")" '# Launcher project context' 'self worker retains its existing prompt sections'
+python3 - "$d/pinned-path" "$repo/state/pins/T-Z/1.json" <<'PY_PINNED'
+import json
+from pathlib import Path
+import sys
+folder = Path(Path(sys.argv[1]).read_text())
+pin = json.loads(Path(sys.argv[2]).read_text())
+assert folder.name == 'pinned' and folder.is_absolute()
+assert folder.stat().st_mode & 0o222 == 0
+for key, name in [('spec', 'spec.json'), ('design', 'design.md'), ('contract', 'contract.yaml')]:
+    path = folder / name
+    assert path.read_bytes() == pin['snapshots'][key]['text'].encode()
+    assert path.stat().st_mode & 0o222 == 0
+PY_PINNED
+assert_eq 0 "$?" 'worker adapter receives exact read-only pin files'
 # A valid mutable branch spec must never rescue an existing corrupt pin.
 for corruption in hash unreadable; do
   rm -f "$d/prompt.md"
@@ -60,6 +75,7 @@ for missing in contract design; do
 #!/usr/bin/env bash
 [ "$1" = run ] || exit 64
 cp "$2" "$FM_SEEN/prompt.md"
+printf '%s' "${FM_PINNED_DIR:-}" > "$FM_SEEN/pinned-path"
 mkdir -p "$3/src"
 printf 'implemented\n' > "$3/src/feature"
 printf 'Adapter report\n' > "$3/.fm-say.md"

@@ -292,3 +292,14 @@ snapshot, recording authentication/start, checkout/head, denied access, final
 provenance and cleanup. This change needs independent bootstrap review before
 it can supply reviews for other changes; no fake approval, unsandboxed review or
 silent Claude fallback resolves that dependency.
+
+### Complete pinned round inputs (T-173)
+
+Worker and reviewer launchers export `FM_PINNED_DIR`, an absolute path to their
+own run's `pinned/` directory. The shared OS sandbox exposes exactly this folder
+read-only after its state denials; adapters must preserve this environment
+variable and must not grant the parent run or project directory. This applies
+through `fm-sandbox.sh` to Claude, Codex, Cursor and Gemini alike. The mock is a
+fixed file-writing fixture, with no model or arbitrary command execution.
+The prompt indexes the files, their hashes, pin version and design anchors.
+Missing, writable or malformed pinned folders refuse sandbox profile creation.

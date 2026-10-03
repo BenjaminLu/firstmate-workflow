@@ -4576,6 +4576,19 @@ Gate 4 refuses missing pins, mismatches, out-of-scope files and `.fm-*` artifact
 Repin requires an exact project/task captain decision for changed snapshots,
 appends a version and emits `spec_repinned`; never rewrite old pins.
 
+Before each worker or reviewer round, the launcher materializes the verified
+snapshots byte for byte under that run's private `pinned/` directory as
+`spec.json`, `design.md`, optional `CONVENTIONS.md`, and `contract.yaml` (T-173).
+Files and directory have no write bits; the OS sandbox grants only that folder
+read access, with no access to its state siblings or signing key. Prompts carry
+absolute paths, version and hashes, plus heading and line-range anchors for
+spec references and mandatory sections 6–8. No design excerpt or 48 KB cap
+remains. Conventions and parsed gate contract also remain complete in the
+prompt. Missing conventions are explicit. Legacy no-pin rounds snapshot their
+existing sources in the same folder and label them unpinned, without inventing
+approval. Invalid hashes refuse before an adapter starts. External snapshots
+stay in the project's private run, never the target checkout or engine tree.
+
 The worker launcher writes pin 1 outside the sandbox before calling an adapter.
 A resumed task with an existing PR and no pin gets `source: first-pin-on-resume`
 from the current accepted base. Self sources record `<commit>:<path>` and
@@ -4706,8 +4719,8 @@ approved before ordinary task branch rules, not an exception inferred by fm.
 
 ### 15.7 Portable roles and stock execution
 
-Trusted launcher prompts carry role, immutable spec, whole conventions, bounded
-design/context with visible cap/trimming, full gate contract, project/task/base
+Trusted launcher prompts carry role, immutable spec, whole conventions, complete
+design paths and section anchors, full gate contract, project/task/base
 and isolated checkout SHA. The reviewer receives diff and machine evidence,
 never worker reasoning. First-round spec is the brief; later packs include
 assertions/logs/source, authentic standing-list findings, acceptance mapping and

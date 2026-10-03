@@ -1141,13 +1141,16 @@ if [ -f "$round_coverage" ]; then
   done < <(jq -c '.[]' "$round_coverage")
 fi
 
+# shellcheck source=bin/lib/fm-pinned.sh
+. "${FM_CODE_ROOT:-$REPO}/bin/lib/fm-pinned.sh"
+fm_round_pinned worker "$spec" || exit 65
+
 {
   cat "${FM_CODE_ROOT:-$REPO}/skills/worker/SKILL.md"
   if [ "$FM_EXTERNAL" = 1 ]; then
     fm_prompt_identity worker "$round_head" "$(git -C "$tree" merge-base "$BASE" HEAD 2>/dev/null || true)" || exit 65
   fi
-  if [ -n "${FM_SPEC_PIN_JSON:-}" ]; then fm_pin_prompt worker || exit 65
-  else fm_conventions_prompt || exit 65; fi
+  cat "$FM_RUN_DIR/pinned-prompt.md"
   printf '\n---\n\n# Your task\n\n```json\n%s\n```\n' "$spec"
   printf '\nYour worktree is the current directory. Your branch is `%s`.\n' "$branch"
   printf 'Stay inside these paths:\n'
@@ -1243,10 +1246,7 @@ fi
   printf 'and pushes what the worktree holds when the round ends, however it ends,\n'
   printf 'including when it is stopped. Leave your work in the worktree.\n'
   printf '\n---\n\n# The design\n\n'
-  if [ -z "$FM_SPEC_PIN_JSON" ]; then
-    if [ "$FM_EXTERNAL" = 1 ]; then fm_prompt_design "$FM_DESIGN" worker || exit 65
-    else sed -n '/^## 6\./,/^## 8\./p' "$FM_DESIGN"; fi
-  fi
+  printf 'Read the complete design at %s/design.md; section anchors appear above.\n' "$FM_PINNED_DIR"
 } > "$prompt"
 
 # --- the adapter, with fallback only on a vendor being unavailable -------

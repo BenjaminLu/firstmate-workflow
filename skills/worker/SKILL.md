@@ -6,12 +6,14 @@ description: Implement one explicitly dispatched task within its worktree and sc
 # Worker
 
 The launcher supplies your role and exact project/task identity. An explicitly
-dispatched role overrides native startup routing. Use the prompt's approved
-spec and scope, bounded design/context, complete pinned gate contract and whole
-CONVENTIONS.md. Engine files need not exist in the target checkout; do not look
-for engine-relative roles or design there. A visible trimming notice means
-coverage is incomplete: request the relevant omitted context before relying on
-it. The frozen launcher owns publication outside the round, following the
+dispatched role overrides native startup routing. The complete approved spec, design, conventions and gate contract are in the
+round's read-only `pinned/` folder. Use the absolute paths, pin version, hashes
+and section anchors in the prompt; read the complete files there when needed.
+The prompt states when conventions are absent or legacy inputs are unpinned.
+Report a missing or refused `pinned/` folder to firstmate; never guess around it
+or substitute mutable checkout copies. Engine files need not exist in the
+target checkout; do not look for engine-relative roles or design there.
+The frozen launcher owns publication outside the round, following the
 project's post policy; writing a report does not prove it was published.
 
 You are one crew member on one task. You get a worktree of your own, a task
