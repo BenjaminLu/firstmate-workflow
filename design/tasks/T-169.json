@@ -1,0 +1,17 @@
+{
+  "id": "T-169",
+  "title": "a pull request whose base moved can still be rebuilt: the base check compares the live base branch, not the PR's recorded baseRefOid",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/lib/fm_binding.py",
+    "tests/**",
+    "design/tasks/T-169.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-10-03, after T-143 merged (main 3583f21), every open pull request needing a rebuild was refused before its worker started: `bin/fm-worker.sh:489` runs `fm_binding base`, and `verified_base` in `bin/lib/fm_binding.py` (~221-227) compares the local base ref with the PR's `baseRefOid`. GitHub updates a PR's `baseRefOid` only when its head is pushed, not when the base branch moves (#151 and #152 both still reported ff04759 while main was 3583f21). So a PR whose base moved can never be rebuilt: the round that would push is refused for the base having moved. Found by firstmate; the captain approved this fix the same day.",
+    "The authoritative base is the base branch's live tip. `verified_base` reads the tip of `refs/heads/<baseRefName>` from the PR's repository (fetch or ls-remote of that exact ref, as `authoritative` already fetches the PR head), requires the local base ref to equal it, and otherwise fails with 'local base is stale; synchronize' (the local ref is behind or ahead). It no longer compares against `baseRefOid`. Every caller (`view_base`, the `base` command used by fm-worker.sh, candidate and readiness binding, the gate base) keeps its contract.",
+    "A rebuild works after the base moved: a test whose PR's recorded baseRefOid is older than the live base tip, with the local base synced to the live tip, passes `fm_binding base` and `view_base`; the same test with a stale local base fails with the stale-local message; a test where the live tip cannot be read fails closed. The gh and git stubs answer exactly as the real tools do (baseRefOid stays at the old commit, as GitHub does).",
+    "Evidence is the required GitHub check and the gates, checked by firstmate at the merge gate. Workers do not run the suite themselves. Stubs answer as the real tools do."
+  ]
+}
