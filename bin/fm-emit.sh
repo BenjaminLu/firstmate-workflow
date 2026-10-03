@@ -304,9 +304,11 @@ for _ in $(seq 1 600); do
     fi
     printf '%s\n' "$line" >> "$LOG"
     # Every local writer rings after persistence. A bell is only a hint;
-    # autopilot resumes from its durable complete-line offset.
+    # autopilot resumes from its durable complete-line offset. Without a
+    # channel, avoid starting Python after publishing a lifecycle boundary:
+    # the writer's caller may still hold its task lock until we return.
     _pilot_lib="$(dirname "${BASH_SOURCE[0]}")/lib/fm_lifeline.py"
-    if [ -r "$_pilot_lib" ]; then
+    if [ -d "$FM_STATE_DIR/session/autopilot.d" ] && [ -r "$_pilot_lib" ]; then
       python3 "$_pilot_lib" ring-events "$ROOT" event >/dev/null 2>&1 ||
         printf 'fm-emit: event persisted but its doorbell could not be rung\n' >&2
     fi

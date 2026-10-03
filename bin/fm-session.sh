@@ -65,7 +65,9 @@ if [ "$MODE" = start ]; then
   "${FM_CODE_ROOT:-$REPO}/bin/fm-doctor.sh" --hooks-only --repo "$REPO" >&2 ||
     echo "fm-session: hook guidance unavailable; run fm doctor --hooks-only" >&2
 fi
-if [ "$MODE" = start ] && [ -x "${FM_CODE_ROOT:-$REPO}/bin/fm-autopilot.sh" ]; then
+if [ "$MODE" = start ] && [ -z "${FM_IN_ROUND:-}" ] &&
+   { [ -z "${FIRSTMATE_CI_SESSION:-}" ] || [ "${FM_AUTOPILOT_TEST_ENABLE:-0}" = 1 ]; } &&
+   [ -x "${FM_CODE_ROOT:-$REPO}/bin/fm-autopilot.sh" ]; then
   "${FM_CODE_ROOT:-$REPO}/bin/fm-autopilot.sh" ensure --all --repo "$REPO" >&2 ||
     echo 'fm-session: autopilot unavailable; inspect project state/autopilot/service.log' >&2
 fi

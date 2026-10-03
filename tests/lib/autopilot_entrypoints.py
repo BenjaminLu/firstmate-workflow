@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 ROOT = Path(sys.argv.pop(1))
+os.environ['HERDR_ENV'] = '0'
 
 
 class Entrypoints(unittest.TestCase):
@@ -22,9 +23,10 @@ class Entrypoints(unittest.TestCase):
         self.bin = self.root/'bin'
         (self.bin/'lib').mkdir(parents=True)
         self.env = {k:v for k,v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
-        self.env.update(FM_ROOT=str(self.root), FM_CODE_ROOT=str(self.root))
+        self.env.update(FM_ROOT=str(self.root), FM_CODE_ROOT=str(self.root),
+                        FIRSTMATE_CI_SESSION=str(os.getpid()), FM_AUTOPILOT_TEST_ENABLE='1')
         # Actual shell parser, storage resolver and option guards.
-        for name in ('fm-autopilot.sh', 'fm-session.sh', 'fm-config.sh', 'fm-herdr.py'):
+        for name in ('fm.sh', 'fm-autopilot.sh', 'fm-session.sh', 'fm-config.sh', 'fm-herdr.py', 'fm-emit.sh'):
             shutil.copy2(ROOT/'bin'/name, self.bin/name)
         for name in ('fm-stack.sh', 'fm_project_paths.py'):
             shutil.copy2(ROOT/'bin/lib'/name, self.bin/'lib'/name)
@@ -42,6 +44,46 @@ class Entrypoints(unittest.TestCase):
         result = self.run_shell('fm-autopilot.sh', 'ensure', '--resume')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.root/'state/autopilot').exists())
+
+    def test_plain_command_without_session_starts_nothing(self):
+        result = self.run_shell('fm.sh', 'help')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.root/'state').exists())
+
+    def test_automatic_resume_is_not_called_in_tests_or_rounds(self):
+        call = self.root/'calls'
+        (self.bin/'fm-autopilot.sh').write_text('#!/bin/sh\ntouch "'+str(call)+'"\n')
+        for changes in ({'FM_AUTOPILOT_TEST_ENABLE':'0'}, {'FM_IN_ROUND':'1'}):
+            with self.subTest(changes=changes):
+                env = self.env.copy()
+                self.env.update(changes)
+                try:
+                    result = self.run_shell('fm.sh', 'help')
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertFalse(call.exists(), 'ineligible command must not invoke resume')
+                finally:
+                    self.env = env
+                    call.unlink(missing_ok=True)
+
+    def test_test_service_start_exits_before_storage_or_locks(self):
+        self.env.pop('FM_AUTOPILOT_TEST_ENABLE')
+        (self.root/'config.yaml').unlink()
+        result = self.run_shell('fm-autopilot.sh', 'ensure', '--all')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.root/'state').exists())
+
+    def test_emit_without_channel_never_invokes_notification_helper(self):
+        # A failing probe proves that no Python notification work follows the
+        # append in ordinary fixtures, even when the lifeline module exists.
+        call = self.root/'notification-called'
+        (self.bin/'lib/fm_lifeline.py').write_text(
+            'from pathlib import Path\nPath('+repr(str(call))+').touch()\nraise SystemExit(1)\n')
+        result = subprocess.run(['bash', str(self.bin/'fm-emit.sh'), '--actor', 'fixture',
+                                 '--type', 'agent_finished', '--task', 'T-001'],
+                                env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads((self.root/'state/events.jsonl').read_text())['type'], 'agent_finished')
+        self.assertFalse(call.exists(), 'no channel means no post-append notification process')
 
     def test_round_exits_before_resolving_or_writing_project_state(self):
         self.env['FM_IN_ROUND'] = '1'
@@ -104,6 +146,17 @@ class Entrypoints(unittest.TestCase):
         result = self.run_shell('fm-session.sh', 'status', frozen=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(call.exists())
+        for changes in ({'FM_AUTOPILOT_TEST_ENABLE':'0'}, {'FM_IN_ROUND':'1'}):
+            with self.subTest(changes=changes):
+                env = self.env.copy()
+                self.env.update(changes)
+                try:
+                    result = self.run_shell('fm-session.sh', 'start', frozen=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertFalse(call.exists(), 'ineligible session must not invoke ensure')
+                finally:
+                    self.env = env
+                    call.unlink(missing_ok=True)
 
 
 if __name__ == '__main__': unittest.main()

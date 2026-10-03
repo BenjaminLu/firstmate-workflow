@@ -29,7 +29,7 @@ class Lifecycle(unittest.TestCase):
             gh.write_text('#!/bin/sh\nprintf \'HTTP/2.0 200 OK\\nETag: "empty"\\n\\n[]\\n\'\n')
             gh.chmod(0o755)
             env = {k:v for k,v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}
-            env.update(FM_ENGINE_ROOT=str(root), FM_ROOT=str(root), FM_STATE_DIR=str(root/'state'),
+            env.update(FM_AUTOPILOT_TEST_ENABLE='1', FM_ENGINE_ROOT=str(root), FM_ROOT=str(root), FM_STATE_DIR=str(root/'state'),
                        FM_TARGET_ROOT=str(root), FM_TASKS_DIR=str(root/'design/tasks'), FM_EXTERNAL='0',
                        FM_AUTOPILOT_REPOSITORY='owner/repo', FM_EVIDENCE_PROJECT='self', FM_BASE='main',
                        FM_GH=str(gh), GH_REPO='owner/repo', FM_CODE_ROOT=str(ROOT), FM_CONFIG=str(root/'config.yaml'))

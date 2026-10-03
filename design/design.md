@@ -4785,12 +4785,17 @@ an explicit captain choice; nothing installs it implicitly. Kernel locks guard
 startup and singleton service ownership. Every operator `fm` command calls
 `ensure --resume --all`: a crashed service restarts on that command, while a
 project without an `autopilot/owner.json` receipt stays unstarted. Crew commands
-with `FM_IN_ROUND` start no service. Reviews still use visible Herdr dispatch.
+with `FM_IN_ROUND` start no service. Test sessions identified by
+`FIRSTMATE_CI_SESSION` skip automatic resume and startup unless the feature test
+sets `FM_AUTOPILOT_TEST_ENABLE=1`. Reviews still use visible Herdr dispatch.
 
 Local event writers persist complete lines before ringing the service's own
 `state/session/autopilot.d/` FIFOs. These are separate from firstmate's
 `session/wake.d/`. Semantic wake and conventions writers also notify autopilot;
-ordinary events never ring firstmate's doorbells. The service subscribes before
+ordinary events never ring firstmate's doorbells. When the autopilot channel
+directory is absent, emission starts no notification subprocess; this avoids
+adding process startup after publishing a lifecycle boundary while the caller
+still holds its task lock. The service subscribes before
 reading durable offsets and reads local inputs only at startup and on pushed
 notifications. Only GitHub is polled, with endpoint ETags, confirmed convention
 cadence and bounded network backoff. Per-reviewer quiet periods batch findings;

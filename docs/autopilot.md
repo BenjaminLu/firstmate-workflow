@@ -8,6 +8,10 @@ T-151 lifeline, owned by the fm session. Owner exit stops the service and its
 descendants. Kernel locks exclude duplicate services; there is no PID polling.
 No launchd/systemd installation is implicit. An operator choosing such an owner
 must explicitly arrange its lifetime and invoke `ensure` with that session owner.
+Crew rounds never start supervision. Test sessions carrying
+`FIRSTMATE_CI_SESSION` skip startup and automatic resume unless a feature test
+explicitly sets `FM_AUTOPILOT_TEST_ENABLE=1`. Resume without an owner receipt
+does not start a service or acquire service locks.
 
 Local event writers append first and ring owned FIFOs under
 `state/session/autopilot.d/`. Firstmate retains `session/wake.d/`; semantic

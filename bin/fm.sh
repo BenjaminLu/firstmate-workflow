@@ -871,7 +871,9 @@ cmd="${1:-help}"
 [ $# -eq 0 ] || shift
 # Reconnect crashed session services on the next operator command. This is
 # a kernel-lock check, never a PID heartbeat, and crew rounds never start it.
-if [ -z "${FM_IN_ROUND:-}" ] && [ -x "$HERE/fm-autopilot.sh" ]; then
+if [ -z "${FM_IN_ROUND:-}" ] &&
+   { [ -z "${FIRSTMATE_CI_SESSION:-}" ] || [ "${FM_AUTOPILOT_TEST_ENABLE:-0}" = 1 ]; } &&
+   [ -x "$HERE/fm-autopilot.sh" ]; then
   _pilot_repo="$REPO"; _pilot_prev=''
   for _pilot_arg in "$@"; do
     if [ "$_pilot_prev" = --repo ]; then _pilot_repo="$_pilot_arg"; fi

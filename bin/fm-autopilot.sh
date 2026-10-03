@@ -22,6 +22,10 @@ while [ $# -gt 0 ]; do
 done
 # Crew commands must not start another supervisor or write session state.
 [ -z "${FM_IN_ROUND:-}" ] || exit 0
+# CI's owner survives fixtures that scrub FM_*; supervision requires opt-in.
+if [ -n "${FIRSTMATE_CI_SESSION:-}" ] && [ "${FM_AUTOPILOT_TEST_ENABLE:-0}" != 1 ]; then
+  exit 0
+fi
 REPO="$(cd "$REPO" && pwd -P)"
 if [ "$ALL" = 1 ]; then
   names="$(fm_projects "$REPO/config.yaml")"
