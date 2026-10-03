@@ -93,15 +93,9 @@ def authoritative(root, branch, repository, pr):
              'https://github.com/' + repository + '.git', 'refs/pull/' + str(pr) + '/head'])
     if git(root, 'rev-parse', 'FETCH_HEAD') != head or git(root, 'rev-parse', branch + '^{commit}') != head:
         raise ValueError('authoritative PR head differs from fetched head or local task ref; refresh before accepting')
-    base_name = view['baseRefName']
-    if not base_name or base_name.startswith('-'):
-        raise ValueError('invalid authoritative base name')
-    command(['git', '-C', str(root), 'fetch', '--no-tags',
-             'https://github.com/' + repository + '.git', 'refs/heads/' + base_name])
-    if git(root, 'rev-parse', 'FETCH_HEAD') != view['baseRefOid'] or git(root, 'rev-parse', base_name + '^{commit}') != view['baseRefOid']:
-        raise ValueError('local base is stale; synchronize before accepting')
+    verified_base(view, repository, root)
     now = remote_head(repository, pr)
-    if now['headRefOid'] != head or now['baseRefOid'] != view['baseRefOid']:
+    if now['headRefOid'] != head or now['baseRefName'] != view['baseRefName']:
         raise ValueError('PR head/base moved while verifying')
     return head
 
@@ -111,8 +105,7 @@ def required_checks(root, repository, pr, head):
     view = remote_head(repository, pr)
     if view['headRefOid'] != head:
         raise ValueError('checks belong to stale head')
-    if git(root, 'rev-parse', view['baseRefName'] + '^{commit}') != view['baseRefOid']:
-        raise ValueError('checks refer to a stale local base')
+    verified_base(view, repository, root)
     if os.environ.get('FM_EXTERNAL') == '1':
         from fm_conventions import read_policy
         policy = read_policy(Path(os.environ['FM_STATE_DIR']).parent / 'CONVENTIONS.md', repository, os.environ.get('FM_BASE') or 'main')
@@ -215,15 +208,21 @@ def selected_review(store, root, repo, pr, head):
 
 
 def view_base(repo, pr):
-    return verified_base(remote_head(repo, pr))
+    return verified_base(remote_head(repo, pr), repo)
 
 
-def verified_base(view):
+def verified_base(view, repo=None, root=None):
     name = view['baseRefName']
     if not name or name.startswith('-'):
         raise ValueError('invalid authoritative base')
-    if git(os.environ['FM_TARGET_ROOT'], 'rev-parse', name + '^{commit}') != view['baseRefOid']:
-        raise ValueError('candidate base moved; refresh gates')
+    root = root if root is not None else os.environ['FM_TARGET_ROOT']
+    repo = repo or repository(root)
+    # The PR's recorded base OID may lag behind its base branch's live tip.
+    command(['git', '-C', str(root), 'fetch', '--no-tags',
+             'https://github.com/' + repo + '.git', 'refs/heads/' + name])
+    live_base = sha(git(root, 'rev-parse', 'FETCH_HEAD'))
+    if git(root, 'rev-parse', name + '^{commit}') != live_base:
+        raise ValueError('local base is stale; synchronize before accepting')
     return name
 
 
@@ -231,13 +230,14 @@ def local_gate_base(root, pr, project_base):
     # Individual local gates also work before a PR exists, or without an
     # origin. Full runs and gate 6 keep the strict authoritative binding.
     try:
-        view = remote_head(repository(root), pr)
+        repo = repository(root)
+        view = remote_head(repo, pr)
     except ValueError:
         return project_base
     if view['baseRefName'] == project_base:
         return project_base
     # Once a stacked PR is known, a stale parent must not fall back to main.
-    return verified_base(view)
+    return verified_base(view, repo)
 
 
 def main():
