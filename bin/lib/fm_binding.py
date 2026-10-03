@@ -115,7 +115,7 @@ def required_checks(root, repository, pr, head):
         raise ValueError('checks refer to a stale local base')
     if os.environ.get('FM_EXTERNAL') == '1':
         from fm_conventions import read_policy
-        policy = read_policy(Path(os.environ['FM_STATE_DIR']).parent / 'CONVENTIONS.md', repository, view['baseRefName'])
+        policy = read_policy(Path(os.environ['FM_STATE_DIR']).parent / 'CONVENTIONS.md', repository, os.environ.get('FM_BASE'))
         names = policy['required_checks']
     else:
         from urllib.parse import quote

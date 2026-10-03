@@ -11,6 +11,7 @@ head_binding_fixture() { # root branch [check conclusion]
   cat > "$d/stub/head-gh" <<STUB
 #!/usr/bin/env bash
 case "\$1 \$2" in
+  'repo view') echo fixture/project ;;
   'pr view') printf '{"state":"OPEN","headRefOid":"%s","baseRefName":"main","baseRefOid":"%s","headRefName":"$branch"}\n' "\$(git -C "$d" rev-parse refs/pull/9/head)" "\$(git -C "$d" rev-parse main)" ;;
   'api repos/fixture/project/branches/main/protection/required_status_checks') echo '{"contexts":["ci"],"checks":[]}' ;;
   *) case "\$2" in

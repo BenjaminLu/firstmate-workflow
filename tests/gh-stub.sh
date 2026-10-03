@@ -20,10 +20,12 @@ if [ -f "$S/down" ]; then
 fi
 
 case "${1-}:${2-}" in
+  repo:view) printf '{"nameWithOwner":"fixture/project"}\n' | emit_json ;;
   pr:create)
     n="$(cat "$S/next")"; echo $(( n + 1 )) > "$S/next"
     head="$(arg --head "$@")"; title="$(arg --title "$@")"
     printf '%s\t%s\t%s\tOPEN\n' "$n" "$head" "$title" >> "$S/prs"
+    printf '%s\n' "$(arg --base "$@")" > "$S/base.$n"
     : > "$S/comments.$n"
     echo "https://example.invalid/pull/$n"
     ;;
@@ -31,6 +33,10 @@ case "${1-}:${2-}" in
     printf '[' > "$S/out"; first=1
     while IFS=$'\t' read -r n head title state; do
       [ -n "$n" ] || continue
+      base="$(cat "$S/base.$n" 2>/dev/null)"; base="${base:-main}"
+      wanted="$(arg --base "$@")"; [ -z "$wanted" ] || [ "$base" = "$wanted" ] || continue
+      wanted="$(arg --head "$@")"; [ -z "$wanted" ] || [ "$head" = "$wanted" ] || continue
+      wanted="$(arg --state "$@")"; [ -z "$wanted" ] || [ "$wanted" = all ] || [ "$state" = "$(tr '[:lower:]' '[:upper:]' <<<"$wanted")" ] || continue
       [ "$first" = 1 ] || printf ',' >> "$S/out"; first=0
       printf '{"number":%s,"state":"%s","title":"%s","headRefName":"%s","mergedAt":null}' \
         "$n" "$state" "$title" "$head" >> "$S/out"
@@ -93,10 +99,12 @@ case "${1-}:${2-}" in
           exit 1
         fi
         IFS=$'\t' read -r _ head title state <<<"$line"
+        base="$(cat "$S/base.$n" 2>/dev/null)"; base="${base:-main}"
         jq -cnS --argjson n "$n" --arg h "$head" --arg t "$title" --arg s "$state" \
           --arg oid "$(git rev-parse "$head^{commit}" 2>/dev/null || true)" \
+          --arg base "$base" --arg base_oid "$(git rev-parse "$base^{commit}" 2>/dev/null || true)" \
           --arg f "$(arg --json "$@")" \
-          '{number:$n, headRefName:$h, headRefOid:$oid, title:$t, state:$s} as $d
+          '{number:$n, headRefName:$h, headRefOid:$oid, title:$t, state:$s, baseRefName:$base, baseRefOid:$base_oid} as $d
            | reduce ($f|split(","))[] as $k ({}; .[$k] = $d[$k])' | emit_json
         ;;
     esac

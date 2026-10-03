@@ -4,7 +4,7 @@ project_storage_fixture() {
   local dest="$1"
   mkdir -p "$dest/lib"
   cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-herdr.py" "$dest/"
-  cp "$ROOT/bin/lib/fm_project_paths.py" "$dest/lib/"
+  cp "$ROOT/bin/lib/fm_project_paths.py" "$ROOT/bin/lib/fm-stack.sh" "$ROOT/bin/lib/fm_stack.py" "$ROOT/bin/lib/fm_binding.py" "$ROOT/bin/lib/fm_conventions.py" "$dest/lib/"
 }
 
 project_fixture_config() {

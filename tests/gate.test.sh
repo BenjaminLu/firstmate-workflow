@@ -162,6 +162,12 @@ ghc() {  # ghc <dir> ; a gh whose pr view answers from <dir>/comments.tsv
   : > "$1/comments.tsv"
   cat > "$1/stub/gh" <<EOF
 #!/usr/bin/env bash
+if [ "\$1 \$2" = "repo view" ]; then echo fixture/project; exit; fi
+if [[ " \$* " = *" --json headRefOid,baseRefOid,baseRefName,headRefName,state "* ]]; then
+  h="\$(git -C "$1" rev-parse main)"
+  printf '{"state":"OPEN","headRefOid":"%s","baseRefOid":"%s","baseRefName":"main","headRefName":"b"}\n' "\$h" "\$h"
+  exit
+fi
 if [ "\$1 \$2" = "pr view" ]; then
   filter=.
   while [ \$# -gt 0 ]; do [ "\$1" = --jq ] && { filter="\$2"; break; }; shift; done

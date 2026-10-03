@@ -79,6 +79,8 @@ _fm_lib="$GATE_BIN/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "fm-gate: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
+# shellcheck source=bin/lib/fm-stack.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/fm-stack.sh"
 
 # ---- one gate run at a time on this machine ------------------------------
 # The lock is the kernel's: flock on descriptor 8, taken through perl because
@@ -146,6 +148,10 @@ fm_storage_init "$REPO" || exit 65
 fm_target_validate || exit 65
 BASE="${FM_BASE:-$BASE}"
 cd "$FM_TARGET_ROOT" || { echo "fm-gate: no repo at $FM_TARGET_ROOT" >&2; exit 64; }
+
+if [ -n "$PR" ]; then
+  BASE="$(fm_stack base --pr "$PR")" || exit 65
+fi
 
 # Freeze every gate to the same authoritative SHA. A stale local task ref is
 # refused, never silently replaced by a newer, ungated candidate.

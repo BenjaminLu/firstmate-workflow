@@ -16,6 +16,8 @@ _fm_lib="$(dirname "${BASH_SOURCE[0]}")/fm-config.sh"
 [ -f "$_fm_lib" ] || { echo "${0##*/}: missing $_fm_lib" >&2; exit 70; }
 # shellcheck source=bin/fm-config.sh
 . "$_fm_lib"
+# shellcheck source=bin/lib/fm-stack.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/fm-stack.sh"
 # fm_auth_filter_chain (T-121): a round never runs on a login it did not
 # check. The adapters' library is loaded only where the chain is about to
 # run, not here: a worker that ends before its round (a failed worktree, a
@@ -478,6 +480,28 @@ if [ "$round_two" = 1 ] && [ -z "$PR" ]; then
     # succeeded and said none: the branch was pushed by a round that did
     # not get as far as opening one, and this round opens it
     echo "fm-worker: $branch has no open pull request; this round will open one" >&2
+  fi
+fi
+
+# Existing PRs own their base. New allowed stacks start at the verified parent.
+stack_base=''
+if [ -n "$PR" ]; then
+  BASE="$(fm_stack base --pr "$PR")" || exit 65
+elif [ "$(fm_stack_policy stacking)" = allowed ]; then
+  stack_base="$(fm_stack select --task "$TASK")" || exit 65
+  BASE="$(jq -r .name <<<"$stack_base")"
+  if [ "$(jq -r '.head // empty' <<<"$stack_base")" != '' ]; then
+    git fetch --no-tags origin "refs/heads/$BASE:refs/remotes/origin/$BASE" || exit 65
+    parent_head="$(jq -r .head <<<"$stack_base")"
+    [ "$(git rev-parse "refs/remotes/origin/$BASE")" = "$parent_head" ] || exit 65
+    # Do not replace a local parent's unpublished work.
+    if git show-ref --verify --quiet "refs/heads/$BASE"; then
+      [ "$(git rev-parse "refs/heads/$BASE")" = "$parent_head" ] || exit 65
+    else
+      git update-ref "refs/heads/$BASE" "$parent_head" '' || exit 65
+    fi
+    refreshed_stack="$(fm_stack select --task "$TASK")" || exit 65
+    [ "$refreshed_stack" = "$stack_base" ] || exit 65
   fi
 fi
 
@@ -955,7 +979,7 @@ rebuild_probe_drop() {
 }
 bring_up_to_date() {
   if [ "$FM_EXTERNAL" = 1 ]; then
-    echo 'fm-worker: external stacking/rebuild remains held for T-143 / 外部堆疊與重建仍等待 T-143' >&2
+    echo 'fm-worker: external rewrites require the explicit restack helper and expected-head lease / 外部重寫需要明確的重新堆疊工具與預期版本租約' >&2
     return 0
   fi
   local base_ref="refs/remotes/origin/$BASE" head mb ls rc f side

@@ -6,7 +6,7 @@ binding_service_fixture() {
   mkdir -p "$1/bin/lib"
   cp "$ROOT/bin/lib/fm_binding.py" "$1/bin/lib/fm_binding_real.py"
   cat > "$1/bin/lib/fm_binding.py" <<'PY'
-from fm_binding_real import source_binding, git
+from fm_binding_real import source_binding, git, command, github, remote_head, sha
 if __name__ == "__main__":
     import argparse, json, os, re, subprocess
     p=argparse.ArgumentParser()

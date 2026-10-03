@@ -15,6 +15,8 @@ export HERDR_ENV=0 FM_TRANSPORT=direct
 # fixtures' checks never finish, so no case waits unless it says so
 export FM_REVIEW_CI_WAIT=0
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=tests/lib/stack-base-fixture.sh
+. "$ROOT/tests/lib/stack-base-fixture.sh"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 # shellcheck source=tests/lib/project-storage.sh
@@ -63,6 +65,7 @@ fixture() {
   cp -r "$ROOT/bin/adapters" bin/
   cp -R "$ROOT/bin/lib" bin/   # the lifeline a round's runner holds (T-151)
   binding_service_fixture "$d/repo"  # unrelated orchestration cases; real head checks in role-prompts
+  stack_base_fixture bin
   cp "$ROOT/skills/reviewer/SKILL.md" "$d/repo/skills/reviewer/"
   printf 'vendor: mock\n' > config.yaml
   printf '{"id":"T-Z","title":"a task","activity":{"en":"Review the authored task","zh-TW":"審查已撰寫的任務"},"scope":["src/**"],"acceptance":["it exists"]}\n' > design/tasks/T-Z.json

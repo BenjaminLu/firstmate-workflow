@@ -12,6 +12,8 @@ for _fm_k in $(env | sed -E -n 's/^(FM_[^=]*|HERDR_[^=]*)=.*$/\1/p'); do
 done
 export HERDR_ENV=0 FM_TRANSPORT=direct
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=tests/lib/stack-base-fixture.sh
+. "$ROOT/tests/lib/stack-base-fixture.sh"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 isolate_tmpdir
@@ -55,6 +57,7 @@ fixture() {                     # a repo with a remote, a task, and the real scr
      "$ROOT/bin/fm-auth-probe.sh" "$ROOT/bin/fm-sandbox.sh" bin/
   cp -r "$ROOT/bin/adapters" bin/
   cp -R "$ROOT/bin/lib" bin/   # the lifeline a round's runner holds (T-151)
+  stack_base_fixture bin
   cp "$ROOT/skills/worker/SKILL.md" "$d/repo/skills/worker/"
   printf 'vendor: mock\nfallback:\n  - mock\n' > config.yaml
   jq -n --arg task "$task" '{id:$task,title:"a mock task",scope:["src/**"],acceptance:["it exists"]}' \

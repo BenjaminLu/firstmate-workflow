@@ -19,7 +19,7 @@ fixture() {
 # one directory per stub: a factory that reuses a path silently overwrites the
 # stub a previous assertion is still holding a reference to
 ghstub() { local dir="$1/stub-$2"; mkdir -p "$dir"
-  printf '#!/usr/bin/env bash\necho "%s"\n' "$2" > "$dir/gh"
+  printf '#!/usr/bin/env bash\ncase "$1:$2" in pr:list) echo "${DOWNSTREAM:-[]}" ;; repo:view) echo owner/repo ;; *) echo "%s" ;; esac\n' "$2" > "$dir/gh"
   chmod +x "$dir/gh"; printf '%s' "$dir/gh"; }
 
 d="$(fixture)"; r="$d/repo"
@@ -64,6 +64,17 @@ assert_ok "test -f '$r/f'" "the repository is untouched"
 assert_contains "$(jq -r .type < "$r/state/events.jsonl" 2>/dev/null | tr '\n' ' ')" "closed" "it emits closed"
 
 assert_ok "FM_GH='$MERGED' '$r/bin/fm-cleanup.sh' --task T-A --repo '$r'" "cleaning an already-clean task exits 0"
+
+# --- a merged branch remains while any open PR targets it ---------------
+for downstream in '[{"number":22}]' 'unreadable'; do
+  retained="$(fixture)"
+  stub="$(ghstub "$retained" MERGED)"
+  DOWNSTREAM="$downstream" FM_GH="$stub" "$retained/repo/bin/fm-cleanup.sh" \
+    --task T-A --repo "$retained/repo" --force >/dev/null 2>&1
+  assert_ok "git -C '$retained/repo' rev-parse --verify t-a" \
+    "cleanup retains self PR base when downstream is $downstream"
+  rm -rf "$retained"
+done
 
 # --- one root, inside the repository ------------------------------------
 assert_fail "grep -qE 'treehouse|\\\$HOME|~/' <<<\"\$(grep -vE '^[[:space:]]*#' '$ROOT/bin/fm-cleanup.sh')\"" \
