@@ -232,7 +232,9 @@ missing gemini
 # execs "$(dirname itself)/fm-setup.sh", so a fake beside a copy of doctor,
 # fm-config.sh and adapters/_lib.sh is a full stand-in for that path alone.
 d2="$(safe_tmpdir)"; mkdir -p "$d2/bin/adapters"
-cp "$DOCTOR" "$ROOT/bin/fm-config.sh" "$d2/bin/"
+# shellcheck source=tests/lib/config-modules.sh
+. "$ROOT/tests/lib/config-modules.sh"
+cp "$DOCTOR" "$ROOT/bin/fm-config.sh" "$d2/bin/"; config_modules_fixture "$d2/bin/"
 cp "$ROOT/bin/adapters/_lib.sh" "$d2/bin/adapters/"
 {
   printf '#!/usr/bin/env bash\n'
@@ -320,7 +322,7 @@ tool gh "$(pin_of ubi:cli/cli)"
 # (FM_CANARY_RUN), to FM_CANARY_STATE_DIR/results.jsonl, exactly where and
 # how the real canary's record() writes them, and exits $d3/rc.
 d3="$d/sandbox-bin"; mkdir -p "$d3/adapters"
-cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-doctor.sh" "$d3/"
+cp "$ROOT/bin/fm-config.sh" "$ROOT/bin/fm-doctor.sh" "$d3/"; config_modules_fixture "$d3/"
 cp "$ROOT/bin/adapters/_lib.sh" "$d3/adapters/"
 {
   printf '#!/usr/bin/env bash\n'

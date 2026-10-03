@@ -682,7 +682,9 @@ calls() { if [ -s "$hlog" ]; then grep -c . "$hlog"; else echo 0; fi; }
 # FM_PROJECT is taken away so the captain's shell cannot choose a project;
 # a case that means one sets it, after this, by name
 inherdr() { env -u FM_PROJECT HERDR_ENV=1 HERDR_LOG="$hlog" PATH="$hstub:$PATH" "$@"; }
-nfix() { local n; n="$(fixture)"; cp "$ROOT/bin/fm-config.sh" "$n/bin/"; printf '%s' "$n"; }
+# shellcheck source=tests/lib/config-modules.sh
+. "$ROOT/tests/lib/config-modules.sh"
+nfix() { local n; n="$(fixture)"; cp "$ROOT/bin/fm-config.sh" "$n/bin/"; config_modules_fixture "$n/bin/"; printf '%s' "$n"; }
 # ask [NAME=value ...] <fixture> <id> <task> [fm-decide args]: request a card
 # inside Herdr and keep its exit code, stdout and stderr
 ask() {
@@ -841,7 +843,7 @@ rm -f "$n/config.yaml"
 ask "$n" D-45 T-45 --details "$d/details.json"
 held "$n" D-45 T-45 "no config.yaml and no reader"
 assert_eq "1" "$(calls)" "while the same fixture with no config.yaml rings"
-cp "$ROOT/bin/fm-config.sh" "$n/bin/"
+cp "$ROOT/bin/fm-config.sh" "$n/bin/"; config_modules_fixture "$n/bin/"
 
 # a notification that fails never fails the decision, and says how
 : > "$hlog"

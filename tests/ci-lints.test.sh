@@ -10,7 +10,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # to leave them alone - and the e2e stage has to say it skipped rather than
 # quietly passing when the browser is not installed.
 q="$(safe_tmpdir)"; mkdir -p "$q/bin" "$q/tests/e2e"
-cp "$ROOT/bin/ci.sh" "$ROOT/bin/fm-config.sh" "$q/bin/"
+# shellcheck source=tests/lib/config-modules.sh
+. "$ROOT/tests/lib/config-modules.sh"
+cp "$ROOT/bin/ci.sh" "$ROOT/bin/fm-config.sh" "$q/bin/"; config_modules_fixture "$q/bin/"
 printf 'import { test, expect } from "bun:test";\ntest("a", () => expect(1).toBe(1));\n' \
   > "$q/tests/unit.spec.ts"
 printf 'import { test } from "@playwright/test";\ntest("b", async ({ page }) => { await page.goto("about:blank"); });\n' \
@@ -264,7 +266,7 @@ printf '#!/usr/bin/env bash\nr=/tmp\ncp "$r/bin/x.sh" "$r/x.%s"\n' 'keep"' > "$q
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 n="$(find "$q/tests" -name '*.test.sh' | wc -l | tr -d ' ')"
 assert_contains "$out" "($n suites)" "the hygiene stage says how many suites it linted"
-bare="$(safe_tmpdir)"; mkdir -p "$bare/bin"; cp "$q/bin/ci.sh" "$q/bin/fm-config.sh" "$bare/bin/"
+bare="$(safe_tmpdir)"; mkdir -p "$bare/bin"; cp "$q/bin/ci.sh" "$q/bin/fm-config.sh" "$bare/bin/"; config_modules_fixture "$bare/bin/"
 assert_contains "$(FM_ROOT="$bare" bash "$bare/bin/ci.sh" 2>&1)" "(0 suites)" \
   "and says zero rather than passing silently when there are none"
 rm -rf "$bare"
@@ -653,7 +655,7 @@ rm -rf "$q/bin/inner"
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" 2>&1)"
 assert_matches "$out" 'spin on a flag with no value \([0-9]+ scripts\)' \
   "the option-loop stage says how many scripts it read"
-bare2="$(safe_tmpdir)"; mkdir -p "$bare2/bin"; cp "$q/bin/ci.sh" "$q/bin/fm-config.sh" "$bare2/bin/"
+bare2="$(safe_tmpdir)"; mkdir -p "$bare2/bin"; cp "$q/bin/ci.sh" "$q/bin/fm-config.sh" "$bare2/bin/"; config_modules_fixture "$bare2/bin/"
 assert_contains "$(FM_ROOT="$bare2" bash "$bare2/bin/ci.sh" 2>&1)" "value (0 scripts)" \
   "and says zero on a tree with none"
 rm -rf "$bare2"
