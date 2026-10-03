@@ -19,10 +19,19 @@ class LauncherPython(unittest.TestCase):
     def test_no_embedded_program_longer_than_five_lines(self):
         for name in ('fm-review.sh', 'fm-sandbox.sh'):
             source = (ROOT / 'bin' / name).read_text()
-            for program in embedded_programs(source):
-                with self.subTest(script=name, program=program):
+            with self.subTest(script=name):
+                for program in embedded_programs(source):
                     self.assertLessEqual(len(program.splitlines()), 5,
                                          'embedded Python must move to bin/lib')
+
+    def test_guard_still_detects_programs_after_each_real_launcher(self):
+        program = '\n'.join(['print(1)'] * 6)
+        for name in ('fm-review.sh', 'fm-sandbox.sh'):
+            source = (ROOT / 'bin' / name).read_text()
+            for invocation in (f"python3 - <<'ANY_NAME'\n{program}\nANY_NAME\n",
+                               f'python3 -c "{program}"\n'):
+                with self.subTest(script=name, invocation=invocation):
+                    self.assertIn(program, list(embedded_programs(source + '\n' + invocation)))
 
     def test_guard_recognizes_shell_forms_without_naming_conventions(self):
         for length in (5, 6):
@@ -35,6 +44,8 @@ class LauncherPython(unittest.TestCase):
                 "python3 - <<-'TABS'\n\t" + program.replace('\n', '\n\t') + "\n\tTABS\n",
                 f"python3 -c '{program}'\n",
                 f'python3 -c "{program}"\n',
+                f"python -c '{program}'\n",
+                f"if ! python3 - \\\n  <<'CONTINUED'\n{program}\nCONTINUED\n",
                 f"result=\"$(python3 -c '{program}')\"\n",
                 f"arbitrary='{program}'\npython3 -c \"$arbitrary\"\n",
                 f"IFS= read -r -d '' arbitrary <<'DATA'\n{program}\nDATA\npython3 -c \"$arbitrary\"\n",
@@ -46,8 +57,21 @@ class LauncherPython(unittest.TestCase):
                     self.assertEqual([program], programs)
                     self.assertEqual(int(length > 5),
                                      sum(len(p.splitlines()) > 5 for p in programs))
+            # Real launcher expressions used to crash the whole-shell tokenizer.
+            # They must neither hide nor add Python programs around them.
+            unrelated = r'''CREW_DATA="$(jq -cn --argjson identity "$(fm_crew_identity)" '.identity=$identity')"
+listening="$(awk '$NF == "LISTEN" { n = split($4, a, /[.]/); print a[n] }' <<< "$listing" | sort -u)"
+legacy="`printf '%s' "nested"`"
+count=$(("$count" + 1))
+unknown="unterminated shell word
+'''
+            self.assertEqual([program, program], list(embedded_programs(
+                f"python3 -c '{program}'\n" + unrelated
+                + f"python3 - <<'AFTER'\n{program}\nAFTER\n")))
         self.assertEqual([], list(embedded_programs(
             "cat <<'EOF'\nnot Python\nEOF\n# python3 -c 'comment'\n")))
+        self.assertEqual([], list(embedded_programs(
+            "python3 helper.py\npython3 -c 'unfinished\n")))
 
     def test_sandbox_python_payload_positions(self):
         source = (ROOT / 'bin/fm-sandbox.sh').read_text()
