@@ -146,8 +146,10 @@ print(json.dumps({'type':'result','result':final,'response':final}))
         self.assertEqual(0,answer.returncode,answer.stderr)
         self.assertNotIn('authoritative head unknown or stale', answer.stdout + answer.stderr)
         # The run verifies once, then review verifies before preparation,
-        # after the CI wait and before publication.
-        self.assertEqual(['refs/pull/35/head', 'refs/heads/main'] * 4,
+        # after the CI wait and before publication. Each review verification
+        # also resolves or rechecks the live base through base mode.
+        pair = ['refs/pull/35/head', 'refs/heads/main']
+        self.assertEqual(pair + (pair + ['refs/heads/main']) * 3,
                          (self.repo/'binding-fetches').read_text().splitlines())
         self.assertEqual({'worker','reviewer'},{json.loads(p.read_text())['role'] for p in self.results()})
 

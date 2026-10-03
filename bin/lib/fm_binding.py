@@ -93,15 +93,9 @@ def authoritative(root, branch, repository, pr):
              'https://github.com/' + repository + '.git', 'refs/pull/' + str(pr) + '/head'])
     if git(root, 'rev-parse', 'FETCH_HEAD') != head or git(root, 'rev-parse', branch + '^{commit}') != head:
         raise ValueError('authoritative PR head differs from fetched head or local task ref; refresh before accepting')
-    base_name = view['baseRefName']
-    if not base_name or base_name.startswith('-'):
-        raise ValueError('invalid authoritative base name')
-    command(['git', '-C', str(root), 'fetch', '--no-tags',
-             'https://github.com/' + repository + '.git', 'refs/heads/' + base_name])
-    if git(root, 'rev-parse', 'FETCH_HEAD') != view['baseRefOid'] or git(root, 'rev-parse', base_name + '^{commit}') != view['baseRefOid']:
-        raise ValueError('local base is stale; synchronize before accepting')
+    verified_base(view, repository, root)
     now = remote_head(repository, pr)
-    if now['headRefOid'] != head or now['baseRefOid'] != view['baseRefOid']:
+    if now['headRefOid'] != head or now['baseRefName'] != view['baseRefName']:
         raise ValueError('PR head/base moved while verifying')
     return head
 
@@ -111,8 +105,7 @@ def required_checks(root, repository, pr, head):
     view = remote_head(repository, pr)
     if view['headRefOid'] != head:
         raise ValueError('checks belong to stale head')
-    if git(root, 'rev-parse', view['baseRefName'] + '^{commit}') != view['baseRefOid']:
-        raise ValueError('checks refer to a stale local base')
+    verified_base(view, repository, root)
     if os.environ.get('FM_EXTERNAL') == '1':
         from fm_conventions import read_policy
         policy = read_policy(Path(os.environ['FM_STATE_DIR']).parent / 'CONVENTIONS.md', repository, os.environ.get('FM_BASE') or 'main')
@@ -218,11 +211,11 @@ def view_base(repo, pr):
     return verified_base(remote_head(repo, pr), repo)
 
 
-def verified_base(view, repo=None):
+def verified_base(view, repo=None, root=None):
     name = view['baseRefName']
     if not name or name.startswith('-'):
         raise ValueError('invalid authoritative base')
-    root = os.environ['FM_TARGET_ROOT']
+    root = root if root is not None else os.environ['FM_TARGET_ROOT']
     repo = repo or repository(root)
     # The PR's recorded base OID may lag behind its base branch's live tip.
     command(['git', '-C', str(root), 'fetch', '--no-tags',

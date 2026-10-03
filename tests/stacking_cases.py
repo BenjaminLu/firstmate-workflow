@@ -63,9 +63,12 @@ class Stacking(unittest.TestCase):
              patch('fm_conventions.read_policy', return_value={'required_checks': ['ci']}) as policy, \
              patch.object(binding, 'remote_head', return_value=view), \
              patch.object(binding, 'git', return_value=A), \
+             patch.object(binding, 'command', return_value=b'') as fetch, \
              patch.object(binding, 'github', side_effect=[runs, {'sha': B, 'statuses': []}]):
             self.assertEqual(len(binding.required_checks('/repo', 'owner/repo', 2, B)), 1)
             self.assertEqual(policy.call_args.args[2], 'main')
+            fetch.assert_called_once_with(['git', '-C', '/repo', 'fetch', '--no-tags',
+                                          'https://github.com/owner/repo.git', 'refs/heads/t-1-parent'])
 
     def test_open_base_retained(self):
         with patch.object(stack, 'github', return_value=[{'number': 9}]):
