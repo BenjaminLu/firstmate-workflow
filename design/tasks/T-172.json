@@ -1,0 +1,13 @@
+{
+  "id": "T-172",
+  "title": "the autopilot starts from now, not from history, and treats GitHub's 304 Not Modified as a cache hit",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": ["bin/lib/fm_autopilot.py", "tests/**", "design/tasks/T-172.json"],
+  "acceptance": [
+    "Why. On 2026-10-03, the first start of the autopilot (T-141) replayed the whole event log: bin/lib/fm_autopilot.py initialises `offset` and `wake_offset` to 0 (line ~55), so every historical gate failure, review and round since September was queued as a new wake (432 items, archived by firstmate in state/wake-queue.replayed-20261003/). Separately it reported 'GitHub unavailable; backing off: gh: HTTP 304': `api()` (lines ~164-182) sends If-None-Match, but `gh api --include` exits non-zero on 304, so `command()` raises before the status is parsed and an ETag hit is treated as an outage.",
+    "First start: with no recovery state, the cursors start at the current end of every source log (and the current wake queue), recorded before the first poll; nothing that happened before the service first started is queued. A restart with existing state resumes from its saved cursors as today.",
+    "304: a 304 response to a conditional request is a cache hit and returns the cached body without counting as a failure or triggering backoff, whatever gh's exit status for it; other non-2xx statuses still back off. The gh stub answers exactly as gh does (exit 1 with 'gh: HTTP 304' and the headers on --include).",
+    "Tests (fail first): a first start over a long existing log queues nothing; a 304 with a cache returns the cached body and resets no failure count; a 500 still backs off. Evidence is the required GitHub check and the six gates. Workers do not run the suites."
+  ]
+}

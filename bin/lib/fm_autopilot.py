@@ -50,11 +50,22 @@ class Pilot:
         self.directory.mkdir(parents=True, exist_ok=True)
         self.path = self.directory / 'state.json'
         self.clock = clock
-        self.data = json.loads(self.path.read_text()) if self.path.exists() else {}
+        first_start = not self.path.exists()
+        self.data = {} if first_start else json.loads(self.path.read_text())
         if not isinstance(self.data, dict): raise ValueError('invalid autopilot recovery state')
         for name, default in dict(offset=0, wake_offset=0, actions={}, seen={}, batches={},
                                   wakes={}, pulls={}, cache={}, failures=0, next_poll=0).items():
             self.data.setdefault(name, default)
+        if first_start:
+            # Snapshot both durable inputs before any poll or policy side effect.
+            # Existing recovery state, including zero cursors, remains authoritative.
+            for cursor, source in (('offset', self.state / 'events.jsonl'),
+                                   ('wake_offset', self.state / 'session/wake.jsonl')):
+                try:
+                    self.data[cursor] = source.stat().st_size
+                except FileNotFoundError:
+                    self.data[cursor] = 0
+            self.save()
         self.policy = dict(DEFAULTS)
         self.policy_error = None
         self.reload_policy()
@@ -82,10 +93,13 @@ class Pilot:
             self.queue('conventions-invalid-' + key(str(error)), '',
                        'Conventions unavailable: ' + str(error), '專案慣例無法驗證；需要判斷')
 
-    def command(self, argv, **kwargs):
+    def command(self, argv, *, allow_not_modified=False, **kwargs):
         result = subprocess.run(argv, stdin=subprocess.DEVNULL, text=True,
                                 capture_output=True, timeout=120, **kwargs)
-        if result.returncode:
+        # gh reports HTTP 304 as exit 1, with response headers on stdout.
+        # Only a conditional API read may opt in; all other command errors stay errors.
+        not_modified = allow_not_modified and re.match(r'HTTP/\S+ 304(?:\s|$)', result.stdout)
+        if result.returncode and not not_modified:
             raise RuntimeError(result.stderr[:1000] or 'command failed: ' + argv[0])
         return result.stdout
 
@@ -166,13 +180,14 @@ class Pilot:
         argv = self.gh('api', ('repos/' + self.ctx['repository'] + '/' + endpoint).rstrip('/'), '--include')
         if cached.get('etag'):
             argv += ['-H', 'If-None-Match: ' + cached['etag']]
-        output = self.command(argv).replace('\r\n', '\n')
+        conditional = bool(cached.get('etag')) and 'body' in cached
+        output = self.command(argv, allow_not_modified=conditional).replace('\r\n', '\n')
         headers, separator, body = output.partition('\n\n')
         match = re.match(r'HTTP/\S+ (\d+)', headers)
         if not match or not separator:
             raise ValueError('GitHub response has no HTTP headers')
         status = int(match[1])
-        if status == 304 and 'body' in cached:
+        if status == 304 and conditional:
             return cached['body']
         if status != 200:
             raise ValueError('GitHub status ' + str(status))
