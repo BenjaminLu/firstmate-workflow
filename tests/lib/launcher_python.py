@@ -10,6 +10,7 @@ import tempfile
 import unittest
 
 from python_programs import embedded_programs
+from t177_launcher_base import SOURCES, SHA256
 
 ROOT = Path(sys.argv.pop(1)).resolve()
 BASE = ROOT / 'tests/lib/t177_sandbox_base.py'
@@ -72,6 +73,47 @@ unknown="unterminated shell word
             "cat <<'EOF'\nnot Python\nEOF\n# python3 -c 'comment'\n")))
         self.assertEqual([], list(embedded_programs(
             "python3 helper.py\npython3 -c 'unfinished\n")))
+
+    def test_guard_finds_every_frozen_base_program(self):
+        expected = {'fm-review.sh': [9, 1, 5],
+                    'fm-sandbox.sh': [22] + [780] * 9 + [57, 22, 780]}
+        sandbox = SOURCES['fm-sandbox.sh']
+        payloads = {name: re.search(r"read[^\n]* " + name
+                    + r" <<'PY'\n(.*?)\nPY", sandbox, re.S)[1]
+                    for name in ('SB_PY', 'FWD_PY', 'LOOP_PY')}
+        found = list(embedded_programs(sandbox))
+        for name, count in (('SB_PY', 10), ('FWD_PY', 1), ('LOOP_PY', 2)):
+            with self.subTest(program=name):
+                self.assertEqual(count, found.count(payloads[name]))
+        for name, source in SOURCES.items():
+            with self.subTest(script=name):
+                self.assertEqual(SHA256[name], hashlib.sha256(source.encode()).hexdigest())
+                self.assertEqual(expected[name],
+                                 [len(p.splitlines()) for p in embedded_programs(source)])
+                self.assertEqual([], list(embedded_programs((ROOT / 'bin' / name).read_text())))
+
+    def test_guard_recognizes_interpreter_words_and_assignments(self):
+        program = '\n'.join(['print(1)'] * 6)
+        interpreters = [('', 'python3.12'), ('', '/usr/bin/python3'),
+                        ('', '"/usr/bin/python3"'), ('', '"$(command -v python3)"'),
+                        ('py=/usr/bin/python3\n', '"$py"'),
+                        ('py="$(command -v python3)"\n', '"${py}"'),
+                        ("py='python3.12'\n", '$py')]
+        for setup, interpreter in interpreters:
+            for payload in (f"'{program}'", f'"{program}"', '"$payload"'):
+                for context in ('{}\n', 'inner=({})\n', 'result="$({})"\n'):
+                    source = setup + f"payload='{program}'\n"
+                    source += context.format(f'{interpreter} -c {payload}')
+                    with self.subTest(source=source):
+                        self.assertEqual([program], list(embedded_programs(source)))
+            source = setup + f"payload=$(cat <<'DATA'\n{program}\nDATA\n)\n"
+            source += f'{interpreter} -c "$payload"\n'
+            self.assertEqual([program], list(embedded_programs(source)))
+            self.assertEqual([program], list(embedded_programs(
+                setup + f"{interpreter} - <<'DATA'\n{program}\nDATA\n")))
+        self.assertEqual([], list(embedded_programs(
+            'py=python3\npayload="$(python3 "$INLINE_MODULE" "$FWD_MODULE")"\n'
+            '"$py" -c "$payload"\n')))
 
     def test_sandbox_python_payload_positions(self):
         source = (ROOT / 'bin/fm-sandbox.sh').read_text()

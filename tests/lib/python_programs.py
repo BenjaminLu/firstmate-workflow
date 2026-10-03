@@ -9,12 +9,15 @@ import re
 
 _QUOTED = r"(?:'[^']*'|\"(?:\\[\s\S]|[^\"\\])*\")"
 _NAME = r'[A-Za-z_]\w*'
-# Command starts, substitutions, control words and environment assignments.
-_COMMAND = re.compile(
-    r'(?:^|[;|&(`])[ \t]*'
-    r'(?:(?:if|then|elif|do|!|command|exec|env)[ \t]+|'
-    + _NAME + r'=(?:' + _QUOTED + r'|[^\s;|&()]+)[ \t]+)*'
-    r'python3?(?=[ \t]|$)')
+# Match the whole interpreter word, including quoted command lookup. Python
+# can also be an argument to a sandbox tool or an element of a command array.
+_PYTHON = r'(?:[^\s;|&()\'"`$]+/)?python[0-9.]*'
+_LOOKUP = r'\$\([ \t]*command[ \t]+-v[ \t]+' + _PYTHON + r'[ \t]*\)'
+_REFERENCE = r'\$(?:' + _NAME + r'|\{' + _NAME + r'\})'
+_INTERPRETER = '(?:' + '|'.join((_LOOKUP, _PYTHON, _REFERENCE)) + ')'
+_INTERPRETER_WORD = '(?:"' + _INTERPRETER + '"|\'' + _PYTHON + "'|" + _INTERPRETER + ')'
+_COMMAND = re.compile(r'(?:^|[ \t;|&(`])(' + _INTERPRETER_WORD + r')(?=[ \t]|$)')
+_ASSIGN = re.compile(r'[ \t]*(' + _NAME + r')=(' + _INTERPRETER_WORD + r')(?=[ \t\n;]|$)')
 _HEREDOC = re.compile(r'''(?<!<)<<(-?)[ \t]*(['"]?)(\w+)\2(?![\w'"<])''')
 _SPACE = r'(?:[ \t]|\\\n)'
 _INLINE = re.compile(_SPACE + r'*(?:-[BuEIsS]' + _SPACE + r'+)*-c'
@@ -23,6 +26,21 @@ _LITERAL = re.compile(r'[ \t]*(' + _NAME + r')=(' + _QUOTED + r')(?=[ \t\n;]|$)'
 _READ = re.compile(r'\bread\b[^\n]*[ \t](' + _NAME + r')[ \t]*$')
 _CAT = re.compile(r'[ \t]*(' + _NAME + r')=\$\([ \t]*cat[ \t]*$')
 _VARIABLE = re.compile(r'^\$(?:(' + _NAME + r')|\{(' + _NAME + r')\})$')
+
+
+def is_python(word, variables):
+    if word[:1] in ("'", '"'):
+        word = word[1:-1]
+    reference = _VARIABLE.fullmatch(word)
+    if reference:
+        word = variables.get(reference[1] or reference[2], '')
+    return re.fullmatch(_PYTHON + '|' + _LOOKUP, word) is not None
+
+
+def python_commands(line, variables):
+    for command in _COMMAND.finditer(line):
+        if is_python(command[1], variables):
+            yield command
 
 
 def heredoc_body(source, start, marker, strip_tabs):
@@ -54,6 +72,12 @@ def embedded_programs(source):
         if line.lstrip().startswith('#'):
             cursor = end
             continue
+        assignment = _ASSIGN.match(source, cursor)
+        if assignment and is_python(assignment[2], variables):
+            word = assignment[2]
+            variables[assignment[1]] = word[1:-1] if word[:1] in ("'", '"') else word
+            cursor = assignment.end()
+            continue
         literal = _LITERAL.match(source, cursor)
         if literal and '$(' not in literal[2] and '`' not in literal[2]:
             variables[literal[1]] = literal[2][1:-1]
@@ -65,7 +89,7 @@ def embedded_programs(source):
             if captured is not None:
                 body, after = captured
                 prefix = line[:document.start()]
-                if _COMMAND.search(prefix):
+                if any(python_commands(prefix, variables)):
                     yield body
                 else:
                     assignment = _READ.search(prefix) or _CAT.fullmatch(prefix)
@@ -75,7 +99,7 @@ def embedded_programs(source):
                 continue
         # Only inspect arguments immediately following an actual Python word.
         # Module invocations and anything we cannot classify need no action.
-        for command in _COMMAND.finditer(line):
+        for command in python_commands(line, variables):
             inline = _INLINE.match(source, cursor + command.end())
             if inline is None:
                 continue
