@@ -315,3 +315,13 @@ the owner's directory write bit. `spec.json` is required; `design.md`,
 `contract.yaml` and `CONVENTIONS.md` are each optional for legacy inputs.
 Missing folders, invalid ownership or permissions, and unexpected entries
 refuse sandbox profile creation.
+
+The sandbox launcher's Python lives in `bin/lib/fm_sandbox_policy.py`,
+`fm_sandbox_forward.py` and `fm_sandbox_loopback.py` (T-177). Partial engine
+copies must include these files beside `fm-sandbox.sh`; copies that launch
+reviews also need `fm_review_runtime.py`. Copying the complete `bin/lib/`
+directory, as managed snapshots and the shared round fixtures do, includes
+them. The forwarding and loopback modules execute inside the sandbox from
+source passed as an argument to a short loader, compiled with their module
+filename. This requires no engine-directory read grant and no writable helper
+copy. Arguments, policy and profile output retain their existing contracts.

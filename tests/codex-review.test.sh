@@ -78,9 +78,10 @@ class CodexReview(unittest.TestCase):
         with self.assertRaises(ValueError): m.review_context(self.env)
 
     def test_review_profiles_protect_git(self):
-        source = (root / 'bin/fm-sandbox.sh').read_text().split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
-        namespace = {}
-        exec(source.rsplit('\nmain()', 1)[0], namespace)
+        spec = importlib.util.spec_from_file_location('sandbox', root / 'bin/lib/fm_sandbox_policy.py')
+        sandbox = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sandbox)
+        namespace = vars(sandbox)
         policy = dict(never_read=[], repo_config=['.codex'], review_git_readonly=True)
         (self.tree / '.codex').mkdir()
         roots = [str(self.tree), str(self.home / 'round-temp')]
