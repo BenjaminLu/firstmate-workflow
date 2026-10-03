@@ -46,6 +46,26 @@ printf '#!/usr/bin/env bash\nargs=""\necho $args\n' > "$q/bin/adapters/sloppy.sh
 out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)"
 assert_lacks "$out" "x shellcheck" "an info-level finding does not, which is what the adapters depend on"
 
+# T-176: exercise compilation through the fast entry point, not just its
+# Python helper. Each broken module is the only syntax error in its run,
+# so a top-level failure cannot conceal a missing recursive scan.
+for python_file in bin/lib/compile_probe.py bin/lib/nested/compile_probe.py; do
+  mkdir -p "$q/$(dirname "$python_file")"
+  printf 'def broken(:\n' > "$q/$python_file"
+  python_rc=0
+  out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)" || python_rc=$?
+  assert_eq '1' "$python_rc" "invalid Python in $python_file fails fast checks"
+  assert_contains "$out" 'x bin/lib Python modules compile' "the compilation stage rejects $python_file"
+  assert_contains "$out" "$python_file" "the compilation diagnostic names $python_file"
+  printf 'answer = 42\n' > "$q/$python_file"
+  python_rc=0
+  out="$(FM_ROOT="$q" bash "$q/bin/ci.sh" --stage fast 2>&1)" || python_rc=$?
+  assert_eq '0' "$python_rc" "fixing $python_file restores green fast checks"
+  assert_contains "$out" '+ bin/lib Python modules compile' "the compilation stage accepts fixed $python_file"
+  rm -f "$q/$python_file"
+done
+rmdir "$q/bin/lib/nested"
+
 # T-161: construct the unsafe bytes so this test is itself lint-clean.
 # Exercise nested shell snippets as well as test files, without text exclusions.
 unicode_tree_before="$(find "$q" -print | sort)"
