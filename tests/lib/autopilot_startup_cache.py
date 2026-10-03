@@ -54,6 +54,11 @@ sys.exit(code)
     def response(self, status, code):
         (self.root / 'response.json').write_text(json.dumps([status, code]))
 
+    def fresh_context(self):
+        temporary = tempfile.TemporaryDirectory(dir=self.root)
+        self.addCleanup(temporary.cleanup)
+        return {**self.ctx, 'state': temporary.name}
+
     def append(self, cursor):
         with self.logs[cursor].open('a') as stream:
             stream.write(json.dumps(self.rows[cursor]) + '\n')
@@ -109,24 +114,24 @@ sys.exit(code)
         self.assertEqual(len(pilot.data['wakes']), 2)
 
     def test_conditional_304_returns_cached_body_without_changing_failure_state(self):
-        pilot = A.Pilot(self.ctx, clock=lambda: 1000)
-        self.response(200, 0)
-        self.assertEqual(pilot.api('pulls'), [])
-        pilot.data.update(failures=2, next_poll=2000)
         for code in (1, 0):
             with self.subTest(exit_status=code):
+                pilot = A.Pilot(self.fresh_context(), clock=lambda: 1000)
+                self.response(200, 0)
+                self.assertEqual(pilot.api('pulls'), [])
+                pilot.data.update(failures=2, next_poll=2000)
                 self.response(304, code)
                 self.assertEqual(pilot.api('pulls'), [])
                 self.assertEqual(pilot.data['failures'], 2)
                 self.assertEqual(pilot.data['next_poll'], 2000)
                 self.assertEqual(pilot.data['wakes'], {})
-        calls = [json.loads(line) for line in (self.root / 'calls.jsonl').read_text().splitlines()]
-        self.assertNotIn('-H', calls[0])
-        self.assertIn('If-None-Match: "one"', calls[-1])
-        self.assertIn('--include', calls[-1])
-        self.assertIn('repos/owner/repo/pulls', calls[-1])
-        with self.assertRaises((RuntimeError, ValueError)):
-            pilot.api('uncached-endpoint')
+                calls = [json.loads(line) for line in (self.root / 'calls.jsonl').read_text().splitlines()]
+                self.assertNotIn('-H', calls[-2])
+                self.assertIn('If-None-Match: "one"', calls[-1])
+                self.assertIn('--include', calls[-1])
+                self.assertIn('repos/owner/repo/pulls', calls[-1])
+                with self.assertRaises((RuntimeError, ValueError)):
+                    pilot.api('uncached-endpoint')
 
     def test_conditional_304_poll_uses_normal_cadence_without_backoff(self):
         pilot = A.Pilot(self.ctx, clock=lambda: 1000)
@@ -141,7 +146,7 @@ sys.exit(code)
     def test_500_backs_off_even_with_cached_body_and_zero_exit_status(self):
         for code in (1, 0):
             with self.subTest(exit_status=code):
-                pilot = A.Pilot(self.ctx, clock=lambda: 1000)
+                pilot = A.Pilot(self.fresh_context(), clock=lambda: 1000)
                 self.response(200, 0)
                 pilot.poll()
                 self.response(500, code)
