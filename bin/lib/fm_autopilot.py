@@ -106,7 +106,9 @@ class Pilot(MechanicalLoop):
         return result.stdout
 
     def script(self, name, *args):
-        return ['bash', str(BIN / name), *map(str, args), '--repo', str(self.root),
+        # Execute the endpoint so its shebang selects the interpreter, as
+        # the retired turn did for gates, protocol, review and decisions.
+        return [str(BIN / name), *map(str, args), '--repo', str(self.root),
                 *(['--project', self.ctx['project']] if self.ctx['project'] else [])]
 
     def gh(self, *args):

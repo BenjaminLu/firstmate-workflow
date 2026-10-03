@@ -36,8 +36,12 @@ class MechanicalLoop:
     def pr_task(self, pr):
         # Call the canonical shell grammar, including legacy t004 branches,
         # title fallback and the deliberate exclusion of Revert titles.
-        return self.command(['bash', '-c', '. "$1"; fm_task_of_pr "$2" "$3" || true',
-                             '_', str(BIN / 'fm-emit.sh'), pr['head']['ref'], pr.get('title', '')]).strip()
+        # This local read must not enter the write-ahead operation channel.
+        result = subprocess.run(['bash', '-c', '. "$1"; fm_task_of_pr "$2" "$3" || true',
+                                 '_', str(BIN / 'fm-emit.sh'), pr['head']['ref'], pr.get('title', '')],
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                timeout=120, check=True)
+        return result.stdout.strip()
 
     def observe_pr(self, pr):
         if pr.get('state') not in ('open', 'closed'): return

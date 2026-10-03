@@ -139,7 +139,7 @@ assert_eq "D-firstmate-workflow-T101-1" "$card1" \
   "firstmate allocates the merge card's id; a tree with no registry is the self project"
 cp "$DETAILS" "$r/state/decision-details/$card1.json"
 
-out3="$(run python3 "$ROOT/tests/lib/autopilot_turn.py" "$r" 2>&1)"
+run python3 "$ROOT/tests/lib/autopilot_turn.py" "$r"
 assert_ok "test -f '$r/state/pending/$card1.json'" "every gate green means a decision, not a merge"
 pend="$(ls "$r/state/pending" 2>/dev/null | head -1)"
 assert_ok "[ -n \"$pend\" ]" "a decision is pending on disk"

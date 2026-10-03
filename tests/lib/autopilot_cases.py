@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -24,6 +25,7 @@ class PilotTests(unittest.TestCase):
     def setUp(self):
         env = patch.dict(os.environ, {k:v for k,v in os.environ.items() if not k.startswith(('FM_', 'HERDR_'))}, clear=True)
         env.start(); self.addCleanup(env.stop)
+        os.environ['HERDR_ENV'] = '0'
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
@@ -126,6 +128,37 @@ class PilotTests(unittest.TestCase):
         self.pilot.pull(PR, [], [], [], [])
         self.assertFalse(any(isinstance(x,list) for x in self.calls))
         self.assertTrue(self.pilot.data['wakes'])
+
+    def test_task_lookup_and_observation_do_not_use_operation_channel(self):
+        self.pilot.command = lambda *a, **kw: self.fail('task lookup used operation channel')
+        for number, ref, title, expected in (
+                (21, 't001-legacy', 'Other', 'T-001'),
+                (22, 'unrelated', 'T-001: fallback', 'T-001'),
+                (23, 'sk-123-update', 'Other', 'SK-123'),
+                (24, 'revert-1', 'Revert "T-001: work"', '')):
+            with self.subTest(ref=ref):
+                if expected:
+                    (Path(self.context['tasks']) / (expected + '.json')).write_text('{}')
+                pr = copy.deepcopy(PR)
+                pr.update(number=number, title=title)
+                pr['head']['ref'] = ref
+                self.assertEqual(self.pilot.task(pr), expected)
+                self.pilot.observe_pr(pr)
+                self.assertEqual(self.calls[-1][1][0:2], ('pr_opened', expected))
+
+    def test_migrated_launchers_use_their_own_interpreter(self):
+        endpoints = self.root / 'bin'
+        endpoints.mkdir()
+        for name in ('fm-gate.sh', 'fm-review.sh', 'fm-protocol.sh', 'fm-decide.sh'):
+            with self.subTest(name=name):
+                endpoint = endpoints / name
+                endpoint.write_text('#!' + sys.executable + '\nimport sys\nprint(sys.argv[1])\n')
+                endpoint.chmod(0o755)
+                with patch.object(A, 'BIN', endpoints):
+                    argv = self.pilot.script(name, 'shebang-selected')
+                result = subprocess.run(argv, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, 'shebang-selected\n')
 
     def test_retry_backoff_is_bounded_and_resets(self):
         first = self.pilot.network_failure('offline')
