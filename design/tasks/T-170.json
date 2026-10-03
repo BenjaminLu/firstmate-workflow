@@ -1,0 +1,12 @@
+{
+  "id": "T-170",
+  "title": "the self project's contract moves into its registry entry, now that every reader reads both places",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": ["config.yaml", "README.md", "design/design.md", "tests/**", "design/tasks/T-170.json"],
+  "acceptance": [
+    "Why. T-050 (merged 2026-10-03) was split on the captain's card D-firstmate-workflow-T050-3: it shipped shell and Python readers that accept the self contract at the top level or at projects.firstmate-workflow.project, and left config.yaml unchanged, because moving the contract in the same change left no gate run able to verify it. Main now reads both locations, so the move itself is a plain change.",
+    "Move the top-level `project:` block of config.yaml unchanged to projects.firstmate-workflow.project and delete the top-level block in the same commit; exactly one self contract source remains. Old pins keep reading the location at their recorded commit without repinning. README and design section 6 say where the self contract lives.",
+    "Tests: session start/status, gate 5 and fm-failfirst read the moved contract; a config with both locations is refused. Evidence is the required GitHub check and the six gates. Workers do not run the suites."
+  ]
+}
