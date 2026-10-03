@@ -97,6 +97,7 @@ ROUND="$(jq -r .round "$FM_RUN_DIR/identity.json")"
 # that vendor are in identity.json from the start, so the board shows them
 # from the round's first event (the model the vendor reports joins them
 # once the round has run; a fallback vendor replaces them as it starts)
+fm_record_vendor_resolution reviewer "$VENDOR"
 head_vendor="$(fm_vendor_chain reviewer "$VENDOR" | head -1)"
 fm_record_requested "$head_vendor" "$(fm_model_for reviewer "$head_vendor" "$FM_CONFIG")"
 # T-116: name, role, project, task, round and attempt ride every crew
@@ -1056,6 +1057,7 @@ prepare_review_attempt() {
   fi
   checkout_attempted=1
 }
+fm_log_vendor_resolution "$work/log"
 attempt_n=1
 while :; do
 fm_run_chain "$adapters" "$chain" \

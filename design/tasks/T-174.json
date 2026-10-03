@@ -1,0 +1,31 @@
+{
+  "id": "T-174",
+  "title": "firstmate's host is recorded and shown on the board, and the worker runs on the other main vendor: a Claude firstmate gets codex workers, a Codex firstmate gets claude workers",
+  "milestone": "M2",
+  "depends_on": [],
+  "scope": [
+    "bin/fm-config.sh",
+    "bin/fm-session.sh",
+    "bin/fm-worker.sh",
+    "bin/fm-review.sh",
+    "bin/fm-dispatch.sh",
+    "bin/lib/**",
+    "bin/adapters/_contract.md",
+    "board/server.ts",
+    "board/public/**",
+    "config.yaml",
+    "README.md",
+    "design/design.md",
+    "skills/firstmate/SKILL.md",
+    "tests/**",
+    "design/tasks/T-174.json"
+  ],
+  "acceptance": [
+    "Why. On 2026-10-03 the captain set the rule: 'Claude派工的話 codex優先當worker；Codex派工的話，Claude優先當worker；額度不足的話才開始考慮cursor'. config.yaml today names one fixed worker vendor (top-level `vendor: codex`) and a fixed fallback order (claude, codex, cursor-agent, gemini). That is right only while firstmate runs in Claude Code. The same night the captain asked why the board does not show which model firstmate is: the board's crew row for firstmate (board/server.ts, the `id: \"firstmate\"` entry near line 1120) has no vendor or model, because firstmate is the captain's own session and no fm script writes an identity record for it, unlike fm-worker.sh and fm-review.sh (identity.json, T-127/T-146). Both need the same fact: which harness firstmate runs in. bin/lib/fm_hooks.py `detect()` already answers that (FM_HARNESS, else the session owner's process name, else CLAUDECODE=1).",
+    "Host record. `bin/fm-session.sh start` (and `status`, refreshing it) writes the firstmate host to the session's state: harness (claude, codex or another fm_hooks harness, or null when undetectable), its CLI version as the CLI reports it, and the model only from a source the harness itself owns (e.g. its configured model in its own settings), marked with that source; never guessed from config.yaml. FM_HARNESS overrides detection. The record lives with the other session state, not in any repository.",
+    "Board. The firstmate crew row shows the host harness, model (or 'unknown') and CLI version the same way worker and reviewer rows show theirs, in both languages. A session started before this change, or with no record, shows nothing rather than a guess.",
+    "Worker vendor follows the host. A new value `vendor: opposite-of-host` (worker role, or top level) resolves in fm_role_vendor/fm_vendor_chain: host claude -> codex, host codex -> claude; any other or unknown host -> the configured fallback head, and the resolution says so in the round's log. The fallback chain after the head is: the other main vendor (claude or codex), then the rest of `fallback:` in order (cursor-agent before gemini today), so cursor-agent is reached only when both main vendors are unavailable (exit 2, which quota and rate-limit refusals already produce via bin/adapters/_lib.sh). Rounds dispatched by the board read the recorded host, not the board process's own environment. An explicit `--vendor` and an explicit vendor name in config.yaml still win unchanged. The shipped config.yaml sets the worker to `opposite-of-host`; the reviewer stays `vendor: claude` (the captain's choice, unchanged). identity.json records the resolved vendor and why (host and rule).",
+    "Docs. README and design say how the worker vendor is chosen and where the host record lives. skills/firstmate/SKILL.md says the same, and its line about the project contract (currently 'config.yaml's `project:` block', about line 126) names the location since T-170: `projects.<name>.project`. Two leftovers T-173 could not touch: skills/firstmate/SKILL.md (about line 1028) still describes the 48000-byte design excerpt removed by T-173 - rewrite it to the pinned/ folder; bin/fm-config.sh fm_prompt_design (about line 1794) calls fm_prompt_context.py design, a mode T-173 removed, and nothing calls it - delete it.",
+    "Tests (fail first, stubs answering like the real CLIs): host claude resolves the worker to codex with chain codex, claude, cursor-agent, gemini; host codex resolves to claude with chain claude, codex, cursor-agent, gemini; unknown host falls back with a logged reason; --vendor and a named vendor still win; a board-dispatched round uses the recorded host; the board's firstmate row shows the recorded harness and model and nothing when there is no record. Evidence is the required GitHub check and the six gates. Workers do not run the suites."
+  ]
+}

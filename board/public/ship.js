@@ -174,12 +174,13 @@ const SHIP = (() => {
       // never config.yaml's guess, and unknown until the round has run.
       // The Model field carries the warning colour, with both names, only
       // when the run reported a model other than the one config.yaml asked for.
+      (c.role === "fm" && !c.host_recorded ? "" :
       line("cvendor", T("crewVendor"), c.vendor ? esc(c.vendor) : unknown) +
       `<dt>${esc(T("crewModel"))}</dt><dd class="cmodel${c.model_mismatch ? " warn" : ""}">` +
       (c.model_mismatch
         ? esc(T("modelMismatch").replace("{requested}", c.model_requested || unknown).replace("{model}", c.model || unknown))
         : c.model ? esc(c.model) : unknown) + `</dd>` +
-      line("ccli", T("crewCli"), c.cli_version ? esc(c.cli_version) : unknown) +
+      line("ccli", T("crewCli"), c.cli_version ? esc(c.cli_version) : unknown)) +
       // .job: the current activity, the one line the tag used to carry
       line("job", T("crewActivity"), linkPrs(esc(c.activity), c.pr_urls)) +
       `</dl></div>`;
@@ -233,6 +234,7 @@ const SHIP = (() => {
         attempt: Number.isInteger(a.attempt) ? a.attempt : null,
         // T-127: what the round actually ran on, read from the run itself;
         // null/false for a run recorded before this, never guessed
+        host_recorded: !!a.host_recorded,
         vendor: a.vendor || null,
         model: a.model || null,
         model_requested: a.model_requested || null,
@@ -494,10 +496,11 @@ const SHIP = (() => {
       cell("rl", T("crewRole"), esc(c.roleLabel)) +
       cell("pj", T("projectChip"), c.project
         ? `<i class="pdot" style="--pc:${projectColor(c.project)}" aria-hidden="true"></i>${esc(c.project)}` : unknown) +
+      (c.role === "fm" && !c.host_recorded ? "" :
       cell("rv", T("crewVendor"), c.vendor ? esc(c.vendor) : unknown) +
       cell("rm" + (c.model_mismatch ? " warn" : ""), T("crewModel"), c.model_mismatch
         ? esc(T("modelMismatch").replace("{requested}", c.model_requested || unknown).replace("{model}", c.model || unknown))
-        : c.model ? esc(c.model) : unknown) +
+        : c.model ? esc(c.model) : unknown)) +
       cell("rd", T("crewRound"), c.round == null ? unknown
         : esc(c.round) + (c.attempt > 1 ? ` <span class="att">${esc(T("crewAttempt"))} ${esc(c.attempt)}</span>` : "")) +
       `<span class="st" data-label="${esc(T("crewState"))}">${esc(T("lane" + c.state[0].toUpperCase() + c.state.slice(1)))}</span>` +

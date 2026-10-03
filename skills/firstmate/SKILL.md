@@ -123,7 +123,7 @@ decision, then record that with
 idempotent, deletes no wake, decision file or event, and is refused for an id
 with no wake. Acknowledging is bookkeeping, not approval.
 
-The project contract is `config.yaml`'s `project:` block: `setup`, `check`,
+The project contract is `config.yaml`'s `projects.<name>.project` block: `setup`, `check`,
 `check_env`, `tests`, `test` and `docs` (see the README). `start` runs the declared
 `setup` once in the checkout and reports a `project` block with the declared
 keys, setup's exit status and error, and `ready`; `status` reports the same
@@ -1025,9 +1025,9 @@ Work from the engine root and pass `--project` to supported operations on a
 selected project. Use the frozen launcher's prompt to carry the approved pin,
 whole conventions, complete gate contract and exact project/task/base/head
 identity into the target; do not require engine roles or design files there.
-Design excerpts have a 48000 UTF-8 byte cap with source size, hash and visible
-trimming. Supply relevant omitted sections through private local context before
-a crew member must decide from them. Keep reviewer input limited to the spec,
+Read the complete approved inputs in the round's read-only `pinned/` folder.
+The prompt indexes absolute paths, hashes and section anchors; it does not
+embed or trim design excerpts. Do not substitute mutable checkout copies. Keep reviewer input limited to the spec,
 design, conventions, diff, machine evidence and authentic standing list; never
 include worker reasoning. A model provenance receipt is not head freshness.
 Self default and explicit self project use the same prompt shape. Routine fair
@@ -1072,3 +1072,34 @@ findings without a review thread require firstmate coordination; never invent a
 thread or infer that a changed head fixed every finding. The language and actual
 fix require firstmate judgment; structural checks cannot establish either.
 Automatic scheduling beyond the launcher/gate collection points remains T-141.
+
+### Firstmate host and worker vendor (T-174)
+
+The shipped worker vendor is `opposite-of-host`: a Claude firstmate starts
+Codex workers, and a Codex firstmate starts Claude workers. The other main
+vendor comes next, followed by the remaining `fallback:` entries in their
+configured order (currently cursor-agent, then gemini). Only an unavailable
+adapter (exit 2, including quota/rate-limit refusal) advances the chain.
+An unknown or other host uses the configured fallback head and logs why.
+A named worker vendor retains its existing chain; explicit `--vendor` selects
+that vendor alone. The reviewer remains explicitly `vendor: claude`.
+
+`fm-session.sh start` and `status` refresh `state/session/host.json` beside
+the other session records. External project records live under
+`FM_HOME/projects/<name>/state/session/host.json`, never in the target repository.
+Board launches use the board's owning session record across projects; other
+launches use their project's record, falling back to the engine session's.
+The collector reuses `fm_hooks.detect()` (`FM_HARNESS` overrides detection),
+records the CLI's own version output, and reads models only from harness-owned
+settings with a `model_source`. Claude settings are read in user, project,
+then local order; Codex reads its own `CODEX_HOME/config.toml` (default
+`~/.codex/config.toml`). These are configured models, not proof of the model
+serving the current turn; an unobservable model stays unknown. Crew model
+settings in `config.yaml` never supply firstmate's model.
+
+The board shows the recorded harness, model (or localized unknown) and CLI
+version through its existing crew fields; a legacy session with no record
+has no host fields. Board-dispatched rounds read the stored host, never the
+board process's harness environment. Each round logs its resolution and keeps
+`vendor_resolution` (host, rule, resolved head) in `identity.json`, alongside
+the current vendor, which can change on fallback.

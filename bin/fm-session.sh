@@ -26,6 +26,10 @@ cd "$REPO" || exit 64
 REPO="$(pwd -P)"
 fm_storage_init "$REPO" || exit 65
 fm_freeze "$0" "$REPO" ${fm_args[@]+"${fm_args[@]}"}
+# Refresh only in firstmate's session, never when a board launches a round.
+if [ "$MODE" = start ] || [ "$MODE" = status ]; then
+  python3 "${FM_CODE_ROOT:-$REPO}/bin/lib/fm_host.py" "$REPO" "$FM_STATE_DIR" || exit 70
+fi
 # The reviewer's engine is the captain's to choose. A project that names none
 # is said out loud here, once per start, rather than reviewed by whatever the
 # top-level vendor happens to be: firstmate asks on the board and the answer

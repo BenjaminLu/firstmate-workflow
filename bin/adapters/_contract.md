@@ -153,7 +153,13 @@ whose verdict is an input rather than a judgement, which is why the
 contract test exempts it by name and checks its scripted promises instead.
 
 `fm_vendor_chain` builds the order and `fm_run_chain` runs it, both in
-`bin/fm-config.sh`, so the worker and the reviewer fall back identically.
+`bin/fm-config.sh`, so worker and reviewer share the same exit-2 behavior.
+`opposite-of-host` resolves from `state/session/host.json`: Claude host to
+Codex worker, Codex host to Claude worker, otherwise the configured fallback
+head with a logged reason. The other main vendor precedes remaining fallbacks.
+Named vendors keep their configured chain; `--vendor` selects only that vendor.
+The launcher records host, rule and resolved head as `vendor_resolution` in
+`identity.json`; adapters receive a concrete vendor, never the rule name.
 
 The separation matters: if a model producing bad work looked the same as an
 outage, an outage would look like the model failing and the crew would burn a

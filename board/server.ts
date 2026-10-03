@@ -74,7 +74,7 @@ const PUBLIC = join(ROOT, "board/public");
 // default's - was merged by fm-merge.sh in the shell's project while the
 // board's marker said the default held the merge.
 const childEnv = (): Record<string, string | undefined> => {
-  const { FM_PROJECT: _, FM_CONFIG: _cfg, FM_ENGINE_ROOT: _engine, FM_EXTERNAL: _external, FM_STATE_DIR: _state, FM_WORKTREES: _trees, FM_TARGET_ROOT: _target, FM_BASE: _base, FM_TASKS_DIR: _tasks, FM_DESIGN: _design, GH_REPO: _github, ...env } = process.env;
+  const { FM_PROJECT: _, FM_SESSION_HOST_STATE: _hostState, FM_CONFIG: _cfg, FM_ENGINE_ROOT: _engine, FM_EXTERNAL: _external, FM_STATE_DIR: _state, FM_WORKTREES: _trees, FM_TARGET_ROOT: _target, FM_BASE: _base, FM_TASKS_DIR: _tasks, FM_DESIGN: _design, GH_REPO: _github, ...env } = process.env;
   return { ...env, FM_ROOT: ROOT };
 };
 
@@ -139,7 +139,8 @@ type Crew = {
   // model_source says which it is - null when neither is known.
   vendor?: string | null;
   model?: string | null;
-  model_source?: "reported" | "requested" | null;
+  model_source?: string | null;
+  host_recorded?: boolean;
   model_requested?: string | null;
   cli_version?: string | null;
   model_mismatch?: boolean;
@@ -591,6 +592,27 @@ const stateDir = (project: string) => {
 const stores = () => [...new Set([join(ROOT, "state"), ...[...registry().projects.keys()].flatMap(p => {
   try { return [stateDir(p)]; } catch { return []; }
 })])];
+// Session-owned facts only. An absent legacy record produces no host fields;
+// neither this process's environment nor crew model settings are evidence.
+const firstmateHost = (project: string): Partial<Crew> => {
+  const paths = [...new Set([join(stateDir(project), "session/host.json"),
+    join(ROOT, "state/session/host.json")])];
+  for (const path of paths) {
+    if (!existsSync(path)) continue;
+    try {
+      const value = JSON.parse(readFileSync(path, "utf8"));
+      if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+      const text = (v: unknown) => typeof v === "string" && v.trim() ? v : null;
+      return { host_recorded: true, vendor: text(value.harness), model: text(value.model),
+        cli_version: text(value.cli_version), model_source: text(value.model_source) };
+    } catch { return {}; }
+  }
+  return {};
+};
+// Attach session routing only to round launches. The generic child environment
+// also serves the registry reader and must not depend on registry resolution.
+const roundEnv = () => ({ ...childEnv(),
+  FM_SESSION_HOST_STATE: stateDir(process.env.FM_PROJECT || defaultProject()) });
 const decisionDir = (id: string) => join(stateDir(ownerOf(id)?.project ?? defaultProject()), "decisions");
 const responseFile = (id: string) => {
   const old = join(ROOT, "state/decisions", `${id}.json`);
@@ -1118,6 +1140,7 @@ const buildState = (only: string | null) => {
   const planned = (e: Event) => authored((definitions.get(ek(e)) as { activity?: unknown } | undefined)?.activity);
   const crew: Crew[] = [{
     id: "firstmate", role: "firstmate",
+    ...firstmateHost(process.env.FM_PROJECT || defaultProject()),
     state: greenlit ? (fm ? phases.get('firstmate') || 'unknown' : 'unknown') : "queued",
     task: fmTask, title: fmT?.title ?? null,
     // firstmate is every project's; the project is the one of the task it is on
@@ -1316,7 +1339,7 @@ const buildState = (only: string | null) => {
     const keys = new Set(["id", "key", "project", "task", "pr", "pr_url", "type", "ts", "actor",
       "role", "stage", "state", "kind", "chosen", "merge", "merge_unknown", "owner", "task_final", "identity",
       "confirm", "merged_seq", "crew_name", "name", "round", "attempt", "vendor", "model", "model_source",
-      "model_requested", "cli_version", "model_mismatch", "progress", "window_expected"]);
+      "model_requested", "cli_version", "model_mismatch", "host_recorded", "progress", "window_expected"]);
     const metadata = (value: Record<string, any>) => {
       const project = projectOf(value), entry = registry().projects.get(project);
       if (!entry || entry.state === join(ROOT, "state")) return value;
@@ -1653,7 +1676,7 @@ const setAside = (project: string, task: string, action: "park" | "drop", decisi
 const dispatchTask = async (project: string, task: string): Promise<Carried> => {
   try {
     const child = Bun.spawn([join(ROOT, "bin/fm-dispatch.sh"), "--task", task, "--repo", ROOT],
-      { env: { ...childEnv(), ...(project && project !== defaultProject() ? { FM_PROJECT: project } : {}) },
+      { env: { ...roundEnv(), ...(project && project !== defaultProject() ? { FM_PROJECT: project } : {}) },
         stdin: "ignore", stdout: "pipe", stderr: "pipe", cwd: ROOT });
     const timer = setTimeout(() => child.kill(), 60_000);
     const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
@@ -1677,7 +1700,7 @@ const sendBack = async (project: string, task: string, pr: number | null): Promi
     const fd = openSync(log, "a");
     try {
       child = startOwned("fm-worker.sh", [join(ROOT, "bin/fm-worker.sh"), "--task", task, "--repo", ROOT, ...(pr ? ["--pr", String(pr)] : [])],
-        fd, { ...childEnv(), ...(project && project !== defaultProject() ? { FM_PROJECT: project } : {}) });
+        fd, { ...roundEnv(), ...(project && project !== defaultProject() ? { FM_PROJECT: project } : {}) });
     } finally { closeSync(fd); }
   } catch { return { outcome: "failed", reason: "fm-worker.sh could not be started" }; }
   const exited = await new Promise<number | null | "running">((settled) => {

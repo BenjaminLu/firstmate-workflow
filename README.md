@@ -302,12 +302,42 @@ end-to-end stage), `check` is `bin/ci.sh` with `FM_CI_MAX_SECONDS=600`, and
 `.github/ISSUE_TEMPLATE/**` and `.github/pull_request_template.md`; skills
 are behaviour, so they are not docs.
 
+### Firstmate host and worker selection
+
+The shipped worker vendor is `opposite-of-host`: a Claude firstmate starts
+Codex workers, and a Codex firstmate starts Claude workers. The other main
+vendor comes next, followed by the remaining `fallback:` entries in their
+configured order (currently cursor-agent, then gemini). Only an unavailable
+adapter (exit 2, including quota/rate-limit refusal) advances the chain.
+An unknown or other host uses the configured fallback head and logs why.
+A named worker vendor retains its existing chain; explicit `--vendor` selects
+that vendor alone. The reviewer remains explicitly `vendor: claude`.
+
+`fm-session.sh start` and `status` refresh `state/session/host.json` beside
+the other session records. External project records live under
+`FM_HOME/projects/<name>/state/session/host.json`, never in the target repository.
+Board launches use the board's owning session record across projects; other
+launches use their project's record, falling back to the engine session's.
+The collector reuses `fm_hooks.detect()` (`FM_HARNESS` overrides detection),
+records the CLI's own version output, and reads models only from harness-owned
+settings with a `model_source`. Claude settings are read in user, project,
+then local order; Codex reads its own `CODEX_HOME/config.toml` (default
+`~/.codex/config.toml`). These are configured models, not proof of the model
+serving the current turn; an unobservable model stays unknown. Crew model
+settings in `config.yaml` never supply firstmate's model.
+
+The board shows the recorded harness, model (or localized unknown) and CLI
+version through its existing crew fields; a legacy session with no record
+has no host fields. Board-dispatched rounds read the stored host, never the
+board process's harness environment. Each round logs its resolution and keeps
+`vendor_resolution` (host, rule, resolved head) in `identity.json`, alongside
+the current vendor, which can change on fallback.
+
 ### The reviewer
 
 `config.yaml`'s `reviewer:` block names the reviewer's `vendor` and `model`,
-and they are the captain's choice: this repository reviews with `claude` and
-`opus-5`, the worker's own, so review adds no second vendor. Other vendors
-stay in `fallback:` and `--vendor`. A project that names no reviewer vendor or
+and they are the captain's choice: this repository reviews with `claude`,
+using `models.claude` unless a reviewer model overrides it. A project that names no reviewer vendor or
 model is reported by `fm-session.sh start`, and firstmate asks the captain on
 the board; the answer lands as a `config.yaml` change in a pull request.
 
