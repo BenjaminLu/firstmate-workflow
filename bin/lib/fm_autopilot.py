@@ -230,7 +230,8 @@ class Pilot:
         base = git(root, 'merge-base', pr['base']['sha'], pr['head']['sha'])
         current = source_binding(task, pr['head']['sha'], base, BIN.parent)
         if previous['patch'] != current['patch']:
-            return False  # worker edits belong to fm-run's review loop
+            # Worker edits belong to fm-run's review loop.
+            return False
         record = rows[-1]
         if not record.get('signature'):
             return True  # gate 7 refuses pre-T-138 unsigned legacy approvals

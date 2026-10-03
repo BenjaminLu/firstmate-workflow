@@ -151,7 +151,7 @@ while read -r name want; do
     fi
   done <<< "$cases"
 done <<< "$PINNED"
-assert_eq "122" "$total" "every pinned flag and all nine fm option cases were exercised"
+assert_eq "124" "$total" "every pinned flag and all nine fm option cases were exercised"
 
 # These flags consume one word, so they are deliberately outside the shift-2
 # count. Probe them without a base ref: parsing must finish at usage, not hang.
