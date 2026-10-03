@@ -476,14 +476,14 @@ def concurrent_service():
     return module
 
 
-def allocate(root, role, task, alias):
+def allocate(root, role, task, alias, owner_record=None):
     # Dispatch and identity publication share lock order: global, then project.
     # A launch receipt holds the slot until this identity is visible.
     with locked(Path(root).resolve() / 'state/dispatch.lock'):
-        return allocate_identity(root, role, task, alias)
+        return allocate_identity(root, role, task, alias, owner_record)
 
 
-def allocate_identity(root, role, task, alias):
+def allocate_identity(root, role, task, alias, owner_record=None):
     if role not in ('worker', 'reviewer', 'firstmate'):
         raise ValueError('unsupported role')
     if not re.fullmatch(r'[A-Za-z0-9_-]+', task):
@@ -539,12 +539,10 @@ def allocate_identity(root, role, task, alias):
                       round=number, attempt=attempt, one_role=True,
                       requested_alias=alias, run=str(run), created=time.time())
         save(run / 'identity.json', record)
-        # Bind allocation to its launcher before releasing either lock. A
-        # launcher killed before fm_identity returns must not reserve forever.
-        parent = os.getppid()
-        command = subprocess.run(['ps', '-p', str(parent), '-o', 'command='],
-                                 capture_output=True, text=True).stdout.strip()
-        save(run / 'process.json', dict(record, pid=parent, token=command or str(parent)))
+        # Only the CLI's actual keeper may bind a launcher at allocation.
+        # In-process callers reserve an identity, not their parent's lifetime.
+        if owner_record is not None:
+            save(run / 'process.json', dict(record, owner_record=str(owner_record)))
     return run
 
 
@@ -1831,6 +1829,8 @@ def execute_child(attempt, lifetime_fd):
 
 
 def process_matches(record):
+    if record.get('owner_record'):
+        return lifeline().owner_record_live(record['owner_record'])
     try:
         pid = int(record['pid'])
         result = subprocess.run(['ps', '-p', str(pid), '-o', 'command='], capture_output=True, text=True)
@@ -2633,7 +2633,9 @@ def main(args):
         try: return project_field(*args)
         except ValueError as error:
             print('fm-config: ' + str(error), file=sys.stderr); return 65
-    if mode == 'allocate': print(allocate(Path(args[0]), *args[1:])); return 0
+    if mode == 'allocate':
+        print(allocate(Path(args[0]), *args[1:], owner_record=os.environ.get('FM_LAUNCH_OWNER_RECORD')))
+        return 0
     if mode == 'task-idle': return task_idle(Path(args[0]), args[1])
     if mode == 'record-model':
         run, vendor, model_requested, model, cli_version = args

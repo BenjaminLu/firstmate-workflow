@@ -1104,7 +1104,12 @@ import json, pathlib, sys
 run, pid, code = sys.argv[1:]
 p = pathlib.Path(run)
 identity = json.loads((p / 'identity.json').read_text())
-(p / 'process.json').write_text(json.dumps(dict(identity, pid=int(pid), token=code, snapshot=code)))
+process = p / 'process.json'
+launcher = json.loads(process.read_text()) if process.exists() else {}
+temporary = p / ('process.' + pid + '.tmp')
+temporary.write_text(json.dumps(dict(identity, **({'owner_record': launcher['owner_record']}
+    if launcher.get('owner_record') else {}), pid=int(pid), token=code, snapshot=code)))
+temporary.replace(process)
 PY
 }
 

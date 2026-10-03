@@ -28,7 +28,7 @@ class Entrypoints(unittest.TestCase):
         # Actual shell parser, storage resolver and option guards.
         for name in ('fm.sh', 'fm-autopilot.sh', 'fm-session.sh', 'fm-config.sh', 'fm-herdr.py', 'fm-emit.sh'):
             shutil.copy2(ROOT/'bin'/name, self.bin/name)
-        for name in ('fm-stack.sh', 'fm_project_paths.py'):
+        for name in ('fm-stack.sh', 'fm_project_paths.py', 'fm_concurrent.py', 'fm_merge_outcome.py'):
             shutil.copy2(ROOT/'bin/lib'/name, self.bin/'lib'/name)
         (self.root/'config.yaml').write_text('project:\n  check: "true"\n')
 

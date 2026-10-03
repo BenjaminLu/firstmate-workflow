@@ -11,13 +11,16 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import time
+import tempfile
 
 sys.dont_write_bytecode = True
 CODE = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('concurrent_managed', CODE / 'fm-herdr.py')
 managed = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(managed)
+merge_spec = importlib.util.spec_from_file_location('fm_merge_outcome', CODE / 'lib/fm_merge_outcome.py')
+merge_records = importlib.util.module_from_spec(merge_spec)
+merge_spec.loader.exec_module(merge_records)
 
 
 def shell(root, script, project='', *args):
@@ -73,14 +76,17 @@ def live_rounds(projects):
             if item.get('role') not in ('worker', 'reviewer'):
                 continue
             allocated[item['task']] = max(allocated.get(item['task'], -1), item.get('created', -1))
-            if managed.run_is_live(identity.parent):
+            process = identity.parent / 'process.json'
+            launcher_live = process.is_file() and managed.process_matches(managed.read(process))
+            if ((launcher_live and not (identity.parent / 'orchestration-result.json').exists())
+                    or any(a['live'] for a in managed.executions(identity.parent))):
                 item = dict(item, project=project['name'])
                 result.append(item); seen.add(item['task'])
         for receipt in sorted((state / 'dispatch').glob('*.json')):
             item = managed.read(receipt)
-            if item.get('task') in seen or allocated.get(item.get('task'), -1) >= item.get('created', float('inf')):
+            if item.get('task') in seen or allocated.get(item.get('task'), -1) >= receipt.stat().st_mtime:
                 continue
-            if managed.process_matches(item):
+            if managed.lifeline().owner_record_live(receipt.with_suffix('.owner')):
                 result.append(dict(item, project=project['name']))
     return result
 
@@ -196,17 +202,23 @@ def dispatch(root, selected, ordered, dry, limit):
                 (state / 'dispatch').mkdir(parents=True, exist_ok=True)
                 owner = managed.lifeline().session_owner()
                 env = dict(os.environ, FM_ROOT=str(root), FM_PROJECT=name)
-                command = [str(CODE / 'lib/fm-lifeline.sh'), '--owner-pid', str(owner),
-                           '--log', str(state / 'dispatch' / (task + '.log')), '--',
-                           str(CODE / 'fm-worker.sh'), '--task', task, '--repo', str(root)]
+                command = [str(CODE / 'fm-worker.sh'), '--task', task, '--repo', str(root)]
                 if name: command += ['--project', name]
-                created = time.time()
-                out = subprocess.run(command, env=env, stdin=subprocess.DEVNULL,
-                                     capture_output=True, text=True, check=True)
-                keeper = int(out.stdout.strip())
-                managed.save(state / 'dispatch' / (task + '.json'),
-                             dict(project=name, task=task, owner=owner, pid=keeper,
-                                  token=str(CODE / 'lib/fm_lifeline.py'), keeper=keeper, created=created))
+                receipt = state / 'dispatch' / (task + '.json')
+                with (state / 'dispatch' / (task + '.log')).open('ab') as log:
+                    keeper = managed.lifeline().start(command, owner=owner,
+                        owner_record=receipt.with_suffix('.owner'), env=env,
+                        stdin=subprocess.DEVNULL, stdout=log, stderr=log).pid
+                # Keep the public four-key receipt and its observable atomic
+                # rename boundary. Ownership lives in the keeper-held sidecar.
+                fd, temporary = tempfile.mkstemp(prefix=task + '.', suffix='.json', dir=receipt.parent)
+                try:
+                    with os.fdopen(fd, 'w') as output:
+                        json.dump(dict(project=name, task=task, owner=owner, keeper=keeper), output)
+                        output.flush(); os.fsync(output.fileno())
+                    subprocess.run(['mv', temporary, str(receipt)], check=True)
+                finally:
+                    Path(temporary).unlink(missing_ok=True)
                 emit = [str(CODE / 'fm-emit.sh'), '--actor', 'firstmate',
                         '--type', 'dispatched', '--task', task,
                         '--en', 'Reserved a worker slot', '--tw', '已保留工作執行名額']
@@ -237,7 +249,7 @@ def merge_blocker(state, project):
                 continue
             if folder == 'pending':
                 return 'pending merge ' + item.get('id', path.stem)
-            if item.get('chosen') == 'A' and item.get('merge') not in ('merged', 'failed'):
+            if item.get('chosen') == 'A' and merge_records.merge_outcome(item) not in ('merged', 'failed'):
                 return 'running merge ' + item.get('id', path.stem)
     return ''
 

@@ -4,8 +4,10 @@ import json
 import concurrent.futures
 import shutil
 import signal
+import select
 import subprocess
 import os
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -42,6 +44,21 @@ class ConcurrentProjects(unittest.TestCase):
         self.write('alpha', 'events.jsonl', dict(type='dispatched', task='T-012'))
         self.assertEqual([], module.live_rounds(self.routes))
 
+    def test_owned_launcher_record_releases_capacity_on_keeper_exit(self):
+        life = module.managed.lifeline()
+        record = self.root / 'launcher.lock'
+        child = life.start([sys.executable, '-c', 'import time; time.sleep(120)'],
+                           owner=os.getpid(), owner_record=record,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            self.write('alpha', 'runs/worker/identity.json',
+                       dict(project='alpha', task='T-012', role='worker'))
+            self.write('alpha', 'runs/worker/process.json', dict(owner_record=str(record)))
+            self.assertEqual(1, len(module.live_rounds(self.routes)))
+        finally:
+            child.terminate(); child.wait(timeout=10)
+        self.assertEqual([], module.live_rounds(self.routes))
+
     def test_fair_fill_uses_fewer_live_rounds_and_name_tie_break(self):
         queues = {'alpha': ['T-012', 'T-013'], 'beta': ['T-012', 'T-013']}
         self.assertEqual([('alpha', 'T-012'), ('beta', 'T-012'), ('alpha', 'T-013')],
@@ -61,9 +78,28 @@ class ConcurrentProjects(unittest.TestCase):
         self.assertEqual('', module.merge_blocker(self.root / 'alpha', 'alpha'))
         self.write('alpha', 'decisions/card.json', dict(card, chosen='A', merge='failed'))
         self.assertEqual('', module.merge_blocker(self.root / 'alpha', 'alpha'))
+        for ok in (True, False):
+            self.write('alpha', 'decisions/card.json', dict(card, chosen='A', merged=dict(ok=ok)))
+            self.assertEqual('', module.merge_blocker(self.root / 'alpha', 'alpha'))
+        self.write('alpha', 'decisions/card.json', dict(card, chosen='A', merge='running', merged=dict(ok=True)))
+        self.assertIn('running', module.merge_blocker(self.root / 'alpha', 'alpha'))
         for choice in ('B', 'C'):
             self.write('alpha', 'decisions/card.json', dict(card, chosen=choice))
             self.assertEqual('', module.merge_blocker(self.root / 'alpha', 'alpha'))
+
+    def test_merge_outcome_matches_board_reader_for_every_accepted_form(self):
+        # Execute the board's actual expression: Python cannot import TypeScript.
+        source = (ROOT / 'board/server.ts').read_text()
+        expression = re.search(r'const mergeOf = .*?=>\s*(.*?);', source, re.S).group(1)
+        records = [None, {}, {'merged': None}]
+        records += [dict(merge=modern, merged=dict(ok=legacy))
+                    for modern in (None, 'running', 'merged', 'failed', 'unknown')
+                    for legacy in (True, False, None, 0, 1, 'true', 'false')]
+        out = subprocess.run(['bun', '-e', 'const mergeOf = d => ' + expression + ';'
+            + 'console.log(JSON.stringify(' + json.dumps(records) + '.map(mergeOf)))'],
+            capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(out.stdout),
+                         [module.merge_records.merge_outcome(r) for r in records])
 
     def test_greenlight_and_dependencies_are_project_local(self):
         events = [dict(type='greenlit', project='alpha'), dict(type='merged', task='T-001', project='alpha')]
@@ -143,17 +179,17 @@ exec python3 -c 'import time; time.sleep(120)'
 
     def stop_workers(self):
         for receipt in self.receipts():
-            try: os.kill(receipt['pid'], signal.SIGTERM)
+            try: os.kill(receipt['keeper'], signal.SIGTERM)
             except ProcessLookupError: pass
-        # Lifeline terminates/reaps its entire group before exiting. This is
-        # bounded test observation, never production owner polling.
-        import time
-        deadline = time.monotonic() + 10
         for receipt in self.receipts():
-            while module.managed.process_matches(receipt):
-                if time.monotonic() >= deadline:
-                    self.fail('owned worker did not terminate')
-                time.sleep(.02)
+            self.wait_keeper(receipt)
+
+    def wait_keeper(self, receipt):
+        life = module.managed.lifeline()
+        try: watcher = life.ProcessExit(receipt['keeper'])
+        except life.OwnerGone: return
+        try: self.assertTrue(select.select([watcher], [], [], 10)[0], 'owned keeper must end')
+        finally: watcher.close()
 
     def test_parallel_dispatch_never_exceeds_global_capacity(self):
         with concurrent.futures.ThreadPoolExecutor(2) as pool:
@@ -187,12 +223,8 @@ exec python3 -c 'import time; time.sleep(120)'
         first = self.dispatch('--project', 'alpha', '--limit', '2')
         self.assertEqual(0, first.returncode, first.stderr)
         receipt = self.receipts()[0]
-        os.kill(receipt['pid'], signal.SIGTERM)
-        import time
-        deadline = time.monotonic() + 10
-        while module.managed.process_matches(receipt):
-            self.assertLess(time.monotonic(), deadline, 'owned keeper must end')
-            time.sleep(.02)
+        os.kill(receipt['keeper'], signal.SIGTERM)
+        self.wait_keeper(receipt)
         out = self.dispatch('--limit', '2')
         self.assertEqual(0, out.returncode, out.stderr)
         self.assertEqual(1, sum(r['project'] == 'beta' for r in self.receipts()))

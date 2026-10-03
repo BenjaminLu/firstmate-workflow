@@ -261,7 +261,19 @@ def _keeper_argv(argv, fd=None, pid=None, name=None):
     return [sys.executable, HERE, 'keep', *how, *(['--name', name] if name else []), '--', *argv]
 
 
-def start(argv, owner=None, name=None, direct=False, **popen):
+def owner_record_live(path):
+    """Read the keeper's kernel-held ownership record, never a PID probe."""
+    import fcntl
+    try:
+        with open(path, 'rb') as record:
+            try: fcntl.flock(record, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError: return True
+            return False
+    except FileNotFoundError:
+        return False
+
+
+def start(argv, owner=None, name=None, direct=False, owner_record=None, **popen):
     """Start argv under a keeper; return the keeper's Popen.
 
     owner=None: this process owns it through a pipe it keeps open for its
@@ -277,6 +289,20 @@ def start(argv, owner=None, name=None, direct=False, **popen):
     for refused in ('start_new_session', 'preexec_fn', 'process_group', 'pass_fds'):
         if refused in popen:
             raise ValueError(refused + ' belongs to the lifeline, not to the caller')
+    if owner_record is not None:
+        if direct or owner is None:
+            raise ValueError('an ownership record requires a keeper and an explicit owner')
+        import fcntl
+        # Acquire before spawn so the reservation has no unowned startup gap.
+        # Only the keeper inherits this descriptor, never its child. Kernel
+        # close releases it on every exit, including SIGKILL.
+        ProcessExit(owner).close()
+        with open(owner_record, 'a+b') as record:
+            fcntl.flock(record, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            env = dict(popen.pop('env', None) or os.environ)
+            env['FM_LAUNCH_OWNER_RECORD'] = os.path.abspath(owner_record)
+            return subprocess.Popen(_keeper_argv(argv, pid=int(owner), name=name),
+                env=env, pass_fds=(record.fileno(),), start_new_session=True, **popen)
     if direct:
         env = dict(popen.pop('env', None) or os.environ)
         env.pop('FM_LIFELINE_FD', None); env.pop('FM_LIFELINE_PID', None)
