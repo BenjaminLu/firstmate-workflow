@@ -116,7 +116,7 @@ print(json.dumps({'type':'result','result':final,'response':final}))
         statuses=[json.loads(p.read_text())['status'] for p in self.results()]
         self.assertEqual(1,statuses.count('completed'),statuses)
 
-    def test_real_dispatch_and_run_paths_use_managed_adapters(self):
+    def test_real_dispatch_and_autopilot_paths_use_managed_adapters(self):
         # The binding service must resolve this checkout without an ambient
         # GH_REPO before it can fetch and verify the authoritative PR head.
         origin = subprocess.run(['git', '-C', str(self.repo), 'config', '--get',
@@ -142,14 +142,15 @@ print(json.dumps({'type':'result','result':final,'response':final}))
         self.assertEqual(0,json.loads(paths[0].read_text())['process_exit'])
         # Gate 7 requests a reviewer; gate execution itself is outside this test.
         (self.repo/'bin/fm-gate.sh').write_text('#!/usr/bin/env bash\nexit 7\n')
-        answer=self.invoke('fm-run.sh',['once'])
+        answer=subprocess.run([sys.executable,str(root/'tests/lib/autopilot_turn.py'),str(self.repo)],
+                              env=self.env,capture_output=True,text=True,timeout=WAIT)
         self.assertEqual(0,answer.returncode,answer.stderr)
         self.assertNotIn('authoritative head unknown or stale', answer.stdout + answer.stderr)
-        # The run verifies once, then review verifies before preparation,
+        # Autopilot verifies before gates and launch, then review verifies before preparation,
         # after the CI wait and before publication. Each review verification
         # also resolves or rechecks the live base through base mode.
         pair = ['refs/pull/35/head', 'refs/heads/main']
-        self.assertEqual(pair + (pair + ['refs/heads/main']) * 3,
+        self.assertEqual(pair * 2 + (pair + ['refs/heads/main']) * 3,
                          (self.repo/'binding-fetches').read_text().splitlines())
         self.assertEqual({'worker','reviewer'},{json.loads(p.read_text())['role'] for p in self.results()})
 

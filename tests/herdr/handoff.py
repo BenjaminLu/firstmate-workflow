@@ -78,7 +78,7 @@ class Entrypoints(EntrypointsFixture):
                        env=self.env,check=True,capture_output=True)
         entries=[('fm-session.sh',['status']),('fm-worker.sh',['--task','T-035']),
                  ('fm-review.sh',['--task','T-035','--branch','work']),
-                 ('fm-dispatch.sh',['--dry-run']),('fm-run.sh',['once'])]
+                 ('fm-dispatch.sh',['--dry-run']),('fm-autopilot.sh',['context'])]
         (self.repo/'bin/fm-gate.sh').write_text('#!/usr/bin/env bash\nexit 1\n')
         for script,args in entries:
             # Exercise every wrapper's two root inputs; relative script resolution
@@ -88,7 +88,7 @@ class Entrypoints(EntrypointsFixture):
                 sources+=('relative-script-argument','relative-script-environment')
             for source in sources:
                 with self.subTest(script=script,source=source):
-                    env=dict(self.env,FM_TRANSPORT='direct',FM_ROOT=self.repo.name)
+                    env=dict(self.env,FM_TRANSPORT='direct',FM_ROOT=self.repo.name,FM_AUTOPILOT_TEST_ENABLE='1')
                     entry=self.repo/'bin'/script
                     if source.startswith('relative-script'): entry=entry.relative_to(self.repo.parent)
                     argv=['bash',str(entry),*args]

@@ -45,7 +45,8 @@ fm_storage_init "$REPO"
 [ "$RESUME" = 0 ] || [ -f "$FM_STATE_DIR/autopilot/owner.json" ] || exit 0
 FM_AUTOPILOT_REPOSITORY="$(fm_stack_repository)"
 FM_EVIDENCE_PROJECT="$(fm_evidence_project)"
-export FM_AUTOPILOT_REPOSITORY FM_EVIDENCE_PROJECT
+FM_AUTOPILOT_DEFAULT_PROJECT="$(FM_PROJECT='' fm_project_resolve '' "$REPO/config.yaml" 2>/dev/null || true)"
+export FM_AUTOPILOT_REPOSITORY FM_EVIDENCE_PROJECT FM_AUTOPILOT_DEFAULT_PROJECT
 pilot_base="$(fm_project_get "${FM_PROJECT:-}" base "$REPO/config.yaml" 2>/dev/null || true)"
 export FM_BASE="${pilot_base:-main}"
 if [ "$MODE" = ensure ]; then

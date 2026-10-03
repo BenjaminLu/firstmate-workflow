@@ -118,6 +118,14 @@ class Entrypoints(unittest.TestCase):
             'firstmate-workflow':str(self.root/'state'),
             'other':str(Path(private.name).resolve()/'projects/other/state')})
 
+    def test_unknown_project_is_refused_before_network(self):
+        private = tempfile.TemporaryDirectory(); self.addCleanup(private.cleanup)
+        self.env['FM_HOME'] = private.name
+        (self.root/'config.yaml').write_text('projects:\n  firstmate-workflow:\n    repo: .\n    github: owner/self\n    base: main\n')
+        result = self.run_shell('fm-autopilot.sh', 'context', '--project', 'unknown')
+        self.assertEqual(result.returncode, 65, result.stderr)
+        self.assertFalse((Path(private.name)/'projects/unknown/state/autopilot').exists())
+
     def test_frozen_launch_normalizes_repo_after_each_boolean_option(self):
         spec = importlib.util.spec_from_file_location('entry_herdr', ROOT/'bin/fm-herdr.py')
         herdr = importlib.util.module_from_spec(spec); spec.loader.exec_module(herdr)

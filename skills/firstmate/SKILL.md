@@ -136,7 +136,7 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
 
 1. Inspect config, task dependencies, events, pending decisions, saved reviews,
    open PR evidence, worktrees and actual live processes before launching work.
-   Use `bin/fm-sync-prs.sh --repo <root>` and read-only filesystem inspection;
+   Use `bin/fm-autopilot.sh status --all --repo <root>` and read-only filesystem inspection;
    reconcile discrepancies explicitly. Reconnect to existing live agents and
    preserve interrupted work before any restart. A historical dispatched event
    alone does not establish a live worker or a free concurrency slot. When
@@ -223,10 +223,19 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   before restarting: the script can recreate a worktree. Resume a live process
   instead of duplicating it; only restart a stopped attempt with its review and
   current task context.
-- `bin/fm-run.sh once --repo <root>` advances dispatch, gates and review;
-  `watch` repeats it. It reports failed gates but does not restart failed workers.
-  Explicitly coordinate remediation with the assigned worker, inspect its final
-  results, then rerun the relevant checks. Avoid competing loop owners.
+- `bin/fm-autopilot.sh ensure --all --repo <root>` starts the session-owned
+  supervisor for each registered project. It observes PR events, runs gates on
+  worker heads, checks the standing-list protocol from round three, launches
+  review after gate exit 7, and reruns gates when approval or CI changes.
+  After all six gates pass it requests the merge card using your authored
+  `state/decision-details/<id>.json`, with the gated head bound to the request.
+  It wakes firstmate once per head for REJECT (brief needed), SCOPE-BLOCKED/ASK,
+  failed gates, unavailable or misconfigured launchers, a review without a
+  verdict, or missing merge-card details (naming the reserved id). Read the
+  child's quoted log line when investigating a launcher failure.
+  It never relaunches a worker or dispatches a new task. Dispatch stays with
+  the board intent card or an explicit `bin/fm-dispatch.sh` call; a new worker
+  round still needs your approved brief. Avoid competing loop owners.
 - `bin/fm-gate.sh` checks six gates, numbered 1, 2, 4, 5, 6 and 7. Gate 3,
   the local run of the whole project `check`, is retired (T-114): the required
   GitHub check runs it on the same head, and gate 6 reads that. Gate 5 runs
@@ -274,8 +283,8 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   once, automatically, with a fresh checkout, and the board says so in `en`
   and `zh-TW`; a second empty ending is reported as today.
 - Round order and the merge double check (captain, 2026-09-25; design §6).
-  Start the review round through `bin/fm-review.sh` as soon as the worker hands
-  back; do not hold it for CI yourself. Given `--pr`, `fm-review.sh` waits,
+  The autopilot starts the review after the worker hands back and gates 1, 2,
+  4, 5 and 6 pass. An explicitly coordinated review may still use `bin/fm-review.sh`. Given `--pr`, `fm-review.sh` waits,
   bounded, for the head's required checks and hands the reviewer what they
   found - every job's result, the failing assertions and the fail-first
   report - in either mode (T-153): the machine runs the tests, fail-first
@@ -285,8 +294,8 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   `APPROVE:<task-id>` for that head, and your own reading of that head's
   required GitHub check (green) and the six gates (`bin/fm-gate.sh`).
   Neither substitutes for the other, and a head that changes after either one
-  restarts both, with one exception. `fm-run.sh` still reviews only after
-  every gate before 7 is green, so do not wait for its loop to start a round.
+  requires fresh gates; the approval may carry only under the binding rules below.
+  The autopilot advances this mechanical loop without a model timer.
 - The approval binds to the change; CI and the gates bind to the head
   (captain, 2026-09-29; SK-008; design §6). An APPROVE carries forward across
   any update of the branch from its base as long as the change itself is
@@ -320,7 +329,7 @@ passed: a skipped stage is an unverified stage, whatever the exit status.
   neither that route nor the merge helper rechecks the gates. The helper
   checks that the pull request is the card's task's (T-119), checks PR state,
   invokes the GitHub merge and attempts an event and cleanup;
-  it does not read or validate captain decision approval. `fm-run.sh` requests a
+  it does not read or validate captain decision approval. `fm-autopilot.sh` requests a
   card after gate success but does not consume decisions or perform the merge.
   Approval and readiness are orchestration requirements, not guarantees of
   `fm-merge.sh`. Do not invoke it without verified board approval and readiness,
@@ -521,8 +530,7 @@ after every merge, run `bin/fm-ready.sh list --repo <root>`. Each line is
 
 Never dispatch a ready task that is `unjudged`, nor one whose answer was not A
 or a completed B, unless the captain orders that task directly.
-`bin/fm-dispatch.sh`, and so the dispatch step of `bin/fm-run.sh once`/`watch`,
-starts only the tasks `bin/fm-ready.sh cleared` lists: ready, judged this time,
+`bin/fm-dispatch.sh` starts only the tasks `bin/fm-ready.sh cleared` lists: ready, judged this time,
 and answered A on a choice card for that same task; an A on another task's card
 or on a merge card clears nothing. An adopted skill update (SK-*) is listed
 `judged` by its own adoption card, D-SK-*, answered A: raise no second card for
@@ -809,7 +817,7 @@ bin/fm-decide.sh --request "$id" --task T-004 --kind choice \
 ```
 
 For a merge, use `--kind merge --pr <actual-pr>` only after current-head gates,
-CI and reviewer provenance are verified. `fm-run.sh` allocates the merge card's
+CI and reviewer provenance are verified. `fm-autopilot.sh` allocates the merge card's
 id itself (never `D-<task digits>`), says which id when details are missing,
 and reads `<repo>/state/decision-details/<decision-id>.json` after gates pass;
 it reuses that id on later turns. Supply the preflighted details there, or
@@ -997,7 +1005,7 @@ not treated as current because local gates were green. Required review policy
 comes from the project's confirmed conventions; native external reviews require
 every named reviewer's latest approval for the verified commit/patch, with no unresolved review threads.
 
-`fm-run.sh` passes that SHA to `fm-decide.sh --expected-head <sha>`. A manually
+`fm-autopilot.sh` passes that SHA to `fm-decide.sh --expected-head <sha>`. A manually
 raised tracked merge card needs the same flag and a signed readiness record.
 The board forwards the recorded SHA; never replace it with a fresh PR read.
 `fm-merge.sh --expected-head <sha>` revalidates the receipt and calls GitHub

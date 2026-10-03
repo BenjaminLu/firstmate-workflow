@@ -82,7 +82,7 @@ cap3="$d/sent3.md"
 assert_contains "$(cat "$cap3")" "CRITERIA-COMPLETE:T-Z" "round three asks for the closed list"
 
 # An outage is a run that produced nothing at all - a CLI that is not there.
-# That is the only thing that earns exit 2, because 2 tells fm-run to try
+# That is the only thing that earns exit 2, because 2 tells the autopilot to try
 # again next turn, and a run that DID produce something will produce the
 # same something next turn, for ever.
 printf 'vendor: mock\n' > "$r/config.yaml"   # one vendor, and it is not there
@@ -219,7 +219,7 @@ unset FM_FORGED_PROVENANCE
 unset FM_RECOVERY_TOKEN
 
 # a vendor named in config.yaml with no adapter behind it is a typo, not an
-# outage: reporting it as transient would have fm-run say "leaving it for
+# outage: reporting it as transient would have the autopilot say "leaving it for
 # the next turn" on every turn, forever
 printf 'vendor: mock\nreviewer:\n  vendor: nosuchvendor\nfallback:\n  - mock\n' > "$r/config.yaml"
 out="$(cd "$r" && FM_ROOT="$r" FM_GH="$GH" bin/fm-review.sh --task T-Z --branch work --pr 9 2>&1)"
@@ -378,7 +378,7 @@ printf 'vendor: mock\nreviewer:\n  vendor: other\nfallback:\n  - mock\n' > "$r/c
 
 # an engine that ran and said something unsigned is a failed round, even
 # when what it said trips the signature list. Reporting that as an outage
-# would have fm-run retry it every turn on the same input, for ever.
+# would have the autopilot retry it every turn on the same input, for ever.
 stub_script "$r/bin/adapters/down.sh" <<'M'
 #!/usr/bin/env bash
 [ "$1" = "run" ] || exit 64
